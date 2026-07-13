@@ -804,22 +804,44 @@ const io = new IntersectionObserver(entries => {
 }, { threshold: 0.05 });
 document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 
-// ── 앵커 링크: 클릭 시에만 부드럽게 이동 (전역 smooth 제거로 휠 끊김 방지) ──
+// ── 앵커 링크 이동: 네이티브 smooth에 의존하지 않는 직접 rAF 애니메이션 ──
+// (브라우저의 부드러운 스크롤이 꺼져 있거나 깨져 있어도 무조건 이동)
 const subnavEl = document.querySelector('.subnav');
+const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let scrollRAF = null;
+
+function smoothScrollTo(targetY) {
+  const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  targetY = Math.max(0, Math.min(targetY, maxY));
+  if (scrollRAF) cancelAnimationFrame(scrollRAF);
+  const startY = window.scrollY;
+  const dist = targetY - startY;
+  if (prefersReduced || Math.abs(dist) < 4) { window.scrollTo(0, targetY); return; }
+  const dur = Math.min(720, Math.max(300, Math.abs(dist) * 0.45));
+  let startTs = null;
+  function step(ts) {
+    if (startTs === null) startTs = ts;
+    const p = Math.min(1, (ts - startTs) / dur);
+    const eased = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; // easeInOutCubic
+    window.scrollTo(0, Math.round(startY + dist * eased));
+    if (p < 1) scrollRAF = requestAnimationFrame(step); else scrollRAF = null;
+  }
+  scrollRAF = requestAnimationFrame(step);
+}
+// 사용자가 휠/터치로 스크롤하면 진행 중인 애니메이션 즉시 중단 (스크롤 방해 방지)
+['wheel', 'touchstart'].forEach(ev =>
+  addEventListener(ev, () => { if (scrollRAF) { cancelAnimationFrame(scrollRAF); scrollRAF = null; } }, { passive: true })
+);
+
 document.querySelectorAll('a[href^="#"]').forEach(a => {
   a.addEventListener('click', e => {
     const href = a.getAttribute('href');
-    if (href === '#top' || href === '#') {
-      e.preventDefault();
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
+    if (href === '#' || href === '#top') { e.preventDefault(); smoothScrollTo(0); return; }
     const target = document.querySelector(href);
     if (!target) return;
     e.preventDefault();
     const offset = (subnavEl ? subnavEl.offsetHeight : 0) + 14;
-    const y = target.getBoundingClientRect().top + window.scrollY - offset;
-    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+    smoothScrollTo(target.getBoundingClientRect().top + window.scrollY - offset);
   });
 });
 
