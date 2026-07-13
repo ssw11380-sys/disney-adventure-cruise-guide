@@ -224,6 +224,39 @@ footer{background:var(--navy);color:#B9C7D8;margin-top:0;font-size:13.5px}
 .fac .fbadge{margin-left:5px;vertical-align:1px}
 .dp-empty{font-size:12.5px;color:#A9B4C2;padding:4px 0}
 
+/* ═══════════ 모바일 최적화 ═══════════ */
+@media(max-width:600px){
+  body{font-size:15px}
+  .container{padding:0 16px}
+  section.block{padding:44px 0 8px}
+  section.block.alt{padding-bottom:44px;margin-top:44px}
+  .intro{padding:44px 0 8px}
+  .sec-head{margin-bottom:20px}
+
+  /* 반응형 표: 가로 스크롤 대신 행별 카드로 재구성 */
+  .tbl-wrap{overflow:visible;border:none;background:transparent;box-shadow:none;border-radius:0;margin:12px 0 4px}
+  .tbl-wrap table{min-width:0;display:block;font-size:13.5px}
+  .tbl-wrap tbody{display:block}
+  .tbl-wrap tr{display:block;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 2px 10px rgba(37,59,86,.06);margin:0 0 12px;padding:12px 15px}
+  .tbl-wrap tr:first-child{display:none}                 /* 헤더 행 숨김(셀마다 라벨) */
+  .tbl-wrap td{display:flex;gap:10px;padding:7px 0;border-top:1px solid #EEF2F6;background:none;vertical-align:top;min-width:0}
+  .tbl-wrap td::before{content:attr(data-label);flex:0 0 76px;font-size:11px;font-weight:800;color:var(--teal);letter-spacing:.02em;padding-top:2px;text-transform:uppercase}
+  .tbl-wrap tr:nth-child(even) td{background:none}
+  .tbl-wrap td:first-child{display:block;border-top:none;font-size:15px;font-weight:800;color:var(--navy);padding:2px 0 8px;min-width:0}
+  .tbl-wrap td:first-child::before{display:none}
+  .tbl-wrap td.tip{color:var(--text-soft)}
+  .tbl-wrap td .deck{margin-top:2px}
+
+  /* 데크 지도: 위치 라벨 가독성 + 컬럼 여백 */
+  .dp-orient{font-size:11.5px;padding:12px 18px 0}
+  .dp-cols{padding:8px 18px 20px}
+  .deck-btn .dl span{font-size:11.5px}
+
+  /* 카드/타임라인 여백 축소 */
+  .cards{gap:12px}
+  .timeline{padding-left:28px}
+}
+
 /* ═══════════ 리빌 ═══════════ */
 .reveal{opacity:0;transform:translateY(14px);transition:opacity .55s ease,transform .55s ease}
 .reveal.in{opacity:1;transform:none}
@@ -862,6 +895,14 @@ footer{background:var(--navy);color:#B9C7D8;margin-top:0;font-size:13.5px}
 <a class="top-btn" id="topBtn" href="#top" aria-label="맨 위로">↑</a>
 
 <script>
+// ── 모바일 표: 각 셀에 열 제목을 data-label로 부여(카드형 표시용) ──
+document.querySelectorAll('.tbl-wrap table').forEach(t => {
+  const heads = [...t.querySelectorAll('tr:first-child th')].map(th => th.textContent.trim());
+  [...t.querySelectorAll('tr')].slice(1).forEach(tr => {
+    [...tr.children].forEach((td, i) => { if (heads[i]) td.setAttribute('data-label', heads[i]); });
+  });
+});
+
 // ── 스크롤 리빌 ──
 const io = new IntersectionObserver(entries => {
   entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
