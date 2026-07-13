@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>디즈니 어드벤처 크루즈 완벽 가이드 | 싱가포르 출항</title>
+<meta name="description" content="싱가포르 마리나 베이에서 출항하는 디즈니 어드벤처 크루즈 — 무료·유료 시설 총정리, 예약 체크리스트, 실전 꿀팁까지 담은 한국어 완벽 가이드">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════ DESIGN TOKENS ═══════════════ */
+:root{
+  --navy-deep:#0A1633;      /* 밤바다 */
+  --navy:#122448;
+  --navy-soft:#1C3564;
+  --gold:#D4A94A;           /* 매직 골드 */
+  --gold-bright:#F0C86B;
+  --gold-dim:#9A7A32;
+  --cream:#FAF6EC;          /* 종이 */
+  --card:#FFFFFF;
+  --ink:#17233B;
+  --ink-soft:#4A5A75;
+  --line:#E6E0D0;
+  --free:#1B7F4E;  --free-bg:#E4F3EB;
+  --paid:#C96A0C;  --paid-bg:#FBEEDD;
+  --partial:#A87C10; --partial-bg:#FCF3D5;
+  --check:#64748B; --check-bg:#EEF1F5;
+  --pink:#E8A0B4;
+  --sky:#7FB3D8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;scroll-padding-top:64px}
+body{font-family:'Noto Sans KR',sans-serif;background:var(--cream);color:var(--ink);font-size:15px;line-height:1.75;-webkit-text-size-adjust:100%}
+img{max-width:100%}
+.serif{font-family:'Gowun Batang',serif}
+
+/* ═══════════════ HERO ═══════════════ */
+.hero{position:relative;background:linear-gradient(180deg,#060D22 0%,#0A1633 34%,#16305E 68%,#28517F 100%);color:#F6F1E4;text-align:center;padding:86px 20px 0;overflow:hidden}
+.stars,.stars2{position:absolute;inset:0;pointer-events:none}
+.stars{background-image:
+  radial-gradient(1.6px 1.6px at 8% 22%,#fff 55%,transparent 60%),
+  radial-gradient(1.2px 1.2px at 21% 9%, #FFEFC4 55%,transparent 60%),
+  radial-gradient(1.8px 1.8px at 33% 30%,#fff 55%,transparent 60%),
+  radial-gradient(1.1px 1.1px at 46% 12%,#fff 55%,transparent 60%),
+  radial-gradient(1.7px 1.7px at 58% 26%,#FFEFC4 55%,transparent 60%),
+  radial-gradient(1.2px 1.2px at 71% 8%, #fff 55%,transparent 60%),
+  radial-gradient(1.9px 1.9px at 83% 21%,#fff 55%,transparent 60%),
+  radial-gradient(1.3px 1.3px at 93% 34%,#FFEFC4 55%,transparent 60%),
+  radial-gradient(1.4px 1.4px at 15% 44%,#fff 55%,transparent 60%),
+  radial-gradient(1.2px 1.2px at 64% 42%,#fff 55%,transparent 60%),
+  radial-gradient(1.6px 1.6px at 88% 48%,#fff 55%,transparent 60%);
+  animation:twinkle 3.4s ease-in-out infinite alternate}
+.stars2{background-image:
+  radial-gradient(1.3px 1.3px at 12% 33%,#fff 55%,transparent 60%),
+  radial-gradient(1.7px 1.7px at 27% 18%,#fff 55%,transparent 60%),
+  radial-gradient(1.1px 1.1px at 41% 40%,#FFEFC4 55%,transparent 60%),
+  radial-gradient(1.6px 1.6px at 53% 6%, #fff 55%,transparent 60%),
+  radial-gradient(1.2px 1.2px at 67% 34%,#fff 55%,transparent 60%),
+  radial-gradient(1.8px 1.8px at 78% 14%,#FFEFC4 55%,transparent 60%),
+  radial-gradient(1.2px 1.2px at 95% 10%,#fff 55%,transparent 60%);
+  animation:twinkle 2.6s ease-in-out .9s infinite alternate}
+@keyframes twinkle{from{opacity:.35}to{opacity:1}}
+.hero-inner{position:relative;z-index:2;max-width:760px;margin:0 auto}
+.hero .crest{width:74px;height:74px;margin:0 auto 18px;position:relative}
+.hero .crest svg{width:100%;height:100%}
+.hero .eyebrow{font-size:12px;letter-spacing:.48em;color:var(--gold-bright);text-transform:uppercase;margin-bottom:16px;text-indent:.48em}
+.hero h1{font-family:'Gowun Batang',serif;font-size:clamp(30px,6.6vw,54px);font-weight:700;line-height:1.3;text-shadow:0 2px 24px rgba(0,0,0,.4)}
+.hero h1 em{font-style:normal;color:var(--gold-bright)}
+.hero .tagline{margin-top:18px;font-size:clamp(13.5px,2.6vw,16px);color:#C9D6E8;font-weight:300}
+.hero .divider-orn{display:flex;align-items:center;justify-content:center;gap:14px;margin:26px auto 0;color:var(--gold)}
+.hero .divider-orn::before,.hero .divider-orn::after{content:"";height:1px;width:min(120px,24vw);background:linear-gradient(90deg,transparent,var(--gold));display:block}
+.hero .divider-orn::after{background:linear-gradient(90deg,var(--gold),transparent)}
+.hero-meta{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:26px auto 0;max-width:640px}
+.hero-meta span{border:1px solid rgba(212,169,74,.55);background:rgba(10,22,51,.5);backdrop-filter:blur(2px);border-radius:999px;padding:7px 16px;font-size:12.5px;letter-spacing:.02em;color:#EFE6CE}
+.hero-cta{margin:34px 0 0}
+.hero-cta a{display:inline-block;background:linear-gradient(135deg,var(--gold-bright),var(--gold));color:#1A2036;font-weight:900;font-size:14px;letter-spacing:.06em;text-decoration:none;padding:13px 34px;border-radius:999px;box-shadow:0 6px 24px rgba(212,169,74,.4);transition:transform .2s}
+.hero-cta a:hover{transform:translateY(-2px)}
+.hero-wave{display:block;width:100%;margin-top:52px}
+.ship-line{position:relative;z-index:2;margin:44px auto -6px;max-width:560px;opacity:.95}
+
+/* ═══════════════ STICKY NAV ═══════════════ */
+.nav{position:sticky;top:0;z-index:100;background:rgba(10,22,51,.96);backdrop-filter:blur(8px);border-bottom:2px solid var(--gold);box-shadow:0 4px 18px rgba(6,13,34,.35)}
+.nav-scroll{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;max-width:1080px;margin:0 auto;padding:0 8px}
+.nav-scroll::-webkit-scrollbar{display:none}
+.nav a{flex:0 0 auto;color:#D7E0EE;text-decoration:none;font-size:13px;font-weight:500;padding:15px 14px;white-space:nowrap;border-bottom:3px solid transparent;transition:color .15s,border-color .15s;letter-spacing:.01em}
+.nav a .n{color:var(--gold);font-family:'Gowun Batang',serif;font-size:11px;margin-right:5px}
+.nav a:hover{color:var(--gold-bright)}
+.nav a.active{color:var(--gold-bright);border-bottom-color:var(--gold)}
+
+/* ═══════════════ LAYOUT ═══════════════ */
+.wrap{max-width:1080px;margin:0 auto;padding:0 18px 90px}
+section.block{margin-top:84px;scroll-margin-top:70px}
+.sec-head{text-align:center;margin-bottom:14px}
+.sec-head .kicker{display:inline-flex;align-items:center;gap:10px;font-size:11.5px;font-weight:700;letter-spacing:.34em;color:var(--gold-dim);text-transform:uppercase;text-indent:.34em}
+.sec-head .kicker::before,.sec-head .kicker::after{content:"";width:34px;height:1px;background:var(--gold)}
+.sec-head h2{font-family:'Gowun Batang',serif;font-size:clamp(23px,4.8vw,34px);margin-top:10px;color:var(--navy)}
+.sec-head .lead{max-width:640px;margin:12px auto 0;font-size:14px;color:var(--ink-soft)}
+.mickey-orn{display:flex;justify-content:center;gap:0;margin:18px auto 34px;align-items:flex-end;height:16px}
+.mickey-orn i{display:block;border-radius:50%;background:var(--gold)}
+.mickey-orn .ear{width:7px;height:7px;margin-bottom:7px}
+.mickey-orn .face{width:11px;height:11px;margin:0 -2px}
+
+h3.sub-h{font-size:17px;font-weight:700;margin:40px 0 6px;color:var(--navy);display:flex;align-items:center;gap:10px}
+h3.sub-h .dot{flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:var(--navy);color:var(--gold-bright);font-family:'Gowun Batang',serif;font-size:13px;display:flex;align-items:center;justify-content:center}
+p.note{font-size:13.5px;color:var(--ink-soft);margin:6px 0 14px}
+
+/* ═══════════════ BADGES / DECK ═══════════════ */
+.badge{display:inline-block;font-size:11px;font-weight:700;padding:2.5px 10px;border-radius:999px;vertical-align:2px;white-space:nowrap;letter-spacing:.02em}
+.b-free{background:var(--free);color:#fff}
+.b-paid{background:var(--paid);color:#fff}
+.b-part{background:var(--partial);color:#fff}
+.b-check{background:var(--check);color:#fff}
+.deck{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.07em;color:var(--navy);background:#EAE4D4;border:1px solid var(--line);border-radius:4px;padding:1px 8px;white-space:nowrap;vertical-align:2px}
+
+.legend{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 20px;margin:34px 0 0;font-size:13px;display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(23,35,59,.05)}
+.legend b{color:var(--navy)}
+
+/* ═══════════════ QUICK FACTS ═══════════════ */
+.facts{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:38px}
+@media(min-width:720px){.facts{grid-template-columns:repeat(4,1fr)}}
+.fact{background:var(--navy);color:#EFE6CE;border-radius:14px;padding:20px 16px;text-align:center;position:relative;overflow:hidden;border:1px solid var(--navy-soft)}
+.fact::after{content:"";position:absolute;right:-18px;bottom:-18px;width:70px;height:70px;border-radius:50%;background:radial-gradient(circle,rgba(212,169,74,.22),transparent 70%)}
+.fact .f-label{font-size:11px;letter-spacing:.22em;color:var(--gold-bright);text-transform:uppercase}
+.fact .f-value{font-family:'Gowun Batang',serif;font-size:clamp(16px,2.6vw,20px);font-weight:700;margin-top:6px;line-height:1.4}
+.fact .f-sub{font-size:11.5px;color:#AEBCD2;margin-top:3px}
+
+/* ═══════════════ TABLES ═══════════════ */
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:14px;background:var(--card);margin:12px 0 6px;box-shadow:0 2px 12px rgba(23,35,59,.05)}
+table{width:100%;border-collapse:collapse;min-width:600px;font-size:13.5px}
+th{background:var(--navy);color:#EFE6CE;text-align:left;padding:11px 14px;font-size:12.5px;letter-spacing:.05em;white-space:nowrap;font-weight:500}
+td{padding:12px 14px;border-top:1px solid var(--line);vertical-align:top}
+td.nm{font-weight:700;min-width:140px;color:var(--navy)}
+td.tip{color:var(--ink-soft);font-size:12.8px;min-width:200px}
+tr:nth-child(even) td{background:#FBF8F1}
+
+/* ═══════════════ CARDS ═══════════════ */
+.cards{display:grid;grid-template-columns:1fr;gap:14px;margin-top:14px}
+@media(min-width:640px){.cards{grid-template-columns:1fr 1fr}}
+@media(min-width:920px){.cards.c3{grid-template-columns:1fr 1fr 1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 19px;box-shadow:0 2px 12px rgba(23,35,59,.05);position:relative}
+.card.gold-top{border-top:3px solid var(--gold)}
+.card h4{font-size:15.5px;margin-bottom:6px;display:flex;flex-wrap:wrap;gap:7px;align-items:center;color:var(--navy)}
+.card .price{font-size:13px;font-weight:700;color:var(--paid);margin:2px 0 6px}
+.card p{font-size:13.2px;color:var(--ink-soft)}
+.card .emoji{font-size:20px;line-height:1;margin-right:2px}
+
+/* ═══════════════ BOXES ═══════════════ */
+.box{border-radius:14px;padding:18px 20px;margin:18px 0;font-size:13.5px}
+.box b.t{display:block;margin-bottom:8px;font-size:14.5px;color:var(--navy)}
+.box-tip{background:#EDF4EE;border:1px solid #CBE3D2}
+.box-warn{background:#FDF0E4;border:1px solid #F0CFA8}
+.box-magic{background:linear-gradient(135deg,#101F42,#1C3564);border:1px solid var(--gold-dim);color:#EFE6CE}
+.box-magic b.t{color:var(--gold-bright)}
+.box-magic li{color:#DCE4F0}
+.box ul{padding-left:18px}
+.box li{margin:5px 0}
+
+/* ═══════════════ CHECKLIST TIMELINE ═══════════════ */
+.timeline{list-style:none;margin-top:24px;position:relative;padding-left:34px}
+.timeline::before{content:"";position:absolute;left:11px;top:8px;bottom:8px;width:2px;background:repeating-linear-gradient(180deg,var(--gold) 0 6px,transparent 6px 12px)}
+.timeline li{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 17px;margin-bottom:14px;position:relative;font-size:14px;box-shadow:0 2px 10px rgba(23,35,59,.05)}
+.timeline li::before{content:"";position:absolute;left:-30px;top:18px;width:14px;height:14px;border-radius:50%;background:var(--gold);border:3px solid var(--cream);box-shadow:0 0 0 2px var(--gold)}
+.timeline .when{display:inline-block;font-size:11px;color:#fff;background:var(--navy);font-weight:700;letter-spacing:.08em;margin-bottom:6px;padding:2px 10px;border-radius:999px}
+.timeline b{color:var(--navy)}
+.timeline p{font-size:13px;color:var(--ink-soft);margin-top:3px}
+
+/* ═══════════════ ROTATION DINING CARDS ═══════════════ */
+.set-label{display:inline-block;font-size:11px;font-weight:900;letter-spacing:.14em;padding:3px 12px;border-radius:999px;margin-bottom:10px}
+.set-a{background:#E4EDF8;color:#2A5788}
+.set-b{background:#F4E7EE;color:#94456B}
+
+/* ═══════════════ BAND (dark full-width strips) ═══════════════ */
+.band{background:var(--navy-deep);color:#EFE6CE;margin-top:84px;padding:64px 18px;position:relative;overflow:hidden}
+.band .stars{opacity:.5}
+.band-inner{max-width:1080px;margin:0 auto;position:relative;z-index:2}
+
+/* ═══════════════ FOOTER ═══════════════ */
+footer{background:var(--navy-deep);color:#93A5C0;padding:56px 20px 80px;text-align:center;position:relative;overflow:hidden;margin-top:90px}
+footer .f-title{font-family:'Gowun Batang',serif;color:var(--gold-bright);font-size:19px;letter-spacing:.05em}
+footer .f-sub{font-size:12.5px;margin-top:10px;line-height:1.9}
+footer .mickey-orn i{background:var(--gold-dim)}
+.top-btn{position:fixed;right:18px;bottom:18px;width:46px;height:46px;border-radius:50%;background:var(--navy);color:var(--gold-bright);border:1.5px solid var(--gold);font-size:18px;display:flex;align-items:center;justify-content:center;text-decoration:none;box-shadow:0 6px 16px rgba(6,13,34,.35);z-index:120;opacity:0;pointer-events:none;transition:opacity .25s}
+.top-btn.show{opacity:1;pointer-events:auto}
+
+/* ═══════════════ REVEAL ═══════════════ */
+.reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease,transform .6s ease}
+.reveal.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .stars,.stars2{animation:none}
+  .reveal{opacity:1;transform:none;transition:none}
+}
+</style>
+</head>
+<body id="top">
+
+<!-- ═══════════════════════ HERO ═══════════════════════ -->
+<div class="hero">
+  <div class="stars"></div><div class="stars2"></div>
+  <div class="hero-inner">
+    <div class="crest" aria-hidden="true">
+      <!-- 미키 실루엣 + 골드 링 크레스트 -->
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="47" fill="none" stroke="#D4A94A" stroke-width="1.6"/>
+        <circle cx="50" cy="50" r="42" fill="none" stroke="#D4A94A" stroke-width=".7" opacity=".6"/>
+        <circle cx="35" cy="36" r="11" fill="#F0C86B"/>
+        <circle cx="65" cy="36" r="11" fill="#F0C86B"/>
+        <circle cx="50" cy="55" r="17" fill="#F0C86B"/>
+      </svg>
+    </div>
+    <div class="eyebrow">Disney Cruise Line · Singapore</div>
+    <h1>디즈니 어드벤처<br><em>크루즈 완벽 가이드</em></h1>
+    <p class="tagline">마리나 베이에서 시작되는 마법의 항해 — 무료·유료 시설 총정리부터<br>예약 체크리스트, 실전 꿀팁까지 한 페이지에 담았습니다.</p>
+    <div class="divider-orn">✦</div>
+    <div class="hero-meta">
+      <span>⚓ 모항 · 마리나 베이 크루즈 센터</span>
+      <span>🚢 208,000톤 · 20개 데크</span>
+      <span>🗓 3박(월→목) / 4박(목→월)</span>
+      <span>💵 선내 통화 USD</span>
+    </div>
+    <div class="hero-cta"><a href="#s1">가이드 시작하기 ↓</a></div>
+    <div class="ship-line" aria-hidden="true">
+      <!-- 크루즈선 실루엣 -->
+      <svg viewBox="0 0 560 120" xmlns="http://www.w3.org/2000/svg">
+        <g fill="#08122B">
+          <rect x="150" y="38" width="240" height="14" rx="4"/>
+          <rect x="130" y="52" width="290" height="14" rx="4"/>
+          <path d="M96 66 h368 l-30 40 H130 Z"/>
+          <rect x="205" y="20" width="12" height="20" rx="3"/>
+          <rect x="255" y="16" width="12" height="24" rx="3"/>
+          <rect x="305" y="20" width="12" height="20" rx="3"/>
+        </g>
+        <g fill="#F0C86B" opacity=".95">
+          <circle cx="160" cy="45" r="2"/><circle cx="180" cy="45" r="2"/><circle cx="200" cy="45" r="2"/><circle cx="220" cy="45" r="2"/><circle cx="240" cy="45" r="2"/><circle cx="260" cy="45" r="2"/><circle cx="280" cy="45" r="2"/><circle cx="300" cy="45" r="2"/><circle cx="320" cy="45" r="2"/><circle cx="340" cy="45" r="2"/><circle cx="360" cy="45" r="2"/><circle cx="380" cy="45" r="2"/>
+          <circle cx="145" cy="59" r="2"/><circle cx="167" cy="59" r="2"/><circle cx="189" cy="59" r="2"/><circle cx="211" cy="59" r="2"/><circle cx="233" cy="59" r="2"/><circle cx="255" cy="59" r="2"/><circle cx="277" cy="59" r="2"/><circle cx="299" cy="59" r="2"/><circle cx="321" cy="59" r="2"/><circle cx="343" cy="59" r="2"/><circle cx="365" cy="59" r="2"/><circle cx="387" cy="59" r="2"/><circle cx="409" cy="59" r="2"/>
+        </g>
+      </svg>
+    </div>
+  </div>
+  <svg class="hero-wave" viewBox="0 0 1440 70" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M0,36 C180,64 360,8 540,30 C720,52 900,10 1080,28 C1260,46 1380,26 1440,34 L1440,70 L0,70 Z" fill="#FAF6EC"/>
+  </svg>
+</div>
+
+<!-- ═══════════════════════ STICKY NAV ═══════════════════════ -->
+<nav class="nav" id="nav">
+  <div class="nav-scroll">
+    <a href="#s1"><span class="n">01</span>식음료</a>
+    <a href="#s2"><span class="n">02</span>수영장</a>
+    <a href="#s3"><span class="n">03</span>엔터테인먼트</a>
+    <a href="#s4"><span class="n">04</span>키즈 · 청소년</a>
+    <a href="#s5"><span class="n">05</span>어른 전용</a>
+    <a href="#s6"><span class="n">06</span>서비스 · 쇼핑</a>
+    <a href="#s7"><span class="n">07</span>예약 체크리스트</a>
+    <a href="#s8"><span class="n">08</span>실전 꿀팁</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<!-- ═══════════════════════ QUICK FACTS ═══════════════════════ -->
+<div class="facts reveal">
+  <div class="fact"><div class="f-label">Home Port</div><div class="f-value serif">마리나 베이<br>크루즈 센터</div><div class="f-sub">싱가포르</div></div>
+  <div class="fact"><div class="f-label">Ship</div><div class="f-value serif">208,000톤</div><div class="f-sub">20개 데크 · 2025년 12월 취항</div></div>
+  <div class="fact"><div class="f-label">Itinerary</div><div class="f-value serif">3박 / 4박</div><div class="f-sub">월→목 · 목→월</div></div>
+  <div class="fact"><div class="f-label">Currency</div><div class="f-value serif">USD</div><div class="f-sub">Key to the World 카드 결제</div></div>
+</div>
+
+<div class="legend reveal">
+  <b>요금 배지 안내</b>
+  <span><span class="badge b-free">무료</span> 크루즈 요금 포함</span>
+  <span><span class="badge b-paid">유료</span> 추가 요금 발생</span>
+  <span><span class="badge b-part">일부 유료</span> 기본 무료 + 옵션 유료</span>
+  <span><span class="badge b-check">확인 필요</span> 정보 미확인 · 변동 가능</span>
+</div>
+
+<!-- ═══════════════════════ 01 식음료 ═══════════════════════ -->
+<section class="block reveal" id="s1">
+  <div class="sec-head">
+    <span class="kicker">Dining &amp; Drinks</span>
+    <h2>식음료 시설 완벽 가이드</h2>
+    <p class="lead">디즈니 어드벤처의 식사는 대부분 크루즈 요금에 포함됩니다. 유료는 스페셜티 레스토랑 2곳, 카페, 바(주류)뿐입니다.</p>
+  </div>
+  <div class="mickey-orn" aria-hidden="true"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+
+  <h3 class="sub-h"><span class="dot">①</span>무료 로테이션 다이닝 — 저녁 · 자동 배정 <span class="badge b-free">무료</span></h3>
+  <p class="note">저녁은 매일 다른 테마 레스토랑으로 '회전'하며, 담당 서버팀이 함께 이동합니다. 예약 불필요 — Navigator 앱에 매일 저녁 장소가 자동 표시됩니다. 저녁 시간은 <b>17:45 / 20:15</b> 중 예약 시 선택하며, 탑승객은 아래 두 세트 중 하나로 배정됩니다 (변경은 Guest Services 문의).</p>
+
+  <div class="cards">
+    <div class="card gold-top">
+      <span class="set-label set-a">SET A</span>
+      <h4>네비게이터스 클럽 <span class="deck">DECK 6 AFT</span></h4>
+      <p>클래식 오션라이너 · 황금기 헐리우드 테마. 미키·미니·도날드·데이지가 식사 중 테이블로 찾아옵니다.</p>
+      <p style="margin-top:6px"><b>TIP</b> — 조식·중식엔 플레이티드(주문식) 식사로도 운영됩니다.</p>
+    </div>
+    <div class="card gold-top">
+      <span class="set-label set-a">SET A</span>
+      <h4>애니메이터스 팔레트 <span class="deck">DECK 5 AFT</span></h4>
+      <p>디즈니·픽사 애니메이션 테마. 식사 전 그린 내 그림이 디저트 전에 애니메이션으로 스크린에 상영됩니다!</p>
+      <p style="margin-top:6px"><b>TIP</b> — 그림은 정성껏 그리세요. 스크린에 진짜 나옵니다.</p>
+    </div>
+    <div class="card gold-top">
+      <span class="set-label set-a">SET A</span>
+      <h4>픽사 마켓 <span class="deck">DECK 17 AFT</span></h4>
+      <p>인사이드아웃 · 몬스터대학 · 터닝레드 등 픽사 테마. 조식·중식은 뷔페로 운영됩니다.</p>
+      <p style="margin-top:6px"><b>TIP</b> — Cars 구역 맨 뒤 코너 원형 테이블이 바다 파노라마 뷰 명당.</p>
+    </div>
+    <div class="card gold-top">
+      <span class="set-label set-b">SET B</span>
+      <h4>헐리우드 스포트라이트 클럽 <span class="deck">DECK 8 AFT</span></h4>
+      <p>헐리우드 황금기 + 파노라마 오션뷰. 캐릭터가 등장합니다.</p>
+      <p style="margin-top:6px"><b>TIP</b> — 네비게이터스 클럽의 자매 레스토랑입니다.</p>
+    </div>
+    <div class="card gold-top">
+      <span class="set-label set-b">SET B</span>
+      <h4>애니메이터스 테이블 <span class="deck">DECK 9 AFT</span></h4>
+      <p>애니메이터스 팔레트와 유사한 인터랙티브 다이닝.</p>
+      <p style="margin-top:6px"><b>TIP</b> — 여기서도 내 그림이 화면에 등장합니다.</p>
+    </div>
+    <div class="card gold-top">
+      <span class="set-label set-b">SET B</span>
+      <h4>인챈티드 서머 <span class="deck">DECK 6 AFT</span></h4>
+      <p>라푼젤(막시무스 홀) + 겨울왕국(올라프 홀)의 2개 홀 구성. 조식·중식은 뷔페.</p>
+      <p style="margin-top:6px"><b>TIP</b> — 올라프 쪽 = 스테이크·양식 / 막시무스 쪽 = 아시안. 양쪽 다 가져와도 OK.</p>
+    </div>
+  </div>
+
+  <div class="box box-magic"><b class="t">✨ 숨은 꿀팁 (실탑승자 확인)</b>
+    <ul>
+      <li>3코스(스타터·메인·디저트)는 <b>여러 개 주문 가능</b>합니다. 메인 2개도 OK!</li>
+      <li>메뉴에 없는 숨은 디저트 <b>'미키 프리미엄 아이스크림 바'</b>를 요청하면 스프링클과 함께 나옵니다.</li>
+      <li>조식·중식은 배정 무관 — 무료 레스토랑 어디든, 몇 번이든 이용 가능합니다.</li>
+    </ul>
+  </div>
+
+  <h3 class="sub-h"><span class="dot">②</span>무료 퀵서비스 · 푸드 부스 <span class="badge b-free">무료</span></h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>시설</th><th>위치</th><th>메뉴</th><th>한 줄 팁</th></tr>
+    <tr><td class="nm">모글리스 이터리</td><td><span class="deck">DECK 10 MID</span></td><td>정글북 테마 인도 요리 (채식 옵션 有)</td><td class="tip">커리·탄두리 등 본격 인도식. 채식주의자 동행 시 최적.</td></tr>
+    <tr><td class="nm">그램마 탈라스 키친</td><td><span class="deck">DECK 10 MID</span></td><td>모아나 테마 · 아시아~퍼시픽 라이스볼·그릴 생선·치킨</td><td class="tip">가볍고 건강한 한 끼로 좋습니다.</td></tr>
+    <tr><td class="nm">스티치스 오하나 그릴</td><td><span class="deck">DECK 10 MID</span></td><td>하와이안 버거·핫도그·그릴</td><td class="tip">고구마튀김(스위트포테이토 프라이즈)이 실탑승자 강추 메뉴.</td></tr>
+    <tr><td class="nm">코스믹 케밥</td><td><span class="deck">DECK 10 MID</span></td><td>미즈 마블 테마 · 케밥·피타랩·팔라펠·후무스</td><td class="tip">할랄 프렌들리. 고민되면 "믹스로 주세요" 하면 이것저것 담아줍니다.</td></tr>
+    <tr><td class="nm">피자 플래닛</td><td><span class="deck">DECK 17 MID</span></td><td>토이스토리 테마 화덕피자 (페퍼로니·4치즈·BBQ치킨·마르게리타)</td><td class="tip">자정까지 영업 — 야식·맥주 안주 성지.</td></tr>
+    <tr><td class="nm">위지스 프리지스</td><td><span class="deck">DECK 17 MID</span></td><td>소프트 아이스크림 (초코·딸기·바닐라·스월)</td><td class="tip">수영 후 무제한 콘 아이스크림. 아이들 천국.</td></tr>
+    <tr><td class="nm">음료 스테이션 (4곳)</td><td><span class="deck">D10 MID ×2 · D17 FWD ×2</span></td><td>냉수·탄산음료·주스·핫초코·커피·차</td><td class="tip">텀블러 지참하면 시원하게 들고 다니기 편합니다.</td></tr>
+    <tr><td class="nm">인피니티 바 핫도그</td><td><span class="deck">DECK 18 AFT</span></td><td>비프·치킨 핫도그 샌드위치</td><td class="tip">바 자체는 유료지만 핫도그는 무료로 제공되는 숨은 스팟!</td></tr>
+    <tr><td class="nm">룸서비스 (24시간)</td><td>전 객실</td><td>24시간 인룸 다이닝</td><td class="tip">음식은 무료, 팁만 접시당 US$1~2 현금 권장. 발코니 조식 추천.</td></tr>
+  </table></div>
+
+  <h3 class="sub-h"><span class="dot">③</span>유료 스페셜티 레스토랑 <span class="badge b-paid">유료</span></h3>
+  <div class="cards">
+    <div class="card gold-top">
+      <h4><span class="emoji">🍝</span>팔로 트라토리아 <span class="badge b-paid">유료</span> <span class="deck">DECK 10 AFT</span></h4>
+      <div class="price">1인 약 US$55 (프리픽스 기준 · 알라카르트 별도) + 18% 팁 자동</div>
+      <p>루카 테마 · <b>성인 전용(18+)</b> 북이탈리아 파인다이닝. DCL 최초 2층 구조 팔로. 브런치도 운영(브런치 약 US$55). 예약 필수이며 이용 시 그날 로테이션 디너는 건너뜁니다. <b>24시간 전 미취소 시 전액 청구.</b> 드레스코드: 세미포멀~드레스캐주얼 (반바지·수영복 불가, 브런치는 드레스 반바지 허용).</p>
+    </div>
+    <div class="card gold-top">
+      <h4><span class="emoji">🍣</span>마이크 &amp; 설리스 – 플레이버스 오브 아시아 <span class="badge b-paid">유료</span> <span class="deck">DECK 10 AFT</span></h4>
+      <div class="price">가격 정보 미확인 (콘셉트별 상이) + 18% 팁 자동 <span class="badge b-check">확인 필요</span></div>
+      <p>몬스터주식회사 테마 · <b>가족 이용 가능</b> 프리미엄 다이닝. 한 지붕 아래 4개 콘셉트 — ① 재패니즈 스테이크하우스 ② 철판요리(테판야키) ③ 오마카세 카운터 ④ 야외 스시·사시미 가든(워크인 가능). 예약 필수, 24시간 전 취소 규정 동일.</p>
+    </div>
+  </div>
+
+  <h3 class="sub-h"><span class="dot">④</span>카페 · 음료 정책</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>구분</th><th>내용</th><th>비고</th></tr>
+    <tr><td class="nm"><span class="badge b-free">무료</span> 기본 음료</td><td>물, 탄산음료, 주스, 브루드 커피, 차, 핫초코 — 음료 스테이션·레스토랑에서 무제한</td><td class="tip">타 크루즈와 달리 <b>탄산음료도 무료</b>입니다.</td></tr>
+    <tr><td class="nm"><span class="badge b-free">무료</span> 객실 커피·차</td><td>객실 내 바샤커피 &amp; TWG 티백 무료 비치 (1일 2회 보충)</td><td class="tip">무료 레스토랑에서 요청해도 제공됩니다.</td></tr>
+    <tr><td class="nm"><span class="badge b-paid">유료</span> 스페셜티 커피</td><td>바샤 커피 · TWG 티 매장(D7 MID), 앨리 캣 카페(D7 AFT), 팔로 카페(D10 AFT) — 커피 1잔 약 US$4</td><td class="tip">앨리 캣 카페는 바이맥스 영화관 옆 — 팝콘도 판매.</td></tr>
+    <tr><td class="nm"><span class="badge b-check">확인 필요</span> 버블티</td><td>비위칭 보바 &amp; 브루스(D10 MID) — 우르술라 테마 버블티</td><td class="tip">일부 자료는 무료, 실탑승 후기는 유료 카페로 분류. 탑승 후 확인 권장.</td></tr>
+    <tr><td class="nm"><span class="badge b-paid">유료</span> 주류</td><td>맥주 약 US$8 / 칵테일·와인·사케 약 US$11 + 18% 팁 자동</td><td class="tip">무제한 음료 패키지는 <b>없음</b>(디즈니 크루즈 공통). 대신 'DCL 비어 머그' 구매 시 리필마다 맥주값만 내고 머그는 기념품으로.</td></tr>
+    <tr><td class="nm">주류 반입</td><td>성인 1인당 맥주 6캔(일반캔) 또는 와인 2병(750ml 미개봉) — <b>핸드캐리만</b></td><td class="tip">위탁수하물에 넣으면 압수됩니다. 선내 주류가 비싸 반입 추천.</td></tr>
+  </table></div>
+
+  <h3 class="sub-h"><span class="dot">⑤</span>바 &amp; 라운지 11곳 — 음료 유료 · 입장은 자유</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>바 · 라운지</th><th>위치</th><th>테마 · 특징</th></tr>
+    <tr><td class="nm">티아나스 바이유 라운지</td><td><span class="deck">DECK 5 MID</span></td><td>공주와 개구리 · 라이브 재즈. <b>베녜(도넛)</b> 강추</td></tr>
+    <tr><td class="nm">스펠바운드</td><td><span class="deck">DECK 6 MID</span></td><td>백설공주 이블퀸 · '마법 물약' 칵테일</td></tr>
+    <tr><td class="nm">버커니어 바</td><td><span class="deck">DECK 6 AFT</span></td><td>피터팬 해적 테마 스포츠 바 · 스포츠 중계</td></tr>
+    <tr><td class="nm">마블 스타일 스튜디오 스피크이지</td><td><span class="deck">DECK 6 AFT</span></td><td>낮엔 마블 변신샵, 밤엔 히든 스피크이지 바</td></tr>
+    <tr><td class="nm">D 라운지</td><td><span class="deck">DECK 7 MID</span></td><td>공용 노래방 무대·밴드·트리비아 (무대 이용 무료)</td></tr>
+    <tr><td class="nm">가든 바</td><td><span class="deck">DECK 10 MID</span></td><td>이매지네이션 가든 안 — 가든 스테이지 쇼 보며 한잔</td></tr>
+    <tr><td class="nm">웨이파인더 바</td><td><span class="deck">DECK 10 AFT</span></td><td>모아나 테마 · 저녁 DJ 나이트 명당</td></tr>
+    <tr><td class="nm">타베르나 포르토로소</td><td><span class="deck">DECK 10 AFT</span></td><td>루카 테마 · 팔로 2층의 이탈리안 바</td></tr>
+    <tr><td class="nm">바운스 앤 홉스</td><td><span class="deck">DECK 17 MID</span></td><td>탑데크 스탠딩 바 · 맥주 버킷</td></tr>
+    <tr><td class="nm">마켓 바</td><td><span class="deck">DECK 17 MID</span></td><td>풀사이드 카페형 바 · 맥주 버킷</td></tr>
+    <tr><td class="nm">인피니티 바</td><td><span class="deck">DECK 18 AFT</span></td><td>마블 테마 · 인피니티 풀 옆 (무료 핫도그!)</td></tr>
+  </table></div>
+</section>
+
+<!-- ═══════════════════════ 02 수영장 ═══════════════════════ -->
+<section class="block reveal" id="s2">
+  <div class="sec-head">
+    <span class="kicker">Pools &amp; Water Play</span>
+    <h2>수영장 · 워터 액티비티</h2>
+    <p class="lead">수영 시설은 <b>전부 무료</b>입니다. 아동용 구명조끼도 무료 비치, 수건은 풀 데크에서 제공됩니다.</p>
+  </div>
+  <div class="mickey-orn" aria-hidden="true"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+
+  <div class="tbl-wrap"><table>
+    <tr><th>시설</th><th>위치</th><th>대상 · 제한</th><th>특징 · 팁</th></tr>
+    <tr><td class="nm">써니사이드 패밀리 풀<br><span class="badge b-free">무료</span></td><td><span class="deck">DECK 17 MID</span></td><td>전 연령</td><td class="tip">선내 최대 풀 · 깊이 1.32m. 미니 랩 수영 가능. 대형 스크린 2개로 영화 상영. 가장 붐빔.</td></tr>
+    <tr><td class="nm">인피니티 풀<br><span class="badge b-free">무료</span></td><td><span class="deck">DECK 18 AFT</span></td><td>전 연령</td><td class="tip">깊이 1m · 바다를 향한 인피니티 뷰 + 지붕 有. 실탑승자 최애 — 한적하고 그늘져서 한낮에 최고.</td></tr>
+    <tr><td class="nm">웨이파인더 베이 웨이딩풀<br><span class="badge b-free">무료</span></td><td><span class="deck">DECK 10 AFT</span></td><td>유아·아동 적합</td><td class="tip">얕은 물놀이 풀. 저녁엔 '모아나: 콜 오브 더 씨' 쇼 무대로 변신.</td></tr>
+    <tr><td class="nm">우디 &amp; 제시스 와일드 슬라이드<br><span class="badge b-free">무료</span></td><td><span class="deck">DECK 18 MID</span></td><td>신장 제한 <span class="badge b-check">확인 필요</span></td><td class="tip">빨강·노랑 트윈 워터슬라이드. 꽤 스릴 있다는 후기. 제한 기준은 탑승 후 안내판 확인.</td></tr>
+    <tr><td class="nm">플라잉 소서 스플래시 존<br><span class="badge b-free">무료</span></td><td><span class="deck">DECK 17 MID</span></td><td>8세 미만</td><td class="tip">UFO·로켓·물대포·대형 물양동이. 피자플래닛 컵 모양 덤프버킷이 포인트.</td></tr>
+    <tr><td class="nm">토이스토리 스플래시 패드<br><span class="badge b-free">무료</span></td><td><span class="deck">DECK 17 MID</span></td><td>4세 미만 유아</td><td class="tip">우디·버즈가 거대 목욕장난감으로 등장하는 유아 전용 존.</td></tr>
+    <tr><td class="nm">월풀 스파 (자쿠지)<br><span class="badge b-free">무료</span></td><td>풀 데크 곳곳</td><td>전 연령</td><td class="tip">써니사이드 풀 주변 다수 배치.</td></tr>
+    <tr><td class="nm">컨시어지 전용 풀</td><td><span class="deck">DECK 17 FWD</span></td><td>컨시어지 투숙객만</td><td class="tip">일반 객실 투숙객은 이용 불가.</td></tr>
+  </table></div>
+
+  <div class="box box-warn"><b class="t">⚠️ 성인 전용 풀 관련 참고</b>
+    타 디즈니 선박에 있는 성인 전용 풀(Quiet Cove)은 이 배에서는 확인되지 않았습니다. 조용한 물놀이를 원하시면 인피니티 풀(D18 AFT)이 가장 한적합니다. ※ 탑승 후 확인 필요
+  </div>
+</section>
+
+<!-- ═══════════════════════ 03 엔터테인먼트 ═══════════════════════ -->
+<section class="block reveal" id="s3">
+  <div class="sec-head">
+    <span class="kicker">Shows &amp; Rides</span>
+    <h2>엔터테인먼트 · 라이드</h2>
+    <p class="lead">브로드웨이급 뮤지컬부터 해상 최장 롤러코스터까지 — 대부분 무료, 슬롯제는 Navigator 앱 예약이 핵심입니다.</p>
+  </div>
+  <div class="mickey-orn" aria-hidden="true"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+
+  <h3 class="sub-h"><span class="dot">①</span>공연 · 쇼 — 전부 무료</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>공연</th><th>장소</th><th>구분</th><th>팁</th></tr>
+    <tr><td class="nm">Remember (월-E &amp; 이브)<br><span class="badge b-free">무료</span></td><td><span class="deck">월트 디즈니 시어터 · D7 FWD</span></td><td>브로드웨이급 뮤지컬</td><td class="tip">디즈니 팬들 눈물버튼이라는 후기. 좌석 선착순 — 앱에서 시간 확인 후 일찍 입장.</td></tr>
+    <tr><td class="nm">Disney Seas the Adventure (구피)<br><span class="badge b-free">무료</span></td><td><span class="deck">월트 디즈니 시어터 · D7 FWD</span></td><td>브로드웨이급 뮤지컬</td><td class="tip">보통 이른 저녁 팀·늦은 저녁 팀용 2회 공연.</td></tr>
+    <tr><td class="nm">어벤져스 어셈블!<br><span class="badge b-free">무료</span></td><td><span class="deck">가든 스테이지 · D10 MID</span></td><td>야외 액션 쇼</td><td class="tip">스파이더맨 와이어 액션 + 스칼렛 위치 부양 + 춤추는 데드풀. 발코니 가든뷰 객실이면 방에서도 관람 가능.</td></tr>
+    <tr><td class="nm">더피와 프렌드십<br><span class="badge b-free">무료</span></td><td><span class="deck">가든 스테이지 · D10 MID</span></td><td>가족 쇼</td><td class="tip">더피 팬이라면 필수. 인형극 + 음악.</td></tr>
+    <tr><td class="nm">모아나: 콜 오브 더 씨<br><span class="badge b-free">무료</span></td><td><span class="deck">웨이파인더 베이 · D10 AFT</span></td><td>야외 수상 쇼</td><td class="tip">인피니티 풀(D18)에서 내려다보며 감상하는 것도 가능.</td></tr>
+    <tr><td class="nm">라이온킹: 셀레브레이션 인 더 스카이<br><span class="badge b-part">일부 유료</span></td><td>탑데크 (우현 쪽 발사)</td><td>해상 불꽃놀이 쇼</td><td class="tip">샤루크 칸 내레이션! 탑데크 관람 무료 · 스파클링 와인 포함 프리미엄 좌석만 유료. 자리 선점은 일찍.</td></tr>
+    <tr><td class="nm">캡틴 잭 스패로우 &amp; 사이렌 퀸 · 바이맥스 슈퍼 스트레치 · 세일어웨이 파티<br><span class="badge b-free">무료</span></td><td><span class="deck">가든 스테이지 등</span></td><td>수시 이벤트</td><td class="tip">매일 스케줄이 다르니 Navigator 앱을 아침마다 확인하세요.</td></tr>
+  </table></div>
+
+  <h3 class="sub-h"><span class="dot">②</span>영화 · 게임 · 액티비티</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>시설</th><th>위치</th><th>요금</th><th>팁</th></tr>
+    <tr><td class="nm">바이맥스 시네마 (4개관)</td><td><span class="deck">DECK 7 AFT</span></td><td><span class="badge b-free">무료</span></td><td class="tip">30~50석 미니 영화관 4개. 디즈니 영화 상영. 팝콘은 옆 앨리 캣 카페에서 유료 구매.</td></tr>
+    <tr><td class="nm">어드벤처 비전 (야외 대형스크린 2개)</td><td><span class="deck">DECK 17 MID</span></td><td><span class="badge b-free">무료</span></td><td class="tip">풀사이드 영화 + 무료 피자·아이스크림 조합 = 최고의 밤.</td></tr>
+    <tr><td class="nm">빅 히어로 아케이드</td><td><span class="deck">DECK 7 AFT</span></td><td><span class="badge b-free">무료</span></td><td class="tip">오락실 게임 전부 무료! (카이주 카오스, 고고 레이서스, 와사비 스피드 슬라이스 등)</td></tr>
+    <tr><td class="nm">히로 트레이닝 존 (체감형 시뮬레이터)</td><td><span class="deck">DECK 7 AFT</span></td><td><span class="badge b-free">무료</span></td><td class="tip">인터랙티브 바닥에서 달리고 피하는 VR류 게임.</td></tr>
+    <tr><td class="nm">프라이빗 노래방 (3개 룸)</td><td><span class="deck">DECK 7 MID 부근</span></td><td><span class="badge b-paid">유료</span> 룸당 약 US$135 / 1.5시간</td><td class="tip">인기 폭발 — 승선 직후 앱에서 바로 예약하세요.</td></tr>
+    <tr><td class="nm">D 라운지 공용 노래방 무대</td><td><span class="deck">DECK 7 MID</span></td><td><span class="badge b-free">무료</span></td><td class="tip">무대에서 부르는 건 무료, 음료만 유료.</td></tr>
+    <tr><td class="nm">빙고</td><td><span class="deck">월트 디즈니 시어터</span></td><td><span class="badge b-paid">유료</span> 카드 구매 <span class="badge b-check">확인 필요</span></td><td class="tip">카지노가 없는 대신 빙고가 인기. 카드 가격은 탑승 후 확인.</td></tr>
+    <tr><td class="nm">사일런트 디스코 · DJ 나이트</td><td><span class="deck">D10 가든 · 웨이파인더</span></td><td><span class="badge b-free">무료</span></td><td class="tip">저녁 스케줄 — 앱 확인.</td></tr>
+    <tr><td class="nm">더피 앤 프렌즈 디스커버리 퀘스트</td><td>선내 전역</td><td><span class="badge b-free">무료</span></td><td class="tip">단서 따라 선내 보물찾기, 완료 시 소정의 선물.</td></tr>
+    <tr><td class="nm">캐릭터 미트 &amp; 그리트</td><td>선내 전역</td><td><span class="badge b-free">무료</span></td><td class="tip">미키·미니·구피·스티치 등 인기 캐릭터는 앱 사전 예약 / 자스민·라푼젤·알라딘 등은 로밍으로 자주 마주칩니다.</td></tr>
+  </table></div>
+
+  <h3 class="sub-h"><span class="dot">③</span>마블 랜딩 라이드 — 전부 무료 · 앱 예약 <span class="badge b-free">무료</span></h3>
+  <div class="cards c3">
+    <div class="card gold-top">
+      <h4><span class="emoji">🎢</span>아이언사이클 테스트 런 <span class="deck">DECK 18 AFT</span></h4>
+      <p><b>해상 최장(250m) 롤러코스터</b>이자 이 배의 상징. 토니 스타크의 테스트 트랙 콘셉트로 상부 데크 위 최대 30피트를 달립니다. Navigator 앱에서 무료 예약(때때로 워크인 허용). 신장 제한 기준은 탑승 후 확인 필요.</p>
+    </div>
+    <div class="card gold-top">
+      <h4><span class="emoji">🏎</span>핌 퀀텀 레이서스 <span class="deck">DECK 18 AFT</span></h4>
+      <p>앤트맨 테마 미니카 레이싱. 어린이는 일정 신장 미만 시 보호자 동반 필요 — 부모도 같이 탈 좋은 핑계가 됩니다.</p>
+    </div>
+    <div class="card gold-top">
+      <h4><span class="emoji">🎠</span>그루트 갤럭시 스핀 <span class="deck">DECK 18 AFT</span></h4>
+      <p>가디언즈 테마 회전 라이드. 그루트가 DJ를 맡은 신나는 음악과 함께. 유아~가족용으로 무난.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 04 키즈 ═══════════════════════ -->
+<section class="block reveal" id="s4">
+  <div class="sec-head">
+    <span class="kicker">Kids &amp; Teens</span>
+    <h2>키즈 · 청소년 시설</h2>
+    <p class="lead">생후 6개월부터 17세까지 — 연령별 전용 공간이 촘촘하게 준비되어 있습니다.</p>
+  </div>
+  <div class="mickey-orn" aria-hidden="true"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+
+  <div class="tbl-wrap"><table>
+    <tr><th>시설</th><th>대상</th><th>위치</th><th>요금</th><th>내용 · 팁</th></tr>
+    <tr><td class="nm">잇츠 어 스몰월드 너서리</td><td>6개월~3세</td><td><span class="deck">DECK 8 MID</span></td><td><span class="badge b-paid">유료</span> 요금 미확인<br><span class="badge b-check">확인 필요</span></td><td class="tip">전문 보육. 타 디즈니 선박 기준 시간당 약 US$9 수준이 참고치 — 정확한 요금은 앱/탑승 후 확인. 자리가 적어 사전 예약 강추.</td></tr>
+    <tr><td class="nm">오셔니어 클럽</td><td>3~10세</td><td><span class="deck">DECK 8 MID</span></td><td><span class="badge b-free">무료</span></td><td class="tip">배변 훈련 완료 아동 대상 · 맡기고 가는 방식. 이매지니어링 랩(롤러코스터 설계 체험), 앤디스 토이박스, 마블 WEB 워크숍, 페어리테일 홀. 캐릭터 방문 + 유스 카운슬러 상주. 아이들이 하선날 울 정도로 만족도 높음.</td></tr>
+    <tr><td class="nm">미키 &amp; 미니 캡틴스 데크</td><td>유아~아동 (보호자 동반)</td><td><span class="deck">DECK 8 MID</span></td><td><span class="badge b-free">무료</span></td><td class="tip">부모와 함께 노는 개방형 자유 놀이 공간 (비상주).</td></tr>
+    <tr><td class="nm">엣지 (Edge)</td><td>11~14세</td><td><span class="deck">DECK 7 AFT</span></td><td><span class="badge b-free">무료</span></td><td class="tip">산프란소쿄 상점가로 위장한 트윈 전용 아지트 — 비디오게임·보드게임·영화.</td></tr>
+    <tr><td class="nm">바이브 (Vibe)</td><td>14~17세</td><td><span class="deck">DECK 7 AFT</span></td><td><span class="badge b-free">무료</span></td><td class="tip">콘솔게임·탁구·푸스볼 + 저녁 무비나이트. 부모 출입 불가 = 십대들이 좋아하는 이유.</td></tr>
+    <tr><td class="nm">비비디 바비디 부티크</td><td>3~12세</td><td><span class="deck">DECK 7 MID</span></td><td><span class="badge b-paid">유료</span> 패키지별 상이<br><span class="badge b-check">확인 필요</span></td><td class="tip">공주·기사·선장 변신 살롱. 파크 기준 패키지 약 US$60~250 참고 (선내 정확 요금은 앱 확인). <b>출항 75일 전부터 사전 예약 가능 — 순삭됩니다.</b></td></tr>
+    <tr><td class="nm">마블 스타일 스튜디오</td><td>전 연령</td><td><span class="deck">DECK 6 AFT</span></td><td><span class="badge b-paid">유료</span></td><td class="tip">마블 히어로 헤어·메이크업·코스튬 변신. 밤에는 스피크이지 바로 변신하는 독특한 공간.</td></tr>
+  </table></div>
+
+  <div class="box box-tip"><b class="t">🎭 코스프레 규정</b>
+    아이들은 크루즈 내내 코스튬 착용 자유. 성인은 규정 있음 — 마스크는 포토 스팟에서 정지 상태로만, 무기류 소품 금지, 승선 수속 중 마스크 착용 금지.
+  </div>
+</section>
+
+<!-- ═══════════════════════ 05 어른 전용 ═══════════════════════ -->
+<section class="block reveal" id="s5">
+  <div class="sec-head">
+    <span class="kicker">Adults &amp; Wellness</span>
+    <h2>어른 전용 · 웰니스</h2>
+    <p class="lead">아이는 오셔니어 클럽에, 어른은 팔로와 스파로 — 어른의 시간도 마법이 됩니다.</p>
+  </div>
+  <div class="mickey-orn" aria-hidden="true"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+
+  <div class="tbl-wrap"><table>
+    <tr><th>시설</th><th>위치</th><th>요금</th><th>내용 · 팁</th></tr>
+    <tr><td class="nm">팔로 트라토리아 (18+)</td><td><span class="deck">DECK 10 AFT</span></td><td><span class="badge b-paid">유료</span> 약 US$55/인</td><td class="tip">이 배의 유일한 성인 전용 다이닝. 부부 데이트 저녁으론 이만한 게 없다는 평. 아이는 오셔니어 클럽에 맡기고!</td></tr>
+    <tr><td class="nm">인피니트 스파 – 엘레미스 앳 씨</td><td><span class="deck">DECK 10 MID</span></td><td><span class="badge b-paid">유료</span> 트리트먼트별 상이 <span class="badge b-check">확인 필요</span></td><td class="tip">마사지·페이셜 등 (Elemis 제품 사용). 건식 사우나·스팀·명상·요가룸 보유. 출항 전 앱에서 예약 가능. 첫날 스파 투어·래플 이벤트가 있는지 체크.</td></tr>
+    <tr><td class="nm">피트니스 센터</td><td><span class="deck">DECK 10 MID</span></td><td><span class="badge b-free">무료</span></td><td class="tip">오션뷰 통창의 잘 갖춰진 짐. 운동복·운동화 챙기세요.</td></tr>
+    <tr><td class="nm">러닝 트랙</td><td><span class="deck">DECK 18 MID</span></td><td><span class="badge b-free">무료</span></td><td class="tip">바다 보며 달리는 탑데크 트랙 — 아침 러닝 강추.</td></tr>
+    <tr><td class="nm">오퓰런스 스파 &amp; 피트니스</td><td>컨시어지 구역</td><td>컨시어지 전용</td><td class="tip">컨시어지 투숙객 전용 별도 웰니스 시설.</td></tr>
+    <tr><td class="nm">바 &amp; 라운지 11곳</td><td>선내 전역</td><td><span class="badge b-paid">유료</span></td><td class="tip">상세는 01 식음료 섹션 ⑤ 표 참조. 성인의 밤은 스피크이지(D6 AFT)와 웨이파인더 DJ 나이트가 핵심.</td></tr>
+  </table></div>
+</section>
+
+<!-- ═══════════════════════ 06 서비스 ═══════════════════════ -->
+<section class="block reveal" id="s6">
+  <div class="sec-head">
+    <span class="kicker">Onboard Services</span>
+    <h2>서비스 · 쇼핑 안내</h2>
+    <p class="lead">Wi-Fi, 팁, 결제, 세탁, 쇼핑까지 — 알고 타면 훨씬 편해지는 선내 생활 정보.</p>
+  </div>
+  <div class="mickey-orn" aria-hidden="true"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+
+  <h3 class="sub-h"><span class="dot">①</span>Wi-Fi 인터넷</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>구분</th><th>요금</th><th>가능한 것</th></tr>
+    <tr><td class="nm">기본 선내 Wi-Fi (DCL-GUEST)</td><td><span class="badge b-free">무료</span></td><td>Navigator 앱 전체 기능 + 기본 메시징 (iMessage·WhatsApp 텍스트)</td></tr>
+    <tr><td class="nm">인터넷 패키지</td><td><span class="badge b-paid">유료</span> 기기당 약 US$26~30/일 <span class="badge b-check">확인 필요</span></td><td>웹서핑·이메일·SNS 업로드·영상통화·숏폼</td></tr>
+    <tr><td class="nm">인터넷+스트리밍 패키지</td><td><span class="badge b-paid">유료</span> 기기당 약 US$42~49/일 <span class="badge b-check">확인 필요</span></td><td>위 + 유튜브·음악 스트리밍. 다기기 묶음(최대 4대) US$88~299도 있음</td></tr>
+  </table></div>
+  <p class="note">구매: 앱 &gt; Connect to the Internet 또는 dclwifi.com. 접속 안 될 땐 ① VPN 끄기 ② Private Wi-Fi Address 끄기 ③ Limit IP Address Tracking 끄기. 3~4박이면 굳이 전 일정 결제 말고 필요한 날만 사는 게 절약 팁. 요금은 항차별 변동 — 탑승 후 앱에서 최종 확인.</p>
+
+  <h3 class="sub-h"><span class="dot">②</span>팁(Gratuity) 정책</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>항목</th><th>금액</th><th>비고</th></tr>
+    <tr><td class="nm">자동 팁 (스탠다드 객실)</td><td>1박·1인당 약 US$16 (4박 기준 총 약 US$64/인)</td><td class="tip">객실 호스트·다이닝 팀 몫. 선내 계정에 자동 부과 — 조정·제거는 Guest Services에서 가능.</td></tr>
+    <tr><td class="nm">자동 팁 (컨시어지)</td><td>1인당 총 약 US$109 (4박 기준)</td><td class="tip">스위트·컨시어지는 요율이 더 높습니다.</td></tr>
+    <tr><td class="nm">음료·유료 다이닝</td><td>18% 자동 부과</td><td class="tip">바·팔로·마이크&amp;설리스 계산서에 자동 포함.</td></tr>
+    <tr><td class="nm">룸서비스</td><td>접시당 US$1~2 현금 권장</td><td class="tip">소액 USD 현금을 미리 준비해 가세요. SGD도 받습니다.</td></tr>
+  </table></div>
+
+  <h3 class="sub-h"><span class="dot">③</span>결제 · 통화</h3>
+  <div class="box box-magic"><b class="t">💳 Key to the World 카드 = 방 열쇠 + 지갑</b>
+    <ul>
+      <li>선내 모든 결제는 <b>USD</b> 기준, 객실 카드로 통합 청구 → 마지막 밤 정산.</li>
+      <li>온라인 체크인 때 신용/체크카드를 연결 (또는 현금 정산 선택). 현금 정산은 Guest Services(D6 MID).</li>
+      <li>선내에 <b>ATM·환전소 없음</b> — 팁용 소액 USD는 미리 준비.</li>
+      <li>해외 결제 수수료가 낮은 카드(트래블 카드 등)를 연결하면 유리합니다.</li>
+      <li>카드 분실 시 Guest Services에서 즉시 정지 + 무료 재발급.</li>
+    </ul>
+  </div>
+
+  <h3 class="sub-h"><span class="dot">④</span>사진 · 세탁 · 흡연 · 의무실</h3>
+  <div class="tbl-wrap"><table>
+    <tr><th>항목</th><th>요금</th><th>내용</th></tr>
+    <tr><td class="nm">전문 사진 서비스</td><td><span class="badge b-paid">유료</span> 패키지 요금 미확인 <span class="badge b-check">확인 필요</span></td><td class="tip">캐릭터 그리팅·디너에서 전속 포토그래퍼 촬영 → 구매는 선택. 개인 카메라 촬영은 자유·무료.</td></tr>
+    <tr><td class="nm">세탁</td><td><span class="badge b-paid">유료</span></td><td class="tip">세탁 서비스 이용 시 유료 (세탁백 US$10). 셀프 세탁실 유무는 확인 필요.</td></tr>
+    <tr><td class="nm">흡연 구역</td><td>—</td><td class="tip">3곳: D7 FWD 우현 / D18 AFT 좌현 / D17 컨시어지 라운지(전용). 발코니 포함 그 외 전 구역 금연. 담배는 인피니티 바에서 판매 (약 US$7/갑, 말보로 2종).</td></tr>
+    <tr><td class="nm">의무실</td><td>진료 시 유료</td><td class="tip">DECK 9. 상비약·멀미약은 챙겨가는 게 경제적.</td></tr>
+  </table></div>
+
+  <h3 class="sub-h"><span class="dot">⑤</span>쇼핑 — 11개 매장</h3>
+  <div class="cards">
+    <div class="card"><h4><span class="emoji">🏰</span>월드 오브 디즈니 · 투 <span class="deck">D5 MID</span></h4><p>메인 기념품 매장 2곳.</p></div>
+    <div class="card"><h4><span class="emoji">🖼</span>아트 오브 디즈니 온 디맨드 <span class="deck">D5</span></h4><p>아트프린트 주문 제작.</p></div>
+    <div class="card"><h4><span class="emoji">💎</span>다이아몬드 &amp; 위시스 <span class="deck">D7</span></h4><p>파인주얼리 (스펠바운드 옆).</p></div>
+    <div class="card"><h4><span class="emoji">☕</span>바샤 커피 · TWG 티 <span class="deck">D7</span></h4><p>원두·차 구매 가능.</p></div>
+    <div class="card"><h4><span class="emoji">🧸</span>더피 앤 프렌즈 숍 · 내셔널지오그래픽 스토어 <span class="deck">D7 AFT</span></h4><p>선내 한정판 굿즈.</p></div>
+    <div class="card"><h4><span class="emoji">👜</span>트레저스 언톨드 <span class="deck">D10</span></h4><p>명품 콜라보 — LV·구찌 디즈니 라인 목격담.</p></div>
+    <div class="card"><h4><span class="emoji">🪄</span>캐슬 컬렉션 <span class="deck">D11</span></h4><p>인형 전문 — 옷에 붙이는 자석 플러시 인기.</p></div>
+    <div class="card"><h4><span class="emoji">⭐</span>3 위시스 · 팰리스 트레저스 <span class="deck">D17</span></h4><p>컨시어지 전용 매장.</p></div>
+  </div>
+
+  <h3 class="sub-h"><span class="dot">⑥</span>무료로 챙길 수 있는 것들 <span class="badge b-free">무료</span></h3>
+  <div class="box box-tip"><b class="t">🎁 놓치면 아까운 무료 기념품</b>
+    <ul>
+      <li><b>팔찌 + 참(Charm)</b>: 다이아몬드 &amp; 위시스(D7)에서 매일 정해진 시간 배포 (※ 미제공 항차 보고도 있음 — 매장에 문의)</li>
+      <li><b>핀 배지</b>: 생일·기념일·첫 크루즈 등 사유가 있으면 Guest Services(D6)에서 1인 1개</li>
+      <li><b>첫 크루즈 증서</b>: 첫 항해자 대상 — 객실에 없으면 Guest Services에 요청</li>
+      <li><b>객실 어메니티</b>: 디즈니 씨솔트 바디워시·샴푸·컨디셔너·로션 / 220V 만능형 콘센트 + 어댑터 비치 (어댑터·컵·접시는 반출 불가)</li>
+      <li><b>칫솔·치약</b>: 기본 비치는 안 되지만 Guest Services에 요청하면 무료 제공</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 07 체크리스트 ═══════════════════════ -->
+<section class="block reveal" id="s7">
+  <div class="sec-head">
+    <span class="kicker">Booking Checklist</span>
+    <h2>탑승 전 예약 체크리스트</h2>
+    <p class="lead">인기 유료 프로그램은 <b>출항 75일 전부터</b> Navigator 앱에서 열립니다. 현장 예약은 자리가 없는 경우가 많으니 아래 타임라인 순서대로 준비하세요.</p>
+  </div>
+  <div class="mickey-orn" aria-hidden="true"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+
+  <ul class="timeline">
+    <li><span class="when">D-75 ~ 즉시</span><br><b>Navigator 앱 설치 + 계정 · 예약번호 연결</b><p>모든 예약과 온라인 체크인의 시작점입니다.</p></li>
+    <li><span class="when">D-75 ~</span><br><b>비비디 바비디 부티크 / 마블 스타일 스튜디오 메이크오버 예약 (유료)</b><p>가장 빨리 마감되는 프로그램.</p></li>
+    <li><span class="when">D-75 ~</span><br><b>팔로 트라토리아 · 마이크 &amp; 설리스 유료 다이닝 예약</b><p>팔로 디너는 첫날 밤 포함 시 최대 2회까지 가능.</p></li>
+    <li><span class="when">D-75 ~</span><br><b>스파 트리트먼트 예약 (유료)</b><p>해상일 오후 시간대가 먼저 마감됩니다.</p></li>
+    <li><span class="when">체크인 시</span><br><b>저녁 시간대 선택: 17:45 vs 20:15</b><p>실탑승 후기 추천은 <b>20:15</b> — 석양 + 한산한 저녁 수영장을 즐길 수 있습니다.</p></li>
+    <li><span class="when">체크인 시</span><br><b>일행 예약 연결(링크)</b><p>큰 그룹이 같은 테이블에서 저녁을 먹으려면 앱에서 예약을 서로 연결해야 합니다.</p></li>
+    <li><span class="when">D-30 ~</span><br><b>온라인 체크인 완료 + Port Arrival Time 배정</b><p>첫 크루즈면 30일 전부터 가능. Port Arrival Form 출력/저장 필수.</p></li>
+    <li><span class="when">승선 직후</span><br><b>라이드(아이언사이클) · 캐릭터 그리팅 · 노래방 룸 앱 예약</b><p>무료지만 슬롯제입니다. 승선 첫 1시간에 전 일정 슬롯을 잡는 게 프로의 방식.</p></li>
+    <li><span class="when">승선 직후</span><br><b>키즈클럽 등록 (리스트밴드 수령)</b><p>너서리 이용 예정이면 슬롯 예약도 함께.</p></li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════ 08 꿀팁 ═══════════════════════ -->
+<section class="block reveal" id="s8">
+  <div class="sec-head">
+    <span class="kicker">Insider Tips</span>
+    <h2>실전 꿀팁 모음</h2>
+    <p class="lead">실제 탑승 후기에서 건져 올린, 알고 타면 격이 달라지는 8가지 노하우.</p>
+  </div>
+  <div class="mickey-orn" aria-hidden="true"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+
+  <div class="cards">
+    <div class="card gold-top"><h4><span class="emoji">🧭</span>길찾기 치트키</h4><p>복도 카펫의 미키 얼굴이 <b>바로 보이면 선수(앞)</b> 방향. 카펫 색: 초록=선수(FWD), 파랑=선미(AFT). 14층은 없습니다 (13 다음 15).</p></div>
+    <div class="card gold-top"><h4><span class="emoji">🍺</span>주류 반입은 핸드캐리로</h4><p>맥주 6캔 또는 와인 2병(성인 1인)은 반드시 기내용 가방에. 위탁 캐리어에 넣으면 압수됩니다.</p></div>
+    <div class="card gold-top"><h4><span class="emoji">💧</span>챙겨갈 것</h4><p>텀블러(음료 스테이션용), 랜야드(Key to the World 카드용), 멀미약, 슬리퍼(객실 미비치), 물티슈/휴대용 비데(비데 없음), 도어 장식 자석(픽시더스팅 전통 참여용).</p></div>
+    <div class="card gold-top"><h4><span class="emoji">🚫</span>반입 금지</h4><p>드론, 멀티탭/연장선, 전기포트류, 전자담배, 생과일·육류, 캔들, 풍선, 악기, 대형 스포츠용품.</p></div>
+    <div class="card gold-top"><h4><span class="emoji">🕗</span>저녁은 20:15가 이득</h4><p>이른 팀(17:45)이 저녁 먹는 동안 석양 + 텅 빈 수영장을 독점할 수 있습니다.</p></div>
+    <div class="card gold-top"><h4><span class="emoji">📶</span>e심 별도 준비</h4><p>싱가포르 시내용 데이터는 선내 Wi-Fi와 별개 — 승선 전후 이동을 위해 e심을 미리 준비하세요.</p></div>
+    <div class="card gold-top"><h4><span class="emoji">⏰</span>승선일 흐름</h4><p>승선 가능 시간부터 배 안 식사·시설 이용 가능 (객실 입장은 오후). 출항 16~17시. 하선일은 아침 7시 하선 시작 — 마지막 조식은 배정 레스토랑이지만 뷔페(인챈티드 서머)로 변경 요청 가능.</p></div>
+    <div class="card gold-top"><h4><span class="emoji">📅</span>앱을 아침마다</h4><p>쇼·캐릭터·이벤트 스케줄이 매일 다릅니다. 아침에 Navigator 앱으로 그날 동선을 짜는 게 핵심 루틴.</p></div>
+  </div>
+
+  <div class="box box-warn" style="margin-top:30px"><b class="t">📌 정보 기준 안내</b>
+    이 가이드는 2026년 7월 기준, 디즈니 크루즈 라인 공식 자료 · 주요 크루즈 매체(WDW Magazine, WDWNT, Disney Parks Blog) · 실제 탑승 후기(2026년 3~6월 항차)를 종합해 작성했습니다. 디즈니 어드벤처는 2025년 12월 취항한 신규 선박으로 요금·운영이 계속 조정되고 있습니다. <span class="badge b-check">확인 필요</span> 표시 항목과 모든 가격은 탑승 후 Navigator 앱에서 최종 확인하세요.
+  </div>
+</section>
+
+</div><!-- /wrap -->
+
+<!-- ═══════════════════════ FOOTER ═══════════════════════ -->
+<footer>
+  <div class="stars"></div>
+  <div style="position:relative;z-index:2">
+    <div class="mickey-orn" aria-hidden="true" style="margin-bottom:20px"><i class="ear"></i><i class="face"></i><i class="ear"></i></div>
+    <div class="f-title serif">Disney Adventure Cruise Guide</div>
+    <div class="f-sub">Marina Bay Cruise Centre Singapore · 선내 통화 USD<br>즐거운 항해 되세요! ⚓ Bon Voyage!</div>
+  </div>
+</footer>
+
+<a class="top-btn" id="topBtn" href="#top" aria-label="맨 위로">↑</a>
+
+<script>
+// ── 스크롤 리빌 ──
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+}, { threshold: 0.06 });
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+// ── 현재 섹션 하이라이트 ──
+const navLinks = [...document.querySelectorAll('.nav a')];
+const sections = navLinks.map(a => document.querySelector(a.getAttribute('href')));
+const secIO = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id));
+      const active = document.querySelector('.nav a.active');
+      if (active) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+    }
+  });
+}, { rootMargin: '-30% 0px -60% 0px' });
+sections.forEach(s => s && secIO.observe(s));
+
+// ── 맨 위로 버튼 ──
+const topBtn = document.getElementById('topBtn');
+addEventListener('scroll', () => topBtn.classList.toggle('show', scrollY > 600), { passive: true });
+</script>
+
+</body>
+</html>
