@@ -30,7 +30,7 @@
   --radius:12px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth;scroll-padding-top:118px}
+html{scroll-padding-top:118px}
 body{font-family:'Figtree','Noto Sans KR',Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.7;-webkit-text-size-adjust:100%}
 a{color:var(--teal)}
 .container{max-width:1120px;margin:0 auto;padding:0 20px}
@@ -188,7 +188,7 @@ footer{background:var(--navy);color:#B9C7D8;margin-top:0;font-size:13.5px}
 /* ═══════════ 리빌 ═══════════ */
 .reveal{opacity:0;transform:translateY(14px);transition:opacity .55s ease,transform .55s ease}
 .reveal.in{opacity:1;transform:none}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.reveal{opacity:1;transform:none;transition:none}}
+@media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}}
 </style>
 </head>
 <body id="top">
@@ -804,15 +804,40 @@ const io = new IntersectionObserver(entries => {
 }, { threshold: 0.05 });
 document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 
-// ── 현재 섹션 탭 하이라이트 ──
+// ── 앵커 링크: 클릭 시에만 부드럽게 이동 (전역 smooth 제거로 휠 끊김 방지) ──
+const subnavEl = document.querySelector('.subnav');
+document.querySelectorAll('a[href^="#"]').forEach(a => {
+  a.addEventListener('click', e => {
+    const href = a.getAttribute('href');
+    if (href === '#top' || href === '#') {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    const target = document.querySelector(href);
+    if (!target) return;
+    e.preventDefault();
+    const offset = (subnavEl ? subnavEl.offsetHeight : 0) + 14;
+    const y = target.getBoundingClientRect().top + window.scrollY - offset;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+  });
+});
+
+// ── 현재 섹션 탭 하이라이트 (창은 절대 건드리지 않고, 탭 바만 가로 정렬) ──
 const navLinks = [...document.querySelectorAll('.subnav a')];
 const sections = navLinks.map(a => document.querySelector(a.getAttribute('href')));
+const subnavScroll = document.querySelector('.subnav .scroll');
 const secIO = new IntersectionObserver(entries => {
   entries.forEach(e => {
     if (e.isIntersecting) {
       navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id));
       const active = document.querySelector('.subnav a.active');
-      if (active) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+      if (active && subnavScroll && subnavScroll.scrollWidth > subnavScroll.clientWidth) {
+        subnavScroll.scrollTo({
+          left: active.offsetLeft - subnavScroll.clientWidth / 2 + active.offsetWidth / 2,
+          behavior: 'smooth'
+        });
+      }
     }
   });
 }, { rootMargin: '-25% 0px -65% 0px' });
