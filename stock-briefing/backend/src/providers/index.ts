@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config.js";
 import type { Db } from "../db/index.js";
+import { describeLlmBackend, resolveLlmBackend } from "../llm/backend.js";
 import { ClaudeGenerator, DisabledGenerator, type TextGenerator } from "../llm/generator.js";
 import { DartProvider } from "./dart/dart.js";
 import type { FinancialsProvider } from "./dart/types.js";
@@ -51,9 +52,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
 
   const dart = cfg.DART_API_KEY ? new DartProvider({ apiKey: cfg.DART_API_KEY, db }) : null;
 
-  const generator: TextGenerator = cfg.ANTHROPIC_API_KEY
-    ? new ClaudeGenerator({ apiKey: cfg.ANTHROPIC_API_KEY, model: cfg.ANTHROPIC_MODEL })
-    : new DisabledGenerator();
+  const backend = resolveLlmBackend(cfg);
+  const generator: TextGenerator = backend ? new ClaudeGenerator({ backend }) : new DisabledGenerator();
 
   return {
     quotes: new QuoteProviderChain(quoteChain, log),
@@ -74,6 +74,6 @@ export function describeProviders(cfg: AppConfig): Record<string, string> {
     news: cfg.NAVER_CLIENT_ID ? "naver → google-rss" : "google-rss (네이버 키 없음)",
     financials: cfg.DART_API_KEY ? "dart" : "없음 (DART 키 없음)",
     investorFlow: cfg.kisEnabled ? "kis" : "없음 (KIS 키 없음)",
-    llm: cfg.ANTHROPIC_API_KEY ? cfg.ANTHROPIC_MODEL : "없음 (ANTHROPIC_API_KEY 없음)",
+    llm: describeLlmBackend(resolveLlmBackend(cfg)),
   };
 }

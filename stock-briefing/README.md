@@ -106,7 +106,7 @@ npm run dev                  # http://localhost:3000
 
 | 키 | 없으면 |
 |---|---|
-| `ANTHROPIC_API_KEY` | 브리핑/분석이 `failed` 로 저장되고 사유가 남음 (수집은 정상) |
+| `ANTHROPIC_API_KEY` 또는 Bedrock 키 | 브리핑/분석이 `failed` 로 저장되고 사유가 남음 (수집은 정상). 둘 중 하나면 됨 |
 | `KIS_APP_KEY/SECRET` | 시세는 Yahoo, 수급(투자자별 매매동향)은 미확인, PER/PBR 없음 |
 | `DART_API_KEY` | 공시·재무제표·배당·회사 개요 미확인 |
 | `NAVER_CLIENT_ID/SECRET` | 뉴스는 Google News RSS |
@@ -221,7 +221,7 @@ Android 원격 푸시는 **Expo Go 에서 동작하지 않으므로** 개발 빌
 ```
 
 - 같은 날 같은 세션이 이미 성공했으면 건너뜁니다(`force: true` 로 재생성). 실패 건은 다음 실행에서 자동 재시도.
-- 모델: `ANTHROPIC_MODEL` (기본 `claude-opus-5`). 시스템 프롬프트는 1시간 프롬프트 캐싱, 서버측 refusal fallback 기본 활성. 상세는 effort medium, 요약은 low, 회사/가치 분석은 high.
+- 모델: Anthropic 직접이면 `ANTHROPIC_MODEL`(기본 `claude-opus-5`, 서버측 refusal fallback 활성), Bedrock 이면 `BEDROCK_MODEL`(기본 `anthropic.claude-opus-4-8`, 도쿄 리전). 시스템 프롬프트는 1시간 프롬프트 캐싱. 상세는 effort medium, 요약은 low, 회사/가치 분석은 high.
 - 종목 상세 탭 분석은 요청 시 생성 후 캐시(회사 30일, 가치 7일, 기술 1일). `?refresh=1` 로 강제 재생성.
 - 공휴일에는 시세가 전일과 같은 상태로 브리핑이 생성됩니다(휴장일 달력은 v1 범위 밖).
 
@@ -265,11 +265,30 @@ Dockerfile 을 자동 인식합니다. Postgres 를 붙이면 `DATABASE_URL` 에
 
 PC 명령 없이 웹 화면만으로 서버 배포, 앱 설치, 푸시 설정까지 할 수 있습니다. 필요한 계정: GitHub(있음), Anthropic, Railway, Expo, Firebase. 전부 휴대폰 브라우저에서 됩니다.
 
+### 0. 브리핑 모델 키: Anthropic 또는 Amazon Bedrock (약 10~20분)
+
+둘 중 하나만 있으면 됩니다. 한국 카드로 Anthropic 결제가 안 되면 Bedrock 을 쓰세요. 같은 Claude 모델이고 프롬프트·코드는 그대로입니다.
+
+**A. Anthropic 직접** — https://console.anthropic.com 가입 → 결제 등록·크레딧 충전 → API Keys → Create Key. 서버 변수 `ANTHROPIC_API_KEY`.
+
+**B. Amazon Bedrock** (휴대폰 브라우저 기준)
+1. https://aws.amazon.com 에서 AWS 계정 만들기 (이메일, 카드, 휴대폰 인증). 카드 확인용으로 1달러가 잠깐 결제됐다 취소됩니다.
+2. AWS 콘솔 상단 검색창에 `Bedrock` → Amazon Bedrock 열기. 오른쪽 위 리전을 **아시아 태평양(도쿄) ap-northeast-1** 로 바꿉니다.
+3. 왼쪽 메뉴 **Model access** (모델 액세스) → Claude 모델들이 "Available"(사용 가능) 인지 확인. 필요하면 **Modify model access** 로 Anthropic 모델을 체크하고 저장(회사명·용도 입력란은 개인용으로 짧게 적으면 됩니다).
+4. 왼쪽 메뉴 **API keys** → **Generate long-term API key** (장기 API 키 생성) → 만료 기간 선택 → 생성된 키 복사(`ABSK...` 형태, 한 번만 표시). 서버 변수 `AWS_BEARER_TOKEN_BEDROCK` 에 넣습니다.
+5. 리전을 도쿄가 아닌 곳으로 했다면 `AWS_REGION` 도 같이 넣습니다. 모델은 기본 `anthropic.claude-opus-4-8` 이고, 더 싸게 쓰려면 `BEDROCK_MODEL=anthropic.claude-sonnet-5`.
+
+호출 시 403 이 나면: 3번 모델 액세스가 안 됐거나, 키에 붙은 IAM 정책에 `bedrock-mantle:CreateInference` 가 없는 경우입니다. IAM → 사용자 → 키 생성 때 만들어진 사용자 → 권한 추가 → 인라인 정책에 아래를 넣으세요.
+```json
+{ "Version": "2012-10-17", "Statement": [{ "Effect": "Allow", "Action": ["bedrock-mantle:*", "bedrock:*"], "Resource": "*" }] }
+```
+요금은 후불(사용한 만큼 월말 청구)이며 Anthropic 직접 요금과 같습니다.
+
 ### 1. 서버: Railway (약 15분)
 
 1. https://railway.app 에 GitHub 로 로그인 → **New Project → Deploy from GitHub repo** → 이 저장소 선택 → 브랜치 `claude/stock-analysis-alert-app-g3zrxd`.
 2. 서비스 **Settings → Root Directory** 를 `stock-briefing/backend` 로 지정 (Dockerfile 을 자동 인식).
-3. **Variables** 에 추가: `ANTHROPIC_API_KEY`, `API_TOKEN`(아무 긴 문자열), 있으면 `KIS_APP_KEY` `KIS_APP_SECRET` `DART_API_KEY` `NAVER_CLIENT_ID` `NAVER_CLIENT_SECRET`.
+3. **Variables** 에 추가: `ANTHROPIC_API_KEY` 또는 `AWS_BEARER_TOKEN_BEDROCK`(+ 필요 시 `AWS_REGION`), `API_TOKEN`(아무 긴 문자열), 있으면 `KIS_APP_KEY` `KIS_APP_SECRET` `DART_API_KEY` `NAVER_CLIENT_ID` `NAVER_CLIENT_SECRET`.
 4. 데이터 보존: 프로젝트에 **+ New → Database → PostgreSQL** 추가 후 백엔드 Variables 에 `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` 추가. (SQLite 로 두려면 대신 **Volume** 을 `/app/data` 에 마운트.)
 5. **Settings → Networking → Generate Domain** 으로 주소를 받습니다(예: `https://xxx.up.railway.app`). 브라우저에서 `https://xxx.up.railway.app/health` 가 열리면 완료.
 
@@ -302,6 +321,6 @@ Railway Hobby 요금(월 5달러, 사용량 포함)이 듭니다. 무료 체험�
 - **Yahoo Finance**: 비공식 엔드포인트. `PER/PBR/시가총액`은 제공되지 않아 `null`. 주봉 조회 시 진행 중인 주가 별도 봉으로 붙는 경우가 있음.
 - **DART**: 무료 키 (일 20,000회). 첫 조회 때 `corpCode.xml`(약 3,500개 상장사 매핑)을 내려받아 DB에 캐시. 재무제표는 사업보고서(11011) 주요계정으로 당기/전기/전전기를 한 번에 받아 5개년을 2회 호출로 구성. 실제 키로는 아직 검증되지 않음.
 - **네이버 뉴스 API**: 일 25,000회 무료. 없으면 Google News RSS(키 불필요, 실제 동작 확인됨).
-- **Anthropic**: 브리핑 2회(상세+요약) + 분석 3종. 종목 5개 기준 하루 약 20회 호출.
+- **Anthropic / Bedrock**: 브리핑 2회(상세+요약) + 분석 3종. 종목 5개 기준 하루 약 20회 호출. Bedrock 은 `@anthropic-ai/bedrock-sdk` 의 Messages API 엔드포인트(bedrock-mantle)를 쓰며 실제 키로는 아직 검증되지 않음(가짜 키로 엔드포인트 연결·인증 오류 응답만 확인).
 - **Expo Push Service**: 서버 키 불필요(계정에서 Enhanced push security 를 켠 경우만 `EXPO_ACCESS_TOKEN`). 실제 기기 토큰으로는 아직 검증되지 않음(이 환경에 Android 기기 없음).
 - **종목 마스터**: KIS 가 공개 배포하는 `kospi_code.mst` / `kosdaq_code.mst` (cp949 고정폭). 배포 서버가 간헐적으로 503 을 내서 3회 재시도.

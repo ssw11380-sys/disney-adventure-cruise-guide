@@ -15,8 +15,17 @@ const schema = z.object({
   NAVER_CLIENT_ID: z.string().default(""),
   NAVER_CLIENT_SECRET: z.string().default(""),
 
+  /** anthropic | bedrock | auto(기본: 키가 있는 쪽) */
+  LLM_PROVIDER: z.enum(["auto", "anthropic", "bedrock"]).default("auto"),
   ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().default("claude-opus-5"),
+
+  /** Amazon Bedrock (Claude in Amazon Bedrock, Messages API 엔드포인트). Bedrock API 키 또는 IAM 액세스 키 중 하나 */
+  AWS_BEARER_TOKEN_BEDROCK: z.string().default(""),
+  AWS_ACCESS_KEY_ID: z.string().default(""),
+  AWS_SECRET_ACCESS_KEY: z.string().default(""),
+  AWS_REGION: z.string().default("ap-northeast-1"),
+  BEDROCK_MODEL: z.string().default("anthropic.claude-opus-4-8"),
 
   BRIEFING_MORNING_CRON: z.string().default("30 8 * * 1-5"),
   BRIEFING_AFTERNOON_CRON: z.string().default("0 16 * * 1-5"),

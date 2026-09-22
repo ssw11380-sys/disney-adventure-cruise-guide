@@ -18,6 +18,7 @@
     "briefing": "tsx src/scripts/runBriefing.ts"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.33.7",
     "@anthropic-ai/sdk": "^0.127.0",
     "@fastify/cors": "^11.0.1",
     "better-sqlite3": "^13.0.3",

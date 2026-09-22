@@ -1,4 +1,6 @@
+import { AnthropicBedrockMantle } from "@anthropic-ai/bedrock-sdk";
 import Anthropic from "@anthropic-ai/sdk";
+import type { LlmBackend } from "./backend.js";
 
 /**
  * 텍스트 생성기 인터페이스. 브리핑/분석 서비스는 이 인터페이스만 알고,
@@ -37,52 +39,76 @@ export class GenerationError extends Error {
 }
 
 export interface ClaudeGeneratorOptions {
-  apiKey: string;
-  model: string;
+  backend: LlmBackend;
   /** 3xx/5xx, 429 재시도 횟수. SDK 기본값 2 */
   maxRetries?: number;
   timeoutMs?: number;
 }
 
+/** 두 SDK 응답의 공통 모양 (구조적 타입) */
+interface MessageLike {
+  model: string;
+  stop_reason: string | null;
+  stop_details?: { category?: string | null } | null;
+  content: Array<{ type: string; text?: string }>;
+  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+}
+
 /**
- * Anthropic SDK 래퍼.
- * - 시스템 프롬프트는 cache_control 로 캐싱 (프롬프트 파일 내용이 그대로 prefix 가 되므로 안정적).
- * - 서버측 refusal fallback 을 기본으로 켠다 (안전 분류기가 거절하면 대체 모델이 같은 요청을 이어서 처리).
- * - stop_reason 을 검사해서 refusal / max_tokens 를 오류로 올린다.
+ * Claude 호출 래퍼. 두 경로를 지원한다.
+ *  - anthropic: 첫 번째 파티 API. 서버측 refusal fallback 을 켠다 (beta).
+ *  - bedrock:   Claude in Amazon Bedrock (Messages API 엔드포인트). fallback 파라미터는 지원되지 않아 뺀다.
+ * 공통: 시스템 프롬프트는 1시간 캐싱, stop_reason 검사 (refusal / max_tokens 는 오류).
  */
 export class ClaudeGenerator implements TextGenerator {
   readonly model: string;
-  private readonly client: Anthropic;
+  private readonly anthropic: Anthropic | null = null;
+  private readonly bedrock: AnthropicBedrockMantle | null = null;
 
   constructor(opts: ClaudeGeneratorOptions) {
-    if (!opts.apiKey) throw new GenerationError("ANTHROPIC_API_KEY 가 설정되지 않았습니다", "config");
-    this.model = opts.model;
-    this.client = new Anthropic({
-      apiKey: opts.apiKey,
-      maxRetries: opts.maxRetries ?? 2,
-      timeout: opts.timeoutMs ?? 5 * 60_000,
-    });
+    const b = opts.backend;
+    this.model = b.model;
+    const common = { maxRetries: opts.maxRetries ?? 2, timeout: opts.timeoutMs ?? 5 * 60_000 };
+    if (b.kind === "anthropic") {
+      if (!b.apiKey) throw new GenerationError("ANTHROPIC_API_KEY 가 설정되지 않았습니다", "config");
+      this.anthropic = new Anthropic({ apiKey: b.apiKey, ...common });
+    } else {
+      if (!b.bearerToken && !(b.accessKeyId && b.secretAccessKey)) {
+        throw new GenerationError("Bedrock 자격 증명(AWS_BEARER_TOKEN_BEDROCK 또는 AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)이 없습니다", "config");
+      }
+      this.bedrock = new AnthropicBedrockMantle({
+        awsRegion: b.region,
+        ...(b.bearerToken ? { apiKey: b.bearerToken } : { awsAccessKey: b.accessKeyId, awsSecretAccessKey: b.secretAccessKey }),
+        ...common,
+      });
+    }
   }
 
   async generate(req: GenerateRequest): Promise<GenerateResult> {
-    let response: Anthropic.Beta.Messages.BetaMessage;
+    const system = req.system
+      ? [{ type: "text" as const, text: req.system, cache_control: { type: "ephemeral" as const, ttl: "1h" as const } }]
+      : undefined;
+    const base = {
+      model: this.model,
+      max_tokens: req.maxTokens ?? 4096,
+      output_config: { effort: req.effort ?? "medium" },
+      ...(system ? { system } : {}),
+      messages: [{ role: "user" as const, content: req.user }],
+    };
+
+    let response: MessageLike;
     try {
-      response = await this.client.beta.messages.create({
-        model: this.model,
-        max_tokens: req.maxTokens ?? 4096,
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
-        output_config: { effort: req.effort ?? "medium" },
-        ...(req.system
-          ? { system: [{ type: "text" as const, text: req.system, cache_control: { type: "ephemeral" as const, ttl: "1h" as const } }] }
-          : {}),
-        messages: [{ role: "user", content: req.user }],
-      });
+      if (this.anthropic) {
+        response = await this.anthropic.beta.messages.create({
+          ...base,
+          betas: ["server-side-fallback-2026-07-01"],
+          fallbacks: "default",
+        });
+      } else {
+        response = await this.bedrock!.messages.create(base);
+      }
     } catch (e) {
-      if (e instanceof Anthropic.AuthenticationError) throw new GenerationError("Anthropic API 키가 올바르지 않습니다", "config", e);
-      if (e instanceof Anthropic.RateLimitError) throw new GenerationError("Anthropic API 사용량 제한에 걸렸습니다", "api", e);
-      if (e instanceof Anthropic.APIError) throw new GenerationError(`Anthropic API 오류 ${e.status ?? ""}: ${e.message}`, "api", e);
-      throw new GenerationError(`Anthropic 호출 실패: ${(e as Error).message}`, "api", e);
+      throw toGenerationError(e);
     }
 
     if (response.stop_reason === "refusal") {
@@ -90,8 +116,8 @@ export class ClaudeGenerator implements TextGenerator {
       throw new GenerationError(`모델이 응답을 거절했습니다 (category=${cat})`, "refusal");
     }
     const text = response.content
-      .filter((b): b is Anthropic.Beta.Messages.BetaTextBlock => b.type === "text")
-      .map((b) => b.text)
+      .filter((b) => b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text as string)
       .join("")
       .trim();
     if (response.stop_reason === "max_tokens") {
@@ -113,10 +139,21 @@ export class ClaudeGenerator implements TextGenerator {
   }
 }
 
-/** API 키가 없을 때 쓰는 생성기: 호출 즉시 설정 오류를 낸다 (서버는 뜨되 브리핑은 "미생성"으로 기록). */
+function toGenerationError(e: unknown): GenerationError {
+  if (e instanceof Anthropic.AuthenticationError) return new GenerationError("API 키/자격 증명이 올바르지 않습니다 (401)", "config", e);
+  if (e instanceof Anthropic.PermissionDeniedError) {
+    return new GenerationError("권한이 없습니다 (403). Bedrock 이면 모델 접근 권한(Model access)과 IAM 정책(bedrock-mantle:CreateInference)을 확인하세요", "config", e);
+  }
+  if (e instanceof Anthropic.NotFoundError) return new GenerationError(`모델을 찾을 수 없습니다 (404): 모델 ID 와 리전을 확인하세요. ${(e as Error).message}`, "config", e);
+  if (e instanceof Anthropic.RateLimitError) return new GenerationError("API 사용량 제한에 걸렸습니다 (429)", "api", e);
+  if (e instanceof Anthropic.APIError) return new GenerationError(`API 오류 ${e.status ?? ""}: ${e.message}`, "api", e);
+  return new GenerationError(`모델 호출 실패: ${(e as Error).message}`, "api", e);
+}
+
+/** 자격 증명이 없을 때 쓰는 생성기: 호출 즉시 설정 오류를 낸다 (서버는 뜨되 브리핑은 "미생성"으로 기록). */
 export class DisabledGenerator implements TextGenerator {
   readonly model = "disabled";
   async generate(): Promise<GenerateResult> {
-    throw new GenerationError("ANTHROPIC_API_KEY 가 설정되지 않아 브리핑을 생성할 수 없습니다", "config");
+    throw new GenerationError("ANTHROPIC_API_KEY 또는 Bedrock 자격 증명이 없어 브리핑을 생성할 수 없습니다", "config");
   }
 }
