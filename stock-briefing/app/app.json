@@ -106,11 +106,6 @@
         "projectId": "ad496986-18c5-4d46-9fef-5c8b0a7d5e38"
       }
     },
-    "owner": "seo861229",
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#021037"
-    }
+    "owner": "seo861229"
   }
 }

@@ -88,10 +88,13 @@ export class NaverFundamentals {
   }
 
   private async getUs(code: string, market?: string | null): Promise<Fundamentals | null> {
-    for (const rc of reutersCandidates(code, market)) {
+    // 로이터 코드 규칙이 들쭉날쭉(IONQ.K, SOXL.K, ETN, AVGO.O)이라 네이버 자동완성으로 먼저 알아낸다
+    const resolved = await this.resolveReuters(code);
+    const candidates = [...new Set([...(resolved ? [resolved] : []), ...reutersCandidates(code, market)])];
+    for (const rc of candidates) {
       const j = await this.getJson(`https://api.stock.naver.com/stock/${encodeURIComponent(rc)}/basic`);
       const infos = j?.["stockItemTotalInfos"] as Json[] | undefined;
-      if (!j || !infos || String(j["symbolCode"] ?? "").toUpperCase() !== code.replace(/[-.]/g, "").toUpperCase() && String(j["reutersCode"] ?? "").toUpperCase() !== rc.toUpperCase()) continue;
+      if (!j || !infos) continue;
       const f = fromInfos(infos, "naver-world");
       // 미국 시총은 "1조 4,944억 USD" 같은 한글 표기라 발행주식수 × 현재가로 대신 계산할 수 있게 원화 시총도 같이 둔다
       const shares = parseNum(j["countOfListedStock"]);
@@ -100,6 +103,15 @@ export class NaverFundamentals {
       return f;
     }
     return null;
+  }
+
+  /** 네이버 자동완성으로 티커 → 로이터 코드 (예: IONQ → IONQ.K). 못 찾으면 null */
+  async resolveReuters(code: string): Promise<string | null> {
+    const j = await this.getJson(`https://ac.stock.naver.com/ac?q=${encodeURIComponent(code)}&target=stock`);
+    const items = (j?.["items"] as Json[] | undefined) ?? [];
+    const symbol = code.replace(/[-.]/g, "").toUpperCase();
+    const hit = items.find((it) => String(it["code"] ?? "").replace(/[-.]/g, "").toUpperCase() === symbol && String(it["nationCode"] ?? "") === "USA" && typeof it["reutersCode"] === "string");
+    return hit ? String(hit["reutersCode"]) : null;
   }
 }
 

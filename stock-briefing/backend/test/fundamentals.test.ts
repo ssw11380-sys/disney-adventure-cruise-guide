@@ -44,6 +44,9 @@ function fakeFetch(calls: string[] = []): typeof fetch {
     if (url.includes("/api/stock/035420/integration")) return ok(KR_INTEGRATION);
     if (url.includes("/stock/TSLA.O/basic")) return ok(US_BASIC);
     if (url.includes("/stock/KO/basic")) return ok({ ...US_BASIC, reutersCode: "KO", symbolCode: "KO" });
+    if (url.includes("/stock/IONQ.K/basic")) return ok({ ...US_BASIC, reutersCode: "IONQ.K", symbolCode: "IONQ" });
+    if (url.includes("ac.stock.naver.com/ac?q=IONQ")) return ok({ query: "IONQ", items: [{ code: "IONQ", name: "아이온큐", typeCode: "NYSE", reutersCode: "IONQ.K", nationCode: "USA", category: "stock" }] });
+    if (url.includes("ac.stock.naver.com/ac")) return ok({ query: "", items: [] });
     if (url.includes("/marketindex/exchange/FX_USDKRW")) return ok(FX);
     return new Response(JSON.stringify({ code: "StockConflict" }), { status: 409 });
   }) as typeof fetch;
@@ -73,10 +76,14 @@ describe("NaverFundamentals", () => {
     const f = new NaverFundamentals(fakeFetch(calls), NOW);
     const t = await f.get("TSLA", "NASDAQ");
     expect(t).toMatchObject({ per: 350.29, pbr: 17.2, eps: 1.08, dividendPerShare: null, dividendYieldPct: null, industry: "자동차 및 트럭 제조", marketCap: Math.round(3949547394 * 378.62) });
-    const ko = await f.get("KO", null); // .O 실패 → 접미사 없음
+    const ko = await f.get("KO", null); // 자동완성 없음 → .O 실패 → 접미사 없음
     expect(ko?.per).toBe(350.29);
     expect(calls.filter((c) => c.includes("/stock/KO"))).toHaveLength(2);
     expect(await f.get("ZZZZ", "NYSE")).toBeNull();
+    // 규칙에 없는 접미사(IONQ.K)는 자동완성으로 찾는다
+    const ionq = await f.get("IONQ", "NYSE");
+    expect(ionq?.per).toBe(350.29);
+    expect(calls.filter((c) => c.includes("/stock/IONQ"))).toEqual([expect.stringContaining("/stock/IONQ.K/basic")]);
   });
 
   it("환율은 1분 캐시", async () => {
