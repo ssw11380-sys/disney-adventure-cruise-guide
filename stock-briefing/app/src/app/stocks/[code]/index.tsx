@@ -6,6 +6,7 @@ import { useAnalysis, useBriefings, useCandles, useStock, useStockMutations, use
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { CandleChart } from "@/components/CandleChart";
+import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, ChangeText, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
@@ -69,7 +70,9 @@ export default function StockDetailScreen() {
             </Muted>
             {q ? (
               <>
-                <Text style={{ color: t.ink, fontSize: 28, fontWeight: "700", fontVariant: ["tabular-nums"] }}>{formatPrice(q.price, cur)}</Text>
+                <View style={{ flexDirection: "row" }}>
+                  <FlashPrice value={q.price} text={formatPrice(q.price, cur)} style={{ color: t.ink, fontSize: 28, fontWeight: "700", fontVariant: ["tabular-nums"] }} />
+                </View>
                 <ChangeText value={q.change} text={`${formatPrice(q.change, cur, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.body }} />
                 {q.priceKrw ? <Muted>≈ {formatPrice(q.priceKrw, "KRW")}</Muted> : null}
                 {nxt ? (

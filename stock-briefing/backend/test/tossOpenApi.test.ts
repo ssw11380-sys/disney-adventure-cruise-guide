@@ -347,4 +347,30 @@ describe("StockService + 실시간", () => {
     expect((await service.getQuote("000660")).live).toBeUndefined();
     await db.destroy();
   });
+
+  it("웹소켓이 없으면 REST 일괄 조회로 덮어쓰되, 같은 가격 기준(toss 계열) 스냅샷에만 적용한다", async () => {
+    const db = await createMigratedDb(":memory:");
+    const calls: string[][] = [];
+    const quick = {
+      name: "toss",
+      getMany: async (codes: string[]) => {
+        calls.push(codes);
+        return new Map(codes.map((c) => [c, { code: c, price: 102000, volume: null, timestamp: "2026-09-22T14:30:00+09:00", receivedAt: 0 }]));
+      },
+    };
+    const fromToss = new StockService({ db, quotes: new FakeQuoteProvider("toss"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), quickPrices: quick, now: NOW });
+    await fromToss.refreshMaster();
+    await fromToss.register({ code: "000660" });
+    await fromToss.register({ code: "005930" });
+    const list = await fromToss.listWithQuotes();
+    expect(calls).toEqual([["000660", "005930"]]); // 목록 전체를 요청 1개로
+    expect(list.map((s) => [s.quote!.price, s.quote!.live])).toEqual([[102000, true], [102000, true]]);
+    expect(list[0]!.evaluation).toBeNull();
+
+    const fromNaver = new StockService({ db, quotes: new FakeQuoteProvider("naver"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), quickPrices: quick, now: NOW });
+    const q = await fromNaver.getQuote("000660", { fresh: true });
+    expect(q.price).toBe(100000); // 네이버 정규장 종가에는 통합 가격을 섞지 않는다
+    expect(q.live).toBeUndefined();
+    await db.destroy();
+  });
 });

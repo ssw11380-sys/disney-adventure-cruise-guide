@@ -7,7 +7,7 @@ import type { FinancialsProvider } from "./dart/types.js";
 import { QuoteProviderChain, StockSearchChain, type ChainLogger } from "./market/chain.js";
 import { TossProvider, type CodeStore } from "./market/toss.js";
 import { TossOpenApiClient, TossOpenApiProvider } from "./market/tossOpenApi.js";
-import { TossRealtime } from "./market/tossRealtime.js";
+import { TossRealtime, type QuickPriceSource } from "./market/tossRealtime.js";
 import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
 import { KisMasterProvider } from "./market/kisMaster.js";
@@ -26,6 +26,8 @@ export interface Providers {
   tossOpenApi: TossOpenApiProvider | null;
   /** 실시간 체결(웹소켓) — 토스 Open API 키 있을 때만 */
   live: TossRealtime | null;
+  /** 키 없이도 되는 준실시간: 토스 웹 시세를 여러 종목 한 번에 */
+  quickPrices: QuickPriceSource | null;
   search: StockSearchProvider; // 외부 검색 (토스 → Yahoo)
   searchRemoteFirst?: boolean; // true 면 로컬 마스터보다 외부 검색을 먼저 쓴다
   master: MasterProvider;
@@ -90,6 +92,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     quotes: new QuoteProviderChain(quoteChain, log),
     tossOpenApi,
     live,
+    quickPrices: toss,
     search: new StockSearchChain([toss, yahoo], log),
     searchRemoteFirst: true, // 토스 검색은 한글로 미국 종목도 찾고 순위도 좋아 마스터보다 먼저 쓴다
     master: tossOpenApi ?? new KisMasterProvider(), // 토스 마스터는 한국+미국 종목(한글명)까지
@@ -109,7 +112,7 @@ export function describeProviders(cfg: AppConfig): Record<string, string> {
     news: cfg.NAVER_CLIENT_ID ? "naver → google-rss" : "google-rss (네이버 키 없음)",
     financials: cfg.DART_API_KEY ? "dart" : "없음 (DART 키 없음)",
     investorFlow: cfg.kisEnabled ? "kis" : cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : "없음 (KIS/토스 Open API 키 없음)",
-    realtime: cfg.tossOpenApiEnabled ? "toss-openapi 웹소켓" : "없음 (토스 Open API 키 없음)",
+    realtime: cfg.tossOpenApiEnabled ? "toss-openapi 웹소켓 + toss 웹 3초 갱신" : "toss 웹 3초 갱신 (Open API 키 있으면 웹소켓)",
     llm: describeLlmBackend(resolveLlmBackend(cfg)),
   };
 }

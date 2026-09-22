@@ -2,6 +2,7 @@ import type { AfterMarketQuote, Candle, CandlePeriod, CandleSeries, ListedStock,
 import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
+import type { LiveTick } from "./tossRealtime.js";
 import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
 
 /**
@@ -212,6 +213,43 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
       priceKrw: currency === "USD" ? num(p["closeKrw"]) : null,
       afterMarket,
     };
+  }
+
+  // ── 실시간에 가까운 현재가 (여러 종목 한 번에) ───────────────────────
+
+  private quickCache: { at: number; key: string; map: Map<string, LiveTick> } | null = null;
+
+  /**
+   * 등록 종목 전체의 현재가를 요청 1개로 받는다 (stock-prices 는 코드를 콤마로 여러 개 받음).
+   * 앱이 3초마다 물어봐도 토스에는 2초에 한 번만 나간다. 통합 가격(KRX+NXT)이라 toss 계열 시세에만 덮어쓴다.
+   */
+  async getMany(codes: string[]): Promise<Map<string, LiveTick>> {
+    const list = [...new Set(codes.map(normalizeCode))].filter((c) => CODE_RE.test(c));
+    const out = new Map<string, LiveTick>();
+    if (list.length === 0) return out;
+    const key = list.join(",");
+    const t = this.now().getTime();
+    if (this.quickCache && this.quickCache.key === key && t - this.quickCache.at < 2000) return this.quickCache.map;
+    const pcs: Array<[string, string]> = [];
+    for (const c of list) {
+      try {
+        pcs.push([c, await this.productCode(c)]);
+      } catch {
+        /* 모르는 티커는 건너뜀 */
+      }
+    }
+    if (pcs.length === 0) return out;
+    const rows = (await this.request(`/v3/stock-prices?productCodes=${encodeURIComponent(pcs.map((p) => p[1]).join(","))}`)) as Json[];
+    const byPc = new Map(rows.map((r) => [String(r["productCode"] ?? ""), r]));
+    const nowIso = seoulIso(this.now());
+    for (const [code, pc] of pcs) {
+      const r = byPc.get(pc);
+      const price = num(r?.["close"]);
+      if (!r || price === null) continue;
+      out.set(code, { code, price, volume: num(r["volume"]), timestamp: nowIso, receivedAt: t });
+    }
+    this.quickCache = { at: t, key, map: out };
+    return out;
   }
 
   private async fetchChart(productCode: string, kr: boolean, period: CandlePeriod, count: number): Promise<Candle[]> {

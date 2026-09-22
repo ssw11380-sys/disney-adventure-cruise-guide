@@ -139,6 +139,25 @@ describe("TossProvider", () => {
     expect(calls2.some((c) => c.includes("/us-s/US20100629001/day:1?count=2"))).toBe(true);
   });
 
+  it("getMany 는 여러 종목 현재가를 요청 1개로 받고 2초 동안 재사용한다", async () => {
+    const calls: string[] = [];
+    let t = Date.parse("2026-09-22T14:00:00+09:00");
+    const p = new TossProvider(fakeFetch(calls), null, () => new Date(t));
+    const m = await p.getMany(["035420", "tsla", "ZZZZ"]);
+    expect([...m.keys()]).toEqual(["035420", "TSLA"]);
+    expect(m.get("035420")).toMatchObject({ price: 201500, volume: 1050258 });
+    expect(m.get("TSLA")).toMatchObject({ price: 376.31 });
+    const priceCalls = () => calls.filter((c) => c.includes("/v3/stock-prices?")).length;
+    expect(priceCalls()).toBe(1);
+    expect(calls.at(-1)).toContain(encodeURIComponent("A035420,US20100629001"));
+    t += 1000;
+    await p.getMany(["035420", "TSLA", "ZZZZ"]);
+    expect(priceCalls()).toBe(1); // 캐시
+    t += 2000;
+    await p.getMany(["035420", "TSLA", "ZZZZ"]);
+    expect(priceCalls()).toBe(2);
+  });
+
   it("봉은 오래된 순으로 정렬되고 날짜는 거래소 현지 날짜다", async () => {
     const s = await new TossProvider(fakeFetch(), null, NOW).getCandles("035420", "W", 2);
     expect(s.candles.map((c) => c.date)).toEqual(["2026-09-21", "2026-09-22"]);
