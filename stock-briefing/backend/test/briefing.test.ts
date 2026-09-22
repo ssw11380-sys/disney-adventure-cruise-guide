@@ -79,6 +79,8 @@ describe("briefing pipeline", () => {
     expect(list[0].name).toBe("SK하이닉스");
     expect(list[0].missing).toEqual(["공시(DART 키 없음)"]);
     expect(normalizeSummary("• a\n\n* b\n1) c\nd")).toBe("a\nb\nc");
+    // 숫자로 시작하는 본문은 잘리면 안 된다
+    expect(normalizeSummary("184만원 마감, 1.50% 하락\n2. 189만원 저항 확인\n3: 거래량 확인")).toBe("184만원 마감, 1.50% 하락\n189만원 저항 확인\n거래량 확인");
   });
 
   it("같은 날 같은 세션은 force 없이는 건너뛰고, force 면 덮어쓴다", async () => {

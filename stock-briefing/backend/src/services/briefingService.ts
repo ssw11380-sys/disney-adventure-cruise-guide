@@ -277,7 +277,8 @@ function safeJson<T>(s: string): T | null {
 export function normalizeSummary(text: string): string {
   return text
     .split(/\r?\n/)
-    .map((l) => l.replace(/^[\s\-*•\d.)]+/, "").replace(/[*_`#]/g, "").trim())
+    // 앞의 글머리 기호(-, *, •)나 번호(1. / 2) / 3:)만 걷어낸다. "189만원…" 처럼 숫자로 시작하는 본문은 남겨야 한다.
+    .map((l) => l.replace(/^\s*(?:[-*•]\s+|\d{1,2}\s*[.):]\s+)?/, "").replace(/[*_`#]/g, "").trim())
     .filter((l) => l.length > 0)
     .slice(0, 3)
     .join("\n");
