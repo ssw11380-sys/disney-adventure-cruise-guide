@@ -11,7 +11,7 @@ import { FakeGenerator, FakeQuoteProvider, FakeSearchProvider, fakeProviders, SA
 
 describe("code rules", () => {
   it("한국 6자리와 미국 티커를 받고 나머지는 거절한다", () => {
-    for (const ok of ["000660", "AAPL", "BRK-B", "BF.B", "TSLA"]) expect(CODE_RE.test(ok), ok).toBe(true);
+    for (const ok of ["000660", "0162Z0", "AAPL", "BRK-B", "BF.B", "TSLA"]) expect(CODE_RE.test(ok), ok).toBe(true);
     for (const bad of ["12345", "aapl", "TSLA.TO", "XTSLA=F", "1AAPL", "ABCDEFGHIJK"]) expect(CODE_RE.test(bad), bad).toBe(false);
     expect(normalizeCode(" tsla ")).toBe("TSLA");
     expect(currencyOf("NASDAQ")).toBe("USD");

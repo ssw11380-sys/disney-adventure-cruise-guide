@@ -9,7 +9,7 @@ import { CandleChart } from "@/components/CandleChart";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, ChangeText, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
-import { currencyOfMarket, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatVolume, isUsMarket, relativeTime } from "@/lib/format";
+import { afterMarketLabel, currencyOfMarket, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatVolume, isUsMarket, relativeTime } from "@/lib/format";
 import { font, space, useTheme } from "@/theme";
 
 type Tab = AnalysisKind | "news";
@@ -64,16 +64,17 @@ export default function StockDetailScreen() {
           <View>
             <Muted>
               {s.code} · {s.market}
-              {q ? ` · ${q.source.toUpperCase()} ${relativeTime(q.asOf)}` : ""}
+              {q ? ` · ${q.source.toUpperCase()}${q.priceBasis ? ` ${q.priceBasis}` : ""} ${relativeTime(q.asOf)}` : ""}
             </Muted>
             {q ? (
               <>
                 <Text style={{ color: t.ink, fontSize: 28, fontWeight: "700", fontVariant: ["tabular-nums"] }}>{formatPrice(q.price, cur)}</Text>
                 <ChangeText value={q.change} text={`${formatPrice(q.change, cur, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.body }} />
+                {q.priceKrw ? <Muted>≈ {formatPrice(q.priceKrw, "KRW")}</Muted> : null}
                 {nxt ? (
                   <ChangeText
                     value={nxt.change}
-                    text={`NXT ${nxt.session === "PRE_MARKET" ? "프리마켓" : "야간"}${nxt.status === "OPEN" ? "(거래 중)" : ""} ${formatPrice(nxt.price, cur)} (${formatPrice(nxt.change, cur, { sign: true })}, ${formatPct(nxt.changeRate)})`}
+                    text={`${afterMarketLabel(nxt)} ${formatPrice(nxt.price, cur)} (${formatPrice(nxt.change, cur, { sign: true })}, ${formatPct(nxt.changeRate)})`}
                     style={{ fontSize: font.small }}
                   />
                 ) : null}

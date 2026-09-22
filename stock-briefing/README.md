@@ -18,8 +18,8 @@
                                         ┌────────────────┘           │          └──────────────┐
                                         ▼                            ▼                         ▼
                               시세/차트 (QuoteProvider 체인)    재무 (DART)              뉴스 (네이버)
-                              KIS → 네이버 증권 → Yahoo        + 회사 개요               + 공시(DART)
-                              (미국 종목은 Yahoo)
+                              KIS → 토스증권 → 네이버 → Yahoo   + 회사 개요               + 공시(DART)
+                              검색: 토스증권 → Yahoo (+마스터)
                                         │
                                         ▼
                               SQLite(개발) / Postgres(운영)  ← Kysely (두 DB 공용 쿼리)
@@ -28,8 +28,8 @@
 핵심 설계 원칙
 
 - **데이터 소스는 인터페이스 뒤에 둔다.** `QuoteProvider`, `StockSearchProvider`, `MasterProvider`(1단계), `FinancialsProvider`, `NewsProvider`(2단계). 구현체는 교체·체인 가능.
-- **폴백 체인.** 한국 종목은 KIS(키 있을 때) → 네이버 증권(키 불필요, KRX 확정 종가 + NXT 야간 가격) → Yahoo Finance 순. 미국 종목은 Yahoo. 모든 소스가 실패해도 API는 200 + `quoteError` 로 응답하고, 브리핑에는 "데이터 미확인"을 남긴다.
-- **한국 + 미국 종목.** 코드는 6자리 숫자(한국) 또는 티커(미국, `AAPL`·`BRK-B`). 미국 종목은 통화가 USD 이고 공시·수급·재무제표(DART/KIS)가 없어 브리핑에 "미국 종목 미지원"으로 표시된다. 검색은 티커나 영문 회사명으로만 된다(Yahoo 검색이 한글명을 모름).
+- **폴백 체인.** 시세는 KIS(키 있을 때) → 토스증권(키 불필요, 한국은 KRX+NXT 통합 가격 = 토스 앱과 같은 숫자, 미국은 USD + 원화 환산) → 네이버 증권(한국, KRX 정규장 종가 + NXT 야간 가격) → Yahoo Finance 순. 모든 소스가 실패해도 API는 200 + `quoteError` 로 응답하고, 브리핑에는 "데이터 미확인"을 남긴다. 어떤 기준의 가격인지는 `quote.priceBasis` 로 알 수 있다.
+- **한국 + 미국 종목.** 코드는 숫자로 시작하는 6자리(한국, `000660`·`0162Z0`) 또는 티커(미국, `AAPL`·`BRK-B`). 미국 종목은 통화가 USD 이고 공시·수급·재무제표(DART/KIS)가 없어 브리핑에 "미국 종목 미지원"으로 표시된다. 검색은 토스증권 검색을 먼저 써서 한글 이름("테슬라", "애플")으로도 미국 종목이 나오고, 등록되는 이름도 한글이라 뉴스 검색이 한국어로 된다.
 - **모든 시각은 Asia/Seoul.** 서버 TZ 와 무관하게 `lib/time.ts` 로 계산.
 - **프롬프트는 파일로.** `backend/prompts/*.md` (2단계) — 코드 수정 없이 편집 가능.
 - **단일 사용자 v1.** 인증/멀티유저는 범위 밖. 배포 시 네트워크(VPN, 방화벽)로 보호.
@@ -53,7 +53,7 @@ stock-briefing/
 │   │   ├── db/                 # Kysely 스키마 + 마이그레이션 + 커넥션
 │   │   ├── providers/
 │   │   │   ├── index.ts        # 설정에 따라 실제 소스 조립 (키 없는 소스는 폴백 또는 null)
-│   │   │   ├── market/         # kis, naver(한국 시세+NXT), yahoo(한국 폴백·미국), kisMaster(종목 마스터), investorFlow(수급), chain(폴백)
+│   │   │   ├── market/         # kis, toss(시세·봉·검색, 한국+미국), naver(한국 폴백+NXT), yahoo(최종 폴백), kisMaster(종목 마스터), investorFlow(수급), chain(폴백)
 │   │   │   ├── news/           # naver(검색 API), googleRss(키 불필요), chain(폴백)
 │   │   │   └── dart/           # DART 회사 개요·공시·재무제표·배당
 │   │   ├── llm/                # generator(Anthropic SDK 래퍼, 캐싱·폴백), prompts(파일 로더·템플릿)
@@ -109,7 +109,7 @@ npm run dev                  # http://localhost:3000
 | 키 | 없으면 |
 |---|---|
 | `ANTHROPIC_API_KEY` 또는 Bedrock 키 | 브리핑/분석이 `failed` 로 저장되고 사유가 남음 (수집은 정상). 둘 중 하나면 됨 |
-| `KIS_APP_KEY/SECRET` | 시세는 네이버 증권(→ Yahoo 폴백), 수급(투자자별 매매동향)은 미확인 |
+| `KIS_APP_KEY/SECRET` | 시세는 토스증권(→ 네이버 → Yahoo 폴백), 수급(투자자별 매매동향)은 미확인 |
 | `DART_API_KEY` | 공시·재무제표·배당·회사 개요 미확인 |
 | `NAVER_CLIENT_ID/SECRET` | 뉴스는 Google News RSS |
 
@@ -120,7 +120,7 @@ npm run dev                  # http://localhost:3000
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/health` | 상태, 현재 시세 소스, 고지 문구 |
-| GET | `/api/stocks/search?q=하이닉스&limit=20` | 종목명/코드 검색 (마스터 → Yahoo 폴백, 티커처럼 보이면 미국 종목도 함께). 본주가 ETF 보다 먼저 |
+| GET | `/api/stocks/search?q=테슬라&limit=20` | 종목명/코드/티커 검색 (토스증권 → 종목 마스터 → Yahoo). 한글로 미국 종목도 검색됨 |
 | GET | `/api/stocks?quotes=1` | 등록 종목 목록 (+현재가, 평가손익). 현재가에 `currency`, 한국 종목은 `afterMarket`(NXT) 포함 |
 | POST | `/api/stocks` | `{ code, quantity?, avgPrice?, memo? }` 등록. 코드는 `000660` 또는 `AAPL`(소문자 허용, 평단은 그 통화 기준) |
 | GET | `/api/stocks/:code` | 등록 종목 + 현재가 |
@@ -182,7 +182,7 @@ npx expo start          # QR 을 Expo Go 앱으로 스캔 (iOS/Android)
 
 ### 토스·네이버 앱과 종가가 다르게 보일 때
 
-장 마감 후 토스나 네이버 앱에 보이는 가격은 대개 **넥스트레이드(NXT) 애프터마켓**(15:40~20:00) 체결가입니다. 이 앱의 현재가·등락률·차트는 **KRX 정규장**(09:00~15:30) 기준이고, NXT 가격은 그 아래 "NXT 야간 …" 한 줄로 따로 보여줍니다. 브리핑도 정규장 종가를 기준으로 쓰고 NXT 가격을 한 줄 덧붙입니다. 거래량도 정규장만 집계하므로 통합 거래량을 보여주는 앱보다 적게 나옵니다.
+장 마감 후 토스 앱에 보이는 가격은 **KRX 정규장 + 넥스트레이드(NXT) 애프터마켓**(15:40~20:00)을 합친 "통합" 가격입니다. 이 앱은 시세 1순위가 토스증권이라 평소에는 토스와 같은 숫자가 나오고, 종목 상세의 소스 표시에 "TOSS KRX+NXT 통합"이 붙습니다. 토스 API 가 응답하지 않아 네이버 증권으로 넘어간 경우에는 "NAVER KRX 정규장"으로 바뀌며 정규장 종가 아래 "NXT 야간 …" 한 줄이 따로 보입니다. 브리핑에도 어느 기준인지(`quote.priceBasis`) 같이 전달됩니다.
 
 ### 앱 업데이트
 
@@ -344,6 +344,7 @@ Railway Hobby 요금(월 5달러, 사용량 포함)이 듭니다. 무료 체험�
 ## 데이터 소스 메모
 
 - **KIS Open API**: `KIS_APP_KEY`/`KIS_APP_SECRET` 설정 시 1차 소스. 토큰은 24시간 캐시. 실서버 초당 20건 제한이라 종목은 순차 조회. 이 저장소 개발 환경에는 키가 없어 **KIS 호출 코드는 공식 문서 기준으로 작성됐고 실제 키로는 아직 검증되지 않음** — 키를 넣고 `GET /api/stocks/000660/quote?fresh=1` 로 확인 필요.
+- **토스증권**: 토스증권 웹(tossinvest.com)이 쓰는 내부 JSON API (`wts-info-api.tossinvest.com`). 공식 개발자 API 가 아니라 예고 없이 바뀔 수 있고 이용약관상 자동 수집을 금지할 수 있으니 개인 용도로만, 호출은 최소한으로(현재가 60초 캐시, 종목당 하루 브리핑 2회). 한국은 `A`+종목코드, 미국은 내부 상품코드(`US20100629001`)라 티커로 한 번 검색해 `meta` 테이블에 캐시한다. 응답이 바뀌면 체인이 네이버/Yahoo 로 넘어간다.
 - **네이버 증권**: 모바일 앱이 쓰는 비공식 JSON (`polling.finance.naver.com`, `m.stock.naver.com/api`, `api.stock.naver.com/chart`). 키 불필요, 한국 종목 전용. KRX 확정 종가·PER/PBR/52주·NXT 프리/애프터마켓 가격을 준다. Yahoo 는 15:30 동시호가 전 가격이 종가로 남거나 거래량이 일부만 잡히는 경우가 있어 한국 종목은 네이버를 먼저 쓴다. 응답 형식이 바뀌면 Yahoo 로 폴백.
 - **Yahoo Finance**: 비공식 엔드포인트. 미국 종목의 1차 소스이자 한국 종목 폴백. `PER/PBR/시가총액`은 제공되지 않아 `null`. 주봉 조회 시 진행 중인 주가 별도 봉으로 붙는 경우가 있음. 검색은 티커/영문명만 됨.
 - **DART**: 무료 키 (일 20,000회). 첫 조회 때 `corpCode.xml`(약 3,500개 상장사 매핑)을 내려받아 DB에 캐시. 재무제표는 사업보고서(11011) 주요계정으로 당기/전기/전전기를 한 번에 받아 5개년을 2회 호출로 구성. 실제 키로는 아직 검증되지 않음.

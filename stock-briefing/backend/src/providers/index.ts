@@ -4,7 +4,8 @@ import { describeLlmBackend, resolveLlmBackend } from "../llm/backend.js";
 import { ClaudeGenerator, DisabledGenerator, type TextGenerator } from "../llm/generator.js";
 import { DartProvider } from "./dart/dart.js";
 import type { FinancialsProvider } from "./dart/types.js";
-import { QuoteProviderChain, type ChainLogger } from "./market/chain.js";
+import { QuoteProviderChain, StockSearchChain, type ChainLogger } from "./market/chain.js";
+import { TossProvider, type CodeStore } from "./market/toss.js";
 import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
 import { KisMasterProvider } from "./market/kisMaster.js";
@@ -19,7 +20,8 @@ import type { NewsProvider } from "./news/types.js";
 
 export interface Providers {
   quotes: QuoteProvider;
-  search: StockSearchProvider; // 로컬 마스터에 없을 때 쓰는 외부 검색
+  search: StockSearchProvider; // 외부 검색 (토스 → Yahoo)
+  searchRemoteFirst?: boolean; // true 면 로컬 마스터보다 외부 검색을 먼저 쓴다
   master: MasterProvider;
   news: NewsProvider;
   financials: FinancialsProvider | null; // DART 키 없으면 null → "데이터 미확인"
@@ -38,6 +40,14 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     return registered?.market ?? null;
   };
   const yahoo = new YahooProvider(fetch, resolveMarket);
+  // 토스 상품 코드(티커 → US2010...) 매핑은 meta 테이블에 남긴다
+  const codeStore: CodeStore = {
+    get: async (key) => (await db.selectFrom("meta").select("value").where("key", "=", key).executeTakeFirst())?.value ?? null,
+    set: async (key, value) => {
+      await db.insertInto("meta").values({ key, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
+    },
+  };
+  const toss = new TossProvider(fetch, codeStore);
 
   const quoteChain: QuoteProvider[] = [];
   let kis: KisProvider | null = null;
@@ -45,7 +55,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     kis = new KisProvider({ appKey: cfg.KIS_APP_KEY, appSecret: cfg.KIS_APP_SECRET, env: cfg.KIS_ENV });
     quoteChain.push(kis);
   }
-  quoteChain.push(new NaverFinanceProvider()); // 한국 종목: KRX 확정 종가 + NXT 야간 가격
+  quoteChain.push(toss); // 한국(KRX+NXT 통합, 토스 앱과 같은 숫자)·미국 모두
+  quoteChain.push(new NaverFinanceProvider()); // 한국 폴백: KRX 정규장 종가 + NXT 야간 가격
   quoteChain.push(yahoo);
 
   const newsChain: NewsProvider[] = [];
@@ -61,7 +72,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
 
   return {
     quotes: new QuoteProviderChain(quoteChain, log),
-    search: yahoo,
+    search: new StockSearchChain([toss, yahoo], log),
+    searchRemoteFirst: true, // 토스 검색은 한글로 미국 종목도 찾고 순위도 좋아 마스터보다 먼저 쓴다
     master: new KisMasterProvider(),
     news: new NewsProviderChain(newsChain, log),
     financials: dart,
@@ -74,7 +86,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
 
 export function describeProviders(cfg: AppConfig): Record<string, string> {
   return {
-    quotes: cfg.kisEnabled ? "kis → naver → yahoo" : "naver → yahoo (KIS 키 없음, 미국은 yahoo)",
+    quotes: cfg.kisEnabled ? "kis → toss → naver → yahoo" : "toss → naver → yahoo (KIS 키 없음)",
+    search: "toss → yahoo (+ 종목 마스터)",
     news: cfg.NAVER_CLIENT_ID ? "naver → google-rss" : "google-rss (네이버 키 없음)",
     financials: cfg.DART_API_KEY ? "dart" : "없음 (DART 키 없음)",
     investorFlow: cfg.kisEnabled ? "kis" : "없음 (KIS 키 없음)",

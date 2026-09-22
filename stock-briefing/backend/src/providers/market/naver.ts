@@ -117,6 +117,7 @@ export class NaverFinanceProvider implements QuoteProvider {
       low52w: parseNum(info.get("lowPriceOf52Weeks")),
       asOf: seoulIso(this.now()),
       source: this.name,
+      priceBasis: "KRX 정규장",
       afterMarket: toAfterMarket(d["overMarketPriceInfo"] as Json | undefined),
     };
   }
