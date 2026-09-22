@@ -12,6 +12,7 @@ import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
 import { KisMasterProvider } from "./market/kisMaster.js";
 import { NaverFinanceProvider } from "./market/naver.js";
+import { NaverFundamentals } from "./market/fundamentals.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "./market/types.js";
 import { YahooProvider } from "./market/yahoo.js";
 import { ExpoPushSender, type PushSender } from "../notifications/push.js";
@@ -28,6 +29,8 @@ export interface Providers {
   live: TossRealtime | null;
   /** 키 없이도 되는 준실시간: 토스 웹 시세를 여러 종목 한 번에 */
   quickPrices: QuickPriceSource | null;
+  /** PER/PBR/배당/52주·환율 보강 (네이버) */
+  fundamentals: NaverFundamentals | null;
   search: StockSearchProvider; // 외부 검색 (토스 → Yahoo)
   searchRemoteFirst?: boolean; // true 면 로컬 마스터보다 외부 검색을 먼저 쓴다
   master: MasterProvider;
@@ -93,6 +96,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     tossOpenApi,
     live,
     quickPrices: toss,
+    fundamentals: new NaverFundamentals(),
     search: new StockSearchChain([toss, yahoo], log),
     searchRemoteFirst: true, // 토스 검색은 한글로 미국 종목도 찾고 순위도 좋아 마스터보다 먼저 쓴다
     master: tossOpenApi ?? new KisMasterProvider(), // 토스 마스터는 한국+미국 종목(한글명)까지

@@ -21,6 +21,9 @@ export interface ListedStock {
   market: Market;
   isinCode: string | null;
   groupCode: string | null;
+  price?: number | null; // 토스 검색이 주는 현재가
+  changeRate?: number | null;
+  currency?: Currency;
 }
 
 export interface Quote {
@@ -47,6 +50,10 @@ export interface Quote {
   priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
   priceKrw?: number | null; // 미국 종목 원화 환산
   live?: boolean; // 실시간 체결로 덮어쓴 현재가
+  fxRate?: number | null; // 미국 종목: 1달러당 원화
+  dividendPerShare?: number | null;
+  dividendYieldPct?: number | null;
+  industry?: string | null;
 }
 
 /** 토스증권 공식 Open API 연동 상태 (/health, /api/admin/toss/status) */

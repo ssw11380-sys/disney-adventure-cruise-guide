@@ -10,6 +10,10 @@ export interface ListedStock {
   isinCode: string | null; // 표준코드 KR7000660001
   /** KIS 그룹코드. ST=주식, EF=ETF, BC=수익증권 등. 모르면 null */
   groupCode: string | null;
+  /** 검색 소스가 현재가를 같이 주는 경우 (토스 검색). 등록 화면 표시용 */
+  price?: number | null;
+  changeRate?: number | null;
+  currency?: "KRW" | "USD";
 }
 
 /** 사용자가 등록한 종목 (관심/보유) */
@@ -56,6 +60,14 @@ export interface Quote {
   priceKrw?: number | null;
   /** 실시간 체결(웹소켓)로 price 를 덮어쓴 경우 true */
   live?: boolean;
+  /** 미국 종목: 1달러당 원화 환율 (원화 환산 표시용) */
+  fxRate?: number | null;
+  /** 주당 배당금 (종목 통화) */
+  dividendPerShare?: number | null;
+  /** 배당수익률 (%) */
+  dividendYieldPct?: number | null;
+  /** 업종 (한글) */
+  industry?: string | null;
 }
 
 export interface AfterMarketQuote {

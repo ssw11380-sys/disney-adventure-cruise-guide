@@ -10,9 +10,10 @@ export default function TabsLayout() {
       screenOptions={{
         headerStyle: { backgroundColor: t.bg },
         headerTintColor: t.ink,
-        headerTitleStyle: { fontWeight: "700" },
+        headerTitleStyle: { fontWeight: "800", fontSize: 20, letterSpacing: -0.3 },
         headerShadowVisible: false,
-        tabBarStyle: { backgroundColor: t.bg, borderTopColor: t.line },
+        tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.line, height: 60, paddingTop: 6 },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: "600", marginBottom: 6 },
         tabBarActiveTintColor: t.accent,
         tabBarInactiveTintColor: t.muted,
         sceneStyle: { backgroundColor: t.bg },
@@ -20,15 +21,15 @@ export default function TabsLayout() {
     >
       <Tabs.Screen
         name="index"
-        options={{ title: "내 종목", tabBarIcon: ({ color, size }) => <Ionicons name="list" size={size} color={color} /> }}
+        options={{ title: "내 종목", tabBarIcon: ({ color, size, focused }) => <Ionicons name={focused ? "briefcase" : "briefcase-outline"} size={size} color={color} /> }}
       />
       <Tabs.Screen
         name="briefings"
-        options={{ title: "브리핑", tabBarIcon: ({ color, size }) => <Ionicons name="newspaper-outline" size={size} color={color} /> }}
+        options={{ title: "브리핑", tabBarIcon: ({ color, size, focused }) => <Ionicons name={focused ? "newspaper" : "newspaper-outline"} size={size} color={color} /> }}
       />
       <Tabs.Screen
         name="settings"
-        options={{ title: "설정", tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" size={size} color={color} /> }}
+        options={{ title: "설정", tabBarIcon: ({ color, size, focused }) => <Ionicons name={focused ? "settings" : "settings-outline"} size={size} color={color} /> }}
       />
     </Tabs>
   );

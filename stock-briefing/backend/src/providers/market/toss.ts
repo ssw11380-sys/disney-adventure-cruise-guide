@@ -287,11 +287,19 @@ function toListed(it: Json): ListedStock | null {
   const status = String(it["stockStatus"] ?? "N");
   if (status !== "N") return null; // 상장폐지 등
   const companyCode = String(it["companyCode"] ?? "");
+  const kr = isKrMarket(marketCode);
+  const close = it["close"] as Json | undefined;
+  const base = it["base"] as Json | undefined;
+  const price = num(kr ? close?.["krw"] : close?.["usd"]);
+  const basePrice = num(kr ? base?.["krw"] : base?.["usd"]);
   return {
     code,
     name: String(it["productName"] ?? it["keyword"] ?? code),
     market: tossMarket(marketCode),
     isinCode: null,
     groupCode: companyCode.startsWith("EF") ? "EF" : "ST",
+    price,
+    changeRate: price !== null && basePrice ? round2(((price - basePrice) / basePrice) * 100) : null,
+    currency: kr ? "KRW" : "USD",
   };
 }
