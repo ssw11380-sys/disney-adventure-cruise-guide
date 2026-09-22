@@ -8,6 +8,7 @@ import { QuoteProviderChain, type ChainLogger } from "./market/chain.js";
 import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
 import { KisMasterProvider } from "./market/kisMaster.js";
+import { NaverFinanceProvider } from "./market/naver.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "./market/types.js";
 import { YahooProvider } from "./market/yahoo.js";
 import { ExpoPushSender, type PushSender } from "../notifications/push.js";
@@ -31,8 +32,10 @@ export interface Providers {
 /** 설정에 따라 실제 데이터 소스를 조립한다. 키가 없는 소스는 폴백 또는 null. */
 export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Providers {
   const resolveMarket = async (code: string): Promise<string | null> => {
-    const row = await db.selectFrom("listed_stocks").select("market").where("code", "=", code).executeTakeFirst();
-    return row?.market ?? null;
+    const listed = await db.selectFrom("listed_stocks").select("market").where("code", "=", code).executeTakeFirst();
+    if (listed) return listed.market;
+    const registered = await db.selectFrom("registered_stocks").select("market").where("code", "=", code).executeTakeFirst();
+    return registered?.market ?? null;
   };
   const yahoo = new YahooProvider(fetch, resolveMarket);
 
@@ -42,6 +45,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     kis = new KisProvider({ appKey: cfg.KIS_APP_KEY, appSecret: cfg.KIS_APP_SECRET, env: cfg.KIS_ENV });
     quoteChain.push(kis);
   }
+  quoteChain.push(new NaverFinanceProvider()); // 한국 종목: KRX 확정 종가 + NXT 야간 가격
   quoteChain.push(yahoo);
 
   const newsChain: NewsProvider[] = [];
@@ -70,7 +74,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
 
 export function describeProviders(cfg: AppConfig): Record<string, string> {
   return {
-    quotes: cfg.kisEnabled ? "kis → yahoo" : "yahoo (KIS 키 없음)",
+    quotes: cfg.kisEnabled ? "kis → naver → yahoo" : "naver → yahoo (KIS 키 없음, 미국은 yahoo)",
     news: cfg.NAVER_CLIENT_ID ? "naver → google-rss" : "google-rss (네이버 키 없음)",
     financials: cfg.DART_API_KEY ? "dart" : "없음 (DART 키 없음)",
     investorFlow: cfg.kisEnabled ? "kis" : "없음 (KIS 키 없음)",

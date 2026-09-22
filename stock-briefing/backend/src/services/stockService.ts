@@ -1,5 +1,6 @@
 import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
+import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import { ConflictError, NotFoundError, ProviderError } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
@@ -35,7 +36,6 @@ export interface RegisteredWithQuote extends RegisteredStock {
   evaluation: { marketValue: number; costBasis: number; profit: number; profitRate: number } | null;
 }
 
-const CODE_RE = /^\d{6}$/;
 
 export class StockService {
   private readonly now: () => Date;
@@ -115,12 +115,16 @@ export class StockService {
     if (!q) return { results: [], source: "none" };
     const compact = q.replace(/\s+/g, "");
     const local = await this.searchLocal(compact, limit);
-    if (local.length > 0) return { results: local, source: "master" };
+    // 영문 티커처럼 보이면(대문자 1~5자) 마스터에 있어도 미국 종목을 함께 보여준다
+    const looksLikeTicker = /^[A-Za-z][A-Za-z.\-]{0,5}$/.test(compact);
+    if (local.length > 0 && !looksLikeTicker) return { results: local, source: "master" };
     try {
       const remote = await this.deps.search.search(q, limit);
-      return { results: remote, source: this.deps.search.name };
+      const seen = new Set(local.map((s) => s.code));
+      const merged = [...local, ...remote.filter((r) => !seen.has(r.code))].slice(0, limit);
+      return { results: merged, source: local.length ? `master+${this.deps.search.name}` : this.deps.search.name };
     } catch (e) {
-      if (e instanceof ProviderError) return { results: [], source: "none" };
+      if (e instanceof ProviderError) return { results: local, source: local.length ? "master" : "none" };
       throw e;
     }
   }
@@ -180,7 +184,8 @@ export class StockService {
   // ── 등록/보유 ────────────────────────────────────────────────────
 
   async register(input: RegisterInput): Promise<RegisteredStock> {
-    if (!CODE_RE.test(input.code)) throw new NotFoundError(`종목 코드는 6자리 숫자여야 합니다: ${input.code}`);
+    input = { ...input, code: normalizeCode(input.code) };
+    if (!CODE_RE.test(input.code)) throw new NotFoundError(`종목 코드는 6자리 숫자(한국) 또는 티커(미국)여야 합니다: ${input.code}`);
     const exists = await this.deps.db
       .selectFrom("registered_stocks")
       .select("code")

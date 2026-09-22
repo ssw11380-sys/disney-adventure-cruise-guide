@@ -7,6 +7,8 @@ import type { CandlePeriod, CandleSeries, ListedStock, Quote } from "../../domai
  */
 export interface QuoteProvider {
   readonly name: string;
+  /** 이 소스가 해당 코드를 다룰 수 있는지 (예: KIS 는 한국 종목만). 없으면 전부 지원 */
+  supports?(code: string): boolean;
   getQuote(code: string): Promise<Quote>;
   getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries>;
 }

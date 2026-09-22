@@ -1,15 +1,16 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import type { FinancialsProvider } from "../providers/dart/types.js";
 import type { NewsProvider } from "../providers/news/types.js";
 import type { AnalysisService } from "../services/analysisService.js";
 import type { StockService } from "../services/stockService.js";
 
 const params = z.object({
-  code: z.string().regex(/^\d{6}$/, "종목 코드는 6자리 숫자"),
+  code: z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE, "종목 코드는 6자리 숫자(한국) 또는 티커(미국)")),
   kind: z.enum(["company", "value", "technical"]),
 });
-const codeParam = z.object({ code: z.string().regex(/^\d{6}$/, "종목 코드는 6자리 숫자") });
+const codeParam = z.object({ code: z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE, "종목 코드는 6자리 숫자(한국) 또는 티커(미국)")) });
 const query = z.object({ refresh: z.coerce.boolean().default(false) });
 
 export interface AnalysisRouteDeps {

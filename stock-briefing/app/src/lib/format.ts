@@ -1,3 +1,5 @@
+import type { Currency, Market } from "@/api/types";
+
 export function formatWon(n: number | null | undefined, opts: { sign?: boolean } = {}): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
   const abs = Math.abs(n);
@@ -5,6 +7,28 @@ export function formatWon(n: number | null | undefined, opts: { sign?: boolean }
   if (opts.sign) return n > 0 ? `+${body}` : n < 0 ? `-${body}` : body;
   return n < 0 ? `-${body}` : body;
 }
+
+export function formatUsd(n: number | null | undefined, opts: { sign?: boolean } = {}): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "-";
+  const abs = Math.abs(n);
+  const body = `$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (opts.sign) return n > 0 ? `+${body}` : n < 0 ? `-${body}` : body;
+  return n < 0 ? `-${body}` : body;
+}
+
+/** 통화에 맞춘 가격 표기. KRW 는 "201,000원", USD 는 "$340.22" */
+export function formatPrice(n: number | null | undefined, currency: Currency | undefined, opts: { sign?: boolean } = {}): string {
+  return currency === "USD" ? formatUsd(n, opts) : formatWon(n, opts);
+}
+
+const US_MARKETS: ReadonlySet<string> = new Set(["NASDAQ", "NYSE", "AMEX", "US"]);
+export function isUsMarket(market: Market | string | null | undefined): boolean {
+  return !!market && US_MARKETS.has(market);
+}
+export function currencyOfMarket(market: Market | string | null | undefined): Currency {
+  return isUsMarket(market) ? "USD" : "KRW";
+}
+export const CURRENCY_LABEL: Record<Currency, string> = { KRW: "원화", USD: "달러" };
 
 export function formatNumber(n: number | null | undefined, digits = 0): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
@@ -18,11 +42,17 @@ export function formatPct(n: number | null | undefined, opts: { sign?: boolean }
   return n > 0 ? `+${s}` : n < 0 ? `-${s}` : s;
 }
 
-/** 큰 금액을 억/조 단위로 (시가총액, 매출 등) */
-export function formatKrwCompact(n: number | null | undefined): string {
+/** 큰 금액을 억/조 단위로 (시가총액, 매출 등). USD 는 B/M 단위 */
+export function formatKrwCompact(n: number | null | undefined, currency: Currency = "KRW"): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
   const abs = Math.abs(n);
   const sign = n < 0 ? "-" : "";
+  if (currency === "USD") {
+    if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(2)}T`;
+    if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
+    if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+    return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
+  }
   if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(abs >= 1e13 ? 0 : 1)}조원`;
   if (abs >= 1e8) return `${sign}${Math.round(abs / 1e8).toLocaleString("ko-KR")}억원`;
   return `${sign}${Math.round(abs).toLocaleString("ko-KR")}원`;

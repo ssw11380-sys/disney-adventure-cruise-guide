@@ -6,6 +6,7 @@ import { useSearch, useStockMutations } from "@/api/hooks";
 import type { ListedStock } from "@/api/types";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Loading, Muted } from "@/components/ui";
+import { isUsMarket } from "@/lib/format";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 종목 등록: 검색 → 선택 → 수량/평단(선택) → 등록 */
@@ -51,7 +52,7 @@ export default function AddStockScreen() {
             setQ(v);
             setSelected(null);
           }}
-          placeholder="종목명 또는 코드 (예: SK하이닉스, 000660)"
+          placeholder="종목명·코드·미국 티커 (예: SK하이닉스, 000660, AAPL)"
           placeholderTextColor={t.muted}
           autoFocus
           autoCorrect={false}
@@ -91,7 +92,7 @@ export default function AddStockScreen() {
             <TextInput
               value={avgPrice}
               onChangeText={setAvgPrice}
-              placeholder="평균 단가 (원)"
+              placeholder={isUsMarket(selected.market) ? "평균 단가 ($)" : "평균 단가 (원)"}
               placeholderTextColor={t.muted}
               keyboardType="numeric"
               style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]}
@@ -100,7 +101,7 @@ export default function AddStockScreen() {
           <Button title="등록" onPress={submit} loading={register.isPending} />
         </Card>
       ) : debounced.trim().length === 0 ? (
-        <Muted>KOSPI/KOSDAQ 상장 종목을 검색합니다.</Muted>
+        <Muted>한국 종목은 종목명이나 6자리 코드로, 미국 종목은 티커(AAPL, TSLA, NVDA)나 영문 회사명으로 검색합니다. 한글 회사명(예: 애플)으로는 미국 종목이 검색되지 않습니다.</Muted>
       ) : search.isLoading ? (
         <Loading />
       ) : search.isError ? (
@@ -120,6 +121,7 @@ export default function AddStockScreen() {
                   {item.code} · {item.market}
                 </Muted>
               </View>
+              {isUsMarket(item.market) ? <Badge tone="warn">미국 · $</Badge> : null}
               {item.groupCode === "EF" ? <Badge>ETF</Badge> : null}
             </Pressable>
           )}

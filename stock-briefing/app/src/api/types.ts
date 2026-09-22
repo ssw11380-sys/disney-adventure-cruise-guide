@@ -1,6 +1,19 @@
 /** 백엔드 응답 타입 (backend/src/domain, services 와 맞춘다) */
 
-export type Market = "KOSPI" | "KOSDAQ" | "UNKNOWN";
+export type Market = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "US" | "UNKNOWN";
+export type Currency = "KRW" | "USD";
+
+/** 정규장 밖(넥스트레이드 NXT) 가격. 토스·네이버가 장 마감 후 보여주는 값 */
+export interface AfterMarketQuote {
+  venue: "NXT";
+  session: "PRE_MARKET" | "AFTER_MARKET" | "UNKNOWN";
+  status: "OPEN" | "CLOSE";
+  price: number;
+  change: number;
+  changeRate: number;
+  volume: number | null;
+  asOf: string;
+}
 
 export interface ListedStock {
   code: string;
@@ -12,6 +25,7 @@ export interface ListedStock {
 
 export interface Quote {
   code: string;
+  currency?: Currency; // 구버전 서버 응답에는 없음 → KRW 로 간주
   price: number;
   change: number;
   changeRate: number;
@@ -29,6 +43,7 @@ export interface Quote {
   low52w: number | null;
   asOf: string;
   source: string;
+  afterMarket?: AfterMarketQuote | null;
 }
 
 export interface RegisteredStock {

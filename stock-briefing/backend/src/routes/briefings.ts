@@ -1,18 +1,19 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import type { BriefingScheduler } from "../scheduler.js";
 import type { BriefingService } from "../services/briefingService.js";
 
 const sessionEnum = z.enum(["morning", "afternoon"]);
 const listQuery = z.object({
-  code: z.string().regex(/^\d{6}$/).optional(),
+  code: z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE)).optional(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   session: sessionEnum.optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 const runBody = z.object({
   session: sessionEnum,
-  codes: z.array(z.string().regex(/^\d{6}$/)).optional(),
+  codes: z.array(z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE))).optional(),
   force: z.boolean().default(false),
 });
 const idParam = z.object({ id: z.coerce.number().int().positive() });

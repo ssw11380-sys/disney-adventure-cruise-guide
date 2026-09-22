@@ -1,4 +1,5 @@
 import type { Candle, CandlePeriod, CandleSeries, ListedStock, Quote } from "../../domain/types.js";
+import { isKrCode, marketFromYahooExchange } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
 import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
@@ -20,6 +21,7 @@ function num(v: unknown): number | null {
 }
 
 export function yahooSymbol(code: string, market: string): string {
+  if (!isKrCode(code)) return code; // 미국 티커는 그대로
   return `${code}.${market === "KOSDAQ" ? "KQ" : "KS"}`;
 }
 
@@ -49,14 +51,17 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
     const out: ListedStock[] = [];
     for (const q of json.quotes ?? []) {
       const symbol = String(q["symbol"] ?? "");
-      const m = /^(\d{6})\.(KS|KQ)$/.exec(symbol);
-      if (!m) continue;
+      const quoteType = String(q["quoteType"] ?? "");
+      if (quoteType !== "EQUITY" && quoteType !== "ETF") continue; // 선물/옵션/지수 제외
+      const market = marketFromYahooExchange(q["exchange"] as string | undefined, symbol);
+      if (!market) continue;
+      const code = isKrCode(symbol.slice(0, 6)) && /^\d{6}\.(KS|KQ)$/.test(symbol) ? symbol.slice(0, 6) : symbol;
       out.push({
-        code: m[1]!,
+        code,
         name: String(q["longname"] ?? q["shortname"] ?? symbol),
-        market: m[2] === "KQ" ? "KOSDAQ" : "KOSPI",
+        market,
         isinCode: null,
-        groupCode: q["quoteType"] === "ETF" ? "EF" : q["quoteType"] === "EQUITY" ? "ST" : null,
+        groupCode: quoteType === "ETF" ? "EF" : "ST",
       });
       if (out.length >= limit) break;
     }
@@ -68,7 +73,7 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
     candles: Candle[];
   }> {
     const known = await this.resolveMarket(code);
-    const markets = known ? [known] : ["KOSPI", "KOSDAQ"];
+    const markets = !isKrCode(code) ? ["US"] : known ? [known] : ["KOSPI", "KOSDAQ"];
     let lastErr: unknown;
     for (const market of markets) {
       const symbol = yahooSymbol(code, market);
@@ -109,6 +114,7 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
     const closes = candles.map((c) => c.close);
     return {
       code,
+      currency: meta["currency"] === "USD" ? "USD" : "KRW",
       price,
       change,
       changeRate: round2(changeRate),

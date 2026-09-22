@@ -84,6 +84,7 @@ export class KisMasterProvider implements MasterProvider {
   }
 }
 
+const MARKETS: ReadonlySet<string> = new Set(["KOSPI", "KOSDAQ", "NASDAQ", "NYSE", "AMEX", "US"]);
 export function toMarket(s: string): Market {
-  return s === "KOSPI" || s === "KOSDAQ" ? s : "UNKNOWN";
+  return MARKETS.has(s) ? (s as Market) : "UNKNOWN";
 }

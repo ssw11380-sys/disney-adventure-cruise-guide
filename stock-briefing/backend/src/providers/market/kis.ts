@@ -1,5 +1,6 @@
 import type { Candle, CandlePeriod, CandleSeries, Quote } from "../../domain/types.js";
 import { ProviderError } from "../../lib/errors.js";
+import { isKrCode } from "../../lib/codes.js";
 import { seoulDateCompact, seoulDateCompactDaysAgo, seoulIso } from "../../lib/time.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
 import type { FetchFn, QuoteProvider } from "./types.js";
@@ -49,6 +50,11 @@ export class KisProvider implements QuoteProvider, InvestorFlowProvider {
     this.fetchFn = opts.fetchFn ?? fetch;
     this.now = opts.now ?? (() => new Date());
     this.baseUrl = BASE_URL[opts.env];
+  }
+
+  /** KIS 국내주식 API 는 한국 종목만 */
+  supports(code: string): boolean {
+    return isKrCode(code);
   }
 
   private async getToken(): Promise<string> {
@@ -125,6 +131,7 @@ export class KisProvider implements QuoteProvider, InvestorFlowProvider {
     const marketCapEok = n(o["hts_avls"]); // 억원 단위
     return {
       code,
+      currency: "KRW",
       price,
       change,
       changeRate: sign === "4" || sign === "5" ? -Math.abs(rawRate) : Math.abs(rawRate),

@@ -97,7 +97,7 @@ describe("stock routes", () => {
   });
 
   it("잘못된 코드/본문은 400 으로 거절한다", async () => {
-    const bad = await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "abc" } });
+    const bad = await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "12345" } });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error).toBe("VALIDATION");
     const neg = await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "000660", quantity: -1 } });

@@ -5,6 +5,7 @@ import { useStock, useStockMutations } from "@/api/hooks";
 import type { RegisteredStock } from "@/api/types";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted } from "@/components/ui";
+import { isUsMarket } from "@/lib/format";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 보유 수량/평단/메모 수정, 삭제 */
@@ -62,7 +63,7 @@ function EditForm({ stock }: { stock: RegisteredStock }) {
         <Muted>비우면 관심 종목으로 바뀝니다.</Muted>
         <View style={{ flexDirection: "row", gap: space.sm }}>
           <TextInput value={quantity} onChangeText={setQuantity} placeholder="보유 수량 (주)" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
-          <TextInput value={avgPrice} onChangeText={setAvgPrice} placeholder="평균 단가 (원)" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
+          <TextInput value={avgPrice} onChangeText={setAvgPrice} placeholder={isUsMarket(stock.market) ? "평균 단가 ($)" : "평균 단가 (원)"} placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
         </View>
         <TextInput value={memo} onChangeText={setMemo} placeholder="메모 (선택)" placeholderTextColor={t.muted} multiline style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt, minHeight: 72 }]} />
         <Button title="저장" onPress={save} loading={update.isPending} />

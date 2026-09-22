@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 import { useHealth } from "@/api/hooks";
+import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "@/components/ui";
@@ -50,6 +51,8 @@ export default function SettingsScreen() {
       </Card>
 
       {health.data ? <NotificationSettingsCard /> : null}
+
+      <AppUpdateCard />
     </Screen>
   );
 }

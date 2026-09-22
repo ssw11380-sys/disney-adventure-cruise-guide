@@ -1,12 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import type { StockService } from "../services/stockService.js";
 
-const codeParam = z.object({ code: z.string().regex(/^\d{6}$/, "종목 코드는 6자리 숫자") });
+const codeParam = z.object({ code: z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE, "종목 코드는 6자리 숫자(한국) 또는 티커(미국)")) });
 const money = z.number().nonnegative().nullable().optional();
 
 const registerBody = z.object({
-  code: z.string().regex(/^\d{6}$/, "종목 코드는 6자리 숫자"),
+  code: z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE, "종목 코드는 6자리 숫자(한국) 또는 티커(미국)")),
   quantity: money,
   avgPrice: money,
   memo: z.string().max(500).nullable().optional(),
