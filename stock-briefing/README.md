@@ -261,6 +261,41 @@ Dockerfile 을 자동 인식합니다. Postgres 를 붙이면 `DATABASE_URL` 에
 
 배포 후 앱 설정에서 서버 주소를 `https://<앱>.fly.dev` 처럼 바꾸고 토큰을 입력하면 됩니다. 배포용 APK 를 만들 때는 `app/eas.json` 의 `preview` 프로필 `EXPO_PUBLIC_API_URL` 에 서버 주소를 넣어 두면 기본값으로 들어갑니다.
 
+## 휴대폰만으로 운영하기 (PC 없이)
+
+PC 명령 없이 웹 화면만으로 서버 배포, 앱 설치, 푸시 설정까지 할 수 있습니다. 필요한 계정: GitHub(있음), Anthropic, Railway, Expo, Firebase. 전부 휴대폰 브라우저에서 됩니다.
+
+### 1. 서버: Railway (약 15분)
+
+1. https://railway.app 에 GitHub 로 로그인 → **New Project → Deploy from GitHub repo** → 이 저장소 선택 → 브랜치 `claude/stock-analysis-alert-app-g3zrxd`.
+2. 서비스 **Settings → Root Directory** 를 `stock-briefing/backend` 로 지정 (Dockerfile 을 자동 인식).
+3. **Variables** 에 추가: `ANTHROPIC_API_KEY`, `API_TOKEN`(아무 긴 문자열), 있으면 `KIS_APP_KEY` `KIS_APP_SECRET` `DART_API_KEY` `NAVER_CLIENT_ID` `NAVER_CLIENT_SECRET`.
+4. 데이터 보존: 프로젝트에 **+ New → Database → PostgreSQL** 추가 후 백엔드 Variables 에 `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` 추가. (SQLite 로 두려면 대신 **Volume** 을 `/app/data` 에 마운트.)
+5. **Settings → Networking → Generate Domain** 으로 주소를 받습니다(예: `https://xxx.up.railway.app`). 브라우저에서 `https://xxx.up.railway.app/health` 가 열리면 완료.
+
+Railway Hobby 요금(월 5달러, 사용량 포함)이 듭니다. 무료 체험이 끝나면 결제 등록이 필요합니다.
+
+### 2. 앱: Expo 대시보드에서 APK 빌드 (약 20분, 빌드 대기 포함)
+
+1. https://expo.dev 가입 → **Create a project** (이름 `stock-briefing`) → 프로젝트 **ID** 를 복사해 Claude 에게 보내면 `app.json` 에 넣어 커밋합니다. (또는 대시보드 **Environment variables** 에 `EAS_PROJECT_ID` 로 넣어도 됩니다.)
+2. 프로젝트 **Settings → GitHub** 에서 저장소를 연결하고 **Base directory** 를 `stock-briefing/app` 으로 지정.
+3. **Environment variables** 에 `EXPO_PUBLIC_API_URL` = Railway 주소, `EXPO_PUBLIC_API_TOKEN` = API_TOKEN 값 을 추가 (앱 설정 화면에서 나중에 바꿀 수도 있습니다).
+4. **Builds → Build from GitHub** → 브랜치 선택, 플랫폼 Android, 프로필 `preview` → 완료되면 APK 다운로드 링크가 나옵니다. 휴대폰에서 열어 설치("출처를 알 수 없는 앱" 허용 필요).
+
+설치한 앱은 Expo Go 없이 단독으로 동작합니다. 앱 코드를 바꾸면 같은 방법으로 다시 빌드합니다(10~15분).
+
+### 3. 푸시 알림 (약 15분)
+
+1. https://console.firebase.google.com → 프로젝트 만들기 → **Android 앱 추가**, 패키지명 `com.stockbriefing.app` → `google-services.json` 다운로드.
+2. Expo 대시보드 **Environment variables → Create variable**: 이름 `GOOGLE_SERVICES_JSON`, 타입 **File**, 위 파일 업로드, visibility Secret. (`app.config.js` 가 이 값을 읽어 빌드에 넣습니다.)
+3. Firebase **프로젝트 설정 → 서비스 계정 → 새 비공개 키 생성** 으로 JSON 키 다운로드 → Expo 대시보드 **Credentials → Android → FCM V1 service account key → Add** 에 업로드.
+4. 앱을 다시 빌드해서 설치한 뒤 **설정 탭 → 알림 → 이 기기에서 알림 받기** 를 켜고 **테스트 알림 보내기**.
+
+### 제약
+
+- 앱을 고칠 때마다 클라우드 빌드(10~15분)를 거칩니다. PC 가 있으면 Expo Go 로 즉시 확인할 수 있어 훨씬 빠릅니다.
+- 브리핑 내용 수정(프롬프트)은 GitHub 웹에서 `backend/prompts/*.md` 를 편집하면 Railway 가 자동 재배포합니다.
+
 ## 데이터 소스 메모
 
 - **KIS Open API**: `KIS_APP_KEY`/`KIS_APP_SECRET` 설정 시 1차 소스. 토큰은 24시간 캐시. 실서버 초당 20건 제한이라 종목은 순차 조회. 이 저장소 개발 환경에는 키가 없어 **KIS 호출 코드는 공식 문서 기준으로 작성됐고 실제 키로는 아직 검증되지 않음** — 키를 넣고 `GET /api/stocks/000660/quote?fresh=1` 로 확인 필요.

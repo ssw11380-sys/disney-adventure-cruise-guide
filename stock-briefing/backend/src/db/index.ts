@@ -23,8 +23,7 @@ export function createDb(databaseUrl: string): { db: Db; dialect: Dialect } {
     const pool = new pg.Pool({
       connectionString: databaseUrl,
       max: 5,
-      // Railway/Supabase 등은 SSL 을 요구하는 경우가 많다. sslmode=disable 이 명시되지 않으면 켠다.
-      ...(databaseUrl.includes("sslmode=disable") || /localhost|127\.0\.0\.1/.test(databaseUrl) ? {} : { ssl: { rejectUnauthorized: false } }),
+      ...(needsSsl(databaseUrl) ? { ssl: { rejectUnauthorized: false } } : {}),
     });
     return { db: new Kysely<Database>({ dialect: new PostgresDialect({ pool }) }), dialect: "postgres" };
   }
@@ -33,6 +32,25 @@ export function createDb(databaseUrl: string): { db: Db; dialect: Dialect } {
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   return { db: new Kysely<Database>({ dialect: new SqliteDialect({ database: sqlite }) }), dialect: "sqlite" };
+}
+
+/**
+ * Neon/Supabase 같은 외부 호스트는 SSL 필수, Railway 사설망(postgres.railway.internal)이나 localhost, docker compose 의 서비스명은 SSL 미지원.
+ * 규칙: sslmode=disable 이면 끔, 호스트에 점이 없거나(.internal 포함) localhost 면 끔, 그 외는 켬. DATABASE_SSL=true|false 로 강제 가능.
+ */
+export function needsSsl(databaseUrl: string, override = process.env["DATABASE_SSL"]): boolean {
+  if (override === "true") return true;
+  if (override === "false") return false;
+  if (/sslmode=disable/.test(databaseUrl)) return false;
+  let host = "";
+  try {
+    host = new URL(databaseUrl).hostname;
+  } catch {
+    return true;
+  }
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return false;
+  if (!host.includes(".") || host.endsWith(".internal")) return false;
+  return true;
 }
 
 export async function createMigratedDb(databaseUrl: string): Promise<Db> {

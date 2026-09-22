@@ -38,3 +38,16 @@ describe("API_TOKEN auth", () => {
     await open.close();
   });
 });
+
+describe("needsSsl", () => {
+  it("외부 호스트는 켜고 localhost/사설망/sslmode=disable 은 끈다", async () => {
+    const { needsSsl } = await import("../src/db/index.js");
+    expect(needsSsl("postgres://u:p@ep-cool.neon.tech/db?sslmode=require", undefined)).toBe(true);
+    expect(needsSsl("postgres://u:p@db.supabase.co:5432/postgres", undefined)).toBe(true);
+    expect(needsSsl("postgres://u:p@postgres.railway.internal:5432/railway", undefined)).toBe(false);
+    expect(needsSsl("postgres://u:p@db:5432/stock", undefined)).toBe(false);
+    expect(needsSsl("postgres://u:p@127.0.0.1:5433/x", undefined)).toBe(false);
+    expect(needsSsl("postgres://u:p@host.example.com/x?sslmode=disable", undefined)).toBe(false);
+    expect(needsSsl("postgres://u:p@postgres.railway.internal/x", "true")).toBe(true);
+  });
+});
