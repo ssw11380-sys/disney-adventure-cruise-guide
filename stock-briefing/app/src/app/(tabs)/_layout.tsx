@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Tabs } from "expo-router";
+import { router, Tabs } from "expo-router";
 import React from "react";
+import { Pressable } from "react-native";
 import { useTheme } from "@/theme";
 
 export default function TabsLayout() {
@@ -21,7 +22,16 @@ export default function TabsLayout() {
     >
       <Tabs.Screen
         name="index"
-        options={{ title: "내 종목", tabBarIcon: ({ color, size, focused }) => <Ionicons name={focused ? "briefcase" : "briefcase-outline"} size={size} color={color} /> }}
+        options={{
+          title: "내 종목",
+          tabBarIcon: ({ color, size, focused }) => <Ionicons name={focused ? "briefcase" : "briefcase-outline"} size={size} color={color} />,
+          // 목록 위에 떠 있던 + 버튼이 종목 행을 가려서 헤더 오른쪽으로 옮겼다
+          headerRight: () => (
+            <Pressable onPress={() => router.push("/stocks/add")} accessibilityRole="button" accessibilityLabel="종목 등록" hitSlop={8} style={{ marginRight: 16, width: 34, height: 34, borderRadius: 17, backgroundColor: t.accent, alignItems: "center", justifyContent: "center" }}>
+              <Ionicons name="add" size={22} color={t.accentInk} />
+            </Pressable>
+          ),
+        }}
       />
       <Tabs.Screen
         name="briefings"

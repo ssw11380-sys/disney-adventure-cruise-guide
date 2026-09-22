@@ -1,8 +1,7 @@
-import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef } from "react";
-import { Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { Screen } from "@/components/Screen";
@@ -158,13 +157,8 @@ export default function StocksScreen() {
             </Card>
           </View>
         }
-        ListFooterComponent={(data?.length ?? 0) > 0 ? <Muted style={{ textAlign: "center", marginTop: space.md }}>종목을 길게 누르면 수정·삭제할 수 있습니다</Muted> : null}
+        ListFooterComponent={(data?.length ?? 0) > 0 ? <Muted style={{ textAlign: "center", marginTop: space.md }}>종목을 길게 누르면 수정·삭제할 수 있습니다 · 오른쪽 위 + 로 등록</Muted> : null}
       />
-      {(data?.length ?? 0) > 0 ? (
-        <Pressable onPress={() => router.push("/stocks/add")} accessibilityRole="button" accessibilityLabel="종목 등록" style={[styles.fab, { backgroundColor: t.accent, shadowColor: t.shadow }]}>
-          <Ionicons name="add" size={28} color={t.accentInk} />
-        </Pressable>
-      ) : null}
     </Screen>
   );
 }
@@ -210,20 +204,6 @@ function Step({ n, text }: { n: number; text: string }) {
 }
 
 const styles = StyleSheet.create({
-  list: { padding: space.lg, paddingBottom: 96 },
+  list: { padding: space.lg, paddingBottom: space.xl },
   hero: { borderRadius: radius.lg, padding: space.xl, gap: space.md, shadowOpacity: 0.25, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 6 },
-  fab: {
-    position: "absolute",
-    right: space.lg,
-    bottom: 56,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 5,
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-  },
 });
