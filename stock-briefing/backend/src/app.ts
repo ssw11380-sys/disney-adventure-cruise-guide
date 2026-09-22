@@ -122,6 +122,20 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     return reply.code(500).send({ error: "INTERNAL", message: "서버 오류" });
   });
 
+  /** 브라우저로 주소만 열었을 때 보이는 안내 페이지 */
+  app.get("/", async (_req, reply) => {
+    const h = await deviceService.enabledTokens();
+    const jobs = scheduler?.status().jobs ?? [];
+    const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>주식 브리핑 서버</title>
+<style>body{font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;max-width:640px;margin:40px auto;padding:0 16px;line-height:1.6;color:#1b221d;background:#f5f6f3}h1{font-size:1.4rem}code{background:#eef0eb;padding:2px 6px;border-radius:4px}.ok{color:#1f6f5c;font-weight:600}small{color:#5f6a63}</style></head>
+<body><h1>주식 브리핑 서버 <span class="ok">정상 작동 중</span></h1>
+<p>이 주소는 휴대폰 앱이 접속하는 서버입니다. 앱의 <b>설정 탭 → 서버 주소</b>에 이 주소를 입력하세요.</p>
+<ul><li>서버 시각: ${seoulIso(now())}</li><li>브리핑 모델: ${describeProviders(opts.config).llm}</li><li>등록된 알림 기기: ${h.length}대</li>${jobs.map((j) => `<li>다음 ${j.session === "morning" ? "오전" : "오후"} 브리핑: ${j.nextRun ? new Date(j.nextRun).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "-"}</li>`).join("")}</ul>
+<p><small>상태 확인: <a href="/health">/health</a> · API 는 토큰이 필요합니다.</small></p>
+<p><small>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</small></p></body></html>`;
+    return reply.type("text/html; charset=utf-8").send(html);
+  });
+
   app.get("/health", async () => ({
     ok: true,
     time: seoulIso(now()),
