@@ -30,6 +30,13 @@ export function currencyOfMarket(market: Market | string | null | undefined): Cu
 }
 export const CURRENCY_LABEL: Record<Currency, string> = { KRW: "원화", USD: "달러" };
 
+/** 정규장 밖 가격의 짧은 라벨: NXT 야간/프리마켓, 미국 애프터/프리마켓 */
+export function afterMarketLabel(a: { venue: "NXT" | "US"; session: "PRE_MARKET" | "AFTER_MARKET" | "UNKNOWN"; status: "OPEN" | "CLOSE" }): string {
+  const venue = a.venue === "NXT" ? "NXT" : "미국";
+  const session = a.session === "PRE_MARKET" ? "프리마켓" : a.venue === "NXT" ? "야간" : "애프터마켓";
+  return `${venue} ${session}${a.status === "OPEN" ? "(거래 중)" : ""}`;
+}
+
 export function formatNumber(n: number | null | undefined, digits = 0): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
   return n.toLocaleString("ko-KR", { maximumFractionDigits: digits, minimumFractionDigits: digits });

@@ -5,7 +5,7 @@ export type Currency = "KRW" | "USD";
 
 /** 정규장 밖(넥스트레이드 NXT) 가격. 토스·네이버가 장 마감 후 보여주는 값 */
 export interface AfterMarketQuote {
-  venue: "NXT";
+  venue: "NXT" | "US"; // NXT=넥스트레이드(한국), US=미국 프리/애프터마켓
   session: "PRE_MARKET" | "AFTER_MARKET" | "UNKNOWN";
   status: "OPEN" | "CLOSE";
   price: number;
@@ -44,6 +44,8 @@ export interface Quote {
   asOf: string;
   source: string;
   afterMarket?: AfterMarketQuote | null;
+  priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
+  priceKrw?: number | null; // 미국 종목 원화 환산
 }
 
 export interface RegisteredStock {

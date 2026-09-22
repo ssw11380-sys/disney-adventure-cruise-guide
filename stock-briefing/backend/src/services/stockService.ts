@@ -11,6 +11,8 @@ export interface StockServiceDeps {
   quotes: QuoteProvider;
   search: StockSearchProvider;
   master: MasterProvider;
+  /** true 면 외부 검색(토스)을 먼저 쓰고 로컬 마스터는 보조/폴백으로 쓴다 */
+  searchRemoteFirst?: boolean;
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
@@ -107,14 +109,28 @@ export class StockService {
   // ── 검색 ────────────────────────────────────────────────────────
 
   /**
-   * 1) 로컬 마스터(코드 정확 일치 → 이름 접두 → 이름 포함) 2) 비어 있으면 외부 검색.
-   * 외부 검색 결과는 마스터에 없을 때만 보조로 쓴다(응답 형식이 불안정하므로).
+   * 기본: 1) 로컬 마스터(코드 정확 일치 → 이름 접두 → 이름 포함) 2) 비어 있으면 외부 검색.
+   * searchRemoteFirst: 외부 검색(토스: 한글로 미국 종목까지, 순위 좋음)을 먼저 쓰고 마스터 결과를 뒤에 덧붙인다.
+   * 외부 검색이 실패하면 마스터만으로 답한다.
    */
   async search(query: string, limit = 20): Promise<{ results: ListedStock[]; source: string }> {
     const q = query.trim();
     if (!q) return { results: [], source: "none" };
     const compact = q.replace(/\s+/g, "");
     const local = await this.searchLocal(compact, limit);
+    if (this.deps.searchRemoteFirst) {
+      try {
+        const remote = await this.deps.search.search(q, limit);
+        if (remote.length > 0) {
+          const seen = new Set(remote.map((s) => s.code));
+          const merged = [...remote, ...local.filter((s) => !seen.has(s.code))].slice(0, limit);
+          return { results: merged, source: local.length ? `${this.deps.search.name}+master` : this.deps.search.name };
+        }
+      } catch (e) {
+        if (!(e instanceof ProviderError)) throw e;
+      }
+      return { results: local, source: local.length ? "master" : "none" };
+    }
     // 영문 티커처럼 보이면(대문자 1~5자) 마스터에 있어도 미국 종목을 함께 보여준다
     const looksLikeTicker = /^[A-Za-z][A-Za-z.\-]{0,5}$/.test(compact);
     if (local.length > 0 && !looksLikeTicker) return { results: local, source: "master" };

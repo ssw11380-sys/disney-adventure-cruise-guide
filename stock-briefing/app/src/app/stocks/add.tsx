@@ -101,7 +101,7 @@ export default function AddStockScreen() {
           <Button title="등록" onPress={submit} loading={register.isPending} />
         </Card>
       ) : debounced.trim().length === 0 ? (
-        <Muted>한국 종목은 종목명이나 6자리 코드로, 미국 종목은 티커(AAPL, TSLA, NVDA)나 영문 회사명으로 검색합니다. 한글 회사명(예: 애플)으로는 미국 종목이 검색되지 않습니다.</Muted>
+        <Muted>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
       ) : search.isLoading ? (
         <Loading />
       ) : search.isError ? (

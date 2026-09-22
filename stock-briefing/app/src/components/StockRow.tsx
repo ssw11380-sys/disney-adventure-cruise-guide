@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { RegisteredWithQuote } from "@/api/types";
-import { formatPct, formatPrice } from "@/lib/format";
+import { afterMarketLabel, formatPct, formatPrice } from "@/lib/format";
 import { font, radius, space, useTheme } from "@/theme";
 import { ChangeText, Muted } from "./ui";
 
@@ -29,7 +29,8 @@ export function StockRow({ stock, onPress }: { stock: RegisteredWithQuote; onPre
           <>
             <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{formatPrice(q.price, cur)}</Text>
             <ChangeText value={q.change} text={`${formatPrice(q.change, cur, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.small }} />
-            {nxt && nxt.price !== q.price ? <ChangeText value={nxt.change} text={`NXT ${formatPrice(nxt.price, cur)} (${formatPct(nxt.changeRate)})`} style={{ fontSize: font.tiny }} /> : null}
+            {q.priceKrw ? <Muted style={{ fontSize: font.tiny }}>≈ {formatPrice(q.priceKrw, "KRW")}</Muted> : null}
+            {nxt && nxt.price !== q.price ? <ChangeText value={nxt.change} text={`${afterMarketLabel(nxt)} ${formatPrice(nxt.price, cur)} (${formatPct(nxt.changeRate)})`} style={{ fontSize: font.tiny }} /> : null}
             {ev ? <ChangeText value={ev.profit} text={`평가 ${formatPrice(ev.profit, cur, { sign: true })} (${formatPct(ev.profitRate)})`} style={{ fontSize: font.tiny }} /> : null}
           </>
         ) : (
