@@ -93,7 +93,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }));
 
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });
-  await app.register(analysisRoutes, { prefix: "/api/stocks", service: analysisService });
+  await app.register(analysisRoutes, {
+    prefix: "/api/stocks",
+    service: analysisService,
+    stocks: stockService,
+    news: opts.providers.news,
+    financials: opts.providers.financials,
+  });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart });
 

@@ -61,7 +61,19 @@ stock-briefing/
 │   │   ├── lib/                # time(KST), errors
 │   │   └── scripts/            # refreshMaster, runBriefing
 │   └── test/                   # vitest (네트워크 없이 가짜 프로바이더로 검증)
-└── app/                        # (3단계) Expo + TypeScript
+└── app/                        # Expo(SDK 57) + TypeScript + Expo Router
+    ├── app.json                # 앱 이름/스킴, extra.apiUrl(기본 서버 주소)
+    ├── metro.config.js         # markdown-it 의 punycode 를 npm 패키지로 연결
+    └── src/
+        ├── app/                # 라우트 = 화면
+        │   ├── (tabs)/         # 내 종목 / 브리핑 / 설정
+        │   ├── stocks/add      # 종목 검색·등록 (모달)
+        │   ├── stocks/[code]/  # 종목 상세(index: 시세·차트·4탭), edit: 보유 정보 수정·삭제
+        │   └── briefings/[id]  # 브리핑 상세 (요약/상세 토글, 지난 브리핑)
+        ├── api/                # client(fetch 래퍼), hooks(react-query), types(백엔드와 동일)
+        ├── components/         # Screen(고지 footer), CandleChart, MarkdownView, BriefingCard, StockRow, ui
+        ├── lib/                # settings(서버 주소 저장), format(원/%/날짜)
+        └── theme.ts            # 라이트/다크 토큰
 ```
 
 ## 단계별 계획
@@ -70,7 +82,7 @@ stock-briefing/
 |---|---|---|
 | 1 | 백엔드 뼈대, 종목 검색/등록 API, 시세 어댑터(KIS → Yahoo 폴백), SQLite | **완료** |
 | 2 | 브리핑 파이프라인(시세·뉴스·공시·재무 수집 → 프롬프트 → Claude → 저장), node-cron 스케줄러, 프롬프트 파일 5종, 브리핑·분석 조회 API | **완료** |
-| 3 | Expo 앱: 종목 목록/등록, 브리핑 목록·상세(요약/상세 토글, 날짜별), 종목 상세 4탭(회사 소개·가치·기술·뉴스/공시), 캔들 차트 | 대기 |
+| 3 | Expo 앱: 종목 목록/등록, 브리핑 목록·상세(요약/상세 토글, 날짜별), 종목 상세 4탭(회사 소개·가치·기술·뉴스/공시), 캔들 차트 | **완료** |
 | 4 | Expo Push 연동, 기기 토큰 등록, 알림 시간 사용자 설정 | 대기 |
 | 5 | 기술적 지표(SMA/RSI/MACD/볼린저) 직접 구현 + 단위 테스트, 브리핑 파이프라인 통합 테스트 | 2단계에서 선행 구현 (지표 + 파이프라인 테스트 포함). 실제 키로 통합 검증만 남음 |
 
@@ -132,6 +144,31 @@ curl "localhost:3000/api/stocks?quotes=1"
 npm run typecheck
 npm test
 ```
+
+## 앱 실행 (3단계)
+
+```bash
+cd stock-briefing/app
+npm install
+npx expo start          # QR 을 Expo Go 앱으로 스캔 (iOS/Android)
+```
+
+- 사용하는 네이티브 모듈(reanimated, gesture-handler, svg, async-storage, haptics)은 모두 Expo Go 에 포함되어 있어 별도 빌드 없이 Expo Go 로 바로 실행됩니다. 스토어 배포나 푸시 알림(4단계)부터는 `eas build` 개발 빌드가 필요합니다.
+- 실기기에서는 앱의 **설정 탭 > 서버 주소** 에 백엔드를 실행한 PC 의 LAN IP(예: `http://192.168.0.10:3000`)를 입력하세요. 같은 Wi-Fi 에 있어야 합니다. 기본값은 iOS 시뮬레이터 `localhost:3000`, Android 에뮬레이터 `10.0.2.2:3000`. 빌드 시점에 `EXPO_PUBLIC_API_URL` 로도 지정할 수 있습니다.
+- 확인 명령: `npm run typecheck`, `npm run lint`, `npx expo-doctor`, `npm run export:check`(Metro 번들 생성).
+
+### 화면
+
+| 화면 | 내용 |
+|---|---|
+| 내 종목 | 보유 합계(평가금액·손익), 종목별 현재가·등락·평가손익, + 버튼으로 등록 |
+| 종목 등록 | 이름/코드 검색(300ms 디바운스) → 선택 → 수량·평단(선택) → 등록 |
+| 종목 상세 | 시세 헤더(시·고·저·거래량·52주·시총·PER/PBR), 일/주/월 캔들 차트(길게 눌러 값 보기), 탭: 회사 소개·가치투자·기술적 분석(마크다운, 캐시 표시, 다시 생성)·뉴스/공시(링크), 최근 브리핑 3건. 헤더 연필 아이콘으로 수정/삭제 |
+| 브리핑 | 종목별 최신 브리핑, 요약/상세 토글, 오전·오후 즉시 생성 버튼 |
+| 브리핑 상세 | 요약/상세 토글, 브리핑 시점 가격·손익, 미확인 데이터, 같은 종목 지난 브리핑 목록(날짜별 이동) |
+| 설정 | 서버 주소 저장/연결 확인, 서버 데이터 소스 상태, 브리핑 스케줄 다음 실행 시각 |
+
+모든 화면 하단에 "투자 판단의 책임은 본인에게 있으며 투자 권유가 아님" 고지가 고정됩니다. 라이트/다크 모드는 기기 설정을 따릅니다.
 
 ## 브리핑 파이프라인 (2단계)
 
