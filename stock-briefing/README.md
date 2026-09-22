@@ -1,6 +1,6 @@
 # 주식 브리핑 앱 (stock-briefing)
 
-보유/관심 한국 주식을 등록하면 매일 오전·오후 브리핑을 생성해 푸시로 알려주고, 종목별 회사 소개·가치투자·기술적 분석을 보여주는 모바일 앱.
+보유/관심 한국·미국 주식을 등록하면 매일 오전·오후 브리핑을 생성해 푸시로 알려주고, 종목별 회사 소개·가치투자·기술적 분석을 보여주는 모바일 앱.
 
 > 투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.
 
@@ -18,7 +18,8 @@
                                         ┌────────────────┘           │          └──────────────┐
                                         ▼                            ▼                         ▼
                               시세/차트 (QuoteProvider 체인)    재무 (DART)              뉴스 (네이버)
-                              KIS Open API → Yahoo Finance     + 회사 개요               + 공시(DART)
+                              KIS → 네이버 증권 → Yahoo        + 회사 개요               + 공시(DART)
+                              (미국 종목은 Yahoo)
                                         │
                                         ▼
                               SQLite(개발) / Postgres(운영)  ← Kysely (두 DB 공용 쿼리)
@@ -27,7 +28,8 @@
 핵심 설계 원칙
 
 - **데이터 소스는 인터페이스 뒤에 둔다.** `QuoteProvider`, `StockSearchProvider`, `MasterProvider`(1단계), `FinancialsProvider`, `NewsProvider`(2단계). 구현체는 교체·체인 가능.
-- **폴백 체인.** KIS 키가 없거나 장애면 Yahoo Finance(yfinance 가 쓰는 동일 엔드포인트)로 자동 대체. 모든 소스가 실패해도 API는 200 + `quoteError` 로 응답하고, 브리핑에는 "데이터 미확인"을 남긴다.
+- **폴백 체인.** 한국 종목은 KIS(키 있을 때) → 네이버 증권(키 불필요, KRX 확정 종가 + NXT 야간 가격) → Yahoo Finance 순. 미국 종목은 Yahoo. 모든 소스가 실패해도 API는 200 + `quoteError` 로 응답하고, 브리핑에는 "데이터 미확인"을 남긴다.
+- **한국 + 미국 종목.** 코드는 6자리 숫자(한국) 또는 티커(미국, `AAPL`·`BRK-B`). 미국 종목은 통화가 USD 이고 공시·수급·재무제표(DART/KIS)가 없어 브리핑에 "미국 종목 미지원"으로 표시된다. 검색은 티커나 영문 회사명으로만 된다(Yahoo 검색이 한글명을 모름).
 - **모든 시각은 Asia/Seoul.** 서버 TZ 와 무관하게 `lib/time.ts` 로 계산.
 - **프롬프트는 파일로.** `backend/prompts/*.md` (2단계) — 코드 수정 없이 편집 가능.
 - **단일 사용자 v1.** 인증/멀티유저는 범위 밖. 배포 시 네트워크(VPN, 방화벽)로 보호.
@@ -51,7 +53,7 @@ stock-briefing/
 │   │   ├── db/                 # Kysely 스키마 + 마이그레이션 + 커넥션
 │   │   ├── providers/
 │   │   │   ├── index.ts        # 설정에 따라 실제 소스 조립 (키 없는 소스는 폴백 또는 null)
-│   │   │   ├── market/         # kis, yahoo, kisMaster(종목 마스터), investorFlow(수급), chain(폴백)
+│   │   │   ├── market/         # kis, naver(한국 시세+NXT), yahoo(한국 폴백·미국), kisMaster(종목 마스터), investorFlow(수급), chain(폴백)
 │   │   │   ├── news/           # naver(검색 API), googleRss(키 불필요), chain(폴백)
 │   │   │   └── dart/           # DART 회사 개요·공시·재무제표·배당
 │   │   ├── llm/                # generator(Anthropic SDK 래퍼, 캐싱·폴백), prompts(파일 로더·템플릿)
@@ -61,7 +63,7 @@ stock-briefing/
 │   │   │                       # deviceService(푸시 토큰), notificationService(브리핑 → 푸시, 영수증)
 │   │   ├── scheduler.ts        # node-cron (Asia/Seoul) 오전/오후 브리핑
 │   │   ├── routes/             # stocks, analysis, briefings, notifications(devices/settings/test), admin
-│   │   ├── lib/                # time(KST), errors
+│   │   ├── lib/                # time(KST), errors, codes(한국 6자리/미국 티커 규칙, 통화)
 │   │   └── scripts/            # refreshMaster, runBriefing
 │   └── test/                   # vitest (네트워크 없이 가짜 프로바이더로 검증)
 └── app/                        # Expo(SDK 57) + TypeScript + Expo Router
@@ -75,8 +77,8 @@ stock-briefing/
         │   └── briefings/[id]  # 브리핑 상세 (요약/상세 토글, 지난 브리핑)
         ├── api/                # client(fetch 래퍼), hooks(react-query), types(백엔드와 동일)
         ├── components/         # Screen(고지 footer), CandleChart, MarkdownView, BriefingCard, StockRow, ui,
-        │                       # NotificationSettingsCard(알림 설정), NotificationBridge(알림 탭 → 브리핑 이동)
-        ├── lib/                # settings(서버 주소 저장), notifications(권한·토큰·등록), format(원/%/날짜)
+        │                       # NotificationSettingsCard(알림 설정), NotificationBridge(알림 탭 → 브리핑 이동), AppUpdateCard(앱 업데이트 확인)
+        ├── lib/                # settings(서버 주소 저장), notifications(권한·토큰·등록), format(원·$/%/날짜), appUpdate(release.json + expo-updates)
         └── theme.ts            # 라이트/다크 토큰
 ```
 
@@ -107,7 +109,7 @@ npm run dev                  # http://localhost:3000
 | 키 | 없으면 |
 |---|---|
 | `ANTHROPIC_API_KEY` 또는 Bedrock 키 | 브리핑/분석이 `failed` 로 저장되고 사유가 남음 (수집은 정상). 둘 중 하나면 됨 |
-| `KIS_APP_KEY/SECRET` | 시세는 Yahoo, 수급(투자자별 매매동향)은 미확인, PER/PBR 없음 |
+| `KIS_APP_KEY/SECRET` | 시세는 네이버 증권(→ Yahoo 폴백), 수급(투자자별 매매동향)은 미확인 |
 | `DART_API_KEY` | 공시·재무제표·배당·회사 개요 미확인 |
 | `NAVER_CLIENT_ID/SECRET` | 뉴스는 Google News RSS |
 
@@ -118,9 +120,9 @@ npm run dev                  # http://localhost:3000
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/health` | 상태, 현재 시세 소스, 고지 문구 |
-| GET | `/api/stocks/search?q=하이닉스&limit=20` | 종목명/코드 검색 (마스터 → Yahoo 폴백). 본주가 ETF 보다 먼저 |
-| GET | `/api/stocks?quotes=1` | 등록 종목 목록 (+현재가, 평가손익) |
-| POST | `/api/stocks` | `{ code, quantity?, avgPrice?, memo? }` 등록 |
+| GET | `/api/stocks/search?q=하이닉스&limit=20` | 종목명/코드 검색 (마스터 → Yahoo 폴백, 티커처럼 보이면 미국 종목도 함께). 본주가 ETF 보다 먼저 |
+| GET | `/api/stocks?quotes=1` | 등록 종목 목록 (+현재가, 평가손익). 현재가에 `currency`, 한국 종목은 `afterMarket`(NXT) 포함 |
+| POST | `/api/stocks` | `{ code, quantity?, avgPrice?, memo? }` 등록. 코드는 `000660` 또는 `AAPL`(소문자 허용, 평단은 그 통화 기준) |
 | GET | `/api/stocks/:code` | 등록 종목 + 현재가 |
 | PATCH | `/api/stocks/:code` | 수량/단가/메모 수정 (null 로 비우기) |
 | DELETE | `/api/stocks/:code` | 삭제 |
@@ -171,12 +173,36 @@ npx expo start          # QR 을 Expo Go 앱으로 스캔 (iOS/Android)
 
 | 화면 | 내용 |
 |---|---|
-| 내 종목 | 보유 합계(평가금액·손익), 종목별 현재가·등락·평가손익, + 버튼으로 등록 |
-| 종목 등록 | 이름/코드 검색(300ms 디바운스) → 선택 → 수량·평단(선택) → 등록 |
-| 종목 상세 | 시세 헤더(시·고·저·거래량·52주·시총·PER/PBR), 일/주/월 캔들 차트(길게 눌러 값 보기), 탭: 회사 소개·가치투자·기술적 분석(마크다운, 캐시 표시, 다시 생성)·뉴스/공시(링크), 최근 브리핑 3건. 헤더 연필 아이콘으로 수정/삭제 |
+| 내 종목 | 보유 합계(평가금액·손익, 원화/달러 따로), 종목별 현재가·등락·평가손익, 한국 종목은 NXT 야간 가격, + 버튼으로 등록 |
+| 종목 등록 | 이름/코드/미국 티커 검색(300ms 디바운스) → 선택 → 수량·평단(선택, 미국은 $) → 등록 |
+| 종목 상세 | 시세 헤더(시·고·저·거래량·52주·시총·PER/PBR, NXT 야간 가격), 일/주/월 캔들 차트(길게 눌러 값 보기), 탭: 회사 소개·가치투자·기술적 분석(마크다운, 캐시 표시, 다시 생성)·뉴스/공시(링크), 최근 브리핑 3건. 헤더 연필 아이콘으로 수정/삭제 |
 | 브리핑 | 종목별 최신 브리핑, 요약/상세 토글, 오전·오후 즉시 생성 버튼 |
 | 브리핑 상세 | 요약/상세 토글, 브리핑 시점 가격·손익, 미확인 데이터, 같은 종목 지난 브리핑 목록(날짜별 이동) |
-| 설정 | 서버 주소 저장/연결 확인, 서버 데이터 소스 상태, 브리핑 스케줄 다음 실행 시각 |
+| 설정 | 서버 주소 저장/연결 확인, 서버 데이터 소스 상태, 알림 시간, 앱 업데이트 확인(현재 버전·새 APK·OTA) |
+
+### 토스·네이버 앱과 종가가 다르게 보일 때
+
+장 마감 후 토스나 네이버 앱에 보이는 가격은 대개 **넥스트레이드(NXT) 애프터마켓**(15:40~20:00) 체결가입니다. 이 앱의 현재가·등락률·차트는 **KRX 정규장**(09:00~15:30) 기준이고, NXT 가격은 그 아래 "NXT 야간 …" 한 줄로 따로 보여줍니다. 브리핑도 정규장 종가를 기준으로 쓰고 NXT 가격을 한 줄 덧붙입니다. 거래량도 정규장만 집계하므로 통합 거래량을 보여주는 앱보다 적게 나옵니다.
+
+### 앱 업데이트
+
+설정 탭 맨 아래 **앱 업데이트** 카드에서 **업데이트 확인**을 누르면 두 가지를 순서대로 확인합니다.
+
+1. **새 APK** — 저장소의 `stock-briefing/release.json` 을 읽어 `version` 이 현재 앱보다 높고 `apkUrl` 이 있으면 "새 버전 설치" 버튼이 나옵니다. 누르면 APK 를 내려받아 기존 앱 위에 덮어씌워 설치되고, 등록 종목·설정은 유지됩니다. 네이티브 모듈이 바뀌거나 `app.json` 의 `version` 을 올렸을 때 이 경로를 씁니다.
+2. **OTA (EAS Update)** — 화면·기능(JS)만 바뀐 경우. 내려받은 뒤 "지금 다시 시작"으로 바로 적용됩니다. 앱을 켤 때도 자동으로 확인해 다음 실행 때 적용됩니다(`updates.checkAutomatically: ON_LOAD`).
+
+배포하는 쪽 절차:
+
+```bash
+cd stock-briefing/app
+# (a) JS 만 바뀜 → OTA. 같은 runtimeVersion(= app.json version) 의 설치 앱에 즉시 배포
+npx eas-cli update --channel preview --environment preview --message "설명"
+# (b) 네이티브/버전 변경 → app.json 과 package.json 의 version 을 올리고 APK 빌드
+npx eas-cli build --platform android --profile preview --non-interactive
+# 빌드가 끝나면 APK 링크를 stock-briefing/release.json 의 apkUrl 에, version 도 같이 적어 main 에 커밋
+```
+
+`release.json` 은 GitHub raw 주소로 읽으므로 저장소가 공개여야 합니다(비공개로 바꾸면 `app/src/lib/appUpdate.ts` 의 `RELEASE_URL` 을 다른 곳으로 옮기세요).
 
 모든 화면 하단에 "투자 판단의 책임은 본인에게 있으며 투자 권유가 아님" 고지가 고정됩니다. 라이트/다크 모드는 기기 설정을 따릅니다.
 
@@ -318,7 +344,8 @@ Railway Hobby 요금(월 5달러, 사용량 포함)이 듭니다. 무료 체험�
 ## 데이터 소스 메모
 
 - **KIS Open API**: `KIS_APP_KEY`/`KIS_APP_SECRET` 설정 시 1차 소스. 토큰은 24시간 캐시. 실서버 초당 20건 제한이라 종목은 순차 조회. 이 저장소 개발 환경에는 키가 없어 **KIS 호출 코드는 공식 문서 기준으로 작성됐고 실제 키로는 아직 검증되지 않음** — 키를 넣고 `GET /api/stocks/000660/quote?fresh=1` 로 확인 필요.
-- **Yahoo Finance**: 비공식 엔드포인트. `PER/PBR/시가총액`은 제공되지 않아 `null`. 주봉 조회 시 진행 중인 주가 별도 봉으로 붙는 경우가 있음.
+- **네이버 증권**: 모바일 앱이 쓰는 비공식 JSON (`polling.finance.naver.com`, `m.stock.naver.com/api`, `api.stock.naver.com/chart`). 키 불필요, 한국 종목 전용. KRX 확정 종가·PER/PBR/52주·NXT 프리/애프터마켓 가격을 준다. Yahoo 는 15:30 동시호가 전 가격이 종가로 남거나 거래량이 일부만 잡히는 경우가 있어 한국 종목은 네이버를 먼저 쓴다. 응답 형식이 바뀌면 Yahoo 로 폴백.
+- **Yahoo Finance**: 비공식 엔드포인트. 미국 종목의 1차 소스이자 한국 종목 폴백. `PER/PBR/시가총액`은 제공되지 않아 `null`. 주봉 조회 시 진행 중인 주가 별도 봉으로 붙는 경우가 있음. 검색은 티커/영문명만 됨.
 - **DART**: 무료 키 (일 20,000회). 첫 조회 때 `corpCode.xml`(약 3,500개 상장사 매핑)을 내려받아 DB에 캐시. 재무제표는 사업보고서(11011) 주요계정으로 당기/전기/전전기를 한 번에 받아 5개년을 2회 호출로 구성. 실제 키로는 아직 검증되지 않음.
 - **네이버 뉴스 API**: 일 25,000회 무료. 없으면 Google News RSS(키 불필요, 실제 동작 확인됨).
 - **Anthropic / Bedrock**: 브리핑 2회(상세+요약) + 분석 3종. 종목 5개 기준 하루 약 20회 호출. Bedrock 은 `@anthropic-ai/bedrock-sdk` 의 Messages API 엔드포인트(bedrock-mantle)를 쓰며 실제 키로는 아직 검증되지 않음(가짜 키로 엔드포인트 연결·인증 오류 응답만 확인).

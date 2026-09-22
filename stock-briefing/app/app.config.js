@@ -10,6 +10,8 @@ module.exports = ({ config }) => {
       ...config.android,
       ...(googleServicesFile ? { googleServicesFile } : {}),
     },
+    // EAS Update 주소는 프로젝트 ID 를 따라간다
+    ...(projectId ? { updates: { ...(config.updates ?? {}), url: `https://u.expo.dev/${projectId}` } } : {}),
     extra: {
       ...config.extra,
       ...(projectId ? { eas: { ...(config.extra?.eas ?? {}), projectId } } : {}),

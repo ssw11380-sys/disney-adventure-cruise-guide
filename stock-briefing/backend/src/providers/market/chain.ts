@@ -22,10 +22,11 @@ export class QuoteProviderChain implements QuoteProvider {
     this.name = providers.map((p) => p.name).join(">");
   }
 
-  private async attempt<T>(label: string, fn: (p: QuoteProvider) => Promise<T>): Promise<T> {
+  private async attempt<T>(label: string, code: string, fn: (p: QuoteProvider) => Promise<T>): Promise<T> {
     const attempted: string[] = [];
     let lastErr: unknown;
     for (const p of this.providers) {
+      if (p.supports && !p.supports(code)) continue;
       attempted.push(p.name);
       try {
         return await fn(p);
@@ -34,14 +35,14 @@ export class QuoteProviderChain implements QuoteProvider {
         this.log.warn({ provider: p.name, err: e instanceof Error ? e.message : String(e) }, `${label} 실패, 다음 소스로`);
       }
     }
-    throw new ProviderError(this.name, `${label}: 모든 소스 실패 (${attempted.join(", ")})`, lastErr);
+    throw new ProviderError(this.name, attempted.length ? `${label}: 모든 소스 실패 (${attempted.join(", ")})` : `${label}: 지원하는 소스 없음`, lastErr);
   }
 
   getQuote(code: string): Promise<Quote> {
-    return this.attempt(`현재가(${code})`, (p) => p.getQuote(code));
+    return this.attempt(`현재가(${code})`, code, (p) => p.getQuote(code));
   }
 
   getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
-    return this.attempt(`봉차트(${code},${period})`, (p) => p.getCandles(code, period, count));
+    return this.attempt(`봉차트(${code},${period})`, code, (p) => p.getCandles(code, period, count));
   }
 }

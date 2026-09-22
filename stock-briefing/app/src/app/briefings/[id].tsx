@@ -5,7 +5,7 @@ import { useBriefing, useBriefings } from "@/api/hooks";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Badge, Card, ChangeText, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
-import { formatDateKo, formatPct, formatWon, SESSION_LABEL } from "@/lib/format";
+import { formatDateKo, formatPct, formatPrice, SESSION_LABEL } from "@/lib/format";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 브리핑 상세: 요약/상세 토글, 당시 시세 스냅샷, 같은 종목 지난 브리핑 날짜 목록 */
@@ -42,9 +42,10 @@ export default function BriefingDetailScreen() {
 
       {q ? (
         <Card>
-          <Row label="브리핑 시점 가격" value={formatWon(q.price)} />
-          <Row label="전일 대비" value={<ChangeText value={q.change} text={`${formatWon(q.change, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.small }} />} />
-          {d.data?.holding ? <Row label="보유 손익" value={<ChangeText value={d.data.holding.profit} text={`${formatWon(d.data.holding.profit, { sign: true })} (${formatPct(d.data.holding.profitRate)})`} style={{ fontSize: font.small }} />} /> : null}
+          <Row label="브리핑 시점 가격" value={formatPrice(q.price, q.currency)} />
+          <Row label="전일 대비" value={<ChangeText value={q.change} text={`${formatPrice(q.change, q.currency, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.small }} />} />
+          {q.afterMarket ? <Row label="NXT 야간 가격" value={<ChangeText value={q.afterMarket.change} text={`${formatPrice(q.afterMarket.price, q.currency)} (${formatPct(q.afterMarket.changeRate)})`} style={{ fontSize: font.small }} />} /> : null}
+          {d.data?.holding ? <Row label="보유 손익" value={<ChangeText value={d.data.holding.profit} text={`${formatPrice(d.data.holding.profit, q.currency, { sign: true })} (${formatPct(d.data.holding.profitRate)})`} style={{ fontSize: font.small }} />} /> : null}
         </Card>
       ) : null}
 

@@ -2,8 +2,8 @@ import * as Haptics from "expo-haptics";
 import React, { useMemo, useState } from "react";
 import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { CandlestickChart } from "react-native-wagmi-charts";
-import type { Candle, CandlePeriod } from "@/api/types";
-import { formatWon } from "@/lib/format";
+import type { Candle, CandlePeriod, Currency } from "@/api/types";
+import { formatPrice } from "@/lib/format";
 import { font, radius, space, useTheme } from "@/theme";
 import { Segmented } from "./ui";
 
@@ -16,11 +16,13 @@ export function CandleChart({
   period,
   onPeriodChange,
   loading,
+  currency = "KRW",
 }: {
   candles: Candle[] | undefined;
   period: CandlePeriod;
   onPeriodChange: (p: CandlePeriod) => void;
   loading?: boolean;
+  currency?: Currency;
 }) {
   const t = useTheme();
   const { width } = useWindowDimensions();
@@ -80,7 +82,7 @@ export function CandleChart({
               </>
             ) : (
               <Text style={[styles.readoutText, { color: t.muted }]}>
-                {first?.date} ~ {last?.date} · 종가 {formatWon(last?.close)} · 차트를 길게 누르면 값이 보입니다
+                {first?.date} ~ {last?.date} · 종가 {formatPrice(last?.close, currency)} · 차트를 길게 누르면 값이 보입니다
               </Text>
             )}
           </View>

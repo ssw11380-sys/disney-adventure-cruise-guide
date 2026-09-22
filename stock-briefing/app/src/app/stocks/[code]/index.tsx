@@ -9,7 +9,7 @@ import { CandleChart } from "@/components/CandleChart";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, ChangeText, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
-import { formatDateKo, formatKrwCompact, formatNumber, formatPct, formatVolume, formatWon, relativeTime } from "@/lib/format";
+import { currencyOfMarket, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatVolume, isUsMarket, relativeTime } from "@/lib/format";
 import { font, space, useTheme } from "@/theme";
 
 type Tab = AnalysisKind | "news";
@@ -36,6 +36,8 @@ export default function StockDetailScreen() {
   if (stock.isError) return <Screen><ErrorView error={stock.error} onRetry={() => void stock.refetch()} /></Screen>;
   const s = stock.data!;
   const q = s.quote;
+  const cur = q?.currency ?? currencyOfMarket(s.market);
+  const nxt = q?.afterMarket ?? null;
   const ev = q && s.quantity && s.avgPrice ? { profit: (q.price - s.avgPrice) * s.quantity, rate: ((q.price - s.avgPrice) / s.avgPrice) * 100, value: q.price * s.quantity } : null;
 
   return (
@@ -66,8 +68,15 @@ export default function StockDetailScreen() {
             </Muted>
             {q ? (
               <>
-                <Text style={{ color: t.ink, fontSize: 28, fontWeight: "700", fontVariant: ["tabular-nums"] }}>{formatWon(q.price)}</Text>
-                <ChangeText value={q.change} text={`${formatWon(q.change, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.body }} />
+                <Text style={{ color: t.ink, fontSize: 28, fontWeight: "700", fontVariant: ["tabular-nums"] }}>{formatPrice(q.price, cur)}</Text>
+                <ChangeText value={q.change} text={`${formatPrice(q.change, cur, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.body }} />
+                {nxt ? (
+                  <ChangeText
+                    value={nxt.change}
+                    text={`NXT ${nxt.session === "PRE_MARKET" ? "프리마켓" : "야간"}${nxt.status === "OPEN" ? "(거래 중)" : ""} ${formatPrice(nxt.price, cur)} (${formatPrice(nxt.change, cur, { sign: true })}, ${formatPct(nxt.changeRate)})`}
+                    style={{ fontSize: font.small }}
+                  />
+                ) : null}
               </>
             ) : (
               <Text style={{ color: t.danger }}>{s.quoteError ?? "시세 미확인"}</Text>
@@ -77,32 +86,32 @@ export default function StockDetailScreen() {
         </View>
         {q ? (
           <View style={styles.grid}>
-            <Row label="시가" value={formatWon(q.open)} />
-            <Row label="고가" value={formatWon(q.high)} />
-            <Row label="저가" value={formatWon(q.low)} />
+            <Row label="시가" value={formatPrice(q.open, cur)} />
+            <Row label="고가" value={formatPrice(q.high, cur)} />
+            <Row label="저가" value={formatPrice(q.low, cur)} />
             <Row label="거래량" value={formatVolume(q.volume)} />
-            <Row label="52주 고" value={formatWon(q.high52w)} />
-            <Row label="52주 저" value={formatWon(q.low52w)} />
-            <Row label="시가총액" value={formatKrwCompact(q.marketCap)} />
+            <Row label="52주 고" value={formatPrice(q.high52w, cur)} />
+            <Row label="52주 저" value={formatPrice(q.low52w, cur)} />
+            <Row label="시가총액" value={formatKrwCompact(q.marketCap, cur)} />
             <Row label="PER / PBR" value={`${formatNumber(q.per, 1)} / ${formatNumber(q.pbr, 2)}`} />
           </View>
         ) : null}
         {ev ? (
           <View style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.line, paddingTop: space.sm }}>
-            <Row label={`보유 ${s.quantity}주 · 평단 ${formatWon(s.avgPrice)}`} value={<ChangeText value={ev.profit} text={`${formatWon(ev.profit, { sign: true })} (${formatPct(ev.rate)})`} style={{ fontSize: font.small }} />} />
-            <Row label="평가금액" value={formatWon(ev.value)} />
+            <Row label={`보유 ${s.quantity}주 · 평단 ${formatPrice(s.avgPrice, cur)}`} value={<ChangeText value={ev.profit} text={`${formatPrice(ev.profit, cur, { sign: true })} (${formatPct(ev.rate)})`} style={{ fontSize: font.small }} />} />
+            <Row label="평가금액" value={formatPrice(ev.value, cur)} />
           </View>
         ) : null}
         {s.memo ? <Muted>메모: {s.memo}</Muted> : null}
       </Card>
 
       <Card>
-        <CandleChart candles={candles.data?.candles} period={period} onPeriodChange={setPeriod} loading={candles.isLoading} />
+        <CandleChart candles={candles.data?.candles} period={period} onPeriodChange={setPeriod} loading={candles.isLoading} currency={cur} />
         {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트 실패"}</Text> : null}
       </Card>
 
       <Segmented options={TABS} value={tab} onChange={setTab} />
-      {tab === "news" ? <NewsTab code={c} /> : <AnalysisTab code={c} kind={tab} />}
+      {tab === "news" ? <NewsTab code={c} us={isUsMarket(s.market)} /> : <AnalysisTab code={c} kind={tab} />}
 
       {briefings.data && briefings.data.length > 0 ? (
         <View style={{ gap: space.md }}>
@@ -137,7 +146,7 @@ function AnalysisTab({ code, kind }: { code: string; kind: AnalysisKind }) {
   );
 }
 
-function NewsTab({ code }: { code: string }) {
+function NewsTab({ code, us }: { code: string; us: boolean }) {
   const t = useTheme();
   const n = useStockNews(code);
   if (n.isLoading) return <Card><Loading /></Card>;
@@ -161,6 +170,7 @@ function NewsTab({ code }: { code: string }) {
       <Card>
         <SectionTitle>공시 (DART)</SectionTitle>
         {d.disclosuresError ? <Muted>{d.disclosuresError}</Muted> : null}
+        {us ? <Muted>미국 종목은 DART 공시가 없습니다. 실적·공시는 뉴스와 회사 소개를 참고하세요.</Muted> : null}
         {d.disclosures.length === 0 && !d.disclosuresError ? <Muted>최근 30일 공시가 없습니다.</Muted> : null}
         {d.disclosures.map((item, i) => (
           <Pressable key={item.receiptNo} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>

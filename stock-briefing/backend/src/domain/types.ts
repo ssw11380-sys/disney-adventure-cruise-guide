@@ -1,6 +1,6 @@
 /** 도메인 타입. 데이터 소스(KIS/Yahoo/DART)와 무관하게 앱 전체가 공유한다. */
 
-export type Market = "KOSPI" | "KOSDAQ" | "UNKNOWN";
+export type Market = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "US" | "UNKNOWN";
 
 /** 상장 종목 마스터 (검색용) */
 export interface ListedStock {
@@ -27,7 +27,8 @@ export interface RegisteredStock {
 /** 현재가 스냅샷 */
 export interface Quote {
   code: string;
-  price: number; // 현재가/종가 (원)
+  currency: "KRW" | "USD";
+  price: number; // 현재가/종가 (currency 단위)
   change: number; // 전일 대비 (원)
   changeRate: number; // 전일 대비 (%)
   open: number | null;
@@ -43,7 +44,23 @@ export interface Quote {
   high52w: number | null;
   low52w: number | null;
   asOf: string; // ISO (한국 시간 오프셋)
-  source: string; // 'kis' | 'yahoo'
+  source: string; // 'kis' | 'naver' | 'yahoo'
+  /**
+   * 정규장 밖 거래 가격. 한국은 넥스트레이드(NXT) 프리/애프터마켓(08:00~08:50, 15:40~20:00).
+   * 토스·네이버 앱이 장 마감 후 보여주는 값이 이것이라 정규장 종가와 다를 수 있다. 소스가 제공하지 않으면 없음.
+   */
+  afterMarket?: AfterMarketQuote | null;
+}
+
+export interface AfterMarketQuote {
+  venue: "NXT"; // 거래소 (지금은 넥스트레이드만)
+  session: "PRE_MARKET" | "AFTER_MARKET" | "UNKNOWN";
+  status: "OPEN" | "CLOSE";
+  price: number;
+  change: number; // 정규장 전일 종가 대비
+  changeRate: number;
+  volume: number | null;
+  asOf: string; // 마지막 체결 시각 (ISO, 한국 시간)
 }
 
 export type CandlePeriod = "D" | "W" | "M";

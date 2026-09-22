@@ -17,7 +17,7 @@ export const SAMPLE_MASTER: ListedStock[] = [
 
 export function makeQuote(code: string, source: string, price = 100_000): Quote {
   return {
-    code, price, change: 1000, changeRate: 1.01, open: 99_000, high: 101_000, low: 98_500, prevClose: 99_000,
+    code, currency: "KRW", price, change: 1000, changeRate: 1.01, open: 99_000, high: 101_000, low: 98_500, prevClose: 99_000,
     volume: 1_000_000, marketCap: null, per: null, pbr: null, eps: null, bps: null, high52w: null, low52w: null,
     asOf: "2026-09-22T09:00:00+09:00", source,
   };

@@ -1,4 +1,5 @@
 import { computeTechnicalSummary, type TechnicalSummary } from "../analysis/indicators.js";
+import { isKrCode } from "../lib/codes.js";
 import type { Candle, Quote, RegisteredStock } from "../domain/types.js";
 import type { ChainLogger } from "../providers/market/chain.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "../providers/market/investorFlow.js";
@@ -72,12 +73,16 @@ export class DataCollector {
       this.attempt("현재가", missing, () => q.quotes.getQuote(stock.code)),
       this.attempt("일봉/기술적 지표", missing, () => q.quotes.getCandles(stock.code, "D", 160)),
       this.attempt("뉴스", missing, () => q.news.search(stock.name, 8)),
-      q.financials
-        ? this.attempt("공시", missing, () => q.financials!.getDisclosures(stock.code, 7, 8))
-        : (missing.push("공시(DART 키 없음)"), Promise.resolve(null)),
-      q.investorFlow
-        ? this.attempt("수급", missing, () => q.investorFlow!.getInvestorFlow(stock.code, 10))
-        : (missing.push("수급(KIS 키 없음)"), Promise.resolve(null)),
+      !isKrCode(stock.code)
+        ? (missing.push("공시(미국 종목 미지원)"), Promise.resolve(null))
+        : q.financials
+          ? this.attempt("공시", missing, () => q.financials!.getDisclosures(stock.code, 7, 8))
+          : (missing.push("공시(DART 키 없음)"), Promise.resolve(null)),
+      !isKrCode(stock.code)
+        ? (missing.push("수급(미국 종목 미지원)"), Promise.resolve(null))
+        : q.investorFlow
+          ? this.attempt("수급", missing, () => q.investorFlow!.getInvestorFlow(stock.code, 10))
+          : (missing.push("수급(KIS 키 없음)"), Promise.resolve(null)),
     ]);
     const candles = series?.candles ?? null;
     const technical = candles ? computeTechnicalSummary(candles) : null;
@@ -106,9 +111,9 @@ export class DataCollector {
   async collectAnalysis(stock: { code: string; name: string; market: string }, kind: "company" | "value" | "technical"): Promise<AnalysisSnapshot> {
     const missing: string[] = [];
     const q = this.deps;
-    const fin = q.financials;
+    const fin = isKrCode(stock.code) ? q.financials : null;
     const noDart = <T>(label: string): Promise<T | null> => {
-      missing.push(`${label}(DART 키 없음)`);
+      missing.push(isKrCode(stock.code) ? `${label}(DART 키 없음)` : `${label}(미국 종목 미지원)`);
       return Promise.resolve(null);
     };
 
@@ -156,9 +161,9 @@ export class DataCollector {
 
 /** 병렬 수집이라 실패 순서가 뒤섞이므로, 프롬프트에 넣을 때는 고정된 순서로 정렬한다 */
 const MISSING_ORDER = [
-  "현재가", "일봉", "일봉/기술적 지표", "기술적 지표(봉 부족)", "주봉", "회사 개요", "회사 개요(DART 키 없음)",
-  "재무제표", "재무제표(DART 키 없음)", "PER/PBR(현재 시세 소스가 제공하지 않음)", "배당", "배당(DART 키 없음)",
-  "뉴스", "공시", "공시(DART 키 없음)", "수급", "수급(KIS 키 없음)",
+  "현재가", "일봉", "일봉/기술적 지표", "기술적 지표(봉 부족)", "주봉", "회사 개요", "회사 개요(DART 키 없음)", "회사 개요(미국 종목 미지원)",
+  "재무제표", "재무제표(DART 키 없음)", "재무제표(미국 종목 미지원)", "PER/PBR(현재 시세 소스가 제공하지 않음)", "배당", "배당(DART 키 없음)", "배당(미국 종목 미지원)",
+  "뉴스", "공시", "공시(DART 키 없음)", "공시(미국 종목 미지원)", "수급", "수급(KIS 키 없음)", "수급(미국 종목 미지원)",
 ];
 export function orderMissing(missing: string[]): string[] {
   const idx = (s: string) => {
