@@ -68,6 +68,17 @@ export interface DartCorpCodeTable {
   updated_at: string;
 }
 
+/** 푸시 알림 기기 (Expo 푸시 토큰이 식별자) */
+export interface DeviceTable {
+  token: string;
+  platform: string;
+  device_name: string | null;
+  enabled: number; // 1 | 0 (SQLite/Postgres 공용)
+  disabled_reason: string | null;
+  created_at: string;
+  last_seen_at: string;
+}
+
 export interface Database {
   listed_stocks: ListedStockTable;
   registered_stocks: RegisteredStockTable;
@@ -76,4 +87,5 @@ export interface Database {
   briefings: BriefingTable;
   analyses: AnalysisTable;
   dart_corp_codes: DartCorpCodeTable;
+  devices: DeviceTable;
 }

@@ -77,6 +77,38 @@ export function useBriefing(id: number) {
   return useQuery({ queryKey: useKey("briefing", id), queryFn: () => api.getBriefing(id), enabled: Number.isFinite(id) && id > 0 });
 }
 
+export function useNotificationSettings() {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("notificationSettings"), queryFn: api.getNotificationSettings, staleTime: 30_000, retry: 0 });
+}
+
+export function useDevices() {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("devices"), queryFn: api.listDevices, staleTime: 30_000, retry: 0 });
+}
+
+export function useNotificationMutations() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl } = useSettings();
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: [apiUrl, "notificationSettings"] });
+    void qc.invalidateQueries({ queryKey: [apiUrl, "devices"] });
+    void qc.invalidateQueries({ queryKey: [apiUrl, "health"] });
+  };
+  return {
+    updateSettings: useMutation({
+      mutationFn: api.updateNotificationSettings,
+      onSuccess: (data) => {
+        qc.setQueryData([apiUrl, "notificationSettings"], data);
+        invalidate();
+      },
+    }),
+    sendTest: useMutation({ mutationFn: api.sendTestNotification, onSuccess: invalidate }),
+    invalidate,
+  };
+}
+
 /** 종목 등록/수정/삭제, 브리핑 실행 뮤테이션. 성공 시 관련 쿼리를 무효화한다. */
 export function useStockMutations() {
   const api = useApi();

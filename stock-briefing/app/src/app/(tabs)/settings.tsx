@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 import { useHealth } from "@/api/hooks";
+import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
@@ -36,15 +37,7 @@ export default function SettingsScreen() {
         )}
       </Card>
 
-      {health.data?.schedule ? (
-        <Card>
-          <SectionTitle>브리핑 스케줄</SectionTitle>
-          {health.data.schedule.jobs.map((j) => (
-            <Row key={j.session} label={j.session === "morning" ? "오전" : "오후"} value={j.nextRun ? `다음 ${formatDateKo(j.nextRun, true)}` : j.cron} />
-          ))}
-          <Muted>시간대 {health.data.schedule.timezone}. 알림 시간 변경은 다음 단계(푸시 알림)에서 지원됩니다.</Muted>
-        </Card>
-      ) : null}
+      {health.data ? <NotificationSettingsCard /> : null}
     </Screen>
   );
 }

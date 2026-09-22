@@ -20,6 +20,9 @@ const schema = z.object({
 
   BRIEFING_MORNING_CRON: z.string().default("30 8 * * 1-5"),
   BRIEFING_AFTERNOON_CRON: z.string().default("0 16 * * 1-5"),
+
+  /** Expo 푸시 보안 토큰 (선택). 계정에서 "Enhanced push security" 를 켠 경우에만 필요 */
+  EXPO_ACCESS_TOKEN: z.string().default(""),
 });
 
 export type AppConfig = z.infer<typeof schema> & {

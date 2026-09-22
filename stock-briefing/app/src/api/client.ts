@@ -6,7 +6,10 @@ import type {
   BriefingWithData,
   CandlePeriod,
   CandleSeries,
+  Device,
   Health,
+  NotificationSettings,
+  SendSummary,
   LatestBriefing,
   ListedStock,
   Quote,
@@ -95,6 +98,13 @@ export function createApi(baseUrl: string) {
     getBriefing: (id: number) => get<BriefingWithData>(`/api/briefings/${id}`),
     runBriefings: (session: BriefingSession, codes?: string[], force = false) =>
       send<RunResult>("POST", "/api/briefings/run", { session, codes, force }, 600_000),
+
+    registerDevice: (body: { token: string; platform: "android" | "ios" | "unknown"; deviceName?: string | null }) => send<Device>("POST", "/api/devices", body),
+    unregisterDevice: (token: string) => send<void>("DELETE", `/api/devices/${encodeURIComponent(token)}`),
+    listDevices: () => get<Device[]>("/api/devices"),
+    getNotificationSettings: () => get<NotificationSettings>("/api/notifications/settings"),
+    updateNotificationSettings: (patch: Partial<Omit<NotificationSettings, "schedule">>) => send<NotificationSettings>("PUT", "/api/notifications/settings", patch),
+    sendTestNotification: () => send<SendSummary>("POST", "/api/notifications/test"),
   };
 }
 

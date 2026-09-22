@@ -9,6 +9,7 @@ import { KisProvider } from "./market/kis.js";
 import { KisMasterProvider } from "./market/kisMaster.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "./market/types.js";
 import { YahooProvider } from "./market/yahoo.js";
+import { ExpoPushSender, type PushSender } from "../notifications/push.js";
 import { NewsProviderChain } from "./news/chain.js";
 import { GoogleNewsRssProvider } from "./news/googleRss.js";
 import { NaverNewsProvider } from "./news/naver.js";
@@ -23,6 +24,7 @@ export interface Providers {
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   generator: TextGenerator;
   dart: DartProvider | null;
+  push: PushSender;
 }
 
 /** 설정에 따라 실제 데이터 소스를 조립한다. 키가 없는 소스는 폴백 또는 null. */
@@ -62,6 +64,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     investorFlow: kis,
     generator,
     dart,
+    push: new ExpoPushSender(cfg.EXPO_ACCESS_TOKEN || undefined),
   };
 }
 

@@ -113,6 +113,22 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>) => Promise
         .execute();
     },
   },
+  {
+    version: 3,
+    up: async (db) => {
+      await db.schema
+        .createTable("devices")
+        .ifNotExists()
+        .addColumn("token", "text", (c) => c.primaryKey())
+        .addColumn("platform", "text", (c) => c.notNull())
+        .addColumn("device_name", "text")
+        .addColumn("enabled", "integer", (c) => c.notNull().defaultTo(1))
+        .addColumn("disabled_reason", "text")
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("last_seen_at", "text", (c) => c.notNull())
+        .execute();
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>): Promise<void> {

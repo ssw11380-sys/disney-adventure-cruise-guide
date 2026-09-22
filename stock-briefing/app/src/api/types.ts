@@ -163,3 +163,29 @@ export interface ApiError {
   error: string;
   message: string;
 }
+
+export interface Device {
+  token: string;
+  platform: string;
+  deviceName: string | null;
+  enabled: boolean;
+  disabledReason: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
+export interface NotificationSettings {
+  morningTime: string; // HH:MM (KST)
+  afternoonTime: string;
+  morningEnabled: boolean;
+  afternoonEnabled: boolean;
+  weekdaysOnly: boolean;
+  pushEnabled: boolean;
+  schedule: Health["schedule"];
+}
+
+export interface SendSummary {
+  sent: number;
+  failed: number;
+  disabled: string[];
+}

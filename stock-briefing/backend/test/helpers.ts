@@ -5,6 +5,7 @@ import type { InvestorFlowDay, InvestorFlowProvider } from "../src/providers/mar
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../src/providers/market/types.js";
 import type { NewsItem, NewsProvider } from "../src/providers/news/types.js";
 import type { Providers } from "../src/providers/index.js";
+import type { PushMessage, PushSender, PushSendResult } from "../src/notifications/push.js";
 
 export const SAMPLE_MASTER: ListedStock[] = [
   { code: "000660", name: "SK하이닉스", market: "KOSPI", isinCode: "KR7000660001", groupCode: "ST" },
@@ -107,6 +108,20 @@ export class FakeGenerator implements TextGenerator {
   }
 }
 
+/** 아무것도 보내지 않는 푸시 (기본 가짜) */
+export class NoopPushSender implements PushSender {
+  readonly name = "noop-push";
+  isValidToken(token: string): boolean {
+    return /^ExponentPushToken\[[A-Za-z0-9_-]+\]$/.test(token);
+  }
+  async send(tokens: string[], _message: PushMessage): Promise<PushSendResult> {
+    return { results: tokens.map((token) => ({ token, ok: true, error: null, receiptId: null })) };
+  }
+  async checkReceipts() {
+    return [];
+  }
+}
+
 export function fakeProviders(over: Partial<Providers> = {}): Providers {
   return {
     quotes: new FakeQuoteProvider("kis"),
@@ -117,6 +132,7 @@ export function fakeProviders(over: Partial<Providers> = {}): Providers {
     investorFlow: null,
     generator: new FakeGenerator(),
     dart: null,
+    push: new NoopPushSender(),
     ...over,
   };
 }
