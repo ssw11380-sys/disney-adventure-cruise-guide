@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/data
+**/.env
+**/.env.*
+!**/.env.example
+stock-briefing/app
+stock-briefing/backend/test
+.git
+index.html

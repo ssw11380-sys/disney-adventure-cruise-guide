@@ -1,0 +1,29 @@
+# 집 PC / NAS / VPS 에서 한 줄로 띄우기:  docker compose up -d
+# 기본은 SQLite (./data 볼륨). Postgres 를 쓰려면 아래 db 서비스 주석을 풀고 DATABASE_URL 을 바꾼다.
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      DATABASE_URL: /app/data/app.db
+      # DATABASE_URL: postgres://stock:stock@db:5432/stock?sslmode=disable
+    volumes:
+      - ./data:/app/data
+      - ./prompts:/app/prompts:ro   # 프롬프트를 재빌드 없이 수정
+    # depends_on: [db]
+
+  # db:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: stock
+  #     POSTGRES_PASSWORD: stock
+  #     POSTGRES_DB: stock
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+# volumes:
+#   pgdata:
