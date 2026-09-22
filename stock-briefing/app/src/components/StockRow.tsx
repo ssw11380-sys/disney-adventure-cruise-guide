@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { RegisteredWithQuote } from "@/api/types";
 import { afterMarketLabel, formatPct, formatPrice } from "@/lib/format";
 import { font, radius, space, useTheme } from "@/theme";
+import { FlashPrice } from "./FlashPrice";
 import { ChangeText, Muted } from "./ui";
 
 /** 종목 목록 한 줄: 이름/코드, 현재가/등락, 보유 평가손익, (한국) NXT 야간 가격 */
@@ -29,7 +30,7 @@ export function StockRow({ stock, onPress }: { stock: RegisteredWithQuote; onPre
           <>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
               {q.live ? <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.accent }} accessibilityLabel="실시간" /> : null}
-              <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{formatPrice(q.price, cur)}</Text>
+              <FlashPrice value={q.price} text={formatPrice(q.price, cur)} style={{ color: t.ink, fontSize: font.body, fontWeight: "600", fontVariant: ["tabular-nums"] }} />
             </View>
             <ChangeText value={q.change} text={`${formatPrice(q.change, cur, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.small }} />
             {q.priceKrw ? <Muted style={{ fontSize: font.tiny }}>≈ {formatPrice(q.priceKrw, "KRW")}</Muted> : null}

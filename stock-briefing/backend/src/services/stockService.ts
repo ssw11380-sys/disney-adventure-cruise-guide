@@ -5,7 +5,7 @@ import { ConflictError, NotFoundError, ProviderError } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
-import type { LiveTicks } from "../providers/market/tossRealtime.js";
+import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
 
 export interface StockServiceDeps {
   db: Db;
@@ -16,6 +16,8 @@ export interface StockServiceDeps {
   searchRemoteFirst?: boolean;
   /** 실시간 체결(웹소켓). 있으면 현재가에 마지막 체결가를 덮어쓰고, 등록 종목이 바뀌면 구독을 갱신한다 */
   live?: LiveTicks | null;
+  /** 웹소켓이 없을 때 REST 로 여러 종목 현재가를 한 번에 받아 덮어쓴다 (같은 가격 기준의 시세에만) */
+  quickPrices?: QuickPriceSource | null;
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
@@ -271,13 +273,15 @@ export class StockService {
 
   async listWithQuotes(): Promise<RegisteredWithQuote[]> {
     const stocks = await this.list();
+    // 등록 종목 전체의 최신 가격을 요청 1개로 미리 받아 둔다 (없거나 실패해도 스냅샷으로 진행)
+    const quick = await this.quickPrices(stocks.map((s) => s.code));
     // 소스 rate limit 을 고려해 순차 조회
     const out: RegisteredWithQuote[] = [];
     for (const s of stocks) {
       let quote: Quote | null = null;
       let quoteError: string | null = null;
       try {
-        quote = await this.getQuote(s.code);
+        quote = await this.getQuote(s.code, { quick });
       } catch (e) {
         quoteError = e instanceof Error ? e.message : String(e);
       }
@@ -286,14 +290,24 @@ export class StockService {
     return out;
   }
 
+  private async quickPrices(codes: string[]): Promise<Map<string, LiveTick>> {
+    if (!this.deps.quickPrices || codes.length === 0) return new Map();
+    try {
+      return await this.deps.quickPrices.getMany(codes);
+    } catch {
+      return new Map();
+    }
+  }
+
   // ── 시세 ────────────────────────────────────────────────────────
 
-  async getQuote(code: string, opts: { fresh?: boolean } = {}): Promise<Quote> {
+  async getQuote(code: string, opts: { fresh?: boolean; quick?: Map<string, LiveTick> } = {}): Promise<Quote> {
     const db = this.deps.db;
+    const quick = opts.quick ?? (this.deps.live?.get(code) ? new Map() : await this.quickPrices([code]));
     if (!opts.fresh) {
       const cached = await db.selectFrom("quote_cache").selectAll().where("code", "=", code).executeTakeFirst();
       if (cached && this.now().getTime() - Date.parse(cached.fetched_at) < this.ttl) {
-        return this.applyLive(JSON.parse(cached.payload) as Quote);
+        return this.applyLive(JSON.parse(cached.payload) as Quote, quick);
       }
     }
     const quote = await this.deps.quotes.getQuote(code);
@@ -303,12 +317,16 @@ export class StockService {
       .values({ code, payload: JSON.stringify(quote), fetched_at: fetchedAt })
       .onConflict((oc) => oc.column("code").doUpdateSet({ payload: JSON.stringify(quote), fetched_at: fetchedAt }))
       .execute();
-    return this.applyLive(quote);
+    return this.applyLive(quote, quick);
   }
 
-  /** 실시간 체결이 시세 스냅샷보다 새로우면 현재가·등락을 마지막 체결가로 바꾼다 */
-  private applyLive(quote: Quote): Quote {
-    const tick = this.deps.live?.get(quote.code);
+  /**
+   * 현재가 덮어쓰기. 1순위 웹소켓 체결, 2순위 REST 일괄 조회.
+   * REST 일괄 조회는 토스 통합 가격이라 같은 기준(toss 계열)의 스냅샷에만 적용한다 — 네이버 정규장 종가에 섞이면 등락이 틀어진다.
+   */
+  private applyLive(quote: Quote, quick?: Map<string, LiveTick>): Quote {
+    let tick = this.deps.live?.get(quote.code) ?? null;
+    if (!tick && quick && quote.source.startsWith("toss")) tick = quick.get(quote.code) ?? null;
     if (!tick) return quote;
     const tickAt = Date.parse(tick.timestamp);
     const quoteAt = Date.parse(quote.asOf);

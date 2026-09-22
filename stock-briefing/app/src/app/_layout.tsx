@@ -1,8 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import React from "react";
-import { useColorScheme } from "react-native";
+import React, { useEffect } from "react";
+import { AppState, useColorScheme, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
@@ -37,6 +37,11 @@ function Navigator() {
 
 export default function RootLayout() {
   const scheme = useColorScheme();
+  // 앱이 뒤로 가면 react-query 의 주기적 갱신(실시간 시세 3초)을 멈추고, 다시 열면 재개한다
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state: AppStateStatus) => focusManager.setFocused(state === "active"));
+    return () => sub.remove();
+  }, []);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

@@ -1,0 +1,38 @@
+import React, { useEffect, useState } from "react";
+import { Animated, Text, type StyleProp, type TextStyle } from "react-native";
+import { useTheme } from "@/theme";
+
+/**
+ * HTS 처럼 가격이 바뀌는 순간 배경을 잠깐 물들인다 (오르면 빨강, 내리면 파랑) — 값이 실제로 바뀔 때만.
+ * react-native Animated 만 쓰므로 네이티브 모듈 추가 없이 OTA 로 배포된다.
+ */
+export function FlashPrice({ value, text, style }: { value: number | null | undefined; text: string; style?: StyleProp<TextStyle> }) {
+  const t = useTheme();
+  const [anim] = useState(() => new Animated.Value(0));
+  // "이전 값" 패턴: 렌더 중에 비교해서 바뀐 경우에만 방향과 깜빡임 횟수를 갱신한다
+  const [prev, setPrev] = useState(value);
+  const [dir, setDir] = useState<1 | -1>(1);
+  const [flash, setFlash] = useState(0);
+  if (value !== prev) {
+    setPrev(value);
+    if (value !== null && value !== undefined && prev !== null && prev !== undefined) {
+      setDir(value > prev ? 1 : -1);
+      setFlash((f) => f + 1);
+    }
+  }
+
+  useEffect(() => {
+    if (flash === 0) return;
+    anim.setValue(1);
+    const a = Animated.timing(anim, { toValue: 0, duration: 700, useNativeDriver: false });
+    a.start();
+    return () => a.stop();
+  }, [flash, anim]);
+
+  const bg = anim.interpolate({ inputRange: [0, 1], outputRange: ["rgba(0,0,0,0)", dir > 0 ? `${t.up}55` : `${t.down}55`] });
+  return (
+    <Animated.View style={{ backgroundColor: bg, borderRadius: 4, paddingHorizontal: 3, marginHorizontal: -3 }}>
+      <Text style={style}>{text}</Text>
+    </Animated.View>
+  );
+}

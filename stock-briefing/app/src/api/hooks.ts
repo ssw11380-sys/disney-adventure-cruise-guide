@@ -20,25 +20,37 @@ export function useHealth() {
   return useQuery({ queryKey: useKey("health"), queryFn: api.health, staleTime: 30_000, retry: 0 });
 }
 
+/** 한국·미국 장이 열려 있을 만한 시간인지 (KST). 평일 08:00 ~ 다음날 07:00 이면 true (한국 08~20시, 미국 17시~익일 07시) */
+export function isTradingHoursKst(d = new Date()): boolean {
+  const kst = new Date(d.getTime() + 9 * 3_600_000);
+  const day = kst.getUTCDay(); // 0 일 ~ 6 토
+  const h = kst.getUTCHours();
+  if (day === 0) return false; // 일요일
+  if (day === 6) return h < 7; // 토요일 새벽 = 미국 금요일 장
+  if (day === 1) return h >= 8; // 월요일 08시부터
+  return h >= 8 || h < 7;
+}
+
 /**
- * 실시간 갱신 주기. 서버가 토스증권 실시간 소켓에 붙어 있으면 5초마다 현재가를 다시 받는다
- * (서버는 메모리의 마지막 체결가를 돌려주므로 외부 API 호출이 늘지 않는다). 아니면 자동 갱신 없음.
+ * 현재가 갱신 주기. 서버가 등록 종목 시세를 한 번에 받아(토스 웹 2초 캐시 / Open API 웹소켓) 돌려주므로
+ * 장 시간에는 3초마다 다시 받아 HTS 처럼 움직이게 하고, 장이 닫힌 시간에는 1분으로 늦춘다.
  */
-export function useLiveInterval(): number | false {
+export function useLiveInterval(): number {
   const health = useHealth();
-  return health.data?.tossOpenApi?.realtime?.connected ? 5_000 : false;
+  if (health.isError) return 60_000;
+  return isTradingHoursKst() ? 3_000 : 60_000;
 }
 
 export function useStocks() {
   const api = useApi();
   const interval = useLiveInterval();
-  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: interval ? 3_000 : 30_000, refetchInterval: interval });
+  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: Math.min(interval, 30_000), refetchInterval: interval, refetchIntervalInBackground: false });
 }
 
 export function useStock(code: string) {
   const api = useApi();
   const interval = useLiveInterval();
-  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: interval ? 3_000 : 30_000, refetchInterval: interval, enabled: !!code });
+  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: Math.min(interval, 30_000), refetchInterval: interval, refetchIntervalInBackground: false, enabled: !!code });
 }
 
 export function useTossStatus() {

@@ -26,6 +26,12 @@ export interface LiveTicks {
   status(): { enabled: boolean; connected: boolean; subscribed: string[]; lastMessageAt: string | null; lastError: string | null };
 }
 
+/** 웹소켓 없이 REST 로 여러 종목 현재가를 한 번에 받는 소스 (토스 웹 stock-prices 등) */
+export interface QuickPriceSource {
+  readonly name: string;
+  getMany(codes: string[]): Promise<Map<string, LiveTick>>;
+}
+
 /** 테스트에서 가짜 소켓을 넣기 위한 최소 인터페이스 */
 export interface SocketLike extends EventEmitter {
   send(data: string): void;
