@@ -1,0 +1,90 @@
+import { sql, type Kysely } from "kysely";
+import type { Database } from "./schema.js";
+
+/**
+ * 스키마 마이그레이션. 아직 규모가 작아 순차 버전 배열로 관리한다.
+ * Postgres로 옮길 때는 AUTOINCREMENT → SERIAL 정도만 손보면 되도록 표준 SQL만 쓴다.
+ */
+const migrations: Array<{ version: number; up: (db: Kysely<Database>) => Promise<void> }> = [
+  {
+    version: 1,
+    up: async (db) => {
+      await db.schema
+        .createTable("listed_stocks")
+        .ifNotExists()
+        .addColumn("code", "text", (c) => c.primaryKey())
+        .addColumn("name", "text", (c) => c.notNull())
+        .addColumn("market", "text", (c) => c.notNull())
+        .addColumn("isin_code", "text")
+        .addColumn("group_code", "text")
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      await db.schema
+        .createIndex("idx_listed_stocks_name")
+        .ifNotExists()
+        .on("listed_stocks")
+        .column("name")
+        .execute();
+
+      await db.schema
+        .createTable("registered_stocks")
+        .ifNotExists()
+        .addColumn("code", "text", (c) => c.primaryKey())
+        .addColumn("name", "text", (c) => c.notNull())
+        .addColumn("market", "text", (c) => c.notNull())
+        .addColumn("quantity", "real")
+        .addColumn("avg_price", "real")
+        .addColumn("memo", "text")
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createTable("quote_cache")
+        .ifNotExists()
+        .addColumn("code", "text", (c) => c.primaryKey())
+        .addColumn("payload", "text", (c) => c.notNull())
+        .addColumn("fetched_at", "text", (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createTable("meta")
+        .ifNotExists()
+        .addColumn("key", "text", (c) => c.primaryKey())
+        .addColumn("value", "text", (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createTable("briefings")
+        .ifNotExists()
+        .addColumn("id", "integer", (c) => c.primaryKey().autoIncrement())
+        .addColumn("code", "text", (c) => c.notNull())
+        .addColumn("session", "text", (c) => c.notNull())
+        .addColumn("briefing_date", "text", (c) => c.notNull())
+        .addColumn("summary", "text", (c) => c.notNull())
+        .addColumn("detail", "text", (c) => c.notNull())
+        .addColumn("data_snapshot", "text", (c) => c.notNull())
+        .addColumn("missing_data", "text", (c) => c.notNull())
+        .addColumn("model", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .execute();
+      await db.schema
+        .createIndex("idx_briefings_code_date")
+        .ifNotExists()
+        .on("briefings")
+        .columns(["code", "briefing_date", "session"])
+        .execute();
+    },
+  },
+];
+
+export async function migrate(db: Kysely<Database>): Promise<void> {
+  await sql`create table if not exists schema_version (version integer primary key)`.execute(db);
+  const rows = await sql<{ version: number }>`select version from schema_version`.execute(db);
+  const applied = new Set(rows.rows.map((r) => r.version));
+  for (const m of migrations) {
+    if (applied.has(m.version)) continue;
+    await m.up(db);
+    await sql`insert into schema_version (version) values (${m.version})`.execute(db);
+  }
+}
