@@ -1,14 +1,19 @@
-import { sql, type Kysely } from "kysely";
+import { sql, type ColumnDefinitionBuilder, type Kysely } from "kysely";
 import type { Database } from "./schema.js";
+
+export type Dialect = "sqlite" | "postgres";
 
 /**
  * 스키마 마이그레이션. 아직 규모가 작아 순차 버전 배열로 관리한다.
- * Postgres로 옮길 때는 AUTOINCREMENT → SERIAL 정도만 손보면 되도록 표준 SQL만 쓴다.
+ * SQLite/Postgres 공용. 방언 차이는 자동 증가 id 컬럼뿐이다.
  */
-const migrations: Array<{ version: number; up: (db: Kysely<Database>) => Promise<void> }> = [
+const idColumn = (dialect: Dialect) => (c: ColumnDefinitionBuilder) =>
+  dialect === "postgres" ? c.primaryKey().generatedAlwaysAsIdentity() : c.primaryKey().autoIncrement();
+
+const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: Dialect) => Promise<void> }> = [
   {
     version: 1,
-    up: async (db) => {
+    up: async (db, dialect) => {
       await db.schema
         .createTable("listed_stocks")
         .ifNotExists()
@@ -57,7 +62,7 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>) => Promise
       await db.schema
         .createTable("briefings")
         .ifNotExists()
-        .addColumn("id", "integer", (c) => c.primaryKey().autoIncrement())
+        .addColumn("id", "integer", idColumn(dialect))
         .addColumn("code", "text", (c) => c.notNull())
         .addColumn("session", "text", (c) => c.notNull())
         .addColumn("briefing_date", "text", (c) => c.notNull())
@@ -78,7 +83,7 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>) => Promise
   },
   {
     version: 2,
-    up: async (db) => {
+    up: async (db, dialect) => {
       // 1단계에서 미리 만든 briefings 테이블에 상태/오류 컬럼 추가 (아직 데이터 없음)
       await db.schema.alterTable("briefings").addColumn("status", "text", (c) => c.notNull().defaultTo("ok")).execute();
       await db.schema.alterTable("briefings").addColumn("error", "text").execute();
@@ -87,7 +92,7 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>) => Promise
       await db.schema
         .createTable("analyses")
         .ifNotExists()
-        .addColumn("id", "integer", (c) => c.primaryKey().autoIncrement())
+        .addColumn("id", "integer", idColumn(dialect))
         .addColumn("code", "text", (c) => c.notNull())
         .addColumn("kind", "text", (c) => c.notNull())
         .addColumn("content", "text", (c) => c.notNull())
@@ -131,13 +136,13 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>) => Promise
   },
 ];
 
-export async function migrate(db: Kysely<Database>): Promise<void> {
+export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {
   await sql`create table if not exists schema_version (version integer primary key)`.execute(db);
   const rows = await sql<{ version: number }>`select version from schema_version`.execute(db);
-  const applied = new Set(rows.rows.map((r) => r.version));
+  const applied = new Set(rows.rows.map((r) => Number(r.version)));
   for (const m of migrations) {
     if (applied.has(m.version)) continue;
-    await m.up(db);
+    await m.up(db, dialect);
     await sql`insert into schema_version (version) values (${m.version})`.execute(db);
   }
 }

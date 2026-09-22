@@ -156,6 +156,8 @@ export interface Health {
   time: string;
   sources: Record<string, string>;
   schedule: { timezone: string; running: boolean; jobs: { session: BriefingSession; cron: string; nextRun: string | null }[] } | null;
+  devices?: number;
+  authRequired?: boolean;
   disclaimer: string;
 }
 

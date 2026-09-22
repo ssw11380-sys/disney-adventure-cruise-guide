@@ -30,14 +30,19 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function request<T>(baseUrl: string, path: string, init: RequestInit = {}, timeoutMs = 60_000): Promise<T> {
+async function request<T>(baseUrl: string, token: string, path: string, init: RequestInit = {}, timeoutMs = 60_000): Promise<T> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res: Response;
   try {
     res = await fetch(`${baseUrl}${path}`, {
       ...init,
-      headers: { accept: "application/json", ...(init.body ? { "content-type": "application/json" } : {}), ...(init.headers ?? {}) },
+      headers: {
+        accept: "application/json",
+        ...(init.body ? { "content-type": "application/json" } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(init.headers ?? {}),
+      },
       signal: ctrl.signal,
     });
   } catch (e) {
@@ -56,16 +61,20 @@ async function request<T>(baseUrl: string, path: string, init: RequestInit = {},
   }
   if (!res.ok) {
     const err = (json ?? {}) as { error?: string; message?: string };
-    throw new ApiRequestError(res.status, err.error ?? `HTTP_${res.status}`, err.message ?? `서버 오류 (${res.status})`);
+    throw new ApiRequestError(
+      res.status,
+      err.error ?? `HTTP_${res.status}`,
+      res.status === 401 ? "API 토큰이 틀리거나 비어 있습니다. 설정 > 서버 주소 아래에 토큰을 입력하세요." : (err.message ?? `서버 오류 (${res.status})`),
+    );
   }
   return json as T;
 }
 
-/** 백엔드 REST 클라이언트. baseUrl 은 설정에서 온다. */
-export function createApi(baseUrl: string) {
-  const get = <T>(path: string, timeoutMs?: number) => request<T>(baseUrl, path, {}, timeoutMs);
+/** 백엔드 REST 클라이언트. baseUrl/token 은 설정에서 온다. */
+export function createApi(baseUrl: string, token = "") {
+  const get = <T>(path: string, timeoutMs?: number) => request<T>(baseUrl, token, path, {}, timeoutMs);
   const send = <T>(method: string, path: string, body?: unknown, timeoutMs?: number) =>
-    request<T>(baseUrl, path, { method, body: body === undefined ? undefined : JSON.stringify(body) }, timeoutMs);
+    request<T>(baseUrl, token, path, { method, body: body === undefined ? undefined : JSON.stringify(body) }, timeoutMs);
 
   return {
     baseUrl,

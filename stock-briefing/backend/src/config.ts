@@ -23,6 +23,9 @@ const schema = z.object({
 
   /** Expo 푸시 보안 토큰 (선택). 계정에서 "Enhanced push security" 를 켠 경우에만 필요 */
   EXPO_ACCESS_TOKEN: z.string().default(""),
+
+  /** 설정하면 /api/* 요청에 `Authorization: Bearer <토큰>` 이 필요하다 (인터넷에 노출할 때 필수) */
+  API_TOKEN: z.string().default(""),
 });
 
 export type AppConfig = z.infer<typeof schema> & {

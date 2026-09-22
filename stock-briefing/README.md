@@ -39,6 +39,7 @@ stock-briefing/
 ├── README.md
 ├── backend/
 │   ├── .env.example            # 모든 API 키/설정 항목
+│   ├── Dockerfile, docker-compose.yml, fly.toml   # 배포
 │   ├── package.json
 │   ├── prompts/                # briefing_detail.md, briefing_summary.md, company_overview.md,
 │   │                           # value_analysis.md, technical_analysis.md (+ README: 변수 목록)
@@ -87,7 +88,8 @@ stock-briefing/
 | 2 | 브리핑 파이프라인(시세·뉴스·공시·재무 수집 → 프롬프트 → Claude → 저장), node-cron 스케줄러, 프롬프트 파일 5종, 브리핑·분석 조회 API | **완료** |
 | 3 | Expo 앱: 종목 목록/등록, 브리핑 목록·상세(요약/상세 토글, 날짜별), 종목 상세 4탭(회사 소개·가치·기술·뉴스/공시), 캔들 차트 | **완료** |
 | 4 | Expo Push 연동, 기기 토큰 등록, 알림 시간 사용자 설정 (Android 대상) | **완료** |
-| 5 | 기술적 지표(SMA/RSI/MACD/볼린저) 직접 구현 + 단위 테스트, 브리핑 파이프라인 통합 테스트 | 2단계에서 선행 구현 (지표 + 파이프라인 테스트 포함). 실제 키로 통합 검증만 남음 |
+| 5 | 기술적 지표(SMA/RSI/MACD/볼린저) 직접 구현 + 단위 테스트, 브리핑 파이프라인 통합 테스트 | 2단계에서 선행 구현. Postgres 통합 테스트 추가. 실제 키로 검증만 남음 |
+| 6 | 배포: Docker 이미지, Postgres 전환, API 토큰 인증, Fly.io/Railway/docker-compose 설정 | **완료** |
 
 ## 실행 방법
 
@@ -222,6 +224,42 @@ Android 원격 푸시는 **Expo Go 에서 동작하지 않으므로** 개발 빌
 - 모델: `ANTHROPIC_MODEL` (기본 `claude-opus-5`). 시스템 프롬프트는 1시간 프롬프트 캐싱, 서버측 refusal fallback 기본 활성. 상세는 effort medium, 요약은 low, 회사/가치 분석은 high.
 - 종목 상세 탭 분석은 요청 시 생성 후 캐시(회사 30일, 가치 7일, 기술 1일). `?refresh=1` 로 강제 재생성.
 - 공휴일에는 시세가 전일과 같은 상태로 브리핑이 생성됩니다(휴장일 달력은 v1 범위 밖).
+
+## 배포 (6단계)
+
+브리핑은 서버가 만들고 푸시만 보내므로, 알림 시간에 서버가 켜져 있어야 합니다. 세 가지 방법 중 하나를 고르세요.
+
+### 공통: 보안 설정
+
+서버를 인터넷에 노출한다면 `.env` 에 `API_TOKEN` 을 반드시 설정하고(예: `openssl rand -hex 24`), 앱 **설정 탭 > 서버 주소 아래 토큰 칸**에 같은 값을 넣습니다. 설정하면 `/api/*` 전체가 `Authorization: Bearer <토큰>` 을 요구하고 `/health` 만 열려 있습니다. 로컬 Wi-Fi 안에서만 쓸 때는 비워 두어도 됩니다.
+
+### A. 집 PC / NAS 에서 Docker 로 (가장 간단)
+
+```bash
+cd stock-briefing/backend
+cp .env.example .env        # 키와 API_TOKEN 입력
+docker compose up -d        # http://<PC IP>:3000, 데이터는 ./data, 프롬프트는 ./prompts 를 그대로 마운트
+```
+
+외부에서도 앱을 쓰려면 공유기 포트포워딩 대신 Tailscale 같은 VPN 을 권장합니다.
+
+### B. Fly.io (도쿄 리전, 월 수천 원 수준)
+
+```bash
+cd stock-briefing/backend
+fly launch --copy-config --no-deploy     # fly.toml 사용, 앱 이름만 바꾸면 됨
+fly volumes create data --size 1 --region nrt
+fly secrets set ANTHROPIC_API_KEY=... API_TOKEN=... KIS_APP_KEY=... KIS_APP_SECRET=... DART_API_KEY=...
+fly deploy
+```
+
+`auto_stop_machines = false` 로 두어야 스케줄러가 멈추지 않습니다. SQLite 파일은 볼륨에 남습니다.
+
+### C. Railway / Render 등 (Postgres 사용)
+
+Dockerfile 을 자동 인식합니다. Postgres 를 붙이면 `DATABASE_URL` 에 `postgres://...` 를 넣기만 하면 되고, 스키마는 기동 시 자동 생성됩니다(SQLite 와 같은 마이그레이션, id 컬럼만 identity 로 생성). localhost 가 아닌 주소는 SSL 을 자동으로 켭니다. Postgres 통합 테스트: `TEST_PG_URL=postgres://user:pass@host:5432/db npm test`.
+
+배포 후 앱 설정에서 서버 주소를 `https://<앱>.fly.dev` 처럼 바꾸고 토큰을 입력하면 됩니다. 배포용 APK 를 만들 때는 `app/eas.json` 의 `preview` 프로필 `EXPO_PUBLIC_API_URL` 에 서버 주소를 넣어 두면 기본값으로 들어갑니다.
 
 ## 데이터 소스 메모
 

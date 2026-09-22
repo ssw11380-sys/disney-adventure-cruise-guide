@@ -10,6 +10,7 @@ import { Platform } from "react-native";
  */
 
 const KEY = "settings.apiUrl";
+const TOKEN_KEY = "settings.apiToken";
 
 function defaultApiUrl(): string {
   const env = process.env.EXPO_PUBLIC_API_URL;
@@ -21,23 +22,39 @@ function defaultApiUrl(): string {
 
 interface Settings {
   apiUrl: string;
+  /** 서버 API_TOKEN 과 같은 값. 비어 있으면 헤더를 보내지 않는다 */
+  apiToken: string;
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
+  setApiToken: (token: string) => Promise<void>;
 }
 
-const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), ready: false, setApiUrl: async () => {} });
+const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", ready: false, setApiUrl: async () => {}, setApiToken: async () => {} });
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [apiUrl, setUrl] = useState(defaultApiUrl());
+  const [apiToken, setToken] = useState(process.env.EXPO_PUBLIC_API_TOKEN ?? "");
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.getItem(KEY)
-      .then((v) => {
-        if (v) setUrl(v);
+    Promise.all([AsyncStorage.getItem(KEY), AsyncStorage.getItem(TOKEN_KEY)])
+      .then(([u, t]) => {
+        if (u) setUrl(u);
+        if (t) setToken(t);
       })
       .catch(() => {})
       .finally(() => setReady(true));
+  }, []);
+
+  const setApiToken = useCallback(async (token: string) => {
+    const clean = token.trim();
+    setToken(clean);
+    try {
+      if (clean) await AsyncStorage.setItem(TOKEN_KEY, clean);
+      else await AsyncStorage.removeItem(TOKEN_KEY);
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const setApiUrl = useCallback(async (url: string) => {
@@ -50,7 +67,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const value = useMemo(() => ({ apiUrl, ready, setApiUrl }), [apiUrl, ready, setApiUrl]);
+  const value = useMemo(() => ({ apiUrl, apiToken, ready, setApiUrl, setApiToken }), [apiUrl, apiToken, ready, setApiUrl, setApiToken]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -1,32 +1,43 @@
 import SQLite from "better-sqlite3";
-import { Kysely, SqliteDialect } from "kysely";
+import { Kysely, PostgresDialect, SqliteDialect } from "kysely";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import pg from "pg";
 import type { Database } from "./schema.js";
-import { migrate } from "./migrate.js";
+import { migrate, type Dialect } from "./migrate.js";
 
 export type Db = Kysely<Database>;
 
+export function detectDialect(databaseUrl: string): Dialect {
+  return databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://") ? "postgres" : "sqlite";
+}
+
 /**
  * DATABASE_URL 에 따라 SQLite(개발) 또는 Postgres(운영) 연결을 만든다.
- * Postgres 는 `pg` 패키지 설치 후 PostgresDialect 로 교체하면 된다 (스키마/쿼리는 공용).
+ *  - 파일 경로 또는 ":memory:"  → SQLite
+ *  - postgres://user:pass@host:5432/db → Postgres (Railway/Fly/Supabase 등)
+ * 스키마와 쿼리는 Kysely 로 공용. 방언 차이는 migrate.ts 의 id 컬럼 정도.
  */
-export function createDb(databaseUrl: string): Db {
-  if (databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://")) {
-    throw new Error(
-      "Postgres 연결은 아직 활성화되지 않았습니다. `npm i pg` 후 src/db/index.ts 의 PostgresDialect 분기를 열어 주세요.",
-    );
+export function createDb(databaseUrl: string): { db: Db; dialect: Dialect } {
+  if (detectDialect(databaseUrl) === "postgres") {
+    const pool = new pg.Pool({
+      connectionString: databaseUrl,
+      max: 5,
+      // Railway/Supabase 등은 SSL 을 요구하는 경우가 많다. sslmode=disable 이 명시되지 않으면 켠다.
+      ...(databaseUrl.includes("sslmode=disable") || /localhost|127\.0\.0\.1/.test(databaseUrl) ? {} : { ssl: { rejectUnauthorized: false } }),
+    });
+    return { db: new Kysely<Database>({ dialect: new PostgresDialect({ pool }) }), dialect: "postgres" };
   }
   if (databaseUrl !== ":memory:") mkdirSync(dirname(databaseUrl), { recursive: true });
   const sqlite = new SQLite(databaseUrl);
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
-  return new Kysely<Database>({ dialect: new SqliteDialect({ database: sqlite }) });
+  return { db: new Kysely<Database>({ dialect: new SqliteDialect({ database: sqlite }) }), dialect: "sqlite" };
 }
 
 export async function createMigratedDb(databaseUrl: string): Promise<Db> {
-  const db = createDb(databaseUrl);
-  await migrate(db);
+  const { db, dialect } = createDb(databaseUrl);
+  await migrate(db, dialect);
   return db;
 }
 

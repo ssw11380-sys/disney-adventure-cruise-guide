@@ -5,8 +5,8 @@ import { createApi, type Api } from "./client";
 import type { AnalysisKind, BriefingSession, CandlePeriod } from "./types";
 
 export function useApi(): Api {
-  const { apiUrl } = useSettings();
-  return useMemo(() => createApi(apiUrl), [apiUrl]);
+  const { apiUrl, apiToken } = useSettings();
+  return useMemo(() => createApi(apiUrl, apiToken), [apiUrl, apiToken]);
 }
 
 /** 쿼리 키에 apiUrl 을 넣어 서버 주소를 바꾸면 캐시가 분리되게 한다 */

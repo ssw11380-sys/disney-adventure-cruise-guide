@@ -94,6 +94,17 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("notificationService", notificationService);
   app.decorate("settingsStore", settingsStore);
 
+  // 인터넷에 노출할 때의 최소 보호: API_TOKEN 이 설정되면 /api/* 는 Bearer 토큰이 있어야 한다. /health 는 열어 둔다.
+  if (opts.config.API_TOKEN) {
+    const expected = `Bearer ${opts.config.API_TOKEN}`;
+    app.addHook("onRequest", async (req, reply) => {
+      if (!req.url.startsWith("/api/")) return;
+      if (req.headers.authorization !== expected) {
+        return reply.code(401).send({ error: "UNAUTHORIZED", message: "API 토큰이 필요합니다 (앱 설정 > 서버 주소 아래 토큰 입력)" });
+      }
+    });
+  }
+
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) {
       return reply.code(400).send({
@@ -117,6 +128,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     sources: describeProviders(opts.config),
     schedule: scheduler?.status() ?? null,
     devices: (await deviceService.enabledTokens()).length,
+    authRequired: Boolean(opts.config.API_TOKEN),
     disclaimer: DISCLAIMER,
   }));
 

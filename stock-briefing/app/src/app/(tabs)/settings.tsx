@@ -11,13 +11,25 @@ import { font, radius, space, useTheme } from "@/theme";
 /** 설정: 서버 주소, 서버 상태(데이터 소스/스케줄). 알림 시간 설정은 4단계에서 추가. */
 export default function SettingsScreen() {
   const t = useTheme();
-  const { apiUrl, setApiUrl } = useSettings();
+  const { apiUrl, apiToken, setApiUrl, setApiToken } = useSettings();
   const health = useHealth();
 
   return (
     <Screen refreshing={health.isRefetching} onRefresh={() => void health.refetch()}>
       {/* key 로 저장된 주소가 바뀌면 입력 폼을 다시 만든다 */}
-      <ApiUrlForm key={apiUrl} apiUrl={apiUrl} onSave={async (url) => { await setApiUrl(url); await health.refetch(); }} onCheck={() => void health.refetch()} checking={health.isFetching} />
+      <ApiUrlForm
+        key={`${apiUrl}|${apiToken}`}
+        apiUrl={apiUrl}
+        apiToken={apiToken}
+        authRequired={health.data?.authRequired ?? false}
+        onSave={async (url, token) => {
+          await setApiUrl(url);
+          await setApiToken(token);
+          await health.refetch();
+        }}
+        onCheck={() => void health.refetch()}
+        checking={health.isFetching}
+      />
 
       <Card>
         <SectionTitle right={health.data ? <Badge tone="good">연결됨</Badge> : health.isError ? <Badge tone="bad">연결 안 됨</Badge> : null}>서버 상태</SectionTitle>
@@ -42,10 +54,25 @@ export default function SettingsScreen() {
   );
 }
 
-function ApiUrlForm({ apiUrl, onSave, onCheck, checking }: { apiUrl: string; onSave: (url: string) => Promise<void>; onCheck: () => void; checking: boolean }) {
+function ApiUrlForm({
+  apiUrl,
+  apiToken,
+  authRequired,
+  onSave,
+  onCheck,
+  checking,
+}: {
+  apiUrl: string;
+  apiToken: string;
+  authRequired: boolean;
+  onSave: (url: string, token: string) => Promise<void>;
+  onCheck: () => void;
+  checking: boolean;
+}) {
   const t = useTheme();
   const [draft, setDraft] = useState(apiUrl);
-  const dirty = draft.trim().replace(/\/+$/, "") !== apiUrl;
+  const [tokenDraft, setTokenDraft] = useState(apiToken);
+  const dirty = draft.trim().replace(/\/+$/, "") !== apiUrl || tokenDraft.trim() !== apiToken;
   return (
     <Card>
       <SectionTitle>서버 주소</SectionTitle>
@@ -60,7 +87,17 @@ function ApiUrlForm({ apiUrl, onSave, onCheck, checking }: { apiUrl: string; onS
         style={[styles.input, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]}
       />
       <Muted>실기기에서는 백엔드를 실행한 PC 의 LAN IP 를 입력하세요. Android 에뮬레이터는 10.0.2.2, iOS 시뮬레이터는 localhost.</Muted>
-      <Button title={dirty ? "저장하고 연결 확인" : "연결 확인"} onPress={() => (dirty ? void onSave(draft) : onCheck())} loading={checking} />
+      <TextInput
+        value={tokenDraft}
+        onChangeText={setTokenDraft}
+        autoCapitalize="none"
+        autoCorrect={false}
+        secureTextEntry
+        placeholder={authRequired ? "API 토큰 (서버 .env 의 API_TOKEN)" : "API 토큰 (서버에 API_TOKEN 을 설정한 경우만)"}
+        placeholderTextColor={t.muted}
+        style={[styles.input, { color: t.ink, borderColor: authRequired && !tokenDraft ? t.danger : t.line, backgroundColor: t.surfaceAlt }]}
+      />
+      <Button title={dirty ? "저장하고 연결 확인" : "연결 확인"} onPress={() => (dirty ? void onSave(draft, tokenDraft) : onCheck())} loading={checking} />
     </Card>
   );
 }
