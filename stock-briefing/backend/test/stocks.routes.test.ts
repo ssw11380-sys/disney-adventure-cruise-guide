@@ -4,7 +4,7 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { QuoteProviderChain } from "../src/providers/market/chain.js";
-import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider, SAMPLE_MASTER } from "./helpers.js";
+import { FakeQuoteProvider, FakeSearchProvider, SAMPLE_MASTER, fakeProviders } from "./helpers.js";
 
 describe("stock routes", () => {
   let app: FastifyInstance;
@@ -21,8 +21,9 @@ describe("stock routes", () => {
     app = await buildApp({
       config: loadConfig({ DATABASE_URL: ":memory:" }),
       db,
-      providers: { quotes: new QuoteProviderChain([kis, yahoo]), search, master: new FakeMasterProvider() },
+      providers: fakeProviders({ quotes: new QuoteProviderChain([kis, yahoo]), search }),
       logger: false,
+      enableScheduler: false,
     });
     await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
   });
@@ -132,7 +133,7 @@ describe("stock routes", () => {
     expect(kis.calls).toBe(2);
     expect(fresh.json().source).toBe("kis");
 
-    (kis as unknown as { opts: { fail: boolean } }).opts.fail = true;
+    kis.opts.fail = true;
     const fallback = await app.inject({ method: "GET", url: "/api/stocks/005930/quote?fresh=1" });
     expect(fallback.statusCode).toBe(200);
     expect(fallback.json().source).toBe("yahoo");
@@ -141,8 +142,8 @@ describe("stock routes", () => {
 
   it("모든 시세 소스가 죽어도 종목 목록은 quoteError 와 함께 200 으로 응답한다", async () => {
     await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "005930" } });
-    (kis as unknown as { opts: { fail: boolean } }).opts.fail = true;
-    (yahoo as unknown as { opts: { fail: boolean } }).opts.fail = true;
+    kis.opts.fail = true;
+    yahoo.opts.fail = true;
     const res = await app.inject({ method: "GET", url: "/api/stocks?quotes=1" });
     expect(res.statusCode).toBe(200);
     expect(res.json()[0].quote).toBeNull();

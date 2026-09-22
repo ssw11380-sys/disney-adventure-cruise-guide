@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "한국 주식 보유 종목 브리핑 앱 백엔드 (Fastify + TypeScript)",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
@@ -12,9 +14,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "master:refresh": "tsx src/scripts/refreshMaster.ts"
+    "master:refresh": "tsx src/scripts/refreshMaster.ts",
+    "briefing": "tsx src/scripts/runBriefing.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
     "@fastify/cors": "^11.0.1",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.2.3",
@@ -22,6 +26,7 @@
     "fflate": "^0.8.3",
     "iconv-lite": "^0.7.3",
     "kysely": "^0.29.6",
+    "node-cron": "^4.6.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

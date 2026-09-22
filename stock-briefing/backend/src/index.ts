@@ -1,7 +1,7 @@
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createMigratedDb } from "./db/index.js";
-import { buildProviders } from "./providers/index.js";
+import { buildProviders, describeProviders } from "./providers/index.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -33,7 +33,8 @@ async function main(): Promise<void> {
   process.on("SIGTERM", close);
 
   await app.listen({ port: config.PORT, host: config.HOST });
-  app.log.info(`시세 소스: ${config.kisEnabled ? "KIS → Yahoo 폴백" : "Yahoo (KIS 키 미설정)"}`);
+  app.log.info(describeProviders(config), "데이터 소스");
+  app.log.info(app.scheduler?.status() ?? {}, "브리핑 스케줄");
 }
 
 main().catch((e) => {

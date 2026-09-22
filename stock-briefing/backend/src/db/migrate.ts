@@ -76,6 +76,43 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>) => Promise
         .execute();
     },
   },
+  {
+    version: 2,
+    up: async (db) => {
+      // 1단계에서 미리 만든 briefings 테이블에 상태/오류 컬럼 추가 (아직 데이터 없음)
+      await db.schema.alterTable("briefings").addColumn("status", "text", (c) => c.notNull().defaultTo("ok")).execute();
+      await db.schema.alterTable("briefings").addColumn("error", "text").execute();
+      await sql`create unique index if not exists uq_briefings_code_date_session on briefings (code, briefing_date, session)`.execute(db);
+
+      await db.schema
+        .createTable("analyses")
+        .ifNotExists()
+        .addColumn("id", "integer", (c) => c.primaryKey().autoIncrement())
+        .addColumn("code", "text", (c) => c.notNull())
+        .addColumn("kind", "text", (c) => c.notNull())
+        .addColumn("content", "text", (c) => c.notNull())
+        .addColumn("data_snapshot", "text", (c) => c.notNull())
+        .addColumn("missing_data", "text", (c) => c.notNull())
+        .addColumn("model", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .execute();
+      await db.schema
+        .createIndex("idx_analyses_code_kind")
+        .ifNotExists()
+        .on("analyses")
+        .columns(["code", "kind", "created_at"])
+        .execute();
+
+      await db.schema
+        .createTable("dart_corp_codes")
+        .ifNotExists()
+        .addColumn("stock_code", "text", (c) => c.primaryKey())
+        .addColumn("corp_code", "text", (c) => c.notNull())
+        .addColumn("corp_name", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>): Promise<void> {

@@ -1,6 +1,7 @@
 import type { Candle, CandlePeriod, CandleSeries, Quote } from "../../domain/types.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulDateCompact, seoulDateCompactDaysAgo, seoulIso } from "../../lib/time.js";
+import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
 import type { FetchFn, QuoteProvider } from "./types.js";
 
 /**
@@ -36,7 +37,7 @@ function dashDate(yyyymmdd: string): string {
   return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
 }
 
-export class KisProvider implements QuoteProvider {
+export class KisProvider implements QuoteProvider, InvestorFlowProvider {
   readonly name = "kis";
   private token: { value: string; expiresAt: number } | null = null;
   private tokenPromise: Promise<string> | null = null;
@@ -185,5 +186,24 @@ export class KisProvider implements QuoteProvider {
     }
     all.sort((a, b) => (a.date < b.date ? -1 : 1));
     return { code, period, candles: all.slice(-count), source: this.name };
+  }
+
+  /** 투자자별 매매동향 (tr_id FHKST01010900). 최근 30영업일 정도를 최신순으로 돌려준다. */
+  async getInvestorFlow(code: string, days: number): Promise<InvestorFlowDay[]> {
+    const json = await this.get<{ output?: KisRow[] }>(
+      "/uapi/domestic-stock/v1/quotations/inquire-investor",
+      "FHKST01010900",
+      { FID_COND_MRKT_DIV_CODE: "J", FID_INPUT_ISCD: code },
+    );
+    return (json.output ?? [])
+      .filter((r) => r["stck_bsop_date"])
+      .slice(0, days)
+      .map((r) => ({
+        date: dashDate(r["stck_bsop_date"]!),
+        close: n(r["stck_clpr"]),
+        individual: n(r["prsn_ntby_qty"]),
+        foreign: n(r["frgn_ntby_qty"]),
+        institution: n(r["orgn_ntby_qty"]),
+      }));
   }
 }
