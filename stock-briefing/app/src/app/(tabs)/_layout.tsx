@@ -2,10 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, Tabs } from "expo-router";
 import React from "react";
 import { Pressable } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@/theme";
 
 export default function TabsLayout() {
   const t = useTheme();
+  const insets = useSafeAreaInsets();
   return (
     <Tabs
       screenOptions={{
@@ -13,8 +15,9 @@ export default function TabsLayout() {
         headerTintColor: t.ink,
         headerTitleStyle: { fontWeight: "800", fontSize: 20, letterSpacing: -0.3 },
         headerShadowVisible: false,
-        tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.line, height: 60, paddingTop: 6 },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "600", marginBottom: 6 },
+        // 고정 height 를 주면 시스템 내비게이션 바(제스처/3버튼) 영역이 무시되어 탭이 그 밑에 깔린다 → 인셋만큼 더한다
+        tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.line, height: 58 + insets.bottom, paddingTop: 6, paddingBottom: insets.bottom + 6 },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
         tabBarActiveTintColor: t.accent,
         tabBarInactiveTintColor: t.muted,
         sceneStyle: { backgroundColor: t.bg },
