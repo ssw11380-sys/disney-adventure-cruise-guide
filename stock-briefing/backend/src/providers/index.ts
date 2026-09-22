@@ -6,6 +6,8 @@ import { DartProvider } from "./dart/dart.js";
 import type { FinancialsProvider } from "./dart/types.js";
 import { QuoteProviderChain, StockSearchChain, type ChainLogger } from "./market/chain.js";
 import { TossProvider, type CodeStore } from "./market/toss.js";
+import { TossOpenApiClient, TossOpenApiProvider } from "./market/tossOpenApi.js";
+import { TossRealtime } from "./market/tossRealtime.js";
 import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
 import { KisMasterProvider } from "./market/kisMaster.js";
@@ -20,6 +22,10 @@ import type { NewsProvider } from "./news/types.js";
 
 export interface Providers {
   quotes: QuoteProvider;
+  /** 토스증권 공식 Open API (키 있을 때만). 보유 종목 가져오기·상태 조회에 쓴다 */
+  tossOpenApi: TossOpenApiProvider | null;
+  /** 실시간 체결(웹소켓) — 토스 Open API 키 있을 때만 */
+  live: TossRealtime | null;
   search: StockSearchProvider; // 외부 검색 (토스 → Yahoo)
   searchRemoteFirst?: boolean; // true 면 로컬 마스터보다 외부 검색을 먼저 쓴다
   master: MasterProvider;
@@ -49,12 +55,22 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   };
   const toss = new TossProvider(fetch, codeStore);
 
+  // 토스증권 공식 Open API: 키가 있으면 시세·차트·마스터·수급·실시간의 1순위
+  let tossOpenApi: TossOpenApiProvider | null = null;
+  let live: TossRealtime | null = null;
+  if (cfg.tossOpenApiEnabled) {
+    const client = new TossOpenApiClient({ clientId: cfg.TOSS_CLIENT_ID, clientSecret: cfg.TOSS_CLIENT_SECRET, log });
+    tossOpenApi = new TossOpenApiProvider(client);
+    live = new TossRealtime(client, { log });
+  }
+
   const quoteChain: QuoteProvider[] = [];
   let kis: KisProvider | null = null;
   if (cfg.kisEnabled) {
     kis = new KisProvider({ appKey: cfg.KIS_APP_KEY, appSecret: cfg.KIS_APP_SECRET, env: cfg.KIS_ENV });
     quoteChain.push(kis);
   }
+  if (tossOpenApi) quoteChain.push(tossOpenApi);
   quoteChain.push(toss); // 한국(KRX+NXT 통합, 토스 앱과 같은 숫자)·미국 모두
   quoteChain.push(new NaverFinanceProvider()); // 한국 폴백: KRX 정규장 종가 + NXT 야간 가격
   quoteChain.push(yahoo);
@@ -72,12 +88,14 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
 
   return {
     quotes: new QuoteProviderChain(quoteChain, log),
+    tossOpenApi,
+    live,
     search: new StockSearchChain([toss, yahoo], log),
     searchRemoteFirst: true, // 토스 검색은 한글로 미국 종목도 찾고 순위도 좋아 마스터보다 먼저 쓴다
-    master: new KisMasterProvider(),
+    master: tossOpenApi ?? new KisMasterProvider(), // 토스 마스터는 한국+미국 종목(한글명)까지
     news: new NewsProviderChain(newsChain, log),
     financials: dart,
-    investorFlow: kis,
+    investorFlow: kis ?? tossOpenApi,
     generator,
     dart,
     push: new ExpoPushSender(cfg.EXPO_ACCESS_TOKEN || undefined),
@@ -86,11 +104,12 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
 
 export function describeProviders(cfg: AppConfig): Record<string, string> {
   return {
-    quotes: cfg.kisEnabled ? "kis → toss → naver → yahoo" : "toss → naver → yahoo (KIS 키 없음)",
-    search: "toss → yahoo (+ 종목 마스터)",
+    quotes: [cfg.kisEnabled ? "kis" : null, cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : null, "toss(웹)", "naver", "yahoo"].filter(Boolean).join(" → ") + (cfg.tossOpenApiEnabled ? "" : " (토스 Open API 키 없음)"),
+    search: cfg.tossOpenApiEnabled ? "토스 마스터(한국+미국) + toss → yahoo" : "toss → yahoo (+ KIS 종목 마스터)",
     news: cfg.NAVER_CLIENT_ID ? "naver → google-rss" : "google-rss (네이버 키 없음)",
     financials: cfg.DART_API_KEY ? "dart" : "없음 (DART 키 없음)",
-    investorFlow: cfg.kisEnabled ? "kis" : "없음 (KIS 키 없음)",
+    investorFlow: cfg.kisEnabled ? "kis" : cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : "없음 (KIS/토스 Open API 키 없음)",
+    realtime: cfg.tossOpenApiEnabled ? "toss-openapi 웹소켓" : "없음 (토스 Open API 키 없음)",
     llm: describeLlmBackend(resolveLlmBackend(cfg)),
   };
 }

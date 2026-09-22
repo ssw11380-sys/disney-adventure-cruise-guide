@@ -27,7 +27,10 @@ export function StockRow({ stock, onPress }: { stock: RegisteredWithQuote; onPre
       <View style={{ alignItems: "flex-end", gap: 2 }}>
         {q ? (
           <>
-            <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{formatPrice(q.price, cur)}</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              {q.live ? <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.accent }} accessibilityLabel="실시간" /> : null}
+              <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{formatPrice(q.price, cur)}</Text>
+            </View>
             <ChangeText value={q.change} text={`${formatPrice(q.change, cur, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.small }} />
             {q.priceKrw ? <Muted style={{ fontSize: font.tiny }}>≈ {formatPrice(q.priceKrw, "KRW")}</Muted> : null}
             {nxt && nxt.price !== q.price ? <ChangeText value={nxt.change} text={`${afterMarketLabel(nxt)} ${formatPrice(nxt.price, cur)} (${formatPct(nxt.changeRate)})`} style={{ fontSize: font.tiny }} /> : null}

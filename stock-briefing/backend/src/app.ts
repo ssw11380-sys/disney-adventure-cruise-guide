@@ -9,7 +9,8 @@ import { GenerationError } from "./llm/generator.js";
 import { PromptStore } from "./llm/prompts.js";
 import { defaultsFromCron, NotificationSettingsStore, timeToCron } from "./notifications/settings.js";
 import { describeProviders, type Providers } from "./providers/index.js";
-import { adminRoutes } from "./routes/admin.js";
+import { adminRoutes, tossStatus, type AdminDeps } from "./routes/admin.js";
+import { TossSyncService } from "./services/tossSyncService.js";
 import { analysisRoutes } from "./routes/analysis.js";
 import { briefingRoutes } from "./routes/briefings.js";
 import { deviceRoutes, notificationRoutes } from "./routes/notifications.js";
@@ -45,6 +46,34 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const now = opts.now ?? (() => new Date());
 
   const stockService = new StockService({ db: opts.db, ...opts.providers, now });
+
+  // 토스증권 공식 Open API: 실시간 구독 시작 + 보유 종목 가져오기 서비스 + 서버 공인 IP(허용 IP 등록 안내용)
+  let tossDeps: AdminDeps["toss"] = null;
+  if (opts.providers.tossOpenApi) {
+    const live = opts.providers.live;
+    if (live && opts.enableScheduler !== false) {
+      live.start();
+      await stockService.syncLive();
+      app.addHook("onClose", async () => live.stop());
+    }
+    let ipCache: { at: number; ip: string | null } | null = null;
+    const outboundIp = async (): Promise<string | null> => {
+      if (ipCache && Date.now() - ipCache.at < 10 * 60_000) return ipCache.ip;
+      let ip: string | null = null;
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5000);
+        const res = await fetch("https://api.ipify.org?format=json", { signal: ctrl.signal });
+        clearTimeout(timer);
+        ip = ((await res.json()) as { ip?: string }).ip ?? null;
+      } catch {
+        ip = null;
+      }
+      ipCache = { at: Date.now(), ip };
+      return ip;
+    };
+    tossDeps = { provider: opts.providers.tossOpenApi, sync: new TossSyncService(opts.db, opts.providers.tossOpenApi, now), live, outboundIp };
+  }
   const collector = new DataCollector({
     quotes: opts.providers.quotes,
     news: opts.providers.news,
@@ -143,6 +172,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     schedule: scheduler?.status() ?? null,
     devices: (await deviceService.enabledTokens()).length,
     authRequired: Boolean(opts.config.API_TOKEN),
+    tossOpenApi: tossStatus(tossDeps, tossDeps ? await tossDeps.outboundIp() : null),
     disclaimer: DISCLAIMER,
   }));
 
@@ -155,7 +185,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     financials: opts.providers.financials,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
-  await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart });
+  await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps });
   const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler };
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });

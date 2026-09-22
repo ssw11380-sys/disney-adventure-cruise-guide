@@ -54,6 +54,8 @@ export interface Quote {
   priceBasis?: string;
   /** 미국 종목의 원화 환산 현재가 (소스가 주는 경우만) */
   priceKrw?: number | null;
+  /** 실시간 체결(웹소켓)로 price 를 덮어쓴 경우 true */
+  live?: boolean;
 }
 
 export interface AfterMarketQuote {

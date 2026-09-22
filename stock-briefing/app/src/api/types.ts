@@ -46,6 +46,23 @@ export interface Quote {
   afterMarket?: AfterMarketQuote | null;
   priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
   priceKrw?: number | null; // 미국 종목 원화 환산
+  live?: boolean; // 실시간 체결로 덮어쓴 현재가
+}
+
+/** 토스증권 공식 Open API 연동 상태 (/health, /api/admin/toss/status) */
+export interface TossOpenApiStatus {
+  configured: boolean;
+  outboundIp: string | null; // 토스 허용 IP 에 등록할 서버 공인 IP
+  client: { configured: boolean; tokenIssuedAt: string | null; lastOkAt: string | null; lastError: string | null; ipBlocked: boolean } | null;
+  realtime: { enabled: boolean; connected: boolean; subscribed: string[]; lastMessageAt: string | null; lastError: string | null } | null;
+}
+
+export interface TossImportResult {
+  accounts: number;
+  added: string[];
+  updated: string[];
+  unchanged: string[];
+  holdings: { code: string; name: string; currency: Currency; quantity: number; avgPrice: number | null; lastPrice: number | null; market: string }[];
 }
 
 export interface RegisteredStock {
@@ -175,6 +192,7 @@ export interface Health {
   schedule: { timezone: string; running: boolean; jobs: { session: BriefingSession; cron: string; nextRun: string | null }[] } | null;
   devices?: number;
   authRequired?: boolean;
+  tossOpenApi?: TossOpenApiStatus;
   disclaimer: string;
 }
 

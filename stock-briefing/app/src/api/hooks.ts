@@ -20,14 +20,30 @@ export function useHealth() {
   return useQuery({ queryKey: useKey("health"), queryFn: api.health, staleTime: 30_000, retry: 0 });
 }
 
+/**
+ * 실시간 갱신 주기. 서버가 토스증권 실시간 소켓에 붙어 있으면 5초마다 현재가를 다시 받는다
+ * (서버는 메모리의 마지막 체결가를 돌려주므로 외부 API 호출이 늘지 않는다). 아니면 자동 갱신 없음.
+ */
+export function useLiveInterval(): number | false {
+  const health = useHealth();
+  return health.data?.tossOpenApi?.realtime?.connected ? 5_000 : false;
+}
+
 export function useStocks() {
   const api = useApi();
-  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 30_000 });
+  const interval = useLiveInterval();
+  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: interval ? 3_000 : 30_000, refetchInterval: interval });
 }
 
 export function useStock(code: string) {
   const api = useApi();
-  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: 30_000, enabled: !!code });
+  const interval = useLiveInterval();
+  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: interval ? 3_000 : 30_000, refetchInterval: interval, enabled: !!code });
+}
+
+export function useTossStatus() {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("tossStatus"), queryFn: api.tossStatus, staleTime: 30_000, retry: 0 });
 }
 
 export function useSearch(q: string) {

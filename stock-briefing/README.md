@@ -109,7 +109,8 @@ npm run dev                  # http://localhost:3000
 | 키 | 없으면 |
 |---|---|
 | `ANTHROPIC_API_KEY` 또는 Bedrock 키 | 브리핑/분석이 `failed` 로 저장되고 사유가 남음 (수집은 정상). 둘 중 하나면 됨 |
-| `KIS_APP_KEY/SECRET` | 시세는 토스증권(→ 네이버 → Yahoo 폴백), 수급(투자자별 매매동향)은 미확인 |
+| `TOSS_CLIENT_ID/SECRET` | 공식 API 대신 토스 웹 비공식 API(→ 네이버 → Yahoo). 실시간·보유 종목 가져오기 없음 |
+| `KIS_APP_KEY/SECRET` | 수급은 토스 Open API 가 있으면 그쪽, 없으면 미확인 |
 | `DART_API_KEY` | 공시·재무제표·배당·회사 개요 미확인 |
 | `NAVER_CLIENT_ID/SECRET` | 뉴스는 Google News RSS |
 
@@ -139,6 +140,8 @@ npm run dev                  # http://localhost:3000
 | GET/PUT | `/api/notifications/settings` | 알림 시간 설정 `{ morningTime, afternoonTime, morningEnabled, afternoonEnabled, weekdaysOnly, pushEnabled }` (PUT 즉시 스케줄 반영) |
 | POST | `/api/notifications/test` | 등록 기기 전체에 테스트 알림 |
 | POST | `/api/notifications/receipts` | Expo 푸시 영수증 즉시 확인 (기본은 전송 15분 뒤 자동) |
+| GET | `/api/admin/toss/status` | 토스 Open API 상태 (키 설정, 토큰, 서버 공인 IP, 실시간 구독) |
+| POST | `/api/admin/toss/import-holdings` | 토스증권 보유 종목 → 등록 종목 (수량·평단 동기화) |
 | GET | `/api/admin/master` | 종목 마스터 건수/갱신 시각 |
 | POST | `/api/admin/master/refresh` | 종목 마스터 갱신 |
 | POST | `/api/admin/dart/refresh` | DART 고유번호 매핑 갱신 (DART 키 필요, 첫 조회 시 자동) |
@@ -179,6 +182,22 @@ npx expo start          # QR 을 Expo Go 앱으로 스캔 (iOS/Android)
 | 브리핑 | 종목별 최신 브리핑, 요약/상세 토글, 오전·오후 즉시 생성 버튼 |
 | 브리핑 상세 | 요약/상세 토글, 브리핑 시점 가격·손익, 미확인 데이터, 같은 종목 지난 브리핑 목록(날짜별 이동) |
 | 설정 | 서버 주소 저장/연결 확인, 서버 데이터 소스 상태, 알림 시간, 앱 업데이트 확인(현재 버전·새 APK·OTA) |
+
+### 토스증권 공식 Open API 연결 (실시간 시세 · 수급 · 보유 종목 자동 등록)
+
+토스증권은 2026년 5월부터 공식 Open API(https://developers.tossinvest.com)를 제공합니다. 키를 넣으면 시세·차트·종목 마스터(한국+미국, 한글명)·투자자별 매매동향(수급)·보유 종목 가져오기·**실시간 체결(웹소켓)**이 모두 공식 API 로 동작하고, 키가 없으면 지금처럼 토스 웹 비공식 API → 네이버 → Yahoo 로 동작합니다.
+
+1. **키 발급** — 토스증권 PC 웹(WTS, https://tossinvest.com)에 로그인 → **설정 → Open API** → `client_id` / `client_secret` 발급 (토스 앱 지문 승인). 휴대폰 브라우저는 "데스크톱 사이트 보기"로 열면 됩니다.
+2. **허용 IP 등록** — 같은 화면 아래 **허용 IP 관리**에 서버의 공인 IP 를 등록합니다. 앱 **설정 → 토스증권 연동** 카드에 서버 IP 가 표시됩니다(`/health` 의 `tossOpenApi.outboundIp`). 등록되지 않은 IP 의 호출은 403 으로 차단됩니다.
+   - Railway Hobby 플랜은 서버 IP 가 재배포·재시작 때 바뀔 수 있습니다. 바뀌면 앱 카드에 "IP 차단됨"이 뜨고 새 IP 가 보이니 다시 등록하면 됩니다. 고정 IP 가 필요하면 Railway Pro(Static Outbound IP) 또는 고정 IP 를 주는 VPS/Oracle Cloud 무료 VM 으로 옮기면 됩니다.
+3. **서버 변수** — Railway → Variables 에 `TOSS_CLIENT_ID`, `TOSS_CLIENT_SECRET` 추가 → 자동 재배포. 기동 시 종목 마스터가 토스(한국+미국 약 1만 종목)로 바뀝니다.
+4. 앱 **설정 → 토스증권 연동 → 토스증권 보유 종목 가져오기** 를 누르면 계좌의 보유 종목이 수량·평단과 함께 등록됩니다(여러 계좌는 합산). 같은 카드에서 토큰·실시간 연결 상태를 볼 수 있습니다.
+
+실시간: 서버가 등록 종목의 체결을 웹소켓(`trade:kr`, `trade:us`)으로 받아 메모리에 두고, 앱은 홈·상세 화면에서 5초마다 서버에 다시 물어봅니다(외부 호출 없음). 현재가 옆의 초록 점이 실시간 값이라는 표시입니다. 토큰은 클라이언트당 1개만 유효하므로 **같은 키를 다른 프로그램(챗GPT·클로드 연동 등)에 동시에 쓰면 서로 토큰을 무효화합니다** — 이 서버 전용 키를 쓰세요. 데이터는 토스증권 약관상 본인 매매 목적에 한해 쓸 수 있고 제3자 배포는 금지입니다.
+
+### 차트
+
+일/주/월봉에 이동평균선 5·20·60·120 이 그려지고(범례를 눌러 숨기기), 기간(예: 60일/120일/250일)을 고르거나 **◀ 과거 / 최신 ▶** 로 구간을 옮겨 과거 차트를 볼 수 있습니다. 일봉은 약 3년(800봉), 주봉 5년, 월봉 10년치를 받아 둡니다. 차트를 길게 누르면 그 봉의 시·고·저·종이 보입니다.
 
 ### 토스·네이버 앱과 종가가 다르게 보일 때
 
@@ -344,7 +363,8 @@ Railway Hobby 요금(월 5달러, 사용량 포함)이 듭니다. 무료 체험�
 ## 데이터 소스 메모
 
 - **KIS Open API**: `KIS_APP_KEY`/`KIS_APP_SECRET` 설정 시 1차 소스. 토큰은 24시간 캐시. 실서버 초당 20건 제한이라 종목은 순차 조회. 이 저장소 개발 환경에는 키가 없어 **KIS 호출 코드는 공식 문서 기준으로 작성됐고 실제 키로는 아직 검증되지 않음** — 키를 넣고 `GET /api/stocks/000660/quote?fresh=1` 로 확인 필요.
-- **토스증권**: 토스증권 웹(tossinvest.com)이 쓰는 내부 JSON API (`wts-info-api.tossinvest.com`). 공식 개발자 API 가 아니라 예고 없이 바뀔 수 있고 이용약관상 자동 수집을 금지할 수 있으니 개인 용도로만, 호출은 최소한으로(현재가 60초 캐시, 종목당 하루 브리핑 2회). 한국은 `A`+종목코드, 미국은 내부 상품코드(`US20100629001`)라 티커로 한 번 검색해 `meta` 테이블에 캐시한다. 응답이 바뀌면 체인이 네이버/Yahoo 로 넘어간다.
+- **토스증권 공식 Open API** (`TOSS_CLIENT_ID/SECRET`): OAuth2 client credentials, 허용 IP 필수. 현재가 API 는 가격·시각만 주므로 전일 대비는 일봉으로 계산하고, 캔들은 1분·일봉만 있어 주봉·월봉은 일봉을 묶어 만든다(최대 200개/페이지, `before` 페이지네이션). 한국 시세는 KRX+NXT 통합. Rate limit 은 그룹별 초당 N회(429 는 Retry-After 뒤 1회 재시도). 실시간 웹소켓은 연결당 구독 100건, 60초마다 PING.
+- **토스증권 (웹 비공식)**: 토스증권 웹(tossinvest.com)이 쓰는 내부 JSON API (`wts-info-api.tossinvest.com`). 공식 개발자 API 가 아니라 예고 없이 바뀔 수 있고 이용약관상 자동 수집을 금지할 수 있으니 개인 용도로만, 호출은 최소한으로(현재가 60초 캐시, 종목당 하루 브리핑 2회). 한국은 `A`+종목코드, 미국은 내부 상품코드(`US20100629001`)라 티커로 한 번 검색해 `meta` 테이블에 캐시한다. 응답이 바뀌면 체인이 네이버/Yahoo 로 넘어간다.
 - **네이버 증권**: 모바일 앱이 쓰는 비공식 JSON (`polling.finance.naver.com`, `m.stock.naver.com/api`, `api.stock.naver.com/chart`). 키 불필요, 한국 종목 전용. KRX 확정 종가·PER/PBR/52주·NXT 프리/애프터마켓 가격을 준다. Yahoo 는 15:30 동시호가 전 가격이 종가로 남거나 거래량이 일부만 잡히는 경우가 있어 한국 종목은 네이버를 먼저 쓴다. 응답 형식이 바뀌면 Yahoo 로 폴백.
 - **Yahoo Finance**: 비공식 엔드포인트. 미국 종목의 1차 소스이자 한국 종목 폴백. `PER/PBR/시가총액`은 제공되지 않아 `null`. 주봉 조회 시 진행 중인 주가 별도 봉으로 붙는 경우가 있음. 검색은 티커/영문명만 됨.
 - **DART**: 무료 키 (일 20,000회). 첫 조회 때 `corpCode.xml`(약 3,500개 상장사 매핑)을 내려받아 DB에 캐시. 재무제표는 사업보고서(11011) 주요계정으로 당기/전기/전전기를 한 번에 받아 5개년을 2회 호출로 구성. 실제 키로는 아직 검증되지 않음.

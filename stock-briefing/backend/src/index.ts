@@ -12,10 +12,14 @@ async function main(): Promise<void> {
     providers: buildProviders(config, db, { warn: (o, m) => console.warn(m, o) }),
   });
 
-  // 종목 마스터가 비어 있으면 기동 시 한 번 받아 둔다 (실패해도 서버는 뜬다)
+  // 종목 마스터가 비어 있으면 기동 시 한 번 받아 둔다 (실패해도 서버는 뜬다).
+  // 토스 Open API 키를 새로 넣은 경우에는 미국 종목까지 들어간 토스 마스터로 한 번 갈아탄다.
   const status = await app.stockService.masterStatus();
-  if (status.count === 0) {
-    app.log.info("종목 마스터가 비어 있어 KIS 마스터 파일을 내려받습니다...");
+  const masterSource = (await db.selectFrom("meta").select("value").where("key", "=", "master_source").executeTakeFirst())?.value ?? null;
+  const wantSource = config.tossOpenApiEnabled ? "toss-openapi" : "kis-master";
+  if (status.count === 0 || masterSource !== wantSource) {
+    app.log.info(`종목 마스터를 ${wantSource} 로 내려받습니다...`);
+    void db.insertInto("meta").values({ key: "master_source", value: wantSource }).onConflict((oc) => oc.column("key").doUpdateSet({ value: wantSource })).execute();
     app.stockService
       .refreshMaster()
       .then((r) => app.log.info(r, "종목 마스터 갱신 완료"))

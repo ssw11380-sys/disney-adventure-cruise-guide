@@ -1,11 +1,37 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { DartProvider } from "../providers/dart/dart.js";
+import type { TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
+import type { TossRealtime } from "../providers/market/tossRealtime.js";
 import type { StockService } from "../services/stockService.js";
+import type { TossSyncService } from "../services/tossSyncService.js";
 
-/** 운영용 엔드포인트. 인증은 단일 사용자 v1 범위 밖이라 없음 (배포 시 네트워크로 보호). */
-export const adminRoutes: FastifyPluginAsync<{ service: StockService; dart: DartProvider | null }> = async (app, { service, dart }) => {
+export interface AdminDeps {
+  service: StockService;
+  dart: DartProvider | null;
+  toss?: { provider: TossOpenApiProvider; sync: TossSyncService; live: TossRealtime | null; outboundIp: () => Promise<string | null> } | null;
+}
+
+/** 토스 Open API 연동 상태 (앱 설정 화면용). 키가 없어도 200 으로 configured:false 를 준다 */
+export function tossStatus(deps: AdminDeps["toss"], ip: string | null) {
+  if (!deps) return { configured: false, outboundIp: ip, client: null, realtime: null };
+  return { configured: true, outboundIp: ip, client: deps.provider.client.status, realtime: deps.live?.status() ?? null };
+}
+
+/** 운영용 엔드포인트. API_TOKEN 이 있으면 /api/* 전체에 적용된다. */
+export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service, dart, toss }) => {
   app.get("/master", async () => service.masterStatus());
   app.post("/master/refresh", async () => service.refreshMaster());
+
+  /** 토스증권 Open API 상태: 키 설정 여부, 토큰/마지막 오류, 허용 IP 에 등록할 서버 공인 IP, 실시간 구독 */
+  app.get("/toss/status", async () => tossStatus(toss, toss ? await toss.outboundIp() : null));
+
+  /** 토스증권 계좌의 보유 종목을 등록 종목으로 가져온다 (수량·평단 동기화) */
+  app.post("/toss/import-holdings", async (_req, reply) => {
+    if (!toss) return reply.code(503).send({ error: "TOSS_DISABLED", message: "TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 설정되지 않았습니다" });
+    const result = await toss.sync.importHoldings();
+    await service.syncLive();
+    return result;
+  });
 
   /** DART 고유번호 매핑 갱신 (DART 키 필요) */
   app.post("/dart/refresh", async (_req, reply) => {
