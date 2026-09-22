@@ -28,7 +28,8 @@ export default function StockDetailScreen() {
   const stock = useStock(c);
   const [period, setPeriod] = useState<CandlePeriod>("D");
   const [tab, setTab] = useState<Tab>("company");
-  const candles = useCandles(c, period, period === "D" ? 90 : period === "W" ? 52 : 36);
+  // 과거 구간 이동과 120 이평선을 위해 넉넉히 받는다 (일봉 약 3년, 주봉 5년, 월봉 10년)
+  const candles = useCandles(c, period, period === "D" ? 800 : period === "W" ? 260 : 120);
   const briefings = useBriefings({ code: c, limit: 3 });
 
   if (!c) return null;
@@ -64,7 +65,7 @@ export default function StockDetailScreen() {
           <View>
             <Muted>
               {s.code} · {s.market}
-              {q ? ` · ${q.source.toUpperCase()}${q.priceBasis ? ` ${q.priceBasis}` : ""} ${relativeTime(q.asOf)}` : ""}
+              {q ? ` · ${q.source.toUpperCase()}${q.priceBasis ? ` ${q.priceBasis}` : ""}${q.live ? " · 실시간" : ""} ${relativeTime(q.asOf)}` : ""}
             </Muted>
             {q ? (
               <>

@@ -11,6 +11,10 @@ const schema = z.object({
   KIS_APP_SECRET: z.string().default(""),
   KIS_ENV: z.enum(["real", "mock"]).default("real"),
 
+  /** 토스증권 공식 Open API (WTS 설정 > Open API 에서 발급, 허용 IP 등록 필요) */
+  TOSS_CLIENT_ID: z.string().default(""),
+  TOSS_CLIENT_SECRET: z.string().default(""),
+
   DART_API_KEY: z.string().default(""),
   NAVER_CLIENT_ID: z.string().default(""),
   NAVER_CLIENT_SECRET: z.string().default(""),
@@ -39,6 +43,7 @@ const schema = z.object({
 
 export type AppConfig = z.infer<typeof schema> & {
   kisEnabled: boolean;
+  tossOpenApiEnabled: boolean;
   timezone: "Asia/Seoul";
 };
 
@@ -52,6 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     ...cfg,
     kisEnabled: cfg.KIS_APP_KEY.length > 0 && cfg.KIS_APP_SECRET.length > 0,
+    tossOpenApiEnabled: cfg.TOSS_CLIENT_ID.length > 0 && cfg.TOSS_CLIENT_SECRET.length > 0,
     timezone: "Asia/Seoul",
   };
 }

@@ -125,6 +125,8 @@ export class NoopPushSender implements PushSender {
 export function fakeProviders(over: Partial<Providers> = {}): Providers {
   return {
     quotes: new FakeQuoteProvider("kis"),
+    tossOpenApi: null,
+    live: null,
     search: new FakeSearchProvider([SAMPLE_MASTER[0]!]),
     master: new FakeMasterProvider(),
     news: new FakeNewsProvider(),

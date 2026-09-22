@@ -17,6 +17,8 @@ import type {
   RegisteredWithQuote,
   RunResult,
   StockNews,
+  TossImportResult,
+  TossOpenApiStatus,
 } from "./types";
 
 export class ApiRequestError extends Error {
@@ -114,6 +116,9 @@ export function createApi(baseUrl: string, token = "") {
     getNotificationSettings: () => get<NotificationSettings>("/api/notifications/settings"),
     updateNotificationSettings: (patch: Partial<Omit<NotificationSettings, "schedule">>) => send<NotificationSettings>("PUT", "/api/notifications/settings", patch),
     sendTestNotification: () => send<SendSummary>("POST", "/api/notifications/test"),
+
+    tossStatus: () => get<TossOpenApiStatus>("/api/admin/toss/status", 15_000),
+    importTossHoldings: () => send<TossImportResult>("POST", "/api/admin/toss/import-holdings", undefined, 60_000),
   };
 }
 

@@ -3,6 +3,7 @@ import { StyleSheet, Text, TextInput, View } from "react-native";
 import { useHealth } from "@/api/hooks";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
+import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
@@ -43,6 +44,7 @@ export default function SettingsScreen() {
             <Row label="뉴스" value={health.data.sources.news ?? "-"} />
             <Row label="재무/공시" value={health.data.sources.financials ?? "-"} />
             <Row label="수급" value={health.data.sources.investorFlow ?? "-"} />
+            <Row label="실시간" value={health.data.sources.realtime ?? "-"} />
             <Row label="브리핑 모델" value={health.data.sources.llm ?? "-"} />
           </View>
         ) : (
@@ -51,6 +53,8 @@ export default function SettingsScreen() {
       </Card>
 
       {health.data ? <NotificationSettingsCard /> : null}
+
+      {health.data ? <TossOpenApiCard /> : null}
 
       <AppUpdateCard />
     </Screen>

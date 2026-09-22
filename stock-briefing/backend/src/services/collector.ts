@@ -82,7 +82,7 @@ export class DataCollector {
         ? (missing.push("수급(미국 종목 미지원)"), Promise.resolve(null))
         : q.investorFlow
           ? this.attempt("수급", missing, () => q.investorFlow!.getInvestorFlow(stock.code, 10))
-          : (missing.push("수급(KIS 키 없음)"), Promise.resolve(null)),
+          : (missing.push("수급(KIS/토스 Open API 키 없음)"), Promise.resolve(null)),
     ]);
     const candles = series?.candles ?? null;
     const technical = candles ? computeTechnicalSummary(candles) : null;
@@ -163,7 +163,7 @@ export class DataCollector {
 const MISSING_ORDER = [
   "현재가", "일봉", "일봉/기술적 지표", "기술적 지표(봉 부족)", "주봉", "회사 개요", "회사 개요(DART 키 없음)", "회사 개요(미국 종목 미지원)",
   "재무제표", "재무제표(DART 키 없음)", "재무제표(미국 종목 미지원)", "PER/PBR(현재 시세 소스가 제공하지 않음)", "배당", "배당(DART 키 없음)", "배당(미국 종목 미지원)",
-  "뉴스", "공시", "공시(DART 키 없음)", "공시(미국 종목 미지원)", "수급", "수급(KIS 키 없음)", "수급(미국 종목 미지원)",
+  "뉴스", "공시", "공시(DART 키 없음)", "공시(미국 종목 미지원)", "수급", "수급(KIS/토스 Open API 키 없음)", "수급(미국 종목 미지원)",
 ];
 export function orderMissing(missing: string[]): string[] {
   const idx = (s: string) => {

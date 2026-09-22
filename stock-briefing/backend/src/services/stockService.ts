@@ -5,6 +5,7 @@ import { ConflictError, NotFoundError, ProviderError } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
+import type { LiveTicks } from "../providers/market/tossRealtime.js";
 
 export interface StockServiceDeps {
   db: Db;
@@ -13,6 +14,8 @@ export interface StockServiceDeps {
   master: MasterProvider;
   /** true 면 외부 검색(토스)을 먼저 쓰고 로컬 마스터는 보조/폴백으로 쓴다 */
   searchRemoteFirst?: boolean;
+  /** 실시간 체결(웹소켓). 있으면 현재가에 마지막 체결가를 덮어쓰고, 등록 종목이 바뀌면 구독을 갱신한다 */
+  live?: LiveTicks | null;
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
@@ -223,7 +226,15 @@ export class StockService {
         updated_at: ts,
       })
       .execute();
+    await this.syncLive();
     return (await this.get(listed.code))!;
+  }
+
+  /** 등록 종목 전체를 실시간 구독 목록으로 넘긴다 (기동 시, 등록/삭제/가져오기 후) */
+  async syncLive(): Promise<void> {
+    if (!this.deps.live) return;
+    const codes = (await this.list()).map((s) => s.code);
+    this.deps.live.setCodes(codes);
   }
 
   async update(code: string, input: UpdateInput): Promise<RegisteredStock> {
@@ -245,6 +256,7 @@ export class StockService {
   async remove(code: string): Promise<void> {
     const r = await this.deps.db.deleteFrom("registered_stocks").where("code", "=", code).executeTakeFirst();
     if (Number(r.numDeletedRows) === 0) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
+    await this.syncLive();
   }
 
   async get(code: string): Promise<RegisteredStock | null> {
@@ -281,7 +293,7 @@ export class StockService {
     if (!opts.fresh) {
       const cached = await db.selectFrom("quote_cache").selectAll().where("code", "=", code).executeTakeFirst();
       if (cached && this.now().getTime() - Date.parse(cached.fetched_at) < this.ttl) {
-        return JSON.parse(cached.payload) as Quote;
+        return this.applyLive(JSON.parse(cached.payload) as Quote);
       }
     }
     const quote = await this.deps.quotes.getQuote(code);
@@ -291,7 +303,31 @@ export class StockService {
       .values({ code, payload: JSON.stringify(quote), fetched_at: fetchedAt })
       .onConflict((oc) => oc.column("code").doUpdateSet({ payload: JSON.stringify(quote), fetched_at: fetchedAt }))
       .execute();
-    return quote;
+    return this.applyLive(quote);
+  }
+
+  /** 실시간 체결이 시세 스냅샷보다 새로우면 현재가·등락을 마지막 체결가로 바꾼다 */
+  private applyLive(quote: Quote): Quote {
+    const tick = this.deps.live?.get(quote.code);
+    if (!tick) return quote;
+    const tickAt = Date.parse(tick.timestamp);
+    const quoteAt = Date.parse(quote.asOf);
+    if (Number.isNaN(tickAt) || (!Number.isNaN(quoteAt) && tickAt < quoteAt) || tick.price === quote.price) return quote;
+    const prevClose = quote.prevClose ?? (quote.change ? quote.price - quote.change : null);
+    const change = prevClose !== null ? Math.round((tick.price - prevClose) * 100) / 100 : quote.change;
+    const changeRate = prevClose ? Math.round((change / prevClose) * 10000) / 100 : quote.changeRate;
+    const priceKrw = quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * tick.price) : (quote.priceKrw ?? null);
+    return {
+      ...quote,
+      price: tick.price,
+      change,
+      changeRate,
+      high: quote.high !== null ? Math.max(quote.high, tick.price) : null,
+      low: quote.low !== null ? Math.min(quote.low, tick.price) : null,
+      asOf: tick.timestamp,
+      priceKrw,
+      live: true,
+    };
   }
 
   getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
