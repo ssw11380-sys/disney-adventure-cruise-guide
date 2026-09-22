@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { isTradingHoursKst } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
 import type { AnalysisKind, BriefingSession, CandlePeriod } from "./types";
@@ -18,17 +19,6 @@ function useKey(...parts: unknown[]) {
 export function useHealth() {
   const api = useApi();
   return useQuery({ queryKey: useKey("health"), queryFn: api.health, staleTime: 30_000, retry: 0 });
-}
-
-/** 한국·미국 장이 열려 있을 만한 시간인지 (KST). 평일 08:00 ~ 다음날 07:00 이면 true (한국 08~20시, 미국 17시~익일 07시) */
-export function isTradingHoursKst(d = new Date()): boolean {
-  const kst = new Date(d.getTime() + 9 * 3_600_000);
-  const day = kst.getUTCDay(); // 0 일 ~ 6 토
-  const h = kst.getUTCHours();
-  if (day === 0) return false; // 일요일
-  if (day === 6) return h < 7; // 토요일 새벽 = 미국 금요일 장
-  if (day === 1) return h >= 8; // 월요일 08시부터
-  return h >= 8 || h < 7;
 }
 
 /**

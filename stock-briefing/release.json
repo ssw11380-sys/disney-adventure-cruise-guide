@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "apkUrl": "https://expo.dev/artifacts/eas/LCmn3PaoYBtu4WRYoNRaHcw-ElpClbnISI4vKPN4fdQ.apk",
-  "notes": "미국 주식 등록, 네이버 시세(정규장 종가 + NXT 야간 가격), 설정에서 앱 업데이트 확인",
-  "publishedAt": "2026-09-22"
+  "version": "1.2.0",
+  "apkUrl": null,
+  "notes": "새 디자인·아이콘, 홈 화면 위젯 3종, PER·PBR·배당 표시, 내 종목 정렬, 미국 주식 원화 환산, 52주 위치, 종목 길게 눌러 수정·삭제",
+  "publishedAt": "2026-09-23"
 }

@@ -1,12 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, FlatList, Platform, Pressable, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
 import { useSearch, useStockMutations } from "@/api/hooks";
 import type { ListedStock } from "@/api/types";
 import { Screen } from "@/components/Screen";
-import { Badge, Button, Card, Loading, Muted } from "@/components/ui";
-import { isUsMarket } from "@/lib/format";
+import { Badge, Button, Card, ChangeText, Loading, Muted } from "@/components/ui";
+import { formatPct, formatPrice, isUsMarket } from "@/lib/format";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 종목 등록: 검색 → 선택 → 수량/평단(선택) → 등록 */
@@ -36,7 +36,10 @@ export default function AddStockScreen() {
     register.mutate(
       { code: selected.code, quantity: qty, avgPrice: avg },
       {
-        onSuccess: () => router.back(),
+        onSuccess: () => {
+          if (Platform.OS === "android") ToastAndroid.show(`${selected.name} 등록됨`, ToastAndroid.SHORT);
+          router.back();
+        },
         onError: (e) => Alert.alert("등록 실패", e instanceof Error ? e.message : String(e)),
       },
     );
@@ -121,6 +124,12 @@ export default function AddStockScreen() {
                   {item.code} · {item.market}
                 </Muted>
               </View>
+              {item.price ? (
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{formatPrice(item.price, item.currency)}</Text>
+                  <ChangeText value={item.changeRate} text={formatPct(item.changeRate)} style={{ fontSize: font.tiny }} />
+                </View>
+              ) : null}
               {isUsMarket(item.market) ? <Badge tone="warn">미국 · $</Badge> : null}
               {item.groupCode === "EF" ? <Badge>ETF</Badge> : null}
             </Pressable>

@@ -30,6 +30,23 @@ export function currencyOfMarket(market: Market | string | null | undefined): Cu
 }
 export const CURRENCY_LABEL: Record<Currency, string> = { KRW: "원화", USD: "달러" };
 
+/**
+ * 표시 통화 결정. showKrw 이고 환율이 있으면 달러 금액을 원화로 바꾼다.
+ * 반환값의 currency 로 formatPrice 를 부르면 된다.
+ */
+export function toDisplay(n: number | null | undefined, currency: Currency | undefined, fxRate: number | null | undefined, showKrw: boolean): { value: number | null; currency: Currency } {
+  const cur = currency ?? "KRW";
+  if (n === null || n === undefined || !Number.isFinite(n)) return { value: null, currency: cur };
+  if (cur === "USD" && showKrw && fxRate) return { value: n * fxRate, currency: "KRW" };
+  return { value: n, currency: cur };
+}
+
+/** toDisplay + formatPrice 를 한 번에 */
+export function formatMoney(n: number | null | undefined, currency: Currency | undefined, fxRate: number | null | undefined, showKrw: boolean, opts: { sign?: boolean } = {}): string {
+  const d = toDisplay(n, currency, fxRate, showKrw);
+  return formatPrice(d.value, d.currency, opts);
+}
+
 /** 정규장 밖 가격의 짧은 라벨: NXT 야간/프리마켓, 미국 애프터/프리마켓 */
 export function afterMarketLabel(a: { venue: "NXT" | "US"; session: "PRE_MARKET" | "AFTER_MARKET" | "UNKNOWN"; status: "OPEN" | "CLOSE" }): string {
   const venue = a.venue === "NXT" ? "NXT" : "미국";
@@ -97,3 +114,14 @@ export function relativeTime(iso: string | null | undefined): string {
 }
 
 export const SESSION_LABEL: Record<"morning" | "afternoon", string> = { morning: "오전", afternoon: "오후" };
+
+/** 한국·미국 장이 열려 있을 만한 시간인지 (KST). 평일 08:00 ~ 다음날 07:00 이면 true (한국 08~20시, 미국 17시~익일 07시) */
+export function isTradingHoursKst(d = new Date()): boolean {
+  const kst = new Date(d.getTime() + 9 * 3_600_000);
+  const day = kst.getUTCDay(); // 0 일 ~ 6 토
+  const h = kst.getUTCHours();
+  if (day === 0) return false; // 일요일
+  if (day === 6) return h < 7; // 토요일 새벽 = 미국 금요일 장
+  if (day === 1) return h >= 8; // 월요일 08시부터
+  return h >= 8 || h < 7;
+}

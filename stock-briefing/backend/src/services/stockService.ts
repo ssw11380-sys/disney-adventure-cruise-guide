@@ -5,6 +5,7 @@ import { ConflictError, NotFoundError, ProviderError } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
+import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
 import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
 
 export interface StockServiceDeps {
@@ -18,6 +19,8 @@ export interface StockServiceDeps {
   live?: LiveTicks | null;
   /** 웹소켓이 없을 때 REST 로 여러 종목 현재가를 한 번에 받아 덮어쓴다 (같은 가격 기준의 시세에만) */
   quickPrices?: QuickPriceSource | null;
+  /** PER/PBR/배당/52주·환율 보강 (토스 시세에는 없음) */
+  fundamentals?: NaverFundamentals | null;
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
@@ -310,7 +313,7 @@ export class StockService {
         return this.applyLive(JSON.parse(cached.payload) as Quote, quick);
       }
     }
-    const quote = await this.deps.quotes.getQuote(code);
+    const quote = await this.enrich(await this.deps.quotes.getQuote(code));
     const fetchedAt = seoulIso(this.now());
     await db
       .insertInto("quote_cache")
@@ -318,6 +321,24 @@ export class StockService {
       .onConflict((oc) => oc.column("code").doUpdateSet({ payload: JSON.stringify(quote), fetched_at: fetchedAt }))
       .execute();
     return this.applyLive(quote, quick);
+  }
+
+  /** 밸류에이션(PER/PBR/EPS/BPS/배당/52주)과 달러 환율을 채운다. 실패해도 시세는 그대로 */
+  private async enrich(quote: Quote): Promise<Quote> {
+    const f = this.deps.fundamentals;
+    if (!f) return quote;
+    const needFundamentals = quote.per === null || quote.pbr === null || quote.dividendYieldPct === undefined;
+    const market = (await this.get(quote.code))?.market ?? null;
+    const [fund, fx] = await Promise.all([
+      needFundamentals ? f.get(quote.code, market).catch(() => null) : Promise.resolve(null),
+      quote.currency === "USD" ? f.usdKrw().catch(() => null) : Promise.resolve(null),
+    ]);
+    let out = applyFundamentals(quote, fund);
+    if (quote.currency === "USD") {
+      const rate = fx ?? (quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * 100) / 100 : null);
+      out = { ...out, fxRate: rate, priceKrw: out.priceKrw ?? (rate ? Math.round(out.price * rate) : null) };
+    }
+    return out;
   }
 
   /**
@@ -334,7 +355,7 @@ export class StockService {
     const prevClose = quote.prevClose ?? (quote.change ? quote.price - quote.change : null);
     const change = prevClose !== null ? Math.round((tick.price - prevClose) * 100) / 100 : quote.change;
     const changeRate = prevClose ? Math.round((change / prevClose) * 10000) / 100 : quote.changeRate;
-    const priceKrw = quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * tick.price) : (quote.priceKrw ?? null);
+    const priceKrw = quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * tick.price) : quote.fxRate ? Math.round(tick.price * quote.fxRate) : (quote.priceKrw ?? null);
     return {
       ...quote,
       price: tick.price,

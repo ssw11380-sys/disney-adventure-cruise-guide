@@ -128,6 +128,7 @@ export function fakeProviders(over: Partial<Providers> = {}): Providers {
     tossOpenApi: null,
     live: null,
     quickPrices: null,
+    fundamentals: null,
     search: new FakeSearchProvider([SAMPLE_MASTER[0]!]),
     master: new FakeMasterProvider(),
     news: new FakeNewsProvider(),
