@@ -1,9 +1,11 @@
 # 저장소 루트용 Dockerfile: Railway 등이 Root Directory 설정 없이 바로 백엔드를 빌드하도록 한다.
 # 내용은 stock-briefing/backend/Dockerfile 과 같고 경로만 루트 기준이다.
 FROM node:22-bookworm-slim AS build
+# better-sqlite3 는 프리빌드 바이너리를 못 받으면 소스에서 컴파일하므로 빌드 도구를 넣어 둔다 (런타임 이미지에는 없음)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY stock-briefing/backend/package.json stock-briefing/backend/package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 COPY stock-briefing/backend/tsconfig.json ./
 COPY stock-briefing/backend/src ./src
 RUN npm run build && npm prune --omit=dev
