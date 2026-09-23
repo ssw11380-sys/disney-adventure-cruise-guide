@@ -1,7 +1,7 @@
 import { within } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { fallbackState, type MarketCalendar, type MarketState } from "../providers/market/calendar.js";
-import { isMostlyZero, isPreopenQuotes, type DiscoverMarket, type ExchangeStatus, type DiscoverStock, type NaverDiscover, type RankCategory, type SectorDetail, type ThemeKind, type ThemePeriod, type ThemeSummary, type UsQuote } from "../providers/market/naverDiscover.js";
+import { isMostlyZero, isPreopenQuotes, type DiscoverMarket, type ExchangeSession, type ExchangeStatus, type DiscoverStock, type NaverDiscover, type RankCategory, type SectorDetail, type ThemeKind, type ThemePeriod, type ThemeSummary, type UsQuote } from "../providers/market/naverDiscover.js";
 import type { CodeStore } from "../providers/market/toss.js";
 import type { TicsRankRow, TossTics } from "../providers/market/tossTics.js";
 import { latestTradeDay, pool, usThemeSummary, UsThemesBuildingError, type UsThemeBook, type UsThemeBookData } from "./usThemes.js";
@@ -152,9 +152,14 @@ export class DiscoverService {
   private exStatus: { until: number; value: Partial<Record<DiscoverMarket, ExchangeStatus>> } | null = null;
   private exInflight: Promise<Partial<Record<DiscoverMarket, ExchangeStatus>> | null> | null = null;
   private exFailedAt = 0;
-  /** 한국 마지막 거래 마감. 장 시작 전(08:00~09:00)에는 출처가 알려 주지 않아 마감 뒤에 본 값을 기억한다 (meta 표에도) */
-  private krLastClose: string | null = null;
-  private krLastCloseLoaded = false;
+  /**
+   * 한국 마지막 거래일과 그날 마감. 장 시작 전(08:00~09:00)에는 출처가 직전 마감을 알려 주지 않아, 거래일 세션을 볼 때마다
+   * 기억한다(더 늦은 거래일로만 바꾼다, meta 표에도). exact = 마감 뒤 출처가 준 실제 마감, 아니면 그날 20:00(NXT 끝) 추정
+   */
+  private krTrade: { day: string; close: string; exact: boolean } | null = null;
+  private krTradeLoaded = false;
+  /** 미국 가장 최근 정규장 마감 (조기 폐장일 13:00 포함) — 정규장·애프터마켓 세션을 볼 때 기억한다 */
+  private usRegularClose: string | null = null;
   private readonly inflight = new Map<string, Promise<unknown>>();
   private readonly failures = new Map<string, { at: number; error: unknown }>();
   /** 미국 테마 기간 등락률의 정규장 중 스냅숏 */
@@ -189,48 +194,91 @@ export class DiscoverService {
   /**
    * 장 상태. open 이면 값이 바뀌는 시간이라 30초마다 새로 받는다.
    * 값의 출처(네이버)가 주는 거래소 장 상태를 먼저 쓴다 — 휴장일·특수일(수능 10:00 개장, 미국 조기 폐장)과 세션 경계가 값과 맞는다.
-   *  - 한국: 개장 전·프리마켓 = pre, 정규장 = regular, 애프터마켓(시간외) = extended, 그 밖 = closed
+   *  - 한국: 개장 전·프리마켓 = pre, 정규장 = regular, 정규장 뒤(15:30~20:00, 시간외·NXT 애프터마켓) = extended, 그 밖 = closed
    *  - 미국: 네이버 미국 값은 정규장 값이라 정규장만 open, 나머지(프리·애프터 포함)는 closed
-   * 네이버 장 상태를 2.5초 안에 못 받으면 토스 달력(없으면 요일·시각 추정)으로 대신한다.
+   * 직전에 받은 장 상태가 지금도 유효하면 기다리지 않고 쓰며(새 값은 뒤에서), 아니면 네이버와 토스 달력을 함께 물어 2.5초까지만 기다린다.
+   * 둘 다 없으면 요일·시각 추정.
    */
   private async session(market: DiscoverMarket): Promise<Session> {
     const now = this.now;
     const t = now.getTime();
-    const known = (await this.exchangeStatus())?.[market];
-    // 마지막으로 받은 세션이 아직 지금을 덮고 있을 때만 쓴다 (새로 못 받아 옛 값을 쓰는 경우 포함 — 휴장일 내내 이어지는 '마감'은 그대로 맞다)
-    const ex = known && (!known.latest.closeAt || Date.parse(known.latest.closeAt) > t) ? known : null;
-    if (ex) {
-      const l = ex.latest;
-      if (market === "US") {
-        if (l.kind === "regular") return { session: "regular", open: true, lastClose: null };
-        // 애프터마켓 중이면 그 시작이 오늘 정규장 마감(조기 폐장일 13:00), 아니면 토스 달력의 마지막 세션 끝
-        const lastClose = l.kind === "after" && l.openAt ? new Date(l.openAt).toISOString() : ((await this.calendarState("US"))?.lastClose ?? null);
-        return { session: "closed", open: false, lastClose };
+    const calP = this.calendarState(market); // 필요할 때 기다리지 않게 먼저 시작 (보통 캐시)
+    let cur = this.currentExchange(market, t);
+    if (!this.exStatus || t >= this.exStatus.until) {
+      const p = this.refreshExchange();
+      if (!cur) {
+        await within(p, CAL_WAIT_MS, null);
+        cur = this.currentExchange(market, t);
       }
-      if (l.kind === "closed") {
-        const began = l.openAt ? Date.parse(l.openAt) : NaN;
-        const lastClose = !Number.isNaN(began) && began <= t ? new Date(began).toISOString() : ((await this.calendarState("KR"))?.lastClose ?? null);
-        if (lastClose) void this.rememberKrClose(lastClose);
-        return { session: "closed", open: false, lastClose };
-      }
-      if (l.kind === "regular") return { session: "regular", open: true, lastClose: null };
-      if (l.kind === "after") return { session: "extended", open: true, lastClose: null };
-      return { session: "pre", open: true, lastClose: await this.recallKrClose(t) };
     }
-    if (!this.deps.calendar) return { session: "closed", open: false, lastClose: null };
-    const st: MarketState = (await this.calendarState(market)) ?? fallbackState(market, now);
-    const lastClose = st.lastClose ?? null;
+    if (cur) return market === "KR" ? this.krSession(cur, t) : this.usSession(cur.session, t, calP);
+    const st: MarketState | null = await calP;
+    if (!st && !this.deps.calendar) return { session: "closed", open: false, lastClose: null };
+    const cal = st ?? fallbackState(market, now);
     if (market === "US") {
-      const regular = st.isOpen && isUsRegularHours(now);
-      return { session: regular ? "regular" : "closed", open: regular, lastClose };
+      const regular = cal.isOpen && isUsRegularHours(now);
+      return { session: regular ? "regular" : "closed", open: regular, lastClose: regular ? null : this.latestUsClose(t, cal.lastClose ?? null) };
     }
-    if (!st.isOpen) {
-      if (lastClose) void this.rememberKrClose(lastClose);
-      return { session: "closed", open: false, lastClose };
+    if (!cal.isOpen) {
+      if (cal.lastClose) this.noteKrTrade(seoulIso(new Date(cal.lastClose)).slice(0, 10), cal.lastClose, true);
+      return { session: "closed", open: false, lastClose: cal.lastClose ?? null };
     }
     const m = seoulMinutes(now);
     const session: DiscoverSession = m < 9 * 60 ? "pre" : isKrxRegularHours(now) ? "regular" : "extended";
+    if (session !== "pre") this.noteKrTrade(seoulIso(now).slice(0, 10), null, false);
     return { session, open: true, lastClose: session === "pre" ? await this.recallKrClose(t) : null };
+  }
+
+  /** 받아 둔 네이버 장 상태 중 지금 유효한 세션 (없으면 null) */
+  private currentExchange(market: DiscoverMarket, t: number): { session: ExchangeSession; status: ExchangeStatus } | null {
+    const st = this.exStatus?.value[market];
+    const cur = st ? currentSession(st, t) : null;
+    return st && cur ? { session: cur, status: st } : null;
+  }
+
+  private async krSession({ session: cur, status }: { session: ExchangeSession; status: ExchangeStatus }, t: number): Promise<Session> {
+    // 정규장 마감(15:30) 뒤 같은 날 애프터마켓(16:00~)까지의 틈도 시간외다 (NXT 애프터마켓 15:40~·장후 시간외 종가가 진행 중)
+    const gap = cur.kind === "closed" && status.next?.kind === "after" && status.next.tradeBaseAt === cur.tradeBaseAt;
+    if (cur.kind === "regular" || cur.kind === "after" || gap) {
+      const afterEnd = cur.kind === "after" ? cur.closeAt : status.next?.kind === "after" ? status.next.closeAt : null;
+      if (cur.tradeBaseAt) this.noteKrTrade(cur.tradeBaseAt, afterEnd, false);
+      return { session: cur.kind === "regular" ? "regular" : "extended", open: true, lastClose: null };
+    }
+    if (cur.kind === "closed") {
+      const began = cur.openAt ? Date.parse(cur.openAt) : NaN;
+      const lastClose = !Number.isNaN(began) && began <= t ? new Date(began).toISOString() : null;
+      if (lastClose && cur.tradeBaseAt) this.noteKrTrade(cur.tradeBaseAt, lastClose, true);
+      return { session: "closed", open: false, lastClose: lastClose ?? (await this.recallKrClose(t)) };
+    }
+    return { session: "pre", open: true, lastClose: await this.recallKrClose(t) };
+  }
+
+  private async usSession(cur: ExchangeSession, t: number, calP: Promise<MarketState | null>): Promise<Session> {
+    if (cur.kind === "regular") {
+      if (cur.closeAt) this.noteUsClose(cur.closeAt); // 정규장 끝(조기 폐장이면 13:00) — 끝난 뒤에 쓰인다
+      return { session: "regular", open: true, lastClose: null };
+    }
+    // 애프터마켓의 시작이 오늘 정규장 마감
+    if (cur.kind === "after" && cur.openAt) this.noteUsClose(cur.openAt);
+    // 기억한 마감이 가장 최근 평일 정규장 것이면 달력을 기다리지 않는다 (휴장일이면 달력으로 확인)
+    const mem = this.usRegularClose && Date.parse(this.usRegularClose) <= t ? this.usRegularClose : null;
+    const recent = !!mem && nyParts(new Date(mem)).date >= lastUsRegularDay(this.now, null);
+    const cal = recent ? null : await calP;
+    return { session: "closed", open: false, lastClose: this.latestUsClose(t, cal?.lastClose ?? null) };
+  }
+
+  /** 미국 가장 최근 정규장 마감: 기억한 값(조기 폐장 반영)과 달력 값 중 늦은 날, 같은 날이면 기억한 값 */
+  private latestUsClose(t: number, calendarClose: string | null): string | null {
+    const mem = this.usRegularClose && Date.parse(this.usRegularClose) <= t ? this.usRegularClose : null;
+    if (!mem) return calendarClose;
+    if (!calendarClose) return mem;
+    return nyParts(new Date(calendarClose)).date > nyParts(new Date(mem)).date ? calendarClose : mem;
+  }
+
+  private noteUsClose(iso: string): void {
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return;
+    if (!this.usRegularClose || t > Date.parse(this.usRegularClose)) this.usRegularClose = new Date(t).toISOString();
   }
 
   /** 토스 달력 상태 (2.5초까지만 기다린다) */
@@ -240,23 +288,20 @@ export class DiscoverService {
   }
 
   /**
-   * 네이버 거래소 장 상태. 다음 세션 경계(또는 5분)까지 캐시하고, 2.5초까지만 기다린다.
-   * 새로 못 받으면(실패는 30초 동안 다시 묻지 않음) 마지막으로 받은 값을 준다 — 쓸 수 있는지는 session() 이 세션 끝 시각으로 가린다.
+   * 네이버 거래소 장 상태를 새로 받는다 (같은 때 한 번만). 다음 세션 경계(끝·다음 개장) 또는 5분까지 쓰고,
+   * 실패하면 30초 동안 다시 묻지 않는다. 받아 둔 옛 값은 그대로 둔다 — 쓸 수 있는지는 currentSession 이 가린다.
    */
-  private async exchangeStatus(): Promise<Partial<Record<DiscoverMarket, ExchangeStatus>> | null> {
-    const t = this.now.getTime();
-    if (this.exStatus && t < this.exStatus.until) return this.exStatus.value;
-    const last = this.exStatus?.value ?? null;
-    if (t - this.exFailedAt < 30_000) return last;
+  private refreshExchange(): Promise<Partial<Record<DiscoverMarket, ExchangeStatus>> | null> {
+    if (this.now.getTime() - this.exFailedAt < 30_000) return Promise.resolve(null);
     this.exInflight ??= this.deps.naver
       .marketStatus()
       .then((value) => {
-        const at = this.now.getTime();
-        // 가장 가까운 세션 경계에서 새로 묻는다 (09:00·09:30 ET 개장 직후에도 바로 장중으로)
-        const bounds = Object.values(value)
-          .map((x) => Date.parse(x.latest.closeAt ?? ""))
-          .filter((b) => !Number.isNaN(b) && b > at);
         if (!Object.keys(value).length) throw new Error("네이버 장 상태가 비어 있습니다");
+        const at = this.now.getTime();
+        const bounds = Object.values(value)
+          .flatMap((x) => [x.latest.closeAt, x.next?.openAt])
+          .map((b) => Date.parse(b ?? ""))
+          .filter((b) => !Number.isNaN(b) && b > at);
         this.exStatus = { until: Math.min(at + 5 * 60_000, ...bounds), value };
         return value;
       })
@@ -267,24 +312,34 @@ export class DiscoverService {
       .finally(() => {
         this.exInflight = null;
       });
-    return (await within(this.exInflight, CAL_WAIT_MS, null)) ?? last;
+    return this.exInflight;
   }
 
-  /** 한국 마지막 거래 마감을 기억한다 (바뀌었을 때만 meta 표에 쓴다) */
-  private async rememberKrClose(iso: string): Promise<void> {
-    if (this.krLastClose === iso) return;
-    this.krLastClose = iso;
-    await this.deps.store?.set("discover:kr-last-close", iso).catch(() => undefined);
+  /** 한국 거래일을 기억한다: 더 늦은 거래일, 또는 같은 날의 실제 마감(추정보다 우선)일 때만 바꾸고 meta 표에 쓴다 */
+  private noteKrTrade(day: string, close: string | null, exact: boolean): void {
+    const iso = close && !Number.isNaN(Date.parse(close)) ? new Date(close).toISOString() : new Date(`${day}T20:00:00+09:00`).toISOString();
+    const cur = this.krTrade;
+    if (cur && day < cur.day) return; // 더 이른 거래일로 되돌리지 않는다
+    if (cur && day === cur.day && ((cur.exact && !exact) || (cur.close === iso && cur.exact === exact))) return; // 실제 마감을 추정으로 덮지 않고, 같은 값은 다시 쓰지 않는다
+    this.krTrade = { day, close: iso, exact };
+    this.krTradeLoaded = true;
+    void this.deps.store?.set("discover:kr-last-trade", JSON.stringify(this.krTrade)).catch(() => undefined);
   }
 
   /** 기억해 둔 한국 마지막 거래 마감 (지금보다 앞이고 14일 이내일 때만) */
   private async recallKrClose(t: number): Promise<string | null> {
-    if (!this.krLastClose && !this.krLastCloseLoaded) {
-      this.krLastCloseLoaded = true;
-      this.krLastClose = (await this.deps.store?.get("discover:kr-last-close").catch(() => null)) ?? null;
+    if (!this.krTradeLoaded) {
+      this.krTradeLoaded = true;
+      try {
+        const raw = await this.deps.store?.get("discover:kr-last-trade");
+        const v = raw ? (JSON.parse(raw) as { day: string; close: string; exact: boolean }) : null;
+        if (v && typeof v.day === "string" && typeof v.close === "string" && (!this.krTrade || v.day > this.krTrade.day)) this.krTrade = v;
+      } catch {
+        /* 기억이 깨졌으면 없는 것으로 */
+      }
     }
-    const c = this.krLastClose ? Date.parse(this.krLastClose) : NaN;
-    return !Number.isNaN(c) && c <= t && t - c < SNAP_MAX_AGE_MS ? this.krLastClose : null;
+    const c = this.krTrade ? Date.parse(this.krTrade.close) : NaN;
+    return !Number.isNaN(c) && c <= t && t - c < SNAP_MAX_AGE_MS ? this.krTrade!.close : null;
   }
 
   /**
@@ -969,6 +1024,20 @@ type ThemeListValue = { themes: ThemeSummary[]; dataAt: number; fromSnap: boolea
 function naverBasis(market: DiscoverMarket, kind: ThemeKind): string {
   if (market === "US") return "산업 분류(TRBC)별 구성 종목 시가총액 가중 평균";
   return kind === "theme" ? "구성 종목 등락률 단순 평균(거래정지 제외)" : "구성 종목 시가총액 가중 평균";
+}
+
+/**
+ * 네이버 장 상태에서 지금 유효한 세션. 마감 세션의 closeAt 은 휴장일과 상관없이 다음 달력 날 아침이라,
+ * 다음 개장(next.openAt) 전이거나 오늘이 휴장일이면 여전히 마감으로 본다. 그 밖에 세션 끝이 지났으면 옛 값(null).
+ */
+export function currentSession(st: ExchangeStatus, t: number): ExchangeSession | null {
+  const l = st.latest;
+  const end = l.closeAt ? Date.parse(l.closeAt) : NaN;
+  if (Number.isNaN(end) || t < end) return l;
+  if (l.kind !== "closed") return null;
+  const nextOpen = st.next?.openAt ? Date.parse(st.next.openAt) : NaN;
+  if (!Number.isNaN(nextOpen)) return t < nextOpen ? l : null;
+  return st.isTradingDay === false ? l : null;
 }
 
 /** 문자열 지문 (FNV-1a 32비트 + 길이) — 저장본이 바뀌었는지만 본다 */
