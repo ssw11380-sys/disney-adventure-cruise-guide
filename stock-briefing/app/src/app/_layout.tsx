@@ -1,8 +1,9 @@
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import * as SystemUI from "expo-system-ui";
 import React, { useEffect } from "react";
-import { AppState, useColorScheme, type AppStateStatus } from "react-native";
+import { AppState, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
@@ -15,23 +16,33 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
 });
 
+/** 상태바 글자색 + 루트 배경(화면 전환·키보드 뒤로 비치는 색)을 테마에 맞춘다 */
+function ThemedStatusBar() {
+  const t = useTheme();
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(t.bg).catch(() => undefined);
+  }, [t.bg]);
+  return <StatusBar style={t.dark ? "light" : "dark"} />;
+}
+
 function Navigator() {
   const t = useTheme();
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: t.bg },
+        headerStyle: { backgroundColor: t.surface },
         headerTintColor: t.ink,
-        headerTitleStyle: { fontWeight: "700" },
+        headerTitleStyle: { fontWeight: "700", fontSize: 17 },
+        headerTitleAlign: "left",
         headerShadowVisible: false,
         contentStyle: { backgroundColor: t.bg },
         headerBackTitle: "뒤로",
       }}
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="stocks/add" options={{ title: "종목 등록", presentation: "modal" }} />
+      <Stack.Screen name="stocks/add" options={{ title: "종목 검색", presentation: "modal" }} />
       <Stack.Screen name="stocks/[code]/index" options={{ title: "종목" }} />
-      <Stack.Screen name="stocks/[code]/edit" options={{ title: "보유 정보 수정", presentation: "modal" }} />
+      <Stack.Screen name="stocks/[code]/edit" options={{ title: "잔고 수정", presentation: "modal" }} />
       <Stack.Screen name="stocks/[code]/chart" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
       <Stack.Screen name="briefings/[id]" options={{ title: "브리핑" }} />
     </Stack>
@@ -39,7 +50,6 @@ function Navigator() {
 }
 
 export default function RootLayout() {
-  const scheme = useColorScheme();
   // 앱이 뒤로 가면 react-query 의 주기적 갱신(실시간 시세 3초)을 멈추고, 다시 열면 재개한다
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state: AppStateStatus) => focusManager.setFocused(state === "active"));
@@ -52,7 +62,7 @@ export default function RootLayout() {
         <SettingsProvider>
           <QueryClientProvider client={queryClient}>
             <LiveStreamProvider>
-              <StatusBar style={scheme === "dark" ? "light" : "dark"} />
+              <ThemedStatusBar />
               <NotificationBridge />
               <Navigator />
             </LiveStreamProvider>

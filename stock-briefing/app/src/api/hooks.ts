@@ -28,6 +28,12 @@ export function useMarketStatus() {
   return useQuery({ queryKey: useKey("market"), queryFn: api.marketStatus, staleTime: 5 * 60_000, refetchInterval: 5 * 60_000, retry: 0 });
 }
 
+/** 지수 띠. 서버가 30초 캐시하므로 30초마다 */
+export function useMarketIndices() {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("indices"), queryFn: api.marketIndices, staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: false, retry: 0 });
+}
+
 /** 한국·미국 중 하나라도 거래 중이면 true. 서버 상태가 없으면 시간 기반 추정 */
 export function useAnyMarketOpen(): { open: boolean; label: string; loaded: boolean } {
   const m = useMarketStatus();

@@ -1,17 +1,17 @@
-import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useEffect, useMemo, useRef } from "react";
-import { Alert, FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
-import { useLiveStream } from "@/lib/liveStream";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
+import { MarketStrip } from "@/components/MarketStrip";
 import { Screen } from "@/components/Screen";
-import { StockRow } from "@/components/StockRow";
-import { Button, Card, ChangeText, Chip, ErrorView, Loading, Muted } from "@/components/ui";
-import { formatPct, formatPrice } from "@/lib/format";
+import { COL, StockRow } from "@/components/StockRow";
+import { Button, ErrorView, Loading, TableHead } from "@/components/ui";
+import { formatPct, formatPrice, formatQuote } from "@/lib/format";
+import { useLiveStream } from "@/lib/liveStream";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
+import { changeColor, font, space, useTheme } from "@/theme";
 import { refreshWidgets } from "@/widgets/refresh";
-import { font, radius, space, useTheme } from "@/theme";
 
 const fxOf = (s: RegisteredWithQuote): number | null => s.quote?.fxRate ?? (s.quote?.priceKrw && s.quote.price ? s.quote.priceKrw / s.quote.price : null);
 /** 종목 통화 금액을 원화로. 환율을 모르면 null */
@@ -22,7 +22,15 @@ const toKrw = (n: number, s: RegisteredWithQuote): number | null => {
   return fx ? n * fx : null;
 };
 
-/** 홈: 자산 요약(히어로) + 정렬 + 등록 종목 목록 */
+interface Totals {
+  value: number;
+  cost: number;
+  day: number;
+  count: number;
+}
+const zero = (): Totals => ({ value: 0, cost: 0, day: 0, count: 0 });
+
+/** 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표 */
 export default function StocksScreen() {
   const t = useTheme();
   const { data, isLoading, isError, error, refetch, isRefetching } = useStocks();
@@ -31,12 +39,14 @@ export default function StocksScreen() {
   const health = useHealth();
   const live = useAnyMarketOpen();
   const stream = useLiveStream();
+  const [sortOpen, setSortOpen] = useState(false);
 
   const summary = useMemo(() => {
     const list = data ?? [];
     const held = list.filter((s) => s.evaluation && s.quote);
-    const byCur: Record<Currency, { value: number; cost: number; day: number; count: number }> = { KRW: { value: 0, cost: 0, day: 0, count: 0 }, USD: { value: 0, cost: 0, day: 0, count: 0 } };
-    let krwValue = 0, krwCost = 0, krwDay = 0, convertible = true;
+    const byCur: Record<Currency, Totals> = { KRW: zero(), USD: zero() };
+    const krw = zero();
+    let convertible = true;
     for (const s of held) {
       const cur = s.quote!.currency ?? "KRW";
       const ev = s.evaluation!;
@@ -48,36 +58,46 @@ export default function StocksScreen() {
       const v = toKrw(ev.marketValue, s), c = toKrw(ev.costBasis, s), d = toKrw(day, s);
       if (v === null || c === null || d === null) convertible = false;
       else {
-        krwValue += v;
-        krwCost += c;
-        krwDay += d;
+        krw.value += v;
+        krw.cost += c;
+        krw.day += d;
+        krw.count += 1;
       }
     }
-    return { held: held.length, byCur, krw: convertible ? { value: krwValue, cost: krwCost, day: krwDay } : null, watch: list.length - held.length };
+    const fx = held.map(fxOf).find((x) => x) ?? null;
+    return { held: held.length, byCur, krw: convertible && held.length ? krw : null, fx, watch: list.length - held.length };
   }, [data]);
 
-  const sorted = useMemo(() => {
+  const sections = useMemo(() => {
     const list = [...(data ?? [])];
     const num = (s: RegisteredWithQuote, k: SortKey): number => {
       const q = s.quote;
       if (!q) return Number.NEGATIVE_INFINITY;
       if (k === "changeRate") return q.changeRate;
-      if (k === "profit") return s.evaluation ? (toKrw(s.evaluation.profit, s) ?? s.evaluation.profit) : Number.NEGATIVE_INFINITY;
+      if (k === "profit") return s.evaluation ? s.evaluation.profitRate : Number.NEGATIVE_INFINITY;
       if (k === "value") return s.evaluation ? (toKrw(s.evaluation.marketValue, s) ?? s.evaluation.marketValue) : Number.NEGATIVE_INFINITY;
       return 0;
     };
-    switch (sort) {
-      case "name":
-        return list.sort((a, b) => a.name.localeCompare(b.name, "ko"));
-      case "market":
-        return list.sort((a, b) => a.market.localeCompare(b.market) || a.name.localeCompare(b.name, "ko"));
-      case "changeRate":
-      case "profit":
-      case "value":
-        return list.sort((a, b) => num(b, sort) - num(a, sort));
-      default:
-        return list;
-    }
+    const sorted = (() => {
+      switch (sort) {
+        case "name":
+          return list.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+        case "market":
+          return list.sort((a, b) => a.market.localeCompare(b.market) || a.name.localeCompare(b.name, "ko"));
+        case "changeRate":
+        case "profit":
+        case "value":
+          return list.sort((a, b) => num(b, sort) - num(a, sort));
+        default:
+          return list;
+      }
+    })();
+    const held = sorted.filter((s) => s.evaluation);
+    const watch = sorted.filter((s) => !s.evaluation);
+    return [
+      ...(held.length ? [{ key: "held", title: `보유 ${held.length}`, data: held }] : []),
+      ...(watch.length ? [{ key: "watch", title: `관심 ${watch.length}`, data: watch }] : []),
+    ];
   }, [data, sort]);
 
   // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (1분에 한 번)
@@ -89,123 +109,225 @@ export default function StocksScreen() {
   }, [data, showKrw]);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
-    Alert.alert(s.name, "어떻게 할까요?", [
+    Alert.alert(s.name, undefined, [
       { text: "보유 정보 수정", onPress: () => router.push(`/stocks/${s.code}/edit`) },
-      { text: "목록에서 삭제", style: "destructive", onPress: () => remove.mutate(s.code, { onError: (e) => Alert.alert("삭제 실패", e instanceof Error ? e.message : String(e)) }) },
+      { text: "삭제", style: "destructive", onPress: () => remove.mutate(s.code, { onError: (e) => Alert.alert("삭제 실패", e instanceof Error ? e.message : String(e)) }) },
       { text: "취소", style: "cancel" },
     ]);
 
-  if (isLoading) return <Screen><Loading label="종목 불러오는 중" /></Screen>;
+  if (isLoading) return <Screen><Loading /></Screen>;
   if (isError) return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
-  const heroMain = showKrw && summary.krw ? { value: summary.krw.value, cost: summary.krw.cost, day: summary.krw.day, currency: "KRW" as Currency } : null;
+  const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";
+  const statusLabel = live.open ? (stream.connected ? "실시간" : "지연 3초") : live.label;
+
+  const header = (
+    <View>
+      <MarketStrip />
+      {summary.held > 0 ? (
+        <AccountPanel
+          total={summary.krw}
+          byCur={summary.byCur}
+          showKrw={showKrw}
+          fx={summary.fx}
+          status={statusLabel}
+          live={live.open && stream.connected}
+          counts={`보유 ${summary.held}${summary.watch ? ` · 관심 ${summary.watch}` : ""}`}
+        />
+      ) : null}
+    </View>
+  );
 
   return (
     <Screen scroll={false}>
-      <FlatList
-        data={sorted}
+      <SectionList
+        sections={sections}
         keyExtractor={(s) => s.code}
-        contentContainerStyle={styles.list}
         refreshing={isRefetching}
         onRefresh={() => void refetch()}
-        ListHeaderComponent={
-          <View style={{ gap: space.md, marginBottom: space.sm }}>
-            {summary.held > 0 ? (
-              <LinearGradient colors={[t.heroFrom, t.heroTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.hero, { shadowColor: t.shadow }]}>
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                  <Text style={{ color: t.heroMuted, fontSize: font.small, fontWeight: "600" }}>
-                    보유 {summary.held}종목{summary.watch ? ` · 관심 ${summary.watch}` : ""}
-                  </Text>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: live.open ? "#5CE0A5" : t.heroMuted }} />
-                    <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>{live.open && stream.connected ? "실시간 스트리밍" : live.label}</Text>
-                  </View>
-                </View>
-                {heroMain ? (
-                  <HeroTotals value={heroMain.value} cost={heroMain.cost} day={heroMain.day} currency="KRW" />
-                ) : (
-                  (["KRW", "USD"] as const)
-                    .filter((c) => summary.byCur[c].count > 0)
-                    .map((c) => <HeroTotals key={c} value={summary.byCur[c].value} cost={summary.byCur[c].cost} day={summary.byCur[c].day} currency={c} label={summary.byCur.KRW.count && summary.byCur.USD.count ? (c === "KRW" ? "원화 종목" : "달러 종목") : undefined} />)
-                )}
-                {!heroMain && summary.byCur.USD.count > 0 && summary.krw ? (
-                  <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>원화 환산 합계 {formatPrice(summary.krw.value, "KRW")} · 설정에서 “미국 주식 원화로 보기”를 켜면 합쳐서 보여줍니다</Text>
-                ) : null}
-              </LinearGradient>
-            ) : null}
-            {(data?.length ?? 0) > 1 ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: space.sm, paddingVertical: 2 }}>
-                {SORT_OPTIONS.map((o) => (
-                  <Chip key={o.value} label={o.label} active={sort === o.value} onPress={() => void setSort(o.value)} />
-                ))}
-              </ScrollView>
-            ) : null}
+        stickySectionHeadersEnabled
+        ListHeaderComponent={header}
+        renderSectionHeader={({ section }) => (
+          <View style={{ backgroundColor: t.bg }}>
+            <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
+              <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{section.title}</Text>
+              <Pressable onPress={() => setSortOpen(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel="정렬">
+                <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel} ▾</Text>
+              </Pressable>
+            </View>
+            <TableHead>
+              <HeadCell label="종목명" active={sort === "name"} onPress={() => void setSort("name")} flex />
+              <HeadCell label="현재가 / 등락률" active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={COL.price} />
+              {section.key === "held" ? (
+                <HeadCell label="평가손익 / 수익률" active={sort === "profit"} onPress={() => void setSort("profit")} width={COL.right} />
+              ) : (
+                <HeadCell label="전일대비 / 거래량" width={COL.right} />
+              )}
+            </TableHead>
           </View>
-        }
+        )}
         renderItem={({ item }) => <StockRow stock={item} showKrw={showKrw} onPress={() => router.push(`/stocks/${item.code}`)} onLongPress={() => confirmRemove(item)} />}
-        ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
         ListEmptyComponent={
-          <View style={{ gap: space.md }}>
-            <Card>
-              <Text style={{ color: t.ink, fontSize: font.title, fontWeight: "800", letterSpacing: -0.3 }}>시작해 볼까요</Text>
-              <Muted>보유하거나 지켜보는 종목을 등록하면 매일 아침·저녁 브리핑이 오고, 홈에서 실시간 시세와 손익을 볼 수 있습니다.</Muted>
-              <View style={{ gap: space.sm, marginTop: space.xs }}>
-                <Step n={1} text="종목 등록 — 한글 이름이나 티커로 검색 (삼성전자, 테슬라, AAPL)" />
-                <Step n={2} text="수량·평단을 넣으면 평가손익이 계산됩니다 (비우면 관심 종목)" />
-                <Step n={3} text="설정에서 알림 시간을 정하면 그 시간에 브리핑 알림이 옵니다" />
-              </View>
-              <Button title="종목 등록" icon="add" onPress={() => router.push("/stocks/add")} />
-              {health.data?.tossOpenApi?.configured ? <Button title="토스증권 보유 종목 가져오기" variant="secondary" icon="download-outline" onPress={() => router.push("/settings")} /> : null}
-            </Card>
+          <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
+            <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>등록된 종목이 없습니다</Text>
+            <Text style={{ color: t.muted, fontSize: font.small }}>종목명·티커로 검색해 추가하거나 토스증권 계좌에서 불러옵니다.</Text>
+            <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
+              <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />
+              {health.data?.tossOpenApi?.configured ? <Button title="계좌 불러오기" variant="secondary" onPress={() => router.push("/settings")} style={{ flex: 1 }} /> : null}
+            </View>
           </View>
         }
-        ListFooterComponent={(data?.length ?? 0) > 0 ? <Muted style={{ textAlign: "center", marginTop: space.md }}>종목을 길게 누르면 수정·삭제할 수 있습니다 · 오른쪽 위 + 로 등록</Muted> : null}
+        contentContainerStyle={{ paddingBottom: space.xl }}
       />
+      <SortSheet visible={sortOpen} value={sort} onClose={() => setSortOpen(false)} onPick={(k) => void setSort(k)} />
     </Screen>
   );
 }
 
-function HeroTotals({ value, cost, day, currency, label }: { value: number; cost: number; day: number; currency: Currency; label?: string }) {
+function HeadCell({ label, active, onPress, width, flex }: { label: string; active?: boolean; onPress?: () => void; width?: number; flex?: boolean }) {
   const t = useTheme();
-  const profit = value - cost;
-  const rate = cost > 0 ? (profit / cost) * 100 : 0;
+  const body = (
+    <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right" }} numberOfLines={1}>
+      {label}
+      {active ? " ▼" : ""}
+    </Text>
+  );
+  const style = flex ? { flex: 1 } : { width };
+  return onPress ? (
+    <Pressable onPress={onPress} hitSlop={6} style={style}>
+      {body}
+    </Pressable>
+  ) : (
+    <View style={style}>{body}</View>
+  );
+}
+
+/** 계좌 평가 패널: 총 평가금액(원화 환산) + 평가손익·수익률·매입·당일 + 국내/해외 구분 */
+function AccountPanel({
+  total,
+  byCur,
+  showKrw,
+  fx,
+  status,
+  live,
+  counts,
+}: {
+  total: Totals | null;
+  byCur: Record<Currency, Totals>;
+  showKrw: boolean;
+  fx: number | null;
+  status: string;
+  live: boolean;
+  counts: string;
+}) {
+  const t = useTheme();
+  // 합계는 원화로(환율을 모르면 원화 종목만). 해외 행은 설정에 따라 달러 또는 원화
+  const main = total ?? byCur.KRW;
+  const profit = main.value - main.cost;
+  const rate = main.cost > 0 ? (profit / main.cost) * 100 : 0;
+  const pc = changeColor(t, profit);
+  const dc = changeColor(t, main.day);
+  const lines: { label: string; tot: Totals; cur: Currency }[] = [];
+  if (byCur.KRW.count) lines.push({ label: "국내", tot: byCur.KRW, cur: "KRW" });
+  if (byCur.USD.count) {
+    const k = showKrw && fx ? fx : 1;
+    lines.push({ label: "해외", tot: { value: byCur.USD.value * k, cost: byCur.USD.cost * k, day: byCur.USD.day * k, count: byCur.USD.count }, cur: showKrw && fx ? "KRW" : "USD" });
+  }
   return (
-    <View style={{ gap: 4 }}>
-      {label ? <Text style={{ color: t.heroMuted, fontSize: font.tiny, fontWeight: "600" }}>{label}</Text> : null}
-      <Text style={{ color: t.heroInk, fontSize: font.hero, fontWeight: "800", letterSpacing: -0.5, fontVariant: ["tabular-nums"] }}>{formatPrice(value, currency)}</Text>
-      <View style={{ flexDirection: "row", gap: space.lg, flexWrap: "wrap" }}>
-        <View>
-          <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>오늘</Text>
-          <ChangeText value={day} text={`${formatPrice(day, currency, { sign: true })}`} style={{ fontSize: font.small, fontWeight: "700", color: day > 0 ? "#FF8A80" : day < 0 ? "#8EC5FF" : t.heroMuted }} />
-        </View>
-        <View>
-          <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>총 손익</Text>
-          <Text style={{ color: profit > 0 ? "#FF8A80" : profit < 0 ? "#8EC5FF" : t.heroMuted, fontSize: font.small, fontWeight: "700", fontVariant: ["tabular-nums"] }}>
-            {formatPrice(profit, currency, { sign: true })} ({formatPct(rate)})
+    <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
+      <View style={styles.panelTop}>
+        <Text style={{ color: t.muted, fontSize: font.small }}>총 평가금액{total ? "" : " (원화 종목)"}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+          <View style={[styles.dot, { backgroundColor: live ? t.up : t.muted }]} />
+          <Text style={{ color: t.muted, fontSize: font.tiny }}>
+            {status} · {counts}
           </Text>
         </View>
-        <View>
-          <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>매입</Text>
-          <Text style={{ color: t.heroInk, fontSize: font.small, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{formatPrice(cost, currency)}</Text>
-        </View>
       </View>
+      <Text style={[styles.total, { color: t.ink }]}>
+        {formatQuote(main.value, "KRW")}
+        <Text style={{ fontSize: font.body, color: t.muted, fontWeight: "500" }}> 원</Text>
+      </Text>
+      <View style={styles.kpis}>
+        <Kpi label="평가손익" value={formatPrice(profit, "KRW", { sign: true })} color={pc} />
+        <Kpi label="수익률" value={formatPct(rate)} color={pc} />
+        <Kpi label="매입금액" value={formatPrice(main.cost, "KRW")} />
+        <Kpi label="당일손익" value={formatPrice(main.day, "KRW", { sign: true })} color={dc} />
+      </View>
+      {lines.length > 1 || (lines[0]?.cur === "USD") ? (
+        <View style={[styles.split, { borderTopColor: t.line }]}>
+          {lines.map((l) => {
+            const p = l.tot.value - l.tot.cost;
+            const r = l.tot.cost > 0 ? (p / l.tot.cost) * 100 : 0;
+            return (
+              <View key={l.label} style={styles.splitRow}>
+                <Text style={{ color: t.muted, fontSize: font.small, width: 34 }}>{l.label}</Text>
+                <Text style={[styles.splitNum, { color: t.ink, flex: 1 }]}>{formatPrice(l.tot.value, l.cur)}</Text>
+                <Text style={[styles.splitNum, { color: changeColor(t, p), width: 118 }]} numberOfLines={1} adjustsFontSizeToFit>
+                  {formatPrice(p, l.cur, { sign: true })}
+                </Text>
+                <Text style={[styles.splitNum, { color: changeColor(t, p), width: 62 }]}>{formatPct(r)}</Text>
+              </View>
+            );
+          })}
+          {fx ? <Text style={{ color: t.muted, fontSize: font.tiny, textAlign: "right" }}>적용 환율 {fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원</Text> : null}
+        </View>
+      ) : null}
     </View>
   );
 }
 
-function Step({ n, text }: { n: number; text: string }) {
+function Kpi({ label, value, color }: { label: string; value: string; color?: string }) {
   const t = useTheme();
   return (
-    <View style={{ flexDirection: "row", gap: space.sm, alignItems: "flex-start" }}>
-      <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: t.accent, alignItems: "center", justifyContent: "center" }}>
-        <Text style={{ color: t.accentInk, fontSize: font.tiny, fontWeight: "800" }}>{n}</Text>
-      </View>
-      <Text style={{ color: t.ink, fontSize: font.small, flex: 1, lineHeight: 20 }}>{text}</Text>
+    <View style={styles.kpi}>
+      <Text style={{ color: t.muted, fontSize: font.tiny }}>{label}</Text>
+      <Text style={{ color: color ?? t.ink, fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] }} numberOfLines={1} adjustsFontSizeToFit>
+        {value}
+      </Text>
     </View>
+  );
+}
+
+function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; value: SortKey; onClose: () => void; onPick: (k: SortKey) => void }) {
+  const t = useTheme();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <View style={[styles.sheet, { backgroundColor: t.surface, borderColor: t.lineStrong }]}>
+          <Text style={{ color: t.muted, fontSize: font.small, paddingHorizontal: space.lg, paddingVertical: space.sm }}>정렬</Text>
+          {SORT_OPTIONS.map((o) => (
+            <Pressable
+              key={o.value}
+              onPress={() => {
+                onPick(o.value);
+                onClose();
+              }}
+              style={({ pressed }) => [styles.sheetItem, { borderTopColor: t.line, backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}
+            >
+              <Text style={{ color: o.value === value ? t.accent : t.ink, fontSize: font.body, fontWeight: o.value === value ? "700" : "400" }}>{o.label}</Text>
+              {o.value === value ? <Text style={{ color: t.accent }}>✓</Text> : null}
+            </Pressable>
+          ))}
+        </View>
+      </Pressable>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  list: { padding: space.lg, paddingBottom: space.xl },
-  hero: { borderRadius: radius.lg, padding: space.xl, gap: space.md, shadowOpacity: 0.25, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 6 },
+  panel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, gap: 4 },
+  panelTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  total: { fontSize: 26, fontWeight: "800", letterSpacing: -0.5, fontVariant: ["tabular-nums"] },
+  kpis: { flexDirection: "row", flexWrap: "wrap", marginTop: 4 },
+  kpi: { width: "50%", paddingVertical: 4, paddingRight: space.sm, gap: 1 },
+  split: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 6, paddingTop: 6, gap: 3 },
+  splitRow: { flexDirection: "row", alignItems: "center" },
+  splitNum: { fontSize: font.small, fontVariant: ["tabular-nums"], textAlign: "right" },
+  dot: { width: 5, height: 5, borderRadius: 3 },
+  sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: 6 },
+  empty: { margin: space.lg, padding: space.lg, gap: 4, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
+  sheet: { borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: space.xl },
+  sheetItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: 14, borderTopWidth: StyleSheet.hairlineWidth },
 });

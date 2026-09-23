@@ -12,7 +12,7 @@ import type {
   SendSummary,
   LatestBriefing,
   ListedStock,
-  MarketStatus,
+  MarketIndex, MarketStatus,
   Quote,
   RegisteredStock,
   RegisteredWithQuote,
@@ -121,6 +121,7 @@ export function createApi(baseUrl: string, token = "") {
     tossStatus: () => get<TossOpenApiStatus>("/api/admin/toss/status", 15_000),
     importTossHoldings: () => send<TossImportResult>("POST", "/api/admin/toss/import-holdings", undefined, 60_000),
     marketStatus: () => get<MarketStatus>("/api/market/status", 10_000),
+    marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices", 10_000),
   };
 }
 

@@ -430,8 +430,10 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     if (price === null) throw new ProviderError(this.name, `${code} 현재가 없음`);
     const ts = typeof p["timestamp"] === "string" ? p["timestamp"] : null;
     const priceDate = ts ? localDate(ts, kr) : latest?.date ?? "";
-    // 오늘 봉이 있으면 전일은 그 앞 봉, 없으면(장 시작 전 등) 마지막 봉이 전일
-    const today = latest && latest.date === priceDate ? latest : null;
+    // 오늘 봉이 있으면 전일은 그 앞 봉, 없으면(장 시작 전 등) 마지막 봉이 전일.
+    // 미국 데이마켓(한국 낮 시간)에는 토스가 다음 거래일 봉을 먼저 열어 두므로, 체결 날짜(뉴욕 기준 전날 밤)보다
+    // 마지막 봉 날짜가 뒤일 수 있다 → 그 봉을 오늘 봉으로 보고 직전 정규장 종가와 비교한다.
+    const today = latest && latest.date >= priceDate ? latest : null;
     const prev = today ? daily.at(-2) ?? null : latest;
     const prevClose = prev?.close ?? null;
     const change = prevClose !== null ? round2(price - prevClose) : 0;

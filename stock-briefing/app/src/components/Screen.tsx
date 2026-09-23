@@ -22,8 +22,9 @@ export function Disclaimer({ inTabs = false }: { inTabs?: boolean }) {
 }
 
 /**
- * 화면 래퍼: 배경색 + 스크롤 + 고지 footer.
- * scroll=false 면 자식이 직접 FlatList 등을 그린다 (footer 는 그대로).
+ * 화면 래퍼: 배경색 + 스크롤. 패널(Card)은 화면 폭을 꽉 채워 위아래로 쌓인다(증권사 앱 방식).
+ * disclaimer 면 투자 고지 한 줄을 아래에 붙인다(분석·브리핑 화면만).
+ * scroll=false 면 자식이 직접 FlatList 등을 그린다.
  */
 export function Screen({
   children,
@@ -31,12 +32,14 @@ export function Screen({
   refreshing,
   onRefresh,
   contentStyle,
+  disclaimer = false,
 }: {
   children: React.ReactNode;
   scroll?: boolean;
   refreshing?: boolean;
   onRefresh?: () => void;
   contentStyle?: StyleProp<ViewStyle>;
+  disclaimer?: boolean;
 }) {
   const t = useTheme();
   const inTabs = /^\/(\(tabs\))?\/?(briefings|settings)?$/.test(usePathname());
@@ -47,20 +50,20 @@ export function Screen({
           style={styles.root}
           contentContainerStyle={[styles.content, contentStyle]}
           keyboardShouldPersistTaps="handled"
-          refreshControl={onRefresh ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={t.accent} /> : undefined}
+          refreshControl={onRefresh ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} /> : undefined}
         >
           {children}
         </ScrollView>
       ) : (
         <View style={[styles.root, contentStyle]}>{children}</View>
       )}
-      <Disclaimer inTabs={inTabs} />
+      {disclaimer ? <Disclaimer inTabs={inTabs} /> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  content: { padding: space.lg, gap: space.lg },
+  content: { paddingBottom: space.xl, gap: space.sm },
   disclaimer: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.sm, paddingHorizontal: space.lg },
 });

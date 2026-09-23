@@ -180,6 +180,17 @@ export interface MarketState {
   source: "toss" | "fallback";
 }
 
+/** 홈 상단 지수 띠 (코스피·코스닥·나스닥·S&P500·다우·필라반도체·원/달러) */
+export interface MarketIndex {
+  code: string;
+  name: string;
+  value: number;
+  change: number;
+  changeRate: number;
+  open: boolean;
+  asOf: string | null;
+}
+
 export interface MarketStatus {
   now: string;
   KR: MarketState;

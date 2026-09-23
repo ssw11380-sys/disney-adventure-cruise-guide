@@ -115,8 +115,8 @@ export function NotificationSettingsCard() {
               : token
                 ? "즉시 푸시 (Firebase 연결됨)"
                 : localMode
-                  ? "백그라운드 확인 방식 · 브리핑 생성 후 15~30분 안에 알림"
-                  : "브리핑이 생성되면 요약 3줄이 알림으로 옵니다"}
+                  ? "백그라운드 확인 (15~30분 지연)"
+                  : "브리핑 생성 시 요약 알림"}
           </Muted>
         </View>
         <Switch value={enabled} onValueChange={(v) => void toggleDevice(v)} disabled={busy || !tokenLoaded} trackColor={{ true: t.accent }} />
@@ -124,9 +124,8 @@ export function NotificationSettingsCard() {
       {setupError ? <Text style={{ color: t.danger, fontSize: font.small }}>{setupError}</Text> : null}
       {localMode ? (
         <View style={{ gap: space.xs }}>
-          <Muted>지금은 앱이 주기적으로 서버를 확인해 알리는 방식입니다. 배터리 절약 모드에서는 더 늦어질 수 있습니다. 정각에 바로 받으려면 Firebase 를 한 번 연결해야 합니다.</Muted>
           <Pressable onPress={() => setShowGuide((v) => !v)} accessibilityRole="button">
-            <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showGuide ? "연결 방법 접기" : "즉시 푸시(Firebase) 연결 방법 보기"}</Text>
+            <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showGuide ? "접기" : "즉시 푸시 설정 방법"}</Text>
           </Pressable>
           {showGuide ? (
             <View style={{ gap: 4 }}>
@@ -152,13 +151,12 @@ export function NotificationSettingsCard() {
           <TimeRow label="오전 브리핑" time={s.morningTime} enabled={s.morningEnabled} onToggle={(v) => patch({ morningEnabled: v })} onPick={() => pickTime("morningTime")} />
           <TimeRow label="오후 브리핑" time={s.afternoonTime} enabled={s.afternoonEnabled} onToggle={(v) => patch({ afternoonEnabled: v })} onPick={() => pickTime("afternoonTime")} />
           <View style={styles.switchRow}>
-            <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>평일만 (월~금)</Text>
+            <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>평일만</Text>
             <Switch value={s.weekdaysOnly} onValueChange={(v) => patch({ weekdaysOnly: v })} trackColor={{ true: t.accent }} />
           </View>
           {s.schedule?.jobs.map((j) => (
             <Row key={j.session} label={`다음 ${j.session === "morning" ? "오전" : "오후"} 실행`} value={j.nextRun ? new Date(j.nextRun).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "short", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" }) : "-"} />
           ))}
-          <Muted>시간은 한국 시간 기준이며 브리핑 생성 시각이자 알림 시각입니다. 변경 즉시 서버 스케줄에 반영됩니다.</Muted>
         </View>
       ) : null}
 

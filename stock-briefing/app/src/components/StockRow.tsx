@@ -1,80 +1,105 @@
-import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { RegisteredWithQuote } from "@/api/types";
-import { afterMarketLabel, formatMoney, formatPct, isUsMarket } from "@/lib/format";
-import { font, radius, space, useTheme } from "@/theme";
+import { formatArrowDisplay, formatMoney, formatPct, formatQuoteDisplay, isUsMarket } from "@/lib/format";
+import { changeColor, font, space, useTheme } from "@/theme";
 import { FlashPrice } from "./FlashPrice";
-import { ChangeText, Muted } from "./ui";
 
 /**
- * 종목 목록 한 줄.
- *  왼쪽: 시장 배지 + 이름, 코드·수량   오른쪽: 현재가(실시간 깜빡임), 등락, 평가손익
- *  showKrw 면 미국 종목을 원화로 환산해 보여준다. 길게 누르면 삭제 등 메뉴.
+ * 잔고·관심 표의 한 줄 (증권사 잔고 화면처럼 3열).
+ *  보유:  종목명 / 수량·평단  |  현재가 / 등락률  |  평가손익 / 수익률
+ *  관심:  종목명 / 코드       |  현재가 / 등락률  |  전일대비 / 거래량
+ * showKrw 면 미국 종목 금액을 원화로 환산한다. 길게 누르면 수정·삭제.
  */
+export const COL = { price: 96, right: 108 } as const;
+
 export function StockRow({ stock, onPress, onLongPress, showKrw }: { stock: RegisteredWithQuote; onPress: () => void; onLongPress?: () => void; showKrw: boolean }) {
   const t = useTheme();
   const q = stock.quote;
   const ev = stock.evaluation;
   const cur = q?.currency;
   const fx = q?.fxRate ?? (q?.priceKrw && q.price ? q.priceKrw / q.price : null);
-  const nxt = q?.afterMarket ?? null;
   const us = isUsMarket(stock.market);
-  const money = (n: number | null | undefined, opts?: { sign?: boolean }) => formatMoney(n, cur, fx, showKrw, opts);
+  const held = !!ev;
+  const c = changeColor(t, q?.change);
+  const pc = changeColor(t, ev?.profit);
   return (
     <Pressable
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={350}
       accessibilityRole="button"
-      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.line, shadowColor: t.shadow }]}
+      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
     >
-      <View style={[styles.marketMark, { backgroundColor: us ? `${t.accent}18` : `${t.gold}22` }]}>
-        <Text style={{ color: us ? t.accent : t.gold, fontSize: font.tiny, fontWeight: "800" }}>{us ? "US" : "KR"}</Text>
-      </View>
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} numberOfLines={1}>
-          {stock.name}
+      <View style={styles.name}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+          <Text style={[styles.mkt, { color: us ? t.accent : t.gold, borderColor: us ? t.accent : t.gold }]}>{us ? "US" : "KR"}</Text>
+          <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", flexShrink: 1 }} numberOfLines={1}>
+            {stock.name}
+          </Text>
+        </View>
+        <Text style={styles.subText(t.muted)} numberOfLines={1}>
+          {held ? `${formatQty(stock.quantity)}주 · ${formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw)}` : stock.code}
         </Text>
-        <Muted style={{ fontSize: font.tiny }}>
-          {stock.code} · {stock.market}
-          {stock.quantity ? ` · ${stock.quantity}주` : " · 관심"}
-        </Muted>
       </View>
-      <View style={{ alignItems: "flex-end", gap: 1 }}>
-        {q ? (
-          <>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-              {q.live ? <View style={[styles.liveDot, { backgroundColor: t.accent }]} accessibilityLabel="실시간" /> : null}
-              <FlashPrice value={q.price} text={money(q.price)} style={{ color: t.ink, fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] }} />
+
+      {q ? (
+        <>
+          <View style={[styles.num, { width: COL.price }]}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              {q.live ? <View style={[styles.live, { backgroundColor: c === t.ink ? t.muted : c }]} /> : null}
+              <FlashPrice value={q.price} text={formatQuoteDisplay(q.price, cur, fx, showKrw)} style={[styles.main, { color: c }]} />
             </View>
-            <ChangeText value={q.change} text={`${money(q.change, { sign: true })} (${formatPct(q.changeRate)})`} style={{ fontSize: font.small }} />
-            {nxt && nxt.price !== q.price ? <ChangeText value={nxt.change} text={`${afterMarketLabel(nxt)} ${money(nxt.price)} (${formatPct(nxt.changeRate)})`} style={{ fontSize: font.tiny }} /> : null}
-            {ev ? <ChangeText value={ev.profit} text={`평가 ${money(ev.profit, { sign: true })} (${formatPct(ev.profitRate)})`} style={{ fontSize: font.tiny }} /> : null}
-          </>
-        ) : (
-          <Muted>{stock.quoteError ? "시세 미확인" : "-"}</Muted>
-        )}
-      </View>
-      <Ionicons name="chevron-forward" size={16} color={t.muted} />
+            <Text style={[styles.sub, { color: c }]}>{formatPct(q.changeRate)}</Text>
+          </View>
+          <View style={[styles.num, { width: COL.right }]}>
+            {held ? (
+              <>
+                <Text style={[styles.main, { color: pc }]} numberOfLines={1} adjustsFontSizeToFit>
+                  {formatMoney(ev!.profit, cur, fx, showKrw, { sign: true }).replace("원", "")}
+                </Text>
+                <Text style={[styles.sub, { color: pc }]}>{formatPct(ev!.profitRate)}</Text>
+              </>
+            ) : (
+              <>
+                <Text style={[styles.main, { color: c }]} numberOfLines={1}>
+                  {formatArrowDisplay(q.change, cur, fx, showKrw)}
+                </Text>
+                <Text style={[styles.sub, { color: t.muted }]}>{formatVol(q.volume)}</Text>
+              </>
+            )}
+          </View>
+        </>
+      ) : (
+        <View style={[styles.num, { width: COL.price + COL.right }]}>
+          <Text style={{ color: t.muted, fontSize: font.small }}>{stock.quoteError ? "시세 없음" : "-"}</Text>
+        </View>
+      )}
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.md,
-    paddingVertical: 14,
-    paddingHorizontal: space.lg,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 1,
-  },
-  marketMark: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  liveDot: { width: 6, height: 6, borderRadius: 3 },
-});
+function formatQty(n: number | null): string {
+  if (n === null) return "-";
+  return Number.isInteger(n) ? n.toLocaleString("ko-KR") : n.toLocaleString("ko-KR", { maximumFractionDigits: 4 });
+}
+
+function formatVol(n: number | null | undefined): string {
+  if (!n) return "";
+  if (n >= 1e8) return `${(n / 1e8).toFixed(1)}억주`;
+  if (n >= 1e4) return `${Math.round(n / 1e4).toLocaleString("ko-KR")}만주`;
+  return `${n.toLocaleString("ko-KR")}주`;
+}
+
+const styles = {
+  ...StyleSheet.create({
+    row: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 52 },
+    name: { flex: 1, gap: 2, paddingRight: space.sm },
+    mkt: { fontSize: 9, fontWeight: "800", borderWidth: 1, borderRadius: 2, paddingHorizontal: 3, lineHeight: 12, overflow: "hidden" },
+    num: { alignItems: "flex-end", gap: 2 },
+    main: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
+    sub: { fontSize: font.small, fontVariant: ["tabular-nums"] },
+    live: { width: 4, height: 4, borderRadius: 2 },
+  }),
+  subText: (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] }),
+};

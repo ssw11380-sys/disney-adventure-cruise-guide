@@ -125,3 +125,28 @@ export function isTradingHoursKst(d = new Date()): boolean {
   if (day === 1) return h >= 8; // 월요일 08시부터
   return h >= 8 || h < 7;
 }
+
+/** 호가 표기 (단위 없이): KRW "196,000", USD "44.52". 목록·시세표용 */
+export function formatQuote(n: number | null | undefined, currency: Currency | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "-";
+  if (currency === "USD") return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Math.round(n).toLocaleString("ko-KR");
+}
+
+/** 전일 대비 화살표 표기: "▲2,500" / "▼0.30" / "0" */
+export function formatArrow(n: number | null | undefined, currency: Currency | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "-";
+  if (n === 0) return "0";
+  return `${n > 0 ? "▲" : "▼"}${formatQuote(Math.abs(n), currency)}`;
+}
+
+/** showKrw 를 반영한 호가 표기 */
+export function formatQuoteDisplay(n: number | null | undefined, currency: Currency | undefined, fxRate: number | null | undefined, showKrw: boolean): string {
+  const d = toDisplay(n, currency, fxRate, showKrw);
+  return formatQuote(d.value, d.currency);
+}
+
+export function formatArrowDisplay(n: number | null | undefined, currency: Currency | undefined, fxRate: number | null | undefined, showKrw: boolean): string {
+  const d = toDisplay(n, currency, fxRate, showKrw);
+  return formatArrow(d.value, d.currency);
+}

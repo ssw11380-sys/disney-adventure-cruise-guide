@@ -92,22 +92,17 @@ export function TossOpenApiCard() {
           {s.sync?.lastError ? <Text style={{ color: t.danger, fontSize: font.small }}>자동 동기화 실패: {s.sync.lastError}</Text> : null}
           {s.client?.ipBlocked ? (
             <View style={{ gap: space.xs }}>
-              <Text style={{ color: t.danger, fontSize: font.small }}>토스증권이 이 서버의 요청을 차단했습니다(403). 허용 IP 목록에 {ip ?? "서버 IP"} 를 등록하세요. Railway 무료 플랜은 서버 IP 가 재배포 때 바뀔 수 있어 그때마다 다시 등록해야 합니다.</Text>
+              <Text style={{ color: t.danger, fontSize: font.small }}>허용 IP 차단(403). 토스증권 허용 IP에 {ip ?? "서버 IP"} 등록 필요</Text>
               {ip ? <Button title="IP 보내기/복사" variant="secondary" icon="share-outline" onPress={() => void copyIp()} /> : null}
             </View>
           ) : null}
           {s.client?.lastError && !s.client.ipBlocked ? <Text style={{ color: t.danger, fontSize: font.small }}>{s.client.lastError}</Text> : null}
           {s.realtime?.lastError ? <Muted>실시간: {s.realtime.lastError}</Muted> : null}
-          <Button title="토스증권 보유 종목 가져오기" icon="download-outline" onPress={() => importHoldings.mutate()} loading={importHoldings.isPending} />
+          <Button title="지금 계좌 동기화" icon="sync" onPress={() => importHoldings.mutate()} loading={importHoldings.isPending} />
           {lastImport ? <Muted>{lastImport}</Muted> : null}
-          <Muted>
-            {s.sync?.enabled
-              ? `토스 앱에서 사고팔면 장중 ${s.sync.intervalMin}분마다, 장 밖 ${s.sync.idleIntervalMin}분마다, 브리핑 직전에 자동으로 맞춰집니다. 전량 매도한 종목은 지우지 않고 관심 종목으로 남깁니다. 지금 바로 맞추려면 위 버튼을 누르세요.`
-              : "보유 중인 종목이 수량·평단과 함께 등록됩니다. 토스에 없는 관심 종목은 그대로 둡니다."}
-          </Muted>
         </View>
       )}
-      <Button title="상태 다시 확인" variant="secondary" icon="refresh" onPress={() => void status.refetch()} loading={status.isFetching} />
+      <Button title="상태 새로고침" variant="secondary" compact icon="refresh" onPress={() => void status.refetch()} loading={status.isFetching} />
     </Card>
   );
 }

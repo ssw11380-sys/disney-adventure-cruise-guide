@@ -10,7 +10,7 @@ import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, SectionTitle } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
-import { SORT_OPTIONS, useSettings } from "@/lib/settings";
+import { SORT_OPTIONS, THEME_OPTIONS, useSettings } from "@/lib/settings";
 import { font, radius, space, useTheme } from "@/theme";
 
 /**
@@ -19,7 +19,7 @@ import { font, radius, space, useTheme } from "@/theme";
  */
 export default function SettingsScreen() {
   const t = useTheme();
-  const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort } = useSettings();
+  const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode } = useSettings();
   const health = useHealth();
   const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
@@ -28,16 +28,24 @@ export default function SettingsScreen() {
     <Screen refreshing={health.isRefetching} onRefresh={() => void health.refetch()}>
       <Card>
         <SectionTitle>표시</SectionTitle>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-          <View style={{ flex: 1, paddingRight: space.md }}>
-            <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }}>미국 주식 원화로 보기</Text>
-            <Muted>현재 환율(하나은행 고시, 1분 갱신)로 환산해 가격·손익·합계를 원화로 표시합니다.</Muted>
+        <View style={styles.line}>
+          <Text style={styles.label(t.ink)}>화면</Text>
+          <View style={{ flexDirection: "row", gap: 6 }}>
+            {THEME_OPTIONS.map((o) => (
+              <Chip key={o.value} label={o.label} active={themeMode === o.value} onPress={() => void setThemeMode(o.value)} />
+            ))}
           </View>
-          <Switch value={showKrw} onValueChange={(v) => void setShowKrw(v)} trackColor={{ true: t.accent }} />
         </View>
-        <View style={{ gap: space.xs, marginTop: space.xs }}>
-          <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }}>내 종목 기본 정렬</Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+        <View style={styles.line}>
+          <View style={{ flex: 1, paddingRight: space.md }}>
+            <Text style={styles.label(t.ink)}>해외주식 원화 표시</Text>
+            <Muted style={{ fontSize: font.tiny }}>토스증권 적용 환율 기준</Muted>
+          </View>
+          <Switch value={showKrw} onValueChange={(v) => void setShowKrw(v)} trackColor={{ true: t.accent, false: t.lineStrong }} thumbColor="#FFFFFF" />
+        </View>
+        <View style={{ gap: 6, paddingTop: 6 }}>
+          <Text style={styles.label(t.ink)}>잔고 정렬</Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {SORT_OPTIONS.map((o) => (
               <Chip key={o.value} label={o.label} active={sort === o.value} onPress={() => void setSort(o.value)} />
             ))}
@@ -50,7 +58,7 @@ export default function SettingsScreen() {
       <AppUpdateCard />
 
       <Card>
-        <SectionTitle right={health.data ? <Badge tone="good">연결됨</Badge> : health.isError ? <Badge tone="bad">연결 안 됨</Badge> : null}>서버 상태</SectionTitle>
+        <SectionTitle right={health.data ? <Badge tone="good">정상</Badge> : health.isError ? <Badge tone="bad">연결 끊김</Badge> : null}>서버</SectionTitle>
         {health.isError ? (
           <Text style={{ color: t.danger, fontSize: font.small }}>{health.error instanceof Error ? health.error.message : String(health.error)}</Text>
         ) : health.data ? (
@@ -58,7 +66,7 @@ export default function SettingsScreen() {
             <Row label="서버 시각" value={formatDateKo(health.data.time, true)} />
             <Row label="시세" value={health.data.sources.quotes ?? "-"} />
             <Row label="실시간" value={health.data.sources.realtime ?? "-"} />
-            <Row label="앱 스트리밍" value={stream.connected ? `연결됨 · 체결 ${stream.ticks}건 반영` : "연결 안 됨 (3초 폴링으로 동작)"} />
+            <Row label="앱 스트리밍" value={stream.connected ? `연결 · ${stream.ticks}건` : "폴링 3초"} />
             <Row label="뉴스" value={health.data.sources.news ?? "-"} />
             <Row label="재무/공시" value={health.data.sources.financials ?? "-"} />
             <Row label="수급" value={health.data.sources.investorFlow ?? "-"} />
@@ -71,7 +79,7 @@ export default function SettingsScreen() {
 
       <Card>
         <Pressable onPress={() => setAdvanced((v) => !v)} accessibilityRole="button" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-          <SectionTitle style={{ marginBottom: 0 }}>고급</SectionTitle>
+          <SectionTitle style={{ marginBottom: 0 }}>서버 연결</SectionTitle>
           <Ionicons name={advanced ? "chevron-up" : "chevron-down"} size={18} color={t.muted} />
         </Pressable>
         {advanced ? (
@@ -88,15 +96,15 @@ export default function SettingsScreen() {
             onCheck={() => void health.refetch()}
             checking={health.isFetching}
           />
-        ) : (
-          <Muted>서버 주소와 접속 토큰. 앱 설치 때 이미 설정되어 있어 보통은 바꿀 필요가 없습니다.</Muted>
-        )}
+        ) : null}
       </Card>
 
       <Card>
         <SectionTitle>정보</SectionTitle>
         <Row label="앱 버전" value={Constants.expoConfig?.version ?? "-"} />
-        <Muted>시세는 토스증권·네이버 증권·Yahoo Finance, 공시는 DART, 브리핑은 Claude 가 작성합니다. 투자 판단의 책임은 본인에게 있으며 투자 권유가 아닙니다.</Muted>
+        <Row label="시세" value="토스증권 · 네이버 증권" />
+        <Row label="공시" value="DART · SEC EDGAR" />
+        <Muted style={{ fontSize: font.tiny, marginTop: 4 }}>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</Muted>
       </Card>
     </Screen>
   );
@@ -150,6 +158,10 @@ function ApiUrlForm({
   );
 }
 
-const styles = StyleSheet.create({
-  input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
-});
+const styles = {
+  ...StyleSheet.create({
+    input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
+    line: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6 },
+  }),
+  label: (color: string) => ({ color, fontSize: font.body, fontWeight: "600" as const }),
+};
