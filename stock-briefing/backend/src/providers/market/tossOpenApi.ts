@@ -400,7 +400,9 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
   async getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
     code = normalizeCode(code);
     if (isIntraday(period)) {
-      const step = period === "1m" ? 1 : period === "5m" ? 5 : 30;
+      // 30분봉은 1분봉 9,000개(45페이지)가 필요해 여기서는 만들지 않는다 → 체인이 토스 웹(min:30, 요청 1개)으로 넘어간다
+      if (period === "30m") throw new ProviderError(this.name, "30분봉은 1분봉 집계 비용이 커서 웹 차트 소스로 넘깁니다");
+      const step = period === "1m" ? 1 : 5;
       const minutes = await this.minuteCandles(code, Math.min(count * step, 2000));
       if (minutes.length === 0) throw new ProviderError(this.name, `${code} 분봉 데이터 없음`);
       return { code, period, candles: aggregateIntraday(minutes, step).slice(-count), source: this.name };
