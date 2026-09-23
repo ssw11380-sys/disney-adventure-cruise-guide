@@ -187,9 +187,9 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
       { code: "IONQ", name: "한글 IONQ", changeRate: null },
       { code: "RGTI", name: "한글 RGTI", changeRate: null },
     ]);
-    expect(week.note).toContain("상승·하락 종목 수 없음");
-    expect(week.note).toContain("토스 현재가라"); // 정규장 중 스냅숏이 없으면 그렇다고 밝힌다
-    expect(week.note).toContain("1주는 테마 등락률만");
+    expect(week.note).toContain("상승·하락 종목 수 없이");
+    expect(week.note).toContain("주간·프리·애프터 가격이 섞일 수 있음"); // 정규장 중 스냅숏이 없으면 그렇다고 밝힌다
+    expect(week.note).toContain("1주는 상승·하락");
     expect(week.live).toBe(true);
     expect(w.calls.some((c) => c.includes("/simple"))).toBe(false); // 순위에 있으면 하나씩 묻지 않는다
     // 1개월 순위에 없으면 테마마다 미국 종목 기준(nation=US)으로 묻는다
@@ -210,7 +210,7 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     const inSession = await mk().themes("US", "theme", "week");
     expect(inSession.marketOpen).toBe(true);
     expect(inSession.themes[0]!.changeRate).toBe(12.96);
-    expect(inSession.note).not.toContain("토스 현재가");
+    expect(inSession.note).not.toContain("주간·프리·애프터");
     expect(saved.get("discover:us-tics-period:week")).toContain("12.96");
     // 한국 낮(뉴욕 새벽): 토스가 주간거래 가격으로 바뀌었더라도 정규장 중 값을 쓴다
     now = new Date("2026-09-23T06:00:00Z");
@@ -239,7 +239,7 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     us = { isOpen: false, isTradingDay: true, lastClose: "2026-09-21T20:00:00.000Z" };
     const stale = await mk().themes("US", "theme", "week");
     expect(stale.live).toBe(true);
-    expect(stale.note).toContain("토스 현재가라");
+    expect(stale.note).toContain("주간·프리·애프터");
     // 주말(한국 토·일 낮)에는 금요일 값이 가장 최근 정규장 값 — 오늘이 아니면 날짜를 붙인다
     now = new Date("2026-09-19T06:00:00Z");
     us = { isOpen: false, isTradingDay: false, lastClose: "2026-09-18T20:00:00.000Z" };

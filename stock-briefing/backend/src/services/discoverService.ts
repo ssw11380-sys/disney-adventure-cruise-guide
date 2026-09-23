@@ -611,7 +611,8 @@ export class DiscoverService {
     }
     const snap = await this.usPeriodRates(ss, period);
     const word = period === "week" ? "1주" : "1개월";
-    const when = snap.inSession ? (open ? null : `직전 정규장 중 ${this.hm(snap.capturedAt)} 값`) : "토스 현재가라 주간·프리·애프터 가격이 섞일 수 있음";
+    // 지금 값이면 앱 상태 줄이 "장외 시간 · 현재가 기준"이라고 먼저 밝힌다
+    const when = snap.inSession ? (open ? null : `직전 정규장 중 ${this.hm(snap.capturedAt)} 값`) : "주간·프리·애프터 가격이 섞일 수 있음";
     return {
       market: "US",
       kind: "theme",
@@ -625,7 +626,7 @@ export class DiscoverService {
       basis: `토스증권 테마 ${word} 등락률 (미국 종목, 시가총액 가중)`,
       note: [
         when,
-        `${period === "week" ? "1주는" : "1개월은"} 테마 등락률만 제공 (상승·하락 종목 수 없음)`,
+        `${period === "week" ? "1주는" : "1개월은"} 상승·하락 종목 수 없이 등락률만`,
         snap.themes.length < snap.total ? `기간 등락률을 받은 테마만 (${snap.themes.length}/${snap.total}개)` : null,
       ]
         .filter(Boolean)
