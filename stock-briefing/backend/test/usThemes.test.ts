@@ -224,6 +224,33 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     expect(w.calls.filter((c) => c.includes("/tics/ranking")).length).toBe(before);
   });
 
+  it("개장 직후(오늘 거래대금이 거의 0)에도 직전 정규장 거래대금이 기준을 넘은 테마는 오늘·1주 목록에 남긴다", async () => {
+    const w = world();
+    const saved = new Map<string, string>();
+    const store = { get: async (k: string) => saved.get(k) ?? null, set: async (k: string, v: string) => void saved.set(k, v) };
+    let now = new Date("2026-09-22T21:00:00Z"); // 뉴욕 17:00 장 마감 뒤 (값 = 9/22 정규장)
+    let us = { isOpen: false, isTradingDay: true, lastClose: "2026-09-22T20:00:00Z" as string | null };
+    const calendar = { status: async () => ({ KR: { isOpen: false, isTradingDay: true }, US: us }) } as never;
+    const mk = () =>
+      new DiscoverService({ naver: new NaverDiscover(w.fetchFn), tics: new TossTics(w.fetchFn, 0), usThemes: new UsThemeBook({ tics: new TossTics(w.fetchFn, 0), naver: new NaverDiscover(w.fetchFn), now: () => now }), calendar, store, now: () => now });
+    const closed = await mk().themes("US", "theme", "day");
+    expect(closed.themes.map((t) => t.id)).toEqual(["956"]);
+    expect(saved.get("discover:us-theme-tv")).toContain("2026-09-22");
+    // 다음 날 뉴욕 09:30:03: 막 열려 모든 종목의 오늘 거래대금이 100 달러 남짓
+    now = new Date("2026-09-23T13:30:03Z");
+    us = { isOpen: true, isTradingDay: true, lastClose: "2026-09-22T20:00:00Z" };
+    for (const q of Object.values(w.quotes)) if (!q.localTradedAt.startsWith("2025")) Object.assign(q, { localTradedAt: "2026-09-23T09:30:02-04:00", accumulatedTradingValueRaw: "100" });
+    const svc = mk(); // 재시작해도 meta 표에서 직전 정규장 거래대금을 읽는다
+    const day = await svc.themes("US", "theme", "day");
+    expect(day.marketOpen).toBe(true);
+    expect(day.themes.map((t) => t.id)).toEqual(["956"]); // 동전주 테마 888 은 여전히 뺀다
+    const week = await svc.themes("US", "theme", "week");
+    expect(week.themes.map((t) => t.id)).toEqual(["956"]);
+    // 직전 정규장 기억이 없으면 오늘 값으로만 거른다 (예전 동작 — 개장 직후 테마가 사라지던 원인)
+    saved.clear();
+    expect((await mk().themes("US", "theme", "day")).themes).toEqual([]);
+  });
+
   it("며칠 지난 정규장 값은 '직전 정규장'으로 쓰지 않고 지금 값을 받아 밝힌다 · 뉴욕 15:50 에 미리 받아 둔다", async () => {
     const w = world();
     const saved = new Map<string, string>();

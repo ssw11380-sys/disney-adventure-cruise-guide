@@ -63,6 +63,10 @@ function fakeFetch(opts: { calls?: Call[]; tokenStatus?: number; priceStatus?: n
       const symbol = u.searchParams.get("symbol")!;
       const count = Number(u.searchParams.get("count") ?? 100);
       const before = u.searchParams.get("before");
+      if (symbol === "0010S0") {
+        // 상장 첫날: 오늘 봉 하나뿐
+        return ok({ result: { candles: [{ timestamp: "2026-09-22T00:00:00+09:00", openPrice: "30000", highPrice: "46000", lowPrice: "29000", closePrice: "45700", volume: "100", currency: "KRW" }], nextBefore: null } });
+      }
       if (symbol === "TSLA") {
         // 미국: 뉴욕 자정, 오늘(9/22 뉴욕) 봉은 아직 없고 9/21 이 마지막
         return ok({
@@ -205,6 +209,10 @@ describe("TossOpenApiProvider", () => {
     expect(q.open).toBeNull(); // 오늘 봉 없음
     expect(q.priceKrw).toBe(Math.round(377.5 * 1384.3));
     expect(q.priceBasis).toContain("시간외");
+  });
+
+  it("상장 첫날(전일 봉 없음)은 등락 0 으로 만들지 않고 실패해 다음 소스(기준가)로 넘긴다", async () => {
+    await expect(new TossOpenApiProvider(client(), { now: NOW }).getQuote("0010S0")).rejects.toThrow(/전일 종가 없음/);
   });
 
   it("일봉은 페이지를 이어 받고 주봉·월봉은 일봉을 묶어 만든다", async () => {

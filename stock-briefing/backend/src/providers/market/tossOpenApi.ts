@@ -436,7 +436,10 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const today = latest && latest.date >= priceDate ? latest : null;
     const prev = today ? daily.at(-2) ?? null : latest;
     const prevClose = prev?.close ?? null;
-    const change = prevClose !== null ? round2(price - prevClose) : 0;
+    // 전일 종가를 모르면(상장 첫날이라 일봉이 오늘 것뿐, 또는 일봉을 못 받음) 등락을 0 으로 만들지 않고
+    // 다음 소스(기준가를 주는 토스 웹)로 넘긴다 — 상장 첫날 +280% 종목이 "0 · 0.00%"로 보이지 않게
+    if (prevClose === null) throw new ProviderError(this.name, `${code} 전일 종가 없음 (상장 첫날이거나 일봉을 받지 못함)`);
+    const change = round2(price - prevClose);
     const changeRate = prevClose ? round2((change / prevClose) * 100) : 0;
     const currency = String(p["currency"] ?? (kr ? "KRW" : "USD")) === "USD" ? "USD" : "KRW";
     const info = infos.get(code);
