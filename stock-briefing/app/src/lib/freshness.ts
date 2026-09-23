@@ -18,8 +18,6 @@ export interface QueryLike {
   isError: boolean;
   /** 'paused' = 오프라인이라 요청을 미뤄 둔 상태(웹) */
   fetchStatus: "fetching" | "paused" | "idle";
-  /** 연속 실패 횟수. 성공하면 0 */
-  failureCount: number;
   dataUpdatedAt: number;
 }
 
@@ -35,7 +33,8 @@ export interface Connection {
 export function connection(q: QueryLike, now: number, maxAgeMs: number): Connection {
   const has = q.data !== undefined && q.dataUpdatedAt > 0;
   if (!has) return { offline: false, stale: false, asOf: null };
-  const offline = q.isError || q.fetchStatus === "paused" || q.failureCount > 0;
+  // 재시도까지 실패해 오류 상태가 됐거나(일시적 1회 실패로는 띠를 띄우지 않음), 오프라인이라 요청이 보류됐을 때
+  const offline = q.isError || q.fetchStatus === "paused";
   const stale = now - q.dataUpdatedAt > maxAgeMs;
   return { offline, stale, asOf: q.dataUpdatedAt };
 }
@@ -45,6 +44,14 @@ export const LIVE_TICK_MAX_AGE_MS = 30_000;
 
 /** 장중 시세가 이 시간보다 오래 안 바뀌면(3초 폴링 5번 이상 못 받음) 늦은 값으로 본다 */
 export const OPEN_MAX_AGE_MS = 15_000;
+
+/**
+ * 장중 "지연" 판단 기준. 스트림이 값을 주는 동안은 폴링이 30초라 그보다 길게 잡는다
+ * (그렇지 않으면 "실시간"과 "시세 지연"이 동시에 보인다)
+ */
+export function openMaxAge(fresh: boolean): number {
+  return fresh ? LIVE_TICK_MAX_AGE_MS + OPEN_MAX_AGE_MS : OPEN_MAX_AGE_MS;
+}
 
 /** 체결 스트림이 지금 값을 주고 있는지: 연결돼 있고, 마지막 체결(없으면 연결 시각)이 30초 이내 */
 export function streamFresh(s: { connected: boolean; lastTickAt: number | null; connectedAt: number | null }, now: number): boolean {

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { clockLabel, connection, liveLabel, parseBriefingId, parseStockCode, pollInterval, staleBanner, streamFresh, viewState, type QueryLike } from "@/lib/freshness";
+import { clockLabel, connection, liveLabel, openMaxAge, parseBriefingId, parseStockCode, pollInterval, staleBanner, streamFresh, viewState, type QueryLike } from "@/lib/freshness";
 
 // 2026-09-24 14:03:21 KST
 const NOW = Date.parse("2026-09-24T14:03:21+09:00");
-const q = (o: Partial<QueryLike> = {}): QueryLike => ({ data: [1], isError: false, fetchStatus: "idle", failureCount: 0, dataUpdatedAt: NOW - 1000, ...o });
+const q = (o: Partial<QueryLike> = {}): QueryLike => ({ data: [1], isError: false, fetchStatus: "idle", dataUpdatedAt: NOW - 1000, ...o });
 
 describe("viewState: 오류 화면은 처음 불러오기 실패 때만", () => {
   it("값이 있으면 재조회가 실패해도 화면 유지", () => expect(viewState({ data: [1], isError: true })).toBe("ready"));
@@ -15,11 +15,17 @@ describe("viewState: 오류 화면은 처음 불러오기 실패 때만", () => 
 describe("connection: 끊김·지연 판단", () => {
   it("정상", () => expect(connection(q(), NOW, 15_000)).toEqual({ offline: false, stale: false, asOf: NOW - 1000 }));
   it("재조회 실패(오류 상태) → 끊김", () => expect(connection(q({ isError: true }), NOW, 15_000).offline).toBe(true));
-  it("재시도 중(실패 1회) → 끊김", () => expect(connection(q({ failureCount: 1 }), NOW, 15_000).offline).toBe(true));
+  it("일시적 실패(재시도 중, 아직 오류 아님)로는 끊김 띠를 띄우지 않음", () => expect(connection(q({ fetchStatus: "fetching" }), NOW, 15_000).offline).toBe(false));
   it("오프라인이라 요청 보류(웹) → 끊김", () => expect(connection(q({ fetchStatus: "paused" }), NOW, 15_000).offline).toBe(true));
   it("15초 넘게 안 바뀜 → 지연", () => expect(connection(q({ dataUpdatedAt: NOW - 16_000 }), NOW, 15_000).stale).toBe(true));
   it("15초 이내 → 지연 아님", () => expect(connection(q({ dataUpdatedAt: NOW - 14_000 }), NOW, 15_000).stale).toBe(false));
   it("받은 값이 없으면 판단하지 않음", () => expect(connection(q({ data: undefined, dataUpdatedAt: 0, isError: true }), NOW, 15_000)).toEqual({ offline: false, stale: false, asOf: null }));
+});
+
+describe("openMaxAge: 스트림 중에는 30초 보정 폴링보다 길게", () => {
+  it("스트림 없음 → 15초", () => expect(openMaxAge(false)).toBe(15_000));
+  it("스트림 중 → 45초 (30초 폴링 사이에 '시세 지연'이 깜빡이지 않게)", () => expect(openMaxAge(true)).toBe(45_000));
+  it("스트림 중 25초 전 값은 지연 아님", () => expect(connection(q({ dataUpdatedAt: NOW - 25_000 }), NOW, openMaxAge(true)).stale).toBe(false));
 });
 
 describe("streamFresh: '실시간'은 소켓 연결만이 아니라 최근 체결로", () => {

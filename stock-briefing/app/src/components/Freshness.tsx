@@ -1,31 +1,51 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useCallback, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { connection, staleBanner, type Connection, type QueryLike } from "@/lib/freshness";
+import { clockLabel, connection, liveLabel, staleBanner, streamFresh, type QueryLike } from "@/lib/freshness";
+import { useLiveStream } from "@/lib/liveStream";
 import { useNow } from "@/lib/useNow";
 import { font, space, useTheme } from "@/theme";
 
-/** 쿼리의 연결 상태(끊김·지연·기준 시각). 5초마다 다시 계산한다 */
-export function useConnection(q: QueryLike, maxAgeMs: number): Connection & { now: number } {
-  const now = useNow(5_000);
-  return { ...connection(q, now, maxAgeMs), now };
-}
-
 /**
  * 끊김·지연 띠: "연결 끊김 · 14:03:21 기준 · 다시 연결 중". 값은 그대로 두고 위에 한 줄만 얹는다.
- * 보여 줄 게 없으면 아무것도 그리지 않는다.
+ * 시간이 지나 "지연"으로 바뀌는 판단은 이 작은 컴포넌트 안에서만 5초마다 다시 그린다(화면 전체를 다시 그리지 않게).
+ * maxAgeMs 를 주지 않으면 끊김만 본다(브리핑처럼 시세가 아닌 화면).
  */
-export function StaleBanner({ conn, open }: { conn: Connection & { now: number }; open: boolean }) {
+export function StaleBanner({ query, open = false, maxAgeMs }: { query: QueryLike; open?: boolean; maxAgeMs?: number | ((fresh: boolean) => number) }) {
   const t = useTheme();
-  const text = staleBanner(conn, { open, now: conn.now });
+  const stream = useLiveStream();
+  const now = useNow(maxAgeMs === undefined ? 60_000 : 5_000);
+  const limit = typeof maxAgeMs === "function" ? maxAgeMs(streamFresh(stream, now)) : (maxAgeMs ?? Number.POSITIVE_INFINITY);
+  const conn = connection(query, now, limit);
+  const text = staleBanner(conn, { open, now });
   if (!text) return null;
   const color = conn.offline ? t.danger : t.warn;
   return (
-    <View style={[styles.bar, { backgroundColor: t.surfaceAlt, borderBottomColor: t.line }]} accessibilityRole="alert" accessibilityLiveRegion="polite">
+    <View style={[styles.bar, { backgroundColor: t.surfaceAlt, borderBottomColor: t.line }]} accessible accessibilityRole="alert" accessibilityLiveRegion="polite" accessibilityLabel={text}>
       <Ionicons name={conn.offline ? "cloud-offline-outline" : "time-outline"} size={14} color={color} />
       <Text style={{ color, fontSize: font.small, fontWeight: "600" }} numberOfLines={1}>
         {text}
       </Text>
+    </View>
+  );
+}
+
+/**
+ * 잔고 패널의 상태 점 + 글자: "실시간 · 14:03:21 · 보유 17". 체결이 30초 끊기면 5초 안에 "지연 3초"/"지연"으로 바뀐다.
+ */
+export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix }: { query: QueryLike; open: boolean; closedLabel: string; maxAgeMs: (fresh: boolean) => number; suffix: string }) {
+  const t = useTheme();
+  const stream = useLiveStream();
+  const now = useNow(5_000);
+  const fresh = streamFresh(stream, now);
+  const conn = connection(query, now, maxAgeMs(fresh));
+  const s = liveLabel({ open, closedLabel, streamFresh: fresh, offline: conn.offline, stale: conn.stale });
+  const warn = s.tone === "offline" || (s.tone === "delayed" && conn.stale);
+  const text = `${s.text}${conn.asOf ? ` · ${clockLabel(conn.asOf, now)}` : ""} · ${suffix}`;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }} accessible accessibilityLabel={text}>
+      <View style={[styles.dot, { backgroundColor: s.tone === "live" ? t.up : warn ? t.warn : t.muted }]} />
+      <Text style={{ color: warn ? t.warn : t.muted, fontSize: font.tiny }}>{text}</Text>
     </View>
   );
 }
@@ -45,4 +65,5 @@ export function usePull(refetch: () => Promise<unknown>): { pulling: boolean; on
 
 const styles = StyleSheet.create({
   bar: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: space.lg, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },
+  dot: { width: 5, height: 5, borderRadius: 3 },
 });

@@ -157,13 +157,13 @@ export function Loading({ label }: { label?: string }) {
   );
 }
 
-export function ErrorView({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+export function ErrorView({ error, onRetry, retryLabel = "다시 시도" }: { error: unknown; onRetry?: () => void; retryLabel?: string }) {
   const t = useTheme();
   const message = error instanceof Error ? error.message : String(error);
   return (
     <View style={[styles.center, { gap: space.md }]}>
       <Text style={{ color: t.sub, textAlign: "center", fontSize: font.small }}>{message}</Text>
-      {onRetry ? <Button title="다시 시도" variant="secondary" compact onPress={onRetry} /> : null}
+      {onRetry ? <Button title={retryLabel} variant="secondary" compact onPress={onRetry} /> : null}
     </View>
   );
 }

@@ -3,7 +3,7 @@ import { Alert, Text, View } from "react-native";
 import { useHealth, useLatestBriefings, useMarketStatus, useStockMutations } from "@/api/hooks";
 import type { BriefingSession } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
-import { StaleBanner, useConnection, usePull } from "@/components/Freshness";
+import { StaleBanner, usePull } from "@/components/Freshness";
 import { Screen } from "@/components/Screen";
 import { Button, Card, Empty, ErrorView, Loading, Muted, SectionTitle, Segmented } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
@@ -18,7 +18,6 @@ export default function BriefingsScreen() {
   const [mode, setMode] = useState<Mode>("summary");
   const latest = useLatestBriefings();
   const { data, error, refetch } = latest;
-  const conn = useConnection(latest, Number.POSITIVE_INFINITY);
   const { pulling, onPull } = usePull(refetch);
   const { run } = useStockMutations();
   const health = useHealth();
@@ -52,8 +51,7 @@ export default function BriefingsScreen() {
   const krHoliday = market.data && !market.data.KR.isTradingDay;
 
   return (
-    <Screen disclaimer refreshing={pulling} onRefresh={onPull}>
-      <StaleBanner conn={conn} open={false} />
+    <Screen disclaimer refreshing={pulling} onRefresh={onPull} top={<StaleBanner query={latest} />}>
       {llmOff || (last && last.failed > 0) ? (
         <Card style={{ borderLeftWidth: 3, borderLeftColor: t.danger }}>
           <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>

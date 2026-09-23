@@ -3,14 +3,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
-import { StaleBanner, useConnection, usePull } from "@/components/Freshness";
+import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
 import { Screen } from "@/components/Screen";
 import { COL, StockRow } from "@/components/StockRow";
 import { Button, ErrorView, Loading, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
-import { clockLabel, liveLabel, OPEN_MAX_AGE_MS, streamFresh, viewState } from "@/lib/freshness";
-import { useLiveStream } from "@/lib/liveStream";
+import { openMaxAge, viewState } from "@/lib/freshness";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
@@ -26,10 +25,8 @@ export default function StocksScreen() {
   const { remove } = useStockMutations();
   const health = useHealth();
   const live = useAnyMarketOpen();
-  const stream = useLiveStream();
   const [sortOpen, setSortOpen] = useState(false);
   // 값이 있으면 재조회가 실패해도 화면을 지우지 않고, 끊김·지연을 띠와 상태 글자로 알린다
-  const conn = useConnection(stocks, OPEN_MAX_AGE_MS);
   const { pulling, onPull } = usePull(refetch);
 
   // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
@@ -92,11 +89,9 @@ export default function StocksScreen() {
   if (view === "error") return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";
-  const status = liveLabel({ open: live.open, closedLabel: live.label, streamFresh: streamFresh(stream, conn.now), offline: conn.offline, stale: conn.stale });
 
   const header = (
     <View>
-      <StaleBanner conn={conn} open={live.open} />
       <MarketStrip />
       {summary.held > 0 ? (
         <AccountPanel
@@ -108,17 +103,14 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
-          status={conn.asOf ? `${status.text} · ${clockLabel(conn.asOf, conn.now)}` : status.text}
-          live={status.tone === "live"}
-          warn={status.tone === "offline" || (status.tone === "delayed" && conn.stale)}
-          counts={`보유 ${summary.held}${summary.watch ? ` · 관심 ${summary.watch}` : ""}`}
+          status={<LiveStatus query={stocks} open={live.open} closedLabel={live.label} maxAgeMs={openMaxAge} suffix={`보유 ${summary.held}${summary.watch ? ` · 관심 ${summary.watch}` : ""}`} />}
         />
       ) : null}
     </View>
   );
 
   return (
-    <Screen scroll={false}>
+    <Screen scroll={false} top={<StaleBanner query={stocks} open={live.open} maxAgeMs={openMaxAge} />}>
       <SectionList
         sections={sections}
         keyExtractor={(s) => s.code}
@@ -192,9 +184,6 @@ function AccountPanel({
   showKrw,
   fx,
   status,
-  live,
-  warn,
-  counts,
 }: {
   total: Totals | null;
   byCur: Record<Currency, Totals>;
@@ -205,10 +194,7 @@ function AccountPanel({
   afterCost: boolean;
   showKrw: boolean;
   fx: number | null;
-  status: string;
-  live: boolean;
-  warn: boolean;
-  counts: string;
+  status: React.ReactNode;
 }) {
   const t = useTheme();
   // 합계는 원화로(환율을 모르면 원화 종목만). 해외 행은 설정에 따라 달러 또는 원화
@@ -227,12 +213,7 @@ function AccountPanel({
           총 평가금액{total ? "" : " (원화 종목)"}
           {afterCost ? " · 비용 차감" : ""}
         </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-          <View style={[styles.dot, { backgroundColor: live ? t.up : warn ? t.warn : t.muted }]} />
-          <Text style={{ color: warn ? t.warn : t.muted, fontSize: font.tiny }}>
-            {status} · {counts}
-          </Text>
-        </View>
+        {status}
       </View>
       <Text style={[styles.total, { color: t.ink }]}>
         {formatQuote(main.value, "KRW")}
@@ -319,7 +300,6 @@ const styles = StyleSheet.create({
   split: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 6, paddingTop: 6, gap: 3 },
   splitRow: { flexDirection: "row", alignItems: "center" },
   splitNum: { fontSize: font.small, fontVariant: ["tabular-nums"], textAlign: "right" },
-  dot: { width: 5, height: 5, borderRadius: 3 },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: 6 },
   empty: { margin: space.lg, padding: space.lg, gap: 4, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },

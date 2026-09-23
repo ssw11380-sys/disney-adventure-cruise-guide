@@ -1,4 +1,3 @@
-import { usePull } from "@/components/Freshness";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
@@ -6,6 +5,7 @@ import { Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-nati
 import { useHealth } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
+import { usePull } from "@/components/Freshness";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";

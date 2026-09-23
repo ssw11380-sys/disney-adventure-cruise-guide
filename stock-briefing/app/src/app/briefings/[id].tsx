@@ -2,7 +2,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useBriefing, useBriefings } from "@/api/hooks";
-import { StaleBanner, useConnection } from "@/components/Freshness";
+import { StaleBanner } from "@/components/Freshness";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Badge, Card, ChangeText, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
@@ -17,11 +17,10 @@ export default function BriefingDetailScreen() {
   // 잘못된 딥링크(briefings/abc, briefings/0)는 요청하지 않고 안내만 한다
   const numId = parseBriefingId(id);
   const b = useBriefing(numId ?? 0);
-  const conn = useConnection(b, Number.POSITIVE_INFINITY);
   const [mode, setMode] = useState<"summary" | "detail">("detail");
-  const history = useBriefings({ code: b.data?.code, limit: 30 });
+  const history = useBriefings({ code: b.data?.code, limit: 30 }, !!b.data?.code);
 
-  if (numId === null) return <Screen><ErrorView error={new Error("브리핑 주소가 올바르지 않습니다")} onRetry={() => router.replace("/briefings")} /></Screen>;
+  if (numId === null) return <Screen><ErrorView error={new Error("브리핑 주소가 올바르지 않습니다")} retryLabel="브리핑 목록으로" onRetry={() => router.dismissTo("/briefings")} /></Screen>;
   const view = viewState(b);
   if (view === "loading") return <Screen><Loading /></Screen>;
   if (view === "error") return <Screen><ErrorView error={b.error} onRetry={() => void b.refetch()} /></Screen>;
@@ -30,8 +29,7 @@ export default function BriefingDetailScreen() {
   const failed = d.status === "failed";
 
   return (
-    <Screen disclaimer>
-      <StaleBanner conn={conn} open={false} />
+    <Screen disclaimer top={<StaleBanner query={b} />}>
       <Stack.Screen options={{ title: `${d.name ?? d.code} · ${SESSION_LABEL[d.session]}` }} />
       <View style={{ gap: 2, paddingHorizontal: space.lg, paddingTop: space.md }}>
         <Pressable onPress={() => router.push(`/stocks/${d.code}`)} accessibilityRole="link">

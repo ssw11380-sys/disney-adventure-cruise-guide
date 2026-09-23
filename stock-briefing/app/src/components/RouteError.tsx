@@ -19,7 +19,7 @@ export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
       </Text>
       <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
         <Button title="다시 시도" compact onPress={() => void retry()} />
-        <Button title="잔고로" variant="secondary" compact onPress={() => router.replace("/")} />
+        <Button title="잔고로" variant="secondary" compact onPress={() => router.dismissTo("/")} />
       </View>
     </View>
   );

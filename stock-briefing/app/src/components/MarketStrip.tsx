@@ -69,7 +69,7 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
         })}
         {/* 띠 끝에 기준 시각 (지수는 30초마다 받음). 받지 못하는 동안은 마지막으로 받은 시각이 남는다 */}
         {q.dataUpdatedAt ? (
-          <View style={[styles.item, styles.asOf, { borderLeftColor: t.line }]} accessibilityLabel={`지수 기준 시각 ${clockLabel(q.dataUpdatedAt, now)}`}>
+          <View style={[styles.item, styles.asOf, { borderLeftColor: t.line }]} accessible accessibilityLabel={`지수 기준 시각 ${clockLabel(q.dataUpdatedAt, now)}`}>
             <Text style={{ color: q.isError || q.failureCount > 0 ? t.warn : t.muted, fontSize: font.tiny }}>{clockLabel(q.dataUpdatedAt, now)}</Text>
             <Text style={{ color: t.muted, fontSize: font.tiny }}>기준</Text>
           </View>

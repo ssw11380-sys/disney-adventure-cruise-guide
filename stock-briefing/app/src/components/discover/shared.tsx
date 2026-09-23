@@ -52,9 +52,7 @@ export function useAddWatch(): (item: DiscoverStock) => void {
   );
 }
 
-/**
- * 당겨서 새로고침 상태. 자동 갱신(30초)마다 스피너가 뜨지 않도록, 사용자가 당겼을 때만 돌린다.
- */
+// 당겨서 새로고침 상태는 공용(components/Freshness)으로 옮겼다
 export { usePull } from "@/components/Freshness";
 
 export function openStock(item: DiscoverStock): void {

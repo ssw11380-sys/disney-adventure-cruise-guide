@@ -81,13 +81,13 @@ export function useLivePoll(): (q: Query<any, any, any, any>) => number {
 export function useStocks() {
   const api = useApi();
   const every = useLivePoll();
-  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false });
+  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, retryDelay: 1_000 });
 }
 
 export function useStock(code: string) {
   const api = useApi();
   const every = useLivePoll();
-  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, enabled: !!code });
+  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, retryDelay: 1_000, enabled: !!code });
 }
 
 export function useTossStatus() {
@@ -195,7 +195,7 @@ export function useMarketCandles(code: string, period: CandlePeriod, count: numb
 
 export function useCandles(code: string, period: CandlePeriod, count = 90) {
   const api = useApi();
-  return useQuery({ queryKey: useKey("candles", code, period, count), queryFn: () => api.getCandles(code, period, count), staleTime: 5 * 60_000 });
+  return useQuery({ queryKey: useKey("candles", code, period, count), queryFn: () => api.getCandles(code, period, count), staleTime: 5 * 60_000, enabled: !!code });
 }
 
 export function useAnalysis(code: string, kind: AnalysisKind, enabled = true) {
@@ -219,9 +219,9 @@ export function useLatestBriefings() {
   return useQuery({ queryKey: useKey("briefings", "latest"), queryFn: api.latestBriefings, staleTime: 30_000 });
 }
 
-export function useBriefings(filter: { code?: string; date?: string; session?: BriefingSession; limit?: number }) {
+export function useBriefings(filter: { code?: string; date?: string; session?: BriefingSession; limit?: number }, enabled = true) {
   const api = useApi();
-  return useQuery({ queryKey: useKey("briefings", "list", filter), queryFn: () => api.listBriefings(filter), staleTime: 30_000 });
+  return useQuery({ queryKey: useKey("briefings", "list", filter), queryFn: () => api.listBriefings(filter), staleTime: 30_000, enabled });
 }
 
 export function useBriefing(id: number) {
