@@ -841,17 +841,18 @@ export class DiscoverService {
     const snapKey = `themes:${market}:${kind}:${period}`;
     const { value } = await this.cached(snapKey, this.ttl(ss.open, period !== "day"), async (): Promise<ThemeListValue> => {
       const dataAt = this.dataTime(ss, this.now.getTime());
+      const live = ss.session === "regular" || ss.session === "extended";
       const list = await this.deps.naver.sectors(market, kind, period);
       // 장 시작 전 초기화(거의 모든 등락률 0)면 직전 저장본을 쓴다
       if (list.length > 5 && isMostlyZero(list)) {
         const snap = await this.loadSnap<ThemeSummary[]>(snapKey);
-        if (snap) return { themes: snap.value, dataAt: snap.savedAt, fromSnap: true, zero: false };
-        return { themes: list, dataAt, fromSnap: false, zero: true };
+        if (snap) return { themes: snap.value, dataAt: snap.savedAt, fromSnap: true, zero: false, live };
+        return { themes: list, dataAt, fromSnap: false, zero: true, live };
       }
       // 오늘 등락률만 조정한다 (주·월은 상장 첫날 값이 섞여도 기간 수익률 계산 기준이 달라 네이버 값 그대로)
       const out = market === "KR" && period === "day" ? await this.adjustForNewListings(kind, list, await this.newlyListed(ss.open)) : list;
       void this.saveSnap(snapKey, out, !ss.open, dataAt);
-      return { themes: out, dataAt, fromSnap: false, zero: false };
+      return { themes: out, dataAt, fromSnap: false, zero: false, live };
     }, FAIL_RETRY_MS, this.closedSince(ss));
     const dataAt = value.dataAt;
     return {
@@ -1055,7 +1056,7 @@ export class DiscoverService {
     if (market === "US" && kind === "theme" && this.deps.usThemes) return this.usTheme(ss, id);
     const k: ThemeKind = market === "US" ? "sector" : kind;
     // 목록의 상승·보합·하락 수는 구성 종목과 함께 받는다 (차례로 기다리지 않게)
-    const listedP = this.listedTheme(market, k, id, ss).catch(() => null);
+    const listedP = this.listedTheme(market, k, id, ss, SUMMARY_WAIT_MS).catch(() => null);
     let got: { value: { detail: SectorDetail | null; dataAt: number }; at: number };
     try {
       got = await this.cached(
@@ -1101,8 +1102,8 @@ export class DiscoverService {
     const adjust = top3.some((i) => fresh.has(i.code)) && !truncated;
     let theme = adjust ? recount(value.theme, value.items, fresh, k === "sector") : value.theme;
     // 상승·보합·하락 수는 목록(출처)과 같게: 받아 둔 목록에 이 테마가 있으면 그 수, 구성 종목이 잘렸는데 목록도 없으면 세지 않는다
-    // 다시 센 값(adjust)이면 목록 수는 쓰지 않는다. 목록이 늦으면 SUMMARY_WAIT_MS 만 기다린다
-    const listed = adjust ? null : await within(listedP, SUMMARY_WAIT_MS, null);
+    // 다시 센 값(adjust)이면 목록 수는 쓰지 않는다 (listedP 는 시작부터 SUMMARY_WAIT_MS 안에 끝난다)
+    const listed = adjust ? null : await listedP;
     if (!adjust && listed && listed.up + listed.flat + listed.down > 0) theme = { ...theme, up: listed.up, flat: listed.flat, down: listed.down };
     else if (!adjust && truncated) theme = { ...theme, up: 0, flat: 0, down: 0 };
     if (truncated) {
@@ -1126,22 +1127,30 @@ export class DiscoverService {
   }
 
   /**
-   * 오늘 목록(출처 값)에서 이 테마·업종 — 목록을 같은 캐시 규칙으로 받아(대개 이미 받아 둔 것) 지금 세션의 값일 때만 쓴다.
-   * 저장본(출처 초기화)이나 0% 목록이면 null (어제의 상승·하락 수를 오늘 상세에 붙이지 않게).
-   * 새 조회가 늦어 직전 목록이 돌아와도, 장중이면 LISTED_MAX_AGE_MS 안에 받은 것, 장이 닫혔으면 마지막 마감 뒤에 받은 것만 쓴다
+   * 오늘 목록(출처 값)에서 이 테마·업종의 상승·보합·하락 수. 지금 세션의 목록일 때만 쓴다:
+   * 장중·시간외면 장중·시간외에 받은 지 LISTED_MAX_AGE_MS 안의 목록(개장 직전에 받은 어제 목록은 안 됨),
+   * 장이 닫혔으면 마지막 마감 뒤에 받은 목록. 저장본(출처 초기화)이나 0% 목록이면 null.
+   * 받아 둔 목록이 이 조건에 맞으면 바로 쓰고(새 조회는 뒤에서), 아니면 새 목록을 waitMs 까지만 기다린다
    */
-  private async listedTheme(market: DiscoverMarket, kind: ThemeKind, id: string, ss: Session): Promise<ThemeSummary | null> {
-    try {
-      await this.naverThemes(market, kind, "day", ss);
-    } catch {
-      return null;
-    }
-    const hit = this.cache.get(`themes:${market}:${kind}:day`) as Cached<ThemeListValue> | undefined;
-    if (!hit || hit.value.fromSnap || hit.value.zero) return null;
-    const since = this.closedSince(ss);
-    const current = ss.open || since === undefined ? this.now.getTime() - hit.at <= LISTED_MAX_AGE_MS : hit.at >= since;
-    if (!current) return null;
-    return hit.value.themes.find((t) => t.id === id) ?? null;
+  private async listedTheme(market: DiscoverMarket, kind: ThemeKind, id: string, ss: Session, waitMs: number): Promise<ThemeSummary | null> {
+    const pick = (): ThemeSummary | null | undefined => {
+      const hit = this.cache.get(`themes:${market}:${kind}:day`) as Cached<ThemeListValue> | undefined;
+      if (!hit || hit.value.fromSnap || hit.value.zero || !this.listIsCurrent(hit, ss)) return undefined;
+      return hit.value.themes.find((t) => t.id === id) ?? null;
+    };
+    const load = this.naverThemes(market, kind, "day", ss);
+    load.catch(() => undefined);
+    const ready = pick();
+    if (ready !== undefined) return ready;
+    await within(load, waitMs, null);
+    return pick() ?? null;
+  }
+
+  private listIsCurrent(hit: Cached<ThemeListValue>, ss: Session): boolean {
+    const t = this.now.getTime();
+    if (ss.session === "regular" || ss.session === "extended") return hit.value.live && t - hit.at <= LISTED_MAX_AGE_MS;
+    const since = ss.lastClose ? Date.parse(ss.lastClose) : NaN;
+    return Number.isNaN(since) ? t - hit.at <= LISTED_MAX_AGE_MS : hit.at >= since;
   }
 
   /** 업종 목록의 코드. 받아 둔 것이 없으면(재시작 직후) 받아 본다. 못 받으면 null */
@@ -1203,7 +1212,8 @@ function weekdayBetween(a: string, b: string): boolean {
 }
 
 /** 테마 목록 캐시 값. dataAt = 값의 시각(마감 뒤에 받았으면 마지막 거래 마감, 저장본이면 그 시각), fromSnap = 출처 초기화로 저장본, zero = 저장본도 없어 0% 목록 그대로 */
-type ThemeListValue = { themes: ThemeSummary[]; dataAt: number; fromSnap: boolean; zero: boolean };
+/** live: 장중·시간외에 받은 값인지 (개장 직전에 받은 어제 값과 가르려고) */
+type ThemeListValue = { themes: ThemeSummary[]; dataAt: number; fromSnap: boolean; zero: boolean; live: boolean };
 
 /** 네이버 테마·업종 등락률 산출 방식 (실측: 한국 테마 = 단순 평균, 업종 = 시가총액 가중) */
 function naverBasis(market: DiscoverMarket, kind: ThemeKind): string {

@@ -688,6 +688,48 @@ describe("운영 검증 뒤 4차 수정", () => {
     expect(d!.theme).toMatchObject({ up: 1, down: 9 });
   }, 10_000);
 
+  it("상세: 개장 직전(프리마켓)에 받은 어제 목록의 수는 개장 뒤 상세에 붙이지 않고, 받아 둔 지금 목록은 새 조회를 기다리지 않고 쓴다", async () => {
+    const kr: Ex = { latest: exRow("close", "afterMarket", "2026-09-24T20:00:00+09:00", "2026-09-25T08:00:00+09:00", "2026-09-24") };
+    let us: Ex = { latest: exRow("open", "preMarket", "2026-09-24T04:00:00-04:00", "2026-09-24T09:30:00-04:00", "2026-09-24") };
+    let today = false; // 프리마켓 동안 네이버 미국 값은 직전 정규장 값
+    let listFail = false;
+    let listDelay = 0;
+    const usRow = (i: number, rate: number) => ({ reutersCode: `S${i}.O`, symbolCode: `S${i}`, name: `S${i}`, currentPrice: "10", fluctuations: "0.1", fluctuationsRatio: String(rate), accumulatedTradingVolume: "1000", accumulatedTradingValue: "10000", marketValue: "1000000" });
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(kr, us);
+      if (url.includes("/sectors/all")) {
+        if (listFail) return json({ isSuccess: false }, 500);
+        const t = today;
+        if (listDelay) await new Promise((r) => setTimeout(r, listDelay));
+        return ok({ sectors: Array.from({ length: 8 }, (_, i) => ({ code: String(i), name: `업종${i}`, changeRate: t ? -0.8 : 3, risingCount: t ? 5 : 10, unchangedCount: 0, fallingCount: t ? 5 : 0, topItems: [] })), hasNext: false });
+      }
+      if (url.includes("/worldstock/sector/item/list")) {
+        const t = today;
+        return ok({ name: "업종7", changeRate: t ? -0.8 : 3, risingCount: t ? 1 : 10, unChangedCount: 0, fallingCount: t ? 9 : 0, items: Array.from({ length: 10 }, (_, i) => usRow(i, t ? (i === 0 ? 1 : -1) : 3)) });
+      }
+      return json({}, 404);
+    }) as unknown as typeof fetch;
+    let now = new Date("2026-09-24T13:25:00Z"); // 09:25 ET 프리마켓 (closed)
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    expect((await svc.themes("US", "sector", "day")).themes[7]).toMatchObject({ up: 10, down: 0 });
+    // 09:33 ET 정규장: 목록 새 조회가 실패해 캐시에는 09:25 의 어제 목록만 있다 → 상세 자신의 오늘 수
+    now = new Date("2026-09-24T13:33:00Z");
+    us = { latest: exRow("open", "regularMarket", "2026-09-24T09:30:00-04:00", "2026-09-24T16:00:00-04:00", "2026-09-24") };
+    today = true;
+    listFail = true;
+    expect((await svc.theme("US", "sector", "7"))!.theme).toMatchObject({ up: 1, flat: 0, down: 9 });
+    // 09:34 목록을 받은 뒤, 09:35 에는 목록 새 조회가 3초 걸려도 받아 둔 지금 목록(1분 전)의 수를 바로 쓴다
+    listFail = false;
+    now = new Date("2026-09-24T13:34:00Z");
+    await svc.themes("US", "sector", "day");
+    now = new Date("2026-09-24T13:35:00Z");
+    listDelay = 3_000;
+    const t0 = Date.now();
+    const d = await svc.theme("US", "sector", "7");
+    expect(Date.now() - t0).toBeLessThan(1_500);
+    expect(d!.theme).toMatchObject({ up: 5, flat: 0, down: 5 });
+  }, 10_000);
+
   it("뒤 쪽 판(ver)은 최근 5판까지 이어 준다", async () => {
     const src = krSource();
     let now = new Date("2026-09-23T01:00:00Z");

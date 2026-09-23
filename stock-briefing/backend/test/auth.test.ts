@@ -97,6 +97,11 @@ describe("요청 로그의 토큰 가림", () => {
     expect(redactToken("/api/stream?TOKEN=abc")).toBe("/api/stream?TOKEN=[redacted]");
     expect(redactToken("/api/stocks?tokens=1&mytoken=2")).toBe("/api/stocks?tokens=1&mytoken=2");
     expect(redactToken("/health")).toBe("/health");
+    // 라우터는 '#' 뒤도 쿼리로 읽는다
+    expect(redactToken("/api/stream#token=abc")).toBe("/api/stream#token=[redacted]");
+    expect(redactToken("/api/stream#x=1&token=abc")).toBe("/api/stream#x=1&token=[redacted]");
+    expect(redactToken("/api/stream;token=abc")).toBe("/api/stream;token=[redacted]");
+    expect(redactToken("/api/stream?token=a=b&x=1")).toBe("/api/stream?token=[redacted]&x=1");
   });
 
   it("서버 요청 로그에 웹소켓 토큰이 남지 않는다", async () => {

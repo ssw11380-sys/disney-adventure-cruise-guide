@@ -49,7 +49,7 @@ export interface BuildAppOptions {
 export const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.";
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
-  const logger = opts.logger === false ? false : { level: opts.config.LOG_LEVEL, ...(typeof opts.logger === "object" ? opts.logger : {}), serializers: { req: logReq } };
+  const logger = opts.logger === false ? false : { level: opts.config.LOG_LEVEL, ...(typeof opts.logger === "object" ? opts.logger : {}), serializers: { req: logReq, path: logPath } };
   const app = Fastify({ logger });
   await app.register(cors, { origin: true });
   await app.register(websocket, { options: { maxPayload: 4096 } });
@@ -350,6 +350,11 @@ function decodedPath(url: string): string {
   }
 }
 
+/** @fastify/websocket 은 웹소켓 핸들러가 없는 경로로 온 접속을 { path: 주소 } 로 남긴다 — 여기서도 token 을 가린다 */
+function logPath(p: unknown): unknown {
+  return typeof p === "string" ? redactToken(p) : p;
+}
+
 /** 요청 로그: Fastify 기본 항목과 같되, 주소의 token 쿼리(웹소켓 인증)는 가린다 (서버 로그에 API 토큰이 남지 않게) */
 function logReq(req: FastifyRequest): { method: string; url: string; host: string; remoteAddress: string; version?: string; remotePort?: number } {
   const version = req.headers?.["accept-version"];
@@ -364,26 +369,25 @@ function logReq(req: FastifyRequest): { method: string; url: string; host: strin
   };
 }
 
-/** 쿼리에서 이름이 token 인 값(퍼센트 인코딩한 이름 포함)을 [redacted] 로 바꾼다 */
+/**
+ * 주소에서 이름이 token 인 쿼리 값(퍼센트 인코딩한 이름 포함)을 [redacted] 로 바꾼다.
+ * 라우터는 '?' 와 '#' 중 앞선 곳부터 쿼리로 읽으므로 '?', '#', ';', '&' 뒤의 이름=값을 모두 본다
+ */
 export function redactToken(url: string): string {
-  const q = url.indexOf("?");
-  if (q < 0) return url;
-  const parts = url
-    .slice(q + 1)
-    .split("&")
-    .map((kv) => {
-      const eq = kv.indexOf("=");
-      if (eq < 0) return kv;
-      const key = kv.slice(0, eq);
-      let name = key;
-      try {
-        name = decodeURIComponent(key.replace(/\+/g, " "));
-      } catch {
-        // 깨진 인코딩: 원문 이름으로 비교
-      }
-      return name.trim().toLowerCase() === "token" ? `${key}=[redacted]` : kv;
-    });
-  return `${url.slice(0, q)}?${parts.join("&")}`;
+  const start = url.search(/[?#;]/);
+  if (start < 0) return url;
+  const rest = url.slice(start).replace(/([?#;&])([^?#;&=]*)=([^?#;&]*)/g, (m, sep: string, key: string) => (isTokenName(key) ? `${sep}${key}=[redacted]` : m));
+  return url.slice(0, start) + rest;
+}
+
+function isTokenName(key: string): boolean {
+  let name = key;
+  try {
+    name = decodeURIComponent(key.replace(/\+/g, " "));
+  } catch {
+    // 깨진 인코딩: 원문 이름으로 비교
+  }
+  return name.trim().toLowerCase() === "token";
 }
 
 /** 비밀값 비교 (길이가 같을 때 시간 일정 비교) */
