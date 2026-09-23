@@ -69,10 +69,11 @@ export function openStock(item: DiscoverStock): void {
 }
 
 /** 상태 줄 첫머리: 값이 바뀌는 중인지, 아니면 어느 시점 값인지 */
-function statusLabel(market: DiscoverMarket, open: boolean, session: DiscoverSession | undefined, live: boolean | undefined): string {
+function statusLabel(market: DiscoverMarket, open: boolean, session: DiscoverSession | undefined, live: boolean | undefined, paused: boolean): string {
   const s: DiscoverSession = session ?? (open ? "regular" : "closed"); // 옛 서버는 session 이 없다
-  if (s === "regular") return "장중 · 30초마다 갱신";
-  if (s === "extended") return "시간외 거래 반영 중 · 30초마다 갱신";
+  const every = paused ? "자동 갱신 멈춤 (당겨서 새로고침)" : "30초마다 갱신";
+  if (s === "regular") return `장중 · ${every}`;
+  if (s === "extended") return `시간외 거래 반영 중 · ${every}`;
   if (s === "pre") return "장 시작 전 · 직전 거래일 기준";
   if (live) return "장외 시간 · 현재가 기준";
   return market === "US" ? "장 마감 · 직전 정규장 기준" : "장 마감 · 마지막 거래 기준";
@@ -89,6 +90,7 @@ export function StatusLine({
   market = "KR",
   session,
   live,
+  paused = false,
 }: {
   open: boolean;
   asOf: string | null;
@@ -96,6 +98,8 @@ export function StatusLine({
   market?: DiscoverMarket;
   session?: DiscoverSession;
   live?: boolean;
+  /** 자동 갱신을 멈춘 목록(깊이 내려 둔 순위) — "30초마다 갱신"이라고 하지 않는다 */
+  paused?: boolean;
 }) {
   const t = useTheme();
   const moving = session ? session === "regular" || session === "extended" : open;
@@ -103,7 +107,7 @@ export function StatusLine({
     <View style={[styles.status, { borderBottomColor: t.line, backgroundColor: t.bg }]}>
       <View style={[styles.dot, { backgroundColor: moving ? t.up : t.muted }]} />
       <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1 }} numberOfLines={2}>
-        {statusLabel(market, open, session, live)}
+        {statusLabel(market, open, session, live, paused)}
         {asOf ? ` · ${formatDateKo(asOf, true)} 기준` : ""}
         {note ? ` · ${note}` : ""}
       </Text>

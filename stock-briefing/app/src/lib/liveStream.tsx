@@ -29,13 +29,13 @@ export function useLiveStream(): LiveStreamState {
 type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
 
 export function LiveStreamProvider({ children }: { children: React.ReactNode }) {
-  const { apiUrl, apiToken } = useSettings();
+  const { apiUrl, apiToken, ready } = useSettings();
   const qc = useQueryClient();
   const [state, setState] = useState<LiveStreamState>({ connected: false, lastTickAt: null, ticks: 0 });
   const ticksRef = useRef(0);
 
   useEffect(() => {
-    if (!apiUrl) return;
+    if (!apiUrl || !ready) return; // 저장된 토큰을 읽은 뒤에 붙는다
     let socket: WebSocket | null = null;
     let closed = false;
     let backoff = 1000;
@@ -169,7 +169,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       sub.remove();
       disconnect();
     };
-  }, [apiUrl, apiToken, qc]);
+  }, [apiUrl, apiToken, ready, qc]);
 
   return <LiveStreamContext.Provider value={state}>{children}</LiveStreamContext.Provider>;
 }

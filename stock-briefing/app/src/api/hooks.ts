@@ -2,13 +2,27 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import { useEffect, useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
 import { useLiveStream } from "@/lib/liveStream";
-import { useSettings } from "@/lib/settings";
+import { loadedCredentials, useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
 import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
-  const { apiUrl, apiToken } = useSettings();
-  return useMemo(() => createApi(apiUrl, apiToken), [apiUrl, apiToken]);
+  const { apiUrl, apiToken, ready } = useSettings();
+  return useMemo(() => (ready ? createApi(apiUrl, apiToken) : deferredApi()), [apiUrl, apiToken, ready]);
+}
+
+/** 저장된 서버 주소·토큰을 읽기 전의 API: 요청마다 읽기가 끝나길 기다렸다가 그 값으로 보낸다 */
+function deferredApi(): Api {
+  const shape = createApi("", "");
+  const out: Record<string, unknown> = {};
+  for (const [name, v] of Object.entries(shape)) {
+    out[name] =
+      typeof v === "function"
+        ? (...args: unknown[]) =>
+            loadedCredentials().then((c) => (createApi(c.apiUrl, c.apiToken) as unknown as Record<string, (...a: unknown[]) => unknown>)[name]!(...args))
+        : v;
+  }
+  return out as unknown as Api;
 }
 
 /** 쿼리 키에 apiUrl 을 넣어 서버 주소를 바꾸면 캐시가 분리되게 한다 */
@@ -99,7 +113,7 @@ const discoverEvery = (open: boolean | undefined, fallback: number) => (open ===
 
 /** 순위 목록 (거래대금·거래량·급상승·급하락). 50개씩, 끝까지 내리면 다음 쪽 */
 /** 자동 갱신은 앞쪽 몇 쪽을 볼 때만 — 깊이 내려 두면 갱신마다 받아 둔 쪽을 모두 다시 받게 되므로 멈춘다(당겨서 새로고침은 그대로) */
-const AUTO_REFRESH_MAX_PAGES = 3;
+export const AUTO_REFRESH_MAX_PAGES = 3;
 type RankPageParam = { page: number; ver?: number };
 
 export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, size = 50) {

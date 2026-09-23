@@ -63,6 +63,20 @@ interface Settings {
   setAfterCost: (on: boolean) => Promise<void>;
 }
 
+/**
+ * 저장해 둔 서버 주소·토큰을 다 읽은 뒤의 값. 앱 시작 직후(읽기 전) 나가는 요청이 번들 기본 토큰으로 가서
+ * 설정 화면의 서버 상태가 틀리게 보이지 않게, 그런 요청은 이 값을 기다렸다가 쓴다 (hooks 의 useApi)
+ */
+const latest = { apiUrl: defaultApiUrl(), apiToken: process.env.EXPO_PUBLIC_API_TOKEN ?? "" };
+let markLoaded: () => void = () => {};
+const loaded = new Promise<void>((resolve) => {
+  markLoaded = resolve;
+});
+export async function loadedCredentials(): Promise<{ apiUrl: string; apiToken: string }> {
+  await loaded;
+  return { ...latest };
+}
+
 const noop = async () => {};
 const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, themeMode: "dark", afterCost: true, ready: false, setApiUrl: noop, setApiToken: noop, setSort: noop, setShowKrw: noop, setThemeMode: noop, setAfterCost: noop });
 
@@ -94,6 +108,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         const k = m.get(STORAGE_KEYS.showKrw);
         if (u) setUrl(u);
         if (t) setToken(t);
+        if (u) latest.apiUrl = u;
+        if (t) latest.apiToken = t;
         if (s && SORT_OPTIONS.some((o) => o.value === s)) setSortState(s as SortKey);
         if (k) setShowKrwState(k === "1");
         const tm = m.get(STORAGE_KEYS.themeMode);
@@ -102,16 +118,21 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         if (ac) setAfterCostState(ac === "1");
       })
       .catch(() => {})
-      .finally(() => setReady(true));
+      .finally(() => {
+        markLoaded();
+        setReady(true);
+      });
   }, []);
 
   const setApiToken = useCallback(async (token: string) => {
     const clean = token.trim();
+    latest.apiToken = clean;
     setToken(clean);
     await persist(STORAGE_KEYS.apiToken, clean);
   }, []);
   const setApiUrl = useCallback(async (url: string) => {
     const clean = url.trim().replace(/\/+$/, "");
+    latest.apiUrl = clean;
     setUrl(clean);
     await persist(STORAGE_KEYS.apiUrl, clean);
   }, []);

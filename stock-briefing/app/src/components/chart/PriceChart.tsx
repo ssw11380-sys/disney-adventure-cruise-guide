@@ -323,7 +323,17 @@ export function PriceChart(p: PriceChartProps) {
 
   return (
     <View style={{ width, gap: space.xs }}>
-      <Readout candle={crossCandle} prev={cross ? visible[cross.i - 1] ?? candles[start + cross.i - 1] : undefined} last={last} currency={currency} mas={mas} index={cross ? start + cross.i : end - 1} period={p.period} showVolume={p.hasVolume !== false} />
+      <Readout
+        candle={crossCandle}
+        prev={cross ? visible[cross.i - 1] ?? candles[start + cross.i - 1] : visible[n - 2] ?? candles[end - 2]}
+        latestBase={!cross && view.offset === 0 && p.period === "D" ? p.prevClose : null}
+        last={last}
+        currency={currency}
+        mas={mas}
+        index={cross ? start + cross.i : end - 1}
+        period={p.period}
+        showVolume={p.hasVolume !== false}
+      />
       <GestureDetector gesture={gesture}>
         <View style={{ width, height }} collapsable={false}>
           <Svg width={width} height={height}>
@@ -494,6 +504,7 @@ function Tag({ y, plotW, label, color, dashed, dotted, filled, labelDy = 0 }: { 
 function Readout({
   candle,
   prev,
+  latestBase,
   last,
   currency,
   mas,
@@ -503,6 +514,8 @@ function Readout({
 }: {
   candle: Candle | undefined;
   prev: Candle | undefined;
+  /** 최신 일봉을 볼 때의 전일 종가(현재가 헤더와 같은 기준) */
+  latestBase?: number | null;
   last: Candle | undefined;
   currency: ChartUnit;
   mas: { period: number; values: Series }[];
@@ -513,7 +526,9 @@ function Readout({
   const t = useTheme();
   const c = candle ?? last;
   if (!c) return <Text style={{ color: t.muted, fontSize: font.tiny }}>차트 데이터가 없습니다</Text>;
-  const base = candle ? prev?.close ?? c.open : c.open;
+  // 등락 기준: 십자선 봉은 직전 봉 종가, 최신 일봉은 헤더와 같은 전일 종가, 주·월봉은 직전 봉 종가, 분봉은 그 봉의 시가
+  const intraday = period !== "D" && period !== "W" && period !== "M";
+  const base = candle ? (prev?.close ?? c.open) : (latestBase ?? (intraday ? null : prev?.close) ?? c.open);
   const chg = base ? ((c.close - base) / base) * 100 : null;
   const color = chg === null ? t.muted : chg > 0 ? t.up : chg < 0 ? t.down : t.muted;
   const when = c.time ? `${c.date} ${c.time.slice(11, 16)}` : c.date;
