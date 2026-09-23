@@ -62,6 +62,18 @@ export interface TossOpenApiStatus {
   outboundIp: string | null; // 토스 허용 IP 에 등록할 서버 공인 IP
   client: { configured: boolean; tokenIssuedAt: string | null; lastOkAt: string | null; lastError: string | null; ipBlocked: boolean } | null;
   realtime: { enabled: boolean; connected: boolean; subscribed: string[]; lastMessageAt: string | null; lastError: string | null } | null;
+  /** 보유 종목 자동 동기화 (장중 intervalMin 분마다, 장 밖 idleIntervalMin 분마다, 브리핑 직전) */
+  sync?: {
+    enabled: boolean;
+    intervalMin: number;
+    idleIntervalMin: number;
+    running: boolean;
+    lastRunAt: string | null;
+    lastTrigger: "startup" | "schedule" | "briefing" | "manual" | null;
+    lastError: string | null;
+    lastChanges: { added: number; updated: number; removed: number; holdings: number } | null;
+    nextRunAt: string | null;
+  } | null;
 }
 
 export interface TossImportResult {
@@ -69,6 +81,8 @@ export interface TossImportResult {
   added: string[];
   updated: string[];
   unchanged: string[];
+  /** 전량 매도로 관심 종목으로 바뀐 종목 (구버전 서버에는 없음) */
+  removed?: string[];
   holdings: { code: string; name: string; currency: Currency; quantity: number; avgPrice: number | null; lastPrice: number | null; market: string }[];
 }
 

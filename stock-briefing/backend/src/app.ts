@@ -11,7 +11,7 @@ import { PromptStore } from "./llm/prompts.js";
 import { defaultsFromCron, NotificationSettingsStore, timeToCron } from "./notifications/settings.js";
 import { describeProviders, type Providers } from "./providers/index.js";
 import { adminRoutes, tossStatus, type AdminDeps } from "./routes/admin.js";
-import { TossSyncService } from "./services/tossSyncService.js";
+import { HoldingsAutoSync, TossSyncService } from "./services/tossSyncService.js";
 import { analysisRoutes } from "./routes/analysis.js";
 import { briefingRoutes } from "./routes/briefings.js";
 import { deviceRoutes, notificationRoutes } from "./routes/notifications.js";
@@ -79,7 +79,21 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       await stockService.syncLive();
       app.addHook("onClose", async () => live.stop());
     }
-    tossDeps = { provider: opts.providers.tossOpenApi, sync: new TossSyncService(opts.db, opts.providers.tossOpenApi, now), live, outboundIp };
+    const sync = new TossSyncService(opts.db, opts.providers.tossOpenApi, now);
+    // 토스 앱에서 사고팔면 늦어도 TOSS_SYNC_MINUTES 안에 반영. 바뀐 게 있으면 실시간 구독 종목도 갱신
+    const autoSync = new HoldingsAutoSync({
+      sync,
+      calendar: opts.providers.calendar,
+      afterSync: () => stockService.syncLive(),
+      intervalMin: opts.config.TOSS_SYNC_MINUTES,
+      log,
+      now,
+    });
+    if (opts.enableScheduler !== false) {
+      autoSync.start();
+      app.addHook("onClose", async () => autoSync.stop());
+    }
+    tossDeps = { provider: opts.providers.tossOpenApi, sync, autoSync, live, outboundIp };
   }
   // 서버 → 앱 실시간 가격 스트림 (/api/stream). 토스 웹소켓 체결을 그대로 중계하고, 없으면 앱이 붙어 있는 동안만 3초 폴링
   const priceStream = new PriceStream({
@@ -116,6 +130,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       morningCron: settings.morningEnabled ? timeToCron(settings.morningTime, settings.weekdaysOnly) : null,
       afternoonCron: settings.afternoonEnabled ? timeToCron(settings.afternoonTime, settings.weekdaysOnly) : null,
       timezone: opts.config.timezone,
+      // 브리핑 직전에 토스 계좌를 한 번 더 읽어 수량·평단이 최신이 되게 한다
+      ...(tossDeps ? { beforeRun: async () => void (await tossDeps!.autoSync.run("briefing")) } : {}),
       log,
     });
     scheduler.start();

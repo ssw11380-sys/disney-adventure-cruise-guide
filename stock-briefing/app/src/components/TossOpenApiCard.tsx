@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Alert, Linking, Pressable, Share, Text, View } from "react-native";
 import { useApi, useTossStatus } from "@/api/hooks";
+import type { TossOpenApiStatus } from "@/api/types";
 import { useSettings } from "@/lib/settings";
 import { formatDateKo, formatPrice } from "@/lib/format";
 import { font, space, useTheme } from "@/theme";
@@ -25,7 +26,10 @@ export function TossOpenApiCard() {
       void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
       void qc.invalidateQueries({ queryKey: [apiUrl, "briefings"] });
       const lines = r.holdings.map((h) => `${h.name} ${h.quantity}주 · 평단 ${formatPrice(h.avgPrice, h.currency)}`);
-      setLastImport(`${r.accounts}개 계좌에서 ${r.holdings.length}종목 (새로 ${r.added.length}, 갱신 ${r.updated.length})`);
+      const removed = r.removed ?? [];
+      if (removed.length) lines.push(`전량 매도 → 관심 종목: ${removed.join(", ")}`);
+      setLastImport(`${r.accounts}개 계좌에서 ${r.holdings.length}종목 (새로 ${r.added.length}, 갱신 ${r.updated.length}${removed.length ? `, 매도 ${removed.length}` : ""})`);
+      void status.refetch();
       Alert.alert("보유 종목 가져오기 완료", lines.length ? lines.join("\n") : "보유 중인 주식이 없습니다.");
     },
     onError: (e) => Alert.alert("가져오기 실패", e instanceof Error ? e.message : String(e)),
@@ -84,6 +88,8 @@ export function TossOpenApiCard() {
           <Row label="토큰 발급" value={s.client?.tokenIssuedAt ? formatDateKo(s.client.tokenIssuedAt, true) : "-"} />
           <Row label="마지막 성공" value={s.client?.lastOkAt ? formatDateKo(s.client.lastOkAt, true) : "-"} />
           <Row label="실시간 구독" value={s.realtime ? `${s.realtime.connected ? "연결됨" : "끊김"} · ${s.realtime.subscribed.length}종목` : "-"} />
+          <Row label="자동 동기화" value={syncLabel(s.sync)} />
+          {s.sync?.lastError ? <Text style={{ color: t.danger, fontSize: font.small }}>자동 동기화 실패: {s.sync.lastError}</Text> : null}
           {s.client?.ipBlocked ? (
             <View style={{ gap: space.xs }}>
               <Text style={{ color: t.danger, fontSize: font.small }}>토스증권이 이 서버의 요청을 차단했습니다(403). 허용 IP 목록에 {ip ?? "서버 IP"} 를 등록하세요. Railway 무료 플랜은 서버 IP 가 재배포 때 바뀔 수 있어 그때마다 다시 등록해야 합니다.</Text>
@@ -94,10 +100,23 @@ export function TossOpenApiCard() {
           {s.realtime?.lastError ? <Muted>실시간: {s.realtime.lastError}</Muted> : null}
           <Button title="토스증권 보유 종목 가져오기" icon="download-outline" onPress={() => importHoldings.mutate()} loading={importHoldings.isPending} />
           {lastImport ? <Muted>{lastImport}</Muted> : null}
-          <Muted>보유 중인 종목이 수량·평단과 함께 등록됩니다. 토스에 없는 관심 종목은 그대로 둡니다.</Muted>
+          <Muted>
+            {s.sync?.enabled
+              ? `토스 앱에서 사고팔면 장중 ${s.sync.intervalMin}분마다, 장 밖 ${s.sync.idleIntervalMin}분마다, 브리핑 직전에 자동으로 맞춰집니다. 전량 매도한 종목은 지우지 않고 관심 종목으로 남깁니다. 지금 바로 맞추려면 위 버튼을 누르세요.`
+              : "보유 중인 종목이 수량·평단과 함께 등록됩니다. 토스에 없는 관심 종목은 그대로 둡니다."}
+          </Muted>
         </View>
       )}
       <Button title="상태 다시 확인" variant="secondary" icon="refresh" onPress={() => void status.refetch()} loading={status.isFetching} />
     </Card>
   );
+}
+
+function syncLabel(sync: NonNullable<TossOpenApiStatus["sync"]> | null | undefined): string {
+  if (!sync) return "구버전 서버";
+  if (!sync.enabled) return "꺼짐 (TOSS_SYNC_MINUTES=0)";
+  const when = sync.lastRunAt ? formatDateKo(sync.lastRunAt, true) : "아직 안 함";
+  const c = sync.lastChanges;
+  const changes = c ? (c.added || c.updated || c.removed ? ` (+${c.added} / 갱신 ${c.updated}${c.removed ? ` / 매도 ${c.removed}` : ""})` : " (변화 없음)") : "";
+  return `${sync.intervalMin}분마다 · 마지막 ${when}${changes}`;
 }
