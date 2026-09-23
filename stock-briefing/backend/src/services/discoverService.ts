@@ -100,11 +100,16 @@ export class DiscoverService {
     return (this.deps.now ?? (() => new Date()))();
   }
 
+  /**
+   * 장중인지. 한국은 달력 그대로(KRX+NXT 08:00~20:00 — 통합 가격이 계속 바뀐다).
+   * 미국은 정규장(뉴욕 09:30~16:00)만 장중으로 본다: 달력은 프리~애프터를 모두 열림으로 보지만 발견 탭 값은 정규장 기준이라
+   * 장 시작 전·마감 뒤에는 "장 마감"으로 보여야 한다.
+   */
   private async isOpen(market: DiscoverMarket): Promise<boolean> {
     if (!this.deps.calendar) return false;
     try {
       const s = await this.deps.calendar.status();
-      return market === "KR" ? s.KR.isOpen : s.US.isOpen;
+      return market === "KR" ? s.KR.isOpen : s.US.isOpen && isUsRegularHours(this.now);
     } catch {
       return false;
     }
@@ -434,6 +439,15 @@ export class DiscoverService {
       note: t.total > t.members.length ? `시가총액 상위 ${t.members.length}종목 기준 (토스 분류 전체 ${t.total}종목)` : null,
     };
   }
+}
+
+/** 뉴욕 현지 평일 09:30~16:00 (휴장일은 달력이 거른다) */
+export function isUsRegularHours(d: Date): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  if (get("weekday") === "Sat" || get("weekday") === "Sun") return false;
+  const m = Number(get("hour")) * 60 + Number(get("minute"));
+  return m >= 9 * 60 + 30 && m < 16 * 60;
 }
 
 /** 구성 종목에서 상장 첫날 종목과 거래정지(거래량 0)를 빼고 테마 등락률(단순 평균)·상승/보합/하락 수를 다시 센다 */

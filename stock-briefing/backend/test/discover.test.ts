@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NaverDiscover } from "../src/providers/market/naverDiscover.js";
-import { DiscoverService, recount } from "../src/services/discoverService.js";
+import { DiscoverService, isUsRegularHours, recount } from "../src/services/discoverService.js";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const ok = (result: unknown) => json({ isSuccess: true, detailCode: "", message: "", result });
@@ -232,6 +232,22 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
     await svc.rank("US", "volume", 1, 50);
     expect(urls.some((u) => u.includes("/stock/nation/USA/top?page=1"))).toBe(true);
     expect((await svc.rank("US", "volume", 1, 50)).items.map((i) => i.code)).toContain("PENNY");
+  });
+
+  it("미국은 정규장(뉴욕 09:30~16:00)만 장중 — 달력이 프리·애프터를 열림으로 봐도 장 마감", async () => {
+    expect(isUsRegularHours(new Date("2026-09-22T13:29:00Z"))).toBe(false); // 09:29 EDT (프리마켓)
+    expect(isUsRegularHours(new Date("2026-09-22T13:30:00Z"))).toBe(true); // 09:30 EDT
+    expect(isUsRegularHours(new Date("2026-09-22T19:59:00Z"))).toBe(true); // 15:59 EDT
+    expect(isUsRegularHours(new Date("2026-09-22T20:00:00Z"))).toBe(false); // 16:00 EDT (애프터마켓)
+    expect(isUsRegularHours(new Date("2026-12-01T14:45:00Z"))).toBe(true); // 09:45 EST
+    expect(isUsRegularHours(new Date("2026-09-26T15:00:00Z"))).toBe(false); // 토요일
+    let now = new Date("2026-09-22T12:00:00Z"); // 08:00 EDT, 프리마켓
+    const calendar = { status: async () => ({ KR: { isOpen: false }, US: { isOpen: true } }) } as never;
+    const fetchFn = (async () => json({ page: 1, totalCount: 0, stocks: [] })) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), calendar, now: () => now });
+    expect((await svc.rank("US", "tradingValue", 1, 50)).marketOpen).toBe(false);
+    now = new Date("2026-09-22T15:00:00Z"); // 11:00 EDT
+    expect((await svc.rank("US", "volume", 1, 50)).marketOpen).toBe(true);
   });
 
   it("recount: 거래정지·상장 첫날을 빼고 평균·상승/보합/하락을 다시 센다", () => {

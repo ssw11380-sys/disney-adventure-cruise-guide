@@ -94,6 +94,9 @@ function useDiscoverInterval(market: DiscoverMarket): number {
   return (open ?? true) ? 30_000 : 5 * 60_000;
 }
 
+/** 서버가 알려 준 장 상태(미국은 정규장만 장중)로 갱신 주기를 고른다. 아직 응답이 없으면 달력 기준 */
+const discoverEvery = (open: boolean | undefined, fallback: number) => (open === undefined ? fallback : open ? 30_000 : 5 * 60_000);
+
 /** 순위 목록 (거래대금·거래량·급상승·급하락). 50개씩, 끝까지 내리면 다음 쪽 */
 export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, size = 50) {
   const api = useApi();
@@ -104,7 +107,7 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
     staleTime: Math.min(interval, 30_000),
-    refetchInterval: interval,
+    refetchInterval: (q) => discoverEvery(q.state.data?.pages[0]?.marketOpen, interval),
     refetchIntervalInBackground: false,
   });
 }
@@ -118,7 +121,7 @@ export function useDiscoverThemes(market: DiscoverMarket, kind: ThemeKind, perio
     queryFn: () => api.discoverThemes(market, kind, period),
     placeholderData: keepPreviousData,
     staleTime: Math.min(interval, 30_000),
-    refetchInterval: interval,
+    refetchInterval: (q) => discoverEvery(q.state.data?.marketOpen, interval),
     refetchIntervalInBackground: false,
   });
 }
@@ -131,7 +134,7 @@ export function useDiscoverTheme(market: DiscoverMarket, kind: ThemeKind, id: st
     queryFn: () => api.discoverTheme(market, kind, id),
     enabled: !!id,
     staleTime: Math.min(interval, 30_000),
-    refetchInterval: interval,
+    refetchInterval: (q) => discoverEvery(q.state.data?.marketOpen, interval),
     refetchIntervalInBackground: false,
   });
 }
