@@ -1,4 +1,4 @@
-import type { Evaluation,
+import type { AppErrorSummary, Evaluation,
   DiscoverMarket,
   DiscoverRank,
   RankCategory,
@@ -89,6 +89,9 @@ export function createApi(baseUrl: string, token = "") {
   return {
     baseUrl,
     health: () => get<Health>("/health", 8_000),
+    /** 앱 오류 보고 (lib/errorReport). 토큰·금액은 보내기 전에 지운다 */
+    reportErrors: (errors: unknown[]) => send<{ saved: number; dropped: number }>("POST", "/api/app-errors", { errors }, 10_000),
+    appErrorSummary: (days = 7) => get<AppErrorSummary>(`/api/admin/app-errors?days=${days}`),
 
     searchStocks: (q: string, limit = 20) => get<{ results: ListedStock[]; source: string }>(`/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`),
     // 3초마다 부르는 조회는 응답 없는 망에서 60초씩 묶이지 않게 15초로 끊는다 (서버 첫 호출 최대 약 13초 실측)

@@ -1,5 +1,5 @@
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import { Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as SystemUI from "expo-system-ui";
 import React, { useEffect } from "react";
@@ -8,9 +8,13 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
+import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
 import { LiveStreamProvider } from "@/lib/liveStream";
 import { SettingsProvider } from "@/lib/settings";
 import { useTheme } from "@/theme";
+
+// 가장 먼저: 이후 어디서 난 JS 오류든 서버로 보고한다 (토큰·금액은 지운 뒤)
+installErrorHandlers();
 
 /**
  * 위젯·알림 딥링크로 상세 화면부터 열어도 그 아래에 탭(잔고)을 깔아 둔다 → 뒤로 가면 앱이 닫히지 않고 잔고로 간다.
@@ -28,6 +32,13 @@ function ThemedStatusBar() {
     void SystemUI.setBackgroundColorAsync(t.bg).catch(() => undefined);
   }, [t.bg]);
   return <StatusBar style={t.dark ? "light" : "dark"} />;
+}
+
+/** 오류 보고에 "어느 화면에서" 를 붙이기 위해 현재 경로를 알려 둔다 */
+function ScreenTracker() {
+  const path = usePathname();
+  useEffect(() => setCurrentScreen(path), [path]);
+  return null;
 }
 
 function Navigator() {
@@ -71,6 +82,7 @@ export default function RootLayout() {
             <LiveStreamProvider>
               <ThemedStatusBar />
               <NotificationBridge />
+              <ScreenTracker />
               <Navigator />
             </LiveStreamProvider>
           </QueryClientProvider>
@@ -79,3 +91,6 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+// 레이아웃 자체(탭 머리·공통 제공자)에서 난 렌더 오류도 앱을 끄지 않고 "다시 시도" 화면으로, 서버에 보고
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

@@ -273,7 +273,20 @@ export interface Health {
   /** 서버→앱 실시간 스트림(/api/stream): 접속한 앱 수, 폴링 여부 */
   stream?: { clients: number; polling: boolean; tracked: number };
   llmConfigured?: boolean;
+  /** 최근 7일 앱 오류 수 (시험 보고 제외) */
+  appErrors?: { days: number; total: number; fatal: number } | null;
   disclaimer: string;
+}
+
+export interface AppErrorSummary {
+  days: number;
+  since: string;
+  total: number;
+  fatal: number;
+  byDay: { date: string; count: number }[];
+  byKind: Record<string, number>;
+  top: { fingerprint: string; kind: string; message: string; screen: string | null; count: number; lastAt: string; updateId: string | null }[];
+  recent: { at: string; kind: string; message: string; screen: string | null; appVersion: string | null; updateId: string | null }[];
 }
 
 export interface ApiError {

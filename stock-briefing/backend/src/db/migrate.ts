@@ -134,6 +134,28 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
         .execute();
     },
   },
+  {
+    version: 4,
+    up: async (db, dialect) => {
+      // 앱 오류 수집 (3-3). 새 표만 추가하고 기존 표는 건드리지 않는다
+      await db.schema
+        .createTable("app_errors")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("at", "text", (c) => c.notNull())
+        .addColumn("occurred_at", "text")
+        .addColumn("kind", "text", (c) => c.notNull())
+        .addColumn("message", "text", (c) => c.notNull())
+        .addColumn("stack", "text")
+        .addColumn("screen", "text")
+        .addColumn("fingerprint", "text", (c) => c.notNull())
+        .addColumn("app_version", "text")
+        .addColumn("update_id", "text")
+        .addColumn("platform", "text")
+        .execute();
+      await db.schema.createIndex("idx_app_errors_at").ifNotExists().on("app_errors").column("at").execute();
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

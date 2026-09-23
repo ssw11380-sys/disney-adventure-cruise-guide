@@ -79,6 +79,21 @@ export interface DeviceTable {
   last_seen_at: string;
 }
 
+/** 앱이 보낸 JS 오류 (토큰·금액은 지운 뒤 저장) */
+export interface AppErrorTable {
+  id: Generated<number>;
+  at: string; // 서버 수신 시각 (한국 시간 ISO)
+  occurred_at: string | null; // 앱에서 난 시각
+  kind: string; // fatal | js | render | promise | test
+  message: string;
+  stack: string | null;
+  screen: string | null;
+  fingerprint: string;
+  app_version: string | null;
+  update_id: string | null;
+  platform: string | null;
+}
+
 export interface Database {
   listed_stocks: ListedStockTable;
   registered_stocks: RegisteredStockTable;
@@ -88,4 +103,5 @@ export interface Database {
   analyses: AnalysisTable;
   dart_corp_codes: DartCorpCodeTable;
   devices: DeviceTable;
+  app_errors: AppErrorTable;
 }
