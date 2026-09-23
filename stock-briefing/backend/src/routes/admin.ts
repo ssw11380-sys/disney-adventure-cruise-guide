@@ -41,6 +41,26 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
     return { accounts, holdings: await Promise.all(accounts.map((a) => toss.provider.holdingsRaw(a.accountSeq))) };
   });
 
+  /**
+   * 진단용 읽기 전용 프록시: 토스 Open API 의 GET /api/v1/* 경로를 그대로 호출해 원본 응답을 돌려준다.
+   * 주문 같은 쓰기 요청은 할 수 없다(GET 만, 경로 형식 제한). account=<accountSeq> 를 주면 계좌 헤더를 붙인다.
+   *   GET /api/admin/toss/probe?path=/api/v1/holdings&account=1&q=currency%3DKRW
+   */
+  app.get("/toss/probe", async (req, reply) => {
+    if (!toss) return reply.code(503).send({ error: "TOSS_DISABLED", message: "TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 설정되지 않았습니다" });
+    const q = req.query as { path?: string; account?: string; q?: string };
+    const path = String(q.path ?? "");
+    if (!/^\/api\/v1\/[a-z0-9\-/]+$/i.test(path)) return reply.code(400).send({ error: "BAD_PATH", message: "path 는 /api/v1/... 형식이어야 합니다" });
+    const params: Record<string, string> = {};
+    for (const [k, v] of new URLSearchParams(q.q ?? "")) params[k] = v;
+    const headers: Record<string, string> = q.account ? { "X-Tossinvest-Account": String(q.account) } : {};
+    try {
+      return { ok: true, result: await toss.provider.client.get<unknown>(path, params, headers) };
+    } catch (e) {
+      return reply.code(200).send({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
   /** DART 고유번호 매핑 갱신 (DART 키 필요) */
   app.post("/dart/refresh", async (_req, reply) => {
     if (!dart) return reply.code(503).send({ error: "DART_DISABLED", message: "DART_API_KEY 가 설정되지 않았습니다" });
