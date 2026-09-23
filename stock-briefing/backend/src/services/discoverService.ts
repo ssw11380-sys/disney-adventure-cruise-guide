@@ -108,6 +108,9 @@ export class PreopenError extends Error {
 
 export const MIN_TRADING_VALUE: Record<DiscoverMarket, number> = { KR: 1_000_000_000, US: 1_000_000 };
 const MAX_SOURCE_PAGES = 12;
+/** 미국 순위 원본을 쪽마다 받는 벌 수, 묶음의 가장 새 값보다 이만큼 늦은 쪽은 묵은 쪽으로 본다 (다시 받는다) */
+const US_RANK_COPIES = 2;
+const STALE_PAGE_MS = 2_000;
 /** 한국 가격제한폭(%) — 넘으면 상장 첫날이거나 정리매매 */
 const KR_LIMIT_PCT = 30.5;
 /** 분류별 정렬 기준 값 */
@@ -756,12 +759,26 @@ export class DiscoverService {
     let preopen = false;
     const movers = category === "gainers" || category === "losers";
     const minTv = movers ? MIN_TRADING_VALUE[market] : 0;
+    // 미국 원본(api.stock.naver.com)은 같은 쪽을 물어도 서버마다 다른 시점의 목록(최대 1분 전)을 주고, 가끔 한 종목이 빠진 채 온다.
+    // 쪽마다 두 벌을 함께 받아 합치고, 묶음에서 가장 새 값보다 늦은 쪽은 한 번 더 받는다 (한국 원본은 한 벌)
+    const copies = market === "US" ? US_RANK_COPIES : 1;
+    const tau = (p: { tradedAt?: string | null }) => (p.tradedAt ? Date.parse(p.tradedAt) || 0 : 0);
+    const fetchPage = (i: number) => Promise.all(Array.from({ length: copies }, () => src.source(category, i)));
     while (items.length < need && hasNext && next < MAX_SOURCE_PAGES) {
       // 이어 받을 때는 바로 앞 쪽도 다시 받는다 — 살아 있는 출처 목록에서 그 사이 한 쪽 위로 올라온 종목이 쪽 경계에서 빠지지 않게
       // (겹친 줄은 seen 이 거른다)
       const fresh = [next, next + 1, next + 2].filter((i) => i < MAX_SOURCE_PAGES);
       const batch = next > 0 ? [next - 1, ...fresh] : fresh;
-      const pages = await Promise.all(batch.map((i) => src.source(category, i)));
+      const got = await Promise.all(batch.map(fetchPage));
+      const newest = Math.max(...got.flat().map(tau));
+      const lagging = (cs: { tradedAt?: string | null }[]) => newest > 0 && newest - Math.max(...cs.map(tau)) > STALE_PAGE_MS;
+      const late = batch.map((_, j) => j).filter((j) => lagging(got[j]!));
+      if (market === "US" && late.length) {
+        const more = await Promise.all(late.map((j) => fetchPage(batch[j]!)));
+        late.forEach((j, n) => got[j]!.push(...more[n]!));
+      }
+      // 받은 벌을 모두 합치되 새 값부터 넣는다 — seen 이 종목마다 가장 새 줄을 남기고, 묵은 벌은 새 벌에 없던 종목만 보탠다
+      const pages = got.flat().sort((a, b) => tau(b) - tau(a));
       for (const p of pages) {
         if (p.preopen) {
           // 초기화된 쪽의 줄(0%)은 넣지 않는다 — 직전 목록 뒤에 오늘 0% 줄이 섞이지 않게
@@ -779,8 +796,8 @@ export class DiscoverService {
         }
       }
       next += fresh.length;
-      hasNext = pages.at(-1)?.hasNext ?? false;
-      if (pages.some((p) => !p.hasNext)) hasNext = false;
+      hasNext = got.at(-1)?.some((p) => p.hasNext) ?? false;
+      if (got.some((cs) => cs.every((p) => !p.hasNext))) hasNext = false;
       if (preopen) {
         hasNext = false; // 장 시작 전 초기화 — 더 받아도 쓸 값이 없다
         break;
