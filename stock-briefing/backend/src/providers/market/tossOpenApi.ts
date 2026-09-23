@@ -1,4 +1,4 @@
-import type { Candle, CandlePeriod, CandleSeries, ListedStock, Market, Quote } from "../../domain/types.js";
+import { isIntraday, type Candle, type CandlePeriod, type CandleSeries, type ListedStock, type Market, type Quote } from "../../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
@@ -204,10 +204,49 @@ export function localDate(iso: string, kr: boolean): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: kr ? "Asia/Seoul" : "America/New_York" }).format(new Date(iso));
 }
 
-export function toCandle(c: TossCandle, kr: boolean): Candle | null {
+/** ISO 시각을 현지(서울/뉴욕) 오프셋이 붙은 ISO 로 (예: 2026-09-23T10:25:00+09:00) */
+export function localIso(iso: string, kr: boolean): string {
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: kr ? "Asia/Seoul" : "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZoneName: "longOffset",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  const off = get("timeZoneName").replace("GMT", "") || "+00:00";
+  return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}:${get("second")}${off === "" ? "Z" : off}`;
+}
+
+/** 1분봉(오래된 순) → 5분/30분봉. 봉의 time 은 그 구간의 시작 시각(현지 기준으로 step 분 단위 절삭) */
+export function aggregateIntraday(minutes: Candle[], stepMin: number): Candle[] {
+  if (stepMin <= 1) return minutes;
+  const out: Candle[] = [];
+  let key = "";
+  for (const c of minutes) {
+    if (!c.time) continue;
+    const m = c.time.slice(0, 16); // YYYY-MM-DDTHH:MM (현지)
+    const minute = Number(m.slice(14, 16));
+    const bucketMin = Math.floor(minute / stepMin) * stepMin;
+    const k = `${m.slice(0, 14)}${String(bucketMin).padStart(2, "0")}`;
+    const last = out.at(-1);
+    if (k !== key || !last) {
+      key = k;
+      out.push({ ...c, time: `${k}:00${c.time.slice(19)}` });
+    } else {
+      last.high = Math.max(last.high, c.high);
+      last.low = Math.min(last.low, c.low);
+      last.close = c.close;
+      last.volume += c.volume;
+    }
+  }
+  return out;
+}
+
+export function toCandle(c: TossCandle, kr: boolean, intraday = false): Candle | null {
   const ts = c.timestamp ?? "";
   const o = num(c.openPrice), h = num(c.highPrice), l = num(c.lowPrice), cl = num(c.closePrice);
   if (!ts || o === null || h === null || l === null || cl === null) return null;
+  if (intraday) return { date: localDate(ts, kr), time: localIso(ts, kr), open: o, high: h, low: l, close: cl, volume: num(c.volume) ?? 0 };
   // 1d 봉의 timestamp 는 현지 자정 고정이라 앞 10자리가 곧 거래일이다. 형식이 달라도 현지 날짜로 환산해 둔다.
   const date = /^\d{4}-\d{2}-\d{2}T00:00:00/.test(ts) ? ts.slice(0, 10) : localDate(ts, kr);
   return { date, open: o, high: h, low: l, close: cl, volume: num(c.volume) ?? 0 };
@@ -329,8 +368,43 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     return acc;
   }
 
+  /** 1분봉을 최신순 페이지로 받아 오래된 순으로 (분봉은 하루 390개 안팎) */
+  private async minuteCandles(code: string, count: number): Promise<Candle[]> {
+    const kr = isKrCode(code);
+    const acc: Candle[] = [];
+    const seen = new Set<string>();
+    let before: string | undefined;
+    for (let page = 0; page < 10 && acc.length < count; page++) {
+      const r = await this.client.get<{ candles?: TossCandle[]; nextBefore?: string | null }>("/api/v1/candles", {
+        symbol: code,
+        interval: "1m",
+        count: Math.min(200, count - acc.length + (page > 0 ? 1 : 0)),
+        before,
+        adjusted: true,
+      });
+      const rows = r?.candles ?? [];
+      for (const c of rows) {
+        const candle = toCandle(c, kr, true);
+        if (candle?.time && !seen.has(candle.time)) {
+          seen.add(candle.time);
+          acc.push(candle);
+        }
+      }
+      if (!r?.nextBefore || rows.length === 0) break;
+      before = r.nextBefore;
+    }
+    acc.sort((a, b) => Date.parse(a.time!) - Date.parse(b.time!));
+    return acc;
+  }
+
   async getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
     code = normalizeCode(code);
+    if (isIntraday(period)) {
+      const step = period === "1m" ? 1 : period === "5m" ? 5 : 30;
+      const minutes = await this.minuteCandles(code, Math.min(count * step, 2000));
+      if (minutes.length === 0) throw new ProviderError(this.name, `${code} 분봉 데이터 없음`);
+      return { code, period, candles: aggregateIntraday(minutes, step).slice(-count), source: this.name };
+    }
     const dailyNeeded = period === "D" ? count : period === "W" ? count * 5 + 10 : count * 22 + 10;
     const daily = await this.dailyCandles(code, Math.min(dailyNeeded, 1600));
     if (daily.length === 0) throw new ProviderError(this.name, `${code} 봉 데이터 없음`);

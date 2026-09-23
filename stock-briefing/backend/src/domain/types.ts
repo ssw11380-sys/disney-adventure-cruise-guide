@@ -81,10 +81,17 @@ export interface AfterMarketQuote {
   asOf: string; // 마지막 체결 시각 (ISO, 한국 시간)
 }
 
-export type CandlePeriod = "D" | "W" | "M";
+/** 1m/5m/30m 은 분봉(토스 소스만 지원), D/W/M 은 일·주·월봉 */
+export type CandlePeriod = "1m" | "5m" | "30m" | "D" | "W" | "M";
+export const INTRADAY_PERIODS: ReadonlySet<CandlePeriod> = new Set<CandlePeriod>(["1m", "5m", "30m"]);
+export function isIntraday(period: CandlePeriod): boolean {
+  return INTRADAY_PERIODS.has(period);
+}
 
 export interface Candle {
   date: string; // YYYY-MM-DD (주/월봉은 해당 기간 시작일 또는 마지막 거래일, 소스에 따름)
+  /** 분봉만: 봉 시작 시각 ISO(현지 오프셋 포함, 예 2026-09-23T10:25:00+09:00) */
+  time?: string;
   open: number;
   high: number;
   low: number;

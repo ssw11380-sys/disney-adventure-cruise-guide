@@ -32,6 +32,7 @@ function Navigator() {
       <Stack.Screen name="stocks/add" options={{ title: "종목 등록", presentation: "modal" }} />
       <Stack.Screen name="stocks/[code]/index" options={{ title: "종목" }} />
       <Stack.Screen name="stocks/[code]/edit" options={{ title: "보유 정보 수정", presentation: "modal" }} />
+      <Stack.Screen name="stocks/[code]/chart" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
       <Stack.Screen name="briefings/[id]" options={{ title: "브리핑" }} />
     </Stack>
   );

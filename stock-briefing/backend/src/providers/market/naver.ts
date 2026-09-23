@@ -1,4 +1,4 @@
-import type { AfterMarketQuote, Candle, CandlePeriod, CandleSeries, Quote } from "../../domain/types.js";
+import { isIntraday, type AfterMarketQuote, type Candle, type CandlePeriod, type CandleSeries, type Quote } from "../../domain/types.js";
 import { isKrCode } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
@@ -18,9 +18,9 @@ const POLLING_URL = "https://polling.finance.naver.com/api/realtime/domestic/sto
 const INTEGRATION_URL = "https://m.stock.naver.com/api/stock";
 const CHART_URL = "https://api.stock.naver.com/chart/domestic/item";
 
-const PERIOD_PATH: Record<CandlePeriod, string> = { D: "day", W: "week", M: "month" };
+const PERIOD_PATH: Partial<Record<CandlePeriod, string>> = { D: "day", W: "week", M: "month" };
 /** count 개 봉을 받기 위해 거슬러 올라갈 대략의 달력 일수 (휴장 여유 포함) */
-const DAYS_PER_CANDLE: Record<CandlePeriod, number> = { D: 1.7, W: 7.5, M: 31 };
+const DAYS_PER_CANDLE: Partial<Record<CandlePeriod, number>> = { D: 1.7, W: 7.5, M: 31 };
 
 type Json = Record<string, unknown>;
 
@@ -124,8 +124,9 @@ export class NaverFinanceProvider implements QuoteProvider {
 
   async getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
     if (!isKrCode(code)) throw new ProviderError(this.name, `한국 종목만 지원합니다: ${code}`);
+    if (isIntraday(period)) throw new ProviderError(this.name, "분봉은 지원하지 않습니다");
     const end = this.now();
-    const start = new Date(end.getTime() - Math.ceil(count * DAYS_PER_CANDLE[period] + 14) * 86_400_000);
+    const start = new Date(end.getTime() - Math.ceil(count * (DAYS_PER_CANDLE[period] ?? 1.7) + 14) * 86_400_000);
     const url = `${CHART_URL}/${code}/${PERIOD_PATH[period]}?startDateTime=${ymd(start)}0000&endDateTime=${ymd(end)}2359`;
     const json = await this.getJson(url);
     if (!Array.isArray(json)) throw new ProviderError(this.name, `${code} 봉 응답 형식이 다릅니다`);

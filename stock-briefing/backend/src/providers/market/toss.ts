@@ -1,4 +1,4 @@
-import type { AfterMarketQuote, Candle, CandlePeriod, CandleSeries, ListedStock, Market, Quote } from "../../domain/types.js";
+import { isIntraday, type AfterMarketQuote, type Candle, type CandlePeriod, type CandleSeries, type ListedStock, type Market, type Quote } from "../../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
@@ -11,7 +11,7 @@ import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
  *
  *  - 시세:   GET  /api/v3/stock-prices?productCodes=A035420,US20100629001
  *            한국은 KRX+NXT "통합" 가격(토스 앱에 보이는 그 숫자), 미국은 USD + 원화 환산.
- *  - 봉:     GET  /api/v1/c-chart/{kr-s|us-s}/{productCode}/{day|week|month}:1?count=N  (최신순)
+ *  - 봉:     GET  /api/v1/c-chart/{kr-s|us-s}/{productCode}/{day|week|month}:1?count=N  (최신순), 분봉은 min:1|min:5|min:30
  *  - 종목:   GET  /api/v2/stock-infos/{productCode}  (이름, 시장, 발행주식수 → 시가총액)
  *  - 검색:   POST /api/v3/search-all/wts-auto-complete  (한글로 미국 종목 검색 가능: "테슬라" → TSLA)
  *
@@ -23,7 +23,7 @@ const BASE = "https://wts-info-api.tossinvest.com/api";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 
 const TOSS_MARKET: Record<string, Market> = { KSP: "KOSPI", KSQ: "KOSDAQ", NSQ: "NASDAQ", NYS: "NYSE", AMX: "AMEX" };
-const PERIOD_PATH: Record<CandlePeriod, string> = { D: "day", W: "week", M: "month" };
+const PERIOD_PATH: Record<CandlePeriod, string> = { "1m": "min:1", "5m": "min:5", "30m": "min:30", D: "day", W: "week", M: "month" };
 
 type Json = Record<string, unknown>;
 
@@ -253,16 +253,19 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
   }
 
   private async fetchChart(productCode: string, kr: boolean, period: CandlePeriod, count: number): Promise<Candle[]> {
-    const path = `/v1/c-chart/${kr ? "kr-s" : "us-s"}/${encodeURIComponent(productCode)}/${PERIOD_PATH[period]}:1?count=${count}`;
+    const intraday = isIntraday(period);
+    const path = `/v1/c-chart/${kr ? "kr-s" : "us-s"}/${encodeURIComponent(productCode)}/${PERIOD_PATH[period]}${intraday ? "" : ":1"}?count=${count}`;
     const result = (await this.request(path)) as { candles?: Json[] };
     const out: Candle[] = [];
     for (const c of result.candles ?? []) {
       const dt = String(c["dt"] ?? "");
       const o = num(c["open"]), h = num(c["high"]), l = num(c["low"]), cl = num(c["close"]);
       if (!/^\d{4}-\d{2}-\d{2}/.test(dt) || o === null || h === null || l === null || cl === null) continue;
-      out.push({ date: dt.slice(0, 10), open: o, high: h, low: l, close: cl, volume: num(c["volume"]) ?? 0 });
+      out.push({ date: dt.slice(0, 10), ...(intraday ? { time: dt } : {}), open: o, high: h, low: l, close: cl, volume: num(c["volume"]) ?? 0 });
     }
-    out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)); // 토스는 최신순 → 오래된 순으로
+    // 토스는 최신순 → 오래된 순으로. 분봉은 시각(오프셋 포함)으로 정렬
+    const keyOf = (c: Candle) => (c.time ? Date.parse(c.time) : Date.parse(`${c.date}T00:00:00Z`));
+    out.sort((a, b) => keyOf(a) - keyOf(b));
     return out;
   }
 

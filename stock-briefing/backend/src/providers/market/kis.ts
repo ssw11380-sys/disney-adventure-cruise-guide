@@ -1,4 +1,4 @@
-import type { Candle, CandlePeriod, CandleSeries, Quote } from "../../domain/types.js";
+import { isIntraday, type Candle, type CandlePeriod, type CandleSeries, type Quote } from "../../domain/types.js";
 import { ProviderError } from "../../lib/errors.js";
 import { isKrCode } from "../../lib/codes.js";
 import { seoulDateCompact, seoulDateCompactDaysAgo, seoulIso } from "../../lib/time.js";
@@ -153,6 +153,7 @@ export class KisProvider implements QuoteProvider, InvestorFlowProvider {
   }
 
   async getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
+    if (isIntraday(period)) throw new ProviderError(this.name, "분봉은 지원하지 않습니다");
     // 한 호출에 최대 100건. 필요한 만큼 기간을 뒤로 옮기며 반복 조회한다.
     const perCall = 100;
     const daysPerBar = period === "D" ? 1.5 : period === "W" ? 7.5 : 31;

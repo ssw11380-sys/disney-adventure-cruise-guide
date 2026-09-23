@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
+import type { CandleSeries, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
+import { applyTickToCandles } from "./chartPrefs";
 import { applyTick, evaluate, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
 import { useSettings } from "./settings";
 
@@ -62,6 +63,12 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         if (quote === d.quote) return d;
         touched = true;
         return { ...d, quote };
+      });
+      // 차트의 마지막 봉도 같이 움직인다 (일·주·월봉은 고·저·종 갱신, 분봉은 구간이 바뀌면 새 봉)
+      qc.setQueriesData<CandleSeries>({ queryKey: [apiUrl, "candles", tick.code] }, (series) => {
+        if (!series) return series;
+        const next = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp);
+        return next === series.candles ? series : { ...series, candles: next };
       });
       if (touched) {
         ticksRef.current += 1;
