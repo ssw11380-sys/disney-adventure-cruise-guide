@@ -47,8 +47,7 @@ export function AppUpdateCard() {
     <Card>
       <SectionTitle right={newer ? <Badge tone="warn">새 버전 {newer.version}</Badge> : result?.kind === "none" ? <Badge tone="good">최신</Badge> : null}>앱 업데이트</SectionTitle>
       <Row label="현재 버전" value={currentVersion} />
-      <Row label="업데이트 채널" value={running.channel} />
-      <Row label="적용된 업데이트" value={running.createdAt ? `${running.updateId} · ${formatDateKo(running.createdAt, true)}` : running.updateId} />
+      <Row label="빌드" value={running.createdAt ? formatDateKo(running.createdAt, true) : running.updateId} />
       {newer ? (
         <View style={{ gap: space.xs }}>
           <Text style={{ color: t.ink, fontSize: font.small }}>
@@ -58,7 +57,7 @@ export function AppUpdateCard() {
           {newer.apkUrl ? <Button title={`새 버전 ${newer.version} 설치 (APK)`} icon="download-outline" onPress={() => void Linking.openURL(newer.apkUrl!)} /> : null}
         </View>
       ) : null}
-      <Button title="업데이트 확인" variant={newer ? "secondary" : "primary"} icon="refresh" onPress={() => void check()} loading={checking} />
+      <Button title="업데이트 확인" variant="secondary" icon="refresh" onPress={() => void check()} loading={checking} />
       {error ? <Text style={{ color: t.danger, fontSize: font.small }}>{error}</Text> : null}
       {result?.kind === "none" ? (
         <Muted>
@@ -67,7 +66,6 @@ export function AppUpdateCard() {
         </Muted>
       ) : null}
       {result?.kind === "ota" ? <Button title="지금 다시 시작해서 적용" variant="secondary" icon="play" onPress={() => void applyOtaUpdate()} /> : null}
-      <Muted>화면·기능만 바뀐 업데이트는 여기서 바로 적용되고, 앱 자체가 바뀐 업데이트는 새 설치 파일(APK)을 내려받아 덮어씌웁니다.</Muted>
     </Card>
   );
 }

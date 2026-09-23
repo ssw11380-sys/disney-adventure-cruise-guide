@@ -94,7 +94,6 @@ function EditForm({ stock }: { stock: RegisteredStock }) {
         <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>
           {stock.name} <Muted>{stock.code}</Muted>
         </Text>
-        <Muted>비우면 관심 종목으로 바뀝니다.</Muted>
         <View style={{ flexDirection: "row", gap: space.sm }}>
           <TextInput value={quantity} onChangeText={setQuantity} placeholder="보유 수량 (주)" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
           <TextInput value={avgPrice} onChangeText={setAvgPrice} placeholder={cur === "USD" ? "평균 단가 ($)" : "평균 단가 (원)"} placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
@@ -104,8 +103,7 @@ function EditForm({ stock }: { stock: RegisteredStock }) {
       </Card>
 
       <Card>
-        <SectionTitle>매수·매도 기록</SectionTitle>
-        <Muted>거래한 수량과 가격을 넣으면 보유 수량과 평균 단가를 대신 계산해 위 칸에 채웁니다. 매수는 수량 가중 평균, 매도는 평단 유지.</Muted>
+        <SectionTitle>체결 반영</SectionTitle>
         <Segmented
           options={[
             { value: "buy", label: "매수" },
@@ -128,7 +126,9 @@ function EditForm({ stock }: { stock: RegisteredStock }) {
         <Button title="위 칸에 반영" variant="secondary" icon="calculator-outline" disabled={!preview || "error" in preview} onPress={applyTradeToForm} />
       </Card>
 
-      <Button title="목록에서 삭제" variant="danger" onPress={confirmRemove} loading={remove.isPending} />
+      <View style={{ paddingHorizontal: space.lg }}>
+        <Button title="종목 삭제" variant="danger" onPress={confirmRemove} loading={remove.isPending} />
+      </View>
     </Screen>
   );
 }

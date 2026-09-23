@@ -30,7 +30,7 @@ export function BriefingCard({ briefing, mode, showName = true }: { briefing: Br
           </Muted>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-          {failed ? <Badge tone="bad">생성 실패</Badge> : briefing.missing.length ? <Badge tone="warn">일부 미확인</Badge> : null}
+          {failed ? <Badge tone="bad">생성 실패</Badge> : briefing.missing.length ? <Badge>일부 데이터 없음</Badge> : null}
           <Ionicons name="chevron-forward" size={18} color={t.muted} />
         </View>
       </Pressable>

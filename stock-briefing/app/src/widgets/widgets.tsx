@@ -1,11 +1,12 @@
 import React from "react";
-import { FlexWidget, TextWidget, type FlexWidgetStyle } from "react-native-android-widget";
+import { FlexWidget, ListWidget, TextWidget, type FlexWidgetStyle } from "react-native-android-widget";
 import type { Currency, LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { formatPct, formatPrice, toDisplay } from "@/lib/format";
 
 /**
  * 홈 화면 위젯 3종. react-native-android-widget 프리미티브만 쓴다(RN 컴포넌트 불가, 색은 hex/rgba 문자열).
- *  - HoldingsWidget (4x2): 총 평가·오늘 손익 + 종목별 현재가/등락 (최대 6개). 종목을 누르면 상세로, 헤더를 누르면 앱으로.
+ *  - HoldingsWidget (4x2~): 총 평가·당일 손익 + 등록 종목 전체(보유 → 관심, 평가금액 순)를 스크롤 목록으로.
+ *    종목을 누르면 상세로, 헤더를 누르면 앱으로. 위젯 높이를 늘리면 한 번에 더 많이 보인다.
  *  - BriefingWidget (4x2): 가장 최근 브리핑의 3줄 요약. 누르면 브리핑 상세로.
  *  - AssetWidget (2x1): 총 평가금액과 오늘 손익만 크게.
  * 새로고침 아이콘은 clickAction "REFRESH" 로 태스크 핸들러에 전달된다.
@@ -13,15 +14,16 @@ import { formatPct, formatPrice, toDisplay } from "@/lib/format";
 
 export const WIDGET_NAMES = { holdings: "Holdings", briefing: "Briefing", asset: "Asset" } as const;
 
+// 앱 다크 테마와 같은 톤 (HTS 풍 단색 바탕)
 const C = {
-  bg: "#0F1E45",
-  bg2: "#132A5E",
-  ink: "#FFFFFF",
-  muted: "#B8C4E6",
-  line: "rgba(255, 255, 255, 0.12)",
-  up: "#FF8A80",
-  down: "#8EC5FF",
-  gold: "#E1C25B",
+  bg: "#12151B",
+  bg2: "#12151B",
+  ink: "#E8EAED",
+  muted: "#7A828F",
+  line: "rgba(255, 255, 255, 0.07)",
+  up: "#FF4B55",
+  down: "#3D8EFF",
+  gold: "#E3B341",
 } as const;
 
 const DEEP_LINK = "stockbriefing://";
@@ -79,9 +81,9 @@ function tone(n: number): `#${string}` {
 const root: FlexWidgetStyle = {
   height: "match_parent",
   width: "match_parent",
-  backgroundGradient: { from: C.bg, to: C.bg2, orientation: "TL_BR" },
-  borderRadius: 20,
-  padding: 14,
+  backgroundColor: C.bg,
+  borderRadius: 14,
+  padding: 12,
   flexDirection: "column",
 };
 
@@ -89,7 +91,6 @@ function Header({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
       <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 6 }} clickAction="OPEN_APP">
-        <TextWidget text="◆" style={{ color: C.gold, fontSize: 10 }} />
         <TextWidget text={title} style={{ color: C.ink, fontSize: 13, fontWeight: "700" }} />
         {subtitle ? <TextWidget text={subtitle} style={{ color: C.muted, fontSize: 10 }} /> : null}
       </FlexWidget>
@@ -105,39 +106,66 @@ function updatedLabel(at: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")} 기준`;
 }
 
-export function HoldingsWidget({ stocks, showKrw, fetchedAt, error, height }: { stocks: RegisteredWithQuote[]; showKrw: boolean; fetchedAt: number; error: string | null; height: number }) {
+/** 위젯 목록 순서: 보유(원화 환산 평가금액 큰 순) → 관심(이름 순) */
+function widgetOrder(stocks: RegisteredWithQuote[]): RegisteredWithQuote[] {
+  const krw = (s: RegisteredWithQuote) => {
+    const v = s.evaluation?.marketValue ?? 0;
+    return (s.quote?.currency ?? "KRW") === "USD" ? v * (fxOf(s) ?? 1) : v;
+  };
+  const held = stocks.filter((s) => s.evaluation).sort((a, b) => krw(b) - krw(a));
+  const watch = stocks.filter((s) => !s.evaluation).sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  return [...held, ...watch];
+}
+
+export function HoldingsWidget({ stocks, showKrw, fetchedAt, error }: { stocks: RegisteredWithQuote[]; showKrw: boolean; fetchedAt: number; error: string | null; height?: number }) {
   const t = totals(stocks, showKrw);
-  const rowsFit = Math.max(2, Math.min(6, Math.floor((height - 78) / 26)));
-  const rows = stocks.filter((s) => s.quote).slice(0, rowsFit);
+  const rows = widgetOrder(stocks);
   return (
     <FlexWidget style={root}>
-      <Header title="내 종목" subtitle={updatedLabel(fetchedAt)} />
+      <Header title={`잔고 ${rows.length}`} subtitle={updatedLabel(fetchedAt)} />
       {t ? (
-        <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 6, marginBottom: 6 }} clickAction="OPEN_APP">
-          <TextWidget text={formatPrice(t.value, t.currency)} style={{ color: C.ink, fontSize: 20, fontWeight: "800" }} />
-          <TextWidget text={`오늘 ${formatPrice(t.day, t.currency, { sign: true })}`} style={{ color: tone(t.day), fontSize: 12, fontWeight: "700" }} />
+        <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 4, marginBottom: 4 }} clickAction="OPEN_APP">
+          <TextWidget text={formatPrice(t.value, t.currency)} style={{ color: C.ink, fontSize: 18, fontWeight: "800" }} />
+          <TextWidget text={`당일 ${formatPrice(t.day, t.currency, { sign: true })}`} style={{ color: tone(t.day), fontSize: 11, fontWeight: "700" }} />
         </FlexWidget>
       ) : null}
       {error ? <TextWidget text={`불러오기 실패: ${error}`} style={{ color: C.muted, fontSize: 11 }} /> : null}
-      {rows.length === 0 && !error ? <TextWidget text="등록된 종목이 없습니다. 앱에서 종목을 등록하세요." style={{ color: C.muted, fontSize: 11 }} /> : null}
-      {rows.map((s) => {
-        const q = s.quote!;
-        const fx = fxOf(s);
-        return (
-          <FlexWidget
-            key={s.code}
-            clickAction="OPEN_URI"
-            clickActionData={{ uri: `${DEEP_LINK}stocks/${s.code}` }}
-            style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, borderTopWidth: 1, borderTopColor: C.line }}
-          >
-            <TextWidget text={s.name} truncate="END" maxLines={1} style={{ color: C.ink, fontSize: 12, fontWeight: "600", width: 120 }} />
-            <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 8 }}>
-              <TextWidget text={money(q.price, q.currency, fx, showKrw)} style={{ color: C.ink, fontSize: 12, fontWeight: "700" }} />
-              <TextWidget text={formatPct(q.changeRate)} style={{ color: tone(q.change), fontSize: 11, fontWeight: "700", width: 58, textAlign: "right" }} />
-            </FlexWidget>
-          </FlexWidget>
-        );
-      })}
+      {rows.length === 0 && !error ? <TextWidget text="등록된 종목이 없습니다" style={{ color: C.muted, fontSize: 11 }} /> : null}
+      {rows.length > 0 ? (
+        <ListWidget style={{ height: "match_parent", width: "match_parent" }}>
+          {rows.map((s) => {
+            const q = s.quote;
+            const fx = fxOf(s);
+            const ev = s.evaluation;
+            return (
+              <FlexWidget
+                key={s.code}
+                clickAction="OPEN_URI"
+                clickActionData={{ uri: `${DEEP_LINK}stocks/${s.code}` }}
+                style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 5, borderTopWidth: 1, borderTopColor: C.line }}
+              >
+                <FlexWidget style={{ flexDirection: "column", width: 118 }}>
+                  <TextWidget text={s.name} truncate="END" maxLines={1} style={{ color: C.ink, fontSize: 12, fontWeight: "600" }} />
+                  <TextWidget
+                    text={ev ? `${formatPct(ev.profitRate)} ${money(ev.profit, q?.currency, fx, showKrw, true)}` : "관심"}
+                    truncate="END"
+                    maxLines={1}
+                    style={{ color: ev ? tone(ev.profit) : C.muted, fontSize: 10 }}
+                  />
+                </FlexWidget>
+                {q ? (
+                  <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 8 }}>
+                    <TextWidget text={money(q.price, q.currency, fx, showKrw)} style={{ color: tone(q.change), fontSize: 12, fontWeight: "700" }} />
+                    <TextWidget text={formatPct(q.changeRate)} style={{ color: tone(q.change), fontSize: 11, fontWeight: "700", width: 56, textAlign: "right" }} />
+                  </FlexWidget>
+                ) : (
+                  <TextWidget text="-" style={{ color: C.muted, fontSize: 11 }} />
+                )}
+              </FlexWidget>
+            );
+          })}
+        </ListWidget>
+      ) : null}
     </FlexWidget>
   );
 }
@@ -170,7 +198,7 @@ export function AssetWidget({ stocks, showKrw, fetchedAt, error }: { stocks: Reg
   return (
     <FlexWidget style={{ ...root, padding: 12, justifyContent: "center" }} clickAction="OPEN_APP">
       <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-        <TextWidget text="◆ 총 평가" style={{ color: C.gold, fontSize: 10, fontWeight: "700" }} />
+        <TextWidget text="총 평가" style={{ color: C.muted, fontSize: 10, fontWeight: "700" }} />
         <TextWidget text={updatedLabel(fetchedAt)} style={{ color: C.muted, fontSize: 9 }} />
       </FlexWidget>
       {t ? (

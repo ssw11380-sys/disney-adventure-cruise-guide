@@ -6,7 +6,7 @@ import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Badge, Card, ChangeText, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL } from "@/lib/format";
-import { font, radius, space, useTheme } from "@/theme";
+import { font, space, useTheme } from "@/theme";
 
 /** 브리핑 상세: 요약/상세 토글, 당시 시세 스냅샷, 같은 종목 지난 브리핑 날짜 목록 */
 export default function BriefingDetailScreen() {
@@ -24,9 +24,9 @@ export default function BriefingDetailScreen() {
   const failed = d.status === "failed";
 
   return (
-    <Screen>
+    <Screen disclaimer>
       <Stack.Screen options={{ title: `${d.name ?? d.code} · ${SESSION_LABEL[d.session]}` }} />
-      <View style={{ gap: 2 }}>
+      <View style={{ gap: 2, paddingHorizontal: space.lg, paddingTop: space.md }}>
         <Pressable onPress={() => router.push(`/stocks/${d.code}`)} accessibilityRole="link">
           <Text style={{ color: t.ink, fontSize: font.title, fontWeight: "700" }}>{d.name ?? d.code}</Text>
         </Pressable>
@@ -52,7 +52,6 @@ export default function BriefingDetailScreen() {
       {failed ? (
         <Card>
           <Text style={{ color: t.danger }}>{d.error ?? d.summary}</Text>
-          <Muted>다음 정기 실행에서 자동으로 다시 시도합니다.</Muted>
         </Card>
       ) : (
         <>
@@ -81,8 +80,8 @@ export default function BriefingDetailScreen() {
 
       {history.data && history.data.length > 1 ? (
         <View>
-          <SectionTitle>지난 브리핑</SectionTitle>
-          <View style={{ gap: space.xs }}>
+          <SectionTitle style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>지난 브리핑</SectionTitle>
+          <View>
             {history.data
               .filter((h) => h.id !== d.id)
               .map((h) => (
@@ -103,5 +102,5 @@ export default function BriefingDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  historyRow: { flexDirection: "row", alignItems: "center", padding: space.md, borderRadius: radius.sm, borderWidth: StyleSheet.hairlineWidth },
+  historyRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: StyleSheet.hairlineWidth },
 });

@@ -340,7 +340,17 @@ export function PriceChart(p: PriceChartProps) {
             {p.high52w && p.high52w > domain[0] && p.high52w < domain[1] ? <Tag y={yOf(p.high52w)} plotW={plotW} label="52주고" color={t.muted} dotted /> : null}
             {p.low52w && p.low52w > domain[0] && p.low52w < domain[1] ? <Tag y={yOf(p.low52w)} plotW={plotW} label="52주저" color={t.muted} dotted /> : null}
             {/* 평단선 */}
-            {avgIn ? <Tag y={yOf(p.avgPrice!)} plotW={plotW} label={`평단 ${axisPrice(p.avgPrice!, currency)}`} color={t.gold} dashed /> : null}
+            {avgIn ? (
+              <Tag
+                y={yOf(p.avgPrice!)}
+                // 현재가 태그와 겹치면 평단 글자만 위/아래로 비켜 적는다 (선 위치는 그대로)
+                labelDy={showCurrent && Math.abs(yOf(p.avgPrice!) - yOf(p.currentPrice!)) < 16 ? (yOf(p.avgPrice!) >= yOf(p.currentPrice!) ? 14 : -14) : 0}
+                plotW={plotW}
+                label={`평단 ${axisPrice(p.avgPrice!, currency)}`}
+                color={t.gold}
+                dashed
+              />
+            ) : null}
             {avgOut ? (
               <SvgText x={plotW - 4} y={avgOut === "above" ? 12 : priceH - 4} fill={t.gold} fontSize={10} textAnchor="end">
                 {avgOut === "above" ? "▲ 평단 " : "▼ 평단 "}
@@ -449,14 +459,14 @@ function fmtNum(v: number | null | undefined, digits: number): string {
 }
 
 /** 가로 기준선 + 오른쪽 축 태그 */
-function Tag({ y, plotW, label, color, dashed, dotted, filled }: { y: number; plotW: number; label: string; color: string; dashed?: boolean; dotted?: boolean; filled?: boolean }) {
+function Tag({ y, plotW, label, color, dashed, dotted, filled, labelDy = 0 }: { y: number; plotW: number; label: string; color: string; dashed?: boolean; dotted?: boolean; filled?: boolean; labelDy?: number }) {
   const t = useTheme();
   const w = Math.max(AXIS_W, label.length * 6 + 8);
   return (
     <>
       <Line x1={0} x2={plotW} y1={y} y2={y} stroke={color} strokeWidth={dotted ? 0.8 : 1} strokeDasharray={dashed ? "5 3" : dotted ? "1.5 3" : undefined} strokeOpacity={dotted ? 0.7 : 0.9} />
       {filled ? <Rect x={plotW} y={y - 8} width={w} height={16} fill={color} rx={3} /> : null}
-      <SvgText x={plotW + 4} y={y + 3.5} fill={filled ? t.bg : color} fontSize={10} fontWeight="700">
+      <SvgText x={plotW + 4} y={y + 3.5 + labelDy} fill={filled ? t.bg : color} fontSize={10} fontWeight="700">
         {label}
       </SvgText>
     </>

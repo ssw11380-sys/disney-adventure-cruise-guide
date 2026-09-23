@@ -26,7 +26,7 @@ export function CandleChart({
   height,
   width: widthProp,
   onFullscreen,
-  compact,
+  compact: _compact,
 }: {
   candles: Candle[] | undefined;
   period: CandlePeriod;
@@ -178,14 +178,7 @@ export function CandleChart({
           <Text style={chipText(prefs.indicator !== "none")}>{prefs.indicator === "none" ? "RSI/MACD" : prefs.indicator === "rsi" ? "RSI ▸ MACD" : "MACD ▸ 끄기"}</Text>
         </Pressable>
       </ScrollView>
-      {toKrw ? (
-        <Text style={{ color: t.muted, fontSize: font.tiny }}>원화 환산 · 현재 환율 1달러 {formatNumber(fx, 2)}원 기준 (과거 봉도 같은 환율 적용, 설정에서 끄면 달러)</Text>
-      ) : null}
-      {!compact ? (
-        <Text style={{ color: t.muted, fontSize: font.tiny }}>
-          드래그로 과거 이동, 두 손가락으로 확대, 길게 누르면 십자선 · 금색 점선은 내 평단{quote?.live ? " · 마지막 봉은 실시간 체결로 움직입니다" : ""}
-        </Text>
-      ) : null}
+      {toKrw ? <Text style={{ color: t.muted, fontSize: font.tiny }}>원화 환산 · 1달러 {formatNumber(fx, 2)}원 (과거 봉 동일 환율)</Text> : null}
     </View>
   );
 }
@@ -194,6 +187,6 @@ const styles = StyleSheet.create({
   placeholder: { alignItems: "center", justifyContent: "center", borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth },
   toolbar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: space.sm, flexWrap: "wrap" },
   chips: { flexDirection: "row", gap: 6, alignItems: "center", flexWrap: "wrap" },
-  chip: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
-  swatch: { width: 8, height: 8, borderRadius: 4 },
+  chip: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  swatch: { width: 8, height: 2 },
 });

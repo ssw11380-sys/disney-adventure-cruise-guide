@@ -16,7 +16,15 @@ export const STORAGE_KEYS = {
   apiToken: "settings.apiToken",
   sort: "settings.sort",
   showKrw: "settings.showKrw",
+  themeMode: "settings.themeMode",
 } as const;
+
+export type ThemeMode = "dark" | "light" | "system";
+export const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: "dark", label: "다크" },
+  { value: "light", label: "라이트" },
+  { value: "system", label: "시스템" },
+];
 
 export type SortKey = "created" | "name" | "changeRate" | "profit" | "value" | "market";
 export const SORT_OPTIONS: { value: SortKey; label: string }[] = [
@@ -42,15 +50,17 @@ interface Settings {
   apiToken: string;
   sort: SortKey;
   showKrw: boolean;
+  themeMode: ThemeMode;
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
   setApiToken: (token: string) => Promise<void>;
   setSort: (sort: SortKey) => Promise<void>;
   setShowKrw: (on: boolean) => Promise<void>;
+  setThemeMode: (m: ThemeMode) => Promise<void>;
 }
 
 const noop = async () => {};
-const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, ready: false, setApiUrl: noop, setApiToken: noop, setSort: noop, setShowKrw: noop });
+const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, themeMode: "dark", ready: false, setApiUrl: noop, setApiToken: noop, setSort: noop, setShowKrw: noop, setThemeMode: noop });
 
 async function persist(key: string, value: string | null): Promise<void> {
   try {
@@ -66,10 +76,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [apiToken, setToken] = useState(process.env.EXPO_PUBLIC_API_TOKEN ?? "");
   const [sort, setSortState] = useState<SortKey>("created");
   const [showKrw, setShowKrwState] = useState(false);
+  const [themeMode, setThemeModeState] = useState<ThemeMode>("dark");
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw])
+    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode])
       .then((pairs) => {
         const m = new Map(pairs);
         const u = m.get(STORAGE_KEYS.apiUrl);
@@ -80,6 +91,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         if (t) setToken(t);
         if (s && SORT_OPTIONS.some((o) => o.value === s)) setSortState(s as SortKey);
         if (k) setShowKrwState(k === "1");
+        const tm = m.get(STORAGE_KEYS.themeMode);
+        if (tm && THEME_OPTIONS.some((o) => o.value === tm)) setThemeModeState(tm as ThemeMode);
       })
       .catch(() => {})
       .finally(() => setReady(true));
@@ -104,9 +117,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     await persist(STORAGE_KEYS.showKrw, on ? "1" : "0");
   }, []);
 
+  const setThemeMode = useCallback(async (m: ThemeMode) => {
+    setThemeModeState(m);
+    await persist(STORAGE_KEYS.themeMode, m);
+  }, []);
+
   const value = useMemo(
-    () => ({ apiUrl, apiToken, sort, showKrw, ready, setApiUrl, setApiToken, setSort, setShowKrw }),
-    [apiUrl, apiToken, sort, showKrw, ready, setApiUrl, setApiToken, setSort, setShowKrw],
+    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, ready, setApiUrl, setApiToken, setSort, setShowKrw, setThemeMode }),
+    [apiUrl, apiToken, sort, showKrw, themeMode, ready, setApiUrl, setApiToken, setSort, setShowKrw, setThemeMode],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -4,7 +4,7 @@ import { useHealth, useLatestBriefings, useMarketStatus, useStockMutations } fro
 import type { BriefingSession } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { Screen } from "@/components/Screen";
-import { Button, Card, Empty, ErrorView, Loading, Muted, Segmented } from "@/components/ui";
+import { Button, Card, Empty, ErrorView, Loading, Muted, SectionTitle, Segmented } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
 import { font, space, useTheme } from "@/theme";
 
@@ -36,7 +36,7 @@ export default function BriefingsScreen() {
     );
   };
 
-  if (isLoading) return <Screen><Loading label="브리핑 불러오는 중" /></Screen>;
+  if (isLoading) return <Screen><Loading /></Screen>;
   if (isError) return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const items = data ?? [];
@@ -46,15 +46,15 @@ export default function BriefingsScreen() {
   const krHoliday = market.data && !market.data.KR.isTradingDay;
 
   return (
-    <Screen refreshing={isRefetching} onRefresh={() => void refetch()}>
+    <Screen disclaimer refreshing={isRefetching} onRefresh={() => void refetch()}>
       {llmOff || (last && last.failed > 0) ? (
-        <Card style={{ borderColor: t.danger }}>
+        <Card style={{ borderLeftWidth: 3, borderLeftColor: t.danger }}>
           <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>
           <Muted>{llmOff ? "서버 변수 ANTHROPIC_API_KEY 가 비어 있습니다." : last!.lastError ?? ""}</Muted>
           {last ? <Muted>{formatDateKo(last.finishedAt, true)} · {last.session === "morning" ? "오전" : "오후"} · 성공 {last.ok} / 실패 {last.failed} / 건너뜀 {last.skipped}</Muted> : null}
         </Card>
       ) : null}
-      {krHoliday ? <Muted>오늘은 한국 시장 휴장일이라 한국 종목 브리핑은 생성되지 않습니다{market.data?.KR.opensAt ? ` (다음 개장 ${formatDateKo(market.data.KR.opensAt, true)})` : ""}.</Muted> : null}
+      {krHoliday ? <Muted style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>한국 휴장일 · 국내 종목 브리핑 없음{market.data?.KR.opensAt ? ` · 다음 개장 ${formatDateKo(market.data.KR.opensAt, true)}` : ""}</Muted> : null}
       <Segmented
         options={[
           { value: "line", label: "한 줄" },
@@ -65,15 +65,15 @@ export default function BriefingsScreen() {
         onChange={setMode}
       />
       {items.length === 0 ? (
-        <Empty title="등록된 종목이 없습니다" hint="내 종목 탭에서 종목을 등록하세요." />
+        <Empty title="등록된 종목이 없습니다" hint="잔고 탭에서 종목을 추가하세요." />
       ) : withBriefing.length === 0 ? (
-        <Empty title="아직 생성된 브리핑이 없습니다" hint="평일 08:30, 16:00 에 자동 생성됩니다. 지금 바로 만들어 볼 수도 있습니다." />
+        <Empty title="생성된 브리핑이 없습니다" hint="평일 장 시작 전·마감 후 자동 생성" />
       ) : (
         withBriefing.map((i) => <BriefingCard key={i.code} briefing={i.latest!} mode={mode} />)
       )}
       {items.length > 0 ? (
         <Card>
-          <Muted>지금 생성 (등록 종목 전체, 종목당 30초 안팎)</Muted>
+          <SectionTitle>수동 생성</SectionTitle>
           <View style={{ flexDirection: "row", gap: space.sm }}>
             <Button title="오전 브리핑" variant="secondary" style={{ flex: 1 }} loading={run.isPending && run.variables?.session === "morning"} disabled={run.isPending} onPress={() => runNow("morning")} />
             <Button title="오후 브리핑" variant="secondary" style={{ flex: 1 }} loading={run.isPending && run.variables?.session === "afternoon"} disabled={run.isPending} onPress={() => runNow("afternoon")} />
@@ -81,7 +81,7 @@ export default function BriefingsScreen() {
         </Card>
       ) : null}
       {items.some((i) => !i.latest) && withBriefing.length > 0 ? (
-        <Muted>브리핑 없음: {items.filter((i) => !i.latest).map((i) => i.name).join(", ")}</Muted>
+        <Muted style={{ paddingHorizontal: space.lg }}>브리핑 없음: {items.filter((i) => !i.latest).map((i) => i.name).join(", ")}</Muted>
       ) : null}
     </Screen>
   );
