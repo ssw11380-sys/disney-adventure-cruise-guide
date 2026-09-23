@@ -83,6 +83,7 @@ export const DiscoverRow = memo(function DiscoverRow({
           {mark ? (
             <Text style={[styles.mark, { color: mark === "보유" ? t.gold : t.accent, borderColor: mark === "보유" ? t.gold : t.accent }]}>{mark}</Text>
           ) : null}
+          {item.newlyListed ? <Text style={[styles.mark, { color: t.muted, borderColor: t.lineStrong }]}>신규상장</Text> : null}
         </View>
       </View>
       <View style={[styles.num, { width: DISCOVER_COL.price }]}>

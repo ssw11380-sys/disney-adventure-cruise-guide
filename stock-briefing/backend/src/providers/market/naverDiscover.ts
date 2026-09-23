@@ -7,7 +7,8 @@ import type { FetchFn } from "./types.js";
  *  - 테마·업종: front-api/stock/sectors/all?sectorType=theme|upjong&businessDayCategory=daily|weekly|monthly&nationType=domestic|USA
  *    (50개씩 cursor. 등락률은 거래정지를 뺀 구성 종목 단순 평균 = 네이버 값 그대로)
  *  - 구성 종목: 한국 front-api/domestic/sector/item/list, 미국 front-api/worldstock/sector/item/list
- * 미국은 네이버가 테마 대신 TRBC 산업 분류(137개)만 준다 → 앱에서는 "업종"으로 쓴다.
+ *  - 미국 여러 종목 시세: polling.finance.naver.com/api/realtime/worldstock/stock/{로이터 코드,…} (정규장 값)
+ * 미국은 네이버가 테마 대신 TRBC 산업 분류(137개)만 준다 → "업종"으로 쓰고, 미국 테마는 토스 테마 분류(tossTics)로 만든다.
  */
 
 export type DiscoverMarket = "KR" | "US";
@@ -26,6 +27,8 @@ export interface DiscoverStock {
   volume: number | null;
   tradingValue: number | null;
   marketCap?: number | null;
+  /** 상장 첫날 (가격제한폭이 없어 등락률이 크게 나온다) */
+  newlyListed?: boolean;
 }
 
 export interface ThemeSummary {
@@ -38,6 +41,8 @@ export interface ThemeSummary {
   leaders: { code: string; name: string; changeRate: number | null }[];
   /** 상장 첫날 종목(가격제한폭 없음)을 빼고 다시 계산한 값이면 true */
   adjusted?: boolean;
+  /** changeRate 가 시가총액 가중 평균일 때 함께 주는 단순 평균 (참고) */
+  simpleAvg?: number;
 }
 
 export interface SectorDetail {
@@ -51,6 +56,9 @@ type Json = Record<string, unknown>;
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 const BASE = "https://m.stock.naver.com/front-api";
 const US_BASE = "https://api.stock.naver.com";
+const POLL_BASE = "https://polling.finance.naver.com";
+/** 폴링 한 번에 묻는 코드 수 (주소 길이 한도: 800개면 400) */
+const POLL_BATCH = 500;
 const SORT: Record<RankCategory, string> = { tradingValue: "priceTop", volume: "quantTop", gainers: "up", losers: "down" };
 /** 미국 순위 경로 (네이버 JS 기준 거래대금 = priceTop, 거래량 = top) */
 const US_SORT: Record<RankCategory, string> = { tradingValue: "priceTop", volume: "top", gainers: "up", losers: "down" };
@@ -100,6 +108,7 @@ export function krStock(it: Json): DiscoverStock | null {
     volume: num(integ["accumulatedTradingVolume"]) ?? num(it["accumulatedTradingVolume"]),
     tradingValue: num(integ["accumulatedTradingValue"]) ?? num(it["accumulatedTradingValue"]),
     marketCap: num(it["marketValue"]),
+    ...(isNewlyListed(it) ? { newlyListed: true } : {}),
   };
 }
 
@@ -175,7 +184,15 @@ export class NaverDiscover {
   constructor(private readonly fetchFn: FetchFn = fetch) {}
 
   private async json(url: string): Promise<Json> {
-    const res = await this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" } });
+    const once = () => this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" } });
+    // 연결이 끊기면 한 번 더 (HTTP 오류는 그대로)
+    let res: Response;
+    try {
+      res = await once();
+    } catch {
+      await new Promise((r) => setTimeout(r, 300));
+      res = await once();
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status} (${url.replace(BASE, "")})`);
     const body = (await res.json()) as Json;
     if (body["isSuccess"] === false) throw new Error(`네이버 응답 실패: ${String(body["message"] ?? "")}`);
@@ -193,7 +210,7 @@ export class NaverDiscover {
    * 미국 순위 원본 한 쪽 (100개, index 0부터). NYSE·NASDAQ·AMEX 합산, 보통주만(ETF 없음).
    * 가장 최근 거래일이 아닌 줄(오래 멈춘 종목)은 뺀다.
    */
-  async usRankPage(category: RankCategory, index: number): Promise<{ items: DiscoverStock[]; raw: number; hasNext: boolean }> {
+  async usRankPage(category: RankCategory, index: number): Promise<{ items: DiscoverStock[]; raw: number; hasNext: boolean; tradedAt: string | null }> {
     const r = await this.json(`${US_BASE}/stock/nation/USA/${US_SORT[category]}?page=${index + 1}&pageSize=100`);
     const rows = (r["stocks"] as Json[] | undefined) ?? [];
     const day = (it: Json) => String(it["localTradedAt"] ?? "").slice(0, 10);
@@ -203,7 +220,27 @@ export class NaverDiscover {
       .map(usRankStock)
       .filter((x): x is DiscoverStock => x !== null);
     const total = num(r["totalCount"]) ?? 0;
-    return { items, raw: rows.length, hasNext: rows.length > 0 && (index + 1) * 100 < total };
+    // 값의 시각: 가장 늦은 체결 시각 (장 마감 뒤엔 정규장 종료 16:00 ET)
+    const tradedAt = rows.map((it) => String(it["localTradedAt"] ?? "")).filter((x) => !Number.isNaN(Date.parse(x))).sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+    return { items, raw: rows.length, hasNext: rows.length > 0 && (index + 1) * 100 < total, tradedAt };
+  }
+
+  /**
+   * 미국 종목 여러 개의 정규장 시세 (polling.finance.naver.com, 로이터 코드 500개씩).
+   * 모르는 코드는 응답에서 빠진다. 결과는 로이터 코드 → 종목 (시가총액 포함).
+   */
+  async usQuotes(reuters: string[]): Promise<Map<string, DiscoverStock & { tradedAt: string | null }>> {
+    const out = new Map<string, DiscoverStock & { tradedAt: string | null }>();
+    const codes = [...new Set(reuters)].filter((c) => /^[A-Za-z0-9._]+$/.test(c));
+    for (let i = 0; i < codes.length; i += POLL_BATCH) {
+      const r = await this.json(`${POLL_BASE}/api/realtime/worldstock/stock/${codes.slice(i, i + POLL_BATCH).join(",")}`);
+      for (const it of (r["datas"] as Json[] | undefined) ?? []) {
+        const s = usRankStock({ ...it, marketValueRaw: it["marketValueFullRaw"] ?? it["marketValueRaw"] });
+        const rc = String(it["reutersCode"] ?? "");
+        if (s && rc) out.set(rc, { ...s, tradedAt: typeof it["localTradedAt"] === "string" ? it["localTradedAt"] : null });
+      }
+    }
+    return out;
   }
 
   /** 오늘 상장한(첫날) 한국 종목 코드. 테마 평균을 크게 왜곡하므로 따로 빼서 계산한다 */
@@ -243,7 +280,8 @@ export class NaverDiscover {
       const url =
         market === "KR"
           ? `${BASE}/domestic/sector/item/list?sectorType=${kind === "theme" ? "theme" : "upjong"}&sectorCode=${encodeURIComponent(id)}&sectorSortType=CHANGE_RATE&size=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`
-          : `${BASE}/worldstock/sector/item/list?nationType=USA&sectorCode=${encodeURIComponent(id)}&sectorSortType=CHANGE_RATE&size=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+          : // 미국은 cursor 가 없고 pageSize(최대 50)·page(1부터)로 넘긴다 (size 를 주면 10개만 온다)
+            `${BASE}/worldstock/sector/item/list?nationType=USA&sectorCode=${encodeURIComponent(id)}&sectorSortType=CHANGE_RATE&pageSize=50&page=${page + 1}`;
       let r: Json;
       try {
         r = await this.json(url);
@@ -252,15 +290,23 @@ export class NaverDiscover {
         throw e;
       }
       if (!info) info = market === "KR" ? ((r["sectorInfo"] as Json | undefined) ?? {}) : r;
-      for (const it of (r["items"] as Json[] | undefined) ?? []) {
+      const rows = (r["items"] as Json[] | undefined) ?? [];
+      for (const it of rows) {
         const s = market === "KR" ? krStock(it) : usStock(it);
         if (s && !seen.has(s.code)) {
           seen.add(s.code);
           items.push(s);
         }
       }
+      if (items.length >= maxItems) break;
+      if (market === "US") {
+        // 쪽이 덜 찼거나 상승+보합+하락 수만큼 받았으면 끝
+        const total = (num(r["risingCount"]) ?? 0) + (num(r["unChangedCount"] ?? r["unchangedCount"]) ?? 0) + (num(r["fallingCount"]) ?? 0);
+        if (rows.length < 50 || (total > 0 && (page + 1) * 50 >= total)) break;
+        continue;
+      }
       cursor = r["hasNext"] === true && typeof r["cursor"] === "string" ? r["cursor"] : null;
-      if (!cursor || items.length >= maxItems) break;
+      if (!cursor) break;
     }
     if (!info) return null;
     // 요약: 출처 등락률(없으면 구성 종목 단순 평균)과 상승·보합·하락 수(없으면 구성 종목으로 센다)

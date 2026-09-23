@@ -39,9 +39,11 @@ export const HeatTile = memo(function HeatTile({ theme, max, onPress }: { theme:
       </Text>
       <View style={styles.bottom}>
         <Text style={[styles.rate, { color: c.fg }]}>{formatPct(theme.changeRate)}</Text>
-        <Text style={[styles.counts, { color: c.sub }]}>
-          ▲{theme.up} ▼{theme.down}
-        </Text>
+        {theme.up + theme.flat + theme.down > 0 ? (
+          <Text style={[styles.counts, { color: c.sub }]}>
+            ▲{theme.up} ▼{theme.down}
+          </Text>
+        ) : null}
       </View>
     </Pressable>
   );

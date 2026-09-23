@@ -44,6 +44,11 @@ export default function ThemeDetailScreen() {
         </Text>
         <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.md }}>
           <Text style={[styles.big, { color: c }]}>{theme ? formatPct(theme.changeRate) : "-"}</Text>
+          {period === "day" && theme?.simpleAvg !== undefined ? (
+            <Text style={{ color: t.muted, fontSize: font.small }}>
+              시가총액 가중 · 단순 평균 <Text style={{ color: changeColor(t, theme.simpleAvg), fontWeight: "700" }}>{formatPct(theme.simpleAvg)}</Text>
+            </Text>
+          ) : null}
           {period !== "day" && periodRate !== null ? (
             <Text style={{ color: changeColor(t, periodRate), fontSize: font.body, fontWeight: "700" }}>
               {period === "week" ? "1주" : "1개월"} {formatPct(periodRate)}
@@ -67,6 +72,7 @@ export default function ThemeDetailScreen() {
             {q.data.description}
           </Text>
         ) : null}
+        {q.data?.note ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{q.data.note}</Text> : null}
         {q.data?.basis ? (
           <Text style={{ color: t.muted, fontSize: font.tiny }}>
             등락률: {q.data.basis}

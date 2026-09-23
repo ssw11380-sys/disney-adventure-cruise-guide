@@ -325,6 +325,8 @@ export interface DiscoverStock {
   /** 거래대금 (종목 통화) */
   tradingValue: number | null;
   marketCap?: number | null;
+  /** 상장 첫날 (가격제한폭이 없어 등락률이 크게 나온다) */
+  newlyListed?: boolean;
 }
 
 export interface DiscoverRank {
@@ -353,6 +355,8 @@ export interface ThemeSummary {
   leaders: { code: string; name: string; changeRate: number | null }[];
   /** 상장 첫날 종목(가격제한폭 없음)을 빼고 다시 계산한 값이면 true */
   adjusted?: boolean;
+  /** changeRate 가 시가총액 가중 평균일 때 함께 오는 단순 평균 (미국 테마) */
+  simpleAvg?: number;
 }
 
 export interface ThemeList {
@@ -365,6 +369,8 @@ export interface ThemeList {
   source: string;
   /** 테마 등락률 산출 방식 (출처 값 / 구성 종목 평균 등) */
   basis: string;
+  /** 범위·대체 안내 (예: 기간 등락률을 받은 테마만) */
+  note?: string | null;
 }
 
 export interface ThemeDetail {
@@ -379,5 +385,7 @@ export interface ThemeDetail {
   fxRate?: number | null;
   source: string;
   basis: string;
+  /** 범위 안내 (예: 시가총액 상위 30종목 기준) */
+  note?: string | null;
 }
 
