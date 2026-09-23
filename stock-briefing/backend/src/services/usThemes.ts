@@ -8,7 +8,8 @@ import { reutersCandidates, type TicsDuration, type TicsNode, type TossTics } fr
  *  1) 테마 목록: 토스 미국 테마 순위(기간 5개 × 등락률·거래대금)에 나온 테마의 개요에서 분류 트리 전체를 모은다
  *  2) 구성 종목: 테마마다 시가총액 큰 순으로 최대 pagesPerTheme 쪽(쪽당 10개). 미국 종목이 minStocks 개 미만인 테마는 뺀다
  *  3) 토스 상품 코드 → 티커(stock-infos) → 네이버 로이터 코드(후보를 폴링해 실제로 있는 것). 스팩은 뺀다
- *  4) 하루 한 번 새로 만들고 meta 표에 남긴다. 오래됐으면 옛것을 주면서 뒤에서 새로 만든다
+ *  4) 매일 정해진 시각(app.ts: 한국 21:00, 미국 정규장 전)에 새로 만들고 meta 표에 남긴다.
+ *     그 사이 하루가 넘었으면(정기 갱신 실패 등) 옛것을 주면서 뒤에서 새로 만든다
  *
  * 토스 값을 쓰지 않고 다시 계산하는 까닭: 토스는 한국 낮에 미국 주간거래 가격을 섞어 등락률을 낸다 (정규장 기준이 아님).
  */
@@ -123,6 +124,20 @@ export class UsThemeBook {
   /** 서버를 켤 때 미리 만들어 둔다 (첫 화면이 기다리지 않게) */
   warm(): void {
     void this.get().catch((e) => this.deps.log?.warn?.({ err: String(e) }, "미국 테마북 준비 실패"));
+  }
+
+  /**
+   * 신선도와 상관없이 지금 새로 만든다 (매일 정해진 시각에 부른다 — 화면을 열지 않아도 새 테마·편입 종목이 반영되게).
+   * 실패하면 가진 것을 그대로 둔다.
+   */
+  async refresh(): Promise<void> {
+    if (!this.loaded) await this.get().catch(() => undefined);
+    await this.rebuild().catch((e) => this.deps.log?.warn?.({ err: String(e) }, "미국 테마북 정기 갱신 실패 (옛것 유지)"));
+  }
+
+  /** 지금 가진 테마북을 만든 시각 (없으면 null) */
+  get builtAt(): number | null {
+    return this.data?.builtAt ?? null;
   }
 
   private rebuild(): Promise<UsThemeBookData> {

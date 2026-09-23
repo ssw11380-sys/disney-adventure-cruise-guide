@@ -371,6 +371,8 @@ export interface ThemeList {
   basis: string;
   /** 범위·대체 안내 (예: 기간 등락률을 받은 테마만) */
   note?: string | null;
+  /** 테마 구성(소속 종목)을 마지막으로 새로 만든 시각 — 미국 테마만 (매일 자동 갱신) */
+  updatedAt?: string | null;
 }
 
 export interface ThemeDetail {
@@ -387,5 +389,6 @@ export interface ThemeDetail {
   basis: string;
   /** 범위 안내 (예: 시가총액 상위 30종목 기준) */
   note?: string | null;
+  updatedAt?: string | null;
 }
 

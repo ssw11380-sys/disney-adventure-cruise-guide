@@ -93,7 +93,7 @@ function world(opts: { failToss?: boolean } = {}) {
       return json({ isSuccess: true, result: { sectors: [{ code: "57201010", name: "IT 서비스", changeRate: -0.55, risingCount: 1, unchangedCount: 0, fallingCount: 2, topItems: [] }], hasNext: false } });
     return json({}, 404);
   }) as unknown as typeof fetch;
-  return { calls, fetchFn, quotes };
+  return { calls, fetchFn, quotes, members };
 }
 
 describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", () => {
@@ -116,6 +116,7 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     expect(q.members.map((m) => `${m.symbol}:${m.reuters}`)).toEqual(["IONQ:IONQ.K", "RGTI:RGTI.O", "QBTS:QBTS.K", "OLD:OLD.O"]); // 스팩 제외
     expect(w.calls.filter((c) => c.includes("/tics/956/stocks")).length).toBe(2); // 12종목 = 2쪽
     expect(saved.get("discover:us-tics:v1")).toContain("IONQ.K");
+    expect(book.builtAt).toBe(Date.parse("2026-09-23T06:00:00Z"));
     // 저장본이 있으면 다시 만들지 않는다
     const w2 = world({ failToss: true });
     const again = new UsThemeBook({ tics: new TossTics(w2.fetchFn, 0), naver: new NaverDiscover(w2.fetchFn), store, now: () => new Date("2026-09-23T07:00:00Z") });
@@ -135,6 +136,7 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     expect(list).toMatchObject({ market: "US", kind: "theme", period: "day", note: "거래대금 100만 달러 미만 테마 1개 제외" });
     expect(list.themes.map((t) => t.id)).toEqual(["956"]); // 888(동전주 테마)은 거래대금이 3천 달러라 뺀다
     expect(list.asOf).toBe("2026-09-23T05:00:00+09:00"); // 정규장 종료 시각
+    expect(list.updatedAt).toMatch(/\+09:00$/); // 테마 구성 갱신 시각
     const q = list.themes[0]!;
     // 전일 시총: IONQ 1000, RGTI 1000, QBTS 8000 → (10·1000 − 10·1000 + 0·8000) / 10000 = 0
     expect(q).toMatchObject({ id: "956", name: "양자컴퓨터", changeRate: 0, simpleAvg: 0, up: 1, flat: 1, down: 1 });
@@ -143,6 +145,33 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     expect(detail).toMatchObject({ description: "양자컴퓨팅 하드웨어·소프트웨어", fxRate: 1390, note: "시가총액 상위 4종목 기준 (토스 분류 전체 12종목)" });
     expect(detail!.items.map((i) => i.code)).toEqual(["IONQ", "RGTI", "QBTS"]); // OLD 는 지난 날짜
     expect(await svc.theme("US", "theme", "123")).toBeNull();
+  });
+
+  it("정기 갱신(refresh)은 신선해도 새로 만들어 새 테마·새 편입 종목을 반영하고, 실패하면 옛것을 둔다", async () => {
+    const w = world();
+    let t = new Date("2026-09-23T06:00:00Z");
+    const saved = new Map<string, string>();
+    const store = { get: async (k: string) => saved.get(k) ?? null, set: async (k: string, v: string) => void saved.set(k, v) };
+    let fail = false;
+    const fetchFn = (async (url: string, init?: RequestInit) => (fail && String(url).includes("tossinvest") ? json({}, 503) : w.fetchFn(url, init))) as unknown as typeof fetch;
+    const book = new UsThemeBook({ tics: new TossTics(fetchFn, 0), naver: new NaverDiscover(fetchFn), store, now: () => t });
+    expect((await book.get()).themes[0]!.members.map((m) => m.symbol)).not.toContain("BRK.B");
+    // 토스가 양자컴퓨터 테마에 BRK.B 를 새로 넣었다 (한 시간 뒤 = 아직 신선)
+    w.members["956"] = [...w.members["956"]!, "P_BRK"];
+    t = new Date("2026-09-23T07:00:00Z");
+    const before = w.calls.length;
+    expect((await book.get()).themes[0]!.members.map((m) => m.symbol)).not.toContain("BRK.B");
+    expect(w.calls.length).toBe(before); // 신선하면 get 은 다시 만들지 않는다
+    await book.refresh(); // 매일 21:00 정기 갱신
+    expect((await book.get()).themes[0]!.members.map((m) => m.symbol)).toContain("BRK.B");
+    expect(book.builtAt).toBe(Date.parse("2026-09-23T07:00:00Z"));
+    expect(saved.get("discover:us-tics:v1")).toContain("BRKb");
+    // 실패하면 옛것 유지
+    fail = true;
+    t = new Date("2026-09-23T12:00:00Z");
+    await book.refresh();
+    expect(book.builtAt).toBe(Date.parse("2026-09-23T07:00:00Z"));
+    expect((await book.get()).themes[0]!.members.map((m) => m.symbol)).toContain("BRK.B");
   });
 
   it("1주·1개월: 토스 순위 값, 순위에 없는 테마는 미국 종목 기준으로 하나씩 묻는다", async () => {

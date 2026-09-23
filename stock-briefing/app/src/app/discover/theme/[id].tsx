@@ -7,7 +7,7 @@ import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover
 import { openStock, StatusLine, useAddWatch, useMarks } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
 import { Empty, ErrorView, TableHead } from "@/components/ui";
-import { formatPct } from "@/lib/format";
+import { formatDateKo, formatPct } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
 
@@ -111,7 +111,14 @@ export default function ThemeDetailScreen() {
           removeClippedSubviews
           ListHeaderComponent={head}
           ListEmptyComponent={<Empty title="구성 종목이 없습니다" />}
-          ListFooterComponent={items.length ? <Text style={[styles.footer, { color: t.muted }]}>출처: {q.data?.source ?? "-"} · 길게 누르면 관심 종목에 추가</Text> : null}
+          ListFooterComponent={
+            items.length ? (
+              <Text style={[styles.footer, { color: t.muted }]}>
+                출처: {q.data?.source ?? "-"} · 길게 누르면 관심 종목에 추가
+                {q.data?.updatedAt ? `\n테마 구성 갱신: ${formatDateKo(q.data.updatedAt, true)} (매일 자동)` : ""}
+              </Text>
+            ) : null
+          }
           refreshControl={<RefreshControl refreshing={q.isRefetching} onRefresh={() => void q.refetch()} tintColor={t.muted} />}
         />
       )}

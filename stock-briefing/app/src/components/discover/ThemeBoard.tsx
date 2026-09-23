@@ -5,7 +5,7 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "rea
 import { useDiscoverThemes } from "@/api/hooks";
 import type { DiscoverMarket, ThemeKind, ThemePeriod, ThemeSummary } from "@/api/types";
 import { Empty, ErrorView } from "@/components/ui";
-import { formatPct } from "@/lib/format";
+import { formatDateKo, formatPct } from "@/lib/format";
 import { changeColor, font, space, useTheme } from "@/theme";
 import { StatusLine } from "./shared";
 import { SkeletonRows } from "./Skeleton";
@@ -137,6 +137,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
     <Text style={[styles.footer, { color: t.muted }]}>
       {kindWord} 등락률: {data?.basis ?? "-"} · 출처: {data?.source ?? "-"}
       {all.some((x) => x.adjusted) ? "\n* 상장 첫날 종목(가격제한폭 없음)을 빼고 다시 계산한 값" : ""}
+      {data?.updatedAt ? `\n테마 구성 갱신: ${formatDateKo(data.updatedAt, true)} (매일 자동)` : ""}
     </Text>
   ) : null;
   const empty = <Empty title={`${kindWord}를 불러오지 못했습니다`} hint="잠시 뒤 당겨서 새로고침 하세요." />;

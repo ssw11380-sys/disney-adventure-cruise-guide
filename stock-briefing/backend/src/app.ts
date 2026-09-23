@@ -20,6 +20,7 @@ import { discoverRoutes } from "./routes/discover.js";
 import { NaverDiscover } from "./providers/market/naverDiscover.js";
 import { DiscoverService } from "./services/discoverService.js";
 import { UsThemeBook } from "./services/usThemes.js";
+import cron from "node-cron";
 import { stockRoutes } from "./routes/stocks.js";
 import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
@@ -265,8 +266,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     usThemes,
     tics,
   });
-  // 미국 테마북은 만드는 데 1분쯤 걸려 서버를 켤 때 미리 만든다 (하루 한 번 새로)
-  if (usThemes && opts.enableScheduler !== false) usThemes.warm();
+  // 미국 테마북은 만드는 데 1분쯤 걸려 서버를 켤 때 미리 만들고, 매일 21:00(한국, 미국 정규장 전)에 새로 만든다
+  // → 새 테마·새로 편입된 종목이 화면을 열지 않아도 하루 안에 반영된다
+  if (usThemes && opts.enableScheduler !== false) {
+    usThemes.warm();
+    const task = cron.schedule("0 21 * * *", () => void usThemes.refresh(), { timezone: opts.config.timezone, name: "us-themes-daily" });
+    app.addHook("onClose", async () => void task.stop());
+  }
   await app.register(discoverRoutes, { prefix: "/api/discover", service: discoverService });
 
   /** GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token= */

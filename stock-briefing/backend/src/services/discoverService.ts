@@ -37,6 +37,8 @@ export interface ThemeList {
   basis: string;
   /** 범위·대체 안내 (없으면 null) */
   note: string | null;
+  /** 테마 구성(소속 종목)을 마지막으로 새로 만든 시각 — 미국 테마만 (한국은 매번 출처에서 받는다) */
+  updatedAt?: string | null;
 }
 
 export interface ThemeDetail {
@@ -51,6 +53,7 @@ export interface ThemeDetail {
   source: string;
   basis: string;
   note: string | null;
+  updatedAt?: string | null;
 }
 
 /** 순위 원본: 정렬된 전체 목록을 앞에서부터 한 쪽씩 (없으면 빈 목록, hasNext 로 끝) */
@@ -329,6 +332,7 @@ export class DiscoverService {
         source: "토스증권 테마 분류 · 네이버 증권 시세",
         basis: "테마별 시가총액 상위 종목의 시가총액 가중 평균 (정규장)",
         note: dropped ? `거래대금 100만 달러 미만 테마 ${dropped}개 제외` : null,
+        updatedAt: seoulIso(new Date(book.builtAt)),
       };
     }
     // 1주·1개월: 토스 테마 기간 등락률 (미국 종목만, 시가총액 가중). 순위(상위 약 100개)에 없는 테마는 하나씩 묻는다
@@ -374,7 +378,7 @@ export class DiscoverService {
         themes.push({ id: t.id, name: t.name, changeRate: Math.round(r * 100) / 100, up: 0, flat: 0, down: 0, leaders: code && lead ? [{ code, name: lead.name, changeRate: null }] : [] });
       }
       if (!themes.length) throw new Error("토스 테마 기간 등락률을 받지 못했습니다");
-      return { themes, total: targets.length };
+      return { themes, total: targets.length, builtAt: book.builtAt };
     });
     return {
       market: "US",
@@ -386,6 +390,7 @@ export class DiscoverService {
       source: "토스증권",
       basis: `토스증권 테마 ${period === "week" ? "1주" : "1개월"} 등락률 (미국 종목, 시가총액 가중)`,
       note: value.themes.length < value.total ? `기간 등락률을 받은 테마만 (${value.themes.length}/${value.total}개)` : null,
+      updatedAt: seoulIso(new Date(value.builtAt)),
     };
   }
 
@@ -437,6 +442,7 @@ export class DiscoverService {
       source: "토스증권 테마 분류 · 네이버 증권 시세",
       basis: "시가총액 가중 평균 (정규장)",
       note: t.total > t.members.length ? `시가총액 상위 ${t.members.length}종목 기준 (토스 분류 전체 ${t.total}종목)` : null,
+      updatedAt: seoulIso(new Date(book.builtAt)),
     };
   }
 }
