@@ -275,7 +275,10 @@ export class DiscoverService {
   /** 미국 테마북 구성 종목 전체의 정규장 시세 (한 번에, 캐시) */
   private async usThemeQuotes(book: UsThemeBookData, open: boolean) {
     const codes = [...new Set(book.themes.flatMap((t) => t.members.map((m) => m.reuters)))];
-    return this.cached(`usq:${book.builtAt}`, this.ttl(open), () => this.deps.naver.usQuotes(codes));
+    const key = `usq:${book.builtAt}`;
+    // 테마북이 새로 만들어지면 옛 시세 묶음은 버린다 (하루에 하나씩 쌓이지 않게)
+    for (const k of this.cache.keys()) if (k.startsWith("usq:") && k !== key) this.cache.delete(k);
+    return this.cached(key, this.ttl(open), () => this.deps.naver.usQuotes(codes));
   }
 
   private async usThemeList(open: boolean, period: ThemePeriod): Promise<ThemeList> {
