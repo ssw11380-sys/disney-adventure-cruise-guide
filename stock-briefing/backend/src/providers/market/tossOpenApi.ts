@@ -527,6 +527,11 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     return rows.map((r) => ({ accountNo: String(r["accountNo"] ?? ""), accountSeq: Number(r["accountSeq"]), accountType: String(r["accountType"] ?? "") }));
   }
 
+  /** 진단용: 보유 종목 원본 응답 (필드 구성 확인) */
+  async holdingsRaw(accountSeq: number): Promise<unknown> {
+    return this.client.get<unknown>("/api/v1/holdings", {}, { "X-Tossinvest-Account": String(accountSeq) });
+  }
+
   async holdings(accountSeq: number): Promise<TossHolding[]> {
     const r = await this.client.get<{ items?: Json[] }>("/api/v1/holdings", {}, { "X-Tossinvest-Account": String(accountSeq) });
     return (r?.items ?? [])
