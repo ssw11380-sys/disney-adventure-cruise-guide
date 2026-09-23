@@ -36,13 +36,16 @@ export default function ThemeDetailScreen() {
     [marks, showKrw, fx, addWatch],
   );
   const total = theme ? theme.up + theme.flat + theme.down : 0;
+  // 상승·보합·하락은 출처 목록 기준(거래정지 제외)이라, 구성 수는 보이는 줄(거래정지 포함)과 잘린 경우의 전체 수 중 큰 값
+  const halted = items.filter((i) => i.suspended).length;
+  const members = Math.max(total, items.length);
   const c = changeColor(t, theme?.changeRate);
 
   const head = (
     <>
       <View style={[styles.summary, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
         <Text style={{ color: t.muted, fontSize: font.small }}>
-          {market === "KR" ? "한국" : "미국"} {kind === "theme" ? "테마" : "업종"} · 구성 {total || items.length}종목 · 오늘
+          {market === "KR" ? "한국" : "미국"} {kind === "theme" ? "테마" : "업종"} · 구성 {members}종목{halted ? ` (거래정지 ${halted})` : ""} · 오늘
         </Text>
         <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.md }}>
           <Text style={[styles.big, { color: c }]}>{theme ? formatPct(theme.changeRate) : "-"}</Text>

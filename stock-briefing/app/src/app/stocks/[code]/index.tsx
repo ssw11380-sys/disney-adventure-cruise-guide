@@ -169,7 +169,7 @@ export default function StockDetailScreen() {
             <Stat label="고가" value={quote(q.high)} change={q.high !== null && q.prevClose ? q.high - q.prevClose : null} />
             <Stat label="거래량" value={formatVolume(q.volume)} />
             <Stat label="저가" value={quote(q.low)} change={q.low !== null && q.prevClose ? q.low - q.prevClose : null} />
-            <Stat label="시가총액" value={formatKrwCompact(q.marketCap, cur)} />
+            <Stat label="시가총액" value={showKrw && cur === "USD" && fx && q.marketCap !== null ? formatKrwCompact(q.marketCap * fx, "KRW") : formatKrwCompact(q.marketCap, cur)} />
             <Stat label="52주 최고" value={quote(q.high52w)} />
             <Stat label="52주 최저" value={quote(q.low52w)} />
             <Stat label="PER" value={q.per !== null ? `${formatNumber(q.per, 2)}배` : "-"} />

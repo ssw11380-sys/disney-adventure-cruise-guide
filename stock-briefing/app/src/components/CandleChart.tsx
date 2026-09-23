@@ -138,7 +138,9 @@ export function CandleChart({
 
       {all.length < 2 ? (
         <View style={[styles.placeholder, { height: chartH, borderColor: t.line, backgroundColor: t.surfaceAlt }]}>
-          <Text style={{ color: t.muted }}>{loading ? "차트 불러오는 중…" : "차트 데이터가 없습니다"}</Text>
+          <Text style={{ color: t.muted, textAlign: "center" }}>
+            {loading ? "차트 불러오는 중…" : all.length === 1 ? "봉이 하나뿐입니다 (상장 첫날 등)\n분봉(1분·5분)에서 볼 수 있습니다" : "차트 데이터가 없습니다"}
+          </Text>
         </View>
       ) : (
         <PriceChart

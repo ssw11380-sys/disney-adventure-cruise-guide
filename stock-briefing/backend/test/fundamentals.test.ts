@@ -122,7 +122,7 @@ describe("StockService 보강", () => {
     // 미국: 가짜 시세는 KRW 로 오므로 USD 로 바꿔 넣는 별도 프로바이더
     const usd = new FakeQuoteProvider("toss", { price: 378.62 });
     const origin = usd.getQuote.bind(usd);
-    usd.getQuote = async (code) => ({ ...(await origin(code)), currency: "USD" });
+    usd.getQuote = async (code) => ({ ...(await origin(code)), currency: "USD", priceKrw: Math.round(378.62 * 1371) }); // 공급자 환율(1371)은 화면 환율과 다를 수 있다
     const svc2 = new StockService({ db, quotes: usd, search: new FakeSearchProvider(), master: new FakeMasterProvider(), fundamentals: new NaverFundamentals(fakeFetch(), NOW), now: NOW });
     await svc2.register({ code: "TSLA" }).catch(() => undefined);
     const us = await svc2.getQuote("TSLA", { fresh: true });

@@ -369,7 +369,8 @@ export class StockService {
     let out = applyFundamentals(quote, fund);
     if (quote.currency === "USD") {
       const rate = fx ?? (quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * 100) / 100 : null);
-      out = { ...out, fxRate: rate, priceKrw: out.priceKrw ?? (rate ? Math.round(out.price * rate) : null) };
+      // 원화 환산은 함께 보여 주는 환율(fxRate)로 — 공급자가 준 값(공식 API 매매기준율 등)과 섞이면 같은 화면에서 숫자가 어긋난다
+      out = { ...out, fxRate: rate, priceKrw: rate ? Math.round(out.price * rate) : (out.priceKrw ?? null) };
     }
     return out;
   }

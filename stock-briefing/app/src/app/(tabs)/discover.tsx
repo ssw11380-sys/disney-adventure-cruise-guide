@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useDiscoverRank } from "@/api/hooks";
+import { AUTO_REFRESH_MAX_PAGES, useDiscoverRank } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverStock, RankCategory } from "@/api/types";
 import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
 import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
@@ -79,7 +79,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
 
   const head = (
     <>
-      {first ? <StatusLine market={market} open={first.marketOpen} session={first.session} asOf={first.asOf} note={first.note} /> : null}
+      {first ? <StatusLine market={market} open={first.marketOpen} session={first.session} asOf={first.asOf} note={first.note} paused={(pages?.length ?? 0) > AUTO_REFRESH_MAX_PAGES} /> : null}
       <TableHead>
         <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.rank }]}>순위</Text>
         <Text style={[styles.th, { color: t.muted, flex: 1 }]}>종목명</Text>
