@@ -280,6 +280,54 @@ describe("TossSyncService", () => {
   });
 });
 
+describe("TossOpenApiProvider 원화 장부용 조회", () => {
+  const make = (handler: (url: URL, headers: Record<string, string>) => Response | null) =>
+    new TossOpenApiProvider(
+      new TossOpenApiClient({
+        clientId: "c",
+        clientSecret: "s",
+        now: NOW,
+        maxRetryWaitMs: 0,
+        fetchFn: (async (input: string | URL | Request, init?: RequestInit) => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/oauth2/token")) return new Response(JSON.stringify({ access_token: "tok-1", expires_in: 86400 }), { status: 200 });
+          const headers = Object.fromEntries(Object.entries((init?.headers as Record<string, string>) ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+          return handler(url, headers) ?? new Response(JSON.stringify({ error: { code: "not-found" } }), { status: 404 });
+        }) as typeof fetch,
+      }),
+      { now: NOW },
+    );
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  it("그 분의 환율이 없으면(404) 조금 앞 시각으로 다시 찾는다", async () => {
+    const asked: string[] = [];
+    const p = make((url) => {
+      if (!url.pathname.endsWith("/exchange-rate")) return null;
+      const t = url.searchParams.get("dateTime")!;
+      asked.push(t);
+      return asked.length === 1 ? json({ error: { code: "exchange-rate-not-found", message: "요청한 시점의 환율 정보가 없습니다." } }, 404) : json({ result: { rate: "1391.2" } });
+    });
+    expect(await p.usdKrwAt("2026-09-22T23:00:00+09:00")).toBe(1391.2);
+    expect(asked).toEqual(["2026-09-22T23:00:00+09:00", "2026-09-22T22:59:00+09:00"]);
+  });
+
+  it("429 같은 다른 오류는 그대로 던진다 (장부가 다음 동기화에서 다시)", async () => {
+    const p = make((url) => (url.pathname.endsWith("/exchange-rate") ? json({ error: { code: "internal-error" } }, 500) : null));
+    await expect(p.usdKrwAt("2026-09-22T23:00:00+09:00")).rejects.toThrow("HTTP 500");
+  });
+
+  it("보유 응답 본문이 비면 던지고, 달러 요약이 빠지면 purchaseUsd 는 null, 수익률 보정은 끈다", async () => {
+    let body: unknown = { result: null };
+    const p = make((url) => (url.pathname.endsWith("/holdings") ? json(body) : null));
+    await expect(p.holdingsWithOverview(1)).rejects.toThrow("보유 종목 응답이 비었습니다");
+    body = { result: { items: [], profitLoss: { rateAfterCost: "0.01" } } };
+    const r = await p.holdingsWithOverview(1);
+    expect(r.overview).toMatchObject({ purchaseUsd: null, rateAfterCost: null });
+    body = { result: { items: [], totalPurchaseAmount: { krw: "0", usd: "0" }, marketValue: { amountAfterCost: { krw: "0", usd: "0" } }, profitLoss: { rateAfterCost: "0" } } };
+    expect((await p.holdingsWithOverview(1)).overview).toMatchObject({ purchaseUsd: 0, rateAfterCost: 0 });
+  });
+});
+
 class FakeSocket extends EventEmitter implements SocketLike {
   sent: string[] = [];
   closed = false;

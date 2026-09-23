@@ -463,9 +463,12 @@ function krwBasis(
 ): { costBasisKrw: number | null; krwCostSource: "exact" | "estimated" | null } {
   const none = { costBasisKrw: null, krwCostSource: null };
   if (!krwCost || !(krwCost.quantity > 0)) return none;
-  if (Math.abs(krwCost.quantity - quantity) < 1e-9) return { costBasisKrw: krwCost.krw, krwCostSource: krwCost.source };
   const usdNow = t?.purchaseAmount ?? null;
   const usdBook = krwCost.usdCost ?? null;
+  const sameQty = Math.abs(krwCost.quantity - quantity) < 1e-9;
+  // 수량이 같아도(같은 수량 매도 후 재매수 등) 달러 매입금액이 다르면 장부가 뒤처진 것이다
+  const sameUsd = usdNow === null || usdBook === null || Math.abs(usdBook - usdNow) < Math.max(0.05, usdNow * 1e-4);
+  if (sameQty && sameUsd) return { costBasisKrw: krwCost.krw, krwCostSource: krwCost.source };
   if (usdNow === null || !usdBook || !(usdBook > 0)) return none;
   if (usdNow <= usdBook) return { costBasisKrw: krwCost.krw * (usdNow / usdBook), krwCostSource: "estimated" };
   const fx = q.fxRate ?? (q.priceKrw && q.price ? q.priceKrw / q.price : null);

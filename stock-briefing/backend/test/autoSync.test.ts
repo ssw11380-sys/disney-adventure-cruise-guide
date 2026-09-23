@@ -13,9 +13,10 @@ class FakeToss {
   calls = 0;
   fail = false;
   holdingsList: TossHolding[] = [];
+  noAccounts = false;
   async accounts() {
     if (this.fail) throw new Error("토스 계좌 조회 실패");
-    return [{ accountNo: "1", accountSeq: 1, accountType: "BROKERAGE" }];
+    return this.noAccounts ? [] : [{ accountNo: "1", accountSeq: 1, accountType: "BROKERAGE" }];
   }
   /** 동기화 도중(보유 조회 직후) 한 번 실행할 콜백 */
   duringSync: (() => void) | null = null;
@@ -76,6 +77,16 @@ describe("TossSyncService 전량 매도 처리", () => {
     const r3 = await new TossSyncService(db, toss.asProvider(), NOW).importHoldings();
     expect(r3.removed).toEqual([]);
     expect(r3.unchanged).toEqual(["035420"]);
+    await db.destroy();
+  });
+
+  it("계좌 목록이 비면 일시 오류로 보고 아무것도 바꾸지 않는다 (전량 매도로 처리하지 않음)", async () => {
+    const { db, toss, stocks, sync } = await setup();
+    toss.holdingsList = [h("035420", 9, 232555)];
+    await sync.importHoldings();
+    toss.noAccounts = true;
+    await expect(sync.importHoldings()).rejects.toThrow("토스 계좌 목록이 비었습니다");
+    expect((await stocks.list()).find((s) => s.code === "035420")).toMatchObject({ quantity: 9 });
     await db.destroy();
   });
 

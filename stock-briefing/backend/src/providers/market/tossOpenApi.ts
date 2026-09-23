@@ -534,14 +534,27 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
    * 요약의 rateAfterCost 는 토스 내부 원화 매입금액(매수 당시 환율) 기준이다 — 문서 설명과 달리 실측으로 확인
    * (계좌 합계 원화 매입금액이 토스 앱 값과 238원 차이, 현재 환율 기준이었다면 약 290만 원 차이).
    */
-  async holdingsWithOverview(accountSeq: number): Promise<{ items: TossHolding[]; overview: { purchaseKrw: number; purchaseUsd: number; afterCostKrw: number; afterCostUsd: number; rateAfterCost: number | null } }> {
+  async holdingsWithOverview(accountSeq: number): Promise<{
+    items: TossHolding[];
+    overview: { purchaseKrw: number; purchaseUsd: number | null; afterCostKrw: number; afterCostUsd: number; rateAfterCost: number | null };
+  }> {
     const r = await this.client.get<Json>("/api/v1/holdings", {}, { "X-Tossinvest-Account": String(accountSeq) });
-    const two = (o: unknown) => ({ krw: num((o as Json | undefined)?.["krw"]) ?? 0, usd: num((o as Json | undefined)?.["usd"]) ?? 0 });
-    const purchase = two(r?.["totalPurchaseAmount"]);
-    const after = two(((r?.["marketValue"] as Json | undefined) ?? {})["amountAfterCost"]);
+    // 본문이 빈 200 은 일시 오류로 본다 (빈 목록으로 받아들이면 전량 매도로 처리돼 보유·원화 장부가 지워진다)
+    if (!r || !Array.isArray(r["items"])) throw new ProviderError(this.name, "보유 종목 응답이 비었습니다 (/api/v1/holdings)");
+    const purchase = (r["totalPurchaseAmount"] as Json | undefined) ?? null;
+    const after = (((r["marketValue"] as Json | undefined) ?? {})["amountAfterCost"] as Json | undefined) ?? null;
+    const rate = num(((r["profitLoss"] as Json | undefined) ?? {})["rateAfterCost"]);
     return {
-      items: parseHoldingItems((r?.["items"] as Json[] | undefined) ?? []),
-      overview: { purchaseKrw: purchase.krw, purchaseUsd: purchase.usd, afterCostKrw: after.krw, afterCostUsd: after.usd, rateAfterCost: num(((r?.["profitLoss"] as Json | undefined) ?? {})["rateAfterCost"]) },
+      items: parseHoldingItems(r["items"] as Json[]),
+      overview: {
+        purchaseKrw: num(purchase?.["krw"]) ?? 0,
+        // 모르면 null (0 이면 "달러 종목 없음"으로 읽혀 원화 장부가 지워진다)
+        purchaseUsd: num(purchase?.["usd"]),
+        afterCostKrw: num(after?.["krw"]) ?? 0,
+        afterCostUsd: num(after?.["usd"]) ?? 0,
+        // 요약 값이 빠졌으면 계좌 합계 보정을 하지 않는다
+        rateAfterCost: purchase && after ? rate : null,
+      },
     };
   }
 
@@ -576,12 +589,28 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     return out;
   }
 
-  /** 과거 시점의 토스 매수 환율 (USD→KRW). 오류는 던진다(원화 장부가 실패와 "데이터 없음"을 구분해야 한다) */
+  /**
+   * 과거 시점의 토스 매수 환율 (USD→KRW). 오류는 던진다(원화 장부가 실패와 "데이터 없음"을 구분해야 한다).
+   * 그 분의 환율이 없으면(404 exchange-rate-not-found) 조금 앞 시각(체결 직전 유효 환율)들로 한 번씩 더 찾는다.
+   */
   async usdKrwAt(iso: string): Promise<number> {
-    const r = await this.client.get<Json>("/api/v1/exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW", dateTime: iso });
-    const rate = num(r?.["rate"]) ?? num(r?.["midRate"]);
-    if (rate === null) throw new ProviderError(this.name, `환율 없음 (${iso})`);
-    return rate;
+    const at = Date.parse(iso);
+    const backMinutes = Number.isFinite(at) ? [0, 1, 5, 30, 120, 1440] : [0];
+    let last: unknown = null;
+    for (const [i, m] of backMinutes.entries()) {
+      if (i > 0) await sleep(350); // MARKET_INFO 초당 3회
+      const dateTime = m === 0 ? iso : seoulIso(new Date(at - m * 60_000));
+      try {
+        const r = await this.client.get<Json>("/api/v1/exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW", dateTime });
+        const rate = num(r?.["rate"]) ?? num(r?.["midRate"]);
+        if (rate !== null) return rate;
+        last = new ProviderError(this.name, `환율 없음 (${dateTime})`);
+      } catch (e) {
+        if (!(e instanceof ProviderError) || !e.message.includes("exchange-rate-not-found")) throw e;
+        last = e;
+      }
+    }
+    throw last instanceof Error ? last : new ProviderError(this.name, `환율 없음 (${iso})`);
   }
 
   /** 진단용: 보유 종목 원본 응답 (필드 구성 확인) */

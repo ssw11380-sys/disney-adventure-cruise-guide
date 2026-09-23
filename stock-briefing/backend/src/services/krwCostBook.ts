@@ -14,7 +14,8 @@ import { seoulIso } from "../lib/time.js";
  *  - krwExact: 토스 앱 값을 사용자가 넣은 몫. 이후 매도만 있으면 이동평균이라 비율대로 줄 뿐 계속 정확하다.
  *  - krwEst:   체결 시각의 토스 환율로 계산한 몫(새 매수분, 또는 토스 값이 없을 때 전체). 계좌 합계에 맞춰 보정 비율을 곱한다.
  * 새 체결은 orderId 별로 "이미 반영한 수량·금액"을 기억해 차이만 반영한다(시각 비교 없음 → 동기화 도중 체결도 놓치지 않는다).
- * 조회 실패(429·네트워크·환율 없음)나 주문 내역과 맞지 않는 경우는 항목을 건드리지 않고 기다린다(pending).
+ * 조회 실패(429·네트워크·환율 없음)는 항목을 건드리지 않고 다음 동기화에서 다시 시도한다(몇 번이든).
+ * 조회는 됐는데 주문 내역이 보유 달러 매입금액을 설명하지 못하면(이관 입고, 체결 순서가 엇갈린 주문, 주문 목록 지연) 기다리고(pending),
  * PENDING_MS 넘게 계속되면 가진 정보로 보유와 맞춘다: 모자란 달러 매입금액은 표시 환율로 채우고, 남으면 비율대로 줄인다(추정 표시).
  */
 
@@ -27,7 +28,7 @@ export interface KrwCostEntry {
   krwEst: number;
   /** orderId → 이미 반영한 누적 체결 수량·금액 */
   applied: Record<string, { q: number; amt: number }>;
-  /** 주문 내역으로 다 설명되지 않아(이관·체결 순서·환율 없음) 표시 환율로 채우거나 비율로 맞춘 항목, 또는 여러 계좌에 나눠 넣은 토스 값 → 추정 */
+  /** 주문 내역으로 다 설명되지 않아(이관·체결 순서) 표시 환율로 채우거나 비율로 맞춘 항목, 또는 여러 계좌에 나눠 넣은 토스 값 → 추정 */
   approx?: boolean;
   updatedAt: string;
 }
@@ -59,7 +60,7 @@ export interface HoldingForBook {
   purchaseAmount: number | null;
 }
 
-/** 계좌 하나의 보유 (같은 /holdings 응답). purchaseUsd: 계좌 요약의 달러 매입금액 합계 — 목록이 비었을 때 정말 없는지 확인용 */
+/** 계좌 하나의 보유 (같은 /holdings 응답). purchaseUsd: 계좌 요약의 달러 매입금액 합계(모르면 null) — 목록이 비었을 때 정말 없는지 확인용 */
 export interface AccountForBook {
   account: number;
   holdings: HoldingForBook[];
@@ -90,7 +91,7 @@ export type KrwCost = { krw: number; source: "exact" | "estimated"; quantity: nu
 type Position = { quantity: number; usdCost: number; krwExact: number; krwEst: number; applied: Record<string, { q: number; amt: number }> };
 
 const KEY = "krw_cost_book";
-/** 주문 내역과 맞지 않거나 조회 실패가 이만큼 계속되면 가진 정보로 맞춘다 (주문 목록이 잠깐 늦는 경우는 기다린다) */
+/** 주문 내역이 보유를 설명하지 못하는 상태가 이만큼 계속되면 가진 정보로 맞춘다 (주문 목록이 잠깐 늦는 경우는 기다린다) */
 export const PENDING_MS = 20 * 60_000;
 const keyOf = (account: number, code: string) => `${account}:${code}`;
 const empty = (): KrwCostBookState => ({ version: 2, items: {}, pending: {}, calib: null, factor: 1, factorHash: null });
@@ -159,16 +160,34 @@ export class KrwCostBook {
     return out;
   }
 
-  /**
-   * 주문의 누적 체결량과 이미 반영한 양의 차이만 이동평균으로 반영한다.
-   * fallbackRate 가 있으면 환율 조회 실패 시 그 환율을 쓰고 approx 로 표시한다(없으면 던진다).
-   */
-  private async applyOrders(start: Position, orders: BookOrder[], fallbackRate: number | null): Promise<Position & { approx: boolean }> {
-    const applied = { ...start.applied };
-    const deltas = orders
+  /** 아직 반영하지 않은 체결(주문별 누적량과 반영한 양의 차이)을 체결 시각 순으로 */
+  private static deltas(applied: Record<string, { q: number; amt: number }>, orders: BookOrder[]) {
+    return orders
       .map((o) => ({ o, dq: o.quantity - (applied[o.orderId]?.q ?? 0), damt: o.amount - (applied[o.orderId]?.amt ?? 0) }))
       .filter((d) => d.dq > 1e-12)
       .sort((a, b) => (Date.parse(a.o.at) || 0) - (Date.parse(b.o.at) || 0));
+  }
+
+  /** 환율 없이 수량·달러 매입금액만 이동평균으로 (주문 내역이 보유를 설명하는지 확인용) */
+  private static usdAfter(start: { quantity: number; usdCost: number; applied: Record<string, { q: number; amt: number }> }, orders: BookOrder[]): number {
+    let qty = start.quantity;
+    let usd = start.usdCost;
+    for (const { o, dq, damt } of KrwCostBook.deltas(start.applied, orders)) {
+      if (o.side === "BUY") {
+        qty += dq;
+        usd += damt;
+      } else if (qty > 0) {
+        usd *= Math.max(qty - dq, 0) / qty;
+        qty = Math.max(qty - dq, 0);
+      }
+    }
+    return usd;
+  }
+
+  /** 주문의 누적 체결량과 이미 반영한 양의 차이만 이동평균으로 반영한다. 환율 조회 실패는 던진다 */
+  private async applyOrders(start: Position, orders: BookOrder[]): Promise<Position> {
+    const applied = { ...start.applied };
+    const deltas = KrwCostBook.deltas(applied, orders);
     // 뒤에서 전량 매도되는 매수분은 원화 금액이 0 이 되므로 환율을 조회하지 않는다 (오래된 시점 환율이 없어도 막히지 않게)
     let simQty = start.quantity;
     let lastZero = -1;
@@ -180,19 +199,9 @@ export class KrwCostBook {
       }
     });
     let { quantity: qty, usdCost: usd, krwExact, krwEst } = start;
-    let approx = false;
     for (const [i, { o, dq, damt }] of deltas.entries()) {
       if (o.side === "BUY") {
-        let rate = 0;
-        if (i > lastZero) {
-          try {
-            rate = await this.deps.rateAt(o.at);
-          } catch (e) {
-            if (fallbackRate === null) throw e;
-            rate = fallbackRate;
-            approx = true;
-          }
-        }
+        const rate = i > lastZero ? await this.deps.rateAt(o.at) : 0;
         qty += dq;
         usd += damt;
         krwEst += damt * rate;
@@ -205,7 +214,7 @@ export class KrwCostBook {
       }
       applied[o.orderId] = { q: o.quantity, amt: o.amount };
     }
-    return { quantity: qty, usdCost: usd, krwExact, krwEst, applied, approx };
+    return { quantity: qty, usdCost: usd, krwExact, krwEst, applied };
   }
 
   /** 달러 매입금액이 토스 값과 맞는지 (분할·병합은 수량만 바뀌고 매입금액은 같으므로 금액으로 본다) */
@@ -246,15 +255,27 @@ export class KrwCostBook {
             out.push({ account, h, applied: e.applied, weight: e.krwExact + e.krwEst * state.factor });
             continue;
           }
+          let orders: BookOrder[];
           try {
-            const orders = await this.deps.orders(account, code);
+            orders = await this.deps.orders(account, code);
             fetched = true;
-            out.push({ account, h, applied: Object.fromEntries(orders.map((o) => [o.orderId, { q: o.quantity, amt: o.amount }])), weight: null });
-          } catch (e) {
-            this.deps.log?.warn({ code, err: errText(e) }, "원화 매입금액 저장: 주문 내역 조회 실패");
+          } catch (err) {
+            this.deps.log?.warn({ code, err: errText(err) }, "원화 매입금액 저장: 주문 내역 조회 실패");
             ok = false;
             break;
           }
+          // 읽은 주문이 이 보유를 설명해야 "이미 반영"으로 기록할 수 있다 (주문 목록이 늦으면 빠진 체결이 영영 반영되지 않는다).
+          // 오래 설명되지 않는 보유(이관 등)는 동기화가 가진 값으로 맞춰 둔 뒤라야 저장된다
+          const target = h.purchaseAmount!;
+          const explained =
+            KrwCostBook.matches(KrwCostBook.usdAfter({ quantity: 0, usdCost: 0, applied: {} }, orders), target) ||
+            (!!e && KrwCostBook.matches(KrwCostBook.usdAfter(e, orders), target));
+          if (!explained) {
+            this.deps.log?.warn({ code, account, target }, "원화 매입금액 저장: 주문 내역이 아직 보유와 맞지 않아 건너뜀");
+            ok = false;
+            break;
+          }
+          out.push({ account, h, applied: Object.fromEntries(orders.map((o) => [o.orderId, { q: o.quantity, amt: o.amount }])), weight: null });
         }
         if (ok) prepared.set(code, out);
       }
@@ -317,11 +338,11 @@ export class KrwCostBook {
           if (!(await this.syncHolding(state, account, h, displayFx))) complete = false;
         }
       }
-      // 이번 응답에 없는(전량 매도한) 계좌·종목은 지운다. 계좌 응답이 통째로 비었는데 계좌 요약엔 달러 매입금액이 있으면 일시 오류로 보고 둔다
-      const known = new Set(accounts.map((a) => a.account));
-      const trusted = new Set(accounts.filter((a) => a.holdings.length > 0 || a.purchaseUsd === 0).map((a) => a.account));
+      // 이번 응답에 없는(전량 매도한) 계좌·종목은 지운다. 단 그 계좌 응답에 보유가 있거나, 계좌 요약이 달러 매입금액 0 을 분명히 줬을 때만.
+      // 계좌가 목록에서 빠졌거나 응답이 통째로 비면 일시 오류일 수 있어 둔다(사용자가 넣은 토스 값은 다시 만들 수 없다)
+      const confirmed = new Set(accounts.filter((a) => a.holdings.length > 0 || a.purchaseUsd === 0).map((a) => a.account));
       for (const [key, e] of Object.entries(state.items)) {
-        if (!present.has(key) && (!known.has(e.account) || trusted.has(e.account))) delete state.items[key];
+        if (!present.has(key) && confirmed.has(e.account)) delete state.items[key];
       }
       for (const key of Object.keys(state.pending)) if (!present.has(key)) delete state.pending[key];
       this.calibrate(state, accounts, present, overview, displayFx, complete);
@@ -367,25 +388,26 @@ export class KrwCostBook {
     try {
       orders = await this.deps.orders(account, h.code);
     } catch (err) {
-      return wait("주문 내역 조회 실패", { err: errText(err) });
+      this.deps.log?.warn({ code: h.code, account, err: errText(err) }, "원화 장부: 주문 내역 조회 실패, 다음 동기화에서 다시");
+      return false;
     }
-    // 오래 못 맞췄으면 없는 과거 환율은 표시 환율로 대신한다
-    const lenient = overdue ? displayFx : null;
-    let cont: (Position & { approx: boolean }) | null = null;
-    let rebuilt: Position & { approx: boolean };
+    // 환율 조회 실패는 몇 번이든 다시 시도한다(표시 환율로 굳히지 않는다). 기다림(pending)은 "설명되지 않음"에만 센다
+    let cont: Position | null = null;
+    let rebuilt: Position;
     try {
       // 1) 기존 항목에 새 체결만 이어 붙인다 (토스 값·exact 몫이 그대로 남는다)
       if (e) {
-        cont = await this.applyOrders(e, orders, lenient);
-        if (KrwCostBook.matches(cont.usdCost, target)) return write(cont, !!e.approx || cont.approx);
+        cont = await this.applyOrders(e, orders);
+        if (KrwCostBook.matches(cont.usdCost, target)) return write(cont, !!e.approx);
       }
       // 2) 주문 내역 전체로 다시 계산
-      rebuilt = await this.applyOrders(EMPTY_POSITION, orders, lenient);
+      rebuilt = await this.applyOrders(EMPTY_POSITION, orders);
     } catch (err) {
-      return wait("환율 조회 실패", { err: errText(err) });
+      this.deps.log?.warn({ code: h.code, account, err: errText(err) }, "원화 장부: 환율 조회 실패, 다음 동기화에서 다시");
+      return false;
     }
     // 토스 값이 든 항목은 곧바로 재계산 값으로 바꾸지 않는다 (주문 목록이 잠깐 늦는 경우 등). 오래 계속되면 바꾼다
-    if (KrwCostBook.matches(rebuilt.usdCost, target) && (!e || e.krwExact <= 0 || overdue)) return write(rebuilt, rebuilt.approx);
+    if (KrwCostBook.matches(rebuilt.usdCost, target) && (!e || e.krwExact <= 0 || overdue)) return write(rebuilt, false);
     if (!overdue) return wait("주문 내역과 매입금액이 맞지 않음", { rebuilt: rebuilt.usdCost, cont: cont?.usdCost ?? null });
     // 3) 오래 맞지 않음(이관·체결 순서 등): 가진 값으로 보유에 맞춘다. 모자란 달러는 표시 환율로, 남으면 비율대로 줄인다
     const base = cont ?? rebuilt;

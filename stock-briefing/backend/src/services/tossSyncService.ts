@@ -125,6 +125,8 @@ export class TossSyncService {
 
   async importHoldings(): Promise<ImportResult> {
     const accounts = await this.toss.accounts();
+    // 계좌 목록이 비면 일시 오류로 본다 (그대로 진행하면 토스에서 가져온 종목이 전부 전량 매도로 처리된다)
+    if (accounts.length === 0) throw new Error("토스 계좌 목록이 비었습니다 (일시 오류일 수 있어 이번 동기화는 건너뜁니다)");
     this.accountSeqs = accounts.map((a) => a.accountSeq);
     this.onAccounts?.(this.accountSeqs);
     const merged = new Map<string, TossHolding>();
@@ -221,17 +223,17 @@ export class TossSyncService {
    * 넣은 뒤 마지막으로 읽은 보유로 장부를 한 번 갱신해 계좌 합계 보정도 다시 계산한다. 반환: 저장된 종목 코드
    */
   async setExactKrw(values: Record<string, number>): Promise<string[]> {
-    let last: PerAccount[] | null = null;
+    const snap: { last: PerAccount[] } = { last: [] };
     const applied = await this.costBook.setExact(values, async () => {
-      last = await this.readAccounts();
-      return forBook(last);
+      snap.last = await this.readAccounts();
+      return forBook(snap.last);
     });
-    if (last) await this.updateCostBook(last);
+    if (snap.last.length > 0) await this.updateCostBook(snap.last);
     return applied;
   }
 }
 
-type PerAccount = { account: number; holdings: TossHolding[]; overview: OverviewForBook & { purchaseUsd: number } };
+type PerAccount = { account: number; holdings: TossHolding[]; overview: OverviewForBook & { purchaseUsd: number | null } };
 
 function forBook(perAccount: PerAccount[]): AccountForBook[] {
   return perAccount.map((a) => ({

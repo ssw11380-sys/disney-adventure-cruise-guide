@@ -130,7 +130,7 @@ describe("KrwCostBook", () => {
     ctl.fail = true;
     let s = await book.update(one(usd("AAA", 20, 2200)), null, 1360);
     expect(krwOf(s, "AAA")).toMatchObject({ krw: 1_380_000, quantity: 10, source: "exact" }); // 그대로
-    expect(Object.keys(s.pending)).toEqual(["1:AAA"]);
+    expect(s.pending).toEqual({}); // 조회 실패는 "설명되지 않음"이 아니라 몇 번이든 다시 시도할 일
     ctl.fail = false;
     ctl.rateFail = true;
     s = await book.update(one(usd("AAA", 20, 2200)), null, 1360);
@@ -284,6 +284,51 @@ describe("KrwCostBook", () => {
     await db.destroy();
   });
 
+  it("환율 조회가 20분 넘게 실패해도 표시 환율로 굳히지 않고, 복구되면 체결 시각 환율로 맞춘다", async () => {
+    const { book, db, ctl, later } = await setup({ "1:AAA": [{ orderId: "a", side: "BUY", quantity: 10, amount: 1000, at: "2026-09-22T23:00:00+09:00" }] }, { "2026-09-22T23:00:00+09:00": 1450 });
+    ctl.rateFail = true;
+    for (let i = 0; i < 4; i++) {
+      const s = await book.update(one(usd("AAA", 10, 1000)), null, 1380);
+      expect(krwOf(s, "AAA")).toBeUndefined();
+      later(PENDING_MS);
+    }
+    ctl.rateFail = false;
+    const s = await book.update(one(usd("AAA", 10, 1000)), null, 1380);
+    expect(krwOf(s, "AAA")).toMatchObject({ krw: 1_450_000, source: "estimated" });
+    expect(s.items["1:AAA"]!.approx).toBeUndefined();
+    await db.destroy();
+  });
+
+  it("setExact 는 읽은 주문이 보유를 설명할 때만 저장한다 (주문 목록이 늦으면 거절, 따라오면 저장)", async () => {
+    const orders: BookOrder[] = [{ orderId: "o1", side: "BUY", quantity: 10, amount: 1000, at: "2026-09-20T23:00:00+09:00" }];
+    const { book, db } = await setup({ "1:AAA": orders }, { "2026-09-20T23:00:00+09:00": 1400, "2026-09-22T23:00:00+09:00": 1390, "2026-09-23T23:00:00+09:00": 1395 });
+    await book.update(one(usd("AAA", 10, 1000)), null, 1360);
+    // 2주 매수(o2)가 보유엔 반영됐는데 주문 목록엔 아직 없다
+    const held = one(usd("AAA", 12, 1300));
+    let s = await book.update(held, null, 1360);
+    expect(s.pending["1:AAA"]).toBeDefined();
+    expect(await book.setExact({ AAA: 1_690_000 }, reader(held))).toEqual([]);
+    orders.push({ orderId: "o2", side: "BUY", quantity: 2, amount: 300, at: "2026-09-22T23:00:00+09:00" });
+    expect(await book.setExact({ AAA: 1_690_000 }, reader(held))).toEqual(["AAA"]);
+    // 이후 추가 매수는 토스 값 위에 그대로 이어 붙는다
+    orders.push({ orderId: "o3", side: "BUY", quantity: 1, amount: 150, at: "2026-09-23T23:00:00+09:00" });
+    s = await book.update(one(usd("AAA", 13, 1450)), null, 1360);
+    expect(krwOf(s, "AAA")!.krw).toBeCloseTo(1_690_000 + 150 * 1395, 6);
+    expect(s.items["1:AAA"]!.krwExact).toBe(1_690_000);
+    await db.destroy();
+  });
+
+  it("계좌가 목록에서 빠지거나 응답의 달러 요약을 모르면(null) 항목을 지우지 않는다", async () => {
+    const { book, db } = await setup({ "1:AAA": [{ orderId: "a", side: "BUY", quantity: 10, amount: 1000, at: "t1" }] }, { t1: 1400 });
+    await book.update(one(usd("AAA", 10, 1000)), null, 1360);
+    await book.setExact({ AAA: 1_395_000 }, reader(one(usd("AAA", 10, 1000))));
+    let s = await book.update([], null, 1360);
+    expect(krwOf(s, "AAA")).toMatchObject({ krw: 1_395_000, source: "exact" });
+    s = await book.update([{ account: 1, holdings: [], purchaseUsd: null }], null, 1360);
+    expect(krwOf(s, "AAA")).toMatchObject({ krw: 1_395_000, source: "exact" });
+    await db.destroy();
+  });
+
   it("동시에 들어온 갱신과 사용자 입력이 서로 덮어쓰지 않는다", async () => {
     const { book, db } = await setup({ "1:AAA": [{ orderId: "a", side: "BUY", quantity: 10, amount: 1000, at: "t1" }] }, { t1: 1400 });
     const accounts = one(usd("AAA", 10, 1000));
@@ -309,6 +354,12 @@ describe("evaluate (토스 기준)", () => {
     expect(ev.costBasis).toBeCloseTo(50 * 15.12, 6);
     expect(ev.afterCost).toBeNull();
     expect(ev.costBasisKrw).toBeNull();
+  });
+  it("수량이 같아도 달러 매입금액이 다르면(같은 수량 매도 후 재매수) 장부가 뒤처진 것으로 보고 추정한다", () => {
+    const book = { krw: 1_400_000, source: "exact" as const, quantity: 10, usdCost: 1000 };
+    const ev = evaluate({ ...stock, quantity: 10 }, quote, { quantity: 10, purchaseAmount: 1500, costRate: 0.0018, currency: "USD" }, book)!;
+    expect(ev.costBasisKrw).toBeCloseTo(1_400_000 + 500 * 1400, 6);
+    expect(ev.krwCostSource).toBe("estimated");
   });
   it("장부가 새 체결을 아직 못 따라왔으면 차이만 반영한다 (늘어난 매입분은 현재 환율, 줄었으면 비율)", () => {
     const book = { krw: 1_502_649, source: "exact" as const, quantity: 72, usdCost: 1088.64 };
