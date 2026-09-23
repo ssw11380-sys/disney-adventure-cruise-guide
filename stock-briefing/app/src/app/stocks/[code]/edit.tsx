@@ -52,7 +52,7 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     setSavingKrw(true);
     try {
       const r = await api.setKrwCost({ [stock.code]: v });
-      if (!r.applied.includes(stock.code)) throw new Error("토스 계좌에서 가져온 보유 종목만 저장할 수 있습니다 (설정 → 토스증권 연동 → 동기화 후 다시 시도)");
+      if (!r.applied.includes(stock.code)) throw new Error(skipMessage(r.skipped.find((x) => x.code === stock.code)));
       await qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
       await qc.invalidateQueries({ queryKey: [apiUrl, "stock", stock.code] });
       Alert.alert("저장됨", "원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
@@ -177,3 +177,20 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
 const styles = StyleSheet.create({
   field: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
 });
+
+/** 원화 매입금액을 저장하지 못한 이유 (서버가 알려 준 대로) */
+function skipMessage(skip: { reason: string; retryAfter?: string } | undefined): string {
+  switch (skip?.reason) {
+    case "unexplained": {
+      const at = skip.retryAfter ? new Date(skip.retryAfter) : null;
+      const when = at && !Number.isNaN(at.getTime()) ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")} 이후` : "잠시 뒤";
+      return `토스 주문 내역이 아직 이 보유와 맞지 않습니다 (방금 체결됐거나 입고된 주식). ${when} 다시 저장해 주세요.`;
+    }
+    case "changed":
+      return "저장하는 사이 체결이 있었습니다. 토스 앱의 최신 값으로 다시 저장해 주세요.";
+    case "orders_failed":
+      return "토스 주문 내역을 읽지 못했습니다. 잠시 뒤 다시 시도해 주세요.";
+    default:
+      return "토스 계좌에서 가져온 해외 보유 종목만 저장할 수 있습니다 (설정 → 토스증권 연동 → 동기화 후 다시 시도).";
+  }
+}

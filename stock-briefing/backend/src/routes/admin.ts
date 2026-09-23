@@ -58,8 +58,9 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
       const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, ""));
       if (Number.isFinite(n) && n > 0) values[code.toUpperCase()] = n;
     }
-    const applied = await toss.sync.setExactKrw(values);
-    return { applied, skipped: Object.keys(values).filter((c) => !applied.includes(c)), items: Object.fromEntries([...(await service.krwCosts())]) };
+    // skipped: [{ code, reason: not_held | orders_failed | unexplained | changed, retryAfter? }]
+    const r = await toss.sync.setExactKrw(values);
+    return { ...r, items: Object.fromEntries([...(await service.krwCosts())]) };
   });
 
   /** 진단용: 토스 계좌·보유 종목 원본 응답 (필드 구성 확인) */

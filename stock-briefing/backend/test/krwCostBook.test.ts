@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMigratedDb } from "../src/db/index.js";
 import type { Quote, RegisteredStock } from "../src/domain/types.js";
-import { KrwCostBook, PENDING_MS, type AccountForBook, type BookOrder, type HoldingForBook, type OverviewForBook } from "../src/services/krwCostBook.js";
+import { ACCOUNT_GONE_MS, KrwCostBook, PENDING_MS, RateNotFoundError, type AccountForBook, type BookOrder, type HoldingForBook, type OverviewForBook } from "../src/services/krwCostBook.js";
 import { evaluate } from "../src/services/stockService.js";
 
 /** 계좌·종목별 주문 목록과 시각별 환율, 시계를 테스트에서 바꿀 수 있는 장부 */
@@ -19,7 +19,7 @@ async function setup(orders: Record<string, BookOrder[]>, rates: Record<string, 
     rateAt: async (iso) => {
       if (ctl.rateFail) throw new Error("환율 조회 실패");
       const r = rates[iso];
-      if (r === undefined) throw new Error(`환율 없음 ${iso}`);
+      if (r === undefined) throw new RateNotFoundError(iso); // 토스에 아예 없는 시각
       return r;
     },
   });
@@ -71,7 +71,7 @@ describe("KrwCostBook", () => {
 
     const before = ctl.orders;
     // 장부가 이미 보유와 맞으면 주문을 다시 읽지 않고 그 반영 기록을 쓴다
-    expect(await book.setExact({ SOXL: 24_557_187, NONE: 1000 }, reader(one(usd("SOXL", 136, 17559.65))))).toEqual(["SOXL"]);
+    expect((await book.setExact({ SOXL: 24_557_187, NONE: 1000 }, reader(one(usd("SOXL", 136, 17559.65))))).applied).toEqual(["SOXL"]);
     expect(ctl.orders).toBe(before);
     s = await book.update(one(usd("SOXL", 136, 17559.65)), null, 1360); // 그대로면 주문 조회도 하지 않는다
     expect(ctl.orders).toBe(before);
@@ -111,10 +111,10 @@ describe("KrwCostBook", () => {
       }
       return one(usd("AAA", 12, 1300));
     });
-    expect(await book.setExact({ AAA: 1_380_000 }, racing)).toEqual([]);
+    expect((await book.setExact({ AAA: 1_380_000 }, racing)).applied).toEqual([]);
     expect(reads).toBe(2);
     // 다시 넣으면(체결 반영 뒤 토스 값) 저장되고, 이후 동기화에서 exact 가 그대로 남는다
-    expect(await book.setExact({ AAA: 1_794_000 }, reader(one(usd("AAA", 12, 1300))))).toEqual(["AAA"]);
+    expect((await book.setExact({ AAA: 1_794_000 }, reader(one(usd("AAA", 12, 1300))))).applied).toEqual(["AAA"]);
     const s = await book.update(one(usd("AAA", 12, 1300)), null, 1360);
     expect(krwOf(s, "AAA")).toMatchObject({ krw: 1_794_000, source: "exact" });
     await db.destroy();
@@ -222,7 +222,7 @@ describe("KrwCostBook", () => {
     ];
     let s = await book.update(accounts, null, 1360);
     expect(krwOf(s, "DDD")).toMatchObject({ quantity: 20, usdCost: 2000, krw: 2_800_000 });
-    expect(await book.setExact({ DDD: 2_810_000 }, reader(accounts))).toEqual(["DDD"]);
+    expect((await book.setExact({ DDD: 2_810_000 }, reader(accounts))).applied).toEqual(["DDD"]);
     s = await book.update(accounts, null, 1360);
     expect(krwOf(s, "DDD")).toMatchObject({ quantity: 20, krw: 2_810_000, source: "estimated" });
     // 달러가 아니라 장부의 원화 비율(1.3M : 1.5M)로 나뉜다
@@ -307,9 +307,9 @@ describe("KrwCostBook", () => {
     const held = one(usd("AAA", 12, 1300));
     let s = await book.update(held, null, 1360);
     expect(s.pending["1:AAA"]).toBeDefined();
-    expect(await book.setExact({ AAA: 1_690_000 }, reader(held))).toEqual([]);
+    expect((await book.setExact({ AAA: 1_690_000 }, reader(held))).applied).toEqual([]);
     orders.push({ orderId: "o2", side: "BUY", quantity: 2, amount: 300, at: "2026-09-22T23:00:00+09:00" });
-    expect(await book.setExact({ AAA: 1_690_000 }, reader(held))).toEqual(["AAA"]);
+    expect((await book.setExact({ AAA: 1_690_000 }, reader(held))).applied).toEqual(["AAA"]);
     // 이후 추가 매수는 토스 값 위에 그대로 이어 붙는다
     orders.push({ orderId: "o3", side: "BUY", quantity: 1, amount: 150, at: "2026-09-23T23:00:00+09:00" });
     s = await book.update(one(usd("AAA", 13, 1450)), null, 1360);
@@ -326,6 +326,62 @@ describe("KrwCostBook", () => {
     expect(krwOf(s, "AAA")).toMatchObject({ krw: 1_395_000, source: "exact" });
     s = await book.update([{ account: 1, holdings: [], purchaseUsd: null }], null, 1360);
     expect(krwOf(s, "AAA")).toMatchObject({ krw: 1_395_000, source: "exact" });
+    await db.destroy();
+  });
+
+  it("토스에 아예 없는 과거 환율(404)은 기다렸다가 그 매수분만 표시 환율로 대신하고, 계좌 보정도 다시 켜진다", async () => {
+    const { book, db, later } = await setup(
+      {
+        "1:AAA": [{ orderId: "a", side: "BUY", quantity: 10, amount: 1000, at: "2019-03-04T23:00:00+09:00" }],
+        "1:BBB": [{ orderId: "b", side: "BUY", quantity: 10, amount: 1000, at: "2026-09-01T23:00:00+09:00" }],
+      },
+      { "2026-09-01T23:00:00+09:00": 1400 },
+    );
+    const accounts = one(usd("AAA", 10, 1000), usd("BBB", 10, 1000));
+    const ov: OverviewForBook = { purchaseKrw: 0, afterCostKrw: 0, afterCostUsd: 2100, rateAfterCost: Math.round(((2100 * 1360) / 2_760_000 - 1) * 10000) / 10000 };
+    let s = await book.update(accounts, ov, 1360);
+    expect(krwOf(s, "AAA")).toBeUndefined();
+    expect(s.pending["1:AAA"]).toBeDefined();
+    expect(s.factorHash).toBeNull(); // 빠진 종목이 있어 보정하지 않음
+    later(PENDING_MS);
+    s = await book.update(accounts, ov, 1360);
+    expect(krwOf(s, "AAA")).toMatchObject({ source: "estimated", quantity: 10 });
+    expect(s.items["1:AAA"]!.approx).toBe(true);
+    expect(s.factorHash).not.toBeNull(); // 장부가 보유 전부와 맞아 보정 재개
+    await db.destroy();
+  });
+
+  it("setExact 는 못 한 이유를 돌려주고, 오래 설명되지 않은 보유(이관 입고)는 받아들인다", async () => {
+    const { book, db, later } = await setup({ "1:TIN": [] }, {});
+    const held = one(usd("TIN", 5, 500));
+    let r = await book.setExact({ TIN: 700_000, NONE: 1 }, reader(held));
+    expect(r.applied).toEqual([]);
+    expect(r.skipped).toEqual([
+      { code: "TIN", reason: "unexplained", retryAfter: "2026-09-23T12:20:00+09:00" },
+      { code: "NONE", reason: "not_held" },
+    ]);
+    later(PENDING_MS);
+    r = await book.setExact({ TIN: 700_000 }, reader(held));
+    expect(r.applied).toEqual(["TIN"]);
+    const s = await book.update(held, null, 1360);
+    expect(krwOf(s, "TIN")).toMatchObject({ krw: 700_000, source: "exact" });
+    await db.destroy();
+  });
+
+  it("다른 계좌는 보이는데 하루 넘게 목록에서 빠진 계좌의 항목은 지운다", async () => {
+    const { book, db, later } = await setup(
+      {
+        "1:AAA": [{ orderId: "a", side: "BUY", quantity: 10, amount: 1000, at: "t1" }],
+        "2:AAA": [{ orderId: "b", side: "BUY", quantity: 5, amount: 500, at: "t1" }],
+      },
+      { t1: 1400 },
+    );
+    await book.update([{ account: 1, holdings: [usd("AAA", 10, 1000)] }, { account: 2, holdings: [usd("AAA", 5, 500)] }], null, 1360);
+    let s = await book.update([{ account: 1, holdings: [usd("AAA", 10, 1000)] }], null, 1360);
+    expect(krwOf(s, "AAA")!.quantity).toBe(15); // 잠깐 빠진 건 둔다
+    later(ACCOUNT_GONE_MS);
+    s = await book.update([{ account: 1, holdings: [usd("AAA", 10, 1000)] }], null, 1360);
+    expect(krwOf(s, "AAA")!.quantity).toBe(10);
     await db.destroy();
   });
 

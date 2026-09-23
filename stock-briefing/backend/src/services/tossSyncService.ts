@@ -3,7 +3,8 @@ import { seoulIso } from "../lib/time.js";
 import type { MarketCalendar } from "../providers/market/calendar.js";
 import type { TossHolding, TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import { toMarket } from "../providers/market/kisMaster.js";
-import { KrwCostBook, type AccountForBook, type OverviewForBook } from "./krwCostBook.js";
+import { ProviderError } from "../lib/errors.js";
+import { KrwCostBook, RateNotFoundError, type AccountForBook, type OverviewForBook, type SetExactResult } from "./krwCostBook.js";
 
 /**
  * 토스증권 계좌의 보유 종목을 registered_stocks 로 가져온다.
@@ -49,22 +50,28 @@ export class TossSyncService {
     private readonly now: () => Date = () => new Date(),
     /** 토스가 원화 평가에 쓰는 표시 환율 (없으면 원화 장부 보정을 건너뛴다) */
     private readonly displayFx: (() => Promise<number | null>) | null = null,
+    log?: { warn(obj: Record<string, unknown>, msg: string): void },
   ) {
     this.costBook = new KrwCostBook({
       db,
       now,
       orders: (account, symbol) => this.toss.ordersForBook(account, symbol),
       rateAt: (iso) => this.rateAt(iso),
+      ...(log ? { log } : {}),
     });
   }
 
-  // 과거 환율 조회는 MARKET_INFO 한도(초당 3회) 안에서 천천히, 같은 분은 한 번만. 실패는 던진다(장부가 다음에 다시 시도)
+  // 과거 환율 조회는 MARKET_INFO 한도(초당 3회) 안에서 천천히, 같은 분은 한 번만. 실패는 던진다(장부가 다음에 다시 시도).
+  // 토스에 아예 없는 시각(404, 앞 시각들도 없음)은 RateNotFoundError 로 바꾸고 6시간 기억해 매 동기화마다 다시 묻지 않는다
   private readonly rateCache = new Map<string, number>();
+  private readonly rateMissing = new Map<string, number>();
   private rateGate: Promise<unknown> = Promise.resolve();
   private rateAt(iso: string): Promise<number> {
     const minute = iso.slice(0, 16);
     const cached = this.rateCache.get(minute);
     if (cached !== undefined) return Promise.resolve(cached);
+    const missingAt = this.rateMissing.get(minute);
+    if (missingAt !== undefined && this.now().getTime() - missingAt < 6 * 3_600_000) return Promise.reject(new RateNotFoundError(iso));
     const run = this.rateGate.then(async () => {
       const hit = this.rateCache.get(minute);
       if (hit !== undefined) return hit;
@@ -72,6 +79,12 @@ export class TossSyncService {
         const rate = await this.toss.usdKrwAt(iso);
         this.rateCache.set(minute, rate);
         return rate;
+      } catch (e) {
+        if (e instanceof ProviderError && e.message.includes("exchange-rate-not-found")) {
+          this.rateMissing.set(minute, this.now().getTime());
+          throw new RateNotFoundError(iso);
+        }
+        throw e;
       } finally {
         await new Promise((r) => setTimeout(r, 400));
       }
@@ -126,7 +139,7 @@ export class TossSyncService {
   async importHoldings(): Promise<ImportResult> {
     const accounts = await this.toss.accounts();
     // 계좌 목록이 비면 일시 오류로 본다 (그대로 진행하면 토스에서 가져온 종목이 전부 전량 매도로 처리된다)
-    if (accounts.length === 0) throw new Error("토스 계좌 목록이 비었습니다 (일시 오류일 수 있어 이번 동기화는 건너뜁니다)");
+    if (accounts.length === 0) throw emptyAccounts();
     this.accountSeqs = accounts.map((a) => a.accountSeq);
     this.onAccounts?.(this.accountSeqs);
     const merged = new Map<string, TossHolding>();
@@ -210,7 +223,9 @@ export class TossSyncService {
 
   private async readAccounts(): Promise<PerAccount[]> {
     const out: PerAccount[] = [];
-    for (const a of await this.toss.accounts()) {
+    const accounts = await this.toss.accounts();
+    if (accounts.length === 0) throw emptyAccounts();
+    for (const a of accounts) {
       const { items, overview } = await this.toss.holdingsWithOverview(a.accountSeq);
       out.push({ account: a.accountSeq, holdings: items, overview });
     }
@@ -220,9 +235,9 @@ export class TossSyncService {
   /**
    * 토스 앱에서 본 해외 종목 원화 매입금액(원화 보기의 평가금액 − 평가손익)을 정확한 값으로 넣는다.
    * 장부가 잠금 안에서 토스 보유를 새로 읽어(보유 → 주문 → 보유) 그 사이 체결이 없었던 종목만 저장한다.
-   * 넣은 뒤 마지막으로 읽은 보유로 장부를 한 번 갱신해 계좌 합계 보정도 다시 계산한다. 반환: 저장된 종목 코드
+   * 넣은 뒤 마지막으로 읽은 보유로 장부를 한 번 갱신해 계좌 합계 보정도 다시 계산한다. 반환: 저장한 종목과 못 한 종목·이유
    */
-  async setExactKrw(values: Record<string, number>): Promise<string[]> {
+  async setExactKrw(values: Record<string, number>): Promise<SetExactResult> {
     const snap: { last: PerAccount[] } = { last: [] };
     const applied = await this.costBook.setExact(values, async () => {
       snap.last = await this.readAccounts();
@@ -234,6 +249,10 @@ export class TossSyncService {
 }
 
 type PerAccount = { account: number; holdings: TossHolding[]; overview: OverviewForBook & { purchaseUsd: number | null } };
+
+function emptyAccounts(): ProviderError {
+  return new ProviderError("toss-openapi", "토스 계좌 목록이 비었습니다 (일시 오류일 수 있어 이번 동기화는 건너뜁니다)");
+}
 
 function forBook(perAccount: PerAccount[]): AccountForBook[] {
   return perAccount.map((a) => ({

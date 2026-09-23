@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createMigratedDb } from "../src/db/index.js";
 import type { MarketCalendar } from "../src/providers/market/calendar.js";
 import type { TossHolding, TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
+import { ProviderError } from "../src/lib/errors.js";
 import { StockService } from "../src/services/stockService.js";
 import { HoldingsAutoSync, TossSyncService } from "../src/services/tossSyncService.js";
 import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider } from "./helpers.js";
@@ -29,10 +30,15 @@ class FakeToss {
     if (this.fail) throw new Error("토스 계좌 조회 실패");
     return { items, overview: { purchaseKrw: 0, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } };
   }
+  orders: Array<{ orderId: string; side: "BUY" | "SELL"; quantity: number; amount: number; at: string }> = [];
+  rateCalls = 0;
+  rateMissing = false;
   async ordersForBook() {
-    return [];
+    return this.orders;
   }
   async usdKrwAt() {
+    this.rateCalls++;
+    if (this.rateMissing) throw new ProviderError("toss-openapi", "HTTP 404 exchange-rate-not-found: 요청한 시점의 환율 정보가 없습니다.");
     return 1400;
   }
   async stockInfos(codes: string[]) {
@@ -87,6 +93,18 @@ describe("TossSyncService 전량 매도 처리", () => {
     toss.noAccounts = true;
     await expect(sync.importHoldings()).rejects.toThrow("토스 계좌 목록이 비었습니다");
     expect((await stocks.list()).find((s) => s.code === "035420")).toMatchObject({ quantity: 9 });
+    await db.destroy();
+  });
+
+  it("토스에 없는 과거 환율(404)은 기억해 두고 동기화마다 다시 묻지 않는다", async () => {
+    const { db, toss, sync } = await setup();
+    toss.holdingsList = [{ ...h("TSLA", 2, 300, "USD"), purchaseAmount: 600 }];
+    toss.orders = [{ orderId: "o1", side: "BUY", quantity: 2, amount: 600, at: "2019-03-04T23:00:00+09:00" }];
+    toss.rateMissing = true;
+    await sync.importHoldings();
+    await sync.importHoldings();
+    expect(toss.rateCalls).toBe(1);
+    expect((await sync.costBook.load()).pending["1:TSLA"]).toBeDefined();
     await db.destroy();
   });
 

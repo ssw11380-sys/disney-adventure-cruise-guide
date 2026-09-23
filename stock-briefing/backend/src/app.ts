@@ -81,7 +81,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     }
     // 원화 장부 보정에는 토스가 원화 평가에 쓰는 표시 환율이 필요하다 (fundamentals.usdKrw 는 토스 웹 표시 환율을 먼저 쓴다)
     const fundamentals = opts.providers.fundamentals;
-    const sync = new TossSyncService(opts.db, opts.providers.tossOpenApi, now, fundamentals ? () => fundamentals.usdKrw() : null);
+    const sync = new TossSyncService(opts.db, opts.providers.tossOpenApi, now, fundamentals ? () => fundamentals.usdKrw() : null, log);
     // 토스 앱에서 사고팔면 늦어도 TOSS_SYNC_MINUTES 안에 반영. 바뀐 게 있으면 실시간 구독 종목도 갱신
     const autoSync = new HoldingsAutoSync({
       sync,
