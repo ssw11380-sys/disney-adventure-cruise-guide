@@ -45,6 +45,17 @@ export interface ThemeSummary {
   simpleAvg?: number;
 }
 
+/** 미국 종목 정규장 시세 + 체결 시각 + 네이버 장 상태(OPEN/CLOSE/PREOPEN) */
+export type UsQuote = DiscoverStock & { tradedAt: string | null; status?: string };
+
+/** 장 시작 전 초기화된 미국 시세 묶음인지 (절반 넘게 PREOPEN 이면 등락률·거래량이 0 이라 쓸 수 없다) */
+export function isPreopenQuotes(q: Map<string, UsQuote>): boolean {
+  if (!q.size) return false;
+  let pre = 0;
+  for (const v of q.values()) if (v.status === "PREOPEN") pre++;
+  return pre / q.size >= 0.5;
+}
+
 export interface SectorDetail {
   theme: ThemeSummary;
   description: string | null;
@@ -225,17 +236,20 @@ export class NaverDiscover {
   }
 
   /** 한국 순위 원본 한 쪽 (50개, index 0부터) */
-  async krRankPage(category: RankCategory, index: number): Promise<{ items: DiscoverStock[]; raw: number; hasNext: boolean }> {
+  async krRankPage(category: RankCategory, index: number): Promise<{ items: DiscoverStock[]; raw: number; hasNext: boolean; preopen: boolean }> {
     const r = await this.json(`${BASE}/domestic/stock/list/sorted?sortType=${SORT[category]}&marketType=all&domesticStockExchangeType=KRX&index=${index}`);
     const rows = (r["items"] as Json[] | undefined) ?? [];
-    return { items: rows.filter(isPlainStock).map(krStock).filter((x): x is DiscoverStock => x !== null), raw: rows.length, hasNext: r["hasNext"] === true };
+    const items = rows.filter(isPlainStock).map(krStock).filter((x): x is DiscoverStock => x !== null);
+    // 장 시작 전 초기화: 모든 줄의 등락률·거래량이 0 이면 오늘 값이 아직 없는 것
+    const preopen = items.length > 0 && items.every((i) => i.changeRate === 0 && !i.volume);
+    return { items, raw: rows.length, hasNext: r["hasNext"] === true, preopen };
   }
 
   /**
    * 미국 순위 원본 한 쪽 (100개, index 0부터). NYSE·NASDAQ·AMEX 합산, 보통주만(ETF 없음).
    * 가장 최근 거래일이 아닌 줄(오래 멈춘 종목)은 뺀다.
    */
-  async usRankPage(category: RankCategory, index: number): Promise<{ items: DiscoverStock[]; raw: number; hasNext: boolean; tradedAt: string | null }> {
+  async usRankPage(category: RankCategory, index: number): Promise<{ items: DiscoverStock[]; raw: number; hasNext: boolean; tradedAt: string | null; preopen: boolean }> {
     const r = await this.json(`${US_BASE}/stock/nation/USA/${US_SORT[category]}?page=${index + 1}&pageSize=100`);
     const rows = (r["stocks"] as Json[] | undefined) ?? [];
     const day = (it: Json) => String(it["localTradedAt"] ?? "").slice(0, 10);
@@ -247,15 +261,17 @@ export class NaverDiscover {
     const total = num(r["totalCount"]) ?? 0;
     // 값의 시각: 가장 늦은 체결 시각 (장 마감 뒤엔 정규장 종료 16:00 ET)
     const tradedAt = rows.map((it) => String(it["localTradedAt"] ?? "")).filter((x) => !Number.isNaN(Date.parse(x))).sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
-    return { items, raw: rows.length, hasNext: rows.length > 0 && (index + 1) * 100 < total, tradedAt };
+    // 네이버는 뉴욕 새벽(한국 16시 무렵)부터 정규장 전까지 목록을 비우고 marketStatus=PREOPEN 으로 둔다
+    const preopen = String(r["marketStatus"] ?? "") === "PREOPEN" || (rows.length === 0 && total === 0);
+    return { items, raw: rows.length, hasNext: rows.length > 0 && (index + 1) * 100 < total, tradedAt, preopen };
   }
 
   /**
    * 미국 종목 여러 개의 정규장 시세 (polling.finance.naver.com, 로이터 코드 500개씩).
    * 모르는 코드는 응답에서 빠진다. 결과는 로이터 코드 → 종목 (시가총액 포함).
    */
-  async usQuotes(reuters: string[]): Promise<Map<string, DiscoverStock & { tradedAt: string | null }>> {
-    const out = new Map<string, DiscoverStock & { tradedAt: string | null }>();
+  async usQuotes(reuters: string[]): Promise<Map<string, UsQuote>> {
+    const out = new Map<string, UsQuote>();
     const codes = [...new Set(reuters)].filter((c) => /^[A-Za-z0-9._]+$/.test(c));
     const batches: string[][] = [];
     for (let i = 0; i < codes.length; i += POLL_BATCH) batches.push(codes.slice(i, i + POLL_BATCH));
@@ -267,7 +283,7 @@ export class NaverDiscover {
       for (const it of (r["datas"] as Json[] | undefined) ?? []) {
         const s = usRankStock({ ...it, marketValueRaw: it["marketValueFullRaw"] ?? it["marketValueRaw"] });
         const rc = String(it["reutersCode"] ?? "");
-        if (s && rc) out.set(rc, { ...s, tradedAt: typeof it["localTradedAt"] === "string" ? it["localTradedAt"] : null });
+        if (s && rc) out.set(rc, { ...s, tradedAt: typeof it["localTradedAt"] === "string" ? it["localTradedAt"] : null, status: String(it["marketStatus"] ?? "") });
       }
     }
     return out;

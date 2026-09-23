@@ -1,6 +1,6 @@
 import { seoulIso } from "../lib/time.js";
 import type { MarketCalendar } from "../providers/market/calendar.js";
-import type { DiscoverMarket, DiscoverStock, NaverDiscover, RankCategory, SectorDetail, ThemeKind, ThemePeriod, ThemeSummary } from "../providers/market/naverDiscover.js";
+import { isPreopenQuotes, type DiscoverMarket, type DiscoverStock, type NaverDiscover, type RankCategory, type SectorDetail, type ThemeKind, type ThemePeriod, type ThemeSummary, type UsQuote } from "../providers/market/naverDiscover.js";
 import type { CodeStore } from "../providers/market/toss.js";
 import type { TicsRankRow, TossTics } from "../providers/market/tossTics.js";
 import { latestTradeDay, pool, usThemeSummary, UsThemesBuildingError, type UsThemeBook, type UsThemeBookData } from "./usThemes.js";
@@ -58,9 +58,17 @@ export interface ThemeDetail {
 }
 
 /** 순위 원본: 정렬된 전체 목록을 앞에서부터 한 쪽씩 (없으면 빈 목록, hasNext 로 끝) */
-export type RankSource = (category: RankCategory, index: number) => Promise<{ items: DiscoverStock[]; hasNext: boolean; tradedAt?: string | null }>;
+export type RankSource = (category: RankCategory, index: number) => Promise<{ items: DiscoverStock[]; hasNext: boolean; tradedAt?: string | null; preopen?: boolean }>;
 
-type RankState = { at: number; items: DiscoverStock[]; next: number; hasNext: boolean; source: string; tradedAt: string | null };
+type RankState = { at: number; items: DiscoverStock[]; next: number; hasNext: boolean; source: string; tradedAt: string | null; preopen?: boolean; fromSnapshot?: boolean };
+
+/** 네이버가 장 시작 전으로 초기화해 쓸 값이 없고 저장본도 없을 때 */
+export class PreopenError extends Error {
+  constructor(what: string) {
+    super(`${what}: 장 시작 전이라 직전 정규장 값이 아직 없습니다`);
+    this.name = "PreopenError";
+  }
+}
 
 export const MIN_TRADING_VALUE: Record<DiscoverMarket, number> = { KR: 1_000_000_000, US: 1_000_000 };
 const MAX_SOURCE_PAGES = 12;
@@ -84,6 +92,11 @@ const FAIL_RETRY_MS = 20_000;
 const FAIL_COOLDOWN_MS = 10 * 60_000;
 /** 구성 종목을 이만큼 받았으면 잘렸을 수 있어 신규상장 조정을 하지 않는다 */
 const SECTOR_MAX_ITEMS = 300;
+/** 직전 정규장 저장본(meta)을 쓰는 기간과 저장 간격 */
+const SNAP_MAX_AGE_MS = 5 * 24 * 3_600_000;
+const SNAP_PERSIST_EVERY_MS = 10 * 60_000;
+/** 순위 저장본에 남기는 줄 수 */
+const SNAP_RANK_ITEMS = 600;
 
 type Cached<T> = { at: number; value: T };
 
@@ -95,6 +108,8 @@ export class DiscoverService {
   private readonly failures = new Map<string, { at: number; error: unknown }>();
   /** 미국 테마 기간 등락률의 정규장 중 스냅숏 */
   private readonly periodSnaps = new Map<ThemePeriod, UsPeriodSnapshot>();
+  /** 직전 정규장 저장본 (메모리 + meta 표). 네이버가 장 시작 전으로 초기화한 시간에 쓴다 */
+  private readonly snaps = new Map<string, { savedAt: number; persistedAt: number; value: unknown }>();
 
   constructor(
     private readonly deps: {
@@ -196,6 +211,32 @@ export class DiscoverService {
     }
   }
 
+  /** 직전 정규장 저장본 쓰기 — 메모리는 늘, meta 표는 10분에 한 번(또는 force) */
+  private async saveSnap(key: string, value: unknown, force = false): Promise<void> {
+    const t = this.now.getTime();
+    const prev = this.snaps.get(key);
+    const persist = force || !prev || t - prev.persistedAt >= SNAP_PERSIST_EVERY_MS;
+    this.snaps.set(key, { savedAt: t, persistedAt: persist ? t : (prev?.persistedAt ?? 0), value });
+    if (persist) await this.deps.store?.set(`discover:snap:${key}`, JSON.stringify({ savedAt: t, value })).catch(() => undefined);
+  }
+
+  /** 직전 정규장 저장본 읽기 (5일 넘으면 버림) */
+  private async loadSnap<T>(key: string): Promise<{ savedAt: number; value: T } | null> {
+    const t = this.now.getTime();
+    const mem = this.snaps.get(key);
+    if (mem) return t - mem.savedAt < SNAP_MAX_AGE_MS ? { savedAt: mem.savedAt, value: mem.value as T } : null;
+    try {
+      const raw = await this.deps.store?.get(`discover:snap:${key}`);
+      if (!raw) return null;
+      const v = JSON.parse(raw) as { savedAt: number; value: T };
+      if (typeof v.savedAt !== "number" || t - v.savedAt >= SNAP_MAX_AGE_MS) return null;
+      this.snaps.set(key, { savedAt: v.savedAt, persistedAt: v.savedAt, value: v.value });
+      return v;
+    } catch {
+      return null;
+    }
+  }
+
   async rank(market: DiscoverMarket, category: RankCategory, page: number, size: number): Promise<DiscoverRank> {
     const open = await this.isOpen(market);
     const key = `${market}:${category}`;
@@ -206,14 +247,35 @@ export class DiscoverService {
       // 새로 받는다. 실패하거나(장 시작 전처럼) 빈 목록이 오면 직전 목록
       try {
         const fresh = await this.fillRank(market, category, { at: t, items: [], next: 0, hasNext: true, source: "", tradedAt: null }, need);
-        if (fresh.items.length || !st?.items.length) {
+        if (fresh.items.length && !fresh.preopen) {
           st = fresh;
           this.ranks.set(key, st);
+          // 정규장 값이 있을 때 저장본을 남긴다 (재시작 뒤 장 시작 전에도 직전 정규장 순위를 보여 주려고)
+          void this.saveSnap(`rank:${key}`, { ...fresh, items: fresh.items.slice(0, SNAP_RANK_ITEMS) }, !open);
+        } else if (st?.items.length && !st.fromSnapshot) {
+          // 장 시작 전처럼 빈 목록·0% 목록이 오면 가진 직전 목록을 그대로 (다음 확인은 TTL 뒤)
+          st = { ...st, at: t };
+          this.ranks.set(key, st);
+        } else {
+          const snap = await this.loadSnap<RankState>(`rank:${key}`);
+          if (snap) {
+            // 저장본은 더 이어 받지 않는다 (지금 출처는 비어 있으므로)
+            st = { ...snap.value, at: t, next: MAX_SOURCE_PAGES, hasNext: false, fromSnapshot: true };
+            this.ranks.set(key, st);
+          } else if (!st) {
+            st = { ...fresh, items: fresh.preopen ? [] : fresh.items };
+            this.ranks.set(key, st);
+          }
         }
       } catch (e) {
-        if (!st) throw e;
+        if (!st) {
+          const snap = await this.loadSnap<RankState>(`rank:${key}`);
+          if (!snap) throw e;
+          st = { ...snap.value, at: t, next: MAX_SOURCE_PAGES, hasNext: false, fromSnapshot: true };
+          this.ranks.set(key, st);
+        }
       }
-    } else if (st.items.length < need && st.hasNext) {
+    } else if (st.items.length < need && st.hasNext && !st.fromSnapshot) {
       try {
         st = await this.fillRank(market, category, st, need);
         this.ranks.set(key, st);
@@ -236,6 +298,7 @@ export class DiscoverService {
       fxRate: await this.fx(market),
       source: s.source,
       note: [
+        !s.items.length && !open ? "장 시작 전이라 출처가 목록을 비워 두었습니다 (정규장이 열리면 채워집니다)" : null,
         market === "KR" ? (category === "gainers" || category === "losers" ? "KRX 기준 · ETF·ETN·스팩·정리매매 제외" : "KRX 기준 · ETF·ETN·스팩 제외") : "ETF·우선주·권리주 제외",
         category === "gainers" || category === "losers" ? `거래대금 ${market === "KR" ? "10억 원" : "100만 달러"} 이상` : null,
       ]
@@ -260,12 +323,14 @@ export class DiscoverService {
     let next = start.next;
     let hasNext = start.hasNext;
     let tradedAt = start.tradedAt;
+    let preopen = false;
     const movers = category === "gainers" || category === "losers";
     const minTv = movers ? MIN_TRADING_VALUE[market] : 0;
     while (items.length < need && hasNext && next < MAX_SOURCE_PAGES) {
       const batch = [next, next + 1, next + 2].filter((i) => i < MAX_SOURCE_PAGES);
       const pages = await Promise.all(batch.map((i) => src.source(category, i)));
       for (const p of pages) {
+        if (p.preopen) preopen = true;
         if (p.tradedAt && (!tradedAt || Date.parse(p.tradedAt) > Date.parse(tradedAt))) tradedAt = p.tradedAt;
         for (const it of p.items) {
           if (seen.has(it.code)) continue;
@@ -279,6 +344,7 @@ export class DiscoverService {
       next += batch.length;
       hasNext = pages.at(-1)?.hasNext ?? false;
       if (pages.some((p) => !p.hasNext)) hasNext = false;
+      if (preopen) break; // 장 시작 전 초기화 — 더 받아도 쓸 값이 없다
     }
     // 원본 쪽 상한에 닿으면 끝 (빈 "더 보기"가 이어지지 않게)
     if (next >= MAX_SOURCE_PAGES) hasNext = false;
@@ -291,7 +357,7 @@ export class DiscoverService {
       .map((it, i) => ({ it, i }))
       .sort((a, b) => dir * ((key(a.it) ?? -Infinity) - (key(b.it) ?? -Infinity)) || a.i - b.i)
       .map((x) => x.it);
-    return { at: start.at, items: [...start.items, ...added], next, hasNext, source: src.name, tradedAt };
+    return { at: start.at, items: [...start.items, ...added], next, hasNext, source: src.name, tradedAt, preopen };
   }
 
   /** 오늘 상장한 한국 종목 (실패하면 빈 집합 — 조정 없이 네이버 값 그대로) */
@@ -331,7 +397,12 @@ export class DiscoverService {
       } catch (e) {
         // 토스 테마를 못 받거나 처음 만드는 중이면 네이버 산업 분류로 대신 (빈 화면·긴 기다림보다 낫다)
         const alt = await this.naverThemes("US", "sector", period, open);
-        const why = e instanceof UsThemesBuildingError ? "미국 테마를 처음 준비하는 중이라(약 1분)" : "미국 테마를 불러오지 못해";
+        const why =
+          e instanceof UsThemesBuildingError
+            ? "미국 테마를 처음 준비하는 중이라(약 1분)"
+            : e instanceof PreopenError
+              ? "미국 장 시작 전이라 직전 정규장 테마 값이 아직 없어"
+              : "미국 테마를 불러오지 못해";
         return { ...alt, note: `${why} 산업 분류로 대신 보여 줍니다` };
       }
     }
@@ -339,10 +410,19 @@ export class DiscoverService {
   }
 
   private async naverThemes(market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod, open: boolean): Promise<ThemeList> {
+    const snapKey = `themes:${market}:${kind}:${period}`;
     const { value, at } = await this.cached(`themes:${market}:${kind}:${period}`, this.ttl(open, period !== "day"), async () => {
       const list = await this.deps.naver.sectors(market, kind, period);
+      // 장 시작 전 초기화(모든 등락률 0)면 직전 정규장 저장본을 쓴다
+      if (list.length > 5 && list.every((x) => x.changeRate === 0)) {
+        const snap = await this.loadSnap<ThemeSummary[]>(snapKey);
+        if (snap) return snap.value;
+        return list;
+      }
       // 오늘 등락률만 조정한다 (주·월은 상장 첫날 값이 섞여도 기간 수익률 계산 기준이 달라 네이버 값 그대로)
-      return market === "KR" && period === "day" ? this.adjustForNewListings(kind, list, await this.newlyListed(open)) : list;
+      const out = market === "KR" && period === "day" ? await this.adjustForNewListings(kind, list, await this.newlyListed(open)) : list;
+      void this.saveSnap(snapKey, out, !open);
+      return out;
     });
     return {
       market,
@@ -363,7 +443,17 @@ export class DiscoverService {
     const key = `usq:${book.builtAt}`;
     // 테마북이 새로 만들어지면 옛 시세 묶음은 버린다 (하루에 하나씩 쌓이지 않게)
     for (const k of this.cache.keys()) if (k.startsWith("usq:") && k !== key) this.cache.delete(k);
-    return this.cached(key, this.ttl(open), () => this.deps.naver.usQuotes(codes));
+    return this.cached(key, this.ttl(open), async () => {
+      const q = await this.deps.naver.usQuotes(codes);
+      if (isPreopenQuotes(q)) {
+        // 뉴욕 새벽~정규장 전: 네이버가 등락률·거래량을 0 으로 초기화한다 → 직전 정규장 저장본
+        const snap = await this.loadSnap<[string, UsQuote][]>("usq");
+        if (snap) return new Map(snap.value);
+        throw new PreopenError("미국 테마 시세");
+      }
+      void this.saveSnap("usq", [...q.entries()], !open);
+      return q;
+    });
   }
 
   private async usThemeList(open: boolean, period: ThemePeriod): Promise<ThemeList> {
@@ -511,8 +601,24 @@ export class DiscoverService {
       if (market === "US" && this.knownSectorIds("US")?.has(id) === false) return null;
       throw e;
     }
-    const { value, at } = got;
+    const { at } = got;
+    let value = got.value;
     if (!value) return null;
+    let note: string | null = null;
+    if (market === "US" && value.items.length && value.items.filter((i) => !i.volume && i.changeRate === 0).length / value.items.length >= 0.8) {
+      // 장 시작 전 초기화: 종목 값이 모두 0 — 미국 테마 시세 저장본(약 2,500종목)으로 덮는다
+      const snap = await this.loadSnap<[string, UsQuote][]>("usq");
+      const byTicker = new Map((snap?.value ?? []).map(([, q]) => [q.code, q] as const));
+      let hit = 0;
+      const items = value.items.map((i) => {
+        const q = byTicker.get(i.code);
+        if (!q) return i;
+        hit++;
+        return { ...i, price: q.price, change: q.change, changeRate: q.changeRate, volume: q.volume, tradingValue: q.tradingValue };
+      });
+      value = { ...value, items };
+      note = hit ? `장 시작 전이라 종목 값은 직전 정규장 저장본 (${hit}/${items.length}종목)` : "장 시작 전이라 종목별 등락률이 0으로 초기화돼 있습니다 (정규장이 열리면 갱신)";
+    }
     // 목록과 같은 조건으로만 조정한다: 상장 첫날 종목이 등락률 상위 3(네이버 대표 종목)에 들 때
     const fresh = market === "KR" ? await this.newlyListed(open) : new Set<string>();
     const top3 = [...value.items].sort((a, b) => b.changeRate - a.changeRate).slice(0, 3);
@@ -529,7 +635,7 @@ export class DiscoverService {
       fxRate: await this.fx(market),
       source: "네이버 증권",
       basis: naverBasis(market, k),
-      note: null,
+      note,
     };
   }
 
