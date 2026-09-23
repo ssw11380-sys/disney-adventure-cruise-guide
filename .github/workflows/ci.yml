@@ -9,7 +9,8 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # PR 은 새 푸시가 오면 이전 실행을 취소, main 은 커밋마다 끝까지 검사 (배포 전 확인용)
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -36,6 +37,8 @@ jobs:
         working-directory: stock-briefing/backend
     env:
       TEST_PG_URL: postgres://postgres:postgres@127.0.0.1:5432/stockbriefing_test
+      # Postgres 테스트가 조용히 건너뛰어지지 않도록 (TEST_PG_URL 이 없으면 실패)
+      REQUIRE_PG: "1"
       TZ: Asia/Seoul
     steps:
       - uses: actions/checkout@v4

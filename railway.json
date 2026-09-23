@@ -5,6 +5,7 @@
     "dockerfilePath": "Dockerfile",
     "watchPatterns": [
       "/stock-briefing/backend/**",
+      "!/stock-briefing/backend/test/**",
       "/Dockerfile",
       "/.dockerignore",
       "/railway.json"

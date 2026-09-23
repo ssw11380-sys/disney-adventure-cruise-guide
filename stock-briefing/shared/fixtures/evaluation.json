@@ -1,5 +1,5 @@
 {
-  "note": "서버 evaluate() 결과. backend/test/evaluationFixtures.test.ts 가 서버와, app/test/evaluation.test.ts 가 앱과 0원 차이로 맞는지 확인한다.",
+  "note": "서버 evaluate() 결과. backend/test/evaluationFixtures.test.ts 가 서버와, app/test/evaluation.test.ts 가 앱과 0원 차이로 맞는지 확인한다. tickQuote 는 앱 applyTick() 과 같은 규칙으로 만든 체결 시점 시세.",
   "cases": [
     {
       "name": "원화 · 토스 없음",
@@ -34,7 +34,6 @@
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture"
       },
-      "tickPrice": 72300,
       "atQuote": {
         "marketValue": 715000,
         "costBasis": 700000,
@@ -54,6 +53,27 @@
         "afterCost": null,
         "costBasisKrw": null,
         "krwCostSource": null
+      },
+      "tickQuote": {
+        "code": "005930",
+        "currency": "KRW",
+        "price": 72300,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -89,7 +109,6 @@
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture"
       },
-      "tickPrice": 229500,
       "atQuote": {
         "marketValue": 693000,
         "costBasis": 750000,
@@ -109,6 +128,27 @@
         "afterCost": null,
         "costBasisKrw": null,
         "krwCostSource": null
+      },
+      "tickQuote": {
+        "code": "000660",
+        "currency": "KRW",
+        "price": 229500,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -144,7 +184,6 @@
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture"
       },
-      "tickPrice": 191000,
       "toss": {
         "quantity": 7,
         "purchaseAmount": 1262345,
@@ -178,6 +217,27 @@
         },
         "costBasisKrw": null,
         "krwCostSource": null
+      },
+      "tickQuote": {
+        "code": "035420",
+        "currency": "KRW",
+        "price": 191000,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -213,7 +273,6 @@
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture"
       },
-      "tickPrice": 41350,
       "toss": {
         "quantity": 4,
         "purchaseAmount": 160500,
@@ -239,6 +298,27 @@
         "afterCost": null,
         "costBasisKrw": null,
         "krwCostSource": null
+      },
+      "tickQuote": {
+        "code": "035720",
+        "currency": "KRW",
+        "price": 41350,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -274,7 +354,6 @@
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture"
       },
-      "tickPrice": 5100,
       "atQuote": {
         "marketValue": 10000,
         "costBasis": 0,
@@ -294,6 +373,27 @@
         "afterCost": null,
         "costBasisKrw": null,
         "krwCostSource": null
+      },
+      "tickQuote": {
+        "code": "123456",
+        "currency": "KRW",
+        "price": 5100,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -329,7 +429,6 @@
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture"
       },
-      "tickPrice": 36025,
       "atQuote": {
         "marketValue": 54015,
         "costBasis": 52500,
@@ -349,6 +448,27 @@
         "afterCost": null,
         "costBasisKrw": null,
         "krwCostSource": null
+      },
+      "tickQuote": {
+        "code": "069500",
+        "currency": "KRW",
+        "price": 36025,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -383,10 +503,8 @@
         "low52w": null,
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture",
-        "fxRate": 1360,
         "priceKrw": 274040
       },
-      "tickPrice": 202.13,
       "atQuote": {
         "marketValue": 806,
         "costBasis": 761,
@@ -406,6 +524,28 @@
         "afterCost": null,
         "costBasisKrw": null,
         "krwCostSource": null
+      },
+      "tickQuote": {
+        "code": "AAPL",
+        "currency": "USD",
+        "price": 202.13,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture",
+        "priceKrw": 274897
       }
     },
     {
@@ -440,10 +580,8 @@
         "low52w": null,
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture",
-        "fxRate": 1360,
         "priceKrw": 178432
       },
-      "tickPrice": 130.07,
       "toss": {
         "quantity": 12,
         "purchaseAmount": 1446.12,
@@ -483,6 +621,28 @@
         },
         "costBasisKrw": 1952310,
         "krwCostSource": "exact"
+      },
+      "tickQuote": {
+        "code": "NVDA",
+        "currency": "USD",
+        "price": 130.07,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture",
+        "priceKrw": 176895
       }
     },
     {
@@ -516,10 +676,8 @@
         "high52w": null,
         "low52w": null,
         "asOf": "2026-09-23T10:00:00+09:00",
-        "source": "fixture",
-        "fxRate": 1355.5
+        "source": "fixture"
       },
-      "tickPrice": 262.4,
       "toss": {
         "quantity": 2,
         "purchaseAmount": 500,
@@ -559,6 +717,27 @@
         },
         "costBasisKrw": 670000,
         "krwCostSource": "estimated"
+      },
+      "tickQuote": {
+        "code": "TSLA",
+        "currency": "USD",
+        "price": 262.4,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -592,10 +771,8 @@
         "high52w": null,
         "low52w": null,
         "asOf": "2026-09-23T10:00:00+09:00",
-        "source": "fixture",
-        "fxRate": 1360
+        "source": "fixture"
       },
-      "tickPrice": 409.5,
       "toss": {
         "quantity": 3,
         "purchaseAmount": 1200,
@@ -619,8 +796,8 @@
           "profit": 26.924999999999955,
           "profitRate": 2.24
         },
-        "costBasisKrw": 1627600,
-        "krwCostSource": "estimated"
+        "costBasisKrw": null,
+        "krwCostSource": null
       },
       "atTick": {
         "marketValue": 1228.5,
@@ -633,8 +810,29 @@
           "profit": 25.428750000000036,
           "profitRate": 2.12
         },
-        "costBasisKrw": 1627600,
-        "krwCostSource": "estimated"
+        "costBasisKrw": null,
+        "krwCostSource": null
+      },
+      "tickQuote": {
+        "code": "MSFT",
+        "currency": "USD",
+        "price": 409.5,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -668,10 +866,8 @@
         "high52w": null,
         "low52w": null,
         "asOf": "2026-09-23T10:00:00+09:00",
-        "source": "fixture",
-        "fxRate": 1360
+        "source": "fixture"
       },
-      "tickPrice": 166.2,
       "toss": {
         "quantity": 1,
         "purchaseAmount": 150,
@@ -711,6 +907,27 @@
         },
         "costBasisKrw": 202500,
         "krwCostSource": "estimated"
+      },
+      "tickQuote": {
+        "code": "GOOGL",
+        "currency": "USD",
+        "price": 166.2,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
       }
     },
     {
@@ -746,9 +963,29 @@
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture"
       },
-      "tickPrice": 251000,
       "atQuote": null,
-      "atTick": null
+      "atTick": null,
+      "tickQuote": {
+        "code": "005380",
+        "currency": "KRW",
+        "price": 251000,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
+      }
     },
     {
       "name": "수량 0",
@@ -783,9 +1020,126 @@
         "asOf": "2026-09-23T10:00:00+09:00",
         "source": "fixture"
       },
-      "tickPrice": 321000,
       "atQuote": null,
-      "atTick": null
+      "atTick": null,
+      "tickQuote": {
+        "code": "051910",
+        "currency": "KRW",
+        "price": 321000,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture"
+      }
+    },
+    {
+      "name": "달러 · 환율 필드 없음(원화 환산가로 추정) + 장부 exact",
+      "stock": {
+        "code": "AMZN",
+        "name": "AMZN",
+        "market": "KOSPI",
+        "quantity": 5,
+        "avgPrice": 180,
+        "memo": null,
+        "createdAt": "",
+        "updatedAt": ""
+      },
+      "quote": {
+        "code": "AMZN",
+        "currency": "USD",
+        "price": 200,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture",
+        "priceKrw": 271000
+      },
+      "toss": {
+        "quantity": 5,
+        "purchaseAmount": 900,
+        "costRate": 0.0025,
+        "currency": "USD"
+      },
+      "krwCost": {
+        "krw": 1210000,
+        "source": "exact",
+        "quantity": 5,
+        "usdCost": 900
+      },
+      "tickQuote": {
+        "code": "AMZN",
+        "currency": "USD",
+        "price": 201.25,
+        "change": 0,
+        "changeRate": 0,
+        "open": null,
+        "high": null,
+        "low": null,
+        "prevClose": null,
+        "volume": null,
+        "marketCap": null,
+        "per": null,
+        "pbr": null,
+        "eps": null,
+        "bps": null,
+        "high52w": null,
+        "low52w": null,
+        "asOf": "2026-09-23T10:00:00+09:00",
+        "source": "fixture",
+        "priceKrw": 272694
+      },
+      "atQuote": {
+        "marketValue": 1000,
+        "costBasis": 900,
+        "profit": 100,
+        "profitRate": 11.11,
+        "costRate": 0.0025,
+        "afterCost": {
+          "marketValue": 997.5,
+          "profit": 97.5,
+          "profitRate": 10.83
+        },
+        "costBasisKrw": 1210000,
+        "krwCostSource": "exact"
+      },
+      "atTick": {
+        "marketValue": 1006.25,
+        "costBasis": 900,
+        "profit": 106.25,
+        "profitRate": 11.81,
+        "costRate": 0.0025,
+        "afterCost": {
+          "marketValue": 1003.734375,
+          "profit": 103.734375,
+          "profitRate": 11.53
+        },
+        "costBasisKrw": 1210000,
+        "krwCostSource": "exact"
+      }
     }
   ]
 }

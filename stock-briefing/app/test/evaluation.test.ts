@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Evaluation, Quote, RegisteredStock } from "@/api/types";
-import { evalView, evaluate } from "@/lib/liveTick";
+import { applyTick, evalView, evaluate } from "@/lib/liveTick";
 
 /**
  * 서버 evaluate() 결과(공용 픽스처)와 앱 evaluate() 가 0원 차이로 같은지.
@@ -11,7 +11,7 @@ interface Case {
   name: string;
   stock: RegisteredStock;
   quote: Quote;
-  tickPrice: number;
+  tickQuote: Quote;
   toss?: unknown;
   krwCost?: unknown;
   atQuote: Evaluation | null;
@@ -24,14 +24,17 @@ describe("실시간 평가 = 서버 평가 (공용 픽스처)", () => {
 
   for (const c of fixture.cases) {
     it(`체결가 반영 후 서버와 같다: ${c.name}`, () => {
-      const live = evaluate(c.stock, { ...c.quote, price: c.tickPrice }, c.atQuote);
-      expect(live).toEqual(c.atTick);
+      // 앱이 실제로 하는 순서: 체결을 시세에 덮어쓰고(applyTick) → 직전 서버 평가를 이어받아 다시 평가
+      const tq = applyTick(c.quote, { code: c.quote.code, price: c.tickQuote.price, volume: null, timestamp: "2026-09-23T10:00:05+09:00", source: "test" })!;
+      expect(tq.price).toBe(c.tickQuote.price);
+      expect(tq.priceKrw ?? null).toBe(c.tickQuote.priceKrw ?? null);
+      expect(evaluate(c.stock, tq, c.atQuote)).toStrictEqual(c.atTick);
     });
   }
 
   for (const c of fixture.cases.filter((x) => !x.toss && !x.krwCost)) {
     it(`토스·장부가 없으면 직전 평가 없이도 같다: ${c.name}`, () => {
-      expect(evaluate(c.stock, c.quote)).toEqual(c.atQuote);
+      expect(evaluate(c.stock, c.quote)).toStrictEqual(c.atQuote);
     });
   }
 });

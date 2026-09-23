@@ -1,12 +1,13 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
  * 투자 권유로 읽히는 문구가 앱·서버·프롬프트에 들어가지 않았는지, 고지 문구가 그대로 있는지 확인한다.
  * 금지 문구를 꼭 써야 하는 곳(금지 지시 자체)은 프롬프트뿐이라 프롬프트는 "금지 지시가 있는지"로 따로 본다.
  */
-const ROOT = new URL("../../", import.meta.url).pathname; // stock-briefing/
+const ROOT = fileURLToPath(new URL("../../", import.meta.url)); // stock-briefing/
 const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.";
 const BANNED = ["매수 추천", "매도 추천", "매수추천", "매도추천", "적극 매수", "강력 매수", "매수하세요", "매도하세요", "사세요", "파세요", "추천 종목", "수익 보장", "원금 보장", "목표주가", "목표 주가", "무조건 오", "반드시 오릅"];
 

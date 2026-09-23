@@ -8,7 +8,7 @@ import { evaluate } from "../src/services/stockService.js";
  * 서버 계산을 바꿨다면 이 테스트가 먼저 깨진다 → 픽스처와 앱 evaluate() 를 같이 고칠 것.
  */
 const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/evaluation.json", import.meta.url), "utf8")) as {
-  cases: { name: string; stock: any; quote: any; tickPrice: number; toss?: any; krwCost?: any; atQuote: unknown; atTick: unknown }[];
+  cases: { name: string; stock: any; quote: any; tickQuote: any; toss?: any; krwCost?: any; atQuote: unknown; atTick: unknown }[];
 };
 
 describe("공용 평가 픽스처", () => {
@@ -18,8 +18,8 @@ describe("공용 평가 픽스처", () => {
 
   for (const c of fixture.cases) {
     it(`서버 evaluate() 와 픽스처가 같다: ${c.name}`, () => {
-      expect(evaluate(c.stock, c.quote, c.toss ?? null, c.krwCost ?? null)).toEqual(c.atQuote);
-      expect(evaluate(c.stock, { ...c.quote, price: c.tickPrice }, c.toss ?? null, c.krwCost ?? null)).toEqual(c.atTick);
+      expect(evaluate(c.stock, c.quote, c.toss ?? null, c.krwCost ?? null)).toStrictEqual(c.atQuote);
+      expect(evaluate(c.stock, c.tickQuote, c.toss ?? null, c.krwCost ?? null)).toStrictEqual(c.atTick);
     });
   }
 });
