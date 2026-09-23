@@ -3,6 +3,8 @@ import React, { useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import type { Candle, CandlePeriod, Currency, Quote } from "@/api/types";
 import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
+import { formatNumber } from "@/lib/format";
+import { useSettings } from "@/lib/settings";
 import { font, radius, space, useTheme } from "@/theme";
 import { clampView, MA_COLORS, PriceChart, type ChartView, type IndicatorKind } from "./chart/PriceChart";
 
@@ -32,7 +34,7 @@ export function CandleChart({
   loading?: boolean;
   currency?: Currency;
   avgPrice?: number | null;
-  quote?: Pick<Quote, "price" | "prevClose" | "high52w" | "low52w" | "live"> | null;
+  quote?: Pick<Quote, "price" | "prevClose" | "high52w" | "low52w" | "live" | "fxRate" | "priceKrw"> | null;
   height?: number;
   width?: number;
   onFullscreen?: () => void;
@@ -44,6 +46,13 @@ export function CandleChart({
   const width = widthProp ?? Math.min(winW - space.lg * 2 - space.lg * 2, 720);
   const chartH = height ?? Math.round(width * 0.62);
   const [prefs, setPrefs] = useChartPrefs();
+  // 설정 "미국 주식 원화로 보기"가 켜져 있으면 차트도 원화로. 과거 봉도 현재 환율로 환산한다(당시 환율 아님)
+  const { showKrw } = useSettings();
+  const fx = quote?.fxRate ?? (quote?.priceKrw && quote.price ? quote.priceKrw / quote.price : null);
+  const toKrw = currency === "USD" && showKrw && !!fx;
+  const k = toKrw ? fx! : 1;
+  const conv = (v: number | null | undefined) => (v === null || v === undefined ? null : v * k);
+  const chartCurrency: Currency = toKrw ? "KRW" : currency;
   // 보이는 구간은 기간별로 따로 기억한다. 기간이 바뀌면 그 기간의 기본 칩(최신 구간)에서 시작
   const defaultView = (per: CandlePeriod): ChartView => ({ count: WINDOWS[per][1] ?? 120, offset: 0 });
   const [vs, setVs] = useState<{ period: CandlePeriod; windowIdx: number; view: ChartView }>(() => ({ period, windowIdx: 1, view: defaultView(period) }));
@@ -55,7 +64,10 @@ export function CandleChart({
       const base = prev.period === period ? prev : { period, windowIdx: 1, view: defaultView(period) };
       return { ...base, view: typeof next === "function" ? next(base.view) : next };
     });
-  const all = useMemo(() => candles ?? [], [candles]);
+  const all = useMemo(
+    () => (candles ?? []).map((c) => (k === 1 ? c : { ...c, open: c.open * k, high: c.high * k, low: c.low * k, close: c.close * k })),
+    [candles, k],
+  );
 
   const clamped = clampView(view, all.length);
   const maxOffset = Math.max(all.length - clamped.count, 0);
@@ -128,7 +140,7 @@ export function CandleChart({
         <PriceChart
           candles={all}
           period={period}
-          currency={currency}
+          currency={chartCurrency}
           width={width}
           height={chartH}
           view={clamped}
@@ -137,11 +149,11 @@ export function CandleChart({
           showBollinger={prefs.bollinger}
           showVolume={prefs.volume}
           indicator={prefs.indicator}
-          avgPrice={avgPrice ?? null}
-          currentPrice={quote?.price ?? null}
-          prevClose={quote?.prevClose ?? null}
-          high52w={quote?.high52w ?? null}
-          low52w={quote?.low52w ?? null}
+          avgPrice={conv(avgPrice)}
+          currentPrice={conv(quote?.price)}
+          prevClose={conv(quote?.prevClose)}
+          high52w={conv(quote?.high52w)}
+          low52w={conv(quote?.low52w)}
         />
       )}
 
@@ -166,6 +178,9 @@ export function CandleChart({
           <Text style={chipText(prefs.indicator !== "none")}>{prefs.indicator === "none" ? "RSI/MACD" : prefs.indicator === "rsi" ? "RSI ▸ MACD" : "MACD ▸ 끄기"}</Text>
         </Pressable>
       </ScrollView>
+      {toKrw ? (
+        <Text style={{ color: t.muted, fontSize: font.tiny }}>원화 환산 · 현재 환율 1달러 {formatNumber(fx, 2)}원 기준 (과거 봉도 같은 환율 적용, 설정에서 끄면 달러)</Text>
+      ) : null}
       {!compact ? (
         <Text style={{ color: t.muted, fontSize: font.tiny }}>
           드래그로 과거 이동, 두 손가락으로 확대, 길게 누르면 십자선 · 금색 점선은 내 평단{quote?.live ? " · 마지막 봉은 실시간 체결로 움직입니다" : ""}
