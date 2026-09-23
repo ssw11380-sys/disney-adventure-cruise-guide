@@ -16,6 +16,9 @@ import { analysisRoutes } from "./routes/analysis.js";
 import { briefingRoutes } from "./routes/briefings.js";
 import { deviceRoutes, notificationRoutes } from "./routes/notifications.js";
 import { marketRoutes } from "./routes/market.js";
+import { discoverRoutes } from "./routes/discover.js";
+import { NaverDiscover } from "./providers/market/naverDiscover.js";
+import { DiscoverService } from "./services/discoverService.js";
 import { stockRoutes } from "./routes/stocks.js";
 import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
@@ -249,6 +252,14 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }));
 
   await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar });
+  // 발견 탭: 순위·테마·업종 (네이버 공개 JSON). 미국 원화 환산은 토스 표시 환율
+  const discoverService = new DiscoverService({
+    naver: opts.providers.discover ?? new NaverDiscover(),
+    calendar: opts.providers.calendar,
+    usdKrw: opts.providers.fundamentals ? () => opts.providers.fundamentals!.usdKrw() : null,
+    now,
+  });
+  await app.register(discoverRoutes, { prefix: "/api/discover", service: discoverService });
 
   /** GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token= */
   app.get("/api/stream", { websocket: true }, (socket) => {

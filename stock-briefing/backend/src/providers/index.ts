@@ -3,6 +3,7 @@ import type { Db } from "../db/index.js";
 import { describeLlmBackend, resolveLlmBackend } from "../llm/backend.js";
 import { ClaudeGenerator, DisabledGenerator, type TextGenerator } from "../llm/generator.js";
 import { DartProvider } from "./dart/dart.js";
+import type { NaverDiscover } from "./market/naverDiscover.js";
 import { EdgarProvider } from "./dart/edgar.js";
 import type { FinancialsProvider } from "./dart/types.js";
 import { MarketCalendar } from "./market/calendar.js";
@@ -34,6 +35,8 @@ export interface Providers {
   quickPrices: QuickPriceSource | null;
   /** PER/PBR/배당/52주·환율 보강 (네이버) */
   fundamentals: NaverFundamentals | null;
+  /** 발견 탭(순위·테마·업종). 없으면 기본 네이버 공개 JSON */
+  discover?: NaverDiscover | null;
   search: StockSearchProvider; // 외부 검색 (토스 → Yahoo)
   searchRemoteFirst?: boolean; // true 면 로컬 마스터보다 외부 검색을 먼저 쓴다
   master: MasterProvider;

@@ -1,0 +1,152 @@
+import { describe, expect, it } from "vitest";
+import { NaverDiscover } from "../src/providers/market/naverDiscover.js";
+import { DiscoverService, recount } from "../src/services/discoverService.js";
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const ok = (result: unknown) => json({ isSuccess: true, detailCode: "", message: "", result });
+
+/** 네이버 한국 순위 한 줄 */
+const krRow = (code: string, name: string, rate: number, tv: number, extra: Record<string, unknown> = {}) => ({
+  itemCode: code,
+  name,
+  stockEndType: "stock",
+  marketType: "KOSPI",
+  currentPrice: 10000,
+  fluctuations: String(rate * 100),
+  fluctuationsRatio: String(rate),
+  accumulatedTradingVolume: 1000,
+  accumulatedTradingValue: tv,
+  marketValue: 1e12,
+  ...extra,
+});
+
+describe("NaverDiscover + DiscoverService (한국)", () => {
+  it("순위는 ETF·ETN·스팩을 빼고, 급상승은 거래대금 10억 원 미만을 빼며, 쪽을 이어 받는다", async () => {
+    const calls: string[] = [];
+    const fetchFn = (async (url: string) => {
+      calls.push(url);
+      const u = new URL(url);
+      const index = Number(u.searchParams.get("index"));
+      if (u.pathname.endsWith("/domestic/stock/list/sorted") && u.searchParams.get("sortType") === "up") {
+        const rows = Array.from({ length: 50 }, (_, i) => {
+          const n = index * 50 + i;
+          if (n % 10 === 3) return krRow(`1${String(n).padStart(5, "0")}`, `KODEX ${n}`, 30 - n * 0.1, 5e9, { stockEndType: "etf" });
+          if (n % 10 === 5) return krRow(`2${String(n).padStart(5, "0")}`, `하나스팩${n}`, 30 - n * 0.1, 5e9);
+          if (n % 10 === 7) return krRow(`3${String(n).padStart(5, "0")}`, `동전${n}`, 30 - n * 0.1, 5e8); // 거래대금 5억
+          return krRow(`0${String(n).padStart(5, "0")}`, `종목${n}`, 30 - n * 0.1, 2e9);
+        });
+        return ok({ items: rows, hasNext: index < 5, totalCount: 300 });
+      }
+      return json({}, 404);
+    }) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => new Date("2026-09-23T05:00:00Z") });
+    const p1 = await svc.rank("KR", "gainers", 1, 50);
+    expect(p1.items).toHaveLength(50);
+    expect(p1.items.every((i) => i.code.startsWith("0"))).toBe(true); // ETF(1)·스팩(2)·동전(3) 제외
+    expect(p1.items[0]).toMatchObject({ code: "000000", name: "종목0", changeRate: 30, currency: "KRW", tradingValue: 2e9 });
+    expect(p1.hasMore).toBe(true);
+    expect(p1.note).toContain("10억 원");
+    expect(calls).toHaveLength(3); // 한 번에 3쪽 (쪽당 걸러낸 뒤 35개 → 105개)
+    const p2 = await svc.rank("KR", "gainers", 2, 50);
+    expect(p2.items).toHaveLength(50);
+    expect(new Set([...p1.items, ...p2.items].map((i) => i.code)).size).toBe(100);
+    expect(calls).toHaveLength(3); // 이미 가진 것으로 충분
+    const p3 = await svc.rank("KR", "gainers", 3, 50);
+    expect(p3.items).toHaveLength(50);
+    expect(calls).toHaveLength(6); // 부족한 만큼만 이어 받음
+    const p4 = await svc.rank("KR", "gainers", 4, 50);
+    expect(p4.items).toHaveLength(50);
+    expect(p4.hasMore).toBe(true); // 6쪽 × 35 = 210
+    const p5 = await svc.rank("KR", "gainers", 5, 50);
+    expect(p5.items).toHaveLength(10);
+    expect(p5.hasMore).toBe(false);
+    // 캐시 안에서는 다시 받지 않는다
+    const again = calls.length;
+    await svc.rank("KR", "gainers", 1, 50);
+    expect(calls.length).toBe(again);
+  });
+
+  it("조회가 실패하면 직전 목록을 주고, 직전 값이 없으면 던진다", async () => {
+    let fail = false;
+    let now = new Date("2026-09-23T05:00:00Z");
+    const fetchFn = (async (url: string) => {
+      if (fail) return json({}, 503);
+      if (url.includes("sortType=priceTop")) return ok({ items: [krRow("005930", "삼성전자", 2.9, 6.6e12)], hasNext: false });
+      if (url.includes("sortType=quantTop")) return json({}, 500);
+      return json({}, 404);
+    }) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    expect((await svc.rank("KR", "tradingValue", 1, 50)).items.map((i) => i.name)).toEqual(["삼성전자"]);
+    await expect(svc.rank("KR", "volume", 1, 50)).rejects.toThrow("HTTP 500");
+    fail = true;
+    now = new Date(now.getTime() + 10 * 60_000);
+    const stale = await svc.rank("KR", "tradingValue", 1, 50);
+    expect(stale.items.map((i) => i.name)).toEqual(["삼성전자"]);
+    expect(stale.asOf).toBe("2026-09-23T14:00:00+09:00"); // 직전 값의 시각
+  });
+
+  it("테마 목록은 cursor 로 끝까지 받고, 상장 첫날 종목이 든 테마는 그 종목을 빼고 다시 센다", async () => {
+    const urls: string[] = [];
+    const fetchFn = (async (url: string) => {
+      urls.push(url);
+      const u = new URL(url);
+      if (u.pathname.endsWith("/stock/sectors/all")) {
+        expect(u.searchParams.get("businessDayCategory")).toBe("daily");
+        if (!u.searchParams.get("cursor"))
+          return ok({
+            sectors: [
+              { code: "615", name: "신규상장", changeRate: 60, risingCount: 2, unchangedCount: 0, fallingCount: 1, topItems: [{ code: "0010S0", name: "새내기" }, { code: "000001", name: "가" }] },
+              { code: "110", name: "화장품", changeRate: 1.5, risingCount: 10, unchangedCount: 1, fallingCount: 4, topItems: [{ code: "000002", name: "나" }] },
+            ],
+            hasNext: true,
+            cursor: "MTEw",
+          });
+        return ok({ sectors: [{ code: "110", name: "화장품(중복)", changeRate: 1.5 }, { code: "300", name: "원자력", changeRate: -2, risingCount: 0, unchangedCount: 0, fallingCount: 5, topItems: [] }], hasNext: false });
+      }
+      if (u.pathname.endsWith("/domestic/stock/list/sorted") && u.searchParams.get("sortType") === "newStock")
+        return ok({ items: [krRow("0010S0", "새내기", 288, 9e11, { newlyListed: true }), krRow("0240J0", "RISE ETF", 1, 1e9, { newlyListed: false })], hasNext: true });
+      if (u.pathname.endsWith("/domestic/sector/item/list"))
+        return ok({
+          sectorInfo: { sectorName: "신규상장", sectorDescription: "새로 상장한 종목", changeRate: 60 },
+          items: [
+            krRow("0010S0", "새내기", 288, 9e11),
+            krRow("000001", "가", 2, 1e9),
+            krRow("000003", "다", -1, 1e9),
+            krRow("000004", "정지", 0, 0, { accumulatedTradingVolume: 0 }),
+          ],
+          hasNext: false,
+        });
+      return json({}, 404);
+    }) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn) });
+    const list = await svc.themes("KR", "theme", "day");
+    expect(list.themes.map((t) => t.id)).toEqual(["615", "110", "300"]);
+    expect(list.themes[1]!.name).toBe("화장품"); // 중복은 처음 것
+    expect(list.themes[0]).toMatchObject({ changeRate: 0.5, up: 1, flat: 0, down: 1, adjusted: true }); // (2 + -1)/2, 정지 제외
+    expect(list.themes[0]!.leaders.map((l) => l.code)).toEqual(["000001", "000003"]);
+    expect(list.themes[1]).toMatchObject({ changeRate: 1.5, up: 10, flat: 1, down: 4 });
+    expect(list.themes[1]!.adjusted).toBeUndefined();
+    const detail = await svc.theme("KR", "theme", "615");
+    expect(detail).toMatchObject({ description: "새로 상장한 종목", theme: { name: "신규상장", changeRate: 0.5, adjusted: true } });
+    expect(detail!.items).toHaveLength(4); // 목록에는 모두 보여 준다 (평균만 조정)
+    // 주·월은 네이버 값 그대로
+    const week = new DiscoverService({
+      naver: new NaverDiscover((async (url: string) =>
+        url.includes("/stock/sectors/all") ? ok({ sectors: [{ code: "615", name: "신규상장", changeRate: 60, risingCount: 2, unchangedCount: 0, fallingCount: 1, topItems: [{ code: "0010S0", name: "새내기" }] }], hasNext: false }) : json({}, 404)) as unknown as typeof fetch),
+    });
+    expect((await week.themes("KR", "theme", "week")).themes[0]!.changeRate).toBe(60);
+  });
+
+  it("모르는 테마 코드는 null (라우트에서 404)", async () => {
+    const fetchFn = (async () => json({ isSuccess: false, detailCode: "RESOURCE_NOT_FOUND" }, 404)) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn) });
+    expect(await svc.theme("KR", "theme", "99999")).toBeNull();
+  });
+
+  it("recount: 거래정지·상장 첫날을 빼고 평균·상승/보합/하락을 다시 센다", () => {
+    const base = { id: "1", name: "t", changeRate: 9, up: 0, flat: 0, down: 0, leaders: [] };
+    const s = (code: string, changeRate: number, volume = 10) => ({ code, name: code, market: "KOSPI", currency: "KRW" as const, price: 1, change: 0, changeRate, volume, tradingValue: 1 });
+    const r = recount(base, [s("A", 3), s("B", 0), s("C", -1), s("N", 100), s("H", 0, 0)], new Set(["N"]));
+    expect(r).toMatchObject({ changeRate: 0.67, up: 1, flat: 1, down: 1, adjusted: true });
+  });
+});
