@@ -204,3 +204,24 @@ describe("분봉", () => {
     expect(s.candles[0]).toMatchObject({ date: "2026-09-23", open: 284500, close: 284000 });
   });
 });
+
+describe("토스 표시 환율", () => {
+  it("closeKrw / close 의 중앙값을 환율로 쓰고 1분 캐시한다", async () => {
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls++;
+      return new Response(
+        JSON.stringify({ result: [
+          { productCode: "US19801212001", close: 340.31, closeKrw: 462821 },
+          { productCode: "US20100629001", close: 378.83, closeKrw: 515208 },
+          { productCode: "US19990122001", close: 180, closeKrw: 244800 },
+        ] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const p = new TossProvider(fetchFn, null, NOW);
+    expect(await p.usdKrw()).toBe(1360);
+    await p.usdKrw();
+    expect(calls).toBe(1);
+  });
+});

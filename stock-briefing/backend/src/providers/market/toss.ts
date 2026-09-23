@@ -218,6 +218,33 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
   // ── 실시간에 가까운 현재가 (여러 종목 한 번에) ───────────────────────
 
   private quickCache: { at: number; key: string; map: Map<string, LiveTick> } | null = null;
+  private fxCache: { at: number; rate: number } | null = null;
+
+  /**
+   * 토스 앱이 달러 종목을 원화로 보여줄 때 쓰는 환율 (1분 캐시). 시세 응답의 closeKrw / close 로 구한다.
+   * 토스 계좌 화면의 원화 평가금과 같은 숫자를 내려면 매매기준율(하나은행·토스 Open API midRate)이 아니라 이 값을 써야 한다.
+   */
+  async usdKrw(): Promise<number | null> {
+    const t = this.now().getTime();
+    if (this.fxCache && t - this.fxCache.at < 60_000) return this.fxCache.rate;
+    try {
+      // 거래가 많은 미국 종목 몇 개(애플·테슬라·엔비디아)의 비율 중앙값
+      const rows = (await this.request(`/v3/stock-prices?productCodes=US19801212001,US20100629001,US19990122001`)) as Json[];
+      const rates = rows
+        .map((r) => {
+          const usd = num(r["close"]), krw = num(r["closeKrw"]);
+          return usd && krw && usd > 0 ? krw / usd : null;
+        })
+        .filter((x): x is number => x !== null && x > 500 && x < 5000)
+        .sort((a, b) => a - b);
+      if (rates.length === 0) return this.fxCache?.rate ?? null;
+      const rate = Math.round(rates[Math.floor(rates.length / 2)]! * 100) / 100;
+      this.fxCache = { at: t, rate };
+      return rate;
+    } catch {
+      return this.fxCache?.rate ?? null;
+    }
+  }
 
   /**
    * 등록 종목 전체의 현재가를 요청 1개로 받는다 (stock-prices 는 코드를 콤마로 여러 개 받음).
