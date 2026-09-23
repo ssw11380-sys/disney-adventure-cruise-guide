@@ -80,7 +80,7 @@ export default function ThemeDetailScreen() {
           </Text>
         ) : null}
       </View>
-      {q.data ? <StatusLine open={q.data.marketOpen} asOf={q.data.asOf} /> : null}
+      {q.data ? <StatusLine market={market} open={q.data.marketOpen} asOf={q.data.asOf} /> : null}
       <TableHead>
         <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.rank }]}>순위</Text>
         <Text style={[styles.th, { color: t.muted, flex: 1 }]}>종목명</Text>

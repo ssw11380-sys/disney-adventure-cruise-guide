@@ -61,7 +61,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
 
   const head = (
     <View>
-      {data ? <StatusLine open={data.marketOpen} asOf={data.asOf} note={data.note} /> : null}
+      {data ? <StatusLine market={market} open={data.marketOpen} asOf={data.asOf} note={data.note} /> : null}
       {/* 테마/업종 · 기간 · 보기 */}
       <View style={[styles.controls, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
         <View style={styles.group}>

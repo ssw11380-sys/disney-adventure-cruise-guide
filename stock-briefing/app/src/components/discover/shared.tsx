@@ -2,7 +2,7 @@ import { router } from "expo-router";
 import React, { useCallback, useMemo } from "react";
 import { Alert, StyleSheet, Text, View } from "react-native";
 import { useStockMutations, useStocks } from "@/api/hooks";
-import type { DiscoverStock } from "@/api/types";
+import type { DiscoverMarket, DiscoverStock } from "@/api/types";
 import { formatDateKo } from "@/lib/format";
 import { font, space, useTheme } from "@/theme";
 import type { HoldingMark } from "./DiscoverRow";
@@ -46,14 +46,17 @@ export function openStock(item: DiscoverStock): void {
   router.push(`/stocks/${item.code}`);
 }
 
-/** "● 장중 · 14:52 기준" / "장 마감 · 9월 22일 (월) 16:00 기준" */
-export function StatusLine({ open, asOf, note }: { open: boolean; asOf: string | null; note?: string | null }) {
+/**
+ * "● 장중 · 30초마다 갱신 · 14:52 기준" / "장 마감 · 직전 정규장 기준 · 9월 23일 (수) 05:00 기준".
+ * 미국 값은 정규장 기준이라 장 밖에서는 "직전 정규장", 한국은 KRX+NXT 통합이라 "마지막 거래".
+ */
+export function StatusLine({ open, asOf, note, market = "KR" }: { open: boolean; asOf: string | null; note?: string | null; market?: DiscoverMarket }) {
   const t = useTheme();
   return (
     <View style={[styles.status, { borderBottomColor: t.line, backgroundColor: t.bg }]}>
       <View style={[styles.dot, { backgroundColor: open ? t.up : t.muted }]} />
       <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1 }} numberOfLines={2}>
-        {open ? "장중 · 30초마다 갱신" : "장 마감 · 직전 정규장 기준"}
+        {open ? "장중 · 30초마다 갱신" : market === "US" ? "장 마감 · 직전 정규장 기준" : "장 마감 · 마지막 거래 기준"}
         {asOf ? ` · ${formatDateKo(asOf, true)} 기준` : ""}
         {note ? ` · ${note}` : ""}
       </Text>

@@ -77,7 +77,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
 
   const head = (
     <>
-      {first ? <StatusLine open={first.marketOpen} asOf={first.asOf} note={first.note} /> : null}
+      {first ? <StatusLine market={market} open={first.marketOpen} asOf={first.asOf} note={first.note} /> : null}
       <TableHead>
         <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.rank }]}>순위</Text>
         <Text style={[styles.th, { color: t.muted, flex: 1 }]}>종목명</Text>
