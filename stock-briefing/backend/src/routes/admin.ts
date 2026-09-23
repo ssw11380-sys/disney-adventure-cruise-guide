@@ -34,6 +34,13 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
     return toss.autoSync.run("manual");
   });
 
+  /** 진단용: 토스 계좌·보유 종목 원본 응답 (필드 구성 확인) */
+  app.get("/toss/holdings-raw", async (_req, reply) => {
+    if (!toss) return reply.code(503).send({ error: "TOSS_DISABLED", message: "TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 설정되지 않았습니다" });
+    const accounts = await toss.provider.accounts();
+    return { accounts, holdings: await Promise.all(accounts.map((a) => toss.provider.holdingsRaw(a.accountSeq))) };
+  });
+
   /** DART 고유번호 매핑 갱신 (DART 키 필요) */
   app.post("/dart/refresh", async (_req, reply) => {
     if (!dart) return reply.code(503).send({ error: "DART_DISABLED", message: "DART_API_KEY 가 설정되지 않았습니다" });
