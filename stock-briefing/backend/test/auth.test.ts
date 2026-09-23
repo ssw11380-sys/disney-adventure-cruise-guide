@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../src/app.js";
+import { buildApp, redactToken } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { fakeProviders } from "./helpers.js";
@@ -87,5 +87,38 @@ describe("/health · 없는 주소 · 발견 탭 오류 형식", () => {
     expect(nf.json()).toMatchObject({ error: "NOT_FOUND" });
     await app.close();
     await db.destroy();
+  });
+});
+
+describe("요청 로그의 토큰 가림", () => {
+  it("쿼리의 token 값만 가린다 (인코딩한 이름 포함)", () => {
+    expect(redactToken("/api/stream?token=abc123")).toBe("/api/stream?token=[redacted]");
+    expect(redactToken("/api/stream?x=1&%74oken=abc&y=2")).toBe("/api/stream?x=1&%74oken=[redacted]&y=2");
+    expect(redactToken("/api/stream?TOKEN=abc")).toBe("/api/stream?TOKEN=[redacted]");
+    expect(redactToken("/api/stocks?tokens=1&mytoken=2")).toBe("/api/stocks?tokens=1&mytoken=2");
+    expect(redactToken("/health")).toBe("/health");
+  });
+
+  it("서버 요청 로그에 웹소켓 토큰이 남지 않는다", async () => {
+    const lines: string[] = [];
+    const db = await createMigratedDb(":memory:");
+    const app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:", API_TOKEN: "secret-123" }),
+      db,
+      providers: fakeProviders(),
+      logger: { level: "info", stream: { write: (s: string) => lines.push(s) } },
+      enableScheduler: false,
+    });
+    try {
+      await app.inject({ method: "GET", url: "/api/stream?token=secret-123" });
+      await app.inject({ method: "GET", url: "/api/stocks?t%6Fken=secret-123" });
+      const all = lines.join("");
+      expect(all).toContain("[redacted]");
+      expect(all).toContain("/api/stream");
+      expect(all).not.toContain("secret-123");
+    } finally {
+      await app.close();
+      await db.destroy();
+    }
   });
 });

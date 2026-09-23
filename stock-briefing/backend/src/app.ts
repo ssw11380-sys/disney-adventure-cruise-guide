@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import type { AppConfig } from "./config.js";
 import type { Db } from "./db/index.js";
@@ -49,7 +49,8 @@ export interface BuildAppOptions {
 export const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.";
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? { level: opts.config.LOG_LEVEL } });
+  const logger = opts.logger === false ? false : { level: opts.config.LOG_LEVEL, ...(typeof opts.logger === "object" ? opts.logger : {}), serializers: { req: logReq } };
+  const app = Fastify({ logger });
   await app.register(cors, { origin: true });
   await app.register(websocket, { options: { maxPayload: 4096 } });
   const log = app.log;
@@ -347,6 +348,42 @@ function decodedPath(url: string): string {
   } catch {
     return raw;
   }
+}
+
+/** 요청 로그: Fastify 기본 항목과 같되, 주소의 token 쿼리(웹소켓 인증)는 가린다 (서버 로그에 API 토큰이 남지 않게) */
+function logReq(req: FastifyRequest): { method: string; url: string; host: string; remoteAddress: string; version?: string; remotePort?: number } {
+  const version = req.headers?.["accept-version"];
+  const port = req.socket?.remotePort;
+  return {
+    method: req.method,
+    url: redactToken(req.url),
+    host: req.host,
+    remoteAddress: req.ip,
+    ...(typeof version === "string" ? { version } : {}),
+    ...(port !== undefined ? { remotePort: port } : {}),
+  };
+}
+
+/** 쿼리에서 이름이 token 인 값(퍼센트 인코딩한 이름 포함)을 [redacted] 로 바꾼다 */
+export function redactToken(url: string): string {
+  const q = url.indexOf("?");
+  if (q < 0) return url;
+  const parts = url
+    .slice(q + 1)
+    .split("&")
+    .map((kv) => {
+      const eq = kv.indexOf("=");
+      if (eq < 0) return kv;
+      const key = kv.slice(0, eq);
+      let name = key;
+      try {
+        name = decodeURIComponent(key.replace(/\+/g, " "));
+      } catch {
+        // 깨진 인코딩: 원문 이름으로 비교
+      }
+      return name.trim().toLowerCase() === "token" ? `${key}=[redacted]` : kv;
+    });
+  return `${url.slice(0, q)}?${parts.join("&")}`;
 }
 
 /** 비밀값 비교 (길이가 같을 때 시간 일정 비교) */
