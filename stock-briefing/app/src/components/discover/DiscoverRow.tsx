@@ -7,7 +7,7 @@ import { changeColor, font, space, useTheme } from "@/theme";
 
 /** 발견 목록 한 줄의 높이 (FlatList getItemLayout 용) */
 export const DISCOVER_ROW_H = 58;
-export const DISCOVER_COL = { rank: 26, price: 100, right: 86 } as const;
+export const DISCOVER_COL = { rank: 30, price: 100, right: 86 } as const;
 
 export type HoldingMark = "보유" | "관심" | null;
 
@@ -70,7 +70,9 @@ export const DiscoverRow = memo(function DiscoverRow({
       style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
     >
       {rank !== undefined ? (
-        <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]}>{rank}</Text>
+        <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+          {rank}
+        </Text>
       ) : null}
       <View style={styles.name}>
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }} numberOfLines={1}>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { appTicker, isUsNonCommon, krStock, NaverDiscover, usTicker } from "../src/providers/market/naverDiscover.js";
 import { TossTics } from "../src/providers/market/tossTics.js";
-import { DiscoverService, isKrxRegularHours, lastKrxClose, recount } from "../src/services/discoverService.js";
+import { DiscoverService, isKrxRegularHours, lastKrClose, lastUsRegularDay, recount } from "../src/services/discoverService.js";
 import { UsThemeBook } from "../src/services/usThemes.js";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -69,16 +69,32 @@ describe("발견 탭 검토 수정", () => {
     expect(s).toMatchObject({ volume: 18_684_033, tradingValue: 5.3e12 });
   });
 
-  it("한국 장중 = KRX 정규장 09:00~15:30, 장 마감 기준 시각 = 직전 15:30", () => {
+  it("KRX 정규장 09:00~15:30, 달력이 없을 때 마지막 거래 마감 근사 = 직전 평일 20:00, 미국 최근 정규장 날짜", () => {
     expect(isKrxRegularHours(new Date("2026-09-23T00:00:00Z"))).toBe(true); // 09:00
     expect(isKrxRegularHours(new Date("2026-09-23T06:29:00Z"))).toBe(true); // 15:29
-    expect(isKrxRegularHours(new Date("2026-09-23T06:30:00Z"))).toBe(false); // 15:30 (NXT 애프터마켓)
-    expect(isKrxRegularHours(new Date("2026-09-22T23:30:00Z"))).toBe(false); // 08:30 (NXT 프리마켓)
+    expect(isKrxRegularHours(new Date("2026-09-23T06:30:00Z"))).toBe(false); // 15:30 (시간외)
+    expect(isKrxRegularHours(new Date("2026-09-22T23:30:00Z"))).toBe(false); // 08:30 (장 시작 전)
     expect(isKrxRegularHours(new Date("2026-09-26T02:00:00Z"))).toBe(false); // 토요일
-    expect(lastKrxClose(new Date("2026-09-23T08:00:00Z"), true)).toBe("2026-09-23T15:30:00+09:00"); // 17:00 → 오늘
-    expect(lastKrxClose(new Date("2026-09-23T00:30:00Z"), true)).toBe("2026-09-22T15:30:00+09:00"); // 09:30 전후 → 어제
-    expect(lastKrxClose(new Date("2026-09-28T01:00:00Z"), true)).toBe("2026-09-25T15:30:00+09:00"); // 월 10:00 → 금요일
-    expect(lastKrxClose(new Date("2026-09-24T08:00:00Z"), false)).toBe("2026-09-23T15:30:00+09:00"); // 휴장일 → 직전 평일
+    expect(lastKrClose(new Date("2026-09-23T11:30:00Z"))).toBe("2026-09-23T20:00:00+09:00"); // 20:30 → 오늘
+    expect(lastKrClose(new Date("2026-09-23T08:00:00Z"))).toBe("2026-09-22T20:00:00+09:00"); // 17:00 → 어제
+    expect(lastKrClose(new Date("2026-09-28T01:00:00Z"))).toBe("2026-09-25T20:00:00+09:00"); // 월 10:00 → 금요일 (휴장은 모름 — 달력이 있으면 달력 값)
+    // 미국: 달력의 마지막 세션 종료가 있으면 그 날, 없으면 09:30 이 지난 평일
+    expect(lastUsRegularDay(new Date("2026-09-23T08:00:00Z"), "2026-09-22T20:00:00.000Z")).toBe("2026-09-22");
+    expect(lastUsRegularDay(new Date("2026-09-23T08:00:00Z"), null)).toBe("2026-09-22"); // 뉴욕 04:00 → 어제
+    expect(lastUsRegularDay(new Date("2026-09-23T14:00:00Z"), null)).toBe("2026-09-23"); // 뉴욕 10:00 → 오늘
+    expect(lastUsRegularDay(new Date("2026-09-28T08:00:00Z"), null)).toBe("2026-09-25"); // 월 04:00 → 금요일
+  });
+
+  it("미국 업종 목록의 기준 시각은 장 밖이면 직전 정규장 마감(16:00 ET, 서머타임 반영)", async () => {
+    const fetchFn = (async () => json({ isSuccess: true, result: { sectors: [{ code: "1", name: "IT", changeRate: 1, topItems: [] }], hasNext: false } })) as unknown as typeof fetch;
+    const at = (now: string, lastClose: string) =>
+      new DiscoverService({
+        naver: new NaverDiscover(fetchFn),
+        calendar: { status: async () => ({ now: "", KR: { market: "KR", isOpen: false, isTradingDay: true, opensAt: null, closesAt: null, source: "toss" }, US: { market: "US", isOpen: false, isTradingDay: true, opensAt: null, closesAt: null, lastClose, source: "toss" } }) } as never,
+        now: () => new Date(now),
+      }).themes("US", "sector", "day");
+    expect((await at("2026-09-23T08:00:00Z", "2026-09-22T20:00:00.000Z")).asOf).toBe("2026-09-23T05:00:00+09:00"); // 서머타임
+    expect((await at("2026-12-01T08:00:00Z", "2026-11-30T21:00:00.000Z")).asOf).toBe("2026-12-01T06:00:00+09:00"); // 표준시
   });
 
   it("미국 티커: 클래스주 BRK.B, 우선주·권리주 제외, MLP(Common Units)는 남기고 스팩 유닛은 뺀다", () => {
@@ -87,11 +103,20 @@ describe("발견 탭 검토 수정", () => {
     expect(usTicker({ reutersCode: "BRKb" })).toBe("BRK.B");
     expect(usTicker({ reutersCode: "AHT_pd" })).toBeNull();
     expect(usTicker({ reutersCode: "AAPL.O" })).toBe("AAPL");
-    expect(isUsNonCommon("Energy Transfer LP Common Units", "ET")).toBe(false);
-    expect(isUsNonCommon("Enterprise Products Partners LP", "EPD")).toBe(false);
-    expect(isUsNonCommon("Brookfield Infrastructure Partners LP Units", "BIP")).toBe(false);
+    // 네이버 실제 이름: MLP·로열티 트러스트 지분은 "… Units" 로 온다 → 남긴다
+    for (const [eng, sym] of [
+      ["Energy Transfer Units", "ET"],
+      ["Plains All American Pipeline Units", "PAA"],
+      ["Icahn Enterprises Units", "IEP"],
+      ["Dorchester Minerals Units", "DMLP"],
+      ["Black Stone Minerals Units", "BSM"],
+      ["Permian Basin Royalty Units", "PBT"],
+      ["Sabine Royalty Units", "SBR"],
+      ["Enterprise Products Partners LP", "EPD"],
+    ])
+      expect(isUsNonCommon(eng!, sym!), sym).toBe(false);
     expect(isUsNonCommon("Cayson Acquisition Corp Units", "CAPNU")).toBe(true);
-    expect(isUsNonCommon("Some Growth Fund Units", "SGFU")).toBe(true);
+    expect(isUsNonCommon("Some Growth Capital Units", "SGCU")).toBe(true);
     expect(isUsNonCommon("KLX Energy Services Holdings Rights", "KLXER")).toBe(true);
   });
 

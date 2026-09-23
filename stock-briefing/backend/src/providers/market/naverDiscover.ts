@@ -1,3 +1,4 @@
+import { isTimeoutError } from "../../lib/errors.js";
 import type { FetchFn } from "./types.js";
 
 /**
@@ -47,6 +48,12 @@ export interface ThemeSummary {
 
 /** 미국 종목 정규장 시세 + 체결 시각 + 네이버 장 상태(OPEN/CLOSE/PREOPEN) */
 export type UsQuote = DiscoverStock & { tradedAt: string | null; status?: string };
+
+/** 줄의 90% 이상이 등락률 0·거래량 0(또는 없음)인지 — 출처가 장 시작 전으로 초기화한 목록 */
+export function isMostlyZero(rows: { changeRate: number; volume?: number | null }[], ratio = 0.9): boolean {
+  if (!rows.length) return false;
+  return rows.filter((r) => r.changeRate === 0 && !r.volume).length / rows.length >= ratio;
+}
 
 /** 장 시작 전 초기화된 미국 시세 묶음인지 (절반 넘게 PREOPEN 이면 등락률·거래량이 0 이라 쓸 수 없다) */
 export function isPreopenQuotes(q: Map<string, UsQuote>): boolean {
@@ -171,13 +178,13 @@ export function appTicker(raw: string): string | null {
 
 /**
  * 보통주가 아닌 미국 종목: 권리(Rights)·워런트·조건부가치권(CVR), 스팩(Acquisition Corp)과 스팩 유닛.
- * MLP 의 "Common Units"(ET·EPD·MPLX 등)는 보통주처럼 거래되므로 남긴다.
+ * 네이버는 MLP·로열티 트러스트 지분도 "… Units" 로 부른다("Energy Transfer Units", "Sabine Royalty Units").
+ * 이들은 보통주처럼 거래되므로 남기고, 티커가 U 로 끝나는 유닛(스팩 유닛 "CAPNU")만 뺀다.
  */
 export function isUsNonCommon(eng: string, sym: string): boolean {
   if (/\b(rights?|warrants?|contingent value)\b/i.test(eng)) return true;
   if (/\bacquisition (corp|co|company|inc|holdings?)\b/i.test(eng)) return true;
-  // 스팩 유닛: 이름이 Unit(s) 로 끝나고 파트너십 지분(LP/L.P./Partners/Common Units)이 아닐 때
-  if (/\bunits?\s*$/i.test(eng) && !/\b(l\.?p\.?|partners|common units|limited partnership)\b/i.test(eng)) return true;
+  if (/\bunits?\s*$/i.test(eng) && sym.length >= 4 && sym.endsWith("U")) return true;
   return false;
 }
 
@@ -221,11 +228,12 @@ export class NaverDiscover {
   private async json(url: string): Promise<Json> {
     // 10초 안에 답이 없으면 끊는다 (멈춘 출처가 요청을 붙잡지 않게 — 캐시가 직전 값을 준다)
     const once = () => this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    // 연결이 끊기면 한 번 더 (HTTP 오류는 그대로)
+    // 연결이 끊기면 한 번 더 (HTTP 오류는 그대로). 시간 초과는 다시 부르지 않는다 (한 요청이 20초를 붙잡지 않게)
     let res: Response;
     try {
       res = await once();
-    } catch {
+    } catch (e) {
+      if (isTimeoutError(e)) throw e;
       await new Promise((r) => setTimeout(r, 300));
       res = await once();
     }
@@ -240,8 +248,9 @@ export class NaverDiscover {
     const r = await this.json(`${BASE}/domestic/stock/list/sorted?sortType=${SORT[category]}&marketType=all&domesticStockExchangeType=KRX&index=${index}`);
     const rows = (r["items"] as Json[] | undefined) ?? [];
     const items = rows.filter(isPlainStock).map(krStock).filter((x): x is DiscoverStock => x !== null);
-    // 장 시작 전 초기화: 모든 줄의 등락률·거래량이 0 이면 오늘 값이 아직 없는 것
-    const preopen = items.length > 0 && items.every((i) => i.changeRate === 0 && !i.volume);
+    // 장 시작 전 초기화: 거의 모든 줄(90% 이상)의 등락률·거래량이 0 이면 오늘 값이 아직 없는 것
+    // (장전 시간외 매매로 몇 줄만 거래량이 잡혀도 초기화로 알아보게)
+    const preopen = isMostlyZero(items);
     return { items, raw: rows.length, hasNext: r["hasNext"] === true, preopen };
   }
 
@@ -261,7 +270,8 @@ export class NaverDiscover {
     const total = num(r["totalCount"]) ?? 0;
     // 값의 시각: 가장 늦은 체결 시각 (장 마감 뒤엔 정규장 종료 16:00 ET)
     const tradedAt = rows.map((it) => String(it["localTradedAt"] ?? "")).filter((x) => !Number.isNaN(Date.parse(x))).sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
-    // 네이버는 뉴욕 새벽(한국 16시 무렵)부터 정규장 전까지 목록을 비우고 marketStatus=PREOPEN 으로 둔다
+    // 네이버는 뉴욕 03:40~04:00(한국 16:40~17:00, 겨울 17:40~18:00) 잠시 목록을 비우고 marketStatus=PREOPEN 으로 둔다
+    // (04:00 프리마켓 시작과 함께 직전 정규장 값으로 돌아온다 — 2026-09-23 실측)
     const preopen = String(r["marketStatus"] ?? "") === "PREOPEN" || (rows.length === 0 && total === 0);
     return { items, raw: rows.length, hasNext: rows.length > 0 && (index + 1) * 100 < total, tradedAt, preopen };
   }

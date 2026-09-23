@@ -34,6 +34,10 @@ export default function StockDetailScreen() {
   const { showKrw, afterCost } = useSettings();
   const [period, setPeriod] = useState<CandlePeriod>("D");
   const [tab, setTab] = useState<Tab>("company");
+  // 미등록 종목에서 "AI 분석 만들기"를 누른 탭 (탭을 오가도 다시 묻지 않게 화면에 둔다)
+  const [asked, setAsked] = useState<Partial<Record<AnalysisKind, true>>>({});
+  // 관심 추가를 눌러 서버 반영·새로고침이 끝날 때까지 (시세 자동 갱신 중에도 버튼이 깜빡이지 않게 따로 둔다)
+  const [adding, setAdding] = useState(false);
   // 과거 구간 이동과 120 이평선을 위해 넉넉히 받는다 (일봉 약 3년, 주봉 5년, 월봉 10년)
   const candles = useCandles(c, period, CANDLE_COUNT[period]);
   const briefings = useBriefings({ code: c, limit: 3 });
@@ -45,18 +49,23 @@ export default function StockDetailScreen() {
   const q = s.quote;
   // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가
   const unregistered = s.registered === false;
-  const addWatch = () =>
+  const addWatch = () => {
+    if (adding) return;
+    setAdding(true);
+    const done = () => void stock.refetch().finally(() => setAdding(false));
     register.mutate(
       { code: s.code },
       {
-        onSuccess: () => void stock.refetch(),
+        onSuccess: done,
         onError: (e) => {
           // 두 번 눌러 이미 등록된 경우(409)는 성공으로 본다
-          if (e instanceof Error && /이미 등록/.test(e.message)) return void stock.refetch();
+          if (e instanceof Error && /이미 등록/.test(e.message)) return done();
+          setAdding(false);
           Alert.alert("관심 추가 실패", e instanceof Error ? e.message : String(e));
         },
       },
     );
+  };
   const cur = q?.currency ?? currencyOfMarket(s.market);
   const fx = q?.fxRate ?? (q?.priceKrw && q.price ? q.priceKrw / q.price : null);
   const displayCur = toDisplay(1, cur, fx, showKrw).currency;
@@ -86,9 +95,9 @@ export default function StockDetailScreen() {
           title: s.name,
           headerRight: () =>
             unregistered ? (
-              <Pressable onPress={addWatch} disabled={register.isPending || stock.isFetching} accessibilityLabel="관심 종목에 추가" hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <Pressable onPress={addWatch} disabled={adding} accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                 <Ionicons name="star-outline" size={20} color={t.gold} />
-                <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{register.isPending ? "추가 중" : "관심 추가"}</Text>
+                <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{adding ? "추가 중" : "관심 추가"}</Text>
               </Pressable>
             ) : (
               <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityLabel="보유 정보 수정" hitSlop={10}>
@@ -214,7 +223,12 @@ export default function StockDetailScreen() {
       ) : null}
 
       <Segmented options={TABS} value={tab} onChange={setTab} style={{ marginTop: 2 }} />
-      {tab === "news" ? <NewsTab code={c} us={isUsMarket(s.market)} /> : <AnalysisTab key={`${c}:${tab}`} code={c} kind={tab} manual={unregistered} />}
+      {tab === "news" ? (
+        <NewsTab code={c} us={isUsMarket(s.market)} />
+      ) : (
+        // 관심 종목이 되면(unregistered → false) 바로 자동으로 만든다
+        <AnalysisTab key={`${c}:${tab}`} code={c} kind={tab} requested={!unregistered || !!asked[tab]} onRequest={(k) => setAsked((m) => ({ ...m, [k]: true }))} />
+      )}
 
       {briefings.data && briefings.data.length > 0 ? (
         <View style={{ gap: space.sm }}>
@@ -228,17 +242,19 @@ export default function StockDetailScreen() {
   );
 }
 
-/** manual: 발견 탭 등에서 잠깐 들여다보는 미등록 종목 — AI 분석은 눌렀을 때만 만든다 (비용·시간) */
-function AnalysisTab({ code, kind, manual = false }: { code: string; kind: AnalysisKind; manual?: boolean }) {
-  const [requested, setRequested] = useState(!manual);
+/**
+ * requested=false: 발견 탭 등에서 잠깐 들여다보는 미등록 종목 — AI 분석은 눌렀을 때만 만든다 (비용·시간).
+ * 이미 받아 둔 분석(캐시)이 있으면 누르지 않아도 보여 준다.
+ */
+function AnalysisTab({ code, kind, requested, onRequest }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void }) {
   const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
   const busy = refreshAnalysis.isPending && refreshAnalysis.variables?.kind === kind;
-  if (!requested)
+  if (!requested && !a.data)
     return (
       <Card>
         <Muted>관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.</Muted>
-        <Button title="AI 분석 만들기" icon="sparkles" onPress={() => setRequested(true)} />
+        <Button title="AI 분석 만들기" icon="sparkles" onPress={() => onRequest(kind)} />
       </Card>
     );
   if (a.isLoading || busy) return <Card><Loading label="분석 생성 중" /></Card>;

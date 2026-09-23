@@ -16,6 +16,8 @@ export interface MarketState {
   isOpen: boolean; // 지금 거래 시간인지 (한국은 KRX+NXT 통합 08:00~20:00, 미국은 프리~애프터)
   opensAt: string | null; // ISO, 다음(또는 오늘) 개장
   closesAt: string | null; // ISO, 현재/다음 세션 종료
+  /** 장이 닫혀 있을 때 마지막 세션이 끝난 시각(ISO, 휴장일을 건너뛴 실제 값). 장중이거나 모르면 null */
+  lastClose?: string | null;
   source: "toss" | "fallback";
 }
 
@@ -57,6 +59,7 @@ export function stateFromSession(market: MarketKey, now: Date, tradingEnd: strin
     isOpen,
     opensAt: isOpen ? null : new Date(next).toISOString(),
     closesAt: isOpen ? new Date(end).toISOString() : null,
+    lastClose: !isOpen && end <= t ? new Date(end).toISOString() : null,
     source: "toss",
   };
 }
@@ -78,6 +81,7 @@ export class MarketCalendar {
     try {
       const res = await this.fetchFn(`https://wts-info-api.tossinvest.com/api/v3/stock-prices?productCodes=${PRODUCTS.KR},${PRODUCTS.US}`, {
         headers: { "user-agent": UA, accept: "application/json", referer: "https://tossinvest.com/" },
+        signal: AbortSignal.timeout(5_000), // 멈춘 연결이 장 상태를 묻는 모든 요청을 붙잡지 않게
       });
       if (res.ok) {
         const rows = ((await res.json()) as { result?: Array<Record<string, unknown>> }).result ?? [];

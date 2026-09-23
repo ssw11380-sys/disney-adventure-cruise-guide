@@ -2,7 +2,7 @@ import { router } from "expo-router";
 import React, { useCallback, useMemo, useState } from "react";
 import { Alert, StyleSheet, Text, View } from "react-native";
 import { useStockMutations, useStocks } from "@/api/hooks";
-import type { DiscoverMarket, DiscoverStock } from "@/api/types";
+import type { DiscoverMarket, DiscoverSession, DiscoverStock } from "@/api/types";
 import { formatDateKo } from "@/lib/format";
 import { font, space, useTheme } from "@/theme";
 import type { HoldingMark } from "./DiscoverRow";
@@ -68,24 +68,48 @@ export function openStock(item: DiscoverStock): void {
   router.push(`/stocks/${item.code}`);
 }
 
+/** 상태 줄 첫머리: 값이 바뀌는 중인지, 아니면 어느 시점 값인지 */
+function statusLabel(market: DiscoverMarket, open: boolean, session: DiscoverSession | undefined, live: boolean | undefined): string {
+  const s: DiscoverSession = session ?? (open ? "regular" : "closed"); // 옛 서버는 session 이 없다
+  if (s === "regular") return "장중 · 30초마다 갱신";
+  if (s === "extended") return "시간외 거래 반영 중 · 30초마다 갱신";
+  if (s === "pre") return "장 시작 전 · 직전 거래일 기준";
+  if (live) return "장외 시간 · 현재가 기준";
+  return market === "US" ? "장 마감 · 직전 정규장 기준" : "장 마감 · 마지막 거래 기준";
+}
+
 /**
  * "● 장중 · 30초마다 갱신 · 14:52 기준" / "장 마감 · 직전 정규장 기준 · 9월 23일 (수) 05:00 기준".
- * 미국 값은 정규장 기준이라 장 밖에서는 "직전 정규장", 한국은 KRX+NXT 통합이라 "마지막 거래".
+ * 미국 값은 정규장 기준이라 장 밖에서는 "직전 정규장", 한국은 15:30 뒤에도 시간외 거래로 값이 바뀌어 20:00 까지 "시간외 거래 반영 중".
  */
-export function StatusLine({ open, asOf, note, market = "KR" }: { open: boolean; asOf: string | null; note?: string | null; market?: DiscoverMarket }) {
+export function StatusLine({
+  open,
+  asOf,
+  note,
+  market = "KR",
+  session,
+  live,
+}: {
+  open: boolean;
+  asOf: string | null;
+  note?: string | null;
+  market?: DiscoverMarket;
+  session?: DiscoverSession;
+  live?: boolean;
+}) {
   const t = useTheme();
+  const moving = session ? session === "regular" || session === "extended" : open;
   return (
     <View style={[styles.status, { borderBottomColor: t.line, backgroundColor: t.bg }]}>
-      <View style={[styles.dot, { backgroundColor: open ? t.up : t.muted }]} />
+      <View style={[styles.dot, { backgroundColor: moving ? t.up : t.muted }]} />
       <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1 }} numberOfLines={2}>
-        {open ? "장중 · 30초마다 갱신" : market === "US" ? "장 마감 · 직전 정규장 기준" : "장 마감 · KRX 종가 기준"}
+        {statusLabel(market, open, session, live)}
         {asOf ? ` · ${formatDateKo(asOf, true)} 기준` : ""}
         {note ? ` · ${note}` : ""}
       </Text>
     </View>
   );
 }
-
 
 const styles = StyleSheet.create({
   status: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: space.lg, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },

@@ -188,7 +188,9 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
       { code: "RGTI", name: "한글 RGTI", changeRate: null },
     ]);
     expect(week.note).toContain("상승·하락 종목 수 없음");
-    expect(week.note).toContain("토스 현재가 기준"); // 정규장 중 스냅숏이 없으면 그렇다고 밝힌다
+    expect(week.note).toContain("토스 현재가라"); // 정규장 중 스냅숏이 없으면 그렇다고 밝힌다
+    expect(week.note).toContain("1주는 테마 등락률만");
+    expect(week.live).toBe(true);
     expect(w.calls.some((c) => c.includes("/simple"))).toBe(false); // 순위에 있으면 하나씩 묻지 않는다
     // 1개월 순위에 없으면 테마마다 미국 종목 기준(nation=US)으로 묻는다
     const month = await mk().themes("US", "theme", "month");
@@ -219,6 +221,59 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     expect(later.note).toContain("직전 정규장 중");
     expect(later.asOf).toBe("2026-09-23T00:00:00+09:00"); // 받은 시각 = 정규장 중
     expect(w.calls.filter((c) => c.includes("/tics/ranking")).length).toBe(before);
+  });
+
+  it("며칠 지난 정규장 값은 '직전 정규장'으로 쓰지 않고 지금 값을 받아 밝힌다 · 뉴욕 15:50 에 미리 받아 둔다", async () => {
+    const w = world();
+    const saved = new Map<string, string>();
+    const store = { get: async (k: string) => saved.get(k) ?? null, set: async (k: string, v: string) => void saved.set(k, v) };
+    let now = new Date("2026-09-18T19:50:00Z"); // 금 뉴욕 15:50 정규장
+    let us = { isOpen: true, isTradingDay: true, lastClose: null as string | null };
+    const calendar = { status: async () => ({ KR: { isOpen: false, isTradingDay: true }, US: us }) } as never;
+    const mk = () =>
+      new DiscoverService({ naver: new NaverDiscover(w.fetchFn), tics: new TossTics(w.fetchFn, 0), usThemes: new UsThemeBook({ tics: new TossTics(w.fetchFn, 0), naver: new NaverDiscover(w.fetchFn), now: () => now }), calendar, store, now: () => now });
+    expect(await mk().captureUsPeriods()).toBe(2); // 1주·1개월
+    expect(saved.get("discover:us-tics-period:month")).toContain('"inSession":true');
+    // 다음 화요일 한국 낮: 금요일 값은 가장 최근 정규장(월) 값이 아니다 → 지금 값 + 안내
+    now = new Date("2026-09-22T06:00:00Z");
+    us = { isOpen: false, isTradingDay: true, lastClose: "2026-09-21T20:00:00.000Z" };
+    const stale = await mk().themes("US", "theme", "week");
+    expect(stale.live).toBe(true);
+    expect(stale.note).toContain("토스 현재가라");
+    // 주말(한국 토·일 낮)에는 금요일 값이 가장 최근 정규장 값 — 오늘이 아니면 날짜를 붙인다
+    now = new Date("2026-09-19T06:00:00Z");
+    us = { isOpen: false, isTradingDay: false, lastClose: "2026-09-18T20:00:00.000Z" };
+    const kept = await mk().themes("US", "theme", "week");
+    expect(kept.live).toBeUndefined();
+    expect(kept.note).toContain("직전 정규장 중 04:50 값");
+    now = new Date("2026-09-20T06:00:00Z");
+    expect((await mk().themes("US", "theme", "week")).note).toContain("직전 정규장 중 9/19 04:50 값");
+    // 정규장이 아니면 받아 두지 않는다
+    expect(await mk().captureUsPeriods()).toBe(0);
+  });
+
+  it("테마북 안전장치: 쓸 수 있는 옛것이 있을 때만 크게 줄어든 결과를 거르고, 두 번 이어서 같은 크기면 받아들인다", async () => {
+    const w = world();
+    let t = new Date("2026-09-23T06:00:00Z");
+    const saved = new Map<string, string>();
+    const store = { get: async (k: string) => saved.get(k) ?? null, set: async (k: string, v: string) => void saved.set(k, v) };
+    const book = new UsThemeBook({ tics: new TossTics(w.fetchFn, 0), naver: new NaverDiscover(w.fetchFn), store, now: () => t });
+    expect((await book.get()).themes).toHaveLength(2);
+    w.members["888"] = []; // 토스가 테마 하나를 없앴다 → 2개 → 1개 (50%)
+    t = new Date("2026-09-24T12:00:00Z");
+    await book.refresh();
+    expect((await book.get()).themes).toHaveLength(2); // 한 번은 일시적 부분 응답일 수 있어 거른다
+    t = new Date("2026-09-25T12:00:00Z");
+    await book.refresh();
+    expect((await book.get()).themes).toHaveLength(1); // 두 번 이어서 같은 크기 → 실제로 줄었다
+    // 옛것이 너무 오래됐으면(7일 넘음) 줄어든 결과라도 바로 받아들인다
+    w.members["888"] = ["P_TA", "P_TB", "P_TC"];
+    const old = new Map<string, string>([["discover:us-tics:v1", saved.get("discover:us-tics:v1")!.replace(/"builtAt":\d+/, `"builtAt":${Date.parse("2026-09-01T00:00:00Z")}`)]]);
+    const w2 = world();
+    w2.members["888"] = [];
+    w2.members["956"] = ["P_IONQ", "P_RGTI", "P_QBTS"];
+    const stale = new UsThemeBook({ tics: new TossTics(w2.fetchFn, 0), naver: new NaverDiscover(w2.fetchFn), store: { get: async (k: string) => old.get(k) ?? null, set: async () => undefined }, now: () => t });
+    expect((await stale.get()).themes.map((x) => x.id)).toEqual(["956"]);
   });
 
   it("토스가 막히면 네이버 산업 분류로 대신 보여 주고 안내한다", async () => {

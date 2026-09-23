@@ -1,3 +1,4 @@
+import { isTimeoutError } from "../../lib/errors.js";
 import type { FetchFn } from "./types.js";
 
 /**
@@ -80,12 +81,13 @@ export class TossTics {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(10_000), // 멈춘 연결이 테마북 만들기를 붙잡지 않게
       });
-    // 연결이 끊기거나 5xx·429 면 한 번 더 (하루 한 번 수백 번 부르는 동안 가끔 끊긴다)
+    // 연결이 끊기거나 5xx·429 면 한 번 더 (하루 한 번 수백 번 부르는 동안 가끔 끊긴다). 시간 초과는 다시 부르지 않는다
     let res: Response;
     try {
       res = await once();
       if (res.status >= 500 || res.status === 429) throw new Error(`HTTP ${res.status}`);
-    } catch {
+    } catch (e) {
+      if (isTimeoutError(e)) throw e;
       await new Promise((r) => setTimeout(r, this.retryDelayMs));
       res = await once();
     }

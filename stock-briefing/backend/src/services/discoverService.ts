@@ -1,18 +1,29 @@
+import { within } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
-import type { MarketCalendar } from "../providers/market/calendar.js";
-import { isPreopenQuotes, type DiscoverMarket, type DiscoverStock, type NaverDiscover, type RankCategory, type SectorDetail, type ThemeKind, type ThemePeriod, type ThemeSummary, type UsQuote } from "../providers/market/naverDiscover.js";
+import { fallbackState, type MarketCalendar, type MarketState } from "../providers/market/calendar.js";
+import { isMostlyZero, isPreopenQuotes, type DiscoverMarket, type DiscoverStock, type NaverDiscover, type RankCategory, type SectorDetail, type ThemeKind, type ThemePeriod, type ThemeSummary, type UsQuote } from "../providers/market/naverDiscover.js";
 import type { CodeStore } from "../providers/market/toss.js";
 import type { TicsRankRow, TossTics } from "../providers/market/tossTics.js";
 import { latestTradeDay, pool, usThemeSummary, UsThemesBuildingError, type UsThemeBook, type UsThemeBookData } from "./usThemes.js";
 
 /**
  * 발견 탭 서비스: 순위(거래대금·거래량·급상승·급하락)와 테마·업종(오늘/1주/1개월), 테마 구성 종목.
- *  - 캐시: 그 나라 장이 열려 있으면 30초, 닫혀 있으면 5분 (주·월 등락률은 장중에도 2분)
+ *  - 캐시: 값이 바뀌는 시간(한국 08:00~20:00, 미국 정규장)이면 30초, 아니면 5분 (주·월 등락률은 장중에도 2분)
  *  - 조회가 실패하면 직전 값을 그대로 준다(stale). 직전 값도 없으면 오류
  *  - 급상승·급하락은 거래대금 한국 10억 원·미국 100만 달러 미만을 빼서 동전주가 뜨지 않게 한다
  *  - ETF·ETN·스팩은 순위에서 뺀다 (종목만)
  *  - 미국 테마는 토스 테마 분류에 네이버 정규장 시세를 붙여 직접 계산한다 (usThemes.ts)
  */
+
+/**
+ * 발견 탭 값의 장 상태 (앱 상태 줄 문구)
+ *  - regular: 정규장 (한국 KRX 09:00~15:30, 미국 뉴욕 09:30~16:00)
+ *  - extended: 한국 정규장 뒤 시간외(15:30~20:00) — 시간외 거래로 값이 계속 바뀐다
+ *  - pre: 한국 정규장 전(08:00~09:00) — 값은 직전 거래일
+ *  - closed: 장 마감·휴장. 미국은 프리·애프터도 여기 (네이버 미국 값은 정규장 값이라 바뀌지 않는다)
+ */
+export type DiscoverSession = "regular" | "extended" | "pre" | "closed";
+type Session = { session: DiscoverSession; open: boolean; lastClose: string | null };
 
 export interface DiscoverRank {
   market: DiscoverMarket;
@@ -20,7 +31,9 @@ export interface DiscoverRank {
   items: DiscoverStock[];
   page: number;
   hasMore: boolean;
+  /** 값이 바뀌는 시간이라 자주(30초) 갱신하는지 */
   marketOpen: boolean;
+  session: DiscoverSession;
   asOf: string | null;
   fxRate: number | null;
   source: string;
@@ -33,6 +46,9 @@ export interface ThemeList {
   period: ThemePeriod;
   themes: ThemeSummary[];
   marketOpen: boolean;
+  session: DiscoverSession;
+  /** 장 밖인데 정규장 값이 없어 지금(주간·프리·애프터 섞인) 값을 준 경우 */
+  live?: boolean;
   asOf: string | null;
   source: string;
   basis: string;
@@ -49,6 +65,7 @@ export interface ThemeDetail {
   description: string | null;
   items: DiscoverStock[];
   marketOpen: boolean;
+  session: DiscoverSession;
   asOf: string | null;
   fxRate: number | null;
   source: string;
@@ -60,12 +77,27 @@ export interface ThemeDetail {
 /** 순위 원본: 정렬된 전체 목록을 앞에서부터 한 쪽씩 (없으면 빈 목록, hasNext 로 끝) */
 export type RankSource = (category: RankCategory, index: number) => Promise<{ items: DiscoverStock[]; hasNext: boolean; tradedAt?: string | null; preopen?: boolean }>;
 
-type RankState = { at: number; items: DiscoverStock[]; next: number; hasNext: boolean; source: string; tradedAt: string | null; preopen?: boolean; fromSnapshot?: boolean };
+/**
+ * 순위 누적 상태. at = 값을 받은 시각(기준 시각), checkedAt = 마지막으로 출처를 확인한 시각(다음 확인 시점 계산).
+ * stale = 출처가 비어 직전 목록을 유지 중, fromSnapshot = 재시작 뒤 저장본에서 복원 (둘 다 더 이어 받지 않는다)
+ */
+type RankState = {
+  at: number;
+  checkedAt: number;
+  items: DiscoverStock[];
+  next: number;
+  hasNext: boolean;
+  source: string;
+  tradedAt: string | null;
+  preopen?: boolean;
+  stale?: boolean;
+  fromSnapshot?: boolean;
+};
 
-/** 네이버가 장 시작 전으로 초기화해 쓸 값이 없고 저장본도 없을 때 */
+/** 네이버가 잠시 값을 비운 시간(장 시작 전 초기화)인데 저장해 둔 직전 값도 없을 때 */
 export class PreopenError extends Error {
   constructor(what: string) {
-    super(`${what}: 장 시작 전이라 직전 정규장 값이 아직 없습니다`);
+    super(`${what}: 출처가 잠시 값을 비운 시간이고 저장해 둔 직전 값도 없습니다`);
     this.name = "PreopenError";
   }
 }
@@ -97,6 +129,12 @@ const SNAP_MAX_AGE_MS = 5 * 24 * 3_600_000;
 const SNAP_PERSIST_EVERY_MS = 10 * 60_000;
 /** 순위 저장본에 남기는 줄 수 */
 const SNAP_RANK_ITEMS = 600;
+/** 뒤 쪽(2쪽~) 요청은 첫 쪽이 받은 목록을 이만큼(TTL 배수) 더 쓴다 — 쪽마다 목록이 바뀌어 종목이 빠지거나 두 번 나오지 않게 */
+const PAGE_TTL_FACTOR = 3;
+/** 장 상태·환율·테마 설명을 기다리는 최대 시간 (느리면 추정값·없음으로) */
+const CAL_WAIT_MS = 2_500;
+const FX_WAIT_MS = 2_000;
+const SUMMARY_WAIT_MS = 2_000;
 
 type Cached<T> = { at: number; value: T };
 
@@ -108,8 +146,8 @@ export class DiscoverService {
   private readonly failures = new Map<string, { at: number; error: unknown }>();
   /** 미국 테마 기간 등락률의 정규장 중 스냅숏 */
   private readonly periodSnaps = new Map<ThemePeriod, UsPeriodSnapshot>();
-  /** 직전 정규장 저장본 (메모리 + meta 표). 네이버가 장 시작 전으로 초기화한 시간에 쓴다 */
-  private readonly snaps = new Map<string, { savedAt: number; persistedAt: number; value: unknown }>();
+  /** 직전 값 저장본 (메모리 + meta 표). 네이버가 잠시 값을 비운 시간(장 시작 전 초기화)과 재시작 직후에 쓴다 */
+  private readonly snaps = new Map<string, { savedAt: number; sig: string; persistedAt: number; persistedSig: string; value: unknown }>();
 
   constructor(
     private readonly deps: {
@@ -136,28 +174,48 @@ export class DiscoverService {
   }
 
   /**
-   * 장중인지 — 발견 탭 값의 기준 세션만 본다.
-   *  - 한국: 네이버 순위·테마 값은 KRX 기준이라 KRX 정규장(09:00~15:30)만 장중. 달력은 NXT(08:00~20:00)까지 열림으로 본다
-   *  - 미국: 정규장(뉴욕 09:30~16:00)만 장중. 달력은 프리~애프터를 모두 열림으로 본다
+   * 장 상태. open 이면 값이 바뀌는 시간이라 30초마다 새로 받는다.
+   *  - 한국: 달력(08:00~20:00, 휴장일 반영)이 열려 있으면 open. 네이버 한국 값은 15:30 뒤에도 시간외 거래로 바뀐다
+   *  - 미국: 네이버 미국 값은 정규장 값이라 정규장(뉴욕 09:30~16:00)만 open
+   * 달력이 느리면 2.5초만 기다리고 요일·시각 추정으로 대신한다.
    */
-  private async isOpen(market: DiscoverMarket): Promise<boolean> {
-    if (!this.deps.calendar) return false;
-    try {
-      const s = await this.deps.calendar.status();
-      return market === "KR" ? s.KR.isTradingDay && isKrxRegularHours(this.now) : s.US.isOpen && isUsRegularHours(this.now);
-    } catch {
-      return false;
+  private async session(market: DiscoverMarket): Promise<Session> {
+    if (!this.deps.calendar) return { session: "closed", open: false, lastClose: null };
+    const now = this.now;
+    const status = await within(this.deps.calendar.status(), CAL_WAIT_MS, null);
+    const st: MarketState = status?.[market] ?? fallbackState(market, now);
+    const lastClose = st.lastClose ?? null;
+    if (market === "US") {
+      const regular = st.isOpen && isUsRegularHours(now);
+      return { session: regular ? "regular" : "closed", open: regular, lastClose };
     }
+    if (!st.isOpen) return { session: "closed", open: false, lastClose };
+    const m = seoulMinutes(now);
+    return { session: m < 9 * 60 ? "pre" : isKrxRegularHours(now) ? "regular" : "extended", open: true, lastClose: null };
   }
 
-  /** 장이 닫혀 있을 때 한국 값의 기준 시각 = 직전 KRX 정규장 마감(15:30). 휴장이 이어지면 주말만 거른 근사 */
-  private async krClosedAsOf(): Promise<string | null> {
-    try {
-      const s = this.deps.calendar ? await this.deps.calendar.status() : null;
-      return lastKrxClose(this.now, s?.KR.isTradingDay ?? true);
-    } catch {
-      return null;
-    }
+  /**
+   * 한국 값의 기준 시각: 장중·시간외는 값을 받은 시각, 장 시작 전·마감 뒤는 마지막 거래 마감(달력, 없으면 평일 20:00 근사).
+   * 값을 받은 시각이 그보다 이르면(저장본 등) 그 시각
+   */
+  private krAsOf(ss: Session, at: number): string {
+    if (ss.session === "regular" || ss.session === "extended") return seoulIso(new Date(at));
+    const close = Date.parse(ss.lastClose ?? lastKrClose(this.now));
+    return seoulIso(new Date(Number.isNaN(close) ? at : Math.min(at, close)));
+  }
+
+  /** 미국 값(네이버 정규장 값)의 기준 시각: 정규장 중에는 받은 시각, 밖에서는 가장 최근 정규장 마감(16:00 ET) — 받은 시각이 더 이르면 그 시각 */
+  private usAsOf(ss: Session, at: number): string {
+    if (ss.session === "regular") return seoulIso(new Date(at));
+    const close = nyCloseOf(lastUsRegularDay(this.now, ss.lastClose));
+    return seoulIso(new Date(Math.min(at, close)));
+  }
+
+  /** "HH:MM" (서울) — 날짜가 오늘이 아니면 "M/D HH:MM" */
+  private hm(t: number): string {
+    const iso = seoulIso(new Date(t));
+    const time = iso.slice(11, 16);
+    return iso.slice(0, 10) === seoulIso(this.now).slice(0, 10) ? time : `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))} ${time}`;
   }
 
   private ttl(open: boolean, slow = false): number {
@@ -166,13 +224,14 @@ export class DiscoverService {
 
   private async fx(market: DiscoverMarket): Promise<number | null> {
     if (market !== "US" || !this.deps.usdKrw) return null;
-    return this.deps.usdKrw().catch(() => null);
+    return within(this.deps.usdKrw(), FX_WAIT_MS, null);
   }
 
   /**
    * 캐시 → 없거나 오래되면 조회(같은 키는 한 번만) → 실패하면 직전 값.
    * 직전 값이 있으면 새 조회를 STALE_WAIT_MS 만 기다리고 직전 값을 준다(느린 출처가 화면을 붙잡지 않게, 새 값은 뒤에서 채운다).
    * 직전 값이 없는 실패는 잠시(기본 20초, 비싼 조회는 10분) 기억해 같은 오류를 바로 준다(상류 장애 때 요청마다 다시 부르지 않게).
+   * 테마북을 만드는 중·출처 초기화처럼 곧 풀리는 실패는 기억하지 않는다.
    */
   private async cached<T>(key: string, ttl: number, load: () => Promise<T>, failCooldownMs = FAIL_RETRY_MS): Promise<{ value: T; at: number }> {
     const hit = this.cache.get(key) as Cached<T> | undefined;
@@ -190,7 +249,8 @@ export class DiscoverService {
           return value;
         })
         .catch((e: unknown) => {
-          this.failures.set(key, { at: started, error: e });
+          // 실패한 시각부터 센다 (느리게 실패한 조회가 바로 다시 불리지 않게)
+          if (!(e instanceof UsThemesBuildingError || e instanceof PreopenError)) this.failures.set(key, { at: this.now.getTime(), error: e });
           throw e;
         })
         .finally(() => this.inflight.delete(key));
@@ -211,16 +271,21 @@ export class DiscoverService {
     }
   }
 
-  /** 직전 정규장 저장본 쓰기 — 메모리는 늘, meta 표는 10분에 한 번(또는 force) */
+  /**
+   * 직전 값 저장본 쓰기. savedAt 은 그 값을 처음 받은 시각(= 값의 시각)이다.
+   * meta 표에는 값이 바뀌었을 때만, 10분에 한 번(장 마감 뒤 첫 값은 force 로 바로) 쓴다 — 장 밖에 같은 값을 5분마다 다시 쓰지 않게.
+   */
   private async saveSnap(key: string, value: unknown, force = false): Promise<void> {
     const t = this.now.getTime();
+    const sig = fingerprint(JSON.stringify(value));
     const prev = this.snaps.get(key);
-    const persist = force || !prev || t - prev.persistedAt >= SNAP_PERSIST_EVERY_MS;
-    this.snaps.set(key, { savedAt: t, persistedAt: persist ? t : (prev?.persistedAt ?? 0), value });
-    if (persist) await this.deps.store?.set(`discover:snap:${key}`, JSON.stringify({ savedAt: t, value })).catch(() => undefined);
+    const savedAt = prev && prev.sig === sig ? prev.savedAt : t;
+    const persist = prev?.persistedSig !== sig && (force || !prev || t - prev.persistedAt >= SNAP_PERSIST_EVERY_MS);
+    this.snaps.set(key, { savedAt, sig, value, persistedAt: persist ? t : (prev?.persistedAt ?? 0), persistedSig: persist ? sig : (prev?.persistedSig ?? "") });
+    if (persist) await this.deps.store?.set(`discover:snap:${key}`, JSON.stringify({ savedAt, value })).catch(() => undefined);
   }
 
-  /** 직전 정규장 저장본 읽기 (5일 넘으면 버림) */
+  /** 직전 값 저장본 읽기 (5일 넘으면 버림) */
   private async loadSnap<T>(key: string): Promise<{ savedAt: number; value: T } | null> {
     const t = this.now.getTime();
     const mem = this.snaps.get(key);
@@ -230,7 +295,8 @@ export class DiscoverService {
       if (!raw) return null;
       const v = JSON.parse(raw) as { savedAt: number; value: T };
       if (typeof v.savedAt !== "number" || t - v.savedAt >= SNAP_MAX_AGE_MS) return null;
-      this.snaps.set(key, { savedAt: v.savedAt, persistedAt: v.savedAt, value: v.value });
+      const sig = fingerprint(JSON.stringify(v.value));
+      this.snaps.set(key, { savedAt: v.savedAt, sig, persistedAt: v.savedAt, persistedSig: sig, value: v.value });
       return v;
     } catch {
       return null;
@@ -238,55 +304,48 @@ export class DiscoverService {
   }
 
   async rank(market: DiscoverMarket, category: RankCategory, page: number, size: number): Promise<DiscoverRank> {
-    const open = await this.isOpen(market);
+    const ss = await this.session(market);
+    const open = ss.open;
     const key = `${market}:${category}`;
     const t = this.now.getTime();
     const need = page * size + 1; // 다음 쪽이 있는지 알기 위해 하나 더
     let st = this.ranks.get(key);
-    if (!st || t - st.at >= this.ttl(open)) {
-      // 새로 받는다. 실패하거나(장 시작 전처럼) 빈 목록이 오면 직전 목록
-      try {
-        const fresh = await this.fillRank(market, category, { at: t, items: [], next: 0, hasNext: true, source: "", tradedAt: null }, need);
-        if (fresh.items.length && !fresh.preopen) {
-          st = fresh;
-          this.ranks.set(key, st);
-          // 정규장 값이 있을 때 저장본을 남긴다 (재시작 뒤 장 시작 전에도 직전 정규장 순위를 보여 주려고)
-          void this.saveSnap(`rank:${key}`, { ...fresh, items: fresh.items.slice(0, SNAP_RANK_ITEMS) }, !open);
-        } else if (st?.items.length && !st.fromSnapshot) {
-          // 장 시작 전처럼 빈 목록·0% 목록이 오면 가진 직전 목록을 그대로 (다음 확인은 TTL 뒤)
-          st = { ...st, at: t };
-          this.ranks.set(key, st);
-        } else {
-          const snap = await this.loadSnap<RankState>(`rank:${key}`);
-          if (snap) {
-            // 저장본은 더 이어 받지 않는다 (지금 출처는 비어 있으므로)
-            st = { ...snap.value, at: t, next: MAX_SOURCE_PAGES, hasNext: false, fromSnapshot: true };
-            this.ranks.set(key, st);
-          } else if (!st) {
-            st = { ...fresh, items: fresh.preopen ? [] : fresh.items };
-            this.ranks.set(key, st);
-          }
-        }
-      } catch (e) {
-        if (!st) {
-          const snap = await this.loadSnap<RankState>(`rank:${key}`);
-          if (!snap) throw e;
-          st = { ...snap.value, at: t, next: MAX_SOURCE_PAGES, hasNext: false, fromSnapshot: true };
-          this.ranks.set(key, st);
-        }
+    // 새 목록은 첫 쪽 요청 때 받는다. 뒤 쪽은 첫 쪽과 같은 목록에서 이어 줘야 종목이 빠지거나 두 번 나오지 않는다
+    // (앱은 새로고침 때 첫 쪽부터 차례로 다시 받는다). 뒤 쪽만 너무 오래(TTL 3배) 요청되면 그때는 새로 받는다
+    const maxAge = this.ttl(open) * (page === 1 ? 1 : PAGE_TTL_FACTOR);
+    if (!st || t - st.checkedAt >= maxAge) {
+      const failed = this.failures.get(`rank:${key}`);
+      if (!st && failed && t - failed.at < FAIL_RETRY_MS) throw failed.error;
+      const p = this.refreshRank(market, category, key, need, open);
+      if (st) {
+        // 직전 목록이 있으면 새 조회를 잠깐만 기다린다 (느린 출처가 화면을 붙잡지 않게, 새 목록은 뒤에서 채운다)
+        await Promise.race([p.catch(() => undefined), new Promise((res) => setTimeout(res, this.deps.staleWaitMs ?? STALE_WAIT_MS))]);
+      } else await p;
+      st = this.ranks.get(key) ?? st;
+    }
+    if (st && st.items.length < need && st.hasNext && !st.stale && !st.fromSnapshot) {
+      // 더 받기. 새 목록을 받는 중이면 그것부터 기다린다 (옛 목록 뒤에 새 목록 줄이 붙지 않게)
+      const pending = this.inflight.get(`rank:${key}`);
+      if (pending) {
+        await pending.catch(() => undefined);
+        st = this.ranks.get(key) ?? st;
       }
-    } else if (st.items.length < need && st.hasNext && !st.fromSnapshot) {
-      try {
-        st = await this.fillRank(market, category, st, need);
-        this.ranks.set(key, st);
-      } catch {
-        /* 더 받기 실패: 가진 만큼 */
+      const base = st;
+      if (base.items.length < need && base.hasNext && !base.stale && !base.fromSnapshot) {
+        try {
+          const more = await this.fillRank(market, category, base, need);
+          if (this.ranks.get(key) === base) this.ranks.set(key, more);
+          st = more;
+        } catch {
+          /* 더 받기 실패: 가진 만큼 */
+        }
       }
     }
     const s = st!;
     const items = s.items.slice((page - 1) * size, page * size);
-    // 기준 시각: 출처가 체결 시각을 주면 그 시각(미국), 한국 장 마감 뒤엔 직전 KRX 마감, 아니면 받은 시각
-    const asOf = s.tradedAt ? seoulIso(new Date(s.tradedAt)) : market === "KR" && !open ? ((await this.krClosedAsOf()) ?? seoulIso(new Date(s.at))) : seoulIso(new Date(s.at));
+    // 기준 시각: 출처가 체결 시각을 주면 그 시각(미국), 한국은 장 상태에 따라 받은 시각 또는 마지막 거래 마감
+    const asOf = s.tradedAt ? seoulIso(new Date(s.tradedAt)) : market === "KR" ? this.krAsOf(ss, s.at) : seoulIso(new Date(s.at));
+    const movers = category === "gainers" || category === "losers";
     return {
       market,
       category,
@@ -294,17 +353,76 @@ export class DiscoverService {
       page,
       hasMore: page < MAX_PAGE && items.length > 0 && (s.items.length > page * size || s.hasNext),
       marketOpen: open,
+      session: ss.session,
       asOf,
       fxRate: await this.fx(market),
       source: s.source,
       note: [
-        !s.items.length && !open ? "장 시작 전이라 출처가 목록을 비워 두었습니다 (정규장이 열리면 채워집니다)" : null,
-        market === "KR" ? (category === "gainers" || category === "losers" ? "KRX 기준 · ETF·ETN·스팩·정리매매 제외" : "KRX 기준 · ETF·ETN·스팩 제외") : "ETF·우선주·권리주 제외",
-        category === "gainers" || category === "losers" ? `거래대금 ${market === "KR" ? "10억 원" : "100만 달러"} 이상` : null,
+        !s.items.length ? "출처가 잠시 목록을 비웠습니다 (곧 다시 채워집니다)" : s.stale ? "출처가 잠시 목록을 비워 직전 목록을 보여 줍니다" : s.fromSnapshot ? "저장해 둔 직전 목록입니다" : null,
+        market === "KR" ? (movers ? "ETF·ETN·스팩·정리매매 제외" : "ETF·ETN·스팩 제외") : "ETF·우선주·권리주 제외",
+        movers ? `거래대금 ${market === "KR" ? "10억 원" : "100만 달러"} 이상` : null,
       ]
         .filter(Boolean)
         .join(" · "),
     };
+  }
+
+  /**
+   * 순위 목록을 처음부터 새로 받는다 (같은 분류는 한 번만).
+   * 출처가 비었거나(장 시작 전 초기화) 실패하면 가진 직전 목록을 유지하고, 없으면 저장본(재시작 뒤)으로 채운다.
+   */
+  private refreshRank(market: DiscoverMarket, category: RankCategory, key: string, need: number, open: boolean): Promise<void> {
+    const ik = `rank:${key}`;
+    const running = this.inflight.get(ik) as Promise<void> | undefined;
+    if (running) return running;
+    const t = this.now.getTime();
+    const p = (async () => {
+      try {
+        const fresh = await this.fillRank(market, category, { at: t, checkedAt: t, items: [], next: 0, hasNext: true, source: "", tradedAt: null }, need);
+        this.failures.delete(ik);
+        if (fresh.items.length && !fresh.preopen) {
+          this.ranks.set(key, fresh);
+          // 값이 있을 때 저장본을 남긴다 (재시작 뒤·출처 초기화 때 직전 목록을 보여 주려고)
+          // 시각 필드는 빼고 남긴다 (같은 목록이면 같은 지문 → 다시 쓰지 않게. 저장 시각이 곧 값의 시각)
+          void this.saveSnap(`rank:${key}`, { items: fresh.items.slice(0, SNAP_RANK_ITEMS), source: fresh.source, tradedAt: fresh.tradedAt }, !open);
+          return;
+        }
+        // 출처가 비었다: 가진 직전 목록을 그대로 두고(더 이어 받지 않음) 다음 확인은 TTL 뒤. 없으면 저장본
+        const cur = this.keptRank(key);
+        if (cur) {
+          this.ranks.set(key, { ...cur, checkedAt: t, stale: !cur.fromSnapshot, next: MAX_SOURCE_PAGES, hasNext: false });
+          return;
+        }
+        this.ranks.set(key, (await this.rankSnapshot(key, t)) ?? { ...fresh, items: [], hasNext: false });
+      } catch (e) {
+        this.failures.set(ik, { at: this.now.getTime(), error: e });
+        const cur = this.keptRank(key);
+        if (cur) {
+          this.ranks.set(key, { ...cur, checkedAt: this.now.getTime() });
+          return;
+        }
+        const snap = await this.rankSnapshot(key, t);
+        if (!snap) throw e;
+        this.ranks.set(key, snap);
+      }
+    })().finally(() => this.inflight.delete(ik));
+    p.catch(() => undefined); // 뒤에서 끝난 실패가 처리되지 않은 거부로 남지 않게
+    this.inflight.set(ik, p);
+    return p;
+  }
+
+  /** 메모리에 가진 직전 목록 (값이 있고 5일 이내일 때만) */
+  private keptRank(key: string): RankState | null {
+    const cur = this.ranks.get(key);
+    return cur?.items.length && this.now.getTime() - cur.at < SNAP_MAX_AGE_MS ? cur : null;
+  }
+
+  /** 저장본 목록. 더 이어 받지 않고(지금 출처는 비어 있으므로), 기준 시각은 저장한 시각 */
+  private async rankSnapshot(key: string, t: number): Promise<RankState | null> {
+    const snap = await this.loadSnap<Pick<RankState, "items" | "source" | "tradedAt">>(`rank:${key}`);
+    if (!snap?.value.items?.length) return null;
+    const { items, source, tradedAt } = snap.value;
+    return { items, source, tradedAt: tradedAt ?? null, at: snap.savedAt, checkedAt: t, next: MAX_SOURCE_PAGES, hasNext: false, fromSnapshot: true };
   }
 
   /** 원본을 need 개(걸러낸 뒤)가 찰 때까지 이어 받는다. 한 번에 3쪽씩 병렬 */
@@ -330,7 +448,11 @@ export class DiscoverService {
       const batch = [next, next + 1, next + 2].filter((i) => i < MAX_SOURCE_PAGES);
       const pages = await Promise.all(batch.map((i) => src.source(category, i)));
       for (const p of pages) {
-        if (p.preopen) preopen = true;
+        if (p.preopen) {
+          // 초기화된 쪽의 줄(0%)은 넣지 않는다 — 직전 목록 뒤에 오늘 0% 줄이 섞이지 않게
+          preopen = true;
+          continue;
+        }
         if (p.tradedAt && (!tradedAt || Date.parse(p.tradedAt) > Date.parse(tradedAt))) tradedAt = p.tradedAt;
         for (const it of p.items) {
           if (seen.has(it.code)) continue;
@@ -344,7 +466,10 @@ export class DiscoverService {
       next += batch.length;
       hasNext = pages.at(-1)?.hasNext ?? false;
       if (pages.some((p) => !p.hasNext)) hasNext = false;
-      if (preopen) break; // 장 시작 전 초기화 — 더 받아도 쓸 값이 없다
+      if (preopen) {
+        hasNext = false; // 장 시작 전 초기화 — 더 받아도 쓸 값이 없다
+        break;
+      }
     }
     // 원본 쪽 상한에 닿으면 끝 (빈 "더 보기"가 이어지지 않게)
     if (next >= MAX_SOURCE_PAGES) hasNext = false;
@@ -357,7 +482,7 @@ export class DiscoverService {
       .map((it, i) => ({ it, i }))
       .sort((a, b) => dir * ((key(a.it) ?? -Infinity) - (key(b.it) ?? -Infinity)) || a.i - b.i)
       .map((x) => x.it);
-    return { at: start.at, items: [...start.items, ...added], next, hasNext, source: src.name, tradedAt, preopen };
+    return { ...start, items: [...start.items, ...added], next, hasNext, source: src.name, tradedAt, preopen };
   }
 
   /** 오늘 상장한 한국 종목 (실패하면 빈 집합 — 조정 없이 네이버 값 그대로) */
@@ -390,55 +515,57 @@ export class DiscoverService {
   }
 
   async themes(market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod): Promise<ThemeList> {
-    const open = await this.isOpen(market);
+    const ss = await this.session(market);
     if (market === "US" && kind === "theme" && this.deps.usThemes) {
       try {
-        return await this.usThemeList(open, period);
+        return await this.usThemeList(ss, period);
       } catch (e) {
         // 토스 테마를 못 받거나 처음 만드는 중이면 네이버 산업 분류로 대신 (빈 화면·긴 기다림보다 낫다)
-        const alt = await this.naverThemes("US", "sector", period, open);
+        const alt = await this.naverThemes("US", "sector", period, ss);
         const why =
           e instanceof UsThemesBuildingError
             ? "미국 테마를 처음 준비하는 중이라(약 1분)"
             : e instanceof PreopenError
-              ? "미국 장 시작 전이라 직전 정규장 테마 값이 아직 없어"
+              ? "출처가 잠시 미국 시세를 비운 시간이라"
               : "미국 테마를 불러오지 못해";
         return { ...alt, note: `${why} 산업 분류로 대신 보여 줍니다` };
       }
     }
-    return this.naverThemes(market, market === "US" ? "sector" : kind, period, open);
+    return this.naverThemes(market, market === "US" ? "sector" : kind, period, ss);
   }
 
-  private async naverThemes(market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod, open: boolean): Promise<ThemeList> {
+  private async naverThemes(market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod, ss: Session): Promise<ThemeList> {
     const snapKey = `themes:${market}:${kind}:${period}`;
-    const { value, at } = await this.cached(`themes:${market}:${kind}:${period}`, this.ttl(open, period !== "day"), async () => {
+    const { value, at } = await this.cached(snapKey, this.ttl(ss.open, period !== "day"), async (): Promise<ThemeListValue> => {
       const list = await this.deps.naver.sectors(market, kind, period);
-      // 장 시작 전 초기화(모든 등락률 0)면 직전 정규장 저장본을 쓴다
-      if (list.length > 5 && list.every((x) => x.changeRate === 0)) {
+      // 장 시작 전 초기화(거의 모든 등락률 0)면 직전 저장본을 쓴다
+      if (list.length > 5 && isMostlyZero(list)) {
         const snap = await this.loadSnap<ThemeSummary[]>(snapKey);
-        if (snap) return snap.value;
-        return list;
+        if (snap) return { themes: snap.value, snapAt: snap.savedAt, zero: false };
+        return { themes: list, snapAt: null, zero: true };
       }
       // 오늘 등락률만 조정한다 (주·월은 상장 첫날 값이 섞여도 기간 수익률 계산 기준이 달라 네이버 값 그대로)
-      const out = market === "KR" && period === "day" ? await this.adjustForNewListings(kind, list, await this.newlyListed(open)) : list;
-      void this.saveSnap(snapKey, out, !open);
-      return out;
+      const out = market === "KR" && period === "day" ? await this.adjustForNewListings(kind, list, await this.newlyListed(ss.open)) : list;
+      void this.saveSnap(snapKey, out, !ss.open);
+      return { themes: out, snapAt: null, zero: false };
     });
+    const dataAt = value.snapAt ?? at;
     return {
       market,
       kind,
       period,
-      themes: value,
-      marketOpen: open,
-      asOf: market === "KR" && !open ? ((await this.krClosedAsOf()) ?? seoulIso(new Date(at))) : seoulIso(new Date(at)),
+      themes: value.themes,
+      marketOpen: ss.open,
+      session: ss.session,
+      asOf: market === "KR" ? this.krAsOf(ss, dataAt) : this.usAsOf(ss, dataAt),
       source: "네이버 증권",
       basis: naverBasis(market, kind),
-      note: null,
+      note: value.zero ? "출처가 잠시 등락률을 0으로 비웠습니다 (곧 다시 채워집니다)" : value.snapAt !== null ? "출처가 잠시 값을 비워 저장해 둔 직전 값을 보여 줍니다" : null,
     };
   }
 
   /** 미국 테마북 구성 종목 전체의 정규장 시세 (한 번에, 캐시) */
-  private async usThemeQuotes(book: UsThemeBookData, open: boolean) {
+  private async usThemeQuotes(book: UsThemeBookData, open: boolean): Promise<{ value: Map<string, UsQuote>; at: number }> {
     const codes = [...new Set(book.themes.flatMap((t) => t.members.map((m) => m.reuters)))];
     const key = `usq:${book.builtAt}`;
     // 테마북이 새로 만들어지면 옛 시세 묶음은 버린다 (하루에 하나씩 쌓이지 않게)
@@ -446,7 +573,7 @@ export class DiscoverService {
     return this.cached(key, this.ttl(open), async () => {
       const q = await this.deps.naver.usQuotes(codes);
       if (isPreopenQuotes(q)) {
-        // 뉴욕 새벽~정규장 전: 네이버가 등락률·거래량을 0 으로 초기화한다 → 직전 정규장 저장본
+        // 뉴욕 03:40~04:00(한국 16:40~17:00): 네이버가 잠시 등락률·거래량을 0 으로 초기화한다 → 직전 정규장 저장본
         const snap = await this.loadSnap<[string, UsQuote][]>("usq");
         if (snap) return new Map(snap.value);
         throw new PreopenError("미국 테마 시세");
@@ -456,8 +583,9 @@ export class DiscoverService {
     });
   }
 
-  private async usThemeList(open: boolean, period: ThemePeriod): Promise<ThemeList> {
+  private async usThemeList(ss: Session, period: ThemePeriod): Promise<ThemeList> {
     const usThemes = this.deps.usThemes!;
+    const open = ss.open;
     if (period === "day") {
       const book = await usThemes.get(this.deps.bookWaitMs ?? BOOK_WAIT_MS);
       const { value: quotes, at } = await this.usThemeQuotes(book, open);
@@ -473,6 +601,7 @@ export class DiscoverService {
         period,
         themes,
         marketOpen: open,
+        session: ss.session,
         asOf: seoulIso(new Date(tradedAt ?? at)),
         source: "토스증권 테마 분류 · 네이버 증권 시세",
         basis: "테마별 시가총액 상위 종목의 시가총액 가중 평균 (정규장)",
@@ -480,21 +609,23 @@ export class DiscoverService {
         updatedAt: seoulIso(new Date(book.builtAt)),
       };
     }
-    const snap = await this.usPeriodRates(open, period);
+    const snap = await this.usPeriodRates(ss, period);
     const word = period === "week" ? "1주" : "1개월";
-    const when = snap.inSession ? (open ? null : `직전 정규장 중 ${hm(snap.capturedAt)} 값`) : "토스 현재가 기준이라 주간·프리·애프터 가격이 섞일 수 있음";
+    const when = snap.inSession ? (open ? null : `직전 정규장 중 ${this.hm(snap.capturedAt)} 값`) : "토스 현재가라 주간·프리·애프터 가격이 섞일 수 있음";
     return {
       market: "US",
       kind: "theme",
       period,
       themes: snap.themes,
       marketOpen: open,
+      session: ss.session,
+      ...(snap.inSession ? {} : { live: true }),
       asOf: seoulIso(new Date(snap.capturedAt)),
       source: "토스증권",
       basis: `토스증권 테마 ${word} 등락률 (미국 종목, 시가총액 가중)`,
       note: [
         when,
-        `${word}은 테마 등락률만 제공 (상승·하락 종목 수 없음)`,
+        `${period === "week" ? "1주는" : "1개월은"} 테마 등락률만 제공 (상승·하락 종목 수 없음)`,
         snap.themes.length < snap.total ? `기간 등락률을 받은 테마만 (${snap.themes.length}/${snap.total}개)` : null,
       ]
         .filter(Boolean)
@@ -505,16 +636,16 @@ export class DiscoverService {
 
   /**
    * 미국 테마 1주·1개월 등락률. 토스 값은 그때의 현재가 기준이라 장 밖(한국 낮)에는 주간거래·프리·애프터 가격이 섞인다.
-   * 그래서 미국 정규장 중에 받은 값을 남겨 두고(meta), 장 밖에는 그 값을 쓴다. 남긴 값이 없을 때만 지금 값을 받아 그렇다고 밝힌다.
+   * 그래서 미국 정규장 중에 받은 값을 남겨 두고(meta, 매일 뉴욕 15:50 에도 받아 둔다), 장 밖에는 그 값을 쓴다.
+   * 남긴 값이 가장 최근 정규장 것이 아니면(며칠 지난 값) 쓰지 않고 지금 값을 받아 그렇다고 밝힌다.
    */
-  private async usPeriodRates(open: boolean, period: ThemePeriod): Promise<UsPeriodSnapshot> {
+  private async usPeriodRates(ss: Session, period: ThemePeriod): Promise<UsPeriodSnapshot> {
     const storeKey = `discover:us-tics-period:${period}`;
+    const open = ss.open;
     if (!open) {
       const kept = this.periodSnaps.get(period) ?? (await this.loadPeriodSnap(storeKey));
-      if (kept && this.now.getTime() - kept.capturedAt < 4 * 24 * 3_600_000) {
-        this.periodSnaps.set(period, kept);
-        return kept;
-      }
+      if (kept) this.periodSnaps.set(period, kept);
+      if (kept?.inSession && nyParts(new Date(kept.capturedAt)).date === lastUsRegularDay(this.now, ss.lastClose)) return kept;
     }
     const { value } = await this.cached(`usperiod:${period}:${open ? "open" : "closed"}`, open ? 15 * 60_000 : 60 * 60_000, () => this.computePeriodRates(open, period), FAIL_COOLDOWN_MS);
     if (value.inSession && this.periodSnaps.get(period)?.capturedAt !== value.capturedAt) {
@@ -532,6 +663,28 @@ export class DiscoverService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 미국 정규장 끝나기 직전(뉴욕 15:50) 1주·1개월 테마 등락률을 받아 남긴다 — 화면을 열지 않은 날에도
+   * 장 밖(한국 낮)에 그날 정규장 값을 보여 줄 수 있게. 정규장이 아니면(휴장일) 아무것도 하지 않는다.
+   */
+  async captureUsPeriods(): Promise<number> {
+    if (!this.deps.usThemes || !this.deps.tics) return 0;
+    const ss = await this.session("US");
+    if (ss.session !== "regular") return 0;
+    let saved = 0;
+    const errors: unknown[] = [];
+    for (const period of ["week", "month"] as const) {
+      this.cache.delete(`usperiod:${period}:open`);
+      try {
+        if ((await this.usPeriodRates(ss, period)).inSession) saved++;
+      } catch (e) {
+        errors.push(e);
+      }
+    }
+    if (errors.length) throw new Error(`미국 테마 기간 등락률 저장 실패 ${errors.length}건: ${String(errors[0])}`);
+    return saved;
   }
 
   private async computePeriodRates(open: boolean, period: ThemePeriod): Promise<UsPeriodSnapshot> {
@@ -590,34 +743,36 @@ export class DiscoverService {
   }
 
   async theme(market: DiscoverMarket, kind: ThemeKind, id: string): Promise<ThemeDetail | null> {
-    const open = await this.isOpen(market);
-    if (market === "US" && kind === "theme" && this.deps.usThemes) return this.usTheme(open, id);
+    const ss = await this.session(market);
+    const open = ss.open;
+    if (market === "US" && kind === "theme" && this.deps.usThemes) return this.usTheme(ss, id);
     const k: ThemeKind = market === "US" ? "sector" : kind;
     let got: { value: SectorDetail | null; at: number };
     try {
       got = await this.cached(`theme:${market}:${k}:${id}`, this.ttl(open), () => this.deps.naver.sectorDetail(market, k, id));
     } catch (e) {
-      // 네이버 미국 업종은 없는 코드에 404 대신 500 을 준다 → 받아 둔 업종 목록에 없으면 "없음"
-      if (market === "US" && this.knownSectorIds("US")?.has(id) === false) return null;
+      // 네이버 미국 업종은 없는 코드에 404 대신 500 을 준다 → 업종 목록(없으면 받아서)에 없으면 "없음"
+      if (market === "US" && (await this.sectorIds("US", ss))?.has(id) === false) return null;
       throw e;
     }
-    const { at } = got;
+    let dataAt = got.at;
     let value = got.value;
     if (!value) return null;
     let note: string | null = null;
-    if (market === "US" && value.items.length && value.items.filter((i) => !i.volume && i.changeRate === 0).length / value.items.length >= 0.8) {
-      // 장 시작 전 초기화: 종목 값이 모두 0 — 미국 테마 시세 저장본(약 2,500종목)으로 덮는다
+    if (market === "US" && !open && isMostlyZero(value.items, 0.8)) {
+      // 출처 초기화(뉴욕 03:40~04:00): 종목 값이 0 — 미국 테마 시세 저장본(약 2,500종목)으로 0 인 종목만 덮는다
       const snap = await this.loadSnap<[string, UsQuote][]>("usq");
       const byTicker = new Map((snap?.value ?? []).map(([, q]) => [q.code, q] as const));
       let hit = 0;
       const items = value.items.map((i) => {
         const q = byTicker.get(i.code);
-        if (!q) return i;
+        if (!q || i.changeRate !== 0 || i.volume) return i;
         hit++;
         return { ...i, price: q.price, change: q.change, changeRate: q.changeRate, volume: q.volume, tradingValue: q.tradingValue };
       });
       value = { ...value, items };
-      note = hit ? `장 시작 전이라 종목 값은 직전 정규장 저장본 (${hit}/${items.length}종목)` : "장 시작 전이라 종목별 등락률이 0으로 초기화돼 있습니다 (정규장이 열리면 갱신)";
+      if (hit && snap) dataAt = snap.savedAt;
+      note = hit ? `출처가 잠시 값을 비워 종목 값은 저장해 둔 직전 정규장 값 (${hit}/${items.length}종목)` : "출처가 잠시 종목별 등락률을 0으로 비웠습니다 (곧 다시 채워집니다)";
     }
     // 목록과 같은 조건으로만 조정한다: 상장 첫날 종목이 등락률 상위 3(네이버 대표 종목)에 들 때
     const fresh = market === "KR" ? await this.newlyListed(open) : new Set<string>();
@@ -631,7 +786,8 @@ export class DiscoverService {
       description: value.description,
       items: value.items,
       marketOpen: open,
-      asOf: market === "KR" && !open ? ((await this.krClosedAsOf()) ?? seoulIso(new Date(at))) : seoulIso(new Date(at)),
+      session: ss.session,
+      asOf: market === "KR" ? this.krAsOf(ss, dataAt) : this.usAsOf(ss, dataAt),
       fxRate: await this.fx(market),
       source: "네이버 증권",
       basis: naverBasis(market, k),
@@ -639,17 +795,22 @@ export class DiscoverService {
     };
   }
 
-  /** 받아 둔 업종 목록의 코드 (없으면 null) */
-  private knownSectorIds(market: DiscoverMarket): Set<string> | null {
+  /** 업종 목록의 코드. 받아 둔 것이 없으면(재시작 직후) 받아 본다. 못 받으면 null */
+  private async sectorIds(market: DiscoverMarket, ss: Session): Promise<Set<string> | null> {
     for (const period of ["day", "week", "month"] as const) {
-      const hit = this.cache.get(`themes:${market}:sector:${period}`) as Cached<ThemeSummary[]> | undefined;
-      if (hit) return new Set(hit.value.map((t) => t.id));
+      const hit = this.cache.get(`themes:${market}:sector:${period}`) as Cached<ThemeListValue> | undefined;
+      if (hit) return new Set(hit.value.themes.map((t) => t.id));
     }
-    return null;
+    try {
+      return new Set((await this.naverThemes(market, "sector", "day", ss)).themes.map((t) => t.id));
+    } catch {
+      return null;
+    }
   }
 
-  private async usTheme(open: boolean, id: string): Promise<ThemeDetail | null> {
+  private async usTheme(ss: Session, id: string): Promise<ThemeDetail | null> {
     const usThemes = this.deps.usThemes!;
+    const open = ss.open;
     const book = await usThemes.get(this.deps.bookWaitMs ?? BOOK_WAIT_MS);
     const t = book.themes.find((x) => x.id === id);
     if (!t) return null;
@@ -665,9 +826,10 @@ export class DiscoverService {
       market: "US",
       kind: "theme",
       theme: r.summary,
-      description: await usThemes.summary(id),
+      description: await within(usThemes.summary(id), SUMMARY_WAIT_MS, null),
       items: r.items,
       marketOpen: open,
+      session: ss.session,
       asOf: seoulIso(new Date(tradedAt ?? at)),
       fxRate: await this.fx("US"),
       source: "토스증권 테마 분류 · 네이버 증권 시세",
@@ -679,19 +841,65 @@ export class DiscoverService {
 }
 
 type UsPeriodSnapshot = { themes: ThemeSummary[]; total: number; builtAt: number; capturedAt: number; inSession: boolean };
+/** 테마 목록 캐시 값. snapAt = 출처 초기화로 저장본을 쓸 때 그 저장 시각, zero = 저장본도 없어 0% 목록 그대로 */
+type ThemeListValue = { themes: ThemeSummary[]; snapAt: number | null; zero: boolean };
 
 /** 네이버 테마·업종 등락률 산출 방식 (실측: 한국 테마 = 단순 평균, 업종 = 시가총액 가중) */
 function naverBasis(market: DiscoverMarket, kind: ThemeKind): string {
   if (market === "US") return "산업 분류(TRBC)별 구성 종목 시가총액 가중 평균";
-  return kind === "theme" ? "구성 종목 등락률 단순 평균(거래정지 제외, KRX 기준)" : "구성 종목 시가총액 가중 평균(KRX 기준)";
+  return kind === "theme" ? "구성 종목 등락률 단순 평균(거래정지 제외)" : "구성 종목 시가총액 가중 평균";
 }
 
-/** "HH:MM" (서울) — 날짜가 오늘이 아니면 "M/D HH:MM" */
-function hm(t: number): string {
-  const iso = seoulIso(new Date(t));
-  const today = seoulIso(new Date()).slice(0, 10);
-  const time = iso.slice(11, 16);
-  return iso.slice(0, 10) === today ? time : `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))} ${time}`;
+/** 문자열 지문 (FNV-1a 32비트 + 길이) — 저장본이 바뀌었는지만 본다 */
+function fingerprint(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return `${text.length}:${(h >>> 0).toString(16)}`;
+}
+
+/** 서울 시각의 하루 중 분 */
+function seoulMinutes(d: Date): number {
+  const iso = seoulIso(d);
+  return Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
+}
+
+/** 뉴욕 날짜(YYYY-MM-DD)와 하루 중 분 */
+function nyParts(d: Date): { date: string; minutes: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, minutes: Number(get("hour")) * 60 + Number(get("minute")) };
+}
+
+/** 뉴욕 날짜(YYYY-MM-DD)의 정규장 마감(16:00 ET) 시각 (서머타임 여부를 맞춰 본다) */
+function nyCloseOf(date: string): number {
+  for (const off of ["-04:00", "-05:00"]) {
+    const t = Date.parse(`${date}T16:00:00${off}`);
+    const p = nyParts(new Date(t));
+    if (p.date === date && p.minutes === 16 * 60) return t;
+  }
+  return Date.parse(`${date}T16:00:00-05:00`);
+}
+
+/** 날짜(YYYY-MM-DD) 직전 평일 */
+function prevWeekday(date: string): string {
+  let d = new Date(`${date}T12:00:00Z`);
+  do d = new Date(d.getTime() - 86_400_000);
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * 가장 최근 미국 정규장 날짜(뉴욕 YYYY-MM-DD). 달력이 준 마지막 세션 종료(lastClose)가 있으면 그 날(휴장일을 건너뛴 실제 값),
+ * 없으면(프리마켓 중 등) 오늘 09:30 이 지난 평일이면 오늘, 아니면 직전 평일 (휴장일은 모르는 근사)
+ */
+export function lastUsRegularDay(now: Date, lastClose: string | null): string {
+  if (lastClose && !Number.isNaN(Date.parse(lastClose))) {
+    const c = nyParts(new Date(lastClose));
+    return c.minutes >= 9 * 60 + 30 ? c.date : prevWeekday(c.date);
+  }
+  const n = nyParts(now);
+  const wd = new Date(`${n.date}T12:00:00Z`).getUTCDay();
+  return wd !== 0 && wd !== 6 && n.minutes >= 9 * 60 + 30 ? n.date : prevWeekday(n.date);
 }
 
 /** 서울 평일 09:00~15:30 (KRX 정규장, 휴장일은 달력이 거른다) */
@@ -703,17 +911,16 @@ export function isKrxRegularHours(d: Date): boolean {
   return m >= 9 * 60 && m < 15 * 60 + 30;
 }
 
-/** 직전 KRX 정규장 마감 시각 (서울 15:30). 오늘이 거래일이고 15:30 이 지났으면 오늘, 아니면 직전 평일 */
-export function lastKrxClose(now: Date, todayIsTradingDay: boolean): string {
+/**
+ * 직전 한국 거래 마감(서울 20:00, NXT 애프터마켓 끝) 근사 — 달력이 마지막 세션을 알려 주지 않을 때만 쓴다.
+ * 오늘이 평일이고 20:00 이 지났으면 오늘, 아니면 직전 평일 (휴장일은 모른다)
+ */
+export function lastKrClose(now: Date): string {
   const iso = seoulIso(now);
-  const m = Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
-  let day = new Date(`${iso.slice(0, 10)}T12:00:00+09:00`);
-  const wd = day.getUTCDay();
-  if (!(todayIsTradingDay && wd !== 0 && wd !== 6 && m >= 15 * 60 + 30)) {
-    do day = new Date(day.getTime() - 86_400_000);
-    while (day.getUTCDay() === 0 || day.getUTCDay() === 6);
-  }
-  return `${seoulIso(day).slice(0, 10)}T15:30:00+09:00`;
+  let day = iso.slice(0, 10);
+  const wd = new Date(`${day}T12:00:00Z`).getUTCDay();
+  if (!(wd !== 0 && wd !== 6 && seoulMinutes(now) >= 20 * 60)) day = prevWeekday(day);
+  return `${day}T20:00:00+09:00`;
 }
 
 /** 뉴욕 현지 평일 09:30~16:00 (휴장일은 달력이 거른다) */

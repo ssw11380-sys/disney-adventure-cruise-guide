@@ -272,7 +272,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   if (usThemes && opts.enableScheduler !== false) {
     usThemes.warm();
     const task = cron.schedule("0 21 * * *", () => void usThemes.refresh(), { timezone: opts.config.timezone, name: "us-themes-daily" });
-    app.addHook("onClose", async () => void task.stop());
+    // 1주·1개월 테마 등락률은 정규장 끝나기 직전 값을 남겨 둔다 (장 밖에는 토스 값에 주간·프리·애프터 가격이 섞이므로)
+    const periods = cron.schedule(
+      "50 15 * * 1-5",
+      () => void discoverService.captureUsPeriods().catch((e) => app.log.warn({ err: String(e) }, "미국 테마 기간 등락률 저장 실패")),
+      { timezone: "America/New_York", name: "us-theme-periods" },
+    );
+    app.addHook("onClose", async () => {
+      void task.stop();
+      void periods.stop();
+    });
   }
   await app.register(discoverRoutes, { prefix: "/api/discover", service: discoverService });
 

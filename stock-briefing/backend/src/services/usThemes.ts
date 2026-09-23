@@ -76,6 +76,8 @@ export class UsThemeBook {
   private readonly summaries = new Map<string, { at: number; summary: string | null }>();
   /** 마지막 실패 (백오프용) */
   private fail: { at: number; count: number; error: unknown } | null = null;
+  /** 너무 작다고 버린 직전 결과의 테마 수 — 다음에도 비슷한 크기면 토스 분류가 실제로 줄어든 것으로 보고 받아들인다 */
+  private shrunk: number | null = null;
 
   constructor(
     private readonly deps: {
@@ -172,11 +174,14 @@ export class UsThemeBook {
   }
 
   /**
-   * 새 테마북을 만든다. prev(지금 쓰는 것)가 있으면, 토스가 일부만 답해 크게 줄어든 결과로 덮어쓰지 않도록
+   * 새 테마북을 만든다. 쓸 수 있는 prev(7일 이내)가 있으면, 토스가 일부만 답해 크게 줄어든 결과로 덮어쓰지 않도록
    * 구성 종목 조회 실패가 10%를 넘거나 테마 수가 이전의 80% 미만이면 실패로 본다.
+   * prev 가 없거나 너무 오래됐으면 일부라도 받아들인다 (아무것도 없는 것보다 낫다).
+   * 80% 미만이 두 번 이어서 비슷한 크기로 나오면 실제로 줄어든 것으로 보고 받아들인다 (영영 옛것에 묶이지 않게).
    */
   async build(prev: UsThemeBookData | null = null): Promise<UsThemeBookData> {
     const { tics, naver } = this.deps;
+    const guard = prev && this.t - prev.builtAt < USABLE_MS ? prev : null;
     const pages = this.deps.pagesPerTheme ?? 3;
     const minStocks = this.deps.minStocks ?? 3;
     const conc = this.deps.concurrency ?? 4;
@@ -223,7 +228,7 @@ export class UsThemeBook {
         return null;
       }
     });
-    if (targets.length && pageFailures / targets.length > 0.1) throw new Error(`토스 테마 구성 종목 조회 실패가 많습니다 (${pageFailures}/${targets.length})`);
+    if (guard && targets.length && pageFailures / targets.length > 0.1) throw new Error(`토스 테마 구성 종목 조회 실패가 많습니다 (${pageFailures}/${targets.length})`);
     const themes = crawled.filter((x): x is NonNullable<typeof x> => x !== null);
     if (!themes.length) throw new Error("토스 미국 테마 구성 종목을 받지 못했습니다");
 
@@ -244,7 +249,13 @@ export class UsThemeBook {
       if (members.length >= minStocks) out.push({ id: t.node.id, name: t.node.name, root: t.node.root, depth: t.node.depth, total: t.total, members });
     }
     if (!out.length) throw new Error("미국 테마 구성 종목의 시세 코드를 찾지 못했습니다");
-    if (prev && out.length < prev.themes.length * 0.8) throw new Error(`새 테마북이 너무 작습니다 (${out.length} < 이전 ${prev.themes.length}의 80%)`);
+    if (guard && out.length < guard.themes.length * 0.8) {
+      const again = this.shrunk !== null && Math.abs(out.length - this.shrunk) <= Math.max(3, this.shrunk * 0.05);
+      this.shrunk = out.length;
+      if (!again) throw new Error(`새 테마북이 너무 작습니다 (${out.length} < 이전 ${guard.themes.length}의 80%)`);
+      this.deps.log?.warn?.({ themes: out.length, prev: guard.themes.length }, "미국 테마 수가 두 번 이어서 크게 줄어 받아들임");
+    }
+    this.shrunk = null;
     return { version: 1, builtAt: this.t, themes: out };
   }
 

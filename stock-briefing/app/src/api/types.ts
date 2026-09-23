@@ -329,14 +329,22 @@ export interface DiscoverStock {
   newlyListed?: boolean;
 }
 
+/**
+ * 발견 탭 값의 장 상태 (서버가 준다, 옛 서버는 없음)
+ *  - regular: 정규장 · extended: 한국 정규장 뒤 시간외(15:30~20:00, 값이 계속 바뀜)
+ *  - pre: 한국 정규장 전(08:00~09:00, 직전 거래일 값) · closed: 장 마감·휴장 (미국은 프리·애프터 포함)
+ */
+export type DiscoverSession = "regular" | "extended" | "pre" | "closed";
+
 export interface DiscoverRank {
   market: DiscoverMarket;
   category: RankCategory;
   items: DiscoverStock[];
   page: number;
   hasMore: boolean;
-  /** 장중이면 true (자동 갱신·"장 마감" 표시) */
+  /** 값이 바뀌는 시간이면 true (30초 자동 갱신) */
   marketOpen: boolean;
+  session?: DiscoverSession;
   asOf: string | null;
   /** 미국 종목 원화 환산용 */
   fxRate?: number | null;
@@ -365,6 +373,9 @@ export interface ThemeList {
   period: ThemePeriod;
   themes: ThemeSummary[];
   marketOpen: boolean;
+  session?: DiscoverSession;
+  /** 장 밖인데 정규장 값이 없어 지금 값(주간·프리·애프터 섞임)을 준 경우 */
+  live?: boolean;
   asOf: string | null;
   source: string;
   /** 테마 등락률 산출 방식 (출처 값 / 구성 종목 평균 등) */
@@ -383,6 +394,7 @@ export interface ThemeDetail {
   description?: string | null;
   items: DiscoverStock[];
   marketOpen: boolean;
+  session?: DiscoverSession;
   asOf: string | null;
   fxRate?: number | null;
   source: string;

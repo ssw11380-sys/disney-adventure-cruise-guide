@@ -48,7 +48,7 @@ describe("장 시작 전 초기화 — 직전 정규장 저장본", () => {
     const c = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
     const empty = await c.rank("US", "gainers", 1, 50);
     expect(empty.items).toEqual([]);
-    expect(empty.note).toContain("장 시작 전");
+    expect(empty.note).toContain("출처가 잠시 목록을 비웠습니다");
   });
 
   it("같은 서버에서는 초기화된 빈 목록이 와도 가진 직전 목록을 유지한다 (한국 장 시작 전 0% 목록 포함)", async () => {
@@ -115,6 +115,9 @@ describe("장 시작 전 초기화 — 직전 정규장 저장본", () => {
     const noSnap = new DiscoverService({ naver: new NaverDiscover(fetchFn), tics: new TossTics(fetchFn, 0), usThemes: new UsThemeBook({ tics: new TossTics(fetchFn, 0), naver: new NaverDiscover(fetchFn), now: () => now }), now: () => now });
     const alt = await noSnap.themes("US", "theme", "day");
     expect(alt.kind).toBe("sector");
-    expect(alt.note).toContain("장 시작 전");
+    expect(alt.note).toContain("출처가 잠시 미국 시세를 비운 시간");
+    // 초기화가 끝나면 바로(실패를 기억해 20초 막지 않고) 테마로 돌아온다
+    preopen = false;
+    expect((await noSnap.themes("US", "theme", "day")).kind).toBe("theme");
   });
 });
