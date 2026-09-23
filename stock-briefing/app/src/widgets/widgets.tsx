@@ -3,6 +3,9 @@ import { FlexWidget, ListWidget, TextWidget, type FlexWidgetStyle } from "react-
 import type { Currency, LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { formatPct, formatPrice, toDisplay } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
+import { fxOf, totals, widgetOrder } from "@/lib/portfolio";
+
+export { totals, type Totals } from "@/lib/portfolio";
 
 /**
  * 홈 화면 위젯 3종. react-native-android-widget 프리미티브만 쓴다(RN 컴포넌트 불가, 색은 hex/rgba 문자열).
@@ -29,47 +32,9 @@ const C = {
 
 const DEEP_LINK = "stockbriefing://";
 
-function fxOf(s: RegisteredWithQuote): number | null {
-  return s.quote?.fxRate ?? (s.quote?.priceKrw && s.quote.price ? s.quote.priceKrw / s.quote.price : null);
-}
-
 function money(n: number | null | undefined, currency: Currency | undefined, fx: number | null, showKrw: boolean, sign = false): string {
   const d = toDisplay(n, currency, fx, showKrw);
   return formatPrice(d.value, d.currency, { sign });
-}
-
-export interface Totals {
-  value: number;
-  day: number;
-  profit: number;
-  currency: Currency;
-  mixed: boolean; // 통화가 섞여 원화 환산이 안 된 경우
-}
-
-/**
- * 보유 종목 합계 (앱 잔고 화면과 같은 기준: 비용 차감 평가, 해외 원화 손익은 매수 당시 환율의 원화 매입금액).
- * 원화 종목만 있거나 달러 종목만 있고 원화 표시가 꺼져 있으면 그 통화로, 아니면 원화로 합친다.
- */
-export function totals(stocks: RegisteredWithQuote[], showKrw: boolean, afterCost = true): Totals | null {
-  const held = stocks.filter((s) => s.evaluation && s.quote);
-  if (held.length === 0) return null;
-  const currencies = new Set(held.map((s) => s.quote!.currency ?? "KRW"));
-  const native = currencies.size === 1 && (currencies.has("KRW") || !showKrw);
-  let value = 0, day = 0, profit = 0, mixed = false;
-  for (const s of held) {
-    const cur = s.quote!.currency ?? "KRW";
-    const fx = fxOf(s);
-    const v = evalView(s.evaluation, { afterCost, toKrw: !native, currency: cur, fx });
-    if (!v || (!native && cur === "USD" && !fx)) {
-      mixed = true;
-      continue;
-    }
-    value += v.marketValue;
-    profit += v.profit;
-    day += s.quote!.change * (s.quantity ?? 0) * (!native && cur === "USD" ? fx! : 1);
-  }
-  const currency: Currency = native ? ((currencies.values().next().value as Currency) ?? "KRW") : "KRW";
-  return { value, day, profit, currency, mixed };
 }
 
 function tone(n: number): `#${string}` {
@@ -102,17 +67,6 @@ function Header({ title, subtitle }: { title: string; subtitle?: string }) {
 function updatedLabel(at: number): string {
   const d = new Date(at);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")} 기준`;
-}
-
-/** 위젯 목록 순서: 보유(원화 환산 평가금액 큰 순) → 관심(이름 순) */
-function widgetOrder(stocks: RegisteredWithQuote[]): RegisteredWithQuote[] {
-  const krw = (s: RegisteredWithQuote) => {
-    const v = s.evaluation?.marketValue ?? 0;
-    return (s.quote?.currency ?? "KRW") === "USD" ? v * (fxOf(s) ?? 1) : v;
-  };
-  const held = stocks.filter((s) => s.evaluation).sort((a, b) => krw(b) - krw(a));
-  const watch = stocks.filter((s) => !s.evaluation).sort((a, b) => a.name.localeCompare(b.name, "ko"));
-  return [...held, ...watch];
 }
 
 export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error }: { stocks: RegisteredWithQuote[]; showKrw: boolean; afterCost?: boolean; fetchedAt: number; error: string | null; height?: number }) {

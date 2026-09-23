@@ -10,19 +10,10 @@ import { Button, ErrorView, Loading, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { useLiveStream } from "@/lib/liveStream";
 import { evalView } from "@/lib/liveTick";
+import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
 import { refreshWidgets } from "@/widgets/refresh";
-
-const fxOf = (s: RegisteredWithQuote): number | null => s.quote?.fxRate ?? (s.quote?.priceKrw && s.quote.price ? s.quote.priceKrw / s.quote.price : null);
-
-interface Totals {
-  value: number;
-  cost: number;
-  day: number;
-  count: number;
-}
-const zero = (): Totals => ({ value: 0, cost: 0, day: 0, count: 0 });
 
 /** 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표 */
 export default function StocksScreen() {
@@ -36,46 +27,7 @@ export default function StocksScreen() {
   const [sortOpen, setSortOpen] = useState(false);
 
   // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
-  const summary = useMemo(() => {
-    const list = data ?? [];
-    const held = list.filter((s) => s.evaluation && s.quote);
-    const byCur: Record<Currency, Totals> = { KRW: zero(), USD: zero() };
-    const usdInKrw = zero();
-    const krw = zero();
-    let convertible = true;
-    let estimated = false;
-    let currentBasis = 0;
-    for (const s of held) {
-      const cur = s.quote!.currency ?? "KRW";
-      const fx = fxOf(s);
-      const day = s.quote!.change * (s.quantity ?? 0);
-      const native = evalView(s.evaluation, { afterCost, toKrw: false, currency: cur, fx })!;
-      byCur[cur].value += native.marketValue;
-      byCur[cur].cost += native.costBasis;
-      byCur[cur].day += day;
-      byCur[cur].count += 1;
-      if (cur === "USD" && !fx) {
-        convertible = false;
-        continue;
-      }
-      const k = evalView(s.evaluation, { afterCost, toKrw: true, currency: cur, fx })!;
-      if (k.estimated) estimated = true;
-      if (k.krwBasis === "current") currentBasis += 1;
-      const dayKrw = cur === "USD" ? day * fx! : day;
-      krw.value += k.marketValue;
-      krw.cost += k.costBasis;
-      krw.day += dayKrw;
-      krw.count += 1;
-      if (cur === "USD") {
-        usdInKrw.value += k.marketValue;
-        usdInKrw.cost += k.costBasis;
-        usdInKrw.day += dayKrw;
-        usdInKrw.count += 1;
-      }
-    }
-    const fx = held.map(fxOf).find((x) => x) ?? null;
-    return { held: held.length, byCur, usdInKrw, krw: convertible && held.length ? krw : null, fx, estimated, currentBasis, watch: list.length - held.length };
-  }, [data, afterCost]);
+  const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
 
   const sections = useMemo(() => {
     const list = [...(data ?? [])];
