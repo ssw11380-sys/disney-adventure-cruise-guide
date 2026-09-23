@@ -231,6 +231,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       const status = err.kind === "config" ? 503 : 502;
       return reply.code(status).send({ error: `LLM_${err.kind.toUpperCase()}`, message: err.message });
     }
+    // 본문 크기 초과·JSON 형식 오류 등 Fastify 가 붙인 4xx 는 그대로 (본문 내용은 기록하지 않음)
+    const status = (err as { statusCode?: number }).statusCode;
+    if (typeof status === "number" && status >= 400 && status < 500) {
+      return reply.code(status).send({ error: (err as { code?: string }).code ?? "BAD_REQUEST", message: status === 413 ? "요청 본문이 너무 큽니다" : "요청 형식이 올바르지 않습니다" });
+    }
     app.log.error(err);
     return reply.code(500).send({ error: "INTERNAL", message: "서버 오류" });
   });
@@ -269,10 +274,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     lastBriefing: briefingService.lastRun,
     stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
-    appErrors: await appErrors
-      .summary(7)
-      .then((s) => ({ days: s.days, total: s.total, fatal: s.fatal }))
-      .catch(() => null),
+    appErrors: await appErrors.counts(7).catch(() => null),
     disclaimer: DISCLAIMER,
   });
 

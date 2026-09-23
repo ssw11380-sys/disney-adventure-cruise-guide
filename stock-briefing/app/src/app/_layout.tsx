@@ -91,3 +91,6 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+// 레이아웃 자체(탭 머리·공통 제공자)에서 난 렌더 오류도 앱을 끄지 않고 "다시 시도" 화면으로, 서버에 보고
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

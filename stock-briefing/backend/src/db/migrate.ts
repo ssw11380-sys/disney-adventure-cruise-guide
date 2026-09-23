@@ -153,7 +153,7 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
         .addColumn("update_id", "text")
         .addColumn("platform", "text")
         .execute();
-      await db.schema.createIndex("app_errors_at").ifNotExists().on("app_errors").column("at").execute();
+      await db.schema.createIndex("idx_app_errors_at").ifNotExists().on("app_errors").column("at").execute();
     },
   },
 ];

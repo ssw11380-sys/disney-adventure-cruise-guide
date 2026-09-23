@@ -22,9 +22,6 @@ export const appErrorInput = z.object({
 });
 export type AppErrorInput = z.infer<typeof appErrorInput>;
 
-/** 한 번에 여러 건 (앱이 켜질 때 못 보낸 것을 모아 보낸다) */
-export const appErrorBatch = z.object({ errors: z.array(appErrorInput).min(1).max(20) });
-
 const MAX_PER_MINUTE = 30;
 const MAX_ROWS = 5000;
 const MESSAGE_MAX = 500;
@@ -35,11 +32,25 @@ export function scrub(text: string, opts: { numbers: boolean }): string {
   let s = text
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [지움]")
     .replace(/([?&;#]|%3F|%26)(token|access_token|api_token|key)(=|%3D)[^&\s#;"']*/gi, "$1$2=[지움]")
+    // JSON·객체 모양: "token":"…", apiToken: '…', authorization: …
+    .replace(/(["']?(?:token|apiToken|api_token|access_token|authorization|password|secret|key)["']?\s*[:=]\s*)(?!\[지움\])("[^"]*"|'[^']*'|[^\s,}&]+)/gi, "$1\"[지움]\"")
     .replace(/\b(sk-ant-[A-Za-z0-9_-]+|ExponentPushToken\[[^\]]*\])/g, "[지움]")
     .replace(/\b[0-9a-f]{24,}\b/gi, "[지움]");
-  // 금액·수량으로 보이는 숫자(4자리 이상, 콤마·소수 포함)와 통화 표기
-  if (opts.numbers) s = s.replace(/(?:[$₩]\s?)?\d[\d,]{3,}(\.\d+)?(?:\s?(원|달러|USD|KRW))?/g, "#").replace(/[$₩]\s?\d+(\.\d+)?/g, "#");
+  // 금액·수량으로 보이는 숫자(4자리 이상 또는 천 단위 콤마, 소수 포함)와 통화 표기. 뒤따르는 구분 콤마는 남긴다
+  if (opts.numbers)
+    s = s
+      .replace(/(?:[$₩]\s?)?(?:\d{1,3}(?:,\d{3})+|\d{4,})(?:\.\d+)?(?:\s?(원|달러|USD|KRW))?/g, "#")
+      .replace(/[$₩]\s?\d+(\.\d+)?/g, "#");
   return s;
+}
+
+/** 스택: 첫 호출 위치 줄 앞(오류 메시지가 되풀이되는 부분)은 숫자까지 지우고, 호출 위치 줄은 줄·열 번호를 남긴다 */
+export function scrubStack(stack: string): string {
+  const lines = stack.split("\n");
+  const first = lines.findIndex((l) => /^\s*at\s|@/.test(l));
+  const head = first < 0 ? lines : lines.slice(0, first);
+  const frames = first < 0 ? [] : lines.slice(first);
+  return [...head.map((l) => scrub(l, { numbers: true })), ...frames.map((l) => scrub(l, { numbers: false }))].join("\n");
 }
 
 /** 같은 오류를 묶는 키: 종류 + 숫자를 지운 메시지 + 첫 스택 줄 */
@@ -85,7 +96,7 @@ export class AppErrorService {
       .values(
         take.map((e) => {
           const message = scrub(e.message, { numbers: true }).slice(0, MESSAGE_MAX) || "(메시지 없음)";
-          const stack = e.stack ? scrub(e.stack, { numbers: false }).slice(0, STACK_MAX) : null;
+          const stack = e.stack ? scrubStack(e.stack).slice(0, STACK_MAX) : null;
           return {
             at,
             occurred_at: e.occurredAt ?? null,
@@ -110,10 +121,28 @@ export class AppErrorService {
     if (cut) await this.db.deleteFrom("app_errors").where("id", "<=", cut.id).execute();
   }
 
-  /** 최근 N일 오류 수 (관리 API·설정 화면용) */
+  /** N일 창의 시작: 한국 날짜로 (N-1)일 전 00:00 → 오늘 포함 N일 */
+  private since(days: number): string {
+    return `${seoulDate(new Date(this.now().getTime() - (days - 1) * 86_400_000))}T00:00:00+09:00`;
+  }
+
+  /** /health 용 가벼운 수 (시험 보고 제외) */
+  async counts(days = 7): Promise<{ days: number; total: number; fatal: number }> {
+    const rows = await this.db
+      .selectFrom("app_errors")
+      .select(["kind", (eb) => eb.fn.countAll<number>().as("n")])
+      .where("at", ">=", this.since(days))
+      .where("kind", "!=", "test")
+      .groupBy("kind")
+      .execute();
+    const total = rows.reduce((a, r) => a + Number(r.n), 0);
+    const fatal = Number(rows.find((r) => r.kind === "fatal")?.n ?? 0);
+    return { days, total, fatal };
+  }
+
+  /** 최근 N일 오류 수 (관리 API·설정 화면용). 시험 보고는 byKind.test 와 recent 에만 보인다 */
   async summary(days = 7): Promise<AppErrorSummary> {
-    const sinceDate = new Date(this.now().getTime() - days * 86_400_000);
-    const since = seoulIso(sinceDate);
+    const since = this.since(days);
     const rows = await this.db
       .selectFrom("app_errors")
       .select(["at", "kind", "message", "screen", "fingerprint", "app_version", "update_id"])
@@ -124,9 +153,10 @@ export class AppErrorService {
     const byKind: Record<string, number> = {};
     const groups = new Map<string, AppErrorSummary["top"][number]>();
     for (const r of rows) {
+      byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
+      if (r.kind === "test") continue;
       const d = r.at.slice(0, 10);
       byDay.set(d, (byDay.get(d) ?? 0) + 1);
-      byKind[r.kind] = (byKind[r.kind] ?? 0) + 1;
       const g = groups.get(r.fingerprint);
       if (g) g.count += 1;
       else groups.set(r.fingerprint, { fingerprint: r.fingerprint, kind: r.kind, message: r.message, screen: r.screen, count: 1, lastAt: r.at, updateId: r.update_id });
@@ -136,7 +166,6 @@ export class AppErrorService {
       const date = seoulDate(new Date(this.now().getTime() - i * 86_400_000));
       dates.push({ date, count: byDay.get(date) ?? 0 });
     }
-    // 설정 화면의 "오류 수집 시험"으로 만든 건은 합계에서 뺀다 (byKind.test 로만 보인다)
     return {
       days,
       since,

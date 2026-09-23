@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReport, createLimiter, enqueue, scrubText, type ErrorReport } from "@/lib/errorScrub";
+import { buildReport, createLimiter, enqueue, scrubStack, scrubText, type ErrorReport } from "@/lib/errorScrub";
 
 const META = { screen: "/stocks/005930?token=abc", appVersion: "1.3.0", updateId: "u1", platform: "android" };
 const NOW = Date.parse("2026-09-24T10:00:00+09:00");
@@ -11,6 +11,20 @@ describe("오류 보고: 토큰·금액은 기기를 떠나기 전에 지운다"
   });
   it("메시지 속 금액·수량", () => {
     expect(scrubText("총 75,857,144원 · $52,669.59 · 수량 1234 · 5주", { numbers: true })).toBe("총 # · # · 수량 # · 5주");
+  });
+  it("스택 첫 줄(메시지 반복)의 금액은 지운다", () => {
+    const e = new Error("평가금액 75,857,144원 불일치");
+    const r = buildReport("js", e, META, NOW);
+    expect(r.stack).not.toContain("75,857,144");
+    expect(scrubStack("Error: 합계 1,234,567원\n    at f (b:12345:6)")).toBe("Error: 합계 #\n    at f (b:12345:6)");
+  });
+  it("JSON 모양 토큰·콤마 구분 유지", () => {
+    expect(scrubText('{"apiToken":"abc","avg":12345,"q":3}', { numbers: true })).toBe('{"apiToken":"[지움]","avg":#,"q":3}');
+  });
+  it("보고마다 서로 다른 id", () => {
+    const a = buildReport("js", "a", META, NOW);
+    const b = buildReport("js", "a", META, NOW);
+    expect(a.id).not.toBe(b.id);
   });
   it("스택의 줄·열 번호는 남긴다", () => expect(scrubText("at f (index.bundle:12345:67)", { numbers: false })).toBe("at f (index.bundle:12345:67)"));
   it("buildReport: Error·문자열·객체 모두 한 건으로", () => {

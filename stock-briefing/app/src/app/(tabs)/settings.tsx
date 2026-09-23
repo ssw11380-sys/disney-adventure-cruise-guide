@@ -123,9 +123,13 @@ export default function SettingsScreen() {
             compact
             style={{ marginTop: space.sm }}
             onPress={() =>
-              void reportError("test", new Error("오류 수집 시험 (설정 화면)"))
+              void reportError("test", new Error(`오류 수집 시험 (설정 화면) ${new Date().toISOString().slice(11, 19)}`))
                 .then(() => flushErrors())
-                .then(() => Alert.alert("보냈습니다", "서버의 앱 오류 기록에 '시험'으로 남습니다. 합계에는 들어가지 않습니다."))
+                .then((r) =>
+                  r === "sent" || r === "empty"
+                    ? Alert.alert("보냈습니다", "서버의 앱 오류 기록에 '시험'으로 남습니다. 합계에는 들어가지 않습니다.")
+                    : Alert.alert("보내지 못했습니다", r === "dropped" ? "서버가 보고 형식을 받지 않았습니다 (서버 버전 확인)." : "서버에 연결되지 않았습니다. 기기에 남겨 두고 다음 실행 때 다시 보냅니다."),
+                )
             }
           />
         ) : null}
