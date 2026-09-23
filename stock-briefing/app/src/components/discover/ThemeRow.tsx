@@ -11,14 +11,14 @@ export const THEME_ROW_H = 72;
  * 테마 한 줄: 순위 · 테마명 / 대표 종목 · 상승·보합·하락 비율 막대 | 테마 등락률 상자.
  * 막대는 구성 종목 중 오른 종목(빨강)·보합(회색)·내린 종목(파랑)의 비율이라, 등락률과 함께 테마 전체의 힘을 보여 준다.
  */
-export const ThemeRow = memo(function ThemeRow({ theme, rank, onPress }: { theme: ThemeSummary; rank: number; onPress: (t: ThemeSummary) => void }) {
+export const ThemeRow = memo(function ThemeRow({ theme, rank, kindWord = "테마", onPress }: { theme: ThemeSummary; rank: number; kindWord?: string; onPress: (t: ThemeSummary) => void }) {
   const t = useTheme();
   const total = theme.up + theme.flat + theme.down;
   return (
     <Pressable
       onPress={() => onPress(theme)}
       accessibilityRole="button"
-      accessibilityLabel={`${theme.name} 테마 ${formatPct(theme.changeRate)}, 상승 ${theme.up} 하락 ${theme.down}`}
+      accessibilityLabel={`${rank}위 ${theme.name} ${kindWord} ${formatPct(theme.changeRate)}${total > 0 ? `, 상승 ${theme.up} 하락 ${theme.down}` : ""}`}
       style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
     >
       <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>

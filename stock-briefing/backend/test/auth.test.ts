@@ -68,3 +68,20 @@ describe("needsSsl", () => {
     expect(needsSsl("postgres://u:p@postgres.railway.internal/x", "true")).toBe(true);
   });
 });
+
+describe("/health · 없는 주소 · 발견 탭 오류 형식", () => {
+  it("토큰이 없으면 /health 는 최소 정보만, 토큰이 있으면 상세", async () => {
+    const db = await createMigratedDb(":memory:");
+    const app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:", API_TOKEN: "secret-123" }), db, providers: fakeProviders(), logger: false, enableScheduler: false });
+    const pub = (await app.inject({ method: "GET", url: "/health" })).json();
+    expect(Object.keys(pub).sort()).toEqual(["authRequired", "disclaimer", "ok", "time"]);
+    const full = (await app.inject({ method: "GET", url: "/health", headers: { authorization: "Bearer secret-123" } })).json();
+    expect(full).toHaveProperty("sources");
+    expect(full).toHaveProperty("tossOpenApi");
+    const nf = await app.inject({ method: "GET", url: "/nope", headers: { authorization: "Bearer secret-123" } });
+    expect(nf.statusCode).toBe(404);
+    expect(nf.json()).toMatchObject({ error: "NOT_FOUND" });
+    await app.close();
+    await db.destroy();
+  });
+});

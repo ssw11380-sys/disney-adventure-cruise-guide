@@ -5,6 +5,7 @@ import type { DiscoverMarket, DiscoverStock, RankCategory } from "@/api/types";
 import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
 import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
+import { DISCLAIMER } from "@/components/Screen";
 import { ThemeBoard } from "@/components/discover/ThemeBoard";
 import { Chip, Empty, ErrorView, Segmented, TableHead } from "@/components/ui";
 import { useSettings } from "@/lib/settings";
@@ -104,15 +105,22 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
       ListHeaderComponent={head}
       ListEmptyComponent={<Empty title="표시할 종목이 없습니다" hint="장 시작 전이거나 데이터를 받지 못했습니다. 잠시 뒤 당겨서 새로고침 하세요." />}
       ListFooterComponent={
-        q.isFetchingNextPage ? (
-          <ActivityIndicator style={{ marginVertical: space.lg }} color={t.muted} />
-        ) : q.hasNextPage ? (
-          <Pressable onPress={() => void q.fetchNextPage()} style={[styles.more, { borderColor: t.line }]} accessibilityRole="button">
-            <Text style={{ color: t.muted, fontSize: font.small }}>더 보기</Text>
-          </Pressable>
-        ) : items.length ? (
-          <Text style={[styles.footer, { color: t.muted }]}>출처: {first?.source ?? "-"} · 투자 판단의 책임은 본인에게 있습니다</Text>
-        ) : null
+        <View>
+          {q.isFetchingNextPage ? (
+            <ActivityIndicator style={{ marginVertical: space.lg }} color={t.muted} />
+          ) : q.hasNextPage ? (
+            <Pressable onPress={() => void q.fetchNextPage()} style={[styles.more, { borderColor: t.line }]} accessibilityRole="button">
+              <Text style={{ color: t.muted, fontSize: font.small }}>더 보기</Text>
+            </Pressable>
+          ) : null}
+          {items.length ? (
+            <Text style={[styles.footer, { color: t.muted }]}>
+              출처: {first?.source ?? "-"}
+              {"\n"}
+              {DISCLAIMER}
+            </Text>
+          ) : null}
+        </View>
       }
       onEndReachedThreshold={0.4}
       onEndReached={() => {

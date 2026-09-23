@@ -1,10 +1,10 @@
-import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
 import { useLiveStream } from "@/lib/liveStream";
 import { useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
-import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, RankCategory, ThemeKind, ThemePeriod } from "./types";
+import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken } = useSettings();
@@ -98,18 +98,33 @@ function useDiscoverInterval(market: DiscoverMarket): number {
 const discoverEvery = (open: boolean | undefined, fallback: number) => (open === undefined ? fallback : open ? 30_000 : 5 * 60_000);
 
 /** 순위 목록 (거래대금·거래량·급상승·급하락). 50개씩, 끝까지 내리면 다음 쪽 */
+/** 자동 갱신은 앞쪽 몇 쪽을 볼 때만 — 깊이 내려 두면 갱신마다 받아 둔 쪽을 모두 다시 받게 되므로 멈춘다(당겨서 새로고침은 그대로) */
+const AUTO_REFRESH_MAX_PAGES = 3;
+type RankPageParam = { page: number; ver?: number };
+
 export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, size = 50) {
   const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl } = useSettings();
   const interval = useDiscoverInterval(market);
+  // 목록을 떠나면 첫 쪽만 남긴다 — 돌아왔을 때 깊이 내려 두었던 쪽을 모두 다시 받지 않게
+  useEffect(
+    () => () => {
+      qc.setQueryData<InfiniteData<DiscoverRank, RankPageParam>>([apiUrl, "discoverRank", market, category, size], (d) =>
+        d && d.pages.length > 1 ? { pages: d.pages.slice(0, 1), pageParams: d.pageParams.slice(0, 1) } : d,
+      );
+    },
+    [qc, apiUrl, market, category, size],
+  );
   return useInfiniteQuery({
     queryKey: useKey("discoverRank", market, category, size),
     queryFn: ({ pageParam }) => api.discoverRank(market, category, pageParam.page, size, pageParam.ver),
-    initialPageParam: { page: 1 } as { page: number; ver?: number },
+    initialPageParam: { page: 1 } as RankPageParam,
     // 서버 상한(20쪽)과 빈 쪽에서 멈춘다 (빈 "더 보기"가 끝없이 이어지지 않게).
     // 다음 쪽은 앞 쪽과 같은 목록 판(ver)에서 받는다 — 그 사이 서버 목록이 바뀌어도 줄이 빠지거나 겹치지 않게
     getNextPageParam: (last) => (last.hasMore && last.items.length > 0 && last.page < 20 ? { page: last.page + 1, ver: last.ver } : undefined),
     staleTime: Math.min(interval, 30_000),
-    refetchInterval: (q) => discoverEvery(q.state.data?.pages[0]?.marketOpen, interval),
+    refetchInterval: (q) => ((q.state.data?.pages.length ?? 0) > AUTO_REFRESH_MAX_PAGES ? false : discoverEvery(q.state.data?.pages[0]?.marketOpen, interval)),
     refetchIntervalInBackground: false,
   });
 }

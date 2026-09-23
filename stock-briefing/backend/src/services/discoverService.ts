@@ -146,8 +146,8 @@ export class DiscoverService {
   private readonly cache = new Map<string, Cached<unknown>>();
   /** 순위는 쪽을 이어 받으므로 (시장, 분류)별로 누적 상태를 둔다 */
   private readonly ranks = new Map<string, RankState>();
-  /** 바로 전 목록 — 첫 쪽을 옛 목록으로 받은 앱이 뒤 쪽도 같은 목록(ver)에서 이어 받게 */
-  private readonly prevRanks = new Map<string, RankState>();
+  /** 지난 목록들(최근 5판) — 첫 쪽을 옛 목록으로 받은 앱이 뒤 쪽도 같은 목록(ver)에서 이어 받게 */
+  private readonly prevRanks = new Map<string, RankState[]>();
   /** 네이버 거래소 장 상태 (다음 세션 경계 또는 5분까지 쓴다) */
   private exStatus: { until: number; value: Partial<Record<DiscoverMarket, ExchangeStatus>>; fetchedAt: Partial<Record<DiscoverMarket, number>> } | null = null;
   private exInflight: Promise<Partial<Record<DiscoverMarket, ExchangeStatus>> | null> | null = null;
@@ -217,6 +217,12 @@ export class DiscoverService {
     }
     if (cur) return market === "KR" ? this.krSession(cur, t) : this.usSession(cur.session, t, calendar);
     const st: MarketState | null = await calendar();
+    // 장 상태를 못 받았어도, 기억한 한국 마감과 그때 알려 준 다음 개장 사이면 마감이다 (연휴 중 두 출처가 모두 멈춘 경우)
+    if (market === "KR" && !st?.source?.startsWith("toss")) {
+      await this.loadKrTrade();
+      const m = this.krTrade;
+      if (m?.exact && m.nextOpen && Date.parse(m.close) <= t && t < Date.parse(m.nextOpen)) return { session: "closed", open: false, lastClose: m.close };
+    }
     if (!st && !this.deps.calendar) return { session: "closed", open: false, lastClose: null };
     const cal = st ?? fallbackState(market, now);
     if (market === "US") {
@@ -226,12 +232,12 @@ export class DiscoverService {
     // 토스 달력이 실제로 준 값만 기억한다 (요일 추정은 휴장일을 모른다)
     const real = cal.source === "toss";
     if (!cal.isOpen) {
-      if (real && cal.lastClose) void this.noteKrTrade({ day: seoulIso(new Date(cal.lastClose)).slice(0, 10), close: cal.lastClose, exact: true, nextOpen: cal.opensAt ?? null });
+      if (real && cal.lastClose) this.noteKrTradeSoon({ day: seoulIso(new Date(cal.lastClose)).slice(0, 10), close: cal.lastClose, exact: true, nextOpen: cal.opensAt ?? null });
       return { session: "closed", open: false, lastClose: cal.lastClose ?? null };
     }
     const m = seoulMinutes(now);
     const session: DiscoverSession = m < 9 * 60 ? "pre" : isKrxRegularHours(now) ? "regular" : "extended";
-    if (real && session !== "pre") void this.noteKrTrade({ day: seoulIso(now).slice(0, 10), close: null, exact: false, nextOpen: null });
+    if (real && session !== "pre") this.noteKrTradeSoon({ day: seoulIso(now).slice(0, 10), close: null, exact: false, nextOpen: null });
     return { session, open: true, lastClose: session === "pre" ? await this.recallKrClose(t, null) : null };
   }
 
@@ -266,15 +272,17 @@ export class DiscoverService {
     if (kr && k?.tradeBaseAt) {
       const gap = k.kind === "closed" && kr.next?.kind === "after" && kr.next.tradeBaseAt === k.tradeBaseAt;
       if (k.kind === "regular" || k.kind === "after" || gap) {
-        void this.noteKrTrade({ day: k.tradeBaseAt, close: k.kind === "after" ? k.closeAt : kr.next?.kind === "after" ? kr.next.closeAt : null, exact: false, nextOpen: null });
+        this.noteKrTradeSoon({ day: k.tradeBaseAt, close: k.kind === "after" ? k.closeAt : kr.next?.kind === "after" ? kr.next.closeAt : null, exact: false, nextOpen: null });
       } else if (k.kind === "closed" && k.openAt && Date.parse(k.openAt) <= at) {
-        void this.noteKrTrade({ day: k.tradeBaseAt, close: k.openAt, exact: true, nextOpen: kr.next?.kind === "preopen" || kr.next?.kind === "pre" || kr.next?.kind === "regular" ? kr.next.openAt : null });
+        this.noteKrTradeSoon({ day: k.tradeBaseAt, close: k.openAt, exact: true, nextOpen: kr.next?.kind === "preopen" || kr.next?.kind === "pre" || kr.next?.kind === "regular" ? kr.next.openAt : null });
       }
     }
     const us = value.US;
     const u = us ? currentSession(us, at, at) : null;
-    if (u?.kind === "regular" && u.closeAt) void this.noteUsClose(u.closeAt);
-    if (u?.kind === "after" && u.openAt) void this.noteUsClose(u.openAt);
+    if (u?.kind === "regular" && u.closeAt) this.noteUsCloseSoon(u.closeAt);
+    if (u?.kind === "after" && u.openAt) this.noteUsCloseSoon(u.openAt);
+    // 마감(20:00 ET~프리마켓 전) 세션의 거래일 = 마지막 정규장 날 → 그날 16:00 (조기 폐장 13:00 은 이미 기억한 값이 더 늦지 않으므로 그대로 둔다)
+    if (u?.kind === "closed" && u.tradeBaseAt && /^\d{4}-\d{2}-\d{2}$/.test(u.tradeBaseAt)) this.noteUsCloseSoon(new Date(nyCloseOf(u.tradeBaseAt)).toISOString(), true);
   }
 
   private async usSession(cur: ExchangeSession, t: number, calendar: () => Promise<MarketState | null>): Promise<Session> {
@@ -288,9 +296,10 @@ export class DiscoverService {
       const lastClose = mem && nyParts(new Date(mem)).date === cur.tradeBaseAt ? mem : new Date(nyCloseOf(cur.tradeBaseAt)).toISOString();
       return { session: "closed", open: false, lastClose };
     }
-    // 프리마켓(04:00~09:30 ET): 기억이 가장 최근 평일 것이면 그대로, 아니면 토스 달력 (휴장일 확인)
+    // 프리마켓(04:00~09:30 ET): 기억이 가장 최근 평일 것이면 그대로, 아니면 토스 달력 (휴장일 확인).
+    // 달력도 답이 없으면 기억(밤사이 마감 세션에서 배운 마지막 거래일)을 쓴다
     const cal = this.recentUsClose(t) ? null : await calendar();
-    return { session: "closed", open: false, lastClose: this.latestUsClose(t, cal?.lastClose ?? null) };
+    return { session: "closed", open: false, lastClose: this.latestUsClose(t, cal?.lastClose ?? null) ?? mem };
   }
 
   /** 기억한 미국 정규장 마감이 가장 최근 평일의 것이면 그 값 */
@@ -310,12 +319,17 @@ export class DiscoverService {
     return nyParts(new Date(calendarClose)).date > nyParts(new Date(mem)).date ? calendarClose : mem;
   }
 
-  /** 미국 정규장 마감을 기억한다 (더 늦은 값으로만, meta 표에도 — 재시작해도 조기 폐장 13:00 을 잃지 않게) */
-  private async noteUsClose(iso: string): Promise<void> {
+  /**
+   * 미국 정규장 마감을 기억한다 (더 늦은 값으로만, meta 표에도 — 재시작해도 조기 폐장 13:00 을 잃지 않게).
+   * estimate = 거래일만 알고 16:00 으로 추정한 값: 같은 날 이미 아는 마감(조기 폐장 13:00)은 덮지 않는다
+   */
+  private async noteUsClose(iso: string, estimate = false): Promise<void> {
     const t = Date.parse(iso);
     if (Number.isNaN(t)) return;
     await this.loadUsClose();
-    if (this.usRegularClose && t <= Date.parse(this.usRegularClose)) return;
+    const cur = this.usRegularClose;
+    if (cur && t <= Date.parse(cur)) return;
+    if (cur && estimate && nyParts(new Date(cur)).date === nyParts(new Date(t)).date) return;
     this.usRegularClose = new Date(t).toISOString();
     await this.deps.store?.set("discover:us-regular-close", this.usRegularClose).catch(() => undefined);
   }
@@ -370,6 +384,15 @@ export class DiscoverService {
     return this.exInflight;
   }
 
+  /** 기억 갱신은 부수 효과 — 실패해도 요청·프로세스에 번지지 않게 */
+  private noteKrTradeSoon(v: { day: string; close: string | null; exact: boolean; nextOpen: string | null }): void {
+    this.noteKrTrade(v).catch(() => undefined);
+  }
+
+  private noteUsCloseSoon(iso: string, estimate = false): void {
+    this.noteUsClose(iso, estimate).catch(() => undefined);
+  }
+
   /** 저장해 둔 한국 거래일 기억을 한 번만 읽는다 (동시 요청이 모두 같은 읽기를 기다린다) */
   private loadKrTrade(): Promise<void> {
     this.krTradeLoad ??= (async () => {
@@ -391,7 +414,9 @@ export class DiscoverService {
   private async noteKrTrade(v: { day: string; close: string | null; exact: boolean; nextOpen: string | null }): Promise<void> {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(v.day)) return;
     await this.loadKrTrade();
-    const close = v.close && !Number.isNaN(Date.parse(v.close)) ? new Date(v.close).toISOString() : new Date(`${v.day}T20:00:00+09:00`).toISOString();
+    const est = Date.parse(`${v.day}T20:00:00+09:00`);
+    if (Number.isNaN(est)) return; // 형식만 맞고 없는 날짜(2026-13-01 등)
+    const close = v.close && !Number.isNaN(Date.parse(v.close)) ? new Date(v.close).toISOString() : new Date(est).toISOString();
     const nextOpen = v.nextOpen && !Number.isNaN(Date.parse(v.nextOpen)) ? new Date(v.nextOpen).toISOString() : null;
     const cur = this.krTrade;
     if (cur && v.day < cur.day) return; // 더 이른 거래일로 되돌리지 않는다
@@ -420,6 +445,12 @@ export class DiscoverService {
    * 지금 받은 값이 어느 시점 값인지: 장중·시간외는 지금, 장 시작 전·마감 뒤는 마지막 거래 마감(모르면 지금).
    * 이 시각을 목록에 붙여 두면, 나중에 출처가 비어 직전 목록을 보여 줄 때도 기준 시각이 맞다.
    */
+  /** 장이 닫혀 있으면 마지막 마감 시각 (그 전에 받은 캐시 값은 새로 받는다), 아니면 undefined */
+  private closedSince(ss: Session): number | undefined {
+    const c = !ss.open && ss.lastClose ? Date.parse(ss.lastClose) : NaN;
+    return Number.isNaN(c) ? undefined : c;
+  }
+
   private dataTime(ss: Session, t: number): number {
     if (ss.session === "regular" || ss.session === "extended") return t;
     const c = ss.lastClose ? Date.parse(ss.lastClose) : NaN;
@@ -469,10 +500,11 @@ export class DiscoverService {
    * 직전 값이 없는 실패는 잠시(기본 20초, 비싼 조회는 10분) 기억해 같은 오류를 바로 준다(상류 장애 때 요청마다 다시 부르지 않게).
    * 테마북을 만드는 중·출처 초기화처럼 곧 풀리는 실패는 기억하지 않는다.
    */
-  private async cached<T>(key: string, ttl: number, load: () => Promise<T>, failCooldownMs = FAIL_RETRY_MS): Promise<{ value: T; at: number }> {
+  private async cached<T>(key: string, ttl: number, load: () => Promise<T>, failCooldownMs = FAIL_RETRY_MS, staleBefore?: number): Promise<{ value: T; at: number }> {
     const hit = this.cache.get(key) as Cached<T> | undefined;
     const t = this.now.getTime();
-    if (hit && t - hit.at < ttl) return { value: hit.value, at: hit.at };
+    // 장이 닫힌 뒤(staleBefore = 마지막 마감)에는 마감 전에 받은 값을 TTL 과 상관없이 새로 받는다 (마감 직후 최종 값으로)
+    if (hit && t - hit.at < ttl && !(staleBefore !== undefined && hit.at < staleBefore)) return { value: hit.value, at: hit.at };
     const failed = this.failures.get(key);
     if (!hit && failed && t - failed.at < failCooldownMs) throw failed.error;
     let p = this.inflight.get(key) as Promise<T> | undefined;
@@ -482,6 +514,7 @@ export class DiscoverService {
         .then((value) => {
           this.cache.set(key, { at: started, value });
           this.failures.delete(key);
+          this.prune();
           return value;
         })
         .catch((e: unknown) => {
@@ -495,7 +528,7 @@ export class DiscoverService {
     }
     try {
       if (hit) {
-        const r = await Promise.race([p.then((v) => ({ v })), new Promise<null>((res) => setTimeout(() => res(null), this.deps.staleWaitMs ?? STALE_WAIT_MS))]);
+        const r = await waitAtMost(p.then((v) => ({ v })), this.deps.staleWaitMs ?? STALE_WAIT_MS);
         if (!r) return { value: hit.value, at: hit.at };
         return { value: r.v, at: (this.cache.get(key) as Cached<T>).at };
       }
@@ -508,6 +541,18 @@ export class DiscoverService {
   }
 
   /**
+   * 캐시·실패 기억이 커지지 않게 (테마 id 는 요청마다 달라질 수 있다) — 400개를 넘으면 1시간 넘게 지난 것부터 지운다
+   */
+  private prune(): void {
+    const t = this.now.getTime();
+    for (const m of [this.cache, this.failures] as Map<string, { at: number }>[]) {
+      if (m.size <= 400) continue;
+      for (const [k, v] of m) if (t - v.at > 3_600_000) m.delete(k);
+      if (m.size > 400) [...m.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, m.size - 400).forEach(([k]) => m.delete(k));
+    }
+  }
+
+  /**
    * 직전 값 저장본 쓰기. savedAt 은 그 값을 처음 받은 시각(= 값의 시각)이다.
    * meta 표에는 값이 바뀌었을 때만, 10분에 한 번(장 마감 뒤 첫 값은 force 로 바로) 쓴다 — 장 밖에 같은 값을 5분마다 다시 쓰지 않게.
    */
@@ -515,8 +560,11 @@ export class DiscoverService {
     const t = this.now.getTime();
     const sig = fingerprint(JSON.stringify(value));
     const prev = this.snaps.get(key);
-    const savedAt = prev && prev.sig === sig ? prev.savedAt : (dataAt ?? t);
-    const persist = prev?.persistedSig !== sig && (force || !prev || t - prev.persistedAt >= SNAP_PERSIST_EVERY_MS);
+    // 같은 값이면 처음 받은 시각을 두되, 마감 뒤(force)에 다시 확인했으면 값의 시각을 그 마감(dataAt)으로 올린다
+    // (시간외에 본 값과 마감 뒤 값이 같으면 "마감 기준"이 맞다)
+    const same = !!prev && prev.sig === sig;
+    const savedAt = prev && same ? (force && dataAt !== undefined ? Math.max(prev.savedAt, dataAt) : prev.savedAt) : (dataAt ?? t);
+    const persist = (prev?.persistedSig !== sig || (!!prev && same && savedAt !== prev.savedAt)) && (force || !prev || t - prev.persistedAt >= SNAP_PERSIST_EVERY_MS);
     this.snaps.set(key, { savedAt, sig, value, persistedAt: persist ? t : (prev?.persistedAt ?? 0), persistedSig: persist ? sig : (prev?.persistedSig ?? "") });
     if (persist) await this.deps.store?.set(`discover:snap:${key}`, JSON.stringify({ savedAt, value })).catch(() => undefined);
   }
@@ -546,18 +594,21 @@ export class DiscoverService {
     const t = this.now.getTime();
     const need = page * size + 1; // 다음 쪽이 있는지 알기 위해 하나 더
     // 뒤 쪽 요청이 첫 쪽의 목록 판(ver)을 가져오면 그 목록에서 이어 준다 (첫 쪽을 받은 뒤 새 목록이 들어왔어도)
-    const pinned = page > 1 && ver !== undefined ? [this.ranks.get(key), this.prevRanks.get(key)].find((x) => x?.ver === ver) : undefined;
+    const pinned = page > 1 && ver !== undefined ? [this.ranks.get(key), ...(this.prevRanks.get(key) ?? [])].find((x) => x?.ver === ver) : undefined;
     let st = pinned ?? this.ranks.get(key);
     // 새 목록은 첫 쪽 요청 때 받는다. 뒤 쪽은 첫 쪽과 같은 목록에서 이어 줘야 종목이 빠지거나 두 번 나오지 않는다
     // (앱은 새로고침 때 첫 쪽부터 차례로 다시 받는다). 뒤 쪽만 너무 오래(TTL 3배) 요청되면 그때는 새로 받는다
     const maxAge = this.ttl(open) * (page === 1 ? 1 : PAGE_TTL_FACTOR);
-    if (!pinned && (!st || t - st.checkedAt >= maxAge)) {
+    // 장이 닫힌 뒤에는 마감 전에 확인한 목록을 TTL 과 상관없이 새로 받는다 (마감 직후 최종 값·마감 기준 시각으로)
+    const closeAt = !open && ss.lastClose ? Date.parse(ss.lastClose) : NaN;
+    const beforeClose = !!st && !Number.isNaN(closeAt) && st.checkedAt < closeAt && t >= closeAt;
+    if (!pinned && (!st || t - st.checkedAt >= maxAge || beforeClose)) {
       const failed = this.failures.get(`rank:${key}`);
       if (!st && failed && t - failed.at < FAIL_RETRY_MS) throw failed.error;
       const p = this.refreshRank(market, category, key, need, ss);
       if (st) {
         // 직전 목록이 있으면 새 조회를 잠깐만 기다린다 (느린 출처가 화면을 붙잡지 않게, 새 목록은 뒤에서 채운다)
-        await Promise.race([p.catch(() => undefined), new Promise((res) => setTimeout(res, this.deps.staleWaitMs ?? STALE_WAIT_MS))]);
+        await waitAtMost(p.catch(() => undefined), this.deps.staleWaitMs ?? STALE_WAIT_MS);
       } else await p;
       st = this.ranks.get(key) ?? st;
     }
@@ -573,7 +624,11 @@ export class DiscoverService {
         try {
           const more = await this.fillRank(market, category, base, need);
           if (this.ranks.get(key) === base) this.ranks.set(key, more);
-          else if (this.prevRanks.get(key) === base) this.prevRanks.set(key, more);
+          else {
+            const prev = this.prevRanks.get(key);
+            const i = prev?.indexOf(base) ?? -1;
+            if (prev && i >= 0) prev[i] = more;
+          }
           st = more;
         } catch {
           /* 더 받기 실패: 가진 만큼 */
@@ -599,7 +654,7 @@ export class DiscoverService {
       source: s.source,
       note: [
         !s.items.length ? "출처가 잠시 목록을 비웠습니다 (곧 다시 채워집니다)" : s.stale ? "출처가 잠시 목록을 비워 직전 목록을 보여 줍니다" : s.fromSnapshot ? "저장해 둔 직전 목록입니다" : null,
-        market === "KR" ? (movers ? "ETF·ETN·스팩·정리매매 제외" : "ETF·ETN·스팩 제외") : "ETF·우선주·권리주 제외",
+        market === "KR" ? (movers ? "KRX 시세 · ETF·ETN·스팩·정리매매 제외" : "KRX 시세 · ETF·ETN·스팩 제외") : "정규장 시세 · ETF·우선주·채권·권리주 제외",
         movers ? `거래대금 ${market === "KR" ? "10억 원" : "100만 달러"} 이상` : null,
       ]
         .filter(Boolean)
@@ -623,7 +678,7 @@ export class DiscoverService {
         this.failures.delete(ik);
         if (fresh.items.length && !fresh.preopen) {
           const old = this.ranks.get(key);
-          if (old?.items.length) this.prevRanks.set(key, old);
+          if (old?.items.length) this.prevRanks.set(key, [old, ...(this.prevRanks.get(key) ?? []).filter((x) => x.ver !== old.ver)].slice(0, 5));
           this.ranks.set(key, fresh);
           // 값이 있을 때 저장본을 남긴다 (재시작 뒤·출처 초기화 때 직전 목록을 보여 주려고)
           // 시각 필드는 빼고 남긴다 (같은 목록이면 같은 지문 → 다시 쓰지 않게. 값의 시각은 저장본 시각으로)
@@ -688,7 +743,10 @@ export class DiscoverService {
     const movers = category === "gainers" || category === "losers";
     const minTv = movers ? MIN_TRADING_VALUE[market] : 0;
     while (items.length < need && hasNext && next < MAX_SOURCE_PAGES) {
-      const batch = [next, next + 1, next + 2].filter((i) => i < MAX_SOURCE_PAGES);
+      // 이어 받을 때는 바로 앞 쪽도 다시 받는다 — 살아 있는 출처 목록에서 그 사이 한 쪽 위로 올라온 종목이 쪽 경계에서 빠지지 않게
+      // (겹친 줄은 seen 이 거른다)
+      const fresh = [next, next + 1, next + 2].filter((i) => i < MAX_SOURCE_PAGES);
+      const batch = next > 0 ? [next - 1, ...fresh] : fresh;
       const pages = await Promise.all(batch.map((i) => src.source(category, i)));
       for (const p of pages) {
         if (p.preopen) {
@@ -706,7 +764,7 @@ export class DiscoverService {
           items.push(it);
         }
       }
-      next += batch.length;
+      next += fresh.length;
       hasNext = pages.at(-1)?.hasNext ?? false;
       if (pages.some((p) => !p.hasNext)) hasNext = false;
       if (preopen) {
@@ -792,7 +850,7 @@ export class DiscoverService {
       const out = market === "KR" && period === "day" ? await this.adjustForNewListings(kind, list, await this.newlyListed(ss.open)) : list;
       void this.saveSnap(snapKey, out, !ss.open, dataAt);
       return { themes: out, dataAt, fromSnap: false, zero: false };
-    });
+    }, FAIL_RETRY_MS, this.closedSince(ss));
     const dataAt = value.dataAt;
     return {
       market,
@@ -892,7 +950,7 @@ export class DiscoverService {
       if (kept) this.periodSnaps.set(period, kept);
       if (kept?.inSession && nyParts(new Date(kept.capturedAt)).date === lastUsRegularDay(this.now, ss.lastClose)) return kept;
     }
-    const { value } = await this.cached(`usperiod:${period}:${open ? "open" : "closed"}`, open ? 15 * 60_000 : 60 * 60_000, () => this.computePeriodRates(open, period), FAIL_COOLDOWN_MS);
+    const { value } = await this.cached(`usperiod:${period}:${open ? "open" : "closed"}`, open ? 15 * 60_000 : 10 * 60_000, () => this.computePeriodRates(open, period), FAIL_COOLDOWN_MS);
     if (value.inSession && this.periodSnaps.get(period)?.capturedAt !== value.capturedAt) {
       this.periodSnaps.set(period, value);
       await this.deps.store?.set(storeKey, JSON.stringify(value)).catch(() => undefined);
@@ -996,10 +1054,16 @@ export class DiscoverService {
     const k: ThemeKind = market === "US" ? "sector" : kind;
     let got: { value: { detail: SectorDetail | null; dataAt: number }; at: number };
     try {
-      got = await this.cached(`theme:${market}:${k}:${id}`, this.ttl(open), async () => {
-        const dataAt = this.dataTime(ss, this.now.getTime());
-        return { detail: await this.deps.naver.sectorDetail(market, k, id), dataAt };
-      });
+      got = await this.cached(
+        `theme:${market}:${k}:${id}`,
+        this.ttl(open),
+        async () => {
+          const dataAt = this.dataTime(ss, this.now.getTime());
+          return { detail: await this.deps.naver.sectorDetail(market, k, id), dataAt };
+        },
+        FAIL_RETRY_MS,
+        this.closedSince(ss),
+      );
     } catch (e) {
       // 네이버 미국 업종은 없는 코드에 404 대신 500 을 준다 → 업종 목록(없으면 받아서)에 없으면 "없음"
       if (market === "US" && (await this.sectorIds("US", ss))?.has(id) === false) return null;
@@ -1027,8 +1091,17 @@ export class DiscoverService {
     // 목록과 같은 조건으로만 조정한다: 상장 첫날 종목이 등락률 상위 3(네이버 대표 종목)에 들 때
     const fresh = market === "KR" ? await this.newlyListed(open) : new Set<string>();
     const top3 = [...value.items].sort((a, b) => b.changeRate - a.changeRate).slice(0, 3);
-    const adjust = top3.some((i) => fresh.has(i.code)) && value.items.length < SECTOR_MAX_ITEMS;
-    const theme = adjust ? recount(value.theme, value.items, fresh, k === "sector") : value.theme;
+    const truncated = value.items.length >= SECTOR_MAX_ITEMS;
+    const adjust = top3.some((i) => fresh.has(i.code)) && !truncated;
+    let theme = adjust ? recount(value.theme, value.items, fresh, k === "sector") : value.theme;
+    // 상승·보합·하락 수는 목록(출처)과 같게: 받아 둔 목록에 이 테마가 있으면 그 수, 구성 종목이 잘렸는데 목록도 없으면 세지 않는다
+    const listed = this.listedTheme(market, k, id);
+    if (!adjust && listed && listed.up + listed.flat + listed.down > 0) theme = { ...theme, up: listed.up, flat: listed.flat, down: listed.down };
+    else if (!adjust && truncated) theme = { ...theme, up: 0, flat: 0, down: 0 };
+    if (truncated) {
+      const total = listed ? listed.up + listed.flat + listed.down : 0;
+      note = [note, `등락률 상위 ${value.items.length}종목만 보여 줍니다${total > value.items.length ? ` (전체 ${total}종목)` : ""}`].filter(Boolean).join(" · ");
+    }
     return {
       market,
       kind: k,
@@ -1043,6 +1116,12 @@ export class DiscoverService {
       basis: naverBasis(market, k),
       note,
     };
+  }
+
+  /** 받아 둔 오늘 목록에서 이 테마·업종 (없으면 null) */
+  private listedTheme(market: DiscoverMarket, kind: ThemeKind, id: string): ThemeSummary | null {
+    const hit = this.cache.get(`themes:${market}:${kind}:day`) as Cached<ThemeListValue> | undefined;
+    return hit?.value.themes.find((t) => t.id === id) ?? null;
   }
 
   /** 업종 목록의 코드. 받아 둔 것이 없으면(재시작 직후) 받아 본다. 못 받으면 null */
@@ -1126,6 +1205,16 @@ export function currentSession(st: ExchangeStatus, t: number, fetchedAt?: number
   const nextOpen = st.next?.openAt ? Date.parse(st.next.openAt) : NaN;
   if (!Number.isNaN(nextOpen)) return t < nextOpen ? l : null;
   return st.isTradingDay === false ? l : null;
+}
+
+/** p 를 ms 까지만 기다린다 (넘으면 null). 타이머는 끝나면 지운다 */
+async function waitAtMost<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([p, new Promise<null>((res) => (timer = setTimeout(() => res(null), ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** 문자열 지문 (FNV-1a 32비트 + 길이) — 저장본이 바뀌었는지만 본다 */
@@ -1221,11 +1310,11 @@ export function recount(th: ThemeSummary, items: DiscoverStock[], fresh: Set<str
   if (weighted) {
     let w = 0;
     let wr = 0;
+    // 네이버 업종 등락률과 같은 현재 시가총액 가중 (실측: 77개 업종 중 74개가 소수 둘째 자리까지 일치)
     for (const i of live) {
       if (!i.marketCap || i.marketCap <= 0) continue;
-      const prev = i.marketCap / (1 + i.changeRate / 100);
-      w += prev;
-      wr += prev * i.changeRate;
+      w += i.marketCap;
+      wr += i.marketCap * i.changeRate;
     }
     if (w > 0) avg = wr / w;
   }

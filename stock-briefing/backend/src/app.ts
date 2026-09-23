@@ -244,7 +244,15 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     return reply.type("text/html; charset=utf-8").send(html);
   });
 
-  app.get("/health", async () => ({
+  // 토큰이 설정돼 있으면 상세(구독 종목·서버 IP·출처 구성 등)는 토큰을 보낸 요청에만 준다 — 앱은 늘 토큰을 보낸다
+  app.get("/health", async (req) => {
+    const token = opts.config.API_TOKEN;
+    const auth = req.headers.authorization;
+    const trusted = !token || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), token));
+    if (!trusted) return { ok: true, time: seoulIso(now()), authRequired: true, disclaimer: DISCLAIMER };
+    return healthDetail();
+  });
+  const healthDetail = async () => ({
     ok: true,
     time: seoulIso(now()),
     sources: describeProviders(opts.config),
@@ -256,7 +264,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
     disclaimer: DISCLAIMER,
-  }));
+  });
+
+  // 없는 경로도 앱 표준 오류 형식으로
+  app.setNotFoundHandler((req, reply) => reply.code(404).send({ error: "NOT_FOUND", message: `없는 주소입니다: ${req.method} ${req.url.split("?")[0]}` }));
 
   await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar });
   // 발견 탭: 순위·테마·업종 (네이버 공개 JSON). 미국 테마는 토스 테마 분류 + 네이버 정규장 시세. 미국 원화 환산은 토스 표시 환율
@@ -278,8 +289,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     usThemes.warm();
     const task = cron.schedule("0 21 * * *", () => void usThemes.refresh(), { timezone: opts.config.timezone, name: "us-themes-daily" });
     // 1주·1개월 테마 등락률은 정규장 끝나기 직전 값을 남겨 둔다 (장 밖에는 토스 값에 주간·프리·애프터 가격이 섞이므로)
+    // 12:50 에도 받는다 — 조기 폐장일(13:00 마감)에는 15:50 이 정규장이 아니어서 건너뛰므로 (보통 날은 15:50 값이 덮는다)
     const periods = cron.schedule(
-      "50 15 * * 1-5",
+      "50 12,15 * * 1-5",
       () => void discoverService.captureUsPeriods().catch((e) => app.log.warn({ err: String(e) }, "미국 테마 기간 등락률 저장 실패")),
       { timezone: "America/New_York", name: "us-theme-periods" },
     );

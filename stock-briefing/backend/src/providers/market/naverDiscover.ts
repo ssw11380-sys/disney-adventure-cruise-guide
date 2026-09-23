@@ -175,7 +175,7 @@ export function usRankStock(it: Json): DiscoverStock | null {
   const eng = String(it["stockNameEng"] ?? "");
   const sym = appTicker(String(it["symbolCode"] ?? ""));
   if (!sym) return null; // "AHT PRD", "RIV RT", "ASGI RTWI"
-  if (isUsNonCommon(eng, sym)) return null;
+  if (isUsNonCommon(eng, sym, typeof it["stockName"] === "string" ? it["stockName"] : "")) return null;
   const price = num(it["closePriceRaw"] ?? it["closePrice"]);
   if (price === null) return null;
   const ex = it["stockExchangeType"] as Json | undefined;
@@ -207,8 +207,11 @@ export function appTicker(raw: string): string | null {
  * 네이버는 MLP·로열티 트러스트 지분도 "… Units" 로 부른다("Energy Transfer Units", "Sabine Royalty Units").
  * 이들은 보통주처럼 거래되므로 남기고, 티커가 U 로 끝나는 유닛(스팩 유닛 "CAPNU")만 뺀다.
  */
-export function isUsNonCommon(eng: string, sym: string): boolean {
+export function isUsNonCommon(eng: string, sym: string, kor = ""): boolean {
   if (/\b(rights?|warrants?|contingent value)\b/i.test(eng)) return true;
+  // 우선주(나스닥식 5글자 티커 GOOGM·STRK 등도)와 거래소 상장 채권(베이비본드) — 한글명이 가장 확실하고, 영문명은 단어 경계로 ("Preferred Bank" 같은 회사명은 남긴다)
+  if (/우선주|채권/.test(kor)) return true;
+  if (/\b(pref|pfd|prf|preferred (stock|shares?|series)|preference shares?|depositary shares?|dep shs|senior notes?|subordinated (notes?|debentures?)|debentures?|notes due)\b/i.test(eng)) return true;
   if (/\bacquisition (corp|co|company|inc|holdings?)\b/i.test(eng)) return true;
   if (/\bunits?\s*$/i.test(eng) && sym.length >= 4 && sym.endsWith("U")) return true;
   return false;
@@ -409,9 +412,11 @@ export class NaverDiscover {
       if (!cursor) break;
     }
     if (!info) return null;
-    // 요약: 출처 등락률(없으면 구성 종목 단순 평균)과 상승·보합·하락 수(없으면 구성 종목으로 센다)
-    const avg = items.length ? items.reduce((s, i) => s + i.changeRate, 0) / items.length : 0;
-    const count = (f: (x: DiscoverStock) => boolean) => items.filter(f).length;
+    // 요약: 출처 등락률(없으면 구성 종목 단순 평균)과 상승·보합·하락 수(없으면 구성 종목으로 센다).
+    // 거래정지(거래량 0) 종목은 빼고 센다 — 목록(네이버)의 개수와 같은 기준
+    const live = items.filter((i) => (i.volume ?? 1) > 0);
+    const avg = live.length ? live.reduce((s, i) => s + i.changeRate, 0) / live.length : 0;
+    const count = (f: (x: DiscoverStock) => boolean) => live.filter(f).length;
     const theme: ThemeSummary = {
       id,
       name: String(info["sectorName"] ?? info["name"] ?? id),

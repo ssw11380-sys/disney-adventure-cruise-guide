@@ -54,7 +54,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
     expect(calls).toHaveLength(3); // 이미 가진 것으로 충분
     const p3 = await svc.rank("KR", "gainers", 3, 50);
     expect(p3.items).toHaveLength(50);
-    expect(calls).toHaveLength(6); // 부족한 만큼만 이어 받음
+    expect(calls).toHaveLength(7); // 부족한 만큼만 이어 받음 (바로 앞 쪽 하나를 겹쳐 다시 받아 쪽 경계에서 빠지는 종목이 없게)
     const p4 = await svc.rank("KR", "gainers", 4, 50);
     expect(p4.items).toHaveLength(50);
     expect(p4.hasMore).toBe(true); // 6쪽 × 35 = 210
@@ -226,7 +226,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
     expect(r.items[0]).toMatchObject({ name: "한글 JAGX", market: "NASDAQ", currency: "USD", price: 10.5, change: 1.25, changeRate: 1190.64, tradingValue: 6.6e8 });
     expect(r.items[2]!.name).toBe("-"); // 한글명이 없으면 영문명
     expect(r).toMatchObject({ fxRate: 1380, source: "네이버 증권", hasMore: false }); // 150개 = 2쪽을 다 받아도 3개뿐
-    expect(r.note).toContain("ETF·우선주·권리주 제외");
+    expect(r.note).toContain("ETF·우선주·채권·권리주 제외");
     expect(r.asOf).toBe("2026-09-23T05:00:00+09:00"); // 정규장 종료(16:00 ET) 시각
     expect(r.note).toContain("100만 달러");
     // 거래량 순위는 top 경로, 동전주도 남긴다

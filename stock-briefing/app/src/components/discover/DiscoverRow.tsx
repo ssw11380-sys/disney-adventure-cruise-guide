@@ -39,6 +39,8 @@ export const DiscoverRow = memo(function DiscoverRow({
   const t = useTheme();
   const c = changeColor(t, item.change);
   const usd = item.currency === "USD";
+  // 한국 종목이 거래량·등락 모두 0 이면 거래정지 (테마 평균에서도 빠진다)
+  const suspended = !usd && item.volume === 0 && item.changeRate === 0;
   const krw = usd && showKrw && !!fxRate;
   const tv = item.tradingValue;
   const main =
@@ -86,6 +88,7 @@ export const DiscoverRow = memo(function DiscoverRow({
             <Text style={[styles.mark, { color: mark === "보유" ? t.gold : t.accent, borderColor: mark === "보유" ? t.gold : t.accent }]}>{mark}</Text>
           ) : null}
           {item.newlyListed ? <Text style={[styles.mark, { color: t.muted, borderColor: t.lineStrong }]}>신규상장</Text> : null}
+          {suspended ? <Text style={[styles.mark, { color: t.muted, borderColor: t.lineStrong }]}>거래정지</Text> : null}
         </View>
       </View>
       <View style={[styles.num, { width: DISCOVER_COL.price }]}>
