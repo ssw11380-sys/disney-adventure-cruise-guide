@@ -3,9 +3,10 @@ import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useBriefing, useBriefings } from "@/api/hooks";
 import { StaleBanner } from "@/components/Freshness";
+import { CardsSkeleton } from "@/components/Skeleton";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
-import { Badge, Card, ChangeText, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
+import { Badge, Card, ChangeText, ErrorView, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL } from "@/lib/format";
 import { parseBriefingId, viewState } from "@/lib/freshness";
 import { font, space, useTheme } from "@/theme";
@@ -22,7 +23,7 @@ export default function BriefingDetailScreen() {
 
   if (numId === null) return <Screen><ErrorView error={new Error("브리핑 주소가 올바르지 않습니다")} retryLabel="브리핑 목록으로" onRetry={() => router.dismissTo("/briefings")} /></Screen>;
   const view = viewState(b);
-  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "loading") return <Screen><CardsSkeleton count={2} /></Screen>;
   if (view === "error") return <Screen><ErrorView error={b.error} onRetry={() => void b.refetch()} /></Screen>;
   const d = b.data!;
   const q = d.data?.quote ?? null;

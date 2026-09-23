@@ -4,8 +4,9 @@ import { useHealth, useLatestBriefings, useMarketStatus, useStockMutations } fro
 import type { BriefingSession } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { StaleBanner, usePull } from "@/components/Freshness";
+import { CardsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
-import { Button, Card, Empty, ErrorView, Loading, Muted, SectionTitle, Segmented } from "@/components/ui";
+import { Button, Card, Empty, ErrorView, Muted, SectionTitle, Segmented } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { font, space, useTheme } from "@/theme";
@@ -41,7 +42,7 @@ export default function BriefingsScreen() {
   };
 
   const view = viewState(latest);
-  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "loading") return <Screen><CardsSkeleton count={4} /></Screen>;
   if (view === "error") return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const items = data ?? [];

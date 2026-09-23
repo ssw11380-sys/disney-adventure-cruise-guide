@@ -78,6 +78,16 @@ export async function loadedCredentials(): Promise<{ apiUrl: string; apiToken: s
 }
 
 const noop = async () => {};
+
+function initialThemeMode(): ThemeMode {
+  if (Platform.OS !== "web") return "dark";
+  try {
+    const v = globalThis.localStorage?.getItem(STORAGE_KEYS.themeMode);
+    return v && THEME_OPTIONS.some((o) => o.value === v) ? (v as ThemeMode) : "dark";
+  } catch {
+    return "dark";
+  }
+}
 const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, themeMode: "dark", afterCost: true, ready: false, setApiUrl: noop, setApiToken: noop, setSort: noop, setShowKrw: noop, setThemeMode: noop, setAfterCost: noop });
 
 async function persist(key: string, value: string | null): Promise<void> {
@@ -94,7 +104,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [apiToken, setToken] = useState(process.env.EXPO_PUBLIC_API_TOKEN ?? "");
   const [sort, setSortState] = useState<SortKey>("created");
   const [showKrw, setShowKrwState] = useState(false);
-  const [themeMode, setThemeModeState] = useState<ThemeMode>("dark");
+  // 휴대폰은 저장된 설정을 읽을 때까지 스플래시가 가려 준다(_layout 의 SplashGate). 웹은 스플래시가 없어 저장소를 바로 읽는다
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => initialThemeMode());
   const [afterCost, setAfterCostState] = useState(true);
   const [ready, setReady] = useState(false);
 

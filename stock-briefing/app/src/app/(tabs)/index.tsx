@@ -1,13 +1,14 @@
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
-import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
+import { useAnyMarketOpen, useHealth, useMarketIndices, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
+import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { COL, StockRow } from "@/components/StockRow";
-import { Button, ErrorView, Loading, TableHead } from "@/components/ui";
+import { Button, ErrorView, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { openMaxAge, viewState } from "@/lib/freshness";
 import { evalView } from "@/lib/liveTick";
@@ -20,6 +21,8 @@ import { refreshWidgets } from "@/widgets/refresh";
 export default function StocksScreen() {
   const t = useTheme();
   const stocks = useStocks();
+  // 지수 띠 요청을 잔고와 동시에 시작한다 (띠가 잔고 아래 머리에 있어 잔고가 온 뒤에야 요청되던 것을 앞당김)
+  useMarketIndices();
   const { data, error, refetch } = stocks;
   const { sort, setSort, showKrw, afterCost } = useSettings();
   const { remove } = useStockMutations();
@@ -85,7 +88,13 @@ export default function StocksScreen() {
     ]);
 
   const view = viewState(stocks);
-  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "loading")
+    return (
+      <Screen scroll={false}>
+        <MarketStrip />
+        <HoldingsSkeleton />
+      </Screen>
+    );
   if (view === "error") return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";

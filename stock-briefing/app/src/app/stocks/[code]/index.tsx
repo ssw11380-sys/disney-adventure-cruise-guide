@@ -9,6 +9,7 @@ import { CandleChart } from "@/components/CandleChart";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { FlashPrice } from "@/components/FlashPrice";
 import { StaleBanner, usePull } from "@/components/Freshness";
+import { DetailSkeleton } from "@/components/Skeleton";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, SectionTitle, Segmented, Stat, StatGrid } from "@/components/ui";
@@ -49,7 +50,7 @@ export default function StockDetailScreen() {
 
   if (!c) return <Screen><ErrorView error={new Error("종목 주소가 올바르지 않습니다")} retryLabel="잔고로" onRetry={() => router.dismissTo("/")} /></Screen>;
   const view = viewState(stock);
-  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "loading") return <Screen><DetailSkeleton /></Screen>;
   if (view === "error") return <Screen><ErrorView error={stock.error} onRetry={() => void stock.refetch()} /></Screen>;
   const s = stock.data!;
   const q = s.quote;
