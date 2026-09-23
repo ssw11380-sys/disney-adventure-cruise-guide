@@ -76,4 +76,36 @@ describe("미국 순위: 네이버 쪽마다 다른 시점·빠진 줄", () => {
     expect(p1.items).toHaveLength(50);
     expect(urls).toHaveLength(6); // 3쪽 × 두 벌
   });
+
+  it("벌 하나가 실패하거나 초기화(PREOPEN)여도 같은 쪽의 다른 벌로 목록을 채우고, 개장 직후 섞인 전날 벌은 버린다", async () => {
+    const TODAY = "2026-09-24T09:30:20-04:00";
+    const YDAY = "2026-09-23T16:00:00-04:00";
+    const today = Array.from({ length: 300 }, (_, i) => `T${String(i).padStart(3, "0")}`);
+    const yday = Array.from({ length: 300 }, (_, i) => `Y${String(i).padStart(3, "0")}`);
+    const run = async (mode: "fail" | "preopen" | "yesterday" | "failAll") => {
+      const seen = new Map<number, number>();
+      const fetchFn = (async (url: string) => {
+        if (!url.includes("/stock/nation/USA/")) return json({}, 404);
+        const index = Number(new URL(url).searchParams.get("page")) - 1;
+        const n = (seen.get(index) ?? 0) + 1;
+        seen.set(index, n);
+        if (index === 1 && (mode === "failAll" || (mode === "fail" && n === 2))) return json({}, 503);
+        if (index === 1 && mode === "preopen" && n === 1) return json({ page: 2, pageSize: 100, totalCount: 0, marketStatus: "PREOPEN", stocks: [] });
+        const old = index === 0 && mode === "yesterday" && n === 2; // 개장 직후 묵은 서버: 전날 목록(값이 더 큼)
+        const list = old ? yday : today;
+        const rows = list.slice(index * 100, index * 100 + 100).map((s, k) => usRow(s, (old ? 5e9 : 1e9) - (index * 100 + k) * 1e6, old ? YDAY : TODAY));
+        return json({ page: index + 1, pageSize: 100, totalCount: 300, marketStatus: old ? "CLOSE" : "OPEN", stocks: rows });
+      }) as unknown as typeof fetch;
+      const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => new Date("2026-09-24T13:30:25Z") });
+      return chain(svc, 6);
+    };
+    for (const mode of ["fail", "preopen", "yesterday"] as const) {
+      const codes = await run(mode);
+      expect(codes, mode).toHaveLength(300);
+      expect(codes.slice(0, 3), mode).toEqual(["T000", "T001", "T002"]);
+      expect(codes.some((c) => c.startsWith("Y")), mode).toBe(false);
+    }
+    // 한 쪽의 모든 벌이 실패하면 예전처럼 실패한다 (출처 오류로 알린다)
+    await expect(run("failAll")).rejects.toThrow(/503/);
+  });
 });

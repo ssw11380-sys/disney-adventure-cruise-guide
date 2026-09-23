@@ -763,7 +763,14 @@ export class DiscoverService {
     // 쪽마다 두 벌을 함께 받아 합치고, 묶음에서 가장 새 값보다 늦은 쪽은 한 번 더 받는다 (한국 원본은 한 벌)
     const copies = market === "US" ? US_RANK_COPIES : 1;
     const tau = (p: { tradedAt?: string | null }) => (p.tradedAt ? Date.parse(p.tradedAt) || 0 : 0);
-    const fetchPage = (i: number) => Promise.all(Array.from({ length: copies }, () => src.source(category, i)));
+    type Page = Awaited<ReturnType<RankSource>>;
+    // 벌 하나가 실패해도 같은 쪽의 다른 벌이 오면 그 쪽은 받은 것으로 본다 (쪽의 모든 벌이 실패할 때만 실패)
+    const fetchPage = async (i: number): Promise<Page[]> => {
+      const rs = await Promise.allSettled(Array.from({ length: copies }, () => src.source(category, i)));
+      const ok = rs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      if (!ok.length) throw (rs[0] as PromiseRejectedResult).reason;
+      return ok;
+    };
     while (items.length < need && hasNext && next < MAX_SOURCE_PAGES) {
       // 이어 받을 때는 바로 앞 쪽도 다시 받는다 — 살아 있는 출처 목록에서 그 사이 한 쪽 위로 올라온 종목이 쪽 경계에서 빠지지 않게
       // (겹친 줄은 seen 이 거른다)
@@ -771,20 +778,24 @@ export class DiscoverService {
       const batch = next > 0 ? [next - 1, ...fresh] : fresh;
       const got = await Promise.all(batch.map(fetchPage));
       const newest = Math.max(...got.flat().map(tau));
-      const lagging = (cs: { tradedAt?: string | null }[]) => newest > 0 && newest - Math.max(...cs.map(tau)) > STALE_PAGE_MS;
+      const lagging = (cs: Page[]) => newest > 0 && newest - Math.max(...cs.map(tau)) > STALE_PAGE_MS;
       const late = batch.map((_, j) => j).filter((j) => lagging(got[j]!));
       if (market === "US" && late.length) {
-        const more = await Promise.all(late.map((j) => fetchPage(batch[j]!)));
+        // 다시 받기가 실패하면 가진 벌로 간다
+        const more = await Promise.all(late.map((j) => fetchPage(batch[j]!).catch(() => [] as Page[])));
         late.forEach((j, n) => got[j]!.push(...more[n]!));
       }
-      // 받은 벌을 모두 합치되 새 값부터 넣는다 — seen 이 종목마다 가장 새 줄을 남기고, 묵은 벌은 새 벌에 없던 종목만 보탠다
-      const pages = got.flat().sort((a, b) => tau(b) - tau(a));
-      for (const p of pages) {
-        if (p.preopen) {
-          // 초기화된 쪽의 줄(0%)은 넣지 않는다 — 직전 목록 뒤에 오늘 0% 줄이 섞이지 않게
-          preopen = true;
-          continue;
-        }
+      // 쪽마다 초기화(PREOPEN) 벌은 빼고 쓴다 — 그 쪽의 모든 벌이 초기화일 때만 초기화로 본다
+      // (초기화된 쪽의 줄(0%)은 넣지 않는다 — 직전 목록 뒤에 오늘 0% 줄이 섞이지 않게)
+      const usable = got.map((cs) => cs.filter((p) => !p.preopen));
+      if (usable.some((cs) => !cs.length)) preopen = true;
+      // 받은 벌을 모두 합치되 새 값부터 넣는다 — seen 이 종목마다 가장 새 줄을 남기고, 묵은 벌은 새 벌에 없던 종목만 보탠다.
+      // 가장 새 벌과 거래일(현지 날짜)이 다른 벌은 버린다 (개장 직후 묵은 서버가 주는 전날 목록이 오늘 목록 위에 섞이지 않게)
+      const all = usable.flat().sort((a, b) => tau(b) - tau(a));
+      const day = (p: Page) => p.tradedAt?.slice(0, 10) ?? "";
+      const today = all[0] ? day(all[0]) : "";
+      for (const p of all) {
+        if (today && day(p) && day(p) !== today) continue;
         if (p.tradedAt && (!tradedAt || Date.parse(p.tradedAt) > Date.parse(tradedAt))) tradedAt = p.tradedAt;
         for (const it of p.items) {
           if (seen.has(it.code)) continue;
@@ -796,8 +807,8 @@ export class DiscoverService {
         }
       }
       next += fresh.length;
-      hasNext = got.at(-1)?.some((p) => p.hasNext) ?? false;
-      if (got.some((cs) => cs.every((p) => !p.hasNext))) hasNext = false;
+      hasNext = usable.at(-1)?.some((p) => p.hasNext) ?? false;
+      if (usable.some((cs) => cs.length > 0 && cs.every((p) => !p.hasNext))) hasNext = false;
       if (preopen) {
         hasNext = false; // 장 시작 전 초기화 — 더 받아도 쓸 값이 없다
         break;
