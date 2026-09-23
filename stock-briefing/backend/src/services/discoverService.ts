@@ -64,7 +64,7 @@ export class DiscoverService {
   constructor(
     private readonly deps: {
       naver: NaverDiscover;
-      /** 미국 순위 원본 (없으면 미국 순위는 오류) */
+      /** 미국 순위 원본 (없으면 네이버 미국 순위) */
       usRank?: { source: RankSource; name: string } | null;
       calendar?: MarketCalendar | null;
       usdKrw?: (() => Promise<number | null>) | null;
@@ -149,7 +149,12 @@ export class DiscoverService {
       asOf: seoulIso(new Date(s.at)),
       fxRate: await this.fx(market),
       source: s.source,
-      note: category === "gainers" || category === "losers" ? `ETF·ETN·스팩 제외 · 거래대금 ${market === "KR" ? "10억 원" : "100만 달러"} 이상` : "ETF·ETN·스팩 제외",
+      note: [
+        market === "KR" ? "ETF·ETN·스팩 제외" : "정규장 기준 · ETF·우선주·권리주 제외",
+        category === "gainers" || category === "losers" ? `거래대금 ${market === "KR" ? "10억 원" : "100만 달러"} 이상` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
     };
   }
 
@@ -160,9 +165,10 @@ export class DiscoverService {
     start: { at: number; items: DiscoverStock[]; next: number; hasNext: boolean; source: string },
     need: number,
   ): Promise<{ at: number; items: DiscoverStock[]; next: number; hasNext: boolean; source: string }> {
-    const src: { source: RankSource; name: string } | null =
-      market === "KR" ? { source: (c, i) => this.deps.naver.krRankPage(c, i), name: "네이버 증권" } : (this.deps.usRank ?? null);
-    if (!src) throw new Error("미국 순위 출처가 설정되지 않았습니다");
+    const src: { source: RankSource; name: string } =
+      market === "KR"
+        ? { source: (c, i) => this.deps.naver.krRankPage(c, i), name: "네이버 증권" }
+        : (this.deps.usRank ?? { source: (c, i) => this.deps.naver.usRankPage(c, i), name: "네이버 증권" });
     const items = [...start.items];
     const seen = new Set(items.map((i) => i.code));
     let next = start.next;

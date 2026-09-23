@@ -143,10 +143,108 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
     expect(await svc.theme("KR", "theme", "99999")).toBeNull();
   });
 
+  it("미국 순위: 정규장 값, 권리주·우선주·워런트·SPAC 권리·거래정지·지난 날짜 줄 제외, 클래스주는 BRK.B", async () => {
+    const usRow = (sym: string, eng: string, rate: number, tv: number, extra: Record<string, unknown> = {}) => ({
+      stockEndType: "stock",
+      symbolCode: sym,
+      reutersCode: `${sym}.O`,
+      stockName: eng === "-" ? null : `한글 ${sym}`,
+      stockNameEng: eng,
+      stockExchangeType: { name: "NASDAQ" },
+      closePriceRaw: "10.5",
+      compareToPreviousClosePriceRaw: "1.25",
+      fluctuationsRatioRaw: String(rate),
+      accumulatedTradingVolumeRaw: "1000",
+      accumulatedTradingValueRaw: String(tv),
+      marketValueRaw: "5000000000",
+      localTradedAt: "2026-09-22T16:00:00-04:00",
+      tradeStopType: { name: "TRADING" },
+      overMarketPriceInfo: { overPrice: "99" }, // 애프터마켓 값은 쓰지 않는다
+      ...extra,
+    });
+    const urls: string[] = [];
+    const fetchFn = (async (url: string) => {
+      urls.push(url);
+      return json({
+        page: 1,
+        totalCount: 150,
+        marketStatus: "CLOSE",
+        stocks: [
+          usRow("JAGX", "Jaguar Health Inc", 1190.64, 6.6e8),
+          usRow("RIV RT", "RiverNorth Opportunities Rights", 900, 5e6),
+          usRow("KLXER", "KLX Energy Services Holdings Rights", 800, 5e6),
+          usRow("AHT PRD", "Ashford Pref D", 700, 5e6),
+          usRow("ASGI RTWI", "Abrdn Rights When Issued", 600, 5e6),
+          usRow("CAPNU", "Cayson Acquisition Corp Units", 500, 5e6),
+          usRow("OLD", "Halted Co", 400, 5e6, { tradeStopType: { name: "HALTED" } }),
+          usRow("STALE", "Stale Co", 300, 5e6, { localTradedAt: "2025-01-02T16:00:00-05:00" }),
+          usRow("PENNY", "Penny Co", 200, 9e5),
+          usRow("BRK B", "Berkshire Hathaway Class B", 100, 3e9),
+          usRow("NONAME", "-", 50, 2e6),
+        ],
+      });
+    }) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), usdKrw: async () => 1380 });
+    const r = await svc.rank("US", "gainers", 1, 50);
+    expect(urls[0]).toContain("api.stock.naver.com/stock/nation/USA/up?page=1&pageSize=100");
+    expect(r.items.map((i) => i.code)).toEqual(["JAGX", "BRK.B", "NONAME"]);
+    expect(r.items[0]).toMatchObject({ name: "한글 JAGX", market: "NASDAQ", currency: "USD", price: 10.5, change: 1.25, changeRate: 1190.64, tradingValue: 6.6e8 });
+    expect(r.items[2]!.name).toBe("-"); // 한글명이 없으면 영문명
+    expect(r).toMatchObject({ fxRate: 1380, source: "네이버 증권", hasMore: false }); // 150개 = 2쪽을 다 받아도 3개뿐
+    expect(r.note).toContain("정규장 기준");
+    expect(r.note).toContain("100만 달러");
+    // 거래량 순위는 top 경로, 동전주도 남긴다
+    await svc.rank("US", "volume", 1, 50);
+    expect(urls.some((u) => u.includes("/stock/nation/USA/top?page=1"))).toBe(true);
+    expect((await svc.rank("US", "volume", 1, 50)).items.map((i) => i.code)).toContain("PENNY");
+  });
+
   it("recount: 거래정지·상장 첫날을 빼고 평균·상승/보합/하락을 다시 센다", () => {
     const base = { id: "1", name: "t", changeRate: 9, up: 0, flat: 0, down: 0, leaders: [] };
     const s = (code: string, changeRate: number, volume = 10) => ({ code, name: code, market: "KOSPI", currency: "KRW" as const, price: 1, change: 0, changeRate, volume, tradingValue: 1 });
     const r = recount(base, [s("A", 3), s("B", 0), s("C", -1), s("N", 100), s("H", 0, 0)], new Set(["N"]));
     expect(r).toMatchObject({ changeRate: 0.67, up: 1, flat: 1, down: 1, adjusted: true });
+  });
+});
+
+describe("GET /api/discover", () => {
+  it("값 검사 400, 모르는 테마 404, 출처 실패 502, 정상 200", async () => {
+    const { buildApp } = await import("../src/app.js");
+    const { loadConfig } = await import("../src/config.js");
+    const { createMigratedDb } = await import("../src/db/index.js");
+    const { fakeProviders } = await import("./helpers.js");
+    const fetchFn = (async (url: string) => {
+      const u = new URL(url);
+      if (u.pathname.endsWith("/domestic/stock/list/sorted") && u.searchParams.get("sortType") === "priceTop")
+        return ok({ items: [krRow("005930", "삼성전자", 2.9, 6.6e12)], hasNext: false });
+      if (u.pathname.endsWith("/domestic/sector/item/list")) return json({ isSuccess: false }, 404);
+      return json({}, 500);
+    }) as unknown as typeof fetch;
+    const db = await createMigratedDb(":memory:");
+    const app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:" }),
+      db,
+      providers: fakeProviders({ discover: new NaverDiscover(fetchFn) }),
+      logger: false,
+      enableScheduler: false,
+    });
+    try {
+      const okRes = await app.inject({ method: "GET", url: "/api/discover/KR/rank/tradingValue?page=1&size=50" });
+      expect(okRes.statusCode).toBe(200);
+      expect(okRes.json()).toMatchObject({ market: "KR", category: "tradingValue", page: 1, hasMore: false, source: "네이버 증권" });
+      expect(okRes.json().items[0]).toMatchObject({ code: "005930", name: "삼성전자" });
+      expect((await app.inject({ method: "GET", url: "/api/discover/JP/rank/tradingValue" })).statusCode).toBe(400);
+      expect((await app.inject({ method: "GET", url: "/api/discover/KR/rank/popular" })).statusCode).toBe(400);
+      expect((await app.inject({ method: "GET", url: "/api/discover/KR/rank/volume?size=500" })).statusCode).toBe(400);
+      expect((await app.inject({ method: "GET", url: "/api/discover/KR/themes?period=year" })).statusCode).toBe(400);
+      expect((await app.inject({ method: "GET", url: "/api/discover/KR/themes/a%20b" })).statusCode).toBe(400);
+      expect((await app.inject({ method: "GET", url: "/api/discover/KR/themes/99999" })).statusCode).toBe(404);
+      const bad = await app.inject({ method: "GET", url: "/api/discover/KR/rank/volume" });
+      expect(bad.statusCode).toBe(502);
+      expect(bad.json().error ?? bad.json().message).toBeTruthy();
+    } finally {
+      await app.close();
+      await db.destroy();
+    }
   });
 });

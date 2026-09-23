@@ -67,7 +67,12 @@ export default function ThemeDetailScreen() {
             {q.data.description}
           </Text>
         ) : null}
-        {q.data?.basis ? <Text style={{ color: t.muted, fontSize: font.tiny }}>등락률: {q.data.basis}</Text> : null}
+        {q.data?.basis ? (
+          <Text style={{ color: t.muted, fontSize: font.tiny }}>
+            등락률: {q.data.basis}
+            {theme?.adjusted ? " · 상장 첫날 종목은 가격제한폭이 없어 평균에서 뺐습니다" : ""}
+          </Text>
+        ) : null}
       </View>
       {q.data ? <StatusLine open={q.data.marketOpen} asOf={q.data.asOf} /> : null}
       <TableHead>

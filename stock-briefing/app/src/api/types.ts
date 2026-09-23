@@ -351,6 +351,8 @@ export interface ThemeSummary {
   down: number;
   /** 대표 종목 2~3개 (출처가 등락률을 주지 않으면 changeRate 는 null) */
   leaders: { code: string; name: string; changeRate: number | null }[];
+  /** 상장 첫날 종목(가격제한폭 없음)을 빼고 다시 계산한 값이면 true */
+  adjusted?: boolean;
 }
 
 export interface ThemeList {

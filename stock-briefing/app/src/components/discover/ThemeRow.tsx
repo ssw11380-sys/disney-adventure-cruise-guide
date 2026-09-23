@@ -25,6 +25,7 @@ export const ThemeRow = memo(function ThemeRow({ theme, rank, onPress }: { theme
       <View style={styles.body}>
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} numberOfLines={1}>
           {theme.name}
+          {theme.adjusted ? <Text style={{ color: t.muted, fontWeight: "400" }}> *</Text> : null}
         </Text>
         <Text style={{ color: t.muted, fontSize: font.tiny }} numberOfLines={1}>
           {theme.leaders.length

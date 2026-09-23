@@ -3,6 +3,7 @@ import type { FetchFn } from "./types.js";
 /**
  * 발견 탭 데이터 (네이버 증권 모바일 공개 JSON, 로그인 불필요).
  *  - 한국 순위: front-api/domestic/stock/list/sorted?sortType=priceTop|quantTop|up|down&marketType=all (50개씩, index 0부터)
+ *  - 미국 순위: api.stock.naver.com/stock/nation/USA/priceTop|top|up|down?page=&pageSize=100 (정규장 기준, 보통주만)
  *  - 테마·업종: front-api/stock/sectors/all?sectorType=theme|upjong&businessDayCategory=daily|weekly|monthly&nationType=domestic|USA
  *    (50개씩 cursor. 등락률은 거래정지를 뺀 구성 종목 단순 평균 = 네이버 값 그대로)
  *  - 구성 종목: 한국 front-api/domestic/sector/item/list, 미국 front-api/worldstock/sector/item/list
@@ -49,7 +50,10 @@ type Json = Record<string, unknown>;
 
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 const BASE = "https://m.stock.naver.com/front-api";
+const US_BASE = "https://api.stock.naver.com";
 const SORT: Record<RankCategory, string> = { tradingValue: "priceTop", volume: "quantTop", gainers: "up", losers: "down" };
+/** 미국 순위 경로 (네이버 JS 기준 거래대금 = priceTop, 거래량 = top) */
+const US_SORT: Record<RankCategory, string> = { tradingValue: "priceTop", volume: "top", gainers: "up", losers: "down" };
 const PERIOD: Record<ThemePeriod, string> = { day: "daily", week: "weekly", month: "monthly" };
 
 export function num(v: unknown): number | null {
@@ -96,6 +100,40 @@ export function krStock(it: Json): DiscoverStock | null {
     volume: num(integ["accumulatedTradingVolume"]) ?? num(it["accumulatedTradingVolume"]),
     tradingValue: num(integ["accumulatedTradingValue"]) ?? num(it["accumulatedTradingValue"]),
     marketCap: num(it["marketValue"]),
+  };
+}
+
+/**
+ * 미국 순위 한 줄 (api.stock.naver.com/stock/nation/USA/*). 정규장 기준 값이다:
+ * closePrice 는 장중엔 현재가, 장 밖에서는 직전 정규장 종가이고 프리·애프터 값은 overMarketPriceInfo 에 따로 온다.
+ * 권리주(RT)·워런트(WS)·우선주(PR*)·유닛(U)·SPAC 권리, 거래정지 종목은 뺀다. 클래스주 "BRK B" 는 "BRK.B" 로 바꾼다.
+ */
+export function usRankStock(it: Json): DiscoverStock | null {
+  if (String(it["stockEndType"] ?? "stock") !== "stock") return null;
+  const stop = it["tradeStopType"] as Json | undefined;
+  if (stop && String(stop["name"] ?? "TRADING") !== "TRADING") return null;
+  const eng = String(it["stockNameEng"] ?? "");
+  if (/\b(rights?|warrants?|units?|contingent value)\b/i.test(eng) || /\bacquisition (corp|co|company|inc|holdings?)\b/i.test(eng)) return null;
+  let sym = String(it["symbolCode"] ?? "").trim().toUpperCase();
+  const cls = /^([A-Z][A-Z0-9]*) ([A-Z])$/.exec(sym);
+  if (cls) sym = `${cls[1]}.${cls[2]}`;
+  else if (/\s/.test(sym)) return null; // "AHT PRD", "RIV RT", "ASGI RTWI"
+  if (!/^[A-Z][A-Z0-9-]{0,9}(?:\.[A-Z])?$/.test(sym)) return null;
+  const price = num(it["closePriceRaw"] ?? it["closePrice"]);
+  if (price === null) return null;
+  const ex = it["stockExchangeType"] as Json | undefined;
+  const name = typeof it["stockName"] === "string" && it["stockName"].trim() ? it["stockName"].trim() : eng || sym;
+  return {
+    code: sym,
+    name,
+    market: String(ex?.["name"] ?? "US"),
+    currency: "USD",
+    price,
+    change: num(it["compareToPreviousClosePriceRaw"]) ?? 0,
+    changeRate: num(it["fluctuationsRatioRaw"]) ?? 0,
+    volume: num(it["accumulatedTradingVolumeRaw"]),
+    tradingValue: num(it["accumulatedTradingValueRaw"]),
+    marketCap: num(it["marketValueRaw"]),
   };
 }
 
@@ -149,6 +187,23 @@ export class NaverDiscover {
     const r = await this.json(`${BASE}/domestic/stock/list/sorted?sortType=${SORT[category]}&marketType=all&domesticStockExchangeType=KRX&index=${index}`);
     const rows = (r["items"] as Json[] | undefined) ?? [];
     return { items: rows.filter(isPlainStock).map(krStock).filter((x): x is DiscoverStock => x !== null), raw: rows.length, hasNext: r["hasNext"] === true };
+  }
+
+  /**
+   * 미국 순위 원본 한 쪽 (100개, index 0부터). NYSE·NASDAQ·AMEX 합산, 보통주만(ETF 없음).
+   * 가장 최근 거래일이 아닌 줄(오래 멈춘 종목)은 뺀다.
+   */
+  async usRankPage(category: RankCategory, index: number): Promise<{ items: DiscoverStock[]; raw: number; hasNext: boolean }> {
+    const r = await this.json(`${US_BASE}/stock/nation/USA/${US_SORT[category]}?page=${index + 1}&pageSize=100`);
+    const rows = (r["stocks"] as Json[] | undefined) ?? [];
+    const day = (it: Json) => String(it["localTradedAt"] ?? "").slice(0, 10);
+    const latest = rows.reduce((m, it) => (day(it) > m ? day(it) : m), "");
+    const items = rows
+      .filter((it) => !latest || day(it) === latest)
+      .map(usRankStock)
+      .filter((x): x is DiscoverStock => x !== null);
+    const total = num(r["totalCount"]) ?? 0;
+    return { items, raw: rows.length, hasNext: rows.length > 0 && (index + 1) * 100 < total };
   }
 
   /** 오늘 상장한(첫날) 한국 종목 코드. 테마 평균을 크게 왜곡하므로 따로 빼서 계산한다 */

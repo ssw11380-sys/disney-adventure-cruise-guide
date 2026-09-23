@@ -133,6 +133,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
   const footer = themes.length ? (
     <Text style={[styles.footer, { color: t.muted }]}>
       {kind === "theme" ? "테마" : "업종"} 등락률: {data?.basis ?? "-"} · 출처: {data?.source ?? "-"}
+      {all.some((x) => x.adjusted) ? "\n* 상장 첫날 종목(가격제한폭 없음)을 빼고 다시 계산한 값" : ""}
     </Text>
   ) : null;
   const empty = <Empty title={`${kind === "theme" ? "테마" : "업종"}를 불러오지 못했습니다`} hint="잠시 뒤 당겨서 새로고침 하세요." />;
