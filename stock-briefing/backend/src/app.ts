@@ -49,6 +49,25 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const stockService = new StockService({ db: opts.db, ...opts.providers, now });
 
   // 토스증권 공식 Open API: 실시간 구독 시작 + 보유 종목 가져오기 서비스 + 서버 공인 IP(허용 IP 등록 안내용)
+  // 서버 공인 IP (토스 Open API 허용 IP 등록용). 키가 없을 때도 /health 에 보여 준다.
+  const skipIp = opts.enableScheduler === false; // 테스트에서는 외부 호출 안 함
+  let ipCache: { at: number; ip: string | null } | null = null;
+  const outboundIp = async (): Promise<string | null> => {
+    if (skipIp) return null;
+    if (ipCache && Date.now() - ipCache.at < 10 * 60_000) return ipCache.ip;
+    let ip: string | null = null;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const res = await fetch("https://api.ipify.org?format=json", { signal: ctrl.signal });
+      clearTimeout(timer);
+      ip = ((await res.json()) as { ip?: string }).ip ?? null;
+    } catch {
+      ip = null;
+    }
+    ipCache = { at: Date.now(), ip };
+    return ip;
+  };
   let tossDeps: AdminDeps["toss"] = null;
   if (opts.providers.tossOpenApi) {
     const live = opts.providers.live;
@@ -57,22 +76,6 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       await stockService.syncLive();
       app.addHook("onClose", async () => live.stop());
     }
-    let ipCache: { at: number; ip: string | null } | null = null;
-    const outboundIp = async (): Promise<string | null> => {
-      if (ipCache && Date.now() - ipCache.at < 10 * 60_000) return ipCache.ip;
-      let ip: string | null = null;
-      try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 5000);
-        const res = await fetch("https://api.ipify.org?format=json", { signal: ctrl.signal });
-        clearTimeout(timer);
-        ip = ((await res.json()) as { ip?: string }).ip ?? null;
-      } catch {
-        ip = null;
-      }
-      ipCache = { at: Date.now(), ip };
-      return ip;
-    };
     tossDeps = { provider: opts.providers.tossOpenApi, sync: new TossSyncService(opts.db, opts.providers.tossOpenApi, now), live, outboundIp };
   }
   const collector = new DataCollector({
@@ -175,7 +178,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     schedule: scheduler?.status() ?? null,
     devices: (await deviceService.enabledTokens()).length,
     authRequired: Boolean(opts.config.API_TOKEN),
-    tossOpenApi: tossStatus(tossDeps, tossDeps ? await tossDeps.outboundIp() : null),
+    tossOpenApi: tossStatus(tossDeps, await outboundIp()),
     lastBriefing: briefingService.lastRun,
     llmConfigured: opts.providers.generator.model !== "disabled",
     disclaimer: DISCLAIMER,
@@ -193,7 +196,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     financialsUs: opts.providers.financialsUs,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
-  await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps });
+  await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp });
   const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler };
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });
