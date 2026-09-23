@@ -3,6 +3,7 @@ import Constants from "expo-constants";
 import React, { useState } from "react";
 import { Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { useHealth } from "@/api/hooks";
+import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
@@ -20,6 +21,7 @@ export default function SettingsScreen() {
   const t = useTheme();
   const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort } = useSettings();
   const health = useHealth();
+  const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
 
   return (
@@ -56,6 +58,7 @@ export default function SettingsScreen() {
             <Row label="서버 시각" value={formatDateKo(health.data.time, true)} />
             <Row label="시세" value={health.data.sources.quotes ?? "-"} />
             <Row label="실시간" value={health.data.sources.realtime ?? "-"} />
+            <Row label="앱 스트리밍" value={stream.connected ? `연결됨 · 체결 ${stream.ticks}건 반영` : "연결 안 됨 (3초 폴링으로 동작)"} />
             <Row label="뉴스" value={health.data.sources.news ?? "-"} />
             <Row label="재무/공시" value={health.data.sources.financials ?? "-"} />
             <Row label="수급" value={health.data.sources.investorFlow ?? "-"} />

@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import { ZodError } from "zod";
 import type { AppConfig } from "./config.js";
@@ -22,6 +23,7 @@ import { BriefingService } from "./services/briefingService.js";
 import { DataCollector } from "./services/collector.js";
 import { DeviceService } from "./services/deviceService.js";
 import { NotificationService } from "./services/notificationService.js";
+import { PriceStream } from "./services/priceStream.js";
 import { StockService } from "./services/stockService.js";
 
 export interface BuildAppOptions {
@@ -43,6 +45,7 @@ export const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, �
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: opts.logger ?? { level: opts.config.LOG_LEVEL } });
   await app.register(cors, { origin: true });
+  await app.register(websocket, { options: { maxPayload: 4096 } });
   const log = app.log;
   const now = opts.now ?? (() => new Date());
 
@@ -78,6 +81,15 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     }
     tossDeps = { provider: opts.providers.tossOpenApi, sync: new TossSyncService(opts.db, opts.providers.tossOpenApi, now), live, outboundIp };
   }
+  // 서버 → 앱 실시간 가격 스트림 (/api/stream). 토스 웹소켓 체결을 그대로 중계하고, 없으면 앱이 붙어 있는 동안만 3초 폴링
+  const priceStream = new PriceStream({
+    live: opts.providers.live,
+    quickPrices: opts.providers.quickPrices,
+    codes: async () => (await stockService.list()).map((s) => s.code),
+    log,
+  });
+  app.addHook("onClose", async () => priceStream.stop());
+
   const collector = new DataCollector({
     quotes: opts.providers.quotes,
     news: opts.providers.news,
@@ -128,12 +140,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("deviceService", deviceService);
   app.decorate("notificationService", notificationService);
   app.decorate("settingsStore", settingsStore);
+  app.decorate("priceStream", priceStream);
 
   // 인터넷에 노출할 때의 최소 보호: API_TOKEN 이 설정되면 /api/* 는 Bearer 토큰이 있어야 한다. /health 는 열어 둔다.
   if (opts.config.API_TOKEN) {
     const expected = `Bearer ${opts.config.API_TOKEN}`;
     app.addHook("onRequest", async (req, reply) => {
       if (!req.url.startsWith("/api/")) return;
+      // 웹소켓(/api/stream)은 헤더를 못 붙이는 클라이언트를 위해 ?token= 도 받는다
+      const q = req.query as { token?: string } | undefined;
+      if (req.url.startsWith("/api/stream") && q?.token === opts.config.API_TOKEN) return;
       if (req.headers.authorization !== expected) {
         return reply.code(401).send({ error: "UNAUTHORIZED", message: "API 토큰이 필요합니다 (앱 설정 > 서버 주소 아래 토큰 입력)" });
       }
@@ -180,11 +196,17 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     authRequired: Boolean(opts.config.API_TOKEN),
     tossOpenApi: tossStatus(tossDeps, await outboundIp()),
     lastBriefing: briefingService.lastRun,
+    stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
     disclaimer: DISCLAIMER,
   }));
 
   await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar });
+
+  /** GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token= */
+  app.get("/api/stream", { websocket: true }, (socket) => {
+    priceStream.attach(socket);
+  });
 
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });
   await app.register(analysisRoutes, {
@@ -213,5 +235,6 @@ declare module "fastify" {
     deviceService: DeviceService;
     notificationService: NotificationService;
     settingsStore: NotificationSettingsStore;
+    priceStream: PriceStream;
   }
 }

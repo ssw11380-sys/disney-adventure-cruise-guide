@@ -228,6 +228,8 @@ export interface Health {
   authRequired?: boolean;
   tossOpenApi?: TossOpenApiStatus;
   lastBriefing?: LastBriefingRun | null;
+  /** 서버→앱 실시간 스트림(/api/stream): 접속한 앱 수, 폴링 여부 */
+  stream?: { clients: number; polling: boolean; tracked: number };
   llmConfigured?: boolean;
   disclaimer: string;
 }
