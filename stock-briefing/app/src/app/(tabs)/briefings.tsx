@@ -1,17 +1,23 @@
 import React, { useState } from "react";
-import { Alert, View } from "react-native";
-import { useLatestBriefings, useStockMutations } from "@/api/hooks";
+import { Alert, Text, View } from "react-native";
+import { useHealth, useLatestBriefings, useMarketStatus, useStockMutations } from "@/api/hooks";
 import type { BriefingSession } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { Screen } from "@/components/Screen";
 import { Button, Card, Empty, ErrorView, Loading, Muted, Segmented } from "@/components/ui";
-import { space } from "@/theme";
+import { formatDateKo } from "@/lib/format";
+import { font, space, useTheme } from "@/theme";
 
-/** 브리핑 탭: 종목별 최신 브리핑. 요약/상세 토글, 수동 실행. */
+type Mode = "line" | "summary" | "detail";
+
+/** 브리핑 탭: 서버 상태 배너 → 종목별 최신 브리핑(한 줄/요약/상세) → 수동 실행 */
 export default function BriefingsScreen() {
-  const [mode, setMode] = useState<"summary" | "detail">("summary");
+  const t = useTheme();
+  const [mode, setMode] = useState<Mode>("summary");
   const { data, isLoading, isError, error, refetch, isRefetching } = useLatestBriefings();
   const { run } = useStockMutations();
+  const health = useHealth();
+  const market = useMarketStatus();
 
   const runNow = (session: BriefingSession) => {
     run.mutate(
@@ -19,10 +25,11 @@ export default function BriefingsScreen() {
       {
         onSuccess: (r) => {
           const failed = r.results.filter((x) => x.status === "failed");
-          Alert.alert(
-            "브리핑 생성 완료",
-            failed.length ? `${r.results.length}개 중 ${failed.length}개 실패\n${failed.map((f) => `${f.name}: ${f.error}`).join("\n")}` : `${r.results.length}개 종목 생성`,
-          );
+          const skipped = r.results.filter((x) => x.status === "skipped");
+          const parts = [`${r.results.length}개 중 ${r.results.length - failed.length - skipped.length}개 생성`];
+          if (skipped.length) parts.push(`${skipped.length}개 휴장일로 건너뜀`);
+          if (failed.length) parts.push(`${failed.length}개 실패\n${failed.map((f) => `${f.name}: ${f.error}`).join("\n")}`);
+          Alert.alert("브리핑 생성 완료", parts.join(", "));
         },
         onError: (e) => Alert.alert("실행 실패", e instanceof Error ? e.message : String(e)),
       },
@@ -34,11 +41,23 @@ export default function BriefingsScreen() {
 
   const items = data ?? [];
   const withBriefing = items.filter((i) => i.latest);
+  const last = health.data?.lastBriefing ?? null;
+  const llmOff = health.data?.llmConfigured === false;
+  const krHoliday = market.data && !market.data.KR.isTradingDay;
 
   return (
     <Screen refreshing={isRefetching} onRefresh={() => void refetch()}>
+      {llmOff || (last && last.failed > 0) ? (
+        <Card style={{ borderColor: t.danger }}>
+          <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>
+          <Muted>{llmOff ? "서버 변수 ANTHROPIC_API_KEY 가 비어 있습니다." : last!.lastError ?? ""}</Muted>
+          {last ? <Muted>{formatDateKo(last.finishedAt, true)} · {last.session === "morning" ? "오전" : "오후"} · 성공 {last.ok} / 실패 {last.failed} / 건너뜀 {last.skipped}</Muted> : null}
+        </Card>
+      ) : null}
+      {krHoliday ? <Muted>오늘은 한국 시장 휴장일이라 한국 종목 브리핑은 생성되지 않습니다{market.data?.KR.opensAt ? ` (다음 개장 ${formatDateKo(market.data.KR.opensAt, true)})` : ""}.</Muted> : null}
       <Segmented
         options={[
+          { value: "line", label: "한 줄" },
           { value: "summary", label: "요약" },
           { value: "detail", label: "상세" },
         ]}

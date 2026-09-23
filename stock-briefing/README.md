@@ -140,6 +140,7 @@ npm run dev                  # http://localhost:3000
 | GET/PUT | `/api/notifications/settings` | 알림 시간 설정 `{ morningTime, afternoonTime, morningEnabled, afternoonEnabled, weekdaysOnly, pushEnabled }` (PUT 즉시 스케줄 반영) |
 | POST | `/api/notifications/test` | 등록 기기 전체에 테스트 알림 |
 | POST | `/api/notifications/receipts` | Expo 푸시 영수증 즉시 확인 (기본은 전송 15분 뒤 자동) |
+| GET | `/api/market/status` | 한국·미국 장 상태 (거래일 여부, 장중 여부, 다음 개장/종료 시각) |
 | GET | `/api/admin/toss/status` | 토스 Open API 상태 (키 설정, 토큰, 서버 공인 IP, 실시간 구독) |
 | POST | `/api/admin/toss/import-holdings` | 토스증권 보유 종목 → 등록 종목 (수량·평단 동기화) |
 | GET | `/api/admin/master` | 종목 마스터 건수/갱신 시각 |
@@ -243,6 +244,17 @@ npx eas-cli build --platform android --profile preview --non-interactive
 
 ## 푸시 알림 (4단계, Android)
 
+동작 방식은 두 가지이고, 앱 **설정 → 알림 → 이 기기에서 알림 받기**를 켜면 가능한 쪽이 자동으로 선택됩니다.
+
+| 방식 | 조건 | 도착 시각 |
+|---|---|---|
+| 즉시 푸시 (FCM) | Firebase 연결 + FCM V1 키 업로드 + 재빌드 | 브리핑 생성 즉시 |
+| 백그라운드 확인 | 없음 (기본) | 생성 후 15~30분 안에 (Android WorkManager 가 앱을 깨워 서버를 확인, 새 브리핑이면 로컬 알림). 배터리 절약 모드에서는 더 늦을 수 있고, 앱을 "강제 종료"하면 다음 실행까지 멈춥니다 |
+
+백그라운드 확인 태스크(`app/src/lib/backgroundBriefings.ts`)는 위젯 갱신도 겸하므로 알림을 끄더라도 30분 간격으로 등록됩니다.
+
+즉시 푸시로 바꾸려면 Firebase 를 한 번 연결해야 합니다.
+
 동작 방식: 브리핑이 생성되면 서버가 등록된 모든 기기에 Expo Push Service 로 요약 3줄을 보냅니다(제목 "SK하이닉스 오전 브리핑"). 알림을 누르면 해당 브리핑 상세로 이동합니다. 알림 시간(= 브리핑 생성 시간)은 앱 설정에서 바꾸며 서버 DB 에 저장되어 재시작 후에도 유지됩니다. 전송 15분 뒤 영수증을 확인해 앱이 삭제된 기기(`DeviceNotRegistered`)는 자동으로 비활성화합니다.
 
 Android 원격 푸시는 **Expo Go 에서 동작하지 않으므로** 개발 빌드가 필요합니다. 한 번만 하면 됩니다.
@@ -282,9 +294,13 @@ Android 원격 푸시는 **Expo Go 에서 동작하지 않으므로** 개발 빌
 ```
 
 - 같은 날 같은 세션이 이미 성공했으면 건너뜁니다(`force: true` 로 재생성). 실패 건은 다음 실행에서 자동 재시도.
+- **휴장일**: 토스 시세의 `tradingEnd`/`nextTradingStart`(대표 종목 삼성전자·애플)로 한국·미국 달력을 판단해(`providers/market/calendar.ts`, 5분 캐시) 휴장일에는 그 시장의 종목을 `skipped` 로 건너뜁니다. 앱은 `GET /api/market/status` 로 같은 판단을 받아 "실시간 / 장 마감 / 휴장" 배지와 갱신 주기를 정합니다.
+- **직전 브리핑 반영**: 상세 프롬프트에 직전 브리핑 요약이 들어가 "달라진 점" 위주로 쓰고 같은 문장을 반복하지 않게 합니다. 뉴스는 네이버 **종목 뉴스**(종목 페이지에 붙는 기사, 한국·미국 모두)를 먼저 쓰고 부족하면 이름 검색으로 채웁니다.
+- **미국 종목 재무·공시**: SEC EDGAR(`providers/dart/edgar.ts`, 키 불필요)에서 10-K 연간 재무제표(매출·영업이익·순이익·자산·부채·자본)와 최근 공시(8-K, 10-Q, 10-K, Form 4 등)를 받아 DART 와 같은 형식으로 넣습니다. SEC 는 초당 10회 제한이라 6시간 캐시. 배당 이력은 네이버 보강의 배당수익률로 대신합니다.
+- **상태 확인**: `/health` 의 `lastBriefing`(마지막 실행의 성공/실패/건너뜀 수와 마지막 오류)과 `llmConfigured` 를 앱 브리핑 탭 상단 배너로 보여줍니다. Anthropic 크레딧 부족·키 오류·서버 장애는 사람이 읽을 수 있는 문장으로 분류됩니다.
 - 모델: Anthropic 직접이면 `ANTHROPIC_MODEL`(기본 `claude-opus-5`, 서버측 refusal fallback 활성), Bedrock 이면 `BEDROCK_MODEL`(기본 `anthropic.claude-opus-4-8`, 도쿄 리전). 시스템 프롬프트는 1시간 프롬프트 캐싱. 상세는 effort medium, 요약은 low, 회사/가치 분석은 high.
 - 종목 상세 탭 분석은 요청 시 생성 후 캐시(회사 30일, 가치 7일, 기술 1일). `?refresh=1` 로 강제 재생성.
-- 공휴일에는 시세가 전일과 같은 상태로 브리핑이 생성됩니다(휴장일 달력은 v1 범위 밖).
+- 공휴일에는 시장 달력으로 건너뜁니다(위 참고).
 
 ## 배포 (6단계)
 

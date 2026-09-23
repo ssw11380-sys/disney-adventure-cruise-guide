@@ -21,14 +21,32 @@ export function useHealth() {
   return useQuery({ queryKey: useKey("health"), queryFn: api.health, staleTime: 30_000, retry: 0 });
 }
 
+/** 장 운영 상태 (서버가 토스 달력으로 판단, 5분 캐시). 실패하면 요일·시간 추정 */
+export function useMarketStatus() {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("market"), queryFn: api.marketStatus, staleTime: 5 * 60_000, refetchInterval: 5 * 60_000, retry: 0 });
+}
+
+/** 한국·미국 중 하나라도 거래 중이면 true. 서버 상태가 없으면 시간 기반 추정 */
+export function useAnyMarketOpen(): { open: boolean; label: string; loaded: boolean } {
+  const m = useMarketStatus();
+  if (!m.data) return { open: isTradingHoursKst(), label: isTradingHoursKst() ? "실시간" : "장 마감", loaded: false };
+  const kr = m.data.KR, us = m.data.US;
+  if (kr.isOpen || us.isOpen) return { open: true, label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", loaded: true };
+  if (!kr.isTradingDay && !us.isTradingDay) return { open: false, label: "휴장", loaded: true };
+  if (!kr.isTradingDay) return { open: false, label: "한국 휴장", loaded: true };
+  return { open: false, label: "장 마감", loaded: true };
+}
+
 /**
  * 현재가 갱신 주기. 서버가 등록 종목 시세를 한 번에 받아(토스 웹 2초 캐시 / Open API 웹소켓) 돌려주므로
  * 장 시간에는 3초마다 다시 받아 HTS 처럼 움직이게 하고, 장이 닫힌 시간에는 1분으로 늦춘다.
  */
 export function useLiveInterval(): number {
   const health = useHealth();
+  const { open } = useAnyMarketOpen();
   if (health.isError) return 60_000;
-  return isTradingHoursKst() ? 3_000 : 60_000;
+  return open ? 3_000 : 60_000;
 }
 
 export function useStocks() {

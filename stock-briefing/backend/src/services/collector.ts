@@ -23,6 +23,8 @@ export interface CollectorDeps {
   quotes: QuoteProvider;
   news: NewsProvider;
   financials: FinancialsProvider | null;
+  /** 미국 종목용 (SEC EDGAR). 없으면 "미국 종목 미지원" */
+  financialsUs?: FinancialsProvider | null;
   investorFlow: InvestorFlowProvider | null;
   log?: ChainLogger;
 }
@@ -66,18 +68,28 @@ export class DataCollector {
     }
   }
 
+  private news(stock: { code: string; name: string; market?: string }, limit: number): Promise<NewsItem[]> {
+    const n = this.deps.news;
+    return n.forStock ? n.forStock(stock, limit) : n.search(stock.name, limit);
+  }
+
+  /** 시장에 맞는 재무·공시 소스. 한국은 DART, 미국은 EDGAR */
+  private finFor(code: string): { provider: FinancialsProvider | null; missingSuffix: string } {
+    if (isKrCode(code)) return { provider: this.deps.financials, missingSuffix: "(DART 키 없음)" };
+    return { provider: this.deps.financialsUs ?? null, missingSuffix: "(미국 종목 미지원)" };
+  }
+
   async collectBriefing(stock: RegisteredStock): Promise<BriefingSnapshot> {
     const missing: string[] = [];
     const q = this.deps;
+    const fin = this.finFor(stock.code);
     const [quote, series, news, disclosures, investorFlow] = await Promise.all([
       this.attempt("현재가", missing, () => q.quotes.getQuote(stock.code)),
       this.attempt("일봉/기술적 지표", missing, () => q.quotes.getCandles(stock.code, "D", 160)),
-      this.attempt("뉴스", missing, () => q.news.search(stock.name, 8)),
-      !isKrCode(stock.code)
-        ? (missing.push("공시(미국 종목 미지원)"), Promise.resolve(null))
-        : q.financials
-          ? this.attempt("공시", missing, () => q.financials!.getDisclosures(stock.code, 7, 8))
-          : (missing.push("공시(DART 키 없음)"), Promise.resolve(null)),
+      this.attempt("뉴스", missing, () => this.news(stock, 8)),
+      fin.provider
+        ? this.attempt("공시", missing, () => fin.provider!.getDisclosures(stock.code, 7, 8))
+        : (missing.push(`공시${fin.missingSuffix}`), Promise.resolve(null)),
       !isKrCode(stock.code)
         ? (missing.push("수급(미국 종목 미지원)"), Promise.resolve(null))
         : q.investorFlow
@@ -111,9 +123,9 @@ export class DataCollector {
   async collectAnalysis(stock: { code: string; name: string; market: string }, kind: "company" | "value" | "technical"): Promise<AnalysisSnapshot> {
     const missing: string[] = [];
     const q = this.deps;
-    const fin = isKrCode(stock.code) ? q.financials : null;
+    const { provider: fin, missingSuffix } = this.finFor(stock.code);
     const noDart = <T>(label: string): Promise<T | null> => {
-      missing.push(isKrCode(stock.code) ? `${label}(DART 키 없음)` : `${label}(미국 종목 미지원)`);
+      missing.push(`${label}${missingSuffix}`);
       return Promise.resolve(null);
     };
 
@@ -128,7 +140,7 @@ export class DataCollector {
       wantFundamentals ? (fin ? this.attempt("재무제표", missing, () => fin.getAnnualFinancials(stock.code, 5)) : noDart<AnnualFinancials[]>("재무제표")) : Promise.resolve(null),
       kind === "value" ? (fin ? this.attempt("배당", missing, () => fin.getDividends(stock.code, 3)) : noDart<DividendInfo[]>("배당")) : Promise.resolve(null),
       wantFundamentals ? (fin ? this.attempt("공시", missing, () => fin.getDisclosures(stock.code, 90, 10)) : noDart<Disclosure[]>("공시")) : Promise.resolve(null),
-      kind === "company" ? this.attempt("뉴스", missing, () => q.news.search(stock.name, 8)) : Promise.resolve(null),
+      kind === "company" ? this.attempt("뉴스", missing, () => this.news(stock, 8)) : Promise.resolve(null),
     ]);
 
     const technical = daily ? computeTechnicalSummary(daily.candles) : null;

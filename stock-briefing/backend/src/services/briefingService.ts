@@ -31,9 +31,22 @@ export interface BriefingWithData extends Briefing {
 export interface RunResult {
   session: BriefingSession;
   date: string;
-  results: Array<{ code: string; name: string; status: "ok" | "failed"; briefingId: number | null; error: string | null; summary: string | null }>;
+  results: Array<{ code: string; name: string; status: "ok" | "failed" | "skipped"; briefingId: number | null; error: string | null; summary: string | null }>;
   startedAt: string;
   finishedAt: string;
+}
+
+/** 마지막 실행 요약 (/health 와 앱 상태 배너용) */
+export interface LastRun {
+  session: BriefingSession;
+  date: string;
+  startedAt: string;
+  finishedAt: string;
+  ok: number;
+  failed: number;
+  skipped: number;
+  lastError: string | null;
+  trigger: "schedule" | "manual";
 }
 
 export interface BriefingServiceDeps {
@@ -41,6 +54,8 @@ export interface BriefingServiceDeps {
   collector: DataCollector;
   generator: TextGenerator;
   prompts: PromptStore;
+  /** 휴장일이면 해당 시장 종목을 건너뛴다 */
+  calendar?: { isTradingDay(code: string): Promise<boolean> } | null;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -57,9 +72,14 @@ export class BriefingService {
   private readonly now: () => Date;
   private readonly listeners: BriefingListener[] = [];
   private running = false;
+  private _lastRun: LastRun | null = null;
 
   constructor(private readonly deps: BriefingServiceDeps) {
     this.now = deps.now ?? (() => new Date());
+  }
+
+  get lastRun(): LastRun | null {
+    return this._lastRun;
   }
 
   /** 4단계(푸시)에서 알림 발송기를 여기에 붙인다. */
@@ -71,7 +91,7 @@ export class BriefingService {
     return this.running;
   }
 
-  async runSession(session: BriefingSession, opts: { codes?: string[]; force?: boolean } = {}): Promise<RunResult> {
+  async runSession(session: BriefingSession, opts: { codes?: string[]; force?: boolean; trigger?: "schedule" | "manual" } = {}): Promise<RunResult> {
     if (this.running) throw new Error("브리핑이 이미 실행 중입니다");
     this.running = true;
     const startedAt = seoulIso(this.now());
@@ -91,6 +111,15 @@ export class BriefingService {
             results.push({ code: stock.code, name: stock.name, status: "ok", briefingId: existing.id, error: null, summary: existing.summary });
             continue;
           }
+          // 휴장일(공휴일·주말)에는 시세가 움직이지 않아 의미 없는 브리핑이 되므로 건너뛴다 (강제 실행은 예외)
+          if (this.deps.calendar) {
+            const trading = await this.deps.calendar.isTradingDay(stock.code).catch(() => true);
+            if (!trading) {
+              this.deps.log?.info({ code: stock.code, session }, "휴장일이라 브리핑 건너뜀");
+              results.push({ code: stock.code, name: stock.name, status: "skipped", briefingId: null, error: "휴장일", summary: null });
+              continue;
+            }
+          }
         }
         const b = await this.generateOne(stock, session, date);
         results.push({ code: b.code, name: stock.name, status: b.status, briefingId: b.id, error: b.error, summary: b.status === "ok" ? b.summary : null });
@@ -98,12 +127,39 @@ export class BriefingService {
     } finally {
       this.running = false;
     }
-    return { session, date, results, startedAt, finishedAt: seoulIso(this.now()) };
+    const finishedAt = seoulIso(this.now());
+    this._lastRun = {
+      session,
+      date,
+      startedAt,
+      finishedAt,
+      ok: results.filter((r) => r.status === "ok").length,
+      failed: results.filter((r) => r.status === "failed").length,
+      skipped: results.filter((r) => r.status === "skipped").length,
+      lastError: results.find((r) => r.status === "failed")?.error ?? null,
+      trigger: opts.trigger ?? "manual",
+    };
+    return { session, date, results, startedAt, finishedAt };
+  }
+
+  /** 직전 브리핑(오늘 이전 세션 또는 어제) 요약 — 같은 말 반복을 피하고 "달라진 점"을 쓰게 한다 */
+  private async previousSummary(code: string, date: string, session: BriefingSession): Promise<string | null> {
+    const rows = await this.deps.db
+      .selectFrom("briefings")
+      .select(["briefing_date", "session", "summary", "status"])
+      .where("code", "=", code)
+      .where("status", "=", "ok")
+      .orderBy("briefing_date", "desc")
+      .orderBy("created_at", "desc")
+      .limit(3)
+      .execute();
+    const prev = rows.find((r) => r.briefing_date < date || (r.briefing_date === date && r.session !== session));
+    return prev ? `${prev.briefing_date} ${prev.session === "morning" ? "오전" : "오후"}: ${prev.summary}` : null;
   }
 
   async generateOne(stock: RegisteredStock, session: BriefingSession, date = seoulDate(this.now())): Promise<Briefing> {
     const log = this.deps.log;
-    const snapshot = await this.deps.collector.collectBriefing(stock);
+    const [snapshot, previous] = await Promise.all([this.deps.collector.collectBriefing(stock), this.previousSummary(stock.code, date, session)]);
     const vars = {
       stock_name: stock.name,
       stock_code: stock.code,
@@ -112,6 +168,7 @@ export class BriefingService {
       quantity: stock.quantity === null ? "미입력" : `${stock.quantity}주`,
       avg_price: stock.avgPrice === null ? "미입력" : `${stock.avgPrice.toLocaleString("ko-KR")}원`,
       missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
+      previous_summary: previous ?? "없음 (첫 브리핑)",
       data_json: JSON.stringify(snapshotForPrompt(snapshot), null, 1),
     };
 

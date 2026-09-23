@@ -2,7 +2,7 @@
   "expo": {
     "name": "주식 브리핑",
     "slug": "stock-briefing",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "runtimeVersion": {
       "policy": "appVersion"
     },

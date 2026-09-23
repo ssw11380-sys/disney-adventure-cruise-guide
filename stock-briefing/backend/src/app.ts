@@ -14,6 +14,7 @@ import { TossSyncService } from "./services/tossSyncService.js";
 import { analysisRoutes } from "./routes/analysis.js";
 import { briefingRoutes } from "./routes/briefings.js";
 import { deviceRoutes, notificationRoutes } from "./routes/notifications.js";
+import { marketRoutes } from "./routes/market.js";
 import { stockRoutes } from "./routes/stocks.js";
 import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
@@ -78,11 +79,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     quotes: opts.providers.quotes,
     news: opts.providers.news,
     financials: opts.providers.financials,
+    financialsUs: opts.providers.financialsUs,
     investorFlow: opts.providers.investorFlow,
     log,
   });
   const prompts = opts.promptStore ?? new PromptStore();
-  const briefingService = new BriefingService({ db: opts.db, collector, generator: opts.providers.generator, prompts, log, now });
+  const briefingService = new BriefingService({ db: opts.db, collector, generator: opts.providers.generator, prompts, calendar: opts.providers.calendar, log, now });
   const analysisService = new AnalysisService({ db: opts.db, collector, generator: opts.providers.generator, prompts, now });
 
   // 알림/시간 설정: DB 에 저장된 값이 .env 기본값을 덮어쓴다
@@ -173,8 +175,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     devices: (await deviceService.enabledTokens()).length,
     authRequired: Boolean(opts.config.API_TOKEN),
     tossOpenApi: tossStatus(tossDeps, tossDeps ? await tossDeps.outboundIp() : null),
+    lastBriefing: briefingService.lastRun,
+    llmConfigured: opts.providers.generator.model !== "disabled",
     disclaimer: DISCLAIMER,
   }));
+
+  await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar });
 
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });
   await app.register(analysisRoutes, {

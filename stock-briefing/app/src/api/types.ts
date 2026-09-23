@@ -151,7 +151,34 @@ export interface LatestBriefing {
 export interface RunResult {
   session: BriefingSession;
   date: string;
-  results: { code: string; name: string; status: "ok" | "failed"; briefingId: number | null; error: string | null; summary: string | null }[];
+  results: { code: string; name: string; status: "ok" | "failed" | "skipped"; briefingId: number | null; error: string | null; summary: string | null }[];
+}
+
+export interface MarketState {
+  market: "KR" | "US";
+  isTradingDay: boolean;
+  isOpen: boolean;
+  opensAt: string | null;
+  closesAt: string | null;
+  source: "toss" | "fallback";
+}
+
+export interface MarketStatus {
+  now: string;
+  KR: MarketState;
+  US: MarketState;
+}
+
+export interface LastBriefingRun {
+  session: BriefingSession;
+  date: string;
+  startedAt: string;
+  finishedAt: string;
+  ok: number;
+  failed: number;
+  skipped: number;
+  lastError: string | null;
+  trigger: "schedule" | "manual";
 }
 
 export type AnalysisKind = "company" | "value" | "technical";
@@ -200,6 +227,8 @@ export interface Health {
   devices?: number;
   authRequired?: boolean;
   tossOpenApi?: TossOpenApiStatus;
+  lastBriefing?: LastBriefingRun | null;
+  llmConfigured?: boolean;
   disclaimer: string;
 }
 
