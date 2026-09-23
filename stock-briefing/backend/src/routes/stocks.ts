@@ -16,7 +16,7 @@ const updateBody = registerBody.omit({ code: true });
 const searchQuery = z.object({ q: z.string().min(1), limit: z.coerce.number().int().min(1).max(50).default(20) });
 const quoteQuery = z.object({ fresh: z.coerce.boolean().default(false) });
 const candlesQuery = z.object({
-  period: z.enum(["D", "W", "M"]).default("D"),
+  period: z.enum(["1m", "5m", "30m", "D", "W", "M"]).default("D"),
   count: z.coerce.number().int().min(5).max(1000).default(120),
 });
 

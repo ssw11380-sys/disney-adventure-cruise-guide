@@ -374,3 +374,19 @@ describe("StockService + 실시간", () => {
     await db.destroy();
   });
 });
+
+describe("분봉 (Open API 1m → 5m/30m)", () => {
+  it("aggregateIntraday 는 현지 시각을 step 분 단위로 묶고, localIso 는 오프셋을 붙인다", async () => {
+    const { aggregateIntraday, localIso } = await import("../src/providers/market/tossOpenApi.js");
+    expect(localIso("2026-09-23T01:25:00Z", true)).toBe("2026-09-23T10:25:00+09:00");
+    expect(localIso("2026-09-22T13:30:00Z", false)).toBe("2026-09-22T09:30:00-04:00");
+    const m = (t: string, o: number, c: number, v = 1) => ({ date: t.slice(0, 10), time: t, open: o, high: Math.max(o, c) + 1, low: Math.min(o, c) - 1, close: c, volume: v });
+    const out = aggregateIntraday(
+      [m("2026-09-23T10:21:00+09:00", 10, 11), m("2026-09-23T10:24:00+09:00", 11, 13), m("2026-09-23T10:25:00+09:00", 13, 12), m("2026-09-23T10:29:00+09:00", 12, 15)],
+      5,
+    );
+    expect(out.map((c) => c.time)).toEqual(["2026-09-23T10:20:00+09:00", "2026-09-23T10:25:00+09:00"]);
+    expect(out[0]).toMatchObject({ open: 10, close: 13, high: 14, low: 9, volume: 2 });
+    expect(out[1]).toMatchObject({ open: 13, close: 15, high: 16, low: 11, volume: 2 });
+  });
+});

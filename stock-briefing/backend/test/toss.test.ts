@@ -180,3 +180,27 @@ describe("TossProvider", () => {
     expect((await chain2.search("테슬라", 5))[0]!.name).toBe("테슬라");
   });
 });
+
+describe("분봉", () => {
+  it("토스 웹 분봉은 min:N 경로로 받고 time 을 붙여 시각순으로 돌려준다", async () => {
+    const calls: string[] = [];
+    const fetchFn = (async (url: string) => {
+      calls.push(url);
+      return new Response(
+        JSON.stringify({
+          result: {
+            candles: [
+              { dt: "2026-09-23T10:30:00+09:00", open: 284000, high: 284500, low: 283500, close: 283500, volume: 248364 },
+              { dt: "2026-09-23T10:25:00+09:00", open: 284500, high: 284500, low: 283750, close: 284000, volume: 268872 },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const s = await new TossProvider(fetchFn, null, NOW).getCandles("035420", "5m", 10);
+    expect(calls[0]).toContain("/api/v1/c-chart/kr-s/A035420/min:5?count=10");
+    expect(s.candles.map((c) => c.time)).toEqual(["2026-09-23T10:25:00+09:00", "2026-09-23T10:30:00+09:00"]);
+    expect(s.candles[0]).toMatchObject({ date: "2026-09-23", open: 284500, close: 284000 });
+  });
+});

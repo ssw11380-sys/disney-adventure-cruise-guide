@@ -6,6 +6,7 @@ import { useAnalysis, useBriefings, useCandles, useStock, useStockMutations, use
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { CandleChart } from "@/components/CandleChart";
+import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
@@ -32,7 +33,7 @@ export default function StockDetailScreen() {
   const [period, setPeriod] = useState<CandlePeriod>("D");
   const [tab, setTab] = useState<Tab>("company");
   // 과거 구간 이동과 120 이평선을 위해 넉넉히 받는다 (일봉 약 3년, 주봉 5년, 월봉 10년)
-  const candles = useCandles(c, period, period === "D" ? 800 : period === "W" ? 260 : 120);
+  const candles = useCandles(c, period, CANDLE_COUNT[period]);
   const briefings = useBriefings({ code: c, limit: 3 });
 
   if (!c) return null;
@@ -144,7 +145,16 @@ export default function StockDetailScreen() {
       </Card>
 
       <Card>
-        <CandleChart candles={candles.data?.candles} period={period} onPeriodChange={setPeriod} loading={candles.isLoading} currency={cur} />
+        <CandleChart
+          candles={candles.data?.candles}
+          period={period}
+          onPeriodChange={setPeriod}
+          loading={candles.isLoading}
+          currency={cur}
+          avgPrice={s.avgPrice}
+          quote={q}
+          onFullscreen={() => router.push(`/stocks/${c}/chart?period=${period}` as never)}
+        />
         {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트 실패"}</Text> : null}
       </Card>
 

@@ -110,10 +110,13 @@ export interface RegisteredWithQuote extends RegisteredStock {
   evaluation: Evaluation | null;
 }
 
-export type CandlePeriod = "D" | "W" | "M";
+/** 1m/5m/30m 분봉(토스 소스), D/W/M 일·주·월봉 */
+export type CandlePeriod = "1m" | "5m" | "30m" | "D" | "W" | "M";
 
 export interface Candle {
   date: string;
+  /** 분봉만: 봉 시작 시각 ISO(현지 오프셋 포함) */
+  time?: string;
   open: number;
   high: number;
   low: number;

@@ -1,4 +1,4 @@
-import type { Candle, CandlePeriod, CandleSeries, ListedStock, Quote } from "../../domain/types.js";
+import { isIntraday, type Candle, type CandlePeriod, type CandleSeries, type ListedStock, type Quote } from "../../domain/types.js";
 import { isKrCode, marketFromYahooExchange } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
@@ -14,7 +14,7 @@ const UA = "Mozilla/5.0 (compatible; stock-briefing/0.1)";
 const SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search";
 const CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 
-const INTERVAL: Record<CandlePeriod, string> = { D: "1d", W: "1wk", M: "1mo" };
+const INTERVAL: Partial<Record<CandlePeriod, string>> = { D: "1d", W: "1wk", M: "1mo" };
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -136,6 +136,7 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
   }
 
   async getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
+    if (isIntraday(period)) throw new ProviderError(this.name, "분봉은 지원하지 않습니다");
     const range = period === "D" ? (count <= 250 ? "1y" : "5y") : period === "W" ? "5y" : "max";
     const { candles } = await this.fetchChart(code, period, range);
     return { code, period, candles: candles.slice(-count), source: this.name };
