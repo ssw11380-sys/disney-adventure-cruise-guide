@@ -35,7 +35,7 @@ function Row() {
 export function HoldingsSkeleton() {
   const t = useTheme();
   return (
-    <View accessibilityLabel="잔고 불러오는 중" accessibilityRole="progressbar">
+    <View accessibilityLabel="잔고 불러오는 중" accessible accessibilityRole="progressbar" accessibilityState={{ busy: true }}>
       <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
         <Bar w="40%" h={12} />
         <Bar w="60%" h={28} style={{ marginTop: 8 }} />
@@ -55,7 +55,7 @@ export function HoldingsSkeleton() {
 export function DetailSkeleton() {
   const t = useTheme();
   return (
-    <View accessibilityLabel="종목 불러오는 중" accessibilityRole="progressbar" style={{ paddingHorizontal: space.lg, paddingTop: space.md, gap: 10 }}>
+    <View accessibilityLabel="종목 불러오는 중" accessible accessibilityRole="progressbar" accessibilityState={{ busy: true }} style={{ paddingHorizontal: space.lg, paddingTop: space.md, gap: 10 }}>
       <Bar w="35%" h={12} />
       <Bar w="55%" h={34} />
       <Bar w="40%" h={14} />
@@ -74,7 +74,7 @@ export function DetailSkeleton() {
 export function CardsSkeleton({ count = 3 }: { count?: number }) {
   const t = useTheme();
   return (
-    <View accessibilityLabel="불러오는 중" accessibilityRole="progressbar" style={{ gap: space.sm, paddingTop: space.sm }}>
+    <View accessibilityLabel="불러오는 중" accessible accessibilityRole="progressbar" accessibilityState={{ busy: true }} style={{ gap: space.sm, paddingTop: space.sm }}>
       {Array.from({ length: count }, (_, i) => (
         <View key={i} style={[styles.card, { backgroundColor: t.surface, borderColor: t.line }]}>
           <Bar w="40%" h={14} />

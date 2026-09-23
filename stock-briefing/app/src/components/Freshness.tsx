@@ -17,7 +17,9 @@ export function StaleBanner({ query, open = false, maxAgeMs }: { query: QueryLik
   const now = useNow(maxAgeMs === undefined ? 60_000 : 5_000);
   const limit = typeof maxAgeMs === "function" ? maxAgeMs(streamFresh(stream, now)) : (maxAgeMs ?? Number.POSITIVE_INFINITY);
   const conn = connection(query, now, limit);
-  const text = staleBanner(conn, { open, now });
+  // 토큰이 틀려 실패 중이면 "다시 연결 중" 대신 무엇을 고쳐야 하는지
+  const auth = conn.offline && (query as { error?: { status?: number } | null }).error?.status === 401;
+  const text = auth ? `토큰 확인 필요 · ${clockLabel(conn.asOf!, now)} 기준 · 설정에서 토큰 입력` : staleBanner(conn, { open, now });
   if (!text) return null;
   const color = conn.offline ? t.danger : t.warn;
   return (

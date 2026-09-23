@@ -73,8 +73,9 @@ function CredentialWatcher() {
   useEffect(() => {
     if (!ready) return;
     if (prev.current !== null && prev.current !== apiToken) {
-      qc.removeQueries();
-      void qc.refetchQueries({ type: "active" });
+      // 이전 토큰으로 받은 캐시를 비우고(기기에 저장된 것도) 보고 있는 화면은 새 토큰으로 다시 받는다
+      void queryPersister.removeClient();
+      void qc.resetQueries();
     }
     prev.current = apiToken;
   }, [apiToken, ready, qc]);
@@ -131,7 +132,7 @@ export default function RootLayout() {
               persister: queryPersister,
               maxAge: PERSIST_MAX_AGE_MS,
               buster: PERSIST_BUSTER,
-              dehydrateOptions: { shouldDehydrateQuery: (q) => shouldPersist(q.queryKey, q.state.status) },
+              dehydrateOptions: { shouldDehydrateQuery: (q) => shouldPersist(q.queryKey, q.state, Date.now()), shouldDehydrateMutation: () => false },
             }}
           >
             <SplashGate />

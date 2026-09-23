@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
-import { useAnyMarketOpen, useHealth, useMarketIndices, useStockMutations, useStocks } from "@/api/hooks";
+import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
@@ -21,8 +21,6 @@ import { refreshWidgets } from "@/widgets/refresh";
 export default function StocksScreen() {
   const t = useTheme();
   const stocks = useStocks();
-  // 지수 띠 요청을 잔고와 동시에 시작한다 (띠가 잔고 아래 머리에 있어 잔고가 온 뒤에야 요청되던 것을 앞당김)
-  useMarketIndices();
   const { data, error, refetch } = stocks;
   const { sort, setSort, showKrw, afterCost } = useSettings();
   const { remove } = useStockMutations();
@@ -72,13 +70,15 @@ export default function StocksScreen() {
     ];
   }, [data, sort, afterCost, showKrw]);
 
-  // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (1분에 한 번)
+  // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (1분에 한 번).
+  // 기기에 저장해 둔 옛 잔고(켜자마자 보이는 값)로는 위젯을 덮지 않는다 — 방금 받은 값(30초 이내)만
   const lastWidgetPush = useRef(0);
+  const dataAt = stocks.dataUpdatedAt;
   useEffect(() => {
-    if (!data || Date.now() - lastWidgetPush.current < 60_000) return;
+    if (!data || Date.now() - dataAt > 30_000 || Date.now() - lastWidgetPush.current < 60_000) return;
     lastWidgetPush.current = Date.now();
     void refreshWidgets({ stocks: data, showKrw, afterCost });
-  }, [data, showKrw, afterCost]);
+  }, [data, dataAt, showKrw, afterCost]);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
     Alert.alert(s.name, undefined, [

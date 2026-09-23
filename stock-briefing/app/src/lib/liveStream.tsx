@@ -28,6 +28,9 @@ export function useLiveStream(): LiveStreamState {
   return useContext(LiveStreamContext);
 }
 
+/** 앱이 켜진 시각. 기기에 저장해 둔 옛 잔고(이 시각보다 오래된 값)에는 체결을 덮지 않는다 — 옛 수량으로 "실시간"처럼 보이지 않게 */
+const SESSION_START = Date.now();
+
 type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
 
 export function LiveStreamProvider({ children }: { children: React.ReactNode }) {
@@ -46,8 +49,9 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
 
     const apply = (tick: StreamTick) => {
       let touched = false;
+      const fresh = (key: unknown[]) => (qc.getQueryState(key)?.dataUpdatedAt ?? 0) >= SESSION_START;
       qc.setQueriesData<RegisteredWithQuote[]>({ queryKey: [apiUrl, "stocks"], exact: true }, (list) => {
-        if (!list) return list;
+        if (!list || !fresh([apiUrl, "stocks"])) return list;
         let changed = false;
         const next = list.map((s) => {
           if (s.code !== tick.code) return s;
