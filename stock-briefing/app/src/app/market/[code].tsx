@@ -27,13 +27,17 @@ export default function MarketIndexScreen() {
   const fx = idx?.kind === "fx" || code.endsWith("KRW");
   const intraday = period === "1m" || period === "5m" || period === "30m";
   const up = changeColor(t, idx?.change);
+  // 거래량이 없는 시계열(환율, 필라반도체처럼 소스가 0만 주는 지수)은 거래량 칸을 숨긴다
+  const hasVolume = !fx && (candles.data ? candles.data.candles.some((c) => c.volume > 0) : true);
   // 차트 오른쪽 현재가 태그와 전일 기준선에 쓰는 값
   const quote = idx ? { price: idx.value, prevClose: idx.value - idx.change, high52w: null, low52w: null, live: false, fxRate: null, priceKrw: null } : null;
 
   const note = fx
     ? intraday
       ? "하나은행 고시 회차 기준 · 시각은 한국 시간"
-      : "하나은행 매매기준율 종가 기준 (시가는 직전 종가)"
+      : period === "M"
+        ? "하나은행 매매기준율 종가 기준 (시가는 직전 종가 · 1년 이전 월봉은 주별 종가로 만든 근사)"
+        : "하나은행 매매기준율 종가 기준 (시가는 직전 종가)"
     : US_INDEX.has(code) && intraday
       ? "직전·당일 정규장 1분 시세 기준 · 시각은 뉴욕 현지"
       : null;
@@ -82,7 +86,7 @@ export default function MarketIndexScreen() {
           loading={candles.isLoading}
           currency="PT"
           quote={quote}
-          hasVolume={!fx}
+          hasVolume={hasVolume}
         />
         {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text> : null}
         {note ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{note}</Text> : null}

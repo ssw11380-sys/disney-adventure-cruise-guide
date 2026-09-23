@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MarketIndices } from "../src/providers/market/indices.js";
+import { fxMonthly, MarketIndices } from "../src/providers/market/indices.js";
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 
@@ -47,10 +47,14 @@ describe("MarketIndices", () => {
       }) as unknown as typeof fetch;
       const m = new MarketIndices(fetchFn, NOW);
       const min = await m.candles("kospi", "1m", 100);
-      expect(min!.candles[0]).toEqual({ date: "2026-09-23", time: "2026-09-23T09:00:00+09:00", open: 7153.99, high: 7153.99, low: 7144.02, close: 7144.02, volume: 4038 });
+      // 국내 지수 차트 거래량은 천주 단위 → 주 단위
+      expect(min!.candles[0]).toEqual({ date: "2026-09-23", time: "2026-09-23T09:00:00+09:00", open: 7153.99, high: 7153.99, low: 7144.02, close: 7144.02, volume: 4_038_000 });
       expect(urls[0]).toContain("startDateTime=202609160000&endDateTime=202609232359");
       const day = await m.candles("KOSPI", "D", 100);
-      expect(day!.candles.map((c) => c.close)).toEqual([7017.91, 7050.69]);
+      expect(day!.candles.map((c) => [c.close, c.volume])).toEqual([
+        [7017.91, 500_000],
+        [7050.69, 300_000],
+      ]);
       expect(urls[1]).toMatch(/\/day\?startDateTime=\d{8}0000&endDateTime=202609232359/);
       expect(await m.candles("NOPE", "D", 100)).toBeNull();
     });
@@ -134,10 +138,11 @@ describe("MarketIndices", () => {
       ]);
       const day = (await m.candles("CNYKRW", "D", 100))!.candles;
       expect(day[1]).toEqual({ date: "2026-09-22", open: 203, high: 203, low: 202, close: 202, volume: 0 });
+      // 일별 자료가 9/21 부터라 온전한 달이 없다 → 전부 주별로. 봉 날짜는 그 달 1일
       const month = (await m.candles("CNYKRW", "M", 100))!.candles;
       expect(month.map((c) => [c.date, c.close])).toEqual([
-        ["2026-08-28", 200],
-        ["2026-09-04", 206],
+        ["2026-08-01", 200],
+        ["2026-09-01", 206],
       ]);
     });
 
@@ -156,5 +161,21 @@ describe("MarketIndices", () => {
       now = new Date(now.getTime() + 60 * 60_000); // 캐시 만료 뒤 실패
       expect((await m.candles("DJI", "W", 50))!.candles).toHaveLength(1);
     });
+  });
+});
+
+describe("fxMonthly", () => {
+  const c = (date: string, close: number, high = close, low = close) => ({ date, open: close, high, low, close, volume: 0 });
+  it("일별이 온전히 덮는 달은 월말 종가로, 그 전은 주별로 묶고, 시가를 직전 달 종가로 잇는다", () => {
+    const weekly = [c("2025-08-29", 1390), c("2025-09-05", 1395, 1400, 1388), c("2025-09-26", 1400), c("2025-10-03", 1405)];
+    // 일별은 2025-09-23 부터 → 10월부터 일별로. 9/30(화) 종가 1406 이 9월이 아니라 주별 행(10/3 주)에 섞이는 문제를 피한다
+    const daily = [c("2025-09-23", 1398), c("2025-09-30", 1406), c("2025-10-01", 1401, 1410, 1399), c("2025-10-31", 1430), c("2025-11-03", 1428)];
+    const m = fxMonthly(daily, weekly);
+    expect(m.map((x) => [x.date, x.open, x.high, x.low, x.close])).toEqual([
+      ["2025-08-01", 1390, 1390, 1390, 1390],
+      ["2025-09-01", 1390, 1400, 1388, 1400],
+      ["2025-10-01", 1400, 1430, 1399, 1430],
+      ["2025-11-01", 1430, 1430, 1428, 1428],
+    ]);
   });
 });

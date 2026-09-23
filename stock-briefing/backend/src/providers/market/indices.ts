@@ -171,15 +171,17 @@ export class MarketIndices {
     const base = `https://api.stock.naver.com/chart/${kr ? "domestic" : "foreign"}/index/${encodeURIComponent(src.naver)}`;
     const now = this.now();
     const range = (days: number) => `startDateTime=${stampKst(new Date(now.getTime() - days * 86_400_000)).slice(0, 8)}0000&endDateTime=${stampKst(now).slice(0, 8)}2359`;
+    // 국내 지수 차트의 거래량은 천주 단위 → 주 단위로 (종목 차트와 같게)
+    const volUnit = kr ? 1000 : 1;
     if (period === "D" || period === "W" || period === "M") {
       const path = period === "D" ? "day" : period === "W" ? "week" : "month";
       const rows = (await this.json(`${base}/${path}?${range(RANGE_DAYS[period](want))}`)) as Json[];
-      return (Array.isArray(rows) ? rows : []).map(dailyCandle).filter((c): c is Candle => c !== null);
+      return (Array.isArray(rows) ? rows : []).map((r) => dailyCandle(r, volUnit)).filter((c): c is Candle => c !== null);
     }
     if (kr) {
       const path = period === "1m" ? "minute" : period === "5m" ? "minute5" : "minute30";
       const rows = (await this.json(`${base}/${path}?${range(RANGE_DAYS[period](want))}`)) as Json[];
-      return (Array.isArray(rows) ? rows : []).map((r) => minuteCandle(r, "+09:00")).filter((c): c is Candle => c !== null);
+      return (Array.isArray(rows) ? rows : []).map((r) => minuteCandle(r, "+09:00", volUnit)).filter((c): c is Candle => c !== null);
     }
     // 해외 지수 분봉: 직전·당일 세션의 1분 시세(종가만) → 1분봉 → 5·30분
     const d = (await this.json(`${base}?periodType=day`)) as Json;
@@ -188,18 +190,31 @@ export class MarketIndices {
     return aggregateIntraday(minutes, period === "1m" ? 1 : period === "5m" ? 5 : 30);
   }
 
-  /** 환율: 당일 고시 회차 → 분봉, 1년 일별 종가 → 일봉, 5·10년 주별 → 주·월봉 */
+  /**
+   * 환율: 당일 고시 회차 → 분봉, 1년 일별 종가 → 일봉, 5년 주별 → 주봉.
+   * 월봉은 최근 1년을 일별 종가로(월말 종가 정확), 그 이전은 10년 주별로 묶는다(주가 월말에 걸치면 그 주의 마지막 날 달로 들어가는 근사).
+   */
   private async fxCandles(src: Source, period: CandlePeriod): Promise<Candle[]> {
-    const type = period === "D" ? "areaYear" : period === "W" ? "areaYearFive" : period === "M" ? "areaYearTen" : "day";
+    if (period === "M") {
+      const [daily, weekly] = await Promise.all([this.fxSeries(src, "areaYear"), this.fxSeries(src, "areaYearTen")]);
+      return fxMonthly(daily, weekly);
+    }
+    if (period === "D" || period === "W") return this.fxSeries(src, period === "D" ? "areaYear" : "areaYearFive");
+    const r = await this.fxResult(src, "day");
+    const ticks = [...((r["lastPriceInfos"] as Json[] | undefined) ?? []), ...((r["priceInfos"] as Json[] | undefined) ?? [])];
+    const minutes = ticksToMinutes(ticks, () => "+09:00", num(r["openPrice"]), false);
+    return aggregateIntraday(minutes, period === "1m" ? 1 : period === "5m" ? 5 : 30);
+  }
+
+  private async fxResult(src: Source, type: string): Promise<Json> {
     const url = `https://m.stock.naver.com/front-api/chart/pricesByPeriod?reutersCode=${encodeURIComponent(src.naver)}&category=exchange&chartInfoType=marketindex&scriptChartType=${type}`;
     const raw = (await this.json(url)) as Json;
-    const r = (raw["result"] as Json | undefined) ?? {};
-    if (type === "day") {
-      const ticks = [...((r["lastPriceInfos"] as Json[] | undefined) ?? []), ...((r["priceInfos"] as Json[] | undefined) ?? [])];
-      const minutes = ticksToMinutes(ticks, () => "+09:00", num(r["openPrice"]), false);
-      return aggregateIntraday(minutes, period === "1m" ? 1 : period === "5m" ? 5 : 30);
-    }
-    // 일·주별 종가(시가 0). 시가는 직전 종가로, 고·저는 그 둘을 포함하게
+    return (raw["result"] as Json | undefined) ?? {};
+  }
+
+  /** 일·주별 종가(시가 0) → 봉. 시가는 직전 종가로, 고·저는 그 둘을 포함하게 */
+  private async fxSeries(src: Source, type: string): Promise<Candle[]> {
+    const r = await this.fxResult(src, type);
     const out: Candle[] = [];
     for (const row of (r["priceInfos"] as Json[] | undefined) ?? []) {
       const p = splitStamp(String(row["localDate"] ?? ""));
@@ -210,19 +225,45 @@ export class MarketIndices {
       const low = Math.min(num(row["lowPrice"]) ?? close, open, close);
       out.push({ date: p.date, open, high, low, close, volume: 0 });
     }
-    return period === "M" ? aggregateCandles(out, "M") : out;
+    return out;
   }
 }
 
-function dailyCandle(r: Json): Candle | null {
+/**
+ * 환율 월봉: 일별 자료가 온전히 덮는 달(첫 일별 날짜의 다음 달부터)은 일별로, 그 전은 주별로 묶는다.
+ * 봉 날짜는 그 달 1일, 시가는 직전 달 종가로 잇는다.
+ */
+export function fxMonthly(daily: Candle[], weekly: Candle[]): Candle[] {
+  const first = daily[0]?.date;
+  const cutoff = first ? nextMonth(first.slice(0, 7)) : null; // "YYYY-MM"
+  const older = aggregateCandles(
+    weekly.filter((c) => !cutoff || c.date.slice(0, 7) < cutoff),
+    "M",
+  );
+  const recent = cutoff ? aggregateCandles(daily.filter((c) => c.date.slice(0, 7) >= cutoff), "M") : [];
+  const out: Candle[] = [];
+  for (const c of [...older, ...recent]) {
+    const prev = out.at(-1);
+    const open = prev ? prev.close : c.open;
+    out.push({ ...c, date: `${c.date.slice(0, 7)}-01`, open, high: Math.max(c.high, open), low: Math.min(c.low, open) });
+  }
+  return out;
+}
+
+function nextMonth(ym: string): string {
+  const [y, m] = ym.split("-").map(Number) as [number, number];
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+}
+
+function dailyCandle(r: Json, volUnit = 1): Candle | null {
   const p = splitStamp(String(r["localDate"] ?? ""));
   const close = num(r["closePrice"]);
   if (!p || close === null) return null;
   const open = num(r["openPrice"]) || close;
-  return { date: p.date, open, high: num(r["highPrice"]) ?? Math.max(open, close), low: num(r["lowPrice"]) ?? Math.min(open, close), close, volume: num(r["accumulatedTradingVolume"]) ?? 0 };
+  return { date: p.date, open, high: num(r["highPrice"]) ?? Math.max(open, close), low: num(r["lowPrice"]) ?? Math.min(open, close), close, volume: (num(r["accumulatedTradingVolume"]) ?? 0) * volUnit };
 }
 
-function minuteCandle(r: Json, offset: string): Candle | null {
+function minuteCandle(r: Json, offset: string, volUnit = 1): Candle | null {
   const p = splitStamp(String(r["localDateTime"] ?? ""));
   const close = num(r["currentPrice"]);
   if (!p?.hms || close === null) return null;
@@ -234,7 +275,7 @@ function minuteCandle(r: Json, offset: string): Candle | null {
     high: num(r["highPrice"]) ?? Math.max(open, close),
     low: num(r["lowPrice"]) ?? Math.min(open, close),
     close,
-    volume: num(r["accumulatedTradingVolume"]) ?? 0,
+    volume: (num(r["accumulatedTradingVolume"]) ?? 0) * volUnit,
   };
 }
 
