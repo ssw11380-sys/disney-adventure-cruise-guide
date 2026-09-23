@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
-import type { Candle, CandlePeriod, Currency } from "@/api/types";
+import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
 import { formatPct, formatPrice, formatVolume } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
 import { font, space, useTheme } from "@/theme";
@@ -27,7 +27,8 @@ export interface ChartView {
 export interface PriceChartProps {
   candles: Candle[];
   period: CandlePeriod;
-  currency: Currency;
+  /** 값 단위: KRW·USD 통화, PT = 지수·환율(소수 둘째 자리) */
+  currency: ChartUnit;
   width: number;
   height: number;
   view: ChartView;
@@ -35,6 +36,8 @@ export interface PriceChartProps {
   maPeriods: number[];
   showBollinger: boolean;
   showVolume: boolean;
+  /** 거래량이 없는 시계열(환율)이면 false: 읽기 줄에서 거래량을 뺀다 */
+  hasVolume?: boolean;
   indicator: IndicatorKind;
   avgPrice?: number | null;
   currentPrice?: number | null;
@@ -57,9 +60,20 @@ export function clampView(v: ChartView, total: number, minCount = 15, maxCount =
   return { count, offset };
 }
 
-function axisPrice(v: number, currency: Currency): string {
+/** 축·태그 값. PT 는 digits(눈금 간격에 맞춘 소수 자리, 없으면 2) */
+function axisPrice(v: number, currency: ChartUnit, digits?: number): string {
+  if (currency === "PT") {
+    const d = digits ?? 2;
+    return v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
   if (currency === "USD") return v >= 1000 ? v.toLocaleString("en-US", { maximumFractionDigits: 0 }) : v.toFixed(2);
   return Math.round(v).toLocaleString("ko-KR");
+}
+
+/** 읽기 줄의 값 (통화는 원·달러 표기, PT 는 소수 둘째 자리) */
+export function formatChartValue(v: number, unit: ChartUnit): string {
+  if (unit === "PT") return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatPrice(v, unit);
 }
 
 function labelOf(c: Candle, period: CandlePeriod, prev: Candle | undefined, dense: boolean): string {
@@ -180,6 +194,9 @@ export function PriceChart(p: PriceChartProps) {
   );
 
   const priceTicks = useMemo(() => niceTicks(domain[0], domain[1], 5).filter((v) => v > domain[0] && v < domain[1]), [domain]);
+  // 지수·환율 축 눈금: 간격이 1 미만이면 소수 자리를 늘린다 (원/위안 201.5, 201.6 …)
+  const tickStep = priceTicks.length > 1 ? priceTicks[1]! - priceTicks[0]! : 1;
+  const tickDigits = tickStep >= 1 ? 0 : tickStep >= 0.1 ? 1 : 2;
   const xTicks = useMemo(() => {
     if (n === 0) return [] as { i: number; label: string }[];
     const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 64))));
@@ -306,7 +323,7 @@ export function PriceChart(p: PriceChartProps) {
 
   return (
     <View style={{ width, gap: space.xs }}>
-      <Readout candle={crossCandle} prev={cross ? visible[cross.i - 1] ?? candles[start + cross.i - 1] : undefined} last={last} currency={currency} mas={mas} index={cross ? start + cross.i : end - 1} period={p.period} />
+      <Readout candle={crossCandle} prev={cross ? visible[cross.i - 1] ?? candles[start + cross.i - 1] : undefined} last={last} currency={currency} mas={mas} index={cross ? start + cross.i : end - 1} period={p.period} showVolume={p.hasVolume !== false} />
       <GestureDetector gesture={gesture}>
         <View style={{ width, height }} collapsable={false}>
           <Svg width={width} height={height}>
@@ -315,7 +332,7 @@ export function PriceChart(p: PriceChartProps) {
               <React.Fragment key={v}>
                 <Line x1={0} x2={plotW} y1={yOf(v)} y2={yOf(v)} stroke={t.line} strokeWidth={StyleSheet.hairlineWidth} />
                 <SvgText x={plotW + 4} y={yOf(v) + 3.5} fill={t.muted} fontSize={10}>
-                  {axisPrice(v, currency)}
+                  {axisPrice(v, currency, tickDigits)}
                 </SvgText>
               </React.Fragment>
             ))}
@@ -413,7 +430,7 @@ export function PriceChart(p: PriceChartProps) {
                 <Path d={linePath(macdS.macd, yInd)} stroke="#0ea5e9" strokeWidth={1.2} fill="none" />
                 <Path d={linePath(macdS.signal, yInd)} stroke="#f59e0b" strokeWidth={1.2} fill="none" />
                 <SvgText x={2} y={indTop + 9} fill={t.muted} fontSize={9}>
-                  MACD(12,26,9) {fmtNum(macdS.macd[end - 1], currency === "USD" ? 2 : 0)} · 시그널 {fmtNum(macdS.signal[end - 1], currency === "USD" ? 2 : 0)}
+                  MACD(12,26,9) {fmtNum(macdS.macd[end - 1], currency === "KRW" ? 0 : 2)} · 시그널 {fmtNum(macdS.signal[end - 1], currency === "KRW" ? 0 : 2)}
                 </SvgText>
               </>
             ) : null}
@@ -482,14 +499,16 @@ function Readout({
   mas,
   index,
   period,
+  showVolume,
 }: {
   candle: Candle | undefined;
   prev: Candle | undefined;
   last: Candle | undefined;
-  currency: Currency;
+  currency: ChartUnit;
   mas: { period: number; values: Series }[];
   index: number;
   period: CandlePeriod;
+  showVolume: boolean;
 }) {
   const t = useTheme();
   const c = candle ?? last;
@@ -506,8 +525,10 @@ function Readout({
         {candle ? " · 십자선" : ""}
       </Text>
       <Text style={[styles.readoutText, { color: t.ink }]}>
-        시 {formatPrice(c.open, currency)} 고 {formatPrice(c.high, currency)} 저 {formatPrice(c.low, currency)} 종 <Text style={{ color, fontWeight: "700" }}>{formatPrice(c.close, currency)}</Text>
-        {chg !== null ? <Text style={{ color }}> ({formatPct(chg)})</Text> : null} · 거래량 {formatVolume(c.volume)}
+        시 {formatChartValue(c.open, currency)} 고 {formatChartValue(c.high, currency)} 저 {formatChartValue(c.low, currency)} 종{" "}
+        <Text style={{ color, fontWeight: "700" }}>{formatChartValue(c.close, currency)}</Text>
+        {chg !== null ? <Text style={{ color }}> ({formatPct(chg)})</Text> : null}
+        {showVolume ? ` · 거래량 ${formatVolume(c.volume)}` : ""}
       </Text>
       {mas.length ? (
         <Text style={[styles.readoutText, { color: t.muted }]}>
@@ -516,7 +537,7 @@ function Readout({
             return (
               <Text key={m.period}>
                 <Text style={{ color: MA_COLORS[m.period] ?? t.muted }}>■</Text> {m.period}
-                {unit} {v === null || v === undefined ? "-" : formatPrice(v, currency)}{" "}
+                {unit} {v === null || v === undefined ? "-" : formatChartValue(v, currency)}{" "}
               </Text>
             );
           })}

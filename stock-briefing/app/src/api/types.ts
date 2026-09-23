@@ -2,6 +2,8 @@
 
 export type Market = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "US" | "UNKNOWN";
 export type Currency = "KRW" | "USD";
+/** 차트 값 단위: 통화, 또는 지수·환율처럼 소수 둘째 자리 숫자(PT) */
+export type ChartUnit = Currency | "PT";
 
 /** 정규장 밖(넥스트레이드 NXT) 가격. 토스·네이버가 장 마감 후 보여주는 값 */
 export interface AfterMarketQuote {
@@ -191,6 +193,8 @@ export interface MarketState {
 export interface MarketIndex {
   code: string;
   name: string;
+  /** index: 지수(포인트), fx: 환율(원). 구버전 서버는 없음 */
+  kind?: "index" | "fx";
   value: number;
   change: number;
   changeRate: number;

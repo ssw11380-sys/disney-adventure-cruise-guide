@@ -45,6 +45,7 @@ function Navigator() {
       <Stack.Screen name="stocks/[code]/edit" options={{ title: "잔고 수정", presentation: "modal" }} />
       <Stack.Screen name="stocks/[code]/chart" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
       <Stack.Screen name="briefings/[id]" options={{ title: "브리핑" }} />
+      <Stack.Screen name="market/[code]" options={{ title: "지수" }} />
     </Stack>
   );
 }

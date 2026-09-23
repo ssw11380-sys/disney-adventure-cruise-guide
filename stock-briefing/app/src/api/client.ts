@@ -125,6 +125,7 @@ export function createApi(baseUrl: string, token = "") {
       send<{ applied: string[]; skipped: { code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed"; retryAfter?: string }[] }>("PUT", "/api/admin/toss/krw-cost", { items }),
     marketStatus: () => get<MarketStatus>("/api/market/status", 10_000),
     marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices", 10_000),
+    marketCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`/api/market/indices/${encodeURIComponent(code)}/candles?period=${period}&count=${count}`),
   };
 }
 
