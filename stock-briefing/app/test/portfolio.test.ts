@@ -135,3 +135,25 @@ describe("위젯 목록 순서", () => {
     expect(widgetOrder([noFx, samsung]).map((s) => s.code)).toEqual(["005930", "TSLA"]);
   });
 });
+
+/**
+ * 3-4단계에서 고칠 위젯 버그의 재현 테스트. 지금은 "수정 전 실패"(it.fails)로 고정해 두고,
+ * 고치면 이 테스트가 깨지므로 그때 it.fails → it 으로 바꾼다.
+ */
+describe("수정 전 실패 (3-4에서 고침)", () => {
+  // 위젯-3: 시세를 못 받은 보유 종목(수량 있음, quote·evaluation null)이 '관심'으로 내려가고 합계에서 표시 없이 빠진다
+  const noQuoteHeld = { ...samsung, quote: null, evaluation: null };
+
+  it.fails("위젯-3: 시세 없는 보유 종목도 보유 쪽에 남는다", () => {
+    const watchFirstByName = { ...watchOnly, name: "가나다" }; // 이름순으로 관심 맨 앞에 오는 종목
+    const order = widgetOrder([watchFirstByName, noQuoteHeld, hynix]).map((s) => s.code);
+    // 보유(하이닉스, 삼성전자) → 관심 순이어야 한다. 지금은 삼성전자가 관심 뒤로 밀린다
+    expect(order.indexOf("005930")).toBeLessThan(order.indexOf("035720"));
+  });
+
+  it.fails("위젯-3: 합계에서 빠진 보유 종목이 있으면 표시된다", () => {
+    expect(totals([noQuoteHeld, hynix], false)!.mixed).toBe(true);
+  });
+
+  it.todo("위젯-2: 자산 위젯의 총손익 색이 당일 손익이 아니라 총손익 부호를 따른다 (렌더 함수 분리 후 3-4에서)");
+});
