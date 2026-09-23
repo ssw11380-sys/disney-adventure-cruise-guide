@@ -130,3 +130,23 @@ describe("StockService 보강", () => {
     await db.destroy();
   });
 });
+
+describe("환율 우선 소스", () => {
+  it("fxPrimary(토스)가 값을 주면 네이버를 부르지 않고, 실패하면 네이버로 넘어간다", async () => {
+    const { NaverFundamentals } = await import("../src/providers/market/fundamentals.js");
+    let naverCalls = 0;
+    const fetchFn = (async (url: string) => {
+      naverCalls++;
+      return new Response(JSON.stringify({ exchangeInfo: { closePrice: "1,348.80" } }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    let t = 0;
+    const f = new NaverFundamentals(fetchFn, () => new Date(t));
+    f.fxPrimary = async () => 1357.2;
+    expect(await f.usdKrw()).toBe(1357.2);
+    expect(naverCalls).toBe(0);
+    t += 61_000;
+    f.fxPrimary = async () => null;
+    expect(await f.usdKrw()).toBe(1348.8);
+    expect(naverCalls).toBe(1);
+  });
+});

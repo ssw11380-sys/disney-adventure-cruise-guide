@@ -88,6 +88,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   quoteChain.push(yahoo);
 
   const fundamentals = new NaverFundamentals();
+  // 환율은 토스 Open API 가 있으면 그쪽을 먼저 (토스 앱 평가금과 같은 환산가), 없으면 네이버(하나은행 고시)
+  if (tossOpenApi) fundamentals.fxPrimary = () => tossOpenApi!.usdKrw();
   const newsChain: NewsProvider[] = [new NaverStockNewsProvider(fetch, fundamentals)];
   if (cfg.NAVER_CLIENT_ID && cfg.NAVER_CLIENT_SECRET) {
     newsChain.push(new NaverNewsProvider(cfg.NAVER_CLIENT_ID, cfg.NAVER_CLIENT_SECRET));

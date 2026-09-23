@@ -43,6 +43,9 @@ export class NaverFundamentals {
   private readonly cache = new Map<string, { at: number; value: Fundamentals | null }>();
   private fx: { at: number; rate: number } | null = null;
 
+  /** 우선 쓸 환율 소스(토스 Open API 등). 토스 앱의 평가금과 같은 숫자를 내기 위해 토스 환율을 먼저 쓴다 */
+  fxPrimary: (() => Promise<number | null>) | null = null;
+
   constructor(
     private readonly fetchFn: FetchFn = fetch,
     private readonly now: () => Date = () => new Date(),
@@ -63,6 +66,13 @@ export class NaverFundamentals {
   async usdKrw(): Promise<number | null> {
     const t = this.now().getTime();
     if (this.fx && t - this.fx.at < 60_000) return this.fx.rate;
+    if (this.fxPrimary) {
+      const primary = await this.fxPrimary().catch(() => null);
+      if (primary && primary > 0) {
+        this.fx = { at: t, rate: primary };
+        return primary;
+      }
+    }
     const j = await this.getJson("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW");
     const rate = parseNum((j?.["exchangeInfo"] as Json | undefined)?.["closePrice"]);
     if (rate === null || rate <= 0) return this.fx?.rate ?? null;
