@@ -39,8 +39,10 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
 
   app.get("/:code", async (req, reply) => {
     const { code } = codeParam.parse(req.params);
-    const stock = await service.get(code);
-    if (!stock) return reply.code(404).send({ error: "NOT_FOUND", message: `등록되지 않은 종목입니다: ${code}` });
+    // 등록하지 않은 종목(발견 탭에서 누른 종목 등)도 종목 마스터에 있으면 미리 보기로 보여 준다 (registered: false)
+    const registered = await service.get(code);
+    const stock = registered ?? (await service.preview(code));
+    if (!stock) return reply.code(404).send({ error: "NOT_FOUND", message: `종목을 찾을 수 없습니다: ${code}` });
     let quote = null;
     let quoteError: string | null = null;
     try {
@@ -49,7 +51,7 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
       quoteError = e instanceof Error ? e.message : String(e);
     }
     const [detail, krw] = await Promise.all([service.tossDetail(), service.krwCosts()]);
-    return { ...stock, quote, quoteError, evaluation: evaluate(stock, quote, detail.get(code), krw.get(code)) };
+    return { ...stock, registered: !!registered, quote, quoteError, evaluation: evaluate(stock, quote, detail.get(code), krw.get(code)) };
   });
 
   app.patch("/:code", async (req) => {

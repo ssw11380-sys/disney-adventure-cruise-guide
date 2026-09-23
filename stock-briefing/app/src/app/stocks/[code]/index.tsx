@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { useAnalysis, useBriefings, useCandles, useStock, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
@@ -30,6 +30,7 @@ export default function StockDetailScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const c = code ?? "";
   const stock = useStock(c);
+  const { register } = useStockMutations();
   const { showKrw, afterCost } = useSettings();
   const [period, setPeriod] = useState<CandlePeriod>("D");
   const [tab, setTab] = useState<Tab>("company");
@@ -42,6 +43,16 @@ export default function StockDetailScreen() {
   if (stock.isError) return <Screen><ErrorView error={stock.error} onRetry={() => void stock.refetch()} /></Screen>;
   const s = stock.data!;
   const q = s.quote;
+  // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가
+  const unregistered = s.registered === false;
+  const addWatch = () =>
+    register.mutate(
+      { code: s.code },
+      {
+        onSuccess: () => void stock.refetch(),
+        onError: (e) => Alert.alert("관심 추가 실패", e instanceof Error ? e.message : String(e)),
+      },
+    );
   const cur = q?.currency ?? currencyOfMarket(s.market);
   const fx = q?.fxRate ?? (q?.priceKrw && q.price ? q.priceKrw / q.price : null);
   const displayCur = toDisplay(1, cur, fx, showKrw).currency;
@@ -69,11 +80,17 @@ export default function StockDetailScreen() {
       <Stack.Screen
         options={{
           title: s.name,
-          headerRight: () => (
-            <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityLabel="보유 정보 수정" hitSlop={10}>
-              <Ionicons name="create-outline" size={21} color={t.ink} />
-            </Pressable>
-          ),
+          headerRight: () =>
+            unregistered ? (
+              <Pressable onPress={addWatch} disabled={register.isPending} accessibilityLabel="관심 종목에 추가" hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Ionicons name="star-outline" size={20} color={t.gold} />
+                <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{register.isPending ? "추가 중" : "관심 추가"}</Text>
+              </Pressable>
+            ) : (
+              <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityLabel="보유 정보 수정" hitSlop={10}>
+                <Ionicons name="create-outline" size={21} color={t.ink} />
+              </Pressable>
+            ),
         }}
       />
 
@@ -82,7 +99,7 @@ export default function StockDetailScreen() {
         <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={1}>
           {s.code} · {s.market}
           {q?.industry ? ` · ${q.industry}` : ""}
-          {s.quantity ? "" : " · 관심"}
+          {unregistered ? " · 미등록" : s.quantity ? "" : " · 관심"}
         </Text>
         {q ? (
           <>

@@ -303,3 +303,70 @@ export interface SendSummary {
   failed: number;
   disabled: string[];
 }
+
+// ── 발견 탭 ────────────────────────────────────────────────────────
+export type DiscoverMarket = "KR" | "US";
+export type RankCategory = "tradingValue" | "volume" | "gainers" | "losers";
+
+/** 순위·테마 목록의 종목 한 줄 */
+export interface DiscoverStock {
+  code: string;
+  name: string;
+  market: Market | string;
+  currency: Currency;
+  price: number;
+  change: number;
+  changeRate: number;
+  volume: number | null;
+  /** 거래대금 (종목 통화) */
+  tradingValue: number | null;
+  marketCap?: number | null;
+}
+
+export interface DiscoverRank {
+  market: DiscoverMarket;
+  category: RankCategory;
+  items: DiscoverStock[];
+  page: number;
+  hasMore: boolean;
+  /** 장중이면 true (자동 갱신·"장 마감" 표시) */
+  marketOpen: boolean;
+  asOf: string | null;
+  /** 미국 종목 원화 환산용 */
+  fxRate?: number | null;
+  source: string;
+  note?: string | null;
+}
+
+export interface ThemeSummary {
+  id: string;
+  name: string;
+  changeRate: number;
+  up: number;
+  flat: number;
+  down: number;
+  /** 대표 종목 (등락률 높은 순 2~3개) */
+  leaders: { code: string; name: string; changeRate: number }[];
+}
+
+export interface ThemeList {
+  market: DiscoverMarket;
+  themes: ThemeSummary[];
+  marketOpen: boolean;
+  asOf: string | null;
+  source: string;
+  /** 테마 등락률 산출 방식 (출처 값 / 구성 종목 평균 등) */
+  basis: string;
+}
+
+export interface ThemeDetail {
+  market: DiscoverMarket;
+  theme: ThemeSummary;
+  items: DiscoverStock[];
+  marketOpen: boolean;
+  asOf: string | null;
+  fxRate?: number | null;
+  source: string;
+  basis: string;
+}
+

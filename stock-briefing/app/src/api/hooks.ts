@@ -1,10 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
 import { useLiveStream } from "@/lib/liveStream";
 import { useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
-import type { AnalysisKind, BriefingSession, CandlePeriod } from "./types";
+import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, RankCategory } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken } = useSettings();
@@ -84,6 +84,47 @@ export function useSearch(q: string) {
     queryFn: () => api.searchStocks(query),
     enabled: query.length > 0,
     staleTime: 5 * 60_000,
+  });
+}
+
+/** 발견 탭: 그 나라 장이 열려 있으면 30초, 아니면 5분마다 */
+function useDiscoverInterval(market: DiscoverMarket): number {
+  const m = useMarketStatus();
+  const open = market === "KR" ? m.data?.KR.isOpen : m.data?.US.isOpen;
+  return (open ?? true) ? 30_000 : 5 * 60_000;
+}
+
+/** 순위 목록 (거래대금·거래량·급상승·급하락). 50개씩, 끝까지 내리면 다음 쪽 */
+export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, size = 50) {
+  const api = useApi();
+  const interval = useDiscoverInterval(market);
+  return useInfiniteQuery({
+    queryKey: useKey("discoverRank", market, category, size),
+    queryFn: ({ pageParam }) => api.discoverRank(market, category, pageParam, size),
+    initialPageParam: 1,
+    getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
+    staleTime: Math.min(interval, 30_000),
+    refetchInterval: interval,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useDiscoverThemes(market: DiscoverMarket) {
+  const api = useApi();
+  const interval = useDiscoverInterval(market);
+  return useQuery({ queryKey: useKey("discoverThemes", market), queryFn: () => api.discoverThemes(market), staleTime: Math.min(interval, 30_000), refetchInterval: interval, refetchIntervalInBackground: false });
+}
+
+export function useDiscoverTheme(market: DiscoverMarket, id: string) {
+  const api = useApi();
+  const interval = useDiscoverInterval(market);
+  return useQuery({
+    queryKey: useKey("discoverTheme", market, id),
+    queryFn: () => api.discoverTheme(market, id),
+    enabled: !!id,
+    staleTime: Math.min(interval, 30_000),
+    refetchInterval: interval,
+    refetchIntervalInBackground: false,
   });
 }
 

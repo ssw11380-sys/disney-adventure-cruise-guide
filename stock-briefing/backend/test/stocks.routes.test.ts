@@ -53,6 +53,16 @@ describe("stock routes", () => {
     expect(search.calls).toHaveLength(0);
   });
 
+  it("등록하지 않은 마스터 종목은 미리 보기(registered:false)로, 모르는 코드는 404", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/stocks/000660" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ code: "000660", name: "SK하이닉스", registered: false, quantity: null, evaluation: null });
+    expect(res.json().quote.price).toBe(180_000);
+    await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "000660" } });
+    expect((await app.inject({ method: "GET", url: "/api/stocks/000660" })).json().registered).toBe(true);
+    expect((await app.inject({ method: "GET", url: "/api/stocks/999999" })).statusCode).toBe(404);
+  });
+
   it("코드로 검색하면 정확히 하나만 나온다", async () => {
     const res = await app.inject({ method: "GET", url: "/api/stocks/search?q=005930" });
     expect(res.json().results).toHaveLength(1);
@@ -92,8 +102,9 @@ describe("stock routes", () => {
 
     const del = await app.inject({ method: "DELETE", url: "/api/stocks/000660" });
     expect(del.statusCode).toBe(204);
+    // 삭제 뒤에는 등록 종목이 아니라 마스터 미리 보기로 보인다
     const gone = await app.inject({ method: "GET", url: "/api/stocks/000660" });
-    expect(gone.statusCode).toBe(404);
+    expect(gone.json()).toMatchObject({ registered: false, quantity: null });
   });
 
   it("잘못된 코드/본문은 400 으로 거절한다", async () => {
