@@ -60,6 +60,15 @@ type RankState = { at: number; items: DiscoverStock[]; next: number; hasNext: bo
 
 export const MIN_TRADING_VALUE: Record<DiscoverMarket, number> = { KR: 1_000_000_000, US: 1_000_000 };
 const MAX_SOURCE_PAGES = 12;
+/** 한국 가격제한폭(%) — 넘으면 상장 첫날이거나 정리매매 */
+const KR_LIMIT_PCT = 30.5;
+/** 분류별 정렬 기준 값 */
+const RANK_KEY: Record<RankCategory, (s: DiscoverStock) => number | null> = {
+  tradingValue: (s) => s.tradingValue,
+  volume: (s) => s.volume,
+  gainers: (s) => s.changeRate,
+  losers: (s) => s.changeRate,
+};
 /** 미국 테마북을 처음 만드는 동안(약 1분) 요청이 기다리는 최대 시간 */
 const BOOK_WAIT_MS = 20_000;
 
@@ -137,10 +146,13 @@ export class DiscoverService {
     const need = page * size + 1; // 다음 쪽이 있는지 알기 위해 하나 더
     let st = this.ranks.get(key);
     if (!st || t - st.at >= this.ttl(open)) {
-      // 새로 받는다. 실패하면 직전 목록
+      // 새로 받는다. 실패하거나(장 시작 전처럼) 빈 목록이 오면 직전 목록
       try {
-        st = await this.fillRank(market, category, { at: t, items: [], next: 0, hasNext: true, source: "", tradedAt: null }, need);
-        this.ranks.set(key, st);
+        const fresh = await this.fillRank(market, category, { at: t, items: [], next: 0, hasNext: true, source: "", tradedAt: null }, need);
+        if (fresh.items.length || !st?.items.length) {
+          st = fresh;
+          this.ranks.set(key, st);
+        }
       } catch (e) {
         if (!st) throw e;
       }
@@ -166,7 +178,7 @@ export class DiscoverService {
       fxRate: await this.fx(market),
       source: s.source,
       note: [
-        market === "KR" ? "ETF·ETN·스팩 제외" : "ETF·우선주·권리주 제외",
+        market === "KR" ? (category === "gainers" || category === "losers" ? "ETF·ETN·스팩·정리매매 제외" : "ETF·ETN·스팩 제외") : "ETF·우선주·권리주 제외",
         category === "gainers" || category === "losers" ? `거래대금 ${market === "KR" ? "10억 원" : "100만 달러"} 이상` : null,
       ]
         .filter(Boolean)
@@ -190,7 +202,8 @@ export class DiscoverService {
     let next = start.next;
     let hasNext = start.hasNext;
     let tradedAt = start.tradedAt;
-    const minTv = category === "gainers" || category === "losers" ? MIN_TRADING_VALUE[market] : 0;
+    const movers = category === "gainers" || category === "losers";
+    const minTv = movers ? MIN_TRADING_VALUE[market] : 0;
     while (items.length < need && hasNext && next < MAX_SOURCE_PAGES) {
       const batch = [next, next + 1, next + 2].filter((i) => i < MAX_SOURCE_PAGES);
       const pages = await Promise.all(batch.map((i) => src.source(category, i)));
@@ -199,6 +212,8 @@ export class DiscoverService {
         for (const it of p.items) {
           if (seen.has(it.code)) continue;
           if (minTv && (it.tradingValue ?? 0) < minTv) continue;
+          // 한국 가격제한폭(±30%)을 넘는데 상장 첫날이 아니면 정리매매·기준가 변경 종목이라 뺀다 (예: -96%)
+          if (movers && market === "KR" && Math.abs(it.changeRate) > KR_LIMIT_PCT && !it.newlyListed) continue;
           seen.add(it.code);
           items.push(it);
         }
@@ -207,7 +222,14 @@ export class DiscoverService {
       hasNext = pages.at(-1)?.hasNext ?? false;
       if (pages.some((p) => !p.hasNext)) hasNext = false;
     }
-    return { at: start.at, items, next, hasNext, source: src.name, tradedAt };
+    // 출처 순위는 가격보다 늦게 갱신돼 순서가 조금씩 어긋난다 → 받은 값으로 다시 정렬 (같으면 원래 순서)
+    const key = RANK_KEY[category];
+    const dir = category === "losers" ? 1 : -1;
+    const sorted = items
+      .map((it, i) => ({ it, i }))
+      .sort((a, b) => dir * ((key(a.it) ?? -Infinity) - (key(b.it) ?? -Infinity)) || a.i - b.i)
+      .map((x) => x.it);
+    return { at: start.at, items: sorted, next, hasNext, source: src.name, tradedAt };
   }
 
   /** 오늘 상장한 한국 종목 (실패하면 빈 집합 — 조정 없이 네이버 값 그대로) */

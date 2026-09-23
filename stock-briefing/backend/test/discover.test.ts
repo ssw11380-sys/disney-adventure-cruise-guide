@@ -67,6 +67,39 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
     expect(calls.length).toBe(again);
   });
 
+  it("순위는 받은 값으로 다시 정렬하고, 가격제한폭을 넘는 정리매매는 빼며(상장 첫날은 남김), 빈 목록이 오면 직전 목록을 유지한다", async () => {
+    let empty = false;
+    let now = new Date("2026-09-23T05:00:00Z");
+    const fetchFn = (async (url: string) => {
+      const u = new URL(url);
+      if (empty) return ok({ items: [], hasNext: false });
+      if (u.searchParams.get("sortType") === "down")
+        return ok({
+          items: [
+            krRow("000010", "정리매매", -96.68, 1.03e9),
+            krRow("000011", "가", -12, 2e9),
+            krRow("000012", "나", -15, 2e9), // 출처 순서가 어긋남
+            krRow("000013", "다", -29.9, 2e9),
+          ],
+          hasNext: false,
+        });
+      if (u.searchParams.get("sortType") === "up")
+        return ok({ items: [krRow("0010S0", "새내기", 288, 9e11, { newlyListed: true }), krRow("000020", "라", 21.65, 2e9), krRow("000021", "마", 22.06, 2e9)], hasNext: false });
+      return json({}, 404);
+    }) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    const losers = await svc.rank("KR", "losers", 1, 50);
+    expect(losers.items.map((i) => i.code)).toEqual(["000013", "000012", "000011"]);
+    expect(losers.note).toContain("정리매매 제외");
+    const gainers = await svc.rank("KR", "gainers", 1, 50);
+    expect(gainers.items.map((i) => i.code)).toEqual(["0010S0", "000021", "000020"]);
+    expect(gainers.items[0]!.newlyListed).toBe(true);
+    // 장 시작 전처럼 빈 목록이 오면 직전 목록
+    empty = true;
+    now = new Date(now.getTime() + 10 * 60_000);
+    expect((await svc.rank("KR", "gainers", 1, 50)).items).toHaveLength(3);
+  });
+
   it("조회가 실패하면 직전 목록을 주고, 직전 값이 없으면 던진다", async () => {
     let fail = false;
     let now = new Date("2026-09-23T05:00:00Z");
