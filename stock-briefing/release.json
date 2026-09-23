@@ -1,6 +1,6 @@
 {
   "version": "1.3.0",
-  "apkUrl": null,
+  "apkUrl": "https://expo.dev/artifacts/eas/agGelw0r2HS2t669niQ8hEhL63CyiQt_fB1YuYNuXmM.apk",
   "notes": "Firebase 없이 브리핑 알림(백그라운드 확인), 휴장일 자동 건너뜀, 미국 종목 재무·공시(SEC), 종목 뉴스 정확도 개선, 매수·매도 기록으로 평단 자동 계산, 브리핑 탭 한 줄 보기와 서버 상태 배너",
   "publishedAt": "2026-09-23"
 }
