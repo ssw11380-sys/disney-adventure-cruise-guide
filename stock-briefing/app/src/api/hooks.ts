@@ -103,10 +103,11 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
   const interval = useDiscoverInterval(market);
   return useInfiniteQuery({
     queryKey: useKey("discoverRank", market, category, size),
-    queryFn: ({ pageParam }) => api.discoverRank(market, category, pageParam, size),
-    initialPageParam: 1,
-    // 서버 상한(20쪽)과 빈 쪽에서 멈춘다 (빈 "더 보기"가 끝없이 이어지지 않게)
-    getNextPageParam: (last) => (last.hasMore && last.items.length > 0 && last.page < 20 ? last.page + 1 : undefined),
+    queryFn: ({ pageParam }) => api.discoverRank(market, category, pageParam.page, size, pageParam.ver),
+    initialPageParam: { page: 1 } as { page: number; ver?: number },
+    // 서버 상한(20쪽)과 빈 쪽에서 멈춘다 (빈 "더 보기"가 끝없이 이어지지 않게).
+    // 다음 쪽은 앞 쪽과 같은 목록 판(ver)에서 받는다 — 그 사이 서버 목록이 바뀌어도 줄이 빠지거나 겹치지 않게
+    getNextPageParam: (last) => (last.hasMore && last.items.length > 0 && last.page < 20 ? { page: last.page + 1, ver: last.ver } : undefined),
     staleTime: Math.min(interval, 30_000),
     refetchInterval: (q) => discoverEvery(q.state.data?.pages[0]?.marketOpen, interval),
     refetchIntervalInBackground: false,

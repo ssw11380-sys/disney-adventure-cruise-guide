@@ -65,7 +65,8 @@ export function stateFromSession(market: MarketKey, now: Date, tradingEnd: strin
 }
 
 export class MarketCalendar {
-  private cache: { at: number; status: MarketStatus } | null = null;
+  /** until = TTL 끝 또는 가장 가까운 세션 경계(개장·마감) 중 이른 때 — 경계를 지나면 바로 다시 묻는다 */
+  private cache: { until: number; status: MarketStatus } | null = null;
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
@@ -75,7 +76,7 @@ export class MarketCalendar {
 
   async status(): Promise<MarketStatus> {
     const now = this.now();
-    if (this.cache && now.getTime() - this.cache.at < this.ttlMs) return { ...this.cache.status, now: now.toISOString() };
+    if (this.cache && now.getTime() < this.cache.until) return { ...this.cache.status, now: now.toISOString() };
     let KR = fallbackState("KR", now);
     let US = fallbackState("US", now);
     try {
@@ -94,7 +95,8 @@ export class MarketCalendar {
       /* fallback 유지 */
     }
     const status: MarketStatus = { now: now.toISOString(), KR, US };
-    this.cache = { at: now.getTime(), status };
+    const bounds = [KR, US].map((m) => Date.parse((m.isOpen ? m.closesAt : m.opensAt) ?? "")).filter((b) => !Number.isNaN(b) && b > now.getTime());
+    this.cache = { until: Math.min(now.getTime() + this.ttlMs, ...bounds), status };
     return status;
   }
 

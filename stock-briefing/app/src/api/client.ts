@@ -134,8 +134,8 @@ export function createApi(baseUrl: string, token = "") {
       send<{ applied: string[]; skipped: { code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed"; retryAfter?: string }[] }>("PUT", "/api/admin/toss/krw-cost", { items }),
     marketStatus: () => get<MarketStatus>("/api/market/status", 10_000),
     marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices", 10_000),
-    discoverRank: (market: DiscoverMarket, category: RankCategory, page = 1, size = 50) =>
-      get<DiscoverRank>(`/api/discover/${market}/rank/${category}?page=${page}&size=${size}`, 15_000),
+    discoverRank: (market: DiscoverMarket, category: RankCategory, page = 1, size = 50, ver?: number) =>
+      get<DiscoverRank>(`/api/discover/${market}/rank/${category}?page=${page}&size=${size}${ver ? `&v=${ver}` : ""}`, 15_000),
     discoverThemes: (market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod) => get<ThemeList>(`/api/discover/${market}/themes?kind=${kind}&period=${period}`, 20_000),
     discoverTheme: (market: DiscoverMarket, kind: ThemeKind, id: string) => get<ThemeDetail>(`/api/discover/${market}/themes/${encodeURIComponent(id)}?kind=${kind}`, 20_000),
     marketCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`/api/market/indices/${encodeURIComponent(code)}/candles?period=${period}&count=${count}`),

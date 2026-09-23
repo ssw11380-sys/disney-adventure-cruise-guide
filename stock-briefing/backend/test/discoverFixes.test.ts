@@ -227,3 +227,24 @@ describe("발견 탭 검토 수정", () => {
     expect(calls).toBeGreaterThan(before); // 10분 뒤 다시 시도
   });
 });
+
+describe("토스 달력 캐시", () => {
+  it("TTL 안이라도 개장·마감 시각을 지나면 바로 다시 묻는다", async () => {
+    const { MarketCalendar } = await import("../src/providers/market/calendar.js");
+    let calls = 0;
+    let now = new Date("2026-09-23T13:29:00Z"); // 09:29 ET
+    const fetchFn = (async () => {
+      calls++;
+      const us = now.getTime() < Date.parse("2026-09-23T13:30:00Z") ? { tradingEnd: "2026-09-22T20:00:00Z", nextTradingStart: "2026-09-23T13:30:00Z" } : { tradingEnd: "2026-09-23T20:00:00Z", nextTradingStart: "2026-09-24T13:30:00Z" };
+      return json({ result: [{ productCode: "US19801212001", ...us }, { productCode: "A005930", tradingEnd: "2026-09-23T11:00:00Z", nextTradingStart: "2026-09-27T23:00:00Z" }] });
+    }) as unknown as typeof fetch;
+    const cal = new MarketCalendar(fetchFn, () => now);
+    expect((await cal.status()).US.isOpen).toBe(false);
+    now = new Date("2026-09-23T13:29:50Z");
+    await cal.status();
+    expect(calls).toBe(1);
+    now = new Date("2026-09-23T13:30:05Z");
+    expect((await cal.status()).US.isOpen).toBe(true);
+    expect(calls).toBe(2);
+  });
+});

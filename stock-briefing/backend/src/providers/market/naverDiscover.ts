@@ -49,6 +49,32 @@ export interface ThemeSummary {
 /** 미국 종목 정규장 시세 + 체결 시각 + 네이버 장 상태(OPEN/CLOSE/PREOPEN) */
 export type UsQuote = DiscoverStock & { tradedAt: string | null; status?: string };
 
+/**
+ * 네이버 거래소 장 상태 한 세션 (front-api/marketStatus). 휴장일·특수일(수능 10:00 개장 등)이 반영된 실제 세션이다.
+ *  - kind: preopen(개장 전) · pre(프리마켓) · regular(정규장) · after(애프터마켓·시간외) · closed(마감·휴장)
+ *  - openAt·closeAt: 이 상태가 시작·끝나는 시각 (closed 면 openAt = 마지막 거래가 끝난 시각)
+ */
+export interface ExchangeSession {
+  kind: "preopen" | "pre" | "regular" | "after" | "closed";
+  label: string;
+  openAt: string | null;
+  closeAt: string | null;
+  /** 이 세션 값의 거래일 (YYYY-MM-DD) */
+  tradeBaseAt: string | null;
+}
+export type ExchangeStatus = { latest: ExchangeSession; next: ExchangeSession | null; isTradingDay: boolean | null };
+
+export function exchangeSession(j: Json | undefined): ExchangeSession | null {
+  const ss = j?.["session"] as Json | undefined;
+  if (!ss) return null;
+  const status = String(ss["marketStatusDetailType"] ?? "");
+  const type = String(ss["marketSessionType"] ?? "");
+  const kind: ExchangeSession["kind"] =
+    status === "open" ? (type === "regularMarket" ? "regular" : type === "afterMarket" ? "after" : type === "preMarket" ? "pre" : "closed") : status === "preopen" ? "preopen" : "closed";
+  const iso = (v: unknown) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : null);
+  return { kind, label: String(ss["displayLabel"] ?? ""), openAt: iso(ss["openAt"]), closeAt: iso(ss["closeAt"]), tradeBaseAt: typeof j?.["tradeBaseAt"] === "string" ? (j["tradeBaseAt"] as string) : null };
+}
+
 /** 줄의 90% 이상이 등락률 0·거래량 0(또는 없음)인지 — 출처가 장 시작 전으로 초기화한 목록 */
 export function isMostlyZero(rows: { changeRate: number; volume?: number | null }[], ratio = 0.9): boolean {
   if (!rows.length) return false;
@@ -295,6 +321,24 @@ export class NaverDiscover {
         const rc = String(it["reutersCode"] ?? "");
         if (s && rc) out.set(rc, { ...s, tradedAt: typeof it["localTradedAt"] === "string" ? it["localTradedAt"] : null, status: String(it["marketStatus"] ?? "") });
       }
+    }
+    return out;
+  }
+
+  /**
+   * 거래소 장 상태 — 한국은 KRX 코스피 주식, 미국은 나스닥 (front-api/marketStatus, 로그인 불필요).
+   * 발견 탭 값의 출처(네이버)와 같은 곳이라 세션 경계·휴장일·특수일 개장 시각이 값과 맞는다.
+   */
+  async marketStatus(): Promise<Partial<Record<DiscoverMarket, ExchangeStatus>>> {
+    const r = await this.json(`${BASE}/marketStatus?exchanges=krx,nasdaq`);
+    const out: Partial<Record<DiscoverMarket, ExchangeStatus>> = {};
+    for (const ex of (r["exchanges"] as Json[] | undefined) ?? []) {
+      const statuses = (ex["statuses"] as Json[] | undefined) ?? [];
+      const row = ex["exchange"] === "krx" ? statuses.find((x) => x["marketType"] === "KOSPI" && x["stockType"] === "stock") : ex["exchange"] === "nasdaq" ? statuses[0] : undefined;
+      const latest = exchangeSession(row?.["latest"] as Json | undefined);
+      if (!row || !latest) continue;
+      const today = row["today"] as Json | undefined;
+      out[ex["exchange"] === "krx" ? "KR" : "US"] = { latest, next: exchangeSession(row["next"] as Json | undefined), isTradingDay: typeof today?.["isTradingDay"] === "boolean" ? (today["isTradingDay"] as boolean) : null };
     }
     return out;
   }

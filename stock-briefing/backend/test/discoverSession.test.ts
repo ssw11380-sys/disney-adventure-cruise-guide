@@ -30,6 +30,7 @@ function krSource() {
   const calls: string[] = [];
   const w = { reset: false, base: 5, slowMs: 0, calls };
   const fetchFn = (async (url: string) => {
+    if (url.includes("/marketStatus")) return json({}, 404); // 장 상태는 달력(가짜)으로
     calls.push(url);
     if (w.slowMs) await new Promise((r) => setTimeout(r, w.slowMs));
     const index = Number(new URL(url).searchParams.get("index") ?? 0);
@@ -224,5 +225,147 @@ describe("발견 탭 장 상태 (정규장·시간외·장 시작 전·마감)",
     }) as unknown as typeof fetch;
     await expect(new NaverDiscover(reset).sectors("KR", "theme", "day")).rejects.toThrow();
     expect(calls).toBe(2);
+  });
+});
+
+/** 네이버 거래소 장 상태 응답 (front-api/marketStatus) */
+const exRow = (status: string, type: string | null, openAt: string, closeAt: string, base = "2026-09-28") => ({
+  tradeBaseAt: base,
+  session: { marketStatusDetailType: status, marketSessionType: type, displayLabel: "", openAt, closeAt },
+});
+const marketStatus = (kr: ReturnType<typeof exRow>, us: ReturnType<typeof exRow>) =>
+  ok({
+    exchanges: [
+      { exchange: "krx", statuses: [{ marketType: "KOSPI", stockType: "stock", today: { isTradingDay: true }, latest: kr, next: null }] },
+      { exchange: "nasdaq", statuses: [{ today: { isTradingDay: true }, latest: us, next: null }] },
+    ],
+  });
+
+describe("네이버 거래소 장 상태로 세션·기준 시각 (휴장일·특수일 반영)", () => {
+  const usClosed = exRow("close", "afterMarket", "2026-09-25T20:00:00-04:00", "2026-09-28T04:00:00-04:00");
+  function world() {
+    const w = { kr: exRow("close", "afterMarket", "2026-09-23T20:00:00+09:00", "2026-09-28T08:00:00+09:00", "2026-09-23"), us: usClosed, statusCalls: 0 };
+    const src = krSource();
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) {
+        w.statusCalls++;
+        return marketStatus(w.kr, w.us);
+      }
+      return src.fetchFn(url);
+    }) as unknown as typeof fetch;
+    return { w, src, fetchFn };
+  }
+
+  it("추석 연휴 뒤 개장 전(9/28 08:30): 연휴 중에 본 마지막 거래 마감(9/23 20:00)을 기준 시각으로 쓴다 — 휴장일(9/25)로 틀리지 않게", async () => {
+    const { w, fetchFn } = world();
+    const { store, m } = memStore();
+    let now = new Date("2026-09-25T03:00:00Z"); // 추석 연휴 중 (금 12:00)
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => now });
+    const holiday = await svc.rank("KR", "tradingValue", 1, 50);
+    expect(holiday).toMatchObject({ session: "closed", marketOpen: false, asOf: "2026-09-23T20:00:00+09:00" });
+    expect(m.get("discover:kr-last-close")).toBe("2026-09-23T11:00:00.000Z");
+    // 월 08:30 개장 전 — 네이버는 이때 직전 마감을 알려 주지 않는다
+    now = new Date("2026-09-27T23:30:00Z");
+    w.kr = exRow("preopen", null, "2026-09-28T08:00:00+09:00", "2026-09-28T09:00:00+09:00");
+    const pre = await svc.rank("KR", "tradingValue", 1, 50);
+    expect(pre).toMatchObject({ session: "pre", marketOpen: true, asOf: "2026-09-23T20:00:00+09:00" });
+    // 서버를 다시 켜도 meta 표에서 기억해 낸다
+    const restarted = await new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => now }).rank("KR", "volume", 1, 50);
+    expect(restarted.asOf).toBe("2026-09-23T20:00:00+09:00");
+    // 기억도 없으면 틀린 날짜 대신 시각을 밝히지 않는다
+    const blank = await new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now }).rank("KR", "gainers", 1, 50);
+    expect(blank).toMatchObject({ session: "pre", asOf: null });
+  });
+
+  it("세션 경계(09:00·09:30 ET)에서 바로 새로 묻는다 · 수능일처럼 개장이 늦으면 출처 세션을 따른다", async () => {
+    const { w, fetchFn } = world();
+    // 수능일: 10:00 개장 — 09:30 에도 개장 전
+    w.kr = exRow("preopen", null, "2026-11-19T08:00:00+09:00", "2026-11-19T10:00:00+09:00", "2026-11-19");
+    let now = new Date("2026-11-19T00:30:00Z");
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    expect((await svc.rank("KR", "tradingValue", 1, 50)).session).toBe("pre");
+    const calls = w.statusCalls;
+    now = new Date("2026-11-19T00:31:00Z");
+    await svc.rank("KR", "tradingValue", 1, 50);
+    expect(w.statusCalls).toBe(calls); // 경계 전에는 캐시
+    w.kr = exRow("open", "regularMarket", "2026-11-19T10:00:00+09:00", "2026-11-19T16:30:00+09:00", "2026-11-19");
+    now = new Date("2026-11-19T01:00:05Z"); // 10:00:05 — 경계를 지나면 바로 다시 묻는다
+    expect((await svc.rank("KR", "tradingValue", 1, 50)).session).toBe("regular");
+    expect(w.statusCalls).toBe(calls + 1);
+  });
+
+  it("미국: 네이버 정규장만 장중, 애프터마켓이면 그 시작(조기 폐장일 13:00)을 정규장 마감으로", async () => {
+    const { w, fetchFn } = world();
+    const sectors = (async (url: string) => (url.includes("/marketStatus") ? fetchFn(url) : ok({ sectors: [{ code: "1", name: "IT", changeRate: 1, topItems: [] }], hasNext: false }))) as unknown as typeof fetch;
+    w.us = exRow("open", "regularMarket", "2026-11-27T09:30:00-05:00", "2026-11-27T13:00:00-05:00", "2026-11-27");
+    let now = new Date("2026-11-27T15:00:00Z"); // 10:00 ET
+    expect(await new DiscoverService({ naver: new NaverDiscover(sectors), now: () => now }).themes("US", "sector", "day")).toMatchObject({ session: "regular", marketOpen: true });
+    w.us = exRow("open", "afterMarket", "2026-11-27T13:00:00-05:00", "2026-11-27T17:00:00-05:00", "2026-11-27");
+    now = new Date("2026-11-27T19:00:00Z"); // 14:00 ET (조기 폐장 뒤)
+    const after = await new DiscoverService({ naver: new NaverDiscover(sectors), now: () => now }).themes("US", "sector", "day");
+    expect(after).toMatchObject({ session: "closed", asOf: "2026-11-28T03:00:00+09:00" }); // 13:00 ET
+  });
+
+  it("장 상태를 못 받으면 토스 달력으로 대신한다", async () => {
+    const { src } = world();
+    const fetchFn = (async (url: string) => (url.includes("/marketStatus") ? json({}, 500) : src.fetchFn(url))) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), calendar: calendarOf(state("KR", false, "2026-09-23T11:00:00.000Z")), now: () => new Date("2026-09-24T01:00:00Z") });
+    expect(await svc.rank("KR", "volume", 1, 50)).toMatchObject({ session: "closed", asOf: "2026-09-23T20:00:00+09:00" });
+  });
+
+  it("마감 뒤에 받은 목록은 마지막 거래 마감 시점 값 — 다음 날 장중 출처가 비어 그 목록을 보여 줘도 기준 시각이 맞다", async () => {
+    const { w, src, fetchFn } = world();
+    let now = new Date("2026-09-23T12:30:00Z"); // 수 21:30 (마감 뒤)
+    w.kr = exRow("close", "afterMarket", "2026-09-23T20:00:00+09:00", "2026-09-24T08:00:00+09:00", "2026-09-23");
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    await svc.rank("KR", "tradingValue", 1, 50);
+    src.w.reset = true;
+    now = new Date("2026-09-28T00:00:30Z"); // 월 09:00:30 정규장 — 출처가 아직 0%
+    w.kr = exRow("open", "regularMarket", "2026-09-28T09:00:00+09:00", "2026-09-28T15:30:00+09:00");
+    const r = await svc.rank("KR", "tradingValue", 1, 50);
+    expect(r).toMatchObject({ session: "regular", asOf: "2026-09-23T20:00:00+09:00" });
+    expect(r.note).toContain("직전 목록");
+  });
+
+  it("첫 쪽을 옛 목록으로 받은 뒤 새 목록이 들어와도, 뒤 쪽은 같은 판(ver)에서 이어 준다", async () => {
+    const { w, src, fetchFn } = world();
+    w.kr = exRow("open", "regularMarket", "2026-09-23T09:00:00+09:00", "2026-09-23T15:30:00+09:00", "2026-09-23");
+    let now = new Date("2026-09-23T01:00:00Z");
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now, staleWaitMs: 10 });
+    const first = await svc.rank("KR", "tradingValue", 1, 50);
+    src.w.slowMs = 80;
+    src.w.base = 9; // 새 목록은 등락률이 다르다
+    now = new Date("2026-09-23T01:01:00Z");
+    const p1 = await svc.rank("KR", "tradingValue", 1, 50); // 새 조회가 느려 옛 목록
+    expect(p1.ver).toBe(first.ver);
+    await new Promise((r) => setTimeout(r, 400)); // 새 목록 도착
+    const p2 = await svc.rank("KR", "tradingValue", 2, 50, p1.ver);
+    expect(p2.ver).toBe(p1.ver);
+    expect(p2.items[0]!.changeRate).toBe(first.items[0]!.changeRate - 0.5); // 옛 목록의 51번째
+    const fresh = await svc.rank("KR", "tradingValue", 2, 50); // 판 없이 부르면 새 목록
+    expect(fresh.ver).not.toBe(p1.ver);
+  });
+});
+
+describe("장 상태 출처가 모두 막힐 때", () => {
+  it("네이버 장 상태를 새로 못 받아도, 마지막으로 받은 '마감' 세션이 지금을 덮고 있으면 그대로 쓴다 (휴장일을 장중으로 추정하지 않게)", async () => {
+    const src = krSource();
+    let fail = false;
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) {
+        if (fail) return json({}, 503);
+        return marketStatus(exRow("close", "afterMarket", "2026-09-23T20:00:00+09:00", "2026-09-28T08:00:00+09:00", "2026-09-23"), exRow("close", "afterMarket", "2026-09-23T20:00:00-04:00", "2026-09-24T04:00:00-04:00", "2026-09-23"));
+      }
+      return src.fetchFn(url);
+    }) as unknown as typeof fetch;
+    let now = new Date("2026-09-24T01:00:00Z"); // 추석 10:00
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), calendar: { status: () => new Promise(() => undefined) } as unknown as MarketCalendar, now: () => now });
+    expect((await svc.rank("KR", "volume", 1, 50)).session).toBe("closed");
+    fail = true;
+    now = new Date("2026-09-24T02:00:00Z"); // 한 시간 뒤 — 네이버 503, 토스 달력도 멈춤
+    const t0 = Date.now();
+    const r = await svc.rank("KR", "volume", 1, 50);
+    expect(r).toMatchObject({ session: "closed", marketOpen: false, asOf: "2026-09-23T20:00:00+09:00" });
+    expect(Date.now() - t0).toBeLessThan(1_000); // 마지막 값이 있으면 달력을 기다리지 않는다
   });
 });

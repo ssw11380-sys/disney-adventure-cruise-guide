@@ -51,6 +51,7 @@ function world(opts: { failToss?: boolean } = {}) {
   };
   const members: Record<string, string[]> = { "956": ["P_IONQ", "P_RGTI", "P_QBTS", "P_OLD", "P_SPAC"], "777": ["P_BRK", "P_IONQ"], "888": ["P_TA", "P_TB", "P_TC"] };
   const fetchFn = (async (url: string, init?: RequestInit) => {
+    if (url.includes("/marketStatus")) return json({}, 404); // 장 상태는 달력(가짜)으로
     calls.push(url);
     const u = new URL(url);
     if (u.host === "wts-info-api.tossinvest.com") {

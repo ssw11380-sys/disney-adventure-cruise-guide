@@ -345,6 +345,8 @@ export interface DiscoverRank {
   /** 값이 바뀌는 시간이면 true (30초 자동 갱신) */
   marketOpen: boolean;
   session?: DiscoverSession;
+  /** 목록 판 — 다음 쪽 요청에 돌려주면 같은 목록에서 이어 받는다 (옛 서버는 없음) */
+  ver?: number;
   asOf: string | null;
   /** 미국 종목 원화 환산용 */
   fxRate?: number | null;

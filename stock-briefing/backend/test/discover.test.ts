@@ -24,7 +24,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
   it("순위는 ETF·ETN·스팩을 빼고, 급상승은 거래대금 10억 원 미만을 빼며, 쪽을 이어 받는다", async () => {
     const calls: string[] = [];
     const fetchFn = (async (url: string) => {
-      calls.push(url);
+      if (!url.includes("/marketStatus")) calls.push(url); // 장 상태 조회는 세지 않는다
       const u = new URL(url);
       const index = Number(u.searchParams.get("index"));
       if (u.pathname.endsWith("/domestic/stock/list/sorted") && u.searchParams.get("sortType") === "up") {
@@ -123,7 +123,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
   it("테마 목록은 cursor 로 끝까지 받고, 상장 첫날 종목이 든 테마는 그 종목을 빼고 다시 센다", async () => {
     const urls: string[] = [];
     const fetchFn = (async (url: string) => {
-      urls.push(url);
+      if (!url.includes("/marketStatus")) urls.push(url);
       const u = new URL(url);
       if (u.pathname.endsWith("/stock/sectors/all")) {
         expect(u.searchParams.get("businessDayCategory")).toBe("daily");
@@ -199,7 +199,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
     });
     const urls: string[] = [];
     const fetchFn = (async (url: string) => {
-      urls.push(url);
+      if (!url.includes("/marketStatus")) urls.push(url);
       return json({
         page: 1,
         totalCount: 150,

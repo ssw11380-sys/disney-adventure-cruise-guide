@@ -5,7 +5,12 @@ import type { DiscoverService } from "../services/discoverService.js";
 
 const marketParam = z.object({ market: z.enum(["KR", "US"]) });
 const rankParams = marketParam.extend({ category: z.enum(["tradingValue", "volume", "gainers", "losers"]) });
-const rankQuery = z.object({ page: z.coerce.number().int().min(1).max(20).default(1), size: z.coerce.number().int().min(10).max(100).default(50) });
+const rankQuery = z.object({
+  page: z.coerce.number().int().min(1).max(20).default(1),
+  size: z.coerce.number().int().min(10).max(100).default(50),
+  /** 첫 쪽이 준 목록 판 (뒤 쪽을 같은 목록에서 이어 받기) */
+  v: z.coerce.number().int().positive().optional(),
+});
 const themesQuery = z.object({ kind: z.enum(["theme", "sector"]).default("theme"), period: z.enum(["day", "week", "month"]).default("day") });
 const themeParams = marketParam.extend({ id: z.string().min(1).max(40).regex(/^[0-9A-Za-z_-]+$/) });
 const themeQuery = z.object({ kind: z.enum(["theme", "sector"]).default("theme") });
@@ -21,11 +26,11 @@ export const discoverRoutes: FastifyPluginAsync<{ service: DiscoverService }> = 
     }
   };
 
-  /** GET /api/discover/:market/rank/:category?page=&size= */
+  /** GET /api/discover/:market/rank/:category?page=&size=&v= */
   app.get("/:market/rank/:category", async (req) => {
     const { market, category } = rankParams.parse(req.params);
-    const { page, size } = rankQuery.parse(req.query);
-    return upstream("순위", () => service.rank(market, category, page, size));
+    const { page, size, v } = rankQuery.parse(req.query);
+    return upstream("순위", () => service.rank(market, category, page, size, v));
   });
 
   /** GET /api/discover/:market/themes?kind=theme|sector&period=day|week|month */
