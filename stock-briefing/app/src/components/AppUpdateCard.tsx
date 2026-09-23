@@ -47,7 +47,8 @@ export function AppUpdateCard() {
     <Card>
       <SectionTitle right={newer ? <Badge tone="warn">새 버전 {newer.version}</Badge> : result?.kind === "none" ? <Badge tone="good">최신</Badge> : null}>앱 업데이트</SectionTitle>
       <Row label="현재 버전" value={currentVersion} />
-      <Row label="빌드" value={running.createdAt ? formatDateKo(running.createdAt, true) : running.updateId} />
+      {/* 되돌리기(docs/OTA-되돌리기.md) 때 어느 업데이트가 돌고 있는지 확인하는 값 */}
+      <Row label="빌드" value={running.createdAt ? `${formatDateKo(running.createdAt, true)} · ${running.updateId}` : running.updateId} />
       {newer ? (
         <View style={{ gap: space.xs }}>
           <Text style={{ color: t.ink, fontSize: font.small }}>

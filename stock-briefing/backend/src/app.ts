@@ -14,6 +14,7 @@ import { describeProviders, metaStore, type Providers } from "./providers/index.
 import { adminRoutes, tossStatus, type AdminDeps } from "./routes/admin.js";
 import { HoldingsAutoSync, TossSyncService } from "./services/tossSyncService.js";
 import { analysisRoutes } from "./routes/analysis.js";
+import { appErrorAdminRoutes, appErrorRoutes } from "./routes/appErrors.js";
 import { briefingRoutes } from "./routes/briefings.js";
 import { deviceRoutes, notificationRoutes } from "./routes/notifications.js";
 import { marketRoutes } from "./routes/market.js";
@@ -30,6 +31,7 @@ import { DataCollector } from "./services/collector.js";
 import { DeviceService } from "./services/deviceService.js";
 import { NotificationService } from "./services/notificationService.js";
 import { PriceStream } from "./services/priceStream.js";
+import { AppErrorService } from "./services/appErrorService.js";
 import { StockService } from "./services/stockService.js";
 
 export interface BuildAppOptions {
@@ -57,6 +59,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const now = opts.now ?? (() => new Date());
 
   const stockService = new StockService({ db: opts.db, ...opts.providers, now });
+  const appErrors = new AppErrorService(opts.db, now);
 
   // 토스증권 공식 Open API: 실시간 구독 시작 + 보유 종목 가져오기 서비스 + 서버 공인 IP(허용 IP 등록 안내용)
   // 서버 공인 IP (토스 Open API 허용 IP 등록용). 키가 없을 때도 /health 에 보여 준다.
@@ -266,6 +269,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     lastBriefing: briefingService.lastRun,
     stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
+    appErrors: await appErrors
+      .summary(7)
+      .then((s) => ({ days: s.days, total: s.total, fatal: s.fatal }))
+      .catch(() => null),
     disclaimer: DISCLAIMER,
   });
 
@@ -321,6 +328,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp });
+  await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
+  await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler };
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });

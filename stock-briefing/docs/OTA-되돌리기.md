@@ -1,0 +1,37 @@
+# OTA 되돌리기 (5분 안에 이전 버전으로)
+
+잘못된 OTA(앱 화면 업데이트)를 올렸을 때 바로 앞 버전으로 돌리는 절차입니다. 서버 배포와는 별개입니다.
+
+## 1. 알아채기
+- 앱 **설정 → 서버 → 앱 오류 (7일)** 숫자가 OTA 직후 늘었는지 봅니다.
+- 자세히 보려면 관리 API를 엽니다: `GET /api/admin/app-errors?days=1` (Bearer 토큰 필요).
+  - `top`: 자주 난 오류
+  - `recent[].updateId`: 어느 OTA에서 났는지
+- OTA를 올린 뒤 24시간은 새 오류 수를 확인합니다(단계마다 하는 마무리 점검에 포함).
+
+## 2. 되돌리기: 휴대폰만으로 (약 2분)
+1. 휴대폰 브라우저로 expo.dev에 로그인합니다.
+2. **stock-briefing → Updates → preview 브랜치**로 들어갑니다.
+3. 문제가 된 것 **바로 아래(이전)** 업데이트 그룹을 엽니다.
+4. **Republish**를 누릅니다.
+5. 앱을 완전히 닫았다 두 번 열면 이전 버전이 적용됩니다. expo-updates는 첫 실행에 받고, 다음 실행에 적용합니다.
+
+## 3. 되돌리기: 명령으로 (PC·작업 환경)
+```bash
+cd stock-briefing/app
+# 최근 업데이트 그룹 보기
+npx eas-cli update:list --branch preview --limit 5
+# 이전 그룹을 다시 게시 (그룹 ID는 위 목록에서)
+npx eas-cli update:republish --group <이전 그룹 ID> --platform android --non-interactive -m "되돌리기: <이유>"
+```
+- 앱을 처음 설치했을 때의 화면으로 돌리려면 `npx eas-cli update:roll-back-to-embedded`를 씁니다. APK에 들어 있던 버전입니다.
+
+## 4. 확인
+- 설정 → 앱 업데이트에서 현재 업데이트 ID가 이전 그룹의 것인지 봅니다.
+- 30분 동안 `app-errors`의 새 오류가 멈췄는지 봅니다.
+- 원인을 고친 새 OTA를 올리면, 되돌린 것은 자연스럽게 덮어써집니다.
+
+## 기록
+| 날짜 | 무엇 | 걸린 시간 |
+|---|---|---|
+| 2026-09-24 | 리허설: 3-3 OTA → 3-2 그룹 다시 게시 → 3-3 그룹 다시 게시 | 리허설 후 기록 |

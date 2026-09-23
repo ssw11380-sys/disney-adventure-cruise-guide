@@ -1,11 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
-import { Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { useHealth } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
+import { flushErrors, reportError } from "@/lib/errorReport";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
@@ -86,6 +87,9 @@ export default function SettingsScreen() {
             <Row label="재무/공시" value={health.data.sources?.financials ?? "-"} />
             <Row label="수급" value={health.data.sources?.investorFlow ?? "-"} />
             <Row label="브리핑 모델" value={health.data.sources?.llm ?? "-"} />
+            {health.data.appErrors ? (
+              <Row label="앱 오류 (7일)" value={`${health.data.appErrors.total}건${health.data.appErrors.fatal ? ` · 강제 종료 ${health.data.appErrors.fatal}건` : ""}`} />
+            ) : null}
           </View>
         ) : (
           <Muted>확인 중…</Muted>
@@ -110,6 +114,19 @@ export default function SettingsScreen() {
             }}
             onCheck={() => void health.refetch()}
             checking={health.isFetching}
+          />
+        ) : null}
+        {advanced ? (
+          <Button
+            title="오류 수집 시험 보내기"
+            variant="secondary"
+            compact
+            style={{ marginTop: space.sm }}
+            onPress={() =>
+              void reportError("test", new Error("오류 수집 시험 (설정 화면)"))
+                .then(() => flushErrors())
+                .then(() => Alert.alert("보냈습니다", "서버의 앱 오류 기록에 '시험'으로 남습니다. 합계에는 들어가지 않습니다."))
+            }
           />
         ) : null}
       </Card>

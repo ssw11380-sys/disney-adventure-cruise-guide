@@ -1,7 +1,8 @@
 import { router, type ErrorBoundaryProps } from "expo-router";
-import React from "react";
+import React, { useEffect } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Button } from "@/components/ui";
+import { reportError } from "@/lib/errorReport";
 import { font, space, useTheme } from "@/theme";
 
 /**
@@ -11,6 +12,10 @@ import { font, space, useTheme } from "@/theme";
  */
 export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   const t = useTheme();
+  // 화면 오류는 서버에 남긴다 (같은 오류는 분당 1건)
+  useEffect(() => {
+    void reportError("render", error);
+  }, [error]);
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]} accessibilityRole="alert">
       <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>화면을 표시하지 못했습니다</Text>

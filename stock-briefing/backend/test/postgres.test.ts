@@ -47,7 +47,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4]);
   });
 
   it("종목 마스터 → 검색 → 등록 → 브리핑 → 조회 전체 흐름", async () => {
