@@ -79,12 +79,18 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       await stockService.syncLive();
       app.addHook("onClose", async () => live.stop());
     }
-    const sync = new TossSyncService(opts.db, opts.providers.tossOpenApi, now);
+    // 원화 장부 보정에는 토스가 원화 평가에 쓰는 표시 환율이 필요하다 (fundamentals.usdKrw 는 토스 웹 표시 환율을 먼저 쓴다)
+    const fundamentals = opts.providers.fundamentals;
+    const sync = new TossSyncService(opts.db, opts.providers.tossOpenApi, now, fundamentals ? () => fundamentals.usdKrw() : null);
     // 토스 앱에서 사고팔면 늦어도 TOSS_SYNC_MINUTES 안에 반영. 바뀐 게 있으면 실시간 구독 종목도 갱신
     const autoSync = new HoldingsAutoSync({
       sync,
       calendar: opts.providers.calendar,
-      afterSync: () => stockService.syncLive(),
+      // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다
+      afterSync: async () => {
+        await stockService.syncLive();
+        priceStream.notify("holdings");
+      },
       intervalMin: opts.config.TOSS_SYNC_MINUTES,
       log,
       now,
@@ -92,6 +98,31 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     if (opts.enableScheduler !== false) {
       autoSync.start();
       app.addHook("onClose", async () => autoSync.stop());
+      // 토스 앱에서 체결되면(personal:order FILL/PARTIAL_FILL) 3초 뒤 바로 잔고를 다시 맞춘다 (여러 건이 연달아 와도 한 번).
+      // 자동 동기화를 끈 경우(TOSS_SYNC_MINUTES=0)엔 체결로도 자동 반영하지 않는다
+      if (live && autoSync.enabled) {
+        sync.onAccounts = (seqs) => live.setAccounts(seqs);
+        let orderTimer: NodeJS.Timeout | null = null;
+        const soon = () => {
+          if (orderTimer) clearTimeout(orderTimer);
+          orderTimer = setTimeout(() => {
+            orderTimer = null;
+            void autoSync.run("order");
+          }, 3000);
+        };
+        live.on("order", (data: { event?: string }) => {
+          if (data?.event === "FILL" || data?.event === "PARTIAL_FILL") soon();
+        });
+        // 끊겨 있던 동안의 체결은 다시 오지 않는다 → 재연결되면 한 번 맞춘다 (첫 연결은 시작 동기화가 한다)
+        let opened = false;
+        live.on("open", () => {
+          if (opened) soon();
+          opened = true;
+        });
+        app.addHook("onClose", async () => {
+          if (orderTimer) clearTimeout(orderTimer);
+        });
+      }
     }
     tossDeps = { provider: opts.providers.tossOpenApi, sync, autoSync, live, outboundIp };
   }

@@ -2,6 +2,7 @@ import React from "react";
 import { FlexWidget, ListWidget, TextWidget, type FlexWidgetStyle } from "react-native-android-widget";
 import type { Currency, LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { formatPct, formatPrice, toDisplay } from "@/lib/format";
+import { evalView } from "@/lib/liveTick";
 
 /**
  * 홈 화면 위젯 3종. react-native-android-widget 프리미티브만 쓴다(RN 컴포넌트 불가, 색은 hex/rgba 문자열).
@@ -45,32 +46,29 @@ export interface Totals {
   mixed: boolean; // 통화가 섞여 원화 환산이 안 된 경우
 }
 
-/** 보유 종목 합계. showKrw 이거나 통화가 하나면 그 통화로, 아니면 원화 환산(환율 있을 때) */
-export function totals(stocks: RegisteredWithQuote[], showKrw: boolean): Totals | null {
+/**
+ * 보유 종목 합계 (앱 잔고 화면과 같은 기준: 비용 차감 평가, 해외 원화 손익은 매수 당시 환율의 원화 매입금액).
+ * 원화 종목만 있거나 달러 종목만 있고 원화 표시가 꺼져 있으면 그 통화로, 아니면 원화로 합친다.
+ */
+export function totals(stocks: RegisteredWithQuote[], showKrw: boolean, afterCost = true): Totals | null {
   const held = stocks.filter((s) => s.evaluation && s.quote);
   if (held.length === 0) return null;
   const currencies = new Set(held.map((s) => s.quote!.currency ?? "KRW"));
-  const single = currencies.size === 1 ? ([...currencies][0] as Currency) : null;
+  const native = currencies.size === 1 && (currencies.has("KRW") || !showKrw);
   let value = 0, day = 0, profit = 0, mixed = false;
   for (const s of held) {
     const cur = s.quote!.currency ?? "KRW";
     const fx = fxOf(s);
-    const conv = (n: number) => (single ? n : cur === "KRW" ? n : fx ? n * fx : null);
-    const v = conv(s.evaluation!.marketValue), d = conv(s.quote!.change * (s.quantity ?? 0)), p = conv(s.evaluation!.profit);
-    if (v === null || d === null || p === null) {
+    const v = evalView(s.evaluation, { afterCost, toKrw: !native, currency: cur, fx });
+    if (!v || (!native && cur === "USD" && !fx)) {
       mixed = true;
       continue;
     }
-    value += v;
-    day += d;
-    profit += p;
+    value += v.marketValue;
+    profit += v.profit;
+    day += s.quote!.change * (s.quantity ?? 0) * (!native && cur === "USD" ? fx! : 1);
   }
-  const currency: Currency = single ?? "KRW";
-  if (single === "USD" && showKrw) {
-    // 달러만 보유 + 원화 표시: 환율 있는 종목 기준으로 환산
-    const fx = fxOf(held[0]!);
-    if (fx) return { value: value * fx, day: day * fx, profit: profit * fx, currency: "KRW", mixed };
-  }
+  const currency: Currency = native ? ((currencies.values().next().value as Currency) ?? "KRW") : "KRW";
   return { value, day, profit, currency, mixed };
 }
 
@@ -117,8 +115,8 @@ function widgetOrder(stocks: RegisteredWithQuote[]): RegisteredWithQuote[] {
   return [...held, ...watch];
 }
 
-export function HoldingsWidget({ stocks, showKrw, fetchedAt, error }: { stocks: RegisteredWithQuote[]; showKrw: boolean; fetchedAt: number; error: string | null; height?: number }) {
-  const t = totals(stocks, showKrw);
+export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error }: { stocks: RegisteredWithQuote[]; showKrw: boolean; afterCost?: boolean; fetchedAt: number; error: string | null; height?: number }) {
+  const t = totals(stocks, showKrw, afterCost);
   const rows = widgetOrder(stocks);
   return (
     <FlexWidget style={root}>
@@ -136,7 +134,7 @@ export function HoldingsWidget({ stocks, showKrw, fetchedAt, error }: { stocks: 
           {rows.map((s) => {
             const q = s.quote;
             const fx = fxOf(s);
-            const ev = s.evaluation;
+            const ev = evalView(s.evaluation, { afterCost, toKrw: showKrw, currency: q?.currency, fx });
             return (
               <FlexWidget
                 key={s.code}
@@ -147,7 +145,7 @@ export function HoldingsWidget({ stocks, showKrw, fetchedAt, error }: { stocks: 
                 <FlexWidget style={{ flexDirection: "column", width: 118 }}>
                   <TextWidget text={s.name} truncate="END" maxLines={1} style={{ color: C.ink, fontSize: 12, fontWeight: "600" }} />
                   <TextWidget
-                    text={ev ? `${formatPct(ev.profitRate)} ${money(ev.profit, q?.currency, fx, showKrw, true)}` : "관심"}
+                    text={ev ? `${formatPct(ev.profitRate)} ${formatPrice(ev.profit, ev.currency, { sign: true })}` : "관심"}
                     truncate="END"
                     maxLines={1}
                     style={{ color: ev ? tone(ev.profit) : C.muted, fontSize: 10 }}
@@ -193,8 +191,8 @@ export function BriefingWidget({ briefings, fetchedAt, error }: { briefings: Lat
   );
 }
 
-export function AssetWidget({ stocks, showKrw, fetchedAt, error }: { stocks: RegisteredWithQuote[]; showKrw: boolean; fetchedAt: number; error: string | null }) {
-  const t = totals(stocks, showKrw);
+export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, error }: { stocks: RegisteredWithQuote[]; showKrw: boolean; afterCost?: boolean; fetchedAt: number; error: string | null }) {
+  const t = totals(stocks, showKrw, afterCost);
   return (
     <FlexWidget style={{ ...root, padding: 12, justifyContent: "center" }} clickAction="OPEN_APP">
       <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>

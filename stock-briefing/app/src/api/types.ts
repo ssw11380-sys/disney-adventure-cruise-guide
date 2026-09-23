@@ -102,6 +102,13 @@ export interface Evaluation {
   costBasis: number;
   profit: number;
   profitRate: number;
+  /** 토스 기준 매도 예상 수수료·세금 비율 (토스 동기화 종목만, 구버전 서버에는 없음) */
+  costRate?: number | null;
+  /** 수수료·세금 차감 후 평가 (토스 앱 화면 기준) */
+  afterCost?: { marketValue: number; profit: number; profitRate: number } | null;
+  /** 해외 종목 원화 매입금액 (매수 당시 환율 = 토스 원화 손익 기준). exact = 토스 값, estimated = 체결 환율 추정 */
+  costBasisKrw?: number | null;
+  krwCostSource?: "exact" | "estimated" | null;
 }
 
 export interface RegisteredWithQuote extends RegisteredStock {

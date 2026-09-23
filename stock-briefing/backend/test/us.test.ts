@@ -107,7 +107,7 @@ describe("US stock end to end", () => {
     const list = (await app.inject({ method: "GET", url: "/api/stocks?quotes=1" })).json();
     expect(list[0].quote.source).toBe("yahoo");
     expect(kis.calls).toBe(0);
-    expect(list[0].evaluation).toEqual({ marketValue: 1020, costBasis: 900, profit: 120, profitRate: 13.33 });
+    expect(list[0].evaluation).toMatchObject({ marketValue: 1020, costBasis: 900, profit: 120, profitRate: 13.33 });
     expect((await app.inject({ method: "GET", url: "/api/stocks/tsla" })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "TSLA.TO" } })).statusCode).toBe(400);
   });

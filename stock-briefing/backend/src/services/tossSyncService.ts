@@ -3,6 +3,7 @@ import { seoulIso } from "../lib/time.js";
 import type { MarketCalendar } from "../providers/market/calendar.js";
 import type { TossHolding, TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import { toMarket } from "../providers/market/kisMaster.js";
+import { KrwCostBook, type HoldingForBook, type OverviewForBook } from "./krwCostBook.js";
 
 /**
  * 토스증권 계좌의 보유 종목을 registered_stocks 로 가져온다.
@@ -23,13 +24,69 @@ export interface ImportResult {
 }
 
 const SNAPSHOT_KEY = "toss_holdings_codes";
+export const DETAIL_KEY = "toss_holdings_detail";
+
+/**
+ * 토스가 계산한 종목별 평가 기준 (동기화 때마다 저장). 실시간 가격에 그대로 적용해 토스 앱과 같은 숫자를 낸다.
+ *  - purchaseAmount: 매입금액 (종목 통화)
+ *  - costRate: 매도 시 예상 수수료·세금 비율 = (평가금액 − 비용 차감 평가금액) / 평가금액. 수수료·거래세는 매도 금액에 비례한다.
+ */
+export interface TossHoldingDetail {
+  quantity: number;
+  purchaseAmount: number | null;
+  costRate: number | null;
+  currency: "KRW" | "USD";
+}
 
 export class TossSyncService {
+  /** 해외 종목 원화 매입금액 장부 (토스 앱의 원화 손익과 맞추기 위해) */
+  readonly costBook: KrwCostBook;
+  private accountSeqs: number[] = [];
+
   constructor(
     private readonly db: Db,
     private readonly toss: TossOpenApiProvider,
     private readonly now: () => Date = () => new Date(),
-  ) {}
+    /** 토스가 원화 평가에 쓰는 표시 환율 (없으면 원화 장부 보정을 건너뛴다) */
+    private readonly displayFx: (() => Promise<number | null>) | null = null,
+  ) {
+    this.costBook = new KrwCostBook({
+      db,
+      now,
+      orders: (account, symbol) => this.toss.ordersForBook(account, symbol),
+      rateAt: (iso) => this.rateAt(iso),
+    });
+  }
+
+  // 과거 환율 조회는 MARKET_INFO 한도(초당 3회) 안에서 천천히, 같은 분은 한 번만. 실패는 던진다(장부가 다음에 다시 시도)
+  private readonly rateCache = new Map<string, number>();
+  private rateGate: Promise<unknown> = Promise.resolve();
+  private rateAt(iso: string): Promise<number> {
+    const minute = iso.slice(0, 16);
+    const cached = this.rateCache.get(minute);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const run = this.rateGate.then(async () => {
+      const hit = this.rateCache.get(minute);
+      if (hit !== undefined) return hit;
+      try {
+        const rate = await this.toss.usdKrwAt(iso);
+        this.rateCache.set(minute, rate);
+        return rate;
+      } finally {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    });
+    this.rateGate = run.catch(() => undefined);
+    return run;
+  }
+
+  /** 계좌 목록이 확인될 때마다 호출 (실시간 체결 구독 갱신용) */
+  onAccounts: ((seqs: number[]) => void) | null = null;
+
+  /** 계좌 목록 (실시간 주문 체결 구독에 쓴다). importHoldings 를 한 번 부른 뒤에 채워진다 */
+  get accounts(): number[] {
+    return [...this.accountSeqs];
+  }
 
   private async lastSnapshot(): Promise<string[]> {
     const row = await this.db.selectFrom("meta").select("value").where("key", "=", SNAPSHOT_KEY).executeTakeFirst();
@@ -51,18 +108,47 @@ export class TossSyncService {
       .execute();
   }
 
+  private async saveDetail(holdings: TossHolding[]): Promise<void> {
+    const detail: Record<string, TossHoldingDetail> = {};
+    for (const h of holdings) {
+      const mv = h.marketValue ?? null, after = h.marketValueAfterCost ?? null;
+      detail[h.code] = {
+        quantity: h.quantity,
+        purchaseAmount: h.purchaseAmount ?? null,
+        costRate: mv && after !== null && mv > 0 ? Math.max(0, (mv - after) / mv) : null,
+        currency: h.currency,
+      };
+    }
+    const value = JSON.stringify({ syncedAt: seoulIso(this.now()), items: detail });
+    await this.db.insertInto("meta").values({ key: DETAIL_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
+  }
+
   async importHoldings(): Promise<ImportResult> {
     const accounts = await this.toss.accounts();
+    this.accountSeqs = accounts.map((a) => a.accountSeq);
+    this.onAccounts?.(this.accountSeqs);
     const merged = new Map<string, TossHolding>();
+    const perAccount: Array<{ account: number; holdings: TossHolding[]; overview: OverviewForBook }> = [];
     for (const a of accounts) {
-      for (const h of await this.toss.holdings(a.accountSeq)) {
+      // 보유 종목과 계좌 요약을 한 응답에서 (원화 장부 보정은 둘이 같은 시점이어야 맞는다)
+      const { items, overview } = await this.toss.holdingsWithOverview(a.accountSeq);
+      perAccount.push({ account: a.accountSeq, holdings: items, overview });
+      for (const h of items) {
         const prev = merged.get(h.code);
         if (!prev) merged.set(h.code, h);
         else {
           // 여러 계좌에 같은 종목이 있으면 수량 합산, 평단은 수량 가중 평균
           const q = prev.quantity + h.quantity;
           const avg = prev.avgPrice !== null && h.avgPrice !== null ? (prev.avgPrice * prev.quantity + h.avgPrice * h.quantity) / q : prev.avgPrice ?? h.avgPrice;
-          merged.set(h.code, { ...prev, quantity: q, avgPrice: avg === null ? null : Math.round(avg * 100) / 100 });
+          const add = (a: number | null | undefined, b: number | null | undefined) => (a !== null && a !== undefined && b !== null && b !== undefined ? a + b : null);
+          merged.set(h.code, {
+            ...prev,
+            quantity: q,
+            avgPrice: avg === null ? null : Math.round(avg * 100) / 100,
+            purchaseAmount: add(prev.purchaseAmount, h.purchaseAmount),
+            marketValue: add(prev.marketValue, h.marketValue),
+            marketValueAfterCost: add(prev.marketValueAfterCost, h.marketValueAfterCost),
+          });
         }
       }
     }
@@ -103,11 +189,49 @@ export class TossSyncService {
       result.removed.push(code);
     }
     await this.saveSnapshot([...nowCodes]);
+    await this.saveDetail(holdings);
+    await this.updateCostBook(perAccount);
     return result;
+  }
+
+  /** 해외 종목 원화 매입금액 장부 갱신. 실패해도 동기화 자체는 성공으로 둔다(장부는 다음 동기화에서 다시) */
+  private async updateCostBook(perAccount: Array<{ account: number; holdings: TossHolding[]; overview: OverviewForBook }>): Promise<void> {
+    try {
+      // 계좌 수익률은 계좌마다 따로라 합칠 수 없다 → 계좌가 하나일 때만 계좌 합계로 보정한다
+      const overview = perAccount.length === 1 ? perAccount[0]!.overview : null;
+      const fx = this.displayFx ? await this.displayFx().catch(() => null) : null;
+      await this.costBook.update(forBook(perAccount), overview, fx);
+    } catch {
+      /* 원화 장부는 다음 동기화에서 다시 시도 */
+    }
+  }
+
+  /**
+   * 토스 앱에서 본 해외 종목 원화 매입금액(원화 보기의 평가금액 − 평가손익)을 정확한 값으로 넣는다.
+   * 그 순간의 보유 수량·달러 매입금액·주문 상태와 함께 저장해야 이후 체결만 정확히 이어 붙일 수 있어 토스에서 새로 읽는다.
+   * 넣은 뒤 바로 장부를 한 번 갱신해 계좌 합계 보정도 다시 계산한다. 반환: 저장된 종목 코드
+   */
+  async setExactKrw(values: Record<string, number>): Promise<string[]> {
+    const accounts = await this.toss.accounts();
+    const perAccount: Array<{ account: number; holdings: TossHolding[]; overview: OverviewForBook }> = [];
+    for (const a of accounts) {
+      const { items, overview } = await this.toss.holdingsWithOverview(a.accountSeq);
+      perAccount.push({ account: a.accountSeq, holdings: items, overview });
+    }
+    const applied = await this.costBook.setExact(values, forBook(perAccount));
+    await this.updateCostBook(perAccount);
+    return applied;
   }
 }
 
-export type SyncTrigger = "startup" | "schedule" | "briefing" | "manual";
+function forBook(perAccount: Array<{ account: number; holdings: TossHolding[] }>): Array<{ account: number; holdings: HoldingForBook[] }> {
+  return perAccount.map((a) => ({
+    account: a.account,
+    holdings: a.holdings.map((h) => ({ code: h.code, currency: h.currency, quantity: h.quantity, purchaseAmount: h.purchaseAmount ?? null })),
+  }));
+}
+
+export type SyncTrigger = "startup" | "schedule" | "briefing" | "manual" | "order";
 
 export interface AutoSyncStatus {
   enabled: boolean;
@@ -129,6 +253,8 @@ export interface AutoSyncStatus {
 export class HoldingsAutoSync {
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<ImportResult | null> | null = null;
+  /** 실행 중에 체결 알림이 오면, 이번 실행이 체결 전 잔고를 읽었을 수 있어 끝난 뒤 한 번 더 돈다 */
+  private rerun = false;
   private stopped = true;
   private lastRunAt: string | null = null;
   private lastTrigger: SyncTrigger | null = null;
@@ -180,6 +306,7 @@ export class HoldingsAutoSync {
 
   stop(): void {
     this.stopped = true;
+    this.rerun = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.nextRunAt = null;
@@ -210,7 +337,15 @@ export class HoldingsAutoSync {
 
   /** 한 번 동기화. 이미 실행 중이면 그 결과를 같이 기다린다. 실패해도 던지지 않고 lastError 에 남긴다(manual 은 던짐) */
   async run(trigger: SyncTrigger): Promise<ImportResult | null> {
-    if (this.running) return this.running;
+    if (this.running) {
+      // 수동 실행은 자기 결과(와 오류)를 받아야 한다 → 진행 중인 실행이 끝나면 새로 한 번
+      if (trigger === "manual") {
+        await this.running.catch(() => null);
+        return this.run("manual");
+      }
+      if (trigger === "order") this.rerun = true;
+      return this.running;
+    }
     this.running = (async () => {
       try {
         const r = await this.deps.sync.importHoldings();
@@ -235,6 +370,10 @@ export class HoldingsAutoSync {
       return await this.running;
     } finally {
       this.running = null;
+      if (this.rerun) {
+        this.rerun = false;
+        void this.run("order");
+      }
     }
   }
 }

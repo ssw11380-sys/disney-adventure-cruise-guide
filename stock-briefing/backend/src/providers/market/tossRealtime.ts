@@ -45,6 +45,8 @@ const defaultSocketFactory: SocketFactory = (url, headers) => new WebSocket(url,
 export class TossRealtime extends EventEmitter implements LiveTicks {
   private socket: SocketLike | null = null;
   private codes: string[] = [];
+  /** 내 주문·체결 이벤트(personal:order)를 받을 계좌 */
+  private accounts: string[] = [];
   private subscribed: string[] = [];
   private readonly ticks = new Map<string, LiveTick>();
   private pingTimer: NodeJS.Timeout | null = null;
@@ -88,12 +90,22 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
     if (same) return;
     for (const c of [...this.ticks.keys()]) if (!next.includes(c)) this.ticks.delete(c);
     if (this.connected) this.declare();
+    else if (!this.socket && !this.stopped && (next.length > 0 || this.accounts.length > 0)) void this.connect();
+  }
+
+  /** 계좌를 알려주면 내 주문 체결 이벤트도 구독한다 (토스 앱에서 사고팔면 즉시 "order" 이벤트) */
+  setAccounts(seqs: number[]): void {
+    const next = [...new Set(seqs.map(String))].sort();
+    if (next.length === this.accounts.length && next.every((c, i) => c === this.accounts[i])) return;
+    this.accounts = next;
+    if (this.connected) this.declare();
+    // 보유·관심 종목이 하나도 없어도 첫 매수를 바로 알 수 있게 연결한다
     else if (!this.socket && !this.stopped && next.length > 0) void this.connect();
   }
 
   start(): void {
     this.stopped = false;
-    if (this.codes.length > 0 && !this.socket) void this.connect();
+    if ((this.codes.length > 0 || this.accounts.length > 0) && !this.socket) void this.connect();
   }
 
   stop(): void {
@@ -170,11 +182,14 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
   /** 현재 종목 목록으로 구독 선언(배열 1개 = 전체) */
   private declare(): void {
     if (!this.socket || !this.connected) return;
-    const kr = this.codes.filter(isKrCode);
-    const us = this.codes.filter((c) => !isKrCode(c));
+    // 연결당 구독 한도는 토픽 100개(종목 + 계좌 합산). 넘으면 선언 전체가 거절되므로 계좌 몫을 먼저 뺀다
+    const codes = this.codes.slice(0, Math.max(0, 100 - this.accounts.length));
+    const kr = codes.filter(isKrCode);
+    const us = codes.filter((c) => !isKrCode(c));
     const decl: Array<Record<string, unknown>> = [{ id: `sub-${Date.now()}` }];
     if (kr.length) decl.push({ type: "trade:kr", codes: kr });
     if (us.length) decl.push({ type: "trade:us", codes: us });
+    if (this.accounts.length) decl.push({ type: "personal:order", codes: this.accounts });
     try {
       this.socket.send(JSON.stringify(decl));
     } catch (e) {
@@ -202,6 +217,12 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
       return;
     }
     if (msg.type !== "message" || !msg.topic || !msg.data) return;
+    if (msg.topic.startsWith("personal:order")) {
+      // { event: PENDING|PARTIAL_FILL|FILL|CANCELED|..., accountSeq, order{...} }
+      this.lastMessageAt = nowIso;
+      this.emit("order", msg.data);
+      return;
+    }
     const parts = msg.topic.split(":"); // trade:us:AAPL
     if (parts[0] !== "trade" || parts.length < 3) return;
     const code = normalizeCode(parts.slice(2).join(":"));

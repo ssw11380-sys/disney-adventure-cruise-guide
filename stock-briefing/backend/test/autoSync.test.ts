@@ -17,9 +17,21 @@ class FakeToss {
     if (this.fail) throw new Error("토스 계좌 조회 실패");
     return [{ accountNo: "1", accountSeq: 1, accountType: "BROKERAGE" }];
   }
-  async holdings(_seq: number) {
+  /** 동기화 도중(보유 조회 직후) 한 번 실행할 콜백 */
+  duringSync: (() => void) | null = null;
+  async holdingsWithOverview(_seq: number) {
     this.calls++;
-    return this.holdingsList;
+    const items = this.holdingsList;
+    const hook = this.duringSync;
+    this.duringSync = null;
+    hook?.();
+    return { items, overview: { purchaseKrw: 0, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } };
+  }
+  async ordersForBook() {
+    return [];
+  }
+  async usdKrwAt() {
+    return 1400;
   }
   async stockInfos(codes: string[]) {
     return new Map(codes.map((c) => [c, { name: c === "TSLA" ? "테슬라" : "NAVER", market: c === "TSLA" ? "NASDAQ" : "KOSPI" }]));
@@ -106,6 +118,29 @@ describe("HoldingsAutoSync", () => {
     const [a, b] = await Promise.all([auto.run("schedule"), auto.run("briefing")]);
     expect(a).toBe(b);
     expect(toss.calls).toBe(1);
+    await db.destroy();
+  });
+
+  it("동기화 중에 체결 알림(order)이 오면 끝난 뒤 한 번 더 읽는다 (체결 전 잔고를 읽었을 수 있으므로)", async () => {
+    const { db, toss, sync } = await setup();
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW });
+    toss.holdingsList = [h("035420", 9, 232555)];
+    let second: Promise<unknown> | null = null;
+    toss.duringSync = () => {
+      toss.holdingsList = [h("035420", 12, 225000)]; // 이번 실행은 이미 9주를 읽었다
+      second = auto.run("order");
+    };
+    await auto.run("schedule");
+    await second;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(toss.calls).toBe(2);
+    expect((await db.selectFrom("registered_stocks").select("quantity").where("code", "=", "035420").executeTakeFirst())?.quantity).toBe(12);
+
+    // order 가 아닌 트리거는 기존 실행 결과를 같이 기다리기만 한다
+    toss.duringSync = () => void auto.run("schedule");
+    await auto.run("briefing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(toss.calls).toBe(3);
     await db.destroy();
   });
 

@@ -1,8 +1,10 @@
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { Alert, StyleSheet, Text, TextInput, View } from "react-native";
-import { useStock, useStockMutations } from "@/api/hooks";
-import type { RegisteredStock } from "@/api/types";
+import { useQueryClient } from "@tanstack/react-query";
+import { useApi, useStock, useStockMutations } from "@/api/hooks";
+import type { Evaluation, RegisteredStock } from "@/api/types";
+import { useSettings } from "@/lib/settings";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { formatPrice, isUsMarket } from "@/lib/format";
@@ -32,9 +34,34 @@ export function applyTrade(current: { quantity: number | null; avgPrice: number 
   return { quantity: q, avgPrice: q === 0 ? null : current.avgPrice };
 }
 
-function EditForm({ stock }: { stock: RegisteredStock }) {
+function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluation | null } }) {
   const t = useTheme();
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl } = useSettings();
   const { update, remove } = useStockMutations();
+  const ev = stock.evaluation ?? null;
+  const [krwCost, setKrwCost] = useState(ev?.costBasisKrw && ev.krwCostSource === "exact" ? String(Math.round(ev.costBasisKrw)) : "");
+  const [savingKrw, setSavingKrw] = useState(false);
+  const saveKrwCost = async () => {
+    const v = Number(krwCost.replace(/[^0-9.]/g, ""));
+    if (!(v > 0)) {
+      Alert.alert("입력 확인", "원화 매입금액을 숫자로 입력하세요.");
+      return;
+    }
+    setSavingKrw(true);
+    try {
+      const r = await api.setKrwCost({ [stock.code]: v });
+      if (!r.applied.includes(stock.code)) throw new Error("토스 계좌에서 가져온 보유 종목만 저장할 수 있습니다 (설정 → 토스증권 연동 → 동기화 후 다시 시도)");
+      await qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
+      await qc.invalidateQueries({ queryKey: [apiUrl, "stock", stock.code] });
+      Alert.alert("저장됨", "원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
+    } catch (e) {
+      Alert.alert("저장 실패", e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingKrw(false);
+    }
+  };
   const cur = isUsMarket(stock.market) ? "USD" : "KRW";
   const [quantity, setQuantity] = useState(stock.quantity?.toString() ?? "");
   const [avgPrice, setAvgPrice] = useState(stock.avgPrice?.toString() ?? "");
@@ -101,6 +128,20 @@ function EditForm({ stock }: { stock: RegisteredStock }) {
         <TextInput value={memo} onChangeText={setMemo} placeholder="메모 (선택)" placeholderTextColor={t.muted} multiline style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt, minHeight: 72 }]} />
         <Button title="저장" onPress={save} loading={update.isPending} />
       </Card>
+
+      {cur === "USD" && ev ? (
+        <Card>
+          <SectionTitle>원화 매입금액</SectionTitle>
+          <Muted>
+            토스 앱 원화 보기에서 이 종목의 평가금액 − 평가손익 값을 넣으면 원화 손익이 토스와 똑같아집니다.{" "}
+            {ev.costBasisKrw ? `현재 ${Math.round(ev.costBasisKrw).toLocaleString("ko-KR")}원 (${ev.krwCostSource === "exact" ? "토스 값" : "체결 환율 추정"})` : ""}
+          </Muted>
+          <View style={{ flexDirection: "row", gap: space.sm }}>
+            <TextInput value={krwCost} onChangeText={setKrwCost} placeholder="예: 24557187" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
+            <Button title="저장" variant="secondary" onPress={() => void saveKrwCost()} loading={savingKrw} />
+          </View>
+        </Card>
+      ) : null}
 
       <Card>
         <SectionTitle>체결 반영</SectionTitle>

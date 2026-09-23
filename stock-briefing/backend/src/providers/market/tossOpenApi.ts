@@ -529,6 +529,61 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     return rows.map((r) => ({ accountNo: String(r["accountNo"] ?? ""), accountSeq: Number(r["accountSeq"]), accountType: String(r["accountType"] ?? "") }));
   }
 
+  /**
+   * 보유 종목과 계좌 요약을 한 번의 호출로 (요약과 종목이 같은 시점이어야 원화 장부 보정이 맞는다).
+   * 요약의 rateAfterCost 는 토스 내부 원화 매입금액(매수 당시 환율) 기준이다 — 문서 설명과 달리 실측으로 확인
+   * (계좌 합계 원화 매입금액이 토스 앱 값과 238원 차이, 현재 환율 기준이었다면 약 290만 원 차이).
+   */
+  async holdingsWithOverview(accountSeq: number): Promise<{ items: TossHolding[]; overview: { purchaseKrw: number; purchaseUsd: number; afterCostKrw: number; afterCostUsd: number; rateAfterCost: number | null } }> {
+    const r = await this.client.get<Json>("/api/v1/holdings", {}, { "X-Tossinvest-Account": String(accountSeq) });
+    const two = (o: unknown) => ({ krw: num((o as Json | undefined)?.["krw"]) ?? 0, usd: num((o as Json | undefined)?.["usd"]) ?? 0 });
+    const purchase = two(r?.["totalPurchaseAmount"]);
+    const after = two(((r?.["marketValue"] as Json | undefined) ?? {})["amountAfterCost"]);
+    return {
+      items: parseHoldingItems((r?.["items"] as Json[] | undefined) ?? []),
+      overview: { purchaseKrw: purchase.krw, purchaseUsd: purchase.usd, afterCostKrw: after.krw, afterCostUsd: after.usd, rateAfterCost: num(((r?.["profitLoss"] as Json | undefined) ?? {})["rateAfterCost"]) },
+    };
+  }
+
+  /**
+   * 원화 장부용 체결 목록: 종료된 주문(CLOSED, 100건씩 페이지) + 진행 중이지만 일부 체결된 주문(OPEN).
+   * 주문 하나 = 한 줄이고 부분 체결은 누적 수량·금액으로 온다 → 장부는 orderId 별로 이미 반영한 양을 기억해 차이만 반영한다.
+   * 네트워크·한도 오류는 그대로 던진다(장부를 건드리지 않고 다음 동기화에서 다시).
+   */
+  async ordersForBook(accountSeq: number, symbol: string): Promise<Array<{ orderId: string; side: "BUY" | "SELL"; quantity: number; amount: number; at: string }>> {
+    const out: Array<{ orderId: string; side: "BUY" | "SELL"; quantity: number; amount: number; at: string }> = [];
+    const take = (orders: Json[] | undefined) => {
+      for (const o of orders ?? []) {
+        const ex = (o["execution"] as Json | undefined) ?? {};
+        const q = num(ex["filledQuantity"]) ?? 0;
+        const amount = num(ex["filledAmount"]);
+        const at = typeof ex["filledAt"] === "string" ? ex["filledAt"] : typeof o["orderedAt"] === "string" ? o["orderedAt"] : null;
+        const side = o["side"] === "SELL" ? "SELL" : o["side"] === "BUY" ? "BUY" : null;
+        const id = typeof o["orderId"] === "string" ? o["orderId"] : null;
+        if (q > 0 && amount !== null && at && side && id) out.push({ orderId: id, side, quantity: q, amount, at });
+      }
+    };
+    const headers = { "X-Tossinvest-Account": String(accountSeq) };
+    let cursor: string | undefined;
+    for (let page = 0; page < 50; page++) {
+      const r = await this.client.get<{ orders?: Json[]; nextCursor?: string | null; hasNext?: boolean }>("/api/v1/orders", { status: "CLOSED", symbol, limit: 100, cursor }, headers);
+      take(r?.orders);
+      if (!r?.hasNext || !r.nextCursor) break;
+      cursor = r.nextCursor;
+    }
+    const open = await this.client.get<{ orders?: Json[] }>("/api/v1/orders", { status: "OPEN", symbol }, headers);
+    take(open?.orders);
+    return out;
+  }
+
+  /** 과거 시점의 토스 매수 환율 (USD→KRW). 오류는 던진다(원화 장부가 실패와 "데이터 없음"을 구분해야 한다) */
+  async usdKrwAt(iso: string): Promise<number> {
+    const r = await this.client.get<Json>("/api/v1/exchange-rate", { baseCurrency: "USD", quoteCurrency: "KRW", dateTime: iso });
+    const rate = num(r?.["rate"]) ?? num(r?.["midRate"]);
+    if (rate === null) throw new ProviderError(this.name, `환율 없음 (${iso})`);
+    return rate;
+  }
+
   /** 진단용: 보유 종목 원본 응답 (필드 구성 확인) */
   async holdingsRaw(accountSeq: number): Promise<unknown> {
     return this.client.get<unknown>("/api/v1/holdings", {}, { "X-Tossinvest-Account": String(accountSeq) });
@@ -536,17 +591,24 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
 
   async holdings(accountSeq: number): Promise<TossHolding[]> {
     const r = await this.client.get<{ items?: Json[] }>("/api/v1/holdings", {}, { "X-Tossinvest-Account": String(accountSeq) });
-    return (r?.items ?? [])
-      .map((it) => ({
-        code: String(it["symbol"] ?? "").toUpperCase(),
-        name: String(it["name"] ?? ""),
-        currency: String(it["currency"] ?? "") === "USD" ? ("USD" as const) : ("KRW" as const),
-        quantity: num(it["quantity"]) ?? 0,
-        avgPrice: num(it["averagePurchasePrice"]),
-        lastPrice: num(it["lastPrice"]),
-      }))
-      .filter((h) => CODE_RE.test(h.code) && h.quantity > 0);
+    return parseHoldingItems(r?.items ?? []);
   }
+}
+
+function parseHoldingItems(items: Json[]): TossHolding[] {
+  return items
+    .map((it) => ({
+      code: String(it["symbol"] ?? "").toUpperCase(),
+      name: String(it["name"] ?? ""),
+      currency: String(it["currency"] ?? "") === "USD" ? ("USD" as const) : ("KRW" as const),
+      quantity: num(it["quantity"]) ?? 0,
+      avgPrice: num(it["averagePurchasePrice"]),
+      lastPrice: num(it["lastPrice"]),
+      purchaseAmount: num((it["marketValue"] as Json | undefined)?.["purchaseAmount"]),
+      marketValue: num((it["marketValue"] as Json | undefined)?.["amount"]),
+      marketValueAfterCost: num((it["marketValue"] as Json | undefined)?.["amountAfterCost"]),
+    }))
+    .filter((h) => CODE_RE.test(h.code) && h.quantity > 0);
 }
 
 export interface TossHolding {
@@ -556,4 +618,9 @@ export interface TossHolding {
   quantity: number;
   avgPrice: number | null;
   lastPrice: number | null;
+  /** 매입금액 (종목 통화). 토스 앱의 "매입금액" */
+  purchaseAmount?: number | null;
+  /** 평가금액 (수수료·세금 차감 전 / 후, 종목 통화) */
+  marketValue?: number | null;
+  marketValueAfterCost?: number | null;
 }

@@ -11,7 +11,8 @@ import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, SectionTitle, Segmented, Stat, StatGrid } from "@/components/ui";
-import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatMoney, formatNumber, formatPct, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, relativeTime, toDisplay } from "@/lib/format";
+import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, relativeTime, toDisplay } from "@/lib/format";
+import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
 
@@ -29,7 +30,7 @@ export default function StockDetailScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const c = code ?? "";
   const stock = useStock(c);
-  const { showKrw } = useSettings();
+  const { showKrw, afterCost } = useSettings();
   const [period, setPeriod] = useState<CandlePeriod>("D");
   const [tab, setTab] = useState<Tab>("company");
   // 과거 구간 이동과 120 이평선을 위해 넉넉히 받는다 (일봉 약 3년, 주봉 5년, 월봉 10년)
@@ -43,10 +44,13 @@ export default function StockDetailScreen() {
   const q = s.quote;
   const cur = q?.currency ?? currencyOfMarket(s.market);
   const fx = q?.fxRate ?? (q?.priceKrw && q.price ? q.priceKrw / q.price : null);
-  const money = (n: number | null | undefined, opts?: { sign?: boolean }) => formatMoney(n, cur, fx, showKrw, opts);
   const displayCur = toDisplay(1, cur, fx, showKrw).currency;
   const nxt = q?.afterMarket ?? null;
-  const ev = q && s.quantity && s.avgPrice ? { profit: (q.price - s.avgPrice) * s.quantity, rate: ((q.price - s.avgPrice) / s.avgPrice) * 100, value: q.price * s.quantity } : null;
+  // 서버 평가(토스 매입금액·비용 비율·원화 매입금액 포함)를 쓰고, 구버전 서버면 수량×평단으로 계산
+  const baseEval = s.evaluation ?? (q ? evaluate(s, q) : null);
+  const evNative = evalView(baseEval, { afterCost, toKrw: false, currency: cur, fx });
+  const evKrw = cur === "USD" ? evalView(baseEval, { afterCost, toKrw: true, currency: cur, fx }) : null;
+  const ev = evNative;
   const quote = (n: number | null | undefined) => formatQuoteDisplay(n, cur, fx, showKrw);
   const arrow = (n: number | null | undefined) => formatArrowDisplay(n, cur, fx, showKrw);
   const range52 = q && q.high52w && q.low52w && q.high52w > q.low52w ? Math.min(1, Math.max(0, (q.price - q.low52w) / (q.high52w - q.low52w))) : null;
@@ -166,12 +170,24 @@ export default function StockDetailScreen() {
           <Text style={styles.panelTitle(t.ink)}>잔고</Text>
           <StatGrid>
             <Stat label="보유수량" value={`${formatNumber(s.quantity, Number.isInteger(s.quantity) ? 0 : 4)}주`} />
-            <Stat label="평균단가" value={quote(s.avgPrice)} />
-            <Stat label="평가금액" value={money(ev.value)} />
-            <Stat label="매입금액" value={money((s.avgPrice ?? 0) * (s.quantity ?? 0))} />
-            <Stat label="평가손익" value={money(ev.profit, { sign: true })} change={ev.profit} />
-            <Stat label="수익률" value={formatPct(ev.rate)} change={ev.profit} />
+            <Stat label="평균단가" value={formatQuote(s.avgPrice, cur)} />
+            <Stat label="평가금액" value={formatPrice(ev.marketValue, cur)} />
+            <Stat label="매입금액" value={formatPrice(ev.costBasis, cur)} />
+            <Stat label="평가손익" value={formatPrice(ev.profit, cur, { sign: true })} change={ev.profit} />
+            <Stat label="수익률" value={formatPct(ev.profitRate)} change={ev.profit} />
           </StatGrid>
+          {evKrw?.currency === "KRW" ? (
+            <>
+              <Text style={[styles.sub(t.muted), { marginTop: 4 }]}>원화 기준 (매수 당시 환율{evKrw.estimated ? " · 추정" : ""})</Text>
+              <StatGrid>
+                <Stat label="평가금액" value={formatPrice(evKrw.marketValue, "KRW")} />
+                <Stat label="매입금액" value={formatPrice(evKrw.costBasis, "KRW")} />
+                <Stat label="평가손익" value={formatPrice(evKrw.profit, "KRW", { sign: true })} change={evKrw.profit} />
+                <Stat label="수익률" value={formatPct(evKrw.profitRate)} change={evKrw.profit} />
+              </StatGrid>
+            </>
+          ) : null}
+          {afterCost && baseEval?.afterCost ? <Text style={styles.sub(t.muted)}>평가금액·손익은 매도 시 예상 수수료·세금 차감 후 (토스 기준)</Text> : null}
           {s.memo ? <Text style={styles.sub(t.muted)}>메모 {s.memo}</Text> : null}
         </View>
       ) : null}

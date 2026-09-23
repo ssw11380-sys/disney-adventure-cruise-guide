@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
-import type { StockService } from "../services/stockService.js";
+import { evaluate, type StockService } from "../services/stockService.js";
 
 const codeParam = z.object({ code: z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE, "종목 코드는 6자리 숫자(한국) 또는 티커(미국)")) });
 const money = z.number().nonnegative().nullable().optional();
@@ -48,7 +48,8 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
     } catch (e) {
       quoteError = e instanceof Error ? e.message : String(e);
     }
-    return { ...stock, quote, quoteError };
+    const [detail, krw] = await Promise.all([service.tossDetail(), service.krwCosts()]);
+    return { ...stock, quote, quoteError, evaluation: evaluate(stock, quote, detail.get(code), krw.get(code)) };
   });
 
   app.patch("/:code", async (req) => {
