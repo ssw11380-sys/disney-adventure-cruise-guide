@@ -178,7 +178,7 @@ export default function StockDetailScreen() {
           </StatGrid>
           {evKrw?.currency === "KRW" ? (
             <>
-              <Text style={[styles.sub(t.muted), { marginTop: 4 }]}>원화 기준 (매수 당시 환율{evKrw.estimated ? " · 추정" : ""})</Text>
+              <Text style={[styles.sub(t.muted), { marginTop: 4 }]}>{evKrw.krwBasis === "current" ? "원화 기준 (현재 환율 환산)" : `원화 기준 (매수 당시 환율${evKrw.estimated ? " · 추정" : ""})`}</Text>
               <StatGrid>
                 <Stat label="평가금액" value={formatPrice(evKrw.marketValue, "KRW")} />
                 <Stat label="매입금액" value={formatPrice(evKrw.costBasis, "KRW")} />

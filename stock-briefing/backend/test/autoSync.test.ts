@@ -25,6 +25,7 @@ class FakeToss {
     const hook = this.duringSync;
     this.duringSync = null;
     hook?.();
+    if (this.fail) throw new Error("토스 계좌 조회 실패");
     return { items, overview: { purchaseKrw: 0, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } };
   }
   async ordersForBook() {
@@ -141,6 +142,33 @@ describe("HoldingsAutoSync", () => {
     await auto.run("briefing");
     await new Promise((r) => setTimeout(r, 20));
     expect(toss.calls).toBe(3);
+    await db.destroy();
+  });
+
+  it("수동 실행이 실패해도 같이 기다리던 자동 실행(order)에는 오류를 넘기지 않고, 수동은 진행 중 실행이 끝난 뒤 자기 실행을 한다", async () => {
+    const { db, toss, sync } = await setup();
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW });
+    toss.holdingsList = [h("035420", 9, 232555)];
+    let joined: Promise<unknown> | null = null;
+    // 수동 실행 도중 체결 알림으로 order 가 합류하고, 수동 실행은 실패한다
+    toss.duringSync = () => {
+      toss.fail = true;
+      joined = auto.run("order");
+    };
+    await expect(auto.run("manual")).rejects.toThrow("토스 계좌 조회 실패");
+    expect(await joined).toBeNull(); // 처리 안 된 거부 없이 null
+    await new Promise((r) => setTimeout(r, 20)); // order 로 한 번 더 도는 실행도 조용히 실패
+    expect(auto.status().lastError).toContain("토스 계좌 조회 실패");
+
+    // 진행 중인 자동 실행에 수동이 겹치면: 자동이 끝난 뒤 수동이 따로 돌고, 실패는 수동 쪽에만 던진다
+    toss.fail = false;
+    toss.duringSync = () => {
+      toss.fail = true;
+    };
+    const scheduled = auto.run("schedule");
+    const manual = auto.run("manual");
+    expect(await scheduled).toBeNull();
+    await expect(manual).rejects.toThrow("토스 계좌 조회 실패");
     await db.destroy();
   });
 

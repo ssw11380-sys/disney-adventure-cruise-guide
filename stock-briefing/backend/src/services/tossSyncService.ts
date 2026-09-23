@@ -3,7 +3,7 @@ import { seoulIso } from "../lib/time.js";
 import type { MarketCalendar } from "../providers/market/calendar.js";
 import type { TossHolding, TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import { toMarket } from "../providers/market/kisMaster.js";
-import { KrwCostBook, type HoldingForBook, type OverviewForBook } from "./krwCostBook.js";
+import { KrwCostBook, type AccountForBook, type OverviewForBook } from "./krwCostBook.js";
 
 /**
  * 토스증권 계좌의 보유 종목을 registered_stocks 로 가져온다.
@@ -128,7 +128,7 @@ export class TossSyncService {
     this.accountSeqs = accounts.map((a) => a.accountSeq);
     this.onAccounts?.(this.accountSeqs);
     const merged = new Map<string, TossHolding>();
-    const perAccount: Array<{ account: number; holdings: TossHolding[]; overview: OverviewForBook }> = [];
+    const perAccount: PerAccount[] = [];
     for (const a of accounts) {
       // 보유 종목과 계좌 요약을 한 응답에서 (원화 장부 보정은 둘이 같은 시점이어야 맞는다)
       const { items, overview } = await this.toss.holdingsWithOverview(a.accountSeq);
@@ -195,7 +195,7 @@ export class TossSyncService {
   }
 
   /** 해외 종목 원화 매입금액 장부 갱신. 실패해도 동기화 자체는 성공으로 둔다(장부는 다음 동기화에서 다시) */
-  private async updateCostBook(perAccount: Array<{ account: number; holdings: TossHolding[]; overview: OverviewForBook }>): Promise<void> {
+  private async updateCostBook(perAccount: PerAccount[]): Promise<void> {
     try {
       // 계좌 수익률은 계좌마다 따로라 합칠 수 없다 → 계좌가 하나일 때만 계좌 합계로 보정한다
       const overview = perAccount.length === 1 ? perAccount[0]!.overview : null;
@@ -206,27 +206,37 @@ export class TossSyncService {
     }
   }
 
+  private async readAccounts(): Promise<PerAccount[]> {
+    const out: PerAccount[] = [];
+    for (const a of await this.toss.accounts()) {
+      const { items, overview } = await this.toss.holdingsWithOverview(a.accountSeq);
+      out.push({ account: a.accountSeq, holdings: items, overview });
+    }
+    return out;
+  }
+
   /**
    * 토스 앱에서 본 해외 종목 원화 매입금액(원화 보기의 평가금액 − 평가손익)을 정확한 값으로 넣는다.
-   * 그 순간의 보유 수량·달러 매입금액·주문 상태와 함께 저장해야 이후 체결만 정확히 이어 붙일 수 있어 토스에서 새로 읽는다.
-   * 넣은 뒤 바로 장부를 한 번 갱신해 계좌 합계 보정도 다시 계산한다. 반환: 저장된 종목 코드
+   * 장부가 잠금 안에서 토스 보유를 새로 읽어(보유 → 주문 → 보유) 그 사이 체결이 없었던 종목만 저장한다.
+   * 넣은 뒤 마지막으로 읽은 보유로 장부를 한 번 갱신해 계좌 합계 보정도 다시 계산한다. 반환: 저장된 종목 코드
    */
   async setExactKrw(values: Record<string, number>): Promise<string[]> {
-    const accounts = await this.toss.accounts();
-    const perAccount: Array<{ account: number; holdings: TossHolding[]; overview: OverviewForBook }> = [];
-    for (const a of accounts) {
-      const { items, overview } = await this.toss.holdingsWithOverview(a.accountSeq);
-      perAccount.push({ account: a.accountSeq, holdings: items, overview });
-    }
-    const applied = await this.costBook.setExact(values, forBook(perAccount));
-    await this.updateCostBook(perAccount);
+    let last: PerAccount[] | null = null;
+    const applied = await this.costBook.setExact(values, async () => {
+      last = await this.readAccounts();
+      return forBook(last);
+    });
+    if (last) await this.updateCostBook(last);
     return applied;
   }
 }
 
-function forBook(perAccount: Array<{ account: number; holdings: TossHolding[] }>): Array<{ account: number; holdings: HoldingForBook[] }> {
+type PerAccount = { account: number; holdings: TossHolding[]; overview: OverviewForBook & { purchaseUsd: number } };
+
+function forBook(perAccount: PerAccount[]): AccountForBook[] {
   return perAccount.map((a) => ({
     account: a.account,
+    purchaseUsd: a.overview.purchaseUsd,
     holdings: a.holdings.map((h) => ({ code: h.code, currency: h.currency, quantity: h.quantity, purchaseAmount: h.purchaseAmount ?? null })),
   }));
 }
@@ -331,7 +341,9 @@ export class HoldingsAutoSync {
     this.nextRunAt = new Date(this.now.getTime() + delayMs).toISOString();
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.run(trigger).finally(() => void this.nextDelayMs().then((d) => this.schedule(d, "schedule")));
+      void this.run(trigger)
+        .catch(() => null)
+        .finally(() => void this.nextDelayMs().then((d) => this.schedule(d, "schedule")));
     }, delayMs);
   }
 
@@ -344,7 +356,8 @@ export class HoldingsAutoSync {
         return this.run("manual");
       }
       if (trigger === "order") this.rerun = true;
-      return this.running;
+      // 수동 실행이 실패하면 그 실행은 던진다. 같이 기다리던 자동 실행에는 넘기지 않는다(처리 안 된 거부로 서버가 죽지 않게)
+      return this.running.catch(() => null);
     }
     this.running = (async () => {
       try {
@@ -372,7 +385,7 @@ export class HoldingsAutoSync {
       this.running = null;
       if (this.rerun) {
         this.rerun = false;
-        void this.run("order");
+        void this.run("order").catch(() => null);
       }
     }
   }

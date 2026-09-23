@@ -428,7 +428,7 @@ export function evaluate(
   s: RegisteredStock,
   q: Quote | null,
   toss?: TossHoldingDetail | null,
-  krwCost?: { krw: number; source: "exact" | "estimated"; quantity: number } | null,
+  krwCost?: { krw: number; source: "exact" | "estimated"; quantity: number; usdCost?: number } | null,
 ): Evaluation | null {
   if (!q || s.quantity === null || s.avgPrice === null || s.quantity <= 0) return null;
   // 토스에서 가져온 수량과 같을 때만 토스 기준(매입금액·비용 비율)을 쓴다. 사용자가 수량을 바꿨으면 직접 계산
@@ -446,8 +446,28 @@ export function evaluate(
     profitRate: pct(profit),
     costRate,
     afterCost: afterValue !== null ? { marketValue: afterValue, profit: afterValue - costBasis, profitRate: pct(afterValue - costBasis) } : null,
-    ...(q.currency === "USD" && krwCost && Math.abs(krwCost.quantity - s.quantity) < 1e-9
-      ? { costBasisKrw: krwCost.krw, krwCostSource: krwCost.source }
-      : { costBasisKrw: null, krwCostSource: null }),
+    ...(q.currency === "USD" ? krwBasis(s.quantity, q, t, krwCost) : { costBasisKrw: null, krwCostSource: null }),
   };
+}
+
+/**
+ * 해외 종목의 원화 매입금액. 장부 수량이 보유와 같으면 그대로.
+ * 장부가 새 체결을 아직 못 따라온 동안(토스 매입금액은 이미 바뀜)에는 전체를 현재 환율로 바꾸지 않고 차이만 반영한다:
+ * 늘어난 달러 매입금액은 현재 환율로 더하고, 줄었으면 비율대로 줄인다 (추정).
+ */
+function krwBasis(
+  quantity: number,
+  q: Quote,
+  t: TossHoldingDetail | null,
+  krwCost: { krw: number; source: "exact" | "estimated"; quantity: number; usdCost?: number } | null | undefined,
+): { costBasisKrw: number | null; krwCostSource: "exact" | "estimated" | null } {
+  const none = { costBasisKrw: null, krwCostSource: null };
+  if (!krwCost || !(krwCost.quantity > 0)) return none;
+  if (Math.abs(krwCost.quantity - quantity) < 1e-9) return { costBasisKrw: krwCost.krw, krwCostSource: krwCost.source };
+  const usdNow = t?.purchaseAmount ?? null;
+  const usdBook = krwCost.usdCost ?? null;
+  if (usdNow === null || !usdBook || !(usdBook > 0)) return none;
+  if (usdNow <= usdBook) return { costBasisKrw: krwCost.krw * (usdNow / usdBook), krwCostSource: "estimated" };
+  const fx = q.fxRate ?? (q.priceKrw && q.price ? q.priceKrw / q.price : null);
+  return fx ? { costBasisKrw: krwCost.krw + (usdNow - usdBook) * fx, krwCostSource: "estimated" } : none;
 }

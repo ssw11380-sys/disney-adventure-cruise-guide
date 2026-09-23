@@ -44,6 +44,7 @@ export default function StocksScreen() {
     const krw = zero();
     let convertible = true;
     let estimated = false;
+    let currentBasis = 0;
     for (const s of held) {
       const cur = s.quote!.currency ?? "KRW";
       const fx = fxOf(s);
@@ -59,6 +60,7 @@ export default function StocksScreen() {
       }
       const k = evalView(s.evaluation, { afterCost, toKrw: true, currency: cur, fx })!;
       if (k.estimated) estimated = true;
+      if (k.krwBasis === "current") currentBasis += 1;
       const dayKrw = cur === "USD" ? day * fx! : day;
       krw.value += k.marketValue;
       krw.cost += k.costBasis;
@@ -72,7 +74,7 @@ export default function StocksScreen() {
       }
     }
     const fx = held.map(fxOf).find((x) => x) ?? null;
-    return { held: held.length, byCur, usdInKrw, krw: convertible && held.length ? krw : null, fx, estimated, watch: list.length - held.length };
+    return { held: held.length, byCur, usdInKrw, krw: convertible && held.length ? krw : null, fx, estimated, currentBasis, watch: list.length - held.length };
   }, [data, afterCost]);
 
   const sections = useMemo(() => {
@@ -142,6 +144,7 @@ export default function StocksScreen() {
           byCur={summary.byCur}
           usdInKrw={summary.usdInKrw}
           estimated={summary.estimated}
+          currentBasis={summary.currentBasis}
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
@@ -223,6 +226,7 @@ function AccountPanel({
   byCur,
   usdInKrw,
   estimated,
+  currentBasis,
   afterCost,
   showKrw,
   fx,
@@ -234,6 +238,8 @@ function AccountPanel({
   byCur: Record<Currency, Totals>;
   usdInKrw: Totals;
   estimated: boolean;
+  /** 원화 매입금액 장부가 없어 현재 환율로 환산한 해외 종목 수 */
+  currentBasis: number;
   afterCost: boolean;
   showKrw: boolean;
   fx: number | null;
@@ -294,6 +300,7 @@ function AccountPanel({
           {fx ? (
             <Text style={{ color: t.muted, fontSize: font.tiny, textAlign: "right" }}>
               적용 환율 {fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원 · 원화 손익은 매수 당시 환율 기준{estimated ? " (일부 추정)" : ""}
+              {currentBasis ? ` · ${currentBasis}종목은 현재 환율 환산` : ""}
             </Text>
           ) : null}
         </View>

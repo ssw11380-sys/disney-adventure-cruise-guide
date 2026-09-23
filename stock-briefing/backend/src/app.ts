@@ -107,7 +107,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
           if (orderTimer) clearTimeout(orderTimer);
           orderTimer = setTimeout(() => {
             orderTimer = null;
-            void autoSync.run("order");
+            void autoSync.run("order").catch(() => null);
           }, 3000);
         };
         live.on("order", (data: { event?: string }) => {

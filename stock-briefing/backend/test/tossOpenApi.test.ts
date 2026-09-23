@@ -335,6 +335,40 @@ describe("TossRealtime", () => {
   });
 });
 
+describe("TossRealtime 내 주문 체결 구독", () => {
+  it("종목이 없어도 계좌를 알면 연결해 personal:order 를 구독하고, 100토픽 한도 안에서 계좌 몫을 먼저 뺀다", async () => {
+    const sockets: FakeSocket[] = [];
+    const rt = new TossRealtime(client(), {
+      socketFactory: () => {
+        const s = new FakeSocket();
+        sockets.push(s);
+        return s;
+      },
+      pingIntervalMs: 1000,
+    });
+    rt.start();
+    expect(sockets.length).toBe(0); // 종목도 계좌도 없으면 연결하지 않는다
+    rt.setAccounts([3]);
+    await new Promise((r) => setTimeout(r, 10));
+    const s = sockets[0]!;
+    s.emit("open");
+    expect((JSON.parse(s.sent.at(-1)!) as Array<Record<string, unknown>>).slice(1)).toEqual([{ type: "personal:order", codes: ["3"] }]);
+    const orders: unknown[] = [];
+    rt.on("order", (d) => orders.push(d));
+    s.emit("message", JSON.stringify({ type: "message", topic: "personal:order:3", data: { event: "FILL", accountSeq: 3 } }));
+    expect(orders).toEqual([{ event: "FILL", accountSeq: 3 }]);
+
+    // 종목 100개 + 계좌 1개 → 종목은 99개만 선언한다
+    const codes = Array.from({ length: 100 }, (_, i) => String(100000 + i));
+    rt.setCodes(codes);
+    const decl = JSON.parse(s.sent.at(-1)!) as Array<{ type?: string; codes?: string[] }>;
+    const topics = decl.slice(1).reduce((n, d) => n + (d.codes?.length ?? 0), 0);
+    expect(topics).toBe(100);
+    expect(decl.find((d) => d.type === "personal:order")?.codes).toEqual(["3"]);
+    rt.stop();
+  });
+});
+
 describe("StockService + 실시간", () => {
   it("실시간 체결이 스냅샷보다 새로우면 현재가·등락을 덮어쓰고 live 표시를 붙인다", async () => {
     const db = await createMigratedDb(":memory:");

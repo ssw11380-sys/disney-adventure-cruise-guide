@@ -70,8 +70,10 @@ export interface EvalView {
   profit: number;
   profitRate: number;
   currency: Currency;
-  /** 원화 손익이 추정치인지 (해외 종목 원화 매입금액을 토스에서 못 받은 경우) */
+  /** 원화 손익이 추정치인지 (해외 종목 원화 매입금액이 장부 추정값이거나 현재 환율 환산인 경우) */
   estimated: boolean;
+  /** 해외 종목 원화 매입금액 기준: 매수 당시 환율(장부) / 현재 환율 환산(장부 없음). 원화 환산이 아니면 null */
+  krwBasis: "purchase" | "current" | null;
 }
 
 /**
@@ -90,10 +92,18 @@ export function evalView(
     const value = native * opts.fx;
     const cost = ev.costBasisKrw ?? ev.costBasis * opts.fx;
     const profit = value - cost;
-    return { marketValue: value, costBasis: cost, profit, profitRate: cost > 0 ? (profit / cost) * 100 : 0, currency: "KRW", estimated: ev.costBasisKrw == null || ev.krwCostSource === "estimated" };
+    return {
+      marketValue: value,
+      costBasis: cost,
+      profit,
+      profitRate: cost > 0 ? (profit / cost) * 100 : 0,
+      currency: "KRW",
+      estimated: ev.costBasisKrw == null || ev.krwCostSource === "estimated",
+      krwBasis: ev.costBasisKrw == null ? "current" : "purchase",
+    };
   }
   const profit = native - ev.costBasis;
-  return { marketValue: native, costBasis: ev.costBasis, profit, profitRate: ev.costBasis > 0 ? (profit / ev.costBasis) * 100 : 0, currency: cur, estimated: false };
+  return { marketValue: native, costBasis: ev.costBasis, profit, profitRate: ev.costBasis > 0 ? (profit / ev.costBasis) * 100 : 0, currency: cur, estimated: false, krwBasis: null };
 }
 
 /** 웹소켓 주소: http(s) → ws(s), 토큰은 헤더와 ?token= 둘 다 (React Native 는 헤더를 붙일 수 있지만 프록시가 떼는 경우 대비) */
