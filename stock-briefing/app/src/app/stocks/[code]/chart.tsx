@@ -23,8 +23,9 @@ export default function FullscreenChartScreen() {
   const c = code ?? "";
   const [period, setPeriod] = useState<CandlePeriod>((initial as CandlePeriod) || "D");
   const [landscape, setLandscape] = useState(false);
-  // 차트 아래·위 도구 모음(기간·봉 수·오버레이 줄)의 실제 높이. 글자 크기·화면 폭에 따라 달라지므로 그려 본 뒤 잰다
-  const [chrome, setChrome] = useState(170);
+  // 차트 아래·위 도구 모음(기간·봉 수·읽기 줄·오버레이 줄)의 실제 높이. 글자 크기·화면 폭에 따라 달라지므로 그려 본 뒤 잰다.
+  // 늘어날 때만 반영한다(방향·폭이 바뀌면 새로) → 십자선을 움직일 때 읽기 줄이 한 줄 늘었다 줄었다 해도 차트 높이가 흔들리지 않는다
+  const [chrome, setChrome] = useState<{ key: string; h: number }>({ key: "", h: 170 });
   const stock = useStock(c);
   const candles = useCandles(c, period, CANDLE_COUNT[period]);
   const s = stock.data;
@@ -38,7 +39,9 @@ export default function FullscreenChartScreen() {
   const headerH = 44;
   const chartW = availW - pad * 2;
   // 남는 높이에서 도구 모음 높이를 뺀 만큼만 차트로 → 하단 토글이 화면 밖으로 잘리지 않는다
-  const chartH = Math.max(160, availH - headerH - chrome - space.sm);
+  const layoutKey = `${landscape ? "L" : "P"}:${Math.round(chartW)}`;
+  const chromeH = chrome.key === layoutKey ? chrome.h : 170;
+  const chartH = Math.max(160, availH - headerH - chromeH - space.sm);
 
   const body = (
     <View style={{ width: availW, height: availH, backgroundColor: t.bg, paddingHorizontal: pad }}>
@@ -65,9 +68,10 @@ export default function FullscreenChartScreen() {
       </View>
       <View
         onLayout={(e) => {
-          // 도구 모음 높이 = 전체 높이 − 차트 높이. 1px 넘게 달라졌을 때만 다시 맞춘다(무한 반복 방지)
+          // 도구 모음 높이 = 전체 높이 − 차트 높이. 새 배치면 그대로, 같은 배치면 1px 넘게 늘었을 때만(무한 반복·흔들림 방지)
           const next = Math.ceil(e.nativeEvent.layout.height - chartH);
-          if (next > 0 && Math.abs(next - chrome) > 1) setChrome(next);
+          if (next <= 0) return;
+          if (chrome.key !== layoutKey || next > chrome.h + 1) setChrome({ key: layoutKey, h: next });
         }}
       >
       <CandleChart
