@@ -91,10 +91,11 @@ export function createApi(baseUrl: string, token = "") {
     health: () => get<Health>("/health", 8_000),
 
     searchStocks: (q: string, limit = 20) => get<{ results: ListedStock[]; source: string }>(`/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`),
-    listStocks: () => get<RegisteredWithQuote[]>("/api/stocks?quotes=1"),
+    // 3초마다 부르는 조회는 응답 없는 망에서 60초씩 묶이지 않게 15초로 끊는다 (서버 첫 호출 최대 약 13초 실측)
+    listStocks: () => get<RegisteredWithQuote[]>("/api/stocks?quotes=1", 15_000),
     /** registered: false 면 등록하지 않은 종목의 미리 보기(발견 탭 등). 구버전 서버는 필드 없음(= 등록 종목) */
     getStock: (code: string) =>
-      get<RegisteredStock & { registered?: boolean; quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(`/api/stocks/${code}`),
+      get<RegisteredStock & { registered?: boolean; quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(`/api/stocks/${code}`, 15_000),
     registerStock: (body: { code: string; quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
       send<RegisteredStock>("POST", "/api/stocks", body),
     updateStock: (code: string, body: { quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>

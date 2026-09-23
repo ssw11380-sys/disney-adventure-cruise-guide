@@ -15,8 +15,9 @@ export default function EditStockScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const stock = useStock(code ?? "");
   if (!code) return null;
-  if (stock.isLoading) return <Screen><Loading /></Screen>;
-  if (stock.isError || !stock.data) return <Screen><ErrorView error={stock.error ?? new Error("종목을 찾을 수 없습니다")} onRetry={() => void stock.refetch()} /></Screen>;
+  // 입력 중에 재조회가 실패해도 폼을 지우지 않는다(값이 한 번이라도 왔으면 폼 유지)
+  if (!stock.data && !stock.isError) return <Screen><Loading /></Screen>;
+  if (!stock.data) return <Screen><ErrorView error={stock.error ?? new Error("종목을 찾을 수 없습니다")} onRetry={() => void stock.refetch()} /></Screen>;
   // key 로 종목이 바뀌면 폼 상태를 새로 만든다 (effect 로 setState 하지 않기 위함)
   return <EditForm key={`${stock.data.code}:${stock.data.updatedAt}`} stock={stock.data} />;
 }
@@ -194,3 +195,6 @@ function skipMessage(skip: { reason: string; retryAfter?: string } | undefined):
       return "토스 계좌에서 가져온 해외 보유 종목만 저장할 수 있습니다 (설정 → 토스증권 연동 → 동기화 후 다시 시도).";
   }
 }
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

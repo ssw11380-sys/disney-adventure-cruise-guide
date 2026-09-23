@@ -12,6 +12,11 @@ import { LiveStreamProvider } from "@/lib/liveStream";
 import { SettingsProvider } from "@/lib/settings";
 import { useTheme } from "@/theme";
 
+/**
+ * 위젯·알림 딥링크로 상세 화면부터 열어도 그 아래에 탭(잔고)을 깔아 둔다 → 뒤로 가면 앱이 닫히지 않고 잔고로 간다.
+ */
+export const unstable_settings = { anchor: "(tabs)" };
+
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
 });

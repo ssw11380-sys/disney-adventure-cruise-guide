@@ -3,12 +3,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
+import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
 import { Screen } from "@/components/Screen";
 import { COL, StockRow } from "@/components/StockRow";
 import { Button, ErrorView, Loading, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
-import { useLiveStream } from "@/lib/liveStream";
+import { openMaxAge, viewState } from "@/lib/freshness";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
@@ -18,13 +19,15 @@ import { refreshWidgets } from "@/widgets/refresh";
 /** 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표 */
 export default function StocksScreen() {
   const t = useTheme();
-  const { data, isLoading, isError, error, refetch, isRefetching } = useStocks();
+  const stocks = useStocks();
+  const { data, error, refetch } = stocks;
   const { sort, setSort, showKrw, afterCost } = useSettings();
   const { remove } = useStockMutations();
   const health = useHealth();
   const live = useAnyMarketOpen();
-  const stream = useLiveStream();
   const [sortOpen, setSortOpen] = useState(false);
+  // 값이 있으면 재조회가 실패해도 화면을 지우지 않고, 끊김·지연을 띠와 상태 글자로 알린다
+  const { pulling, onPull } = usePull(refetch);
 
   // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
   const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
@@ -81,11 +84,11 @@ export default function StocksScreen() {
       { text: "취소", style: "cancel" },
     ]);
 
-  if (isLoading) return <Screen><Loading /></Screen>;
-  if (isError) return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
+  const view = viewState(stocks);
+  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "error") return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";
-  const statusLabel = live.open ? (stream.connected ? "실시간" : "지연 3초") : live.label;
 
   const header = (
     <View>
@@ -100,21 +103,19 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
-          status={statusLabel}
-          live={live.open && stream.connected}
-          counts={`보유 ${summary.held}${summary.watch ? ` · 관심 ${summary.watch}` : ""}`}
+          status={<LiveStatus query={stocks} open={live.open} closedLabel={live.label} maxAgeMs={openMaxAge} suffix={`보유 ${summary.held}${summary.watch ? ` · 관심 ${summary.watch}` : ""}`} />}
         />
       ) : null}
     </View>
   );
 
   return (
-    <Screen scroll={false}>
+    <Screen scroll={false} top={<StaleBanner query={stocks} open={live.open} maxAgeMs={openMaxAge} />}>
       <SectionList
         sections={sections}
         keyExtractor={(s) => s.code}
-        refreshing={isRefetching}
-        onRefresh={() => void refetch()}
+        refreshing={pulling}
+        onRefresh={onPull}
         stickySectionHeadersEnabled
         ListHeaderComponent={header}
         renderSectionHeader={({ section }) => (
@@ -183,8 +184,6 @@ function AccountPanel({
   showKrw,
   fx,
   status,
-  live,
-  counts,
 }: {
   total: Totals | null;
   byCur: Record<Currency, Totals>;
@@ -195,9 +194,7 @@ function AccountPanel({
   afterCost: boolean;
   showKrw: boolean;
   fx: number | null;
-  status: string;
-  live: boolean;
-  counts: string;
+  status: React.ReactNode;
 }) {
   const t = useTheme();
   // 합계는 원화로(환율을 모르면 원화 종목만). 해외 행은 설정에 따라 달러 또는 원화
@@ -216,12 +213,7 @@ function AccountPanel({
           총 평가금액{total ? "" : " (원화 종목)"}
           {afterCost ? " · 비용 차감" : ""}
         </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-          <View style={[styles.dot, { backgroundColor: live ? t.up : t.muted }]} />
-          <Text style={{ color: t.muted, fontSize: font.tiny }}>
-            {status} · {counts}
-          </Text>
-        </View>
+        {status}
       </View>
       <Text style={[styles.total, { color: t.ink }]}>
         {formatQuote(main.value, "KRW")}
@@ -308,10 +300,12 @@ const styles = StyleSheet.create({
   split: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 6, paddingTop: 6, gap: 3 },
   splitRow: { flexDirection: "row", alignItems: "center" },
   splitNum: { fontSize: font.small, fontVariant: ["tabular-nums"], textAlign: "right" },
-  dot: { width: 5, height: 5, borderRadius: 3 },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: 6 },
   empty: { margin: space.lg, padding: space.lg, gap: 4, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
   sheet: { borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: space.xl },
   sheetItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: 14, borderTopWidth: StyleSheet.hairlineWidth },
 });
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

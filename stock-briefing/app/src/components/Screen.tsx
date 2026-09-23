@@ -33,6 +33,7 @@ export function Screen({
   onRefresh,
   contentStyle,
   disclaimer = false,
+  top,
 }: {
   children: React.ReactNode;
   scroll?: boolean;
@@ -40,11 +41,14 @@ export function Screen({
   onRefresh?: () => void;
   contentStyle?: StyleProp<ViewStyle>;
   disclaimer?: boolean;
+  /** 스크롤과 무관하게 맨 위에 고정할 것 (끊김·지연 띠 등) */
+  top?: React.ReactNode;
 }) {
   const t = useTheme();
   const inTabs = /^\/(\(tabs\))?\/?(briefings|settings)?$/.test(usePathname());
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
+      {top}
       {scroll ? (
         <ScrollView
           style={styles.root}

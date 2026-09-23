@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-nati
 import { useHealth } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
+import { usePull } from "@/components/Freshness";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
@@ -23,9 +24,10 @@ export default function SettingsScreen() {
   const health = useHealth();
   const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
+  const { pulling, onPull } = usePull(health.refetch);
 
   return (
-    <Screen refreshing={health.isRefetching} onRefresh={() => void health.refetch()}>
+    <Screen refreshing={pulling} onRefresh={onPull}>
       <Card>
         <SectionTitle>표시</SectionTitle>
         <View style={styles.line}>
@@ -178,3 +180,6 @@ const styles = {
   }),
   label: (color: string) => ({ color, fontSize: font.body, fontWeight: "600" as const }),
 };
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

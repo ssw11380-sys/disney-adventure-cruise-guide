@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { useMarketCandles, useMarketIndices } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
 import { CandleChart } from "@/components/CandleChart";
+import { usePull } from "@/components/Freshness";
 import { formatIndexValue, MarketStrip } from "@/components/MarketStrip";
 import { Screen } from "@/components/Screen";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
@@ -30,6 +31,7 @@ export default function MarketIndexScreen() {
   // 거래량이 없는 시계열(환율, 필라반도체처럼 소스가 0만 주는 지수)은 거래량 칸을 숨긴다
   const hasVolume = !fx && (candles.data ? candles.data.candles.some((c) => c.volume > 0) : true);
   // 차트 오른쪽 현재가 태그와 전일 기준선에 쓰는 값
+  const { pulling, onPull } = usePull(() => Promise.all([indices.refetch(), candles.refetch()]));
   const quote = idx ? { price: idx.value, prevClose: idx.value - idx.change, high52w: null, low52w: null, live: false, fxRate: null, priceKrw: null } : null;
 
   const note = fx
@@ -44,11 +46,8 @@ export default function MarketIndexScreen() {
 
   return (
     <Screen
-      refreshing={candles.isRefetching || indices.isRefetching}
-      onRefresh={() => {
-        void indices.refetch();
-        void candles.refetch();
-      }}
+      refreshing={pulling}
+      onRefresh={onPull}
     >
       <Stack.Screen options={{ title: idx?.name ?? code }} />
       <MarketStrip selected={code} onSelect={(c) => router.setParams({ code: c })} />
@@ -103,3 +102,6 @@ const styles = StyleSheet.create({
   change: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
   panel: { paddingHorizontal: space.lg, paddingVertical: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm, marginTop: space.sm },
 });
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

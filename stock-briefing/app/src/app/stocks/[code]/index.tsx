@@ -2,16 +2,18 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { Alert, Linking, Pressable, StyleSheet, Text, View } from "react-native";
-import { useAnalysis, useBriefings, useCandles, useStock, useStockMutations, useStockNews } from "@/api/hooks";
+import { useAnalysis, useAnyMarketOpen, useBriefings, useCandles, useStock, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { CandleChart } from "@/components/CandleChart";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { FlashPrice } from "@/components/FlashPrice";
+import { StaleBanner, usePull } from "@/components/Freshness";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, SectionTitle, Segmented, Stat, StatGrid } from "@/components/ui";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, relativeTime, toDisplay } from "@/lib/format";
+import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
@@ -28,8 +30,10 @@ const TABS: { value: Tab; label: string }[] = [
 export default function StockDetailScreen() {
   const t = useTheme();
   const { code } = useLocalSearchParams<{ code: string }>();
-  const c = code ?? "";
+  // 잘못된 딥링크(stocks/%20 등)는 서버에 묻지 않고 안내만 한다
+  const c = parseStockCode(code) ?? "";
   const stock = useStock(c);
+  const live = useAnyMarketOpen();
   const { register } = useStockMutations();
   const { showKrw, afterCost } = useSettings();
   const [period, setPeriod] = useState<CandlePeriod>("D");
@@ -40,11 +44,13 @@ export default function StockDetailScreen() {
   const [adding, setAdding] = useState(false);
   // 과거 구간 이동과 120 이평선을 위해 넉넉히 받는다 (일봉 약 3년, 주봉 5년, 월봉 10년)
   const candles = useCandles(c, period, CANDLE_COUNT[period]);
-  const briefings = useBriefings({ code: c, limit: 3 });
+  const briefings = useBriefings({ code: c, limit: 3 }, !!c);
+  const { pulling, onPull } = usePull(() => Promise.all([stock.refetch(), candles.refetch()]));
 
-  if (!c) return null;
-  if (stock.isLoading) return <Screen><Loading /></Screen>;
-  if (stock.isError) return <Screen><ErrorView error={stock.error} onRetry={() => void stock.refetch()} /></Screen>;
+  if (!c) return <Screen><ErrorView error={new Error("종목 주소가 올바르지 않습니다")} retryLabel="잔고로" onRetry={() => router.dismissTo("/")} /></Screen>;
+  const view = viewState(stock);
+  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "error") return <Screen><ErrorView error={stock.error} onRetry={() => void stock.refetch()} /></Screen>;
   const s = stock.data!;
   const q = s.quote;
   // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가
@@ -84,11 +90,9 @@ export default function StockDetailScreen() {
   return (
     <Screen
       disclaimer
-      refreshing={stock.isRefetching}
-      onRefresh={() => {
-        void stock.refetch();
-        void candles.refetch();
-      }}
+      refreshing={pulling}
+      onRefresh={onPull}
+      top={<StaleBanner query={stock} open={live.open} maxAgeMs={openMaxAge} />}
     >
       <Stack.Screen
         options={{
@@ -326,3 +330,6 @@ const styles = {
   sub: (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] }),
   panelTitle: (color: string) => ({ color, fontSize: font.body, fontWeight: "700" as const }),
 };
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

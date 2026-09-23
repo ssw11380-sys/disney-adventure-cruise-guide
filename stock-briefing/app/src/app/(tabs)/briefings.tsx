@@ -3,9 +3,11 @@ import { Alert, Text, View } from "react-native";
 import { useHealth, useLatestBriefings, useMarketStatus, useStockMutations } from "@/api/hooks";
 import type { BriefingSession } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
+import { StaleBanner, usePull } from "@/components/Freshness";
 import { Screen } from "@/components/Screen";
 import { Button, Card, Empty, ErrorView, Loading, Muted, SectionTitle, Segmented } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
+import { viewState } from "@/lib/freshness";
 import { font, space, useTheme } from "@/theme";
 
 type Mode = "line" | "summary" | "detail";
@@ -14,7 +16,9 @@ type Mode = "line" | "summary" | "detail";
 export default function BriefingsScreen() {
   const t = useTheme();
   const [mode, setMode] = useState<Mode>("summary");
-  const { data, isLoading, isError, error, refetch, isRefetching } = useLatestBriefings();
+  const latest = useLatestBriefings();
+  const { data, error, refetch } = latest;
+  const { pulling, onPull } = usePull(refetch);
   const { run } = useStockMutations();
   const health = useHealth();
   const market = useMarketStatus();
@@ -36,8 +40,9 @@ export default function BriefingsScreen() {
     );
   };
 
-  if (isLoading) return <Screen><Loading /></Screen>;
-  if (isError) return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
+  const view = viewState(latest);
+  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "error") return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const items = data ?? [];
   const withBriefing = items.filter((i) => i.latest);
@@ -46,7 +51,7 @@ export default function BriefingsScreen() {
   const krHoliday = market.data && !market.data.KR.isTradingDay;
 
   return (
-    <Screen disclaimer refreshing={isRefetching} onRefresh={() => void refetch()}>
+    <Screen disclaimer refreshing={pulling} onRefresh={onPull} top={<StaleBanner query={latest} />}>
       {llmOff || (last && last.failed > 0) ? (
         <Card style={{ borderLeftWidth: 3, borderLeftColor: t.danger }}>
           <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>
@@ -86,3 +91,6 @@ export default function BriefingsScreen() {
     </Screen>
   );
 }
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";
