@@ -9,6 +9,8 @@ export interface AdminDeps {
   service: StockService;
   dart: DartProvider | null;
   toss?: { provider: TossOpenApiProvider; sync: TossSyncService; live: TossRealtime | null; outboundIp: () => Promise<string | null> } | null;
+  /** 서버 공인 IP 조회 (키가 없을 때도 앱 카드에 허용 IP 등록용으로 보여 준다) */
+  outboundIp?: () => Promise<string | null>;
 }
 
 /** 토스 Open API 연동 상태 (앱 설정 화면용). 키가 없어도 200 으로 configured:false 를 준다 */
@@ -18,12 +20,12 @@ export function tossStatus(deps: AdminDeps["toss"], ip: string | null) {
 }
 
 /** 운영용 엔드포인트. API_TOKEN 이 있으면 /api/* 전체에 적용된다. */
-export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service, dart, toss }) => {
+export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service, dart, toss, outboundIp }) => {
   app.get("/master", async () => service.masterStatus());
   app.post("/master/refresh", async () => service.refreshMaster());
 
   /** 토스증권 Open API 상태: 키 설정 여부, 토큰/마지막 오류, 허용 IP 에 등록할 서버 공인 IP, 실시간 구독 */
-  app.get("/toss/status", async () => tossStatus(toss, toss ? await toss.outboundIp() : null));
+  app.get("/toss/status", async () => tossStatus(toss, outboundIp ? await outboundIp() : toss ? await toss.outboundIp() : null));
 
   /** 토스증권 계좌의 보유 종목을 등록 종목으로 가져온다 (수량·평단 동기화) */
   app.post("/toss/import-holdings", async (_req, reply) => {
