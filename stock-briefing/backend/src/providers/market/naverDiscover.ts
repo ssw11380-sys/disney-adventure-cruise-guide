@@ -232,8 +232,13 @@ export class NaverDiscover {
   async usQuotes(reuters: string[]): Promise<Map<string, DiscoverStock & { tradedAt: string | null }>> {
     const out = new Map<string, DiscoverStock & { tradedAt: string | null }>();
     const codes = [...new Set(reuters)].filter((c) => /^[A-Za-z0-9._]+$/.test(c));
-    for (let i = 0; i < codes.length; i += POLL_BATCH) {
-      const r = await this.json(`${POLL_BASE}/api/realtime/worldstock/stock/${codes.slice(i, i + POLL_BATCH).join(",")}`);
+    const batches: string[][] = [];
+    for (let i = 0; i < codes.length; i += POLL_BATCH) batches.push(codes.slice(i, i + POLL_BATCH));
+    // 묶음은 4개씩 동시에 (2,500종목 = 5번, 하나씩이면 5초 남짓)
+    const results: Json[] = [];
+    for (let i = 0; i < batches.length; i += 4)
+      results.push(...(await Promise.all(batches.slice(i, i + 4).map((b) => this.json(`${POLL_BASE}/api/realtime/worldstock/stock/${b.join(",")}`)))));
+    for (const r of results) {
       for (const it of (r["datas"] as Json[] | undefined) ?? []) {
         const s = usRankStock({ ...it, marketValueRaw: it["marketValueFullRaw"] ?? it["marketValueRaw"] });
         const rc = String(it["reutersCode"] ?? "");

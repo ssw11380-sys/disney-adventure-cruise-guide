@@ -236,12 +236,13 @@ export function latestTradeDay(quotes: Iterable<{ tradedAt: string | null }>): s
  * 테마 한 개의 오늘 등락률 (정규장). 거래가 없는 종목·지난 날짜 종목은 뺀다.
  *  - changeRate: 시가총액 가중 평균 (전일 시가총액 = 오늘 시가총액 / (1 + 등락률))
  *  - simpleAvg: 단순 평균 (참고)
+ *  - tradingValue: 구성 종목 거래대금 합 (달러) — 거의 거래되지 않는 테마를 거르는 데 쓴다
  */
 export function usThemeSummary(
   theme: UsTheme,
   quotes: Map<string, DiscoverStock & { tradedAt: string | null }>,
   day: string,
-): { summary: ThemeSummary; items: DiscoverStock[] } | null {
+): { summary: ThemeSummary; items: DiscoverStock[]; tradingValue: number } | null {
   const items: DiscoverStock[] = [];
   for (const m of theme.members) {
     const q = quotes.get(m.reuters);
@@ -264,6 +265,7 @@ export function usThemeSummary(
   const weighted = wSum > 0 ? wr / wSum : simple;
   const r2 = (x: number) => Math.round(x * 100) / 100 || 0; // -0 은 0 으로
   return {
+    tradingValue: live.reduce((s, i) => s + (i.tradingValue ?? 0), 0),
     summary: {
       id: theme.id,
       name: theme.name,

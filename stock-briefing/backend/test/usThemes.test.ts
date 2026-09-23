@@ -17,7 +17,7 @@ const poll = (reuters: string, sym: string, rate: number, cap: number, extra: Re
   compareToPreviousClosePriceRaw: String(rate),
   fluctuationsRatioRaw: String(rate),
   accumulatedTradingVolumeRaw: "1000",
-  accumulatedTradingValueRaw: "100000",
+  accumulatedTradingValueRaw: "500000",
   marketValueFullRaw: String(cap),
   localTradedAt: "2026-09-22T16:00:00-04:00",
   tradeStopType: { name: "TRADING" },
@@ -33,6 +33,10 @@ function world(opts: { failToss?: boolean } = {}) {
     "QBTS.K": poll("QBTS.K", "QBTS", 0, 8_000),
     BRKb: poll("BRKb", "BRK B", 1, 1000),
     "OLD.O": poll("OLD.O", "OLD", 5, 100, { localTradedAt: "2025-01-02T16:00:00-05:00" }),
+    // 거의 거래되지 않는 테마 888
+    "TA.O": poll("TA.O", "TA", 40, 10, { accumulatedTradingValueRaw: "1000" }),
+    "TB.O": poll("TB.O", "TB", 30, 10, { accumulatedTradingValueRaw: "1000" }),
+    "TC.O": poll("TC.O", "TC", 20, 10, { accumulatedTradingValueRaw: "1000" }),
   };
   const productOf: Record<string, { symbol: string; market: string; spac?: boolean }> = {
     P_IONQ: { symbol: "IONQ", market: "NYS" },
@@ -41,8 +45,11 @@ function world(opts: { failToss?: boolean } = {}) {
     P_BRK: { symbol: "BRK.B", market: "NYS" },
     P_OLD: { symbol: "OLD", market: "NSQ" },
     P_SPAC: { symbol: "SPCX", market: "NSQ", spac: true },
+    P_TA: { symbol: "TA", market: "NSQ" },
+    P_TB: { symbol: "TB", market: "NSQ" },
+    P_TC: { symbol: "TC", market: "NSQ" },
   };
-  const members: Record<string, string[]> = { "956": ["P_IONQ", "P_RGTI", "P_QBTS", "P_OLD", "P_SPAC"], "777": ["P_BRK", "P_IONQ"] };
+  const members: Record<string, string[]> = { "956": ["P_IONQ", "P_RGTI", "P_QBTS", "P_OLD", "P_SPAC"], "777": ["P_BRK", "P_IONQ"], "888": ["P_TA", "P_TB", "P_TC"] };
   const fetchFn = (async (url: string, init?: RequestInit) => {
     calls.push(url);
     const u = new URL(url);
@@ -63,7 +70,7 @@ function world(opts: { failToss?: boolean } = {}) {
             ticsId: Number(m[1]),
             name: "양자컴퓨터",
             summary: "양자컴퓨팅 하드웨어·소프트웨어",
-            relatedTics: [{ ticsId: 87, name: "IT", depth: 0, subItems: [{ ticsId: 956, name: "양자컴퓨터", depth: 1, subItems: [] }, { ticsId: 777, name: "소형", depth: 2, subItems: [] }] }],
+            relatedTics: [{ ticsId: 87, name: "IT", depth: 0, subItems: [{ ticsId: 956, name: "양자컴퓨터", depth: 1, subItems: [] }, { ticsId: 777, name: "소형", depth: 2, subItems: [] }, { ticsId: 888, name: "동전주", depth: 1, subItems: [] }] }],
           },
         });
       if (m?.[2] === "stocks") {
@@ -103,7 +110,7 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     const store = { get: async (k: string) => saved.get(k) ?? null, set: async (k: string, v: string) => void saved.set(k, v) };
     const book = new UsThemeBook({ tics: new TossTics(w.fetchFn, 0), naver: new NaverDiscover(w.fetchFn), store, now: () => new Date("2026-09-23T06:00:00Z") });
     const d = await book.get();
-    expect(d.themes.map((t) => t.id)).toEqual(["956"]); // 777 은 2종목뿐, 87 은 가장 큰 분류라 뺀다
+    expect(d.themes.map((t) => t.id)).toEqual(["956", "888"]); // 777 은 2종목뿐, 87 은 가장 큰 분류라 뺀다
     const q = d.themes[0]!;
     expect(q.total).toBe(12);
     expect(q.members.map((m) => `${m.symbol}:${m.reuters}`)).toEqual(["IONQ:IONQ.K", "RGTI:RGTI.O", "QBTS:QBTS.K", "OLD:OLD.O"]); // 스팩 제외
@@ -125,7 +132,8 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
       usdKrw: async () => 1390,
     });
     const list = await svc.themes("US", "theme", "day");
-    expect(list).toMatchObject({ market: "US", kind: "theme", period: "day", note: null });
+    expect(list).toMatchObject({ market: "US", kind: "theme", period: "day", note: "거래대금 100만 달러 미만 테마 1개 제외" });
+    expect(list.themes.map((t) => t.id)).toEqual(["956"]); // 888(동전주 테마)은 거래대금이 3천 달러라 뺀다
     expect(list.asOf).toBe("2026-09-23T05:00:00+09:00"); // 정규장 종료 시각
     const q = list.themes[0]!;
     // 전일 시총: IONQ 1000, RGTI 1000, QBTS 8000 → (10·1000 − 10·1000 + 0·8000) / 10000 = 0
@@ -142,6 +150,7 @@ describe("미국 테마 (토스 테마 분류 + 네이버 정규장 시세)", ()
     const mk = () =>
       new DiscoverService({ naver: new NaverDiscover(w.fetchFn), tics: new TossTics(w.fetchFn, 0), usThemes: new UsThemeBook({ tics: new TossTics(w.fetchFn, 0), naver: new NaverDiscover(w.fetchFn) }) });
     const week = await mk().themes("US", "theme", "week");
+    expect(week.themes.map((t) => t.id)).toEqual(["956"]); // 오늘 목록과 같은 테마만
     expect(week.themes[0]).toMatchObject({ id: "956", changeRate: 12.96, up: 0, down: 0 });
     expect(week.themes[0]!.leaders).toEqual([{ code: "IONQ", name: "아이온큐", changeRate: null }]);
     expect(week.note).toBeNull();

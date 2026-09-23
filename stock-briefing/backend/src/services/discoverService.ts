@@ -284,7 +284,10 @@ export class DiscoverService {
       const book = await usThemes.get(this.deps.bookWaitMs ?? BOOK_WAIT_MS);
       const { value: quotes, at } = await this.usThemeQuotes(book, open);
       const day = latestTradeDay(quotes.values());
-      const themes = book.themes.map((t) => usThemeSummary(t, quotes, day)?.summary).filter((x): x is ThemeSummary => !!x);
+      // 구성 종목 거래대금 합이 100만 달러 미만인 테마(동전주 몇 개짜리)는 뺀다 — 급상승 순위와 같은 기준
+      const rows = book.themes.map((t) => usThemeSummary(t, quotes, day)).filter((x): x is NonNullable<typeof x> => !!x);
+      const themes = rows.filter((r) => r.tradingValue >= MIN_TRADING_VALUE.US).map((r) => r.summary);
+      const dropped = rows.length - themes.length;
       const tradedAt = [...quotes.values()].map((q) => q.tradedAt).filter((x): x is string => !!x && !Number.isNaN(Date.parse(x))).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
       return {
         market: "US",
@@ -295,7 +298,7 @@ export class DiscoverService {
         asOf: seoulIso(new Date(tradedAt ?? at)),
         source: "토스증권 테마 분류 · 네이버 증권 시세",
         basis: "테마별 시가총액 상위 종목의 시가총액 가중 평균 (정규장)",
-        note: null,
+        note: dropped ? `거래대금 100만 달러 미만 테마 ${dropped}개 제외` : null,
       };
     }
     // 1주·1개월: 토스 테마 기간 등락률 (미국 종목만, 시가총액 가중). 순위(상위 약 100개)에 없는 테마는 하나씩 묻는다
@@ -311,7 +314,17 @@ export class DiscoverService {
           /* 하나씩 묻기로 채운다 */
         }
       }
-      const missing = book.themes.filter((t) => !rows.has(t.id));
+      // 오늘 목록과 같은 테마만 (거래가 거의 없는 테마 제외)
+      let liquid: Set<string> | null = null;
+      try {
+        const { value: quotes } = await this.usThemeQuotes(book, open);
+        const day = latestTradeDay(quotes.values());
+        liquid = new Set(book.themes.filter((t) => (usThemeSummary(t, quotes, day)?.tradingValue ?? 0) >= MIN_TRADING_VALUE.US).map((t) => t.id));
+      } catch {
+        /* 시세를 못 받으면 거르지 않는다 */
+      }
+      const targets = liquid ? book.themes.filter((t) => liquid!.has(t.id)) : book.themes;
+      const missing = targets.filter((t) => !rows.has(t.id));
       const extra = await pool(missing, 6, async (t) => {
         try {
           return [t.id, await tics.periodRate(t.id, "US", dur)] as const;
@@ -323,7 +336,7 @@ export class DiscoverService {
       for (const [id, r] of extra) if (r !== null) rate.set(id, r);
       const symbolOf = new Map(book.themes.flatMap((t) => t.members.map((m) => [m.productCode, m.symbol] as const)));
       const themes: ThemeSummary[] = [];
-      for (const t of book.themes) {
+      for (const t of targets) {
         const r = rate.get(t.id);
         if (r === undefined) continue;
         const lead = rows.get(t.id)?.leader;
@@ -331,7 +344,7 @@ export class DiscoverService {
         themes.push({ id: t.id, name: t.name, changeRate: Math.round(r * 100) / 100, up: 0, flat: 0, down: 0, leaders: code && lead ? [{ code, name: lead.name, changeRate: null }] : [] });
       }
       if (!themes.length) throw new Error("토스 테마 기간 등락률을 받지 못했습니다");
-      return { themes, total: book.themes.length };
+      return { themes, total: targets.length };
     });
     return {
       market: "US",
