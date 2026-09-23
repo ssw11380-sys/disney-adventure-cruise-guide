@@ -39,8 +39,8 @@ export interface KrwCostBookState {
   items: Record<string, KrwCostEntry>;
   /** 아직 맞추지 못한 (계좌:종목) → 처음 본 시각 */
   pending: Record<string, string>;
-  /** 계좌 → 마지막으로 계좌 목록에서 본 시각 (목록에서 오래 빠진 계좌의 항목을 지우기 위해) */
-  seen: Record<string, string>;
+  /** 계좌 → 계좌 목록에서 처음 빠진 시각과 연속으로 빠진 횟수 (다시 보이면 지운다). 오래 빠진 계좌의 항목을 지우기 위해 */
+  missing: Record<string, { since: string; count: number }>;
   /** 계좌 전체 원화 매입금액 구간. 보유 구성(hash)이 그대로인 동안 동기화마다 좁혀진다 */
   calib: { hash: string; lo: number; hi: number; samples: number } | null;
   /** krwEst 에만 곱하는 보정 비율과, 그 비율을 계산한 보유 구성 */
@@ -113,7 +113,7 @@ export const PENDING_MS = 20 * 60_000;
 const keyOf = (account: number, code: string) => `${account}:${code}`;
 /** 계좌가 목록에서 이만큼 계속 빠져 있으면(해지·권한 해제) 그 계좌의 항목을 지운다 */
 export const ACCOUNT_GONE_MS = 24 * 3_600_000;
-const empty = (): KrwCostBookState => ({ version: 2, items: {}, pending: {}, seen: {}, calib: null, factor: 1, factorHash: null });
+const empty = (): KrwCostBookState => ({ version: 2, items: {}, pending: {}, missing: {}, calib: null, factor: 1, factorHash: null });
 const EMPTY_POSITION: Position = { quantity: 0, usdCost: 0, krwExact: 0, krwEst: 0, applied: {} };
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -148,7 +148,7 @@ export class KrwCostBook {
         version: 2,
         items: s.items ?? {},
         pending: s.pending ?? {},
-        seen: s.seen ?? {},
+        missing: s.missing ?? {},
         calib: s.calib ?? null,
         factor: typeof s.factor === "number" && s.factor > 0 ? s.factor : 1,
         factorHash: s.factorHash ?? null,
@@ -380,7 +380,7 @@ export class KrwCostBook {
       const present = new Set<string>();
       let complete = true;
       for (const { account, holdings } of accounts) {
-        state.seen[String(account)] = seoulIso(now);
+        delete state.missing[String(account)];
         for (const h of holdings) {
           if (h.currency !== "USD" || !(h.quantity > 0)) continue;
           present.add(keyOf(account, h.code));
@@ -389,21 +389,28 @@ export class KrwCostBook {
       }
       // 이번 응답에 없는(전량 매도한) 계좌·종목은 지운다. 단 그 계좌 응답에 보유가 있거나, 계좌 요약이 달러 매입금액 0 을 분명히 줬을 때만.
       // 계좌가 목록에서 잠깐 빠졌거나 응답이 통째로 비면 일시 오류일 수 있어 둔다(사용자가 넣은 토스 값은 다시 만들 수 없다).
-      // 다른 계좌는 계속 보이는데 ACCOUNT_GONE_MS 넘게 목록에서 빠진 계좌(해지·권한 해제)의 항목은 지운다
+      // 다른 계좌는 계속 보이는데 목록에서 처음 빠진 뒤 ACCOUNT_GONE_MS 넘게, 두 번 이상 연속으로 빠진 계좌(해지·권한 해제)의 항목은 지운다.
+      // 마지막으로 본 시각이 아니라 처음 빠진 시각부터 센다 (동기화가 하루 넘게 멈췄다가 한 번 빠진 걸로 지우지 않게)
       const confirmed = new Set(accounts.filter((a) => a.holdings.length > 0 || a.purchaseUsd === 0).map((a) => a.account));
       const listed = new Set(accounts.map((a) => a.account));
+      if (accounts.length > 0) {
+        for (const acct of new Set(Object.values(state.items).map((e) => e.account))) {
+          if (listed.has(acct)) continue;
+          const m = state.missing[String(acct)];
+          state.missing[String(acct)] = m ? { since: m.since, count: m.count + 1 } : { since: seoulIso(now), count: 1 };
+        }
+      }
       for (const [key, e] of Object.entries(state.items)) {
         if (present.has(key)) continue;
         if (confirmed.has(e.account)) {
           delete state.items[key];
           continue;
         }
-        if (accounts.length > 0 && !listed.has(e.account)) {
-          const seen = state.seen[String(e.account)];
-          if (!seen) state.seen[String(e.account)] = seoulIso(now); // 처음 알아챈 때부터 센다
-          else if (now.getTime() - Date.parse(seen) >= ACCOUNT_GONE_MS) delete state.items[key];
-        }
+        const m = state.missing[String(e.account)];
+        if (m && m.count >= 2 && now.getTime() - Date.parse(m.since) >= ACCOUNT_GONE_MS) delete state.items[key];
       }
+      const accountsWithItems = new Set(Object.values(state.items).map((e) => String(e.account)));
+      for (const acct of Object.keys(state.missing)) if (!accountsWithItems.has(acct)) delete state.missing[acct];
       for (const key of Object.keys(state.pending)) if (!present.has(key)) delete state.pending[key];
       this.calibrate(state, accounts, present, overview, displayFx, complete);
       await this.save(state);

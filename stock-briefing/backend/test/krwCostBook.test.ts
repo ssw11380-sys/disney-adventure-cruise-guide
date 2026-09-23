@@ -377,11 +377,22 @@ describe("KrwCostBook", () => {
       { t1: 1400 },
     );
     await book.update([{ account: 1, holdings: [usd("AAA", 10, 1000)] }, { account: 2, holdings: [usd("AAA", 5, 500)] }], null, 1360);
-    let s = await book.update([{ account: 1, holdings: [usd("AAA", 10, 1000)] }], null, 1360);
-    expect(krwOf(s, "AAA")!.quantity).toBe(15); // 잠깐 빠진 건 둔다
-    later(ACCOUNT_GONE_MS);
-    s = await book.update([{ account: 1, holdings: [usd("AAA", 10, 1000)] }], null, 1360);
-    expect(krwOf(s, "AAA")!.quantity).toBe(10);
+    const only1 = [{ account: 1, holdings: [usd("AAA", 10, 1000)] }];
+    // 동기화가 하루 넘게 멈췄다가 한 번 빠진 건 지우지 않는다 (처음 빠진 시각부터 센다)
+    later(ACCOUNT_GONE_MS + 3_600_000);
+    let s = await book.update(only1, null, 1360);
+    expect(krwOf(s, "AAA")!.quantity).toBe(15);
+    // 다시 보이면 처음부터 다시 센다
+    later(600_000);
+    await book.update([{ account: 1, holdings: [usd("AAA", 10, 1000)] }, { account: 2, holdings: [usd("AAA", 5, 500)] }], null, 1360);
+    s = await book.update(only1, null, 1360);
+    later(ACCOUNT_GONE_MS - 60_000);
+    s = await book.update(only1, null, 1360);
+    expect(krwOf(s, "AAA")!.quantity).toBe(15); // 아직 하루가 안 됨
+    later(60_000);
+    s = await book.update(only1, null, 1360);
+    expect(krwOf(s, "AAA")!.quantity).toBe(10); // 하루 넘게, 여러 번 빠짐 → 지움
+    expect(s.missing).toEqual({});
     await db.destroy();
   });
 
