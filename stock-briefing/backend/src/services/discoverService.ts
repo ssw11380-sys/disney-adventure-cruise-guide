@@ -139,6 +139,8 @@ const PAGE_TTL_FACTOR = 3;
 const CAL_WAIT_MS = 2_500;
 const FX_WAIT_MS = 2_000;
 const SUMMARY_WAIT_MS = 2_000;
+/** 테마 상세에 목록의 상승·보합·하락 수를 붙일 때, 장중 목록이 이보다 오래되면 쓰지 않는다 */
+const LISTED_MAX_AGE_MS = 10 * 60_000;
 
 type Cached<T> = { at: number; value: T };
 
@@ -1052,6 +1054,8 @@ export class DiscoverService {
     const open = ss.open;
     if (market === "US" && kind === "theme" && this.deps.usThemes) return this.usTheme(ss, id);
     const k: ThemeKind = market === "US" ? "sector" : kind;
+    // 목록의 상승·보합·하락 수는 구성 종목과 함께 받는다 (차례로 기다리지 않게)
+    const listedP = this.listedTheme(market, k, id, ss).catch(() => null);
     let got: { value: { detail: SectorDetail | null; dataAt: number }; at: number };
     try {
       got = await this.cached(
@@ -1097,7 +1101,8 @@ export class DiscoverService {
     const adjust = top3.some((i) => fresh.has(i.code)) && !truncated;
     let theme = adjust ? recount(value.theme, value.items, fresh, k === "sector") : value.theme;
     // 상승·보합·하락 수는 목록(출처)과 같게: 받아 둔 목록에 이 테마가 있으면 그 수, 구성 종목이 잘렸는데 목록도 없으면 세지 않는다
-    const listed = await this.listedTheme(market, k, id, ss);
+    // 다시 센 값(adjust)이면 목록 수는 쓰지 않는다. 목록이 늦으면 SUMMARY_WAIT_MS 만 기다린다
+    const listed = adjust ? null : await within(listedP, SUMMARY_WAIT_MS, null);
     if (!adjust && listed && listed.up + listed.flat + listed.down > 0) theme = { ...theme, up: listed.up, flat: listed.flat, down: listed.down };
     else if (!adjust && truncated) theme = { ...theme, up: 0, flat: 0, down: 0 };
     if (truncated) {
@@ -1122,7 +1127,8 @@ export class DiscoverService {
 
   /**
    * 오늘 목록(출처 값)에서 이 테마·업종 — 목록을 같은 캐시 규칙으로 받아(대개 이미 받아 둔 것) 지금 세션의 값일 때만 쓴다.
-   * 저장본(출처 초기화)이나 0% 목록이면 null (어제의 상승·하락 수를 오늘 상세에 붙이지 않게)
+   * 저장본(출처 초기화)이나 0% 목록이면 null (어제의 상승·하락 수를 오늘 상세에 붙이지 않게).
+   * 새 조회가 늦어 직전 목록이 돌아와도, 장중이면 LISTED_MAX_AGE_MS 안에 받은 것, 장이 닫혔으면 마지막 마감 뒤에 받은 것만 쓴다
    */
   private async listedTheme(market: DiscoverMarket, kind: ThemeKind, id: string, ss: Session): Promise<ThemeSummary | null> {
     try {
@@ -1132,6 +1138,9 @@ export class DiscoverService {
     }
     const hit = this.cache.get(`themes:${market}:${kind}:day`) as Cached<ThemeListValue> | undefined;
     if (!hit || hit.value.fromSnap || hit.value.zero) return null;
+    const since = this.closedSince(ss);
+    const current = ss.open || since === undefined ? this.now.getTime() - hit.at <= LISTED_MAX_AGE_MS : hit.at >= since;
+    if (!current) return null;
     return hit.value.themes.find((t) => t.id === id) ?? null;
   }
 
@@ -1311,11 +1320,11 @@ export function isUsRegularHours(d: Date): boolean {
 }
 
 /**
- * 구성 종목에서 상장 첫날 종목과 거래정지(거래량 0)를 빼고 등락률·상승/보합/하락 수를 다시 센다.
+ * 구성 종목에서 상장 첫날 종목과 거래정지 종목을 빼고 등락률·상승/보합/하락 수를 다시 센다.
  * weighted 면 전일 시가총액 가중 평균(업종), 아니면 단순 평균(테마) — 네이버와 같은 방식.
  */
 export function recount(th: ThemeSummary, items: DiscoverStock[], fresh: Set<string>, weighted = false): ThemeSummary {
-  const live = items.filter((i) => !fresh.has(i.code) && !i.suspended && (i.volume ?? 1) > 0);
+  const live = items.filter((i) => !fresh.has(i.code) && !i.suspended);
   if (!live.length) return th;
   let avg = live.reduce((s, i) => s + i.changeRate, 0) / live.length;
   if (weighted) {

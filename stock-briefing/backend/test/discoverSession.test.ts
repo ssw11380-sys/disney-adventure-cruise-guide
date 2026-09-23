@@ -656,6 +656,38 @@ describe("운영 검증 뒤 4차 수정", () => {
     expect(d!.theme).toMatchObject({ up: 1, down: 9 }); // 구성 종목으로 센 값 (저장본 10/0/0 이 아니라)
   });
 
+  it("상세: 목록 새 조회가 늦어 돌아온 오래된 목록 값은 붙이지 않고, 목록이 안 오면 2초 안에 구성 종목으로 센다", async () => {
+    const kr: Ex = { latest: exRow("open", "regularMarket", "2026-09-24T09:00:00+09:00", "2026-09-24T15:30:00+09:00", "2026-09-24") };
+    let listDelay = 0;
+    let listCalls = 0;
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(kr, usClosed);
+      if (url.includes("/sectors/all")) {
+        listCalls++;
+        if (listDelay) await new Promise((r) => setTimeout(r, listDelay));
+        return ok({ sectors: Array.from({ length: 8 }, (_, i) => ({ code: String(i), name: `테마${i}`, changeRate: 3, risingCount: 10, unchangedCount: 0, fallingCount: 0, topItems: [] })), hasNext: false });
+      }
+      return ok({ sectorInfo: { sectorName: "테마7", changeRate: -2 }, items: Array.from({ length: 10 }, (_, i) => ({ ...krRow(String(i).padStart(6, "0"), i === 0 ? 1 : -1, 1000), tradableStatus: "tradable" })), hasNext: false });
+    }) as unknown as typeof fetch;
+    let now = new Date("2026-09-24T01:00:00Z"); // 10:00 장중
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now, staleWaitMs: 10 });
+    expect((await svc.theme("KR", "theme", "7"))!.theme).toMatchObject({ up: 10, flat: 0, down: 0 }); // 막 받은 목록의 수
+    // 30분 뒤: 목록 새 조회가 늦으면 캐시는 30분 전 목록을 돌려주지만, 상세에는 붙이지 않는다
+    now = new Date("2026-09-24T01:30:00Z");
+    listDelay = 300;
+    expect((await svc.theme("KR", "theme", "7"))!.theme).toMatchObject({ up: 1, down: 9 });
+    await new Promise((r) => setTimeout(r, 350));
+    // 받아 둔 목록이 없고 목록이 멈춰 있으면 상세는 2초(SUMMARY_WAIT_MS) 남짓만 기다린다
+    listDelay = 5_000;
+    const calls = listCalls;
+    const cold = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now, staleWaitMs: 10 });
+    const t0 = Date.now();
+    const d = await cold.theme("KR", "theme", "7");
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(listCalls).toBe(calls + 1); // 구성 종목과 함께 한 번 불렀다
+    expect(d!.theme).toMatchObject({ up: 1, down: 9 });
+  }, 10_000);
+
   it("뒤 쪽 판(ver)은 최근 5판까지 이어 준다", async () => {
     const src = krSource();
     let now = new Date("2026-09-23T01:00:00Z");

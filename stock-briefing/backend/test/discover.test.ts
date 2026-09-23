@@ -147,7 +147,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
             krRow("0010S0", "새내기", 288, 9e11),
             krRow("000001", "가", 2, 1e9),
             krRow("000003", "다", -1, 1e9),
-            krRow("000004", "정지", 0, 0, { accumulatedTradingVolume: 0 }),
+            krRow("000004", "정지", 0, 0, { accumulatedTradingVolume: 0, tradableStatus: "halt" }),
           ],
           hasNext: false,
         });
@@ -254,8 +254,11 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
   it("recount: 거래정지·상장 첫날을 빼고 평균·상승/보합/하락을 다시 센다", () => {
     const base = { id: "1", name: "t", changeRate: 9, up: 0, flat: 0, down: 0, leaders: [] };
     const s = (code: string, changeRate: number, volume = 10) => ({ code, name: code, market: "KOSPI", currency: "KRW" as const, price: 1, change: 0, changeRate, volume, tradingValue: 1 });
-    const r = recount(base, [s("A", 3), s("B", 0), s("C", -1), s("N", 100), s("H", 0, 0)], new Set(["N"]));
+    const r = recount(base, [s("A", 3), s("B", 0), s("C", -1), s("N", 100), { ...s("H", 0, 0), suspended: true }], new Set(["N"]));
     expect(r).toMatchObject({ changeRate: 0.67, up: 1, flat: 1, down: 1, adjusted: true });
+    // 거래정지가 아닌데 아직 거래가 없는 종목은 보합으로 센다 (네이버 목록과 같게)
+    const q = recount(base, [s("A", 3), s("C", -1), s("Z", 0, 0)], new Set());
+    expect(q).toMatchObject({ changeRate: 0.67, up: 1, flat: 1, down: 1 });
   });
 });
 
