@@ -67,7 +67,8 @@ export function HeatLegend({ max }: { max: number }) {
 }
 
 const styles = StyleSheet.create({
-  tile: { flex: 1, height: HEAT_TILE_H, padding: 7, justifyContent: "space-between", borderWidth: 1, borderRadius: 4 },
+  // 폭을 1/3 로 고정 (flex:1 이면 마지막 줄 타일이 가로로 늘어난다)
+  tile: { width: "33.333%", height: HEAT_TILE_H, padding: 7, justifyContent: "space-between", borderWidth: 1, borderRadius: 4 },
   name: { fontSize: font.small, fontWeight: "700", lineHeight: 16 },
   bottom: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 4 },
   rate: { fontSize: font.body, fontWeight: "800", fontVariant: ["tabular-nums"] },

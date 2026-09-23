@@ -3,7 +3,7 @@ import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Sty
 import { useDiscoverRank } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverStock, RankCategory } from "@/api/types";
 import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
-import { openStock, StatusLine, useAddWatch, useMarks } from "@/components/discover/shared";
+import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
 import { ThemeBoard } from "@/components/discover/ThemeBoard";
 import { Chip, Empty, ErrorView, Segmented, TableHead } from "@/components/ui";
@@ -49,6 +49,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
   const t = useTheme();
   const { showKrw } = useSettings();
   const q = useDiscoverRank(market, category);
+  const { pulling, onPull } = usePull(q.refetch);
   const marks = useMarks();
   const addWatch = useAddWatch();
   const pages = q.data?.pages;
@@ -117,7 +118,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
       onEndReached={() => {
         if (q.hasNextPage && !q.isFetchingNextPage) void q.fetchNextPage();
       }}
-      refreshControl={<RefreshControl refreshing={q.isRefetching && !q.isFetchingNextPage} onRefresh={() => void q.refetch()} tintColor={t.muted} />}
+      refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} />}
     />
   );
 }

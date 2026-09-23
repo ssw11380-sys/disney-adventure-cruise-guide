@@ -7,7 +7,7 @@ import type { DiscoverMarket, ThemeKind, ThemePeriod, ThemeSummary } from "@/api
 import { Empty, ErrorView } from "@/components/ui";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { changeColor, font, space, useTheme } from "@/theme";
-import { StatusLine } from "./shared";
+import { StatusLine, usePull } from "./shared";
 import { SkeletonRows } from "./Skeleton";
 import { HEAT_MAX, HeatLegend, HeatTile } from "./ThemeHeatmap";
 import { THEME_ROW_H, ThemeRow } from "./ThemeRow";
@@ -30,6 +30,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
   const [view, setView] = useState<"list" | "heat">("list");
   const [order, setOrder] = useState<"up" | "down">("up");
   const q = useDiscoverThemes(market, kind, period);
+  const { pulling, onPull } = usePull(q.refetch);
   // 테마/업종·기간을 바꾸는 동안에는 이전 값을 흐리게 보여 준다
   const data = q.data;
   const switching = q.isPlaceholderData;
@@ -37,6 +38,8 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
   const all = useMemo(() => data?.themes ?? [], [data]);
   // 서버가 대신 준 분류(미국 테마 실패 → 산업 분류)면 그 이름으로
   const shownKind: ThemeKind = data?.kind ?? kind;
+  // 바꾸는 중(이전 값을 흐리게 보여 줄 때)에도 화면의 숫자와 같은 기간으로 열고 칠한다
+  const shownPeriod: ThemePeriod = data?.period ?? period;
   const kindWord = shownKind === "theme" ? "테마" : "업종";
   const themes = useMemo(() => [...all].sort((a, b) => (order === "up" ? b.changeRate - a.changeRate : a.changeRate - b.changeRate)), [all, order]);
   const rising = all.filter((x) => x.changeRate > 0).length;
@@ -44,14 +47,14 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
   const flat = all.length - rising - falling;
   const best = themes.length ? (order === "up" ? themes[0] : themes.at(-1)) : undefined;
   const worst = themes.length ? (order === "up" ? themes.at(-1) : themes[0]) : undefined;
-  const max = HEAT_MAX[period];
+  const max = HEAT_MAX[shownPeriod];
 
   const open = useCallback(
     (th: ThemeSummary) =>
       router.push(
-        `/discover/theme/${encodeURIComponent(th.id)}?market=${market}&kind=${shownKind}&name=${encodeURIComponent(th.name)}&period=${period}&rate=${th.changeRate}` as never,
+        `/discover/theme/${encodeURIComponent(th.id)}?market=${market}&kind=${shownKind}&name=${encodeURIComponent(th.name)}&period=${shownPeriod}&rate=${th.changeRate}` as never,
       ),
-    [market, shownKind, period],
+    [market, shownKind, shownPeriod],
   );
   const renderRow = useCallback(({ item, index }: { item: ThemeSummary; index: number }) => <ThemeRow theme={item} rank={index + 1} onPress={open} />, [open]);
   const renderTile = useCallback(({ item }: { item: ThemeSummary }) => <HeatTile theme={item} max={max} onPress={open} />, [max, open]);
@@ -93,7 +96,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
         <View style={[styles.breadth, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
           <View style={styles.breadthTop}>
             <Text style={{ color: t.muted, fontSize: font.small }}>
-              {PERIOD_WORD[period]} {kindWord} {all.length}개 · 상승 <Text style={{ color: t.up, fontWeight: "800" }}>{rising}</Text> · 하락{" "}
+              {PERIOD_WORD[shownPeriod]} {kindWord} {all.length}개 · 상승 <Text style={{ color: t.up, fontWeight: "800" }}>{rising}</Text> · 하락{" "}
               <Text style={{ color: t.down, fontWeight: "800" }}>{falling}</Text>
             </Text>
             <Pressable onPress={() => setOrder(order === "up" ? "down" : "up")} accessibilityRole="button" style={[styles.sortBtn, { borderColor: t.line }]}>
@@ -131,7 +134,14 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
   );
 
   if (q.isLoading) return <View>{head}<SkeletonRows height={THEME_ROW_H} rank={false} /></View>;
-  if (q.isError && !data) return <ErrorView error={q.error} onRetry={() => void q.refetch()} />;
+  // 오류여도 테마/업종·기간·보기 버튼은 남겨 다른 선택으로 돌아갈 수 있게
+  if (q.isError && !data)
+    return (
+      <View style={{ flex: 1 }}>
+        {head}
+        <ErrorView error={q.error} onRetry={() => void q.refetch()} />
+      </View>
+    );
 
   const footer = themes.length ? (
     <Text style={[styles.footer, { color: t.muted }]}>
@@ -141,7 +151,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
     </Text>
   ) : null;
   const empty = <Empty title={`${kindWord}를 불러오지 못했습니다`} hint="잠시 뒤 당겨서 새로고침 하세요." />;
-  const refresh = <RefreshControl refreshing={q.isRefetching && !switching} onRefresh={() => void q.refetch()} tintColor={t.muted} />;
+  const refresh = <RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} />;
 
   return view === "heat" ? (
     <FlatList

@@ -4,7 +4,7 @@ import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useDiscoverTheme } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverStock, ThemeKind, ThemePeriod } from "@/api/types";
 import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
-import { openStock, StatusLine, useAddWatch, useMarks } from "@/components/discover/shared";
+import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
 import { Empty, ErrorView, TableHead } from "@/components/ui";
 import { formatDateKo, formatPct } from "@/lib/format";
@@ -21,6 +21,7 @@ export default function ThemeDetailScreen() {
   const period: ThemePeriod = p === "week" || p === "month" ? p : "day";
   const periodRate = rate !== undefined && rate !== "" && Number.isFinite(Number(rate)) ? Number(rate) : null;
   const q = useDiscoverTheme(market, kind, id ?? "");
+  const { pulling, onPull } = usePull(q.refetch);
   const { showKrw } = useSettings();
   const marks = useMarks();
   const addWatch = useAddWatch();
@@ -119,7 +120,7 @@ export default function ThemeDetailScreen() {
               </Text>
             ) : null
           }
-          refreshControl={<RefreshControl refreshing={q.isRefetching} onRefresh={() => void q.refetch()} tintColor={t.muted} />}
+          refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} />}
         />
       )}
     </View>

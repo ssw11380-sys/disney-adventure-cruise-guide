@@ -21,7 +21,9 @@ export const ThemeRow = memo(function ThemeRow({ theme, rank, onPress }: { theme
       accessibilityLabel={`${theme.name} 테마 ${formatPct(theme.changeRate)}, 상승 ${theme.up} 하락 ${theme.down}`}
       style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
     >
-      <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]}>{rank}</Text>
+      <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+        {rank}
+      </Text>
       <View style={styles.body}>
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} numberOfLines={1}>
           {theme.name}
@@ -58,7 +60,7 @@ export const ThemeRow = memo(function ThemeRow({ theme, rank, onPress }: { theme
 
 const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", height: THEME_ROW_H, paddingHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
-  rank: { width: 22, fontSize: font.small, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  rank: { width: 28, fontSize: font.small, fontWeight: "800", fontVariant: ["tabular-nums"] },
   body: { flex: 1, gap: 3 },
   barRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   bar: { flex: 1, height: 4, borderRadius: 2, overflow: "hidden", flexDirection: "row" },

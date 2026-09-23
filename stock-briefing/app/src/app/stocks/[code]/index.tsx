@@ -50,7 +50,11 @@ export default function StockDetailScreen() {
       { code: s.code },
       {
         onSuccess: () => void stock.refetch(),
-        onError: (e) => Alert.alert("관심 추가 실패", e instanceof Error ? e.message : String(e)),
+        onError: (e) => {
+          // 두 번 눌러 이미 등록된 경우(409)는 성공으로 본다
+          if (e instanceof Error && /이미 등록/.test(e.message)) return void stock.refetch();
+          Alert.alert("관심 추가 실패", e instanceof Error ? e.message : String(e));
+        },
       },
     );
   const cur = q?.currency ?? currencyOfMarket(s.market);
@@ -82,7 +86,7 @@ export default function StockDetailScreen() {
           title: s.name,
           headerRight: () =>
             unregistered ? (
-              <Pressable onPress={addWatch} disabled={register.isPending} accessibilityLabel="관심 종목에 추가" hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <Pressable onPress={addWatch} disabled={register.isPending || stock.isFetching} accessibilityLabel="관심 종목에 추가" hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                 <Ionicons name="star-outline" size={20} color={t.gold} />
                 <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{register.isPending ? "추가 중" : "관심 추가"}</Text>
               </Pressable>
@@ -210,7 +214,7 @@ export default function StockDetailScreen() {
       ) : null}
 
       <Segmented options={TABS} value={tab} onChange={setTab} style={{ marginTop: 2 }} />
-      {tab === "news" ? <NewsTab code={c} us={isUsMarket(s.market)} /> : <AnalysisTab code={c} kind={tab} />}
+      {tab === "news" ? <NewsTab code={c} us={isUsMarket(s.market)} /> : <AnalysisTab key={`${c}:${tab}`} code={c} kind={tab} manual={unregistered} />}
 
       {briefings.data && briefings.data.length > 0 ? (
         <View style={{ gap: space.sm }}>
@@ -224,10 +228,19 @@ export default function StockDetailScreen() {
   );
 }
 
-function AnalysisTab({ code, kind }: { code: string; kind: AnalysisKind }) {
-  const a = useAnalysis(code, kind);
+/** manual: 발견 탭 등에서 잠깐 들여다보는 미등록 종목 — AI 분석은 눌렀을 때만 만든다 (비용·시간) */
+function AnalysisTab({ code, kind, manual = false }: { code: string; kind: AnalysisKind; manual?: boolean }) {
+  const [requested, setRequested] = useState(!manual);
+  const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
   const busy = refreshAnalysis.isPending && refreshAnalysis.variables?.kind === kind;
+  if (!requested)
+    return (
+      <Card>
+        <Muted>관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.</Muted>
+        <Button title="AI 분석 만들기" icon="sparkles" onPress={() => setRequested(true)} />
+      </Card>
+    );
   if (a.isLoading || busy) return <Card><Loading label="분석 생성 중" /></Card>;
   if (a.isError) return <Card><ErrorView error={a.error} onRetry={() => void a.refetch()} /></Card>;
   const d = a.data!;
