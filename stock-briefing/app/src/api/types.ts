@@ -307,6 +307,10 @@ export interface SendSummary {
 // ── 발견 탭 ────────────────────────────────────────────────────────
 export type DiscoverMarket = "KR" | "US";
 export type RankCategory = "tradingValue" | "volume" | "gainers" | "losers";
+/** 테마·업종 등락률 기간 */
+export type ThemePeriod = "day" | "week" | "month";
+/** 테마(재료별 묶음) / 업종(산업 분류) */
+export type ThemeKind = "theme" | "sector";
 
 /** 순위·테마 목록의 종목 한 줄 */
 export interface DiscoverStock {
@@ -345,12 +349,14 @@ export interface ThemeSummary {
   up: number;
   flat: number;
   down: number;
-  /** 대표 종목 (등락률 높은 순 2~3개) */
-  leaders: { code: string; name: string; changeRate: number }[];
+  /** 대표 종목 2~3개 (출처가 등락률을 주지 않으면 changeRate 는 null) */
+  leaders: { code: string; name: string; changeRate: number | null }[];
 }
 
 export interface ThemeList {
   market: DiscoverMarket;
+  kind: ThemeKind;
+  period: ThemePeriod;
   themes: ThemeSummary[];
   marketOpen: boolean;
   asOf: string | null;
@@ -361,7 +367,10 @@ export interface ThemeList {
 
 export interface ThemeDetail {
   market: DiscoverMarket;
+  kind: ThemeKind;
   theme: ThemeSummary;
+  /** 테마 설명 (출처가 줄 때) */
+  description?: string | null;
   items: DiscoverStock[];
   marketOpen: boolean;
   asOf: string | null;

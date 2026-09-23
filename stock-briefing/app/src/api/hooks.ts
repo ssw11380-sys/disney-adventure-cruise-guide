@@ -1,10 +1,10 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
 import { useLiveStream } from "@/lib/liveStream";
 import { useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
-import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, RankCategory } from "./types";
+import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken } = useSettings();
@@ -109,18 +109,26 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
   });
 }
 
-export function useDiscoverThemes(market: DiscoverMarket) {
-  const api = useApi();
-  const interval = useDiscoverInterval(market);
-  return useQuery({ queryKey: useKey("discoverThemes", market), queryFn: () => api.discoverThemes(market), staleTime: Math.min(interval, 30_000), refetchInterval: interval, refetchIntervalInBackground: false });
-}
-
-export function useDiscoverTheme(market: DiscoverMarket, id: string) {
+/** 테마·업종 목록. 주·월 등락률은 자주 바뀌지 않아 이전 값을 두고(placeholder) 바꿔 보여 준다 */
+export function useDiscoverThemes(market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod) {
   const api = useApi();
   const interval = useDiscoverInterval(market);
   return useQuery({
-    queryKey: useKey("discoverTheme", market, id),
-    queryFn: () => api.discoverTheme(market, id),
+    queryKey: useKey("discoverThemes", market, kind, period),
+    queryFn: () => api.discoverThemes(market, kind, period),
+    placeholderData: keepPreviousData,
+    staleTime: Math.min(interval, 30_000),
+    refetchInterval: interval,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useDiscoverTheme(market: DiscoverMarket, kind: ThemeKind, id: string) {
+  const api = useApi();
+  const interval = useDiscoverInterval(market);
+  return useQuery({
+    queryKey: useKey("discoverTheme", market, kind, id),
+    queryFn: () => api.discoverTheme(market, kind, id),
     enabled: !!id,
     staleTime: Math.min(interval, 30_000),
     refetchInterval: interval,

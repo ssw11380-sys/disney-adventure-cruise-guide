@@ -31,7 +31,8 @@ export const ThemeRow = memo(function ThemeRow({ theme, rank, onPress }: { theme
             ? theme.leaders.map((l, i) => (
                 <Text key={l.code}>
                   {i > 0 ? " · " : ""}
-                  {l.name} <Text style={{ color: changeColor(t, l.changeRate) }}>{formatPct(l.changeRate)}</Text>
+                  {l.name}
+                  {l.changeRate !== null ? <Text style={{ color: changeColor(t, l.changeRate) }}> {formatPct(l.changeRate)}</Text> : null}
                 </Text>
               ))
             : "대표 종목 없음"}

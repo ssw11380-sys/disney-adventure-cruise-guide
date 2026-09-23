@@ -3,7 +3,9 @@ import type { Evaluation,
   DiscoverRank,
   RankCategory,
   ThemeDetail,
+  ThemeKind,
   ThemeList,
+  ThemePeriod,
   Analysis,
   AnalysisKind,
   Briefing,
@@ -134,8 +136,8 @@ export function createApi(baseUrl: string, token = "") {
     marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices", 10_000),
     discoverRank: (market: DiscoverMarket, category: RankCategory, page = 1, size = 50) =>
       get<DiscoverRank>(`/api/discover/${market}/rank/${category}?page=${page}&size=${size}`, 15_000),
-    discoverThemes: (market: DiscoverMarket) => get<ThemeList>(`/api/discover/${market}/themes`, 20_000),
-    discoverTheme: (market: DiscoverMarket, id: string) => get<ThemeDetail>(`/api/discover/${market}/themes/${encodeURIComponent(id)}`, 20_000),
+    discoverThemes: (market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod) => get<ThemeList>(`/api/discover/${market}/themes?kind=${kind}&period=${period}`, 20_000),
+    discoverTheme: (market: DiscoverMarket, kind: ThemeKind, id: string) => get<ThemeDetail>(`/api/discover/${market}/themes/${encodeURIComponent(id)}?kind=${kind}`, 20_000),
     marketCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`/api/market/indices/${encodeURIComponent(code)}/candles?period=${period}&count=${count}`),
   };
 }

@@ -1,12 +1,11 @@
-import { router } from "expo-router";
 import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useDiscoverRank, useDiscoverThemes } from "@/api/hooks";
-import type { DiscoverMarket, DiscoverStock, RankCategory, ThemeSummary } from "@/api/types";
+import { useDiscoverRank } from "@/api/hooks";
+import type { DiscoverMarket, DiscoverStock, RankCategory } from "@/api/types";
 import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
 import { openStock, StatusLine, useAddWatch, useMarks } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
-import { THEME_ROW_H, ThemeRow } from "@/components/discover/ThemeRow";
+import { ThemeBoard } from "@/components/discover/ThemeBoard";
 import { Chip, Empty, ErrorView, Segmented, TableHead } from "@/components/ui";
 import { useSettings } from "@/lib/settings";
 import { font, space, useTheme } from "@/theme";
@@ -41,7 +40,7 @@ export default function DiscoverScreen() {
           ))}
         </ScrollView>
       </View>
-      {category === "themes" ? <ThemeList key={market} market={market} /> : <RankList key={`${market}:${category}`} market={market} category={category} />}
+      {category === "themes" ? <ThemeBoard key={market} market={market} /> : <RankList key={`${market}:${category}`} market={market} category={category} />}
     </View>
   );
 }
@@ -123,68 +122,10 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
   );
 }
 
-function ThemeList({ market }: { market: DiscoverMarket }) {
-  const t = useTheme();
-  const q = useDiscoverThemes(market);
-  const [order, setOrder] = useState<"up" | "down">("up");
-  const themes = useMemo(() => {
-    const list = [...(q.data?.themes ?? [])];
-    return list.sort((a, b) => (order === "up" ? b.changeRate - a.changeRate : a.changeRate - b.changeRate));
-  }, [q.data, order]);
-  const rising = (q.data?.themes ?? []).filter((x) => x.changeRate > 0).length;
-  const falling = (q.data?.themes ?? []).filter((x) => x.changeRate < 0).length;
-  const open = useCallback(
-    (th: ThemeSummary) => router.push(`/discover/theme/${encodeURIComponent(th.id)}?market=${market}&name=${encodeURIComponent(th.name)}` as never),
-    [market],
-  );
-  const renderItem = useCallback(({ item, index }: { item: ThemeSummary; index: number }) => <ThemeRow theme={item} rank={index + 1} onPress={open} />, [open]);
-
-  const head = (
-    <>
-      {q.data ? <StatusLine open={q.data.marketOpen} asOf={q.data.asOf} /> : null}
-      <View style={[styles.themeBar, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
-        <Text style={{ color: t.muted, fontSize: font.small }}>
-          {q.data ? (
-            <>
-              상승 테마 <Text style={{ color: t.up, fontWeight: "700" }}>{rising}</Text> · 하락 테마 <Text style={{ color: t.down, fontWeight: "700" }}>{falling}</Text>
-            </>
-          ) : (
-            "테마"
-          )}
-        </Text>
-        <View style={{ flexDirection: "row", gap: 6 }}>
-          <Chip label="상승률순" active={order === "up"} onPress={() => setOrder("up")} />
-          <Chip label="하락률순" active={order === "down"} onPress={() => setOrder("down")} />
-        </View>
-      </View>
-    </>
-  );
-
-  if (q.isLoading) return <View>{head}<SkeletonRows height={THEME_ROW_H} /></View>;
-  if (q.isError && !q.data) return <ErrorView error={q.error} onRetry={() => void q.refetch()} />;
-
-  return (
-    <FlatList
-      data={themes}
-      keyExtractor={(it) => it.id}
-      renderItem={renderItem}
-      getItemLayout={(_, index) => ({ length: THEME_ROW_H, offset: THEME_ROW_H * index, index })}
-      initialNumToRender={12}
-      windowSize={9}
-      removeClippedSubviews
-      ListHeaderComponent={head}
-      ListEmptyComponent={<Empty title="테마를 불러오지 못했습니다" hint="잠시 뒤 당겨서 새로고침 하세요." />}
-      ListFooterComponent={themes.length ? <Text style={[styles.footer, { color: t.muted }]}>테마 등락률: {q.data?.basis ?? "-"} · 출처: {q.data?.source ?? "-"}</Text> : null}
-      refreshControl={<RefreshControl refreshing={q.isRefetching} onRefresh={() => void q.refetch()} tintColor={t.muted} />}
-    />
-  );
-}
-
 const styles = StyleSheet.create({
   chipsWrap: { borderBottomWidth: StyleSheet.hairlineWidth },
   chips: { flexDirection: "row", gap: 6, paddingHorizontal: space.lg, paddingVertical: space.sm },
   th: { fontSize: font.tiny, fontWeight: "600" },
   more: { margin: space.lg, paddingVertical: 10, alignItems: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
-  themeBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
 });

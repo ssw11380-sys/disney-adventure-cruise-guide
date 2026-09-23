@@ -2,7 +2,7 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useMemo } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useDiscoverTheme } from "@/api/hooks";
-import type { DiscoverMarket, DiscoverStock } from "@/api/types";
+import type { DiscoverMarket, DiscoverStock, ThemeKind, ThemePeriod } from "@/api/types";
 import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
 import { openStock, StatusLine, useAddWatch, useMarks } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
@@ -14,9 +14,13 @@ import { changeColor, font, space, useTheme } from "@/theme";
 /** 테마 상세: 테마 전체 등락률·상승/보합/하락 요약 → 구성 종목(등락률순) */
 export default function ThemeDetailScreen() {
   const t = useTheme();
-  const { id, market: m, name } = useLocalSearchParams<{ id: string; market?: string; name?: string }>();
+  const { id, market: m, name, kind: k, period: p, rate } = useLocalSearchParams<{ id: string; market?: string; name?: string; kind?: string; period?: string; rate?: string }>();
   const market: DiscoverMarket = m === "US" ? "US" : "KR";
-  const q = useDiscoverTheme(market, id ?? "");
+  const kind: ThemeKind = k === "sector" ? "sector" : "theme";
+  // 목록에서 본 기간의 등락률 (주·월이면 오늘 등락률과 함께 보여 준다)
+  const period: ThemePeriod = p === "week" || p === "month" ? p : "day";
+  const periodRate = rate !== undefined && rate !== "" && Number.isFinite(Number(rate)) ? Number(rate) : null;
+  const q = useDiscoverTheme(market, kind, id ?? "");
   const { showKrw } = useSettings();
   const marks = useMarks();
   const addWatch = useAddWatch();
@@ -36,9 +40,16 @@ export default function ThemeDetailScreen() {
     <>
       <View style={[styles.summary, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
         <Text style={{ color: t.muted, fontSize: font.small }}>
-          {market === "KR" ? "한국" : "미국"} 테마 · 구성 {total || items.length}종목
+          {market === "KR" ? "한국" : "미국"} {kind === "theme" ? "테마" : "업종"} · 구성 {total || items.length}종목 · 오늘
         </Text>
-        <Text style={[styles.big, { color: c }]}>{theme ? formatPct(theme.changeRate) : "-"}</Text>
+        <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.md }}>
+          <Text style={[styles.big, { color: c }]}>{theme ? formatPct(theme.changeRate) : "-"}</Text>
+          {period !== "day" && periodRate !== null ? (
+            <Text style={{ color: changeColor(t, periodRate), fontSize: font.body, fontWeight: "700" }}>
+              {period === "week" ? "1주" : "1개월"} {formatPct(periodRate)}
+            </Text>
+          ) : null}
+        </View>
         {theme && total > 0 ? (
           <>
             <View style={[styles.bar, { backgroundColor: t.surfaceAlt }]}>
@@ -51,7 +62,12 @@ export default function ThemeDetailScreen() {
             </Text>
           </>
         ) : null}
-        {q.data?.basis ? <Text style={{ color: t.muted, fontSize: font.tiny }}>테마 등락률: {q.data.basis}</Text> : null}
+        {q.data?.description ? (
+          <Text style={{ color: t.muted, fontSize: font.small, lineHeight: 18 }} numberOfLines={4}>
+            {q.data.description}
+          </Text>
+        ) : null}
+        {q.data?.basis ? <Text style={{ color: t.muted, fontSize: font.tiny }}>등락률: {q.data.basis}</Text> : null}
       </View>
       {q.data ? <StatusLine open={q.data.marketOpen} asOf={q.data.asOf} /> : null}
       <TableHead>
