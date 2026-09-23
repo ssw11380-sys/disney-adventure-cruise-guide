@@ -1,4 +1,4 @@
-import { isTimeoutError } from "../../lib/errors.js";
+import { isTimeoutError, ProviderError } from "../../lib/errors.js";
 import type { FetchFn } from "./types.js";
 
 /**
@@ -73,7 +73,16 @@ export class TossTics {
     private readonly retryDelayMs = 800,
   ) {}
 
+  /** 연결·시간 초과·HTTP·해석 실패는 모두 출처 오류(ProviderError)로 */
   private async call(path: string, body?: unknown): Promise<unknown> {
+    try {
+      return await this.callRaw(path, body);
+    } catch (e) {
+      throw e instanceof ProviderError ? e : new ProviderError("toss-tics", e instanceof Error ? e.message : String(e), e);
+    }
+  }
+
+  private async callRaw(path: string, body?: unknown): Promise<unknown> {
     const once = () =>
       this.fetchFn(`${BASE}${path}`, {
         method: body === undefined ? "GET" : "POST",

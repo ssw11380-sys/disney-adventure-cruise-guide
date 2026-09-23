@@ -249,7 +249,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     const token = opts.config.API_TOKEN;
     const auth = req.headers.authorization;
     const trusted = !token || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), token));
-    if (!trusted) return { ok: true, time: seoulIso(now()), authRequired: true, disclaimer: DISCLAIMER };
+    // 옛 앱이 sources·schedule 을 바로 읽으므로 빈 값을 함께 준다 (limited = 토큰이 없거나 틀려 상세를 뺀 응답)
+    if (!trusted) return { ok: true, time: seoulIso(now()), authRequired: true, limited: true, sources: {}, schedule: null, disclaimer: DISCLAIMER };
     return healthDetail();
   });
   const healthDetail = async () => ({

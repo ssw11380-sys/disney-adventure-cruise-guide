@@ -614,26 +614,46 @@ describe("운영 검증 뒤 4차 수정", () => {
     expect(r.asOf).toBe("2026-09-23T20:00:00+09:00");
   });
 
-  it("업종 상세: 상승·보합·하락 수는 목록과 같게(거래정지 제외), 300종목에서 잘리면 안내한다", async () => {
-    const detailItems = (n: number, suspended = 0) =>
-      Array.from({ length: n }, (_, i) => ({ ...krRow(String(i).padStart(6, "0"), i < suspended ? 0 : 1, i < suspended ? 0 : 1000), itemCode: String(i).padStart(6, "0") }));
-    let items = detailItems(12, 3);
+  it("업종 상세: 상승·보합·하락 수는 목록(출처)과 같게, 거래정지는 출처 표시(halt)로만 빼고, 300종목에서 잘리면 안내한다", async () => {
+    // 거래정지 2 · 거래 없는 코넥스 1(거래 가능 → 보합) · 오른 종목 9
+    const row = (i: number, extra: Record<string, unknown>) => ({ ...krRow(String(i).padStart(6, "0"), 1, 1000), tradableStatus: "tradable", ...extra });
+    let items: unknown[] = [
+      ...[0, 1].map((i) => row(i, { fluctuationsRatio: "0", accumulatedTradingVolume: 0, tradableStatus: "halt" })),
+      row(2, { fluctuationsRatio: "0", accumulatedTradingVolume: 0, marketType: "KONEX" }),
+      ...Array.from({ length: 9 }, (_, i) => row(3 + i, {})),
+    ];
+    let listUp = false;
     const fetchFn = (async (url: string) => {
       if (url.includes("/marketStatus")) return marketStatus(chuseokKr(), usClosed);
-      if (url.includes("/sectors/all")) return ok({ sectors: [{ code: "25", name: "기타", changeRate: 0.75, risingCount: 831, unchangedCount: 119, fallingCount: 587, topItems: [] }], hasNext: false });
+      if (url.includes("/sectors/all")) return listUp ? ok({ sectors: [{ code: "25", name: "기타", changeRate: 0.75, risingCount: 831, unchangedCount: 119, fallingCount: 587, topItems: [] }], hasNext: false }) : json({}, 503);
       return ok({ sectorInfo: { sectorName: "기타", changeRate: 0.75 }, items, hasNext: false });
     }) as unknown as typeof fetch;
     const now = () => new Date("2026-09-24T01:00:00Z");
-    // 목록을 받기 전: 구성 종목으로 세되 거래정지 3종목은 뺀다
-    const fresh = await new DiscoverService({ naver: new NaverDiscover(fetchFn), now }).theme("KR", "sector", "25");
-    expect(fresh!.theme).toMatchObject({ up: 9, flat: 0, down: 0 });
+    const direct = await new NaverDiscover(fetchFn).sectorDetail("KR", "sector", "25");
+    expect(direct!.theme).toMatchObject({ up: 9, flat: 1, down: 0 });
+    expect(direct!.items.filter((i) => i.suspended).map((i) => i.code)).toEqual(["000000", "000001"]);
+    // 목록을 못 받으면 구성 종목으로 센 값
+    expect((await new DiscoverService({ naver: new NaverDiscover(fetchFn), now }).theme("KR", "sector", "25"))!.theme).toMatchObject({ up: 9, flat: 1, down: 0 });
     // 300종목에서 잘리면: 목록의 수를 쓰고 안내
-    items = detailItems(300);
-    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now });
-    await svc.themes("KR", "sector", "day");
-    const big = await svc.theme("KR", "sector", "25");
+    listUp = true;
+    items = Array.from({ length: 300 }, (_, i) => row(i, {}));
+    const big = await new DiscoverService({ naver: new NaverDiscover(fetchFn), now }).theme("KR", "sector", "25");
     expect(big!.theme).toMatchObject({ up: 831, flat: 119, down: 587 });
     expect(big!.note).toContain("등락률 상위 300종목만 보여 줍니다 (전체 1537종목)");
+  });
+
+  it("상세의 상승·하락 수에 저장본(어제) 목록 값을 붙이지 않는다", async () => {
+    const { store } = memStore();
+    let zero = false;
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(chuseokKr(), usClosed);
+      if (url.includes("/sectors/all")) return ok({ sectors: Array.from({ length: 8 }, (_, i) => ({ code: String(i), name: `테마${i}`, changeRate: zero ? 0 : 3, risingCount: zero ? 0 : 10, unchangedCount: 0, fallingCount: 0, topItems: [] })), hasNext: false });
+      return ok({ sectorInfo: { sectorName: "테마7", changeRate: -2 }, items: Array.from({ length: 10 }, (_, i) => ({ ...krRow(String(i).padStart(6, "0"), i === 0 ? 1 : -1, 1000), tradableStatus: "tradable" })), hasNext: false });
+    }) as unknown as typeof fetch;
+    await new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => new Date("2026-09-24T01:00:00Z") }).themes("KR", "theme", "day");
+    zero = true; // 다음 날 출처 초기화 → 목록은 저장본
+    const d = await new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => new Date("2026-09-25T01:00:00Z") }).theme("KR", "theme", "7");
+    expect(d!.theme).toMatchObject({ up: 1, down: 9 }); // 구성 종목으로 센 값 (저장본 10/0/0 이 아니라)
   });
 
   it("뒤 쪽 판(ver)은 최근 5판까지 이어 준다", async () => {

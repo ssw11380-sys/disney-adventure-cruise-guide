@@ -32,7 +32,7 @@ const contrast = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a
 export function heatColor(t: Theme, rate: number, max: number): { bg: string; fg: string; sub: string } {
   const r = Math.max(-1, Math.min(1, rate / max));
   const mag = Math.abs(r);
-  if (mag < 0.03) return { bg: t.surfaceAlt, fg: t.ink, sub: t.muted };
+  if (mag < 0.03) return { bg: t.surfaceAlt, fg: t.ink, sub: t.ink };
   // 5단계로 끊어 읽기 쉽게 (연속 색보다 구분이 잘 된다)
   const step = mag < 0.15 ? 0.28 : mag < 0.35 ? 0.45 : mag < 0.6 ? 0.62 : mag < 0.85 ? 0.8 : 1;
   const base = rgb(r > 0 ? t.up : t.down);
@@ -42,7 +42,9 @@ export function heatColor(t: Theme, rate: number, max: number): { bg: string; fg
   const L = luminance(mixed);
   const dark = "#111418";
   const useWhite = contrast(L, 1) >= contrast(L, luminance(rgb(dark)));
-  return { bg, fg: useWhite ? "#FFFFFF" : dark, sub: useWhite ? "rgba(255,255,255,0.92)" : "rgba(17,20,24,0.85)" };
+  // 오른·내린 종목 수도 같은 색 (반투명으로 흐리게 하면 작은 글자 대비가 4.5:1 밑으로 떨어진다)
+  const fg = useWhite ? "#FFFFFF" : dark;
+  return { bg, fg, sub: fg };
 }
 
 /** 히트맵 타일 하나: 테마명 · 등락률 · 오른/내린 종목 수 */

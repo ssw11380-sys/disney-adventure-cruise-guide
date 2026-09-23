@@ -1,4 +1,4 @@
-import { isTimeoutError } from "../../lib/errors.js";
+import { isTimeoutError, ProviderError } from "../../lib/errors.js";
 import type { FetchFn } from "./types.js";
 
 /**
@@ -30,6 +30,8 @@ export interface DiscoverStock {
   marketCap?: number | null;
   /** 상장 첫날 (가격제한폭이 없어 등락률이 크게 나온다) */
   newlyListed?: boolean;
+  /** 거래정지 (한국: 출처의 tradableStatus = halt). 테마 평균·상승/보합/하락 수에서 뺀다 */
+  suspended?: boolean;
 }
 
 export interface ThemeSummary {
@@ -160,6 +162,8 @@ export function krStock(it: Json): DiscoverStock | null {
     tradingValue: num(it["accumulatedTradingValue"]),
     marketCap: num(it["marketValue"]),
     ...(isNewlyListed(it) ? { newlyListed: true } : {}),
+    // 거래량 0 이어도 거래 가능한 종목(코넥스 무거래 등)이 있어, 출처의 거래 가능 상태로만 거래정지를 판정한다
+    ...(String(it["tradableStatus"] ?? "") === "halt" ? { suspended: true } : {}),
   };
 }
 
@@ -209,9 +213,11 @@ export function appTicker(raw: string): string | null {
  */
 export function isUsNonCommon(eng: string, sym: string, kor = ""): boolean {
   if (/\b(rights?|warrants?|contingent value)\b/i.test(eng)) return true;
-  // 우선주(나스닥식 5글자 티커 GOOGM·STRK 등도)와 거래소 상장 채권(베이비본드) — 한글명이 가장 확실하고, 영문명은 단어 경계로 ("Preferred Bank" 같은 회사명은 남긴다)
-  if (/우선주|채권/.test(kor)) return true;
-  if (/\b(pref|pfd|prf|preferred (stock|shares?|series)|preference shares?|depositary shares?|dep shs|senior notes?|subordinated (notes?|debentures?)|debentures?|notes due)\b/i.test(eng)) return true;
+  // 우선주(나스닥식 5글자 티커 GOOGM·STRK 등도)와 거래소 상장 채권(베이비본드).
+  //  - 영문명에 분명한 증권 표지가 있으면 뺀다 ("Preferred Stock", "Senior Notes due" …). "Preferred Bank" 같은 회사명은 남긴다
+  //  - 한글명의 '우선주'·'채권'은 영문명에도 증권 표지(Pref·Series·% 쿠폰 …)가 있을 때만 — 네이버 한글명이 틀린 보통주 ADR(KSPI '카스피.kz 우선주')을 빼지 않게
+  if (/\b(pfd|preferred (stock|shares?|series)|preference shares?|depositary shares?|dep shs|senior notes?|subordinated (notes?|debentures?)|debentures?|notes due)\b/i.test(eng)) return true;
+  if (/우선주|채권/.test(kor) && /(\bpref\b|\bprf\b|\bpfd\b|\bseries\b|\bnotes?\b|\bbonds?\b|\bdebentures?\b|\bdepositary\b|\d+(\.\d+)?\s?%)/i.test(eng)) return true;
   if (/\bacquisition (corp|co|company|inc|holdings?)\b/i.test(eng)) return true;
   if (/\bunits?\s*$/i.test(eng) && sym.length >= 4 && sym.endsWith("U")) return true;
   return false;
@@ -254,7 +260,16 @@ function sectorSummary(s: Json, market: DiscoverMarket): ThemeSummary {
 export class NaverDiscover {
   constructor(private readonly fetchFn: FetchFn = fetch) {}
 
+  /** 출처 JSON — 연결·시간 초과·HTTP·해석 실패는 모두 출처 오류(ProviderError)로 (라우트가 502 로 돌려준다) */
   private async json(url: string): Promise<Json> {
+    try {
+      return await this.fetchJson(url);
+    } catch (e) {
+      throw e instanceof ProviderError ? e : new ProviderError("naver", e instanceof Error ? e.message : String(e), e);
+    }
+  }
+
+  private async fetchJson(url: string): Promise<Json> {
     // 10초 안에 답이 없으면 끊는다 (멈춘 출처가 요청을 붙잡지 않게 — 캐시가 직전 값을 준다)
     const once = () => this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     // 연결이 끊기면 한 번 더 (HTTP 오류는 그대로). 시간 초과는 다시 부르지 않는다 (한 요청이 20초를 붙잡지 않게)
@@ -413,8 +428,8 @@ export class NaverDiscover {
     }
     if (!info) return null;
     // 요약: 출처 등락률(없으면 구성 종목 단순 평균)과 상승·보합·하락 수(없으면 구성 종목으로 센다).
-    // 거래정지(거래량 0) 종목은 빼고 센다 — 목록(네이버)의 개수와 같은 기준
-    const live = items.filter((i) => (i.volume ?? 1) > 0);
+    // 거래정지(출처 표시) 종목은 빼고 센다 — 목록(네이버)의 개수와 같은 기준 (거래 없는 코넥스 종목은 보합)
+    const live = items.filter((i) => !i.suspended);
     const avg = live.length ? live.reduce((s, i) => s + i.changeRate, 0) / live.length : 0;
     const count = (f: (x: DiscoverStock) => boolean) => live.filter(f).length;
     const theme: ThemeSummary = {

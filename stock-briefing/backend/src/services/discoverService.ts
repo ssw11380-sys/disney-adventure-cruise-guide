@@ -1088,6 +1088,8 @@ export class DiscoverService {
       if (hit && snap) dataAt = snap.savedAt;
       note = hit ? `출처가 잠시 값을 비워 종목 값은 저장해 둔 직전 정규장 값 (${hit}/${items.length}종목)` : "출처가 잠시 종목별 등락률을 0으로 비웠습니다 (곧 다시 채워집니다)";
     }
+    // 한국 장 시작 전: 출처가 종목 값을 0으로 비워 두면 그렇다고 밝힌다 (거래정지로 오해하지 않게)
+    if (market === "KR" && ss.session === "pre" && isMostlyZero(value.items)) note = "장 시작 전이라 종목별 값이 비어 있습니다 (정규장부터 채워집니다)";
     // 목록과 같은 조건으로만 조정한다: 상장 첫날 종목이 등락률 상위 3(네이버 대표 종목)에 들 때
     const fresh = market === "KR" ? await this.newlyListed(open) : new Set<string>();
     const top3 = [...value.items].sort((a, b) => b.changeRate - a.changeRate).slice(0, 3);
@@ -1095,7 +1097,7 @@ export class DiscoverService {
     const adjust = top3.some((i) => fresh.has(i.code)) && !truncated;
     let theme = adjust ? recount(value.theme, value.items, fresh, k === "sector") : value.theme;
     // 상승·보합·하락 수는 목록(출처)과 같게: 받아 둔 목록에 이 테마가 있으면 그 수, 구성 종목이 잘렸는데 목록도 없으면 세지 않는다
-    const listed = this.listedTheme(market, k, id);
+    const listed = await this.listedTheme(market, k, id, ss);
     if (!adjust && listed && listed.up + listed.flat + listed.down > 0) theme = { ...theme, up: listed.up, flat: listed.flat, down: listed.down };
     else if (!adjust && truncated) theme = { ...theme, up: 0, flat: 0, down: 0 };
     if (truncated) {
@@ -1118,10 +1120,19 @@ export class DiscoverService {
     };
   }
 
-  /** 받아 둔 오늘 목록에서 이 테마·업종 (없으면 null) */
-  private listedTheme(market: DiscoverMarket, kind: ThemeKind, id: string): ThemeSummary | null {
+  /**
+   * 오늘 목록(출처 값)에서 이 테마·업종 — 목록을 같은 캐시 규칙으로 받아(대개 이미 받아 둔 것) 지금 세션의 값일 때만 쓴다.
+   * 저장본(출처 초기화)이나 0% 목록이면 null (어제의 상승·하락 수를 오늘 상세에 붙이지 않게)
+   */
+  private async listedTheme(market: DiscoverMarket, kind: ThemeKind, id: string, ss: Session): Promise<ThemeSummary | null> {
+    try {
+      await this.naverThemes(market, kind, "day", ss);
+    } catch {
+      return null;
+    }
     const hit = this.cache.get(`themes:${market}:${kind}:day`) as Cached<ThemeListValue> | undefined;
-    return hit?.value.themes.find((t) => t.id === id) ?? null;
+    if (!hit || hit.value.fromSnap || hit.value.zero) return null;
+    return hit.value.themes.find((t) => t.id === id) ?? null;
   }
 
   /** 업종 목록의 코드. 받아 둔 것이 없으면(재시작 직후) 받아 본다. 못 받으면 null */
@@ -1304,7 +1315,7 @@ export function isUsRegularHours(d: Date): boolean {
  * weighted 면 전일 시가총액 가중 평균(업종), 아니면 단순 평균(테마) — 네이버와 같은 방식.
  */
 export function recount(th: ThemeSummary, items: DiscoverStock[], fresh: Set<string>, weighted = false): ThemeSummary {
-  const live = items.filter((i) => !fresh.has(i.code) && (i.volume ?? 1) > 0);
+  const live = items.filter((i) => !fresh.has(i.code) && !i.suspended && (i.volume ?? 1) > 0);
   if (!live.length) return th;
   let avg = live.reduce((s, i) => s + i.changeRate, 0) / live.length;
   if (weighted) {

@@ -39,8 +39,8 @@ export const DiscoverRow = memo(function DiscoverRow({
   const t = useTheme();
   const c = changeColor(t, item.change);
   const usd = item.currency === "USD";
-  // 한국 종목이 거래량·등락 모두 0 이면 거래정지 (테마 평균에서도 빠진다)
-  const suspended = !usd && item.volume === 0 && item.changeRate === 0;
+  // 거래정지는 출처 표시로만 (거래량 0 이어도 거래 가능한 코넥스 종목·장 시작 전 목록이 있다)
+  const suspended = item.suspended === true;
   const krw = usd && showKrw && !!fxRate;
   const tv = item.tradingValue;
   const main =

@@ -74,7 +74,11 @@ describe("/health · 없는 주소 · 발견 탭 오류 형식", () => {
     const db = await createMigratedDb(":memory:");
     const app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:", API_TOKEN: "secret-123" }), db, providers: fakeProviders(), logger: false, enableScheduler: false });
     const pub = (await app.inject({ method: "GET", url: "/health" })).json();
-    expect(Object.keys(pub).sort()).toEqual(["authRequired", "disclaimer", "ok", "time"]);
+    // 상세(구독 종목·서버 IP·출처 구성)는 빼고, 옛 앱이 바로 읽는 sources·schedule 은 빈 값으로
+    expect(pub).toEqual({ ok: true, time: expect.any(String), authRequired: true, limited: true, sources: {}, schedule: null, disclaimer: expect.any(String) });
+    expect(JSON.stringify(pub)).not.toMatch(/tossOpenApi|outboundIp|subscribed|devices/);
+    const wrong = (await app.inject({ method: "GET", url: "/health", headers: { authorization: "Bearer nope" } })).json();
+    expect(wrong.limited).toBe(true);
     const full = (await app.inject({ method: "GET", url: "/health", headers: { authorization: "Bearer secret-123" } })).json();
     expect(full).toHaveProperty("sources");
     expect(full).toHaveProperty("tossOpenApi");

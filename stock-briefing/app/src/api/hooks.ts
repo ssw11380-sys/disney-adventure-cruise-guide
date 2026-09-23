@@ -107,12 +107,16 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
   const qc = useQueryClient();
   const { apiUrl } = useSettings();
   const interval = useDiscoverInterval(market);
-  // 목록을 떠나면 첫 쪽만 남긴다 — 돌아왔을 때 깊이 내려 두었던 쪽을 모두 다시 받지 않게
+  // 목록을 떠나면 첫 쪽만 남긴다 — 돌아왔을 때 깊이 내려 두었던 쪽을 모두 다시 받지 않게.
+  // 받는 중인 다음 쪽·자동 갱신은 먼저 취소하고(늦게 온 응답이 잘라 둔 쪽을 되살리지 않게), 받은 시각은 그대로 둔다(오래된 값이 새 값처럼 남지 않게)
   useEffect(
     () => () => {
-      qc.setQueryData<InfiniteData<DiscoverRank, RankPageParam>>([apiUrl, "discoverRank", market, category, size], (d) =>
-        d && d.pages.length > 1 ? { pages: d.pages.slice(0, 1), pageParams: d.pageParams.slice(0, 1) } : d,
-      );
+      const key = [apiUrl, "discoverRank", market, category, size];
+      const d = qc.getQueryData<InfiniteData<DiscoverRank, RankPageParam>>(key);
+      const state = qc.getQueryState(key);
+      if (!d || d.pages.length <= 1 || state?.status === "error") return;
+      void qc.cancelQueries({ queryKey: key, exact: true });
+      qc.setQueryData<InfiniteData<DiscoverRank, RankPageParam>>(key, { pages: d.pages.slice(0, 1), pageParams: d.pageParams.slice(0, 1) }, { updatedAt: state?.dataUpdatedAt });
     },
     [qc, apiUrl, market, category, size],
   );

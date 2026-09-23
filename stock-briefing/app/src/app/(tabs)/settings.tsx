@@ -60,24 +60,30 @@ export default function SettingsScreen() {
         </View>
       </Card>
 
-      {health.data ? <NotificationSettingsCard /> : null}
-      {health.data ? <TossOpenApiCard /> : null}
+      {health.data && !health.data.limited ? <NotificationSettingsCard /> : null}
+      {health.data && !health.data.limited ? <TossOpenApiCard /> : null}
       <AppUpdateCard />
 
       <Card>
-        <SectionTitle right={health.data ? <Badge tone="good">정상</Badge> : health.isError ? <Badge tone="bad">연결 끊김</Badge> : null}>서버</SectionTitle>
+        <SectionTitle
+          right={health.data?.limited ? <Badge tone="bad">토큰 필요</Badge> : health.data ? <Badge tone="good">정상</Badge> : health.isError ? <Badge tone="bad">연결 끊김</Badge> : null}
+        >
+          서버
+        </SectionTitle>
         {health.isError ? (
           <Text style={{ color: t.danger, fontSize: font.small }}>{health.error instanceof Error ? health.error.message : String(health.error)}</Text>
+        ) : health.data?.limited ? (
+          <Text style={{ color: t.danger, fontSize: font.small }}>서버에 연결됐지만 토큰이 없거나 맞지 않습니다. 아래 서버 연결에서 토큰을 입력하세요.</Text>
         ) : health.data ? (
           <View>
             <Row label="서버 시각" value={formatDateKo(health.data.time, true)} />
-            <Row label="시세" value={health.data.sources.quotes ?? "-"} />
-            <Row label="실시간" value={health.data.sources.realtime ?? "-"} />
+            <Row label="시세" value={health.data.sources?.quotes ?? "-"} />
+            <Row label="실시간" value={health.data.sources?.realtime ?? "-"} />
             <Row label="앱 스트리밍" value={stream.connected ? `연결 · ${stream.ticks}건` : "폴링 3초"} />
-            <Row label="뉴스" value={health.data.sources.news ?? "-"} />
-            <Row label="재무/공시" value={health.data.sources.financials ?? "-"} />
-            <Row label="수급" value={health.data.sources.investorFlow ?? "-"} />
-            <Row label="브리핑 모델" value={health.data.sources.llm ?? "-"} />
+            <Row label="뉴스" value={health.data.sources?.news ?? "-"} />
+            <Row label="재무/공시" value={health.data.sources?.financials ?? "-"} />
+            <Row label="수급" value={health.data.sources?.investorFlow ?? "-"} />
+            <Row label="브리핑 모델" value={health.data.sources?.llm ?? "-"} />
           </View>
         ) : (
           <Muted>확인 중…</Muted>
