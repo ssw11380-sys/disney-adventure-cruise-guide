@@ -39,6 +39,8 @@ export const DiscoverRow = memo(function DiscoverRow({
   const t = useTheme();
   const c = changeColor(t, item.change);
   const usd = item.currency === "USD";
+  // 거래정지는 출처 표시로만 (거래량 0 이어도 거래 가능한 코넥스 종목·장 시작 전 목록이 있다)
+  const suspended = item.suspended === true;
   const krw = usd && showKrw && !!fxRate;
   const tv = item.tradingValue;
   const main =
@@ -86,6 +88,7 @@ export const DiscoverRow = memo(function DiscoverRow({
             <Text style={[styles.mark, { color: mark === "보유" ? t.gold : t.accent, borderColor: mark === "보유" ? t.gold : t.accent }]}>{mark}</Text>
           ) : null}
           {item.newlyListed ? <Text style={[styles.mark, { color: t.muted, borderColor: t.lineStrong }]}>신규상장</Text> : null}
+          {suspended ? <Text style={[styles.mark, { color: t.muted, borderColor: t.lineStrong }]}>거래정지</Text> : null}
         </View>
       </View>
       <View style={[styles.num, { width: DISCOVER_COL.price }]}>

@@ -54,7 +54,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
     expect(calls).toHaveLength(3); // 이미 가진 것으로 충분
     const p3 = await svc.rank("KR", "gainers", 3, 50);
     expect(p3.items).toHaveLength(50);
-    expect(calls).toHaveLength(6); // 부족한 만큼만 이어 받음
+    expect(calls).toHaveLength(7); // 부족한 만큼만 이어 받음 (바로 앞 쪽 하나를 겹쳐 다시 받아 쪽 경계에서 빠지는 종목이 없게)
     const p4 = await svc.rank("KR", "gainers", 4, 50);
     expect(p4.items).toHaveLength(50);
     expect(p4.hasMore).toBe(true); // 6쪽 × 35 = 210
@@ -147,7 +147,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
             krRow("0010S0", "새내기", 288, 9e11),
             krRow("000001", "가", 2, 1e9),
             krRow("000003", "다", -1, 1e9),
-            krRow("000004", "정지", 0, 0, { accumulatedTradingVolume: 0 }),
+            krRow("000004", "정지", 0, 0, { accumulatedTradingVolume: 0, tradableStatus: "halt" }),
           ],
           hasNext: false,
         });
@@ -226,7 +226,7 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
     expect(r.items[0]).toMatchObject({ name: "한글 JAGX", market: "NASDAQ", currency: "USD", price: 10.5, change: 1.25, changeRate: 1190.64, tradingValue: 6.6e8 });
     expect(r.items[2]!.name).toBe("-"); // 한글명이 없으면 영문명
     expect(r).toMatchObject({ fxRate: 1380, source: "네이버 증권", hasMore: false }); // 150개 = 2쪽을 다 받아도 3개뿐
-    expect(r.note).toContain("ETF·우선주·권리주 제외");
+    expect(r.note).toContain("ETF·우선주·채권·권리주 제외");
     expect(r.asOf).toBe("2026-09-23T05:00:00+09:00"); // 정규장 종료(16:00 ET) 시각
     expect(r.note).toContain("100만 달러");
     // 거래량 순위는 top 경로, 동전주도 남긴다
@@ -254,8 +254,11 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
   it("recount: 거래정지·상장 첫날을 빼고 평균·상승/보합/하락을 다시 센다", () => {
     const base = { id: "1", name: "t", changeRate: 9, up: 0, flat: 0, down: 0, leaders: [] };
     const s = (code: string, changeRate: number, volume = 10) => ({ code, name: code, market: "KOSPI", currency: "KRW" as const, price: 1, change: 0, changeRate, volume, tradingValue: 1 });
-    const r = recount(base, [s("A", 3), s("B", 0), s("C", -1), s("N", 100), s("H", 0, 0)], new Set(["N"]));
+    const r = recount(base, [s("A", 3), s("B", 0), s("C", -1), s("N", 100), { ...s("H", 0, 0), suspended: true }], new Set(["N"]));
     expect(r).toMatchObject({ changeRate: 0.67, up: 1, flat: 1, down: 1, adjusted: true });
+    // 거래정지가 아닌데 아직 거래가 없는 종목은 보합으로 센다 (네이버 목록과 같게)
+    const q = recount(base, [s("A", 3), s("C", -1), s("Z", 0, 0)], new Set());
+    expect(q).toMatchObject({ changeRate: 0.67, up: 1, flat: 1, down: 1 });
   });
 });
 

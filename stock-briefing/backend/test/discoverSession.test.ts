@@ -51,7 +51,7 @@ describe("발견 탭 장 상태 (정규장·시간외·장 시작 전·마감)",
     const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), calendar: { status: async () => ({ now: "", KR: kr, US: state("US", false) }) } as unknown as MarketCalendar, now: () => now });
     const ext = await svc.rank("KR", "tradingValue", 1, 50);
     expect(ext).toMatchObject({ session: "extended", marketOpen: true, asOf: "2026-09-23T17:00:00+09:00" });
-    expect(ext.note).not.toContain("KRX");
+    expect(ext.note).toContain("KRX 시세"); // 순위 값은 KRX 시세 (NXT 통합 아님)
     // 추석(9/24) 10:00: 휴장 — 달력의 마지막 세션 종료(9/23 20:00)가 기준 시각
     now = new Date("2026-09-24T01:00:00Z");
     kr = state("KR", false, "2026-09-23T11:00:00.000Z");
@@ -355,7 +355,8 @@ describe("네이버 거래소 장 상태로 세션·기준 시각 (휴장일·�
     const down = (async (url: string) => (url.includes("/marketStatus") ? json({}, 503) : fetchFn(url))) as unknown as typeof fetch;
     const { MarketCalendar } = await import("../src/providers/market/calendar.js");
     const broken = new DiscoverService({ naver: new NaverDiscover(down), calendar: new MarketCalendar((async () => json({}, 500)) as unknown as typeof fetch, () => now), store, now: () => now });
-    expect((await broken.rank("KR", "volume", 1, 50)).session).toBe("regular"); // 추정은 어쩔 수 없다
+    // 두 출처가 모두 멈춰도, 기억한 마감(9/23 20:00)과 다음 개장(9/28) 사이라 요일 추정 대신 마감으로 본다
+    expect(await broken.rank("KR", "volume", 1, 50)).toMatchObject({ session: "closed", asOf: "2026-09-23T20:00:00+09:00" });
     await new Promise((r) => setTimeout(r, 0));
     expect(m.get("discover:kr-last-trade")).toBe(before); // 하지만 기억은 그대로
     now = new Date("2026-09-27T23:30:00Z");
@@ -533,5 +534,240 @@ describe("장 상태 방어 (부분 응답·깨진 값·재시작)", () => {
     // 기억이 없으면 그 거래일의 16:00
     const plain = await new DiscoverService({ naver: new NaverDiscover(fetchFn), calendar: stuck, now: () => now }).themes("US", "sector", "month");
     expect(plain.asOf).toBe("2026-11-28T06:00:00+09:00");
+  });
+});
+
+describe("운영 검증 뒤 4차 수정", () => {
+  it("미국 우선주(5글자 티커 포함)·거래소 상장 채권은 빼고, 'Preferred Bank' 같은 회사명은 남긴다", async () => {
+    const { isUsNonCommon } = await import("../src/providers/market/naverDiscover.js");
+    expect(isUsNonCommon("Alphabet Inc 6.25% Series A", "GOOGM", "알파벳 우선주 6.25% Series A")).toBe(true);
+    expect(isUsNonCommon("Strategy Inc 8.00% Series A Perpetual Strike Preferred Stock", "STRK", "스트래티지 우선주 Series A 8.00%")).toBe(true);
+    expect(isUsNonCommon("B. Riley Financial Inc 5.25% Senior Notes due 2028", "RILYZ", "B. 라일리 선순위 채권 5.250% 만기 2028년")).toBe(true);
+    expect(isUsNonCommon("Banco Bradesco SA Pref ADR", "BBD", "방쿠 브라데스쿠 우선주 ADR")).toBe(true);
+    expect(isUsNonCommon("Preferred Bank", "PFBC", "프리퍼드 뱅크")).toBe(false);
+    expect(isUsNonCommon("Preformed Line Products Co", "PLPC", "프리폼드 라인 프로덕츠")).toBe(false);
+    expect(isUsNonCommon("Energy Transfer Units", "ET", "에너지 트랜스퍼")).toBe(false);
+  });
+
+  it("이어 받을 때 바로 앞 쪽을 겹쳐 받아, 그 사이 한 쪽 위로 올라온 종목을 놓치지 않는다", async () => {
+    let calls = 0;
+    // 3쪽(index 2)의 마지막 종목 X 가 두 번째 묶음을 받을 때 2쪽(index 1)의 끝으로 올라간다
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return json({}, 404);
+      calls++;
+      const index = Number(new URL(url).searchParams.get("index") ?? 0);
+      const moved = calls > 3;
+      const codes = Array.from({ length: 50 }, (_, i) => String(index * 50 + i).padStart(6, "0"));
+      if (index === 3 && !moved) codes[0] = "XXXXXX"; // 처음엔 4쪽 첫 줄
+      if (index === 2 && moved) codes[49] = "XXXXXX"; // 나중엔 3쪽 끝 줄 (4쪽 첫 줄은 다른 종목)
+      return ok({ items: codes.map((c, i) => krRow(c, 5 - (index * 50 + i) * 0.01, 1_000_000 - index * 50 - i)), hasNext: index < 5 });
+    }) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => new Date("2026-09-24T01:00:00Z") });
+    await svc.rank("KR", "volume", 1, 50); // index 0~2 (X 는 아직 index 3)
+    const p4 = await svc.rank("KR", "volume", 4, 50); // index 2(겹침)~5 — X 는 이제 index 2 끝에 있다
+    const all = [...(await svc.rank("KR", "volume", 1, 50)).items, ...(await svc.rank("KR", "volume", 2, 50)).items, ...(await svc.rank("KR", "volume", 3, 50)).items, ...p4.items];
+    expect(all.map((i) => i.code)).toContain("XXXXXX");
+  });
+
+  it("장이 닫힌 직후에는 마감 전에 받은 목록·테마를 TTL 과 상관없이 새로 받아 마감 기준 시각으로 준다", async () => {
+    const { w, fetchFn } = (() => {
+      const w = { kr: { latest: exRow("open", "afterMarket", "2026-09-23T16:00:00+09:00", "2026-09-23T20:00:00+09:00", "2026-09-23"), next: exRow("close", "afterMarket", "2026-09-23T20:00:00+09:00", "2026-09-24T08:00:00+09:00", "2026-09-23") } as Ex };
+      const src = krSource();
+      const fetchFn = (async (url: string) => {
+        if (url.includes("/marketStatus")) return marketStatus(w.kr, usClosed);
+        if (url.includes("/sectors/all")) return ok({ sectors: [{ code: "1", name: "반도체", changeRate: 1.2, topItems: [] }], hasNext: false });
+        return src.fetchFn(url);
+      }) as unknown as typeof fetch;
+      return { w, fetchFn };
+    })();
+    let now = new Date("2026-09-23T10:59:40Z"); // 19:59:40
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    expect((await svc.rank("KR", "tradingValue", 1, 50)).asOf).toBe("2026-09-23T19:59:40+09:00");
+    expect((await svc.themes("KR", "theme", "day")).asOf).toBe("2026-09-23T19:59:40+09:00");
+    now = new Date("2026-09-23T11:00:20Z"); // 20:00:20 — 마감 (닫힘 TTL 5분 안이지만)
+    w.kr = { latest: exRow("close", "afterMarket", "2026-09-23T20:00:00+09:00", "2026-09-24T08:00:00+09:00", "2026-09-23"), next: exRow("preopen", null, "2026-09-28T08:00:00+09:00", "2026-09-28T09:00:00+09:00") };
+    expect(await svc.rank("KR", "tradingValue", 1, 50)).toMatchObject({ session: "closed", asOf: "2026-09-23T20:00:00+09:00" });
+    expect((await svc.themes("KR", "theme", "day")).asOf).toBe("2026-09-23T20:00:00+09:00");
+  });
+
+  it("시간외에 본 값과 마감 뒤 값이 같으면 저장본의 기준 시각을 마감으로 올린다 (재시작 뒤 개장 전에도 20:00)", async () => {
+    const { store } = memStore();
+    let zero = false;
+    let kr: Ex = { latest: exRow("open", "afterMarket", "2026-09-23T16:00:00+09:00", "2026-09-23T20:00:00+09:00", "2026-09-23") };
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(kr, usClosed);
+      return ok({ sectors: Array.from({ length: 10 }, (_, i) => ({ code: String(i), name: `테마${i}`, changeRate: zero ? 0 : 1 + i / 10, topItems: [] })), hasNext: false });
+    }) as unknown as typeof fetch;
+    let now = new Date("2026-09-23T09:05:00Z"); // 18:05 시간외
+    await new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => now }).themes("KR", "theme", "week");
+    now = new Date("2026-09-23T11:06:00Z"); // 20:06 마감 뒤 — 같은 값
+    kr = chuseokKr(true);
+    const after = new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => now });
+    await after.themes("KR", "theme", "week");
+    await new Promise((r) => setTimeout(r, 0));
+    // 9/28 08:30 개장 전, 재시작 · 출처 0%
+    zero = true;
+    now = new Date("2026-09-27T23:30:00Z");
+    kr = { latest: exRow("preopen", null, "2026-09-28T08:00:00+09:00", "2026-09-28T09:00:00+09:00") };
+    const r = await new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => now }).themes("KR", "theme", "week");
+    expect(r.themes[0]!.changeRate).toBe(1);
+    expect(r.asOf).toBe("2026-09-23T20:00:00+09:00");
+  });
+
+  it("업종 상세: 상승·보합·하락 수는 목록(출처)과 같게, 거래정지는 출처 표시(halt)로만 빼고, 300종목에서 잘리면 안내한다", async () => {
+    // 거래정지 2 · 거래 없는 코넥스 1(거래 가능 → 보합) · 오른 종목 9
+    const row = (i: number, extra: Record<string, unknown>) => ({ ...krRow(String(i).padStart(6, "0"), 1, 1000), tradableStatus: "tradable", ...extra });
+    let items: unknown[] = [
+      ...[0, 1].map((i) => row(i, { fluctuationsRatio: "0", accumulatedTradingVolume: 0, tradableStatus: "halt" })),
+      row(2, { fluctuationsRatio: "0", accumulatedTradingVolume: 0, marketType: "KONEX" }),
+      ...Array.from({ length: 9 }, (_, i) => row(3 + i, {})),
+    ];
+    let listUp = false;
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(chuseokKr(), usClosed);
+      if (url.includes("/sectors/all")) return listUp ? ok({ sectors: [{ code: "25", name: "기타", changeRate: 0.75, risingCount: 831, unchangedCount: 119, fallingCount: 587, topItems: [] }], hasNext: false }) : json({}, 503);
+      return ok({ sectorInfo: { sectorName: "기타", changeRate: 0.75 }, items, hasNext: false });
+    }) as unknown as typeof fetch;
+    const now = () => new Date("2026-09-24T01:00:00Z");
+    const direct = await new NaverDiscover(fetchFn).sectorDetail("KR", "sector", "25");
+    expect(direct!.theme).toMatchObject({ up: 9, flat: 1, down: 0 });
+    expect(direct!.items.filter((i) => i.suspended).map((i) => i.code)).toEqual(["000000", "000001"]);
+    // 목록을 못 받으면 구성 종목으로 센 값
+    expect((await new DiscoverService({ naver: new NaverDiscover(fetchFn), now }).theme("KR", "sector", "25"))!.theme).toMatchObject({ up: 9, flat: 1, down: 0 });
+    // 300종목에서 잘리면: 목록의 수를 쓰고 안내
+    listUp = true;
+    items = Array.from({ length: 300 }, (_, i) => row(i, {}));
+    const big = await new DiscoverService({ naver: new NaverDiscover(fetchFn), now }).theme("KR", "sector", "25");
+    expect(big!.theme).toMatchObject({ up: 831, flat: 119, down: 587 });
+    expect(big!.note).toContain("등락률 상위 300종목만 보여 줍니다 (전체 1537종목)");
+  });
+
+  it("상세의 상승·하락 수에 저장본(어제) 목록 값을 붙이지 않는다", async () => {
+    const { store } = memStore();
+    let zero = false;
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(chuseokKr(), usClosed);
+      if (url.includes("/sectors/all")) return ok({ sectors: Array.from({ length: 8 }, (_, i) => ({ code: String(i), name: `테마${i}`, changeRate: zero ? 0 : 3, risingCount: zero ? 0 : 10, unchangedCount: 0, fallingCount: 0, topItems: [] })), hasNext: false });
+      return ok({ sectorInfo: { sectorName: "테마7", changeRate: -2 }, items: Array.from({ length: 10 }, (_, i) => ({ ...krRow(String(i).padStart(6, "0"), i === 0 ? 1 : -1, 1000), tradableStatus: "tradable" })), hasNext: false });
+    }) as unknown as typeof fetch;
+    await new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => new Date("2026-09-24T01:00:00Z") }).themes("KR", "theme", "day");
+    zero = true; // 다음 날 출처 초기화 → 목록은 저장본
+    const d = await new DiscoverService({ naver: new NaverDiscover(fetchFn), store, now: () => new Date("2026-09-25T01:00:00Z") }).theme("KR", "theme", "7");
+    expect(d!.theme).toMatchObject({ up: 1, down: 9 }); // 구성 종목으로 센 값 (저장본 10/0/0 이 아니라)
+  });
+
+  it("상세: 목록 새 조회가 늦어 돌아온 오래된 목록 값은 붙이지 않고, 목록이 안 오면 2초 안에 구성 종목으로 센다", async () => {
+    const kr: Ex = { latest: exRow("open", "regularMarket", "2026-09-24T09:00:00+09:00", "2026-09-24T15:30:00+09:00", "2026-09-24") };
+    let listDelay = 0;
+    let listCalls = 0;
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(kr, usClosed);
+      if (url.includes("/sectors/all")) {
+        listCalls++;
+        if (listDelay) await new Promise((r) => setTimeout(r, listDelay));
+        return ok({ sectors: Array.from({ length: 8 }, (_, i) => ({ code: String(i), name: `테마${i}`, changeRate: 3, risingCount: 10, unchangedCount: 0, fallingCount: 0, topItems: [] })), hasNext: false });
+      }
+      return ok({ sectorInfo: { sectorName: "테마7", changeRate: -2 }, items: Array.from({ length: 10 }, (_, i) => ({ ...krRow(String(i).padStart(6, "0"), i === 0 ? 1 : -1, 1000), tradableStatus: "tradable" })), hasNext: false });
+    }) as unknown as typeof fetch;
+    let now = new Date("2026-09-24T01:00:00Z"); // 10:00 장중
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now, staleWaitMs: 10 });
+    expect((await svc.theme("KR", "theme", "7"))!.theme).toMatchObject({ up: 10, flat: 0, down: 0 }); // 막 받은 목록의 수
+    // 30분 뒤: 목록 새 조회가 늦으면 캐시는 30분 전 목록을 돌려주지만, 상세에는 붙이지 않는다
+    now = new Date("2026-09-24T01:30:00Z");
+    listDelay = 300;
+    expect((await svc.theme("KR", "theme", "7"))!.theme).toMatchObject({ up: 1, down: 9 });
+    await new Promise((r) => setTimeout(r, 350));
+    // 받아 둔 목록이 없고 목록이 멈춰 있으면 상세는 2초(SUMMARY_WAIT_MS) 남짓만 기다린다
+    listDelay = 5_000;
+    const calls = listCalls;
+    const cold = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now, staleWaitMs: 10 });
+    const t0 = Date.now();
+    const d = await cold.theme("KR", "theme", "7");
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(listCalls).toBe(calls + 1); // 구성 종목과 함께 한 번 불렀다
+    expect(d!.theme).toMatchObject({ up: 1, down: 9 });
+  }, 10_000);
+
+  it("상세: 개장 직전(프리마켓)에 받은 어제 목록의 수는 개장 뒤 상세에 붙이지 않고, 받아 둔 지금 목록은 새 조회를 기다리지 않고 쓴다", async () => {
+    const kr: Ex = { latest: exRow("close", "afterMarket", "2026-09-24T20:00:00+09:00", "2026-09-25T08:00:00+09:00", "2026-09-24") };
+    let us: Ex = { latest: exRow("open", "preMarket", "2026-09-24T04:00:00-04:00", "2026-09-24T09:30:00-04:00", "2026-09-24") };
+    let today = false; // 프리마켓 동안 네이버 미국 값은 직전 정규장 값
+    let listFail = false;
+    let listDelay = 0;
+    const usRow = (i: number, rate: number) => ({ reutersCode: `S${i}.O`, symbolCode: `S${i}`, name: `S${i}`, currentPrice: "10", fluctuations: "0.1", fluctuationsRatio: String(rate), accumulatedTradingVolume: "1000", accumulatedTradingValue: "10000", marketValue: "1000000" });
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(kr, us);
+      if (url.includes("/sectors/all")) {
+        if (listFail) return json({ isSuccess: false }, 500);
+        const t = today;
+        if (listDelay) await new Promise((r) => setTimeout(r, listDelay));
+        return ok({ sectors: Array.from({ length: 8 }, (_, i) => ({ code: String(i), name: `업종${i}`, changeRate: t ? -0.8 : 3, risingCount: t ? 5 : 10, unchangedCount: 0, fallingCount: t ? 5 : 0, topItems: [] })), hasNext: false });
+      }
+      if (url.includes("/worldstock/sector/item/list")) {
+        const t = today;
+        return ok({ name: "업종7", changeRate: t ? -0.8 : 3, risingCount: t ? 1 : 10, unChangedCount: 0, fallingCount: t ? 9 : 0, items: Array.from({ length: 10 }, (_, i) => usRow(i, t ? (i === 0 ? 1 : -1) : 3)) });
+      }
+      return json({}, 404);
+    }) as unknown as typeof fetch;
+    let now = new Date("2026-09-24T13:25:00Z"); // 09:25 ET 프리마켓 (closed)
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    expect((await svc.themes("US", "sector", "day")).themes[7]).toMatchObject({ up: 10, down: 0 });
+    // 09:33 ET 정규장: 목록 새 조회가 실패해 캐시에는 09:25 의 어제 목록만 있다 → 상세 자신의 오늘 수
+    now = new Date("2026-09-24T13:33:00Z");
+    us = { latest: exRow("open", "regularMarket", "2026-09-24T09:30:00-04:00", "2026-09-24T16:00:00-04:00", "2026-09-24") };
+    today = true;
+    listFail = true;
+    expect((await svc.theme("US", "sector", "7"))!.theme).toMatchObject({ up: 1, flat: 0, down: 9 });
+    // 09:34 목록을 받은 뒤, 09:35 에는 목록 새 조회가 3초 걸려도 받아 둔 지금 목록(1분 전)의 수를 바로 쓴다
+    listFail = false;
+    now = new Date("2026-09-24T13:34:00Z");
+    await svc.themes("US", "sector", "day");
+    now = new Date("2026-09-24T13:35:00Z");
+    listDelay = 3_000;
+    const t0 = Date.now();
+    const d = await svc.theme("US", "sector", "7");
+    expect(Date.now() - t0).toBeLessThan(1_500);
+    expect(d!.theme).toMatchObject({ up: 5, flat: 0, down: 5 });
+  }, 10_000);
+
+  it("뒤 쪽 판(ver)은 최근 5판까지 이어 준다", async () => {
+    const src = krSource();
+    let now = new Date("2026-09-23T01:00:00Z");
+    const fetchFn = (async (url: string) => (url.includes("/marketStatus") ? marketStatus({ latest: exRow("open", "regularMarket", "2026-09-23T09:00:00+09:00", "2026-09-23T15:30:00+09:00", "2026-09-23") }, usClosed) : src.fetchFn(url))) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    const first = await svc.rank("KR", "volume", 1, 50);
+    for (let i = 1; i <= 3; i++) {
+      src.w.base = 5 + i;
+      now = new Date(Date.parse("2026-09-23T01:00:00Z") + i * 31_000);
+      await svc.rank("KR", "volume", 1, 50); // 새 판
+    }
+    const p2 = await svc.rank("KR", "volume", 2, 50, first.ver);
+    expect(p2.ver).toBe(first.ver);
+    expect(p2.items[0]!.changeRate).toBe(4.5);
+  });
+
+  it("캐시는 모르는 테마 id 가 쌓여도 커지지 않는다", async () => {
+    const fetchFn = (async (url: string) => (url.includes("/marketStatus") ? json({}, 404) : json({}, 404))) as unknown as typeof fetch;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => new Date("2026-09-24T01:00:00Z") });
+    for (let i = 0; i < 450; i++) await svc.theme("KR", "theme", `x${i}`);
+    expect((svc as unknown as { cache: Map<string, unknown> }).cache.size).toBeLessThanOrEqual(400);
+  });
+
+  it("출처가 형식만 맞는 없는 날짜(2026-13-01)를 줘도 처리되지 않은 거부가 생기지 않는다", async () => {
+    const seen: unknown[] = [];
+    const on = (e: unknown) => seen.push(e);
+    process.on("unhandledRejection", on);
+    try {
+      const fetchFn = (async (url: string) =>
+        url.includes("/marketStatus")
+          ? marketStatus({ latest: exRow("open", "regularMarket", "2026-09-23T09:00:00+09:00", "2026-09-23T15:30:00+09:00", "2026-13-01") }, usClosed)
+          : ok({ sectors: [{ code: "1", name: "반도체", changeRate: 1.2, topItems: [] }], hasNext: false })) as unknown as typeof fetch;
+      const r = await new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => new Date("2026-09-23T01:00:00Z") }).themes("KR", "sector", "day");
+      expect(r.session).toBe("regular");
+      await new Promise((res) => setTimeout(res, 20));
+      expect(seen).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", on);
+    }
   });
 });

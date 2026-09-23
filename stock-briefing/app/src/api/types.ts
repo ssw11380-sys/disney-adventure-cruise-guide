@@ -261,7 +261,10 @@ export interface StockNews {
 export interface Health {
   ok: boolean;
   time: string;
-  sources: Record<string, string>;
+  /** 토큰이 없거나 틀리면 서버가 빈 값({})을 준다 (limited) */
+  sources?: Record<string, string>;
+  /** 토큰이 없거나 틀려 상세를 뺀 응답 */
+  limited?: boolean;
   schedule: { timezone: string; running: boolean; jobs: { session: BriefingSession; cron: string; nextRun: string | null }[] } | null;
   devices?: number;
   authRequired?: boolean;
@@ -327,6 +330,8 @@ export interface DiscoverStock {
   marketCap?: number | null;
   /** 상장 첫날 (가격제한폭이 없어 등락률이 크게 나온다) */
   newlyListed?: boolean;
+  /** 거래정지 (출처 표시) */
+  suspended?: boolean;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../src/app.js";
+import { buildApp, redactToken } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { fakeProviders } from "./helpers.js";
@@ -66,5 +66,64 @@ describe("needsSsl", () => {
     expect(needsSsl("postgres://u:p@127.0.0.1:5433/x", undefined)).toBe(false);
     expect(needsSsl("postgres://u:p@host.example.com/x?sslmode=disable", undefined)).toBe(false);
     expect(needsSsl("postgres://u:p@postgres.railway.internal/x", "true")).toBe(true);
+  });
+});
+
+describe("/health · 없는 주소 · 발견 탭 오류 형식", () => {
+  it("토큰이 없으면 /health 는 최소 정보만, 토큰이 있으면 상세", async () => {
+    const db = await createMigratedDb(":memory:");
+    const app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:", API_TOKEN: "secret-123" }), db, providers: fakeProviders(), logger: false, enableScheduler: false });
+    const pub = (await app.inject({ method: "GET", url: "/health" })).json();
+    // 상세(구독 종목·서버 IP·출처 구성)는 빼고, 옛 앱이 바로 읽는 sources·schedule 은 빈 값으로
+    expect(pub).toEqual({ ok: true, time: expect.any(String), authRequired: true, limited: true, sources: {}, schedule: null, disclaimer: expect.any(String) });
+    expect(JSON.stringify(pub)).not.toMatch(/tossOpenApi|outboundIp|subscribed|devices/);
+    const wrong = (await app.inject({ method: "GET", url: "/health", headers: { authorization: "Bearer nope" } })).json();
+    expect(wrong.limited).toBe(true);
+    const full = (await app.inject({ method: "GET", url: "/health", headers: { authorization: "Bearer secret-123" } })).json();
+    expect(full).toHaveProperty("sources");
+    expect(full).toHaveProperty("tossOpenApi");
+    const nf = await app.inject({ method: "GET", url: "/nope", headers: { authorization: "Bearer secret-123" } });
+    expect(nf.statusCode).toBe(404);
+    expect(nf.json()).toMatchObject({ error: "NOT_FOUND" });
+    await app.close();
+    await db.destroy();
+  });
+});
+
+describe("요청 로그의 토큰 가림", () => {
+  it("쿼리의 token 값만 가린다 (인코딩한 이름 포함)", () => {
+    expect(redactToken("/api/stream?token=abc123")).toBe("/api/stream?token=[redacted]");
+    expect(redactToken("/api/stream?x=1&%74oken=abc&y=2")).toBe("/api/stream?x=1&%74oken=[redacted]&y=2");
+    expect(redactToken("/api/stream?TOKEN=abc")).toBe("/api/stream?TOKEN=[redacted]");
+    expect(redactToken("/api/stocks?tokens=1&mytoken=2")).toBe("/api/stocks?tokens=1&mytoken=2");
+    expect(redactToken("/health")).toBe("/health");
+    // 라우터는 '#' 뒤도 쿼리로 읽는다
+    expect(redactToken("/api/stream#token=abc")).toBe("/api/stream#token=[redacted]");
+    expect(redactToken("/api/stream#x=1&token=abc")).toBe("/api/stream#x=1&token=[redacted]");
+    expect(redactToken("/api/stream;token=abc")).toBe("/api/stream;token=[redacted]");
+    expect(redactToken("/api/stream?token=a=b&x=1")).toBe("/api/stream?token=[redacted]&x=1");
+  });
+
+  it("서버 요청 로그에 웹소켓 토큰이 남지 않는다", async () => {
+    const lines: string[] = [];
+    const db = await createMigratedDb(":memory:");
+    const app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:", API_TOKEN: "secret-123" }),
+      db,
+      providers: fakeProviders(),
+      logger: { level: "info", stream: { write: (s: string) => lines.push(s) } },
+      enableScheduler: false,
+    });
+    try {
+      await app.inject({ method: "GET", url: "/api/stream?token=secret-123" });
+      await app.inject({ method: "GET", url: "/api/stocks?t%6Fken=secret-123" });
+      const all = lines.join("");
+      expect(all).toContain("[redacted]");
+      expect(all).toContain("/api/stream");
+      expect(all).not.toContain("secret-123");
+    } finally {
+      await app.close();
+      await db.destroy();
+    }
   });
 });

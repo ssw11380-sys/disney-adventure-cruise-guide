@@ -6,6 +6,7 @@ import type { DiscoverMarket, DiscoverStock, ThemeKind, ThemePeriod } from "@/ap
 import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
 import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
+import { DISCLAIMER } from "@/components/Screen";
 import { Empty, ErrorView, TableHead } from "@/components/ui";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
@@ -115,8 +116,9 @@ export default function ThemeDetailScreen() {
           ListFooterComponent={
             items.length ? (
               <Text style={[styles.footer, { color: t.muted }]}>
-                출처: {q.data?.source ?? "-"} · 길게 누르면 관심 종목에 추가
+                출처: {q.data?.source ?? "-"} · 길게 누르면 관심 추가
                 {q.data?.updatedAt ? `\n테마 구성 갱신: ${formatDateKo(q.data.updatedAt, true)} (매일 자동)` : ""}
+                {`\n${DISCLAIMER}`}
               </Text>
             ) : null
           }

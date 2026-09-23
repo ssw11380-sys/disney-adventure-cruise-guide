@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import type { AppConfig } from "./config.js";
 import type { Db } from "./db/index.js";
@@ -49,7 +49,8 @@ export interface BuildAppOptions {
 export const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.";
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? { level: opts.config.LOG_LEVEL } });
+  const logger = opts.logger === false ? false : { level: opts.config.LOG_LEVEL, ...(typeof opts.logger === "object" ? opts.logger : {}), serializers: { req: logReq, path: logPath } };
+  const app = Fastify({ logger });
   await app.register(cors, { origin: true });
   await app.register(websocket, { options: { maxPayload: 4096 } });
   const log = app.log;
@@ -244,7 +245,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     return reply.type("text/html; charset=utf-8").send(html);
   });
 
-  app.get("/health", async () => ({
+  // 토큰이 설정돼 있으면 상세(구독 종목·서버 IP·출처 구성 등)는 토큰을 보낸 요청에만 준다 — 앱은 늘 토큰을 보낸다
+  app.get("/health", async (req) => {
+    const token = opts.config.API_TOKEN;
+    const auth = req.headers.authorization;
+    const trusted = !token || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), token));
+    // 옛 앱이 sources·schedule 을 바로 읽으므로 빈 값을 함께 준다 (limited = 토큰이 없거나 틀려 상세를 뺀 응답)
+    if (!trusted) return { ok: true, time: seoulIso(now()), authRequired: true, limited: true, sources: {}, schedule: null, disclaimer: DISCLAIMER };
+    return healthDetail();
+  });
+  const healthDetail = async () => ({
     ok: true,
     time: seoulIso(now()),
     sources: describeProviders(opts.config),
@@ -256,7 +266,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
     disclaimer: DISCLAIMER,
-  }));
+  });
+
+  // 없는 경로도 앱 표준 오류 형식으로
+  app.setNotFoundHandler((req, reply) => reply.code(404).send({ error: "NOT_FOUND", message: `없는 주소입니다: ${req.method} ${req.url.split("?")[0]}` }));
 
   await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar });
   // 발견 탭: 순위·테마·업종 (네이버 공개 JSON). 미국 테마는 토스 테마 분류 + 네이버 정규장 시세. 미국 원화 환산은 토스 표시 환율
@@ -278,8 +291,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     usThemes.warm();
     const task = cron.schedule("0 21 * * *", () => void usThemes.refresh(), { timezone: opts.config.timezone, name: "us-themes-daily" });
     // 1주·1개월 테마 등락률은 정규장 끝나기 직전 값을 남겨 둔다 (장 밖에는 토스 값에 주간·프리·애프터 가격이 섞이므로)
+    // 12:50 에도 받는다 — 조기 폐장일(13:00 마감)에는 15:50 이 정규장이 아니어서 건너뛰므로 (보통 날은 15:50 값이 덮는다)
     const periods = cron.schedule(
-      "50 15 * * 1-5",
+      "50 12,15 * * 1-5",
       () => void discoverService.captureUsPeriods().catch((e) => app.log.warn({ err: String(e) }, "미국 테마 기간 등락률 저장 실패")),
       { timezone: "America/New_York", name: "us-theme-periods" },
     );
@@ -334,6 +348,46 @@ function decodedPath(url: string): string {
   } catch {
     return raw;
   }
+}
+
+/** @fastify/websocket 은 웹소켓 핸들러가 없는 경로로 온 접속을 { path: 주소 } 로 남긴다 — 여기서도 token 을 가린다 */
+function logPath(p: unknown): unknown {
+  return typeof p === "string" ? redactToken(p) : p;
+}
+
+/** 요청 로그: Fastify 기본 항목과 같되, 주소의 token 쿼리(웹소켓 인증)는 가린다 (서버 로그에 API 토큰이 남지 않게) */
+function logReq(req: FastifyRequest): { method: string; url: string; host: string; remoteAddress: string; version?: string; remotePort?: number } {
+  const version = req.headers?.["accept-version"];
+  const port = req.socket?.remotePort;
+  return {
+    method: req.method,
+    url: redactToken(req.url),
+    host: req.host,
+    remoteAddress: req.ip,
+    ...(typeof version === "string" ? { version } : {}),
+    ...(port !== undefined ? { remotePort: port } : {}),
+  };
+}
+
+/**
+ * 주소에서 이름이 token 인 쿼리 값(퍼센트 인코딩한 이름 포함)을 [redacted] 로 바꾼다.
+ * 라우터는 '?' 와 '#' 중 앞선 곳부터 쿼리로 읽으므로 '?', '#', ';', '&' 뒤의 이름=값을 모두 본다
+ */
+export function redactToken(url: string): string {
+  const start = url.search(/[?#;]/);
+  if (start < 0) return url;
+  const rest = url.slice(start).replace(/([?#;&])([^?#;&=]*)=([^?#;&]*)/g, (m, sep: string, key: string) => (isTokenName(key) ? `${sep}${key}=[redacted]` : m));
+  return url.slice(0, start) + rest;
+}
+
+function isTokenName(key: string): boolean {
+  let name = key;
+  try {
+    name = decodeURIComponent(key.replace(/\+/g, " "));
+  } catch {
+    // 깨진 인코딩: 원문 이름으로 비교
+  }
+  return name.trim().toLowerCase() === "token";
 }
 
 /** 비밀값 비교 (길이가 같을 때 시간 일정 비교) */

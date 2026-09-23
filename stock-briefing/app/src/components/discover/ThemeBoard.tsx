@@ -7,6 +7,7 @@ import type { DiscoverMarket, ThemeKind, ThemePeriod, ThemeSummary } from "@/api
 import { Empty, ErrorView } from "@/components/ui";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { changeColor, font, space, useTheme } from "@/theme";
+import { DISCLAIMER } from "@/components/Screen";
 import { StatusLine, usePull } from "./shared";
 import { SkeletonRows } from "./Skeleton";
 import { HEAT_MAX, HeatLegend, HeatTile } from "./ThemeHeatmap";
@@ -56,7 +57,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
       ),
     [market, shownKind, shownPeriod],
   );
-  const renderRow = useCallback(({ item, index }: { item: ThemeSummary; index: number }) => <ThemeRow theme={item} rank={index + 1} onPress={open} />, [open]);
+  const renderRow = useCallback(({ item, index }: { item: ThemeSummary; index: number }) => <ThemeRow theme={item} rank={index + 1} kindWord={kindWord} onPress={open} />, [open, kindWord]);
   const renderTile = useCallback(({ item }: { item: ThemeSummary }) => <HeatTile theme={item} max={max} onPress={open} />, [max, open]);
 
   const seg = (active: boolean) => [styles.seg, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.line }];
@@ -148,6 +149,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
       {kindWord} 등락률: {data?.basis ?? "-"} · 출처: {data?.source ?? "-"}
       {all.some((x) => x.adjusted) ? "\n* 상장 첫날 종목(가격제한폭 없음)을 빼고 다시 계산한 값" : ""}
       {data?.updatedAt ? `\n테마 구성 갱신: ${formatDateKo(data.updatedAt, true)} (매일 자동)` : ""}
+      {`\n${DISCLAIMER}`}
     </Text>
   ) : null;
   const empty = <Empty title={`${kindWord}를 불러오지 못했습니다`} hint="잠시 뒤 당겨서 새로고침 하세요." />;

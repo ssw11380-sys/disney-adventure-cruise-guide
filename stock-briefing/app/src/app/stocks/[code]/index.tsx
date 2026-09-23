@@ -95,7 +95,7 @@ export default function StockDetailScreen() {
           title: s.name,
           headerRight: () =>
             unregistered ? (
-              <Pressable onPress={addWatch} disabled={adding} accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <Pressable onPress={addWatch} disabled={adding} accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 4, marginRight: 8, paddingHorizontal: 4 }}>
                 <Ionicons name="star-outline" size={20} color={t.gold} />
                 <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{adding ? "추가 중" : "관심 추가"}</Text>
               </Pressable>

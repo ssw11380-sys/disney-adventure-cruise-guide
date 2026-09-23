@@ -124,7 +124,7 @@ describe("발견 탭 검토 수정", () => {
     const base = { id: "1", name: "t", changeRate: 150, up: 0, flat: 0, down: 0, leaders: [] };
     const s = (code: string, changeRate: number, marketCap: number) => ({ code, name: code, market: "KOSPI", currency: "KRW" as const, price: 1, change: 0, changeRate, volume: 10, tradingValue: 1, marketCap });
     const items = [s("BIG", 10, 1100), s("SMALL", -10, 90), s("NEW", 300, 400)]; // 전일 시총 1000, 100
-    expect(recount(base, items, new Set(["NEW"]), true).changeRate).toBe(8.18); // (10·1000 − 10·100) / 1100
+    expect(recount(base, items, new Set(["NEW"]), true).changeRate).toBe(8.49); // 현재 시가총액 가중 (10·1100 − 10·90) / 1190 — 네이버 업종과 같은 방식
     expect(recount(base, items, new Set(["NEW"]), false).changeRate).toBe(0);
   });
 

@@ -73,21 +73,23 @@ export function formatKrwCompact(n: number | null | undefined, currency: Currenc
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
   const abs = Math.abs(n);
   const sign = n < 0 ? "-" : "";
+  // 경계는 반올림한 값 기준 (999.96B 가 "1000.0B" 가 아니라 "1.00T" 로)
   if (currency === "USD") {
-    if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(2)}T`;
-    if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
-    if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+    if (abs >= 999.95e9) return `${sign}$${(abs / 1e12).toFixed(2)}T`;
+    if (abs >= 999.95e6) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
+    if (abs >= 999.5e3) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+    if (abs >= 1e4) return `${sign}$${Math.round(abs / 1e3).toLocaleString("en-US")}K`;
     return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
   }
-  if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(abs >= 1e13 ? 0 : 1)}조원`;
-  if (abs >= 1e8) return `${sign}${Math.round(abs / 1e8).toLocaleString("ko-KR")}억원`;
+  if (abs >= 9_999.5e8) return `${sign}${(abs / 1e12).toFixed(abs >= 9.95e12 ? 0 : 1)}조원`;
+  if (abs >= 9_999.5e4) return `${sign}${Math.round(abs / 1e8).toLocaleString("ko-KR")}억원`;
   if (abs >= 1e4) return `${sign}${Math.round(abs / 1e4).toLocaleString("ko-KR")}만원`;
   return `${sign}${Math.round(abs).toLocaleString("ko-KR")}원`;
 }
 
 export function formatVolume(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
-  if (n >= 1e8) return `${(n / 1e8).toFixed(1)}억`;
+  if (n >= 9_999.5e4) return `${(n / 1e8).toFixed(1)}억`;
   if (n >= 1e4) return `${Math.round(n / 1e4).toLocaleString("ko-KR")}만`;
   return n.toLocaleString("ko-KR");
 }
