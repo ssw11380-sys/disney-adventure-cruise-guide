@@ -218,6 +218,8 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
   // ── 실시간에 가까운 현재가 (여러 종목 한 번에) ───────────────────────
 
   private quickCache: { at: number; key: string; map: Map<string, LiveTick> } | null = null;
+  /** 종목별 기준가(base) — 일괄 시세(getMany)를 받을 때마다 채운다 */
+  private readonly baseCache = new Map<string, { at: number; base: number }>();
   private fxCache: { at: number; rate: number } | null = null;
 
   /**
@@ -272,11 +274,25 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     for (const [code, pc] of pcs) {
       const r = byPc.get(pc);
       const price = num(r?.["close"]);
+      const base = num(r?.["base"]);
+      if (r && base !== null && base > 0) this.baseCache.set(code, { at: t, base });
       if (!r || price === null) continue;
       out.set(code, { code, price, volume: num(r["volume"]), timestamp: nowIso, receivedAt: t });
     }
     this.quickCache = { at: t, key, map: out };
     return out;
+  }
+
+  /**
+   * 기준가(전일 종가) — 토스 앱·네이버가 전일 대비 등락을 재는 값. 한국은 KRX 종가(배당락 등은 조정 기준가), 상장 첫날은 공모가.
+   * 최근 1분 안에 일괄 시세로 받은 값이 있으면 요청 없이 쓴다
+   */
+  async basePrice(code: string): Promise<number | null> {
+    code = normalizeCode(code);
+    const hit = this.baseCache.get(code);
+    if (hit && this.now().getTime() - hit.at < 60_000) return hit.base;
+    await this.getMany([code]);
+    return this.baseCache.get(code)?.base ?? null;
   }
 
   private async fetchChart(productCode: string, kr: boolean, period: CandlePeriod, count: number): Promise<Candle[]> {

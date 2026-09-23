@@ -282,6 +282,11 @@ export function aggregateCandles(daily: Candle[], period: CandlePeriod): Candle[
 
 export interface TossOpenApiProviderOptions {
   now?: () => Date;
+  /**
+   * 한국 종목의 기준가(토스 앱·네이버가 등락을 재는 전일 종가, 토스 웹 시세의 base). 주면 전일 종가로 이 값을 쓴다 —
+   * 공식 API 일봉 종가는 NXT 애프터마켓까지 포함한 통합 종가라 NXT 종목의 등락이 토스 앱과 달라진다 (삼성전자 +3.24% vs +3.62%)
+   */
+  krBase?: (code: string) => Promise<number | null>;
 }
 
 export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider, MasterProvider {
@@ -292,7 +297,7 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
 
   constructor(
     readonly client: TossOpenApiClient,
-    opts: TossOpenApiProviderOptions = {},
+    private readonly opts: TossOpenApiProviderOptions = {},
   ) {
     this.now = opts.now ?? (() => new Date());
   }
@@ -419,13 +424,14 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     code = normalizeCode(code);
     const kr = isKrCode(code);
     let dailyError: unknown = null;
-    const [prices, daily, infos] = await Promise.all([
+    const [prices, daily, infos, krBase] = await Promise.all([
       this.client.get<Json[]>("/api/v1/prices", { symbols: code }),
       this.dailyCandles(code, 260).catch((e: unknown) => {
         dailyError = e;
         return [] as Candle[];
       }),
       this.stockInfos([code]).catch(() => new Map<string, TossStockInfo>()),
+      kr && this.opts.krBase ? this.opts.krBase(code).catch(() => null) : Promise.resolve(null),
     ]);
     const p = (prices ?? []).find((x) => String(x["symbol"] ?? "").toUpperCase() === code) ?? prices?.[0];
     if (!p) throw new ProviderError(this.name, `${code} 시세 없음`);
@@ -439,7 +445,7 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     // 마지막 봉 날짜가 뒤일 수 있다 → 그 봉을 오늘 봉으로 보고 직전 정규장 종가와 비교한다.
     const today = latest && latest.date >= priceDate ? latest : null;
     const prev = today ? daily.at(-2) ?? null : latest;
-    const prevClose = prev?.close ?? null;
+    const prevClose = krBase && krBase > 0 ? krBase : (prev?.close ?? null);
     // 전일 종가를 모르면(상장 첫날이라 일봉이 오늘 것뿐, 또는 일봉을 못 받음) 등락을 0 으로 만들지 않고
     // 다음 소스(기준가를 주는 토스 웹)로 넘긴다 — 상장 첫날 +280% 종목이 "0 · 0.00%"로 보이지 않게
     if (prevClose === null)

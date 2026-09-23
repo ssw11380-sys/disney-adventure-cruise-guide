@@ -83,7 +83,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   let live: TossRealtime | null = null;
   if (cfg.tossOpenApiEnabled) {
     const client = new TossOpenApiClient({ clientId: cfg.TOSS_CLIENT_ID, clientSecret: cfg.TOSS_CLIENT_SECRET, log });
-    tossOpenApi = new TossOpenApiProvider(client);
+    tossOpenApi = new TossOpenApiProvider(client, { krBase: (code) => toss.basePrice(code) });
     live = new TossRealtime(client, { log });
   }
 

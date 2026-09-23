@@ -158,6 +158,20 @@ describe("TossProvider", () => {
     expect(priceCalls()).toBe(2);
   });
 
+  it("basePrice: 일괄 시세에서 받은 기준가를 1분 동안 요청 없이 쓴다", async () => {
+    const calls: string[] = [];
+    let t = Date.parse("2026-09-22T14:00:00+09:00");
+    const p = new TossProvider(fakeFetch(calls), null, () => new Date(t));
+    await p.getMany(["035420", "TSLA"]);
+    const priceCalls = () => calls.filter((c) => c.includes("/v3/stock-prices?")).length;
+    expect(await p.basePrice("035420")).toBe(197900);
+    expect(priceCalls()).toBe(1); // 일괄 시세 때 받은 값
+    t += 61_000;
+    expect(await p.basePrice("035420")).toBe(197900);
+    expect(priceCalls()).toBe(2); // 1분이 지나면 다시 받는다
+    expect(await p.basePrice("ZZZZ")).toBeNull();
+  });
+
   it("봉은 오래된 순으로 정렬되고 날짜는 거래소 현지 날짜다", async () => {
     const s = await new TossProvider(fakeFetch(), null, NOW).getCandles("035420", "W", 2);
     expect(s.candles.map((c) => c.date)).toEqual(["2026-09-21", "2026-09-22"]);

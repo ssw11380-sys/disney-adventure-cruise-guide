@@ -211,6 +211,21 @@ describe("TossOpenApiProvider", () => {
     expect(q.priceBasis).toContain("시간외");
   });
 
+  it("한국 종목은 기준가(krBase)를 주면 그 값을 전일 종가로 쓴다 — 토스 앱과 같은 등락 (일봉 종가는 NXT 포함 통합 종가)", async () => {
+    const p = new TossOpenApiProvider(client(), { now: NOW, krBase: async () => 199_500 });
+    const q = await p.getQuote("035420");
+    expect(q).toMatchObject({ prevClose: 199_500, change: 2_000, changeRate: 1 });
+    // 상장 첫날도 기준가(공모가)가 있으면 공식 API 로 바로 답한다
+    const first = await new TossOpenApiProvider(client(), { now: NOW, krBase: async () => 12_000 }).getQuote("0010S0");
+    expect(first).toMatchObject({ prevClose: 12_000, change: 201_500 - 12_000 });
+    // 기준가를 못 받으면 예전처럼 일봉으로
+    const fallback = await new TossOpenApiProvider(client(), { now: NOW, krBase: async () => { throw new Error("down"); } }).getQuote("035420");
+    expect(fallback.prevClose).toBe(200000 + 199 * 100);
+    // 미국 종목에는 쓰지 않는다
+    const us = await new TossOpenApiProvider(client(), { now: NOW, krBase: async () => 1 }).getQuote("tsla");
+    expect(us.prevClose).toBe(375.3);
+  });
+
   it("상장 첫날(전일 봉 없음)은 등락 0 으로 만들지 않고 실패해 다음 소스(기준가)로 넘긴다", async () => {
     await expect(new TossOpenApiProvider(client(), { now: NOW }).getQuote("0010S0")).rejects.toThrow(/전일 종가 없음 \(상장 첫날\)/);
   });
