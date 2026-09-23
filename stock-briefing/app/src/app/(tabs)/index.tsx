@@ -5,9 +5,10 @@ import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
+import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { COL, StockRow } from "@/components/StockRow";
-import { Button, ErrorView, Loading, TableHead } from "@/components/ui";
+import { Button, ErrorView, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { openMaxAge, viewState } from "@/lib/freshness";
 import { evalView } from "@/lib/liveTick";
@@ -69,13 +70,15 @@ export default function StocksScreen() {
     ];
   }, [data, sort, afterCost, showKrw]);
 
-  // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (1분에 한 번)
+  // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (1분에 한 번).
+  // 기기에 저장해 둔 옛 잔고(켜자마자 보이는 값)로는 위젯을 덮지 않는다 — 방금 받은 값(30초 이내)만
   const lastWidgetPush = useRef(0);
+  const dataAt = stocks.dataUpdatedAt;
   useEffect(() => {
-    if (!data || Date.now() - lastWidgetPush.current < 60_000) return;
+    if (!data || Date.now() - dataAt > 30_000 || Date.now() - lastWidgetPush.current < 60_000) return;
     lastWidgetPush.current = Date.now();
     void refreshWidgets({ stocks: data, showKrw, afterCost });
-  }, [data, showKrw, afterCost]);
+  }, [data, dataAt, showKrw, afterCost]);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
     Alert.alert(s.name, undefined, [
@@ -85,7 +88,13 @@ export default function StocksScreen() {
     ]);
 
   const view = viewState(stocks);
-  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "loading")
+    return (
+      <Screen scroll={false}>
+        <MarketStrip />
+        <HoldingsSkeleton />
+      </Screen>
+    );
   if (view === "error") return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";

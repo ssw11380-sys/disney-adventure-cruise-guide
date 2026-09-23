@@ -1,8 +1,10 @@
-import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, useIsRestoring, useQueryClient } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { Stack, usePathname } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import * as SystemUI from "expo-system-ui";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -10,11 +12,27 @@ import { NotificationBridge } from "@/components/NotificationBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
 import { LiveStreamProvider } from "@/lib/liveStream";
-import { SettingsProvider } from "@/lib/settings";
+import { PERSIST_BUSTER, PERSIST_MAX_AGE_MS, queryPersister, shouldPersist } from "@/lib/queryPersist";
+import { SettingsProvider, useSettings } from "@/lib/settings";
 import { useTheme } from "@/theme";
 
 // 가장 먼저: 이후 어디서 난 JS 오류든 서버로 보고한다 (토큰·금액은 지운 뒤)
 installErrorHandlers();
+
+// 저장된 설정(라이트/다크)과 마지막 잔고를 읽을 때까지 스플래시를 둔다 → 라이트 모드에서 어두운 첫 화면이 번쩍이지 않게.
+// 읽기가 늦어도 1.5초 뒤에는 연다
+void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+let splashHidden = false;
+function hideSplash() {
+  if (splashHidden) return;
+  splashHidden = true;
+  try {
+    SplashScreen.hide();
+  } catch {
+    /* 웹 등 */
+  }
+}
+setTimeout(hideSplash, 1_500);
 
 /**
  * 위젯·알림 딥링크로 상세 화면부터 열어도 그 아래에 탭(잔고)을 깔아 둔다 → 뒤로 가면 앱이 닫히지 않고 잔고로 간다.
@@ -32,6 +50,36 @@ function ThemedStatusBar() {
     void SystemUI.setBackgroundColorAsync(t.bg).catch(() => undefined);
   }, [t.bg]);
   return <StatusBar style={t.dark ? "light" : "dark"} />;
+}
+
+/** 설정·저장된 캐시를 다 읽으면 스플래시를 내린다 */
+function SplashGate() {
+  const { ready } = useSettings();
+  const restoring = useIsRestoring();
+  useEffect(() => {
+    if (ready && !restoring) hideSplash();
+  }, [ready, restoring]);
+  return null;
+}
+
+/**
+ * 토큰을 바꾸면 이전 토큰으로 받은 캐시(401 오류 포함)를 버리고 새로 받는다.
+ * 쿼리 키에 토큰을 넣지 않는 대신 여기서 처리한다(토큰이 저장 캐시 키에 남지 않게).
+ */
+function CredentialWatcher() {
+  const { apiToken, ready } = useSettings();
+  const qc = useQueryClient();
+  const prev = useRef<string | null>(null);
+  useEffect(() => {
+    if (!ready) return;
+    if (prev.current !== null && prev.current !== apiToken) {
+      // 이전 토큰으로 받은 캐시를 비우고(기기에 저장된 것도) 보고 있는 화면은 새 토큰으로 다시 받는다
+      void queryPersister.removeClient();
+      void qc.resetQueries();
+    }
+    prev.current = apiToken;
+  }, [apiToken, ready, qc]);
+  return null;
 }
 
 /** 오류 보고에 "어느 화면에서" 를 붙이기 위해 현재 경로를 알려 둔다 */
@@ -78,14 +126,24 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <SettingsProvider>
-          <QueryClientProvider client={queryClient}>
+          <PersistQueryClientProvider
+            client={queryClient}
+            persistOptions={{
+              persister: queryPersister,
+              maxAge: PERSIST_MAX_AGE_MS,
+              buster: PERSIST_BUSTER,
+              dehydrateOptions: { shouldDehydrateQuery: (q) => shouldPersist(q.queryKey, q.state, Date.now()), shouldDehydrateMutation: () => false },
+            }}
+          >
+            <SplashGate />
+            <CredentialWatcher />
             <LiveStreamProvider>
               <ThemedStatusBar />
               <NotificationBridge />
               <ScreenTracker />
               <Navigator />
             </LiveStreamProvider>
-          </QueryClientProvider>
+          </PersistQueryClientProvider>
         </SettingsProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
