@@ -162,7 +162,17 @@ curl "localhost:3000/api/stocks?quotes=1"
 ```bash
 npm run typecheck
 npm test
+# Postgres 방언까지 (건너뛰는 테스트 0개): TEST_PG_URL=postgres://postgres:postgres@127.0.0.1:5432/stockbriefing_test npm test
 ```
+
+앱도 같은 명령으로 검사합니다(`cd app && npm run typecheck && npm run lint && npm test`). 앱 테스트는 평가·합계·위젯 합계·표기·실시간 체결 계산 같은 순수 함수와, 투자 권유 금지 문구·고지 문구를 봅니다. 서버와 앱의 평가 계산은 공용 픽스처 `shared/fixtures/evaluation.json` 으로 묶여 있어, 한쪽 계산만 바꾸면 양쪽 테스트 중 하나가 깨집니다(0원 차이 기준).
+
+### CI 와 병합 규칙
+
+- 모든 PR 과 main 푸시에서 GitHub Actions(`.github/workflows/ci.yml`)가 **서버**(타입·테스트·Postgres·빌드), **앱**(타입·린트·테스트), **비밀키 스캔**(gitleaks) 세 잡을 돌립니다. 하나라도 빨간불이면 병합하지 않습니다.
+- Railway 는 `railway.json` 의 `watchPatterns` 에 걸린 파일(`stock-briefing/backend/**` 중 `test/` 제외, 루트 `Dockerfile`·`.dockerignore`·`railway.json`)이 바뀐 커밋만 다시 배포합니다. 앱만 바꾼 PR 은 서버를 재시작하지 않습니다.
+- 병합 금지 시간(한국 시간, 평일): **08:20~08:40**(오전 브리핑·장 시작 직전), **15:50~16:15**(장 마감·오후 브리핑). 서버 재배포 중에는 실시간 시세와 브리핑 생성이 잠깐 멈추기 때문입니다.
+- 저장소 설정에서 켜 두면 좋은 것(저장소 관리자만 가능): main 브랜치 보호 규칙에 세 CI 잡을 필수 검사로 지정, Railway 서비스 설정의 "Wait for CI" 켜기.
 
 ## 앱 실행 (3단계)
 

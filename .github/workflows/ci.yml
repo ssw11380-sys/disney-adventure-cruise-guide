@@ -1,0 +1,95 @@
+# PR·main 푸시마다 서버·앱 검사와 비밀키 스캔을 돌린다. 한 잡이라도 실패하면 병합하지 않는다.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # PR 은 새 푸시가 오면 이전 실행을 취소, main 은 커밋마다 끝까지 검사 (배포 전 확인용)
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: 서버 (타입·테스트·Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stockbriefing_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: stock-briefing/backend
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@127.0.0.1:5432/stockbriefing_test
+      # Postgres 테스트가 조용히 건너뛰어지지 않도록 (TEST_PG_URL 이 없으면 실패)
+      REQUIRE_PG: "1"
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: stock-briefing/backend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - name: 운영 빌드 (Dockerfile 과 같은 tsc 빌드)
+        run: npm run build
+
+  app:
+    name: 앱 (타입·린트·테스트)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: stock-briefing/app
+    env:
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: stock-briefing/app/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  secrets:
+    name: 비밀키 스캔
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (PR 은 이번 변경분만, main 은 전체)
+        env:
+          GITLEAKS_VERSION: 8.28.0
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz gitleaks
+          if [ -n "$BASE_SHA" ]; then
+            ./gitleaks git --no-banner --redact --verbose --log-opts="$BASE_SHA..HEAD" .
+          else
+            ./gitleaks git --no-banner --redact --verbose .
+          fi

@@ -13,6 +13,11 @@ import { FakeGenerator, fakeProviders, SAMPLE_MASTER } from "./helpers.js";
  */
 const url = process.env["TEST_PG_URL"];
 
+// CI 는 REQUIRE_PG=1 을 켠다: 환경변수 이름이 바뀌거나 빠져 Postgres 검사가 조용히 건너뛰어지는 일을 막는다
+it.runIf(process.env["REQUIRE_PG"] === "1")("CI 에서는 TEST_PG_URL 이 반드시 있다", () => {
+  expect(url, "TEST_PG_URL 없음").toBeTruthy();
+});
+
 describe.skipIf(!url)("postgres dialect", () => {
   let db: Db;
   let app: FastifyInstance;
