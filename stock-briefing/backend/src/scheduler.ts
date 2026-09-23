@@ -6,6 +6,8 @@ export interface SchedulerOptions {
   morningCron: string | null;
   afternoonCron: string | null;
   timezone?: string;
+  /** 정기 브리핑 직전에 실행 (예: 토스 보유 종목 동기화). 실패해도 브리핑은 진행 */
+  beforeRun?: (session: BriefingSession) => Promise<void>;
   log?: { info(obj: Record<string, unknown>, msg: string): void; error(obj: Record<string, unknown>, msg: string): void };
 }
 
@@ -25,6 +27,7 @@ export class BriefingScheduler {
   private readonly timezone: string;
   private readonly log: SchedulerOptions["log"];
   private crons: { morningCron: string | null; afternoonCron: string | null };
+  private readonly beforeRun: SchedulerOptions["beforeRun"];
 
   constructor(
     private readonly service: BriefingService,
@@ -32,6 +35,7 @@ export class BriefingScheduler {
   ) {
     this.timezone = opts.timezone ?? "Asia/Seoul";
     this.log = opts.log;
+    this.beforeRun = opts.beforeRun;
     this.crons = { morningCron: opts.morningCron, afternoonCron: opts.afternoonCron };
   }
 
@@ -53,6 +57,7 @@ export class BriefingScheduler {
         async () => {
           this.log?.info({ session }, "정기 브리핑 시작");
           try {
+            await this.beforeRun?.(session).catch((e: unknown) => this.log?.error({ session, err: (e as Error).message }, "브리핑 사전 작업 실패"));
             const r = await this.service.runSession(session, { trigger: "schedule" });
             const failed = r.results.filter((x) => x.status === "failed").length;
             const skipped = r.results.filter((x) => x.status === "skipped").length;

@@ -14,6 +14,8 @@ const schema = z.object({
   /** 토스증권 공식 Open API (WTS 설정 > Open API 에서 발급, 허용 IP 등록 필요) */
   TOSS_CLIENT_ID: z.string().default(""),
   TOSS_CLIENT_SECRET: z.string().default(""),
+  /** 보유 종목 자동 동기화 주기(분, 장중 기준). 0 이면 끔. 장 밖에는 1시간마다 */
+  TOSS_SYNC_MINUTES: z.coerce.number().int().min(0).max(1440).default(10),
 
   DART_API_KEY: z.string().default(""),
   NAVER_CLIENT_ID: z.string().default(""),
