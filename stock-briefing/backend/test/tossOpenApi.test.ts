@@ -212,7 +212,7 @@ describe("TossOpenApiProvider", () => {
   });
 
   it("상장 첫날(전일 봉 없음)은 등락 0 으로 만들지 않고 실패해 다음 소스(기준가)로 넘긴다", async () => {
-    await expect(new TossOpenApiProvider(client(), { now: NOW }).getQuote("0010S0")).rejects.toThrow(/전일 종가 없음/);
+    await expect(new TossOpenApiProvider(client(), { now: NOW }).getQuote("0010S0")).rejects.toThrow(/전일 종가 없음 \(상장 첫날\)/);
   });
 
   it("일봉은 페이지를 이어 받고 주봉·월봉은 일봉을 묶어 만든다", async () => {

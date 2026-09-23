@@ -141,6 +141,8 @@ const FX_WAIT_MS = 2_000;
 const SUMMARY_WAIT_MS = 2_000;
 /** 미국 테마별 직전 정규장 거래대금 (meta 표 키) */
 const US_THEME_TV_KEY = "discover:us-theme-tv";
+/** 미국 개장 뒤 이 시간(분) 동안은 직전 정규장 거래대금으로도 테마를 남긴다 */
+const US_OPEN_GRACE_MIN = 60;
 /** 테마 상세에 목록의 상승·보합·하락 수를 붙일 때, 장중 목록이 이보다 오래되면 쓰지 않는다 */
 const LISTED_MAX_AGE_MS = 10 * 60_000;
 
@@ -172,6 +174,8 @@ export class DiscoverService {
    * 개장 직후에는 오늘 누적 거래대금이 거의 0 이라, 이 값으로도 거래대금 기준을 넘으면 테마를 남긴다
    */
   private usThemeTv: { day: string; tv: Map<string, number> } | null = null;
+  /** meta 표에 저장하는 데 성공한 값의 지문 (값이 바뀌면 다시 쓴다, 실패하면 다음에 다시) */
+  private usThemeTvSaved = "";
   private usThemeTvLoad: Promise<void> | null = null;
   /** 미국 테마 기간 등락률의 정규장 중 스냅숏 */
   private readonly periodSnaps = new Map<ThemePeriod, UsPeriodSnapshot>();
@@ -910,7 +914,7 @@ export class DiscoverService {
       const day = latestTradeDay(quotes.values());
       // 구성 종목 거래대금 합이 100만 달러 미만인 테마(동전주 몇 개짜리)는 뺀다 — 급상승 순위와 같은 기준
       const rows = book.themes.map((t) => usThemeSummary(t, quotes, day)).filter((x): x is NonNullable<typeof x> => !!x);
-      const keep = await this.usTvFilter(new Map(rows.map((r) => [r.summary.id, r.tradingValue])), day, open);
+      const { keep, withPrev } = await this.usTvFilter(new Map(rows.map((r) => [r.summary.id, r.tradingValue])), quotes, day, ss);
       const themes = rows.filter((r) => keep(r.summary.id)).map((r) => r.summary);
       const dropped = rows.length - themes.length;
       const tradedAt = [...quotes.values()].map((q) => q.tradedAt).filter((x): x is string => !!x && !Number.isNaN(Date.parse(x))).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
@@ -924,7 +928,7 @@ export class DiscoverService {
         asOf: seoulIso(new Date(tradedAt ?? at)),
         source: "토스증권 테마 분류 · 네이버 증권 시세",
         basis: "테마별 시가총액 상위 종목의 시가총액 가중 평균 (정규장)",
-        note: dropped ? `거래대금 100만 달러 미만 테마 ${dropped}개 제외` : null,
+        note: dropped ? (withPrev ? `오늘·직전 정규장 거래대금이 모두 100만 달러 미만인 테마 ${dropped}개 제외` : `거래대금 100만 달러 미만 테마 ${dropped}개 제외`) : null,
         updatedAt: seoulIso(new Date(book.builtAt)),
       };
     }
@@ -956,22 +960,35 @@ export class DiscoverService {
 
   /**
    * 미국 테마를 거래대금으로 거르는 기준 (급상승 순위와 같은 100만 달러, 동전주 몇 개짜리 테마를 뺀다).
-   * 장이 닫혀 있으면 받은 값(직전 정규장 하루치)으로 거르고 그 값을 기억한다. 정규장 중에는 오늘 누적 거래대금이나
-   * 직전 정규장 거래대금 가운데 하나라도 기준을 넘으면 남긴다 — 개장 직후 오늘 값만 보면 190개 중 4개만 남는다
+   * 개장 직후에는 오늘 누적 거래대금이 거의 0 이라 오늘 값만 보면 190개 중 4개만 남는다 →
+   * 개장 뒤 US_OPEN_GRACE_MIN 동안은 직전 정규장 거래대금이 기준을 넘어도 남긴다(withPrev).
+   * 직전 정규장 값은 장이 닫혀 있을 때, 끝난 정규장 하루치일 때만 기억한다 (모든 종목이 OPEN·PREOPEN 이 아니고 날짜가 마지막 정규장 날)
    */
-  private async usTvFilter(today: Map<string, number>, day: string, open: boolean): Promise<(id: string) => boolean> {
+  private async usTvFilter(today: Map<string, number>, quotes: Map<string, UsQuote>, day: string, ss: Session): Promise<{ keep: (id: string) => boolean; withPrev: boolean }> {
     const min = MIN_TRADING_VALUE.US;
-    if (!open) {
-      if (day && today.size) {
-        const persist = this.usThemeTv?.day !== day;
-        this.usThemeTv = { day, tv: today };
-        if (persist) await this.deps.store?.set(US_THEME_TV_KEY, JSON.stringify({ day, tv: [...today] })).catch(() => undefined);
-      }
-      return (id) => (today.get(id) ?? 0) >= min;
+    const todayOk = (id: string) => (today.get(id) ?? 0) >= min;
+    if (!ss.open) {
+      const settled = ![...quotes.values()].some((q) => q.status === "OPEN" || q.status === "PREOPEN");
+      if (day && today.size && settled && day === lastUsRegularDay(this.now, ss.lastClose)) await this.rememberUsThemeTv(day, today);
+      return { keep: todayOk, withPrev: false };
     }
+    if (nyParts(this.now).minutes - (9 * 60 + 30) >= US_OPEN_GRACE_MIN) return { keep: todayOk, withPrev: false };
     await this.loadUsThemeTv();
     const prev = this.usThemeTv && this.usThemeTv.day < day ? this.usThemeTv.tv : null;
-    return (id) => (today.get(id) ?? 0) >= min || (prev?.get(id) ?? 0) >= min;
+    if (!prev) return { keep: todayOk, withPrev: false };
+    return { keep: (id) => todayOk(id) || (prev.get(id) ?? 0) >= min, withPrev: true };
+  }
+
+  private async rememberUsThemeTv(day: string, tv: Map<string, number>): Promise<void> {
+    this.usThemeTv = { day, tv };
+    const sig = `${day}:${tv.size}:${Math.round([...tv.values()].reduce((a, b) => a + b, 0))}`;
+    if (sig === this.usThemeTvSaved || !this.deps.store) return;
+    try {
+      await this.deps.store.set(US_THEME_TV_KEY, JSON.stringify({ day, tv: [...tv] }));
+      this.usThemeTvSaved = sig;
+    } catch {
+      /* 다음 호출에서 다시 쓴다 */
+    }
   }
 
   private async loadUsThemeTv(): Promise<void> {
@@ -986,7 +1003,7 @@ export class DiscoverService {
           this.usThemeTv = { day: v.day, tv };
         }
       } catch {
-        /* 없으면 오늘 값으로만 거른다 */
+        this.usThemeTvLoad = null; // 읽기 실패는 다음 요청에서 다시 (그동안은 오늘 값으로만 거른다)
       }
     })();
     await this.usThemeTvLoad;
@@ -1005,7 +1022,7 @@ export class DiscoverService {
       if (kept) this.periodSnaps.set(period, kept);
       if (kept?.inSession && nyParts(new Date(kept.capturedAt)).date === lastUsRegularDay(this.now, ss.lastClose)) return kept;
     }
-    const { value } = await this.cached(`usperiod:${period}:${open ? "open" : "closed"}`, open ? 15 * 60_000 : 10 * 60_000, () => this.computePeriodRates(open, period), FAIL_COOLDOWN_MS);
+    const { value } = await this.cached(`usperiod:${period}:${open ? "open" : "closed"}`, open ? 15 * 60_000 : 10 * 60_000, () => this.computePeriodRates(ss, period), FAIL_COOLDOWN_MS);
     if (value.inSession && this.periodSnaps.get(period)?.capturedAt !== value.capturedAt) {
       this.periodSnaps.set(period, value);
       await this.deps.store?.set(storeKey, JSON.stringify(value)).catch(() => undefined);
@@ -1047,7 +1064,8 @@ export class DiscoverService {
     return saved;
   }
 
-  private async computePeriodRates(open: boolean, period: ThemePeriod): Promise<UsPeriodSnapshot> {
+  private async computePeriodRates(ss: Session, period: ThemePeriod): Promise<UsPeriodSnapshot> {
+    const open = ss.open;
     const usThemes = this.deps.usThemes!;
     const book = await usThemes.get(this.deps.bookWaitMs ?? BOOK_WAIT_MS);
     const tics = this.deps.tics!;
@@ -1073,7 +1091,7 @@ export class DiscoverService {
       /* 시세를 못 받으면 거르지 않는다 */
     }
     const day = quotes ? latestTradeDay(quotes.values()) : "";
-    const keep = quotes ? await this.usTvFilter(new Map(book.themes.map((t) => [t.id, usThemeSummary(t, quotes!, day)?.tradingValue ?? 0])), day, open) : null;
+    const keep = quotes ? (await this.usTvFilter(new Map(book.themes.map((t) => [t.id, usThemeSummary(t, quotes!, day)?.tradingValue ?? 0])), quotes, day, ss)).keep : null;
     const targets = keep ? book.themes.filter((t) => keep(t.id)) : book.themes;
     const missing = targets.filter((t) => !rows.has(t.id));
     const extra = await pool(missing, 6, async (t) => {
