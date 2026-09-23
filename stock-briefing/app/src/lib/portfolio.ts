@@ -110,14 +110,3 @@ export function totals(stocks: RegisteredWithQuote[], showKrw: boolean, afterCos
   const currency: Currency = native ? ((currencies.values().next().value as Currency) ?? "KRW") : "KRW";
   return { value, day, profit, currency, mixed };
 }
-
-/** 위젯 목록 순서: 보유(원화 환산 평가금액 큰 순) → 관심(이름 순) */
-export function widgetOrder(stocks: RegisteredWithQuote[]): RegisteredWithQuote[] {
-  const krw = (s: RegisteredWithQuote) => {
-    const v = s.evaluation?.marketValue ?? 0;
-    return (s.quote?.currency ?? "KRW") === "USD" ? v * (fxOf(s) ?? 1) : v;
-  };
-  const held = stocks.filter((s) => s.evaluation).sort((a, b) => krw(b) - krw(a));
-  const watch = stocks.filter((s) => !s.evaluation).sort((a, b) => a.name.localeCompare(b.name, "ko"));
-  return [...held, ...watch];
-}

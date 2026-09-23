@@ -28,12 +28,13 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
 }
 
 export function render(name: string, data: Awaited<ReturnType<typeof loadWidgetData>>, height: number): React.JSX.Element {
+  const now = Date.now();
   switch (name) {
     case WIDGET_NAMES.briefing:
-      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} />;
+      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={now} />;
     case WIDGET_NAMES.asset:
-      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} />;
+      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={now} />;
     default:
-      return <HoldingsWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} height={height} />;
+      return <HoldingsWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} height={height} now={now} />;
   }
 }
