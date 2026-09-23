@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
-import type { Candle, CandlePeriod, Currency, Quote } from "@/api/types";
+import type { Candle, CandlePeriod, ChartUnit, Currency, Quote } from "@/api/types";
 import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
@@ -27,12 +27,14 @@ export function CandleChart({
   width: widthProp,
   onFullscreen,
   compact: _compact,
+  hasVolume = true,
 }: {
   candles: Candle[] | undefined;
   period: CandlePeriod;
   onPeriodChange: (p: CandlePeriod) => void;
   loading?: boolean;
-  currency?: Currency;
+  /** 값 단위: KRW·USD 통화, PT = 지수·환율 */
+  currency?: ChartUnit;
   avgPrice?: number | null;
   quote?: Pick<Quote, "price" | "prevClose" | "high52w" | "low52w" | "live" | "fxRate" | "priceKrw"> | null;
   height?: number;
@@ -40,6 +42,8 @@ export function CandleChart({
   onFullscreen?: () => void;
   /** 전체 화면: 도구 모음을 한 줄로 줄인다 */
   compact?: boolean;
+  /** 거래량이 없는 시계열(환율)이면 false: 거래량 pane·토글·읽기를 뺀다 */
+  hasVolume?: boolean;
 }) {
   const t = useTheme();
   const { width: winW } = useWindowDimensions();
@@ -52,7 +56,7 @@ export function CandleChart({
   const toKrw = currency === "USD" && showKrw && !!fx;
   const k = toKrw ? fx! : 1;
   const conv = (v: number | null | undefined) => (v === null || v === undefined ? null : v * k);
-  const chartCurrency: Currency = toKrw ? "KRW" : currency;
+  const chartCurrency: ChartUnit = toKrw ? ("KRW" as Currency) : currency;
   // 보이는 구간은 기간별로 따로 기억한다. 기간이 바뀌면 그 기간의 기본 칩(최신 구간)에서 시작
   const defaultView = (per: CandlePeriod): ChartView => ({ count: WINDOWS[per][1] ?? 120, offset: 0 });
   const [vs, setVs] = useState<{ period: CandlePeriod; windowIdx: number; view: ChartView }>(() => ({ period, windowIdx: 1, view: defaultView(period) }));
@@ -147,7 +151,8 @@ export function CandleChart({
           onViewChange={setView}
           maPeriods={prefs.maPeriods}
           showBollinger={prefs.bollinger}
-          showVolume={prefs.volume}
+          showVolume={prefs.volume && hasVolume}
+          hasVolume={hasVolume}
           indicator={prefs.indicator}
           avgPrice={conv(avgPrice)}
           currentPrice={conv(quote?.price)}
@@ -171,9 +176,11 @@ export function CandleChart({
         <Pressable onPress={() => setPrefs({ bollinger: !prefs.bollinger })} accessibilityRole="button" style={chipStyle(prefs.bollinger)}>
           <Text style={chipText(prefs.bollinger)}>볼린저</Text>
         </Pressable>
-        <Pressable onPress={() => setPrefs({ volume: !prefs.volume })} accessibilityRole="button" style={chipStyle(prefs.volume)}>
-          <Text style={chipText(prefs.volume)}>거래량</Text>
-        </Pressable>
+        {hasVolume ? (
+          <Pressable onPress={() => setPrefs({ volume: !prefs.volume })} accessibilityRole="button" style={chipStyle(prefs.volume)}>
+            <Text style={chipText(prefs.volume)}>거래량</Text>
+          </Pressable>
+        ) : null}
         <Pressable onPress={cycleIndicator} accessibilityRole="button" style={chipStyle(prefs.indicator !== "none")}>
           <Text style={chipText(prefs.indicator !== "none")}>{prefs.indicator === "none" ? "RSI/MACD" : prefs.indicator === "rsi" ? "RSI ▸ MACD" : "MACD ▸ 끄기"}</Text>
         </Pressable>

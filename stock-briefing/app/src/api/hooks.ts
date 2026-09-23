@@ -87,6 +87,20 @@ export function useSearch(q: string) {
   });
 }
 
+/** 지수·환율 차트. 분봉은 30초마다, 일·주·월봉은 5분마다 다시 받는다 */
+export function useMarketCandles(code: string, period: CandlePeriod, count: number) {
+  const api = useApi();
+  const intraday = period === "1m" || period === "5m" || period === "30m";
+  return useQuery({
+    queryKey: useKey("marketCandles", code, period, count),
+    queryFn: () => api.marketCandles(code, period, count),
+    enabled: !!code,
+    staleTime: intraday ? 20_000 : 5 * 60_000,
+    refetchInterval: intraday ? 30_000 : 5 * 60_000,
+    refetchIntervalInBackground: false,
+  });
+}
+
 export function useCandles(code: string, period: CandlePeriod, count = 90) {
   const api = useApi();
   return useQuery({ queryKey: useKey("candles", code, period, count), queryFn: () => api.getCandles(code, period, count), staleTime: 5 * 60_000 });
