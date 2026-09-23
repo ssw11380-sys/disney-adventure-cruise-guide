@@ -81,6 +81,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     financials: opts.providers.financials,
     financialsUs: opts.providers.financialsUs,
     investorFlow: opts.providers.investorFlow,
+    fundamentals: opts.providers.fundamentals,
     log,
   });
   const prompts = opts.promptStore ?? new PromptStore();
@@ -189,6 +190,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     stocks: stockService,
     news: opts.providers.news,
     financials: opts.providers.financials,
+    financialsUs: opts.providers.financialsUs,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps });

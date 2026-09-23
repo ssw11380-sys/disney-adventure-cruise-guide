@@ -141,14 +141,15 @@ describe("NaverStockNewsProvider + chain", () => {
     expect(us).toHaveLength(1);
   });
 
-  it("체인: 종목 뉴스가 적으면 이름 검색으로 채우고 중복은 제거", async () => {
+  it("체인: 종목 뉴스가 하나라도 있으면 그것만, 전혀 없을 때만 이름 검색", async () => {
     const p = new NaverStockNewsProvider(fetchFn, { resolveReuters: async () => null });
     const fallback = new FakeNewsProvider();
     const chain = new NewsProviderChain([p, fallback]);
     const items = await chain.forStock({ code: "035420", name: "NAVER" }, 8);
-    expect(items.length).toBe(5); // 네이버 2 + 가짜 3
-    expect(fallback.queries).toEqual(["NAVER"]);
-    const none = await chain.forStock({ code: "ZZZZ", name: "없음" }, 8); // 네이버 실패 → 이름 검색만
+    expect(items.length).toBe(2); // 네이버 종목 뉴스 2개만, 이름 검색 안 함
+    expect(fallback.queries).toEqual([]);
+    const none = await chain.forStock({ code: "ZZZZ", name: "없음" }, 8); // 네이버 실패 → 이름 검색
     expect(none.length).toBe(3);
+    expect(fallback.queries).toEqual(["없음"]);
   });
 });

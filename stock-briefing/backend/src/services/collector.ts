@@ -2,6 +2,7 @@ import { computeTechnicalSummary, type TechnicalSummary } from "../analysis/indi
 import { isKrCode } from "../lib/codes.js";
 import type { Candle, Quote, RegisteredStock } from "../domain/types.js";
 import type { ChainLogger } from "../providers/market/chain.js";
+import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "../providers/market/investorFlow.js";
 import type { QuoteProvider } from "../providers/market/types.js";
 import type { NewsItem, NewsProvider } from "../providers/news/types.js";
@@ -26,6 +27,8 @@ export interface CollectorDeps {
   /** 미국 종목용 (SEC EDGAR). 없으면 "미국 종목 미지원" */
   financialsUs?: FinancialsProvider | null;
   investorFlow: InvestorFlowProvider | null;
+  /** PER/PBR/배당/환율 보강 (StockService 와 같은 로직을 브리핑·분석 데이터에도 적용) */
+  fundamentals?: NaverFundamentals | null;
   log?: ChainLogger;
 }
 
@@ -73,6 +76,20 @@ export class DataCollector {
     return n.forStock ? n.forStock(stock, limit) : n.search(stock.name, limit);
   }
 
+  /** 현재가 + 밸류에이션·환율 보강 */
+  private async quote(code: string, market?: string): Promise<Quote> {
+    const q = await this.deps.quotes.getQuote(code);
+    const f = this.deps.fundamentals;
+    if (!f) return q;
+    const [fund, fx] = await Promise.all([
+      q.per === null || q.pbr === null ? f.get(code, market ?? null).catch(() => null) : Promise.resolve(null),
+      q.currency === "USD" ? f.usdKrw().catch(() => null) : Promise.resolve(null),
+    ]);
+    let out = applyFundamentals(q, fund);
+    if (q.currency === "USD" && fx) out = { ...out, fxRate: fx, priceKrw: out.priceKrw ?? Math.round(out.price * fx) };
+    return out;
+  }
+
   /** 시장에 맞는 재무·공시 소스. 한국은 DART, 미국은 EDGAR */
   private finFor(code: string): { provider: FinancialsProvider | null; missingSuffix: string } {
     if (isKrCode(code)) return { provider: this.deps.financials, missingSuffix: "(DART 키 없음)" };
@@ -84,7 +101,7 @@ export class DataCollector {
     const q = this.deps;
     const fin = this.finFor(stock.code);
     const [quote, series, news, disclosures, investorFlow] = await Promise.all([
-      this.attempt("현재가", missing, () => q.quotes.getQuote(stock.code)),
+      this.attempt("현재가", missing, () => this.quote(stock.code, stock.market)),
       this.attempt("일봉/기술적 지표", missing, () => q.quotes.getCandles(stock.code, "D", 160)),
       this.attempt("뉴스", missing, () => this.news(stock, 8)),
       fin.provider
@@ -133,7 +150,7 @@ export class DataCollector {
     const wantTechnical = kind !== "company";
 
     const [quote, daily, weekly, company, financials, dividends, disclosures, news] = await Promise.all([
-      this.attempt("현재가", missing, () => q.quotes.getQuote(stock.code)),
+      this.attempt("현재가", missing, () => this.quote(stock.code, stock.market)),
       wantTechnical ? this.attempt("일봉", missing, () => q.quotes.getCandles(stock.code, "D", 160)) : Promise.resolve(null),
       kind === "technical" ? this.attempt("주봉", missing, () => q.quotes.getCandles(stock.code, "W", 26)) : Promise.resolve(null),
       kind === "company" ? (fin ? this.attempt("회사 개요", missing, () => fin.getCompany(stock.code)) : noDart<CompanyProfile>("회사 개요")) : Promise.resolve(null),
