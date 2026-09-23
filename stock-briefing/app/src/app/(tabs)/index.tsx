@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef } from "react";
 import { Alert, FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
+import { useLiveStream } from "@/lib/liveStream";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { Screen } from "@/components/Screen";
 import { StockRow } from "@/components/StockRow";
@@ -29,6 +30,7 @@ export default function StocksScreen() {
   const { remove } = useStockMutations();
   const health = useHealth();
   const live = useAnyMarketOpen();
+  const stream = useLiveStream();
 
   const summary = useMemo(() => {
     const list = data ?? [];
@@ -116,7 +118,7 @@ export default function StocksScreen() {
                   </Text>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                     <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: live.open ? "#5CE0A5" : t.heroMuted }} />
-                    <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>{live.label}</Text>
+                    <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>{live.open && stream.connected ? "실시간 스트리밍" : live.label}</Text>
                   </View>
                 </View>
                 {heroMain ? (

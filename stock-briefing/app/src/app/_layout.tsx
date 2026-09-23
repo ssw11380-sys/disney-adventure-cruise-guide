@@ -7,6 +7,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
+import { LiveStreamProvider } from "@/lib/liveStream";
 import { SettingsProvider } from "@/lib/settings";
 import { useTheme } from "@/theme";
 
@@ -49,9 +50,11 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <SettingsProvider>
           <QueryClientProvider client={queryClient}>
-            <StatusBar style={scheme === "dark" ? "light" : "dark"} />
-            <NotificationBridge />
-            <Navigator />
+            <LiveStreamProvider>
+              <StatusBar style={scheme === "dark" ? "light" : "dark"} />
+              <NotificationBridge />
+              <Navigator />
+            </LiveStreamProvider>
           </QueryClientProvider>
         </SettingsProvider>
       </SafeAreaProvider>

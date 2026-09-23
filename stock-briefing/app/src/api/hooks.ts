@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
+import { useLiveStream } from "@/lib/liveStream";
 import { useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
 import type { AnalysisKind, BriefingSession, CandlePeriod } from "./types";
@@ -45,7 +46,10 @@ export function useAnyMarketOpen(): { open: boolean; label: string; loaded: bool
 export function useLiveInterval(): number {
   const health = useHealth();
   const { open } = useAnyMarketOpen();
+  const stream = useLiveStream();
   if (health.isError) return 60_000;
+  // 웹소켓 스트림이 붙어 있으면 체결이 바로 캐시에 반영되므로 폴링은 보정용으로 30초에 한 번만
+  if (stream.connected) return 30_000;
   return open ? 3_000 : 60_000;
 }
 
