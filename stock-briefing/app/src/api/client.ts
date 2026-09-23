@@ -1,4 +1,11 @@
 import type { Evaluation,
+  DiscoverMarket,
+  DiscoverRank,
+  RankCategory,
+  ThemeDetail,
+  ThemeKind,
+  ThemeList,
+  ThemePeriod,
   Analysis,
   AnalysisKind,
   Briefing,
@@ -85,7 +92,9 @@ export function createApi(baseUrl: string, token = "") {
 
     searchStocks: (q: string, limit = 20) => get<{ results: ListedStock[]; source: string }>(`/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`),
     listStocks: () => get<RegisteredWithQuote[]>("/api/stocks?quotes=1"),
-    getStock: (code: string) => get<RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(`/api/stocks/${code}`),
+    /** registered: false 면 등록하지 않은 종목의 미리 보기(발견 탭 등). 구버전 서버는 필드 없음(= 등록 종목) */
+    getStock: (code: string) =>
+      get<RegisteredStock & { registered?: boolean; quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(`/api/stocks/${code}`),
     registerStock: (body: { code: string; quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
       send<RegisteredStock>("POST", "/api/stocks", body),
     updateStock: (code: string, body: { quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
@@ -125,6 +134,10 @@ export function createApi(baseUrl: string, token = "") {
       send<{ applied: string[]; skipped: { code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed"; retryAfter?: string }[] }>("PUT", "/api/admin/toss/krw-cost", { items }),
     marketStatus: () => get<MarketStatus>("/api/market/status", 10_000),
     marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices", 10_000),
+    discoverRank: (market: DiscoverMarket, category: RankCategory, page = 1, size = 50, ver?: number) =>
+      get<DiscoverRank>(`/api/discover/${market}/rank/${category}?page=${page}&size=${size}${ver ? `&v=${ver}` : ""}`, 15_000),
+    discoverThemes: (market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod) => get<ThemeList>(`/api/discover/${market}/themes?kind=${kind}&period=${period}`, 20_000),
+    discoverTheme: (market: DiscoverMarket, kind: ThemeKind, id: string) => get<ThemeDetail>(`/api/discover/${market}/themes/${encodeURIComponent(id)}?kind=${kind}`, 20_000),
     marketCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`/api/market/indices/${encodeURIComponent(code)}/candles?period=${period}&count=${count}`),
   };
 }

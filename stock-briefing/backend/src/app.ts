@@ -9,13 +9,18 @@ import { seoulIso } from "./lib/time.js";
 import { GenerationError } from "./llm/generator.js";
 import { PromptStore } from "./llm/prompts.js";
 import { defaultsFromCron, NotificationSettingsStore, timeToCron } from "./notifications/settings.js";
-import { describeProviders, type Providers } from "./providers/index.js";
+import { describeProviders, metaStore, type Providers } from "./providers/index.js";
 import { adminRoutes, tossStatus, type AdminDeps } from "./routes/admin.js";
 import { HoldingsAutoSync, TossSyncService } from "./services/tossSyncService.js";
 import { analysisRoutes } from "./routes/analysis.js";
 import { briefingRoutes } from "./routes/briefings.js";
 import { deviceRoutes, notificationRoutes } from "./routes/notifications.js";
 import { marketRoutes } from "./routes/market.js";
+import { discoverRoutes } from "./routes/discover.js";
+import { NaverDiscover } from "./providers/market/naverDiscover.js";
+import { DiscoverService } from "./services/discoverService.js";
+import { UsThemeBook } from "./services/usThemes.js";
+import cron from "node-cron";
 import { stockRoutes } from "./routes/stocks.js";
 import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
@@ -249,6 +254,36 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }));
 
   await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar });
+  // 발견 탭: 순위·테마·업종 (네이버 공개 JSON). 미국 테마는 토스 테마 분류 + 네이버 정규장 시세. 미국 원화 환산은 토스 표시 환율
+  const discoverNaver = opts.providers.discover ?? new NaverDiscover();
+  const tics = opts.providers.tics ?? null;
+  const usThemes = tics ? new UsThemeBook({ tics, naver: discoverNaver, store: metaStore(opts.db), now, log }) : null;
+  const discoverService = new DiscoverService({
+    naver: discoverNaver,
+    calendar: opts.providers.calendar,
+    usdKrw: opts.providers.fundamentals ? () => opts.providers.fundamentals!.usdKrw() : null,
+    now,
+    usThemes,
+    tics,
+    store: metaStore(opts.db),
+  });
+  // 미국 테마북은 만드는 데 1분쯤 걸려 서버를 켤 때 미리 만들고, 매일 21:00(한국, 미국 정규장 전)에 새로 만든다
+  // → 새 테마·새로 편입된 종목이 화면을 열지 않아도 하루 안에 반영된다
+  if (usThemes && opts.enableScheduler !== false) {
+    usThemes.warm();
+    const task = cron.schedule("0 21 * * *", () => void usThemes.refresh(), { timezone: opts.config.timezone, name: "us-themes-daily" });
+    // 1주·1개월 테마 등락률은 정규장 끝나기 직전 값을 남겨 둔다 (장 밖에는 토스 값에 주간·프리·애프터 가격이 섞이므로)
+    const periods = cron.schedule(
+      "50 15 * * 1-5",
+      () => void discoverService.captureUsPeriods().catch((e) => app.log.warn({ err: String(e) }, "미국 테마 기간 등락률 저장 실패")),
+      { timezone: "America/New_York", name: "us-theme-periods" },
+    );
+    app.addHook("onClose", async () => {
+      void task.stop();
+      void periods.stop();
+    });
+  }
+  await app.register(discoverRoutes, { prefix: "/api/discover", service: discoverService });
 
   /** GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token= */
   app.get("/api/stream", { websocket: true }, (socket) => {

@@ -303,3 +303,106 @@ export interface SendSummary {
   failed: number;
   disabled: string[];
 }
+
+// ── 발견 탭 ────────────────────────────────────────────────────────
+export type DiscoverMarket = "KR" | "US";
+export type RankCategory = "tradingValue" | "volume" | "gainers" | "losers";
+/** 테마·업종 등락률 기간 */
+export type ThemePeriod = "day" | "week" | "month";
+/** 테마(재료별 묶음) / 업종(산업 분류) */
+export type ThemeKind = "theme" | "sector";
+
+/** 순위·테마 목록의 종목 한 줄 */
+export interface DiscoverStock {
+  code: string;
+  name: string;
+  market: Market | string;
+  currency: Currency;
+  price: number;
+  change: number;
+  changeRate: number;
+  volume: number | null;
+  /** 거래대금 (종목 통화) */
+  tradingValue: number | null;
+  marketCap?: number | null;
+  /** 상장 첫날 (가격제한폭이 없어 등락률이 크게 나온다) */
+  newlyListed?: boolean;
+}
+
+/**
+ * 발견 탭 값의 장 상태 (서버가 준다, 옛 서버는 없음)
+ *  - regular: 정규장 · extended: 한국 정규장 뒤 시간외(15:30~20:00, 값이 계속 바뀜)
+ *  - pre: 한국 정규장 전(08:00~09:00, 직전 거래일 값) · closed: 장 마감·휴장 (미국은 프리·애프터 포함)
+ */
+export type DiscoverSession = "regular" | "extended" | "pre" | "closed";
+
+export interface DiscoverRank {
+  market: DiscoverMarket;
+  category: RankCategory;
+  items: DiscoverStock[];
+  page: number;
+  hasMore: boolean;
+  /** 값이 바뀌는 시간이면 true (30초 자동 갱신) */
+  marketOpen: boolean;
+  session?: DiscoverSession;
+  /** 목록 판 — 다음 쪽 요청에 돌려주면 같은 목록에서 이어 받는다 (옛 서버는 없음) */
+  ver?: number;
+  asOf: string | null;
+  /** 미국 종목 원화 환산용 */
+  fxRate?: number | null;
+  source: string;
+  note?: string | null;
+}
+
+export interface ThemeSummary {
+  id: string;
+  name: string;
+  changeRate: number;
+  up: number;
+  flat: number;
+  down: number;
+  /** 대표 종목 2~3개 (출처가 등락률을 주지 않으면 changeRate 는 null) */
+  leaders: { code: string; name: string; changeRate: number | null }[];
+  /** 상장 첫날 종목(가격제한폭 없음)을 빼고 다시 계산한 값이면 true */
+  adjusted?: boolean;
+  /** changeRate 가 시가총액 가중 평균일 때 함께 오는 단순 평균 (미국 테마) */
+  simpleAvg?: number;
+}
+
+export interface ThemeList {
+  market: DiscoverMarket;
+  kind: ThemeKind;
+  period: ThemePeriod;
+  themes: ThemeSummary[];
+  marketOpen: boolean;
+  session?: DiscoverSession;
+  /** 장 밖인데 정규장 값이 없어 지금 값(주간·프리·애프터 섞임)을 준 경우 */
+  live?: boolean;
+  asOf: string | null;
+  source: string;
+  /** 테마 등락률 산출 방식 (출처 값 / 구성 종목 평균 등) */
+  basis: string;
+  /** 범위·대체 안내 (예: 기간 등락률을 받은 테마만) */
+  note?: string | null;
+  /** 테마 구성(소속 종목)을 마지막으로 새로 만든 시각 — 미국 테마만 (매일 자동 갱신) */
+  updatedAt?: string | null;
+}
+
+export interface ThemeDetail {
+  market: DiscoverMarket;
+  kind: ThemeKind;
+  theme: ThemeSummary;
+  /** 테마 설명 (출처가 줄 때) */
+  description?: string | null;
+  items: DiscoverStock[];
+  marketOpen: boolean;
+  session?: DiscoverSession;
+  asOf: string | null;
+  fxRate?: number | null;
+  source: string;
+  basis: string;
+  /** 범위 안내 (예: 시가총액 상위 30종목 기준) */
+  note?: string | null;
+  updatedAt?: string | null;
+}
+

@@ -16,6 +16,8 @@ export interface MarketState {
   isOpen: boolean; // 지금 거래 시간인지 (한국은 KRX+NXT 통합 08:00~20:00, 미국은 프리~애프터)
   opensAt: string | null; // ISO, 다음(또는 오늘) 개장
   closesAt: string | null; // ISO, 현재/다음 세션 종료
+  /** 장이 닫혀 있을 때 마지막 세션이 끝난 시각(ISO, 휴장일을 건너뛴 실제 값). 장중이거나 모르면 null */
+  lastClose?: string | null;
   source: "toss" | "fallback";
 }
 
@@ -57,12 +59,14 @@ export function stateFromSession(market: MarketKey, now: Date, tradingEnd: strin
     isOpen,
     opensAt: isOpen ? null : new Date(next).toISOString(),
     closesAt: isOpen ? new Date(end).toISOString() : null,
+    lastClose: !isOpen && end <= t ? new Date(end).toISOString() : null,
     source: "toss",
   };
 }
 
 export class MarketCalendar {
-  private cache: { at: number; status: MarketStatus } | null = null;
+  /** until = TTL 끝 또는 가장 가까운 세션 경계(개장·마감) 중 이른 때 — 경계를 지나면 바로 다시 묻는다 */
+  private cache: { until: number; status: MarketStatus } | null = null;
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
@@ -70,14 +74,26 @@ export class MarketCalendar {
     private readonly ttlMs = 5 * 60_000,
   ) {}
 
+  private inflight: Promise<MarketStatus> | null = null;
+
   async status(): Promise<MarketStatus> {
     const now = this.now();
-    if (this.cache && now.getTime() - this.cache.at < this.ttlMs) return { ...this.cache.status, now: now.toISOString() };
+    if (this.cache && now.getTime() < this.cache.until) return { ...this.cache.status, now: now.toISOString() };
+    // 캐시가 끝난 직후 동시에 들어온 요청은 한 번만 묻는다
+    this.inflight ??= this.load().finally(() => {
+      this.inflight = null;
+    });
+    return this.inflight;
+  }
+
+  private async load(): Promise<MarketStatus> {
+    const now = this.now();
     let KR = fallbackState("KR", now);
     let US = fallbackState("US", now);
     try {
       const res = await this.fetchFn(`https://wts-info-api.tossinvest.com/api/v3/stock-prices?productCodes=${PRODUCTS.KR},${PRODUCTS.US}`, {
         headers: { "user-agent": UA, accept: "application/json", referer: "https://tossinvest.com/" },
+        signal: AbortSignal.timeout(5_000), // 멈춘 연결이 장 상태를 묻는 모든 요청을 붙잡지 않게
       });
       if (res.ok) {
         const rows = ((await res.json()) as { result?: Array<Record<string, unknown>> }).result ?? [];
@@ -90,7 +106,8 @@ export class MarketCalendar {
       /* fallback 유지 */
     }
     const status: MarketStatus = { now: now.toISOString(), KR, US };
-    this.cache = { at: now.getTime(), status };
+    const bounds = [KR, US].map((m) => Date.parse((m.isOpen ? m.closesAt : m.opensAt) ?? "")).filter((b) => !Number.isNaN(b) && b > now.getTime());
+    this.cache = { until: Math.min(now.getTime() + this.ttlMs, ...bounds), status };
     return status;
   }
 

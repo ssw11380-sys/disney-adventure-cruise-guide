@@ -1,10 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
 import { useLiveStream } from "@/lib/liveStream";
 import { useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
-import type { AnalysisKind, BriefingSession, CandlePeriod } from "./types";
+import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken } = useSettings();
@@ -84,6 +84,60 @@ export function useSearch(q: string) {
     queryFn: () => api.searchStocks(query),
     enabled: query.length > 0,
     staleTime: 5 * 60_000,
+  });
+}
+
+/** 발견 탭: 그 나라 장이 열려 있으면 30초, 아니면 5분마다 */
+function useDiscoverInterval(market: DiscoverMarket): number {
+  const m = useMarketStatus();
+  const open = market === "KR" ? m.data?.KR.isOpen : m.data?.US.isOpen;
+  return (open ?? true) ? 30_000 : 5 * 60_000;
+}
+
+/** 서버가 알려 준 장 상태(미국은 정규장만 장중)로 갱신 주기를 고른다. 아직 응답이 없으면 달력 기준 */
+const discoverEvery = (open: boolean | undefined, fallback: number) => (open === undefined ? fallback : open ? 30_000 : 5 * 60_000);
+
+/** 순위 목록 (거래대금·거래량·급상승·급하락). 50개씩, 끝까지 내리면 다음 쪽 */
+export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, size = 50) {
+  const api = useApi();
+  const interval = useDiscoverInterval(market);
+  return useInfiniteQuery({
+    queryKey: useKey("discoverRank", market, category, size),
+    queryFn: ({ pageParam }) => api.discoverRank(market, category, pageParam.page, size, pageParam.ver),
+    initialPageParam: { page: 1 } as { page: number; ver?: number },
+    // 서버 상한(20쪽)과 빈 쪽에서 멈춘다 (빈 "더 보기"가 끝없이 이어지지 않게).
+    // 다음 쪽은 앞 쪽과 같은 목록 판(ver)에서 받는다 — 그 사이 서버 목록이 바뀌어도 줄이 빠지거나 겹치지 않게
+    getNextPageParam: (last) => (last.hasMore && last.items.length > 0 && last.page < 20 ? { page: last.page + 1, ver: last.ver } : undefined),
+    staleTime: Math.min(interval, 30_000),
+    refetchInterval: (q) => discoverEvery(q.state.data?.pages[0]?.marketOpen, interval),
+    refetchIntervalInBackground: false,
+  });
+}
+
+/** 테마·업종 목록. 주·월 등락률은 자주 바뀌지 않아 이전 값을 두고(placeholder) 바꿔 보여 준다 */
+export function useDiscoverThemes(market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod) {
+  const api = useApi();
+  const interval = useDiscoverInterval(market);
+  return useQuery({
+    queryKey: useKey("discoverThemes", market, kind, period),
+    queryFn: () => api.discoverThemes(market, kind, period),
+    placeholderData: keepPreviousData,
+    staleTime: Math.min(interval, 30_000),
+    refetchInterval: (q) => discoverEvery(q.state.data?.marketOpen, interval),
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useDiscoverTheme(market: DiscoverMarket, kind: ThemeKind, id: string) {
+  const api = useApi();
+  const interval = useDiscoverInterval(market);
+  return useQuery({
+    queryKey: useKey("discoverTheme", market, kind, id),
+    queryFn: () => api.discoverTheme(market, kind, id),
+    enabled: !!id,
+    staleTime: Math.min(interval, 30_000),
+    refetchInterval: (q) => discoverEvery(q.state.data?.marketOpen, interval),
+    refetchIntervalInBackground: false,
   });
 }
 

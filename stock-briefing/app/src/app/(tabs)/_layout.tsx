@@ -38,6 +38,14 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="discover"
+        options={{
+          title: "발견",
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "compass" : "compass-outline"} size={22} color={color} />,
+          headerRight: () => <View style={{ flexDirection: "row", marginRight: 8 }}>{icon("search", () => router.push("/stocks/add"), "종목 검색")}</View>,
+        }}
+      />
+      <Tabs.Screen
         name="briefings"
         options={{ title: "브리핑", tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "document-text" : "document-text-outline"} size={21} color={color} /> }}
       />

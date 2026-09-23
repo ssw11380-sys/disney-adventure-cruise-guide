@@ -207,6 +207,19 @@ export class StockService {
     throw new NotFoundError(`종목 코드 ${code} 를 찾을 수 없습니다. 종목 마스터를 갱신하거나 코드를 확인하세요.`);
   }
 
+  /**
+   * 등록하지 않은 종목을 상세 화면에서 미리 보기 위한 가상 항목 (발견 탭 등에서 누른 종목).
+   * 종목 마스터(없으면 외부 검색)에서 이름·시장을 찾는다. 모르는 코드면 null.
+   */
+  async preview(code: string): Promise<RegisteredStock | null> {
+    try {
+      const listed = await this.resolveListed(normalizeCode(code));
+      return { code: listed.code, name: listed.name, market: listed.market, quantity: null, avgPrice: null, memo: null, createdAt: "", updatedAt: "" };
+    } catch {
+      return null;
+    }
+  }
+
   // ── 등록/보유 ────────────────────────────────────────────────────
 
   async register(input: RegisterInput): Promise<RegisteredStock> {

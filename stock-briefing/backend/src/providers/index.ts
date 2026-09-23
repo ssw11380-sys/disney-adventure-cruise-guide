@@ -3,12 +3,14 @@ import type { Db } from "../db/index.js";
 import { describeLlmBackend, resolveLlmBackend } from "../llm/backend.js";
 import { ClaudeGenerator, DisabledGenerator, type TextGenerator } from "../llm/generator.js";
 import { DartProvider } from "./dart/dart.js";
+import type { NaverDiscover } from "./market/naverDiscover.js";
 import { EdgarProvider } from "./dart/edgar.js";
 import type { FinancialsProvider } from "./dart/types.js";
 import { MarketCalendar } from "./market/calendar.js";
 import { QuoteProviderChain, StockSearchChain, type ChainLogger } from "./market/chain.js";
 import { TossProvider, type CodeStore } from "./market/toss.js";
 import { TossOpenApiClient, TossOpenApiProvider } from "./market/tossOpenApi.js";
+import { TossTics } from "./market/tossTics.js";
 import { TossRealtime, type QuickPriceSource } from "./market/tossRealtime.js";
 import type { InvestorFlowProvider } from "./market/investorFlow.js";
 import { KisProvider } from "./market/kis.js";
@@ -34,6 +36,10 @@ export interface Providers {
   quickPrices: QuickPriceSource | null;
   /** PER/PBR/배당/52주·환율 보강 (네이버) */
   fundamentals: NaverFundamentals | null;
+  /** 발견 탭(순위·테마·업종). 없으면 기본 네이버 공개 JSON */
+  discover?: NaverDiscover | null;
+  /** 발견 탭 미국 테마(토스 테마 분류). 없으면 미국은 산업 분류만 */
+  tics?: TossTics | null;
   search: StockSearchProvider; // 외부 검색 (토스 → Yahoo)
   searchRemoteFirst?: boolean; // true 면 로컬 마스터보다 외부 검색을 먼저 쓴다
   master: MasterProvider;
@@ -49,6 +55,16 @@ export interface Providers {
   push: PushSender;
 }
 
+/** meta 표를 키-값 저장소로 (토스 상품 코드, 미국 테마북 등) */
+export function metaStore(db: Db): CodeStore {
+  return {
+    get: async (key) => (await db.selectFrom("meta").select("value").where("key", "=", key).executeTakeFirst())?.value ?? null,
+    set: async (key, value) => {
+      await db.insertInto("meta").values({ key, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
+    },
+  };
+}
+
 /** 설정에 따라 실제 데이터 소스를 조립한다. 키가 없는 소스는 폴백 또는 null. */
 export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Providers {
   const resolveMarket = async (code: string): Promise<string | null> => {
@@ -59,12 +75,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   };
   const yahoo = new YahooProvider(fetch, resolveMarket);
   // 토스 상품 코드(티커 → US2010...) 매핑은 meta 테이블에 남긴다
-  const codeStore: CodeStore = {
-    get: async (key) => (await db.selectFrom("meta").select("value").where("key", "=", key).executeTakeFirst())?.value ?? null,
-    set: async (key, value) => {
-      await db.insertInto("meta").values({ key, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
-    },
-  };
+  const codeStore = metaStore(db);
   const toss = new TossProvider(fetch, codeStore);
 
   // 토스증권 공식 Open API: 키가 있으면 시세·차트·마스터·수급·실시간의 1순위
@@ -107,6 +118,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     live,
     quickPrices: toss,
     fundamentals,
+    tics: new TossTics(),
     search: new StockSearchChain([toss, yahoo], log),
     searchRemoteFirst: true, // 토스 검색은 한글로 미국 종목도 찾고 순위도 좋아 마스터보다 먼저 쓴다
     master: tossOpenApi ?? new KisMasterProvider(), // 토스 마스터는 한국+미국 종목(한글명)까지

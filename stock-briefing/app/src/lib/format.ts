@@ -61,7 +61,9 @@ export function formatNumber(n: number | null | undefined, digits = 0): string {
 
 export function formatPct(n: number | null | undefined, opts: { sign?: boolean } = { sign: true }): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
-  const s = `${Math.abs(n).toFixed(2)}%`;
+  // 1,000% 넘는 급등(상장 첫날·동전주)도 읽기 쉽게 자리 구분
+  const a = Math.abs(n);
+  const s = `${a >= 1000 ? a.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : a.toFixed(2)}%`;
   if (!opts.sign) return s;
   return n > 0 ? `+${s}` : n < 0 ? `-${s}` : s;
 }
@@ -79,6 +81,7 @@ export function formatKrwCompact(n: number | null | undefined, currency: Currenc
   }
   if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(abs >= 1e13 ? 0 : 1)}조원`;
   if (abs >= 1e8) return `${sign}${Math.round(abs / 1e8).toLocaleString("ko-KR")}억원`;
+  if (abs >= 1e4) return `${sign}${Math.round(abs / 1e4).toLocaleString("ko-KR")}만원`;
   return `${sign}${Math.round(abs).toLocaleString("ko-KR")}원`;
 }
 

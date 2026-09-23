@@ -32,3 +32,17 @@ export class ProviderError extends Error {
     this.name = "ProviderError";
   }
 }
+
+/** AbortSignal.timeout 이 끊은 요청인지 — 시간 초과는 다시 불러도 또 그만큼 걸리므로 재시도하지 않는다 */
+export function isTimeoutError(e: unknown): boolean {
+  return typeof e === "object" && e !== null && ((e as { name?: unknown }).name === "TimeoutError" || (e as { name?: unknown }).name === "AbortError");
+}
+
+/** p 를 ms 만 기다리고, 넘으면 fallback (p 는 뒤에서 끝나도 무시) */
+export function within<T, F>(p: Promise<T>, ms: number, fallback: F): Promise<T | F> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<F>((res) => {
+    timer = setTimeout(() => res(fallback), ms);
+  });
+  return Promise.race([p.catch(() => fallback), late]).finally(() => clearTimeout(timer));
+}
