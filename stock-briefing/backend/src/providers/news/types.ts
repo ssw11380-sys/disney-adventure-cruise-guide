@@ -10,6 +10,8 @@ export interface NewsProvider {
   readonly name: string;
   /** 종목명 기준 최신 뉴스. limit 개 이하, 최신순. */
   search(query: string, limit: number): Promise<NewsItem[]>;
+  /** 종목 코드로 직접 조회할 수 있는 소스(네이버 종목 뉴스). 있으면 체인이 이름 검색보다 먼저 쓴다 */
+  forStock?(stock: { code: string; name: string; market?: string }, limit: number): Promise<NewsItem[]>;
 }
 
 /** HTML 태그 제거 + 흔한 엔티티 복원 */

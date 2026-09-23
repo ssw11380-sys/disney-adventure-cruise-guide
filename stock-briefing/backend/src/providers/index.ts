@@ -3,7 +3,9 @@ import type { Db } from "../db/index.js";
 import { describeLlmBackend, resolveLlmBackend } from "../llm/backend.js";
 import { ClaudeGenerator, DisabledGenerator, type TextGenerator } from "../llm/generator.js";
 import { DartProvider } from "./dart/dart.js";
+import { EdgarProvider } from "./dart/edgar.js";
 import type { FinancialsProvider } from "./dart/types.js";
+import { MarketCalendar } from "./market/calendar.js";
 import { QuoteProviderChain, StockSearchChain, type ChainLogger } from "./market/chain.js";
 import { TossProvider, type CodeStore } from "./market/toss.js";
 import { TossOpenApiClient, TossOpenApiProvider } from "./market/tossOpenApi.js";
@@ -19,6 +21,7 @@ import { ExpoPushSender, type PushSender } from "../notifications/push.js";
 import { NewsProviderChain } from "./news/chain.js";
 import { GoogleNewsRssProvider } from "./news/googleRss.js";
 import { NaverNewsProvider } from "./news/naver.js";
+import { NaverStockNewsProvider } from "./news/naverStock.js";
 import type { NewsProvider } from "./news/types.js";
 
 export interface Providers {
@@ -36,6 +39,10 @@ export interface Providers {
   master: MasterProvider;
   news: NewsProvider;
   financials: FinancialsProvider | null; // DART 키 없으면 null → "데이터 미확인"
+  /** 미국 종목 재무·공시 (SEC EDGAR, 키 불필요) */
+  financialsUs: FinancialsProvider | null;
+  /** 휴장일·장중 판단 */
+  calendar: MarketCalendar;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   generator: TextGenerator;
   dart: DartProvider | null;
@@ -80,7 +87,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   quoteChain.push(new NaverFinanceProvider()); // 한국 폴백: KRX 정규장 종가 + NXT 야간 가격
   quoteChain.push(yahoo);
 
-  const newsChain: NewsProvider[] = [];
+  const fundamentals = new NaverFundamentals();
+  const newsChain: NewsProvider[] = [new NaverStockNewsProvider(fetch, fundamentals)];
   if (cfg.NAVER_CLIENT_ID && cfg.NAVER_CLIENT_SECRET) {
     newsChain.push(new NaverNewsProvider(cfg.NAVER_CLIENT_ID, cfg.NAVER_CLIENT_SECRET));
   }
@@ -96,12 +104,14 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     tossOpenApi,
     live,
     quickPrices: toss,
-    fundamentals: new NaverFundamentals(),
+    fundamentals,
     search: new StockSearchChain([toss, yahoo], log),
     searchRemoteFirst: true, // 토스 검색은 한글로 미국 종목도 찾고 순위도 좋아 마스터보다 먼저 쓴다
     master: tossOpenApi ?? new KisMasterProvider(), // 토스 마스터는 한국+미국 종목(한글명)까지
     news: new NewsProviderChain(newsChain, log),
     financials: dart,
+    financialsUs: new EdgarProvider(),
+    calendar: new MarketCalendar(),
     investorFlow: kis ?? tossOpenApi,
     generator,
     dart,
@@ -113,8 +123,8 @@ export function describeProviders(cfg: AppConfig): Record<string, string> {
   return {
     quotes: [cfg.kisEnabled ? "kis" : null, cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : null, "toss(웹)", "naver", "yahoo"].filter(Boolean).join(" → ") + (cfg.tossOpenApiEnabled ? "" : " (토스 Open API 키 없음)"),
     search: cfg.tossOpenApiEnabled ? "토스 마스터(한국+미국) + toss → yahoo" : "toss → yahoo (+ KIS 종목 마스터)",
-    news: cfg.NAVER_CLIENT_ID ? "naver → google-rss" : "google-rss (네이버 키 없음)",
-    financials: cfg.DART_API_KEY ? "dart" : "없음 (DART 키 없음)",
+    news: cfg.NAVER_CLIENT_ID ? "naver 종목뉴스 → naver 검색 → google-rss" : "naver 종목뉴스 → google-rss",
+    financials: (cfg.DART_API_KEY ? "dart(한국)" : "없음(DART 키 없음)") + " · edgar(미국)",
     investorFlow: cfg.kisEnabled ? "kis" : cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : "없음 (KIS/토스 Open API 키 없음)",
     realtime: cfg.tossOpenApiEnabled ? "toss-openapi 웹소켓 + toss 웹 3초 갱신" : "toss 웹 3초 갱신 (Open API 키 있으면 웹소켓)",
     llm: describeLlmBackend(resolveLlmBackend(cfg)),

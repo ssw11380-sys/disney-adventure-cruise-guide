@@ -6,6 +6,7 @@ import { AppState, useColorScheme, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
+import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { SettingsProvider } from "@/lib/settings";
 import { useTheme } from "@/theme";
 
@@ -40,6 +41,7 @@ export default function RootLayout() {
   // 앱이 뒤로 가면 react-query 의 주기적 갱신(실시간 시세 3초)을 멈추고, 다시 열면 재개한다
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state: AppStateStatus) => focusManager.setFocused(state === "active"));
+    void ensureBackgroundTaskRegistered();
     return () => sub.remove();
   }, []);
   return (

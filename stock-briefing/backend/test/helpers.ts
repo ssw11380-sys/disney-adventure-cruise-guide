@@ -5,6 +5,7 @@ import type { InvestorFlowDay, InvestorFlowProvider } from "../src/providers/mar
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../src/providers/market/types.js";
 import type { NewsItem, NewsProvider } from "../src/providers/news/types.js";
 import type { Providers } from "../src/providers/index.js";
+import { MarketCalendar } from "../src/providers/market/calendar.js";
 import type { PushMessage, PushSender, PushSendResult } from "../src/notifications/push.js";
 
 export const SAMPLE_MASTER: ListedStock[] = [
@@ -133,6 +134,8 @@ export function fakeProviders(over: Partial<Providers> = {}): Providers {
     master: new FakeMasterProvider(),
     news: new FakeNewsProvider(),
     financials: null,
+    financialsUs: null,
+    calendar: new MarketCalendar(async () => new Response("{}", { status: 500 })),
     investorFlow: null,
     generator: new FakeGenerator(),
     dart: null,

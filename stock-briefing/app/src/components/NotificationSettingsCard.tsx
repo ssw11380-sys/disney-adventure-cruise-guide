@@ -1,7 +1,9 @@
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
+import * as Notifications from "expo-notifications";
 import React, { useEffect, useState } from "react";
 import { Alert, Platform, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { useApi, useNotificationMutations, useNotificationSettings } from "@/api/hooks";
+import { disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
 import { font, radius, space, useTheme } from "@/theme";
 import { Button, Card, Loading, Muted, Row, SectionTitle } from "./ui";
@@ -9,6 +11,8 @@ import { Button, Card, Loading, Muted, Row, SectionTitle } from "./ui";
 /**
  * 설정 > 알림 카드.
  * - "이 기기에서 알림 받기": 권한 요청 → Expo 푸시 토큰 → 서버 등록 (끄면 서버에서 삭제)
+ *   FCM(Firebase) 이 아직 연결되지 않아 토큰 발급이 실패하면, 앱이 15~30분마다 서버를 확인해
+ *   새 브리핑을 로컬 알림으로 띄우는 "백그라운드 확인" 방식으로 자동 전환한다.
  * - 오전/오후 시간(한국 시간)과 켜기/끄기, 평일만
  * - 테스트 알림
  */
@@ -18,15 +22,18 @@ export function NotificationSettingsCard() {
   const settings = useNotificationSettings();
   const { updateSettings, sendTest } = useNotificationMutations();
   const [token, setToken] = useState<string | null>(null);
+  const [localMode, setLocalMode] = useState(false);
   const [tokenLoaded, setTokenLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    void getStoredToken().then((v) => {
+    void Promise.all([getStoredToken(), isLocalModeEnabled()]).then(([v, l]) => {
       if (alive) {
         setToken(v);
+        setLocalMode(l);
         setTokenLoaded(true);
       }
     });
@@ -35,16 +42,31 @@ export function NotificationSettingsCard() {
     };
   }, []);
 
+  const enabled = !!token || localMode;
+
   const toggleDevice = async (on: boolean) => {
     setBusy(true);
     setSetupError(null);
     try {
       if (on) {
-        const tk = await registerForPush(api);
-        setToken(tk);
+        try {
+          const tk = await registerForPush(api);
+          setToken(tk);
+          await disableLocalBriefingAlerts();
+          setLocalMode(false);
+        } catch (e) {
+          // FCM 미설정(토큰 발급 실패)이면 백그라운드 확인 방식으로 대체
+          if (e instanceof PushSetupError && e.code === "TOKEN") {
+            await enableLocalBriefingAlerts();
+            setLocalMode(true);
+            setSetupError(null);
+          } else throw e;
+        }
       } else {
         await unregisterPush(api);
+        await disableLocalBriefingAlerts();
         setToken(null);
+        setLocalMode(false);
       }
     } catch (e) {
       setSetupError(e instanceof PushSetupError || e instanceof Error ? e.message : String(e));
@@ -87,11 +109,35 @@ export function NotificationSettingsCard() {
       <View style={styles.switchRow}>
         <View style={{ flex: 1 }}>
           <Text style={{ color: t.ink, fontSize: font.body }}>이 기기에서 알림 받기</Text>
-          <Muted>{!tokenLoaded ? "확인 중…" : token ? `등록됨 · ${token.slice(0, 24)}…` : "브리핑이 생성되면 요약 3줄이 푸시로 옵니다"}</Muted>
+          <Muted>
+            {!tokenLoaded
+              ? "확인 중…"
+              : token
+                ? "즉시 푸시 (Firebase 연결됨)"
+                : localMode
+                  ? "백그라운드 확인 방식 · 브리핑 생성 후 15~30분 안에 알림"
+                  : "브리핑이 생성되면 요약 3줄이 알림으로 옵니다"}
+          </Muted>
         </View>
-        <Switch value={!!token} onValueChange={(v) => void toggleDevice(v)} disabled={busy || !tokenLoaded} trackColor={{ true: t.accent }} />
+        <Switch value={enabled} onValueChange={(v) => void toggleDevice(v)} disabled={busy || !tokenLoaded} trackColor={{ true: t.accent }} />
       </View>
       {setupError ? <Text style={{ color: t.danger, fontSize: font.small }}>{setupError}</Text> : null}
+      {localMode ? (
+        <View style={{ gap: space.xs }}>
+          <Muted>지금은 앱이 주기적으로 서버를 확인해 알리는 방식입니다. 배터리 절약 모드에서는 더 늦어질 수 있습니다. 정각에 바로 받으려면 Firebase 를 한 번 연결해야 합니다.</Muted>
+          <Pressable onPress={() => setShowGuide((v) => !v)} accessibilityRole="button">
+            <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showGuide ? "연결 방법 접기" : "즉시 푸시(Firebase) 연결 방법 보기"}</Text>
+          </Pressable>
+          {showGuide ? (
+            <View style={{ gap: 4 }}>
+              <Muted>1. console.firebase.google.com → 프로젝트 만들기 → Android 앱 추가, 패키지명 com.stockbriefing.app → google-services.json 다운로드</Muted>
+              <Muted>2. expo.dev → 프로젝트 stock-briefing → Environment variables → 이름 GOOGLE_SERVICES_JSON, 타입 File 로 업로드 (환경: preview)</Muted>
+              <Muted>3. Firebase 프로젝트 설정 → 서비스 계정 → 새 비공개 키 생성 → expo.dev → Credentials → Android → FCM V1 service account key 에 업로드</Muted>
+              <Muted>4. 앱을 다시 빌드해 설치한 뒤 이 스위치를 껐다 켜면 “즉시 푸시”로 바뀝니다. 위 두 파일을 저에게 알려주시면 빌드는 제가 합니다.</Muted>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
 
       {settings.isLoading ? (
         <Loading />
@@ -117,16 +163,27 @@ export function NotificationSettingsCard() {
       ) : null}
 
       <Button
-        title="테스트 알림 보내기"
+        title={localMode && !token ? "지금 확인해서 알림 테스트" : "테스트 알림 보내기"}
         variant="secondary"
         icon="notifications-outline"
-        loading={sendTest.isPending}
-        onPress={() =>
+        loading={sendTest.isPending || busy}
+        onPress={() => {
+          if (localMode && !token) {
+            setBusy(true);
+            void Notifications.scheduleNotificationAsync({
+              content: { title: "주식 브리핑 테스트 알림", body: "알림이 정상적으로 도착했습니다.\n브리핑이 생성되면 이렇게 도착합니다.", sound: "default" },
+              trigger: null,
+            })
+              .then(() => runBriefingCheck())
+              .catch((e) => Alert.alert("테스트 실패", e instanceof Error ? e.message : String(e)))
+              .finally(() => setBusy(false));
+            return;
+          }
           sendTest.mutate(undefined, {
             onSuccess: (r) => Alert.alert("전송 완료", `${r.sent}대 전송, ${r.failed}대 실패${r.disabled.length ? `, ${r.disabled.length}대 비활성화` : ""}`),
             onError: (e) => Alert.alert("전송 실패", e instanceof Error ? e.message : String(e)),
-          })
-        }
+          });
+        }}
       />
     </Card>
   );

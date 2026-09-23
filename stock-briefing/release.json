@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
-  "apkUrl": "https://expo.dev/artifacts/eas/9giNSLqzAaW-Lqv0gae5OOmWdATNfqv7HbstH6XwGd8.apk",
-  "notes": "새 디자인·아이콘, 홈 화면 위젯 3종, PER·PBR·배당 표시, 내 종목 정렬, 미국 주식 원화 환산, 52주 위치, 종목 길게 눌러 수정·삭제",
+  "version": "1.3.0",
+  "apkUrl": null,
+  "notes": "Firebase 없이 브리핑 알림(백그라운드 확인), 휴장일 자동 건너뜀, 미국 종목 재무·공시(SEC), 종목 뉴스 정확도 개선, 매수·매도 기록으로 평단 자동 계산, 브리핑 탭 한 줄 보기와 서버 상태 배너",
   "publishedAt": "2026-09-23"
 }

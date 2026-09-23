@@ -18,7 +18,7 @@ export interface SchedulerStatus {
 /**
  * node-cron 기반 스케줄러. 한국 시간 기준으로 오전/오후 브리핑을 돌린다.
  * 설정 화면에서 시간을 바꾸면 reschedule() 로 즉시 반영된다.
- * 휴장일(공휴일)에는 시세가 전일과 같게 나오지만 브리핑은 그대로 생성된다 (v1 범위 밖).
+ * 휴장일(공휴일)에는 BriefingService 가 시장 달력을 보고 해당 종목을 건너뛴다.
  */
 export class BriefingScheduler {
   private tasks: Array<{ session: BriefingSession; expr: string; task: ScheduledTask }> = [];
@@ -53,9 +53,10 @@ export class BriefingScheduler {
         async () => {
           this.log?.info({ session }, "정기 브리핑 시작");
           try {
-            const r = await this.service.runSession(session);
+            const r = await this.service.runSession(session, { trigger: "schedule" });
             const failed = r.results.filter((x) => x.status === "failed").length;
-            this.log?.info({ session, total: r.results.length, failed }, "정기 브리핑 완료");
+            const skipped = r.results.filter((x) => x.status === "skipped").length;
+            this.log?.info({ session, total: r.results.length, failed, skipped }, "정기 브리핑 완료");
           } catch (e) {
             this.log?.error({ session, err: (e as Error).message }, "정기 브리핑 실패");
           }

@@ -9,12 +9,13 @@ import { MarkdownView } from "./MarkdownView";
 import { Badge, Card, Muted } from "./ui";
 
 /**
- * 브리핑 카드. mode=summary 면 3줄 요약, detail 이면 마크다운 전체.
+ * 브리핑 카드. mode=line 이면 첫 줄만, summary 면 3줄 요약, detail 이면 마크다운 전체.
  * 제목을 누르면 브리핑 상세 화면으로.
  */
-export function BriefingCard({ briefing, mode, showName = true }: { briefing: Briefing; mode: "summary" | "detail"; showName?: boolean }) {
+export function BriefingCard({ briefing, mode, showName = true }: { briefing: Briefing; mode: "line" | "summary" | "detail"; showName?: boolean }) {
   const t = useTheme();
   const failed = briefing.status === "failed";
+  const lines = briefing.summary.split("\n").filter(Boolean);
   return (
     <Card>
       <Pressable onPress={() => router.push(`/briefings/${briefing.id}`)} accessibilityRole="link" style={styles.header}>
@@ -35,9 +36,13 @@ export function BriefingCard({ briefing, mode, showName = true }: { briefing: Br
       </Pressable>
       {failed ? (
         <Text style={{ color: t.danger, fontSize: font.small }}>{briefing.error ?? briefing.summary}</Text>
+      ) : mode === "line" ? (
+        <Text style={{ color: t.ink, fontSize: font.body, lineHeight: 22 }} numberOfLines={1}>
+          {lines[0] ?? ""}
+        </Text>
       ) : mode === "summary" ? (
         <View style={{ gap: 4 }}>
-          {briefing.summary.split("\n").map((line, i) => (
+          {lines.map((line, i) => (
             <Text key={i} style={{ color: t.ink, fontSize: font.body, lineHeight: 22 }}>
               {line}
             </Text>

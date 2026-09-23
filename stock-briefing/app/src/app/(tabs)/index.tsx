@@ -2,12 +2,12 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef } from "react";
 import { Alert, FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useHealth, useStockMutations, useStocks } from "@/api/hooks";
+import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { Screen } from "@/components/Screen";
 import { StockRow } from "@/components/StockRow";
 import { Button, Card, ChangeText, Chip, ErrorView, Loading, Muted } from "@/components/ui";
-import { formatPct, formatPrice, isTradingHoursKst } from "@/lib/format";
+import { formatPct, formatPrice } from "@/lib/format";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { refreshWidgets } from "@/widgets/refresh";
 import { font, radius, space, useTheme } from "@/theme";
@@ -28,6 +28,7 @@ export default function StocksScreen() {
   const { sort, setSort, showKrw } = useSettings();
   const { remove } = useStockMutations();
   const health = useHealth();
+  const live = useAnyMarketOpen();
 
   const summary = useMemo(() => {
     const list = data ?? [];
@@ -95,7 +96,6 @@ export default function StocksScreen() {
   if (isLoading) return <Screen><Loading label="종목 불러오는 중" /></Screen>;
   if (isError) return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
-  const live = isTradingHoursKst();
   const heroMain = showKrw && summary.krw ? { value: summary.krw.value, cost: summary.krw.cost, day: summary.krw.day, currency: "KRW" as Currency } : null;
 
   return (
@@ -115,8 +115,8 @@ export default function StocksScreen() {
                     보유 {summary.held}종목{summary.watch ? ` · 관심 ${summary.watch}` : ""}
                   </Text>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: live ? "#5CE0A5" : t.heroMuted }} />
-                    <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>{live ? "실시간" : "장 마감"}</Text>
+                    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: live.open ? "#5CE0A5" : t.heroMuted }} />
+                    <Text style={{ color: t.heroMuted, fontSize: font.tiny }}>{live.label}</Text>
                   </View>
                 </View>
                 {heroMain ? (

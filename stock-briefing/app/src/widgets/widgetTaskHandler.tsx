@@ -1,5 +1,5 @@
 import React from "react";
-import type { WidgetTaskHandlerProps } from "react-native-android-widget";
+import { FlexWidget, TextWidget, type WidgetTaskHandlerProps } from "react-native-android-widget";
 import { loadWidgetData } from "./data";
 import { AssetWidget, BriefingWidget, HoldingsWidget, WIDGET_NAMES } from "./widgets";
 
@@ -12,8 +12,19 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
   if (widgetAction === "WIDGET_DELETED") return;
   if (widgetAction === "WIDGET_CLICK" && props.clickAction !== "REFRESH") return;
   const name = widgetInfo.widgetName;
-  const data = await loadWidgetData({ stocks: name !== WIDGET_NAMES.briefing, briefings: name === WIDGET_NAMES.briefing });
-  renderWidget(render(name, data, widgetInfo.height));
+  try {
+    const data = await loadWidgetData({ stocks: name !== WIDGET_NAMES.briefing, briefings: name === WIDGET_NAMES.briefing });
+    renderWidget(render(name, data, widgetInfo.height));
+  } catch (e) {
+    // 렌더 중 예외가 나면 위젯이 빈 채로 남으므로 오류를 글로 보여준다
+    renderWidget(
+      <FlexWidget style={{ height: "match_parent", width: "match_parent", backgroundColor: "#0F1E45", borderRadius: 20, padding: 14, justifyContent: "center" }} clickAction="OPEN_APP">
+        <TextWidget text="위젯을 그리지 못했습니다" style={{ color: "#FFFFFF", fontSize: 12, fontWeight: "700" }} />
+        <TextWidget text={String(e instanceof Error ? e.message : e).slice(0, 120)} style={{ color: "#B8C4E6", fontSize: 10 }} maxLines={3} />
+        <TextWidget text="눌러서 앱 열기" style={{ color: "#E1C25B", fontSize: 10, marginTop: 4 }} />
+      </FlexWidget>,
+    );
+  }
 }
 
 export function render(name: string, data: Awaited<ReturnType<typeof loadWidgetData>>, height: number): React.JSX.Element {
