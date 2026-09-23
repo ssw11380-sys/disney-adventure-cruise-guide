@@ -1,6 +1,7 @@
 import { seoulIso } from "../lib/time.js";
 import type { MarketCalendar } from "../providers/market/calendar.js";
-import type { DiscoverMarket, DiscoverStock, NaverDiscover, RankCategory, ThemeKind, ThemePeriod, ThemeSummary } from "../providers/market/naverDiscover.js";
+import type { DiscoverMarket, DiscoverStock, NaverDiscover, RankCategory, SectorDetail, ThemeKind, ThemePeriod, ThemeSummary } from "../providers/market/naverDiscover.js";
+import type { CodeStore } from "../providers/market/toss.js";
 import type { TicsRankRow, TossTics } from "../providers/market/tossTics.js";
 import { latestTradeDay, pool, usThemeSummary, UsThemesBuildingError, type UsThemeBook, type UsThemeBookData } from "./usThemes.js";
 
@@ -72,8 +73,17 @@ const RANK_KEY: Record<RankCategory, (s: DiscoverStock) => number | null> = {
   gainers: (s) => s.changeRate,
   losers: (s) => s.changeRate,
 };
-/** 미국 테마북을 처음 만드는 동안(약 1분) 요청이 기다리는 최대 시간 */
-const BOOK_WAIT_MS = 20_000;
+/** 미국 테마북을 처음 만드는 동안(약 1분) 요청이 기다리는 최대 시간 — 앱 제한 시간(20초)보다 훨씬 짧게 */
+const BOOK_WAIT_MS = 3_000;
+/** 앱이 받을 수 있는 순위 쪽 상한 (라우트 page ≤ 20) */
+const MAX_PAGE = 20;
+/** 직전 값이 있으면 새 조회를 이만큼만 기다리고 직전 값을 준다 (새 값은 뒤에서 채운다) */
+const STALE_WAIT_MS = 2_500;
+/** 실패한 조회는 이 시간 동안 다시 하지 않는다 (상류 장애 때 요청마다 다시 부르지 않게). 비싼 조회(미국 테마 기간 등락률)는 10분 */
+const FAIL_RETRY_MS = 20_000;
+const FAIL_COOLDOWN_MS = 10 * 60_000;
+/** 구성 종목을 이만큼 받았으면 잘렸을 수 있어 신규상장 조정을 하지 않는다 */
+const SECTOR_MAX_ITEMS = 300;
 
 type Cached<T> = { at: number; value: T };
 
@@ -82,6 +92,9 @@ export class DiscoverService {
   /** 순위는 쪽을 이어 받으므로 (시장, 분류)별로 누적 상태를 둔다 */
   private readonly ranks = new Map<string, RankState>();
   private readonly inflight = new Map<string, Promise<unknown>>();
+  private readonly failures = new Map<string, { at: number; error: unknown }>();
+  /** 미국 테마 기간 등락률의 정규장 중 스냅숏 */
+  private readonly periodSnaps = new Map<ThemePeriod, UsPeriodSnapshot>();
 
   constructor(
     private readonly deps: {
@@ -94,8 +107,12 @@ export class DiscoverService {
       /** 미국 테마 (토스 테마 분류 + 네이버 정규장 시세). 없으면 미국은 산업 분류만 */
       usThemes?: UsThemeBook | null;
       tics?: TossTics | null;
-      /** 미국 테마북을 처음 만드는 동안 기다리는 최대 시간 (기본 20초) */
+      /** 미국 테마북을 처음 만드는 동안 기다리는 최대 시간 (기본 3초) */
       bookWaitMs?: number;
+      /** 미국 테마 기간 등락률의 "정규장 중" 스냅숏을 남길 곳 (meta 표) */
+      store?: CodeStore | null;
+      /** 직전 값이 있을 때 새 조회를 기다리는 시간 (기본 2.5초, 테스트용) */
+      staleWaitMs?: number;
     },
   ) {}
 
@@ -104,17 +121,27 @@ export class DiscoverService {
   }
 
   /**
-   * 장중인지. 한국은 달력 그대로(KRX+NXT 08:00~20:00 — 통합 가격이 계속 바뀐다).
-   * 미국은 정규장(뉴욕 09:30~16:00)만 장중으로 본다: 달력은 프리~애프터를 모두 열림으로 보지만 발견 탭 값은 정규장 기준이라
-   * 장 시작 전·마감 뒤에는 "장 마감"으로 보여야 한다.
+   * 장중인지 — 발견 탭 값의 기준 세션만 본다.
+   *  - 한국: 네이버 순위·테마 값은 KRX 기준이라 KRX 정규장(09:00~15:30)만 장중. 달력은 NXT(08:00~20:00)까지 열림으로 본다
+   *  - 미국: 정규장(뉴욕 09:30~16:00)만 장중. 달력은 프리~애프터를 모두 열림으로 본다
    */
   private async isOpen(market: DiscoverMarket): Promise<boolean> {
     if (!this.deps.calendar) return false;
     try {
       const s = await this.deps.calendar.status();
-      return market === "KR" ? s.KR.isOpen : s.US.isOpen && isUsRegularHours(this.now);
+      return market === "KR" ? s.KR.isTradingDay && isKrxRegularHours(this.now) : s.US.isOpen && isUsRegularHours(this.now);
     } catch {
       return false;
+    }
+  }
+
+  /** 장이 닫혀 있을 때 한국 값의 기준 시각 = 직전 KRX 정규장 마감(15:30). 휴장이 이어지면 주말만 거른 근사 */
+  private async krClosedAsOf(): Promise<string | null> {
+    try {
+      const s = this.deps.calendar ? await this.deps.calendar.status() : null;
+      return lastKrxClose(this.now, s?.KR.isTradingDay ?? true);
+    } catch {
+      return null;
     }
   }
 
@@ -127,20 +154,42 @@ export class DiscoverService {
     return this.deps.usdKrw().catch(() => null);
   }
 
-  /** 캐시 → 없거나 오래되면 조회(같은 키는 한 번만) → 실패하면 직전 값 */
-  private async cached<T>(key: string, ttl: number, load: () => Promise<T>): Promise<{ value: T; at: number }> {
+  /**
+   * 캐시 → 없거나 오래되면 조회(같은 키는 한 번만) → 실패하면 직전 값.
+   * 직전 값이 있으면 새 조회를 STALE_WAIT_MS 만 기다리고 직전 값을 준다(느린 출처가 화면을 붙잡지 않게, 새 값은 뒤에서 채운다).
+   * 직전 값이 없는 실패는 잠시(기본 20초, 비싼 조회는 10분) 기억해 같은 오류를 바로 준다(상류 장애 때 요청마다 다시 부르지 않게).
+   */
+  private async cached<T>(key: string, ttl: number, load: () => Promise<T>, failCooldownMs = FAIL_RETRY_MS): Promise<{ value: T; at: number }> {
     const hit = this.cache.get(key) as Cached<T> | undefined;
     const t = this.now.getTime();
     if (hit && t - hit.at < ttl) return { value: hit.value, at: hit.at };
+    const failed = this.failures.get(key);
+    if (!hit && failed && t - failed.at < failCooldownMs) throw failed.error;
     let p = this.inflight.get(key) as Promise<T> | undefined;
     if (!p) {
-      p = load().finally(() => this.inflight.delete(key));
+      const started = t;
+      p = load()
+        .then((value) => {
+          this.cache.set(key, { at: started, value });
+          this.failures.delete(key);
+          return value;
+        })
+        .catch((e: unknown) => {
+          this.failures.set(key, { at: started, error: e });
+          throw e;
+        })
+        .finally(() => this.inflight.delete(key));
+      p.catch(() => undefined); // 뒤에서 끝난 실패가 처리되지 않은 거부로 남지 않게
       this.inflight.set(key, p);
     }
     try {
+      if (hit) {
+        const r = await Promise.race([p.then((v) => ({ v })), new Promise<null>((res) => setTimeout(() => res(null), this.deps.staleWaitMs ?? STALE_WAIT_MS))]);
+        if (!r) return { value: hit.value, at: hit.at };
+        return { value: r.v, at: (this.cache.get(key) as Cached<T>).at };
+      }
       const value = await p;
-      this.cache.set(key, { at: t, value });
-      return { value, at: t };
+      return { value, at: (this.cache.get(key) as Cached<T> | undefined)?.at ?? t };
     } catch (e) {
       if (hit) return { value: hit.value, at: hit.at };
       throw e;
@@ -174,19 +223,20 @@ export class DiscoverService {
     }
     const s = st!;
     const items = s.items.slice((page - 1) * size, page * size);
+    // 기준 시각: 출처가 체결 시각을 주면 그 시각(미국), 한국 장 마감 뒤엔 직전 KRX 마감, 아니면 받은 시각
+    const asOf = s.tradedAt ? seoulIso(new Date(s.tradedAt)) : market === "KR" && !open ? ((await this.krClosedAsOf()) ?? seoulIso(new Date(s.at))) : seoulIso(new Date(s.at));
     return {
       market,
       category,
       items,
       page,
-      hasMore: s.items.length > page * size || s.hasNext,
+      hasMore: page < MAX_PAGE && items.length > 0 && (s.items.length > page * size || s.hasNext),
       marketOpen: open,
-      // 출처가 체결 시각을 주면 그 시각(미국 장 마감 뒤엔 정규장 종료 시각), 아니면 받은 시각
-      asOf: seoulIso(new Date(s.tradedAt ?? s.at)),
+      asOf,
       fxRate: await this.fx(market),
       source: s.source,
       note: [
-        market === "KR" ? (category === "gainers" || category === "losers" ? "ETF·ETN·스팩·정리매매 제외" : "ETF·ETN·스팩 제외") : "ETF·우선주·권리주 제외",
+        market === "KR" ? (category === "gainers" || category === "losers" ? "KRX 기준 · ETF·ETN·스팩·정리매매 제외" : "KRX 기준 · ETF·ETN·스팩 제외") : "ETF·우선주·권리주 제외",
         category === "gainers" || category === "losers" ? `거래대금 ${market === "KR" ? "10억 원" : "100만 달러"} 이상` : null,
       ]
         .filter(Boolean)
@@ -230,14 +280,18 @@ export class DiscoverService {
       hasNext = pages.at(-1)?.hasNext ?? false;
       if (pages.some((p) => !p.hasNext)) hasNext = false;
     }
-    // 출처 순위는 가격보다 늦게 갱신돼 순서가 조금씩 어긋난다 → 받은 값으로 다시 정렬 (같으면 원래 순서)
+    // 원본 쪽 상한에 닿으면 끝 (빈 "더 보기"가 이어지지 않게)
+    if (next >= MAX_SOURCE_PAGES) hasNext = false;
+    // 출처 순위는 가격보다 늦게 갱신돼 순서가 조금씩 어긋난다 → 이번에 새로 받은 것만 받은 값으로 다시 정렬해 뒤에 붙인다.
+    // 이미 앱에 내려보낸 앞부분의 순서는 건드리지 않는다 (쪽 경계에서 종목이 빠지거나 두 번 나오지 않게)
     const key = RANK_KEY[category];
     const dir = category === "losers" ? 1 : -1;
-    const sorted = items
+    const added = items
+      .slice(start.items.length)
       .map((it, i) => ({ it, i }))
       .sort((a, b) => dir * ((key(a.it) ?? -Infinity) - (key(b.it) ?? -Infinity)) || a.i - b.i)
       .map((x) => x.it);
-    return { at: start.at, items: sorted, next, hasNext, source: src.name, tradedAt };
+    return { at: start.at, items: [...start.items, ...added], next, hasNext, source: src.name, tradedAt };
   }
 
   /** 오늘 상장한 한국 종목 (실패하면 빈 집합 — 조정 없이 네이버 값 그대로) */
@@ -251,7 +305,8 @@ export class DiscoverService {
 
   /**
    * 상장 첫날 종목은 가격제한폭이 없어(+300%) 몇 종목짜리 테마 평균을 크게 왜곡한다(예: 업종 +168%).
-   * 그 종목이 대표 종목에 든 테마만 구성 종목을 받아, 그 종목과 거래정지(거래량 0)를 빼고 단순 평균·상승/보합/하락을 다시 센다.
+   * 그 종목이 대표 종목(네이버 topItems = 등락률 상위 3)에 든 테마만 구성 종목을 받아, 그 종목과 거래정지(거래량 0)를 빼고 다시 센다.
+   * 테마는 단순 평균, 업종은 시가총액 가중 — 네이버와 같은 방식으로.
    */
   private async adjustForNewListings(kind: ThemeKind, themes: ThemeSummary[], fresh: Set<string>): Promise<ThemeSummary[]> {
     if (!fresh.size) return themes;
@@ -260,7 +315,7 @@ export class DiscoverService {
         if (!th.leaders.some((l) => fresh.has(l.code))) return th;
         try {
           const d = await this.deps.naver.sectorDetail("KR", kind, th.id);
-          return d ? recount(th, d.items, fresh) : th;
+          return d && d.items.length < SECTOR_MAX_ITEMS ? recount(th, d.items, fresh, kind === "sector") : th;
         } catch {
           return th;
         }
@@ -295,9 +350,9 @@ export class DiscoverService {
       period,
       themes: value,
       marketOpen: open,
-      asOf: seoulIso(new Date(at)),
+      asOf: market === "KR" && !open ? ((await this.krClosedAsOf()) ?? seoulIso(new Date(at))) : seoulIso(new Date(at)),
       source: "네이버 증권",
-      basis: market === "US" ? "산업 분류(TRBC)별 구성 종목 단순 평균" : "구성 종목 등락률 단순 평균(거래정지 제외)",
+      basis: naverBasis(market, kind),
       note: null,
     };
   }
@@ -335,73 +390,134 @@ export class DiscoverService {
         updatedAt: seoulIso(new Date(book.builtAt)),
       };
     }
-    // 1주·1개월: 토스 테마 기간 등락률 (미국 종목만, 시가총액 가중). 순위(상위 약 100개)에 없는 테마는 하나씩 묻는다
-    const { value, at } = await this.cached(`themes:US:theme:${period}`, open ? 15 * 60_000 : 60 * 60_000, async () => {
-      const book = await usThemes.get(this.deps.bookWaitMs ?? BOOK_WAIT_MS);
-      const tics = this.deps.tics!;
-      const dur = period === "week" ? "1w" : "1m";
-      const rows = new Map<string, TicsRankRow>();
-      for (const sortBy of ["FLUCTUATION_RATE", "TRADING_AMOUNT"] as const) {
-        try {
-          for (const r of await tics.ranking("US", dur, sortBy)) if (!rows.has(r.id)) rows.set(r.id, r);
-        } catch {
-          /* 하나씩 묻기로 채운다 */
-        }
-      }
-      // 오늘 목록과 같은 테마만 (거래가 거의 없는 테마 제외)
-      let liquid: Set<string> | null = null;
-      try {
-        const { value: quotes } = await this.usThemeQuotes(book, open);
-        const day = latestTradeDay(quotes.values());
-        liquid = new Set(book.themes.filter((t) => (usThemeSummary(t, quotes, day)?.tradingValue ?? 0) >= MIN_TRADING_VALUE.US).map((t) => t.id));
-      } catch {
-        /* 시세를 못 받으면 거르지 않는다 */
-      }
-      const targets = liquid ? book.themes.filter((t) => liquid!.has(t.id)) : book.themes;
-      const missing = targets.filter((t) => !rows.has(t.id));
-      const extra = await pool(missing, 6, async (t) => {
-        try {
-          return [t.id, await tics.periodRate(t.id, "US", dur)] as const;
-        } catch {
-          return [t.id, null] as const;
-        }
-      });
-      const rate = new Map<string, number>([...rows].map(([id, r]) => [id, r.rate]));
-      for (const [id, r] of extra) if (r !== null) rate.set(id, r);
-      const symbolOf = new Map(book.themes.flatMap((t) => t.members.map((m) => [m.productCode, m.symbol] as const)));
-      const themes: ThemeSummary[] = [];
-      for (const t of targets) {
-        const r = rate.get(t.id);
-        if (r === undefined) continue;
-        const lead = rows.get(t.id)?.leader;
-        const code = lead ? symbolOf.get(lead.productCode) : undefined;
-        themes.push({ id: t.id, name: t.name, changeRate: Math.round(r * 100) / 100, up: 0, flat: 0, down: 0, leaders: code && lead ? [{ code, name: lead.name, changeRate: null }] : [] });
-      }
-      if (!themes.length) throw new Error("토스 테마 기간 등락률을 받지 못했습니다");
-      return { themes, total: targets.length, builtAt: book.builtAt };
-    });
+    const snap = await this.usPeriodRates(open, period);
+    const word = period === "week" ? "1주" : "1개월";
+    const when = snap.inSession ? (open ? null : `직전 정규장 중 ${hm(snap.capturedAt)} 값`) : "토스 현재가 기준이라 주간·프리·애프터 가격이 섞일 수 있음";
     return {
       market: "US",
       kind: "theme",
       period,
-      themes: value.themes,
+      themes: snap.themes,
       marketOpen: open,
-      asOf: seoulIso(new Date(at)),
+      asOf: seoulIso(new Date(snap.capturedAt)),
       source: "토스증권",
-      basis: `토스증권 테마 ${period === "week" ? "1주" : "1개월"} 등락률 (미국 종목, 시가총액 가중)`,
-      note: value.themes.length < value.total ? `기간 등락률을 받은 테마만 (${value.themes.length}/${value.total}개)` : null,
-      updatedAt: seoulIso(new Date(value.builtAt)),
+      basis: `토스증권 테마 ${word} 등락률 (미국 종목, 시가총액 가중)`,
+      note: [
+        when,
+        `${word}은 테마 등락률만 제공 (상승·하락 종목 수 없음)`,
+        snap.themes.length < snap.total ? `기간 등락률을 받은 테마만 (${snap.themes.length}/${snap.total}개)` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      updatedAt: seoulIso(new Date(snap.builtAt)),
     };
+  }
+
+  /**
+   * 미국 테마 1주·1개월 등락률. 토스 값은 그때의 현재가 기준이라 장 밖(한국 낮)에는 주간거래·프리·애프터 가격이 섞인다.
+   * 그래서 미국 정규장 중에 받은 값을 남겨 두고(meta), 장 밖에는 그 값을 쓴다. 남긴 값이 없을 때만 지금 값을 받아 그렇다고 밝힌다.
+   */
+  private async usPeriodRates(open: boolean, period: ThemePeriod): Promise<UsPeriodSnapshot> {
+    const storeKey = `discover:us-tics-period:${period}`;
+    if (!open) {
+      const kept = this.periodSnaps.get(period) ?? (await this.loadPeriodSnap(storeKey));
+      if (kept && this.now.getTime() - kept.capturedAt < 4 * 24 * 3_600_000) {
+        this.periodSnaps.set(period, kept);
+        return kept;
+      }
+    }
+    const { value } = await this.cached(`usperiod:${period}:${open ? "open" : "closed"}`, open ? 15 * 60_000 : 60 * 60_000, () => this.computePeriodRates(open, period), FAIL_COOLDOWN_MS);
+    if (value.inSession && this.periodSnaps.get(period)?.capturedAt !== value.capturedAt) {
+      this.periodSnaps.set(period, value);
+      await this.deps.store?.set(storeKey, JSON.stringify(value)).catch(() => undefined);
+    }
+    return value;
+  }
+
+  private async loadPeriodSnap(key: string): Promise<UsPeriodSnapshot | null> {
+    try {
+      const raw = await this.deps.store?.get(key);
+      const v = raw ? (JSON.parse(raw) as UsPeriodSnapshot) : null;
+      return v && Array.isArray(v.themes) && typeof v.capturedAt === "number" ? v : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async computePeriodRates(open: boolean, period: ThemePeriod): Promise<UsPeriodSnapshot> {
+    const usThemes = this.deps.usThemes!;
+    const book = await usThemes.get(this.deps.bookWaitMs ?? BOOK_WAIT_MS);
+    const tics = this.deps.tics!;
+    const dur = period === "week" ? "1w" : "1m";
+    const capturedAt = this.now.getTime();
+    const rows = new Map<string, TicsRankRow>();
+    let rankOk = 0;
+    for (const sortBy of ["FLUCTUATION_RATE", "TRADING_AMOUNT"] as const) {
+      try {
+        for (const r of await tics.ranking("US", dur, sortBy)) if (!rows.has(r.id)) rows.set(r.id, r);
+        rankOk++;
+      } catch {
+        /* 하나씩 묻기로 채운다 */
+      }
+    }
+    // 순위가 둘 다 실패하면 토스가 막힌 것 — 테마마다 수백 번 묻지 않고 바로 실패
+    if (!rankOk) throw new Error("토스 테마 기간 순위를 받지 못했습니다");
+    // 오늘 목록과 같은 테마만 (거래가 거의 없는 테마 제외), 대표 종목은 시가총액 상위 3
+    let quotes: Awaited<ReturnType<NaverDiscover["usQuotes"]>> | null = null;
+    try {
+      quotes = (await this.usThemeQuotes(book, open)).value;
+    } catch {
+      /* 시세를 못 받으면 거르지 않는다 */
+    }
+    const day = quotes ? latestTradeDay(quotes.values()) : "";
+    const targets = quotes ? book.themes.filter((t) => (usThemeSummary(t, quotes!, day)?.tradingValue ?? 0) >= MIN_TRADING_VALUE.US) : book.themes;
+    const missing = targets.filter((t) => !rows.has(t.id));
+    const extra = await pool(missing, 6, async (t) => {
+      try {
+        return [t.id, await tics.periodRate(t.id, "US", dur)] as const;
+      } catch {
+        return [t.id, null] as const;
+      }
+    });
+    const rate = new Map<string, number>([...rows].map(([id, r]) => [id, r.rate]));
+    for (const [id, r] of extra) if (r !== null) rate.set(id, r);
+    const themes: ThemeSummary[] = [];
+    for (const t of targets) {
+      const r = rate.get(t.id);
+      if (r === undefined) continue;
+      const leaders = quotes
+        ? t.members
+            .map((m) => quotes!.get(m.reuters))
+            .filter((q): q is NonNullable<typeof q> => !!q)
+            .sort((a, b) => (b.marketCap ?? 0) - (a.marketCap ?? 0))
+            .slice(0, 3)
+            .map((q) => ({ code: q.code, name: q.name, changeRate: null }))
+        : [];
+      themes.push({ id: t.id, name: t.name, changeRate: Math.round(r * 100) / 100 || 0, up: 0, flat: 0, down: 0, leaders });
+    }
+    if (!themes.length) throw new Error("토스 테마 기간 등락률을 받지 못했습니다");
+    return { themes, total: targets.length, builtAt: book.builtAt, capturedAt, inSession: open };
   }
 
   async theme(market: DiscoverMarket, kind: ThemeKind, id: string): Promise<ThemeDetail | null> {
     const open = await this.isOpen(market);
     if (market === "US" && kind === "theme" && this.deps.usThemes) return this.usTheme(open, id);
     const k: ThemeKind = market === "US" ? "sector" : kind;
-    const { value, at } = await this.cached(`theme:${market}:${k}:${id}`, this.ttl(open), () => this.deps.naver.sectorDetail(market, k, id));
+    let got: { value: SectorDetail | null; at: number };
+    try {
+      got = await this.cached(`theme:${market}:${k}:${id}`, this.ttl(open), () => this.deps.naver.sectorDetail(market, k, id));
+    } catch (e) {
+      // 네이버 미국 업종은 없는 코드에 404 대신 500 을 준다 → 받아 둔 업종 목록에 없으면 "없음"
+      if (market === "US" && this.knownSectorIds("US")?.has(id) === false) return null;
+      throw e;
+    }
+    const { value, at } = got;
     if (!value) return null;
+    // 목록과 같은 조건으로만 조정한다: 상장 첫날 종목이 등락률 상위 3(네이버 대표 종목)에 들 때
     const fresh = market === "KR" ? await this.newlyListed(open) : new Set<string>();
-    const theme = value.items.some((i) => fresh.has(i.code)) ? recount(value.theme, value.items, fresh) : value.theme;
+    const top3 = [...value.items].sort((a, b) => b.changeRate - a.changeRate).slice(0, 3);
+    const adjust = top3.some((i) => fresh.has(i.code)) && value.items.length < SECTOR_MAX_ITEMS;
+    const theme = adjust ? recount(value.theme, value.items, fresh, k === "sector") : value.theme;
     return {
       market,
       kind: k,
@@ -409,12 +525,21 @@ export class DiscoverService {
       description: value.description,
       items: value.items,
       marketOpen: open,
-      asOf: seoulIso(new Date(at)),
+      asOf: market === "KR" && !open ? ((await this.krClosedAsOf()) ?? seoulIso(new Date(at))) : seoulIso(new Date(at)),
       fxRate: await this.fx(market),
       source: "네이버 증권",
-      basis: market === "US" ? "산업 분류(TRBC)별 구성 종목 단순 평균" : "구성 종목 등락률 단순 평균(거래정지 제외)",
+      basis: naverBasis(market, k),
       note: null,
     };
+  }
+
+  /** 받아 둔 업종 목록의 코드 (없으면 null) */
+  private knownSectorIds(market: DiscoverMarket): Set<string> | null {
+    for (const period of ["day", "week", "month"] as const) {
+      const hit = this.cache.get(`themes:${market}:sector:${period}`) as Cached<ThemeSummary[]> | undefined;
+      if (hit) return new Set(hit.value.map((t) => t.id));
+    }
+    return null;
   }
 
   private async usTheme(open: boolean, id: string): Promise<ThemeDetail | null> {
@@ -447,6 +572,44 @@ export class DiscoverService {
   }
 }
 
+type UsPeriodSnapshot = { themes: ThemeSummary[]; total: number; builtAt: number; capturedAt: number; inSession: boolean };
+
+/** 네이버 테마·업종 등락률 산출 방식 (실측: 한국 테마 = 단순 평균, 업종 = 시가총액 가중) */
+function naverBasis(market: DiscoverMarket, kind: ThemeKind): string {
+  if (market === "US") return "산업 분류(TRBC)별 구성 종목 시가총액 가중 평균";
+  return kind === "theme" ? "구성 종목 등락률 단순 평균(거래정지 제외, KRX 기준)" : "구성 종목 시가총액 가중 평균(KRX 기준)";
+}
+
+/** "HH:MM" (서울) — 날짜가 오늘이 아니면 "M/D HH:MM" */
+function hm(t: number): string {
+  const iso = seoulIso(new Date(t));
+  const today = seoulIso(new Date()).slice(0, 10);
+  const time = iso.slice(11, 16);
+  return iso.slice(0, 10) === today ? time : `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))} ${time}`;
+}
+
+/** 서울 평일 09:00~15:30 (KRX 정규장, 휴장일은 달력이 거른다) */
+export function isKrxRegularHours(d: Date): boolean {
+  const iso = seoulIso(d);
+  const wd = new Date(`${iso.slice(0, 10)}T12:00:00+09:00`).getUTCDay();
+  if (wd === 0 || wd === 6) return false;
+  const m = Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
+  return m >= 9 * 60 && m < 15 * 60 + 30;
+}
+
+/** 직전 KRX 정규장 마감 시각 (서울 15:30). 오늘이 거래일이고 15:30 이 지났으면 오늘, 아니면 직전 평일 */
+export function lastKrxClose(now: Date, todayIsTradingDay: boolean): string {
+  const iso = seoulIso(now);
+  const m = Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
+  let day = new Date(`${iso.slice(0, 10)}T12:00:00+09:00`);
+  const wd = day.getUTCDay();
+  if (!(todayIsTradingDay && wd !== 0 && wd !== 6 && m >= 15 * 60 + 30)) {
+    do day = new Date(day.getTime() - 86_400_000);
+    while (day.getUTCDay() === 0 || day.getUTCDay() === 6);
+  }
+  return `${seoulIso(day).slice(0, 10)}T15:30:00+09:00`;
+}
+
 /** 뉴욕 현지 평일 09:30~16:00 (휴장일은 달력이 거른다) */
 export function isUsRegularHours(d: Date): boolean {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d);
@@ -456,11 +619,25 @@ export function isUsRegularHours(d: Date): boolean {
   return m >= 9 * 60 + 30 && m < 16 * 60;
 }
 
-/** 구성 종목에서 상장 첫날 종목과 거래정지(거래량 0)를 빼고 테마 등락률(단순 평균)·상승/보합/하락 수를 다시 센다 */
-export function recount(th: ThemeSummary, items: DiscoverStock[], fresh: Set<string>): ThemeSummary {
+/**
+ * 구성 종목에서 상장 첫날 종목과 거래정지(거래량 0)를 빼고 등락률·상승/보합/하락 수를 다시 센다.
+ * weighted 면 전일 시가총액 가중 평균(업종), 아니면 단순 평균(테마) — 네이버와 같은 방식.
+ */
+export function recount(th: ThemeSummary, items: DiscoverStock[], fresh: Set<string>, weighted = false): ThemeSummary {
   const live = items.filter((i) => !fresh.has(i.code) && (i.volume ?? 1) > 0);
   if (!live.length) return th;
-  const avg = live.reduce((s, i) => s + i.changeRate, 0) / live.length;
+  let avg = live.reduce((s, i) => s + i.changeRate, 0) / live.length;
+  if (weighted) {
+    let w = 0;
+    let wr = 0;
+    for (const i of live) {
+      if (!i.marketCap || i.marketCap <= 0) continue;
+      const prev = i.marketCap / (1 + i.changeRate / 100);
+      w += prev;
+      wr += prev * i.changeRate;
+    }
+    if (w > 0) avg = wr / w;
+  }
   const leaders = [...live]
     .sort((a, b) => b.changeRate - a.changeRate)
     .slice(0, 3)

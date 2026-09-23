@@ -57,6 +57,7 @@ const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/6
 const BASE = "https://m.stock.naver.com/front-api";
 const US_BASE = "https://api.stock.naver.com";
 const POLL_BASE = "https://polling.finance.naver.com";
+const FETCH_TIMEOUT_MS = 10_000;
 /** 폴링 한 번에 묻는 코드 수 (주소 길이 한도: 800개면 400) */
 const POLL_BATCH = 500;
 const SORT: Record<RankCategory, string> = { tradingValue: "priceTop", volume: "quantTop", gainers: "up", losers: "down" };
@@ -71,12 +72,18 @@ export function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** 앱에서 쓰는 티커: symbolCode(AAPL) 우선, 없으면 로이터 코드의 거래소 접미사를 뗀다 (AAPL.O → AAPL) */
+/**
+ * 앱에서 쓰는 티커: symbolCode(AAPL, "BRK B") 우선, 없으면 로이터 코드에서 만든다
+ * (AAPL.O → AAPL, 클래스주 BRKb → BRK.B, 우선주 AHT_pd 처럼 앱 티커로 못 쓰는 것은 null).
+ */
 export function usTicker(it: Json): string | null {
-  const sym = typeof it["symbolCode"] === "string" && it["symbolCode"] ? it["symbolCode"] : null;
+  const sym = typeof it["symbolCode"] === "string" && it["symbolCode"].trim() ? it["symbolCode"] : null;
+  if (sym) return appTicker(sym);
   const reuters = typeof it["reutersCode"] === "string" ? it["reutersCode"] : typeof it["code"] === "string" ? it["code"] : null;
-  const raw = sym ?? (reuters ? reuters.replace(/\.[A-Z]$/, "") : null);
-  return raw ? raw.toUpperCase() : null;
+  if (!reuters) return null;
+  const base = reuters.replace(/\.[A-Z]$/, "");
+  const cls = /^([A-Z0-9]+)([a-z])$/.exec(base);
+  return appTicker(cls ? `${cls[1]}.${cls[2]!.toUpperCase()}` : base);
 }
 
 /** 스팩(기업인수목적회사)·ETF·ETN 은 순위에서 뺀다 (동전주·상품이 목록을 덮지 않게) */
@@ -95,8 +102,8 @@ export function krStock(it: Json): DiscoverStock | null {
   const code = String(it["itemCode"] ?? it["id"] ?? "").toUpperCase();
   const price = num(it["currentPrice"]);
   if (!code || price === null) return null;
-  // NXT 통합 거래량·대금이 있으면 그 값 (KRX 만 보면 장 마감 뒤 NXT 거래가 빠진다)
-  const integ = (it["krxNxtIntegratedPriceInfo"] as Json | undefined) ?? {};
+  // 가격·등락률이 KRX 값이라 거래량·거래대금도 KRX 값으로 맞춘다 (순위 원본 정렬도 KRX 기준).
+  // NXT 통합 값(krxNxtIntegratedPriceInfo)을 섞으면 기준이 어긋나고 쪽을 이어 받을 때 순서가 틀어진다.
   return {
     code,
     name: String(it["name"] ?? code),
@@ -105,8 +112,8 @@ export function krStock(it: Json): DiscoverStock | null {
     price,
     change: num(it["fluctuations"]) ?? 0,
     changeRate: num(it["fluctuationsRatio"]) ?? 0,
-    volume: num(integ["accumulatedTradingVolume"]) ?? num(it["accumulatedTradingVolume"]),
-    tradingValue: num(integ["accumulatedTradingValue"]) ?? num(it["accumulatedTradingValue"]),
+    volume: num(it["accumulatedTradingVolume"]),
+    tradingValue: num(it["accumulatedTradingValue"]),
     marketCap: num(it["marketValue"]),
     ...(isNewlyListed(it) ? { newlyListed: true } : {}),
   };
@@ -122,12 +129,9 @@ export function usRankStock(it: Json): DiscoverStock | null {
   const stop = it["tradeStopType"] as Json | undefined;
   if (stop && String(stop["name"] ?? "TRADING") !== "TRADING") return null;
   const eng = String(it["stockNameEng"] ?? "");
-  if (/\b(rights?|warrants?|units?|contingent value)\b/i.test(eng) || /\bacquisition (corp|co|company|inc|holdings?)\b/i.test(eng)) return null;
-  let sym = String(it["symbolCode"] ?? "").trim().toUpperCase();
-  const cls = /^([A-Z][A-Z0-9]*) ([A-Z])$/.exec(sym);
-  if (cls) sym = `${cls[1]}.${cls[2]}`;
-  else if (/\s/.test(sym)) return null; // "AHT PRD", "RIV RT", "ASGI RTWI"
-  if (!/^[A-Z][A-Z0-9-]{0,9}(?:\.[A-Z])?$/.test(sym)) return null;
+  const sym = appTicker(String(it["symbolCode"] ?? ""));
+  if (!sym) return null; // "AHT PRD", "RIV RT", "ASGI RTWI"
+  if (isUsNonCommon(eng, sym)) return null;
   const price = num(it["closePriceRaw"] ?? it["closePrice"]);
   if (price === null) return null;
   const ex = it["stockExchangeType"] as Json | undefined;
@@ -146,8 +150,28 @@ export function usRankStock(it: Json): DiscoverStock | null {
   };
 }
 
+/** 네이버 심볼 → 앱 티커. 클래스주 "BRK B" → "BRK.B", 그 밖에 공백이 남는 우선주·권리주 등은 null */
+export function appTicker(raw: string): string | null {
+  let sym = raw.trim().toUpperCase();
+  const cls = /^([A-Z][A-Z0-9]*) ([A-Z])$/.exec(sym);
+  if (cls) sym = `${cls[1]}.${cls[2]}`;
+  return /^[A-Z][A-Z0-9-]{0,9}(?:\.[A-Z])?$/.test(sym) ? sym : null;
+}
+
+/**
+ * 보통주가 아닌 미국 종목: 권리(Rights)·워런트·조건부가치권(CVR), 스팩(Acquisition Corp)과 스팩 유닛.
+ * MLP 의 "Common Units"(ET·EPD·MPLX 등)는 보통주처럼 거래되므로 남긴다.
+ */
+export function isUsNonCommon(eng: string, sym: string): boolean {
+  if (/\b(rights?|warrants?|contingent value)\b/i.test(eng)) return true;
+  if (/\bacquisition (corp|co|company|inc|holdings?)\b/i.test(eng)) return true;
+  // 스팩 유닛: 이름이 Unit(s) 로 끝나고 파트너십 지분(LP/L.P./Partners/Common Units)이 아닐 때
+  if (/\bunits?\s*$/i.test(eng) && !/\b(l\.?p\.?|partners|common units|limited partnership)\b/i.test(eng)) return true;
+  return false;
+}
+
 export function usStock(it: Json): DiscoverStock | null {
-  const code = usTicker(it);
+  const code = usTicker(it); // 공백이 남는 우선주 등("BIP PRA")은 앱에서 열 수 없어 뺀다
   const price = num(it["currentPrice"]);
   if (!code || price === null) return null;
   return {
@@ -184,7 +208,8 @@ export class NaverDiscover {
   constructor(private readonly fetchFn: FetchFn = fetch) {}
 
   private async json(url: string): Promise<Json> {
-    const once = () => this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" } });
+    // 10초 안에 답이 없으면 끊는다 (멈춘 출처가 요청을 붙잡지 않게 — 캐시가 직전 값을 준다)
+    const once = () => this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     // 연결이 끊기면 한 번 더 (HTTP 오류는 그대로)
     let res: Response;
     try {

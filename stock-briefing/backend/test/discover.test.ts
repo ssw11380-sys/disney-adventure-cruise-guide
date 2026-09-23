@@ -109,7 +109,8 @@ describe("NaverDiscover + DiscoverService (한국)", () => {
       if (url.includes("sortType=quantTop")) return json({}, 500);
       return json({}, 404);
     }) as unknown as typeof fetch;
-    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now });
+    const calendar = { status: async () => ({ KR: { isOpen: true, isTradingDay: true }, US: { isOpen: false } }) } as never;
+    const svc = new DiscoverService({ naver: new NaverDiscover(fetchFn), now: () => now, calendar });
     expect((await svc.rank("KR", "tradingValue", 1, 50)).items.map((i) => i.name)).toEqual(["삼성전자"]);
     await expect(svc.rank("KR", "volume", 1, 50)).rejects.toThrow("HTTP 500");
     fail = true;

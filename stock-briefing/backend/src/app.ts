@@ -265,6 +265,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     now,
     usThemes,
     tics,
+    store: metaStore(opts.db),
   });
   // 미국 테마북은 만드는 데 1분쯤 걸려 서버를 켤 때 미리 만들고, 매일 21:00(한국, 미국 정규장 전)에 새로 만든다
   // → 새 테마·새로 편입된 종목이 화면을 열지 않아도 하루 안에 반영된다

@@ -43,6 +43,11 @@ const FRESH_MS = 24 * 3_600_000;
 const USABLE_MS = 7 * 24 * 3_600_000;
 const DURATIONS: TicsDuration[] = ["1d", "1w", "1m", "3m", "1y"];
 
+/** 테마북 만들기 실패 뒤 다시 시도하기까지 (1번째 10분, 2번째 30분, 그 뒤 60분) */
+function backoffMs(count: number): number {
+  return count <= 1 ? 10 * 60_000 : count === 2 ? 30 * 60_000 : 60 * 60_000;
+}
+
 export async function pool<T, R>(items: T[], size: number, fn: (x: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let i = 0;
@@ -69,6 +74,8 @@ export class UsThemeBook {
   private loaded = false;
   private building: Promise<UsThemeBookData> | null = null;
   private readonly summaries = new Map<string, { at: number; summary: string | null }>();
+  /** 마지막 실패 (백오프용) */
+  private fail: { at: number; count: number; error: unknown } | null = null;
 
   constructor(
     private readonly deps: {
@@ -92,7 +99,9 @@ export class UsThemeBook {
    */
   async get(waitMs?: number): Promise<UsThemeBookData> {
     const p = this.getInner();
-    if (waitMs === undefined || this.data) return p;
+    // 바로 줄 수 있는 테마북(7일 이내)이 있으면 그대로, 아니면(없거나 너무 오래됨 → 새로 만드는 중) waitMs 까지만 기다린다
+    const usable = this.data && this.t - this.data.builtAt < USABLE_MS;
+    if (waitMs === undefined || usable) return p;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new UsThemesBuildingError()), waitMs)))]);
@@ -114,10 +123,13 @@ export class UsThemeBook {
     }
     const d = this.data;
     if (d && this.t - d.builtAt < FRESH_MS) return d;
+    // 최근에 만들다 실패했으면 백오프(10분 → 30분 → 60분) 동안은 다시 만들지 않는다 (요청마다 토스를 수백 번 부르지 않게)
+    const backingOff = this.fail !== null && this.t - this.fail.at < backoffMs(this.fail.count);
     if (d && this.t - d.builtAt < USABLE_MS) {
-      void this.rebuild().catch((e) => this.deps.log?.warn?.({ err: String(e) }, "미국 테마북 갱신 실패 (옛것 사용)"));
+      if (!backingOff) void this.rebuild().catch((e) => this.deps.log?.warn?.({ err: String(e) }, "미국 테마북 갱신 실패 (옛것 사용)"));
       return d;
     }
+    if (backingOff && !this.building) throw this.fail!.error;
     return this.rebuild();
   }
 
@@ -141,12 +153,17 @@ export class UsThemeBook {
   }
 
   private rebuild(): Promise<UsThemeBookData> {
-    this.building ??= this.build()
+    this.building ??= this.build(this.data)
       .then(async (d) => {
+        this.fail = null;
         this.data = d;
         await this.deps.store?.set(STORE_KEY, JSON.stringify(d)).catch(() => undefined);
         this.deps.log?.info?.({ themes: d.themes.length, stocks: new Set(d.themes.flatMap((t) => t.members.map((m) => m.reuters))).size }, "미국 테마북 만듦");
         return d;
+      })
+      .catch((e: unknown) => {
+        this.fail = { at: this.t, count: (this.fail?.count ?? 0) + 1, error: e };
+        throw e;
       })
       .finally(() => {
         this.building = null;
@@ -154,7 +171,11 @@ export class UsThemeBook {
     return this.building;
   }
 
-  async build(): Promise<UsThemeBookData> {
+  /**
+   * 새 테마북을 만든다. prev(지금 쓰는 것)가 있으면, 토스가 일부만 답해 크게 줄어든 결과로 덮어쓰지 않도록
+   * 구성 종목 조회 실패가 10%를 넘거나 테마 수가 이전의 80% 미만이면 실패로 본다.
+   */
+  async build(prev: UsThemeBookData | null = null): Promise<UsThemeBookData> {
     const { tics, naver } = this.deps;
     const pages = this.deps.pagesPerTheme ?? 3;
     const minStocks = this.deps.minStocks ?? 3;
@@ -189,6 +210,7 @@ export class UsThemeBook {
 
     // 2) 구성 종목 (시가총액 큰 순). 가장 큰 분류(depth 0: IT·금융 …)는 너무 넓어 뺀다
     const targets = [...nodes.values()].filter((n) => n.depth >= 1);
+    let pageFailures = 0;
     const crawled = await pool(targets, conc, async (n) => {
       try {
         const first = await tics.stocksPage(n.id, "US", 1);
@@ -197,9 +219,11 @@ export class UsThemeBook {
         for (let p = 2; p <= Math.min(pages, Math.ceil(first.total / 10)); p++) stocks.push(...(await tics.stocksPage(n.id, "US", p)).stocks);
         return { node: n, total: first.total, codes: [...new Set(stocks.map((s) => s.productCode))] };
       } catch {
+        pageFailures++;
         return null;
       }
     });
+    if (targets.length && pageFailures / targets.length > 0.1) throw new Error(`토스 테마 구성 종목 조회 실패가 많습니다 (${pageFailures}/${targets.length})`);
     const themes = crawled.filter((x): x is NonNullable<typeof x> => x !== null);
     if (!themes.length) throw new Error("토스 미국 테마 구성 종목을 받지 못했습니다");
 
@@ -220,6 +244,7 @@ export class UsThemeBook {
       if (members.length >= minStocks) out.push({ id: t.node.id, name: t.node.name, root: t.node.root, depth: t.node.depth, total: t.total, members });
     }
     if (!out.length) throw new Error("미국 테마 구성 종목의 시세 코드를 찾지 못했습니다");
+    if (prev && out.length < prev.themes.length * 0.8) throw new Error(`새 테마북이 너무 작습니다 (${out.length} < 이전 ${prev.themes.length}의 80%)`);
     return { version: 1, builtAt: this.t, themes: out };
   }
 

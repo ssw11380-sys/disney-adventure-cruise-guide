@@ -78,6 +78,7 @@ export class TossTics {
         method: body === undefined ? "GET" : "POST",
         headers: body === undefined ? HEADERS : { ...HEADERS, "content-type": "application/json" },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(10_000), // 멈춘 연결이 테마북 만들기를 붙잡지 않게
       });
     // 연결이 끊기거나 5xx·429 면 한 번 더 (하루 한 번 수백 번 부르는 동안 가끔 끊긴다)
     let res: Response;
