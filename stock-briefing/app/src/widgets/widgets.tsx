@@ -3,7 +3,8 @@ import { FlexWidget, ListWidget, TextWidget, type FlexWidgetStyle } from "react-
 import type { Currency, LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { formatPct, formatPrice, toDisplay } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
-import { fxOf, totals, widgetOrder } from "@/lib/portfolio";
+import { fxOf, totals } from "@/lib/portfolio";
+import { asOfLabel, asOfMs, assetLine, excludedCount, failureText, HOME_URI, isHeld, tone, widgetOrder } from "./model";
 
 export { totals, type Totals } from "@/lib/portfolio";
 
@@ -37,10 +38,6 @@ function money(n: number | null | undefined, currency: Currency | undefined, fx:
   return formatPrice(d.value, d.currency, { sign });
 }
 
-function tone(n: number): `#${string}` {
-  return n > 0 ? C.up : n < 0 ? C.down : C.muted;
-}
-
 const root: FlexWidgetStyle = {
   height: "match_parent",
   width: "match_parent",
@@ -50,10 +47,11 @@ const root: FlexWidgetStyle = {
   flexDirection: "column",
 };
 
+/** 헤더를 누르면 잔고 탭으로 (OPEN_APP 은 마지막으로 보던 화면을 연다) */
 function Header({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-      <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 6 }} clickAction="OPEN_APP">
+      <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 6 }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
         <TextWidget text={title} style={{ color: C.ink, fontSize: 13, fontWeight: "700" }} />
         {subtitle ? <TextWidget text={subtitle} style={{ color: C.muted, fontSize: 10 }} /> : null}
       </FlexWidget>
@@ -64,31 +62,38 @@ function Header({ title, subtitle }: { title: string; subtitle?: string }) {
   );
 }
 
-function updatedLabel(at: number): string {
-  const d = new Date(at);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")} 기준`;
+/** 합계 아래 회색 한 줄: 갱신 실패·이전 값·합계에서 빠진 종목 */
+function notes(error: string | null, filled: number, excluded: number): string | null {
+  const parts = [failureText(error), filled ? `${filled}종목 이전 값` : null, excluded ? `일부 제외 ${excluded}` : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
 }
 
-export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error }: { stocks: RegisteredWithQuote[]; showKrw: boolean; afterCost?: boolean; fetchedAt: number; error: string | null; height?: number }) {
+type StockWidgetProps = { stocks: RegisteredWithQuote[]; showKrw: boolean; afterCost?: boolean; fetchedAt: number; error: string | null; filled?: string[]; height?: number; /** 그리는 시각 (기준 시각에 날짜를 붙일지 판단). 부르는 쪽에서 넘긴다 */ now: number };
+
+export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now }: StockWidgetProps) {
   const t = totals(stocks, showKrw, afterCost);
-  const rows = widgetOrder(stocks);
+  const rows = widgetOrder(stocks, fxOf);
+  const note = notes(error, filled.length, excludedCount(stocks));
   return (
     <FlexWidget style={root}>
-      <Header title={`잔고 ${rows.length}`} subtitle={updatedLabel(fetchedAt)} />
+      <Header title={`잔고 ${rows.length}`} subtitle={asOfLabel(asOfMs(stocks, fetchedAt), now)} />
       {t ? (
-        <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 4, marginBottom: 4 }} clickAction="OPEN_APP">
+        <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 4, marginBottom: 4 }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
           <TextWidget text={formatPrice(t.value, t.currency)} style={{ color: C.ink, fontSize: 18, fontWeight: "800" }} />
-          <TextWidget text={`당일 ${formatPrice(t.day, t.currency, { sign: true })}`} style={{ color: tone(t.day), fontSize: 11, fontWeight: "700" }} />
+          <TextWidget text={`당일 ${formatPrice(t.day, t.currency, { sign: true })}`} style={{ color: tone(t.day) as `#${string}`, fontSize: 11, fontWeight: "700" }} />
         </FlexWidget>
       ) : null}
-      {error ? <TextWidget text={`불러오기 실패: ${error}`} style={{ color: C.muted, fontSize: 11 }} /> : null}
+      {note ? <TextWidget text={note} maxLines={1} truncate="END" style={{ color: C.muted, fontSize: 10 }} /> : null}
       {rows.length === 0 && !error ? <TextWidget text="등록된 종목이 없습니다" style={{ color: C.muted, fontSize: 11 }} /> : null}
+      {rows.length === 0 && error ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" style={{ color: C.muted, fontSize: 11 }} /> : null}
       {rows.length > 0 ? (
         <ListWidget style={{ height: "match_parent", width: "match_parent" }}>
           {rows.map((s) => {
             const q = s.quote;
             const fx = fxOf(s);
             const ev = evalView(s.evaluation, { afterCost, toKrw: showKrw, currency: q?.currency, fx });
+            // 시세를 못 받은 보유 종목은 "관심"이 아니라 "시세 없음"
+            const sub = ev ? `${formatPct(ev.profitRate)} ${formatPrice(ev.profit, ev.currency, { sign: true })}` : isHeld(s) ? `${s.quantity}주 · 시세 없음` : "관심";
             return (
               <FlexWidget
                 key={s.code}
@@ -99,16 +104,16 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
                 <FlexWidget style={{ flexDirection: "column", width: 118 }}>
                   <TextWidget text={s.name} truncate="END" maxLines={1} style={{ color: C.ink, fontSize: 12, fontWeight: "600" }} />
                   <TextWidget
-                    text={ev ? `${formatPct(ev.profitRate)} ${formatPrice(ev.profit, ev.currency, { sign: true })}` : "관심"}
+                    text={sub}
                     truncate="END"
                     maxLines={1}
-                    style={{ color: ev ? tone(ev.profit) : C.muted, fontSize: 10 }}
+                    style={{ color: ev ? (tone(ev.profit) as `#${string}`) : C.muted, fontSize: 10 }}
                   />
                 </FlexWidget>
                 {q ? (
                   <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 8 }}>
-                    <TextWidget text={money(q.price, q.currency, fx, showKrw)} style={{ color: tone(q.change), fontSize: 12, fontWeight: "700" }} />
-                    <TextWidget text={formatPct(q.changeRate)} style={{ color: tone(q.change), fontSize: 11, fontWeight: "700", width: 56, textAlign: "right" }} />
+                    <TextWidget text={money(q.price, q.currency, fx, showKrw)} style={{ color: tone(q.change) as `#${string}`, fontSize: 12, fontWeight: "700" }} />
+                    <TextWidget text={formatPct(q.changeRate)} style={{ color: tone(q.change) as `#${string}`, fontSize: 11, fontWeight: "700", width: 56, textAlign: "right" }} />
                   </FlexWidget>
                 ) : (
                   <TextWidget text="-" style={{ color: C.muted, fontSize: 11 }} />
@@ -122,7 +127,7 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
   );
 }
 
-export function BriefingWidget({ briefings, fetchedAt, error }: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null }) {
+export function BriefingWidget({ briefings, fetchedAt, error, now }: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number }) {
   const latest = briefings
     .filter((b) => b.latest && b.latest.status === "ok")
     .sort((a, b) => (a.latest!.createdAt < b.latest!.createdAt ? 1 : -1))[0];
@@ -130,7 +135,7 @@ export function BriefingWidget({ briefings, fetchedAt, error }: { briefings: Lat
   const lines = b ? b.summary.split("\n").filter(Boolean).slice(0, 3) : [];
   return (
     <FlexWidget style={root}>
-      <Header title="브리핑" subtitle={updatedLabel(fetchedAt)} />
+      <Header title="브리핑" subtitle={asOfLabel(fetchedAt, now)} />
       {b ? (
         <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: `${DEEP_LINK}briefings/${b.id}` }} style={{ width: "match_parent", flexDirection: "column", marginTop: 6, flexGap: 4 }}>
           <TextWidget text={`${latest!.name} · ${b.date.slice(5).replace("-", "/")} ${b.session === "morning" ? "오전" : "오후"}`} style={{ color: C.gold, fontSize: 11, fontWeight: "700" }} />
@@ -139,27 +144,35 @@ export function BriefingWidget({ briefings, fetchedAt, error }: { briefings: Lat
           ))}
         </FlexWidget>
       ) : (
-        <TextWidget text={error ? `불러오기 실패: ${error}` : "아직 브리핑이 없습니다. 평일 08:30·16:00 에 생성됩니다."} style={{ color: C.muted, fontSize: 11, marginTop: 6 }} />
+        <TextWidget text={error ? `${failureText(error)} · ↻ 로 다시 시도` : "아직 브리핑이 없습니다. 평일 08:30·16:00 에 생성됩니다."} style={{ color: C.muted, fontSize: 11, marginTop: 6 }} />
       )}
     </FlexWidget>
   );
 }
 
-export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, error }: { stocks: RegisteredWithQuote[]; showKrw: boolean; afterCost?: boolean; fetchedAt: number; error: string | null }) {
+export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now }: StockWidgetProps) {
   const t = totals(stocks, showKrw, afterCost);
+  const note = notes(error, filled.length, excludedCount(stocks));
+  const line = t ? assetLine(t.day, t.profit, (n) => formatPrice(n, t.currency, { sign: true })) : null;
   return (
-    <FlexWidget style={{ ...root, padding: 12, justifyContent: "center" }} clickAction="OPEN_APP">
+    <FlexWidget style={{ ...root, padding: 12, justifyContent: "center" }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
       <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
         <TextWidget text="총 평가" style={{ color: C.muted, fontSize: 10, fontWeight: "700" }} />
-        <TextWidget text={updatedLabel(fetchedAt)} style={{ color: C.muted, fontSize: 9 }} />
+        <TextWidget text={asOfLabel(asOfMs(stocks, fetchedAt), now)} style={{ color: C.muted, fontSize: 9 }} />
       </FlexWidget>
-      {t ? (
+      {t && line ? (
         <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: 2 }}>
           <TextWidget text={formatPrice(t.value, t.currency)} maxLines={1} style={{ color: C.ink, fontSize: 19, fontWeight: "800", adjustsFontSizeToFit: true }} />
-          <TextWidget text={`오늘 ${formatPrice(t.day, t.currency, { sign: true })} · 총 ${formatPrice(t.profit, t.currency, { sign: true })}`} maxLines={1} truncate="END" style={{ color: tone(t.day), fontSize: 10, fontWeight: "700" }} />
+          {/* 오늘 손익과 총손익은 각자 부호 색 (예전에는 둘 다 오늘 색이었다) */}
+          <FlexWidget style={{ flexDirection: "row", flexGap: 4 }}>
+            <TextWidget text={line.day.text} maxLines={1} style={{ color: line.day.color as `#${string}`, fontSize: 10, fontWeight: "700" }} />
+            <TextWidget text="·" style={{ color: C.muted, fontSize: 10 }} />
+            <TextWidget text={line.total.text} maxLines={1} truncate="END" style={{ color: line.total.color as `#${string}`, fontSize: 10, fontWeight: "700" }} />
+          </FlexWidget>
+          {note ? <TextWidget text={note} maxLines={1} truncate="END" style={{ color: C.muted, fontSize: 9 }} /> : null}
         </FlexWidget>
       ) : (
-        <TextWidget text={error ? "불러오기 실패" : "보유 종목 없음"} style={{ color: C.muted, fontSize: 11 }} />
+        <TextWidget text={error ? `${failureText(error)} · 눌러서 앱 열기` : "보유 종목 없음"} style={{ color: C.muted, fontSize: 11 }} />
       )}
     </FlexWidget>
   );

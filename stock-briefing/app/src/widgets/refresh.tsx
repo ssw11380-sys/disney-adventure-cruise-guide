@@ -1,6 +1,7 @@
 import React from "react";
 import { Platform } from "react-native";
 import type { RegisteredWithQuote } from "@/api/types";
+import { saveLastStocks } from "./data";
 import { WIDGET_NAMES, AssetWidget, HoldingsWidget } from "./widgets";
 
 /**
@@ -12,13 +13,15 @@ export async function refreshWidgets({ stocks, showKrw, afterCost }: { stocks: R
   try {
     const { requestWidgetUpdate } = await import("react-native-android-widget");
     const fetchedAt = Date.now();
+    // 위젯이 다음에 조회에 실패해도 이 값을 보이도록 남겨 둔다
+    await saveLastStocks(stocks, fetchedAt);
     await requestWidgetUpdate({
       widgetName: WIDGET_NAMES.holdings,
-      renderWidget: (info) => <HoldingsWidget stocks={stocks} showKrw={showKrw} afterCost={afterCost} fetchedAt={fetchedAt} error={null} height={info.height} />,
+      renderWidget: (info) => <HoldingsWidget stocks={stocks} showKrw={showKrw} afterCost={afterCost} fetchedAt={fetchedAt} error={null} height={info.height} now={fetchedAt} />,
     });
     await requestWidgetUpdate({
       widgetName: WIDGET_NAMES.asset,
-      renderWidget: () => <AssetWidget stocks={stocks} showKrw={showKrw} afterCost={afterCost} fetchedAt={fetchedAt} error={null} />,
+      renderWidget: () => <AssetWidget stocks={stocks} showKrw={showKrw} afterCost={afterCost} fetchedAt={fetchedAt} error={null} now={fetchedAt} />,
     });
   } catch {
     /* 위젯 모듈이 없는 빌드(개발 클라이언트 등)에서는 무시 */
