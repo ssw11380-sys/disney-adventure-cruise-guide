@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -196,13 +197,17 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   // 인터넷에 노출할 때의 최소 보호: API_TOKEN 이 설정되면 /api/* 는 Bearer 토큰이 있어야 한다. /health 는 열어 둔다.
   if (opts.config.API_TOKEN) {
-    const expected = `Bearer ${opts.config.API_TOKEN}`;
+    const token = opts.config.API_TOKEN;
     app.addHook("onRequest", async (req, reply) => {
-      if (!req.url.startsWith("/api/")) return;
+      // 원본 URL 문자열이 아니라 라우터가 고른 경로로 판단한다 — "/%61pi/stocks" 처럼 퍼센트 인코딩해 검사를 피하지 못하게.
+      // 맞는 라우트가 없으면(404) 디코딩한 경로로 본다
+      const path = req.routeOptions.url ?? decodedPath(req.url);
+      if (!path.startsWith("/api/") && path !== "/api") return;
       // 웹소켓(/api/stream)은 헤더를 못 붙이는 클라이언트를 위해 ?token= 도 받는다
-      const q = req.query as { token?: string } | undefined;
-      if (req.url.startsWith("/api/stream") && q?.token === opts.config.API_TOKEN) return;
-      if (req.headers.authorization !== expected) {
+      const q = req.query as { token?: unknown } | undefined;
+      if (path === "/api/stream" && typeof q?.token === "string" && sameSecret(q.token, token)) return;
+      const auth = req.headers.authorization;
+      if (typeof auth !== "string" || !auth.startsWith("Bearer ") || !sameSecret(auth.slice(7), token)) {
         return reply.code(401).send({ error: "UNAUTHORIZED", message: "API 토큰이 필요합니다 (앱 설정 > 서버 주소 아래 토큰 입력)" });
       }
     });
@@ -319,4 +324,21 @@ declare module "fastify" {
     settingsStore: NotificationSettingsStore;
     priceStream: PriceStream;
   }
+}
+
+/** 요청 경로(쿼리 제외)를 퍼센트 디코딩한다. 깨진 인코딩이면 원문 그대로 (그러면 /api/ 로 시작하지 않아 라우터도 못 찾는다) */
+function decodedPath(url: string): string {
+  const raw = url.split("?")[0] ?? "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/** 비밀값 비교 (길이가 같을 때 시간 일정 비교) */
+function sameSecret(given: string, expected: string): boolean {
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }

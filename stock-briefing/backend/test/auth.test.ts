@@ -31,6 +31,23 @@ describe("API_TOKEN auth", () => {
     expect(ok.statusCode).toBe(200);
   });
 
+  it("퍼센트 인코딩·이중 슬래시 등으로 경로를 바꿔도 인증을 피할 수 없다 (라우터가 고른 경로로 판단)", async () => {
+    for (const url of ["/%61pi/stocks", "/%61%70%69/stocks", "/api/%73tocks", "/api//stocks", "/api/stocks/", "/api/stocks?x=1", "/%61pi/briefings/latest", "/%61pi/stream?token=nope"]) {
+      const res = await app.inject({ method: "GET", url });
+      expect([401, 404], url).toContain(res.statusCode);
+      expect(res.body, url).not.toContain('"code"');
+    }
+    // 쓰기 요청도 마찬가지
+    for (const [method, url] of [["POST", "/%61pi/stocks"], ["DELETE", "/%61pi/stocks/005930"], ["POST", "/%61pi/briefings/run"]] as const) {
+      expect([401, 404], url).toContain((await app.inject({ method, url, payload: { code: "005930" } })).statusCode);
+    }
+    // 올바른 토큰이면 인코딩된 경로도 정상
+    expect((await app.inject({ method: "GET", url: "/%61pi/stocks", headers: { authorization: "Bearer secret-123" } })).statusCode).toBe(200);
+    // 토큰 길이가 달라도 오류 없이 401
+    expect((await app.inject({ method: "GET", url: "/api/stocks", headers: { authorization: "Bearer secret-1234567890" } })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/stocks", headers: { authorization: "secret-123" } })).statusCode).toBe(401);
+  });
+
   it("API_TOKEN 이 비어 있으면 인증 없이 통과한다", async () => {
     const open = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders(), logger: false, enableScheduler: false });
     expect((await open.inject({ method: "GET", url: "/api/stocks" })).statusCode).toBe(200);
