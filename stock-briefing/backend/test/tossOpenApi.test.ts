@@ -226,6 +226,14 @@ describe("TossOpenApiProvider", () => {
     expect(us.prevClose).toBe(375.3);
   });
 
+  it("기준가가 늦으면 짧게만 기다리고 일봉으로 답한다 (토스 웹이 멈춰도 시세가 멈추지 않게)", async () => {
+    const slow = new TossOpenApiProvider(client(), { now: NOW, krBase: () => new Promise<number>((r) => setTimeout(() => r(199_500), 5_000)) });
+    const t0 = Date.now();
+    const q = await slow.getQuote("035420");
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(q.prevClose).toBe(200000 + 199 * 100);
+  }, 10_000);
+
   it("상장 첫날(전일 봉 없음)은 등락 0 으로 만들지 않고 실패해 다음 소스(기준가)로 넘긴다", async () => {
     await expect(new TossOpenApiProvider(client(), { now: NOW }).getQuote("0010S0")).rejects.toThrow(/전일 종가 없음 \(상장 첫날\)/);
   });

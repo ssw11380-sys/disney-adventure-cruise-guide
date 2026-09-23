@@ -29,6 +29,8 @@ export interface CollectorDeps {
   investorFlow: InvestorFlowProvider | null;
   /** PER/PBR/배당/환율 보강 (StockService 와 같은 로직을 브리핑·분석 데이터에도 적용) */
   fundamentals?: NaverFundamentals | null;
+  /** 여러 종목 시세를 한 번에 받아 두는 곳(토스 웹). 브리핑 전에 불러 한국 종목 기준가를 미리 채운다 */
+  quickPrices?: { getMany(codes: string[]): Promise<unknown> } | null;
   log?: ChainLogger;
 }
 
@@ -86,8 +88,15 @@ export class DataCollector {
       q.currency === "USD" ? f.usdKrw().catch(() => null) : Promise.resolve(null),
     ]);
     let out = applyFundamentals(q, fund);
-    if (q.currency === "USD" && fx) out = { ...out, fxRate: fx, priceKrw: out.priceKrw ?? Math.round(out.price * fx) };
+    // 원화 환산은 함께 넣는 환율(fxRate)로 — 앱(StockService)과 같은 규칙
+    if (q.currency === "USD" && fx) out = { ...out, fxRate: fx, priceKrw: Math.round(out.price * fx) };
     return out;
+  }
+
+  /** 여러 종목을 모을 때 앞서 한 번: 시세·기준가를 일괄로 받아 둔다 (종목마다 따로 부르지 않게). 실패해도 그냥 진행 */
+  async warm(codes: string[]): Promise<void> {
+    if (!this.deps.quickPrices || !codes.length) return;
+    await this.deps.quickPrices.getMany(codes).catch(() => undefined);
   }
 
   /** 시장에 맞는 재무·공시 소스. 한국은 DART, 미국은 EDGAR */

@@ -100,6 +100,7 @@ export class BriefingService {
     try {
       let stocks = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at").execute();
       if (opts.codes?.length) stocks = stocks.filter((s) => opts.codes!.includes(s.code));
+      await this.deps.collector.warm?.(stocks.map((s) => s.code));
       for (const row of stocks) {
         const stock: RegisteredStock = {
           code: row.code, name: row.name, market: row.market as RegisteredStock["market"],

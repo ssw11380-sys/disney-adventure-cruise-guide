@@ -1,6 +1,6 @@
 import { isIntraday, type Candle, type CandlePeriod, type CandleSeries, type ListedStock, type Market, type Quote } from "../../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
-import { ProviderError } from "../../lib/errors.js";
+import { ProviderError, within } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
 import type { FetchFn, MasterProvider, QuoteProvider } from "./types.js";
@@ -280,6 +280,9 @@ export function aggregateCandles(daily: Candle[], period: CandlePeriod): Candle[
   return out;
 }
 
+/** 한국 종목 기준가(krBase)를 기다리는 최대 시간 */
+const KR_BASE_WAIT_MS = 1_500;
+
 export interface TossOpenApiProviderOptions {
   now?: () => Date;
   /**
@@ -431,7 +434,8 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
         return [] as Candle[];
       }),
       this.stockInfos([code]).catch(() => new Map<string, TossStockInfo>()),
-      kr && this.opts.krBase ? this.opts.krBase(code).catch(() => null) : Promise.resolve(null),
+      // 기준가는 짧게만 기다린다 — 토스 웹이 느리거나 멈추면 일봉으로 (공식 API 시세까지 붙잡지 않게)
+      kr && this.opts.krBase ? within(this.opts.krBase(code), KR_BASE_WAIT_MS, null) : Promise.resolve(null),
     ]);
     const p = (prices ?? []).find((x) => String(x["symbol"] ?? "").toUpperCase() === code) ?? prices?.[0];
     if (!p) throw new ProviderError(this.name, `${code} 시세 없음`);

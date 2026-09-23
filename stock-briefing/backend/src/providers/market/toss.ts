@@ -20,6 +20,8 @@ import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
  */
 
 const BASE = "https://wts-info-api.tossinvest.com/api";
+/** 토스 웹 요청 하나의 최대 대기 (응답이 멈추면 시세 체인이 다음 소스로 넘어가게) */
+const REQUEST_TIMEOUT_MS = 8_000;
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 
 const TOSS_MARKET: Record<string, Market> = { KSP: "KOSPI", KSQ: "KOSDAQ", NSQ: "NASDAQ", NYS: "NYSE", AMX: "AMEX" };
@@ -67,6 +69,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     try {
       res = await this.fetchFn(url, {
         ...init,
+        signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: {
           "user-agent": UA,
           accept: "application/json",
@@ -218,8 +221,14 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
   // ── 실시간에 가까운 현재가 (여러 종목 한 번에) ───────────────────────
 
   private quickCache: { at: number; key: string; map: Map<string, LiveTick> } | null = null;
-  /** 종목별 기준가(base) — 일괄 시세(getMany)를 받을 때마다 채운다 */
-  private readonly baseCache = new Map<string, { at: number; base: number }>();
+  /**
+   * 종목별 기준가(base) — 일괄 시세(getMany)를 받을 때마다 채운다. 기준가는 거래일마다 한 번 바뀌므로
+   * 다음 거래 시작(nextTradingStart) 전까지는 새로 받지 못해도 마지막 값을 쓴다
+   */
+  private readonly baseCache = new Map<string, { at: number; base: number; until: number }>();
+  private readonly baseInflight = new Map<string, Promise<number | null>>();
+  /** 일괄 시세가 마지막으로 실패한 시각 — 잠시 동안 종목마다 다시 부르지 않는다 (장애 때 요청이 불어나지 않게) */
+  private pricesFailedAt = 0;
   private fxCache: { at: number; rate: number } | null = null;
 
   /**
@@ -268,14 +277,23 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
       }
     }
     if (pcs.length === 0) return out;
-    const rows = (await this.request(`/v3/stock-prices?productCodes=${encodeURIComponent(pcs.map((p) => p[1]).join(","))}`)) as Json[];
+    let rows: Json[];
+    try {
+      rows = (await this.request(`/v3/stock-prices?productCodes=${encodeURIComponent(pcs.map((p) => p[1]).join(","))}`)) as Json[];
+    } catch (e) {
+      this.pricesFailedAt = this.now().getTime();
+      throw e;
+    }
     const byPc = new Map(rows.map((r) => [String(r["productCode"] ?? ""), r]));
     const nowIso = seoulIso(this.now());
     for (const [code, pc] of pcs) {
       const r = byPc.get(pc);
       const price = num(r?.["close"]);
       const base = num(r?.["base"]);
-      if (r && base !== null && base > 0) this.baseCache.set(code, { at: t, base });
+      if (r && base !== null && base > 0) {
+        const next = Date.parse(String(r["nextTradingStart"] ?? ""));
+        this.baseCache.set(code, { at: t, base, until: Number.isNaN(next) || next <= t ? t + 60_000 : next });
+      }
       if (!r || price === null) continue;
       out.set(code, { code, price, volume: num(r["volume"]), timestamp: nowIso, receivedAt: t });
     }
@@ -289,10 +307,23 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
    */
   async basePrice(code: string): Promise<number | null> {
     code = normalizeCode(code);
+    const t = this.now().getTime();
+    const valid = (h: { base: number; until: number } | undefined) => (h && this.now().getTime() < h.until ? h.base : null);
     const hit = this.baseCache.get(code);
-    if (hit && this.now().getTime() - hit.at < 60_000) return hit.base;
-    await this.getMany([code]);
-    return this.baseCache.get(code)?.base ?? null;
+    // 1분 안에 받은 값이면 그대로. 토스 웹이 방금(30초 안) 실패했으면 부르지 않고 아직 유효한 마지막 값(같은 거래일)을 쓴다
+    if (hit && t - hit.at < 60_000 && valid(hit) !== null) return hit.base;
+    if (t - this.pricesFailedAt < 30_000) return valid(hit);
+    let p = this.baseInflight.get(code);
+    if (!p) {
+      p = this.getMany([code])
+        .then(
+          () => valid(this.baseCache.get(code)),
+          () => valid(this.baseCache.get(code)),
+        )
+        .finally(() => this.baseInflight.delete(code));
+      this.baseInflight.set(code, p);
+    }
+    return p;
   }
 
   private async fetchChart(productCode: string, kr: boolean, period: CandlePeriod, count: number): Promise<Candle[]> {

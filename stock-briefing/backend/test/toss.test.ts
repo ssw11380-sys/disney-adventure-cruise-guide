@@ -172,6 +172,36 @@ describe("TossProvider", () => {
     expect(await p.basePrice("ZZZZ")).toBeNull();
   });
 
+  it("basePrice: 토스 웹이 실패하면 다음 거래 시작 전까지 마지막 기준가를 쓰고, 30초 동안 다시 부르지 않으며, 동시 요청은 하나로 합친다", async () => {
+    let fail = false;
+    let calls = 0;
+    let t = Date.parse("2026-09-23T10:00:00+09:00");
+    const fetchFn = (async (url: string) => {
+      if (!url.includes("/v3/stock-prices")) return new Response("{}", { status: 404 });
+      calls++;
+      if (fail) return new Response("{}", { status: 503 });
+      const body = { result: [{ productCode: "A005930", base: 276500, close: 286500, nextTradingStart: "2026-09-24T08:00:00+09:00" }] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const p = new TossProvider(fetchFn, null, () => new Date(t));
+    expect(await p.basePrice("005930")).toBe(276500);
+    expect(calls).toBe(1);
+    t += 61_000;
+    fail = true;
+    expect(await p.basePrice("005930")).toBe(276500); // 새로 받기 실패 → 같은 거래일의 마지막 값
+    expect(calls).toBe(2);
+    t += 5_000;
+    expect(await p.basePrice("005930")).toBe(276500);
+    expect(calls).toBe(2); // 실패 뒤 30초 동안은 부르지 않는다
+    t = Date.parse("2026-09-24T08:00:30+09:00");
+    expect(await p.basePrice("005930")).toBeNull(); // 다음 거래 시작이 지나면 옛 기준가는 쓰지 않는다
+    fail = false;
+    t += 60_000;
+    const before = calls;
+    expect(await Promise.all([p.basePrice("005930"), p.basePrice("005930")])).toEqual([276500, 276500]);
+    expect(calls - before).toBe(1);
+  });
+
   it("봉은 오래된 순으로 정렬되고 날짜는 거래소 현지 날짜다", async () => {
     const s = await new TossProvider(fakeFetch(), null, NOW).getCandles("035420", "W", 2);
     expect(s.candles.map((c) => c.date)).toEqual(["2026-09-21", "2026-09-22"]);

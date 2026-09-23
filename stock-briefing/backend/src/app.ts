@@ -149,6 +149,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     financialsUs: opts.providers.financialsUs,
     investorFlow: opts.providers.investorFlow,
     fundamentals: opts.providers.fundamentals,
+    quickPrices: opts.providers.quickPrices,
     log,
   });
   const prompts = opts.promptStore ?? new PromptStore();
