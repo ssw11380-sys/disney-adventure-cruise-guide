@@ -1,7 +1,8 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { RegisteredWithQuote } from "@/api/types";
-import { formatArrowDisplay, formatMoney, formatPct, formatQuoteDisplay, isUsMarket } from "@/lib/format";
+import { formatArrowDisplay, formatPct, formatPrice, formatQuoteDisplay, isUsMarket } from "@/lib/format";
+import { evalView } from "@/lib/liveTick";
 import { changeColor, font, space, useTheme } from "@/theme";
 import { FlashPrice } from "./FlashPrice";
 
@@ -13,16 +14,21 @@ import { FlashPrice } from "./FlashPrice";
  */
 export const COL = { price: 96, right: 108 } as const;
 
-export function StockRow({ stock, onPress, onLongPress, showKrw }: { stock: RegisteredWithQuote; onPress: () => void; onLongPress?: () => void; showKrw: boolean }) {
+export function StockRow({ stock, onPress, onLongPress, showKrw, afterCost = true }: { stock: RegisteredWithQuote; onPress: () => void; onLongPress?: () => void; showKrw: boolean; afterCost?: boolean }) {
   const t = useTheme();
   const q = stock.quote;
-  const ev = stock.evaluation;
   const cur = q?.currency;
   const fx = q?.fxRate ?? (q?.priceKrw && q.price ? q.priceKrw / q.price : null);
+  const ev = evalView(stock.evaluation, { afterCost, toKrw: showKrw, currency: cur, fx });
   const us = isUsMarket(stock.market);
   const held = !!ev;
   const c = changeColor(t, q?.change);
   const pc = changeColor(t, ev?.profit);
+  // 원화 보기의 미국 종목 평단은 손익과 같은 기준(매수 당시 환율의 원화 매입금액 ÷ 수량)으로
+  const avgText =
+    showKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity
+      ? formatPrice(ev.costBasis / stock.quantity, "KRW")
+      : formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw);
   return (
     <Pressable
       onPress={onPress}
@@ -39,7 +45,7 @@ export function StockRow({ stock, onPress, onLongPress, showKrw }: { stock: Regi
           </Text>
         </View>
         <Text style={styles.subText(t.muted)} numberOfLines={1}>
-          {held ? `${formatQty(stock.quantity)}주 · ${formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw)}` : stock.code}
+          {held ? `${formatQty(stock.quantity)}주 · ${avgText}` : stock.code}
         </Text>
       </View>
 
@@ -56,7 +62,7 @@ export function StockRow({ stock, onPress, onLongPress, showKrw }: { stock: Regi
             {held ? (
               <>
                 <Text style={[styles.main, { color: pc }]} numberOfLines={1} adjustsFontSizeToFit>
-                  {formatMoney(ev!.profit, cur, fx, showKrw, { sign: true }).replace("원", "")}
+                  {formatPrice(ev!.profit, ev!.currency, { sign: true }).replace("원", "")}
                 </Text>
                 <Text style={[styles.sub, { color: pc }]}>{formatPct(ev!.profitRate)}</Text>
               </>

@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { CandleSeries, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
+import type { CandleSeries, Evaluation, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
 import { applyTickToCandles } from "./chartPrefs";
 import { applyTick, evaluate, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
 import { useSettings } from "./settings";
@@ -26,7 +26,7 @@ export function useLiveStream(): LiveStreamState {
   return useContext(LiveStreamContext);
 }
 
-type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null };
+type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
 
 export function LiveStreamProvider({ children }: { children: React.ReactNode }) {
   const { apiUrl, apiToken } = useSettings();
@@ -52,7 +52,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
           const quote = applyTick(s.quote, tick);
           if (quote === s.quote) return s;
           changed = true;
-          return { ...s, quote, evaluation: evaluate(s, quote) };
+          return { ...s, quote, evaluation: evaluate(s, quote, s.evaluation) };
         });
         if (changed) touched = true;
         return changed ? next : list;
@@ -62,7 +62,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         const quote = applyTick(d.quote, tick);
         if (quote === d.quote) return d;
         touched = true;
-        return { ...d, quote };
+        return { ...d, quote, evaluation: evaluate(d, quote, d.evaluation) };
       });
       // 차트의 마지막 봉도 같이 움직인다 (일·주·월봉은 고·저·종 갱신, 분봉은 구간이 바뀌면 새 봉)
       qc.setQueriesData<CandleSeries>({ queryKey: [apiUrl, "candles", tick.code] }, (series) => {
@@ -115,6 +115,11 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         }
         if (msg.type === "tick") apply(msg);
         else if (msg.type === "snapshot") for (const t of msg.ticks) apply(t);
+        else if (msg.type === "holdings") {
+          // 토스 계좌 체결로 잔고가 바뀌었다 → 목록·상세를 바로 다시 받는다
+          void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
+          void qc.invalidateQueries({ queryKey: [apiUrl, "stock"] });
+        }
       };
       ws.onerror = () => {
         /* onclose 가 이어서 온다 */

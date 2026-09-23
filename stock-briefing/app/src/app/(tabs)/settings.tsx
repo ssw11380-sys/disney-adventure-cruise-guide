@@ -19,7 +19,7 @@ import { font, radius, space, useTheme } from "@/theme";
  */
 export default function SettingsScreen() {
   const t = useTheme();
-  const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode } = useSettings();
+  const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost } = useSettings();
   const health = useHealth();
   const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
@@ -42,6 +42,13 @@ export default function SettingsScreen() {
             <Muted style={{ fontSize: font.tiny }}>토스증권 적용 환율 기준</Muted>
           </View>
           <Switch value={showKrw} onValueChange={(v) => void setShowKrw(v)} trackColor={{ true: t.accent, false: t.lineStrong }} thumbColor="#FFFFFF" />
+        </View>
+        <View style={styles.line}>
+          <View style={{ flex: 1, paddingRight: space.md }}>
+            <Text style={styles.label(t.ink)}>수수료·세금 차감 평가</Text>
+            <Muted style={{ fontSize: font.tiny }}>토스 앱과 같은 평가금액·손익 (토스 연동 종목)</Muted>
+          </View>
+          <Switch value={afterCost} onValueChange={(v) => void setAfterCost(v)} trackColor={{ true: t.accent, false: t.lineStrong }} thumbColor="#FFFFFF" />
         </View>
         <View style={{ gap: 6, paddingTop: 6 }}>
           <Text style={styles.label(t.ink)}>잔고 정렬</Text>

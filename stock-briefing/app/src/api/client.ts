@@ -1,4 +1,4 @@
-import type {
+import type { Evaluation,
   Analysis,
   AnalysisKind,
   Briefing,
@@ -85,7 +85,7 @@ export function createApi(baseUrl: string, token = "") {
 
     searchStocks: (q: string, limit = 20) => get<{ results: ListedStock[]; source: string }>(`/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`),
     listStocks: () => get<RegisteredWithQuote[]>("/api/stocks?quotes=1"),
-    getStock: (code: string) => get<RegisteredStock & { quote: Quote | null; quoteError: string | null }>(`/api/stocks/${code}`),
+    getStock: (code: string) => get<RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(`/api/stocks/${code}`),
     registerStock: (body: { code: string; quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
       send<RegisteredStock>("POST", "/api/stocks", body),
     updateStock: (code: string, body: { quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
@@ -120,6 +120,9 @@ export function createApi(baseUrl: string, token = "") {
 
     tossStatus: () => get<TossOpenApiStatus>("/api/admin/toss/status", 15_000),
     importTossHoldings: () => send<TossImportResult>("POST", "/api/admin/toss/import-holdings", undefined, 60_000),
+    /** 해외 종목 원화 매입금액(토스 앱 원화 보기의 평가금액 − 평가손익)을 정확한 값으로 저장 */
+    setKrwCost: (items: Record<string, number>) =>
+      send<{ applied: string[]; skipped: { code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed"; retryAfter?: string }[] }>("PUT", "/api/admin/toss/krw-cost", { items }),
     marketStatus: () => get<MarketStatus>("/api/market/status", 10_000),
     marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices", 10_000),
   };

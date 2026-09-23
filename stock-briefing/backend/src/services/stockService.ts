@@ -1,3 +1,5 @@
+import type { TossHoldingDetail } from "./tossSyncService.js";
+import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
@@ -43,7 +45,7 @@ export interface RegisteredWithQuote extends RegisteredStock {
   quote: Quote | null;
   quoteError: string | null;
   /** 보유 정보가 있을 때만 계산 */
-  evaluation: { marketValue: number; costBasis: number; profit: number; profitRate: number } | null;
+  evaluation: Evaluation | null;
 }
 
 
@@ -274,8 +276,26 @@ export class StockService {
     return rows.map(toRegistered);
   }
 
+  /** 해외 종목 원화 매입금액 장부 (토스 원화 손익 기준, 종목별 계좌 합산). 없으면 빈 맵 */
+  async krwCosts(): Promise<Map<string, KrwCost>> {
+    return KrwCostBook.summarize(await KrwCostBook.read(this.deps.db));
+  }
+
+  /** 토스 동기화 때 저장한 종목별 평가 기준(매입금액·예상 비용 비율). 없으면 빈 맵 */
+  async tossDetail(): Promise<Map<string, TossHoldingDetail>> {
+    const row = await this.deps.db.selectFrom("meta").select("value").where("key", "=", "toss_holdings_detail").executeTakeFirst();
+    if (!row) return new Map();
+    try {
+      const parsed = JSON.parse(row.value) as { items?: Record<string, TossHoldingDetail> };
+      return new Map(Object.entries(parsed.items ?? {}));
+    } catch {
+      return new Map();
+    }
+  }
+
   async listWithQuotes(): Promise<RegisteredWithQuote[]> {
     const stocks = await this.list();
+    const [detail, krw] = await Promise.all([this.tossDetail(), this.krwCosts()]);
     // 등록 종목 전체의 최신 가격을 요청 1개로 미리 받아 둔다 (없거나 실패해도 스냅샷으로 진행)
     const quick = await this.quickPrices(stocks.map((s) => s.code));
     // 소스 rate limit 을 고려해 순차 조회
@@ -288,7 +308,7 @@ export class StockService {
       } catch (e) {
         quoteError = e instanceof Error ? e.message : String(e);
       }
-      out.push({ ...s, quote, quoteError, evaluation: evaluate(s, quote) });
+      out.push({ ...s, quote, quoteError, evaluation: evaluate(s, quote, detail.get(s.code), krw.get(s.code)) });
     }
     return out;
   }
@@ -390,15 +410,67 @@ function toRegistered(r: {
   };
 }
 
-export function evaluate(s: RegisteredStock, q: Quote | null): RegisteredWithQuote["evaluation"] {
+export interface Evaluation {
+  marketValue: number;
+  costBasis: number;
+  profit: number;
+  profitRate: number;
+  /** 토스 기준 매도 예상 수수료·세금 비율 (토스 동기화 종목만). 앱이 실시간 가격에 곱해 "비용 차감 후" 평가를 만든다 */
+  costRate: number | null;
+  /** 수수료·세금 차감 후 (토스 앱 화면 기준). costRate 가 없으면 null */
+  afterCost: { marketValue: number; profit: number; profitRate: number } | null;
+  /** 해외 종목: 원화 매입금액(매수 당시 환율, 토스 원화 손익 기준). exact = 토스 값, estimated = 체결 시각 환율로 계산 후 계좌 합계에 보정 */
+  costBasisKrw: number | null;
+  krwCostSource: "exact" | "estimated" | null;
+}
+
+export function evaluate(
+  s: RegisteredStock,
+  q: Quote | null,
+  toss?: TossHoldingDetail | null,
+  krwCost?: { krw: number; source: "exact" | "estimated"; quantity: number; usdCost?: number } | null,
+): Evaluation | null {
   if (!q || s.quantity === null || s.avgPrice === null || s.quantity <= 0) return null;
+  // 토스에서 가져온 수량과 같을 때만 토스 기준(매입금액·비용 비율)을 쓴다. 사용자가 수량을 바꿨으면 직접 계산
+  const t = toss && Math.abs(toss.quantity - s.quantity) < 1e-9 ? toss : null;
   const marketValue = q.price * s.quantity;
-  const costBasis = s.avgPrice * s.quantity;
+  const costBasis = t?.purchaseAmount ?? s.avgPrice * s.quantity;
   const profit = marketValue - costBasis;
+  const pct = (p: number) => (costBasis > 0 ? Math.round((p / costBasis) * 10000) / 100 : 0);
+  const costRate = t?.costRate ?? null;
+  const afterValue = costRate !== null ? marketValue * (1 - costRate) : null;
   return {
     marketValue,
     costBasis,
     profit,
-    profitRate: costBasis > 0 ? Math.round((profit / costBasis) * 10000) / 100 : 0,
+    profitRate: pct(profit),
+    costRate,
+    afterCost: afterValue !== null ? { marketValue: afterValue, profit: afterValue - costBasis, profitRate: pct(afterValue - costBasis) } : null,
+    ...(q.currency === "USD" ? krwBasis(s.quantity, q, t, krwCost) : { costBasisKrw: null, krwCostSource: null }),
   };
+}
+
+/**
+ * 해외 종목의 원화 매입금액. 장부 수량이 보유와 같으면 그대로.
+ * 장부가 새 체결을 아직 못 따라온 동안(토스 매입금액은 이미 바뀜)에는 전체를 현재 환율로 바꾸지 않고 차이만 반영한다:
+ * 늘어난 달러 매입금액은 현재 환율로 더하고, 줄었으면 비율대로 줄인다 (추정).
+ */
+function krwBasis(
+  quantity: number,
+  q: Quote,
+  t: TossHoldingDetail | null,
+  krwCost: { krw: number; source: "exact" | "estimated"; quantity: number; usdCost?: number } | null | undefined,
+): { costBasisKrw: number | null; krwCostSource: "exact" | "estimated" | null } {
+  const none = { costBasisKrw: null, krwCostSource: null };
+  if (!krwCost || !(krwCost.quantity > 0)) return none;
+  const usdNow = t?.purchaseAmount ?? null;
+  const usdBook = krwCost.usdCost ?? null;
+  const sameQty = Math.abs(krwCost.quantity - quantity) < 1e-9;
+  // 수량이 같아도(같은 수량 매도 후 재매수 등) 달러 매입금액이 다르면 장부가 뒤처진 것이다
+  const sameUsd = usdNow === null || usdBook === null || Math.abs(usdBook - usdNow) < Math.max(0.05, usdNow * 1e-4);
+  if (sameQty && sameUsd) return { costBasisKrw: krwCost.krw, krwCostSource: krwCost.source };
+  if (usdNow === null || !usdBook || !(usdBook > 0)) return none;
+  if (usdNow <= usdBook) return { costBasisKrw: krwCost.krw * (usdNow / usdBook), krwCostSource: "estimated" };
+  const fx = q.fxRate ?? (q.priceKrw && q.price ? q.priceKrw / q.price : null);
+  return fx ? { costBasisKrw: krwCost.krw + (usdNow - usdBook) * fx, krwCostSource: "estimated" } : none;
 }

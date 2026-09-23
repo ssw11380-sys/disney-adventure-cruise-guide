@@ -80,7 +80,7 @@ describe("stock routes", () => {
     const list = await app.inject({ method: "GET", url: "/api/stocks?quotes=1" });
     expect(list.json()).toHaveLength(1);
     expect(list.json()[0].quote.source).toBe("kis");
-    expect(list.json()[0].evaluation).toEqual({
+    expect(list.json()[0].evaluation).toMatchObject({
       marketValue: 1_800_000,
       costBasis: 1_500_000,
       profit: 300_000,

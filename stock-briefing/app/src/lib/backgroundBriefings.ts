@@ -70,7 +70,7 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     const data = await loadWidgetData({ stocks: true, briefings: true });
     if (data.error) return BackgroundTask.BackgroundTaskResult.Failed;
     if (local) await notifyNewBriefings(data.briefings);
-    await refreshWidgets({ stocks: data.stocks, showKrw: data.showKrw });
+    await refreshWidgets({ stocks: data.stocks, showKrw: data.showKrw, afterCost: data.afterCost });
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {
     return BackgroundTask.BackgroundTaskResult.Failed;

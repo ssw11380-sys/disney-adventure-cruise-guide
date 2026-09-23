@@ -32,8 +32,8 @@ export function render(name: string, data: Awaited<ReturnType<typeof loadWidgetD
     case WIDGET_NAMES.briefing:
       return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} />;
     case WIDGET_NAMES.asset:
-      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} fetchedAt={data.fetchedAt} error={data.error} />;
+      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} />;
     default:
-      return <HoldingsWidget stocks={data.stocks} showKrw={data.showKrw} fetchedAt={data.fetchedAt} error={data.error} height={height} />;
+      return <HoldingsWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} height={height} />;
   }
 }

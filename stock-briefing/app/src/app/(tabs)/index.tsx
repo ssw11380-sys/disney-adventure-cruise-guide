@@ -9,18 +9,12 @@ import { COL, StockRow } from "@/components/StockRow";
 import { Button, ErrorView, Loading, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { useLiveStream } from "@/lib/liveStream";
+import { evalView } from "@/lib/liveTick";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
 import { refreshWidgets } from "@/widgets/refresh";
 
 const fxOf = (s: RegisteredWithQuote): number | null => s.quote?.fxRate ?? (s.quote?.priceKrw && s.quote.price ? s.quote.priceKrw / s.quote.price : null);
-/** 종목 통화 금액을 원화로. 환율을 모르면 null */
-const toKrw = (n: number, s: RegisteredWithQuote): number | null => {
-  const cur = s.quote?.currency ?? "KRW";
-  if (cur === "KRW") return n;
-  const fx = fxOf(s);
-  return fx ? n * fx : null;
-};
 
 interface Totals {
   value: number;
@@ -34,39 +28,54 @@ const zero = (): Totals => ({ value: 0, cost: 0, day: 0, count: 0 });
 export default function StocksScreen() {
   const t = useTheme();
   const { data, isLoading, isError, error, refetch, isRefetching } = useStocks();
-  const { sort, setSort, showKrw } = useSettings();
+  const { sort, setSort, showKrw, afterCost } = useSettings();
   const { remove } = useStockMutations();
   const health = useHealth();
   const live = useAnyMarketOpen();
   const stream = useLiveStream();
   const [sortOpen, setSortOpen] = useState(false);
 
+  // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
   const summary = useMemo(() => {
     const list = data ?? [];
     const held = list.filter((s) => s.evaluation && s.quote);
     const byCur: Record<Currency, Totals> = { KRW: zero(), USD: zero() };
+    const usdInKrw = zero();
     const krw = zero();
     let convertible = true;
+    let estimated = false;
+    let currentBasis = 0;
     for (const s of held) {
       const cur = s.quote!.currency ?? "KRW";
-      const ev = s.evaluation!;
+      const fx = fxOf(s);
       const day = s.quote!.change * (s.quantity ?? 0);
-      byCur[cur].value += ev.marketValue;
-      byCur[cur].cost += ev.costBasis;
+      const native = evalView(s.evaluation, { afterCost, toKrw: false, currency: cur, fx })!;
+      byCur[cur].value += native.marketValue;
+      byCur[cur].cost += native.costBasis;
       byCur[cur].day += day;
       byCur[cur].count += 1;
-      const v = toKrw(ev.marketValue, s), c = toKrw(ev.costBasis, s), d = toKrw(day, s);
-      if (v === null || c === null || d === null) convertible = false;
-      else {
-        krw.value += v;
-        krw.cost += c;
-        krw.day += d;
-        krw.count += 1;
+      if (cur === "USD" && !fx) {
+        convertible = false;
+        continue;
+      }
+      const k = evalView(s.evaluation, { afterCost, toKrw: true, currency: cur, fx })!;
+      if (k.estimated) estimated = true;
+      if (k.krwBasis === "current") currentBasis += 1;
+      const dayKrw = cur === "USD" ? day * fx! : day;
+      krw.value += k.marketValue;
+      krw.cost += k.costBasis;
+      krw.day += dayKrw;
+      krw.count += 1;
+      if (cur === "USD") {
+        usdInKrw.value += k.marketValue;
+        usdInKrw.cost += k.costBasis;
+        usdInKrw.day += dayKrw;
+        usdInKrw.count += 1;
       }
     }
     const fx = held.map(fxOf).find((x) => x) ?? null;
-    return { held: held.length, byCur, krw: convertible && held.length ? krw : null, fx, watch: list.length - held.length };
-  }, [data]);
+    return { held: held.length, byCur, usdInKrw, krw: convertible && held.length ? krw : null, fx, estimated, currentBasis, watch: list.length - held.length };
+  }, [data, afterCost]);
 
   const sections = useMemo(() => {
     const list = [...(data ?? [])];
@@ -74,8 +83,13 @@ export default function StocksScreen() {
       const q = s.quote;
       if (!q) return Number.NEGATIVE_INFINITY;
       if (k === "changeRate") return q.changeRate;
-      if (k === "profit") return s.evaluation ? s.evaluation.profitRate : Number.NEGATIVE_INFINITY;
-      if (k === "value") return s.evaluation ? (toKrw(s.evaluation.marketValue, s) ?? s.evaluation.marketValue) : Number.NEGATIVE_INFINITY;
+      // 수익률은 화면에 보이는 기준(원화 보기 여부)대로, 평가금액은 통화를 맞춰야 비교되므로 항상 원화로
+      if (k === "profit") {
+        const v = evalView(s.evaluation, { afterCost, toKrw: showKrw, currency: q.currency, fx: fxOf(s) });
+        return v ? v.profitRate : Number.NEGATIVE_INFINITY;
+      }
+      const v = evalView(s.evaluation, { afterCost, toKrw: true, currency: q.currency, fx: fxOf(s) });
+      if (k === "value") return v ? v.marketValue : Number.NEGATIVE_INFINITY;
       return 0;
     };
     const sorted = (() => {
@@ -98,15 +112,15 @@ export default function StocksScreen() {
       ...(held.length ? [{ key: "held", title: `보유 ${held.length}`, data: held }] : []),
       ...(watch.length ? [{ key: "watch", title: `관심 ${watch.length}`, data: watch }] : []),
     ];
-  }, [data, sort]);
+  }, [data, sort, afterCost, showKrw]);
 
   // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (1분에 한 번)
   const lastWidgetPush = useRef(0);
   useEffect(() => {
     if (!data || Date.now() - lastWidgetPush.current < 60_000) return;
     lastWidgetPush.current = Date.now();
-    void refreshWidgets({ stocks: data, showKrw });
-  }, [data, showKrw]);
+    void refreshWidgets({ stocks: data, showKrw, afterCost });
+  }, [data, showKrw, afterCost]);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
     Alert.alert(s.name, undefined, [
@@ -128,6 +142,10 @@ export default function StocksScreen() {
         <AccountPanel
           total={summary.krw}
           byCur={summary.byCur}
+          usdInKrw={summary.usdInKrw}
+          estimated={summary.estimated}
+          currentBasis={summary.currentBasis}
+          afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
           status={statusLabel}
@@ -166,7 +184,7 @@ export default function StocksScreen() {
             </TableHead>
           </View>
         )}
-        renderItem={({ item }) => <StockRow stock={item} showKrw={showKrw} onPress={() => router.push(`/stocks/${item.code}`)} onLongPress={() => confirmRemove(item)} />}
+        renderItem={({ item }) => <StockRow stock={item} showKrw={showKrw} afterCost={afterCost} onPress={() => router.push(`/stocks/${item.code}`)} onLongPress={() => confirmRemove(item)} />}
         ListEmptyComponent={
           <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
             <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>등록된 종목이 없습니다</Text>
@@ -206,6 +224,10 @@ function HeadCell({ label, active, onPress, width, flex }: { label: string; acti
 function AccountPanel({
   total,
   byCur,
+  usdInKrw,
+  estimated,
+  currentBasis,
+  afterCost,
   showKrw,
   fx,
   status,
@@ -214,6 +236,11 @@ function AccountPanel({
 }: {
   total: Totals | null;
   byCur: Record<Currency, Totals>;
+  usdInKrw: Totals;
+  estimated: boolean;
+  /** 원화 매입금액 장부가 없어 현재 환율로 환산한 해외 종목 수 */
+  currentBasis: number;
+  afterCost: boolean;
   showKrw: boolean;
   fx: number | null;
   status: string;
@@ -229,14 +256,14 @@ function AccountPanel({
   const dc = changeColor(t, main.day);
   const lines: { label: string; tot: Totals; cur: Currency }[] = [];
   if (byCur.KRW.count) lines.push({ label: "국내", tot: byCur.KRW, cur: "KRW" });
-  if (byCur.USD.count) {
-    const k = showKrw && fx ? fx : 1;
-    lines.push({ label: "해외", tot: { value: byCur.USD.value * k, cost: byCur.USD.cost * k, day: byCur.USD.day * k, count: byCur.USD.count }, cur: showKrw && fx ? "KRW" : "USD" });
-  }
+  if (byCur.USD.count) lines.push(showKrw && usdInKrw.count === byCur.USD.count ? { label: "해외", tot: usdInKrw, cur: "KRW" } : { label: "해외", tot: byCur.USD, cur: "USD" });
   return (
     <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
       <View style={styles.panelTop}>
-        <Text style={{ color: t.muted, fontSize: font.small }}>총 평가금액{total ? "" : " (원화 종목)"}</Text>
+        <Text style={{ color: t.muted, fontSize: font.small }}>
+          총 평가금액{total ? "" : " (원화 종목)"}
+          {afterCost ? " · 비용 차감" : ""}
+        </Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
           <View style={[styles.dot, { backgroundColor: live ? t.up : t.muted }]} />
           <Text style={{ color: t.muted, fontSize: font.tiny }}>
@@ -270,7 +297,12 @@ function AccountPanel({
               </View>
             );
           })}
-          {fx ? <Text style={{ color: t.muted, fontSize: font.tiny, textAlign: "right" }}>적용 환율 {fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원</Text> : null}
+          {fx ? (
+            <Text style={{ color: t.muted, fontSize: font.tiny, textAlign: "right" }}>
+              적용 환율 {fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원 · 원화 손익은 매수 당시 환율 기준{estimated ? " (일부 추정)" : ""}
+              {currentBasis ? ` · ${currentBasis}종목은 현재 환율 환산` : ""}
+            </Text>
+          ) : null}
         </View>
       ) : null}
     </View>

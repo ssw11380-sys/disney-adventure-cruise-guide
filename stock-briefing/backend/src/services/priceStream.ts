@@ -135,6 +135,11 @@ export class PriceStream {
     return !prev || prev.price !== tick.price;
   }
 
+  /** 앱에 알림만 보낸다 (예: 잔고가 바뀌었으니 다시 받아 가라) */
+  notify(type: "holdings"): void {
+    this.broadcast(JSON.stringify({ type, at: Date.now() }));
+  }
+
   private publish(tick: StreamTick): void {
     if (!this.remember(tick) || this.clients.size === 0) return;
     this.broadcast(JSON.stringify({ type: "tick", ...tick }));

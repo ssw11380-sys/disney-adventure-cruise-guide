@@ -34,6 +34,35 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
     return toss.autoSync.run("manual");
   });
 
+  /** 해외 종목 원화 매입금액 장부 보기 (종목별 원화 매입금액, exact/estimated, 계좌 보정 구간·비율) */
+  app.get("/toss/krw-cost", async (_req, reply) => {
+    if (!toss) return reply.code(503).send({ error: "TOSS_DISABLED", message: "TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 설정되지 않았습니다" });
+    const state = await toss.sync.costBook.load();
+    return {
+      factor: state.factor,
+      calib: state.calib,
+      items: Object.fromEntries([...(await service.krwCosts())]),
+      entries: Object.values(state.items).map(({ applied: _applied, ...e }) => e),
+    };
+  });
+
+  /**
+   * 토스 앱에서 본 해외 종목 원화 매입금액을 정확한 값으로 넣는다 (토스 앱 원화 보기의 평가금액 − 평가손익).
+   * body: { items: { "SOXL": 24557187, ... } }. 현재 보유 수량·달러 매입금액과 함께 저장되고, 이후 매도만 있으면 비율대로 유지된다.
+   */
+  app.put("/toss/krw-cost", async (req, reply) => {
+    if (!toss) return reply.code(503).send({ error: "TOSS_DISABLED", message: "TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 설정되지 않았습니다" });
+    const body = req.body as { items?: Record<string, unknown> } | undefined;
+    const values: Record<string, number> = {};
+    for (const [code, v] of Object.entries(body?.items ?? {})) {
+      const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, ""));
+      if (Number.isFinite(n) && n > 0) values[code.toUpperCase()] = n;
+    }
+    // skipped: [{ code, reason: not_held | orders_failed | unexplained | changed, retryAfter? }]
+    const r = await toss.sync.setExactKrw(values);
+    return { ...r, items: Object.fromEntries([...(await service.krwCosts())]) };
+  });
+
   /** 진단용: 토스 계좌·보유 종목 원본 응답 (필드 구성 확인) */
   app.get("/toss/holdings-raw", async (_req, reply) => {
     if (!toss) return reply.code(503).send({ error: "TOSS_DISABLED", message: "TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 설정되지 않았습니다" });

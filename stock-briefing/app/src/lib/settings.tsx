@@ -17,6 +17,7 @@ export const STORAGE_KEYS = {
   sort: "settings.sort",
   showKrw: "settings.showKrw",
   themeMode: "settings.themeMode",
+  afterCost: "settings.afterCost",
 } as const;
 
 export type ThemeMode = "dark" | "light" | "system";
@@ -51,16 +52,19 @@ interface Settings {
   sort: SortKey;
   showKrw: boolean;
   themeMode: ThemeMode;
+  /** 평가금액·손익에서 매도 예상 수수료·세금을 뺀다 (토스 앱 기준, 기본 켬) */
+  afterCost: boolean;
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
   setApiToken: (token: string) => Promise<void>;
   setSort: (sort: SortKey) => Promise<void>;
   setShowKrw: (on: boolean) => Promise<void>;
   setThemeMode: (m: ThemeMode) => Promise<void>;
+  setAfterCost: (on: boolean) => Promise<void>;
 }
 
 const noop = async () => {};
-const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, themeMode: "dark", ready: false, setApiUrl: noop, setApiToken: noop, setSort: noop, setShowKrw: noop, setThemeMode: noop });
+const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, themeMode: "dark", afterCost: true, ready: false, setApiUrl: noop, setApiToken: noop, setSort: noop, setShowKrw: noop, setThemeMode: noop, setAfterCost: noop });
 
 async function persist(key: string, value: string | null): Promise<void> {
   try {
@@ -77,10 +81,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [sort, setSortState] = useState<SortKey>("created");
   const [showKrw, setShowKrwState] = useState(false);
   const [themeMode, setThemeModeState] = useState<ThemeMode>("dark");
+  const [afterCost, setAfterCostState] = useState(true);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode])
+    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost])
       .then((pairs) => {
         const m = new Map(pairs);
         const u = m.get(STORAGE_KEYS.apiUrl);
@@ -93,6 +98,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         if (k) setShowKrwState(k === "1");
         const tm = m.get(STORAGE_KEYS.themeMode);
         if (tm && THEME_OPTIONS.some((o) => o.value === tm)) setThemeModeState(tm as ThemeMode);
+        const ac = m.get(STORAGE_KEYS.afterCost);
+        if (ac) setAfterCostState(ac === "1");
       })
       .catch(() => {})
       .finally(() => setReady(true));
@@ -122,9 +129,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     await persist(STORAGE_KEYS.themeMode, m);
   }, []);
 
+  const setAfterCost = useCallback(async (on: boolean) => {
+    setAfterCostState(on);
+    await persist(STORAGE_KEYS.afterCost, on ? "1" : "0");
+  }, []);
+
   const value = useMemo(
-    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, ready, setApiUrl, setApiToken, setSort, setShowKrw, setThemeMode }),
-    [apiUrl, apiToken, sort, showKrw, themeMode, ready, setApiUrl, setApiToken, setSort, setShowKrw, setThemeMode],
+    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, ready, setApiUrl, setApiToken, setSort, setShowKrw, setThemeMode, setAfterCost }),
+    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, ready, setApiUrl, setApiToken, setSort, setShowKrw, setThemeMode, setAfterCost],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

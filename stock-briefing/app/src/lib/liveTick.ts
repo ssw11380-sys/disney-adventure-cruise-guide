@@ -1,4 +1,4 @@
-import type { Evaluation, Quote, RegisteredStock } from "@/api/types";
+import type { Currency, Evaluation, Quote, RegisteredStock } from "@/api/types";
 
 /** 서버 /api/stream 이 보내는 체결 1건 */
 export interface StreamTick {
@@ -9,7 +9,7 @@ export interface StreamTick {
   source: string;
 }
 
-export type StreamMessage = { type: "snapshot"; ticks: StreamTick[] } | ({ type: "tick" } & StreamTick) | { type: "ping"; at: number };
+export type StreamMessage = { type: "snapshot"; ticks: StreamTick[] } | ({ type: "tick" } & StreamTick) | { type: "ping"; at: number } | { type: "holdings"; at: number };
 
 /**
  * 체결가를 이미 받아 둔 시세에 덮어쓴다 (서버 StockService.applyLive 와 같은 규칙).
@@ -39,13 +39,71 @@ export function applyTick(quote: Quote | null, tick: StreamTick): Quote | null {
   };
 }
 
-/** 서버 evaluate() 와 같은 계산 */
-export function evaluate(s: Pick<RegisteredStock, "quantity" | "avgPrice">, q: Quote | null): Evaluation | null {
+/**
+ * 서버 evaluate() 와 같은 계산. prev(직전 평가)가 있으면 토스 기준(매입금액·예상 비용 비율)을 이어받아
+ * 실시간 가격에서도 토스 앱과 같은 "비용 차감 후" 평가를 유지한다.
+ */
+export function evaluate(s: Pick<RegisteredStock, "quantity" | "avgPrice">, q: Quote | null, prev?: Evaluation | null): Evaluation | null {
   if (!q || s.quantity === null || s.avgPrice === null || s.quantity <= 0) return null;
   const marketValue = q.price * s.quantity;
-  const costBasis = s.avgPrice * s.quantity;
+  const costBasis = prev?.costBasis ?? s.avgPrice * s.quantity;
   const profit = marketValue - costBasis;
-  return { marketValue, costBasis, profit, profitRate: costBasis > 0 ? Math.round((profit / costBasis) * 10000) / 100 : 0 };
+  const pct = (p: number) => (costBasis > 0 ? Math.round((p / costBasis) * 10000) / 100 : 0);
+  const costRate = prev?.costRate ?? null;
+  const after = costRate !== null && costRate !== undefined ? marketValue * (1 - costRate) : null;
+  return {
+    marketValue,
+    costBasis,
+    profit,
+    profitRate: pct(profit),
+    costRate,
+    afterCost: after !== null ? { marketValue: after, profit: after - costBasis, profitRate: pct(after - costBasis) } : null,
+    costBasisKrw: prev?.costBasisKrw ?? null,
+    krwCostSource: prev?.krwCostSource ?? null,
+  };
+}
+
+/** 화면에 보여줄 평가 한 벌 (통화 포함) */
+export interface EvalView {
+  marketValue: number;
+  costBasis: number;
+  profit: number;
+  profitRate: number;
+  currency: Currency;
+  /** 원화 손익이 추정치인지 (해외 종목 원화 매입금액이 장부 추정값이거나 현재 환율 환산인 경우) */
+  estimated: boolean;
+  /** 해외 종목 원화 매입금액 기준: 매수 당시 환율(장부) / 현재 환율 환산(장부 없음). 원화 환산이 아니면 null */
+  krwBasis: "purchase" | "current" | null;
+}
+
+/**
+ * 토스 앱과 같은 방식으로 평가를 고른다.
+ *  - afterCost: 매도 예상 수수료·세금을 뺀 평가금액 (토스 비용 비율이 있을 때)
+ *  - 해외 종목을 원화로 볼 때: 평가금액은 현재 표시 환율로, 매입금액은 매수 당시 환율의 원화 매입금액으로 → 환차손익 포함 손익
+ */
+export function evalView(
+  ev: Evaluation | null | undefined,
+  opts: { afterCost: boolean; toKrw: boolean; currency: Currency | undefined; fx: number | null | undefined },
+): EvalView | null {
+  if (!ev) return null;
+  const native = opts.afterCost && ev.afterCost ? ev.afterCost.marketValue : ev.marketValue;
+  const cur = opts.currency ?? "KRW";
+  if (cur === "USD" && opts.toKrw && opts.fx) {
+    const value = native * opts.fx;
+    const cost = ev.costBasisKrw ?? ev.costBasis * opts.fx;
+    const profit = value - cost;
+    return {
+      marketValue: value,
+      costBasis: cost,
+      profit,
+      profitRate: cost > 0 ? (profit / cost) * 100 : 0,
+      currency: "KRW",
+      estimated: ev.costBasisKrw == null || ev.krwCostSource === "estimated",
+      krwBasis: ev.costBasisKrw == null ? "current" : "purchase",
+    };
+  }
+  const profit = native - ev.costBasis;
+  return { marketValue: native, costBasis: ev.costBasis, profit, profitRate: ev.costBasis > 0 ? (profit / ev.costBasis) * 100 : 0, currency: cur, estimated: false, krwBasis: null };
 }
 
 /** 웹소켓 주소: http(s) → ws(s), 토큰은 헤더와 ?token= 둘 다 (React Native 는 헤더를 붙일 수 있지만 프록시가 떼는 경우 대비) */

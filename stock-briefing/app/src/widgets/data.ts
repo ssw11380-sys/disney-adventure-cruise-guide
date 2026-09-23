@@ -11,17 +11,19 @@ export interface WidgetData {
   stocks: RegisteredWithQuote[];
   briefings: LatestBriefing[];
   showKrw: boolean;
+  afterCost: boolean;
   fetchedAt: number;
   error: string | null;
 }
 
-async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showKrw: boolean }> {
-  const pairs = await AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.showKrw]).catch(() => []);
+async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showKrw: boolean; afterCost: boolean }> {
+  const pairs = await AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.showKrw, STORAGE_KEYS.afterCost]).catch(() => []);
   const m = new Map(pairs);
   return {
     apiUrl: m.get(STORAGE_KEYS.apiUrl) || defaultApiUrl(),
     apiToken: m.get(STORAGE_KEYS.apiToken) || process.env.EXPO_PUBLIC_API_TOKEN || "",
     showKrw: m.get(STORAGE_KEYS.showKrw) === "1",
+    afterCost: m.get(STORAGE_KEYS.afterCost) !== "0",
   };
 }
 
@@ -39,8 +41,8 @@ async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promi
 
 /** 서버에서 위젯에 필요한 데이터를 받는다. 실패하면 error 에 사유를 남기고 빈 목록 */
 export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
-  const { apiUrl, apiToken, showKrw } = await readSettings();
-  const out: WidgetData = { stocks: [], briefings: [], showKrw, fetchedAt: Date.now(), error: null };
+  const { apiUrl, apiToken, showKrw, afterCost } = await readSettings();
+  const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, fetchedAt: Date.now(), error: null };
   try {
     const [stocks, briefings] = await Promise.all([
       opts.stocks ? getJson<RegisteredWithQuote[]>(`${apiUrl}/api/stocks?quotes=1`, apiToken) : Promise.resolve([]),

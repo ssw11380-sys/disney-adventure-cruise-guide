@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createMigratedDb } from "../src/db/index.js";
 import type { MarketCalendar } from "../src/providers/market/calendar.js";
 import type { TossHolding, TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
+import { ProviderError } from "../src/lib/errors.js";
 import { StockService } from "../src/services/stockService.js";
 import { HoldingsAutoSync, TossSyncService } from "../src/services/tossSyncService.js";
 import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider } from "./helpers.js";
@@ -13,13 +14,32 @@ class FakeToss {
   calls = 0;
   fail = false;
   holdingsList: TossHolding[] = [];
+  noAccounts = false;
   async accounts() {
     if (this.fail) throw new Error("토스 계좌 조회 실패");
-    return [{ accountNo: "1", accountSeq: 1, accountType: "BROKERAGE" }];
+    return this.noAccounts ? [] : [{ accountNo: "1", accountSeq: 1, accountType: "BROKERAGE" }];
   }
-  async holdings(_seq: number) {
+  /** 동기화 도중(보유 조회 직후) 한 번 실행할 콜백 */
+  duringSync: (() => void) | null = null;
+  async holdingsWithOverview(_seq: number) {
     this.calls++;
-    return this.holdingsList;
+    const items = this.holdingsList;
+    const hook = this.duringSync;
+    this.duringSync = null;
+    hook?.();
+    if (this.fail) throw new Error("토스 계좌 조회 실패");
+    return { items, overview: { purchaseKrw: 0, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } };
+  }
+  orders: Array<{ orderId: string; side: "BUY" | "SELL"; quantity: number; amount: number; at: string }> = [];
+  rateCalls = 0;
+  rateMissing = false;
+  async ordersForBook() {
+    return this.orders;
+  }
+  async usdKrwAt() {
+    this.rateCalls++;
+    if (this.rateMissing) throw new ProviderError("toss-openapi", "HTTP 404 exchange-rate-not-found: 요청한 시점의 환율 정보가 없습니다.");
+    return 1400;
   }
   async stockInfos(codes: string[]) {
     return new Map(codes.map((c) => [c, { name: c === "TSLA" ? "테슬라" : "NAVER", market: c === "TSLA" ? "NASDAQ" : "KOSPI" }]));
@@ -66,6 +86,28 @@ describe("TossSyncService 전량 매도 처리", () => {
     await db.destroy();
   });
 
+  it("계좌 목록이 비면 일시 오류로 보고 아무것도 바꾸지 않는다 (전량 매도로 처리하지 않음)", async () => {
+    const { db, toss, stocks, sync } = await setup();
+    toss.holdingsList = [h("035420", 9, 232555)];
+    await sync.importHoldings();
+    toss.noAccounts = true;
+    await expect(sync.importHoldings()).rejects.toThrow("토스 계좌 목록이 비었습니다");
+    expect((await stocks.list()).find((s) => s.code === "035420")).toMatchObject({ quantity: 9 });
+    await db.destroy();
+  });
+
+  it("토스에 없는 과거 환율(404)은 기억해 두고 동기화마다 다시 묻지 않는다", async () => {
+    const { db, toss, sync } = await setup();
+    toss.holdingsList = [{ ...h("TSLA", 2, 300, "USD"), purchaseAmount: 600 }];
+    toss.orders = [{ orderId: "o1", side: "BUY", quantity: 2, amount: 600, at: "2019-03-04T23:00:00+09:00" }];
+    toss.rateMissing = true;
+    await sync.importHoldings();
+    await sync.importHoldings();
+    expect(toss.rateCalls).toBe(1);
+    expect((await sync.costBook.load()).pending["1:TSLA"]).toBeDefined();
+    await db.destroy();
+  });
+
   it("수량 0 으로 내려온 보유 항목은 보유로 치지 않는다", async () => {
     const { db, toss, sync } = await setup();
     toss.holdingsList = [h("035420", 0, 232555)];
@@ -106,6 +148,56 @@ describe("HoldingsAutoSync", () => {
     const [a, b] = await Promise.all([auto.run("schedule"), auto.run("briefing")]);
     expect(a).toBe(b);
     expect(toss.calls).toBe(1);
+    await db.destroy();
+  });
+
+  it("동기화 중에 체결 알림(order)이 오면 끝난 뒤 한 번 더 읽는다 (체결 전 잔고를 읽었을 수 있으므로)", async () => {
+    const { db, toss, sync } = await setup();
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW });
+    toss.holdingsList = [h("035420", 9, 232555)];
+    let second: Promise<unknown> | null = null;
+    toss.duringSync = () => {
+      toss.holdingsList = [h("035420", 12, 225000)]; // 이번 실행은 이미 9주를 읽었다
+      second = auto.run("order");
+    };
+    await auto.run("schedule");
+    await second;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(toss.calls).toBe(2);
+    expect((await db.selectFrom("registered_stocks").select("quantity").where("code", "=", "035420").executeTakeFirst())?.quantity).toBe(12);
+
+    // order 가 아닌 트리거는 기존 실행 결과를 같이 기다리기만 한다
+    toss.duringSync = () => void auto.run("schedule");
+    await auto.run("briefing");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(toss.calls).toBe(3);
+    await db.destroy();
+  });
+
+  it("수동 실행이 실패해도 같이 기다리던 자동 실행(order)에는 오류를 넘기지 않고, 수동은 진행 중 실행이 끝난 뒤 자기 실행을 한다", async () => {
+    const { db, toss, sync } = await setup();
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now: NOW });
+    toss.holdingsList = [h("035420", 9, 232555)];
+    let joined: Promise<unknown> | null = null;
+    // 수동 실행 도중 체결 알림으로 order 가 합류하고, 수동 실행은 실패한다
+    toss.duringSync = () => {
+      toss.fail = true;
+      joined = auto.run("order");
+    };
+    await expect(auto.run("manual")).rejects.toThrow("토스 계좌 조회 실패");
+    expect(await joined).toBeNull(); // 처리 안 된 거부 없이 null
+    await new Promise((r) => setTimeout(r, 20)); // order 로 한 번 더 도는 실행도 조용히 실패
+    expect(auto.status().lastError).toContain("토스 계좌 조회 실패");
+
+    // 진행 중인 자동 실행에 수동이 겹치면: 자동이 끝난 뒤 수동이 따로 돌고, 실패는 수동 쪽에만 던진다
+    toss.fail = false;
+    toss.duringSync = () => {
+      toss.fail = true;
+    };
+    const scheduled = auto.run("schedule");
+    const manual = auto.run("manual");
+    expect(await scheduled).toBeNull();
+    await expect(manual).rejects.toThrow("토스 계좌 조회 실패");
     await db.destroy();
   });
 

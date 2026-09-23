@@ -87,7 +87,7 @@ export function TossOpenApiCard() {
           <Row label="서버 공인 IP" value={<Text selectable style={{ color: t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{ip ?? "확인 불가"}</Text>} />
           <Row label="토큰 발급" value={s.client?.tokenIssuedAt ? formatDateKo(s.client.tokenIssuedAt, true) : "-"} />
           <Row label="마지막 성공" value={s.client?.lastOkAt ? formatDateKo(s.client.lastOkAt, true) : "-"} />
-          <Row label="실시간 구독" value={s.realtime ? `${s.realtime.connected ? "연결됨" : "끊김"} · ${s.realtime.subscribed.length}종목` : "-"} />
+          <Row label="실시간 구독" value={s.realtime ? `${s.realtime.connected ? "연결됨" : "끊김"} · ${s.realtime.subscribed.filter((k) => !k.startsWith("personal:")).length}종목` : "-"} />
           <Row label="자동 동기화" value={syncLabel(s.sync)} />
           {s.sync?.lastError ? <Text style={{ color: t.danger, fontSize: font.small }}>자동 동기화 실패: {s.sync.lastError}</Text> : null}
           {s.client?.ipBlocked ? (
