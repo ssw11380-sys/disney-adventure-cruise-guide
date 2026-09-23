@@ -200,6 +200,11 @@ describe("TossProvider", () => {
     const before = calls;
     expect(await Promise.all([p.basePrice("005930"), p.basePrice("005930")])).toEqual([276500, 276500]);
     expect(calls - before).toBe(1);
+    // 토스 웹이 기준가를 주지 않는 코드(ETN 등)는 10분 동안 다시 묻지 않는다
+    const n = calls;
+    expect(await p.basePrice("570051")).toBeNull();
+    expect(await p.basePrice("570051")).toBeNull();
+    expect(calls - n).toBe(1);
   });
 
   it("봉은 오래된 순으로 정렬되고 날짜는 거래소 현지 날짜다", async () => {

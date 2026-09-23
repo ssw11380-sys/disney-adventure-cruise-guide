@@ -229,6 +229,8 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
   private readonly baseInflight = new Map<string, Promise<number | null>>();
   /** 일괄 시세가 마지막으로 실패한 시각 — 잠시 동안 종목마다 다시 부르지 않는다 (장애 때 요청이 불어나지 않게) */
   private pricesFailedAt = 0;
+  /** 토스 웹이 기준가를 주지 않은 코드(예: 상품코드가 Q 로 시작하는 ETN) — 10분 동안 다시 묻지 않는다 */
+  private readonly baseMissing = new Map<string, number>();
   private fxCache: { at: number; rate: number } | null = null;
 
   /**
@@ -290,6 +292,8 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
       const r = byPc.get(pc);
       const price = num(r?.["close"]);
       const base = num(r?.["base"]);
+      if (!r || base === null || base <= 0) this.baseMissing.set(code, t);
+      else this.baseMissing.delete(code);
       if (r && base !== null && base > 0) {
         const next = Date.parse(String(r["nextTradingStart"] ?? ""));
         this.baseCache.set(code, { at: t, base, until: Number.isNaN(next) || next <= t ? t + 60_000 : next });
@@ -313,6 +317,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     // 1분 안에 받은 값이면 그대로. 토스 웹이 방금(30초 안) 실패했으면 부르지 않고 아직 유효한 마지막 값(같은 거래일)을 쓴다
     if (hit && t - hit.at < 60_000 && valid(hit) !== null) return hit.base;
     if (t - this.pricesFailedAt < 30_000) return valid(hit);
+    if (t - (this.baseMissing.get(code) ?? -Infinity) < 10 * 60_000) return null;
     let p = this.baseInflight.get(code);
     if (!p) {
       p = this.getMany([code])
