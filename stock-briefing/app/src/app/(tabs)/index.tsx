@@ -252,7 +252,7 @@ function AccountPanel({
           })}
           {fx ? (
             <Text style={{ color: t.muted, fontSize: font.tiny, textAlign: "right" }}>
-              적용 환율 {fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원 · 원화 손익은 매수 당시 환율 기준{estimated ? " (일부 추정)" : ""}
+              토스 적용 환율 {fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원 · 원화 손익은 매수 당시 환율 기준{estimated ? " (일부 추정)" : ""}
               {currentBasis ? ` · ${currentBasis}종목은 현재 환율 환산` : ""}
             </Text>
           ) : null}

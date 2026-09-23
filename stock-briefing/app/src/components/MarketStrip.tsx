@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMarketIndices } from "@/api/hooks";
 import type { MarketIndex } from "@/api/types";
+import { formatPct } from "@/lib/format";
 import { clockLabel } from "@/lib/freshness";
 import { useNow } from "@/lib/useNow";
 import { changeColor, font, space, useTheme } from "@/theme";
@@ -55,14 +56,17 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
               ]}
             >
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                <Text style={{ color: on ? t.ink : t.muted, fontSize: font.tiny, fontWeight: "600" }}>{i.name}</Text>
+                <Text style={{ color: on ? t.ink : t.muted, fontSize: font.tiny, fontWeight: "600" }}>
+                  {i.name}
+                  {/* 잔고 패널의 "토스 적용 환율"과 구분 */}
+                  {i.kind === "fx" ? <Text style={{ fontWeight: "400" }}> 시장</Text> : null}
+                </Text>
                 {i.open && i.kind !== "fx" ? <View style={[styles.dot, { backgroundColor: t.up }]} /> : null}
               </View>
               <Text style={[styles.value, { color: c }]}>{formatIndexValue(i.value)}</Text>
               <Text style={[styles.rate, { color: c }]}>
                 {i.change > 0 ? "▲" : i.change < 0 ? "▼" : ""}
-                {Math.abs(i.change).toLocaleString("en-US", { maximumFractionDigits: 2 })} {i.changeRate > 0 ? "+" : ""}
-                {i.changeRate.toFixed(2)}%
+                {formatIndexValue(Math.abs(i.change))} {formatPct(i.changeRate)}
               </Text>
             </Pressable>
           );

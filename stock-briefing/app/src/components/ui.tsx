@@ -129,8 +129,8 @@ export function Badge({ children, tone = "neutral" }: { children: React.ReactNod
 /** 등락 색: 한국 관례 (상승 빨강, 하락 파랑) */
 export function ChangeText({ value, text, style }: { value: number | null | undefined; text: string; style?: StyleProp<TextStyle> }) {
   const t = useTheme();
-  const color = value === null || value === undefined || value === 0 ? t.muted : value > 0 ? t.up : t.down;
-  return <Text style={[{ color }, NUM, style]}>{text}</Text>;
+  // 보합(0)·값 없음은 앱 전체 공통 규칙(changeColor)대로 기본 글자색
+  return <Text style={[{ color: changeColor(t, value) }, NUM, style]}>{text}</Text>;
 }
 
 /** 등락률 상자 (HTS 목록의 색 칠한 등락률 칸) */
