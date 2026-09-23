@@ -28,7 +28,8 @@ export class NewsProviderChain implements NewsProvider {
   }
 
   /**
-   * 종목 뉴스: 코드로 조회할 수 있는 소스(네이버 종목 뉴스)를 먼저 쓰고, 결과가 적으면 이름 검색 결과로 채운다.
+   * 종목 뉴스: 코드로 조회할 수 있는 소스(네이버 종목 뉴스)를 먼저 쓴다. 종목 뉴스가 하나라도 있으면 그걸로 끝
+   * (이름 검색은 "NAVER" 처럼 흔한 단어일 때 블로그·무관 기사가 섞이므로 종목 뉴스가 전혀 없을 때만 쓴다).
    * 같은 기사(제목 정규화)는 한 번만.
    */
   async forStock(stock: { code: string; name: string; market?: string }, limit: number): Promise<NewsItem[]> {
@@ -49,15 +50,9 @@ export class NewsProviderChain implements NewsProvider {
       } catch (e) {
         this.log.warn({ provider: p.name, err: e instanceof Error ? e.message : String(e) }, `종목 뉴스(${stock.code}) 실패, 다음 소스로`);
       }
-      if (out.length >= limit) return out.slice(0, limit);
+      if (out.length >= limit) break;
     }
-    if (out.length < Math.min(3, limit)) {
-      try {
-        add(await this.search(stock.name, limit));
-      } catch (e) {
-        if (out.length === 0) throw e;
-      }
-    }
-    return out.sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : -1)).slice(0, limit);
+    if (out.length > 0) return out.slice(0, limit);
+    return (await this.search(stock.name, limit)).slice(0, limit);
   }
 }

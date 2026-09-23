@@ -15,8 +15,17 @@ import type { FetchFn } from "../market/types.js";
 const UA = "stock-briefing/1.0 (personal use; contact: admin@stock-briefing.app)";
 const TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
 
-const REVENUE_TAGS = ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet", "RevenueFromContractWithCustomerIncludingAssessedTax"];
-const OPERATING_TAGS = ["OperatingIncomeLoss"];
+const REVENUE_TAGS = [
+  "Revenues",
+  "RevenueFromContractWithCustomerExcludingAssessedTax",
+  "RevenueFromContractWithCustomerIncludingAssessedTax",
+  "SalesRevenueNet",
+  "SalesRevenueGoodsNet",
+  "RevenuesNetOfInterestExpense",
+  "TotalRevenuesAndOtherIncome",
+  "OperatingRevenue",
+];
+const OPERATING_TAGS = ["OperatingIncomeLoss", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"];
 const NET_TAGS = ["NetIncomeLoss", "ProfitLoss"];
 const ASSET_TAGS = ["Assets"];
 const LIAB_TAGS = ["Liabilities", "LiabilitiesCurrent"];
@@ -135,8 +144,10 @@ export class EdgarProvider implements FinancialsProvider {
     const f = await this.getJson<Json>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, 6 * 3_600_000);
     const gaap = ((f["facts"] as Json | undefined)?.["us-gaap"] as Record<string, { units?: Record<string, FactRow[]> }> | undefined) ?? {};
     const pick = (tags: string[], duration: boolean): Map<number, number> => {
-      const byYear = new Map<number, { end: string; val: number }>();
+      // 태그마다 연도별 값을 모으고, 연도별로 앞선 태그의 값을 우선하되 빠진 연도는 뒤 태그로 채운다
+      const merged = new Map<number, number>();
       for (const tag of tags) {
+        const byYear = new Map<number, { end: string; val: number }>();
         const rows = gaap[tag]?.units?.["USD"] ?? [];
         for (const r of rows) {
           if (r.form !== "10-K" || r.fp !== "FY" || !r.fy || typeof r.val !== "number" || !r.end) continue;
@@ -150,9 +161,9 @@ export class EdgarProvider implements FinancialsProvider {
           const prev = byYear.get(year);
           if (!prev || r.end > prev.end) byYear.set(year, { end: r.end, val: r.val });
         }
-        if (byYear.size > 0) break; // 첫 번째로 데이터가 있는 태그 사용
+        for (const [y, v] of byYear) if (!merged.has(y)) merged.set(y, v.val);
       }
-      return new Map([...byYear.entries()].map(([y, v]) => [y, v.val]));
+      return merged;
     };
     const revenue = pick(REVENUE_TAGS, true);
     const operating = pick(OPERATING_TAGS, true);

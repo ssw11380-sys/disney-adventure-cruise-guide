@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { CODE_RE, normalizeCode } from "../lib/codes.js";
+import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
 import type { FinancialsProvider } from "../providers/dart/types.js";
 import type { NewsProvider } from "../providers/news/types.js";
 import type { AnalysisService } from "../services/analysisService.js";
@@ -18,9 +18,11 @@ export interface AnalysisRouteDeps {
   stocks: StockService;
   news: NewsProvider;
   financials: FinancialsProvider | null;
+  /** 미국 종목 공시 (SEC EDGAR) */
+  financialsUs?: FinancialsProvider | null;
 }
 
-export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app, { service, stocks, news, financials }) => {
+export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app, { service, stocks, news, financials, financialsUs }) => {
   /** GET /api/stocks/:code/analysis/:kind?refresh=1 — 종목 상세 탭 (회사 소개 / 가치투자 / 기술적 분석) */
   app.get("/:code/analysis/:kind", async (req) => {
     const { code, kind } = params.parse(req.params);
@@ -31,13 +33,13 @@ export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app,
   /** GET /api/stocks/:code/news — 종목 상세 4번째 탭 (최근 뉴스 + 공시). 각 항목 독립, 실패는 error 로 */
   app.get("/:code/news", async (req) => {
     const { code } = codeParam.parse(req.params);
-    const name =
-      (await stocks.get(code))?.name ??
-      (await stocks.search(code, 1)).results[0]?.name ??
-      code;
+    const registered = await stocks.get(code);
+    const name = registered?.name ?? (await stocks.search(code, 1)).results[0]?.name ?? code;
+    const kr = isKrCode(code);
+    const fin = kr ? financials : (financialsUs ?? null);
     const [newsRes, discRes] = await Promise.allSettled([
-      news.search(name, 15),
-      financials ? financials.getDisclosures(code, 30, 15) : Promise.reject(new Error("DART_API_KEY 가 설정되지 않았습니다")),
+      news.forStock ? news.forStock({ code, name, ...(registered?.market ? { market: registered.market } : {}) }, 15) : news.search(name, 15),
+      fin ? fin.getDisclosures(code, 30, 15) : Promise.reject(new Error(kr ? "DART_API_KEY 가 설정되지 않았습니다" : "미국 공시 소스가 없습니다")),
     ]);
     return {
       code,
