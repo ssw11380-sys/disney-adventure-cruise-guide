@@ -72,7 +72,7 @@ export function exchangeSession(j: Json | undefined): ExchangeSession | null {
   const kind: ExchangeSession["kind"] =
     status === "open" ? (type === "regularMarket" ? "regular" : type === "afterMarket" ? "after" : type === "preMarket" ? "pre" : "closed") : status === "preopen" ? "preopen" : "closed";
   const iso = (v: unknown) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : null);
-  return { kind, label: String(ss["displayLabel"] ?? ""), openAt: iso(ss["openAt"]), closeAt: iso(ss["closeAt"]), tradeBaseAt: typeof j?.["tradeBaseAt"] === "string" ? (j["tradeBaseAt"] as string) : null };
+  return { kind, label: String(ss["displayLabel"] ?? ""), openAt: iso(ss["openAt"]), closeAt: iso(ss["closeAt"]), tradeBaseAt: typeof j?.["tradeBaseAt"] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(j["tradeBaseAt"] as string) ? (j["tradeBaseAt"] as string) : null };
 }
 
 /** 줄의 90% 이상이 등락률 0·거래량 0(또는 없음)인지 — 출처가 장 시작 전으로 초기화한 목록 */

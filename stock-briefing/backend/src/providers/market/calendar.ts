@@ -74,9 +74,20 @@ export class MarketCalendar {
     private readonly ttlMs = 5 * 60_000,
   ) {}
 
+  private inflight: Promise<MarketStatus> | null = null;
+
   async status(): Promise<MarketStatus> {
     const now = this.now();
     if (this.cache && now.getTime() < this.cache.until) return { ...this.cache.status, now: now.toISOString() };
+    // 캐시가 끝난 직후 동시에 들어온 요청은 한 번만 묻는다
+    this.inflight ??= this.load().finally(() => {
+      this.inflight = null;
+    });
+    return this.inflight;
+  }
+
+  private async load(): Promise<MarketStatus> {
+    const now = this.now();
     let KR = fallbackState("KR", now);
     let US = fallbackState("US", now);
     try {

@@ -248,3 +248,18 @@ describe("토스 달력 캐시", () => {
     expect(calls).toBe(2);
   });
 });
+
+describe("토스 달력 동시 요청", () => {
+  it("캐시가 끝난 직후 동시에 들어온 요청은 한 번만 묻는다", async () => {
+    const { MarketCalendar } = await import("../src/providers/market/calendar.js");
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 20));
+      return json({ result: [] });
+    }) as unknown as typeof fetch;
+    const cal = new MarketCalendar(fetchFn, () => new Date("2026-09-23T01:00:00Z"));
+    await Promise.all([cal.status(), cal.status(), cal.status(), cal.status()]);
+    expect(calls).toBe(1);
+  });
+});
