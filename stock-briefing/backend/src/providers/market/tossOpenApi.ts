@@ -418,9 +418,13 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
   async getQuote(code: string): Promise<Quote> {
     code = normalizeCode(code);
     const kr = isKrCode(code);
+    let dailyError: unknown = null;
     const [prices, daily, infos] = await Promise.all([
       this.client.get<Json[]>("/api/v1/prices", { symbols: code }),
-      this.dailyCandles(code, 260).catch(() => [] as Candle[]),
+      this.dailyCandles(code, 260).catch((e: unknown) => {
+        dailyError = e;
+        return [] as Candle[];
+      }),
       this.stockInfos([code]).catch(() => new Map<string, TossStockInfo>()),
     ]);
     const p = (prices ?? []).find((x) => String(x["symbol"] ?? "").toUpperCase() === code) ?? prices?.[0];
@@ -436,7 +440,11 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const today = latest && latest.date >= priceDate ? latest : null;
     const prev = today ? daily.at(-2) ?? null : latest;
     const prevClose = prev?.close ?? null;
-    const change = prevClose !== null ? round2(price - prevClose) : 0;
+    // 전일 종가를 모르면(상장 첫날이라 일봉이 오늘 것뿐, 또는 일봉을 못 받음) 등락을 0 으로 만들지 않고
+    // 다음 소스(기준가를 주는 토스 웹)로 넘긴다 — 상장 첫날 +280% 종목이 "0 · 0.00%"로 보이지 않게
+    if (prevClose === null)
+      throw new ProviderError(this.name, dailyError ? `${code} 일봉을 받지 못해 전일 종가를 모름` : `${code} 전일 종가 없음 (상장 첫날)`, dailyError ?? undefined);
+    const change = round2(price - prevClose);
     const changeRate = prevClose ? round2((change / prevClose) * 100) : 0;
     const currency = String(p["currency"] ?? (kr ? "KRW" : "USD")) === "USD" ? "USD" : "KRW";
     const info = infos.get(code);

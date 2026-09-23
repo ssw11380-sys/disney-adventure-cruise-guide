@@ -688,6 +688,28 @@ describe("운영 검증 뒤 4차 수정", () => {
     expect(d!.theme).toMatchObject({ up: 1, down: 9 });
   }, 10_000);
 
+  it("오늘 업종 목록: 출처가 잠깐 끼워 준 빈 항목(0% · 0/0/0)은 빼고, 빈 항목이 많으면(값을 비우는 중) 그대로 둔다", async () => {
+    let empties = 2;
+    const fetchFn = (async (url: string) => {
+      if (url.includes("/marketStatus")) return marketStatus(chuseokKr(), { latest: exRow("open", "regularMarket", "2026-09-24T09:30:00-04:00", "2026-09-24T16:00:00-04:00", "2026-09-24") });
+      if (url.includes("/sectors/all"))
+        return ok({
+          sectors: [
+            ...Array.from({ length: 10 }, (_, i) => ({ code: `S${i}`, name: `업종${i}`, changeRate: i % 3 === 0 ? 0 : 1 + i / 10, risingCount: 2, unchangedCount: 1, fallingCount: 1, topItems: [] })),
+            ...Array.from({ length: empties }, (_, i) => ({ code: `E${i}`, name: `빈${i}`, changeRate: 0, risingCount: 0, unchangedCount: 0, fallingCount: 0, topItems: [] })),
+          ],
+          hasNext: false,
+        });
+      return json({}, 404);
+    }) as unknown as typeof fetch;
+    const now = () => new Date("2026-09-24T14:00:00Z");
+    const few = await new DiscoverService({ naver: new NaverDiscover(fetchFn), now }).themes("US", "sector", "day");
+    expect(few.themes.map((t) => t.id)).toEqual(Array.from({ length: 10 }, (_, i) => `S${i}`)); // 0% 이지만 종목 수가 있는 업종은 남긴다
+    empties = 5;
+    const many = await new DiscoverService({ naver: new NaverDiscover(fetchFn), now }).themes("US", "sector", "day");
+    expect(many.themes).toHaveLength(15);
+  });
+
   it("상세: 개장 직전(프리마켓)에 받은 어제 목록의 수는 개장 뒤 상세에 붙이지 않고, 받아 둔 지금 목록은 새 조회를 기다리지 않고 쓴다", async () => {
     const kr: Ex = { latest: exRow("close", "afterMarket", "2026-09-24T20:00:00+09:00", "2026-09-25T08:00:00+09:00", "2026-09-24") };
     let us: Ex = { latest: exRow("open", "preMarket", "2026-09-24T04:00:00-04:00", "2026-09-24T09:30:00-04:00", "2026-09-24") };
