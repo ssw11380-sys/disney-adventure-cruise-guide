@@ -16,11 +16,13 @@ import { useSettings } from "./settings";
 
 interface LiveStreamState {
   connected: boolean;
+  /** 마지막으로 연결된 시각. 체결이 한 번도 안 왔을 때 "실시간" 판단의 기준 */
+  connectedAt: number | null;
   lastTickAt: number | null;
   ticks: number;
 }
 
-const LiveStreamContext = createContext<LiveStreamState>({ connected: false, lastTickAt: null, ticks: 0 });
+const LiveStreamContext = createContext<LiveStreamState>({ connected: false, connectedAt: null, lastTickAt: null, ticks: 0 });
 
 export function useLiveStream(): LiveStreamState {
   return useContext(LiveStreamContext);
@@ -31,7 +33,7 @@ type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string |
 export function LiveStreamProvider({ children }: { children: React.ReactNode }) {
   const { apiUrl, apiToken, ready } = useSettings();
   const qc = useQueryClient();
-  const [state, setState] = useState<LiveStreamState>({ connected: false, lastTickAt: null, ticks: 0 });
+  const [state, setState] = useState<LiveStreamState>({ connected: false, connectedAt: null, lastTickAt: null, ticks: 0 });
   const ticksRef = useRef(0);
 
   useEffect(() => {
@@ -102,7 +104,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       socket = ws;
       ws.onopen = () => {
         backoff = 1000;
-        setState((s) => ({ ...s, connected: true }));
+        setState((s) => ({ ...s, connected: true, connectedAt: Date.now() }));
         armWatchdog();
       };
       ws.onmessage = (ev) => {

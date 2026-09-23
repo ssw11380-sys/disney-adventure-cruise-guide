@@ -2,29 +2,36 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useBriefing, useBriefings } from "@/api/hooks";
+import { StaleBanner, useConnection } from "@/components/Freshness";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Badge, Card, ChangeText, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL } from "@/lib/format";
+import { parseBriefingId, viewState } from "@/lib/freshness";
 import { font, space, useTheme } from "@/theme";
 
 /** 브리핑 상세: 요약/상세 토글, 당시 시세 스냅샷, 같은 종목 지난 브리핑 날짜 목록 */
 export default function BriefingDetailScreen() {
   const t = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const numId = Number(id);
-  const b = useBriefing(numId);
+  // 잘못된 딥링크(briefings/abc, briefings/0)는 요청하지 않고 안내만 한다
+  const numId = parseBriefingId(id);
+  const b = useBriefing(numId ?? 0);
+  const conn = useConnection(b, Number.POSITIVE_INFINITY);
   const [mode, setMode] = useState<"summary" | "detail">("detail");
   const history = useBriefings({ code: b.data?.code, limit: 30 });
 
-  if (b.isLoading) return <Screen><Loading /></Screen>;
-  if (b.isError) return <Screen><ErrorView error={b.error} onRetry={() => void b.refetch()} /></Screen>;
+  if (numId === null) return <Screen><ErrorView error={new Error("브리핑 주소가 올바르지 않습니다")} onRetry={() => router.replace("/briefings")} /></Screen>;
+  const view = viewState(b);
+  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "error") return <Screen><ErrorView error={b.error} onRetry={() => void b.refetch()} /></Screen>;
   const d = b.data!;
   const q = d.data?.quote ?? null;
   const failed = d.status === "failed";
 
   return (
     <Screen disclaimer>
+      <StaleBanner conn={conn} open={false} />
       <Stack.Screen options={{ title: `${d.name ?? d.code} · ${SESSION_LABEL[d.session]}` }} />
       <View style={{ gap: 2, paddingHorizontal: space.lg, paddingTop: space.md }}>
         <Pressable onPress={() => router.push(`/stocks/${d.code}`)} accessibilityRole="link">
@@ -104,3 +111,6 @@ export default function BriefingDetailScreen() {
 const styles = StyleSheet.create({
   historyRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: StyleSheet.hairlineWidth },
 });
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

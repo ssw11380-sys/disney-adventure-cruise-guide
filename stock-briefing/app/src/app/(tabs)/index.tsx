@@ -3,11 +3,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
+import { StaleBanner, useConnection, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
 import { Screen } from "@/components/Screen";
 import { COL, StockRow } from "@/components/StockRow";
 import { Button, ErrorView, Loading, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
+import { clockLabel, liveLabel, OPEN_MAX_AGE_MS, streamFresh, viewState } from "@/lib/freshness";
 import { useLiveStream } from "@/lib/liveStream";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
@@ -18,13 +20,17 @@ import { refreshWidgets } from "@/widgets/refresh";
 /** 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표 */
 export default function StocksScreen() {
   const t = useTheme();
-  const { data, isLoading, isError, error, refetch, isRefetching } = useStocks();
+  const stocks = useStocks();
+  const { data, error, refetch } = stocks;
   const { sort, setSort, showKrw, afterCost } = useSettings();
   const { remove } = useStockMutations();
   const health = useHealth();
   const live = useAnyMarketOpen();
   const stream = useLiveStream();
   const [sortOpen, setSortOpen] = useState(false);
+  // 값이 있으면 재조회가 실패해도 화면을 지우지 않고, 끊김·지연을 띠와 상태 글자로 알린다
+  const conn = useConnection(stocks, OPEN_MAX_AGE_MS);
+  const { pulling, onPull } = usePull(refetch);
 
   // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
   const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
@@ -81,14 +87,16 @@ export default function StocksScreen() {
       { text: "취소", style: "cancel" },
     ]);
 
-  if (isLoading) return <Screen><Loading /></Screen>;
-  if (isError) return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
+  const view = viewState(stocks);
+  if (view === "loading") return <Screen><Loading /></Screen>;
+  if (view === "error") return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";
-  const statusLabel = live.open ? (stream.connected ? "실시간" : "지연 3초") : live.label;
+  const status = liveLabel({ open: live.open, closedLabel: live.label, streamFresh: streamFresh(stream, conn.now), offline: conn.offline, stale: conn.stale });
 
   const header = (
     <View>
+      <StaleBanner conn={conn} open={live.open} />
       <MarketStrip />
       {summary.held > 0 ? (
         <AccountPanel
@@ -100,8 +108,9 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
-          status={statusLabel}
-          live={live.open && stream.connected}
+          status={conn.asOf ? `${status.text} · ${clockLabel(conn.asOf, conn.now)}` : status.text}
+          live={status.tone === "live"}
+          warn={status.tone === "offline" || (status.tone === "delayed" && conn.stale)}
           counts={`보유 ${summary.held}${summary.watch ? ` · 관심 ${summary.watch}` : ""}`}
         />
       ) : null}
@@ -113,8 +122,8 @@ export default function StocksScreen() {
       <SectionList
         sections={sections}
         keyExtractor={(s) => s.code}
-        refreshing={isRefetching}
-        onRefresh={() => void refetch()}
+        refreshing={pulling}
+        onRefresh={onPull}
         stickySectionHeadersEnabled
         ListHeaderComponent={header}
         renderSectionHeader={({ section }) => (
@@ -184,6 +193,7 @@ function AccountPanel({
   fx,
   status,
   live,
+  warn,
   counts,
 }: {
   total: Totals | null;
@@ -197,6 +207,7 @@ function AccountPanel({
   fx: number | null;
   status: string;
   live: boolean;
+  warn: boolean;
   counts: string;
 }) {
   const t = useTheme();
@@ -217,8 +228,8 @@ function AccountPanel({
           {afterCost ? " · 비용 차감" : ""}
         </Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-          <View style={[styles.dot, { backgroundColor: live ? t.up : t.muted }]} />
-          <Text style={{ color: t.muted, fontSize: font.tiny }}>
+          <View style={[styles.dot, { backgroundColor: live ? t.up : warn ? t.warn : t.muted }]} />
+          <Text style={{ color: warn ? t.warn : t.muted, fontSize: font.tiny }}>
             {status} · {counts}
           </Text>
         </View>
@@ -315,3 +326,6 @@ const styles = StyleSheet.create({
   sheet: { borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: space.xl },
   sheetItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: 14, borderTopWidth: StyleSheet.hairlineWidth },
 });
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

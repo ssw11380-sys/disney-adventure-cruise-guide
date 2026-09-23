@@ -3,6 +3,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMarketIndices } from "@/api/hooks";
 import type { MarketIndex } from "@/api/types";
+import { clockLabel } from "@/lib/freshness";
+import { useNow } from "@/lib/useNow";
 import { changeColor, font, space, useTheme } from "@/theme";
 
 /** 지수·환율 값: 1,000 이상은 콤마, 소수 둘째 자리 */
@@ -17,6 +19,7 @@ export function formatIndexValue(v: number): string {
 export function MarketStrip({ selected, onSelect }: { selected?: string; onSelect?: (code: string) => void } = {}) {
   const t = useTheme();
   const q = useMarketIndices();
+  const now = useNow(30_000);
   const list: MarketIndex[] = q.data?.indices ?? [];
   // 고른 항목이 화면 밖(오른쪽)에 있으면 보이도록 띠를 민다
   const scroll = useRef<ScrollView>(null);
@@ -64,6 +67,13 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
             </Pressable>
           );
         })}
+        {/* 띠 끝에 기준 시각 (지수는 30초마다 받음). 받지 못하는 동안은 마지막으로 받은 시각이 남는다 */}
+        {q.dataUpdatedAt ? (
+          <View style={[styles.item, styles.asOf, { borderLeftColor: t.line }]} accessibilityLabel={`지수 기준 시각 ${clockLabel(q.dataUpdatedAt, now)}`}>
+            <Text style={{ color: q.isError || q.failureCount > 0 ? t.warn : t.muted, fontSize: font.tiny }}>{clockLabel(q.dataUpdatedAt, now)}</Text>
+            <Text style={{ color: t.muted, fontSize: font.tiny }}>기준</Text>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -74,6 +84,7 @@ const styles = StyleSheet.create({
   row: { paddingHorizontal: space.sm },
   item: { paddingVertical: 8, paddingHorizontal: space.md, gap: 1, minWidth: 104 },
   dot: { width: 4, height: 4, borderRadius: 2 },
+  asOf: { minWidth: 0, justifyContent: "center", borderLeftWidth: StyleSheet.hairlineWidth },
   value: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
   rate: { fontSize: font.tiny, fontVariant: ["tabular-nums"] },
 });

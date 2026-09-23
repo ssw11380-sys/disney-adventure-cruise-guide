@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo } from "react";
 import { Alert, StyleSheet, Text, View } from "react-native";
 import { useStockMutations, useStocks } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverSession, DiscoverStock } from "@/api/types";
@@ -55,14 +55,7 @@ export function useAddWatch(): (item: DiscoverStock) => void {
 /**
  * 당겨서 새로고침 상태. 자동 갱신(30초)마다 스피너가 뜨지 않도록, 사용자가 당겼을 때만 돌린다.
  */
-export function usePull(refetch: () => Promise<unknown>): { pulling: boolean; onPull: () => void } {
-  const [pulling, setPulling] = useState(false);
-  const onPull = useCallback(() => {
-    setPulling(true);
-    void refetch().finally(() => setPulling(false));
-  }, [refetch]);
-  return { pulling, onPull };
-}
+export { usePull } from "@/components/Freshness";
 
 export function openStock(item: DiscoverStock): void {
   router.push(`/stocks/${item.code}`);

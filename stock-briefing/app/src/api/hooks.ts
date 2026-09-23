@@ -1,6 +1,7 @@
-import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
+import { pollInterval, streamFresh } from "@/lib/freshness";
 import { useLiveStream } from "@/lib/liveStream";
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
@@ -33,7 +34,8 @@ function useKey(...parts: unknown[]) {
 
 export function useHealth() {
   const api = useApi();
-  return useQuery({ queryKey: useKey("health"), queryFn: api.health, staleTime: 30_000, retry: 0 });
+  // 한 번 실패해도 1분 뒤 다시 확인한다 (예전에는 실패 상태로 굳어 시세 갱신이 1분 주기에 묶였다)
+  return useQuery({ queryKey: useKey("health"), queryFn: api.health, staleTime: 30_000, retry: 0, refetchInterval: 60_000, refetchIntervalInBackground: false });
 }
 
 /** 장 운영 상태 (서버가 토스 달력으로 판단, 5분 캐시). 실패하면 요일·시간 추정 */
@@ -62,27 +64,30 @@ export function useAnyMarketOpen(): { open: boolean; label: string; loaded: bool
 /**
  * 현재가 갱신 주기. 서버가 등록 종목 시세를 한 번에 받아(토스 웹 2초 캐시 / Open API 웹소켓) 돌려주므로
  * 장 시간에는 3초마다 다시 받아 HTS 처럼 움직이게 하고, 장이 닫힌 시간에는 1분으로 늦춘다.
+ * 체결 스트림이 값을 주는 동안은 보정용 30초, 요청이 실패하는 동안은 짧게 다시 시도한다 (규칙은 lib/freshness 의 pollInterval).
+ * 쿼리마다 실패 여부가 다르므로 react-query 의 함수형 refetchInterval 로 넘긴다.
  */
-export function useLiveInterval(): number {
-  const health = useHealth();
+export function useLivePoll(): (q: Query<any, any, any, any>) => number {
   const { open } = useAnyMarketOpen();
   const stream = useLiveStream();
-  if (health.isError) return 60_000;
-  // 웹소켓 스트림이 붙어 있으면 체결이 바로 캐시에 반영되므로 폴링은 보정용으로 30초에 한 번만
-  if (stream.connected) return 30_000;
-  return open ? 3_000 : 60_000;
+  return (q) =>
+    pollInterval({
+      open,
+      streamFresh: streamFresh(stream, Date.now()),
+      failing: q.state.status === "error" || q.state.fetchFailureCount > 0,
+    });
 }
 
 export function useStocks() {
   const api = useApi();
-  const interval = useLiveInterval();
-  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: Math.min(interval, 30_000), refetchInterval: interval, refetchIntervalInBackground: false });
+  const every = useLivePoll();
+  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false });
 }
 
 export function useStock(code: string) {
   const api = useApi();
-  const interval = useLiveInterval();
-  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: Math.min(interval, 30_000), refetchInterval: interval, refetchIntervalInBackground: false, enabled: !!code });
+  const every = useLivePoll();
+  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, enabled: !!code });
 }
 
 export function useTossStatus() {

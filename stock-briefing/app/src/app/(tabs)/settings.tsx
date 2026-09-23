@@ -1,3 +1,4 @@
+import { usePull } from "@/components/Freshness";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
@@ -23,9 +24,10 @@ export default function SettingsScreen() {
   const health = useHealth();
   const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
+  const { pulling, onPull } = usePull(health.refetch);
 
   return (
-    <Screen refreshing={health.isRefetching} onRefresh={() => void health.refetch()}>
+    <Screen refreshing={pulling} onRefresh={onPull}>
       <Card>
         <SectionTitle>표시</SectionTitle>
         <View style={styles.line}>
@@ -178,3 +180,6 @@ const styles = {
   }),
   label: (color: string) => ({ color, fontSize: font.body, fontWeight: "600" as const }),
 };
+
+// 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
+export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";
