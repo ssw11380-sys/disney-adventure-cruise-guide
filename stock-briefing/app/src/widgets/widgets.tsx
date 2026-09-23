@@ -31,7 +31,7 @@ const C = {
   gold: "#E3B341",
 } as const;
 
-const DEEP_LINK = "stockbriefing://";
+const DEEP_LINK = HOME_URI;
 
 function money(n: number | null | undefined, currency: Currency | undefined, fx: number | null, showKrw: boolean, sign = false): string {
   const d = toDisplay(n, currency, fx, showKrw);
@@ -93,7 +93,8 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
             const fx = fxOf(s);
             const ev = evalView(s.evaluation, { afterCost, toKrw: showKrw, currency: q?.currency, fx });
             // 시세를 못 받은 보유 종목은 "관심"이 아니라 "시세 없음"
-            const sub = ev ? `${formatPct(ev.profitRate)} ${formatPrice(ev.profit, ev.currency, { sign: true })}` : isHeld(s) ? `${s.quantity}주 · 시세 없음` : "관심";
+            const old = filled.includes(s.code) ? "이전 값 · " : "";
+            const sub = ev ? `${old}${formatPct(ev.profitRate)} ${formatPrice(ev.profit, ev.currency, { sign: true })}` : isHeld(s) ? `${Number((s.quantity ?? 0).toFixed(4))}주 · 시세 없음` : "관심";
             return (
               <FlexWidget
                 key={s.code}
@@ -172,7 +173,10 @@ export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, erro
           {note ? <TextWidget text={note} maxLines={1} truncate="END" style={{ color: C.muted, fontSize: 9 }} /> : null}
         </FlexWidget>
       ) : (
-        <TextWidget text={error ? `${failureText(error)} · 눌러서 앱 열기` : "보유 종목 없음"} style={{ color: C.muted, fontSize: 11 }} />
+        <TextWidget
+          text={error ? `${failureText(error)} · 눌러서 앱 열기` : excludedCount(stocks) ? `시세 없음 · ${excludedCount(stocks)}종목` : "보유 종목 없음"}
+          style={{ color: C.muted, fontSize: 11 }}
+        />
       )}
     </FlexWidget>
   );

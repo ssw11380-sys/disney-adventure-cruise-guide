@@ -22,7 +22,8 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 
 const { AssetWidget, HoldingsWidget } = await import("@/widgets/widgets");
 const { loadWidgetData, saveLastStocks } = await import("@/widgets/data");
-const { HOME_URI, asOfLabel, failureText, assetLine } = await import("@/widgets/model");
+const { HOME_URI, asOfLabel, failureText, assetLine, fillFromLast } = await import("@/widgets/model");
+const API = "https://server.test";
 
 interface Node {
   kind: string;
@@ -91,7 +92,7 @@ describe("위젯-2: 자산 위젯 색 (오늘·총 각자 부호)", () => {
 describe("위젯-3: 시세 없는 보유 종목", () => {
   it("SOXL 처럼 한 종목 시세가 null 이어도 보유 17 유지, '관심' 표시 0, 마지막 값으로 합계 유지", async () => {
     const full = book();
-    await saveLastStocks(full, NOW - 60_000);
+    await saveLastStocks(full, NOW - 60_000, API);
     const broken = full.map((s, i) => (i === 3 ? { ...s, quote: null, quoteError: "시세 없음", evaluation: null } : s));
     vi.stubGlobal("fetch", async () => new Response(JSON.stringify(broken), { status: 200 }));
     const d = await loadWidgetData({ stocks: true, briefings: false });
@@ -103,6 +104,42 @@ describe("위젯-3: 시세 없는 보유 종목", () => {
     const fullTotal = texts(render(<HoldingsWidget stocks={full} showKrw={false} fetchedAt={NOW} error={null} now={NOW} />)).map((t) => t.text).find((t) => t.endsWith("원") && !t.startsWith("당일"));
     expect(tx).toContain(fullTotal);
     expect(tx.some((t) => t.includes("1종목 이전 값"))).toBe(true);
+    expect(tx.some((t) => t.startsWith("이전 값 · "))).toBe(true); // 채운 종목 행에도 표시
+  });
+
+  it("어제 값으로 채우면 등락은 0 (지난 거래일 등락이 오늘 손익에 들어가지 않게)", () => {
+    const yesterday = [holding("005930", quote("005930", 70_000, { change: 5_000, changeRate: 7.7, asOf: "2026-09-23T15:30:00+09:00" }), 10, 60_000)];
+    const now = [{ ...yesterday[0]!, quote: null, evaluation: null }];
+    const f = fillFromLast(now, yesterday, NOW);
+    expect(f.filled).toEqual(["005930"]);
+    expect(f.stocks[0]!.quote!.change).toBe(0);
+    expect(f.stocks[0]!.quote!.price).toBe(70_000);
+    // 오늘 값이면 등락 유지
+    const today = [holding("005930", quote("005930", 70_000, { change: 5_000, asOf: AT_CLOSE }), 10, 60_000)];
+    expect(fillFromLast(now, today, NOW).stocks[0]!.quote!.change).toBe(5_000);
+  });
+
+  it("7일 넘은 값·수량이 바뀐 종목은 채우지 않음", () => {
+    const old = [holding("005930", quote("005930", 70_000, { asOf: "2026-09-16T15:30:00+09:00" }), 10, 60_000)];
+    const now = [{ ...old[0]!, quote: null, evaluation: null }];
+    expect(fillFromLast(now, old, NOW).filled).toEqual([]);
+    const fresh = [holding("005930", quote("005930", 70_000, { asOf: AT_CLOSE }), 10, 60_000)];
+    expect(fillFromLast([{ ...now[0]!, quantity: 11 }], fresh, NOW).filled).toEqual([]);
+  });
+
+  it("서버 주소가 바뀌면 이전 서버의 잔고를 쓰지 않음", async () => {
+    await saveLastStocks(book(), NOW - 60_000, "https://other.server");
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("Network request failed");
+    });
+    const d = await loadWidgetData({ stocks: true, briefings: false });
+    expect(d.stocks).toEqual([]);
+  });
+
+  it("모든 보유 종목 시세가 없고 이전 값도 없으면 자산 위젯은 '시세 없음 · N종목' ('보유 종목 없음' 아님)", () => {
+    const s = book().map((x) => ({ ...x, quote: null, evaluation: null }));
+    const words = texts(render(<AssetWidget stocks={s} showKrw={false} fetchedAt={NOW} error={null} now={NOW} />)).map((t) => t.text);
+    expect(words).toContain("시세 없음 · 17종목");
   });
 
   it("마지막 값도 없으면 '시세 없음'으로 보유에 남고 '일부 제외 1' 표시", () => {
@@ -116,7 +153,7 @@ describe("위젯-3: 시세 없는 보유 종목", () => {
 describe("위젯-1: 조회 실패", () => {
   it("비행기 모드 10회: 합계·종목 유지, '잔고 0'·영어 오류 0건, '갱신 실패' 회색", async () => {
     const full = book();
-    await saveLastStocks(full, NOW - 120_000);
+    await saveLastStocks(full, NOW - 120_000, API);
     vi.stubGlobal("fetch", async () => {
       throw new TypeError("Network request failed");
     });

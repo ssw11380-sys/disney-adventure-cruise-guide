@@ -24,11 +24,17 @@ export function isHeld(s: Pick<RegisteredWithQuote, "quantity" | "avgPrice">): b
   return s.quantity !== null && s.quantity > 0 && s.avgPrice !== null;
 }
 
+/** 이보다 오래된 마지막 값으로는 채우지 않는다 (긴 거래정지·장애 때 옛 값이 계속 남지 않게) */
+export const FILL_MAX_AGE_MS = 7 * 86_400_000;
+
+const kstDate = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(0, 10);
+
 /**
  * 이번에 시세를 못 받은 보유 종목을 마지막으로 받은 값으로 채운다.
- * 수량·평단이 그대로일 때만 쓴다(매매 뒤 옛 평가를 쓰지 않게). 채운 종목 코드도 돌려준다.
+ *  - 수량·평단이 그대로일 때만 (매매 뒤 옛 평가를 쓰지 않게), 시세 시각이 7일 이내일 때만
+ *  - 시세가 오늘(한국 날짜) 것이 아니면 등락을 0 으로 둔다 → 지난 거래일 등락이 "오늘 손익"에 들어가지 않게
  */
-export function fillFromLast(stocks: RegisteredWithQuote[], last: RegisteredWithQuote[] | null): { stocks: RegisteredWithQuote[]; filled: string[] } {
+export function fillFromLast(stocks: RegisteredWithQuote[], last: RegisteredWithQuote[] | null, now: number): { stocks: RegisteredWithQuote[]; filled: string[] } {
   if (!last?.length) return { stocks, filled: [] };
   const prev = new Map(last.map((s) => [s.code, s]));
   const filled: string[] = [];
@@ -36,8 +42,11 @@ export function fillFromLast(stocks: RegisteredWithQuote[], last: RegisteredWith
     if (s.quote || !isHeld(s)) return s;
     const p = prev.get(s.code);
     if (!p?.quote || !p.evaluation || p.quantity !== s.quantity || p.avgPrice !== s.avgPrice) return s;
+    const at = Date.parse(p.quote.asOf);
+    if (!Number.isFinite(at) || now - at > FILL_MAX_AGE_MS) return s;
     filled.push(s.code);
-    return { ...s, quote: p.quote, evaluation: p.evaluation };
+    const quote = kstDate(at) === kstDate(now) ? p.quote : { ...p.quote, change: 0, changeRate: 0 };
+    return { ...s, quote, evaluation: p.evaluation };
   });
   return { stocks: out, filled };
 }
