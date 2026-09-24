@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { applyTick, applyTicksToList, latestPerCode, newTradingDay, type StreamTick } from "@/lib/liveTick";
 import { holding, quote } from "./helpers";
@@ -65,6 +68,33 @@ describe("거래일이 바뀐 체결 (PF-01)", () => {
   });
 });
 
+describe("장 시작 전에 받은 국내 시세 (PF-01 2차 검증 지적)", () => {
+  // 토스 웹·네이버 시세는 asOf 가 받은 시각이다. 07:59 에 받은 시세는 9/23 거래 값(전일 종가 = 9/22 종가 90)
+  const early = quote("005930", 100, { prevClose: 90, change: 10, changeRate: 11.11, high: 105, low: 90, asOf: "2026-09-24T07:59:30+09:00", source: "toss" });
+
+  it("07:59 에 받은 시세에 08:00 NXT 첫 체결을 붙이지 않는다 (+11 / +12.22% 가 아님) → 새 시세를 받으면 +1 / +1%", () => {
+    const first = tick("005930", 101, "2026-09-24T08:00:05+09:00");
+    expect(applyTick(early, first)).toBe(early);
+    expect(newTradingDay(early, first)).toBe(true);
+    const held = new Set<string>();
+    const list = [holding("005930", early, 10, 80)];
+    expect(applyTicksToList(list, latestPerCode([first]), held)).toBe(list);
+    expect([...held]).toEqual(["005930"]);
+    // 08:00 이후 받은 시세(9/24 기준가 100)에는 붙는다
+    const fresh = quote("005930", 100, { prevClose: 100, change: 0, changeRate: 0, asOf: "2026-09-24T08:00:30+09:00", source: "toss" });
+    expect(applyTick(fresh, tick("005930", 101, "2026-09-24T08:00:40+09:00"))).toMatchObject({ price: 101, change: 1, changeRate: 1, live: true });
+  });
+
+  it("UTC 표기(22:59Z = 07:59 KST)도 같고, 월요일 새벽 시세는 금요일 거래일", () => {
+    const z = { ...early, asOf: "2026-09-23T22:59:30Z" };
+    expect(applyTick(z, tick("005930", 101, "2026-09-23T23:00:05Z"))).toBe(z);
+    const monEarly = { ...early, asOf: "2026-09-28T06:00:00+09:00" };
+    expect(newTradingDay(monEarly, tick("005930", 101, "2026-09-28T08:00:01+09:00"))).toBe(true);
+    // 장 시작 전 시세와 그 전날 밤 체결(값 그대로)은 같은 거래일
+    expect(newTradingDay({ ...early, asOf: "2026-09-24T06:00:00+09:00" }, tick("005930", 100, "2026-09-24T07:00:00+09:00"))).toBe(false);
+  });
+});
+
 describe("미국 주간거래(뉴욕 20:00 이후)는 다음 거래일 (PF-01 검증 지적)", () => {
   it("애프터마켓 시세(뉴욕 19:58, 전일 종가 = 전날 정규장의 전날 것)에 주간거래 체결(뉴욕 21:00)을 붙이지 않는다", () => {
     // 9/24 정규장 종가 200 (9/23 종가 190), 애프터 202 → 등락 +12 는 9/23 종가 기준
@@ -111,6 +141,36 @@ describe("시장 현지 거래일 규칙 (한국 서울, 미국 뉴욕·서머�
     expect(tradingDate("2026-09-24T20:30:00+09:00", "005930")).toBe("2026-09-24");
     expect(tradingDate("2026-09-26T10:00:00+09:00", "005930")).toBe("2026-09-25");
     expect(tradingDate("bad", "AAPL")).toBeNull();
+  });
+
+  it("tradingDate: 한국 00:00~08:00 은 직전 거래일 (체결이 없는 시간, 월요일 새벽은 금요일)", async () => {
+    const { tradingDate } = await import("@/lib/marketTime");
+    expect(tradingDate("2026-09-24T07:59:59+09:00", "005930")).toBe("2026-09-23");
+    expect(tradingDate("2026-09-24T08:00:00+09:00", "005930")).toBe("2026-09-24");
+    expect(tradingDate("2026-09-23T23:00:00Z", "005930")).toBe("2026-09-24"); // 08:00 KST
+    expect(tradingDate("2026-09-24T00:10:00+09:00", "005930")).toBe("2026-09-23");
+    expect(tradingDate("2026-09-28T07:00:00+09:00", "005930")).toBe("2026-09-25");
+    expect(tradingDate("2026-09-26T07:00:00+09:00", "005930")).toBe("2026-09-25"); // 토 새벽
+  });
+
+  it("tradingDate: 미국 휴장일(추수감사절 11/26, 노동절 9/7)은 직전 거래일 — 전날 밤 20:00 이후 체결도 휴장일 봉을 만들지 않는다", async () => {
+    const { tradingDate } = await import("@/lib/marketTime");
+    expect(tradingDate("2026-11-26T10:30:00+09:00", "AAPL")).toBe("2026-11-25"); // 뉴욕 11/25(수) 20:30 — 다음 날 휴장이라 주간거래 없음
+    expect(tradingDate("2026-11-27T02:00:00+09:00", "AAPL")).toBe("2026-11-25"); // 뉴욕 11/26 12:00
+    expect(tradingDate("2026-11-27T10:30:00+09:00", "AAPL")).toBe("2026-11-27"); // 뉴욕 11/26 20:30 → 금요일 세션
+    expect(tradingDate("2026-09-07T10:00:00+09:00", "AAPL")).toBe("2026-09-04"); // 뉴욕 일 9/6 21:00 → 월 9/7 휴장 → 금 9/4
+    expect(tradingDate("2026-09-08T10:00:00+09:00", "AAPL")).toBe("2026-09-08"); // 뉴욕 월 9/7 21:00 → 화 9/8
+  });
+
+  it("앱 미국 휴장일 목록이 서버(marketContext.US_HOLIDAYS)와 같다 — 해마다 둘 다 추가", () => {
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const list = (rel: string) => {
+      const m = /US_HOLIDAYS = new Set\(\[([\s\S]*?)\]\)/.exec(readFileSync(join(root, rel), "utf8"));
+      return [...(m?.[1] ?? "").matchAll(/"(\d{4}-\d{2}-\d{2})"/g)].map((x) => x[1]);
+    };
+    const app = list("app/src/lib/marketTime.ts");
+    expect(app.length).toBeGreaterThan(10);
+    expect(app).toEqual(list("backend/src/services/marketContext.ts"));
   });
 
   it("marketDate: 같은 순간은 표기(Z·+09:00)와 관계없이 같은 날짜", async () => {

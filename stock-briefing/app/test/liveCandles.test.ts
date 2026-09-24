@@ -87,6 +87,20 @@ describe("미국 주간거래(한국 낮) 체결은 다음 거래일 봉 — 토
     expect(applyTickToCandles(fri, "D", 205, "2026-09-26T10:30:00+09:00", "AAPL")).toBe(fri);
     expect(applyTickToCandles(fri, "D", 205, "2026-09-26T15:00:00+09:00", "005930")).toBe(fri);
   });
+
+  it("미국 휴장일 전날 밤(추수감사절 전날 뉴욕 20:30) 재연결 체결은 휴장일(11/26) 임시 봉을 만들지 않는다", () => {
+    const wed = [candle("2026-11-24", 200), candle("2026-11-25", 205)];
+    expect(applyTickToCandles(wed, "D", 205, "2026-11-26T10:30:00+09:00", "AAPL")).toBe(wed);
+    expect(applyTickToCandles(wed, "D", 205, "2026-11-27T02:00:00+09:00", "AAPL")).toBe(wed); // 휴장일 낮
+    // 휴장일 밤 20:00 부터는 금요일 세션(주간거래) → 새 봉
+    expect(dates(applyTickToCandles(wed, "D", 206, "2026-11-27T10:30:00+09:00", "AAPL"))).toEqual(["2026-11-24", "2026-11-25", "2026-11-27"]);
+  });
+
+  it("한국 장 시작(08:00) 전 재연결 체결(값 그대로)은 오늘 임시 봉을 만들지 않는다", () => {
+    const days = [candle("2026-09-23", 100)];
+    expect(applyTickToCandles(days, "D", 100, "2026-09-24T07:30:00+09:00", "005930")).toBe(days);
+    expect(dates(applyTickToCandles(days, "D", 101, "2026-09-24T08:00:05+09:00", "005930"))).toEqual(["2026-09-23", "2026-09-24"]);
+  });
 });
 
 describe("새 주·월 체결은 지난 봉을 바꾸지 않고 새 봉 (PF-03)", () => {
@@ -152,6 +166,18 @@ describe("실시간으로 만든 봉의 거래량 (PF-04)", () => {
   it("새 일·주봉도 거래량 미확인", () => {
     expect(applyTickToCandles([candle("2026-09-23", 100)], "D", 101, "2026-09-24T09:00:00+09:00", "005930").at(-1)!.volumeUnknown).toBe(true);
     expect(applyTickToCandles([candle("2026-09-21", 100)], "W", 101, "2026-09-28T09:00:00+09:00", "005930").at(-1)!.volumeUnknown).toBe(true);
+  });
+
+  it("거래 시간 밖 체결(장 전·주말·미국 휴장일에 서버가 보낸 값 그대로의 체결)로는 새 분봉을 열지 않는다", () => {
+    const kr = [candle("2026-09-23", 100, { time: "2026-09-23T19:59:00+09:00" })];
+    expect(applyTickToCandles(kr, "1m", 100, "2026-09-24T07:30:00+09:00", "005930")).toBe(kr);
+    expect(applyTickToCandles(kr, "1m", 100, "2026-09-23T21:00:00+09:00", "005930")).toBe(kr);
+    expect(applyTickToCandles(kr, "1m", 101, "2026-09-24T08:00:05+09:00", "005930").at(-1)).toMatchObject({ time: "2026-09-24T08:00:00+09:00", volumeUnknown: true });
+    const us = [candle("2026-09-25", 200, { time: "2026-09-25T19:59:00-04:00" })];
+    expect(applyTickToCandles(us, "5m", 200, "2026-09-26T11:00:00+09:00", "AAPL")).toBe(us); // 뉴욕 금 22:00 (주말 앞이라 주간거래 없음)
+    const wed = [candle("2026-11-25", 200, { time: "2026-11-25T19:55:00-05:00" })];
+    expect(applyTickToCandles(wed, "5m", 200, "2026-11-26T10:30:00+09:00", "AAPL")).toBe(wed); // 추수감사절 전날 밤 20:30
+    expect(applyTickToCandles(wed, "5m", 201, "2026-11-27T10:30:00+09:00", "AAPL")).toHaveLength(2); // 휴장일 밤 20:30 → 금요일 주간거래
   });
 
   it("미국 분봉: 뉴욕 오프셋 봉 시각을 그대로 잇는다", () => {
@@ -268,6 +294,17 @@ describe("차트 봉 주기 갱신 (PF-04)", () => {
     expect(tradingNow("005930", usClosed, Date.parse("2026-09-26T10:30:00+09:00"))).toBe(true); // 한국은 서버 값 그대로
   });
 
+  it("미국 휴장일에는 주간거래도 없다 — 추수감사절 전날 밤·당일에는 다시 받지 않고, 당일 뉴욕 20:00(금요일 세션)부터 다시 받는다", async () => {
+    const { tradingNow } = await import("@/lib/marketTime");
+    const usClosed = { KR: { isOpen: false }, US: { isOpen: false } } as MarketStatus;
+    const at = (iso: string) => Date.parse(iso);
+    expect(tradingNow("AAPL", usClosed, at("2026-11-26T11:30:00+09:00"))).toBe(false); // 뉴욕 수 11/25 21:30
+    expect(tradingNow("AAPL", usClosed, at("2026-11-26T16:00:00+09:00"))).toBe(false); // 뉴욕 목 11/26 02:00
+    expect(tradingNow("AAPL", usClosed, at("2026-11-27T11:30:00+09:00"))).toBe(true); // 뉴욕 목 11/26 21:30
+    expect(tradingNow("AAPL", undefined, at("2026-11-27T02:00:00+09:00"))).toBe(false); // 장 상태 모름 + 휴장일 낮
+    expect(tradingNow("AAPL", undefined, at("2026-11-25T02:00:00+09:00"))).toBe(true); // 평일 낮
+  });
+
   it("장 상태를 모르면(조회 실패) 요일·시각으로 — 주말에 1분마다 다시 받지 않는다", async () => {
     const { candleRefresh } = await import("@/lib/freshness");
     const { tradingNow } = await import("@/lib/marketTime");
@@ -278,5 +315,60 @@ describe("차트 봉 주기 갱신 (PF-04)", () => {
     expect(tradingNow("AAPL", undefined, at("2026-09-27T12:00:00+09:00"))).toBe(false); // 뉴욕 토 23:00
     expect(tradingNow("AAPL", undefined, at("2026-09-28T09:30:00+09:00"))).toBe(true); // 뉴욕 일 20:30
     expect(candleRefresh("D", tradingNow("AAPL", undefined, at("2026-09-27T12:00:00+09:00"))).refetchInterval).toBe(false);
+  });
+});
+
+describe("주기 갱신으로 받은 서버 봉에 마지막 체결을 다시 얹는다 (PF-04 검증 지적)", () => {
+  const API = "https://server.test";
+  const tick = (code: string, price: number, timestamp: string): StreamTick => ({ code, price, volume: 1, timestamp, source: "toss-openapi" });
+
+  it("서버 캐시가 늦어 방금 연 분봉이 없어도 다시 붙이고, 일봉 종가는 현재가를 따라간다 (서버 거래량은 그대로)", async () => {
+    const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
+    forgetTicks();
+    rememberTicks(API, [tick("005930", 103, "2026-09-24T10:01:20+09:00")]);
+    const minutes: CandleSeries = { code: "005930", period: "1m", candles: [candle("2026-09-24", 100, { time: "2026-09-24T10:00:00+09:00" })], source: "test" };
+    const m = withLastTick(API, "005930", minutes);
+    expect(m.candles.at(-1)).toMatchObject({ time: "2026-09-24T10:01:00+09:00", close: 103, volumeUnknown: true });
+    const days: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-09-24", 100, { volume: 5000 })], source: "test" };
+    expect(withLastTick(API, "005930", days).candles).toEqual([{ ...candle("2026-09-24", 100, { volume: 5000 }), close: 103, high: 103 }]);
+    // 서버 봉이 체결보다 새로우면(10:02 봉까지 있음) 그대로
+    const newer: CandleSeries = { ...minutes, candles: [...minutes.candles, candle("2026-09-24", 104, { time: "2026-09-24T10:02:00+09:00" })] };
+    expect(withLastTick(API, "005930", newer)).toBe(newer);
+    // 다른 서버 주소·다른 종목의 체결은 쓰지 않는다
+    expect(withLastTick("https://other.test", "005930", days)).toBe(days);
+    expect(withLastTick(API, "000660", { ...days, code: "000660" }).candles).toEqual(days.candles);
+  });
+
+  it("더 오래된 체결로 덮지 않고, 연결이 끊겨 비우면 서버 봉을 그대로 쓴다", async () => {
+    const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
+    forgetTicks();
+    rememberTicks(API, [tick("005930", 103, "2026-09-24T10:01:20+09:00")]);
+    rememberTicks(API, [tick("005930", 99, "2026-09-24T10:01:00+09:00")]);
+    const days: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-09-24", 100)], source: "test" };
+    expect(withLastTick(API, "005930", days).candles.at(-1)!.close).toBe(103);
+    forgetTicks();
+    expect(withLastTick(API, "005930", days)).toBe(days);
+  });
+});
+
+describe("차트 아래 알림 (PF-04 검증 지적)", () => {
+  const NOW = Date.parse("2026-09-24T10:05:00+09:00");
+  const q = (o: { data?: unknown; isError?: boolean; error?: unknown; dataUpdatedAt?: number; fetchStatus?: "fetching" | "paused" | "idle" }) => ({
+    data: o.data,
+    isError: o.isError ?? false,
+    error: o.error ?? null,
+    dataUpdatedAt: o.dataUpdatedAt ?? 0,
+    fetchStatus: o.fetchStatus ?? "idle",
+  });
+
+  it("처음 불러오기 실패만 오류, 그려진 차트의 주기 갱신 실패는 언제 받은 봉인지만", async () => {
+    const { chartNotice } = await import("@/lib/freshness");
+    expect(chartNotice(q({ isError: true, error: new Error("서버 오류") }), NOW)).toEqual({ text: "서버 오류", error: true });
+    expect(chartNotice(q({ isError: true }), NOW)).toEqual({ text: "차트 실패", error: true });
+    const loaded = { data: { candles: [] }, dataUpdatedAt: Date.parse("2026-09-24T10:03:21+09:00") };
+    expect(chartNotice(q({ ...loaded, isError: true, error: new Error("서버 오류") }), NOW)).toEqual({ text: "차트 갱신 지연 · 10:03:21 기준", error: false });
+    expect(chartNotice(q({ ...loaded, fetchStatus: "paused" }), NOW)).toMatchObject({ error: false });
+    expect(chartNotice(q(loaded), NOW)).toBeNull();
+    expect(chartNotice(q({ fetchStatus: "fetching" }), NOW)).toBeNull();
   });
 });

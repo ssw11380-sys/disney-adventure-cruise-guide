@@ -31,7 +31,7 @@ function parts(d: Date, tz: string): { date: string; minutes: number; weekday: n
 
 const md = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
 
-/** 뉴욕증권거래소 휴장일 (현지 날짜). 해마다 추가 — 없으면 평일로 본다 */
+/** 뉴욕증권거래소 휴장일 (현지 날짜). 해마다 추가 — 없으면 평일로 본다. 앱 lib/marketTime 에 같은 목록이 있다 (app/test 가 비교) */
 export const US_HOLIDAYS = new Set([
   "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
   "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
@@ -86,18 +86,20 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
 
 /**
  * 체결·시세가 속한 거래일 YYYY-MM-DD (앱 lib/marketTime 의 tradingDate 와 같은 규칙).
- *  - 한국은 서울 날짜
+ *  - 한국은 서울 날짜, 단 08:00(NXT 프리마켓 시작) 전은 전날 — 토스 웹·네이버 시세는 받은 시각이 asOf 라 장 시작 전에 받은 지난 거래일 시세에
+ *    08:00 첫 체결을 붙이지 않게 (그 시간엔 한국 체결이 없다)
  *  - 미국은 뉴욕 날짜, 단 뉴욕 20:00 이후(애프터마켓이 끝난 뒤 주간거래)는 다음 날 정규장에 딸린 세션이라 다음 날 (토스도 다음 거래일 봉에 넣는다)
- *  - 토·일은 거래가 없으니 직전 금요일로 본다 (평일 휴장일은 따로 보지 않는다 — 앱과 같게)
+ *  - 거래가 없는 날(토·일, 미국 휴장일 US_HOLIDAYS)은 직전 거래일로 본다 (한국 평일 휴장일은 목록이 없어 보지 않는다 — 앱과 같게)
  */
 export function tradingDate(iso: string, kr: boolean): string {
   const p = parts(new Date(iso), kr ? "Asia/Seoul" : "America/New_York");
   const d = new Date(`${p.date}T12:00:00Z`);
+  if (kr && p.minutes < 8 * 60) d.setUTCDate(d.getUTCDate() - 1);
   if (!kr && p.minutes >= 20 * 60) d.setUTCDate(d.getUTCDate() + 1);
-  const wd = d.getUTCDay();
-  if (wd === 6) d.setUTCDate(d.getUTCDate() - 1);
-  else if (wd === 0) d.setUTCDate(d.getUTCDate() - 2);
-  return d.toISOString().slice(0, 10);
+  const day = () => d.toISOString().slice(0, 10);
+  const open = () => (kr ? d.getUTCDay() >= 1 && d.getUTCDay() <= 5 : isUsTradingDate(day()));
+  for (let i = 0; i < 7 && !open(); i++) d.setUTCDate(d.getUTCDate() - 1);
+  return day();
 }
 
 /** 직전 미국 거래일 (주말·휴장일 건너뜀) */

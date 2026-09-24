@@ -3,6 +3,7 @@ import type { CandlePeriod, MarketStatus } from "@/api/types";
 /**
  * 시장 현지 시각·거래일 규칙 하나 (서버 marketContext.tradingDate · stockService.sameTradingDay · tossOpenApi.aggregateCandles 와 같은 기준).
  *  - 한국 종목은 서울, 미국 종목은 뉴욕(서머타임 포함) 시각으로 본다
+ *  - 한국 00:00~08:00(NXT 프리마켓 전)은 체결이 없는 시간 → 직전 거래일. 이때 받은 시세(받은 시각이 asOf 인 토스 웹·네이버)는 지난 거래일 값이다
  *  - 미국 뉴욕 20:00 이후(애프터마켓이 끝난 뒤 주간거래)는 다음 날 정규장에 딸린 세션 → 다음 거래일 (토스도 다음 거래일 봉에 넣는다)
  *  - 체결 시각이 Z 든 +09:00 이든 같은 순간이면 같은 거래일 (앞 10자리를 자르지 않는다)
  * 실시간 체결을 시세(liveTick)·차트 봉(chartPrefs)에 붙일 때 같이 쓴다.
@@ -79,9 +80,22 @@ export function marketDate(iso: string, code: string): string | null {
   return marketClock(iso, code)?.local.slice(0, 10) ?? null;
 }
 
+/** 한국 거래(NXT 프리마켓)가 시작되는 서울 시각. 그 전(00:00~08:00)은 직전 거래일에 딸린 시간 */
+const KR_SESSION_FROM_H = 8;
+/** 한국 거래(NXT 애프터마켓)가 끝나는 서울 시각 */
+const KR_SESSION_TO_H = 20;
 /** 미국 주간거래(블루오션)가 시작되는 뉴욕 시각. 여기부터 다음 날 04:00(프리마켓 시작)까지는 다음 날 정규장에 딸린 세션 */
 const US_OVERNIGHT_FROM_H = 20;
 const US_OVERNIGHT_TO_H = 4;
+
+/**
+ * 뉴욕증권거래소 평일 휴장일 (현지 날짜). 서버 marketContext.US_HOLIDAYS 와 같은 목록 — 해마다 둘 다 추가한다(app/test 가 두 목록을 비교).
+ * 없으면 평일로 본다. 한국 평일 휴장일은 목록이 없다 (장 상태는 서버 달력 값을 쓴다)
+ */
+const US_HOLIDAYS = new Set([
+  "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+  "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+]);
 
 function addDays(date: string, n: number): string {
   const d = new Date(`${date}T00:00:00Z`);
@@ -92,25 +106,33 @@ function addDays(date: string, n: number): string {
 /** 0 일 ~ 6 토 */
 const weekdayOf = (date: string) => new Date(`${date}T00:00:00Z`).getUTCDay();
 
-/** 세션 날짜(주말 보정 전): 한국은 서울 날짜, 미국은 뉴욕 날짜 — 뉴욕 20:00 이후는 다음 날 */
+/** 그 시장이 거래하는 날인지: 토·일이 아니고, 미국은 휴장일도 아님 */
+function isSessionDay(date: string, code: string): boolean {
+  const wd = weekdayOf(date);
+  return wd >= 1 && wd <= 5 && (isKrCode(code) || !US_HOLIDAYS.has(date));
+}
+
+/** 세션 날짜(휴장 보정 전): 한국은 서울 날짜(08:00 전은 전날), 미국은 뉴욕 날짜(20:00 이후는 다음 날) */
 function sessionDate(local: string, code: string): string {
   const date = local.slice(0, 10);
-  return !isKrCode(code) && Number(local.slice(11, 13)) >= US_OVERNIGHT_FROM_H ? addDays(date, 1) : date;
+  const hour = Number(local.slice(11, 13));
+  if (isKrCode(code)) return hour < KR_SESSION_FROM_H ? addDays(date, -1) : date;
+  return hour >= US_OVERNIGHT_FROM_H ? addDays(date, 1) : date;
 }
 
 /**
  * 체결·시세가 속한 거래일 YYYY-MM-DD. 시각을 못 읽으면 null.
- *  - 한국은 서울 날짜
+ *  - 한국은 서울 날짜, 단 08:00 전은 전날 — 장 시작 전에 받은 시세(전일 종가가 지난 거래일 기준)에 08:00 첫 체결을 붙이지 않게 (PF-01)
  *  - 미국은 뉴욕 날짜, 단 뉴욕 20:00 이후(주간거래)는 다음 날 — 한국 낮의 주간거래 체결이 끝난 정규장 봉을 고치지 않고 다음 거래일 봉으로 간다
- *  - 토·일은 거래가 없으니(서버가 막 켜져 값이 그대로인 체결 등) 직전 금요일로 본다 → 주말에 빈 봉을 만들지 않게
- * 평일 휴장일은 모른다 — 그날 체결은 새 거래일로 보고, 서버 봉·시세를 다시 받으면 바로잡힌다
+ *  - 거래가 없는 날(토·일, 미국 휴장일)은 직전 거래일로 본다(서버가 막 켜져 값이 그대로인 체결 등) → 빈 봉을 만들지 않게
+ * 한국 평일 휴장일은 모른다 — 그날 체결은 새 거래일로 보고, 서버 봉·시세를 다시 받으면 바로잡힌다
  */
 export function tradingDate(iso: string, code: string): string | null {
   const clock = marketClock(iso, code);
   if (!clock) return null;
-  const date = sessionDate(clock.local, code);
-  const wd = weekdayOf(date);
-  return wd === 6 ? addDays(date, -1) : wd === 0 ? addDays(date, -2) : date;
+  let date = sessionDate(clock.local, code);
+  for (let i = 0; i < 7 && !isSessionDay(date, code); i++) date = addDays(date, -1);
+  return date;
 }
 
 /** 시세 기준 시각과 체결이 같은 거래일인지 (서버 stockService.sameTradingDay 와 같다). 시각을 못 읽으면 막지 않는다 */
@@ -121,19 +143,31 @@ export function sameTradingDay(asOf: string, tickIso: string, code: string): boo
 }
 
 /**
- * 지금 그 종목에 거래가 있는 시간인지 (차트 봉 주기 갱신용, PF-04).
- *  - 서버 장 상태가 있으면 그 값. 미국은 토스 달력 isOpen 이 프리~애프터(뉴욕 04:00~20:00)뿐이라 주간거래(뉴욕 20:00~04:00, 일~목 밤)를 더한다
- *  - 장 상태를 모르면(못 받음) 요일·시각으로: 한국 평일 08:00~20:00(서울), 미국 뉴욕 일요일 20:00 ~ 금요일 20:00
+ * 그 시각이 그 시장의 거래 시간인지 (요일·시각·미국 휴장일로). 시각을 못 읽으면 true.
+ *  - 한국: 평일 08:00~20:00 (서울, KRX+NXT)
+ *  - 미국: 세션 날짜가 거래일인 동안 — 뉴욕 전날 20:00(주간거래) ~ 당일 20:00(애프터 끝). 일요일 20:00 ~ 금요일 20:00, 휴장일 빼고
+ * 한국 평일 휴장일은 모른다
  */
-export function tradingNow(code: string, status: Pick<MarketStatus, "KR" | "US"> | undefined, now = Date.now()): boolean {
-  const clock = marketClock(new Date(now).toISOString(), code);
+export function inTradingHours(iso: string, code: string): boolean {
+  const clock = marketClock(iso, code);
   if (!clock) return true;
   const hour = Number(clock.local.slice(11, 13));
-  const wd = weekdayOf(sessionDate(clock.local, code));
-  const weekday = wd >= 1 && wd <= 5;
-  if (isKrCode(code)) return status ? status.KR.isOpen : weekday && hour >= 8 && hour < 20;
-  const overnight = weekday && (hour >= US_OVERNIGHT_FROM_H || hour < US_OVERNIGHT_TO_H);
-  return status ? status.US.isOpen || overnight : weekday;
+  if (isKrCode(code) && (hour < KR_SESSION_FROM_H || hour >= KR_SESSION_TO_H)) return false;
+  return isSessionDay(sessionDate(clock.local, code), code);
+}
+
+/**
+ * 지금 그 종목에 거래가 있는 시간인지 (차트 봉 주기 갱신용, PF-04).
+ *  - 서버 장 상태가 있으면 그 값. 미국은 토스 달력 isOpen 이 프리~애프터(뉴욕 04:00~20:00)뿐이라 주간거래(뉴욕 20:00~04:00, 다음 날이 거래일인 밤)를 더한다
+ *  - 장 상태를 모르면(못 받음) 요일·시각으로 (inTradingHours)
+ */
+export function tradingNow(code: string, status: Pick<MarketStatus, "KR" | "US"> | undefined, now = Date.now()): boolean {
+  const iso = new Date(now).toISOString();
+  const open = inTradingHours(iso, code);
+  if (isKrCode(code)) return status ? status.KR.isOpen : open;
+  if (!status) return open;
+  const hour = Number(marketClock(iso, code)?.local.slice(11, 13) ?? 12);
+  return status.US.isOpen || (open && (hour >= US_OVERNIGHT_FROM_H || hour < US_OVERNIGHT_TO_H));
 }
 
 /** 일·주·월봉 구간 키 (서버 aggregateCandles 와 같다: 주는 월요일 시작, 월은 YYYY-MM, 일은 날짜 그대로) */

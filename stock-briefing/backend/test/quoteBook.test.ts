@@ -270,6 +270,32 @@ describe("밤새 쉬었다 연 경우 (리뷰 M1)", () => {
     expect((await service.listWithQuotes())[0]!.quote).toMatchObject({ price: 120_000, live: true });
   });
 
+  it("07:59 에 받은 스냅샷(토스 웹·네이버처럼 asOf 가 받은 시각)에 08:00 첫 체결을 붙이지 않는다 — 08:00 전은 지난 거래일 (PF-01)", async () => {
+    const p = new BatchProvider();
+    const t = { now: Date.parse("2026-09-24T07:59:30+09:00") };
+    p.asOf = "2026-09-24T07:59:30+09:00";
+    const db = await createMigratedDb(":memory:");
+    const live = {
+      get: (c: string) => ({ code: c, price: 120_000, volume: 1, timestamp: new Date(t.now).toISOString(), receivedAt: t.now }),
+      setCodes: () => {},
+      status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }),
+    };
+    const service = new StockService({ db, quotes: p, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, now: () => new Date(t.now), quoteCacheTtlMs: 60_000 });
+    await setup(p, t, db);
+    await service.listWithQuotes();
+    // 35초 뒤(ttl 안이라 스냅샷은 그대로) 08:00:05 체결
+    t.now = Date.parse("2026-09-24T08:00:05+09:00");
+    const list = await service.listWithQuotes();
+    expect(list[0]!.quote).toMatchObject({ price: 100_000 });
+    expect(list[0]!.quote!.live).toBeUndefined();
+    // 08:00 이후 받은 스냅샷에는 붙는다 (ttl 이 지나 뒤에서 새로 받는다)
+    p.asOf = "2026-09-24T08:01:00+09:00";
+    t.now = Date.parse("2026-09-24T08:01:10+09:00");
+    await service.listWithQuotes();
+    await settle();
+    expect((await service.listWithQuotes())[0]!.quote).toMatchObject({ price: 120_000, live: true });
+  });
+
   it("등록하자마자 시세를 받기 시작한다", async () => {
     const p = new BatchProvider();
     const t = { now: Date.parse("2026-09-22T10:00:00+09:00") };

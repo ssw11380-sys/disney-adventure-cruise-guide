@@ -103,6 +103,17 @@ export function candleRefresh(period: CandlePeriod, open: boolean): { refetchInt
   return intraday ? { refetchInterval: 30_000, staleTime: 20_000 } : { refetchInterval: 60_000, staleTime: 60_000 };
 }
 
+/**
+ * 차트 아래 한 줄. 봉을 처음 불러오지 못했으면 오류(error), 받은 봉이 있는데 주기 갱신이 재시도까지 실패했으면 봉은 그대로 두고
+ * 언제 받은 봉인지만 알린다 — 멀쩡히 그려진 차트 아래에 "차트 실패"를 띄우지 않는다. 보여 줄 게 없으면 null
+ */
+export function chartNotice(q: QueryLike & { error?: unknown }, now: number): { text: string; error: boolean } | null {
+  const view = viewState(q);
+  if (view === "error") return { text: q.error instanceof Error ? q.error.message : "차트 실패", error: true };
+  if (view !== "ready" || !connection(q, now, Number.POSITIVE_INFINITY).offline) return null;
+  return { text: `차트 갱신 지연 · ${clockLabel(q.dataUpdatedAt, now)} 기준`, error: false };
+}
+
 /** "14:03:21" (한국 시간). 오늘이 아니면 "9/23 14:03" */
 export function clockLabel(ms: number, now: number): string {
   const kst = (x: number) => new Date(x + 9 * 3_600_000);

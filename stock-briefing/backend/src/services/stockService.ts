@@ -64,7 +64,7 @@ const TICK_FRESH_MS = 60_000;
 /** 밸류에이션·환율 보강을 기다리는 최대 시간 (넘으면 보강 없이 시세만 저장) */
 const ENRICH_WAIT_MS = 3_000;
 
-/** 스냅샷과 체결이 같은 거래일인지 (한국은 서울, 미국은 뉴욕 날짜 — 뉴욕 20:00 이후 주간거래는 다음 거래일. 앱 lib/marketTime 과 같다) */
+/** 스냅샷과 체결이 같은 거래일인지 (한국은 서울 날짜 — 08:00 전은 전날, 미국은 뉴욕 날짜 — 20:00 이후 주간거래는 다음 거래일. 앱 lib/marketTime 과 같다) */
 function sameTradingDay(q: Quote, tickIso: string): boolean {
   const a = Date.parse(q.asOf), b = Date.parse(tickIso);
   if (Number.isNaN(a) || Number.isNaN(b)) return true;

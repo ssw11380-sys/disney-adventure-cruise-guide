@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useState } from "react";
 import type { Candle, CandlePeriod } from "@/api/types";
 import type { IndicatorKind } from "@/components/chart/PriceChart";
-import { marketClock, periodKey, tradingDate } from "./marketTime";
+import { inTradingHours, marketClock, periodKey, tradingDate } from "./marketTime";
 
 /** 차트 설정(이평선·볼린저·거래량·보조지표)은 종목과 화면(인라인/전체)에 상관없이 하나로 기억한다 */
 export interface ChartPrefs {
@@ -99,7 +99,8 @@ export function applyTickToCandles(candles: Candle[], period: CandlePeriod, pric
     const bucket = `${local.slice(0, 14)}${String(Math.floor(minute / stepMin) * stepMin).padStart(2, "0")}:00${offset}`;
     const at = Date.parse(bucket);
     if (at === lastAt) return updateLast(candles, last, price);
-    if (at > lastAt) return newBar(bucket.slice(0, 10), bucket);
+    // 거래 시간 밖 체결(서버가 막 켜져 장 전·휴장일에 보낸 값 그대로의 체결 등)로는 새 분봉을 열지 않는다 — 서버 봉을 다시 받아도 마지막 체결을 다시 얹으므로(withLastTick) 빈 봉이 남지 않게
+    if (at > lastAt) return inTradingHours(timestamp, code) ? newBar(bucket.slice(0, 10), bucket) : candles;
     return candles;
   }
   // 일·주·월봉: 체결의 거래일이 마지막 봉과 같은 구간(날·월요일 시작 주·월)이면 마지막 봉 갱신, 뒤 구간이면 지난 봉은 두고 새 봉

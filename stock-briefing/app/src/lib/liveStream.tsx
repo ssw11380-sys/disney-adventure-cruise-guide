@@ -44,6 +44,34 @@ const NEW_BAR_REFETCH_MS = 15_000;
 type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
 
 /**
+ * 연결이 살아 있는 동안 받은 종목별 마지막 체결 (서버 주소별). 주기 갱신으로 받은 서버 봉은 서버 봉 캐시 값이라 최대 수십 초~몇 분 늦을 수 있어,
+ * 받은 봉에 이 체결을 다시 얹는다(withLastTick) — 마지막 봉 종가가 상단 현재가보다 뒤처지거나 방금 연 봉이 사라졌다 다시 생기지 않게 (PF-04).
+ * 끊기면 비운다: 끊긴 동안 놓친 체결이 있을 수 있으니 그때는 서버 봉을 그대로 믿는다
+ */
+const lastTicks = new Map<string, StreamTick>();
+const lastTickKey = (apiUrl: string, code: string) => `${apiUrl}\n${code}`;
+
+export function rememberTicks(apiUrl: string, ticks: Iterable<StreamTick>): void {
+  for (const t of ticks) {
+    const prev = lastTicks.get(lastTickKey(apiUrl, t.code));
+    if (prev && Date.parse(prev.timestamp) > Date.parse(t.timestamp)) continue;
+    lastTicks.set(lastTickKey(apiUrl, t.code), t);
+  }
+}
+
+export function forgetTicks(): void {
+  lastTicks.clear();
+}
+
+/** 서버에서 받은 봉에 연결 중 받은 마지막 체결을 다시 얹는다 (같은 구간이면 고·저·종, 뒤 구간이면 새 봉, 지난 구간이면 그대로) */
+export function withLastTick(apiUrl: string, code: string, series: CandleSeries): CandleSeries {
+  const tick = lastTicks.get(lastTickKey(apiUrl, series.code || code));
+  if (!tick) return series;
+  const candles = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp, series.code || code);
+  return candles === series.candles ? series : { ...series, candles };
+}
+
+/**
  * 체결 묶음을 react-query 캐시(잔고 목록 · 종목 상세 · 차트 봉)에 적용한다. 화면에 보이는 값이 바뀌었으면 true.
  *  - 바뀐 게 없으면 쿼리를 건드리지 않는다(undefined) — 같은 값을 다시 넣어도 react-query 는 "방금 받은 값"으로 받은 시각을 새로 찍는다
  *  - 거래일이 바뀐 체결은 붙이지 않고 held 에 모은다 → 새 거래일 시세를 다시 받는다 (PF-01)
@@ -123,6 +151,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       flushTimer = null;
       if (!queue.length) return;
       const ticks = latestPerCode(queue.splice(0));
+      rememberTicks(apiUrl, ticks.values());
       const held = new Set<string>();
       const touched = applyTicksToCache(qc, apiUrl, ticks, held);
       if (held.size) refetchNewDay(held);
@@ -205,7 +234,10 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         /* onclose 가 이어서 온다 */
       };
       ws.onclose = () => {
-        if (socket === ws) socket = null;
+        if (socket === ws) {
+          socket = null;
+          forgetTicks(); // 이미 새로 붙은 뒤 늦게 온 옛 연결의 close 는 새 연결의 체결을 지우지 않는다
+        }
         setState((s) => ({ ...s, connected: false }));
         if (watchdog) clearTimeout(watchdog);
         scheduleReconnect();
@@ -228,6 +260,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       watchdog = null;
       const ws = socket;
       socket = null;
+      forgetTicks();
       try {
         ws?.close();
       } catch {

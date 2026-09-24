@@ -4,7 +4,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import { useEffect, useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
 import { candleRefresh, pollInterval, streamFresh } from "@/lib/freshness";
-import { useLiveStream } from "@/lib/liveStream";
+import { useLiveStream, withLastTick } from "@/lib/liveStream";
 import { tradingNow } from "@/lib/marketTime";
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
@@ -294,17 +294,19 @@ export function useMarketCandles(code: string, period: CandlePeriod, count: numb
 /**
  * 종목 차트 봉. 체결 스트림이 마지막 봉을 고치지만 거래량·놓친 체결은 모르므로, 화면이 보이고 그 종목에 거래가 있는 시간이면
  * 서버 봉을 주기적으로 다시 받는다 (PF-04, 규칙은 lib/freshness 의 candleRefresh). 인라인·전체 화면 차트가 같이 쓴다.
+ * 서버 봉은 서버 캐시 값이라 조금 늦을 수 있어, 받은 봉에 연결 중 받은 마지막 체결을 다시 얹는다 (lib/liveStream 의 withLastTick).
  * 시각 판단은 그릴 때 한다 — 장 상태가 바뀌거나 체결로 봉이 바뀌면 다시 그려져 주기도 다시 정해진다
  */
 export function useCandles(code: string, period: CandlePeriod, count = 90) {
   const api = useApi();
+  const { apiUrl } = useSettings();
   const focused = useScreenFocused();
   const m = useMarketStatus();
   const { refetchInterval, staleTime } = candleRefresh(period, tradingNow(code, m.data));
   return useQuery({
     subscribed: focused,
     queryKey: useKey("candles", code, period, count),
-    queryFn: () => api.getCandles(code, period, count),
+    queryFn: async () => withLastTick(apiUrl, code, await api.getCandles(code, period, count)),
     staleTime,
     refetchInterval,
     refetchIntervalInBackground: false,
