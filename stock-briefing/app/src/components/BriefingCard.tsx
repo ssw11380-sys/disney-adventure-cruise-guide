@@ -19,7 +19,7 @@ export function BriefingCard({ briefing, mode, showName = true, rate }: { briefi
   return (
     <Card>
       <Pressable onPress={() => router.push(`/briefings/${briefing.id}`)} accessibilityRole="link" style={styles.header}>
-        <View style={{ flex: 1, gap: 2 }}>
+        <View style={{ flex: 1, gap: space.xxs }}>
           {showName ? (
             <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>
               {briefing.name ?? briefing.code}
@@ -42,7 +42,7 @@ export function BriefingCard({ briefing, mode, showName = true, rate }: { briefi
           {lines[0] ?? ""}
         </Text>
       ) : mode === "summary" ? (
-        <View style={{ gap: 4 }}>
+        <View style={{ gap: space.xs }}>
           {lines.map((line, i) => (
             <Text key={i} style={{ color: t.ink, fontSize: font.body, lineHeight: 22 }}>
               {line}

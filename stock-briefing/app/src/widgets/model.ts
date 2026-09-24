@@ -8,12 +8,9 @@ import type { RegisteredWithQuote } from "@/api/types";
  *  - "기준" 시각은 휴대폰이 받은 시각이 아니라 시세 시각, 오늘이 아니면 날짜까지 (위젯-8)
  */
 
-export const WIDGET_COLORS = {
-  ink: "#E8EAED",
-  muted: "#7A828F",
-  up: "#FF4B55",
-  down: "#3D8EFF",
-} as const;
+import { WIDGET_COLORS } from "./palette";
+
+export { WIDGET_COLORS };
 
 export function tone(n: number): string {
   // 보합(0)은 앱과 같은 기본 글자색

@@ -207,10 +207,10 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
 
 const styles = StyleSheet.create({
   field: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
-  col: { flex: 1, gap: 4 },
+  col: { flex: 1, gap: space.xs },
   inCol: { flexGrow: 0, flexBasis: "auto" },
   label: { fontSize: font.tiny },
-  lockNote: { borderRadius: radius.sm, padding: space.md, gap: 2 },
+  lockNote: { borderRadius: radius.sm, padding: space.md, gap: space.xxs },
 });
 
 /** 원화 매입금액을 저장하지 못한 이유 (서버가 알려 준 대로) */

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Animated, Platform, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
-import { useTheme } from "@/theme";
+import { space, useTheme } from "@/theme";
 
 /**
  * HTS 처럼 가격이 바뀌는 순간 배경을 잠깐 물들인다 (오르면 빨강, 내리면 파랑) — 값이 실제로 바뀔 때만.
@@ -31,7 +31,7 @@ export function FlashPrice({ value, text, style }: { value: number | null | unde
   }, [flash, anim]);
 
   return (
-    <View style={{ borderRadius: 4, paddingHorizontal: 3, marginHorizontal: -3, overflow: "hidden" }}>
+    <View style={{ borderRadius: 4, paddingHorizontal: space.xxs, marginHorizontal: -space.xxs, overflow: "hidden" }}>
       <Animated.View style={[StyleSheet.absoluteFill, { pointerEvents: "none", backgroundColor: dir > 0 ? `${t.up}55` : `${t.down}55`, opacity: anim }]} />
       <Text style={style}>{text}</Text>
     </View>

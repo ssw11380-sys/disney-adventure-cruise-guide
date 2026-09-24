@@ -217,9 +217,9 @@ function ResultRow({ item, registered, onOpen, onRegister }: { item: RecentStock
 }
 
 const styles = StyleSheet.create({
-  addBtn: { flexDirection: "row", alignItems: "center", gap: 2, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: 4 },
+  addBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
   search: { flexDirection: "row", alignItems: "center", gap: space.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.md },
-  input: { flex: 1, paddingVertical: 12, fontSize: font.body },
+  input: { flex: 1, paddingVertical: space.md, fontSize: font.body },
   field: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
   result: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, borderRadius: radius.sm, borderWidth: StyleSheet.hairlineWidth },
 });

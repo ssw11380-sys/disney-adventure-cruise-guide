@@ -96,7 +96,7 @@ export default function BriefingsScreen() {
               onPress={() => router.push(`/briefings/${i.latest!.id}`)}
               accessibilityRole="link"
               accessibilityLabel={`${i.name} ${formatPct(rates.get(i.code) ?? null)} 브리핑 보기`}
-              style={{ flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: 6 }}
+              style={{ flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.s }}
             >
               <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", flex: 1 }} numberOfLines={1}>
                 {i.name}

@@ -61,8 +61,8 @@ export const ThemeRow = memo(function ThemeRow({ theme, rank, kindWord = "테마
 const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", height: THEME_ROW_H, paddingHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
   rank: { width: 28, fontSize: font.small, fontWeight: "800", fontVariant: ["tabular-nums"] },
-  body: { flex: 1, gap: 3 },
-  barRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  body: { flex: 1, gap: space.xxs },
+  barRow: { flexDirection: "row", alignItems: "center", gap: space.s },
   bar: { flex: 1, height: 4, borderRadius: 2, overflow: "hidden", flexDirection: "row" },
   counts: { fontSize: font.tiny, fontVariant: ["tabular-nums"], minWidth: 56, textAlign: "right" },
   rate: { minWidth: 72 },

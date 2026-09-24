@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { changeColor, font, radius, space, useTheme } from "@/theme";
 
 /**
@@ -138,14 +138,30 @@ export function ChangeText({ value, text, style }: { value: number | null | unde
 export function RateBox({ value, text, style }: { value: number | null | undefined; text: string; style?: StyleProp<ViewStyle> }) {
   const t = useTheme();
   const up = (value ?? 0) > 0, down = (value ?? 0) < 0;
-  const bg = up ? t.up : down ? t.down : t.surfaceAlt;
+  // 칠한 칸은 흰 글자가 4.5:1 이상 읽히는 진한 등락색 (3-20)
+  const bg = up ? t.upFill : down ? t.downFill : t.surfaceAlt;
   return (
     <View style={[styles.rateBox, { backgroundColor: bg }, style]}>
-      <Text style={[{ color: up || down ? "#FFFFFF" : t.muted, fontSize: font.small, fontWeight: "700" }, NUM]} numberOfLines={1}>
+      <Text style={[{ color: up || down ? t.onFill : t.muted, fontSize: font.small, fontWeight: "700" }, NUM]} numberOfLines={1}>
         {text}
       </Text>
     </View>
   );
+}
+
+/** 켜고 끄기 스위치 — 앱의 모든 스위치는 이것만 쓴다 (모양 하나, 3-20) */
+export function Toggle({ value, onValueChange, disabled, accessibilityLabel }: { value: boolean; onValueChange: (v: boolean) => void; disabled?: boolean; accessibilityLabel?: string }) {
+  const t = useTheme();
+  return (
+    // eslint-disable-next-line no-restricted-syntax -- 스위치를 감싸는 유일한 곳
+    <Switch value={value} onValueChange={onValueChange} disabled={disabled} accessibilityLabel={accessibilityLabel} trackColor={{ true: t.accent, false: t.lineStrong }} thumbColor={t.onFill} />
+  );
+}
+
+/** 실시간·장중 점 (등락색이 아닌 초록, 3-20) */
+export function LiveDot({ on = true, size = 6 }: { on?: boolean; size?: number }) {
+  const t = useTheme();
+  return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: on ? t.live : t.muted }} />;
 }
 
 export function Loading({ label }: { label?: string }) {
@@ -222,13 +238,13 @@ export function TableHead({ children, style }: { children: React.ReactNode; styl
 
 const styles = StyleSheet.create({
   card: { borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
-  sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 2 },
+  sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: space.xxs },
   sectionTitle: { fontSize: font.h2, fontWeight: "700" },
   button: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    gap: space.s,
     height: 44,
     paddingHorizontal: space.lg,
     borderRadius: radius.sm,
@@ -236,14 +252,14 @@ const styles = StyleSheet.create({
   },
   buttonCompact: { height: 32, paddingHorizontal: space.md },
   buttonText: { fontSize: font.body, fontWeight: "700" },
-  chip: { flexDirection: "row", alignItems: "center", gap: 4, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 5 },
+  chip: { flexDirection: "row", alignItems: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
   segment: { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },
-  segmentItem: { flex: 1, alignItems: "center", paddingVertical: 11, borderBottomWidth: 2 },
-  badge: { borderWidth: 1, borderRadius: 3, paddingHorizontal: 5, paddingVertical: 1 },
-  rateBox: { minWidth: 64, alignItems: "flex-end", borderRadius: 3, paddingHorizontal: 6, paddingVertical: 3 },
+  segmentItem: { flex: 1, alignItems: "center", paddingVertical: space.md, borderBottomWidth: 2 },
+  badge: { borderWidth: 1, borderRadius: 3, paddingHorizontal: space.xs, paddingVertical: space.xxs },
+  rateBox: { minWidth: 64, alignItems: "flex-end", borderRadius: 3, paddingHorizontal: space.s, paddingVertical: space.xxs },
   center: { alignItems: "center", justifyContent: "center", padding: space.xl },
-  kv: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth },
+  kv: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   grid: { flexDirection: "row", flexWrap: "wrap", columnGap: space.lg },
-  stat: { width: "47%", flexGrow: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 7, borderBottomWidth: StyleSheet.hairlineWidth, gap: 6 },
-  tableHead: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
+  stat: { width: "47%", flexGrow: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.s },
+  tableHead: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.s, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
 });

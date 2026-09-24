@@ -80,7 +80,7 @@ export const DiscoverRow = memo(function DiscoverRow({
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }} numberOfLines={1}>
           {item.name}
         </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
           <Text style={{ color: t.muted, fontSize: font.tiny, fontVariant: ["tabular-nums"] }} numberOfLines={1}>
             {item.code}
           </Text>
@@ -110,9 +110,9 @@ export const DiscoverRow = memo(function DiscoverRow({
 const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", height: DISCOVER_ROW_H, paddingHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth },
   rank: { width: DISCOVER_COL.rank, fontSize: font.small, fontWeight: "800", fontVariant: ["tabular-nums"] },
-  name: { flex: 1, gap: 2, paddingRight: space.sm },
-  mark: { fontSize: 9, fontWeight: "800", borderWidth: 1, borderRadius: 2, paddingHorizontal: 3, lineHeight: 12, overflow: "hidden" },
-  num: { alignItems: "flex-end", gap: 2 },
+  name: { flex: 1, gap: space.xxs, paddingRight: space.sm },
+  mark: { fontSize: font.tiny, fontWeight: "800", borderWidth: 1, borderRadius: 2, paddingHorizontal: space.xs, lineHeight: 14, overflow: "hidden", flexShrink: 0 },
+  num: { alignItems: "flex-end", gap: space.xxs },
   main: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
   sub: { fontSize: font.small, fontVariant: ["tabular-nums"] },
 });

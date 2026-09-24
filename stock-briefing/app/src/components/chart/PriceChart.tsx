@@ -7,7 +7,7 @@ import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
 import { axisWidth, labelSide, readoutBasis, textWidth } from "@/lib/chartBasis";
 import { formatPct, formatPrice, formatVolume } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
-import { changeColor, font, space, useTheme } from "@/theme";
+import { changeColor, font, space, useTheme, type Theme } from "@/theme";
 
 /**
  * 직접 그리는 캔들 차트 (react-native-svg + gesture-handler).
@@ -17,7 +17,10 @@ import { changeColor, font, space, useTheme } from "@/theme";
  *  - 부모가 전체 시계열과 보이는 구간(count, offset)을 들고 있고, 여기서는 그리기와 제스처만 담당
  */
 
-export const MA_COLORS: Record<number, string> = { 5: "#22c55e", 10: "#06b6d4", 20: "#ef4444", 60: "#f59e0b", 120: "#8b5cf6", 200: "#ec4899" };
+/** 이동평균선 색 (테마의 차트 색 — 상승·하락색과 겹치지 않게 고른 값, 3-20) */
+export function maColor(t: Theme, period: number): string {
+  return t.chart.ma[period] ?? t.muted;
+}
 export type IndicatorKind = "none" | "rsi" | "macd";
 
 export interface ChartView {
@@ -158,7 +161,7 @@ export function PriceChart(p: PriceChartProps) {
     axisPrice(domain[1], currency),
     axisPrice(domain[0], currency),
     p.currentPrice ? axisPrice(p.currentPrice, currency) : "",
-    p.showVolume ? [formatVolume(maxVol), 0.9] : "",
+    p.showVolume ? formatVolume(maxVol) : "",
   ]);
   const plotW = Math.max(width - axisW, 10);
   const step = n ? plotW / n : plotW;
@@ -361,7 +364,7 @@ export function PriceChart(p: PriceChartProps) {
                 <Line x1={0} x2={plotW} y1={yOf(v)} y2={yOf(v)} stroke={t.line} strokeWidth={StyleSheet.hairlineWidth} />
                 {/* 현재가 태그에 가려지거나 맨 위에 붙어 잘리는 눈금 숫자는 그리지 않는다 */}
                 {(showCurrent && Math.abs(yOf(v) - yOf(p.currentPrice!)) < 13) || yOf(v) < 5 ? null : (
-                  <SvgText x={plotW + 4} y={yOf(v) + 3.5} fill={t.muted} fontSize={10}>
+                  <SvgText x={plotW + 4} y={yOf(v) + 3.5} fill={t.muted} fontSize={font.tiny}>
                     {axisPrice(v, currency, tickDigits)}
                   </SvgText>
                 )}
@@ -370,9 +373,9 @@ export function PriceChart(p: PriceChartProps) {
             {/* 볼린저 */}
             {bb ? (
               <>
-                <Path d={`${linePath(bb.upper, yOf)}${reversePath(linePath(bb.lower, yOf))}Z`} fill={t.accent} fillOpacity={0.07} />
-                <Path d={linePath(bb.upper, yOf)} stroke={t.accent} strokeOpacity={0.6} strokeWidth={1} fill="none" />
-                <Path d={linePath(bb.lower, yOf)} stroke={t.accent} strokeOpacity={0.6} strokeWidth={1} fill="none" />
+                <Path d={`${linePath(bb.upper, yOf)}${reversePath(linePath(bb.lower, yOf))}Z`} fill={t.chart.band} fillOpacity={0.07} />
+                <Path d={linePath(bb.upper, yOf)} stroke={t.chart.band} strokeOpacity={0.6} strokeWidth={1} fill="none" />
+                <Path d={linePath(bb.lower, yOf)} stroke={t.chart.band} strokeOpacity={0.6} strokeWidth={1} fill="none" />
               </>
             ) : null}
             {/* 캔들 */}
@@ -382,7 +385,7 @@ export function PriceChart(p: PriceChartProps) {
             <Path d={candlePaths.downBody} fill={downColor} />
             {/* 이동평균 */}
             {mas.map((m) => (
-              <Path key={m.period} d={linePath(m.values, yOf)} stroke={MA_COLORS[m.period] ?? t.muted} strokeWidth={1.2} fill="none" />
+              <Path key={m.period} d={linePath(m.values, yOf)} stroke={maColor(t, m.period)} strokeWidth={1.2} fill="none" />
             ))}
             {/* 52주 고/저 */}
             {p.high52w && p.high52w > domain[0] && p.high52w < domain[1] ? <Tag y={yOf(p.high52w)} plotW={plotW} axisW={axisW} label="52주 최고" color={t.muted} dotted inside={side52(p.high52w)} /> : null}
@@ -394,8 +397,8 @@ export function PriceChart(p: PriceChartProps) {
             ) : null}
             {avgOut ? (
               // 범위 밖 평단은 왼쪽 끝에 (오른쪽 끝의 52주 글자·최신 봉과 겹치지 않게)
-              <SvgText x={5} y={avgOut === "above" ? 12 : priceH - 4} fill={t.gold} fontSize={10}>
-                {avgOut === "above" ? "▲ 평단 " : "▼ 평단 "}
+              <SvgText x={5} y={avgOut === "above" ? 12 : priceH - 4} fill={t.gold} fontSize={font.tiny}>
+                {avgOut === "above" ? "평단(범위 위) " : "평단(범위 아래) "}
                 {axisPrice(p.avgPrice!, currency)}
               </SvgText>
             ) : null}
@@ -406,10 +409,10 @@ export function PriceChart(p: PriceChartProps) {
               <>
                 <Path d={volPaths.up} fill={upColor} fillOpacity={0.55} />
                 <Path d={volPaths.down} fill={downColor} fillOpacity={0.55} />
-                <SvgText x={plotW + 4} y={volTop + 9} fill={t.muted} fontSize={9}>
+                <SvgText x={plotW + 4} y={volTop + 9} fill={t.muted} fontSize={font.tiny}>
                   {formatVolume(maxVol)}
                 </SvgText>
-                <SvgText x={2} y={volTop + 9} fill={t.muted} fontSize={9}>
+                <SvgText x={2} y={volTop + 9} fill={t.muted} fontSize={font.tiny}>
                   거래량
                 </SvgText>
               </>
@@ -420,12 +423,12 @@ export function PriceChart(p: PriceChartProps) {
                 {[30, 70].map((v) => (
                   <Line key={v} x1={0} x2={plotW} y1={yInd(v)} y2={yInd(v)} stroke={t.line} strokeDasharray="3 3" />
                 ))}
-                <Path d={linePath(rsiS, yInd)} stroke="#8b5cf6" strokeWidth={1.2} fill="none" />
-                <SvgText x={2} y={indTop + 9} fill={t.muted} fontSize={9}>
+                <Path d={linePath(rsiS, yInd)} stroke={t.chart.rsi} strokeWidth={1.2} fill="none" />
+                <SvgText x={2} y={indTop + 9} fill={t.muted} fontSize={font.tiny}>
                   RSI(14) {fmtNum(rsiS[end - 1], 1)}
                 </SvgText>
                 {[30, 70].map((v) => (
-                  <SvgText key={v} x={plotW + 4} y={yInd(v) + 3} fill={t.muted} fontSize={9}>
+                  <SvgText key={v} x={plotW + 4} y={yInd(v) + 3} fill={t.muted} fontSize={font.tiny}>
                     {v}
                   </SvgText>
                 ))}
@@ -452,16 +455,16 @@ export function PriceChart(p: PriceChartProps) {
                     </>
                   );
                 })()}
-                <Path d={linePath(macdS.macd, yInd)} stroke="#0ea5e9" strokeWidth={1.2} fill="none" />
-                <Path d={linePath(macdS.signal, yInd)} stroke="#f59e0b" strokeWidth={1.2} fill="none" />
-                <SvgText x={2} y={indTop + 9} fill={t.muted} fontSize={9}>
+                <Path d={linePath(macdS.macd, yInd)} stroke={t.chart.macd} strokeWidth={1.2} fill="none" />
+                <Path d={linePath(macdS.signal, yInd)} stroke={t.chart.signal} strokeWidth={1.2} fill="none" />
+                <SvgText x={2} y={indTop + 9} fill={t.muted} fontSize={font.tiny}>
                   MACD(12,26,9) {fmtNum(macdS.macd[end - 1], currency === "KRW" ? 0 : 2)} · 시그널 {fmtNum(macdS.signal[end - 1], currency === "KRW" ? 0 : 2)}
                 </SvgText>
               </>
             ) : null}
             {/* 날짜 축 */}
             {xTicks.map((tk) => (
-              <SvgText key={tk.i} x={xOf(tk.i)} y={height - 4} fill={t.muted} fontSize={9} textAnchor="middle">
+              <SvgText key={tk.i} x={xOf(tk.i)} y={height - 4} fill={t.muted} fontSize={font.tiny} textAnchor="middle">
                 {tk.label}
               </SvgText>
             ))}
@@ -471,11 +474,11 @@ export function PriceChart(p: PriceChartProps) {
                 <Line x1={xOf(cross.i)} x2={xOf(cross.i)} y1={0} y2={height - X_AXIS_H} stroke={t.ink} strokeOpacity={0.5} strokeDasharray="3 3" />
                 <Line x1={0} x2={plotW} y1={cross.y} y2={cross.y} stroke={t.ink} strokeOpacity={0.5} strokeDasharray="3 3" />
                 <Rect x={plotW} y={cross.y - 8} width={axisW} height={16} fill={t.ink} rx={3} />
-                <SvgText x={plotW + 4} y={cross.y + 3.5} fill={t.bg} fontSize={10} fontWeight="700">
+                <SvgText x={plotW + 4} y={cross.y + 3.5} fill={t.bg} fontSize={font.tiny} fontWeight="700">
                   {axisPrice(domain[0] + (1 - cross.y / priceH) * (domain[1] - domain[0]), currency)}
                 </SvgText>
                 <Rect x={Math.min(Math.max(xOf(cross.i) - 40, 0), plotW - 80)} y={height - X_AXIS_H} width={80} height={X_AXIS_H - 2} fill={t.ink} rx={3} />
-                <SvgText x={Math.min(Math.max(xOf(cross.i), 40), plotW - 40)} y={height - 5} fill={t.bg} fontSize={9} fontWeight="700" textAnchor="middle">
+                <SvgText x={Math.min(Math.max(xOf(cross.i), 40), plotW - 40)} y={height - 5} fill={t.bg} fontSize={font.tiny} fontWeight="700" textAnchor="middle">
                   {crossCandle.time ? `${crossCandle.date.slice(5).replace("-", "/")} ${crossCandle.time.slice(11, 16)}` : crossCandle.date}
                 </SvgText>
               </>
@@ -534,7 +537,7 @@ function Tag({
       <Line x1={0} x2={plotW} y1={y} y2={y} stroke={color} strokeWidth={dotted ? 0.8 : 1} strokeDasharray={dashed ? "5 3" : dotted ? "1.5 3" : undefined} strokeOpacity={dotted ? 0.7 : 0.9} />
       {filled ? <Rect x={plotW} y={y - 8} width={axisW} height={16} fill={color} rx={3} /> : null}
       {inside ? <Rect x={inside === "left" ? 2 : plotW - textW - 2} y={ty - 10} width={textW} height={13} fill={t.bg} fillOpacity={0.75} rx={2} /> : null}
-      <SvgText x={inside === "left" ? 5 : inside === "right" ? plotW - 5 : plotW + 4} y={ty} textAnchor={inside === "right" ? "end" : "start"} fill={filled ? t.bg : color} fontSize={10} fontWeight={dotted ? "400" : "700"}>
+      <SvgText x={inside === "left" ? 5 : inside === "right" ? plotW - 5 : plotW + 4} y={ty} textAnchor={inside === "right" ? "end" : "start"} fill={filled ? t.bg : color} fontSize={font.tiny} fontWeight={dotted ? "400" : "700"}>
         {label}
       </SvgText>
     </>
@@ -597,8 +600,11 @@ function Readout({
             const v = m.values[index];
             return (
               <Text key={m.period}>
-                <Text style={{ color: MA_COLORS[m.period] ?? t.muted }}>■</Text> {m.period}
-                {unit} {v === null || v === undefined ? "-" : formatChartValue(v, currency)}{" "}
+                <Text style={{ color: maColor(t, m.period), fontWeight: "700" }}>
+                  {m.period}
+                  {unit}
+                </Text>{" "}
+                {v === null || v === undefined ? "-" : formatChartValue(v, currency)}{" "}
               </Text>
             );
           })}
@@ -609,6 +615,6 @@ function Readout({
 }
 
 const styles = StyleSheet.create({
-  readout: { gap: 2, minHeight: 34 },
+  readout: { gap: space.xxs, minHeight: 34 },
   readoutText: { fontSize: font.tiny, fontVariant: ["tabular-nums"] },
 });

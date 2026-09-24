@@ -192,14 +192,14 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
 
 const styles = StyleSheet.create({
   controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
-  group: { flexDirection: "row", gap: 4 },
-  seg: { flexDirection: "row", alignItems: "center", paddingHorizontal: 9, paddingVertical: 5, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
-  breadth: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.sm, gap: 6, borderBottomWidth: StyleSheet.hairlineWidth },
+  group: { flexDirection: "row", gap: space.xs },
+  seg: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  breadth: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.sm, gap: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   breadthTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
   breadthBar: { height: 6, borderRadius: 3, overflow: "hidden", flexDirection: "row" },
-  sortBtn: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  sortBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.s, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
   extremes: { flexDirection: "row", gap: space.md },
-  extreme: { flex: 1, gap: 1 },
+  extreme: { flex: 1, gap: space.xxs },
   heatRow: { gap: 0, paddingHorizontal: space.sm },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
 });

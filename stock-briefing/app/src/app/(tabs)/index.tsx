@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -120,8 +121,9 @@ export default function StocksScreen() {
     <View style={{ backgroundColor: t.bg }}>
       <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
         <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{section.title}</Text>
-        <Pressable onPress={() => setSortOpen(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel="정렬">
-          <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel} ▾</Text>
+        <Pressable onPress={() => setSortOpen(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`정렬: ${sortLabel}`} style={{ flexDirection: "row", alignItems: "center", gap: space.xxs }}>
+          <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel}</Text>
+          <Ionicons name="chevron-down" size={font.small} color={t.muted} />
         </Pressable>
       </View>
       <TableHead>
@@ -178,10 +180,12 @@ export default function StocksScreen() {
 function HeadCell({ label, active, onPress, width, flex }: { label: string; active?: boolean; onPress?: () => void; width?: number; flex?: boolean }) {
   const t = useTheme();
   const body = (
-    <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right" }} numberOfLines={1}>
-      {label}
-      {active ? " ▼" : ""}
-    </Text>
+    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: flex ? "flex-start" : "flex-end", gap: space.xxs }}>
+      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right" }} numberOfLines={1}>
+        {label}
+      </Text>
+      {active ? <Ionicons name="caret-down" size={font.tiny} color={t.ink} /> : null}
+    </View>
   );
   const style = flex ? { flex: 1 } : { width };
   return onPress ? (
@@ -289,7 +293,7 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
   const t = useTheme();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+      <Pressable style={[styles.backdrop, { backgroundColor: t.scrim }]} onPress={onClose}>
         <View style={[styles.sheet, { backgroundColor: t.surface, borderColor: t.lineStrong }]}>
           <Text style={{ color: t.muted, fontSize: font.small, paddingHorizontal: space.lg, paddingVertical: space.sm }}>정렬</Text>
           {SORT_OPTIONS.map((o) => (
@@ -302,7 +306,7 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
               style={({ pressed }) => [styles.sheetItem, { borderTopColor: t.line, backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}
             >
               <Text style={{ color: o.value === value ? t.accent : t.ink, fontSize: font.body, fontWeight: o.value === value ? "700" : "400" }}>{o.label}</Text>
-              {o.value === value ? <Text style={{ color: t.accent }}>✓</Text> : null}
+              {o.value === value ? <Ionicons name="checkmark" size={font.h2} color={t.accent} /> : null}
             </Pressable>
           ))}
         </View>
@@ -312,20 +316,20 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
 }
 
 const styles = StyleSheet.create({
-  panel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, gap: 4 },
+  panel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, gap: space.xs },
   // 상태 줄이 길면(시세 지연 N 등) 제목을 줄이지 않고 다음 줄로 내린다
-  panelTop: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", columnGap: space.sm, rowGap: 2 },
-  total: { fontSize: 26, fontWeight: "800", letterSpacing: -0.5, fontVariant: ["tabular-nums"] },
-  kpis: { flexDirection: "row", flexWrap: "wrap", marginTop: 4 },
-  kpi: { width: "50%", paddingVertical: 4, paddingRight: space.sm, gap: 1 },
-  split: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 6, paddingTop: 6, gap: 3 },
+  panelTop: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", columnGap: space.sm, rowGap: space.xxs },
+  total: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.5, fontVariant: ["tabular-nums"] },
+  kpis: { flexDirection: "row", flexWrap: "wrap", marginTop: space.xs },
+  kpi: { width: "50%", paddingVertical: space.xs, paddingRight: space.sm, gap: space.xxs },
+  split: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: space.s, paddingTop: space.s, gap: space.xxs },
   splitRow: { flexDirection: "row", alignItems: "center" },
   splitNum: { fontSize: font.small, fontVariant: ["tabular-nums"], textAlign: "right" },
-  sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: 6 },
-  empty: { margin: space.lg, padding: space.lg, gap: 4, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
-  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
+  sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
+  empty: { margin: space.lg, padding: space.lg, gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
+  backdrop: { flex: 1, justifyContent: "flex-end" },
   sheet: { borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: space.xl },
-  sheetItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: 14, borderTopWidth: StyleSheet.hairlineWidth },
+  sheetItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.lg, borderTopWidth: StyleSheet.hairlineWidth },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)

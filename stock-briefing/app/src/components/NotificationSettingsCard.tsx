@@ -1,13 +1,13 @@
 import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import * as Notifications from "expo-notifications";
 import React, { useEffect, useState } from "react";
-import { Alert, Platform, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useApi, useNotificationMutations, useNotificationSettings, useRegisteredStocks } from "@/api/hooks";
 import { quietWarnings } from "@/lib/briefingDigest";
 import { disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
 import { font, radius, space, useTheme } from "@/theme";
-import { Button, Card, Loading, Muted, Row, SectionTitle } from "./ui";
+import { Button, Card, Loading, Muted, Row, SectionTitle, Toggle } from "./ui";
 
 /**
  * 설정 > 알림 카드.
@@ -127,7 +127,7 @@ export function NotificationSettingsCard() {
                   : "브리핑 생성 시 요약 알림"}
           </Muted>
         </View>
-        <Switch value={enabled} onValueChange={(v) => void toggleDevice(v)} disabled={busy || !tokenLoaded} trackColor={{ true: t.accent }} />
+        <Toggle value={enabled} onValueChange={(v) => void toggleDevice(v)} disabled={busy || !tokenLoaded} />
       </View>
       {setupError ? <Text style={{ color: t.danger, fontSize: font.small }}>{setupError}</Text> : null}
       {localMode ? (
@@ -136,7 +136,7 @@ export function NotificationSettingsCard() {
             <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showGuide ? "접기" : "즉시 푸시 설정 방법"}</Text>
           </Pressable>
           {showGuide ? (
-            <View style={{ gap: 4 }}>
+            <View style={{ gap: space.xs }}>
               <Muted>1. console.firebase.google.com → 프로젝트 만들기 → Android 앱 추가, 패키지명 com.stockbriefing.app → google-services.json 다운로드</Muted>
               <Muted>2. expo.dev → 프로젝트 stock-briefing → Environment variables → 이름 GOOGLE_SERVICES_JSON, 타입 File 로 업로드 (환경: preview)</Muted>
               <Muted>3. Firebase 프로젝트 설정 → 서비스 계정 → 새 비공개 키 생성 → expo.dev → Credentials → Android → FCM V1 service account key 에 업로드</Muted>
@@ -154,20 +154,20 @@ export function NotificationSettingsCard() {
         <View style={{ gap: space.xs }}>
           <View style={styles.switchRow}>
             <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>서버에서 푸시 보내기</Text>
-            <Switch value={s.pushEnabled} onValueChange={(v) => patch({ pushEnabled: v })} trackColor={{ true: t.accent }} />
+            <Toggle value={s.pushEnabled} onValueChange={(v) => patch({ pushEnabled: v })} />
           </View>
           <TimeRow label="오전 브리핑" time={s.morningTime} enabled={s.morningEnabled} onToggle={(v) => patch({ morningEnabled: v })} onPick={() => pickTime("morningTime")} />
           <TimeRow label="오후 브리핑" time={s.afternoonTime} enabled={s.afternoonEnabled} onToggle={(v) => patch({ afternoonEnabled: v })} onPick={() => pickTime("afternoonTime")} />
           <View style={styles.switchRow}>
             <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>평일만</Text>
-            <Switch value={s.weekdaysOnly} onValueChange={(v) => patch({ weekdaysOnly: v })} trackColor={{ true: t.accent }} />
+            <Toggle value={s.weekdaysOnly} onValueChange={(v) => patch({ weekdaysOnly: v })} />
           </View>
           {/* 3-19: 묶음(briefingDigest)이 켜진 서버에서만 — 꺼져 있으면 서버가 조용한 시간·끈 종목을 쓰지 않는다 */}
           {s.digest === true && s.quietStart && s.quietEnd ? (
             <>
               <View style={styles.switchRow}>
                 <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>조용한 시간</Text>
-                <Switch value={!!s.quietEnabled} onValueChange={(v) => patch({ quietEnabled: v })} trackColor={{ true: t.accent }} accessibilityLabel="조용한 시간" />
+                <Toggle value={!!s.quietEnabled} onValueChange={(v) => patch({ quietEnabled: v })} accessibilityLabel="조용한 시간" />
               </View>
               <View style={[styles.switchRow, { paddingTop: 0 }]}>
                 <TimeChip time={s.quietStart} enabled={!!s.quietEnabled} label="조용한 시간 시작" onPick={() => pickTime("quietStart")} />
@@ -195,7 +195,7 @@ export function NotificationSettingsCard() {
                         <Text style={{ color: muted ? t.muted : t.ink, fontSize: font.small, flex: 1 }} numberOfLines={1}>
                           {st.name}
                         </Text>
-                        <Switch value={!muted} accessibilityLabel={`${st.name} 알림`} onValueChange={(on) => patch({ mute: { code: st.code, muted: !on } })} trackColor={{ true: t.accent }} />
+                        <Toggle value={!muted} accessibilityLabel={`${st.name} 알림`} onValueChange={(on) => patch({ mute: { code: st.code, muted: !on } })} />
                       </View>
                     );
                   })
@@ -253,12 +253,12 @@ function TimeRow({ label, time, enabled, onToggle, onPick }: { label: string; ti
       <Pressable onPress={onPick} disabled={!enabled} accessibilityRole="button" accessibilityLabel={`${label} 시간 변경`} style={[styles.timeChip, { borderColor: t.line, backgroundColor: t.surfaceAlt, opacity: enabled ? 1 : 0.5 }]}>
         <Text style={{ color: t.ink, fontSize: font.body, fontVariant: ["tabular-nums"], fontWeight: "600" }}>{time}</Text>
       </Pressable>
-      <Switch value={enabled} onValueChange={onToggle} trackColor={{ true: t.accent }} />
+      <Toggle value={enabled} onValueChange={onToggle} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  switchRow: { flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: 4 },
-  timeChip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.md, paddingVertical: 6 },
+  switchRow: { flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.xs },
+  timeChip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.md, paddingVertical: space.s },
 });

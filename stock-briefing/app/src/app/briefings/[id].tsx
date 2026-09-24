@@ -37,7 +37,7 @@ export default function BriefingDetailScreen() {
   return (
     <Screen disclaimer top={<StaleBanner query={b} />}>
       <Stack.Screen options={{ title: `${d.name ?? d.code} · ${SESSION_LABEL[d.session]}` }} />
-      <View style={{ gap: 2, paddingHorizontal: space.lg, paddingTop: space.md }}>
+      <View style={{ gap: space.xxs, paddingHorizontal: space.lg, paddingTop: space.md }}>
         <Pressable onPress={() => router.push(`/stocks/${d.code}`)} accessibilityRole="link">
           <Text style={{ color: t.ink, fontSize: font.title, fontWeight: "700" }}>{d.name ?? d.code}</Text>
         </Pressable>
@@ -92,7 +92,7 @@ export default function BriefingDetailScreen() {
 
       {/* 이 종목만 다시 만들기 (3-19): 전체를 다시 만들지 않고 약 30초 */}
       {regenOn ? (
-        <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, gap: 4 }}>
+        <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, gap: space.xs }}>
           <Button
             title={`이 종목 오늘 ${d.session === "morning" ? "오전" : "오후"} 브리핑 다시 만들기`}
             variant="secondary"

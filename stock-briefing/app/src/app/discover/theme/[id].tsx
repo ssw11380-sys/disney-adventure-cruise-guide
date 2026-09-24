@@ -133,8 +133,8 @@ export default function ThemeDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  summary: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: 6, borderBottomWidth: StyleSheet.hairlineWidth },
-  big: { fontSize: 30, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
+  summary: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
+  big: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
   bar: { height: 6, borderRadius: 3, overflow: "hidden", flexDirection: "row" },
   th: { fontSize: font.tiny, fontWeight: "600" },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
