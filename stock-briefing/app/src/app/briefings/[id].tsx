@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useBriefing, useBriefings } from "@/api/hooks";
 import { StaleBanner } from "@/components/Freshness";
 import { CardsSkeleton } from "@/components/Skeleton";
+import { BriefingSources } from "@/components/BriefingSources";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Badge, Card, ChangeText, ErrorView, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
@@ -42,7 +43,6 @@ export default function BriefingDetailScreen() {
         <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.xs }}>
           {failed ? <Badge tone="bad">생성 실패</Badge> : null}
           {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
-          <Badge>{d.model}</Badge>
         </View>
       </View>
 
@@ -83,6 +83,8 @@ export default function BriefingDetailScreen() {
           </Card>
         </>
       )}
+
+      <BriefingSources data={d.data} />
 
       {history.data && history.data.length > 1 ? (
         <View>
