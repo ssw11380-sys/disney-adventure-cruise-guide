@@ -6,7 +6,7 @@ import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
 import { font, radius, space, useTheme } from "@/theme";
-import { clampView, MA_COLORS, PriceChart, type ChartView, type IndicatorKind } from "./chart/PriceChart";
+import { clampView, maColor, PriceChart, type ChartView, type IndicatorKind } from "./chart/PriceChart";
 
 /**
  * 종목 상세·전체 화면에서 쓰는 차트 묶음: 기간(분·일·주·월) → 보이는 봉 수 칩 + 과거/최신 버튼 → 차트 → 오버레이·지표 토글.
@@ -134,10 +134,10 @@ export function CandleChart({
         </View>
         <View style={styles.chips}>
           <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityLabel="과거로" style={[styles.chip, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
-            <Text style={{ color: t.ink, fontSize: font.tiny }}>◀</Text>
+            <Ionicons name="chevron-back" size={font.small} color={t.ink} />
           </Pressable>
           <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityLabel="최신으로" style={[styles.chip, { borderColor: t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
-            <Text style={{ color: t.ink, fontSize: font.tiny }}>▶</Text>
+            <Ionicons name="chevron-forward" size={font.small} color={t.ink} />
           </Pressable>
         </View>
       </View>
@@ -176,8 +176,8 @@ export function CandleChart({
         {MA_CHOICES.map((per) => {
           const on = prefs.maPeriods.includes(per);
           return (
-            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="button" accessibilityState={{ selected: on }} style={[styles.chip, { borderColor: on ? MA_COLORS[per] : t.line, opacity: on ? 1 : 0.6 }]}>
-              <View style={[styles.swatch, { backgroundColor: MA_COLORS[per] }]} />
+            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="button" accessibilityState={{ selected: on }} style={[styles.chip, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
+              <View style={[styles.swatch, { backgroundColor: maColor(t, per) }]} />
               <Text style={chipText(on)}>{per}</Text>
             </Pressable>
           );
@@ -191,7 +191,7 @@ export function CandleChart({
           </Pressable>
         ) : null}
         <Pressable onPress={cycleIndicator} accessibilityRole="button" style={chipStyle(prefs.indicator !== "none")}>
-          <Text style={chipText(prefs.indicator !== "none")}>{prefs.indicator === "none" ? "RSI/MACD" : prefs.indicator === "rsi" ? "RSI ▸ MACD" : "MACD ▸ 끄기"}</Text>
+          <Text style={chipText(prefs.indicator !== "none")}>{prefs.indicator === "none" ? "RSI/MACD" : prefs.indicator === "rsi" ? "RSI (다음 MACD)" : "MACD (다음 끄기)"}</Text>
         </Pressable>
       </ScrollView>
       {toKrw ? <Text style={{ color: t.muted, fontSize: font.tiny }}>원화 환산 · 1달러 {formatNumber(fx, 2)}원 (과거 봉 동일 환율)</Text> : null}
@@ -202,7 +202,7 @@ export function CandleChart({
 const styles = StyleSheet.create({
   placeholder: { alignItems: "center", justifyContent: "center", borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth },
   toolbar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: space.sm, flexWrap: "wrap" },
-  chips: { flexDirection: "row", gap: 6, alignItems: "center", flexWrap: "wrap" },
-  chip: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  chips: { flexDirection: "row", gap: space.s, alignItems: "center", flexWrap: "wrap" },
+  chip: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
   swatch: { width: 8, height: 2 },
 });

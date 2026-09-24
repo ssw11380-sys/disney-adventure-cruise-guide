@@ -71,7 +71,7 @@ function statusLabel(market: DiscoverMarket, open: boolean, session: DiscoverSes
 }
 
 /**
- * "● 장중 · 30초마다 갱신 · 14:52 기준" / "장 마감 · 직전 정규장 기준 · 9월 23일 (수) 05:00 기준".
+ * "(초록 점) 장중 · 30초마다 갱신 · 14:52 기준" / "장 마감 · 직전 정규장 기준 · 9월 23일 (수) 05:00 기준".
  * 미국 값은 정규장 기준이라 장 밖에서는 "직전 정규장", 한국은 15:30 뒤에도 시간외 거래로 값이 바뀌어 20:00 까지 "시간외 거래 반영 중".
  */
 export function StatusLine({
@@ -96,7 +96,7 @@ export function StatusLine({
   const moving = session ? session === "regular" || session === "extended" : open;
   return (
     <View style={[styles.status, { borderBottomColor: t.line, backgroundColor: t.bg }]}>
-      <View style={[styles.dot, { backgroundColor: moving ? t.up : t.muted }]} />
+      <View style={[styles.dot, { backgroundColor: moving ? t.live : t.muted }]} />
       <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1 }} numberOfLines={2}>
         {statusLabel(market, open, session, live, paused)}
         {asOf ? ` · ${formatDateKo(asOf, true)} 기준` : ""}
@@ -107,6 +107,6 @@ export function StatusLine({
 }
 
 const styles = StyleSheet.create({
-  status: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: space.lg, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth },
+  status: { flexDirection: "row", alignItems: "center", gap: space.s, paddingHorizontal: space.lg, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   dot: { width: 5, height: 5, borderRadius: 3 },
 });

@@ -133,9 +133,9 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
 
 const styles = StyleSheet.create({
   chipsWrap: { borderBottomWidth: StyleSheet.hairlineWidth },
-  chips: { flexDirection: "row", gap: 6, paddingHorizontal: space.lg, paddingVertical: space.sm },
+  chips: { flexDirection: "row", gap: space.s, paddingHorizontal: space.lg, paddingVertical: space.sm },
   th: { fontSize: font.tiny, fontWeight: "600" },
-  more: { margin: space.lg, paddingVertical: 10, alignItems: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
+  more: { margin: space.lg, paddingVertical: space.sm, alignItems: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
 });
 

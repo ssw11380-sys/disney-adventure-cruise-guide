@@ -3,13 +3,13 @@ import { router, Tabs } from "expo-router";
 import React from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useTheme } from "@/theme";
+import { font, space, useTheme } from "@/theme";
 
 export default function TabsLayout() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const icon = (name: keyof typeof Ionicons.glyphMap, onPress: () => void, label: string) => (
-    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} hitSlop={10} style={{ paddingHorizontal: 8 }}>
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} hitSlop={10} style={{ paddingHorizontal: space.sm }}>
       <Ionicons name={name} size={21} color={t.ink} />
     </Pressable>
   );
@@ -19,11 +19,11 @@ export default function TabsLayout() {
         headerStyle: { backgroundColor: t.surface, height: 52 + insets.top },
         headerTintColor: t.ink,
         headerTitleAlign: "left",
-        headerTitleStyle: { fontWeight: "700", fontSize: 17 },
+        headerTitleStyle: { fontWeight: "700", fontSize: font.h2 },
         headerShadowVisible: false,
         // 고정 height 를 주면 시스템 내비게이션 바(제스처/3버튼) 영역이 무시되어 탭이 그 밑에 깔린다 → 인셋만큼 더한다
-        tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.line, height: 58 + insets.bottom, paddingTop: 6, paddingBottom: insets.bottom + 6 },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
+        tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.line, height: 58 + insets.bottom, paddingTop: space.s, paddingBottom: insets.bottom + space.s },
+        tabBarLabelStyle: { fontSize: font.tiny, fontWeight: "600" },
         tabBarActiveTintColor: t.ink,
         tabBarInactiveTintColor: t.muted,
         sceneStyle: { backgroundColor: t.bg },
@@ -36,7 +36,7 @@ export default function TabsLayout() {
         options={{
           title: "잔고",
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "wallet" : "wallet-outline"} size={21} color={color} />,
-          headerRight: () => <View style={{ flexDirection: "row", marginRight: 8 }}>{icon("search", () => router.push("/stocks/add"), "종목 검색")}</View>,
+          headerRight: () => <View style={{ flexDirection: "row", marginRight: space.sm }}>{icon("search", () => router.push("/stocks/add"), "종목 검색")}</View>,
         }}
       />
       <Tabs.Screen
@@ -44,7 +44,7 @@ export default function TabsLayout() {
         options={{
           title: "발견",
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "compass" : "compass-outline"} size={22} color={color} />,
-          headerRight: () => <View style={{ flexDirection: "row", marginRight: 8 }}>{icon("search", () => router.push("/stocks/add"), "종목 검색")}</View>,
+          headerRight: () => <View style={{ flexDirection: "row", marginRight: space.sm }}>{icon("search", () => router.push("/stocks/add"), "종목 검색")}</View>,
         }}
       />
       <Tabs.Screen

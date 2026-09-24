@@ -15,7 +15,7 @@ import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
 import { LiveStreamProvider } from "@/lib/liveStream";
 import { PERSIST_BUSTER, PERSIST_MAX_AGE_MS, queryPersister, shouldPersist } from "@/lib/queryPersist";
 import { SettingsProvider, useSettings } from "@/lib/settings";
-import { useTheme } from "@/theme";
+import { font, useTheme } from "@/theme";
 
 // 가장 먼저: 이후 어디서 난 JS 오류든 서버로 보고한다 (토큰·금액은 지운 뒤)
 installErrorHandlers();
@@ -97,7 +97,7 @@ function Navigator() {
       screenOptions={{
         headerStyle: { backgroundColor: t.surface },
         headerTintColor: t.ink,
-        headerTitleStyle: { fontWeight: "700", fontSize: 17 },
+        headerTitleStyle: { fontWeight: "700", fontSize: font.h2 },
         headerTitleAlign: "left",
         headerShadowVisible: false,
         contentStyle: { backgroundColor: t.bg },

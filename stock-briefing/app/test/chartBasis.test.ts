@@ -27,21 +27,22 @@ describe("차트 읽기 줄 등락 기준", () => {
 
 describe("가격 축 폭", () => {
   it("짧은 값(달러)은 좁게, 긴 값(원화 7자리)은 넓게", () => {
-    expect(axisWidth(["23.45", "24.00"])).toBe(34); // 4×6+3+7 = 34
-    expect(axisWidth(["1,234,567"])).toBe(56); // 7×6+2×3+7 = 55 → 2 단위 올림 56
+    expect(axisWidth(["23.45", "24.00"])).toBe(38); // (4×6+3)×1.1+7 = 36.7 → 2 단위 올림 38 (11pt)
+    expect(axisWidth(["1,234,567"])).toBe(60); // (7×6+2×3)×1.1+7 = 59.8 → 60
     expect(axisWidth([])).toBe(32);
     expect(axisWidth(["1,234,567,890.12"])).toBe(80);
   });
-  it("작은 글자(거래량 9pt)도 넣어 잘리지 않게", () => {
-    expect(axisWidth(["985"])).toBe(32); // 3×6+7 = 25 → 최소 32
-    expect(axisWidth(["985", ["3,000만", 0.9]])).toBe(42); // (4×6+3+10)×0.9+7 = 40.3 → 42
+  it("거래량 글자도 넣어 잘리지 않게, 작은 글자는 배율로", () => {
+    expect(axisWidth(["985"])).toBe(32); // 3×6×1.1+7 = 26.8 → 최소 32
+    expect(axisWidth(["985", "3,000만"])).toBe(48); // (4×6+3+10)×1.1+7 = 47.7 → 48
+    expect(axisWidth(["985", ["3,000만", 0.9]])).toBe(44); // 36.63+7 = 43.63 → 44
   });
 });
 
 describe("글자 폭 어림", () => {
   it("한글은 넓게, 쉼표는 좁게", () => {
-    expect(textWidth("평단")).toBe(20);
-    expect(textWidth("1,000")).toBeCloseTo(27, 5);
+    expect(textWidth("평단")).toBeCloseTo(22, 5);
+    expect(textWidth("1,000")).toBeCloseTo(29.7, 5);
   });
 });
 

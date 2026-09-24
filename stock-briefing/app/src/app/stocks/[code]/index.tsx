@@ -12,7 +12,7 @@ import { StaleBanner, usePull } from "@/components/Freshness";
 import { DetailSkeleton } from "@/components/Skeleton";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
-import { Button, Card, ErrorView, Loading, Muted, SectionTitle, Segmented, Stat, StatGrid } from "@/components/ui";
+import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Segmented, Stat, StatGrid } from "@/components/ui";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, relativeTime, toDisplay } from "@/lib/format";
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { evalView, evaluate } from "@/lib/liveTick";
@@ -100,7 +100,7 @@ export default function StockDetailScreen() {
           title: s.name,
           headerRight: () =>
             unregistered ? (
-              <Pressable onPress={addWatch} disabled={adding} accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: 4, marginRight: 8, paddingHorizontal: 4 }}>
+              <Pressable onPress={addWatch} disabled={adding} accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginRight: space.sm, paddingHorizontal: space.xs }}>
                 <Ionicons name="star-outline" size={20} color={t.gold} />
                 <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{adding ? "추가 중" : "관심 추가"}</Text>
               </Pressable>
@@ -128,7 +128,12 @@ export default function StockDetailScreen() {
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
               <Text style={[styles.change, { color: up }]}>{arrow(q.change)}</Text>
               <Text style={[styles.change, { color: up }]}>{formatPct(q.changeRate)}</Text>
-              {q.live ? <Text style={{ color: t.up, fontSize: font.tiny, fontWeight: "700" }}>● 실시간</Text> : null}
+              {q.live ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
+                  <LiveDot />
+                  <Text style={{ color: t.live, fontSize: font.tiny, fontWeight: "700" }}>실시간</Text>
+                </View>
+              ) : null}
             </View>
             {cur === "USD" ? (
               <Text style={styles.sub(t.muted)}>
@@ -146,7 +151,7 @@ export default function StockDetailScreen() {
             </Text>
           </>
         ) : (
-          <Text style={{ color: t.danger, marginTop: 4 }}>{s.quoteError ?? "시세 없음"}</Text>
+          <Text style={{ color: t.danger, marginTop: space.xs }}>{s.quoteError ?? "시세 없음"}</Text>
         )}
       </View>
 
@@ -186,7 +191,7 @@ export default function StockDetailScreen() {
             <Stat label="주당배당" value={q.dividendPerShare !== null && q.dividendPerShare !== undefined ? formatQuote(q.dividendPerShare, cur) : "-"} />
           </StatGrid>
           {range52 !== null ? (
-            <View style={{ gap: 3, marginTop: 6 }}>
+            <View style={{ gap: space.xxs, marginTop: space.s }}>
               <View style={[styles.rangeTrack, { backgroundColor: t.surfaceAlt }]}>
                 <View style={[styles.rangeKnob, { left: `${Math.round(range52 * 100)}%`, backgroundColor: up === t.ink ? t.sub : up }]} />
               </View>
@@ -214,7 +219,7 @@ export default function StockDetailScreen() {
           </StatGrid>
           {evKrw?.currency === "KRW" ? (
             <>
-              <Text style={[styles.sub(t.muted), { marginTop: 4 }]}>{evKrw.krwBasis === "current" ? "원화 기준 (현재 환율 환산)" : `원화 기준 (매수 당시 환율${evKrw.estimated ? " · 추정" : ""})`}</Text>
+              <Text style={[styles.sub(t.muted), { marginTop: space.xs }]}>{evKrw.krwBasis === "current" ? "원화 기준 (현재 환율 환산)" : `원화 기준 (매수 당시 환율${evKrw.estimated ? " · 추정" : ""})`}</Text>
               <StatGrid>
                 <Stat label="평가금액" value={formatPrice(evKrw.marketValue, "KRW")} />
                 <Stat label="매입금액" value={formatPrice(evKrw.costBasis, "KRW")} />
@@ -228,7 +233,7 @@ export default function StockDetailScreen() {
         </View>
       ) : null}
 
-      <Segmented options={TABS} value={tab} onChange={setTab} style={{ marginTop: 2 }} />
+      <Segmented options={TABS} value={tab} onChange={setTab} style={{ marginTop: space.xxs }} />
       {tab === "news" ? (
         <NewsTab code={c} us={isUsMarket(s.market)} />
       ) : (
@@ -320,14 +325,14 @@ function NewsTab({ code, us }: { code: string; us: boolean }) {
 
 const styles = {
   ...StyleSheet.create({
-    quoteHead: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, borderBottomWidth: StyleSheet.hairlineWidth, gap: 2 },
-    priceRow: { flexDirection: "row", alignItems: "baseline", gap: 6, marginTop: 2 },
-    bigPrice: { fontSize: 30, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
+    quoteHead: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.xxs },
+    priceRow: { flexDirection: "row", alignItems: "baseline", gap: space.s, marginTop: space.xxs },
+    bigPrice: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
     change: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
     panel: { paddingHorizontal: space.lg, paddingVertical: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
-    newsItem: { paddingVertical: 10, gap: 3 },
+    newsItem: { paddingVertical: space.sm, gap: space.xxs },
     rangeTrack: { height: 4, borderRadius: 2, justifyContent: "center" },
-    rangeKnob: { position: "absolute", width: 8, height: 12, borderRadius: 1, marginLeft: -4, top: -4 },
+    rangeKnob: { position: "absolute", width: 8, height: 12, borderRadius: 1, marginLeft: -space.xs, top: -4 },
   }),
   sub: (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] }),
   panelTitle: (color: string) => ({ color, fontSize: font.body, fontWeight: "700" as const }),

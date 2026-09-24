@@ -22,15 +22,15 @@ export function SkeletonRows({ count = 10, height, rank = true }: { count?: numb
       {Array.from({ length: count }, (_, i) => (
         <View key={i} style={[styles.row, { height, borderBottomColor: t.line, backgroundColor: t.surface }]}>
           {rank ? bone(14) : null}
-          <View style={{ flex: 1, gap: 6 }}>
+          <View style={{ flex: 1, gap: space.s }}>
             {bone(`${55 + ((i * 17) % 30)}%`, 13)}
             {bone(`${25 + ((i * 11) % 20)}%`, 9)}
           </View>
-          <View style={{ alignItems: "flex-end", gap: 6, width: 90 }}>
+          <View style={{ alignItems: "flex-end", gap: space.s, width: 90 }}>
             {bone(70, 13)}
             {bone(44, 9)}
           </View>
-          <View style={{ alignItems: "flex-end", gap: 6, width: 76 }}>
+          <View style={{ alignItems: "flex-end", gap: space.s, width: 76 }}>
             {bone(60, 13)}
             {bone(36, 9)}
           </View>

@@ -2,6 +2,7 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RegisteredWithQuote } from "@/api/types";
 import { holding, quote } from "./helpers";
+import { WIDGET_COLORS } from "@/widgets/palette";
 
 // 위젯 프리미티브·RN·저장소를 가짜로: 렌더 결과(글자·색·누르면 가는 곳)만 본다
 vi.mock("react-native-android-widget", () => {
@@ -166,7 +167,7 @@ describe("위젯-1: 조회 실패", () => {
       expect(words.join(" ")).not.toMatch(/Network|request|failed|HTTP|Error/);
       const note = tx.find((t) => t.text.startsWith("갱신 실패"))!;
       expect(note.text).toBe("갱신 실패 · 연결 안 됨");
-      expect(note.color).toBe("#7A828F");
+      expect(note.color).toBe(WIDGET_COLORS.muted); // 회색 (위젯 팔레트)
       const asset = texts(render(<AssetWidget stocks={d.stocks} showKrw={false} fetchedAt={d.fetchedAt} error={d.error} filled={d.filled} now={NOW} />)).map((t) => t.text);
       expect(asset.some((t) => /^\d[\d,]*원$/.test(t))).toBe(true);
     }

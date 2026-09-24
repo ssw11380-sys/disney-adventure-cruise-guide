@@ -55,13 +55,13 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
                 on && { borderBottomColor: t.accent, borderBottomWidth: 2 },
               ]}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
                 <Text style={{ color: on ? t.ink : t.muted, fontSize: font.tiny, fontWeight: "600" }}>
                   {i.name}
                   {/* 잔고 패널의 "토스 적용 환율"과 구분 */}
                   {i.kind === "fx" ? <Text style={{ fontWeight: "400" }}> 시장</Text> : null}
                 </Text>
-                {i.open && i.kind !== "fx" ? <View style={[styles.dot, { backgroundColor: t.up }]} /> : null}
+                {i.open && i.kind !== "fx" ? <View style={[styles.dot, { backgroundColor: t.live }]} /> : null}
               </View>
               <Text style={[styles.value, { color: c }]}>{formatIndexValue(i.value)}</Text>
               <Text style={[styles.rate, { color: c }]}>
@@ -86,7 +86,7 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
 const styles = StyleSheet.create({
   wrap: { borderBottomWidth: StyleSheet.hairlineWidth },
   row: { paddingHorizontal: space.sm },
-  item: { paddingVertical: 8, paddingHorizontal: space.md, gap: 1, minWidth: 104 },
+  item: { paddingVertical: space.sm, paddingHorizontal: space.md, gap: space.xxs, minWidth: 104 },
   dot: { width: 4, height: 4, borderRadius: 2 },
   asOf: { minWidth: 0, justifyContent: "center", borderLeftWidth: StyleSheet.hairlineWidth },
   value: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },

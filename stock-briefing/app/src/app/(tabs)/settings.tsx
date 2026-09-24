@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
-import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useHealth } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
@@ -10,7 +10,7 @@ import { flushErrors, reportError } from "@/lib/errorReport";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
-import { Badge, Button, Card, Chip, Muted, Row, SectionTitle } from "@/components/ui";
+import { Badge, Button, Card, Chip, Muted, Row, SectionTitle, Toggle } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
 import { SORT_OPTIONS, THEME_OPTIONS, useSettings } from "@/lib/settings";
 import { font, radius, space, useTheme } from "@/theme";
@@ -34,7 +34,7 @@ export default function SettingsScreen() {
         <SectionTitle>표시</SectionTitle>
         <View style={styles.line}>
           <Text style={styles.label(t.ink)}>화면</Text>
-          <View style={{ flexDirection: "row", gap: 6 }}>
+          <View style={{ flexDirection: "row", gap: space.s }}>
             {THEME_OPTIONS.map((o) => (
               <Chip key={o.value} label={o.label} active={themeMode === o.value} onPress={() => void setThemeMode(o.value)} />
             ))}
@@ -45,24 +45,24 @@ export default function SettingsScreen() {
             <Text style={styles.label(t.ink)}>해외주식 원화 표시</Text>
             <Muted style={{ fontSize: font.tiny }}>토스증권 적용 환율 기준</Muted>
           </View>
-          <Switch value={showKrw} onValueChange={(v) => void setShowKrw(v)} trackColor={{ true: t.accent, false: t.lineStrong }} thumbColor="#FFFFFF" />
+          <Toggle value={showKrw} onValueChange={(v) => void setShowKrw(v)} />
         </View>
         <View style={styles.line}>
           <View style={{ flex: 1, paddingRight: space.md }}>
             <Text style={styles.label(t.ink)}>수수료·세금 차감 평가</Text>
             <Muted style={{ fontSize: font.tiny }}>토스 앱과 같은 평가금액·손익 (토스 연동 종목)</Muted>
           </View>
-          <Switch value={afterCost} onValueChange={(v) => void setAfterCost(v)} trackColor={{ true: t.accent, false: t.lineStrong }} thumbColor="#FFFFFF" />
+          <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} />
         </View>
-        <View style={{ gap: 6, paddingTop: 6 }}>
+        <View style={{ gap: space.s, paddingTop: space.s }}>
           <Text style={styles.label(t.ink)}>잔고 정렬</Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
             {SORT_OPTIONS.map((o) => (
               <Chip key={o.value} label={o.label} active={sort === o.value} onPress={() => void setSort(o.value)} />
             ))}
           </View>
         </View>
-        <View style={{ gap: 2, paddingTop: space.sm }}>
+        <View style={{ gap: space.xxs, paddingTop: space.sm }}>
           <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
           <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
         </View>
@@ -145,7 +145,7 @@ export default function SettingsScreen() {
         <Row label="앱 버전" value={Constants.expoConfig?.version ?? "-"} />
         <Row label="시세" value="토스증권 · 네이버 증권" />
         <Row label="공시" value="DART · SEC EDGAR" />
-        <Muted style={{ fontSize: font.tiny, marginTop: 4 }}>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</Muted>
+        <Muted style={{ fontSize: font.tiny, marginTop: space.xs }}>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</Muted>
       </Card>
     </Screen>
   );
@@ -202,7 +202,7 @@ function ApiUrlForm({
 const styles = {
   ...StyleSheet.create({
     input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
-    line: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6 },
+    line: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: space.s },
   }),
   label: (color: string) => ({ color, fontSize: font.body, fontWeight: "600" as const }),
 };

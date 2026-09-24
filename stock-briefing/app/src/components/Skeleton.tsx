@@ -15,15 +15,15 @@ function Row() {
   const t = useTheme();
   return (
     <View style={[styles.row, { borderTopColor: t.line }]}>
-      <View style={{ flex: 1, gap: 6 }}>
+      <View style={{ flex: 1, gap: space.s }}>
         <Bar w="45%" h={14} />
         <Bar w="30%" h={10} />
       </View>
-      <View style={{ width: 96, gap: 6, alignItems: "flex-end" }}>
+      <View style={{ width: 96, gap: space.s, alignItems: "flex-end" }}>
         <Bar w={72} h={14} />
         <Bar w={48} h={10} />
       </View>
-      <View style={{ width: 110, gap: 6, alignItems: "flex-end" }}>
+      <View style={{ width: 110, gap: space.s, alignItems: "flex-end" }}>
         <Bar w={80} h={14} />
         <Bar w={52} h={10} />
       </View>
@@ -38,8 +38,8 @@ export function HoldingsSkeleton() {
     <View accessibilityLabel="잔고 불러오는 중" accessible accessibilityRole="progressbar" accessibilityState={{ busy: true }}>
       <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
         <Bar w="40%" h={12} />
-        <Bar w="60%" h={28} style={{ marginTop: 8 }} />
-        <View style={{ flexDirection: "row", gap: space.lg, marginTop: 10 }}>
+        <Bar w="60%" h={28} style={{ marginTop: space.sm }} />
+        <View style={{ flexDirection: "row", gap: space.lg, marginTop: space.sm }}>
           <Bar w="40%" />
           <Bar w="30%" />
         </View>
@@ -55,7 +55,7 @@ export function HoldingsSkeleton() {
 export function DetailSkeleton() {
   const t = useTheme();
   return (
-    <View accessibilityLabel="종목 불러오는 중" accessible accessibilityRole="progressbar" accessibilityState={{ busy: true }} style={{ paddingHorizontal: space.lg, paddingTop: space.md, gap: 10 }}>
+    <View accessibilityLabel="종목 불러오는 중" accessible accessibilityRole="progressbar" accessibilityState={{ busy: true }} style={{ paddingHorizontal: space.lg, paddingTop: space.md, gap: space.sm }}>
       <Bar w="35%" h={12} />
       <Bar w="55%" h={34} />
       <Bar w="40%" h={14} />
@@ -88,7 +88,7 @@ export function CardsSkeleton({ count = 3 }: { count?: number }) {
 }
 
 const styles = StyleSheet.create({
-  panel: { borderBottomWidth: StyleSheet.hairlineWidth, padding: space.lg, gap: 4 },
-  row: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth },
-  card: { borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, padding: space.lg, gap: 8 },
+  panel: { borderBottomWidth: StyleSheet.hairlineWidth, padding: space.lg, gap: space.xs },
+  row: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.md, borderTopWidth: StyleSheet.hairlineWidth },
+  card: { borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, padding: space.lg, gap: space.sm },
 });

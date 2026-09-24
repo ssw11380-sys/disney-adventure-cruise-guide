@@ -7,6 +7,8 @@ import { fxOf, totals } from "@/lib/portfolio";
 import { DISCLAIMER_SHORT } from "@/lib/disclaimer";
 import { asOfLabel, asOfMs, assetLine, excludedCount, failureText, HOME_URI, isHeld, tone, widgetOrder } from "./model";
 import { currentMarket, isDelayed, openMarketAsOf, type WidgetMarket } from "./payload";
+import { space } from "@/tokens";
+import { WIDGET_COLORS, WIDGET_FONT } from "./palette";
 
 export { totals, type Totals } from "@/lib/portfolio";
 
@@ -21,18 +23,9 @@ export { totals, type Totals } from "@/lib/portfolio";
 
 export const WIDGET_NAMES = { holdings: "Holdings", briefing: "Briefing", asset: "Asset" } as const;
 
-// 앱 다크 테마와 같은 톤 (HTS 풍 단색 바탕)
-const C = {
-  bg: "#12151B",
-  bg2: "#12151B",
-  ink: "#E8EAED",
-  muted: "#7A828F",
-  line: "rgba(255, 255, 255, 0.07)",
-  up: "#FF4B55",
-  down: "#3D8EFF",
-  gold: "#E3B341",
-  warn: "#F0A030",
-} as const;
+// 색·글자 크기는 위젯 팔레트에서 (앱 다크 테마와 같은 톤, 3-20)
+const C = WIDGET_COLORS;
+const F = WIDGET_FONT;
 
 const DEEP_LINK = HOME_URI;
 
@@ -46,7 +39,7 @@ const root: FlexWidgetStyle = {
   width: "match_parent",
   backgroundColor: C.bg,
   borderRadius: 14,
-  padding: 12,
+  padding: space.md,
   flexDirection: "column",
 };
 
@@ -54,8 +47,8 @@ const root: FlexWidgetStyle = {
 function MarketChip({ market }: { market: WidgetMarket | null | undefined }) {
   if (!market) return null;
   return (
-    <FlexWidget style={{ borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1, borderWidth: 1, borderColor: market.open ? C.gold : C.line }}>
-      <TextWidget text={market.label} style={{ color: market.open ? C.gold : C.muted, fontSize: 9, fontWeight: "700" }} />
+    <FlexWidget style={{ borderRadius: 6, paddingHorizontal: space.xs, paddingVertical: space.xxs, borderWidth: 1, borderColor: market.open ? C.gold : C.line }}>
+      <TextWidget text={market.label} style={{ color: market.open ? C.gold : C.muted, fontSize: F.xs, fontWeight: "700" }} />
     </FlexWidget>
   );
 }
@@ -64,14 +57,14 @@ function MarketChip({ market }: { market: WidgetMarket | null | undefined }) {
 function Header({ title, subtitle, market, delayed }: { title: string; subtitle?: string; market?: WidgetMarket | null; delayed?: boolean }) {
   return (
     <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-      <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 6 }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
-        <TextWidget text={title} style={{ color: C.ink, fontSize: 13, fontWeight: "700" }} />
+      <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.s }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
+        <TextWidget text={title} style={{ color: C.ink, fontSize: F.title, fontWeight: "700" }} />
         <MarketChip market={market} />
-        {subtitle ? <TextWidget text={subtitle} style={{ color: C.muted, fontSize: 10 }} /> : null}
-        {delayed ? <TextWidget text="지연" style={{ color: C.warn, fontSize: 10, fontWeight: "700" }} /> : null}
+        {subtitle ? <TextWidget text={subtitle} style={{ color: C.muted, fontSize: F.sm }} /> : null}
+        {delayed ? <TextWidget text="지연" style={{ color: C.warn, fontSize: F.sm, fontWeight: "700" }} /> : null}
       </FlexWidget>
-      <FlexWidget clickAction="REFRESH" style={{ padding: 4 }}>
-        <TextWidget text="↻" style={{ color: C.muted, fontSize: 14 }} />
+      <FlexWidget clickAction="REFRESH" style={{ padding: space.xs }}>
+        <TextWidget text="↻" style={{ color: C.muted, fontSize: F.icon }} />
       </FlexWidget>
     </FlexWidget>
   );
@@ -108,14 +101,14 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
     <FlexWidget style={root}>
       <Header title={`잔고 ${rows.length}`} subtitle={asOfLabel(asOf, now)} market={market} delayed={delayed} />
       {t ? (
-        <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 4, marginBottom: 4 }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
-          <TextWidget text={formatPrice(t.value, t.currency)} style={{ color: C.ink, fontSize: 18, fontWeight: "800" }} />
-          <TextWidget text={`당일 ${formatPrice(t.day, t.currency, { sign: true })}`} style={{ color: tone(t.day) as `#${string}`, fontSize: 11, fontWeight: "700" }} />
+        <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: space.xs, marginBottom: space.xs }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
+          <TextWidget text={formatPrice(t.value, t.currency)} style={{ color: C.ink, fontSize: F.big, fontWeight: "800" }} />
+          <TextWidget text={`당일 ${formatPrice(t.day, t.currency, { sign: true })}`} style={{ color: tone(t.day) as `#${string}`, fontSize: F.md, fontWeight: "700" }} />
         </FlexWidget>
       ) : null}
-      {note ? <TextWidget text={note} maxLines={1} truncate="END" style={{ color: C.muted, fontSize: 10 }} /> : null}
-      {rows.length === 0 && !error ? <TextWidget text="등록된 종목이 없습니다" style={{ color: C.muted, fontSize: 11 }} /> : null}
-      {rows.length === 0 && error ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" style={{ color: C.muted, fontSize: 11 }} /> : null}
+      {note ? <TextWidget text={note} maxLines={1} truncate="END" style={{ color: C.muted, fontSize: F.sm }} /> : null}
+      {rows.length === 0 && !error ? <TextWidget text="등록된 종목이 없습니다" style={{ color: C.muted, fontSize: F.md }} /> : null}
+      {rows.length === 0 && error ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" style={{ color: C.muted, fontSize: F.md }} /> : null}
       {rows.length > 0 ? (
         <ListWidget style={{ height: "match_parent", width: "match_parent" }}>
           {rows.map((s) => {
@@ -130,24 +123,24 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
                 key={s.code}
                 clickAction="OPEN_URI"
                 clickActionData={{ uri: `${DEEP_LINK}stocks/${s.code}` }}
-                style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 5, borderTopWidth: 1, borderTopColor: C.line }}
+                style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: space.xs, borderTopWidth: 1, borderTopColor: C.line }}
               >
                 <FlexWidget style={{ flexDirection: "column", width: 118 }}>
-                  <TextWidget text={s.name} truncate="END" maxLines={1} style={{ color: C.ink, fontSize: 12, fontWeight: "600" }} />
+                  <TextWidget text={s.name} truncate="END" maxLines={1} style={{ color: C.ink, fontSize: F.base, fontWeight: "600" }} />
                   <TextWidget
                     text={sub}
                     truncate="END"
                     maxLines={1}
-                    style={{ color: ev ? (tone(ev.profit) as `#${string}`) : C.muted, fontSize: 10 }}
+                    style={{ color: ev ? (tone(ev.profit) as `#${string}`) : C.muted, fontSize: F.sm }}
                   />
                 </FlexWidget>
                 {q ? (
-                  <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 8 }}>
-                    <TextWidget text={money(q.price, q.currency, fx, showKrw)} style={{ color: tone(q.change) as `#${string}`, fontSize: 12, fontWeight: "700" }} />
-                    <TextWidget text={formatPct(q.changeRate)} style={{ color: tone(q.change) as `#${string}`, fontSize: 11, fontWeight: "700", width: 56, textAlign: "right" }} />
+                  <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.sm }}>
+                    <TextWidget text={money(q.price, q.currency, fx, showKrw)} style={{ color: tone(q.change) as `#${string}`, fontSize: F.base, fontWeight: "700" }} />
+                    <TextWidget text={formatPct(q.changeRate)} style={{ color: tone(q.change) as `#${string}`, fontSize: F.md, fontWeight: "700", width: 56, textAlign: "right" }} />
                   </FlexWidget>
                 ) : (
-                  <TextWidget text="-" style={{ color: C.muted, fontSize: 11 }} />
+                  <TextWidget text="-" style={{ color: C.muted, fontSize: F.md }} />
                 )}
               </FlexWidget>
             );
@@ -166,22 +159,22 @@ export function BriefingWidget({ briefings, fetchedAt, error, now, market }: { b
     <FlexWidget style={root}>
       <Header title="브리핑" subtitle={asOfLabel(fetchedAt, now)} market={currentMarket(market, now)} delayed={isDelayed({ openAsOf: null, fetchedAt, error, now })} />
       {items.length ? (
-        <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: 4, flexGap: 3 }}>
+        <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: space.xs, flexGap: space.xxs }}>
           {items.map((it) => {
             const b = it.latest!;
             const first = b.summary.split("\n").find(Boolean) ?? "";
             return (
               <FlexWidget key={b.id} clickAction="OPEN_URI" clickActionData={{ uri: `${DEEP_LINK}briefings/${b.id}` }} style={{ width: "match_parent", flexDirection: "column" }}>
-                <TextWidget text={`${it.name} · ${b.date.slice(5).replace("-", "/")} ${b.session === "morning" ? "오전" : "오후"}`} maxLines={1} truncate="END" style={{ color: C.gold, fontSize: 10, fontWeight: "700" }} />
-                <TextWidget text={first} maxLines={1} truncate="END" style={{ color: C.ink, fontSize: 12 }} />
+                <TextWidget text={`${it.name} · ${b.date.slice(5).replace("-", "/")} ${b.session === "morning" ? "오전" : "오후"}`} maxLines={1} truncate="END" style={{ color: C.gold, fontSize: F.sm, fontWeight: "700" }} />
+                <TextWidget text={first} maxLines={1} truncate="END" style={{ color: C.ink, fontSize: F.base }} />
               </FlexWidget>
             );
           })}
         </FlexWidget>
       ) : (
-        <TextWidget text={error ? `${failureText(error)} · ↻ 로 다시 시도` : "아직 브리핑이 없습니다. 평일 08:30·16:00 에 생성됩니다."} style={{ color: C.muted, fontSize: 11, marginTop: 6 }} />
+        <TextWidget text={error ? `${failureText(error)} · ↻ 로 다시 시도` : "아직 브리핑이 없습니다. 평일 08:30·16:00 에 생성됩니다."} style={{ color: C.muted, fontSize: F.md, marginTop: space.s }} />
       )}
-      <TextWidget text={DISCLAIMER_SHORT} maxLines={1} style={{ color: C.muted, fontSize: 9, marginTop: 4 }} />
+      <TextWidget text={DISCLAIMER_SHORT} maxLines={1} style={{ color: C.muted, fontSize: F.xs, marginTop: space.xs }} />
     </FlexWidget>
   );
 }
@@ -194,29 +187,29 @@ export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, erro
   const market = currentMarket(given, now);
   const delayed = isDelayed({ openAsOf: openMarketAsOf(stocks, market), fetchedAt, error, now });
   return (
-    <FlexWidget style={{ ...root, padding: 12, justifyContent: "center" }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
+    <FlexWidget style={{ ...root, padding: space.md, justifyContent: "center" }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
       <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-        <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 4 }}>
-          <TextWidget text="총 평가" style={{ color: C.muted, fontSize: 10, fontWeight: "700" }} />
+        <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.xs }}>
+          <TextWidget text="총 평가" style={{ color: C.muted, fontSize: F.sm, fontWeight: "700" }} />
           <MarketChip market={market} />
         </FlexWidget>
-        <TextWidget text={delayed ? `지연 · ${asOfLabel(asOf, now)}` : asOfLabel(asOf, now)} style={{ color: delayed ? C.warn : C.muted, fontSize: 9 }} />
+        <TextWidget text={delayed ? `지연 · ${asOfLabel(asOf, now)}` : asOfLabel(asOf, now)} style={{ color: delayed ? C.warn : C.muted, fontSize: F.xs }} />
       </FlexWidget>
       {t && line ? (
-        <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: 2 }}>
-          <TextWidget text={formatPrice(t.value, t.currency)} maxLines={1} style={{ color: C.ink, fontSize: 19, fontWeight: "800", adjustsFontSizeToFit: true }} />
+        <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: space.xxs }}>
+          <TextWidget text={formatPrice(t.value, t.currency)} maxLines={1} style={{ color: C.ink, fontSize: F.bigger, fontWeight: "800", adjustsFontSizeToFit: true }} />
           {/* 오늘 손익과 총손익은 각자 부호 색 (예전에는 둘 다 오늘 색이었다) */}
-          <FlexWidget style={{ flexDirection: "row", flexGap: 4 }}>
-            <TextWidget text={line.day.text} maxLines={1} style={{ color: line.day.color as `#${string}`, fontSize: 10, fontWeight: "700" }} />
-            <TextWidget text="·" style={{ color: C.muted, fontSize: 10 }} />
-            <TextWidget text={line.total.text} maxLines={1} truncate="END" style={{ color: line.total.color as `#${string}`, fontSize: 10, fontWeight: "700" }} />
+          <FlexWidget style={{ flexDirection: "row", flexGap: space.xs }}>
+            <TextWidget text={line.day.text} maxLines={1} style={{ color: line.day.color as `#${string}`, fontSize: F.sm, fontWeight: "700" }} />
+            <TextWidget text="·" style={{ color: C.muted, fontSize: F.sm }} />
+            <TextWidget text={line.total.text} maxLines={1} truncate="END" style={{ color: line.total.color as `#${string}`, fontSize: F.sm, fontWeight: "700" }} />
           </FlexWidget>
-          {note ? <TextWidget text={note} maxLines={1} truncate="END" style={{ color: C.muted, fontSize: 9 }} /> : null}
+          {note ? <TextWidget text={note} maxLines={1} truncate="END" style={{ color: C.muted, fontSize: F.xs }} /> : null}
         </FlexWidget>
       ) : (
         <TextWidget
           text={error ? `${failureText(error)} · 눌러서 앱 열기` : excludedCount(stocks) ? `시세 없음 · ${excludedCount(stocks)}종목` : "보유 종목 없음"}
-          style={{ color: C.muted, fontSize: 11 }}
+          style={{ color: C.muted, fontSize: F.md }}
         />
       )}
     </FlexWidget>

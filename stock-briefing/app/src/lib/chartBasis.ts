@@ -1,4 +1,5 @@
 import type { CandlePeriod } from "@/api/types";
+import { font } from "@/tokens";
 
 /**
  * 차트 읽기 줄의 등락 기준 (순수 함수 → 단위 테스트).
@@ -28,11 +29,14 @@ export function readoutBasis(o: {
   return { base: o.prevClose ?? o.open ?? null, label };
 }
 
-/** 10pt 글자 폭 어림 (굵은 글자도 들어가게 조금 넉넉히): 숫자·영문 약 6, 쉼표·마침표 약 3, 한글 약 10 */
+/**
+ * 차트 글자(font.tiny) 폭 어림 (굵은 글자도 들어가게 조금 넉넉히). 10pt 기준 숫자·영문 약 6, 쉼표·마침표 약 3, 한글 약 10 을
+ * 글자 크기에 비례해 늘린다 (3-20 에 차트 글자를 9·10pt 에서 토큰 11pt 로 맞춤)
+ */
 export function textWidth(label: string): number {
   let w = 0;
   for (const ch of label) w += /[가-힣]/.test(ch) ? 10 : /[,.]/.test(ch) ? 3 : 6;
-  return w;
+  return (w * font.tiny) / 10;
 }
 
 /**

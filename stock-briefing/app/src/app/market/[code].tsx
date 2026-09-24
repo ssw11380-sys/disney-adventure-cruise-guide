@@ -73,7 +73,7 @@ export default function MarketIndexScreen() {
             <Text style={{ color: t.muted, fontSize: font.small }}>{formatDateKo(idx.asOf, true)} 기준</Text>
           </>
         ) : (
-          <Text style={{ color: t.muted, fontSize: font.small, marginTop: 4 }}>{indices.isLoading ? "불러오는 중…" : "시세를 불러오지 못했습니다"}</Text>
+          <Text style={{ color: t.muted, fontSize: font.small, marginTop: space.xs }}>{indices.isLoading ? "불러오는 중…" : "시세를 불러오지 못했습니다"}</Text>
         )}
       </View>
 
@@ -96,9 +96,9 @@ export default function MarketIndexScreen() {
 }
 
 const styles = StyleSheet.create({
-  head: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, borderBottomWidth: StyleSheet.hairlineWidth, gap: 2 },
-  priceRow: { flexDirection: "row", alignItems: "baseline", gap: 6, marginTop: 2 },
-  bigPrice: { fontSize: 30, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
+  head: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.xxs },
+  priceRow: { flexDirection: "row", alignItems: "baseline", gap: space.s, marginTop: space.xxs },
+  bigPrice: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
   change: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
   panel: { paddingHorizontal: space.lg, paddingVertical: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm, marginTop: space.sm },
 });

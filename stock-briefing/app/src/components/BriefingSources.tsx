@@ -53,5 +53,5 @@ export function BriefingSources({ data }: { data: BriefingWithData["data"] }) {
 
 const styles = StyleSheet.create({
   head: { fontSize: font.small, fontWeight: "700", marginTop: space.sm },
-  row: { paddingVertical: space.sm, borderTopWidth: StyleSheet.hairlineWidth, gap: 2 },
+  row: { paddingVertical: space.sm, borderTopWidth: StyleSheet.hairlineWidth, gap: space.xxs },
 });

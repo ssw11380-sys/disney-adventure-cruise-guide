@@ -48,7 +48,7 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
       style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
     >
       <View style={styles.name}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
           <Text style={[styles.mkt, { color: us ? t.accent : t.gold, borderColor: us ? t.accent : t.gold }]}>{us ? "US" : "KR"}</Text>
           <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", flexShrink: 1 }} numberOfLines={1}>
             {stock.name}
@@ -62,8 +62,8 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
       {q ? (
         <>
           <View style={[styles.num, { width: COL.price }]}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-              {q.live ? <View style={[styles.live, { backgroundColor: c === t.ink ? t.muted : c }]} /> : null}
+            <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
+              {q.live ? <View style={[styles.live, { backgroundColor: t.live }]} /> : null}
               <FlashPrice value={q.price} text={formatQuoteDisplay(q.price, cur, fx, showKrw)} style={[styles.main, { color: c }]} />
             </View>
             <Text style={[styles.sub, { color: c }]}>{formatPct(q.changeRate)}</Text>
@@ -109,10 +109,10 @@ function formatVol(n: number | null | undefined): string {
 
 const styles = {
   ...StyleSheet.create({
-    row: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 52 },
-    name: { flex: 1, gap: 2, paddingRight: space.sm },
-    mkt: { fontSize: 9, fontWeight: "800", borderWidth: 1, borderRadius: 2, paddingHorizontal: 3, lineHeight: 12, overflow: "hidden" },
-    num: { alignItems: "flex-end", gap: 2 },
+    row: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 52 },
+    name: { flex: 1, gap: space.xxs, paddingRight: space.sm },
+    mkt: { fontSize: font.tiny, fontWeight: "800", borderWidth: 1, borderRadius: 2, paddingHorizontal: space.xs, lineHeight: 14, overflow: "hidden", flexShrink: 0 },
+    num: { alignItems: "flex-end", gap: space.xxs },
     main: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
     sub: { fontSize: font.small, fontVariant: ["tabular-nums"] },
     live: { width: 4, height: 4, borderRadius: 2 },
