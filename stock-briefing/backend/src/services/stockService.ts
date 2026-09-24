@@ -2,11 +2,12 @@ import type { TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
-import { CODE_RE, normalizeCode } from "../lib/codes.js";
+import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
 import { mapLimit } from "../lib/concurrency.js";
 import { ConflictError, NotFoundError, ProviderError, within } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
+import { localDate } from "../providers/market/tossOpenApi.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
 import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
 import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
@@ -59,7 +60,13 @@ const TICK_FRESH_MS = 60_000;
 /** 밸류에이션·환율 보강을 기다리는 최대 시간 (넘으면 보강 없이 시세만 저장) */
 const ENRICH_WAIT_MS = 3_000;
 
-const kstDay = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(0, 10);
+/** 스냅샷과 체결이 같은 거래일인지 (한국은 서울, 미국은 뉴욕 날짜) */
+function sameTradingDay(q: Quote, tickIso: string): boolean {
+  const a = Date.parse(q.asOf), b = Date.parse(tickIso);
+  if (Number.isNaN(a) || Number.isNaN(b)) return true;
+  const kr = isKrCode(q.code);
+  return localDate(q.asOf, kr) === localDate(tickIso, kr);
+}
 const TOSS_DETAIL_KEY = "toss_holdings_detail";
 
 interface Held {
@@ -564,8 +571,9 @@ export class StockService {
     if (!h) return null;
     const t = this.now().getTime();
     let tick = this.liveTick(h.quote, quick);
-    // 스냅샷이 오래됐고 체결가와 날짜가 다르면(어제 받은 스냅샷 + 오늘 체결) 섞지 않는다 — 전일 종가가 하루 어긋나 등락이 틀린다
-    if (tick && t - h.at > STALE_AFTER_MS && kstDay(Date.parse(tick.timestamp)) !== kstDay(h.at)) tick = null;
+    // 스냅샷(asOf)과 체결의 거래일(현지 날짜)이 다르면 섞지 않는다 — 어제 스냅샷의 전일 종가에 오늘 체결을 대면 등락이 이틀치가 된다.
+    // 스냅샷을 새로 받으면(1분 안) 같은 날이 되어 다시 붙는다
+    if (tick && !sameTradingDay(h.quote, tick.timestamp)) tick = null;
     const q = tick ? this.applyTick(h.quote, tick) : h.quote;
     const tickFresh = tick !== null && Math.abs(t - tick.receivedAt) <= TICK_FRESH_MS;
     const stale = !tickFresh && this.isStale(code, h, t);

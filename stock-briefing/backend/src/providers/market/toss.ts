@@ -322,6 +322,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     }
     const byPc = new Map(rows.map((r) => [String(r["productCode"] ?? ""), r]));
     const nowIso = seoulIso(this.now());
+    const got = this.now().getTime(); // 받은 시각 (응답이 늦어도 같이 기다린 호출이 2초 안의 값으로 본다)
     for (const [code, pc] of pcs) {
       const r = byPc.get(pc);
       const price = num(r?.["close"]);
@@ -336,7 +337,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
         this.tickMissAt.set(code, t);
         continue;
       }
-      const tick = { code, price, volume: num(r["volume"]), timestamp: nowIso, receivedAt: t };
+      const tick = { code, price, volume: num(r["volume"]), timestamp: nowIso, receivedAt: got };
       this.tickCache.set(code, tick);
       this.tickMissAt.delete(code);
       out.set(code, tick);

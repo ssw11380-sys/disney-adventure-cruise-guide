@@ -243,6 +243,33 @@ describe("밤새 쉬었다 연 경우 (리뷰 M1)", () => {
     expect(list[0]!.quote!.live).toBeUndefined();
   });
 
+  it("장 전(07:30)에 받은 스냅샷(어제 체결)에 09:05 체결을 붙이지 않는다 — 받은 시각이 같은 날이어도 거래일로 비교", async () => {
+    const p = new BatchProvider();
+    const t = { now: Date.parse("2026-09-23T07:30:00+09:00") };
+    p.asOf = "2026-09-22T19:59:00+09:00";
+    const db = await createMigratedDb(":memory:");
+    const live = {
+      get: (c: string) => ({ code: c, price: 120_000, volume: 1, timestamp: new Date(t.now).toISOString(), receivedAt: t.now }),
+      setCodes: () => {},
+      status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }),
+    };
+    const service = new StockService({ db, quotes: p, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, now: () => new Date(t.now), quoteCacheTtlMs: 60_000 });
+    await setup(p, t, db);
+    await service.listWithQuotes();
+    t.now = Date.parse("2026-09-23T09:05:00+09:00");
+    p.mode = "fail";
+    await service.listWithQuotes();
+    const list = await service.listWithQuotes();
+    expect(list[0]!.quote).toMatchObject({ price: 100_000, stale: true });
+    // 오늘 스냅샷을 받으면 체결이 다시 붙는다
+    p.mode = "ok";
+    p.asOf = "2026-09-23T09:05:10+09:00";
+    t.now += 25_000;
+    await service.listWithQuotes();
+    await settle();
+    expect((await service.listWithQuotes())[0]!.quote).toMatchObject({ price: 120_000, live: true });
+  });
+
   it("등록하자마자 시세를 받기 시작한다", async () => {
     const p = new BatchProvider();
     const t = { now: Date.parse("2026-09-22T10:00:00+09:00") };
