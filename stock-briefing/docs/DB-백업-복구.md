@@ -6,11 +6,10 @@
 
 | 항목 | 내용 |
 |---|---|
-| 넣는 것 | 등록 종목(수량·평단), meta(원화 매입 장부·토스 평가 기준·알림 설정 등), 브리핑, 분석, 기기, 앱 오류 |
-| 빼는 것 | 다시 받을 수 있는 캐시: 종목 마스터, 현재가 캐시, DART 코드 |
-| 주기 | 하루 1번, 한국 04~06시 (26시간 넘게 못 했으면 바로) |
-| 보관 | 볼륨 안 `/app/data/backups/backup-YYYYMMDD-HHMMSS.sbk`, 최근 7개 |
-| 암호화 | gzip → AES-256-GCM. 키는 Railway 변수 `BACKUP_KEY` (저장소에는 없음) |
+| 넣는 것 | 운영(SQLite): 한 시점의 DB 파일 전체(`VACUUM INTO`, 쓰는 중이어도 일관됨). Postgres 로 옮긴 경우: 등록 종목·meta·브리핑·분석·기기·앱 오류를 한 트랜잭션에서 JSON 으로 |
+| 주기 | 하루 1번, 한국 07시대 (미국 장 마감 뒤·NXT 개장 전). 26시간 넘게 못 했으면 바로. 실패하면 3시간 뒤 다시 |
+| 보관 | 볼륨 안 `/app/data/backups/backup-YYYYMMDD-HHMMSS.sbk`, 날짜별 1개씩 최근 7일 (같은 날 수동 백업은 가장 새것만) |
+| 암호화 | gzip → AES-256-GCM, 키는 Railway 변수 `BACKUP_KEY` 를 scrypt(파일마다 salt)로 늘려 씀. 저장소에는 키·백업 없음 |
 | 확인 | `GET /health` 의 `backup` (마지막 시각·파일·표별 건수·오류), 관리 API `GET /api/admin/backups` |
 
 `BACKUP_KEY` 가 없으면 백업하지 않고 `backup.lastError` 에 이유를 남깁니다. **키를 잃으면 백업을 풀 수 없으니** Railway 변수 값을 비밀번호 관리자에도 한 부 적어 두세요.
@@ -34,9 +33,10 @@ curl -X POST -H "Authorization: Bearer $API_TOKEN" https://<서버>/api/admin/ba
    cd stock-briefing/backend
    BACKUP_KEY=<Railway 값> RESTORE_DATABASE_URL=./data/restored.db npm run backup:restore -- b.sbk
    ```
-   출력의 `restored` 에서 표별 건수를 확인합니다 (Postgres 로 옮길 때는 `RESTORE_DATABASE_URL=postgres://...`).
+   SQLite 백업이면 그 시점의 DB 파일이 `restored.db` 로 생기고, 출력의 `restored` 에 표별 건수가 나옵니다 (JSON 백업은 `RESTORE_DATABASE_URL=postgres://...` 로 Postgres 에도 넣을 수 있음).
 3. **확인**: 등록 종목 수, `meta` 의 `krw_cost_book`, 브리핑 건수가 백업 때(`/health` 의 `backup.lastCounts`)와 같은지 봅니다.
 4. **운영에 넣기**: Railway 에서 서비스를 멈추고(Replicas 0) 볼륨의 `dev.db` 를 `restored.db` 로 바꾼 뒤 다시 켭니다.
+   **같은 폴더의 `dev.db-wal`·`dev.db-shm` 은 반드시 지우거나 옮깁니다** (옛 WAL 이 남으면 새 파일이 깨질 수 있음).
    볼륨 파일을 바꾸기 어려우면 새 볼륨·새 서비스에 `restored.db` 를 올리고 앱의 서버 주소를 바꿉니다.
 5. 켜진 뒤 `/health` 의 `quotes`·`backup` 과 앱 잔고 화면을 확인합니다. 캐시(종목 마스터·현재가)는 기동 때 다시 받습니다.
 

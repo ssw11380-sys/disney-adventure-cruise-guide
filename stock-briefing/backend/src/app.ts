@@ -4,7 +4,7 @@ import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import type { AppConfig } from "./config.js";
-import type { Db } from "./db/index.js";
+import { detectDialect, type Db } from "./db/index.js";
 import { AppError, ProviderError } from "./lib/errors.js";
 import { seoulIso } from "./lib/time.js";
 import { GenerationError } from "./llm/generator.js";
@@ -61,11 +61,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   const stockService = new StockService({ db: opts.db, ...opts.providers, now });
   const appErrors = new AppErrorService(opts.db, now);
-  const backups = new BackupService({ db: opts.db, dir: opts.config.BACKUP_DIR, key: opts.config.BACKUP_KEY, now, log });
-  if (opts.enableScheduler !== false) {
-    backups.start();
-    app.addHook("onClose", async () => backups.stop());
-  }
+  const backups = new BackupService({ db: opts.db, dialect: detectDialect(opts.config.DATABASE_URL), dir: opts.config.BACKUP_DIR, key: opts.config.BACKUP_KEY, now, log });
+  if (opts.enableScheduler !== false) backups.start();
+  app.addHook("onClose", async () => backups.stop()); // 진행 중인 백업이 끝난 뒤 DB 를 닫는다
 
   // 토스증권 공식 Open API: 실시간 구독 시작 + 보유 종목 가져오기 서비스 + 서버 공인 IP(허용 IP 등록 안내용)
   // 서버 공인 IP (토스 Open API 허용 IP 등록용). 키가 없을 때도 /health 에 보여 준다.

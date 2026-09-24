@@ -1,90 +1,113 @@
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createDb, createMigratedDb, migrate } from "../src/db/index.js";
-import { BackupService, decryptBackup, encryptBackup, restoreBackup } from "../src/services/backupService.js";
+import { BackupService, decodeBackup, encryptJsonBackup, restoreBackup } from "../src/services/backupService.js";
 import { FakeGenerator, fakeProviders } from "./helpers.js";
 
 const KEY = "test-key-not-a-secret";
 
-async function seeded() {
-  const db = await createMigratedDb(":memory:");
+async function seeded(path = ":memory:") {
+  const db = await createMigratedDb(path);
   await db
     .insertInto("registered_stocks")
     .values(["005930", "035420", "VRT"].map((code, i) => ({ code, name: code, market: "KOSPI", quantity: i + 1, avg_price: 1000, memo: null, created_at: "2026-09-01T00:00:00+09:00", updated_at: "2026-09-01T00:00:00+09:00" })))
     .execute();
   await db.insertInto("meta").values({ key: "krw_cost_book", value: JSON.stringify({ version: 2, items: { VRT: { krw: 1 } } }) }).execute();
-  await db.insertInto("quote_cache").values({ code: "005930", payload: "{}", fetched_at: "x" }).execute();
   return db;
 }
 
-describe("DB 백업 (3-7)", () => {
-  it("암호화한 파일은 같은 키로만 풀린다", () => {
-    const file = encryptBackup({ version: 1, createdAt: "t", tables: { meta: [{ key: "a", value: "b" }] } }, KEY);
-    expect(file.includes(Buffer.from('"value"'))).toBe(false); // 평문이 보이지 않는다
-    expect(decryptBackup(file, KEY).tables["meta"]).toEqual([{ key: "a", value: "b" }]);
-    expect(() => decryptBackup(file, "wrong")).toThrow();
-  });
+const svcFor = (db: Awaited<ReturnType<typeof seeded>>, dir: string, now: () => Date, key = KEY) => new BackupService({ db, dialect: "sqlite", dir, key, now });
 
-  it("백업 → 빈 DB 에 복구하면 종목·원화 장부가 같고, 캐시는 넣지 않는다", async () => {
+describe("DB 백업 (3-7)", () => {
+  it("SQLite: 한 시점의 DB 파일을 암호화해 두고, 풀면 그대로 열린다 (종목·원화 장부 같음)", async () => {
     const db = await seeded();
     const dir = await mkdtemp(join(tmpdir(), "bk-"));
-    const svc = new BackupService({ db, dir, key: KEY, now: () => new Date("2026-09-24T04:30:00+09:00") });
-    const st = await svc.run();
-    expect(st).toMatchObject({ enabled: true, lastFile: "backup-20260924-043000.sbk", lastError: null, files: 1 });
+    const st = await svcFor(db, dir, () => new Date("2026-09-24T07:10:00+09:00")).run();
+    expect(st).toMatchObject({ enabled: true, lastFile: "backup-20260924-071000.sbk", lastError: null, files: 1 });
     expect(st.lastCounts).toMatchObject({ registered_stocks: 3 });
-    const payload = decryptBackup((await svc.read(st.lastFile!))!, KEY);
-    expect(payload.tables["quote_cache"]).toBeUndefined();
+    const raw = await readFile(join(dir, st.lastFile!));
+    expect(raw.includes(Buffer.from("SQLite format"))).toBe(false); // 평문이 보이지 않는다
+    expect(raw.includes(Buffer.from("krw_cost_book"))).toBe(false);
+    const decoded = await decodeBackup(raw, KEY);
+    expect(decoded.kind).toBe("sqlite");
+    const restoredPath = join(dir, "restored.db");
+    await writeFile(restoredPath, decoded.kind === "sqlite" ? decoded.file : Buffer.alloc(0));
+    const back = await createMigratedDb(restoredPath);
+    expect((await back.selectFrom("registered_stocks").select("code").execute()).map((x) => x.code).sort()).toEqual(["005930", "035420", "VRT"]);
+    expect((await back.selectFrom("meta").select("value").where("key", "=", "krw_cost_book").executeTakeFirst())?.value).toContain("VRT");
+    await back.destroy();
+    await expect(decodeBackup(raw, "wrong")).rejects.toThrow();
+    const tampered = Buffer.from(raw);
+    tampered[7] = tampered[7]! ^ 1; // 헤더(salt) 한 비트
+    await expect(decodeBackup(tampered, KEY)).rejects.toThrow();
+  });
 
+  it("JSON 백업(Postgres 형식)을 빈 DB 에 넣고, 이미 행이 있는 표는 건너뛴다", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bk-"));
+    const file = join(dir, "j.sbk");
+    await encryptJsonBackup({ version: 1, createdAt: "t", tables: { registered_stocks: [{ code: "A", name: "A", market: "KOSPI", quantity: 1, avg_price: 1, memo: null, created_at: "x", updated_at: "x" }] } }, file, KEY);
+    const decoded = await decodeBackup(await readFile(file), KEY);
+    if (decoded.kind !== "json") throw new Error("json 이어야 함");
     const fresh = createDb(":memory:");
     await migrate(fresh.db, fresh.dialect);
-    const r = await restoreBackup(fresh.db, fresh.dialect, payload);
-    expect(r["registered_stocks"]).toBe(3);
-    expect((await fresh.db.selectFrom("registered_stocks").select("code").execute()).map((x) => x.code).sort()).toEqual(["005930", "035420", "VRT"]);
-    expect((await fresh.db.selectFrom("meta").select("value").where("key", "=", "krw_cost_book").executeTakeFirst())?.value).toContain("VRT");
-    // 이미 행이 있으면 덮어쓰지 않는다
-    expect((await restoreBackup(fresh.db, fresh.dialect, payload))["registered_stocks"]).toBe("skipped");
+    expect((await restoreBackup(fresh.db, fresh.dialect, decoded.payload))["registered_stocks"]).toBe(1);
+    expect((await restoreBackup(fresh.db, fresh.dialect, decoded.payload))["registered_stocks"]).toBe("skipped");
   });
 
-  it("7개만 남기고, 경로를 벗어난 이름은 읽지 않는다", async () => {
+  it("날짜별 1개씩 7일치만 남기고(같은 날 수동 백업은 하나로), 남은 임시 파일을 치우고, 경로를 벗어난 이름은 읽지 않는다", async () => {
     const db = await seeded();
     const dir = await mkdtemp(join(tmpdir(), "bk-"));
-    let t = Date.parse("2026-09-24T04:30:00+09:00");
-    const svc = new BackupService({ db, dir, key: KEY, now: () => new Date(t) });
-    for (let i = 0; i < 9; i++) {
-      await svc.run();
-      t += 86_400_000;
+    let t = Date.parse("2026-09-20T07:10:00+09:00");
+    const svc = svcFor(db, dir, () => new Date(t));
+    await writeFile(join(dir, "backup-20260101-000000.sbk.tmp"), "half");
+    for (let d = 0; d < 9; d++) {
+      for (let k = 0; k < 3; k++) {
+        await svc.run(); // 같은 날 여러 번
+        t += 60_000;
+      }
+      t += 86_400_000 - 3 * 60_000;
     }
-    const files = await readdir(dir);
+    const files = (await readdir(dir)).sort();
     expect(files).toHaveLength(7);
-    expect(files.sort()[0]).toBe("backup-20260926-043000.sbk");
+    expect(new Set(files.map((f) => f.slice(7, 15))).size).toBe(7);
+    expect(files[0]!.startsWith("backup-20260922-")).toBe(true);
+    expect(files.some((f) => f.endsWith(".tmp"))).toBe(false);
     await writeFile(join(dir, "..", "secret.txt"), "x");
     expect(await svc.read("../secret.txt")).toBeNull();
   });
 
-  it("키가 없으면 백업하지 않고 이유를 남긴다", async () => {
+  it("키가 없으면 처음부터 이유를 보이고 백업하지 않는다", async () => {
     const db = await seeded();
     const dir = await mkdtemp(join(tmpdir(), "bk-"));
-    const st = await new BackupService({ db, dir, key: "" }).run();
-    expect(st).toMatchObject({ enabled: false, files: 0 });
-    expect(st.lastError).toContain("BACKUP_KEY");
+    const svc = svcFor(db, dir, () => new Date(), "");
+    expect((await svc.status()).lastError).toContain("BACKUP_KEY");
+    expect(await svc.run()).toMatchObject({ enabled: false, files: 0 });
   });
 
-  it("새벽(04~06시)에 20시간 넘었으면, 또는 26시간 넘었으면 백업한다", async () => {
+  it("아침 7시대에 20시간 넘었으면, 또는 26시간 넘었으면 백업. 실패하면 3시간 쉰다", async () => {
     const db = await seeded();
     const dir = await mkdtemp(join(tmpdir(), "bk-"));
-    let t = Date.parse("2026-09-24T04:10:00+09:00");
-    const svc = new BackupService({ db, dir, key: KEY, now: () => new Date(t) });
+    let t = Date.parse("2026-09-24T07:10:00+09:00");
+    const svc = svcFor(db, dir, () => new Date(t));
     expect(await svc.maybeRun()).toBe(true); // 처음
     t = Date.parse("2026-09-24T12:00:00+09:00");
     expect(await svc.maybeRun()).toBe(false);
-    t = Date.parse("2026-09-25T04:40:00+09:00");
-    expect(await svc.maybeRun()).toBe(true); // 다음 날 새벽
-    t = Date.parse("2026-09-26T07:00:00+09:00"); // 새벽을 놓쳤어도 26시간 넘음
+    t = Date.parse("2026-09-25T07:40:00+09:00");
+    expect(await svc.maybeRun()).toBe(true); // 다음 날 아침
+    t = Date.parse("2026-09-26T10:00:00+09:00"); // 아침을 놓쳤어도 26시간 넘음
     expect(await svc.maybeRun()).toBe(true);
+    // 쓸 수 없는 폴더 → 실패 → 3시간 동안은 다시 시도하지 않음
+    await writeFile(join(dir, "blocker"), "x");
+    const bad = svcFor(db, join(dir, "blocker", "sub"), () => new Date(t));
+    t = Date.parse("2026-09-28T07:10:00+09:00");
+    expect(await bad.maybeRun()).toBe(true);
+    expect((await bad.status()).lastError).toBeTruthy();
+    t += 60 * 60_000;
+    expect(await bad.maybeRun()).toBe(false);
   });
 
   it("관리 API: 지금 백업·목록·내려받기, /health 에 마지막 백업", async () => {
@@ -96,7 +119,7 @@ describe("DB 백업 (3-7)", () => {
     const list = (await app.inject({ method: "GET", url: "/api/admin/backups" })).json();
     expect(list.files).toHaveLength(1);
     const dl = await app.inject({ method: "GET", url: `/api/admin/backups/${run.lastFile}` });
-    expect(decryptBackup(dl.rawPayload, KEY).tables["registered_stocks"]).toHaveLength(3);
+    expect((await decodeBackup(dl.rawPayload, KEY)).kind).toBe("sqlite");
     expect((await app.inject({ method: "GET", url: "/api/admin/backups/..%2Fx" })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: "/health" })).json().backup).toMatchObject({ enabled: true, files: 1 });
     await app.close();

@@ -4,7 +4,10 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createDb, migrate, type Db } from "../src/db/index.js";
-import { BACKUP_TABLES, decryptBackup, encryptBackup, restoreBackup } from "../src/services/backupService.js";
+import { BACKUP_TABLES, BackupService, decodeBackup, restoreBackup } from "../src/services/backupService.js";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { FakeGenerator, fakeProviders, SAMPLE_MASTER } from "./helpers.js";
 
 /**
@@ -104,9 +107,14 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("백업을 비운 표에 되살리고, 일련번호가 이어져 새 행을 넣을 수 있다 (3-7)", async () => {
     const tables: Record<string, Record<string, unknown>[]> = {};
     for (const t of BACKUP_TABLES) tables[t] = (await sql<Record<string, unknown>>`select * from ${sql.table(t)}`.execute(db)).rows;
-    const before = Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.length]));
+    const dir = await mkdtemp(join(tmpdir(), "pgbk-"));
+    const st = await new BackupService({ db, dialect: "postgres", dir, key: "k" }).run();
+    expect(st.lastError).toBeNull();
+    const decoded = await decodeBackup(await readFile(join(dir, st.lastFile!)), "k");
+    if (decoded.kind !== "json") throw new Error("json 이어야 함");
+    const payload = decoded.payload;
+    const before = st.lastCounts!;
     expect(before["briefings"]).toBeGreaterThan(0);
-    const payload = decryptBackup(encryptBackup({ version: 1, createdAt: "t", tables }, "k"), "k");
     for (const t of [...BACKUP_TABLES].reverse()) await sql`delete from ${sql.table(t)}`.execute(db);
     const r = await restoreBackup(db, "postgres", payload);
     expect(r).toEqual(before);
