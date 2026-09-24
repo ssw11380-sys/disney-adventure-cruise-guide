@@ -208,14 +208,14 @@ describe("위젯-13: 누르면 잔고 탭", () => {
   });
 });
 
-const { fromPayload, isDelayed, shouldSkipFetch } = await import("@/widgets/payload");
+const { canReuse, fromPayload, isDelayed, shouldSkipFetch } = await import("@/widgets/payload");
 const { widgetPushDue } = await import("@/widgets/pushPolicy");
 const { BriefingWidget } = await import("@/widgets/widgets");
 
 describe("3-16 위젯 데이터·갱신 주기", () => {
   const payload = {
     v: 1 as const,
-    market: { label: "한국 장중", open: true, nextChangeAt: "2026-09-24T06:30:00Z" },
+    market: { label: "한국 장중", open: true, nextChangeAt: "2026-09-24T11:00:00Z", kr: true, us: false },
     stocks: [
       { c: "005930", n: "삼성전자", qty: 10, avg: 60_000, q: [70_000, 100, 0.14, "KRW", AT_CLOSE, null, 0] as [number, number, number, "KRW", string, null, 0], e: [700_000, 600_000, 698_000, null, null] as [number, number, number, null, null] },
       { c: "VRT", n: "버티브", qty: 2, avg: 200, q: [250, -1, -0.4, "USD", AT_CLOSE, 1360, 0] as [number, number, number, "USD", string, number, 0], e: [500, 400, 499, 540_000, "exact"] as [number, number, number, number, "exact"] },
@@ -283,7 +283,20 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     const holiday = texts(render(<AssetWidget stocks={p.stocks} showKrw={false} fetchedAt={later} error={null} now={later} market={{ label: "휴장", open: false, nextChangeAt: null }} />)).map((t) => t.text);
     expect(holiday).toContain("휴장");
     expect(holiday.some((t) => t.startsWith("지연"))).toBe(false); // 휴장 중 옛 시세는 지연이 아님
-    expect(isDelayed({ marketOpen: false, asOf: 0, fetchedAt: NOW - 31 * 60_000, error: "HTTP 500", now: NOW })).toBe(true);
+    expect(isDelayed({ openAsOf: null, fetchedAt: NOW - 31 * 60_000, error: "HTTP 500", now: NOW })).toBe(true);
+  });
+
+  it("지연은 열린 시장 종목의 시세만 본다: 한국 장중에 미국 종목만 가진 사람은 지연 아님, 칩은 다음 개장·마감 시각이 지나면 감춤", () => {
+    const p = fromPayload(payload);
+    const usOnly = p.stocks.filter((x) => x.quote?.currency === "USD").map((x) => ({ ...x, quote: { ...x.quote!, asOf: "2026-09-24T05:00:00+09:00" } }));
+    const t = Date.parse("2026-09-24T11:00:00+09:00");
+    const tx = texts(render(<HoldingsWidget stocks={usOnly} showKrw={false} fetchedAt={t} error={null} now={t} market={p.market} />)).map((x) => x.text);
+    expect(tx).toContain("한국 장중");
+    expect(tx).not.toContain("지연");
+    const afterClose = Date.parse("2026-09-24T20:05:00+09:00"); // nextChangeAt(20:00) 지남
+    const tx2 = texts(render(<HoldingsWidget stocks={p.stocks} showKrw={false} fetchedAt={afterClose} error={null} now={afterClose} market={p.market} />)).map((x) => x.text);
+    expect(tx2).not.toContain("한국 장중");
+    expect(tx2).not.toContain("지연");
   });
 
   it("브리핑 위젯: 서버가 고른 순서(보유 비중)대로 최대 3종목, 고지 한 줄은 항상", () => {
@@ -309,12 +322,54 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     expect(shouldSkipFetch(null, t)).toBe(false);
   });
 
-  it("앱 → 위젯: 시세만 바뀌면 1분에 한 번, 원화 표시를 바꾸거나 앱을 떠나면 바로", () => {
-    const base = { now: NOW, dataAt: NOW - 1000, lastAt: NOW - 10_000, lastKey: "false|true|장 마감", key: "false|true|장 마감" };
+  it("앱 → 위젯: 시세만 바뀌면 1분에 한 번, 원화 표시를 바꾸거나 앱을 떠나면 바로 (휴장 중 시세가 1분에 한 번 와도)", () => {
+    const base = { now: NOW, fetchedThisSession: true, lastAt: NOW - 10_000, lastKey: "false|true|장 마감", key: "false|true|장 마감" };
     expect(widgetPushDue(base)).toBe(false);
     expect(widgetPushDue({ ...base, key: "true|true|장 마감" })).toBe(true);
     expect(widgetPushDue({ ...base, leaving: true })).toBe(true);
     expect(widgetPushDue({ ...base, lastAt: NOW - 61_000 })).toBe(true);
-    expect(widgetPushDue({ ...base, key: "true|true|장 마감", dataAt: NOW - 60_000 })).toBe(false); // 기기에 저장해 둔 옛 값으로는 덮지 않음
+    expect(widgetPushDue({ ...base, key: "true|true|장 마감", fetchedThisSession: false })).toBe(false); // 기기에 저장해 둔 옛 값으로는 덮지 않음
+  });
+
+  it("위젯이 스스로 갱신할 때는 백그라운드가 받아 둔 응답을 다시 쓴다: 장중 15분, 휴장 2시간", () => {
+    const open = { label: "한국 장중", open: true, nextChangeAt: "2026-09-24T06:30:00Z" };
+    expect(canReuse({ at: NOW - 10 * 60_000, market: open }, NOW)).toBe(true);
+    expect(canReuse({ at: NOW - 16 * 60_000, market: open }, NOW)).toBe(false);
+    const t = Date.parse("2026-09-26T13:00:00+09:00");
+    expect(canReuse({ at: t - 90 * 60_000, market: { label: "휴장", open: false, nextChangeAt: "2026-09-28T23:00:00Z" } }, t)).toBe(true);
+    expect(canReuse(null, t)).toBe(false);
+  });
+
+  it("주기 갱신(reuse)은 서버를 부르지 않고, 예전 서버는 한 번 404 뒤 6시간 동안 /api/widget 을 묻지 않는다", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify(payload), { status: 200, headers: { etag: '"x"' } });
+    });
+    await loadWidgetData({ stocks: true, briefings: true });
+    const d = await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(urls).toHaveLength(1);
+    expect(d.stocks).toHaveLength(3);
+
+    store.clear();
+    urls.length = 0;
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      if (url.endsWith("/api/widget")) return new Response("<html>not found</html>", { status: 404 });
+      return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
+    });
+    await loadWidgetData({ stocks: true, briefings: true });
+    await loadWidgetData({ stocks: true, briefings: true });
+    expect(urls.filter((u) => u.endsWith("/api/widget"))).toHaveLength(1);
+  });
+
+  it("예전 서버의 브리핑은 최신 순으로 (등록 순서가 아니라)", async () => {
+    const mk = (code: string, createdAt: string) => ({ code, name: code, latest: { id: code.length, code, name: code, session: "morning", date: "2026-09-24", status: "ok", summary: "s", detail: "", missing: [], model: "", error: null, createdAt } });
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.endsWith("/api/widget")) return new Response("", { status: 404 });
+      return new Response(JSON.stringify(url.includes("briefings") ? [mk("A", "2026-09-24T08:31:00+09:00"), mk("B", "2026-09-24T16:02:00+09:00")] : []), { status: 200 });
+    });
+    const d = await loadWidgetData({ stocks: false, briefings: true });
+    expect(d.briefings.map((b) => b.code)).toEqual(["B", "A"]);
   });
 });

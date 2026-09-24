@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { fillFromLast } from "./model";
-import { fromPayload, type WidgetMarket, type WidgetPayload } from "./payload";
+import { canReuse, fromPayload, type WidgetMarket, type WidgetPayload } from "./payload";
 
 /**
  * 위젯은 앱과 별도의 JS 컨텍스트에서 돌아가므로(react-native-android-widget 태스크 핸들러) react-query 나
@@ -90,8 +90,26 @@ class HttpError extends Error {
   }
 }
 
-/** /api/widget 한 번: 304 면 저장해 둔 본문, 받으면 저장. 예전 서버(404)면 null */
+const LEGACY_KEY = "widget.legacyServer";
+const LEGACY_RECHECK_MS = 6 * 3_600_000;
+
+/** 예전 서버라 /api/widget 이 없던 기록 (6시간 동안은 묻지 않고 예전 API 로 — 호출이 늘지 않게) */
+async function legacyUntil(apiUrl: string): Promise<number> {
+  try {
+    const v = JSON.parse((await AsyncStorage.getItem(LEGACY_KEY)) ?? "null") as { apiUrl?: string; until?: number } | null;
+    return v?.apiUrl === apiUrl && typeof v.until === "number" ? v.until : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** /api/widget 한 번: 304 면 저장해 둔 본문, 받으면 저장. 예전 서버(404·모양이 다른 응답)면 null */
 async function fetchPayload(apiUrl: string, token: string, now: number): Promise<WidgetPayload | null> {
+  if (now < (await legacyUntil(apiUrl))) return null;
+  const legacy = async () => {
+    await AsyncStorage.setItem(LEGACY_KEY, JSON.stringify({ apiUrl, until: now + LEGACY_RECHECK_MS })).catch(() => undefined);
+    return null;
+  };
   const cached = await readCachedPayload(apiUrl);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
@@ -100,13 +118,13 @@ async function fetchPayload(apiUrl: string, token: string, now: number): Promise
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
-    if (res.status === 404) return null;
-    let body: WidgetPayload;
+    if (res.status === 404) return legacy();
+    let body: WidgetPayload | null;
     if (res.status === 304 && cached) body = cached.body;
-    else if (res.ok) body = (await res.json()) as WidgetPayload;
+    else if (res.ok) body = (await res.json().catch(() => null)) as WidgetPayload | null; // 프록시의 HTML 대체 페이지 등
     else throw new HttpError(res.status);
     // 모양이 다르면(예전·다른 서버) 예전 API 로
-    if (!body || body.v !== 1 || !Array.isArray(body.stocks)) return null;
+    if (!body || body.v !== 1 || !Array.isArray(body.stocks)) return legacy();
     await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, etag: res.headers.get("etag"), body })).catch(() => undefined);
     return body;
   } finally {
@@ -137,12 +155,16 @@ async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promi
  *  - 조회가 통째로 실패하면 마지막으로 받은 잔고를 그대로 돌려주고 error 에 사유를 남긴다("잔고 0"을 보이지 않게)
  *  - 일부 종목만 시세가 없으면 그 종목은 마지막 값으로 채운다
  */
-export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
+export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean; reuse?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
   const { apiUrl, apiToken, showKrw, afterCost } = await readSettings();
   const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, fetchedAt: Date.now(), error: null, filled: [], market: null };
   const last = await readLastStocks(apiUrl);
   try {
-    const payload = await fetchPayload(apiUrl, apiToken, out.fetchedAt);
+    // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
+    const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
+    const reuse = reused && canReuse({ at: reused.at, market: reused.body.market }, out.fetchedAt) ? reused : null;
+    if (reuse) out.fetchedAt = reuse.at;
+    const payload = reuse ? reuse.body : await fetchPayload(apiUrl, apiToken, out.fetchedAt);
     let stocks: RegisteredWithQuote[];
     if (payload) {
       const p = fromPayload(payload);
@@ -155,6 +177,8 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
         opts.stocks ? getJson<RegisteredWithQuote[]>(`${apiUrl}/api/stocks?quotes=1`, apiToken) : Promise.resolve([]),
         opts.briefings ? getJson<LatestBriefing[]>(`${apiUrl}/api/briefings/latest`, apiToken) : Promise.resolve([]),
       ]);
+      // 예전 서버는 등록 순서라 최신 순으로 (위젯은 앞의 3개를 보여 준다)
+      out.briefings = [...out.briefings].sort((a, b) => ((a.latest?.createdAt ?? "") < (b.latest?.createdAt ?? "") ? 1 : -1));
     }
     const f = fillFromLast(stocks, last?.stocks ?? null, out.fetchedAt);
     out.stocks = f.stocks;

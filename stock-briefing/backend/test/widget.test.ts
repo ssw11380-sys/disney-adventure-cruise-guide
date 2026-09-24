@@ -12,10 +12,10 @@ const st = (kr: MarketState, us: MarketState): MarketStatus => ({ now: "", KR: k
 
 describe("위젯 장 상태 칩 (3-16): 앱 잔고 탭 띠와 같은 규칙", () => {
   it("장중·휴장·장 마감, 다음 바뀌는 시각", () => {
-    expect(marketChip(st(m("KR", true, true, "2026-09-23T11:00:00Z"), m("US", false, true, "2026-09-23T08:00:00Z")))).toEqual({ label: "한국 장중", open: true, nextChangeAt: "2026-09-23T08:00:00Z" });
+    expect(marketChip(st(m("KR", true, true, "2026-09-23T11:00:00Z"), m("US", false, true, "2026-09-23T08:00:00Z")))).toEqual({ label: "한국 장중", open: true, kr: true, us: false, nextChangeAt: "2026-09-23T08:00:00Z" });
     expect(marketChip(st(m("KR", true, true), m("US", true, true))).label).toBe("실시간");
     expect(marketChip(st(m("KR", false, false), m("US", true, true))).label).toBe("미국 장중");
-    expect(marketChip(st(m("KR", false, false, "2026-09-28T23:00:00Z"), m("US", false, false, "2026-09-26T08:00:00Z")))).toEqual({ label: "휴장", open: false, nextChangeAt: "2026-09-26T08:00:00Z" });
+    expect(marketChip(st(m("KR", false, false, "2026-09-28T23:00:00Z"), m("US", false, false, "2026-09-26T08:00:00Z")))).toEqual({ label: "휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-26T08:00:00Z" });
     expect(marketChip(st(m("KR", false, false), m("US", false, true))).label).toBe("한국 휴장");
     expect(marketChip(st(m("KR", false, true), m("US", false, true))).label).toBe("장 마감");
   });
@@ -53,6 +53,8 @@ describe("GET /api/widget (3-16)", () => {
     expect(hynix.e[1]).toBe(1_500_000);
     expect(body.briefings.map((b: { code: string }) => b.code)).toEqual(["000660", "005930", "247540"]); // 평가금 큰 순, 관심 종목은 뒤
     expect(body.briefings[0]).toMatchObject({ session: "morning", summary: expect.any(String) });
+    expect(body.briefings[0].summary).not.toContain("\n"); // 위젯은 첫 줄만 쓴다
+    expect(body.latestIds).toHaveLength(3);
   });
 
   it("같은 내용이면 304, gzip 을 받으면 압축", async () => {
@@ -65,6 +67,7 @@ describe("GET /api/widget (3-16)", () => {
     const r2 = await app.inject({ method: "GET", url: "/api/widget", headers: { "if-none-match": etag } });
     expect(r2.statusCode).toBe(304);
     expect(r2.rawPayload.length).toBe(0);
+    expect((await app.inject({ method: "GET", url: "/api/widget", headers: { "if-none-match": `W/${etag}, "other"` } })).statusCode).toBe(304); // 약한 ETag·여러 개
     const r3 = await app.inject({ method: "GET", url: "/api/widget", headers: { "if-none-match": '"stale"' } });
     expect(r3.statusCode).toBe(200);
   });

@@ -6,7 +6,7 @@ import { evalView } from "@/lib/liveTick";
 import { fxOf, totals } from "@/lib/portfolio";
 import { DISCLAIMER_SHORT } from "@/lib/disclaimer";
 import { asOfLabel, asOfMs, assetLine, excludedCount, failureText, HOME_URI, isHeld, tone, widgetOrder } from "./model";
-import { isDelayed, type WidgetMarket } from "./payload";
+import { currentMarket, isDelayed, openMarketAsOf, type WidgetMarket } from "./payload";
 
 export { totals, type Totals } from "@/lib/portfolio";
 
@@ -97,12 +97,13 @@ type StockWidgetProps = {
   market?: WidgetMarket | null;
 };
 
-export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market }: StockWidgetProps) {
+export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given }: StockWidgetProps) {
   const t = totals(stocks, showKrw, afterCost);
   const rows = widgetOrder(stocks, fxOf);
   const note = notes(error, filled.length, excludedCount(stocks));
   const asOf = asOfMs(stocks, fetchedAt);
-  const delayed = isDelayed({ marketOpen: !!market?.open, asOf, fetchedAt, error, now });
+  const market = currentMarket(given, now);
+  const delayed = isDelayed({ openAsOf: openMarketAsOf(stocks, market), fetchedAt, error, now });
   return (
     <FlexWidget style={root}>
       <Header title={`잔고 ${rows.length}`} subtitle={asOfLabel(asOf, now)} market={market} delayed={delayed} />
@@ -159,10 +160,11 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
 
 /** 브리핑: 서버가 고른 보유 비중 상위 3종목(예전 서버면 최신 3개)의 요약 첫 줄 + 고지 한 줄 (항상) */
 export function BriefingWidget({ briefings, fetchedAt, error, now, market }: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number; market?: WidgetMarket | null }) {
+  // 받은 순서 그대로(새 서버: 보유 비중 순, 예전 서버: data.ts 가 최신 순으로 정렬)
   const items = briefings.filter((b) => b.latest && b.latest.status === "ok").slice(0, 3);
   return (
     <FlexWidget style={root}>
-      <Header title="브리핑" subtitle={asOfLabel(fetchedAt, now)} market={market} delayed={!!error && now - fetchedAt > 30 * 60_000} />
+      <Header title="브리핑" subtitle={asOfLabel(fetchedAt, now)} market={currentMarket(market, now)} delayed={isDelayed({ openAsOf: null, fetchedAt, error, now })} />
       {items.length ? (
         <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: 4, flexGap: 3 }}>
           {items.map((it) => {
@@ -184,12 +186,13 @@ export function BriefingWidget({ briefings, fetchedAt, error, now, market }: { b
   );
 }
 
-export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market }: StockWidgetProps) {
+export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given }: StockWidgetProps) {
   const t = totals(stocks, showKrw, afterCost);
   const note = notes(error, filled.length, excludedCount(stocks));
   const line = t ? assetLine(t.day, t.profit, (n) => formatPrice(n, t.currency, { sign: true })) : null;
   const asOf = asOfMs(stocks, fetchedAt);
-  const delayed = isDelayed({ marketOpen: !!market?.open, asOf, fetchedAt, error, now });
+  const market = currentMarket(given, now);
+  const delayed = isDelayed({ openAsOf: openMarketAsOf(stocks, market), fetchedAt, error, now });
   return (
     <FlexWidget style={{ ...root, padding: 12, justifyContent: "center" }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
       <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>

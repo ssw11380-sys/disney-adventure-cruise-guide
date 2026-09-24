@@ -8,6 +8,9 @@ export interface WidgetMarket {
   label: string;
   open: boolean;
   nextChangeAt: string | null;
+  /** 시장별 거래 중 (예전 응답에는 없음) */
+  kr?: boolean;
+  us?: boolean;
 }
 
 export interface WidgetStock {
@@ -68,11 +71,46 @@ export function fromPayload(p: WidgetPayload): { stocks: RegisteredWithQuote[]; 
   return { stocks, briefings, market: p.market };
 }
 
-/** 30분 넘게 지난 값이면 "지연": 장중인데 시세가 오래됐거나, 조회가 실패해 마지막 값을 보여 줄 때 */
+/**
+ * 그릴 때 쓸 장 상태: 받은 뒤 다음 개장·마감 시각이 지났으면 모르는 것으로(칩을 감추고 지연도 따지지 않음).
+ * 위젯은 받을 때만 다시 그려지므로 09:00·15:30 을 지나 옛 칩이 남지 않게
+ */
+export function currentMarket(market: WidgetMarket | null | undefined, now: number): WidgetMarket | null {
+  if (!market) return null;
+  const next = market.nextChangeAt ? Date.parse(market.nextChangeAt) : NaN;
+  return Number.isFinite(next) && now >= next ? null : market;
+}
+
+/** 지금 열린 시장 종목의 가장 늦은 시세 시각 (한국 장중이면 한국 종목만). 열린 시장 종목이 없으면 null */
+export function openMarketAsOf(stocks: RegisteredWithQuote[], market: WidgetMarket | null): number | null {
+  if (!market?.open) return null;
+  const byMarket = market.kr !== undefined || market.us !== undefined;
+  let best: number | null = null;
+  for (const s of stocks) {
+    if (!s.quote) continue;
+    const isOpen = !byMarket || (s.quote.currency === "USD" ? market.us : market.kr);
+    const t = Date.parse(s.quote.asOf);
+    if (isOpen && Number.isFinite(t) && (best === null || t > best)) best = t;
+  }
+  return best;
+}
+
+/** 30분 넘게 지난 값이면 "지연": 열린 시장 종목의 시세가 오래됐거나, 조회가 실패해 마지막 값을 보여 줄 때 */
 export const STALE_MS = 30 * 60_000;
-export function isDelayed(opts: { marketOpen: boolean; asOf: number; fetchedAt: number; error: string | null; now: number }): boolean {
+export function isDelayed(opts: { openAsOf: number | null; fetchedAt: number; error: string | null; now: number }): boolean {
   if (opts.error && opts.now - opts.fetchedAt > STALE_MS) return true;
-  return opts.marketOpen && opts.now - opts.asOf > STALE_MS;
+  return opts.openAsOf !== null && opts.now - opts.openAsOf > STALE_MS;
+}
+
+/**
+ * 위젯이 스스로 갱신할 때(주기·추가·크기 변경) 서버를 다시 부르지 않고 저장해 둔 응답을 쓸지.
+ * 장중엔 15분 안에 받은 값(백그라운드 작업이 15분마다 받는다), 두 시장이 닫혀 있으면 shouldSkipFetch 규칙
+ */
+export const REUSE_OPEN_MS = 15 * 60_000;
+export function canReuse(last: { at: number; market: WidgetMarket | null } | null, now: number): boolean {
+  if (!last) return false;
+  if (now - last.at < REUSE_OPEN_MS) return true;
+  return shouldSkipFetch(last, now);
 }
 
 /**

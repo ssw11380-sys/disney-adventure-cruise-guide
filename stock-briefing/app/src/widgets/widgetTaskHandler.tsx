@@ -13,7 +13,8 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
   if (widgetAction === "WIDGET_CLICK" && props.clickAction !== "REFRESH") return;
   const name = widgetInfo.widgetName;
   try {
-    const data = await loadWidgetData({ stocks: name !== WIDGET_NAMES.briefing, briefings: name === WIDGET_NAMES.briefing });
+    // ↻ 를 누른 때만 서버에 바로 묻고, 주기·추가·크기 변경 갱신은 백그라운드 작업이 받아 둔 응답을 다시 쓴다
+    const data = await loadWidgetData({ stocks: name !== WIDGET_NAMES.briefing, briefings: name === WIDGET_NAMES.briefing, reuse: widgetAction !== "WIDGET_CLICK" });
     renderWidget(render(name, data, widgetInfo.height));
   } catch (e) {
     // 렌더 중 예외가 나면 위젯이 빈 채로 남으므로 오류를 글로 보여준다

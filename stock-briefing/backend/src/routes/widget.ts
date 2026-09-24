@@ -16,7 +16,9 @@ export const widgetRoutes: FastifyPluginAsync<{ stocks: StockService; briefings:
     const body = JSON.stringify(buildWidgetPayload(list, latest, status));
     const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 16)}"`;
     reply.header("etag", etag).header("cache-control", "no-cache").header("vary", "accept-encoding");
-    if (req.headers["if-none-match"] === etag) return reply.code(304).send();
+    // 프록시가 약한 ETag(W/"…")로 바꾸거나 여러 개를 보내도 맞춰 본다
+    const inm = String(req.headers["if-none-match"] ?? "").split(",").map((t) => t.trim().replace(/^W\//, ""));
+    if (inm.includes(etag)) return reply.code(304).send();
     reply.type("application/json; charset=utf-8");
     if (/\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""))) return reply.header("content-encoding", "gzip").send(gzipSync(body));
     return reply.send(body);

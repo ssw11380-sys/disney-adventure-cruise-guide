@@ -109,9 +109,10 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
   await AsyncStorage.setItem(LOCAL_MODE_KEY, "1");
   await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: BG_INTERVAL_MIN });
   await AsyncStorage.setItem(INTERVAL_KEY, String(BG_INTERVAL_MIN)).catch(() => undefined);
-  // 현재 브리핑 목록을 "이미 본 것"으로 기록해 켜자마자 옛 브리핑이 쏟아지지 않게 한다
-  const data = await loadWidgetData({ stocks: false, briefings: true });
-  if (!data.error) await notifyNewBriefings(data.briefings, { first: true });
+  // 현재 브리핑 목록 전체를 "이미 본 것"으로 기록해 켜자마자 옛 브리핑이 쏟아지지 않게 한다
+  // (위젯 응답의 브리핑은 상위 3종목뿐이라 전체 목록을 따로 받는다)
+  const latest = await loadLatestBriefings().catch(() => null);
+  if (latest) await notifyNewBriefings(latest, { first: true });
 }
 
 export async function disableLocalBriefingAlerts(): Promise<void> {

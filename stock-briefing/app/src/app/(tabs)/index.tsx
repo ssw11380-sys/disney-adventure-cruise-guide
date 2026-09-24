@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
-import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
+import { useAnyMarketOpen, useHealth, useMarketStatus, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
@@ -75,19 +75,26 @@ export default function StocksScreen() {
   // 표시 설정·장 상태가 바뀌거나 앱을 떠날 때는 바로). 기기에 저장해 둔 옛 잔고로는 덮지 않는다
   const lastWidgetPush = useRef({ at: 0, key: "" });
   const dataAt = stocks.dataUpdatedAt;
-  const market = useMemo(() => (live.loaded ? { label: live.label, open: live.open, nextChangeAt: null } : null), [live.loaded, live.label, live.open]);
+  const ms = useMarketStatus().data;
+  const krOpen = ms?.KR.isOpen ?? false;
+  const usOpen = ms?.US.isOpen ?? false;
+  const market = useMemo(
+    () => (live.loaded ? { label: live.label, open: live.open, nextChangeAt: null, kr: krOpen, us: usOpen } : null),
+    [live.loaded, live.label, live.open, krOpen, usOpen],
+  );
+  const fetchedThisSession = stocks.isFetchedAfterMount;
   const pushKey = `${showKrw}|${afterCost}|${market?.label ?? ""}`;
   // 앱을 떠날 때 쓸 최신 값 (렌더 중에는 ref 를 건드리지 않고 effect 에서 갱신)
   const pushWidgets = useRef<(leaving: boolean) => void>(() => undefined);
   useEffect(() => {
     pushWidgets.current = (leaving: boolean) => {
       const now = Date.now();
-      if (!data || !widgetPushDue({ now, dataAt, lastAt: lastWidgetPush.current.at, lastKey: lastWidgetPush.current.key, key: pushKey, leaving })) return;
+      if (!data || !widgetPushDue({ now, fetchedThisSession, lastAt: lastWidgetPush.current.at, lastKey: lastWidgetPush.current.key, key: pushKey, leaving })) return;
       lastWidgetPush.current = { at: now, key: pushKey };
       void refreshWidgets({ stocks: data, showKrw, afterCost, market });
     };
     pushWidgets.current(false);
-  }, [data, dataAt, pushKey, showKrw, afterCost, market]);
+  }, [data, dataAt, pushKey, showKrw, afterCost, market, fetchedThisSession]);
   useEffect(() => {
     const sub = AppState.addEventListener("change", (st) => {
       if (st === "background") pushWidgets.current(true);

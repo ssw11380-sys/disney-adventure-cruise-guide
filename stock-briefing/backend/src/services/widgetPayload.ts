@@ -6,13 +6,16 @@ import type { RegisteredWithQuote } from "./stockService.js";
  * 홈 화면 위젯 한 번에 필요한 것만 (3-16). 위젯 3종이 이 응답 하나를 같이 쓴다.
  *  - 시세는 위젯이 쓰는 칸만(가격·등락·통화·시각·환율·지연 표시), 평가는 그대로
  *  - 장 상태 칩: 앱 잔고 탭 띠와 같은 규칙(/api/market/status 기준)
- *  - 브리핑: 보유 비중(원화 환산 평가금) 상위 3종목의 최신 요약
+ *  - 브리핑: 보유 비중(원화 환산 평가금) 상위 3종목의 최신 요약 첫 줄 (위젯이 한 줄만 보여 준다)
  */
 
 export interface WidgetMarket {
   /** 칩 문구: 실시간 / 한국 장중 / 미국 장중 / 휴장 / 한국 휴장 / 장 마감 */
   label: string;
   open: boolean;
+  /** 시장별 거래 중 (지연 판단은 열린 시장의 시세만 본다) */
+  kr: boolean;
+  us: boolean;
   /** 다음에 장 상태가 바뀌는 시각 (위젯 백그라운드 갱신이 휴장 중 호출을 건너뛸 때 이때까지만) */
   nextChangeAt: string | null;
 }
@@ -46,10 +49,11 @@ export function marketChip(s: MarketStatus): WidgetMarket {
   const kr = s.KR, us = s.US;
   const bounds = [kr, us].map((m) => (m.isOpen ? m.closesAt : m.opensAt)).filter((x): x is string => !!x).sort();
   const nextChangeAt = bounds[0] ?? null;
-  if (kr.isOpen || us.isOpen) return { label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", open: true, nextChangeAt };
-  if (!kr.isTradingDay && !us.isTradingDay) return { label: "휴장", open: false, nextChangeAt };
-  if (!kr.isTradingDay) return { label: "한국 휴장", open: false, nextChangeAt };
-  return { label: "장 마감", open: false, nextChangeAt };
+  const base = { kr: kr.isOpen, us: us.isOpen, nextChangeAt };
+  if (kr.isOpen || us.isOpen) return { label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", open: true, ...base };
+  if (!kr.isTradingDay && !us.isTradingDay) return { label: "휴장", open: false, ...base };
+  if (!kr.isTradingDay) return { label: "한국 휴장", open: false, ...base };
+  return { label: "장 마감", open: false, ...base };
 }
 
 /** 위젯 표시에 필요한 자릿수만 (등락률 소수 2자리, 금액·가격·환율 4자리) */
@@ -68,11 +72,12 @@ function slim(s: RegisteredWithQuote): WidgetStock {
     avg: s.avgPrice,
     q: q ? [r4(q.price), r4(q.change), r2(q.changeRate), q.currency, shortIso(q.asOf), q.fxRate == null ? null : r4(q.fxRate), q.stale ? 1 : 0] : null,
     // 금액은 소수 4자리까지 (달러 금액을 원화로 바꿔도 1원 미만 차이 — 앱 잔고와 같은 숫자가 되게)
-    e: e ? [r4(e.marketValue), r4(e.costBasis), e.afterCost ? r4(e.afterCost.marketValue) : null, e.costBasisKrw === null ? null : Math.round(e.costBasisKrw), e.krwCostSource] : null,
+    e: e ? [r4(e.marketValue), r4(e.costBasis), e.afterCost ? r4(e.afterCost.marketValue) : null, e.costBasisKrw === null ? null : r4(e.costBasisKrw), e.krwCostSource] : null,
   };
 }
 
-const krwValue = (s: RegisteredWithQuote) => {
+const krwValue = (s: RegisteredWithQuote | undefined) => {
+  if (!s) return 0; // 목록을 읽는 사이에 등록·삭제된 종목
   const v = s.evaluation?.marketValue ?? 0;
   return s.quote?.currency === "USD" ? v * (s.quote.fxRate ?? 1400) : v;
 };
@@ -82,7 +87,7 @@ export function buildWidgetPayload(stocks: RegisteredWithQuote[], latest: Array<
   const ok = latest.filter((b) => b.latest?.status === "ok");
   // 보유 비중 큰 순 → 비중이 같으면(관심 종목) 최신 순
   ok.sort((a, b) => {
-    const d = krwValue(byCode.get(b.code)!) - krwValue(byCode.get(a.code)!);
+    const d = krwValue(byCode.get(b.code)) - krwValue(byCode.get(a.code));
     if (Number.isFinite(d) && d !== 0) return d;
     return a.latest!.createdAt < b.latest!.createdAt ? 1 : -1;
   });
@@ -91,6 +96,6 @@ export function buildWidgetPayload(stocks: RegisteredWithQuote[], latest: Array<
     market: status ? marketChip(status) : null,
     stocks: stocks.map(slim),
     latestIds: ok.map((b) => b.latest!.id).sort((a, b) => a - b),
-    briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary, createdAt: b.latest!.createdAt })),
+    briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary.split("\n").find((l) => l.trim()) ?? "", createdAt: b.latest!.createdAt })),
   };
 }
