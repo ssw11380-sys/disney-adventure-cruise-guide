@@ -90,6 +90,25 @@ function parseTossDetail(value: string | null): Map<string, TossHoldingDetail> {
   }
 }
 
+/**
+ * 잠금 밖(연동 꺼짐·동기화 멈춤)에서 사용자가 수량·평단을 직접 넣으면 그 종목의 옛 토스 평가 기준을 지운다.
+ * 안 그러면 수량만 같을 때 옛 토스 매입금액으로 손익을 내 직접 넣은 평단이 무시된다. 원화 장부는 이 기준이 있을 때만 쓰므로
+ * 장부 자체는 두고(다시 연동되면 그대로 쓴다) 여기서만 뺀다. syncedAt 은 그대로 → 잠금 판단은 바뀌지 않고, 다음 동기화가 다시 채운다
+ */
+async function forgetTossDetail(db: Db, code: string): Promise<void> {
+  const row = await db.selectFrom("meta").select("value").where("key", "=", TOSS_DETAIL_KEY).executeTakeFirst();
+  if (!row) return;
+  let parsed: { items?: Record<string, TossHoldingDetail> } | null;
+  try {
+    parsed = JSON.parse(row.value) as { items?: Record<string, TossHoldingDetail> } | null;
+  } catch {
+    return;
+  }
+  if (!parsed?.items || !Object.hasOwn(parsed.items, code)) return;
+  delete parsed.items[code];
+  await db.updateTable("meta").set({ value: JSON.stringify(parsed) }).where("key", "=", TOSS_DETAIL_KEY).execute();
+}
+
 export interface RegisteredWithQuote extends RegisteredStock {
   quote: Quote | null;
   quoteError: string | null;
@@ -338,6 +357,8 @@ export class StockService {
       .execute();
     // 동기화에서 뺐던 종목을 다시 등록하면 다시 토스 계좌에서 맞춘다 (등록이 된 뒤에)
     await this.setExcluded(listed.code, false);
+    // 잠금 밖에서 지웠다가 다시 등록한 종목도 직접 넣은 수량·평단으로 평가 (잠긴 종목은 다음 동기화가 토스 값으로 맞춘다)
+    if (!(await this.tossSynced()).has(listed.code)) await forgetTossDetail(this.deps.db, listed.code);
     void this.refreshQuotes([listed.code]); // 등록 직후 잔고 화면이 시세를 기다리지 않게 바로 받기 시작
     await this.syncLive();
     return (await this.get(listed.code))!;
@@ -361,16 +382,20 @@ export class StockService {
       (input.quantity !== undefined && input.quantity !== current.quantity) || (input.avgPrice !== undefined && input.avgPrice !== current.avgPrice);
     if (changesHolding && (await this.tossSynced()).has(code))
       throw new TossLockedError("토스 계좌에서 자동으로 맞추는 종목이라 수량·평단은 바꿀 수 없습니다. 메모는 바꿀 수 있습니다. 이 종목을 앱에서 빼려면 삭제하세요 (토스 동기화에서도 빠집니다).");
-    await this.deps.db
-      .updateTable("registered_stocks")
-      .set({
-        quantity: input.quantity === undefined ? current.quantity : input.quantity,
-        avg_price: input.avgPrice === undefined ? current.avgPrice : input.avgPrice,
-        memo: input.memo === undefined ? current.memo : input.memo,
-        updated_at: seoulIso(this.now()),
-      })
-      .where("code", "=", code)
-      .execute();
+    await this.deps.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("registered_stocks")
+        .set({
+          quantity: input.quantity === undefined ? current.quantity : input.quantity,
+          avg_price: input.avgPrice === undefined ? current.avgPrice : input.avgPrice,
+          memo: input.memo === undefined ? current.memo : input.memo,
+          updated_at: seoulIso(this.now()),
+        })
+        .where("code", "=", code)
+        .execute();
+      // 직접 고친 수량·평단으로 평가 (메모만 고치면 토스 기준 그대로)
+      if (changesHolding) await forgetTossDetail(trx, code);
+    });
     return (await this.get(code))!;
   }
 
@@ -786,6 +811,7 @@ export function evaluate(
 ): Evaluation | null {
   if (!q || s.quantity === null || s.avgPrice === null || s.quantity <= 0) return null;
   // 토스에서 가져온 수량과 같을 때만 토스 기준(매입금액·비용 비율)을 쓴다. 사용자가 수량을 바꿨으면 직접 계산
+  // (잠금 밖에서 수량·평단을 직접 고친 종목은 update 가 토스 기준을 지워 toss 가 넘어오지 않는다 → 평단만 고쳐도 직접 계산)
   const t = toss && Math.abs(toss.quantity - s.quantity) < 1e-9 ? toss : null;
   const marketValue = q.price * s.quantity;
   const costBasis = t?.purchaseAmount ?? s.avgPrice * s.quantity;
@@ -800,7 +826,8 @@ export function evaluate(
     profitRate: pct(profit),
     costRate,
     afterCost: afterValue !== null ? { marketValue: afterValue, profit: afterValue - costBasis, profitRate: pct(afterValue - costBasis) } : null,
-    ...(q.currency === "USD" ? krwBasis(s.quantity, q, t, krwCost) : { costBasisKrw: null, krwCostSource: null }),
+    // 원화 장부도 토스 기준을 쓸 때만 (직접 넣은 평단에 옛 원화 매입금액을 붙이지 않게)
+    ...(q.currency === "USD" ? krwBasis(s.quantity, q, t, t ? krwCost : null) : { costBasisKrw: null, krwCostSource: null }),
   };
 }
 
