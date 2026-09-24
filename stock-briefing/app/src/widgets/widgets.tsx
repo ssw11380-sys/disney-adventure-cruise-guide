@@ -26,7 +26,7 @@ import {
   type PnlMode,
 } from "./model";
 import { currentMarket, isDelayed, openMarketAsOf, type WidgetIndex, type WidgetMarket } from "./payload";
-import { PAD, planAsset, planBriefing, planHoldings, textWidth, type HeaderPlan, type IndexPlan, type RowInput, type RowsPlan, type TotalPlan } from "./layout";
+import { EMPTY_LINES, PAD, planAsset, planBriefing, planHoldings, textWidth, type HeaderPlan, type IndexPlan, type RowInput, type RowsPlan, type TotalPlan } from "./layout";
 import { space } from "@/tokens";
 import { CHIP_RADIUS, WIDGET_COLORS, WIDGET_FONT as F, WIDGET_RADIUS, WIDGET_TOUCH as TOUCH, type WidgetPalette } from "./palette";
 
@@ -209,7 +209,8 @@ function TotalRow({ plan, total, pnl, c }: { plan: TotalPlan; total: string; pnl
       <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={totalLabel} style={{ height: plan.totalH, flexDirection: "column", justifyContent: "center" }}>
         {totalText}
       </FlexWidget>
-      <FlexWidget clickAction={WIDGET_CLICK.pnlToggle} accessibilityLabel={pnlLabel} style={pnlBoxStyle}>
+      {/* 보여 주는 쪽을 함께 보낸다: 태스크 핸들러가 그 반대로 저장한다 (잔고 위젯이 둘 이상이어도 누른 위젯이 바로 바뀌게) */}
+      <FlexWidget clickAction={WIDGET_CLICK.pnlToggle} clickActionData={{ mode: pnl.mode }} accessibilityLabel={pnlLabel} style={pnlBoxStyle}>
         {pnlTexts}
       </FlexWidget>
     </FlexWidget>
@@ -292,7 +293,8 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
     total: total && cum ? { total, fixed: { amount: cum.amount, rate: cum.rate }, toggle: chosen ? { amount: chosen.amount, rate: chosen.rate } : null } : null,
     indices: items,
     rows,
-    note: noteParts(error, filled.length, excludedCount(stocks)),
+    // 갱신 중에는 지난 실패 문구를 빼고 "갱신 중"만 (둘이 함께 보이지 않게)
+    note: noteParts(refreshing ? null : error, filled.length, excludedCount(stocks)),
     alert,
   });
   // 전환 칸을 둔 배치면 저장된 쪽, 아니면(플래그 꺼짐·낮은 위젯) 누적
@@ -305,8 +307,8 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
         {plan.total && total && pnl ? <TotalRow plan={plan.total} total={total} pnl={pnl} c={c} /> : null}
         {plan.index ? <IndexLine plan={plan.index} items={items} c={c} /> : null}
         {plan.note ? <TextWidget text={plan.note} maxLines={1} style={{ color: c.muted, fontSize: F.sm }} /> : null}
-        {rows.length === 0 && !error && !refreshing ? <TextWidget text="등록된 종목이 없습니다" maxLines={2} style={{ color: c.muted, fontSize: F.md }} /> : null}
-        {rows.length === 0 && error && !refreshing ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" maxLines={2} style={{ color: c.muted, fontSize: F.md }} /> : null}
+        {rows.length === 0 && !error && !refreshing ? <TextWidget text="등록된 종목이 없습니다" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
+        {rows.length === 0 && error && !refreshing ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
       </FlexWidget>
       {/* 목록은 첫 줄이 보일 높이가 있을 때만 (높이 0 인 목록은 라이브러리가 그리지 못해 위젯이 갱신되지 않는다) */}
       {plan.list && rows.length > 0 ? (

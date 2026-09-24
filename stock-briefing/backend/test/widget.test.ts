@@ -80,7 +80,10 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
   let clock: Date;
   let source: { close: string; fail: boolean };
   let indices: ReturnType<typeof fakeIndices>;
-  const get = (headers: Record<string, string> = {}) => app.inject({ method: "GET", url: "/api/widget", headers });
+  /** 새 앱: 지수 줄을 그릴 수 있다고 알린다 (?indices=1) */
+  const get = (headers: Record<string, string> = {}) => app.inject({ method: "GET", url: "/api/widget?indices=1", headers });
+  /** 예전 앱(runtime 1.3.0): 쿼리 없이 */
+  const getOld = (headers: Record<string, string> = {}) => app.inject({ method: "GET", url: "/api/widget", headers });
   const later = (sec: number) => (clock = new Date(clock.getTime() + sec * 1000));
 
   beforeEach(async () => {
@@ -177,10 +180,32 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     expect((await get()).json().features).toEqual({ widgetPnlToggle: false, widgetIndexLine: true });
   });
 
+  it("검토 지적: 예전 앱(?indices=1 없음)에는 지수를 넣지도 부르지도 않는다 — 나스닥·환율이 바뀌어도 304 그대로", async () => {
+    const r1 = await getOld();
+    expect(r1.statusCode).toBe(200);
+    expect(r1.json()).not.toHaveProperty("indices");
+    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true });
+    expect(indices.calls).toBe(0);
+    const etag = String(r1.headers["etag"]);
+    source.close = "3,500.00";
+    later(31);
+    expect((await getOld({ "if-none-match": etag })).statusCode).toBe(304);
+    expect(indices.calls).toBe(0);
+    // 같은 서버에서 새 앱은 지수를 받고, 본문이 달라 ETag 도 다르다 (예전 앱이 받아 둔 ETag 로 304 가 나지 않는다)
+    const r2 = await get({ "if-none-match": etag });
+    expect(r2.statusCode).toBe(200);
+    expect(r2.json().indices[0].value).toBe(3500);
+    expect(String(r2.headers["etag"])).not.toBe(etag);
+    // 다른 값·빈 값은 새 앱 표시로 보지 않는다
+    for (const q of ["indices=0", "indices=", "indices=true"]) expect((await app.inject({ method: "GET", url: `/api/widget?${q}` })).json()).not.toHaveProperty("indices");
+  });
+
   it("예전 앱과 호환: 예전 칸(v·market·stocks·briefings·latestIds)은 그대로이고 새 칸은 더해지기만 한다", async () => {
     const body = (await get()).json();
     expect(body.v).toBe(1);
     expect(Object.keys(body).sort()).toEqual(["briefings", "features", "indices", "latestIds", "market", "stocks", "v"]);
+    // 예전 앱이 받는 응답: 예전 칸 + features 만
+    expect(Object.keys((await getOld()).json()).sort()).toEqual(["briefings", "features", "latestIds", "market", "stocks", "v"]);
     expect(body.stocks[0].q).toHaveLength(7);
     expect(body.stocks[0].e).toHaveLength(5);
     // 플래그·지수 없이 만들면 예전 응답과 같은 모양

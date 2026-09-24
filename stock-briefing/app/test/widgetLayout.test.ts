@@ -10,6 +10,7 @@ import {
   assetSize,
   briefingItemHeight,
   disclaimerHeight,
+  EMPTY_LINES,
   PAD,
   planAsset,
   planBriefing,
@@ -147,7 +148,9 @@ function holdingsVertical(i: HoldingsInput, p: HoldingsPlan): string[] {
     if (listH < listMinHeight(s)) bad.push(`목록 ${listH} < 첫 줄 ${listMinHeight(s)}`);
     if (Math.abs(p.listH - listH) > 0.001) bad.push(`목록 어림 ${p.listH} ≠ ${listH}`);
   }
-  if (p.index && (!p.list || listH < p.rows.rowH)) bad.push("지수 줄 때문에 목록이 한 줄도 안 보임");
+  if (p.index && i.rows.length && (!p.list || listH < p.rows.rowH)) bad.push("지수 줄 때문에 목록이 한 줄도 안 보임");
+  // 종목이 없으면 목록 대신 안내 문구(최대 두 줄)가 들어갈 자리 (검토 지적: 종목 0개면 자리가 있어도 지수 줄을 감추던 것)
+  if (p.index && !i.rows.length && listH < EMPTY_LINES * lineHeight(F.md, s)) bad.push("지수 줄 때문에 빈 목록 안내가 안 보임");
   return bad;
 }
 
@@ -202,6 +205,44 @@ describe("3-23 글자 폭 어림은 실제 글꼴보다 넓다 (보수적)", () 
     ["원", 0.92],
   ];
   for (const [ch, em] of ROBOTO) it(`'${ch}' ${em}em 이상`, () => expect(charEm(ch)).toBeGreaterThanOrEqual(em));
+
+  /** 굵은 글자 한 자의 어림 폭 (em): textWidth(bold) 에서 여유(SLACK)를 뺀 것 */
+  const boldEm = (ch: string) => (textWidth(ch, 100, 1, true) - textWidth("", 100, 1, true)) / 100;
+  // 검토 지적: 합계(800)·가격·등락률·손익(700)은 굵은 글자라 굵기 계수(BOLD)에 기댄다 → 실제 굵은 글꼴 폭과 견준다.
+  // 로컬 글꼴 파일의 hmtx 전진 폭을 잰 값 (Roboto v2 Bold 2048 단위, 맑은 고딕 Bold — 한글 대체 글꼴 중 넓은 쪽, 본고딕 0.92 보다 넓다)
+  const ROBOTO_BOLD: [string, number][] = [
+    ["0", 0.5737],
+    ["9", 0.5737],
+    [",", 0.2441],
+    [".", 0.2905],
+    ["%", 0.7383],
+    ["+", 0.5459],
+    ["-", 0.3877],
+    ["−", 0.5557],
+    ["(", 0.3511],
+    [")", 0.3525],
+    ["$", 0.5737],
+    [" ", 0.249],
+    [":", 0.2822],
+    ["/", 0.3735],
+    ["·", 0.3013],
+  ];
+  const HANGUL_BOLD: [string, number][] = [
+    ["원", 1],
+    ["누", 1],
+    ["적", 1],
+    ["당", 1],
+    ["일", 1],
+  ];
+  for (const [ch, em] of [...ROBOTO_BOLD, ...HANGUL_BOLD]) it(`굵은 '${ch}' ${em}em 이상`, () => expect(boldEm(ch)).toBeGreaterThanOrEqual(em));
+  it("굵은 숫자 줄 전체도 실제 굵은 글꼴보다 넓다 (합계·손익·가격 예)", () => {
+    // Roboto 숫자는 굵기마다 모두 같은 폭 (잰 값: 0·1·4·7·9 모두 0.5737)
+    const real = (t: string) => [...t].reduce((a, ch) => a + ([...ROBOTO_BOLD, ...HANGUL_BOLD].find(([c]) => c === (/\d/.test(ch) ? "0" : ch))?.[1] ?? NaN), 0);
+    for (const t of ["123,456,789원", "누적 -12,345,678원 (-12.34%)", "당일 +2,868,108원 (+3.78%)", "$12,345.67", "−1.13%"]) {
+      expect(Number.isFinite(real(t))).toBe(true);
+      expect(textWidth(t, 20, 1.3, true)).toBeGreaterThan(real(t) * 20 * 1.3);
+    }
+  });
   it("굵은 글자·배율·여유가 폭에 들어간다", () => {
     expect(textWidth("123", 10, 1)).toBeCloseTo(0.6 * 3 * 10 + 2, 6);
     expect(textWidth("123", 10, 1.3, true)).toBeGreaterThan(textWidth("123", 10, 1.3));

@@ -136,10 +136,14 @@ export async function readPnlMode(): Promise<PnlMode> {
   }
 }
 
+export async function setPnlMode(mode: PnlMode): Promise<void> {
+  await AsyncStorage.setItem(PNL_KEY, mode).catch(() => undefined);
+}
+
 /** 누적 ↔ 당일을 바꾸고 바뀐 값을 돌려준다 */
 export async function togglePnlMode(): Promise<PnlMode> {
   const next: PnlMode = (await readPnlMode()) === "day" ? "cumulative" : "day";
-  await AsyncStorage.setItem(PNL_KEY, next).catch(() => undefined);
+  await setPnlMode(next);
   return next;
 }
 
@@ -261,6 +265,12 @@ async function legacyUntil(apiUrl: string): Promise<number> {
   }
 }
 
+/**
+ * 위젯 응답 주소. indices=1 은 "지수 줄을 그릴 수 있는 앱"이라는 표시다 — 서버는 이 표시가 있을 때만 지수를 넣는다
+ * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다
+ */
+const WIDGET_PATH = "/api/widget?indices=1";
+
 /** /api/widget 한 번: 304 면 저장해 둔 본문, 받으면 저장. 예전 서버(404·모양이 다른 응답)면 null */
 async function fetchPayload(apiUrl: string, token: string, now: number): Promise<WidgetPayload | null> {
   if (now < (await legacyUntil(apiUrl))) return null;
@@ -272,7 +282,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number): Promise
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
   try {
-    const res = await fetch(`${apiUrl}/api/widget`, {
+    const res = await fetch(`${apiUrl}${WIDGET_PATH}`, {
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
@@ -341,6 +351,8 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, fetchedAt: Date.now(), error: null, filled: [], market: null, indices: null, features: NO_FEATURES };
   const last = await readLastStocks(apiUrl);
   let full = false;
+  /** 방금 서버에서 받은 응답인지 (304 도 서버가 지금 값이라고 답한 것) */
+  let fresh = false;
   try {
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
@@ -359,6 +371,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.featuresAt = out.fetchedAt;
       if (payload.latestIds) out.latestIds = payload.latestIds;
       full = true;
+      fresh = !reuse;
     } else {
       [stocks, out.briefings] = await Promise.all([
         opts.stocks ? getJson<RegisteredWithQuote[]>(`${apiUrl}/api/stocks?quotes=1`, apiToken) : Promise.resolve([]),
@@ -391,8 +404,32 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.fetchedAt = last.at;
     }
   }
+  // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 지수·플래그를 옛 응답으로 덮지 않는다
+  if (full && !fresh) await keepNewer(out, apiUrl);
   await saveWidgetView(full ? out : await mergeLegacy(out, apiUrl, opts), apiUrl);
   return out;
+}
+
+/**
+ * 받아 둔 /api/widget 응답을 다시 쓸 때(위젯 스스로 갱신 — 장중 15분·휴장 2시간까지 재사용, 조회 실패):
+ * 마지막으로 그린 데이터(앱 즉시 갱신이 적은 것)의 지수·플래그가 그 응답보다 늦게 받은 것이면 그쪽을 쓴다 (pushWidgetData 와 같은 규칙).
+ * 그러지 않으면 앱 갱신과 위젯 갱신이 번갈아 가며 손익 전환 칸·지수 줄이 켜졌다 꺼졌다 한다
+ */
+async function keepNewer(out: WidgetData, apiUrl: string): Promise<void> {
+  const prev = await readWidgetView(apiUrl);
+  if (!prev || out.featuresAt === undefined) return;
+  const at = out.featuresAt;
+  // 응답에 지수가 없어도(플래그 꺼짐·조회 실패) 그 응답의 시각으로 견준다 — 더 옛 지수가 되살아나지 않게
+  const idx = newest([{ at: out.indicesAt ?? at, list: out.indices }, prev.indices ? { at: prev.indicesAt ?? prev.fetchedAt, list: prev.indices } : null]);
+  if (idx && idx.list !== out.indices) {
+    out.indices = idx.list;
+    out.indicesAt = idx.at;
+  }
+  const flags = newest([{ at, flags: out.features }, prev.featuresAt !== undefined ? { at: prev.featuresAt, flags: prev.features } : null]);
+  if (flags && flags.flags !== out.features) {
+    out.features = flags.flags;
+    out.featuresAt = flags.at;
+  }
 }
 
 /** 예전 서버에서 한쪽만 받았으면(잔고만·브리핑만) 받지 않은 쪽은 마지막으로 그린 값을 남긴다 */

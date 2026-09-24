@@ -9,8 +9,8 @@ import type { RegisteredWithQuote } from "./stockService.js";
  *  - 장 상태 칩: 앱 잔고 탭 띠와 같은 규칙(/api/market/status 기준)
  *  - 브리핑: 보유 비중(원화 환산 평가금) 상위 3종목의 최신 요약 첫 줄 (위젯이 한 줄만 보여 준다)
  *  - features: 위젯이 쓰는 기능 플래그만 (위젯은 /api/features 를 따로 받지 않는다). 예전 앱은 모르는 칸이라 무시한다
- *  - indices: 잔고 위젯 지수 줄 (코스피·나스닥·원/달러). widgetIndexLine 이 켜져 있을 때만 — 끄면 지수를 부르지도 넣지도 않아
- *    ETag 가 지수 값에 따라 바뀌지 않는다. 다만 features 칸은 늘 들어가므로 본문·ETag 가 예전(main) 서버와 바이트까지 같지는 않다
+ *  - indices: 잔고 위젯 지수 줄 (코스피·나스닥·원/달러). widgetIndexLine 이 켜져 있고 새 앱이 물을 때(?indices=1)만 — 아니면 지수를 부르지도
+ *    넣지도 않아 ETag 가 지수 값에 따라 바뀌지 않는다. 다만 features 칸은 늘 들어가므로 본문·ETag 가 예전(main) 서버와 바이트까지 같지는 않다
  */
 
 export interface WidgetMarket {

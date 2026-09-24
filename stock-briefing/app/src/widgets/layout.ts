@@ -409,6 +409,9 @@ export interface HoldingsPlan<T extends IndexInput = IndexInput> {
   rows: RowsPlan;
 }
 
+/** 종목이 없을 때 안내 문구("등록된 종목이 없습니다" · 불러오지 못함)의 최대 줄 수 */
+export const EMPTY_LINES = 2;
+
 /** 목록을 넣을 최소 높이: 첫 줄의 이름·가격 줄이 온전히 보일 만큼 (위 여백 + 구분선 + 한 줄) */
 export function listMinHeight(scale: number): number {
   return space.xs + 1 + lineHeight(F.base, scale);
@@ -422,7 +425,7 @@ export function listMinHeight(scale: number): number {
  *  3. 목록, 메모 없이(갱신 실패는 머리 줄 기준 시각 자리에) + 전환 칸   4. 목록만
  *  5~8. 같은 순서로 목록 없이   9. 마지막: 모두 빼고 합계 줄 여백 0 (가장 낮은 합계 배치)
  * 그래서 갱신이 실패해 메모가 생겨도 목록이 사라지지 않는다. 각 단계에서 합계 줄은 폭에 들어가는 후보(totalOptions) 중 높이가 들어가는 첫 것.
- * 지수 줄은 compact 가 아니고, 넣은 뒤에도 목록이 한 줄 이상 보일 때만.
+ * 지수 줄은 compact 가 아니고, 넣은 뒤에도 목록이 한 줄 이상 보일 때만. 종목이 없으면(목록 없음) 크기와 상관없이 안내 문구 두 줄이 남을 때.
  */
 export function planHoldings<T extends IndexInput>(i: HoldingsInput & { indices: T[] }): HoldingsPlan<T> {
   const s = i.scale;
@@ -466,9 +469,11 @@ export function planHoldings<T extends IndexInput>(i: HoldingsInput & { indices:
   const header = planHeader(!pick.note && noteText && i.alert ? { ...i.header, sub: [i.alert, ...i.header.sub] } : i.header, i.width, s);
   let listH = pick.room;
   let index: IndexPlan<T> | null = null;
-  if (pick.list && size !== "compact" && i.indices.length) {
+  // 종목이 있으면 목록이 한 줄 이상 남을 때만(compact 는 목록 자리), 종목이 없으면 빈 목록 안내 두 줄이 남을 때만
+  const keep = hasRows ? (pick.list && size !== "compact" ? rows.rowH : null) : EMPTY_LINES * lineHeight(F.md, s);
+  if (keep !== null && i.indices.length) {
     const plan = planIndexLine(i.indices, content, s, size === "large" ? 2 : 1);
-    if (plan && listH - (plan.height + space.xs) >= rows.rowH) {
+    if (plan && listH - (plan.height + space.xs) >= keep) {
       index = plan;
       listH -= plan.height + space.xs;
     }
