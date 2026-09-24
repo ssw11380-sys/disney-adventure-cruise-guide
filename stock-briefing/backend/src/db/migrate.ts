@@ -5,7 +5,7 @@ export type Dialect = "sqlite" | "postgres";
 
 /**
  * 스키마 마이그레이션. 아직 규모가 작아 순차 버전 배열로 관리한다.
- * SQLite/Postgres 공용. 방언 차이는 자동 증가 id 컬럼뿐이다.
+ * SQLite/Postgres 공용. 방언 차이는 자동 증가 id 컬럼과 v5(Postgres 실수 컬럼을 8바이트로)뿐이다.
  */
 const idColumn = (dialect: Dialect) => (c: ColumnDefinitionBuilder) =>
   dialect === "postgres" ? c.primaryKey().generatedAlwaysAsIdentity() : c.primaryKey().autoIncrement();
@@ -154,6 +154,18 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
         .addColumn("platform", "text")
         .execute();
       await db.schema.createIndex("idx_app_errors_at").ifNotExists().on("app_errors").column("at").execute();
+    },
+  },
+  {
+    version: 5,
+    up: async (db, dialect) => {
+      // Postgres 의 real 은 4바이트(float4)라 소수 수량이 바뀌어 읽힌다 (105.234567 → 105.234566).
+      // 그러면 토스 동기화가 매번 "수량 변경"으로 본다. SQLite 의 REAL 은 원래 8바이트라 할 일이 없다.
+      // 기존 값은 text 를 거쳐 옮긴다: float4 를 바로 넓히면 0.1 → 0.10000000149011612 처럼 이진 오차가 드러난다
+      if (dialect !== "postgres") return;
+      await sql`alter table registered_stocks
+        alter column quantity type double precision using quantity::text::double precision,
+        alter column avg_price type double precision using avg_price::text::double precision`.execute(db);
     },
   },
 ];

@@ -208,7 +208,7 @@ export class TossSyncService {
           .values({ code: h.code, name, market, quantity: h.quantity, avg_price: h.avgPrice, memo: null, created_at: ts, updated_at: ts })
           .execute();
         result.added.push(h.code);
-      } else if (existing.quantity !== h.quantity || existing.avg_price !== h.avgPrice || existing.name !== name) {
+      } else if (!sameAmount(existing.quantity, h.quantity) || !sameAmount(existing.avg_price, h.avgPrice) || existing.name !== name) {
         await this.db
           .updateTable("registered_stocks")
           .set({ quantity: h.quantity, avg_price: h.avgPrice, name, market, updated_at: ts })
@@ -280,6 +280,15 @@ export class TossSyncService {
 }
 
 type PerAccount = { account: number; holdings: TossHolding[]; overview: OverviewForBook & { purchaseUsd: number | null } };
+
+/**
+ * 수량·평단이 같은지. 여러 계좌 합산의 부동소수 끝자리 차이(계좌 순서가 바뀌면 0.1 + 0.2 + 0.3 이 0.6 이 되기도 한다)는 같은 값으로 본다.
+ * 허용 폭(상대 1e-9)은 실제 매매로 바뀌는 수량보다 훨씬 작다
+ */
+function sameAmount(a: number | null, b: number | null): boolean {
+  if (a === null || b === null) return a === b;
+  return Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
+}
 
 function emptyAccounts(): ProviderError {
   return new ProviderError("toss-openapi", "토스 계좌 목록이 비었습니다 (일시 오류일 수 있어 이번 동기화는 건너뜁니다)");

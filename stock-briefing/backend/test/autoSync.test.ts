@@ -116,6 +116,18 @@ describe("TossSyncService 전량 매도 처리", () => {
     expect(r.holdings).toEqual([]);
     await db.destroy();
   });
+
+  it("수량이 부동소수 끝자리만 다르면 변경으로 보지 않고, 실제로 바뀐 소수 수량은 반영한다", async () => {
+    const { db, toss, sync } = await setup();
+    toss.holdingsList = [h("TSLA", 0.6, 300, "USD")];
+    await sync.importHoldings();
+    // 지난 동기화가 계좌 순서만 달라 0.1 + 0.2 + 0.3 = 0.6000000000000001 을 저장했다고 치자
+    await db.updateTable("registered_stocks").set({ quantity: 0.1 + 0.2 + 0.3 }).where("code", "=", "TSLA").execute();
+    expect((await sync.importHoldings()).unchanged).toEqual(["TSLA"]);
+    toss.holdingsList = [h("TSLA", 0.600001, 300, "USD")];
+    expect((await sync.importHoldings()).updated).toEqual(["TSLA"]);
+    await db.destroy();
+  });
 });
 
 describe("HoldingsAutoSync", () => {

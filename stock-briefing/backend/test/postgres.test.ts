@@ -1,10 +1,13 @@
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createDb, migrate, type Db } from "../src/db/index.js";
 import { BACKUP_TABLES, BackupService, decodeBackup, restoreBackup } from "../src/services/backupService.js";
+import { DETAIL_KEY, SNAPSHOT_KEY, TossSyncService } from "../src/services/tossSyncService.js";
+import { KrwCostBook } from "../src/services/krwCostBook.js";
+import type { TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,7 +54,62 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  const qtyColumns = async () =>
+    (
+      await sql<{ column_name: string; data_type: string }>`select column_name, data_type from information_schema.columns
+        where table_name = 'registered_stocks' and column_name in ('quantity', 'avg_price') order by column_name`.execute(db)
+    ).rows;
+  /** 테스트가 실패해도 넣은 행을 지운다 (남으면 뒤 테스트의 등록 목록이 달라진다) */
+  const cleanupStock = (code: string) =>
+    onTestFinished(async () => {
+      await db.deleteFrom("registered_stocks").where("code", "=", code).execute();
+    });
+  const insertStock = async (code: string, quantity: number, avgPrice: number) => {
+    cleanupStock(code);
+    await db.insertInto("registered_stocks").values({ code, name: code, market: "NASDAQ", quantity, avg_price: avgPrice, memo: null, created_at: "t", updated_at: "t" }).execute();
+  };
+  const readStock = (code: string) => db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", code).executeTakeFirstOrThrow();
+
+  it("소수 수량·평단이 그대로 읽힌다 (real 이면 105.234567 → 105.234566)", async () => {
+    expect(await qtyColumns()).toEqual([
+      { column_name: "avg_price", data_type: "double precision" },
+      { column_name: "quantity", data_type: "double precision" },
+    ]);
+    await insertStock("PGQTY", 105.234567, 187.123456);
+    expect(await readStock("PGQTY")).toEqual({ quantity: 105.234567, avg_price: 187.123456 });
+  });
+
+  it("real 로 만든 기존 DB 도 v5 에서 보이던 값 그대로 옮긴다 (0.1 → 0.10000000149011612 가 되지 않게)", async () => {
+    await sql`alter table registered_stocks alter column quantity type real, alter column avg_price type real`.execute(db);
+    await sql`delete from schema_version where version = 5`.execute(db);
+    await insertStock("PGOLD", 0.1, 123.45);
+    await migrate(db, "postgres");
+    expect((await qtyColumns()).map((c) => c.data_type)).toEqual(["double precision", "double precision"]);
+    expect(await readStock("PGOLD")).toEqual({ quantity: 0.1, avg_price: 123.45 });
+  });
+
+  it("여러 계좌에 나눠 든 소수 수량을 동기화해도 다음 동기화에서 변경으로 보지 않는다", async () => {
+    cleanupStock("PGSYNC");
+    onTestFinished(async () => {
+      await db.deleteFrom("meta").where("key", "in", [SNAPSHOT_KEY, DETAIL_KEY, KrwCostBook.KEY]).execute(); // 토스 연동 흔적도 남기지 않게
+    });
+    const toss = {
+      accounts: async () => [1, 2].map((seq) => ({ accountNo: String(seq), accountSeq: seq, accountType: "BROKERAGE" })),
+      holdingsWithOverview: async (seq: number) => ({
+        items: [{ code: "PGSYNC", name: "PGSYNC", currency: "USD", quantity: seq === 1 ? 100.1 : 5.134567, avgPrice: 250, lastPrice: null }],
+        overview: { purchaseKrw: 0, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null },
+      }),
+      stockInfos: async () => new Map([["PGSYNC", { name: "PGSYNC", market: "NASDAQ" }]]),
+      ordersForBook: async () => [],
+      usdKrwAt: async () => 1400,
+    } as unknown as TossOpenApiProvider;
+    const sync = new TossSyncService(db, toss, () => new Date("2026-09-22T00:00:00+09:00"));
+    expect((await sync.importHoldings()).added).toEqual(["PGSYNC"]);
+    expect((await readStock("PGSYNC")).quantity).toBe(105.234567);
+    expect((await sync.importHoldings()).unchanged).toEqual(["PGSYNC"]);
   });
 
   it("종목 마스터 → 검색 → 등록 → 브리핑 → 조회 전체 흐름", async () => {
