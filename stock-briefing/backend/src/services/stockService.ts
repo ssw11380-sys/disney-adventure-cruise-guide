@@ -1,6 +1,7 @@
 import { EXCLUDED_KEY, parseCodes, SNAPSHOT_KEY, type TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import { CandleCache } from "./candleCache.js";
+import { marketContext } from "./marketContext.js";
 import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
@@ -117,7 +118,7 @@ export class StockService {
   constructor(private readonly deps: StockServiceDeps) {
     this.now = deps.now ?? (() => new Date());
     this.ttl = deps.quoteCacheTtlMs ?? 60_000;
-    this.candleCache = new CandleCache((c, p, n) => deps.quotes.getCandles(c, p, n), () => this.now().getTime());
+    this.candleCache = new CandleCache((c, p, n) => deps.quotes.getCandles(c, p, n), () => this.now().getTime(), candleSession);
   }
 
   // ── 종목 마스터 ────────────────────────────────────────────────
@@ -217,14 +218,16 @@ export class StockService {
     }
   }
 
-  /** 외부 검색 결과 (5분 캐시: 같은 말을 다시 치거나 지웠다 다시 쳐도 바로, 3-18) */
+  /** 외부 검색 결과 (1분 캐시: 같은 말을 다시 치거나 지웠다 다시 쳐도 바로, 3-18). 빈 결과는 담지 않는다(일시 장애일 수 있음) */
   private readonly searchCache = new Map<string, { at: number; results: ListedStock[] }>();
   private async remoteSearch(q: string, limit: number): Promise<ListedStock[]> {
-    const key = `${q.toUpperCase()}|${limit}`;
+    const key = `${q.replace(/\s+/g, " ").toUpperCase()}|${limit}`;
     const t = this.now().getTime();
     const hit = this.searchCache.get(key);
-    if (hit && t - hit.at < 5 * 60_000) return hit.results;
+    if (hit && t - hit.at < 60_000) return hit.results;
     const results = await this.deps.search.search(q, limit);
+    if (results.length === 0) return results;
+    this.searchCache.delete(key);
     this.searchCache.set(key, { at: t, results });
     if (this.searchCache.size > 500) this.searchCache.delete(this.searchCache.keys().next().value!);
     return results;
@@ -732,10 +735,11 @@ export class StockService {
     return this.candleCache.get(normalizeCode(code), period, count);
   }
 
-  /** 기동 뒤: 등록 종목의 기본 차트(일봉 800개)를 한 종목씩 미리 받아 둔다 (처음 여는 차트도 기다리지 않게). 실패는 무시 */
-  async warmCandles(codes?: string[], count = 800): Promise<void> {
+  /** 기동 뒤: 등록 종목의 기본 차트(일봉 800개)를 한 종목씩 미리 받아 둔다 (처음 여는 차트도 기다리지 않게). 실패는 무시, 종목 사이 gapMs 쉼 */
+  async warmCandles(codes?: string[], count = 800, gapMs = 300): Promise<void> {
     for (const code of codes ?? (await this.list()).map((s) => s.code)) {
-      await this.candleCache.get(code, "D", count).catch(() => undefined);
+      await this.candleCache.get(normalizeCode(code), "D", count).catch(() => undefined);
+      if (gapMs > 0) await new Promise((r) => setTimeout(r, gapMs));
     }
   }
 
@@ -823,4 +827,12 @@ function krwBasis(
   if (usdNow <= usdBook) return { costBasisKrw: krwCost.krw * (usdNow / usdBook), krwCostSource: "estimated" };
   const fx = q.fxRate ?? (q.priceKrw && q.price ? q.priceKrw / q.price : null);
   return fx ? { costBasisKrw: krwCost.krw + (usdNow - usdBook) * fx, krwCostSource: "estimated" } : none;
+}
+
+/** 차트 캐시용 장 구간: 시장·단계·마지막 정규장·현지 날짜가 같을 때만 옛 봉을 쓴다 (달력 조회 없이 시계로) */
+function candleSession(code: string, at: number): { key: string; regular: boolean } {
+  const now = new Date(at);
+  const ctx = marketContext(code, null, now);
+  const date = now.toLocaleDateString("en-CA", { timeZone: ctx.market === "KR" ? "Asia/Seoul" : "America/New_York" });
+  return { key: `${ctx.market}|${ctx.phase}|${ctx.todayIncomplete}|${ctx.lastRegularDate}|${date}`, regular: ctx.phase === "regular" };
 }

@@ -24,7 +24,16 @@ describe("검색 (3-18)", () => {
     expect(pickSearch("삼성", full("F"), local("L"))).toMatchObject({ data: "F", pending: false });
     expect(pickSearch("삼성", full("old", true), local("L"))).toMatchObject({ data: "L", pending: true }); // 마스터가 먼저
     expect(pickSearch("삼성", full("old", true), local("oldL", true))).toMatchObject({ data: "old", pending: true }); // 이전 결과 유지
+    expect(pickSearch("삼성", full("old", true), local("oldL", true))).toMatchObject({ previous: true }); // 흐리게
+    expect(pickSearch("삼성", full("old", true), local("L"))).toMatchObject({ previous: false });
     expect(pickSearch("삼성", full(undefined, false, true), local(undefined))).toMatchObject({ isError: true });
+    // 토스 검색 실패 + 마스터 결과 있음 → 마스터 결과를 끝난 결과로, 실패는 error 로
+    const r = pickSearch("삼성", full(undefined, false, true), local("L"));
+    expect(r).toMatchObject({ data: "L", pending: false, isError: false });
+    expect(r.error).toBeInstanceOf(Error);
+    // 토스 실패, 마스터는 아직(이전 결과) → 기다린다
+    expect(pickSearch("삼성", full(undefined, false, true), local("oldL", true))).toMatchObject({ data: "oldL", pending: true, previous: true });
+    expect(pickSearch("삼성", full(undefined, false, true), { data: "oldL", isPlaceholderData: true, isError: true })).toMatchObject({ isError: true });
     expect(pickSearch("", full("F"), local("L"))).toMatchObject({ data: undefined, pending: false });
   });
 });

@@ -41,8 +41,49 @@ describe("차트 봉 캐시 (3-18)", () => {
     const c = new CandleCache(async (code, p, n) => (calls++, series(code, p, Math.min(n, 50))), () => 0);
     await c.get("NEW", "M", 10);
     await c.get("NEW", "M", 120); // 10개만 받아 둠 → 새로 (50개뿐)
-    await c.get("NEW", "M", 120); // 50 < 120 이지만 원래 50개뿐 → 캐시
+    await c.get("NEW", "M", 120); // 50 < 120 이지만 원래 50개뿐 → 캐시 (새 값일 때만)
     expect(calls).toBe(2);
+  });
+
+  it("받은 개수가 모자란 봉은 새 값 시간(60초)이 지나면 기다려 다시 받는다", async () => {
+    let calls = 0;
+    let t = 0;
+    const c = new CandleCache(async (code, p, n) => (calls++, series(code, p, Math.min(n, 50))), () => t);
+    await c.get("NEW", "M", 120);
+    t += 61_000;
+    await c.get("NEW", "M", 120);
+    expect(calls).toBe(2);
+  });
+
+  it("받은 뒤 장 구간이 바뀌면(개장 등) 옛 봉을 주지 않고 기다려 새로 받는다", async () => {
+    let calls = 0;
+    let t = 0;
+    let session = { key: "closed", regular: false };
+    const c = new CandleCache(async (code, p, n) => (calls++, series(code, p, n, calls)), () => t, () => session);
+    await c.get("005930", "D", 10);
+    t += 30 * 60_000;
+    expect((await c.get("005930", "D", 10)).candles[0]!.close).toBe(1); // 같은 구간: 옛 값 바로
+    await new Promise((r) => setTimeout(r, 0));
+    session = { key: "regular", regular: true };
+    t += 1_000;
+    expect((await c.get("005930", "D", 10)).candles[0]!.close).toBe(3); // 구간이 바뀜 → 기다려 새 값
+    t += 11 * 60_000; // 정규장 중 일봉은 10분 넘으면 기다린다
+    expect((await c.get("005930", "D", 10)).candles[0]!.close).toBe(4);
+    expect(c.stats).toMatchObject({ misses: 3, stale: 1 });
+  });
+
+  it("받는 중인 것보다 많이 달라면 끝난 뒤 이어서 한 번 더 받는다", async () => {
+    const asked: number[] = [];
+    const c = new CandleCache(async (code, p, n) => {
+      asked.push(n);
+      await new Promise((r) => setTimeout(r, 5));
+      return series(code, p, n);
+    }, () => 0);
+    const [a, b, d] = await Promise.all([c.get("A", "D", 90), c.get("A", "D", 800), c.get("A", "D", 300)]);
+    expect(a.candles).toHaveLength(90);
+    expect(b.candles).toHaveLength(800);
+    expect(d.candles).toHaveLength(300);
+    expect(asked).toEqual([90, 800]);
   });
 
   it("같은 요청이 겹치면 한 번만, 새로 받기가 실패하면 받아 둔 값을 쓴다", async () => {
