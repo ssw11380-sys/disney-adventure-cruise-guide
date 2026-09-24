@@ -604,7 +604,8 @@ function Readout({
   // 분봉은 시각만 (날짜는 차트 아래 축에 있다) — 십자선으로 옮겨도 한 줄에 들어가게
   const when = c.time ? c.time.slice(11, 16) : c.date.slice(5);
   const v = (x: number) => formatChartValue(x, currency).replace(/원$/, "");
-  const vol = showVolume ? `거래량 ${formatVolume(c.volume)}` : "";
+  // 실시간 체결로 만든 임시 봉은 거래량을 모른다 — 0 으로 보이지 않게 (PF-04, 서버 봉을 다시 받으면 채워진다)
+  const vol = showVolume ? (c.volumeUnknown ? "거래량 집계 중" : `거래량 ${formatVolume(c.volume)}`) : "";
   const a11y = [`${c.date}${c.time ? ` ${c.time.slice(11, 16)}` : ""}`, `종가 ${formatChartValue(c.close, currency)}`, chg !== null ? `${basis.label} ${formatPct(chg)}` : "", `고가 ${v(c.high)}`, `저가 ${v(c.low)}`, `시가 ${v(c.open)}`, vol]
     .filter(Boolean)
     .join(", ");

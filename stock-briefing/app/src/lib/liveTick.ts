@@ -1,4 +1,5 @@
 import type { Currency, Evaluation, Quote, RegisteredStock } from "@/api/types";
+import { sameTradingDay } from "./marketTime";
 
 /** 서버 /api/stream 이 보내는 체결 1건 */
 export interface StreamTick {
@@ -28,13 +29,14 @@ export function latestPerCode(ticks: StreamTick[]): Map<string, StreamTick> {
 
 /**
  * 잔고 목록에 체결 묶음을 한 번에 적용 (3-17). 값이 바뀐 종목만 새 객체, 나머지는 그대로(참조 유지 → 그 줄은 다시 그리지 않음).
- * 바뀐 게 없으면 목록 자체도 그대로 돌려준다.
+ * 바뀐 게 없으면 목록 자체도 그대로 돌려준다. 거래일이 바뀌어 보류한 종목 코드는 held 에 모은다 (시세를 다시 받게)
  */
-export function applyTicksToList<T extends { code: string; quote: Quote | null; quantity: number | null; avgPrice: number | null; evaluation?: Evaluation | null }>(list: T[], ticks: Map<string, StreamTick>): T[] {
+export function applyTicksToList<T extends { code: string; quote: Quote | null; quantity: number | null; avgPrice: number | null; evaluation?: Evaluation | null }>(list: T[], ticks: Map<string, StreamTick>, held?: Set<string>): T[] {
   let changed = false;
   const next = list.map((s) => {
     const tick = ticks.get(s.code);
     if (!tick) return s;
+    if (held && newTradingDay(s.quote, tick)) held.add(s.code);
     const quote = applyTick(s.quote, tick);
     if (quote === s.quote) return s;
     changed = true;
@@ -44,15 +46,28 @@ export function applyTicksToList<T extends { code: string; quote: Quote | null; 
 }
 
 /**
+ * 체결이 받아 둔 시세보다 새 거래일(한국 서울·미국 뉴욕 날짜)의 것인지 (PF-01).
+ * 이때 전일 종가·고가·저가는 지난 거래일 기준이라 섞지 않고, 새 거래일 시세를 다시 받아야 한다
+ */
+export function newTradingDay(quote: Quote | null, tick: StreamTick): boolean {
+  if (!quote || quote.code !== tick.code) return false;
+  const tickAt = Date.parse(tick.timestamp);
+  const quoteAt = Date.parse(quote.asOf);
+  return !Number.isNaN(tickAt) && !Number.isNaN(quoteAt) && tickAt >= quoteAt && !sameTradingDay(quote.asOf, tick.timestamp, quote.code);
+}
+
+/**
  * 체결가를 이미 받아 둔 시세에 덮어쓴다 (서버 StockService.applyLive 와 같은 규칙).
  * 등락은 전일 종가 기준으로 다시 계산하고, 미국 종목은 환율로 원화 환산가도 갱신한다.
  * 시세보다 오래된 체결이거나 값이 같으면 원본을 그대로 돌려준다(참조 유지 → 리렌더 없음).
+ * 시세와 거래일이 다른 체결도 그대로 둔다 — 어제 시세의 전일 종가에 오늘 체결을 대면 등락이 이틀치가 된다 (서버 sameTradingDay 와 같다)
  */
 export function applyTick(quote: Quote | null, tick: StreamTick): Quote | null {
   if (!quote || quote.code !== tick.code) return quote;
   const tickAt = Date.parse(tick.timestamp);
   const quoteAt = Date.parse(quote.asOf);
   if (Number.isNaN(tickAt) || (!Number.isNaN(quoteAt) && tickAt < quoteAt) || tick.price === quote.price) return quote;
+  if (!sameTradingDay(quote.asOf, tick.timestamp, quote.code)) return quote;
   const prevClose = quote.prevClose ?? (quote.change ? quote.price - quote.change : null);
   const change = prevClose !== null ? Math.round((tick.price - prevClose) * 100) / 100 : quote.change;
   const changeRate = prevClose ? Math.round((change / prevClose) * 10000) / 100 : quote.changeRate;

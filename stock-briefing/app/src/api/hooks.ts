@@ -3,8 +3,9 @@ import { featureOn } from "@/lib/features";
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { isTradingHoursKst } from "@/lib/format";
-import { pollInterval, streamFresh } from "@/lib/freshness";
+import { candleRefresh, pollInterval, streamFresh } from "@/lib/freshness";
 import { useLiveStream } from "@/lib/liveStream";
+import { isKrCode } from "@/lib/marketTime";
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
 import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
@@ -290,9 +291,24 @@ export function useMarketCandles(code: string, period: CandlePeriod, count: numb
   });
 }
 
+/**
+ * 종목 차트 봉. 체결 스트림이 마지막 봉을 고치지만 거래량·놓친 체결은 모르므로, 화면이 보이고 그 종목 장이 열려 있으면
+ * 서버 봉을 주기적으로 다시 받는다 (PF-04, 규칙은 lib/freshness 의 candleRefresh). 인라인·전체 화면 차트가 같이 쓴다
+ */
 export function useCandles(code: string, period: CandlePeriod, count = 90) {
   const api = useApi();
-  return useQuery({ queryKey: useKey("candles", code, period, count), queryFn: () => api.getCandles(code, period, count), staleTime: 5 * 60_000, enabled: !!code });
+  const focused = useScreenFocused();
+  const m = useMarketStatus();
+  const { refetchInterval, staleTime } = candleRefresh(period, isKrCode(code) ? m.data?.KR.isOpen : m.data?.US.isOpen);
+  return useQuery({
+    subscribed: focused,
+    queryKey: useKey("candles", code, period, count),
+    queryFn: () => api.getCandles(code, period, count),
+    staleTime,
+    refetchInterval,
+    refetchIntervalInBackground: false,
+    enabled: !!code,
+  });
 }
 
 export function useAnalysis(code: string, kind: AnalysisKind, enabled = true) {

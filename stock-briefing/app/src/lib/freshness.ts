@@ -1,3 +1,5 @@
+import type { CandlePeriod } from "@/api/types";
+
 /**
  * 통신이 끊기거나 늦을 때 화면을 어떻게 보여 줄지 정하는 순수 함수 모음 (RN 의존 없음 → 단위 테스트).
  *  - 한 번이라도 받은 값이 있으면 재조회가 실패해도 화면을 지우지 않는다(오류 화면은 처음 불러오기 실패 때만)
@@ -88,6 +90,17 @@ export function pollInterval(o: { open: boolean; streamFresh: boolean; failing: 
   if (o.failing) return o.open ? 3_000 : 5_000;
   if (o.open && o.streamFresh) return 30_000;
   return o.open ? 3_000 : 60_000;
+}
+
+/**
+ * 종목 차트 봉을 서버에서 다시 받는 주기 (PF-04). 실시간 체결로는 고·저·종만 따라가고 거래량·놓친 체결은 모르므로
+ * 그 종목 장이 열려 있으면 분봉 30초·일·주·월봉 1분마다 서버 봉으로 바로잡는다 (서버 봉 캐시의 새 값 기준 20초·1분에 맞춤).
+ * 장이 닫혀 있으면 멈춘다. 장 상태를 아직 모르면(못 받음) 열린 것으로 본다
+ */
+export function candleRefresh(period: CandlePeriod, open: boolean | undefined): { refetchInterval: number | false; staleTime: number } {
+  const intraday = period === "1m" || period === "5m" || period === "30m";
+  if (open === false) return { refetchInterval: false, staleTime: 5 * 60_000 };
+  return intraday ? { refetchInterval: 30_000, staleTime: 20_000 } : { refetchInterval: 60_000, staleTime: 60_000 };
 }
 
 /** "14:03:21" (한국 시간). 오늘이 아니면 "9/23 14:03" */
