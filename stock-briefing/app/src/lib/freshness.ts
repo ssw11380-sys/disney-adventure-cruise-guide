@@ -129,6 +129,40 @@ export function staleQuoteCount(list: readonly { quote: { stale?: boolean } | nu
   return list ? list.filter((s) => s.quote?.stale === true).length : 0;
 }
 
+/** 지수 띠 항목 중 여기서 쓰는 부분 (구버전 서버는 fetchedAt·stale 없음) */
+export interface IndexFreshness {
+  kind?: "index" | "fx";
+  open: boolean;
+  fetchedAt?: string;
+  stale?: boolean;
+}
+
+/**
+ * 지수 띠 끝 "HH:MM:SS 기준": 서버가 출처에서 값을 받은 시각(fetchedAt) 중 가장 오래된 것.
+ * 앱이 응답을 받은 시각은 서버가 마지막 값을 다시 준 것일 수 있어 쓰지 않는다 (구버전 서버만 받은 시각으로).
+ * stale: 출처 조회가 실패해 마지막 값으로 보여 주는 항목이 있다
+ */
+export function indicesAsOf(list: readonly IndexFreshness[], receivedAt: number): { at: number | null; stale: boolean } {
+  let at: number | null = null;
+  for (const i of list) {
+    const t = i.fetchedAt ? Date.parse(i.fetchedAt) : NaN;
+    if (!Number.isNaN(t)) at = at === null ? t : Math.min(at, t);
+  }
+  return { at: at ?? (receivedAt > 0 ? receivedAt : null), stale: list.some((i) => i.stale === true) };
+}
+
+/** 지수 띠 초록 점: 출처에서 장중을 확인한 지수만 (환율·갱신 실패 항목은 아님) */
+export function indexLive(i: IndexFreshness): boolean {
+  return i.open && i.kind !== "fx" && i.stale !== true;
+}
+
+/** 지수 상세 머리의 상태: 갱신 실패면 "시세 지연"(옛 장중을 이어 쓰지 않는다), 환율은 없음, 지수는 장중·장 마감 */
+export function indexSessionLabel(i: IndexFreshness): string | null {
+  if (i.stale === true) return "시세 지연";
+  if (i.kind === "fx") return null;
+  return i.open ? "장중" : "장 마감";
+}
+
 /** 잔고 상단 상태 줄 끝: "보유 17 · 관심 1 · 시세 지연 2" */
 export function holdingsSuffix(o: { held: number; watch: number; stale: number }): string {
   return `보유 ${o.held}${o.watch ? ` · 관심 ${o.watch}` : ""}${o.stale ? ` · 시세 지연 ${o.stale}` : ""}`;

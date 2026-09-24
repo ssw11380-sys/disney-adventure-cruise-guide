@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockLabel, connection, holdingsSuffix, reconcileLabel, staleQuoteCount, liveLabel, openMaxAge, parseBriefingId, parseStockCode, pollInterval, staleBanner, streamFresh, viewState, type QueryLike } from "@/lib/freshness";
+import { clockLabel, connection, holdingsSuffix, indexLive, indexSessionLabel, indicesAsOf, reconcileLabel, type IndexFreshness, staleQuoteCount, liveLabel, openMaxAge, parseBriefingId, parseStockCode, pollInterval, staleBanner, streamFresh, viewState, type QueryLike } from "@/lib/freshness";
 
 // 2026-09-24 14:03:21 KST
 const NOW = Date.parse("2026-09-24T14:03:21+09:00");
@@ -92,5 +92,44 @@ describe("토스 대조 줄 (3-13)", () => {
     expect(reconcileLabel({ last: { at: "x", diffKrw: 0, diffPct: 0, missing: 0 } }, when)).toBe("차이 0원 (0.00%) · 9/28 10:20");
     expect(reconcileLabel({ last: { at: "x", diffKrw: 5, diffPct: 0.1, missing: 2 } }, when)).toBe("시세 지연 등으로 이번엔 비교 못 함 · 9/28 10:20");
     expect(reconcileLabel({ last: { at: "x", diffKrw: 0, diffPct: 0, missing: 1, qtyMismatch: ["005930"] } }, when)).toBe("보유 수량이 토스와 다른 종목 1개 · 9/28 10:20");
+  });
+});
+
+describe("지수 띠·상세의 기준 시각과 장중 (DISC-01)", () => {
+  const AT11 = "2026-09-24T11:00:00+09:00";
+  const RECV21 = Date.parse("2026-09-24T21:00:00+09:00"); // 앱이 응답을 받은 시각 (서버는 11:00 값을 다시 줌)
+  const idx = (o: Partial<IndexFreshness> = {}): IndexFreshness => ({ kind: "index", open: true, fetchedAt: AT11, stale: false, ...o });
+
+  it("출처가 실패해 서버가 마지막 값을 다시 줘도 기준은 앱이 받은 시각(21:00)이 아니라 서버가 출처에서 받은 시각(11:00)", () => {
+    const b = indicesAsOf([idx({ stale: true, open: false }), idx({ kind: "fx", stale: true, open: false })], RECV21);
+    expect(b).toEqual({ at: Date.parse(AT11), stale: true });
+    expect(clockLabel(b.at!, RECV21)).toBe("11:00:00");
+  });
+  it("일부만 실패하면 가장 오래된 받은 시각 + 지연", () => {
+    const b = indicesAsOf([idx({ fetchedAt: "2026-09-24T21:00:00+09:00" }), idx({ stale: true })], RECV21);
+    expect(b).toEqual({ at: Date.parse(AT11), stale: true });
+  });
+  it("모두 정상이면 지연 아님", () => expect(indicesAsOf([idx(), idx()], RECV21)).toEqual({ at: Date.parse(AT11), stale: false }));
+  it("구버전 서버(fetchedAt·stale 없음)는 앱이 받은 시각으로", () => {
+    expect(indicesAsOf([{ kind: "index", open: true }], RECV21)).toEqual({ at: RECV21, stale: false });
+  });
+  it("받은 값이 없으면 기준 시각 없음", () => expect(indicesAsOf([], 0)).toEqual({ at: null, stale: false }));
+
+  it("갱신 실패 항목은 open 이 남아 있어도 장중(초록 점)·'장중'으로 보이지 않는다", () => {
+    expect(indexLive(idx({ stale: true, open: true }))).toBe(false);
+    expect(indexSessionLabel(idx({ stale: true, open: true }))).toBe("시세 지연");
+    expect(indexSessionLabel(idx({ kind: "fx", stale: true }))).toBe("시세 지연");
+  });
+  it("정상 항목: 장중·장 마감, 환율은 장 상태 없음", () => {
+    expect(indexLive(idx())).toBe(true);
+    expect(indexSessionLabel(idx())).toBe("장중");
+    expect(indexLive(idx({ open: false }))).toBe(false);
+    expect(indexSessionLabel(idx({ open: false }))).toBe("장 마감");
+    expect(indexLive(idx({ kind: "fx" }))).toBe(false);
+    expect(indexSessionLabel(idx({ kind: "fx" }))).toBeNull();
+  });
+  it("구버전 서버(stale 없음)의 장중 지수는 그대로 장중", () => {
+    expect(indexLive({ kind: "index", open: true })).toBe(true);
+    expect(indexSessionLabel({ open: true })).toBe("장중");
   });
 });

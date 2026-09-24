@@ -1,7 +1,156 @@
-import { describe, expect, it } from "vitest";
-import { fxMonthly, MarketIndices } from "../src/providers/market/indices.js";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { describe, expect, it, vi } from "vitest";
+import { fxMonthly, INDEX_SOURCES, MarketIndices, type MarketIndex } from "../src/providers/market/indices.js";
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+
+/** p 가 ms 안에 끝나면 그 값, 아니면 "pending" (멈춘 조회를 테스트 제한 시간까지 기다리지 않게) */
+async function settle<T>(p: Promise<T>, ms: number): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"pending">((r) => (timer = setTimeout(() => r("pending"), ms)));
+  try {
+    return await Promise.race([p, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 9개 출처가 모두 정상일 때의 응답 (11:00 KST 시세, 국내·해외 지수는 장중) */
+const healthy = (url: string) =>
+  url.includes("/marketindex/exchange/")
+    ? json({ exchangeInfo: { closePrice: "1,352.10", fluctuations: "-3.40", fluctuationsRatio: "-0.25", localTradedAt: "2026-09-24T10:59:00+09:00" } })
+    : json({ closePrice: "3,000", compareToPreviousClosePrice: "30", fluctuationsRatio: "1.01", marketStatus: "OPEN", localTradedAt: "2026-09-24T11:00:00+09:00" });
+
+const ALL = INDEX_SOURCES.map((s) => s.code);
+
+describe("MarketIndices 출처 장애 (DISC-01)", () => {
+  it("정상 → 출처 전부 503 → 장 마감 뒤: 값은 남기되 원래 시세·받은 시각과 stale 을 주고, 옛 장중(open)을 이어 가지 않는다", async () => {
+    let now = new Date("2026-09-24T02:00:00Z"); // 11:00 KST
+    let failed = false;
+    const fetchFn = (async (url: string) => (failed ? new Response("error", { status: 503 }) : healthy(url))) as unknown as typeof fetch;
+    const m = new MarketIndices(fetchFn, () => now);
+    const first = await m.list();
+    expect(first.map((i) => i.code)).toEqual(ALL);
+    expect(first[0]).toMatchObject({ code: "KOSPI", open: true, stale: false, asOf: "2026-09-24T11:00:00+09:00", fetchedAt: "2026-09-24T11:00:00+09:00" });
+
+    failed = true;
+    now = new Date("2026-09-24T12:00:00Z"); // 21:00 KST
+    const later = await m.list();
+    // 마지막 정상값은 그대로 (가격 보존)
+    expect(later.map((i) => [i.code, i.value])).toEqual(first.map((i) => [i.code, i.value]));
+    // 실제 시세 시각·서버가 받은 시각은 11:00 그대로, 갱신 실패 표시, 장중을 확정값처럼 주지 않는다
+    expect(later[0]).toMatchObject({ code: "KOSPI", asOf: "2026-09-24T11:00:00+09:00", fetchedAt: "2026-09-24T11:00:00+09:00", stale: true, open: false });
+    expect(later.every((i) => i.stale === true && i.open === false && i.fetchedAt === "2026-09-24T11:00:00+09:00")).toBe(true);
+
+    // 출처가 돌아오면 새 값·새 시각
+    failed = false;
+    now = new Date("2026-09-24T12:01:00Z");
+    const back = await m.list();
+    expect(back[0]).toMatchObject({ code: "KOSPI", open: true, stale: false, fetchedAt: "2026-09-24T21:01:00+09:00" });
+  });
+
+  it("일부 항목만 실패하면 그 항목만 마지막 값(stale), 나머지는 새 값. 한 번도 못 받은 항목은 빠진다", async () => {
+    let now = new Date("2026-09-24T02:00:00Z");
+    let round = 1;
+    const fetchFn = (async (url: string) => {
+      if (url.includes("KOSDAQ")) return new Response("error", { status: 503 }); // 처음부터 실패
+      if (round === 2 && url.includes("KOSPI")) return new Response("error", { status: 503 });
+      return healthy(url);
+    }) as unknown as typeof fetch;
+    const m = new MarketIndices(fetchFn, () => now);
+    await m.list();
+    round = 2;
+    now = new Date("2026-09-24T02:01:00Z"); // 11:01 KST (30초 캐시 뒤)
+    const list = await m.list();
+    expect(list.map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSDAQ"));
+    expect(list.find((i) => i.code === "KOSPI")).toMatchObject({ stale: true, open: false, fetchedAt: "2026-09-24T11:00:00+09:00" });
+    expect(list.find((i) => i.code === "NASDAQ")).toMatchObject({ stale: false, open: true, fetchedAt: "2026-09-24T11:01:00+09:00" });
+  });
+});
+
+describe("MarketIndices 멈춘 출처 (DISC-02)", () => {
+  it("한 출처가 응답하지 않아도 앱 제한(10초)보다 먼저 나머지 8개를 주고, 멈춘 요청은 끊는다 (기본 제한 시간)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let signal: AbortSignal | null | undefined;
+      const fetchFn = (async (url: string, init?: RequestInit) => {
+        if (url.includes("KOSPI")) {
+          signal = init?.signal;
+          return new Promise<Response>(() => {}); // 끝나지 않는 연결
+        }
+        return healthy(url);
+      }) as unknown as typeof fetch;
+      const m = new MarketIndices(fetchFn, () => new Date("2026-09-24T02:00:00Z"));
+      let result: MarketIndex[] | undefined;
+      void m.list().then((r) => (result = r));
+      await vi.advanceTimersByTimeAsync(9_000); // 앱은 10초에 끊는다 (서버↔앱 오가는 시간 여유)
+      expect(result?.map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSPI"));
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("캐시가 있으면 멈춘 출처는 마지막 값(stale)으로 채운다", async () => {
+    let now = new Date("2026-09-24T02:00:00Z");
+    let hang = false;
+    const fetchFn = (async (url: string) => (hang && url.includes("KOSPI") ? new Promise<Response>(() => {}) : healthy(url))) as unknown as typeof fetch;
+    const m = new MarketIndices(fetchFn, () => now, { listTimeoutMs: 50 });
+    await m.list();
+    hang = true;
+    now = new Date("2026-09-24T02:01:00Z");
+    const list = await settle(m.list(), 2_000);
+    expect(list).not.toBe("pending");
+    expect((list as MarketIndex[]).map((i) => i.code)).toEqual(ALL);
+    expect((list as MarketIndex[])[0]).toMatchObject({ code: "KOSPI", stale: true, open: false, fetchedAt: "2026-09-24T11:00:00+09:00" });
+  });
+
+  it("헤더만 오고 본문이 멈춰도(실제 HTTP) 제한 시간에 연결을 끊고 나머지를 준다", async () => {
+    let closed = false;
+    const server = http.createServer((req, res) => {
+      req.socket.on("close", () => (closed = true));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"closePrice":'); // 본문 일부만 보내고 멈춘다
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const fetchFn = ((url: string, init?: RequestInit) =>
+        url.includes("KOSPI") ? fetch(`http://127.0.0.1:${port}/`, init) : Promise.resolve(healthy(url))) as unknown as typeof fetch;
+      const m = new MarketIndices(fetchFn, () => new Date("2026-09-24T02:00:00Z"), { listTimeoutMs: 200 });
+      const list = await settle(m.list(), 3_000);
+      expect(list).not.toBe("pending");
+      expect((list as MarketIndex[]).map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSPI"));
+      // 남은 요청은 취소된다 (서버 쪽 연결이 닫힘)
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 2_000 });
+    } finally {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+    }
+  });
+
+  it("차트도 본문이 멈추면 제한 시간에 끝낸다: 캐시가 있으면 직전 값, 없으면 실패", async () => {
+    let now = new Date("2026-09-24T05:20:00Z");
+    let hang = false;
+    // 헤더는 오고 본문이 끝나지 않는 응답 (주입한 fetch 가 signal 을 몰라도 끝나야 한다)
+    const stalled = () => new Response(new ReadableStream({ start() {} }), { status: 200 });
+    const fetchFn = (async (url: string) => {
+      if (hang) return stalled();
+      if (url.includes("/chart/foreign/index/.DJI/week?")) return json([{ localDate: "20260920", closePrice: 51863.69, openPrice: 51000, highPrice: 52000, lowPrice: 50900, accumulatedTradingVolume: 1 }]);
+      return new Response("x", { status: 404 });
+    }) as unknown as typeof fetch;
+    const m = new MarketIndices(fetchFn, () => now, { chartTimeoutMs: 50 });
+    expect((await m.candles("DJI", "W", 50))!.candles).toHaveLength(1);
+    hang = true;
+    now = new Date(now.getTime() + 60 * 60_000); // 캐시 만료 뒤
+    const cached = await settle(m.candles("DJI", "W", 50), 2_000);
+    expect(cached).not.toBe("pending");
+    expect((cached as { candles: unknown[] }).candles).toHaveLength(1);
+    const none = await settle(m.candles("SPX", "D", 50).then(() => "ok", (e: Error) => e.message), 2_000);
+    expect(none).toMatch(/시간 초과/);
+  });
+});
 
 describe("MarketIndices", () => {
   it("지수와 환율을 모으고, 실패한 항목만 빼며, 음수 등락률 부호를 맞춘다", async () => {

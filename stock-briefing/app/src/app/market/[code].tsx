@@ -9,6 +9,7 @@ import { formatIndexValue, MarketStrip } from "@/components/MarketStrip";
 import { Screen } from "@/components/Screen";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { formatDateKo, formatPct } from "@/lib/format";
+import { indexSessionLabel } from "@/lib/freshness";
 import { changeColor, font, space, useTheme } from "@/theme";
 
 const US_INDEX = new Set(["NASDAQ", "SPX", "DJI", "SOX"]);
@@ -26,6 +27,8 @@ export default function MarketIndexScreen() {
   const candles = useMarketCandles(code, period, CANDLE_COUNT[period]);
   const idx = indices.data?.indices.find((i) => i.code === code) ?? null;
   const fx = idx?.kind === "fx" || code.endsWith("KRW");
+  // 장중·장 마감. 서버가 출처에서 새로 받지 못한 값(stale)이면 옛 장중 대신 "시세 지연"
+  const session = idx ? indexSessionLabel({ ...idx, kind: fx ? "fx" : "index" }) : null;
   const intraday = period === "1m" || period === "5m" || period === "30m";
   const up = changeColor(t, idx?.change);
   // 거래량이 없는 시계열(환율, 필라반도체처럼 소스가 0만 주는 지수)은 거래량 칸을 숨긴다
@@ -55,7 +58,8 @@ export default function MarketIndexScreen() {
       <View style={[styles.head, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
         <Text style={{ color: t.muted, fontSize: font.small }}>
           {idx?.name ?? code}
-          {fx ? (code === "JPYKRW" ? " · 100엔당 원" : " · 원") : idx ? (idx.open ? " · 장중" : " · 장 마감") : ""}
+          {fx ? (code === "JPYKRW" ? " · 100엔당 원" : " · 원") : ""}
+          {session ? <Text style={idx?.stale ? { color: t.warn } : null}> · {session}</Text> : null}
         </Text>
         {idx ? (
           <>
@@ -70,7 +74,8 @@ export default function MarketIndexScreen() {
               </Text>
               <Text style={[styles.change, { color: up }]}>{formatPct(idx.changeRate)}</Text>
             </View>
-            <Text style={{ color: t.muted, fontSize: font.small }}>{formatDateKo(idx.asOf, true)} 기준</Text>
+            {/* 출처의 시세 시각 (없으면 서버가 받은 시각). 앱이 응답을 받은 시각이 아니다 */}
+            <Text style={{ color: t.muted, fontSize: font.small }}>{formatDateKo(idx.asOf ?? idx.fetchedAt, true)} 기준</Text>
           </>
         ) : (
           <Text style={{ color: t.muted, fontSize: font.small, marginTop: space.xs }}>{indices.isLoading ? "불러오는 중…" : "시세를 불러오지 못했습니다"}</Text>
