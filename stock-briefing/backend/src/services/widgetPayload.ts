@@ -52,7 +52,7 @@ export function marketChip(s: MarketStatus): WidgetMarket {
   return { label: "장 마감", open: false, nextChangeAt };
 }
 
-/** 위젯 표시에 필요한 자릿수만 (금액 소수 2자리, 가격·환율 4자리) */
+/** 위젯 표시에 필요한 자릿수만 (등락률 소수 2자리, 금액·가격·환율 4자리) */
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
 /** "2026-09-24T12:03:51.000+09:00" → "2026-09-24T12:03:51+09:00" */
@@ -67,7 +67,8 @@ function slim(s: RegisteredWithQuote): WidgetStock {
     qty: s.quantity,
     avg: s.avgPrice,
     q: q ? [r4(q.price), r4(q.change), r2(q.changeRate), q.currency, shortIso(q.asOf), q.fxRate == null ? null : r4(q.fxRate), q.stale ? 1 : 0] : null,
-    e: e ? [r2(e.marketValue), r2(e.costBasis), e.afterCost ? r2(e.afterCost.marketValue) : null, e.costBasisKrw === null ? null : Math.round(e.costBasisKrw), e.krwCostSource] : null,
+    // 금액은 소수 4자리까지 (달러 금액을 원화로 바꿔도 1원 미만 차이 — 앱 잔고와 같은 숫자가 되게)
+    e: e ? [r4(e.marketValue), r4(e.costBasis), e.afterCost ? r4(e.afterCost.marketValue) : null, e.costBasisKrw === null ? null : Math.round(e.costBasisKrw), e.krwCostSource] : null,
   };
 }
 
