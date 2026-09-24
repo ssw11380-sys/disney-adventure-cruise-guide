@@ -4,7 +4,9 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View, type StyleProp, typ
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { font, space, useTheme } from "@/theme";
 
-export const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.";
+import { DISCLAIMER } from "@/lib/disclaimer";
+
+export { DISCLAIMER };
 
 /**
  * 모든 화면 하단에 붙는 고지.

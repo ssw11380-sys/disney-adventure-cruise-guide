@@ -14,6 +14,7 @@ import { Badge, Button, Card, Chip, Muted, Row, SectionTitle } from "@/component
 import { formatDateKo } from "@/lib/format";
 import { SORT_OPTIONS, THEME_OPTIONS, useSettings } from "@/lib/settings";
 import { font, radius, space, useTheme } from "@/theme";
+import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
 
 /**
  * 설정: 표시(원화 환산·정렬) → 알림 → 토스증권 연동 → 앱 업데이트 → 서버 상태 → 고급(서버 주소·토큰, 접힘) → 정보
@@ -60,6 +61,10 @@ export default function SettingsScreen() {
               <Chip key={o.value} label={o.label} active={sort === o.value} onPress={() => void setSort(o.value)} />
             ))}
           </View>
+        </View>
+        <View style={{ gap: 2, paddingTop: space.sm }}>
+          <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
+          <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
         </View>
       </Card>
 

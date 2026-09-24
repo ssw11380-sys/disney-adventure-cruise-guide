@@ -46,7 +46,8 @@ describe("투자 권유 금지 문구", () => {
 });
 
 describe("고지 문구", () => {
-  it("앱 공통 고지 문구가 그대로다", () => expect(read("app/src/components/Screen.tsx")).toContain(`DISCLAIMER = "${DISCLAIMER}"`));
+  it("앱 공통 고지 문구가 그대로다", () => expect(read("app/src/lib/disclaimer.ts")).toContain(`DISCLAIMER = "${DISCLAIMER}"`));
+  it("위젯 고지 한 줄은 권유가 아님을 밝힌다", () => expect(read("app/src/lib/disclaimer.ts")).toMatch(/DISCLAIMER_SHORT = ".*투자 권유가 아닙니다"/));
   it("서버 고지 문구가 앱과 같다", () => expect(read("backend/src/app.ts")).toContain(`DISCLAIMER = "${DISCLAIMER}"`));
   it("설정 화면에 고지가 있다", () => expect(read("app/src/app/(tabs)/settings.tsx")).toContain(DISCLAIMER));
   it("브리핑 목록·상세·종목 상세 화면이 고지를 붙인다", () => {

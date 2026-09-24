@@ -4,7 +4,9 @@ import type { Currency, LatestBriefing, RegisteredWithQuote } from "@/api/types"
 import { formatPct, formatPrice, toDisplay } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, totals } from "@/lib/portfolio";
+import { DISCLAIMER_SHORT } from "@/lib/disclaimer";
 import { asOfLabel, asOfMs, assetLine, excludedCount, failureText, HOME_URI, isHeld, tone, widgetOrder } from "./model";
+import { currentMarket, isDelayed, openMarketAsOf, type WidgetMarket } from "./payload";
 
 export { totals, type Totals } from "@/lib/portfolio";
 
@@ -12,7 +14,7 @@ export { totals, type Totals } from "@/lib/portfolio";
  * 홈 화면 위젯 3종. react-native-android-widget 프리미티브만 쓴다(RN 컴포넌트 불가, 색은 hex/rgba 문자열).
  *  - HoldingsWidget (4x2~): 총 평가·당일 손익 + 등록 종목 전체(보유 → 관심, 평가금액 순)를 스크롤 목록으로.
  *    종목을 누르면 상세로, 헤더를 누르면 앱으로. 위젯 높이를 늘리면 한 번에 더 많이 보인다.
- *  - BriefingWidget (4x2): 가장 최근 브리핑의 3줄 요약. 누르면 브리핑 상세로.
+ *  - BriefingWidget (4x2): 보유 비중 상위 3종목의 최신 브리핑 한 줄씩 + 고지 한 줄. 누르면 브리핑 상세로.
  *  - AssetWidget (2x1): 총 평가금액과 오늘 손익만 크게.
  * 새로고침 아이콘은 clickAction "REFRESH" 로 태스크 핸들러에 전달된다.
  */
@@ -29,6 +31,7 @@ const C = {
   up: "#FF4B55",
   down: "#3D8EFF",
   gold: "#E3B341",
+  warn: "#F0A030",
 } as const;
 
 const DEEP_LINK = HOME_URI;
@@ -47,13 +50,25 @@ const root: FlexWidgetStyle = {
   flexDirection: "column",
 };
 
+/** 장 상태 칩 (장중은 금색, 그 밖은 회색) */
+function MarketChip({ market }: { market: WidgetMarket | null | undefined }) {
+  if (!market) return null;
+  return (
+    <FlexWidget style={{ borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1, borderWidth: 1, borderColor: market.open ? C.gold : C.line }}>
+      <TextWidget text={market.label} style={{ color: market.open ? C.gold : C.muted, fontSize: 9, fontWeight: "700" }} />
+    </FlexWidget>
+  );
+}
+
 /** 헤더를 누르면 잔고 탭으로 (OPEN_APP 은 마지막으로 보던 화면을 연다) */
-function Header({ title, subtitle }: { title: string; subtitle?: string }) {
+function Header({ title, subtitle, market, delayed }: { title: string; subtitle?: string; market?: WidgetMarket | null; delayed?: boolean }) {
   return (
     <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
       <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 6 }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
         <TextWidget text={title} style={{ color: C.ink, fontSize: 13, fontWeight: "700" }} />
+        <MarketChip market={market} />
         {subtitle ? <TextWidget text={subtitle} style={{ color: C.muted, fontSize: 10 }} /> : null}
+        {delayed ? <TextWidget text="지연" style={{ color: C.warn, fontSize: 10, fontWeight: "700" }} /> : null}
       </FlexWidget>
       <FlexWidget clickAction="REFRESH" style={{ padding: 4 }}>
         <TextWidget text="↻" style={{ color: C.muted, fontSize: 14 }} />
@@ -68,15 +83,30 @@ function notes(error: string | null, filled: number, excluded: number): string |
   return parts.length ? parts.join(" · ") : null;
 }
 
-type StockWidgetProps = { stocks: RegisteredWithQuote[]; showKrw: boolean; afterCost?: boolean; fetchedAt: number; error: string | null; filled?: string[]; height?: number; /** 그리는 시각 (기준 시각에 날짜를 붙일지 판단). 부르는 쪽에서 넘긴다 */ now: number };
+type StockWidgetProps = {
+  stocks: RegisteredWithQuote[];
+  showKrw: boolean;
+  afterCost?: boolean;
+  fetchedAt: number;
+  error: string | null;
+  filled?: string[];
+  height?: number;
+  /** 그리는 시각 (기준 시각에 날짜를 붙일지 판단). 부르는 쪽에서 넘긴다 */
+  now: number;
+  /** 장 상태 칩 (없으면 칩 없이) */
+  market?: WidgetMarket | null;
+};
 
-export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now }: StockWidgetProps) {
+export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given }: StockWidgetProps) {
   const t = totals(stocks, showKrw, afterCost);
   const rows = widgetOrder(stocks, fxOf);
   const note = notes(error, filled.length, excludedCount(stocks));
+  const asOf = asOfMs(stocks, fetchedAt);
+  const market = currentMarket(given, now);
+  const delayed = isDelayed({ openAsOf: openMarketAsOf(stocks, market), fetchedAt, error, now });
   return (
     <FlexWidget style={root}>
-      <Header title={`잔고 ${rows.length}`} subtitle={asOfLabel(asOfMs(stocks, fetchedAt), now)} />
+      <Header title={`잔고 ${rows.length}`} subtitle={asOfLabel(asOf, now)} market={market} delayed={delayed} />
       {t ? (
         <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 4, marginBottom: 4 }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
           <TextWidget text={formatPrice(t.value, t.currency)} style={{ color: C.ink, fontSize: 18, fontWeight: "800" }} />
@@ -128,38 +158,49 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
   );
 }
 
-export function BriefingWidget({ briefings, fetchedAt, error, now }: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number }) {
-  const latest = briefings
-    .filter((b) => b.latest && b.latest.status === "ok")
-    .sort((a, b) => (a.latest!.createdAt < b.latest!.createdAt ? 1 : -1))[0];
-  const b = latest?.latest ?? null;
-  const lines = b ? b.summary.split("\n").filter(Boolean).slice(0, 3) : [];
+/** 브리핑: 서버가 고른 보유 비중 상위 3종목(예전 서버면 최신 3개)의 요약 첫 줄 + 고지 한 줄 (항상) */
+export function BriefingWidget({ briefings, fetchedAt, error, now, market }: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number; market?: WidgetMarket | null }) {
+  // 받은 순서 그대로(새 서버: 보유 비중 순, 예전 서버: data.ts 가 최신 순으로 정렬)
+  const items = briefings.filter((b) => b.latest && b.latest.status === "ok").slice(0, 3);
   return (
     <FlexWidget style={root}>
-      <Header title="브리핑" subtitle={asOfLabel(fetchedAt, now)} />
-      {b ? (
-        <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: `${DEEP_LINK}briefings/${b.id}` }} style={{ width: "match_parent", flexDirection: "column", marginTop: 6, flexGap: 4 }}>
-          <TextWidget text={`${latest!.name} · ${b.date.slice(5).replace("-", "/")} ${b.session === "morning" ? "오전" : "오후"}`} style={{ color: C.gold, fontSize: 11, fontWeight: "700" }} />
-          {lines.map((line, i) => (
-            <TextWidget key={i} text={`• ${line}`} maxLines={2} truncate="END" style={{ color: C.ink, fontSize: 12, lineHeight: 17 }} />
-          ))}
+      <Header title="브리핑" subtitle={asOfLabel(fetchedAt, now)} market={currentMarket(market, now)} delayed={isDelayed({ openAsOf: null, fetchedAt, error, now })} />
+      {items.length ? (
+        <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: 4, flexGap: 3 }}>
+          {items.map((it) => {
+            const b = it.latest!;
+            const first = b.summary.split("\n").find(Boolean) ?? "";
+            return (
+              <FlexWidget key={b.id} clickAction="OPEN_URI" clickActionData={{ uri: `${DEEP_LINK}briefings/${b.id}` }} style={{ width: "match_parent", flexDirection: "column" }}>
+                <TextWidget text={`${it.name} · ${b.date.slice(5).replace("-", "/")} ${b.session === "morning" ? "오전" : "오후"}`} maxLines={1} truncate="END" style={{ color: C.gold, fontSize: 10, fontWeight: "700" }} />
+                <TextWidget text={first} maxLines={1} truncate="END" style={{ color: C.ink, fontSize: 12 }} />
+              </FlexWidget>
+            );
+          })}
         </FlexWidget>
       ) : (
         <TextWidget text={error ? `${failureText(error)} · ↻ 로 다시 시도` : "아직 브리핑이 없습니다. 평일 08:30·16:00 에 생성됩니다."} style={{ color: C.muted, fontSize: 11, marginTop: 6 }} />
       )}
+      <TextWidget text={DISCLAIMER_SHORT} maxLines={1} style={{ color: C.muted, fontSize: 9, marginTop: 4 }} />
     </FlexWidget>
   );
 }
 
-export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now }: StockWidgetProps) {
+export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given }: StockWidgetProps) {
   const t = totals(stocks, showKrw, afterCost);
   const note = notes(error, filled.length, excludedCount(stocks));
   const line = t ? assetLine(t.day, t.profit, (n) => formatPrice(n, t.currency, { sign: true })) : null;
+  const asOf = asOfMs(stocks, fetchedAt);
+  const market = currentMarket(given, now);
+  const delayed = isDelayed({ openAsOf: openMarketAsOf(stocks, market), fetchedAt, error, now });
   return (
     <FlexWidget style={{ ...root, padding: 12, justifyContent: "center" }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
       <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-        <TextWidget text="총 평가" style={{ color: C.muted, fontSize: 10, fontWeight: "700" }} />
-        <TextWidget text={asOfLabel(asOfMs(stocks, fetchedAt), now)} style={{ color: C.muted, fontSize: 9 }} />
+        <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 4 }}>
+          <TextWidget text="총 평가" style={{ color: C.muted, fontSize: 10, fontWeight: "700" }} />
+          <MarketChip market={market} />
+        </FlexWidget>
+        <TextWidget text={delayed ? `지연 · ${asOfLabel(asOf, now)}` : asOfLabel(asOf, now)} style={{ color: delayed ? C.warn : C.muted, fontSize: 9 }} />
       </FlexWidget>
       {t && line ? (
         <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: 2 }}>
