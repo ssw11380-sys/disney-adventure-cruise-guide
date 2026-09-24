@@ -160,8 +160,10 @@ describe("NaverStockNewsProvider + chain", () => {
     const naverSearch = new FakeNewsProvider();
     const chain = new NewsProviderChain([naverSearch, google], undefined, () => Date.parse("2026-09-24T00:00:00+09:00"));
     await chain.forStock({ code: "RGTI", name: "리게티 컴퓨팅" }, 8);
-    await chain.forStock({ code: "RGTI", name: "리게티 컴퓨팅" }, 8);
+    await chain.forStock({ code: "RGTI", name: "리게티 컴퓨팅" }, 15); // 브리핑(8건) 뒤 뉴스 탭(15건)도 같은 캐시
     expect(google.queries).toEqual(['"리게티" when:30d']);
+    await chain.forStock({ code: "RGTI", name: "RGTI" }, 8); // 이름이 다르면 질의가 달라 캐시도 따로
+    expect(google.queries).toHaveLength(2);
     expect(naverSearch.queries).toEqual([]);
   });
 });

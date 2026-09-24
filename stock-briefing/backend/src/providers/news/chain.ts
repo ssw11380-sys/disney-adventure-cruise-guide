@@ -3,6 +3,10 @@ import type { ChainLogger } from "../market/chain.js";
 import { coreName, filterNews, newsQuery } from "./relevance.js";
 import type { NewsItem, NewsProvider } from "./types.js";
 
+const NAME_CACHE_MS = 10 * 60_000;
+/** 이름 검색은 호출한 곳(브리핑 8건·뉴스 탭 15건)과 관계없이 넉넉히 받아 캐시를 함께 쓴다 */
+const NAME_SEARCH_SIZE = 45;
+
 export class NewsProviderChain implements NewsProvider {
   readonly name: string;
   constructor(
@@ -39,8 +43,8 @@ export class NewsProviderChain implements NewsProvider {
     const out: NewsItem[] = [];
     const seen = new Set<string>();
     const now = this.now();
-    const add = (items: NewsItem[]) => {
-      for (const it of filterNews(stock, items, now)) {
+    const add = (items: NewsItem[], fromNameSearch = false) => {
+      for (const it of filterNews(stock, items, now, fromNameSearch)) {
         const key = it.title.replace(/\s+/g, "").toLowerCase().slice(0, 40);
         if (!key || seen.has(key)) continue;
         seen.add(key);
@@ -60,7 +64,7 @@ export class NewsProviderChain implements NewsProvider {
     }
     if (out.length < Math.ceil(limit / 2)) {
       try {
-        add(await this.nameSearch(stock, limit * 3, now));
+        add(await this.nameSearch(stock, Math.max(limit * 3, NAME_SEARCH_SIZE), now), true);
       } catch (e) {
         // 종목 뉴스는 받았는데 이름 검색만 실패했으면 모은 것만 (빈 목록이어도 "관련 뉴스 없음"). 둘 다 실패면 실패
         if (!stockOk && out.length === 0) throw e;
@@ -69,22 +73,25 @@ export class NewsProviderChain implements NewsProvider {
     return out.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt)).slice(0, limit);
   }
 
-  /** 이름 검색 결과 (종목마다 10분 캐시 — 브리핑이 여러 종목을 연달아 모을 때 구글이 503 을 내지 않게) */
-  private readonly nameCache = new Map<string, { at: number; items: NewsItem[] }>();
+  /** 이름 검색 결과 (질의마다 10분 캐시 — 브리핑이 여러 종목을 연달아 모을 때 구글이 503 을 내지 않게) */
+  private readonly nameCache = new Map<string, { at: number; size: number; items: NewsItem[] }>();
 
   /** 검색 문법을 알아듣는 소스(구글)가 있으면 최근 30일 질의로, 없으면 이름만으로 일반 검색 */
   private async nameSearch(stock: { code: string; name: string }, limit: number, now: number): Promise<NewsItem[]> {
-    const hit = this.nameCache.get(stock.code);
-    if (hit && now - hit.at < 10 * 60_000) return hit.items;
     const adv = this.providers.find((p) => p.advancedQuery);
-    const once = () => (adv ? adv.search(newsQuery(stock), limit) : this.search(coreName(stock.name), limit));
+    const query = adv ? newsQuery(stock) : coreName(stock.name);
+    const key = `${adv ? "adv" : "plain"}:${query}`;
+    const hit = this.nameCache.get(key);
+    if (hit && now - hit.at < NAME_CACHE_MS && hit.size >= limit) return hit.items;
+    const once = () => (adv ? adv.search(query, limit) : this.search(query, limit));
     // 구글은 연달아 부르면 잠깐 503 을 낸다 → 1.5초 뒤 한 번만 다시
     const items = await once().catch(async (e: unknown) => {
       this.log.warn({ code: stock.code, err: e instanceof Error ? e.message : String(e) }, "이름 검색 실패, 한 번 더");
       await new Promise((r) => setTimeout(r, this.retryDelayMs));
       return once();
     });
-    this.nameCache.set(stock.code, { at: now, items });
+    for (const [k, v] of this.nameCache) if (now - v.at >= NAME_CACHE_MS) this.nameCache.delete(k);
+    this.nameCache.set(key, { at: now, size: limit, items });
     return items;
   }
 }
