@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockLabel, connection, holdingsSuffix, staleQuoteCount, liveLabel, openMaxAge, parseBriefingId, parseStockCode, pollInterval, staleBanner, streamFresh, viewState, type QueryLike } from "@/lib/freshness";
+import { clockLabel, connection, holdingsSuffix, reconcileLabel, staleQuoteCount, liveLabel, openMaxAge, parseBriefingId, parseStockCode, pollInterval, staleBanner, streamFresh, viewState, type QueryLike } from "@/lib/freshness";
 
 // 2026-09-24 14:03:21 KST
 const NOW = Date.parse("2026-09-24T14:03:21+09:00");
@@ -81,5 +81,15 @@ describe("시세 지연 표시 (3-9)", () => {
     expect(staleQuoteCount(undefined)).toBe(0);
     expect(holdingsSuffix({ held: 17, watch: 1, stale: 2 })).toBe("보유 17 · 관심 1 · 시세 지연 2");
     expect(holdingsSuffix({ held: 17, watch: 0, stale: 0 })).toBe("보유 17");
+  });
+});
+
+describe("토스 대조 줄 (3-13)", () => {
+  it("차이를 부호·원·%로, 비교 제외는 따로", () => {
+    const when = () => "9/28 10:20";
+    expect(reconcileLabel(null, when)).toBe("아직 없음 (동기화 뒤 표시)");
+    expect(reconcileLabel({ last: { at: "x", diffKrw: -1234, diffPct: -0.0123, missing: 0 } }, when)).toBe("차이 -1,234원 (-0.01%) · 9/28 10:20");
+    expect(reconcileLabel({ last: { at: "x", diffKrw: 0, diffPct: 0, missing: 0 } }, when)).toBe("차이 0원 (0.00%) · 9/28 10:20");
+    expect(reconcileLabel({ last: { at: "x", diffKrw: 5, diffPct: 0.1, missing: 2 } }, when)).toBe("시세 2종목을 못 받아 비교 제외 · 9/28 10:20");
   });
 });

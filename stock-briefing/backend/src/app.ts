@@ -34,6 +34,7 @@ import { PriceStream } from "./services/priceStream.js";
 import { AppErrorService } from "./services/appErrorService.js";
 import { StockService } from "./services/stockService.js";
 import { BackupService } from "./services/backupService.js";
+import { ReconcileService } from "./services/reconcileService.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -97,8 +98,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     const fundamentals = opts.providers.fundamentals;
     const sync = new TossSyncService(opts.db, opts.providers.tossOpenApi, now, fundamentals ? () => fundamentals.usdKrw() : null, log);
     // 토스 앱에서 사고팔면 늦어도 TOSS_SYNC_MINUTES 안에 반영. 바뀐 게 있으면 실시간 구독 종목도 갱신
+    const reconcile = new ReconcileService({ db: opts.db, now, log });
     const autoSync = new HoldingsAutoSync({
       sync,
+      // 동기화마다 앱 총평가와 토스 계좌 요약을 대조해 남긴다 (3-13)
+      onResult: async (r) => {
+        if (r.totals) await reconcile.record(await stockService.listWithFreshQuotes(), r.totals);
+      },
       calendar: opts.providers.calendar,
       // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다
       afterSync: async () => {
@@ -138,7 +144,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
         });
       }
     }
-    tossDeps = { provider: opts.providers.tossOpenApi, sync, autoSync, live, outboundIp };
+    tossDeps = { provider: opts.providers.tossOpenApi, sync, autoSync, live, outboundIp, reconcile };
   }
   // 서버 → 앱 실시간 가격 스트림 (/api/stream). 토스 웹소켓 체결을 그대로 중계하고, 없으면 앱이 붙어 있는 동안만 3초 폴링
   const priceStream = new PriceStream({
@@ -284,7 +290,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     schedule: scheduler?.status() ?? null,
     devices: (await deviceService.enabledTokens()).length,
     authRequired: Boolean(opts.config.API_TOKEN),
-    tossOpenApi: tossStatus(tossDeps, await outboundIp()),
+    tossOpenApi: { ...tossStatus(tossDeps, await outboundIp()), reconcile: tossDeps ? await tossDeps.reconcile.status().catch(() => null) : null },
     lastBriefing: briefingService.lastRun,
     stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
