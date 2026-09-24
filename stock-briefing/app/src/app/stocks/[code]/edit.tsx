@@ -8,6 +8,7 @@ import { useSettings } from "@/lib/settings";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { formatPrice, isUsMarket } from "@/lib/format";
+import { avgText, holdingPatch, parseNum, qtyText } from "@/lib/holdingForm";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 보유 수량/평단/메모 수정, 매수·매도 기록(평단 자동 계산), 삭제 */
@@ -64,24 +65,26 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     }
   };
   const cur = isUsMarket(stock.market) ? "USD" : "KRW";
-  const [quantity, setQuantity] = useState(stock.quantity?.toString() ?? "");
-  const [avgPrice, setAvgPrice] = useState(stock.avgPrice?.toString() ?? "");
+  const locked = stock.tossSynced === true;
+  const initial = { quantity: qtyText(stock.quantity), avgPrice: avgText(stock.avgPrice, cur) };
+  const [quantity, setQuantity] = useState(initial.quantity);
+  const [avgPrice, setAvgPrice] = useState(initial.avgPrice);
   const [memo, setMemo] = useState(stock.memo ?? "");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [tradeQty, setTradeQty] = useState("");
   const [tradePrice, setTradePrice] = useState("");
 
-  const num = (s: string) => (s.trim() ? Number(s.replace(/,/g, "")) : null);
+  const num = parseNum;
 
-  const save = () => {
-    const qty = num(quantity);
-    const avg = num(avgPrice);
-    if ((qty !== null && !(qty > 0)) || (avg !== null && !(avg > 0))) {
-      Alert.alert("입력 확인", "수량과 평균 단가는 0보다 큰 숫자여야 합니다.");
+  /** 바꾼 칸만 보낸다 (메모만 고치면 수량·평단은 그대로). 토스 종목은 메모만 */
+  const save = (values: { quantity: string; avgPrice: string } = { quantity, avgPrice }) => {
+    const patch = locked ? {} : holdingPatch(initial, values);
+    if ("error" in patch) {
+      Alert.alert("입력 확인", patch.error);
       return;
     }
     update.mutate(
-      { code: stock.code, quantity: qty, avgPrice: avg, memo: memo.trim() || null },
+      { code: stock.code, ...patch, memo: memo.trim() || null },
       { onSuccess: () => router.back(), onError: (e) => Alert.alert("저장 실패", e instanceof Error ? e.message : String(e)) },
     );
   };
@@ -93,16 +96,17 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     return applyTrade({ quantity: num(quantity), avgPrice: num(avgPrice) }, side, q, p);
   })();
 
-  const applyTradeToForm = () => {
+  /** 체결을 반영해 바로 저장 (예전: 위 칸에 반영 → 저장, 2단계) */
+  const saveTrade = () => {
     if (!preview || "error" in preview) return;
-    setQuantity(preview.quantity > 0 ? String(preview.quantity) : "");
-    setAvgPrice(preview.avgPrice !== null ? String(preview.avgPrice) : "");
-    setTradeQty("");
-    setTradePrice("");
+    save({ quantity: preview.quantity > 0 ? String(preview.quantity) : "", avgPrice: avgText(preview.avgPrice, cur) });
   };
 
   const confirmRemove = () => {
-    Alert.alert("종목 삭제", `${stock.name} 을(를) 목록에서 삭제할까요? 지난 브리핑은 남습니다.`, [
+    const body = locked
+      ? `${stock.name} 은(는) 토스 계좌에서 가져온 종목입니다. 삭제하면 토스 동기화에서도 빠져 다시 나타나지 않습니다 (다시 등록하면 다시 맞춤). 지난 브리핑은 남습니다.`
+      : `${stock.name} 을(를) 목록에서 삭제할까요? 지난 브리핑은 남습니다.`;
+    Alert.alert(locked ? "동기화 제외하고 삭제" : "종목 삭제", body, [
       { text: "취소", style: "cancel" },
       {
         text: "삭제",
@@ -122,12 +126,25 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
         <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>
           {stock.name} <Muted>{stock.code}</Muted>
         </Text>
+        {locked ? (
+          <View style={[styles.lockNote, { backgroundColor: t.surfaceAlt }]}>
+            <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "600" }}>토스 계좌 기준 · 10분마다 맞춤</Text>
+            <Muted>수량·평단은 토스 계좌 값으로 자동으로 맞춰져 여기서 바꿀 수 없습니다. 메모는 바꿀 수 있습니다.</Muted>
+          </View>
+        ) : null}
         <View style={{ flexDirection: "row", gap: space.sm }}>
-          <TextInput value={quantity} onChangeText={setQuantity} placeholder="보유 수량 (주)" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
-          <TextInput value={avgPrice} onChangeText={setAvgPrice} placeholder={cur === "USD" ? "평균 단가 ($)" : "평균 단가 (원)"} placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
+          <View style={styles.col}>
+            <Text style={[styles.label, { color: t.muted }]}>보유 수량 (주)</Text>
+            <TextInput value={quantity} onChangeText={setQuantity} editable={!locked} accessibilityLabel="보유 수량" placeholder="예: 10" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, styles.inCol, { color: locked ? t.muted : t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
+          </View>
+          <View style={styles.col}>
+            <Text style={[styles.label, { color: t.muted }]}>{cur === "USD" ? "평균 단가 ($)" : "평균 단가 (원)"}</Text>
+            <TextInput value={avgPrice} onChangeText={setAvgPrice} editable={!locked} accessibilityLabel="평균 단가" placeholder={cur === "USD" ? "예: 123.45" : "예: 70000"} placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, styles.inCol, { color: locked ? t.muted : t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
+          </View>
         </View>
-        <TextInput value={memo} onChangeText={setMemo} placeholder="메모 (선택)" placeholderTextColor={t.muted} multiline style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt, minHeight: 72 }]} />
-        <Button title="저장" onPress={save} loading={update.isPending} />
+        <Text style={[styles.label, { color: t.muted }]}>메모</Text>
+        <TextInput value={memo} onChangeText={setMemo} accessibilityLabel="메모" placeholder="선택" placeholderTextColor={t.muted} multiline style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt, minHeight: 72 }]} />
+        <Button title="저장" onPress={() => save()} loading={update.isPending} />
       </Card>
 
       {cur === "USD" && ev ? (
@@ -144,6 +161,7 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
         </Card>
       ) : null}
 
+      {locked ? null : (
       <Card>
         <SectionTitle>체결 반영</SectionTitle>
         <Segmented
@@ -165,11 +183,12 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
             <Row label="거래 후 평단" value={preview.avgPrice !== null ? formatPrice(preview.avgPrice, cur) : "-"} />
           </View>
         ) : null}
-        <Button title="위 칸에 반영" variant="secondary" icon="calculator-outline" disabled={!preview || "error" in preview} onPress={applyTradeToForm} />
+        <Button title="반영해 저장" variant="secondary" icon="calculator-outline" disabled={!preview || "error" in preview} loading={update.isPending} onPress={saveTrade} />
       </Card>
+      )}
 
       <View style={{ paddingHorizontal: space.lg }}>
-        <Button title="종목 삭제" variant="danger" onPress={confirmRemove} loading={remove.isPending} />
+        <Button title={locked ? "동기화 제외하고 삭제" : "종목 삭제"} variant="danger" onPress={confirmRemove} loading={remove.isPending} />
       </View>
     </Screen>
   );
@@ -177,6 +196,10 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
 
 const styles = StyleSheet.create({
   field: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
+  col: { flex: 1, gap: 4 },
+  inCol: { flexGrow: 0, flexBasis: "auto" },
+  label: { fontSize: font.tiny },
+  lockNote: { borderRadius: radius.sm, padding: space.md, gap: 2 },
 });
 
 /** 원화 매입금액을 저장하지 못한 이유 (서버가 알려 준 대로) */

@@ -21,6 +21,13 @@ export class ConflictError extends AppError {
   }
 }
 
+/** 토스 계좌에서 맞추는 종목의 수량·평단을 앱에서 바꾸려 함 */
+export class TossLockedError extends AppError {
+  constructor(message: string) {
+    super(409, "TOSS_LOCKED", message);
+  }
+}
+
 /** 외부 데이터 소스 호출 실패. 체인의 다음 소스로 넘어가는 신호로 쓴다. */
 export class ProviderError extends Error {
   constructor(
