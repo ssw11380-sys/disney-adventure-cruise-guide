@@ -64,6 +64,19 @@ export interface BriefingListener {
   (briefing: Briefing): Promise<void> | void;
 }
 
+/** 한 번의 실행(세션)이 끝났을 때: 이번에 새로 만든 브리핑(성공만)과 브리핑 시점 등락률 (3-19 알림 묶음) */
+export interface SessionDone {
+  session: BriefingSession;
+  date: string;
+  trigger: "schedule" | "manual";
+  /** 일부 종목만 실행(codes 지정, 예: 상세의 "이 종목 다시 만들기") */
+  partial: boolean;
+  created: Array<{ briefing: Briefing; changeRate: number | null }>;
+}
+export type SessionListener = (done: SessionDone) => Promise<void> | void;
+/** 실행 한 번이 시작될 때 (알림이 이 실행 동안 쓸 플래그 값을 여기서 정한다) */
+export type SessionStartListener = (start: { session: BriefingSession; trigger: "schedule" | "manual"; partial: boolean }) => Promise<void> | void;
+
 /**
  * 브리핑 파이프라인: 수집 → 프롬프트 조립 → Claude(상세) → Claude(요약) → 저장.
  * 종목별로 순차 실행한다(외부 API rate limit). 실패도 저장해서 앱에서 "생성 실패" 를 볼 수 있게 한다.
@@ -71,6 +84,8 @@ export interface BriefingListener {
 export class BriefingService {
   private readonly now: () => Date;
   private readonly listeners: BriefingListener[] = [];
+  private readonly sessionListeners: SessionListener[] = [];
+  private readonly startListeners: SessionStartListener[] = [];
   private running = false;
   private _lastRun: LastRun | null = null;
 
@@ -87,6 +102,15 @@ export class BriefingService {
     this.listeners.push(listener);
   }
 
+  /** 실행 한 번이 끝나면 (예약·수동 모두). 새로 만든 브리핑이 없으면 부르지 않는다 */
+  onSessionDone(listener: SessionListener): void {
+    this.sessionListeners.push(listener);
+  }
+
+  onSessionStart(listener: SessionStartListener): void {
+    this.startListeners.push(listener);
+  }
+
   get isRunning(): boolean {
     return this.running;
   }
@@ -97,6 +121,16 @@ export class BriefingService {
     const startedAt = seoulIso(this.now());
     const date = seoulDate(this.now());
     const results: RunResult["results"] = [];
+    const created: SessionDone["created"] = [];
+    const trigger = opts.trigger ?? "manual";
+    const partial = !!opts.codes?.length;
+    for (const l of this.startListeners) {
+      try {
+        await l({ session, trigger, partial });
+      } catch (e) {
+        this.deps.log?.warn({ err: (e as Error).message }, "세션 시작 리스너 오류");
+      }
+    }
     try {
       let stocks = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at").execute();
       if (opts.codes?.length) stocks = stocks.filter((s) => opts.codes!.includes(s.code));
@@ -122,11 +156,22 @@ export class BriefingService {
             }
           }
         }
-        const b = await this.generateOne(stock, session, date);
+        const { briefing: b, changeRate } = await this.generate(stock, session, date);
+        if (b.status === "ok") created.push({ briefing: b, changeRate });
         results.push({ code: b.code, name: stock.name, status: b.status, briefingId: b.id, error: b.error, summary: b.status === "ok" ? b.summary : null });
       }
     } finally {
       this.running = false;
+      // 도중에 예외로 끝나도 이미 만든 브리핑은 알린다
+      if (created.length > 0) {
+        for (const l of this.sessionListeners) {
+          try {
+            await l({ session, date, trigger, partial, created });
+          } catch (e) {
+            this.deps.log?.warn({ err: (e as Error).message }, "세션 리스너 오류");
+          }
+        }
+      }
     }
     const finishedAt = seoulIso(this.now());
     this._lastRun = {
@@ -138,7 +183,7 @@ export class BriefingService {
       failed: results.filter((r) => r.status === "failed").length,
       skipped: results.filter((r) => r.status === "skipped").length,
       lastError: results.find((r) => r.status === "failed")?.error ?? null,
-      trigger: opts.trigger ?? "manual",
+      trigger,
     };
     return { session, date, results, startedAt, finishedAt };
   }
@@ -159,6 +204,11 @@ export class BriefingService {
   }
 
   async generateOne(stock: RegisteredStock, session: BriefingSession, date = seoulDate(this.now())): Promise<Briefing> {
+    return (await this.generate(stock, session, date)).briefing;
+  }
+
+  /** 브리핑 한 건 + 브리핑 시점 등락률 (알림 묶음용) */
+  private async generate(stock: RegisteredStock, session: BriefingSession, date: string): Promise<{ briefing: Briefing; changeRate: number | null }> {
     const log = this.deps.log;
     const [snapshot, previous] = await Promise.all([this.deps.collector.collectBriefing(stock), this.previousSummary(stock.code, date, session)]);
     const vars = {
@@ -236,7 +286,7 @@ export class BriefingService {
         }
       }
     }
-    return saved;
+    return { briefing: saved, changeRate: snapshot.quote?.changeRate ?? null };
   }
 
   // ── 조회 ──────────────────────────────────────────────────────

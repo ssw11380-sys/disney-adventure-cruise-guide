@@ -323,8 +323,18 @@ export interface NotificationSettings {
   afternoonEnabled: boolean;
   weekdaysOnly: boolean;
   pushEnabled: boolean;
+  /** 3-19 서버부터: 조용한 시간(한국 시간)·알림 끈 종목·세션당 1건 묶음 여부. 예전 서버는 없음 */
+  quietEnabled?: boolean;
+  quietStart?: string;
+  quietEnd?: string;
+  mutedCodes?: string[];
+  digest?: boolean;
+  /** 브리핑 실행 중 (3-19 서버부터) */
+  running?: boolean;
   schedule: Health["schedule"];
 }
+
+export type NotificationSettingsPatch = Partial<Omit<NotificationSettings, "schedule" | "digest" | "running">> & { mute?: { code: string; muted: boolean } };
 
 export interface SendSummary {
   sent: number;

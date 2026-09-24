@@ -1,13 +1,14 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useBriefing, useBriefings, useFeature } from "@/api/hooks";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { useBriefing, useBriefings, useFeature, useStockMutations } from "@/api/hooks";
 import { StaleBanner } from "@/components/Freshness";
 import { CardsSkeleton } from "@/components/Skeleton";
 import { BriefingSources } from "@/components/BriefingSources";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
-import { Badge, Card, ChangeText, ErrorView, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
+import { Badge, Button, Card, ChangeText, ErrorView, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
+import { estimateText } from "@/lib/briefingRun";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL } from "@/lib/format";
 import { parseBriefingId, viewState } from "@/lib/freshness";
 import { font, space, useTheme } from "@/theme";
@@ -22,6 +23,8 @@ export default function BriefingDetailScreen() {
   const [mode, setMode] = useState<"summary" | "detail">("detail");
   const history = useBriefings({ code: b.data?.code, limit: 30 }, !!b.data?.code);
   const sourcesOn = useFeature("briefingSources", true); // 이미 나간 기능(3-12)
+  const { run } = useStockMutations();
+  const regenOn = useFeature("briefingManualRun", false); // 새 기능(3-19): 서버가 켤 때만
 
   if (numId === null) return <Screen><ErrorView error={new Error("브리핑 주소가 올바르지 않습니다")} retryLabel="브리핑 목록으로" onRetry={() => router.dismissTo("/briefings")} /></Screen>;
   const view = viewState(b);
@@ -86,6 +89,40 @@ export default function BriefingDetailScreen() {
       )}
 
       {sourcesOn ? <BriefingSources data={d.data} /> : null}
+
+      {/* 이 종목만 다시 만들기 (3-19): 전체를 다시 만들지 않고 약 30초 */}
+      {regenOn ? (
+        <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, gap: 4 }}>
+          <Button
+            title={`이 종목 오늘 ${d.session === "morning" ? "오전" : "오후"} 브리핑 다시 만들기`}
+            variant="secondary"
+            icon="refresh"
+            loading={run.isPending}
+            disabled={run.isPending}
+            onPress={() =>
+              Alert.alert("이 종목만 다시 만들기", `${d.name ?? d.code} 오늘 ${d.session === "morning" ? "오전" : "오후"} 브리핑을 새로 만들어 덮어씁니다 (${estimateText(1)}).`, [
+                { text: "취소", style: "cancel" },
+                {
+                  text: "만들기",
+                  onPress: () =>
+                    run.mutate(
+                      { session: d.session, codes: [d.code], force: true },
+                      {
+                        onSuccess: (r) => {
+                          const res = r.results[0];
+                          if (res?.status === "ok" && res.briefingId) router.replace(`/briefings/${res.briefingId}`);
+                          else Alert.alert("다시 만들기 실패", res?.error ?? "결과가 없습니다");
+                        },
+                        onError: (e) => Alert.alert("다시 만들기 실패", e instanceof Error ? e.message : String(e)),
+                      },
+                    ),
+                },
+              ])
+            }
+          />
+          <Muted style={{ fontSize: font.tiny }}>전체 종목은 브리핑 탭 아래 “수동 생성”에서</Muted>
+        </View>
+      ) : null}
 
       {history.data && history.data.length > 1 ? (
         <View>

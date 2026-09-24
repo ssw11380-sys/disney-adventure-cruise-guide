@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import { notificationSettingsPatch, timeToCron, type NotificationSettingsStore } from "../notifications/settings.js";
 import type { BriefingScheduler } from "../scheduler.js";
 import type { DeviceService } from "../services/deviceService.js";
@@ -11,12 +12,19 @@ const registerBody = z.object({
   deviceName: z.string().max(100).nullable().optional(),
 });
 const tokenParam = z.object({ token: z.string().min(10) });
+const codeSchema = z.string().transform(normalizeCode).pipe(z.string().regex(CODE_RE, "종목 코드 형식이 아닙니다"));
+/** 종목 하나만 알림 끄기/켜기 (3-19) */
+const muteBody = z.object({ mute: z.object({ code: codeSchema, muted: z.boolean() }).optional(), mutedCodes: z.array(codeSchema).max(200).optional() });
 
 export interface NotificationRouteDeps {
   devices: DeviceService;
   notifications: NotificationService;
   settings: NotificationSettingsStore;
   scheduler: BriefingScheduler | null;
+  /** 앱이 로컬 알림(백그라운드 확인)도 같은 규칙으로 묶게 briefingDigest 상태를 같이 준다 */
+  features?: { enabled(key: "briefingDigest"): Promise<boolean> };
+  /** 브리핑 실행 중인지 (앱 백그라운드 알림이 실행 도중엔 알리지 않고 기다리게) */
+  isRunning?: () => boolean;
 }
 
 export const deviceRoutes: FastifyPluginAsync<NotificationRouteDeps> = async (app, { devices }) => {
@@ -33,18 +41,21 @@ export const deviceRoutes: FastifyPluginAsync<NotificationRouteDeps> = async (ap
   });
 };
 
-export const notificationRoutes: FastifyPluginAsync<NotificationRouteDeps> = async (app, { notifications, settings, scheduler, devices }) => {
-  /** 알림/브리핑 시간 설정 */
-  app.get("/settings", async () => ({ ...(await settings.get()), schedule: scheduler?.status() ?? null }));
+export const notificationRoutes: FastifyPluginAsync<NotificationRouteDeps> = async (app, { notifications, settings, scheduler, devices, features, isRunning }) => {
+  const extra = async () => ({ digest: features ? await features.enabled("briefingDigest") : true, running: isRunning?.() ?? scheduler?.status().running ?? false, schedule: scheduler?.status() ?? null });
+  /** 알림/브리핑 시간 설정 (+ digest: 세션당 1건으로 묶는지, running: 브리핑 실행 중, 3-19) */
+  app.get("/settings", async () => ({ ...(await settings.get()), ...(await extra()) }));
 
   app.put("/settings", async (req) => {
     const patch = notificationSettingsPatch.parse(req.body ?? {});
-    const next = await settings.update(Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)));
+    const { mute, mutedCodes } = muteBody.parse(req.body ?? {});
+    if (mutedCodes) patch.mutedCodes = [...new Set(mutedCodes)];
+    const next = await settings.update(Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)), mute);
     scheduler?.reschedule({
       morningCron: next.morningEnabled ? timeToCron(next.morningTime, next.weekdaysOnly) : null,
       afternoonCron: next.afternoonEnabled ? timeToCron(next.afternoonTime, next.weekdaysOnly) : null,
     });
-    return { ...next, schedule: scheduler?.status() ?? null };
+    return { ...next, ...(await extra()) };
   });
 
   /** 테스트 알림 */

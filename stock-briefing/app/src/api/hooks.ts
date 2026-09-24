@@ -7,7 +7,7 @@ import { pollInterval, streamFresh } from "@/lib/freshness";
 import { useLiveStream } from "@/lib/liveStream";
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
-import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, RankCategory, ThemeKind, ThemePeriod } from "./types";
+import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken, ready } = useSettings();
@@ -176,13 +176,18 @@ export function pickSearch<T>(
   return { ...none, data, pending: true, previous: data !== undefined };
 }
 
+/** 등록 종목 목록 (잔고 캐시를 쓰고 30초보다 오래됐을 때만 새로 받는다 — 폴링하지 않는 화면용) */
+export function useRegisteredStocks(enabled = true) {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 30_000, retry: 0, enabled });
+}
+
 /**
  * 등록 종목 코드 (검색 화면의 "등록됨" 표시). 잔고 캐시를 쓰고 30초보다 오래됐으면 한 번 새로 받는다 —
  * 상세에서 등록하고 돌아와도 바뀐 표시가 보이게 (등록·삭제는 잔고 캐시를 무효화한다)
  */
 export function useRegisteredCodes(): { codes: Set<string>; refresh: () => void } {
-  const api = useApi();
-  const q = useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 30_000, retry: 0 });
+  const q = useRegisteredStocks();
   const codes = useMemo(() => new Set((q.data ?? []).map((s) => s.code)), [q.data]);
   const { refetch } = q;
   return { codes, refresh: () => void refetch() };
@@ -342,15 +347,36 @@ export function useNotificationMutations() {
   };
   return {
     updateSettings: useMutation({
+      mutationKey: [apiUrl, "updateNotificationSettings"],
       mutationFn: api.updateNotificationSettings,
+      // 바로 화면에 반영. 종목 알림은 하나씩(mute) 보내 서버가 합치므로 연달아 눌러도 앞의 변경을 잃지 않는다
+      onMutate: async (patch) => {
+        await qc.cancelQueries({ queryKey: [apiUrl, "notificationSettings"] });
+        qc.setQueryData<NotificationSettings>([apiUrl, "notificationSettings"], (old) => (old ? applySettingsPatch(old, patch) : old));
+      },
+      onError: () => invalidate(),
       onSuccess: (data) => {
-        qc.setQueryData([apiUrl, "notificationSettings"], data);
-        invalidate();
+        // 아직 끝나지 않은 변경이 있으면 서버 응답으로 덮지 않는다 (앞 응답이 뒤 변경을 되돌려 보이지 않게). 마지막 것이 끝나면 다시 받는다
+        if (qc.isMutating({ mutationKey: [apiUrl, "updateNotificationSettings"] }) <= 1) {
+          qc.setQueryData([apiUrl, "notificationSettings"], data);
+          invalidate();
+        }
       },
     }),
     sendTest: useMutation({ mutationFn: api.sendTestNotification, onSuccess: invalidate }),
     invalidate,
   };
+}
+
+/** 알림 설정 변경을 화면용 값에 미리 반영 (mute 는 목록에 더하거나 뺀다) */
+export function applySettingsPatch(old: NotificationSettings, patch: NotificationSettingsPatch): NotificationSettings {
+  const { mute, ...rest } = patch;
+  const next: NotificationSettings = { ...old, ...rest };
+  if (mute) {
+    const list = next.mutedCodes ?? [];
+    next.mutedCodes = mute.muted ? [...new Set([...list, mute.code])] : list.filter((c) => c !== mute.code);
+  }
+  return next;
 }
 
 /** 종목 등록/수정/삭제, 브리핑 실행 뮤테이션. 성공 시 관련 쿼리를 무효화한다. */

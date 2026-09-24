@@ -3,6 +3,7 @@ import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { fillFromLast } from "./model";
 import { canReuse, fromPayload, type WidgetMarket, type WidgetPayload } from "./payload";
+import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 
 /**
  * 위젯은 앱과 별도의 JS 컨텍스트에서 돌아가므로(react-native-android-widget 태스크 핸들러) react-query 나
@@ -136,6 +137,29 @@ async function fetchPayload(apiUrl: string, token: string, now: number): Promise
 export async function loadLatestBriefings(): Promise<LatestBriefing[]> {
   const { apiUrl, apiToken } = await readSettings();
   return getJson<LatestBriefing[]>(`${apiUrl}/api/briefings/latest`, apiToken);
+}
+
+/**
+ * 알림 규칙 (3-19): 세션당 1건 묶음·조용한 시간·끈 종목 + 브리핑 실행 중인지. 백그라운드 알림이 새 브리핑을 찾았을 때만 받는다.
+ * 예전 서버(digest 없음)면 예전처럼 종목마다. 받지 못하면 null → 이번에는 알리지 않고 다음 확인에서 (잘못된 규칙으로 "본 것" 처리하지 않게)
+ */
+export async function loadNotifyPrefs(): Promise<(NotifyPrefs & { running: boolean }) | null> {
+  const { apiUrl, apiToken } = await readSettings();
+  try {
+    const s = await getJson<Partial<NotifyPrefs> & { running?: boolean; schedule?: { running?: boolean } | null }>(`${apiUrl}/api/notifications/settings`, apiToken);
+    const running = s.running ?? s.schedule?.running ?? false;
+    if (s.digest === undefined) return { ...DEFAULT_PREFS, digest: false, running };
+    return {
+      digest: s.digest,
+      quietEnabled: s.quietEnabled ?? DEFAULT_PREFS.quietEnabled,
+      quietStart: s.quietStart ?? DEFAULT_PREFS.quietStart,
+      quietEnd: s.quietEnd ?? DEFAULT_PREFS.quietEnd,
+      mutedCodes: s.mutedCodes ?? [],
+      running,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promise<T> {
