@@ -104,5 +104,20 @@ export function assetLine(day: number, profit: number, fmt: (n: number) => strin
   };
 }
 
+/**
+ * 누적 수익률(%) = 누적 손익 ÷ 매입금액. 매입금액은 평가금액 − 누적 손익 (토스 "내 투자"와 같은 기준, 비용 차감 설정도 합계와 같게 따른다).
+ * 매입금액이 0 이하면 수익률을 낼 수 없어 null
+ */
+export function cumulativeRate(value: number, profit: number): number | null {
+  const cost = value - profit;
+  return cost > 0 ? (profit / cost) * 100 : null;
+}
+
+/** 잔고 위젯 합계 옆 한 줄: "누적 -5,901,231원 (-7.48%)" — 누적 손익 부호 색 */
+export function cumulativeLine(value: number, profit: number, money: (n: number) => string, pct: (n: number) => string): { text: string; color: string } {
+  const r = cumulativeRate(value, profit);
+  return { text: `누적 ${money(profit)}${r === null ? "" : ` (${pct(r)})`}`, color: tone(profit) };
+}
+
 /** 위젯·헤더를 누르면 잔고 탭으로 (마지막으로 보던 화면이 아니라) */
 export const HOME_URI = "stockbriefing://";

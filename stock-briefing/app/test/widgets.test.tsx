@@ -23,7 +23,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 
 const { AssetWidget, HoldingsWidget } = await import("@/widgets/widgets");
 const { loadWidgetData, saveLastStocks } = await import("@/widgets/data");
-const { HOME_URI, asOfLabel, failureText, assetLine, fillFromLast } = await import("@/widgets/model");
+const { HOME_URI, asOfLabel, failureText, assetLine, cumulativeLine, cumulativeRate, fillFromLast } = await import("@/widgets/model");
 const API = "https://server.test";
 
 interface Node {
@@ -90,6 +90,36 @@ describe("위젯-2: 자산 위젯 색 (오늘·총 각자 부호)", () => {
   });
 });
 
+describe("잔고 위젯 합계 옆은 누적 손익 금액·수익률 (2026-09-24 요청)", () => {
+  it("누적 수익률 = 누적 손익 ÷ (평가금액 − 누적 손익) — 토스 '내 투자'와 같은 기준", () => {
+    // 토스 위젯 예: 평가 72,956,242원, 손익 −5,901,231원 → 매입 78,857,473원, −7.48%
+    expect(cumulativeRate(72_956_242, -5_901_231)).toBeCloseTo(-7.483, 3);
+    expect(cumulativeRate(110, 10)).toBeCloseTo(10, 6); // 매입 100 에 +10
+    expect(cumulativeRate(0, 0)).toBeNull();
+    expect(cumulativeRate(100, 100)).toBeNull(); // 매입금액 0
+    const l = cumulativeLine(72_956_242, -5_901_231, (n) => `${n}원`, (n) => `${n.toFixed(2)}%`);
+    expect(l).toEqual({ text: "누적 -5901231원 (-7.48%)", color: DOWN });
+    expect(cumulativeLine(100, 100, String, String).text).toBe("누적 100"); // 수익률을 낼 수 없으면 금액만
+  });
+
+  it("렌더 결과: 오늘은 올라도 누적이 손실이면 '누적 −…원 (−…%)' 파랑, '당일' 글자는 없다", () => {
+    // 오늘 +100×10 = +1,000원, 평단 80,000 → 누적 (70,000−80,000)×10 = −100,000원, −12.50%
+    const s = [holding("005930", quote("005930", 70_000, { change: 100, asOf: AT_CLOSE }), 10, 80_000)];
+    const tx = texts(render(<HoldingsWidget stocks={s} showKrw={false} afterCost={false} fetchedAt={NOW} error={null} now={NOW} />));
+    const cum = tx.find((t) => t.text.startsWith("누적"))!;
+    expect(cum.text).toBe("누적 -100,000원 (-12.50%)");
+    expect(cum.color).toBe(DOWN);
+    expect(tx.some((t) => t.text.startsWith("당일"))).toBe(false);
+  });
+
+  it("미국 종목을 원화로 볼 때도 합계와 같은 통화·같은 기준으로", () => {
+    const us = holding("AAPL", quote("AAPL", 220, { currency: "USD", fxRate: 1_400, priceKrw: 308_000, change: 1, asOf: AT_CLOSE }), 2, 200);
+    const tx = texts(render(<HoldingsWidget stocks={[us]} showKrw afterCost={false} fetchedAt={NOW} error={null} now={NOW} />)).map((t) => t.text);
+    const cum = tx.find((t) => t.startsWith("누적"))!;
+    expect(cum).toMatch(/^누적 \+[\d,]+원 \(\+\d+\.\d{2}%\)$/);
+  });
+});
+
 describe("위젯-3: 시세 없는 보유 종목", () => {
   it("SOXL 처럼 한 종목 시세가 null 이어도 보유 17 유지, '관심' 표시 0, 마지막 값으로 합계 유지", async () => {
     const full = book();
@@ -102,7 +132,7 @@ describe("위젯-3: 시세 없는 보유 종목", () => {
     const tx = texts(nodes).map((t) => t.text);
     expect(tx).toContain("잔고 18");
     expect(tx.filter((t) => t === "관심")).toHaveLength(1); // 진짜 관심 종목 1개만
-    const fullTotal = texts(render(<HoldingsWidget stocks={full} showKrw={false} fetchedAt={NOW} error={null} now={NOW} />)).map((t) => t.text).find((t) => t.endsWith("원") && !t.startsWith("당일"));
+    const fullTotal = texts(render(<HoldingsWidget stocks={full} showKrw={false} fetchedAt={NOW} error={null} now={NOW} />)).map((t) => t.text).find((t) => t.endsWith("원") && !t.startsWith("누적"));
     expect(tx).toContain(fullTotal);
     expect(tx.some((t) => t.includes("1종목 이전 값"))).toBe(true);
     expect(tx.some((t) => t.startsWith("이전 값 · "))).toBe(true); // 채운 종목 행에도 표시

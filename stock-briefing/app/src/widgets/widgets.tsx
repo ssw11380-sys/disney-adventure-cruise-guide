@@ -5,7 +5,7 @@ import { formatPct, formatPrice, toDisplay } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, totals } from "@/lib/portfolio";
 import { DISCLAIMER_SHORT } from "@/lib/disclaimer";
-import { asOfLabel, asOfMs, assetLine, excludedCount, failureText, HOME_URI, isHeld, tone, widgetOrder } from "./model";
+import { asOfLabel, asOfMs, assetLine, cumulativeLine, excludedCount, failureText, HOME_URI, isHeld, tone, widgetOrder } from "./model";
 import { currentMarket, isDelayed, openMarketAsOf, type WidgetMarket } from "./payload";
 import { space } from "@/tokens";
 import { WIDGET_COLORS, WIDGET_FONT } from "./palette";
@@ -14,7 +14,7 @@ export { totals, type Totals } from "@/lib/portfolio";
 
 /**
  * 홈 화면 위젯 3종. react-native-android-widget 프리미티브만 쓴다(RN 컴포넌트 불가, 색은 hex/rgba 문자열).
- *  - HoldingsWidget (4x2~): 총 평가·당일 손익 + 등록 종목 전체(보유 → 관심, 평가금액 순)를 스크롤 목록으로.
+ *  - HoldingsWidget (4x2~): 총 평가·누적 손익(금액·수익률) + 등록 종목 전체(보유 → 관심, 평가금액 순)를 스크롤 목록으로.
  *    종목을 누르면 상세로, 헤더를 누르면 앱으로. 위젯 높이를 늘리면 한 번에 더 많이 보인다.
  *  - BriefingWidget (4x2): 보유 비중 상위 3종목의 최신 브리핑 한 줄씩 + 고지 한 줄. 누르면 브리핑 상세로.
  *  - AssetWidget (2x1): 총 평가금액과 오늘 손익만 크게.
@@ -92,6 +92,8 @@ type StockWidgetProps = {
 
 export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given }: StockWidgetProps) {
   const t = totals(stocks, showKrw, afterCost);
+  // 합계 옆은 당일이 아니라 누적 손익 (사용자 요청 2026-09-24, 토스 "내 투자"처럼 금액과 수익률)
+  const cum = t ? cumulativeLine(t.value, t.profit, (n) => formatPrice(n, t.currency, { sign: true }), (n) => formatPct(n)) : null;
   const rows = widgetOrder(stocks, fxOf);
   const note = notes(error, filled.length, excludedCount(stocks));
   const asOf = asOfMs(stocks, fetchedAt);
@@ -100,10 +102,10 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
   return (
     <FlexWidget style={root}>
       <Header title={`잔고 ${rows.length}`} subtitle={asOfLabel(asOf, now)} market={market} delayed={delayed} />
-      {t ? (
+      {t && cum ? (
         <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: space.xs, marginBottom: space.xs }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
           <TextWidget text={formatPrice(t.value, t.currency)} style={{ color: C.ink, fontSize: F.big, fontWeight: "800" }} />
-          <TextWidget text={`당일 ${formatPrice(t.day, t.currency, { sign: true })}`} style={{ color: tone(t.day) as `#${string}`, fontSize: F.md, fontWeight: "700" }} />
+          <TextWidget text={cum.text} maxLines={1} style={{ color: cum.color as `#${string}`, fontSize: F.md, fontWeight: "700", adjustsFontSizeToFit: true }} />
         </FlexWidget>
       ) : null}
       {note ? <TextWidget text={note} maxLines={1} truncate="END" style={{ color: C.muted, fontSize: F.sm }} /> : null}
