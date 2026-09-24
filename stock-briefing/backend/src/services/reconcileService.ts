@@ -3,7 +3,9 @@ import { seoulIso } from "../lib/time.js";
 import type { RegisteredWithQuote } from "./stockService.js";
 
 /**
- * 토스 계좌 자동 대조: 동기화 때마다 "앱 평가금(비용 차감)"과 같은 응답의 토스 종목별 평가금(amountAfterCost)을 비교해 남긴다.
+ * 토스 계좌 자동 대조: 동기화 때마다 같은 응답의 토스 종목별 수량·평가금(amountAfterCost)과 앱을 비교해 남긴다.
+ *  - 수량: 토스와 앱 보유 수량이 다른 종목 수 (3번 연속이면 경고 — 동기화가 수량을 못 맞추는 경우)
+ *  - 평가금: 수량이 같은 종목만. 수량·비용률은 토스에서 받아 오므로 사실상 앱 시세가 토스 가격과 맞는지 보는 검사
  *  - 같은 종목끼리만: 이번 동기화로 받은 토스 종목 중 "동기화 제외"가 아닌 것 (계좌 요약 합계를 쓰면 제외 종목·앱이 모르는 종목이 늘 차이로 남는다)
  *  - 원화 종목은 원화끼리, 달러 종목은 달러끼리 합치고 합계 차이만 환율로 원화 환산 (환율 차이가 섞이지 않게)
  *  - 가격 시각이 조금 달라 장중엔 작은 차이가 정상이다 → 0.1% 초과가 3번 연속일 때 한 번만 경고
@@ -27,14 +29,18 @@ export interface ReconcileEntry {
   diffPct: number;
   /** 비교한 종목 수 */
   n?: number;
-  /** 비교할 수 없던 종목 수 (0 이 아니면 비교 제외) */
+  /** 비교할 수 없던 종목 수 (0 이 아니면 평가금 비교 제외) */
   missing: number;
+  /** 토스와 보유 수량이 다른 종목 (예전 기록에는 없음) */
+  qtyMismatch?: string[];
 }
 
 export interface ReconcileStatus {
   last: ReconcileEntry | null;
   /** 0.1% 넘는 차이가 연속된 횟수 */
   streakOver: number;
+  /** 수량이 다른 종목이 있는 기록이 연속된 횟수 */
+  qtyStreak: number;
   /** 최근 7일: 비교한 횟수와 0.1% 이하 비율 */
   week: { n: number; withinPct: number | null };
   alert: boolean;
@@ -44,6 +50,7 @@ export interface ReconcileStatus {
 export interface TossItem {
   code: string;
   currency: "KRW" | "USD";
+  quantity: number;
   marketValueAfterCost?: number | null;
 }
 
@@ -52,16 +59,21 @@ export function compareWithToss(list: RegisteredWithQuote[], toss: TossItem[], a
   const byCode = new Map(list.map((s) => [s.code, s]));
   let appKrw = 0, appUsd = 0, tossKrw = 0, tossUsd = 0, missing = 0, n = 0;
   let fx: number | null = null;
+  const qtyMismatch: string[] = [];
   for (const t of toss) {
     const s = byCode.get(t.code);
     const ev = s?.evaluation ?? null;
-    if (t.marketValueAfterCost == null || (s?.quantity && (!s.quote || s.quote.stale || !ev?.afterCost))) {
+    // 수량이 다르면 평가금 비교는 의미가 없다 → 수량 차이로 따로 센다
+    if ((s?.quantity ?? 0) !== t.quantity) {
+      qtyMismatch.push(t.code);
+      continue;
+    }
+    if (t.marketValueAfterCost == null || !s!.quote || s!.quote.stale || !ev?.afterCost) {
       missing++;
       continue;
     }
     n++;
-    // 앱에 없거나 수량이 비었으면 0 으로 (동기화가 못 맞춘 실제 차이)
-    const v = s?.quantity ? ev!.afterCost!.marketValue : 0;
+    const v = ev.afterCost.marketValue;
     if (t.currency === "USD") {
       appUsd += v;
       tossUsd += t.marketValueAfterCost;
@@ -88,8 +100,9 @@ export function compareWithToss(list: RegisteredWithQuote[], toss: TossItem[], a
     diffKrw: Math.round(diffKrw),
     diffPct: base > 0 ? Math.round((diffKrw / base) * 1e5) / 1e3 : 0,
     n,
-    // 환율이 없거나 비교할 금액이 없으면 믿을 수 없는 비교
-    missing: missing + (noFx ? 1 : 0) + (base > 0 ? 0 : 1),
+    // 수량이 다른 종목이 있거나 환율·비교할 금액이 없으면 평가금 비교는 믿을 수 없다
+    missing: missing + qtyMismatch.length + (noFx ? 1 : 0) + (base > 0 ? 0 : 1),
+    qtyMismatch,
   };
 }
 
@@ -126,7 +139,12 @@ export class ReconcileService {
     this.cache = trimmed;
     // 이번 비교로 연속 3번이 된 때만 (비교 제외 건이 뒤에 붙어도 다시 알리지 않게)
     if (entry.missing === 0 && streakOver(trimmed) === STREAK_ALERT) {
-      const text = `토스 대조: 앱 평가금이 토스 계좌와 ${entry.diffKrw.toLocaleString("ko-KR")}원(${entry.diffPct.toFixed(2)}%) 다릅니다 (${STREAK_ALERT}회 연속 ${RECONCILE_WARN_PCT}% 초과)`;
+      const text = `토스 대조: 앱 평가금이 토스 계좌와 ${entry.diffKrw.toLocaleString("ko-KR")}원(${entry.diffPct.toFixed(2)}%) 다릅니다 (${STREAK_ALERT}회 연속 ${RECONCILE_WARN_PCT}% 초과, 시세 출처·시각 차이)`;
+      this.opts.log?.warn({ entry }, text);
+      await this.opts.notify?.(text).catch(() => undefined);
+    }
+    if (entry.qtyMismatch?.length && qtyStreak(trimmed) === STREAK_ALERT) {
+      const text = `토스 대조: 보유 수량이 토스와 다른 종목이 ${STREAK_ALERT}회 연속 있습니다 (${entry.qtyMismatch.join(", ")})`;
       this.opts.log?.warn({ entry }, text);
       await this.opts.notify?.(text).catch(() => undefined);
     }
@@ -152,7 +170,8 @@ export class ReconcileService {
     const week = h.filter((e) => e.missing === 0 && Date.parse(e.at) >= since);
     const within = week.filter((e) => Math.abs(e.diffPct) <= RECONCILE_WARN_PCT).length;
     const streak = streakOver(h);
-    return { last: h.at(-1) ?? null, streakOver: streak, week: { n: week.length, withinPct: week.length ? Math.round((within / week.length) * 1000) / 10 : null }, alert: streak >= STREAK_ALERT };
+    const qty = qtyStreak(h);
+    return { last: h.at(-1) ?? null, streakOver: streak, qtyStreak: qty, week: { n: week.length, withinPct: week.length ? Math.round((within / week.length) * 1000) / 10 : null }, alert: streak >= STREAK_ALERT || qty >= STREAK_ALERT };
   }
 }
 
@@ -165,5 +184,12 @@ function streakOver(h: ReconcileEntry[]): number {
     if (Math.abs(e.diffPct) > RECONCILE_WARN_PCT) n++;
     else break;
   }
+  return n;
+}
+
+/** 끝에서부터 수량이 다른 종목이 있는 기록이 몇 번 연속인지 (연달아 이어진 동기화 사이에 잠깐 어긋나는 건 3번 연속이 되기 어렵다) */
+function qtyStreak(h: ReconcileEntry[]): number {
+  let n = 0;
+  for (let i = h.length - 1; i >= 0 && h[i]!.qtyMismatch?.length; i--) n++;
   return n;
 }

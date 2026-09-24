@@ -80,8 +80,9 @@ export interface TossOpenApiStatus {
   } | null;
   /** 토스 계좌 자동 대조 (앱 총평가 vs 토스 비용 차감 평가). 구버전 서버에는 없음 */
   reconcile?: {
-    last: { at: string; diffKrw: number; diffPct: number; missing: number } | null;
+    last: { at: string; diffKrw: number; diffPct: number; missing: number; qtyMismatch?: string[] } | null;
     streakOver: number;
+    qtyStreak?: number;
     week: { n: number; withinPct: number | null };
     alert: boolean;
   } | null;

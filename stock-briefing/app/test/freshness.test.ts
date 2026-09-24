@@ -91,5 +91,6 @@ describe("토스 대조 줄 (3-13)", () => {
     expect(reconcileLabel({ last: { at: "x", diffKrw: -1234, diffPct: -0.0123, missing: 0 } }, when)).toBe("차이 -1,234원 (-0.01%) · 9/28 10:20");
     expect(reconcileLabel({ last: { at: "x", diffKrw: 0, diffPct: 0, missing: 0 } }, when)).toBe("차이 0원 (0.00%) · 9/28 10:20");
     expect(reconcileLabel({ last: { at: "x", diffKrw: 5, diffPct: 0.1, missing: 2 } }, when)).toBe("시세 지연 등으로 이번엔 비교 못 함 · 9/28 10:20");
+    expect(reconcileLabel({ last: { at: "x", diffKrw: 0, diffPct: 0, missing: 1, qtyMismatch: ["005930"] } }, when)).toBe("보유 수량이 토스와 다른 종목 1개 · 9/28 10:20");
   });
 });

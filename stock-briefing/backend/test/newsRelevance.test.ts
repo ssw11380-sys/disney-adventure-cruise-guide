@@ -106,6 +106,11 @@ describe("종목 뉴스 관련도 (3-12, 운영에서 뽑은 제목)", () => {
     expect(etfAliases(spx)).toEqual(["미국S&P500", "S&P500"]);
     expect(etfAliases({ code: "379810", name: "KODEX 미국나스닥100" })).toEqual(["미국나스닥100", "나스닥100"]);
     expect(etfAliases({ code: "005930", name: "삼성전자" })).toEqual([]);
+    expect(etfAliases({ code: "069500", name: "KODEX 200" })).toEqual([]);
+    expect(etfAliases({ code: "122630", name: "KODEX 레버리지" })).toEqual([]);
+    // 스팸 거르기는 이름 검색에만, 종목 이름이 제목에 있으면 남긴다 (카지노·항공 슬롯 기사)
+    expect(keep({ code: "035250", name: "강원랜드" }, [item("강원랜드, 3분기 카지노 매출 역대 최대")])).toHaveLength(1);
+    expect(filterNews({ code: "003490", name: "대한항공" }, [item("대한항공, 유럽 노선 슬롯 반납 완료")], NOW, true)).toHaveLength(1);
     expect(newsQuery(spx)).toBe('("S&P500" OR "KODEX 미국S&P500") (지수 OR 증시 OR ETF) when:30d');
     expect(
       filterNews(spx, [item("서학개미 8월 수익률 ‘-’…S&P500 올랐지만, 원화 가치 치솟아"), item("로아 캐릭터 슬롯 24 : 위험 피하기", 1, "Calgary Roughnecks"), item("유로 원 토토 비교 팀 협업 체계적 방법"), item("반도체 ETF 수익률 싹쓸이")], NOW, true).map((x) => x.title),

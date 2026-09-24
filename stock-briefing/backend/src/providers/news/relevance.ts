@@ -63,7 +63,7 @@ const FINANCE =
 /** 뉴스로 보기 어려운 출처 (블로그·유료 칼럼·가상자산 시세 페이지·게임 하드웨어 매체) */
 const BLOCKED_SOURCE = /브런치|brunch|티스토리|tistory|blog|블로그|카페|프리미엄콘텐츠|CoinGecko|GameGPU/i;
 
-/** 검색 결과에 섞이는 도박 스팸 제목 */
+/** 이름 검색 결과에 섞이는 도박 스팸 제목 (카지노 종목·항공 슬롯 기사처럼 종목 이름이 제목에 있으면 거르지 않는다) */
 const SPAM_TITLE = /토토|카지노|슬롯|포커|바카라|먹튀/;
 
 export function coreName(name: string): string {
@@ -110,6 +110,9 @@ function hasWord(text: string, word: string): boolean {
   return false;
 }
 
+/** 기초지수 이름에 들어가는 말 */
+const INDEX_WORD = /S&P|나스닥|NASDAQ|다우|필라델피아|코스피|코스닥|MSCI|항셍|니케이|닛케이|유로스톡스|러셀/i;
+
 /** 국내 상장 ETF 브랜드 */
 const ETF_BRAND = /^(KODEX|TIGER|ACE|SOL|RISE|KBSTAR|HANARO|ARIRANG|PLUS|KOSEF|TIMEFOLIO)\s+/i;
 
@@ -119,7 +122,8 @@ export function etfAliases(stock: StockRef): string[] {
   const rest = stock.name.replace(ETF_BRAND, "").replace(/\(H\)|\(합성\)/g, "").trim();
   const out = [rest];
   if (rest.startsWith("미국")) out.push(rest.slice(2).trim());
-  return out.filter((x) => x.length >= 3);
+  // 지수 이름이 있는 것만 ("KODEX 200"의 "200", "KODEX 레버리지"의 "레버리지"처럼 흔한 말은 별칭으로 쓰지 않는다)
+  return out.filter((x) => x.length >= 3 && INDEX_WORD.test(x));
 }
 
 function names(stock: StockRef): string[] {
@@ -137,7 +141,7 @@ export function isRelevant(stock: StockRef, item: NewsItem, now: number, fromNam
   const at = Date.parse(item.publishedAt);
   if (Number.isNaN(at) || now - at > NEWS_MAX_AGE_MS) return false;
   if (item.source && BLOCKED_SOURCE.test(item.source)) return false;
-  if (SPAM_TITLE.test(item.title)) return false;
+  if (fromNameSearch && SPAM_TITLE.test(item.title) && !names(stock).some((n) => hasWord(item.title, n))) return false;
   const title = item.title;
   const us = !isKrCode(stock.code);
   const ticker = us && hasWord(title, stock.code.toUpperCase());

@@ -16,7 +16,7 @@ function row(code: string, cur: "KRW" | "USD", afterCost: number, opts: { synced
   };
 }
 
-const toss = (code: string, cur: "KRW" | "USD", v: number | null) => ({ code, currency: cur, marketValueAfterCost: v });
+const toss = (code: string, cur: "KRW" | "USD", v: number | null, quantity = 1) => ({ code, currency: cur, quantity, marketValueAfterCost: v });
 
 describe("토스 계좌 자동 대조 (3-13)", () => {
   it("같은 종목끼리 원화는 원화끼리, 달러는 달러끼리 비교하고 합계 차이만 환율로 환산한다. 토스 밖 종목은 넣지 않는다", () => {
@@ -38,11 +38,27 @@ describe("토스 계좌 자동 대조 (3-13)", () => {
     expect(compareWithToss([], [], "t").missing).toBeGreaterThan(0); // 비교할 금액 없음
   });
 
-  it("토스에 있는데 앱에서 수량이 빠진 종목은 실제 차이로 잡는다", () => {
+  it("수량이 다르면 평가금 비교에서 빼고 수량 차이로 따로 센다 (재검토: 연달은 동기화 사이 어긋남이 가격 경고가 되지 않게)", () => {
     const gone = row("005930", "KRW", 1_000_000);
     gone.quantity = null;
-    const e = compareWithToss([gone, row("000660", "KRW", 1_000_000)], [toss("005930", "KRW", 1_000_000), toss("000660", "KRW", 1_000_000)], "t");
-    expect(e).toMatchObject({ missing: 0, diffKrw: -1_000_000, diffPct: -50 });
+    const more = row("000660", "KRW", 2_000_000);
+    more.quantity = 2;
+    const e = compareWithToss([gone, more, row("035420", "KRW", 1_000_000)], [toss("005930", "KRW", 1_000_000), toss("000660", "KRW", 1_000_000, 1), toss("035420", "KRW", 1_000_000)], "t");
+    expect(e.qtyMismatch).toEqual(["005930", "000660"]);
+    expect(e.missing).toBe(2);
+    expect(e).toMatchObject({ appKrw: 1_000_000, tossKrw: 1_000_000, diffKrw: 0 });
+  });
+
+  it("수량 차이가 3번 연속이면 한 번 알린다", async () => {
+    const db = await createMigratedDb(":memory:");
+    const sent: string[] = [];
+    const svc = new ReconcileService({ db, notify: async (x) => void sent.push(x) });
+    const two = row("005930", "KRW", 1_000_000);
+    two.quantity = 2;
+    for (let i = 0; i < 4; i++) await svc.record([two], [toss("005930", "KRW", 1_000_000, 1)]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("005930");
+    expect(await svc.status()).toMatchObject({ qtyStreak: 4, alert: true, streakOver: 0 });
   });
 
   it("0.1% 초과가 3번 연속이면 한 번만 알리고, 비교 제외 건이 뒤에 붙어도 다시 알리지 않는다 (리뷰 M1)", async () => {

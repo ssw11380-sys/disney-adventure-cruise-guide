@@ -67,6 +67,10 @@ describe("장 상태 (3-11)", () => {
     const tg = marketContext("AAPL", null, at("2026-11-26T16:00:00+09:00"));
     expect(tg.phase).toBe("closed");
     expect(tg.lastRegularDate).toBe("2026-11-25");
+    // 주간거래는 다음 날 정규장에 딸린다: 월요일 한국 10:30(뉴욕 일요일 밤)은 주간거래 중, 추수감사절 한국 11:00(뉴욕 수요일 밤)은 아님
+    expect(marketContext("AAPL", null, at("2026-09-28T10:30:00+09:00")).phase).toBe("extended");
+    expect(marketContext("AAPL", null, at("2026-11-26T11:00:00+09:00")).phase).toBe("closed");
+    expect(marketContext("AAPL", null, at("2026-09-08T11:00:00+09:00")).phase).toBe("extended"); // 노동절 다음 날 한국 낮
   });
 
   it("한국 08:50~09:00 은 NXT 프리마켓이 아니라 개장 직전", () => {

@@ -78,8 +78,8 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
     return { market: "US", phase: "extended", label: `미국 정규장은 ${last}(현지) 마감, 지금은 애프터마켓 중`, lastRegularDate: lastRegular, todayIncomplete: false };
   // 한국 낮 시간(대략 10:00~17:30 KST)은 미국 주간거래(블루오션) 시간 — 정규장은 전날 밤 끝났다
   const kst = parts(now, "Asia/Seoul");
-  // 주간거래는 뉴욕 날짜로 그날 정규장이 열리는 날에만 (추수감사절 등 휴장일엔 없다)
-  if (tradingDay && kst.weekday >= 1 && kst.weekday <= 5 && kst.minutes >= 10 * 60 && kst.minutes < 17 * 60 + 30)
+  // 주간거래(뉴욕 저녁~밤)는 다음 날 정규장에 딸린 세션 → 한국 날짜가 미국 거래일일 때만 (추수감사절 등 휴장일 전날 밤엔 없다)
+  if (isUsTradingDate(kst.date) && kst.weekday >= 1 && kst.weekday <= 5 && kst.minutes >= 10 * 60 && kst.minutes < 17 * 60 + 30)
     return { market: "US", phase: "extended", label: `미국 주간거래(한국 낮 시간) 중. 마지막 정규장은 ${last}(현지)에 끝났고 다음 정규장은 아직 열리지 않았습니다`, lastRegularDate: lastRegular, todayIncomplete: false };
   return { market: "US", phase: "closed", label: `미국 정규장 마감 상태 (마지막 정규장 ${last}, 현지)`, lastRegularDate: lastRegular, todayIncomplete: false };
 }
