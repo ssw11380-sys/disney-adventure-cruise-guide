@@ -62,7 +62,8 @@ describe("devices, settings and push", () => {
       logger: false,
       enableScheduler: true,
       receiptDelayMs: 0,
-      now: () => new Date("2026-09-22T00:00:00+09:00"),
+      // 조용한 시간(22~07시) 밖
+      now: () => new Date("2026-09-22T09:00:00+09:00"),
     });
     await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
     await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "000660", quantity: 10, avgPrice: 150_000 } });

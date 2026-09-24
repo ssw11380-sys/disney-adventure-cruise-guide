@@ -64,6 +64,15 @@ export interface BriefingListener {
   (briefing: Briefing): Promise<void> | void;
 }
 
+/** 한 번의 실행(세션)이 끝났을 때: 이번에 새로 만든 브리핑(성공만)과 브리핑 시점 등락률 (3-19 알림 묶음) */
+export interface SessionDone {
+  session: BriefingSession;
+  date: string;
+  trigger: "schedule" | "manual";
+  created: Array<{ briefing: Briefing; changeRate: number | null }>;
+}
+export type SessionListener = (done: SessionDone) => Promise<void> | void;
+
 /**
  * 브리핑 파이프라인: 수집 → 프롬프트 조립 → Claude(상세) → Claude(요약) → 저장.
  * 종목별로 순차 실행한다(외부 API rate limit). 실패도 저장해서 앱에서 "생성 실패" 를 볼 수 있게 한다.
@@ -71,6 +80,9 @@ export interface BriefingListener {
 export class BriefingService {
   private readonly now: () => Date;
   private readonly listeners: BriefingListener[] = [];
+  private readonly sessionListeners: SessionListener[] = [];
+  /** generateOne 이 만든 브리핑의 등락률 (runSession 이 모아 알림 묶음에 쓴다) */
+  private readonly rateOf = new Map<number, number | null>();
   private running = false;
   private _lastRun: LastRun | null = null;
 
@@ -87,6 +99,11 @@ export class BriefingService {
     this.listeners.push(listener);
   }
 
+  /** 실행 한 번이 끝나면 (예약·수동 모두). 새로 만든 브리핑이 없으면 부르지 않는다 */
+  onSessionDone(listener: SessionListener): void {
+    this.sessionListeners.push(listener);
+  }
+
   get isRunning(): boolean {
     return this.running;
   }
@@ -97,6 +114,7 @@ export class BriefingService {
     const startedAt = seoulIso(this.now());
     const date = seoulDate(this.now());
     const results: RunResult["results"] = [];
+    const created: SessionDone["created"] = [];
     try {
       let stocks = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at").execute();
       if (opts.codes?.length) stocks = stocks.filter((s) => opts.codes!.includes(s.code));
@@ -123,6 +141,8 @@ export class BriefingService {
           }
         }
         const b = await this.generateOne(stock, session, date);
+        if (b.status === "ok") created.push({ briefing: b, changeRate: this.rateOf.get(b.id) ?? null });
+        this.rateOf.delete(b.id);
         results.push({ code: b.code, name: stock.name, status: b.status, briefingId: b.id, error: b.error, summary: b.status === "ok" ? b.summary : null });
       }
     } finally {
@@ -140,6 +160,15 @@ export class BriefingService {
       lastError: results.find((r) => r.status === "failed")?.error ?? null,
       trigger: opts.trigger ?? "manual",
     };
+    if (created.length > 0) {
+      for (const l of this.sessionListeners) {
+        try {
+          await l({ session, date, trigger: opts.trigger ?? "manual", created });
+        } catch (e) {
+          this.deps.log?.warn({ err: (e as Error).message }, "세션 리스너 오류");
+        }
+      }
+    }
     return { session, date, results, startedAt, finishedAt };
   }
 
@@ -227,6 +256,8 @@ export class BriefingService {
       .onConflict((oc) => oc.columns(["code", "briefing_date", "session"]).doUpdateSet(values))
       .execute();
     const saved = (await this.find(stock.code, date, session))!;
+    if (this.rateOf.size > 500) this.rateOf.clear();
+    this.rateOf.set(saved.id, snapshot.quote?.changeRate ?? null);
     if (saved.status === "ok") {
       for (const l of this.listeners) {
         try {

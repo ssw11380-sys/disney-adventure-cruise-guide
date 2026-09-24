@@ -1,7 +1,7 @@
 import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import { useEffect, useRef } from "react";
-import { routeForNotification } from "@/lib/notifications";
+import { ensureAndroidChannel, routeForNotification } from "@/lib/notifications";
 
 /**
  * 알림을 탭했을 때 해당 브리핑으로 이동한다.
@@ -10,6 +10,11 @@ import { routeForNotification } from "@/lib/notifications";
 export function NotificationBridge() {
   const lastResponse = Notifications.useLastNotificationResponse();
   const handled = useRef<string | null>(null);
+
+  // 알림 채널(브리핑·가격)을 앱을 켤 때 만들어 둔다 — 기기 설정에서 채널별로 끌 수 있게 (3-19)
+  useEffect(() => {
+    void ensureAndroidChannel().catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!lastResponse) return;

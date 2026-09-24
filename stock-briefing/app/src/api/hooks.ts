@@ -7,7 +7,7 @@ import { pollInterval, streamFresh } from "@/lib/freshness";
 import { useLiveStream } from "@/lib/liveStream";
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { createApi, type Api } from "./client";
-import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, RankCategory, ThemeKind, ThemePeriod } from "./types";
+import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, NotificationSettings, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken, ready } = useSettings();
@@ -176,13 +176,18 @@ export function pickSearch<T>(
   return { ...none, data, pending: true, previous: data !== undefined };
 }
 
+/** 등록 종목 목록 (잔고 캐시를 쓰고 30초보다 오래됐을 때만 새로 받는다 — 폴링하지 않는 화면용) */
+export function useRegisteredStocks() {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 30_000, retry: 0 });
+}
+
 /**
  * 등록 종목 코드 (검색 화면의 "등록됨" 표시). 잔고 캐시를 쓰고 30초보다 오래됐으면 한 번 새로 받는다 —
  * 상세에서 등록하고 돌아와도 바뀐 표시가 보이게 (등록·삭제는 잔고 캐시를 무효화한다)
  */
 export function useRegisteredCodes(): { codes: Set<string>; refresh: () => void } {
-  const api = useApi();
-  const q = useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 30_000, retry: 0 });
+  const q = useRegisteredStocks();
   const codes = useMemo(() => new Set((q.data ?? []).map((s) => s.code)), [q.data]);
   const { refetch } = q;
   return { codes, refresh: () => void refetch() };
@@ -343,6 +348,11 @@ export function useNotificationMutations() {
   return {
     updateSettings: useMutation({
       mutationFn: api.updateNotificationSettings,
+      // 바로 화면에 반영 (종목 알림 스위치를 연달아 눌러도 앞의 변경을 잃지 않게)
+      onMutate: (patch) => {
+        qc.setQueryData<NotificationSettings>([apiUrl, "notificationSettings"], (old) => (old ? { ...old, ...patch } : old));
+      },
+      onError: () => invalidate(),
       onSuccess: (data) => {
         qc.setQueryData([apiUrl, "notificationSettings"], data);
         invalidate();

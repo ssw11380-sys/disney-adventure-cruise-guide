@@ -1,6 +1,7 @@
+import { buildDigest, inQuietHours } from "../notifications/digest.js";
 import type { PushMessage, PushSender } from "../notifications/push.js";
 import type { NotificationSettingsStore } from "../notifications/settings.js";
-import type { Briefing } from "./briefingService.js";
+import type { Briefing, SessionDone } from "./briefingService.js";
 import type { DeviceService } from "./deviceService.js";
 
 export interface NotificationLog {
@@ -15,7 +16,10 @@ export interface SendSummary {
 }
 
 /**
- * 브리핑이 생성되면 등록된 모든 기기에 요약을 푸시한다.
+ * 브리핑 알림 푸시.
+ *  - briefingDigest 플래그가 켜져 있으면(기본) 실행 한 번(세션)이 끝날 때 1건으로 묶어 보낸다: "오후 브리핑 17종목 · 변동 상위 2개".
+ *    조용한 시간(기본 22~07시, 한국 시간)에는 보내지 않고, 알림을 끈 종목은 빼고 센다 (3-19)
+ *  - 꺼져 있으면 예전처럼 브리핑이 생성될 때마다 종목별로 1건
  * 영수증(receipt)은 전송 후 일정 시간 뒤에 확인해서 DeviceNotRegistered 기기를 비활성화한다.
  */
 export class NotificationService {
@@ -30,12 +34,16 @@ export class NotificationService {
       log?: NotificationLog;
       /** 영수증 확인까지 대기 시간 (기본 15분). 테스트에서 0 */
       receiptDelayMs?: number;
+      /** 기능 플래그 (없으면 briefingDigest 켜짐으로 본다) */
+      features?: { enabled(key: "briefingDigest"): Promise<boolean> };
+      now?: () => Date;
     },
   ) {}
 
   /** BriefingService.onBriefing 에 붙이는 리스너 */
   readonly onBriefing = async (b: Briefing): Promise<void> => {
     if (b.status !== "ok") return;
+    if (await this.digestOn()) return; // 세션이 끝날 때 묶어서 (onSession)
     const s = await this.deps.settings.get();
     if (!s.pushEnabled) return;
     const sessionLabel = b.session === "morning" ? "오전" : "오후";
@@ -45,6 +53,32 @@ export class NotificationService {
       data: { type: "briefing", briefingId: b.id, code: b.code, session: b.session, date: b.date },
     });
   };
+
+  /** BriefingService.onSessionDone 에 붙이는 리스너: 세션 알림 1건 */
+  readonly onSession = async (done: SessionDone): Promise<void> => {
+    if (!(await this.digestOn())) return;
+    const s = await this.deps.settings.get();
+    if (!s.pushEnabled) return;
+    const now = this.deps.now?.() ?? new Date();
+    if (inQuietHours(s, now)) {
+      this.deps.log?.info({ session: done.session, count: done.created.length, quiet: `${s.quietStart}~${s.quietEnd}` }, "조용한 시간이라 브리핑 알림 보내지 않음");
+      return;
+    }
+    const muted = new Set(s.mutedCodes);
+    const items = done.created
+      .filter((c) => !muted.has(c.briefing.code))
+      .map((c) => ({ briefingId: c.briefing.id, code: c.briefing.code, name: c.briefing.name ?? c.briefing.code, summary: c.briefing.summary, changeRate: c.changeRate }));
+    const msg = buildDigest(done.session, done.date, items);
+    if (!msg) {
+      this.deps.log?.info({ session: done.session, muted: done.created.length }, "알림을 끈 종목뿐이라 보내지 않음");
+      return;
+    }
+    await this.sendToAll(msg);
+  };
+
+  private async digestOn(): Promise<boolean> {
+    return this.deps.features ? this.deps.features.enabled("briefingDigest") : true;
+  }
 
   async sendTest(): Promise<SendSummary> {
     return this.sendToAll({

@@ -4,8 +4,9 @@ import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
 import { Platform } from "react-native";
 import type { LatestBriefing } from "@/api/types";
+import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefingDigest";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
-import { loadLatestBriefings, loadWidgetData, readCachedPayload } from "@/widgets/data";
+import { loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload } from "@/widgets/data";
 import { shouldSkipFetch } from "@/widgets/payload";
 import { refreshWidgets } from "@/widgets/refresh";
 
@@ -45,32 +46,37 @@ export async function hasUnseen(ids: number[]): Promise<boolean> {
   return seen.size === 0 || ids.some((id) => !seen.has(id));
 }
 
-/** 새 브리핑을 찾아 로컬 알림. 처음 실행(기록 없음)에는 알리지 않고 현재 상태만 기억한다 */
-export async function notifyNewBriefings(latest: LatestBriefing[], opts: { first?: boolean } = {}): Promise<number> {
+/**
+ * 새 브리핑을 찾아 로컬 알림. 처음 실행(기록 없음)에는 알리지 않고 현재 상태만 기억한다.
+ * 3-19: 세션(날짜·오전/오후)마다 1건으로 묶고, 조용한 시간에는 보내지 않으며, 알림을 끈 종목은 뺀다 (서버 알림과 같은 규칙).
+ * 조용한 시간에 만들어진 브리핑도 "본 것"으로 적는다 — 아침에 한꺼번에 울리지 않게 (브리핑 탭에는 그대로 있다)
+ */
+export async function notifyNewBriefings(
+  latest: LatestBriefing[],
+  opts: { first?: boolean; prefs?: NotifyPrefs; rates?: Map<string, number | null>; now?: Date } = {},
+): Promise<number> {
   const seen = await seenIds();
   const isFirst = opts.first ?? seen.size === 0;
-  let sent = 0;
+  const now = opts.now ?? new Date();
+  const fresh = [];
   for (const item of latest) {
     const b = item.latest;
     if (!b || b.status !== "ok" || seen.has(b.id)) continue;
     seen.add(b.id);
     if (isFirst) continue;
     // 하루 이상 지난 브리핑은 알리지 않는다 (오래 꺼져 있다 켠 경우 폭탄 방지)
-    if (Date.now() - Date.parse(b.createdAt) > 24 * 3_600_000) continue;
+    if (now.getTime() - Date.parse(b.createdAt) > 24 * 3_600_000) continue;
+    fresh.push({ briefingId: b.id, code: b.code, name: item.name, summary: b.summary, changeRate: opts.rates?.get(b.code) ?? null, session: b.session, date: b.date });
+  }
+  const messages = fresh.length ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now) : [];
+  for (const m of messages) {
     await Notifications.scheduleNotificationAsync({
-      content: {
-        title: `${item.name} ${b.session === "morning" ? "오전" : "오후"} 브리핑`,
-        body: b.summary,
-        data: { type: "briefing", briefingId: b.id, code: b.code, session: b.session, date: b.date },
-        sound: "default",
-        ...(Platform.OS === "android" ? { channelId: ANDROID_CHANNEL } : {}),
-      },
+      content: { title: m.title, body: m.body, data: m.data, sound: "default", ...(Platform.OS === "android" ? { channelId: ANDROID_CHANNEL } : {}) },
       trigger: null,
     });
-    sent++;
   }
   await saveSeen(seen);
-  return sent;
+  return messages.length;
 }
 
 /** 태스크 본체. 앱 진입점(index.js)에서 defineTask 로 전역 등록해야 한다 */
@@ -83,9 +89,13 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     const data = await loadWidgetData({ stocks: true, briefings: true });
     if (data.error) return BackgroundTask.BackgroundTaskResult.Failed;
     if (local) {
-      // 새 서버는 최신 브리핑 id 만 준다 → 아직 알리지 않은 id 가 있을 때만 전체 목록을 받아 알린다 (예전 서버는 briefings 가 전체 목록)
-      if (!data.latestIds) await notifyNewBriefings(data.briefings);
-      else if (await hasUnseen(data.latestIds)) await notifyNewBriefings(await loadLatestBriefings());
+      // 새 서버는 최신 브리핑 id 만 준다 → 아직 알리지 않은 id 가 있을 때만 전체 목록과 알림 규칙을 받아 알린다 (예전 서버는 briefings 가 전체 목록)
+      const unseen = await hasUnseen(data.latestIds ?? data.briefings.flatMap((b) => (b.latest ? [b.latest.id] : [])));
+      if (unseen) {
+        const [latest, prefs] = await Promise.all([data.latestIds ? loadLatestBriefings() : Promise.resolve(data.briefings), loadNotifyPrefs()]);
+        const rates = new Map(data.stocks.map((s) => [s.code, s.quote?.changeRate ?? null] as const));
+        await notifyNewBriefings(latest, { prefs, rates });
+      }
     }
     await refreshWidgets({ stocks: data.stocks, showKrw: data.showKrw, afterCost: data.afterCost, filled: data.filled, market: data.market, briefings: data.briefings });
     return BackgroundTask.BackgroundTaskResult.Success;

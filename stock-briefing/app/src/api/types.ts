@@ -323,6 +323,12 @@ export interface NotificationSettings {
   afternoonEnabled: boolean;
   weekdaysOnly: boolean;
   pushEnabled: boolean;
+  /** 3-19 서버부터: 조용한 시간(한국 시간)·알림 끈 종목·세션당 1건 묶음 여부. 예전 서버는 없음 */
+  quietEnabled?: boolean;
+  quietStart?: string;
+  quietEnd?: string;
+  mutedCodes?: string[];
+  digest?: boolean;
   schedule: Health["schedule"];
 }
 

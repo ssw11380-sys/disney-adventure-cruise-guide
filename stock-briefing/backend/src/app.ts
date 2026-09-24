@@ -207,9 +207,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     devices: deviceService,
     settings: settingsStore,
     log,
+    features,
+    now,
     ...(opts.receiptDelayMs !== undefined ? { receiptDelayMs: opts.receiptDelayMs } : {}),
   });
   briefingService.onBriefing(notificationService.onBriefing);
+  briefingService.onSessionDone(notificationService.onSession);
   app.addHook("onClose", async () => notificationService.stop());
 
   app.decorate("stockService", stockService);
@@ -370,7 +373,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
-  const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler };
+  const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler, features };
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });
 

@@ -2,7 +2,7 @@ import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import * as Notifications from "expo-notifications";
 import React, { useEffect, useState } from "react";
 import { Alert, Platform, Pressable, StyleSheet, Switch, Text, View } from "react-native";
-import { useApi, useNotificationMutations, useNotificationSettings } from "@/api/hooks";
+import { useApi, useNotificationMutations, useNotificationSettings, useRegisteredStocks } from "@/api/hooks";
 import { disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
 import { font, radius, space, useTheme } from "@/theme";
@@ -14,6 +14,7 @@ import { Button, Card, Loading, Muted, Row, SectionTitle } from "./ui";
  *   FCM(Firebase) 이 아직 연결되지 않아 토큰 발급이 실패하면, 앱이 15~30분마다 서버를 확인해
  *   새 브리핑을 로컬 알림으로 띄우는 "백그라운드 확인" 방식으로 자동 전환한다.
  * - 오전/오후 시간(한국 시간)과 켜기/끄기, 평일만
+ * - 3-19 서버부터: 조용한 시간(기본 22~07시), 종목별 알림 끄기. 브리핑 알림은 세션마다 1건으로 묶인다
  * - 테스트 알림
  */
 export function NotificationSettingsCard() {
@@ -27,6 +28,8 @@ export function NotificationSettingsCard() {
   const [busy, setBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
+  const [showMuted, setShowMuted] = useState(false);
+  const stocks = useRegisteredStocks();
 
   useEffect(() => {
     let alive = true;
@@ -79,9 +82,10 @@ export function NotificationSettingsCard() {
   const patch = (p: Parameters<typeof updateSettings.mutate>[0]) =>
     updateSettings.mutate(p, { onError: (e) => Alert.alert("저장 실패", e instanceof Error ? e.message : String(e)) });
 
-  const pickTime = (key: "morningTime" | "afternoonTime") => {
-    if (!s) return;
-    const [h, m] = s[key].split(":").map(Number);
+  const pickTime = (key: "morningTime" | "afternoonTime" | "quietStart" | "quietEnd") => {
+    const current = s?.[key];
+    if (!s || !current) return;
+    const [h, m] = current.split(":").map(Number);
     const initial = new Date();
     initial.setHours(h ?? 8, m ?? 30, 0, 0);
     if (Platform.OS === "android") {
@@ -98,7 +102,7 @@ export function NotificationSettingsCard() {
       Alert.prompt?.("시간 입력", "HH:MM (한국 시간)", (v) => {
         if (/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) patch({ [key]: v });
         else Alert.alert("형식 오류", "예: 08:30");
-      }, "plain-text", s[key]);
+      }, "plain-text", current);
     }
   };
 
@@ -154,6 +158,44 @@ export function NotificationSettingsCard() {
             <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>평일만</Text>
             <Switch value={s.weekdaysOnly} onValueChange={(v) => patch({ weekdaysOnly: v })} trackColor={{ true: t.accent }} />
           </View>
+          {s.digest !== undefined && s.quietStart && s.quietEnd ? (
+            <>
+              <View style={styles.switchRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: t.ink, fontSize: font.body }}>조용한 시간</Text>
+                  <Muted style={{ fontSize: font.tiny }}>이 사이에 만든 브리핑은 알리지 않고 탭에만 둡니다</Muted>
+                </View>
+                <TimeChip time={s.quietStart} enabled={!!s.quietEnabled} label="조용한 시간 시작" onPick={() => pickTime("quietStart")} />
+                <Muted>~</Muted>
+                <TimeChip time={s.quietEnd} enabled={!!s.quietEnabled} label="조용한 시간 끝" onPick={() => pickTime("quietEnd")} />
+                <Switch value={!!s.quietEnabled} onValueChange={(v) => patch({ quietEnabled: v })} trackColor={{ true: t.accent }} />
+              </View>
+              <Pressable onPress={() => setShowMuted((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: showMuted }} style={styles.switchRow}>
+                <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>종목별 알림</Text>
+                <Muted>{(s.mutedCodes?.length ?? 0) > 0 ? `${s.mutedCodes!.length}종목 끔` : "모두 받음"}</Muted>
+                <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showMuted ? "접기" : "바꾸기"}</Text>
+              </Pressable>
+              {showMuted
+                ? (stocks.data ?? []).map((st) => {
+                    const muted = s.mutedCodes?.includes(st.code) ?? false;
+                    return (
+                      <View key={st.code} style={[styles.switchRow, { paddingLeft: space.md }]}>
+                        <Text style={{ color: muted ? t.muted : t.ink, fontSize: font.small, flex: 1 }} numberOfLines={1}>
+                          {st.name}
+                        </Text>
+                        <Switch
+                          value={!muted}
+                          accessibilityLabel={`${st.name} 알림`}
+                          onValueChange={(on) => patch({ mutedCodes: on ? (s.mutedCodes ?? []).filter((c) => c !== st.code) : [...(s.mutedCodes ?? []), st.code] })}
+                          trackColor={{ true: t.accent }}
+                        />
+                      </View>
+                    );
+                  })
+                : null}
+              {s.digest ? <Muted style={{ fontSize: font.tiny }}>브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (종목 수와 변동 큰 2종목)</Muted> : null}
+            </>
+          ) : null}
           {s.schedule?.jobs.map((j) => (
             <Row key={j.session} label={`다음 ${j.session === "morning" ? "오전" : "오후"} 실행`} value={j.nextRun ? new Date(j.nextRun).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "short", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" }) : "-"} />
           ))}
@@ -184,6 +226,15 @@ export function NotificationSettingsCard() {
         }}
       />
     </Card>
+  );
+}
+
+function TimeChip({ time, enabled, label, onPick }: { time: string; enabled: boolean; label: string; onPick: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable onPress={onPick} disabled={!enabled} accessibilityRole="button" accessibilityLabel={`${label} ${time} 변경`} style={[styles.timeChip, { borderColor: t.line, backgroundColor: t.surfaceAlt, opacity: enabled ? 1 : 0.5, paddingHorizontal: space.sm }]}>
+      <Text style={{ color: t.ink, fontSize: font.small, fontVariant: ["tabular-nums"], fontWeight: "600" }}>{time}</Text>
+    </Pressable>
   );
 }
 

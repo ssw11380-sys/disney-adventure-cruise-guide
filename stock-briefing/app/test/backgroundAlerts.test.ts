@@ -63,4 +63,47 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     await runBriefingCheck();
     expect(scheduled).toHaveLength(1);
   });
+
+  describe("3-19 알림 묶음", () => {
+    const newOnes = (n: number, at = "2026-09-24T16:59:00+09:00") =>
+      Array.from({ length: n }, (_, i) => ({ code: `N0000${i}`, name: `새${i}`, latest: { ...latest[0]!.latest, id: 500 + i, code: `N0000${i}`, name: `새${i}`, createdAt: at } }));
+    const serve = (list: typeof latest, prefs: Record<string, unknown>) =>
+      vi.stubGlobal("fetch", async (url: string) => {
+        if (url.endsWith("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+        if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(prefs), { status: 200 });
+        return new Response(JSON.stringify(list), { status: 200 });
+      });
+    const prefs = { digest: true, quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", mutedCodes: [] as string[] };
+
+    it("같은 세션의 새 브리핑 5건 → 알림 1건 ('오후 브리핑 5종목')", async () => {
+      await enableLocalBriefingAlerts();
+      serve([...latest, ...newOnes(5)], prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect((scheduled[0] as { content: { title: string } }).content.title).toBe("오후 브리핑 5종목");
+    });
+
+    it("끈 종목은 빼고 세며, 조용한 시간에는 0건이고 아침에 다시 울리지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      serve([...latest, ...newOnes(3)], { ...prefs, mutedCodes: ["N00000", "N00001"] });
+      await runBriefingCheck();
+      expect((scheduled[0] as { content: { title: string } }).content.title).toBe("새2 오후 브리핑");
+
+      vi.setSystemTime(Date.parse("2026-09-24T23:00:00+09:00"));
+      const night = newOnes(4, "2026-09-24T22:30:00+09:00").map((b) => ({ ...b, latest: { ...b.latest, id: b.latest.id + 100 } }));
+      serve([...latest, ...night], prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1); // 조용한 시간: 0건
+      vi.setSystemTime(Date.parse("2026-09-25T07:30:00+09:00"));
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1); // 이미 본 것으로 적혀 아침에 한꺼번에 울리지 않는다
+    });
+
+    it("묶음 플래그를 끄면 예전처럼 종목마다", async () => {
+      await enableLocalBriefingAlerts();
+      serve([...latest, ...newOnes(3)], { ...prefs, digest: false });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(3);
+    });
+  });
 });

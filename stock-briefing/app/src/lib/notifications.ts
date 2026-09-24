@@ -12,6 +12,8 @@ import type { Api } from "@/api/client";
  */
 
 export const ANDROID_CHANNEL = "briefings";
+/** 가격 알림(목표가·급등락) 채널 — 브리핑과 따로 끄고 켤 수 있게 미리 만든다 (3-19) */
+export const PRICE_CHANNEL = "prices";
 const TOKEN_KEY = "push.expoToken";
 
 // 앱이 포그라운드일 때도 배너/목록에 표시
@@ -34,13 +36,21 @@ export class PushSetupError extends Error {
   }
 }
 
+/** 안드로이드 알림 채널 2개: 브리핑·가격. 사용자가 기기 설정에서 채널별로 끄고 소리를 바꿀 수 있다 */
 export async function ensureAndroidChannel(): Promise<void> {
   if (Platform.OS !== "android") return;
   await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL, {
     name: "브리핑 알림",
-    description: "오전/오후 종목 브리핑",
+    description: "오전/오후 브리핑 (세션마다 1건으로 묶음)",
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 250, 250, 250],
+    sound: "default",
+  });
+  await Notifications.setNotificationChannelAsync(PRICE_CHANNEL, {
+    name: "가격 알림",
+    description: "목표가·급등락 알림",
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 150, 100, 150],
     sound: "default",
   });
 }
@@ -107,6 +117,8 @@ export async function getStoredToken(): Promise<string | null> {
 /** 알림을 눌렀을 때 이동할 경로 */
 export function routeForNotification(data: Record<string, unknown> | undefined): string | null {
   if (!data) return null;
+  // 세션 묶음 알림은 브리핑 탭으로 (변동 큰 순으로 모두 보인다)
+  if (data["type"] === "briefingDigest") return "/briefings";
   if (data["type"] === "briefing" && typeof data["briefingId"] === "number") return `/briefings/${data["briefingId"]}`;
   if (data["type"] === "briefing" && typeof data["briefingId"] === "string") return `/briefings/${data["briefingId"]}`;
   return null;
