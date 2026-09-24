@@ -9,7 +9,7 @@ import type { FetchFn } from "./types.js";
  *    (해외 지수 분봉은 기간 조회가 비어 있어 당일 1분 시세 ?periodType=day 를 쓴다. 시각은 뉴욕 현지)
  *  - 환율: api.stock.naver.com/marketindex/exchange/FX_{USD|JPY|CNY}KRW (하나은행 고시 매매기준율. 엔은 100엔 기준),
  *    차트 m.stock.naver.com/front-api/chart/pricesByPeriod (당일 고시 회차, 1년 일별, 5·10년 주별 종가·고저)
- * 목록은 30초 캐시. 개별 항목이 실패하면 그 항목만 빠진다.
+ * 목록은 30초 캐시. 개별 항목이 실패하면(멈춤은 제한 시간에 끊는다) 그 항목의 마지막 정상값을 stale 로 주고, 한 번도 못 받았으면 빠진다.
  */
 
 export type IndexKind = "index" | "fx";
@@ -22,9 +22,20 @@ export interface MarketIndex {
   value: number;
   change: number;
   changeRate: number;
+  /** 장중. 출처 조회가 실패한 항목(stale)은 확인하지 못했으므로 false */
   open: boolean;
+  /** 출처의 시세 시각 */
   asOf: string | null;
+  /** 서버가 출처에서 이 값을 받은 시각 (ISO, 한국 시간). stale 이면 마지막으로 받은 시각 그대로 */
+  fetchedAt?: string;
+  /** 이번 조회가 실패해 마지막 정상값을 그대로 주는 중. 구버전 앱은 무시한다 */
+  stale?: boolean;
 }
+
+/** 목록: 출처 하나를 기다리는 최대 시간(연결·본문 포함). 출처들은 함께 부르므로 목록 전체도 이 안에 끝난다 — 앱 제한(10초)보다 짧게 */
+const LIST_TIMEOUT_MS = 5_000;
+/** 차트: 출처 한 번 조회의 최대 시간 (본문 읽기 포함) */
+const CHART_TIMEOUT_MS = 10_000;
 
 const UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Mobile Safari/537.36";
 
@@ -81,22 +92,39 @@ const RANGE_DAYS: Record<CandlePeriod, (count: number) => number> = {
 
 export class MarketIndices {
   private cache: { at: number; value: MarketIndex[] } | null = null;
+  /** 항목별 마지막 정상값 (출처가 실패하면 이 값을 stale 로 준다) */
+  private readonly last = new Map<string, MarketIndex>();
   private readonly chartCache = new Map<string, { at: number; want: number; series: CandleSeries }>();
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
     private readonly now: () => Date = () => new Date(),
+    private readonly limits: { listTimeoutMs?: number; chartTimeoutMs?: number } = {},
   ) {}
 
-  private async json(url: string): Promise<unknown> {
-    const res = await this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" } });
-    if (!res.ok) throw new Error(`HTTP ${res.status} (${url})`);
-    return res.json();
+  /**
+   * 출처 JSON 한 번. 연결부터 본문 끝까지 ms 안에 못 받으면 요청을 끊고(abort) 실패로 끝낸다
+   * (멈춘 출처 하나가 목록·차트 응답을 붙잡지 않게)
+   */
+  private async json(url: string, ms = this.limits.chartTimeoutMs ?? CHART_TIMEOUT_MS): Promise<unknown> {
+    const ctrl = new AbortController();
+    // fetch 가 signal 을 따르지 않아도(주입한 fetch 등) 제한 시간에 끝나게 같이 경쟁시킨다
+    const expired = new Promise<never>((_, reject) => {
+      ctrl.signal.addEventListener("abort", () => reject(new Error(`시간 초과 ${ms}ms (${url})`)), { once: true });
+    });
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const res = await Promise.race([this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" }, signal: ctrl.signal }), expired]);
+      if (!res.ok) throw new Error(`HTTP ${res.status} (${url})`);
+      return await Promise.race([res.json() as Promise<unknown>, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async one(src: Source): Promise<MarketIndex | null> {
     try {
-      const raw = (await this.json(src.url)) as Json;
+      const raw = (await this.json(src.url, this.limits.listTimeoutMs ?? LIST_TIMEOUT_MS)) as Json;
       // 환율 응답은 exchangeInfo 아래에 있고 필드 이름이 조금 다르다
       const d = (raw["exchangeInfo"] as Json | undefined) ?? raw;
       const value = num(d["closePrice"]);
@@ -123,10 +151,21 @@ export class MarketIndices {
   async list(): Promise<MarketIndex[]> {
     const t = this.now().getTime();
     if (this.cache && t - this.cache.at < 30_000) return this.cache.value;
+    const fetchedAt = localIso(new Date(t).toISOString(), true);
     const rows = await Promise.all(INDEX_SOURCES.map((s) => this.one(s)));
-    const out = rows.filter((r): r is MarketIndex => r !== null);
-    // 전부 실패하면 직전 값을 계속 쓴다
-    if (out.length === 0 && this.cache) return this.cache.value;
+    const out: MarketIndex[] = [];
+    rows.forEach((row, n) => {
+      const code = INDEX_SOURCES[n]!.code;
+      if (row) {
+        const fresh: MarketIndex = { ...row, fetchedAt, stale: false };
+        this.last.set(code, fresh);
+        out.push(fresh);
+        return;
+      }
+      // 이번에 못 받은 항목은 마지막 정상값을 원래 시각 그대로 stale 로. 장 상태는 확인하지 못했으니 장중으로 두지 않는다
+      const prev = this.last.get(code);
+      if (prev) out.push({ ...prev, open: false, stale: true });
+    });
     this.cache = { at: t, value: out };
     return out;
   }

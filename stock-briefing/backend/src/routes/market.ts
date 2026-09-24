@@ -13,7 +13,10 @@ const candlesQuery = z.object({
 export const marketRoutes: FastifyPluginAsync<{ calendar: MarketCalendar; indices?: MarketIndices }> = async (app, { calendar, indices }) => {
   const idx = indices ?? new MarketIndices();
   app.get("/status", async () => calendar.status());
-  /** GET /api/market/indices — 코스피·코스닥·나스닥·S&P500·다우·필라반도체·원/달러·원/100엔·원/위안 (30초 캐시) */
+  /**
+   * GET /api/market/indices — 코스피·코스닥·나스닥·S&P500·다우·필라반도체·원/달러·원/100엔·원/위안 (30초 캐시).
+   * 항목마다 fetchedAt(서버가 출처에서 받은 시각). 출처가 실패한 항목은 마지막 값에 stale: true·open: false (5초 안에 응답)
+   */
   app.get("/indices", async () => ({ indices: await idx.list() }));
   /** GET /api/market/indices/:code/candles?period=1m|5m|30m|D|W|M&count= — 지수·환율 차트 (종목 차트와 같은 형식) */
   app.get("/indices/:code/candles", async (req) => {

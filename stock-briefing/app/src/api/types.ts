@@ -211,7 +211,12 @@ export interface MarketIndex {
   change: number;
   changeRate: number;
   open: boolean;
+  /** 출처의 시세 시각 */
   asOf: string | null;
+  /** 서버가 출처에서 이 값을 받은 시각 (ISO). 구버전 서버는 없음 */
+  fetchedAt?: string;
+  /** 출처 조회가 실패해 마지막 값을 그대로 준 경우 (fetchedAt·asOf 는 원래 시각, open 은 false). 구버전 서버는 없음 */
+  stale?: boolean;
 }
 
 export interface MarketStatus {
