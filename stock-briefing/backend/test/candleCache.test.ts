@@ -45,7 +45,7 @@ describe("차트 봉 캐시 (3-18)", () => {
     expect(calls).toBe(2);
   });
 
-  it("받은 개수가 모자란 봉은 새 값 시간(60초)이 지나면 기다려 다시 받는다", async () => {
+  it("받은 개수가 모자란 봉은 새 값 시간(60초)이 지나면 더 많이 달라는 요청에 다시 받는다", async () => {
     let calls = 0;
     let t = 0;
     const c = new CandleCache(async (code, p, n) => (calls++, series(code, p, Math.min(n, 50))), () => t);

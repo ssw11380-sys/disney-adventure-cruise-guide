@@ -154,7 +154,7 @@ export default function AddStockScreen() {
         <FlatList
           data={search.data?.results ?? []}
           // 이전 입력의 결과를 보여 주는 동안은 흐리게
-          style={{ opacity: search.previous || typing ? 0.55 : 1 }}
+          style={{ opacity: search.previous ? 0.55 : 1 }}
           keyExtractor={(s) => s.code}
           keyboardShouldPersistTaps="handled"
           ItemSeparatorComponent={() => <View style={{ height: space.xs }} />}

@@ -70,12 +70,16 @@ export class CandleCache {
     if (running && running.count >= count) return running.p;
     // 받는 중인 것이 모자라면 그게 끝난 뒤 더 많이 한 번 더 (겹쳐서 두 번 받지 않게)
     const before = running ? running.p.catch(() => undefined) : Promise.resolve();
+    // 장 구간은 받기 시작한 때로 적는다 (개장 직전에 시작해 개장 뒤 끝난 응답을 정규장 것으로 보지 않게)
+    let started = 0;
     const p = before
-      .then(() => this.fetchFn(code, period, count))
+      .then(() => {
+        started = this.now();
+        return this.fetchFn(code, period, count);
+      })
       .then((series) => {
-        const at = this.now();
         this.entries.delete(key);
-        this.entries.set(key, { at, count, session: this.sessionOf(code, at).key, series });
+        this.entries.set(key, { at: started, count, session: this.sessionOf(code, started).key, series });
         while (this.entries.size > MAX_ENTRIES) this.entries.delete(this.entries.keys().next().value!);
         return series;
       })
