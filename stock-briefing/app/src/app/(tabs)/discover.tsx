@@ -9,6 +9,7 @@ import { SkeletonRows } from "@/components/discover/Skeleton";
 import { DISCLAIMER } from "@/components/Screen";
 import { ThemeBoard } from "@/components/discover/ThemeBoard";
 import { Chip, Empty, ErrorView, Segmented } from "@/components/ui";
+import { joinRankPages } from "@/lib/rankPages";
 import { useSettings } from "@/lib/settings";
 import { font, space, touch, useTheme } from "@/theme";
 
@@ -57,18 +58,8 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
   const addWatch = useAddWatch();
   const pages = q.data?.pages;
   const first = pages?.[0];
-  // 쪽을 이어 붙일 때 순위가 바뀌어 같은 종목이 두 번 나오지 않게
-  const items = useMemo(() => {
-    const seen = new Set<string>();
-    const out: DiscoverStock[] = [];
-    for (const p of pages ?? [])
-      for (const it of p.items) {
-        if (seen.has(it.code)) continue;
-        seen.add(it.code);
-        out.push(it);
-      }
-    return out;
-  }, [pages]);
+  // 쪽을 이어 붙일 때 순위가 바뀌어 같은 종목이 두 번 나오지 않게, 첫 쪽과 다른 판의 쪽은 붙이지 않는다 (첫 쪽부터 다시 받는 중)
+  const items = useMemo(() => joinRankPages(pages), [pages]);
   const metric = category === "volume" ? "volume" : "tradingValue";
   const fx = first?.fxRate ?? null;
 

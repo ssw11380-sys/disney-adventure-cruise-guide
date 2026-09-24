@@ -387,6 +387,8 @@ export interface DiscoverRank {
   session?: DiscoverSession;
   /** 목록 판 — 다음 쪽 요청에 돌려주면 같은 목록에서 이어 받는다 (옛 서버는 없음) */
   ver?: number;
+  /** 요청한 판을 서버가 더 갖고 있지 않아(재시작 등) 이어 줄 수 없다 — 첫 쪽부터 다시 받는다 (items 는 빈 목록) */
+  restart?: boolean;
   asOf: string | null;
   /** 미국 종목 원화 환산용 */
   fxRate?: number | null;
