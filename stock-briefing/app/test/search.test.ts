@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RecentStock } from "@/lib/recentSearch";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
 vi.mock("expo-router", () => ({ useIsFocused: () => true }));
@@ -8,7 +9,7 @@ vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
 describe("검색 (3-18)", () => {
   it("최근 검색: 맨 앞에, 같은 종목은 한 번만, 10개까지", async () => {
     const { pushRecent } = await import("@/lib/recentSearch");
-    let list = Array.from({ length: 10 }, (_, i) => ({ code: String(i), name: `종목${i}`, market: "KOSPI" as const }));
+    let list: RecentStock[] = Array.from({ length: 10 }, (_, i) => ({ code: String(i), name: `종목${i}`, market: "KOSPI" as const }));
     list = pushRecent(list, { code: "5", name: "종목5", market: "KOSPI" });
     expect(list.map((x) => x.code)).toEqual(["5", "0", "1", "2", "3", "4", "6", "7", "8", "9"]);
     list = pushRecent(list, { code: "NEW", name: "새", market: "NASDAQ" });
