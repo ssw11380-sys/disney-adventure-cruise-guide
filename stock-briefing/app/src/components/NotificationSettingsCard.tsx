@@ -90,7 +90,8 @@ export function NotificationSettingsCard() {
     // 켜기에 성공했을 때만 서버 발송도 켠다. 설정을 아직 못 받았으면 받아 온 뒤에 판단한다
     if (on && ok) {
       const latest = s ?? (await settings.refetch()).data;
-      if (latest && !latest.pushEnabled) patch({ pushEnabled: true });
+      // 설정을 끝내 못 받았으면 서버 발송을 켜 두는 쪽으로 (스위치가 켜짐으로 보이는데 알림이 안 오지 않게)
+      if (!latest || !latest.pushEnabled) patch({ pushEnabled: true });
     }
   };
   // 스위치 표시: 백그라운드 확인(로컬) 모드는 서버 발송 설정과 상관없이 알림이 오므로 그대로 켜짐

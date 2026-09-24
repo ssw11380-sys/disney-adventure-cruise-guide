@@ -14,6 +14,8 @@ import { clampView, maColor, PriceChart, type ChartView, type IndicatorKind } fr
  */
 
 const MA_CHOICES = [5, 10, 20, 60, 120, 200];
+/** 조작 버튼 누르는 영역: 위아래 8, 좌우는 버튼 간격(6)의 절반만 — 이웃 버튼과 겹치지 않게 */
+const SLOP = { top: 8, bottom: 8, left: 3, right: 3 };
 /** 조작 줄 순서: 자주 쓰는 일·주·월 먼저, 분봉은 뒤 (가로로 넘겨서) */
 const TOOL_ORDER = (["D", "W", "M", "1m", "5m", "30m"] as CandlePeriod[]).map((v) => PERIOD_OPTIONS.find((o) => o.value === v)!);
 
@@ -155,14 +157,14 @@ export function CandleChart({
           {TOOL_ORDER.slice(3).map((o) => periodChip(o))}
           {compact ? overlayChips : null}
         </ScrollView>
-        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityLabel="과거로" hitSlop={8} style={[styles.icon, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
+        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityLabel="과거로" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
           <Ionicons name="chevron-back" size={font.small} color={t.ink} />
         </Pressable>
-        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={8} style={[styles.icon, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
+        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={SLOP} style={[styles.icon, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
           <Ionicons name="chevron-forward" size={font.small} color={t.ink} />
         </Pressable>
         {onFullscreen ? (
-          <Pressable onPress={onFullscreen} accessibilityLabel="차트 크게 보기" hitSlop={8} style={[styles.icon, { borderColor: t.line }]}>
+          <Pressable onPress={onFullscreen} accessibilityLabel="차트 크게 보기" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line }]}>
             <Ionicons name="expand-outline" size={font.small} color={t.ink} />
           </Pressable>
         ) : null}

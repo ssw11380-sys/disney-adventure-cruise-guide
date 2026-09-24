@@ -91,7 +91,7 @@ export function StockLine({
           // 표시가 여럿이어도 현재가 열을 넘지 않게 자른다
           <View style={[styles.inline, { overflow: "hidden" }]}>
             {sub ? (
-              <Text style={{ color: t.muted, fontSize: font.small, fontVariant: ["tabular-nums"], flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={MAX_SCALE}>
+              <Text style={{ color: t.muted, fontSize: font.small, fontVariant: ["tabular-nums"], flexShrink: 0 }} numberOfLines={1} maxFontSizeMultiplier={MAX_SCALE}>
                 {sub}
               </Text>
             ) : null}
@@ -111,7 +111,9 @@ export function StockLine({
             </Text>
           </>
         ) : (
-          <Text style={{ color: t.muted, fontSize: font.small }}>{priceMissing}</Text>
+          <Text style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={MAX_SCALE}>
+            {priceMissing}
+          </Text>
         )}
       </View>
       <View style={[styles.num, { width: LINE_COL.right }]}>{right}</View>
@@ -138,7 +140,11 @@ export function LineValue({ main, mainColor, sub, subColor }: { main: string; ma
 
 /** 작은 테두리 표시 (US·KR·보유·관심·신규상장·거래정지) */
 export function LineMark({ label, color }: { label: string; color: string }) {
-  return <Text style={[styles.mark, { color, borderColor: color }]}>{label}</Text>;
+  return (
+    <Text style={[styles.mark, { color, borderColor: color }]} maxFontSizeMultiplier={MAX_SCALE}>
+      {label}
+    </Text>
+  );
 }
 
 /** 표 머리: 종목 행과 같은 열 폭. 가운데 열 문구는 PRICE_HEAD 로 고정 */

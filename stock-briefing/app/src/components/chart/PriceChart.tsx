@@ -599,7 +599,8 @@ function Readout({
   const chg = basis.base ? ((c.close - basis.base) / basis.base) * 100 : null;
   const color = chg === null ? t.muted : changeColor(t, chg);
   // 날짜는 짧게(연도 빼고), 분봉은 시각까지. 값은 단위(원) 없이 — 한 줄에 종가·등락·고·저가 들어가게 (3-21 리뷰)
-  const when = `${c.date.slice(5)}${c.time ? ` ${c.time.slice(11, 16)}` : ""}`;
+  // 분봉은 시각만 (날짜는 차트 아래 축에 있다) — 십자선으로 옮겨도 한 줄에 들어가게
+  const when = c.time ? c.time.slice(11, 16) : c.date.slice(5);
   const v = (x: number) => formatChartValue(x, currency).replace(/원$/, "");
   const vol = showVolume ? `거래량 ${formatVolume(c.volume)}` : "";
   const a11y = [`${c.date}${c.time ? ` ${c.time.slice(11, 16)}` : ""}`, `종가 ${formatChartValue(c.close, currency)}`, chg !== null ? `${basis.label} ${formatPct(chg)}` : "", `고가 ${v(c.high)}`, `저가 ${v(c.low)}`, `시가 ${v(c.open)}`, vol]
@@ -608,7 +609,7 @@ function Readout({
   if (part === "bottom") {
     // 차트 아래 줄: 등락 기준 · 시가 · 거래량 (위 줄에 다 들어가지 않는 것)
     return (
-      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} importantForAccessibility="no">
+      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} importantForAccessibility="no" accessibilityElementsHidden>
         {chg !== null ? `${basis.label} · ` : ""}시 {v(c.open)}
         {vol ? ` · ${vol}` : ""}
       </Text>
@@ -619,7 +620,7 @@ function Readout({
     <View style={styles.readout}>
       <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} accessibilityLabel={a11y}>
         {when}
-        {candle ? " 십자선" : ""} · 종 <Text style={{ color, fontWeight: "700" }}>{v(c.close)}</Text>
+ · 종 <Text style={{ color, fontWeight: "700" }}>{v(c.close)}</Text>
         {chg !== null ? <Text style={{ color }}> ({formatPct(chg)})</Text> : null}
         <Text style={{ color: t.ink }}>
           {" "}
