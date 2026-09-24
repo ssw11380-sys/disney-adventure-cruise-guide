@@ -103,7 +103,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       sync,
       // 동기화마다 앱 총평가와 토스 계좌 요약을 대조해 남긴다 (3-13)
       onResult: async (r) => {
-        if (r.totals) await reconcile.record(await stockService.listWithFreshQuotes(), r.totals);
+        const excluded = new Set(r.excluded);
+        const items = r.holdings.filter((h) => !excluded.has(h.code));
+        if (items.length) await reconcile.record(await stockService.listWithFreshQuotes(), items);
       },
       calendar: opts.providers.calendar,
       // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다

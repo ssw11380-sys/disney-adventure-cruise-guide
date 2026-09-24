@@ -94,7 +94,7 @@ export function TossOpenApiCard() {
           {s.reconcile !== undefined ? (
             <Row label="토스 대조" value={<Text style={{ color: s.reconcile?.alert ? t.warn : t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{reconcileLabel(s.reconcile, (iso) => formatDateKo(iso, true))}</Text>} />
           ) : null}
-          {s.reconcile?.alert ? <Text style={{ color: t.warn, fontSize: font.small }}>앱 총평가가 토스 계좌와 {s.reconcile.streakOver}회 연속 0.1% 넘게 다릅니다. 동기화 뒤에도 계속되면 알려 주세요.</Text> : null}
+          {s.reconcile?.alert ? <Text style={{ color: t.warn, fontSize: font.small }}>앱 평가금이 토스 계좌와 {s.reconcile.streakOver}회 연속 0.1% 넘게 다릅니다. 토스 앱의 보유 수량·평균 단가와 비교해 보세요.</Text> : null}
           {s.reconcile?.week.n ? <Muted>최근 7일 {s.reconcile.week.n}회 중 {s.reconcile.week.withinPct}%가 0.1% 이내</Muted> : null}
           {s.client?.ipBlocked ? (
             <View style={{ gap: space.xs }}>

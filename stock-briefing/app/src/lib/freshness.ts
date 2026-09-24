@@ -138,7 +138,7 @@ export function holdingsSuffix(o: { held: number; watch: number; stale: number }
 export function reconcileLabel(r: { last: { at: string; diffKrw: number; diffPct: number; missing: number } | null } | null | undefined, when: (iso: string) => string): string {
   if (!r?.last) return "아직 없음 (동기화 뒤 표시)";
   const l = r.last;
-  if (l.missing > 0) return `시세 ${l.missing}종목을 못 받아 비교 제외 · ${when(l.at)}`;
+  if (l.missing > 0) return `시세 지연 등으로 이번엔 비교 못 함 · ${when(l.at)}`;
   const sign = l.diffKrw > 0 ? "+" : l.diffKrw < 0 ? "-" : "";
   return `차이 ${sign}${Math.abs(l.diffKrw).toLocaleString("ko-KR")}원 (${sign}${Math.abs(l.diffPct).toFixed(2)}%) · ${when(l.at)}`;
 }

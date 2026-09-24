@@ -24,8 +24,6 @@ export interface ImportResult {
   removed: string[];
   /** 토스에는 있지만 사용자가 동기화에서 뺀 종목 (건드리지 않음) */
   excluded: string[];
-  /** 계좌 요약 합계 (비용 차감 평가, 원화 종목·달러 종목 따로). 토스 대조(3-13)용 */
-  totals: { afterCostKrw: number; afterCostUsd: number } | null;
   holdings: Array<TossHolding & { market: string }>;
 }
 
@@ -190,10 +188,7 @@ export class TossSyncService {
   }
 
   private async applyHoldings(accountCount: number, holdings: TossHolding[], infos: Map<string, unknown>, perAccount: PerAccount[]): Promise<ImportResult> {
-    const totals = perAccount.every((a) => a.overview.rateAfterCost !== null)
-      ? { afterCostKrw: perAccount.reduce((s, a) => s + a.overview.afterCostKrw, 0), afterCostUsd: perAccount.reduce((s, a) => s + a.overview.afterCostUsd, 0) }
-      : null;
-    const result: ImportResult = { accounts: accountCount, added: [], updated: [], unchanged: [], removed: [], excluded: [], totals, holdings: [] };
+    const result: ImportResult = { accounts: accountCount, added: [], updated: [], unchanged: [], removed: [], excluded: [], holdings: [] };
     const ts = seoulIso(this.now());
     const excluded = await this.excluded();
     for (const h of holdings) {
@@ -427,7 +422,8 @@ export class HoldingsAutoSync {
           this.deps.log?.info({ trigger, added: r.added, updated: r.updated, removed: r.removed }, "토스 보유 종목 동기화");
           await this.deps.afterSync?.(r);
         }
-        await this.deps.onResult?.(r).catch((e: unknown) => this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "동기화 후 처리 실패"));
+        // 대조처럼 시세를 다시 받는 뒷일은 기다리지 않는다 (수동 동기화·브리핑 전 동기화가 느려지지 않게)
+        void this.deps.onResult?.(r).catch((e: unknown) => this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "동기화 후 처리 실패"));
         return r;
       } catch (e) {
         this.lastError = e instanceof Error ? e.message : String(e);
