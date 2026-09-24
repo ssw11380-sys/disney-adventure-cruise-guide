@@ -150,11 +150,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     }
     tossDeps = { provider: opts.providers.tossOpenApi, sync, autoSync, live, outboundIp, reconcile };
   }
-  // 서버 → 앱 실시간 가격 스트림 (/api/stream). 토스 웹소켓 체결을 그대로 중계하고, 없으면 앱이 붙어 있는 동안만 3초 폴링
+  // 서버 → 앱 실시간 가격 스트림 (/api/stream). 토스 웹소켓 체결을 250ms 씩 모아 중계하고, 웹소켓이 없는 종목만 앱이 붙어 있는 동안 3초 폴링
   const priceStream = new PriceStream({
     live: opts.providers.live,
     quickPrices: opts.providers.quickPrices,
     codes: async () => (await stockService.list()).map((s) => s.code),
+    // 두 시장이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시)
+    marketOpen: async () => {
+      const st = await opts.providers.calendar.status();
+      return st.KR.isOpen || st.US.isOpen;
+    },
     log,
   });
   app.addHook("onClose", async () => priceStream.stop());

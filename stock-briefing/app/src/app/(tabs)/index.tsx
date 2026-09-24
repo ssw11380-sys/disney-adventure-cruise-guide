@@ -1,8 +1,7 @@
-import { useIsRestoring } from "@tanstack/react-query";
 import { router } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
-import { useAnyMarketOpen, useHealth, useMarketStatus, useStockMutations, useStocks } from "@/api/hooks";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
@@ -16,8 +15,6 @@ import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
-import { widgetPushDue } from "@/widgets/pushPolicy";
-import { refreshWidgets } from "@/widgets/refresh";
 
 /** 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표 */
 export default function StocksScreen() {
@@ -72,41 +69,6 @@ export default function StocksScreen() {
     ];
   }, [data, sort, afterCost, showKrw]);
 
-  // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (규칙은 widgets/pushPolicy: 시세만 바뀌면 1분에 한 번,
-  // 표시 설정·장 상태가 바뀌거나 앱을 떠날 때는 바로). 기기에 저장해 둔 옛 잔고로는 덮지 않는다
-  const lastWidgetPush = useRef({ at: 0, key: "" });
-  const dataAt = stocks.dataUpdatedAt;
-  const ms = useMarketStatus().data;
-  const krOpen = ms?.KR.isOpen ?? false;
-  const usOpen = ms?.US.isOpen ?? false;
-  const market = useMemo(
-    () => (live.loaded ? { label: live.label, open: live.open, nextChangeAt: null, kr: krOpen, us: usOpen } : null),
-    [live.loaded, live.label, live.open, krOpen, usOpen],
-  );
-  // 이번 실행에서 서버에서 받은 잔고인지: 받은 시각이 화면을 연 뒤인지로 본다
-  // (isFetchedAfterMount 는 기기 저장값 복원·오프라인 실패에도 true 가 되어 옛 잔고로 위젯을 덮을 수 있다)
-  const [mountedAt] = useState(() => Date.now());
-  const restoring = useIsRestoring();
-  const fetchedThisSession = !restoring && dataAt > mountedAt;
-  const pushKey = `${showKrw}|${afterCost}|${market?.label ?? ""}`;
-  // 앱을 떠날 때 쓸 최신 값 (렌더 중에는 ref 를 건드리지 않고 effect 에서 갱신)
-  const pushWidgets = useRef<(leaving: boolean) => void>(() => undefined);
-  useEffect(() => {
-    pushWidgets.current = (leaving: boolean) => {
-      const now = Date.now();
-      if (!data || !widgetPushDue({ now, fetchedThisSession, lastAt: lastWidgetPush.current.at, lastKey: lastWidgetPush.current.key, key: pushKey, leaving })) return;
-      lastWidgetPush.current = { at: now, key: pushKey };
-      void refreshWidgets({ stocks: data, showKrw, afterCost, market });
-    };
-    pushWidgets.current(false);
-  }, [data, dataAt, pushKey, showKrw, afterCost, market, fetchedThisSession]);
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (st) => {
-      if (st === "background") pushWidgets.current(true);
-    });
-    return () => sub.remove();
-  }, []);
-
   const confirmRemove = (s: RegisteredWithQuote) =>
     // 토스 연동 종목은 삭제하면 동기화에서도 빠진다는 것을 먼저 알린다 (수정 화면과 같은 문구)
     Alert.alert(s.name, s.tossSynced ? "토스 계좌에서 가져온 종목입니다. 삭제하면 토스 동기화에서도 빠져 다시 나타나지 않습니다 (다시 등록하면 다시 맞춤)." : undefined, [
@@ -114,6 +76,14 @@ export default function StocksScreen() {
       { text: "삭제", style: "destructive", onPress: () => remove.mutate(s.code, { onError: (e) => Alert.alert("삭제 실패", e instanceof Error ? e.message : String(e)) }) },
       { text: "취소", style: "cancel" },
     ]);
+
+  // 줄 누름 처리는 렌더마다 새로 만들지 않는다 (체결이 온 줄만 다시 그리게, 3-17)
+  const confirmRef = useRef(confirmRemove);
+  useEffect(() => {
+    confirmRef.current = confirmRemove;
+  });
+  const openStock = useCallback((s: RegisteredWithQuote) => router.push(`/stocks/${s.code}`), []);
+  const longPress = useCallback((s: RegisteredWithQuote) => confirmRef.current(s), []);
 
   const view = viewState(stocks);
   if (view === "loading")
@@ -146,47 +116,60 @@ export default function StocksScreen() {
     </View>
   );
 
+  const sectionHeader = (section: (typeof sections)[number]) => (
+    <View style={{ backgroundColor: t.bg }}>
+      <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
+        <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{section.title}</Text>
+        <Pressable onPress={() => setSortOpen(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel="정렬">
+          <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel} ▾</Text>
+        </Pressable>
+      </View>
+      <TableHead>
+        <HeadCell label="종목명" active={sort === "name"} onPress={() => void setSort("name")} flex />
+        <HeadCell label="현재가 / 등락률" active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={COL.price} />
+        {section.key === "held" ? (
+          <HeadCell label="평가손익 / 수익률" active={sort === "profit"} onPress={() => void setSort("profit")} width={COL.right} />
+        ) : (
+          <HeadCell label="전일대비 / 거래량" width={COL.right} />
+        )}
+      </TableHead>
+    </View>
+  );
+  const empty = (
+    <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
+      <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>등록된 종목이 없습니다</Text>
+      <Text style={{ color: t.muted, fontSize: font.small }}>종목명·티커로 검색해 추가하거나 토스증권 계좌에서 불러옵니다.</Text>
+      <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
+        <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />
+        {health.data?.tossOpenApi?.configured ? <Button title="계좌 불러오기" variant="secondary" onPress={() => router.push("/settings")} style={{ flex: 1 }} /> : null}
+      </View>
+    </View>
+  );
+  // 머리(0) 다음부터 구역마다 [머리글, 줄들...] → 머리글 자리만 고정
+  const stickyIndices: number[] = [];
+  let childIndex = 1;
+  for (const sec of sections) {
+    stickyIndices.push(childIndex);
+    childIndex += 1 + sec.data.length;
+  }
+
   return (
     <Screen scroll={false} top={<StaleBanner query={stocks} open={live.open} maxAgeMs={openMaxAge} />}>
-      <SectionList
-        sections={sections}
-        keyExtractor={(s) => s.code}
-        refreshing={pulling}
-        onRefresh={onPull}
-        stickySectionHeadersEnabled
-        ListHeaderComponent={header}
-        renderSectionHeader={({ section }) => (
-          <View style={{ backgroundColor: t.bg }}>
-            <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
-              <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{section.title}</Text>
-              <Pressable onPress={() => setSortOpen(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel="정렬">
-                <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel} ▾</Text>
-              </Pressable>
-            </View>
-            <TableHead>
-              <HeadCell label="종목명" active={sort === "name"} onPress={() => void setSort("name")} flex />
-              <HeadCell label="현재가 / 등락률" active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={COL.price} />
-              {section.key === "held" ? (
-                <HeadCell label="평가손익 / 수익률" active={sort === "profit"} onPress={() => void setSort("profit")} width={COL.right} />
-              ) : (
-                <HeadCell label="전일대비 / 거래량" width={COL.right} />
-              )}
-            </TableHead>
-          </View>
-        )}
-        renderItem={({ item }) => <StockRow stock={item} showKrw={showKrw} afterCost={afterCost} onPress={() => router.push(`/stocks/${item.code}`)} onLongPress={() => confirmRemove(item)} />}
-        ListEmptyComponent={
-          <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
-            <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>등록된 종목이 없습니다</Text>
-            <Text style={{ color: t.muted, fontSize: font.small }}>종목명·티커로 검색해 추가하거나 토스증권 계좌에서 불러옵니다.</Text>
-            <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
-              <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />
-              {health.data?.tossOpenApi?.configured ? <Button title="계좌 불러오기" variant="secondary" onPress={() => router.push("/settings")} style={{ flex: 1 }} /> : null}
-            </View>
-          </View>
-        }
+      {/* 잔고는 수십 줄이라 가상화 목록 대신 스크롤 + 고정 머리글로 그린다: 체결 묶음마다 목록 내부의 두 번째 커밋이 없고,
+          체결이 온 줄만 다시 그린다 (3-17) */}
+      <ScrollView
+        stickyHeaderIndices={stickyIndices}
+        refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
         contentContainerStyle={{ paddingBottom: space.xl }}
-      />
+      >
+        {header}
+        {sections.length === 0
+          ? empty
+          : sections.flatMap((section) => [
+              <View key={`h-${section.key}`}>{sectionHeader(section)}</View>,
+              ...section.data.map((item) => <StockRow key={item.code} stock={item} showKrw={showKrw} afterCost={afterCost} onPress={openStock} onLongPress={longPress} />),
+            ])}
+      </ScrollView>
       <SortSheet visible={sortOpen} value={sort} onClose={() => setSortOpen(false)} onPick={(k) => void setSort(k)} />
     </Screen>
   );

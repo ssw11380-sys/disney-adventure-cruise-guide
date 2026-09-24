@@ -23,7 +23,7 @@ export interface LiveTick {
 export interface LiveTicks {
   get(code: string): LiveTick | null;
   setCodes(codes: string[]): void;
-  status(): { enabled: boolean; connected: boolean; subscribed: string[]; lastMessageAt: string | null; lastError: string | null };
+  status(): { enabled: boolean; connected: boolean; subscribed: string[]; lastMessageAt: string | null; lastError: string | null; lastAliveAt?: string | null };
 }
 
 /** 웹소켓 없이 REST 로 여러 종목 현재가를 한 번에 받는 소스 (토스 웹 stock-prices 등) */
@@ -48,6 +48,7 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
   /** 내 주문·체결 이벤트(personal:order)를 받을 계좌 */
   private accounts: string[] = [];
   private subscribed: string[] = [];
+  private lastAliveAt: string | null = null;
   private readonly ticks = new Map<string, LiveTick>();
   private pingTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -79,7 +80,7 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
   }
 
   status() {
-    return { enabled: !this.stopped, connected: this.connected, subscribed: [...this.subscribed], lastMessageAt: this.lastMessageAt, lastError: this.lastError };
+    return { enabled: !this.stopped, connected: this.connected, subscribed: [...this.subscribed], lastMessageAt: this.lastMessageAt, lastError: this.lastError, lastAliveAt: this.lastAliveAt };
   }
 
   /** 구독할 종목 전체 목록(등록 종목). 100건 초과분은 버린다. 연결돼 있으면 바로 재선언한다. */
@@ -198,6 +199,8 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
   }
 
   private onMessage(raw: string): void {
+    // 체결이 없어도 PING 응답(pong)까지 포함해 연결이 살아 있다는 신호 (폴링을 맡길지 판단용)
+    this.lastAliveAt = (this.opts.now ?? (() => new Date()))().toISOString();
     let msg: { type?: string; topic?: string; data?: Record<string, unknown>; subscribed?: string[]; rejected?: Array<{ code?: string; symbol?: string; topic?: string }>; error?: { code?: string; message?: string } };
     try {
       msg = JSON.parse(raw);

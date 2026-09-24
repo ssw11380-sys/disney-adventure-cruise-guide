@@ -14,7 +14,17 @@ import { FlashPrice } from "./FlashPrice";
  */
 export const COL = { price: 96, right: 108 } as const;
 
-export function StockRow({ stock, onPress, onLongPress, showKrw, afterCost = true }: { stock: RegisteredWithQuote; onPress: () => void; onLongPress?: () => void; showKrw: boolean; afterCost?: boolean }) {
+type StockRowProps = { stock: RegisteredWithQuote; onPress: (stock: RegisteredWithQuote) => void; onLongPress?: (stock: RegisteredWithQuote) => void; showKrw: boolean; afterCost?: boolean };
+
+/** 다시 그릴지: 종목 객체(체결이 오면 그 종목만 새 객체)·표시 설정·누름 처리 함수가 같으면 그대로 (3-17) */
+export function sameRow(a: StockRowProps, b: StockRowProps): boolean {
+  return a.stock === b.stock && a.showKrw === b.showKrw && a.afterCost === b.afterCost && a.onPress === b.onPress && a.onLongPress === b.onLongPress;
+}
+
+/** 체결이 온 줄만 다시 그린다: 부르는 쪽은 onPress·onLongPress 를 안정된 함수(종목을 인자로 받음)로 넘긴다 */
+export const StockRow = React.memo(StockRowView, sameRow);
+
+function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }: StockRowProps) {
   const t = useTheme();
   const q = stock.quote;
   const cur = q?.currency;
@@ -31,8 +41,8 @@ export function StockRow({ stock, onPress, onLongPress, showKrw, afterCost = tru
       : formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw);
   return (
     <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
+      onPress={() => onPress(stock)}
+      onLongPress={onLongPress ? () => onLongPress(stock) : undefined}
       delayLongPress={350}
       accessibilityRole="button"
       style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}

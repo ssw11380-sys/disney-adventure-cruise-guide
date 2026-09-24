@@ -1,3 +1,4 @@
+import { useIsFocused } from "expo-router";
 import { featureOn } from "@/lib/features";
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
@@ -28,6 +29,18 @@ function deferredApi(): Api {
 }
 
 /** 쿼리 키에 apiUrl 을 넣어 서버 주소를 바꾸면 캐시가 분리되게 한다 */
+/**
+ * 화면이 보일 때만 폴링하도록 (3-17): 탭이 가려졌거나 위에 다른 화면이 올라와 있으면 쿼리 구독을 끊어 주기 갱신을 멈춘다.
+ * 캐시는 그대로라 돌아오면 바로 보이고, 오래됐으면 그때 다시 받는다. 내비게이션 밖(테스트 등)에서는 늘 보이는 것으로
+ */
+function useScreenFocused(): boolean {
+  try {
+    return useIsFocused();
+  } catch {
+    return true;
+  }
+}
+
 function useKey(...parts: unknown[]) {
   const { apiUrl } = useSettings();
   return [apiUrl, ...parts];
@@ -48,7 +61,8 @@ export function useMarketStatus() {
 /** 지수 띠. 서버가 30초 캐시하므로 30초마다 */
 export function useMarketIndices() {
   const api = useApi();
-  return useQuery({ queryKey: useKey("indices"), queryFn: api.marketIndices, staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: false, retry: 0 });
+  const focused = useScreenFocused();
+  return useQuery({ subscribed: focused, queryKey: useKey("indices"), queryFn: api.marketIndices, staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: false, retry: 0 });
 }
 
 /** 한국·미국 중 하나라도 거래 중이면 true. 서버 상태가 없으면 시간 기반 추정 */
@@ -82,13 +96,15 @@ export function useLivePoll(): (q: Query<any, any, any, any>) => number {
 export function useStocks() {
   const api = useApi();
   const every = useLivePoll();
-  return useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, retryDelay: 1_000 });
+  const focused = useScreenFocused();
+  return useQuery({ subscribed: focused, queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, retryDelay: 1_000 });
 }
 
 export function useStock(code: string) {
   const api = useApi();
   const every = useLivePoll();
-  return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, retryDelay: 1_000, enabled: !!code });
+  const focused = useScreenFocused();
+  return useQuery({ subscribed: focused, queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, retryDelay: 1_000, enabled: !!code });
 }
 
 /**
@@ -156,7 +172,9 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
     },
     [qc, apiUrl, market, category, size],
   );
+  const focused = useScreenFocused();
   return useInfiniteQuery({
+    subscribed: focused,
     queryKey: useKey("discoverRank", market, category, size),
     queryFn: ({ pageParam }) => api.discoverRank(market, category, pageParam.page, size, pageParam.ver),
     initialPageParam: { page: 1 } as RankPageParam,
@@ -165,6 +183,8 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
     getNextPageParam: (last) => (last.hasMore && last.items.length > 0 && last.page < 20 ? { page: last.page + 1, ver: last.ver } : undefined),
     staleTime: Math.min(interval, 30_000),
     refetchInterval: (q) => ((q.state.data?.pages.length ?? 0) > AUTO_REFRESH_MAX_PAGES ? false : discoverEvery(q.state.data?.pages[0]?.marketOpen, interval)),
+    // 탭으로 돌아올 때(구독 재개) 많이 펼친 목록의 모든 쪽을 다시 받지 않게 (자동 새로고침과 같은 기준)
+    refetchOnMount: (q) => (q.state.data?.pages.length ?? 0) <= AUTO_REFRESH_MAX_PAGES,
     refetchIntervalInBackground: false,
   });
 }
@@ -173,7 +193,9 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
 export function useDiscoverThemes(market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod) {
   const api = useApi();
   const interval = useDiscoverInterval(market);
+  const focused = useScreenFocused();
   return useQuery({
+    subscribed: focused,
     queryKey: useKey("discoverThemes", market, kind, period),
     queryFn: () => api.discoverThemes(market, kind, period),
     placeholderData: keepPreviousData,
@@ -186,7 +208,9 @@ export function useDiscoverThemes(market: DiscoverMarket, kind: ThemeKind, perio
 export function useDiscoverTheme(market: DiscoverMarket, kind: ThemeKind, id: string) {
   const api = useApi();
   const interval = useDiscoverInterval(market);
+  const focused = useScreenFocused();
   return useQuery({
+    subscribed: focused,
     queryKey: useKey("discoverTheme", market, kind, id),
     queryFn: () => api.discoverTheme(market, kind, id),
     enabled: !!id,
@@ -200,7 +224,9 @@ export function useDiscoverTheme(market: DiscoverMarket, kind: ThemeKind, id: st
 export function useMarketCandles(code: string, period: CandlePeriod, count: number) {
   const api = useApi();
   const intraday = period === "1m" || period === "5m" || period === "30m";
+  const focused = useScreenFocused();
   return useQuery({
+    subscribed: focused,
     queryKey: useKey("marketCandles", code, period, count),
     queryFn: () => api.marketCandles(code, period, count),
     enabled: !!code,

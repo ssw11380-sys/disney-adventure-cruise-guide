@@ -51,3 +51,31 @@ describe("streamUrl", () => {
   });
   it("토큰이 없으면 쿼리 없음", () => expect(streamUrl("http://127.0.0.1:3000", "")).toBe("ws://127.0.0.1:3000/api/stream"));
 });
+
+describe("체결 묶음 적용 (3-17)", () => {
+  it("같은 종목은 가장 늦은 체결 하나만", async () => {
+    const { latestPerCode } = await import("@/lib/liveTick");
+    const t = (code: string, price: number, ts: string): StreamTick => ({ code, price, volume: 1, timestamp: ts, source: "x" });
+    const m = latestPerCode([t("A", 1, "2026-09-24T10:00:01+09:00"), t("A", 2, "2026-09-24T10:00:03+09:00"), t("A", 3, "2026-09-24T10:00:02+09:00"), t("B", 9, "2026-09-24T10:00:00+09:00")]);
+    expect(m.get("A")!.price).toBe(2);
+    expect(m.size).toBe(2);
+  });
+
+  it("바뀐 종목만 새 객체(그 줄만 다시 그림), 나머지·목록은 참조 유지", async () => {
+    const { applyTicksToList, latestPerCode } = await import("@/lib/liveTick");
+    const { holding } = await import("./helpers");
+    const list = [
+      holding("005930", quote("005930", 70_000, { asOf: "2026-09-24T10:00:00+09:00" }), 10, 60_000),
+      holding("000660", quote("000660", 200_000, { asOf: "2026-09-24T10:00:00+09:00" }), 1, 150_000),
+    ];
+    const tick = (code: string, price: number): StreamTick => ({ code, price, volume: 1, timestamp: "2026-09-24T10:00:05+09:00", source: "x" });
+    const next = applyTicksToList(list, latestPerCode([tick("005930", 70_500)]));
+    expect(next).not.toBe(list);
+    expect(next[0]).not.toBe(list[0]);
+    expect(next[0]!.quote!.price).toBe(70_500);
+    expect(next[0]!.evaluation!.marketValue).toBe(705_000);
+    expect(next[1]).toBe(list[1]);
+    // 같은 가격이면 목록도 그대로 (화면 커밋 없음)
+    expect(applyTicksToList(list, latestPerCode([tick("005930", 70_000)]))).toBe(list);
+  });
+});

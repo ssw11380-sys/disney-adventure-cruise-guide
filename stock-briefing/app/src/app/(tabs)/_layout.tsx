@@ -27,6 +27,8 @@ export default function TabsLayout() {
         tabBarActiveTintColor: t.ink,
         tabBarInactiveTintColor: t.muted,
         sceneStyle: { backgroundColor: t.bg },
+        // 보이지 않는 탭은 얼려 둔다: 체결·폴링으로 캐시가 바뀌어도 숨은 탭은 다시 그리지 않는다 (3-17)
+        freezeOnBlur: true,
       }}
     >
       <Tabs.Screen

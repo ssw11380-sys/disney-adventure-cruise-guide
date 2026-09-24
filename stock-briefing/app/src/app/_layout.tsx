@@ -9,6 +9,7 @@ import { AppState, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
+import { WidgetBridge } from "@/components/WidgetBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
 import { LiveStreamProvider } from "@/lib/liveStream";
@@ -140,6 +141,7 @@ export default function RootLayout() {
             <LiveStreamProvider>
               <ThemedStatusBar />
               <NotificationBridge />
+              <WidgetBridge />
               <ScreenTracker />
               <Navigator />
             </LiveStreamProvider>
