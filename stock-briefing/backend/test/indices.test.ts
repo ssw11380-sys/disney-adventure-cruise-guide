@@ -45,8 +45,8 @@ describe("MarketIndices 출처 장애 (DISC-01)", () => {
     // 실제 시세 시각·서버가 받은 시각은 그대로, 갱신 실패 표시, 장중을 확정값처럼 주지 않는다
     expect(later[0]).toMatchObject({ code: "KOSPI", asOf: "2026-09-24T11:00:00+09:00", fetchedAt: "2026-09-24T15:00:00+09:00", stale: true, open: false });
     expect(later.every((i) => i.stale === true && i.open === false && i.fetchedAt === "2026-09-24T15:00:00+09:00")).toBe(true);
-    // 전부 실패면 옛 앱(플래그 없음)도 같은 마지막 값 (예전 서버도 직전 목록을 줬다)
-    expect(await m.list()).toEqual(later);
+    // 전부 실패면 옛 앱(플래그 없음)은 예전(main) 서버처럼 직전 목록을 그대로 (stale·open:false 를 모르는 옛 앱에 항목별 stale 을 주지 않는다)
+    expect(await m.list()).toEqual(first);
 
     // 받은 지 3시간이 지나면 더 이어 주지 않는다 (옛 앱도)
     now = new Date("2026-09-24T09:01:00Z"); // 18:01 KST
@@ -80,6 +80,12 @@ describe("MarketIndices 출처 장애 (DISC-01)", () => {
     const old = await m.list();
     expect(old.map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSDAQ" && c !== "KOSPI"));
     expect(old.every((i) => i.stale === false)).toBe(true);
+  });
+
+  it("처음부터 출처가 모두 실패하면 두 앱 모두 빈 목록 (main 도 빈 목록 — 띠를 숨긴다)", async () => {
+    const m = new MarketIndices((async () => new Response("error", { status: 503 })) as unknown as typeof fetch, () => new Date("2026-09-24T02:00:00Z"));
+    expect(await m.list()).toEqual([]);
+    expect(await m.list({ stale: true })).toEqual([]);
   });
 });
 
@@ -140,19 +146,57 @@ describe("GET /api/market/indices: stale 을 아는 앱만 마지막 값을 받�
     }
   });
 
-  it("출처가 모두 실패하면 옛 앱도 마지막 값을 받는다(main 도 직전 목록을 줬다) — 장중으로 두지 않고, 3시간이 지나면 뺀다", async () => {
+  it("출처가 모두 실패하면 옛 앱은 main 서버처럼 직전 목록을 원래 장중(open) 그대로 받는다 — 새 앱은 항목별 stale, 3시간이 지나면 둘 다 뺀다", async () => {
     const { w, m } = world();
     const app = await serve(m);
     try {
-      await get(app, "/api/market/indices");
+      const first = await get(app, "/api/market/indices");
       w.fail.add("naver.com"); // 9개 출처 모두
-      later(w, 60 * 60_000); // 12:00 KST
+      later(w, 60 * 60_000); // 12:00 KST 장중
+      // 옛 앱: 마지막으로 받은 목록 그대로 (장중 표시·상세의 "장중"이 "장 마감"으로 바뀌지 않게)
       const old = await get(app, "/api/market/indices");
-      expect(old.map((i) => i.code)).toEqual(ALL);
-      expect(old.every((i) => i.open === false && i.fetchedAt === "2026-09-24T11:00:00+09:00")).toBe(true);
+      expect(old).toEqual(first);
+      expect(old.filter((i) => i.kind === "index").every((i) => i.open === true)).toBe(true);
+      // 새 앱: 항목별 마지막 값을 stale 로 (장 상태는 확인하지 못해 장중으로 두지 않는다)
+      const neu = await get(app, "/api/market/indices?stale=1");
+      expect(neu.map((i) => i.code)).toEqual(ALL);
+      expect(neu.every((i) => i.stale === true && i.open === false && i.fetchedAt === "2026-09-24T11:00:00+09:00")).toBe(true);
       later(w, 2 * 60 * 60_000 + 60_000); // 14:01 KST
       expect(await get(app, "/api/market/indices")).toEqual([]);
       expect(await get(app, "/api/market/indices?stale=1")).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("옛 앱: 일부 실패 → 전체 실패면 main 서버처럼 직전(일부 실패) 목록을 받는다 — 빠졌던 항목의 몇 시간 전 값이 다시 나타나지 않게", async () => {
+    const { w, m } = world();
+    const app = await serve(m);
+    try {
+      expect((await get(app, "/api/market/indices")).map((i) => i.code)).toEqual(ALL); // 11:00 모두 정상
+      w.fail.add("KOSPI");
+      later(w, 60 * 60_000); // 12:00 KOSPI 만 503
+      const noon = await get(app, "/api/market/indices");
+      expect(noon.map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSPI"));
+      w.fail.add("naver.com");
+      later(w, 60 * 60_000); // 13:00 모두 503
+      const old = await get(app, "/api/market/indices");
+      // main 과 같이 12:00 목록 그대로: KOSPI 의 11:00 값이 되살아나지 않고, 나머지는 원래 장중(open) 그대로
+      expect(old).toEqual(noon);
+      expect(old.some((i) => i.fetchedAt === "2026-09-24T11:00:00+09:00")).toBe(false);
+      expect(old.filter((i) => i.kind === "index").every((i) => i.open === true)).toBe(true);
+      // 새 앱은 항목별 마지막 값: KOSPI 는 11:00, 나머지는 12:00 값을 stale 로
+      const neu = await get(app, "/api/market/indices?stale=1");
+      expect(neu.map((i) => i.code)).toEqual(ALL);
+      expect(neu.find((i) => i.code === "KOSPI")).toMatchObject({ stale: true, open: false, fetchedAt: "2026-09-24T11:00:00+09:00" });
+      expect(neu.find((i) => i.code === "KOSDAQ")).toMatchObject({ stale: true, open: false, fetchedAt: "2026-09-24T12:00:00+09:00" });
+      // 직전 목록도 받은 지 3시간이 지나면 옛 앱에 주지 않는다 (12:00 목록 → 15:01)
+      later(w, 2 * 60 * 60_000 + 60_000);
+      expect(await get(app, "/api/market/indices")).toEqual([]);
+      // 출처가 돌아오면 다시 받는다
+      w.fail.clear();
+      later(w, 60_000);
+      expect((await get(app, "/api/market/indices")).map((i) => i.code)).toEqual(ALL);
     } finally {
       await app.close();
     }

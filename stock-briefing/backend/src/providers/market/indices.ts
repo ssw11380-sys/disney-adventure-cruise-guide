@@ -11,7 +11,7 @@ import type { FetchFn } from "./types.js";
  *    차트 m.stock.naver.com/front-api/chart/pricesByPeriod (당일 고시 회차, 1년 일별, 5·10년 주별 종가·고저)
  * 목록은 30초 캐시. 개별 항목이 실패하면(멈춤은 제한 시간에 끊는다):
  *  - stale 을 아는 앱(list({ stale: true })): 그 항목의 마지막 정상값을 stale 로 준다 (받은 지 STALE_MAX_MS 까지). 한 번도 못 받았거나 너무 오래됐으면 빠진다
- *  - 옛 앱: 예전(main) 서버처럼 그 항목을 뺀다. 전부 실패했을 때만 마지막 값을 준다
+ *  - 옛 앱: 예전(main) 서버처럼 그 항목을 뺀다. 전부 실패하면 main 처럼 직전 목록(마지막으로 비어 있지 않던 목록, 원래 open 그대로)을 준다
  */
 
 export type IndexKind = "index" | "fx";
@@ -32,7 +32,7 @@ export interface MarketIndex {
   fetchedAt?: string;
   /**
    * 이번 조회가 실패해 마지막 정상값을 그대로 주는 중. 구버전 앱은 이 필드를 몰라 멈춘 값을 앱이 받은 시각 옆에 지금 값처럼 보여 주므로
-   * stale=1 로 요청한 앱에만 준다 (옛 앱에는 출처가 모두 실패했을 때만)
+   * stale=1 로 요청한 앱에만 준다 (옛 앱에는 true 인 항목을 주지 않는다)
    */
   stale?: boolean;
 }
@@ -104,10 +104,15 @@ const RANGE_DAYS: Record<CandlePeriod, (count: number) => number> = {
 };
 
 export class MarketIndices {
-  /** 30초 캐시: fresh = 이번에 받은 항목만, all = 실패한 항목을 마지막 값(stale)으로 채운 목록 */
-  private cache: { at: number; fresh: MarketIndex[]; all: MarketIndex[] } | null = null;
+  /**
+   * 30초 캐시: all = 실패한 항목을 마지막 값(stale)으로 채운 목록 (stale 을 아는 앱),
+   * legacy = 옛 앱용 — 이번에 받은 항목만, 전부 실패면 직전 목록 (main 서버와 같은 응답)
+   */
+  private cache: { at: number; all: MarketIndex[]; legacy: MarketIndex[] } | null = null;
   /** 항목별 마지막 정상값과 받은 시각 (출처가 실패하면 STALE_MAX_MS 까지 이 값을 stale 로 준다) */
   private readonly last = new Map<string, { row: MarketIndex; at: number }>();
+  /** 마지막으로 비어 있지 않던 목록(이번에 받은 항목만)과 받은 시각 — main 의 직전 목록. 전부 실패하면 옛 앱에 이것을 준다 */
+  private lastList: { rows: MarketIndex[]; at: number } | null = null;
   private readonly chartCache = new Map<string, { at: number; want: number; series: CandleSeries }>();
 
   constructor(
@@ -165,17 +170,20 @@ export class MarketIndices {
   /**
    * 지수 띠 목록.
    *  - stale: true (stale 을 아는 앱, 요청의 stale=1): 실패한 항목도 마지막 정상값을 stale 로 (받은 지 STALE_MAX_MS 까지)
-   *  - 없으면(옛 앱): 예전(main) 서버처럼 실패한 항목은 뺀다 — 옛 앱은 stale·fetchedAt 을 몰라, 멈춘 값을 앱이 받은 시각 옆에 지금 값처럼,
-   *    장중에도 "장 마감"으로 보여 준다. 전부 실패했을 때만 마지막 값을 준다 (main 도 직전 목록을 줬다. 장중으로 두지 않고 STALE_MAX_MS 까지)
+   *  - 없으면(옛 앱): 예전(main) 서버와 같은 응답 — 옛 앱은 stale·fetchedAt 을 몰라, 멈춘 값을 앱이 받은 시각 옆에 지금 값처럼,
+   *    stale 항목의 open:false 때문에 장중에도 "장 마감"으로 보여 준다. 그래서 항목별 마지막 값(all)은 주지 않는다:
+   *    · 일부 실패: 실패한 항목을 뺀다
+   *    · 전부 실패: main 처럼 직전 목록을 원래 open 그대로 (일부 실패 뒤 전부 실패면 그 일부 실패 목록 — 빠졌던 항목이 옛 값으로 되살아나지 않게).
+   *      main 과 달리 직전 목록도 받은 지 STALE_MAX_MS 가 지나면 주지 않는다: 몇 시간 넘은 값을 옛 앱이 지금 값·장중처럼 계속 보이느니
+   *      띠를 숨기고 상세는 "시세를 불러오지 못했습니다"로 두는 편이 낫다 (한 번도 못 받았을 때의 main 과 같은 모습)
    */
   async list(opts: { stale?: boolean } = {}): Promise<MarketIndex[]> {
     const t = this.now().getTime();
     if (!this.cache || t - this.cache.at >= 30_000) this.cache = await this.fetchAll(t);
-    const { fresh, all } = this.cache;
-    return opts.stale || fresh.length === 0 ? all : fresh;
+    return opts.stale ? this.cache.all : this.cache.legacy;
   }
 
-  private async fetchAll(t: number): Promise<{ at: number; fresh: MarketIndex[]; all: MarketIndex[] }> {
+  private async fetchAll(t: number): Promise<{ at: number; all: MarketIndex[]; legacy: MarketIndex[] }> {
     const fetchedAt = localIso(new Date(t).toISOString(), true);
     const rows = await Promise.all(INDEX_SOURCES.map((s) => this.one(s)));
     const fresh: MarketIndex[] = [];
@@ -194,7 +202,11 @@ export class MarketIndices {
       const prev = this.last.get(code);
       if (prev && t - prev.at < STALE_MAX_MS) all.push({ ...prev.row, open: false, stale: true });
     });
-    return { at: t, fresh, all };
+    // 옛 앱: 이번에 받은 항목만. 전부 실패면 직전 목록 그대로 (받은 지 STALE_MAX_MS 까지)
+    if (fresh.length > 0) this.lastList = { rows: fresh, at: t };
+    const prevList = this.lastList;
+    const legacy = prevList && t - prevList.at < STALE_MAX_MS ? prevList.rows : [];
+    return { at: t, all, legacy };
   }
 
   static source(code: string): Source | null {
