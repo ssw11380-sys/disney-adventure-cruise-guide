@@ -1,7 +1,9 @@
+import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import type { MarketCalendar, MarketState } from "../src/providers/market/calendar.js";
 import { NaverDiscover, type DiscoverStock, type ThemeSummary } from "../src/providers/market/naverDiscover.js";
-import { DiscoverService } from "../src/services/discoverService.js";
+import { discoverRoutes } from "../src/routes/discover.js";
+import { DiscoverService, type DiscoverRank } from "../src/services/discoverService.js";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const ok = (result: unknown) => json({ isSuccess: true, result });
@@ -200,6 +202,8 @@ describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판
   }
   const tick = (w: { now: Date }) => (w.now = new Date(w.now.getTime() + 31_000));
   const newOrder = [codes[50]!, ...codes.slice(0, 50), ...codes.slice(51)];
+  /** 새 앱: restart 를 안다고 알린다 (요청의 r=1) */
+  const R1 = { restart: true };
 
   it("최근 5판 밖으로 밀린 판이면 새 목록 쪽 대신 빈 쪽 + restart — 첫 쪽부터 다시 받으면 빠진 종목·순서가 맞다", async () => {
     const { w, make } = rankWorld();
@@ -210,11 +214,11 @@ describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판
       tick(w);
       await svc.rank("KR", "volume", 1, 50); // 다른 앱이 새로고침 — 새 판
     }
-    const page2 = await svc.rank("KR", "volume", 2, 50, page1.ver);
+    const page2 = await svc.rank("KR", "volume", 2, 50, page1.ver, R1);
     expect(page2).toMatchObject({ restart: true, items: [], hasMore: false });
     // 앱이 첫 쪽부터 다시 받는다
     const again1 = await svc.rank("KR", "volume", 1, 50);
-    const again2 = await svc.rank("KR", "volume", 2, 50, again1.ver);
+    const again2 = await svc.rank("KR", "volume", 2, 50, again1.ver, R1);
     expect(again2.restart).toBeUndefined();
     expect([...again1.items, ...again2.items].map((i) => i.code)).toEqual(newOrder.slice(0, 100));
   });
@@ -225,11 +229,11 @@ describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판
     w.revision++;
     tick(w);
     const restarted = make();
-    const page2 = await restarted.rank("KR", "volume", 2, 50, page1.ver);
+    const page2 = await restarted.rank("KR", "volume", 2, 50, page1.ver, R1);
     expect(page2).toMatchObject({ restart: true, items: [], hasMore: false });
     expect(page2.ver).not.toBe(page1.ver);
     const again1 = await restarted.rank("KR", "volume", 1, 50);
-    const again2 = await restarted.rank("KR", "volume", 2, 50, again1.ver);
+    const again2 = await restarted.rank("KR", "volume", 2, 50, again1.ver, R1);
     const all = [...again1.items, ...again2.items].map((i) => i.code);
     expect(all).toContain("000050");
     expect(all).toEqual(newOrder.slice(0, 100));
@@ -242,12 +246,12 @@ describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판
     tick(w);
     const restarted = make();
     w.calls = 0;
-    const deep = await restarted.rank("KR", "volume", 20, 50, page1.ver);
+    const deep = await restarted.rank("KR", "volume", 20, 50, page1.ver, R1);
     expect(deep).toMatchObject({ restart: true, items: [], hasMore: false, page: 20 });
     expect(w.calls).toBe(0);
     // 원본이 내려가 있어도 restart 를 준다 (첫 쪽 요청에서 오류·저장본을 다룬다)
     w.down = true;
-    const down = await restarted.rank("KR", "volume", 3, 50, page1.ver);
+    const down = await restarted.rank("KR", "volume", 3, 50, page1.ver, R1);
     expect(down).toMatchObject({ restart: true, items: [], hasMore: false });
     expect(w.calls).toBe(0);
     await expect(restarted.rank("KR", "volume", 1, 50)).rejects.toThrow("down");
@@ -258,10 +262,10 @@ describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판
     expect(again1.items[0]!.code).toBe("000050");
     // 판을 가진 서버에서도 잃은 판의 뒤 쪽은 원본을 더 받지 않는다 (지금 판 그대로)
     const calls = w.calls;
-    const gone = await restarted.rank("KR", "volume", 4, 50, page1.ver);
+    const gone = await restarted.rank("KR", "volume", 4, 50, page1.ver, R1);
     expect(gone).toMatchObject({ restart: true, items: [], ver: again1.ver });
     expect(w.calls).toBe(calls);
-    const again2 = await restarted.rank("KR", "volume", 2, 50, again1.ver);
+    const again2 = await restarted.rank("KR", "volume", 2, 50, again1.ver, R1);
     expect(again2.restart).toBeUndefined();
     expect([...again1.items, ...again2.items].map((i) => i.code)).toEqual(newOrder.slice(0, 100));
   });
@@ -282,5 +286,54 @@ describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판
     const bare = await svc.rank("KR", "volume", 2, 50);
     expect(bare.restart).toBeUndefined();
     expect(bare.items.map((i) => i.code)).toEqual(newOrder.slice(50, 100));
+  });
+
+  it("옛 앱(r 플래그 없음)이 잃은 판으로 뒤 쪽을 물으면 main 서버처럼 지금 목록의 쪽을 준다 — 빈 쪽에서 더 보기·자동 갱신이 멈추지 않게", async () => {
+    const { w, make } = rankWorld();
+    const before = make();
+    const page1 = await before.rank("KR", "volume", 1, 50);
+    await before.rank("KR", "volume", 2, 50, page1.ver);
+    await before.rank("KR", "volume", 3, 50, page1.ver);
+    w.revision++;
+    tick(w);
+    // 배포(재시작) 뒤 옛 앱이 4쪽을 옛 판으로 묻는다
+    const restarted = make();
+    const page4 = await restarted.rank("KR", "volume", 4, 50, page1.ver);
+    expect(page4.restart).toBeUndefined();
+    expect(page4.items.map((i) => i.code)).toEqual(newOrder.slice(150, 200));
+    expect(page4.hasMore).toBe(true);
+    // 최근 5판 밖으로 밀린 판도 같다
+    const svc = make();
+    const first = await svc.rank("KR", "volume", 1, 50);
+    for (let i = 0; i < 6; i++) {
+      tick(w);
+      await svc.rank("KR", "volume", 1, 50);
+    }
+    const page2 = await svc.rank("KR", "volume", 2, 50, first.ver);
+    expect(page2.restart).toBeUndefined();
+    expect(page2.items).toHaveLength(50);
+  });
+
+  it("GET 순위: r=1 을 보낸 요청에만 restart, 없으면 지금 목록의 쪽 (옛 앱 번들 호환)", async () => {
+    const { w, make } = rankWorld();
+    const page1 = await make().rank("KR", "volume", 1, 50);
+    w.revision++;
+    tick(w);
+    const app = Fastify({ logger: false });
+    await app.register(discoverRoutes, { prefix: "/api/discover", service: make() });
+    try {
+      const old = (await app.inject({ method: "GET", url: `/api/discover/KR/rank/volume?page=2&size=50&v=${page1.ver}` })).json() as DiscoverRank;
+      expect(old.restart).toBeUndefined();
+      expect(old.items.map((i) => i.code)).toEqual(newOrder.slice(50, 100));
+      const neu = (await app.inject({ method: "GET", url: `/api/discover/KR/rank/volume?page=2&size=50&v=${page1.ver}&r=1` })).json() as DiscoverRank;
+      expect(neu).toMatchObject({ restart: true, items: [], hasMore: false });
+      // 판이 남아 있으면 플래그와 상관없이 그 판에서 이어 준다
+      const cur = (await app.inject({ method: "GET", url: "/api/discover/KR/rank/volume?page=1&size=50&r=1" })).json() as DiscoverRank;
+      const next = (await app.inject({ method: "GET", url: `/api/discover/KR/rank/volume?page=2&size=50&v=${cur.ver}&r=1` })).json() as DiscoverRank;
+      expect(next.restart).toBeUndefined();
+      expect([...cur.items, ...next.items].map((i) => i.code)).toEqual(newOrder.slice(0, 100));
+    } finally {
+      await app.close();
+    }
   });
 });

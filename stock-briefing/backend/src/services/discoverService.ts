@@ -38,7 +38,8 @@ export interface DiscoverRank {
   ver: number;
   /**
    * 뒤 쪽 요청의 판(v)을 더 갖고 있지 않아(재시작·최근 5판 밖) 이어 줄 수 없다 — 첫 쪽부터 다시 받아야 한다.
-   * 이때 items 는 비고 hasMore 는 false (이 필드를 모르는 옛 앱도 다른 판의 줄을 붙이지 않고 거기서 멈춘다)
+   * 이때 items 는 비고 hasMore 는 false. restart 를 안다고 알린 요청(r=1)에만 준다 — 모르는 옛 앱은 빈 쪽을 붙이고
+   * 더 보기·자동 갱신이 말없이 멈추므로, 예전 서버처럼 지금 목록의 쪽을 준다
    */
   restart?: boolean;
   asOf: string | null;
@@ -612,7 +613,11 @@ export class DiscoverService {
     }
   }
 
-  async rank(market: DiscoverMarket, category: RankCategory, page: number, size: number, ver?: number): Promise<DiscoverRank> {
+  /**
+   * 순위 한 쪽. ver: 첫 쪽이 준 목록 판(뒤 쪽을 같은 목록에서 이어 받기).
+   * opts.restart: 요청한 앱이 restart 를 안다 (r=1). 그때만 잃은 판의 뒤 쪽에 빈 쪽 + restart 를 준다 — 없으면 예전 서버처럼 지금 목록의 쪽
+   */
+  async rank(market: DiscoverMarket, category: RankCategory, page: number, size: number, ver?: number, opts: { restart?: boolean } = {}): Promise<DiscoverRank> {
     const ss = await this.session(market);
     const open = ss.open;
     const key = `${market}:${category}`;
@@ -621,8 +626,9 @@ export class DiscoverService {
     // 뒤 쪽 요청이 첫 쪽의 목록 판(ver)을 가져오면 그 목록에서 이어 준다 (첫 쪽을 받은 뒤 새 목록이 들어왔어도)
     const pinned = page > 1 && ver !== undefined ? [this.ranks.get(key), ...(this.prevRanks.get(key) ?? [])].find((x) => x?.ver === ver) : undefined;
     // 그 판을 더 갖고 있지 않으면(재시작·최근 5판 밖) 지금 목록으로 대신 이어 주지 않는다 — 판이 다른 쪽을 붙이면
-    // 순위가 바뀐 종목이 빠지고 순위 번호가 어긋난다. 빈 쪽 + restart 로 첫 쪽부터 다시 받게 한다
-    const gone = page > 1 && ver !== undefined && !pinned;
+    // 순위가 바뀐 종목이 빠지고 순위 번호가 어긋난다. 빈 쪽 + restart 로 첫 쪽부터 다시 받게 한다.
+    // restart 를 모르는 옛 앱(r=1 없음)은 빈 쪽을 붙이고 더 보기·자동 갱신이 말없이 멈추므로 예전처럼 지금 목록의 쪽을 준다 (아래)
+    const gone = opts.restart === true && page > 1 && ver !== undefined && !pinned;
     if (gone) {
       // 원본은 받지 않고 바로 알린다 — 새 목록은 이어 올 첫 쪽 요청이 받는다 (깊은 쪽이라고 수백 줄을 받느라 늦거나, 원본 실패로 restart 대신 오류가 나지 않게)
       const cur = this.ranks.get(key);

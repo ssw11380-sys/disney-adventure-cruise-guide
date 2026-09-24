@@ -14,10 +14,12 @@ export const marketRoutes: FastifyPluginAsync<{ calendar: MarketCalendar; indice
   const idx = indices ?? new MarketIndices();
   app.get("/status", async () => calendar.status());
   /**
-   * GET /api/market/indices — 코스피·코스닥·나스닥·S&P500·다우·필라반도체·원/달러·원/100엔·원/위안 (30초 캐시).
-   * 항목마다 fetchedAt(서버가 출처에서 받은 시각). 출처가 실패한 항목은 마지막 값에 stale: true·open: false (5초 안에 응답)
+   * GET /api/market/indices?stale=1 — 코스피·코스닥·나스닥·S&P500·다우·필라반도체·원/달러·원/100엔·원/위안 (30초 캐시, 5초 안에 응답).
+   * 항목마다 fetchedAt(서버가 출처에서 받은 시각).
+   *  - stale=1 (stale 을 아는 앱): 출처가 실패한 항목도 마지막 값(받은 지 3시간까지)에 stale: true·open: false
+   *  - 없으면(옛 앱 번들): 예전 서버와 같은 응답 — 실패한 항목은 빼고, 출처가 모두 실패하면 직전 목록 그대로(받은 지 3시간까지)
    */
-  app.get("/indices", async () => ({ indices: await idx.list() }));
+  app.get("/indices", async (req) => ({ indices: await idx.list({ stale: (req.query as { stale?: string }).stale === "1" }) }));
   /** GET /api/market/indices/:code/candles?period=1m|5m|30m|D|W|M&count= — 지수·환율 차트 (종목 차트와 같은 형식) */
   app.get("/indices/:code/candles", async (req) => {
     const code = String((req.params as { code?: string }).code ?? "");
