@@ -73,7 +73,7 @@ export async function registerForPush(api: Api): Promise<string> {
   if (status !== "granted") throw new PushSetupError("PERMISSION", "알림 권한이 거부되었습니다. 기기 설정에서 이 앱의 알림을 허용해 주세요.");
 
   const pid = projectId();
-  if (!pid) throw new PushSetupError("NO_PROJECT_ID", "EAS projectId 가 없습니다. 앱 폴더에서 `eas init` 을 실행한 뒤 다시 빌드하세요.");
+  if (!pid) throw new PushSetupError("NO_PROJECT_ID", "이 앱 설치본에는 알림 설정 정보가 빠져 있습니다. 최신 앱을 다시 설치해 주세요.");
 
   let token: string;
   try {

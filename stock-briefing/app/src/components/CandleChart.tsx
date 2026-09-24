@@ -14,6 +14,10 @@ import { clampView, maColor, PriceChart, type ChartView, type IndicatorKind } fr
  */
 
 const MA_CHOICES = [5, 10, 20, 60, 120, 200];
+/** 조작 버튼 누르는 영역: 위아래 8, 좌우는 버튼 간격(6)의 절반만 — 이웃 버튼과 겹치지 않게 */
+const SLOP = { top: 8, bottom: 8, left: 3, right: 3 };
+/** 조작 줄 순서: 자주 쓰는 일·주·월 먼저, 분봉은 뒤 (가로로 넘겨서) */
+const TOOL_ORDER = (["D", "W", "M", "1m", "5m", "30m"] as CandlePeriod[]).map((v) => PERIOD_OPTIONS.find((o) => o.value === v)!);
 
 /** 국내 종목 시세 시각의 한국 날짜 (일봉 날짜와 비교). 해외는 거래소 날짜가 달라 쓰지 않는다 */
 function kstDate(asOf: string | null | undefined): string | null {
@@ -32,7 +36,7 @@ export function CandleChart({
   height,
   width: widthProp,
   onFullscreen,
-  compact: _compact,
+  compact = false,
   hasVolume = true,
 }: {
   candles: Candle[] | undefined;
@@ -97,49 +101,73 @@ export function CandleChart({
     setPrefs({ indicator: order[(order.indexOf(prefs.indicator) + 1) % order.length]! });
   };
 
+  const periodChip = (o: (typeof PERIOD_OPTIONS)[number]) => (
+    <Pressable key={o.value} onPress={() => onPeriodChange(o.value)} accessibilityRole="button" accessibilityState={{ selected: o.value === period }} style={chipStyle(o.value === period)}>
+      <Text style={chipText(o.value === period)}>{o.label}</Text>
+    </Pressable>
+  );
   const chipStyle = (active: boolean) => [styles.chip, { borderColor: active ? t.accent : t.line, backgroundColor: active ? t.surfaceAlt : "transparent" }];
   const chipText = (active: boolean) => ({ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? ("700" as const) : ("500" as const) });
-
-  return (
-    <View style={{ gap: space.sm }}>
-      {/* 기간 */}
-      <View style={styles.toolbar}>
-        <View style={styles.chips}>
-          {PERIOD_OPTIONS.map((o) => (
-            <Pressable key={o.value} onPress={() => onPeriodChange(o.value)} accessibilityRole="button" accessibilityState={{ selected: o.value === period }} style={chipStyle(o.value === period)}>
-              <Text style={chipText(o.value === period)}>{o.label}</Text>
+  const overlayChips = (
+    <>
+        {MA_CHOICES.map((per) => {
+          const on = prefs.maPeriods.includes(per);
+          return (
+            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="button" accessibilityState={{ selected: on }} style={[styles.chip, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
+              <View style={[styles.swatch, { backgroundColor: maColor(t, per) }]} />
+              <Text style={chipText(on)}>{per}</Text>
             </Pressable>
-          ))}
-        </View>
-        {onFullscreen ? (
-          <Pressable onPress={onFullscreen} accessibilityLabel="차트 크게 보기" hitSlop={8} style={[styles.chip, { borderColor: t.line }]}>
-            <Ionicons name="expand-outline" size={14} color={t.ink} />
+          );
+        })}
+        <Pressable onPress={() => setPrefs({ bollinger: !prefs.bollinger })} accessibilityRole="button" style={chipStyle(prefs.bollinger)}>
+          <Text style={chipText(prefs.bollinger)}>볼린저</Text>
+        </Pressable>
+        {hasVolume ? (
+          <Pressable onPress={() => setPrefs({ volume: !prefs.volume })} accessibilityRole="button" style={chipStyle(prefs.volume)}>
+            <Text style={chipText(prefs.volume)}>거래량</Text>
           </Pressable>
         ) : null}
-      </View>
-      {/* 보이는 봉 수 + 이동 */}
-      <View style={styles.toolbar}>
-        <View style={styles.chips}>
-          {WINDOWS[period].map((w, i) => (
-            <Pressable key={w} onPress={() => pickWindow(i)} accessibilityRole="button" style={chipStyle(i === windowIdx && clamped.count === Math.min(w, Math.max(all.length, 15)))}>
-              <Text style={chipText(i === windowIdx)}>
-                {w}
-                {UNIT[period]}
-              </Text>
-            </Pressable>
-          ))}
-          <Text style={{ color: t.muted, fontSize: font.tiny, alignSelf: "center" }}>
-            {clamped.count}봉{clamped.offset > 0 ? ` · 최신보다 ${clamped.offset}${UNIT[period]} 전` : ""}
-          </Text>
-        </View>
-        <View style={styles.chips}>
-          <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityLabel="과거로" style={[styles.chip, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
-            <Ionicons name="chevron-back" size={font.small} color={t.ink} />
+        <Pressable onPress={cycleIndicator} accessibilityRole="button" style={chipStyle(prefs.indicator !== "none")}>
+          <Text style={chipText(prefs.indicator !== "none")}>{prefs.indicator === "none" ? "RSI/MACD" : prefs.indicator === "rsi" ? "RSI (다음 MACD)" : "MACD (다음 끄기)"}</Text>
+        </Pressable>
+    </>
+  );
+
+  return (
+    <View style={{ gap: space.s }}>
+      {/* 조작 한 줄 (3-21): [일 주 월 | 봉 수 | 1분 5분 30분] 은 가로로 넘기고, 과거·최신·크게 보기는 오른쪽에 고정.
+          자주 쓰는 일·주·월과 봉 수를 앞에 둔다 (분봉은 넘겨서) */}
+      <View style={styles.toolRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={styles.chips}>
+          {TOOL_ORDER.slice(0, 3).map((o) => periodChip(o))}
+          <Pressable
+            onPress={() => pickWindow((windowIdx + 1) % WINDOWS[period].length)}
+            accessibilityRole="button"
+            accessibilityLabel={`보이는 봉 ${Math.min(clamped.count, all.length)}개${clamped.offset > 0 ? `, 최신보다 ${clamped.offset}${UNIT[period]} 전` : ""}. 눌러서 바꾸기`}
+            style={[chipStyle(true), { borderStyle: "dashed" }]}
+          >
+            {/* 실제로 보이는 봉 수 (확대·축소하거나 봉이 적으면 칩 값과 다르다), 과거로 옮겼으면 몇 봉 전인지 */}
+            <Text style={chipText(true)}>
+              {Math.min(clamped.count, all.length) || WINDOWS[period][windowIdx]}
+              {UNIT[period]}
+              {clamped.offset > 0 ? ` · ${clamped.offset}${UNIT[period]} 전` : ""}
+            </Text>
+            <Ionicons name="swap-horizontal" size={font.tiny} color={t.muted} />
           </Pressable>
-          <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityLabel="최신으로" style={[styles.chip, { borderColor: t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
-            <Ionicons name="chevron-forward" size={font.small} color={t.ink} />
+          {TOOL_ORDER.slice(3).map((o) => periodChip(o))}
+          {compact ? overlayChips : null}
+        </ScrollView>
+        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityLabel="과거로" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
+          <Ionicons name="chevron-back" size={font.small} color={t.ink} />
+        </Pressable>
+        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={SLOP} style={[styles.icon, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
+          <Ionicons name="chevron-forward" size={font.small} color={t.ink} />
+        </Pressable>
+        {onFullscreen ? (
+          <Pressable onPress={onFullscreen} accessibilityLabel="차트 크게 보기" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line }]}>
+            <Ionicons name="expand-outline" size={font.small} color={t.ink} />
           </Pressable>
-        </View>
+        ) : null}
       </View>
 
       {all.length < 2 ? (
@@ -168,32 +196,16 @@ export function CandleChart({
           latestDate={currency === "KRW" ? kstDate(quote?.asOf) : null}
           high52w={conv(quote?.high52w)}
           low52w={conv(quote?.low52w)}
+          showMaValues={!compact}
         />
       )}
 
-      {/* 오버레이 · 지표 */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-        {MA_CHOICES.map((per) => {
-          const on = prefs.maPeriods.includes(per);
-          return (
-            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="button" accessibilityState={{ selected: on }} style={[styles.chip, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
-              <View style={[styles.swatch, { backgroundColor: maColor(t, per) }]} />
-              <Text style={chipText(on)}>{per}</Text>
-            </Pressable>
-          );
-        })}
-        <Pressable onPress={() => setPrefs({ bollinger: !prefs.bollinger })} accessibilityRole="button" style={chipStyle(prefs.bollinger)}>
-          <Text style={chipText(prefs.bollinger)}>볼린저</Text>
-        </Pressable>
-        {hasVolume ? (
-          <Pressable onPress={() => setPrefs({ volume: !prefs.volume })} accessibilityRole="button" style={chipStyle(prefs.volume)}>
-            <Text style={chipText(prefs.volume)}>거래량</Text>
-          </Pressable>
-        ) : null}
-        <Pressable onPress={cycleIndicator} accessibilityRole="button" style={chipStyle(prefs.indicator !== "none")}>
-          <Text style={chipText(prefs.indicator !== "none")}>{prefs.indicator === "none" ? "RSI/MACD" : prefs.indicator === "rsi" ? "RSI (다음 MACD)" : "MACD (다음 끄기)"}</Text>
-        </Pressable>
-      </ScrollView>
+      {/* 오버레이 · 지표 (전체 화면이면 위 조작 줄 안으로 합쳐 차트를 더 크게, 3-21) */}
+      {compact ? null : (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+          {overlayChips}
+        </ScrollView>
+      )}
       {toKrw ? <Text style={{ color: t.muted, fontSize: font.tiny }}>원화 환산 · 1달러 {formatNumber(fx, 2)}원 (과거 봉 동일 환율)</Text> : null}
     </View>
   );
@@ -201,8 +213,9 @@ export function CandleChart({
 
 const styles = StyleSheet.create({
   placeholder: { alignItems: "center", justifyContent: "center", borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth },
-  toolbar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: space.sm, flexWrap: "wrap" },
-  chips: { flexDirection: "row", gap: space.s, alignItems: "center", flexWrap: "wrap" },
-  chip: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  toolRow: { flexDirection: "row", alignItems: "center", gap: space.s },
+  chips: { flexDirection: "row", gap: space.s, alignItems: "center" },
+  chip: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, minHeight: 28 },
+  icon: { width: 28, height: 28, alignItems: "center", justifyContent: "center", borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
   swatch: { width: 8, height: 2 },
 });

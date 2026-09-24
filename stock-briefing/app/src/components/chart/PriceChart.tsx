@@ -40,6 +40,8 @@ export interface PriceChartProps {
   onViewChange: (v: ChartView) => void;
   maPeriods: number[];
   showBollinger: boolean;
+  /** 차트 아래 이동평균 값 줄 (전체 화면은 끔 — 칩 색으로 구분) */
+  showMaValues?: boolean;
   showVolume: boolean;
   /** 거래량이 없는 시계열(환율)이면 false: 읽기 줄에서 거래량을 뺀다 */
   hasVolume?: boolean;
@@ -351,10 +353,9 @@ export function PriceChart(p: PriceChartProps) {
         isLatest={isLatest}
         last={last}
         currency={currency}
-        mas={mas}
-        index={cross ? start + cross.i : end - 1}
         period={p.period}
         showVolume={p.hasVolume !== false}
+        part={p.showMaValues === false ? "all" : "top"}
       />
       <GestureDetector gesture={gesture}>
         <View style={{ width, height }} collapsable={false}>
@@ -487,6 +488,24 @@ export function PriceChart(p: PriceChartProps) {
           </Svg>
         </View>
       </GestureDetector>
+      {/* 이동평균 값은 차트 아래 (위쪽 조작·읽기 줄을 한 줄로 유지, 3-21) */}
+      {p.showMaValues !== false ? (
+        <>
+          <Readout
+          candle={crossCandle}
+          prev={cross ? visible[cross.i - 1] ?? candles[start + cross.i - 1] : visible[n - 2] ?? candles[end - 2]}
+          latestBase={p.period === "D" ? p.prevClose : null}
+          latestDate={p.latestDate}
+          isLatest={isLatest}
+          last={last}
+          currency={currency}
+          period={p.period}
+          showVolume={p.hasVolume !== false}
+          part="bottom"
+          />
+          <MaLine mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} />
+        </>
+      ) : null}
     </View>
   );
 }
@@ -545,7 +564,7 @@ function Tag({
   );
 }
 
-/** 차트 위 한 줄: 십자선이 잡은 봉(없으면 마지막 봉)의 시·고·저·종·거래량·등락 + 이평 값 */
+/** 읽기 줄: 십자선이 잡은 봉(없으면 마지막 봉)의 종가·등락·고·저 (차트 위), 등락 기준·시가·거래량 (차트 아래) */
 function Readout({
   candle,
   prev,
@@ -554,10 +573,9 @@ function Readout({
   isLatest,
   last,
   currency,
-  mas,
-  index,
   period,
   showVolume,
+  part,
 }: {
   candle: Candle | undefined;
   prev: Candle | undefined;
@@ -568,10 +586,10 @@ function Readout({
   isLatest: boolean;
   last: Candle | undefined;
   currency: ChartUnit;
-  mas: { period: number; values: Series }[];
-  index: number;
   period: CandlePeriod;
   showVolume: boolean;
+  /** top = 차트 위 한 줄, bottom = 차트 아래(기준·시가·거래량), all = 위 한 줄에 전부(전체 화면) */
+  part: "top" | "bottom" | "all";
 }) {
   const t = useTheme();
   const c = candle ?? last;
@@ -580,41 +598,62 @@ function Readout({
   const basis = readoutBasis({ period, isLatest, latestBase, latestDate, candleDate: c.date, prevClose: prev?.close, open: c.open });
   const chg = basis.base ? ((c.close - basis.base) / basis.base) * 100 : null;
   const color = chg === null ? t.muted : changeColor(t, chg);
-  const when = c.time ? `${c.date} ${c.time.slice(11, 16)}` : c.date;
-  const unit = period === "W" ? "주" : period === "M" ? "월" : period === "D" ? "일" : "봉";
+  // 날짜는 짧게(연도 빼고), 분봉은 시각까지. 값은 단위(원) 없이 — 한 줄에 종가·등락·고·저가 들어가게 (3-21 리뷰)
+  // 분봉은 시각만 (날짜는 차트 아래 축에 있다) — 십자선으로 옮겨도 한 줄에 들어가게
+  const when = c.time ? c.time.slice(11, 16) : c.date.slice(5);
+  const v = (x: number) => formatChartValue(x, currency).replace(/원$/, "");
+  const vol = showVolume ? `거래량 ${formatVolume(c.volume)}` : "";
+  const a11y = [`${c.date}${c.time ? ` ${c.time.slice(11, 16)}` : ""}`, `종가 ${formatChartValue(c.close, currency)}`, chg !== null ? `${basis.label} ${formatPct(chg)}` : "", `고가 ${v(c.high)}`, `저가 ${v(c.low)}`, `시가 ${v(c.open)}`, vol]
+    .filter(Boolean)
+    .join(", ");
+  if (part === "bottom") {
+    // 차트 아래 줄: 등락 기준 · 시가 · 거래량 (위 줄에 다 들어가지 않는 것)
+    return (
+      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} importantForAccessibility="no" accessibilityElementsHidden>
+        {chg !== null ? `${basis.label} · ` : ""}시 {v(c.open)}
+        {vol ? ` · ${vol}` : ""}
+      </Text>
+    );
+  }
+  // 위 줄: 날짜 · 종가(등락) · 고 · 저 (전체 화면은 아래 줄이 없으므로 시가·거래량까지, 좁으면 뒤부터 잘린다)
   return (
     <View style={styles.readout}>
-      <Text style={[styles.readoutText, { color: t.muted }]}>
+      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} accessibilityLabel={a11y}>
         {when}
-        {candle ? " · 십자선" : ""}
-        {chg !== null ? ` · ${basis.label}` : ""}
-      </Text>
-      <Text style={[styles.readoutText, { color: t.ink }]}>
-        시 {formatChartValue(c.open, currency)} 고 {formatChartValue(c.high, currency)} 저 {formatChartValue(c.low, currency)} 종{" "}
-        <Text style={{ color, fontWeight: "700" }}>{formatChartValue(c.close, currency)}</Text>
+ · 종 <Text style={{ color, fontWeight: "700" }}>{v(c.close)}</Text>
         {chg !== null ? <Text style={{ color }}> ({formatPct(chg)})</Text> : null}
-        {showVolume ? ` · 거래량 ${formatVolume(c.volume)}` : ""}
-      </Text>
-      {mas.length ? (
-        <Text style={[styles.readoutText, { color: t.muted }]}>
-          {mas.map((m) => {
-            const v = m.values[index];
-            return (
-              <Text key={m.period}>
-                {/* 색은 네모에만 (차트 선 색은 글자 대비 4.5 를 보장하지 않는다), 글자는 흐린 글자색 */}
-                <Ionicons name="square" size={font.tiny} color={maColor(t, m.period)} /> {m.period}
-                {unit}{" "}
-                {v === null || v === undefined ? "-" : formatChartValue(v, currency)}{" "}
-              </Text>
-            );
-          })}
+        <Text style={{ color: t.ink }}>
+          {" "}
+          고 {v(c.high)} 저 {v(c.low)}
+          {part === "all" ? ` 시 ${v(c.open)}` : ""}
         </Text>
-      ) : null}
+        {part === "all" && vol ? ` · ${vol}` : ""}
+      </Text>
     </View>
   );
 }
 
+/** 차트 아래 이동평균 값 (십자선이 잡은 봉, 없으면 마지막 봉). 색은 네모에만 — 선 색은 글자 대비 4.5 를 보장하지 않는다 */
+function MaLine({ mas, index, currency, period }: { mas: { period: number; values: Series }[]; index: number; currency: ChartUnit; period: CandlePeriod }) {
+  const t = useTheme();
+  if (!mas.length) return null;
+  const unit = period === "W" ? "주" : period === "M" ? "월" : period === "D" ? "일" : "봉";
+  return (
+    <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={2}>
+      {mas.map((m) => {
+        const v = m.values[index];
+        return (
+          <Text key={m.period}>
+            <Ionicons name="square" size={font.tiny} color={maColor(t, m.period)} /> {m.period}
+            {unit} {v === null || v === undefined ? "-" : formatChartValue(v, currency)}{"  "}
+          </Text>
+        );
+      })}
+    </Text>
+  );
+}
+
 const styles = StyleSheet.create({
-  readout: { gap: space.xxs, minHeight: 34 },
+  readout: { minHeight: 16, justifyContent: "center" },
   readoutText: { fontSize: font.tiny, fontVariant: ["tabular-nums"] },
 });

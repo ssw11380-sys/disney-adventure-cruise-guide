@@ -9,6 +9,7 @@ import { MarketStrip } from "@/components/MarketStrip";
 import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { COL, StockRow } from "@/components/StockRow";
+import { PRICE_HEAD } from "@/components/StockLine";
 import { Button, ErrorView, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
@@ -128,11 +129,11 @@ export default function StocksScreen() {
       </View>
       <TableHead>
         <HeadCell label="종목명" active={sort === "name"} onPress={() => void setSort("name")} flex />
-        <HeadCell label="현재가 / 등락률" active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={COL.price} />
+        <HeadCell label={PRICE_HEAD} active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={COL.price} />
         {section.key === "held" ? (
-          <HeadCell label="평가손익 / 수익률" active={sort === "profit"} onPress={() => void setSort("profit")} width={COL.right} />
+          <HeadCell label="평가손익·수익률" active={sort === "profit"} onPress={() => void setSort("profit")} width={COL.right} />
         ) : (
-          <HeadCell label="전일대비 / 거래량" width={COL.right} />
+          <HeadCell label="전일대비·거래량" width={COL.right} />
         )}
       </TableHead>
     </View>

@@ -41,9 +41,9 @@ export async function fetchRelease(timeoutMs = 8000): Promise<ReleaseInfo> {
   try {
     // GitHub raw 는 CDN 캐시가 있어 쿼리를 붙여 최신을 받는다
     const res = await fetch(`${RELEASE_URL}?t=${Date.now()}`, { signal: ctrl.signal, headers: { "cache-control": "no-cache" } });
-    if (!res.ok) throw new Error(`release.json HTTP ${res.status}`);
+    if (!res.ok) throw new Error(res.status === 404 ? "새 버전 정보를 찾지 못했습니다" : `새 버전 정보를 받지 못했습니다 (${res.status})`);
     const j = (await res.json()) as Partial<ReleaseInfo>;
-    if (typeof j.version !== "string") throw new Error("release.json 에 version 이 없습니다");
+    if (typeof j.version !== "string") throw new Error("새 버전 정보가 올바르지 않습니다");
     return { version: j.version, apkUrl: typeof j.apkUrl === "string" && j.apkUrl ? j.apkUrl : null, notes: j.notes ?? null, publishedAt: j.publishedAt ?? null };
   } finally {
     clearTimeout(timer);

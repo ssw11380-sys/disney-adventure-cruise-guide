@@ -1,18 +1,17 @@
 import React from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { RegisteredWithQuote } from "@/api/types";
 import { formatArrowDisplay, formatPct, formatPrice, formatQuoteDisplay, isUsMarket } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
-import { changeColor, font, space, useTheme } from "@/theme";
-import { FlashPrice } from "./FlashPrice";
+import { changeColor, useTheme } from "@/theme";
+import { LINE_COL, LineMark, LineValue, StockLine, type LinePrice } from "./StockLine";
 
 /**
- * 잔고·관심 표의 한 줄 (증권사 잔고 화면처럼 3열).
+ * 잔고·관심 표의 한 줄 (공용 StockLine, 3-21).
  *  보유:  종목명 / 수량·평단  |  현재가 / 등락률  |  평가손익 / 수익률
  *  관심:  종목명 / 코드       |  현재가 / 등락률  |  전일대비 / 거래량
  * showKrw 면 미국 종목 금액을 원화로 환산한다. 길게 누르면 수정·삭제.
  */
-export const COL = { price: 96, right: 108 } as const;
+export const COL = LINE_COL;
 
 type StockRowProps = { stock: RegisteredWithQuote; onPress: (stock: RegisteredWithQuote) => void; onLongPress?: (stock: RegisteredWithQuote) => void; showKrw: boolean; afterCost?: boolean };
 
@@ -39,59 +38,26 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
     showKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity
       ? formatPrice(ev.costBasis / stock.quantity, "KRW")
       : formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw);
+  const price: LinePrice | null = q
+    ? { value: q.price, text: formatQuoteDisplay(q.price, cur, fx, showKrw), color: c, rate: formatPct(q.changeRate), rateColor: c, live: q.live }
+    : null;
   return (
-    <Pressable
+    <StockLine
+      name={stock.name}
+      nameBadge={<LineMark label={us ? "US" : "KR"} color={us ? t.accent : t.gold} />}
+      sub={held ? `${formatQty(stock.quantity)}주 · ${avgText}` : stock.code}
+      price={price}
+      priceMissing={stock.quoteError ? "시세 없음" : "-"}
+      right={
+        !q ? null : held ? (
+          <LineValue main={formatPrice(ev!.profit, ev!.currency, { sign: true }).replace("원", "")} mainColor={pc} sub={formatPct(ev!.profitRate)} subColor={pc} />
+        ) : (
+          <LineValue main={formatArrowDisplay(q.change, cur, fx, showKrw)} mainColor={c} sub={formatVol(q.volume)} />
+        )
+      }
       onPress={() => onPress(stock)}
       onLongPress={onLongPress ? () => onLongPress(stock) : undefined}
-      delayLongPress={350}
-      accessibilityRole="button"
-      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
-    >
-      <View style={styles.name}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
-          <Text style={[styles.mkt, { color: us ? t.accent : t.gold, borderColor: us ? t.accent : t.gold }]}>{us ? "US" : "KR"}</Text>
-          <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", flexShrink: 1 }} numberOfLines={1}>
-            {stock.name}
-          </Text>
-        </View>
-        <Text style={styles.subText(t.muted)} numberOfLines={1}>
-          {held ? `${formatQty(stock.quantity)}주 · ${avgText}` : stock.code}
-        </Text>
-      </View>
-
-      {q ? (
-        <>
-          <View style={[styles.num, { width: COL.price }]}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
-              {q.live ? <View style={[styles.live, { backgroundColor: t.live }]} /> : null}
-              <FlashPrice value={q.price} text={formatQuoteDisplay(q.price, cur, fx, showKrw)} style={[styles.main, { color: c }]} />
-            </View>
-            <Text style={[styles.sub, { color: c }]}>{formatPct(q.changeRate)}</Text>
-          </View>
-          <View style={[styles.num, { width: COL.right }]}>
-            {held ? (
-              <>
-                <Text style={[styles.main, { color: pc }]} numberOfLines={1} adjustsFontSizeToFit>
-                  {formatPrice(ev!.profit, ev!.currency, { sign: true }).replace("원", "")}
-                </Text>
-                <Text style={[styles.sub, { color: pc }]}>{formatPct(ev!.profitRate)}</Text>
-              </>
-            ) : (
-              <>
-                <Text style={[styles.main, { color: c }]} numberOfLines={1}>
-                  {formatArrowDisplay(q.change, cur, fx, showKrw)}
-                </Text>
-                <Text style={[styles.sub, { color: t.muted }]}>{formatVol(q.volume)}</Text>
-              </>
-            )}
-          </View>
-        </>
-      ) : (
-        <View style={[styles.num, { width: COL.price + COL.right }]}>
-          <Text style={{ color: t.muted, fontSize: font.small }}>{stock.quoteError ? "시세 없음" : "-"}</Text>
-        </View>
-      )}
-    </Pressable>
+    />
   );
 }
 
@@ -106,16 +72,3 @@ function formatVol(n: number | null | undefined): string {
   if (n >= 1e4) return `${Math.round(n / 1e4).toLocaleString("ko-KR")}만주`;
   return `${n.toLocaleString("ko-KR")}주`;
 }
-
-const styles = {
-  ...StyleSheet.create({
-    row: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth, minHeight: 52 },
-    name: { flex: 1, gap: space.xxs, paddingRight: space.sm },
-    mkt: { fontSize: font.tiny, fontWeight: "800", borderWidth: 1, borderRadius: 2, paddingHorizontal: space.xs, lineHeight: 14, overflow: "hidden", flexShrink: 0 },
-    num: { alignItems: "flex-end", gap: space.xxs },
-    main: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
-    sub: { fontSize: font.small, fontVariant: ["tabular-nums"] },
-    live: { width: 4, height: 4, borderRadius: 2 },
-  }),
-  subText: (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] }),
-};

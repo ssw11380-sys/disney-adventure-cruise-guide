@@ -83,7 +83,7 @@ export function TossOpenApiCard() {
           <Text style={{ color: t.ink, fontSize: font.small }}>2. 같은 화면 아래 “허용 IP 관리”에 아래 서버 IP 를 등록</Text>
           <Row label="서버 공인 IP" value={<Text selectable style={{ color: t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{ip ?? "확인 불가"}</Text>} />
           {ip ? <Button title="IP 보내기/복사" variant="secondary" icon="share-outline" onPress={() => void copyIp()} /> : null}
-          <Text style={{ color: t.ink, fontSize: font.small }}>3. 발급받은 두 값을 서버 환경 변수 TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 에 넣고 재시작 (Railway → Variables)</Text>
+          <Text style={{ color: t.ink, fontSize: font.small }}>3. 발급받은 두 값을 서버 설정에 넣고 서버를 다시 시작합니다 (서버 관리자 작업)</Text>
           <Pressable onPress={() => void Linking.openURL("https://tossinvest.com")} accessibilityRole="link">
             <Text style={{ color: t.accent, fontSize: font.small }}>토스증권 WTS 열기</Text>
           </Pressable>
@@ -124,7 +124,7 @@ export function TossOpenApiCard() {
 
 function syncLabel(sync: NonNullable<TossOpenApiStatus["sync"]> | null | undefined): string {
   if (!sync) return "구버전 서버";
-  if (!sync.enabled) return "꺼짐 (TOSS_SYNC_MINUTES=0)";
+  if (!sync.enabled) return "꺼짐 (서버에서 꺼 둠)";
   const when = sync.lastRunAt ? formatDateKo(sync.lastRunAt, true) : "아직 안 함";
   const c = sync.lastChanges;
   const changes = c ? (c.added || c.updated || c.removed ? ` (+${c.added} / 갱신 ${c.updated}${c.removed ? ` / 매도 ${c.removed}` : ""})` : " (변화 없음)") : "";

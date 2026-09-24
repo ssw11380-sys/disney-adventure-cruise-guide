@@ -3,11 +3,12 @@ import React, { useCallback, useMemo } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useDiscoverTheme } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverStock, ThemeKind, ThemePeriod } from "@/api/types";
-import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
+import { DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
+import { LineHead } from "@/components/StockLine";
 import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
 import { DISCLAIMER } from "@/components/Screen";
-import { Empty, ErrorView, TableHead } from "@/components/ui";
+import { Empty, ErrorView } from "@/components/ui";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
@@ -86,12 +87,7 @@ export default function ThemeDetailScreen() {
         ) : null}
       </View>
       {q.data ? <StatusLine market={market} open={q.data.marketOpen} session={q.data.session} asOf={q.data.asOf} /> : null}
-      <TableHead>
-        <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.rank }]}>순위</Text>
-        <Text style={[styles.th, { color: t.muted, flex: 1 }]}>종목명</Text>
-        <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.price, textAlign: "right" }]}>현재가·등락률</Text>
-        <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.right, textAlign: "right" }]}>거래대금</Text>
-      </TableHead>
+      <LineHead rank right="거래대금" />
     </>
   );
 
@@ -136,7 +132,6 @@ const styles = StyleSheet.create({
   summary: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   big: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
   bar: { height: 6, borderRadius: 3, overflow: "hidden", flexDirection: "row" },
-  th: { fontSize: font.tiny, fontWeight: "600" },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
 });
 

@@ -7,7 +7,7 @@ import { space, useTheme } from "@/theme";
  * react-native Animated 만 쓰므로 네이티브 모듈 추가 없이 OTA 로 배포된다.
  * 배경색 대신 뒤에 깐 색 판의 불투명도를 네이티브 드라이버로 움직인다 → 체결이 몰려도 JS 스레드를 쓰지 않는다 (3-17)
  */
-export function FlashPrice({ value, text, style }: { value: number | null | undefined; text: string; style?: StyleProp<TextStyle> }) {
+export function FlashPrice({ value, text, style, maxScale }: { value: number | null | undefined; text: string; style?: StyleProp<TextStyle>; /** 글자 확대 상한 (목록 줄) */ maxScale?: number }) {
   const t = useTheme();
   const [anim] = useState(() => new Animated.Value(0));
   // "이전 값" 패턴: 렌더 중에 비교해서 바뀐 경우에만 방향과 깜빡임 횟수를 갱신한다
@@ -33,7 +33,9 @@ export function FlashPrice({ value, text, style }: { value: number | null | unde
   return (
     <View style={{ borderRadius: 4, paddingHorizontal: space.xxs, marginHorizontal: -space.xxs, overflow: "hidden" }}>
       <Animated.View style={[StyleSheet.absoluteFill, { pointerEvents: "none", backgroundColor: dir > 0 ? `${t.up}55` : `${t.down}55`, opacity: anim }]} />
-      <Text style={style}>{text}</Text>
+      <Text style={style} maxFontSizeMultiplier={maxScale}>
+        {text}
+      </Text>
     </View>
   );
 }

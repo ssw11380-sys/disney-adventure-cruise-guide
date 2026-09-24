@@ -2,12 +2,13 @@ import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AUTO_REFRESH_MAX_PAGES, useDiscoverRank } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverStock, RankCategory } from "@/api/types";
-import { DISCOVER_COL, DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
+import { DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
+import { LineHead } from "@/components/StockLine";
 import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
 import { DISCLAIMER } from "@/components/Screen";
 import { ThemeBoard } from "@/components/discover/ThemeBoard";
-import { Chip, Empty, ErrorView, Segmented, TableHead } from "@/components/ui";
+import { Chip, Empty, ErrorView, Segmented } from "@/components/ui";
 import { useSettings } from "@/lib/settings";
 import { font, space, useTheme } from "@/theme";
 
@@ -80,12 +81,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
   const head = (
     <>
       {first ? <StatusLine market={market} open={first.marketOpen} session={first.session} asOf={first.asOf} note={first.note} paused={(pages?.length ?? 0) > AUTO_REFRESH_MAX_PAGES} /> : null}
-      <TableHead>
-        <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.rank }]}>순위</Text>
-        <Text style={[styles.th, { color: t.muted, flex: 1 }]}>종목명</Text>
-        <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.price, textAlign: "right" }]}>현재가·등락률</Text>
-        <Text style={[styles.th, { color: t.muted, width: DISCOVER_COL.right, textAlign: "right" }]}>{metric === "volume" ? "거래량" : "거래대금"}</Text>
-      </TableHead>
+      <LineHead rank right={metric === "volume" ? "거래량" : "거래대금"} />
     </>
   );
 
@@ -134,7 +130,6 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
 const styles = StyleSheet.create({
   chipsWrap: { borderBottomWidth: StyleSheet.hairlineWidth },
   chips: { flexDirection: "row", gap: space.s, paddingHorizontal: space.lg, paddingVertical: space.sm },
-  th: { fontSize: font.tiny, fontWeight: "600" },
   more: { margin: space.lg, paddingVertical: space.sm, alignItems: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
 });
