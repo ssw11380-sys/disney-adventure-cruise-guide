@@ -36,5 +36,8 @@ describe("headlineRate", () => {
     expect(src).toMatch(/styles\.big[^>]*>\{formatPct\(headRate\)\}/);
     expect(src).not.toMatch(/formatPct\(theme\.changeRate\)/);
     expect(src).toMatch(/headRate !== null && theme\?\.simpleAvg !== undefined/);
+    // 곧 채워진다는 뜻으로 읽히지 않게 (서버 note: "…같은 때 값을 확인하지 못했습니다" — 새로고침해도 그대로일 수 있다)
+    expect(src).toMatch(/theme\?\.unverified \?[^\n]*>등락률 확인 못 함</);
+    expect(src).not.toContain("등락률 확인 중");
   });
 });

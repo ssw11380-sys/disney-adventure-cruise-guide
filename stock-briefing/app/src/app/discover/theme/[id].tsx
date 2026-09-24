@@ -54,7 +54,7 @@ export default function ThemeDetailScreen() {
         </Text>
         <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.md }}>
           <Text style={[styles.big, { color: c }]}>{formatPct(headRate)}</Text>
-          {theme?.unverified ? <Text style={{ color: t.muted, fontSize: font.small }}>등락률 확인 중</Text> : null}
+          {theme?.unverified ? <Text style={{ color: t.muted, fontSize: font.small }}>등락률 확인 못 함</Text> : null}
           {period === "day" && headRate !== null && theme?.simpleAvg !== undefined ? (
             <Text style={{ color: t.muted, fontSize: font.small }}>
               시가총액 가중 · 단순 평균 <Text style={{ color: changeColor(t, theme.simpleAvg), fontWeight: "700" }}>{formatPct(theme.simpleAvg)}</Text>

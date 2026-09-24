@@ -1209,7 +1209,9 @@ export class DiscoverService {
     let note: string | null = null;
     /** 종목 값을 저장본으로 덮었으면 그 저장본 시각과 비워진 종목을 모두 덮었는지 (업종 요약을 종목과 같은 시점으로 맞추려고) */
     let restored: { savedAt: number; all: boolean } | null = null;
-    if (market === "US" && !open && isMostlyZero(value.items, 0.8)) {
+    /** 출처가 미국 업종 값을 비웠다 (출처 요약도 비운 때 값) */
+    const reset = market === "US" && !open && isMostlyZero(value.items, 0.8);
+    if (reset) {
       // 출처 초기화(뉴욕 03:40~04:00): 종목 값이 0 — 미국 테마 시세 저장본(약 2,500종목)으로 0 인 종목만 덮는다
       const snap = await this.loadSnap<[string, UsQuote][]>("usq");
       const byTicker = new Map((snap?.value ?? []).map(([, q]) => [q.code, q] as const));
@@ -1247,12 +1249,19 @@ export class DiscoverService {
     const listed = adjust ? null : await listedP;
     /** 상승·보합·하락 수를 가져온 목록 요약 (잘린 업종의 전체 종목 수) */
     let counted: ThemeSummary | null = null;
+    /** 출처가 비웠는데 덮지 못했을 때 마감 뒤(비우기 전) 업종 목록의 요약 */
+    const closed = reset && !restored ? await this.closeListed(id, this.usCloseAt(ss), listed) : null;
     if (restored) {
       // 종목 값을 저장본으로 덮었으면 출처 요약은 비운 때 값이라 종목과 시점이 다르다 → 같은 시점 요약으로 맞춘다
       const r = await this.restoredSummary(ss, value, restored, listed, truncated);
       theme = r.theme;
       counted = r.counted;
       if (r.note) note = [note, r.note].filter(Boolean).join(" · ");
+    } else if (closed) {
+      // 비워진 채인 종목과 달리 머리는 마감 뒤 목록 값 — 등락률까지 그 목록 값으로 (수만 가져오면 머리 안에서 시점이 섞인다)
+      theme = { ...theme, changeRate: closed.changeRate, up: closed.up, flat: closed.flat, down: closed.down };
+      counted = closed;
+      note = [note, "업종 등락률·상승/하락 수는 비우기 전 업종 목록 값입니다"].filter(Boolean).join(" · ");
     } else if (!adjust && listed && listed.up + listed.flat + listed.down > 0) {
       theme = { ...theme, up: listed.up, flat: listed.flat, down: listed.down };
       counted = listed;
@@ -1293,14 +1302,22 @@ export class DiscoverService {
     const base = detail.theme;
     const close = this.usCloseAt(ss);
     if (restored.savedAt >= close) {
-      // 지금 목록은 마감 뒤에 받은 것만 온다 (listIsCurrent). 없으면 마감 뒤에 남긴 목록 저장본
-      const snap = listed ? null : await this.loadSnap<ThemeSummary[]>("themes:US:sector:day");
-      const same = listed ?? (snap && snap.savedAt >= close ? (snap.value.find((t) => t.id === base.id) ?? null) : null);
-      if (same && same.up + same.flat + same.down > 0) return { theme: { ...base, changeRate: same.changeRate, up: same.up, flat: same.flat, down: same.down }, counted: same, note: null };
+      const same = await this.closeListed(base.id, close, listed);
+      if (same) return { theme: { ...base, changeRate: same.changeRate, up: same.up, flat: same.flat, down: same.down }, counted: same, note: null };
     }
     const live = detail.items.filter((i) => !i.suspended);
     if (!truncated && restored.all && live.length && live.every((i) => (i.marketCap ?? 0) > 0)) return { theme: summarize(base, live, true), counted: null, note: "업종 등락률·상승/하락 수는 이 종목 값으로 다시 셌습니다" };
     return { theme: { ...base, up: 0, flat: 0, down: 0, unverified: true }, counted: null, note: "업종 등락률·상승/하락 수는 종목 값과 같은 때 값을 확인하지 못했습니다" };
+  }
+
+  /**
+   * 마지막 미국 정규장 마감(close) 뒤, 출처가 비우기 전에 받은 업종 목록의 이 업종 요약: 지금 목록(마감 뒤에 받은 것만 온다 — listIsCurrent),
+   * 없으면 마감 뒤에 남긴 목록 저장본. 상승·보합·하락 수가 없으면 null
+   */
+  private async closeListed(id: string, close: number, listed: ThemeSummary | null): Promise<ThemeSummary | null> {
+    const snap = listed ? null : await this.loadSnap<ThemeSummary[]>("themes:US:sector:day");
+    const same = listed ?? (snap && snap.savedAt >= close ? (snap.value.find((t) => t.id === id) ?? null) : null);
+    return same && same.up + same.flat + same.down > 0 ? same : null;
   }
 
   /**

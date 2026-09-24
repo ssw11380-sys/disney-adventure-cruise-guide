@@ -138,6 +138,43 @@ describe("DISC-03 미국 업종 상세: 출처 초기화 때 저장본으로 덮
     expect(before!.theme.unverified).toBeUndefined();
     expect(before!.note).toBeNull();
   });
+
+  it("저장본 없이(또는 덮을 종목이 없어) 비워진 채인데 마감 뒤 목록 요약이 있으면 등락률·수를 모두 그 목록 값으로 (머리 안에서 시점을 섞지 않는다)", async () => {
+    const rates = [10, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const others = Array.from({ length: 9 }, (_, i) => ({ id: String(70 + i), name: `업종${i}`, changeRate: 1 + i / 10, up: 1, flat: 0, down: 0, leaders: [] }));
+    const list = [it57({ changeRate: 2.8, up: 10, flat: 0, down: 0 }), ...others];
+    // 검증 재현: usq 저장본 없음 + 마감 뒤 받은 지금 목록 57 = 2.8% · 상승 10 (예전: 0% · 상승 10/보합 0 — 등락률만 비운 때 값)
+    const unrelated = { savedAt: CLOSE, quotes: [quote("X1", 3)] }; // 저장본은 있지만 이 업종 종목이 없다
+    for (const usq of [null, unrelated]) {
+      const d = await world({ usq, list }).theme("US", "sector", "57");
+      expect(d!.items.map((i) => i.changeRate)).toEqual(rates); // 종목은 비워진 값 그대로
+      expect(d!.theme).toMatchObject({ changeRate: 2.8, up: 10, flat: 0, down: 0 });
+      expect(d!.theme.unverified).toBeUndefined();
+      expect(d!.note).toContain("0으로 비웠습니다");
+      expect(d!.note).toContain("업종 목록 값"); // 머리(마감 뒤 목록)와 종목(비운 값)의 시점 차이를 밝힌다
+    }
+    // 지금 목록도 비워져(저장본 목록) 없으면 마감 뒤에 남긴 목록 저장본의 요약
+    const snap = await world({ usq: null, list: "zero", listSnap: { savedAt: CLOSE, value: [it57({ changeRate: 2.75, up: 9, flat: 1, down: 0 })] } }).theme("US", "sector", "57");
+    expect(snap!.items.map((i) => i.changeRate)).toEqual(rates);
+    expect(snap!.theme).toMatchObject({ changeRate: 2.75, up: 9, flat: 1, down: 0 });
+    // 목록 저장본이 그 전 정규장 것이면 쓰지 않고 출처 요약 그대로 (보이는 비워진 종목과 같은 때 값)
+    const old = await world({ usq: null, list: "zero", listSnap: { savedAt: "2026-09-21T20:00:00.000Z", value: [it57({ changeRate: 2.75, up: 9, flat: 1, down: 0 })] } }).theme("US", "sector", "57");
+    expect(old!.theme).toMatchObject({ ...RESET_SUMMARY });
+    expect(old!.theme).toMatchObject({ up: fromItems(old!.items).up, flat: fromItems(old!.items).flat, down: 0 });
+    expect(old!.note).not.toContain("업종 목록 값");
+  });
+
+  it("300종목에서 잘린 업종이 저장본 없이 비워진 채: 마감 뒤 목록 요약이 있으면 그 등락률·전체 종목 수", async () => {
+    const rows = Array.from({ length: 350 }, (_, i) => (i < 10 ? usItem(`T${i}`, 5, 1000) : usItem(`T${i}`, 0, 0)));
+    const summary: Summary = { changeRate: 0.4, up: 10, flat: 340, down: 0 };
+    const d = await world({ rows, summary, usq: null, list: "zero", listSnap: { savedAt: CLOSE, value: [it57({ changeRate: -0.9, up: 20, flat: 30, down: 300 })] } }).theme("US", "sector", "57");
+    expect(d!.items).toHaveLength(300);
+    expect(d!.theme).toMatchObject({ changeRate: -0.9, up: 20, flat: 30, down: 300 });
+    expect(d!.note).toContain("(전체 350종목)");
+    // 목록도 없으면 수는 세지 않는다 (예전과 같음)
+    const none = await world({ rows, summary, usq: null, list: "zero" }).theme("US", "sector", "57");
+    expect(none!.theme).toMatchObject({ changeRate: 0.4, up: 0, flat: 0, down: 0 });
+  });
 });
 
 describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판을 이어 주지 않는다", () => {
