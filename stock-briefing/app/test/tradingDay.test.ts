@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyTick, applyTicksToList, latestPerCode, type StreamTick } from "@/lib/liveTick";
+import { applyTick, applyTicksToList, latestPerCode, newTradingDay, type StreamTick } from "@/lib/liveTick";
 import { holding, quote } from "./helpers";
 
 // PF-01: 거래일이 바뀐 첫 체결을 전날 시세(전일 종가·고가·저가)에 섞지 않는다 (서버 stockService.sameTradingDay 와 같은 기준)
@@ -65,7 +65,54 @@ describe("거래일이 바뀐 체결 (PF-01)", () => {
   });
 });
 
+describe("미국 주간거래(뉴욕 20:00 이후)는 다음 거래일 (PF-01 검증 지적)", () => {
+  it("애프터마켓 시세(뉴욕 19:58, 전일 종가 = 전날 정규장의 전날 것)에 주간거래 체결(뉴욕 21:00)을 붙이지 않는다", () => {
+    // 9/24 정규장 종가 200 (9/23 종가 190), 애프터 202 → 등락 +12 는 9/23 종가 기준
+    const after = quote("AAPL", 202, { currency: "USD", prevClose: 190, change: 12, changeRate: 6.32, asOf: "2026-09-25T08:58:00+09:00" });
+    const t = tick("AAPL", 205, "2026-09-25T10:00:00+09:00");
+    expect(applyTick(after, t)).toBe(after);
+    expect(newTradingDay(after, t)).toBe(true);
+  });
+
+  it("주간거래 시세(전일 종가 = 9/24 정규장)에는 붙고, 뉴욕 자정을 넘겨도(한국 13:30) 같은 거래일이라 보류하지 않는다", () => {
+    const day = quote("AAPL", 204, { currency: "USD", prevClose: 200, change: 4, changeRate: 2, asOf: "2026-09-25T10:00:00+09:00" });
+    const t = tick("AAPL", 206, "2026-09-25T13:30:00+09:00");
+    expect(newTradingDay(day, t)).toBe(false);
+    expect(applyTick(day, t)).toMatchObject({ price: 206, change: 6, changeRate: 3, live: true });
+  });
+
+  it("주말에 온 체결(값 그대로)은 금요일 시세와 같은 거래일, 월요일 주간거래(뉴욕 일요일 20:00~)는 새 거래일", () => {
+    const fri = quote("AAPL", 200, { currency: "USD", prevClose: 198, change: 2, changeRate: 1.01, asOf: "2026-09-26T08:59:00+09:00" }); // 뉴욕 금 19:59
+    expect(newTradingDay(fri, tick("AAPL", 200, "2026-09-26T13:00:00+09:00"))).toBe(false);
+    expect(newTradingDay(fri, tick("AAPL", 201, "2026-09-28T10:00:00+09:00"))).toBe(true);
+    const krFri = quote("005930", 100, { asOf: "2026-09-25T15:30:00+09:00" });
+    expect(newTradingDay(krFri, tick("005930", 100, "2026-09-26T11:00:00+09:00"))).toBe(false);
+    expect(newTradingDay(krFri, tick("005930", 101, "2026-09-28T09:00:00+09:00"))).toBe(true);
+  });
+});
+
 describe("시장 현지 거래일 규칙 (한국 서울, 미국 뉴욕·서머타임)", () => {
+  it("tradingDate: 미국은 뉴욕 20:00 부터 다음 날, 주말은 직전 금요일 (서머타임 적용/비적용, Z 표기)", async () => {
+    const { tradingDate } = await import("@/lib/marketTime");
+    // EDT(-4): 9/24(목) 19:59 → 9/24, 20:00 → 9/25, 9/25 00:30 → 9/25
+    expect(tradingDate("2026-09-25T08:59:00+09:00", "AAPL")).toBe("2026-09-24");
+    expect(tradingDate("2026-09-25T09:00:00+09:00", "AAPL")).toBe("2026-09-25");
+    expect(tradingDate("2026-09-25T00:00:00Z", "AAPL")).toBe("2026-09-25");
+    expect(tradingDate("2026-09-25T13:30:00+09:00", "AAPL")).toBe("2026-09-25");
+    // EST(-5): 1/15(목) 19:59 → 1/15, 20:00 → 1/16
+    expect(tradingDate("2026-01-16T00:59:00Z", "AAPL")).toBe("2026-01-15");
+    expect(tradingDate("2026-01-16T01:00:00Z", "AAPL")).toBe("2026-01-16");
+    // 주말: 금 20:00 ~ 일 20:00 전은 금요일, 일 20:00 부터 월요일
+    expect(tradingDate("2026-09-26T10:30:00+09:00", "AAPL")).toBe("2026-09-25"); // 뉴욕 금 21:30
+    expect(tradingDate("2026-09-27T12:00:00+09:00", "AAPL")).toBe("2026-09-25"); // 뉴욕 토 23:00
+    expect(tradingDate("2026-09-28T08:59:00+09:00", "AAPL")).toBe("2026-09-25"); // 뉴욕 일 19:59
+    expect(tradingDate("2026-09-28T09:00:00+09:00", "AAPL")).toBe("2026-09-28"); // 뉴욕 일 20:00
+    // 한국은 서울 날짜 그대로(20:00 규칙 없음), 주말은 금요일
+    expect(tradingDate("2026-09-24T20:30:00+09:00", "005930")).toBe("2026-09-24");
+    expect(tradingDate("2026-09-26T10:00:00+09:00", "005930")).toBe("2026-09-25");
+    expect(tradingDate("bad", "AAPL")).toBeNull();
+  });
+
   it("marketDate: 같은 순간은 표기(Z·+09:00)와 관계없이 같은 날짜", async () => {
     const { marketDate } = await import("@/lib/marketTime");
     expect(marketDate("2026-09-25T01:00:00+09:00", "AAPL")).toBe("2026-09-24");

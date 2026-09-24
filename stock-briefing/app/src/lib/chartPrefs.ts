@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useState } from "react";
 import type { Candle, CandlePeriod } from "@/api/types";
 import type { IndicatorKind } from "@/components/chart/PriceChart";
-import { marketClock, periodKey } from "./marketTime";
+import { marketClock, periodKey, tradingDate } from "./marketTime";
 
 /** 차트 설정(이평선·볼린저·거래량·보조지표)은 종목과 화면(인라인/전체)에 상관없이 하나로 기억한다 */
 export interface ChartPrefs {
@@ -74,7 +74,8 @@ export function isIntraday(period: CandlePeriod): boolean {
 
 /**
  * 실시간 체결을 봉 시계열에 반영한다. 마지막 봉과 같은 구간이면 고·저·종을 갱신하고, 새 구간이면 봉을 하나 붙인다.
- * 구간은 시장 현지(한국 서울·미국 뉴욕, 서머타임 포함) 시각으로 나눈다 — 서버 봉과 같은 거래일·주·월 (PF-02·03).
+ * 분봉은 시장 현지(한국 서울·미국 뉴욕, 서머타임 포함) 시각으로, 일·주·월봉은 거래일(lib/marketTime 의 tradingDate)로 나눈다 —
+ * 미국 주간거래(뉴욕 20:00 이후) 체결은 토스·서버 봉처럼 다음 거래일 봉으로 간다 (PF-02·03).
  * 새로 붙인 봉은 거래량을 모른다(volumeUnknown) — 체결마다 거래량이 오지 않으니 더해서 만들지 않고, 서버 봉을 다시 받으면 채워진다 (PF-04).
  * 바뀐 게 없으면 같은 배열을 돌려준다(리렌더 방지).
  */
@@ -101,8 +102,9 @@ export function applyTickToCandles(candles: Candle[], period: CandlePeriod, pric
     if (at > lastAt) return newBar(bucket.slice(0, 10), bucket);
     return candles;
   }
-  // 일·주·월봉: 체결의 시장 현지 날짜가 마지막 봉과 같은 구간(날·월요일 시작 주·월)이면 마지막 봉 갱신, 뒤 구간이면 지난 봉은 두고 새 봉
-  const day = clock.local.slice(0, 10);
+  // 일·주·월봉: 체결의 거래일이 마지막 봉과 같은 구간(날·월요일 시작 주·월)이면 마지막 봉 갱신, 뒤 구간이면 지난 봉은 두고 새 봉
+  const day = tradingDate(timestamp, code);
+  if (!day) return candles;
   const key = periodKey(day, period);
   const lastKey = periodKey(last.date, period);
   if (key < lastKey) return candles;

@@ -35,6 +35,11 @@ const SESSION_START = Date.now();
 const STATE_EVERY_MS = 5_000;
 /** 거래일이 바뀐 체결을 보류한 종목의 시세를 다시 받는 최소 간격 (서버도 새 거래일 시세를 받기 전이면 옛 값을 주므로 두드리지 않게) */
 const NEW_DAY_REFETCH_MS = 15_000;
+/**
+ * 새 일·주·월 봉이 열려 서버 봉을 바로 다시 받는 것은 서버 봉을 받은 지 이만큼 지났을 때만. 방금 받은 서버 봉에 그 봉이 없으면
+ * (서버 봉 출처가 아직 새 거래일 봉을 열지 않음) 체결마다 다시 받지 않고 주기 갱신·다시 볼 때에 맡긴다
+ */
+const NEW_BAR_REFETCH_MS = 15_000;
 
 type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
 
@@ -44,7 +49,7 @@ type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string |
  *  - 거래일이 바뀐 체결은 붙이지 않고 held 에 모은다 → 새 거래일 시세를 다시 받는다 (PF-01)
  *  - 차트 봉은 체결로 고쳐도 서버에서 새로 받은 값이 아니므로 받은 시각·무효 표시를 그대로 둔다 → 다시 볼 때·주기 갱신 때 서버 봉(거래량 포함)으로 바로잡힌다 (PF-04)
  */
-export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<string, StreamTick>, held: Set<string>): boolean {
+export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<string, StreamTick>, held: Set<string>, now = Date.now()): boolean {
   let touched = false;
   const fresh = (key: unknown[]) => (qc.getQueryState(key)?.dataUpdatedAt ?? 0) >= SESSION_START;
   qc.setQueriesData<RegisteredWithQuote[]>({ queryKey: [apiUrl, "stocks"], exact: true }, (list) => {
@@ -63,7 +68,7 @@ export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<st
       touched = true;
       return { ...d, quote, evaluation: evaluate(d, quote, d.evaluation) };
     });
-    // 차트의 마지막 봉도 같이 움직인다 (시장 현지 날짜로 같은 구간이면 고·저·종 갱신, 새 구간이면 새 봉)
+    // 차트의 마지막 봉도 같이 움직인다 (분봉은 현지 시각, 일·주·월봉은 거래일로 같은 구간이면 고·저·종 갱신, 새 구간이면 새 봉)
     for (const q of qc.getQueryCache().findAll({ queryKey: [apiUrl, "candles", tick.code] })) {
       const series = q.state.data as CandleSeries | undefined;
       if (!series) continue;
@@ -71,9 +76,10 @@ export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<st
       if (next === series.candles) continue;
       const { dataUpdatedAt, isInvalidated } = q.state;
       qc.setQueryData<CandleSeries>(q.queryKey, { ...series, candles: next }, { updatedAt: dataUpdatedAt });
-      // 새 일·주·월 봉이 열렸으면 서버 봉을 다시 받는다 (보고 있지 않은 차트는 표시만 해 두고 다시 볼 때)
+      // 새 일·주·월 봉이 열렸으면 서버 봉을 다시 받는다 (보고 있지 않은 차트는 표시만 해 두고 다시 볼 때, 방금 받은 서버 봉이면 표시만)
       const opened = !isIntraday(series.period) && next.length > series.candles.length;
-      if (opened || isInvalidated) void qc.invalidateQueries({ queryKey: q.queryKey, exact: true, refetchType: opened ? "active" : "none" }, { cancelRefetch: false });
+      const refetchNow = opened && now - dataUpdatedAt >= NEW_BAR_REFETCH_MS;
+      if (opened || isInvalidated) void qc.invalidateQueries({ queryKey: q.queryKey, exact: true, refetchType: refetchNow ? "active" : "none" }, { cancelRefetch: false });
     }
   }
   return touched;

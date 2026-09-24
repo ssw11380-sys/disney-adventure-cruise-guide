@@ -94,12 +94,12 @@ export function pollInterval(o: { open: boolean; streamFresh: boolean; failing: 
 
 /**
  * 종목 차트 봉을 서버에서 다시 받는 주기 (PF-04). 실시간 체결로는 고·저·종만 따라가고 거래량·놓친 체결은 모르므로
- * 그 종목 장이 열려 있으면 분봉 30초·일·주·월봉 1분마다 서버 봉으로 바로잡는다 (서버 봉 캐시의 새 값 기준 20초·1분에 맞춤).
- * 장이 닫혀 있으면 멈춘다. 장 상태를 아직 모르면(못 받음) 열린 것으로 본다
+ * 그 종목에 거래가 있는 시간이면(lib/marketTime 의 tradingNow — 미국 주간거래 포함, 장 상태를 모르면 요일·시각으로) 분봉 30초·일·주·월봉 1분마다
+ * 서버 봉으로 바로잡는다 (서버 봉 캐시의 새 값 기준 20초·1분에 맞춤). 거래가 없는 시간이면 멈춘다
  */
-export function candleRefresh(period: CandlePeriod, open: boolean | undefined): { refetchInterval: number | false; staleTime: number } {
+export function candleRefresh(period: CandlePeriod, open: boolean): { refetchInterval: number | false; staleTime: number } {
   const intraday = period === "1m" || period === "5m" || period === "30m";
-  if (open === false) return { refetchInterval: false, staleTime: 5 * 60_000 };
+  if (!open) return { refetchInterval: false, staleTime: 5 * 60_000 };
   return intraday ? { refetchInterval: 30_000, staleTime: 20_000 } : { refetchInterval: 60_000, staleTime: 60_000 };
 }
 

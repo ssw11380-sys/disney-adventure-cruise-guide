@@ -84,6 +84,22 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
   return { market: "US", phase: "closed", label: `미국 정규장 마감 상태 (마지막 정규장 ${last}, 현지)`, lastRegularDate: lastRegular, todayIncomplete: false };
 }
 
+/**
+ * 체결·시세가 속한 거래일 YYYY-MM-DD (앱 lib/marketTime 의 tradingDate 와 같은 규칙).
+ *  - 한국은 서울 날짜
+ *  - 미국은 뉴욕 날짜, 단 뉴욕 20:00 이후(애프터마켓이 끝난 뒤 주간거래)는 다음 날 정규장에 딸린 세션이라 다음 날 (토스도 다음 거래일 봉에 넣는다)
+ *  - 토·일은 거래가 없으니 직전 금요일로 본다 (평일 휴장일은 따로 보지 않는다 — 앱과 같게)
+ */
+export function tradingDate(iso: string, kr: boolean): string {
+  const p = parts(new Date(iso), kr ? "Asia/Seoul" : "America/New_York");
+  const d = new Date(`${p.date}T12:00:00Z`);
+  if (!kr && p.minutes >= 20 * 60) d.setUTCDate(d.getUTCDate() + 1);
+  const wd = d.getUTCDay();
+  if (wd === 6) d.setUTCDate(d.getUTCDate() - 1);
+  else if (wd === 0) d.setUTCDate(d.getUTCDate() - 2);
+  return d.toISOString().slice(0, 10);
+}
+
 /** 직전 미국 거래일 (주말·휴장일 건너뜀) */
 function prevTradingDate(date: string): string {
   const d = new Date(`${date}T12:00:00Z`);

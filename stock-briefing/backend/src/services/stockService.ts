@@ -1,7 +1,7 @@
 import { EXCLUDED_KEY, parseCodes, SNAPSHOT_KEY, type TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import { CandleCache } from "./candleCache.js";
-import { marketContext } from "./marketContext.js";
+import { marketContext, tradingDate } from "./marketContext.js";
 import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
@@ -10,7 +10,6 @@ import { holdingsWriteLock } from "../lib/mutex.js";
 import { ConflictError, NotFoundError, ProviderError, TossLockedError, within } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
-import { localDate } from "../providers/market/tossOpenApi.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
 import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
 import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
@@ -65,12 +64,12 @@ const TICK_FRESH_MS = 60_000;
 /** 밸류에이션·환율 보강을 기다리는 최대 시간 (넘으면 보강 없이 시세만 저장) */
 const ENRICH_WAIT_MS = 3_000;
 
-/** 스냅샷과 체결이 같은 거래일인지 (한국은 서울, 미국은 뉴욕 날짜) */
+/** 스냅샷과 체결이 같은 거래일인지 (한국은 서울, 미국은 뉴욕 날짜 — 뉴욕 20:00 이후 주간거래는 다음 거래일. 앱 lib/marketTime 과 같다) */
 function sameTradingDay(q: Quote, tickIso: string): boolean {
   const a = Date.parse(q.asOf), b = Date.parse(tickIso);
   if (Number.isNaN(a) || Number.isNaN(b)) return true;
   const kr = isKrCode(q.code);
-  return localDate(q.asOf, kr) === localDate(tickIso, kr);
+  return tradingDate(q.asOf, kr) === tradingDate(tickIso, kr);
 }
 const TOSS_DETAIL_KEY = "toss_holdings_detail";
 

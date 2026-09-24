@@ -281,6 +281,36 @@ describe("밤새 쉬었다 연 경우 (리뷰 M1)", () => {
   });
 });
 
+describe("미국 주간거래 체결의 거래일 (PF-01, 앱과 같은 규칙)", () => {
+  it("애프터마켓 스냅샷(뉴욕 19:58)에 주간거래 체결(뉴욕 21:00)을 붙이지 않고, 주간거래 스냅샷에는 뉴욕 자정을 넘긴 체결도 붙인다", async () => {
+    const p = new BatchProvider();
+    p.asOf = "2026-09-25T08:58:00+09:00"; // 뉴욕 9/24 19:58 (애프터마켓)
+    const t = { now: Date.parse("2026-09-25T10:00:00+09:00") };
+    let tickAt = "2026-09-25T10:00:00+09:00"; // 뉴욕 9/24 21:00 (주간거래 → 9/25 거래일)
+    const db = await createMigratedDb(":memory:");
+    await db
+      .insertInto("registered_stocks")
+      .values({ code: "AAPL", name: "애플", market: "NASDAQ", quantity: 1, avg_price: 90_000, memo: null, created_at: "2026-09-01T00:00:00+09:00", updated_at: "2026-09-01T00:00:00+09:00" })
+      .execute();
+    const live = {
+      get: (c: string) => ({ code: c, price: 120_000, volume: 1, timestamp: tickAt, receivedAt: t.now }),
+      setCodes: () => {},
+      status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }),
+    };
+    const service = new StockService({ db, quotes: p, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, now: () => new Date(t.now), quoteCacheTtlMs: 60_000 });
+    const first = await service.listWithQuotes();
+    expect(first[0]!.quote).toMatchObject({ code: "AAPL", price: 100_000 });
+    expect(first[0]!.quote!.live).toBeUndefined();
+    // 주간거래 중 받은 스냅샷(뉴욕 9/24 23:30 → 9/25 거래일)에 뉴욕 9/25 00:30 체결은 같은 거래일
+    p.asOf = "2026-09-25T12:30:00+09:00";
+    t.now = Date.parse("2026-09-25T13:30:00+09:00");
+    tickAt = "2026-09-25T13:30:00+09:00";
+    await service.listWithQuotes();
+    await settle();
+    expect((await service.listWithQuotes())[0]!.quote).toMatchObject({ price: 120_000, live: true });
+  });
+});
+
 describe("QuoteProviderChain.getQuotes", () => {
   it("일괄 소스에서 빠진 종목만 다음 소스로(종목마다) 넘긴다", async () => {
     const batch = new BatchProvider();
