@@ -17,10 +17,14 @@ export interface ReleaseInfo {
   publishedAt: string | null;
 }
 
+/** 확인하는 두 갈래: 새 버전 정보(release.json → APK), 화면 업데이트(OTA) */
+export type UpdateSource = "apk" | "ota";
+
 export type UpdateCheckResult =
   | { kind: "apk"; release: ReleaseInfo } // 새 APK 를 설치해야 하는 업데이트
   | { kind: "ota"; updateId: string | null } // 이미 내려받았고 재시작만 하면 되는 업데이트
-  | { kind: "none"; warnings: string[] }; // 최신 (확인 못 한 항목은 warnings 에)
+  | { kind: "none"; warnings: string[] } // 확인할 갈래를 모두 확인했고 최신 (개발 빌드라 OTA 를 건너뛴 안내는 warnings 에)
+  | { kind: "unknown"; checked: UpdateSource[]; warnings: string[] }; // 확인에 실패한 갈래가 있어 최신인지 모른다 (checked: 확인된 갈래, 실패 까닭은 warnings 에)
 
 export const currentVersion: string = Constants.expoConfig?.version ?? "0.0.0";
 
@@ -50,18 +54,25 @@ export async function fetchRelease(timeoutMs = 8000): Promise<ReleaseInfo> {
   }
 }
 
-/** APK(새 버전) → OTA 순으로 확인한다. 어느 한쪽이 실패해도 다른 쪽은 확인한다. */
+/**
+ * APK(새 버전) → OTA 순으로 확인한다. 어느 한쪽이 실패해도 다른 쪽은 확인한다.
+ * 확인해야 할 갈래를 모두 확인했을 때만 "최신"(none). 하나라도 실패하면 unknown (U1: 인터넷이 없을 때 "최신"으로 표시하던 문제).
+ */
 export async function checkForAppUpdate(): Promise<UpdateCheckResult> {
   const warnings: string[] = [];
+  const checked: UpdateSource[] = [];
+  const settle = (needed: UpdateSource[]): UpdateCheckResult =>
+    needed.every((x) => checked.includes(x)) ? { kind: "none", warnings } : { kind: "unknown", checked, warnings };
   try {
     const release = await fetchRelease();
     if (compareVersions(release.version, currentVersion) > 0 && release.apkUrl) return { kind: "apk", release };
+    checked.push("apk");
   } catch (e) {
     warnings.push(`새 버전 정보 확인 실패: ${e instanceof Error ? e.message : String(e)}`);
   }
   if (!Updates.isEnabled) {
     warnings.push("개발 빌드라 OTA 업데이트는 확인하지 않습니다.");
-    return { kind: "none", warnings };
+    return settle(["apk"]);
   }
   try {
     const check = await Updates.checkForUpdateAsync();
@@ -69,10 +80,30 @@ export async function checkForAppUpdate(): Promise<UpdateCheckResult> {
       const fetched = await Updates.fetchUpdateAsync();
       return { kind: "ota", updateId: fetched.manifest && "id" in fetched.manifest ? String(fetched.manifest.id) : null };
     }
+    checked.push("ota");
   } catch (e) {
     warnings.push(`OTA 확인 실패: ${e instanceof Error ? e.message : String(e)}`);
   }
-  return { kind: "none", warnings };
+  return settle(["apk", "ota"]);
+}
+
+export interface UpdateStatus {
+  /** 제목 옆 배지. 녹색 "최신"은 확인할 갈래를 모두 확인했을 때만 */
+  badge: { text: string; tone: "good" | "neutral" | "bad" } | null;
+  /** 확인 버튼 아래 한 줄 */
+  message: string | null;
+  /** 아무것도 확인하지 못함 → 오류 색 */
+  failed: boolean;
+}
+
+/** 업데이트 확인 결과를 화면 글자로. 새 APK·OTA 는 카드가 따로 그린다 */
+export function updateStatus(r: UpdateCheckResult | null): UpdateStatus {
+  if (!r || r.kind === "apk" || r.kind === "ota") return { badge: null, message: null, failed: false };
+  const why = r.warnings.length ? ` (${r.warnings.join(" / ")})` : "";
+  if (r.kind === "none") return { badge: { text: "최신", tone: "good" }, message: `최신 버전입니다.${why}`, failed: false };
+  if (r.checked.includes("apk")) return { badge: { text: "일부 확인", tone: "neutral" }, message: `새 설치 파일은 없습니다. 화면 업데이트는 확인하지 못했습니다.${why}`, failed: false };
+  if (r.checked.includes("ota")) return { badge: { text: "일부 확인", tone: "neutral" }, message: `화면 업데이트는 없습니다. 새 설치 파일은 확인하지 못했습니다.${why}`, failed: false };
+  return { badge: { text: "확인 실패", tone: "bad" }, message: `업데이트를 확인하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 눌러 주세요.${why}`, failed: true };
 }
 
 export function describeRunningUpdate(): { channel: string; updateId: string; createdAt: string | null } {

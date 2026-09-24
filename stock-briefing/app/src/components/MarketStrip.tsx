@@ -4,7 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMarketIndices } from "@/api/hooks";
 import type { MarketIndex } from "@/api/types";
 import { formatPct } from "@/lib/format";
-import { clockLabel } from "@/lib/freshness";
+import { clockLabel, indexLive, indicesAsOf } from "@/lib/freshness";
 import { useNow } from "@/lib/useNow";
 import { changeColor, font, space, touch, useTheme } from "@/theme";
 import { sentence, speakRate } from "@/lib/a11y";
@@ -32,12 +32,16 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
   }, [selectedX]);
   if (list.length === 0) return null;
   const open = (code: string) => (onSelect ? onSelect(code) : router.push(`/market/${code}` as never));
+  // 기준 시각은 서버가 출처에서 받은 시각 (앱이 응답을 받은 시각이 아니라). 출처 조회가 실패 중인 항목이 있으면 경고색
+  const basis = indicesAsOf(list, q.dataUpdatedAt);
+  const warn = basis.stale || q.isError || q.failureCount > 0;
   return (
     <View style={[styles.wrap, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
       <ScrollView ref={scroll} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
         {list.map((i, n) => {
           const c = changeColor(t, i.change);
           const on = selected === i.code;
+          const live = indexLive(i);
           return (
             <Pressable
               key={i.code}
@@ -47,7 +51,7 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
                 setXs((prev) => (prev[i.code] === x ? prev : { ...prev, [i.code]: x }));
               } : undefined}
               accessibilityRole="button"
-              accessibilityLabel={sentence([i.kind === "fx" ? `${i.name} 시장` : i.name, formatIndexValue(i.value), speakRate(i.changeRate), i.open && i.kind !== "fx" ? "장중" : null])}
+              accessibilityLabel={sentence([i.kind === "fx" ? `${i.name} 시장` : i.name, formatIndexValue(i.value), speakRate(i.changeRate), live ? "장중" : null, i.stale ? "시세 지연" : null])}
               accessibilityHint="차트 보기"
               accessibilityState={{ selected: on }}
               style={({ pressed }) => [
@@ -63,7 +67,8 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
                   {/* 잔고 패널의 "토스 적용 환율"과 구분 */}
                   {i.kind === "fx" ? <Text style={{ fontWeight: "400" }}> 시장</Text> : null}
                 </Text>
-                {i.open && i.kind !== "fx" ? <View style={[styles.dot, { backgroundColor: t.live }]} /> : null}
+                {/* 초록 점 = 장중 확인, 경고색 점 = 출처 조회 실패로 마지막 값 */}
+                {live ? <View style={[styles.dot, { backgroundColor: t.live }]} /> : i.stale ? <View style={[styles.dot, { backgroundColor: t.warn }]} /> : null}
               </View>
               <Text style={[styles.value, { color: c }]}>{formatIndexValue(i.value)}</Text>
               <Text style={[styles.rate, { color: c }]}>
@@ -73,10 +78,10 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
             </Pressable>
           );
         })}
-        {/* 띠 끝에 기준 시각 (지수는 30초마다 받음). 받지 못하는 동안은 마지막으로 받은 시각이 남는다 */}
-        {q.dataUpdatedAt ? (
-          <View style={[styles.item, styles.asOf, { borderLeftColor: t.line }]} accessible accessibilityLabel={`지수 기준 시각 ${clockLabel(q.dataUpdatedAt, now)}`}>
-            <Text style={{ color: q.isError || q.failureCount > 0 ? t.warn : t.muted, fontSize: font.tiny }}>{clockLabel(q.dataUpdatedAt, now)}</Text>
+        {/* 띠 끝에 기준 시각 (지수는 30초마다 받음). 서버가 출처에서 새로 받지 못하는 동안은 마지막으로 받은 시각이 남는다 */}
+        {basis.at !== null ? (
+          <View style={[styles.item, styles.asOf, { borderLeftColor: t.line }]} accessible accessibilityLabel={sentence([`지수 기준 시각 ${clockLabel(basis.at, now)}`, basis.stale ? "시세 지연" : null])}>
+            <Text style={{ color: warn ? t.warn : t.muted, fontSize: font.tiny }}>{clockLabel(basis.at, now)}</Text>
             <Text style={{ color: t.muted, fontSize: font.tiny }}>기준</Text>
           </View>
         ) : null}

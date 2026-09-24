@@ -5,7 +5,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
-import { axisWidth, labelSide, readoutBasis, textWidth } from "@/lib/chartBasis";
+import { axisWidth, labelSide, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
 import { formatPct, formatPrice, formatVolume } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
 import { changeColor, font, space, useFontScale, useTheme, type Theme } from "@/theme";
@@ -222,18 +222,11 @@ export function PriceChart(p: PriceChartProps) {
     return out.reverse();
   }, [visible, n, plotW, p.period]);
 
-  const volPaths = useMemo(() => {
-    if (!p.showVolume) return null;
-    let up = "", down = "";
-    for (let i = 0; i < n; i++) {
-      const c = visible[i]!;
-      const h = Math.max((c.volume / maxVol) * volH, c.volume > 0 ? 1 : 0);
-      const d = `M${(xOf(i) - bodyW / 2).toFixed(1)} ${(volTop + volH - h).toFixed(1)}h${bodyW.toFixed(1)}v${h.toFixed(1)}h${(-bodyW).toFixed(1)}z`;
-      if (c.close >= c.open) up += d;
-      else down += d;
-    }
-    return { up, down };
-  }, [visible, n, maxVol, volH, volTop, xOf, bodyW, p.showVolume]);
+  // 거래량을 모르는 임시 봉(실시간 체결로 만든 봉)은 0 처럼 비워 두지 않고 점선 빈 막대로 (PF-04)
+  const volPaths = useMemo(
+    () => (p.showVolume ? volumeBars(visible, { maxVol, top: volTop, height: volH, barW: bodyW, xOf }) : null),
+    [visible, maxVol, volH, volTop, xOf, bodyW, p.showVolume],
+  );
 
   // ── 보조지표 pane ──
   const indScale = useMemo(() => {
@@ -411,6 +404,7 @@ export function PriceChart(p: PriceChartProps) {
               <>
                 <Path d={volPaths.up} fill={upColor} fillOpacity={0.55} />
                 <Path d={volPaths.down} fill={downColor} fillOpacity={0.55} />
+                {volPaths.unknown ? <Path d={volPaths.unknown} stroke={t.muted} strokeWidth={1} strokeDasharray="2 2" fill="none" /> : null}
                 <SvgText x={plotW + 4} y={volTop + 9} fill={t.muted} fontSize={font.tiny}>
                   {formatVolume(maxVol)}
                 </SvgText>
@@ -604,7 +598,8 @@ function Readout({
   // 분봉은 시각만 (날짜는 차트 아래 축에 있다) — 십자선으로 옮겨도 한 줄에 들어가게
   const when = c.time ? c.time.slice(11, 16) : c.date.slice(5);
   const v = (x: number) => formatChartValue(x, currency).replace(/원$/, "");
-  const vol = showVolume ? `거래량 ${formatVolume(c.volume)}` : "";
+  // 실시간 체결로 만든 임시 봉은 거래량을 모른다 — 0 으로 보이지 않게 (PF-04, 서버 봉을 다시 받으면 채워진다)
+  const vol = showVolume ? (c.volumeUnknown ? "거래량 집계 중" : `거래량 ${formatVolume(c.volume)}`) : "";
   const a11y = [`${c.date}${c.time ? ` ${c.time.slice(11, 16)}` : ""}`, `종가 ${formatChartValue(c.close, currency)}`, chg !== null ? `${basis.label} ${formatPct(chg)}` : "", `고가 ${v(c.high)}`, `저가 ${v(c.low)}`, `시가 ${v(c.open)}`, vol]
     .filter(Boolean)
     .join(", ");

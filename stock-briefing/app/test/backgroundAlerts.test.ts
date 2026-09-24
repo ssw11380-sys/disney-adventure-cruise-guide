@@ -7,16 +7,19 @@ vi.mock("expo-notifications", () => ({
   requestPermissionsAsync: async () => ({ status: "granted" }),
   scheduleNotificationAsync: async (x: unknown) => void scheduled.push(x),
 }));
+// 공용 태스크(check-new-briefings)의 등록 상태를 기억한다 — 알림을 꺼도 위젯 갱신용으로 남는지 본다 (N2)
+const task = { registered: false };
 vi.mock("expo-background-task", () => ({
   getStatusAsync: async () => 1,
-  registerTaskAsync: async () => undefined,
-  unregisterTaskAsync: async () => undefined,
+  registerTaskAsync: async () => void (task.registered = true),
+  unregisterTaskAsync: async () => void (task.registered = false),
   BackgroundTaskStatus: { Restricted: 0, Available: 1 },
   BackgroundTaskResult: { Success: 1, Failed: 2 },
 }));
-vi.mock("expo-task-manager", () => ({ isTaskDefined: () => true, defineTask: () => undefined, isTaskRegisteredAsync: async () => false }));
+vi.mock("expo-task-manager", () => ({ isTaskDefined: () => true, defineTask: () => undefined, isTaskRegisteredAsync: async () => task.registered }));
 vi.mock("@/lib/notifications", () => ({ ANDROID_CHANNEL: "briefings", ensureAndroidChannel: async () => undefined }));
-vi.mock("@/widgets/refresh", () => ({ refreshWidgets: async () => undefined }));
+const refreshed: unknown[] = [];
+vi.mock("@/widgets/refresh", () => ({ refreshWidgets: async (x: unknown) => void refreshed.push(x) }));
 vi.mock("react-native", () => ({ Platform: { OS: "android" } }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: { apiUrl: "https://server.test" } } } }));
 const store = new Map<string, string>();
@@ -29,7 +32,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   },
 }));
 
-const { enableLocalBriefingAlerts, runBriefingCheck } = await import("@/lib/backgroundBriefings");
+const { disableLocalBriefingAlerts, enableLocalBriefingAlerts, ensureBackgroundTaskRegistered, runBriefingCheck } = await import("@/lib/backgroundBriefings");
 
 const NOW = Date.parse("2026-09-24T17:00:00+09:00");
 const latest = Array.from({ length: 15 }, (_, i) => ({
@@ -38,10 +41,21 @@ const latest = Array.from({ length: 15 }, (_, i) => ({
   latest: { id: 100 + i, code: `00000${i}`, name: `종목${i}`, session: "afternoon", date: "2026-09-24", status: "ok", summary: "요약", detail: "", missing: [], model: "", error: null, createdAt: "2026-09-24T16:05:00+09:00" },
 }));
 const payload = { v: 1, market: { label: "장 마감", open: false, nextChangeAt: null }, stocks: [], briefings: latest.slice(0, 3).map((b) => ({ ...b.latest, name: b.name })), latestIds: latest.map((b) => b.latest.id) };
+const newOnes = (n: number, at = "2026-09-24T16:59:00+09:00") =>
+  Array.from({ length: n }, (_, i) => ({ code: `N0000${i}`, name: `새${i}`, latest: { ...latest[0]!.latest, id: 500 + i, code: `N0000${i}`, name: `새${i}`, createdAt: at } }));
+const serve = (list: typeof latest, prefs: Record<string, unknown>) =>
+  vi.stubGlobal("fetch", async (url: string) => {
+    if (url.endsWith("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+    if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(prefs), { status: 200 });
+    return new Response(JSON.stringify(list), { status: 200 });
+  });
+const prefs = { digest: true, quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", mutedCodes: [] as string[] };
 
 beforeEach(() => {
   store.clear();
   scheduled.length = 0;
+  refreshed.length = 0;
+  task.registered = false;
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   vi.stubGlobal("fetch", async (url: string) => new Response(JSON.stringify(url.endsWith("/api/widget") ? payload : latest), { status: 200 }));
@@ -65,16 +79,6 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
   });
 
   describe("3-19 알림 묶음", () => {
-    const newOnes = (n: number, at = "2026-09-24T16:59:00+09:00") =>
-      Array.from({ length: n }, (_, i) => ({ code: `N0000${i}`, name: `새${i}`, latest: { ...latest[0]!.latest, id: 500 + i, code: `N0000${i}`, name: `새${i}`, createdAt: at } }));
-    const serve = (list: typeof latest, prefs: Record<string, unknown>) =>
-      vi.stubGlobal("fetch", async (url: string) => {
-        if (url.endsWith("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
-        if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(prefs), { status: 200 });
-        return new Response(JSON.stringify(list), { status: 200 });
-      });
-    const prefs = { digest: true, quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", mutedCodes: [] as string[] };
-
     it("같은 세션의 새 브리핑 5건 → 알림 1건 ('오후 브리핑 5종목')", async () => {
       await enableLocalBriefingAlerts();
       serve([...latest, ...newOnes(5)], prefs);
@@ -145,6 +149,82 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       expect(scheduled).toHaveLength(0);
       await runBriefingCheck();
       expect(scheduled).toHaveLength(2);
+    });
+  });
+
+  describe("브리핑이 0건일 때 알림 켜기 (N3)", () => {
+    it("빈 목록에서 켠 뒤 첫 신규 브리핑은 1건 알리고, 다음 확인에서 다시 알리지 않는다", async () => {
+      serve([], prefs);
+      await enableLocalBriefingAlerts();
+      serve(newOnes(1), prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
+
+    it("빈 목록에서 켠 뒤 브리핑이 없으면 알림 규칙을 매번 받지 않는다 (확인할 새 id 없음)", async () => {
+      serve([], prefs);
+      await enableLocalBriefingAlerts();
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", async (url: string) => {
+        calls.push(url);
+        return new Response(JSON.stringify(url.endsWith("/api/widget") ? { ...payload, latestIds: [] } : []), { status: 200 });
+      });
+      await runBriefingCheck();
+      expect(calls.filter((u) => u.endsWith("/api/notifications/settings"))).toHaveLength(0);
+      expect(scheduled).toHaveLength(0);
+    });
+
+    it("켤 때 목록을 받지 못했으면 첫 확인은 지금 상태만 기억한다 (옛 브리핑이 쏟아지지 않게)", async () => {
+      vi.stubGlobal("fetch", async () => new Response("down", { status: 503 }));
+      await enableLocalBriefingAlerts();
+      serve(latest, prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      serve([...latest, ...newOnes(1)], prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
+
+    it("예전 앱에서 올라온 기기(초기화 표시 없이 본 기록만 있음)는 새 브리핑을 그대로 알린다", async () => {
+      store.set("push.localMode", "1");
+      store.set("briefings.notified", JSON.stringify(latest.map((b) => b.latest.id)));
+      serve([...latest, ...newOnes(1)], prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
+
+    it("알림을 껐다 다시 켜면 꺼져 있던 동안의 브리핑은 알리지 않는다", async () => {
+      serve([], prefs);
+      await enableLocalBriefingAlerts();
+      await disableLocalBriefingAlerts();
+      serve(newOnes(2), prefs);
+      await runBriefingCheck();
+      await enableLocalBriefingAlerts();
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+    });
+  });
+
+  describe("알림 끄기와 위젯 갱신 태스크 (N2)", () => {
+    it("앱 시작 때 등록된 공용 태스크는 브리핑 알림을 꺼도 남고, 위젯은 계속 갱신된다", async () => {
+      await ensureBackgroundTaskRegistered();
+      expect(task.registered).toBe(true);
+      serve(latest, prefs);
+      await enableLocalBriefingAlerts();
+      await disableLocalBriefingAlerts();
+      expect(task.registered).toBe(true);
+      serve([...latest, ...newOnes(2)], prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0); // 알림은 꺼짐
+      expect(refreshed).toHaveLength(1); // 위젯 갱신은 계속
+    });
+
+    it("즉시 푸시로 바꿀 때(로컬 알림만 끄기)도 태스크가 남는다", async () => {
+      await ensureBackgroundTaskRegistered();
+      await disableLocalBriefingAlerts();
+      expect(task.registered).toBe(true);
     });
   });
 });

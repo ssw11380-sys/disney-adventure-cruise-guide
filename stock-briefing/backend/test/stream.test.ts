@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import WebSocket from "ws";
 import { buildApp } from "../src/app.js";
@@ -11,9 +11,12 @@ import { fakeProviders } from "./helpers.js";
 
 class FakeSocket extends EventEmitter implements StreamSocket {
   sent: Array<Record<string, unknown>> = [];
+  /** sent 와 같은 순서의 보낸 시각 (가짜 시계에서 묶음 간격 확인용) */
+  sentAt: number[] = [];
   readyState = 1;
   send(data: string) {
     this.sent.push(JSON.parse(data));
+    this.sentAt.push(Date.now());
   }
   close() {
     this.readyState = 3;
@@ -21,6 +24,9 @@ class FakeSocket extends EventEmitter implements StreamSocket {
   }
   messages(type: string) {
     return this.sent.filter((m) => m["type"] === type);
+  }
+  times(type: string) {
+    return this.sentAt.filter((_, i) => this.sent[i]?.["type"] === type);
   }
 }
 
@@ -130,37 +136,57 @@ describe("PriceStream", () => {
 });
 
 describe("체결 묶어 보내기 (3-17)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("장중 체결이 초당 20건 몰려도 앱에는 초당 4통 이하, 새 앱은 한 통에 여러 종목, 종목마다 마지막 값", async () => {
+    // 실제 50ms 타이머는 OS 타이머 정밀도에 따라 1초에 17건만 나오기도 해서(QA-01) 가짜 시계로 입력을 정확히 20건 만든다
+    vi.useFakeTimers({ now: Date.UTC(2026, 8, 23, 1, 0, 0) });
+    const codes = ["005930", "000660", "AAPL"];
     const live = new FakeLive();
-    const stream = new PriceStream({ live, codes: async () => ["005930", "000660", "AAPL"], batchMs: 250 });
+    const stream = new PriceStream({ live, codes: async () => codes, batchMs: 250 });
     const modern = new FakeSocket();
     const legacy = new FakeSocket();
     stream.attach(modern);
     stream.attach(legacy);
     modern.emit("message", JSON.stringify({ type: "hello", batch: true }));
-    await tick();
+    await vi.advanceTimersByTimeAsync(0);
     const started = Date.now();
-    let n = 0;
-    while (Date.now() - started < 1_000) {
-      const code = ["005930", "000660", "AAPL"][n % 3]!;
+    const pushed = new Map<string, number>();
+    const pushedAt: number[] = [];
+    for (let n = 0; n < 20; n++) {
+      const code = codes[n % 3]!;
       live.push(code, 70_000 + n, new Date(Date.UTC(2026, 8, 23, 1, 0, 0, n)).toISOString());
-      n++;
-      await new Promise((r) => setTimeout(r, 50)); // 초당 20건
+      pushed.set(code, 70_000 + n);
+      pushedAt.push(Date.now());
+      await vi.advanceTimersByTimeAsync(50); // 초당 20건
     }
-    await new Promise((r) => setTimeout(r, 300));
+    await vi.advanceTimersByTimeAsync(300);
+
     const batches = modern.messages("ticks");
-    expect(n).toBeGreaterThanOrEqual(18);
-    expect(batches.length).toBeLessThanOrEqual(6); // 1.3초 동안 250ms 마다 → 최대 5~6통 (초당 4통 이하)
+    const at = modern.times("ticks");
+    const sentTicks = batches.flatMap((b) => b["ticks"] as { code: string; price: number }[]);
     expect(modern.messages("tick")).toHaveLength(0);
+    // 조용하던 중 첫 체결은 바로, 그 뒤로는 250ms 이상 간격 → 1초에 4통 이하
+    expect(at[0]).toBe(started);
+    for (let i = 1; i < at.length; i++) expect(at[i]! - at[i - 1]!).toBeGreaterThanOrEqual(250);
+    expect(batches.length).toBeLessThanOrEqual(6); // 1.3초 동안 250ms 마다 → 최대 5~6통
+    expect(sentTicks.length).toBeLessThan(20); // 20건이 종목별로 합쳐져 줄어든다
     for (const b of batches) {
-      const codes = (b["ticks"] as { code: string }[]).map((t) => t.code);
-      expect(new Set(codes).size).toBe(codes.length); // 한 통 안에 종목마다 하나
+      const inBatch = (b["ticks"] as { code: string }[]).map((t) => t.code);
+      expect(new Set(inBatch).size).toBe(inBatch.length); // 한 통 안에 종목마다 하나
     }
-    // 예전 앱은 종목별 tick 이지만 역시 250ms 마다 종목당 1건
+    // 예전 앱은 종목별 tick 이지만 같은 묶음을 같은 때에 받는다 (역시 250ms 마다 종목당 1건)
+    expect(legacy.messages("tick").map((m) => [m["code"], m["price"]])).toEqual(sentTicks.map((t) => [t.code, t.price]));
     expect(legacy.messages("tick").length).toBeLessThanOrEqual(batches.length * 3);
     // 마지막 값은 빠짐없이 도착
-    const lastSent = batches.flatMap((b) => b["ticks"] as { code: string; price: number }[]).filter((t) => t.code === "AAPL").at(-1)!;
-    expect(lastSent.price).toBe(live.get("AAPL")!.price);
+    for (const code of codes) {
+      expect(sentTicks.filter((t) => t.code === code).at(-1)?.price).toBe(pushed.get(code));
+      expect(live.get(code)!.price).toBe(pushed.get(code));
+    }
+    // 어느 체결이든 한 묶음 간격(250ms) 안에 앱으로 나간다
+    for (const t of pushedAt) expect(at.find((a) => a >= t)! - t).toBeLessThanOrEqual(250);
     stream.stop();
   });
 

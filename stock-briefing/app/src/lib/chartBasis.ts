@@ -1,4 +1,4 @@
-import type { CandlePeriod } from "@/api/types";
+import type { Candle, CandlePeriod } from "@/api/types";
 import { font } from "@/tokens";
 
 /**
@@ -66,4 +66,28 @@ export function labelSide(o: { y: number; plotW: number; bars: { left: number; r
   if (hit(0, w)) return "right";
   if (o.avoidY !== null && o.avoidY !== undefined && Math.abs(o.avoidY - o.y) < 16) return "right";
   return "left";
+}
+
+/**
+ * 거래량 막대 경로(SVG path). 상승·하락 막대는 거래량 비율 높이로 채우고, 거래량을 아직 모르는 임시 봉(volumeUnknown — 실시간 체결로 만든 봉)은
+ * 0 처럼 비워 두지 않고 pane 높이의 점선 빈 막대(unknown)로 따로 준다 (PF-04, 서버 봉을 다시 받으면 채워진다)
+ */
+export function volumeBars(
+  candles: Pick<Candle, "open" | "close" | "volume" | "volumeUnknown">[],
+  o: { maxVol: number; top: number; height: number; barW: number; xOf: (i: number) => number },
+): { up: string; down: string; unknown: string } {
+  let up = "", down = "", unknown = "";
+  const bottom = o.top + o.height;
+  candles.forEach((c, i) => {
+    const left = (o.xOf(i) - o.barW / 2).toFixed(1);
+    if (c.volumeUnknown) {
+      unknown += `M${left} ${bottom.toFixed(1)}V${o.top.toFixed(1)}h${o.barW.toFixed(1)}V${bottom.toFixed(1)}`;
+      return;
+    }
+    const h = Math.max((c.volume / o.maxVol) * o.height, c.volume > 0 ? 1 : 0);
+    const d = `M${left} ${(bottom - h).toFixed(1)}h${o.barW.toFixed(1)}v${h.toFixed(1)}h${(-o.barW).toFixed(1)}z`;
+    if (c.close >= c.open) up += d;
+    else down += d;
+  });
+  return { up, down, unknown };
 }

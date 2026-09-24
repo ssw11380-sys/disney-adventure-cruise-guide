@@ -1,7 +1,8 @@
-import { EXCLUDED_KEY, parseCodes, SNAPSHOT_KEY, type TossHoldingDetail } from "./tossSyncService.js";
+import { sql, type Expression, type SqlBool } from "kysely";
+import { EXCLUDED_KEY, parseCodes, parseTossDetail, SNAPSHOT_KEY, tossBasisFor, type TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import { CandleCache } from "./candleCache.js";
-import { marketContext } from "./marketContext.js";
+import { marketContext, tradingDate } from "./marketContext.js";
 import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
@@ -10,7 +11,6 @@ import { holdingsWriteLock } from "../lib/mutex.js";
 import { ConflictError, NotFoundError, ProviderError, TossLockedError, within } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
-import { localDate } from "../providers/market/tossOpenApi.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
 import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
 import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
@@ -65,14 +65,29 @@ const TICK_FRESH_MS = 60_000;
 /** 밸류에이션·환율 보강을 기다리는 최대 시간 (넘으면 보강 없이 시세만 저장) */
 const ENRICH_WAIT_MS = 3_000;
 
-/** 스냅샷과 체결이 같은 거래일인지 (한국은 서울, 미국은 뉴욕 날짜) */
+/** 스냅샷과 체결이 같은 거래일인지 (한국은 서울 날짜 — 08:00 전은 전날, 미국은 뉴욕 날짜 — 20:00 이후 주간거래는 다음 거래일. 앱 lib/marketTime 과 같다) */
 function sameTradingDay(q: Quote, tickIso: string): boolean {
   const a = Date.parse(q.asOf), b = Date.parse(tickIso);
   if (Number.isNaN(a) || Number.isNaN(b)) return true;
   const kr = isKrCode(q.code);
-  return localDate(q.asOf, kr) === localDate(tickIso, kr);
+  return tradingDate(q.asOf, kr) === tradingDate(tickIso, kr);
 }
 const TOSS_DETAIL_KEY = "toss_holdings_detail";
+
+/** 로컬 검색 순위의 마지막 칸: 이름 중간에 검색어가 들어 있기만 한 종목 */
+const RANK_NAME_CONTAINS = 4;
+/**
+ * 로컬 검색 순위: 정확한 코드 → 이름 일치 → 이름 접두 → 코드 접두 → 이름 포함.
+ * searchLocal 의 order by 와 같은 기준 (이름은 대문자로, ' ' 만 뺀다). upperQ 는 공백을 뺀 대문자 검색어.
+ */
+function localRank(upperQ: string, s: { name: string; code: string }): number {
+  const n = s.name.replace(/ /g, "").toUpperCase();
+  if (s.code === upperQ) return 0;
+  if (n === upperQ) return 1;
+  if (n.startsWith(upperQ)) return 2;
+  if (s.code.startsWith(upperQ)) return 3;
+  return RANK_NAME_CONTAINS;
+}
 
 interface Held {
   quote: Quote;
@@ -80,14 +95,23 @@ interface Held {
   failedAt: number;
 }
 
-function parseTossDetail(value: string | null): Map<string, TossHoldingDetail> {
-  if (!value) return new Map();
+/**
+ * 잠금 밖(연동 꺼짐·동기화 멈춤)에서 사용자가 수량·평단을 직접 넣으면 그 종목의 옛 토스 평가 기준을 지운다.
+ * 안 그러면 수량만 같을 때 옛 토스 매입금액으로 손익을 내 직접 넣은 평단이 무시된다. 원화 장부는 이 기준이 있을 때만 쓰므로
+ * 장부 자체는 두고(다시 연동되면 그대로 쓴다) 여기서만 뺀다. syncedAt 은 그대로 → 잠금 판단은 바뀌지 않고, 다음 동기화가 다시 채운다
+ */
+async function forgetTossDetail(db: Db, code: string): Promise<void> {
+  const row = await db.selectFrom("meta").select("value").where("key", "=", TOSS_DETAIL_KEY).executeTakeFirst();
+  if (!row) return;
+  let parsed: { items?: Record<string, TossHoldingDetail> } | null;
   try {
-    const parsed = JSON.parse(value) as { items?: Record<string, TossHoldingDetail> };
-    return new Map(Object.entries(parsed.items ?? {}));
+    parsed = JSON.parse(row.value) as { items?: Record<string, TossHoldingDetail> } | null;
   } catch {
-    return new Map();
+    return;
   }
+  if (!parsed?.items || !Object.hasOwn(parsed.items, code)) return;
+  delete parsed.items[code];
+  await db.updateTable("meta").set({ value: JSON.stringify(parsed) }).where("key", "=", TOSS_DETAIL_KEY).execute();
 }
 
 export interface RegisteredWithQuote extends RegisteredStock {
@@ -182,7 +206,7 @@ export class StockService {
   // ── 검색 ────────────────────────────────────────────────────────
 
   /**
-   * 기본: 1) 로컬 마스터(코드 정확 일치 → 이름 접두 → 이름 포함) 2) 비어 있으면 외부 검색.
+   * 기본: 1) 로컬 마스터(코드 정확 일치 → 이름 일치·접두 → 이름 포함) 2) 비어 있으면 외부 검색.
    * searchRemoteFirst: 외부 검색(토스: 한글로 미국 종목까지, 순위 좋음)을 먼저 쓰고 마스터 결과를 뒤에 덧붙인다.
    * 외부 검색이 실패하면 마스터만으로 답한다.
    */
@@ -209,8 +233,12 @@ export class StockService {
     if (local.length > 0 && !looksLikeTicker) return { results: local, source: "master" };
     try {
       const remote = await this.remoteSearch(q, limit);
+      // 이름 중간에만 걸린 로컬 종목(GE → TIGER …)이 개수 제한을 채워 미국 종목을 밀어내지 않게, 외부 결과를 그 앞에 둔다
+      const upperQ = compact.toUpperCase();
+      const strong = local.filter((s) => localRank(upperQ, s) < RANK_NAME_CONTAINS);
+      const weak = local.filter((s) => localRank(upperQ, s) >= RANK_NAME_CONTAINS);
       const seen = new Set(local.map((s) => s.code));
-      const merged = [...local, ...remote.filter((r) => !seen.has(r.code))].slice(0, limit);
+      const merged = [...strong, ...remote.filter((r) => !seen.has(r.code)), ...weak].slice(0, limit);
       return { results: merged, source: local.length ? `master+${this.deps.search.name}` : this.deps.search.name };
     } catch (e) {
       if (e instanceof ProviderError) return { results: local, source: local.length ? "master" : "none" };
@@ -241,24 +269,39 @@ export class StockService {
     return { results, source: results.length ? "master" : "none" };
   }
 
+  /**
+   * 정확한 코드 → 이름 일치 → 이름 접두 → 코드 접두 → 이름 포함 순.
+   * NAVER·KT·LG 처럼 티커 모양의 영문 종목명도 있으니 코드처럼 보여도 이름 검색을 함께 한다 (DISC-05).
+   * 대소문자·띄어쓰기는 무시한다 (Postgres LIKE 는 대소문자를 가리고, 검색어는 공백을 뺀 채 온다).
+   */
   private async searchLocal(q: string, limit: number): Promise<ListedStock[]> {
-    const db = this.deps.db;
-    const rows = CODE_RE.test(q)
-      ? await db.selectFrom("listed_stocks").selectAll().where("code", "=", q).execute()
-      : await db
-          .selectFrom("listed_stocks")
-          .selectAll()
-          .where((eb) => eb.or([eb("name", "like", `${q}%`), eb("name", "like", `%${q}%`), eb("code", "like", `${q}%`)]))
-          .limit(limit * 3)
-          .execute();
     const upperQ = q.toUpperCase();
-    const rank = (name: string, code: string): number => {
-      const n = name.replace(/\s+/g, "").toUpperCase();
-      if (n === upperQ || code === q) return 0;
-      if (n.startsWith(upperQ)) return 1;
-      if (code.startsWith(q)) return 2;
-      return 3;
-    };
+    const name = sql<string>`replace(upper(${sql.ref("name")}), ' ', '')`;
+    const code = sql.ref<string>("code");
+    // 검색어의 % _ 는 글자 그대로 찾는다 (백슬래시는 Postgres 설정에 따라 문자열에서 달리 읽혀 escape 문자로 '!' 를 쓴다)
+    const pat = upperQ.replace(/[!%_]/g, "!$&");
+    const like = (col: Expression<string>, pattern: string) => sql<SqlBool>`${col} like ${pattern} escape '!'`;
+    const rows = await this.deps.db
+      .selectFrom("listed_stocks")
+      .selectAll()
+      .where((eb) => eb.or([like(name, `%${pat}%`), like(code, `${pat}%`)]))
+      // 개수 제한에 정확히 맞는 종목이 잘리지 않게 localRank 와 같은 순서로 먼저 줄 세운다
+      .orderBy((eb) =>
+        eb
+          .case()
+          .when(code, "=", upperQ)
+          .then(0)
+          .when(name, "=", upperQ)
+          .then(1)
+          .when(like(name, `${pat}%`))
+          .then(2)
+          .when(like(code, `${pat}%`))
+          .then(3)
+          .else(RANK_NAME_CONTAINS)
+          .end(),
+      )
+      .limit(limit * 3)
+      .execute();
     return rows
       .map((r) => ({
         code: r.code,
@@ -268,7 +311,7 @@ export class StockService {
         groupCode: r.group_code,
       }))
       .sort((a, b) => {
-        const d = rank(a.name, a.code) - rank(b.name, b.code);
+        const d = localRank(upperQ, a) - localRank(upperQ, b);
         if (d !== 0) return d;
         // 일반 주식(ST) 우선, 그 다음 이름 길이(짧을수록 본주일 확률 높음)
         const g = (x: ListedStock) => (x.groupCode === "ST" ? 0 : 1);
@@ -338,6 +381,8 @@ export class StockService {
       .execute();
     // 동기화에서 뺐던 종목을 다시 등록하면 다시 토스 계좌에서 맞춘다 (등록이 된 뒤에)
     await this.setExcluded(listed.code, false);
+    // 잠금 밖에서 지웠다가 다시 등록한 종목도 직접 넣은 수량·평단으로 평가 (잠긴 종목은 다음 동기화가 토스 값으로 맞춘다)
+    if (!(await this.tossSynced()).has(listed.code)) await forgetTossDetail(this.deps.db, listed.code);
     void this.refreshQuotes([listed.code]); // 등록 직후 잔고 화면이 시세를 기다리지 않게 바로 받기 시작
     await this.syncLive();
     return (await this.get(listed.code))!;
@@ -361,16 +406,20 @@ export class StockService {
       (input.quantity !== undefined && input.quantity !== current.quantity) || (input.avgPrice !== undefined && input.avgPrice !== current.avgPrice);
     if (changesHolding && (await this.tossSynced()).has(code))
       throw new TossLockedError("토스 계좌에서 자동으로 맞추는 종목이라 수량·평단은 바꿀 수 없습니다. 메모는 바꿀 수 있습니다. 이 종목을 앱에서 빼려면 삭제하세요 (토스 동기화에서도 빠집니다).");
-    await this.deps.db
-      .updateTable("registered_stocks")
-      .set({
-        quantity: input.quantity === undefined ? current.quantity : input.quantity,
-        avg_price: input.avgPrice === undefined ? current.avgPrice : input.avgPrice,
-        memo: input.memo === undefined ? current.memo : input.memo,
-        updated_at: seoulIso(this.now()),
-      })
-      .where("code", "=", code)
-      .execute();
+    await this.deps.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("registered_stocks")
+        .set({
+          quantity: input.quantity === undefined ? current.quantity : input.quantity,
+          avg_price: input.avgPrice === undefined ? current.avgPrice : input.avgPrice,
+          memo: input.memo === undefined ? current.memo : input.memo,
+          updated_at: seoulIso(this.now()),
+        })
+        .where("code", "=", code)
+        .execute();
+      // 직접 고친 수량·평단으로 평가 (메모만 고치면 토스 기준 그대로)
+      if (changesHolding) await forgetTossDetail(trx, code);
+    });
     return (await this.get(code))!;
   }
 
@@ -786,7 +835,9 @@ export function evaluate(
 ): Evaluation | null {
   if (!q || s.quantity === null || s.avgPrice === null || s.quantity <= 0) return null;
   // 토스에서 가져온 수량과 같을 때만 토스 기준(매입금액·비용 비율)을 쓴다. 사용자가 수량을 바꿨으면 직접 계산
-  const t = toss && Math.abs(toss.quantity - s.quantity) < 1e-9 ? toss : null;
+  // (잠금 밖에서 수량·평단을 직접 고친 종목은 update 가 토스 기준을 지워 toss 가 넘어오지 않는다 → 평단만 고쳐도 직접 계산)
+  // 원화 매입금액 저장(TossSyncService.setExactKrw)도 같은 기준으로 "지금 평가에 쓰는지"를 알린다
+  const t = tossBasisFor(s.quantity, toss);
   const marketValue = q.price * s.quantity;
   const costBasis = t?.purchaseAmount ?? s.avgPrice * s.quantity;
   const profit = marketValue - costBasis;
@@ -800,7 +851,8 @@ export function evaluate(
     profitRate: pct(profit),
     costRate,
     afterCost: afterValue !== null ? { marketValue: afterValue, profit: afterValue - costBasis, profitRate: pct(afterValue - costBasis) } : null,
-    ...(q.currency === "USD" ? krwBasis(s.quantity, q, t, krwCost) : { costBasisKrw: null, krwCostSource: null }),
+    // 원화 장부도 토스 기준을 쓸 때만 (직접 넣은 평단에 옛 원화 매입금액을 붙이지 않게)
+    ...(q.currency === "USD" ? krwBasis(s.quantity, q, t, t ? krwCost : null) : { costBasisKrw: null, krwCostSource: null }),
   };
 }
 

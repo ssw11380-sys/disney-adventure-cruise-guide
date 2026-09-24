@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { fxOf, summarize, totals } from "@/lib/portfolio";
 import { excludedCount, widgetOrder as order } from "@/widgets/model";
+import { holding, quote } from "./helpers";
 
 const widgetOrder = (list: Parameters<typeof order>[0]) => order(list, fxOf);
-import { holding, quote } from "./helpers";
 
 const FX = 1360;
 const samsung = holding("005930", quote("005930", 72_000, { change: 1000 }), 10, 70_000, undefined, "삼성전자");

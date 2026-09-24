@@ -3,7 +3,7 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
-import type { Api } from "@/api/client";
+import { ApiRequestError, type Api } from "@/api/client";
 
 /**
  * 푸시 알림 등록.
@@ -90,13 +90,25 @@ export async function registerForPush(api: Api): Promise<string> {
   return token;
 }
 
+/** 서버에서 이 기기를 빼지 못함 — 서버는 계속 보내므로 알림은 아직 켜져 있다 */
+export class PushUnregisterError extends Error {
+  constructor(reason: string) {
+    super(`알림을 끄지 못해 아직 켜져 있습니다. 잠시 뒤 다시 꺼 주세요.\n${reason}`);
+    this.name = "PushUnregisterError";
+  }
+}
+
+/**
+ * 서버에서 이 기기를 뺀 뒤에만 저장된 토큰을 지운다 (N1).
+ * 연결 실패·5xx 등으로 못 빼면 토큰을 남기고 던진다 — 다시 끌 때 같은 토큰으로 재시도. 이미 지워진 기기(404)는 성공으로 본다
+ */
 export async function unregisterPush(api: Api): Promise<void> {
   const token = await getStoredToken();
   if (token) {
     try {
       await api.unregisterDevice(token);
-    } catch {
-      /* 서버에 없어도 로컬은 지운다 */
+    } catch (e) {
+      if (!(e instanceof ApiRequestError && e.status === 404)) throw new PushUnregisterError(e instanceof Error ? e.message : String(e));
     }
   }
   try {

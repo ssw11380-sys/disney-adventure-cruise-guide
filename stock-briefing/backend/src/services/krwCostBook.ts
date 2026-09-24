@@ -99,10 +99,13 @@ export class RateNotFoundError extends Error {
   }
 }
 
-/** 원화 매입금액 저장 결과: 저장한 종목과, 못 한 종목·이유·다시 해볼 시각 */
+/**
+ * 원화 매입금액 저장 결과: 저장한 종목과, 못 한 종목·이유·다시 해볼 시각.
+ * manual(TossSyncService 가 붙인다): 장부에는 저장했지만 직접 넣은 수량·평단으로 평가 중이라 다음 토스 동기화 뒤부터 쓰인다
+ */
 export interface SetExactResult {
   applied: string[];
-  skipped: Array<{ code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed"; retryAfter?: string }>;
+  skipped: Array<{ code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed" | "manual"; retryAfter?: string }>;
 }
 
 type Position = { quantity: number; usdCost: number; krwExact: number; krwEst: number; applied: Record<string, { q: number; amt: number }> };

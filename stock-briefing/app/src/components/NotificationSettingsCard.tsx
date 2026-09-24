@@ -69,6 +69,7 @@ export function NotificationSettingsCard() {
           } else throw e;
         }
       } else {
+        // 서버에서 기기를 뺀 뒤에만 끔으로 바꾼다. 못 빼면 던지므로 스위치는 켜진 채 오류를 보이고, 다시 끄면 재시도 (N1)
         await unregisterPush(api);
         await disableLocalBriefingAlerts();
         setToken(null);

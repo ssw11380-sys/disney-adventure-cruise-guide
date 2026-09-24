@@ -143,6 +143,8 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  /** 앱만: 실시간 체결로 앱이 만든 임시 봉이라 거래량을 아직 모른다 (volume 0 은 확정값이 아님). 서버 봉을 다시 받으면 없어진다 */
+  volumeUnknown?: boolean;
 }
 
 export interface CandleSeries {
@@ -211,7 +213,12 @@ export interface MarketIndex {
   change: number;
   changeRate: number;
   open: boolean;
+  /** 출처의 시세 시각 */
   asOf: string | null;
+  /** 서버가 출처에서 이 값을 받은 시각 (ISO). 구버전 서버는 없음 */
+  fetchedAt?: string;
+  /** 출처 조회가 실패해 마지막 값을 그대로 준 경우 (fetchedAt·asOf 는 원래 시각, open 은 false). 구버전 서버는 없음 */
+  stale?: boolean;
 }
 
 export interface MarketStatus {
@@ -387,6 +394,8 @@ export interface DiscoverRank {
   session?: DiscoverSession;
   /** 목록 판 — 다음 쪽 요청에 돌려주면 같은 목록에서 이어 받는다 (옛 서버는 없음) */
   ver?: number;
+  /** 요청한 판을 서버가 더 갖고 있지 않아(재시작 등) 이어 줄 수 없다 — 첫 쪽부터 다시 받는다 (items 는 빈 목록) */
+  restart?: boolean;
   asOf: string | null;
   /** 미국 종목 원화 환산용 */
   fxRate?: number | null;
@@ -407,6 +416,11 @@ export interface ThemeSummary {
   adjusted?: boolean;
   /** changeRate 가 시가총액 가중 평균일 때 함께 오는 단순 평균 (미국 테마) */
   simpleAvg?: number;
+  /**
+   * 요약을 보이는 종목 값과 같은 때 값으로 확인하지 못했다 (미국 업종 상세, 출처 초기화 때) — changeRate 는 대표 값이 아니고
+   * 상승·보합·하락 수는 0(세지 않음). 옛 서버는 없음
+   */
+  unverified?: boolean;
 }
 
 export interface ThemeList {

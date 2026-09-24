@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCandles, useStock } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
 import { CandleChart } from "@/components/CandleChart";
+import { ChartNotice } from "@/components/Freshness";
 import { ChangeText } from "@/components/ui";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { currencyOfMarket, formatPct, formatPrice } from "@/lib/format";
@@ -87,7 +88,7 @@ export default function FullscreenChartScreen() {
         compact
       />
       </View>
-      {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트 실패"}</Text> : null}
+      <ChartNotice query={candles} />
     </View>
   );
 

@@ -1,3 +1,5 @@
+import type { CandlePeriod } from "@/api/types";
+
 /**
  * 통신이 끊기거나 늦을 때 화면을 어떻게 보여 줄지 정하는 순수 함수 모음 (RN 의존 없음 → 단위 테스트).
  *  - 한 번이라도 받은 값이 있으면 재조회가 실패해도 화면을 지우지 않는다(오류 화면은 처음 불러오기 실패 때만)
@@ -10,6 +12,27 @@ export type ViewState = "loading" | "error" | "ready";
 export function viewState(q: { data: unknown; isError: boolean }): ViewState {
   if (q.data !== undefined) return "ready";
   return q.isError ? "error" : "loading";
+}
+
+/**
+ * AI 분석 탭(기업개요·가치·기술분석). 조회 오류와 "갱신" 오류를 따로 본다 (AI-01).
+ *  - 갱신이 실패해도 받아 둔 분석은 지우지 않고, 갱신 실패·이전 분석을 보여 주는 중임을 함께 알린다(다시 시도)
+ *  - ask: 관심 종목이 아니라 아직 만들지 않음 / error: 처음 조회 실패(받은 분석 없음)
+ */
+export function analysisView(o: {
+  requested: boolean;
+  query: { data: unknown; isLoading: boolean; isError: boolean };
+  refresh: { isPending: boolean; isError: boolean; error: unknown; variables?: { code: string; kind: string } };
+  code: string;
+  kind: string;
+}): { state: "ask" | "loading" | "error" | "ready"; refreshError: string | null } {
+  const mine = o.refresh.variables?.code === o.code && o.refresh.variables?.kind === o.kind;
+  if (!o.requested && o.query.data === undefined) return { state: "ask", refreshError: null };
+  if (o.query.isLoading || (mine && o.refresh.isPending)) return { state: "loading", refreshError: null };
+  if (o.query.isError) return { state: "error", refreshError: null };
+  const e = o.refresh.error;
+  const refreshError = mine && o.refresh.isError ? `갱신하지 못했습니다 · 이전 분석을 보여 주는 중 (${e instanceof Error ? e.message : String(e)})` : null;
+  return { state: "ready", refreshError };
 }
 
 /** react-query 쿼리 상태 중 여기서 쓰는 부분 */
@@ -90,6 +113,49 @@ export function pollInterval(o: { open: boolean; streamFresh: boolean; failing: 
   return o.open ? 3_000 : 60_000;
 }
 
+/**
+ * 종목 차트 봉을 서버에서 다시 받는 주기 (PF-04). 실시간 체결로는 고·저·종만 따라가고 거래량·놓친 체결은 모르므로
+ * 그 종목에 거래가 있는 시간이면(lib/marketTime 의 tradingNow — 미국 주간거래 포함, 장 상태를 모르면 요일·시각으로) 분봉 30초·일·주·월봉 1분마다
+ * 서버 봉으로 바로잡는다 (서버 봉 캐시의 새 값 기준 20초·1분에 맞춤). 거래가 없는 시간이면 멈춘다
+ */
+export function candleRefresh(period: CandlePeriod, open: boolean): { refetchInterval: number | false; staleTime: number } {
+  const intraday = period === "1m" || period === "5m" || period === "30m";
+  if (!open) return { refetchInterval: false, staleTime: 5 * 60_000 };
+  return intraday ? { refetchInterval: 30_000, staleTime: 20_000 } : { refetchInterval: 60_000, staleTime: 60_000 };
+}
+
+/**
+ * react-query refetchInterval 에 넘길 "다음 서버 요청까지 남은 시간" (PF-04 검증 지적).
+ * react-query 는 쿼리가 바뀔 때마다(체결로 봉을 고치는 캐시 쓰기 포함) 간격 타이머를 처음부터 다시 건다. 그래서 고정 간격(1분)을 주면
+ * 체결이 그보다 촘촘한 종목은 한 번도 다시 받지 않는다. 마지막 서버 요청이 끝난 때(받은 시각 — 체결로 고쳐도 그대로 둔다(lib/liveStream),
+ * 실패했으면 실패 시각)부터 every 가 지나는 때까지 남은 시간을 주면, 타이머를 몇 번 다시 걸어도 그때 한 번 받는다.
+ *  - 받는 중이면 every: 끝나면 다시 정해진다 (겹쳐 요청하지 않게)
+ *  - 앱이 뒤에 있으면 every: 받지도 않을 타이머를 짧게 돌리지 않는다. 앞으로 오면 다시 정해져 밀린 갱신을 바로 한다
+ * every=false(거래 없는 시간)면 멈춘다
+ */
+export function refetchDue(every: number | false, s: { dataUpdatedAt: number; errorUpdatedAt: number; fetchStatus: string }, now: number, appFocused = true): number | false {
+  if (every === false) return false;
+  if (!appFocused || s.fetchStatus !== "idle") return every;
+  const last = Math.max(s.dataUpdatedAt, s.errorUpdatedAt);
+  if (last <= 0) return every;
+  return Math.min(every, Math.max(1, last + every - now));
+}
+
+/**
+ * 차트 아래 한 줄. 봉을 처음 불러오지 못했으면 오류(error), 받은 봉이 있는데 주기 갱신이 재시도까지 실패했으면 봉은 그대로 두고
+ * 언제 받은 봉인지만 알린다 — 멀쩡히 그려진 차트 아래에 "차트 실패"를 띄우지 않는다. 보여 줄 게 없으면 null.
+ * 갱신 실패는 isError 만으로 보지 않는다: 체결로 봉을 고치는 캐시 쓰기(setQueryData)가 react-query 의 오류 상태를 지워서 장중에는 1초도 안 남는다.
+ * 그래서 마지막 실패 시각(errorUpdatedAt)이 마지막으로 서버 봉을 받은 시각(dataUpdatedAt — 체결로 고쳐도 그대로 둔다, lib/liveStream)보다 뒤인지로 본다
+ */
+export function chartNotice(q: QueryLike & { error?: unknown; errorUpdatedAt?: number }, now: number): { text: string; error: boolean } | null {
+  const view = viewState(q);
+  if (view === "error") return { text: q.error instanceof Error ? q.error.message : "차트 실패", error: true };
+  if (view !== "ready") return null;
+  const failedSince = (q.errorUpdatedAt ?? 0) > q.dataUpdatedAt;
+  if (!failedSince && !connection(q, now, Number.POSITIVE_INFINITY).offline) return null;
+  return { text: `차트 갱신 지연 · ${clockLabel(q.dataUpdatedAt, now)} 기준`, error: false };
+}
+
 /** "14:03:21" (한국 시간). 오늘이 아니면 "9/23 14:03" */
 export function clockLabel(ms: number, now: number): string {
   const kst = (x: number) => new Date(x + 9 * 3_600_000);
@@ -127,6 +193,40 @@ export function parseStockCode(raw: string | string[] | undefined): string | nul
 /** 서버가 새로 받지 못한 마지막 시세(stale)로 보여 주는 종목 수 → 잔고 상단 "시세 지연 N" */
 export function staleQuoteCount(list: readonly { quote: { stale?: boolean } | null }[] | undefined): number {
   return list ? list.filter((s) => s.quote?.stale === true).length : 0;
+}
+
+/** 지수 띠 항목 중 여기서 쓰는 부분 (구버전 서버는 fetchedAt·stale 없음) */
+export interface IndexFreshness {
+  kind?: "index" | "fx";
+  open: boolean;
+  fetchedAt?: string;
+  stale?: boolean;
+}
+
+/**
+ * 지수 띠 끝 "HH:MM:SS 기준": 서버가 출처에서 값을 받은 시각(fetchedAt) 중 가장 오래된 것.
+ * 앱이 응답을 받은 시각은 서버가 마지막 값을 다시 준 것일 수 있어 쓰지 않는다 (구버전 서버만 받은 시각으로).
+ * stale: 출처 조회가 실패해 마지막 값으로 보여 주는 항목이 있다
+ */
+export function indicesAsOf(list: readonly IndexFreshness[], receivedAt: number): { at: number | null; stale: boolean } {
+  let at: number | null = null;
+  for (const i of list) {
+    const t = i.fetchedAt ? Date.parse(i.fetchedAt) : NaN;
+    if (!Number.isNaN(t)) at = at === null ? t : Math.min(at, t);
+  }
+  return { at: at ?? (receivedAt > 0 ? receivedAt : null), stale: list.some((i) => i.stale === true) };
+}
+
+/** 지수 띠 초록 점: 출처에서 장중을 확인한 지수만 (환율·갱신 실패 항목은 아님) */
+export function indexLive(i: IndexFreshness): boolean {
+  return i.open && i.kind !== "fx" && i.stale !== true;
+}
+
+/** 지수 상세 머리의 상태: 갱신 실패면 "시세 지연"(옛 장중을 이어 쓰지 않는다), 환율은 없음, 지수는 장중·장 마감 */
+export function indexSessionLabel(i: IndexFreshness): string | null {
+  if (i.stale === true) return "시세 지연";
+  if (i.kind === "fx") return null;
+  return i.open ? "장중" : "장 마감";
 }
 
 /** 잔고 상단 상태 줄 끝: "보유 17 · 관심 1 · 시세 지연 2" */

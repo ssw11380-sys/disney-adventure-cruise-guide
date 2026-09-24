@@ -46,6 +46,8 @@ export interface ThemeSummary {
   adjusted?: boolean;
   /** changeRate 가 시가총액 가중 평균일 때 함께 주는 단순 평균 (참고) */
   simpleAvg?: number;
+  /** 요약을 보이는 종목 값과 같은 시점으로 확인하지 못했으면 true (상승·보합·하락 수는 0 = 세지 않음, 이유는 note) */
+  unverified?: boolean;
 }
 
 /** 미국 종목 정규장 시세 + 체결 시각 + 네이버 장 상태(OPEN/CLOSE/PREOPEN) */

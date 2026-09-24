@@ -36,6 +36,12 @@ export interface DiscoverRank {
   session: DiscoverSession;
   /** 이 쪽이 나온 목록의 판 — 앱이 다음 쪽을 받을 때 돌려주면 같은 목록에서 이어 준다 */
   ver: number;
+  /**
+   * 뒤 쪽 요청의 판(v)을 더 갖고 있지 않아(재시작·최근 5판 밖) 이어 줄 수 없다 — 첫 쪽부터 다시 받아야 한다.
+   * 이때 items 는 비고 hasMore 는 false. restart 를 안다고 알린 요청(r=1)에만 준다 — 모르는 옛 앱은 빈 쪽을 붙이고
+   * 더 보기·자동 갱신이 말없이 멈추므로, 예전 서버처럼 지금 목록의 쪽을 준다
+   */
+  restart?: boolean;
   asOf: string | null;
   fxRate: number | null;
   source: string;
@@ -488,11 +494,14 @@ export class DiscoverService {
   /** 미국 값(네이버 정규장 값)의 기준 시각: 정규장 중에는 받은 시각, 밖에서는 가장 최근 정규장 마감(보통 16:00 ET, 조기 폐장일 13:00) */
   private usAsOf(ss: Session, at: number): string {
     if (ss.session === "regular") return seoulIso(new Date(at));
+    return seoulIso(new Date(Math.min(at, this.usCloseAt(ss))));
+  }
+
+  /** 가장 최근 미국 정규장 마감 시각: 달력이 준 마감이 정규장 시간(09:30~16:00) 안이면 그대로(조기 폐장 포함), 아니면 그날 16:00 */
+  private usCloseAt(ss: Session): number {
     const lc = ss.lastClose ? new Date(ss.lastClose) : null;
     const m = lc && !Number.isNaN(lc.getTime()) ? nyParts(lc).minutes : -1;
-    // 달력이 준 마감이 정규장 시간(09:30~16:00) 안이면 그대로(조기 폐장 포함), 아니면 그날 16:00
-    const close = lc && m > 9 * 60 + 30 && m <= 16 * 60 ? lc.getTime() : nyCloseOf(lastUsRegularDay(this.now, ss.lastClose));
-    return seoulIso(new Date(Math.min(at, close)));
+    return lc && m > 9 * 60 + 30 && m <= 16 * 60 ? lc.getTime() : nyCloseOf(lastUsRegularDay(this.now, ss.lastClose));
   }
 
   /** "HH:MM" (서울) — 날짜가 오늘이 아니면 "M/D HH:MM" */
@@ -604,7 +613,11 @@ export class DiscoverService {
     }
   }
 
-  async rank(market: DiscoverMarket, category: RankCategory, page: number, size: number, ver?: number): Promise<DiscoverRank> {
+  /**
+   * 순위 한 쪽. ver: 첫 쪽이 준 목록 판(뒤 쪽을 같은 목록에서 이어 받기).
+   * opts.restart: 요청한 앱이 restart 를 안다 (r=1). 그때만 잃은 판의 뒤 쪽에 빈 쪽 + restart 를 준다 — 없으면 예전 서버처럼 지금 목록의 쪽
+   */
+  async rank(market: DiscoverMarket, category: RankCategory, page: number, size: number, ver?: number, opts: { restart?: boolean } = {}): Promise<DiscoverRank> {
     const ss = await this.session(market);
     const open = ss.open;
     const key = `${market}:${category}`;
@@ -612,6 +625,29 @@ export class DiscoverService {
     const need = page * size + 1; // 다음 쪽이 있는지 알기 위해 하나 더
     // 뒤 쪽 요청이 첫 쪽의 목록 판(ver)을 가져오면 그 목록에서 이어 준다 (첫 쪽을 받은 뒤 새 목록이 들어왔어도)
     const pinned = page > 1 && ver !== undefined ? [this.ranks.get(key), ...(this.prevRanks.get(key) ?? [])].find((x) => x?.ver === ver) : undefined;
+    // 그 판을 더 갖고 있지 않으면(재시작·최근 5판 밖) 지금 목록으로 대신 이어 주지 않는다 — 판이 다른 쪽을 붙이면
+    // 순위가 바뀐 종목이 빠지고 순위 번호가 어긋난다. 빈 쪽 + restart 로 첫 쪽부터 다시 받게 한다.
+    // restart 를 모르는 옛 앱(r=1 없음)은 빈 쪽을 붙이고 더 보기·자동 갱신이 말없이 멈추므로 예전처럼 지금 목록의 쪽을 준다 (아래)
+    const gone = opts.restart === true && page > 1 && ver !== undefined && !pinned;
+    if (gone) {
+      // 원본은 받지 않고 바로 알린다 — 새 목록은 이어 올 첫 쪽 요청이 받는다 (깊은 쪽이라고 수백 줄을 받느라 늦거나, 원본 실패로 restart 대신 오류가 나지 않게)
+      const cur = this.ranks.get(key);
+      return {
+        market,
+        category,
+        items: [],
+        page,
+        hasMore: false,
+        marketOpen: open,
+        session: ss.session,
+        ver: cur?.ver ?? 0, // 가진 목록이 없으면(재시작 직후) 0
+        restart: true,
+        asOf: null,
+        fxRate: null, // 앱은 첫 쪽의 환율을 쓴다
+        source: cur?.source ?? "",
+        note: "목록이 바뀌어 첫 쪽부터 다시 받습니다",
+      };
+    }
     let st = pinned ?? this.ranks.get(key);
     // 새 목록은 첫 쪽 요청 때 받는다. 뒤 쪽은 첫 쪽과 같은 목록에서 이어 줘야 종목이 빠지거나 두 번 나오지 않는다
     // (앱은 새로고침 때 첫 쪽부터 차례로 다시 받는다). 뒤 쪽만 너무 오래(TTL 3배) 요청되면 그때는 새로 받는다
@@ -1177,20 +1213,34 @@ export class DiscoverService {
     let value = got.value.detail;
     if (!value) return null;
     let note: string | null = null;
-    if (market === "US" && !open && isMostlyZero(value.items, 0.8)) {
+    /** 종목 값을 저장본으로 덮었으면 그 저장본 시각과 비워진 종목을 모두 덮었는지 (업종 요약을 종목과 같은 시점으로 맞추려고) */
+    let restored: { savedAt: number; all: boolean } | null = null;
+    /** 출처가 미국 업종 값을 비웠다 (출처 요약도 비운 때 값) */
+    const reset = market === "US" && !open && isMostlyZero(value.items, 0.8);
+    if (reset) {
       // 출처 초기화(뉴욕 03:40~04:00): 종목 값이 0 — 미국 테마 시세 저장본(약 2,500종목)으로 0 인 종목만 덮는다
       const snap = await this.loadSnap<[string, UsQuote][]>("usq");
       const byTicker = new Map((snap?.value ?? []).map(([, q]) => [q.code, q] as const));
       let hit = 0;
+      let blank = 0;
       const items = value.items.map((i) => {
+        if (i.changeRate !== 0 || i.volume) return i;
+        blank++;
         const q = byTicker.get(i.code);
-        if (!q || i.changeRate !== 0 || i.volume) return i;
+        if (!q) return i;
         hit++;
         return { ...i, price: q.price, change: q.change, changeRate: q.changeRate, volume: q.volume, tradingValue: q.tradingValue };
       });
       value = { ...value, items };
-      if (hit && snap) dataAt = snap.savedAt;
-      note = hit ? `출처가 잠시 값을 비워 종목 값은 저장해 둔 직전 정규장 값 (${hit}/${items.length}종목)` : "출처가 잠시 종목별 등락률을 0으로 비웠습니다 (곧 다시 채워집니다)";
+      if (hit && snap) {
+        dataAt = snap.savedAt;
+        restored = { savedAt: snap.savedAt, all: hit === blank };
+      }
+      // 저장본에 없는 종목은 비워진 0% 그대로라고 밝힌다 (덮은 종목과 시점이 다르다)
+      const rest = blank - hit;
+      note = hit
+        ? `출처가 잠시 값을 비워 종목 값은 저장해 둔 직전 정규장 값 (${hit}/${items.length}종목${rest ? ` · ${rest}종목은 비워진 0% 그대로` : ""})`
+        : "출처가 잠시 종목별 등락률을 0으로 비웠습니다 (곧 다시 채워집니다)";
     }
     // 한국 장 시작 전: 출처가 종목 값을 0으로 비워 두면 그렇다고 밝힌다 (거래정지로 오해하지 않게)
     if (market === "KR" && ss.session === "pre" && isMostlyZero(value.items)) note = "장 시작 전이라 종목별 값이 비어 있습니다 (정규장부터 채워집니다)";
@@ -1203,10 +1253,27 @@ export class DiscoverService {
     // 상승·보합·하락 수는 목록(출처)과 같게: 받아 둔 목록에 이 테마가 있으면 그 수, 구성 종목이 잘렸는데 목록도 없으면 세지 않는다
     // 다시 센 값(adjust)이면 목록 수는 쓰지 않는다 (listedP 는 시작부터 SUMMARY_WAIT_MS 안에 끝난다)
     const listed = adjust ? null : await listedP;
-    if (!adjust && listed && listed.up + listed.flat + listed.down > 0) theme = { ...theme, up: listed.up, flat: listed.flat, down: listed.down };
-    else if (!adjust && truncated) theme = { ...theme, up: 0, flat: 0, down: 0 };
+    /** 상승·보합·하락 수를 가져온 목록 요약 (잘린 업종의 전체 종목 수) */
+    let counted: ThemeSummary | null = null;
+    /** 출처가 비웠는데 덮지 못했을 때 마감 뒤(비우기 전) 업종 목록의 요약 */
+    const closed = reset && !restored ? await this.closeListed(id, this.usCloseAt(ss), listed) : null;
+    if (restored) {
+      // 종목 값을 저장본으로 덮었으면 출처 요약은 비운 때 값이라 종목과 시점이 다르다 → 같은 시점 요약으로 맞춘다
+      const r = await this.restoredSummary(ss, value, restored, listed, truncated);
+      theme = r.theme;
+      counted = r.counted;
+      if (r.note) note = [note, r.note].filter(Boolean).join(" · ");
+    } else if (closed) {
+      // 비워진 채인 종목과 달리 머리는 마감 뒤 목록 값 — 등락률까지 그 목록 값으로 (수만 가져오면 머리 안에서 시점이 섞인다)
+      theme = { ...theme, changeRate: closed.changeRate, up: closed.up, flat: closed.flat, down: closed.down };
+      counted = closed;
+      note = [note, "업종 등락률·상승/하락 수는 비우기 전 업종 목록 값입니다"].filter(Boolean).join(" · ");
+    } else if (!adjust && listed && listed.up + listed.flat + listed.down > 0) {
+      theme = { ...theme, up: listed.up, flat: listed.flat, down: listed.down };
+      counted = listed;
+    } else if (!adjust && truncated) theme = { ...theme, up: 0, flat: 0, down: 0 };
     if (truncated) {
-      const total = listed ? listed.up + listed.flat + listed.down : 0;
+      const total = counted ? counted.up + counted.flat + counted.down : 0;
       note = [note, `등락률 상위 ${value.items.length}종목만 보여 줍니다${total > value.items.length ? ` (전체 ${total}종목)` : ""}`].filter(Boolean).join(" · ");
     }
     return {
@@ -1223,6 +1290,40 @@ export class DiscoverService {
       basis: naverBasis(market, k),
       note,
     };
+  }
+
+  /**
+   * 종목 값을 저장본으로 덮은 미국 업종의 요약(등락률·상승/보합/하락 수). 출처 요약은 비운 때 값이라 덮은 종목과 시점이 다르다:
+   *  1) 저장본이 마지막 정규장 마감 뒤 값이면, 같은 마감 뒤에 받은 업종 목록(지금 목록 또는 목록 저장본)의 요약 — 잘린 업종도 전체 종목 수
+   *  2) 없으면 구성 종목을 다 받았고(잘리지 않음) 비워진 종목을 모두 덮었을 때만 보이는 종목 값으로 다시 센다 (시가총액 가중, 모든 종목에 시가총액이 있을 때)
+   *  3) 그 밖에는 확인하지 못한 요약: 상승·보합·하락 수는 세지 않고(0) 그렇다고 밝힌다 — 잘린 업종을 보이는 종목만으로 평균 내지 않는다
+   */
+  private async restoredSummary(
+    ss: Session,
+    detail: SectorDetail,
+    restored: { savedAt: number; all: boolean },
+    listed: ThemeSummary | null,
+    truncated: boolean,
+  ): Promise<{ theme: ThemeSummary; counted: ThemeSummary | null; note: string | null }> {
+    const base = detail.theme;
+    const close = this.usCloseAt(ss);
+    if (restored.savedAt >= close) {
+      const same = await this.closeListed(base.id, close, listed);
+      if (same) return { theme: { ...base, changeRate: same.changeRate, up: same.up, flat: same.flat, down: same.down }, counted: same, note: null };
+    }
+    const live = detail.items.filter((i) => !i.suspended);
+    if (!truncated && restored.all && live.length && live.every((i) => (i.marketCap ?? 0) > 0)) return { theme: summarize(base, live, true), counted: null, note: "업종 등락률·상승/하락 수는 이 종목 값으로 다시 셌습니다" };
+    return { theme: { ...base, up: 0, flat: 0, down: 0, unverified: true }, counted: null, note: "업종 등락률·상승/하락 수는 종목 값과 같은 때 값을 확인하지 못했습니다" };
+  }
+
+  /**
+   * 마지막 미국 정규장 마감(close) 뒤, 출처가 비우기 전에 받은 업종 목록의 이 업종 요약: 지금 목록(마감 뒤에 받은 것만 온다 — listIsCurrent),
+   * 없으면 마감 뒤에 남긴 목록 저장본. 상승·보합·하락 수가 없으면 null
+   */
+  private async closeListed(id: string, close: number, listed: ThemeSummary | null): Promise<ThemeSummary | null> {
+    const snap = listed ? null : await this.loadSnap<ThemeSummary[]>("themes:US:sector:day");
+    const same = listed ?? (snap && snap.savedAt >= close ? (snap.value.find((t) => t.id === id) ?? null) : null);
+    return same && same.up + same.flat + same.down > 0 ? same : null;
   }
 
   /**
@@ -1435,6 +1536,11 @@ export function isUsRegularHours(d: Date): boolean {
 export function recount(th: ThemeSummary, items: DiscoverStock[], fresh: Set<string>, weighted = false): ThemeSummary {
   const live = items.filter((i) => !fresh.has(i.code) && !i.suspended);
   if (!live.length) return th;
+  return { ...summarize(th, live, weighted), adjusted: true };
+}
+
+/** 종목 값으로 등락률(weighted 면 시가총액 가중, 아니면 단순 평균)·상승/보합/하락 수·대표 종목을 센다 (live 는 비어 있지 않다) */
+function summarize(th: ThemeSummary, live: DiscoverStock[], weighted: boolean): ThemeSummary {
   let avg = live.reduce((s, i) => s + i.changeRate, 0) / live.length;
   if (weighted) {
     let w = 0;
@@ -1458,6 +1564,5 @@ export function recount(th: ThemeSummary, items: DiscoverStock[], fresh: Set<str
     flat: live.filter((i) => i.changeRate === 0).length,
     down: live.filter((i) => i.changeRate < 0).length,
     leaders,
-    adjusted: true,
   };
 }

@@ -83,6 +83,32 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect((await app.inject({ method: "GET", url: "/api/stocks/000660/analysis/technical" })).json().cached).toBe(true);
   });
 
+  it("영문 종목명은 티커 모양이어도·대소문자가 달라도 이름으로 찾는다 (Postgres LIKE 는 대소문자를 가림, DISC-05)", async () => {
+    const rows = [
+      { code: "035420", name: "NAVER", group_code: "ST" },
+      { code: "030200", name: "KT", group_code: "ST" },
+      { code: "033780", name: "KT&G", group_code: "ST" },
+      { code: "069500", name: "KODEX 200", group_code: "EF" },
+    ];
+    await db
+      .insertInto("listed_stocks")
+      .values(rows.map((r) => ({ ...r, market: "KOSPI", isin_code: null, updated_at: "2026-09-22T09:00:00+09:00" })))
+      .execute();
+    try {
+      const find = async (q: string) => (await app.stockService.searchMaster(q)).results.map((s) => s.code);
+      expect(await find("NAVER")).toEqual(["035420"]);
+      expect(await find("naver")).toEqual(["035420"]);
+      expect(await find("KT")).toEqual(["030200", "033780"]);
+      expect(await find("kodex 200")).toEqual(["069500"]);
+      expect(await find("005930")).toEqual(["005930"]);
+      // % _ 는 글자 그대로 (like ... escape '!')
+      expect(await find("K_")).toEqual([]);
+      expect(await find("%")).toEqual([]);
+    } finally {
+      await db.deleteFrom("listed_stocks").where("code", "in", rows.map((r) => r.code)).execute();
+    }
+  });
+
   it("현재가 캐시를 여러 행 한 번에 저장하고 같은 종목은 갱신한다 (on conflict excluded)", async () => {
     const svc = app.stockService;
     const rows = await db.selectFrom("quote_cache").select("code").execute();

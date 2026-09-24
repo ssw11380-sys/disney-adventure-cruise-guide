@@ -9,7 +9,9 @@ import type { FetchFn } from "./types.js";
  *    (해외 지수 분봉은 기간 조회가 비어 있어 당일 1분 시세 ?periodType=day 를 쓴다. 시각은 뉴욕 현지)
  *  - 환율: api.stock.naver.com/marketindex/exchange/FX_{USD|JPY|CNY}KRW (하나은행 고시 매매기준율. 엔은 100엔 기준),
  *    차트 m.stock.naver.com/front-api/chart/pricesByPeriod (당일 고시 회차, 1년 일별, 5·10년 주별 종가·고저)
- * 목록은 30초 캐시. 개별 항목이 실패하면 그 항목만 빠진다.
+ * 목록은 30초 캐시. 개별 항목이 실패하면(멈춤은 제한 시간에 끊는다):
+ *  - stale 을 아는 앱(list({ stale: true })): 그 항목의 마지막 정상값을 stale 로 준다 (받은 지 STALE_MAX_MS 까지). 한 번도 못 받았거나 너무 오래됐으면 빠진다
+ *  - 옛 앱: 예전(main) 서버처럼 그 항목을 뺀다. 전부 실패하면 main 처럼 직전 목록(마지막으로 비어 있지 않던 목록, 원래 open 그대로)을 준다
  */
 
 export type IndexKind = "index" | "fx";
@@ -22,9 +24,31 @@ export interface MarketIndex {
   value: number;
   change: number;
   changeRate: number;
+  /** 장중. 출처 조회가 실패한 항목(stale)은 확인하지 못했으므로 false */
   open: boolean;
+  /** 출처의 시세 시각 */
   asOf: string | null;
+  /** 서버가 출처에서 이 값을 받은 시각 (ISO, 한국 시간). stale 이면 마지막으로 받은 시각 그대로 */
+  fetchedAt?: string;
+  /**
+   * 이번 조회가 실패해 마지막 정상값을 그대로 주는 중. 구버전 앱은 이 필드를 몰라 멈춘 값을 앱이 받은 시각 옆에 지금 값처럼 보여 주므로
+   * stale=1 로 요청한 앱에만 준다 (옛 앱에는 true 인 항목을 주지 않는다)
+   */
+  stale?: boolean;
 }
+
+/** 목록: 출처 하나를 기다리는 최대 시간(연결·본문 포함). 출처들은 함께 부르므로 목록 전체도 이 안에 끝난다 — 앱 제한(10초)보다 짧게 */
+const LIST_TIMEOUT_MS = 5_000;
+/**
+ * 실패한 항목의 마지막 정상값을 stale 로 이어 주는 최대 시간 (서버가 출처에서 받은 시각부터). 3시간:
+ *  - 흔한 장애(제한 시간 초과·503·잠깐의 차단)는 몇 분~수십 분이면 풀리므로 그동안은 값이 사라지지 않고 "시세 지연"으로 보이게 넉넉히 덮는다
+ *  - 그보다 오래 실패하면 출처 주소가 바뀌었거나 고장 난 것 — 장중 지수는 몇 시간이면 크게 움직이고, 표시가 있어도 몇 시간 넘은 값을 두면
+ *    띠가 굳어 보인다. 정규장(6시간 30분)의 절반쯤에서 끊어, 멈춘 값이 한 세션 내내 또는 다음 날 세션 대부분까지 남지 않게 한다
+ *  - 끊은 뒤에는 예전(main) 서버처럼 그 항목을 뺀다 (띠에서 빠지고 상세는 "시세를 불러오지 못했습니다")
+ */
+const STALE_MAX_MS = 3 * 60 * 60_000;
+/** 차트: 출처 한 번 조회의 최대 시간 (본문 읽기 포함) */
+const CHART_TIMEOUT_MS = 10_000;
 
 const UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Mobile Safari/537.36";
 
@@ -80,23 +104,46 @@ const RANGE_DAYS: Record<CandlePeriod, (count: number) => number> = {
 };
 
 export class MarketIndices {
-  private cache: { at: number; value: MarketIndex[] } | null = null;
+  /**
+   * 30초 캐시: all = 실패한 항목을 마지막 값(stale)으로 채운 목록 (stale 을 아는 앱),
+   * legacy = 옛 앱용 — 이번에 받은 항목만, 전부 실패면 직전 목록 (main 서버와 같은 응답)
+   */
+  private cache: { at: number; all: MarketIndex[]; legacy: MarketIndex[] } | null = null;
+  /** 항목별 마지막 정상값과 받은 시각 (출처가 실패하면 STALE_MAX_MS 까지 이 값을 stale 로 준다) */
+  private readonly last = new Map<string, { row: MarketIndex; at: number }>();
+  /** 마지막으로 비어 있지 않던 목록(이번에 받은 항목만)과 받은 시각 — main 의 직전 목록. 전부 실패하면 옛 앱에 이것을 준다 */
+  private lastList: { rows: MarketIndex[]; at: number } | null = null;
   private readonly chartCache = new Map<string, { at: number; want: number; series: CandleSeries }>();
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
     private readonly now: () => Date = () => new Date(),
+    private readonly limits: { listTimeoutMs?: number; chartTimeoutMs?: number } = {},
   ) {}
 
-  private async json(url: string): Promise<unknown> {
-    const res = await this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" } });
-    if (!res.ok) throw new Error(`HTTP ${res.status} (${url})`);
-    return res.json();
+  /**
+   * 출처 JSON 한 번. 연결부터 본문 끝까지 ms 안에 못 받으면 요청을 끊고(abort) 실패로 끝낸다
+   * (멈춘 출처 하나가 목록·차트 응답을 붙잡지 않게)
+   */
+  private async json(url: string, ms = this.limits.chartTimeoutMs ?? CHART_TIMEOUT_MS): Promise<unknown> {
+    const ctrl = new AbortController();
+    // fetch 가 signal 을 따르지 않아도(주입한 fetch 등) 제한 시간에 끝나게 같이 경쟁시킨다
+    const expired = new Promise<never>((_, reject) => {
+      ctrl.signal.addEventListener("abort", () => reject(new Error(`시간 초과 ${ms}ms (${url})`)), { once: true });
+    });
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const res = await Promise.race([this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" }, signal: ctrl.signal }), expired]);
+      if (!res.ok) throw new Error(`HTTP ${res.status} (${url})`);
+      return await Promise.race([res.json() as Promise<unknown>, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async one(src: Source): Promise<MarketIndex | null> {
     try {
-      const raw = (await this.json(src.url)) as Json;
+      const raw = (await this.json(src.url, this.limits.listTimeoutMs ?? LIST_TIMEOUT_MS)) as Json;
       // 환율 응답은 exchangeInfo 아래에 있고 필드 이름이 조금 다르다
       const d = (raw["exchangeInfo"] as Json | undefined) ?? raw;
       const value = num(d["closePrice"]);
@@ -120,15 +167,46 @@ export class MarketIndices {
     }
   }
 
-  async list(): Promise<MarketIndex[]> {
+  /**
+   * 지수 띠 목록.
+   *  - stale: true (stale 을 아는 앱, 요청의 stale=1): 실패한 항목도 마지막 정상값을 stale 로 (받은 지 STALE_MAX_MS 까지)
+   *  - 없으면(옛 앱): 예전(main) 서버와 같은 응답 — 옛 앱은 stale·fetchedAt 을 몰라, 멈춘 값을 앱이 받은 시각 옆에 지금 값처럼,
+   *    stale 항목의 open:false 때문에 장중에도 "장 마감"으로 보여 준다. 그래서 항목별 마지막 값(all)은 주지 않는다:
+   *    · 일부 실패: 실패한 항목을 뺀다
+   *    · 전부 실패: main 처럼 직전 목록을 원래 open 그대로 (일부 실패 뒤 전부 실패면 그 일부 실패 목록 — 빠졌던 항목이 옛 값으로 되살아나지 않게).
+   *      main 과 달리 직전 목록도 받은 지 STALE_MAX_MS 가 지나면 주지 않는다: 몇 시간 넘은 값을 옛 앱이 지금 값·장중처럼 계속 보이느니
+   *      띠를 숨기고 상세는 "시세를 불러오지 못했습니다"로 두는 편이 낫다 (한 번도 못 받았을 때의 main 과 같은 모습)
+   */
+  async list(opts: { stale?: boolean } = {}): Promise<MarketIndex[]> {
     const t = this.now().getTime();
-    if (this.cache && t - this.cache.at < 30_000) return this.cache.value;
+    if (!this.cache || t - this.cache.at >= 30_000) this.cache = await this.fetchAll(t);
+    return opts.stale ? this.cache.all : this.cache.legacy;
+  }
+
+  private async fetchAll(t: number): Promise<{ at: number; all: MarketIndex[]; legacy: MarketIndex[] }> {
+    const fetchedAt = localIso(new Date(t).toISOString(), true);
     const rows = await Promise.all(INDEX_SOURCES.map((s) => this.one(s)));
-    const out = rows.filter((r): r is MarketIndex => r !== null);
-    // 전부 실패하면 직전 값을 계속 쓴다
-    if (out.length === 0 && this.cache) return this.cache.value;
-    this.cache = { at: t, value: out };
-    return out;
+    const fresh: MarketIndex[] = [];
+    const all: MarketIndex[] = [];
+    rows.forEach((row, n) => {
+      const code = INDEX_SOURCES[n]!.code;
+      if (row) {
+        const got: MarketIndex = { ...row, fetchedAt, stale: false };
+        this.last.set(code, { row: got, at: t });
+        fresh.push(got);
+        all.push(got);
+        return;
+      }
+      // 이번에 못 받은 항목은 마지막 정상값을 원래 시각 그대로 stale 로. 장 상태는 확인하지 못했으니 장중으로 두지 않는다.
+      // 받은 지 STALE_MAX_MS 가 지났으면 이어 주지 않는다 (고장 난 출처의 값이 계속 굳어 있지 않게)
+      const prev = this.last.get(code);
+      if (prev && t - prev.at < STALE_MAX_MS) all.push({ ...prev.row, open: false, stale: true });
+    });
+    // 옛 앱: 이번에 받은 항목만. 전부 실패면 직전 목록 그대로 (받은 지 STALE_MAX_MS 까지)
+    if (fresh.length > 0) this.lastList = { rows: fresh, at: t };
+    const prevList = this.lastList;
+    const legacy = prevList && t - prevList.at < STALE_MAX_MS ? prevList.rows : [];
+    return { at: t, all, legacy };
   }
 
   static source(code: string): Source | null {
