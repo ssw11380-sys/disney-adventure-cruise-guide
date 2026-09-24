@@ -1,8 +1,7 @@
-import { useIsRestoring } from "@tanstack/react-query";
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useAnyMarketOpen, useHealth, useMarketStatus, useStockMutations, useStocks } from "@/api/hooks";
+import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
@@ -16,8 +15,6 @@ import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
-import { widgetPushDue } from "@/widgets/pushPolicy";
-import { refreshWidgets } from "@/widgets/refresh";
 
 /** 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표 */
 export default function StocksScreen() {
@@ -71,41 +68,6 @@ export default function StocksScreen() {
       ...(watch.length ? [{ key: "watch", title: `관심 ${watch.length}`, data: watch }] : []),
     ];
   }, [data, sort, afterCost, showKrw]);
-
-  // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (규칙은 widgets/pushPolicy: 시세만 바뀌면 1분에 한 번,
-  // 표시 설정·장 상태가 바뀌거나 앱을 떠날 때는 바로). 기기에 저장해 둔 옛 잔고로는 덮지 않는다
-  const lastWidgetPush = useRef({ at: 0, key: "" });
-  const dataAt = stocks.dataUpdatedAt;
-  const ms = useMarketStatus().data;
-  const krOpen = ms?.KR.isOpen ?? false;
-  const usOpen = ms?.US.isOpen ?? false;
-  const market = useMemo(
-    () => (live.loaded ? { label: live.label, open: live.open, nextChangeAt: null, kr: krOpen, us: usOpen } : null),
-    [live.loaded, live.label, live.open, krOpen, usOpen],
-  );
-  // 이번 실행에서 서버에서 받은 잔고인지: 받은 시각이 화면을 연 뒤인지로 본다
-  // (isFetchedAfterMount 는 기기 저장값 복원·오프라인 실패에도 true 가 되어 옛 잔고로 위젯을 덮을 수 있다)
-  const [mountedAt] = useState(() => Date.now());
-  const restoring = useIsRestoring();
-  const fetchedThisSession = !restoring && dataAt > mountedAt;
-  const pushKey = `${showKrw}|${afterCost}|${market?.label ?? ""}`;
-  // 앱을 떠날 때 쓸 최신 값 (렌더 중에는 ref 를 건드리지 않고 effect 에서 갱신)
-  const pushWidgets = useRef<(leaving: boolean) => void>(() => undefined);
-  useEffect(() => {
-    pushWidgets.current = (leaving: boolean) => {
-      const now = Date.now();
-      if (!data || !widgetPushDue({ now, fetchedThisSession, lastAt: lastWidgetPush.current.at, lastKey: lastWidgetPush.current.key, key: pushKey, leaving })) return;
-      lastWidgetPush.current = { at: now, key: pushKey };
-      void refreshWidgets({ stocks: data, showKrw, afterCost, market });
-    };
-    pushWidgets.current(false);
-  }, [data, dataAt, pushKey, showKrw, afterCost, market, fetchedThisSession]);
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (st) => {
-      if (st === "background") pushWidgets.current(true);
-    });
-    return () => sub.remove();
-  }, []);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
     // 토스 연동 종목은 삭제하면 동기화에서도 빠진다는 것을 먼저 알린다 (수정 화면과 같은 문구)
