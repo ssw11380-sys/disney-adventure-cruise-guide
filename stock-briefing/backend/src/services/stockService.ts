@@ -24,6 +24,8 @@ export interface StockServiceDeps {
   quickPrices?: QuickPriceSource | null;
   /** PER/PBR/배당/52주·환율 보강 (토스 시세에는 없음) */
   fundamentals?: NaverFundamentals | null;
+  /** 공식 API 소스 (기준가 폴백 횟수를 /health 에 보이려고) */
+  tossOpenApi?: { baseFallbacks: number } | null;
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
@@ -50,8 +52,14 @@ const QUICK_WAIT_MS = 150;
 const QUICK_MAX_AGE_MS = 30_000;
 /** 새로 받기가 실패한 종목은 이만큼 쉬었다가 다시 (출처가 죽었을 때 3초 폴링마다 두드리지 않게) */
 const RETRY_AFTER_FAIL_MS = 20_000;
-/** 새로 받지 못한 채 이보다 오래된 값은 stale 로 본다 */
+/** 새로 받지 못한 채 이보다 오래된 값은 stale 로 본다. 이보다 오래된 캐시로 답해야 할 때는 새로 받기를 잠깐(COLD_WAIT_MS) 기다린다 */
 const STALE_AFTER_MS = 3 * 60_000;
+/** 실시간 체결가가 이 안에 들어왔을 때만 "지연 아님"으로 본다 */
+const TICK_FRESH_MS = 60_000;
+/** 밸류에이션·환율 보강을 기다리는 최대 시간 (넘으면 보강 없이 시세만 저장) */
+const ENRICH_WAIT_MS = 3_000;
+
+const kstDay = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(0, 10);
 const TOSS_DETAIL_KEY = "toss_holdings_detail";
 
 interface Held {
@@ -285,6 +293,7 @@ export class StockService {
         updated_at: ts,
       })
       .execute();
+    void this.refreshQuotes([listed.code]); // 등록 직후 잔고 화면이 시세를 기다리지 않게 바로 받기 시작
     await this.syncLive();
     return (await this.get(listed.code))!;
   }
@@ -361,7 +370,8 @@ export class StockService {
     const expired = codes.filter((c) => this.due(c, t));
     if (expired.length) {
       const p = this.refreshQuotes(expired);
-      if (expired.some((c) => !this.book.has(c))) await within(p, COLD_WAIT_MS, undefined);
+      // 캐시가 없거나 오래된(밤새 쉬었다 연 경우 등) 종목이 있으면 잠깐 기다린다 — 어제 스냅샷에 오늘 체결가를 섞어 보여 주지 않게
+      if (expired.some((c) => this.old(c, t))) await within(p, COLD_WAIT_MS, undefined);
     }
     const quick = await quickP;
     return stocks.map((s) => {
@@ -405,8 +415,12 @@ export class StockService {
     await this.hydrate();
     const quickP = opts.quick ? Promise.resolve(opts.quick) : this.deps.live?.get(code) ? Promise.resolve(new Map<string, LiveTick>()) : this.quickNow([code]);
     const h = this.book.get(code);
+    const t = this.now().getTime();
     if (h && !opts.fresh) {
-      if (this.due(code, this.now().getTime())) void this.refreshQuotes([code]);
+      if (this.due(code, t)) {
+        const p = this.refreshQuotes([code]);
+        if (this.old(code, t)) await within(p, COLD_WAIT_MS, undefined);
+      }
     } else {
       await this.refreshQuotes([code]);
     }
@@ -427,8 +441,7 @@ export class StockService {
     const t = this.now().getTime();
     let stale = 0;
     for (const [code, h] of this.book) if (this.isStale(code, h, t)) stale++;
-    const fb = (this.deps.quotes as { baseFallbacks?: unknown }).baseFallbacks;
-    return { cached: this.book.size, stale, refreshing: this.inflight.size, ...this.stats, baseFallbacks: typeof fb === "number" ? fb : null };
+    return { cached: this.book.size, stale, refreshing: this.inflight.size, ...this.stats, baseFallbacks: this.deps.tossOpenApi?.baseFallbacks ?? null };
   }
 
   private hydrate(): Promise<void> {
@@ -483,16 +496,17 @@ export class StockService {
     }
     const ok = codes.flatMap((c) => {
       const r = results.get(c);
-      return r && !(r instanceof Error) ? [r] : [];
+      return r && !(r instanceof Error) ? [[c, r] as const] : [];
     });
-    const markets = ok.length ? await this.marketsOf(ok.map((q) => q.code)) : new Map<string, string>();
-    const enriched = await mapLimit(ok, 4, (q) => this.enrich(q, markets.get(q.code) ?? null));
+    const markets = ok.length ? await this.marketsOf(ok.map(([c]) => c)).catch(() => new Map<string, string>()) : new Map<string, string>();
+    // 보강(네이버)이 멈춰도 새 시세는 저장한다
+    const enriched = await mapLimit(ok, 4, async ([c, q]) => [c, await within(this.enrich(q, markets.get(c) ?? null), ENRICH_WAIT_MS, q)] as const);
     const t = this.now().getTime();
     const fetchedAt = seoulIso(this.now());
-    for (const q of enriched) {
-      this.book.set(q.code, { quote: q, at: t, failedAt: 0 });
-      this.quoteErrors.delete(q.code);
-      this.failedAt.delete(q.code);
+    for (const [c, q] of enriched) {
+      this.book.set(c, { quote: q, at: t, failedAt: 0 });
+      this.quoteErrors.delete(c);
+      this.failedAt.delete(c);
     }
     let failures = 0;
     for (const c of codes) {
@@ -508,7 +522,7 @@ export class StockService {
     if (enriched.length) {
       await this.deps.db
         .insertInto("quote_cache")
-        .values(enriched.map((q) => ({ code: q.code, payload: JSON.stringify(q), fetched_at: fetchedAt })))
+        .values(enriched.map(([c, q]) => ({ code: c, payload: JSON.stringify(q), fetched_at: fetchedAt })))
         .onConflict((oc) => oc.column("code").doUpdateSet((eb) => ({ payload: eb.ref("excluded.payload"), fetched_at: eb.ref("excluded.fetched_at") })))
         .execute()
         .catch(() => {
@@ -524,6 +538,12 @@ export class StockService {
   private async marketsOf(codes: string[]): Promise<Map<string, string>> {
     const rows = await this.deps.db.selectFrom("registered_stocks").select(["code", "market"]).where("code", "in", codes).execute();
     return new Map(rows.map((r) => [r.code, r.market]));
+  }
+
+  /** 캐시가 없거나 STALE_AFTER_MS 보다 오래됐는지 (이때만 응답이 새로 받기를 잠깐 기다린다) */
+  private old(code: string, t: number): boolean {
+    const h = this.book.get(code);
+    return !h || t - h.at > STALE_AFTER_MS;
   }
 
   /** 새로 받을 때인지: 캐시가 없거나 ttl 이 지났고, 최근(RETRY_AFTER_FAIL_MS) 실패하지 않았음 */
@@ -542,9 +562,13 @@ export class StockService {
   private current(code: string, quick?: Map<string, LiveTick>): Quote | null {
     const h = this.book.get(code);
     if (!h) return null;
-    const tick = this.liveTick(h.quote, quick);
+    const t = this.now().getTime();
+    let tick = this.liveTick(h.quote, quick);
+    // 스냅샷이 오래됐고 체결가와 날짜가 다르면(어제 받은 스냅샷 + 오늘 체결) 섞지 않는다 — 전일 종가가 하루 어긋나 등락이 틀린다
+    if (tick && t - h.at > STALE_AFTER_MS && kstDay(Date.parse(tick.timestamp)) !== kstDay(h.at)) tick = null;
     const q = tick ? this.applyTick(h.quote, tick) : h.quote;
-    const stale = !tick && this.isStale(code, h, this.now().getTime());
+    const tickFresh = tick !== null && Math.abs(t - tick.receivedAt) <= TICK_FRESH_MS;
+    const stale = !tickFresh && this.isStale(code, h, t);
     return stale ? { ...q, stale: true } : q.stale ? { ...q, stale: false } : q;
   }
 

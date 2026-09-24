@@ -224,6 +224,8 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
   private readonly tickCache = new Map<string, LiveTick>();
   /** 일괄 시세에 가격이 없던 코드(모르는 티커 등)를 물은 시각 — 2초 안에는 그 코드 때문에 다시 부르지 않는다 */
   private readonly tickMissAt = new Map<string, number>();
+  /** 나가 있는 일괄 시세 요청 (같은 종목을 동시에 물으면 이것을 같이 기다린다) */
+  private readonly manyInflight: Array<{ codes: Set<string>; p: Promise<Map<string, LiveTick>> }> = [];
   /**
    * 종목별 기준가(base) — 일괄 시세(getMany)를 받을 때마다 채운다. 기준가는 거래일마다 한 번 바뀌므로
    * 다음 거래 시작(nextTradingStart) 전까지는 새로 받지 못해도 마지막 값을 쓴다
@@ -268,21 +270,46 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
    */
   async getMany(codes: string[]): Promise<Map<string, LiveTick>> {
     const list = [...new Set(codes.map(normalizeCode))].filter((c) => CODE_RE.test(c));
-    const out = new Map<string, LiveTick>();
-    if (list.length === 0) return out;
+    if (list.length === 0) return new Map();
     const t = this.now().getTime();
     const fresh = (c: string) => {
       const x = this.tickCache.get(c);
       return (x !== undefined && t - x.receivedAt < 2000) || t - (this.tickMissAt.get(c) ?? -Infinity) < 2000;
     };
-    if (list.every(fresh)) return new Map(list.flatMap((c) => (this.tickCache.has(c) && t - this.tickCache.get(c)!.receivedAt < 2000 ? [[c, this.tickCache.get(c)!] as [string, LiveTick]] : [])));
-    for (const c of list) this.tickMissAt.set(c, t);
+    const pick = () => {
+      const n = this.now().getTime();
+      return new Map(
+        list.flatMap((c) => {
+          const x = this.tickCache.get(c);
+          return x && n - x.receivedAt < 2000 ? [[c, x] as [string, LiveTick]] : [];
+        }),
+      );
+    };
+    if (list.every(fresh)) return pick();
+    // 같은 종목을 받는 요청이 이미 나가 있으면 새로 보내지 않고 그 응답을 같이 기다린다 (잔고·기준가·실시간 폴링이 동시에 물을 때)
+    const running = this.manyInflight.find((x) => list.every((c) => x.codes.has(c)));
+    if (running) {
+      await running.p;
+      return pick();
+    }
+    const entry = { codes: new Set(list), p: this.fetchMany(list) };
+    this.manyInflight.push(entry);
+    try {
+      return await entry.p;
+    } finally {
+      this.manyInflight.splice(this.manyInflight.indexOf(entry), 1);
+    }
+  }
+
+  private async fetchMany(list: string[]): Promise<Map<string, LiveTick>> {
+    const out = new Map<string, LiveTick>();
+    const t = this.now().getTime();
     const pcs: Array<[string, string]> = [];
     for (const c of list) {
       try {
         pcs.push([c, await this.productCode(c)]);
       } catch {
-        /* 모르는 티커는 건너뜀 */
+        this.tickMissAt.set(c, t); // 모르는 티커는 건너뜀
       }
     }
     if (pcs.length === 0) return out;
@@ -305,7 +332,10 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
         const next = Date.parse(String(r["nextTradingStart"] ?? ""));
         this.baseCache.set(code, { at: t, base, until: Number.isNaN(next) || next <= t ? t + 60_000 : next });
       }
-      if (!r || price === null) continue;
+      if (!r || price === null) {
+        this.tickMissAt.set(code, t);
+        continue;
+      }
       const tick = { code, price, volume: num(r["volume"]), timestamp: nowIso, receivedAt: t };
       this.tickCache.set(code, tick);
       this.tickMissAt.delete(code);

@@ -92,7 +92,9 @@ export class QuoteProviderChain implements QuoteProvider {
         : mapLimit(mine, 4, (c) => p.getQuote(c).then((q): Quote | Error => q, (e: unknown) => (e instanceof Error ? e : new Error(String(e))))).then(
             (rs) => new Map(mine.map((c, i) => [c, rs[i]!])),
           );
-      const got = await within(run, PROVIDER_WAIT_MS, null).then((m) => m ?? new Map(mine.map((c) => [c, timedOut as Error])));
+      // 소스 전체 실패(403·네트워크 등)는 그 오류를, 시간 초과는 "응답 없음"을 종목마다 담는다
+      const settled = await within(run.catch((e: unknown) => (e instanceof Error ? e : new Error(String(e)))), PROVIDER_WAIT_MS, null);
+      const got: Map<string, Quote | Error> = settled instanceof Map ? settled : new Map(mine.map((c) => [c, settled ?? timedOut]));
       const failed: string[] = [];
       for (const c of mine) {
         const r = got.get(c);

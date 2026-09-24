@@ -285,8 +285,8 @@ export function aggregateCandles(daily: Candle[], period: CandlePeriod): Candle[
 const KR_BASE_WAIT_MS = 1_500;
 /** 시세용 일봉 개수 (52주 고저) */
 const QUOTE_DAILY = 260;
-/** 같은 거래일 안에서 오늘 봉(시고저·거래량)만 다시 받는 간격 */
-const TODAY_REFRESH_MS = 5 * 60_000;
+/** 같은 거래일 안에서 최근 봉(오늘 시고저·거래량, 새로 열린 거래일 봉)만 다시 받는 간격 — 예전 시세 캐시와 같은 1분 */
+const TODAY_REFRESH_MS = 60_000;
 /** 일봉을 동시에 받는 종목 수 (그룹별 초당 호출 제한) */
 const DAILY_CONCURRENCY = 4;
 /** 현재가 일괄 조회 한 번에 넣는 종목 수 */
@@ -308,7 +308,7 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
   private readonly now: () => Date;
   private readonly infoCache = new Map<string, { at: number; info: TossStockInfo }>();
   private fxCache: { at: number; rate: number } | null = null;
-  /** 시세용 일봉: 과거 봉은 거래일(현지 날짜)마다 한 번, 같은 날에는 오늘 봉만 5분마다 앞 몇 개로 갈아 끼운다 */
+  /** 시세용 일봉: 과거 봉은 거래일(현지 날짜)마다 한 번, 같은 날에는 1분마다 최근 3개만 받아 끝을 갈아 끼운다 */
   private readonly dailyBook = new Map<string, { day: string; candles: Candle[]; at: number }>();
   private readonly dailyInflight = new Map<string, Promise<Candle[]>>();
   /** 기준가를 못 받아 일봉 종가로 등락을 계산한 횟수 (운영 확인용) */
@@ -475,7 +475,15 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const out = new Map<string, Json>();
     for (let i = 0; i < codes.length; i += PRICES_CHUNK) {
       const chunk = codes.slice(i, i + PRICES_CHUNK);
-      const rows = (await this.client.get<Json[]>("/api/v1/prices", { symbols: chunk.join(",") })) ?? [];
+      let rows: Json[];
+      try {
+        rows = (await this.client.get<Json[]>("/api/v1/prices", { symbols: chunk.join(",") })) ?? [];
+      } catch (e) {
+        // 모르는·상장폐지 종목 하나 때문에 묶음 전체가 4xx 로 거절되면 종목마다 다시 물어 나머지는 살린다
+        if (chunk.length === 1 || !(e instanceof ProviderError) || !/HTTP 4(00|04|22)/.test(e.message)) throw e;
+        const single = await mapLimit(chunk, DAILY_CONCURRENCY, (c) => this.client.get<Json[]>("/api/v1/prices", { symbols: c }).then((r) => (r ?? []).map((x) => ({ ...x, symbol: x["symbol"] ?? c })), () => [] as Json[]));
+        rows = single.flat();
+      }
       for (const r of rows) {
         const sym = String(r["symbol"] ?? "").toUpperCase();
         if (sym) out.set(sym, r);
@@ -571,8 +579,9 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
       change,
       changeRate,
       open: today?.open ?? null,
-      high: today?.high ?? null,
-      low: today?.low ?? null,
+      // 오늘 봉은 최대 1분 전 것이라 현재가가 그 고가·저가를 넘었을 수 있다
+      high: today ? Math.max(today.high, price) : null,
+      low: today ? Math.min(today.low, price) : null,
       prevClose,
       volume: today?.volume ?? null,
       marketCap: shares !== null ? Math.round(price * shares) : null,

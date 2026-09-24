@@ -136,7 +136,7 @@ describe("잔고 현재가 캐시 (3-9)", () => {
     const before = await service.listWithQuotes();
     const p2 = new BatchProvider();
     p2.mode = "hang";
-    t.now += 10 * 60_000;
+    t.now += 2 * 60_000;
     const { service: restarted } = await setup(p2, t, db);
     const t0 = performance.now();
     const list = await restarted.listWithQuotes();
@@ -192,7 +192,7 @@ describe("잔고 현재가 캐시 (3-9)", () => {
     const t = { now: Date.parse("2026-09-22T10:00:00+09:00") };
     const db = await createMigratedDb(":memory:");
     const live = {
-      get: (c: string) => (c === CODES[0] ? { code: c, price: 100_500, volume: 1, timestamp: new Date(t.now).toISOString(), receivedAt: 0 } : null),
+      get: (c: string) => (c === CODES[0] ? { code: c, price: 100_500, volume: 1, timestamp: new Date(t.now).toISOString(), receivedAt: t.now } : null),
       setCodes: () => {},
       status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }),
     };
@@ -207,6 +207,50 @@ describe("잔고 현재가 캐시 (3-9)", () => {
     expect(list[0]!.quote).toMatchObject({ price: 100_500, live: true });
     expect(list[0]!.quote!.stale).toBeFalsy();
     expect(list[1]!.quote!.stale).toBe(true);
+  });
+});
+
+describe("밤새 쉬었다 연 경우 (리뷰 M1)", () => {
+  it("캐시가 3분보다 오래됐으면 새로 받기를 잠깐 기다려 오늘 시세로 답한다", async () => {
+    const p = new BatchProvider();
+    const t = { now: Date.parse("2026-09-22T15:40:00+09:00") };
+    const { service } = await setup(p, t);
+    await service.listWithQuotes();
+    t.now = Date.parse("2026-09-23T09:05:00+09:00");
+    p.price = 105_000;
+    p.asOf = "2026-09-23T09:04:59+09:00";
+    const list = await service.listWithQuotes();
+    expect(list.every((s) => s.quote!.price === 105_000 && s.quote!.asOf === "2026-09-23T09:04:59+09:00")).toBe(true);
+  });
+
+  it("새로 받지 못하면 어제 스냅샷에 오늘 체결가를 섞지 않고 지연으로 표시한다", async () => {
+    const p = new BatchProvider();
+    const t = { now: Date.parse("2026-09-22T15:40:00+09:00") };
+    const db = await createMigratedDb(":memory:");
+    const live = {
+      get: (c: string) => ({ code: c, price: 120_000, volume: 1, timestamp: new Date(t.now).toISOString(), receivedAt: t.now }),
+      setCodes: () => {},
+      status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }),
+    };
+    const service = new StockService({ db, quotes: p, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, now: () => new Date(t.now), quoteCacheTtlMs: 60_000 });
+    await setup(p, t, db);
+    await service.listWithQuotes();
+    t.now = Date.parse("2026-09-23T09:05:00+09:00");
+    p.mode = "fail";
+    await service.listWithQuotes();
+    const list = await service.listWithQuotes();
+    expect(list[0]!.quote).toMatchObject({ price: 100_000, change: 1000, stale: true });
+    expect(list[0]!.quote!.live).toBeUndefined();
+  });
+
+  it("등록하자마자 시세를 받기 시작한다", async () => {
+    const p = new BatchProvider();
+    const t = { now: Date.parse("2026-09-22T10:00:00+09:00") };
+    const db = await createMigratedDb(":memory:");
+    const service = new StockService({ db, quotes: p, search: new FakeSearchProvider(), master: new FakeMasterProvider(), now: () => new Date(t.now) });
+    await service.refreshMaster();
+    await service.register({ code: "005930", quantity: 1, avgPrice: 90_000 });
+    expect(p.batches).toEqual([["005930"]]);
   });
 });
 
@@ -225,6 +269,16 @@ describe("QuoteProviderChain.getQuotes", () => {
     expect((r.get("000001") as Quote).source).toBe("toss-openapi");
     expect((r.get("000002") as Quote).source).toBe("toss");
     expect(next.calls).toBe(1);
+  });
+
+  it("소스 전체 실패는 시간 초과가 아니라 그 오류로 남긴다 (403 등)", async () => {
+    const batch = new BatchProvider();
+    batch.getQuotes = async () => {
+      throw new ProviderError("toss-openapi", "HTTP 403 edge-blocked");
+    };
+    const chain = new QuoteProviderChain([batch]);
+    const r = await chain.getQuotes(["000001"]);
+    expect(((r.get("000001") as Error & { cause?: Error }).cause as Error).message).toContain("403");
   });
 
   it("모든 소스가 실패한 종목은 시도한 소스를 담은 오류", async () => {

@@ -158,6 +158,21 @@ describe("TossProvider", () => {
     expect(priceCalls()).toBe(2);
   });
 
+  it("일괄 시세가 나가 있는 동안 같은 종목을 물으면 그 응답을 같이 기다린다 (기준가가 비지 않게, 리뷰 M2)", async () => {
+    const calls: string[] = [];
+    const base = fakeFetch(calls);
+    const slow = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes("/v3/stock-prices?")) await new Promise((r) => setTimeout(r, 30));
+      return base(input, init);
+    }) as typeof fetch;
+    const p = new TossProvider(slow, null, () => new Date("2026-09-22T14:00:00+09:00"));
+    const [many, bases, again] = await Promise.all([p.getMany(["035420", "TSLA"]), p.baseMany(["035420"]), p.getMany(["035420"])]);
+    expect(many.size).toBe(2);
+    expect(bases.get("035420")).toBe(197900);
+    expect(again.get("035420")?.price).toBe(201500);
+    expect(calls.filter((c) => c.includes("/v3/stock-prices?")).length).toBe(1);
+  });
+
   it("basePrice: 일괄 시세에서 받은 기준가를 1분 동안 요청 없이 쓴다", async () => {
     const calls: string[] = [];
     let t = Date.parse("2026-09-22T14:00:00+09:00");
