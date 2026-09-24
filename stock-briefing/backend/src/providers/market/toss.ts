@@ -220,7 +220,10 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
 
   // ── 실시간에 가까운 현재가 (여러 종목 한 번에) ───────────────────────
 
-  private quickCache: { at: number; key: string; map: Map<string, LiveTick> } | null = null;
+  /** 종목별 마지막 일괄 시세 (2초 안이면 다시 부르지 않는다 — 목록·상세·기준가가 같은 값을 나눠 쓴다) */
+  private readonly tickCache = new Map<string, LiveTick>();
+  /** 일괄 시세에 가격이 없던 코드(모르는 티커 등)를 물은 시각 — 2초 안에는 그 코드 때문에 다시 부르지 않는다 */
+  private readonly tickMissAt = new Map<string, number>();
   /**
    * 종목별 기준가(base) — 일괄 시세(getMany)를 받을 때마다 채운다. 기준가는 거래일마다 한 번 바뀌므로
    * 다음 거래 시작(nextTradingStart) 전까지는 새로 받지 못해도 마지막 값을 쓴다
@@ -267,9 +270,13 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     const list = [...new Set(codes.map(normalizeCode))].filter((c) => CODE_RE.test(c));
     const out = new Map<string, LiveTick>();
     if (list.length === 0) return out;
-    const key = list.join(",");
     const t = this.now().getTime();
-    if (this.quickCache && this.quickCache.key === key && t - this.quickCache.at < 2000) return this.quickCache.map;
+    const fresh = (c: string) => {
+      const x = this.tickCache.get(c);
+      return (x !== undefined && t - x.receivedAt < 2000) || t - (this.tickMissAt.get(c) ?? -Infinity) < 2000;
+    };
+    if (list.every(fresh)) return new Map(list.flatMap((c) => (this.tickCache.has(c) && t - this.tickCache.get(c)!.receivedAt < 2000 ? [[c, this.tickCache.get(c)!] as [string, LiveTick]] : [])));
+    for (const c of list) this.tickMissAt.set(c, t);
     const pcs: Array<[string, string]> = [];
     for (const c of list) {
       try {
@@ -299,9 +306,35 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
         this.baseCache.set(code, { at: t, base, until: Number.isNaN(next) || next <= t ? t + 60_000 : next });
       }
       if (!r || price === null) continue;
-      out.set(code, { code, price, volume: num(r["volume"]), timestamp: nowIso, receivedAt: t });
+      const tick = { code, price, volume: num(r["volume"]), timestamp: nowIso, receivedAt: t };
+      this.tickCache.set(code, tick);
+      this.tickMissAt.delete(code);
+      out.set(code, tick);
     }
-    this.quickCache = { at: t, key, map: out };
+    return out;
+  }
+
+  /**
+   * 여러 종목 기준가를 한 번에: 1분 안에 받은 값은 그대로, 모자라면 일괄 시세 1회로 채운다.
+   * 토스 웹이 방금(30초 안) 실패했으면 부르지 않고 아직 유효한(같은 거래일) 마지막 값만 쓴다
+   */
+  async baseMany(codes: string[]): Promise<Map<string, number>> {
+    const list = [...new Set(codes.map(normalizeCode))];
+    const t = this.now().getTime();
+    const valid = (c: string) => {
+      const h = this.baseCache.get(c);
+      return h && this.now().getTime() < h.until ? h.base : null;
+    };
+    const recent = (c: string) => {
+      const h = this.baseCache.get(c);
+      return (h && t - h.at < 60_000 && valid(c) !== null) || t - (this.baseMissing.get(c) ?? -Infinity) < 10 * 60_000;
+    };
+    if (!list.every(recent) && t - this.pricesFailedAt >= 30_000) await this.getMany(list).catch(() => undefined);
+    const out = new Map<string, number>();
+    for (const c of list) {
+      const b = valid(c);
+      if (b !== null) out.set(c, b);
+    }
     return out;
   }
 

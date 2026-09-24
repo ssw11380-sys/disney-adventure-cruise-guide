@@ -10,7 +10,7 @@ import { Screen } from "@/components/Screen";
 import { COL, StockRow } from "@/components/StockRow";
 import { Button, ErrorView, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
-import { openMaxAge, viewState } from "@/lib/freshness";
+import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
@@ -112,7 +112,7 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
-          status={<LiveStatus query={stocks} open={live.open} closedLabel={live.label} maxAgeMs={openMaxAge} suffix={`보유 ${summary.held}${summary.watch ? ` · 관심 ${summary.watch}` : ""}`} />}
+          status={<LiveStatus query={stocks} open={live.open} closedLabel={live.label} maxAgeMs={openMaxAge} suffix={holdingsSuffix({ held: summary.held, watch: summary.watch, stale: staleQuoteCount(stocks.data) })} />}
         />
       ) : null}
     </View>

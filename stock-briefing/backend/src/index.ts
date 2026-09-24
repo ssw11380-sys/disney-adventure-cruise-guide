@@ -37,6 +37,11 @@ async function main(): Promise<void> {
   process.on("SIGTERM", close);
 
   await app.listen({ port: config.PORT, host: config.HOST });
+  // 등록 종목 현재가를 미리 받아 둔다 → 배포 직후 첫 잔고 요청이 기다리지 않는다 (실패해도 요청 때 다시)
+  void app.stockService
+    .warmQuotes()
+    .then(() => app.log.info(app.stockService.quoteStatus(), "현재가 미리 받기 완료"))
+    .catch((e) => app.log.warn({ err: e }, "현재가 미리 받기 실패"));
   app.log.info(describeProviders(config), "데이터 소스");
   app.log.info(app.scheduler?.status() ?? {}, "브리핑 스케줄");
 }

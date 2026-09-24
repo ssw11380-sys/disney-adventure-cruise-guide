@@ -79,6 +79,16 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect((await app.inject({ method: "GET", url: "/api/stocks/000660/analysis/technical" })).json().cached).toBe(true);
   });
 
+  it("현재가 캐시를 여러 행 한 번에 저장하고 같은 종목은 갱신한다 (on conflict excluded)", async () => {
+    const svc = app.stockService;
+    const rows = await db.selectFrom("quote_cache").select("code").execute();
+    expect(rows.length).toBeGreaterThan(0);
+    await svc.getQuote(rows[0]!.code, { fresh: true });
+    await svc.warmQuotes();
+    expect(svc.quoteStatus().cacheWriteErrors).toBe(0);
+    expect((await db.selectFrom("quote_cache").select("code").execute()).length).toBe(rows.length);
+  });
+
   it("기기 등록과 알림 설정이 저장된다", async () => {
     const dev = await app.inject({ method: "POST", url: "/api/devices", payload: { token: "ExponentPushToken[pgpgpgpgpgpgpgpgpgpgpg]", platform: "android" } });
     expect(dev.statusCode).toBe(201);

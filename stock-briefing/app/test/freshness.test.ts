@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockLabel, connection, liveLabel, openMaxAge, parseBriefingId, parseStockCode, pollInterval, staleBanner, streamFresh, viewState, type QueryLike } from "@/lib/freshness";
+import { clockLabel, connection, holdingsSuffix, staleQuoteCount, liveLabel, openMaxAge, parseBriefingId, parseStockCode, pollInterval, staleBanner, streamFresh, viewState, type QueryLike } from "@/lib/freshness";
 
 // 2026-09-24 14:03:21 KST
 const NOW = Date.parse("2026-09-24T14:03:21+09:00");
@@ -71,5 +71,15 @@ describe("딥링크 파라미터 검증", () => {
   it("종목 코드: 국내·미국·신규 코드, 공백·특수문자는 거절", () => {
     for (const ok of ["005930", "0010S0", "AAPL", "BRK.B", "Q500001"]) expect(parseStockCode(ok)).toBe(ok);
     for (const bad of [" ", "", undefined, "../x", "a b", "<script>", "%20"]) expect(parseStockCode(bad)).toBeNull();
+  });
+});
+
+describe("시세 지연 표시 (3-9)", () => {
+  it("서버가 새로 받지 못한 시세 수를 세어 상단 줄 끝에 붙인다", () => {
+    const list = [{ quote: { stale: true } }, { quote: { stale: false } }, { quote: null }, { quote: {} }, { quote: { stale: true } }];
+    expect(staleQuoteCount(list)).toBe(2);
+    expect(staleQuoteCount(undefined)).toBe(0);
+    expect(holdingsSuffix({ held: 17, watch: 1, stale: 2 })).toBe("보유 17 · 관심 1 · 시세 지연 2");
+    expect(holdingsSuffix({ held: 17, watch: 0, stale: 0 })).toBe("보유 17");
   });
 });

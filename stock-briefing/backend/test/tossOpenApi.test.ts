@@ -503,3 +503,71 @@ describe("분봉 (Open API 1m → 5m/30m)", () => {
     expect(out[1]).toMatchObject({ open: 13, close: 15, high: 16, low: 11, volume: 2 });
   });
 });
+
+describe("TossOpenApiProvider 일괄 현재가 (3-9)", () => {
+  const CODES = ["035420", "005930", "000660", "TSLA"];
+  it("현재가는 요청 1번, 일봉은 거래일마다 종목별 한 번(같은 날엔 5분마다 최근 3개만), 기준가는 일괄 1번", async () => {
+    const calls: Call[] = [];
+    let t = Date.parse("2026-09-22T10:00:00+09:00");
+    const baseCalls: string[][] = [];
+    const p = new TossOpenApiProvider(client({ candlePages: 2 }, calls), {
+      now: () => new Date(t),
+      krBaseMany: async (codes) => {
+        baseCalls.push(codes);
+        return new Map(codes.map((c) => [c, 199_500]));
+      },
+    });
+    const count = (part: string) => calls.filter((c) => c.url.includes(part)).length;
+    const candleCounts = () => calls.filter((c) => c.url.includes("/candles")).map((c) => Number(new URL(c.url).searchParams.get("count")));
+    const r = await p.getQuotes(CODES);
+    expect([...r.keys()]).toEqual(CODES);
+    expect([...r.values()].every((q) => !(q instanceof Error))).toBe(true);
+    expect(count("/api/v1/prices")).toBe(1);
+    expect(new URL(calls.find((c) => c.url.includes("/prices"))!.url).searchParams.get("symbols")).toBe(CODES.join(","));
+    expect(baseCalls).toEqual([["035420", "005930", "000660"]]);
+    const first = count("/candles");
+    expect(first).toBe(7); // 한국 3종목 × 2페이지(260개) + 미국 1페이지
+    expect(r.get("035420")).toMatchObject({ prevClose: 199_500, prevCloseBasis: "base" });
+
+    // 1분 뒤: 일봉 요청 없음
+    t += 60_000;
+    await p.getQuotes(CODES);
+    expect(count("/candles")).toBe(first);
+    expect(count("/api/v1/prices")).toBe(2);
+
+    // 6분 뒤(같은 날): 오늘 봉만 최근 3개로
+    t += 5 * 60_000;
+    await p.getQuotes(CODES);
+    expect(candleCounts().slice(first)).toEqual([3, 3, 3, 3]);
+
+    // 다음 날: 다시 260개
+    const before = count("/candles");
+    t += 24 * 3_600_000;
+    await p.getQuotes(CODES);
+    expect(count("/candles") - before).toBe(7);
+  });
+
+  it("기준가를 못 받으면 일봉 종가로 등락을 계산하고 표식·횟수를 남긴다", async () => {
+    const p = new TossOpenApiProvider(client(), { now: NOW, krBaseMany: async () => new Map() });
+    const r = await p.getQuotes(["035420", "TSLA"]);
+    expect(r.get("035420")).toMatchObject({ prevCloseBasis: "candle", prevClose: 200000 + 199 * 100 });
+    expect((r.get("TSLA") as { prevCloseBasis?: string }).prevCloseBasis).toBeUndefined();
+    expect(p.baseFallbacks).toBe(1);
+  });
+
+  it("일봉을 새로 받지 못하면 전에 받은 일봉으로 답한다", async () => {
+    let fail = false;
+    let t = Date.parse("2026-09-22T10:00:00+09:00");
+    const base = fakeFetch();
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (fail && String(input).includes("/candles")) return new Response("{}", { status: 500 });
+      return base(input, init);
+    }) as typeof fetch;
+    const p = new TossOpenApiProvider(new TossOpenApiClient({ clientId: "c", clientSecret: "s", fetchFn, now: NOW, maxRetryWaitMs: 0 }), { now: () => new Date(t) });
+    const a = await p.getQuote("035420");
+    fail = true;
+    t += 24 * 3_600_000;
+    const b = await p.getQuote("035420");
+    expect(b.prevClose).toBe(a.prevClose);
+  });
+});

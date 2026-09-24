@@ -52,6 +52,8 @@ export interface Quote {
   priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
   priceKrw?: number | null; // 미국 종목 원화 환산
   live?: boolean; // 실시간 체결로 덮어쓴 현재가
+  /** 서버가 시세를 새로 받지 못해 마지막 값을 그대로 준 경우 (asOf 는 원래 시각). 회색 "시세 지연"으로 표시 */
+  stale?: boolean;
   fxRate?: number | null; // 미국 종목: 1달러당 원화
   dividendPerShare?: number | null;
   dividendYieldPct?: number | null;

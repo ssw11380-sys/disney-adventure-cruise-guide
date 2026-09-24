@@ -1,6 +1,7 @@
 import { isIntraday, type Candle, type CandlePeriod, type CandleSeries, type ListedStock, type Market, type Quote } from "../../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError, within } from "../../lib/errors.js";
+import { mapLimit } from "../../lib/concurrency.js";
 import { seoulIso } from "../../lib/time.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
 import type { FetchFn, MasterProvider, QuoteProvider } from "./types.js";
@@ -282,6 +283,14 @@ export function aggregateCandles(daily: Candle[], period: CandlePeriod): Candle[
 
 /** 한국 종목 기준가(krBase)를 기다리는 최대 시간 */
 const KR_BASE_WAIT_MS = 1_500;
+/** 시세용 일봉 개수 (52주 고저) */
+const QUOTE_DAILY = 260;
+/** 같은 거래일 안에서 오늘 봉(시고저·거래량)만 다시 받는 간격 */
+const TODAY_REFRESH_MS = 5 * 60_000;
+/** 일봉을 동시에 받는 종목 수 (그룹별 초당 호출 제한) */
+const DAILY_CONCURRENCY = 4;
+/** 현재가 일괄 조회 한 번에 넣는 종목 수 */
+const PRICES_CHUNK = 50;
 
 export interface TossOpenApiProviderOptions {
   now?: () => Date;
@@ -290,6 +299,8 @@ export interface TossOpenApiProviderOptions {
    * 공식 API 일봉 종가는 NXT 애프터마켓까지 포함한 통합 종가라 NXT 종목의 등락이 토스 앱과 달라진다 (삼성전자 +3.24% vs +3.62%)
    */
   krBase?: (code: string) => Promise<number | null>;
+  /** 여러 종목 기준가를 한 번에 (토스 웹 일괄 시세 1회). 없으면 krBase 를 종목마다 */
+  krBaseMany?: (codes: string[]) => Promise<Map<string, number>>;
 }
 
 export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider, MasterProvider {
@@ -297,6 +308,11 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
   private readonly now: () => Date;
   private readonly infoCache = new Map<string, { at: number; info: TossStockInfo }>();
   private fxCache: { at: number; rate: number } | null = null;
+  /** 시세용 일봉: 과거 봉은 거래일(현지 날짜)마다 한 번, 같은 날에는 오늘 봉만 5분마다 앞 몇 개로 갈아 끼운다 */
+  private readonly dailyBook = new Map<string, { day: string; candles: Candle[]; at: number }>();
+  private readonly dailyInflight = new Map<string, Promise<Candle[]>>();
+  /** 기준가를 못 받아 일봉 종가로 등락을 계산한 횟수 (운영 확인용) */
+  baseFallbacks = 0;
 
   constructor(
     readonly client: TossOpenApiClient,
@@ -423,21 +439,107 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
 
   // ── 현재가 ──────────────────────────────────────────────────────
 
+  /** 시세용 일봉 (캐시). 새로 받지 못하면 전에 받은 것을 그대로 쓴다 */
+  private quoteDaily(code: string): Promise<Candle[]> {
+    const kr = isKrCode(code);
+    const t = this.now().getTime();
+    const day = localDate(new Date(t).toISOString(), kr);
+    const hit = this.dailyBook.get(code);
+    if (hit && hit.day === day && t - hit.at < TODAY_REFRESH_MS) return Promise.resolve(hit.candles);
+    const running = this.dailyInflight.get(code);
+    if (running) return running;
+    const p = (async () => {
+      let candles: Candle[];
+      if (hit && hit.day === day) {
+        // 같은 거래일: 최근 봉 몇 개만 다시 받아 끝을 갈아 끼운다 (요청 1개)
+        const recent = await this.dailyCandles(code, 3);
+        const from = recent[0]?.date;
+        candles = from ? [...hit.candles.filter((c) => c.date < from), ...recent].slice(-QUOTE_DAILY) : hit.candles;
+      } else {
+        candles = await this.dailyCandles(code, QUOTE_DAILY);
+      }
+      this.dailyBook.set(code, { day, candles, at: t });
+      return candles;
+    })()
+      .catch((e: unknown) => {
+        if (hit) return hit.candles;
+        throw e;
+      })
+      .finally(() => this.dailyInflight.delete(code));
+    this.dailyInflight.set(code, p);
+    return p;
+  }
+
+  /** 현재가 일괄 조회 (/prices 는 symbols 를 콤마로 여러 개 받는다) */
+  private async pricesMany(codes: string[]): Promise<Map<string, Json>> {
+    const out = new Map<string, Json>();
+    for (let i = 0; i < codes.length; i += PRICES_CHUNK) {
+      const chunk = codes.slice(i, i + PRICES_CHUNK);
+      const rows = (await this.client.get<Json[]>("/api/v1/prices", { symbols: chunk.join(",") })) ?? [];
+      for (const r of rows) {
+        const sym = String(r["symbol"] ?? "").toUpperCase();
+        if (sym) out.set(sym, r);
+      }
+      // 한 종목만 물었는데 심볼 표기가 다르게 오면(대소문자 등) 그 한 줄을 쓴다
+      if (chunk.length === 1 && !out.has(chunk[0]!) && rows[0]) out.set(chunk[0]!, rows[0]);
+    }
+    return out;
+  }
+
+  private async krBases(codes: string[]): Promise<Map<string, number>> {
+    if (codes.length === 0) return new Map();
+    const { krBase, krBaseMany } = this.opts;
+    if (krBaseMany) return within(krBaseMany(codes), KR_BASE_WAIT_MS, new Map<string, number>());
+    if (!krBase) return new Map();
+    // 기준가는 짧게만 기다린다 — 토스 웹이 느리거나 멈추면 일봉으로 (공식 API 시세까지 붙잡지 않게)
+    const vals = await Promise.all(codes.map((c) => within(krBase(c), KR_BASE_WAIT_MS, null)));
+    return new Map(codes.flatMap((c, i) => (vals[i] && vals[i]! > 0 ? [[c, vals[i]!] as [string, number]] : [])));
+  }
+
   async getQuote(code: string): Promise<Quote> {
     code = normalizeCode(code);
-    const kr = isKrCode(code);
-    let dailyError: unknown = null;
-    const [prices, daily, infos, krBase] = await Promise.all([
-      this.client.get<Json[]>("/api/v1/prices", { symbols: code }),
-      this.dailyCandles(code, 260).catch((e: unknown) => {
-        dailyError = e;
-        return [] as Candle[];
-      }),
-      this.stockInfos([code]).catch(() => new Map<string, TossStockInfo>()),
-      // 기준가는 짧게만 기다린다 — 토스 웹이 느리거나 멈추면 일봉으로 (공식 API 시세까지 붙잡지 않게)
-      kr && this.opts.krBase ? within(this.opts.krBase(code), KR_BASE_WAIT_MS, null) : Promise.resolve(null),
+    const r = (await this.getQuotes([code])).get(code);
+    if (!r) throw new ProviderError(this.name, `${code} 시세 없음`);
+    if (r instanceof Error) throw r;
+    return r;
+  }
+
+  /**
+   * 여러 종목 현재가: 현재가 1회(일괄) + 종목 정보(하루 캐시) + 기준가 1회(일괄) + 일봉(거래일 캐시).
+   * 현재가 일괄 조회가 실패하면 던진다(체인이 다음 소스로). 종목별 실패는 Error 로 담는다
+   */
+  async getQuotes(codes: string[]): Promise<Map<string, Quote | Error>> {
+    const list = [...new Set(codes.map(normalizeCode))];
+    const out = new Map<string, Quote | Error>();
+    if (list.length === 0) return out;
+    const [prices, infos, bases, fx, dailies] = await Promise.all([
+      this.pricesMany(list),
+      this.stockInfos(list).catch(() => new Map<string, TossStockInfo>()),
+      this.krBases(list.filter(isKrCode)),
+      list.some((c) => !isKrCode(c)) ? this.usdKrw() : Promise.resolve(null),
+      mapLimit(list, DAILY_CONCURRENCY, (c) =>
+        this.quoteDaily(c).then(
+          (d) => ({ d, e: null as unknown }),
+          (e: unknown) => ({ d: [] as Candle[], e }),
+        ),
+      ),
     ]);
-    const p = (prices ?? []).find((x) => String(x["symbol"] ?? "").toUpperCase() === code) ?? prices?.[0];
+    let fallbacks = 0;
+    list.forEach((code, i) => {
+      try {
+        const q = this.buildQuote(code, prices.get(code), dailies[i]!.d, dailies[i]!.e, infos.get(code), bases.get(code) ?? null, fx);
+        if (q.prevCloseBasis === "candle") fallbacks++;
+        out.set(code, q);
+      } catch (e) {
+        out.set(code, e instanceof Error ? e : new ProviderError(this.name, String(e)));
+      }
+    });
+    this.baseFallbacks += fallbacks;
+    return out;
+  }
+
+  private buildQuote(code: string, p: Json | undefined, daily: Candle[], dailyError: unknown, info: TossStockInfo | undefined, krBase: number | null, fx: number | null): Quote {
+    const kr = isKrCode(code);
     if (!p) throw new ProviderError(this.name, `${code} 시세 없음`);
     const latest = daily.at(-1) ?? null;
     const price = num(p["lastPrice"]) ?? latest?.close ?? null;
@@ -449,7 +551,8 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     // 마지막 봉 날짜가 뒤일 수 있다 → 그 봉을 오늘 봉으로 보고 직전 정규장 종가와 비교한다.
     const today = latest && latest.date >= priceDate ? latest : null;
     const prev = today ? daily.at(-2) ?? null : latest;
-    const prevClose = krBase && krBase > 0 ? krBase : (prev?.close ?? null);
+    const useBase = krBase !== null && krBase > 0;
+    const prevClose = useBase ? krBase : (prev?.close ?? null);
     // 전일 종가를 모르면(상장 첫날이라 일봉이 오늘 것뿐, 또는 일봉을 못 받음) 등락을 0 으로 만들지 않고
     // 다음 소스(기준가를 주는 토스 웹)로 넘긴다 — 상장 첫날 +280% 종목이 "0 · 0.00%"로 보이지 않게
     if (prevClose === null)
@@ -457,11 +560,10 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const change = round2(price - prevClose);
     const changeRate = prevClose ? round2((change / prevClose) * 100) : 0;
     const currency = String(p["currency"] ?? (kr ? "KRW" : "USD")) === "USD" ? "USD" : "KRW";
-    const info = infos.get(code);
     const shares = num(info?.sharesOutstanding);
     const yearAgo = new Date(this.now().getTime() - 365 * 86_400_000).toISOString().slice(0, 10);
     const year = daily.filter((c) => c.date >= yearAgo);
-    const fx = currency === "USD" ? await this.usdKrw() : null;
+    const rate = currency === "USD" ? fx : null;
     return {
       code,
       currency,
@@ -483,8 +585,9 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
       asOf: ts ?? seoulIso(this.now()),
       source: this.name,
       priceBasis: kr ? "KRX+NXT 통합" : "최근 체결(시간외 포함)",
-      priceKrw: fx !== null ? Math.round(price * fx) : null,
+      priceKrw: rate !== null ? Math.round(price * rate) : null,
       afterMarket: null,
+      ...(kr ? { prevCloseBasis: useBase ? ("base" as const) : ("candle" as const) } : {}),
     };
   }
 

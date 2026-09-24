@@ -123,3 +123,13 @@ export function parseStockCode(raw: string | string[] | undefined): string | nul
   if (!s || !/^[A-Za-z0-9][A-Za-z0-9.\-]{0,14}$/.test(s)) return null;
   return s;
 }
+
+/** 서버가 새로 받지 못한 마지막 시세(stale)로 보여 주는 종목 수 → 잔고 상단 "시세 지연 N" */
+export function staleQuoteCount(list: readonly { quote: { stale?: boolean } | null }[] | undefined): number {
+  return list ? list.filter((s) => s.quote?.stale === true).length : 0;
+}
+
+/** 잔고 상단 상태 줄 끝: "보유 17 · 관심 1 · 시세 지연 2" */
+export function holdingsSuffix(o: { held: number; watch: number; stale: number }): string {
+  return `보유 ${o.held}${o.watch ? ` · 관심 ${o.watch}` : ""}${o.stale ? ` · 시세 지연 ${o.stale}` : ""}`;
+}

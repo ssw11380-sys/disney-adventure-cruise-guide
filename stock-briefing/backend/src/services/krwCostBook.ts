@@ -140,9 +140,17 @@ export class KrwCostBook {
   /** 저장된 장부 (없거나 이전 형식·깨진 값이면 빈 장부) */
   static async read(db: Db): Promise<KrwCostBookState> {
     const row = await db.selectFrom("meta").select("value").where("key", "=", KEY).executeTakeFirst();
-    if (!row) return empty();
+    return KrwCostBook.parse(row?.value ?? null);
+  }
+
+  /** meta 표에 저장하는 키 (다른 meta 값과 한 번에 읽을 때) */
+  static readonly KEY = KEY;
+
+  /** 저장된 값(JSON)을 장부로. 없거나 이전 형식·깨진 값이면 빈 장부 */
+  static parse(value: string | null): KrwCostBookState {
+    if (!value) return empty();
     try {
-      const s = JSON.parse(row.value) as Partial<KrwCostBookState>;
+      const s = JSON.parse(value) as Partial<KrwCostBookState>;
       if (s.version !== 2) return empty();
       return {
         version: 2,

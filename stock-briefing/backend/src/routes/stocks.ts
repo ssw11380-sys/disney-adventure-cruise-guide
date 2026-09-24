@@ -50,7 +50,7 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
     } catch (e) {
       quoteError = e instanceof Error ? e.message : String(e);
     }
-    const [detail, krw] = await Promise.all([service.tossDetail(), service.krwCosts()]);
+    const { detail, krw } = await service.holdingMeta();
     return { ...stock, registered: !!registered, quote, quoteError, evaluation: evaluate(stock, quote, detail.get(code), krw.get(code)) };
   });
 
