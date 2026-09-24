@@ -154,3 +154,19 @@ export const font = {
   small: 12,
   tiny: 11,
 } as const;
+
+/** 누르는 요소의 최소 크기 (3-22): 보이는 높이 + hitSlop 이 44 이상 */
+export const touch = { min: 44 } as const;
+
+/** 보이는 높이가 h 인 요소를 위아래로 넓혀 44 로 맞추는 hitSlop. 좌우는 side (이웃과 겹치지 않게 간격의 절반 이하) */
+export function slopFor(h: number, side = 0): { top: number; bottom: number; left: number; right: number } {
+  const v = Math.max(0, Math.ceil((touch.min - h) / 2));
+  return { top: v, bottom: v, left: side, right: side };
+}
+
+/**
+ * 시스템 글자 크기 확대 상한 (3-22). 본문은 상한 없이 200% 까지 커진다.
+ *  - row: 고정 폭 열이 있는 종목 줄·표 (숫자가 잘리지 않게 이 이상은 줄이 아니라 열 폭으로 받는다)
+ *  - chrome: 탭 바·화면 머리 (높이를 글자에 맞춰 늘리되 화면을 다 먹지 않게)
+ */
+export const fontCap = { row: 1.4, chrome: 1.5 } as const;

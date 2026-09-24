@@ -8,15 +8,16 @@ import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
 import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
-import { COL, StockRow } from "@/components/StockRow";
-import { PRICE_HEAD } from "@/components/StockLine";
+import { StockRow } from "@/components/StockRow";
+import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
 import { Button, ErrorView, TableHead } from "@/components/ui";
+import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
-import { changeColor, font, space, useTheme } from "@/theme";
+import { changeColor, font, space, touch, useTheme } from "@/theme";
 
 /** 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표 */
 export default function StocksScreen() {
@@ -28,6 +29,7 @@ export default function StocksScreen() {
   const health = useHealth();
   const live = useAnyMarketOpen();
   const [sortOpen, setSortOpen] = useState(false);
+  const col = useLineCols();
   // 값이 있으면 재조회가 실패해도 화면을 지우지 않고, 끊김·지연을 띠와 상태 글자로 알린다
   const { pulling, onPull } = usePull(refetch);
 
@@ -121,19 +123,21 @@ export default function StocksScreen() {
   const sectionHeader = (section: (typeof sections)[number]) => (
     <View style={{ backgroundColor: t.bg }}>
       <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
-        <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{section.title}</Text>
-        <Pressable onPress={() => setSortOpen(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel={`정렬: ${sortLabel}`} style={{ flexDirection: "row", alignItems: "center", gap: space.xxs }}>
+        <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }} accessibilityRole="header">
+          {section.title}
+        </Text>
+        <Pressable onPress={() => setSortOpen(true)} hitSlop={SORT_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={{ flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xs }}>
           <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel}</Text>
           <Ionicons name="chevron-down" size={font.small} color={t.muted} />
         </Pressable>
       </View>
       <TableHead>
-        <HeadCell label="종목명" active={sort === "name"} onPress={() => void setSort("name")} flex />
-        <HeadCell label={PRICE_HEAD} active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={COL.price} />
+        <HeadCell label="종목명" a11y="이름순 정렬" active={sort === "name"} onPress={() => void setSort("name")} flex />
+        <HeadCell label={PRICE_HEAD} a11y="등락률순 정렬" active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={col.price} />
         {section.key === "held" ? (
-          <HeadCell label="평가손익·수익률" active={sort === "profit"} onPress={() => void setSort("profit")} width={COL.right} />
+          <HeadCell label="평가손익·수익률" a11y="수익률순 정렬" active={sort === "profit"} onPress={() => void setSort("profit")} width={col.right} />
         ) : (
-          <HeadCell label="전일대비·거래량" width={COL.right} />
+          <HeadCell label="전일대비·거래량" width={col.right} />
         )}
       </TableHead>
     </View>
@@ -178,25 +182,39 @@ export default function StocksScreen() {
   );
 }
 
-function HeadCell({ label, active, onPress, width, flex }: { label: string; active?: boolean; onPress?: () => void; width?: number; flex?: boolean }) {
+function HeadCell({ label, a11y, active, onPress, width, flex }: { label: string; a11y?: string; active?: boolean; onPress?: () => void; width?: number; flex?: boolean }) {
   const t = useTheme();
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: flex ? "flex-start" : "flex-end", gap: space.xxs }}>
-      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right", flexShrink: 1 }} numberOfLines={1}>
+      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right", flexShrink: 1 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
         {label}
       </Text>
       {active ? <Ionicons name="caret-down" size={font.tiny} color={t.ink} /> : null}
     </View>
   );
   const style = flex ? { flex: 1 } : { width };
+  // 표 머리 칸을 위아래 여백까지 채운다(글자 약 16 + 여백 6·6 = 28). 44 예외: 위는 정렬 버튼, 아래는 첫 종목 줄이라
+  // hitSlop 으로 넓히면 이웃을 누를 때 정렬이 바뀐다 (3-22 리뷰). 같은 정렬은 "정렬" 버튼으로도 된다
+  const tap = { marginVertical: -space.s, paddingVertical: space.s };
   return onPress ? (
-    <Pressable onPress={onPress} hitSlop={6} style={style}>
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={a11y ?? `${label}순 정렬`} accessibilityState={{ selected: !!active }} style={[style, tap]}>
       {body}
     </Pressable>
   ) : (
     <View style={style}>{body}</View>
   );
 }
+
+/** 국내·해외 줄의 이름 칸 최소 폭 (100% 에서 숫자 열이 맞게) */
+const SPLIT_LABEL_W = 34;
+/** 국내·해외 줄의 손익·수익률 칸 최소 폭 (100% 에서 열이 맞게) */
+const SPLIT_PL_W = 118;
+const SPLIT_PCT_W = 62;
+/**
+ * 정렬 버튼(보이는 높이 약 24): 위로 14, 아래로는 머리 줄 여백(6)까지만 → 44.
+ * 아래로 더 넓히면 바로 밑 표 머리의 정렬 칸과 겹친다
+ */
+const SORT_SLOP = { top: 14, bottom: space.s, left: space.sm, right: space.sm };
 
 /** 계좌 평가 패널: 총 평가금액(원화 환산) + 평가손익·수익률·매입·당일 + 국내/해외 구분 */
 function AccountPanel({
@@ -231,6 +249,23 @@ function AccountPanel({
   const lines: { label: string; tot: Totals; cur: Currency }[] = [];
   if (byCur.KRW.count) lines.push({ label: "국내", tot: byCur.KRW, cur: "KRW" });
   if (byCur.USD.count) lines.push(showKrw && usdInKrw.count === byCur.USD.count ? { label: "해외", tot: usdInKrw, cur: "KRW" } : { label: "해외", tot: byCur.USD, cur: "USD" });
+  // 화면 읽기: 계좌 요약을 한 문장으로 (3-22). 상태 줄(실시간·지연)은 따로 읽는다
+  const showSplit = lines.length > 1 || lines[0]?.cur === "USD";
+  const label = sentence([
+    `총 평가금액${total ? "" : " (원화 종목)"} ${speakAmount(formatPrice(main.value, "KRW"))}`,
+    `평가손익 ${speakProfit(formatPrice(profit, "KRW"), Math.sign(profit)) ?? "없음"}`,
+    speakRate(rate) ? `수익률 ${speakRate(rate)}` : null,
+    `매입금액 ${speakAmount(formatPrice(main.cost, "KRW"))}`,
+    `당일손익 ${speakProfit(formatPrice(main.day, "KRW"), Math.sign(main.day)) ?? "없음"}`,
+    // 국내·해외 줄은 화면에 있을 때만 (그 줄 자체는 화면 읽기에서 숨겨 두 번 읽히지 않게)
+    ...(showSplit
+      ? lines.map((l) => {
+          const p = l.tot.value - l.tot.cost;
+          const r = l.tot.cost > 0 ? (p / l.tot.cost) * 100 : 0;
+          return sentence([`${l.label} ${speakAmount(formatPrice(l.tot.value, l.cur))}`, speakProfit(formatPrice(p, l.cur), Math.sign(p)) ?? "손익 없음", speakRate(r)]);
+        })
+      : []),
+  ]);
   return (
     <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
       <View style={styles.panelTop}>
@@ -240,7 +275,8 @@ function AccountPanel({
         </Text>
         {status}
       </View>
-      <Text style={[styles.total, { color: t.ink }]}>
+      <View accessible accessibilityLabel={label} style={{ gap: space.xs }}>
+      <Text style={[styles.total, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
         {formatQuote(main.value, "KRW")}
         <Text style={{ fontSize: font.body, color: t.muted, fontWeight: "500" }}> 원</Text>
       </Text>
@@ -250,22 +286,34 @@ function AccountPanel({
         <Kpi label="매입금액" value={formatPrice(main.cost, "KRW")} />
         <Kpi label="당일손익" value={formatPrice(main.day, "KRW", { sign: true })} color={dc} />
       </View>
-      {lines.length > 1 || (lines[0]?.cur === "USD") ? (
+      </View>
+      {showSplit ? (
         <View style={[styles.split, { borderTopColor: t.line }]}>
+          {/* 숫자는 위 요약 문장에 들어 있다 → 조각으로 한 번 더 읽히지 않게 숨기고, 환율 안내 한 줄만 읽는다 */}
+          <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={styles.splitRows}>
           {lines.map((l) => {
             const p = l.tot.value - l.tot.cost;
             const r = l.tot.cost > 0 ? (p / l.tot.cost) * 100 : 0;
             return (
               <View key={l.label} style={styles.splitRow}>
-                <Text style={{ color: t.muted, fontSize: font.small, width: 34 }}>{l.label}</Text>
-                <Text style={[styles.splitNum, { color: t.ink, flex: 1 }]}>{formatPrice(l.tot.value, l.cur)}</Text>
-                <Text style={[styles.splitNum, { color: changeColor(t, p), width: 118 }]} numberOfLines={1} adjustsFontSizeToFit>
-                  {formatPrice(p, l.cur, { sign: true })}
+                {/* 폭을 고정하지 않는다: 큰 글씨에서 "국…"으로 잘리지 않게 (숫자 칸이 대신 줄어든다) */}
+                <Text style={{ color: t.muted, fontSize: font.small, minWidth: SPLIT_LABEL_W, flexShrink: 0 }}>{l.label}</Text>
+                <Text style={[styles.splitNum, styles.splitGap, { color: t.ink, flexGrow: 1, flexShrink: 1 }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                  {formatPrice(l.tot.value, l.cur)}
                 </Text>
-                <Text style={[styles.splitNum, { color: changeColor(t, p), width: 62 }]}>{formatPct(r)}</Text>
+                {/* 손익·수익률은 한 덩어리: 큰 글씨로 한 줄에 안 들어가면 다음 줄 오른쪽으로 내려간다 (3-22) */}
+                <View style={styles.splitPl}>
+                  <Text style={[styles.splitNum, { color: changeColor(t, p), minWidth: SPLIT_PL_W }]} numberOfLines={1}>
+                    {formatPrice(p, l.cur, { sign: true })}
+                  </Text>
+                  <Text style={[styles.splitNum, styles.splitGap, { color: changeColor(t, p), minWidth: SPLIT_PCT_W }]} numberOfLines={1}>
+                    {formatPct(r)}
+                  </Text>
+                </View>
               </View>
             );
           })}
+          </View>
           {fx ? (
             <Text style={{ color: t.muted, fontSize: font.tiny, textAlign: "right" }}>
               토스 적용 환율 {fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원 · 원화 손익은 매수 당시 환율 기준{estimated ? " (일부 추정)" : ""}
@@ -283,7 +331,7 @@ function Kpi({ label, value, color }: { label: string; value: string; color?: st
   return (
     <View style={styles.kpi}>
       <Text style={{ color: t.muted, fontSize: font.tiny }}>{label}</Text>
-      <Text style={{ color: color ?? t.ink, fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] }} numberOfLines={1} adjustsFontSizeToFit>
+      <Text style={{ color: color ?? t.ink, fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
         {value}
       </Text>
     </View>
@@ -294,9 +342,13 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
   const t = useTheme();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={[styles.backdrop, { backgroundColor: t.scrim }]} onPress={onClose}>
+      <View style={styles.backdrop}>
+        {/* 바깥을 누르면 닫힘. 창을 감싸면 화면 읽기가 창 전체를 한 덩어리로 읽어 항목을 못 고르므로 뒤에 따로 깐다 (3-22) */}
+        <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: t.scrim }]} onPress={onClose} accessibilityRole="button" accessibilityLabel="정렬 닫기" />
         <View style={[styles.sheet, { backgroundColor: t.surface, borderColor: t.lineStrong }]}>
-          <Text style={{ color: t.muted, fontSize: font.small, paddingHorizontal: space.lg, paddingVertical: space.sm }}>정렬</Text>
+          <Text style={{ color: t.muted, fontSize: font.small, paddingHorizontal: space.lg, paddingVertical: space.sm }} accessibilityRole="header">
+            정렬
+          </Text>
           {SORT_OPTIONS.map((o) => (
             <Pressable
               key={o.value}
@@ -304,6 +356,9 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
                 onPick(o.value);
                 onClose();
               }}
+              accessibilityRole="radio"
+              accessibilityLabel={o.label}
+              accessibilityState={{ checked: o.value === value }}
               style={({ pressed }) => [styles.sheetItem, { borderTopColor: t.line, backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}
             >
               <Text style={{ color: o.value === value ? t.accent : t.ink, fontSize: font.body, fontWeight: o.value === value ? "700" : "400" }}>{o.label}</Text>
@@ -311,7 +366,7 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
             </Pressable>
           ))}
         </View>
-      </Pressable>
+      </View>
     </Modal>
   );
 }
@@ -324,13 +379,17 @@ const styles = StyleSheet.create({
   kpis: { flexDirection: "row", flexWrap: "wrap", marginTop: space.xs },
   kpi: { width: "50%", paddingVertical: space.xs, paddingRight: space.sm, gap: space.xxs },
   split: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: space.s, paddingTop: space.s, gap: space.xxs },
-  splitRow: { flexDirection: "row", alignItems: "center" },
+  splitRows: { gap: space.xxs },
+  // 100% 에서는 예전과 같은 열(이름 34 · 평가금액 · 손익 118 · 수익률 62). 칸 사이 여백은 글자가 칸을 채울 때만 보이는 왼쪽 안쪽 여백으로
+  splitRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center" },
+  splitPl: { flexDirection: "row", marginLeft: "auto" },
+  splitGap: { paddingLeft: space.xs },
   splitNum: { fontSize: font.small, fontVariant: ["tabular-nums"], textAlign: "right" },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
   empty: { margin: space.lg, padding: space.lg, gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   backdrop: { flex: 1, justifyContent: "flex-end" },
   sheet: { borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: space.xl },
-  sheetItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.lg, borderTopWidth: StyleSheet.hairlineWidth },
+  sheetItem: { minHeight: touch.min, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.lg, borderTopWidth: StyleSheet.hairlineWidth },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)

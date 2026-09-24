@@ -11,7 +11,7 @@ import { Badge, Button, Card, ChangeText, ErrorView, Muted, Row, SectionTitle, S
 import { estimateText } from "@/lib/briefingRun";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL } from "@/lib/format";
 import { parseBriefingId, viewState } from "@/lib/freshness";
-import { font, space, useTheme } from "@/theme";
+import { font, slopFor, space, touch, useTheme } from "@/theme";
 
 /** 브리핑 상세: 요약/상세 토글, 당시 시세 스냅샷, 같은 종목 지난 브리핑 날짜 목록 */
 export default function BriefingDetailScreen() {
@@ -38,7 +38,7 @@ export default function BriefingDetailScreen() {
     <Screen disclaimer top={<StaleBanner query={b} />}>
       <Stack.Screen options={{ title: `${d.name ?? d.code} · ${SESSION_LABEL[d.session]}` }} />
       <View style={{ gap: space.xxs, paddingHorizontal: space.lg, paddingTop: space.md }}>
-        <Pressable onPress={() => router.push(`/stocks/${d.code}`)} accessibilityRole="link">
+        <Pressable onPress={() => router.push(`/stocks/${d.code}`)} accessibilityRole="link" accessibilityLabel={`${d.name ?? d.code} 종목 화면으로`} hitSlop={slopFor(font.title * 1.35)}>
           <Text style={{ color: t.ink, fontSize: font.title, fontWeight: "700" }}>{d.name ?? d.code}</Text>
         </Pressable>
         <Muted>
@@ -131,7 +131,12 @@ export default function BriefingDetailScreen() {
             {history.data
               .filter((h) => h.id !== d.id)
               .map((h) => (
-                <Pressable key={h.id} onPress={() => router.replace(`/briefings/${h.id}`)} accessibilityRole="link" style={({ pressed }) => [styles.historyRow, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.line }]}>
+                <Pressable
+                  key={h.id}
+                  onPress={() => router.replace(`/briefings/${h.id}`)}
+                  accessibilityRole="link"
+                  accessibilityLabel={`${formatDateKo(h.date)} ${SESSION_LABEL[h.session]} 브리핑, ${h.status === "failed" ? "생성 실패" : h.summary.split("\n")[0]}`}
+                  style={({ pressed }) => [styles.historyRow, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.line }]}>
                   <Text style={{ color: t.ink, fontSize: font.small }}>
                     {formatDateKo(h.date)} {SESSION_LABEL[h.session]}
                   </Text>
@@ -148,7 +153,7 @@ export default function BriefingDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  historyRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: StyleSheet.hairlineWidth },
+  historyRow: { minHeight: touch.min, flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: StyleSheet.hairlineWidth },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)

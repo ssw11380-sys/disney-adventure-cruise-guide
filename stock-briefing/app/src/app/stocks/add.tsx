@@ -10,7 +10,7 @@ import { LineHead, LineMark, StockLine } from "@/components/StockLine";
 import { Button, Card, Muted } from "@/components/ui";
 import { formatPct, formatQuote, isUsMarket } from "@/lib/format";
 import { useRecentSearches, type RecentStock } from "@/lib/recentSearch";
-import { changeColor, font, radius, space, useTheme } from "@/theme";
+import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
 
 /**
  * 종목 검색: 결과를 누르면 바로 상세·차트로, 오른쪽 "등록"으로 수량/평단(선택)을 넣어 등록 (3-18).
@@ -86,12 +86,13 @@ export default function AddStockScreen() {
           placeholderTextColor={t.muted}
           autoFocus
           autoCorrect={false}
+          accessibilityLabel="종목 검색"
           style={[styles.input, { color: t.ink }]}
           returnKeyType="search"
         />
         {q ? (
-          <Pressable onPress={() => setQ("")} accessibilityLabel="지우기">
-            <Ionicons name="close-circle" size={18} color={t.muted} />
+          <Pressable onPress={() => setQ("")} accessibilityRole="button" accessibilityLabel="검색어 지우기" hitSlop={slopFor(ICON, space.xs)}>
+            <Ionicons name="close-circle" size={ICON} color={t.muted} />
           </Pressable>
         ) : null}
       </View>
@@ -105,7 +106,7 @@ export default function AddStockScreen() {
                 {selected.code} · {selected.market}
               </Muted>
             </View>
-            <Pressable onPress={() => setSelected(null)} accessibilityLabel="선택 취소">
+            <Pressable onPress={() => setSelected(null)} accessibilityRole="button" accessibilityLabel="선택 취소" hitSlop={slopFor(ICON, space.xs)}>
               <Ionicons name="close" size={22} color={t.muted} />
             </Pressable>
           </View>
@@ -114,6 +115,7 @@ export default function AddStockScreen() {
             <TextInput
               value={quantity}
               onChangeText={setQuantity}
+              accessibilityLabel="보유 수량"
               placeholder="보유 수량 (주)"
               placeholderTextColor={t.muted}
               keyboardType="numeric"
@@ -122,13 +124,14 @@ export default function AddStockScreen() {
             <TextInput
               value={avgPrice}
               onChangeText={setAvgPrice}
+              accessibilityLabel="평균 단가"
               placeholder={isUsMarket(selected.market) ? "평균 단가 ($)" : "평균 단가 (원)"}
               placeholderTextColor={t.muted}
               keyboardType="numeric"
               style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]}
             />
           </View>
-          <Button title="등록" onPress={submit} loading={register.isPending} />
+          <Button title="등록" accessibilityLabel={`${selected.name} 등록`} onPress={submit} loading={register.isPending} />
         </Card>
       ) : q.trim().length === 0 ? (
         recent.items.length ? (
@@ -140,7 +143,7 @@ export default function AddStockScreen() {
               <>
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingBottom: space.xs, paddingHorizontal: space.lg }}>
                   <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>최근 검색</Text>
-                  <Pressable onPress={recent.clear} hitSlop={8} accessibilityRole="button" accessibilityLabel="최근 검색 지우기">
+                  <Pressable onPress={recent.clear} hitSlop={slopFor(font.small * 1.35, space.sm)} accessibilityRole="button" accessibilityLabel="최근 검색 지우기">
                     <Muted>지우기</Muted>
                   </Pressable>
                 </View>
@@ -196,7 +199,7 @@ function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { i
         registered ? (
           <LineMark label="등록됨" color={t.accent} />
         ) : (
-          <Pressable onPress={onRegister} hitSlop={8} accessibilityRole="button" accessibilityLabel={`${item.name} 등록`} style={[styles.addBtn, { borderColor: t.line }]}>
+          <Pressable onPress={onRegister} hitSlop={slopFor(ADD_BTN_H, space.xs)} accessibilityRole="button" accessibilityLabel={`${item.name} 등록`} style={[styles.addBtn, { borderColor: t.line }]}>
             <Ionicons name="add" size={font.body} color={t.ink} />
             <Text style={{ color: t.ink, fontSize: font.tiny, fontWeight: "600" }}>등록</Text>
           </Pressable>
@@ -213,8 +216,12 @@ function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { i
   );
 }
 
+/** 검색칸 아이콘(18)·줄 안 등록 버튼(28) — hitSlop 으로 44 (3-22) */
+const ICON = 18;
+const ADD_BTN_H = 28;
+
 const styles = StyleSheet.create({
-  addBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
+  addBtn: { minHeight: ADD_BTN_H, flexDirection: "row", alignItems: "center", gap: space.xxs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
   search: { flexDirection: "row", alignItems: "center", gap: space.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.md },
   input: { flex: 1, paddingVertical: space.md, fontSize: font.body },
   field: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },

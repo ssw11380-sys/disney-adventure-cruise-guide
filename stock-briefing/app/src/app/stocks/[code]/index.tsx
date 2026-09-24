@@ -17,7 +17,8 @@ import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, f
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
-import { changeColor, font, space, useTheme } from "@/theme";
+import { changeColor, font, slopFor, space, touch, useTheme } from "@/theme";
+import { sentence, speakMove, speakRate } from "@/lib/a11y";
 
 type Tab = AnalysisKind | "news";
 const TABS: { value: Tab; label: string }[] = [
@@ -100,13 +101,13 @@ export default function StockDetailScreen() {
           title: s.name,
           headerRight: () =>
             unregistered ? (
-              <Pressable onPress={addWatch} disabled={adding} accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={10} style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginRight: space.sm, paddingHorizontal: space.xs }}>
+              <Pressable onPress={addWatch} disabled={adding} accessibilityRole="button" accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={slopFor(font.small * 1.35, space.xs)} style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginRight: space.sm, paddingHorizontal: space.xs }}>
                 <Ionicons name="star-outline" size={20} color={t.gold} />
                 <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{adding ? "추가 중" : "관심 추가"}</Text>
               </Pressable>
             ) : (
-              <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityLabel="보유 정보 수정" hitSlop={10}>
-                <Ionicons name="create-outline" size={21} color={t.ink} />
+              <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityRole="button" accessibilityLabel="보유 정보 수정" hitSlop={slopFor(HEADER_ICON, space.sm)}>
+                <Ionicons name="create-outline" size={HEADER_ICON} color={t.ink} />
               </Pressable>
             ),
         }}
@@ -121,6 +122,17 @@ export default function StockDetailScreen() {
         </Text>
         {q ? (
           <>
+            {/* 화면 읽기: 가격·등락을 한 문장으로 (3-22) */}
+            <View
+              accessible
+              accessibilityLabel={sentence([
+                `현재가 ${quote(q.price)}${displayCur === "KRW" ? "원" : "달러"}`,
+                speakMove(`${arrow(q.change)}${displayCur === "KRW" ? "원" : "달러"}`, Math.sign(q.change)),
+                speakRate(q.changeRate),
+                q.live ? "실시간" : null,
+              ])}
+              style={{ gap: space.xxs }}
+            >
             <View style={styles.priceRow}>
               <FlashPrice value={q.price} text={quote(q.price)} style={[styles.bigPrice, { color: up }]} />
               <Text style={{ color: t.muted, fontSize: font.body }}>{displayCur === "KRW" ? "원" : "USD"}</Text>
@@ -134,6 +146,7 @@ export default function StockDetailScreen() {
                   <Text style={{ color: t.live, fontSize: font.tiny, fontWeight: "700" }}>실시간</Text>
                 </View>
               ) : null}
+            </View>
             </View>
             {cur === "USD" ? (
               <Text style={styles.sub(t.muted)}>
@@ -298,7 +311,7 @@ function NewsTab({ code, us }: { code: string; us: boolean }) {
         {d.newsError ? <Text style={{ color: t.danger, fontSize: font.small }}>{d.newsError}</Text> : null}
         {d.news.length === 0 && !d.newsError ? <Muted>최근 뉴스 없음</Muted> : null}
         {d.news.map((item, i) => (
-          <Pressable key={`${item.url}-${i}`} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
+          <Pressable key={`${item.url}-${i}`} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" accessibilityLabel={`뉴스: ${item.title}, ${item.source ?? ""} ${relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: 20 }} numberOfLines={2}>{item.title}</Text>
             <Muted>
               {item.source ?? ""} · {relativeTime(item.publishedAt) || formatDateKo(item.publishedAt)}
@@ -311,7 +324,7 @@ function NewsTab({ code, us }: { code: string; us: boolean }) {
         {d.disclosuresError ? <Muted>{d.disclosuresError}</Muted> : null}
         {d.disclosures.length === 0 && !d.disclosuresError ? <Muted>최근 30일 공시 없음</Muted> : null}
         {d.disclosures.map((item, i) => (
-          <Pressable key={item.receiptNo} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
+          <Pressable key={item.receiptNo} onPress={() => void Linking.openURL(item.url)} accessibilityRole="link" accessibilityLabel={`공시: ${item.title}, ${item.filer}, ${formatDateKo(item.filedAt)}`} style={[styles.newsItem, { borderTopColor: t.line, borderTopWidth: i === 0 ? 0 : StyleSheet.hairlineWidth }]}>
             <Text style={{ color: t.ink, fontSize: font.body }}>{item.title}</Text>
             <Muted>
               {item.filer} · {formatDateKo(item.filedAt)}
@@ -330,13 +343,16 @@ const styles = {
     bigPrice: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
     change: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
     panel: { paddingHorizontal: space.lg, paddingVertical: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
-    newsItem: { paddingVertical: space.sm, gap: space.xxs },
+    newsItem: { minHeight: touch.min, paddingVertical: space.sm, gap: space.xxs },
     rangeTrack: { height: 4, borderRadius: 2, justifyContent: "center" },
     rangeKnob: { position: "absolute", width: 8, height: 12, borderRadius: 1, marginLeft: -space.xs, top: -4 },
   }),
   sub: (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] }),
   panelTitle: (color: string) => ({ color, fontSize: font.body, fontWeight: "700" as const }),
 };
+
+/** 머리 오른쪽 아이콘 크기 */
+const HEADER_ICON = 21;
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
 export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

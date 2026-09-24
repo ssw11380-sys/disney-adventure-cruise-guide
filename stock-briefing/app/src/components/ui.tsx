@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
-import { changeColor, font, radius, space, useTheme } from "@/theme";
+import { changeColor, font, radius, slopFor, space, touch, useTheme } from "@/theme";
 
 /**
  * 공용 UI 조각 (증권사 MTS 톤). 그림자·둥근 카드 대신 평평한 패널과 얇은 구분선,
@@ -21,7 +21,9 @@ export function SectionTitle({ children, right, style }: { children: React.React
   const t = useTheme();
   return (
     <View style={[styles.sectionRow, style]}>
-      <Text style={[styles.sectionTitle, { color: t.ink }]}>{children}</Text>
+      <Text style={[styles.sectionTitle, { color: t.ink }]} accessibilityRole="header">
+        {children}
+      </Text>
       {right}
     </View>
   );
@@ -45,6 +47,7 @@ export function Button({
   icon,
   style,
   compact,
+  accessibilityLabel,
 }: {
   title: string;
   onPress: () => void;
@@ -54,6 +57,8 @@ export function Button({
   icon?: keyof typeof Ionicons.glyphMap;
   style?: StyleProp<ViewStyle>;
   compact?: boolean;
+  /** 화면 읽기 이름 (기본은 title). 같은 말의 버튼이 여럿이면 무엇의 버튼인지 붙인다 */
+  accessibilityLabel?: string;
 }) {
   const t = useTheme();
   const bg = variant === "primary" ? t.accent : variant === "danger" ? t.danger : variant === "ghost" ? "transparent" : t.surfaceAlt;
@@ -65,6 +70,10 @@ export function Button({
       onPress={onPress}
       disabled={off}
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityState={{ disabled: !!off, busy: !!loading }}
+      // 작은 버튼(32)은 위아래로 넓혀 44 로 (3-22)
+      hitSlop={compact ? slopFor(COMPACT_H) : undefined}
       style={({ pressed }) => [styles.button, compact && styles.buttonCompact, { backgroundColor: bg, borderColor: border, opacity: off ? 0.45 : pressed ? 0.8 : 1 }, style]}
     >
       {loading ? <ActivityIndicator color={fg} size="small" /> : icon ? <Ionicons name={icon} size={compact ? 14 : 16} color={fg} /> : null}
@@ -73,14 +82,16 @@ export function Button({
   );
 }
 
-/** 작은 선택 칩 (사각) */
-export function Chip({ label, active, onPress, icon }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap }) {
+/** 작은 선택 칩 (사각). 보이는 높이 32 + 위아래 hitSlop 6 = 44 (3-22) */
+export function Chip({ label, active, onPress, icon, accessibilityLabel }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap; accessibilityLabel?: string }) {
   const t = useTheme();
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ selected: !!active }}
+      hitSlop={slopFor(CHIP_H, space.xxs)}
       style={({ pressed }) => [styles.chip, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 }]}
     >
       {icon ? <Ionicons name={icon} size={12} color={active ? t.accent : t.muted} /> : null}
@@ -103,11 +114,11 @@ export function Segmented<T extends string>({
 }) {
   const t = useTheme();
   return (
-    <View style={[styles.segment, { borderBottomColor: t.line, backgroundColor: t.surface }, style]}>
+    <View style={[styles.segment, { borderBottomColor: t.line, backgroundColor: t.surface }, style]} accessibilityRole="tablist">
       {options.map((o) => {
         const active = o.value === value;
         return (
-          <Pressable key={o.value} onPress={() => onChange(o.value)} accessibilityRole="tab" accessibilityState={{ selected: active }} style={[styles.segmentItem, { borderBottomColor: active ? t.ink : "transparent" }]}>
+          <Pressable key={o.value} onPress={() => onChange(o.value)} accessibilityRole="tab" accessibilityLabel={o.label} accessibilityState={{ selected: active }} style={[styles.segmentItem, { borderBottomColor: active ? t.ink : "transparent" }]}>
             <Text style={{ color: active ? t.ink : t.muted, fontSize: font.body, fontWeight: active ? "700" : "500" }}>{o.label}</Text>
           </Pressable>
         );
@@ -150,7 +161,11 @@ export function RateBox({ value, text, style }: { value: number | null | undefin
 }
 
 /** 켜고 끄기 스위치 — 앱의 모든 스위치는 이것만 쓴다 (모양 하나, 3-20) */
-export function Toggle({ value, onValueChange, disabled, accessibilityLabel }: { value: boolean; onValueChange: (v: boolean) => void; disabled?: boolean; accessibilityLabel?: string }) {
+/**
+ * accessibilityLabel 은 필수: 화면 읽기가 "켜짐/꺼짐" 앞에 무엇의 스위치인지 읽는다 (3-22).
+ * 누르는 크기는 안드로이드 기본 스위치 크기를 따른다 (Switch 에는 hitSlop 이 먹지 않음) — 3-26 실기기에서 확인
+ */
+export function Toggle({ value, onValueChange, disabled, accessibilityLabel }: { value: boolean; onValueChange: (v: boolean) => void; disabled?: boolean; accessibilityLabel: string }) {
   const t = useTheme();
   return (
     // eslint-disable-next-line no-restricted-syntax -- 스위치를 감싸는 유일한 곳
@@ -236,6 +251,10 @@ export function TableHead({ children, style }: { children: React.ReactNode; styl
   return <View style={[styles.tableHead, { backgroundColor: t.surfaceAlt, borderColor: t.line }, style]}>{children}</View>;
 }
 
+/** 작은 버튼·칩의 보이는 높이 (hitSlop 으로 44 까지 넓힌다) */
+const COMPACT_H = 32;
+const CHIP_H = 32;
+
 const styles = StyleSheet.create({
   card: { borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: space.xxs },
@@ -245,16 +264,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: space.s,
-    height: 44,
+    minHeight: touch.min,
     paddingHorizontal: space.lg,
     borderRadius: radius.sm,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  buttonCompact: { height: 32, paddingHorizontal: space.md },
+  // 높이는 최소만 정해 큰 글씨에서 글자가 잘리지 않게 늘어난다
+  buttonCompact: { minHeight: COMPACT_H, paddingHorizontal: space.md },
   buttonText: { fontSize: font.body, fontWeight: "700" },
-  chip: { flexDirection: "row", alignItems: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
+  chip: { flexDirection: "row", alignItems: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, minHeight: CHIP_H },
   segment: { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },
-  segmentItem: { flex: 1, alignItems: "center", paddingVertical: space.md, borderBottomWidth: 2 },
+  segmentItem: { flex: 1, alignItems: "center", justifyContent: "center", minHeight: touch.min, paddingVertical: space.sm, borderBottomWidth: 2 },
   badge: { borderWidth: 1, borderRadius: 3, paddingHorizontal: space.xs, paddingVertical: space.xxs },
   rateBox: { minWidth: 64, alignItems: "flex-end", borderRadius: 3, paddingHorizontal: space.s, paddingVertical: space.xxs },
   center: { alignItems: "center", justifyContent: "center", padding: space.xl },

@@ -3,7 +3,7 @@ import React, { useCallback, useMemo } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useDiscoverTheme } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverStock, ThemeKind, ThemePeriod } from "@/api/types";
-import { DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
+import { DiscoverRow, useDiscoverRowH } from "@/components/discover/DiscoverRow";
 import { LineHead } from "@/components/StockLine";
 import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
@@ -16,6 +16,7 @@ import { changeColor, font, space, useTheme } from "@/theme";
 /** 테마 상세: 테마 전체 등락률·상승/보합/하락 요약 → 구성 종목(등락률순) */
 export default function ThemeDetailScreen() {
   const t = useTheme();
+  const rowH = useDiscoverRowH();
   const { id, market: m, name, kind: k, period: p, rate } = useLocalSearchParams<{ id: string; market?: string; name?: string; kind?: string; period?: string; rate?: string }>();
   const market: DiscoverMarket = m === "US" ? "US" : "KR";
   const kind: ThemeKind = k === "sector" ? "sector" : "theme";
@@ -97,7 +98,7 @@ export default function ThemeDetailScreen() {
       {q.isLoading ? (
         <View>
           {head}
-          <SkeletonRows height={DISCOVER_ROW_H} />
+          <SkeletonRows height={rowH} />
         </View>
       ) : q.isError && !q.data ? (
         <ErrorView error={q.error} onRetry={() => void q.refetch()} />
@@ -106,7 +107,7 @@ export default function ThemeDetailScreen() {
           data={items}
           keyExtractor={(it) => it.code}
           renderItem={renderItem}
-          getItemLayout={(_, index) => ({ length: DISCOVER_ROW_H, offset: DISCOVER_ROW_H * index, index })}
+          getItemLayout={(_, index) => ({ length: rowH, offset: rowH * index, index })}
           initialNumToRender={14}
           windowSize={9}
           removeClippedSubviews

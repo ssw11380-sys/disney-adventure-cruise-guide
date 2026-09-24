@@ -166,8 +166,8 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
             {ev.costBasisKrw ? `현재 ${Math.round(ev.costBasisKrw).toLocaleString("ko-KR")}원 (${ev.krwCostSource === "exact" ? "토스 값" : "체결 환율 추정"})` : ""}
           </Muted>
           <View style={{ flexDirection: "row", gap: space.sm }}>
-            <TextInput value={krwCost} onChangeText={setKrwCost} placeholder="예: 24557187" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
-            <Button title="저장" variant="secondary" onPress={() => void saveKrwCost()} loading={savingKrw} />
+            <TextInput value={krwCost} onChangeText={setKrwCost} accessibilityLabel="원화 매입금액" placeholder="예: 24557187" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
+            <Button title="저장" accessibilityLabel="원화 매입금액 저장" variant="secondary" onPress={() => void saveKrwCost()} loading={savingKrw} />
           </View>
         </Card>
       ) : null}
@@ -184,8 +184,8 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
           onChange={setSide}
         />
         <View style={{ flexDirection: "row", gap: space.sm }}>
-          <TextInput value={tradeQty} onChangeText={setTradeQty} placeholder="수량 (주)" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
-          <TextInput value={tradePrice} onChangeText={setTradePrice} placeholder={cur === "USD" ? "체결가 ($)" : "체결가 (원)"} placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
+          <TextInput value={tradeQty} onChangeText={setTradeQty} accessibilityLabel={`${side === "buy" ? "매수" : "매도"} 수량`} placeholder="수량 (주)" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
+          <TextInput value={tradePrice} onChangeText={setTradePrice} accessibilityLabel={`${side === "buy" ? "매수" : "매도"} 체결가`} placeholder={cur === "USD" ? "체결가 ($)" : "체결가 (원)"} placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
         </View>
         {preview && "error" in preview ? <Text style={{ color: t.danger, fontSize: font.small }}>{preview.error}</Text> : null}
         {preview && !("error" in preview) ? (

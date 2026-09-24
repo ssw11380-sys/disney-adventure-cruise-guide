@@ -1,6 +1,7 @@
 import React from "react";
 import type { RegisteredWithQuote } from "@/api/types";
-import { formatArrowDisplay, formatPct, formatPrice, formatQuoteDisplay, isUsMarket } from "@/lib/format";
+import { stockRowLabel } from "@/lib/a11y";
+import { formatArrowDisplay, formatMoney, formatPct, formatPrice, formatQuoteDisplay, isUsMarket } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 import { changeColor, useTheme } from "@/theme";
 import { LINE_COL, LineMark, LineValue, StockLine, type LinePrice } from "./StockLine";
@@ -38,6 +39,24 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
     showKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity
       ? formatPrice(ev.costBasis / stock.quantity, "KRW")
       : formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw);
+  // 화면 읽기: 줄 전체를 한 문장으로 (3-22). 금액은 단위를 붙여 읽는다
+  const label = stockRowLabel({
+    name: stock.name,
+    us,
+    holding: ev
+      ? {
+          quantity: formatQty(stock.quantity),
+          avg: showKrw && cur === "USD" && ev.currency === "KRW" && stock.quantity ? formatPrice(ev.costBasis / stock.quantity, "KRW") : formatMoney(stock.avgPrice, cur, fx, showKrw),
+          profit: formatPrice(ev.profit, ev.currency),
+          profitSign: Math.sign(ev.profit),
+          profitRate: ev.profitRate,
+        }
+      : null,
+    price: q ? { text: formatMoney(q.price, cur, fx, showKrw), changeRate: q.changeRate, live: q.live } : null,
+    missing: stock.quoteError ? "시세 없음" : undefined,
+    move: q ? { text: formatMoney(q.change, cur, fx, showKrw), sign: Math.sign(q.change) } : null,
+    volume: formatVol(q?.volume),
+  });
   const price: LinePrice | null = q
     ? { value: q.price, text: formatQuoteDisplay(q.price, cur, fx, showKrw), color: c, rate: formatPct(q.changeRate), rateColor: c, live: q.live }
     : null;
@@ -57,9 +76,15 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
       }
       onPress={() => onPress(stock)}
       onLongPress={onLongPress ? () => onLongPress(stock) : undefined}
+      accessibilityLabel={label}
+      accessibilityActions={onLongPress ? LONG_PRESS_ACTION : undefined}
+      onAccessibilityAction={onLongPress ? (name) => name === "longpress" && onLongPress(stock) : undefined}
     />
   );
 }
+
+/** 화면 읽기의 길게 누르기 안내를 "수정·삭제"로 (TalkBack 이 "두 번 탭하고 길게 눌러 수정·삭제"라고 읽는다) */
+const LONG_PRESS_ACTION = [{ name: "longpress", label: "수정·삭제" }];
 
 function formatQty(n: number | null): string {
   if (n === null) return "-";

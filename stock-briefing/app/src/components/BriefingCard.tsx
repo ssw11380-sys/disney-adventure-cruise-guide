@@ -4,7 +4,8 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { Briefing } from "@/api/types";
 import { formatDateKo, formatPct, SESSION_LABEL } from "@/lib/format";
-import { font, space, useTheme } from "@/theme";
+import { font, slopFor, space, useTheme } from "@/theme";
+import { sentence, speakRate } from "@/lib/a11y";
 import { MarkdownView } from "./MarkdownView";
 import { Badge, Card, ChangeText, Muted } from "./ui";
 
@@ -18,7 +19,19 @@ export function BriefingCard({ briefing, mode, showName = true, rate }: { briefi
   const lines = briefing.summary.split("\n").filter(Boolean);
   return (
     <Card>
-      <Pressable onPress={() => router.push(`/briefings/${briefing.id}`)} accessibilityRole="link" style={styles.header}>
+      <Pressable
+        onPress={() => router.push(`/briefings/${briefing.id}`)}
+        accessibilityRole="link"
+        accessibilityLabel={sentence([
+          showName ? (briefing.name ?? briefing.code) : null,
+          `${formatDateKo(briefing.date)} ${SESSION_LABEL[briefing.session]} 브리핑`,
+          rate !== undefined ? speakRate(rate) : null,
+          failed ? "생성 실패" : briefing.missing.length ? "일부 데이터 없음" : null,
+        ])}
+        // 100% 배치는 그대로, 누르는 영역만 44 로 (이름이 없으면 날짜 한 줄 약 17)
+        hitSlop={showName ? NAMED_HEAD_SLOP : DATE_HEAD_SLOP}
+        style={styles.header}
+      >
         <View style={{ flex: 1, gap: space.xxs }}>
           {showName ? (
             <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>
@@ -56,6 +69,10 @@ export function BriefingCard({ briefing, mode, showName = true, rate }: { briefi
     </Card>
   );
 }
+
+/** 카드 머리의 보이는 높이: 이름+날짜 두 줄 약 40, 날짜만 약 17 */
+const NAMED_HEAD_SLOP = slopFor(40);
+const DATE_HEAD_SLOP = slopFor(17);
 
 const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: space.sm },
