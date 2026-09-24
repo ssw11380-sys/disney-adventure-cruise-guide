@@ -342,6 +342,11 @@ export function normalizeSummary(text: string): string {
     .join("\n");
 }
 
+function kstMinute(iso: string): string {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? iso.slice(0, 16) : new Date(t + 9 * 3_600_000).toISOString().slice(0, 16);
+}
+
 /** 프롬프트에 넣을 때 토큰을 아끼기 위해 불필요한 필드를 줄인다 */
 export function snapshotForPrompt(s: BriefingSnapshot): Record<string, unknown> {
   return {
@@ -350,7 +355,8 @@ export function snapshotForPrompt(s: BriefingSnapshot): Record<string, unknown> 
     holding: s.holding,
     technical: s.technical,
     recentCandles: s.recentCandles,
-    news: s.news?.map((n) => ({ title: n.title, source: n.source, publishedAt: n.publishedAt.slice(0, 16), summary: n.summary })),
+    // 뉴스 시각은 한국 시간으로 맞춰 넣는다 (네이버는 +09:00, 구글은 Z 로 와서 섞이면 모델이 헷갈린다)
+    news: s.news?.map((n) => ({ title: n.title, source: n.source, publishedAt: kstMinute(n.publishedAt), summary: n.summary })),
     disclosures: s.disclosures?.map((d) => ({ title: d.title, filedAt: d.filedAt, filer: d.filer })),
     investorFlow: s.investorFlow,
   };

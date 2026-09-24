@@ -12,6 +12,8 @@ export interface NewsProvider {
   search(query: string, limit: number): Promise<NewsItem[]>;
   /** 종목 코드로 직접 조회할 수 있는 소스(네이버 종목 뉴스). 있으면 체인이 이름 검색보다 먼저 쓴다 */
   forStock?(stock: { code: string; name: string; market?: string }, limit: number): Promise<NewsItem[]>;
+  /** 따옴표·OR·when:30d 같은 검색 문법을 알아듣는 소스(구글 뉴스). 종목 뉴스를 이름 검색으로 채울 때 이 소스를 쓴다 */
+  readonly advancedQuery?: boolean;
 }
 
 /** HTML 태그 제거 + 흔한 엔티티 복원 */

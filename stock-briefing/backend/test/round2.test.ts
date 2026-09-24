@@ -141,15 +141,29 @@ describe("NaverStockNewsProvider + chain", () => {
     expect(us).toHaveLength(1);
   });
 
-  it("체인: 종목 뉴스가 하나라도 있으면 그것만, 전혀 없을 때만 이름 검색", async () => {
+  it("체인: 종목 뉴스에서 관련 기사만 남기고, 절반도 안 차면 최근 30일 이름 검색으로 채운다 (3-12)", async () => {
     const p = new NaverStockNewsProvider(fetchFn, { resolveReuters: async () => null });
     const fallback = new FakeNewsProvider();
-    const chain = new NewsProviderChain([p, fallback]);
+    const chain = new NewsProviderChain([p, fallback], undefined, () => Date.parse("2026-09-24T00:00:00+09:00"));
     const items = await chain.forStock({ code: "035420", name: "NAVER" }, 8);
-    expect(items.length).toBe(2); // 네이버 종목 뉴스 2개만, 이름 검색 안 함
-    expect(fallback.queries).toEqual([]);
-    const none = await chain.forStock({ code: "ZZZZ", name: "없음" }, 8); // 네이버 실패 → 이름 검색
+    // "대기업 33% 흑자행진"(네이버 언급 없음)은 빠지고 "네이버서 …" 1건 + 이름 검색 3건
+    expect(items.map((x) => x.title)).toContain("네이버서 日 맛집 예약 클릭 482%↑");
+    expect(items.map((x) => x.title)).not.toContain("대기업 33% 5년 이상 흑자행진");
+    expect(fallback.queries).toEqual(["NAVER"]); // 검색 문법을 모르는 소스에는 이름만
+    const none = await chain.forStock({ code: "ZZZZ", name: "가나다라" }, 8); // 네이버 실패 → 이름 검색
     expect(none.length).toBe(3);
-    expect(fallback.queries).toEqual(["없음"]);
+    expect(fallback.queries.at(-1)).toBe("가나다라");
+  });
+
+  it("체인: 검색 문법을 아는 소스(구글)가 있으면 그걸로 최근 30일 질의, 종목별 10분 캐시 (리뷰 M3)", async () => {
+    const google = Object.assign(new FakeNewsProvider(), { advancedQuery: true });
+    const naverSearch = new FakeNewsProvider();
+    const chain = new NewsProviderChain([naverSearch, google], undefined, () => Date.parse("2026-09-24T00:00:00+09:00"));
+    await chain.forStock({ code: "RGTI", name: "리게티 컴퓨팅" }, 8);
+    await chain.forStock({ code: "RGTI", name: "리게티 컴퓨팅" }, 15); // 브리핑(8건) 뒤 뉴스 탭(15건)도 같은 캐시
+    expect(google.queries).toEqual(['"리게티" when:30d']);
+    await chain.forStock({ code: "RGTI", name: "RGTI" }, 8); // 이름이 다르면 질의가 달라 캐시도 따로
+    expect(google.queries).toHaveLength(2);
+    expect(naverSearch.queries).toEqual([]);
   });
 });
