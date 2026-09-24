@@ -10,7 +10,7 @@ import { Screen } from "@/components/Screen";
 import { COL, StockRow } from "@/components/StockRow";
 import { Button, ErrorView, TableHead } from "@/components/ui";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
-import { openMaxAge, viewState } from "@/lib/freshness";
+import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
@@ -112,7 +112,7 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
-          status={<LiveStatus query={stocks} open={live.open} closedLabel={live.label} maxAgeMs={openMaxAge} suffix={`보유 ${summary.held}${summary.watch ? ` · 관심 ${summary.watch}` : ""}`} />}
+          status={<LiveStatus query={stocks} open={live.open} closedLabel={live.label} maxAgeMs={openMaxAge} suffix={holdingsSuffix({ held: summary.held, watch: summary.watch, stale: staleQuoteCount(stocks.data) })} />}
         />
       ) : null}
     </View>
@@ -218,7 +218,7 @@ function AccountPanel({
   return (
     <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
       <View style={styles.panelTop}>
-        <Text style={{ color: t.muted, fontSize: font.small }}>
+        <Text style={{ color: t.muted, fontSize: font.small, flexShrink: 0 }}>
           총 평가금액{total ? "" : " (원화 종목)"}
           {afterCost ? " · 비용 차감" : ""}
         </Text>
@@ -302,7 +302,8 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
 
 const styles = StyleSheet.create({
   panel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, gap: 4 },
-  panelTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  // 상태 줄이 길면(시세 지연 N 등) 제목을 줄이지 않고 다음 줄로 내린다
+  panelTop: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", columnGap: space.sm, rowGap: 2 },
   total: { fontSize: 26, fontWeight: "800", letterSpacing: -0.5, fontVariant: ["tabular-nums"] },
   kpis: { flexDirection: "row", flexWrap: "wrap", marginTop: 4 },
   kpi: { width: "50%", paddingVertical: 4, paddingRight: space.sm, gap: 1 },

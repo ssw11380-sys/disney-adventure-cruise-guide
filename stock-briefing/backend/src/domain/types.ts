@@ -68,6 +68,13 @@ export interface Quote {
   dividendYieldPct?: number | null;
   /** 업종 (한글) */
   industry?: string | null;
+  /**
+   * 시세를 새로 받지 못해 마지막으로 받은 값을 그대로 보여 주는 중 (출처가 모두 실패).
+   * asOf 는 그 값을 받은 원래 시각 그대로. 앱은 회색 "시세 지연"으로 표시한다
+   */
+  stale?: boolean;
+  /** 전일 종가(prevClose) 출처: 거래소 기준가(base) 또는 기준가를 못 받아 대신 쓴 일봉 종가(candle, NXT 포함 통합 종가) */
+  prevCloseBasis?: "base" | "candle";
 }
 
 export interface AfterMarketQuote {

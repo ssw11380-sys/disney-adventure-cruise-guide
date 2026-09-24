@@ -45,9 +45,9 @@ export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix }: { que
   const warn = s.tone === "offline" || (s.tone === "delayed" && conn.stale);
   const text = `${s.text}${conn.asOf ? ` · ${clockLabel(conn.asOf, now)}` : ""} · ${suffix}`;
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }} accessible accessibilityLabel={text}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flexShrink: 1 }} accessible accessibilityLabel={text}>
       <View style={[styles.dot, { backgroundColor: s.tone === "live" ? t.up : warn ? t.warn : t.muted }]} />
-      <Text style={{ color: warn ? t.warn : t.muted, fontSize: font.tiny }}>{text}</Text>
+      <Text style={{ color: warn ? t.warn : t.muted, fontSize: font.tiny, flexShrink: 1 }}>{text}</Text>
     </View>
   );
 }

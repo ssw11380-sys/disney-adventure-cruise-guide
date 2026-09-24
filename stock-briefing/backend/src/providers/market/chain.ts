@@ -1,5 +1,6 @@
 import type { CandlePeriod, CandleSeries, ListedStock, Quote } from "../../domain/types.js";
-import { ProviderError } from "../../lib/errors.js";
+import { mapLimit } from "../../lib/concurrency.js";
+import { ProviderError, within } from "../../lib/errors.js";
 import type { QuoteProvider, StockSearchProvider } from "./types.js";
 
 /** 검색 소스 폴백 체인: 앞 소스가 실패하거나 결과가 없으면 다음 소스로 */
@@ -33,6 +34,9 @@ export class StockSearchChain implements StockSearchProvider {
 export interface ChainLogger {
   warn(obj: Record<string, unknown>, msg: string): void;
 }
+
+/** 일괄 현재가에서 소스 하나를 기다리는 최대 시간 (넘으면 그 소스는 실패로 보고 다음 소스로) */
+const PROVIDER_WAIT_MS = 8_000;
 
 /**
  * 여러 QuoteProvider 를 순서대로 시도하는 폴백 체인.
@@ -68,6 +72,49 @@ export class QuoteProviderChain implements QuoteProvider {
 
   getQuote(code: string): Promise<Quote> {
     return this.attempt(`현재가(${code})`, code, (p) => p.getQuote(code));
+  }
+
+  /**
+   * 여러 종목 현재가: 소스마다 아직 못 받은 종목만 넘긴다. 일괄 조회(getQuotes)가 있는 소스는 한 번에,
+   * 없는 소스는 종목마다(동시 4개). 소스 하나가 오래 멈춰도 다음 소스로 넘어가게 소스당 시간 제한을 둔다.
+   */
+  async getQuotes(codes: string[]): Promise<Map<string, Quote | Error>> {
+    const out = new Map<string, Quote | Error>();
+    const tried = new Map<string, string[]>();
+    let remaining = [...new Set(codes)];
+    for (const p of this.providers) {
+      const mine = remaining.filter((c) => !p.supports || p.supports(c));
+      if (mine.length === 0) continue;
+      for (const c of mine) tried.set(c, [...(tried.get(c) ?? []), p.name]);
+      const timedOut = new ProviderError(p.name, `응답 없음 (${PROVIDER_WAIT_MS / 1000}초)`);
+      const run: Promise<Map<string, Quote | Error>> = p.getQuotes
+        ? p.getQuotes(mine)
+        : mapLimit(mine, 4, (c) => p.getQuote(c).then((q): Quote | Error => q, (e: unknown) => (e instanceof Error ? e : new Error(String(e))))).then(
+            (rs) => new Map(mine.map((c, i) => [c, rs[i]!])),
+          );
+      // 소스 전체 실패(403·네트워크 등)는 그 오류를, 시간 초과는 "응답 없음"을 종목마다 담는다
+      const settled = await within(run.catch((e: unknown) => (e instanceof Error ? e : new Error(String(e)))), PROVIDER_WAIT_MS, null);
+      const got: Map<string, Quote | Error> = settled instanceof Map ? settled : new Map(mine.map((c) => [c, settled ?? timedOut]));
+      const failed: string[] = [];
+      for (const c of mine) {
+        const r = got.get(c);
+        if (r && !(r instanceof Error)) out.set(c, r);
+        else {
+          failed.push(c);
+          out.set(c, r ?? new ProviderError(p.name, `${c} 시세 없음`));
+        }
+      }
+      if (failed.length)
+        this.log.warn({ provider: p.name, codes: failed.slice(0, 10), failed: failed.length, err: (() => { const e = got.get(failed[0]!); return e instanceof Error ? e.message : undefined; })() }, "현재가 일괄 조회 일부 실패, 다음 소스로");
+      remaining = remaining.filter((c) => !(out.get(c) && !(out.get(c) instanceof Error)));
+      if (remaining.length === 0) break;
+    }
+    for (const c of remaining) {
+      const last = out.get(c);
+      const names = tried.get(c) ?? [];
+      out.set(c, new ProviderError(this.name, names.length ? `현재가(${c}): 모든 소스 실패 (${names.join(", ")})` : `현재가(${c}): 지원하는 소스 없음`, last));
+    }
+    return out;
   }
 
   getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {

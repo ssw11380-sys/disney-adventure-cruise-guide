@@ -142,6 +142,7 @@ export default function StockDetailScreen() {
             ) : null}
             <Text style={styles.sub(t.muted)}>
               {q.priceBasis ?? q.source.toUpperCase()} · {formatDateKo(q.asOf, true)}
+              {q.stale ? " · 시세 지연" : ""}
             </Text>
           </>
         ) : (

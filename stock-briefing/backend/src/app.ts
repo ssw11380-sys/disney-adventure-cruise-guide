@@ -200,6 +200,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("settingsStore", settingsStore);
   app.decorate("priceStream", priceStream);
 
+  // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
+  app.addHook("onRequest", async (req) => {
+    (req as { startedAt?: bigint }).startedAt = process.hrtime.bigint();
+  });
+  app.addHook("onSend", async (req, reply, payload) => {
+    const started = (req as { startedAt?: bigint }).startedAt;
+    if (started !== undefined) reply.header("server-timing", `app;dur=${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)}`);
+    return payload;
+  });
+
   // 인터넷에 노출할 때의 최소 보호: API_TOKEN 이 설정되면 /api/* 는 Bearer 토큰이 있어야 한다. /health 는 열어 둔다.
   if (opts.config.API_TOKEN) {
     const token = opts.config.API_TOKEN;
@@ -275,6 +285,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
     appErrors: await appErrors.counts(7).catch(() => null),
+    quotes: stockService.quoteStatus(),
     disclaimer: DISCLAIMER,
   });
 

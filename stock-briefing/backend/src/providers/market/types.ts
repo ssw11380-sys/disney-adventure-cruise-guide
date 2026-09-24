@@ -10,6 +10,11 @@ export interface QuoteProvider {
   /** 이 소스가 해당 코드를 다룰 수 있는지 (예: KIS 는 한국 종목만). 없으면 전부 지원 */
   supports?(code: string): boolean;
   getQuote(code: string): Promise<Quote>;
+  /**
+   * 여러 종목 현재가를 한 번에 (있으면 체인이 먼저 쓴다). 종목마다 Quote 또는 실패 이유(Error).
+   * 전체가 실패하면 던져도 된다
+   */
+  getQuotes?(codes: string[]): Promise<Map<string, Quote | Error>>;
   getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries>;
 }
 

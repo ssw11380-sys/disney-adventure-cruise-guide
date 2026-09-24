@@ -2,10 +2,12 @@ import type { TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
-import { CODE_RE, normalizeCode } from "../lib/codes.js";
-import { ConflictError, NotFoundError, ProviderError } from "../lib/errors.js";
+import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
+import { mapLimit } from "../lib/concurrency.js";
+import { ConflictError, NotFoundError, ProviderError, within } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
+import { localDate } from "../providers/market/tossOpenApi.js";
 import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../providers/market/types.js";
 import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
 import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
@@ -23,6 +25,8 @@ export interface StockServiceDeps {
   quickPrices?: QuickPriceSource | null;
   /** PER/PBR/배당/52주·환율 보강 (토스 시세에는 없음) */
   fundamentals?: NaverFundamentals | null;
+  /** 공식 API 소스 (기준가 폴백 횟수를 /health 에 보이려고) */
+  tossOpenApi?: { baseFallbacks: number } | null;
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
@@ -41,6 +45,46 @@ export interface UpdateInput {
   memo?: string | null | undefined;
 }
 
+/** 캐시가 없는 종목이 있을 때(첫 실행) 새로 받기를 기다리는 최대 시간. 넘으면 있는 것만으로 답한다 */
+const COLD_WAIT_MS = 1_200;
+/** 실시간(토스 웹 일괄) 가격을 기다리는 최대 시간. 넘으면 직전에 받은 값(QUICK_MAX_AGE_MS 안)으로 */
+const QUICK_WAIT_MS = 150;
+/** 직전에 받은 일괄 가격을 이만큼까지는 쓴다 (앱은 3초마다 묻는다) */
+const QUICK_MAX_AGE_MS = 30_000;
+/** 새로 받기가 실패한 종목은 이만큼 쉬었다가 다시 (출처가 죽었을 때 3초 폴링마다 두드리지 않게) */
+const RETRY_AFTER_FAIL_MS = 20_000;
+/** 새로 받지 못한 채 이보다 오래된 값은 stale 로 본다. 이보다 오래된 캐시로 답해야 할 때는 새로 받기를 잠깐(COLD_WAIT_MS) 기다린다 */
+const STALE_AFTER_MS = 3 * 60_000;
+/** 실시간 체결가가 이 안에 들어왔을 때만 "지연 아님"으로 본다 */
+const TICK_FRESH_MS = 60_000;
+/** 밸류에이션·환율 보강을 기다리는 최대 시간 (넘으면 보강 없이 시세만 저장) */
+const ENRICH_WAIT_MS = 3_000;
+
+/** 스냅샷과 체결이 같은 거래일인지 (한국은 서울, 미국은 뉴욕 날짜) */
+function sameTradingDay(q: Quote, tickIso: string): boolean {
+  const a = Date.parse(q.asOf), b = Date.parse(tickIso);
+  if (Number.isNaN(a) || Number.isNaN(b)) return true;
+  const kr = isKrCode(q.code);
+  return localDate(q.asOf, kr) === localDate(tickIso, kr);
+}
+const TOSS_DETAIL_KEY = "toss_holdings_detail";
+
+interface Held {
+  quote: Quote;
+  at: number;
+  failedAt: number;
+}
+
+function parseTossDetail(value: string | null): Map<string, TossHoldingDetail> {
+  if (!value) return new Map();
+  try {
+    const parsed = JSON.parse(value) as { items?: Record<string, TossHoldingDetail> };
+    return new Map(Object.entries(parsed.items ?? {}));
+  } catch {
+    return new Map();
+  }
+}
+
 export interface RegisteredWithQuote extends RegisteredStock {
   quote: Quote | null;
   quoteError: string | null;
@@ -52,6 +96,16 @@ export interface RegisteredWithQuote extends RegisteredStock {
 export class StockService {
   private readonly now: () => Date;
   private readonly ttl: number;
+  /** 현재가 메모리 캐시 (DB quote_cache 와 같은 값). at = 새로 받은 시각, failedAt = 그 뒤 마지막 새로 받기 실패 시각 */
+  private readonly book = new Map<string, Held>();
+  private readonly quoteErrors = new Map<string, string>();
+  /** 종목별 마지막 새로 받기 실패 시각 (캐시가 없는 종목 포함) */
+  private readonly failedAt = new Map<string, number>();
+  /** 토스 웹 일괄 가격을 마지막으로 받은 값 (종목별) */
+  private readonly quickLast = new Map<string, LiveTick>();
+  private readonly inflight = new Map<string, Promise<void>>();
+  private hydrated: Promise<void> | null = null;
+  private readonly stats = { refreshes: 0, failures: 0, cacheWriteErrors: 0, lastRefreshAt: null as string | null, lastRefreshMs: null as number | null };
 
   constructor(private readonly deps: StockServiceDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -246,6 +300,7 @@ export class StockService {
         updated_at: ts,
       })
       .execute();
+    void this.refreshQuotes([listed.code]); // 등록 직후 잔고 화면이 시세를 기다리지 않게 바로 받기 시작
     await this.syncLive();
     return (await this.get(listed.code))!;
   }
@@ -296,72 +351,240 @@ export class StockService {
 
   /** 토스 동기화 때 저장한 종목별 평가 기준(매입금액·예상 비용 비율). 없으면 빈 맵 */
   async tossDetail(): Promise<Map<string, TossHoldingDetail>> {
-    const row = await this.deps.db.selectFrom("meta").select("value").where("key", "=", "toss_holdings_detail").executeTakeFirst();
-    if (!row) return new Map();
-    try {
-      const parsed = JSON.parse(row.value) as { items?: Record<string, TossHoldingDetail> };
-      return new Map(Object.entries(parsed.items ?? {}));
-    } catch {
-      return new Map();
-    }
+    const row = await this.deps.db.selectFrom("meta").select("value").where("key", "=", TOSS_DETAIL_KEY).executeTakeFirst();
+    return parseTossDetail(row?.value ?? null);
   }
 
+  /** 평가에 쓰는 두 가지(토스 평가 기준·원화 장부)를 쿼리 1번으로 */
+  async holdingMeta(): Promise<{ detail: Map<string, TossHoldingDetail>; krw: Map<string, KrwCost> }> {
+    const rows = await this.deps.db.selectFrom("meta").select(["key", "value"]).where("key", "in", [TOSS_DETAIL_KEY, KrwCostBook.KEY]).execute();
+    const v = (k: string) => rows.find((r) => r.key === k)?.value ?? null;
+    return { detail: parseTossDetail(v(TOSS_DETAIL_KEY)), krw: KrwCostBook.summarize(KrwCostBook.parse(v(KrwCostBook.KEY))) };
+  }
+
+  /**
+   * 잔고 목록 + 현재가. 요청은 기다리지 않는다:
+   *  - 현재가는 메모리의 마지막 값(없으면 DB 캐시)으로 바로 답하고, 오래됐으면(ttl) 뒤에서 한 번에 새로 받는다(single-flight)
+   *  - 캐시가 아예 없는 종목이 있을 때만(첫 실행) 새로 받기를 잠깐(COLD_WAIT_MS) 기다린다
+   *  - 새로 받기가 실패하면 마지막 값을 버리지 않고 stale 표시로 내보낸다 → 보유 종목이 "관심"으로 빠지거나 총평가가 줄지 않는다
+   * DB 쿼리: 등록 종목 1 + meta 1 (첫 호출만 캐시 읽기 1 추가)
+   */
   async listWithQuotes(): Promise<RegisteredWithQuote[]> {
-    const stocks = await this.list();
-    const [detail, krw] = await Promise.all([this.tossDetail(), this.krwCosts()]);
-    // 등록 종목 전체의 최신 가격을 요청 1개로 미리 받아 둔다 (없거나 실패해도 스냅샷으로 진행)
-    const quick = await this.quickPrices(stocks.map((s) => s.code));
-    // 소스 rate limit 을 고려해 순차 조회
-    const out: RegisteredWithQuote[] = [];
-    for (const s of stocks) {
-      let quote: Quote | null = null;
-      let quoteError: string | null = null;
-      try {
-        quote = await this.getQuote(s.code, { quick });
-      } catch (e) {
-        quoteError = e instanceof Error ? e.message : String(e);
-      }
-      out.push({ ...s, quote, quoteError, evaluation: evaluate(s, quote, detail.get(s.code), krw.get(s.code)) });
+    const [stocks, meta] = await Promise.all([this.list(), this.holdingMeta(), this.hydrate()]);
+    const codes = stocks.map((s) => s.code);
+    const quickP = this.quickNow(codes);
+    const t = this.now().getTime();
+    const expired = codes.filter((c) => this.due(c, t));
+    if (expired.length) {
+      const p = this.refreshQuotes(expired);
+      // 캐시가 없거나 오래된(밤새 쉬었다 연 경우 등) 종목이 있으면 잠깐 기다린다 — 어제 스냅샷에 오늘 체결가를 섞어 보여 주지 않게
+      if (expired.some((c) => this.old(c, t))) await within(p, COLD_WAIT_MS, undefined);
+    }
+    const quick = await quickP;
+    return stocks.map((s) => {
+      const quote = this.current(s.code, quick);
+      const quoteError = quote ? null : (this.quoteErrors.get(s.code) ?? "시세를 불러오는 중입니다");
+      return { ...s, quote, quoteError, evaluation: evaluate(s, quote, meta.detail.get(s.code), meta.krw.get(s.code)) };
+    });
+  }
+
+  /**
+   * 일괄 가격: 새로 받기를 시작하고 짧게(QUICK_WAIT_MS)만 기다린다. 늦으면 직전에 받은 값으로 답하고,
+   * 받은 값은 다음 요청에서 쓴다 → 토스 웹이 느려도 잔고 응답이 그만큼 늦어지지 않는다
+   */
+  private async quickNow(codes: string[]): Promise<Map<string, LiveTick>> {
+    const src = this.deps.quickPrices;
+    if (!src || codes.length === 0) return new Map();
+    const fetched = src
+      .getMany(codes)
+      .then((m) => {
+        for (const [c, tick] of m) this.quickLast.set(c, tick);
+        return true;
+      })
+      .catch(() => false);
+    await within(fetched, QUICK_WAIT_MS, false);
+    const t = this.now().getTime();
+    const out = new Map<string, LiveTick>();
+    for (const c of codes) {
+      const tick = this.quickLast.get(c);
+      if (tick && t - Date.parse(tick.timestamp) <= QUICK_MAX_AGE_MS) out.set(c, tick);
     }
     return out;
   }
 
-  private async quickPrices(codes: string[]): Promise<Map<string, LiveTick>> {
-    if (!this.deps.quickPrices || codes.length === 0) return new Map();
-    try {
-      return await this.deps.quickPrices.getMany(codes);
-    } catch {
-      return new Map();
-    }
-  }
-
   // ── 시세 ────────────────────────────────────────────────────────
 
+  /**
+   * 한 종목 현재가 (상세 화면·/quote). 캐시가 ttl 안이면 그대로, 오래됐으면 마지막 값으로 답하고 뒤에서 새로 받는다.
+   * 캐시가 없거나 fresh 면 새로 받을 때까지 기다린다. 새로 받지 못하면 마지막 값(stale), 그것도 없으면 던진다
+   */
   async getQuote(code: string, opts: { fresh?: boolean; quick?: Map<string, LiveTick> } = {}): Promise<Quote> {
-    const db = this.deps.db;
-    const quick = opts.quick ?? (this.deps.live?.get(code) ? new Map() : await this.quickPrices([code]));
-    if (!opts.fresh) {
-      const cached = await db.selectFrom("quote_cache").selectAll().where("code", "=", code).executeTakeFirst();
-      if (cached && this.now().getTime() - Date.parse(cached.fetched_at) < this.ttl) {
-        return this.applyLive(JSON.parse(cached.payload) as Quote, quick);
+    await this.hydrate();
+    const quickP = opts.quick ? Promise.resolve(opts.quick) : this.deps.live?.get(code) ? Promise.resolve(new Map<string, LiveTick>()) : this.quickNow([code]);
+    const h = this.book.get(code);
+    const t = this.now().getTime();
+    if (h && !opts.fresh) {
+      if (this.due(code, t)) {
+        const p = this.refreshQuotes([code]);
+        if (this.old(code, t)) await within(p, COLD_WAIT_MS, undefined);
+      }
+    } else {
+      await this.refreshQuotes([code]);
+    }
+    const q = this.current(code, await quickP);
+    if (!q) throw new ProviderError(this.deps.quotes.name, this.quoteErrors.get(code) ?? `${code} 시세 없음`);
+    return q;
+  }
+
+  /** 기동 직후: DB 캐시를 메모리로 올리고 등록 종목 현재가를 한 번 받아 둔다 (첫 요청이 기다리지 않게) */
+  async warmQuotes(): Promise<void> {
+    await this.hydrate();
+    const codes = (await this.list()).map((s) => s.code);
+    if (codes.length) await this.refreshQuotes(codes);
+  }
+
+  /** 운영 확인용 (/health) */
+  quoteStatus(): { cached: number; stale: number; refreshing: number; refreshes: number; failures: number; cacheWriteErrors: number; lastRefreshAt: string | null; lastRefreshMs: number | null; baseFallbacks: number | null } {
+    const t = this.now().getTime();
+    let stale = 0;
+    for (const [code, h] of this.book) if (this.isStale(code, h, t)) stale++;
+    return { cached: this.book.size, stale, refreshing: this.inflight.size, ...this.stats, baseFallbacks: this.deps.tossOpenApi?.baseFallbacks ?? null };
+  }
+
+  private hydrate(): Promise<void> {
+    if (!this.hydrated) {
+      this.hydrated = this.deps.db
+        .selectFrom("quote_cache")
+        .selectAll()
+        .execute()
+        .then((rows) => {
+          for (const r of rows) {
+            if (this.book.has(r.code)) continue;
+            const at = Date.parse(r.fetched_at);
+            try {
+              this.book.set(r.code, { quote: JSON.parse(r.payload) as Quote, at: Number.isNaN(at) ? 0 : at, failedAt: 0 });
+            } catch {
+              /* 깨진 행은 건너뜀 */
+            }
+          }
+        })
+        .catch(() => {
+          this.hydrated = null; // 다음 요청에서 다시
+        });
+    }
+    return this.hydrated ?? Promise.resolve();
+  }
+
+  /** 여러 종목을 한 번에 새로 받는다. 이미 받는 중인 종목은 그 작업을 같이 기다린다 (single-flight) */
+  private refreshQuotes(codes: string[]): Promise<void> {
+    const need = [...new Set(codes)].filter((c) => !this.inflight.has(c));
+    if (need.length) {
+      const p: Promise<void> = this.fetchQuotes(need)
+        .catch(() => undefined)
+        .finally(() => {
+          for (const c of need) if (this.inflight.get(c) === p) this.inflight.delete(c);
+        });
+      for (const c of need) this.inflight.set(c, p);
+    }
+    return Promise.all(codes.map((c) => this.inflight.get(c))).then(() => undefined);
+  }
+
+  private async fetchQuotes(codes: string[]): Promise<void> {
+    const started = performance.now();
+    const chain = this.deps.quotes;
+    let results: Map<string, Quote | Error>;
+    try {
+      results = chain.getQuotes
+        ? await chain.getQuotes(codes)
+        : new Map(await mapLimit(codes, 4, async (c) => [c, await chain.getQuote(c).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))))] as const));
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      results = new Map(codes.map((c) => [c, err]));
+    }
+    const ok = codes.flatMap((c) => {
+      const r = results.get(c);
+      return r && !(r instanceof Error) ? [[c, r] as const] : [];
+    });
+    const markets = ok.length ? await this.marketsOf(ok.map(([c]) => c)).catch(() => new Map<string, string>()) : new Map<string, string>();
+    // 보강(네이버)이 멈춰도 새 시세는 저장한다
+    const enriched = await mapLimit(ok, 4, async ([c, q]) => [c, await within(this.enrich(q, markets.get(c) ?? null), ENRICH_WAIT_MS, q)] as const);
+    const t = this.now().getTime();
+    const fetchedAt = seoulIso(this.now());
+    for (const [c, q] of enriched) {
+      this.book.set(c, { quote: q, at: t, failedAt: 0 });
+      this.quoteErrors.delete(c);
+      this.failedAt.delete(c);
+    }
+    let failures = 0;
+    for (const c of codes) {
+      const r = results.get(c);
+      if (r instanceof Error || !r) {
+        failures++;
+        this.quoteErrors.set(c, r instanceof Error ? r.message : `${c} 시세 없음`);
+        this.failedAt.set(c, t);
+        const h = this.book.get(c);
+        if (h) h.failedAt = t;
       }
     }
-    const quote = await this.enrich(await this.deps.quotes.getQuote(code));
-    const fetchedAt = seoulIso(this.now());
-    await db
-      .insertInto("quote_cache")
-      .values({ code, payload: JSON.stringify(quote), fetched_at: fetchedAt })
-      .onConflict((oc) => oc.column("code").doUpdateSet({ payload: JSON.stringify(quote), fetched_at: fetchedAt }))
-      .execute();
-    return this.applyLive(quote, quick);
+    if (enriched.length) {
+      await this.deps.db
+        .insertInto("quote_cache")
+        .values(enriched.map(([c, q]) => ({ code: c, payload: JSON.stringify(q), fetched_at: fetchedAt })))
+        .onConflict((oc) => oc.column("code").doUpdateSet((eb) => ({ payload: eb.ref("excluded.payload"), fetched_at: eb.ref("excluded.fetched_at") })))
+        .execute()
+        .catch(() => {
+          this.stats.cacheWriteErrors++; // 캐시 저장 실패는 메모리 값으로 계속 (/health 에서 확인)
+        });
+    }
+    this.stats.refreshes++;
+    this.stats.failures += failures;
+    this.stats.lastRefreshAt = fetchedAt;
+    this.stats.lastRefreshMs = Math.round(performance.now() - started);
+  }
+
+  private async marketsOf(codes: string[]): Promise<Map<string, string>> {
+    const rows = await this.deps.db.selectFrom("registered_stocks").select(["code", "market"]).where("code", "in", codes).execute();
+    return new Map(rows.map((r) => [r.code, r.market]));
+  }
+
+  /** 캐시가 없거나 STALE_AFTER_MS 보다 오래됐는지 (이때만 응답이 새로 받기를 잠깐 기다린다) */
+  private old(code: string, t: number): boolean {
+    const h = this.book.get(code);
+    return !h || t - h.at > STALE_AFTER_MS;
+  }
+
+  /** 새로 받을 때인지: 캐시가 없거나 ttl 이 지났고, 최근(RETRY_AFTER_FAIL_MS) 실패하지 않았음 */
+  private due(code: string, t: number): boolean {
+    const h = this.book.get(code);
+    if (h && t - h.at < this.ttl) return false;
+    return t - (this.failedAt.get(code) ?? -Infinity) >= RETRY_AFTER_FAIL_MS;
+  }
+
+  /** 새로 받지 못한 마지막 값인지: 마지막 새로 받기가 실패했거나, 오래됐는데 받는 중도 아님 */
+  private isStale(code: string, h: Held, t: number): boolean {
+    return h.failedAt > h.at || (t - h.at > STALE_AFTER_MS && !this.inflight.has(code));
+  }
+
+  /** 캐시 값 + 실시간 가격. 새 체결가로 덮어쓰지 못하고 캐시도 새로 받지 못했으면 stale 표시 */
+  private current(code: string, quick?: Map<string, LiveTick>): Quote | null {
+    const h = this.book.get(code);
+    if (!h) return null;
+    const t = this.now().getTime();
+    let tick = this.liveTick(h.quote, quick);
+    // 스냅샷(asOf)과 체결의 거래일(현지 날짜)이 다르면 섞지 않는다 — 어제 스냅샷의 전일 종가에 오늘 체결을 대면 등락이 이틀치가 된다.
+    // 스냅샷을 새로 받으면(1분 안) 같은 날이 되어 다시 붙는다
+    if (tick && !sameTradingDay(h.quote, tick.timestamp)) tick = null;
+    const q = tick ? this.applyTick(h.quote, tick) : h.quote;
+    const tickFresh = tick !== null && Math.abs(t - tick.receivedAt) <= TICK_FRESH_MS;
+    const stale = !tickFresh && this.isStale(code, h, t);
+    return stale ? { ...q, stale: true } : q.stale ? { ...q, stale: false } : q;
   }
 
   /** 밸류에이션(PER/PBR/EPS/BPS/배당/52주)과 달러 환율을 채운다. 실패해도 시세는 그대로 */
-  private async enrich(quote: Quote): Promise<Quote> {
+  private async enrich(quote: Quote, market: string | null): Promise<Quote> {
     const f = this.deps.fundamentals;
     if (!f) return quote;
     const needFundamentals = quote.per === null || quote.pbr === null || quote.dividendYieldPct === undefined;
-    const market = (await this.get(quote.code))?.market ?? null;
     const [fund, fx] = await Promise.all([
       needFundamentals ? f.get(quote.code, market).catch(() => null) : Promise.resolve(null),
       quote.currency === "USD" ? f.usdKrw().catch(() => null) : Promise.resolve(null),
@@ -376,20 +599,27 @@ export class StockService {
   }
 
   /**
-   * 현재가 덮어쓰기. 1순위 웹소켓 체결, 2순위 REST 일괄 조회.
+   * 덮어쓸 체결가. 1순위 웹소켓 체결, 2순위 REST 일괄 조회.
    * REST 일괄 조회는 토스 통합 가격이라 같은 기준(toss 계열)의 스냅샷에만 적용한다 — 네이버 정규장 종가에 섞이면 등락이 틀어진다.
+   * 스냅샷보다 오래된 체결은 쓰지 않는다
    */
-  private applyLive(quote: Quote, quick?: Map<string, LiveTick>): Quote {
+  private liveTick(quote: Quote, quick?: Map<string, LiveTick>): LiveTick | null {
     let tick = this.deps.live?.get(quote.code) ?? null;
     if (!tick && quick && quote.source.startsWith("toss")) tick = quick.get(quote.code) ?? null;
-    if (!tick) return quote;
+    if (!tick) return null;
     const tickAt = Date.parse(tick.timestamp);
     const quoteAt = Date.parse(quote.asOf);
-    if (Number.isNaN(tickAt) || (!Number.isNaN(quoteAt) && tickAt < quoteAt) || tick.price === quote.price) return quote;
+    if (Number.isNaN(tickAt) || (!Number.isNaN(quoteAt) && tickAt < quoteAt)) return null;
+    return tick;
+  }
+
+  private applyTick(quote: Quote, tick: LiveTick): Quote {
+    if (tick.price === quote.price) return quote;
     const prevClose = quote.prevClose ?? (quote.change ? quote.price - quote.change : null);
     const change = prevClose !== null ? Math.round((tick.price - prevClose) * 100) / 100 : quote.change;
     const changeRate = prevClose ? Math.round((change / prevClose) * 10000) / 100 : quote.changeRate;
-    const priceKrw = quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * tick.price) : quote.fxRate ? Math.round(tick.price * quote.fxRate) : (quote.priceKrw ?? null);
+    // 원화 환산은 화면에 함께 보이는 환율(fxRate)로 — 옛 원화가/달러가 비율로 곱하면 반올림 때문에 1원씩 어긋난다
+    const priceKrw = quote.fxRate ? Math.round(tick.price * quote.fxRate) : quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * tick.price) : (quote.priceKrw ?? null);
     return {
       ...quote,
       price: tick.price,

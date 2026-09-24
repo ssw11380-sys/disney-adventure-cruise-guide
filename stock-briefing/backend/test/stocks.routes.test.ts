@@ -152,9 +152,9 @@ describe("stock routes", () => {
   });
 
   it("모든 시세 소스가 죽어도 종목 목록은 quoteError 와 함께 200 으로 응답한다", async () => {
-    await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "005930" } });
     kis.opts.fail = true;
     yahoo.opts.fail = true;
+    await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "005930" } });
     const res = await app.inject({ method: "GET", url: "/api/stocks?quotes=1" });
     expect(res.statusCode).toBe(200);
     expect(res.json()[0].quote).toBeNull();
