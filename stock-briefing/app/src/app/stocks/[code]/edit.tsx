@@ -9,7 +9,7 @@ import { useSettings } from "@/lib/settings";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { formatPrice, isUsMarket } from "@/lib/format";
-import { avgText, holdingPatch, parseNum, qtyText } from "@/lib/holdingForm";
+import { avgText, draftOf, editDraft, holdingPatch, normNum, normText, parseNum, qtyText, rebaseDraft, type Draft, type Norm } from "@/lib/holdingForm";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 보유 수량/평단/메모 수정, 매수·매도 기록(평단 자동 계산), 삭제 */
@@ -20,9 +20,23 @@ export default function EditStockScreen() {
   // 입력 중에 재조회가 실패해도 폼을 지우지 않는다(값이 한 번이라도 왔으면 폼 유지)
   if (!stock.data && !stock.isError) return <Screen><Loading /></Screen>;
   if (!stock.data) return <Screen><ErrorView error={stock.error ?? new Error("종목을 찾을 수 없습니다")} onRetry={() => void stock.refetch()} /></Screen>;
-  // key 로 종목이 바뀌면 폼 상태를 새로 만든다 (effect 로 setState 하지 않기 위함)
-  return <EditForm key={`${stock.data.code}:${stock.data.updatedAt}`} stock={stock.data} />;
+  // key 로 종목이 바뀌면 폼 상태를 새로 만든다 (effect 로 setState 하지 않기 위함).
+  // updatedAt 은 넣지 않는다: 넣으면 토스 체결 동기화로 같은 종목 값만 바뀌어도 쓰던 메모 등 초안이 지워진다 (PF-07). 같은 종목의 새 서버 값은 칸마다 useDraft 가 맞춘다
+  return <EditForm key={stock.data.code} stock={stock.data} />;
 }
+
+/**
+ * 서버 값에서 시작하는 입력 칸. 같은 종목의 서버 값이 바뀌면 손대지 않은 칸만 새 값을 따르고 고치던 초안은 지킨다 (PF-07).
+ * 이전 렌더의 기준값과 그리는 중에 비교해 맞춘다 (effect 로 setState 하지 않기 위함)
+ */
+function useDraft(server: string, norm: Norm): [Draft, (v: string) => void] {
+  const [draft, setDraft] = useState(() => draftOf(server));
+  const next = rebaseDraft(draft, server, norm);
+  if (next !== draft) setDraft(next);
+  return [next, (v: string) => setDraft((d) => editDraft(d, v, norm))];
+}
+
+const STALE_NOTE = "입력하는 사이 저장된 값이 바뀌었습니다. 저장하면 지금 입력한 값으로 바뀝니다.";
 
 /** 매수: 수량 가중 평균으로 평단 재계산. 매도: 수량만 줄고 평단은 유지 */
 export function applyTrade(current: { quantity: number | null; avgPrice: number | null }, side: "buy" | "sell", qty: number, price: number): { quantity: number; avgPrice: number | null } {
@@ -44,7 +58,8 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
   const { apiUrl } = useSettings();
   const { update, remove } = useStockMutations();
   const ev = stock.evaluation ?? null;
-  const [krwCost, setKrwCost] = useState(ev?.costBasisKrw && ev.krwCostSource === "exact" ? String(Math.round(ev.costBasisKrw)) : "");
+  const [krw, setKrwCost] = useDraft(ev?.costBasisKrw && ev.krwCostSource === "exact" ? String(Math.round(ev.costBasisKrw)) : "", normNum);
+  const krwCost = krw.value;
   const [savingKrw, setSavingKrw] = useState(false);
   const saveKrwCost = async () => {
     const v = Number(krwCost.replace(/[^0-9.]/g, ""));
@@ -68,9 +83,14 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
   const cur = isUsMarket(stock.market) ? "USD" : "KRW";
   const locked = stock.tossSynced === true;
   const initial = { quantity: qtyText(stock.quantity), avgPrice: avgText(stock.avgPrice, cur) };
-  const [quantity, setQuantity] = useState(initial.quantity);
-  const [avgPrice, setAvgPrice] = useState(initial.avgPrice);
-  const [memo, setMemo] = useState(stock.memo ?? "");
+  const [qtyDraft, setQuantity] = useDraft(initial.quantity, normNum);
+  const [avgDraft, setAvgPrice] = useDraft(initial.avgPrice, normNum);
+  const [memoDraft, setMemo] = useDraft(stock.memo ?? "", normText);
+  // 토스 종목은 수량·평단을 저장하지 않는다 → 고치다 잠긴 칸도 서버 값을 보인다
+  const quantity = locked ? initial.quantity : qtyDraft.value;
+  const avgPrice = locked ? initial.avgPrice : avgDraft.value;
+  const memo = memoDraft.value;
+  const stale = memoDraft.stale || (!locked && (qtyDraft.stale || avgDraft.stale));
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [tradeQty, setTradeQty] = useState("");
   const [tradePrice, setTradePrice] = useState("");
@@ -155,6 +175,7 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
         </View>
         <Text style={[styles.label, { color: t.muted }]}>메모</Text>
         <TextInput value={memo} onChangeText={setMemo} accessibilityLabel="메모" placeholder="선택" placeholderTextColor={t.muted} multiline style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt, minHeight: 72 }]} />
+        {stale ? <Text style={[styles.label, { color: t.warn }]}>{STALE_NOTE}</Text> : null}
         <Button title="저장" onPress={() => save()} loading={update.isPending} />
       </Card>
 
@@ -169,6 +190,7 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
             <TextInput value={krwCost} onChangeText={setKrwCost} accessibilityLabel="원화 매입금액" placeholder="예: 24557187" placeholderTextColor={t.muted} keyboardType="numeric" style={[styles.field, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]} />
             <Button title="저장" accessibilityLabel="원화 매입금액 저장" variant="secondary" onPress={() => void saveKrwCost()} loading={savingKrw} />
           </View>
+          {krw.stale ? <Text style={[styles.label, { color: t.warn }]}>{STALE_NOTE}</Text> : null}
         </Card>
       ) : null}
 
