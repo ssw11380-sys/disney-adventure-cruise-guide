@@ -1,9 +1,9 @@
 import { useIsFocused } from "expo-router";
 import { featureOn } from "@/lib/features";
-import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { focusManager, keepPreviousData, queryOptions, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { isTradingHoursKst } from "@/lib/format";
-import { candleRefresh, pollInterval, streamFresh } from "@/lib/freshness";
+import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/freshness";
 import { useLiveStream, withLastTick } from "@/lib/liveStream";
 import { tradingNow } from "@/lib/marketTime";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
@@ -83,6 +83,10 @@ export function useAnyMarketOpen(): { open: boolean; label: string; loaded: bool
  * 장 시간에는 3초마다 다시 받아 HTS 처럼 움직이게 하고, 장이 닫힌 시간에는 1분으로 늦춘다.
  * 체결 스트림이 값을 주는 동안은 보정용 30초, 요청이 실패하는 동안은 짧게 다시 시도한다 (규칙은 lib/freshness 의 pollInterval).
  * 쿼리마다 실패 여부가 다르므로 react-query 의 함수형 refetchInterval 로 넘긴다.
+ * 알려진 한계 (PF-04 검증 지적, main 부터 있던 동작): 체결이 잔고 목록·종목 상세 캐시를 고칠 때마다 react-query 가 이 간격 타이머를 다시 걸어,
+ * 스트림 중 보정용 30초는 그 목록(상세는 그 종목)의 가격이 30초보다 촘촘히 바뀌는 동안 돌지 않는다 — 거래량처럼 체결에 없는 값은 당겨서 새로고침하거나
+ * 체결이 뜸해질 때 바로잡힌다. 차트 봉(candlesQuery)처럼 마지막으로 받은 때부터 재려면 이 캐시 쓰기는 받은 시각을 새로 찍으므로("시세 지연" 판단이 쓴다)
+ * 서버에서 받은 시각을 따로 적어야 하고, 받는 동안 온 체결을 받은 값에 다시 얹어야(withLastTick 처럼) 옛 가격으로 되돌아가지 않아 여기서는 바꾸지 않았다
  */
 export function useLivePoll(): (q: Query<any, any, any, any>) => number {
   const { open } = useAnyMarketOpen();
@@ -297,28 +301,47 @@ export function useMarketCandles(code: string, period: CandlePeriod, count: numb
   });
 }
 
+/** focusManager 구독 (useSyncExternalStore 가 그릴 때마다 다시 구독하지 않게 밖에 둔다) */
+const subscribeAppFocus = (onChange: () => void) => focusManager.subscribe(onChange);
+
 /**
- * 종목 차트 봉. 체결 스트림이 마지막 봉을 고치지만 거래량·놓친 체결은 모르므로, 화면이 보이고 그 종목에 거래가 있는 시간이면
+ * 앱이 앞에 있는지 (react-query focusManager — _layout 이 AppState 로 맞춘다). 바뀌면 다시 그린다 →
+ * 주기 갱신 타이머가 뒤로 갈 때·앞으로 올 때 다시 정해진다 (앞으로 오면 밀린 차트 봉 갱신을 바로 한다)
+ */
+function useAppFocused(): boolean {
+  return useSyncExternalStore(subscribeAppFocus, () => focusManager.isFocused());
+}
+
+/**
+ * 종목 차트 봉 쿼리 옵션 (useCandles 와 테스트가 같이 쓴다). 서버 봉은 서버 캐시 값이라 조금 늦을 수 있어, 받은 봉의 마지막 봉에
+ * 연결 중 받은 마지막 체결을 다시 얹는다 (lib/liveStream 의 withLastTick — 서버에 없는 봉은 붙이지 않아, 앱이 체결로 만든 봉은 다시 받으면
+ * 서버 봉으로 바로잡힌다). 주기 갱신은 마지막으로 서버 봉을 받은 때부터 잰다: 체결로 봉을 고칠 때마다 react-query 가 간격 타이머를 다시 걸어
+ * 고정 간격으로는 체결이 촘촘한 종목에서 한 번도 돌지 않는다 (PF-04 검증 지적, lib/freshness 의 refetchDue)
+ */
+export function candlesQuery(api: Pick<Api, "getCandles">, apiUrl: string, code: string, period: CandlePeriod, count: number, o: { trading: boolean; appFocused: boolean }) {
+  const { refetchInterval: every, staleTime } = candleRefresh(period, o.trading);
+  return queryOptions({
+    queryKey: [apiUrl, "candles", code, period, count],
+    queryFn: async () => withLastTick(apiUrl, code, await api.getCandles(code, period, count)),
+    staleTime,
+    refetchInterval: (q) => refetchDue(every, q.state, Date.now(), o.appFocused),
+    refetchIntervalInBackground: false,
+    enabled: !!code,
+  });
+}
+
+/**
+ * 종목 차트 봉. 체결 스트림이 마지막 봉을 고치지만 거래량·놓친 체결은 모르므로, 화면이 보이고 앱이 앞에 있고 그 종목에 거래가 있는 시간이면
  * 서버 봉을 주기적으로 다시 받는다 (PF-04, 규칙은 lib/freshness 의 candleRefresh). 인라인·전체 화면 차트가 같이 쓴다.
- * 서버 봉은 서버 캐시 값이라 조금 늦을 수 있어, 받은 봉의 마지막 봉에 연결 중 받은 마지막 체결을 다시 얹는다 (lib/liveStream 의 withLastTick —
- * 서버에 없는 봉은 붙이지 않아, 앱이 체결로 만든 봉은 다시 받으면 서버 봉으로 바로잡힌다).
  * 시각 판단은 그릴 때 한다 — 장 상태가 바뀌거나 체결로 봉이 바뀌면 다시 그려져 주기도 다시 정해진다
  */
 export function useCandles(code: string, period: CandlePeriod, count = 90) {
   const api = useApi();
   const { apiUrl } = useSettings();
   const focused = useScreenFocused();
+  const appFocused = useAppFocused();
   const m = useMarketStatus();
-  const { refetchInterval, staleTime } = candleRefresh(period, tradingNow(code, m.data));
-  return useQuery({
-    subscribed: focused,
-    queryKey: useKey("candles", code, period, count),
-    queryFn: async () => withLastTick(apiUrl, code, await api.getCandles(code, period, count)),
-    staleTime,
-    refetchInterval,
-    refetchIntervalInBackground: false,
-    enabled: !!code,
-  });
+  return useQuery({ subscribed: focused, ...candlesQuery(api, apiUrl, code, period, count, { trading: tradingNow(code, m.data), appFocused }) });
 }
 
 export function useAnalysis(code: string, kind: AnalysisKind, enabled = true) {

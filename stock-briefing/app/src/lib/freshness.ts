@@ -125,6 +125,23 @@ export function candleRefresh(period: CandlePeriod, open: boolean): { refetchInt
 }
 
 /**
+ * react-query refetchInterval 에 넘길 "다음 서버 요청까지 남은 시간" (PF-04 검증 지적).
+ * react-query 는 쿼리가 바뀔 때마다(체결로 봉을 고치는 캐시 쓰기 포함) 간격 타이머를 처음부터 다시 건다. 그래서 고정 간격(1분)을 주면
+ * 체결이 그보다 촘촘한 종목은 한 번도 다시 받지 않는다. 마지막 서버 요청이 끝난 때(받은 시각 — 체결로 고쳐도 그대로 둔다(lib/liveStream),
+ * 실패했으면 실패 시각)부터 every 가 지나는 때까지 남은 시간을 주면, 타이머를 몇 번 다시 걸어도 그때 한 번 받는다.
+ *  - 받는 중이면 every: 끝나면 다시 정해진다 (겹쳐 요청하지 않게)
+ *  - 앱이 뒤에 있으면 every: 받지도 않을 타이머를 짧게 돌리지 않는다. 앞으로 오면 다시 정해져 밀린 갱신을 바로 한다
+ * every=false(거래 없는 시간)면 멈춘다
+ */
+export function refetchDue(every: number | false, s: { dataUpdatedAt: number; errorUpdatedAt: number; fetchStatus: string }, now: number, appFocused = true): number | false {
+  if (every === false) return false;
+  if (!appFocused || s.fetchStatus !== "idle") return every;
+  const last = Math.max(s.dataUpdatedAt, s.errorUpdatedAt);
+  if (last <= 0) return every;
+  return Math.min(every, Math.max(1, last + every - now));
+}
+
+/**
  * 차트 아래 한 줄. 봉을 처음 불러오지 못했으면 오류(error), 받은 봉이 있는데 주기 갱신이 재시도까지 실패했으면 봉은 그대로 두고
  * 언제 받은 봉인지만 알린다 — 멀쩡히 그려진 차트 아래에 "차트 실패"를 띄우지 않는다. 보여 줄 게 없으면 null.
  * 갱신 실패는 isError 만으로 보지 않는다: 체결로 봉을 고치는 캐시 쓰기(setQueryData)가 react-query 의 오류 상태를 지워서 장중에는 1초도 안 남는다.

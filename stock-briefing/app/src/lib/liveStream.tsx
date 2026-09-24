@@ -46,15 +46,35 @@ const INTRADAY_NEW_BAR_REFETCH_MS = 60_000;
 type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
 
 /**
- * 연결이 살아 있는 동안 받은 종목별 마지막 체결 (서버 주소별). 주기 갱신으로 받은 서버 봉은 서버 봉 캐시 값이라 최대 수십 초~몇 분 늦을 수 있어,
+ * 연결이 살아 있는 동안 받은 종목별 마지막 체결 (서버 주소별). 주기 갱신으로 받은 서버 봉은 서버 봉 캐시 값이라 조금 늦을 수 있어,
  * 받은 봉에 이 체결을 다시 얹는다(withLastTick) — 마지막 봉 종가가 상단 현재가보다 뒤처지지 않게 (PF-04).
  * 끊기면 비운다: 끊긴 동안 놓친 체결이 있을 수 있으니 그때는 서버 봉을 그대로 믿는다
  */
 const lastTicks = new Map<string, StreamTick>();
 const lastTickKey = (apiUrl: string, code: string) => `${apiUrl}\n${code}`;
 
-export function rememberTicks(apiUrl: string, ticks: Iterable<StreamTick>): void {
-  for (const t of ticks) {
+/**
+ * 서버 봉이 늦을 수 있는 한도. 서버 봉 캐시(backend CandleCache)의 새 값 기준이 분봉 20초·일봉 60초라, 주기 갱신으로 받은 봉에는 받은 때보다
+ * 이만큼 앞선 체결이 이미 들어 있다 → 그런 체결은 봉에 다시 얹지 않는다. 서버 PriceStream 은 삭제한 종목의 마지막 체결도 잊지 않고 접속할 때마다
+ * 스냅샷에 실어 보내므로, 시각을 보지 않으면 몇 시간 전 체결이 새로 받은 봉의 종가·저가를 되돌린다 (PF-04 검증 지적).
+ * 처음 열 때 서버가 몇 분 지난 일봉을 먼저 주면(뒤에서 새로 받음) 마지막 봉이 잠시 머리 현재가보다 늦을 수 있지만 다음 주기 갱신·체결이 바로잡는다
+ */
+const SERVER_CANDLE_LAG_MS = 2 * 60_000;
+
+/** 체결이 seriesAt(서버 봉을 받은 시각)에 받은 봉에 아직 없을 수 있는지 */
+function newerThanSeries(tick: StreamTick, seriesAt: number): boolean {
+  const at = Date.parse(tick.timestamp);
+  return !Number.isNaN(at) && at > seriesAt - SERVER_CANDLE_LAG_MS;
+}
+
+/** snapshot: 접속 직후 스냅샷(서버가 기억하는 체결 전부)이면 그 서버 주소에서 스냅샷에 없는 종목의 체결은 잊는다 */
+export function rememberTicks(apiUrl: string, ticks: Iterable<StreamTick>, { snapshot = false } = {}): void {
+  const list = [...ticks];
+  if (snapshot) {
+    const keep = new Set(list.map((t) => lastTickKey(apiUrl, t.code)));
+    for (const key of lastTicks.keys()) if (key.startsWith(lastTickKey(apiUrl, "")) && !keep.has(key)) lastTicks.delete(key);
+  }
+  for (const t of list) {
     const prev = lastTicks.get(lastTickKey(apiUrl, t.code));
     if (prev && Date.parse(prev.timestamp) > Date.parse(t.timestamp)) continue;
     lastTicks.set(lastTickKey(apiUrl, t.code), t);
@@ -69,11 +89,12 @@ export function forgetTicks(): void {
  * 서버에서 받은 봉에 연결 중 받은 마지막 체결을 다시 얹는다. 서버의 마지막 봉과 같은 구간일 때만 고·저·종을 고치고, 뒤 구간·지난 구간이면 그대로.
  * 서버에 없는 뒤 구간 봉은 붙이지 않는다 — 서버 봉을 다시 받는 것이 앱이 만든 봉을 지우는 길이라서. 붙이면 한국 평일 휴장일(추석·한글날 등,
  * tradingDate 가 모름)에 접속 직후 스냅샷 체결(서버가 값이 그대로여도 마지막 폴링 시각을 붙여 보냄)로 생긴 그날의 빈 봉이 다시 받을 때마다 되살아난다.
- * 방금 열린 봉이 서버 봉 캐시에 아직 없으면 다음 체결이 다시 열거나 다음 주기 갱신이 서버 봉으로 채운다 (PF-04)
+ * 방금 열린 봉이 서버 봉 캐시에 아직 없으면 다음 체결이 다시 열거나 다음 주기 갱신이 서버 봉으로 채운다 (PF-04).
+ * now(방금 받은 때)보다 2분 넘게 오래된 체결은 받은 봉에 이미 들어 있으니 얹지 않는다 (SERVER_CANDLE_LAG_MS)
  */
-export function withLastTick(apiUrl: string, code: string, series: CandleSeries): CandleSeries {
+export function withLastTick(apiUrl: string, code: string, series: CandleSeries, now = Date.now()): CandleSeries {
   const tick = lastTicks.get(lastTickKey(apiUrl, series.code || code));
-  if (!tick) return series;
+  if (!tick || !newerThanSeries(tick, now)) return series;
   const candles = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp, series.code || code);
   return candles === series.candles || candles.length !== series.candles.length ? series : { ...series, candles };
 }
@@ -82,11 +103,13 @@ export function withLastTick(apiUrl: string, code: string, series: CandleSeries)
  * 체결 묶음을 react-query 캐시(잔고 목록 · 종목 상세 · 차트 봉)에 적용한다. 화면에 보이는 값이 바뀌었으면 true.
  *  - 바뀐 게 없으면 쿼리를 건드리지 않는다(undefined) — 같은 값을 다시 넣어도 react-query 는 "방금 받은 값"으로 받은 시각을 새로 찍는다
  *  - 거래일이 바뀐 체결은 붙이지 않고 held 에 모은다 → 새 거래일 시세를 다시 받는다 (PF-01)
- *  - 차트 봉은 체결로 고쳐도 서버에서 새로 받은 값이 아니므로 받은 시각·무효 표시를 그대로 둔다 → 다시 볼 때·주기 갱신 때 서버 봉(거래량 포함)으로 바로잡힌다 (PF-04)
- *  - openBars=false(접속 직후 스냅샷)면 차트에 새 봉을 열지 않고 마지막 봉만 고친다. 스냅샷 시각은 체결 시각이 아니라 서버가 값이 그대로여도
- *    마지막으로 폴링한 시각이라, 한국 평일 휴장일(tradingDate 가 모름)에 그날 봉을 만들어 버린다. 새 봉은 실제로 가격이 바뀐 체결(ticks)이 연다
+ *  - 차트 봉은 체결로 고쳐도 서버에서 새로 받은 값이 아니므로 받은 시각·무효 표시를 그대로 둔다 → 다시 볼 때·주기 갱신 때 서버 봉(거래량 포함)으로 바로잡힌다 (PF-04).
+ *    이 캐시 쓰기마다 react-query 가 주기 갱신 타이머를 다시 걸므로, 주기는 그대로 둔 받은 시각에서 잰다 (hooks 의 candlesQuery · lib/freshness 의 refetchDue)
+ *  - snapshot(접속 직후 스냅샷)이면 차트에 새 봉을 열지 않고 마지막 봉만 고친다. 스냅샷 시각은 체결 시각이 아니라 서버가 값이 그대로여도
+ *    마지막으로 폴링한 시각이라, 한국 평일 휴장일(tradingDate 가 모름)에 그날 봉을 만들어 버린다. 새 봉은 실제로 가격이 바뀐 체결(ticks)이 연다.
+ *    차트 봉을 받은 때보다 2분 넘게 앞선 스냅샷 체결(서버가 잊지 않은 삭제 종목의 체결 등)은 받은 봉에 이미 들어 있으니 봉을 고치지 않는다
  */
-export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<string, StreamTick>, held: Set<string>, now = Date.now(), { openBars = true } = {}): boolean {
+export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<string, StreamTick>, held: Set<string>, now = Date.now(), { snapshot = false } = {}): boolean {
   let touched = false;
   const fresh = (key: unknown[]) => (qc.getQueryState(key)?.dataUpdatedAt ?? 0) >= SESSION_START;
   qc.setQueriesData<RegisteredWithQuote[]>({ queryKey: [apiUrl, "stocks"], exact: true }, (list) => {
@@ -108,9 +131,9 @@ export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<st
     // 차트의 마지막 봉도 같이 움직인다 (분봉은 현지 시각, 일·주·월봉은 거래일로 같은 구간이면 고·저·종 갱신, 새 구간이면 새 봉)
     for (const q of qc.getQueryCache().findAll({ queryKey: [apiUrl, "candles", tick.code] })) {
       const series = q.state.data as CandleSeries | undefined;
-      if (!series) continue;
+      if (!series || (snapshot && !newerThanSeries(tick, q.state.dataUpdatedAt))) continue;
       const next = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp, series.code || tick.code);
-      if (next === series.candles || (!openBars && next.length !== series.candles.length)) continue;
+      if (next === series.candles || (snapshot && next.length !== series.candles.length)) continue;
       const { dataUpdatedAt, isInvalidated } = q.state;
       qc.setQueryData<CandleSeries>(q.queryKey, { ...series, candles: next }, { updatedAt: dataUpdatedAt });
       // 새 봉이 열렸으면 서버 봉을 다시 받는다 (보고 있지 않은 차트는 표시만 해 두고 다시 볼 때, 방금 받은 서버 봉이면 표시만).
@@ -159,14 +182,14 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       listRefetchedAt = now;
       void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"], exact: true }, { cancelRefetch: false });
     };
-    // snapshot: 접속 직후 스냅샷이면 차트에 새 봉을 열지 않는다 (applyTicksToCache 의 openBars)
+    // snapshot: 접속 직후 스냅샷이면 차트에 새 봉을 열지 않고, 스냅샷에 없는 종목의 마지막 체결은 잊는다 (applyTicksToCache · rememberTicks)
     const applyNow = (snapshot = false) => {
       flushTimer = null;
       if (!queue.length) return;
       const ticks = latestPerCode(queue.splice(0));
-      rememberTicks(apiUrl, ticks.values());
+      rememberTicks(apiUrl, ticks.values(), { snapshot });
       const held = new Set<string>();
-      const touched = applyTicksToCache(qc, apiUrl, ticks, held, Date.now(), { openBars: !snapshot });
+      const touched = applyTicksToCache(qc, apiUrl, ticks, held, Date.now(), { snapshot });
       if (held.size) refetchNewDay(held);
       if (touched) {
         ticksRef.current += ticks.size;
