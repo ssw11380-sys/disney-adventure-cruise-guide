@@ -209,15 +209,16 @@ npx expo start          # QR 을 Expo Go 앱으로 스캔 (iOS/Android)
 
 ### 홈 화면 위젯 (Android)
 
-앱을 설치하면 위젯 목록에 세 가지가 생깁니다(홈 화면 길게 누르기 → 위젯 → 주식 브리핑). `react-native-android-widget` 로 만들었고, 서버 주소·토큰·원화 표시 설정은 앱과 같은 저장소(AsyncStorage)를 읽습니다.
+앱을 설치하면 위젯 목록에 네 가지가 생깁니다(홈 화면 길게 누르기 → 위젯 → 주식 브리핑. 지수·환율은 APK 1.4.0 부터). `react-native-android-widget` 로 만들었고, 서버 주소·토큰·원화 표시 설정은 앱과 같은 저장소(AsyncStorage)를 읽습니다.
 
 | 위젯 | 크기 | 내용 |
 |---|---|---|
 | 내 종목 시세 | 4×2 (세로로 늘리면 한 번에 더 보임) | 총 평가금액·당일 손익 + 등록 종목 전체를 스크롤 목록으로(보유는 평가금액 큰 순, 관심은 이름 순). 행마다 현재가·등락률·수익률. 종목을 누르면 상세 화면, ↻ 를 누르면 즉시 새로고침 |
 | 오늘의 브리핑 | 4×2 | 가장 최근 브리핑의 3줄 요약. 누르면 브리핑 상세 |
 | 총 평가금액 | 2×1 | 총 평가금액과 오늘·총 손익 |
+| 지수·환율 | 4×2 (가로·세로로 늘릴 수 있음) | 국내(코스피·코스닥) · 미국(나스닥·S&P500·다우·필라반도체) · 환율(원/달러·원/100엔·원/위안). 값·등락은 홈 지수 띠와 같은 표기(칸마다 등락률, 낮은 크기는 이름 옆에), 장중은 초록 점, 출처가 늦으면 흐린 값 + "지연". 4×3 이상은 9개 모두, 4×2 는 6개. 누르면 그 지수·환율 차트. 플래그 `widgetMarket` |
 
-갱신: Android 최소 주기인 30분마다 자동, 앱을 열어 홈 데이터를 받을 때(1분에 한 번), ↻ 클릭 시. 코드: `app/src/widgets/` (위젯 JSX `widgets.tsx`, 데이터 `data.ts`, 이벤트 `widgetTaskHandler.tsx`), 진입점 `app/index.js`, 크기·라벨은 `app.json` 의 `react-native-android-widget` 플러그인.
+갱신: Android 최소 주기인 30분마다 자동, 앱을 열어 홈 데이터를 받을 때(1분에 한 번), ↻ 클릭 시. 코드: `app/src/widgets/` (위젯 JSX `widgets.tsx`·`marketWidget.tsx`, 크기별 배치 `layout.ts`, 데이터 `data.ts`, 이벤트 `widgetTaskHandler.tsx`), 진입점 `app/index.js`, 크기·라벨은 `app.json` 의 `react-native-android-widget` 플러그인.
 
 ### 미국 주식 원화 표시
 

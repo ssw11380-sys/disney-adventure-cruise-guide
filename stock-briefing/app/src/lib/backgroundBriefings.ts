@@ -8,7 +8,7 @@ import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefi
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload } from "@/widgets/data";
 import { shouldSkipFetch } from "@/widgets/payload";
-import { refreshWidgets } from "@/widgets/refresh";
+import { marketWidgetPlaced, refreshWidgets } from "@/widgets/refresh";
 
 /**
  * FCM(원격 푸시) 없이도 브리핑 알림을 받기 위한 백그라운드 확인.
@@ -99,7 +99,8 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     const cached = await readCachedPayload();
     if (shouldSkipFetch(cached ? { at: cached.at, market: cached.body.market } : null, Date.now())) return BackgroundTask.BackgroundTaskResult.Success;
     const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
-    const data = await loadWidgetData({ stocks: true, briefings: true });
+    // 지수·환율 위젯이 홈 화면에 있을 때만 판 9개를 함께 묻는다 (같은 요청 한 번, 없으면 응답이 예전과 같다)
+    const data = await loadWidgetData({ stocks: true, briefings: true, board: await marketWidgetPlaced() });
     if (data.error) return BackgroundTask.BackgroundTaskResult.Failed;
     if (local) {
       // 새 서버는 최신 브리핑 id 만 준다 → 아직 알리지 않은 id 가 있을 때만 전체 목록과 알림 규칙을 받아 알린다 (예전 서버는 briefings 가 전체 목록)
@@ -127,6 +128,7 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
       briefings: data.briefings,
       features: data.featuresAt !== undefined ? { at: data.featuresAt, flags: data.features } : null,
       indices: data.indices ? { at: data.indicesAt ?? data.fetchedAt, list: data.indices } : null,
+      board: data.board ? { at: data.boardAt ?? data.fetchedAt, list: data.board } : null,
     });
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {

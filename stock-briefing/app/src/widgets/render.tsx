@@ -4,6 +4,7 @@ import { space } from "@/tokens";
 import type { WidgetData } from "./data";
 import type { PnlMode } from "./model";
 import { WIDGET_FONT, WIDGET_PALETTES, WIDGET_RADIUS, type WidgetPalette } from "./palette";
+import { MarketWidget } from "./marketWidget";
 import { agedIndices } from "./payload";
 import { AssetWidget, BriefingWidget, HoldingsWidget, WIDGET_NAMES } from "./widgets";
 
@@ -38,6 +39,19 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
       return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={o.now} market={data.market} refreshing={o.refreshing} {...frame} />;
     case WIDGET_NAMES.asset:
       return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={o.now} market={data.market} {...frame} />;
+    case WIDGET_NAMES.market:
+      // 판을 받은 지 3시간(서버 지연 한도)이 넘으면 모든 칸을 "지연"으로
+      return (
+        <MarketWidget
+          board={agedIndices(data.board, data.boardAt, o.now)}
+          boardAt={data.board ? (data.boardAt ?? data.fetchedAt) : null}
+          enabled={data.features.market}
+          error={data.error}
+          now={o.now}
+          refreshing={o.refreshing}
+          {...frame}
+        />
+      );
     default:
       return (
         <HoldingsWidget

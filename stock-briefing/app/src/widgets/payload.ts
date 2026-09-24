@@ -57,31 +57,53 @@ export interface WidgetPayload {
   features?: Record<string, boolean>;
   /** 코스피·나스닥·원/달러 (widgetIndexLine 이 켜진 서버만) */
   indices?: WidgetIndex[];
+  /** 지수·환율 위젯 판 9개 (widgetMarket 이 켜진 서버가 ?board=1 로 물은 앱에만). 예전 서버·플래그 꺼짐이면 없음 */
+  board?: WidgetIndex[];
 }
 
-/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine) */
+/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket) */
 export interface WidgetFeatures {
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
   /** 합계 아래 지수·환율 한 줄 */
   indexLine: boolean;
+  /** 지수·환율 위젯 (APK 1.4.0). 꺼져 있거나 모르면 짧은 안내만 */
+  market: boolean;
 }
 
-export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false };
+export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false };
 
 /** 받은 플래그 → 위젯 기능. 모르는 키·예전 서버(없음)면 꺼짐 (새 기능은 fallback false, docs/기능-플래그.md) */
 export function widgetFeatures(features: Record<string, boolean> | null | undefined): WidgetFeatures {
   const flags = features ? { features, updatedAt: null } : null;
-  return { pnlToggle: featureOn(flags, "widgetPnlToggle", false), indexLine: featureOn(flags, "widgetIndexLine", false) };
+  return {
+    pnlToggle: featureOn(flags, "widgetPnlToggle", false),
+    indexLine: featureOn(flags, "widgetIndexLine", false),
+    market: featureOn(flags, "widgetMarket", false),
+  };
 }
 
 /** 위젯 지수 줄에 넣는 항목과 순서 (서버 widgetPayload.ts 의 WIDGET_INDEX_CODES 와 같다) */
 export const WIDGET_INDEX_CODES = ["KOSPI", "NASDAQ", "USDKRW"] as const;
 
+/** 지수·환율 위젯 판의 항목과 순서: 국내 → 미국 → 환율 (서버 widgetPayload.ts 의 WIDGET_BOARD_CODES, board.ts 의 구역과 같다) */
+export const WIDGET_BOARD_CODES = ["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "DJI", "SOX", "USDKRW", "JPYKRW", "CNYKRW"] as const;
+
+type IndexRow = { code: string; name: string; value: number; change: number; changeRate: number; open: boolean; stale?: boolean; asOf?: string | null };
+
 /** 앱이 받은 지수 띠 목록(/api/market/indices?stale=1)에서 위젯 줄에 넣을 것만, 서버와 같은 순서·같은 모양으로 */
-export function pickWidgetIndices(list: readonly { code: string; name: string; value: number; change: number; changeRate: number; open: boolean; stale?: boolean; asOf?: string | null }[]): WidgetIndex[] {
+export function pickWidgetIndices(list: readonly IndexRow[]): WidgetIndex[] {
+  return pickCodes(list, WIDGET_INDEX_CODES);
+}
+
+/** 앱이 받은 지수 띠 목록에서 지수·환율 위젯 판 9개 (서버가 주는 board 와 같은 순서·같은 모양) */
+export function pickBoard(list: readonly IndexRow[]): WidgetIndex[] {
+  return pickCodes(list, WIDGET_BOARD_CODES);
+}
+
+function pickCodes(list: readonly IndexRow[], codes: readonly string[]): WidgetIndex[] {
   const byCode = new Map(list.map((i) => [i.code, i]));
-  return WIDGET_INDEX_CODES.flatMap((code) => {
+  return codes.flatMap((code) => {
     const i = byCode.get(code);
     if (!i) return [];
     return [{ code: i.code, name: i.name, value: i.value, change: i.change, changeRate: i.changeRate, open: i.open, ...(i.stale ? { stale: true } : {}), ...(i.asOf ? { asOf: i.asOf } : {}) }];
@@ -113,6 +135,7 @@ export function fromPayload(p: WidgetPayload): {
   briefings: LatestBriefing[];
   market: WidgetMarket | null;
   indices: WidgetIndex[] | null;
+  board: WidgetIndex[] | null;
   features: WidgetFeatures;
 } {
   const stocks = p.stocks.map((s): RegisteredWithQuote => {
@@ -139,7 +162,7 @@ export function fromPayload(p: WidgetPayload): {
     name: b.name,
     latest: { id: b.id, code: b.code, name: b.name, session: b.session as "morning" | "afternoon", date: b.date, status: "ok", summary: b.summary, detail: "", missing: [], model: "", error: null, createdAt: b.createdAt },
   }));
-  return { stocks, briefings, market: p.market, indices: cleanIndices(p.indices), features: widgetFeatures(p.features) };
+  return { stocks, briefings, market: p.market, indices: cleanIndices(p.indices), board: cleanIndices(p.board), features: widgetFeatures(p.features) };
 }
 
 /**

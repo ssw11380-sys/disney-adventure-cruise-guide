@@ -7,7 +7,8 @@ import { WIDGET_CLICK, WIDGET_NAMES } from "./widgets";
 
 /**
  * 위젯 이벤트 처리. 추가/주기 갱신/크기 변경/새로고침 클릭 때 서버에서 데이터를 받아 다시 그린다.
- * 종목·브리핑·합계 클릭은 OPEN_URI 딥링크라 여기로 오지 않는다. 늘 라이트·다크 두 벌을 그린다 (3-23).
+ * 종목·브리핑·합계·지수 칸 클릭은 OPEN_URI 딥링크라 여기로 오지 않는다. 늘 라이트·다크 두 벌을 그린다 (3-23).
+ * 위젯 4종(잔고·브리핑·자산·지수·환율)이 같은 처리를 쓴다 — 지수·환율 위젯의 ↻ 도 "갱신 중"을 먼저 그린다.
  *  - REFRESH(↻): 저장해 둔 값으로 "갱신 중"을 바로 그리고(1초 안), 서버에서 받은 결과로 다시 그린다 (실패하면 "갱신 실패 …")
  *  - PNL_TOGGLE(손익): 누른 위젯이 보여 주던 쪽의 반대로 바꿔 저장하고, 서버를 부르지 않고 저장해 둔 값으로 바로 다시 그린다.
  *    손익 칸 설정은 잔고 위젯 모두가 같이 쓰므로 다른 잔고 위젯도 같은 쪽으로 다시 그린다
@@ -36,8 +37,15 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
         /* 저장해 둔 값으로 못 그려도 서버에서 받아 그리는 것은 계속한다 */
       }
     }
-    // ↻ 를 누른 때만 서버에 바로 묻고, 주기·추가·크기 변경 갱신은 백그라운드 작업이 받아 둔 응답을 다시 쓴다
-    const data = await loadWidgetData({ stocks: name !== WIDGET_NAMES.briefing, briefings: name === WIDGET_NAMES.briefing, reuse: widgetAction !== "WIDGET_CLICK" });
+    // ↻ 를 누른 때만 서버에 바로 묻고, 주기·추가·크기 변경 갱신은 백그라운드 작업이 받아 둔 응답을 다시 쓴다.
+    // 지수·환율 위젯은 판을 함께 묻는다 (받아 둔 응답에 판이 없으면 재사용하지 않고 묻는다). 예전 서버의 예전 API(잔고·브리핑)는 부르지 않는다
+    const market = name === WIDGET_NAMES.market;
+    const data = await loadWidgetData({
+      stocks: name !== WIDGET_NAMES.briefing && !market,
+      briefings: name === WIDGET_NAMES.briefing,
+      board: market,
+      reuse: widgetAction !== "WIDGET_CLICK",
+    });
     // 손익 칸 설정은 받은 뒤에 읽는다: 받는 동안(최대 12초, "갱신 중") 손익을 눌러 바꾼 것을 옛 값으로 되돌려 그리지 않게
     renderWidget(renderBoth(name, data, { ...frame, now: Date.now(), pnlMode: await readPnlMode() }));
   } catch (e) {

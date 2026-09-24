@@ -19,7 +19,9 @@ vi.mock("expo-background-task", () => ({
 vi.mock("expo-task-manager", () => ({ isTaskDefined: () => true, defineTask: () => undefined, isTaskRegisteredAsync: async () => task.registered }));
 vi.mock("@/lib/notifications", () => ({ ANDROID_CHANNEL: "briefings", ensureAndroidChannel: async () => undefined }));
 const refreshed: unknown[] = [];
-vi.mock("@/widgets/refresh", () => ({ refreshWidgets: async (x: unknown) => void refreshed.push(x) }));
+// 지수·환율 위젯이 홈 화면에 있는지 (1.4.0: 있으면 백그라운드 작업이 판을 함께 묻는다)
+const placed = { market: false };
+vi.mock("@/widgets/refresh", () => ({ refreshWidgets: async (x: unknown) => void refreshed.push(x), marketWidgetPlaced: async () => placed.market }));
 vi.mock("react-native", () => ({ Platform: { OS: "android" } }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: { apiUrl: "https://server.test" } } } }));
 const store = new Map<string, string>();
@@ -56,6 +58,7 @@ beforeEach(() => {
   scheduled.length = 0;
   refreshed.length = 0;
   task.registered = false;
+  placed.market = false;
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   vi.stubGlobal("fetch", async (url: string) => new Response(JSON.stringify(url.includes("/api/widget") ? payload : latest), { status: 200 }));
@@ -225,6 +228,40 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       await ensureBackgroundTaskRegistered();
       await disableLocalBriefingAlerts();
       expect(task.registered).toBe(true);
+    });
+  });
+
+  describe("지수·환율 위젯 (APK 1.4.0): 백그라운드 작업이 다른 위젯처럼 갱신한다", () => {
+    const board = [
+      { code: "KOSPI", name: "코스피", value: 7080.92, change: 63.01, changeRate: 0.9, open: true },
+      { code: "USDKRW", name: "원/달러", value: 1360.5, change: -2.1, changeRate: -0.15, open: true },
+    ];
+    const serveBoard = () => {
+      const urls: string[] = [];
+      vi.stubGlobal("fetch", async (url: string) => {
+        urls.push(url);
+        const withBoard = url.includes("board=1");
+        return new Response(JSON.stringify({ ...payload, features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true }, ...(withBoard ? { board } : {}) }), { status: 200 });
+      });
+      return urls;
+    };
+
+    it("홈 화면에 지수·환율 위젯이 있으면 같은 요청 한 번에 판을 함께 묻고(&board=1), 받은 판·플래그로 위젯을 다시 그린다", async () => {
+      placed.market = true;
+      const urls = serveBoard();
+      await runBriefingCheck();
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&board=1"]);
+      const r = refreshed[0] as { board: { at: number; list: { code: string }[] } | null; features: { flags: { market: boolean } } | null };
+      expect(r.board!.list.map((i) => i.code)).toEqual(["KOSPI", "USDKRW"]);
+      expect(r.board!.at).toBe(NOW);
+      expect(r.features!.flags.market).toBe(true);
+    });
+
+    it("위젯이 없으면 판을 묻지 않는다 (응답·ETag 가 예전과 같다)", async () => {
+      const urls = serveBoard();
+      await runBriefingCheck();
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1"]);
+      expect((refreshed[0] as { board: unknown }).board).toBeNull();
     });
   });
 });
