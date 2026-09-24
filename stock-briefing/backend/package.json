@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "master:refresh": "tsx src/scripts/refreshMaster.ts",
-    "briefing": "tsx src/scripts/runBriefing.ts"
+    "briefing": "tsx src/scripts/runBriefing.ts",
+    "backup:restore": "tsx src/scripts/restoreBackup.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.7",

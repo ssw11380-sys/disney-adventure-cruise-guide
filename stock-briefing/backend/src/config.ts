@@ -39,6 +39,11 @@ const schema = z.object({
   /** Expo 푸시 보안 토큰 (선택). 계정에서 "Enhanced push security" 를 켠 경우에만 필요 */
   EXPO_ACCESS_TOKEN: z.string().default(""),
 
+  /** DB 백업 암호화 키 (긴 임의 문자열). 없으면 백업하지 않는다. Railway 변수에만 둔다 */
+  BACKUP_KEY: z.string().default(""),
+  /** 백업 파일 폴더 (운영: 볼륨 안) */
+  BACKUP_DIR: z.string().default("./data/backups"),
+
   /** 설정하면 /api/* 요청에 `Authorization: Bearer <토큰>` 이 필요하다 (인터넷에 노출할 때 필수) */
   API_TOKEN: z.string().default(""),
 });

@@ -173,6 +173,7 @@ npm test
 - Railway 는 `railway.json` 의 `watchPatterns` 에 걸린 파일(`stock-briefing/backend/**` 중 `test/` 제외, 루트 `Dockerfile`·`.dockerignore`·`railway.json`)이 바뀐 커밋만 다시 배포합니다. 앱만 바꾼 PR 은 서버를 재시작하지 않습니다.
 - 병합 금지 시간(한국 시간, 평일): **08:20~08:40**(오전 브리핑·장 시작 직전), **15:50~16:15**(장 마감·오후 브리핑). 서버 재배포 중에는 실시간 시세와 브리핑 생성이 잠깐 멈추기 때문입니다.
 - 앱 JS 오류는 서버에 자동으로 모입니다(`POST /api/app-errors`, 토큰·금액은 앱과 서버에서 두 번 지움, 분당 한도). 최근 N일 수는 `GET /api/admin/app-errors?days=7`, 앱 설정 → 서버 → "앱 오류 (7일)". OTA 를 올린 뒤 24시간은 이 숫자를 확인하고, 늘었으면 [OTA 되돌리기](docs/OTA-되돌리기.md) 절차로 이전 버전을 다시 게시합니다.
+- DB 는 하루 한 번(04~06시) 암호화해 볼륨의 `data/backups/` 에 7개까지 백업합니다(Railway 변수 `BACKUP_KEY` 필요). 상태는 `/health` 의 `backup`, 복구는 [DB 백업·복구](docs/DB-백업-복구.md).
 - 저장소 설정에서 켜 두면 좋은 것(저장소 관리자만 가능): main 브랜치 보호 규칙에 세 CI 잡을 필수 검사로 지정, Railway 서비스 설정의 "Wait for CI" 켜기.
 
 ## 앱 실행 (3단계)

@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createDb, migrate, type Db } from "../src/db/index.js";
+import { BACKUP_TABLES, decryptBackup, encryptBackup, restoreBackup } from "../src/services/backupService.js";
 import { FakeGenerator, fakeProviders, SAMPLE_MASTER } from "./helpers.js";
 
 /**
@@ -98,5 +99,23 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect(put.schedule.jobs[0].cron).toBe("0 9 * * 1-5");
     const del = await app.inject({ method: "DELETE", url: "/api/stocks/000660" });
     expect(del.statusCode).toBe(204);
+  });
+
+  it("백업을 비운 표에 되살리고, 일련번호가 이어져 새 행을 넣을 수 있다 (3-7)", async () => {
+    const tables: Record<string, Record<string, unknown>[]> = {};
+    for (const t of BACKUP_TABLES) tables[t] = (await sql<Record<string, unknown>>`select * from ${sql.table(t)}`.execute(db)).rows;
+    const before = Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.length]));
+    expect(before["briefings"]).toBeGreaterThan(0);
+    const payload = decryptBackup(encryptBackup({ version: 1, createdAt: "t", tables }, "k"), "k");
+    for (const t of [...BACKUP_TABLES].reverse()) await sql`delete from ${sql.table(t)}`.execute(db);
+    const r = await restoreBackup(db, "postgres", payload);
+    expect(r).toEqual(before);
+    // 복구 뒤 새 브리핑 insert 가 id 충돌 없이 된다
+    const row = { ...(tables["briefings"]![0] as Record<string, unknown>) };
+    delete row["id"];
+    row["briefing_date"] = "2099-01-01"; // 고유 키(code·date·session)가 겹치지 않게
+    await (db as unknown as { insertInto: (t: string) => { values: (v: unknown) => { execute: () => Promise<unknown> } } }).insertInto("briefings").values(row).execute();
+    const n = await sql<{ n: number }>`select count(*) as n from briefings`.execute(db);
+    expect(Number(n.rows[0]!.n)).toBe(before["briefings"]! + 1);
   });
 });

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { DartProvider } from "../providers/dart/dart.js";
 import type { TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import type { TossRealtime } from "../providers/market/tossRealtime.js";
+import type { BackupService } from "../services/backupService.js";
 import type { StockService } from "../services/stockService.js";
 import type { HoldingsAutoSync, TossSyncService } from "../services/tossSyncService.js";
 
@@ -11,6 +12,7 @@ export interface AdminDeps {
   toss?: { provider: TossOpenApiProvider; sync: TossSyncService; autoSync: HoldingsAutoSync; live: TossRealtime | null; outboundIp: () => Promise<string | null> } | null;
   /** 서버 공인 IP 조회 (키가 없을 때도 앱 카드에 허용 IP 등록용으로 보여 준다) */
   outboundIp?: () => Promise<string | null>;
+  backups?: BackupService;
 }
 
 /** 토스 Open API 연동 상태 (앱 설정 화면용). 키가 없어도 200 으로 configured:false 를 준다 */
@@ -20,7 +22,16 @@ export function tossStatus(deps: AdminDeps["toss"], ip: string | null) {
 }
 
 /** 운영용 엔드포인트. API_TOKEN 이 있으면 /api/* 전체에 적용된다. */
-export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service, dart, toss, outboundIp }) => {
+export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service, dart, toss, outboundIp, backups }) => {
+  /** DB 백업: 상태·목록, 지금 백업, 암호화된 파일 내려받기 (복구 리허설·외부 보관용) */
+  app.get("/backups", async () => ({ status: await backups?.status(), files: (await backups?.list()) ?? [] }));
+  app.post("/backups/run", async () => backups?.run() ?? { enabled: false });
+  app.get("/backups/:name", async (req, reply) => {
+    const buf = await backups?.read((req.params as { name: string }).name);
+    if (!buf) return reply.code(404).send({ error: "NOT_FOUND", message: "백업 파일이 없습니다" });
+    return reply.type("application/octet-stream").send(buf);
+  });
+
   app.get("/master", async () => service.masterStatus());
   app.post("/master/refresh", async () => service.refreshMaster());
 

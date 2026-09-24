@@ -105,6 +105,8 @@ export class StockService {
   private readonly quickLast = new Map<string, LiveTick>();
   private readonly inflight = new Map<string, Promise<void>>();
   private hydrated: Promise<void> | null = null;
+  /** 마지막 잔고 요청의 종목 (/health 지연 수 세기용) */
+  private listCodes: string[] = [];
   private readonly stats = { refreshes: 0, failures: 0, cacheWriteErrors: 0, lastRefreshAt: null as string | null, lastRefreshMs: null as number | null };
 
   constructor(private readonly deps: StockServiceDeps) {
@@ -372,6 +374,7 @@ export class StockService {
   async listWithQuotes(): Promise<RegisteredWithQuote[]> {
     const [stocks, meta] = await Promise.all([this.list(), this.holdingMeta(), this.hydrate()]);
     const codes = stocks.map((s) => s.code);
+    this.listCodes = codes;
     const quickP = this.quickNow(codes);
     const t = this.now().getTime();
     const expired = codes.filter((c) => this.due(c, t));
@@ -447,7 +450,11 @@ export class StockService {
   quoteStatus(): { cached: number; stale: number; refreshing: number; refreshes: number; failures: number; cacheWriteErrors: number; lastRefreshAt: string | null; lastRefreshMs: number | null; baseFallbacks: number | null } {
     const t = this.now().getTime();
     let stale = 0;
-    for (const [code, h] of this.book) if (this.isStale(code, h, t)) stale++;
+    // 잔고에 보이는 종목만 센다 (발견 탭에서 한 번 본 종목 등 캐시에만 남은 것은 제외)
+    for (const code of this.listCodes) {
+      const h = this.book.get(code);
+      if (h && this.isStale(code, h, t)) stale++;
+    }
     return { cached: this.book.size, stale, refreshing: this.inflight.size, ...this.stats, baseFallbacks: this.deps.tossOpenApi?.baseFallbacks ?? null };
   }
 
