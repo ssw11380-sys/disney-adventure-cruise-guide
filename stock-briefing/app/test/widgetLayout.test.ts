@@ -25,20 +25,24 @@ import {
 } from "@/widgets/layout";
 import {
   BOARD_GAP,
+  BOARD_ROW_PADS,
   boardBodyHeight,
-  boardColW,
   boardContent,
   boardRoom,
+  boardTextRoom,
   boardTileHeight,
+  boardTileWidth,
+  CAPTION_GAPS,
   marketHeaderRoom,
   marketHeaderWidth,
-  markerWidth,
   planMarket,
+  spreadWidths,
   type MarketInput,
   type MarketPlan,
 } from "@/widgets/layout";
 import { BOARD_TITLE, boardColumns, boardTiles } from "@/widgets/board";
 import type { WidgetIndex } from "@/widgets/payload";
+import { formatPct } from "@/lib/format";
 import { WIDGET_BOARD, WIDGET_FONT as F, WIDGET_TOUCH as TOUCH } from "@/widgets/palette";
 import { space } from "@/tokens";
 
@@ -546,41 +550,53 @@ function marketInput(width: number, height: number, scale: number, board: Widget
 const shownCodes = (p: MarketPlan) => p.columns.map((c) => c.codes);
 const shownCount = (p: MarketPlan) => p.columns.reduce((a, c) => a + c.codes.length, 0);
 
-/** 계획대로 그렸을 때 칸을 넘는 글자·높이 (없어야 한다) */
+/** 계획대로 그렸을 때 칸을 넘는 글자·높이·빠진 등락 (없어야 한다) */
 function marketOverflow(i: MarketInput, p: MarketPlan): string[] {
   const bad: string[] = [];
   const s = i.scale;
   if (marketHeaderWidth(i.title, p.sub, s) > marketHeaderRoom(i.width)) bad.push(`머리 ${p.sub}`);
   const n = p.columns.length;
-  if (n * p.colW + (n - 1) * (BOARD_GAP * 2 + WIDGET_BOARD.hairline) > boardContent(i.width)) bad.push(`칸 폭 합 ${p.colW}×${n}`);
+  const sum = p.columns.reduce((a, c) => a + c.width, 0);
+  if (sum + (n - 1) * (BOARD_GAP * 2 + WIDGET_BOARD.hairline) > boardContent(i.width)) bad.push(`칸 폭 합 ${p.columns.map((c) => c.width).join("+")}`);
+  if (p.columns.some((c) => !Number.isInteger(c.width))) bad.push("칸 폭이 정수가 아님");
   if (p.valueFont < WIDGET_BOARD.value.min) bad.push(`값 글자 ${p.valueFont} < ${WIDGET_BOARD.value.min}`);
   const tiles = new Map(i.columns.flatMap((c) => c.tiles).map((t) => [t.code, t]));
-  for (const col of p.columns)
+  for (const col of p.columns) {
+    if (p.captions && textWidth(col.label, F.xs, s, true) > col.width) bad.push(`구역 이름 ${col.label}`);
     for (const code of col.codes) {
       const t = tiles.get(code)!;
-      // 숫자(값·등락)는 자르지 않는다: 칸 폭 안에 한 줄로
-      const vw = textWidth(t.value, p.valueFont, s, true);
-      if (vw > p.colW) bad.push(`${code} 값 ${t.value} ${vw.toFixed(0)} > ${p.colW}`);
-      const ch = p.change[code];
-      if (p.shape === "full" && t.changes.length && !ch) bad.push(`${code} 등락 빠짐`);
-      if (ch) {
-        if (!t.changes.includes(ch)) bad.push(`${code} 모르는 등락 ${ch}`);
-        const cw = textWidth(ch, p.changeFont, s, true);
-        if (cw > p.colW) bad.push(`${code} 등락 ${ch} ${cw.toFixed(0)} > ${p.colW}`);
-      }
-      // 이름(줄일 수 있음) + 장중 점·"지연" ≤ 칸 폭, "지연"은 늘 보인다
-      const nameW = p.nameW[code] ?? -1;
-      if (nameW < 0 || nameW + markerWidth(t.marker, p.nameFont, s) > p.colW) bad.push(`${code} 이름 칸 ${nameW}`);
+      const mark = p.mark[code] ?? null;
+      const change = p.change[code] ?? null;
+      // 숫자(값·등락)는 자르지 않는다: 칸의 가장 긴 줄이 구역 폭 안에
+      const w = boardTileWidth(t, { shape: p.shape, mark, change, nameFont: p.nameFont, valueFont: p.valueFont, changeFont: p.changeFont, nameW: p.nameW[code] }, s);
+      if (w > col.width) bad.push(`${code} ${w.toFixed(0)} > ${col.width}`);
+      // 등락: full 은 등락 줄, inline 은 등락률, brief 는 ▲/▼ (보합 제외). 지연 항목은 inline·brief 에서 "지연"이 그 자리에
+      const stale = t.marker === "stale";
+      if (t.changes.length && p.shape === "full" && !t.changes.includes(change ?? "")) bad.push(`${code} 등락 ${change}`);
+      if (t.changes.length && p.shape === "inline" && !stale && change !== t.changes[t.changes.length - 1]) bad.push(`${code} 등락률 ${change}`);
+      if (p.shape === "brief" && change !== null && change !== "▲" && change !== "▼") bad.push(`${code} 방향 ${change}`);
+      if (p.shape !== "full" && stale && change !== null) bad.push(`${code} 지연인데 등락`);
+      // 지연 항목은 "지연"(글자·점) 표시, 장중 점은 장중 항목에만
+      if (stale !== (mark === "staleText" || mark === "staleDot")) bad.push(`${code} 지연 표시 ${mark}`);
+      if ((t.marker === "live") !== (mark === "live")) bad.push(`${code} 장중 점 ${mark}`);
     }
-  // 세로: 머리 줄 48 + 본문 + 아래 여백 + 테두리 ≤ 높이
+  }
+  // 세로: 머리 줄 48 + 본문 + 아래 여백 + 테두리 ≤ 높이, 여백은 간격 토큰 단계
   const rows = Math.max(...p.columns.map((c) => c.codes.length));
+  if (!(BOARD_ROW_PADS as readonly number[]).includes(p.rowPad)) bad.push(`칸 사이 여백 ${p.rowPad}`);
+  if (!(CAPTION_GAPS as readonly number[]).includes(p.captionGap)) bad.push(`구역 이름 여백 ${p.captionGap}`);
   if (p.tileH !== boardTileHeight(p.shape, p.nameFont, p.valueFont, p.changeFont, s)) bad.push("칸 높이 어림이 다름");
-  const body = boardBodyHeight(rows, p.tileH, p.rowPad, p.captions, s);
+  const body = boardBodyHeight(rows, p.tileH, p.rowPad, p.captions, s, p.captionGap);
   if (Math.abs(body - p.bodyH) > 0.001) bad.push(`본문 어림 ${p.bodyH} ≠ ${body}`);
   if (body > boardRoom(i.height)) bad.push(`세로 ${body} > ${boardRoom(i.height)}`);
   if (TOUCH + body + PAD + WIDGET_BOARD.border * 2 > i.height) bad.push("위젯 밖으로 넘침");
   return bad;
 }
+
+/** 미국 장중(밤): 미국 네 지수 옆에도 장중 점 — 이름 줄이 가장 긴 때 */
+const US_OPEN: WidgetIndex[] = REAL_BOARD.map((i) => (["NASDAQ", "SPX", "DJI", "SOX"].includes(i.code) ? { ...i, open: true } : i));
+/** 흔한 값에 지연 두 개 (코스닥·필라반도체) */
+const STALE_BOARD: WidgetIndex[] = REAL_BOARD.map((i) => (i.code === "KOSDAQ" || i.code === "SOX" ? { ...i, stale: true, open: false } : i));
 
 describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% 숫자 잘림 0", () => {
   const BOXES = {
@@ -610,7 +626,7 @@ describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% �
             expect(plan.columns.map((c) => c.label)).toEqual(["국내", "미국", "환율"]);
           });
 
-  it("4×2 (330×160·180): 코스피·코스닥 / 나스닥·S&P500 / 원/달러·원/100엔 3×2 격자, 흔한 4×2 는 등락 줄과 구역 이름까지", () => {
+  it("4×2 (330×160·180): 코스피·코스닥 / 나스닥·S&P500 / 원/달러·원/100엔 3×2 격자, 흔한 4×2 는 등락률·구역 이름과 제목보다 큰 값", () => {
     const six = [["KOSPI", "KOSDAQ"], ["NASDAQ", "SPX"], ["USDKRW", "JPYKRW"]];
     for (const [w, h, s] of [
       [330, 160, 1],
@@ -619,12 +635,16 @@ describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% �
       [300, 180, 1],
     ] as const)
       expect(shownCodes(planMarket(marketInput(w, h, s)))).toEqual(six);
+    // 가장 흔한 4×2 (330×160): 두 줄 칸(이름 ··· 등락률 / 값), 값은 제목(13sp)보다 크다
     const p160 = planMarket(marketInput(330, 160, 1));
-    expect(p160.shape).toBe("full");
-    expect(p160.change.KOSPI).toBe("▲63.01 +0.90%");
+    expect(p160).toMatchObject({ shape: "inline", captions: true, change: { KOSPI: "+0.90%", NASDAQ: "-1.13%" } });
+    expect(p160.valueFont).toBeGreaterThan(F.title);
     const p180 = planMarket(marketInput(330, 180, 1));
-    expect(p180).toMatchObject({ shape: "full", captions: true });
-    expect(p180.valueFont).toBeGreaterThanOrEqual(WIDGET_BOARD.value.comfort);
+    expect(p180).toMatchObject({ shape: "inline", captions: true });
+    expect(p180.valueFont).toBeGreaterThanOrEqual(16);
+    // 조금 더 높으면 앱 지수 띠와 같은 "▲63.01 +0.90%" 줄까지
+    const p200 = planMarket(marketInput(330, 200, 1));
+    expect(p200).toMatchObject({ shape: "full", captions: true, change: { KOSPI: "▲63.01 +0.90%" } });
   });
 
   it("4×4 (4×3 이상): 9개 모두를 국내 · 미국 · 환율로, 100% 는 등락 줄·구역 이름·큰 값", () => {
@@ -640,10 +660,56 @@ describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% �
     ] as const)
       expect(shownCodes(planMarket(marketInput(w, h, s)))).toEqual(all);
     const p = planMarket(marketInput(330, 330, 1));
-    expect(p).toMatchObject({ shape: "full", captions: true });
+    expect(p).toMatchObject({ shape: "full", captions: true, change: { KOSPI: "▲63.01 +0.90%" } });
     expect(p.valueFont).toBeGreaterThanOrEqual(16);
     // 넓으면 값 글자는 상한(19sp)까지만
     expect(planMarket(marketInput(420, 420, 1)).valueFont).toBe(WIDGET_BOARD.value.max);
+  });
+
+  it("4×3 높이(100% 에서 240~300dp, 예: 330×250): 9칸 모두 등락률이 보이고 구역 이름·제목보다 큰 값 (미국 장중·지연이어도)", () => {
+    for (const board of [REAL_BOARD, US_OPEN, STALE_BOARD]) {
+      const p = planMarket(marketInput(330, 250, 1, board));
+      expect(shownCount(p)).toBe(9);
+      expect(p.shape).toBe("inline");
+      expect(p.captions).toBe(true);
+      expect(p.valueFont).toBeGreaterThan(F.title);
+      for (const i of board) {
+        // 지연 항목은 등락률 자리에 "지연", 나머지는 등락률 ("+0.90%")
+        if (i.stale) expect([p.mark[i.code], p.change[i.code]]).toEqual(["staleText", null]);
+        else expect(p.change[i.code]).toBe(formatPct(i.changeRate));
+      }
+    }
+    // 330·360 폭, 4×3 높이대 전부: brief(등락률 없음) 없이
+    const brief: string[] = [];
+    for (const w of [330, 360])
+      for (let h = 240; h <= 300; h += 5)
+        for (const board of [REAL_BOARD, US_OPEN, STALE_BOARD]) {
+          const p = planMarket(marketInput(w, h, 1, board));
+          if (p.shape === "brief" || shownCount(p) !== 9) brief.push(`${w}×${h} ${p.shape} ${shownCount(p)}`);
+        }
+    expect(brief).toEqual([]);
+  });
+
+  it("키울수록 나빠지지 않는다 (330·360 폭 × 100%): 높이를 늘리면 칸 수는 줄지 않고, 모든 크기에서 등락률이 보이며 흔한 4×2 부터 값은 제목보다 크다", () => {
+    for (const w of [330, 360])
+      for (const board of [REAL_BOARD, US_OPEN, STALE_BOARD]) {
+        let prev = 0;
+        const bad: string[] = [];
+        for (let h = 110; h <= 420; h += 5) {
+          const p = planMarket(marketInput(w, h, 1, board));
+          if (shownCount(p) < prev) bad.push(`${h}: 칸 ${prev} → ${shownCount(p)}`);
+          if (p.shape === "brief") bad.push(`${h}: 등락률 없음`);
+          if (p.valueFont < (h >= 150 ? F.title + 1 : F.title)) bad.push(`${h}: 값 ${p.valueFont}sp`);
+          prev = shownCount(p);
+        }
+        expect(bad).toEqual([]);
+      }
+  });
+
+  it("좁거나 큰 글자로 등락률이 안 들어가면 brief 는 ▲/▼ 방향을 남긴다 (색만으로 읽지 않게)", () => {
+    const p = planMarket(marketInput(330, 250, 1.3));
+    expect(p.shape).toBe("brief");
+    expect(p.change).toMatchObject({ KOSPI: "▲", NASDAQ: "▼", USDKRW: "▼", JPYKRW: "▲" });
   });
 
   it("4×2 최소(250×110): 구역마다 1개 — 코스피 · 나스닥 · 원/달러 (100·130%)", () => {
@@ -652,26 +718,53 @@ describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% �
     expect(planMarket(marketInput(250, 110, 1))).toMatchObject({ shape: "full", change: { KOSPI: "+0.90%" } });
   });
 
-  it("이름은 흔한 크기에서 줄지 않는다 — 미국 장중이라 S&P500·필라반도체 옆에 장중 점이 붙어도 ('S&P5…'로 읽히지 않게)", () => {
-    const usOpen = REAL_BOARD.map((i) => (["NASDAQ", "SPX", "DJI", "SOX"].includes(i.code) ? { ...i, open: true } : i));
+  it("이름은 줄지 않는다 — 미국 장중 점·'지연'이 붙어도, 250폭·130% 에서도 ('S&P5…'·'원/…'로 읽히지 않게)", () => {
     const cut: string[] = [];
+    for (let w = 250; w <= 420; w += 10)
+      for (let h = 110; h <= 420; h += 10)
+        for (const s of [1, 1.3])
+          for (const board of [REAL_BOARD, US_OPEN, STALE_BOARD, LONG_BOARD]) {
+            const p = planMarket(marketInput(w, h, s, board));
+            for (const [code, nameW] of Object.entries(p.nameW)) if (nameW !== null) cut.push(`${w}×${h}@${s} ${code}`);
+          }
+    expect(cut.slice(0, 5)).toEqual([]);
+  }, 30_000); // 배치 1만여 개 — 다른 테스트와 함께 돌 때 기본 5초를 넘을 수 있다
+
+  it("지연 항목: 넓으면 '지연' 글자, full 에서 글자가 안 들어가면 경고색 점 (이름을 줄이지 않고)", () => {
+    const wide = planMarket(marketInput(330, 330, 1, STALE_BOARD));
+    expect(wide.shape).toBe("full");
+    expect([wide.mark.KOSDAQ, wide.mark.SOX]).toEqual(["staleText", "staleText"]);
+    // 모든 크기에서 지연 항목은 글자 또는 점으로 표시되고 장중 점은 붙지 않는다 (marketOverflow 가 본다)
     for (const [w, h, s] of [
-      [250, 110, 1],
-      [250, 250, 1],
-      [330, 160, 1],
-      [330, 160, 1.3],
-      [330, 180, 1],
-      [330, 180, 1.3],
-      [330, 330, 1],
-      [330, 330, 1.3],
-    ] as const)
-      for (const board of [REAL_BOARD, usOpen]) {
-        const input = marketInput(w, h, s, board);
-        const p = planMarket(input);
-        for (const t of input.columns.flatMap((c) => c.tiles))
-          if (p.nameW[t.code] !== undefined && p.nameW[t.code]! < Math.floor(textWidth(t.label, p.nameFont, s, true))) cut.push(`${w}×${h}@${s} ${t.label}`);
-      }
-    expect(cut).toEqual([]);
+      [250, 250, 1.3],
+      [250, 420, 1.3],
+      [300, 330, 1.3],
+    ] as const) {
+      const input = marketInput(w, h, s, STALE_BOARD);
+      expect(marketOverflow(input, planMarket(input))).toEqual([]);
+    }
+  });
+
+  it("구역 폭: 필요한 만큼 주고 남는 폭은 고르게 (이름이 긴 미국이 조금 넓다), 합은 본문 폭 안", () => {
+    expect(spreadWidths([80, 99, 83], 270)).toEqual([85, 99, 85]);
+    expect(spreadWidths([60, 60, 60], 270)).toEqual([90, 90, 90]);
+    expect(spreadWidths([80.2, 99.1, 83], 270)).toEqual([85, 100, 85]);
+    const p = planMarket(marketInput(330, 250, 1, US_OPEN));
+    expect(p.columns[1]!.width).toBeGreaterThan(p.columns[0]!.width);
+    expect(p.columns.reduce((a, c) => a + c.width, 0)).toBeLessThanOrEqual(boardTextRoom(330, 3));
+  });
+
+  it("남는 높이는 칸 사이·구역 이름 아래 여백으로 (간격 토큰 단계): 흔한 4×4 는 본문 아래가 비지 않는다", () => {
+    for (const [w, h] of [
+      [330, 330],
+      [360, 380],
+      [390, 420],
+    ] as const) {
+      const p = planMarket(marketInput(w, h, 1));
+      expect(p.room - p.bodyH).toBeLessThanOrEqual(space.xl + space.sm);
+    }
+    // 4×4(330×330)는 여백 없이 꽉 차서 큰 값·등락 줄, 더 높으면 여백이 커진다
+    expect(planMarket(marketInput(330, 420, 1)).rowPad).toBe(space.md);
   });
 
   it("등락 줄은 모든 칸이 같은 모양: 전부 '▲63.01 +0.90%' 이거나 전부 등락률만", () => {
@@ -680,11 +773,13 @@ describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% �
       [330, 160, 1],
       [330, 330, 1],
       [250, 250, 1],
+      [330, 200, 1],
     ] as const) {
       const p = planMarket(marketInput(w, h, s, LONG_BOARD));
+      if (p.shape !== "full") continue;
       const shown = Object.values(p.change).filter((x): x is string => !!x);
-      const full = shown.filter((x) => /^[▲▼]/.test(x));
-      expect(full.length === 0 || full.length === shown.length).toBe(true);
+      const long = shown.filter((x) => /^[▲▼]/.test(x));
+      expect(long.length === 0 || long.length === shown.length).toBe(true);
     }
   });
 
@@ -716,23 +811,26 @@ describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% �
     expect(p.messageLines * lineHeight(F.md, 1.3)).toBeLessThanOrEqual(boardRoom(110));
   });
 
-  it("폭 250~420dp, 높이 110~420dp, 글자 90~130% × 흔한 값·긴 값: 가로·세로 모두 넘치지 않고, 4×3 이상은 9개 모두", () => {
+  it("폭 250~420dp, 높이 110~420dp, 글자 90~130% × 흔한 값·긴 값·미국 장중·지연: 가로·세로 모두 넘치지 않고, 4×3 이상은 9개 모두", () => {
     const bad: string[] = [];
     let cases = 0;
     for (let w = 250; w <= 420; w += 10)
       for (let h = 110; h <= 420; h += 10)
         for (const s of [0.9, 1, 1.15, 1.3])
-          for (const board of [REAL_BOARD, LONG_BOARD]) {
+          for (const board of [REAL_BOARD, LONG_BOARD, US_OPEN, STALE_BOARD]) {
             const input = marketInput(w, h, s, board);
             const p = planMarket(input);
             const o = marketOverflow(input, p);
             if (shownCount(p) < 3) o.push("구역마다 1개도 안 보임");
-            // 4×3 이상(높이 240dp~)은 9개 모두
-            if (h >= 240 && shownCount(p) !== 9) o.push(`large 인데 ${shownCount(p)}개`);
+            // 4×3 이상(높이 240dp~)은 9개 모두. 있을 수 없을 만큼 긴 값을 가장 좁은 폭·큰 글자로 볼 때만 이름을 자르지 않으려고 6개까지
+            const extreme = board === LONG_BOARD && w < 260 && s > 1.15;
+            if (h >= 240 && shownCount(p) !== 9 && !(extreme && shownCount(p) >= 6)) o.push(`large 인데 ${shownCount(p)}개`);
+            // 흔한 값·100% 이하·330폭 이상이면 어느 높이에서도 등락률이 보인다
+            if (board !== LONG_BOARD && s <= 1 && w >= 330 && p.shape === "brief") o.push("등락률 없음");
             if (o.length) bad.push(`${w}×${h}@${s}: ${o.join(", ")}`);
             cases++;
           }
     expect(bad.slice(0, 5)).toEqual([]);
-    expect(cases).toBe(18 * 32 * 4 * 2);
-  });
+    expect(cases).toBe(18 * 32 * 4 * 4);
+  }, 30_000); // 배치 1만 8천여 개
 });

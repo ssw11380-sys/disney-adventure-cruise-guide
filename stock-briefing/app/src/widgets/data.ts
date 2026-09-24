@@ -370,11 +370,12 @@ async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promi
 }
 
 /**
- * 판을 묻는 조회(지수·환율 위젯)가 받아 둔 응답을 다시 써도 되는지: 그 응답에 판이 있거나, 서버가 플래그를 꺼 두었거나(판을 주지 않는다),
- * 마지막으로 그린 판이 장중 재사용 시간(15분) 안에 받은 것이면. 판 없이 받아 둔 응답(다른 위젯이 받음)만 있으면 서버에 묻는다
+ * 판을 묻는 조회(지수·환율 위젯)가 받아 둔 응답을 다시 써도 되는지: 그 응답에 판이 있거나, 서버가 플래그를 꺼 두었거나 모르거나
+ * (widgetMarket 이 true 가 아님 — 끈 서버·예전 서버는 물어도 판을 주지 않는다), 마지막으로 그린 판이 장중 재사용 시간(15분) 안에 받은 것이면.
+ * 판을 주는 서버에서 판 없이 받아 둔 응답(다른 위젯이 받음)만 있으면 서버에 묻는다
  */
 function boardReusable(body: WidgetPayload, prevBoardAt: number | undefined, now: number): boolean {
-  if (body.board?.length || body.features?.widgetMarket === false) return true;
+  if (body.board?.length || body.features?.widgetMarket !== true) return true;
   return prevBoardAt !== undefined && now - prevBoardAt < REUSE_OPEN_MS;
 }
 
@@ -443,6 +444,13 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.features = p.features;
       out.featuresAt = cached.at;
       full = true;
+    } else if (prevView) {
+      // 받아 둔 응답이 없으면(업데이트 직후 첫 조회 등) 마지막으로 그린 데이터(앱 즉시 갱신이 적은 것)의 지수·플래그를 그대로 —
+      // 첫 조회가 실패했다고 앱이 적어 둔 플래그가 꺼짐으로 바뀌어 판·손익 전환·지수 줄이 사라지지 않게 (판은 아래 keepBoard)
+      out.indices = prevView.indices;
+      if (prevView.indicesAt !== undefined) out.indicesAt = prevView.indicesAt;
+      out.features = prevView.features;
+      if (prevView.featuresAt !== undefined) out.featuresAt = prevView.featuresAt;
     }
     if (last) {
       out.stocks = last.stocks;

@@ -56,7 +56,9 @@ const { loadCachedWidgetData, loadWidgetData } = await import("@/widgets/data");
 const { fromPayload, pickBoard, widgetFeatures, WIDGET_BOARD_CODES } = await import("@/widgets/payload");
 const { BOARD_CODES, BOARD_SECTIONS, boardChanges, boardTiles, marketUri } = await import("@/widgets/board");
 const { HOME_URI } = await import("@/widgets/model");
-const { WIDGET_BOARD, WIDGET_PALETTES, WIDGET_TOUCH } = await import("@/widgets/palette");
+const { WIDGET_BOARD, WIDGET_FONT, WIDGET_PALETTES, WIDGET_TOUCH } = await import("@/widgets/palette");
+const { MARKER_GAP, planMarket } = await import("@/widgets/layout");
+const { boardColumns, BOARD_TITLE } = await import("@/widgets/board");
 const { formatIndexValue, formatPct } = await import("@/lib/format");
 
 interface Tree {
@@ -79,6 +81,8 @@ const NOW = Date.parse("2026-09-24T14:40:00+09:00");
 const AT = NOW - 40_000;
 const API = "https://server.test";
 const S42 = { width: 330, height: 160 };
+/** 4×3 (100% 에서 흔한 3칸 높이) */
+const S43 = { width: 330, height: 250 };
 const S44 = { width: 330, height: 330 };
 
 /** 서버 board 와 같은 모양: 코스피·코스닥 장중, 필라반도체 지연(출처 실패), 환율은 장중 점 없음 */
@@ -172,9 +176,34 @@ describe("4×2 · 4×4 × 라이트 · 다크", () => {
       const body = t.children![1]!;
       expect(body.children).toHaveLength(3);
       expect(body.children!.map((col) => (col.props.borderWidth as { left: number } | undefined)?.left ?? 0)).toEqual([0, 1, 1]);
-      expect(words(t)).toContain("▲63.01 +0.90%");
+      // 흔한 4×2: 두 줄 칸 — 이름 ··· 등락률(색) / 큰 값
+      expect(words(tileOf(t, "KOSPI"))).toEqual(["코스피", "+0.90%", "7,080.92"]);
+      expect(colorOf(t, "+0.90%")).toBe(c.up);
+      expect(colorOf(t, "-1.13%")).toBe(c.down);
       expect(colorOf(t, "7,080.92")).toBe(c.up);
       expect(colorOf(t, "26,936.04")).toBe(c.down);
+      // 값은 제목(13sp)보다 크게
+      expect(texts(t).find((p) => p.text === "7,080.92")!.fontSize).toBeGreaterThan(WIDGET_FONT.title);
+    });
+
+    it(`${scheme} 4×3 (330×250): 9칸 모두 이름 줄 오른쪽에 ▲/▼ 부호 있는 등락률(색), 지연 칸은 그 자리에 '지연', 구역 이름과 큰 값`, () => {
+      const t = market({}, S43, scheme);
+      expect(tileCodes(t)).toEqual(["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "DJI", "SOX", "USDKRW", "JPYKRW", "CNYKRW"]);
+      for (const label of ["국내", "미국", "환율"]) expect(colorOf(t, label)).toBe(c.gold);
+      for (const i of BOARD) {
+        const tile = tileOf(t, i.code);
+        const value = formatIndexValue(i.value);
+        if (i.stale) {
+          expect(words(tile)).toEqual([i.name, "지연", value]);
+          expect(colorOf(tile, "지연")).toBe(c.warn);
+          expect(colorOf(tile, value)).toBe(c.muted);
+        } else {
+          const rate = formatPct(i.changeRate);
+          expect(words(tile)).toEqual([i.name, rate, value]);
+          expect(colorOf(tile, rate)).toBe(i.change > 0 ? c.up : i.change < 0 ? c.down : c.ink);
+        }
+      }
+      expect(texts(t).find((p) => p.text === "7,080.92")!.fontSize).toBeGreaterThan(WIDGET_FONT.title);
     });
 
     it(`${scheme} 4×4 (330×330): 9칸 모두, 구역 이름(금색)·등락 줄, 색은 앱 테마 값`, () => {
@@ -206,6 +235,39 @@ describe("4×2 · 4×4 × 라이트 · 다크", () => {
     // 제목 앞 금색 막대
     const mark = nodes(d).find((n) => n.props.width === WIDGET_BOARD.mark.width && n.props.height === WIDGET_BOARD.mark.height)!;
     expect(mark.props.backgroundColor).toBe(dark.gold);
+  });
+
+  it("이름은 글자 폭대로(칸 폭을 주지 않음): 장중 점·'지연'이 이름 바로 뒤(4dp)에 붙는다, 구역 폭은 배치대로", () => {
+    for (const box of [S42, S43, S44]) {
+      const t = market({}, box);
+      // 4×2 에는 필라반도체(지연)가 없다
+      for (const code of box === S42 ? ["KOSPI"] : ["KOSPI", "SOX"]) {
+        const name = texts(tileOf(t, code))[0]!;
+        expect(name.width).toBeUndefined();
+      }
+      const dot = nodes(tileOf(t, "KOSPI")).find((n) => n.props.width === WIDGET_BOARD.dot)!;
+      expect((dot.props.margin as { left: number }).left).toBe(MARKER_GAP);
+      // 구역 칸 폭 = 배치의 글자 폭 + 구분선·양옆 여백
+      const plan = planMarket({ ...box, scale: 1, title: BOARD_TITLE, sub: [], columns: boardColumns(boardTiles(BOARD)) });
+      const cols = t.children![1]!.children!;
+      expect(cols.map((col) => col.props.width)).toEqual(plan.columns.map((col, n) => col.width + (n ? 8 + 1 : 0) + (n < 2 ? 8 : 0)));
+    }
+  });
+
+  it("좁거나 글자가 커서 등락률이 안 들어가면(330×250 · 130%) 오른쪽에 ▲/▼ 방향을 남긴다 (색만으로 읽지 않게)", () => {
+    for (const scheme of ["dark", "light"] as const) {
+      const c = WIDGET_PALETTES[scheme];
+      const t = market({ fontScale: 1.3 }, S43, scheme);
+      expect(tileCodes(t)).toHaveLength(9);
+      expect(words(tileOf(t, "KOSPI"))).toEqual(["코스피", "▲", "7,080.92"]);
+      expect(words(tileOf(t, "NASDAQ"))).toEqual(["나스닥", "▼", "26,936.04"]);
+      expect(colorOf(tileOf(t, "KOSPI"), "▲")).toBe(c.up);
+      expect(colorOf(tileOf(t, "NASDAQ"), "▼")).toBe(c.down);
+      // 보합은 방향 없이, 지연은 '지연'(글자) 또는 경고색 점
+      expect(words(tileOf(t, "DJI"))).toEqual(["다우", "46,315.27"]);
+      const sox = tileOf(t, "SOX");
+      expect(words(sox).includes("지연") || nodes(sox).some((n) => n.props.width === WIDGET_BOARD.dot && n.props.backgroundColor === c.warn)).toBe(true);
+    }
   });
 
   it("장중 점은 초록(앱 live 색, 빨강 아님): 코스피·코스닥에만, 환율·지연 칸에는 없음", () => {
@@ -395,6 +457,43 @@ describe("데이터: 서버 판(&board=1) · 앱 지수 띠 · 마지막 값", (
     const again = serve();
     await run({ widgetAction: "WIDGET_UPDATE" });
     expect(again).toEqual([`${API}/api/widget?indices=1&board=1`]);
+  });
+
+  it("widgetMarket 을 모르는 서버(롤백한 서버 등): 짧은 안내, 주기 갱신은 받아 둔 응답을 다시 쓴다 (판을 달라고 계속 묻지 않음)", async () => {
+    serve(payload({ features: { widgetPnlToggle: true, widgetIndexLine: true }, board: undefined }));
+    const r = await run({ widgetAction: "WIDGET_ADDED" });
+    expect(words(build(r[0]!.dark))).toContain(MARKET_OFF_TEXT);
+    const calls = serve();
+    for (const min of [3, 6, 9]) {
+      vi.setSystemTime(NOW + min * 60_000);
+      await run({ widgetAction: "WIDGET_UPDATE" });
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("받아 둔 응답 없이(업데이트 직후) 첫 조회가 실패해도 앱이 적어 둔 판·플래그로: 마지막 숫자 + '갱신 실패', 플래그를 꺼짐으로 적지 않는다", async () => {
+    const d = fromPayload(payload());
+    await refreshWidgets({
+      stocks: d.stocks,
+      showKrw: false,
+      afterCost: false,
+      features: { at: NOW - 30_000, flags: d.features },
+      indices: { at: NOW - 30_000, list: [BOARD[0]!, BOARD[2]!, BOARD[6]!] },
+      board: { at: NOW - 30_000, list: BOARD },
+    });
+    down();
+    const r = await run({ widgetAction: "WIDGET_ADDED" });
+    const t = build(r[r.length - 1]!.dark);
+    expect(tileCodes(t)).toHaveLength(9);
+    expect(words(t)).toContain("7,080.92");
+    expect(words(t)).toContain("갱신 실패 · 연결 안 됨");
+    expect(words(t)).not.toContain(MARKET_OFF_TEXT);
+    // 적어 둔 값도 그대로 (다음 손익 전환·↻ '갱신 중' 그림이 꺼진 플래그로 그려지지 않게)
+    const cached = await loadCachedWidgetData();
+    expect(cached.features).toEqual({ pnlToggle: true, indexLine: true, market: true });
+    expect(cached.featuresAt).toBe(NOW - 30_000);
+    expect(cached.indices?.map((i) => i.code)).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
+    expect(cached.board).toHaveLength(9);
   });
 
   it("관리자가 끄면(widgetMarket false) 판 없이 짧은 안내, 주기 갱신은 받아 둔 응답을 다시 쓴다(판을 달라고 계속 묻지 않음)", async () => {

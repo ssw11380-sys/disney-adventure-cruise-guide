@@ -57,11 +57,16 @@ export function charEm(ch: string): number {
   return 1; // 한글·기호
 }
 
-/** 한 줄 글자 폭 어림 (dp) */
-export function textWidth(text: string, font: number, scale: number, bold = false): number {
+/** 글자 폭 합 (em) */
+export function textEm(text: string): number {
   let em = 0;
   for (const ch of text) em += charEm(ch);
-  return em * font * scale * (bold ? BOLD : 1) + SLACK;
+  return em;
+}
+
+/** 한 줄 글자 폭 어림 (dp) */
+export function textWidth(text: string, font: number, scale: number, bold = false): number {
+  return textEm(text) * font * scale * (bold ? BOLD : 1) + SLACK;
 }
 
 /** 한 줄 높이 어림 (dp) */
@@ -630,7 +635,7 @@ export function planAsset(i: AssetInput): AssetPlan {
 
 // ── 지수·환율 위젯 (APK 1.4.0) ───────────────────────────────────────
 
-/** 이름 옆 표시: 장중 초록 점 · "지연"(출처 조회 실패로 마지막 값) · 없음 */
+/** 이름 옆 표시 (입력): 장중 초록 점 · 지연(출처 조회 실패로 마지막 값) · 없음 */
 export type TileMarker = "live" | "stale" | null;
 
 export interface BoardTileInput {
@@ -661,8 +666,20 @@ export interface MarketInput {
   columns: BoardColumnInput[];
 }
 
-/** 칸 모양: full = 이름 / 값 / 등락, brief = 이름 / 값 (낮은 위젯 — 등락은 값의 색으로만) */
-export type TileShape = "full" | "brief";
+/**
+ * 칸 모양:
+ *  - full   = 이름 / 값 / 등락 줄 ("▲63.01 +0.90%", 한 칸이라도 안 들어가면 모두 등락률만)
+ *  - inline = 이름 ··· 등락률 / 값 — 두 줄이라 4×3 처럼 칸이 많고 낮아도 등락률이 보인다
+ *  - brief  = 이름 ··· ▲/▼ / 값 — 방향만(값의 색과 함께, 그것도 안 들어가면 색으로만). 등락률이 들어가는 배치가 하나도 없을 때만 (좁은 4×3 · 큰 글자)
+ * inline·brief 의 지연 항목은 오른쪽 자리에 "지연" (안 들어가면 이름 뒤 경고색 점)
+ */
+export type TileShape = "full" | "inline" | "brief";
+
+/**
+ * 그릴 때 표시: 장중 초록 점(이름 뒤) · "지연" 글자(full 은 이름 뒤, inline·brief 는 오른쪽 자리) ·
+ * 지연 점(경고색, 이름 뒤 — "지연" 글자가 안 들어갈 때, 앱 지수 띠와 같은 모양) · 없음
+ */
+export type TileMark = "live" | "staleText" | "staleDot" | null;
 
 export interface MarketPlan {
   size: SizeClass;
@@ -671,21 +688,26 @@ export interface MarketPlan {
   shape: TileShape;
   /** 구역 이름 줄 (국내 · 미국 · 환율) */
   captions: boolean;
-  /** 구역마다 보여 줄 항목 (위에서 아래로). 4×4 는 9개 모두, 4×2 는 구역마다 2개(3×2 격자), 더 낮으면 1개 */
-  columns: { key: string; label: string; codes: string[] }[];
-  /** 한 칸의 글자 폭 (구분선·여백 뺀 폭) */
-  colW: number;
+  /**
+   * 구역마다 보여 줄 항목(위에서 아래로)과 글자 폭(구분선·여백 뺀 폭, 정수). 4×3 이상은 9개 모두, 4×2 는 구역마다 2개(3×2 격자), 더 낮으면 1개.
+   * 폭은 구역마다 필요한 만큼(가장 긴 줄) 주고 남는 폭은 되도록 고르게 나눈다 — 이름이 긴 미국 구역이 조금 넓을 수 있다
+   */
+  columns: { key: string; label: string; codes: string[]; width: number }[];
   nameFont: number;
   valueFont: number;
   changeFont: number;
-  /** 항목별 이름 칸 폭 (이름은 칸에 맞게 끝을 줄일 수 있다 — 숫자가 아니므로) */
-  nameW: Record<string, number>;
-  /** 항목별 등락 줄 (full 이고 값이 있을 때, 아니면 null) */
+  /** 항목별 이름 칸 폭: 이름이 다 들어가면 null(글자 폭대로 — 표시가 이름 바로 뒤에 붙는다), 줄여야 하면(…) 그 폭 */
+  nameW: Record<string, number | null>;
+  /** 항목별 표시 (장중 점 · "지연" · 지연 점) */
+  mark: Record<string, TileMark>;
+  /** 항목별 등락: full 은 셋째 줄, inline 은 이름 줄 오른쪽 등락률, brief 는 오른쪽 ▲/▼. 값이 없거나 보합(brief)·inline·brief 의 지연 항목이면 null */
   change: Record<string, string | null>;
-  /** 한 칸(이름·값·등락) 높이 */
+  /** 한 칸 높이 어림 */
   tileH: number;
-  /** 같은 구역 안 칸 사이 구분선의 위아래 여백 (남는 높이만큼 넓힌다) */
+  /** 같은 구역 안 칸 사이 구분선의 위아래 여백 (간격 토큰 단계, 남는 높이만큼 넓힌다) */
   rowPad: number;
+  /** 구역 이름 줄 아래 여백 (간격 토큰 단계) */
+  captionGap: number;
   /** 본문(구역 이름 줄 + 칸들) 높이 어림 */
   bodyH: number;
   /** 본문에 쓸 수 있는 높이 (머리 줄·아래 여백·테두리 뺀 높이) */
@@ -696,12 +718,16 @@ export interface MarketPlan {
 
 /** 칸 사이: 구분선(1dp) 양옆 여백 */
 export const BOARD_GAP = space.sm;
-/** 같은 구역 칸 사이 구분선의 위아래 여백: 최소 · 남는 높이가 있을 때 최대 */
-export const BOARD_ROW_PAD = { min: space.xxs, max: space.sm } as const;
-/** 구역 이름 줄 아래 여백 */
-export const CAPTION_GAP = space.xs;
+/** 같은 구역 칸 사이 구분선의 위아래 여백 단계 (간격 토큰, 작은 것부터). 남는 높이가 있으면 큰 단계로 — 본문이 위로 몰리지 않게 */
+export const BOARD_ROW_PADS = [space.xxs, space.xs, space.s, space.sm, space.md] as const;
+/** 구역 이름 줄 아래 여백 단계 (간격 토큰) */
+export const CAPTION_GAPS = [space.xs, space.sm] as const;
 /** 이름 옆 표시(장중 점·"지연") 앞 간격 */
 export const MARKER_GAP = space.xs;
+/** inline·brief 칸: 이름(과 점)과 오른쪽 글자 사이 최소 간격 */
+export const INLINE_GAP = space.xs;
+/** 출처 조회가 실패한 항목 표시 */
+export const STALE_TEXT = "지연";
 const HAIR = BOARD.hairline;
 /** 카드 테두리 (라이트에서만 보이지만 두 벌의 배치가 같게 여백은 늘 잡는다) */
 const EDGE = BOARD.border;
@@ -711,9 +737,9 @@ export function boardContent(width: number): number {
   return width - PAD * 2 - EDGE * 2;
 }
 
-/** n 칸일 때 한 칸의 글자 폭 (칸 사이 구분선과 양옆 여백을 뺀다, 정수로 내림) */
-export function boardColW(width: number, n: number): number {
-  return Math.floor((boardContent(width) - (n - 1) * (BOARD_GAP * 2 + HAIR)) / n);
+/** 구역 n 개의 글자 폭 합: 본문 폭에서 구역 사이 구분선과 양옆 여백을 뺀다 */
+export function boardTextRoom(width: number, n: number): number {
+  return boardContent(width) - Math.max(0, n - 1) * (BOARD_GAP * 2 + HAIR);
 }
 
 /** 본문에 쓸 수 있는 높이: 머리 줄(48dp, ↻ 칸) · 아래 여백 · 위아래 테두리를 뺀다 */
@@ -721,26 +747,48 @@ export function boardRoom(height: number): number {
   return height - TOUCH - PAD - EDGE * 2;
 }
 
-/** 이름 옆 표시 폭 */
-export function markerWidth(marker: TileMarker, font: number, scale: number): number {
-  if (marker === "live") return BOARD.dot + MARKER_GAP;
-  if (marker === "stale") return textWidth("지연", font, scale, true) + MARKER_GAP;
-  return 0;
+/** 한 칸을 그리는 방법 (폭 어림·테스트가 같은 입력을 쓴다) */
+export interface TileDraw {
+  shape: TileShape;
+  mark: TileMark;
+  change: string | null;
+  nameFont: number;
+  valueFont: number;
+  changeFont: number;
+  /** 이름 칸 폭 (null·없음 = 이름 글자 폭 그대로) */
+  nameW?: number | null;
 }
 
-/** 한 칸 높이: 이름 줄 + 값 줄 (+ 등락 줄) */
+/**
+ * 한 칸에 필요한 글자 폭 = 가장 긴 줄 (이름 줄 · 값 줄 · 등락 줄). 칸의 글자는 모두 굵게 어림한다.
+ * measure 는 배치 계산이 같은 어림을 기억해 두고 쓰려는 것 (기본은 textWidth 굵게)
+ */
+export function boardTileWidth(t: BoardTileInput, d: TileDraw, scale: number, measure: (text: string, font: number) => number = (x, f) => textWidth(x, f, scale, true)): number {
+  const name = d.nameW ?? measure(t.label, d.nameFont);
+  const value = measure(t.value, d.valueFont);
+  if (d.shape === "full") {
+    const mark = d.mark === "staleText" ? measure(STALE_TEXT, d.nameFont) + MARKER_GAP : d.mark ? BOARD.dot + MARKER_GAP : 0;
+    return Math.max(name + mark, value, d.change ? measure(d.change, d.changeFont) : 0);
+  }
+  // inline·brief: 이름(+점) ··· 오른쪽(등락률 · ▲/▼ · "지연")
+  const dot = d.mark === "live" || d.mark === "staleDot" ? BOARD.dot + MARKER_GAP : 0;
+  const right = d.mark === "staleText" ? STALE_TEXT : d.change;
+  return Math.max(name + dot + (right ? INLINE_GAP + measure(right, d.nameFont) : 0), value);
+}
+
+/** 한 칸 높이: 이름 줄 + 값 줄 (+ full 의 등락 줄). inline·brief 의 오른쪽 글자는 이름 줄에 같은 글자 크기로 들어간다 */
 export function boardTileHeight(shape: TileShape, nameFont: number, valueFont: number, changeFont: number, scale: number): number {
   return lineHeight(nameFont, scale) + lineHeight(valueFont, scale) + (shape === "full" ? lineHeight(changeFont, scale) : 0);
 }
 
 /** 구역 이름 줄 높이 (아래 여백 포함) */
-export function captionHeight(scale: number): number {
-  return lineHeight(F.xs, scale) + CAPTION_GAP;
+export function captionHeight(scale: number, gap: number = CAPTION_GAPS[0]): number {
+  return lineHeight(F.xs, scale) + gap;
 }
 
 /** 본문 높이: [구역 이름 줄] + 가장 긴 구역의 칸들 + 칸 사이 구분선(위아래 여백 포함) */
-export function boardBodyHeight(rows: number, tileH: number, rowPad: number, captions: boolean, scale: number): number {
-  return (captions ? captionHeight(scale) : 0) + rows * tileH + Math.max(0, rows - 1) * (rowPad * 2 + HAIR);
+export function boardBodyHeight(rows: number, tileH: number, rowPad: number, captions: boolean, scale: number, captionGap: number = CAPTION_GAPS[0]): number {
+  return (captions ? captionHeight(scale, captionGap) : 0) + rows * tileH + Math.max(0, rows - 1) * (rowPad * 2 + HAIR);
 }
 
 /** 머리 왼쪽 묶음(금색 막대·제목·기준 시각) 폭 */
@@ -753,42 +801,87 @@ export function marketHeaderRoom(width: number): number {
   return headerRoom(width) - EDGE * 2;
 }
 
-/** 이름 칸 폭: 이름 글자 폭, 칸이 좁으면 표시(점·"지연")를 뺀 나머지 */
-function nameWidth(t: BoardTileInput, font: number, colW: number, scale: number): number {
-  return Math.max(0, Math.floor(Math.min(textWidth(t.label, font, scale, true), colW - markerWidth(t.marker, font, scale))));
+/**
+ * 구역 폭 나누기: 필요한 폭(올림)은 꼭 주고, 남는 폭은 넓게 필요한 구역부터 고정한 뒤 나머지를 똑같이 (되도록 고른 폭).
+ * 필요한 폭의 합이 total 이하일 때만 부른다. 합은 total 이하, 모두 정수
+ */
+export function spreadWidths(needs: readonly number[], total: number): number[] {
+  const want = needs.map((w) => Math.ceil(w));
+  let rest = total;
+  let k = want.length;
+  for (const w of [...want].sort((a, b) => b - a)) {
+    if (w <= rest / k) break;
+    rest -= w;
+    k--;
+  }
+  const even = k ? Math.floor(rest / k) : 0;
+  return want.map((w) => Math.max(w, even));
 }
 
-/** 모든 칸이 같은 모양이 되게 등락 줄을 고른다: 모두 전체("▲63.01 +0.90%") → 모두 등락률만. 하나라도 안 들어가면 null */
-function pickChanges(tiles: readonly BoardTileInput[], colW: number, font: number, scale: number): Record<string, string | null> | null {
-  for (const k of [0, 1]) {
-    const out: Record<string, string | null> = {};
-    let ok = true;
-    for (const t of tiles) {
-      if (!t.changes.length) {
-        out[t.code] = null;
-        continue;
-      }
-      const text = t.changes[Math.min(k, t.changes.length - 1)]!;
-      if (textWidth(text, font, scale, true) > colW) {
-        ok = false;
-        break;
-      }
-      out[t.code] = text;
-    }
-    if (ok) return out;
-  }
+/**
+ * 배치 점수(값 글자 sp 로 환산한 가산점): 구역 이름 줄은 값 글자 3sp, 자세한 등락(full 의 등락폭 ▲63.01 · brief 의 ▲/▼)은 1·2sp,
+ * "지연" 글자(점 대신)는 2sp 만큼과 바꾼다
+ */
+const CAPTION_BONUS = 3;
+const DETAIL_BONUS: Record<TileShape, number> = { full: 1, inline: 0, brief: 2 };
+const STALE_TEXT_BONUS = 2;
+
+/**
+ * 배치 후보를 보는 순서 (같은 점수면 앞의 것 — 더 많은 정보).
+ * detail: full 은 등락 줄을 "▲63.01 +0.90%" 로(아니면 등락률만), brief 는 오른쪽에 ▲/▼ (아니면 색으로만)
+ */
+const LAYOUTS: readonly { shape: TileShape; detail: boolean; captions: boolean }[] = [
+  { shape: "full", detail: true, captions: true },
+  { shape: "inline", detail: false, captions: true },
+  { shape: "full", detail: true, captions: false },
+  { shape: "inline", detail: false, captions: false },
+  { shape: "full", detail: false, captions: true },
+  { shape: "full", detail: false, captions: false },
+  { shape: "brief", detail: true, captions: true },
+  { shape: "brief", detail: true, captions: false },
+  { shape: "brief", detail: false, captions: true },
+  { shape: "brief", detail: false, captions: false },
+];
+
+/** 표시: 지연 항목은 "지연" 글자(full 은 이름 뒤, inline·brief 는 오른쪽 자리), 안 들어가면 이름 뒤 경고색 점 */
+function tileMark(t: BoardTileInput, staleText: boolean): TileMark {
+  if (t.marker === "live") return "live";
+  if (t.marker === "stale") return staleText ? "staleText" : "staleDot";
   return null;
 }
 
-type BoardPick = Omit<MarketPlan, "size" | "sub" | "room" | "messageLines">;
+function tileChange(t: BoardTileInput, shape: TileShape, detail: boolean): string | null {
+  if (!t.changes.length) return null;
+  if (shape === "full") return t.changes[detail ? 0 : t.changes.length - 1]!;
+  // inline·brief 의 지연 항목은 오른쪽 자리를 "지연"(또는 비움)으로 — 마지막 값의 등락보다 지연이 먼저
+  if (t.marker === "stale") return null;
+  if (shape === "inline") return t.changes[t.changes.length - 1]!;
+  if (!detail) return null;
+  // brief: 방향만 ("▲63.01 +0.90%" 의 첫 글자, 보합이면 없음)
+  const arrow = t.changes[0]!.charAt(0);
+  return arrow === "▲" || arrow === "▼" ? arrow : null;
+}
+
+interface BoardCandidate {
+  score: number;
+  shape: TileShape;
+  detail: boolean;
+  captions: boolean;
+  staleText: boolean;
+  nameFont: number;
+  changeFont: number;
+  valueFont: number;
+  depth: number;
+}
 
 /**
- * 지수·환율 위젯 배치 (숫자는 자르지 않는다). 구역이 세로 칸(국내 | 미국 | 환율)이고, 칸마다 이름 / 값 / 등락.
- * 앞의 것이 더 좋은 배치 — 값 글자가 comfort(12sp) 이상인 첫 배치, 없으면 min(9sp) 이상인 첫 배치:
+ * 지수·환율 위젯 배치 (숫자는 자르지 않는다). 구역이 세로 칸(국내 | 미국 | 환율)이고 같은 줄의 칸은 높이가 같다.
  *  - 보여 줄 개수: large(4×3 이상)는 9개 모두 → 구역마다 2개(4×2 의 3×2 격자) → 1개(코스피·나스닥·원/달러)
- *  - 같은 개수 안에서: 등락 줄 + 구역 이름 → 등락 줄만 → 구역 이름만(brief) → 둘 다 없이
- *  - 같은 배치 안에서는 값 글자가 가장 큰 글자 조합 (이름·등락 10 또는 9sp)
- * 값 글자는 모든 칸이 같은 크기 (한 칸이라도 안 들어가면 줄인다). 남는 높이는 칸 사이 여백으로 (위로 몰리지 않게)
+ *  - 같은 개수 안에서는 점수가 가장 높은 배치: 점수 = 값 글자(sp) + 구역 이름 3 + 등락폭(▲63.01) 1 · brief 의 ▲/▼ 2 + "지연" 글자 2.
+ *    등락률이 보이는 full · inline 을 먼저 보고, 어느 것도 들어가지 않을 때만 brief (▲/▼ 방향만, 그것도 안 되면 색으로만)
+ *  - 값 글자가 comfort(12sp) 이상인 첫 배치 → 없으면 min(9sp) → 없으면 1sp (있을 수 없을 만큼 긴 값). 4×3 이상은 9개 모두가 먼저
+ *  - 이름은 줄이지 않는다("S&P5…"·"원/…"처럼 다른 이름으로 읽히지 않게). 지연 항목은 "지연" 글자가 안 들어가면 경고색 점
+ *  - 값 글자는 모든 칸이 같은 크기. 남는 높이는 칸 사이·구역 이름 아래 여백으로 (간격 토큰 단계)
  */
 export function planMarket(i: MarketInput): MarketPlan {
   const s = i.scale;
@@ -799,88 +892,134 @@ export function planMarket(i: MarketInput): MarketPlan {
   const messageLines = Math.max(1, Math.min(3, Math.floor(room / lineHeight(F.md, s))));
   const base = { size, sub, room, messageLines };
   const n = i.columns.length;
-  if (!n) return { ...base, shape: "brief", captions: false, columns: [], colW: 0, nameFont: F.xs, valueFont: F.xs, changeFont: F.xs, nameW: {}, change: {}, tileH: 0, rowPad: BOARD_ROW_PAD.min, bodyH: 0 };
-  const colW = boardColW(i.width, n);
+  if (!n) {
+    return { ...base, shape: "brief", captions: false, columns: [], nameFont: F.xs, valueFont: F.xs, changeFont: F.xs, nameW: {}, mark: {}, change: {}, tileH: 0, rowPad: BOARD_ROW_PADS[0], captionGap: CAPTION_GAPS[0], bodyH: 0 };
+  }
+  const total = boardTextRoom(i.width, n);
   const deepest = Math.max(...i.columns.map((c) => c.tiles.length));
   const depths = [...new Set((size === "large" ? [deepest, 2, 1] : [2, 1]).map((d) => Math.min(d, deepest)))];
-  const shapes: [TileShape, boolean][] = [
-    ["full", true],
-    ["full", false],
-    ["brief", true],
-    ["brief", false],
-  ];
+  // 큰 위젯은 이름·등락 글자를 한 단계 크게까지 (남는 높이를 빈칸으로 두지 않게)
+  const fonts = size === "large" ? [F.md, F.sm, F.xs] : [F.sm, F.xs];
+  const colsAt = (depth: number) => i.columns.map((c) => ({ ...c, tiles: c.tiles.slice(0, depth) }));
+  // 후보가 많아 같은 글자를 여러 번 잰다: 글자 폭 합(em)을 기억해 두고 textWidth(굵게)와 같은 식으로
+  const ems = new Map<string, number>();
+  const em = (text: string) => {
+    let e = ems.get(text);
+    if (e === undefined) ems.set(text, (e = textEm(text)));
+    return e;
+  };
+  const measure = (text: string, font: number) => em(text) * font * s * BOLD + SLACK;
+  /** 구역마다 필요한 글자 폭: 구역 이름 · 칸마다 가장 긴 줄 (boardTileWidth) */
+  const needsOf = (cols: BoardColumnInput[], c: Omit<BoardCandidate, "score" | "depth">): number[] =>
+    cols.map((col) =>
+      Math.max(
+        c.captions ? measure(col.label, F.xs) : 0,
+        ...col.tiles.map((t) => boardTileWidth(t, { shape: c.shape, mark: tileMark(t, c.staleText), change: tileChange(t, c.shape, c.detail), nameFont: c.nameFont, valueFont: c.valueFont, changeFont: c.changeFont }, s, measure)),
+      ),
+    );
+  const fits = (needs: number[]) => needs.reduce((a, w) => a + Math.ceil(w), 0) <= total;
 
-  const attempt = (depth: number, shape: TileShape, captions: boolean, floor: number): BoardPick | null => {
-    const cols = i.columns.map((c) => ({ ...c, tiles: c.tiles.slice(0, depth) }));
+  /** 한 개수(depth)의 모든 후보: 배치 × 지연 표시 × 이름·등락 글자마다 값 글자가 가장 큰 것 */
+  const candidates = (depth: number): BoardCandidate[] => {
+    const cols = colsAt(depth);
     const tiles = cols.flatMap((c) => c.tiles);
     const rows = Math.max(...cols.map((c) => c.tiles.length));
-    const vfW = Math.min(...tiles.map((t) => fitFont(t.value, colW, BOARD.value.max, s, true)));
-    if (vfW < floor) return null;
-    let best: BoardPick | null = null;
-    let bestWhole = false;
-    for (const nameFont of [F.sm, F.xs])
-      for (const changeFont of shape === "full" ? [F.sm, F.xs] : [F.xs]) {
-        // 이름 옆 표시는 늘 들어가야 한다 (이름은 줄일 수 있다)
-        if (tiles.some((t) => markerWidth(t.marker, nameFont, s) > colW)) continue;
-        const change = shape === "full" ? pickChanges(tiles, colW, changeFont, s) : Object.fromEntries(tiles.map((t) => [t.code, null]));
-        if (!change) continue;
-        // 이름이 줄지 않는지 ("S&P5…"·"원/10…"처럼 줄면 다른 이름으로 읽힐 수 있다)
-        const whole = tiles.every((t) => nameWidth(t, nameFont, colW, s) >= Math.floor(textWidth(t.label, nameFont, s, true)));
-        for (let vf = vfW; vf >= floor; vf--) {
-          const tileH = boardTileHeight(shape, nameFont, vf, changeFont, s);
-          const bodyH = boardBodyHeight(rows, tileH, BOARD_ROW_PAD.min, captions, s);
-          if (bodyH > room) continue;
-          // 값 글자가 큰 쪽, 같으면 이름이 온전한 쪽, 그다음 이름·등락 글자가 큰 쪽(먼저 본 조합)
-          if (!best || vf > best.valueFont || (vf === best.valueFont && whole && !bestWhole)) {
-            bestWhole = whole;
-            // 남는 높이는 칸 사이 여백으로 (최대 space.sm)
-            const extra = rows > 1 ? Math.floor((room - bodyH) / (2 * (rows - 1))) : 0;
-            const rowPad = Math.min(BOARD_ROW_PAD.max, BOARD_ROW_PAD.min + extra);
-            best = {
-              shape,
-              captions,
-              columns: cols.map((c) => ({ key: c.key, label: c.label, codes: c.tiles.map((t) => t.code) })),
-              colW,
-              nameFont,
-              valueFont: vf,
-              changeFont,
-              nameW: Object.fromEntries(tiles.map((t) => [t.code, nameWidth(t, nameFont, colW, s)])),
-              change,
-              tileH,
-              rowPad,
-              bodyH: boardBodyHeight(rows, tileH, rowPad, captions, s),
-            };
+    const hasStale = tiles.some((t) => t.marker === "stale");
+    // 구역마다 가장 긴 값 (값 줄 폭은 크기마다 이것으로)
+    const valueEm = cols.map((col) => Math.max(0, ...col.tiles.map((t) => em(t.value))));
+    const out: BoardCandidate[] = [];
+    for (const L of LAYOUTS)
+      for (const staleText of hasStale ? [true, false] : [true])
+        for (const nameFont of fonts)
+          for (const changeFont of L.shape === "full" ? fonts : [nameFont]) {
+            const c = { ...L, staleText, nameFont, changeFont };
+            // 값 줄을 뺀 폭 (값 글자 없이도 모자라면 — 이름·등락이 김 — 이 조합은 안 된다). 값 줄은 크기마다 더한다
+            const fixed = needsOf(cols, { ...c, valueFont: 0 });
+            if (!fits(fixed)) continue;
+            for (let v = BOARD.value.max; v >= 1; v--) {
+              const tileH = boardTileHeight(L.shape, nameFont, v, changeFont, s);
+              if (boardBodyHeight(rows, tileH, BOARD_ROW_PADS[0], L.captions, s) > room) continue;
+              if (!fits(fixed.map((f, k) => Math.max(f, valueEm[k]! * v * s * BOLD + SLACK)))) continue;
+              const score = v + (L.captions ? CAPTION_BONUS : 0) + (L.detail ? DETAIL_BONUS[L.shape] : 0) + (hasStale && staleText ? STALE_TEXT_BONUS : 0);
+              out.push({ ...c, valueFont: v, score, depth });
+              break;
+            }
           }
-          break;
-        }
-      }
-    return best;
+    return out;
   };
 
-  // 마지막 하한(1)은 있을 수 없을 만큼 긴 값(6자리 지수 등)용: min 아래로 줄여서라도 자르지 않는다
-  for (const floor of [BOARD.value.comfort, BOARD.value.min, 1])
-    for (const depth of depths)
-      for (const [shape, captions] of shapes) {
-        const p = attempt(depth, shape, captions, floor);
-        if (p) return { ...base, ...p };
-      }
-  // 아주 작은 위젯(높이도 모자람): 구역마다 1개, 이름 / 값만, 값은 칸에 들어가는 크기 (숫자는 자르지 않는다)
-  const tiles = i.columns.map((c) => c.tiles.slice(0, 1)).flat();
-  const vf = Math.max(1, Math.min(...tiles.map((t) => fitFont(t.value, colW, BOARD.value.min, s, true))));
+  const finish = (c: BoardCandidate): MarketPlan => {
+    const cols = colsAt(c.depth);
+    const tiles = cols.flatMap((col) => col.tiles);
+    const rows = Math.max(...cols.map((col) => col.tiles.length));
+    const widths = spreadWidths(needsOf(cols, c), total);
+    const tileH = boardTileHeight(c.shape, c.nameFont, c.valueFont, c.changeFont, s);
+    // 남는 높이: 칸 사이 여백을 큰 단계로, 그다음 구역 이름 아래 여백 (둘 다 간격 토큰)
+    const body = (pad: number, gap: number) => boardBodyHeight(rows, tileH, pad, c.captions, s, gap);
+    const rowPad = rows > 1 ? ([...BOARD_ROW_PADS].reverse().find((p) => body(p, CAPTION_GAPS[0]) <= room) ?? BOARD_ROW_PADS[0]) : BOARD_ROW_PADS[0];
+    const captionGap = c.captions ? ([...CAPTION_GAPS].reverse().find((g) => body(rowPad, g) <= room) ?? CAPTION_GAPS[0]) : CAPTION_GAPS[0];
+    return {
+      ...base,
+      shape: c.shape,
+      captions: c.captions,
+      columns: cols.map((col, k) => ({ key: col.key, label: col.label, codes: col.tiles.map((t) => t.code), width: widths[k]! })),
+      nameFont: c.nameFont,
+      valueFont: c.valueFont,
+      changeFont: c.changeFont,
+      nameW: Object.fromEntries(tiles.map((t) => [t.code, null])),
+      mark: Object.fromEntries(tiles.map((t) => [t.code, tileMark(t, c.staleText)])),
+      change: Object.fromEntries(tiles.map((t) => [t.code, tileChange(t, c.shape, c.detail)])),
+      tileH,
+      rowPad,
+      captionGap,
+      bodyH: body(rowPad, captionGap),
+    };
+  };
+
+  const byDepth = new Map<number, BoardCandidate[]>();
+  const at = (depth: number) => {
+    let list = byDepth.get(depth);
+    if (!list) byDepth.set(depth, (list = candidates(depth)));
+    return list;
+  };
+  // 값 글자 하한 → 개수 → 등락률이 보이는 배치(full·inline) → brief 순. 같은 단계에서는 점수가 가장 높은 것 (같으면 먼저 본 것).
+  // 4×3 이상은 9개 모두가 먼저 (값 글자가 min 이상이면 개수를 줄이지 않는다)
+  const order: [number, number][] = [];
+  if (size === "large") for (const floor of [BOARD.value.comfort, BOARD.value.min]) order.push([floor, deepest]);
+  for (const floor of [BOARD.value.comfort, BOARD.value.min, 1]) for (const depth of depths) order.push([floor, depth]);
+  for (const [floor, depth] of order)
+    for (const brief of [false, true]) {
+      let best: BoardCandidate | null = null;
+      for (const c of at(depth)) if ((c.shape === "brief") === brief && c.valueFont >= floor && (!best || c.score > best.score)) best = c;
+      if (best) return finish(best);
+    }
+
+  // 아주 좁은 위젯(이름도 다 안 들어감): 구역마다 1개, 이름 / 값만, 폭은 고르게. 이름은 끝을 줄이고(…) 값은 칸에 들어가는 크기 (숫자는 자르지 않는다)
+  const cols = colsAt(1);
+  const tiles = cols.flatMap((c) => c.tiles);
+  const w = Math.floor(total / n);
+  const vf = Math.max(1, Math.min(...tiles.map((t) => fitFont(t.value, w, BOARD.value.min, s, true))));
+  const markOf = (t: BoardTileInput): TileMark => tileMark(t, false);
   const tileH = boardTileHeight("brief", F.xs, vf, F.xs, s);
   return {
     ...base,
     shape: "brief",
     captions: false,
-    columns: i.columns.map((c) => ({ key: c.key, label: c.label, codes: c.tiles.slice(0, 1).map((t) => t.code) })),
-    colW,
+    columns: cols.map((c) => ({ key: c.key, label: c.label, codes: c.tiles.map((t) => t.code), width: w })),
     nameFont: F.xs,
     valueFont: vf,
     changeFont: F.xs,
-    nameW: Object.fromEntries(tiles.map((t) => [t.code, nameWidth(t, F.xs, colW, s)])),
+    nameW: Object.fromEntries(
+      tiles.map((t) => {
+        const nameRoom = w - (markOf(t) ? BOARD.dot + MARKER_GAP : 0);
+        return [t.code, textWidth(t.label, F.xs, s, true) <= nameRoom ? null : Math.max(0, Math.floor(nameRoom))];
+      }),
+    ),
+    mark: Object.fromEntries(tiles.map((t) => [t.code, markOf(t)])),
     change: Object.fromEntries(tiles.map((t) => [t.code, null])),
     tileH,
-    rowPad: BOARD_ROW_PAD.min,
+    rowPad: BOARD_ROW_PADS[0],
+    captionGap: CAPTION_GAPS[0],
     bodyH: tileH,
   };
 }

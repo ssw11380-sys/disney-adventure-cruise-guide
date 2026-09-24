@@ -3,7 +3,7 @@ import { FlexWidget, TextWidget, type FlexWidgetStyle } from "react-native-andro
 import { sentence } from "@/lib/a11y";
 import { space } from "@/tokens";
 import { BOARD_TITLE, boardColumns, boardTiles, type BoardTile } from "./board";
-import { BOARD_GAP, CAPTION_GAP, MARKER_GAP, PAD, planMarket, type MarketPlan } from "./layout";
+import { BOARD_GAP, MARKER_GAP, PAD, planMarket, STALE_TEXT, type MarketPlan } from "./layout";
 import { asOfVariants, failureText, HOME_URI, tone } from "./model";
 import type { WidgetIndex } from "./payload";
 import { WIDGET_BOARD as BOARD, WIDGET_COLORS, WIDGET_FONT as F, WIDGET_TOUCH as TOUCH, type WidgetPalette } from "./palette";
@@ -11,8 +11,10 @@ import { WIDGET_CLICK, type WidgetFrame } from "./widgets";
 
 /**
  * 지수·환율 위젯 (APK 1.4.0, 플래그 widgetMarket): 국내 | 미국 | 환율 세 구역을 세로 칸으로 나란히.
- *  - 칸: 이름(+장중 초록 점 · "지연") / 큰 값 / 등락("▲63.01 +0.90%"). 값·등락 표기와 색은 앱 지수 띠(MarketStrip)와 같다
- *  - 크기별(layout.ts planMarket): 4×3 이상은 9개 모두, 4×2 는 코스피·코스닥·나스닥·S&P500·원/달러·원/100엔(3×2), 더 낮으면 3개
+ *  - 칸: 이름(+장중 초록 점 · "지연") / 큰 값 / 등락("▲63.01 +0.90%"). 값·등락 표기와 색은 앱 지수 띠(MarketStrip)와 같다.
+ *    낮은 크기(4×3 등)는 두 줄 칸: 이름 ··· 등락률 / 큰 값 — 어느 크기에서도 ▲/▼(부호)와 색이 있는 등락률이 보인다
+ *  - 크기별(layout.ts planMarket): 4×3 이상은 9개 모두, 4×2 는 코스피·코스닥·나스닥·S&P500·원/달러·원/100엔(3×2), 더 낮으면 3개.
+ *    구역 폭은 필요한 만큼(이름이 긴 미국이 조금 넓다), 남는 높이는 칸 사이 여백으로
  *  - 다크: 패널색 → 한 단계 깊은 색으로 비스듬한 그라데이션 카드, 라이트: 흰 카드에 얇은 테두리 (palette.ts)
  *  - 칸을 누르면 그 지수·환율 차트(market/[code]), 머리를 누르면 앱, ↻ 는 새로고침(48dp, 누르면 바로 "갱신 중")
  *  - 출처 조회가 실패한 항목은 마지막 값을 흐리게 + "지연", 위젯 조회가 실패하면 마지막 값을 두고 머리에 "갱신 실패 …"
@@ -54,10 +56,23 @@ const rootStyle = (c: WidgetPalette): FlexWidgetStyle => ({
   paddingBottom: PAD,
 });
 
-/** 한 칸: 이름(+표시) / 값 / 등락. 지연·값 없음은 회색 */
+/** 작은 점 (장중 초록 · 지연 경고색) */
+const Dot = ({ color }: { color: WidgetPalette["live"] }) => (
+  <FlexWidget style={{ width: BOARD.dot, height: BOARD.dot, borderRadius: BOARD.dot / 2, backgroundColor: color, marginLeft: MARKER_GAP }} />
+);
+
+/**
+ * 한 칸. 지연·값 없음은 회색.
+ *  - full: 이름(+장중 점·"지연") / 값 / 등락 줄
+ *  - inline: 이름(+장중 점) ··· 등락률 / 값      - brief: 이름(+장중 점) ··· ▲/▼ / 값   (지연 항목은 오른쪽에 "지연")
+ * 이름은 다 들어가면 글자 폭대로 두어 점·"지연"이 이름 바로 뒤에 붙는다 (줄일 때만 폭을 준다)
+ */
 function Tile({ t, plan, first, last, c }: { t: BoardTile; plan: MarketPlan; first: boolean; last: boolean; c: WidgetPalette }) {
   const color = t.stale || !t.has ? c.muted : tone(t.change, c);
-  const change = plan.shape === "full" ? plan.change[t.code] : null;
+  const mark = plan.mark[t.code] ?? null;
+  const change = plan.change[t.code] ?? null;
+  const nameW = plan.nameW[t.code] ?? null;
+  const full = plan.shape === "full";
   const style: FlexWidgetStyle = {
     width: "match_parent",
     flexDirection: "column",
@@ -65,15 +80,34 @@ function Tile({ t, plan, first, last, c }: { t: BoardTile; plan: MarketPlan; fir
     paddingBottom: last ? 0 : plan.rowPad,
     ...(first ? {} : { borderTopWidth: BOARD.hairline, borderTopColor: c.line }),
   };
+  const staleWord = (lead: boolean) => (
+    <TextWidget text={STALE_TEXT} maxLines={1} style={{ color: c.warn, fontSize: plan.nameFont, fontWeight: "700", ...(lead ? { marginLeft: MARKER_GAP } : {}) }} />
+  );
+  const name = (
+    <FlexWidget style={{ flexDirection: "row", alignItems: "center" }}>
+      <TextWidget text={t.label} maxLines={1} truncate="END" style={{ color: c.sub, fontSize: plan.nameFont, fontWeight: "600", ...(nameW !== null ? { width: nameW } : {}) }} />
+      {mark === "live" ? <Dot color={c.live} /> : mark === "staleDot" ? <Dot color={c.warn} /> : mark === "staleText" && full ? staleWord(true) : null}
+    </FlexWidget>
+  );
+  const value = <TextWidget text={t.value} maxLines={1} style={{ color, fontSize: plan.valueFont, fontWeight: "700" }} />;
+  if (!full) {
+    const right = mark === "staleText" ? staleWord(false) : change ? <TextWidget text={change} maxLines={1} style={{ color, fontSize: plan.nameFont, fontWeight: "700" }} /> : null;
+    return (
+      <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: t.uri }} accessibilityLabel={t.speech} style={style}>
+        <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          {name}
+          {right}
+        </FlexWidget>
+        {value}
+      </FlexWidget>
+    );
+  }
   return (
     <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: t.uri }} accessibilityLabel={t.speech} style={style}>
-      <FlexWidget style={{ flexDirection: "row", alignItems: "center" }}>
-        <TextWidget text={t.label} maxLines={1} truncate="END" style={{ color: c.sub, fontSize: plan.nameFont, fontWeight: "600", width: plan.nameW[t.code] ?? 0 }} />
-        {t.live ? <FlexWidget style={{ width: BOARD.dot, height: BOARD.dot, borderRadius: BOARD.dot / 2, backgroundColor: c.live, marginLeft: MARKER_GAP }} /> : null}
-        {t.stale ? <TextWidget text="지연" maxLines={1} style={{ color: c.warn, fontSize: plan.nameFont, fontWeight: "700", marginLeft: MARKER_GAP }} /> : null}
-      </FlexWidget>
-      <TextWidget text={t.value} maxLines={1} style={{ color, fontSize: plan.valueFont, fontWeight: "700" }} />
-      {change ? <TextWidget text={change} maxLines={1} style={{ color, fontSize: plan.changeFont, fontWeight: "700" }} /> : null}
+      {name}
+      {value}
+      {/* 등락이 없는 칸(한 번도 못 받음)도 줄 높이를 지켜 옆 구역과 줄이 맞게 */}
+      <TextWidget text={change ?? " "} maxLines={1} style={{ color, fontSize: plan.changeFont, fontWeight: "700" }} />
     </FlexWidget>
   );
 }
@@ -82,7 +116,7 @@ function Tile({ t, plan, first, last, c }: { t: BoardTile; plan: MarketPlan; fir
 function Column({ col, index, count, plan, tiles, c }: { col: MarketPlan["columns"][number]; index: number; count: number; plan: MarketPlan; tiles: Map<string, BoardTile>; c: WidgetPalette }) {
   const first = index === 0;
   const lastCol = index === count - 1;
-  const width = plan.colW + (first ? 0 : BOARD_GAP + BOARD.hairline) + (lastCol ? 0 : BOARD_GAP);
+  const width = col.width + (first ? 0 : BOARD_GAP + BOARD.hairline) + (lastCol ? 0 : BOARD_GAP);
   const style: FlexWidgetStyle = {
     width,
     height: "match_parent",
@@ -94,7 +128,7 @@ function Column({ col, index, count, plan, tiles, c }: { col: MarketPlan["column
   const shown = col.codes.map((code) => tiles.get(code)).filter((t): t is BoardTile => !!t);
   return (
     <FlexWidget style={style}>
-      {plan.captions ? <TextWidget text={col.label} maxLines={1} style={{ color: c.gold, fontSize: F.xs, fontWeight: "700", marginBottom: CAPTION_GAP }} /> : null}
+      {plan.captions ? <TextWidget text={col.label} maxLines={1} style={{ color: c.gold, fontSize: F.xs, fontWeight: "700", marginBottom: plan.captionGap }} /> : null}
       {shown.map((t, n) => (
         <Tile key={t.code} t={t} plan={plan} first={n === 0} last={n === shown.length - 1} c={c} />
       ))}
