@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import { EXCLUDED_KEY, parseCodes, SNAPSHOT_KEY, type TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import { CandleCache } from "./candleCache.js";
@@ -182,7 +183,7 @@ export class StockService {
   // ── 검색 ────────────────────────────────────────────────────────
 
   /**
-   * 기본: 1) 로컬 마스터(코드 정확 일치 → 이름 접두 → 이름 포함) 2) 비어 있으면 외부 검색.
+   * 기본: 1) 로컬 마스터(코드 정확 일치 → 이름 일치·접두 → 이름 포함) 2) 비어 있으면 외부 검색.
    * searchRemoteFirst: 외부 검색(토스: 한글로 미국 종목까지, 순위 좋음)을 먼저 쓰고 마스터 결과를 뒤에 덧붙인다.
    * 외부 검색이 실패하면 마스터만으로 답한다.
    */
@@ -241,23 +242,42 @@ export class StockService {
     return { results, source: results.length ? "master" : "none" };
   }
 
+  /**
+   * 정확한 코드 → 이름 일치 → 이름 접두 → 코드 접두 → 이름 포함 순.
+   * NAVER·KT·LG 처럼 티커 모양의 영문 종목명도 있으니 코드처럼 보여도 이름 검색을 함께 한다 (DISC-05).
+   * 대소문자·띄어쓰기는 무시한다 (Postgres LIKE 는 대소문자를 가리고, 검색어는 공백을 뺀 채 온다).
+   */
   private async searchLocal(q: string, limit: number): Promise<ListedStock[]> {
-    const db = this.deps.db;
-    const rows = CODE_RE.test(q)
-      ? await db.selectFrom("listed_stocks").selectAll().where("code", "=", q).execute()
-      : await db
-          .selectFrom("listed_stocks")
-          .selectAll()
-          .where((eb) => eb.or([eb("name", "like", `${q}%`), eb("name", "like", `%${q}%`), eb("code", "like", `${q}%`)]))
-          .limit(limit * 3)
-          .execute();
     const upperQ = q.toUpperCase();
+    const name = sql<string>`replace(upper(${sql.ref("name")}), ' ', '')`;
+    const rows = await this.deps.db
+      .selectFrom("listed_stocks")
+      .selectAll()
+      .where((eb) => eb.or([eb(name, "like", `%${upperQ}%`), eb("code", "like", `${upperQ}%`)]))
+      // 개수 제한에 정확히 맞는 종목이 잘리지 않게 같은 순서로 먼저 줄 세운다
+      .orderBy((eb) =>
+        eb
+          .case()
+          .when("code", "=", upperQ)
+          .then(0)
+          .when(name, "=", upperQ)
+          .then(1)
+          .when(name, "like", `${upperQ}%`)
+          .then(2)
+          .when("code", "like", `${upperQ}%`)
+          .then(3)
+          .else(4)
+          .end(),
+      )
+      .limit(limit * 3)
+      .execute();
     const rank = (name: string, code: string): number => {
       const n = name.replace(/\s+/g, "").toUpperCase();
-      if (n === upperQ || code === q) return 0;
-      if (n.startsWith(upperQ)) return 1;
-      if (code.startsWith(q)) return 2;
-      return 3;
+      if (code === upperQ) return 0;
+      if (n === upperQ) return 1;
+      if (n.startsWith(upperQ)) return 2;
+      if (code.startsWith(upperQ)) return 3;
+      return 4;
     };
     return rows
       .map((r) => ({

@@ -6,6 +6,7 @@ import type { Market } from "../domain/types.js";
  *  - 미국: 티커 1~10자, 영문 대문자로 시작, 영문/숫자/하이픈, 끝에 ".한글자" 클래스 접미사만 허용 (AAPL, BRK-B, BF.B)
  *    ".TO", ".KS" 같은 거래소 접미사(두 글자 이상)는 거절한다.
  *  첫 글자가 숫자면 한국, 영문이면 미국이라 두 형식이 겹치지 않는다.
+ *  NAVER·KT·LG 같은 영문 종목명도 티커 형식에 맞으므로, 검색어가 코드인지 이름인지 가르는 데는 쓰지 않는다 (DISC-05).
  */
 export const KR_CODE_RE = /^\d[0-9A-Z]{5}$/;
 export const US_TICKER_RE = /^[A-Z][A-Z0-9\-]{0,9}(?:\.[A-Z])?$/;
