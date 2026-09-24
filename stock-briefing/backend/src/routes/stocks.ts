@@ -23,6 +23,8 @@ const candlesQuery = z.object({
 export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async (app, { service }) => {
   app.get("/search", async (req) => {
     const { q, limit } = searchQuery.parse(req.query);
+    // local=1: 종목 마스터만 (외부 검색을 기다리지 않아 바로) — 앱이 먼저 보여 주고 전체 결과가 오면 바꾼다 (3-18)
+    if ((req.query as { local?: string }).local === "1") return service.searchMaster(q, limit);
     return service.search(q, limit);
   });
 

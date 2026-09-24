@@ -192,7 +192,7 @@ export class StockService {
     const local = await this.searchLocal(compact, limit);
     if (this.deps.searchRemoteFirst) {
       try {
-        const remote = await this.deps.search.search(q, limit);
+        const remote = await this.remoteSearch(q, limit);
         if (remote.length > 0) {
           const seen = new Set(remote.map((s) => s.code));
           const merged = [...remote, ...local.filter((s) => !seen.has(s.code))].slice(0, limit);
@@ -207,7 +207,7 @@ export class StockService {
     const looksLikeTicker = /^[A-Za-z][A-Za-z.\-]{0,5}$/.test(compact);
     if (local.length > 0 && !looksLikeTicker) return { results: local, source: "master" };
     try {
-      const remote = await this.deps.search.search(q, limit);
+      const remote = await this.remoteSearch(q, limit);
       const seen = new Set(local.map((s) => s.code));
       const merged = [...local, ...remote.filter((r) => !seen.has(r.code))].slice(0, limit);
       return { results: merged, source: local.length ? `master+${this.deps.search.name}` : this.deps.search.name };
@@ -215,6 +215,27 @@ export class StockService {
       if (e instanceof ProviderError) return { results: local, source: local.length ? "master" : "none" };
       throw e;
     }
+  }
+
+  /** 외부 검색 결과 (5분 캐시: 같은 말을 다시 치거나 지웠다 다시 쳐도 바로, 3-18) */
+  private readonly searchCache = new Map<string, { at: number; results: ListedStock[] }>();
+  private async remoteSearch(q: string, limit: number): Promise<ListedStock[]> {
+    const key = `${q.toUpperCase()}|${limit}`;
+    const t = this.now().getTime();
+    const hit = this.searchCache.get(key);
+    if (hit && t - hit.at < 5 * 60_000) return hit.results;
+    const results = await this.deps.search.search(q, limit);
+    this.searchCache.set(key, { at: t, results });
+    if (this.searchCache.size > 500) this.searchCache.delete(this.searchCache.keys().next().value!);
+    return results;
+  }
+
+  /** 종목 마스터만 검색 (외부 검색 없이 바로) */
+  async searchMaster(query: string, limit = 20): Promise<{ results: ListedStock[]; source: string }> {
+    const compact = query.trim().replace(/\s+/g, "");
+    if (!compact) return { results: [], source: "none" };
+    const results = await this.searchLocal(compact, limit);
+    return { results, source: results.length ? "master" : "none" };
   }
 
   private async searchLocal(q: string, limit: number): Promise<ListedStock[]> {

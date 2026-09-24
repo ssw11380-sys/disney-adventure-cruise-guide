@@ -128,15 +128,49 @@ export function useTossStatus() {
   return useQuery({ queryKey: useKey("tossStatus"), queryFn: api.tossStatus, staleTime: 30_000, retry: 0 });
 }
 
+/**
+ * 종목 검색 (3-18): 종목 마스터 결과를 먼저(바로) 보여 주고, 외부(토스) 검색까지 합친 결과가 오면 바꾼다.
+ * 입력이 바뀌는 동안에는 이전 결과를 그대로 두어 목록이 깜빡이거나 스피너가 뜨지 않게 한다
+ */
 export function useSearch(q: string) {
   const api = useApi();
   const query = q.trim();
-  return useQuery({
+  const full = useQuery({
     queryKey: useKey("search", query),
     queryFn: () => api.searchStocks(query),
     enabled: query.length > 0,
     staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
   });
+  const local = useQuery({
+    queryKey: useKey("searchLocal", query),
+    queryFn: () => api.searchStocksLocal(query),
+    enabled: query.length > 0,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
+  });
+  return pickSearch(query, full, local);
+}
+
+/** 보여 줄 검색 결과: 이번 입력의 전체 결과 → 이번 입력의 마스터 결과 → 이전 입력의 결과(깜빡임 없이) */
+export function pickSearch<T>(
+  query: string,
+  full: { data?: T; isPlaceholderData: boolean; isError: boolean; error: unknown },
+  local: { data?: T; isPlaceholderData: boolean },
+): { data: T | undefined; pending: boolean; isError: boolean; error: unknown } {
+  if (!query) return { data: undefined, pending: false, isError: false, error: null };
+  if (full.data !== undefined && !full.isPlaceholderData) return { data: full.data, pending: false, isError: false, error: null };
+  if (local.data !== undefined && !local.isPlaceholderData) return { data: local.data, pending: true, isError: false, error: null };
+  if (full.isError && local.data === undefined) return { data: undefined, pending: false, isError: true, error: full.error };
+  return { data: full.data ?? local.data, pending: true, isError: false, error: null };
+}
+
+/** 등록 종목 코드 (잔고 캐시만 읽는다 — 검색 화면에서 잔고를 다시 받지 않게) */
+export function useRegisteredCodes(): Set<string> {
+  const api = useApi();
+  const { apiUrl } = useSettings();
+  const q = useQuery({ queryKey: [apiUrl, "stocks"], queryFn: api.listStocks, enabled: false });
+  return useMemo(() => new Set((q.data ?? []).map((s) => s.code)), [q.data]);
 }
 
 /** 발견 탭: 그 나라 장이 열려 있으면 30초, 아니면 5분마다 */

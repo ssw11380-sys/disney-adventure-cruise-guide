@@ -95,6 +95,8 @@ export function createApi(baseUrl: string, token = "") {
     appErrorSummary: (days = 7) => get<AppErrorSummary>(`/api/admin/app-errors?days=${days}`),
 
     searchStocks: (q: string, limit = 20) => get<{ results: ListedStock[]; source: string }>(`/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+    /** 종목 마스터만 (외부 검색을 기다리지 않아 바로) — 예전 서버는 local 을 무시하고 전체 결과를 준다 */
+    searchStocksLocal: (q: string, limit = 20) => get<{ results: ListedStock[]; source: string }>(`/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}&local=1`, 5_000),
     // 3초마다 부르는 조회는 응답 없는 망에서 60초씩 묶이지 않게 15초로 끊는다 (서버 첫 호출 최대 약 13초 실측)
     listStocks: () => get<RegisteredWithQuote[]>("/api/stocks?quotes=1", 15_000),
     /** registered: false 면 등록하지 않은 종목의 미리 보기(발견 탭 등). 구버전 서버는 필드 없음(= 등록 종목) */
