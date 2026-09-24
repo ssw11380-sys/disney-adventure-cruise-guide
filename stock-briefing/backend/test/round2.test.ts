@@ -149,9 +149,19 @@ describe("NaverStockNewsProvider + chain", () => {
     // "대기업 33% 흑자행진"(네이버 언급 없음)은 빠지고 "네이버서 …" 1건 + 이름 검색 3건
     expect(items.map((x) => x.title)).toContain("네이버서 日 맛집 예약 클릭 482%↑");
     expect(items.map((x) => x.title)).not.toContain("대기업 33% 5년 이상 흑자행진");
-    expect(fallback.queries).toEqual(['"NAVER" when:30d']);
+    expect(fallback.queries).toEqual(["NAVER"]); // 검색 문법을 모르는 소스에는 이름만
     const none = await chain.forStock({ code: "ZZZZ", name: "가나다라" }, 8); // 네이버 실패 → 이름 검색
     expect(none.length).toBe(3);
-    expect(fallback.queries.at(-1)).toBe('"가나다라" when:30d');
+    expect(fallback.queries.at(-1)).toBe("가나다라");
+  });
+
+  it("체인: 검색 문법을 아는 소스(구글)가 있으면 그걸로 최근 30일 질의, 종목별 10분 캐시 (리뷰 M3)", async () => {
+    const google = Object.assign(new FakeNewsProvider(), { advancedQuery: true });
+    const naverSearch = new FakeNewsProvider();
+    const chain = new NewsProviderChain([naverSearch, google], undefined, () => Date.parse("2026-09-24T00:00:00+09:00"));
+    await chain.forStock({ code: "RGTI", name: "리게티 컴퓨팅" }, 8);
+    await chain.forStock({ code: "RGTI", name: "리게티 컴퓨팅" }, 8);
+    expect(google.queries).toEqual(['"리게티" when:30d']);
+    expect(naverSearch.queries).toEqual([]);
   });
 });

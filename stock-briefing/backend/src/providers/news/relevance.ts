@@ -5,7 +5,7 @@ import type { NewsItem } from "./types.js";
  * 종목 뉴스 관련도 필터 (순수 함수 → 단위 테스트). 무관 기사보다 빈 목록이 낫다는 원칙.
  *  - 30일 넘은 기사, 블로그·게임 매체 등은 뺀다
  *  - 이름이 흔한 단어·티커와 같은 종목(RTX·QQQI·SOXL)은 제목에 티커와 함께 주식·실적 관련 말이 있어야 한다 (지포스 RTX 기사 제외)
- *  - 두 글자 이름(이튼)은 앞뒤가 다른 글자로 이어지지 않고(라이튼·이튼튼 제외), 티커나 주식 관련 말이 함께 있어야 한다
+ *  - 이름은 앞뒤가 다른 글자로 이어지지 않아야 한다(라이튼·이튼튼 제외, 조사는 허용). 이름이 다른 뜻과 겹치는 종목은 종목별 제외어로 거른다
  */
 
 export interface StockRef {
@@ -17,13 +17,22 @@ export interface StockRef {
 export const NEWS_MAX_AGE_MS = 30 * 86_400_000;
 
 /** 회사 이름 뒤에 붙는 말 (기사 제목에서는 빠지는 경우가 많다) */
-const SUFFIX = /\s*(\((ADR|ETF|ETN)\)|홀딩스|컴퓨팅|네트웍스|네트워크스|코퍼레이션|테크놀로지스|테크놀로지|인더스트리즈|그룹|Inc\.?|Corp\.?|Corporation|Holdings)$/i;
+const SUFFIX = /\s*(\((ADR|ETF|ETN)\)|홀딩스|컴퓨팅|네트웍스|네트워크스|코퍼레이션|테크놀로지스|테크놀로지|인더스트리즈|그룹|플랫폼스|Inc\.?|Corp\.?|Corporation|Holdings|\s[A-C])$/i;
 
 /** 이름 대신 기사에 자주 쓰는 다른 이름 */
 const ALIASES: Record<string, string[]> = {
   "035420": ["네이버"],
   CPNG: ["쿠팡"],
   AVGO: ["브로드컴"],
+  GOOGL: ["구글", "알파벳"],
+  GOOG: ["구글", "알파벳"],
+  META: ["메타"],
+  "BRK.B": ["버크셔"],
+};
+
+/** 이름이 다른 뜻과 겹치는 종목: 제목에 이 말이 있으면 뺀다 (이튼 메스·이튼 산불·이튼 칼리지) */
+const EXCLUDE: Record<string, RegExp> = {
+  ETN: /메스|산불|칼리지|스쿨|학교|알렌/,
 };
 
 const FINANCE =
@@ -55,20 +64,22 @@ export function isAmbiguous(stock: StockRef): boolean {
 const PARTICLE = /[은는이가을를의에서와과도로만]/;
 
 /**
- * 앞이 글자(한글·영문·숫자)로 이어지지 않는 위치에 word 가 있는지.
+ * 앞이 글자(한글·영문·숫자)로 이어지지 않는 위치에 word 가 있는지 (영문 이름은 대소문자 무시).
  * 뒤는 글자가 아니거나 조사면 된다 (라이튼·이튼튼 은 아니고 네이버서·이튼의 는 맞음)
  */
 function hasWord(text: string, word: string): boolean {
   if (!word) return false;
   const letter = /[가-힣A-Za-z0-9]/;
-  const variants = [...new Set([word, word.replace(/\s+/g, "")])];
+  const latin = isLatinOnly(word);
+  const hay = latin ? text.toUpperCase() : text;
+  const variants = [...new Set([word, word.replace(/\s+/g, "")].map((w) => (latin ? w.toUpperCase() : w)))];
   for (const w of variants) {
-    let i = text.indexOf(w);
+    let i = hay.indexOf(w);
     while (i >= 0) {
-      const before = i > 0 ? text[i - 1]! : "";
-      const after = text[i + w.length] ?? "";
+      const before = i > 0 ? hay[i - 1]! : "";
+      const after = hay[i + w.length] ?? "";
       if (!letter.test(before) && (!letter.test(after) || PARTICLE.test(after))) return true;
-      i = text.indexOf(w, i + 1);
+      i = hay.indexOf(w, i + 1);
     }
   }
   return false;
@@ -88,12 +99,9 @@ export function isRelevant(stock: StockRef, item: NewsItem, now: number): boolea
   const ticker = us && hasWord(title, stock.code.toUpperCase());
   const finance = FINANCE.test(title);
   if (isAmbiguous(stock)) return ticker && finance;
+  if (EXCLUDE[stock.code.toUpperCase()]?.test(title)) return false;
   const text = `${title} ${item.summary ?? ""}`;
-  const hit = names(stock).filter((n) => hasWord(text, n));
-  if (hit.length === 0) return ticker && finance;
-  // 두 글자 이하 이름(이튼 등)은 다른 뜻과 겹치기 쉬워 티커나 주식 관련 말이 함께 있어야 한다
-  const strong = hit.some((n) => n.replace(/\s/g, "").length >= 3);
-  return strong || ticker || finance;
+  return names(stock).some((n) => hasWord(text, n)) || (ticker && finance);
 }
 
 export function filterNews(stock: StockRef, items: NewsItem[], now: number): NewsItem[] {

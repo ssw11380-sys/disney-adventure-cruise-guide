@@ -14,13 +14,13 @@ export function BriefingSources({ data }: { data: BriefingWithData["data"] }) {
   if (!data) return null;
   const news = data.news ?? [];
   const disclosures = data.disclosures ?? [];
-  const link = (url: string) => () => void Linking.openURL(url);
+  const link = (url: string) => () => void Linking.openURL(url).catch(() => undefined);
   return (
     <Card>
       <SectionTitle>근거</SectionTitle>
       {data.quote ? <Muted>시세 기준: {formatDateKo(data.quote.asOf, true)} · {data.quote.priceBasis ?? data.quote.source}</Muted> : <Muted>시세: 받지 못함</Muted>}
-      <Text style={[styles.head, { color: t.ink }]}>뉴스 {news.length}건</Text>
-      {news.length === 0 ? <Muted>관련 뉴스 없음</Muted> : null}
+      <Text style={[styles.head, { color: t.ink }]}>{data.news === null ? "뉴스" : `뉴스 ${news.length}건`}</Text>
+      {data.news === null ? <Muted>받지 못함 (브리핑 때 뉴스 소스가 응답하지 않음)</Muted> : news.length === 0 ? <Muted>관련 뉴스 없음</Muted> : null}
       {news.map((n, i) => (
         <Pressable key={`${n.url}-${i}`} onPress={link(n.url)} accessibilityRole="link" accessibilityLabel={`${n.title}, ${n.source ?? ""}`} style={({ pressed }) => [styles.row, { borderTopColor: t.line, opacity: pressed ? 0.6 : 1 }]}>
           <Text style={{ color: t.accent, fontSize: font.small }} numberOfLines={2}>

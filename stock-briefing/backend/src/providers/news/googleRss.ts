@@ -8,6 +8,7 @@ import { stripHtml, toIso, type NewsItem, type NewsProvider } from "./types.js";
  */
 export class GoogleNewsRssProvider implements NewsProvider {
   readonly name = "google-news-rss";
+  readonly advancedQuery = true;
   constructor(private readonly fetchFn: FetchFn = fetch) {}
 
   async search(query: string, limit: number): Promise<NewsItem[]> {

@@ -60,6 +60,20 @@ describe("종목 뉴스 관련도 (3-12, 운영에서 뽑은 제목)", () => {
     ).toEqual(["공항 대기시간·무료주차·특선영화까지…네이버 추석 정보 한곳에", "네이버서 日 맛집 예약 클릭 482%↑"]);
   });
 
+  it("두 글자 국내 종목(기아·농심·KT)은 경계만 맞으면 주식 관련 말이 없어도 남긴다 (리뷰 M1)", () => {
+    expect(keep({ code: "030200", name: "KT" }, [item("KT, 추석 맞아 멤버십 혜택 확대"), item("SKT·KT 요금제 개편"), item("KTX 추석 예매")])).toEqual(["KT, 추석 맞아 멤버십 혜택 확대", "SKT·KT 요금제 개편"]);
+    expect(keep({ code: "004370", name: "농심" }, [item("농심, 인천공항 라운지 접수"), item("농심켈로그 신제품")])).toEqual(["농심, 인천공항 라운지 접수"]);
+    expect(keep({ code: "AAPL", name: "애플" }, [item("애플, 신제품 출시 주기 분산"), item("애플망고 제철")])).toEqual(["애플, 신제품 출시 주기 분산"]);
+  });
+
+  it("주식 종류 글자(알파벳 A·버크셔 B)는 떼고, 별칭(구글·메타)도 본다 (리뷰 M2)", () => {
+    expect(coreName("알파벳 A")).toBe("알파벳");
+    expect(coreName("버크셔 해서웨이 B")).toBe("버크셔 해서웨이");
+    expect(keep({ code: "GOOGL", name: "알파벳 A" }, [item("구글, 제미나이 새 모델 공개"), item("알파벳 주가 사상 최고")])).toHaveLength(2);
+    expect(keep({ code: "META", name: "메타 플랫폼스" }, [item("메타, AI 안경 판매 호조"), item("메타버스 플랫폼 경쟁")])).toEqual(["메타, AI 안경 판매 호조"]);
+    expect(newsQuery({ code: "GOOGL", name: "알파벳 A" })).toBe('"알파벳" when:30d');
+  });
+
   it("이름 뒤 수식어(홀딩스·컴퓨팅·(ADR))는 떼고 찾는다", () => {
     expect(coreName("버티브 홀딩스")).toBe("버티브");
     expect(coreName("윙입푸드(ADR)")).toBe("윙입푸드");

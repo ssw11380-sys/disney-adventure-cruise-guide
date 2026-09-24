@@ -1,6 +1,6 @@
 import { ProviderError } from "../../lib/errors.js";
 import type { ChainLogger } from "../market/chain.js";
-import { filterNews, newsQuery } from "./relevance.js";
+import { coreName, filterNews, newsQuery } from "./relevance.js";
 import type { NewsItem, NewsProvider } from "./types.js";
 
 export class NewsProviderChain implements NewsProvider {
@@ -9,6 +9,7 @@ export class NewsProviderChain implements NewsProvider {
     private readonly providers: NewsProvider[],
     private readonly log: ChainLogger = { warn: () => {} },
     private readonly now: () => number = () => Date.now(),
+    private readonly retryDelayMs = 1_500,
   ) {
     if (providers.length === 0) throw new Error("NewsProviderChain 에 최소 1개 소스가 필요합니다");
     this.name = providers.map((p) => p.name).join(">");
@@ -46,25 +47,44 @@ export class NewsProviderChain implements NewsProvider {
         out.push(it);
       }
     };
-    let lastErr: unknown = null;
+    let stockOk = false;
     for (const p of this.providers) {
       if (!p.forStock) continue;
       try {
         add(await p.forStock(stock, limit * 2));
+        stockOk = true;
       } catch (e) {
-        lastErr = e;
         this.log.warn({ provider: p.name, err: e instanceof Error ? e.message : String(e) }, `종목 뉴스(${stock.code}) 실패, 다음 소스로`);
       }
       if (out.length >= limit) break;
     }
     if (out.length < Math.ceil(limit / 2)) {
       try {
-        add(await this.search(newsQuery(stock), limit * 3));
+        add(await this.nameSearch(stock, limit * 3, now));
       } catch (e) {
-        // 이름 검색까지 실패했고 모은 것도 없으면 실패로 (빈 목록과 구분)
-        if (out.length === 0) throw lastErr && !(e instanceof ProviderError) ? e : e;
+        // 종목 뉴스는 받았는데 이름 검색만 실패했으면 모은 것만 (빈 목록이어도 "관련 뉴스 없음"). 둘 다 실패면 실패
+        if (!stockOk && out.length === 0) throw e;
       }
     }
-    return out.sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : -1)).slice(0, limit);
+    return out.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt)).slice(0, limit);
+  }
+
+  /** 이름 검색 결과 (종목마다 10분 캐시 — 브리핑이 여러 종목을 연달아 모을 때 구글이 503 을 내지 않게) */
+  private readonly nameCache = new Map<string, { at: number; items: NewsItem[] }>();
+
+  /** 검색 문법을 알아듣는 소스(구글)가 있으면 최근 30일 질의로, 없으면 이름만으로 일반 검색 */
+  private async nameSearch(stock: { code: string; name: string }, limit: number, now: number): Promise<NewsItem[]> {
+    const hit = this.nameCache.get(stock.code);
+    if (hit && now - hit.at < 10 * 60_000) return hit.items;
+    const adv = this.providers.find((p) => p.advancedQuery);
+    const once = () => (adv ? adv.search(newsQuery(stock), limit) : this.search(coreName(stock.name), limit));
+    // 구글은 연달아 부르면 잠깐 503 을 낸다 → 1.5초 뒤 한 번만 다시
+    const items = await once().catch(async (e: unknown) => {
+      this.log.warn({ code: stock.code, err: e instanceof Error ? e.message : String(e) }, "이름 검색 실패, 한 번 더");
+      await new Promise((r) => setTimeout(r, this.retryDelayMs));
+      return once();
+    });
+    this.nameCache.set(stock.code, { at: now, items });
+    return items;
   }
 }
