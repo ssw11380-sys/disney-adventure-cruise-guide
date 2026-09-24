@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Animated, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
+import { Animated, Platform, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
 import { useTheme } from "@/theme";
 
 /**
@@ -25,7 +25,7 @@ export function FlashPrice({ value, text, style }: { value: number | null | unde
   useEffect(() => {
     if (flash === 0) return;
     anim.setValue(1);
-    const a = Animated.timing(anim, { toValue: 0, duration: 700, useNativeDriver: true });
+    const a = Animated.timing(anim, { toValue: 0, duration: 700, useNativeDriver: Platform.OS !== "web" });
     a.start();
     return () => a.stop();
   }, [flash, anim]);

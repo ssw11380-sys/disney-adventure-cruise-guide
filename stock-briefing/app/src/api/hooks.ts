@@ -183,6 +183,8 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
     getNextPageParam: (last) => (last.hasMore && last.items.length > 0 && last.page < 20 ? { page: last.page + 1, ver: last.ver } : undefined),
     staleTime: Math.min(interval, 30_000),
     refetchInterval: (q) => ((q.state.data?.pages.length ?? 0) > AUTO_REFRESH_MAX_PAGES ? false : discoverEvery(q.state.data?.pages[0]?.marketOpen, interval)),
+    // 탭으로 돌아올 때(구독 재개) 많이 펼친 목록의 모든 쪽을 다시 받지 않게 (자동 새로고침과 같은 기준)
+    refetchOnMount: (q) => (q.state.data?.pages.length ?? 0) <= AUTO_REFRESH_MAX_PAGES,
     refetchIntervalInBackground: false,
   });
 }

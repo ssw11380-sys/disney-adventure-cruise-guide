@@ -1,4 +1,5 @@
 import type { EventEmitter } from "node:events";
+import { normalizeCode } from "../lib/codes.js";
 import type { LiveTick, LiveTicks, QuickPriceSource } from "../providers/market/tossRealtime.js";
 import type { ChainLogger } from "../providers/market/chain.js";
 
@@ -142,9 +143,8 @@ export class PriceStream {
       const open = this.deps.marketOpen ? await this.deps.marketOpen().catch(() => true) : true;
       if (!open && Date.now() - this.lastPollAt < (this.deps.closedPollMs ?? 30_000)) return;
       this.lastPollAt = Date.now();
-      // 토스 웹소켓이 붙어 있으면 웹소켓이 구독한 종목은 체결을 바로 받으므로 폴링하지 않는다
-      const live = this.deps.live?.status();
-      const covered = live?.connected ? new Set(live.subscribed) : null;
+      // 토스 웹소켓이 살아 있으면(최근 90초 안에 메시지) 구독한 종목은 체결을 바로 받으므로 폴링하지 않는다
+      const covered = wsCovered(this.deps.live?.status() ?? null, Date.now());
       const codes = (await this.deps.codes()).filter((c) => !covered?.has(c));
       if (codes.length === 0) return;
       const ticks = await q.getMany(codes);
@@ -179,7 +179,9 @@ export class PriceStream {
     this.pending.set(tick.code, tick);
     if (this.flushTimer) return;
     // 조용하던 중 첫 체결은 바로 보내고(지연 없음), 그 뒤 250ms 안의 체결만 모은다 → 초당 최대 4통
-    const wait = this.lastFlushAt + (this.deps.batchMs ?? 250) - Date.now();
+    const batchMs = this.deps.batchMs ?? 250;
+    // 시계가 뒤로 가도(NTP) 한 묶음 간격보다 오래 붙잡지 않게
+    const wait = Math.min(this.lastFlushAt + batchMs - Date.now(), batchMs);
     if (wait <= 0) this.flush();
     else this.flushTimer = setTimeout(() => this.flush(), wait);
   }
@@ -214,4 +216,21 @@ export class PriceStream {
       this.detach(socket);
     }
   }
+}
+
+/** 구독 목록("trade:kr:005930" 같은 토픽 또는 코드)을 종목 코드로 */
+export function topicCode(topic: string): string {
+  const parts = topic.split(":");
+  return normalizeCode(parts[parts.length - 1] ?? topic);
+}
+
+/**
+ * 웹소켓이 체결을 주고 있다고 볼 종목들. 연결돼 있고 마지막 메시지(체결·60초마다 PING 응답)가 90초 안일 때만
+ * (반쯤 끊긴 연결·받기만 하고 흘려보내지 않는 구독이면 폴링이 계속 뒤를 받친다)
+ */
+export function wsCovered(live: { connected: boolean; subscribed: string[]; lastMessageAt: string | null } | null, now: number): Set<string> | null {
+  if (!live?.connected || !live.lastMessageAt) return null;
+  const last = Date.parse(live.lastMessageAt);
+  if (!Number.isFinite(last) || now - last > 90_000) return null;
+  return new Set(live.subscribed.map(topicCode));
 }

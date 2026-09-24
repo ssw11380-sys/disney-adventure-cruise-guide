@@ -150,7 +150,8 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         else if (msg.type === "tick") enqueue([msg], false);
         else if (msg.type === "holdings") {
           // 토스 계좌 체결로 잔고가 바뀌었다 → 목록·상세를 바로 다시 받는다
-          void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
+          // 잔고 탭이 가려져 구독이 끊겨 있어도 바로 받는다 (위젯이 옛 잔고를 그리지 않게)
+          void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"], refetchType: "all" });
           void qc.invalidateQueries({ queryKey: [apiUrl, "stock"] });
         }
       };

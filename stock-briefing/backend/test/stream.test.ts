@@ -182,7 +182,8 @@ describe("체결 묶어 보내기 (3-17)", () => {
 
   it("토스 웹소켓이 구독한 종목은 폴링하지 않고, 두 시장이 닫혀 있으면 폴링을 늦춘다", async () => {
     const live = new FakeLive();
-    live.status = () => ({ enabled: true, connected: true, subscribed: ["005930"], lastMessageAt: null, lastError: null });
+    // 실제 토스 웹소켓은 구독 목록을 토픽("trade:kr:005930")으로 준다
+    live.status = () => ({ enabled: true, connected: true, subscribed: ["trade:kr:005930"], lastMessageAt: new Date().toISOString(), lastError: null });
     const asked: string[][] = [];
     const quick: QuickPriceSource = { name: "toss", getMany: async (codes) => (asked.push(codes), new Map()) };
     let open = true;
@@ -197,6 +198,18 @@ describe("체결 묶어 보내기 (3-17)", () => {
     await new Promise((r) => setTimeout(r, 60));
     expect(asked.length - before).toBeLessThanOrEqual(1); // 닫혀 있으면 1초에 한 번
     stream.stop();
+  });
+});
+
+describe("웹소켓이 받는 종목 판단 (3-17 리뷰)", () => {
+  it("토픽을 종목 코드로 바꾸고, 90초 넘게 메시지가 없으면 아무 종목도 맡기지 않는다", async () => {
+    const { wsCovered, topicCode } = await import("../src/services/priceStream.js");
+    expect(topicCode("trade:kr:005930")).toBe("005930");
+    expect(topicCode("trade:us:aapl")).toBe("AAPL");
+    const now = Date.parse("2026-09-24T10:00:00Z");
+    expect([...(wsCovered({ connected: true, subscribed: ["trade:kr:005930", "trade:us:AAPL"], lastMessageAt: "2026-09-24T09:59:30Z" }, now) ?? [])]).toEqual(["005930", "AAPL"]);
+    expect(wsCovered({ connected: true, subscribed: ["trade:kr:005930"], lastMessageAt: "2026-09-24T09:58:00Z" }, now)).toBeNull(); // 반쯤 끊김
+    expect(wsCovered({ connected: false, subscribed: ["trade:kr:005930"], lastMessageAt: "2026-09-24T09:59:59Z" }, now)).toBeNull();
   });
 });
 
