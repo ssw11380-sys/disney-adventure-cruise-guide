@@ -35,6 +35,9 @@ import { AppErrorService } from "./services/appErrorService.js";
 import { StockService } from "./services/stockService.js";
 import { BackupService } from "./services/backupService.js";
 import { ReconcileService } from "./services/reconcileService.js";
+import { reconcileAfterSync } from "./services/reconcileAfterSync.js";
+import { FeatureService } from "./services/featureService.js";
+import { featureAdminRoutes, featureRoutes } from "./routes/features.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -59,6 +62,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(websocket, { options: { maxPayload: 4096 } });
   const log = app.log;
   const now = opts.now ?? (() => new Date());
+  // 기능 켜고 끄기 (3-15): 플래그 목록은 featureService.ts 한 곳
+  const features = new FeatureService(opts.db, now);
 
   const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now });
   const appErrors = new AppErrorService(opts.db, now);
@@ -102,11 +107,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     const autoSync = new HoldingsAutoSync({
       sync,
       // 동기화마다 앱 총평가와 토스 계좌 요약을 대조해 남긴다 (3-13)
-      onResult: async (r) => {
-        const excluded = new Set(r.excluded);
-        const items = r.holdings.filter((h) => !excluded.has(h.code));
-        if (items.length) await reconcile.record(await stockService.listWithFreshQuotes(), items);
-      },
+      onResult: reconcileAfterSync({ features, reconcile, stocks: stockService }),
       calendar: opts.providers.calendar,
       // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다
       afterSync: async () => {
@@ -294,7 +295,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     schedule: scheduler?.status() ?? null,
     devices: (await deviceService.enabledTokens()).length,
     authRequired: Boolean(opts.config.API_TOKEN),
-    tossOpenApi: { ...tossStatus(tossDeps, await outboundIp()), reconcile: tossDeps ? await tossDeps.reconcile.status().catch(() => null) : null },
+    // 대조를 끄면(3-15) 옛 기록의 경고도 내보내지 않는다 (예전 앱 빌드에서도 줄이 사라지게)
+    tossOpenApi: { ...tossStatus(tossDeps, await outboundIp()), reconcile: tossDeps && (await features.enabled("tossReconcile")) ? await tossDeps.reconcile.status().catch(() => null) : null },
     lastBriefing: briefingService.lastRun,
     stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
@@ -355,7 +357,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     financialsUs: opts.providers.financialsUs,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
-  await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups });
+  await app.register(featureRoutes, { prefix: "/api/features", features });
+  await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
+  await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler };

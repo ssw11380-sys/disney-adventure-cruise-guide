@@ -169,17 +169,24 @@ export class ReconcileService {
     const since = this.now.getTime() - 7 * 86_400_000;
     const week = h.filter((e) => e.missing === 0 && Date.parse(e.at) >= since);
     const within = week.filter((e) => Math.abs(e.diffPct) <= RECONCILE_WARN_PCT).length;
-    const streak = streakOver(h);
-    const qty = qtyStreak(h);
+    // 마지막 기록이 오래됐으면(대조를 껐다 켠 직후 등) 옛 연속으로 경고하지 않는다
+    const fresh = h.length > 0 && this.now.getTime() - Date.parse(h.at(-1)!.at) <= STREAK_GAP_MS;
+    const streak = fresh ? streakOver(h) : 0;
+    const qty = fresh ? qtyStreak(h) : 0;
     return { last: h.at(-1) ?? null, streakOver: streak, qtyStreak: qty, week: { n: week.length, withinPct: week.length ? Math.round((within / week.length) * 1000) / 10 : null }, alert: streak >= STREAK_ALERT || qty >= STREAK_ALERT };
   }
 }
+
+/** 기록 사이가 이보다 벌어지면 연속이 끊긴 것으로 본다 (대조를 껐다 켜거나 서버가 오래 멈췄을 때 옛 기록과 이어 붙지 않게) */
+const STREAK_GAP_MS = 6 * 3_600_000;
+const gapBefore = (h: ReconcileEntry[], i: number) => i + 1 < h.length && Date.parse(h[i + 1]!.at) - Date.parse(h[i]!.at) > STREAK_GAP_MS;
 
 /** 끝에서부터 0.1% 초과가 몇 번 연속인지 (비교 제외 건은 건너뜀) */
 function streakOver(h: ReconcileEntry[]): number {
   let n = 0;
   for (let i = h.length - 1; i >= 0; i--) {
     const e = h[i]!;
+    if (gapBefore(h, i)) break;
     if (e.missing > 0) continue;
     if (Math.abs(e.diffPct) > RECONCILE_WARN_PCT) n++;
     else break;
@@ -190,7 +197,7 @@ function streakOver(h: ReconcileEntry[]): number {
 /** 끝에서부터 수량이 다른 종목이 있는 기록이 몇 번 연속인지 (연달아 이어진 동기화 사이에 잠깐 어긋나는 건 3번 연속이 되기 어렵다) */
 function qtyStreak(h: ReconcileEntry[]): number {
   let n = 0;
-  for (let i = h.length - 1; i >= 0 && h[i]!.qtyMismatch?.length; i--) n++;
+  for (let i = h.length - 1; i >= 0 && h[i]!.qtyMismatch?.length && !gapBefore(h, i); i--) n++;
   return n;
 }
 
