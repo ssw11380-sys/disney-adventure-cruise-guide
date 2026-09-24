@@ -112,6 +112,15 @@ describe("DISC-03 미국 업종 상세: 출처 초기화 때 저장본으로 덮
     expect(d!.note).toContain("확인하지 못했습니다");
   });
 
+  it("시가총액이 없는 종목이 있으면 가중 평균을 다시 낼 수 없어 확인 못 함 (앱은 등락률을 '-' 로 보여 준다)", async () => {
+    const rows = [usItem("S0", 10, 5000), ...Array.from({ length: 9 }, (_, i) => usItem(`S${i + 1}`, 0, 0, i === 0 ? 0 : 1000))];
+    const d = await world({ rows, list: "empty" }).theme("US", "sector", "57");
+    expect(d!.items.every((i) => i.changeRate > 0)).toBe(true);
+    // 요약 등락률은 출처가 비운 때 값(0%) — 대표 값이 아니라고 unverified 로 알린다
+    expect(d!.theme).toMatchObject({ changeRate: 0, up: 0, flat: 0, down: 0, unverified: true });
+    expect(d!.note).toContain("확인하지 못했습니다");
+  });
+
   it("저장본이 마감 전(정규장 중) 값이면 마감 뒤 목록 요약과 시점이 달라 쓰지 않는다 — 다 덮었으면 다시 센다", async () => {
     const usq = { savedAt: "2026-09-22T19:50:00.000Z", quotes: [quote("S0", -5), ...Array.from({ length: 9 }, (_, i) => quote(`S${i + 1}`, 2))] };
     const d = await world({ usq, list: "zero", listSnap: { savedAt: CLOSE, value: [it57({ changeRate: 2.75, up: 10, flat: 0, down: 0 })] } }).theme("US", "sector", "57");
@@ -135,10 +144,12 @@ describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판
   const codes = Array.from({ length: 250 }, (_, i) => String(i).padStart(6, "0"));
   /** 한국 거래량 순위 원본. revision 이 바뀌면 000050 이 1위로 올라온다 (보고서 재현과 같은 조건) */
   function rankWorld() {
-    const w = { revision: 0, now: new Date("2026-09-24T02:00:00Z") };
+    const w = { revision: 0, now: new Date("2026-09-24T02:00:00Z"), calls: 0, down: false };
     const naver = {
       marketStatus: async () => ({}),
       krRankPage: async (_c: string, index: number) => {
+        w.calls++;
+        if (w.down) throw new Error("down");
         const order = w.revision ? [codes[50]!, ...codes.slice(0, 50), ...codes.slice(51)] : codes;
         return {
           items: order.slice(index * 50, (index + 1) * 50).map((code, i) => ({ code, name: code, market: "KOSPI", currency: "KRW" as const, price: 100, change: 1, changeRate: 1, volume: 10_000 - index * 50 - i, tradingValue: 1e9 })),
@@ -185,6 +196,37 @@ describe("DISC-04 순위 더 보기: 첫 쪽의 판(ver)을 잃으면 다른 판
     const all = [...again1.items, ...again2.items].map((i) => i.code);
     expect(all).toContain("000050");
     expect(all).toEqual(newOrder.slice(0, 100));
+  });
+
+  it("판을 잃은 뒤 쪽은 원본을 받지 않고 바로 restart — 깊은 쪽(20쪽)도 수백 줄을 받지 않고, 원본이 실패해도 오류 대신 restart", async () => {
+    const { w, make } = rankWorld();
+    const page1 = await make().rank("KR", "volume", 1, 50);
+    w.revision++;
+    tick(w);
+    const restarted = make();
+    w.calls = 0;
+    const deep = await restarted.rank("KR", "volume", 20, 50, page1.ver);
+    expect(deep).toMatchObject({ restart: true, items: [], hasMore: false, page: 20 });
+    expect(w.calls).toBe(0);
+    // 원본이 내려가 있어도 restart 를 준다 (첫 쪽 요청에서 오류·저장본을 다룬다)
+    w.down = true;
+    const down = await restarted.rank("KR", "volume", 3, 50, page1.ver);
+    expect(down).toMatchObject({ restart: true, items: [], hasMore: false });
+    expect(w.calls).toBe(0);
+    await expect(restarted.rank("KR", "volume", 1, 50)).rejects.toThrow("down");
+    // 원본이 돌아오면 첫 쪽부터 새 목록
+    w.down = false;
+    tick(w);
+    const again1 = await restarted.rank("KR", "volume", 1, 50);
+    expect(again1.items[0]!.code).toBe("000050");
+    // 판을 가진 서버에서도 잃은 판의 뒤 쪽은 원본을 더 받지 않는다 (지금 판 그대로)
+    const calls = w.calls;
+    const gone = await restarted.rank("KR", "volume", 4, 50, page1.ver);
+    expect(gone).toMatchObject({ restart: true, items: [], ver: again1.ver });
+    expect(w.calls).toBe(calls);
+    const again2 = await restarted.rank("KR", "volume", 2, 50, again1.ver);
+    expect(again2.restart).toBeUndefined();
+    expect([...again1.items, ...again2.items].map((i) => i.code)).toEqual(newOrder.slice(0, 100));
   });
 
   it("판이 남아 있으면(최근 5판) 그 판에서 빠짐·겹침 없이 이어 주고, 판 없이 부르면(옛 앱) 지금 목록", async () => {

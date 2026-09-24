@@ -11,6 +11,7 @@ import { DISCLAIMER } from "@/components/Screen";
 import { Empty, ErrorView } from "@/components/ui";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
+import { headlineRate } from "@/lib/themeSummary";
 import { changeColor, font, space, useTheme } from "@/theme";
 
 /** 테마 상세: 테마 전체 등락률·상승/보합/하락 요약 → 구성 종목(등락률순) */
@@ -41,7 +42,9 @@ export default function ThemeDetailScreen() {
   // 상승·보합·하락은 출처 목록 기준(거래정지 제외)이라, 구성 수는 보이는 줄(거래정지 포함)과 잘린 경우의 전체 수 중 큰 값
   const halted = items.filter((i) => i.suspended).length;
   const members = Math.max(total, items.length);
-  const c = changeColor(t, theme?.changeRate);
+  // 요약을 종목 값과 같은 때 값으로 확인하지 못했으면(unverified) 출처가 비운 때의 등락률을 대표 값처럼 보이지 않는다 ("-", 중립 색)
+  const headRate = headlineRate(theme);
+  const c = changeColor(t, headRate);
 
   const head = (
     <>
@@ -50,8 +53,9 @@ export default function ThemeDetailScreen() {
           {market === "KR" ? "한국" : "미국"} {kind === "theme" ? "테마" : "업종"} · 구성 {members}종목{halted ? ` (거래정지 ${halted})` : ""} · 오늘
         </Text>
         <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.md }}>
-          <Text style={[styles.big, { color: c }]}>{theme ? formatPct(theme.changeRate) : "-"}</Text>
-          {period === "day" && theme?.simpleAvg !== undefined ? (
+          <Text style={[styles.big, { color: c }]}>{formatPct(headRate)}</Text>
+          {theme?.unverified ? <Text style={{ color: t.muted, fontSize: font.small }}>등락률 확인 중</Text> : null}
+          {period === "day" && headRate !== null && theme?.simpleAvg !== undefined ? (
             <Text style={{ color: t.muted, fontSize: font.small }}>
               시가총액 가중 · 단순 평균 <Text style={{ color: changeColor(t, theme.simpleAvg), fontWeight: "700" }}>{formatPct(theme.simpleAvg)}</Text>
             </Text>

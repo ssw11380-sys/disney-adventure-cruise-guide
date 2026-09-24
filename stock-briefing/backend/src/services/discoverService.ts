@@ -623,6 +623,25 @@ export class DiscoverService {
     // 그 판을 더 갖고 있지 않으면(재시작·최근 5판 밖) 지금 목록으로 대신 이어 주지 않는다 — 판이 다른 쪽을 붙이면
     // 순위가 바뀐 종목이 빠지고 순위 번호가 어긋난다. 빈 쪽 + restart 로 첫 쪽부터 다시 받게 한다
     const gone = page > 1 && ver !== undefined && !pinned;
+    if (gone) {
+      // 원본은 받지 않고 바로 알린다 — 새 목록은 이어 올 첫 쪽 요청이 받는다 (깊은 쪽이라고 수백 줄을 받느라 늦거나, 원본 실패로 restart 대신 오류가 나지 않게)
+      const cur = this.ranks.get(key);
+      return {
+        market,
+        category,
+        items: [],
+        page,
+        hasMore: false,
+        marketOpen: open,
+        session: ss.session,
+        ver: cur?.ver ?? 0, // 가진 목록이 없으면(재시작 직후) 0
+        restart: true,
+        asOf: null,
+        fxRate: null, // 앱은 첫 쪽의 환율을 쓴다
+        source: cur?.source ?? "",
+        note: "목록이 바뀌어 첫 쪽부터 다시 받습니다",
+      };
+    }
     let st = pinned ?? this.ranks.get(key);
     // 새 목록은 첫 쪽 요청 때 받는다. 뒤 쪽은 첫 쪽과 같은 목록에서 이어 줘야 종목이 빠지거나 두 번 나오지 않는다
     // (앱은 새로고침 때 첫 쪽부터 차례로 다시 받는다). 뒤 쪽만 너무 오래(TTL 3배) 요청되면 그때는 새로 받는다
@@ -640,7 +659,7 @@ export class DiscoverService {
       } else await p;
       st = this.ranks.get(key) ?? st;
     }
-    if (st && !gone && st.items.length < need && st.hasNext && !st.stale && !st.fromSnapshot) {
+    if (st && st.items.length < need && st.hasNext && !st.stale && !st.fromSnapshot) {
       // 더 받기. 새 목록을 받는 중이면 그것부터 기다린다 (옛 목록 뒤에 새 목록 줄이 붙지 않게). 판을 고정한 요청은 그 목록에 이어 받는다
       const pending = this.inflight.get(`rank:${key}`);
       if (pending && !pinned) {
@@ -664,7 +683,7 @@ export class DiscoverService {
       }
     }
     const s = st!;
-    const items = gone ? [] : s.items.slice((page - 1) * size, page * size);
+    const items = s.items.slice((page - 1) * size, page * size);
     // 기준 시각: 출처가 체결 시각을 주면 그 시각(미국), 한국은 장 상태에 따라 받은 시각 또는 마지막 거래 마감
     const asOf = s.tradedAt ? seoulIso(new Date(s.tradedAt)) : market === "KR" ? this.krAsOf(ss, s.at) : seoulIso(new Date(s.at));
     const movers = category === "gainers" || category === "losers";
@@ -677,7 +696,6 @@ export class DiscoverService {
       marketOpen: open,
       session: ss.session,
       ver: s.ver,
-      ...(gone ? { restart: true } : {}),
       asOf,
       fxRate: await this.fx(market),
       source: s.source,

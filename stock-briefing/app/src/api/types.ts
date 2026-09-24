@@ -409,6 +409,11 @@ export interface ThemeSummary {
   adjusted?: boolean;
   /** changeRate 가 시가총액 가중 평균일 때 함께 오는 단순 평균 (미국 테마) */
   simpleAvg?: number;
+  /**
+   * 요약을 보이는 종목 값과 같은 때 값으로 확인하지 못했다 (미국 업종 상세, 출처 초기화 때) — changeRate 는 대표 값이 아니고
+   * 상승·보합·하락 수는 0(세지 않음). 옛 서버는 없음
+   */
+  unverified?: boolean;
 }
 
 export interface ThemeList {
