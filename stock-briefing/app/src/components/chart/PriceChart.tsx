@@ -8,7 +8,7 @@ import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
 import { axisWidth, labelSide, readoutBasis, textWidth } from "@/lib/chartBasis";
 import { formatPct, formatPrice, formatVolume } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
-import { changeColor, font, space, useTheme, type Theme } from "@/theme";
+import { changeColor, font, space, useFontScale, useTheme, type Theme } from "@/theme";
 
 /**
  * 직접 그리는 캔들 차트 (react-native-svg + gesture-handler).
@@ -592,6 +592,8 @@ function Readout({
   part: "top" | "bottom" | "all";
 }) {
   const t = useTheme();
+  // 100% 는 한 줄(좁으면 뒤부터 잘림, 3-21). 글자를 키우면 두 줄까지 — 종가·등락이 잘리지 않게 (3-22)
+  const lines = useFontScale() > 1 ? 2 : 1;
   const c = candle ?? last;
   if (!c) return <Text style={{ color: t.muted, fontSize: font.tiny }}>차트 데이터가 없습니다</Text>;
   // 등락 기준(lib/chartBasis): 최신 일봉은 십자선이어도 헤더와 같은 전일 종가, 지난 봉은 직전 봉 종가, 분봉은 봉 시가
@@ -609,7 +611,7 @@ function Readout({
   if (part === "bottom") {
     // 차트 아래 줄: 등락 기준 · 시가 · 거래량 (위 줄에 다 들어가지 않는 것)
     return (
-      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} importantForAccessibility="no" accessibilityElementsHidden>
+      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={lines} importantForAccessibility="no" accessibilityElementsHidden>
         {chg !== null ? `${basis.label} · ` : ""}시 {v(c.open)}
         {vol ? ` · ${vol}` : ""}
       </Text>
@@ -618,7 +620,7 @@ function Readout({
   // 위 줄: 날짜 · 종가(등락) · 고 · 저 (전체 화면은 아래 줄이 없으므로 시가·거래량까지, 좁으면 뒤부터 잘린다)
   return (
     <View style={styles.readout}>
-      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} accessibilityLabel={a11y}>
+      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={lines} accessibilityLabel={a11y}>
         {when}
  · 종 <Text style={{ color, fontWeight: "700" }}>{v(c.close)}</Text>
         {chg !== null ? <Text style={{ color }}> ({formatPct(chg)})</Text> : null}

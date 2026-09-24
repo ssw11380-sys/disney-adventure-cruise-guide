@@ -9,7 +9,7 @@ import { CandleChart } from "@/components/CandleChart";
 import { ChangeText } from "@/components/ui";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { currencyOfMarket, formatPct, formatPrice } from "@/lib/format";
-import { font, space, useTheme } from "@/theme";
+import { font, slopFor, space, useTheme } from "@/theme";
 
 /**
  * 전체 화면 차트. 앱은 세로 고정이라 "가로" 버튼을 누르면 화면을 90도 돌려 그린다(가로 모드처럼 넓게).
@@ -58,10 +58,10 @@ export default function FullscreenChartScreen() {
           ) : null}
         </View>
         <View style={{ flexDirection: "row", gap: space.sm }}>
-          <Pressable onPress={() => setLandscape((v) => !v)} accessibilityLabel={landscape ? "세로로 보기" : "가로로 보기"} hitSlop={8} style={[styles.iconBtn, { borderColor: t.line }]}>
+          <Pressable onPress={() => setLandscape((v) => !v)} accessibilityRole="button" accessibilityLabel={landscape ? "세로로 보기" : "가로로 보기"} hitSlop={slopFor(ICON_BTN, space.xs)} style={[styles.iconBtn, { borderColor: t.line }]}>
             <Ionicons name={landscape ? "phone-portrait-outline" : "phone-landscape-outline"} size={18} color={t.ink} />
           </Pressable>
-          <Pressable onPress={() => router.back()} accessibilityLabel="닫기" hitSlop={8} style={[styles.iconBtn, { borderColor: t.line }]}>
+          <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="차트 닫기" hitSlop={slopFor(ICON_BTN, space.xs)} style={[styles.iconBtn, { borderColor: t.line }]}>
             <Ionicons name="close" size={18} color={t.ink} />
           </Pressable>
         </View>
@@ -105,9 +105,12 @@ export default function FullscreenChartScreen() {
   );
 }
 
+/** 둥근 아이콘 버튼 크기 34 → hitSlop 으로 44 */
+const ICON_BTN = 34;
+
 const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
-  iconBtn: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  iconBtn: { width: ICON_BTN, height: ICON_BTN, borderRadius: ICON_BTN / 2, borderWidth: 1, alignItems: "center", justifyContent: "center" },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)

@@ -13,7 +13,7 @@ import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, SectionTitle, Toggle } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
 import { SORT_OPTIONS, THEME_OPTIONS, useSettings } from "@/lib/settings";
-import { font, radius, space, useTheme } from "@/theme";
+import { font, radius, space, touch, useTheme } from "@/theme";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
 
 /**
@@ -34,9 +34,9 @@ export default function SettingsScreen() {
         <SectionTitle>표시</SectionTitle>
         <View style={styles.line}>
           <Text style={styles.label(t.ink)}>화면</Text>
-          <View style={{ flexDirection: "row", gap: space.s }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
             {THEME_OPTIONS.map((o) => (
-              <Chip key={o.value} label={o.label} active={themeMode === o.value} onPress={() => void setThemeMode(o.value)} />
+              <Chip key={o.value} label={o.label} accessibilityLabel={`화면 ${o.label}`} active={themeMode === o.value} onPress={() => void setThemeMode(o.value)} />
             ))}
           </View>
         </View>
@@ -45,20 +45,20 @@ export default function SettingsScreen() {
             <Text style={styles.label(t.ink)}>해외주식 원화 표시</Text>
             <Muted style={{ fontSize: font.tiny }}>토스증권 적용 환율 기준</Muted>
           </View>
-          <Toggle value={showKrw} onValueChange={(v) => void setShowKrw(v)} />
+          <Toggle value={showKrw} onValueChange={(v) => void setShowKrw(v)} accessibilityLabel="해외주식 원화 표시" />
         </View>
         <View style={styles.line}>
           <View style={{ flex: 1, paddingRight: space.md }}>
             <Text style={styles.label(t.ink)}>수수료·세금 차감 평가</Text>
             <Muted style={{ fontSize: font.tiny }}>토스 앱과 같은 평가금액·손익 (토스 연동 종목)</Muted>
           </View>
-          <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} />
+          <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} accessibilityLabel="수수료·세금 차감 평가" />
         </View>
         <View style={{ gap: space.s, paddingTop: space.s }}>
           <Text style={styles.label(t.ink)}>잔고 정렬</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
             {SORT_OPTIONS.map((o) => (
-              <Chip key={o.value} label={o.label} active={sort === o.value} onPress={() => void setSort(o.value)} />
+              <Chip key={o.value} label={o.label} accessibilityLabel={`잔고 정렬 ${o.label}`} active={sort === o.value} onPress={() => void setSort(o.value)} />
             ))}
           </View>
         </View>
@@ -102,7 +102,13 @@ export default function SettingsScreen() {
       </Card>
 
       <Card>
-        <Pressable onPress={() => setAdvanced((v) => !v)} accessibilityRole="button" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <Pressable
+          onPress={() => setAdvanced((v) => !v)}
+          accessibilityRole="button"
+          accessibilityLabel="서버 연결"
+          accessibilityState={{ expanded: advanced }}
+          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: touch.min }}
+        >
           <SectionTitle style={{ marginBottom: 0 }}>서버 연결</SectionTitle>
           <Ionicons name={advanced ? "chevron-up" : "chevron-down"} size={18} color={t.muted} />
         </Pressable>
@@ -179,6 +185,7 @@ function ApiUrlForm({
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
+        accessibilityLabel="서버 주소"
         placeholder="https://서버 주소"
         placeholderTextColor={t.muted}
         style={[styles.input, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]}
@@ -190,6 +197,7 @@ function ApiUrlForm({
         autoCapitalize="none"
         autoCorrect={false}
         secureTextEntry
+        accessibilityLabel="API 토큰"
         placeholder={authRequired ? "서버에 설정한 API 토큰" : "서버에 토큰을 설정한 경우만"}
         placeholderTextColor={t.muted}
         style={[styles.input, { color: t.ink, borderColor: authRequired && !tokenDraft ? t.danger : t.line, backgroundColor: t.surfaceAlt }]}
@@ -202,7 +210,8 @@ function ApiUrlForm({
 const styles = {
   ...StyleSheet.create({
     input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
-    line: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: space.s },
+    // 큰 글씨에서 오른쪽 칩·스위치가 넘치면 다음 줄로
+    line: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", rowGap: space.s, paddingVertical: space.s },
   }),
   label: (color: string) => ({ color, fontSize: font.body, fontWeight: "600" as const }),
 };

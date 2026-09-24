@@ -5,7 +5,7 @@ import type { Candle, CandlePeriod, ChartUnit, Currency, Quote } from "@/api/typ
 import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
-import { font, radius, space, useTheme } from "@/theme";
+import { font, radius, slopFor, space, useTheme } from "@/theme";
 import { clampView, maColor, PriceChart, type ChartView, type IndicatorKind } from "./chart/PriceChart";
 
 /**
@@ -14,8 +14,13 @@ import { clampView, maColor, PriceChart, type ChartView, type IndicatorKind } fr
  */
 
 const MA_CHOICES = [5, 10, 20, 60, 120, 200];
-/** 조작 버튼 누르는 영역: 위아래 8, 좌우는 버튼 간격(6)의 절반만 — 이웃 버튼과 겹치지 않게 */
-const SLOP = { top: 8, bottom: 8, left: 3, right: 3 };
+/** 칩·아이콘 버튼의 보이는 크기 (3-22: 24 → 32). 누르는 영역은 위아래로 넓혀 44, 좌우는 버튼 간격(6)의 절반만 — 이웃 버튼과 겹치지 않게 */
+const CHIP_H = 32;
+const ICON = 32;
+const SLOP = slopFor(ICON, space.s / 2);
+const CHIP_SLOP = slopFor(CHIP_H, space.s / 2);
+/** 기간 칩을 화면 읽기로 읽을 때 */
+const PERIOD_SPEECH: Record<CandlePeriod, string> = { "1m": "1분봉", "5m": "5분봉", "30m": "30분봉", D: "일봉", W: "주봉", M: "월봉" };
 /** 조작 줄 순서: 자주 쓰는 일·주·월 먼저, 분봉은 뒤 (가로로 넘겨서) */
 const TOOL_ORDER = (["D", "W", "M", "1m", "5m", "30m"] as CandlePeriod[]).map((v) => PERIOD_OPTIONS.find((o) => o.value === v)!);
 
@@ -102,7 +107,7 @@ export function CandleChart({
   };
 
   const periodChip = (o: (typeof PERIOD_OPTIONS)[number]) => (
-    <Pressable key={o.value} onPress={() => onPeriodChange(o.value)} accessibilityRole="button" accessibilityState={{ selected: o.value === period }} style={chipStyle(o.value === period)}>
+    <Pressable key={o.value} onPress={() => onPeriodChange(o.value)} accessibilityRole="button" accessibilityLabel={PERIOD_SPEECH[o.value]} accessibilityState={{ selected: o.value === period }} hitSlop={CHIP_SLOP} style={chipStyle(o.value === period)}>
       <Text style={chipText(o.value === period)}>{o.label}</Text>
     </Pressable>
   );
@@ -113,21 +118,27 @@ export function CandleChart({
         {MA_CHOICES.map((per) => {
           const on = prefs.maPeriods.includes(per);
           return (
-            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="button" accessibilityState={{ selected: on }} style={[styles.chip, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
+            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="switch" accessibilityLabel={`${per} 이동평균선`} accessibilityState={{ checked: on }} hitSlop={CHIP_SLOP} style={[styles.chip, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
               <View style={[styles.swatch, { backgroundColor: maColor(t, per) }]} />
               <Text style={chipText(on)}>{per}</Text>
             </Pressable>
           );
         })}
-        <Pressable onPress={() => setPrefs({ bollinger: !prefs.bollinger })} accessibilityRole="button" style={chipStyle(prefs.bollinger)}>
+        <Pressable onPress={() => setPrefs({ bollinger: !prefs.bollinger })} accessibilityRole="switch" accessibilityLabel="볼린저 밴드" accessibilityState={{ checked: prefs.bollinger }} hitSlop={CHIP_SLOP} style={chipStyle(prefs.bollinger)}>
           <Text style={chipText(prefs.bollinger)}>볼린저</Text>
         </Pressable>
         {hasVolume ? (
-          <Pressable onPress={() => setPrefs({ volume: !prefs.volume })} accessibilityRole="button" style={chipStyle(prefs.volume)}>
+          <Pressable onPress={() => setPrefs({ volume: !prefs.volume })} accessibilityRole="switch" accessibilityLabel="거래량" accessibilityState={{ checked: prefs.volume }} hitSlop={CHIP_SLOP} style={chipStyle(prefs.volume)}>
             <Text style={chipText(prefs.volume)}>거래량</Text>
           </Pressable>
         ) : null}
-        <Pressable onPress={cycleIndicator} accessibilityRole="button" style={chipStyle(prefs.indicator !== "none")}>
+        <Pressable
+          onPress={cycleIndicator}
+          accessibilityRole="button"
+          accessibilityLabel={`보조 지표: ${prefs.indicator === "none" ? "끔" : prefs.indicator.toUpperCase()}. 누르면 ${prefs.indicator === "none" ? "RSI" : prefs.indicator === "rsi" ? "MACD" : "끄기"}`}
+          hitSlop={CHIP_SLOP}
+          style={chipStyle(prefs.indicator !== "none")}
+        >
           <Text style={chipText(prefs.indicator !== "none")}>{prefs.indicator === "none" ? "RSI/MACD" : prefs.indicator === "rsi" ? "RSI (다음 MACD)" : "MACD (다음 끄기)"}</Text>
         </Pressable>
     </>
@@ -138,11 +149,12 @@ export function CandleChart({
       {/* 조작 한 줄 (3-21): [일 주 월 | 봉 수 | 1분 5분 30분] 은 가로로 넘기고, 과거·최신·크게 보기는 오른쪽에 고정.
           자주 쓰는 일·주·월과 봉 수를 앞에 둔다 (분봉은 넘겨서) */}
       <View style={styles.toolRow}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={styles.chips}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.chipScroll, { flex: 1 }]} contentContainerStyle={styles.chips}>
           {TOOL_ORDER.slice(0, 3).map((o) => periodChip(o))}
           <Pressable
             onPress={() => pickWindow((windowIdx + 1) % WINDOWS[period].length)}
             accessibilityRole="button"
+            hitSlop={CHIP_SLOP}
             accessibilityLabel={`보이는 봉 ${Math.min(clamped.count, all.length)}개${clamped.offset > 0 ? `, 최신보다 ${clamped.offset}${UNIT[period]} 전` : ""}. 눌러서 바꾸기`}
             style={[chipStyle(true), { borderStyle: "dashed" }]}
           >
@@ -157,14 +169,14 @@ export function CandleChart({
           {TOOL_ORDER.slice(3).map((o) => periodChip(o))}
           {compact ? overlayChips : null}
         </ScrollView>
-        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityLabel="과거로" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
+        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityRole="button" accessibilityState={{ disabled: clamped.offset >= maxOffset }} accessibilityLabel="과거로" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
           <Ionicons name="chevron-back" size={font.small} color={t.ink} />
         </Pressable>
-        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={SLOP} style={[styles.icon, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
+        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityRole="button" accessibilityState={{ disabled: clamped.offset === 0 }} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={SLOP} style={[styles.icon, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
           <Ionicons name="chevron-forward" size={font.small} color={t.ink} />
         </Pressable>
         {onFullscreen ? (
-          <Pressable onPress={onFullscreen} accessibilityLabel="차트 크게 보기" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line }]}>
+          <Pressable onPress={onFullscreen} accessibilityRole="button" accessibilityLabel="차트 크게 보기" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line }]}>
             <Ionicons name="expand-outline" size={font.small} color={t.ink} />
           </Pressable>
         ) : null}
@@ -202,7 +214,7 @@ export function CandleChart({
 
       {/* 오버레이 · 지표 (전체 화면이면 위 조작 줄 안으로 합쳐 차트를 더 크게, 3-21) */}
       {compact ? null : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll} contentContainerStyle={styles.chips}>
           {overlayChips}
         </ScrollView>
       )}
@@ -214,8 +226,11 @@ export function CandleChart({
 const styles = StyleSheet.create({
   placeholder: { alignItems: "center", justifyContent: "center", borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth },
   toolRow: { flexDirection: "row", alignItems: "center", gap: space.s },
-  chips: { flexDirection: "row", gap: space.s, alignItems: "center" },
-  chip: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, minHeight: 28 },
-  icon: { width: 28, height: 28, alignItems: "center", justifyContent: "center", borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  // 가로 스크롤 안의 칩은 스크롤 영역 밖 터치를 받지 못한다(안드로이드) → 영역을 위아래 6씩 넓혀 칩 hitSlop(44)이 들어가게 하고,
+  // 같은 만큼 음수 여백을 줘서 보이는 배치(조작 줄 32)는 그대로 둔다 (3-22 리뷰)
+  chipScroll: { marginVertical: -CHIP_SLOP.top },
+  chips: { flexDirection: "row", gap: space.s, alignItems: "center", paddingVertical: CHIP_SLOP.top },
+  chip: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, minHeight: CHIP_H },
+  icon: { width: ICON, height: ICON, alignItems: "center", justifyContent: "center", borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
   swatch: { width: 8, height: 2 },
 });

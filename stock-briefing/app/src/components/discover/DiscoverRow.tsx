@@ -1,14 +1,17 @@
 import React, { memo } from "react";
 import type { DiscoverStock } from "@/api/types";
-import { LINE_COL, LINE_H, LineMark, LineValue, StockLine } from "@/components/StockLine";
-import { formatKrwCompact, formatPct, formatQuoteDisplay, formatVolume } from "@/lib/format";
+import { LINE_COL, LineMark, LineValue, StockLine } from "@/components/StockLine";
+import { sentence, speakAmount, speakRate } from "@/lib/a11y";
+import { formatKrwCompact, formatMoney, formatPct, formatQuoteDisplay, formatVolume } from "@/lib/format";
 import { changeColor, useTheme } from "@/theme";
 
-/** 발견 목록 한 줄의 높이 (FlatList getItemLayout 용) */
-export const DISCOVER_ROW_H = LINE_H;
+/** 발견 목록 한 줄의 높이 (FlatList getItemLayout 용). 글자 크기에 따라 달라지므로 useLineH 를 쓴다 (3-22) */
+export { useLineH as useDiscoverRowH } from "@/components/StockLine";
 export const DISCOVER_COL = LINE_COL;
 
 export type HoldingMark = "보유" | "관심" | null;
+
+const ADD_WATCH_ACTION = [{ name: "longpress", label: "관심 종목에 추가" }];
 
 /**
  * 순위·테마 종목 한 줄 (증권사 순위 화면처럼 4열):
@@ -77,7 +80,19 @@ export const DiscoverRow = memo(function DiscoverRow({
       right={<LineValue main={main} mainColor={t.ink} sub={sub} />}
       onPress={() => onPress(item)}
       onLongPress={onLongPress ? () => onLongPress(item) : undefined}
-      accessibilityLabel={`${rank ? `${rank}위 ` : ""}${item.name} ${formatPct(item.changeRate)}`}
+      accessibilityLabel={sentence([
+        rank ? `${rank}위` : null,
+        item.name,
+        mark,
+        item.newlyListed ? "신규상장" : null,
+        suspended ? "거래정지" : null,
+        item.price !== null ? `현재가 ${speakAmount(formatMoney(item.price, item.currency, fxRate, showKrw))}` : null,
+        speakRate(item.changeRate),
+        main !== "-" ? (metric === "volume" ? `거래량 ${main}주` : `거래대금 ${speakAmount(main)}`) : null,
+      ])}
+      // 화면 읽기의 길게 누르기 안내를 "관심 종목에 추가"로 (TalkBack 이 "두 번 탭하고 길게 눌러 …"라고 읽는다)
+      accessibilityActions={onLongPress ? ADD_WATCH_ACTION : undefined}
+      onAccessibilityAction={onLongPress ? (name) => name === "longpress" && onLongPress(item) : undefined}
       fixedHeight
     />
   );

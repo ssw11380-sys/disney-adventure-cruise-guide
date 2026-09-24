@@ -6,7 +6,8 @@ import type { MarketIndex } from "@/api/types";
 import { formatPct } from "@/lib/format";
 import { clockLabel } from "@/lib/freshness";
 import { useNow } from "@/lib/useNow";
-import { changeColor, font, space, useTheme } from "@/theme";
+import { changeColor, font, space, touch, useTheme } from "@/theme";
+import { sentence, speakRate } from "@/lib/a11y";
 
 /** 지수·환율 값: 1,000 이상은 콤마, 소수 둘째 자리 */
 export function formatIndexValue(v: number): string {
@@ -46,7 +47,8 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
                 setXs((prev) => (prev[i.code] === x ? prev : { ...prev, [i.code]: x }));
               } : undefined}
               accessibilityRole="button"
-              accessibilityLabel={`${i.name} 차트 보기`}
+              accessibilityLabel={sentence([i.kind === "fx" ? `${i.name} 시장` : i.name, formatIndexValue(i.value), speakRate(i.changeRate), i.open && i.kind !== "fx" ? "장중" : null])}
+              accessibilityHint="차트 보기"
               accessibilityState={{ selected: on }}
               style={({ pressed }) => [
                 styles.item,
@@ -86,7 +88,7 @@ export function MarketStrip({ selected, onSelect }: { selected?: string; onSelec
 const styles = StyleSheet.create({
   wrap: { borderBottomWidth: StyleSheet.hairlineWidth },
   row: { paddingHorizontal: space.sm },
-  item: { paddingVertical: space.sm, paddingHorizontal: space.md, gap: space.xxs, minWidth: 104 },
+  item: { minHeight: touch.min, paddingVertical: space.sm, paddingHorizontal: space.md, gap: space.xxs, minWidth: 104 },
   dot: { width: 4, height: 4, borderRadius: 2 },
   asOf: { minWidth: 0, justifyContent: "center", borderLeftWidth: StyleSheet.hairlineWidth },
   value: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },

@@ -2,10 +2,17 @@ import React, { memo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { ThemeSummary } from "@/api/types";
 import { RateBox } from "@/components/ui";
+import { sentence, speakRate } from "@/lib/a11y";
 import { formatPct } from "@/lib/format";
-import { changeColor, font, space, useTheme } from "@/theme";
+import { themeRowH } from "@/lib/textScale";
+import { changeColor, font, fontCap, space, useFontScale, useTheme } from "@/theme";
 
-export const THEME_ROW_H = 72;
+export { THEME_ROW_H } from "@/lib/textScale";
+
+/** 글자 크기에 맞춘 줄 높이 (lib/textScale) → 목록 getItemLayout 도 이 값을 쓴다 */
+export function useThemeRowH(): number {
+  return themeRowH(useFontScale());
+}
 
 /**
  * 테마 한 줄: 순위 · 테마명 / 대표 종목 · 상승·보합·하락 비율 막대 | 테마 등락률 상자.
@@ -14,22 +21,23 @@ export const THEME_ROW_H = 72;
 export const ThemeRow = memo(function ThemeRow({ theme, rank, kindWord = "테마", onPress }: { theme: ThemeSummary; rank: number; kindWord?: string; onPress: (t: ThemeSummary) => void }) {
   const t = useTheme();
   const total = theme.up + theme.flat + theme.down;
+  const rowH = useThemeRowH();
   return (
     <Pressable
       onPress={() => onPress(theme)}
       accessibilityRole="button"
-      accessibilityLabel={`${rank}위 ${theme.name} ${kindWord} ${formatPct(theme.changeRate)}${total > 0 ? `, 상승 ${theme.up} 하락 ${theme.down}` : ""}`}
-      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
+      accessibilityLabel={sentence([`${rank}위`, `${theme.name} ${kindWord}`, speakRate(theme.changeRate), total > 0 ? `오른 종목 ${theme.up}개, 내린 종목 ${theme.down}개` : null])}
+      style={({ pressed }) => [styles.row, { height: rowH, backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
     >
       <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
         {rank}
       </Text>
       <View style={styles.body}>
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} numberOfLines={1}>
+        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
           {theme.name}
           {theme.adjusted ? <Text style={{ color: t.muted, fontWeight: "400" }}> *</Text> : null}
         </Text>
-        <Text style={{ color: t.muted, fontSize: font.tiny }} numberOfLines={1}>
+        <Text style={{ color: t.muted, fontSize: font.tiny }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
           {theme.leaders.length
             ? theme.leaders.map((l, i) => (
                 <Text key={l.code}>
@@ -47,7 +55,7 @@ export const ThemeRow = memo(function ThemeRow({ theme, rank, kindWord = "테마
               {theme.flat ? <View style={{ flex: theme.flat, backgroundColor: t.lineStrong }} /> : null}
               {theme.down ? <View style={{ flex: theme.down, backgroundColor: t.down }} /> : null}
             </View>
-            <Text style={[styles.counts, { color: t.muted }]}>
+            <Text style={[styles.counts, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
               <Text style={{ color: t.up }}>▲{theme.up}</Text> <Text style={{ color: t.down }}>▼{theme.down}</Text>
             </Text>
           </View>
@@ -59,7 +67,7 @@ export const ThemeRow = memo(function ThemeRow({ theme, rank, kindWord = "테마
 });
 
 const styles = StyleSheet.create({
-  row: { flexDirection: "row", alignItems: "center", height: THEME_ROW_H, paddingHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
+  row: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
   rank: { width: 28, fontSize: font.small, fontWeight: "800", fontVariant: ["tabular-nums"] },
   body: { flex: 1, gap: space.xxs },
   barRow: { flexDirection: "row", alignItems: "center", gap: space.s },

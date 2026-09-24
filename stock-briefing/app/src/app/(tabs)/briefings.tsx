@@ -11,7 +11,8 @@ import { Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, Segmen
 import { orderForTab, runConfirm } from "@/lib/briefingRun";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
-import { font, space, useTheme } from "@/theme";
+import { font, slopFor, space, useTheme } from "@/theme";
+import { sentence, speakRate } from "@/lib/a11y";
 
 type Mode = "line" | "summary" | "detail";
 type Order = "movers" | "registered";
@@ -95,7 +96,8 @@ export default function BriefingsScreen() {
               key={i.code}
               onPress={() => router.push(`/briefings/${i.latest!.id}`)}
               accessibilityRole="link"
-              accessibilityLabel={`${i.name} ${formatPct(rates.get(i.code) ?? null)} 브리핑 보기`}
+              accessibilityLabel={sentence([i.name, speakRate(rates.get(i.code) ?? null), "브리핑 보기"])}
+              hitSlop={TOP_ROW_SLOP}
               style={{ flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.s }}
             >
               <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", flex: 1 }} numberOfLines={1}>
@@ -149,6 +151,9 @@ export default function BriefingsScreen() {
     </Screen>
   );
 }
+
+/** 변동 큰 종목 한 줄(글자 약 19 + 위아래 6) — 100% 배치는 그대로, 누르는 영역만 44 로 */
+const TOP_ROW_SLOP = slopFor(31);
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
 export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

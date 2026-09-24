@@ -6,7 +6,7 @@ import { useApi, useNotificationMutations, useNotificationSettings, useRegistere
 import { quietWarnings } from "@/lib/briefingDigest";
 import { disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
-import { font, radius, space, useTheme } from "@/theme";
+import { font, radius, slopFor, space, touch, useTheme } from "@/theme";
 import { Button, Card, Loading, Muted, Row, SectionTitle, Toggle } from "./ui";
 
 /**
@@ -148,7 +148,7 @@ export function NotificationSettingsCard() {
       {setupError ? <Text style={{ color: t.danger, fontSize: font.small }}>{setupError}</Text> : null}
       {localMode ? (
         <View style={{ gap: space.xs }}>
-          <Pressable onPress={() => setShowGuide((v) => !v)} accessibilityRole="button">
+          <Pressable onPress={() => setShowGuide((v) => !v)} accessibilityRole="button" accessibilityLabel={showGuide ? "설정 방법 접기" : "즉시 푸시 설정 방법 (관리자용)"} accessibilityState={{ expanded: showGuide }} hitSlop={slopFor(font.small + space.xs)}>
             <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showGuide ? "접기" : "즉시 푸시 설정 방법 (관리자용)"}</Text>
           </Pressable>
           {showGuide ? (
@@ -172,7 +172,7 @@ export function NotificationSettingsCard() {
           <TimeRow label="오후 브리핑" time={s.afternoonTime} enabled={s.afternoonEnabled} onToggle={(v) => patch({ afternoonEnabled: v })} onPick={() => pickTime("afternoonTime")} />
           <View style={styles.switchRow}>
             <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>평일만</Text>
-            <Toggle value={s.weekdaysOnly} onValueChange={(v) => patch({ weekdaysOnly: v })} />
+            <Toggle value={s.weekdaysOnly} onValueChange={(v) => patch({ weekdaysOnly: v })} accessibilityLabel="평일만" />
           </View>
           {/* 3-19: 묶음(briefingDigest)이 켜진 서버에서만 — 꺼져 있으면 서버가 조용한 시간·끈 종목을 쓰지 않는다 */}
           {s.digest === true && s.quietStart && s.quietEnd ? (
@@ -192,7 +192,7 @@ export function NotificationSettingsCard() {
                   {w}
                 </Text>
               ))}
-              <Pressable onPress={() => setShowMuted((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: showMuted }} style={styles.switchRow}>
+              <Pressable onPress={() => setShowMuted((v) => !v)} accessibilityRole="button" accessibilityLabel={`종목별 알림, ${mutedCount > 0 ? `${mutedCount}종목 끔` : "모두 받음"}`} accessibilityState={{ expanded: showMuted }} style={[styles.switchRow, { minHeight: touch.min }]}>
                 <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>종목별 알림</Text>
                 <Muted>{mutedCount > 0 ? `${mutedCount}종목 끔` : "모두 받음"}</Muted>
                 <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showMuted ? "접기" : "바꾸기"}</Text>
@@ -251,7 +251,7 @@ export function NotificationSettingsCard() {
 function TimeChip({ time, enabled, label, onPick }: { time: string; enabled: boolean; label: string; onPick: () => void }) {
   const t = useTheme();
   return (
-    <Pressable onPress={onPick} disabled={!enabled} accessibilityRole="button" accessibilityLabel={`${label} ${time} 변경`} hitSlop={8} style={[styles.timeChip, { borderColor: t.line, backgroundColor: t.surfaceAlt, opacity: enabled ? 1 : 0.5 }]}>
+    <Pressable onPress={onPick} disabled={!enabled} accessibilityRole="button" accessibilityLabel={`${label} ${time} 변경`} hitSlop={slopFor(TIME_CHIP_H)} style={[styles.timeChip, { borderColor: t.line, backgroundColor: t.surfaceAlt, opacity: enabled ? 1 : 0.5 }]}>
       <Text style={{ color: t.ink, fontSize: font.body, fontVariant: ["tabular-nums"], fontWeight: "600" }}>{time}</Text>
     </Pressable>
   );
@@ -262,13 +262,16 @@ function TimeRow({ label, time, enabled, onToggle, onPick }: { label: string; ti
   return (
     <View style={styles.switchRow}>
       <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>{label}</Text>
-      <Pressable onPress={onPick} disabled={!enabled} accessibilityRole="button" accessibilityLabel={`${label} 시간 변경`} style={[styles.timeChip, { borderColor: t.line, backgroundColor: t.surfaceAlt, opacity: enabled ? 1 : 0.5 }]}>
+      <Pressable onPress={onPick} disabled={!enabled} accessibilityRole="button" accessibilityLabel={`${label} 시간 ${time} 변경`} hitSlop={slopFor(TIME_CHIP_H)} style={[styles.timeChip, { borderColor: t.line, backgroundColor: t.surfaceAlt, opacity: enabled ? 1 : 0.5 }]}>
         <Text style={{ color: t.ink, fontSize: font.body, fontVariant: ["tabular-nums"], fontWeight: "600" }}>{time}</Text>
       </Pressable>
-      <Toggle value={enabled} onValueChange={onToggle} />
+      <Toggle value={enabled} onValueChange={onToggle} accessibilityLabel={label} />
     </View>
   );
 }
+
+/** 시간 칩의 보이는 높이 (글자 약 19 + 위아래 여백 6) — hitSlop 으로 44 까지 */
+const TIME_CHIP_H = 31;
 
 const styles = StyleSheet.create({
   switchRow: { flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.xs },

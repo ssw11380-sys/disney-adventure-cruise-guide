@@ -1,8 +1,9 @@
 import React, { memo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { ThemeSummary } from "@/api/types";
+import { sentence, speakRate } from "@/lib/a11y";
 import { formatPct } from "@/lib/format";
-import { font, space, useTheme } from "@/theme";
+import { font, fontCap, space, useTheme } from "@/theme";
 
 import { HEAT_TILE_H, heatColor } from "@/lib/heat";
 
@@ -16,16 +17,18 @@ export const HeatTile = memo(function HeatTile({ theme, max, onPress }: { theme:
     <Pressable
       onPress={() => onPress(theme)}
       accessibilityRole="button"
-      accessibilityLabel={`${theme.name} ${formatPct(theme.changeRate)}`}
+      accessibilityLabel={sentence([theme.name, speakRate(theme.changeRate), theme.up + theme.flat + theme.down > 0 ? `오른 종목 ${theme.up}개, 내린 종목 ${theme.down}개` : null])}
       style={({ pressed }) => [styles.tile, { backgroundColor: c.bg, opacity: pressed ? 0.75 : 1, borderColor: t.bg }]}
     >
-      <Text style={[styles.name, { color: c.fg }]} numberOfLines={2}>
+      <Text style={[styles.name, { color: c.fg }]} numberOfLines={2} maxFontSizeMultiplier={fontCap.row}>
         {theme.name}
       </Text>
       <View style={styles.bottom}>
-        <Text style={[styles.rate, { color: c.fg }]}>{formatPct(theme.changeRate)}</Text>
+        <Text style={[styles.rate, { color: c.fg }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} maxFontSizeMultiplier={fontCap.row}>
+          {formatPct(theme.changeRate)}
+        </Text>
         {theme.up + theme.flat + theme.down > 0 ? (
-          <Text style={[styles.counts, { color: c.sub }]}>
+          <Text style={[styles.counts, { color: c.sub }]} maxFontSizeMultiplier={fontCap.row}>
             ▲{theme.up} ▼{theme.down}
           </Text>
         ) : null}
@@ -53,7 +56,8 @@ export function HeatLegend({ max }: { max: number }) {
 
 const styles = StyleSheet.create({
   // 폭을 1/3 로 고정 (flex:1 이면 마지막 줄 타일이 가로로 늘어난다)
-  tile: { width: "33.333%", height: HEAT_TILE_H, padding: space.s, justifyContent: "space-between", borderWidth: 1, borderRadius: 4 },
+  // 큰 글씨에서는 타일이 늘어난다 (같은 줄 타일은 가장 큰 타일 높이로 맞춰짐)
+  tile: { width: "33.333%", minHeight: HEAT_TILE_H, padding: space.s, justifyContent: "space-between", borderWidth: 1, borderRadius: 4 },
   name: { fontSize: font.small, fontWeight: "700", lineHeight: 16 },
   bottom: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: space.xs },
   rate: { fontSize: font.body, fontWeight: "800", fontVariant: ["tabular-nums"] },

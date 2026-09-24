@@ -2,7 +2,7 @@ import React from "react";
 import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import type { BriefingWithData } from "@/api/types";
 import { formatDateKo } from "@/lib/format";
-import { font, space, useTheme } from "@/theme";
+import { font, space, touch, useTheme } from "@/theme";
 import { Card, Muted, SectionTitle } from "./ui";
 
 /**
@@ -22,7 +22,7 @@ export function BriefingSources({ data }: { data: BriefingWithData["data"] }) {
       <Text style={[styles.head, { color: t.ink }]}>{data.news === null ? "뉴스" : `뉴스 ${news.length}건`}</Text>
       {data.news === null ? <Muted>받지 못함 (브리핑 때 뉴스 소스가 응답하지 않음)</Muted> : news.length === 0 ? <Muted>관련 뉴스 없음</Muted> : null}
       {news.map((n, i) => (
-        <Pressable key={`${n.url}-${i}`} onPress={link(n.url)} accessibilityRole="link" accessibilityLabel={`${n.title}, ${n.source ?? ""}`} style={({ pressed }) => [styles.row, { borderTopColor: t.line, opacity: pressed ? 0.6 : 1 }]}>
+        <Pressable key={`${n.url}-${i}`} onPress={link(n.url)} accessibilityRole="link" accessibilityLabel={`뉴스: ${n.title}, ${n.source ?? "출처 미상"}, ${formatDateKo(n.publishedAt, true)}`} style={({ pressed }) => [styles.row, { borderTopColor: t.line, opacity: pressed ? 0.6 : 1 }]}>
           <Text style={{ color: t.accent, fontSize: font.small }} numberOfLines={2}>
             {n.title}
           </Text>
@@ -35,7 +35,7 @@ export function BriefingSources({ data }: { data: BriefingWithData["data"] }) {
         <View>
           <Text style={[styles.head, { color: t.ink }]}>공시 {disclosures.length}건</Text>
           {disclosures.map((d, i) => (
-            <Pressable key={`${d.receiptNo}-${i}`} onPress={link(d.url)} accessibilityRole="link" style={({ pressed }) => [styles.row, { borderTopColor: t.line, opacity: pressed ? 0.6 : 1 }]}>
+            <Pressable key={`${d.receiptNo}-${i}`} onPress={link(d.url)} accessibilityRole="link" accessibilityLabel={`공시: ${d.title}, ${d.filer}, ${formatDateKo(d.filedAt)}`} style={({ pressed }) => [styles.row, { borderTopColor: t.line, opacity: pressed ? 0.6 : 1 }]}>
               <Text style={{ color: t.accent, fontSize: font.small }} numberOfLines={2}>
                 {d.title}
               </Text>
@@ -53,5 +53,5 @@ export function BriefingSources({ data }: { data: BriefingWithData["data"] }) {
 
 const styles = StyleSheet.create({
   head: { fontSize: font.small, fontWeight: "700", marginTop: space.sm },
-  row: { paddingVertical: space.sm, borderTopWidth: StyleSheet.hairlineWidth, gap: space.xxs },
+  row: { minHeight: touch.min, paddingVertical: space.sm, borderTopWidth: StyleSheet.hairlineWidth, gap: space.xxs },
 });

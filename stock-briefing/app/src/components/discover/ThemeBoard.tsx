@@ -5,13 +5,14 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "rea
 import { useDiscoverThemes } from "@/api/hooks";
 import type { DiscoverMarket, ThemeKind, ThemePeriod, ThemeSummary } from "@/api/types";
 import { Empty, ErrorView } from "@/components/ui";
+import { speakRate } from "@/lib/a11y";
 import { formatDateKo, formatPct } from "@/lib/format";
-import { changeColor, font, space, useTheme } from "@/theme";
+import { changeColor, font, slopFor, space, useTheme } from "@/theme";
 import { DISCLAIMER } from "@/components/Screen";
 import { StatusLine, usePull } from "./shared";
 import { SkeletonRows } from "./Skeleton";
 import { HEAT_MAX, HeatLegend, HeatTile } from "./ThemeHeatmap";
-import { THEME_ROW_H, ThemeRow } from "./ThemeRow";
+import { useThemeRowH, ThemeRow } from "./ThemeRow";
 
 const PERIODS: { value: ThemePeriod; label: string }[] = [
   { value: "day", label: "오늘" },
@@ -42,6 +43,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
   // 바꾸는 중(이전 값을 흐리게 보여 줄 때)에도 화면의 숫자와 같은 기간으로 열고 칠한다
   const shownPeriod: ThemePeriod = data?.period ?? period;
   const kindWord = shownKind === "theme" ? "테마" : "업종";
+  const rowH = useThemeRowH();
   const themes = useMemo(() => [...all].sort((a, b) => (order === "up" ? b.changeRate - a.changeRate : a.changeRate - b.changeRate)), [all, order]);
   const rising = all.filter((x) => x.changeRate > 0).length;
   const falling = all.filter((x) => x.changeRate < 0).length;
@@ -70,23 +72,23 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
       <View style={[styles.controls, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
         <View style={styles.group}>
           {(["theme", "sector"] as const).map((k) => (
-            <Pressable key={k} onPress={() => setKind(k)} accessibilityRole="button" accessibilityState={{ selected: kind === k }} style={seg(kind === k)}>
+            <Pressable key={k} onPress={() => setKind(k)} accessibilityRole="button" accessibilityLabel={k === "theme" ? "테마별" : "업종별"} accessibilityState={{ selected: kind === k }} hitSlop={SEG_SLOP} style={seg(kind === k)}>
               <Text style={segText(kind === k)}>{k === "theme" ? "테마" : "업종"}</Text>
             </Pressable>
           ))}
         </View>
         <View style={styles.group}>
           {PERIODS.map((p) => (
-            <Pressable key={p.value} onPress={() => setPeriod(p.value)} accessibilityRole="button" accessibilityState={{ selected: period === p.value }} style={seg(period === p.value)}>
+            <Pressable key={p.value} onPress={() => setPeriod(p.value)} accessibilityRole="button" accessibilityLabel={`기간 ${p.label}`} accessibilityState={{ selected: period === p.value }} hitSlop={SEG_SLOP} style={seg(period === p.value)}>
               <Text style={segText(period === p.value)}>{p.label}</Text>
             </Pressable>
           ))}
         </View>
         <View style={styles.group}>
-          <Pressable onPress={() => setView("list")} accessibilityLabel="목록으로 보기" accessibilityState={{ selected: view === "list" }} style={seg(view === "list")}>
+          <Pressable onPress={() => setView("list")} accessibilityRole="button" accessibilityLabel="목록으로 보기" accessibilityState={{ selected: view === "list" }} hitSlop={SEG_SLOP} style={seg(view === "list")}>
             <Ionicons name="list" size={15} color={view === "list" ? t.ink : t.muted} />
           </Pressable>
-          <Pressable onPress={() => setView("heat")} accessibilityLabel="히트맵으로 보기" accessibilityState={{ selected: view === "heat" }} style={seg(view === "heat")}>
+          <Pressable onPress={() => setView("heat")} accessibilityRole="button" accessibilityLabel="히트맵으로 보기" accessibilityState={{ selected: view === "heat" }} hitSlop={SEG_SLOP} style={seg(view === "heat")}>
             <Ionicons name="grid" size={14} color={view === "heat" ? t.ink : t.muted} />
           </Pressable>
         </View>
@@ -100,7 +102,13 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
               {PERIOD_WORD[shownPeriod]} {kindWord} {all.length}개 · 상승 <Text style={{ color: t.up, fontWeight: "800" }}>{rising}</Text> · 하락{" "}
               <Text style={{ color: t.down, fontWeight: "800" }}>{falling}</Text>
             </Text>
-            <Pressable onPress={() => setOrder(order === "up" ? "down" : "up")} accessibilityRole="button" style={[styles.sortBtn, { borderColor: t.line }]}>
+            <Pressable
+              onPress={() => setOrder(order === "up" ? "down" : "up")}
+              accessibilityRole="button"
+              accessibilityLabel={`${order === "up" ? "상승률순" : "하락률순"}. 누르면 ${order === "up" ? "하락률순" : "상승률순"}으로`}
+              hitSlop={SEG_SLOP}
+              style={[styles.sortBtn, { borderColor: t.line }]}
+            >
               <Ionicons name={order === "up" ? "arrow-up" : "arrow-down"} size={12} color={order === "up" ? t.up : t.down} />
               <Text style={{ color: t.ink, fontSize: font.tiny, fontWeight: "700" }}>{order === "up" ? "상승률순" : "하락률순"}</Text>
             </Pressable>
@@ -112,7 +120,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
           </View>
           <View style={styles.extremes}>
             {best ? (
-              <Pressable onPress={() => open(best)} style={styles.extreme} accessibilityRole="button">
+              <Pressable onPress={() => open(best)} style={styles.extreme} hitSlop={EXTREME_SLOP} accessibilityRole="button" accessibilityLabel={`가장 강한 ${kindWord} ${best.name}, ${speakRate(best.changeRate) ?? "등락률 없음"}`}>
                 <Text style={{ color: t.muted, fontSize: font.tiny }}>가장 강한</Text>
                 <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700", flexShrink: 1 }} numberOfLines={1}>
                   {best.name} <Text style={{ color: changeColor(t, best.changeRate) }}>{formatPct(best.changeRate)}</Text>
@@ -120,7 +128,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
               </Pressable>
             ) : null}
             {worst ? (
-              <Pressable onPress={() => open(worst)} style={styles.extreme} accessibilityRole="button">
+              <Pressable onPress={() => open(worst)} style={styles.extreme} hitSlop={EXTREME_SLOP} accessibilityRole="button" accessibilityLabel={`가장 약한 ${kindWord} ${worst.name}, ${speakRate(worst.changeRate) ?? "등락률 없음"}`}>
                 <Text style={{ color: t.muted, fontSize: font.tiny }}>가장 약한</Text>
                 <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700", flexShrink: 1 }} numberOfLines={1}>
                   {worst.name} <Text style={{ color: changeColor(t, worst.changeRate) }}>{formatPct(worst.changeRate)}</Text>
@@ -134,7 +142,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
     </View>
   );
 
-  if (q.isLoading) return <View>{head}<SkeletonRows height={THEME_ROW_H} rank={false} /></View>;
+  if (q.isLoading) return <View>{head}<SkeletonRows height={rowH} rank={false} /></View>;
   // 오류여도 테마/업종·기간·보기 버튼은 남겨 다른 선택으로 돌아갈 수 있게
   if (q.isError && !data)
     return (
@@ -177,7 +185,7 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
       data={themes}
       keyExtractor={(it) => it.id}
       renderItem={renderRow}
-      getItemLayout={(_, index) => ({ length: THEME_ROW_H, offset: THEME_ROW_H * index, index })}
+      getItemLayout={(_, index) => ({ length: rowH, offset: rowH * index, index })}
       style={{ opacity: switching ? 0.55 : 1 }}
       initialNumToRender={12}
       windowSize={9}
@@ -190,14 +198,20 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
   );
 }
 
+/** 테마/업종·기간·보기 버튼의 보이는 높이 32 → hitSlop 으로 44 (3-22) */
+const SEG_H = 32;
+const SEG_SLOP = slopFor(SEG_H, space.xxs);
+/** 가장 강한·약한 칸(두 줄, 약 33) — 100% 배치는 그대로 두고 누르는 영역만 44 로 */
+const EXTREME_SLOP = slopFor(33);
+
 const styles = StyleSheet.create({
   controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   group: { flexDirection: "row", gap: space.xs },
-  seg: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  seg: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.sm, paddingVertical: space.xs, minHeight: SEG_H, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
   breadth: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.sm, gap: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   breadthTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
   breadthBar: { height: 6, borderRadius: 3, overflow: "hidden", flexDirection: "row" },
-  sortBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.s, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  sortBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.s, paddingVertical: space.xs, minHeight: SEG_H, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
   extremes: { flexDirection: "row", gap: space.md },
   extreme: { flex: 1, gap: space.xxs },
   heatRow: { gap: 0, paddingHorizontal: space.sm },

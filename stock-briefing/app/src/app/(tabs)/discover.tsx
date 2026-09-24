@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AUTO_REFRESH_MAX_PAGES, useDiscoverRank } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverStock, RankCategory } from "@/api/types";
-import { DISCOVER_ROW_H, DiscoverRow } from "@/components/discover/DiscoverRow";
+import { DiscoverRow, useDiscoverRowH } from "@/components/discover/DiscoverRow";
 import { LineHead } from "@/components/StockLine";
 import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
@@ -10,7 +10,7 @@ import { DISCLAIMER } from "@/components/Screen";
 import { ThemeBoard } from "@/components/discover/ThemeBoard";
 import { Chip, Empty, ErrorView, Segmented } from "@/components/ui";
 import { useSettings } from "@/lib/settings";
-import { font, space, useTheme } from "@/theme";
+import { font, space, touch, useTheme } from "@/theme";
 
 type Category = RankCategory | "themes";
 
@@ -38,7 +38,7 @@ export default function DiscoverScreen() {
       <View style={[styles.chipsWrap, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
           {CATEGORIES.map((c) => (
-            <Chip key={c.value} label={c.label} active={category === c.value} onPress={() => setCategory(c.value)} />
+            <Chip key={c.value} label={c.label} accessibilityLabel={`${c.label} 보기`} active={category === c.value} onPress={() => setCategory(c.value)} />
           ))}
         </ScrollView>
       </View>
@@ -49,6 +49,7 @@ export default function DiscoverScreen() {
 
 function RankList({ market, category }: { market: DiscoverMarket; category: RankCategory }) {
   const t = useTheme();
+  const rowH = useDiscoverRowH();
   const { showKrw } = useSettings();
   const q = useDiscoverRank(market, category);
   const { pulling, onPull } = usePull(q.refetch);
@@ -85,7 +86,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
     </>
   );
 
-  if (q.isLoading) return <View>{head}<SkeletonRows height={DISCOVER_ROW_H} /></View>;
+  if (q.isLoading) return <View>{head}<SkeletonRows height={rowH} /></View>;
   if (q.isError && !items.length) return <ErrorView error={q.error} onRetry={() => void q.refetch()} />;
 
   return (
@@ -93,7 +94,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
       data={items}
       keyExtractor={(it) => it.code}
       renderItem={renderItem}
-      getItemLayout={(_, index) => ({ length: DISCOVER_ROW_H, offset: DISCOVER_ROW_H * index, index })}
+      getItemLayout={(_, index) => ({ length: rowH, offset: rowH * index, index })}
       initialNumToRender={14}
       maxToRenderPerBatch={20}
       windowSize={9}
@@ -105,7 +106,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
           {q.isFetchingNextPage ? (
             <ActivityIndicator style={{ marginVertical: space.lg }} color={t.muted} />
           ) : q.hasNextPage ? (
-            <Pressable onPress={() => void q.fetchNextPage()} style={[styles.more, { borderColor: t.line }]} accessibilityRole="button">
+            <Pressable onPress={() => void q.fetchNextPage()} style={[styles.more, { borderColor: t.line }]} accessibilityRole="button" accessibilityLabel="순위 더 보기">
               <Text style={{ color: t.muted, fontSize: font.small }}>더 보기</Text>
             </Pressable>
           ) : null}
@@ -130,7 +131,7 @@ function RankList({ market, category }: { market: DiscoverMarket; category: Rank
 const styles = StyleSheet.create({
   chipsWrap: { borderBottomWidth: StyleSheet.hairlineWidth },
   chips: { flexDirection: "row", gap: space.s, paddingHorizontal: space.lg, paddingVertical: space.sm },
-  more: { margin: space.lg, paddingVertical: space.sm, alignItems: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
+  more: { margin: space.lg, paddingVertical: space.sm, minHeight: touch.min, alignItems: "center", justifyContent: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
 });
 
