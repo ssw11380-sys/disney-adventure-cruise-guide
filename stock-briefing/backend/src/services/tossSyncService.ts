@@ -4,6 +4,7 @@ import type { MarketCalendar } from "../providers/market/calendar.js";
 import type { TossHolding, TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import { toMarket } from "../providers/market/kisMaster.js";
 import { ProviderError } from "../lib/errors.js";
+import { holdingsWriteLock } from "../lib/mutex.js";
 import { KrwCostBook, RateNotFoundError, type AccountForBook, type OverviewForBook, type SetExactResult } from "./krwCostBook.js";
 
 /**
@@ -182,7 +183,12 @@ export class TossSyncService {
     }
     const holdings = [...merged.values()].filter((h) => h.quantity > 0);
     const infos = holdings.length ? await this.toss.stockInfos(holdings.map((h) => h.code)).catch(() => new Map()) : new Map();
-    const result: ImportResult = { accounts: accounts.length, added: [], updated: [], unchanged: [], removed: [], excluded: [], holdings: [] };
+    // 여기부터 DB 쓰기: 앱의 등록·수정·삭제와 겹치지 않게 한 줄로
+    return holdingsWriteLock.run(() => this.applyHoldings(accounts.length, holdings, infos, perAccount));
+  }
+
+  private async applyHoldings(accountCount: number, holdings: TossHolding[], infos: Map<string, unknown>, perAccount: PerAccount[]): Promise<ImportResult> {
+    const result: ImportResult = { accounts: accountCount, added: [], updated: [], unchanged: [], removed: [], excluded: [], holdings: [] };
     const ts = seoulIso(this.now());
     const excluded = await this.excluded();
     for (const h of holdings) {
@@ -223,6 +229,12 @@ export class TossSyncService {
       result.removed.push(code);
     }
     await this.saveSnapshot([...nowCodes]);
+    // 토스에서 전량 매도된 종목은 제외 목록에서도 뺀다 — 나중에 다시 사면 다시 가져온다
+    const keep = [...excluded].filter((c) => nowCodes.has(c));
+    if (keep.length !== excluded.size) {
+      const value = JSON.stringify(keep.sort());
+      await this.db.insertInto("meta").values({ key: EXCLUDED_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
+    }
     await this.saveDetail(holdings);
     await this.updateCostBook(perAccount);
     return result;

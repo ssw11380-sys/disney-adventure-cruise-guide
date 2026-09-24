@@ -2,6 +2,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { Alert, StyleSheet, Text, TextInput, View } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
+import { ApiRequestError } from "@/api/client";
 import { useApi, useStock, useStockMutations } from "@/api/hooks";
 import type { Evaluation, RegisteredStock } from "@/api/types";
 import { useSettings } from "@/lib/settings";
@@ -85,7 +86,14 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     }
     update.mutate(
       { code: stock.code, ...patch, memo: memo.trim() || null },
-      { onSuccess: () => router.back(), onError: (e) => Alert.alert("저장 실패", e instanceof Error ? e.message : String(e)) },
+      {
+        onSuccess: () => router.back(),
+        onError: (e) => {
+          Alert.alert("저장 실패", e instanceof Error ? e.message : String(e));
+          // 토스 연동으로 막혔으면 최신 상태(잠김)로 다시 그린다
+          if (e instanceof ApiRequestError && e.code === "TOSS_LOCKED") void qc.invalidateQueries({ queryKey: [apiUrl, "stock", stock.code] });
+        },
+      },
     );
   };
 
@@ -93,13 +101,16 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     const q = num(tradeQty), p = num(tradePrice);
     if (q === null || p === null || !(q > 0) || !(p > 0)) return null;
     if (side === "sell" && q > (num(quantity) ?? 0)) return { error: "보유 수량보다 많이 매도할 수 없습니다" as const };
-    return applyTrade({ quantity: num(quantity), avgPrice: num(avgPrice) }, side, q, p);
+    // 평단 칸을 고치지 않았으면 화면에 줄여 보인 값이 아니라 저장된 원래 값으로 계산한다
+    const avg0 = avgPrice.trim() === initial.avgPrice.trim() ? stock.avgPrice : num(avgPrice);
+    return applyTrade({ quantity: num(quantity), avgPrice: avg0 }, side, q, p);
   })();
 
   /** 체결을 반영해 바로 저장 (예전: 위 칸에 반영 → 저장, 2단계) */
   const saveTrade = () => {
     if (!preview || "error" in preview) return;
-    save({ quantity: preview.quantity > 0 ? String(preview.quantity) : "", avgPrice: avgText(preview.avgPrice, cur) });
+    const q = Math.round(preview.quantity * 1e6) / 1e6; // 소수 주식 계산의 0.30000000000000004 같은 꼬리 제거
+    save({ quantity: q > 0 ? String(q) : "", avgPrice: preview.avgPrice !== null ? String(preview.avgPrice) : "" });
   };
 
   const confirmRemove = () => {
@@ -128,7 +139,7 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
         </Text>
         {locked ? (
           <View style={[styles.lockNote, { backgroundColor: t.surfaceAlt }]}>
-            <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "600" }}>토스 계좌 기준 · 10분마다 맞춤</Text>
+            <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "600" }}>토스 계좌 기준 · 자동으로 맞춤</Text>
             <Muted>수량·평단은 토스 계좌 값으로 자동으로 맞춰져 여기서 바꿀 수 없습니다. 메모는 바꿀 수 있습니다.</Muted>
           </View>
         ) : null}

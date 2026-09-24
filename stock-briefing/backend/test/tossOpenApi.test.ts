@@ -353,10 +353,42 @@ describe("토스 연동 종목 잠금 (3-10)", () => {
     await db.destroy();
   });
 
-  it("토스 연동이 꺼져 있으면(키 없음) 잠그지 않는다", async () => {
+  it("토스 연동이 꺼져 있거나(키 없음·동기화 0분) 동기화가 3시간 넘게 멈췄으면 잠그지 않는다", async () => {
     const { db } = await setup();
     const plain = new StockService({ db, quotes: new FakeQuoteProvider("x"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), now: NOW });
     await expect(plain.update("035420", { quantity: 1 })).resolves.toMatchObject({ quantity: 1 });
+    const p = new TossOpenApiProvider(client(), { now: NOW });
+    const off = new StockService({ db, quotes: new FakeQuoteProvider("x"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), tossOpenApi: p, tossSyncMinutes: 0, now: NOW });
+    expect((await off.tossSynced()).size).toBe(0);
+    const later = new StockService({ db, quotes: new FakeQuoteProvider("x"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), tossOpenApi: p, now: () => new Date(NOW().getTime() + 4 * 3_600_000) });
+    expect((await later.tossSynced()).size).toBe(0);
+    await db.destroy();
+  });
+
+  it("동기화에서 뺀 종목을 토스에서 전량 매도하면 제외 목록에서도 빠진다 (다시 사면 다시 가져옴)", async () => {
+    const { db, service, sync } = await setup();
+    await service.remove("TSLA");
+    const row = () => db.selectFrom("meta").select("value").where("key", "=", "toss_sync_excluded").executeTakeFirst();
+    expect((await row())?.value).toBe(JSON.stringify(["TSLA"]));
+    // 토스 보유에서 TSLA 가 사라진 동기화
+    const p2 = new TossOpenApiProvider(client(), { now: NOW });
+    const origin = p2.holdingsWithOverview.bind(p2);
+    p2.holdingsWithOverview = async (seq: number) => {
+      const r = await origin(seq);
+      return { ...r, items: r.items.filter((h) => h.code !== "TSLA") };
+    };
+    await new TossSyncService(db, p2, NOW).importHoldings();
+    expect((await row())?.value).toBe("[]");
+    // 다시 보유 → 다시 들어온다
+    const r = await sync.importHoldings();
+    expect(r.added).toEqual(["TSLA"]);
+    await db.destroy();
+  });
+
+  it("동시에 삭제·동기화해도 지운 종목이 되살아나지 않는다", async () => {
+    const { db, service, sync } = await setup();
+    await Promise.all([sync.importHoldings(), service.remove("035420"), sync.importHoldings()]);
+    expect((await service.list()).map((s) => s.code)).not.toContain("035420");
     await db.destroy();
   });
 });

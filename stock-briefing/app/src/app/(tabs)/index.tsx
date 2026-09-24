@@ -81,7 +81,8 @@ export default function StocksScreen() {
   }, [data, dataAt, showKrw, afterCost]);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
-    Alert.alert(s.name, undefined, [
+    // 토스 연동 종목은 삭제하면 동기화에서도 빠진다는 것을 먼저 알린다 (수정 화면과 같은 문구)
+    Alert.alert(s.name, s.tossSynced ? "토스 계좌에서 가져온 종목입니다. 삭제하면 토스 동기화에서도 빠져 다시 나타나지 않습니다 (다시 등록하면 다시 맞춤)." : undefined, [
       { text: "보유 정보 수정", onPress: () => router.push(`/stocks/${s.code}/edit`) },
       { text: "삭제", style: "destructive", onPress: () => remove.mutate(s.code, { onError: (e) => Alert.alert("삭제 실패", e instanceof Error ? e.message : String(e)) }) },
       { text: "취소", style: "cancel" },

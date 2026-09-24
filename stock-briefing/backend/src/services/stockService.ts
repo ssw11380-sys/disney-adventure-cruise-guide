@@ -4,6 +4,7 @@ import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
 import { mapLimit } from "../lib/concurrency.js";
+import { holdingsWriteLock } from "../lib/mutex.js";
 import { ConflictError, NotFoundError, ProviderError, TossLockedError, within } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import { toMarket } from "../providers/market/kisMaster.js";
@@ -25,8 +26,10 @@ export interface StockServiceDeps {
   quickPrices?: QuickPriceSource | null;
   /** PER/PBR/배당/52주·환율 보강 (토스 시세에는 없음) */
   fundamentals?: NaverFundamentals | null;
-  /** 공식 API 소스 (기준가 폴백 횟수를 /health 에 보이려고) */
+  /** 공식 API 소스 (기준가 폴백 횟수를 /health 에 보이려고). 있으면 토스 연동 종목 잠금도 켠다 */
   tossOpenApi?: { baseFallbacks: number } | null;
+  /** 토스 자동 동기화 주기(분). 0 이면 동기화가 없으니 잠그지 않는다 */
+  tossSyncMinutes?: number;
   now?: () => Date;
   /** 현재가 캐시 유효 시간(ms). 장중 새로고침 남발 방지용. */
   quoteCacheTtlMs?: number;
@@ -278,7 +281,11 @@ export class StockService {
 
   // ── 등록/보유 ────────────────────────────────────────────────────
 
-  async register(input: RegisterInput): Promise<RegisteredStock> {
+  register(input: RegisterInput): Promise<RegisteredStock> {
+    return holdingsWriteLock.run(() => this.registerNow(input));
+  }
+
+  private async registerNow(input: RegisterInput): Promise<RegisteredStock> {
     input = { ...input, code: normalizeCode(input.code) };
     if (!CODE_RE.test(input.code)) throw new NotFoundError(`종목 코드는 6자리 숫자(한국) 또는 티커(미국)여야 합니다: ${input.code}`);
     const exists = await this.deps.db
@@ -288,8 +295,6 @@ export class StockService {
       .executeTakeFirst();
     if (exists) throw new ConflictError(`이미 등록된 종목입니다: ${input.code}`);
     const listed = await this.resolveListed(input.code);
-    // 동기화에서 뺐던 종목을 다시 등록하면 다시 토스 계좌에서 맞춘다
-    await this.setExcluded(listed.code, false);
     const ts = seoulIso(this.now());
     await this.deps.db
       .insertInto("registered_stocks")
@@ -304,6 +309,8 @@ export class StockService {
         updated_at: ts,
       })
       .execute();
+    // 동기화에서 뺐던 종목을 다시 등록하면 다시 토스 계좌에서 맞춘다 (등록이 된 뒤에)
+    await this.setExcluded(listed.code, false);
     void this.refreshQuotes([listed.code]); // 등록 직후 잔고 화면이 시세를 기다리지 않게 바로 받기 시작
     await this.syncLive();
     return (await this.get(listed.code))!;
@@ -316,13 +323,17 @@ export class StockService {
     this.deps.live.setCodes(codes);
   }
 
-  async update(code: string, input: UpdateInput): Promise<RegisteredStock> {
+  update(code: string, input: UpdateInput): Promise<RegisteredStock> {
+    return holdingsWriteLock.run(() => this.updateNow(code, input));
+  }
+
+  private async updateNow(code: string, input: UpdateInput): Promise<RegisteredStock> {
     const current = await this.get(code);
     if (!current) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
     const changesHolding =
       (input.quantity !== undefined && input.quantity !== current.quantity) || (input.avgPrice !== undefined && input.avgPrice !== current.avgPrice);
     if (changesHolding && (await this.tossSynced()).has(code))
-      throw new TossLockedError("토스 계좌에서 맞추는 종목이라 수량·평단은 바꿀 수 없습니다 (10분마다 토스 값으로 맞춤). 메모는 바꿀 수 있고, 따로 관리하려면 종목을 삭제해 동기화에서 빼세요.");
+      throw new TossLockedError("토스 계좌에서 자동으로 맞추는 종목이라 수량·평단은 바꿀 수 없습니다. 메모는 바꿀 수 있습니다. 이 종목을 앱에서 빼려면 삭제하세요 (토스 동기화에서도 빠집니다).");
     await this.deps.db
       .updateTable("registered_stocks")
       .set({
@@ -337,7 +348,11 @@ export class StockService {
   }
 
   /** 삭제. 토스 계좌에서 맞추는 종목이면 동기화에서도 뺀다 (안 그러면 10분 뒤 다시 나타난다) */
-  async remove(code: string): Promise<{ tossExcluded: boolean }> {
+  remove(code: string): Promise<{ tossExcluded: boolean }> {
+    return holdingsWriteLock.run(() => this.removeNow(code));
+  }
+
+  private async removeNow(code: string): Promise<{ tossExcluded: boolean }> {
     const synced = (await this.tossSynced()).has(code);
     const r = await this.deps.db.deleteFrom("registered_stocks").where("code", "=", code).executeTakeFirst();
     if (Number(r.numDeletedRows) === 0) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
@@ -371,23 +386,26 @@ export class StockService {
   async holdingMeta(): Promise<{ detail: Map<string, TossHoldingDetail>; krw: Map<string, KrwCost>; synced: Set<string> }> {
     const rows = await this.deps.db.selectFrom("meta").select(["key", "value"]).where("key", "in", [TOSS_DETAIL_KEY, KrwCostBook.KEY, SNAPSHOT_KEY, EXCLUDED_KEY]).execute();
     const v = (k: string) => rows.find((r) => r.key === k)?.value ?? null;
-    return { detail: parseTossDetail(v(TOSS_DETAIL_KEY)), krw: KrwCostBook.summarize(KrwCostBook.parse(v(KrwCostBook.KEY))), synced: this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY)) };
+    return { detail: parseTossDetail(v(TOSS_DETAIL_KEY)), krw: KrwCostBook.summarize(KrwCostBook.parse(v(KrwCostBook.KEY))), synced: this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY)) };
   }
 
   /**
    * 토스 계좌에서 맞추는 종목 = 마지막 동기화 때 토스에 있던 종목 − 사용자가 뺀 종목.
    * 토스 연동이 꺼져 있으면(키 없음) 잠그지 않는다
    */
-  private syncedFrom(snapshot: string | null, excluded: string | null): Set<string> {
-    if (!this.deps.tossOpenApi) return new Set();
+  private syncedFrom(snapshot: string | null, excluded: string | null, detail: string | null): Set<string> {
+    if (!this.deps.tossOpenApi || this.deps.tossSyncMinutes === 0) return new Set();
+    // 동기화가 멈춘 지(3시간) 오래면 잠그지 않는다 — 옛 값에 묶여 고칠 수 없게 되지 않게
+    const syncedAt = detail ? Date.parse(((): string => { try { return String((JSON.parse(detail) as { syncedAt?: string }).syncedAt ?? ""); } catch { return ""; } })()) : NaN;
+    if (Number.isNaN(syncedAt) || this.now().getTime() - syncedAt > 3 * 3_600_000) return new Set();
     const ex = new Set(parseCodes(excluded));
     return new Set(parseCodes(snapshot).filter((c) => !ex.has(c)));
   }
 
   async tossSynced(): Promise<Set<string>> {
-    const rows = await this.deps.db.selectFrom("meta").select(["key", "value"]).where("key", "in", [SNAPSHOT_KEY, EXCLUDED_KEY]).execute();
+    const rows = await this.deps.db.selectFrom("meta").select(["key", "value"]).where("key", "in", [SNAPSHOT_KEY, EXCLUDED_KEY, TOSS_DETAIL_KEY]).execute();
     const v = (k: string) => rows.find((r) => r.key === k)?.value ?? null;
-    return this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY));
+    return this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY));
   }
 
   private async setExcluded(code: string, on: boolean): Promise<void> {
