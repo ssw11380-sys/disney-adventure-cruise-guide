@@ -69,7 +69,11 @@ export interface AnalysisSnapshot {
   disclosures: Disclosure[] | null;
   news: NewsItem[] | null;
   ratios: { roePct: number | null; debtToEquityPct: number | null; operatingMarginPct: number | null } | null;
+  /** 분석 시점의 장 상태 (예전 스냅샷에는 없음) */
+  marketState?: MarketContext;
   missing: string[];
+  /** 원래 제공되지 않는 데이터 (실패 아님) */
+  notes?: string[];
 }
 
 export class DataCollector {
@@ -111,6 +115,16 @@ export class DataCollector {
     await this.deps.quickPrices.getMany(codes).catch(() => undefined);
   }
 
+  /** SEC 에 없는 종목(ETF 등)은 실패가 아니라 "해당 없음" → notes 에 남기고 empty 로 */
+  private notListed<T>(notes: string[], label: string, empty: T, fn: () => Promise<T>): () => Promise<T> {
+    return () =>
+      fn().catch((e: unknown) => {
+        if (!(e instanceof NotListedError)) throw e;
+        notes.push(`${label}: SEC 에서 찾지 못한 종목(ETF 등)이라 해당 없음`);
+        return empty;
+      });
+  }
+
   private async marketStatus(): Promise<MarketStatus | null> {
     return this.deps.calendar ? this.deps.calendar.status().catch(() => null) : null;
   }
@@ -133,15 +147,7 @@ export class DataCollector {
       this.attempt("일봉/기술적 지표", missing, () => q.quotes.getCandles(stock.code, "D", 160)),
       this.attempt("뉴스", missing, () => this.news(stock, 8)),
       fin.provider
-        ? this.attempt("공시", missing, () =>
-            fin.provider!.getDisclosures(stock.code, 7, 8).catch((e: unknown) => {
-              if (e instanceof NotListedError) {
-                notes.push("공시: SEC 에 회사로 등록되지 않은 종목(ETF 등)이라 해당 없음");
-                return [];
-              }
-              throw e;
-            }),
-          )
+        ? this.attempt("공시", missing, this.notListed(notes, "공시", [] as Disclosure[], () => fin.provider!.getDisclosures(stock.code, 7, 8)))
         : (notes.push(kr ? "공시: DART 키가 없어 받지 않음" : "공시: 미국 공시 소스 없음"), Promise.resolve(null)),
       !kr
         ? (notes.push("수급: 미국 종목은 투자자별 매매 동향이 제공되지 않음"), Promise.resolve(null))
@@ -150,11 +156,9 @@ export class DataCollector {
           : (notes.push("수급: KIS/토스 Open API 키가 없어 받지 않음"), Promise.resolve(null)),
       this.marketStatus(),
     ]);
-    // 지표는 끝난 봉까지만 (정규장 중인 오늘 봉·주간거래로 생긴 봉은 빼고). 날짜 표시는 실제 마지막 봉 날짜로 맞춘다
-    const ctx0 = marketContext(stock.code, status, now);
-    const candles = series ? completedCandles(series.candles, ctx0, now) : null;
-    const lastDone = candles?.at(-1)?.date ?? null;
-    const market = lastDone && ctx0.lastRegularDate && lastDone < ctx0.lastRegularDate ? marketContext(stock.code, status, now, lastDone) : ctx0;
+    // 지표는 끝난 봉까지만 (정규장 중인 오늘 봉·주간거래로 생긴 봉은 빼고)
+    const market = marketContext(stock.code, status, now);
+    const candles = series ? completedCandles(series.candles, market, now) : null;
     const technical = candles ? computeTechnicalSummary(candles) : null;
     if (candles && !technical) missing.push("기술적 지표(봉 부족)");
     const holding =
@@ -182,7 +186,9 @@ export class DataCollector {
 
   async collectAnalysis(stock: { code: string; name: string; market: string }, kind: "company" | "value" | "technical"): Promise<AnalysisSnapshot> {
     const missing: string[] = [];
+    const notes: string[] = [];
     const q = this.deps;
+    const now = q.now?.() ?? new Date();
     const { provider: fin, missingSuffix } = this.finFor(stock.code);
     const noDart = <T>(label: string): Promise<T | null> => {
       missing.push(`${label}${missingSuffix}`);
@@ -192,18 +198,21 @@ export class DataCollector {
     const wantFundamentals = kind !== "technical";
     const wantTechnical = kind !== "company";
 
-    const [quote, daily, weekly, company, financials, dividends, disclosures, news] = await Promise.all([
+    const [quote, daily, weekly, company, financials, dividends, disclosures, news, status] = await Promise.all([
       this.attempt("현재가", missing, () => this.quote(stock.code, stock.market)),
       wantTechnical ? this.attempt("일봉", missing, () => q.quotes.getCandles(stock.code, "D", 160)) : Promise.resolve(null),
       kind === "technical" ? this.attempt("주봉", missing, () => q.quotes.getCandles(stock.code, "W", 26)) : Promise.resolve(null),
-      kind === "company" ? (fin ? this.attempt("회사 개요", missing, () => fin.getCompany(stock.code)) : noDart<CompanyProfile>("회사 개요")) : Promise.resolve(null),
-      wantFundamentals ? (fin ? this.attempt("재무제표", missing, () => fin.getAnnualFinancials(stock.code, 5)) : noDart<AnnualFinancials[]>("재무제표")) : Promise.resolve(null),
-      kind === "value" ? (fin ? this.attempt("배당", missing, () => fin.getDividends(stock.code, 3)) : noDart<DividendInfo[]>("배당")) : Promise.resolve(null),
-      wantFundamentals ? (fin ? this.attempt("공시", missing, () => fin.getDisclosures(stock.code, 90, 10)) : noDart<Disclosure[]>("공시")) : Promise.resolve(null),
+      kind === "company" ? (fin ? this.attempt("회사 개요", missing, this.notListed<CompanyProfile | null>(notes, "회사 개요", null, () => fin.getCompany(stock.code))) : noDart<CompanyProfile>("회사 개요")) : Promise.resolve(null),
+      wantFundamentals ? (fin ? this.attempt("재무제표", missing, this.notListed(notes, "재무제표", [] as AnnualFinancials[], () => fin.getAnnualFinancials(stock.code, 5))) : noDart<AnnualFinancials[]>("재무제표")) : Promise.resolve(null),
+      kind === "value" ? (fin ? this.attempt("배당", missing, this.notListed(notes, "배당", [] as DividendInfo[], () => fin.getDividends(stock.code, 3))) : noDart<DividendInfo[]>("배당")) : Promise.resolve(null),
+      wantFundamentals ? (fin ? this.attempt("공시", missing, this.notListed(notes, "공시", [] as Disclosure[], () => fin.getDisclosures(stock.code, 90, 10))) : noDart<Disclosure[]>("공시")) : Promise.resolve(null),
       kind === "company" ? this.attempt("뉴스", missing, () => this.news(stock, 8)) : Promise.resolve(null),
+      this.marketStatus(),
     ]);
 
-    const technical = daily ? computeTechnicalSummary(daily.candles) : null;
+    // 기술적 지표는 브리핑과 같이 끝난 정규장 봉까지만
+    const marketState = marketContext(stock.code, status, now);
+    const technical = daily ? computeTechnicalSummary(completedCandles(daily.candles, marketState, now)) : null;
     const latest = financials?.at(-1) ?? null;
     const ratios =
       latest
@@ -226,7 +235,9 @@ export class DataCollector {
       disclosures,
       news,
       ratios,
+      marketState,
       missing: orderMissing(missing),
+      notes,
     };
   }
 }

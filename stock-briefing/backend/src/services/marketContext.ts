@@ -31,15 +31,23 @@ function parts(d: Date, tz: string): { date: string; minutes: number; weekday: n
 
 const md = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
 
-/**
- * lastRegularHint: 일봉에서 확인한 마지막 완성 정규장 날짜 (휴장일이 끼면 요일 계산보다 정확) — 날짜 표시에 쓴다
- */
-export function marketContext(code: string, status: MarketStatus | null, now: Date, lastRegularHint?: string | null): MarketContext {
+/** 뉴욕증권거래소 휴장일 (현지 날짜). 해마다 추가 — 없으면 평일로 본다 */
+export const US_HOLIDAYS = new Set([
+  "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+  "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+]);
+
+const isUsTradingDate = (date: string) => {
+  const wd = new Date(`${date}T12:00:00Z`).getUTCDay();
+  return wd >= 1 && wd <= 5 && !US_HOLIDAYS.has(date);
+};
+
+export function marketContext(code: string, status: MarketStatus | null, now: Date): MarketContext {
   const kr = /^\d/.test(code);
   if (kr) {
     const p = parts(now, "Asia/Seoul");
     const tradingDay = status ? status.KR.isTradingDay : p.weekday >= 1 && p.weekday <= 5;
-    const lastClose = lastRegularHint ?? (status?.KR.lastClose ? parts(new Date(status.KR.lastClose), "Asia/Seoul").date : null);
+    const lastClose = status?.KR.lastClose ? parts(new Date(status.KR.lastClose), "Asia/Seoul").date : null;
     if (tradingDay && p.minutes >= 9 * 60 && p.minutes < 15 * 60 + 30)
       return { market: "KR", phase: "regular", label: `한국 정규장 진행 중(15:30 마감 전). 오늘 봉은 아직 끝나지 않았습니다`, lastRegularDate: lastClose, todayIncomplete: true };
     if (tradingDay && p.minutes >= 8 * 60 && p.minutes < 20 * 60) {
@@ -47,7 +55,7 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
       return {
         market: "KR",
         phase: "extended",
-        label: pre ? "한국 정규장 개장 전, 넥스트레이드(NXT) 프리마켓 중" : `오늘(${md(p.date)}) 한국 정규장은 15:30 에 마감, 지금은 넥스트레이드(NXT) 애프터마켓 중(20:00 까지)`,
+        label: pre ? (p.minutes < 8 * 60 + 50 ? "한국 정규장 개장 전, 넥스트레이드(NXT) 프리마켓 중" : "한국 정규장 개장 직전") : `오늘(${md(p.date)}) 한국 정규장은 15:30 에 마감, 지금은 넥스트레이드(NXT) 애프터마켓 시간(20:00 까지)`,
         lastRegularDate: pre ? lastClose : p.date,
         todayIncomplete: pre,
       };
@@ -58,9 +66,9 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
   // 미국: 토스 달력의 isOpen 은 프리~애프터를 모두 포함하므로 정규장 여부는 뉴욕 시각으로 가린다
   const ny = parts(now, "America/New_York");
   const weekday = ny.weekday >= 1 && ny.weekday <= 5;
-  const tradingDay = status ? status.US.isTradingDay : weekday;
+  const tradingDay = (status ? status.US.isTradingDay : weekday) && !US_HOLIDAYS.has(ny.date);
   const afterClose = tradingDay && ny.minutes >= 16 * 60;
-  const lastRegular = lastRegularHint ?? (afterClose ? ny.date : prevWeekday(ny.date));
+  const lastRegular = afterClose ? ny.date : prevTradingDate(ny.date);
   const last = md(lastRegular);
   if (tradingDay && ny.minutes >= 9 * 60 + 30 && ny.minutes < 16 * 60)
     return { market: "US", phase: "regular", label: "미국 정규장 진행 중(16:00 ET 마감 전). 오늘 봉은 아직 끝나지 않았습니다", lastRegularDate: lastRegular, todayIncomplete: true };
@@ -70,16 +78,17 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
     return { market: "US", phase: "extended", label: `미국 정규장은 ${last}(현지) 마감, 지금은 애프터마켓 중`, lastRegularDate: lastRegular, todayIncomplete: false };
   // 한국 낮 시간(대략 10:00~17:30 KST)은 미국 주간거래(블루오션) 시간 — 정규장은 전날 밤 끝났다
   const kst = parts(now, "Asia/Seoul");
-  if (kst.weekday >= 1 && kst.weekday <= 5 && kst.minutes >= 10 * 60 && kst.minutes < 17 * 60 + 30)
-    return { market: "US", phase: "extended", label: `미국 주간거래(한국 낮 시간) 중. 마지막 정규장은 ${last}(현지)에 끝났고 다음 정규장은 아직 열리지 않았습니다. 지금 브리핑을 "장 마감"으로 쓰지 않습니다`, lastRegularDate: lastRegular, todayIncomplete: false };
+  // 주간거래는 뉴욕 날짜로 그날 정규장이 열리는 날에만 (추수감사절 등 휴장일엔 없다)
+  if (tradingDay && kst.weekday >= 1 && kst.weekday <= 5 && kst.minutes >= 10 * 60 && kst.minutes < 17 * 60 + 30)
+    return { market: "US", phase: "extended", label: `미국 주간거래(한국 낮 시간) 중. 마지막 정규장은 ${last}(현지)에 끝났고 다음 정규장은 아직 열리지 않았습니다`, lastRegularDate: lastRegular, todayIncomplete: false };
   return { market: "US", phase: "closed", label: `미국 정규장 마감 상태 (마지막 정규장 ${last}, 현지)`, lastRegularDate: lastRegular, todayIncomplete: false };
 }
 
-/** 직전 평일 (휴장일은 모름 → 일봉으로 보정: lastRegularHint) */
-function prevWeekday(date: string): string {
+/** 직전 미국 거래일 (주말·휴장일 건너뜀) */
+function prevTradingDate(date: string): string {
   const d = new Date(`${date}T12:00:00Z`);
   do d.setUTCDate(d.getUTCDate() - 1);
-  while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  while (!isUsTradingDate(d.toISOString().slice(0, 10)));
   return d.toISOString().slice(0, 10);
 }
 

@@ -122,8 +122,7 @@ describe("US stock end to end", () => {
     const run = (await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning" } })).json();
     expect(run.results[0].status).toBe("ok");
     const [b] = (await app.inject({ method: "GET", url: "/api/briefings?code=TSLA" })).json();
-    expect(b.missing).not.toContain("수급(미국 종목 미지원)");
-    expect(b.missing.join()).not.toContain("미지원");
+    expect(b.missing).toEqual([]);
     expect(gen.requests[0]!.user).toContain("수급: 미국 종목은 투자자별 매매 동향이 제공되지 않음");
     expect(gen.requests[0]!.user).toMatch(/장 상태: 미국 /);
     expect(gen.requests[0]!.user).toContain("Tesla, Inc. (TSLA)");

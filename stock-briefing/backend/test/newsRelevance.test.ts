@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coreName, filterNews, isAmbiguous, newsQuery } from "../src/providers/news/relevance.js";
+import { coreName, etfAliases, filterNews, isAmbiguous, newsQuery } from "../src/providers/news/relevance.js";
 import type { NewsItem } from "../src/providers/news/types.js";
 
 const NOW = Date.parse("2026-09-24T10:00:00+09:00");
@@ -99,6 +99,17 @@ describe("종목 뉴스 관련도 (3-12, 운영에서 뽑은 제목)", () => {
     expect(keep(daesang, [item("주주환원 확대한 신한금융…한국IR대상 최고", 1, "이코노미스트", "올해 대상 수상 기업은")])).toHaveLength(0);
     // 농심(農心) 기사는 뺀다 — 운영 네이버 종목 뉴스 실제 제목
     expect(keep({ code: "004370", name: "농심" }, [item("들끓는 농심에 ‘농지 강제처분’ 유예"), item("추석 앞두고 '농심' 요동치자 진화나선 청와대"), item("농심 주가 요동"), item("농심, 대한항공 라운지 '라면 라이브러리'에 라면 단독 공급")])).toHaveLength(2);
+  });
+
+  it("국내 지수 ETF 는 기초지수 이름(S&P500·나스닥100)으로도 찾고, 도박 스팸은 뺀다 (운영 확인)", () => {
+    const spx = { code: "379800", name: "KODEX 미국S&P500" };
+    expect(etfAliases(spx)).toEqual(["미국S&P500", "S&P500"]);
+    expect(etfAliases({ code: "379810", name: "KODEX 미국나스닥100" })).toEqual(["미국나스닥100", "나스닥100"]);
+    expect(etfAliases({ code: "005930", name: "삼성전자" })).toEqual([]);
+    expect(newsQuery(spx)).toBe('("S&P500" OR "KODEX 미국S&P500") (지수 OR 증시 OR ETF) when:30d');
+    expect(
+      filterNews(spx, [item("서학개미 8월 수익률 ‘-’…S&P500 올랐지만, 원화 가치 치솟아"), item("로아 캐릭터 슬롯 24 : 위험 피하기", 1, "Calgary Roughnecks"), item("유로 원 토토 비교 팀 협업 체계적 방법"), item("반도체 ETF 수익률 싹쓸이")], NOW, true).map((x) => x.title),
+    ).toEqual(["서학개미 8월 수익률 ‘-’…S&P500 올랐지만, 원화 가치 치솟아"]);
   });
 
   it("주식 종류 글자(알파벳 A·버크셔 B)는 떼고, 별칭(구글·메타)도 본다 (리뷰 M2)", () => {

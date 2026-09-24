@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { completedCandles, marketContext } from "../src/services/marketContext.js";
 import type { MarketStatus } from "../src/providers/market/calendar.js";
 import type { Candle } from "../src/domain/types.js";
+import { NotListedError } from "../src/lib/errors.js";
+import { DataCollector } from "../src/services/collector.js";
+import { FakeNewsProvider, FakeQuoteProvider } from "./helpers.js";
 
 const st = (kr: boolean, us: boolean): MarketStatus =>
   ({ now: "", KR: { market: "KR", isTradingDay: kr, isOpen: false, opensAt: null, closesAt: null, source: "toss" }, US: { market: "US", isTradingDay: us, isOpen: false, opensAt: null, closesAt: null, source: "toss" } }) as MarketStatus;
@@ -55,14 +58,44 @@ describe("장 상태 (3-11)", () => {
     expect(marketContext("AAPL", st(true, true), at("2026-09-26T12:00:00+09:00")).phase).toBe("closed"); // 토요일
   });
 
-  it("휴장일이 끼면 마지막 봉 날짜(hint)로 날짜를 맞춘다", () => {
-    // 월요일 휴장 뒤 화요일 한국 낮: 요일 계산은 9/7(월)이지만 실제 마지막 정규장은 9/4(금)
-    const ctx = marketContext("AAPL", st(true, true), at("2026-09-08T15:00:00+09:00"), "2026-09-04");
+  it("미국 휴장일: 노동절 다음 날엔 마지막 정규장이 금요일, 추수감사절엔 주간거래가 없다 (리뷰 2·4)", () => {
+    // 9/8(화) 한국 15:00 = 뉴욕 9/8 02:00, 9/7(월)은 노동절 → 마지막 정규장 9/4(금)
+    const ctx = marketContext("AAPL", st(true, true), at("2026-09-08T15:00:00+09:00"));
+    expect(ctx).toMatchObject({ phase: "extended", lastRegularDate: "2026-09-04" });
     expect(ctx.label).toContain("9/4");
+    // 추수감사절 11/26 한국 16:00 = 뉴욕 11/26 03:00 → 주간거래 아님
+    const tg = marketContext("AAPL", null, at("2026-11-26T16:00:00+09:00"));
+    expect(tg.phase).toBe("closed");
+    expect(tg.lastRegularDate).toBe("2026-11-25");
+  });
+
+  it("한국 08:50~09:00 은 NXT 프리마켓이 아니라 개장 직전", () => {
+    expect(marketContext("005930", st(true, true), at("2026-09-23T08:55:00+09:00")).label).toBe("한국 정규장 개장 직전");
   });
 
   it("달력을 못 받으면 요일·시각으로 추정한다", () => {
     expect(marketContext("005930", null, at("2026-09-24T10:00:00+09:00")).phase).toBe("regular");
     expect(marketContext("AAPL", null, at("2026-09-24T15:00:00+09:00")).phase).toBe("extended");
+  });
+});
+
+describe("수집기: 제공되지 않는 데이터는 notes, 끝나지 않은 봉은 지표에서 제외 (3-11)", () => {
+  it("SEC 에 없는 ETF 는 공시·재무가 실패가 아니라 notes 로, 분석 지표도 끝난 봉까지만", async () => {
+    const quotes = new FakeQuoteProvider("fake");
+    const notListed = () => Promise.reject(new NotListedError("sec-edgar", "SEC 에 등록된 티커가 아닙니다: QQQI"));
+    const edgar = { name: "sec-edgar", getCompany: notListed, getDisclosures: notListed, getAnnualFinancials: notListed, getDividends: notListed };
+    const now = () => at("2026-09-24T15:00:00+09:00"); // 미국 주간거래 시간
+    const c = new DataCollector({ quotes, news: new FakeNewsProvider(), financials: null, financialsUs: edgar, investorFlow: null, now, calendar: { status: async () => st(true, true) } });
+    const b = await c.collectBriefing({ code: "QQQI", name: "QQQI", market: "NASDAQ", quantity: null, avgPrice: null, memo: null, createdAt: "", updatedAt: "" });
+    expect(b.missing).toEqual([]);
+    expect(b.disclosures).toEqual([]);
+    expect(b.notes).toHaveLength(2);
+    expect(b.notes).toEqual(expect.arrayContaining(["공시: SEC 에서 찾지 못한 종목(ETF 등)이라 해당 없음", "수급: 미국 종목은 투자자별 매매 동향이 제공되지 않음"]));
+    expect(b.marketState?.phase).toBe("extended");
+    for (const kind of ["company", "value"] as const) {
+      const a = await c.collectAnalysis({ code: "QQQI", name: "QQQI", market: "NASDAQ" }, kind);
+      expect(a.missing.filter((m) => /회사 개요|재무제표|배당|공시/.test(m))).toEqual([]);
+      expect(a.notes!.length).toBeGreaterThan(0);
+    }
   });
 });

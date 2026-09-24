@@ -63,6 +63,9 @@ const FINANCE =
 /** 뉴스로 보기 어려운 출처 (블로그·유료 칼럼·가상자산 시세 페이지·게임 하드웨어 매체) */
 const BLOCKED_SOURCE = /브런치|brunch|티스토리|tistory|blog|블로그|카페|프리미엄콘텐츠|CoinGecko|GameGPU/i;
 
+/** 검색 결과에 섞이는 도박 스팸 제목 */
+const SPAM_TITLE = /토토|카지노|슬롯|포커|바카라|먹튀/;
+
 export function coreName(name: string): string {
   let s = name.trim();
   for (let i = 0; i < 3; i++) {
@@ -107,9 +110,21 @@ function hasWord(text: string, word: string): boolean {
   return false;
 }
 
+/** 국내 상장 ETF 브랜드 */
+const ETF_BRAND = /^(KODEX|TIGER|ACE|SOL|RISE|KBSTAR|HANARO|ARIRANG|PLUS|KOSEF|TIMEFOLIO)\s+/i;
+
+/** 국내 ETF 는 기사 제목에 상품명보다 기초지수가 나온다: "KODEX 미국S&P500" → "미국S&P500", "S&P500" */
+export function etfAliases(stock: StockRef): string[] {
+  if (!isKrCode(stock.code) || !ETF_BRAND.test(stock.name)) return [];
+  const rest = stock.name.replace(ETF_BRAND, "").replace(/\(H\)|\(합성\)/g, "").trim();
+  const out = [rest];
+  if (rest.startsWith("미국")) out.push(rest.slice(2).trim());
+  return out.filter((x) => x.length >= 3);
+}
+
 function names(stock: StockRef): string[] {
   const core = coreName(stock.name);
-  return [...new Set([stock.name, core, ...(ALIASES[stock.code.toUpperCase()] ?? [])].filter(Boolean))];
+  return [...new Set([stock.name, core, ...(ALIASES[stock.code.toUpperCase()] ?? []), ...etfAliases(stock)].filter(Boolean))];
 }
 
 /** 이름이 짧아(두 글자 이하 한글) 이름만으로는 고를 수 없는 국내 종목 */
@@ -122,6 +137,7 @@ export function isRelevant(stock: StockRef, item: NewsItem, now: number, fromNam
   const at = Date.parse(item.publishedAt);
   if (Number.isNaN(at) || now - at > NEWS_MAX_AGE_MS) return false;
   if (item.source && BLOCKED_SOURCE.test(item.source)) return false;
+  if (SPAM_TITLE.test(item.title)) return false;
   const title = item.title;
   const us = !isKrCode(stock.code);
   const ticker = us && hasWord(title, stock.code.toUpperCase());
@@ -141,6 +157,8 @@ export function filterNews(stock: StockRef, items: NewsItem[], now: number, from
 /** 이름 검색(구글 뉴스) 질의: 최근 30일, 이름이 모호하면 티커 + 주식 관련 말 */
 export function newsQuery(stock: StockRef): string {
   if (isAmbiguous(stock)) return `"${stock.code.toUpperCase()}" (주가 OR 주식 OR 실적 OR 배당 OR ETF) when:30d`;
+  const etf = etfAliases(stock).at(-1);
+  if (etf) return `("${etf}" OR "${stock.name}") (지수 OR 증시 OR ETF) when:30d`;
   if (isShortKrName(stock)) {
     const core = coreName(stock.name);
     return `("${core}㈜" OR "${core}그룹" OR "${core} 주가") when:30d`;

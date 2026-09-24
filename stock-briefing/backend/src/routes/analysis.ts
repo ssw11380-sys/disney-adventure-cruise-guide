@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
+import { NotListedError } from "../lib/errors.js";
 import type { FinancialsProvider } from "../providers/dart/types.js";
 import type { NewsProvider } from "../providers/news/types.js";
 import type { AnalysisService } from "../services/analysisService.js";
@@ -47,7 +48,12 @@ export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app,
       news: newsRes.status === "fulfilled" ? newsRes.value : [],
       newsError: newsRes.status === "rejected" ? String(newsRes.reason?.message ?? newsRes.reason) : null,
       disclosures: discRes.status === "fulfilled" ? discRes.value : [],
-      disclosuresError: discRes.status === "rejected" ? String(discRes.reason?.message ?? discRes.reason) : null,
+      disclosuresError:
+        discRes.status === "rejected"
+          ? discRes.reason instanceof NotListedError
+            ? "SEC 에서 찾지 못한 종목(ETF 등)이라 공시가 없습니다"
+            : String(discRes.reason?.message ?? discRes.reason)
+          : null,
     };
   });
 };
