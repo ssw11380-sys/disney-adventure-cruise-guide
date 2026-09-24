@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
@@ -600,10 +601,9 @@ function Readout({
             const v = m.values[index];
             return (
               <Text key={m.period}>
-                <Text style={{ color: maColor(t, m.period), fontWeight: "700" }}>
-                  {m.period}
-                  {unit}
-                </Text>{" "}
+                {/* 색은 네모에만 (차트 선 색은 글자 대비 4.5 를 보장하지 않는다), 글자는 흐린 글자색 */}
+                <Ionicons name="square" size={font.tiny} color={maColor(t, m.period)} /> {m.period}
+                {unit}{" "}
                 {v === null || v === undefined ? "-" : formatChartValue(v, currency)}{" "}
               </Text>
             );

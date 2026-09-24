@@ -154,7 +154,7 @@ export function Toggle({ value, onValueChange, disabled, accessibilityLabel }: {
   const t = useTheme();
   return (
     // eslint-disable-next-line no-restricted-syntax -- 스위치를 감싸는 유일한 곳
-    <Switch value={value} onValueChange={onValueChange} disabled={disabled} accessibilityLabel={accessibilityLabel} trackColor={{ true: t.accent, false: t.lineStrong }} thumbColor={t.onFill} />
+    <Switch value={value} onValueChange={onValueChange} disabled={disabled} accessibilityLabel={accessibilityLabel} trackColor={{ true: t.accent, false: t.muted }} thumbColor={t.onFill} />
   );
 }
 

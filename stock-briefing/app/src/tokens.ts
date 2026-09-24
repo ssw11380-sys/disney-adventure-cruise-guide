@@ -3,7 +3,8 @@
  * React Native 를 불러오지 않는 순수 모듈 (테스트·위젯에서 씀). 훅(useTheme)은 theme.ts.
  * 규칙은 docs/디자인-규칙.md. 대비·색 차이는 test/tokens.test.ts 가 지킨다:
  *  - 글자/바탕 조합 대비 4.5 이상 (라이트·다크 모두)
- *  - 강조색·보조선·실시간 점은 상승·하락색과 ΔE2000 20 이상 (등락으로 읽히지 않게)
+ *  - 강조색·보조선·실시간 점·경고·오류색은 상승·하락색과 ΔE2000 20 이상 (등락으로 읽히지 않게)
+ *  - 가격 영역에 함께 그리는 선(이동평균·볼린저·평단)끼리 ΔE2000 15 이상
  */
 
 export interface ChartColors {
@@ -44,6 +45,7 @@ export interface Theme {
   /** 실시간·장중 표시 (등락색과 겹치지 않는 초록) */
   live: string;
   warn: string;
+  /** 오류 (상승 빨강과 헷갈리지 않게 다크는 주황, 라이트는 자주) */
   danger: string;
   code: string;
   shadow: string;
@@ -80,16 +82,16 @@ export const dark: Theme = {
   onFill: "#FFFFFF",
   live: "#3FB950",
   warn: "#E3B341",
-  danger: "#FF6B6B",
+  danger: "#F97316",
   code: "#0F1217",
   shadow: "#000000",
   scrim: "rgba(0,0,0,0.55)",
   inkOnLight: "#111418",
   chart: {
-    ma: { 5: "#22C55E", 10: "#06B6D4", 20: "#F59E0B", 60: "#D946EF", 120: "#84CC16", 200: "#9CA3AF" },
-    rsi: "#D946EF",
+    ma: { 5: "#22C55E", 10: "#5FC4DD", 20: "#E88C30", 60: "#D742D7", 120: "#7051EC", 200: "#9CA3AF" },
+    rsi: "#D742D7",
     macd: "#14B8A6",
-    signal: "#F59E0B",
+    signal: "#E88C30",
     band: "#14B8A6",
   },
 };
@@ -120,16 +122,16 @@ export const light: Theme = {
   onFill: "#FFFFFF",
   live: "#16762F",
   warn: "#8F5E0F",
-  danger: "#C62828",
+  danger: "#9D174D",
   code: "#F5F6F8",
   shadow: "#000000",
   scrim: "rgba(0,0,0,0.45)",
   inkOnLight: "#111418",
   chart: {
-    ma: { 5: "#15803D", 10: "#0891B2", 20: "#A16207", 60: "#A21CAF", 120: "#4D7C0F", 200: "#78716C" },
-    rsi: "#A21CAF",
+    ma: { 5: "#15803D", 10: "#098DAE", 20: "#868613", 60: "#7A1F7A", 120: "#9F0CE9", 200: "#78716C" },
+    rsi: "#7A1F7A",
     macd: "#0F766E",
-    signal: "#A16207",
+    signal: "#868613",
     band: "#0F766E",
   },
 };

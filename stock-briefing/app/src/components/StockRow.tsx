@@ -63,7 +63,7 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
         <>
           <View style={[styles.num, { width: COL.price }]}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
-              {q.live ? <View style={[styles.live, { backgroundColor: c === t.ink ? t.muted : c }]} /> : null}
+              {q.live ? <View style={[styles.live, { backgroundColor: t.live }]} /> : null}
               <FlashPrice value={q.price} text={formatQuoteDisplay(q.price, cur, fx, showKrw)} style={[styles.main, { color: c }]} />
             </View>
             <Text style={[styles.sub, { color: c }]}>{formatPct(q.changeRate)}</Text>

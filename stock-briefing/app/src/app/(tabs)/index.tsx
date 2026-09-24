@@ -181,7 +181,7 @@ function HeadCell({ label, active, onPress, width, flex }: { label: string; acti
   const t = useTheme();
   const body = (
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: flex ? "flex-start" : "flex-end", gap: space.xxs }}>
-      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right" }} numberOfLines={1}>
+      <Text style={{ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? "700" : "500", textAlign: flex ? "left" : "right", flexShrink: 1 }} numberOfLines={1}>
         {label}
       </Text>
       {active ? <Ionicons name="caret-down" size={font.tiny} color={t.ink} /> : null}

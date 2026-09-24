@@ -57,7 +57,7 @@ function MarketChip({ market }: { market: WidgetMarket | null | undefined }) {
 function Header({ title, subtitle, market, delayed }: { title: string; subtitle?: string; market?: WidgetMarket | null; delayed?: boolean }) {
   return (
     <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-      <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 6 }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
+      <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.s }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
         <TextWidget text={title} style={{ color: C.ink, fontSize: F.title, fontWeight: "700" }} />
         <MarketChip market={market} />
         {subtitle ? <TextWidget text={subtitle} style={{ color: C.muted, fontSize: F.sm }} /> : null}
@@ -135,7 +135,7 @@ export function HoldingsWidget({ stocks, showKrw, afterCost = true, fetchedAt, e
                   />
                 </FlexWidget>
                 {q ? (
-                  <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 8 }}>
+                  <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.sm }}>
                     <TextWidget text={money(q.price, q.currency, fx, showKrw)} style={{ color: tone(q.change) as `#${string}`, fontSize: F.base, fontWeight: "700" }} />
                     <TextWidget text={formatPct(q.changeRate)} style={{ color: tone(q.change) as `#${string}`, fontSize: F.md, fontWeight: "700", width: 56, textAlign: "right" }} />
                   </FlexWidget>
@@ -159,7 +159,7 @@ export function BriefingWidget({ briefings, fetchedAt, error, now, market }: { b
     <FlexWidget style={root}>
       <Header title="브리핑" subtitle={asOfLabel(fetchedAt, now)} market={currentMarket(market, now)} delayed={isDelayed({ openAsOf: null, fetchedAt, error, now })} />
       {items.length ? (
-        <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: space.xs, flexGap: 3 }}>
+        <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: space.xs, flexGap: space.xxs }}>
           {items.map((it) => {
             const b = it.latest!;
             const first = b.summary.split("\n").find(Boolean) ?? "";
@@ -189,7 +189,7 @@ export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, erro
   return (
     <FlexWidget style={{ ...root, padding: space.md, justifyContent: "center" }} clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }}>
       <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-        <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: 4 }}>
+        <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.xs }}>
           <TextWidget text="총 평가" style={{ color: C.muted, fontSize: F.sm, fontWeight: "700" }} />
           <MarketChip market={market} />
         </FlexWidget>
@@ -199,7 +199,7 @@ export function AssetWidget({ stocks, showKrw, afterCost = true, fetchedAt, erro
         <FlexWidget style={{ width: "match_parent", flexDirection: "column", marginTop: space.xxs }}>
           <TextWidget text={formatPrice(t.value, t.currency)} maxLines={1} style={{ color: C.ink, fontSize: F.bigger, fontWeight: "800", adjustsFontSizeToFit: true }} />
           {/* 오늘 손익과 총손익은 각자 부호 색 (예전에는 둘 다 오늘 색이었다) */}
-          <FlexWidget style={{ flexDirection: "row", flexGap: 4 }}>
+          <FlexWidget style={{ flexDirection: "row", flexGap: space.xs }}>
             <TextWidget text={line.day.text} maxLines={1} style={{ color: line.day.color as `#${string}`, fontSize: F.sm, fontWeight: "700" }} />
             <TextWidget text="·" style={{ color: C.muted, fontSize: F.sm }} />
             <TextWidget text={line.total.text} maxLines={1} truncate="END" style={{ color: line.total.color as `#${string}`, fontSize: F.sm, fontWeight: "700" }} />

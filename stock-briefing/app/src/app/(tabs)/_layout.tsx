@@ -22,7 +22,7 @@ export default function TabsLayout() {
         headerTitleStyle: { fontWeight: "700", fontSize: font.h2 },
         headerShadowVisible: false,
         // 고정 height 를 주면 시스템 내비게이션 바(제스처/3버튼) 영역이 무시되어 탭이 그 밑에 깔린다 → 인셋만큼 더한다
-        tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.line, height: 58 + insets.bottom, paddingTop: space.s, paddingBottom: insets.bottom + 6 },
+        tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.line, height: 58 + insets.bottom, paddingTop: space.s, paddingBottom: insets.bottom + space.s },
         tabBarLabelStyle: { fontSize: font.tiny, fontWeight: "600" },
         tabBarActiveTintColor: t.ink,
         tabBarInactiveTintColor: t.muted,

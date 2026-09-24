@@ -4,17 +4,23 @@
  * 그래서 디자인 토큰 규칙(eslint)의 예외다 — 색은 앱 다크 테마(tokens.ts)와 같은 톤을 유지한다.
  */
 
+import { dark } from "@/tokens";
+
+type Hex = `#${string}`;
+const hex = (c: string) => c as Hex;
+
+/** 앱 다크 테마 값을 그대로 쓴다 (테마를 바꾸면 위젯도 따라가게). 위젯에만 있는 색만 여기 */
 export const WIDGET_COLORS = {
-  bg: "#12151B",
-  ink: "#E8EAED",
-  muted: "#8A919D",
-  line: "rgba(255, 255, 255, 0.07)",
-  up: "#FF4B55",
-  down: "#3D8EFF",
-  gold: "#E3B341",
-  warn: "#F0A030",
-  white: "#FFFFFF",
-  link: "#E1C25B",
+  bg: hex(dark.surface),
+  ink: hex(dark.ink),
+  muted: hex(dark.muted),
+  line: "rgba(255, 255, 255, 0.07)" as const,
+  up: hex(dark.up),
+  down: hex(dark.down),
+  gold: hex(dark.gold),
+  warn: hex(dark.warn),
+  white: hex(dark.onFill),
+  link: hex(dark.gold),
 } as const;
 
 /** 위젯 글자 크기 (dp). 2×2 칸에 맞춘 작은 단계 */
