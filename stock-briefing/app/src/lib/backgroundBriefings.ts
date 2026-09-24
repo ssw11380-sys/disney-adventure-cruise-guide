@@ -18,6 +18,8 @@ import { refreshWidgets } from "@/widgets/refresh";
  */
 export const BRIEFING_TASK = "check-new-briefings";
 const SEEN_KEY = "briefings.notified"; // JSON: number[] (알림 보낸 브리핑 id, 최근 200개)
+/** "1" 이면 알림 기준(그때까지의 브리핑)을 이미 적었다. 브리핑이 0건이라 SEEN 이 비어 있어도 처음으로 보지 않게 (N3) */
+const INIT_KEY = "briefings.notifyInit";
 export const LOCAL_MODE_KEY = "push.localMode"; // "1" 이면 백그라운드 확인 방식으로 알림
 /** 백그라운드 갱신 최소 간격(분). Android 가 허용하는 가장 짧은 값 */
 export const BG_INTERVAL_MIN = 15;
@@ -43,14 +45,20 @@ async function saveSeen(ids: Set<number>): Promise<void> {
   }
 }
 
-/** 아직 알리지 않은 브리핑 id 가 있는지 (처음 실행이면 true → 현재 상태를 기억하게) */
+/** 알림 기준을 적었는지. 표시가 없던 예전 앱에서 올라온 기기는 본 기록이 있으면 적은 것으로 본다 */
+async function initialized(seen: Set<number>): Promise<boolean> {
+  if (seen.size > 0) return true;
+  return (await AsyncStorage.getItem(INIT_KEY).catch(() => null)) === "1";
+}
+
+/** 아직 알리지 않은 브리핑 id 가 있는지 (기준을 아직 안 적었으면 true → 현재 상태를 기억하게) */
 export async function hasUnseen(ids: number[]): Promise<boolean> {
   const seen = await seenIds();
-  return seen.size === 0 || ids.some((id) => !seen.has(id));
+  return !(await initialized(seen)) || ids.some((id) => !seen.has(id));
 }
 
 /**
- * 새 브리핑을 찾아 로컬 알림. 처음 실행(기록 없음)에는 알리지 않고 현재 상태만 기억한다.
+ * 새 브리핑을 찾아 로컬 알림. 처음 실행(기준 없음)에는 알리지 않고 현재 상태만 기억한다.
  * 3-19: 세션(날짜·오전/오후)마다 1건으로 묶고, 조용한 시간에는 보내지 않으며, 알림을 끈 종목은 뺀다 (서버 알림과 같은 규칙).
  * 조용한 시간에 만들어진 브리핑도 "본 것"으로 적는다 — 아침에 한꺼번에 울리지 않게 (브리핑 탭에는 그대로 있다)
  */
@@ -59,7 +67,7 @@ export async function notifyNewBriefings(
   opts: { first?: boolean; prefs?: NotifyPrefs; rates?: Map<string, number | null>; now?: Date } = {},
 ): Promise<number> {
   const seen = await seenIds();
-  const isFirst = opts.first ?? seen.size === 0;
+  const isFirst = opts.first ?? !(await initialized(seen));
   const now = opts.now ?? new Date();
   const fresh = [];
   for (const item of latest) {
@@ -79,6 +87,8 @@ export async function notifyNewBriefings(
     });
   }
   await saveSeen(seen);
+  // 빈 목록이어도 기준을 적은 것으로 — 다음에 생기는 첫 브리핑을 알린다
+  if (isFirst) await AsyncStorage.setItem(INIT_KEY, "1").catch(() => undefined);
   return messages.length;
 }
 
@@ -127,6 +137,9 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
   if (status !== "granted") throw new Error("알림 권한이 거부되었습니다. 기기 설정에서 이 앱의 알림을 허용해 주세요.");
   const s = await BackgroundTask.getStatusAsync();
   if (s === BackgroundTask.BackgroundTaskStatus.Restricted) throw new Error("이 기기에서는 백그라운드 작업이 제한되어 있습니다. 배터리 최적화에서 이 앱을 제외해 주세요.");
+  // 알림 기준을 새로 잡는다 — 꺼져 있던 동안의 옛 기록으로 판단하지 않게 (목록을 못 받으면 첫 확인이 기준을 잡는다)
+  await AsyncStorage.removeItem(SEEN_KEY).catch(() => undefined);
+  await AsyncStorage.removeItem(INIT_KEY).catch(() => undefined);
   await AsyncStorage.setItem(LOCAL_MODE_KEY, "1");
   await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: BG_INTERVAL_MIN });
   await AsyncStorage.setItem(INTERVAL_KEY, String(BG_INTERVAL_MIN)).catch(() => undefined);
@@ -136,8 +149,11 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
   if (latest) await notifyNewBriefings(latest, { first: true });
 }
 
+/** 백그라운드 확인 알림만 끈다. 같은 태스크가 위젯도 15분마다 갱신하므로 Android 에서는 태스크를 남긴다 (N2) */
 export async function disableLocalBriefingAlerts(): Promise<void> {
   await AsyncStorage.removeItem(LOCAL_MODE_KEY).catch(() => undefined);
+  if (Platform.OS === "android") return ensureBackgroundTaskRegistered();
+  // 위젯이 없는 기기는 알림 때문에만 등록했으므로 해제
   try {
     if (await TaskManager.isTaskRegisteredAsync(BRIEFING_TASK)) await BackgroundTask.unregisterTaskAsync(BRIEFING_TASK);
   } catch {
