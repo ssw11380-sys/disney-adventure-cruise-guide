@@ -131,5 +131,20 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       await runBriefingCheck();
       expect(scheduled).toHaveLength(1);
     });
+
+    it("알림 규칙을 3번 연달아 못 받으면 예전처럼 종목마다 알린다", async () => {
+      await enableLocalBriefingAlerts();
+      const list = [...latest, ...newOnes(2)];
+      vi.stubGlobal("fetch", async (url: string) => {
+        if (url.endsWith("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+        if (url.endsWith("/api/notifications/settings")) return new Response("down", { status: 503 });
+        return new Response(JSON.stringify(list), { status: 200 });
+      });
+      await runBriefingCheck();
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(2);
+    });
   });
 });

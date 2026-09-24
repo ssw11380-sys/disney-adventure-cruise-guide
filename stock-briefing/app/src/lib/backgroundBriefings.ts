@@ -22,6 +22,9 @@ export const LOCAL_MODE_KEY = "push.localMode"; // "1" 이면 백그라운드 �
 /** 백그라운드 갱신 최소 간격(분). Android 가 허용하는 가장 짧은 값 */
 export const BG_INTERVAL_MIN = 15;
 const INTERVAL_KEY = "bg.intervalMin";
+/** 알림 규칙을 연달아 못 받은 횟수. 3번이면 규칙 없이 예전처럼 종목마다 알린다 (알림이 끝없이 밀리지 않게) */
+const PREFS_FAIL_KEY = "notify.prefsFail";
+export const PREFS_FAIL_LIMIT = 3;
 
 async function seenIds(): Promise<Set<number>> {
   try {
@@ -92,7 +95,10 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
       // 새 서버는 최신 브리핑 id 만 준다 → 아직 알리지 않은 id 가 있을 때만 전체 목록과 알림 규칙을 받아 알린다 (예전 서버는 briefings 가 전체 목록)
       const unseen = await hasUnseen(data.latestIds ?? data.briefings.flatMap((b) => (b.latest ? [b.latest.id] : [])));
       if (unseen) {
-        const prefs = await loadNotifyPrefs();
+        let prefs = await loadNotifyPrefs();
+        const fails = prefs ? 0 : Number((await AsyncStorage.getItem(PREFS_FAIL_KEY).catch(() => null)) ?? 0) + 1;
+        await AsyncStorage.setItem(PREFS_FAIL_KEY, String(fails)).catch(() => undefined);
+        if (!prefs && fails >= PREFS_FAIL_LIMIT) prefs = { ...DEFAULT_PREFS, digest: false, running: false };
         // 규칙을 못 받았거나 서버가 아직 브리핑을 만드는 중이면(17종목 약 7분) 이번엔 넘긴다 — 한 세션이 두 알림으로 쪼개지지 않게.
         // "본 것"으로 적지 않으므로 다음 확인(15분 뒤)에서 한 번에 알린다. 묶음을 끈 서버는 예전처럼 바로
         if (prefs && !(prefs.digest && prefs.running)) {

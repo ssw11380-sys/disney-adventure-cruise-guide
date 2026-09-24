@@ -357,8 +357,10 @@ export function useNotificationMutations() {
       onError: () => invalidate(),
       onSuccess: (data) => {
         // 아직 끝나지 않은 변경이 있으면 서버 응답으로 덮지 않는다 (앞 응답이 뒤 변경을 되돌려 보이지 않게). 마지막 것이 끝나면 다시 받는다
-        if (qc.isMutating({ mutationKey: [apiUrl, "updateNotificationSettings"] }) <= 1) qc.setQueryData([apiUrl, "notificationSettings"], data);
-        invalidate();
+        if (qc.isMutating({ mutationKey: [apiUrl, "updateNotificationSettings"] }) <= 1) {
+          qc.setQueryData([apiUrl, "notificationSettings"], data);
+          invalidate();
+        }
       },
     }),
     sendTest: useMutation({ mutationFn: api.sendTestNotification, onSuccess: invalidate }),
