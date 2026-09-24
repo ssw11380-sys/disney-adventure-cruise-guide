@@ -128,15 +128,64 @@ export function useTossStatus() {
   return useQuery({ queryKey: useKey("tossStatus"), queryFn: api.tossStatus, staleTime: 30_000, retry: 0 });
 }
 
+/**
+ * 종목 검색 (3-18): 종목 마스터 결과를 먼저(바로) 보여 주고, 외부(토스) 검색까지 합친 결과가 오면 바꾼다.
+ * 입력이 바뀌는 동안에는 이전 결과를 그대로 두어 목록이 깜빡이거나 스피너가 뜨지 않게 한다
+ */
 export function useSearch(q: string) {
   const api = useApi();
   const query = q.trim();
-  return useQuery({
+  const full = useQuery({
     queryKey: useKey("search", query),
     queryFn: () => api.searchStocks(query),
     enabled: query.length > 0,
     staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
   });
+  const local = useQuery({
+    queryKey: useKey("searchLocal", query),
+    retry: 0,
+    queryFn: () => api.searchStocksLocal(query),
+    enabled: query.length > 0,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
+  });
+  return pickSearch(query, full, local);
+}
+
+/**
+ * 보여 줄 검색 결과: 이번 입력의 전체 결과 → 이번 입력의 마스터 결과 → 이전 입력의 결과(깜빡임 없이, previous=true 로 흐리게).
+ * 전체 검색(토스)이 실패해도 마스터 결과가 있으면 그것을 끝난 결과로 보여 주고 error 에 실패를 남긴다
+ */
+export function pickSearch<T>(
+  query: string,
+  full: { data?: T; isPlaceholderData: boolean; isError: boolean; error: unknown },
+  local: { data?: T; isPlaceholderData: boolean; isError?: boolean },
+): { data: T | undefined; pending: boolean; previous: boolean; isError: boolean; error: unknown } {
+  const none = { data: undefined, pending: false, previous: false, isError: false, error: null };
+  if (!query) return none;
+  if (full.data !== undefined && !full.isPlaceholderData) return { ...none, data: full.data };
+  const localNow = local.data !== undefined && !local.isPlaceholderData;
+  if (full.isError) {
+    if (localNow) return { ...none, data: local.data, error: full.error };
+    if (local.isError || local.data === undefined) return { ...none, isError: true, error: full.error };
+    return { ...none, data: local.data, pending: true, previous: true };
+  }
+  if (localNow) return { ...none, data: local.data, pending: true };
+  const data = full.data ?? local.data;
+  return { ...none, data, pending: true, previous: data !== undefined };
+}
+
+/**
+ * 등록 종목 코드 (검색 화면의 "등록됨" 표시). 잔고 캐시를 쓰고 30초보다 오래됐으면 한 번 새로 받는다 —
+ * 상세에서 등록하고 돌아와도 바뀐 표시가 보이게 (등록·삭제는 잔고 캐시를 무효화한다)
+ */
+export function useRegisteredCodes(): { codes: Set<string>; refresh: () => void } {
+  const api = useApi();
+  const q = useQuery({ queryKey: useKey("stocks"), queryFn: api.listStocks, staleTime: 30_000, retry: 0 });
+  const codes = useMemo(() => new Set((q.data ?? []).map((s) => s.code)), [q.data]);
+  const { refetch } = q;
+  return { codes, refresh: () => void refetch() };
 }
 
 /** 발견 탭: 그 나라 장이 열려 있으면 30초, 아니면 5분마다 */

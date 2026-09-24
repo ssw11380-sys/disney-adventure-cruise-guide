@@ -41,7 +41,11 @@ async function main(): Promise<void> {
   void app.stockService
     .warmQuotes()
     .then(() => app.log.info(app.stockService.quoteStatus(), "현재가 미리 받기 완료"))
-    .catch((e) => app.log.warn({ err: e }, "현재가 미리 받기 실패"));
+    // 그다음 등록 종목의 기본 차트(일봉 800개)를 한 종목씩 받아 둔다 → 처음 여는 차트도 기다리지 않는다 (3-18)
+    .catch((e) => app.log.warn({ err: e }, "현재가 미리 받기 실패"))
+    .then(() => app.stockService.warmCandles())
+    .then(() => app.log.info(app.stockService.candleStatus(), "차트 미리 받기 완료"))
+    .catch((e) => app.log.warn({ err: e }, "차트 미리 받기 실패"));
   app.log.info(describeProviders(config), "데이터 소스");
   app.log.info(app.scheduler?.status() ?? {}, "브리핑 스케줄");
 }

@@ -308,6 +308,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     llmConfigured: opts.providers.generator.model !== "disabled",
     appErrors: await appErrors.counts(7).catch(() => null),
     quotes: stockService.quoteStatus(),
+    candles: stockService.candleStatus(),
     backup: await backups.status().catch(() => null),
     disclaimer: DISCLAIMER,
   });
