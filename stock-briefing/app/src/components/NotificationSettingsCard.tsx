@@ -81,6 +81,11 @@ export function NotificationSettingsCard() {
   };
 
   const s = settings.data;
+  const toggleAlerts = async (on: boolean) => {
+    await toggleDevice(on);
+    // 예전에 서버 발송만 꺼 둔 경우도 스위치 하나로 다시 켜지게
+    if (on && s && !s.pushEnabled) patch({ pushEnabled: true });
+  };
   // 지금 등록된 종목 중 끈 것만 센다 (삭제한 종목의 옛 기록은 세지 않게). 목록이 없으면 저장된 수
   const mutedCount = stocks.data ? stocks.data.filter((st) => s?.mutedCodes?.includes(st.code)).length : (s?.mutedCodes?.length ?? 0);
   const patch = (p: Parameters<typeof updateSettings.mutate>[0]) =>
@@ -116,7 +121,7 @@ export function NotificationSettingsCard() {
 
       <View style={styles.switchRow}>
         <View style={{ flex: 1 }}>
-          <Text style={{ color: t.ink, fontSize: font.body }}>이 기기에서 알림 받기</Text>
+          <Text style={{ color: t.ink, fontSize: font.body }}>브리핑 알림</Text>
           <Muted>
             {!tokenLoaded
               ? "확인 중…"
@@ -127,20 +132,21 @@ export function NotificationSettingsCard() {
                   : "브리핑 생성 시 요약 알림"}
           </Muted>
         </View>
-        <Toggle value={enabled} onValueChange={(v) => void toggleDevice(v)} disabled={busy || !tokenLoaded} />
+        {/* 알림 스위치는 하나 (3-21): 켜면 이 기기를 등록하고 서버 발송도 켠다. 끄면 이 기기만 뺀다 */}
+        <Toggle value={enabled && (s?.pushEnabled ?? true)} onValueChange={(v) => void toggleAlerts(v)} disabled={busy || !tokenLoaded} accessibilityLabel="브리핑 알림" />
       </View>
       {setupError ? <Text style={{ color: t.danger, fontSize: font.small }}>{setupError}</Text> : null}
       {localMode ? (
         <View style={{ gap: space.xs }}>
           <Pressable onPress={() => setShowGuide((v) => !v)} accessibilityRole="button">
-            <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showGuide ? "접기" : "즉시 푸시 설정 방법"}</Text>
+            <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showGuide ? "접기" : "즉시 푸시 설정 방법 (관리자용)"}</Text>
           </Pressable>
           {showGuide ? (
             <View style={{ gap: space.xs }}>
               <Muted>1. console.firebase.google.com → 프로젝트 만들기 → Android 앱 추가, 패키지명 com.stockbriefing.app → google-services.json 다운로드</Muted>
               <Muted>2. expo.dev → 프로젝트 stock-briefing → Environment variables → 이름 GOOGLE_SERVICES_JSON, 타입 File 로 업로드 (환경: preview)</Muted>
               <Muted>3. Firebase 프로젝트 설정 → 서비스 계정 → 새 비공개 키 생성 → expo.dev → Credentials → Android → FCM V1 service account key 에 업로드</Muted>
-              <Muted>4. 앱을 다시 빌드해 설치한 뒤 이 스위치를 껐다 켜면 “즉시 푸시”로 바뀝니다. 위 두 파일을 저에게 알려주시면 빌드는 제가 합니다.</Muted>
+              <Muted>4. 앱을 다시 빌드해 설치한 뒤 이 스위치를 껐다 켜면 “즉시 푸시”로 바뀝니다.</Muted>
             </View>
           ) : null}
         </View>
@@ -152,10 +158,6 @@ export function NotificationSettingsCard() {
         <Text style={{ color: t.danger, fontSize: font.small }}>{settings.error instanceof Error ? settings.error.message : "설정을 불러오지 못했습니다"}</Text>
       ) : s ? (
         <View style={{ gap: space.xs }}>
-          <View style={styles.switchRow}>
-            <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>서버에서 푸시 보내기</Text>
-            <Toggle value={s.pushEnabled} onValueChange={(v) => patch({ pushEnabled: v })} />
-          </View>
           <TimeRow label="오전 브리핑" time={s.morningTime} enabled={s.morningEnabled} onToggle={(v) => patch({ morningEnabled: v })} onPick={() => pickTime("morningTime")} />
           <TimeRow label="오후 브리핑" time={s.afternoonTime} enabled={s.afternoonEnabled} onToggle={(v) => patch({ afternoonEnabled: v })} onPick={() => pickTime("afternoonTime")} />
           <View style={styles.switchRow}>

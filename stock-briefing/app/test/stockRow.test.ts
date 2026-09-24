@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("react-native", () => ({ StyleSheet: { create: (x: unknown) => x, absoluteFill: {} }, Pressable: () => null, Text: () => null, View: () => null, Animated: { Value: class {}, View: () => null } }));
-vi.mock("@/theme", () => ({ useTheme: () => ({}), changeColor: () => "#000", font: {}, space: {} }));
+vi.mock("@/theme", () => ({ useTheme: () => ({}), changeColor: () => "#000", font: {}, space: {}, radius: {} }));
+vi.mock("@expo/vector-icons", () => ({ Ionicons: () => null }));
 
 describe("잔고 줄 다시 그리기 조건 (3-17)", () => {
   it("종목 객체·표시 설정·누름 함수가 같으면 다시 그리지 않는다", async () => {

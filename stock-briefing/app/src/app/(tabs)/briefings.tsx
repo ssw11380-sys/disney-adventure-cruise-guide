@@ -82,7 +82,7 @@ export default function BriefingsScreen() {
       {llmOff || (last && last.failed > 0) ? (
         <Card style={{ borderLeftWidth: 3, borderLeftColor: t.danger }}>
           <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>
-          <Muted>{llmOff ? "서버 변수 ANTHROPIC_API_KEY 가 비어 있습니다." : last!.lastError ?? ""}</Muted>
+          <Muted>{llmOff ? "브리핑을 만드는 모델 키가 서버에 설정되지 않아 새 브리핑을 만들 수 없습니다. 관리자에게 알려 주세요." : last!.lastError ?? ""}</Muted>
           {last ? <Muted>{formatDateKo(last.finishedAt, true)} · {last.session === "morning" ? "오전" : "오후"} · 성공 {last.ok} / 실패 {last.failed} / 건너뜀 {last.skipped}</Muted> : null}
         </Card>
       ) : null}

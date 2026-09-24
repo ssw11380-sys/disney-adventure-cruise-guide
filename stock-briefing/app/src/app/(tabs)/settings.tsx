@@ -179,7 +179,7 @@ function ApiUrlForm({
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
-        placeholder="https://xxx.up.railway.app"
+        placeholder="https://서버 주소"
         placeholderTextColor={t.muted}
         style={[styles.input, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]}
       />
@@ -190,7 +190,7 @@ function ApiUrlForm({
         autoCapitalize="none"
         autoCorrect={false}
         secureTextEntry
-        placeholder={authRequired ? "서버 .env 의 API_TOKEN" : "서버에 API_TOKEN 을 설정한 경우만"}
+        placeholder={authRequired ? "서버에 설정한 API 토큰" : "서버에 토큰을 설정한 경우만"}
         placeholderTextColor={t.muted}
         style={[styles.input, { color: t.ink, borderColor: authRequired && !tokenDraft ? t.danger : t.line, backgroundColor: t.surfaceAlt }]}
       />

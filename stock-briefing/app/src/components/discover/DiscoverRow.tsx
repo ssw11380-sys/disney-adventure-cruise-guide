@@ -1,13 +1,12 @@
 import React, { memo } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { DiscoverStock } from "@/api/types";
-import { FlashPrice } from "@/components/FlashPrice";
+import { LINE_COL, LINE_H, LineMark, LineValue, StockLine } from "@/components/StockLine";
 import { formatKrwCompact, formatPct, formatQuoteDisplay, formatVolume } from "@/lib/format";
-import { changeColor, font, space, useTheme } from "@/theme";
+import { changeColor, useTheme } from "@/theme";
 
 /** 발견 목록 한 줄의 높이 (FlatList getItemLayout 용) */
-export const DISCOVER_ROW_H = 58;
-export const DISCOVER_COL = { rank: 30, price: 100, right: 86 } as const;
+export const DISCOVER_ROW_H = LINE_H;
+export const DISCOVER_COL = LINE_COL;
 
 export type HoldingMark = "보유" | "관심" | null;
 
@@ -63,56 +62,22 @@ export const DiscoverRow = memo(function DiscoverRow({
         ? ""
         : `${formatVolume(item.volume)}주`;
   return (
-    <Pressable
+    <StockLine
+      rank={rank}
+      name={item.name}
+      sub={item.code}
+      badges={
+        <>
+          {mark ? <LineMark label={mark} color={mark === "보유" ? t.gold : t.accent} /> : null}
+          {item.newlyListed ? <LineMark label="신규상장" color={t.muted} /> : null}
+          {suspended ? <LineMark label="거래정지" color={t.muted} /> : null}
+        </>
+      }
+      price={{ value: item.price, text: formatQuoteDisplay(item.price, item.currency, fxRate, showKrw), color: c, rate: formatPct(item.changeRate), rateColor: c }}
+      right={<LineValue main={main} mainColor={t.ink} sub={sub} />}
       onPress={() => onPress(item)}
       onLongPress={onLongPress ? () => onLongPress(item) : undefined}
-      delayLongPress={350}
-      accessibilityRole="button"
       accessibilityLabel={`${rank ? `${rank}위 ` : ""}${item.name} ${formatPct(item.changeRate)}`}
-      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
-    >
-      {rank !== undefined ? (
-        <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
-          {rank}
-        </Text>
-      ) : null}
-      <View style={styles.name}>
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }} numberOfLines={1}>
-          {item.name}
-        </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
-          <Text style={{ color: t.muted, fontSize: font.tiny, fontVariant: ["tabular-nums"] }} numberOfLines={1}>
-            {item.code}
-          </Text>
-          {mark ? (
-            <Text style={[styles.mark, { color: mark === "보유" ? t.gold : t.accent, borderColor: mark === "보유" ? t.gold : t.accent }]}>{mark}</Text>
-          ) : null}
-          {item.newlyListed ? <Text style={[styles.mark, { color: t.muted, borderColor: t.lineStrong }]}>신규상장</Text> : null}
-          {suspended ? <Text style={[styles.mark, { color: t.muted, borderColor: t.lineStrong }]}>거래정지</Text> : null}
-        </View>
-      </View>
-      <View style={[styles.num, { width: DISCOVER_COL.price }]}>
-        <FlashPrice value={item.price} text={formatQuoteDisplay(item.price, item.currency, fxRate, showKrw)} style={[styles.main, { color: c }]} />
-        <Text style={[styles.sub, { color: c }]}>{formatPct(item.changeRate)}</Text>
-      </View>
-      <View style={[styles.num, { width: DISCOVER_COL.right }]}>
-        <Text style={[styles.main, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit>
-          {main}
-        </Text>
-        <Text style={[styles.sub, { color: t.muted }]} numberOfLines={1}>
-          {sub}
-        </Text>
-      </View>
-    </Pressable>
+    />
   );
-});
-
-const styles = StyleSheet.create({
-  row: { flexDirection: "row", alignItems: "center", height: DISCOVER_ROW_H, paddingHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth },
-  rank: { width: DISCOVER_COL.rank, fontSize: font.small, fontWeight: "800", fontVariant: ["tabular-nums"] },
-  name: { flex: 1, gap: space.xxs, paddingRight: space.sm },
-  mark: { fontSize: font.tiny, fontWeight: "800", borderWidth: 1, borderRadius: 2, paddingHorizontal: space.xs, lineHeight: 14, overflow: "hidden", flexShrink: 0 },
-  num: { alignItems: "flex-end", gap: space.xxs },
-  main: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  sub: { fontSize: font.small, fontVariant: ["tabular-nums"] },
 });

@@ -6,10 +6,11 @@ import { ApiRequestError } from "@/api/client";
 import { useRegisteredCodes, useSearch, useStockMutations } from "@/api/hooks";
 import type { ListedStock } from "@/api/types";
 import { Screen } from "@/components/Screen";
-import { Badge, Button, Card, ChangeText, Muted } from "@/components/ui";
-import { formatPct, formatPrice, isUsMarket } from "@/lib/format";
+import { LineHead, LineMark, StockLine } from "@/components/StockLine";
+import { Button, Card, Muted } from "@/components/ui";
+import { formatPct, formatQuote, isUsMarket } from "@/lib/format";
 import { useRecentSearches, type RecentStock } from "@/lib/recentSearch";
-import { font, radius, space, useTheme } from "@/theme";
+import { changeColor, font, radius, space, useTheme } from "@/theme";
 
 /**
  * 종목 검색: 결과를 누르면 바로 상세·차트로, 오른쪽 "등록"으로 수량/평단(선택)을 넣어 등록 (3-18).
@@ -71,8 +72,9 @@ export default function AddStockScreen() {
   };
 
   return (
-    <Screen scroll={false} contentStyle={{ padding: space.lg, gap: space.md }}>
-      <View style={[styles.search, { borderColor: t.line, backgroundColor: t.surface }]}>
+    // 결과 줄은 다른 목록(잔고·발견)과 같은 공용 줄이라 화면 가장자리까지 (3-21). 검색칸·안내만 안쪽 여백
+    <Screen scroll={false} contentStyle={{ paddingVertical: space.lg, gap: space.md }}>
+      <View style={[styles.search, { borderColor: t.line, backgroundColor: t.surface, marginHorizontal: space.lg }]}>
         <Ionicons name="search" size={18} color={t.muted} />
         <TextInput
           value={q}
@@ -134,22 +136,24 @@ export default function AddStockScreen() {
             data={recent.items}
             keyExtractor={(s) => s.code}
             keyboardShouldPersistTaps="handled"
-            ItemSeparatorComponent={() => <View style={{ height: space.xs }} />}
             ListHeaderComponent={
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingBottom: space.xs }}>
-                <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>최근 검색</Text>
-                <Pressable onPress={recent.clear} hitSlop={8} accessibilityRole="button" accessibilityLabel="최근 검색 지우기">
-                  <Muted>지우기</Muted>
-                </Pressable>
-              </View>
+              <>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingBottom: space.xs, paddingHorizontal: space.lg }}>
+                  <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>최근 검색</Text>
+                  <Pressable onPress={recent.clear} hitSlop={8} accessibilityRole="button" accessibilityLabel="최근 검색 지우기">
+                    <Muted>지우기</Muted>
+                  </Pressable>
+                </View>
+                <LineHead right="등록" />
+              </>
             }
             renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => setSelected({ ...item, isinCode: null, groupCode: null })} />}
           />
         ) : (
-          <Muted>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
+          <Muted style={{ paddingHorizontal: space.lg }}>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
         )
       ) : search.isError ? (
-        <Text style={{ color: t.danger }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>
+        <Text style={{ color: t.danger, paddingHorizontal: space.lg }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>
       ) : (
         <FlatList
           data={search.data?.results ?? []}
@@ -157,14 +161,14 @@ export default function AddStockScreen() {
           style={{ opacity: search.previous ? 0.55 : 1 }}
           keyExtractor={(s) => s.code}
           keyboardShouldPersistTaps="handled"
-          ItemSeparatorComponent={() => <View style={{ height: space.xs }} />}
+          ListHeaderComponent={(search.data?.results.length ?? 0) > 0 ? <LineHead right="등록" /> : null}
           // 결과가 아직 없을 때만 안내 (입력이 바뀌는 동안은 이전 결과를 그대로 둔다 — 스피너·깜빡임 없음)
-          ListEmptyComponent={pending ? null : search.error ? <Text style={{ color: t.danger }}>토스 검색에 실패했고 종목 마스터에도 없습니다. 잠시 뒤 다시 검색해 보세요.</Text> : <Muted>검색 결과가 없습니다.</Muted>}
+          ListEmptyComponent={pending ? null : search.error ? <Text style={{ color: t.danger, paddingHorizontal: space.lg }}>토스 검색에 실패했고 종목 마스터에도 없습니다. 잠시 뒤 다시 검색해 보세요.</Text> : <Muted style={{ paddingHorizontal: space.lg }}>검색 결과가 없습니다.</Muted>}
           ListFooterComponent={
             (search.data?.results.length ?? 0) === 0 ? null : search.pending ? (
-              <Muted style={{ fontSize: font.tiny, paddingTop: space.xs }}>토스 검색 결과를 합치는 중</Muted>
+              <Muted style={{ fontSize: font.tiny, paddingTop: space.xs, paddingHorizontal: space.lg }}>토스 검색 결과를 합치는 중</Muted>
             ) : search.error ? (
-              <Muted style={{ fontSize: font.tiny, paddingTop: space.xs }}>토스 검색 실패 — 종목 마스터 결과만 보여 줍니다</Muted>
+              <Muted style={{ fontSize: font.tiny, paddingTop: space.xs, paddingHorizontal: space.lg }}>토스 검색 실패 — 종목 마스터 결과만 보여 줍니다</Muted>
             ) : null
           }
           renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => setSelected(item)} />}
@@ -174,45 +178,36 @@ export default function AddStockScreen() {
   );
 }
 
-/** 검색 결과 한 줄: 누르면 상세, 오른쪽은 등록됨 표시 또는 "등록" 버튼 */
+/** 검색 결과 한 줄 (공용 StockLine): 누르면 상세, 오른쪽 열은 등록됨 표시 또는 "등록" 버튼 */
 function ResultRow({ item, registered, onOpen, onRegister }: { item: RecentStock & Partial<ListedStock>; registered: boolean; onOpen: () => void; onRegister: () => void }) {
   const t = useTheme();
+  const us = isUsMarket(item.market);
+  const c = changeColor(t, item.changeRate ?? null);
   return (
-    <Pressable
+    <StockLine
+      name={item.name}
+      nameBadge={<LineMark label={us ? "US" : "KR"} color={us ? t.accent : t.gold} />}
+      sub={`${item.code} · ${item.market}`}
+      badges={item.groupCode === "EF" ? <LineMark label="ETF" color={t.muted} /> : null}
+      price={item.price ? { value: item.price, text: formatQuote(item.price, item.currency), color: c, rate: formatPct(item.changeRate ?? null), rateColor: c } : null}
+      right={
+        registered ? (
+          <LineMark label="등록됨" color={t.accent} />
+        ) : (
+          <Pressable onPress={onRegister} hitSlop={8} accessibilityRole="button" accessibilityLabel={`${item.name} 등록`} style={[styles.addBtn, { borderColor: t.line }]}>
+            <Ionicons name="add" size={font.body} color={t.ink} />
+            <Text style={{ color: t.ink, fontSize: font.tiny, fontWeight: "600" }}>등록</Text>
+          </Pressable>
+        )
+      }
       onPress={onOpen}
-      accessibilityRole="button"
       accessibilityLabel={`${item.name}, ${item.code}${registered ? ", 등록됨" : ""}. 누르면 상세 보기`}
       // 화면 읽기 프로그램에서도 줄 안의 "등록" 버튼을 쓸 수 있게
       accessibilityActions={registered ? undefined : [{ name: "register", label: "등록" }]}
-      onAccessibilityAction={(e) => {
-        if (e.nativeEvent.actionName === "register") onRegister();
+      onAccessibilityAction={(name) => {
+        if (name === "register") onRegister();
       }}
-      style={({ pressed }) => [styles.result, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.line }]}>
-      <View style={{ flex: 1 }}>
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }} numberOfLines={1}>
-          {item.name}
-        </Text>
-        <Muted>
-          {item.code} · {item.market}
-        </Muted>
-      </View>
-      {item.price ? (
-        <View style={{ alignItems: "flex-end" }}>
-          <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{formatPrice(item.price, item.currency)}</Text>
-          <ChangeText value={item.changeRate ?? null} text={formatPct(item.changeRate ?? null)} style={{ fontSize: font.tiny }} />
-        </View>
-      ) : null}
-      {isUsMarket(item.market) ? <Badge tone="warn">미국 · $</Badge> : null}
-      {item.groupCode === "EF" ? <Badge>ETF</Badge> : null}
-      {registered ? (
-        <Badge tone="good">등록됨</Badge>
-      ) : (
-        <Pressable onPress={onRegister} hitSlop={8} accessibilityRole="button" accessibilityLabel={`${item.name} 등록`} style={[styles.addBtn, { borderColor: t.line }]}>
-          <Ionicons name="add" size={16} color={t.ink} />
-          <Text style={{ color: t.ink, fontSize: font.tiny, fontWeight: "600" }}>등록</Text>
-        </Pressable>
-      )}
-    </Pressable>
+    />
   );
 }
 
@@ -221,7 +216,6 @@ const styles = StyleSheet.create({
   search: { flexDirection: "row", alignItems: "center", gap: space.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.md },
   input: { flex: 1, paddingVertical: space.md, fontSize: font.body },
   field: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
-  result: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, borderRadius: radius.sm, borderWidth: StyleSheet.hairlineWidth },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
