@@ -31,6 +31,8 @@ RSI 수준(과매수/중립/과매도)과 MACD 신호선 관계.
 종목: {{stock_name}} ({{stock_code}})
 기준일: {{date}}
 데이터 미확인 항목: {{missing_list}}
+장 상태: {{market_state}}
+제공되지 않는 항목(실패 아님, 해당 섹션에 사유를 한 줄로): {{notes_list}}
 
 데이터(JSON):
 ```json

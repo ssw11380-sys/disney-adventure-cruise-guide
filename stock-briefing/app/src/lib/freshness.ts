@@ -133,3 +133,13 @@ export function staleQuoteCount(list: readonly { quote: { stale?: boolean } | nu
 export function holdingsSuffix(o: { held: number; watch: number; stale: number }): string {
   return `보유 ${o.held}${o.watch ? ` · 관심 ${o.watch}` : ""}${o.stale ? ` · 시세 지연 ${o.stale}` : ""}`;
 }
+
+/** 설정 "토스 대조" 줄: "차이 -1,234원 (0.01%) · 9월 28일 (월) 10:20" (시세가 빠진 비교는 따로 표시) */
+export function reconcileLabel(r: { last: { at: string; diffKrw: number; diffPct: number; missing: number; qtyMismatch?: string[] } | null } | null | undefined, when: (iso: string) => string): string {
+  if (!r?.last) return "아직 없음 (동기화 뒤 표시)";
+  const l = r.last;
+  if (l.qtyMismatch?.length) return `보유 수량이 토스와 다른 종목 ${l.qtyMismatch.length}개 · ${when(l.at)}`;
+  if (l.missing > 0) return `시세 지연 등으로 이번엔 비교 못 함 · ${when(l.at)}`;
+  const sign = l.diffKrw > 0 ? "+" : l.diffKrw < 0 ? "-" : "";
+  return `차이 ${sign}${Math.abs(l.diffKrw).toLocaleString("ko-KR")}원 (${sign}${Math.abs(l.diffPct).toFixed(2)}%) · ${when(l.at)}`;
+}

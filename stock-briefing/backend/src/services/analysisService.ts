@@ -76,6 +76,8 @@ export class AnalysisService {
         stock_code: stock.code,
         date: seoulDate(this.now()),
         missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
+        notes_list: snapshot.notes?.length ? snapshot.notes.join(" / ") : "없음",
+        market_state: snapshot.marketState?.label ?? "확인 안 됨",
         data_json: JSON.stringify(snapshotForPrompt(snapshot, kind), null, 1),
       }),
       maxTokens: 4096,

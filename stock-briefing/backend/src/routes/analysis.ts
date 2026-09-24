@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
+import { NotListedError } from "../lib/errors.js";
 import type { FinancialsProvider } from "../providers/dart/types.js";
 import type { NewsProvider } from "../providers/news/types.js";
 import type { AnalysisService } from "../services/analysisService.js";
@@ -39,7 +40,7 @@ export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app,
     const fin = kr ? financials : (financialsUs ?? null);
     const [newsRes, discRes] = await Promise.allSettled([
       news.forStock ? news.forStock({ code, name, ...(registered?.market ? { market: registered.market } : {}) }, 15) : news.search(name, 15),
-      fin ? fin.getDisclosures(code, 30, 15) : Promise.reject(new Error(kr ? "DART_API_KEY 가 설정되지 않았습니다" : "미국 공시 소스가 없습니다")),
+      fin ? fin.getDisclosures(code, 30, 15) : Promise.reject(new Error(kr ? "공시는 OpenDART 키를 등록하면 볼 수 있습니다" : "미국 공시 소스가 없습니다")),
     ]);
     return {
       code,
@@ -47,7 +48,12 @@ export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app,
       news: newsRes.status === "fulfilled" ? newsRes.value : [],
       newsError: newsRes.status === "rejected" ? String(newsRes.reason?.message ?? newsRes.reason) : null,
       disclosures: discRes.status === "fulfilled" ? discRes.value : [],
-      disclosuresError: discRes.status === "rejected" ? String(discRes.reason?.message ?? discRes.reason) : null,
+      disclosuresError:
+        discRes.status === "rejected"
+          ? discRes.reason instanceof NotListedError
+            ? "SEC 에서 찾지 못한 종목(ETF 등)이라 공시가 없습니다"
+            : String(discRes.reason?.message ?? discRes.reason)
+          : null,
     };
   });
 };

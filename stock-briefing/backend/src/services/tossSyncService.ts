@@ -330,6 +330,8 @@ export class HoldingsAutoSync {
       calendar?: MarketCalendar | null;
       /** 동기화가 실제로 무언가를 바꿨을 때 (실시간 구독 갱신 등) */
       afterSync?: (r: ImportResult) => Promise<void>;
+      /** 동기화가 성공할 때마다 (토스 대조 등). 실패해도 동기화는 성공으로 둔다 */
+      onResult?: (r: ImportResult) => Promise<void>;
       intervalMin: number;
       idleIntervalMin?: number;
       startupDelayMs?: number;
@@ -420,6 +422,8 @@ export class HoldingsAutoSync {
           this.deps.log?.info({ trigger, added: r.added, updated: r.updated, removed: r.removed }, "토스 보유 종목 동기화");
           await this.deps.afterSync?.(r);
         }
+        // 대조처럼 시세를 다시 받는 뒷일은 기다리지 않는다 (수동 동기화·브리핑 전 동기화가 느려지지 않게)
+        void this.deps.onResult?.(r).catch((e: unknown) => this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "동기화 후 처리 실패"));
         return r;
       } catch (e) {
         this.lastError = e instanceof Error ? e.message : String(e);

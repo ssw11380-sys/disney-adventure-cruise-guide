@@ -3,13 +3,14 @@ import type { DartProvider } from "../providers/dart/dart.js";
 import type { TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import type { TossRealtime } from "../providers/market/tossRealtime.js";
 import type { BackupService } from "../services/backupService.js";
+import type { ReconcileService } from "../services/reconcileService.js";
 import type { StockService } from "../services/stockService.js";
 import type { HoldingsAutoSync, TossSyncService } from "../services/tossSyncService.js";
 
 export interface AdminDeps {
   service: StockService;
   dart: DartProvider | null;
-  toss?: { provider: TossOpenApiProvider; sync: TossSyncService; autoSync: HoldingsAutoSync; live: TossRealtime | null; outboundIp: () => Promise<string | null> } | null;
+  toss?: { provider: TossOpenApiProvider; sync: TossSyncService; autoSync: HoldingsAutoSync; live: TossRealtime | null; outboundIp: () => Promise<string | null>; reconcile: ReconcileService } | null;
   /** 서버 공인 IP 조회 (키가 없을 때도 앱 카드에 허용 IP 등록용으로 보여 준다) */
   outboundIp?: () => Promise<string | null>;
   backups?: BackupService;
@@ -36,7 +37,15 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
   app.post("/master/refresh", async () => service.refreshMaster());
 
   /** 토스증권 Open API 상태: 키 설정 여부, 토큰/마지막 오류, 허용 IP 에 등록할 서버 공인 IP, 실시간 구독 */
-  app.get("/toss/status", async () => tossStatus(toss, outboundIp ? await outboundIp() : toss ? await toss.outboundIp() : null));
+  app.get("/toss/status", async () => ({
+    ...tossStatus(toss, outboundIp ? await outboundIp() : toss ? await toss.outboundIp() : null),
+    reconcile: toss ? await toss.reconcile.status().catch(() => null) : null,
+  }));
+  /** 토스 대조 기록 (최근 순) */
+  app.get("/toss/reconcile", async (_req, reply) => {
+    if (!toss) return reply.code(503).send({ error: "TOSS_DISABLED", message: "TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 설정되지 않았습니다" });
+    return { status: await toss.reconcile.status(), history: (await toss.reconcile.history()).slice(-50).reverse() };
+  });
 
   /** 토스증권 계좌의 보유 종목을 등록 종목으로 가져온다 (수량·평단 동기화) */
   app.post("/toss/import-holdings", async (_req, reply) => {

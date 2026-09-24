@@ -493,6 +493,14 @@ export class StockService {
     return q;
   }
 
+  /** 현재가를 새로 받은 뒤(최대 8초) 잔고 목록 — 토스 대조처럼 지금 값이 필요할 때 */
+  async listWithFreshQuotes(): Promise<RegisteredWithQuote[]> {
+    await this.hydrate();
+    const codes = (await this.list()).map((s) => s.code);
+    if (codes.length) await within(this.refreshQuotes(codes), 8_000, undefined);
+    return this.listWithQuotes();
+  }
+
   /** 기동 직후: DB 캐시를 메모리로 올리고 등록 종목 현재가를 한 번 받아 둔다 (첫 요청이 기다리지 않게) */
   async warmQuotes(): Promise<void> {
     await this.hydrate();
