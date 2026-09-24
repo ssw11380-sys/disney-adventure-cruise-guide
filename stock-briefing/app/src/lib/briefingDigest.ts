@@ -70,7 +70,7 @@ export function buildDigest(session: "morning" | "afternoon", date: string, item
   if (top.length) lines.push(`변동 상위 ${top.map((i) => `${i.name} ${formatRate(i.changeRate!)}`).join(" · ")}`);
   const first = (ranked[0]!.summary.split("\n")[0] ?? "").trim();
   if (first) lines.push(`${ranked[0]!.name}: ${first}`);
-  return { title: `${label} 브리핑 ${items.length}종목`, body: lines.join("\n"), data: { type: "briefingDigest", session, date, count: items.length, briefingId: ranked[0]!.briefingId } };
+  return { title: `${label} 브리핑 ${items.length}종목`, body: lines.join("\n"), data: { type: "briefing", digest: true, session, date, count: items.length, briefingId: ranked[0]!.briefingId, code: ranked[0]!.code } };
 }
 
 /** 새 브리핑들을 세션(날짜·오전/오후)별로 묶어 알림 목록으로. 조용한 시간이면 빈 목록, 끈 종목은 뺀다 (묶음이 켜져 있을 때) */
@@ -90,4 +90,15 @@ export function planNotifications(
     groups.set(k, [...(groups.get(k) ?? []), f]);
   }
   return [...groups.values()].map((g) => buildDigest(g[0]!.session, g[0]!.date, g)!);
+}
+
+/** 브리핑 시간이 조용한 시간 안이면 알림이 가지 않는다고 미리 알린다 (예: 오전 06:30) */
+export function quietWarnings(s: { quietEnabled?: boolean; quietStart?: string; quietEnd?: string; morningTime: string; afternoonTime: string; morningEnabled: boolean; afternoonEnabled: boolean }): string[] {
+  if (!s.quietEnabled || !s.quietStart || !s.quietEnd) return [];
+  const q = { quietEnabled: true, quietStart: s.quietStart, quietEnd: s.quietEnd };
+  const at = (hhmm: string) => new Date(`2026-01-05T${hhmm}:00+09:00`);
+  const out: string[] = [];
+  if (s.morningEnabled && inQuietHours(q, at(s.morningTime))) out.push(`오전 브리핑(${s.morningTime})이 조용한 시간 안이라 알림이 가지 않습니다`);
+  if (s.afternoonEnabled && inQuietHours(q, at(s.afternoonTime))) out.push(`오후 브리핑(${s.afternoonTime})이 조용한 시간 안이라 알림이 가지 않습니다`);
+  return out;
 }

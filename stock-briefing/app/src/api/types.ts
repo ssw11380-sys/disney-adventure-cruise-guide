@@ -329,8 +329,12 @@ export interface NotificationSettings {
   quietEnd?: string;
   mutedCodes?: string[];
   digest?: boolean;
+  /** 브리핑 실행 중 (3-19 서버부터) */
+  running?: boolean;
   schedule: Health["schedule"];
 }
+
+export type NotificationSettingsPatch = Partial<Omit<NotificationSettings, "schedule" | "digest" | "running">> & { mute?: { code: string; muted: boolean } };
 
 export interface SendSummary {
   sent: number;

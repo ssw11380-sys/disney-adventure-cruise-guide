@@ -92,9 +92,14 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
       // 새 서버는 최신 브리핑 id 만 준다 → 아직 알리지 않은 id 가 있을 때만 전체 목록과 알림 규칙을 받아 알린다 (예전 서버는 briefings 가 전체 목록)
       const unseen = await hasUnseen(data.latestIds ?? data.briefings.flatMap((b) => (b.latest ? [b.latest.id] : [])));
       if (unseen) {
-        const [latest, prefs] = await Promise.all([data.latestIds ? loadLatestBriefings() : Promise.resolve(data.briefings), loadNotifyPrefs()]);
-        const rates = new Map(data.stocks.map((s) => [s.code, s.quote?.changeRate ?? null] as const));
-        await notifyNewBriefings(latest, { prefs, rates });
+        const prefs = await loadNotifyPrefs();
+        // 규칙을 못 받았거나 서버가 아직 브리핑을 만드는 중이면(17종목 약 7분) 이번엔 넘긴다 — 한 세션이 두 알림으로 쪼개지지 않게.
+        // "본 것"으로 적지 않으므로 다음 확인(15분 뒤)에서 한 번에 알린다. 묶음을 끈 서버는 예전처럼 바로
+        if (prefs && !(prefs.digest && prefs.running)) {
+          const latest = data.latestIds ? await loadLatestBriefings() : data.briefings;
+          const rates = new Map(data.stocks.map((s) => [s.code, s.quote?.changeRate ?? null] as const));
+          await notifyNewBriefings(latest, { prefs, rates });
+        }
       }
     }
     await refreshWidgets({ stocks: data.stocks, showKrw: data.showKrw, afterCost: data.afterCost, filled: data.filled, market: data.market, briefings: data.briefings });

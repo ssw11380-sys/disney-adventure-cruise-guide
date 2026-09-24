@@ -56,6 +56,9 @@ export function timeToCron(time: string, weekdaysOnly: boolean): string {
 }
 
 export class NotificationSettingsStore {
+  /** 바꾸기는 한 줄로 (읽고-고쳐-쓰기 사이에 다른 변경이 사라지지 않게) */
+  private queue: Promise<unknown> = Promise.resolve();
+
   constructor(
     private readonly db: Db,
     private readonly defaults: NotificationSettings,
@@ -72,8 +75,17 @@ export class NotificationSettingsStore {
     }
   }
 
-  async update(patch: Partial<NotificationSettings>): Promise<NotificationSettings> {
-    const next = notificationSettingsSchema.parse({ ...(await this.get()), ...stripUndefined(patch) });
+  /** mute: 종목 하나만 알림 끄기/켜기 (목록 전체를 보내지 않아 연달아 눌러도 앞의 변경을 잃지 않는다) */
+  update(patch: Partial<NotificationSettings>, mute?: { code: string; muted: boolean }): Promise<NotificationSettings> {
+    const run = this.queue.then(() => this.apply(patch, mute));
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async apply(patch: Partial<NotificationSettings>, mute?: { code: string; muted: boolean }): Promise<NotificationSettings> {
+    const merged = { ...(await this.get()), ...stripUndefined(patch) };
+    if (mute) merged.mutedCodes = mute.muted ? [...new Set([...merged.mutedCodes, mute.code])] : merged.mutedCodes.filter((c) => c !== mute.code);
+    const next = notificationSettingsSchema.parse(merged);
     const value = JSON.stringify(next);
     await this.db
       .insertInto("meta")

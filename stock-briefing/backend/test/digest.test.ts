@@ -41,7 +41,7 @@ describe("브리핑 알림 묶음 (3-19)", () => {
     const m = buildDigest("afternoon", "2026-09-22", [item("A", "가", 1.2, 1), item("B", "나", -4.5, 2), item("C", "다", null, 3), item("D", "라", 3.01, 4)])!;
     expect(m.title).toBe("오후 브리핑 4종목");
     expect(m.body).toBe("변동 상위 나 -4.50% · 라 +3.01%\n나: 나 요약 첫 줄");
-    expect(m.data).toMatchObject({ type: "briefingDigest", session: "afternoon", count: 4, briefingId: 2 });
+    expect(m.data).toMatchObject({ type: "briefing", digest: true, session: "afternoon", count: 4, briefingId: 2 });
     const one = buildDigest("morning", "2026-09-22", [item("A", "가", 1.2, 7)])!;
     expect(one).toMatchObject({ title: "가 오전 브리핑", body: "가 요약 첫 줄\n둘째 줄", data: { type: "briefing", briefingId: 7 } });
     expect(buildDigest("morning", "2026-09-22", [])).toBeNull();
@@ -107,6 +107,47 @@ describe("브리핑 알림 묶음 (3-19)", () => {
       expect((await app.inject({ method: "GET", url: "/api/notifications/settings" })).json()).toMatchObject({ digest: false });
       await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "afternoon" } });
       expect(push.sent.map((m) => m.title).sort()).toEqual(["SK하이닉스 오후 브리핑", "삼성전자 오후 브리핑", "에코프로비엠 오후 브리핑"]);
+    });
+
+    it("상세의 '이 종목 다시 만들기'(일부 종목 수동 실행)는 푸시하지 않는다, 예약 실행은 보낸다", async () => {
+      const push = await setup("2026-09-22T16:00:00+09:00");
+      await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "afternoon", codes: ["005930"], force: true } });
+      expect(push.sent).toHaveLength(0);
+      await app.briefingService.runSession("afternoon", { trigger: "schedule" });
+      expect(push.sent.map((m) => m.title)).toEqual(["오후 브리핑 2종목"]); // 이미 만든 삼성전자는 건너뜀
+    });
+
+    it("종목 하나씩 끄기(mute)는 연달아 보내도 모두 남고, 잘못된 코드는 400, 실행 중 여부를 준다", async () => {
+      await setup("2026-09-22T16:00:00+09:00");
+      const puts = ["000660", "005930", "247540"].map((code) => app.inject({ method: "PUT", url: "/api/notifications/settings", payload: { mute: { code, muted: true } } }));
+      await Promise.all(puts);
+      const s = (await app.inject({ method: "GET", url: "/api/notifications/settings" })).json();
+      expect([...s.mutedCodes].sort()).toEqual(["000660", "005930", "247540"]);
+      expect(s.running).toBe(false);
+      await app.inject({ method: "PUT", url: "/api/notifications/settings", payload: { mute: { code: "005930", muted: false } } });
+      expect((await app.inject({ method: "GET", url: "/api/notifications/settings" })).json().mutedCodes.sort()).toEqual(["000660", "247540"]);
+      expect((await app.inject({ method: "PUT", url: "/api/notifications/settings", payload: { mutedCodes: ["$$$"] } })).statusCode).toBe(400);
+    });
+
+    it("예전에 저장한 설정(새 항목 없음)을 읽으면 3-19 기본값으로 채운다", async () => {
+      await setup("2026-09-22T16:00:00+09:00");
+      const old = { morningTime: "06:30", afternoonTime: "16:00", morningEnabled: true, afternoonEnabled: true, weekdaysOnly: true, pushEnabled: true };
+      await db.insertInto("meta").values({ key: "notification_settings", value: JSON.stringify(old) }).onConflict((oc) => oc.column("key").doUpdateSet({ value: JSON.stringify(old) })).execute();
+      expect((await app.inject({ method: "GET", url: "/api/notifications/settings" })).json()).toMatchObject({ morningTime: "06:30", quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", mutedCodes: [] });
+    });
+
+    it("실행 도중 플래그를 바꿔도 시작할 때 값으로: 중복·누락 없음", async () => {
+      const push = await setup("2026-09-22T16:00:00+09:00");
+      await app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingDigest: false } });
+      let flipped = false;
+      app.briefingService.onBriefing(async () => {
+        if (flipped) return;
+        flipped = true;
+        await app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingDigest: true } });
+      });
+      await app.briefingService.runSession("afternoon", { trigger: "schedule" });
+      expect(push.sent).toHaveLength(3); // 시작 때 꺼짐 → 종목마다 3건, 묶음 0건
+      expect(push.sent.every((m) => m.title.endsWith("오후 브리핑") && !m.title.includes("종목"))).toBe(true);
     });
   });
 });

@@ -20,9 +20,12 @@ export interface SendSummary {
  *  - briefingDigest 플래그가 켜져 있으면(기본) 실행 한 번(세션)이 끝날 때 1건으로 묶어 보낸다: "오후 브리핑 17종목 · 변동 상위 2개".
  *    조용한 시간(기본 22~07시, 한국 시간)에는 보내지 않고, 알림을 끈 종목은 빼고 센다 (3-19)
  *  - 꺼져 있으면 예전처럼 브리핑이 생성될 때마다 종목별로 1건
+ *  - 묶음일 때 상세의 "이 종목 다시 만들기"(일부 종목 수동 실행)는 푸시하지 않는다 — 누른 사람이 화면에서 결과를 본다
  * 영수증(receipt)은 전송 후 일정 시간 뒤에 확인해서 DeviceNotRegistered 기기를 비활성화한다.
  */
 export class NotificationService {
+  /** 실행 중인 세션이 시작할 때 읽은 briefingDigest 값 (실행 도중 플래그를 바꿔도 알림이 겹치거나 빠지지 않게) */
+  private sessionDigest: boolean | null = null;
   private pendingReceipts: Array<{ receiptId: string; token: string }> = [];
   private receiptTimer: NodeJS.Timeout | null = null;
 
@@ -43,7 +46,7 @@ export class NotificationService {
   /** BriefingService.onBriefing 에 붙이는 리스너 */
   readonly onBriefing = async (b: Briefing): Promise<void> => {
     if (b.status !== "ok") return;
-    if (await this.digestOn()) return; // 세션이 끝날 때 묶어서 (onSession)
+    if (this.sessionDigest ?? (await this.digestOn())) return; // 세션이 끝날 때 묶어서 (onSession)
     const s = await this.deps.settings.get();
     if (!s.pushEnabled) return;
     const sessionLabel = b.session === "morning" ? "오전" : "오후";
@@ -55,8 +58,15 @@ export class NotificationService {
   };
 
   /** BriefingService.onSessionDone 에 붙이는 리스너: 세션 알림 1건 */
+  readonly onSessionStart = async (): Promise<void> => {
+    this.sessionDigest = await this.digestOn();
+  };
+
   readonly onSession = async (done: SessionDone): Promise<void> => {
-    if (!(await this.digestOn())) return;
+    const digest = this.sessionDigest ?? (await this.digestOn());
+    this.sessionDigest = null;
+    if (!digest) return;
+    if (done.trigger === "manual" && done.partial) return;
     const s = await this.deps.settings.get();
     if (!s.pushEnabled) return;
     const now = this.deps.now?.() ?? new Date();

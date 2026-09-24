@@ -3,6 +3,7 @@ import * as Notifications from "expo-notifications";
 import React, { useEffect, useState } from "react";
 import { Alert, Platform, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { useApi, useNotificationMutations, useNotificationSettings, useRegisteredStocks } from "@/api/hooks";
+import { quietWarnings } from "@/lib/briefingDigest";
 import { disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
 import { font, radius, space, useTheme } from "@/theme";
@@ -29,7 +30,8 @@ export function NotificationSettingsCard() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
   const [showMuted, setShowMuted] = useState(false);
-  const stocks = useRegisteredStocks();
+  // 종목 목록은 "종목별 알림"을 펼쳤을 때만 받는다
+  const stocks = useRegisteredStocks(showMuted);
 
   useEffect(() => {
     let alive = true;
@@ -79,6 +81,8 @@ export function NotificationSettingsCard() {
   };
 
   const s = settings.data;
+  // 지금 등록된 종목 중 끈 것만 센다 (삭제한 종목의 옛 기록은 세지 않게). 목록이 없으면 저장된 수
+  const mutedCount = stocks.data ? stocks.data.filter((st) => s?.mutedCodes?.includes(st.code)).length : (s?.mutedCodes?.length ?? 0);
   const patch = (p: Parameters<typeof updateSettings.mutate>[0]) =>
     updateSettings.mutate(p, { onError: (e) => Alert.alert("저장 실패", e instanceof Error ? e.message : String(e)) });
 
@@ -158,23 +162,31 @@ export function NotificationSettingsCard() {
             <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>평일만</Text>
             <Switch value={s.weekdaysOnly} onValueChange={(v) => patch({ weekdaysOnly: v })} trackColor={{ true: t.accent }} />
           </View>
-          {s.digest !== undefined && s.quietStart && s.quietEnd ? (
+          {/* 3-19: 묶음(briefingDigest)이 켜진 서버에서만 — 꺼져 있으면 서버가 조용한 시간·끈 종목을 쓰지 않는다 */}
+          {s.digest === true && s.quietStart && s.quietEnd ? (
             <>
               <View style={styles.switchRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: t.ink, fontSize: font.body }}>조용한 시간</Text>
-                  <Muted style={{ fontSize: font.tiny }}>이 사이에 만든 브리핑은 알리지 않고 탭에만 둡니다</Muted>
-                </View>
+                <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>조용한 시간</Text>
+                <Switch value={!!s.quietEnabled} onValueChange={(v) => patch({ quietEnabled: v })} trackColor={{ true: t.accent }} accessibilityLabel="조용한 시간" />
+              </View>
+              <View style={[styles.switchRow, { paddingTop: 0 }]}>
                 <TimeChip time={s.quietStart} enabled={!!s.quietEnabled} label="조용한 시간 시작" onPick={() => pickTime("quietStart")} />
                 <Muted>~</Muted>
                 <TimeChip time={s.quietEnd} enabled={!!s.quietEnabled} label="조용한 시간 끝" onPick={() => pickTime("quietEnd")} />
-                <Switch value={!!s.quietEnabled} onValueChange={(v) => patch({ quietEnabled: v })} trackColor={{ true: t.accent }} />
+                <Muted style={{ flex: 1, fontSize: font.tiny }}>이 사이 브리핑은 알리지 않고 탭에만</Muted>
               </View>
+              {quietWarnings(s).map((w) => (
+                <Text key={w} style={{ color: t.warn, fontSize: font.tiny }}>
+                  {w}
+                </Text>
+              ))}
               <Pressable onPress={() => setShowMuted((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: showMuted }} style={styles.switchRow}>
                 <Text style={{ color: t.ink, fontSize: font.body, flex: 1 }}>종목별 알림</Text>
-                <Muted>{(s.mutedCodes?.length ?? 0) > 0 ? `${s.mutedCodes!.length}종목 끔` : "모두 받음"}</Muted>
+                <Muted>{mutedCount > 0 ? `${mutedCount}종목 끔` : "모두 받음"}</Muted>
                 <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{showMuted ? "접기" : "바꾸기"}</Text>
               </Pressable>
+              {showMuted && stocks.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>종목 목록을 불러오지 못했습니다. 잠시 뒤 다시 열어 주세요.</Text> : null}
+              {showMuted && stocks.isLoading ? <Loading /> : null}
               {showMuted
                 ? (stocks.data ?? []).map((st) => {
                     const muted = s.mutedCodes?.includes(st.code) ?? false;
@@ -183,17 +195,12 @@ export function NotificationSettingsCard() {
                         <Text style={{ color: muted ? t.muted : t.ink, fontSize: font.small, flex: 1 }} numberOfLines={1}>
                           {st.name}
                         </Text>
-                        <Switch
-                          value={!muted}
-                          accessibilityLabel={`${st.name} 알림`}
-                          onValueChange={(on) => patch({ mutedCodes: on ? (s.mutedCodes ?? []).filter((c) => c !== st.code) : [...(s.mutedCodes ?? []), st.code] })}
-                          trackColor={{ true: t.accent }}
-                        />
+                        <Switch value={!muted} accessibilityLabel={`${st.name} 알림`} onValueChange={(on) => patch({ mute: { code: st.code, muted: !on } })} trackColor={{ true: t.accent }} />
                       </View>
                     );
                   })
                 : null}
-              {s.digest ? <Muted style={{ fontSize: font.tiny }}>브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (종목 수와 변동 큰 2종목)</Muted> : null}
+              <Muted style={{ fontSize: font.tiny }}>브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (종목 수와 변동 큰 2종목)</Muted>
             </>
           ) : null}
           {s.schedule?.jobs.map((j) => (
@@ -232,8 +239,8 @@ export function NotificationSettingsCard() {
 function TimeChip({ time, enabled, label, onPick }: { time: string; enabled: boolean; label: string; onPick: () => void }) {
   const t = useTheme();
   return (
-    <Pressable onPress={onPick} disabled={!enabled} accessibilityRole="button" accessibilityLabel={`${label} ${time} 변경`} style={[styles.timeChip, { borderColor: t.line, backgroundColor: t.surfaceAlt, opacity: enabled ? 1 : 0.5, paddingHorizontal: space.sm }]}>
-      <Text style={{ color: t.ink, fontSize: font.small, fontVariant: ["tabular-nums"], fontWeight: "600" }}>{time}</Text>
+    <Pressable onPress={onPick} disabled={!enabled} accessibilityRole="button" accessibilityLabel={`${label} ${time} 변경`} hitSlop={8} style={[styles.timeChip, { borderColor: t.line, backgroundColor: t.surfaceAlt, opacity: enabled ? 1 : 0.5 }]}>
+      <Text style={{ color: t.ink, fontSize: font.body, fontVariant: ["tabular-nums"], fontWeight: "600" }}>{time}</Text>
     </Pressable>
   );
 }

@@ -117,8 +117,8 @@ export async function getStoredToken(): Promise<string | null> {
 /** 알림을 눌렀을 때 이동할 경로 */
 export function routeForNotification(data: Record<string, unknown> | undefined): string | null {
   if (!data) return null;
-  // 세션 묶음 알림은 브리핑 탭으로 (변동 큰 순으로 모두 보인다)
-  if (data["type"] === "briefingDigest") return "/briefings";
+  // 세션 묶음 알림은 브리핑 탭으로 (변동 큰 순으로 모두 보인다). 예전 앱은 digest 를 몰라 1위 종목 브리핑으로 간다
+  if (data["digest"] === true) return "/briefings";
   if (data["type"] === "briefing" && typeof data["briefingId"] === "number") return `/briefings/${data["briefingId"]}`;
   if (data["type"] === "briefing" && typeof data["briefingId"] === "string") return `/briefings/${data["briefingId"]}`;
   return null;

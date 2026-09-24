@@ -140,23 +140,25 @@ export async function loadLatestBriefings(): Promise<LatestBriefing[]> {
 }
 
 /**
- * 알림 규칙 (3-19): 세션당 1건 묶음·조용한 시간·끈 종목. 백그라운드 알림이 새 브리핑을 찾았을 때만 받는다.
- * 예전 서버(digest 없음)면 예전처럼 종목마다, 받지 못하면 3-19 기본값
+ * 알림 규칙 (3-19): 세션당 1건 묶음·조용한 시간·끈 종목 + 브리핑 실행 중인지. 백그라운드 알림이 새 브리핑을 찾았을 때만 받는다.
+ * 예전 서버(digest 없음)면 예전처럼 종목마다. 받지 못하면 null → 이번에는 알리지 않고 다음 확인에서 (잘못된 규칙으로 "본 것" 처리하지 않게)
  */
-export async function loadNotifyPrefs(): Promise<NotifyPrefs> {
+export async function loadNotifyPrefs(): Promise<(NotifyPrefs & { running: boolean }) | null> {
   const { apiUrl, apiToken } = await readSettings();
   try {
-    const s = await getJson<Partial<NotifyPrefs>>(`${apiUrl}/api/notifications/settings`, apiToken);
-    if (s.digest === undefined) return { ...DEFAULT_PREFS, digest: false };
+    const s = await getJson<Partial<NotifyPrefs> & { running?: boolean; schedule?: { running?: boolean } | null }>(`${apiUrl}/api/notifications/settings`, apiToken);
+    const running = s.running ?? s.schedule?.running ?? false;
+    if (s.digest === undefined) return { ...DEFAULT_PREFS, digest: false, running };
     return {
       digest: s.digest,
       quietEnabled: s.quietEnabled ?? DEFAULT_PREFS.quietEnabled,
       quietStart: s.quietStart ?? DEFAULT_PREFS.quietStart,
       quietEnd: s.quietEnd ?? DEFAULT_PREFS.quietEnd,
       mutedCodes: s.mutedCodes ?? [],
+      running,
     };
   } catch {
-    return DEFAULT_PREFS;
+    return null;
   }
 }
 

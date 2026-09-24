@@ -25,17 +25,20 @@ export default function BriefingsScreen() {
   const [mode, setMode] = useState<Mode>("summary");
   const latest = useLatestBriefings();
   const { data, error, refetch } = latest;
-  const { pulling, onPull } = usePull(refetch);
+  const stocks = useRegisteredStocks();
+  // 당겨서 새로고침: 브리핑과 등락률을 함께
+  const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch()]));
   const { run } = useStockMutations();
   const health = useHealth();
   const market = useMarketStatus();
   const moversOn = useFeature("briefingTabMovers", false);
+  const confirmOn = useFeature("briefingManualRun", false);
   const [order, setOrder] = useState<Order>("movers");
-  const stocks = useRegisteredStocks();
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);
 
-  // 17종목 × 약 25초: 누르기 전에 한 번 묻는다 (3-19)
+  // 17종목 × 약 25초: 누르기 전에 한 번 묻는다 (3-19, 플래그를 끄면 예전처럼 바로)
   const confirmRun = (session: BriefingSession) => {
+    if (!confirmOn) return runNow(session);
     const c = runConfirm(session, (data ?? []).length);
     Alert.alert(c.title, c.message, [
       { text: "취소", style: "cancel" },
@@ -65,7 +68,9 @@ export default function BriefingsScreen() {
   if (view === "error") return <Screen><ErrorView error={error} onRetry={() => void refetch()} /></Screen>;
 
   const items = data ?? [];
-  const movers = moversOn && order === "movers";
+  // 등락률을 받기 전엔 정렬을 미룬다(두 번 재정렬되지 않게). 못 받으면 등록순 + 안내
+  const ratesReady = stocks.isSuccess;
+  const movers = moversOn && order === "movers" && ratesReady;
   const { list: ordered, top } = orderForTab(items.filter((i) => i.latest), rates, movers);
   const withBriefing = ordered;
   const last = health.data?.lastBriefing ?? null;
@@ -84,7 +89,7 @@ export default function BriefingsScreen() {
       {krHoliday ? <Muted style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>한국 휴장일 · 국내 종목 브리핑 없음{market.data?.KR.opensAt ? ` · 다음 개장 ${formatDateKo(market.data.KR.opensAt, true)}` : ""}</Muted> : null}
       {movers && top.length > 0 ? (
         <Card>
-          <SectionTitle>오늘 변동 큰 종목</SectionTitle>
+          <SectionTitle>변동 큰 종목</SectionTitle>
           {top.map((i) => (
             <Pressable
               key={i.code}
@@ -102,6 +107,7 @@ export default function BriefingsScreen() {
           <Muted style={{ fontSize: font.tiny }}>전일 대비 등락률 크기 순 · 매매 권유가 아닙니다</Muted>
         </Card>
       ) : null}
+      {moversOn && order === "movers" && stocks.isError ? <Muted style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>등락률을 불러오지 못해 등록순으로 보여 줍니다 · 당겨서 다시 시도</Muted> : null}
       {moversOn ? (
         <Segmented
           options={[

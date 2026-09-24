@@ -105,5 +105,31 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       await runBriefingCheck();
       expect(scheduled).toHaveLength(3);
     });
+
+    it("서버가 브리핑을 만드는 중이면 이번엔 넘기고, 끝난 뒤 한 번에 1건 (세션이 두 알림으로 쪼개지지 않게)", async () => {
+      await enableLocalBriefingAlerts();
+      serve([...latest, ...newOnes(6)], { ...prefs, running: true });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      serve([...latest, ...newOnes(17)], { ...prefs, running: false });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect((scheduled[0] as { content: { title: string } }).content.title).toBe("오후 브리핑 17종목");
+    });
+
+    it("알림 규칙을 받지 못하면 이번엔 넘기고 '본 것'으로 적지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      const list = [...latest, ...newOnes(2)];
+      vi.stubGlobal("fetch", async (url: string) => {
+        if (url.endsWith("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+        if (url.endsWith("/api/notifications/settings")) return new Response("down", { status: 503 });
+        return new Response(JSON.stringify(list), { status: 200 });
+      });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      serve(list, prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
   });
 });

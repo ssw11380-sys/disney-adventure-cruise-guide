@@ -38,3 +38,13 @@ describe("검색 (3-18)", () => {
     expect(pickSearch("", full("F"), local("L"))).toMatchObject({ data: undefined, pending: false });
   });
 });
+
+describe("알림 설정 미리 반영 (3-19 리뷰)", () => {
+  it("mute 는 목록에 더하고 빼며 다른 값은 그대로", async () => {
+    const { applySettingsPatch } = await import("@/api/hooks");
+    const old = { morningTime: "08:30", afternoonTime: "16:00", morningEnabled: true, afternoonEnabled: true, weekdaysOnly: true, pushEnabled: true, mutedCodes: ["A"], schedule: null };
+    expect(applySettingsPatch(old, { mute: { code: "B", muted: true } }).mutedCodes).toEqual(["A", "B"]);
+    expect(applySettingsPatch(old, { mute: { code: "A", muted: false } }).mutedCodes).toEqual([]);
+    expect(applySettingsPatch(old, { quietEnabled: false })).toMatchObject({ quietEnabled: false, mutedCodes: ["A"] });
+  });
+});

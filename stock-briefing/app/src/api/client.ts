@@ -16,6 +16,7 @@ import type { AppErrorSummary, Evaluation,
   Device,
   Health,
   NotificationSettings,
+  NotificationSettingsPatch,
   SendSummary,
   LatestBriefing,
   ListedStock,
@@ -131,7 +132,8 @@ export function createApi(baseUrl: string, token = "") {
     unregisterDevice: (token: string) => send<void>("DELETE", `/api/devices/${encodeURIComponent(token)}`),
     listDevices: () => get<Device[]>("/api/devices"),
     getNotificationSettings: () => get<NotificationSettings>("/api/notifications/settings"),
-    updateNotificationSettings: (patch: Partial<Omit<NotificationSettings, "schedule">>) => send<NotificationSettings>("PUT", "/api/notifications/settings", patch),
+    /** mute: 종목 하나만 알림 끄기/켜기 (3-19 서버). 목록 전체(mutedCodes)를 보내지 않아 연달아 눌러도 안전 */
+    updateNotificationSettings: (patch: NotificationSettingsPatch) => send<NotificationSettings>("PUT", "/api/notifications/settings", patch),
     sendTestNotification: () => send<SendSummary>("POST", "/api/notifications/test"),
 
     tossStatus: () => get<TossOpenApiStatus>("/api/admin/toss/status", 15_000),

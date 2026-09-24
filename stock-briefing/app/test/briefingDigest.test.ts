@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDigest, byMove, DEFAULT_PREFS, inQuietHours, planNotifications } from "@/lib/briefingDigest";
+import { buildDigest, byMove, DEFAULT_PREFS, inQuietHours, planNotifications, quietWarnings } from "@/lib/briefingDigest";
 import { estimateText, orderForTab, runConfirm } from "@/lib/briefingRun";
 
 const item = (code: string, changeRate: number | null, session: "morning" | "afternoon" = "afternoon", date = "2026-09-24") => ({
@@ -18,7 +18,7 @@ describe("알림 묶음 (3-19, 서버와 같은 규칙)", () => {
     const m = buildDigest("afternoon", "2026-09-24", items)!;
     expect(m.title).toBe("오후 브리핑 17종목");
     expect(m.body.split("\n")[0]).toBe("변동 상위 이름A5 -6.20% · 이름A10 +5.00%");
-    expect(m.data).toMatchObject({ type: "briefingDigest", count: 17 });
+    expect(m.data).toMatchObject({ type: "briefing", digest: true, count: 17 });
   });
 
   it("세션별로 묶고, 조용한 시간 0건, 끈 종목 제외, 플래그 끄면 종목마다", () => {
@@ -58,5 +58,15 @@ describe("브리핑 탭·수동 생성 (3-19)", () => {
     expect(o.list.map((i) => i.code)).toEqual(["b", "d", "e", "a", "c"]);
     expect(o.top.map((i) => i.code)).toEqual(["b", "d", "e"]);
     expect(orderForTab(items, rates, false)).toEqual({ list: items, top: [] });
+  });
+});
+
+describe("설정 경고 (3-19 리뷰)", () => {
+  it("브리핑 시간이 조용한 시간 안이면 경고", () => {
+    const base = { quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", morningTime: "06:30", afternoonTime: "16:00", morningEnabled: true, afternoonEnabled: true };
+    expect(quietWarnings(base)).toEqual(["오전 브리핑(06:30)이 조용한 시간 안이라 알림이 가지 않습니다"]);
+    expect(quietWarnings({ ...base, morningTime: "08:30" })).toEqual([]);
+    expect(quietWarnings({ ...base, morningEnabled: false })).toEqual([]);
+    expect(quietWarnings({ ...base, quietEnabled: false })).toEqual([]);
   });
 });

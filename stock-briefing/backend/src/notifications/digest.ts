@@ -64,6 +64,7 @@ export function buildDigest(session: "morning" | "afternoon", date: string, item
   return {
     title: `${label} 브리핑 ${items.length}종목`,
     body: lines.join("\n"),
-    data: { type: "briefingDigest", session, date, count: items.length, briefingId: ranked[0]!.briefingId },
+    // 예전 앱은 type "briefing" + briefingId 만 알아듣는다 → 1위 종목 브리핑으로 열리게 두고, 새 앱은 digest 를 보고 브리핑 탭으로
+    data: { type: "briefing", digest: true, session, date, count: items.length, briefingId: ranked[0]!.briefingId, code: ranked[0]!.code },
   };
 }
