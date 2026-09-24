@@ -107,7 +107,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
 
   it("플래그 두 개와 코스피·나스닥·원/달러를 순서대로, 앱 지수 띠(stale=1)와 같은 값으로 준다", async () => {
     const body = (await get()).json();
-    expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true });
+    expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
     expect(body.indices.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
     expect(body.indices[0]).toEqual({ code: "KOSPI", name: "코스피", value: 3412.35, change: 30.45, changeRate: 0.9, open: true, asOf: "2026-09-22T10:00:00+09:00" });
     expect(body.indices[2]).toMatchObject({ code: "USDKRW", name: "원/달러", value: 1360.5, change: -2.1, changeRate: -0.15 });
@@ -155,7 +155,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     const r = await get();
     expect(r.statusCode).toBe(200);
     expect(r.json()).not.toHaveProperty("indices");
-    expect(r.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true });
+    expect(r.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
   });
 
   it("widgetIndexLine 을 끄면 지수를 부르지도 넣지도 않는다 (응답·ETag 가 지수와 무관), 켜면 다시", async () => {
@@ -163,7 +163,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     expect(put.statusCode).toBe(200);
     const r1 = await get();
     expect(r1.json()).not.toHaveProperty("indices");
-    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: false });
+    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: false, widgetMarket: true });
     expect(indices.calls).toBe(0); // 서버 작업 0건
     source.close = "3,999.99";
     later(31);
@@ -177,14 +177,14 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
 
   it("widgetPnlToggle 을 끄면 features 에 false (앱은 누적만, 전환 없음)", async () => {
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetPnlToggle: false } });
-    expect((await get()).json().features).toEqual({ widgetPnlToggle: false, widgetIndexLine: true });
+    expect((await get()).json().features).toEqual({ widgetPnlToggle: false, widgetIndexLine: true, widgetMarket: true });
   });
 
   it("검토 지적: 예전 앱(?indices=1 없음)에는 지수를 넣지도 부르지도 않는다 — 나스닥·환율이 바뀌어도 304 그대로", async () => {
     const r1 = await getOld();
     expect(r1.statusCode).toBe(200);
     expect(r1.json()).not.toHaveProperty("indices");
-    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true });
+    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
     expect(indices.calls).toBe(0);
     const etag = String(r1.headers["etag"]);
     source.close = "3,500.00";
@@ -213,5 +213,76 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     expect(Object.keys(plain).sort()).toEqual(["briefings", "latestIds", "market", "stocks", "v"]);
     // 지수 줄이 꺼져 있으면 지수를 줘도 넣지 않는다
     expect(buildWidgetPayload([], [], null, { features: { widgetPnlToggle: true, widgetIndexLine: false }, indices: [] })).not.toHaveProperty("indices");
+  });
+
+  describe("지수·환율 위젯 판 (APK 1.4.0, widgetMarket · ?board=1)", () => {
+    const getBoard = (q = "indices=1&board=1", headers: Record<string, string> = {}) => app.inject({ method: "GET", url: `/api/widget?${q}`, headers });
+
+    it("?board=1 이면 9개를 국내 → 미국 → 환율 순서로, 앱 지수 띠(stale=1)와 같은 값으로 준다 (지수 목록은 한 번만 부른다)", async () => {
+      const body = (await getBoard()).json();
+      expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
+      expect(body.board.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "DJI", "SOX", "USDKRW", "JPYKRW", "CNYKRW"]);
+      expect(body.board.map((i: { name: string }) => i.name)).toEqual(["코스피", "코스닥", "나스닥", "S&P500", "다우", "필라반도체", "원/달러", "원/100엔", "원/위안"]);
+      // 지수 줄도 그대로 (같은 목록에서)
+      expect(body.indices.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
+      // 출처 9곳을 한 번씩만 (지수 줄과 판이 같은 목록을 쓴다)
+      expect(indices.calls).toBe(9);
+      expect(body.board.some((i: Record<string, unknown>) => "fetchedAt" in i || "kind" in i)).toBe(false);
+      const strip = (await app.inject({ method: "GET", url: "/api/market/indices?stale=1" })).json().indices as Array<Record<string, unknown>>;
+      for (const row of body.board as Array<Record<string, unknown>>) {
+        const s = strip.find((x) => x.code === row.code)!;
+        expect([row.value, row.change, row.changeRate, row.open, row.name]).toEqual([s.value, s.change, s.changeRate, s.open, s.name]);
+      }
+    });
+
+    it("판만 물어도(지수 줄 없이) 판만, 묻지 않으면 넣지도 부르지도 않는다 — 위젯이 없는 앱·예전 앱의 응답·ETag 는 판과 무관", async () => {
+      const only = (await getBoard("board=1")).json();
+      expect(only.board).toHaveLength(9);
+      expect(only).not.toHaveProperty("indices");
+      await app.close();
+      await db.destroy();
+      indices = fakeIndices(fakeIndexSource(), () => clock);
+      db = await createMigratedDb(":memory:");
+      app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ generator: new FakeGenerator(), indices }), logger: false, enableScheduler: false });
+      const none = await getOld();
+      expect(none.json()).not.toHaveProperty("board");
+      expect(indices.calls).toBe(0);
+      expect((await get()).json()).not.toHaveProperty("board");
+      for (const q of ["board=0", "board=", "board=true"]) expect((await getBoard(q)).json()).not.toHaveProperty("board");
+    });
+
+    it("widgetMarket 을 끄면 판을 넣지 않고 features 에 false (지수 줄 없이 물었으면 지수 조회 0건), 켜면 다시", async () => {
+      await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetMarket: false } });
+      const off = await getBoard("board=1");
+      expect(off.json()).not.toHaveProperty("board");
+      expect(off.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: false });
+      expect(indices.calls).toBe(0);
+      await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetMarket: null } });
+      expect((await getBoard("board=1")).json().board).toHaveLength(9);
+    });
+
+    it("ETag: 판의 값이 같으면 304, 바뀌면 200 (판이 있는 응답과 없는 응답의 ETag 는 다르다)", async () => {
+      const r1 = await getBoard();
+      const etag = String(r1.headers["etag"]);
+      later(31);
+      expect((await getBoard("indices=1&board=1", { "if-none-match": etag })).statusCode).toBe(304);
+      expect((await get({ "if-none-match": etag })).statusCode).toBe(200);
+      source.close = "3,420.00";
+      later(31);
+      const r2 = await getBoard("indices=1&board=1", { "if-none-match": etag });
+      expect(r2.statusCode).toBe(200);
+      expect(r2.json().board[1].value).toBe(3420);
+    });
+
+    it("출처가 실패하면 판도 마지막 값을 stale 로(장중 아님), 한 번도 못 받았으면 판 없이", async () => {
+      await getBoard();
+      source.fail = true;
+      later(31);
+      const stale = (await getBoard()).json();
+      expect(stale.board).toHaveLength(9);
+      expect(stale.board.every((i: { stale?: boolean; open: boolean }) => i.stale === true && i.open === false)).toBe(true);
+      expect(buildWidgetPayload([], [], null, { features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true }, board: [] })).not.toHaveProperty("board");
+      expect(buildWidgetPayload([], [], null, { features: { widgetPnlToggle: true, widgetIndexLine: true }, board: [] })).not.toHaveProperty("board");
+    });
   });
 });

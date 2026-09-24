@@ -29,6 +29,15 @@ export interface WidgetPalette {
   /** "갱신 중" 표시 (등락색과 다른 청록) */
   accent: Hex;
   link: Hex;
+  /** 장중 초록 점 (등락색과 겹치지 않는 초록, 앱 지수 띠의 점과 같은 색) */
+  live: Hex;
+  /** 카드 테두리 (라이트 지수·환율 위젯의 얇은 테두리) */
+  edge: Hex;
+  /**
+   * 카드 바탕 그라데이션 (지수·환율 위젯): 다크는 패널색 → 한 단계 깊은 화면 바탕색으로 비스듬히.
+   * 라이트는 없음 — 흰 카드에 얇은 테두리. 두 끝 색 모두 앱 테마 값이라 글자 대비(4.5 이상)가 그대로 지켜진다
+   */
+  gradient: { from: Hex; to: Hex } | null;
 }
 
 /** 앱 테마 값을 그대로 쓴다 (테마를 바꾸면 위젯도 따라가게). 위젯만의 색은 두지 않는다 */
@@ -46,6 +55,9 @@ function fromTheme(scheme: WidgetScheme, t: Theme): WidgetPalette {
     warn: hex(t.warn),
     accent: hex(t.accent),
     link: hex(t.gold),
+    live: hex(t.live),
+    edge: hex(t.line),
+    gradient: t.dark ? { from: hex(t.surface), to: hex(t.bg) } : null,
   };
 }
 
@@ -70,3 +82,21 @@ export const WIDGET_TOUCH = 48;
 export const WIDGET_RADIUS = 14;
 /** 장 상태 칩 모서리 둥글기 (dp) */
 export const CHIP_RADIUS = 6;
+
+/**
+ * 지수·환율 위젯 (APK 1.4.0). 값 글자는 칸에 맞춰 max 에서 줄이고(layout.ts planMarket),
+ * comfort 보다 작아지면 한 칸에 덜 넣는 배치를 먼저 본다. min 아래로는 줄이지 않는다
+ */
+export const WIDGET_BOARD = {
+  /** 카드 모서리 (다른 위젯보다 넉넉히) */
+  radius: 20,
+  /** 카드 테두리 두께 (라이트에서만 보인다 — 다크는 그라데이션이 테두리를 덮는다) */
+  border: 1,
+  /** 제목 앞 금색 막대 (폭·높이·모서리, dp) */
+  mark: { width: 3, height: 14, radius: 2 },
+  /** 장중 초록 점 지름 (dp) */
+  dot: 5,
+  /** 칸 사이 구분선 (dp) */
+  hairline: 1,
+  value: { max: WIDGET_FONT.bigger, comfort: WIDGET_FONT.base, min: WIDGET_FONT.xs },
+} as const;

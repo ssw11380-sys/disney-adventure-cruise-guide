@@ -23,7 +23,23 @@ import {
   type HoldingsPlan,
   type IndexInput,
 } from "@/widgets/layout";
-import { WIDGET_FONT as F, WIDGET_TOUCH as TOUCH } from "@/widgets/palette";
+import {
+  BOARD_GAP,
+  boardBodyHeight,
+  boardColW,
+  boardContent,
+  boardRoom,
+  boardTileHeight,
+  marketHeaderRoom,
+  marketHeaderWidth,
+  markerWidth,
+  planMarket,
+  type MarketInput,
+  type MarketPlan,
+} from "@/widgets/layout";
+import { BOARD_TITLE, boardColumns, boardTiles } from "@/widgets/board";
+import type { WidgetIndex } from "@/widgets/payload";
+import { WIDGET_BOARD, WIDGET_FONT as F, WIDGET_TOUCH as TOUCH } from "@/widgets/palette";
 import { space } from "@/tokens";
 
 /**
@@ -490,5 +506,233 @@ describe("3-23 자산 위젯(2×1) × 글자 100·130% 숫자 잘림 0", () => {
           if (o.length) bad.push(`${w}×${h}@${s}: ${o.join(", ")}`);
         }
     expect(bad.slice(0, 5)).toEqual([]);
+  });
+});
+
+// ── 지수·환율 위젯 (APK 1.4.0) ────────────────────────────────────────
+
+const IDX = (code: string, value: number, change: number, changeRate: number, extra: Partial<WidgetIndex> = {}): WidgetIndex => ({ code, name: code, value, change, changeRate, open: true, ...extra });
+/** 흔한 값 (미리보기와 같은 숫자) */
+const REAL_BOARD: WidgetIndex[] = [
+  IDX("KOSPI", 7080.92, 63.01, 0.9),
+  IDX("KOSDAQ", 862.15, -3.2, -0.37),
+  IDX("NASDAQ", 26936.04, -308.24, -1.13, { open: false }),
+  IDX("SPX", 6650.12, 12.4, 0.19, { open: false }),
+  IDX("DJI", 46315.27, -52.3, -0.11, { open: false }),
+  IDX("SOX", 7123.45, 88.1, 1.25, { open: false }),
+  IDX("USDKRW", 1360.5, -2.1, -0.15),
+  IDX("JPYKRW", 930.12, 1.35, 0.15),
+  IDX("CNYKRW", 190.55, -0.12, -0.06),
+];
+/** 실제로 나올 수 있는 긴 쪽: 지수 5자리(99,999.99), 두 자리 등락률, 큰 등락폭, 지연 두 개(이름 옆 "지연") */
+const LONG_BOARD: WidgetIndex[] = [
+  IDX("KOSPI", 17080.92, -1234.56, -12.34),
+  IDX("KOSDAQ", 1862.15, -123.2, -10.37, { stale: true, open: false }),
+  IDX("NASDAQ", 98936.04, -3308.24, -11.13),
+  IDX("SPX", 16650.12, 412.4, 12.19),
+  IDX("DJI", 99315.27, -5052.3, -10.11),
+  IDX("SOX", 17123.45, 1088.1, 11.25, { stale: true, open: false }),
+  IDX("USDKRW", 1860.5, -22.1, -11.15),
+  IDX("JPYKRW", 1930.12, 111.35, 11.15),
+  IDX("CNYKRW", 290.55, -21.12, -10.56),
+];
+/** 있을 수 없을 만큼 긴 값 (지수 6자리): 글자를 9sp 아래로 줄여서라도 자르지 않는다 */
+const ABSURD_BOARD: WidgetIndex[] = LONG_BOARD.map((i) => (i.code === "DJI" || i.code === "NASDAQ" ? { ...i, value: i.value + 100_000 } : i));
+const ASOF = ["9/23 15:30 기준", "9/23 15:30", "15:30"];
+
+function marketInput(width: number, height: number, scale: number, board: WidgetIndex[] = REAL_BOARD, sub: string[] = ASOF): MarketInput {
+  return { width, height, scale, title: BOARD_TITLE, sub, columns: boardColumns(boardTiles(board)) };
+}
+const shownCodes = (p: MarketPlan) => p.columns.map((c) => c.codes);
+const shownCount = (p: MarketPlan) => p.columns.reduce((a, c) => a + c.codes.length, 0);
+
+/** 계획대로 그렸을 때 칸을 넘는 글자·높이 (없어야 한다) */
+function marketOverflow(i: MarketInput, p: MarketPlan): string[] {
+  const bad: string[] = [];
+  const s = i.scale;
+  if (marketHeaderWidth(i.title, p.sub, s) > marketHeaderRoom(i.width)) bad.push(`머리 ${p.sub}`);
+  const n = p.columns.length;
+  if (n * p.colW + (n - 1) * (BOARD_GAP * 2 + WIDGET_BOARD.hairline) > boardContent(i.width)) bad.push(`칸 폭 합 ${p.colW}×${n}`);
+  if (p.valueFont < WIDGET_BOARD.value.min) bad.push(`값 글자 ${p.valueFont} < ${WIDGET_BOARD.value.min}`);
+  const tiles = new Map(i.columns.flatMap((c) => c.tiles).map((t) => [t.code, t]));
+  for (const col of p.columns)
+    for (const code of col.codes) {
+      const t = tiles.get(code)!;
+      // 숫자(값·등락)는 자르지 않는다: 칸 폭 안에 한 줄로
+      const vw = textWidth(t.value, p.valueFont, s, true);
+      if (vw > p.colW) bad.push(`${code} 값 ${t.value} ${vw.toFixed(0)} > ${p.colW}`);
+      const ch = p.change[code];
+      if (p.shape === "full" && t.changes.length && !ch) bad.push(`${code} 등락 빠짐`);
+      if (ch) {
+        if (!t.changes.includes(ch)) bad.push(`${code} 모르는 등락 ${ch}`);
+        const cw = textWidth(ch, p.changeFont, s, true);
+        if (cw > p.colW) bad.push(`${code} 등락 ${ch} ${cw.toFixed(0)} > ${p.colW}`);
+      }
+      // 이름(줄일 수 있음) + 장중 점·"지연" ≤ 칸 폭, "지연"은 늘 보인다
+      const nameW = p.nameW[code] ?? -1;
+      if (nameW < 0 || nameW + markerWidth(t.marker, p.nameFont, s) > p.colW) bad.push(`${code} 이름 칸 ${nameW}`);
+    }
+  // 세로: 머리 줄 48 + 본문 + 아래 여백 + 테두리 ≤ 높이
+  const rows = Math.max(...p.columns.map((c) => c.codes.length));
+  if (p.tileH !== boardTileHeight(p.shape, p.nameFont, p.valueFont, p.changeFont, s)) bad.push("칸 높이 어림이 다름");
+  const body = boardBodyHeight(rows, p.tileH, p.rowPad, p.captions, s);
+  if (Math.abs(body - p.bodyH) > 0.001) bad.push(`본문 어림 ${p.bodyH} ≠ ${body}`);
+  if (body > boardRoom(i.height)) bad.push(`세로 ${body} > ${boardRoom(i.height)}`);
+  if (TOUCH + body + PAD + WIDGET_BOARD.border * 2 > i.height) bad.push("위젯 밖으로 넘침");
+  return bad;
+}
+
+describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% 숫자 잘림 0", () => {
+  const BOXES = {
+    "4x2": [
+      { width: 250, height: 110 },
+      { width: 330, height: 160 },
+      { width: 330, height: 180 },
+    ],
+    "4x4": [
+      { width: 250, height: 250 },
+      { width: 330, height: 330 },
+      { width: 330, height: 380 },
+    ],
+  } as const;
+  for (const size of ["4x2", "4x4"] as const)
+    for (const box of BOXES[size])
+      for (const scale of SCALES)
+        for (const [name, board] of [
+          ["흔한 값", REAL_BOARD],
+          ["긴 값·지연", LONG_BOARD],
+        ] as const)
+          it(`${size} ${box.width}×${box.height} · ${scale * 100}% · ${name}`, () => {
+            const input = marketInput(box.width, box.height, scale, board);
+            const plan = planMarket(input);
+            expect(marketOverflow(input, plan)).toEqual([]);
+            expect(plan.sub).not.toBeNull(); // 기준 시각은 짧게라도 보인다
+            expect(plan.columns.map((c) => c.label)).toEqual(["국내", "미국", "환율"]);
+          });
+
+  it("4×2 (330×160·180): 코스피·코스닥 / 나스닥·S&P500 / 원/달러·원/100엔 3×2 격자, 흔한 4×2 는 등락 줄과 구역 이름까지", () => {
+    const six = [["KOSPI", "KOSDAQ"], ["NASDAQ", "SPX"], ["USDKRW", "JPYKRW"]];
+    for (const [w, h, s] of [
+      [330, 160, 1],
+      [330, 180, 1],
+      [330, 180, 1.3],
+      [300, 180, 1],
+    ] as const)
+      expect(shownCodes(planMarket(marketInput(w, h, s)))).toEqual(six);
+    const p160 = planMarket(marketInput(330, 160, 1));
+    expect(p160.shape).toBe("full");
+    expect(p160.change.KOSPI).toBe("▲63.01 +0.90%");
+    const p180 = planMarket(marketInput(330, 180, 1));
+    expect(p180).toMatchObject({ shape: "full", captions: true });
+    expect(p180.valueFont).toBeGreaterThanOrEqual(WIDGET_BOARD.value.comfort);
+  });
+
+  it("4×4 (4×3 이상): 9개 모두를 국내 · 미국 · 환율로, 100% 는 등락 줄·구역 이름·큰 값", () => {
+    const all = [["KOSPI", "KOSDAQ"], ["NASDAQ", "SPX", "DJI", "SOX"], ["USDKRW", "JPYKRW", "CNYKRW"]];
+    for (const [w, h, s] of [
+      [250, 250, 1],
+      [330, 250, 1],
+      [330, 330, 1],
+      [330, 330, 1.3],
+      [330, 380, 1],
+      [330, 380, 1.3],
+      [420, 420, 1.3],
+    ] as const)
+      expect(shownCodes(planMarket(marketInput(w, h, s)))).toEqual(all);
+    const p = planMarket(marketInput(330, 330, 1));
+    expect(p).toMatchObject({ shape: "full", captions: true });
+    expect(p.valueFont).toBeGreaterThanOrEqual(16);
+    // 넓으면 값 글자는 상한(19sp)까지만
+    expect(planMarket(marketInput(420, 420, 1)).valueFont).toBe(WIDGET_BOARD.value.max);
+  });
+
+  it("4×2 최소(250×110): 구역마다 1개 — 코스피 · 나스닥 · 원/달러 (100·130%)", () => {
+    for (const s of SCALES) expect(shownCodes(planMarket(marketInput(250, 110, s)))).toEqual([["KOSPI"], ["NASDAQ"], ["USDKRW"]]);
+    // 100% 는 등락률까지
+    expect(planMarket(marketInput(250, 110, 1))).toMatchObject({ shape: "full", change: { KOSPI: "+0.90%" } });
+  });
+
+  it("이름은 흔한 크기에서 줄지 않는다 — 미국 장중이라 S&P500·필라반도체 옆에 장중 점이 붙어도 ('S&P5…'로 읽히지 않게)", () => {
+    const usOpen = REAL_BOARD.map((i) => (["NASDAQ", "SPX", "DJI", "SOX"].includes(i.code) ? { ...i, open: true } : i));
+    const cut: string[] = [];
+    for (const [w, h, s] of [
+      [250, 110, 1],
+      [250, 250, 1],
+      [330, 160, 1],
+      [330, 160, 1.3],
+      [330, 180, 1],
+      [330, 180, 1.3],
+      [330, 330, 1],
+      [330, 330, 1.3],
+    ] as const)
+      for (const board of [REAL_BOARD, usOpen]) {
+        const input = marketInput(w, h, s, board);
+        const p = planMarket(input);
+        for (const t of input.columns.flatMap((c) => c.tiles))
+          if (p.nameW[t.code] !== undefined && p.nameW[t.code]! < Math.floor(textWidth(t.label, p.nameFont, s, true))) cut.push(`${w}×${h}@${s} ${t.label}`);
+      }
+    expect(cut).toEqual([]);
+  });
+
+  it("등락 줄은 모든 칸이 같은 모양: 전부 '▲63.01 +0.90%' 이거나 전부 등락률만", () => {
+    for (const [w, h, s] of [
+      [250, 110, 1],
+      [330, 160, 1],
+      [330, 330, 1],
+      [250, 250, 1],
+    ] as const) {
+      const p = planMarket(marketInput(w, h, s, LONG_BOARD));
+      const shown = Object.values(p.change).filter((x): x is string => !!x);
+      const full = shown.filter((x) => /^[▲▼]/.test(x));
+      expect(full.length === 0 || full.length === shown.length).toBe(true);
+    }
+  });
+
+  it("제목 옆: 기준 시각을 긴 것부터, 좁으면 줄이고 '갱신 실패 · 연결 안 됨' → '갱신 실패'", () => {
+    expect(planMarket(marketInput(330, 180, 1)).sub).toBe("9/23 15:30 기준");
+    expect(planMarket(marketInput(330, 180, 1, REAL_BOARD, ["갱신 실패 · 연결 안 됨", "갱신 실패"])).sub).toBe("갱신 실패 · 연결 안 됨");
+    const narrow = planMarket(marketInput(250, 110, 1.3, REAL_BOARD, ["갱신 실패 · 연결 안 됨", "갱신 실패"]));
+    expect(["갱신 실패 · 연결 안 됨", "갱신 실패"]).toContain(narrow.sub);
+  });
+
+  it("있을 수 없을 만큼 긴 값(6자리 지수)도 자르지 않는다: 가장 좁은 크기에서는 값 글자를 9sp 아래로 줄인다", () => {
+    for (const [w, h, s] of [
+      [250, 110, 1.3],
+      [250, 250, 1.3],
+      [250, 420, 1.3],
+    ] as const) {
+      const input = marketInput(w, h, s, ABSURD_BOARD);
+      const p = planMarket(input);
+      // 값 글자 하한만 넘고, 폭·높이는 지킨다
+      expect(marketOverflow(input, p).filter((x) => !x.startsWith("값 글자"))).toEqual([]);
+      expect(p.valueFont).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("판이 없으면(플래그 꺼짐·못 받음) 칸 없이 안내 문구 줄 수만", () => {
+    const p = planMarket({ ...marketInput(250, 110, 1.3), columns: [] });
+    expect(p.columns).toEqual([]);
+    expect(p.messageLines).toBeGreaterThanOrEqual(1);
+    expect(p.messageLines * lineHeight(F.md, 1.3)).toBeLessThanOrEqual(boardRoom(110));
+  });
+
+  it("폭 250~420dp, 높이 110~420dp, 글자 90~130% × 흔한 값·긴 값: 가로·세로 모두 넘치지 않고, 4×3 이상은 9개 모두", () => {
+    const bad: string[] = [];
+    let cases = 0;
+    for (let w = 250; w <= 420; w += 10)
+      for (let h = 110; h <= 420; h += 10)
+        for (const s of [0.9, 1, 1.15, 1.3])
+          for (const board of [REAL_BOARD, LONG_BOARD]) {
+            const input = marketInput(w, h, s, board);
+            const p = planMarket(input);
+            const o = marketOverflow(input, p);
+            if (shownCount(p) < 3) o.push("구역마다 1개도 안 보임");
+            // 4×3 이상(높이 240dp~)은 9개 모두
+            if (h >= 240 && shownCount(p) !== 9) o.push(`large 인데 ${shownCount(p)}개`);
+            if (o.length) bad.push(`${w}×${h}@${s}: ${o.join(", ")}`);
+            cases++;
+          }
+    expect(bad.slice(0, 5)).toEqual([]);
+    expect(cases).toBe(18 * 32 * 4 * 2);
   });
 });

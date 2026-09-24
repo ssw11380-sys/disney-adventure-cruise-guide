@@ -11,6 +11,8 @@ import type { RegisteredWithQuote } from "./stockService.js";
  *  - features: 위젯이 쓰는 기능 플래그만 (위젯은 /api/features 를 따로 받지 않는다). 예전 앱은 모르는 칸이라 무시한다
  *  - indices: 잔고 위젯 지수 줄 (코스피·나스닥·원/달러). widgetIndexLine 이 켜져 있고 새 앱이 물을 때(?indices=1)만 — 아니면 지수를 부르지도
  *    넣지도 않아 ETag 가 지수 값에 따라 바뀌지 않는다. 다만 features 칸은 늘 들어가므로 본문·ETag 가 예전(main) 서버와 바이트까지 같지는 않다
+ *  - board: 지수·환율 위젯 판 9개 (APK 1.4.0). widgetMarket 이 켜져 있고 지수·환율 위젯이 있는 앱이 물을 때(?board=1)만 — 같은 규칙으로
+ *    위젯이 없는 사용자의 응답·ETag 는 판과 무관하다
  */
 
 export interface WidgetMarket {
@@ -59,10 +61,15 @@ export interface WidgetIndex {
 /** 위젯 지수 줄 항목과 순서 (앱 widgets/payload.ts 의 WIDGET_INDEX_CODES 와 같다) */
 export const WIDGET_INDEX_CODES = ["KOSPI", "NASDAQ", "USDKRW"] as const;
 
+/** 지수·환율 위젯 판 항목과 순서: 국내 → 미국 → 환율 (앱 widgets/payload.ts 의 WIDGET_BOARD_CODES 와 같다) */
+export const WIDGET_BOARD_CODES = ["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "DJI", "SOX", "USDKRW", "JPYKRW", "CNYKRW"] as const;
+
 /** 위젯이 쓰는 기능 플래그 */
 export interface WidgetFeatures {
   widgetPnlToggle: boolean;
   widgetIndexLine: boolean;
+  /** 지수·환율 위젯 (새 서버는 늘 준다. 없으면 새 앱은 꺼짐으로 본다) */
+  widgetMarket?: boolean;
 }
 
 export interface WidgetPayload {
@@ -76,12 +83,14 @@ export interface WidgetPayload {
   features?: WidgetFeatures;
   /** 지수 줄 (widgetIndexLine 이 켜져 있고 지수를 받았을 때만) */
   indices?: WidgetIndex[];
+  /** 지수·환율 위젯 판 9개 (widgetMarket 이 켜져 있고 ?board=1 이고 지수를 받았을 때만) */
+  board?: WidgetIndex[];
 }
 
-/** 지수 띠 목록(stale 을 아는 앱용)에서 위젯 줄에 넣을 것만, 정해진 순서로. 값은 그대로 (앱 지수 띠와 같은 숫자가 되게) */
-export function widgetIndices(list: readonly MarketIndex[]): WidgetIndex[] {
+/** 지수 띠 목록(stale 을 아는 앱용)에서 위젯 줄(또는 판)에 넣을 것만, 정해진 순서로. 값은 그대로 (앱 지수 띠와 같은 숫자가 되게) */
+export function widgetIndices(list: readonly MarketIndex[], codes: readonly string[] = WIDGET_INDEX_CODES): WidgetIndex[] {
   const byCode = new Map(list.map((i) => [i.code, i]));
-  return WIDGET_INDEX_CODES.flatMap((code) => {
+  return codes.flatMap((code) => {
     const i = byCode.get(code);
     if (!i) return [];
     const row: WidgetIndex = { code: i.code, name: i.name, value: i.value, change: i.change, changeRate: i.changeRate, open: i.open };
@@ -133,7 +142,7 @@ export function buildWidgetPayload(
   stocks: RegisteredWithQuote[],
   latest: Array<{ code: string; name: string; latest: Briefing | null }>,
   status: MarketStatus | null,
-  extra: { features?: WidgetFeatures | undefined; indices?: readonly MarketIndex[] | null | undefined } = {},
+  extra: { features?: WidgetFeatures | undefined; indices?: readonly MarketIndex[] | null | undefined; board?: readonly MarketIndex[] | null | undefined } = {},
 ): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
   const ok = latest.filter((b) => b.latest?.status === "ok");
@@ -153,5 +162,7 @@ export function buildWidgetPayload(
   if (extra.features) payload.features = extra.features;
   const indices = extra.features?.widgetIndexLine && extra.indices ? widgetIndices(extra.indices) : [];
   if (indices.length) payload.indices = indices;
+  const board = extra.features?.widgetMarket && extra.board ? widgetIndices(extra.board, WIDGET_BOARD_CODES) : [];
+  if (board.length) payload.board = board;
   return payload;
 }

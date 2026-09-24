@@ -4,7 +4,7 @@ import { AppState } from "react-native";
 import { useAnyMarketOpen, useApi, useMarketStatus } from "@/api/hooks";
 import type { FeatureFlags, MarketIndex, RegisteredWithQuote } from "@/api/types";
 import { useSettings } from "@/lib/settings";
-import { pickWidgetIndices, widgetFeatures } from "@/widgets/payload";
+import { pickBoard, pickWidgetIndices, widgetFeatures } from "@/widgets/payload";
 import { widgetPushDue } from "@/widgets/pushPolicy";
 import { refreshWidgets } from "@/widgets/refresh";
 
@@ -30,6 +30,8 @@ export function WidgetBridge() {
   const idxList = idx.data?.indices;
   const idxAt = idx.dataUpdatedAt;
   const indices = useMemo(() => (idxList ? { at: idxAt, list: pickWidgetIndices(idxList) } : null), [idxList, idxAt]);
+  // 지수·환율 위젯 판: 같은 지수 띠 9개 (앱이 새 지수를 받으면 위젯도 같은 숫자로)
+  const board = useMemo(() => (idxList ? { at: idxAt, list: pickBoard(idxList) } : null), [idxList, idxAt]);
   const live = useAnyMarketOpen();
   const ms = useMarketStatus().data;
   const krOpen = ms?.KR.isOpen ?? false;
@@ -43,7 +45,7 @@ export function WidgetBridge() {
   const restoring = useIsRestoring();
   const fetchedThisSession = !restoring && dataAt > mountedAt;
   // 플래그가 바뀌어도 바로 (손익 전환·지수 줄이 켜지고 꺼지는 것을 1분 기다리지 않게)
-  const pushKey = `${showKrw}|${afterCost}|${market?.label ?? ""}|${features ? `${features.flags.pnlToggle}|${features.flags.indexLine}` : ""}`;
+  const pushKey = `${showKrw}|${afterCost}|${market?.label ?? ""}|${features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}` : ""}`;
   const last = useRef({ at: 0, key: "" });
   const push = useRef<(leaving: boolean) => void>(() => undefined);
   useEffect(() => {
@@ -51,10 +53,10 @@ export function WidgetBridge() {
       const now = Date.now();
       if (!data || !widgetPushDue({ now, fetchedThisSession, lastAt: last.current.at, lastKey: last.current.key, key: pushKey, leaving })) return;
       last.current = { at: now, key: pushKey };
-      void refreshWidgets({ stocks: data, showKrw, afterCost, market, features, indices });
+      void refreshWidgets({ stocks: data, showKrw, afterCost, market, features, indices, board });
     };
     push.current(false);
-  }, [data, dataAt, pushKey, showKrw, afterCost, market, fetchedThisSession, features, indices]);
+  }, [data, dataAt, pushKey, showKrw, afterCost, market, fetchedThisSession, features, indices, board]);
   useEffect(() => {
     const sub = AppState.addEventListener("change", (st) => {
       if (st === "background") push.current(true);

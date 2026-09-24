@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { fillFromLast, type PnlMode } from "./model";
-import { canReuse, fromPayload, NO_FEATURES, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
+import { canReuse, fromPayload, NO_FEATURES, REUSE_OPEN_MS, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
 import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 
 /**
@@ -28,6 +28,13 @@ export interface WidgetData {
   indices: WidgetIndex[] | null;
   /** indices 를 받은 시각 (앱이 받은 지수와 어느 쪽이 새것인지 견줄 때) */
   indicesAt?: number;
+  /**
+   * 지수·환율 위젯 판 9개 (서버 board 또는 앱 지수 띠). 마지막으로 받은 값을 계속 둔다 — 이번 조회가 실패했거나
+   * 판을 묻지 않은 조회(다른 위젯의 ↻)여도 지우지 않는다. 한 번도 못 받았으면 null
+   */
+  board: WidgetIndex[] | null;
+  /** board 를 받은 시각 (기준 시각 표시, 앱이 받은 지수와 견줄 때, 3시간이 넘으면 모두 "지연") */
+  boardAt?: number;
   /** 위젯 기능 플래그 (예전 서버면 모두 꺼짐) */
   features: WidgetFeatures;
   /** features 를 서버에서 받은 시각 (앱이 받은 /api/features 와 어느 쪽이 새것인지 견줄 때). 모르면 없음 */
@@ -119,6 +126,9 @@ async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
       ...(d.latestIds ? { latestIds: d.latestIds } : {}),
       indices: Array.isArray(d.indices) ? d.indices : null,
       ...(typeof d.indicesAt === "number" ? { indicesAt: d.indicesAt } : {}),
+      // 1.3.0 앱이 적은 기록에는 없다 → 판 없음
+      board: Array.isArray(d.board) ? d.board : null,
+      ...(typeof d.boardAt === "number" ? { boardAt: d.boardAt } : {}),
       features: { ...NO_FEATURES, ...(d.features ?? {}) },
       ...(typeof d.featuresAt === "number" ? { featuresAt: d.featuresAt } : {}),
     };
@@ -169,6 +179,8 @@ export async function loadCachedWidgetData(): Promise<WidgetData> {
     ...(cached?.body.latestIds ? { latestIds: cached.body.latestIds } : {}),
     indices: p?.indices ?? null,
     ...(p?.indices && cached ? { indicesAt: cached.at } : {}),
+    board: p?.board ?? null,
+    ...(p?.board && cached ? { boardAt: cached.at } : {}),
     features: p?.features ?? NO_FEATURES,
     ...(cached ? { featuresAt: cached.at } : {}),
   };
@@ -199,6 +211,8 @@ export async function pushWidgetData(o: {
   /** 앱이 받은 기능 플래그와 받은 시각 (react-query dataUpdatedAt) */
   features?: { at: number; flags: WidgetFeatures } | null;
   indices?: { at: number; list: WidgetIndex[] } | null;
+  /** 지수·환율 위젯 판 (앱 지수 띠 9개와 받은 시각) */
+  board?: { at: number; list: WidgetIndex[] } | null;
 }): Promise<WidgetData> {
   const { apiUrl } = await readSettings();
   const [prev, cached] = await Promise.all([readWidgetView(apiUrl), readCachedPayload(apiUrl)]);
@@ -208,6 +222,8 @@ export async function pushWidgetData(o: {
     prev?.indices ? { at: prev.indicesAt ?? prev.fetchedAt, list: prev.indices } : null,
     p?.indices && cached ? { at: cached.at, list: p.indices } : null,
   ]);
+  // 판도 같은 규칙: 앱 지수 띠·마지막으로 그린 판·받아 둔 응답 중 받은 시각이 늦은 쪽
+  const board = newest([o.board?.list.length ? o.board : null, boardOf(prev), p?.board && cached ? { at: cached.at, list: p.board } : null]);
   // 플래그: 받은 시각을 모르는 값(시각 없는 옛 기록)은 견주지 않는다
   const flags = newest([
     o.features,
@@ -226,11 +242,18 @@ export async function pushWidgetData(o: {
     ...(prev?.latestIds ? { latestIds: prev.latestIds } : {}),
     indices: idx?.list ?? null,
     ...(idx ? { indicesAt: idx.at } : {}),
+    board: board?.list ?? null,
+    ...(board ? { boardAt: board.at } : {}),
     features: flags?.flags ?? NO_FEATURES,
     ...(flags ? { featuresAt: flags.at } : {}),
   };
   await saveWidgetView(data, apiUrl);
   return data;
+}
+
+/** 마지막으로 그린 판과 받은 시각 (없으면 null) */
+function boardOf(v: Pick<WidgetData, "board" | "boardAt" | "fetchedAt"> | null): { at: number; list: WidgetIndex[] } | null {
+  return v?.board?.length ? { at: v.boardAt ?? v.fetchedAt, list: v.board } : null;
 }
 
 /** 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단) */
@@ -270,9 +293,14 @@ async function legacyUntil(apiUrl: string): Promise<number> {
  * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다
  */
 const WIDGET_PATH = "/api/widget?indices=1";
+/**
+ * 지수·환율 위젯이 있을 때만 &board=1 (서버는 widgetMarket 이 켜져 있고 이 표시가 있을 때만 판 9개를 넣는다).
+ * 위젯이 없는 사용자의 응답·ETag 는 그대로다. ETag 는 본문으로 만들므로 board 가 있는 응답과 없는 응답의 ETag 가 섞여도 304 가 잘못 나지 않는다
+ */
+const BOARD_QUERY = "&board=1";
 
 /** /api/widget 한 번: 304 면 저장해 둔 본문, 받으면 저장. 예전 서버(404·모양이 다른 응답)면 null */
-async function fetchPayload(apiUrl: string, token: string, now: number): Promise<WidgetPayload | null> {
+async function fetchPayload(apiUrl: string, token: string, now: number, board = false): Promise<WidgetPayload | null> {
   if (now < (await legacyUntil(apiUrl))) return null;
   const legacy = async () => {
     await AsyncStorage.setItem(LEGACY_KEY, JSON.stringify({ apiUrl, until: now + LEGACY_RECHECK_MS })).catch(() => undefined);
@@ -282,7 +310,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number): Promise
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
   try {
-    const res = await fetch(`${apiUrl}${WIDGET_PATH}`, {
+    const res = await fetch(`${apiUrl}${WIDGET_PATH}${board ? BOARD_QUERY : ""}`, {
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
@@ -342,23 +370,36 @@ async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promi
 }
 
 /**
- * 서버에서 위젯에 필요한 데이터를 받는다. 위젯 3종이 GET /api/widget 한 번을 같이 쓴다 (예전 서버면 예전 두 API).
+ * 판을 묻는 조회(지수·환율 위젯)가 받아 둔 응답을 다시 써도 되는지: 그 응답에 판이 있거나, 서버가 플래그를 꺼 두었거나(판을 주지 않는다),
+ * 마지막으로 그린 판이 장중 재사용 시간(15분) 안에 받은 것이면. 판 없이 받아 둔 응답(다른 위젯이 받음)만 있으면 서버에 묻는다
+ */
+function boardReusable(body: WidgetPayload, prevBoardAt: number | undefined, now: number): boolean {
+  if (body.board?.length || body.features?.widgetMarket === false) return true;
+  return prevBoardAt !== undefined && now - prevBoardAt < REUSE_OPEN_MS;
+}
+
+/**
+ * 서버에서 위젯에 필요한 데이터를 받는다. 위젯 4종이 GET /api/widget 한 번을 같이 쓴다 (예전 서버면 예전 두 API).
  *  - 조회가 통째로 실패하면 마지막으로 받은 잔고를 그대로 돌려주고 error 에 사유를 남긴다("잔고 0"을 보이지 않게)
  *  - 일부 종목만 시세가 없으면 그 종목은 마지막 값으로 채운다
+ *  - board: 지수·환율 위젯 판도 묻는다 (&board=1). 판은 받지 못해도(실패·묻지 않음) 마지막으로 받은 것을 둔다
  */
-export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean; reuse?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
+export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean; reuse?: boolean; board?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
   const { apiUrl, apiToken, showKrw, afterCost } = await readSettings();
-  const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, fetchedAt: Date.now(), error: null, filled: [], market: null, indices: null, features: NO_FEATURES };
+  const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, fetchedAt: Date.now(), error: null, filled: [], market: null, indices: null, board: null, features: NO_FEATURES };
   const last = await readLastStocks(apiUrl);
+  // 판은 이번에 못 받아도 마지막 것을 둔다 (조회 전에 읽어 둔다 — 아래에서 이번 결과를 적으므로)
+  const prevView = await readWidgetView(apiUrl);
   let full = false;
   /** 방금 서버에서 받은 응답인지 (304 도 서버가 지금 값이라고 답한 것) */
   let fresh = false;
   try {
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
-    const reuse = reused && canReuse({ at: reused.at, market: reused.body.market }, out.fetchedAt) ? reused : null;
+    const reuse =
+      reused && canReuse({ at: reused.at, market: reused.body.market }, out.fetchedAt) && (!opts.board || boardReusable(reused.body, prevView?.boardAt, out.fetchedAt)) ? reused : null;
     if (reuse) out.fetchedAt = reuse.at;
-    const payload = reuse ? reuse.body : await fetchPayload(apiUrl, apiToken, out.fetchedAt);
+    const payload = reuse ? reuse.body : await fetchPayload(apiUrl, apiToken, out.fetchedAt, opts.board === true);
     let stocks: RegisteredWithQuote[];
     if (payload) {
       const p = fromPayload(payload);
@@ -367,6 +408,8 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.market = p.market;
       out.indices = p.indices;
       if (p.indices) out.indicesAt = out.fetchedAt;
+      out.board = p.board;
+      if (p.board) out.boardAt = out.fetchedAt;
       out.features = p.features;
       out.featuresAt = out.fetchedAt;
       if (payload.latestIds) out.latestIds = payload.latestIds;
@@ -395,6 +438,8 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       // 지수·플래그는 마지막으로 받은 값 그대로 (실패했다고 줄이 사라지거나 손익 전환이 꺼지지 않게)
       out.indices = p.indices;
       if (p.indices) out.indicesAt = cached.at;
+      out.board = p.board;
+      if (p.board) out.boardAt = cached.at;
       out.features = p.features;
       out.featuresAt = cached.at;
       full = true;
@@ -406,8 +451,21 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   }
   // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 지수·플래그를 옛 응답으로 덮지 않는다
   if (full && !fresh) await keepNewer(out, apiUrl);
+  keepBoard(out, prevView);
   await saveWidgetView(full ? out : await mergeLegacy(out, apiUrl, opts), apiUrl);
   return out;
+}
+
+/**
+ * 판은 받은 시각이 늦은 쪽: 이번 응답의 판 · 마지막으로 그린 판(앱 지수 띠가 적은 것 포함).
+ * 이번 응답에 판이 없으면(묻지 않은 조회·조회 실패·서버 지수 조회 실패) 마지막 판을 그대로 둔다 — 숫자가 사라지지 않고,
+ * 3시간이 지나면 그릴 때 모두 "지연"으로 (render.tsx agedIndices)
+ */
+function keepBoard(out: WidgetData, prev: Pick<WidgetData, "board" | "boardAt" | "fetchedAt"> | null): void {
+  const best = newest([out.board?.length ? { at: out.boardAt ?? out.fetchedAt, list: out.board } : null, boardOf(prev)]);
+  out.board = best?.list ?? null;
+  if (best) out.boardAt = best.at;
+  else delete out.boardAt;
 }
 
 /**

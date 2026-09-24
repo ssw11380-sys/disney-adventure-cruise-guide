@@ -33,7 +33,7 @@ import { CHIP_RADIUS, WIDGET_COLORS, WIDGET_FONT as F, WIDGET_RADIUS, WIDGET_TOU
 export { totals, type Totals } from "@/lib/portfolio";
 
 /**
- * 홈 화면 위젯 3종. react-native-android-widget 프리미티브만 쓴다(RN 컴포넌트 불가, 색은 hex/rgba 문자열).
+ * 홈 화면 위젯 3종 (+ 지수·환율 위젯은 marketWidget.tsx). react-native-android-widget 프리미티브만 쓴다(RN 컴포넌트 불가, 색은 hex/rgba 문자열).
  *  - HoldingsWidget (4x2~): 총 평가·누적 손익(금액·수익률) + 지수 한 줄 + 등록 종목 전체(보유 → 관심, 평가금액 순)를 스크롤 목록으로.
  *    종목을 누르면 상세로, 합계를 누르면 앱으로, 손익을 누르면 누적 ↔ 당일 (widgetPnlToggle).
  *    높이가 모자라면 전환 칸 → 메모 → 목록 순으로 뺀다 (목록은 높이 0 이면 그려지지 않으므로 자리가 있을 때만, layout.ts planHoldings).
@@ -46,7 +46,8 @@ export { totals, type Totals } from "@/lib/portfolio";
  * 조건부 칸은 부모에서 `cond ? <X/> : null` 로 넣고, map 결과에는 null 을 넣지 않는다.
  */
 
-export const WIDGET_NAMES = { holdings: "Holdings", briefing: "Briefing", asset: "Asset" } as const;
+/** 위젯 이름 (app.json 의 react-native-android-widget 플러그인 widgets[].name 과 같다). market = 지수·환율 위젯 (APK 1.4.0, marketWidget.tsx) */
+export const WIDGET_NAMES = { holdings: "Holdings", briefing: "Briefing", asset: "Asset", market: "Market" } as const;
 
 /** 태스크 핸들러로 오는 누름 (OPEN_URI 딥링크는 오지 않는다) */
 export const WIDGET_CLICK = { refresh: "REFRESH", pnlToggle: "PNL_TOGGLE" } as const;

@@ -2,7 +2,7 @@
   "expo": {
     "name": "주식 브리핑",
     "slug": "stock-briefing",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -89,6 +89,17 @@
               "targetCellWidth": 2,
               "targetCellHeight": 1,
               "resizeMode": "horizontal",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "Market",
+              "label": "지수·환율",
+              "description": "코스피·코스닥·나스닥 등 종합지수와 달러·엔·위안 환율",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "resizeMode": "horizontal|vertical",
               "updatePeriodMillis": 1800000
             }
           ]
