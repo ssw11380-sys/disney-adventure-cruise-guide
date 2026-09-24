@@ -61,7 +61,7 @@
             {
               "name": "Holdings",
               "label": "내 종목 시세",
-              "description": "총 평가금액·오늘 손익과 종목별 현재가",
+              "description": "총 평가금액·누적 손익과 종목별 현재가",
               "minWidth": "250dp",
               "minHeight": "110dp",
               "targetCellWidth": 4,
