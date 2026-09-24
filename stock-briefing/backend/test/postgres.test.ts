@@ -101,6 +101,9 @@ describe.skipIf(!url)("postgres dialect", () => {
       expect(await find("KT")).toEqual(["030200", "033780"]);
       expect(await find("kodex 200")).toEqual(["069500"]);
       expect(await find("005930")).toEqual(["005930"]);
+      // % _ 는 글자 그대로 (like ... escape '!')
+      expect(await find("K_")).toEqual([]);
+      expect(await find("%")).toEqual([]);
     } finally {
       await db.deleteFrom("listed_stocks").where("code", "in", rows.map((r) => r.code)).execute();
     }

@@ -1,11 +1,13 @@
 import { sql } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildApp } from "../src/app.js";
+import { loadConfig } from "../src/config.js";
 import type { ListedStock } from "../src/domain/types.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { ProviderError } from "../src/lib/errors.js";
 import type { StockSearchProvider } from "../src/providers/market/types.js";
 import { StockService } from "../src/services/stockService.js";
-import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider } from "./helpers.js";
+import { FakeMasterProvider, FakeNewsProvider, FakeQuoteProvider, FakeSearchProvider, SAMPLE_MASTER, fakeProviders } from "./helpers.js";
 
 /**
  * DISC-05: NAVER·KT·LG 처럼 영문 대문자 종목명은 티커 모양이라 로컬 검색이 코드만 찾고 이름 검색을 건너뛰었다.
@@ -138,5 +140,75 @@ describe("로컬 종목 검색: 티커 모양의 영문 종목명 (DISC-05)", ()
     expect(codes(await service.search("KT"))).toEqual(["KT", "030200", "033780"]);
     expect(codes(await service.searchMaster("tsla"))).toEqual(["TSLA"]);
     expect(codes(await service.searchMaster("테슬라"))).toEqual(["TSLA"]);
+  });
+
+  it("짧은 티커(GE)는 이름 중간에만 걸린 로컬 종목(TIGER …)이 많아도 미국 종목이 잘리지 않는다 (로컬 우선)", async () => {
+    const tigers = Array.from({ length: 30 }, (_, i) => st(String(410000 + i), `TIGER 테마${i}`, "EF"));
+    const ge: ListedStock = { code: "GE", name: "GE Aerospace", market: "NYSE", isinCode: null, groupCode: "ST" };
+    const service = await setup({ search: new FakeSearchProvider([ge]), master: [...MASTER, ...tigers] });
+    for (const q of ["GE", "ge"]) {
+      const r = codes(await service.search(q));
+      expect(r).toHaveLength(20);
+      expect(r[0]).toBe("GE");
+    }
+    // 이름이 검색어로 시작하는 로컬 종목은 여전히 외부 결과보다 앞
+    const kt: ListedStock = { code: "KT", name: "KT Corporation", market: "NYSE", isinCode: null, groupCode: "ST" };
+    await db!.destroy();
+    const withKt = await setup({ search: new FakeSearchProvider([kt]), master: [...MASTER, ...tigers] });
+    expect(codes(await withKt.search("KT")).slice(0, 3)).toEqual(["030200", "033780", "KT"]);
+  });
+
+  it("검색어의 % _ 는 LIKE 와일드카드가 아니라 글자 그대로 찾는다", async () => {
+    const service = await setup({ master: [...MASTER, st("499990", "HANARO 100%배당", "EF"), st("499991", "TEST_ETF", "EF")] });
+    expect(codes(await service.searchMaster("%"))).toEqual(["499990"]);
+    expect(codes(await service.searchMaster("100%"))).toEqual(["499990"]);
+    expect(codes(await service.searchMaster("_"))).toEqual(["499991"]);
+    expect(codes(await service.searchMaster("K_"))).toEqual([]); // KT·KODEX 가 걸리면 안 된다
+    expect(codes(await service.searchMaster("!"))).toEqual([]);
+  });
+});
+
+describe("종목 뉴스: 등록 안 한 종목의 이름 (DISC-05 검증 지적)", () => {
+  // 마스터는 한국 종목만(KIS 마스터). GE·T·V 는 코드로는 없지만 TIGER 200·KT·NAVER 이름 안에 들어 있다
+  const master = [...SAMPLE_MASTER, st("102110", "TIGER 200", "EF"), st("035420", "NAVER"), st("030200", "KT")];
+  const us: ListedStock = { code: "GE", name: "GE Aerospace", market: "NYSE", isinCode: null, groupCode: "ST" };
+
+  async function newsName(code: string, search: StockSearchProvider, remoteFirst = false) {
+    const db = await createMigratedDb(":memory:");
+    const news = new FakeNewsProvider();
+    const app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:" }),
+      db,
+      providers: fakeProviders({ master: new FakeMasterProvider(master), search, news, ...(remoteFirst ? { searchRemoteFirst: true } : {}) }),
+      logger: false,
+      enableScheduler: false,
+    });
+    try {
+      await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
+      const res = await app.inject({ method: "GET", url: `/api/stocks/${code}/news` });
+      expect(res.statusCode).toBe(200);
+      const name = res.json().name as string;
+      expect(news.queries).toEqual([name]); // 뉴스 검색에도 같은 이름을 쓴다
+      return name;
+    } finally {
+      await app.close();
+      await db.destroy();
+    }
+  }
+
+  it("마스터에 없고 외부 검색이 실패·빈 결과·다른 종목뿐이면 코드를 그대로 이름으로 쓴다", async () => {
+    for (const code of ["GE", "T", "V"]) {
+      expect(await newsName(code, new FailingSearch())).toBe(code);
+      expect(await newsName(code, new FailingSearch(), true)).toBe(code);
+      expect(await newsName(code, new FakeSearchProvider([]), true)).toBe(code);
+      // 외부 검색이 이름만 비슷한 한국 종목을 돌려줘도 코드가 다르면 쓰지 않는다
+      expect(await newsName(code, new FakeSearchProvider([SAMPLE_MASTER[0]!]))).toBe(code);
+    }
+  });
+
+  it("마스터에 있으면 마스터 이름, 외부 검색에 코드가 정확히 같은 종목이 있으면 그 이름", async () => {
+    expect(await newsName("035420", new FailingSearch())).toBe("NAVER");
+    expect(await newsName("000660", new FakeSearchProvider([us]), true)).toBe("SK하이닉스");
+    expect(await newsName("GE", new FakeSearchProvider([SAMPLE_MASTER[0]!, us]))).toBe("GE Aerospace");
   });
 });

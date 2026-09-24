@@ -35,7 +35,8 @@ export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app,
   app.get("/:code/news", async (req) => {
     const { code } = codeParam.parse(req.params);
     const registered = await stocks.get(code);
-    const name = registered?.name ?? (await stocks.search(code, 1)).results[0]?.name ?? code;
+    // 등록 안 한 종목은 코드가 정확히 같은 종목의 이름만 쓴다. 검색 첫 결과는 이름이 비슷한 다른 종목일 수 있다 (GE → TIGER 200)
+    const name = registered?.name ?? (await stocks.preview(code))?.name ?? code;
     const kr = isKrCode(code);
     const fin = kr ? financials : (financialsUs ?? null);
     const [newsRes, discRes] = await Promise.allSettled([

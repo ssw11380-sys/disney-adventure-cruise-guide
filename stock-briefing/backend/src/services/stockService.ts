@@ -1,4 +1,4 @@
-import { sql } from "kysely";
+import { sql, type Expression, type SqlBool } from "kysely";
 import { EXCLUDED_KEY, parseCodes, SNAPSHOT_KEY, type TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import { CandleCache } from "./candleCache.js";
@@ -74,6 +74,21 @@ function sameTradingDay(q: Quote, tickIso: string): boolean {
   return localDate(q.asOf, kr) === localDate(tickIso, kr);
 }
 const TOSS_DETAIL_KEY = "toss_holdings_detail";
+
+/** 로컬 검색 순위의 마지막 칸: 이름 중간에 검색어가 들어 있기만 한 종목 */
+const RANK_NAME_CONTAINS = 4;
+/**
+ * 로컬 검색 순위: 정확한 코드 → 이름 일치 → 이름 접두 → 코드 접두 → 이름 포함.
+ * searchLocal 의 order by 와 같은 기준 (이름은 대문자로, ' ' 만 뺀다). upperQ 는 공백을 뺀 대문자 검색어.
+ */
+function localRank(upperQ: string, s: { name: string; code: string }): number {
+  const n = s.name.replace(/ /g, "").toUpperCase();
+  if (s.code === upperQ) return 0;
+  if (n === upperQ) return 1;
+  if (n.startsWith(upperQ)) return 2;
+  if (s.code.startsWith(upperQ)) return 3;
+  return RANK_NAME_CONTAINS;
+}
 
 interface Held {
   quote: Quote;
@@ -210,8 +225,12 @@ export class StockService {
     if (local.length > 0 && !looksLikeTicker) return { results: local, source: "master" };
     try {
       const remote = await this.remoteSearch(q, limit);
+      // 이름 중간에만 걸린 로컬 종목(GE → TIGER …)이 개수 제한을 채워 미국 종목을 밀어내지 않게, 외부 결과를 그 앞에 둔다
+      const upperQ = compact.toUpperCase();
+      const strong = local.filter((s) => localRank(upperQ, s) < RANK_NAME_CONTAINS);
+      const weak = local.filter((s) => localRank(upperQ, s) >= RANK_NAME_CONTAINS);
       const seen = new Set(local.map((s) => s.code));
-      const merged = [...local, ...remote.filter((r) => !seen.has(r.code))].slice(0, limit);
+      const merged = [...strong, ...remote.filter((r) => !seen.has(r.code)), ...weak].slice(0, limit);
       return { results: merged, source: local.length ? `master+${this.deps.search.name}` : this.deps.search.name };
     } catch (e) {
       if (e instanceof ProviderError) return { results: local, source: local.length ? "master" : "none" };
@@ -250,35 +269,31 @@ export class StockService {
   private async searchLocal(q: string, limit: number): Promise<ListedStock[]> {
     const upperQ = q.toUpperCase();
     const name = sql<string>`replace(upper(${sql.ref("name")}), ' ', '')`;
+    const code = sql.ref<string>("code");
+    // 검색어의 % _ 는 글자 그대로 찾는다 (백슬래시는 Postgres 설정에 따라 문자열에서 달리 읽혀 escape 문자로 '!' 를 쓴다)
+    const pat = upperQ.replace(/[!%_]/g, "!$&");
+    const like = (col: Expression<string>, pattern: string) => sql<SqlBool>`${col} like ${pattern} escape '!'`;
     const rows = await this.deps.db
       .selectFrom("listed_stocks")
       .selectAll()
-      .where((eb) => eb.or([eb(name, "like", `%${upperQ}%`), eb("code", "like", `${upperQ}%`)]))
-      // 개수 제한에 정확히 맞는 종목이 잘리지 않게 같은 순서로 먼저 줄 세운다
+      .where((eb) => eb.or([like(name, `%${pat}%`), like(code, `${pat}%`)]))
+      // 개수 제한에 정확히 맞는 종목이 잘리지 않게 localRank 와 같은 순서로 먼저 줄 세운다
       .orderBy((eb) =>
         eb
           .case()
-          .when("code", "=", upperQ)
+          .when(code, "=", upperQ)
           .then(0)
           .when(name, "=", upperQ)
           .then(1)
-          .when(name, "like", `${upperQ}%`)
+          .when(like(name, `${pat}%`))
           .then(2)
-          .when("code", "like", `${upperQ}%`)
+          .when(like(code, `${pat}%`))
           .then(3)
-          .else(4)
+          .else(RANK_NAME_CONTAINS)
           .end(),
       )
       .limit(limit * 3)
       .execute();
-    const rank = (name: string, code: string): number => {
-      const n = name.replace(/\s+/g, "").toUpperCase();
-      if (code === upperQ) return 0;
-      if (n === upperQ) return 1;
-      if (n.startsWith(upperQ)) return 2;
-      if (code.startsWith(upperQ)) return 3;
-      return 4;
-    };
     return rows
       .map((r) => ({
         code: r.code,
@@ -288,7 +303,7 @@ export class StockService {
         groupCode: r.group_code,
       }))
       .sort((a, b) => {
-        const d = rank(a.name, a.code) - rank(b.name, b.code);
+        const d = localRank(upperQ, a) - localRank(upperQ, b);
         if (d !== 0) return d;
         // 일반 주식(ST) 우선, 그 다음 이름 길이(짧을수록 본주일 확률 높음)
         const g = (x: ListedStock) => (x.groupCode === "ST" ? 0 : 1);
