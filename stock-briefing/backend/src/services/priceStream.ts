@@ -225,12 +225,13 @@ export function topicCode(topic: string): string {
 }
 
 /**
- * 웹소켓이 체결을 주고 있다고 볼 종목들. 연결돼 있고 마지막 메시지(체결·60초마다 PING 응답)가 90초 안일 때만
- * (반쯤 끊긴 연결·받기만 하고 흘려보내지 않는 구독이면 폴링이 계속 뒤를 받친다)
+ * 웹소켓이 체결을 주고 있다고 볼 종목들. 연결돼 있고 마지막 신호(체결·주문 또는 60초마다 보내는 PING 의 응답)가 90초 안일 때만
+ * (반쯤 끊긴 연결이면 폴링이 계속 뒤를 받친다). 연결 단위 판단이라 구독만 되고 체결이 안 오는 종목까지 가려내지는 못한다
  */
-export function wsCovered(live: { connected: boolean; subscribed: string[]; lastMessageAt: string | null } | null, now: number): Set<string> | null {
-  if (!live?.connected || !live.lastMessageAt) return null;
-  const last = Date.parse(live.lastMessageAt);
+export function wsCovered(live: { connected: boolean; subscribed: string[]; lastMessageAt: string | null; lastAliveAt?: string | null } | null, now: number): Set<string> | null {
+  const alive = live?.lastAliveAt ?? live?.lastMessageAt ?? null;
+  if (!live?.connected || !alive) return null;
+  const last = Date.parse(alive);
   if (!Number.isFinite(last) || now - last > 90_000) return null;
   return new Set(live.subscribed.map(topicCode));
 }

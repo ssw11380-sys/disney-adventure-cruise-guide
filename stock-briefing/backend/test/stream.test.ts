@@ -210,6 +210,8 @@ describe("웹소켓이 받는 종목 판단 (3-17 리뷰)", () => {
     expect([...(wsCovered({ connected: true, subscribed: ["trade:kr:005930", "trade:us:AAPL"], lastMessageAt: "2026-09-24T09:59:30Z" }, now) ?? [])]).toEqual(["005930", "AAPL"]);
     expect(wsCovered({ connected: true, subscribed: ["trade:kr:005930"], lastMessageAt: "2026-09-24T09:58:00Z" }, now)).toBeNull(); // 반쯤 끊김
     expect(wsCovered({ connected: false, subscribed: ["trade:kr:005930"], lastMessageAt: "2026-09-24T09:59:59Z" }, now)).toBeNull();
+    // 체결이 없어도 PING 응답이 오면 살아 있는 것으로
+    expect(wsCovered({ connected: true, subscribed: ["trade:kr:005930"], lastMessageAt: "2026-09-24T09:00:00Z", lastAliveAt: "2026-09-24T09:59:40Z" }, now)).not.toBeNull();
   });
 });
 
