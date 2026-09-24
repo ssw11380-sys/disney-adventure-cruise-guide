@@ -1,5 +1,6 @@
 import type { Db } from "../db/index.js";
 import type { RegisteredStock } from "../domain/types.js";
+import { isKrCode, type Currency } from "../lib/codes.js";
 import { NotFoundError } from "../lib/errors.js";
 import { seoulDate, seoulIso } from "../lib/time.js";
 import { GenerationError, type TextGenerator } from "../llm/generator.js";
@@ -211,13 +212,15 @@ export class BriefingService {
   private async generate(stock: RegisteredStock, session: BriefingSession, date: string): Promise<{ briefing: Briefing; changeRate: number | null }> {
     const log = this.deps.log;
     const [snapshot, previous] = await Promise.all([this.deps.collector.collectBriefing(stock), this.previousSummary(stock.code, date, session)]);
+    // 평균 단가는 종목 통화로 저장된다 (미국은 달러). JSON 의 quote.currency 와 맞추고, 시세를 못 받았으면 코드 규칙으로
+    const currency: Currency = snapshot.quote?.currency ?? (isKrCode(stock.code) ? "KRW" : "USD");
     const vars = {
       stock_name: stock.name,
       stock_code: stock.code,
       session_label: SESSION_LABEL[session],
       date,
       quantity: stock.quantity === null ? "미입력" : `${stock.quantity}주`,
-      avg_price: stock.avgPrice === null ? "미입력" : `${stock.avgPrice.toLocaleString("ko-KR")}원`,
+      avg_price: stock.avgPrice === null ? "미입력" : promptPrice(stock.avgPrice, currency),
       missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
       notes_list: snapshot.notes?.length ? snapshot.notes.join(" / ") : "없음",
       market_state: snapshot.marketState?.label ?? "확인 안 됨",
@@ -392,6 +395,11 @@ export function normalizeSummary(text: string): string {
     .filter((l) => l.length > 0)
     .slice(0, 3)
     .join("\n");
+}
+
+/** 프롬프트에 넣는 가격 표기. 시스템 프롬프트의 통화 규칙과 같게 KRW "184,000원", USD "$340.22" */
+function promptPrice(n: number, currency: Currency): string {
+  return currency === "USD" ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : `${n.toLocaleString("ko-KR")}원`;
 }
 
 function kstMinute(iso: string): string {

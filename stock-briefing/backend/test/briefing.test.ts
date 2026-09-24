@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
+import type { Quote } from "../src/domain/types.js";
+import { ProviderError } from "../src/lib/errors.js";
 import { QuoteProviderChain } from "../src/providers/market/chain.js";
 import { BriefingScheduler } from "../src/scheduler.js";
 import { normalizeSummary } from "../src/services/briefingService.js";
-import { FakeGenerator, FakeInvestorFlow, FakeNewsProvider, FakeQuoteProvider, fakeProviders } from "./helpers.js";
+import { FakeGenerator, FakeInvestorFlow, FakeNewsProvider, FakeQuoteProvider, FakeSearchProvider, fakeProviders, makeQuote } from "./helpers.js";
 
 describe("briefing pipeline", () => {
   let app: FastifyInstance;
@@ -156,6 +158,92 @@ describe("briefing pipeline", () => {
     expect((await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "night" } })).statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url: "/api/briefings/999" })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: "/api/briefings?date=2026/09/22" })).statusCode).toBe(400);
+  });
+});
+
+/** 한국 코드는 원화, 미국 티커는 달러 시세를 준다. failCodes 는 현재가 실패 */
+class CurrencyQuoteProvider extends FakeQuoteProvider {
+  constructor(private readonly failCodes: string[] = []) {
+    super("fake");
+  }
+  override async getQuote(code: string): Promise<Quote> {
+    this.calls++;
+    if (this.failCodes.includes(code)) throw new ProviderError(this.name, "고의 실패");
+    return /^\d/.test(code) ? makeQuote(code, this.name, 180_000) : { ...makeQuote(code, this.name, 220), currency: "USD" };
+  }
+}
+
+describe("브리핑 입력의 평균 단가 통화 (B1)", () => {
+  let app: FastifyInstance;
+  let db: Db;
+  let gen: FakeGenerator;
+
+  beforeEach(async () => {
+    db = await createMigratedDb(":memory:");
+    gen = new FakeGenerator();
+    const us = (code: string, name: string) => ({ code, name, market: "NASDAQ" as const, isinCode: null, groupCode: "ST" });
+    app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:" }),
+      db,
+      providers: fakeProviders({
+        quotes: new QuoteProviderChain([new CurrencyQuoteProvider(["MSFT"])]),
+        search: new FakeSearchProvider([us("AAPL", "Apple Inc."), us("TSLA", "Tesla, Inc."), us("MSFT", "Microsoft Corporation")]),
+        generator: gen,
+      }),
+      logger: false,
+      enableScheduler: false,
+      now: () => new Date("2026-09-22T00:00:00+09:00"),
+    });
+    await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
+    for (const payload of [
+      { code: "000660", quantity: 10, avgPrice: 150_000 }, // 한국 보유
+      { code: "005930" }, // 한국 관심
+      { code: "AAPL", quantity: 2, avgPrice: 200 }, // 미국 보유 (감사 재현: 달러 평단 200, 시세 USD 220)
+      { code: "TSLA" }, // 미국 관심
+      { code: "MSFT", quantity: 1, avgPrice: 1234.5 }, // 미국 보유 + 현재가 실패
+    ]) {
+      expect((await app.inject({ method: "POST", url: "/api/stocks", payload })).statusCode, payload.code).toBe(201);
+    }
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await db.destroy();
+  });
+
+  /** 모델 호출 직전 상세 입력: 평균 단가 줄과 JSON 의 quote.currency */
+  const detailInput = (code: string) => {
+    const user = gen.requests.find((r) => r.label === `briefing_detail:${code}`)!.user;
+    const json = JSON.parse(user.slice(user.indexOf("```json") + "```json".length, user.lastIndexOf("```"))) as {
+      quote: { currency: string } | null;
+      holding: unknown;
+    };
+    return { avgLine: user.split(/\r?\n/).find((l) => l.startsWith("평균 단가:")), currency: json.quote?.currency ?? null, holding: json.holding };
+  };
+
+  it("평균 단가는 JSON 시세 통화와 같은 통화로 넘긴다 (미국 달러, 한국 원)", async () => {
+    const run = (await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", force: true } })).json();
+    expect(run.results.map((r: { code: string; status: string }) => [r.code, r.status])).toEqual([
+      ["000660", "ok"], ["005930", "ok"], ["AAPL", "ok"], ["TSLA", "ok"], ["MSFT", "ok"],
+    ]);
+
+    const aapl = detailInput("AAPL");
+    expect(aapl.currency).toBe("USD");
+    expect(aapl.avgLine).toBe("평균 단가: $200.00");
+    expect(aapl.holding).toMatchObject({ marketValue: 440, profit: 40 });
+
+    const hynix = detailInput("000660");
+    expect(hynix.currency).toBe("KRW");
+    expect(hynix.avgLine).toBe("평균 단가: 150,000원");
+
+    // 관심 종목은 통화와 무관하게 미입력
+    expect(detailInput("005930")).toMatchObject({ currency: "KRW", avgLine: "평균 단가: 미입력" });
+    expect(detailInput("TSLA")).toMatchObject({ currency: "USD", avgLine: "평균 단가: 미입력" });
+
+    // 현재가를 못 받아 JSON 에 통화가 없어도 미국 티커는 달러
+    const msft = detailInput("MSFT");
+    expect(msft.currency).toBeNull();
+    expect(msft.avgLine).toBe("평균 단가: $1,234.50");
   });
 });
 

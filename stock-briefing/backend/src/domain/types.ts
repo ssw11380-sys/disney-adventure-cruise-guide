@@ -22,7 +22,7 @@ export interface RegisteredStock {
   name: string;
   market: Market;
   quantity: number | null; // 보유 수량 (관심 종목이면 null)
-  avgPrice: number | null; // 평균 단가 (원)
+  avgPrice: number | null; // 평균 단가 (종목 통화: 한국 원, 미국 달러)
   memo: string | null;
   createdAt: string; // ISO
   updatedAt: string; // ISO
