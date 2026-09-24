@@ -368,7 +368,7 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     const acc: Candle[] = [];
     const seen = new Set<string>();
     let before: string | undefined;
-    for (let page = 0; page < 8 && acc.length < count; page++) {
+    for (let page = 0; page < 14 && acc.length < count; page++) {
       // before 는 inclusive 라 페이지 경계의 봉이 한 번 더 올 수 있다 → 한 개 더 청하고 날짜로 중복 제거
       const r = await this.client.get<{ candles?: TossCandle[]; nextBefore?: string | null }>("/api/v1/candles", {
         symbol: code,
@@ -432,7 +432,8 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
       return { code, period, candles: aggregateIntraday(minutes, step).slice(-count), source: this.name };
     }
     const dailyNeeded = period === "D" ? count : period === "W" ? count * 5 + 10 : count * 22 + 10;
-    const daily = await this.dailyCandles(code, Math.min(dailyNeeded, 1600));
+    // 월봉 120개 = 일봉 약 2,650개 (200개씩 14쪽). 예전 상한 1,600 이면 79개만 나왔다 (3-18)
+    const daily = await this.dailyCandles(code, Math.min(dailyNeeded, 2700));
     if (daily.length === 0) throw new ProviderError(this.name, `${code} 봉 데이터 없음`);
     return { code, period, candles: aggregateCandles(daily, period).slice(-count), source: this.name };
   }

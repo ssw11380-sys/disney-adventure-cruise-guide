@@ -1,5 +1,6 @@
 import { EXCLUDED_KEY, parseCodes, SNAPSHOT_KEY, type TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
+import { CandleCache } from "./candleCache.js";
 import type { Db } from "../db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
@@ -98,6 +99,7 @@ export interface RegisteredWithQuote extends RegisteredStock {
 
 export class StockService {
   private readonly now: () => Date;
+  private readonly candleCache: CandleCache;
   private readonly ttl: number;
   /** 현재가 메모리 캐시 (DB quote_cache 와 같은 값). at = 새로 받은 시각, failedAt = 그 뒤 마지막 새로 받기 실패 시각 */
   private readonly book = new Map<string, Held>();
@@ -115,6 +117,7 @@ export class StockService {
   constructor(private readonly deps: StockServiceDeps) {
     this.now = deps.now ?? (() => new Date());
     this.ttl = deps.quoteCacheTtlMs ?? 60_000;
+    this.candleCache = new CandleCache((c, p, n) => deps.quotes.getCandles(c, p, n), () => this.now().getTime());
   }
 
   // ── 종목 마스터 ────────────────────────────────────────────────
@@ -703,8 +706,20 @@ export class StockService {
     };
   }
 
+  /** 차트 봉 (캐시: 같은 종목·주기를 다시 열면 바로, 3-18) */
   getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
-    return this.deps.quotes.getCandles(code, period, count);
+    return this.candleCache.get(normalizeCode(code), period, count);
+  }
+
+  /** 기동 뒤: 등록 종목의 기본 차트(일봉 800개)를 한 종목씩 미리 받아 둔다 (처음 여는 차트도 기다리지 않게). 실패는 무시 */
+  async warmCandles(codes?: string[], count = 800): Promise<void> {
+    for (const code of codes ?? (await this.list()).map((s) => s.code)) {
+      await this.candleCache.get(code, "D", count).catch(() => undefined);
+    }
+  }
+
+  candleStatus() {
+    return { ...this.candleCache.stats };
   }
 }
 
