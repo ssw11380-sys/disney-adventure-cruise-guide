@@ -28,3 +28,39 @@ export function holdingPatch(
   for (const v of [out.quantity, out.avgPrice]) if (v !== undefined && v !== null && !(v > 0)) return { error: "수량과 평균 단가는 0보다 큰 숫자여야 합니다." };
   return out;
 }
+
+/**
+ * 서버 값에서 시작한 입력 칸 하나의 초안 (PF-07). base = 초안이 기준으로 삼은 서버 값.
+ * stale = 고치는 사이 그 칸의 서버 값이 바뀜 → 저장하면 새 서버 값을 덮어쓰므로 화면에서 알린다
+ */
+export interface Draft {
+  base: string;
+  value: string;
+  stale: boolean;
+}
+
+/** 같은 값인지 볼 때의 모양: 숫자 칸은 쉼표·단위를 뺀 숫자("1,350,000" = "1350000"), 메모는 앞뒤 공백 제외 (저장할 때와 같게) */
+export type Norm = (s: string) => string;
+export const normNum: Norm = (s) => {
+  const t = s.replace(/[^0-9.]/g, "");
+  return t ? String(Number(t)) : "";
+};
+export const normText: Norm = (s) => s.trim();
+
+export function draftOf(server: string): Draft {
+  return { base: server, value: server, stale: false };
+}
+
+/** 같은 종목의 서버 값이 바뀌면(토스 체결 동기화 등) 손대지 않은 칸만 새 값으로, 고치던 칸은 그대로. 바뀐 게 없으면 같은 객체 */
+export function rebaseDraft(d: Draft, server: string, norm: Norm = (s) => s): Draft {
+  if (d.base === server) return d;
+  const v = norm(d.value);
+  // 손대지 않았거나, 입력이 새 서버 값과 같다(방금 저장한 값을 다시 받음) → 서버 값으로
+  if (v === norm(d.base) || v === norm(server)) return draftOf(server);
+  return { base: server, value: d.value, stale: true };
+}
+
+/** 사용자가 칸을 고침. 서버 값과 같게 되돌리면 안내도 거둔다 */
+export function editDraft(d: Draft, value: string, norm: Norm = (s) => s): Draft {
+  return { ...d, value, stale: d.stale && norm(value) !== norm(d.base) };
+}

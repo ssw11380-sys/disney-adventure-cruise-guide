@@ -42,6 +42,13 @@ export default function AddStockScreen() {
     router.push(`/stocks/${s.code}`);
   };
 
+  /** 등록 양식 열기·닫기는 모두 여기로: 앞 종목에 넣던 수량·평단(원화↔달러)이 다른 종목에 남아 잘못 등록되지 않게 비운다 (PF-06) */
+  const select = (s: ListedStock | null) => {
+    setSelected(s);
+    setQuantity("");
+    setAvgPrice("");
+  };
+
   const submit = () => {
     if (!selected) return;
     const qty = quantity.trim() ? Number(quantity.replace(/,/g, "")) : null;
@@ -61,7 +68,7 @@ export default function AddStockScreen() {
           // 다른 화면(상세)에서 이미 등록한 종목: 실패가 아니라 "이미 등록됨"으로 알리고 표시를 새로 받는다
           if (e instanceof ApiRequestError && e.status === 409 && e.code === "CONFLICT") {
             refreshRegistered();
-            setSelected(null);
+            select(null);
             Alert.alert("이미 등록된 종목", `${selected.name}은(는) 이미 등록되어 있습니다. 수량·평단은 종목 상세에서 바꿀 수 있습니다.`);
             return;
           }
@@ -80,7 +87,7 @@ export default function AddStockScreen() {
           value={q}
           onChangeText={(v) => {
             setQ(v);
-            setSelected(null);
+            select(null);
           }}
           placeholder="종목명·코드·미국 티커 (예: SK하이닉스, 000660, AAPL)"
           placeholderTextColor={t.muted}
@@ -106,7 +113,7 @@ export default function AddStockScreen() {
                 {selected.code} · {selected.market}
               </Muted>
             </View>
-            <Pressable onPress={() => setSelected(null)} accessibilityRole="button" accessibilityLabel="선택 취소" hitSlop={slopFor(ICON, space.xs)}>
+            <Pressable onPress={() => select(null)} accessibilityRole="button" accessibilityLabel="선택 취소" hitSlop={slopFor(ICON, space.xs)}>
               <Ionicons name="close" size={22} color={t.muted} />
             </Pressable>
           </View>
@@ -151,7 +158,7 @@ export default function AddStockScreen() {
                 <LineHead price="" right="등록" />
               </>
             }
-            renderItem={({ item }) => <ResultRow item={item} recent registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => setSelected({ ...item, isinCode: null, groupCode: null })} />}
+            renderItem={({ item }) => <ResultRow item={item} recent registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => select({ ...item, isinCode: null, groupCode: null })} />}
           />
         ) : (
           <Muted style={{ paddingHorizontal: space.lg }}>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
@@ -175,7 +182,7 @@ export default function AddStockScreen() {
               <Muted style={{ fontSize: font.tiny, paddingTop: space.xs, paddingHorizontal: space.lg }}>토스 검색 실패 — 앱의 종목 목록에서 찾은 결과만 보여 줍니다</Muted>
             ) : null
           }
-          renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => setSelected(item)} />}
+          renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => select(item)} />}
         />
       )}
     </Screen>
