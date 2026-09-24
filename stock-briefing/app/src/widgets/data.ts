@@ -30,6 +30,8 @@ export interface WidgetData {
   indicesAt?: number;
   /** 위젯 기능 플래그 (예전 서버면 모두 꺼짐) */
   features: WidgetFeatures;
+  /** features 를 서버에서 받은 시각 (앱이 받은 /api/features 와 어느 쪽이 새것인지 견줄 때). 모르면 없음 */
+  featuresAt?: number;
 }
 
 const LAST_KEY = "widget.lastStocks";
@@ -118,6 +120,7 @@ async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
       indices: Array.isArray(d.indices) ? d.indices : null,
       ...(typeof d.indicesAt === "number" ? { indicesAt: d.indicesAt } : {}),
       features: { ...NO_FEATURES, ...(d.features ?? {}) },
+      ...(typeof d.featuresAt === "number" ? { featuresAt: d.featuresAt } : {}),
     };
   } catch {
     return null;
@@ -163,12 +166,23 @@ export async function loadCachedWidgetData(): Promise<WidgetData> {
     indices: p?.indices ?? null,
     ...(p?.indices && cached ? { indicesAt: cached.at } : {}),
     features: p?.features ?? NO_FEATURES,
+    ...(cached ? { featuresAt: cached.at } : {}),
   };
 }
 
+/** 받은 시각이 가장 늦은 것 (같으면 앞의 것) */
+function newest<T extends { at: number }>(known: (T | null | undefined)[]): T | null {
+  let best: T | null = null;
+  for (const k of known) if (k && (!best || k.at > best.at)) best = k;
+  return best;
+}
+
 /**
- * 앱이 받은 잔고로 위젯을 그릴 때의 데이터 (refreshWidgets). 지수는 앱이 받은 것과 위젯이 받아 둔 것 중 새것,
- * 기능 플래그는 앱이 받은 것(없으면 위젯이 받아 둔 것). 그린 데이터는 적어 둔다 (손익 전환 때 같은 값으로 다시 그리게)
+ * 앱이 받은 잔고로 위젯을 그릴 때의 데이터 (refreshWidgets). 지수와 기능 플래그는 앱이 받은 것과 위젯이 받아 둔 것
+ * (마지막 /api/widget 응답·마지막으로 그린 데이터) 중 받은 시각이 늦은 쪽을 쓴다.
+ * 앱 캐시는 기기에 최대 7일 남고, 플래그는 브리핑·설정 화면을 열 때만 다시 받으므로 옛 값일 수 있다 —
+ * 늘 앱 값을 쓰면 관리자가 끈 기능(예: widgetPnlToggle)이 앱을 열 때마다 되살아난다.
+ * 그린 데이터는 적어 둔다 (손익 전환 때 같은 값으로 다시 그리게)
  */
 export async function pushWidgetData(o: {
   stocks: RegisteredWithQuote[];
@@ -178,17 +192,24 @@ export async function pushWidgetData(o: {
   fetchedAt: number;
   market: WidgetMarket | null;
   briefings?: LatestBriefing[];
-  features?: WidgetFeatures | null;
+  /** 앱이 받은 기능 플래그와 받은 시각 (react-query dataUpdatedAt) */
+  features?: { at: number; flags: WidgetFeatures } | null;
   indices?: { at: number; list: WidgetIndex[] } | null;
 }): Promise<WidgetData> {
   const { apiUrl } = await readSettings();
   const [prev, cached] = await Promise.all([readWidgetView(apiUrl), readCachedPayload(apiUrl)]);
   const p = cached ? fromPayload(cached.body) : null;
-  const known: { at: number; list: WidgetIndex[] }[] = [];
-  if (o.indices) known.push(o.indices);
-  if (prev?.indices) known.push({ at: prev.indicesAt ?? prev.fetchedAt, list: prev.indices });
-  if (p?.indices && cached) known.push({ at: cached.at, list: p.indices });
-  const newest = known.sort((a, b) => b.at - a.at)[0] ?? null;
+  const idx = newest([
+    o.indices,
+    prev?.indices ? { at: prev.indicesAt ?? prev.fetchedAt, list: prev.indices } : null,
+    p?.indices && cached ? { at: cached.at, list: p.indices } : null,
+  ]);
+  // 플래그: 받은 시각을 모르는 값(시각 없는 옛 기록)은 견주지 않는다
+  const flags = newest([
+    o.features,
+    prev && prev.featuresAt !== undefined ? { at: prev.featuresAt, flags: prev.features } : null,
+    p && cached ? { at: cached.at, flags: p.features } : null,
+  ]);
   const data: WidgetData = {
     stocks: o.stocks,
     briefings: o.briefings ?? prev?.briefings ?? p?.briefings ?? [],
@@ -199,9 +220,10 @@ export async function pushWidgetData(o: {
     filled: o.filled,
     market: o.market,
     ...(prev?.latestIds ? { latestIds: prev.latestIds } : {}),
-    indices: newest?.list ?? null,
-    ...(newest ? { indicesAt: newest.at } : {}),
-    features: o.features ?? prev?.features ?? p?.features ?? NO_FEATURES,
+    indices: idx?.list ?? null,
+    ...(idx ? { indicesAt: idx.at } : {}),
+    features: flags?.flags ?? NO_FEATURES,
+    ...(flags ? { featuresAt: flags.at } : {}),
   };
   await saveWidgetView(data, apiUrl);
   return data;
@@ -334,6 +356,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.indices = p.indices;
       if (p.indices) out.indicesAt = out.fetchedAt;
       out.features = p.features;
+      out.featuresAt = out.fetchedAt;
       if (payload.latestIds) out.latestIds = payload.latestIds;
       full = true;
     } else {
@@ -360,6 +383,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.indices = p.indices;
       if (p.indices) out.indicesAt = cached.at;
       out.features = p.features;
+      out.featuresAt = cached.at;
       full = true;
     }
     if (last) {

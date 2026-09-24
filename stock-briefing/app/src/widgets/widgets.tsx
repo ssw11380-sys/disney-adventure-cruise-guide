@@ -36,6 +36,7 @@ export { totals, type Totals } from "@/lib/portfolio";
  * 홈 화면 위젯 3종. react-native-android-widget 프리미티브만 쓴다(RN 컴포넌트 불가, 색은 hex/rgba 문자열).
  *  - HoldingsWidget (4x2~): 총 평가·누적 손익(금액·수익률) + 지수 한 줄 + 등록 종목 전체(보유 → 관심, 평가금액 순)를 스크롤 목록으로.
  *    종목을 누르면 상세로, 합계를 누르면 앱으로, 손익을 누르면 누적 ↔ 당일 (widgetPnlToggle).
+ *    높이가 모자라면 전환 칸 → 메모 → 목록 순으로 뺀다 (목록은 높이 0 이면 그려지지 않으므로 자리가 있을 때만, layout.ts planHoldings).
  *  - BriefingWidget (4x2): 보유 비중 상위 3종목의 최신 브리핑 한 줄씩 + 고지 한 줄. 누르면 브리핑 상세로.
  *  - AssetWidget (2x1): 총 평가금액과 오늘 손익만 크게.
  * 새로고침(↻, 48dp 칸)은 clickAction "REFRESH", 손익 전환은 "PNL_TOGGLE" 로 태스크 핸들러에 전달된다.
@@ -179,14 +180,18 @@ function rowView(s: RegisteredWithQuote, filled: string[], showKrw: boolean, aft
   };
 }
 
-/** 합계·손익 줄. 손익 전환이 켜져 있으면 합계(앱 열기)와 손익(전환, 48dp 높이)을 따로 누른다 */
-function TotalRow({ plan, total, pnl, toggle, c }: { plan: TotalPlan; total: string; pnl: PnlLine; toggle: boolean; c: WidgetPalette }) {
+/**
+ * 합계·손익 줄. 손익 전환 칸이 있으면(plan.toggle) 합계(앱 열기)와 손익(전환, 48dp 높이)을 따로 누른다.
+ * 플래그가 켜져 있어도 위젯이 낮아 칸을 뺐으면(layout.ts) 예전처럼 줄 전체가 앱 열기
+ */
+function TotalRow({ plan, total, pnl, c }: { plan: TotalPlan; total: string; pnl: PnlLine; c: WidgetPalette }) {
+  const toggle = plan.toggle;
   const color = tone(pnl.sign, c);
   const totalLabel = `총 평가 ${speakAmount(total)}`;
   const pnlLabel = pnlSpeech(pnl, toggle);
   const row: FlexWidgetStyle = plan.inline
-    ? { width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: space.xs, marginBottom: space.xs }
-    : { width: "match_parent", flexDirection: "column", alignItems: "flex-start", marginTop: space.xs, marginBottom: space.xs };
+    ? { width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: plan.gapY, marginBottom: plan.gapY }
+    : { width: "match_parent", flexDirection: "column", alignItems: "flex-start", marginTop: plan.gapY, marginBottom: plan.gapY };
   const pnlBoxStyle: FlexWidgetStyle = { height: plan.pnlH, paddingHorizontal: plan.pnlPadX, flexDirection: "column", justifyContent: "center", alignItems: plan.inline ? "flex-end" : "flex-start" };
   const totalText = <TextWidget text={total} maxLines={1} style={{ color: c.ink, fontSize: plan.totalFont, fontWeight: "800" }} />;
   const pnlTexts = plan.pnl.map((line) => <TextWidget key={line} text={line} maxLines={1} style={{ color, fontSize: plan.pnlFont, fontWeight: "700" }} />);
@@ -263,10 +268,11 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const scale = props.fontScale ?? 1;
   const refreshing = props.refreshing === true;
   const t = totals(stocks, showKrw, afterCost);
-  // 합계 옆은 누적 손익 (사용자 요청 2026-09-24, 토스 "내 투자"처럼 금액과 수익률). 손익 전환이 켜져 있으면 당일도
-  const toggle = props.pnlToggle === true;
-  const mode: PnlMode = toggle ? (props.pnlMode ?? "cumulative") : "cumulative";
-  const pnl = t ? pnlLine(mode, t, (n) => formatPrice(n, t.currency, { sign: true }), (n) => formatPct(n)) : null;
+  // 합계 옆은 누적 손익 (사용자 요청 2026-09-24, 토스 "내 투자"처럼 금액과 수익률). 손익 전환이 켜져 있으면 저장된 쪽(누적·당일)
+  const signed = (n: number) => formatPrice(n, t?.currency, { sign: true });
+  const pct = (n: number) => formatPct(n);
+  const cum = t ? pnlLine("cumulative", t, signed, pct) : null;
+  const chosen = t && props.pnlToggle === true ? pnlLine(props.pnlMode ?? "cumulative", t, signed, pct) : null;
   const total = t ? formatPrice(t.value, t.currency) : null;
   const ordered = widgetOrder(stocks, fxOf);
   const rows = ordered.map((s) => rowView(s, filled, showKrw, afterCost, c));
@@ -276,28 +282,34 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const items = props.indexLine ? indexItems(props.indices) : [];
   const title = `잔고 ${rows.length}`;
   const sub = refreshing ? ["갱신 중"] : asOfVariants(asOf, now);
+  // 메모 줄이 들어갈 높이가 없으면 머리 줄에 "갱신 실패" (갱신 중일 때는 "갱신 중"이 먼저)
+  const alert = !refreshing && failureText(error) ? "갱신 실패" : null;
   const plan = planHoldings({
     width,
     height,
     scale,
     header: { title, chip: market?.label ?? null, sub, delayed },
-    total: total && pnl ? { total, amount: pnl.amount, rate: pnl.rate, toggle } : null,
+    total: total && cum ? { total, fixed: { amount: cum.amount, rate: cum.rate }, toggle: chosen ? { amount: chosen.amount, rate: chosen.rate } : null } : null,
     indices: items,
     rows,
     note: noteParts(error, filled.length, excludedCount(stocks)),
+    alert,
   });
-  const headerLabel = sentence([`잔고 ${rows.length}종목`, market?.label, refreshing ? "갱신 중" : sub[0], delayed ? "시세 지연" : null]);
+  // 전환 칸을 둔 배치면 저장된 쪽, 아니면(플래그 꺼짐·낮은 위젯) 누적
+  const pnl = plan.total?.toggle ? chosen : cum;
+  const headerLabel = sentence([`잔고 ${rows.length}종목`, market?.label, alert && plan.header.sub === alert ? alert : null, refreshing ? "갱신 중" : sub[0], delayed ? "시세 지연" : null]);
   return (
     <FlexWidget style={listRootStyle(c)}>
       <Header title={title} plan={plan.header} market={market} refreshing={refreshing} label={headerLabel} c={c} />
       <FlexWidget style={{ width: "match_parent", flexDirection: "column", paddingRight: PAD }}>
-        {plan.total && total && pnl ? <TotalRow plan={plan.total} total={total} pnl={pnl} toggle={toggle} c={c} /> : null}
+        {plan.total && total && pnl ? <TotalRow plan={plan.total} total={total} pnl={pnl} c={c} /> : null}
         {plan.index ? <IndexLine plan={plan.index} items={items} c={c} /> : null}
         {plan.note ? <TextWidget text={plan.note} maxLines={1} style={{ color: c.muted, fontSize: F.sm }} /> : null}
         {rows.length === 0 && !error && !refreshing ? <TextWidget text="등록된 종목이 없습니다" maxLines={2} style={{ color: c.muted, fontSize: F.md }} /> : null}
         {rows.length === 0 && error && !refreshing ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" maxLines={2} style={{ color: c.muted, fontSize: F.md }} /> : null}
       </FlexWidget>
-      {rows.length > 0 ? (
+      {/* 목록은 첫 줄이 보일 높이가 있을 때만 (높이 0 인 목록은 라이브러리가 그리지 못해 위젯이 갱신되지 않는다) */}
+      {plan.list && rows.length > 0 ? (
         <ListWidget style={{ height: "match_parent", width: "match_parent", marginRight: PAD }}>
           {rows.map((r, n) => {
             const subText = plan.rows.sub[n];
@@ -349,36 +361,47 @@ export function BriefingWidget(props: { briefings: LatestBriefing[]; fetchedAt: 
     <FlexWidget style={listRootStyle(c)}>
       <Header title="브리핑" plan={plan.header} market={market} refreshing={refreshing} label={headerLabel} c={c} />
       {items.length ? (
-        <FlexWidget style={{ width: "match_parent", flexDirection: "column", paddingRight: PAD, flexGap: space.xxs }}>
-          {items.slice(0, plan.items).map((it) => {
-            const b = it.latest!;
-            const first = b.summary.split("\n").find(Boolean) ?? "";
-            const session = b.session === "morning" ? "오전" : "오후";
-            // 날짜는 자르지 않는다: 이름 칸만 남는 폭 안에서 끝을 줄인다
-            const date = ` · ${b.date.slice(5).replace("-", "/")} ${session}`;
-            const nameW = Math.max(0, Math.floor(Math.min(textWidth(it.name, F.sm, scale, true), content - textWidth(date, F.sm, scale, true))));
-            return (
-              <FlexWidget
-                key={b.id}
-                clickAction="OPEN_URI"
-                clickActionData={{ uri: `${DEEP_LINK}briefings/${b.id}` }}
-                accessibilityLabel={sentence([`${it.name} ${speakDate(b.date, session)} 브리핑`, first])}
-                style={{ width: "match_parent", flexDirection: "column" }}
-              >
-                <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center" }}>
-                  <TextWidget text={it.name} maxLines={1} truncate="END" style={{ color: c.gold, fontSize: F.sm, fontWeight: "700", width: nameW }} />
-                  <TextWidget text={date} maxLines={1} style={{ color: c.gold, fontSize: F.sm, fontWeight: "700" }} />
+        plan.items ? (
+          <FlexWidget style={{ width: "match_parent", flexDirection: "column", paddingRight: PAD, flexGap: space.xxs }}>
+            {items.slice(0, plan.items).map((it) => {
+              const b = it.latest!;
+              const first = b.summary.split("\n").find(Boolean) ?? "";
+              const session = b.session === "morning" ? "오전" : "오후";
+              const itemProps = {
+                clickAction: "OPEN_URI",
+                clickActionData: { uri: `${DEEP_LINK}briefings/${b.id}` },
+                accessibilityLabel: sentence([`${it.name} ${speakDate(b.date, session)} 브리핑`, first]),
+              };
+              if (plan.item === "line") {
+                // 낮은 위젯: 이름(최대 40%)과 요약을 한 줄에. 날짜는 뺀다 (숫자를 자르지 않게)
+                const nameW = Math.max(0, Math.floor(Math.min(textWidth(it.name, F.sm, scale, true), content * 0.4)));
+                return (
+                  <FlexWidget key={b.id} {...itemProps} style={{ width: "match_parent", flexDirection: "row", alignItems: "center", flexGap: space.xs }}>
+                    <TextWidget text={it.name} maxLines={1} truncate="END" style={{ color: c.gold, fontSize: F.sm, fontWeight: "700", width: nameW }} />
+                    <TextWidget text={first} maxLines={1} truncate="END" style={{ color: c.ink, fontSize: F.base, width: Math.max(0, Math.floor(content - nameW - space.xs)) }} />
+                  </FlexWidget>
+                );
+              }
+              // 날짜는 자르지 않는다: 이름 칸만 남는 폭 안에서 끝을 줄인다
+              const date = ` · ${b.date.slice(5).replace("-", "/")} ${session}`;
+              const nameW = Math.max(0, Math.floor(Math.min(textWidth(it.name, F.sm, scale, true), content - textWidth(date, F.sm, scale, true))));
+              return (
+                <FlexWidget key={b.id} {...itemProps} style={{ width: "match_parent", flexDirection: "column" }}>
+                  <FlexWidget style={{ width: "match_parent", flexDirection: "row", alignItems: "center" }}>
+                    <TextWidget text={it.name} maxLines={1} truncate="END" style={{ color: c.gold, fontSize: F.sm, fontWeight: "700", width: nameW }} />
+                    <TextWidget text={date} maxLines={1} style={{ color: c.gold, fontSize: F.sm, fontWeight: "700" }} />
+                  </FlexWidget>
+                  <TextWidget text={first} maxLines={plan.summaryLines} truncate="END" style={{ color: c.ink, fontSize: F.base }} />
                 </FlexWidget>
-                <TextWidget text={first} maxLines={plan.summaryLines} truncate="END" style={{ color: c.ink, fontSize: F.base }} />
-              </FlexWidget>
-            );
-          })}
-        </FlexWidget>
+              );
+            })}
+          </FlexWidget>
+        ) : null
       ) : refreshing ? null : (
         <TextWidget
           text={error ? `${failureText(error)} · ↻ 로 다시 시도` : "아직 브리핑이 없습니다. 평일 08:30·16:00 에 생성됩니다."}
-          maxLines={3}
-          style={{ color: c.muted, fontSize: F.md, marginTop: space.s, marginRight: PAD }}
+          maxLines={plan.messageLines}
+          style={{ color: c.muted, fontSize: F.md, marginTop: plan.messageGap, marginRight: PAD }}
         />
       )}
       <TextWidget text={DISCLAIMER_SHORT} maxLines={1} style={{ color: c.muted, fontSize: F.xs, marginTop: space.xs, marginRight: PAD }} />

@@ -7,6 +7,8 @@ import { WIDGET_FONT as F, WIDGET_TOTAL_FONTS as TOTAL_FONTS, WIDGET_TOUCH as TO
  * 그래서 글자 폭을 보수적으로(실제 글꼴보다 넓게) 어림해, 숫자가 칸에 다 들어가는 배치를 미리 고른다.
  *  - 숫자는 자르지 않는다: 글자를 줄이거나(정해진 단계 안에서), 덜 중요한 칸(장 상태 칩·손익 금액·지수 항목)을 뺀다
  *  - 이름·브리핑 문장만 끝을 …로 줄일 수 있다
+ *  - 높이도 어림해 위젯 밖으로 넘치지 않게 한다: 잔고 목록(ListWidget)은 높이가 0 이면 라이브러리가 그리지 못하므로(예외 → 위젯이 갱신되지 않음)
+ *    첫 줄이 보일 높이가 없으면 넣지 않고, 브리핑 고지 한 줄은 늘 들어가게 종목 칸을 줄인다
  *  - 크기 단계: 목록 위젯(잔고·브리핑)은 높이, 자산 위젯(2×1)은 폭으로 compact · regular · large
  * 폭·높이는 dp, 글자 크기는 sp (배율 scale = 시스템 글자 크기, 100% = 1)
  */
@@ -137,14 +139,27 @@ export function planHeader(i: HeaderInput, width: number, scale: number): Header
 
 // ── 잔고 위젯 합계 줄 ──────────────────────────────────────────────────
 
-export interface TotalInput {
-  /** "123,456,789원" */
-  total: string;
+/** 손익 글자: 금액과 수익률 */
+export interface PnlText {
   /** "누적 -12,345,678원" */
   amount: string;
   /** "(-12.34%)" (없으면 null) */
   rate: string | null;
-  /** 손익을 눌러 누적·당일을 바꿀 수 있는지 (그러면 손익 칸이 48dp 높이) */
+}
+
+export interface TotalInput {
+  /** "123,456,789원" */
+  total: string;
+  /** 전환 칸 없이 그릴 때의 손익 (누적 — 플래그를 끈 것과 같다) */
+  fixed: PnlText;
+  /** 손익을 눌러 누적·당일을 바꿀 수 있으면(widgetPnlToggle) 전환 칸에 보일 손익 (저장된 쪽). 꺼져 있으면 null */
+  toggle: PnlText | null;
+}
+
+/** 합계 줄 한 가지 배치를 재는 입력: 손익 글자와 누르는 칸(48dp)을 둘지 */
+export interface TotalLine extends PnlText {
+  total: string;
+  /** 손익을 눌러 누적·당일을 바꾸는 칸 (손익 칸이 48dp 높이) */
   toggle: boolean;
 }
 
@@ -161,13 +176,17 @@ export interface TotalPlan {
   pnlH: number;
   /** 합계 칸 높이 */
   totalH: number;
-  /** 줄 전체 높이 */
+  /** 줄 전체 높이 (위아래 여백 제외) */
   height: number;
+  /** 손익 전환 칸을 두는지 (플래그가 켜져 있어도 낮은 위젯에서는 뺄 수 있다) */
+  toggle: boolean;
+  /** 줄 위아래 여백. 전환 칸(48dp)은 안에 빈 곳이 있어 0 */
+  gapY: number;
 }
 
 const TOTAL_GAP = space.sm;
 
-function totalPlan(i: TotalInput, inline: boolean, totalFont: number, pnlFont: number, twoLines: boolean, scale: number): TotalPlan & { width: number } {
+function totalPlan(i: TotalLine, inline: boolean, totalFont: number, pnlFont: number, twoLines: boolean, scale: number): TotalPlan & { width: number } {
   const pnl = twoLines && i.rate ? [i.amount, i.rate] : [i.rate ? `${i.amount} ${i.rate}` : i.amount];
   const textW = Math.max(...pnl.map((l) => textWidth(l, pnlFont, scale, true)));
   const pnlPadX = i.toggle ? Math.max(0, Math.ceil((TOUCH - textW) / 2)) : 0;
@@ -177,14 +196,27 @@ function totalPlan(i: TotalInput, inline: boolean, totalFont: number, pnlFont: n
   const tW = textWidth(i.total, totalFont, scale, true);
   const tLine = lineHeight(totalFont, scale);
   const height = inline ? Math.max(tLine, pnlH) : tLine + pnlH;
-  return { inline, totalFont, pnlFont, pnl, pnlPadX, pnlH, totalH: inline ? height : tLine, height, width: inline ? tW + TOTAL_GAP + pnlW : Math.max(tW, pnlW) };
+  return {
+    inline,
+    totalFont,
+    pnlFont,
+    pnl,
+    pnlPadX,
+    pnlH,
+    totalH: inline ? height : tLine,
+    height,
+    toggle: i.toggle,
+    gapY: i.toggle ? 0 : space.xs,
+    width: inline ? tW + TOTAL_GAP + pnlW : Math.max(tW, pnlW),
+  };
 }
 
 /**
- * 합계·손익 배치: 한 줄 → 손익 두 줄 → 합계 글자 줄이기 → 합계 아래로 내리기 순으로 들어가는 첫 배치.
- * 끝까지 안 되면 합계 아래로 내리고 글자를 칸에 맞게 줄인다 (숫자를 자르지 않는다)
+ * 합계·손익 배치 후보 (폭에 들어가는 것만, 앞의 것이 더 좋은 배치):
+ * 한 줄 → 손익 두 줄 → 합계 글자 줄이기 → 합계 아래로 내리기 → (낮은 위젯용) 합계·손익 글자를 줄여 높이 줄이기.
+ * 하나도 안 들어가면 합계 아래로 내리고 글자를 칸에 맞게 줄인 한 가지 (숫자를 자르지 않는다)
  */
-export function planTotal(i: TotalInput, width: number, scale: number): TotalPlan {
+export function totalOptions(i: TotalLine, width: number, scale: number): TotalPlan[] {
   const [big, mid, small] = TOTAL_FONTS;
   const tries: [boolean, number, number, boolean][] = [
     [true, big, F.md, false],
@@ -195,16 +227,32 @@ export function planTotal(i: TotalInput, width: number, scale: number): TotalPla
     [false, big, F.sm, false],
     [false, big, F.sm, true],
     [false, mid, F.xs, true],
+    // 낮은 위젯(4×2 최소·큰 글자): 합계 글자를 줄여 두 줄 높이를 줄인다
+    [false, small, F.sm, false],
+    [false, small, F.xs, false],
+    [false, small, F.xs, true],
   ];
+  const out: TotalPlan[] = [];
   for (const [inline, tf, pf, two] of tries) {
     const p = totalPlan(i, inline, tf, pf, two, scale);
-    if (p.width <= width) return strip(p);
+    if (p.width <= width) out.push(strip(p));
   }
+  if (out.length) return out;
   // 아주 좁으면 글자를 칸에 맞게
   const tf = fitFont(i.total, width, F.big, scale, true);
   const lines = i.rate ? [i.amount, i.rate] : [i.amount];
   const pf = Math.min(...lines.map((l) => fitFont(l, width, F.xs, scale, true)));
-  return strip(totalPlan(i, false, tf, pf, true, scale));
+  return [strip(totalPlan(i, false, tf, pf, true, scale))];
+}
+
+/** 폭만 볼 때의 합계 배치 (가장 좋은 후보) */
+export function planTotal(i: TotalLine, width: number, scale: number): TotalPlan {
+  return totalOptions(i, width, scale)[0]!;
+}
+
+/** 합계 줄이 차지하는 높이 (위아래 여백 포함) */
+export function totalBlock(t: TotalPlan | null): number {
+  return t ? t.height + t.gapY * 2 : 0;
 }
 
 function strip<T extends { width: number }>(p: T): Omit<T, "width"> {
@@ -339,6 +387,8 @@ export interface HoldingsInput {
   rows: RowInput[];
   /** 합계 아래 회색 한 줄 조각 (갱신 실패·이전 값·일부 제외) */
   note: string[];
+  /** 메모 줄이 들어갈 높이가 없을 때 머리 줄 기준 시각 자리에 대신 보일 짧은 글 ("갱신 실패"). 없으면 null */
+  alert: string | null;
 }
 
 export interface HoldingsPlan<T extends IndexInput = IndexInput> {
@@ -349,24 +399,81 @@ export interface HoldingsPlan<T extends IndexInput = IndexInput> {
   total: TotalPlan | null;
   index: IndexPlan<T> | null;
   note: string | null;
+  /**
+   * 종목 목록(ListWidget)을 넣는지. 넣으면 목록 칸이 첫 줄(이름·가격)이 보이는 높이 이상이다 —
+   * 라이브러리는 높이 0 인 목록을 그리지 못하고(예외), 그 예외는 네이티브가 삼켜 위젯이 아예 갱신되지 않는다
+   */
+  list: boolean;
+  /** 목록 칸 높이 어림 (dp, 목록이 없으면 남는 높이) */
+  listH: number;
   rows: RowsPlan;
 }
 
+/** 목록을 넣을 최소 높이: 첫 줄의 이름·가격 줄이 온전히 보일 만큼 (위 여백 + 구분선 + 한 줄) */
+export function listMinHeight(scale: number): number {
+  return space.xs + 1 + lineHeight(F.base, scale);
+}
+
+/**
+ * 잔고 위젯 배치. 폭(숫자 잘림 0)과 높이(위젯 밖으로 넘치지 않음)를 함께 본다.
+ * 세로 순서: 머리 줄(48dp, ↻ 칸) → 합계 줄 → [지수 줄] → [메모] → 목록 (아래 여백 PAD).
+ * 높이가 모자라면 덜 중요한 것부터 뺀다 — 목록 > 메모 > 손익 전환 칸 순으로 지킨다:
+ *  1. 목록 + 메모 + 손익 전환 칸(48dp)   2. 목록 + 메모, 전환 칸 없이(누적만, 누르면 앱 — 플래그를 끈 것과 같다)
+ *  3. 목록, 메모 없이(갱신 실패는 머리 줄 기준 시각 자리에) + 전환 칸   4. 목록만
+ *  5~8. 같은 순서로 목록 없이   9. 마지막: 모두 빼고 합계 줄 여백 0 (가장 낮은 합계 배치)
+ * 그래서 갱신이 실패해 메모가 생겨도 목록이 사라지지 않는다. 각 단계에서 합계 줄은 폭에 들어가는 후보(totalOptions) 중 높이가 들어가는 첫 것.
+ * 지수 줄은 compact 가 아니고, 넣은 뒤에도 목록이 한 줄 이상 보일 때만.
+ */
 export function planHoldings<T extends IndexInput>(i: HoldingsInput & { indices: T[] }): HoldingsPlan<T> {
+  const s = i.scale;
   const size = listSize(i.height);
   const content = i.width - PAD * 2;
-  const header = planHeader(i.header, i.width, i.scale);
-  const total = i.total ? planTotal(i.total, content, i.scale) : null;
-  const note = fitJoin(i.note, content, F.sm, i.scale);
-  const rows = planRows(i.rows, content, i.scale);
-  // 지수 줄: compact 가 아니고, 넣은 뒤에도 목록이 한 줄 이상 보일 때만 ("너무 낮은 위젯"에서는 감춘다)
-  let index: IndexPlan<T> | null = null;
-  if (size !== "compact" && i.indices.length) {
-    const plan = planIndexLine(i.indices, content, i.scale, size === "large" ? 2 : 1);
-    const fixed = TOUCH + (total?.height ?? 0) + space.xs * 2 + (note ? lineHeight(F.sm, i.scale) : 0) + PAD;
-    if (plan && i.height - fixed - (plan.height + space.xs) >= rows.rowH) index = plan;
+  const rows = planRows(i.rows, content, s);
+  const noteText = fitJoin(i.note, content, F.sm, s);
+  const noteH = noteText ? lineHeight(F.sm, s) : 0;
+  // 머리 줄은 위 끝에 붙고(위 여백 없음), 아래 여백은 PAD
+  const avail = i.height - PAD - TOUCH;
+  const hasRows = i.rows.length > 0;
+  const listMin = listMinHeight(s);
+  const t = i.total;
+  const optionsFor = (toggle: boolean): (TotalPlan | null)[] => {
+    if (!t) return [null];
+    const pnl = toggle && t.toggle ? t.toggle : t.fixed;
+    return totalOptions({ total: t.total, ...pnl, toggle: toggle && !!t.toggle }, content, s);
+  };
+  const toggles = t?.toggle ? [true, false] : [false];
+  type Pick = { total: TotalPlan | null; list: boolean; note: boolean; room: number };
+  const tryFit = (): Pick | null => {
+    for (const list of hasRows ? [true, false] : [false])
+      for (const note of noteText ? [true, false] : [true])
+        for (const toggle of toggles)
+          for (const total of optionsFor(toggle)) {
+            const room = avail - totalBlock(total) - (note ? noteH : 0);
+            if (room >= (list ? listMin : 0)) return { total, list, note, room };
+          }
+    return null;
+  };
+  let pick = tryFit();
+  if (!pick) {
+    // 마지막: 전환 칸·목록·메모 없이, 합계 줄 여백 0 으로 가장 낮은 배치
+    const lowest = optionsFor(false)
+      .map((p) => (p ? { ...p, gapY: 0 } : p))
+      .reduce((a, b) => (totalBlock(b) < totalBlock(a) ? b : a));
+    pick = { total: lowest, list: false, note: false, room: avail - totalBlock(lowest) };
   }
-  return { size, content, header, total, index, note, rows };
+  const note = pick.note ? noteText : null;
+  // 메모를 뺐으면 갱신 실패는 머리 줄 기준 시각 자리에 (옛 값인지 알 수 있게)
+  const header = planHeader(!pick.note && noteText && i.alert ? { ...i.header, sub: [i.alert, ...i.header.sub] } : i.header, i.width, s);
+  let listH = pick.room;
+  let index: IndexPlan<T> | null = null;
+  if (pick.list && size !== "compact" && i.indices.length) {
+    const plan = planIndexLine(i.indices, content, s, size === "large" ? 2 : 1);
+    if (plan && listH - (plan.height + space.xs) >= rows.rowH) {
+      index = plan;
+      listH -= plan.height + space.xs;
+    }
+  }
+  return { size, content, header, total: pick.total, index, note, list: pick.list, listH, rows };
 }
 
 // ── 브리핑 위젯 ───────────────────────────────────────────────────────
@@ -374,22 +481,58 @@ export function planHoldings<T extends IndexInput>(i: HoldingsInput & { indices:
 export interface BriefingPlan {
   size: SizeClass;
   header: HeaderPlan;
-  /** 보여 줄 종목 수 (1~3) */
+  /** 보여 줄 종목 수 (0~3) */
   items: number;
+  /**
+   * 한 종목 칸: "full" = 이름·날짜 줄 + 요약(summaryLines 줄),
+   * "line" = 낮은 위젯에서 이름과 요약을 한 줄에 (날짜는 뺀다 — 자르지 않는다)
+   */
+  item: "full" | "line";
   /** 요약 줄 수 (large 에서 칸이 남으면 2) */
   summaryLines: 1 | 2;
+  /** 종목이 없거나 조회에 실패했을 때 안내 문구 줄 수 (1~3) */
+  messageLines: number;
+  /** 안내 문구 위 여백 */
+  messageGap: number;
 }
 
+/** 브리핑 한 종목 칸 높이 (flexGap 포함) */
+export function briefingItemHeight(item: "full" | "line", summaryLines: number, scale: number): number {
+  if (item === "line") return lineHeight(F.base, scale) + space.xxs;
+  return lineHeight(F.sm, scale) + summaryLines * lineHeight(F.base, scale) + space.xxs;
+}
+
+/** 브리핑 위젯 고지 한 줄이 차지하는 높이 (위 여백 포함) */
+export function disclaimerHeight(scale: number): number {
+  return lineHeight(F.xs, scale) + space.xs;
+}
+
+/** 머리 줄·고지 줄·아래 여백을 뺀, 종목 칸(또는 안내 문구)에 쓸 수 있는 높이. 어림 오차를 space.xs 만큼 더 남긴다 */
+export function briefingRoom(height: number, scale: number): number {
+  return height - TOUCH - PAD - disclaimerHeight(scale) - space.xs;
+}
+
+/**
+ * 브리핑 위젯: 고지 한 줄은 늘 들어가게 종목 칸 수·모양을 고른다.
+ * large 에서 칸이 남으면 요약 두 줄, 한 종목(이름 줄 + 요약)도 안 들어가면 이름·요약 한 줄 모양, 그것도 안 되면 0개
+ */
 export function planBriefing(i: { width: number; height: number; scale: number; header: HeaderInput; count: number }): BriefingPlan {
+  const s = i.scale;
   const size = listSize(i.height);
-  const header = planHeader(i.header, i.width, i.scale);
-  const disclaimer = lineHeight(F.xs, i.scale) + space.xs;
-  const room = i.height - TOUCH - PAD - disclaimer - space.xs;
-  const itemH = (lines: number) => lineHeight(F.sm, i.scale) + lines * lineHeight(F.base, i.scale) + space.xxs;
-  const want = Math.min(3, Math.max(1, i.count));
-  const summaryLines = size === "large" && want * itemH(2) <= room ? 2 : 1;
-  const items = Math.max(1, Math.min(want, Math.floor(room / itemH(summaryLines))));
-  return { size, header, items, summaryLines };
+  const header = planHeader(i.header, i.width, s);
+  const room = briefingRoom(i.height, s);
+  const want = Math.min(3, Math.max(0, i.count));
+  let item: "full" | "line" = "full";
+  let summaryLines: 1 | 2 = 1;
+  if (size === "large" && want && want * briefingItemHeight("full", 2, s) <= room) summaryLines = 2;
+  else if (briefingItemHeight("full", 1, s) > room) item = "line";
+  const items = Math.max(0, Math.min(want, Math.floor(room / briefingItemHeight(item, summaryLines, s))));
+  // 안내 문구: 위 여백(space.s)과 함께 들어가는 줄 수. 한 줄도 여백과 함께 안 들어가면 여백 없이 한 줄
+  const mLine = lineHeight(F.md, s);
+  const withGap = Math.floor((room - space.s) / mLine);
+  const messageLines = Math.max(1, Math.min(3, withGap));
+  const messageGap = withGap >= 1 ? space.s : 0;
+  return { size, header, items, item, summaryLines, messageLines, messageGap };
 }
 
 // ── 자산 위젯 (2×1) ───────────────────────────────────────────────────

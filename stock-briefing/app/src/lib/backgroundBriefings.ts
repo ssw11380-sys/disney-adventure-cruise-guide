@@ -125,7 +125,7 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
       filled: data.filled,
       market: data.market,
       briefings: data.briefings,
-      features: data.features,
+      features: data.featuresAt !== undefined ? { at: data.featuresAt, flags: data.features } : null,
       indices: data.indices ? { at: data.indicesAt ?? data.fetchedAt, list: data.indices } : null,
     });
     return BackgroundTask.BackgroundTaskResult.Success;

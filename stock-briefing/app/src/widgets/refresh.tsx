@@ -30,8 +30,8 @@ export async function refreshWidgets({
   market?: WidgetMarket | null;
   /** 주면 브리핑 위젯도 다시 그린다 (백그라운드 작업) */
   briefings?: LatestBriefing[];
-  /** 위젯 기능 플래그 (앱이 받은 /api/features 또는 위젯 응답). 없으면 위젯이 받아 둔 값 */
-  features?: WidgetFeatures | null;
+  /** 위젯 기능 플래그와 받은 시각 (앱이 받은 /api/features 또는 위젯 응답). 위젯이 받아 둔 것과 견줘 새것을 쓴다 */
+  features?: { at: number; flags: WidgetFeatures } | null;
   /** 지수 줄 (받은 시각과 함께). 위젯이 받아 둔 것과 견줘 새것을 쓴다 */
   indices?: { at: number; list: WidgetIndex[] } | null;
 }): Promise<void> {

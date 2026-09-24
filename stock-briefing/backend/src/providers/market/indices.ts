@@ -109,6 +109,10 @@ export class MarketIndices {
    * legacy = 옛 앱용 — 이번에 받은 항목만, 전부 실패면 직전 목록 (main 서버와 같은 응답)
    */
   private cache: { at: number; all: MarketIndex[]; legacy: MarketIndex[] } | null = null;
+  /**
+   * 진행 중인 목록 조회. 캐시가 만료된 순간 요청이 겹쳐도(지수 띠·/api/widget·위젯끼리) 출처 9곳을 한 번만 부르고 결과를 나눠 쓴다
+   */
+  private inflight: Promise<{ at: number; all: MarketIndex[]; legacy: MarketIndex[] }> | null = null;
   /** 항목별 마지막 정상값과 받은 시각 (출처가 실패하면 STALE_MAX_MS 까지 이 값을 stale 로 준다) */
   private readonly last = new Map<string, { row: MarketIndex; at: number }>();
   /** 마지막으로 비어 있지 않던 목록(이번에 받은 항목만)과 받은 시각 — main 의 직전 목록. 전부 실패하면 옛 앱에 이것을 준다 */
@@ -179,7 +183,12 @@ export class MarketIndices {
    */
   async list(opts: { stale?: boolean } = {}): Promise<MarketIndex[]> {
     const t = this.now().getTime();
-    if (!this.cache || t - this.cache.at >= 30_000) this.cache = await this.fetchAll(t);
+    if (!this.cache || t - this.cache.at >= 30_000) {
+      this.inflight ??= this.fetchAll(t).finally(() => {
+        this.inflight = null;
+      });
+      this.cache = await this.inflight;
+    }
     return opts.stale ? this.cache.all : this.cache.legacy;
   }
 

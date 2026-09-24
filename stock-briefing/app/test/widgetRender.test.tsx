@@ -51,10 +51,12 @@ const { renderBoth, errorView } = await import("@/widgets/render");
 const { widgetTaskHandler } = await import("@/widgets/widgetTaskHandler");
 const { refreshWidgets } = await import("@/widgets/refresh");
 const { loadWidgetData, readPnlMode } = await import("@/widgets/data");
-const { fromPayload } = await import("@/widgets/payload");
+const { fromPayload, widgetFeatures } = await import("@/widgets/payload");
 const { HOME_URI, indexItems } = await import("@/widgets/model");
 const { WIDGET_PALETTES, WIDGET_TOUCH } = await import("@/widgets/palette");
-const { formatIndexValue, formatPct } = await import("@/lib/format");
+const { formatIndexValue, formatPct, formatPrice } = await import("@/lib/format");
+const { DISCLAIMER_SHORT } = await import("@/lib/disclaimer");
+const { pnlLine, pnlSpeech } = await import("@/widgets/model");
 
 interface Tree {
   type: string;
@@ -222,6 +224,15 @@ describe("손익 전환 (widgetPnlToggle)", () => {
     expect(words(row)).toEqual(["700,000원", "누적 -100,000원 (-12.50%)"]);
   });
 
+  it("손익이 0 원이면 '당일 손익 없음' (검토 지적: '당일 손익 손익 없음'으로 읽지 않게)", () => {
+    const money = (n: number) => formatPrice(n, "KRW", { sign: true });
+    const zero = pnlLine("day", { value: 700_000, profit: -100_000, day: 0 }, money, formatPct);
+    expect(pnlSpeech(zero, true)).toBe("당일 손익 없음, 수익률 보합, 누르면 누적 손익으로 바뀝니다");
+    const cum = pnlLine("cumulative", { value: 700_000, profit: 0, day: 0 }, money, formatPct);
+    expect(pnlSpeech(cum, false)).toBe("누적 손익 없음, 수익률 보합");
+    expect(pnlSpeech(pnlLine("day", { value: 700_000, profit: 0, day: 1_000 }, money, formatPct), true)).toBe("당일 손익 1,000원 이익, 수익률 0.14% 상승, 누르면 누적 손익으로 바뀝니다");
+  });
+
   it("예전 서버(플래그 없음)면 꺼짐으로 본다", () => {
     const d = fromPayload(payload({ features: undefined, indices: undefined }));
     expect(d.features).toEqual({ pnlToggle: false, indexLine: false });
@@ -252,11 +263,74 @@ describe("지수 줄 (widgetIndexLine)", () => {
     expect(strip).toMatch(/import \{ formatIndexValue, formatPct \} from "@\/lib\/format"/);
   });
 
+  it("검토 지적: 위젯 조회가 계속 실패해 지수를 받은 지 3시간(서버 stale 한도)이 넘으면 모든 항목을 '지연'(회색)으로", () => {
+    const line = (indicesAt: number) => {
+      const t = build(renderBoth(WIDGET_NAMES.holdings, { ...data(), indicesAt }, { ...WIDE, fontScale: 1, now: NOW, pnlMode: "cumulative" }).dark);
+      return nodes(t).find((n) => n.props.accessibilityLabel?.startsWith("코스피"))!;
+    };
+    const old = line(NOW - 3 * 3_600_000 - 60_000);
+    expect(words(old).filter((w) => w === "지연")).toHaveLength(3);
+    expect(texts(old).find((p) => p.text === "3,412.35")!.color).toBe(dark.muted);
+    expect(old.props.accessibilityLabel).toBe("코스피 3,412.35 0.90% 상승 시세 지연, 나스닥 26,936.04 1.13% 하락 시세 지연, 원/달러 1,360.50 시세 지연");
+    // 3시간 안이면 받은 그대로 (나스닥만 서버가 준 stale)
+    const fresh = line(NOW - 60 * 60_000);
+    expect(words(fresh).filter((w) => w === "지연")).toHaveLength(1);
+    expect(texts(fresh).find((p) => p.text === "3,412.35")!.color).toBe(dark.up);
+  });
+
   it("플래그 꺼짐·지수 없음(예전 서버)·낮은 위젯(4×2 최소)에서는 감춘다", () => {
     expect(words(holdings({ indexLine: false }))).not.toContain("코스피");
     expect(words(holdings({ indices: null }))).not.toContain("코스피");
     expect(words(holdings({ indices: [] }))).not.toContain("코스피");
     expect(words(holdings({}, { width: 250, height: 110 }))).not.toContain("코스피");
+  });
+});
+
+describe("세로 배치: 목록은 자리가 있을 때만 (검토 지적)", () => {
+  const hasList = (t: Tree) => nodes(t).some((n) => n.type === "ListWidget");
+
+  it("4×2 최소(250×110) × 100·130% × 전환 켬: 목록(ListWidget)을 넣지 않는다 — 넣으면 높이 0 → 라이브러리 예외 → 위젯이 갱신되지 않음", () => {
+    for (const fontScale of [1, 1.3])
+      for (const pnlMode of ["cumulative", "day"] as const) {
+        const t = holdings({ fontScale, pnlMode }, { width: 250, height: 110 });
+        expect(hasList(t)).toBe(false);
+        expect(byClick(t, "REFRESH")).toHaveLength(1);
+        expect(words(t)).toContain("700,000원");
+      }
+  });
+
+  it("흔한 4×2(330×150·180)·4×4 에서는 목록과 손익 전환 칸이 함께", () => {
+    for (const box of [
+      { width: 330, height: 150 },
+      { width: 330, height: 180 },
+      { width: 330, height: 380 },
+    ])
+      for (const fontScale of [1, 1.3]) {
+        const t = holdings({ fontScale, pnlMode: "day" }, box);
+        expect(hasList(t)).toBe(true);
+        expect(words(byClick(t, "PNL_TOGGLE")[0]!).join(" ")).toContain("당일 +1,000원");
+      }
+  });
+
+  it("목록 자리가 모자라면 전환 칸을 먼저 뺀다: 누적만, 줄 전체가 앱 열기 (250×130 · 100%, 당일로 저장돼 있어도)", () => {
+    const t = holdings({ pnlMode: "day" }, { width: 250, height: 130 });
+    expect(hasList(t)).toBe(true);
+    expect(byClick(t, "PNL_TOGGLE")).toHaveLength(0);
+    const row = byClick(t, "OPEN_URI").find((n) => words(n).includes("700,000원"))!;
+    expect(words(row).join(" ")).toContain("누적 -100,000원");
+    expect(row.props.accessibilityLabel).toBe("총 평가 700,000원, 누적 손익 100,000원 손실, 수익률 12.50% 하락");
+  });
+
+  it("갱신 실패 메모가 들어갈 자리가 없으면 머리 줄 기준 시각 자리에 '갱신 실패' (읽기에도)", () => {
+    const t = holdings({ error: "Network request failed", filled: ["005930"] }, { width: 250, height: 110 });
+    expect(words(t)).toContain("갱신 실패");
+    expect(words(t)).not.toContain("갱신 실패 · 연결 안 됨 · 1종목 이전 값");
+    const head = byClick(t, "OPEN_URI").find((n) => String(n.props.accessibilityLabel).startsWith("잔고 2종목"))!;
+    expect(head.props.accessibilityLabel).toContain("갱신 실패");
+    // 자리가 있으면 메모 줄 그대로, 머리 줄은 기준 시각
+    const wide = holdings({ error: "Network request failed", filled: ["005930"] });
+    expect(words(wide)).toContain("갱신 실패 · 연결 안 됨 · 1종목 이전 값");
+    expect(words(wide)).toContain("15:30 기준");
   });
 });
 
@@ -289,12 +363,31 @@ describe("3-23 화면 읽기·↻", () => {
 
   it("브리핑: 날짜는 자르지 않고(이름만 줄임), '이름 날짜 브리핑, 첫 줄'로 읽는다", () => {
     const long = [{ ...data().briefings[0]!, name: "TIGER 미국필라델피아반도체나스닥" }];
-    const t = build(<BriefingWidget briefings={long} fetchedAt={NOW} error={null} now={NOW} width={250} height={110} fontScale={1.3} />);
+    const t = build(<BriefingWidget briefings={long} fetchedAt={NOW} error={null} now={NOW} width={250} height={180} fontScale={1.3} />);
     const date = texts(t).find((p) => p.text === " · 09/24 오후")!;
     expect(date.truncate).toBeUndefined();
     const name = texts(t).find((p) => p.text === "TIGER 미국필라델피아반도체나스닥")!;
     expect(name.truncate).toBe("END");
     expect(byClick(t, "OPEN_URI").some((n) => n.props.accessibilityLabel === "TIGER 미국필라델피아반도체나스닥 9월 24일 오후 브리핑, 첫 줄 삼성")).toBe(true);
+  });
+
+  it("브리핑 4×2 최소(110dp) · 130%: 이름·요약을 한 줄에(날짜는 빼고 자르지 않음), 고지 한 줄은 그대로 · 읽기는 날짜까지", () => {
+    const long = [{ ...data().briefings[0]!, name: "TIGER 미국필라델피아반도체나스닥" }];
+    const t = build(<BriefingWidget briefings={long} fetchedAt={NOW} error={null} now={NOW} width={250} height={110} fontScale={1.3} />);
+    const item = byClick(t, "OPEN_URI").find((n) => n.props.accessibilityLabel === "TIGER 미국필라델피아반도체나스닥 9월 24일 오후 브리핑, 첫 줄 삼성")!;
+    expect(words(item)).toEqual(["TIGER 미국필라델피아반도체나스닥", "첫 줄 삼성"]);
+    expect(texts(item).every((p) => p.maxLines === 1)).toBe(true);
+    expect(words(t)).not.toContain(" · 09/24 오후");
+    expect(words(t).at(-1)).toBe(DISCLAIMER_SHORT);
+  });
+
+  it("브리핑이 없을 때 안내 문구 줄 수도 높이에 맞춘다 (고지 줄이 밀려 잘리지 않게)", () => {
+    const small = build(<BriefingWidget briefings={[]} fetchedAt={NOW} error={null} now={NOW} width={250} height={110} fontScale={1.3} />);
+    const msg = texts(small).find((p) => String(p.text).startsWith("아직 브리핑이 없습니다"))!;
+    expect(msg.maxLines).toBe(1);
+    const tall = build(<BriefingWidget briefings={[]} fetchedAt={NOW} error={null} now={NOW} {...WIDE} />);
+    expect(texts(tall).find((p) => String(p.text).startsWith("아직 브리핑이 없습니다"))!.maxLines).toBe(3);
+    expect(words(small).at(-1)).toBe(DISCLAIMER_SHORT);
   });
 
   it("숫자 글자에는 … 줄임이 없고 한 줄이다 (6개 크기·배율)", () => {
@@ -419,7 +512,7 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
     shared.widgets = { [WIDGET_NAMES.holdings]: [WIDE], [WIDGET_NAMES.asset]: [{ width: 160, height: 72 }] };
     const d = data();
     const appIndices = { at: NOW - 30_000, list: [{ code: "KOSPI", name: "코스피", value: 3500, change: 10, changeRate: 0.29, open: true }] };
-    await refreshWidgets({ stocks: d.stocks, showKrw: false, afterCost: false, market: null, features: { pnlToggle: true, indexLine: true }, indices: appIndices });
+    await refreshWidgets({ stocks: d.stocks, showKrw: false, afterCost: false, market: null, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true } }, indices: appIndices });
     expect(shared.updates.map((u) => u.widgetName)).toEqual([WIDGET_NAMES.holdings, WIDGET_NAMES.asset]);
     const r = shared.updates[0]!.rendered as { light: React.JSX.Element; dark: React.JSX.Element };
     expect(build(r.light).props.backgroundColor).toBe(light.surface);
@@ -433,6 +526,71 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
     const rendered: { dark: React.JSX.Element }[] = [];
     await widgetTaskHandler({ widgetInfo: { widgetName: WIDGET_NAMES.holdings, widgetId: 1, ...WIDE, screenInfo: {} }, widgetAction: "WIDGET_CLICK", clickAction: "PNL_TOGGLE", renderWidget: (x: unknown) => void rendered.push(x as { dark: React.JSX.Element }) } as never);
     expect(words(build(rendered[0]!.dark))).toContain("3,500.00");
+  });
+
+  describe("플래그는 앱 캐시와 위젯 응답 중 받은 시각이 늦은 쪽 (검토 지적)", () => {
+    const holdingsTree = () => build((shared.updates.at(-1)!.rendered as { dark: React.JSX.Element }).dark);
+    /** 위젯이 `ago` 전에 /api/widget 을 받아 둔다 */
+    const widgetFetched = async (ago: number, p = payload()) => {
+      vi.stubGlobal("fetch", async () => new Response(JSON.stringify(p), { status: 200, headers: { etag: '"e1"' } }));
+      vi.setSystemTime(NOW - ago);
+      await loadWidgetData({ stocks: true, briefings: true });
+      vi.setSystemTime(NOW);
+      shared.widgets = { [WIDGET_NAMES.holdings]: [WIDE] };
+    };
+    const tap = async (clickAction: string | null) => {
+      const out: { dark: React.JSX.Element }[] = [];
+      await widgetTaskHandler({
+        widgetInfo: { widgetName: WIDGET_NAMES.holdings, widgetId: 1, ...WIDE, screenInfo: {} },
+        widgetAction: clickAction ? "WIDGET_CLICK" : "WIDGET_UPDATE",
+        ...(clickAction ? { clickAction } : {}),
+        renderWidget: (x: unknown) => void out.push(x as { dark: React.JSX.Element }),
+      } as never);
+      return build(out.at(-1)!.dark);
+    };
+
+    it("킬 스위치: 관리자가 끈 widgetPnlToggle·widgetIndexLine 을 앱에 남은 3일 전 /api/features(켜짐)가 되살리지 않는다 · 눌러도 당일로 바뀌지 않는다", async () => {
+      await widgetFetched(5 * 60_000, payload({ features: { widgetPnlToggle: false, widgetIndexLine: false }, indices: undefined }));
+      // 홈 탭만 쓰면 앱은 플래그를 다시 받지 않는다 (기기에 저장된 3일 전 값)
+      await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 3 * 86_400_000, flags: { pnlToggle: true, indexLine: true } } });
+      const t = holdingsTree();
+      expect(byClick(t, "PNL_TOGGLE")).toHaveLength(0);
+      expect(words(t)).toContain("누적 -100,000원 (-12.50%)");
+      vi.stubGlobal("fetch", async () => {
+        throw new Error("부르면 안 됨");
+      });
+      // 앱을 떠날 때의 갱신이 그린 그림에서 손익을 눌러도(옛 그림) 저장된 값은 꺼짐 → 바꾸지 않는다
+      const after = await tap("PNL_TOGGLE");
+      expect(await readPnlMode()).toBe("cumulative");
+      expect(byClick(after, "PNL_TOGGLE")).toHaveLength(0);
+    });
+
+    it("배포 직후: 서버 배포 전에 저장된 앱 플래그(새 키 없음 → 꺼짐)가 위젯이 새로 받은 켜짐을 덮지 않는다 — 앱 갱신·위젯 갱신이 번갈아도 같은 모습", async () => {
+      await widgetFetched(10 * 60_000);
+      const before = { at: NOW - 86_400_000, flags: widgetFeatures({ briefingDigest: true }) };
+      expect(before.flags).toEqual({ pnlToggle: false, indexLine: false });
+      await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: before });
+      const app = holdingsTree();
+      expect(byClick(app, "PNL_TOGGLE")).toHaveLength(1);
+      expect(words(app)).toContain("코스피");
+      // 이어서 위젯이 스스로 갱신해도(받아 둔 응답) 같은 모습
+      const own = await tap(null);
+      expect(byClick(own, "PNL_TOGGLE")).toHaveLength(1);
+      expect(words(own)).toContain("코스피");
+    });
+
+    it("앱이 더 늦게 받은 플래그는 바로 쓴다 (관리자가 켠 직후 앱이 받은 값)", async () => {
+      await widgetFetched(10 * 60_000, payload({ features: { widgetPnlToggle: false, widgetIndexLine: true } }));
+      await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true } } });
+      expect(byClick(holdingsTree(), "PNL_TOGGLE")).toHaveLength(1);
+      // 그린 값(켜짐)을 적어 두어, 서버를 부르지 않는 손익 전환도 켜진 것으로
+      vi.stubGlobal("fetch", async () => {
+        throw new Error("부르면 안 됨");
+      });
+      const t = await tap("PNL_TOGGLE");
+      expect(await readPnlMode()).toBe("day");
+      expect(words(t)).toContain("당일 +1,000원 (+0.14%)");
+    });
   });
 
   it("앱이 지수·플래그를 모르면 위젯이 받아 둔 값을 쓴다", async () => {

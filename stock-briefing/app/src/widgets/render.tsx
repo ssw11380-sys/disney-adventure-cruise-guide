@@ -4,6 +4,7 @@ import { space } from "@/tokens";
 import type { WidgetData } from "./data";
 import type { PnlMode } from "./model";
 import { WIDGET_FONT, WIDGET_PALETTES, WIDGET_RADIUS, type WidgetPalette } from "./palette";
+import { agedIndices } from "./payload";
 import { AssetWidget, BriefingWidget, HoldingsWidget, WIDGET_NAMES } from "./widgets";
 
 /**
@@ -51,7 +52,7 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
           pnlToggle={data.features.pnlToggle}
           pnlMode={o.pnlMode}
           indexLine={data.features.indexLine}
-          indices={data.indices}
+          indices={agedIndices(data.indices, data.indicesAt, o.now)}
           refreshing={o.refreshing}
           {...frame}
         />

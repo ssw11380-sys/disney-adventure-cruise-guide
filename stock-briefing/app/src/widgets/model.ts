@@ -165,7 +165,9 @@ export function pnlLine(mode: PnlMode, t: { value: number; profit: number; day: 
 
 /** 손익 전환 칸을 화면 읽기가 읽는 문장: 지금 무엇을 보여 주는지와 누르면 무엇으로 바뀌는지 */
 export function pnlSpeech(p: PnlLine, toggle: boolean): string {
-  const parts = [`${p.label} 손익 ${speakProfit(p.valueText, p.sign) ?? "없음"}`, p.rateValue === null ? null : `수익률 ${speakRate(p.rateValue)}`];
+  // 0 원이면 speakProfit 이 "손익 없음"이라 "당일 손익 손익 없음"이 되지 않게 "당일 손익 없음"
+  const spoken = p.sign === 0 ? null : speakProfit(p.valueText, p.sign);
+  const parts = [spoken ? `${p.label} 손익 ${spoken}` : `${p.label} 손익 없음`, p.rateValue === null ? null : `수익률 ${speakRate(p.rateValue)}`];
   if (toggle) parts.push(`누르면 ${p.mode === "day" ? "누적" : "당일"} 손익으로 바뀝니다`);
   return parts.filter(Boolean).join(", ");
 }

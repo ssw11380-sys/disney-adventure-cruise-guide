@@ -88,6 +88,18 @@ export function pickWidgetIndices(list: readonly { code: string; name: string; v
   });
 }
 
+/**
+ * 지수를 받은 지 이만큼 지나면 모든 항목을 "지연"(흐리게)으로 그린다: 위젯 조회가 계속 실패해 마지막 값을 쓸 때.
+ * 서버 지수 띠가 실패한 출처의 마지막 값을 이어 주는 최대 시간(indices.ts STALE_MAX_MS)과 같은 3시간
+ */
+export const INDEX_STALE_MS = 3 * 3_600_000;
+
+/** 받은 시각(at)이 INDEX_STALE_MS 보다 오래됐으면 모든 항목을 stale 로. 시각을 모르면 그대로 */
+export function agedIndices(list: WidgetIndex[] | null, at: number | undefined, now: number): WidgetIndex[] | null {
+  if (!list || at === undefined || now - at <= INDEX_STALE_MS) return list;
+  return list.map((i) => ({ ...i, stale: true }));
+}
+
 /** 모양이 맞는 지수 항목만 (예전·다른 서버의 이상한 값은 버린다) */
 function cleanIndices(list: unknown): WidgetIndex[] | null {
   if (!Array.isArray(list)) return null;
