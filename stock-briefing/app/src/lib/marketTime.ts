@@ -89,7 +89,7 @@ const US_OVERNIGHT_FROM_H = 20;
 const US_OVERNIGHT_TO_H = 4;
 
 /**
- * 뉴욕증권거래소 평일 휴장일 (현지 날짜). 서버 marketContext.US_HOLIDAYS 와 같은 목록 — 해마다 둘 다 추가한다(app/test 가 두 목록을 비교).
+ * 뉴욕증권거래소 평일 휴장일 (현지 날짜). 서버 marketContext.US_HOLIDAYS 와 같은 목록 — 해마다 둘 다 추가한다(app/test 가 두 목록이 같은지, 내년 끝까지 있는지 본다).
  * 없으면 평일로 본다. 한국 평일 휴장일은 목록이 없다 (장 상태는 서버 달력 값을 쓴다)
  */
 const US_HOLIDAYS = new Set([
@@ -126,6 +126,7 @@ function sessionDate(local: string, code: string): string {
  *  - 미국은 뉴욕 날짜, 단 뉴욕 20:00 이후(주간거래)는 다음 날 — 한국 낮의 주간거래 체결이 끝난 정규장 봉을 고치지 않고 다음 거래일 봉으로 간다
  *  - 거래가 없는 날(토·일, 미국 휴장일)은 직전 거래일로 본다(서버가 막 켜져 값이 그대로인 체결 등) → 빈 봉을 만들지 않게
  * 한국 평일 휴장일은 모른다 — 그날 체결은 새 거래일로 보고, 서버 봉·시세를 다시 받으면 바로잡힌다
+ * (차트는 접속 직후 스냅샷으로 새 봉을 열지 않고, 다시 받은 서버 봉에 서버에 없는 봉을 붙이지 않는다 — lib/liveStream)
  */
 export function tradingDate(iso: string, code: string): string | null {
   const clock = marketClock(iso, code);

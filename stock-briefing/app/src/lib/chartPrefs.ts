@@ -99,7 +99,7 @@ export function applyTickToCandles(candles: Candle[], period: CandlePeriod, pric
     const bucket = `${local.slice(0, 14)}${String(Math.floor(minute / stepMin) * stepMin).padStart(2, "0")}:00${offset}`;
     const at = Date.parse(bucket);
     if (at === lastAt) return updateLast(candles, last, price);
-    // 거래 시간 밖 체결(서버가 막 켜져 장 전·휴장일에 보낸 값 그대로의 체결 등)로는 새 분봉을 열지 않는다 — 서버 봉을 다시 받아도 마지막 체결을 다시 얹으므로(withLastTick) 빈 봉이 남지 않게
+    // 거래 시간 밖 체결(서버가 막 켜져 장 전·휴장일에 보낸 값 그대로의 체결 등)로는 새 분봉을 열지 않는다 — 거래가 없는 시간에 빈 봉이 생기지 않게
     if (at > lastAt) return inTradingHours(timestamp, code) ? newBar(bucket.slice(0, 10), bucket) : candles;
     return candles;
   }

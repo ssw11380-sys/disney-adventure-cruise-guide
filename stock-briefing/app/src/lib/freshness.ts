@@ -105,12 +105,16 @@ export function candleRefresh(period: CandlePeriod, open: boolean): { refetchInt
 
 /**
  * 차트 아래 한 줄. 봉을 처음 불러오지 못했으면 오류(error), 받은 봉이 있는데 주기 갱신이 재시도까지 실패했으면 봉은 그대로 두고
- * 언제 받은 봉인지만 알린다 — 멀쩡히 그려진 차트 아래에 "차트 실패"를 띄우지 않는다. 보여 줄 게 없으면 null
+ * 언제 받은 봉인지만 알린다 — 멀쩡히 그려진 차트 아래에 "차트 실패"를 띄우지 않는다. 보여 줄 게 없으면 null.
+ * 갱신 실패는 isError 만으로 보지 않는다: 체결로 봉을 고치는 캐시 쓰기(setQueryData)가 react-query 의 오류 상태를 지워서 장중에는 1초도 안 남는다.
+ * 그래서 마지막 실패 시각(errorUpdatedAt)이 마지막으로 서버 봉을 받은 시각(dataUpdatedAt — 체결로 고쳐도 그대로 둔다, lib/liveStream)보다 뒤인지로 본다
  */
-export function chartNotice(q: QueryLike & { error?: unknown }, now: number): { text: string; error: boolean } | null {
+export function chartNotice(q: QueryLike & { error?: unknown; errorUpdatedAt?: number }, now: number): { text: string; error: boolean } | null {
   const view = viewState(q);
   if (view === "error") return { text: q.error instanceof Error ? q.error.message : "차트 실패", error: true };
-  if (view !== "ready" || !connection(q, now, Number.POSITIVE_INFINITY).offline) return null;
+  if (view !== "ready") return null;
+  const failedSince = (q.errorUpdatedAt ?? 0) > q.dataUpdatedAt;
+  if (!failedSince && !connection(q, now, Number.POSITIVE_INFINITY).offline) return null;
   return { text: `차트 갱신 지연 · ${clockLabel(q.dataUpdatedAt, now)} 기준`, error: false };
 }
 

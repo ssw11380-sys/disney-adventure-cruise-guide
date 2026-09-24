@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { Candle, CandleSeries, MarketStatus } from "@/api/types";
 import type { StreamTick } from "@/lib/liveTick";
@@ -322,13 +322,15 @@ describe("주기 갱신으로 받은 서버 봉에 마지막 체결을 다시 �
   const API = "https://server.test";
   const tick = (code: string, price: number, timestamp: string): StreamTick => ({ code, price, volume: 1, timestamp, source: "toss-openapi" });
 
-  it("서버 캐시가 늦어 방금 연 분봉이 없어도 다시 붙이고, 일봉 종가는 현재가를 따라간다 (서버 거래량은 그대로)", async () => {
+  it("일봉·같은 분봉의 종가는 현재가를 따라가고(서버 거래량은 그대로), 서버에 없는 뒤 구간 봉은 붙이지 않는다", async () => {
     const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
     forgetTicks();
     rememberTicks(API, [tick("005930", 103, "2026-09-24T10:01:20+09:00")]);
+    // 서버 봉 캐시가 늦어 10:01 봉이 아직 없으면 그대로 — 앱이 만든 봉은 서버 봉을 다시 받으면 지워져야 한다 (다음 체결·다음 갱신이 채운다)
     const minutes: CandleSeries = { code: "005930", period: "1m", candles: [candle("2026-09-24", 100, { time: "2026-09-24T10:00:00+09:00" })], source: "test" };
-    const m = withLastTick(API, "005930", minutes);
-    expect(m.candles.at(-1)).toMatchObject({ time: "2026-09-24T10:01:00+09:00", close: 103, volumeUnknown: true });
+    expect(withLastTick(API, "005930", minutes)).toBe(minutes);
+    const sameMinute: CandleSeries = { ...minutes, candles: [...minutes.candles, candle("2026-09-24", 101, { time: "2026-09-24T10:01:00+09:00", volume: 700 })] };
+    expect(withLastTick(API, "005930", sameMinute).candles.at(-1)).toEqual({ ...candle("2026-09-24", 101, { time: "2026-09-24T10:01:00+09:00", volume: 700 }), close: 103, high: 103 });
     const days: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-09-24", 100, { volume: 5000 })], source: "test" };
     expect(withLastTick(API, "005930", days).candles).toEqual([{ ...candle("2026-09-24", 100, { volume: 5000 }), close: 103, high: 103 }]);
     // 서버 봉이 체결보다 새로우면(10:02 봉까지 있음) 그대로
@@ -351,6 +353,73 @@ describe("주기 갱신으로 받은 서버 봉에 마지막 체결을 다시 �
   });
 });
 
+describe("한국 평일 휴장일(한글날 2026-10-09 금)에 앱이 만든 봉은 서버 봉을 다시 받으면 남지 않는다 (PF-04 검증 지적)", () => {
+  const API = "https://server.test";
+  // 받은 시각은 실제 지금 기준 (미래 시각이면 react-query 가 새 값으로 보고 다시 받지 않는다)
+  const T0 = Date.now() - 60_000;
+  // 서버 스냅샷: 값은 10/08 종가 그대로인데 시각만 서버가 마지막으로 폴링한 휴장일 시각 (tradingDate 는 한국 휴장일을 몰라 10/09 로 본다)
+  const holidayTick: StreamTick = { code: "005930", price: 100, volume: null, timestamp: "2026-10-09T10:00:03+09:00", source: "toss-web" };
+  const daily: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-10-07", 99, { volume: 4000 }), candle("2026-10-08", 100, { volume: 5000 })], source: "test" };
+  const minutes: CandleSeries = {
+    code: "005930",
+    period: "1m",
+    candles: [candle("2026-10-08", 99, { time: "2026-10-08T19:58:00+09:00" }), candle("2026-10-08", 100, { time: "2026-10-08T19:59:00+09:00" })],
+    source: "test",
+  };
+
+  it("withLastTick: 10/08 에서 끝나는 서버 봉에 10/09 봉을 붙이지 않는다 (일·1분·주봉)", async () => {
+    const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
+    forgetTicks();
+    rememberTicks(API, [holidayTick]);
+    expect(withLastTick(API, "005930", daily)).toBe(daily);
+    expect(withLastTick(API, "005930", minutes)).toBe(minutes);
+    const weekly: CandleSeries = { ...daily, period: "W", candles: [candle("2026-10-05", 100)] };
+    expect(withLastTick(API, "005930", weekly)).toBe(weekly); // 같은 주, 값도 같다
+    forgetTicks();
+  });
+
+  it.each([
+    ["D", daily, 800],
+    ["1m", minutes, 600],
+  ] as const)("%s: 체결로 연 10/09 봉(거래량 미확인)은 주기 갱신으로 서버 봉을 다시 받으면 없어진다", async (period, server, count) => {
+    const { rememberTicks, forgetTicks, withLastTick, applyTicksToCache } = await import("@/lib/liveStream");
+    forgetTicks();
+    const qc = new QueryClient();
+    const key = [API, "candles", "005930", period, count];
+    qc.setQueryData(key, server, { updatedAt: T0 });
+    rememberTicks(API, [holidayTick]);
+    // 연결 중 체결은 새 봉을 연다 (원래 동작 — 다음 갱신이 바로잡는다)
+    applyTicksToCache(qc, API, new Map([["005930", holidayTick]]), new Set(), T0 + 1_000);
+    expect(qc.getQueryData<CandleSeries>(key)!.candles.at(-1)).toMatchObject({ date: "2026-10-09", volumeUnknown: true });
+    // 서버 봉을 다시 받는다 (useCandles 의 queryFn 과 같은 경로: 받은 봉 + 마지막 체결)
+    for (let i = 0; i < 2; i++) {
+      await qc.fetchQuery({ queryKey: key, queryFn: async () => withLastTick(API, "005930", server), staleTime: 0 });
+      const after = qc.getQueryData<CandleSeries>(key)!;
+      expect(dates(after.candles)).not.toContain("2026-10-09");
+      expect(after.candles).toEqual(server.candles);
+    }
+    forgetTicks();
+    qc.clear();
+  });
+
+  it("접속 직후 스냅샷(openBars=false)으로는 새 봉을 열지 않고, 같은 구간이면 마지막 봉만 고친다", async () => {
+    const { applyTicksToCache } = await import("@/lib/liveStream");
+    const qc = new QueryClient();
+    const dKey = [API, "candles", "005930", "D", 800];
+    const mKey = [API, "candles", "005930", "1m", 600];
+    qc.setQueryData(dKey, daily, { updatedAt: T0 });
+    qc.setQueryData(mKey, minutes, { updatedAt: T0 });
+    applyTicksToCache(qc, API, new Map([["005930", holidayTick]]), new Set(), T0 + 30_000, { openBars: false });
+    expect(qc.getQueryData(dKey)).toBe(daily);
+    expect(qc.getQueryData(mKey)).toBe(minutes);
+    // 평일 장중 스냅샷이 서버 마지막 봉과 같은 구간이면 종가는 따라간다
+    applyTicksToCache(qc, API, new Map([["005930", { ...holidayTick, price: 101, timestamp: "2026-10-08T19:59:30+09:00" }]]), new Set(), T0 + 30_000, { openBars: false });
+    expect(qc.getQueryData<CandleSeries>(dKey)!.candles.at(-1)).toMatchObject({ date: "2026-10-08", close: 101, volume: 5000 });
+    expect(qc.getQueryData<CandleSeries>(mKey)!.candles.at(-1)).toMatchObject({ time: "2026-10-08T19:59:00+09:00", close: 101 });
+    qc.clear();
+  });
+});
+
 describe("차트 아래 알림 (PF-04 검증 지적)", () => {
   const NOW = Date.parse("2026-09-24T10:05:00+09:00");
   const q = (o: { data?: unknown; isError?: boolean; error?: unknown; dataUpdatedAt?: number; fetchStatus?: "fetching" | "paused" | "idle" }) => ({
@@ -370,5 +439,40 @@ describe("차트 아래 알림 (PF-04 검증 지적)", () => {
     expect(chartNotice(q({ ...loaded, fetchStatus: "paused" }), NOW)).toMatchObject({ error: false });
     expect(chartNotice(q(loaded), NOW)).toBeNull();
     expect(chartNotice(q({ fetchStatus: "fetching" }), NOW)).toBeNull();
+    // isError 가 지워져도(체결 캐시 쓰기) 마지막 실패가 마지막으로 서버 봉을 받은 뒤면 알린다, 그 뒤 서버 봉을 받았으면 알리지 않는다
+    expect(chartNotice({ ...q(loaded), errorUpdatedAt: loaded.dataUpdatedAt + 30_000 }, NOW)).toEqual({ text: "차트 갱신 지연 · 10:03:21 기준", error: false });
+    expect(chartNotice({ ...q(loaded), errorUpdatedAt: loaded.dataUpdatedAt - 30_000 }, NOW)).toBeNull();
+  });
+
+  it("주기 갱신이 실패한 뒤 체결로 봉을 고쳐도(react-query 가 isError 를 지움) '차트 갱신 지연'이 남고, 서버 봉을 다시 받으면 사라진다", async () => {
+    const { chartNotice, clockLabel } = await import("@/lib/freshness");
+    const { applyTicksToCache, forgetTicks } = await import("@/lib/liveStream");
+    forgetTicks();
+    const API = "https://server.test";
+    const qc = new QueryClient();
+    const key = [API, "candles", "005930", "1m", 600];
+    const server: CandleSeries = { code: "005930", period: "1m", candles: [candle("2026-09-24", 100, { time: "2026-09-24T10:00:00+09:00" })], source: "test" };
+    const loadedAt = Date.now() - 60_000;
+    qc.setQueryData(key, server, { updatedAt: loadedAt });
+    // 화면(ChartNotice)이 보는 것과 같은 useQuery 결과
+    const observer = new QueryObserver<CandleSeries>(qc, { queryKey: key, enabled: false });
+    const unsubscribe = observer.subscribe(() => undefined);
+    await qc.fetchQuery({ queryKey: key, queryFn: () => Promise.reject(new Error("서버 오류")), retry: false, staleTime: 0 }).catch(() => undefined);
+    const now = Date.now();
+    const notice = { text: `차트 갱신 지연 · ${clockLabel(loadedAt, now)} 기준`, error: false };
+    expect(observer.getCurrentResult().isError).toBe(true);
+    expect(chartNotice(observer.getCurrentResult(), now)).toEqual(notice);
+    // 1초 안에 오는 체결이 봉을 고친다
+    applyTicksToCache(qc, API, new Map([["005930", { code: "005930", price: 101, volume: 1, timestamp: "2026-09-24T10:00:20+09:00", source: "toss-openapi" }]]), new Set());
+    const afterTick = observer.getCurrentResult();
+    expect(afterTick.data!.candles.at(-1)!.close).toBe(101);
+    expect(afterTick.isError).toBe(false); // react-query v5 의 setQueryData 는 오류 상태를 지운다 — 그래서 isError 로는 알림이 사라진다
+    expect(afterTick.dataUpdatedAt).toBe(loadedAt);
+    expect(chartNotice(afterTick, now)).toEqual(notice);
+    // 서버 봉을 다시 받으면 알림이 사라진다
+    await qc.fetchQuery({ queryKey: key, queryFn: async () => server, staleTime: 0 });
+    expect(chartNotice(observer.getCurrentResult(), Date.now())).toBeNull();
+    unsubscribe();
+    qc.clear();
   });
 });

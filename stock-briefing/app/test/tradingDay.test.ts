@@ -162,15 +162,22 @@ describe("시장 현지 거래일 규칙 (한국 서울, 미국 뉴욕·서머�
     expect(tradingDate("2026-09-08T10:00:00+09:00", "AAPL")).toBe("2026-09-08"); // 뉴욕 월 9/7 21:00 → 화 9/8
   });
 
-  it("앱 미국 휴장일 목록이 서버(marketContext.US_HOLIDAYS)와 같다 — 해마다 둘 다 추가", () => {
+  const holidayList = (rel: string) => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
-    const list = (rel: string) => {
-      const m = /US_HOLIDAYS = new Set\(\[([\s\S]*?)\]\)/.exec(readFileSync(join(root, rel), "utf8"));
-      return [...(m?.[1] ?? "").matchAll(/"(\d{4}-\d{2}-\d{2})"/g)].map((x) => x[1]);
-    };
-    const app = list("app/src/lib/marketTime.ts");
+    const m = /US_HOLIDAYS = new Set\(\[([\s\S]*?)\]\)/.exec(readFileSync(join(root, rel), "utf8"));
+    return [...(m?.[1] ?? "").matchAll(/"(\d{4}-\d{2}-\d{2})"/g)].map((x) => x[1]!);
+  };
+
+  it("앱 미국 휴장일 목록이 서버(marketContext.US_HOLIDAYS)와 같다 — 해마다 둘 다 추가", () => {
+    const app = holidayList("app/src/lib/marketTime.ts");
     expect(app.length).toBeGreaterThan(10);
-    expect(app).toEqual(list("backend/src/services/marketContext.ts"));
+    expect(app).toEqual(holidayList("backend/src/services/marketContext.ts"));
+  });
+
+  it("미국 휴장일 목록이 내년 끝까지 있다 — 목록이 끝난 해부터는 휴장일을 평일로 보므로, 해가 바뀌면 NYSE 가 발표한 다음 해 휴장일을 앱·서버에 같이 넣는다", () => {
+    const last = Math.max(...holidayList("app/src/lib/marketTime.ts").map((d) => Number(d.slice(0, 4))));
+    const need = new Date().getUTCFullYear() + 1;
+    expect(last, `US_HOLIDAYS 가 ${last}년까지뿐 — ${need}년 NYSE 휴장일을 app/src/lib/marketTime.ts 와 backend/src/services/marketContext.ts 에 추가`).toBeGreaterThanOrEqual(need);
   });
 
   it("marketDate: 같은 순간은 표기(Z·+09:00)와 관계없이 같은 날짜", async () => {

@@ -54,9 +54,9 @@ export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix }: { que
 
 /**
  * 차트 아래 한 줄 (lib/freshness 의 chartNotice): 봉을 처음 불러오지 못했으면 오류, 받은 봉이 있는데 주기 갱신이 실패하면
- * "차트 갱신 지연 · 14:03:21 기준" 만 — 그려진 차트는 그대로 둔다
+ * "차트 갱신 지연 · 14:03:21 기준" 만 — 그려진 차트는 그대로 둔다. 실패 여부는 errorUpdatedAt 으로 본다 (체결 캐시 쓰기가 isError 를 지운다)
  */
-export function ChartNotice({ query }: { query: QueryLike & { error?: unknown } }) {
+export function ChartNotice({ query }: { query: QueryLike & { error?: unknown; errorUpdatedAt: number } }) {
   const t = useTheme();
   const now = useNow(60_000);
   const n = chartNotice(query, now);
