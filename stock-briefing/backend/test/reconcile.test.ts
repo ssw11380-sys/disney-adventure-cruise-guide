@@ -47,6 +47,12 @@ describe("토스 계좌 자동 대조 (3-13)", () => {
     expect(e.qtyMismatch).toEqual(["005930", "000660"]);
     expect(e.missing).toBe(2);
     expect(e).toMatchObject({ appKrw: 1_000_000, tossKrw: 1_000_000, diffKrw: 0 });
+    // 소수점 수량의 끝자리 차이는 같은 수량으로 본다 (Postgres real: 105.234567 → 105.234566, 0.1+0.2)
+    const frac = row("VRT", "USD", 100);
+    frac.quantity = 105.234566;
+    const sum = row("AAPL", "USD", 100);
+    sum.quantity = 0.3;
+    expect(compareWithToss([frac, sum], [toss("VRT", "USD", 100, 105.234567), toss("AAPL", "USD", 100, 0.1 + 0.2)], "t").qtyMismatch).toEqual([]);
   });
 
   it("수량 차이가 3번 연속이면 한 번 알린다", async () => {

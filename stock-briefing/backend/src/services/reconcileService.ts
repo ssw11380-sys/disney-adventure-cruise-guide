@@ -64,7 +64,7 @@ export function compareWithToss(list: RegisteredWithQuote[], toss: TossItem[], a
     const s = byCode.get(t.code);
     const ev = s?.evaluation ?? null;
     // 수량이 다르면 평가금 비교는 의미가 없다 → 수량 차이로 따로 센다
-    if ((s?.quantity ?? 0) !== t.quantity) {
+    if (!sameQty(s?.quantity ?? 0, t.quantity)) {
       qtyMismatch.push(t.code);
       continue;
     }
@@ -192,4 +192,9 @@ function qtyStreak(h: ReconcileEntry[]): number {
   let n = 0;
   for (let i = h.length - 1; i >= 0 && h[i]!.qtyMismatch?.length; i--) n++;
   return n;
+}
+
+/** 소수점 수량(해외 소수 단위 매수)은 DB(Postgres real)·계좌 합산에서 끝자리가 달라질 수 있다 → 상대 오차로 비교 */
+function sameQty(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
 }
