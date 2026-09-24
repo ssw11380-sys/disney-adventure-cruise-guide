@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Alert, Linking, Text, View } from "react-native";
-import { applyOtaUpdate, checkForAppUpdate, compareVersions, currentVersion, describeRunningUpdate, fetchRelease, type UpdateCheckResult } from "@/lib/appUpdate";
+import { applyOtaUpdate, checkForAppUpdate, compareVersions, currentVersion, describeRunningUpdate, fetchRelease, updateStatus, type UpdateCheckResult } from "@/lib/appUpdate";
 import { formatDateKo } from "@/lib/format";
 import { font, space, useTheme } from "@/theme";
 import { Badge, Button, Card, Muted, Row, SectionTitle } from "./ui";
@@ -17,6 +17,8 @@ export function AppUpdateCard() {
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 확인하지 못한 갈래가 있으면 녹색 "최신" 대신 확인 실패/일부 확인 (U1)
+  const status = updateStatus(result);
 
   const check = async () => {
     setChecking(true);
@@ -45,7 +47,7 @@ export function AppUpdateCard() {
 
   return (
     <Card>
-      <SectionTitle right={newer ? <Badge tone="warn">새 버전 {newer.version}</Badge> : result?.kind === "none" ? <Badge tone="good">최신</Badge> : null}>앱 업데이트</SectionTitle>
+      <SectionTitle right={newer ? <Badge tone="warn">새 버전 {newer.version}</Badge> : status.badge ? <Badge tone={status.badge.tone}>{status.badge.text}</Badge> : null}>앱 업데이트</SectionTitle>
       <Row label="현재 버전" value={currentVersion} />
       {/* 되돌리기(docs/OTA-되돌리기.md) 때 어느 업데이트가 돌고 있는지 확인하는 값 */}
       <Row label="빌드" value={running.createdAt ? `${formatDateKo(running.createdAt, true)} · ${running.updateId}` : running.updateId} />
@@ -60,12 +62,7 @@ export function AppUpdateCard() {
       ) : null}
       <Button title="업데이트 확인" variant="secondary" icon="refresh" onPress={() => void check()} loading={checking} />
       {error ? <Text style={{ color: t.danger, fontSize: font.small }}>{error}</Text> : null}
-      {result?.kind === "none" ? (
-        <Muted>
-          최신 버전입니다.
-          {result.warnings.length ? ` (${result.warnings.join(" / ")})` : ""}
-        </Muted>
-      ) : null}
+      {status.message ? status.failed ? <Text style={{ color: t.danger, fontSize: font.small }}>{status.message}</Text> : <Muted>{status.message}</Muted> : null}
       {result?.kind === "ota" ? <Button title="지금 다시 시작해서 적용" variant="secondary" icon="play" onPress={() => void applyOtaUpdate()} /> : null}
     </Card>
   );

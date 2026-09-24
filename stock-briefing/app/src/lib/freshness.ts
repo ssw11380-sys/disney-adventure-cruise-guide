@@ -12,6 +12,27 @@ export function viewState(q: { data: unknown; isError: boolean }): ViewState {
   return q.isError ? "error" : "loading";
 }
 
+/**
+ * AI 분석 탭(기업개요·가치·기술분석). 조회 오류와 "갱신" 오류를 따로 본다 (AI-01).
+ *  - 갱신이 실패해도 받아 둔 분석은 지우지 않고, 갱신 실패·이전 분석을 보여 주는 중임을 함께 알린다(다시 시도)
+ *  - ask: 관심 종목이 아니라 아직 만들지 않음 / error: 처음 조회 실패(받은 분석 없음)
+ */
+export function analysisView(o: {
+  requested: boolean;
+  query: { data: unknown; isLoading: boolean; isError: boolean };
+  refresh: { isPending: boolean; isError: boolean; error: unknown; variables?: { code: string; kind: string } };
+  code: string;
+  kind: string;
+}): { state: "ask" | "loading" | "error" | "ready"; refreshError: string | null } {
+  const mine = o.refresh.variables?.code === o.code && o.refresh.variables?.kind === o.kind;
+  if (!o.requested && o.query.data === undefined) return { state: "ask", refreshError: null };
+  if (o.query.isLoading || (mine && o.refresh.isPending)) return { state: "loading", refreshError: null };
+  if (o.query.isError) return { state: "error", refreshError: null };
+  const e = o.refresh.error;
+  const refreshError = mine && o.refresh.isError ? `갱신하지 못했습니다 · 이전 분석을 보여 주는 중 (${e instanceof Error ? e.message : String(e)})` : null;
+  return { state: "ready", refreshError };
+}
+
 /** react-query 쿼리 상태 중 여기서 쓰는 부분 */
 export interface QueryLike {
   data: unknown;

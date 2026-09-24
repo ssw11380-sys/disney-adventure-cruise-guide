@@ -14,7 +14,7 @@ import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Segmented, Stat, StatGrid } from "@/components/ui";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, relativeTime, toDisplay } from "@/lib/format";
-import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
+import { analysisView, openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
 import { changeColor, font, slopFor, space, touch, useTheme } from "@/theme";
@@ -271,28 +271,35 @@ export default function StockDetailScreen() {
  * 이미 받아 둔 분석(캐시)이 있으면 누르지 않아도 보여 준다.
  */
 function AnalysisTab({ code, kind, requested, onRequest }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void }) {
+  const t = useTheme();
   const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
-  const busy = refreshAnalysis.isPending && refreshAnalysis.variables?.kind === kind;
-  if (!requested && !a.data)
+  // 갱신 실패는 조회 오류와 따로: 이전 분석은 두고 실패를 알린다 (AI-01)
+  const { state, refreshError } = analysisView({ requested, query: a, refresh: refreshAnalysis, code, kind });
+  if (state === "ask")
     return (
       <Card>
         <Muted>관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.</Muted>
         <Button title="AI 분석 만들기" icon="sparkles" onPress={() => onRequest(kind)} />
       </Card>
     );
-  if (a.isLoading || busy) return <Card><Loading label="분석 생성 중" /></Card>;
-  if (a.isError) return <Card><ErrorView error={a.error} onRetry={() => void a.refetch()} /></Card>;
+  if (state === "loading") return <Card><Loading label="분석 생성 중" /></Card>;
+  if (state === "error") return <Card><ErrorView error={a.error} onRetry={() => void a.refetch()} /></Card>;
   const d = a.data!;
   return (
     <Card>
+      {refreshError ? (
+        <Text style={{ color: t.danger, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">
+          {refreshError}
+        </Text>
+      ) : null}
       <MarkdownView>{d.content}</MarkdownView>
       {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
         <Muted>
           {formatDateKo(d.createdAt, true)} 기준
         </Muted>
-        <Button title="갱신" variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
+        <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
       </View>
     </Card>
   );

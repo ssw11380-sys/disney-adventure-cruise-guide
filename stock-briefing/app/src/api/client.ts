@@ -46,6 +46,7 @@ async function request<T>(baseUrl: string, token: string, path: string, init: Re
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res: Response;
+  let text: string;
   try {
     res = await fetch(`${baseUrl}${path}`, {
       ...init,
@@ -57,14 +58,15 @@ async function request<T>(baseUrl: string, token: string, path: string, init: Re
       },
       signal: ctrl.signal,
     });
+    // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 타이머는 본문을 다 읽은 뒤에 푼다 (NET-01)
+    text = res.status === 204 ? "" : await res.text();
   } catch (e) {
-    const aborted = (e as Error).name === "AbortError";
+    const aborted = ctrl.signal.aborted || (e as Error).name === "AbortError";
     throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`);
   } finally {
     clearTimeout(timer);
   }
   if (res.status === 204) return undefined as T;
-  const text = await res.text();
   let json: unknown = null;
   try {
     json = text ? JSON.parse(text) : null;
