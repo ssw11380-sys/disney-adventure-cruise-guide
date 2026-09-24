@@ -402,6 +402,23 @@ describe("한국 평일 휴장일(한글날 2026-10-09 금)에 앱이 만든 봉
     qc.clear();
   });
 
+  it("서버 재시작 직후 첫 체결(스냅샷이 아닌 ticks)이 연 분봉은, 주기 갱신이 없어도(휴장일) 서버 봉을 바로 다시 받게 한다", async () => {
+    const { applyTicksToCache } = await import("@/lib/liveStream");
+    const qc = new QueryClient();
+    const key = [API, "candles", "005930", "1m", 600];
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    // 서버 봉을 받은 지 1분이 넘었다 = 주기 갱신이 돌지 않는 중 → 바로 다시 받는다
+    qc.setQueryData(key, minutes, { updatedAt: T0 });
+    applyTicksToCache(qc, API, new Map([["005930", holidayTick]]), new Set(), T0 + 90_000);
+    expect(qc.getQueryData<CandleSeries>(key)!.candles.at(-1)).toMatchObject({ date: "2026-10-09", volumeUnknown: true });
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ queryKey: key, refetchType: "active" }), expect.anything());
+    // 장중처럼 방금(30초 주기 안) 받은 서버 봉이면 표시만 — 분마다 요청을 더하지 않는다
+    qc.setQueryData(key, minutes, { updatedAt: T0 });
+    applyTicksToCache(qc, API, new Map([["005930", holidayTick]]), new Set(), T0 + 20_000);
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ queryKey: key, refetchType: "none" }), expect.anything());
+    qc.clear();
+  });
+
   it("접속 직후 스냅샷(openBars=false)으로는 새 봉을 열지 않고, 같은 구간이면 마지막 봉만 고친다", async () => {
     const { applyTicksToCache } = await import("@/lib/liveStream");
     const qc = new QueryClient();

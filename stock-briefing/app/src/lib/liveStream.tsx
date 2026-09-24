@@ -40,6 +40,8 @@ const NEW_DAY_REFETCH_MS = 15_000;
  * (서버 봉 출처가 아직 새 거래일 봉을 열지 않음) 체결마다 다시 받지 않고 주기 갱신·다시 볼 때에 맡긴다
  */
 const NEW_BAR_REFETCH_MS = 15_000;
+/** 새 분봉이 열렸을 때 이보다 오래 서버 봉을 못 받았으면 바로 다시 받는다 (장중 분봉 주기 갱신 30초보다 길게 — 장중에는 요청이 늘지 않게) */
+const INTRADAY_NEW_BAR_REFETCH_MS = 60_000;
 
 type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
 
@@ -111,9 +113,12 @@ export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<st
       if (next === series.candles || (!openBars && next.length !== series.candles.length)) continue;
       const { dataUpdatedAt, isInvalidated } = q.state;
       qc.setQueryData<CandleSeries>(q.queryKey, { ...series, candles: next }, { updatedAt: dataUpdatedAt });
-      // 새 일·주·월 봉이 열렸으면 서버 봉을 다시 받는다 (보고 있지 않은 차트는 표시만 해 두고 다시 볼 때, 방금 받은 서버 봉이면 표시만)
-      const opened = !isIntraday(series.period) && next.length > series.candles.length;
-      const refetchNow = opened && now - dataUpdatedAt >= NEW_BAR_REFETCH_MS;
+      // 새 봉이 열렸으면 서버 봉을 다시 받는다 (보고 있지 않은 차트는 표시만 해 두고 다시 볼 때, 방금 받은 서버 봉이면 표시만).
+      // 분봉은 장중 주기 갱신(30초)이 있어 그보다 오래된 봉일 때만 — 주기 갱신이 없는 한국 평일 휴장일에 서버 재시작 직후 첫 체결이 연
+      // 가짜 분봉을 바로 지운다 (PF-04 검증 지적)
+      const opened = next.length > series.candles.length;
+      const refetchAfter = isIntraday(series.period) ? INTRADAY_NEW_BAR_REFETCH_MS : NEW_BAR_REFETCH_MS;
+      const refetchNow = opened && now - dataUpdatedAt >= refetchAfter;
       if (opened || isInvalidated) void qc.invalidateQueries({ queryKey: q.queryKey, exact: true, refetchType: refetchNow ? "active" : "none" }, { cancelRefetch: false });
     }
   }
