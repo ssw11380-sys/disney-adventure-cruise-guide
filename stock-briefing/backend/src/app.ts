@@ -35,6 +35,8 @@ import { AppErrorService } from "./services/appErrorService.js";
 import { StockService } from "./services/stockService.js";
 import { BackupService } from "./services/backupService.js";
 import { ReconcileService } from "./services/reconcileService.js";
+import { FeatureService } from "./services/featureService.js";
+import { featureAdminRoutes, featureRoutes } from "./routes/features.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -59,6 +61,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(websocket, { options: { maxPayload: 4096 } });
   const log = app.log;
   const now = opts.now ?? (() => new Date());
+  // 기능 켜고 끄기 (3-15): 플래그 목록은 featureService.ts 한 곳
+  const features = new FeatureService(opts.db, now);
 
   const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now });
   const appErrors = new AppErrorService(opts.db, now);
@@ -105,7 +109,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       onResult: async (r) => {
         const excluded = new Set(r.excluded);
         const items = r.holdings.filter((h) => !excluded.has(h.code));
-        if (items.length) await reconcile.record(await stockService.listWithFreshQuotes(), items);
+        if (!items.length || !(await features.enabled("tossReconcile"))) return;
+        await reconcile.record(await stockService.listWithFreshQuotes(), items);
       },
       calendar: opts.providers.calendar,
       // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다
@@ -355,6 +360,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     financialsUs: opts.providers.financialsUs,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
+  await app.register(featureRoutes, { prefix: "/api/features", features });
+  await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });

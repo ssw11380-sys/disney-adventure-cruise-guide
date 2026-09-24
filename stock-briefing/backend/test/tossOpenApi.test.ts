@@ -6,7 +6,10 @@ import { aggregateCandles, TossOpenApiClient, TossOpenApiProvider, toCandle } fr
 import { TossRealtime, type SocketLike } from "../src/providers/market/tossRealtime.js";
 import { StockService } from "../src/services/stockService.js";
 import { TossSyncService } from "../src/services/tossSyncService.js";
-import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider } from "./helpers.js";
+import { buildApp } from "../src/app.js";
+import { loadConfig } from "../src/config.js";
+import { FeatureService } from "../src/services/featureService.js";
+import { fakeProviders, FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider } from "./helpers.js";
 
 const NOW = () => new Date("2026-09-22T14:00:00+09:00"); // 장중
 
@@ -669,5 +672,52 @@ describe("TossOpenApiProvider 일괄 현재가 (3-9)", () => {
     t += 24 * 3_600_000;
     const b = await p.getQuote("035420");
     expect(b.prevClose).toBe(a.prevClose);
+  });
+});
+
+describe("기능 켜고 끄기 (3-15)", () => {
+  it("플래그 목록을 주고, 관리 API 로 바꾸면 바로 반영되며, tossReconcile 을 끄면 대조 기록이 0건", async () => {
+    const db = await createMigratedDb(":memory:");
+    const app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:" }),
+      db,
+      providers: fakeProviders({ tossOpenApi: new TossOpenApiProvider(client(), { now: NOW }) }),
+      logger: false,
+      enableScheduler: false,
+      now: NOW,
+    });
+    try {
+      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true }, updatedAt: null });
+      const sync = async () => {
+        expect((await app.inject({ method: "POST", url: "/api/admin/toss/import-holdings" })).statusCode).toBe(200);
+        await new Promise((r) => setTimeout(r, 50)); // 대조는 동기화를 기다리지 않고 뒤에서 돈다
+        return ((await app.inject({ method: "GET", url: "/api/admin/toss/reconcile" })).json() as { history: unknown[] }).history.length;
+      };
+      expect(await sync()).toBe(1);
+      const put = await app.inject({ method: "PUT", url: "/api/admin/features", payload: { tossReconcile: false } });
+      expect(put.json()).toMatchObject({ features: { tossReconcile: false, briefingSources: true } });
+      expect((await app.inject({ method: "GET", url: "/api/features" })).json().features.tossReconcile).toBe(false);
+      expect(await sync()).toBe(1); // 꺼져 있으면 기록(서버 작업)·경고 0건
+      // null 이면 기본값으로, 모르는 키·잘못된 값은 400
+      expect((await app.inject({ method: "PUT", url: "/api/admin/features", payload: { tossReconcile: null } })).json().features.tossReconcile).toBe(true);
+      expect((await app.inject({ method: "PUT", url: "/api/admin/features", payload: { nope: true } })).statusCode).toBe(400);
+      expect((await app.inject({ method: "PUT", url: "/api/admin/features", payload: { tossReconcile: "yes" } })).statusCode).toBe(400);
+      const detail = (await app.inject({ method: "GET", url: "/api/admin/features" })).json().features;
+      expect(detail.find((f: { key: string }) => f.key === "tossReconcile")).toMatchObject({ enabled: true, default: true, overridden: false });
+    } finally {
+      await app.close();
+      await db.destroy();
+    }
+  });
+
+  it("바꾼 값은 DB 에 남아 재시작 뒤에도 유지되고, 지운 플래그의 옛 값은 무시한다", async () => {
+    const db = await createMigratedDb(":memory:");
+    const a = new FeatureService(db, NOW);
+    await a.set({ briefingSources: false });
+    await db.updateTable("meta").set({ value: JSON.stringify({ overrides: { briefingSources: false, removedFlag: true }, updatedAt: "x" }) }).where("key", "=", "features").execute();
+    const b = new FeatureService(db, NOW);
+    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false });
+    expect(await b.enabled("briefingSources")).toBe(false);
+    await db.destroy();
   });
 });

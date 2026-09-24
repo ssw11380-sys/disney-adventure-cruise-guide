@@ -1,7 +1,7 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useBriefing, useBriefings } from "@/api/hooks";
+import { useBriefing, useBriefings, useFeature } from "@/api/hooks";
 import { StaleBanner } from "@/components/Freshness";
 import { CardsSkeleton } from "@/components/Skeleton";
 import { BriefingSources } from "@/components/BriefingSources";
@@ -21,6 +21,7 @@ export default function BriefingDetailScreen() {
   const b = useBriefing(numId ?? 0);
   const [mode, setMode] = useState<"summary" | "detail">("detail");
   const history = useBriefings({ code: b.data?.code, limit: 30 }, !!b.data?.code);
+  const sourcesOn = useFeature("briefingSources");
 
   if (numId === null) return <Screen><ErrorView error={new Error("브리핑 주소가 올바르지 않습니다")} retryLabel="브리핑 목록으로" onRetry={() => router.dismissTo("/briefings")} /></Screen>;
   const view = viewState(b);
@@ -84,7 +85,7 @@ export default function BriefingDetailScreen() {
         </>
       )}
 
-      <BriefingSources data={d.data} />
+      {sourcesOn ? <BriefingSources data={d.data} /> : null}
 
       {history.data && history.data.length > 1 ? (
         <View>

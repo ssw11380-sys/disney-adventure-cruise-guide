@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Alert, Linking, Pressable, Share, Text, View } from "react-native";
-import { useApi, useTossStatus } from "@/api/hooks";
+import { useApi, useFeature, useTossStatus } from "@/api/hooks";
 import type { TossOpenApiStatus } from "@/api/types";
 import { useSettings } from "@/lib/settings";
 import { formatDateKo, formatPrice } from "@/lib/format";
@@ -20,6 +20,7 @@ export function TossOpenApiCard() {
   const qc = useQueryClient();
   const { apiUrl } = useSettings();
   const status = useTossStatus();
+  const reconcileOn = useFeature("tossReconcile");
   const [lastImport, setLastImport] = useState<string | null>(null);
   const importHoldings = useMutation({
     mutationFn: api.importTossHoldings,
@@ -91,15 +92,15 @@ export function TossOpenApiCard() {
           <Row label="실시간 구독" value={s.realtime ? `${s.realtime.connected ? "연결됨" : "끊김"} · ${s.realtime.subscribed.filter((k) => !k.startsWith("personal:")).length}종목` : "-"} />
           <Row label="자동 동기화" value={syncLabel(s.sync)} />
           {s.sync?.lastError ? <Text style={{ color: t.danger, fontSize: font.small }}>자동 동기화 실패: {s.sync.lastError}</Text> : null}
-          {s.reconcile !== undefined ? (
+          {reconcileOn && s.reconcile !== undefined ? (
             <Row label="토스 대조" value={<Text style={{ color: s.reconcile?.alert ? t.warn : t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{reconcileLabel(s.reconcile, (iso) => formatDateKo(iso, true))}</Text>} />
           ) : null}
-          {s.reconcile?.alert && (s.reconcile.qtyStreak ?? 0) >= 3 ? (
+          {reconcileOn && s.reconcile?.alert && (s.reconcile.qtyStreak ?? 0) >= 3 ? (
             <Text style={{ color: t.warn, fontSize: font.small }}>보유 수량이 토스와 다른 종목이 {s.reconcile.qtyStreak}회 연속 있습니다({s.reconcile.last?.qtyMismatch?.join(", ")}). 아래 &quot;지금 계좌 동기화&quot;로 다시 맞춰 보세요.</Text>
-          ) : s.reconcile?.alert ? (
+          ) : reconcileOn && s.reconcile?.alert ? (
             <Text style={{ color: t.warn, fontSize: font.small }}>앱 평가금이 토스 계좌와 {s.reconcile.streakOver}회 연속 0.1% 넘게 다릅니다. 앱 시세 출처·시각이 토스와 달라서일 수 있습니다.</Text>
           ) : null}
-          {s.reconcile?.week.n ? <Muted>최근 7일 {s.reconcile.week.n}회 중 {s.reconcile.week.withinPct}%가 0.1% 이내</Muted> : null}
+          {reconcileOn && s.reconcile?.week.n ? <Muted>최근 7일 {s.reconcile.week.n}회 중 {s.reconcile.week.withinPct}%가 0.1% 이내</Muted> : null}
           {s.client?.ipBlocked ? (
             <View style={{ gap: space.xs }}>
               <Text style={{ color: t.danger, fontSize: font.small }}>허용 IP 차단(403). 토스증권 허용 IP에 {ip ?? "서버 IP"} 등록 필요</Text>

@@ -27,6 +27,7 @@ import type { AppErrorSummary, Evaluation,
   StockNews,
   TossImportResult,
   TossOpenApiStatus,
+  FeatureFlags,
 } from "./types";
 
 export class ApiRequestError extends Error {
@@ -132,6 +133,7 @@ export function createApi(baseUrl: string, token = "") {
     sendTestNotification: () => send<SendSummary>("POST", "/api/notifications/test"),
 
     tossStatus: () => get<TossOpenApiStatus>("/api/admin/toss/status", 15_000),
+    features: () => get<FeatureFlags>("/api/features", 8_000),
     importTossHoldings: () => send<TossImportResult>("POST", "/api/admin/toss/import-holdings", undefined, 60_000),
     /** 해외 종목 원화 매입금액(토스 앱 원화 보기의 평가금액 − 평가손익)을 정확한 값으로 저장 */
     setKrwCost: (items: Record<string, number>) =>

@@ -436,3 +436,9 @@ export interface ThemeDetail {
   updatedAt?: string | null;
 }
 
+
+/** GET /api/features — 기능 켜고 끄기 (3-15). 목록은 서버 한 곳(featureService.ts)에만 있다 */
+export interface FeatureFlags {
+  features: Record<string, boolean>;
+  updatedAt: string | null;
+}
