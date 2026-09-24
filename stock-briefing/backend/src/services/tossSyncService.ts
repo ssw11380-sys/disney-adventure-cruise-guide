@@ -54,6 +54,25 @@ export interface TossHoldingDetail {
   currency: "KRW" | "USD";
 }
 
+/** 저장된 종목별 평가 기준 (DETAIL_KEY 값). 없거나 깨진 값이면 빈 맵 */
+export function parseTossDetail(value: string | null | undefined): Map<string, TossHoldingDetail> {
+  if (!value) return new Map();
+  try {
+    const parsed = JSON.parse(value) as { items?: Record<string, TossHoldingDetail> } | null;
+    return new Map(Object.entries(parsed?.items ?? {}));
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * 등록 종목 평가에 쓰는 토스 기준(매입금액·비용 비율, 해외 종목은 원화 장부까지). 토스에서 가져온 수량과 같을 때만 쓴다.
+ * 사용자가 수량을 바꿨거나 잠금 밖에서 수량·평단을 직접 고쳐 기준이 지워졌으면(PF-05) null → 직접 넣은 값으로 계산
+ */
+export function tossBasisFor(quantity: number | null, detail: TossHoldingDetail | null | undefined): TossHoldingDetail | null {
+  return detail && quantity !== null && Math.abs(detail.quantity - quantity) < 1e-9 ? detail : null;
+}
+
 export class TossSyncService {
   /** 해외 종목 원화 매입금액 장부 (토스 앱의 원화 손익과 맞추기 위해) */
   readonly costBook: KrwCostBook;
@@ -270,12 +289,32 @@ export class TossSyncService {
    */
   async setExactKrw(values: Record<string, number>): Promise<SetExactResult> {
     const snap: { last: PerAccount[] } = { last: [] };
-    const applied = await this.costBook.setExact(values, async () => {
+    const result = await this.costBook.setExact(values, async () => {
       snap.last = await this.readAccounts();
       return forBook(snap.last);
     });
     if (snap.last.length > 0) await this.updateCostBook(snap.last);
-    return applied;
+    return this.deferManual(result);
+  }
+
+  /**
+   * 직접 넣은 수량·평단으로 평가 중인 등록 종목(토스 기준이 없거나 수량이 다름)은 원화 장부를 평가에 쓰지 않는다 (PF-05).
+   * 값은 장부에 그대로 두고(다음 동기화가 토스 값·기준을 다시 채우면 쓴다) applied 대신 skipped(manual)로 돌려준다
+   * → 앱이 "원화 손익이 토스 앱과 같은 기준으로 계산됩니다"라고 안내하지 않게. 등록하지 않은 종목은 전처럼 applied
+   */
+  private async deferManual(result: SetExactResult): Promise<SetExactResult> {
+    if (!result.applied.length) return result;
+    const [rows, detailRow] = await Promise.all([
+      this.db.selectFrom("registered_stocks").select(["code", "quantity"]).where("code", "in", result.applied).execute(),
+      this.db.selectFrom("meta").select("value").where("key", "=", DETAIL_KEY).executeTakeFirst(),
+    ]);
+    const detail = parseTossDetail(detailRow?.value);
+    const manual = new Set(rows.filter((s) => !tossBasisFor(s.quantity, detail.get(s.code))).map((s) => s.code));
+    if (!manual.size) return result;
+    return {
+      applied: result.applied.filter((c) => !manual.has(c)),
+      skipped: [...result.skipped, ...result.applied.filter((c) => manual.has(c)).map((code) => ({ code, reason: "manual" as const }))],
+    };
   }
 }
 

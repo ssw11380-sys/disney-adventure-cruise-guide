@@ -1,5 +1,5 @@
 import { sql, type Expression, type SqlBool } from "kysely";
-import { EXCLUDED_KEY, parseCodes, SNAPSHOT_KEY, type TossHoldingDetail } from "./tossSyncService.js";
+import { EXCLUDED_KEY, parseCodes, parseTossDetail, SNAPSHOT_KEY, tossBasisFor, type TossHoldingDetail } from "./tossSyncService.js";
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import { CandleCache } from "./candleCache.js";
 import { marketContext, tradingDate } from "./marketContext.js";
@@ -93,16 +93,6 @@ interface Held {
   quote: Quote;
   at: number;
   failedAt: number;
-}
-
-function parseTossDetail(value: string | null): Map<string, TossHoldingDetail> {
-  if (!value) return new Map();
-  try {
-    const parsed = JSON.parse(value) as { items?: Record<string, TossHoldingDetail> };
-    return new Map(Object.entries(parsed.items ?? {}));
-  } catch {
-    return new Map();
-  }
 }
 
 /**
@@ -846,7 +836,8 @@ export function evaluate(
   if (!q || s.quantity === null || s.avgPrice === null || s.quantity <= 0) return null;
   // 토스에서 가져온 수량과 같을 때만 토스 기준(매입금액·비용 비율)을 쓴다. 사용자가 수량을 바꿨으면 직접 계산
   // (잠금 밖에서 수량·평단을 직접 고친 종목은 update 가 토스 기준을 지워 toss 가 넘어오지 않는다 → 평단만 고쳐도 직접 계산)
-  const t = toss && Math.abs(toss.quantity - s.quantity) < 1e-9 ? toss : null;
+  // 원화 매입금액 저장(TossSyncService.setExactKrw)도 같은 기준으로 "지금 평가에 쓰는지"를 알린다
+  const t = tossBasisFor(s.quantity, toss);
   const marketValue = q.price * s.quantity;
   const costBasis = t?.purchaseAmount ?? s.avgPrice * s.quantity;
   const profit = marketValue - costBasis;

@@ -312,6 +312,39 @@ describe("PF-07: 보유 수정 — 같은 종목의 서버 값이 바뀌어도 �
     expect(h.update.mock.calls[0][0]).toEqual({ code: "005930", quantity: 12, memo: "저장된 메모" });
   });
 
+  describe("원화 매입금액 저장 안내 — 서버가 지금 원화 손익에 쓰는지에 맞춘다 (PF-05 뒤)", () => {
+    // 잠금 밖에서 평단을 직접 고친 해외 종목: 서버가 토스 기준을 지워 원화 장부를 쓰지 않는다 (costBasisKrw 없음)
+    const manualUs = () => usHeld({ tossSynced: false, quantity: 10, avgPrice: 101, evaluation: { marketValue: 1500, costBasis: 1010, profit: 490, profitRate: 48.51, costBasisKrw: null, krwCostSource: null } });
+    const saveKrw = async (stock: Held, reply: unknown) => {
+      h.setKrwCost.mockResolvedValue(reply);
+      const r = open(stock);
+      typeIn(r, "원화 매입금액", "1,310,000");
+      press(r, "원화 매입금액 저장");
+      await vi.waitFor(() => expect(h.alert).toHaveBeenCalledTimes(1));
+      expect(h.setKrwCost).toHaveBeenCalledWith({ TSLA: 1_310_000 });
+      return h.alert.mock.calls[0] as [string, string];
+    };
+
+    it("직접 고친 종목(manual)은 '토스 앱과 같은 기준으로 계산됩니다'라고 하지 않고 다음 동기화 뒤에 쓰인다고 알린다 (재현)", async () => {
+      const [title, body] = await saveKrw(manualUs(), { applied: [], skipped: [{ code: "TSLA", reason: "manual" }] });
+      expect(title).toBe("저장됨 (동기화 뒤 적용)");
+      expect(body).toContain("직접 고친 수량·평단으로 평가 중이라, 원화 매입금액은 다음 토스 동기화 뒤에 쓰입니다");
+      expect(body).not.toContain("계산됩니다");
+    });
+
+    it("토스 기준으로 평가 중이면(applied) 지금처럼 저장됨", async () => {
+      const [title, body] = await saveKrw(usHeld({ tossSynced: false }), { applied: ["TSLA"], skipped: [] });
+      expect(title).toBe("저장됨");
+      expect(body).toBe("원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
+    });
+
+    it("다른 이유로 못 했으면 지금처럼 저장 실패와 이유", async () => {
+      const [title, body] = await saveKrw(usHeld(), { applied: [], skipped: [{ code: "TSLA", reason: "changed" }] });
+      expect(title).toBe("저장 실패");
+      expect(body).toBe("저장하는 사이 체결이 있었습니다. 토스 앱의 최신 값으로 다시 저장해 주세요.");
+    });
+  });
+
   it("고치던 중 토스 연동으로 잠기면 수량·평단은 서버 값을 보이고 메모만 저장한다", () => {
     const r = open(held({ tossSynced: false }));
     typeIn(r, "보유 수량", "12");
