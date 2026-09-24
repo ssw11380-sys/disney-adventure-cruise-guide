@@ -1,3 +1,4 @@
+import { useIsRestoring } from "@tanstack/react-query";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
@@ -82,7 +83,11 @@ export default function StocksScreen() {
     () => (live.loaded ? { label: live.label, open: live.open, nextChangeAt: null, kr: krOpen, us: usOpen } : null),
     [live.loaded, live.label, live.open, krOpen, usOpen],
   );
-  const fetchedThisSession = stocks.isFetchedAfterMount;
+  // 이번 실행에서 서버에서 받은 잔고인지: 받은 시각이 화면을 연 뒤인지로 본다
+  // (isFetchedAfterMount 는 기기 저장값 복원·오프라인 실패에도 true 가 되어 옛 잔고로 위젯을 덮을 수 있다)
+  const [mountedAt] = useState(() => Date.now());
+  const restoring = useIsRestoring();
+  const fetchedThisSession = !restoring && dataAt > mountedAt;
   const pushKey = `${showKrw}|${afterCost}|${market?.label ?? ""}`;
   // 앱을 떠날 때 쓸 최신 값 (렌더 중에는 ref 를 건드리지 않고 effect 에서 갱신)
   const pushWidgets = useRef<(leaving: boolean) => void>(() => undefined);
