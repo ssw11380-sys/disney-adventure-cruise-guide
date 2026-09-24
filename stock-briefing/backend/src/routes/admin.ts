@@ -80,7 +80,8 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
       const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, ""));
       if (Number.isFinite(n) && n > 0) values[code.toUpperCase()] = n;
     }
-    // skipped: [{ code, reason: not_held | orders_failed | unexplained | changed, retryAfter? }]
+    // skipped: [{ code, reason: not_held | orders_failed | unexplained | changed | manual, retryAfter? }]
+    // manual: 값은 저장했지만 직접 넣은 수량·평단으로 평가 중이라 다음 토스 동기화 뒤부터 쓰인다 (옛 앱은 모르는 이유라 "동기화 후 다시 시도"로 안내)
     const r = await toss.sync.setExactKrw(values);
     return { ...r, items: Object.fromEntries([...(await service.krwCosts())]) };
   });

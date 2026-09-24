@@ -37,6 +37,9 @@ function useDraft(server: string, norm: Norm): [Draft, (v: string) => void] {
 }
 
 const STALE_NOTE = "입력하는 사이 저장된 값이 바뀌었습니다. 저장하면 지금 입력한 값으로 바뀝니다.";
+/** 원화 매입금액을 저장했지만 지금은 쓰지 않을 때 (잠금 밖에서 수량·평단을 직접 고친 해외 종목) */
+const MANUAL_KRW_NOTE =
+  "직접 고친 수량·평단으로 평가 중이라, 원화 매입금액은 다음 토스 동기화 뒤에 쓰입니다 (설정 → 토스증권 연동 → 지금 계좌 동기화). 동기화하면 수량·평단도 토스 계좌 값으로 돌아갑니다.";
 
 /** 매수: 수량 가중 평균으로 평단 재계산. 매도: 수량만 줄고 평단은 유지 */
 export function applyTrade(current: { quantity: number | null; avgPrice: number | null }, side: "buy" | "sell", qty: number, price: number): { quantity: number; avgPrice: number | null } {
@@ -70,10 +73,14 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     setSavingKrw(true);
     try {
       const r = await api.setKrwCost({ [stock.code]: v });
-      if (!r.applied.includes(stock.code)) throw new Error(skipMessage(r.skipped.find((x) => x.code === stock.code)));
+      const skip = r.skipped.find((x) => x.code === stock.code);
+      // manual: 서버가 값은 두었지만 직접 고친 수량·평단으로 평가 중이라 지금 원화 손익에는 쓰지 않는다 (PF-05)
+      const deferred = !r.applied.includes(stock.code) && skip?.reason === "manual";
+      if (!r.applied.includes(stock.code) && !deferred) throw new Error(skipMessage(skip));
       await qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
       await qc.invalidateQueries({ queryKey: [apiUrl, "stock", stock.code] });
-      Alert.alert("저장됨", "원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
+      if (deferred) Alert.alert("저장됨 (동기화 뒤 적용)", MANUAL_KRW_NOTE);
+      else Alert.alert("저장됨", "원화 손익이 토스 앱과 같은 기준으로 계산됩니다.");
     } catch (e) {
       Alert.alert("저장 실패", e instanceof Error ? e.message : String(e));
     } finally {

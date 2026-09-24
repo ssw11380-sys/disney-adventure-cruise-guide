@@ -141,9 +141,12 @@ export function createApi(baseUrl: string, token = "") {
     tossStatus: () => get<TossOpenApiStatus>("/api/admin/toss/status", 15_000),
     features: () => get<FeatureFlags>("/api/features", 8_000),
     importTossHoldings: () => send<TossImportResult>("POST", "/api/admin/toss/import-holdings", undefined, 60_000),
-    /** 해외 종목 원화 매입금액(토스 앱 원화 보기의 평가금액 − 평가손익)을 정확한 값으로 저장 */
+    /**
+     * 해외 종목 원화 매입금액(토스 앱 원화 보기의 평가금액 − 평가손익)을 정확한 값으로 저장.
+     * manual: 저장은 했지만 직접 넣은 수량·평단으로 평가 중이라 다음 토스 동기화 뒤부터 쓰인다 (옛 서버는 보내지 않음)
+     */
     setKrwCost: (items: Record<string, number>) =>
-      send<{ applied: string[]; skipped: { code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed"; retryAfter?: string }[] }>("PUT", "/api/admin/toss/krw-cost", { items }),
+      send<{ applied: string[]; skipped: { code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed" | "manual"; retryAfter?: string }[] }>("PUT", "/api/admin/toss/krw-cost", { items }),
     marketStatus: () => get<MarketStatus>("/api/market/status", 10_000),
     /**
      * stale=1: 출처가 실패한 지수도 마지막 값(stale·fetchedAt)으로 받는다 — 이 앱은 "시세 지연"·실제 받은 시각으로 보여 준다.

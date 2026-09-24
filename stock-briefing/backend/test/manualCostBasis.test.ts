@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { Quote } from "../src/domain/types.js";
-import { TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
+import { TossOpenApiProvider, type TossHolding } from "../src/providers/market/tossOpenApi.js";
 import { evaluate, StockService } from "../src/services/stockService.js";
 import { TossSyncService } from "../src/services/tossSyncService.js";
 import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider } from "./helpers.js";
@@ -170,6 +170,88 @@ describe("PF-05 잠금이 풀린 뒤 직접 고친 평단", () => {
 
     await sync.importHoldings(); // 재연동
     expect(await naver()).toMatchObject({ tossSynced: true, quantity: 9, avgPrice: 232555, evaluation: { costBasis: 2_100_000, profit: 150_000 } });
+    await db.destroy();
+  });
+});
+
+/**
+ * PF-05 뒤 수정 화면의 "원화 매입금액" 저장: 직접 고친 해외 종목은 토스 기준이 지워져 원화 장부를 평가에 쓰지 않는다.
+ * 그런데 저장하면 applied 로 돌려줘 앱이 "저장됨 — 원화 손익이 토스 앱과 같은 기준으로 계산됩니다"를 띄우던 문제.
+ * 이제 값은 장부에 두되(다음 동기화 뒤 쓴다) skipped 에 reason "manual" 로 돌려준다.
+ */
+describe("원화 매입금액 저장 — 직접 고친 해외 종목", () => {
+  /** 계좌 1개 · TSLA 10주 · 매입금액 $1,000 (매수 주문 하나로 설명됨) */
+  const fakeToss = () =>
+    ({
+      async accounts() {
+        return [{ accountNo: "1", accountSeq: 1, accountType: "BROKERAGE" }];
+      },
+      async holdingsWithOverview() {
+        const items: TossHolding[] = [{ code: "TSLA", name: "테슬라", currency: "USD", quantity: 10, avgPrice: 100, lastPrice: 150, purchaseAmount: 1000 }];
+        return { items, overview: { purchaseKrw: 0, purchaseUsd: 1000, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } };
+      },
+      async ordersForBook() {
+        return [{ orderId: "o1", side: "BUY", quantity: 10, amount: 1000, at: "2026-09-01T23:00:00+09:00" }];
+      },
+      async usdKrwAt() {
+        return 1400;
+      },
+      async stockInfos(codes: string[]) {
+        return new Map(codes.map((c) => [c, { name: "테슬라", market: "NASDAQ" }]));
+      },
+    }) as unknown as TossOpenApiProvider;
+
+  /** 토스 키는 있지만 자동 동기화 0분(수동 가져오기만) → 잠그지 않는다 */
+  async function setup() {
+    const db = await createMigratedDb(":memory:");
+    const clock = () => new Date(AT);
+    const sync = new TossSyncService(db, fakeToss(), clock);
+    const svc = new StockService({
+      db,
+      quotes: new UsdQuotes("usd", { price: 150 }),
+      search: new FakeSearchProvider(),
+      master: new FakeMasterProvider(),
+      now: clock,
+      tossOpenApi: { baseFallbacks: 0 },
+      tossSyncMinutes: 0,
+    });
+    await sync.importHoldings();
+    return { db, sync, svc };
+  }
+
+  it("평단을 직접 고친 뒤 넣은 값은 applied 가 아니라 manual 로 돌려주고, 다음 동기화 뒤에 쓴다 (재현)", async () => {
+    const { db, sync, svc } = await setup();
+    // 대조: 토스 기준으로 평가 중이면 저장 즉시 원화 손익에 쓴다
+    expect(await sync.setExactKrw({ TSLA: 1_300_000 })).toEqual({ applied: ["TSLA"], skipped: [] });
+    expect((await evaluationOf(svc, "TSLA")).evaluation).toMatchObject({ costBasis: 1000, costBasisKrw: 1_300_000, krwCostSource: "exact" });
+
+    await svc.update("TSLA", { avgPrice: 101 }); // 잠금 밖에서 평단 직접 고침 → 토스 기준 지움
+    expect(await sync.setExactKrw({ TSLA: 1_310_000 })).toEqual({ applied: [], skipped: [{ code: "TSLA", reason: "manual" }] });
+    // 지금 평가는 직접 넣은 평단 그대로 (원화는 현재 환율 환산)
+    expect((await evaluationOf(svc, "TSLA")).evaluation).toMatchObject({ costBasis: 1010, costBasisKrw: null, krwCostSource: null });
+    // 값은 장부에 남는다
+    expect((await svc.krwCosts()).get("TSLA")).toMatchObject({ krw: 1_310_000, source: "exact" });
+
+    // 다음 동기화가 토스 값·평가 기준을 다시 채우면 넣어 둔 값을 쓰고, 다시 저장하면 바로 applied
+    await sync.importHoldings();
+    expect(await evaluationOf(svc, "TSLA")).toMatchObject({ avgPrice: 100, evaluation: { costBasis: 1000, costBasisKrw: 1_310_000, krwCostSource: "exact" } });
+    expect(await sync.setExactKrw({ TSLA: 1_320_000 })).toEqual({ applied: ["TSLA"], skipped: [] });
+    await db.destroy();
+  });
+
+  it("수량을 직접 고친 종목, 토스 기준 수량과 등록 수량이 다른 종목도 manual. 등록하지 않은 종목은 전처럼 applied", async () => {
+    const { db, sync, svc } = await setup();
+    await svc.update("TSLA", { quantity: 12 });
+    expect((await sync.setExactKrw({ TSLA: 1_300_000 })).skipped).toEqual([{ code: "TSLA", reason: "manual" }]);
+
+    // 예전 서버에서 직접 고쳐 토스 기준이 남아 있지만 수량이 다른 종목 (평가가 토스 기준을 쓰지 않는다)
+    await sync.importHoldings();
+    await db.updateTable("registered_stocks").set({ quantity: 11 }).where("code", "=", "TSLA").execute();
+    expect(await sync.setExactKrw({ TSLA: 1_300_000 })).toEqual({ applied: [], skipped: [{ code: "TSLA", reason: "manual" }] });
+    expect((await evaluationOf(svc, "TSLA")).evaluation).toMatchObject({ costBasisKrw: null });
+
+    await db.deleteFrom("registered_stocks").where("code", "=", "TSLA").execute();
+    expect(await sync.setExactKrw({ TSLA: 1_300_000 })).toEqual({ applied: ["TSLA"], skipped: [] });
     await db.destroy();
   });
 });
