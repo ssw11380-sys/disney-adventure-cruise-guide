@@ -1,3 +1,5 @@
+import type { CandlePeriod } from "@/api/types";
+
 /**
  * 통신이 끊기거나 늦을 때 화면을 어떻게 보여 줄지 정하는 순수 함수 모음 (RN 의존 없음 → 단위 테스트).
  *  - 한 번이라도 받은 값이 있으면 재조회가 실패해도 화면을 지우지 않는다(오류 화면은 처음 불러오기 실패 때만)
@@ -109,6 +111,32 @@ export function pollInterval(o: { open: boolean; streamFresh: boolean; failing: 
   if (o.failing) return o.open ? 3_000 : 5_000;
   if (o.open && o.streamFresh) return 30_000;
   return o.open ? 3_000 : 60_000;
+}
+
+/**
+ * 종목 차트 봉을 서버에서 다시 받는 주기 (PF-04). 실시간 체결로는 고·저·종만 따라가고 거래량·놓친 체결은 모르므로
+ * 그 종목에 거래가 있는 시간이면(lib/marketTime 의 tradingNow — 미국 주간거래 포함, 장 상태를 모르면 요일·시각으로) 분봉 30초·일·주·월봉 1분마다
+ * 서버 봉으로 바로잡는다 (서버 봉 캐시의 새 값 기준 20초·1분에 맞춤). 거래가 없는 시간이면 멈춘다
+ */
+export function candleRefresh(period: CandlePeriod, open: boolean): { refetchInterval: number | false; staleTime: number } {
+  const intraday = period === "1m" || period === "5m" || period === "30m";
+  if (!open) return { refetchInterval: false, staleTime: 5 * 60_000 };
+  return intraday ? { refetchInterval: 30_000, staleTime: 20_000 } : { refetchInterval: 60_000, staleTime: 60_000 };
+}
+
+/**
+ * 차트 아래 한 줄. 봉을 처음 불러오지 못했으면 오류(error), 받은 봉이 있는데 주기 갱신이 재시도까지 실패했으면 봉은 그대로 두고
+ * 언제 받은 봉인지만 알린다 — 멀쩡히 그려진 차트 아래에 "차트 실패"를 띄우지 않는다. 보여 줄 게 없으면 null.
+ * 갱신 실패는 isError 만으로 보지 않는다: 체결로 봉을 고치는 캐시 쓰기(setQueryData)가 react-query 의 오류 상태를 지워서 장중에는 1초도 안 남는다.
+ * 그래서 마지막 실패 시각(errorUpdatedAt)이 마지막으로 서버 봉을 받은 시각(dataUpdatedAt — 체결로 고쳐도 그대로 둔다, lib/liveStream)보다 뒤인지로 본다
+ */
+export function chartNotice(q: QueryLike & { error?: unknown; errorUpdatedAt?: number }, now: number): { text: string; error: boolean } | null {
+  const view = viewState(q);
+  if (view === "error") return { text: q.error instanceof Error ? q.error.message : "차트 실패", error: true };
+  if (view !== "ready") return null;
+  const failedSince = (q.errorUpdatedAt ?? 0) > q.dataUpdatedAt;
+  if (!failedSince && !connection(q, now, Number.POSITIVE_INFINITY).offline) return null;
+  return { text: `차트 갱신 지연 · ${clockLabel(q.dataUpdatedAt, now)} 기준`, error: false };
 }
 
 /** "14:03:21" (한국 시간). 오늘이 아니면 "9/23 14:03" */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completedCandles, marketContext } from "../src/services/marketContext.js";
+import { completedCandles, marketContext, tradingDate } from "../src/services/marketContext.js";
 import type { MarketStatus } from "../src/providers/market/calendar.js";
 import type { Candle } from "../src/domain/types.js";
 import { NotListedError } from "../src/lib/errors.js";
@@ -80,6 +80,39 @@ describe("장 상태 (3-11)", () => {
   it("달력을 못 받으면 요일·시각으로 추정한다", () => {
     expect(marketContext("005930", null, at("2026-09-24T10:00:00+09:00")).phase).toBe("regular");
     expect(marketContext("AAPL", null, at("2026-09-24T15:00:00+09:00")).phase).toBe("extended");
+  });
+});
+
+describe("체결·시세의 거래일 (앱 lib/marketTime.tradingDate 와 같은 규칙)", () => {
+  it("미국은 뉴욕 20:00 부터(주간거래) 다음 날, 주말은 직전 금요일, 한국은 서울 날짜", () => {
+    // EDT(-4): 9/24(목) 19:59 → 9/24, 20:00 → 9/25, 9/25 00:30 → 9/25
+    expect(tradingDate("2026-09-25T08:59:00+09:00", false)).toBe("2026-09-24");
+    expect(tradingDate("2026-09-25T09:00:00+09:00", false)).toBe("2026-09-25");
+    expect(tradingDate("2026-09-25T13:30:00+09:00", false)).toBe("2026-09-25");
+    // EST(-5): 1/15(목) 19:59 → 1/15, 20:00 → 1/16
+    expect(tradingDate("2026-01-16T00:59:00Z", false)).toBe("2026-01-15");
+    expect(tradingDate("2026-01-16T01:00:00Z", false)).toBe("2026-01-16");
+    // 주말: 금 20:00 ~ 일 20:00 전은 금요일, 일 20:00 부터 월요일
+    expect(tradingDate("2026-09-26T10:30:00+09:00", false)).toBe("2026-09-25");
+    expect(tradingDate("2026-09-28T08:59:00+09:00", false)).toBe("2026-09-25");
+    expect(tradingDate("2026-09-28T09:00:00+09:00", false)).toBe("2026-09-28");
+    expect(tradingDate("2026-09-24T20:30:00+09:00", true)).toBe("2026-09-24");
+    expect(tradingDate("2026-09-23T23:30:00Z", true)).toBe("2026-09-24");
+    expect(tradingDate("2026-09-26T10:00:00+09:00", true)).toBe("2026-09-25");
+  });
+
+  it("한국 00:00~08:00 은 직전 거래일 — 장 시작 전에 받은 시세(받은 시각이 asOf)와 08:00 첫 체결을 다른 거래일로 본다", () => {
+    expect(tradingDate("2026-09-24T07:59:30+09:00", true)).toBe("2026-09-23");
+    expect(tradingDate("2026-09-24T08:00:05+09:00", true)).toBe("2026-09-24");
+    expect(tradingDate("2026-09-23T22:59:30Z", true)).toBe("2026-09-23");
+    expect(tradingDate("2026-09-28T07:00:00+09:00", true)).toBe("2026-09-25"); // 월 새벽 → 금
+  });
+
+  it("미국 휴장일(US_HOLIDAYS)은 직전 거래일 — 추수감사절 전날 밤 20:00 이후는 주간거래가 없다", () => {
+    expect(tradingDate("2026-11-26T10:30:00+09:00", false)).toBe("2026-11-25"); // 뉴욕 11/25 20:30
+    expect(tradingDate("2026-11-27T02:00:00+09:00", false)).toBe("2026-11-25"); // 뉴욕 11/26 12:00
+    expect(tradingDate("2026-11-27T10:30:00+09:00", false)).toBe("2026-11-27"); // 뉴욕 11/26 20:30 → 금요일 세션
+    expect(tradingDate("2026-09-07T10:00:00+09:00", false)).toBe("2026-09-04"); // 뉴욕 일 21:00 → 월 노동절 → 금
   });
 });
 

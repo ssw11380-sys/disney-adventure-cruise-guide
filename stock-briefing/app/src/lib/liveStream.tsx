@@ -1,10 +1,10 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { createApi } from "@/api/client";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import type { CandleSeries, Evaluation, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
-import { applyTickToCandles } from "./chartPrefs";
-import { applyTick, applyTicksToList, evaluate, latestPerCode, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
+import { applyTickToCandles, isIntraday } from "./chartPrefs";
+import { applyTick, applyTicksToList, evaluate, latestPerCode, newTradingDay, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
 import { useSettings } from "./settings";
 
 /**
@@ -33,8 +33,92 @@ export function useLiveStream(): LiveStreamState {
 const SESSION_START = Date.now();
 /** 연결 상태(마지막 체결 시각·건수)를 화면에 알리는 간격 — 체결마다 알리면 화면 전체가 한 번 더 그려진다 */
 const STATE_EVERY_MS = 5_000;
+/** 거래일이 바뀐 체결을 보류한 종목의 시세를 다시 받는 최소 간격 (서버도 새 거래일 시세를 받기 전이면 옛 값을 주므로 두드리지 않게) */
+const NEW_DAY_REFETCH_MS = 15_000;
+/**
+ * 새 일·주·월 봉이 열려 서버 봉을 바로 다시 받는 것은 서버 봉을 받은 지 이만큼 지났을 때만. 방금 받은 서버 봉에 그 봉이 없으면
+ * (서버 봉 출처가 아직 새 거래일 봉을 열지 않음) 체결마다 다시 받지 않고 주기 갱신·다시 볼 때에 맡긴다
+ */
+const NEW_BAR_REFETCH_MS = 15_000;
 
 type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
+
+/**
+ * 연결이 살아 있는 동안 받은 종목별 마지막 체결 (서버 주소별). 주기 갱신으로 받은 서버 봉은 서버 봉 캐시 값이라 최대 수십 초~몇 분 늦을 수 있어,
+ * 받은 봉에 이 체결을 다시 얹는다(withLastTick) — 마지막 봉 종가가 상단 현재가보다 뒤처지지 않게 (PF-04).
+ * 끊기면 비운다: 끊긴 동안 놓친 체결이 있을 수 있으니 그때는 서버 봉을 그대로 믿는다
+ */
+const lastTicks = new Map<string, StreamTick>();
+const lastTickKey = (apiUrl: string, code: string) => `${apiUrl}\n${code}`;
+
+export function rememberTicks(apiUrl: string, ticks: Iterable<StreamTick>): void {
+  for (const t of ticks) {
+    const prev = lastTicks.get(lastTickKey(apiUrl, t.code));
+    if (prev && Date.parse(prev.timestamp) > Date.parse(t.timestamp)) continue;
+    lastTicks.set(lastTickKey(apiUrl, t.code), t);
+  }
+}
+
+export function forgetTicks(): void {
+  lastTicks.clear();
+}
+
+/**
+ * 서버에서 받은 봉에 연결 중 받은 마지막 체결을 다시 얹는다. 서버의 마지막 봉과 같은 구간일 때만 고·저·종을 고치고, 뒤 구간·지난 구간이면 그대로.
+ * 서버에 없는 뒤 구간 봉은 붙이지 않는다 — 서버 봉을 다시 받는 것이 앱이 만든 봉을 지우는 길이라서. 붙이면 한국 평일 휴장일(추석·한글날 등,
+ * tradingDate 가 모름)에 접속 직후 스냅샷 체결(서버가 값이 그대로여도 마지막 폴링 시각을 붙여 보냄)로 생긴 그날의 빈 봉이 다시 받을 때마다 되살아난다.
+ * 방금 열린 봉이 서버 봉 캐시에 아직 없으면 다음 체결이 다시 열거나 다음 주기 갱신이 서버 봉으로 채운다 (PF-04)
+ */
+export function withLastTick(apiUrl: string, code: string, series: CandleSeries): CandleSeries {
+  const tick = lastTicks.get(lastTickKey(apiUrl, series.code || code));
+  if (!tick) return series;
+  const candles = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp, series.code || code);
+  return candles === series.candles || candles.length !== series.candles.length ? series : { ...series, candles };
+}
+
+/**
+ * 체결 묶음을 react-query 캐시(잔고 목록 · 종목 상세 · 차트 봉)에 적용한다. 화면에 보이는 값이 바뀌었으면 true.
+ *  - 바뀐 게 없으면 쿼리를 건드리지 않는다(undefined) — 같은 값을 다시 넣어도 react-query 는 "방금 받은 값"으로 받은 시각을 새로 찍는다
+ *  - 거래일이 바뀐 체결은 붙이지 않고 held 에 모은다 → 새 거래일 시세를 다시 받는다 (PF-01)
+ *  - 차트 봉은 체결로 고쳐도 서버에서 새로 받은 값이 아니므로 받은 시각·무효 표시를 그대로 둔다 → 다시 볼 때·주기 갱신 때 서버 봉(거래량 포함)으로 바로잡힌다 (PF-04)
+ *  - openBars=false(접속 직후 스냅샷)면 차트에 새 봉을 열지 않고 마지막 봉만 고친다. 스냅샷 시각은 체결 시각이 아니라 서버가 값이 그대로여도
+ *    마지막으로 폴링한 시각이라, 한국 평일 휴장일(tradingDate 가 모름)에 그날 봉을 만들어 버린다. 새 봉은 실제로 가격이 바뀐 체결(ticks)이 연다
+ */
+export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<string, StreamTick>, held: Set<string>, now = Date.now(), { openBars = true } = {}): boolean {
+  let touched = false;
+  const fresh = (key: unknown[]) => (qc.getQueryState(key)?.dataUpdatedAt ?? 0) >= SESSION_START;
+  qc.setQueriesData<RegisteredWithQuote[]>({ queryKey: [apiUrl, "stocks"], exact: true }, (list) => {
+    if (!list || !fresh([apiUrl, "stocks"])) return undefined;
+    const next = applyTicksToList(list, ticks, held);
+    if (next === list) return undefined;
+    touched = true;
+    return next;
+  });
+  for (const tick of ticks.values()) {
+    qc.setQueriesData<StockDetail>({ queryKey: [apiUrl, "stock", tick.code], exact: true }, (d) => {
+      if (!d) return undefined;
+      if (newTradingDay(d.quote, tick)) held.add(tick.code);
+      const quote = applyTick(d.quote, tick);
+      if (quote === d.quote) return undefined;
+      touched = true;
+      return { ...d, quote, evaluation: evaluate(d, quote, d.evaluation) };
+    });
+    // 차트의 마지막 봉도 같이 움직인다 (분봉은 현지 시각, 일·주·월봉은 거래일로 같은 구간이면 고·저·종 갱신, 새 구간이면 새 봉)
+    for (const q of qc.getQueryCache().findAll({ queryKey: [apiUrl, "candles", tick.code] })) {
+      const series = q.state.data as CandleSeries | undefined;
+      if (!series) continue;
+      const next = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp, series.code || tick.code);
+      if (next === series.candles || (!openBars && next.length !== series.candles.length)) continue;
+      const { dataUpdatedAt, isInvalidated } = q.state;
+      qc.setQueryData<CandleSeries>(q.queryKey, { ...series, candles: next }, { updatedAt: dataUpdatedAt });
+      // 새 일·주·월 봉이 열렸으면 서버 봉을 다시 받는다 (보고 있지 않은 차트는 표시만 해 두고 다시 볼 때, 방금 받은 서버 봉이면 표시만)
+      const opened = !isIntraday(series.period) && next.length > series.candles.length;
+      const refetchNow = opened && now - dataUpdatedAt >= NEW_BAR_REFETCH_MS;
+      if (opened || isInvalidated) void qc.invalidateQueries({ queryKey: q.queryKey, exact: true, refetchType: refetchNow ? "active" : "none" }, { cancelRefetch: false });
+    }
+  }
+  return touched;
+}
 
 export function LiveStreamProvider({ children }: { children: React.ReactNode }) {
   const { apiUrl, apiToken, ready } = useSettings();
@@ -55,33 +139,30 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
     const queue: StreamTick[] = [];
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     let lastStateAt = 0;
-    const applyNow = () => {
+    // 거래일이 바뀐 체결을 보류한 종목: 새 거래일 기준가가 담긴 시세를 다시 받는다 (PF-01).
+    // 상세는 종목마다, 목록은 한꺼번에 NEW_DAY_REFETCH_MS 에 한 번. 받는 중인 요청은 끊지 않고 그 결과를 쓴다
+    const refetchedAt = new Map<string, number>();
+    let listRefetchedAt = 0;
+    const refetchNewDay = (codes: Set<string>) => {
+      const now = Date.now();
+      for (const code of codes) {
+        if (now - (refetchedAt.get(code) ?? 0) < NEW_DAY_REFETCH_MS) continue;
+        refetchedAt.set(code, now);
+        void qc.invalidateQueries({ queryKey: [apiUrl, "stock", code], exact: true }, { cancelRefetch: false });
+      }
+      if (now - listRefetchedAt < NEW_DAY_REFETCH_MS) return;
+      listRefetchedAt = now;
+      void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"], exact: true }, { cancelRefetch: false });
+    };
+    // snapshot: 접속 직후 스냅샷이면 차트에 새 봉을 열지 않는다 (applyTicksToCache 의 openBars)
+    const applyNow = (snapshot = false) => {
       flushTimer = null;
       if (!queue.length) return;
       const ticks = latestPerCode(queue.splice(0));
-      let touched = false;
-      const fresh = (key: unknown[]) => (qc.getQueryState(key)?.dataUpdatedAt ?? 0) >= SESSION_START;
-      qc.setQueriesData<RegisteredWithQuote[]>({ queryKey: [apiUrl, "stocks"], exact: true }, (list) => {
-        if (!list || !fresh([apiUrl, "stocks"])) return list;
-        const next = applyTicksToList(list, ticks);
-        if (next !== list) touched = true;
-        return next;
-      });
-      for (const tick of ticks.values()) {
-        qc.setQueriesData<StockDetail>({ queryKey: [apiUrl, "stock", tick.code], exact: true }, (d) => {
-          if (!d) return d;
-          const quote = applyTick(d.quote, tick);
-          if (quote === d.quote) return d;
-          touched = true;
-          return { ...d, quote, evaluation: evaluate(d, quote, d.evaluation) };
-        });
-        // 차트의 마지막 봉도 같이 움직인다 (일·주·월봉은 고·저·종 갱신, 분봉은 구간이 바뀌면 새 봉)
-        qc.setQueriesData<CandleSeries>({ queryKey: [apiUrl, "candles", tick.code] }, (series) => {
-          if (!series) return series;
-          const next = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp);
-          return next === series.candles ? series : { ...series, candles: next };
-        });
-      }
+      rememberTicks(apiUrl, ticks.values());
+      const held = new Set<string>();
+      const touched = applyTicksToCache(qc, apiUrl, ticks, held, Date.now(), { openBars: !snapshot });
+      if (held.size) refetchNewDay(held);
       if (touched) {
         ticksRef.current += ticks.size;
         // 5초에 한 번 (실시간 판단은 30초 기준이라 충분, 마지막 체결은 늦게라도 반영되게 뒤에 한 번 더)
@@ -96,12 +177,12 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       lastStateAt = Date.now();
       setState((s) => ({ ...s, lastTickAt: lastStateAt, ticks: ticksRef.current }));
     };
-    const enqueue = (ticks: StreamTick[], immediate: boolean) => {
+    const enqueue = (ticks: StreamTick[], immediate: boolean, snapshot = false) => {
       queue.push(...ticks);
       if (immediate) {
         if (flushTimer) clearTimeout(flushTimer);
-        applyNow();
-      } else flushTimer ??= setTimeout(applyNow, 100);
+        applyNow(snapshot);
+      } else flushTimer ??= setTimeout(() => applyNow(), 100);
     };
 
     const armWatchdog = () => {
@@ -147,7 +228,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         } catch {
           return;
         }
-        if (msg.type === "ticks" || msg.type === "snapshot") enqueue(msg.ticks, true);
+        if (msg.type === "ticks" || msg.type === "snapshot") enqueue(msg.ticks, true, msg.type === "snapshot");
         else if (msg.type === "tick") enqueue([msg], false);
         else if (msg.type === "holdings") {
           // 토스 계좌 체결로 잔고가 바뀌었다 → 목록·상세를 바로 다시 받는다
@@ -161,7 +242,10 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         /* onclose 가 이어서 온다 */
       };
       ws.onclose = () => {
-        if (socket === ws) socket = null;
+        if (socket === ws) {
+          socket = null;
+          forgetTicks(); // 이미 새로 붙은 뒤 늦게 온 옛 연결의 close 는 새 연결의 체결을 지우지 않는다
+        }
         setState((s) => ({ ...s, connected: false }));
         if (watchdog) clearTimeout(watchdog);
         scheduleReconnect();
@@ -184,6 +268,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       watchdog = null;
       const ws = socket;
       socket = null;
+      forgetTicks();
       try {
         ws?.close();
       } catch {

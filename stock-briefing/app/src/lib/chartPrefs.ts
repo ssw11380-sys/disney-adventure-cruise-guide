@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useState } from "react";
 import type { Candle, CandlePeriod } from "@/api/types";
 import type { IndicatorKind } from "@/components/chart/PriceChart";
+import { inTradingHours, marketClock, periodKey, tradingDate } from "./marketTime";
 
 /** 차트 설정(이평선·볼린저·거래량·보조지표)은 종목과 화면(인라인/전체)에 상관없이 하나로 기억한다 */
 export interface ChartPrefs {
@@ -73,29 +74,43 @@ export function isIntraday(period: CandlePeriod): boolean {
 
 /**
  * 실시간 체결을 봉 시계열에 반영한다. 마지막 봉과 같은 구간이면 고·저·종을 갱신하고, 새 구간이면 봉을 하나 붙인다.
+ * 분봉은 시장 현지(한국 서울·미국 뉴욕, 서머타임 포함) 시각으로, 일·주·월봉은 거래일(lib/marketTime 의 tradingDate)로 나눈다 —
+ * 미국 주간거래(뉴욕 20:00 이후) 체결은 토스·서버 봉처럼 다음 거래일 봉으로 간다 (PF-02·03).
+ * 새로 붙인 봉은 거래량을 모른다(volumeUnknown) — 체결마다 거래량이 오지 않으니 더해서 만들지 않고, 서버 봉을 다시 받으면 채워진다 (PF-04).
  * 바뀐 게 없으면 같은 배열을 돌려준다(리렌더 방지).
  */
-export function applyTickToCandles(candles: Candle[], period: CandlePeriod, price: number, timestamp: string): Candle[] {
+export function applyTickToCandles(candles: Candle[], period: CandlePeriod, price: number, timestamp: string, code: string): Candle[] {
   const last = candles.at(-1);
   if (!last) return candles;
-  const at = Date.parse(timestamp);
-  if (Number.isNaN(at)) return candles;
+  const clock = marketClock(timestamp, code);
+  if (!clock) return candles;
+  const newBar = (date: string, time?: string): Candle[] => [...candles, { date, ...(time ? { time } : {}), open: price, high: price, low: price, close: price, volume: 0, volumeUnknown: true }];
   if (isIntraday(period)) {
     if (!last.time) return candles;
+    const lastAt = Date.parse(last.time);
+    if (Number.isNaN(lastAt)) return candles;
     const stepMin = period === "1m" ? 1 : period === "5m" ? 5 : 30;
-    const local = shiftToOffset(timestamp, last.time.slice(19));
+    // 봉 시각 표기는 서버 봉을 따른다: 서버 봉이 시장 현지 시각이면 체결 순간의 현지 오프셋(서머타임이 바뀌어도 맞게), 아니면 마지막 봉의 오프셋 그대로
+    const lastOffset = last.time.slice(19);
+    const offset = lastOffset === marketClock(last.time, code)?.offset ? clock.offset : lastOffset;
+    const local = shiftToOffset(timestamp, offset);
     if (!local) return candles;
     const minute = Number(local.slice(14, 16));
-    const bucket = `${local.slice(0, 14)}${String(Math.floor(minute / stepMin) * stepMin).padStart(2, "0")}:00${last.time.slice(19)}`;
-    if (bucket === last.time) return updateLast(candles, last, price);
-    if (Date.parse(bucket) > Date.parse(last.time)) return [...candles, { date: bucket.slice(0, 10), time: bucket, open: price, high: price, low: price, close: price, volume: 0 }];
+    const bucket = `${local.slice(0, 14)}${String(Math.floor(minute / stepMin) * stepMin).padStart(2, "0")}:00${offset}`;
+    const at = Date.parse(bucket);
+    if (at === lastAt) return updateLast(candles, last, price);
+    // 거래 시간 밖 체결(서버가 막 켜져 장 전·휴장일에 보낸 값 그대로의 체결 등)로는 새 분봉을 열지 않는다 — 거래가 없는 시간에 빈 봉이 생기지 않게
+    if (at > lastAt) return inTradingHours(timestamp, code) ? newBar(bucket.slice(0, 10), bucket) : candles;
     return candles;
   }
-  // 일·주·월봉: 체결 날짜(현지)가 마지막 봉 날짜 이후면 마지막 봉을 갱신. 하루가 바뀌는 순간 새 일봉을 붙인다
-  const day = timestamp.slice(0, 10);
-  if (day < last.date) return candles;
-  if (period === "D" && day > last.date) return [...candles, { date: day, open: price, high: price, low: price, close: price, volume: 0 }];
-  return updateLast(candles, last, price);
+  // 일·주·월봉: 체결의 거래일이 마지막 봉과 같은 구간(날·월요일 시작 주·월)이면 마지막 봉 갱신, 뒤 구간이면 지난 봉은 두고 새 봉
+  const day = tradingDate(timestamp, code);
+  if (!day) return candles;
+  const key = periodKey(day, period);
+  const lastKey = periodKey(last.date, period);
+  if (key < lastKey) return candles;
+  if (key === lastKey) return updateLast(candles, last, price);
+  return newBar(day);
 }
 
 function updateLast(candles: Candle[], last: Candle, price: number): Candle[] {

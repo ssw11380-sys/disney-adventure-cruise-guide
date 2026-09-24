@@ -143,6 +143,8 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  /** 앱만: 실시간 체결로 앱이 만든 임시 봉이라 거래량을 아직 모른다 (volume 0 은 확정값이 아님). 서버 봉을 다시 받으면 없어진다 */
+  volumeUnknown?: boolean;
 }
 
 export interface CandleSeries {

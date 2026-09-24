@@ -8,7 +8,7 @@ import { BriefingCard } from "@/components/BriefingCard";
 import { CandleChart } from "@/components/CandleChart";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { FlashPrice } from "@/components/FlashPrice";
-import { StaleBanner, usePull } from "@/components/Freshness";
+import { ChartNotice, StaleBanner, usePull } from "@/components/Freshness";
 import { DetailSkeleton } from "@/components/Skeleton";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
@@ -180,7 +180,7 @@ export default function StockDetailScreen() {
           quote={q}
           onFullscreen={() => router.push(`/stocks/${c}/chart?period=${period}` as never)}
         />
-        {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트 실패"}</Text> : null}
+        <ChartNotice query={candles} />
       </View>
 
       {/* 시세 정보 */}

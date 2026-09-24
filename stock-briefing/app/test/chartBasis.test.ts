@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { axisWidth, labelSide, readoutBasis, textWidth } from "@/lib/chartBasis";
+import { axisWidth, labelSide, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
 
 describe("차트 읽기 줄 등락 기준", () => {
   // 삼성전자 9/23: 거래소 기준가(전일 종가) 276,500, 통합(NXT 포함) 직전 봉 종가 277,800, 오늘 종가 286,500
@@ -58,5 +58,21 @@ describe("52주 글자 자리", () => {
   });
   it("왼쪽 평단 글자와 가까우면 오른쪽 그대로", () => {
     expect(labelSide({ y: 20, plotW: 300, bars: bars((i) => (i >= 27 ? [18, 60] : [100, 140])), avoidY: 28 })).toBe("right");
+  });
+});
+
+describe("거래량 막대 (PF-04)", () => {
+  it("거래량을 모르는 임시 봉은 0 처럼 비워 두지 않고 pane 높이의 점선 빈 막대로 따로 준다", () => {
+    const bars = volumeBars(
+      [
+        { open: 1, close: 2, volume: 100 },
+        { open: 2, close: 1, volume: 0 },
+        { open: 2, close: 3, volume: 0, volumeUnknown: true },
+      ],
+      { maxVol: 100, top: 10, height: 40, barW: 4, xOf: (i) => i * 10 + 5 },
+    );
+    expect(bars.up).toBe("M3.0 10.0h4.0v40.0h-4.0z");
+    expect(bars.down).toBe("M13.0 50.0h4.0v0.0h-4.0z"); // 확정된 0 은 높이 0
+    expect(bars.unknown).toBe("M23.0 50.0V10.0h4.0V50.0");
   });
 });
