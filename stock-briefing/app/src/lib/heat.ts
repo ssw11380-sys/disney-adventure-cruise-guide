@@ -3,7 +3,7 @@ import type { Theme } from "@/tokens";
 import { contrast, hexRgb, rgbHex, type Rgb } from "./color";
 
 /**
- * 테마 히트맵 색 (순수 함수 — test/heat.test.ts 가 모든 등락률에서 글자 대비 4.5 이상인지 본다).
+ * 테마 히트맵 색 (순수 함수 — test/tokens.test.ts 가 모든 등락률에서 글자 대비 4.5 이상인지 본다).
  * 4단계 진하기는 0.75: 0.8 이면 라이트 상승 타일(#D7454C)에서 흰 글자·짙은 글자 모두 4.5 밑 (3-20 리뷰)
  */
 /** 기간별 색 눈금의 끝값(%): 하루 ±5%, 1주 ±10%, 1개월 ±20% 에서 가장 진하다 */

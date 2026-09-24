@@ -6,7 +6,9 @@ const expoConfig = require("eslint-config-expo/flat");
 const SPACING = "/^(padding|margin|gap|rowGap|columnGap|flexGap)(Top|Bottom|Left|Right|Horizontal|Vertical)?$/";
 // 숫자만 (raw 가 숫자로 시작, 0 은 허용) — "auto"·"5%" 같은 문자열은 잡지 않는다. 식 안의 숫자(insets.bottom + 6, a ? 4 : 8)도 잡는다
 const NUMBER = "Literal[raw=/^[0-9.]/][value!=0]";
-const HEX = "/#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?\\b|^#[0-9A-Fa-f]{3}$/";
+// 문자열 전체가 색(#abc·#aabbcc·#aabbccdd)이거나, 템플릿 속 색 (주소의 "#facade" 같은 조각은 앞에 / 가 있어 제외)
+const HEX = "/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/";
+const HEX_IN_TEXT = "/(^|[^\\w/#])#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?\\b/";
 const GLYPH = "/[◀▶◂▸▾▴■□●○✓✔]/";
 const designRules = [
   {
@@ -26,7 +28,7 @@ const designRules = [
     message: "색은 테마 토큰으로 (t.ink·t.accent…). hex 는 tokens.ts·widgets/palette.ts 에만",
   },
   {
-    selector: `TemplateElement[value.raw=${HEX}]`,
+    selector: `TemplateElement[value.raw=${HEX_IN_TEXT}]`,
     message: "색은 테마 토큰으로. hex 는 tokens.ts·widgets/palette.ts 에만",
   },
   {
