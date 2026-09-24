@@ -10,6 +10,8 @@ const rankQuery = z.object({
   size: z.coerce.number().int().min(10).max(100).default(50),
   /** 첫 쪽이 준 목록 판 (뒤 쪽을 같은 목록에서 이어 받기) */
   v: z.coerce.number().int().positive().optional(),
+  /** r=1: 앱이 restart(판을 잃었으니 첫 쪽부터 다시)를 안다. 없으면(옛 앱 번들) 잃은 판의 뒤 쪽도 지금 목록에서 준다 */
+  r: z.string().optional(),
 });
 const themesQuery = z.object({ kind: z.enum(["theme", "sector"]).default("theme"), period: z.enum(["day", "week", "month"]).default("day") });
 const themeParams = marketParam.extend({ id: z.string().min(1).max(40).regex(/^[0-9A-Za-z_-]+$/) });
@@ -32,11 +34,11 @@ export const discoverRoutes: FastifyPluginAsync<{ service: DiscoverService }> = 
     }
   };
 
-  /** GET /api/discover/:market/rank/:category?page=&size=&v= */
+  /** GET /api/discover/:market/rank/:category?page=&size=&v=&r=1 */
   app.get("/:market/rank/:category", async (req) => {
     const { market, category } = rankParams.parse(req.params);
-    const { page, size, v } = rankQuery.parse(req.query);
-    return upstream("순위를", req.log, () => service.rank(market, category, page, size, v));
+    const { page, size, v, r } = rankQuery.parse(req.query);
+    return upstream("순위를", req.log, () => service.rank(market, category, page, size, v, { restart: r === "1" }));
   });
 
   /** GET /api/discover/:market/themes?kind=theme|sector&period=day|week|month */

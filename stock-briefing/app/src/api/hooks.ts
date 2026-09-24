@@ -231,7 +231,8 @@ export function useDiscoverRank(market: DiscoverMarket, category: RankCategory, 
   const q = useInfiniteQuery({
     subscribed: focused,
     queryKey: useKey("discoverRank", market, category, size),
-    // 뒤 쪽이 다른 판에서 왔으면(서버 재시작·오래된 판) 줄을 버리고 restart 로 표시한다 (아래에서 첫 쪽부터 다시)
+    // 뒤 쪽이 다른 판에서 왔으면(서버 재시작·오래된 판) 줄을 버리고 restart 로 표시한다 (아래에서 첫 쪽부터 다시).
+    // 요청은 r=1 을 붙여 새 서버가 빈 쪽 + restart 로 알리게 한다 (api/client.ts)
     queryFn: async ({ pageParam }) => checkRankPage(pageParam, await api.discoverRank(market, category, pageParam.page, size, pageParam.ver)),
     initialPageParam: { page: 1 } as RankPageParam,
     // 다음 쪽은 앞 쪽과 같은 목록 판(ver)에서 (20쪽·빈 쪽에서 멈춘다)

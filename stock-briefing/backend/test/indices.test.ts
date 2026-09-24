@@ -1,7 +1,10 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import Fastify, { type FastifyInstance } from "fastify";
 import { describe, expect, it, vi } from "vitest";
+import type { MarketCalendar } from "../src/providers/market/calendar.js";
 import { fxMonthly, INDEX_SOURCES, MarketIndices, type MarketIndex } from "../src/providers/market/indices.js";
+import { marketRoutes } from "../src/routes/market.js";
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 
@@ -25,32 +28,39 @@ const healthy = (url: string) =>
 const ALL = INDEX_SOURCES.map((s) => s.code);
 
 describe("MarketIndices 출처 장애 (DISC-01)", () => {
-  it("정상 → 출처 전부 503 → 장 마감 뒤: 값은 남기되 원래 시세·받은 시각과 stale 을 주고, 옛 장중(open)을 이어 가지 않는다", async () => {
-    let now = new Date("2026-09-24T02:00:00Z"); // 11:00 KST
+  it("정상 → 출처 전부 503 → 장 마감 뒤: 값은 남기되 원래 시세·받은 시각과 stale 을 주고, 옛 장중(open)을 이어 가지 않는다 (3시간까지)", async () => {
+    let now = new Date("2026-09-24T06:00:00Z"); // 15:00 KST 장중
     let failed = false;
     const fetchFn = (async (url: string) => (failed ? new Response("error", { status: 503 }) : healthy(url))) as unknown as typeof fetch;
     const m = new MarketIndices(fetchFn, () => now);
-    const first = await m.list();
+    const first = await m.list({ stale: true });
     expect(first.map((i) => i.code)).toEqual(ALL);
-    expect(first[0]).toMatchObject({ code: "KOSPI", open: true, stale: false, asOf: "2026-09-24T11:00:00+09:00", fetchedAt: "2026-09-24T11:00:00+09:00" });
+    expect(first[0]).toMatchObject({ code: "KOSPI", open: true, stale: false, asOf: "2026-09-24T11:00:00+09:00", fetchedAt: "2026-09-24T15:00:00+09:00" });
 
     failed = true;
-    now = new Date("2026-09-24T12:00:00Z"); // 21:00 KST
-    const later = await m.list();
+    now = new Date("2026-09-24T08:30:00Z"); // 17:30 KST 장 마감 뒤
+    const later = await m.list({ stale: true });
     // 마지막 정상값은 그대로 (가격 보존)
     expect(later.map((i) => [i.code, i.value])).toEqual(first.map((i) => [i.code, i.value]));
-    // 실제 시세 시각·서버가 받은 시각은 11:00 그대로, 갱신 실패 표시, 장중을 확정값처럼 주지 않는다
-    expect(later[0]).toMatchObject({ code: "KOSPI", asOf: "2026-09-24T11:00:00+09:00", fetchedAt: "2026-09-24T11:00:00+09:00", stale: true, open: false });
-    expect(later.every((i) => i.stale === true && i.open === false && i.fetchedAt === "2026-09-24T11:00:00+09:00")).toBe(true);
+    // 실제 시세 시각·서버가 받은 시각은 그대로, 갱신 실패 표시, 장중을 확정값처럼 주지 않는다
+    expect(later[0]).toMatchObject({ code: "KOSPI", asOf: "2026-09-24T11:00:00+09:00", fetchedAt: "2026-09-24T15:00:00+09:00", stale: true, open: false });
+    expect(later.every((i) => i.stale === true && i.open === false && i.fetchedAt === "2026-09-24T15:00:00+09:00")).toBe(true);
+    // 전부 실패면 옛 앱(플래그 없음)도 같은 마지막 값 (예전 서버도 직전 목록을 줬다)
+    expect(await m.list()).toEqual(later);
+
+    // 받은 지 3시간이 지나면 더 이어 주지 않는다 (옛 앱도)
+    now = new Date("2026-09-24T09:01:00Z"); // 18:01 KST
+    expect(await m.list({ stale: true })).toEqual([]);
+    expect(await m.list()).toEqual([]);
 
     // 출처가 돌아오면 새 값·새 시각
     failed = false;
-    now = new Date("2026-09-24T12:01:00Z");
-    const back = await m.list();
-    expect(back[0]).toMatchObject({ code: "KOSPI", open: true, stale: false, fetchedAt: "2026-09-24T21:01:00+09:00" });
+    now = new Date("2026-09-24T09:02:00Z");
+    const back = await m.list({ stale: true });
+    expect(back[0]).toMatchObject({ code: "KOSPI", open: true, stale: false, fetchedAt: "2026-09-24T18:02:00+09:00" });
   });
 
-  it("일부 항목만 실패하면 그 항목만 마지막 값(stale), 나머지는 새 값. 한 번도 못 받은 항목은 빠진다", async () => {
+  it("일부 항목만 실패하면 그 항목만 마지막 값(stale), 나머지는 새 값. 한 번도 못 받은 항목은 빠진다 · 옛 앱은 실패한 항목을 뺀다", async () => {
     let now = new Date("2026-09-24T02:00:00Z");
     let round = 1;
     const fetchFn = (async (url: string) => {
@@ -59,13 +69,93 @@ describe("MarketIndices 출처 장애 (DISC-01)", () => {
       return healthy(url);
     }) as unknown as typeof fetch;
     const m = new MarketIndices(fetchFn, () => now);
-    await m.list();
+    await m.list({ stale: true });
     round = 2;
     now = new Date("2026-09-24T02:01:00Z"); // 11:01 KST (30초 캐시 뒤)
-    const list = await m.list();
+    const list = await m.list({ stale: true });
     expect(list.map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSDAQ"));
     expect(list.find((i) => i.code === "KOSPI")).toMatchObject({ stale: true, open: false, fetchedAt: "2026-09-24T11:00:00+09:00" });
     expect(list.find((i) => i.code === "NASDAQ")).toMatchObject({ stale: false, open: true, fetchedAt: "2026-09-24T11:01:00+09:00" });
+    // 옛 앱: 예전 서버처럼 이번에 받은 항목만
+    const old = await m.list();
+    expect(old.map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSDAQ" && c !== "KOSPI"));
+    expect(old.every((i) => i.stale === false)).toBe(true);
+  });
+});
+
+describe("GET /api/market/indices: stale 을 아는 앱만 마지막 값을 받는다 (옛 앱 호환)", () => {
+  /** 11:00 KST 에 모두 정상, 주소에 fail 의 글자가 든 출처는 그 뒤로 503 */
+  function world() {
+    const w = { now: new Date("2026-09-24T02:00:00Z"), fail: new Set<string>() };
+    const fetchFn = (async (url: string) => ([...w.fail].some((c) => url.includes(c)) ? new Response("error", { status: 503 }) : healthy(url))) as unknown as typeof fetch;
+    const m = new MarketIndices(fetchFn, () => w.now);
+    return { w, m };
+  }
+  async function serve(m: MarketIndices) {
+    const app = Fastify({ logger: false });
+    await app.register(marketRoutes, { prefix: "/api/market", calendar: {} as MarketCalendar, indices: m });
+    return app;
+  }
+  const get = async (app: FastifyInstance, url: string) => ((await app.inject({ method: "GET", url })).json() as { indices: MarketIndex[] }).indices;
+  const later = (w: { now: Date }, ms: number) => (w.now = new Date(w.now.getTime() + ms));
+
+  it("옛 앱(플래그 없음): 일부 출처가 실패하면 main 서버처럼 그 항목을 뺀다 — 멈춘 값이 받은 시각 옆에 지금 값처럼 보이지 않게", async () => {
+    const { w, m } = world();
+    const app = await serve(m);
+    try {
+      expect((await get(app, "/api/market/indices")).map((i) => i.code)).toEqual(ALL);
+      w.fail.add("KOSPI");
+      later(w, 60_000);
+      const old = await get(app, "/api/market/indices");
+      expect(old.map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSPI"));
+      expect(old.every((i) => i.stale !== true)).toBe(true);
+      // 같은 때 새 앱(stale=1)은 마지막 값을 stale 로 받는다
+      const neu = await get(app, "/api/market/indices?stale=1");
+      expect(neu.map((i) => i.code)).toEqual(ALL);
+      expect(neu.find((i) => i.code === "KOSPI")).toMatchObject({ stale: true, open: false, fetchedAt: "2026-09-24T11:00:00+09:00" });
+      // 출처가 돌아오면 옛 앱도 다시 받는다
+      w.fail.clear();
+      later(w, 60_000);
+      expect((await get(app, "/api/market/indices")).map((i) => i.code)).toEqual(ALL);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("새 앱(stale=1)도 마지막 값은 받은 지 3시간까지만 — 고장 난 출처의 값이 계속 굳어 있지 않게", async () => {
+    const { w, m } = world();
+    const app = await serve(m);
+    try {
+      await get(app, "/api/market/indices?stale=1");
+      w.fail.add("KOSPI");
+      later(w, 3 * 60 * 60_000 - 60_000); // 13:59 KST
+      const kept = await get(app, "/api/market/indices?stale=1");
+      expect(kept.find((i) => i.code === "KOSPI")).toMatchObject({ stale: true, fetchedAt: "2026-09-24T11:00:00+09:00" });
+      later(w, 2 * 60_000); // 14:01 KST — 받은 지 3시간 넘음
+      const dropped = await get(app, "/api/market/indices?stale=1");
+      expect(dropped.map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSPI"));
+      expect(dropped.every((i) => i.stale === false)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("출처가 모두 실패하면 옛 앱도 마지막 값을 받는다(main 도 직전 목록을 줬다) — 장중으로 두지 않고, 3시간이 지나면 뺀다", async () => {
+    const { w, m } = world();
+    const app = await serve(m);
+    try {
+      await get(app, "/api/market/indices");
+      w.fail.add("naver.com"); // 9개 출처 모두
+      later(w, 60 * 60_000); // 12:00 KST
+      const old = await get(app, "/api/market/indices");
+      expect(old.map((i) => i.code)).toEqual(ALL);
+      expect(old.every((i) => i.open === false && i.fetchedAt === "2026-09-24T11:00:00+09:00")).toBe(true);
+      later(w, 2 * 60 * 60_000 + 60_000); // 14:01 KST
+      expect(await get(app, "/api/market/indices")).toEqual([]);
+      expect(await get(app, "/api/market/indices?stale=1")).toEqual([]);
+    } finally {
+      await app.close();
+    }
   });
 });
 
@@ -92,18 +182,20 @@ describe("MarketIndices 멈춘 출처 (DISC-02)", () => {
     }
   });
 
-  it("캐시가 있으면 멈춘 출처는 마지막 값(stale)으로 채운다", async () => {
+  it("캐시가 있으면 멈춘 출처는 마지막 값(stale)으로 채운다 (stale 을 아는 앱)", async () => {
     let now = new Date("2026-09-24T02:00:00Z");
     let hang = false;
     const fetchFn = (async (url: string) => (hang && url.includes("KOSPI") ? new Promise<Response>(() => {}) : healthy(url))) as unknown as typeof fetch;
     const m = new MarketIndices(fetchFn, () => now, { listTimeoutMs: 50 });
-    await m.list();
+    await m.list({ stale: true });
     hang = true;
     now = new Date("2026-09-24T02:01:00Z");
-    const list = await settle(m.list(), 2_000);
+    const list = await settle(m.list({ stale: true }), 2_000);
     expect(list).not.toBe("pending");
     expect((list as MarketIndex[]).map((i) => i.code)).toEqual(ALL);
     expect((list as MarketIndex[])[0]).toMatchObject({ code: "KOSPI", stale: true, open: false, fetchedAt: "2026-09-24T11:00:00+09:00" });
+    // 옛 앱은 같은 조회에서 멈춘 항목을 뺀다 (다시 부르지 않고 30초 캐시에서)
+    expect((await m.list()).map((i) => i.code)).toEqual(ALL.filter((c) => c !== "KOSPI"));
   });
 
   it("헤더만 오고 본문이 멈춰도(실제 HTTP) 제한 시간에 연결을 끊고 나머지를 준다", async () => {

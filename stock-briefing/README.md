@@ -141,7 +141,8 @@ npm run dev                  # http://localhost:3000
 | POST | `/api/notifications/test` | 등록 기기 전체에 테스트 알림 |
 | POST | `/api/notifications/receipts` | Expo 푸시 영수증 즉시 확인 (기본은 전송 15분 뒤 자동) |
 | GET | `/api/market/status` | 한국·미국 장 상태 (거래일 여부, 장중 여부, 다음 개장/종료 시각) |
-| GET | `/api/discover/:market/rank/:category?page=&size=&v=` | 발견 탭 순위 (`v` = 첫 쪽 응답의 `ver`, 같은 목록에서 이어 받기). market `KR`\|`US`, category `tradingValue`\|`volume`\|`gainers`\|`losers` |
+| GET | `/api/market/indices?stale=1` | 지수 띠 (30초 캐시). `stale=1` 이면 출처가 실패한 항목도 마지막 값(받은 지 3시간까지)에 `stale: true`, 없으면(옛 앱) 그 항목을 뺀다 |
+| GET | `/api/discover/:market/rank/:category?page=&size=&v=&r=1` | 발견 탭 순위 (`v` = 첫 쪽 응답의 `ver`, 같은 목록에서 이어 받기. `r=1` 이면 그 판을 잃었을 때 빈 쪽 + `restart`, 없으면(옛 앱) 지금 목록의 쪽). market `KR`\|`US`, category `tradingValue`\|`volume`\|`gainers`\|`losers` |
 | GET | `/api/discover/:market/themes?kind=theme\|sector&period=day\|week\|month` | 테마·업종 목록 (등락률, 상승·보합·하락 수, 대표 종목) |
 | GET | `/api/discover/:market/themes/:id?kind=` | 테마·업종 구성 종목과 요약 |
 | GET | `/api/admin/toss/status` | 토스 Open API 상태 (키 설정, 토큰, 서버 공인 IP, 실시간 구독) |

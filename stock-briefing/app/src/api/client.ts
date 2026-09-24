@@ -145,9 +145,17 @@ export function createApi(baseUrl: string, token = "") {
     setKrwCost: (items: Record<string, number>) =>
       send<{ applied: string[]; skipped: { code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed"; retryAfter?: string }[] }>("PUT", "/api/admin/toss/krw-cost", { items }),
     marketStatus: () => get<MarketStatus>("/api/market/status", 10_000),
-    marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices", 10_000),
+    /**
+     * stale=1: 출처가 실패한 지수도 마지막 값(stale·fetchedAt)으로 받는다 — 이 앱은 "시세 지연"·실제 받은 시각으로 보여 준다.
+     * 서버는 이 표시를 모르는 옛 앱(플래그 없음)에는 실패한 항목을 뺀다. 예전 서버는 플래그를 무시한다
+     */
+    marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices?stale=1", 10_000),
+    /**
+     * r=1: 뒤 쪽의 판(v)을 서버가 잃었으면 빈 쪽 + restart 를 받는다 (checkRankPage 가 첫 쪽부터 다시 받는다).
+     * 서버는 restart 를 모르는 옛 앱(플래그 없음)에는 지금 목록의 쪽을 준다. 예전 서버도 그렇게 주고, 판이 달라 이 앱이 알아챈다
+     */
     discoverRank: (market: DiscoverMarket, category: RankCategory, page = 1, size = 50, ver?: number) =>
-      get<DiscoverRank>(`/api/discover/${market}/rank/${category}?page=${page}&size=${size}${ver ? `&v=${ver}` : ""}`, 15_000),
+      get<DiscoverRank>(`/api/discover/${market}/rank/${category}?page=${page}&size=${size}${ver ? `&v=${ver}` : ""}&r=1`, 15_000),
     discoverThemes: (market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod) => get<ThemeList>(`/api/discover/${market}/themes?kind=${kind}&period=${period}`, 20_000),
     discoverTheme: (market: DiscoverMarket, kind: ThemeKind, id: string) => get<ThemeDetail>(`/api/discover/${market}/themes/${encodeURIComponent(id)}?kind=${kind}`, 20_000),
     marketCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`/api/market/indices/${encodeURIComponent(code)}/candles?period=${period}&count=${count}`),
