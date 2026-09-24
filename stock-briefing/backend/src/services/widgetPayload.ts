@@ -1,4 +1,5 @@
 import type { MarketStatus } from "../providers/market/calendar.js";
+import type { MarketIndex } from "../providers/market/indices.js";
 import type { Briefing } from "./briefingService.js";
 import type { RegisteredWithQuote } from "./stockService.js";
 
@@ -7,6 +8,8 @@ import type { RegisteredWithQuote } from "./stockService.js";
  *  - 시세는 위젯이 쓰는 칸만(가격·등락·통화·시각·환율·지연 표시), 평가는 그대로
  *  - 장 상태 칩: 앱 잔고 탭 띠와 같은 규칙(/api/market/status 기준)
  *  - 브리핑: 보유 비중(원화 환산 평가금) 상위 3종목의 최신 요약 첫 줄 (위젯이 한 줄만 보여 준다)
+ *  - features: 위젯이 쓰는 기능 플래그만 (위젯은 /api/features 를 따로 받지 않는다). 예전 앱은 모르는 칸이라 무시한다
+ *  - indices: 잔고 위젯 지수 줄 (코스피·나스닥·원/달러). widgetIndexLine 이 켜져 있을 때만 — 끄면 응답·ETag 가 예전과 같다
  */
 
 export interface WidgetMarket {
@@ -35,6 +38,32 @@ export interface WidgetStock {
   e: [number, number, number | null, number | null, "exact" | "estimated" | null] | null;
 }
 
+/**
+ * 잔고 위젯 지수 줄 한 항목: 앱 지수 띠(/api/market/indices?stale=1)와 같은 값·같은 stale 규칙.
+ * 서버가 출처에서 받은 시각(fetchedAt)은 넣지 않는다 — 30초마다 바뀌어 값이 같아도 ETag 가 달라지므로
+ */
+export interface WidgetIndex {
+  code: string;
+  name: string;
+  value: number;
+  change: number;
+  changeRate: number;
+  open: boolean;
+  /** 출처 조회가 실패해 마지막 정상값 (새 앱은 흐리게 + "지연") */
+  stale?: true;
+  /** 출처의 시세 시각 */
+  asOf?: string;
+}
+
+/** 위젯 지수 줄 항목과 순서 (앱 widgets/payload.ts 의 WIDGET_INDEX_CODES 와 같다) */
+export const WIDGET_INDEX_CODES = ["KOSPI", "NASDAQ", "USDKRW"] as const;
+
+/** 위젯이 쓰는 기능 플래그 */
+export interface WidgetFeatures {
+  widgetPnlToggle: boolean;
+  widgetIndexLine: boolean;
+}
+
 export interface WidgetPayload {
   v: 1;
   market: WidgetMarket | null;
@@ -42,6 +71,23 @@ export interface WidgetPayload {
   briefings: Array<{ id: number; code: string; name: string; session: string; date: string; summary: string; createdAt: string }>;
   /** 모든 종목의 최신 브리핑 id (앱 백그라운드 알림이 새 브리핑이 있을 때만 전체 목록을 받게) */
   latestIds: number[];
+  /** 위젯 기능 플래그 (새 서버). 없으면 새 앱은 모두 꺼짐으로 본다 */
+  features?: WidgetFeatures;
+  /** 지수 줄 (widgetIndexLine 이 켜져 있고 지수를 받았을 때만) */
+  indices?: WidgetIndex[];
+}
+
+/** 지수 띠 목록(stale 을 아는 앱용)에서 위젯 줄에 넣을 것만, 정해진 순서로. 값은 그대로 (앱 지수 띠와 같은 숫자가 되게) */
+export function widgetIndices(list: readonly MarketIndex[]): WidgetIndex[] {
+  const byCode = new Map(list.map((i) => [i.code, i]));
+  return WIDGET_INDEX_CODES.flatMap((code) => {
+    const i = byCode.get(code);
+    if (!i) return [];
+    const row: WidgetIndex = { code: i.code, name: i.name, value: i.value, change: i.change, changeRate: i.changeRate, open: i.open };
+    if (i.stale) row.stale = true;
+    if (i.asOf) row.asOf = i.asOf;
+    return [row];
+  });
 }
 
 /** 앱 useAnyMarketOpen 과 같은 규칙 */
@@ -82,7 +128,12 @@ const krwValue = (s: RegisteredWithQuote | undefined) => {
   return s.quote?.currency === "USD" ? v * (s.quote.fxRate ?? 1400) : v;
 };
 
-export function buildWidgetPayload(stocks: RegisteredWithQuote[], latest: Array<{ code: string; name: string; latest: Briefing | null }>, status: MarketStatus | null): WidgetPayload {
+export function buildWidgetPayload(
+  stocks: RegisteredWithQuote[],
+  latest: Array<{ code: string; name: string; latest: Briefing | null }>,
+  status: MarketStatus | null,
+  extra: { features?: WidgetFeatures | undefined; indices?: readonly MarketIndex[] | null | undefined } = {},
+): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
   const ok = latest.filter((b) => b.latest?.status === "ok");
   // 보유 비중 큰 순 → 비중이 같으면(관심 종목) 최신 순
@@ -91,11 +142,15 @@ export function buildWidgetPayload(stocks: RegisteredWithQuote[], latest: Array<
     if (Number.isFinite(d) && d !== 0) return d;
     return a.latest!.createdAt < b.latest!.createdAt ? 1 : -1;
   });
-  return {
+  const payload: WidgetPayload = {
     v: 1,
     market: status ? marketChip(status) : null,
     stocks: stocks.map(slim),
     latestIds: ok.map((b) => b.latest!.id).sort((a, b) => a - b),
     briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary.split("\n").find((l) => l.trim()) ?? "", createdAt: b.latest!.createdAt })),
   };
+  if (extra.features) payload.features = extra.features;
+  const indices = extra.features?.widgetIndexLine && extra.indices ? widgetIndices(extra.indices) : [];
+  if (indices.length) payload.indices = indices;
+  return payload;
 }

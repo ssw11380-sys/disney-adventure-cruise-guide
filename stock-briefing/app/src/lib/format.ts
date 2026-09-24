@@ -59,6 +59,11 @@ export function formatNumber(n: number | null | undefined, digits = 0): string {
   return n.toLocaleString("ko-KR", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 }
 
+/** 지수·환율 값: 1,000 이상은 콤마, 소수 둘째 자리 (홈 지수 띠와 잔고 위젯 지수 줄이 같은 표기를 쓴다) */
+export function formatIndexValue(v: number): string {
+  return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export function formatPct(n: number | null | undefined, opts: { sign?: boolean } = { sign: true }): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
   // 1,000% 넘는 급등(상장 첫날·동전주)도 읽기 쉽게 자리 구분

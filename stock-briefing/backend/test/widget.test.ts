@@ -4,8 +4,8 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { MarketState, MarketStatus } from "../src/providers/market/calendar.js";
-import { marketChip } from "../src/services/widgetPayload.js";
-import { fakeProviders, FakeGenerator } from "./helpers.js";
+import { buildWidgetPayload, marketChip } from "../src/services/widgetPayload.js";
+import { fakeIndexSource, fakeIndices, fakeProviders, FakeGenerator } from "./helpers.js";
 
 const m = (market: "KR" | "US", isOpen: boolean, isTradingDay: boolean, at: string | null = null): MarketState => ({ market, isOpen, isTradingDay, opensAt: isOpen ? null : at, closesAt: isOpen ? at : null, source: "toss" });
 const st = (kr: MarketState, us: MarketState): MarketStatus => ({ now: "", KR: kr, US: us });
@@ -70,5 +70,123 @@ describe("GET /api/widget (3-16)", () => {
     expect((await app.inject({ method: "GET", url: "/api/widget", headers: { "if-none-match": `W/${etag}, "other"` } })).statusCode).toBe(304); // 약한 ETag·여러 개
     const r3 = await app.inject({ method: "GET", url: "/api/widget", headers: { "if-none-match": '"stale"' } });
     expect(r3.statusCode).toBe(200);
+  });
+});
+
+describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
+  let db: Db;
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  /** 지수 출처 시계 (30초 캐시를 넘기려고 앞으로 민다) */
+  let clock: Date;
+  let source: { close: string; fail: boolean };
+  let indices: ReturnType<typeof fakeIndices>;
+  const get = (headers: Record<string, string> = {}) => app.inject({ method: "GET", url: "/api/widget", headers });
+  const later = (sec: number) => (clock = new Date(clock.getTime() + sec * 1000));
+
+  beforeEach(async () => {
+    clock = new Date("2026-09-22T10:00:00+09:00");
+    source = { close: "3,412.35", fail: false };
+    const fx = fakeIndexSource();
+    indices = fakeIndices(async (url) => {
+      if (source.fail) return new Response("error", { status: 503 });
+      if (url.includes("/marketindex/")) return fx(url);
+      return fakeIndexSource({ index: { close: source.close, change: "30.45", rate: "0.90", status: "OPEN", at: "2026-09-22T10:00:00+09:00" } })(url);
+    }, () => clock);
+    db = await createMigratedDb(":memory:");
+    app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ generator: new FakeGenerator(), indices }), logger: false, enableScheduler: false, now: () => new Date("2026-09-22T10:00:00+09:00") });
+    await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
+    await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "005930", quantity: 1, avgPrice: 70_000 } });
+  });
+  afterEach(async () => {
+    await app.close();
+    await db.destroy();
+  });
+
+  it("플래그 두 개와 코스피·나스닥·원/달러를 순서대로, 앱 지수 띠(stale=1)와 같은 값으로 준다", async () => {
+    const body = (await get()).json();
+    expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true });
+    expect(body.indices.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
+    expect(body.indices[0]).toEqual({ code: "KOSPI", name: "코스피", value: 3412.35, change: 30.45, changeRate: 0.9, open: true, asOf: "2026-09-22T10:00:00+09:00" });
+    expect(body.indices[2]).toMatchObject({ code: "USDKRW", name: "원/달러", value: 1360.5, change: -2.1, changeRate: -0.15 });
+    // 서버가 받은 시각(fetchedAt)은 넣지 않는다 (값이 같으면 ETag 가 같게)
+    expect(body.indices.some((i: Record<string, unknown>) => "fetchedAt" in i || "kind" in i)).toBe(false);
+    // 같은 인스턴스: 지수 띠가 주는 값과 같다
+    const strip = (await app.inject({ method: "GET", url: "/api/market/indices?stale=1" })).json().indices as Array<Record<string, unknown>>;
+    for (const row of body.indices as Array<Record<string, unknown>>) {
+      const s = strip.find((x) => x.code === row.code)!;
+      expect([row.value, row.change, row.changeRate, row.open, row.name]).toEqual([s.value, s.change, s.changeRate, s.open, s.name]);
+    }
+  });
+
+  it("ETag: 지수 값이 같으면(출처를 다시 받아도) 304, 값이 바뀌면 새 ETag 로 200", async () => {
+    const r1 = await get();
+    const etag = String(r1.headers["etag"]);
+    const first = indices.calls;
+    later(31); // 30초 캐시가 지나 출처를 다시 받는다 (값은 같고 받은 시각만 다름)
+    expect((await get({ "if-none-match": etag })).statusCode).toBe(304);
+    expect(indices.calls).toBeGreaterThan(first); // 실제로 다시 받았다
+    source.close = "3,420.00";
+    later(31);
+    const r3 = await get({ "if-none-match": etag });
+    expect(r3.statusCode).toBe(200);
+    expect(String(r3.headers["etag"])).not.toBe(etag);
+    expect(r3.json().indices[0].value).toBe(3420);
+    // 캐시 안(30초)에서는 같은 값 → 새 ETag 로 304
+    expect((await get({ "if-none-match": String(r3.headers["etag"]) })).statusCode).toBe(304);
+  });
+
+  it("출처가 실패하면 마지막 값을 stale 로(장중 아님), 한 번도 못 받았으면 지수 없이 보낸다", async () => {
+    await get();
+    source.fail = true;
+    later(31);
+    const stale = (await get()).json();
+    expect(stale.indices.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
+    expect(stale.indices.every((i: { stale?: boolean; open: boolean }) => i.stale === true && i.open === false)).toBe(true);
+    expect(stale.indices[0].value).toBe(3412.35);
+
+    // 새 서버 인스턴스에서 처음부터 실패: indices 칸이 없다 (위젯은 줄을 감춘다), 나머지는 그대로
+    await app.close();
+    await db.destroy();
+    db = await createMigratedDb(":memory:");
+    app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ generator: new FakeGenerator(), indices: fakeIndices(async () => new Response("error", { status: 503 }), () => clock) }), logger: false, enableScheduler: false });
+    const r = await get();
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).not.toHaveProperty("indices");
+    expect(r.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true });
+  });
+
+  it("widgetIndexLine 을 끄면 지수를 부르지도 넣지도 않는다 (응답·ETag 가 지수와 무관), 켜면 다시", async () => {
+    const put = await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetIndexLine: false } });
+    expect(put.statusCode).toBe(200);
+    const r1 = await get();
+    expect(r1.json()).not.toHaveProperty("indices");
+    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: false });
+    expect(indices.calls).toBe(0); // 서버 작업 0건
+    source.close = "3,999.99";
+    later(31);
+    expect((await get({ "if-none-match": String(r1.headers["etag"]) })).statusCode).toBe(304);
+    expect(indices.calls).toBe(0);
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetIndexLine: null } });
+    const r2 = await get({ "if-none-match": String(r1.headers["etag"]) });
+    expect(r2.statusCode).toBe(200); // 플래그가 바뀌면 ETag 도 바뀐다
+    expect(r2.json().indices[0].value).toBe(3999.99);
+  });
+
+  it("widgetPnlToggle 을 끄면 features 에 false (앱은 누적만, 전환 없음)", async () => {
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetPnlToggle: false } });
+    expect((await get()).json().features).toEqual({ widgetPnlToggle: false, widgetIndexLine: true });
+  });
+
+  it("예전 앱과 호환: 예전 칸(v·market·stocks·briefings·latestIds)은 그대로이고 새 칸은 더해지기만 한다", async () => {
+    const body = (await get()).json();
+    expect(body.v).toBe(1);
+    expect(Object.keys(body).sort()).toEqual(["briefings", "features", "indices", "latestIds", "market", "stocks", "v"]);
+    expect(body.stocks[0].q).toHaveLength(7);
+    expect(body.stocks[0].e).toHaveLength(5);
+    // 플래그·지수 없이 만들면 예전 응답과 같은 모양
+    const plain = buildWidgetPayload([], [], null);
+    expect(Object.keys(plain).sort()).toEqual(["briefings", "latestIds", "market", "stocks", "v"]);
+    // 지수 줄이 꺼져 있으면 지수를 줘도 넣지 않는다
+    expect(buildWidgetPayload([], [], null, { features: { widgetPnlToggle: true, widgetIndexLine: false }, indices: [] })).not.toHaveProperty("indices");
   });
 });

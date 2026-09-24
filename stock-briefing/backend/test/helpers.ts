@@ -6,6 +6,7 @@ import type { MasterProvider, QuoteProvider, StockSearchProvider } from "../src/
 import type { NewsItem, NewsProvider } from "../src/providers/news/types.js";
 import type { Providers } from "../src/providers/index.js";
 import { MarketCalendar } from "../src/providers/market/calendar.js";
+import { MarketIndices } from "../src/providers/market/indices.js";
 import type { PushMessage, PushSender, PushSendResult } from "../src/notifications/push.js";
 
 export const SAMPLE_MASTER: ListedStock[] = [
@@ -123,6 +124,28 @@ export class NoopPushSender implements PushSender {
   }
 }
 
+/** 지수 출처(네이버) 응답 한 벌: 코스피·나스닥 등 지수는 3,412.35 +0.90%, 환율은 1,360.50 */
+export function fakeIndexSource(values: { index?: { close: string; change: string; rate: string; status?: string; at?: string }; fx?: { close: string; change: string; rate: string; at?: string } } = {}) {
+  const idx = values.index ?? { close: "3,412.35", change: "30.45", rate: "0.90", status: "CLOSE", at: "2026-09-22T15:30:00+09:00" };
+  const fx = values.fx ?? { close: "1,360.50", change: "-2.10", rate: "-0.15", at: "2026-09-22T15:30:00+09:00" };
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  return async (url: string) =>
+    url.includes("/marketindex/exchange/")
+      ? json({ exchangeInfo: { closePrice: fx.close, fluctuations: fx.change, fluctuationsRatio: fx.rate, localTradedAt: fx.at } })
+      : json({ closePrice: idx.close, compareToPreviousClosePrice: idx.change, fluctuationsRatio: idx.rate, marketStatus: idx.status ?? "CLOSE", localTradedAt: idx.at });
+}
+
+/** 네트워크 없이 도는 지수 목록 (테스트 기본값). 호출 수는 calls 로 센다 */
+export function fakeIndices(fetchFn: (url: string) => Promise<Response> = fakeIndexSource(), now: () => Date = () => new Date("2026-09-22T10:00:00+09:00")): MarketIndices & { calls: number } {
+  const counter = { calls: 0 };
+  const m = new MarketIndices((async (url: string) => {
+    counter.calls++;
+    return fetchFn(url);
+  }) as unknown as typeof fetch, now) as MarketIndices & { calls: number };
+  Object.defineProperty(m, "calls", { get: () => counter.calls });
+  return m;
+}
+
 export function fakeProviders(over: Partial<Providers> = {}): Providers {
   return {
     quotes: new FakeQuoteProvider("kis"),
@@ -136,6 +159,7 @@ export function fakeProviders(over: Partial<Providers> = {}): Providers {
     financials: null,
     financialsUs: null,
     calendar: new MarketCalendar(async () => new Response("{}", { status: 500 })),
+    indices: fakeIndices(),
     investorFlow: null,
     generator: new FakeGenerator(),
     dart: null,

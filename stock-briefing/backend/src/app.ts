@@ -18,6 +18,7 @@ import { appErrorAdminRoutes, appErrorRoutes } from "./routes/appErrors.js";
 import { briefingRoutes } from "./routes/briefings.js";
 import { deviceRoutes, notificationRoutes } from "./routes/notifications.js";
 import { marketRoutes } from "./routes/market.js";
+import { MarketIndices } from "./providers/market/indices.js";
 import { discoverRoutes } from "./routes/discover.js";
 import { NaverDiscover } from "./providers/market/naverDiscover.js";
 import { DiscoverService } from "./services/discoverService.js";
@@ -320,7 +321,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   // 없는 경로도 앱 표준 오류 형식으로
   app.setNotFoundHandler((req, reply) => reply.code(404).send({ error: "NOT_FOUND", message: `없는 주소입니다: ${req.method} ${req.url.split("?")[0]}` }));
 
-  await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar });
+  // 지수 띠와 잔고 위젯 지수 줄이 같은 목록(30초 캐시·stale 규칙)을 쓰게 하나만 만든다
+  const marketIndices = opts.providers.indices ?? new MarketIndices();
+  await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar, indices: marketIndices });
   // 발견 탭: 순위·테마·업종 (네이버 공개 JSON). 미국 테마는 토스 테마 분류 + 네이버 정규장 시세. 미국 원화 환산은 토스 표시 환율
   const discoverNaver = opts.providers.discover ?? new NaverDiscover();
   const tics = opts.providers.tics ?? null;
@@ -369,7 +372,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
   await app.register(featureRoutes, { prefix: "/api/features", features });
-  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar });
+  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices });
   await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });

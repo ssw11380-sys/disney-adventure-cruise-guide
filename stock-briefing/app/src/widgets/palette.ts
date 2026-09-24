@@ -1,27 +1,72 @@
 /**
- * 위젯 팔레트 (3-20): 홈 화면 위젯의 색·글자 크기는 여기에만 둔다.
+ * 위젯 팔레트 (3-20·3-23): 홈 화면 위젯의 색·글자 크기·누르는 칸 크기는 여기에만 둔다.
  * 위젯은 안드로이드 RemoteViews 로 그려져 앱 테마·아이콘 글꼴을 쓸 수 없고, 칸이 작아 앱보다 작은 글자 단계를 쓴다.
- * 그래서 디자인 토큰 규칙(eslint)의 예외다 — 색은 앱 다크 테마(tokens.ts)와 같은 톤을 유지한다.
+ * 그래서 디자인 토큰 규칙(eslint)의 예외다 — 색은 앱 테마(tokens.ts)의 라이트·다크 값을 그대로 쓴다.
+ * 위젯은 라이트·다크 두 벌을 함께 그려 두고(3-23), 안드로이드가 시스템 테마에 맞는 쪽을 보여 준다 (서버 재조회 없이 바로 바뀜).
  */
 
-import { dark } from "@/tokens";
+import { dark, light, type Theme } from "@/tokens";
 
 type Hex = `#${string}`;
 const hex = (c: string) => c as Hex;
 
-/** 앱 다크 테마 값을 그대로 쓴다 (테마를 바꾸면 위젯도 따라가게). 위젯에만 있는 색만 여기 */
-export const WIDGET_COLORS = {
-  bg: hex(dark.surface),
-  ink: hex(dark.ink),
-  muted: hex(dark.muted),
-  line: "rgba(255, 255, 255, 0.07)" as const,
-  up: hex(dark.up),
-  down: hex(dark.down),
-  gold: hex(dark.gold),
-  warn: hex(dark.warn),
-  white: hex(dark.onFill),
-  link: hex(dark.gold),
-} as const;
+export type WidgetScheme = "light" | "dark";
 
-/** 위젯 글자 크기 (dp). 2×2 칸에 맞춘 작은 단계 */
+export interface WidgetPalette {
+  scheme: WidgetScheme;
+  /** 위젯 바탕 (앱 패널색) */
+  bg: Hex;
+  ink: Hex;
+  /** 보조 글자 */
+  sub: Hex;
+  /** 흐린 글자 (시각·설명·지연된 지수) */
+  muted: Hex;
+  line: Hex;
+  up: Hex;
+  down: Hex;
+  gold: Hex;
+  warn: Hex;
+  /** "갱신 중" 표시 (등락색과 다른 청록) */
+  accent: Hex;
+  link: Hex;
+}
+
+/** 앱 테마 값을 그대로 쓴다 (테마를 바꾸면 위젯도 따라가게). 위젯만의 색은 두지 않는다 */
+function fromTheme(scheme: WidgetScheme, t: Theme): WidgetPalette {
+  return {
+    scheme,
+    bg: hex(t.surface),
+    ink: hex(t.ink),
+    sub: hex(t.sub),
+    muted: hex(t.muted),
+    line: hex(t.line),
+    up: hex(t.up),
+    down: hex(t.down),
+    gold: hex(t.gold),
+    warn: hex(t.warn),
+    accent: hex(t.accent),
+    link: hex(t.gold),
+  };
+}
+
+export const WIDGET_PALETTES: Record<WidgetScheme, WidgetPalette> = {
+  light: fromTheme("light", light),
+  dark: fromTheme("dark", dark),
+};
+
+/** 다크 팔레트 (부르는 쪽이 팔레트를 넘기지 않을 때의 기본값) */
+export const WIDGET_COLORS = WIDGET_PALETTES.dark;
+
+/** 위젯 글자 크기 (sp). 2×2 칸에 맞춘 작은 단계 */
 export const WIDGET_FONT = { xs: 9, sm: 10, md: 11, base: 12, title: 13, icon: 14, big: 18, bigger: 19 } as const;
+
+/** 잔고 위젯 합계를 칸에 맞춰 줄이는 단계 (sp, 큰 것부터) */
+export const WIDGET_TOTAL_FONTS = [WIDGET_FONT.big, 16, WIDGET_FONT.icon] as const;
+
+/** 누르는 칸 최소 크기 (dp, 안드로이드 권장 48dp) — ↻·손익 전환 (3-23) */
+export const WIDGET_TOUCH = 48;
+
+/** 위젯 모서리 둥글기 (dp) */
+export const WIDGET_RADIUS = 14;
+/** 장 상태 칩 모서리 둥글기 (dp) */
+export const CHIP_RADIUS = 6;
