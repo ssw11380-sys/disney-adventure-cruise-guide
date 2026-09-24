@@ -3,16 +3,14 @@ import React, { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMarketIndices } from "@/api/hooks";
 import type { MarketIndex } from "@/api/types";
-import { formatPct } from "@/lib/format";
+import { formatIndexValue, formatPct } from "@/lib/format";
 import { clockLabel, indexLive, indicesAsOf } from "@/lib/freshness";
 import { useNow } from "@/lib/useNow";
 import { changeColor, font, space, touch, useTheme } from "@/theme";
 import { sentence, speakRate } from "@/lib/a11y";
 
-/** 지수·환율 값: 1,000 이상은 콤마, 소수 둘째 자리 */
-export function formatIndexValue(v: number): string {
-  return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+/** 지수·환율 값 표기 (잔고 위젯 지수 줄과 같은 함수) */
+export { formatIndexValue };
 
 /**
  * 홈 상단 지수 띠: 지수명 / 값 / 등락률. 옆으로 밀어 보고, 누르면 그 지수·환율 차트로 간다.

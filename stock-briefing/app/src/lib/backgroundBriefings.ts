@@ -118,7 +118,16 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
         }
       }
     }
-    await refreshWidgets({ stocks: data.stocks, showKrw: data.showKrw, afterCost: data.afterCost, filled: data.filled, market: data.market, briefings: data.briefings });
+    await refreshWidgets({
+      stocks: data.stocks,
+      showKrw: data.showKrw,
+      afterCost: data.afterCost,
+      filled: data.filled,
+      market: data.market,
+      briefings: data.briefings,
+      features: data.featuresAt !== undefined ? { at: data.featuresAt, flags: data.features } : null,
+      indices: data.indices ? { at: data.indicesAt ?? data.fetchedAt, list: data.indices } : null,
+    });
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {
     return BackgroundTask.BackgroundTaskResult.Failed;

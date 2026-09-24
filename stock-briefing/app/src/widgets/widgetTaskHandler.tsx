@@ -1,43 +1,75 @@
-import React from "react";
-import { FlexWidget, TextWidget, type WidgetTaskHandlerProps } from "react-native-android-widget";
-import { loadWidgetData } from "./data";
-import { AssetWidget, BriefingWidget, HoldingsWidget, WIDGET_NAMES } from "./widgets";
-import { space } from "@/tokens";
-import { WIDGET_COLORS, WIDGET_FONT } from "./palette";
+import { requestWidgetUpdate, type WidgetTaskHandlerProps } from "react-native-android-widget";
+import { loadCachedWidgetData, loadWidgetData, readPnlMode, setPnlMode, togglePnlMode, type WidgetData } from "./data";
+import { fontScaleNow } from "./fontScale";
+import type { PnlMode } from "./model";
+import { errorView, renderBoth } from "./render";
+import { WIDGET_CLICK, WIDGET_NAMES } from "./widgets";
 
 /**
  * 위젯 이벤트 처리. 추가/주기 갱신/크기 변경/새로고침 클릭 때 서버에서 데이터를 받아 다시 그린다.
- * 종목·브리핑 클릭은 OPEN_URI 딥링크라 여기로 오지 않는다.
+ * 종목·브리핑·합계 클릭은 OPEN_URI 딥링크라 여기로 오지 않는다. 늘 라이트·다크 두 벌을 그린다 (3-23).
+ *  - REFRESH(↻): 저장해 둔 값으로 "갱신 중"을 바로 그리고(1초 안), 서버에서 받은 결과로 다시 그린다 (실패하면 "갱신 실패 …")
+ *  - PNL_TOGGLE(손익): 누른 위젯이 보여 주던 쪽의 반대로 바꿔 저장하고, 서버를 부르지 않고 저장해 둔 값으로 바로 다시 그린다.
+ *    손익 칸 설정은 잔고 위젯 모두가 같이 쓰므로 다른 잔고 위젯도 같은 쪽으로 다시 그린다
  */
 export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<void> {
   const { widgetInfo, widgetAction, renderWidget } = props;
   if (widgetAction === "WIDGET_DELETED") return;
-  if (widgetAction === "WIDGET_CLICK" && props.clickAction !== "REFRESH") return;
+  const click = widgetAction === "WIDGET_CLICK" ? props.clickAction : null;
+  if (widgetAction === "WIDGET_CLICK" && click !== WIDGET_CLICK.refresh && click !== WIDGET_CLICK.pnlToggle) return;
   const name = widgetInfo.widgetName;
+  const frame = { width: widgetInfo.width, height: widgetInfo.height, fontScale: fontScaleNow() };
   try {
+    if (click === WIDGET_CLICK.pnlToggle) {
+      const cached = await loadCachedWidgetData();
+      // 플래그가 그사이 꺼졌으면(옛 그림을 누름) 바꾸지 않고 누적으로 다시 그린다
+      const pnlMode = cached.features.pnlToggle ? await switchPnl(props.clickActionData) : await readPnlMode();
+      renderWidget(renderBoth(name, cached, { ...frame, now: Date.now(), pnlMode }));
+      if (cached.features.pnlToggle) await redrawHoldings(cached, pnlMode);
+      return;
+    }
+    if (click === WIDGET_CLICK.refresh) {
+      try {
+        const cached = await loadCachedWidgetData();
+        renderWidget(renderBoth(name, cached, { ...frame, now: Date.now(), pnlMode: await readPnlMode(), refreshing: true }));
+      } catch {
+        /* 저장해 둔 값으로 못 그려도 서버에서 받아 그리는 것은 계속한다 */
+      }
+    }
     // ↻ 를 누른 때만 서버에 바로 묻고, 주기·추가·크기 변경 갱신은 백그라운드 작업이 받아 둔 응답을 다시 쓴다
     const data = await loadWidgetData({ stocks: name !== WIDGET_NAMES.briefing, briefings: name === WIDGET_NAMES.briefing, reuse: widgetAction !== "WIDGET_CLICK" });
-    renderWidget(render(name, data, widgetInfo.height));
+    // 손익 칸 설정은 받은 뒤에 읽는다: 받는 동안(최대 12초, "갱신 중") 손익을 눌러 바꾼 것을 옛 값으로 되돌려 그리지 않게
+    renderWidget(renderBoth(name, data, { ...frame, now: Date.now(), pnlMode: await readPnlMode() }));
   } catch (e) {
-    // 렌더 중 예외가 나면 위젯이 빈 채로 남으므로 오류를 글로 보여준다
-    renderWidget(
-      <FlexWidget style={{ height: "match_parent", width: "match_parent", backgroundColor: WIDGET_COLORS.bg, borderRadius: 14, padding: space.md, justifyContent: "center" }} clickAction="OPEN_APP">
-        <TextWidget text="위젯을 그리지 못했습니다" style={{ color: WIDGET_COLORS.white, fontSize: WIDGET_FONT.base, fontWeight: "700" }} />
-        <TextWidget text={String(e instanceof Error ? e.message : e).slice(0, 120)} style={{ color: WIDGET_COLORS.muted, fontSize: WIDGET_FONT.sm }} maxLines={3} />
-        <TextWidget text="눌러서 앱 열기" style={{ color: WIDGET_COLORS.link, fontSize: WIDGET_FONT.sm, marginTop: space.xs }} />
-      </FlexWidget>,
-    );
+    // 렌더 중 예외가 나면 위젯이 빈 채로 남으므로 오류를 글로 보여 준다
+    renderWidget(errorView(e));
   }
 }
 
-export function render(name: string, data: Awaited<ReturnType<typeof loadWidgetData>>, height: number): React.JSX.Element {
-  const now = Date.now();
-  switch (name) {
-    case WIDGET_NAMES.briefing:
-      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={now} market={data.market} />;
-    case WIDGET_NAMES.asset:
-      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={now} market={data.market} />;
-    default:
-      return <HoldingsWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} height={height} now={now} market={data.market} />;
+/**
+ * 손익 전환: 누른 그림이 보여 주던 쪽(clickActionData.mode)의 반대로 저장한다.
+ * 저장된 값을 뒤집기만 하면, 잔고 위젯이 둘 이상일 때 옛 모드를 보이던 위젯을 눌러도 화면이 그대로다("눌러도 안 바뀜").
+ * 보여 주던 쪽을 모르면(값이 없는 그림) 저장된 값을 뒤집는다
+ */
+async function switchPnl(data: Record<string, unknown> | undefined): Promise<PnlMode> {
+  const shown = data?.mode;
+  if (shown === "day" || shown === "cumulative") {
+    const next: PnlMode = shown === "day" ? "cumulative" : "day";
+    await setPnlMode(next);
+    return next;
+  }
+  return togglePnlMode();
+}
+
+/** 다른 잔고 위젯도 같은 손익 칸으로 (서버를 부르지 않고 같은 저장값으로). 실패해도 누른 위젯은 이미 그렸다 */
+async function redrawHoldings(data: WidgetData, pnlMode: PnlMode): Promise<void> {
+  try {
+    const fontScale = fontScaleNow();
+    await requestWidgetUpdate({
+      widgetName: WIDGET_NAMES.holdings,
+      renderWidget: (info) => renderBoth(WIDGET_NAMES.holdings, data, { width: info.width, height: info.height, fontScale, now: Date.now(), pnlMode }),
+    });
+  } catch {
+    /* 다른 위젯은 다음 갱신 때 같은 값으로 그려진다 */
   }
 }

@@ -283,7 +283,8 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     });
     const a = await loadWidgetData({ stocks: true, briefings: true });
     const b = await loadWidgetData({ stocks: true, briefings: true });
-    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget`, `${API}/api/widget`]);
+    // 새 앱은 지수 줄을 그릴 수 있다고 알린다 (?indices=1 — 서버는 이 표시가 있을 때만 지수를 넣는다)
+    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1`, `${API}/api/widget?indices=1`]);
     expect(calls[1]!.inm).toBe('"abc"');
     expect(b.stocks.map((s) => s.code)).toEqual(a.stocks.map((s) => s.code));
     expect(b.market?.label).toBe("한국 장중");
@@ -294,11 +295,11 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     const urls: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {
       urls.push(url);
-      if (url.endsWith("/api/widget")) return new Response("", { status: 404 });
+      if (url.includes("/api/widget")) return new Response("", { status: 404 });
       return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
     });
     const d = await loadWidgetData({ stocks: true, briefings: true });
-    expect(urls).toEqual([`${API}/api/widget`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
+    expect(urls).toEqual([`${API}/api/widget?indices=1`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
     expect(d.stocks).toHaveLength(18);
     expect(d.market).toBeNull();
   });
@@ -386,18 +387,18 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     urls.length = 0;
     vi.stubGlobal("fetch", async (url: string) => {
       urls.push(url);
-      if (url.endsWith("/api/widget")) return new Response("<html>not found</html>", { status: 404 });
+      if (url.includes("/api/widget")) return new Response("<html>not found</html>", { status: 404 });
       return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
     });
     await loadWidgetData({ stocks: true, briefings: true });
     await loadWidgetData({ stocks: true, briefings: true });
-    expect(urls.filter((u) => u.endsWith("/api/widget"))).toHaveLength(1);
+    expect(urls.filter((u) => u.includes("/api/widget"))).toHaveLength(1);
   });
 
   it("예전 서버의 브리핑은 최신 순으로 (등록 순서가 아니라)", async () => {
     const mk = (code: string, createdAt: string) => ({ code, name: code, latest: { id: code.length, code, name: code, session: "morning", date: "2026-09-24", status: "ok", summary: "s", detail: "", missing: [], model: "", error: null, createdAt } });
     vi.stubGlobal("fetch", async (url: string) => {
-      if (url.endsWith("/api/widget")) return new Response("", { status: 404 });
+      if (url.includes("/api/widget")) return new Response("", { status: 404 });
       return new Response(JSON.stringify(url.includes("briefings") ? [mk("A", "2026-09-24T08:31:00+09:00"), mk("B", "2026-09-24T16:02:00+09:00")] : []), { status: 200 });
     });
     const d = await loadWidgetData({ stocks: false, briefings: true });

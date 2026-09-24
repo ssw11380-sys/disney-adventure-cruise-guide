@@ -4,6 +4,7 @@ import { describeLlmBackend, resolveLlmBackend } from "../llm/backend.js";
 import { ClaudeGenerator, DisabledGenerator, type TextGenerator } from "../llm/generator.js";
 import { DartProvider } from "./dart/dart.js";
 import type { NaverDiscover } from "./market/naverDiscover.js";
+import type { MarketIndices } from "./market/indices.js";
 import { EdgarProvider } from "./dart/edgar.js";
 import type { FinancialsProvider } from "./dart/types.js";
 import { MarketCalendar } from "./market/calendar.js";
@@ -49,6 +50,8 @@ export interface Providers {
   financialsUs: FinancialsProvider | null;
   /** 휴장일·장중 판단 */
   calendar: MarketCalendar;
+  /** 지수 띠·잔고 위젯 지수 줄 (없으면 기본 네이버 공개 JSON) */
+  indices?: MarketIndices | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   generator: TextGenerator;
   dart: DartProvider | null;

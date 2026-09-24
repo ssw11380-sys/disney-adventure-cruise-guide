@@ -45,7 +45,7 @@ const newOnes = (n: number, at = "2026-09-24T16:59:00+09:00") =>
   Array.from({ length: n }, (_, i) => ({ code: `N0000${i}`, name: `새${i}`, latest: { ...latest[0]!.latest, id: 500 + i, code: `N0000${i}`, name: `새${i}`, createdAt: at } }));
 const serve = (list: typeof latest, prefs: Record<string, unknown>) =>
   vi.stubGlobal("fetch", async (url: string) => {
-    if (url.endsWith("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+    if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
     if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(prefs), { status: 200 });
     return new Response(JSON.stringify(list), { status: 200 });
   });
@@ -58,7 +58,7 @@ beforeEach(() => {
   task.registered = false;
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
-  vi.stubGlobal("fetch", async (url: string) => new Response(JSON.stringify(url.endsWith("/api/widget") ? payload : latest), { status: 200 }));
+  vi.stubGlobal("fetch", async (url: string) => new Response(JSON.stringify(url.includes("/api/widget") ? payload : latest), { status: 200 }));
 });
 
 describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
@@ -72,7 +72,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     await enableLocalBriefingAlerts();
     const next = [...latest, { ...latest[0]!, code: "999999", latest: { ...latest[0]!.latest, id: 999, code: "999999", createdAt: "2026-09-24T16:59:00+09:00" } }];
     vi.stubGlobal("fetch", async (url: string) =>
-      new Response(JSON.stringify(url.endsWith("/api/widget") ? { ...payload, latestIds: next.map((b) => b.latest.id) } : next), { status: 200 }),
+      new Response(JSON.stringify(url.includes("/api/widget") ? { ...payload, latestIds: next.map((b) => b.latest.id) } : next), { status: 200 }),
     );
     await runBriefingCheck();
     expect(scheduled).toHaveLength(1);
@@ -125,7 +125,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       await enableLocalBriefingAlerts();
       const list = [...latest, ...newOnes(2)];
       vi.stubGlobal("fetch", async (url: string) => {
-        if (url.endsWith("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+        if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
         if (url.endsWith("/api/notifications/settings")) return new Response("down", { status: 503 });
         return new Response(JSON.stringify(list), { status: 200 });
       });
@@ -140,7 +140,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       await enableLocalBriefingAlerts();
       const list = [...latest, ...newOnes(2)];
       vi.stubGlobal("fetch", async (url: string) => {
-        if (url.endsWith("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+        if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
         if (url.endsWith("/api/notifications/settings")) return new Response("down", { status: 503 });
         return new Response(JSON.stringify(list), { status: 200 });
       });
@@ -169,7 +169,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       const calls: string[] = [];
       vi.stubGlobal("fetch", async (url: string) => {
         calls.push(url);
-        return new Response(JSON.stringify(url.endsWith("/api/widget") ? { ...payload, latestIds: [] } : []), { status: 200 });
+        return new Response(JSON.stringify(url.includes("/api/widget") ? { ...payload, latestIds: [] } : []), { status: 200 });
       });
       await runBriefingCheck();
       expect(calls.filter((u) => u.endsWith("/api/notifications/settings"))).toHaveLength(0);

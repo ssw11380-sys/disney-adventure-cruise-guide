@@ -311,6 +311,34 @@ describe("MarketIndices", () => {
     await m.list();
     expect(calls).toBe(before); // 30초 캐시
   });
+
+  it("캐시가 만료된 순간 요청이 겹쳐도(지수 띠·/api/widget·위젯끼리) 출처는 한 번만 부르고 같은 결과를 나눠 쓴다", async () => {
+    let now = new Date("2026-09-24T02:00:00Z");
+    let calls = 0;
+    const gates: (() => void)[] = [];
+    const fetchFn = (async (url: string) => {
+      calls++;
+      // 출처가 늦게 답해 요청이 확실히 겹치게
+      await new Promise<void>((r) => gates.push(r));
+      return healthy(url);
+    }) as unknown as typeof fetch;
+    const m = new MarketIndices(fetchFn, () => now);
+    const three = Promise.all([m.list({ stale: true }), m.list(), m.list({ stale: true })]);
+    await vi.waitFor(() => expect(gates.length).toBe(INDEX_SOURCES.length));
+    gates.splice(0).forEach((open) => open());
+    const [a, b, c] = await three;
+    expect(calls).toBe(INDEX_SOURCES.length); // 3건 × 9곳 = 27 이 아니라 9
+    expect(a.map((i) => i.code)).toEqual(ALL);
+    expect(b.map((i) => i.code)).toEqual(ALL);
+    expect(c).toBe(a);
+    // 끝난 뒤 30초가 지나면 다시 부른다 (진행 중 조회를 붙잡아 두지 않는다)
+    now = new Date("2026-09-24T02:01:00Z");
+    const again = m.list({ stale: true });
+    await vi.waitFor(() => expect(gates.length).toBe(INDEX_SOURCES.length));
+    gates.splice(0).forEach((open) => open());
+    await again;
+    expect(calls).toBe(INDEX_SOURCES.length * 2);
+  });
   describe("candles", () => {
     const NOW = () => new Date("2026-09-23T05:20:00Z"); // 14:20 KST
 

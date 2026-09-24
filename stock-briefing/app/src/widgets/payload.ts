@@ -1,4 +1,5 @@
 import type { LatestBriefing, Quote, RegisteredWithQuote } from "@/api/types";
+import { featureOn } from "@/lib/features";
 
 /**
  * GET /api/widget 응답 (서버 widgetPayload.ts 와 같은 모양, 짧은 키) → 위젯 코드가 쓰는 모양으로 되돌린다 (순수 함수).
@@ -32,6 +33,19 @@ export interface WidgetBriefing {
   createdAt: string;
 }
 
+/** 잔고 위젯 지수 줄 한 항목 (서버 지수 띠와 같은 값·같은 stale 규칙). 예전 서버에는 없음 */
+export interface WidgetIndex {
+  code: string;
+  name: string;
+  value: number;
+  change: number;
+  changeRate: number;
+  open: boolean;
+  /** 출처 조회가 실패해 마지막 값 (흐리게 + "지연") */
+  stale?: boolean;
+  asOf?: string | null;
+}
+
 export interface WidgetPayload {
   v: 1;
   market: WidgetMarket | null;
@@ -39,11 +53,68 @@ export interface WidgetPayload {
   briefings: WidgetBriefing[];
   /** 모든 종목의 최신 브리핑 id */
   latestIds?: number[];
+  /** 위젯이 쓰는 기능 플래그만 (위젯은 /api/features 를 따로 받지 않는다). 예전 서버에는 없음 → 모두 꺼짐 */
+  features?: Record<string, boolean>;
+  /** 코스피·나스닥·원/달러 (widgetIndexLine 이 켜진 서버만) */
+  indices?: WidgetIndex[];
+}
+
+/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine) */
+export interface WidgetFeatures {
+  /** 합계 옆 손익을 눌러 누적·당일 전환 */
+  pnlToggle: boolean;
+  /** 합계 아래 지수·환율 한 줄 */
+  indexLine: boolean;
+}
+
+export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false };
+
+/** 받은 플래그 → 위젯 기능. 모르는 키·예전 서버(없음)면 꺼짐 (새 기능은 fallback false, docs/기능-플래그.md) */
+export function widgetFeatures(features: Record<string, boolean> | null | undefined): WidgetFeatures {
+  const flags = features ? { features, updatedAt: null } : null;
+  return { pnlToggle: featureOn(flags, "widgetPnlToggle", false), indexLine: featureOn(flags, "widgetIndexLine", false) };
+}
+
+/** 위젯 지수 줄에 넣는 항목과 순서 (서버 widgetPayload.ts 의 WIDGET_INDEX_CODES 와 같다) */
+export const WIDGET_INDEX_CODES = ["KOSPI", "NASDAQ", "USDKRW"] as const;
+
+/** 앱이 받은 지수 띠 목록(/api/market/indices?stale=1)에서 위젯 줄에 넣을 것만, 서버와 같은 순서·같은 모양으로 */
+export function pickWidgetIndices(list: readonly { code: string; name: string; value: number; change: number; changeRate: number; open: boolean; stale?: boolean; asOf?: string | null }[]): WidgetIndex[] {
+  const byCode = new Map(list.map((i) => [i.code, i]));
+  return WIDGET_INDEX_CODES.flatMap((code) => {
+    const i = byCode.get(code);
+    if (!i) return [];
+    return [{ code: i.code, name: i.name, value: i.value, change: i.change, changeRate: i.changeRate, open: i.open, ...(i.stale ? { stale: true } : {}), ...(i.asOf ? { asOf: i.asOf } : {}) }];
+  });
+}
+
+/**
+ * 지수를 받은 지 이만큼 지나면 모든 항목을 "지연"(흐리게)으로 그린다: 위젯 조회가 계속 실패해 마지막 값을 쓸 때.
+ * 서버 지수 띠가 실패한 출처의 마지막 값을 이어 주는 최대 시간(indices.ts STALE_MAX_MS)과 같은 3시간
+ */
+export const INDEX_STALE_MS = 3 * 3_600_000;
+
+/** 받은 시각(at)이 INDEX_STALE_MS 보다 오래됐으면 모든 항목을 stale 로. 시각을 모르면 그대로 */
+export function agedIndices(list: WidgetIndex[] | null, at: number | undefined, now: number): WidgetIndex[] | null {
+  if (!list || at === undefined || now - at <= INDEX_STALE_MS) return list;
+  return list.map((i) => ({ ...i, stale: true }));
+}
+
+/** 모양이 맞는 지수 항목만 (예전·다른 서버의 이상한 값은 버린다) */
+function cleanIndices(list: unknown): WidgetIndex[] | null {
+  if (!Array.isArray(list)) return null;
+  return list.filter((i): i is WidgetIndex => !!i && typeof i === "object" && typeof (i as WidgetIndex).code === "string" && Number.isFinite((i as WidgetIndex).value) && Number.isFinite((i as WidgetIndex).change) && Number.isFinite((i as WidgetIndex).changeRate));
 }
 
 const rate = (profit: number, cost: number) => (cost > 0 ? Math.round((profit / cost) * 10000) / 100 : 0);
 
-export function fromPayload(p: WidgetPayload): { stocks: RegisteredWithQuote[]; briefings: LatestBriefing[]; market: WidgetMarket | null } {
+export function fromPayload(p: WidgetPayload): {
+  stocks: RegisteredWithQuote[];
+  briefings: LatestBriefing[];
+  market: WidgetMarket | null;
+  indices: WidgetIndex[] | null;
+  features: WidgetFeatures;
+} {
   const stocks = p.stocks.map((s): RegisteredWithQuote => {
     const quote: Quote | null = s.q
       ? ({
@@ -68,7 +139,7 @@ export function fromPayload(p: WidgetPayload): { stocks: RegisteredWithQuote[]; 
     name: b.name,
     latest: { id: b.id, code: b.code, name: b.name, session: b.session as "morning" | "afternoon", date: b.date, status: "ok", summary: b.summary, detail: "", missing: [], model: "", error: null, createdAt: b.createdAt },
   }));
-  return { stocks, briefings, market: p.market };
+  return { stocks, briefings, market: p.market, indices: cleanIndices(p.indices), features: widgetFeatures(p.features) };
 }
 
 /**

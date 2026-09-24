@@ -1,8 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
-import { fillFromLast } from "./model";
-import { canReuse, fromPayload, type WidgetMarket, type WidgetPayload } from "./payload";
+import { fillFromLast, type PnlMode } from "./model";
+import { canReuse, fromPayload, NO_FEATURES, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
 import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 
 /**
@@ -24,6 +24,14 @@ export interface WidgetData {
   market: WidgetMarket | null;
   /** 모든 종목의 최신 브리핑 id (새 서버). 없으면 briefings 가 전체 목록(예전 서버) */
   latestIds?: number[];
+  /** 지수 줄 (코스피·나스닥·원/달러). 예전 서버·플래그 꺼짐이면 null */
+  indices: WidgetIndex[] | null;
+  /** indices 를 받은 시각 (앱이 받은 지수와 어느 쪽이 새것인지 견줄 때) */
+  indicesAt?: number;
+  /** 위젯 기능 플래그 (예전 서버면 모두 꺼짐) */
+  features: WidgetFeatures;
+  /** features 를 서버에서 받은 시각 (앱이 받은 /api/features 와 어느 쪽이 새것인지 견줄 때). 모르면 없음 */
+  featuresAt?: number;
 }
 
 const LAST_KEY = "widget.lastStocks";
@@ -71,6 +79,159 @@ async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showK
 }
 
 const PAYLOAD_KEY = "widget.payload";
+const VIEW_KEY = "widget.view";
+const PNL_KEY = "widget.pnlMode";
+
+/** 마지막으로 그린 데이터 (표시 설정 제외). 손익 전환·↻ 직후에 서버를 부르지 않고 바로 다시 그릴 때 쓴다 */
+type StoredView = Omit<WidgetData, "showKrw" | "afterCost">;
+
+/** 브리핑 위젯은 앞의 3개 요약 첫 줄만 쓰므로 그만큼만 적는다 (예전 서버의 전체 목록·상세를 저장하지 않게) */
+function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
+  return list
+    .filter((b) => b.latest && b.latest.status === "ok")
+    .slice(0, 3)
+    .map((b) => ({ ...b, latest: b.latest ? { ...b.latest, detail: "" } : null }));
+}
+
+export async function saveWidgetView(data: WidgetData, apiUrl: string): Promise<void> {
+  const { showKrw: _k, afterCost: _a, ...rest } = data;
+  const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
+  try {
+    await AsyncStorage.setItem(VIEW_KEY, JSON.stringify({ apiUrl, view }));
+  } catch {
+    /* 저장 실패는 무시 */
+  }
+}
+
+async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
+  try {
+    const raw = await AsyncStorage.getItem(VIEW_KEY);
+    const v = raw ? (JSON.parse(raw) as { apiUrl?: unknown; view?: Partial<StoredView> }) : null;
+    const d = v?.view;
+    if (!v || v.apiUrl !== apiUrl || !d || typeof d.fetchedAt !== "number" || !Array.isArray(d.stocks)) return null;
+    return {
+      stocks: d.stocks,
+      briefings: Array.isArray(d.briefings) ? d.briefings : [],
+      fetchedAt: d.fetchedAt,
+      error: typeof d.error === "string" ? d.error : null,
+      filled: Array.isArray(d.filled) ? d.filled : [],
+      market: d.market ?? null,
+      ...(d.latestIds ? { latestIds: d.latestIds } : {}),
+      indices: Array.isArray(d.indices) ? d.indices : null,
+      ...(typeof d.indicesAt === "number" ? { indicesAt: d.indicesAt } : {}),
+      features: { ...NO_FEATURES, ...(d.features ?? {}) },
+      ...(typeof d.featuresAt === "number" ? { featuresAt: d.featuresAt } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 손익 칸이 보여 주는 것: 누적(기본) 또는 당일 */
+export async function readPnlMode(): Promise<PnlMode> {
+  try {
+    return (await AsyncStorage.getItem(PNL_KEY)) === "day" ? "day" : "cumulative";
+  } catch {
+    return "cumulative";
+  }
+}
+
+export async function setPnlMode(mode: PnlMode): Promise<void> {
+  await AsyncStorage.setItem(PNL_KEY, mode).catch(() => undefined);
+}
+
+/** 누적 ↔ 당일을 바꾸고 바뀐 값을 돌려준다 */
+export async function togglePnlMode(): Promise<PnlMode> {
+  const next: PnlMode = (await readPnlMode()) === "day" ? "cumulative" : "day";
+  await setPnlMode(next);
+  return next;
+}
+
+/**
+ * 서버를 부르지 않고 마지막으로 그린 데이터 (손익 전환, ↻ 를 누른 직후 "갱신 중" 표시).
+ * 아직 적어 둔 것이 없으면(업데이트 직후) 마지막 잔고·마지막 /api/widget 응답으로 만든다
+ */
+export async function loadCachedWidgetData(): Promise<WidgetData> {
+  const { apiUrl, showKrw, afterCost } = await readSettings();
+  const view = await readWidgetView(apiUrl);
+  if (view) return { ...view, showKrw, afterCost };
+  const [last, cached] = await Promise.all([readLastStocks(apiUrl), readCachedPayload(apiUrl)]);
+  const p = cached ? fromPayload(cached.body) : null;
+  return {
+    stocks: last?.stocks ?? p?.stocks ?? [],
+    briefings: p?.briefings ?? [],
+    showKrw,
+    afterCost,
+    fetchedAt: last?.at ?? cached?.at ?? Date.now(),
+    error: null,
+    filled: [],
+    market: p?.market ?? null,
+    ...(cached?.body.latestIds ? { latestIds: cached.body.latestIds } : {}),
+    indices: p?.indices ?? null,
+    ...(p?.indices && cached ? { indicesAt: cached.at } : {}),
+    features: p?.features ?? NO_FEATURES,
+    ...(cached ? { featuresAt: cached.at } : {}),
+  };
+}
+
+/** 받은 시각이 가장 늦은 것 (같으면 앞의 것) */
+function newest<T extends { at: number }>(known: (T | null | undefined)[]): T | null {
+  let best: T | null = null;
+  for (const k of known) if (k && (!best || k.at > best.at)) best = k;
+  return best;
+}
+
+/**
+ * 앱이 받은 잔고로 위젯을 그릴 때의 데이터 (refreshWidgets). 지수와 기능 플래그는 앱이 받은 것과 위젯이 받아 둔 것
+ * (마지막 /api/widget 응답·마지막으로 그린 데이터) 중 받은 시각이 늦은 쪽을 쓴다.
+ * 앱 캐시는 기기에 최대 7일 남고, 플래그는 브리핑·설정 화면을 열 때만 다시 받으므로 옛 값일 수 있다 —
+ * 늘 앱 값을 쓰면 관리자가 끈 기능(예: widgetPnlToggle)이 앱을 열 때마다 되살아난다.
+ * 그린 데이터는 적어 둔다 (손익 전환 때 같은 값으로 다시 그리게)
+ */
+export async function pushWidgetData(o: {
+  stocks: RegisteredWithQuote[];
+  filled: string[];
+  showKrw: boolean;
+  afterCost: boolean;
+  fetchedAt: number;
+  market: WidgetMarket | null;
+  briefings?: LatestBriefing[];
+  /** 앱이 받은 기능 플래그와 받은 시각 (react-query dataUpdatedAt) */
+  features?: { at: number; flags: WidgetFeatures } | null;
+  indices?: { at: number; list: WidgetIndex[] } | null;
+}): Promise<WidgetData> {
+  const { apiUrl } = await readSettings();
+  const [prev, cached] = await Promise.all([readWidgetView(apiUrl), readCachedPayload(apiUrl)]);
+  const p = cached ? fromPayload(cached.body) : null;
+  const idx = newest([
+    o.indices,
+    prev?.indices ? { at: prev.indicesAt ?? prev.fetchedAt, list: prev.indices } : null,
+    p?.indices && cached ? { at: cached.at, list: p.indices } : null,
+  ]);
+  // 플래그: 받은 시각을 모르는 값(시각 없는 옛 기록)은 견주지 않는다
+  const flags = newest([
+    o.features,
+    prev && prev.featuresAt !== undefined ? { at: prev.featuresAt, flags: prev.features } : null,
+    p && cached ? { at: cached.at, flags: p.features } : null,
+  ]);
+  const data: WidgetData = {
+    stocks: o.stocks,
+    briefings: o.briefings ?? prev?.briefings ?? p?.briefings ?? [],
+    showKrw: o.showKrw,
+    afterCost: o.afterCost,
+    fetchedAt: o.fetchedAt,
+    error: null,
+    filled: o.filled,
+    market: o.market,
+    ...(prev?.latestIds ? { latestIds: prev.latestIds } : {}),
+    indices: idx?.list ?? null,
+    ...(idx ? { indicesAt: idx.at } : {}),
+    features: flags?.flags ?? NO_FEATURES,
+    ...(flags ? { featuresAt: flags.at } : {}),
+  };
+  await saveWidgetView(data, apiUrl);
+  return data;
+}
 
 /** 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단) */
 export async function readCachedPayload(apiUrl?: string): Promise<{ at: number; etag: string | null; body: WidgetPayload } | null> {
@@ -104,6 +265,12 @@ async function legacyUntil(apiUrl: string): Promise<number> {
   }
 }
 
+/**
+ * 위젯 응답 주소. indices=1 은 "지수 줄을 그릴 수 있는 앱"이라는 표시다 — 서버는 이 표시가 있을 때만 지수를 넣는다
+ * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다
+ */
+const WIDGET_PATH = "/api/widget?indices=1";
+
 /** /api/widget 한 번: 304 면 저장해 둔 본문, 받으면 저장. 예전 서버(404·모양이 다른 응답)면 null */
 async function fetchPayload(apiUrl: string, token: string, now: number): Promise<WidgetPayload | null> {
   if (now < (await legacyUntil(apiUrl))) return null;
@@ -115,7 +282,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number): Promise
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
   try {
-    const res = await fetch(`${apiUrl}/api/widget`, {
+    const res = await fetch(`${apiUrl}${WIDGET_PATH}`, {
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
@@ -181,8 +348,11 @@ async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promi
  */
 export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean; reuse?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
   const { apiUrl, apiToken, showKrw, afterCost } = await readSettings();
-  const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, fetchedAt: Date.now(), error: null, filled: [], market: null };
+  const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, fetchedAt: Date.now(), error: null, filled: [], market: null, indices: null, features: NO_FEATURES };
   const last = await readLastStocks(apiUrl);
+  let full = false;
+  /** 방금 서버에서 받은 응답인지 (304 도 서버가 지금 값이라고 답한 것) */
+  let fresh = false;
   try {
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
@@ -195,7 +365,13 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       stocks = p.stocks;
       out.briefings = p.briefings;
       out.market = p.market;
+      out.indices = p.indices;
+      if (p.indices) out.indicesAt = out.fetchedAt;
+      out.features = p.features;
+      out.featuresAt = out.fetchedAt;
       if (payload.latestIds) out.latestIds = payload.latestIds;
+      full = true;
+      fresh = !reuse;
     } else {
       [stocks, out.briefings] = await Promise.all([
         opts.stocks ? getJson<RegisteredWithQuote[]>(`${apiUrl}/api/stocks?quotes=1`, apiToken) : Promise.resolve([]),
@@ -213,11 +389,56 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     out.error = e instanceof Error ? e.message : String(e);
     const cached = await readCachedPayload(apiUrl);
     out.market = cached?.body.market ?? null;
-    if (cached) out.briefings = fromPayload(cached.body).briefings;
+    if (cached) {
+      const p = fromPayload(cached.body);
+      out.briefings = p.briefings;
+      // 지수·플래그는 마지막으로 받은 값 그대로 (실패했다고 줄이 사라지거나 손익 전환이 꺼지지 않게)
+      out.indices = p.indices;
+      if (p.indices) out.indicesAt = cached.at;
+      out.features = p.features;
+      out.featuresAt = cached.at;
+      full = true;
+    }
     if (last) {
       out.stocks = last.stocks;
       out.fetchedAt = last.at;
     }
   }
+  // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 지수·플래그를 옛 응답으로 덮지 않는다
+  if (full && !fresh) await keepNewer(out, apiUrl);
+  await saveWidgetView(full ? out : await mergeLegacy(out, apiUrl, opts), apiUrl);
   return out;
+}
+
+/**
+ * 받아 둔 /api/widget 응답을 다시 쓸 때(위젯 스스로 갱신 — 장중 15분·휴장 2시간까지 재사용, 조회 실패):
+ * 마지막으로 그린 데이터(앱 즉시 갱신이 적은 것)의 지수·플래그가 그 응답보다 늦게 받은 것이면 그쪽을 쓴다 (pushWidgetData 와 같은 규칙).
+ * 그러지 않으면 앱 갱신과 위젯 갱신이 번갈아 가며 손익 전환 칸·지수 줄이 켜졌다 꺼졌다 한다
+ */
+async function keepNewer(out: WidgetData, apiUrl: string): Promise<void> {
+  const prev = await readWidgetView(apiUrl);
+  if (!prev || out.featuresAt === undefined) return;
+  const at = out.featuresAt;
+  // 응답에 지수가 없어도(플래그 꺼짐·조회 실패) 그 응답의 시각으로 견준다 — 더 옛 지수가 되살아나지 않게
+  const idx = newest([{ at: out.indicesAt ?? at, list: out.indices }, prev.indices ? { at: prev.indicesAt ?? prev.fetchedAt, list: prev.indices } : null]);
+  if (idx && idx.list !== out.indices) {
+    out.indices = idx.list;
+    out.indicesAt = idx.at;
+  }
+  const flags = newest([{ at, flags: out.features }, prev.featuresAt !== undefined ? { at: prev.featuresAt, flags: prev.features } : null]);
+  if (flags && flags.flags !== out.features) {
+    out.features = flags.flags;
+    out.featuresAt = flags.at;
+  }
+}
+
+/** 예전 서버에서 한쪽만 받았으면(잔고만·브리핑만) 받지 않은 쪽은 마지막으로 그린 값을 남긴다 */
+async function mergeLegacy(out: WidgetData, apiUrl: string, opts: { stocks?: boolean; briefings?: boolean }): Promise<WidgetData> {
+  const prev = await readWidgetView(apiUrl);
+  if (!prev) return out;
+  return {
+    ...out,
+    ...(opts.stocks || out.stocks.length ? {} : { stocks: prev.stocks, filled: prev.filled }),
+    ...(opts.briefings ? {} : { briefings: prev.briefings }),
+  };
 }
