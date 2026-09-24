@@ -3,6 +3,7 @@ import type { DartProvider } from "../providers/dart/dart.js";
 import type { TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import type { TossRealtime } from "../providers/market/tossRealtime.js";
 import type { BackupService } from "../services/backupService.js";
+import type { FeatureService } from "../services/featureService.js";
 import type { ReconcileService } from "../services/reconcileService.js";
 import type { StockService } from "../services/stockService.js";
 import type { HoldingsAutoSync, TossSyncService } from "../services/tossSyncService.js";
@@ -14,6 +15,7 @@ export interface AdminDeps {
   /** 서버 공인 IP 조회 (키가 없을 때도 앱 카드에 허용 IP 등록용으로 보여 준다) */
   outboundIp?: () => Promise<string | null>;
   backups?: BackupService;
+  features?: FeatureService;
 }
 
 /** 토스 Open API 연동 상태 (앱 설정 화면용). 키가 없어도 200 으로 configured:false 를 준다 */
@@ -23,7 +25,7 @@ export function tossStatus(deps: AdminDeps["toss"], ip: string | null) {
 }
 
 /** 운영용 엔드포인트. API_TOKEN 이 있으면 /api/* 전체에 적용된다. */
-export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service, dart, toss, outboundIp, backups }) => {
+export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service, dart, toss, outboundIp, backups, features }) => {
   /** DB 백업: 상태·목록, 지금 백업, 암호화된 파일 내려받기 (복구 리허설·외부 보관용) */
   app.get("/backups", async () => ({ status: await backups?.status(), files: (await backups?.list()) ?? [] }));
   app.post("/backups/run", async () => backups?.run() ?? { enabled: false });
@@ -39,7 +41,7 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
   /** 토스증권 Open API 상태: 키 설정 여부, 토큰/마지막 오류, 허용 IP 에 등록할 서버 공인 IP, 실시간 구독 */
   app.get("/toss/status", async () => ({
     ...tossStatus(toss, outboundIp ? await outboundIp() : toss ? await toss.outboundIp() : null),
-    reconcile: toss ? await toss.reconcile.status().catch(() => null) : null,
+    reconcile: toss && (await features?.enabled("tossReconcile") ?? true) ? await toss.reconcile.status().catch(() => null) : null,
   }));
   /** 토스 대조 기록 (최근 순) */
   app.get("/toss/reconcile", async (_req, reply) => {

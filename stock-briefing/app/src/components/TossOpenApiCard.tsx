@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Alert, Linking, Pressable, Share, Text, View } from "react-native";
 import { useApi, useFeature, useTossStatus } from "@/api/hooks";
+import { gated } from "@/lib/features";
 import type { TossOpenApiStatus } from "@/api/types";
 import { useSettings } from "@/lib/settings";
 import { formatDateKo, formatPrice } from "@/lib/format";
@@ -20,7 +21,8 @@ export function TossOpenApiCard() {
   const qc = useQueryClient();
   const { apiUrl } = useSettings();
   const status = useTossStatus();
-  const reconcileOn = useFeature("tossReconcile");
+  // 이미 나간 기능(3-13)이라 서버 값을 못 받았으면 켜진 것으로
+  const reconcileOn = useFeature("tossReconcile", true);
   const [lastImport, setLastImport] = useState<string | null>(null);
   const importHoldings = useMutation({
     mutationFn: api.importTossHoldings,
@@ -38,6 +40,8 @@ export function TossOpenApiCard() {
   });
 
   const s = status.data;
+  // 대조 기능이 꺼져 있으면 서버가 준 대조 값도 쓰지 않는다 (3-15)
+  const rec = gated(reconcileOn, s?.reconcile);
   const ip = s?.outboundIp ?? null;
   // 클립보드 네이티브 모듈 없이(OTA 호환) 공유 시트로 IP 를 넘긴다. 아래 IP 텍스트는 길게 눌러 복사할 수도 있다.
   const copyIp = async () => {
@@ -92,15 +96,15 @@ export function TossOpenApiCard() {
           <Row label="실시간 구독" value={s.realtime ? `${s.realtime.connected ? "연결됨" : "끊김"} · ${s.realtime.subscribed.filter((k) => !k.startsWith("personal:")).length}종목` : "-"} />
           <Row label="자동 동기화" value={syncLabel(s.sync)} />
           {s.sync?.lastError ? <Text style={{ color: t.danger, fontSize: font.small }}>자동 동기화 실패: {s.sync.lastError}</Text> : null}
-          {reconcileOn && s.reconcile !== undefined ? (
-            <Row label="토스 대조" value={<Text style={{ color: s.reconcile?.alert ? t.warn : t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{reconcileLabel(s.reconcile, (iso) => formatDateKo(iso, true))}</Text>} />
+          {rec ? (
+            <Row label="토스 대조" value={<Text style={{ color: rec?.alert ? t.warn : t.ink, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{reconcileLabel(rec, (iso) => formatDateKo(iso, true))}</Text>} />
           ) : null}
-          {reconcileOn && s.reconcile?.alert && (s.reconcile.qtyStreak ?? 0) >= 3 ? (
-            <Text style={{ color: t.warn, fontSize: font.small }}>보유 수량이 토스와 다른 종목이 {s.reconcile.qtyStreak}회 연속 있습니다({s.reconcile.last?.qtyMismatch?.join(", ")}). 아래 &quot;지금 계좌 동기화&quot;로 다시 맞춰 보세요.</Text>
-          ) : reconcileOn && s.reconcile?.alert ? (
-            <Text style={{ color: t.warn, fontSize: font.small }}>앱 평가금이 토스 계좌와 {s.reconcile.streakOver}회 연속 0.1% 넘게 다릅니다. 앱 시세 출처·시각이 토스와 달라서일 수 있습니다.</Text>
+          {rec?.alert && (rec.qtyStreak ?? 0) >= 3 ? (
+            <Text style={{ color: t.warn, fontSize: font.small }}>보유 수량이 토스와 다른 종목이 {rec.qtyStreak}회 연속 있습니다({rec.last?.qtyMismatch?.join(", ")}). 아래 &quot;지금 계좌 동기화&quot;로 다시 맞춰 보세요.</Text>
+          ) : rec?.alert ? (
+            <Text style={{ color: t.warn, fontSize: font.small }}>앱 평가금이 토스 계좌와 {rec.streakOver}회 연속 0.1% 넘게 다릅니다. 앱 시세 출처·시각이 토스와 달라서일 수 있습니다.</Text>
           ) : null}
-          {reconcileOn && s.reconcile?.week.n ? <Muted>최근 7일 {s.reconcile.week.n}회 중 {s.reconcile.week.withinPct}%가 0.1% 이내</Muted> : null}
+          {rec?.week.n ? <Muted>최근 7일 {rec.week.n}회 중 {rec.week.withinPct}%가 0.1% 이내</Muted> : null}
           {s.client?.ipBlocked ? (
             <View style={{ gap: space.xs }}>
               <Text style={{ color: t.danger, fontSize: font.small }}>허용 IP 차단(403). 토스증권 허용 IP에 {ip ?? "서버 IP"} 등록 필요</Text>

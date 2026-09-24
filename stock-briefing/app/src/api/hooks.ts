@@ -91,15 +91,20 @@ export function useStock(code: string) {
   return useQuery({ queryKey: useKey("stock", code), queryFn: () => api.getStock(code), staleTime: 2_000, refetchInterval: every, refetchIntervalInBackground: false, retryDelay: 1_000, enabled: !!code });
 }
 
-/** 기능 플래그: 60초마다 다시 받는다 (관리 API 로 바꾸면 1분 안에 반영). 마지막 값은 기기에 저장해 켤 때 바로 쓴다 */
+/**
+ * 기능 플래그: 30초마다, 앱으로 돌아올 때마다 다시 받는다 (관리 API 로 바꾸면 1분 안에 반영). 마지막 값은 기기에 저장해 켤 때 바로 쓴다
+ */
 export function useFeatures() {
   const api = useApi();
-  return useQuery({ queryKey: useKey("features"), queryFn: api.features, staleTime: 60_000, refetchInterval: 60_000, refetchIntervalInBackground: false, retry: 1 });
+  return useQuery({ queryKey: useKey("features"), queryFn: api.features, staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: false, refetchOnWindowFocus: true, retry: 0 });
 }
 
-/** 켜진 기능인지. 아직 못 받았거나 서버가 모르는 기능이면 꺼진 것으로 본다 (새 기능은 서버가 켤 때만 보이게) */
-export function useFeature(key: string): boolean {
-  return featureOn(useFeatures().data, key);
+/**
+ * 켜진 기능인지. 서버가 준 값이 있으면 그 값, 아직 못 받았거나(첫 실행·예전 서버 404) 서버가 모르는 키면 fallback.
+ * 새 기능은 fallback false(서버가 켤 때만 보이게), 이미 나간 기능을 감싼 플래그는 true(서버가 늦게 배포돼도 사라지지 않게)
+ */
+export function useFeature(key: string, fallback = false): boolean {
+  return featureOn(useFeatures().data, key, fallback);
 }
 
 export function useTossStatus() {

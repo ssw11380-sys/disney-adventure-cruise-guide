@@ -21,7 +21,7 @@ export default function BriefingDetailScreen() {
   const b = useBriefing(numId ?? 0);
   const [mode, setMode] = useState<"summary" | "detail">("detail");
   const history = useBriefings({ code: b.data?.code, limit: 30 }, !!b.data?.code);
-  const sourcesOn = useFeature("briefingSources");
+  const sourcesOn = useFeature("briefingSources", true); // 이미 나간 기능(3-12)
 
   if (numId === null) return <Screen><ErrorView error={new Error("브리핑 주소가 올바르지 않습니다")} retryLabel="브리핑 목록으로" onRetry={() => router.dismissTo("/briefings")} /></Screen>;
   const view = viewState(b);

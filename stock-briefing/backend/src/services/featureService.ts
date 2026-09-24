@@ -21,8 +21,13 @@ interface Stored {
   updatedAt: string | null;
 }
 
+/** 서버 캐시 유지 시간: 여러 인스턴스·DB 직접 수정도 앱 반영 기준(60초) 안에 따라가게 */
+const CACHE_MS = 30_000;
+
 export class FeatureService {
-  private cache: Stored | null = null;
+  private cache: { at: number; stored: Stored } | null = null;
+  /** 바꾸기는 한 줄로 (읽고-고쳐-쓰기 사이에 다른 변경이 사라지지 않게) */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly db: Db,
@@ -30,7 +35,7 @@ export class FeatureService {
   ) {}
 
   private async load(): Promise<Stored> {
-    if (this.cache) return this.cache;
+    if (this.cache && this.now().getTime() - this.cache.at < CACHE_MS) return this.cache.stored;
     const row = await this.db.selectFrom("meta").select("value").where("key", "=", FEATURES_META_KEY).executeTakeFirst();
     let stored: Stored = { overrides: {}, updatedAt: null };
     if (row) {
@@ -44,7 +49,7 @@ export class FeatureService {
         /* 깨진 값은 기본값으로 */
       }
     }
-    this.cache = stored;
+    this.cache = { at: this.now().getTime(), stored };
     return stored;
   }
 
@@ -56,9 +61,11 @@ export class FeatureService {
     return { features, updatedAt: s.updatedAt };
   }
 
+  /** DB 를 못 읽으면 마지막 값, 그것도 없으면 꺼짐 (끄기 스위치가 오류로 다시 켜지지 않게, 앱과 같은 쪽으로) */
   async enabled(key: FeatureKey): Promise<boolean> {
-    const s = await this.load().catch(() => null);
-    return s?.overrides[key] ?? FEATURES[key].default;
+    const s = await this.load().catch(() => this.cache?.stored ?? null);
+    if (!s) return false;
+    return s.overrides[key] ?? FEATURES[key].default;
   }
 
   /** 관리 화면용: 기본값·설명·바꾼 값까지 */
@@ -68,9 +75,16 @@ export class FeatureService {
   }
 
   /** true/false 로 바꾸고, null 이면 기본값으로 되돌린다. 모르는 키는 거절 */
-  async set(patch: Record<string, boolean | null>): Promise<{ features: Record<FeatureKey, boolean>; updatedAt: string | null }> {
+  set(patch: Record<string, boolean | null>): Promise<{ features: Record<FeatureKey, boolean>; updatedAt: string | null }> {
     const unknown = Object.keys(patch).filter((k) => !(FEATURE_KEYS as string[]).includes(k));
-    if (unknown.length) throw new UnknownFeatureError(unknown);
+    if (unknown.length) return Promise.reject(new UnknownFeatureError(unknown));
+    const run = this.queue.then(() => this.setNow(patch));
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async setNow(patch: Record<string, boolean | null>): Promise<{ features: Record<FeatureKey, boolean>; updatedAt: string | null }> {
+    this.cache = null; // 다른 인스턴스가 바꾼 값 위에 쓴다
     const s = await this.load();
     const overrides = { ...s.overrides };
     for (const [k, v] of Object.entries(patch) as Array<[FeatureKey, boolean | null]>) {
@@ -80,7 +94,7 @@ export class FeatureService {
     const next: Stored = { overrides, updatedAt: seoulIso(this.now()) };
     const value = JSON.stringify(next);
     await this.db.insertInto("meta").values({ key: FEATURES_META_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
-    this.cache = next;
+    this.cache = { at: this.now().getTime(), stored: next };
     return this.all();
   }
 }

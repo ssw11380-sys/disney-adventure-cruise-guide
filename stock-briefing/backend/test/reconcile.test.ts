@@ -98,3 +98,22 @@ describe("토스 계좌 자동 대조 (3-13)", () => {
     expect(await new ReconcileService({ db }).history()).toHaveLength(5); // DB 에도
   });
 });
+
+describe("토스 대조 연속 판단 (3-15 리뷰)", () => {
+  it("기록 사이가 6시간 넘게 벌어지면(대조를 껐다 켬) 옛 기록과 이어 붙이지 않고, 오래된 경고는 내지 않는다", async () => {
+    const db = await createMigratedDb(":memory:");
+    const sent: string[] = [];
+    let t = Date.parse("2026-09-21T10:00:00+09:00");
+    const svc = new ReconcileService({ db, now: () => new Date(t), notify: async (x) => void sent.push(x) });
+    const off = [row("005930", "KRW", 1_010_000)];
+    const items = [{ code: "005930", currency: "KRW" as const, quantity: 1, marketValueAfterCost: 1_000_000 }];
+    await svc.record(off, items);
+    t += 600_000;
+    await svc.record(off, items);
+    t += 7 * 86_400_000; // 일주일 꺼 둠
+    expect((await svc.status()).streakOver).toBe(0); // 다시 켠 직후 옛 경고 없음
+    await svc.record(off, items);
+    expect(sent).toHaveLength(0);
+    expect((await svc.status()).streakOver).toBe(1);
+  });
+});
