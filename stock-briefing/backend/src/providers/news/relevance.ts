@@ -30,30 +30,32 @@ const ALIASES: Record<string, string[]> = {
   "BRK.B": ["버크셔"],
 };
 
-/** 이름이 다른 뜻과 겹치는 종목: 제목에 이 말이 있으면 뺀다 (이튼 메스·이튼 산불·이튼 칼리지, 농심(農心)·농지) */
+/** 이름이 다른 뜻과 겹치는 종목: 제목에 이 말이 있으면 뺀다 (이튼 메스·이튼 산불·이튼 칼리지, 농심(農心)·농지, 선진그룹 버스) */
 const EXCLUDE: Record<string, RegExp> = {
   ETN: /메스|산불|칼리지|스쿨|학교|알렌/,
-  "004370": /농지|농민|농가|농촌|농업인|쌀값|민심|청와대|요동/,
+  "004370": /농지|농민|농가|농촌|농업인|쌀값|민심|청와대/,
+  "136490": /선진그룹|버스|여객|운수/, // 선진(사료, 하림 계열) ≠ 선진그룹(버스)
 };
 
 /**
- * 이름이 흔한 한국어 낱말과 같은 종목 (대상·대교·동방 …). 네이버 종목 뉴스(코드로 묶인 기사)는 이름만 맞으면 되지만,
- * 이름 검색 결과는 회사를 가리키는 꼴(제목 첫머리 "대상, …"·대상㈜·대상그룹·"CJ·대상·오뚜기")일 때만 남긴다.
- * ("유미코아 대상 177억 수주", "기관투자자 대상 설명회" 같은 기사 제외)
+ * 두 글자 이하 한글 이름의 국내 종목 (대상·대교·대덕·선진·기아 …): 흔한 낱말·지명과 겹치기 쉽다.
+ * 네이버 종목 뉴스(코드로 묶인 기사)는 제목에 이름만 맞으면 되지만, 이름 검색 결과는
+ * 회사를 가리키는 꼴(첫머리 "대상, …"·대상㈜·㈜대상·대상그룹·"CJ·대상·오뚜기") + 주식 관련 말이나 회사 문맥이 있어야 남긴다.
+ * ("유미코아 대상 177억 수주", "죽동·대덕·안산 특화단지" 같은 기사 제외)
  */
-const COMMON_WORD_NAMES = new Set(["대상", "대교", "동방", "국보", "화신", "동양", "대동", "신성", "선진", "진로", "대성", "경방", "세방", "대원", "삼화", "유유", "한일", "조광", "사조", "성문", "태양", "대유"]);
-
 function companyForm(title: string, core: string): boolean {
   const n = core.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const left = "(?<![가-힣A-Za-z0-9])";
   const forms = [
-    `^(\\[[^\\]]*\\]\\s*)?${n}[\\s,·'"’”]`, // 제목 첫머리: "대상, 3분기 …", "[공시]대상 …"
+    `^(\\[[^\\]]*\\]\\s*)?${n}([,·'"’”]|[은는이가의도]\\s)`, // 제목 첫머리: "대상, 3분기 …", "[공시]대상의 …"
     `${left}${n}(㈜|\\(주\\)|그룹|홀딩스)`, // 대상㈜·대상그룹
     `(㈜|\\(주\\))\\s*${n}(?![가-힣])`, // ㈜대상
-    `·${n}(·|,|\\s|$)`, // "CJ·대상·오뚜기"
+    `[·,]\\s*${n}\\s*(·|,|등)`, // "CJ·대상·오뚜기"
   ];
   return forms.some((f) => new RegExp(f).test(title));
 }
+
+const COMPANY_CONTEXT = /그룹|회장|대표|사장|임직원|계열사|자회사|공장|신제품|출시|브랜드|㈜|\(주\)|주주|이사회|CEO|제품/;
 
 const FINANCE =
   /주가|주식|종목|실적|매출|영업이익|순이익|배당|수주|계약|인수|합병|목표가|투자의견|애널리스트|증시|나스닥|뉴욕|상장|ETF|분기|시총|시가총액|공시|급등|급락|상승|하락|강세|약세|저평가|고평가|공정가치|밸류|순매수|매수|매도|레버리지|편입|지분|가이던스|월가/;
@@ -110,9 +112,9 @@ function names(stock: StockRef): string[] {
   return [...new Set([stock.name, core, ...(ALIASES[stock.code.toUpperCase()] ?? [])].filter(Boolean))];
 }
 
-/** 이름이 흔한 낱말이라 이름만으로는 고를 수 없는 한국 종목 */
-export function isCommonWord(stock: StockRef): boolean {
-  return isKrCode(stock.code) && COMMON_WORD_NAMES.has(coreName(stock.name));
+/** 이름이 짧아(두 글자 이하 한글) 이름만으로는 고를 수 없는 국내 종목 */
+export function isShortKrName(stock: StockRef): boolean {
+  return isKrCode(stock.code) && /^[가-힣]{1,2}$/.test(coreName(stock.name));
 }
 
 /** fromNameSearch: 이름 검색 결과 (코드로 묶인 종목 뉴스보다 엄하게 본다) */
@@ -126,9 +128,9 @@ export function isRelevant(stock: StockRef, item: NewsItem, now: number, fromNam
   const finance = FINANCE.test(title);
   if (isAmbiguous(stock)) return ticker && finance;
   if (EXCLUDE[stock.code.toUpperCase()]?.test(title)) return false;
-  if (fromNameSearch && isCommonWord(stock)) return companyForm(title, coreName(stock.name));
+  if (fromNameSearch && isShortKrName(stock)) return companyForm(title, coreName(stock.name)) && (finance || COMPANY_CONTEXT.test(title));
   // 흔한 낱말 이름은 요약문에 우연히 들어가기 쉬워 제목만 본다 ("한국IR대상" 기사 요약의 "대상")
-  const text = isCommonWord(stock) ? title : `${title} ${item.summary ?? ""}`;
+  const text = isShortKrName(stock) ? title : `${title} ${item.summary ?? ""}`;
   return names(stock).some((n) => hasWord(text, n)) || (ticker && finance);
 }
 
@@ -139,7 +141,7 @@ export function filterNews(stock: StockRef, items: NewsItem[], now: number, from
 /** 이름 검색(구글 뉴스) 질의: 최근 30일, 이름이 모호하면 티커 + 주식 관련 말 */
 export function newsQuery(stock: StockRef): string {
   if (isAmbiguous(stock)) return `"${stock.code.toUpperCase()}" (주가 OR 주식 OR 실적 OR 배당 OR ETF) when:30d`;
-  if (isCommonWord(stock)) {
+  if (isShortKrName(stock)) {
     const core = coreName(stock.name);
     return `("${core}㈜" OR "${core}그룹" OR "${core} 주가") when:30d`;
   }
