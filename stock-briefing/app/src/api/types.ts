@@ -99,6 +99,8 @@ export interface RegisteredStock {
   memo: string | null;
   createdAt: string;
   updatedAt: string;
+  /** 토스 계좌에서 맞추는 종목 (수량·평단 잠김, 삭제하면 동기화에서 빠짐) */
+  tossSynced?: boolean;
 }
 
 export interface Evaluation {

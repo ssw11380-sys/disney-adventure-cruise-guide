@@ -311,6 +311,88 @@ describe("TossSyncService", () => {
   });
 });
 
+describe("토스 연동 종목 잠금 (3-10)", () => {
+  async function setup() {
+    const db = await createMigratedDb(":memory:");
+    const p = new TossOpenApiProvider(client(), { now: NOW });
+    const search = new FakeSearchProvider([{ code: "035420", name: "NAVER", market: "KOSPI", isinCode: "KR7035420009", groupCode: "ST" }]);
+    const service = new StockService({ db, quotes: new FakeQuoteProvider("x"), search, master: new FakeMasterProvider(), tossOpenApi: p, now: NOW });
+    await service.refreshMaster();
+    await service.register({ code: "005930", quantity: 1, avgPrice: 70000 }); // 토스 밖 종목
+    const sync = new TossSyncService(db, p, NOW);
+    await sync.importHoldings();
+    return { db, service, sync };
+  }
+
+  it("토스 종목은 수량·평단을 바꿀 수 없고(409 TOSS_LOCKED) 메모는 바꿀 수 있다. 토스 밖 종목은 그대로 수정", async () => {
+    const { db, service } = await setup();
+    await expect(service.update("035420", { quantity: 1 })).rejects.toMatchObject({ statusCode: 409, code: "TOSS_LOCKED" });
+    await expect(service.update("TSLA", { avgPrice: 1 })).rejects.toMatchObject({ code: "TOSS_LOCKED" });
+    await expect(service.update("035420", { quantity: 9, avgPrice: 232555, memo: "메모" })).resolves.toMatchObject({ memo: "메모", quantity: 9 }); // 같은 값은 통과
+    await expect(service.update("005930", { quantity: 3, avgPrice: 71000 })).resolves.toMatchObject({ quantity: 3, avgPrice: 71000 });
+    const list = await service.listWithQuotes();
+    expect(Object.fromEntries(list.map((s) => [s.code, s.tossSynced]))).toEqual({ "005930": false, "035420": true, TSLA: true });
+    await db.destroy();
+  });
+
+  it("토스 종목을 지우면 동기화에서 빠져 동기화를 여러 번 해도 다시 나타나지 않고, 다시 등록하면 다시 맞춘다", async () => {
+    const { db, service, sync } = await setup();
+    expect(await service.remove("035420")).toEqual({ tossExcluded: true });
+    for (let i = 0; i < 3; i++) {
+      const r = await sync.importHoldings();
+      expect(r.excluded).toEqual(["035420"]);
+      expect(r.added).toEqual([]);
+    }
+    expect((await service.list()).map((s) => s.code).sort()).toEqual(["005930", "TSLA"]);
+    expect(await service.remove("005930")).toEqual({ tossExcluded: false });
+    // 다시 등록 → 다음 동기화가 토스 값으로 맞춘다
+    await service.register({ code: "035420" });
+    const r = await sync.importHoldings();
+    expect(r.updated).toEqual(["035420"]);
+    expect(await service.get("035420")).toMatchObject({ quantity: 9, avgPrice: 232555 });
+    await db.destroy();
+  });
+
+  it("토스 연동이 꺼져 있거나(키 없음·동기화 0분) 동기화가 3시간 넘게 멈췄으면 잠그지 않는다", async () => {
+    const { db } = await setup();
+    const plain = new StockService({ db, quotes: new FakeQuoteProvider("x"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), now: NOW });
+    await expect(plain.update("035420", { quantity: 1 })).resolves.toMatchObject({ quantity: 1 });
+    const p = new TossOpenApiProvider(client(), { now: NOW });
+    const off = new StockService({ db, quotes: new FakeQuoteProvider("x"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), tossOpenApi: p, tossSyncMinutes: 0, now: NOW });
+    expect((await off.tossSynced()).size).toBe(0);
+    const later = new StockService({ db, quotes: new FakeQuoteProvider("x"), search: new FakeSearchProvider(), master: new FakeMasterProvider(), tossOpenApi: p, now: () => new Date(NOW().getTime() + 4 * 3_600_000) });
+    expect((await later.tossSynced()).size).toBe(0);
+    await db.destroy();
+  });
+
+  it("동기화에서 뺀 종목을 토스에서 전량 매도하면 제외 목록에서도 빠진다 (다시 사면 다시 가져옴)", async () => {
+    const { db, service, sync } = await setup();
+    await service.remove("TSLA");
+    const row = () => db.selectFrom("meta").select("value").where("key", "=", "toss_sync_excluded").executeTakeFirst();
+    expect((await row())?.value).toBe(JSON.stringify(["TSLA"]));
+    // 토스 보유에서 TSLA 가 사라진 동기화
+    const p2 = new TossOpenApiProvider(client(), { now: NOW });
+    const origin = p2.holdingsWithOverview.bind(p2);
+    p2.holdingsWithOverview = async (seq: number) => {
+      const r = await origin(seq);
+      return { ...r, items: r.items.filter((h) => h.code !== "TSLA") };
+    };
+    await new TossSyncService(db, p2, NOW).importHoldings();
+    expect((await row())?.value).toBe("[]");
+    // 다시 보유 → 다시 들어온다
+    const r = await sync.importHoldings();
+    expect(r.added).toEqual(["TSLA"]);
+    await db.destroy();
+  });
+
+  it("동시에 삭제·동기화해도 지운 종목이 되살아나지 않는다", async () => {
+    const { db, service, sync } = await setup();
+    await Promise.all([sync.importHoldings(), service.remove("035420"), sync.importHoldings()]);
+    expect((await service.list()).map((s) => s.code)).not.toContain("035420");
+    await db.destroy();
+  });
+});
+
 describe("TossOpenApiProvider 원화 장부용 조회", () => {
   const make = (handler: (url: URL, headers: Record<string, string>) => Response | null) =>
     new TossOpenApiProvider(

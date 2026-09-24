@@ -59,7 +59,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const log = app.log;
   const now = opts.now ?? (() => new Date());
 
-  const stockService = new StockService({ db: opts.db, ...opts.providers, now });
+  const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now });
   const appErrors = new AppErrorService(opts.db, now);
   const backups = new BackupService({ db: opts.db, dialect: detectDialect(opts.config.DATABASE_URL), dir: opts.config.BACKUP_DIR, key: opts.config.BACKUP_KEY, now, log });
   if (opts.enableScheduler !== false) backups.start();

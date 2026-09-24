@@ -26,6 +26,8 @@ export interface RegisteredStock {
   memo: string | null;
   createdAt: string; // ISO
   updatedAt: string; // ISO
+  /** 토스 계좌에서 맞추는 종목 (수량·평단은 동기화가 정한다 → 앱에서 잠금). 목록·상세 응답에만 붙는다 */
+  tossSynced?: boolean;
 }
 
 /** 현재가 스냅샷 */

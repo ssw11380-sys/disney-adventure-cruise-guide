@@ -4,6 +4,7 @@ import type { MarketCalendar } from "../providers/market/calendar.js";
 import type { TossHolding, TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import { toMarket } from "../providers/market/kisMaster.js";
 import { ProviderError } from "../lib/errors.js";
+import { holdingsWriteLock } from "../lib/mutex.js";
 import { KrwCostBook, RateNotFoundError, type AccountForBook, type OverviewForBook, type SetExactResult } from "./krwCostBook.js";
 
 /**
@@ -21,10 +22,24 @@ export interface ImportResult {
   unchanged: string[];
   /** 전량 매도로 관심 종목으로 바뀐 종목 */
   removed: string[];
+  /** 토스에는 있지만 사용자가 동기화에서 뺀 종목 (건드리지 않음) */
+  excluded: string[];
   holdings: Array<TossHolding & { market: string }>;
 }
 
-const SNAPSHOT_KEY = "toss_holdings_codes";
+export const SNAPSHOT_KEY = "toss_holdings_codes";
+/** 사용자가 "동기화 제외"한 종목 (앱에서 삭제한 토스 종목). 동기화가 다시 넣지 않는다 */
+export const EXCLUDED_KEY = "toss_sync_excluded";
+
+export function parseCodes(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const v = JSON.parse(value) as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
 export const DETAIL_KEY = "toss_holdings_detail";
 
 /**
@@ -103,13 +118,12 @@ export class TossSyncService {
 
   private async lastSnapshot(): Promise<string[]> {
     const row = await this.db.selectFrom("meta").select("value").where("key", "=", SNAPSHOT_KEY).executeTakeFirst();
-    if (!row) return [];
-    try {
-      const v = JSON.parse(row.value) as unknown;
-      return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-    } catch {
-      return [];
-    }
+    return parseCodes(row?.value);
+  }
+
+  private async excluded(): Promise<Set<string>> {
+    const row = await this.db.selectFrom("meta").select("value").where("key", "=", EXCLUDED_KEY).executeTakeFirst();
+    return new Set(parseCodes(row?.value));
   }
 
   private async saveSnapshot(codes: string[]): Promise<void> {
@@ -169,13 +183,24 @@ export class TossSyncService {
     }
     const holdings = [...merged.values()].filter((h) => h.quantity > 0);
     const infos = holdings.length ? await this.toss.stockInfos(holdings.map((h) => h.code)).catch(() => new Map()) : new Map();
-    const result: ImportResult = { accounts: accounts.length, added: [], updated: [], unchanged: [], removed: [], holdings: [] };
+    // 여기부터 DB 쓰기: 앱의 등록·수정·삭제와 겹치지 않게 한 줄로
+    return holdingsWriteLock.run(() => this.applyHoldings(accounts.length, holdings, infos, perAccount));
+  }
+
+  private async applyHoldings(accountCount: number, holdings: TossHolding[], infos: Map<string, unknown>, perAccount: PerAccount[]): Promise<ImportResult> {
+    const result: ImportResult = { accounts: accountCount, added: [], updated: [], unchanged: [], removed: [], excluded: [], holdings: [] };
     const ts = seoulIso(this.now());
+    const excluded = await this.excluded();
     for (const h of holdings) {
       const info = infos.get(h.code) as { name?: string; market?: string } | undefined;
       const name = info?.name || h.name || h.code;
       const market = toMarket(info?.market ?? (h.currency === "USD" ? "US" : "UNKNOWN"));
       result.holdings.push({ ...h, name, market });
+      // 앱에서 "동기화 제외"(토스 종목 삭제)한 종목은 다시 넣거나 고치지 않는다
+      if (excluded.has(h.code)) {
+        result.excluded.push(h.code);
+        continue;
+      }
       const existing = await this.db.selectFrom("registered_stocks").selectAll().where("code", "=", h.code).executeTakeFirst();
       if (!existing) {
         await this.db
@@ -197,13 +222,19 @@ export class TossSyncService {
     // 전량 매도: 지난번엔 토스에 있었는데 지금은 없는 종목 → 보유 정보만 비운다
     const nowCodes = new Set(holdings.map((h) => h.code));
     for (const code of await this.lastSnapshot()) {
-      if (nowCodes.has(code)) continue;
+      if (nowCodes.has(code) || excluded.has(code)) continue;
       const existing = await this.db.selectFrom("registered_stocks").select(["code", "quantity"]).where("code", "=", code).executeTakeFirst();
       if (!existing || !existing.quantity) continue;
       await this.db.updateTable("registered_stocks").set({ quantity: null, avg_price: null, updated_at: ts }).where("code", "=", code).execute();
       result.removed.push(code);
     }
     await this.saveSnapshot([...nowCodes]);
+    // 토스에서 전량 매도된 종목은 제외 목록에서도 뺀다 — 나중에 다시 사면 다시 가져온다
+    const keep = [...excluded].filter((c) => nowCodes.has(c));
+    if (keep.length !== excluded.size) {
+      const value = JSON.stringify(keep.sort());
+      await this.db.insertInto("meta").values({ key: EXCLUDED_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
+    }
     await this.saveDetail(holdings);
     await this.updateCostBook(perAccount);
     return result;
