@@ -1,5 +1,8 @@
 import { computeTechnicalSummary, type TechnicalSummary } from "../analysis/indicators.js";
 import { isKrCode } from "../lib/codes.js";
+import { NotListedError } from "../lib/errors.js";
+import type { MarketStatus } from "../providers/market/calendar.js";
+import { completedCandles, marketContext, type MarketContext } from "./marketContext.js";
 import type { Candle, Quote, RegisteredStock } from "../domain/types.js";
 import type { ChainLogger } from "../providers/market/chain.js";
 import { applyFundamentals, type NaverFundamentals } from "../providers/market/fundamentals.js";
@@ -18,6 +21,7 @@ import type {
  * 프롬프트에 넣을 데이터를 모은다.
  * 각 항목은 독립적으로 시도하고, 실패하면 null + missing 목록에 이름을 남긴다.
  * 그래서 외부 API 하나가 죽어도 브리핑은 나간다("데이터 미확인" 표시).
+ * 원래 없는 데이터(미국 종목 수급, 키를 넣지 않은 DART, SEC 에 없는 ETF 공시)는 실패가 아니므로 missing 이 아니라 notes 에 둔다.
  */
 
 export interface CollectorDeps {
@@ -31,6 +35,9 @@ export interface CollectorDeps {
   fundamentals?: NaverFundamentals | null;
   /** 여러 종목 시세를 한 번에 받아 두는 곳(토스 웹). 브리핑 전에 불러 한국 종목 기준가를 미리 채운다 */
   quickPrices?: { getMany(codes: string[]): Promise<unknown> } | null;
+  /** 장 상태 (정규장 중·마감·프리/애프터·주간거래). 없으면 요일·시각으로 추정 */
+  calendar?: { status(): Promise<MarketStatus> } | null;
+  now?: () => Date;
   log?: ChainLogger;
 }
 
@@ -43,7 +50,12 @@ export interface BriefingSnapshot {
   disclosures: Disclosure[] | null;
   investorFlow: InvestorFlowDay[] | null;
   holding: { profit: number; profitRate: number; marketValue: number } | null;
+  /** 브리핑 시점의 장 상태 (예전 스냅샷에는 없음) */
+  marketState?: MarketContext;
+  /** 실제로 받으려다 실패한 데이터 */
   missing: string[];
+  /** 원래 제공되지 않는 데이터 (실패 아님). 예전 스냅샷에는 없음 */
+  notes?: string[];
 }
 
 export interface AnalysisSnapshot {
@@ -99,6 +111,10 @@ export class DataCollector {
     await this.deps.quickPrices.getMany(codes).catch(() => undefined);
   }
 
+  private async marketStatus(): Promise<MarketStatus | null> {
+    return this.deps.calendar ? this.deps.calendar.status().catch(() => null) : null;
+  }
+
   /** 시장에 맞는 재무·공시 소스. 한국은 DART, 미국은 EDGAR */
   private finFor(code: string): { provider: FinancialsProvider | null; missingSuffix: string } {
     if (isKrCode(code)) return { provider: this.deps.financials, missingSuffix: "(DART 키 없음)" };
@@ -107,22 +123,38 @@ export class DataCollector {
 
   async collectBriefing(stock: RegisteredStock): Promise<BriefingSnapshot> {
     const missing: string[] = [];
+    const notes: string[] = [];
     const q = this.deps;
+    const now = q.now?.() ?? new Date();
+    const kr = isKrCode(stock.code);
     const fin = this.finFor(stock.code);
-    const [quote, series, news, disclosures, investorFlow] = await Promise.all([
+    const [quote, series, news, disclosures, investorFlow, status] = await Promise.all([
       this.attempt("현재가", missing, () => this.quote(stock.code, stock.market)),
       this.attempt("일봉/기술적 지표", missing, () => q.quotes.getCandles(stock.code, "D", 160)),
       this.attempt("뉴스", missing, () => this.news(stock, 8)),
       fin.provider
-        ? this.attempt("공시", missing, () => fin.provider!.getDisclosures(stock.code, 7, 8))
-        : (missing.push(`공시${fin.missingSuffix}`), Promise.resolve(null)),
-      !isKrCode(stock.code)
-        ? (missing.push("수급(미국 종목 미지원)"), Promise.resolve(null))
+        ? this.attempt("공시", missing, () =>
+            fin.provider!.getDisclosures(stock.code, 7, 8).catch((e: unknown) => {
+              if (e instanceof NotListedError) {
+                notes.push("공시: SEC 에 회사로 등록되지 않은 종목(ETF 등)이라 해당 없음");
+                return [];
+              }
+              throw e;
+            }),
+          )
+        : (notes.push(kr ? "공시: DART 키가 없어 받지 않음" : "공시: 미국 공시 소스 없음"), Promise.resolve(null)),
+      !kr
+        ? (notes.push("수급: 미국 종목은 투자자별 매매 동향이 제공되지 않음"), Promise.resolve(null))
         : q.investorFlow
           ? this.attempt("수급", missing, () => q.investorFlow!.getInvestorFlow(stock.code, 10))
-          : (missing.push("수급(KIS/토스 Open API 키 없음)"), Promise.resolve(null)),
+          : (notes.push("수급: KIS/토스 Open API 키가 없어 받지 않음"), Promise.resolve(null)),
+      this.marketStatus(),
     ]);
-    const candles = series?.candles ?? null;
+    // 지표는 끝난 봉까지만 (정규장 중인 오늘 봉·주간거래로 생긴 봉은 빼고). 날짜 표시는 실제 마지막 봉 날짜로 맞춘다
+    const ctx0 = marketContext(stock.code, status, now);
+    const candles = series ? completedCandles(series.candles, ctx0, now) : null;
+    const lastDone = candles?.at(-1)?.date ?? null;
+    const market = lastDone && ctx0.lastRegularDate && lastDone < ctx0.lastRegularDate ? marketContext(stock.code, status, now, lastDone) : ctx0;
     const technical = candles ? computeTechnicalSummary(candles) : null;
     if (candles && !technical) missing.push("기술적 지표(봉 부족)");
     const holding =
@@ -142,7 +174,9 @@ export class DataCollector {
       disclosures,
       investorFlow,
       holding,
+      marketState: market,
       missing: orderMissing(missing),
+      notes,
     };
   }
 

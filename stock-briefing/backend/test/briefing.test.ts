@@ -65,7 +65,10 @@ describe("briefing pipeline", () => {
     expect(detailReq.user).toContain('"price": 180000');
     expect(detailReq.user).toContain('"maAlignment"');
     expect(detailReq.user).toContain("뉴스 1");
-    expect(detailReq.user).toContain("데이터 미확인 항목: 공시(DART 키 없음)");
+    // DART 키가 없는 건 실패가 아니라 "제공되지 않는 항목" (3-11)
+    expect(detailReq.user).toContain("데이터 미확인 항목(받으려다 실패): 없음");
+    expect(detailReq.user).toContain("제공되지 않는 항목(실패 아님): 공시: DART 키가 없어 받지 않음");
+    expect(detailReq.user).toMatch(/장 상태: 한국 /);
     // 요약 프롬프트에는 상세 결과가 들어간다
     expect(gen.requests[1]!.user).toContain("briefing_detail:000660 결과입니다");
     expect(news.queries).toEqual(["SK하이닉스", "삼성전자"]);
@@ -77,7 +80,7 @@ describe("briefing pipeline", () => {
     expect(list).toHaveLength(1);
     expect(list[0].summary).toBe("주가 100,000원 (+1.01%)\n뉴스 요약 한 줄\n내일 체크포인트");
     expect(list[0].name).toBe("SK하이닉스");
-    expect(list[0].missing).toEqual(["공시(DART 키 없음)"]);
+    expect(list[0].missing).toEqual([]);
     expect(normalizeSummary("• a\n\n* b\n1) c\nd")).toBe("a\nb\nc");
     // 숫자로 시작하는 본문은 잘리면 안 된다
     expect(normalizeSummary("184만원 마감, 1.50% 하락\n2. 189만원 저항 확인\n3: 거래량 확인")).toBe("184만원 마감, 1.50% 하락\n189만원 저항 확인\n거래량 확인");
@@ -105,14 +108,14 @@ describe("briefing pipeline", () => {
     await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "afternoon", codes: ["005930"] } });
     const [b] = (await app.inject({ method: "GET", url: "/api/briefings?code=005930" })).json();
     expect(b.status).toBe("ok");
-    expect(b.missing).toEqual(expect.arrayContaining(["뉴스", "공시(DART 키 없음)"]));
+    expect(b.missing).toEqual(["뉴스"]);
     expect(b.missing).not.toContain("일봉/기술적 지표"); // 폴백 소스(yahoo)가 봉을 줌
     const detail = (await app.inject({ method: "GET", url: `/api/briefings/${b.id}` })).json();
     expect(detail.data.news).toBeNull();
     expect(detail.data.quote.source).toBe("kis");
     expect(detail.data.technical).not.toBeNull();
     expect(detail.data.holding).toBeNull();
-    expect(gen.requests[0]!.user).toContain("데이터 미확인 항목: 뉴스, 공시(DART 키 없음)");
+    expect(gen.requests[0]!.user).toContain("데이터 미확인 항목(받으려다 실패): 뉴스");
   });
 
   it("모델 호출이 실패하면 failed 로 저장되고 목록에 사유가 남는다", async () => {

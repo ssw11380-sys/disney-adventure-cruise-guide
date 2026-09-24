@@ -40,6 +40,14 @@ export class ProviderError extends Error {
   }
 }
 
+/** 소스에 없는 종목 (예: SEC 에 회사로 등록되지 않은 ETF). 실패가 아니라 "해당 없음" */
+export class NotListedError extends ProviderError {
+  constructor(provider: string, message: string) {
+    super(provider, message);
+    this.name = "NotListedError";
+  }
+}
+
 /** AbortSignal.timeout 이 끊은 요청인지 — 시간 초과는 다시 불러도 또 그만큼 걸리므로 재시도하지 않는다 */
 export function isTimeoutError(e: unknown): boolean {
   return typeof e === "object" && e !== null && ((e as { name?: unknown }).name === "TimeoutError" || (e as { name?: unknown }).name === "AbortError");

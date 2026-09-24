@@ -163,6 +163,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     investorFlow: opts.providers.investorFlow,
     fundamentals: opts.providers.fundamentals,
     quickPrices: opts.providers.quickPrices,
+    calendar: opts.providers.calendar,
+    now,
     log,
   });
   const prompts = opts.promptStore ?? new PromptStore();

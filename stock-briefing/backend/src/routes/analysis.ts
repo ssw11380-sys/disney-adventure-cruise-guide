@@ -39,7 +39,7 @@ export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app,
     const fin = kr ? financials : (financialsUs ?? null);
     const [newsRes, discRes] = await Promise.allSettled([
       news.forStock ? news.forStock({ code, name, ...(registered?.market ? { market: registered.market } : {}) }, 15) : news.search(name, 15),
-      fin ? fin.getDisclosures(code, 30, 15) : Promise.reject(new Error(kr ? "DART_API_KEY 가 설정되지 않았습니다" : "미국 공시 소스가 없습니다")),
+      fin ? fin.getDisclosures(code, 30, 15) : Promise.reject(new Error(kr ? "공시는 OpenDART 키를 등록하면 볼 수 있습니다" : "미국 공시 소스가 없습니다")),
     ]);
     return {
       code,

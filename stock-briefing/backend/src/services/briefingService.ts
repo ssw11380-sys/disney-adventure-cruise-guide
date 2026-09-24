@@ -169,6 +169,8 @@ export class BriefingService {
       quantity: stock.quantity === null ? "미입력" : `${stock.quantity}주`,
       avg_price: stock.avgPrice === null ? "미입력" : `${stock.avgPrice.toLocaleString("ko-KR")}원`,
       missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
+      notes_list: snapshot.notes?.length ? snapshot.notes.join(" / ") : "없음",
+      market_state: snapshot.marketState?.label ?? "확인 안 됨",
       previous_summary: previous ?? "없음 (첫 브리핑)",
       data_json: JSON.stringify(snapshotForPrompt(snapshot), null, 1),
     };
@@ -351,6 +353,7 @@ function kstMinute(iso: string): string {
 export function snapshotForPrompt(s: BriefingSnapshot): Record<string, unknown> {
   return {
     stock: s.stock,
+    marketState: s.marketState ? { phase: s.marketState.phase, label: s.marketState.label, lastRegularDate: s.marketState.lastRegularDate } : null,
     quote: s.quote,
     holding: s.holding,
     technical: s.technical,

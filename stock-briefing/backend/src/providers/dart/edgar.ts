@@ -1,6 +1,6 @@
 import type { AnnualFinancials, CompanyProfile, Disclosure, DividendInfo, FinancialsProvider } from "./types.js";
 import { isKrCode, normalizeCode } from "../../lib/codes.js";
-import { ProviderError } from "../../lib/errors.js";
+import { NotListedError, ProviderError } from "../../lib/errors.js";
 import type { FetchFn } from "../market/types.js";
 
 /**
@@ -91,7 +91,7 @@ export class EdgarProvider implements FinancialsProvider {
       this.tickers = { at: t, map };
     }
     const hit = this.tickers.map.get(code) ?? this.tickers.map.get(code.replace(".", "-")) ?? this.tickers.map.get(code.replace("-", "."));
-    if (!hit) throw new ProviderError(this.name, `SEC 에 등록된 티커가 아닙니다: ${code} (ETF·ADR 은 재무제표가 없을 수 있음)`);
+    if (!hit) throw new NotListedError(this.name, `SEC 에 등록된 티커가 아닙니다: ${code} (ETF·ADR 은 재무제표가 없을 수 있음)`);
     return hit;
   }
 
