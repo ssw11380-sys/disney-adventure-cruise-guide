@@ -144,10 +144,11 @@ export default function AddStockScreen() {
                     <Muted>지우기</Muted>
                   </Pressable>
                 </View>
-                <LineHead right="등록" />
+                {/* 최근 검색은 시세를 들고 있지 않다 → 가격 칸을 비운다 */}
+                <LineHead price="" right="등록" />
               </>
             }
-            renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => setSelected({ ...item, isinCode: null, groupCode: null })} />}
+            renderItem={({ item }) => <ResultRow item={item} recent registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => setSelected({ ...item, isinCode: null, groupCode: null })} />}
           />
         ) : (
           <Muted style={{ paddingHorizontal: space.lg }}>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
@@ -163,12 +164,12 @@ export default function AddStockScreen() {
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={(search.data?.results.length ?? 0) > 0 ? <LineHead right="등록" /> : null}
           // 결과가 아직 없을 때만 안내 (입력이 바뀌는 동안은 이전 결과를 그대로 둔다 — 스피너·깜빡임 없음)
-          ListEmptyComponent={pending ? null : search.error ? <Text style={{ color: t.danger, paddingHorizontal: space.lg }}>토스 검색에 실패했고 종목 마스터에도 없습니다. 잠시 뒤 다시 검색해 보세요.</Text> : <Muted style={{ paddingHorizontal: space.lg }}>검색 결과가 없습니다.</Muted>}
+          ListEmptyComponent={pending ? null : search.error ? <Text style={{ color: t.danger, paddingHorizontal: space.lg }}>토스 검색에 실패했고 앱의 종목 목록에도 없습니다. 잠시 뒤 다시 검색해 보세요.</Text> : <Muted style={{ paddingHorizontal: space.lg }}>검색 결과가 없습니다.</Muted>}
           ListFooterComponent={
             (search.data?.results.length ?? 0) === 0 ? null : search.pending ? (
               <Muted style={{ fontSize: font.tiny, paddingTop: space.xs, paddingHorizontal: space.lg }}>토스 검색 결과를 합치는 중</Muted>
             ) : search.error ? (
-              <Muted style={{ fontSize: font.tiny, paddingTop: space.xs, paddingHorizontal: space.lg }}>토스 검색 실패 — 종목 마스터 결과만 보여 줍니다</Muted>
+              <Muted style={{ fontSize: font.tiny, paddingTop: space.xs, paddingHorizontal: space.lg }}>토스 검색 실패 — 앱의 종목 목록에서 찾은 결과만 보여 줍니다</Muted>
             ) : null
           }
           renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => setSelected(item)} />}
@@ -179,7 +180,7 @@ export default function AddStockScreen() {
 }
 
 /** 검색 결과 한 줄 (공용 StockLine): 누르면 상세, 오른쪽 열은 등록됨 표시 또는 "등록" 버튼 */
-function ResultRow({ item, registered, onOpen, onRegister }: { item: RecentStock & Partial<ListedStock>; registered: boolean; onOpen: () => void; onRegister: () => void }) {
+function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { item: RecentStock & Partial<ListedStock>; registered: boolean; onOpen: () => void; onRegister: () => void; recent?: boolean }) {
   const t = useTheme();
   const us = isUsMarket(item.market);
   const c = changeColor(t, item.changeRate ?? null);
@@ -189,6 +190,7 @@ function ResultRow({ item, registered, onOpen, onRegister }: { item: RecentStock
       nameBadge={<LineMark label={us ? "US" : "KR"} color={us ? t.accent : t.gold} />}
       sub={`${item.code} · ${item.market}`}
       badges={item.groupCode === "EF" ? <LineMark label="ETF" color={t.muted} /> : null}
+      priceMissing={recent ? "" : "-"}
       price={item.price ? { value: item.price, text: formatQuote(item.price, item.currency), color: c, rate: formatPct(item.changeRate ?? null), rateColor: c } : null}
       right={
         registered ? (

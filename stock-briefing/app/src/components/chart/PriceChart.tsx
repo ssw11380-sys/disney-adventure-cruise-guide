@@ -355,6 +355,7 @@ export function PriceChart(p: PriceChartProps) {
         currency={currency}
         period={p.period}
         showVolume={p.hasVolume !== false}
+        part={p.showMaValues === false ? "all" : "top"}
       />
       <GestureDetector gesture={gesture}>
         <View style={{ width, height }} collapsable={false}>
@@ -488,7 +489,23 @@ export function PriceChart(p: PriceChartProps) {
         </View>
       </GestureDetector>
       {/* 이동평균 값은 차트 아래 (위쪽 조작·읽기 줄을 한 줄로 유지, 3-21) */}
-      {p.showMaValues !== false ? <MaLine mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} /> : null}
+      {p.showMaValues !== false ? (
+        <>
+          <Readout
+          candle={crossCandle}
+          prev={cross ? visible[cross.i - 1] ?? candles[start + cross.i - 1] : visible[n - 2] ?? candles[end - 2]}
+          latestBase={p.period === "D" ? p.prevClose : null}
+          latestDate={p.latestDate}
+          isLatest={isLatest}
+          last={last}
+          currency={currency}
+          period={p.period}
+          showVolume={p.hasVolume !== false}
+          part="bottom"
+          />
+          <MaLine mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} />
+        </>
+      ) : null}
     </View>
   );
 }
@@ -547,7 +564,7 @@ function Tag({
   );
 }
 
-/** 차트 위 한 줄: 십자선이 잡은 봉(없으면 마지막 봉)의 종가·등락·고·저·시·거래량 */
+/** 읽기 줄: 십자선이 잡은 봉(없으면 마지막 봉)의 종가·등락·고·저 (차트 위), 등락 기준·시가·거래량 (차트 아래) */
 function Readout({
   candle,
   prev,
@@ -558,6 +575,7 @@ function Readout({
   currency,
   period,
   showVolume,
+  part,
 }: {
   candle: Candle | undefined;
   prev: Candle | undefined;
@@ -570,6 +588,8 @@ function Readout({
   currency: ChartUnit;
   period: CandlePeriod;
   showVolume: boolean;
+  /** top = 차트 위 한 줄, bottom = 차트 아래(기준·시가·거래량), all = 위 한 줄에 전부(전체 화면) */
+  part: "top" | "bottom" | "all";
 }) {
   const t = useTheme();
   const c = candle ?? last;
@@ -578,19 +598,35 @@ function Readout({
   const basis = readoutBasis({ period, isLatest, latestBase, latestDate, candleDate: c.date, prevClose: prev?.close, open: c.open });
   const chg = basis.base ? ((c.close - basis.base) / basis.base) * 100 : null;
   const color = chg === null ? t.muted : changeColor(t, chg);
-  const when = c.time ? `${c.date} ${c.time.slice(11, 16)}` : c.date;
-  // 한 줄 (3-21): 날짜 · 종가(등락) · 고 · 저 · 시 · 거래량 — 좁으면 뒤쪽부터 잘린다
+  // 날짜는 짧게(연도 빼고), 분봉은 시각까지. 값은 단위(원) 없이 — 한 줄에 종가·등락·고·저가 들어가게 (3-21 리뷰)
+  const when = `${c.date.slice(5)}${c.time ? ` ${c.time.slice(11, 16)}` : ""}`;
+  const v = (x: number) => formatChartValue(x, currency).replace(/원$/, "");
+  const vol = showVolume ? `거래량 ${formatVolume(c.volume)}` : "";
+  const a11y = [`${c.date}${c.time ? ` ${c.time.slice(11, 16)}` : ""}`, `종가 ${formatChartValue(c.close, currency)}`, chg !== null ? `${basis.label} ${formatPct(chg)}` : "", `고가 ${v(c.high)}`, `저가 ${v(c.low)}`, `시가 ${v(c.open)}`, vol]
+    .filter(Boolean)
+    .join(", ");
+  if (part === "bottom") {
+    // 차트 아래 줄: 등락 기준 · 시가 · 거래량 (위 줄에 다 들어가지 않는 것)
+    return (
+      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} importantForAccessibility="no">
+        {chg !== null ? `${basis.label} · ` : ""}시 {v(c.open)}
+        {vol ? ` · ${vol}` : ""}
+      </Text>
+    );
+  }
+  // 위 줄: 날짜 · 종가(등락) · 고 · 저 (전체 화면은 아래 줄이 없으므로 시가·거래량까지, 좁으면 뒤부터 잘린다)
   return (
     <View style={styles.readout}>
-      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} accessibilityLabel={`${when} ${basis.label} 종가 ${formatChartValue(c.close, currency)}`}>
+      <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={1} accessibilityLabel={a11y}>
         {when}
-        {candle ? " 십자선" : ""} · 종 <Text style={{ color, fontWeight: "700" }}>{formatChartValue(c.close, currency)}</Text>
+        {candle ? " 십자선" : ""} · 종 <Text style={{ color, fontWeight: "700" }}>{v(c.close)}</Text>
         {chg !== null ? <Text style={{ color }}> ({formatPct(chg)})</Text> : null}
         <Text style={{ color: t.ink }}>
           {" "}
-          고 {formatChartValue(c.high, currency)} 저 {formatChartValue(c.low, currency)} 시 {formatChartValue(c.open, currency)}
+          고 {v(c.high)} 저 {v(c.low)}
+          {part === "all" ? ` 시 ${v(c.open)}` : ""}
         </Text>
-        {showVolume ? ` · 거래량 ${formatVolume(c.volume)}` : ""}
+        {part === "all" && vol ? ` · ${vol}` : ""}
       </Text>
     </View>
   );

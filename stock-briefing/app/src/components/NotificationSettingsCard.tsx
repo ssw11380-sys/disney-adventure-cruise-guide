@@ -49,7 +49,8 @@ export function NotificationSettingsCard() {
 
   const enabled = !!token || localMode;
 
-  const toggleDevice = async (on: boolean) => {
+  /** 이 기기 알림 켜기·끄기. 성공하면 true */
+  const toggleDevice = async (on: boolean): Promise<boolean> => {
     setBusy(true);
     setSetupError(null);
     try {
@@ -73,8 +74,10 @@ export function NotificationSettingsCard() {
         setToken(null);
         setLocalMode(false);
       }
+      return true;
     } catch (e) {
       setSetupError(e instanceof PushSetupError || e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -82,10 +85,16 @@ export function NotificationSettingsCard() {
 
   const s = settings.data;
   const toggleAlerts = async (on: boolean) => {
-    await toggleDevice(on);
-    // 예전에 서버 발송만 꺼 둔 경우도 스위치 하나로 다시 켜지게
-    if (on && s && !s.pushEnabled) patch({ pushEnabled: true });
+    // 이미 이 기기가 등록돼 있고 서버 발송만 꺼진 경우(예전 스위치 2개 시절)는 기기를 다시 등록하지 않는다
+    const ok = on && enabled ? true : await toggleDevice(on);
+    // 켜기에 성공했을 때만 서버 발송도 켠다. 설정을 아직 못 받았으면 받아 온 뒤에 판단한다
+    if (on && ok) {
+      const latest = s ?? (await settings.refetch()).data;
+      if (latest && !latest.pushEnabled) patch({ pushEnabled: true });
+    }
   };
+  // 스위치 표시: 백그라운드 확인(로컬) 모드는 서버 발송 설정과 상관없이 알림이 오므로 그대로 켜짐
+  const alertsOn = localMode || (!!token && (s?.pushEnabled ?? true));
   // 지금 등록된 종목 중 끈 것만 센다 (삭제한 종목의 옛 기록은 세지 않게). 목록이 없으면 저장된 수
   const mutedCount = stocks.data ? stocks.data.filter((st) => s?.mutedCodes?.includes(st.code)).length : (s?.mutedCodes?.length ?? 0);
   const patch = (p: Parameters<typeof updateSettings.mutate>[0]) =>
@@ -126,14 +135,14 @@ export function NotificationSettingsCard() {
             {!tokenLoaded
               ? "확인 중…"
               : token
-                ? "즉시 푸시 (Firebase 연결됨)"
+                ? "즉시 알림 연결됨"
                 : localMode
                   ? "백그라운드 확인 (15~30분 지연)"
                   : "브리핑 생성 시 요약 알림"}
           </Muted>
         </View>
         {/* 알림 스위치는 하나 (3-21): 켜면 이 기기를 등록하고 서버 발송도 켠다. 끄면 이 기기만 뺀다 */}
-        <Toggle value={enabled && (s?.pushEnabled ?? true)} onValueChange={(v) => void toggleAlerts(v)} disabled={busy || !tokenLoaded} accessibilityLabel="브리핑 알림" />
+        <Toggle value={alertsOn} onValueChange={(v) => void toggleAlerts(v)} disabled={busy || !tokenLoaded} accessibilityLabel="브리핑 알림" />
       </View>
       {setupError ? <Text style={{ color: t.danger, fontSize: font.small }}>{setupError}</Text> : null}
       {localMode ? (

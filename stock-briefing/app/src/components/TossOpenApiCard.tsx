@@ -124,7 +124,7 @@ export function TossOpenApiCard() {
 
 function syncLabel(sync: NonNullable<TossOpenApiStatus["sync"]> | null | undefined): string {
   if (!sync) return "구버전 서버";
-  if (!sync.enabled) return "꺼짐 (TOSS_SYNC_MINUTES=0)";
+  if (!sync.enabled) return "꺼짐 (서버에서 꺼 둠)";
   const when = sync.lastRunAt ? formatDateKo(sync.lastRunAt, true) : "아직 안 함";
   const c = sync.lastChanges;
   const changes = c ? (c.added || c.updated || c.removed ? ` (+${c.added} / 갱신 ${c.updated}${c.removed ? ` / 매도 ${c.removed}` : ""})` : " (변화 없음)") : "";

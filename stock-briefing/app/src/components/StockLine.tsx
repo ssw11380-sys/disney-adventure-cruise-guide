@@ -11,6 +11,8 @@ import { TableHead } from "./ui";
  */
 export const LINE_COL = { rank: 30, price: 100, right: 108 } as const;
 export const LINE_H = 58;
+/** 고정 높이 줄(발견)이 큰 글씨에서 겹치지 않게 글자 확대 상한 (3-22 에서 다시 본다) */
+const MAX_SCALE = 1.4;
 /** 표 머리의 현재가 열 문구 (모든 화면 같은 말) */
 export const PRICE_HEAD = "현재가·등락률";
 
@@ -38,6 +40,7 @@ export function StockLine({
   accessibilityLabel,
   accessibilityActions,
   onAccessibilityAction,
+  fixedHeight = false,
 }: {
   rank?: number;
   name: string;
@@ -57,6 +60,8 @@ export function StockLine({
   accessibilityLabel?: string;
   accessibilityActions?: { name: string; label?: string }[];
   onAccessibilityAction?: (name: string) => void;
+  /** 높이를 LINE_H 로 고정 (FlatList getItemLayout 을 쓰는 목록). 아니면 최소 높이만 — 큰 글씨에서 줄이 늘어난다 */
+  fixedHeight?: boolean;
 }) {
   const t = useTheme();
   return (
@@ -68,7 +73,7 @@ export function StockLine({
       accessibilityLabel={accessibilityLabel}
       accessibilityActions={accessibilityActions}
       onAccessibilityAction={onAccessibilityAction ? (e) => onAccessibilityAction(e.nativeEvent.actionName) : undefined}
-      style={({ pressed }) => [styles.row, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
+      style={({ pressed }) => [styles.row, fixedHeight ? { height: LINE_H } : { minHeight: LINE_H, paddingVertical: space.s }, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
     >
       {rank !== undefined ? (
         <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
@@ -78,14 +83,15 @@ export function StockLine({
       <View style={styles.name}>
         <View style={styles.inline}>
           {nameBadge}
-          <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", flexShrink: 1 }} numberOfLines={1}>
+          <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={MAX_SCALE}>
             {name}
           </Text>
         </View>
         {sub || badges ? (
-          <View style={styles.inline}>
+          // 표시가 여럿이어도 현재가 열을 넘지 않게 자른다
+          <View style={[styles.inline, { overflow: "hidden" }]}>
             {sub ? (
-              <Text style={{ color: t.muted, fontSize: font.small, fontVariant: ["tabular-nums"], flexShrink: 1 }} numberOfLines={1}>
+              <Text style={{ color: t.muted, fontSize: font.small, fontVariant: ["tabular-nums"], flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={MAX_SCALE}>
                 {sub}
               </Text>
             ) : null}
@@ -98,9 +104,11 @@ export function StockLine({
           <>
             <View style={styles.inline}>
               {price.live ? <View style={[styles.live, { backgroundColor: t.live }]} /> : null}
-              <FlashPrice value={price.value} text={price.text} style={[styles.main, { color: price.color }]} />
+              <FlashPrice value={price.value} text={price.text} style={[styles.main, { color: price.color }]} maxScale={MAX_SCALE} />
             </View>
-            <Text style={[styles.sub, { color: price.rateColor }]}>{price.rate}</Text>
+            <Text style={[styles.sub, { color: price.rateColor }]} maxFontSizeMultiplier={MAX_SCALE}>
+              {price.rate}
+            </Text>
           </>
         ) : (
           <Text style={{ color: t.muted, fontSize: font.small }}>{priceMissing}</Text>
@@ -116,11 +124,11 @@ export function LineValue({ main, mainColor, sub, subColor }: { main: string; ma
   const t = useTheme();
   return (
     <>
-      <Text style={[styles.main, { color: mainColor }]} numberOfLines={1} adjustsFontSizeToFit>
+      <Text style={[styles.main, { color: mainColor }]} numberOfLines={1} adjustsFontSizeToFit maxFontSizeMultiplier={MAX_SCALE}>
         {main}
       </Text>
       {sub !== undefined ? (
-        <Text style={[styles.sub, { color: subColor ?? t.muted }]} numberOfLines={1}>
+        <Text style={[styles.sub, { color: subColor ?? t.muted }]} numberOfLines={1} maxFontSizeMultiplier={MAX_SCALE}>
           {sub}
         </Text>
       ) : null}
@@ -149,7 +157,7 @@ export function LineHead({ rank, name = "종목명", price, right }: { rank?: bo
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: "row", alignItems: "center", height: LINE_H, paddingHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth },
+  row: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth },
   rank: { width: LINE_COL.rank, fontSize: font.small, fontWeight: "800", fontVariant: ["tabular-nums"] },
   name: { flex: 1, gap: space.xxs, paddingRight: space.sm },
   inline: { flexDirection: "row", alignItems: "center", gap: space.xs },

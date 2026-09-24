@@ -78,6 +78,7 @@ export const DiscoverRow = memo(function DiscoverRow({
       onPress={() => onPress(item)}
       onLongPress={onLongPress ? () => onLongPress(item) : undefined}
       accessibilityLabel={`${rank ? `${rank}위 ` : ""}${item.name} ${formatPct(item.changeRate)}`}
+      fixedHeight
     />
   );
 });

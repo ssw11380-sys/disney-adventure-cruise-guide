@@ -141,26 +141,28 @@ export function CandleChart({
           <Pressable
             onPress={() => pickWindow((windowIdx + 1) % WINDOWS[period].length)}
             accessibilityRole="button"
-            accessibilityLabel={`보이는 봉 ${clamped.count}개, 눌러서 바꾸기`}
+            accessibilityLabel={`보이는 봉 ${Math.min(clamped.count, all.length)}개${clamped.offset > 0 ? `, 최신보다 ${clamped.offset}${UNIT[period]} 전` : ""}. 눌러서 바꾸기`}
             style={[chipStyle(true), { borderStyle: "dashed" }]}
           >
+            {/* 실제로 보이는 봉 수 (확대·축소하거나 봉이 적으면 칩 값과 다르다), 과거로 옮겼으면 몇 봉 전인지 */}
             <Text style={chipText(true)}>
-              {WINDOWS[period][windowIdx]}
+              {Math.min(clamped.count, all.length) || WINDOWS[period][windowIdx]}
               {UNIT[period]}
+              {clamped.offset > 0 ? ` · ${clamped.offset}${UNIT[period]} 전` : ""}
             </Text>
             <Ionicons name="swap-horizontal" size={font.tiny} color={t.muted} />
           </Pressable>
           {TOOL_ORDER.slice(3).map((o) => periodChip(o))}
           {compact ? overlayChips : null}
         </ScrollView>
-        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityLabel="과거로" hitSlop={4} style={[styles.icon, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
+        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityLabel="과거로" hitSlop={8} style={[styles.icon, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
           <Ionicons name="chevron-back" size={font.small} color={t.ink} />
         </Pressable>
-        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={4} style={[styles.icon, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
+        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={8} style={[styles.icon, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
           <Ionicons name="chevron-forward" size={font.small} color={t.ink} />
         </Pressable>
         {onFullscreen ? (
-          <Pressable onPress={onFullscreen} accessibilityLabel="차트 크게 보기" hitSlop={4} style={[styles.icon, { borderColor: t.line }]}>
+          <Pressable onPress={onFullscreen} accessibilityLabel="차트 크게 보기" hitSlop={8} style={[styles.icon, { borderColor: t.line }]}>
             <Ionicons name="expand-outline" size={font.small} color={t.ink} />
           </Pressable>
         ) : null}
