@@ -207,3 +207,114 @@ describe("위젯-13: 누르면 잔고 탭", () => {
     expect(holdings.some((n) => (n.props.clickActionData as { uri?: string })?.uri === HOME_URI)).toBe(true);
   });
 });
+
+const { fromPayload, isDelayed, shouldSkipFetch } = await import("@/widgets/payload");
+const { widgetPushDue } = await import("@/widgets/pushPolicy");
+const { BriefingWidget } = await import("@/widgets/widgets");
+
+describe("3-16 위젯 데이터·갱신 주기", () => {
+  const payload = {
+    v: 1 as const,
+    market: { label: "한국 장중", open: true, nextChangeAt: "2026-09-24T06:30:00Z" },
+    stocks: [
+      { c: "005930", n: "삼성전자", qty: 10, avg: 60_000, q: [70_000, 100, 0.14, "KRW", AT_CLOSE, null, 0] as [number, number, number, "KRW", string, null, 0], e: [700_000, 600_000, 698_000, null, null] as [number, number, number, null, null] },
+      { c: "VRT", n: "버티브", qty: 2, avg: 200, q: [250, -1, -0.4, "USD", AT_CLOSE, 1360, 0] as [number, number, number, "USD", string, number, 0], e: [500, 400, 499, 540_000, "exact"] as [number, number, number, number, "exact"] },
+      { c: "999990", n: "관심", qty: null, avg: null, q: [5_000, 0, 0, "KRW", AT_CLOSE, null, 1] as [number, number, number, "KRW", string, null, 1], e: null },
+    ],
+    briefings: [
+      { id: 3, code: "005930", name: "삼성전자", session: "afternoon", date: "2026-09-24", summary: "첫 줄 삼성\n둘째 줄", createdAt: "2026-09-24T16:05:00+09:00" },
+      { id: 2, code: "VRT", name: "버티브", session: "afternoon", date: "2026-09-24", summary: "첫 줄 버티브", createdAt: "2026-09-24T16:04:00+09:00" },
+    ],
+    latestIds: [2, 3],
+  };
+
+  it("짧은 키 응답을 위젯 모양으로: 손익·수익률은 평가금 − 매입금으로 계산 (서버 evaluate 와 같은 식)", () => {
+    const p = fromPayload(payload);
+    const s = p.stocks[0]!;
+    expect(s.quote).toMatchObject({ price: 70_000, change: 100, changeRate: 0.14, currency: "KRW", asOf: AT_CLOSE });
+    expect(s.evaluation).toMatchObject({ marketValue: 700_000, costBasis: 600_000, profit: 100_000, profitRate: 16.67, afterCost: { marketValue: 698_000, profit: 98_000, profitRate: 16.33 } });
+    expect(p.stocks[1]!.evaluation).toMatchObject({ costBasisKrw: 540_000, krwCostSource: "exact" });
+    expect(p.stocks[2]!.quote).toMatchObject({ stale: true });
+    expect(p.briefings.map((b) => b.code)).toEqual(["005930", "VRT"]);
+  });
+
+  it("/api/widget 한 번으로 받고, 같은 내용이면 304 → 저장해 둔 값", async () => {
+    const calls: { url: string; inm: string | null }[] = [];
+    let first = true;
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const h = new Headers(init?.headers);
+      calls.push({ url, inm: h.get("if-none-match") });
+      if (first) {
+        first = false;
+        return new Response(JSON.stringify(payload), { status: 200, headers: { etag: '"abc"' } });
+      }
+      return new Response(null, { status: 304, headers: { etag: '"abc"' } });
+    });
+    const a = await loadWidgetData({ stocks: true, briefings: true });
+    const b = await loadWidgetData({ stocks: true, briefings: true });
+    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget`, `${API}/api/widget`]);
+    expect(calls[1]!.inm).toBe('"abc"');
+    expect(b.stocks.map((s) => s.code)).toEqual(a.stocks.map((s) => s.code));
+    expect(b.market?.label).toBe("한국 장중");
+    expect(b.latestIds).toEqual([2, 3]);
+  });
+
+  it("예전 서버(/api/widget 404)면 예전 두 API 로", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      if (url.endsWith("/api/widget")) return new Response("", { status: 404 });
+      return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
+    });
+    const d = await loadWidgetData({ stocks: true, briefings: true });
+    expect(urls).toEqual([`${API}/api/widget`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
+    expect(d.stocks).toHaveLength(18);
+    expect(d.market).toBeNull();
+  });
+
+  it("장 상태 칩과 '지연': 장중인데 시세가 30분 넘게 지났으면 지연", () => {
+    const p = fromPayload(payload);
+    const later = Date.parse(AT_CLOSE) + 31 * 60_000;
+    const tx = texts(render(<HoldingsWidget stocks={p.stocks} showKrw={false} fetchedAt={later} error={null} now={later} market={p.market} />)).map((t) => t.text);
+    expect(tx).toContain("한국 장중");
+    expect(tx).toContain("지연");
+    const fresh = texts(render(<HoldingsWidget stocks={p.stocks} showKrw={false} fetchedAt={NOW} error={null} now={Date.parse(AT_CLOSE) + 5 * 60_000} market={p.market} />)).map((t) => t.text);
+    expect(fresh).not.toContain("지연");
+    const holiday = texts(render(<AssetWidget stocks={p.stocks} showKrw={false} fetchedAt={later} error={null} now={later} market={{ label: "휴장", open: false, nextChangeAt: null }} />)).map((t) => t.text);
+    expect(holiday).toContain("휴장");
+    expect(holiday.some((t) => t.startsWith("지연"))).toBe(false); // 휴장 중 옛 시세는 지연이 아님
+    expect(isDelayed({ marketOpen: false, asOf: 0, fetchedAt: NOW - 31 * 60_000, error: "HTTP 500", now: NOW })).toBe(true);
+  });
+
+  it("브리핑 위젯: 서버가 고른 순서(보유 비중)대로 최대 3종목, 고지 한 줄은 항상", () => {
+    const p = fromPayload(payload);
+    const tx = texts(render(<BriefingWidget briefings={p.briefings} fetchedAt={NOW} error={null} now={NOW} market={p.market} />)).map((t) => t.text);
+    expect(tx.filter((t) => t.includes(" · 09/24") || t.includes(" · 9/24") || / · \d\d\/\d\d/.test(t))).toHaveLength(2);
+    expect(tx).toContain("첫 줄 삼성");
+    expect(tx).toContain("첫 줄 버티브");
+    expect(tx).toContain("참고 정보이며 투자 권유가 아닙니다");
+    const empty = texts(render(<BriefingWidget briefings={[]} fetchedAt={NOW} error={null} now={NOW} />)).map((t) => t.text);
+    expect(empty).toContain("참고 정보이며 투자 권유가 아닙니다");
+  });
+
+  it("백그라운드: 두 시장이 닫혀 있으면 2시간에 한 번만 서버에 (다음 개장·브리핑 시간에는 바로)", () => {
+    const closed = { label: "휴장", open: false, nextChangeAt: "2026-09-28T23:00:00Z" };
+    const t = Date.parse("2026-09-26T13:00:00+09:00"); // 토요일 낮
+    expect(shouldSkipFetch({ at: t - 30 * 60_000, market: closed }, t)).toBe(true);
+    expect(shouldSkipFetch({ at: t - 2 * 3_600_000, market: closed }, t)).toBe(false);
+    expect(shouldSkipFetch({ at: t - 10 * 60_000, market: { ...closed, open: true } }, t)).toBe(false);
+    expect(shouldSkipFetch({ at: t - 10 * 60_000, market: { ...closed, nextChangeAt: "2026-09-26T03:55:00Z" } }, t)).toBe(false); // 개장 시각 지남
+    const briefingTime = Date.parse("2026-09-24T16:10:00+09:00");
+    expect(shouldSkipFetch({ at: briefingTime - 10 * 60_000, market: closed }, briefingTime)).toBe(false);
+    expect(shouldSkipFetch(null, t)).toBe(false);
+  });
+
+  it("앱 → 위젯: 시세만 바뀌면 1분에 한 번, 원화 표시를 바꾸거나 앱을 떠나면 바로", () => {
+    const base = { now: NOW, dataAt: NOW - 1000, lastAt: NOW - 10_000, lastKey: "false|true|장 마감", key: "false|true|장 마감" };
+    expect(widgetPushDue(base)).toBe(false);
+    expect(widgetPushDue({ ...base, key: "true|true|장 마감" })).toBe(true);
+    expect(widgetPushDue({ ...base, leaving: true })).toBe(true);
+    expect(widgetPushDue({ ...base, lastAt: NOW - 61_000 })).toBe(true);
+    expect(widgetPushDue({ ...base, key: "true|true|장 마감", dataAt: NOW - 60_000 })).toBe(false); // 기기에 저장해 둔 옛 값으로는 덮지 않음
+  });
+});

@@ -1,8 +1,9 @@
 import React from "react";
 import { Platform } from "react-native";
-import type { RegisteredWithQuote } from "@/api/types";
+import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { withLastGood } from "./data";
-import { WIDGET_NAMES, AssetWidget, HoldingsWidget } from "./widgets";
+import type { WidgetMarket } from "./payload";
+import { WIDGET_NAMES, AssetWidget, BriefingWidget, HoldingsWidget } from "./widgets";
 
 /**
  * 앱이 이미 받아 둔 데이터로 홈 화면 위젯을 즉시 갱신한다 (서버 재호출 없음).
@@ -13,12 +14,18 @@ export async function refreshWidgets({
   showKrw,
   afterCost,
   filled: given,
+  market,
+  briefings,
 }: {
   stocks: RegisteredWithQuote[];
   showKrw: boolean;
   afterCost: boolean;
   /** 이미 마지막 값으로 채운 데이터(백그라운드 작업)면 채운 종목 코드. 없으면 여기서 채운다 */
   filled?: string[];
+  /** 장 상태 칩 */
+  market?: WidgetMarket | null;
+  /** 주면 브리핑 위젯도 다시 그린다 (백그라운드 작업) */
+  briefings?: LatestBriefing[];
 }): Promise<void> {
   if (Platform.OS !== "android") return;
   try {
@@ -28,12 +35,18 @@ export async function refreshWidgets({
     const { stocks, filled } = given ? { stocks: raw, filled: given } : await withLastGood(raw, fetchedAt);
     await requestWidgetUpdate({
       widgetName: WIDGET_NAMES.holdings,
-      renderWidget: (info) => <HoldingsWidget stocks={stocks} showKrw={showKrw} afterCost={afterCost} fetchedAt={fetchedAt} error={null} filled={filled} height={info.height} now={fetchedAt} />,
+      renderWidget: (info) => <HoldingsWidget stocks={stocks} showKrw={showKrw} afterCost={afterCost} fetchedAt={fetchedAt} error={null} filled={filled} height={info.height} now={fetchedAt} market={market} />,
     });
     await requestWidgetUpdate({
       widgetName: WIDGET_NAMES.asset,
-      renderWidget: () => <AssetWidget stocks={stocks} showKrw={showKrw} afterCost={afterCost} fetchedAt={fetchedAt} error={null} filled={filled} now={fetchedAt} />,
+      renderWidget: () => <AssetWidget stocks={stocks} showKrw={showKrw} afterCost={afterCost} fetchedAt={fetchedAt} error={null} filled={filled} now={fetchedAt} market={market} />,
     });
+    if (briefings) {
+      await requestWidgetUpdate({
+        widgetName: WIDGET_NAMES.briefing,
+        renderWidget: () => <BriefingWidget briefings={briefings} fetchedAt={fetchedAt} error={null} now={fetchedAt} market={market} />,
+      });
+    }
   } catch {
     /* 위젯 모듈이 없는 빌드(개발 클라이언트 등)에서는 무시 */
   }

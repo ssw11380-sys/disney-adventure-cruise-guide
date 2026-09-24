@@ -31,10 +31,10 @@ export function render(name: string, data: Awaited<ReturnType<typeof loadWidgetD
   const now = Date.now();
   switch (name) {
     case WIDGET_NAMES.briefing:
-      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={now} />;
+      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={now} market={data.market} />;
     case WIDGET_NAMES.asset:
-      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={now} />;
+      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={now} market={data.market} />;
     default:
-      return <HoldingsWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} height={height} now={now} />;
+      return <HoldingsWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} height={height} now={now} market={data.market} />;
   }
 }

@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
+import { Alert, AppState, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
@@ -15,6 +15,7 @@ import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { changeColor, font, space, useTheme } from "@/theme";
+import { widgetPushDue } from "@/widgets/pushPolicy";
 import { refreshWidgets } from "@/widgets/refresh";
 
 /** 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표 */
@@ -70,15 +71,29 @@ export default function StocksScreen() {
     ];
   }, [data, sort, afterCost, showKrw]);
 
-  // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (1분에 한 번).
-  // 기기에 저장해 둔 옛 잔고(켜자마자 보이는 값)로는 위젯을 덮지 않는다 — 방금 받은 값(30초 이내)만
-  const lastWidgetPush = useRef(0);
+  // 홈 화면 데이터가 새로 오면 홈 화면 위젯도 같이 갱신 (규칙은 widgets/pushPolicy: 시세만 바뀌면 1분에 한 번,
+  // 표시 설정·장 상태가 바뀌거나 앱을 떠날 때는 바로). 기기에 저장해 둔 옛 잔고로는 덮지 않는다
+  const lastWidgetPush = useRef({ at: 0, key: "" });
   const dataAt = stocks.dataUpdatedAt;
+  const market = useMemo(() => (live.loaded ? { label: live.label, open: live.open, nextChangeAt: null } : null), [live.loaded, live.label, live.open]);
+  const pushKey = `${showKrw}|${afterCost}|${market?.label ?? ""}`;
+  // 앱을 떠날 때 쓸 최신 값 (렌더 중에는 ref 를 건드리지 않고 effect 에서 갱신)
+  const pushWidgets = useRef<(leaving: boolean) => void>(() => undefined);
   useEffect(() => {
-    if (!data || Date.now() - dataAt > 30_000 || Date.now() - lastWidgetPush.current < 60_000) return;
-    lastWidgetPush.current = Date.now();
-    void refreshWidgets({ stocks: data, showKrw, afterCost });
-  }, [data, dataAt, showKrw, afterCost]);
+    pushWidgets.current = (leaving: boolean) => {
+      const now = Date.now();
+      if (!data || !widgetPushDue({ now, dataAt, lastAt: lastWidgetPush.current.at, lastKey: lastWidgetPush.current.key, key: pushKey, leaving })) return;
+      lastWidgetPush.current = { at: now, key: pushKey };
+      void refreshWidgets({ stocks: data, showKrw, afterCost, market });
+    };
+    pushWidgets.current(false);
+  }, [data, dataAt, pushKey, showKrw, afterCost, market]);
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "background") pushWidgets.current(true);
+    });
+    return () => sub.remove();
+  }, []);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
     // 토스 연동 종목은 삭제하면 동기화에서도 빠진다는 것을 먼저 알린다 (수정 화면과 같은 문구)

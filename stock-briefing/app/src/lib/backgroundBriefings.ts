@@ -5,7 +5,8 @@ import * as TaskManager from "expo-task-manager";
 import { Platform } from "react-native";
 import type { LatestBriefing } from "@/api/types";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
-import { loadWidgetData } from "@/widgets/data";
+import { loadLatestBriefings, loadWidgetData, readCachedPayload } from "@/widgets/data";
+import { shouldSkipFetch } from "@/widgets/payload";
 import { refreshWidgets } from "@/widgets/refresh";
 
 /**
@@ -17,6 +18,9 @@ import { refreshWidgets } from "@/widgets/refresh";
 export const BRIEFING_TASK = "check-new-briefings";
 const SEEN_KEY = "briefings.notified"; // JSON: number[] (알림 보낸 브리핑 id, 최근 200개)
 export const LOCAL_MODE_KEY = "push.localMode"; // "1" 이면 백그라운드 확인 방식으로 알림
+/** 백그라운드 갱신 최소 간격(분). Android 가 허용하는 가장 짧은 값 */
+export const BG_INTERVAL_MIN = 15;
+const INTERVAL_KEY = "bg.intervalMin";
 
 async function seenIds(): Promise<Set<number>> {
   try {
@@ -33,6 +37,12 @@ async function saveSeen(ids: Set<number>): Promise<void> {
   } catch {
     /* ignore */
   }
+}
+
+/** 아직 알리지 않은 브리핑 id 가 있는지 (처음 실행이면 true → 현재 상태를 기억하게) */
+export async function hasUnseen(ids: number[]): Promise<boolean> {
+  const seen = await seenIds();
+  return seen.size === 0 || ids.some((id) => !seen.has(id));
 }
 
 /** 새 브리핑을 찾아 로컬 알림. 처음 실행(기록 없음)에는 알리지 않고 현재 상태만 기억한다 */
@@ -66,11 +76,18 @@ export async function notifyNewBriefings(latest: LatestBriefing[], opts: { first
 /** 태스크 본체. 앱 진입점(index.js)에서 defineTask 로 전역 등록해야 한다 */
 export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskResult> {
   try {
+    // 두 시장이 모두 닫혀 있으면 2시간에 한 번만 서버에 묻는다 (휴장 중 위젯 트래픽을 줄이려고, 3-16)
+    const cached = await readCachedPayload();
+    if (shouldSkipFetch(cached ? { at: cached.at, market: cached.body.market } : null, Date.now())) return BackgroundTask.BackgroundTaskResult.Success;
     const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
     const data = await loadWidgetData({ stocks: true, briefings: true });
     if (data.error) return BackgroundTask.BackgroundTaskResult.Failed;
-    if (local) await notifyNewBriefings(data.briefings);
-    await refreshWidgets({ stocks: data.stocks, showKrw: data.showKrw, afterCost: data.afterCost, filled: data.filled });
+    if (local) {
+      // 새 서버는 최신 브리핑 id 만 준다 → 아직 알리지 않은 id 가 있을 때만 전체 목록을 받아 알린다 (예전 서버는 briefings 가 전체 목록)
+      if (!data.latestIds) await notifyNewBriefings(data.briefings);
+      else if (await hasUnseen(data.latestIds)) await notifyNewBriefings(await loadLatestBriefings());
+    }
+    await refreshWidgets({ stocks: data.stocks, showKrw: data.showKrw, afterCost: data.afterCost, filled: data.filled, market: data.market, briefings: data.briefings });
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {
     return BackgroundTask.BackgroundTaskResult.Failed;
@@ -90,7 +107,8 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
   const s = await BackgroundTask.getStatusAsync();
   if (s === BackgroundTask.BackgroundTaskStatus.Restricted) throw new Error("이 기기에서는 백그라운드 작업이 제한되어 있습니다. 배터리 최적화에서 이 앱을 제외해 주세요.");
   await AsyncStorage.setItem(LOCAL_MODE_KEY, "1");
-  await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: 15 });
+  await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: BG_INTERVAL_MIN });
+  await AsyncStorage.setItem(INTERVAL_KEY, String(BG_INTERVAL_MIN)).catch(() => undefined);
   // 현재 브리핑 목록을 "이미 본 것"으로 기록해 켜자마자 옛 브리핑이 쏟아지지 않게 한다
   const data = await loadWidgetData({ stocks: false, briefings: true });
   if (!data.error) await notifyNewBriefings(data.briefings, { first: true });
@@ -115,7 +133,14 @@ export async function ensureBackgroundTaskRegistered(): Promise<void> {
     if (Platform.OS !== "android") return;
     const s = await BackgroundTask.getStatusAsync();
     if (s !== BackgroundTask.BackgroundTaskStatus.Available) return;
-    if (!(await TaskManager.isTaskRegisteredAsync(BRIEFING_TASK))) await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: 30 });
+    // 15분 간격 (예전 빌드는 30분으로 등록했으므로 한 번 다시 등록한다). 휴장 중에는 태스크가 스스로 2시간에 한 번만 서버에 묻는다
+    const registered = await TaskManager.isTaskRegisteredAsync(BRIEFING_TASK);
+    const interval = await AsyncStorage.getItem(INTERVAL_KEY).catch(() => null);
+    if (registered && interval !== String(BG_INTERVAL_MIN)) await BackgroundTask.unregisterTaskAsync(BRIEFING_TASK);
+    if (!registered || interval !== String(BG_INTERVAL_MIN)) {
+      await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: BG_INTERVAL_MIN });
+      await AsyncStorage.setItem(INTERVAL_KEY, String(BG_INTERVAL_MIN)).catch(() => undefined);
+    }
   } catch {
     /* Expo Go 등 미지원 환경 */
   }
