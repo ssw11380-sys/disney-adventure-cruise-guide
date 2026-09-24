@@ -4,9 +4,10 @@ import { StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
+import { axisWidth, labelSide, readoutBasis, textWidth } from "@/lib/chartBasis";
 import { formatPct, formatPrice, formatVolume } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
-import { font, space, useTheme } from "@/theme";
+import { changeColor, font, space, useTheme } from "@/theme";
 
 /**
  * 직접 그리는 캔들 차트 (react-native-svg + gesture-handler).
@@ -42,6 +43,8 @@ export interface PriceChartProps {
   avgPrice?: number | null;
   currentPrice?: number | null;
   prevClose?: number | null;
+  /** 전일 종가(prevClose)가 기준인 거래일 (YYYY-MM-DD). 마지막 봉 날짜와 다르면 읽기 줄은 직전 봉 종가를 쓴다 */
+  latestDate?: string | null;
   high52w?: number | null;
   low52w?: number | null;
   /** 십자선이 잡은 봉 (부모가 헤더에 쓰고 싶을 때) */
@@ -50,7 +53,6 @@ export interface PriceChartProps {
   maxCount?: number;
 }
 
-const AXIS_W = 56;
 const X_AXIS_H = 18;
 const PANE_GAP = 6;
 
@@ -96,15 +98,11 @@ export function PriceChart(p: PriceChartProps) {
   const visible = useMemo(() => candles.slice(start, end), [candles, start, end]);
   const n = visible.length;
 
-  const plotW = Math.max(width - AXIS_W, 10);
   const volH = p.showVolume ? Math.round(height * 0.16) : 0;
   const indH = p.indicator === "none" ? 0 : Math.round(height * 0.2);
   const priceH = height - X_AXIS_H - volH - indH - (volH ? PANE_GAP : 0) - (indH ? PANE_GAP : 0);
   const volTop = priceH + PANE_GAP;
   const indTop = volTop + volH + (volH ? PANE_GAP : 0);
-  const step = n ? plotW / n : plotW;
-  const bodyW = Math.max(1, Math.min(step * 0.7, 14));
-
   // ── 지표 (전체 시계열로 계산해 구간 첫 봉부터 선이 보이게) ──
   const closes = useMemo(() => candles.map((c) => c.close), [candles]);
   const mas = useMemo(() => p.maPeriods.map((per) => ({ period: per, values: sma(closes, per) })), [closes, p.maPeriods]);
@@ -148,6 +146,23 @@ export function PriceChart(p: PriceChartProps) {
     const pad = (hi - lo) * 0.06 || Math.abs(hi) * 0.01 || 1;
     return [lo - pad, hi + pad];
   }, [visible, n, mas, bb, start, end, p.currentPrice, p.avgPrice, view.offset]);
+
+  const priceTicks = useMemo(() => niceTicks(domain[0], domain[1], 5).filter((v) => v > domain[0] && v < domain[1]), [domain]);
+  // 지수·환율 축 눈금: 간격이 1 미만이면 소수 자리를 늘린다 (원/위안 201.5, 201.6 …)
+  const tickStep = priceTicks.length > 1 ? priceTicks[1]! - priceTicks[0]! : 1;
+  const tickDigits = tickStep >= 1 ? 0 : tickStep >= 0.1 ? 1 : 2;
+  const maxVol = useMemo(() => (p.showVolume ? Math.max(1, ...visible.map((c) => c.volume)) : 1), [visible, p.showVolume]);
+  // 오른쪽 가격 축 폭은 눈금·현재가·십자선 값·거래량 최대값 중 가장 긴 글자에 맞춘다 (고정 폭이면 짧은 값에서 빈칸, 긴 값은 잘림)
+  const axisW = axisWidth([
+    ...priceTicks.map((v) => axisPrice(v, currency, tickDigits)),
+    axisPrice(domain[1], currency),
+    axisPrice(domain[0], currency),
+    p.currentPrice ? axisPrice(p.currentPrice, currency) : "",
+    p.showVolume ? [formatVolume(maxVol), 0.9] : "",
+  ]);
+  const plotW = Math.max(width - axisW, 10);
+  const step = n ? plotW / n : plotW;
+  const bodyW = Math.max(1, Math.min(step * 0.7, 14));
 
   const yOf = useCallback((v: number) => priceH - ((v - domain[0]) / (domain[1] - domain[0])) * priceH, [domain, priceH]);
   const xOf = useCallback((i: number) => i * step + step / 2, [step]);
@@ -193,10 +208,6 @@ export function PriceChart(p: PriceChartProps) {
     [start, end, xOf],
   );
 
-  const priceTicks = useMemo(() => niceTicks(domain[0], domain[1], 5).filter((v) => v > domain[0] && v < domain[1]), [domain]);
-  // 지수·환율 축 눈금: 간격이 1 미만이면 소수 자리를 늘린다 (원/위안 201.5, 201.6 …)
-  const tickStep = priceTicks.length > 1 ? priceTicks[1]! - priceTicks[0]! : 1;
-  const tickDigits = tickStep >= 1 ? 0 : tickStep >= 0.1 ? 1 : 2;
   const xTicks = useMemo(() => {
     if (n === 0) return [] as { i: number; label: string }[];
     const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 64))));
@@ -205,7 +216,6 @@ export function PriceChart(p: PriceChartProps) {
     return out.reverse();
   }, [visible, n, plotW, p.period]);
 
-  const maxVol = useMemo(() => (p.showVolume ? Math.max(1, ...visible.map((c) => c.volume)) : 1), [visible, p.showVolume]);
   const volPaths = useMemo(() => {
     if (!p.showVolume) return null;
     let up = "", down = "";
@@ -319,14 +329,22 @@ export function PriceChart(p: PriceChartProps) {
   const showCurrent = p.currentPrice !== null && p.currentPrice !== undefined && view.offset === 0 && p.currentPrice > domain[0] && p.currentPrice < domain[1];
   const avgIn = p.avgPrice !== null && p.avgPrice !== undefined && p.avgPrice > domain[0] && p.avgPrice < domain[1];
   const avgOut = p.avgPrice !== null && p.avgPrice !== undefined && !avgIn ? (p.avgPrice >= domain[1] ? "above" : "below") : null;
-  const curColor = p.prevClose && p.currentPrice ? (p.currentPrice >= p.prevClose ? upColor : downColor) : t.accent;
+  // 보합(0)은 앱 전체와 같은 기본 글자색 (예전에는 현재가 태그만 빨강)
+  const curColor = p.prevClose && p.currentPrice ? changeColor(t, p.currentPrice - p.prevClose) : t.accent;
+  const isLatest = cross ? start + cross.i === total - 1 : view.offset === 0;
+  // 52주 글자 상자는 오른쪽 끝, 최신 봉을 가리면 왼쪽 끝으로 (lib/chartBasis)
+  const avgY = avgIn ? yOf(p.avgPrice!) : avgOut === "above" ? 8 : avgOut ? priceH - 8 : null;
+  const side52 = (v: number) =>
+    labelSide({ y: yOf(v), plotW, avoidY: avgY, bars: visible.map((c, i) => ({ left: xOf(i) - bodyW / 2, right: xOf(i) + bodyW / 2, top: yOf(c.high), bottom: yOf(c.low) })) });
 
   return (
     <View style={{ width, gap: space.xs }}>
       <Readout
         candle={crossCandle}
         prev={cross ? visible[cross.i - 1] ?? candles[start + cross.i - 1] : visible[n - 2] ?? candles[end - 2]}
-        latestBase={!cross && view.offset === 0 && p.period === "D" ? p.prevClose : null}
+        latestBase={p.period === "D" ? p.prevClose : null}
+        latestDate={p.latestDate}
+        isLatest={isLatest}
         last={last}
         currency={currency}
         mas={mas}
@@ -341,9 +359,12 @@ export function PriceChart(p: PriceChartProps) {
             {priceTicks.map((v) => (
               <React.Fragment key={v}>
                 <Line x1={0} x2={plotW} y1={yOf(v)} y2={yOf(v)} stroke={t.line} strokeWidth={StyleSheet.hairlineWidth} />
-                <SvgText x={plotW + 4} y={yOf(v) + 3.5} fill={t.muted} fontSize={10}>
-                  {axisPrice(v, currency, tickDigits)}
-                </SvgText>
+                {/* 현재가 태그에 가려지거나 맨 위에 붙어 잘리는 눈금 숫자는 그리지 않는다 */}
+                {(showCurrent && Math.abs(yOf(v) - yOf(p.currentPrice!)) < 13) || yOf(v) < 5 ? null : (
+                  <SvgText x={plotW + 4} y={yOf(v) + 3.5} fill={t.muted} fontSize={10}>
+                    {axisPrice(v, currency, tickDigits)}
+                  </SvgText>
+                )}
               </React.Fragment>
             ))}
             {/* 볼린저 */}
@@ -364,28 +385,22 @@ export function PriceChart(p: PriceChartProps) {
               <Path key={m.period} d={linePath(m.values, yOf)} stroke={MA_COLORS[m.period] ?? t.muted} strokeWidth={1.2} fill="none" />
             ))}
             {/* 52주 고/저 */}
-            {p.high52w && p.high52w > domain[0] && p.high52w < domain[1] ? <Tag y={yOf(p.high52w)} plotW={plotW} label="52주고" color={t.muted} dotted /> : null}
-            {p.low52w && p.low52w > domain[0] && p.low52w < domain[1] ? <Tag y={yOf(p.low52w)} plotW={plotW} label="52주저" color={t.muted} dotted /> : null}
+            {p.high52w && p.high52w > domain[0] && p.high52w < domain[1] ? <Tag y={yOf(p.high52w)} plotW={plotW} axisW={axisW} label="52주 최고" color={t.muted} dotted inside={side52(p.high52w)} /> : null}
+            {p.low52w && p.low52w > domain[0] && p.low52w < domain[1] ? <Tag y={yOf(p.low52w)} plotW={plotW} axisW={axisW} label="52주 최저" color={t.muted} dotted inside={side52(p.low52w)} /> : null}
             {/* 평단선 */}
             {avgIn ? (
-              <Tag
-                y={yOf(p.avgPrice!)}
-                // 현재가 태그와 겹치면 평단 글자만 위/아래로 비켜 적는다 (선 위치는 그대로)
-                labelDy={showCurrent && Math.abs(yOf(p.avgPrice!) - yOf(p.currentPrice!)) < 16 ? (yOf(p.avgPrice!) >= yOf(p.currentPrice!) ? 14 : -14) : 0}
-                plotW={plotW}
-                label={`평단 ${axisPrice(p.avgPrice!, currency)}`}
-                color={t.gold}
-                dashed
-              />
+              // 평단 글자는 오른쪽 축이 아니라 선 위 왼쪽에 적는다 → 축 폭에 잘리거나 현재가 태그와 겹치지 않는다
+              <Tag y={yOf(p.avgPrice!)} plotW={plotW} axisW={axisW} label={`평단 ${axisPrice(p.avgPrice!, currency)}`} color={t.gold} dashed inside="left" topLimit={12} />
             ) : null}
             {avgOut ? (
-              <SvgText x={plotW - 4} y={avgOut === "above" ? 12 : priceH - 4} fill={t.gold} fontSize={10} textAnchor="end">
+              // 범위 밖 평단은 왼쪽 끝에 (오른쪽 끝의 52주 글자·최신 봉과 겹치지 않게)
+              <SvgText x={5} y={avgOut === "above" ? 12 : priceH - 4} fill={t.gold} fontSize={10}>
                 {avgOut === "above" ? "▲ 평단 " : "▼ 평단 "}
                 {axisPrice(p.avgPrice!, currency)}
               </SvgText>
             ) : null}
             {/* 현재가선 */}
-            {showCurrent ? <Tag y={yOf(p.currentPrice!)} plotW={plotW} label={axisPrice(p.currentPrice!, currency)} color={curColor} dashed filled /> : null}
+            {showCurrent ? <Tag y={yOf(p.currentPrice!)} plotW={plotW} axisW={axisW} label={axisPrice(p.currentPrice!, currency)} color={curColor} dashed filled /> : null}
             {/* 거래량 */}
             {volPaths ? (
               <>
@@ -455,7 +470,7 @@ export function PriceChart(p: PriceChartProps) {
               <>
                 <Line x1={xOf(cross.i)} x2={xOf(cross.i)} y1={0} y2={height - X_AXIS_H} stroke={t.ink} strokeOpacity={0.5} strokeDasharray="3 3" />
                 <Line x1={0} x2={plotW} y1={cross.y} y2={cross.y} stroke={t.ink} strokeOpacity={0.5} strokeDasharray="3 3" />
-                <Rect x={plotW} y={cross.y - 8} width={AXIS_W} height={16} fill={t.ink} rx={3} />
+                <Rect x={plotW} y={cross.y - 8} width={axisW} height={16} fill={t.ink} rx={3} />
                 <SvgText x={plotW + 4} y={cross.y + 3.5} fill={t.bg} fontSize={10} fontWeight="700">
                   {axisPrice(domain[0] + (1 - cross.y / priceH) * (domain[1] - domain[0]), currency)}
                 </SvgText>
@@ -486,14 +501,40 @@ function fmtNum(v: number | null | undefined, digits: number): string {
 }
 
 /** 가로 기준선 + 오른쪽 축 태그 */
-function Tag({ y, plotW, label, color, dashed, dotted, filled, labelDy = 0 }: { y: number; plotW: number; label: string; color: string; dashed?: boolean; dotted?: boolean; filled?: boolean; labelDy?: number }) {
+function Tag({
+  y,
+  plotW,
+  axisW,
+  label,
+  color,
+  dashed,
+  dotted,
+  filled,
+  inside,
+  topLimit = 12,
+}: {
+  y: number;
+  plotW: number;
+  axisW: number;
+  label: string;
+  color: string;
+  dashed?: boolean;
+  dotted?: boolean;
+  filled?: boolean;
+  /** 글자를 축이 아니라 그림 안 선 위에 적는다 (왼쪽 끝 또는 오른쪽 끝) */
+  inside?: "left" | "right";
+  topLimit?: number;
+}) {
   const t = useTheme();
-  const w = Math.max(AXIS_W, label.length * 6 + 8);
+  const textW = textWidth(label) + 6;
+  // 그림 맨 위 가까이면 선 아래에 적는다
+  const ty = inside ? (y - 4 < topLimit ? y + 12 : y - 4) : y + 3.5;
   return (
     <>
       <Line x1={0} x2={plotW} y1={y} y2={y} stroke={color} strokeWidth={dotted ? 0.8 : 1} strokeDasharray={dashed ? "5 3" : dotted ? "1.5 3" : undefined} strokeOpacity={dotted ? 0.7 : 0.9} />
-      {filled ? <Rect x={plotW} y={y - 8} width={w} height={16} fill={color} rx={3} /> : null}
-      <SvgText x={plotW + 4} y={y + 3.5 + labelDy} fill={filled ? t.bg : color} fontSize={10} fontWeight="700">
+      {filled ? <Rect x={plotW} y={y - 8} width={axisW} height={16} fill={color} rx={3} /> : null}
+      {inside ? <Rect x={inside === "left" ? 2 : plotW - textW - 2} y={ty - 10} width={textW} height={13} fill={t.bg} fillOpacity={0.75} rx={2} /> : null}
+      <SvgText x={inside === "left" ? 5 : inside === "right" ? plotW - 5 : plotW + 4} y={ty} textAnchor={inside === "right" ? "end" : "start"} fill={filled ? t.bg : color} fontSize={10} fontWeight={dotted ? "400" : "700"}>
         {label}
       </SvgText>
     </>
@@ -505,6 +546,8 @@ function Readout({
   candle,
   prev,
   latestBase,
+  latestDate,
+  isLatest,
   last,
   currency,
   mas,
@@ -516,6 +559,9 @@ function Readout({
   prev: Candle | undefined;
   /** 최신 일봉을 볼 때의 전일 종가(현재가 헤더와 같은 기준) */
   latestBase?: number | null;
+  latestDate?: string | null;
+  /** 보고 있는 봉이 전체 시계열의 최신 봉인지 */
+  isLatest: boolean;
   last: Candle | undefined;
   currency: ChartUnit;
   mas: { period: number; values: Series }[];
@@ -526,11 +572,10 @@ function Readout({
   const t = useTheme();
   const c = candle ?? last;
   if (!c) return <Text style={{ color: t.muted, fontSize: font.tiny }}>차트 데이터가 없습니다</Text>;
-  // 등락 기준: 십자선 봉은 직전 봉 종가, 최신 일봉은 헤더와 같은 전일 종가, 주·월봉은 직전 봉 종가, 분봉은 그 봉의 시가
-  const intraday = period !== "D" && period !== "W" && period !== "M";
-  const base = candle ? (prev?.close ?? c.open) : (latestBase ?? (intraday ? null : prev?.close) ?? c.open);
-  const chg = base ? ((c.close - base) / base) * 100 : null;
-  const color = chg === null ? t.muted : chg > 0 ? t.up : chg < 0 ? t.down : t.muted;
+  // 등락 기준(lib/chartBasis): 최신 일봉은 십자선이어도 헤더와 같은 전일 종가, 지난 봉은 직전 봉 종가, 분봉은 봉 시가
+  const basis = readoutBasis({ period, isLatest, latestBase, latestDate, candleDate: c.date, prevClose: prev?.close, open: c.open });
+  const chg = basis.base ? ((c.close - basis.base) / basis.base) * 100 : null;
+  const color = chg === null ? t.muted : changeColor(t, chg);
   const when = c.time ? `${c.date} ${c.time.slice(11, 16)}` : c.date;
   const unit = period === "W" ? "주" : period === "M" ? "월" : period === "D" ? "일" : "봉";
   return (
@@ -538,6 +583,7 @@ function Readout({
       <Text style={[styles.readoutText, { color: t.muted }]}>
         {when}
         {candle ? " · 십자선" : ""}
+        {chg !== null ? ` · ${basis.label}` : ""}
       </Text>
       <Text style={[styles.readoutText, { color: t.ink }]}>
         시 {formatChartValue(c.open, currency)} 고 {formatChartValue(c.high, currency)} 저 {formatChartValue(c.low, currency)} 종{" "}

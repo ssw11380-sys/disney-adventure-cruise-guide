@@ -129,7 +129,8 @@ export function Badge({ children, tone = "neutral" }: { children: React.ReactNod
 /** 등락 색: 한국 관례 (상승 빨강, 하락 파랑) */
 export function ChangeText({ value, text, style }: { value: number | null | undefined; text: string; style?: StyleProp<TextStyle> }) {
   const t = useTheme();
-  const color = value === null || value === undefined || value === 0 ? t.muted : value > 0 ? t.up : t.down;
+  // 보합(0)은 앱 전체 공통 규칙(changeColor)대로 기본 글자색, 값 없음("-")은 회색
+  const color = value === null || value === undefined ? t.muted : changeColor(t, value);
   return <Text style={[{ color }, NUM, style]}>{text}</Text>;
 }
 

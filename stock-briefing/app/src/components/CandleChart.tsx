@@ -15,6 +15,12 @@ import { clampView, MA_COLORS, PriceChart, type ChartView, type IndicatorKind } 
 
 const MA_CHOICES = [5, 10, 20, 60, 120, 200];
 
+/** 국내 종목 시세 시각의 한국 날짜 (일봉 날짜와 비교). 해외는 거래소 날짜가 달라 쓰지 않는다 */
+function kstDate(asOf: string | null | undefined): string | null {
+  const ms = asOf ? Date.parse(asOf) : NaN;
+  return Number.isFinite(ms) ? new Date(ms + 9 * 3_600_000).toISOString().slice(0, 10) : null;
+}
+
 export function CandleChart({
   candles,
   period,
@@ -36,7 +42,7 @@ export function CandleChart({
   /** 값 단위: KRW·USD 통화, PT = 지수·환율 */
   currency?: ChartUnit;
   avgPrice?: number | null;
-  quote?: Pick<Quote, "price" | "prevClose" | "high52w" | "low52w" | "live" | "fxRate" | "priceKrw"> | null;
+  quote?: Pick<Quote, "price" | "prevClose" | "high52w" | "low52w" | "live" | "fxRate" | "priceKrw"> & { asOf?: string | null } | null;
   height?: number;
   width?: number;
   onFullscreen?: () => void;
@@ -159,6 +165,7 @@ export function CandleChart({
           avgPrice={conv(avgPrice)}
           currentPrice={conv(quote?.price)}
           prevClose={conv(quote?.prevClose)}
+          latestDate={currency === "KRW" ? kstDate(quote?.asOf) : null}
           high52w={conv(quote?.high52w)}
           low52w={conv(quote?.low52w)}
         />

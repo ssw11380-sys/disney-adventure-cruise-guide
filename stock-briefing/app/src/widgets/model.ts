@@ -16,7 +16,8 @@ export const WIDGET_COLORS = {
 } as const;
 
 export function tone(n: number): string {
-  return n > 0 ? WIDGET_COLORS.up : n < 0 ? WIDGET_COLORS.down : WIDGET_COLORS.muted;
+  // 보합(0)은 앱과 같은 기본 글자색
+  return n > 0 ? WIDGET_COLORS.up : n < 0 ? WIDGET_COLORS.down : WIDGET_COLORS.ink;
 }
 
 /** 보유 종목: 수량이 있고 평단이 있는 종목 (시세 유무와 무관) */
