@@ -69,8 +69,11 @@ describe("PriceStream", () => {
     expect(a.messages("snapshot")[0]?.["ticks"]).toEqual([]);
 
     live.push("005930", 71000);
+    stream.flush();
     live.push("005930", 71000, "2026-09-23T10:00:01+09:00"); // 같은 가격 → 생략
+    stream.flush();
     live.push("005930", 71100, "2026-09-23T10:00:02+09:00");
+    stream.flush();
     expect(a.messages("tick").map((m) => m["price"])).toEqual([71000, 71100]);
     expect(b.messages("tick").map((m) => m["price"])).toEqual([71000, 71100]);
     expect(a.messages("tick")[0]?.["source"]).toBe("toss-openapi");
@@ -83,6 +86,7 @@ describe("PriceStream", () => {
 
     a.close();
     live.push("005930", 71200, "2026-09-23T10:00:03+09:00");
+    stream.flush();
     expect(a.messages("tick")).toHaveLength(2); // 닫힌 소켓엔 안 보냄
     expect(c.messages("tick")).toHaveLength(1);
     expect(stream.status().clients).toBe(2);
@@ -92,7 +96,7 @@ describe("PriceStream", () => {
   it("웹소켓이 없으면 앱이 붙어 있는 동안만 quickPrices 를 폴링해 바뀐 가격만 보낸다", async () => {
     const quick = new FakeQuick();
     quick.prices.set("005930", 70000);
-    const stream = new PriceStream({ quickPrices: quick, codes: async () => ["005930", "AAPL"], pollMs: 10 });
+    const stream = new PriceStream({ quickPrices: quick, codes: async () => ["005930", "AAPL"], pollMs: 10, batchMs: 1 });
     expect(stream.status().polling).toBe(false);
     const s = new FakeSocket();
     stream.attach(s);
@@ -121,6 +125,77 @@ describe("PriceStream", () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(s.messages("tick")).toHaveLength(0);
     expect(s.messages("snapshot")[0]?.["ticks"]).toEqual([expect.objectContaining({ price: 71000 })]);
+    stream.stop();
+  });
+});
+
+describe("체결 묶어 보내기 (3-17)", () => {
+  it("장중 체결이 초당 20건 몰려도 앱에는 초당 4통 이하, 새 앱은 한 통에 여러 종목, 종목마다 마지막 값", async () => {
+    const live = new FakeLive();
+    const stream = new PriceStream({ live, codes: async () => ["005930", "000660", "AAPL"], batchMs: 250 });
+    const modern = new FakeSocket();
+    const legacy = new FakeSocket();
+    stream.attach(modern);
+    stream.attach(legacy);
+    modern.emit("message", JSON.stringify({ type: "hello", batch: true }));
+    await tick();
+    const started = Date.now();
+    let n = 0;
+    while (Date.now() - started < 1_000) {
+      const code = ["005930", "000660", "AAPL"][n % 3]!;
+      live.push(code, 70_000 + n, new Date(Date.UTC(2026, 8, 23, 1, 0, 0, n)).toISOString());
+      n++;
+      await new Promise((r) => setTimeout(r, 50)); // 초당 20건
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    const batches = modern.messages("ticks");
+    expect(n).toBeGreaterThanOrEqual(18);
+    expect(batches.length).toBeLessThanOrEqual(6); // 1.3초 동안 250ms 마다 → 최대 5~6통 (초당 4통 이하)
+    expect(modern.messages("tick")).toHaveLength(0);
+    for (const b of batches) {
+      const codes = (b["ticks"] as { code: string }[]).map((t) => t.code);
+      expect(new Set(codes).size).toBe(codes.length); // 한 통 안에 종목마다 하나
+    }
+    // 예전 앱은 종목별 tick 이지만 역시 250ms 마다 종목당 1건
+    expect(legacy.messages("tick").length).toBeLessThanOrEqual(batches.length * 3);
+    // 마지막 값은 빠짐없이 도착
+    const lastSent = batches.flatMap((b) => b["ticks"] as { code: string; price: number }[]).filter((t) => t.code === "AAPL").at(-1)!;
+    expect(lastSent.price).toBe(live.get("AAPL")!.price);
+    stream.stop();
+  });
+
+  it("조용하던 중 첫 체결은 기다리지 않고 바로 보낸다 (지연 추가 없음)", async () => {
+    const live = new FakeLive();
+    const stream = new PriceStream({ live, codes: async () => ["005930"], batchMs: 250 });
+    const s = new FakeSocket();
+    stream.attach(s);
+    s.emit("message", JSON.stringify({ type: "hello", batch: true }));
+    await tick();
+    live.push("005930", 71000);
+    expect(s.messages("ticks")).toHaveLength(1); // 바로
+    live.push("005930", 71100, "2026-09-23T10:00:01+09:00");
+    expect(s.messages("ticks")).toHaveLength(1); // 250ms 안의 다음 체결은 모음
+    await new Promise((r) => setTimeout(r, 300));
+    expect(s.messages("ticks")).toHaveLength(2);
+    stream.stop();
+  });
+
+  it("토스 웹소켓이 구독한 종목은 폴링하지 않고, 두 시장이 닫혀 있으면 폴링을 늦춘다", async () => {
+    const live = new FakeLive();
+    live.status = () => ({ enabled: true, connected: true, subscribed: ["005930"], lastMessageAt: null, lastError: null });
+    const asked: string[][] = [];
+    const quick: QuickPriceSource = { name: "toss", getMany: async (codes) => (asked.push(codes), new Map()) };
+    let open = true;
+    const stream = new PriceStream({ live, quickPrices: quick, codes: async () => ["005930", "AAPL"], pollMs: 10, marketOpen: async () => open, closedPollMs: 1_000 });
+    const s = new FakeSocket();
+    stream.attach(s);
+    await new Promise((r) => setTimeout(r, 35));
+    expect(asked.length).toBeGreaterThan(1);
+    expect(asked.every((c) => c.length === 1 && c[0] === "AAPL")).toBe(true);
+    open = false;
+    const before = asked.length;
+    await new Promise((r) => setTimeout(r, 60));
+    expect(asked.length - before).toBeLessThanOrEqual(1); // 닫혀 있으면 1초에 한 번
     stream.stop();
   });
 });
@@ -172,7 +247,7 @@ describe("GET /api/stream (websocket)", () => {
     });
     await new Promise((r) => setTimeout(r, 30));
     live.push("005930", 71000);
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 300)); // 250ms 묶음
     expect(got[0]?.["type"]).toBe("snapshot");
     expect(got.find((m) => m["type"] === "tick")).toEqual(expect.objectContaining({ code: "005930", price: 71000 }));
     ws.close();

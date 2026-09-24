@@ -9,7 +9,39 @@ export interface StreamTick {
   source: string;
 }
 
-export type StreamMessage = { type: "snapshot"; ticks: StreamTick[] } | ({ type: "tick" } & StreamTick) | { type: "ping"; at: number } | { type: "holdings"; at: number };
+export type StreamMessage =
+  | { type: "snapshot"; ticks: StreamTick[] }
+  | { type: "ticks"; ticks: StreamTick[] }
+  | ({ type: "tick" } & StreamTick)
+  | { type: "ping"; at: number }
+  | { type: "holdings"; at: number };
+
+/** 같은 종목 체결이 여러 개면 가장 늦은 것 하나만 (묶음 적용 전에) */
+export function latestPerCode(ticks: StreamTick[]): Map<string, StreamTick> {
+  const out = new Map<string, StreamTick>();
+  for (const t of ticks) {
+    const prev = out.get(t.code);
+    if (!prev || Date.parse(prev.timestamp) <= Date.parse(t.timestamp)) out.set(t.code, t);
+  }
+  return out;
+}
+
+/**
+ * 잔고 목록에 체결 묶음을 한 번에 적용 (3-17). 값이 바뀐 종목만 새 객체, 나머지는 그대로(참조 유지 → 그 줄은 다시 그리지 않음).
+ * 바뀐 게 없으면 목록 자체도 그대로 돌려준다.
+ */
+export function applyTicksToList<T extends { code: string; quote: Quote | null; quantity: number | null; avgPrice: number | null; evaluation?: Evaluation | null }>(list: T[], ticks: Map<string, StreamTick>): T[] {
+  let changed = false;
+  const next = list.map((s) => {
+    const tick = ticks.get(s.code);
+    if (!tick) return s;
+    const quote = applyTick(s.quote, tick);
+    if (quote === s.quote) return s;
+    changed = true;
+    return { ...s, quote, evaluation: evaluate(s, quote, s.evaluation) };
+  });
+  return changed ? next : list;
+}
 
 /**
  * 체결가를 이미 받아 둔 시세에 덮어쓴다 (서버 StockService.applyLive 와 같은 규칙).

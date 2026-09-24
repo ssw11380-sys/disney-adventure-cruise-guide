@@ -3,7 +3,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from "r
 import { AppState } from "react-native";
 import type { CandleSeries, Evaluation, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
 import { applyTickToCandles } from "./chartPrefs";
-import { applyTick, evaluate, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
+import { applyTick, applyTicksToList, evaluate, latestPerCode, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
 import { useSettings } from "./settings";
 
 /**
@@ -30,6 +30,8 @@ export function useLiveStream(): LiveStreamState {
 
 /** 앱이 켜진 시각. 기기에 저장해 둔 옛 잔고(이 시각보다 오래된 값)에는 체결을 덮지 않는다 — 옛 수량으로 "실시간"처럼 보이지 않게 */
 const SESSION_START = Date.now();
+/** 연결 상태(마지막 체결 시각·건수)를 화면에 알리는 간격 — 체결마다 알리면 화면 전체가 한 번 더 그려진다 */
+const STATE_EVERY_MS = 5_000;
 
 type StockDetail = RegisteredStock & { quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null };
 
@@ -47,39 +49,58 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let watchdog: ReturnType<typeof setTimeout> | null = null;
 
-    const apply = (tick: StreamTick) => {
+    // 체결은 모아서 한 번에 적용한다: 서버가 250ms 묶음(ticks)으로 보내면 받은 즉시 한 번, 예전 서버의 낱개(tick)는 100ms 모아서.
+    // 목록은 바뀐 종목만 새 객체라 그 줄만 다시 그려지고, 연결 상태(lastTickAt)는 5초에 한 번만 갱신한다 (3-17)
+    const queue: StreamTick[] = [];
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastStateAt = 0;
+    const applyNow = () => {
+      flushTimer = null;
+      if (!queue.length) return;
+      const ticks = latestPerCode(queue.splice(0));
       let touched = false;
       const fresh = (key: unknown[]) => (qc.getQueryState(key)?.dataUpdatedAt ?? 0) >= SESSION_START;
       qc.setQueriesData<RegisteredWithQuote[]>({ queryKey: [apiUrl, "stocks"], exact: true }, (list) => {
         if (!list || !fresh([apiUrl, "stocks"])) return list;
-        let changed = false;
-        const next = list.map((s) => {
-          if (s.code !== tick.code) return s;
-          const quote = applyTick(s.quote, tick);
-          if (quote === s.quote) return s;
-          changed = true;
-          return { ...s, quote, evaluation: evaluate(s, quote, s.evaluation) };
+        const next = applyTicksToList(list, ticks);
+        if (next !== list) touched = true;
+        return next;
+      });
+      for (const tick of ticks.values()) {
+        qc.setQueriesData<StockDetail>({ queryKey: [apiUrl, "stock", tick.code], exact: true }, (d) => {
+          if (!d) return d;
+          const quote = applyTick(d.quote, tick);
+          if (quote === d.quote) return d;
+          touched = true;
+          return { ...d, quote, evaluation: evaluate(d, quote, d.evaluation) };
         });
-        if (changed) touched = true;
-        return changed ? next : list;
-      });
-      qc.setQueriesData<StockDetail>({ queryKey: [apiUrl, "stock", tick.code], exact: true }, (d) => {
-        if (!d) return d;
-        const quote = applyTick(d.quote, tick);
-        if (quote === d.quote) return d;
-        touched = true;
-        return { ...d, quote, evaluation: evaluate(d, quote, d.evaluation) };
-      });
-      // 차트의 마지막 봉도 같이 움직인다 (일·주·월봉은 고·저·종 갱신, 분봉은 구간이 바뀌면 새 봉)
-      qc.setQueriesData<CandleSeries>({ queryKey: [apiUrl, "candles", tick.code] }, (series) => {
-        if (!series) return series;
-        const next = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp);
-        return next === series.candles ? series : { ...series, candles: next };
-      });
-      if (touched) {
-        ticksRef.current += 1;
-        setState((s) => ({ ...s, lastTickAt: Date.now(), ticks: ticksRef.current }));
+        // 차트의 마지막 봉도 같이 움직인다 (일·주·월봉은 고·저·종 갱신, 분봉은 구간이 바뀌면 새 봉)
+        qc.setQueriesData<CandleSeries>({ queryKey: [apiUrl, "candles", tick.code] }, (series) => {
+          if (!series) return series;
+          const next = applyTickToCandles(series.candles, series.period, tick.price, tick.timestamp);
+          return next === series.candles ? series : { ...series, candles: next };
+        });
       }
+      if (touched) {
+        ticksRef.current += ticks.size;
+        // 5초에 한 번 (실시간 판단은 30초 기준이라 충분, 마지막 체결은 늦게라도 반영되게 뒤에 한 번 더)
+        const wait = STATE_EVERY_MS - (Date.now() - lastStateAt);
+        if (wait <= 0) publishState();
+        else stateTimer ??= setTimeout(publishState, wait);
+      }
+    };
+    let stateTimer: ReturnType<typeof setTimeout> | null = null;
+    const publishState = () => {
+      stateTimer = null;
+      lastStateAt = Date.now();
+      setState((s) => ({ ...s, lastTickAt: lastStateAt, ticks: ticksRef.current }));
+    };
+    const enqueue = (ticks: StreamTick[], immediate: boolean) => {
+      queue.push(...ticks);
+      if (immediate) {
+        if (flushTimer) clearTimeout(flushTimer);
+        applyNow();
+      } else flushTimer ??= setTimeout(applyNow, 100);
     };
 
     const armWatchdog = () => {
@@ -108,6 +129,12 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       socket = ws;
       ws.onopen = () => {
         backoff = 1000;
+        // 체결을 묶음으로 받겠다고 알린다 (예전 서버는 무시하고 낱개로 보낸다)
+        try {
+          ws.send(JSON.stringify({ type: "hello", batch: true }));
+        } catch {
+          /* ignore */
+        }
         setState((s) => ({ ...s, connected: true, connectedAt: Date.now() }));
         armWatchdog();
       };
@@ -119,8 +146,8 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         } catch {
           return;
         }
-        if (msg.type === "tick") apply(msg);
-        else if (msg.type === "snapshot") for (const t of msg.ticks) apply(t);
+        if (msg.type === "ticks" || msg.type === "snapshot") enqueue(msg.ticks, true);
+        else if (msg.type === "tick") enqueue([msg], false);
         else if (msg.type === "holdings") {
           // 토스 계좌 체결로 잔고가 바뀌었다 → 목록·상세를 바로 다시 받는다
           void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
@@ -173,6 +200,8 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
     return () => {
       closed = true;
       sub.remove();
+      if (flushTimer) clearTimeout(flushTimer);
+      if (stateTimer) clearTimeout(stateTimer);
       disconnect();
     };
   }, [apiUrl, apiToken, ready, qc]);

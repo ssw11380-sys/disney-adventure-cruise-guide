@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { Animated, Text, type StyleProp, type TextStyle } from "react-native";
+import { Animated, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
 import { useTheme } from "@/theme";
 
 /**
  * HTS 처럼 가격이 바뀌는 순간 배경을 잠깐 물들인다 (오르면 빨강, 내리면 파랑) — 값이 실제로 바뀔 때만.
  * react-native Animated 만 쓰므로 네이티브 모듈 추가 없이 OTA 로 배포된다.
+ * 배경색 대신 뒤에 깐 색 판의 불투명도를 네이티브 드라이버로 움직인다 → 체결이 몰려도 JS 스레드를 쓰지 않는다 (3-17)
  */
 export function FlashPrice({ value, text, style }: { value: number | null | undefined; text: string; style?: StyleProp<TextStyle> }) {
   const t = useTheme();
@@ -24,15 +25,15 @@ export function FlashPrice({ value, text, style }: { value: number | null | unde
   useEffect(() => {
     if (flash === 0) return;
     anim.setValue(1);
-    const a = Animated.timing(anim, { toValue: 0, duration: 700, useNativeDriver: false });
+    const a = Animated.timing(anim, { toValue: 0, duration: 700, useNativeDriver: true });
     a.start();
     return () => a.stop();
   }, [flash, anim]);
 
-  const bg = anim.interpolate({ inputRange: [0, 1], outputRange: ["rgba(0,0,0,0)", dir > 0 ? `${t.up}55` : `${t.down}55`] });
   return (
-    <Animated.View style={{ backgroundColor: bg, borderRadius: 4, paddingHorizontal: 3, marginHorizontal: -3 }}>
+    <View style={{ borderRadius: 4, paddingHorizontal: 3, marginHorizontal: -3, overflow: "hidden" }}>
+      <Animated.View style={[StyleSheet.absoluteFill, { pointerEvents: "none", backgroundColor: dir > 0 ? `${t.up}55` : `${t.down}55`, opacity: anim }]} />
       <Text style={style}>{text}</Text>
-    </Animated.View>
+    </View>
   );
 }

@@ -1,7 +1,7 @@
 import { useIsRestoring } from "@tanstack/react-query";
 import { router } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Modal, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AppState, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useAnyMarketOpen, useHealth, useMarketStatus, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
@@ -115,6 +115,14 @@ export default function StocksScreen() {
       { text: "취소", style: "cancel" },
     ]);
 
+  // 줄 누름 처리는 렌더마다 새로 만들지 않는다 (체결이 온 줄만 다시 그리게, 3-17)
+  const confirmRef = useRef(confirmRemove);
+  useEffect(() => {
+    confirmRef.current = confirmRemove;
+  });
+  const openStock = useCallback((s: RegisteredWithQuote) => router.push(`/stocks/${s.code}`), []);
+  const longPress = useCallback((s: RegisteredWithQuote) => confirmRef.current(s), []);
+
   const view = viewState(stocks);
   if (view === "loading")
     return (
@@ -146,47 +154,60 @@ export default function StocksScreen() {
     </View>
   );
 
+  const sectionHeader = (section: (typeof sections)[number]) => (
+    <View style={{ backgroundColor: t.bg }}>
+      <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
+        <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{section.title}</Text>
+        <Pressable onPress={() => setSortOpen(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel="정렬">
+          <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel} ▾</Text>
+        </Pressable>
+      </View>
+      <TableHead>
+        <HeadCell label="종목명" active={sort === "name"} onPress={() => void setSort("name")} flex />
+        <HeadCell label="현재가 / 등락률" active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={COL.price} />
+        {section.key === "held" ? (
+          <HeadCell label="평가손익 / 수익률" active={sort === "profit"} onPress={() => void setSort("profit")} width={COL.right} />
+        ) : (
+          <HeadCell label="전일대비 / 거래량" width={COL.right} />
+        )}
+      </TableHead>
+    </View>
+  );
+  const empty = (
+    <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
+      <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>등록된 종목이 없습니다</Text>
+      <Text style={{ color: t.muted, fontSize: font.small }}>종목명·티커로 검색해 추가하거나 토스증권 계좌에서 불러옵니다.</Text>
+      <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
+        <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />
+        {health.data?.tossOpenApi?.configured ? <Button title="계좌 불러오기" variant="secondary" onPress={() => router.push("/settings")} style={{ flex: 1 }} /> : null}
+      </View>
+    </View>
+  );
+  // 머리(0) 다음부터 구역마다 [머리글, 줄들...] → 머리글 자리만 고정
+  const stickyIndices: number[] = [];
+  let childIndex = 1;
+  for (const sec of sections) {
+    stickyIndices.push(childIndex);
+    childIndex += 1 + sec.data.length;
+  }
+
   return (
     <Screen scroll={false} top={<StaleBanner query={stocks} open={live.open} maxAgeMs={openMaxAge} />}>
-      <SectionList
-        sections={sections}
-        keyExtractor={(s) => s.code}
-        refreshing={pulling}
-        onRefresh={onPull}
-        stickySectionHeadersEnabled
-        ListHeaderComponent={header}
-        renderSectionHeader={({ section }) => (
-          <View style={{ backgroundColor: t.bg }}>
-            <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
-              <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{section.title}</Text>
-              <Pressable onPress={() => setSortOpen(true)} hitSlop={8} accessibilityRole="button" accessibilityLabel="정렬">
-                <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel} ▾</Text>
-              </Pressable>
-            </View>
-            <TableHead>
-              <HeadCell label="종목명" active={sort === "name"} onPress={() => void setSort("name")} flex />
-              <HeadCell label="현재가 / 등락률" active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={COL.price} />
-              {section.key === "held" ? (
-                <HeadCell label="평가손익 / 수익률" active={sort === "profit"} onPress={() => void setSort("profit")} width={COL.right} />
-              ) : (
-                <HeadCell label="전일대비 / 거래량" width={COL.right} />
-              )}
-            </TableHead>
-          </View>
-        )}
-        renderItem={({ item }) => <StockRow stock={item} showKrw={showKrw} afterCost={afterCost} onPress={() => router.push(`/stocks/${item.code}`)} onLongPress={() => confirmRemove(item)} />}
-        ListEmptyComponent={
-          <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
-            <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>등록된 종목이 없습니다</Text>
-            <Text style={{ color: t.muted, fontSize: font.small }}>종목명·티커로 검색해 추가하거나 토스증권 계좌에서 불러옵니다.</Text>
-            <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
-              <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />
-              {health.data?.tossOpenApi?.configured ? <Button title="계좌 불러오기" variant="secondary" onPress={() => router.push("/settings")} style={{ flex: 1 }} /> : null}
-            </View>
-          </View>
-        }
+      {/* 잔고는 수십 줄이라 가상화 목록 대신 스크롤 + 고정 머리글로 그린다: 체결 묶음마다 목록 내부의 두 번째 커밋이 없고,
+          체결이 온 줄만 다시 그린다 (3-17) */}
+      <ScrollView
+        stickyHeaderIndices={stickyIndices}
+        refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
         contentContainerStyle={{ paddingBottom: space.xl }}
-      />
+      >
+        {header}
+        {sections.length === 0
+          ? empty
+          : sections.flatMap((section) => [
+              <View key={`h-${section.key}`}>{sectionHeader(section)}</View>,
+              ...section.data.map((item) => <StockRow key={item.code} stock={item} showKrw={showKrw} afterCost={afterCost} onPress={openStock} onLongPress={longPress} />),
+            ])}
+      </ScrollView>
       <SortSheet visible={sortOpen} value={sort} onClose={() => setSortOpen(false)} onPick={(k) => void setSort(k)} />
     </Screen>
   );
