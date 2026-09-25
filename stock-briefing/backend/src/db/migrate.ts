@@ -156,6 +156,26 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await db.schema.createIndex("idx_app_errors_at").ifNotExists().on("app_errors").column("at").execute();
     },
   },
+  {
+    version: 5,
+    up: async (db, dialect) => {
+      // 계좌 한 장 브리핑 (3-31). 새 표만 추가하고 기존 표는 건드리지 않는다. 날짜·세션마다 1건 (다시 만들면 덮어쓴다)
+      await db.schema
+        .createTable("account_briefings")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("briefing_date", "text", (c) => c.notNull())
+        .addColumn("session", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("summary", "text", (c) => c.notNull())
+        .addColumn("detail", "text", (c) => c.notNull())
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("model", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_account_briefings_date_session on account_briefings (briefing_date, session)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

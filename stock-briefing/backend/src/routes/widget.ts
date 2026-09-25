@@ -18,8 +18,16 @@ import { buildWidgetPayload, type WidgetFeatures } from "../services/widgetPaylo
  *    장이 닫힌 뒤에도 나스닥·환율이 바뀌어 304 대신 200 을 받지 않게. 끄면 지수를 부르지도 않는다. 지수를 못 받으면 빼고 보낸다(위젯은 줄을 감춘다)
  *  - board: widgetMarket 이 켜져 있고 앱이 ?board=1 로 물을 때만(지수·환율 위젯이 있는 1.4.0 앱) 같은 목록에서 9개.
  *    indices 와 board 를 함께 물어도 지수 목록은 한 번만 부른다. 못 받으면 빼고 보낸다(위젯은 마지막 판을 둔다)
+ *  - accountIds: accountBriefing(3-31)이 켜져 있으면 최근 성공한 계좌 브리핑 id (앱 백그라운드 알림용). 끄거나 없으면 넣지 않는다(응답이 예전과 같다)
  */
-export const widgetRoutes: FastifyPluginAsync<{ stocks: StockService; briefings: BriefingService; calendar: MarketCalendar; features?: FeatureService; indices?: MarketIndices }> = async (app, deps) => {
+export const widgetRoutes: FastifyPluginAsync<{
+  stocks: StockService;
+  briefings: BriefingService;
+  calendar: MarketCalendar;
+  features?: FeatureService;
+  indices?: MarketIndices;
+  accounts?: { recentOkIds(limit?: number): Promise<number[]> };
+}> = async (app, deps) => {
   const flags = async (): Promise<WidgetFeatures | undefined> => {
     if (!deps.features) return undefined;
     const [widgetPnlToggle, widgetIndexLine, widgetMarket] = await Promise.all([
@@ -37,8 +45,15 @@ export const widgetRoutes: FastifyPluginAsync<{ stocks: StockService; briefings:
     const indices = features.then((f) =>
       deps.indices && ((wantsIndices && f?.widgetIndexLine) || (wantsBoard && f?.widgetMarket)) ? deps.indices.list({ stale: true }).catch(() => null) : null,
     );
-    const [list, latest, status, f, idx] = await Promise.all([deps.stocks.listWithQuotes(), deps.briefings.latestPerStock(), deps.calendar.status().catch(() => null), features, indices]);
-    const body = JSON.stringify(buildWidgetPayload(list, latest, status, { features: f, indices: wantsIndices ? idx : null, board: wantsBoard ? idx : null }));
+    const accounts =
+      deps.features && deps.accounts
+        ? deps.features
+            .enabled("accountBriefing")
+            .then((on) => (on ? deps.accounts!.recentOkIds(4) : null))
+            .catch(() => null)
+        : null;
+    const [list, latest, status, f, idx, accountIds] = await Promise.all([deps.stocks.listWithQuotes(), deps.briefings.latestPerStock(), deps.calendar.status().catch(() => null), features, indices, accounts]);
+    const body = JSON.stringify(buildWidgetPayload(list, latest, status, { features: f, indices: wantsIndices ? idx : null, board: wantsBoard ? idx : null, accountIds }));
     const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 16)}"`;
     reply.header("etag", etag).header("cache-control", "no-cache").header("vary", "accept-encoding");
     // 프록시가 약한 ETag(W/"…")로 바꾸거나 여러 개를 보내도 맞춰 본다

@@ -8,7 +8,7 @@ import { useLiveStream, withLastTick } from "@/lib/liveStream";
 import { tradingNow } from "@/lib/marketTime";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
 import { loadedCredentials, useSettings } from "@/lib/settings";
-import { createApi, type Api } from "./client";
+import { ApiRequestError, createApi, type Api } from "./client";
 import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
@@ -374,6 +374,30 @@ export function useBriefings(filter: { code?: string; date?: string; session?: B
 export function useBriefing(id: number) {
   const api = useApi();
   return useQuery({ queryKey: useKey("briefing", id), queryFn: () => api.getBriefing(id), enabled: Number.isFinite(id) && id > 0 });
+}
+
+/**
+ * 계좌 한 장 브리핑 목록 (3-31). 플래그가 켜졌을 때만 부른다(enabled). 예전 서버(404)는 빈 목록 → 카드가 숨는다.
+ * 쿼리 키가 "briefings" 아래라 수동 생성이 끝나면 함께 다시 받는다
+ */
+export function useAccountBriefings(enabled: boolean) {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("briefings", "account", "list"), queryFn: () => orEmptyOn404(api.accountBriefings(5)), staleTime: 30_000, retry: 0, enabled });
+}
+
+export function useAccountBriefing(id: number, enabled: boolean) {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("briefings", "account", id), queryFn: () => api.getAccountBriefing(id), enabled: enabled && Number.isFinite(id) && id > 0 });
+}
+
+/** 예전 서버에 없는 경로(404)는 빈 목록으로 */
+export async function orEmptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
+  try {
+    return await p;
+  } catch (e) {
+    if (e instanceof ApiRequestError && e.status === 404) return [];
+    throw e;
+  }
 }
 
 export function useNotificationSettings() {

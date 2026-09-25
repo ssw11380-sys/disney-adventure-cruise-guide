@@ -85,6 +85,11 @@ export interface WidgetPayload {
   indices?: WidgetIndex[];
   /** 지수·환율 위젯 판 9개 (widgetMarket 이 켜져 있고 ?board=1 이고 지수를 받았을 때만) */
   board?: WidgetIndex[];
+  /**
+   * 최근 성공한 계좌 한 장 브리핑 id (3-31, 플래그 accountBriefing 이 켜져 있고 있을 때만). 앱 백그라운드 알림이 새 계좌 브리핑을 알아보게 —
+   * 종목 브리핑이 모두 실패한 세션도 서버 푸시처럼 1건. 예전 앱은 모르는 칸이라 무시한다
+   */
+  accountIds?: number[];
 }
 
 /** 지수 띠 목록(stale 을 아는 앱용)에서 위젯 줄(또는 판)에 넣을 것만, 정해진 순서로. 값은 그대로 (앱 지수 띠와 같은 숫자가 되게) */
@@ -142,7 +147,7 @@ export function buildWidgetPayload(
   stocks: RegisteredWithQuote[],
   latest: Array<{ code: string; name: string; latest: Briefing | null }>,
   status: MarketStatus | null,
-  extra: { features?: WidgetFeatures | undefined; indices?: readonly MarketIndex[] | null | undefined; board?: readonly MarketIndex[] | null | undefined } = {},
+  extra: { features?: WidgetFeatures | undefined; indices?: readonly MarketIndex[] | null | undefined; board?: readonly MarketIndex[] | null | undefined; accountIds?: readonly number[] | null | undefined } = {},
 ): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
   const ok = latest.filter((b) => b.latest?.status === "ok");
@@ -164,5 +169,6 @@ export function buildWidgetPayload(
   if (indices.length) payload.indices = indices;
   const board = extra.features?.widgetMarket && extra.board ? widgetIndices(extra.board, WIDGET_BOARD_CODES) : [];
   if (board.length) payload.board = board;
+  if (extra.accountIds?.length) payload.accountIds = [...extra.accountIds];
   return payload;
 }

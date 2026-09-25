@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import type { AccountBriefing, LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { fillFromLast, type PnlMode } from "./model";
 import { canReuse, fromPayload, NO_FEATURES, REUSE_OPEN_MS, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
@@ -24,6 +24,8 @@ export interface WidgetData {
   market: WidgetMarket | null;
   /** 모든 종목의 최신 브리핑 id (새 서버). 없으면 briefings 가 전체 목록(예전 서버) */
   latestIds?: number[];
+  /** 최근 계좌 한 장 브리핑 id (3-31 서버, 플래그 accountBriefing 이 켜져 있을 때). 백그라운드 알림이 새 계좌 브리핑을 알아보게 */
+  accountIds?: number[];
   /** 지수 줄 (코스피·나스닥·원/달러). 예전 서버·플래그 꺼짐이면 null */
   indices: WidgetIndex[] | null;
   /** indices 를 받은 시각 (앱이 받은 지수와 어느 쪽이 새것인지 견줄 때) */
@@ -346,12 +348,28 @@ export async function loadNotifyPrefs(): Promise<(NotifyPrefs & { running: boole
     if (s.digest === undefined) return { ...DEFAULT_PREFS, digest: false, running };
     return {
       digest: s.digest,
+      // 3-31 서버부터. 없으면(예전 서버) 꺼짐 → 계좌 브리핑 목록을 묻지 않는다
+      accountBriefing: s.accountBriefing === true,
       quietEnabled: s.quietEnabled ?? DEFAULT_PREFS.quietEnabled,
       quietStart: s.quietStart ?? DEFAULT_PREFS.quietStart,
       quietEnd: s.quietEnd ?? DEFAULT_PREFS.quietEnd,
       mutedCodes: s.mutedCodes ?? [],
       running,
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 최근 계좌 한 장 브리핑 (3-31). 알림 규칙에서 accountBriefing 이 켜져 있을 때만 부른다.
+ * 받지 못하면(끊김·5xx·시간 초과·예전 서버 404) null — '빈 목록'과 구분한다. 받지 못한 목록의 계좌 브리핑을 '본 것'으로 적지 않게
+ */
+export async function loadAccountBriefings(): Promise<AccountBriefing[] | null> {
+  const { apiUrl, apiToken } = await readSettings();
+  try {
+    const list = await getJson<AccountBriefing[]>(`${apiUrl}/api/account-briefings?limit=4`, apiToken);
+    return Array.isArray(list) ? list : null;
   } catch {
     return null;
   }
@@ -414,6 +432,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.features = p.features;
       out.featuresAt = out.fetchedAt;
       if (payload.latestIds) out.latestIds = payload.latestIds;
+      if (Array.isArray(payload.accountIds)) out.accountIds = payload.accountIds.filter((id) => Number.isInteger(id) && id > 0);
       full = true;
       fresh = !reuse;
     } else {
