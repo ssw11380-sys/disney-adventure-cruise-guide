@@ -365,10 +365,13 @@ describe("윗줄+아랫줄 배치 (울트라 펼침 세로)", () => {
     size("UP");
     const r = open(samsung(), { flag: true });
     const side = r.all().find((n) => typeof n.props.onLayout === "function" && flat(n).alignSelf === "flex-start" && flat(n).width !== undefined)!;
-    r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 700 } } }));
-    expect(chart(r).props.height).toBe(700 - 120);
+    r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 600 } } }));
+    expect(chart(r).props.height).toBe(600 - 120);
     r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 200 } } }));
     expect(chart(r).props.height).toBeGreaterThan(foldDetail.chartMinH);
+    // AI 분석을 펼쳐 옆 칸이 아주 길어져도 창 높이 × rowsChartMaxRatio 에서 멈춘다
+    r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 3000 } } }));
+    expect(chart(r).props.height).toBe(Math.round(882 * foldDetail.rowsChartMaxRatio));
   });
 });
 

@@ -314,12 +314,13 @@ const CHROME_GUESS = 120;
  * height 가 아직 없으면(재기 전) CandleChart 기본 크기. 둘레는 늘어날 때만 반영한다(폭·높이가 바뀌면 새로) →
  * 십자선을 움직일 때 읽기 줄이 늘었다 줄었다 해도 차트 높이가 흔들리지 않는다
  */
-export function FillChart({ height, minH = 0, render, style }: { height: number | null; minH?: number; render: (chartH: number | undefined) => React.ReactNode; style?: StyleProp<ViewStyle> }) {
+export function FillChart({ height, minH = 0, maxH = Infinity, render, style }: { height: number | null; minH?: number; maxH?: number; render: (chartH: number | undefined) => React.ReactNode; style?: StyleProp<ViewStyle> }) {
   const [boxW, setBoxW] = useState<number | null>(null);
   const [chrome, setChrome] = useState<{ key: string; h: number }>({ key: "", h: CHROME_GUESS });
   const key = height !== null && height > 0 ? `${Math.round(boxW ?? 0)}x${Math.round(height)}` : "";
   const chromeH = chrome.key === key ? chrome.h : CHROME_GUESS;
-  const chartH = key ? Math.max(Math.round(minH), fillChartHeight(height!, chromeH)) : undefined;
+  // 칸에 맞춘 높이를 minH ~ maxH 안으로 (maxH 가 minH 보다 작으면 minH)
+  const chartH = key ? Math.max(Math.round(minH), Math.min(Math.round(maxH), fillChartHeight(height!, chromeH))) : undefined;
   return (
     <View
       style={[styles.fillPanel, style]}

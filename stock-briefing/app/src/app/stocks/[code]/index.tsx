@@ -520,6 +520,7 @@ export default function StockDetailScreen() {
           <FillChart
             height={rowsSideH}
             minH={Math.min((win.width - insets.left - insets.right - sideW - space.md * 2) * layout.chartAspect, win.height * layout.chartMaxHRatio)}
+            maxH={win.height * foldDetail.rowsChartMaxRatio}
             style={styles.rowsChart}
             render={(h) => (
               <>
