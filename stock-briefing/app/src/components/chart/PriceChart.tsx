@@ -1,15 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
+import { ClipPath, Defs, G, Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
-import { axisWidth, labelSide, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
+import { axisWidth, placeInsideLabels, priceDomain, readoutBasis, volumeBars, type InsideLabel, type LabelSpot } from "@/lib/chartBasis";
 import { formatChartValue, maLegendItems } from "@/lib/chartLayout";
 import { formatPct, formatVolume, shownSign } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
-import { changeColor, font, space, useFontScale, useTheme, type Theme } from "@/theme";
+import { changeColor, font, fontCap, radius, slopFor, space, useFontScale, useTheme, type Theme } from "@/theme";
 
 /**
  * 직접 그리는 캔들 차트 (react-native-svg + gesture-handler).
@@ -63,10 +63,23 @@ export interface PriceChartProps {
   onCrosshair?: (c: Candle | null) => void;
   minCount?: number;
   maxCount?: number;
+  /** 차트 뒤 바탕색 (그림 안 평단·52주 글자의 바탕 상자를 이 색으로 옅게 깐다). 기본 패널 색 t.surface */
+  labelBg?: string;
+  /**
+   * 과거로 옮겼을 때 차트 위에 띄우는 안내 버튼 ('2일 전까지 보는 중 · 최신으로', 기능 플래그 detailPolish — CandleChart 가 정한다).
+   * 누르면 onLatest (최신 구간으로). null 이면 없음
+   */
+  pastView?: { text: string; onLatest: () => void } | null;
 }
 
 const X_AXIS_H = 18;
 const PANE_GAP = 6;
+/** 가격 칸 자르기 틀 id (선이 가격 칸 밖 — 거래량 칸·날짜 줄 — 으로 나가지 않게). Svg 문서마다 따로라 화면에 차트가 둘이어도 겹치지 않는다 */
+const PRICE_CLIP = "priceClip";
+/** 그림 안 글자 바탕 상자의 불투명도 (바탕색 토큰 위에 옅게 — 뒤의 봉·선이 살짝 비친다) */
+const LABEL_BG_OPACITY = 0.85;
+/** 과거 구간 안내 버튼의 보이는 높이 (칩과 같음). 누르는 영역은 위아래로 넓혀 44 */
+const BANNER_H = 32;
 
 export function clampView(v: ChartView, total: number, minCount = 15, maxCount = 500): ChartView {
   const count = Math.max(minCount, Math.min(maxCount, Math.min(v.count, Math.max(total, minCount))));
@@ -119,42 +132,13 @@ export function PriceChart(p: PriceChartProps) {
   const rsiS = useMemo(() => (p.indicator === "rsi" ? rsi(closes, 14) : null), [closes, p.indicator]);
   const macdS = useMemo(() => (p.indicator === "macd" ? macd(closes) : null), [closes, p.indicator]);
 
-  // ── 가격 도메인 ──
+  // ── 가격 도메인 (lib/chartBasis priceDomain) ──
+  // 봉 + 현재가(최신 구간일 때) + 평단(±25% 안쪽)으로 정하고, 이동평균·볼린저 선은 그 범위에서 조금(LINE_OVERSHOOT)까지만 넓힌다.
+  // 넘는 선은 가격 칸에서 잘라 그린다 (아래 ClipPath) — 크게 떨어진 종목의 120일선 옛 값이 봉을 차트 바닥에 눌러 두지 않게
   const domain = useMemo<[number, number]>(() => {
-    if (n === 0) return [0, 1];
-    let lo = Infinity, hi = -Infinity;
-    for (const c of visible) {
-      lo = Math.min(lo, c.low);
-      hi = Math.max(hi, c.high);
-    }
-    const inRange = (s: Series | undefined) => {
-      if (!s) return;
-      for (let i = start; i < end; i++) {
-        const v = s[i];
-        if (v !== null && v !== undefined) {
-          lo = Math.min(lo, v);
-          hi = Math.max(hi, v);
-        }
-      }
-    };
-    for (const m of mas) inRange(m.values);
-    if (bb) {
-      inRange(bb.upper);
-      inRange(bb.lower);
-    }
-    if (p.currentPrice && view.offset === 0) {
-      lo = Math.min(lo, p.currentPrice);
-      hi = Math.max(hi, p.currentPrice);
-    }
-    // 평단은 범위에서 너무 멀면(±25% 밖) 축을 망가뜨리므로 넣지 않고 가장자리 태그로만 알린다
-    const band = (hi - lo) * 0.25;
-    if (p.avgPrice && p.avgPrice > lo - band && p.avgPrice < hi + band) {
-      lo = Math.min(lo, p.avgPrice);
-      hi = Math.max(hi, p.avgPrice);
-    }
-    const pad = (hi - lo) * 0.06 || Math.abs(hi) * 0.01 || 1;
-    return [lo - pad, hi + pad];
-  }, [visible, n, mas, bb, start, end, p.currentPrice, p.avgPrice, view.offset]);
+    const lines: Series[] = [...mas.map((m) => m.values.slice(start, end)), ...(bb ? [bb.upper.slice(start, end), bb.lower.slice(start, end)] : [])];
+    return priceDomain({ bars: visible, lines, current: view.offset === 0 ? p.currentPrice : null, avg: p.avgPrice });
+  }, [visible, mas, bb, start, end, p.currentPrice, p.avgPrice, view.offset]);
 
   const priceTicks = useMemo(() => niceTicks(domain[0], domain[1], 5).filter((v) => v > domain[0] && v < domain[1]), [domain]);
   // 지수·환율 축 눈금: 간격이 1 미만이면 소수 자리를 늘린다 (원/위안 201.5, 201.6 …)
@@ -334,10 +318,23 @@ export function PriceChart(p: PriceChartProps) {
   // 보합(0)은 앱 전체와 같은 기본 글자색 (예전에는 현재가 태그만 빨강)
   const curColor = p.prevClose && p.currentPrice ? changeColor(t, p.currentPrice - p.prevClose) : t.accent;
   const isLatest = cross ? start + cross.i === total - 1 : view.offset === 0;
-  // 52주 글자 상자는 오른쪽 끝, 최신 봉을 가리면 왼쪽 끝으로 (lib/chartBasis)
-  const avgY = avgIn ? yOf(p.avgPrice!) : avgOut === "above" ? 8 : avgOut ? priceH - 8 : null;
-  const side52 = (v: number) =>
-    labelSide({ y: yOf(v), plotW, avoidY: avgY, bars: visible.map((c, i) => ({ left: xOf(i) - bodyW / 2, right: xOf(i) + bodyW / 2, top: yOf(c.high), bottom: yOf(c.low) })) });
+  const high52In = !!p.high52w && p.high52w > domain[0] && p.high52w < domain[1];
+  const low52In = !!p.low52w && p.low52w > domain[0] && p.low52w < domain[1];
+  // 그림 안 글자(평단 → 52주 최고 → 52주 최저) 자리: 봉과 서로를 가리지 않는 곳 — 선 위·아래, 안 되면 반대쪽 (lib/chartBasis placeInsideLabels).
+  // 범위 밖 평단은 선 없이 맨 위·맨 아래 가장자리 글자 (좌우만 바꾼다)
+  const spots = (() => {
+    const want: (InsideLabel & { key: "avg" | "h52" | "l52" })[] = [];
+    if (avgIn) want.push({ key: "avg", y: yOf(p.avgPrice!), text: `평단 ${axisPrice(p.avgPrice!, currency)}`, prefer: "left" });
+    else if (avgOut)
+      want.push({ key: "avg", y: avgOut === "above" ? 12 : priceH - 4, text: `${avgOut === "above" ? "평단(범위 위)" : "평단(범위 아래)"} ${axisPrice(p.avgPrice!, currency)}`, prefer: "left", fixed: true });
+    if (high52In) want.push({ key: "h52", y: yOf(p.high52w!), text: "52주 최고", prefer: "right" });
+    if (low52In) want.push({ key: "l52", y: yOf(p.low52w!), text: "52주 최저", prefer: "right" });
+    if (!want.length) return {} as Partial<Record<"avg" | "h52" | "l52", LabelSpot & { text: string }>>;
+    const bars = visible.map((c, i) => ({ left: xOf(i) - bodyW / 2, right: xOf(i) + bodyW / 2, top: yOf(c.high), bottom: yOf(c.low) }));
+    const placed = placeInsideLabels({ plotW, plotH: priceH, bars, labels: want });
+    return Object.fromEntries(want.map((w, i) => [w.key, { ...placed[i]!, text: w.text }])) as Partial<Record<"avg" | "h52" | "l52", LabelSpot & { text: string }>>;
+  })();
+  const labelBg = p.labelBg ?? t.surface;
 
   return (
     <View style={{ width, gap: space.xs }}>
@@ -353,9 +350,17 @@ export function PriceChart(p: PriceChartProps) {
         showVolume={p.hasVolume !== false}
         part={p.showMaValues === false ? "all" : "top"}
       />
+      {/* 그림 + 그 위에 뜨는 과거 구간 안내. 안내는 제스처 틀 밖(형제)에 두어 누르기가 드래그·십자선과 다투지 않게 하고,
+          틀은 늘 같은 모양으로 둔다 (안내가 생길 때 제스처 틀을 다시 만들면 진행 중인 드래그가 끊긴다) */}
+      <View style={{ width, height }}>
       <GestureDetector gesture={gesture}>
         <View style={{ width, height }} collapsable={false}>
           <Svg width={width} height={height}>
+            <Defs>
+              <ClipPath id={PRICE_CLIP}>
+                <Rect x={0} y={0} width={plotW} height={priceH} />
+              </ClipPath>
+            </Defs>
             {/* 가격 눈금 */}
             {priceTicks.map((v) => (
               <React.Fragment key={v}>
@@ -368,37 +373,36 @@ export function PriceChart(p: PriceChartProps) {
                 )}
               </React.Fragment>
             ))}
-            {/* 볼린저 */}
-            {bb ? (
-              <>
-                <Path d={`${linePath(bb.upper, yOf)}${reversePath(linePath(bb.lower, yOf))}Z`} fill={t.chart.band} fillOpacity={0.07} />
-                <Path d={linePath(bb.upper, yOf)} stroke={t.chart.band} strokeOpacity={0.6} strokeWidth={1} fill="none" />
-                <Path d={linePath(bb.lower, yOf)} stroke={t.chart.band} strokeOpacity={0.6} strokeWidth={1} fill="none" />
-              </>
+            {/* 가격 칸 안에만 그리는 것 (선이 축 범위를 넘으면 칸 가장자리에서 잘린다 — 거래량 칸·날짜 줄로 나가지 않게) */}
+            <G clipPath={`url(#${PRICE_CLIP})`}>
+              {/* 볼린저 */}
+              {bb ? (
+                <>
+                  <Path d={`${linePath(bb.upper, yOf)}${reversePath(linePath(bb.lower, yOf))}Z`} fill={t.chart.band} fillOpacity={0.07} />
+                  <Path d={linePath(bb.upper, yOf)} stroke={t.chart.band} strokeOpacity={0.6} strokeWidth={1} fill="none" />
+                  <Path d={linePath(bb.lower, yOf)} stroke={t.chart.band} strokeOpacity={0.6} strokeWidth={1} fill="none" />
+                </>
+              ) : null}
+              {/* 캔들 */}
+              <Path d={candlePaths.upWick} stroke={upColor} strokeWidth={1} />
+              <Path d={candlePaths.downWick} stroke={downColor} strokeWidth={1} />
+              <Path d={candlePaths.upBody} fill={upColor} />
+              <Path d={candlePaths.downBody} fill={downColor} />
+              {/* 이동평균 */}
+              {mas.map((m) => (
+                <Path key={m.period} d={linePath(m.values, yOf)} stroke={maColor(t, m.period)} strokeWidth={1.2} fill="none" />
+              ))}
+            </G>
+            {/* 52주 고/저 · 평단선: 글자는 봉·서로를 가리지 않는 자리에 옅은 바탕 상자와 함께 (spots) */}
+            {high52In && spots.h52 ? <Tag y={yOf(p.high52w!)} plotW={plotW} axisW={axisW} label={spots.h52.text} color={t.muted} dotted spot={spots.h52} bg={labelBg} /> : null}
+            {low52In && spots.l52 ? <Tag y={yOf(p.low52w!)} plotW={plotW} axisW={axisW} label={spots.l52.text} color={t.muted} dotted spot={spots.l52} bg={labelBg} /> : null}
+            {avgIn && spots.avg ? (
+              // 평단 글자는 오른쪽 축이 아니라 그림 안 선 곁에 적는다 → 축 폭에 잘리거나 현재가 태그와 겹치지 않는다
+              <Tag y={yOf(p.avgPrice!)} plotW={plotW} axisW={axisW} label={spots.avg.text} color={t.gold} dashed spot={spots.avg} bg={labelBg} />
             ) : null}
-            {/* 캔들 */}
-            <Path d={candlePaths.upWick} stroke={upColor} strokeWidth={1} />
-            <Path d={candlePaths.downWick} stroke={downColor} strokeWidth={1} />
-            <Path d={candlePaths.upBody} fill={upColor} />
-            <Path d={candlePaths.downBody} fill={downColor} />
-            {/* 이동평균 */}
-            {mas.map((m) => (
-              <Path key={m.period} d={linePath(m.values, yOf)} stroke={maColor(t, m.period)} strokeWidth={1.2} fill="none" />
-            ))}
-            {/* 52주 고/저 */}
-            {p.high52w && p.high52w > domain[0] && p.high52w < domain[1] ? <Tag y={yOf(p.high52w)} plotW={plotW} axisW={axisW} label="52주 최고" color={t.muted} dotted inside={side52(p.high52w)} /> : null}
-            {p.low52w && p.low52w > domain[0] && p.low52w < domain[1] ? <Tag y={yOf(p.low52w)} plotW={plotW} axisW={axisW} label="52주 최저" color={t.muted} dotted inside={side52(p.low52w)} /> : null}
-            {/* 평단선 */}
-            {avgIn ? (
-              // 평단 글자는 오른쪽 축이 아니라 선 위 왼쪽에 적는다 → 축 폭에 잘리거나 현재가 태그와 겹치지 않는다
-              <Tag y={yOf(p.avgPrice!)} plotW={plotW} axisW={axisW} label={`평단 ${axisPrice(p.avgPrice!, currency)}`} color={t.gold} dashed inside="left" topLimit={12} />
-            ) : null}
-            {avgOut ? (
-              // 범위 밖 평단은 왼쪽 끝에 (오른쪽 끝의 52주 글자·최신 봉과 겹치지 않게)
-              <SvgText x={5} y={avgOut === "above" ? 12 : priceH - 4} fill={t.gold} fontSize={font.tiny}>
-                {avgOut === "above" ? "평단(범위 위) " : "평단(범위 아래) "}
-                {axisPrice(p.avgPrice!, currency)}
-              </SvgText>
+            {avgOut && spots.avg ? (
+              // 범위 밖 평단은 선 없이 맨 위·맨 아래 가장자리 글자 (왼쪽, 봉을 가리면 오른쪽)
+              <LabelText spot={spots.avg} label={spots.avg.text} color={t.gold} bg={labelBg} bold={false} />
             ) : null}
             {/* 현재가선 */}
             {showCurrent ? <Tag y={yOf(p.currentPrice!)} plotW={plotW} axisW={axisW} label={axisPrice(p.currentPrice!, currency)} color={curColor} dashed filled /> : null}
@@ -485,6 +489,8 @@ export function PriceChart(p: PriceChartProps) {
           </Svg>
         </View>
       </GestureDetector>
+      {p.pastView ? <PastViewButton text={p.pastView.text} onPress={p.pastView.onLatest} plotW={plotW} /> : null}
+      </View>
       {/* 이동평균 값은 차트 아래 (위쪽 조작·읽기 줄을 한 줄로 유지, 3-21) */}
       {p.showMaValues !== false ? (
         <>
@@ -524,7 +530,10 @@ function fmtNum(v: number | null | undefined, digits: number): string {
   return v === null || v === undefined ? "-" : v.toLocaleString("ko-KR", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 }
 
-/** 가로 기준선 + 오른쪽 축 태그 */
+/**
+ * 가로 기준선 + 글자. spot 이 있으면 글자를 그림 안(placeInsideLabels 가 고른 자리)에 옅은 바탕 상자와 함께,
+ * 없으면 오른쪽 축 태그(현재가)
+ */
 function Tag({
   y,
   plotW,
@@ -534,8 +543,8 @@ function Tag({
   dashed,
   dotted,
   filled,
-  inside,
-  topLimit = 12,
+  spot,
+  bg,
 }: {
   y: number;
   plotW: number;
@@ -545,23 +554,66 @@ function Tag({
   dashed?: boolean;
   dotted?: boolean;
   filled?: boolean;
-  /** 글자를 축이 아니라 그림 안 선 위에 적는다 (왼쪽 끝 또는 오른쪽 끝) */
-  inside?: "left" | "right";
-  topLimit?: number;
+  /** 그림 안 글자 자리 (평단·52주) */
+  spot?: LabelSpot;
+  /** 그림 안 글자 바탕색 */
+  bg?: string;
 }) {
   const t = useTheme();
-  const textW = textWidth(label) + 6;
-  // 그림 맨 위 가까이면 선 아래에 적는다
-  const ty = inside ? (y - 4 < topLimit ? y + 12 : y - 4) : y + 3.5;
   return (
     <>
       <Line x1={0} x2={plotW} y1={y} y2={y} stroke={color} strokeWidth={dotted ? 0.8 : 1} strokeDasharray={dashed ? "5 3" : dotted ? "1.5 3" : undefined} strokeOpacity={dotted ? 0.7 : 0.9} />
-      {filled ? <Rect x={plotW} y={y - 8} width={axisW} height={16} fill={color} rx={3} /> : null}
-      {inside ? <Rect x={inside === "left" ? 2 : plotW - textW - 2} y={ty - 10} width={textW} height={13} fill={t.bg} fillOpacity={0.75} rx={2} /> : null}
-      <SvgText x={inside === "left" ? 5 : inside === "right" ? plotW - 5 : plotW + 4} y={ty} textAnchor={inside === "right" ? "end" : "start"} fill={filled ? t.bg : color} fontSize={font.tiny} fontWeight={dotted ? "400" : "700"}>
+      {spot ? (
+        <LabelText spot={spot} label={label} color={color} bg={bg ?? t.surface} bold={!dotted} />
+      ) : (
+        <>
+          {filled ? <Rect x={plotW} y={y - 8} width={axisW} height={16} fill={color} rx={3} /> : null}
+          <SvgText x={plotW + 4} y={y + 3.5} fill={filled ? t.bg : color} fontSize={font.tiny} fontWeight="700">
+            {label}
+          </SvgText>
+        </>
+      )}
+    </>
+  );
+}
+
+/** 그림 안 글자 한 개: 바탕색 토큰으로 옅게 깐 상자 + 글자 (뒤의 봉·선을 가려 글자가 읽히게) */
+function LabelText({ spot, label, color, bg, bold }: { spot: LabelSpot; label: string; color: string; bg: string; bold: boolean }) {
+  const b = spot.box;
+  return (
+    <>
+      <Rect x={b.left} y={b.top} width={b.right - b.left} height={b.bottom - b.top} fill={bg} fillOpacity={LABEL_BG_OPACITY} rx={radius.sm / 2} />
+      <SvgText x={spot.x} y={spot.ty} textAnchor={spot.side === "right" ? "end" : "start"} fill={color} fontSize={font.tiny} fontWeight={bold ? "700" : "400"}>
         {label}
       </SvgText>
     </>
+  );
+}
+
+/**
+ * 과거 구간 안내 (기능 플래그 detailPolish): 차트를 과거로 옮겼으면 그림 위 가운데에 '2일 전까지 보는 중 · 최신으로'.
+ * 누르면 최신 구간으로. 보이는 높이 32 + 위아래 hitSlop = 누르는 영역 44. 그림 칸(가격 축 제외) 가운데에 놓고 칸을 넘지 않게 한 줄로 줄인다.
+ * 둘레 틀은 누르기를 통과시켜(box-none) 버튼 밖 그림은 그대로 드래그·십자선이 된다
+ */
+function PastViewButton({ text, onPress, plotW }: { text: string; onPress: () => void; plotW: number }) {
+  const t = useTheme();
+  return (
+    <View style={[styles.pastWrap, { width: plotW }]}>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${text}. 누르면 최신 차트로 돌아갑니다`}
+        hitSlop={slopFor(BANNER_H)}
+        style={({ pressed }) => [styles.past, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.accent }]}
+      >
+        <Ionicons name="time-outline" size={font.small} color={t.muted} />
+        <Text style={[styles.pastText, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome}>
+          {text}
+          <Text style={{ color: t.accent, fontWeight: "700" }}> · 최신으로</Text>
+        </Text>
+        <Ionicons name="play-forward" size={font.small} color={t.accent} />
+      </Pressable>
+    </View>
   );
 }
 
@@ -686,4 +738,17 @@ const styles = StyleSheet.create({
   // 넓은 창 이동평균 값 줄: 항목 사이는 예전 두 칸 띄어쓰기만큼, 네모와 글자 사이는 한 칸만큼. 줄 사이 간격은 두지 않는다
   maLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: 0 },
   maItem: { flexDirection: "row", alignItems: "center", gap: space.xxs },
+  // 과거 구간 안내: 그림 위 가운데 (자리를 차지하지 않고 덧그린다). 둘레 틀은 누르기를 통과시킨다
+  pastWrap: { position: "absolute", top: space.xs, left: 0, alignItems: "center", pointerEvents: "box-none" },
+  past: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.xs,
+    minHeight: BANNER_H,
+    maxWidth: "100%",
+    paddingHorizontal: space.sm,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  pastText: { fontSize: font.small, fontWeight: "600", flexShrink: 1, fontVariant: ["tabular-nums"] },
 });

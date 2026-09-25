@@ -230,6 +230,24 @@ export function maLegendItems(mas: { period: number; values: Series }[], index: 
   });
 }
 
+// ── 과거 구간 안내 ──
+
+/** 분봉 한 개의 분 */
+const BAR_MINUTES: Partial<Record<CandlePeriod, number>> = { "1m": 1, "5m": 5, "30m": 30 };
+
+/**
+ * 차트를 과거로 옮겼을 때 차트 위에 띄우는 안내 (기능 플래그 detailPolish): '2일 전까지 보는 중'.
+ * offset 은 최신 봉에서 몇 봉 앞으로 갔는지. 일·주봉은 '일'·'주', 월봉은 '개월'('3월'은 달 이름으로 읽힌다),
+ * 분봉은 봉 수 × 봉 길이의 '분'(장중 거래 시간 기준 — 5분봉 3개 앞이면 15분). 최신 구간(0 이하)이면 null
+ */
+export function pastViewText(offset: number, period: CandlePeriod): string | null {
+  if (!(offset > 0) || !Number.isFinite(offset)) return null;
+  const n = Math.round(offset);
+  const mins = BAR_MINUTES[period];
+  const amount = mins ? `${(n * mins).toLocaleString("ko-KR")}분` : `${n.toLocaleString("ko-KR")}${period === "W" ? "주" : period === "M" ? "개월" : "일"}`;
+  return `${amount} 전까지 보는 중`;
+}
+
 // ── 칩 띠 가장자리 ──
 
 export interface FadeEdges {

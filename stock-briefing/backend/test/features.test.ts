@@ -21,7 +21,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
       now: NOW,
     });
     try {
-      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, foldLayout: true }, updatedAt: null });
+      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, foldLayout: true, detailPolish: true }, updatedAt: null });
       const history = async () => ((await app.inject({ method: "GET", url: "/api/admin/toss/reconcile" })).json() as { history: unknown[] }).history.length;
       expect((await app.inject({ method: "POST", url: "/api/admin/toss/import-holdings" })).statusCode).toBe(200);
       await vi.waitFor(async () => expect(await history()).toBe(1)); // 대조는 동기화를 기다리지 않고 뒤에서 돈다
@@ -72,7 +72,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect((await new FeatureService(db, NOW).all()).features).toMatchObject({ tossReconcile: false, briefingSources: false });
     await db.updateTable("meta").set({ value: JSON.stringify({ overrides: { briefingSources: false, removedFlag: true }, updatedAt: "x" }) }).where("key", "=", "features").execute();
     const b = new FeatureService(db, NOW);
-    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, foldLayout: true });
+    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, foldLayout: true, detailPolish: true });
     await db.destroy();
   });
 
@@ -118,6 +118,22 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect(detail?.description).toMatch(/끄면 .*휴대폰 화면 그대로/);
     // 기본값으로 되돌리면 다시 켜짐
     expect((await f.set({ foldLayout: null })).features.foldLayout).toBe(true);
+    await db.destroy();
+  });
+
+  it("종목 상세 다듬기(detailPolish)는 앱만 쓰는 플래그: 기본 켜짐, 끄면 앱이 받는 값만 꺼짐 (다른 플래그·서버 작업은 그대로)", async () => {
+    const db = await createMigratedDb(":memory:");
+    const f = new FeatureService(db, NOW);
+    expect((await f.all()).features.detailPolish).toBe(true);
+    await f.set({ detailPolish: false });
+    const all = await f.all();
+    expect(all.features.detailPolish).toBe(false);
+    expect(all.features.foldLayout).toBe(true);
+    const detail = (await f.detail()).find((x) => x.key === "detailPolish");
+    expect(detail).toMatchObject({ enabled: false, default: true, overridden: true });
+    expect(detail?.description).toMatch(/보유/);
+    expect(detail?.description).toMatch(/끄면/);
+    expect((await f.set({ detailPolish: null })).features.detailPolish).toBe(true);
     await db.destroy();
   });
 });

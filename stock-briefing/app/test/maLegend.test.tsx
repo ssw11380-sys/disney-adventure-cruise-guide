@@ -14,7 +14,7 @@ vi.mock("react-native", () => ({
   Text: "Text",
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
 }));
-vi.mock("react-native-svg", () => ({ Svg: "Svg", Line: "Line", Path: "Path", Rect: "Rect", Text: "SvgText" }));
+vi.mock("react-native-svg", () => ({ Svg: "Svg", Line: "Line", Path: "Path", Rect: "Rect", Text: "SvgText", G: "G", Defs: "Defs", ClipPath: "ClipPath" }));
 vi.mock("react-native-gesture-handler", () => {
   // Gesture.Pan().runOnJS(true).minDistance(8)... 처럼 이어 부르는 설정을 모두 받아 주는 가짜
   const chain: unknown = new Proxy(function () {}, { get: (_t, key) => (key === "then" ? undefined : () => chain), apply: () => chain });

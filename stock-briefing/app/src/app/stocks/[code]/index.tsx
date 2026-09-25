@@ -3,7 +3,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useMemo, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useAnyMarketOpen, useBriefings, useCandles, useStock, useStockMutations } from "@/api/hooks";
+import { useAnyMarketOpen, useBriefings, useCandles, useFeature, useStock, useStockMutations } from "@/api/hooks";
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { CandleChart } from "@/components/CandleChart";
@@ -15,6 +15,7 @@ import { Screen } from "@/components/Screen";
 import { SplitScreen } from "@/components/SplitScreen";
 import { AnalysisPreview, AnalysisTab, BriefingList, DetailHeader, FillChart, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
 import { ErrorView, LiveDot, Segmented, Stat, StatGrid } from "@/components/ui";
+import { displayName, holdingLine, realText } from "@/lib/detailText";
 import { detailMode, parseDetailTab, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, shownSign, toDisplay } from "@/lib/format";
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
@@ -23,6 +24,7 @@ import { quoteLive, sessionNote, sessionOpen } from "@/lib/liveDot";
 import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
+import { isBigText } from "@/lib/textScale";
 import { changeColor, font, layout, slopFor, space, useTheme } from "@/theme";
 import { foldDetail } from "@/tokens";
 import { sentence, speakMove, speakRate } from "@/lib/a11y";
@@ -71,6 +73,8 @@ export default function StockDetailScreen() {
   const { showKrw, afterCost } = useSettings();
   // 넓은 창 배치 (플래그가 꺼져 있으면 창 크기와 상관없이 phone)
   const fold = useFoldLayout();
+  // 휴대폰·접은 화면 시세 머리 아래 보유 한 줄 (기능 플래그 detailPolish — 앱 fallback 꺼짐)
+  const polish = useFeature("detailPolish", false);
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const mode = detailMode(fold, win);
@@ -156,6 +160,9 @@ export default function StockDetailScreen() {
   // 목록 캐시 줄은 상세 응답과 같은 모양 (registered 가 없으면 등록 종목 — 잔고 목록에 있으니 맞다)
   const s: NonNullable<typeof stock.data> = stock.data ?? seed!;
   const q = s.quote;
+  // 이름이 티커뿐이면(토스 동기화로 들어온 RGTX 등) 시세가 준 사람이 읽는 이름으로, 업종 자리표시('-')는 뺀다 (2026-09-26 버그 수정)
+  const name = displayName(s.name, s.code, q?.fullName);
+  const industry = realText(q?.industry);
   // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가
   const unregistered = s.registered === false;
   const addWatch = () => {
@@ -184,6 +191,9 @@ export default function StockDetailScreen() {
   const evNative = evalView(baseEval, { afterCost, toKrw: false, currency: cur, fx });
   const evKrw = cur === "USD" ? evalView(baseEval, { afterCost, toKrw: true, currency: cur, fx }) : null;
   const ev = evNative;
+  // 시세 머리 아래 보유 한 줄 (휴대폰·접은 화면만 — 넓은 창은 옆 칸·첫 칸에 '내 보유'가 이미 보인다).
+  // 잔고 화면 줄과 같은 평가: 매도 비용 차감(afterCost)·원화로 보기(showKrw) 설정을 따른다
+  const hold = polish && mode === "phone" ? holdingLine(s.quantity, evalView(baseEval, { afterCost, toKrw: showKrw, currency: cur, fx })) : null;
   const quote = (n: number | null | undefined) => formatQuoteDisplay(n, cur, fx, showKrw);
   const arrow = (n: number | null | undefined) => formatArrowDisplay(n, cur, fx, showKrw);
   const range52 = q && q.high52w && q.low52w && q.high52w > q.low52w ? Math.min(1, Math.max(0, (q.price - q.low52w) / (q.high52w - q.low52w))) : null;
@@ -260,7 +270,7 @@ export default function StockDetailScreen() {
           options={{
             // 넓은 창에서 숨겼던 머리를 되살린다 (처음부터 좁은 창이면 지금 옵션 그대로)
             ...(hidHeader ? { headerShown: true } : {}),
-            title: s.name,
+            title: name,
             headerRight: () =>
               unregistered ? (
                 <Pressable onPress={addWatch} disabled={adding} accessibilityRole="button" accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={slopFor(font.small * 1.35, space.xs)} style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginRight: space.sm, paddingHorizontal: space.xs }}>
@@ -279,7 +289,7 @@ export default function StockDetailScreen() {
         <View style={[styles.quoteHead, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
           <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={1}>
             {s.code} · {s.market}
-            {q?.industry ? ` · ${q.industry}` : ""}
+            {industry ? ` · ${industry}` : ""}
             {unregistered ? " · 미등록" : s.quantity ? "" : " · 관심"}
           </Text>
           {q ? (
@@ -323,6 +333,14 @@ export default function StockDetailScreen() {
           ) : (
             <Text style={{ color: t.danger, marginTop: space.xs }}>{s.quoteError ?? "시세 없음"}</Text>
           )}
+          {hold ? (
+            // 보유 한 줄 (detailPolish): 첫 화면에서 차트를 밀어내지 않게 한 줄(큰 글씨는 두 줄까지). 색은 보이는 값의 부호로 (BH-38)
+            <Text style={styles.sub(t.muted)} numberOfLines={isBigText(win.fontScale) ? 2 : 1} accessibilityLabel={hold.a11y}>
+              <Text style={{ color: t.gold, fontWeight: "700" }}>보유 {hold.quantity}주</Text> · 평가손익{" "}
+              <Text style={{ color: changeColor(t, hold.profitSign), fontWeight: "700" }}>{hold.profit}</Text>{" "}
+              <Text style={{ color: changeColor(t, hold.rateSign) }}>({hold.rate})</Text>
+            </Text>
+          ) : null}
         </View>
 
         {/* 차트 */}
@@ -411,8 +429,8 @@ export default function StockDetailScreen() {
     : [];
   const header = (
     <DetailHeader
-      name={s.name}
-      sub={`${s.code} · ${s.market}${q?.industry ? ` · ${q.industry}` : ""}${unregistered ? " · 미등록" : s.quantity ? "" : " · 관심"}`}
+      name={name}
+      sub={`${s.code} · ${s.market}${industry ? ` · ${industry}` : ""}${unregistered ? " · 미등록" : s.quantity ? "" : " · 관심"}`}
       quote={
         q
           ? {

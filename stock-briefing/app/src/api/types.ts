@@ -82,6 +82,11 @@ export interface Quote {
   dividendPerShare?: number | null;
   dividendYieldPct?: number | null;
   industry?: string | null;
+  /**
+   * 사람이 읽는 종목 이름 (새 서버만, 보강 소스가 줄 때만 — 미국 종목은 한글 이름이 있으면 한글, ETF 등은 영문).
+   * 등록 이름이 티커뿐인 종목(RGTX 등)의 상세 제목에 쓴다 (lib/detailText displayName)
+   */
+  fullName?: string | null;
 }
 
 /** 토스증권 공식 Open API 연동 상태 (/health, /api/admin/toss/status) */

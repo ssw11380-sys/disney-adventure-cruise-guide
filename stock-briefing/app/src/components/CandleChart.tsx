@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { useFeature } from "@/api/hooks";
 import type { Candle, CandlePeriod, ChartUnit, Currency, Quote } from "@/api/types";
-import { candleChartSize } from "@/lib/chartLayout";
+import { candleChartSize, pastViewText } from "@/lib/chartLayout";
 import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
@@ -62,7 +63,7 @@ export function CandleChart({
   compact?: boolean;
   /** 거래량이 없는 시계열(환율)이면 false: 거래량 pane·토글·읽기를 뺀다 */
   hasVolume?: boolean;
-  /** 차트 뒤 바탕색 (넓은 창에서 칩 띠 끝을 이 색으로 흐리게 칠한다). 기본은 패널 색 t.surface, 전체 화면은 t.bg */
+  /** 차트 뒤 바탕색 (칩 띠 끝 흐림과 그림 안 평단·52주 글자 바탕을 이 색으로 칠한다). 기본은 패널 색 t.surface, 전체 화면은 t.bg */
   backdrop?: string;
 }) {
   const t = useTheme();
@@ -106,6 +107,11 @@ export function CandleChart({
 
   const clamped = clampView(view, all.length);
   const maxOffset = Math.max(all.length - clamped.count, 0);
+  // 과거로 옮겼으면 차트 위에 '2일 전까지 보는 중 · 최신으로' (기능 플래그 detailPolish — 앱 fallback 꺼짐).
+  // 보이는 구간은 이 화면의 상태라 화면을 다시 열거나 기간을 바꾸면 최신 구간에서 시작한다 (아래 vs)
+  const polish = useFeature("detailPolish", false);
+  const pastText = polish ? pastViewText(clamped.offset, period) : null;
+  const toLatest = () => setView((v) => ({ count: v.count, offset: 0 }));
   const shift = (dir: -1 | 1) => setView((v) => clampView({ count: v.count, offset: v.offset + dir * Math.round(v.count / 2) }, all.length));
   const pickWindow = (i: number) => {
     setVs((prev) => {
@@ -167,9 +173,10 @@ export function CandleChart({
   return (
     <View style={{ gap: space.s }} onLayout={widthProp === undefined ? (e) => setBox(e.nativeEvent.layout.width) : undefined}>
       {/* 조작 한 줄 (3-21): [일 주 월 | 봉 수 | 1분 5분 30분] 은 가로로 넘기고, 과거·최신·크게 보기는 오른쪽에 고정.
-          자주 쓰는 일·주·월과 봉 수를 앞에 둔다 (분봉은 넘겨서). 넓은 창이면 넘길 칩이 더 있는 쪽 끝은 흐리게 (ChipStrip) */}
+          자주 쓰는 일·주·월과 봉 수를 앞에 둔다 (분봉은 넘겨서). 넘길 칩이 더 있는 쪽 끝은 흐리게 (ChipStrip — 모든 창,
+          접은 화면에서 반쯤 잘린 '30분'·'RSI' 칩이 깨진 글자가 아니라 넘길 수 있다는 표시로 보이게. 2026-09-26 버그 수정) */}
       <View style={styles.toolRow}>
-        <ChipStrip backdrop={fadeBg} fade={wide} style={styles.grow}>
+        <ChipStrip backdrop={fadeBg} style={styles.grow}>
           {TOOL_ORDER.slice(0, 3).map((o) => periodChip(o))}
           <Pressable
             onPress={() => pickWindow((windowIdx + 1) % WINDOWS[period].length)}
@@ -230,12 +237,14 @@ export function CandleChart({
           low52w={conv(quote?.low52w)}
           showMaValues={!compact}
           maItems={wide}
+          labelBg={fadeBg}
+          pastView={pastText ? { text: pastText, onLatest: toLatest } : null}
         />
       )}
 
       {/* 오버레이 · 지표 (전체 화면이면 위 조작 줄 안으로 합쳐 차트를 더 크게, 3-21) */}
       {compact ? null : (
-        <ChipStrip backdrop={fadeBg} fade={wide}>
+        <ChipStrip backdrop={fadeBg}>
           {overlayChips}
         </ChipStrip>
       )}
