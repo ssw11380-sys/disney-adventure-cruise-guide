@@ -24,6 +24,9 @@ import { foldScreens } from "@/tokens";
  * 금액은 잔고 탭 총 평가금액과 같은 기준(비용 차감 설정·환율)이고, 사실만 보여 준다 — 판단·권유 문구는 넣지 않는다.
  * 플래그가 꺼져 있으면 잔고를 받지도 계산하지도 않는다 (화면 작업 0건).
  */
+/** 요약의 제외 안내 한 줄 높이 (글자 12 × 줄 간격 약 1.45, 글자 100%) */
+const NOTE_LINE_H = Math.ceil(font.small * 1.45);
+
 export default function AllocationScreen() {
   const on = useFeature("allocationView", false);
   if (!on)
@@ -49,9 +52,11 @@ function AllocationBody() {
   const wide = fold.on && isWide(fold);
   const room = useMemo(() => {
     const rows = [a.charts.slice(0, 2), a.charts.slice(2, 4)].filter((r) => r.length).map((r) => Math.max(...r.map((c) => c.slices.length)));
-    // 격자가 쓸 높이 = 창 − 시스템 막대(위·아래) − 화면 머리·요약·고지 어림 (글자가 크면 그만큼 크게 잡는다)
-    return { height: height - insets.top - Math.max(insets.bottom, space.sm) - Math.round(foldScreens.allocChromeH * clampScale(fontScale)), rows };
-  }, [a.charts, height, insets.top, insets.bottom, fontScale]);
+    // 격자가 쓸 높이 = 창 − 시스템 막대(위·아래) − 화면 머리·요약·고지 어림 (글자가 크면 그만큼 크게 잡는다).
+    // 요약에 제외 안내(시세·환율 없는 종목 제외)가 붙으면 그 한 줄만큼 더 뺀다 — 넷째 카드가 첫 화면 밖으로 밀리지 않게
+    const noteH = excludedNote(a.excluded) ? Math.ceil(NOTE_LINE_H * clampScale(fontScale)) : 0;
+    return { height: height - insets.top - Math.max(insets.bottom, space.sm) - Math.round(foldScreens.allocChromeH * clampScale(fontScale)) - noteH, rows };
+  }, [a.charts, a.excluded, height, insets.top, insets.bottom, fontScale]);
   // 배치 단계(원 아래 / 원 옆 두 줄 / 원 옆 한 줄) 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스).
   // 좁은 창이거나 아직 그릴 차트가 없으면(잔고를 받는 중) 바로 전 배치를 지운다(null) — 접은 화면에서 펴거나 잔고가 늦게 와도
   // 처음부터 잔고를 가진 채 연 것과 같은 배치 (받기 전 '범례 없음' 높이로 고른 단계가 남지 않게)

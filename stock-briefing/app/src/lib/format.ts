@@ -109,7 +109,8 @@ export function formatKrwCompact(n: number | null | undefined, currency: Currenc
     if (abs >= 1e4) return `${sign}$${Math.round(abs / 1e3).toLocaleString("en-US")}K`;
     return withSign(n, `$${Math.round(abs).toLocaleString("en-US")}`, false);
   }
-  if (abs >= 9_999.5e8) return `${sign}${(abs / 1e12).toFixed(abs >= 9.95e12 ? 0 : 1)}조원`;
+  // 조 단위도 천 단위 쉼표 (미국 대형주를 원화로 보면 1,000~6,500조원 — 옆 칸 '1,041억원' 과 같은 표기로)
+  if (abs >= 9_999.5e8) return `${sign}${abs >= 9.95e12 ? Math.round(abs / 1e12).toLocaleString("ko-KR") : (abs / 1e12).toFixed(1)}조원`;
   if (abs >= 9_999.5e4) return `${sign}${Math.round(abs / 1e8).toLocaleString("ko-KR")}억원`;
   if (abs >= 1e4) return `${sign}${Math.round(abs / 1e4).toLocaleString("ko-KR")}만원`;
   return withSign(n, `${Math.round(abs).toLocaleString("ko-KR")}원`, false);

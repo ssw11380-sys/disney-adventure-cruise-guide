@@ -436,6 +436,27 @@ describe("접고 펴기 이어 보기", () => {
     expect(h.briefingIds.at(-1)).toBe(509);
   });
 
+  it("넓은 창에서 연 전체 화면 브리핑을 읽다가 접어도 폰 목록 강조를 끄지 않는다 (탭에서 접을 때와 같다 — 통합 검증 should)", () => {
+    h.flags.foldLayout = true;
+    size(704, 861);
+    const r = render(<BriefingDetailScreen />);
+    expect(pick.currentPick()).toEqual({ pick: { kind: "stock", id: 512 }, highlight: true });
+    size(475, 679);
+    r.rerender();
+    expect(pick.currentPick()).toEqual({ pick: { kind: "stock", id: 512 }, highlight: true });
+  });
+
+  it("카드 격자의 계좌 줄(link)도 고른 것이면 화면 읽기에 '선택됨'", async () => {
+    pick.pickBriefing({ kind: "account", id: 12 }, { highlight: true });
+    h.flags.foldLayout = true;
+    size(704, 861);
+    const r = render(<BriefingsScreen />);
+    await settle(r);
+    const acct = r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel).startsWith("내 계좌 브리핑"))!;
+    expect(acct.props.accessibilityRole).toBe("link");
+    expect(acct.props.accessibilityState).toEqual({ selected: true });
+  });
+
   it("접은 채로 연 브리핑은 강조하지 않는다 (접은 화면만 쓰면 지금과 똑같다) · 그래도 펴면 그 브리핑이 골라져 있다", async () => {
     h.flags.foldLayout = true;
     h.params = { id: "513" };
@@ -633,8 +654,10 @@ describe("2단 첫 선택 · 새 세션 · 목록 안내", () => {
     const r = await open();
     const textGroup = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.props.accessibilityRole === "header" && c.children.join("") === "엔비디아"))!;
     const kids = textGroup.children.filter((c): c is HostNode => typeof c !== "string");
-    expect(kids.map((c) => c.type)).toEqual(["Text", "Muted"]);
-    expect(JSON.stringify(norm(kids[1]!))).toContain("08:02");
+    // 날짜·세션과 만든 시각은 따로 묶음 (좁으면 묶음째 다음 줄 — '생/성' 처럼 글자 가운데서 꺾이지 않게)
+    expect(kids.map((c) => c.type)).toEqual(["Text", "Muted", "Muted"]);
+    expect(kids[1]!.children.join("")).toMatch(/브리핑 ·$/);
+    expect(kids[2]!.children.join("")).toBe("08:02 생성");
     expect(flat(textGroup)).toMatchObject({ flexDirection: "row", flexWrap: "wrap", flex: 1 });
     // 버튼은 줄바꿈 묶음 밖 (미확인 배지·긴 날짜로 글이 넘쳐도 버튼만 둘째 줄로 떨어지지 않는다)
     const headRow = r.all().find((n) => n.children.includes(textGroup))!;
@@ -642,7 +665,8 @@ describe("2단 첫 선택 · 새 세션 · 목록 안내", () => {
     expect(row.map((c) => c.type)).toEqual(["View", "Button"]);
     expect(flat(headRow)).toMatchObject({ flexDirection: "row" });
     expect(flat(headRow)).not.toHaveProperty("flexWrap");
-    expect(row[1]!.props).toMatchObject({ title: "종목 보기", style: { flexShrink: 0 } });
+    // 버튼은 첫 줄 위쪽에 붙는다 (글이 두 줄이어도 두 줄 사이에 뜨지 않게)
+    expect(row[1]!.props).toMatchObject({ title: "종목 보기", style: { flexShrink: 0, alignSelf: "flex-start" } });
     const body = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.type === "MarkdownView"))!;
     expect(flat(body).paddingTop).toBe(0);
     const group = r.all().find((n) => n.children.includes(body))!;
@@ -957,6 +981,60 @@ describe("2단 읽음 · 계좌 브리핑 · 빈 목록 · 안내", () => {
     expect(pick.currentPick().pick).toEqual({ kind: "stock", id: 509, code: "AAPL" });
     expect(r.text()).not.toContain("계좌 브리핑을 볼 수 없습니다");
     expect(r.all().filter((n) => n.type === "Text" && n.props.accessibilityRole === "header").map((n) => n.children.join(""))).toContain("애플");
+  });
+
+  it("오른쪽에 계좌 브리핑을 보던 중 새 계좌 브리핑(같은 날 오후)이 오면 새 것을 고른다 · 알림으로 연 지난 계좌 브리핑은 그대로 (통합 검증 should)", async () => {
+    const r = await open();
+    press(r, acctRow(r));
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 12 });
+    // 종목 목록 세션은 그대로이고 계좌 목록만 새 것(13)으로
+    h.accounts = [{ ...ACCOUNT, id: 13, session: "afternoon" }];
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 13 });
+    expect(acctRow(r).props.accessibilityState).toEqual({ selected: true });
+    // 목록과 다른 지난 계좌 브리핑(알림으로 연 12)을 일부러 보는 중이면 바꾸지 않는다
+    pick.pickBriefing({ kind: "account", id: 12 }, { highlight: true });
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 12 });
+  });
+
+  it("2단 오른쪽 칸은 불러오는 중·오류·꺼짐에도 고지를 붙인다 (고지 줄이 사라졌다 나타나며 들썩이지 않게) · 전체 화면은 지금 그대로", async () => {
+    h.accountDetail = undefined;
+    const pane = render(<AccountBriefingBody numId={12} layout="pane" />);
+    expect(ofType(pane, "CardsSkeleton")).toHaveLength(1);
+    expect(ofType(pane, "Screen")[0]!.props.disclaimer).toBe(true);
+    const stack = render(<AccountBriefingBody numId={12} layout="stack" />);
+    expect(ofType(stack, "CardsSkeleton")).toHaveLength(1);
+    expect(ofType(stack, "Screen")[0]!.props.disclaimer).toBeFalsy();
+    h.flags.accountBriefing = false;
+    const off = render(<AccountBriefingBody numId={12} layout="pane" />);
+    expect(ofType(off, "Empty")).toHaveLength(1);
+    expect(ofType(off, "Screen")[0]!.props.disclaimer).toBe(true);
+    // 고르기 전 뼈대(DetailPane)도
+    h.flags.accountBriefing = true;
+    h.stocks = undefined;
+    h.accountDetail = { ...ACCOUNT, data: ACCOUNT_DATA };
+    const r = await open();
+    const skeletonScreen = ofType(r, "Screen").find((x) => x.children.some((c) => typeof c !== "string" && c.type === "CardsSkeleton"))!;
+    expect(skeletonScreen.props.disclaimer).toBe(true);
+  });
+
+  it("목록 위 안내는 화면 읽기가 한 문장으로 한 번에 읽는다 (묶음마다 나눠 읽거나 '·' 를 읽지 않게)", async () => {
+    h.market = { KR: { isTradingDay: false, opensAt: "2026-09-28T08:00:00+09:00" }, US: { isTradingDay: true } };
+    const r = await open();
+    const box = r.all().find((n) => n.type === "View" && flat(n).minHeight === FB.noticeH)!;
+    expect(box.props.accessible).toBe(true);
+    expect(box.props.accessibilityLabel).toBe("한국 휴장일 · 국내 종목은 직전 거래일 등락 · 다음 개장 9월 28일 (월)");
+  });
+
+  it("계좌 줄 둘째 줄: 구분점은 앞 묶음(당일 손익) 끝에 — 줄이 넘어가도 '· 기여 1위' 로 시작하지 않는다", async () => {
+    const r = await open();
+    const txt = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(txt).join(""));
+    const nums = acctRow(r).children.filter((c): c is HostNode => typeof c !== "string" && c.type === "View" && flat(c).flexWrap === "wrap");
+    const chunks = nums.at(-1)!.children.filter((c): c is HostNode => typeof c !== "string").map(txt);
+    expect(chunks).toEqual(["당일 +423,788원 +0.60% ·", "기여 1위 엔비디아 +169,763원"]);
   });
 
   it("계좌 브리핑 목록을 받는 중에는 고른 계좌 브리핑을 없어졌다고 보지 않는다 (알림으로 열고 돌아온 직후)", async () => {

@@ -32,15 +32,17 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   const flags = useFeatures();
   const q = useAccountBriefing(numId ?? 0, on && numId !== null);
   const data = gated(on, q.data);
+  // 2단 오른쪽 칸은 고지가 이 칸에만 있으므로 불러오는 중·오류·꺼짐에도 붙인다 (고지 줄이 들썩이지 않게). 전체 화면은 지금 그대로
+  const paneNote = layout === "pane";
 
   if (numId === null) return <Screen><ErrorView error={new Error("계좌 브리핑 주소가 올바르지 않습니다")} retryLabel="브리핑 목록으로" onRetry={() => router.dismissTo("/briefings")} /></Screen>;
   if (!on) {
     // 플래그를 아직 못 받았으면(알림으로 막 켠 경우) 잠깐 기다린다
-    if (flags.data === undefined && flags.isFetching) return <Screen><CardsSkeleton count={2} /></Screen>;
+    if (flags.data === undefined && flags.isFetching) return <Screen disclaimer={paneNote}><CardsSkeleton count={2} /></Screen>;
     // 플래그를 받지 못함(끊김·서버 오류·오프라인으로 멈춤): '꺼져 있다'고 하지 않고 연결을 확인하게
     if (flags.data === undefined) {
       return (
-        <Screen>
+        <Screen disclaimer={paneNote}>
           <Empty
             title="계좌 브리핑을 불러오지 못했습니다"
             hint="연결을 확인해 주세요. 인터넷이 연결되면 다시 시도할 수 있습니다."
@@ -51,7 +53,7 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
     }
     // 2단 오른쪽 칸은 이미 브리핑 탭 안이라 '브리핑 탭으로' 버튼을 두지 않는다 (누르면 아무 일도 없는 버튼이 되므로)
     return (
-      <Screen>
+      <Screen disclaimer={paneNote}>
         <Empty
           title="계좌 브리핑을 볼 수 없습니다"
           hint={layout === "pane" ? "지금은 계좌 브리핑이 꺼져 있습니다. 왼쪽 목록에서 종목 브리핑을 고르세요." : "지금은 계좌 브리핑이 꺼져 있습니다. 종목별 브리핑은 브리핑 탭에 있습니다."}
@@ -61,8 +63,8 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
     );
   }
   const view = viewState(q);
-  if (view === "error") return <Screen><ErrorView error={q.error} onRetry={() => void q.refetch()} /></Screen>;
-  if (view === "loading" || !data) return <Screen><CardsSkeleton count={3} /></Screen>;
+  if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} /></Screen>;
+  if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
   // 2단 오른쪽 칸은 끊김·지연 띠를 탭 위쪽에 한 번만 둔다
   return <AccountBriefingView b={data} top={layout === "pane" ? null : <StaleBanner query={q} />} layout={layout} title={title} />;
 }

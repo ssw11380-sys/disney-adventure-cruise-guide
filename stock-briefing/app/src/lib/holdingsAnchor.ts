@@ -75,6 +75,8 @@ type Tagged<T> = T & { mode: AnchorMode };
 
 export interface HoldingsAnchor {
   ref: RefObject<ScrollView | null>;
+  /** 지금 목록에 있는 종목 코드만 남기고 나머지(삭제된 종목) 위치는 버린다 — 맨 위 종목으로 사라진 종목을 고르지 않게 */
+  keep: (codes: ReadonlySet<string>) => void;
   onScroll: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
   /**
    * 사용자가 직접 끌기 시작하면 아직 못 맞춘 복원은 버리고(사라진 종목을 기다리며 기억을 막지 않게),
@@ -103,6 +105,11 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
    * 스크롤이 끝에서 멈추는데(그 위치의 맨 위는 다른 종목), 그 위치로 기억을 바꾸면 다시 접을 때 처음 보던 종목이 아니라 다른 종목으로 돌아간다
    */
   const hold = useRef(false);
+  /**
+   * 되맞춘 뒤 처음 받은 스크롤 위치 (실제로 멈춘 자리 — 목록 끝이면 요청한 위치보다 위). 여기서 줄 반 개(HOLD_SLACK) 넘게 움직이면
+   * 손가락 끌기가 아니어도(화면 읽기 자동 스크롤·마우스 휠·키보드) 사용자가 옮긴 것으로 보고 기억을 다시 켠다
+   */
+  const heldAt = useRef<number | null>(null);
 
   const tryRestore = useCallback(() => {
     const p = pending.current;
@@ -121,6 +128,7 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
     pending.current = null;
     memory.code = p.code;
     hold.current = true;
+    heldAt.current = null;
   }, []);
 
   // 그린 직후(줄 위치를 재기 전)에 배치를 바꾼다: 바뀌었으면 기억한 맨 위 종목으로 맞출 준비
@@ -139,13 +147,19 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
 
   const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const m = cur.current;
-    // 되맞추는 중이거나 되맞춘 스크롤(사용자가 아직 끌지 않음)의 이벤트는 기억에 반영하지 않는다
+    const y = e.nativeEvent.contentOffset.y;
+    if (hold.current && !pending.current) {
+      // 되맞춘 자리에서 줄 반 개 넘게 움직였으면(끌기가 아닌 스크롤 포함) 기억을 다시 켠다
+      if (heldAt.current === null) heldAt.current = y;
+      if (Math.abs(y - heldAt.current) > HOLD_SLACK) hold.current = false;
+    }
+    // 되맞추는 중이거나 되맞춘 스크롤(사용자가 아직 옮기지 않음)의 이벤트는 기억에 반영하지 않는다
     if (!m || pending.current || hold.current) return;
     const list = [...rows.current.values()].filter((r) => r.mode === m);
     const hs: Record<string, HeadPos> = {};
     for (const [k, h] of heads.current) if (h.mode === m) hs[k] = h;
     memory.mode = m;
-    memory.code = topAnchor(list, hs, e.nativeEvent.contentOffset.y);
+    memory.code = topAnchor(list, hs, y);
   }, []);
 
   const onScrollBeginDrag = useCallback(() => {
@@ -174,5 +188,12 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
     [tryRestore],
   );
 
-  return useMemo(() => ({ ref, onScroll, onScrollBeginDrag, row, head }), [onScroll, onScrollBeginDrag, row, head]);
+  const keep = useCallback((codes: ReadonlySet<string>) => {
+    for (const code of [...rows.current.keys()]) if (!codes.has(code)) rows.current.delete(code);
+  }, []);
+
+  return useMemo(() => ({ ref, keep, onScroll, onScrollBeginDrag, row, head }), [keep, onScroll, onScrollBeginDrag, row, head]);
 }
+
+/** 되맞춘 자리에서 이만큼(줄 반 개, dp) 넘게 움직이면 사용자가 옮긴 것으로 본다 */
+const HOLD_SLACK = 22;

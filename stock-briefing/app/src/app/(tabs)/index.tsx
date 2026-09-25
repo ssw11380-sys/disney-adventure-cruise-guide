@@ -96,6 +96,11 @@ export default function StocksScreen() {
     ];
   }, [data, sort, afterCost]);
 
+  // 이어 보기: 목록에서 빠진 종목(삭제 등)의 줄 위치는 버린다 (맨 위 종목으로 사라진 종목을 기억하지 않게)
+  useEffect(() => {
+    if (fold.on) anchor.keep(new Set(sections.flatMap((x) => x.data.map((i) => i.code))));
+  }, [fold.on, anchor, sections]);
+
   const confirmRemove = (s: RegisteredWithQuote) =>
     // 토스 연동 종목은 삭제하면 동기화에서도 빠진다는 것을 먼저 알린다 (수정 화면과 같은 문구)
     Alert.alert(s.name, s.tossSynced ? "토스 계좌에서 가져온 종목입니다. 삭제하면 토스 동기화에서도 빠져 다시 나타나지 않습니다 (다시 등록하면 다시 맞춤)." : undefined, [

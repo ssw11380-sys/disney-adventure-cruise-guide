@@ -338,8 +338,9 @@ function WideFrame({ rail, sides = true, children }: { rail: boolean; sides?: bo
 const DetailPane = React.memo(function DetailPane({ sel, pending, onPick }: { sel: BriefingPick | null; pending: boolean; onPick: (id: number, code: string) => void }) {
   if (sel) return sel.kind === "account" ? <AccountBriefingBody key={`a${sel.id}`} numId={sel.id} layout="pane" /> : <BriefingBody key={`s${sel.id}`} id={sel.id} layout="pane" onPick={onPick} />;
   if (!pending) return null;
+  // 고지는 2단에서 이 칸에만 있으므로 뼈대에도 붙인다
   return (
-    <Screen>
+    <Screen disclaimer>
       <CardsSkeleton count={2} />
     </Screen>
   );
@@ -378,6 +379,15 @@ function WideBriefings(p: WideProps) {
   // 단, 앱이 켜진 채 다음 세션 브리핑이 와서 고른 것이 목록에서 사라졌으면 새 목록의 첫 미확인을 다시 고른다.
   // 보던 계좌 브리핑이 없어지면(서버가 계좌 브리핑을 끔·목록이 빔) 막다른 안내 대신 바로 첫 미확인을 다시 고른다
   const accountGone = sel?.kind === "account" && accountId === null && p.accountSettled;
+  // 목록의 계좌 브리핑이 바뀌었을 때(같은 날 오후 등 새 계좌 브리핑이 옴) 바로 전 계좌 브리핑을 보던 중이면 새 것으로 옮긴다.
+  // (알림으로 연 지난 계좌 브리핑처럼 목록과 다른 것을 일부러 보던 경우는 그대로)
+  const prevAccountId = useRef(accountId);
+  useEffect(() => {
+    const prev = prevAccountId.current;
+    prevAccountId.current = accountId;
+    if (!p.twoPane || prev === accountId || accountId === null) return;
+    if (sel?.kind === "account" && sel.id === prev) pickBriefing({ kind: "account", id: accountId }, { highlight: true });
+  }, [p.twoPane, accountId, sel]);
   useEffect(() => {
     if (!p.twoPane || !settled) return;
     const fresh = noteListSession(latestKey);

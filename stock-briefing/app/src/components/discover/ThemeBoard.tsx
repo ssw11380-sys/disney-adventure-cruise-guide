@@ -10,6 +10,7 @@ import { heatColumns, themeLeaderLineW, themeListColumns } from "@/lib/discoverC
 import { formatDateKo, formatPct } from "@/lib/format";
 import { useSticky } from "@/lib/useSticky";
 import { changeColor, font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
+import { foldScreens } from "@/tokens";
 import { DISCLAIMER } from "@/components/Screen";
 import { StatusLine, usePull } from "./shared";
 import { SkeletonRows } from "./Skeleton";
@@ -147,14 +148,14 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
       {/* 전체 분포 요약 */}
       {all.length ? (
         <View style={[styles.breadth, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
-          <View style={styles.breadthTop}>
+          <View style={wide ? [styles.breadthTop, styles.breadthTopWide] : styles.breadthTop}>
             <Text style={{ color: t.muted, fontSize: font.small }}>
               {PERIOD_WORD[shownPeriod]} {kindWord} {all.length}개 · 상승 <Text style={{ color: t.up, fontWeight: "800" }}>{rising}</Text> · 하락{" "}
               <Text style={{ color: t.down, fontWeight: "800" }}>{falling}</Text>
             </Text>
             {/* 넓은 창: 가장 강한·약한을 이 줄에 합쳐 목록에 높이를 넘긴다 */}
             {wide ? (
-              <View style={styles.extremesInline}>
+              <View style={[styles.extremesInline, { minWidth: Math.round(foldScreens.themeExtremesMinW * fontScale) }]}>
                 {best ? extremeWide("가장 강한", best) : null}
                 {worst ? extremeWide("가장 약한", worst) : null}
               </View>
@@ -290,11 +291,13 @@ const styles = StyleSheet.create({
   // 넓은 창: 버튼 폭도 44 이상 (아이콘·'1주' 버튼이 31~35 로 좁았다 — 진단 34). 이웃과 겹치지 않게 hitSlop 대신 폭을 키운다
   segWide: { minWidth: touch.min, justifyContent: "center" },
   // 넓은 창: 분포 줄 가운데에 가장 강한·약한 두 칸
-  extremesInline: { flex: 1, minWidth: 0, flexDirection: "row", gap: space.md, paddingHorizontal: space.md },
+  // 최소 폭(foldScreens.themeExtremesMinW × 글자 배율)이 안 남으면 분포 줄 아래 줄로 (breadthTopWide 의 줄바꿈)
+  extremesInline: { flex: 1, flexDirection: "row", gap: space.md, paddingHorizontal: space.md },
   extremeWide: { flex: 1, minWidth: 0, gap: space.xxs },
   extremeLine: { flexDirection: "row", alignItems: "baseline", gap: space.xs },
   breadth: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.sm, gap: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   breadthTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
+  breadthTopWide: { flexWrap: "wrap", rowGap: space.s },
   breadthBar: { height: 6, borderRadius: 3, overflow: "hidden", flexDirection: "row" },
   sortBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.s, paddingVertical: space.xs, minHeight: SEG_H, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
   extremes: { flexDirection: "row", gap: space.md },

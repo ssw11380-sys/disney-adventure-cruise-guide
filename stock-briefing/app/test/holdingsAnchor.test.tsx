@@ -106,6 +106,39 @@ describe("이어 보기 훅 (useHoldingsAnchor)", () => {
     expect(holdingsAnchorMemory().code).toBe("C");
   });
 
+  it("되맞춘 뒤 끌기가 아닌 스크롤(화면 읽기 자동 스크롤·휠·키보드)로도 줄 반 개 넘게 옮기면 다시 기억한다", () => {
+    const r = render(<Probe mode="list" />);
+    const scrollTo = vi.fn();
+    out.a!.ref.current = { scrollTo } as never;
+    out.a!.head("held", layout(400, 66));
+    rows(58, 466, CODES).forEach((p) => out.a!.row(p.code, p.section, p.y, p.h));
+    out.a!.onScroll(scroll(466 + 7 * 58 - 66));
+    r.rerender(<Probe mode="table-2" />);
+    out.a!.head("held", layout(96, 44));
+    rows(44, 140, CODES).forEach((p) => out.a!.row(p.code, p.section, p.y, p.h));
+    // 목록 끝이라 E 가 맨 위인 자리에서 멈춤 → 기억은 H 그대로
+    const stop = 140 + 4 * 44 - 44;
+    out.a!.onScroll(scroll(stop));
+    expect(holdingsAnchorMemory().code).toBe("H");
+    // 조금(줄 반 개 이하) 움직인 것은 되맞춘 자리 그대로로 본다
+    out.a!.onScroll(scroll(stop - 20));
+    expect(holdingsAnchorMemory().code).toBe("H");
+    // 끌기(onScrollBeginDrag) 없이 위로 두 줄 옮기면(휠·화면 읽기) C 가 맨 위 → 기억을 바꾼다
+    out.a!.onScroll(scroll(140 + 2 * 44 - 44));
+    expect(holdingsAnchorMemory()).toEqual({ mode: "table-2", code: "C" });
+  });
+
+  it("목록에서 빠진 종목(삭제)의 줄 위치는 버린다 (keep) — 맨 위 종목으로 사라진 종목을 고르지 않는다", () => {
+    render(<Probe mode="table-1" />);
+    out.a!.head("held", layout(52, 40));
+    rows(44, 92, CODES).forEach((p) => out.a!.row(p.code, p.section, p.y, p.h));
+    // E 를 지웠고, 뒤 줄은 아직 자리를 다시 알리지 않았다 (F 가 E 자리로 올라오는 중)
+    out.a!.keep(new Set(CODES.filter((c) => c !== "E")));
+    out.a!.row("F", "held", 92 + 4 * 44, 44);
+    out.a!.onScroll(scroll(92 + 4 * 44 - 40));
+    expect(holdingsAnchorMemory().code).toBe("F");
+  });
+
   it("맨 위였으면(표를 안 내렸으면) 배치가 바뀌어도 맨 위로", () => {
     const r = render(<Probe mode="list" />);
     const scrollTo = vi.fn();

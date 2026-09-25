@@ -57,8 +57,9 @@ const PILL_SLOP = slopFor(FB.pillH);
 export function ListNotice({ items }: { items: string[] }) {
   const t = useTheme();
   const parts = items.flatMap((s) => s.split(" · "));
+  // 화면 읽기는 한 문장으로 한 번에 (묶음마다 따로 초점을 받아 여러 번 나눠 읽지 않게 — 폰 안내 한 줄과 같다)
   return (
-    <View style={[styles.notice, { backgroundColor: t.bg, borderBottomColor: t.line }]}>
+    <View accessible accessibilityLabel={items.join(" · ")} style={[styles.notice, { backgroundColor: t.bg, borderBottomColor: t.line }]}>
       {parts.map((s, i) => (
         <Text key={`${i}:${s}`} style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>
           {i < parts.length - 1 ? `${s} ·` : s}

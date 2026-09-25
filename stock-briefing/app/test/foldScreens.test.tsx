@@ -856,6 +856,20 @@ describe("발견 탭 (넓은 창)", () => {
     expect(styleOf(nodes(r, "Pressable").find((n) => /^1위, 조선 테마/.test(String(n.props.accessibilityLabel)))!).width).toBe("50%");
   });
 
+  it("가장 강한·약한 두 칸은 최소 폭(260 × 글자 배율)을 지키고, 분포 줄이 넘치면 아래 줄로 (글자 200% 에서 등락률이 겹치거나 이름이 찌그러지지 않게)", () => {
+    for (const s of [1, 2]) {
+      wideOn(704, 933, s);
+      const r = render(<DiscoverScreen />);
+      layoutTo(r, r.tree[0] as HostNode, 704);
+      r.act(() => (r.byLabel("테마 보기").props.onPress as () => void)());
+      const best = r.byLabel("가장 강한 테마 조선, 3.42% 상승");
+      const inline = r.all().find((n) => n.children.includes(best))!;
+      expect(styleOf(inline)).toMatchObject({ flex: 1, minWidth: Math.round(foldScreens.themeExtremesMinW * s) });
+      const top = r.all().find((n) => n.children.includes(inline))!;
+      expect(styleOf(top)).toMatchObject({ flexDirection: "row", flexWrap: "wrap" });
+    }
+  });
+
   it("큰 글씨(130%) · 폴드8 펼침 세로 704: 테마 목록은 한 칸 (휴대폰 줄 그대로)", () => {
     wideOn(704, 933, 1.3);
     const r = render(<DiscoverScreen />);
@@ -1308,6 +1322,29 @@ describe("비중 (넓은 창)", () => {
     size(933, 859);
     r.rerender();
     for (const x of r.all().filter((n) => n.type === "View" && /, 비중 [\d.]+%$/.test(String(n.props.accessibilityLabel ?? "")))) expect(styleOf(x).paddingVertical).toBe(space.xs);
+  });
+
+  it("요약에 제외 안내(시세 없는 종목 제외)가 붙으면 그 한 줄만큼 격자 높이를 덜 잡는다 — 넷째 카드가 첫 화면 밖으로 밀리지 않게 (통합 검증 should)", () => {
+    wideOn(933, 632);
+    h.insets = { top: 0, bottom: 0, left: 0, right: 0 };
+    const base = [...HOLD, ...Array.from({ length: 16 }, (_, i) => holding(`D${i}`, quote(`D${i}`, 10_000 + i * 1_000, { industry: `업종${i % 9}` }), 10, 9_000, undefined, `종목${i}`))];
+    const legendPad = (r: R) => r.all().filter((n) => n.type === "View" && /, 비중 [\d.]+%$/.test(String(n.props.accessibilityLabel ?? ""))).map((x) => styleOf(x).paddingVertical);
+    const shape = (r: R) => ({ donut: nodes(r, "Svg").map((x) => x.props.width as number), pad: [...new Set(legendPad(r))] });
+    // 높이가 넉넉한 창에서 안내가 없을 때와 있을 때를 견준다 (안내가 있으면 같은 창에서도 원이 작거나 범례가 촘촘해야 한다)
+    let found = false;
+    for (const hh of [660, 680, 700, 720, 740, 760]) {
+      size(933, hh);
+      h.stocks = base;
+      const plain = shape(render(<AllocationScreen />));
+      h.stocks = [...base, holding("NOQ", null, 5, 1_000, undefined, "시세없음")];
+      const r = render(<AllocationScreen />);
+      expect(r.text()).toContain("시세 없는 1종목 제외");
+      const noted = shape(r);
+      // 안내가 있으면 절대 더 크게 잡지 않는다
+      expect(Math.max(...noted.donut)).toBeLessThanOrEqual(Math.max(...plain.donut));
+      if (JSON.stringify(noted) !== JSON.stringify(plain)) found = true;
+    }
+    expect(found).toBe(true);
   });
 
   it("화면 읽기: 제목보다 먼저 읽는 원 요약 앞에 차트 제목을 붙인다", () => {

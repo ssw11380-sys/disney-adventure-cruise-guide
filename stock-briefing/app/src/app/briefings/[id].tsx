@@ -1,5 +1,5 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { BriefingBody } from "@/components/BriefingBody";
 import { Screen } from "@/components/Screen";
 import { ErrorView } from "@/components/ui";
@@ -15,7 +15,8 @@ import { foldBriefings as FB, layout } from "@/tokens";
  * 브리핑 상세: 요약/상세 토글, 당시 시세 스냅샷, 같은 종목 지난 브리핑 날짜 목록 (본문은 components/BriefingBody).
  * 알림·위젯·목록에서 여는 주소(/briefings/<id>)는 그대로다.
  * 넓은 창(3-42, 플래그 foldLayout)에서는 두 칸(왼쪽 가격·근거·지난 브리핑 | 오른쪽 본문)으로, 그 밖에는 지금 폰 화면 그대로.
- * 플래그가 켜져 있으면 연 브리핑을 '읽음'으로 적고 브리핑 탭이 이어 보도록 기억한다 (넓은 창에서 열었을 때만 폰 목록에서 강조)
+ * 플래그가 켜져 있으면 연 브리핑을 '읽음'으로 적고 브리핑 탭이 이어 보도록 기억한다 (넓은 창에서 열었거나 넓은 창에서 본 적이 있을 때만 폰 목록에서 강조 —
+ * 넓은 창에서 읽다가 접어도 강조를 끄지 않는다: 탭에서 접을 때와 같게)
  */
 export default function BriefingDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -23,10 +24,12 @@ export default function BriefingDetailScreen() {
   const numId = parseBriefingId(id);
   const fold = useFoldLayout();
   const wide = fold.on && isWide(fold);
+  const seenWide = useRef(false);
   useEffect(() => {
     if (!fold.on || numId === null) return;
+    if (wide) seenWide.current = true;
     markBriefingRead(numId);
-    pickBriefing({ kind: "stock", id: numId }, { highlight: wide });
+    pickBriefing({ kind: "stock", id: numId }, { highlight: seenWide.current });
   }, [fold.on, numId, wide]);
 
   if (numId === null) return <Screen><ErrorView error={new Error("브리핑 주소가 올바르지 않습니다")} retryLabel="브리핑 목록으로" onRetry={() => router.dismissTo("/briefings")} /></Screen>;

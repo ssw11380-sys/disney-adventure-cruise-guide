@@ -86,7 +86,8 @@ export function AccountBriefingRow({ briefing, selected, onPress, role }: { brie
       onPress={onPress}
       accessibilityRole={role}
       accessibilityLabel={accountCardSpeech(briefing)}
-      accessibilityState={role === "button" ? { selected } : undefined}
+      // 카드 격자(link)에서도 고른 줄이면 '선택됨'을 알린다 (같은 격자의 카드·폰 카드와 같게)
+      accessibilityState={role === "button" ? { selected } : selected ? { selected: true } : undefined}
       style={({ pressed }) => [styles.row, { borderBottomColor: t.line, backgroundColor: selected || pressed ? t.surfaceAlt : t.surface }]}
     >
       {selected ? <View style={[styles.selBar, { backgroundColor: t.accent }]} /> : null}
@@ -112,10 +113,12 @@ export function AccountBriefingRow({ briefing, selected, onPress, role }: { brie
             당일{" "}
             <Text style={[styles.num, { color: changeColor(t, shownSign(h.dayPnl, formatWon(h.dayPnl, { sign: true }))), fontSize: font.body, fontWeight: "700" }]}>{formatWon(h.dayPnl, { sign: true })}</Text>
             {h.dayRate !== null ? <Text style={[styles.num, { color: changeColor(t, shownSign(h.dayRate, formatPct(h.dayRate))) }]}> {formatPct(h.dayRate)}</Text> : null}
+            {/* 구분점은 앞 묶음 끝에 (줄이 넘어가도 새 줄이 '·'로 시작하지 않게 — 목록 위 안내와 같은 규칙) */}
+            {top ? " ·" : null}
           </Text>
           {top ? (
             <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
-              {"· 기여 1위 "}
+              {"기여 1위 "}
               <Text style={{ color: t.ink }}>{top.name}</Text>{" "}
               <Text style={[styles.num, { color: changeColor(t, shownSign(top.amount, formatWon(top.amount, { sign: true }))) }]}>{formatWon(top.amount, { sign: true })}</Text>
             </Text>

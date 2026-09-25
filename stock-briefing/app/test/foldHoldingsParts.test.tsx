@@ -140,6 +140,13 @@ describe("표 머리 (TableHeadRow)", () => {
     }
   });
 
+  it("평가금액순이면 평가금액 열 하나만 진하게·▾ (비중 열도 같은 정렬이지만 표시는 한 곳 — 정렬이 두 개처럼 보이지 않게)", () => {
+    const r = render(<TableHeadRow plan={pickCols(853)} title="보유 17" sort="value" sortLabel="평가금액" onSort={() => undefined} onOpenSort={() => undefined} />);
+    expect(r.byLabel("평가금액순 정렬").props.accessibilityState).toEqual({ selected: true });
+    expect(r.byLabel("비중순 정렬").props.accessibilityState).toEqual({ selected: false });
+    expect(r.all().filter((n) => n.type === "Ionicons" && n.props.name === "caret-down")).toHaveLength(1);
+  });
+
   it("정렬 이름이 두 글자('이름'·'시장')여도 정렬 창 버튼 폭은 44 이상", () => {
     const r = draw("이름");
     const btn = r.byLabel("정렬 바꾸기, 지금 이름");

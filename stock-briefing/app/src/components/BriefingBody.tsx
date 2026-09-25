@@ -57,8 +57,10 @@ export function BriefingBody({
   const sourcesY = useRef<number | null>(null);
 
   const view = viewState(b);
-  if (view === "loading") return <Screen><CardsSkeleton count={2} /></Screen>;
-  if (view === "error") return <Screen><ErrorView error={b.error} onRetry={() => void b.refetch()} /></Screen>;
+  // 2단 오른쪽 칸은 고지가 이 칸에만 있으므로 불러오는 중·오류에도 붙인다 (고지 줄이 사라졌다 나타나며 들썩이지 않게). 전체 화면은 지금 그대로
+  const paneNote = layout === "pane";
+  if (view === "loading") return <Screen disclaimer={paneNote}><CardsSkeleton count={2} /></Screen>;
+  if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={b.error} onRetry={() => void b.refetch()} /></Screen>;
   const d = b.data!;
   const q = d.data?.quote ?? null;
   const failed = d.status === "failed";
@@ -301,8 +303,9 @@ const SOURCE_SLOP = slopFor(Math.round(font.small * 1.45));
 
 /**
  * 넓은 창 본문 머리 (목업): 이름 · 날짜·세션·만든 시각 · (배지) | [종목 보기] / 숫자 칸(라벨 위, 숫자 아래).
- * [종목 보기]는 늘 첫 줄 오른쪽 끝에 두고, 왼쪽 글 묶음만 줄바꿈한다 — 폭이 모자라면 날짜·배지 묶음이 통째로 이름 아래 줄로 간다
- * (날짜 가운데서 꺾이지 않고, 버튼이 혼자 둘째 줄로 떨어지지 않게). 이름만 말줄임할 수 있다
+ * [종목 보기]는 늘 첫 줄 오른쪽 끝(위쪽에 붙임 — 글이 두 줄이어도 두 줄 사이에 뜨지 않게)에 두고, 왼쪽 글 묶음만 줄바꿈한다 —
+ * 폭이 모자라면 '날짜 세션 브리핑 ·' 과 '만든 시각 생성' 이 묶음째 다음 줄로 간다 ('… 08:02 생' / '성' 처럼 글자 가운데서 꺾이지 않고,
+ * 버튼이 혼자 둘째 줄로 떨어지지 않게). 이름만 말줄임할 수 있다
  */
 function Head({ d }: { d: BriefingWithData }) {
   const t = useTheme();
@@ -316,9 +319,8 @@ function Head({ d }: { d: BriefingWithData }) {
           <Text style={[styles.headName, { color: t.ink }]} accessibilityRole="header" numberOfLines={1}>
             {name}
           </Text>
-          <Muted style={styles.headWhen}>
-            {formatDateKo(d.date)} {SESSION_LABEL[d.session]} 브리핑 · {time ?? formatDateKo(d.createdAt, true)} 생성
-          </Muted>
+          <Muted style={styles.headWhen}>{`${formatDateKo(d.date)} ${SESSION_LABEL[d.session]} 브리핑 ·`}</Muted>
+          <Muted style={styles.headWhen}>{`${time ?? formatDateKo(d.createdAt, true)} 생성`}</Muted>
           {failed ? <Badge tone="bad">생성 실패</Badge> : null}
           {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
         </View>
@@ -416,10 +418,11 @@ const styles = StyleSheet.create({
   historyRow: { minHeight: touch.min, flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: StyleSheet.hairlineWidth },
   head: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   headRow: { flexDirection: "row", alignItems: "center", gap: space.md },
-  headText: { flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.md, rowGap: space.xxs },
-  headName: { flexShrink: 1, minWidth: 0, fontSize: font.title, fontWeight: "700" },
+  headText: { flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.xs, rowGap: space.xxs },
+  // 이름과 날짜 사이는 예전과 같은 12 (묶음 사이 간격 4 + 8). 날짜·시각 두 묶음 사이는 글자 한 칸쯤(4)
+  headName: { flexShrink: 1, minWidth: 0, fontSize: font.title, fontWeight: "700", marginRight: space.sm },
   headWhen: { flexShrink: 1 },
-  headButton: { flexShrink: 0 },
+  headButton: { flexShrink: 0, alignSelf: "flex-start" },
   sourceLink: { marginLeft: "auto", flexShrink: 1, justifyContent: "center" },
   kv: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xl, rowGap: space.sm },
   kvItem: { flexShrink: 0, gap: space.xxs },

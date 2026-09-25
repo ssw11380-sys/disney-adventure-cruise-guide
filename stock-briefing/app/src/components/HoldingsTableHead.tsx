@@ -10,7 +10,8 @@ import { ColDivider } from "./HoldingsTable";
 /**
  * 넓은 잔고 표의 머리 (3-42 웨이브 B, 기능 플래그 foldLayout). 구역(보유·관심)마다 하나, 스크롤해도 위에 고정된다.
  *  - 이름 칸: "보유 17" + "등록순 ▾"(누르면 정렬 창 — 휴대폰 화면의 정렬 버튼과 같다)
- *  - 숫자 열 이름: 누르면 그 정렬로 바꾼다 (설정의 정렬 값 그대로 — lib/holdingsColumns COL_SORT). 정렬이 없는 열은 글자만
+ *  - 숫자 열 이름: 누르면 그 정렬로 바꾼다 (설정의 정렬 값 그대로 — lib/holdingsColumns COL_SORT). 정렬이 없는 열은 글자만.
+ *    비중·평가금액은 같은 정렬(평가금액순)이라, 진하게·▾ 표시는 평가금액 열 하나에만 (둘 다 켜져 지금 정렬이 두 개처럼 보이지 않게)
  *  - 머리 높이가 누르는 크기 44(layout.headH)라 정렬 칸은 hitSlop 없이 머리를 채운다. 머리는 위에 고정되고 바로 아래가 종목 줄이라,
  *    아래로 넓히면 줄 윗가장자리를 누를 때 정렬이 바뀐다 (3-22 휴대폰 머리와 같은 까닭) → 아래로는 넓히지 않는다
  *  - 글자는 표 줄과 같은 확대 상한(fontCap.row 140%): 고정 폭 열의 머리가 아래 숫자보다 커지지 않게
@@ -31,6 +32,7 @@ export function TableHeadRow({
   onOpenSort: () => void;
 }) {
   const t = useTheme();
+  const hasValue = plan.cols.some((c) => c.key === "value");
   return (
     <View style={[styles.head, { minHeight: layout.headH, paddingHorizontal: plan.pad, backgroundColor: t.surfaceAlt, borderColor: t.line }]}>
       <View style={[styles.headName, { width: plan.nameW }]}>
@@ -53,7 +55,7 @@ export function TableHeadRow({
       </View>
       {plan.cols.map((c) => {
         const key = COL_SORT[c.key];
-        const active = key !== undefined && key === sort;
+        const active = key !== undefined && key === sort && !(c.key === "weight" && hasValue);
         const label = (
           <View style={styles.headCell}>
             <Text
