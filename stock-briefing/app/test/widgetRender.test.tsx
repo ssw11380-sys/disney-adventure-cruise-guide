@@ -1184,3 +1184,124 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
     expect(API).toBe("https://server.test");
   });
 });
+
+describe("폴드8·울트라 크기 (3-42 폴드 3단계): 라이브러리 트리 빌더로 그려도 깨지지 않고, 넓은 위젯은 다듬은 모습에서만", () => {
+  // 보유 7 · 관심 1 (평가금액 순서: 삼성전자 → … ), 다듬은 모습 켬
+  const Qk = (p: number, ch: number, r: number): Q => [p, ch, r, "KRW", AT, null, 0];
+  const held = (c: string, n: string, qty: number, avg: number, p: number, ch: number, r: number) => ({ c, n, qty, avg, q: Qk(p, ch, r), e: [p * qty, avg * qty, null, null, null] as E });
+  const STOCKS = [
+    held("005930", "삼성전자", 120, 71_500, 84_300, 1_200, 1.44),
+    held("000660", "SK하이닉스", 15, 262_000, 318_500, -4_500, -1.39),
+    held("005380", "현대차", 10, 230_000, 251_000, 1_500, 0.6),
+    held("035420", "NAVER", 8, 214_000, 198_700, 2_100, 1.07),
+    held("373220", "LG에너지솔루션", 3, 420_000, 402_000, -3_000, -0.74),
+    held("035720", "카카오", 30, 52_000, 61_200, -400, -0.65),
+    held("247540", "에코프로비엠", 5, 180_000, 152_000, 2_300, 1.54),
+    { c: "042700", n: "한미반도체", qty: null, avg: null, q: Qk(98_400, -1_600, -1.6), e: null },
+  ];
+  const foldData = (polish: boolean) => {
+    const p = payload({ stocks: STOCKS, features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: polish } });
+    return { ...fromPayload(p), showKrw: false, afterCost: false, fetchedAt: NOW, error: null, filled: [] as string[] };
+  };
+  /** docs/폴드-위젯.md 크기 표에서 고른 상자 (바깥 4×2 큰 쪽 · 울트라 바깥 4×4 · 안쪽 반쪽 · 미러링 끈 안쪽 4×2 · 5×2 · 6×2 · 6×3 · 6×4) */
+  const BOXES = [
+    { width: 460, height: 290 },
+    { width: 390, height: 540 },
+    { width: 435, height: 200 },
+    { width: 560, height: 300 },
+    { width: 650, height: 230 },
+    { width: 780, height: 230 },
+    { width: 780, height: 350 },
+    { width: 900, height: 470 },
+  ];
+  const draw = (name: string, polish: boolean, box: { width: number; height: number }, fontScale = 1) =>
+    build(renderBoth(name, foldData(polish), { ...box, fontScale, now: NOW, pnlMode: "cumulative" }).dark);
+  const list = (t: Tree) => nodes(t).find((n) => n.type === "ListWidget");
+  const cellsOf = (t: Tree) => byClick(list(t)!, "OPEN_URI");
+  const marketTiles = (t: Tree) => byClick(t, "OPEN_URI").filter((n) => String((n.props.clickActionData as { uri?: string } | undefined)?.uri ?? "").includes("market/"));
+  /** 지수·환율 칸 둘 이상을 가로로 나란히 둔 줄 (넓은 모양의 구역 안 가로 칸) */
+  const sideBySide = (t: Tree) =>
+    nodes(t).filter((n) => n.props.orientation === "HORIZONTAL" && (n.children ?? []).length > 1 && (n.children ?? []).every((k) => marketTiles({ ...k, children: [] }).length === 1));
+
+  it("위젯 4종 × 폴드 크기 × 라이트·다크 × 글자 100·130% × 다듬은 모습 켬·끔: 그려지고, 두 벌은 색만 다르다", () => {
+    const strip = (t: Tree): unknown => {
+      const { color: _c, backgroundColor: _b, borderColor: _bc, backgroundGradient: _g, ...rest } = t.props as Record<string, unknown>;
+      return { type: t.type, props: rest, children: (t.children ?? []).map(strip) };
+    };
+    let built = 0;
+    for (const name of Object.values(WIDGET_NAMES))
+      for (const polish of [true, false])
+        for (const box of name === WIDGET_NAMES.asset ? [{ width: 215, height: 110 }, { width: 190, height: 160 }, { width: 380, height: 150 }] : BOXES)
+          for (const fontScale of [1, 1.3]) {
+            const r = renderBoth(name, foldData(polish), { ...box, fontScale, now: NOW, pnlMode: "day" });
+            expect(strip(build(r.light))).toEqual(strip(build(r.dark)));
+            built++;
+          }
+    expect(built).toBe(3 * 2 * BOXES.length * 2 + 2 * 3 * 2);
+  });
+
+  it("바깥 화면·안쪽 반쪽 크기(460·390·435dp)는 넓은 모습이 아니다: 종목 줄마다 한 종목, 평가금액 칸 없음, 지수·환율 구역은 세로로만", () => {
+    for (const box of BOXES.slice(0, 3))
+      for (const fontScale of [1, 1.3]) {
+        const t = draw(WIDGET_NAMES.holdings, true, box, fontScale);
+        // 목록의 줄 하나하나가 곧 누르는 칸 (두 열이면 줄 안에 칸이 둘)
+        expect(list(t)!.children!.every((row) => row.props.clickAction === "OPEN_URI")).toBe(true);
+        expect(words(t)).not.toContain("평가금액");
+        // 지수·환율: 가로 줄 하나에 칸이 둘 이상 들어간 곳이 없다 (구역마다 세로로만)
+        const m = draw(WIDGET_NAMES.market, true, box, fontScale);
+        expect(sideBySide(m)).toEqual([]);
+        expect(marketTiles(m).length).toBe(box.height >= 240 ? 9 : 6);
+      }
+  });
+
+  it("넓은 잔고(안쪽 6칸, 다듬은 모습): 줄마다 두 종목 — 칸마다 그 종목 상세를 열고 따로 읽는다, 순서는 한 열일 때와 같다", () => {
+    const t = draw(WIDGET_NAMES.holdings, true, { width: 780, height: 350 });
+    const rows = list(t)!.children!;
+    // 8종목 → 4줄, 줄 자체는 누르는 칸이 아니고 안의 두 칸이 누르는 칸
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      expect(row.props.clickAction).toBeUndefined();
+      const cells = byClick(row, "OPEN_URI");
+      expect(cells).toHaveLength(2);
+      for (const c of cells) expect(String(c.props.accessibilityLabel).length).toBeGreaterThan(3);
+    }
+    const uris = cellsOf(t).map((c) => (c.props.clickActionData as { uri: string }).uri);
+    const narrow = draw(WIDGET_NAMES.holdings, true, { width: 460, height: 350 });
+    expect(uris).toEqual(cellsOf(narrow).map((c) => (c.props.clickActionData as { uri: string }).uri));
+    expect(uris[0]).toBe(`${HOME_URI}stocks/005930`);
+    // 다듬은 모습을 끄면 예전 모습 그대로 (줄마다 한 종목)
+    const off = draw(WIDGET_NAMES.holdings, false, { width: 780, height: 350 });
+    expect(list(off)!.children!.every((row) => row.props.clickAction === "OPEN_URI")).toBe(true);
+    expect(words(off)).toContain("잔고 8");
+  });
+
+  it("넓은 잔고(한 열 폭 480dp 이상): 가격 왼쪽에 '평가금액' 칸 — 보이는 금액은 화면 읽기에도, 관심 종목은 빈 칸", () => {
+    const t = draw(WIDGET_NAMES.holdings, true, { width: 560, height: 300 });
+    const cells = cellsOf(t);
+    const samsung = cells.find((c) => words(c)[0] === "삼성전자")!;
+    // 120주 × 84,300원 = 10,116,000원
+    expect(words(samsung)).toEqual(expect.arrayContaining(["평가금액", "10,116,000원", "84,300원", "오늘", "+1.44%"]));
+    expect(samsung.props.accessibilityLabel).toMatch(/평가금액 10,116,000원$/);
+    const watch = cells.find((c) => words(c)[0] === "한미반도체")!;
+    expect(words(watch)).not.toContain("평가금액");
+    expect(watch.props.accessibilityLabel).not.toContain("평가금액");
+    // 금액 칸도 숫자를 자르지 않는다 (한 줄, … 없음)
+    for (const p of texts(t)) if (/^[\d,]+원$/.test(String(p.text))) expect(p.truncate).toBeUndefined();
+  });
+
+  it("넓은 지수·환율(안쪽 6×2, 다듬은 모습): 9칸 모두 — 칸마다 그 지수·환율 차트를 열고 읽는다. 끄면 지금처럼 6칸", () => {
+    const on = draw(WIDGET_NAMES.market, true, { width: 780, height: 230 });
+    const tiles = marketTiles(on);
+    expect(tiles).toHaveLength(9);
+    expect(new Set(tiles.map((n) => (n.props.clickActionData as { uri: string }).uri)).size).toBe(9);
+    for (const n of tiles) expect(String(n.props.accessibilityLabel)).toMatch(/\d/);
+    expect(words(on)).toEqual(expect.arrayContaining(["다우", "필라반도체", "원/위안"]));
+    // 구역 안에서 칸을 가로로 나란히 (미국 나스닥·S&P500 / 다우·필라반도체 …)
+    expect(sideBySide(on).length).toBeGreaterThan(0);
+    const off = draw(WIDGET_NAMES.market, false, { width: 780, height: 230 });
+    expect(marketTiles(off)).toHaveLength(6);
+    expect(sideBySide(off)).toEqual([]);
+    // 같은 크기 · 글자 130% 도 그려지고 칸 수가 줄지 않는다
+    expect(marketTiles(draw(WIDGET_NAMES.market, true, { width: 780, height: 230 }, 1.3)).length).toBeGreaterThanOrEqual(6);
+  });
+});

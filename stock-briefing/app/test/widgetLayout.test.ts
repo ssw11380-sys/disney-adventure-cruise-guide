@@ -28,6 +28,9 @@ import {
   textWidth,
   titleWidth,
   totalBlock,
+  VALUE_LABEL,
+  WIDE,
+  WIDE_ROW_PADS,
   type AssetInput,
   type AssetPlan,
   type HoldingsInput,
@@ -525,12 +528,21 @@ function polishedOverflow(i: PolishedInput, p: PolishedPlan): string[] {
   }
   if (p.note && textWidth(p.note, F.sm, s) > content) bad.push(`메모 ${p.note}`);
   const r = p.rows;
+  // 넓은 위젯(3-42): 두 열이면 한 열 폭 안에, 평가금액 칸이 있으면 그 칸과 오른쪽 칸(rightW)까지 한 열 폭 안에
+  const colW = p.wide ? p.wide.columnW : content;
+  if (p.wide && p.wide.columnW * 2 + p.wide.gap > content) bad.push(`두 열 폭 ${p.wide.columnW}×2 + ${p.wide.gap} > ${content}`);
+  if (r.valueW !== undefined && (r.rightW === undefined || textWidth(VALUE_LABEL, F.xs, s) > r.valueW)) bad.push("평가금액 칸 폭");
   i.rows.forEach((row, n) => {
     const price = textWidth(row.price, F.base, s, true);
     const rate = row.rate ? textWidth(row.rate, F.md, s, true) : 0;
     if (rate > r.rateW) bad.push(`등락률 칸 ${row.rate}`);
     const right = r.stacked ? Math.max(price, r.labelW + r.rateW) : price + space.sm + r.labelW + r.rateW;
-    if (r.leftW + space.sm + right > content) bad.push(`줄 ${row.name}`);
+    if (r.valueW !== undefined) {
+      const value = i.values?.[n];
+      if (value && textWidth(value, F.base, s, true) > r.valueW) bad.push(`평가금액 ${value}`);
+      if (right > r.rightW!) bad.push(`오른쪽 칸 ${row.name}`);
+      if (r.leftW + space.sm + r.valueW + space.sm + r.rightW! > colW) bad.push(`줄 ${row.name}`);
+    } else if (r.leftW + space.sm + right > colW) bad.push(`줄 ${row.name}`);
     const sub = r.sub[n];
     if (sub && textWidth(sub, r.subFont, s) > r.leftW) bad.push(`손익 줄 ${sub}`);
     if (sub && !row.subs.includes(sub)) bad.push(`모르는 손익 줄 ${sub}`);
@@ -798,13 +810,17 @@ function marketOverflow(i: MarketInput, p: MarketPlan): string[] {
   const tiles = new Map(i.columns.flatMap((c) => c.tiles).map((t) => [t.code, t]));
   for (const col of p.columns) {
     if (p.captions && textWidth(col.label, F.xs, s, true) > col.width) bad.push(`구역 이름 ${col.label}`);
+    // 넓은 위젯(3-42): 구역 안 가로 칸 cols 개 + 사이 간격이 구역 폭 안, 칸마다 글자는 칸 폭(tileW) 안
+    const per = col.cols ?? 1;
+    const room = per > 1 ? (col.tileW ?? 0) : col.width;
+    if (per > 1 && (!Number.isInteger(col.tileW) || per * col.tileW! + (per - 1) * WIDE.tileGap > col.width)) bad.push(`가로 칸 폭 ${col.key} ${per}×${col.tileW} > ${col.width}`);
     for (const code of col.codes) {
       const t = tiles.get(code)!;
       const mark = p.mark[code] ?? null;
       const change = p.change[code] ?? null;
-      // 숫자(값·등락)는 자르지 않는다: 칸의 가장 긴 줄이 구역 폭 안에
+      // 숫자(값·등락)는 자르지 않는다: 칸의 가장 긴 줄이 구역(넓은 위젯은 가로 칸) 폭 안에
       const w = boardTileWidth(t, { shape: p.shape, mark, change, nameFont: p.nameFont, valueFont: p.valueFont, changeFont: p.changeFont, nameW: p.nameW[code] }, s);
-      if (w > col.width) bad.push(`${code} ${w.toFixed(0)} > ${col.width}`);
+      if (w > room) bad.push(`${code} ${w.toFixed(0)} > ${room}`);
       // 등락: full 은 등락 줄, inline 은 등락률, brief 는 ▲/▼ (보합 제외). 지연 항목은 inline·brief 에서 "지연"이 그 자리에
       const stale = t.marker === "stale";
       if (t.changes.length && p.shape === "full" && !t.changes.includes(change ?? "")) bad.push(`${code} 등락 ${change}`);
@@ -816,9 +832,10 @@ function marketOverflow(i: MarketInput, p: MarketPlan): string[] {
       if ((t.marker === "live") !== (mark === "live")) bad.push(`${code} 장중 점 ${mark}`);
     }
   }
-  // 세로: 머리 줄 48 + 본문 + 아래 여백 + 테두리 ≤ 높이, 여백은 간격 토큰 단계
-  const rows = Math.max(...p.columns.map((c) => c.codes.length));
-  if (!(BOARD_ROW_PADS as readonly number[]).includes(p.rowPad)) bad.push(`칸 사이 여백 ${p.rowPad}`);
+  // 세로: 머리 줄 48 + 본문 + 아래 여백 + 테두리 ≤ 높이, 여백은 간격 토큰 단계 (넓은 위젯은 가로 칸만큼 줄이 적고 여백 단계가 둘 더)
+  const rows = Math.max(...p.columns.map((c) => Math.ceil(c.codes.length / (c.cols ?? 1))));
+  const wide = p.columns.some((c) => c.cols !== undefined);
+  if (!((wide ? WIDE_ROW_PADS : BOARD_ROW_PADS) as readonly number[]).includes(p.rowPad)) bad.push(`칸 사이 여백 ${p.rowPad}`);
   if (!(CAPTION_GAPS as readonly number[]).includes(p.captionGap)) bad.push(`구역 이름 여백 ${p.captionGap}`);
   if (p.tileH !== boardTileHeight(p.shape, p.nameFont, p.valueFont, p.changeFont, s)) bad.push("칸 높이 어림이 다름");
   const body = boardBodyHeight(rows, p.tileH, p.rowPad, p.captions, s, p.captionGap);
@@ -1068,4 +1085,222 @@ describe("지수·환율 위젯 배치 (1.4.0): 4×2·4×4 × 글자 100·130% �
     expect(bad.slice(0, 5)).toEqual([]);
     expect(cases).toBe(18 * 32 * 4 * 4);
   }, 30_000); // 배치 1만 8천여 개
+});
+
+// ── 폴드8·폴드8 울트라 홈 화면 크기 (3-42 폴드 3단계) ─────────────────────
+
+/**
+ * 폴드8(SM-F971N)·폴드8 울트라(SM-F976N) 홈 화면 위젯 크기 어림 (dp) — docs/폴드-위젯.md 표와 같다.
+ * 폰 실측 전이라 420dpi · One UI 격자(바깥 4열, 안쪽 미러링을 끄면 6~8열) 추정의 범위 [작게, 크게]. 실측을 받으면 이 표만 고친다.
+ * "안쪽 반쪽"은 커버 화면 미러링(기본 켬)으로 바깥 화면 한 쪽이 안쪽 화면의 왼쪽·오른쪽 반에 그대로 옮겨진 것
+ */
+const FOLD_SIZES: Record<string, { w: readonly [number, number]; h: readonly [number, number] }> = {
+  "폴드8 바깥 4x2": { w: [430, 460], h: [180, 290] },
+  "폴드8 바깥 4x3": { w: [430, 460], h: [280, 440] },
+  "폴드8 바깥 4x4": { w: [430, 460], h: [370, 590] },
+  "울트라 바깥 4x2": { w: [380, 400], h: [210, 320] },
+  "울트라 바깥 4x3": { w: [380, 400], h: [320, 480] },
+  "울트라 바깥 4x4": { w: [380, 400], h: [430, 640] },
+  "안쪽 반쪽 4x2 (미러링)": { w: [395, 450], h: [165, 320] },
+  "안쪽 반쪽 4x4 (미러링)": { w: [395, 450], h: [340, 630] },
+  "폴드8 안쪽 4x2 (미러링 끔)": { w: [440, 600], h: [200, 270] },
+  "폴드8 안쪽 6x2": { w: [670, 900], h: [200, 270] },
+  "폴드8 안쪽 6x3": { w: [670, 900], h: [300, 400] },
+  "폴드8 안쪽 6x4": { w: [670, 900], h: [400, 540] },
+  "울트라 안쪽 6x2": { w: [610, 830], h: [215, 316] },
+  "울트라 안쪽 6x3": { w: [610, 830], h: [330, 470] },
+  "울트라 안쪽 6x4": { w: [610, 830], h: [440, 630] },
+};
+/** 자산 위젯(2×1, 가로로만 늘어남)의 폴드 크기 */
+const FOLD_ASSET: Record<string, { w: readonly [number, number]; h: readonly [number, number] }> = {
+  "폴드8 바깥 2x1": { w: [205, 230], h: [85, 145] },
+  "울트라 바깥 2x1": { w: [185, 200], h: [100, 160] },
+  "안쪽 2x1~3x1": { w: [200, 420], h: [80, 160] },
+};
+/** 범위마다 양 끝과 가운데 (3 × 3 상자) */
+function boxesOf(table: typeof FOLD_SIZES): { name: string; width: number; height: number }[] {
+  const mid = ([a, b]: readonly [number, number]) => [a, Math.round((a + b) / 2), b];
+  return Object.entries(table).flatMap(([name, r]) => mid(r.w).flatMap((width) => mid(r.h).map((height) => ({ name, width, height }))));
+}
+/** 바깥 화면·안쪽 반쪽 (접은 화면과 미러링) — 지금 모습 그대로여야 하는 크기 */
+const COVER_BOXES = boxesOf(Object.fromEntries(Object.entries(FOLD_SIZES).filter(([k]) => k.includes("바깥") || k.includes("반쪽"))));
+const FOLD_BOXES = boxesOf(FOLD_SIZES);
+/** 평가금액 글자 (P_ROWS 와 같은 순서, 긴 쪽) — 관심·시세 없음은 null */
+const P_VALUES = ["123,456,789원", "$123,456.78", "10,116,000원", null, null];
+const withValues = (i: PolishedInput): PolishedInput => ({ ...i, values: P_VALUES });
+
+describe("폴드8·울트라 크기 (3-42): 위젯 4종 × 글자 100·130% × 다듬은 모습 켬·끔 — 숫자 잘림 0 · 위젯 밖 넘침 0", () => {
+  it("크기 표: 바깥 화면·안쪽 반쪽은 모두 넓은 모습 기준보다 좁다 (접은 화면은 지금 모습 그대로)", () => {
+    for (const b of COVER_BOXES) {
+      expect(b.width - PAD * 2, b.name).toBeLessThan(WIDE.valueMin);
+      expect(b.width, b.name).toBeLessThan(WIDE.boardMin);
+    }
+    // 안쪽 화면을 미러링 없이 6칸으로 늘리면 넓은 모습 기준(평가금액 칸·지수 가로 칸)을 넘는다. 폴드8 6칸은 두 열까지
+    for (const b of FOLD_BOXES.filter((x) => x.name.includes("6x"))) {
+      expect(b.width - PAD * 2, `${b.name} ${b.width}`).toBeGreaterThanOrEqual(WIDE.valueMin);
+      expect(b.width).toBeGreaterThanOrEqual(WIDE.boardMin);
+      if (b.name.startsWith("폴드8")) expect(b.width - PAD * 2, `${b.name} ${b.width}`).toBeGreaterThanOrEqual(WIDE.columnMin * 2 + WIDE.columnGap);
+    }
+  });
+
+  it("잔고 (예전 모습): 폴드 크기 × 100·130% × 전환·메모·종목 있음·없음", () => {
+    const bad: string[] = [];
+    for (const b of FOLD_BOXES)
+      for (const s of SCALES)
+        for (const toggle of [true, false])
+          for (const note of [NOTE, []])
+            for (const rows of [ROWS, []]) {
+              const input = { ...holdingsInput(b.width, b.height, s, "day", toggle, note), rows };
+              const plan = planHoldings(input);
+              const o = [...holdingsOverflow(input, plan), ...holdingsVertical(input, plan)];
+              if (o.length) bad.push(`${b.name} ${b.width}×${b.height}@${s}: ${o.join(", ")}`);
+            }
+    expect(bad.slice(0, 5)).toEqual([]);
+  });
+
+  it("잔고 (다듬은 모습 · 넓은 위젯 포함): 폴드 크기 × 100·130% × 전환·메모·종목 있음·없음 × 평가금액 있음·없음", () => {
+    const bad: string[] = [];
+    for (const b of FOLD_BOXES)
+      for (const s of SCALES)
+        for (const toggle of [true, false])
+          for (const note of [NOTE, []])
+            for (const rows of [P_ROWS, []])
+              for (const values of [P_VALUES, undefined]) {
+                const input = { ...polishedInput(b.width, b.height, s, "day", toggle, note), rows, ...(values && rows.length ? { values } : {}) };
+                const plan = planHoldingsPolished(input);
+                const o = [...polishedOverflow(input, plan), ...polishedVertical(input, plan)];
+                if (o.length) bad.push(`${b.name} ${b.width}×${b.height}@${s}: ${o.join(", ")}`);
+              }
+    expect(bad.slice(0, 5)).toEqual([]);
+  });
+
+  it("전수: 폭 380~920 · 높이 160~640 × 글자 90~130% — 다듬은 잔고(평가금액 포함)·넓은 지수·환율 모두 넘치지 않는다", () => {
+    const bad: string[] = [];
+    for (let w = 380; w <= 920; w += 20)
+      for (let h = 160; h <= 640; h += 20)
+        for (const s of [0.9, 1, 1.15, 1.3]) {
+          const hi = withValues(polishedInput(w, h, s, "day", true, NOTE));
+          const hp = planHoldingsPolished(hi);
+          const m = { ...marketInput(w, h, s, s > 1 ? LONG_BOARD : STALE_BOARD), wide: true };
+          const mp = planMarket(m);
+          const o = [...polishedOverflow(hi, hp), ...polishedVertical(hi, hp), ...marketOverflow(m, mp)];
+          if (shownCount(mp) < 3) o.push("지수 구역마다 1개도 안 보임");
+          if (o.length) bad.push(`${w}×${h}@${s}: ${o.join(", ")}`);
+        }
+    expect(bad.slice(0, 5)).toEqual([]);
+  }, 60_000);
+
+  it("바깥 화면·안쪽 반쪽: 다듬은 잔고·지수·환율 모두 지금과 똑같다 (평가금액·넓은 모양을 줘도)", () => {
+    for (const b of COVER_BOXES)
+      for (const s of SCALES) {
+        const i = polishedInput(b.width, b.height, s, "cumulative", true, []);
+        const p = planHoldingsPolished(withValues(i));
+        expect(p, `${b.name} ${b.width}×${b.height}@${s}`).toEqual(planHoldingsPolished(i));
+        expect(p.wide).toBeUndefined();
+        expect(p.rows.valueW).toBeUndefined();
+        const m = marketInput(b.width, b.height, s);
+        expect(planMarket({ ...m, wide: true }), `${b.name} ${b.width}×${b.height}@${s}`).toEqual(planMarket(m));
+      }
+  });
+
+  it("넓은 잔고 (안쪽 6칸): 종목을 두 열로 — 같은 높이에 종목이 두 배, 한 열은 흔한 폰 위젯 폭 이상", () => {
+    for (const [w, h] of [
+      [780, 230],
+      [780, 350],
+      [720, 265],
+      [900, 470],
+    ] as const)
+      for (const s of SCALES) {
+        const p = planHoldingsPolished(withValues(polishedInput(w, h, s, "cumulative", true, [])));
+        expect(p.wide, `${w}×${h}@${s}`).toBeDefined();
+        expect(p.wide!.columnW).toBeGreaterThanOrEqual(WIDE.columnMin);
+        expect(p.wide!.columnW * 2 + p.wide!.gap).toBeLessThanOrEqual(w - PAD * 2);
+        // 한 줄에 두 종목: 보이는 종목 = 보이는 줄 수 × 2 (줄 높이는 한 열일 때와 같은 규칙)
+        expect(p.list).toBe(true);
+        expect(p.listH / p.rows.rowH).toBeGreaterThanOrEqual(1);
+      }
+  });
+
+  it("넓은 잔고 (한 열이 WIDE.valueMin 이상): 가격 왼쪽에 평가금액 칸, 손익 줄은 짧아지지 않는다 — 평가금액을 주지 않으면 칸 없음", () => {
+    const p = planHoldingsPolished(withValues(polishedInput(560, 300, 1, "cumulative", true, [])));
+    expect(p.wide).toBeUndefined();
+    expect(p.rows.valueW).toBeGreaterThanOrEqual(Math.ceil(textWidth("123,456,789원", F.base, 1, true)));
+    const plain = planHoldingsPolished(polishedInput(560, 300, 1, "cumulative", true, []));
+    expect(plain.rows.valueW).toBeUndefined();
+    expect(p.rows.sub).toEqual(plain.rows.sub);
+    expect(p.rows.stacked).toBe(plain.rows.stacked);
+    // 칸 폭 기준 바로 아래(한 열 479dp)는 칸 없음
+    expect(planHoldingsPolished(withValues(polishedInput(WIDE.valueMin - 1 + PAD * 2, 300, 1, "cumulative", true, []))).rows.valueW).toBeUndefined();
+  });
+
+  it("넓은 지수·환율 (안쪽 6칸 낮은 위젯): 좁은 모양은 6개, 넓은 모양은 구역 안 가로 칸으로 9개 모두 · 등락률과 제목보다 큰 값", () => {
+    for (const [w, h] of [
+      [650, 230],
+      [780, 230],
+      [900, 210],
+    ] as const) {
+      const narrow = planMarket(marketInput(w, h, 1));
+      const wide = planMarket({ ...marketInput(w, h, 1), wide: true });
+      expect(shownCount(narrow), `${w}×${h}`).toBe(6);
+      expect(shownCount(wide), `${w}×${h}`).toBe(9);
+      expect(wide.shape).not.toBe("brief");
+      expect(wide.valueFont).toBeGreaterThan(F.title);
+      expect(wide.columns.some((c) => (c.cols ?? 1) > 1)).toBe(true);
+      expect(marketOverflow(marketInput(w, h, 1), wide)).toEqual([]);
+    }
+  });
+
+  it("넓은 지수·환율은 좁은 모양보다 나빠지지 않는다: 칸 수가 줄지 않고, 같으면 값 글자가 작아지지 않는다 (폴드 크기 × 100·130% × 판 4가지)", () => {
+    const worse: string[] = [];
+    for (const b of FOLD_BOXES)
+      for (const s of SCALES)
+        for (const board of [REAL_BOARD, LONG_BOARD, US_OPEN, STALE_BOARD]) {
+          const m = marketInput(b.width, b.height, s, board);
+          const narrow = planMarket(m);
+          const wide = planMarket({ ...m, wide: true });
+          const o = marketOverflow(m, wide);
+          if (shownCount(wide) < shownCount(narrow)) o.push(`칸 ${shownCount(narrow)} → ${shownCount(wide)}`);
+          if (shownCount(wide) === shownCount(narrow) && wide.valueFont < narrow.valueFont) o.push(`값 ${narrow.valueFont} → ${wide.valueFont}`);
+          if (shownCount(wide) > shownCount(narrow) && (wide.shape === "brief" || wide.valueFont < WIDGET_BOARD.value.comfort)) o.push("칸을 늘리려고 등락률·큰 값을 잃음");
+          if (o.length) worse.push(`${b.name} ${b.width}×${b.height}@${s}: ${o.join(", ")}`);
+        }
+    expect(worse.slice(0, 5)).toEqual([]);
+  }, 60_000);
+
+  it("넓은 지수·환율 (안쪽 6×4처럼 크고 넓음): 9개 모두 · 값은 BOARD.value.wideMax 까지 커진다", () => {
+    const p = planMarket({ ...marketInput(900, 470, 1), wide: true });
+    expect(shownCount(p)).toBe(9);
+    expect(p.valueFont).toBeGreaterThan(WIDGET_BOARD.value.max);
+    expect(p.valueFont).toBeLessThanOrEqual(WIDGET_BOARD.value.wideMax);
+    // 플래그(다듬은 모습)가 꺼져 있으면 지금 그대로 (값 19sp 상한)
+    expect(planMarket(marketInput(900, 470, 1)).valueFont).toBeLessThanOrEqual(WIDGET_BOARD.value.max);
+    expect(planMarket(marketInput(900, 470, 1)).columns.every((c) => c.cols === undefined)).toBe(true);
+  });
+
+  it("브리핑: 폴드 크기 × 100·130% × 종목 0~3 — 머리가 들어가고 고지 한 줄은 늘 위젯 안", () => {
+    const header = { title: "브리핑", chip: "미국 주간거래", sub: ["9/23 15:30 기준", "9/23 15:30", "15:30"], delayed: true };
+    const bad: string[] = [];
+    for (const b of FOLD_BOXES)
+      for (const s of SCALES)
+        for (const count of [0, 1, 2, 3]) {
+          const p = planBriefing({ width: b.width, height: b.height, scale: s, header, count });
+          const head = [textWidth("브리핑", F.title, s, true), p.header.chip ? textWidth(header.chip, F.xs, s, true) + space.xs * 2 + 2 : 0, p.header.sub ? textWidth(p.header.sub, F.sm, s) : 0, p.header.delayed ? textWidth("지연", F.sm, s, true) : 0].filter(Boolean);
+          if (head.reduce((a, x) => a + x, 0) + space.s * (head.length - 1) > headerRoom(b.width)) bad.push(`${b.name}@${s}: 머리`);
+          const body = count ? p.items * briefingItemHeight(p.item, p.summaryLines, s) : p.messageGap + p.messageLines * lineHeight(F.md, s);
+          if (TOUCH + body + disclaimerHeight(s) + PAD > b.height) bad.push(`${b.name} ${b.width}×${b.height}@${s} 종목 ${count}: 세로 넘침`);
+          if (count && p.items < Math.min(count, 1)) bad.push(`${b.name}@${s}: 종목 0`);
+        }
+    expect(bad.slice(0, 5)).toEqual([]);
+  });
+
+  it("자산(2×1): 폴드 크기 × 90~130% — 숫자 잘림 0", () => {
+    const bad: string[] = [];
+    for (const b of boxesOf(FOLD_ASSET))
+      for (const s of [0.9, 1, 1.15, 1.3]) {
+        const input = assetInput(b.width, b.height, s);
+        const o = assetOverflow(input, planAsset(input));
+        if (o.length) bad.push(`${b.name} ${b.width}×${b.height}@${s}: ${o.join(", ")}`);
+      }
+    expect(bad).toEqual([]);
+  });
 });
