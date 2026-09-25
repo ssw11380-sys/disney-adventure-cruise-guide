@@ -1,4 +1,4 @@
-import { formatRate, formatWon } from "../notifications/digest.js";
+import { formatRate, formatWon, KR_PREVIOUS_DAY_LINE } from "../notifications/digest.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { MarketIndex } from "../providers/market/indices.js";
 import { seoulDate } from "../lib/time.js";
@@ -67,7 +67,7 @@ export interface AccountFx {
   usdKrw: { value: number; change: number; changeRate: number; stale: boolean } | null;
   /** 원화 환산에 쓴 적용 환율 (앱 잔고 화면과 같은 토스 표시 환율) */
   appliedRate: number | null;
-  /** 미국 보유분 원화 평가(비용 차감 전)의 하루 변화 = 가격 효과 + 환율 효과 */
+  /** 미국 보유분 원화 평가(비용 차감 전)의 하루 변화 = 가격 효과 + 환율 효과 (나눈 뒤의 두 값을 더해 정의 — 화면의 등식이 늘 맞게) */
   usdHoldingsKrwChange: number | null;
   /** 가격 효과 = 달러 등락 × 수량 × 적용 환율 = 당일 손익의 미국 몫 */
   priceEffect: number | null;
@@ -137,7 +137,20 @@ export interface AccountData extends AccountTotals {
   schedule: AccountSchedule;
   /** 설명(detail)을 누가 썼는지: 모델(llm) 또는 숫자만으로 만든 기본 문장(template)과 그 이유 */
   narrative: { source: "llm" | "template"; reason: string | null };
+  /**
+   * 오늘 한국이 휴장인데 국내 보유 종목이 있음 → 국내 종목의 등락·당일 손익은 직전 거래일 것이다(앱 잔고 화면과 같은 기준이라 그대로 둔다).
+   * 요약·알림·설명에 이 점을 밝힌다. 예전 기록에는 없다(없으면 false)
+   */
+  krPreviousDay?: boolean;
 }
+
+/** 오늘 한국 휴장인데 국내 보유분이 있는지 (국내 등락이 직전 거래일 것인지) */
+export function krPreviousDay(schedule: Pick<AccountSchedule, "kr">, totals: Pick<AccountTotals, "markets">): boolean {
+  return !schedule.kr.tradingDay && totals.markets.kr !== null;
+}
+
+/** 요약·알림에 붙이는 한 줄 */
+export const KR_PREVIOUS_DAY_NOTE = KR_PREVIOUS_DAY_LINE;
 
 /** 상위 몇 종목까지 따로 보여 주는지 (나머지는 '그 외 N종목') */
 export const TOP_N = 5;
@@ -288,15 +301,10 @@ function fxImpact(us: RawRow[], usDay: number, usdKrw: MarketIndex | null): Acco
     return { status: "unavailable", reason: "원/달러 전일 대비 변동을 받지 못해 환율 효과를 계산하지 못했습니다", usdKrw: idx, appliedRate, ...none };
   }
   const d = usdKrw.change;
-  return {
-    status: "computed",
-    reason: null,
-    usdKrw: idx,
-    appliedRate,
-    usdHoldingsKrwChange: Math.round(sum(us.map((r) => r.nowUsd * r.fx - r.prevUsd * (r.fx - d)))),
-    priceEffect: usDay,
-    fxEffect: Math.round(sum(us.map((r) => r.prevUsd * d))),
-  };
+  const fxEffect = Math.round(sum(us.map((r) => r.prevUsd * d)));
+  // 원화 변화는 나눈 뒤의 두 값의 합으로 정의한다 — 따로 반올림하면 '변화 = 가격 효과 + 환율 효과' 가 1원 어긋날 수 있다.
+  // 반올림 전 원래 값(Σ 지금 달러 평가 × 적용 환율 − 전일 달러 평가 × (적용 환율 − 변동))과는 2원 안에서 같다 (테스트)
+  return { status: "computed", reason: null, usdKrw: idx, appliedRate, usdHoldingsKrwChange: usDay + fxEffect, priceEffect: usDay, fxEffect };
 }
 
 /** 지수·환율 영향에 쓰는 지수 (없으면 missing) */
@@ -391,12 +399,12 @@ const idx = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: 2,
 const signed = (v: number, text: string) => (v > 0 ? `+${text}` : v < 0 ? `-${text}` : text);
 const SESSION_KO: Record<AccountSession, string> = { morning: "오전", afternoon: "오후" };
 
-/** 알림·카드용 요약 두 줄 (코드로 만든다 — 숫자가 늘 맞게) */
-export function summaryText(d: AccountTotals): string {
+/** 알림·카드용 요약 두 줄 (코드로 만든다 — 숫자가 늘 맞게). 오늘 한국 휴장이면 셋째 줄에 국내 등락이 직전 거래일 것임을 밝힌다 */
+export function summaryText(d: AccountTotals & { krPreviousDay?: boolean }): string {
   const top = d.contributions[0];
   const line1 = `당일 ${won(d.dayPnl)}${d.dayRate !== null ? ` (${formatRate(d.dayRate)})` : ""}${top ? ` · 기여 1위 ${top.name} ${won(top.amount)}` : ""}`;
   const line2 = `총 평가금액 ${won(d.totalValue, false)}${d.fx.status === "computed" ? ` · 환율 효과 ${won(d.fx.fxEffect!)}` : ""}`;
-  return `${line1}\n${line2}`;
+  return [line1, line2, ...(d.krPreviousDay ? [KR_PREVIOUS_DAY_NOTE] : [])].join("\n");
 }
 
 function contributionLine(r: AccountRow, rank: number): string {
@@ -425,9 +433,11 @@ function scheduleLines(s: AccountSchedule): string[] {
 /** 모델에게 주는 '사실' 목록. 모델의 설명에 나온 숫자는 모두 이 안에 있어야 한다 */
 export function factsText(d: AccountData): string {
   const lines: string[] = [];
+  lines.push(`- 날짜: ${d.date} ${SESSION_KO[d.session]} 브리핑`);
   lines.push(`- 기준: ${d.basis}`);
   lines.push(`- 총 평가금액: ${won(d.totalValue, false)} (보유 ${d.holdings}종목${d.stale ? `, 시세 지연 ${d.stale}종목` : ""})`);
   lines.push(`- 당일 손익: ${won(d.dayPnl)}${d.dayRate !== null ? ` (${formatRate(d.dayRate)})` : ""}`);
+  if (d.krPreviousDay) lines.push("- 참고: 오늘 한국은 휴장이라 국내 종목의 등락률과 당일 손익은 직전 거래일 것입니다(앱 잔고 화면과 같은 기준)");
   lines.push(`- 누적 평가손익: ${won(d.totalProfit)}${d.totalProfitRate !== null ? ` (${formatRate(d.totalProfitRate)})` : ""}`);
   const m: string[] = [];
   if (d.markets.kr) m.push(`국내 보유분 ${d.markets.kr.count}종목 ${won(d.markets.kr.day)}${d.markets.kr.dayRate !== null ? ` (${formatRate(d.markets.kr.dayRate)})` : ""}`);
@@ -446,14 +456,18 @@ export function factsText(d: AccountData): string {
   return lines.join("\n");
 }
 
-/** 모델 설명을 쓸 수 없을 때의 기본 문장 (숫자만으로) */
+/**
+ * 모델 설명을 쓸 수 없을 때의 기본 문장 (숫자만으로). 기여는 표·사실 목록과 같은 줄(상위 TOP_N + 그 외)을 모두 적는다 —
+ * 적은 금액을 더하면 당일 손익과 정확히 같다 (일부만 적고 '그 외'를 붙이면 빠진 순위가 생긴다)
+ */
 export function templateNarrative(d: AccountData): string {
   const out: string[] = [];
   const top = d.contributions[0];
   out.push(`- ${SESSION_KO[d.session]} 기준 당일 손익은 ${won(d.dayPnl)}${d.dayRate !== null ? `(${formatRate(d.dayRate)})` : ""}입니다.${top ? ` 가장 크게 기여한 종목은 ${top.name}(${won(top.amount)})입니다.` : ""}`);
+  if (d.krPreviousDay) out.push("- 오늘 한국은 휴장이라 국내 종목의 당일 손익은 직전 거래일 등락입니다.");
   if (d.contributions.length > 1 || d.others) {
-    const listed = d.contributions.slice(0, 3).map((r) => `${r.name} ${won(r.amount)}`).join(", ");
-    out.push(`- 기여 상위: ${listed}${d.others ? `, 그 외 ${d.others.count}종목 ${won(d.others.amount)}` : ""}.`);
+    const listed = d.contributions.map((r) => `${r.name} ${won(r.amount)}`).join(", ");
+    out.push(`- 기여 순서: ${listed}${d.others ? `, 그 외 ${d.others.count}종목 ${won(d.others.amount)}` : ""}.`);
   }
   const idxText = d.indices.map((i) => `${i.name} ${formatRate(i.changeRate)}`).join(", ");
   const mk: string[] = [];
@@ -469,25 +483,155 @@ export function templateNarrative(d: AccountData): string {
 
 // ── 모델 설명 검사 ────────────────────────────────────────────
 
-/** 글 속 숫자 (쉼표 뺀 값, 부호 없이) */
-export function numbersIn(text: string): number[] {
-  return [...text.matchAll(/\d+(?:,\d{3})*(?:\.\d+)?/g)].map((m) => Number(m[0].replace(/,/g, ""))).filter((n) => Number.isFinite(n));
+/**
+ * 글 속 숫자 하나. 날짜·시각은 key("9/25"·"22:30")로, 나머지는 값·단위·부호를 함께 맞춰 본다.
+ * (값만 보면 '20% 하락'이 장 시간 20:00 으로, '+30,089원'이 -30,089원으로, '약 8%'가 순서 8 로 통과한다)
+ */
+export interface NumberToken {
+  /** 글에 적힌 모양 (부호·단위 포함, 이유 표시용) */
+  raw: string;
+  kind: "num" | "date" | "time";
+  /** date: "9/25" · time: "22:30" · num: "" */
+  key: string;
+  value: number;
+  /** num 의 단위: % · %p · 원 · pt(포인트) · 만(억·조·천) · 달러 · count(순서·개수: 위·종목·건·줄·개·일…) · 년 · 월 · ""(없음) */
+  unit: string;
+  /** 적혀 있는 부호. 부호 없이 쓴 숫자는 null */
+  sign: "+" | "-" | null;
+  /** 소수점이 있는지 */
+  decimal: boolean;
 }
 
-/** 순서(1위·2종목) 같은 작은 정수는 숫자를 지어낸 것으로 보지 않는다 */
-const SMALL_INT_MAX = 10;
-/** 설명에 나오면 안 되는 말: 매매 지시·전망 (나오면 기본 문장으로) */
-const FORBIDDEN = /(매수|매도|추천|전망|목표가|오를 것|내릴 것|사야|팔아야|손절|익절)/;
+const DATE_TIME: Array<{ re: RegExp; kind: "date" | "time"; key: (m: RegExpExecArray) => string }> = [
+  // 2026-09-25 → 9/25 (연도는 맞춰 보지 않는다)
+  { re: /(?<![\d.,])\d{4}-(\d{1,2})-(\d{1,2})(?!\d)/g, kind: "date", key: (m) => `${Number(m[1])}/${Number(m[2])}` },
+  { re: /(?<![\d.,])(?:\d{4}년\s?)?(\d{1,2})월\s?(\d{1,2})일/g, kind: "date", key: (m) => `${Number(m[1])}/${Number(m[2])}` },
+  { re: /(?<![\d.,/])(\d{1,2})\/(\d{1,2})(?![\d/])/g, kind: "date", key: (m) => `${Number(m[1])}/${Number(m[2])}` },
+  { re: /(?<![\d.,:])(\d{1,2}):(\d{2})(?![\d:])/g, kind: "time", key: (m) => `${Number(m[1])}:${m[2]}` },
+  { re: /(?<![\d.,])(\d{1,2})시(?![간세작])(?:\s?(\d{1,2})분)?/g, kind: "time", key: (m) => `${Number(m[1])}:${String(Number(m[2] ?? 0)).padStart(2, "0")}` },
+];
 
-/** 모델 설명을 그대로 써도 되는지. 사실에 없는 숫자, 매매·전망 표현, 빈 응답이면 이유와 함께 false */
+/** 숫자 바로 뒤(빈칸 하나까지)의 단위 → 정규화한 단위 */
+const UNIT_RE = /^\s?(%p|%포인트|%|퍼센트|원|포인트|pt(?![A-Za-z])|p(?![A-Za-z])|만|억|조|천|달러|종목|번째|가지|위|건|줄|개|일|곳|회|주|년|월)/;
+const COUNT_UNITS = new Set(["종목", "번째", "가지", "위", "건", "줄", "개", "일", "곳", "회", "주"]);
+function normUnit(u: string | undefined): string {
+  if (!u) return "";
+  if (u === "%" || u === "퍼센트") return "%";
+  if (u === "%p" || u === "%포인트") return "%p";
+  if (u === "포인트" || u === "pt" || u === "p") return "pt";
+  if (u === "억" || u === "조" || u === "천") return "만";
+  if (COUNT_UNITS.has(u)) return "count";
+  return u; // 원 · 만 · 달러 · 년 · 월
+}
+/** 부호로 읽는 문자 바로 앞에 올 수 있는 것 (글자·숫자 뒤의 '-' 는 이음표로 본다) */
+const SIGN_BEFORE = /[\s(\[{:,·~=/]/;
+
+/** 글 속 숫자들. malformed: '30,0890'처럼 쉼표 자리가 틀린 표기 (틀린 숫자로 본다) */
+export function numberTokens(text: string): { tokens: NumberToken[]; malformed: string[] } {
+  const tokens: NumberToken[] = [];
+  const malformed: string[] = [];
+  // 1) 날짜·시각을 먼저 읽고 지운다 — 그 안의 숫자(20:00 의 20, 9/25 의 25)를 따로 세지 않게
+  let rest = text;
+  for (const d of DATE_TIME) {
+    rest = rest.replace(d.re, (...args) => {
+      const m = args.slice(0, -2) as unknown as RegExpExecArray;
+      tokens.push({ raw: m[0], kind: d.kind, key: d.key(m), value: Number.NaN, unit: "", sign: null, decimal: false });
+      return " ".repeat(m[0].length);
+    });
+  }
+  // 2) 나머지 숫자: 부호(앞이 빈칸·괄호 등일 때만) + 숫자(쉼표·소수) + 단위
+  for (const m of rest.matchAll(/([+\-−–]?)(\d[\d,]*(?:\.\d+)?)/g)) {
+    const at = m.index!;
+    const body = m[2]!.replace(/,+$/, "");
+    const signChar = m[1] ?? "";
+    const prev = at > 0 ? rest[at - 1]! : "";
+    const sign = signChar && (prev === "" || SIGN_BEFORE.test(prev)) ? (signChar === "+" ? "+" : "-") : null;
+    const u = UNIT_RE.exec(rest.slice(at + m[0].length - (m[2]!.length - body.length)));
+    const unit = normUnit(u?.[1]);
+    const shown = `${sign ?? ""}${body}${u ? u[0] : ""}`.trim();
+    const [intPart = "", frac] = body.split(".");
+    const groups = intPart.split(",");
+    if (groups.length > 1 && (groups[0]!.length > 3 || groups.slice(1).some((g) => g.length > 3))) {
+      malformed.push(shown);
+      continue;
+    }
+    if (groups.length > 1 && groups.slice(1).some((g) => g.length < 3)) {
+      // '1,2위' 처럼 쉼표로 늘어놓은 숫자: 따로 읽는다 (부호는 첫 수, 단위는 마지막 수에)
+      groups.forEach((g, i) => {
+        const last = i === groups.length - 1;
+        const raw = last && frac !== undefined ? `${g}.${frac}` : g;
+        tokens.push({ raw: `${i === 0 ? (sign ?? "") : ""}${raw}${last && u ? u[0].trim() : ""}`, kind: "num", key: "", value: Number(raw), unit: last ? unit : "", sign: i === 0 ? sign : null, decimal: last && frac !== undefined });
+      });
+      continue;
+    }
+    tokens.push({ raw: shown, kind: "num", key: "", value: Number(body.replace(/,/g, "")), unit, sign, decimal: frac !== undefined });
+  }
+  return { tokens, malformed };
+}
+
+/** 순서·개수(1위·3종목·2건)로 쓴 10 이하 정수는 숫자를 지어낸 것으로 보지 않는다. %·원·포인트가 붙거나 부호·소수가 있으면 봐주지 않는다 */
+const SMALL_COUNT_MAX = 10;
+const isSmallCount = (t: NumberToken) => t.kind === "num" && t.unit === "count" && t.sign === null && !t.decimal && Number.isInteger(t.value) && t.value <= SMALL_COUNT_MAX;
+
+/** 글의 숫자 t 가 사실의 숫자 f 를 옮겨 쓴 것인지: 값이 같고, 단위가 맞고(단위 없이 옮긴 것은 봐줌), 부호를 적었으면 부호도 같다 */
+function sameNumber(t: NumberToken, f: NumberToken): boolean {
+  if (t.kind !== f.kind) return false;
+  if (t.kind !== "num") return t.key === f.key;
+  if (t.value !== f.value) return false;
+  const unitOk = t.unit === f.unit || t.unit === "" || (t.unit === "pt" && f.unit === "");
+  if (!unitOk) return false;
+  return t.sign === null || t.sign === f.sign;
+}
+
+/** '24일'·'9월'처럼 날짜의 일·월만 쓴 것은 사실의 날짜(공시일·장 날짜)에 그 일·월이 있으면 옮겨 쓴 것으로 본다 */
+function partOfKnownDate(t: NumberToken, known: readonly NumberToken[]): boolean {
+  if (t.kind !== "num" || t.sign !== null || t.decimal) return false;
+  const dates = known.filter((f) => f.kind === "date").map((f) => f.key.split("/").map(Number));
+  if (t.unit === "count" && t.raw.endsWith("일")) return dates.some(([, d]) => d === t.value);
+  if (t.unit === "월") return dates.some(([m]) => m === t.value);
+  return false;
+}
+
+/**
+ * 설명에 나오면 안 되는 말: 매매 지시·행동 제안·전망/예측 (나오면 기본 문장으로).
+ * '예상액'(기준 문장의 수수료·세금 예상액)은 사실에 있는 말이라 뺀다
+ */
+const FORBIDDEN =
+  /매수|매도|추천|권유|권합|전망|목표가|목표 ?주가|오를 것|내릴 것|오를 수|내릴 수|오르겠|내리겠|사야|팔아야|사 두|사두|살 때|팔 때|손절|익절|비중|반등|반락|예측|예상(?!액)|가능성|기대|좋겠|고려해|고려할|유망|주목할|하세요|하십시오/g;
+
+/**
+ * 금지어가 사실 목록에 그대로 있는 더 긴 말(공시 제목 '주식매수선택권부여에관한신고'·'공개매수신고서'·종목 이름)의 일부면 넘어간다.
+ * 금지어 앞뒤로 빈칸 없이 붙은 글자를 한 자씩 늘려 가며 사실에 있는지 보고, 2자 이상 늘어나면 옮겨 쓴 것으로 본다
+ */
+function forbiddenIn(text: string, facts: string): string | null {
+  for (const m of text.matchAll(FORBIDDEN)) {
+    let s = m.index!;
+    let e = s + m[0].length;
+    while (s > 0 && !/\s/.test(text[s - 1]!) && facts.includes(text.slice(s - 1, e))) s--;
+    while (e < text.length && !/\s/.test(text[e]!) && facts.includes(text.slice(s, e + 1))) e++;
+    if (e - s >= m[0].length + 2) continue;
+    return m[0];
+  }
+  return null;
+}
+
+/**
+ * 모델 설명을 그대로 써도 되는지. 아래면 이유와 함께 false (서비스는 기본 문장을 쓴다):
+ *  - 빈 응답·너무 김
+ *  - 쉼표 자리가 틀린 숫자('-30,0890원')
+ *  - 사실에 없는 숫자: 값·단위·부호(적었으면)가 모두 맞는 숫자가 사실에 없음. 날짜·시각은 사실의 날짜·시각과만 맞춰 본다
+ *  - 매매 지시·행동 제안·전망 표현 (사실에 있는 공시 제목 속 말은 제외)
+ */
 export function checkNarrative(text: string, facts: string): { ok: true } | { ok: false; reason: string } {
   if (!text.trim()) return { ok: false, reason: "빈 응답" };
   if (text.length > 3000) return { ok: false, reason: "설명이 너무 김" };
-  const allowed = new Set(numbersIn(facts));
-  const unknown = [...new Set(numbersIn(text).filter((n) => !allowed.has(n) && !(Number.isInteger(n) && n <= SMALL_INT_MAX)))];
+  const got = numberTokens(text);
+  if (got.malformed.length) return { ok: false, reason: `숫자 표기가 틀림: ${[...new Set(got.malformed)].slice(0, 3).join(", ")}` };
+  const known = numberTokens(facts).tokens;
+  const unknown = [...new Set(got.tokens.filter((t) => !isSmallCount(t) && !partOfKnownDate(t, known) && !known.some((f) => sameNumber(t, f))).map((t) => t.raw))];
   if (unknown.length) return { ok: false, reason: `입력에 없는 숫자: ${unknown.slice(0, 5).join(", ")}` };
-  const bad = text.match(FORBIDDEN);
-  if (bad) return { ok: false, reason: `쓰지 않는 표현: ${bad[1]}` };
+  const bad = forbiddenIn(text, facts);
+  if (bad) return { ok: false, reason: `쓰지 않는 표현: ${bad}` };
   return { ok: true };
 }
 

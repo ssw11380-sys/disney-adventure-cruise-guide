@@ -17,9 +17,14 @@ import { marketWidgetPlaced, refreshWidgets } from "@/widgets/refresh";
  * (배터리 절약·네트워크 조건에 따라 시스템이 미룰 수 있어 정확한 시각은 보장되지 않는다. 즉시 알림은 FCM 설정 필요.)
  */
 export const BRIEFING_TASK = "check-new-briefings";
-const SEEN_KEY = "briefings.notified"; // JSON: number[] (알림 보낸 브리핑 id, 최근 200개)
+const SEEN_KEY = "briefings.notified"; // JSON: number[] (알림 보낸 브리핑 id, 최근 200개. 계좌 브리핑(3-31)은 -id 로 같은 목록에)
 /** "1" 이면 알림 기준(그때까지의 브리핑)을 이미 적었다. 브리핑이 0건이라 SEEN 이 비어 있어도 처음으로 보지 않게 (N3) */
 const INIT_KEY = "briefings.notifyInit";
+/**
+ * "1" 이면 계좌 브리핑(3-31)의 알림 기준을 적었다. 없으면(알림을 막 켬·3-31 전부터 켜 둔 기기) 그때 있는 계좌 브리핑을 알리지 않고 "본 것"으로만 적는다 —
+ * 업데이트 직후 옛 계좌 브리핑이 따로 울리지 않게
+ */
+const ACCOUNT_INIT_KEY = "accountBriefings.notifyInit";
 export const LOCAL_MODE_KEY = "push.localMode"; // "1" 이면 백그라운드 확인 방식으로 알림
 /** 백그라운드 갱신 최소 간격(분). Android 가 허용하는 가장 짧은 값 */
 export const BG_INTERVAL_MIN = 15;
@@ -51,10 +56,13 @@ async function initialized(seen: Set<number>): Promise<boolean> {
   return (await AsyncStorage.getItem(INIT_KEY).catch(() => null)) === "1";
 }
 
-/** 아직 알리지 않은 브리핑 id 가 있는지 (기준을 아직 안 적었으면 true → 현재 상태를 기억하게) */
-export async function hasUnseen(ids: number[]): Promise<boolean> {
+/**
+ * 아직 알리지 않은 브리핑 id 가 있는지 (기준을 아직 안 적었으면 true → 현재 상태를 기억하게).
+ * accountIds(3-31): 위젯 응답의 최근 계좌 브리핑 id — 종목 브리핑이 모두 실패하고 계좌 브리핑만 생긴 세션도 알아보게 (서버 푸시와 같게)
+ */
+export async function hasUnseen(ids: number[], accountIds: readonly number[] = []): Promise<boolean> {
   const seen = await seenIds();
-  return !(await initialized(seen)) || ids.some((id) => !seen.has(id));
+  return !(await initialized(seen)) || ids.some((id) => !seen.has(id)) || accountIds.some((id) => !seen.has(-id));
 }
 
 /**
@@ -64,7 +72,18 @@ export async function hasUnseen(ids: number[]): Promise<boolean> {
  */
 export async function notifyNewBriefings(
   latest: LatestBriefing[],
-  opts: { first?: boolean; prefs?: NotifyPrefs; rates?: Map<string, number | null>; now?: Date; accounts?: AccountBriefing[] } = {},
+  opts: {
+    first?: boolean;
+    prefs?: NotifyPrefs;
+    rates?: Map<string, number | null>;
+    now?: Date;
+    /** 최근 계좌 브리핑 목록 (3-31, 플래그가 켜져 있을 때만 받는다) */
+    accounts?: AccountBriefing[];
+    /** 위젯 응답의 최근 계좌 브리핑 id. 목록을 받지 않았어도(묶음·플래그 꺼짐) "본 것"으로 적어 매번 다시 묻지 않게 */
+    accountIds?: readonly number[];
+    /** 등록한 모든 종목 코드. 모두 알림을 꺼 두었으면 계좌 요약도 보내지 않는다 (서버와 같은 규칙) */
+    codes?: readonly string[];
+  } = {},
 ): Promise<number> {
   const seen = await seenIds();
   const isFirst = opts.first ?? !(await initialized(seen));
@@ -79,8 +98,23 @@ export async function notifyNewBriefings(
     if (now.getTime() - Date.parse(b.createdAt) > 24 * 3_600_000) continue;
     fresh.push({ briefingId: b.id, code: b.code, name: item.name, summary: b.summary, changeRate: opts.rates?.get(b.code) ?? null, session: b.session, date: b.date });
   }
-  // 3-31: 같은 세션의 계좌 브리핑이 있으면 그 세션 알림 앞머리를 계좌 요약으로 (여전히 세션당 1건)
-  const messages = fresh.length ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now, opts.accounts ?? []) : [];
+  // 3-31: 아직 알리지 않은 계좌 브리핑. 계좌 브리핑 기준을 처음 적을 때는 알리지 않는다(옛 계좌 브리핑이 따로 울리지 않게)
+  const accountInfo = opts.accounts !== undefined || opts.accountIds !== undefined;
+  const accountFirst = isFirst || (accountInfo && (await AsyncStorage.getItem(ACCOUNT_INIT_KEY).catch(() => null)) !== "1");
+  const newAccountIds: number[] = [];
+  for (const a of opts.accounts ?? []) {
+    if (a.status !== "ok" || seen.has(-a.id)) continue;
+    seen.add(-a.id);
+    if (accountFirst) continue;
+    if (now.getTime() - Date.parse(a.createdAt) > 24 * 3_600_000) continue;
+    newAccountIds.push(a.id);
+  }
+  for (const id of opts.accountIds ?? []) seen.add(-id);
+  // 같은 세션의 계좌 브리핑이 있으면 그 세션 알림 앞머리를 계좌 요약으로, 새 계좌 브리핑만 있는 세션도 1건 (여전히 세션당 1건)
+  const messages =
+    fresh.length || newAccountIds.length
+      ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now, opts.accounts ?? [], { newAccountIds, ...(opts.codes?.length ? { codes: opts.codes } : {}) })
+      : [];
   for (const m of messages) {
     await Notifications.scheduleNotificationAsync({
       content: { title: m.title, body: m.body, data: m.data, sound: "default", ...(Platform.OS === "android" ? { channelId: ANDROID_CHANNEL } : {}) },
@@ -90,6 +124,8 @@ export async function notifyNewBriefings(
   await saveSeen(seen);
   // 빈 목록이어도 기준을 적은 것으로 — 다음에 생기는 첫 브리핑을 알린다
   if (isFirst) await AsyncStorage.setItem(INIT_KEY, "1").catch(() => undefined);
+  // 계좌 브리핑은 실제로 살펴본 뒤에만 기준을 적는다 (알림을 켤 때는 목록을 받지 않으므로 첫 확인에서 적는다)
+  if (accountInfo) await AsyncStorage.setItem(ACCOUNT_INIT_KEY, "1").catch(() => undefined);
   return messages.length;
 }
 
@@ -105,7 +141,8 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     if (data.error) return BackgroundTask.BackgroundTaskResult.Failed;
     if (local) {
       // 새 서버는 최신 브리핑 id 만 준다 → 아직 알리지 않은 id 가 있을 때만 전체 목록과 알림 규칙을 받아 알린다 (예전 서버는 briefings 가 전체 목록)
-      const unseen = await hasUnseen(data.latestIds ?? data.briefings.flatMap((b) => (b.latest ? [b.latest.id] : [])));
+      // 계좌 브리핑 id(3-31 서버, 플래그 켜짐)도 함께 본다 — 계좌 브리핑만 새로 생긴 세션도 알리게
+      const unseen = await hasUnseen(data.latestIds ?? data.briefings.flatMap((b) => (b.latest ? [b.latest.id] : [])), data.accountIds ?? []);
       if (unseen) {
         let prefs = await loadNotifyPrefs();
         const fails = prefs ? 0 : Number((await AsyncStorage.getItem(PREFS_FAIL_KEY).catch(() => null)) ?? 0) + 1;
@@ -118,7 +155,7 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
           const rates = new Map(data.stocks.map((s) => [s.code, s.quote?.changeRate ?? null] as const));
           // 계좌 한 장 브리핑(3-31): 서버 플래그가 켜져 있을 때만 묻는다 (끄면 요청 0, 알림은 예전 그대로)
           const accounts = prefs.digest && prefs.accountBriefing ? await loadAccountBriefings() : [];
-          await notifyNewBriefings(latest, { prefs, rates, accounts });
+          await notifyNewBriefings(latest, { prefs, rates, accounts, ...(data.accountIds ? { accountIds: data.accountIds } : {}), codes: data.stocks.map((s) => s.code) });
         }
       }
     }
@@ -154,6 +191,7 @@ export async function enableLocalBriefingAlerts(): Promise<void> {
   // 알림 기준을 새로 잡는다 — 꺼져 있던 동안의 옛 기록으로 판단하지 않게 (목록을 못 받으면 첫 확인이 기준을 잡는다)
   await AsyncStorage.removeItem(SEEN_KEY).catch(() => undefined);
   await AsyncStorage.removeItem(INIT_KEY).catch(() => undefined);
+  await AsyncStorage.removeItem(ACCOUNT_INIT_KEY).catch(() => undefined);
   await AsyncStorage.setItem(LOCAL_MODE_KEY, "1");
   await BackgroundTask.registerTaskAsync(BRIEFING_TASK, { minimumInterval: BG_INTERVAL_MIN });
   await AsyncStorage.setItem(INTERVAL_KEY, String(BG_INTERVAL_MIN)).catch(() => undefined);

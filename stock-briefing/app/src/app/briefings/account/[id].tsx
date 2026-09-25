@@ -177,13 +177,14 @@ function ContributionCard({ d }: { d: AccountData }) {
         <Text style={[styles.num, styles.colAmount, { color: changeColor(t, table.sum), fontSize: font.body, fontWeight: "700" }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} maxFontSizeMultiplier={fontCap.row}>
           {formatWon(table.sum, { sign: true })}
         </Text>
-        <Text style={[styles.colRate, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
+        <Text style={[styles.num, styles.colRate, { color: t.muted, fontSize: font.small }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} maxFontSizeMultiplier={fontCap.row}>
           {d.dayRate !== null ? formatPct(d.dayRate) : "-"}
         </Text>
       </View>
       <Muted style={styles.cardFoot}>
         {table.matches ? "줄의 합이 당일 손익과 같습니다(원 단위로 나눔)." : "줄의 합이 당일 손익과 다릅니다. 다시 만들면 바로잡힙니다."}
         {d.fx.appliedRate ? ` 미국 종목은 적용 환율 ${formatIndexValue(d.fx.appliedRate)}원으로 원화 환산.` : ""}
+        {d.krPreviousDay ? " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준)." : ""}
       </Muted>
     </Card>
   );

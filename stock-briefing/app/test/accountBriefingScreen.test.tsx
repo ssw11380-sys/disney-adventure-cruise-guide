@@ -223,6 +223,31 @@ describe("계좌 브리핑 상세 화면", () => {
     expect(labels(r).some((l) => l.startsWith("환율 효과,"))).toBe(false);
   });
 
+  it("기여 표 숫자 칸(합계 줄의 등락률 포함)은 모두 한 줄 맞춤 — 글자 140%에서 두 줄로 꺾이지 않게 (디자인 규칙)", () => {
+    h.flags = { accountBriefing: true };
+    const r = render(<AccountBriefingScreen />);
+    const rows = r.all().filter((n) => typeof n.props.accessibilityLabel === "string" && (String(n.props.accessibilityLabel).includes(", 기여 ") || String(n.props.accessibilityLabel).startsWith("합계, 당일 손익")));
+    expect(rows).toHaveLength(7);
+    for (const row of rows) {
+      const cells = row.children.filter((c): c is HostNode => typeof c !== "string" && c.type === "Text");
+      expect(cells).toHaveLength(3);
+      for (const c of cells.slice(1)) expect(c.props, String(row.props.accessibilityLabel)).toMatchObject({ numberOfLines: 1, adjustsFontSizeToFit: true });
+    }
+    const total = rows.at(-1)!.children.filter((c): c is HostNode => typeof c !== "string" && c.type === "Text");
+    expect(total[2]!.children).toEqual(["-2.66%"]);
+  });
+
+  it("한국 휴장이면 기여 표 아래와 브리핑 탭 카드에 국내 등락이 직전 거래일 것임을 밝힌다", () => {
+    h.flags = { accountBriefing: true };
+    h.detail = { ...DETAIL, data: { ...DATA, krPreviousDay: true } };
+    expect(render(<AccountBriefingScreen />).text()).toContain("오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다");
+    h.detail = DETAIL;
+    expect(render(<AccountBriefingScreen />).text()).not.toContain("직전 거래일");
+    const card = render(<AccountBriefingCard briefing={{ ...ITEM, headline: { ...ITEM.headline!, krPreviousDay: true } }} />);
+    expect(card.text()).toContain("오늘 한국 휴장 · 국내 종목은 직전 거래일 등락");
+    expect(render(<AccountBriefingCard briefing={ITEM} />).text()).not.toContain("직전 거래일");
+  });
+
   it("잘못된 주소는 요청하지 않고 안내", () => {
     h.flags = { accountBriefing: true };
     h.params = { id: "abc" };

@@ -254,6 +254,8 @@ export interface AccountData {
   missingIndices: string[];
   schedule: AccountSchedule;
   narrative: { source: "llm" | "template"; reason: string | null };
+  /** 오늘 한국 휴장이라 국내 종목의 등락·당일 손익이 직전 거래일 것 (예전 기록에는 없음) */
+  krPreviousDay?: boolean;
 }
 
 export interface AccountHeadline {
@@ -263,6 +265,8 @@ export interface AccountHeadline {
   holdings: number;
   /** 당일 손익 기여 상위 3 */
   top: { code: string; name: string; amount: number; changeRate: number | null }[];
+  /** 오늘 한국 휴장이라 국내 종목의 등락이 직전 거래일 것 (그럴 때만 옴) */
+  krPreviousDay?: boolean;
 }
 
 export interface AccountBriefing {

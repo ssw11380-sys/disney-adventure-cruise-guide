@@ -18,7 +18,8 @@ import {
   checkNarrative,
   computeAccount,
   factsText,
-  numbersIn,
+  KR_PREVIOUS_DAY_NOTE,
+  numberTokens,
   pickIndices,
   summaryText,
   templateNarrative,
@@ -31,8 +32,8 @@ import { FakeSearchProvider, fakeIndexSource, fakeIndices, fakeProviders, SAMPLE
 
 /**
  * 계좌 한 장 브리핑 (3-31).
- *  - 숫자: 앱 잔고 합계와 같은 기준, 기여 상위 + 그 외 = 당일 손익 (±1원), 환율 효과 나눔의 합 = 미국 보유분 원화 변화 (±1원)
- *  - 설명: 모델이 입력에 없는 숫자를 쓰면 기본 문장, 모델이 없거나 실패해도 기본 문장으로 저장(실패 아님)
+ *  - 숫자: 앱 잔고 합계와 같은 기준, 기여 상위 + 그 외 = 당일 손익 (정확히), 가격 효과 + 환율 효과 = 미국 보유분 원화 변화 (정확히)
+ *  - 설명: 모델이 입력에 없는 숫자(값·단위·부호)나 권유·전망 표현을 쓰면 기본 문장, 모델이 없거나 실패해도 기본 문장으로 저장(실패 아님)
  *  - 알림: 세션당 1건 그대로, 앞머리만 계좌 요약. 플래그를 끄면 생성·모델 호출·알림 변화·지수 조회 0
  */
 
@@ -124,11 +125,11 @@ describe("계좌 숫자 (순수 계산)", () => {
     expect(apportion([1.5, 1.5], 2)).toEqual([1, 1]);
   });
 
-  it("환율 효과: 가격 효과 + 환율 효과 = 미국 보유분 원화 변화 (±1원), 가격 효과 = 당일 손익의 미국 몫", () => {
+  it("환율 효과: 가격 효과 + 환율 효과 = 미국 보유분 원화 변화 (정확히), 가격 효과 = 당일 손익의 미국 몫", () => {
     const a = computeAccount(fixture.holdings, { usdKrw: fixture.usdKrw });
     expect(a.fx.status).toBe("computed");
     expect(a.fx.priceEffect).toBe(a.markets.us!.day);
-    within1(a.fx.priceEffect! + a.fx.fxEffect!, a.fx.usdHoldingsKrwChange!);
+    expect(a.fx.priceEffect! + a.fx.fxEffect!).toBe(a.fx.usdHoldingsKrwChange!);
     // 환율 효과 = 전일 달러 평가액 × 원/달러 변동 (5.2원)
     const prevUsd = sumOf(fixture.holdings.filter((h) => h.quote?.currency === "USD").map((h) => (h.quote!.price - h.quote!.change) * h.quantity!));
     within1(a.fx.fxEffect!, prevUsd * 5.2);
@@ -139,7 +140,26 @@ describe("계좌 숫자 (순수 계산)", () => {
     for (const d of [-12.3, -0.1, 0, 3.7, 20]) {
       const list = [holding("A", "가", -1.23, { currency: "USD", qty: 37, price: 88.8, fx: 1380.25 }), holding("B", "나", 0.77, { currency: "USD", qty: 3.5, price: 412.1, fx: 1380.25 }), holding("005930", "다", 500, { qty: 11 })];
       const r = computeAccount(list, { usdKrw: { ...fixture.usdKrw, change: d } }).fx;
-      within1(r.priceEffect! + r.fxEffect!, r.usdHoldingsKrwChange!);
+      expect(r.priceEffect! + r.fxEffect!).toBe(r.usdHoldingsKrwChange!);
+    }
+  });
+
+  it("환율 효과 등식: 무작위 달러 포트폴리오 5000개 모두 '변화 = 가격 효과 + 환율 효과'가 정확하고, 반올림 전 원래 변화와 1.5원 안", () => {
+    let seed = 11;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let n = 0; n < 5000; n++) {
+      const fx = 1300 + rnd() * 150;
+      const d = (rnd() - 0.5) * 30;
+      const list = Array.from({ length: 1 + (n % 6) }, (_, i) => {
+        const price = 5 + rnd() * 500;
+        return holding(`U${i}`, `미국${i}`, (rnd() - 0.5) * price * 0.2, { currency: "USD", qty: Math.round(rnd() * 3000) / 100, price, fx });
+      });
+      list.push(holding("005930", "삼성전자", Math.round((rnd() - 0.5) * 4000), { qty: 1 + (n % 13) }));
+      const r = computeAccount(list, { usdKrw: { ...fixture.usdKrw, change: d } }).fx;
+      expect(r.priceEffect! + r.fxEffect!).toBe(r.usdHoldingsKrwChange!);
+      const us = list.filter((h) => h.quote!.currency === "USD");
+      const raw = us.reduce((a, h) => a + h.quote!.price * h.quantity! * fx - (h.quote!.price - h.quote!.change) * h.quantity! * (fx - d), 0);
+      expect(Math.abs(r.usdHoldingsKrwChange! - raw)).toBeLessThanOrEqual(1.5);
     }
   });
 
@@ -184,6 +204,7 @@ describe("계좌 숫자 (순수 계산)", () => {
   it("사실 목록과 기본 문장: 기본 문장의 숫자는 모두 사실 안에 있다, 요약 두 줄", () => {
     const d = dataFrom(fixture.holdings);
     const facts = factsText(d);
+    expect(facts).toContain("- 날짜: 2026-09-25 오후 브리핑");
     expect(facts).toContain(`당일 손익: -250,267원`);
     expect(facts).toContain("1. 리게티 컴퓨팅: ");
     expect(facts).toContain(`그 외 2종목: `);
@@ -196,15 +217,107 @@ describe("계좌 숫자 (순수 계산)", () => {
     expect(summaryText(dataFrom([holding("005930", "삼성전자", 100, { qty: 3 })]))).toBe("당일 +300원 (+1.01%) · 기여 1위 삼성전자 +300원\n총 평가금액 30,000원");
   });
 
+  it("기본 문장의 기여 줄: 표·사실과 같은 줄(상위 5 + 그 외)을 모두 적고, 적은 금액의 합 = 당일 손익 (4·5위가 빠지지 않는다)", () => {
+    const amounts = (text: string) => {
+      const line = text.split("\n").find((l) => l.startsWith("- 기여 순서: "))!;
+      return [...line.matchAll(/([+-]?)([\d,]+)원/g)].map((m) => (m[1] === "-" ? -1 : 1) * Number(m[2]!.replace(/,/g, "")));
+    };
+    const d = dataFrom(fixture.holdings);
+    const t = templateNarrative(d);
+    expect(t).toContain("- 기여 순서: 리게티 컴퓨팅 -268,838원, 엔비디아 +39,240원, NAVER -17,500원, SK하이닉스 +13,500원, 삼성전자 -12,000원, 그 외 2종목 -4,669원.");
+    expect(sumOf(amounts(t))).toBe(d.dayPnl);
+    // 17종목 계좌도 (상위 5 + 그 외 12종목) 합이 맞는다
+    const many = Array.from({ length: 17 }, (_, i) => holding(`0000${String(i).padStart(2, "0")}`, `종목${i}`, (i % 2 ? 1 : -1) * (137 + i * 91.3), { qty: 3 + i }));
+    const dm = dataFrom(many);
+    const tm = templateNarrative(dm);
+    expect(tm).toContain(`그 외 12종목 `);
+    expect(amounts(tm)).toHaveLength(6);
+    expect(sumOf(amounts(tm))).toBe(dm.dayPnl);
+    expect(checkNarrative(tm, factsText(dm))).toEqual({ ok: true });
+  });
+
+  it("한국 휴장일: 국내 등락이 직전 거래일 것임을 요약 셋째 줄·사실·기본 문장에 밝힌다", () => {
+    const d = dataFrom(fixture.holdings, { krPreviousDay: true });
+    expect(summaryText(d).split("\n")).toHaveLength(3);
+    expect(summaryText(d).split("\n")[2]).toBe(KR_PREVIOUS_DAY_NOTE);
+    expect(factsText(d)).toContain("오늘 한국은 휴장이라 국내 종목의 등락률과 당일 손익은 직전 거래일 것입니다");
+    expect(templateNarrative(d)).toContain("오늘 한국은 휴장이라 국내 종목의 당일 손익은 직전 거래일 등락입니다");
+    expect(checkNarrative(templateNarrative(d), factsText(d))).toEqual({ ok: true });
+    expect(summaryText(dataFrom(fixture.holdings)).split("\n")).toHaveLength(2);
+  });
+
   it("모델 설명 검사: 사실에 없는 숫자·매매·전망 표현은 거절, 순서 같은 작은 정수와 표기 그대로 옮긴 숫자는 통과", () => {
     const facts = "- 당일 손익: -2,868,108원 (-1.23%)\n- 1. RGTX: -1,234,567원 (등락률 -8.10%)\n- 코스피 3,412.35 (-0.80%)";
-    expect(numbersIn("-2,868,108원 과 1.23%")).toEqual([2868108, 1.23]);
+    const toks = numberTokens("-2,868,108원 과 1.23% · 9/25 22:30 · 3종목");
+    expect(toks.tokens.map((t) => [t.kind, t.key || t.value, t.unit, t.sign])).toEqual([
+      ["date", "9/25", "", null],
+      ["time", "22:30", "", null],
+      ["num", 2868108, "원", "-"],
+      ["num", 1.23, "%", null],
+      ["num", 3, "count", null],
+    ]);
     expect(checkNarrative("- 당일 손익은 -2,868,108원(-1.23%)입니다.\n- 1위는 RGTX(-1,234,567원, -8.10%)입니다.\n- 코스피는 -0.80%였습니다.", facts)).toEqual({ ok: true });
-    expect(checkNarrative("- 당일 손익은 약 287만 원입니다.", facts)).toEqual({ ok: false, reason: "입력에 없는 숫자: 287" });
+    // 부호 없이 옮기거나 단위를 빼고 옮긴 것, 지수 값 뒤 '포인트'는 통과
+    expect(checkNarrative("- 당일 손실은 2,868,108원(1.23%)입니다.\n- 코스피는 3,412.35포인트, 0.80% 내렸습니다.", facts)).toEqual({ ok: true });
+    expect(checkNarrative("- 당일 손익은 약 287만 원입니다.", facts)).toEqual({ ok: false, reason: "입력에 없는 숫자: 287만" });
     expect(checkNarrative("- RGTX 는 -1.2% 내렸습니다.", facts)).toMatchObject({ ok: false });
-    expect(checkNarrative("- RGTX 비중을 줄이고 매도를 고려할 만합니다.", facts)).toEqual({ ok: false, reason: "쓰지 않는 표현: 매도" });
+    expect(checkNarrative("- RGTX 비중을 줄이고 매도를 고려할 만합니다.", facts)).toEqual({ ok: false, reason: "쓰지 않는 표현: 비중" });
     expect(checkNarrative("- 내일은 반등 전망입니다.", facts)).toMatchObject({ ok: false });
     expect(checkNarrative("  ", facts)).toEqual({ ok: false, reason: "빈 응답" });
+  });
+
+  it("모델 설명 검사 (검증에서 찾은 경우): 부호 뒤집기·반올림한 등락률·장 시간 숫자·틀린 쉼표는 거절", () => {
+    const d = dataFrom(fixture.holdings);
+    const facts = factsText(d);
+    expect(facts).toContain("리게티 컴퓨팅: -268,838원 (등락률 -8.06%)");
+    expect(facts).toMatch(/20:00/); // 장 시간에 20 이 있어도
+    const cases: Array<[string, string]> = [
+      ["- 당일 손익은 +250,267원 이익입니다.", "입력에 없는 숫자: +250,267원"], // 실제 -250,267원
+      ["- 리게티 컴퓨팅이 약 8% 내려 가장 크게 기여했습니다.", "입력에 없는 숫자: 8%"], // 실제 -8.06%
+      ["- 삼성전자가 1% 하락했습니다.", "입력에 없는 숫자: 1%"], // 10 이하 정수라도 % 가 붙으면 봐주지 않는다 (실제 -1.65%)
+      ["- 애플이 3% 하락했습니다.", "입력에 없는 숫자: 3%"],
+      ["- 삼성전자가 20% 하락했습니다.", "입력에 없는 숫자: 20%"],
+      ["- 코스피가 25% 급락했습니다.", "입력에 없는 숫자: 25%"], // 날짜 9/25 의 25
+      ["- 당일 손익은 -250,2670원입니다.", "숫자 표기가 틀림: -250,2670원"],
+      ["- 엔비디아는 -39,240원을 보탰습니다.", "입력에 없는 숫자: -39,240원"], // 실제 +39,240원
+      ["- 미국 정규장은 23:30에 열립니다.", "입력에 없는 숫자: 23:30"],
+      ["- 국내 보유분 4종목이 -15,827%를 기록했습니다.", "입력에 없는 숫자: -15,827%"], // 값은 있어도 단위가 다르면
+    ];
+    for (const [text, reason] of cases) expect(checkNarrative(text, facts), text).toEqual({ ok: false, reason });
+    // 사실에 있는 날짜·시각·순서는 통과
+    expect(checkNarrative("- 미국 정규장은 9월 25일 22:30(한국 시간)에 열립니다.\n- 1위 리게티 컴퓨팅, 2위 엔비디아이고 그 외 2종목이 있습니다.", facts)).toEqual({ ok: true });
+  });
+
+  it("모델 설명 검사: 권유·전망 표현은 거절, 사실에 있는 공시 제목·'예상액'은 통과", () => {
+    const facts = factsText(dataFrom(fixture.holdings, {
+      basis: "총 평가금액은 수수료·세금 예상액을 뺀 값",
+      schedule: buildSchedule(null, new Date("2026-09-25T16:05:00+09:00"), [
+        { code: "005930", name: "삼성전자", title: "주식매수선택권부여에관한신고", filedAt: "2026-09-24", url: null },
+        { code: "000660", name: "SK하이닉스", title: "공개매수신고서", filedAt: "2026-09-25", url: null },
+        { code: "035420", name: "NAVER", title: "영업실적등에대한전망(공정공시)", filedAt: "2026-09-25", url: null },
+      ]),
+    }));
+    for (const [text, word] of [
+      ["- 비중을 줄이는 것이 좋겠습니다.", "비중"],
+      ["- 추가 상승이 예상됩니다.", "예상"],
+      ["- 반등할 수 있습니다.", "반등"],
+      ["- 다시 오를 가능성이 큽니다.", "가능성"],
+      ["- 지금은 팔 때입니다.", "팔 때"],
+      ["- 반도체 업황 회복이 기대됩니다.", "기대"],
+      ["- 리게티 컴퓨팅을 줄이는 것을 고려해 볼 만합니다.", "고려해"],
+      ["- 환율을 확인하세요.", "하세요"],
+      ["- 실적 전망이 밝습니다.", "전망"],
+      ["- 공개매수에 응하는 것을 추천합니다.", "추천"],
+    ] as const) expect(checkNarrative(text, facts), text).toEqual({ ok: false, reason: `쓰지 않는 표현: ${word}` });
+    // 공시일의 '일'만 쓴 것은 통과, 사실에 없는 날은 거절
+    expect(checkNarrative("- 삼성전자는 24일 공시를 냈습니다.", facts)).toEqual({ ok: true });
+    expect(checkNarrative("- 삼성전자는 23일 공시를 냈습니다.", facts)).toEqual({ ok: false, reason: "입력에 없는 숫자: 23일" });
+    expect(
+      checkNarrative(
+        '- 최근 공시로 삼성전자 "주식매수선택권부여에관한신고"(9/24), SK하이닉스 공개매수신고서, NAVER 영업실적등에대한전망(공정공시)가 있습니다.\n- 총 평가금액은 수수료·세금 예상액을 뺀 값입니다.',
+        facts,
+      ),
+    ).toEqual({ ok: true });
   });
 
   it("알림 묶음: 계좌 요약이 앞머리, 종목 브리핑 줄은 그 아래, 누르면 계좌 브리핑 (예전 앱은 digest 로 브리핑 탭)", () => {
@@ -279,11 +392,12 @@ class MixedQuotes implements QuoteProvider {
   }
 }
 
-/** 종목 브리핑은 평범하게, 계좌 브리핑은 사실에서 숫자를 그대로 옮겨(또는 지어내어) 답하는 가짜 모델 */
+/** 종목 브리핑은 평범하게, 계좌 브리핑은 사실에서 숫자를 그대로 옮겨(또는 지어내어, 또는 text 그대로) 답하는 가짜 모델 */
 class AccountGen implements TextGenerator {
   model = "fake-model";
   requests: GenerateRequest[] = [];
-  mode: "copy" | "invent" | "fail" = "copy";
+  mode: "copy" | "invent" | "fail" | "text" = "copy";
+  text = "";
   failStocks = false;
   gate: Promise<void> | null = null;
   async generate(req: GenerateRequest): Promise<GenerateResult> {
@@ -294,6 +408,7 @@ class AccountGen implements TextGenerator {
       if (this.gate) await this.gate;
       if (this.mode === "fail") throw new GenerationError("가짜 실패", "api");
       if (this.mode === "invent") return done("- 당일 손익은 약 12만 원입니다.");
+      if (this.mode === "text") return done(this.text);
       const day = req.user.match(/당일 손익: ([^\n]+)/)?.[1] ?? "";
       const top = req.user.match(/ {2}1\. ([^\n]+)/)?.[1] ?? "";
       return done(`- 오늘 계좌의 당일 손익은 ${day}입니다.\n- 가장 크게 움직인 종목은 ${top}입니다.\n- 환율 효과는 당일 손익과 따로 봅니다.`);
@@ -306,6 +421,9 @@ class AccountGen implements TextGenerator {
 /** 두 시장 모두 휴장인 날 */
 const closed = (market: "KR" | "US") => ({ market, isTradingDay: false, isOpen: false, opensAt: "2026-09-28T23:00:00.000Z", closesAt: null, source: "toss" as const });
 const holidayCalendar = { status: async (): Promise<MarketStatus> => ({ now: "", KR: closed("KR"), US: closed("US") }), isTradingDay: async () => false };
+/** 한국만 휴장인 날 (추석 등): 국내 종목 브리핑은 건너뛰고 미국은 만든다 */
+const openUs = { market: "US" as const, isTradingDay: true, isOpen: false, opensAt: "2026-09-25T13:30:00.000Z", closesAt: null, source: "toss" as const };
+const krHolidayCalendar = { status: async (): Promise<MarketStatus> => ({ now: "", KR: closed("KR"), US: openUs }), isTradingDay: async (code: string) => !/^\d/.test(code) };
 
 const AAPL: ListedStock = { code: "AAPL", name: "애플", market: "NASDAQ", isinCode: null, groupCode: null };
 const TOKEN = "ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]";
@@ -318,7 +436,7 @@ describe("계좌 브리핑 (서버)", () => {
     await db?.destroy();
   });
 
-  const setup = async (o: { at?: string; gen?: AccountGen; holdings?: boolean; disabledModel?: boolean; holiday?: boolean } = {}) => {
+  const setup = async (o: { at?: string; gen?: AccountGen; holdings?: boolean; disabledModel?: boolean; holiday?: boolean | "kr" } = {}) => {
     db = await createMigratedDb(":memory:");
     const push = new FakePush();
     const gen = o.gen ?? new AccountGen();
@@ -328,7 +446,7 @@ describe("계좌 브리핑 (서버)", () => {
     app = await buildApp({
       config: loadConfig({ DATABASE_URL: ":memory:" }),
       db,
-      providers: fakeProviders({ push, generator: gen, quotes, indices, search: new FakeSearchProvider([AAPL]), ...(o.holiday ? { calendar: holidayCalendar as never } : {}) }),
+      providers: fakeProviders({ push, generator: gen, quotes, indices, search: new FakeSearchProvider([AAPL]), ...(o.holiday ? { calendar: (o.holiday === "kr" ? krHolidayCalendar : holidayCalendar) as never } : {}) }),
       logger: false,
       receiptDelayMs: 0,
       now: () => new Date(o.at ?? "2026-09-25T16:05:00+09:00"),
@@ -367,7 +485,8 @@ describe("계좌 브리핑 (서버)", () => {
     const d = detail.data as AccountData;
     expect(d.contributions.reduce((a, c) => a + c.amount, 0) + (d.others?.amount ?? 0)).toBe(d.dayPnl);
     expect(d.fx.status).toBe("computed");
-    within1(d.fx.priceEffect! + d.fx.fxEffect!, d.fx.usdHoldingsKrwChange!);
+    expect(d.fx.priceEffect! + d.fx.fxEffect!).toBe(d.fx.usdHoldingsKrwChange!);
+    expect(d.krPreviousDay).toBe(false);
     expect(d.indices.map((i) => i.code)).toEqual(["KOSPI", "KOSDAQ", "NASDAQ", "SPX"]);
     expect(d.schedule.us.hours).toBe("정규장 9/25 22:30~9/26 05:00 (한국 시간)");
     expect(detail.detail).toBe("- 오늘 계좌의 당일 손익은 -16,589원 (-0.65%)입니다.\n- 가장 크게 움직인 종목은 애플: -18,089원 (등락률 -1.59%)입니다.\n- 환율 효과는 당일 손익과 따로 봅니다.");
@@ -406,7 +525,7 @@ describe("계좌 브리핑 (서버)", () => {
     let b = (await list())[0]!;
     expect(b).toMatchObject({ status: "ok", template: true, model: "template" });
     let d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json();
-    expect(d.data.narrative).toEqual({ source: "template", reason: "입력에 없는 숫자: 12" });
+    expect(d.data.narrative).toEqual({ source: "template", reason: "입력에 없는 숫자: 12만" });
     expect(d.detail).toContain("당일 손익은 -16,589원");
     expect(d.detail).not.toContain("12만");
 
@@ -499,5 +618,90 @@ describe("계좌 브리핑 (서버)", () => {
     const b = (await list())[0]!;
     const d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json().data as AccountData;
     expect(d.schedule.disclosures).toEqual([{ code: "005930", name: "삼성전자", title: "분기보고서 (2026.06)", filedAt: "2026-09-24", url: "https://dart.fss.or.kr/0" }]);
+  });
+
+  it("가짜 모델이 숫자를 바꿔 쓰거나 권유·전망을 쓰면 모두 기본 문장 (source=template), 표기 그대로 옮기면 모델 설명", async () => {
+    const gen = new AccountGen();
+    gen.mode = "text";
+    await setup({ gen });
+    // 실제: 당일 -16,589원 (-0.65%), 애플 -18,089원 (-1.59%), SK하이닉스 +13,500원 (+1.99%), 삼성전자 -12,000원 (-1.65%)
+    const run = async (text: string) => {
+      gen.text = text;
+      await app.inject({ method: "POST", url: "/api/account-briefings/run", payload: { session: "afternoon", force: true } });
+      const b = (await list())[0]!;
+      return (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json() as { detail: string; data: AccountData };
+    };
+    const rejected: Array<[string, string]> = [
+      ["- 당일 손익은 +16,589원 이익입니다.", "입력에 없는 숫자: +16,589원"],
+      ["- 애플이 약 2% 내렸습니다.", "입력에 없는 숫자: 2%"],
+      ["- 애플이 3% 하락했습니다.", "입력에 없는 숫자: 3%"],
+      ["- 삼성전자가 20% 하락했습니다.", "입력에 없는 숫자: 20%"],
+      ["- 당일 손익은 -16,5890원입니다.", "숫자 표기가 틀림: -16,5890원"],
+      ["- 애플 비중을 줄이는 것이 좋겠습니다.", "쓰지 않는 표현: 비중"],
+      ["- 추가 상승이 예상됩니다.", "쓰지 않는 표현: 예상"],
+      ["- SK하이닉스는 반등할 가능성이 큽니다.", "쓰지 않는 표현: 반등"],
+      ["- 애플은 팔 때입니다.", "쓰지 않는 표현: 팔 때"],
+    ];
+    for (const [text, reason] of rejected) {
+      const d = await run(text);
+      expect(d.data.narrative, text).toEqual({ source: "template", reason });
+      expect(d.detail).toContain("- 오후 기준 당일 손익은 -16,589원(-0.65%)입니다.");
+    }
+    const ok = await run("- 당일 손익은 -16,589원 (-0.65%)입니다.\n- 1위는 애플(-18,089원, -1.59%), 2위는 SK하이닉스(+13,500원)입니다.\n- 미국 정규장은 9/25 22:30(한국 시간)에 열립니다.");
+    expect(ok.data.narrative).toEqual({ source: "llm", reason: null });
+  });
+
+  it("한국만 휴장인 날: 국내 등락이 직전 거래일 것임을 요약·알림·사실에 밝힌다 (당일 손익은 앱 잔고 화면과 같은 기준 그대로)", async () => {
+    const { push, gen } = await setup({ holiday: "kr" });
+    const r = await app.briefingService.runSession("afternoon", { trigger: "schedule" });
+    expect(r.results.filter((x) => x.status === "skipped").map((x) => x.code).sort()).toEqual(["000660", "005930"]);
+    const b = (await list())[0]!;
+    expect(b.headline).toMatchObject({ dayPnl: -16_589, krPreviousDay: true });
+    expect(b.summary.split("\n")).toEqual(["당일 -16,589원 (-0.65%) · 기여 1위 애플 -18,089원", `총 평가금액 ${b.headline.totalValue.toLocaleString("ko-KR")}원 · 환율 효과 +4,259원`, "오늘 한국 휴장 · 국내 종목은 직전 거래일 등락"]);
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]!.body).toBe("기여 1위 애플 -18,089원 · 2위 SK하이닉스 +13,500원\n오늘 한국 휴장 · 국내 종목은 직전 거래일 등락\n종목 브리핑 1종목 · 변동 상위 애플 -1.59%");
+    const d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json().data as AccountData;
+    expect(d.krPreviousDay).toBe(true);
+    expect(gen.requests.find((q) => q.label === "account_briefing")!.user).toContain("참고: 오늘 한국은 휴장이라");
+  });
+
+  it("모든 종목의 알림을 끈 사용자에게는 계좌 요약만 담은 알림도 보내지 않는다 (예전처럼 0건), 일부만 끄면 1건", async () => {
+    const gen = new AccountGen();
+    gen.failStocks = true; // 종목 브리핑이 모두 실패해 알릴 종목이 없는 세션
+    const { push } = await setup({ gen });
+    await app.inject({ method: "PUT", url: "/api/notifications/settings", payload: { mutedCodes: ["000660", "005930", "AAPL"] } });
+    await app.briefingService.runSession("afternoon", { trigger: "schedule" });
+    expect(await list()).toHaveLength(1); // 계좌 브리핑은 만든다 (브리핑 탭에서 볼 수 있게)
+    expect(push.sent).toHaveLength(0);
+    await app.inject({ method: "PUT", url: "/api/notifications/settings", payload: { mutedCodes: ["000660", "005930"] } });
+    await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "afternoon", force: true } });
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]!.title).toMatch(/^오후 계좌 브리핑 · 당일 /);
+  });
+
+  it("관리용 계좌 브리핑 실행이 도는 중에 종목 실행이 끝나면 기다렸다가 그 계좌 브리핑을 알림 앞머리로 쓴다 ('이미 만드는 중' 오류로 빠지지 않게)", async () => {
+    const gen = new AccountGen();
+    let release!: () => void;
+    gen.gate = new Promise((r) => (release = r));
+    await setup({ gen });
+    const admin = app.inject({ method: "POST", url: "/api/account-briefings/run", payload: { session: "afternoon" } });
+    await expect.poll(() => accountCalls(gen)).toBe(1);
+    // 종목 실행이 끝난 순간 (BriefingService.onRunDone → afterRun)
+    const after = app.accountBriefings.afterRun({ session: "afternoon", date: "2026-09-25", partial: false, force: false, results: [{ status: "ok" }] });
+    release();
+    const [b, res] = await Promise.all([after, admin]);
+    expect(res.statusCode).toBe(200);
+    expect(b).toMatchObject({ status: "ok", session: "afternoon", date: "2026-09-25", id: res.json().briefing.id });
+    expect(accountCalls(gen)).toBe(1); // 다시 만들지 않는다
+  });
+
+  it("위젯 응답(accountIds): 플래그가 켜져 있으면 최근 계좌 브리핑 id 를 넣어 앱 백그라운드 알림이 알아보게, 끄면 넣지 않는다", async () => {
+    await setup();
+    expect((await app.inject({ method: "GET", url: "/api/widget" })).json()).not.toHaveProperty("accountIds");
+    await app.briefingService.runSession("afternoon", { trigger: "schedule" });
+    const id = (await list())[0]!.id;
+    expect((await app.inject({ method: "GET", url: "/api/widget" })).json().accountIds).toEqual([id]);
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accountBriefing: false } });
+    expect((await app.inject({ method: "GET", url: "/api/widget" })).json()).not.toHaveProperty("accountIds");
   });
 });

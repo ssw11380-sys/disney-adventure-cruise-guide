@@ -24,6 +24,8 @@ export interface WidgetData {
   market: WidgetMarket | null;
   /** 모든 종목의 최신 브리핑 id (새 서버). 없으면 briefings 가 전체 목록(예전 서버) */
   latestIds?: number[];
+  /** 최근 계좌 한 장 브리핑 id (3-31 서버, 플래그 accountBriefing 이 켜져 있을 때). 백그라운드 알림이 새 계좌 브리핑을 알아보게 */
+  accountIds?: number[];
   /** 지수 줄 (코스피·나스닥·원/달러). 예전 서버·플래그 꺼짐이면 null */
   indices: WidgetIndex[] | null;
   /** indices 를 받은 시각 (앱이 받은 지수와 어느 쪽이 새것인지 견줄 때) */
@@ -429,6 +431,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.features = p.features;
       out.featuresAt = out.fetchedAt;
       if (payload.latestIds) out.latestIds = payload.latestIds;
+      if (Array.isArray(payload.accountIds)) out.accountIds = payload.accountIds.filter((id) => Number.isInteger(id) && id > 0);
       full = true;
       fresh = !reuse;
     } else {

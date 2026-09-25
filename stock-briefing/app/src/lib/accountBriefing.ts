@@ -50,6 +50,7 @@ export function accountCardSpeech(b: AccountBriefing): string {
     h ? speakRate(h.dayRate) : null,
     h ? `총 평가금액 ${speakAmount(formatWon(h.totalValue))}` : null,
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
+    h?.krPreviousDay ? "오늘 한국 휴장, 국내 종목은 직전 거래일 등락" : null,
     "자세히 보기",
   ]);
 }

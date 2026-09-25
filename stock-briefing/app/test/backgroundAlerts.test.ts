@@ -160,12 +160,12 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       id: 77, date: "2026-09-24", session: "afternoon", status: "ok", summary: "", detail: "", model: "m", template: false, createdAt: "2026-09-24T16:10:00+09:00",
       headline: { totalValue: 123_456_789, dayPnl: -2_868_108, dayRate: -1.23, holdings: 17, top: [{ code: "RGTX", name: "RGTX", amount: -1_234_567, changeRate: -8.1 }] },
     };
-    /** serve 와 같고 계좌 브리핑 목록도 준다 ("404" 면 예전 서버). 받은 주소를 돌려준다 */
-    const serveWith = (list: typeof latest, p: Record<string, unknown>, accounts: unknown[] | "404") => {
+    /** serve 와 같고 계좌 브리핑 목록도 준다 ("404" 면 예전 서버). accountIds: 위젯 응답의 최근 계좌 브리핑 id (3-31 서버). 받은 주소를 돌려준다 */
+    const serveWith = (list: typeof latest, p: Record<string, unknown>, accounts: unknown[] | "404", extra: { accountIds?: number[]; stocks?: unknown[] } = {}) => {
       const calls: string[] = [];
       vi.stubGlobal("fetch", async (url: string) => {
         calls.push(url);
-        if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+        if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id), ...extra }), { status: 200 });
         if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(p), { status: 200 });
         if (url.includes("/api/account-briefings")) return accounts === "404" ? new Response(JSON.stringify({ error: "NOT_FOUND" }), { status: 404 }) : new Response(JSON.stringify(accounts), { status: 200 });
         return new Response(JSON.stringify(list), { status: 200 });
@@ -207,6 +207,57 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       serveWith([...latest, ...newOnes(2)], { ...prefs, accountBriefing: true }, [{ ...account, session: "morning" }]);
       await runBriefingCheck();
       expect(title(0)).toBe("오후 브리핑 2종목");
+    });
+
+    const on = { ...prefs, accountBriefing: true };
+    const old = { ...account, id: 55, session: "morning", createdAt: "2026-09-24T08:40:00+09:00" };
+
+    it("종목 브리핑이 모두 실패하고 계좌 브리핑만 새로 생긴 세션도 1건 (서버 푸시와 같게), 다음 확인에서 다시 울리지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      // 알림을 켠 뒤 첫 확인: 그때 있던 계좌 브리핑(55)은 기준으로만 적는다
+      serveWith(latest, on, [old], { accountIds: [55] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      // 새 종목 브리핑 없이 계좌 브리핑(77)만 생김
+      const calls = serveWith(latest, on, [account, old], { accountIds: [77, 55] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 계좌 브리핑 · 당일 -2,868,108원 (-1.23%)");
+      expect((scheduled[0] as { content: { data: Record<string, unknown> } }).content.data).toEqual({ type: "briefing", digest: true, session: "afternoon", date: "2026-09-24", count: 0, accountBriefingId: 77 });
+      expect(calls.filter((u) => u.includes("/api/account-briefings"))).toHaveLength(1);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      // 이미 본 것뿐이면 알림 규칙·목록을 다시 묻지 않는다
+      expect(calls.filter((u) => u.endsWith("/api/notifications/settings"))).toHaveLength(1);
+    });
+
+    it("업데이트 직후(계좌 브리핑 기준이 없는 기기)에는 이미 있던 계좌 브리핑을 따로 울리지 않는다", async () => {
+      store.set("push.localMode", "1");
+      store.set("briefings.notified", JSON.stringify(latest.map((b) => b.latest.id)));
+      store.set("briefings.notifyInit", "1");
+      serveWith(latest, on, [account], { accountIds: [77] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      // 그 뒤 새로 생긴 계좌 브리핑은 알린다
+      serveWith(latest, on, [{ ...account, id: 78, createdAt: "2026-09-24T16:50:00+09:00" }, account], { accountIds: [78, 77] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
+
+    it("등록한 모든 종목의 알림을 끈 사용자에게는 계좌 브리핑만 있는 세션도 알리지 않는다 (예전처럼 0건, 서버와 같은 규칙)", async () => {
+      const stocks = [{ c: "005930", n: "삼성전자", qty: 1, avg: 70000, q: null, e: null }, { c: "AAPL", n: "애플", qty: 1, avg: 190, q: null, e: null }];
+      await enableLocalBriefingAlerts();
+      serveWith(latest, on, [old], { accountIds: [55], stocks }); // 기준 적기
+      await runBriefingCheck();
+      serveWith(latest, { ...on, mutedCodes: ["005930", "AAPL"] }, [account, old], { accountIds: [77, 55], stocks });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      // 하나라도 켜 두었으면 1건
+      serveWith(latest, { ...on, mutedCodes: ["005930"] }, [{ ...account, id: 79 }, account, old], { accountIds: [79, 77, 55], stocks });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
     });
   });
 

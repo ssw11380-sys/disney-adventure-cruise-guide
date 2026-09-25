@@ -4,6 +4,7 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { AccountBriefing } from "@/api/types";
 import { accountCardSpeech } from "@/lib/accountBriefing";
+import { KR_PREVIOUS_DAY_LINE } from "@/lib/briefingDigest";
 import { formatDateKo, formatPct, formatWon, SESSION_LABEL } from "@/lib/format";
 import { changeColor, font, space, touch, useTheme } from "@/theme";
 import { Badge, Card, Muted } from "./ui";
@@ -58,6 +59,7 @@ export function AccountBriefingCard({ briefing }: { briefing: AccountBriefing })
                 {top.changeRate !== null ? <Text style={[styles.num, { color: changeColor(t, top.changeRate) }]}> ({formatPct(top.changeRate)})</Text> : null}
               </Text>
             ) : null}
+            {h.krPreviousDay ? <Muted>{KR_PREVIOUS_DAY_LINE}</Muted> : null}
             {briefing.template ? <Muted style={{ fontSize: font.tiny }}>숫자로 만든 기본 설명 · 매매 권유가 아닙니다</Muted> : <Muted style={{ fontSize: font.tiny }}>무엇이 계좌를 움직였는지 · 매매 권유가 아닙니다</Muted>}
           </>
         )}

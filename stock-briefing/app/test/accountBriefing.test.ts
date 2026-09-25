@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountBriefing, RegisteredWithQuote } from "@/api/types";
 import { accountCardItem, accountCardSpeech, contributionSpeech, contributionTable } from "@/lib/accountBriefing";
-import { buildDigest, DEFAULT_PREFS, digestAccountOf, planNotifications } from "@/lib/briefingDigest";
+import { buildDigest, DEFAULT_PREFS, digestAccountOf, KR_PREVIOUS_DAY_LINE, planNotifications } from "@/lib/briefingDigest";
 import { summarize } from "@/lib/portfolio";
 
 // 알림을 눌렀을 때의 경로(lib/notifications)만 네이티브 모듈을 가짜로
@@ -133,14 +133,44 @@ describe("알림: 서버와 같은 문구, 세션당 1건 (3-31)", () => {
     expect(planNotifications(fresh, { ...on, accountBriefing: undefined }, now, [briefing()])[0]!.title).toBe("오전 브리핑 3종목");
   });
 
-  it("모두 끈 종목이어도 계좌 브리핑은 1건, 조용한 시간에는 0건, 묶음을 끄면 예전처럼 종목마다", () => {
+  it("모든 종목의 알림을 끈 사용자에게는 계좌 요약도 보내지 않는다(예전처럼 0건, 서버와 같은 규칙). 일부만 끄면 1건, 조용한 시간 0건, 묶음을 끄면 종목마다", () => {
     const muted = { ...on, mutedCodes: ["RGTX", "005930", "000660"] };
-    const m = planNotifications(fresh.slice(0, 3), muted, now, [briefing()]);
+    // 등록 종목을 모르면 이 세션의 새 종목 브리핑 종목으로 본다 → 모두 끔
+    expect(planNotifications(fresh.slice(0, 3), muted, now, [briefing()])).toEqual([]);
+    expect(planNotifications(fresh.slice(0, 3), muted, now, [briefing()], { codes: ["RGTX", "005930", "000660"] })).toEqual([]);
+    // 끄지 않은 종목(AAPL)이 있으면 계좌 요약만으로 1건
+    const all = ["RGTX", "005930", "000660", "AAPL"];
+    const m = planNotifications(fresh.slice(0, 3), muted, now, [briefing()], { codes: all });
     expect(m).toHaveLength(1);
     expect(m[0]!.data).toMatchObject({ accountBriefingId: 7, count: 0 });
-    expect(planNotifications(fresh.slice(0, 3), { ...muted, accountBriefing: false }, now, [briefing()])).toEqual([]);
+    expect(planNotifications(fresh.slice(0, 3), { ...muted, accountBriefing: false }, now, [briefing()], { codes: all })).toEqual([]);
     expect(planNotifications(fresh, on, new Date("2026-09-25T23:00:00+09:00"), [briefing()])).toEqual([]);
     expect(planNotifications(fresh, { ...on, digest: false }, now, [briefing()])).toHaveLength(4);
+  });
+
+  it("새 계좌 브리핑만 있는 세션(종목 브리핑이 모두 실패)도 1건 — 서버 푸시와 같게. 이미 알린 것·플래그 꺼짐·모든 종목 끔이면 0건", () => {
+    expect(planNotifications([], on, now, [briefing()], { newAccountIds: [7] })).toEqual([
+      {
+        title: "오전 계좌 브리핑 · 당일 -2,868,108원 (-1.23%)",
+        body: "기여 1위 RGTX -1,234,567원 · 2위 삼성전자 -456,789원",
+        data: { type: "briefing", digest: true, session: "morning", date: "2026-09-25", count: 0, accountBriefingId: 7 },
+      },
+    ]);
+    expect(planNotifications([], on, now, [briefing()], { newAccountIds: [] })).toEqual([]);
+    expect(planNotifications([], { ...on, accountBriefing: false }, now, [briefing()], { newAccountIds: [7] })).toEqual([]);
+    expect(planNotifications([], { ...on, mutedCodes: ["A", "B"] }, now, [briefing()], { newAccountIds: [7], codes: ["A", "B"] })).toEqual([]);
+    // 같은 세션에 새 종목 브리핑도 있으면 여전히 1건
+    expect(planNotifications(fresh.slice(0, 3), on, now, [briefing()], { newAccountIds: [7] })).toHaveLength(1);
+  });
+
+  it("한국 휴장: 알림 본문에 국내 등락이 직전 거래일 것임을 한 줄 (서버와 같은 문구), 카드도 읽어 준다", () => {
+    const b = briefing({ headline: { ...briefing().headline!, krPreviousDay: true } });
+    expect(digestAccountOf(b)).toMatchObject({ krPreviousDay: true });
+    const m = planNotifications(fresh.slice(0, 1), on, now, [b])[0]!;
+    expect(m.body).toBe(`기여 1위 RGTX -1,234,567원 · 2위 삼성전자 -456,789원\n${KR_PREVIOUS_DAY_LINE}\n종목 브리핑 1종목 · 변동 상위 리게티 컴퓨팅 -8.10%`);
+    expect(KR_PREVIOUS_DAY_LINE).toBe("오늘 한국 휴장 · 국내 종목은 직전 거래일 등락");
+    expect(accountCardSpeech(b)).toContain("오늘 한국 휴장, 국내 종목은 직전 거래일 등락");
+    expect(digestAccountOf(briefing())).not.toHaveProperty("krPreviousDay");
   });
 });
 

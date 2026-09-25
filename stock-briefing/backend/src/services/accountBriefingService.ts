@@ -15,6 +15,7 @@ import {
   cleanNarrative,
   computeAccount,
   factsText,
+  krPreviousDay,
   pickIndices,
   sessionKo,
   summaryText,
@@ -33,6 +34,8 @@ export interface AccountHeadline {
   holdings: number;
   /** 당일 손익 기여 상위 3 */
   top: Array<{ code: string; name: string; amount: number; changeRate: number | null }>;
+  /** 오늘 한국 휴장이라 국내 종목의 등락이 직전 거래일 것 (그럴 때만 true 로 넣는다 — 예전 앱은 모르는 칸) */
+  krPreviousDay?: true;
 }
 
 export interface AccountBriefing {
@@ -83,6 +86,8 @@ const DISCLOSURE_MAX = 8;
  */
 export class AccountBriefingService {
   private running = false;
+  /** 지금 만드는 중인 한 건 (관리용 수동 실행과 종목 실행 뒤 afterRun 이 겹칠 때 기다리려고) */
+  private inflight: Promise<AccountBriefing | null> | null = null;
   private readonly now: () => Date;
 
   constructor(private readonly deps: AccountBriefingDeps) {
@@ -102,11 +107,19 @@ export class AccountBriefingService {
    * 이번에 새로 만든 성공 브리핑만 돌려준다 (세션 알림 앞머리용). 오류는 알림을 막지 않게 삼킨다
    */
   async afterRun(done: { session: AccountSession; date: string; partial: boolean; force: boolean; results?: Array<{ status: string }> }): Promise<AccountBriefing | null> {
+    // 부른 순간 만드는 중인 것 (관리용 수동 실행 POST /api/account-briefings/run). 아래에서 끝나길 기다린다
+    const pending = this.inflight;
     if (done.partial) return null;
     // 모든 종목이 휴장일이라 건너뛴 실행(두 시장 모두 휴장)은 계좌도 움직이지 않았으므로 만들지 않는다 (알림도 없음)
     if (!done.force && done.results?.length && done.results.every((r) => r.status === "skipped")) return null;
     if (!(await this.enabled().catch(() => false))) return null;
     try {
+      // 관리용 수동 실행이 만드는 중이었으면 끝나길 기다린다 — '이미 만드는 중' 오류로 알림 앞머리가 빠지지 않게.
+      // 방금 같은 날짜·세션으로 만든 것이면 그것을 앞머리로 쓴다 (force 면 이번 실행 기준으로 다시 만든다)
+      if (pending) {
+        const prev = await pending;
+        if (!done.force && prev?.status === "ok" && prev.date === done.date && prev.session === done.session) return prev;
+      }
       const b = await this.generate(done.session, { date: done.date, force: done.force });
       return b?.status === "ok" ? b : null;
     } catch (e) {
@@ -122,48 +135,56 @@ export class AccountBriefingService {
   async generate(session: AccountSession, opts: { date: string; force?: boolean }): Promise<AccountBriefing | null> {
     if (this.running) throw new Error("계좌 브리핑을 이미 만드는 중입니다");
     this.running = true;
+    const p = this.build(session, opts);
+    this.inflight = p.catch(() => null);
     try {
-      const { date } = opts;
-      if (!opts.force) {
-        const existing = await this.find(date, session);
-        if (existing?.status === "ok") return null;
-      }
-      const list = await this.deps.stocks.listWithFreshQuotes();
-      const holdings = list.filter((s) => (s.quantity ?? 0) > 0 && s.avgPrice !== null);
-      if (!holdings.length) {
-        this.deps.log?.info({ session, date }, "보유 종목이 없어 계좌 브리핑 건너뜀");
-        return null;
-      }
-      const now = this.now();
-      const [indexList, status, disclosures] = await Promise.all([
-        this.deps.indices ? this.deps.indices.list({ stale: true }).catch(() => [] as MarketIndex[]) : Promise.resolve([] as MarketIndex[]),
-        this.deps.calendar ? this.deps.calendar.status().catch(() => null) : Promise.resolve(null),
-        this.recentDisclosures(holdings.filter((h) => isKrCode(h.code)), date).catch(() => [] as AccountDisclosure[]),
-      ]);
-      const totals = computeAccount(holdings, { afterCost: true, usdKrw: indexList.find((i) => i.code === "USDKRW") ?? null });
-      const { rows, missing } = pickIndices(indexList);
-      const data: AccountData = {
-        version: 1,
-        session,
-        date,
-        asOf: seoulIso(now),
-        basis: BASIS,
-        ...totals,
-        indices: rows,
-        missingIndices: missing,
-        schedule: buildSchedule(status, now, disclosures),
-        narrative: { source: "template", reason: null },
-      };
-      if (data.holdings === 0) {
-        data.narrative.reason = "시세를 받지 못함";
-        return await this.save(date, session, { status: "failed", summary: "시세를 받지 못해 계좌 브리핑을 만들지 못했습니다", detail: "", data, model: "template" });
-      }
-      const n = await this.narrative(data);
-      data.narrative = { source: n.source, reason: n.reason };
-      return await this.save(date, session, { status: "ok", summary: summaryText(data), detail: n.text, data, model: n.model });
+      return await p;
     } finally {
       this.running = false;
+      this.inflight = null;
     }
+  }
+
+  private async build(session: AccountSession, opts: { date: string; force?: boolean }): Promise<AccountBriefing | null> {
+    const { date } = opts;
+    if (!opts.force) {
+      const existing = await this.find(date, session);
+      if (existing?.status === "ok") return null;
+    }
+    const list = await this.deps.stocks.listWithFreshQuotes();
+    const holdings = list.filter((s) => (s.quantity ?? 0) > 0 && s.avgPrice !== null);
+    if (!holdings.length) {
+      this.deps.log?.info({ session, date }, "보유 종목이 없어 계좌 브리핑 건너뜀");
+      return null;
+    }
+    const now = this.now();
+    const [indexList, status, disclosures] = await Promise.all([
+      this.deps.indices ? this.deps.indices.list({ stale: true }).catch(() => [] as MarketIndex[]) : Promise.resolve([] as MarketIndex[]),
+      this.deps.calendar ? this.deps.calendar.status().catch(() => null) : Promise.resolve(null),
+      this.recentDisclosures(holdings.filter((h) => isKrCode(h.code)), date).catch(() => [] as AccountDisclosure[]),
+    ]);
+    const totals = computeAccount(holdings, { afterCost: true, usdKrw: indexList.find((i) => i.code === "USDKRW") ?? null });
+    const { rows, missing } = pickIndices(indexList);
+    const data: AccountData = {
+      version: 1,
+      session,
+      date,
+      asOf: seoulIso(now),
+      basis: BASIS,
+      ...totals,
+      indices: rows,
+      missingIndices: missing,
+      schedule: buildSchedule(status, now, disclosures),
+      narrative: { source: "template", reason: null },
+    };
+    data.krPreviousDay = krPreviousDay(data.schedule, totals);
+    if (data.holdings === 0) {
+      data.narrative.reason = "시세를 받지 못함";
+      return await this.save(date, session, { status: "failed", summary: "시세를 받지 못해 계좌 브리핑을 만들지 못했습니다", detail: "", data, model: "template" });
+    }
+    const n = await this.narrative(data);
+    data.narrative = { source: n.source, reason: n.reason };
+    return await this.save(date, session, { status: "ok", summary: summaryText(data), detail: n.text, data, model: n.model });
   }
 
   /** 모델 설명. 모델이 없거나 실패·시간 초과·검사 불합격이면 기본 문장 */
@@ -265,6 +286,23 @@ export class AccountBriefingService {
     return rows.map(toBriefing);
   }
 
+  /**
+   * 최근 성공한 계좌 브리핑 id (최신 순). 위젯 응답(accountIds)에 넣어 앱 백그라운드 알림이 새 계좌 브리핑을 알아보게 한다 —
+   * 종목 브리핑이 모두 실패하고 계좌 브리핑만 생긴 세션도 서버 푸시처럼 1건 알리도록
+   */
+  async recentOkIds(limit = 4): Promise<number[]> {
+    const rows = await this.deps.db
+      .selectFrom("account_briefings")
+      .select(["id"])
+      .where("status", "=", "ok")
+      .orderBy("briefing_date", "desc")
+      .orderBy("session", "asc")
+      .orderBy("id", "desc")
+      .limit(limit)
+      .execute();
+    return rows.map((r) => r.id);
+  }
+
   async get(id: number): Promise<AccountBriefingWithData> {
     const r = await this.deps.db.selectFrom("account_briefings").selectAll().where("id", "=", id).executeTakeFirst();
     if (!r) throw new NotFoundError(`계좌 브리핑 ${id} 이 없습니다`);
@@ -275,7 +313,13 @@ export class AccountBriefingService {
 /** 세션 알림 앞머리에 쓸 값 (성공한 계좌 브리핑만) */
 export function digestAccount(b: AccountBriefing | null | undefined): DigestAccount | null {
   if (!b || b.status !== "ok" || !b.headline) return null;
-  return { id: b.id, dayPnl: b.headline.dayPnl, dayRate: b.headline.dayRate, top: b.headline.top.map((t) => ({ name: t.name, amount: t.amount })) };
+  return {
+    id: b.id,
+    dayPnl: b.headline.dayPnl,
+    dayRate: b.headline.dayRate,
+    top: b.headline.top.map((t) => ({ name: t.name, amount: t.amount })),
+    ...(b.headline.krPreviousDay ? { krPreviousDay: true } : {}),
+  };
 }
 
 function parseData(s: string): AccountData | null {
@@ -305,6 +349,7 @@ function toBriefing(r: { id: number; briefing_date: string; session: string; sta
           dayRate: d.dayRate,
           holdings: d.holdings,
           top: d.contributions.slice(0, 3).map((c) => ({ code: c.code, name: c.name, amount: c.amount, changeRate: c.changeRate })),
+          ...(d.krPreviousDay ? { krPreviousDay: true as const } : {}),
         }
       : null,
   };

@@ -392,7 +392,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
   await app.register(accountBriefingRoutes, { prefix: "/api/account-briefings", service: accountBriefings, busy: () => briefingService.isRunning || accountBriefings.isRunning, now });
   await app.register(featureRoutes, { prefix: "/api/features", features });
-  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices });
+  // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
+  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings });
   await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });

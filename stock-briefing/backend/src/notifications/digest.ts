@@ -24,7 +24,12 @@ export interface DigestAccount {
   dayRate: number | null;
   /** 당일 손익 기여 상위 (앞의 2개만 쓴다) */
   top: Array<{ name: string; amount: number }>;
+  /** 오늘 한국 휴장이라 국내 종목의 등락이 직전 거래일 것 → 본문에 한 줄로 밝힌다 */
+  krPreviousDay?: boolean;
 }
+
+/** 계좌 브리핑 알림 본문에 붙이는 한 줄 (accountNumbers.KR_PREVIOUS_DAY_NOTE 와 같다. 앱 briefingDigest 도 같은 문구) */
+export const KR_PREVIOUS_DAY_LINE = "오늘 한국 휴장 · 국내 종목은 직전 거래일 등락";
 
 export interface QuietHours {
   quietEnabled: boolean;
@@ -98,6 +103,7 @@ function accountDigest(session: "morning" | "afternoon", date: string, items: Di
   const lines: string[] = [];
   const top = a.top.slice(0, 2);
   if (top.length) lines.push(top.map((t, i) => `${i === 0 ? "기여 1위" : "2위"} ${t.name} ${formatWon(t.amount)}`).join(" · "));
+  if (a.krPreviousDay) lines.push(KR_PREVIOUS_DAY_LINE);
   const ranked = byMove(items);
   if (items.length) {
     const movers = ranked.filter((i) => i.changeRate !== null).slice(0, 2);
