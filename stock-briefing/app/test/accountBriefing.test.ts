@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountBriefing, RegisteredWithQuote } from "@/api/types";
 import { accountCardItem, accountCardSpeech, contributionSpeech, contributionTable } from "@/lib/accountBriefing";
-import { buildDigest, DEFAULT_PREFS, digestAccountOf, KR_PREVIOUS_DAY_LINE, planNotifications } from "@/lib/briefingDigest";
+import { buildDigest, DEFAULT_PREFS, digestAccountOf, KR_PREVIOUS_DAY_LINE, planNotifications, US_PREVIOUS_DAY_LINE } from "@/lib/briefingDigest";
 import { summarize } from "@/lib/portfolio";
 
 // 알림을 눌렀을 때의 경로(lib/notifications)만 네이티브 모듈을 가짜로
@@ -171,6 +171,16 @@ describe("알림: 서버와 같은 문구, 세션당 1건 (3-31)", () => {
     expect(KR_PREVIOUS_DAY_LINE).toBe("오늘 한국 휴장 · 국내 종목은 직전 거래일 등락");
     expect(accountCardSpeech(b)).toContain("오늘 한국 휴장, 국내 종목은 직전 거래일 등락");
     expect(digestAccountOf(briefing())).not.toHaveProperty("krPreviousDay");
+  });
+
+  it("지난밤 미국 평일 휴장: 알림 본문에 미국 등락이 직전 거래일 것임을 한 줄 (서버와 같은 문구)", () => {
+    const b = briefing({ headline: { ...briefing().headline!, usPreviousDay: true } });
+    expect(digestAccountOf(b)).toMatchObject({ usPreviousDay: true });
+    const m = planNotifications(fresh.slice(0, 1), on, now, [b])[0]!;
+    expect(m.body).toBe(`기여 1위 RGTX -1,234,567원 · 2위 삼성전자 -456,789원\n${US_PREVIOUS_DAY_LINE}\n종목 브리핑 1종목 · 변동 상위 리게티 컴퓨팅 -8.10%`);
+    expect(US_PREVIOUS_DAY_LINE).toBe("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(accountCardSpeech(b)).toContain("지난밤 미국 휴장, 미국 종목은 직전 거래일 등락");
+    expect(digestAccountOf(briefing())).not.toHaveProperty("usPreviousDay");
   });
 });
 

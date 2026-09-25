@@ -256,6 +256,8 @@ export interface AccountData {
   narrative: { source: "llm" | "template"; reason: string | null };
   /** 오늘 한국 휴장이라 국내 종목의 등락·당일 손익이 직전 거래일 것 (예전 기록에는 없음) */
   krPreviousDay?: boolean;
+  /** 지난밤 미국 평일 휴장이라 미국 종목의 등락·당일 손익이 직전 거래일 것 (앞 브리핑에 담긴 움직임. 예전 기록·서버에는 없음) */
+  usPreviousDay?: boolean;
 }
 
 export interface AccountHeadline {
@@ -267,6 +269,8 @@ export interface AccountHeadline {
   top: { code: string; name: string; amount: number; changeRate: number | null }[];
   /** 오늘 한국 휴장이라 국내 종목의 등락이 직전 거래일 것 (그럴 때만 옴) */
   krPreviousDay?: boolean;
+  /** 지난밤 미국 평일 휴장이라 미국 종목의 등락이 직전 거래일 것 (그럴 때만 옴) */
+  usPreviousDay?: boolean;
 }
 
 export interface AccountBriefing {

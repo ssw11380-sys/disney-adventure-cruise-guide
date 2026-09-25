@@ -65,14 +65,21 @@ export interface DigestAccount {
   top: { name: string; amount: number }[];
   /** 오늘 한국 휴장이라 국내 종목의 등락이 직전 거래일 것 → 본문에 한 줄 */
   krPreviousDay?: boolean;
+  /** 지난밤 미국 평일 휴장이라 미국 종목의 등락이 직전 거래일 것 → 본문에 한 줄 */
+  usPreviousDay?: boolean;
 }
 
 /** 계좌 브리핑 알림 본문에 붙이는 한 줄 (서버 digest.ts KR_PREVIOUS_DAY_LINE 과 같다) */
 export const KR_PREVIOUS_DAY_LINE = "오늘 한국 휴장 · 국내 종목은 직전 거래일 등락";
+/** 지난밤 미국 평일 휴장일 때 붙이는 한 줄 (서버 digest.ts US_PREVIOUS_DAY_LINE 과 같다) */
+export const US_PREVIOUS_DAY_LINE = "지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락";
 
 /** 계좌 브리핑 목록 항목(/api/account-briefings) → 알림 앞머리 (성공한 것만) */
 export function digestAccountOf(
-  b: { id: number; status: "ok" | "failed"; headline: { dayPnl: number; dayRate: number | null; top: { name: string; amount: number }[]; krPreviousDay?: boolean } | null } | null | undefined,
+  b:
+    | { id: number; status: "ok" | "failed"; headline: { dayPnl: number; dayRate: number | null; top: { name: string; amount: number }[]; krPreviousDay?: boolean; usPreviousDay?: boolean } | null }
+    | null
+    | undefined,
 ): DigestAccount | null {
   if (!b || b.status !== "ok" || !b.headline) return null;
   return {
@@ -81,6 +88,7 @@ export function digestAccountOf(
     dayRate: b.headline.dayRate,
     top: b.headline.top.map((t) => ({ name: t.name, amount: t.amount })),
     ...(b.headline.krPreviousDay ? { krPreviousDay: true } : {}),
+    ...(b.headline.usPreviousDay ? { usPreviousDay: true } : {}),
   };
 }
 
@@ -120,6 +128,7 @@ function accountDigest(session: "morning" | "afternoon", date: string, items: Di
   const top = a.top.slice(0, 2);
   if (top.length) lines.push(top.map((t, i) => `${i === 0 ? "기여 1위" : "2위"} ${t.name} ${formatWonSigned(t.amount)}`).join(" · "));
   if (a.krPreviousDay) lines.push(KR_PREVIOUS_DAY_LINE);
+  if (a.usPreviousDay) lines.push(US_PREVIOUS_DAY_LINE);
   const ranked = byMove(items, (i) => i.changeRate);
   if (items.length) {
     const movers = ranked.filter((i) => i.changeRate !== null).slice(0, 2);

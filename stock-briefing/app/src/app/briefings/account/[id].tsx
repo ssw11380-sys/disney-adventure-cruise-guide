@@ -9,7 +9,7 @@ import { Screen } from "@/components/Screen";
 import { CardsSkeleton } from "@/components/Skeleton";
 import { Badge, Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, TableHead } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
-import { contributionSpeech, contributionTable, localDay } from "@/lib/accountBriefing";
+import { contributionSpeech, contributionTable, fxEquationSpeech, localDay, summarySpeech, templateNote } from "@/lib/accountBriefing";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL } from "@/lib/format";
 import { parseBriefingId, viewState } from "@/lib/freshness";
@@ -32,6 +32,18 @@ export default function AccountBriefingScreen() {
   if (!on) {
     // 플래그를 아직 못 받았으면(알림으로 막 켠 경우) 잠깐 기다린다
     if (flags.data === undefined && flags.isFetching) return <Screen><CardsSkeleton count={2} /></Screen>;
+    // 플래그를 받지 못함(끊김·서버 오류·오프라인으로 멈춤): '꺼져 있다'고 하지 않고 연결을 확인하게
+    if (flags.data === undefined) {
+      return (
+        <Screen>
+          <Empty
+            title="계좌 브리핑을 불러오지 못했습니다"
+            hint="연결을 확인해 주세요. 인터넷이 연결되면 다시 시도할 수 있습니다."
+            action={<Button title="다시 시도" variant="secondary" compact onPress={() => void flags.refetch()} />}
+          />
+        </Screen>
+      );
+    }
     return (
       <Screen>
         <Empty title="계좌 브리핑을 볼 수 없습니다" hint="지금은 계좌 브리핑이 꺼져 있습니다. 종목별 브리핑은 브리핑 탭에 있습니다." action={<Button title="브리핑 탭으로" variant="secondary" compact onPress={() => router.dismissTo("/briefings")} />} />
@@ -73,11 +85,14 @@ function AccountBriefingView({ b, top }: { b: AccountBriefingWithData; top: Reac
       ) : (
         <>
           <Card>
-            {b.summary.split("\n").map((line, i) => (
-              <Text key={i} style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.6 }}>
-                {line}
-              </Text>
-            ))}
+            {/* 한 줄에 숫자가 여럿이라 화면 읽기는 기호 없이 한 문장으로 (디자인 규칙) */}
+            <View accessible accessibilityLabel={summarySpeech(d)}>
+              {b.summary.split("\n").map((line, i) => (
+                <Text key={i} style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.6 }}>
+                  {line}
+                </Text>
+              ))}
+            </View>
           </Card>
           <TotalsCard d={d} />
           <ContributionCard d={d} />
@@ -87,9 +102,8 @@ function AccountBriefingView({ b, top }: { b: AccountBriefingWithData; top: Reac
             <SectionTitle right={b.template ? <Badge>기본 설명</Badge> : null}>무엇이 계좌를 움직였나</SectionTitle>
             <MarkdownView>{b.detail}</MarkdownView>
             <Muted style={{ fontSize: font.tiny }}>
-              {b.template
-                ? `모델 설명 대신 위 숫자로 만든 기본 설명입니다${d.narrative.reason ? ` (${d.narrative.reason})` : ""}.`
-                : "모델이 위 숫자만 옮겨 쓴 설명입니다. 입력에 없는 숫자나 매매·전망 표현이 나오면 기본 설명으로 바꿉니다."}
+              {/* 자세한 이유(모델이 지어낸 숫자·오류 문구)는 화면에 옮기지 않는다 — 틀린 숫자를 실제 값으로 읽지 않게 */}
+              {b.template ? templateNote(d.narrative.reason) : "모델이 위 숫자만 옮겨 쓴 설명입니다. 입력에 없는 숫자나 매매·전망 표현이 나오면 기본 설명으로 바꿉니다."}
             </Muted>
           </Card>
           <Muted style={styles.basis}>
@@ -185,6 +199,7 @@ function ContributionCard({ d }: { d: AccountData }) {
         {table.matches ? "줄의 합이 당일 손익과 같습니다(원 단위로 나눔)." : "줄의 합이 당일 손익과 다릅니다. 다시 만들면 바로잡힙니다."}
         {d.fx.appliedRate ? ` 미국 종목은 적용 환율 ${formatIndexValue(d.fx.appliedRate)}원으로 원화 환산.` : ""}
         {d.krPreviousDay ? " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준)." : ""}
+        {d.usPreviousDay ? " 지난밤 미국은 휴장이라 미국 종목은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임)." : ""}
       </Muted>
     </Card>
   );
@@ -220,9 +235,11 @@ function ImpactCard({ d }: { d: AccountData }) {
           <Line label="환율 효과" speech={sentence(["환율 효과", speakProfit(formatWon(fx.fxEffect!, { sign: true }), Math.sign(fx.fxEffect!)), "당일 손익에는 넣지 않음"])}>
             <ChangeText value={fx.fxEffect} text={formatWon(fx.fxEffect!, { sign: true })} style={[styles.lineValue, { fontWeight: "700" }]} />
           </Line>
-          <Muted>
-            미국 보유분 원화 평가 변화 {formatWon(fx.usdHoldingsKrwChange!, { sign: true })} = 가격 효과 {formatWon(fx.priceEffect!, { sign: true })} + 환율 효과 {formatWon(fx.fxEffect!, { sign: true })}. 환율 효과는 원/달러 전일 대비 변동으로 계산하며, 당일 손익(앱 잔고 화면과 같은 기준)에는 넣지 않습니다.
-          </Muted>
+          <View accessible accessibilityLabel={fxEquationSpeech(fx) ?? undefined}>
+            <Muted>
+              미국 보유분 원화 평가 변화 {formatWon(fx.usdHoldingsKrwChange!, { sign: true })} = 가격 효과 {formatWon(fx.priceEffect!, { sign: true })} + 환율 효과 {formatWon(fx.fxEffect!, { sign: true })}. 환율 효과는 원/달러 전일 대비 변동으로 계산하며, 당일 손익(앱 잔고 화면과 같은 기준)에는 넣지 않습니다.
+            </Muted>
+          </View>
         </>
       ) : (
         <Muted>{fx.reason ?? "환율 효과를 계산하지 못했습니다"}</Muted>

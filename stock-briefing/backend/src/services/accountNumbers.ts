@@ -1,4 +1,4 @@
-import { formatRate, formatWon, KR_PREVIOUS_DAY_LINE } from "../notifications/digest.js";
+import { formatRate, formatWon, KR_PREVIOUS_DAY_LINE, US_PREVIOUS_DAY_LINE } from "../notifications/digest.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { MarketIndex } from "../providers/market/indices.js";
 import { seoulDate } from "../lib/time.js";
@@ -142,6 +142,11 @@ export interface AccountData extends AccountTotals {
    * 요약·알림·설명에 이 점을 밝힌다. 예전 기록에는 없다(없으면 false)
    */
   krPreviousDay?: boolean;
+  /**
+   * 지난밤(이번 브리핑이 보는) 미국 정규장이 평일 휴장(추수감사절 등)이었는데 미국 보유 종목이 있음 → 미국 종목의 등락·당일 손익은
+   * 그 전 거래일 것이라 이미 앞 브리핑에 담긴 움직임이다. 요약·알림·설명에 밝힌다. 예전 기록에는 없다(없으면 false)
+   */
+  usPreviousDay?: boolean;
 }
 
 /** 오늘 한국 휴장인데 국내 보유분이 있는지 (국내 등락이 직전 거래일 것인지) */
@@ -151,6 +156,35 @@ export function krPreviousDay(schedule: Pick<AccountSchedule, "kr">, totals: Pic
 
 /** 요약·알림에 붙이는 한 줄 */
 export const KR_PREVIOUS_DAY_NOTE = KR_PREVIOUS_DAY_LINE;
+export const US_PREVIOUS_DAY_NOTE = US_PREVIOUS_DAY_LINE;
+
+/**
+ * 지금 기준으로 가장 최근에 끝났어야 할 미국 정규장의 뉴욕 날짜 (뉴욕 16:00 이 지났으면 그날, 아니면 전날).
+ * 오전 브리핑(08:30 KST)은 지난밤 정규장, 오후 브리핑(뉴욕 새벽)도 같은 정규장을 본다
+ */
+export function usLastSessionDate(now: Date): string {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit" })
+      .formatToParts(now)
+      .map((x) => [x.type, x.value]),
+  );
+  const date = `${p["year"]}-${p["month"]}-${p["day"]}`;
+  if (Number(p["hour"]) % 24 >= 16) return date;
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * 지난밤 미국 정규장이 평일 휴장(추수감사절·독립기념일 등)이었는데 미국 보유분이 있는지 → 미국 등락이 그 전 거래일 것(이미 앞 브리핑에 담긴 움직임).
+ * 주말은 뺀다 (월요일 오전의 금요일 등락은 주말 동안 처음 보는 움직임이라 따로 밝히지 않는다)
+ */
+export function usPreviousDay(now: Date, totals: Pick<AccountTotals, "markets">): boolean {
+  if (totals.markets.us === null) return false;
+  const d = usLastSessionDate(now);
+  const wd = new Date(`${d}T12:00:00Z`).getUTCDay();
+  return wd >= 1 && wd <= 5 && !isUsTradingDate(d);
+}
 
 /** 상위 몇 종목까지 따로 보여 주는지 (나머지는 '그 외 N종목') */
 export const TOP_N = 5;
@@ -399,12 +433,15 @@ const idx = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: 2,
 const signed = (v: number, text: string) => (v > 0 ? `+${text}` : v < 0 ? `-${text}` : text);
 const SESSION_KO: Record<AccountSession, string> = { morning: "오전", afternoon: "오후" };
 
-/** 알림·카드용 요약 두 줄 (코드로 만든다 — 숫자가 늘 맞게). 오늘 한국 휴장이면 셋째 줄에 국내 등락이 직전 거래일 것임을 밝힌다 */
-export function summaryText(d: AccountTotals & { krPreviousDay?: boolean }): string {
+/**
+ * 알림·카드용 요약 두 줄 (코드로 만든다 — 숫자가 늘 맞게). 오늘 한국 휴장이면 국내 등락이, 지난밤 미국 평일 휴장이면 미국 등락이
+ * 직전 거래일 것임을 다음 줄에 밝힌다
+ */
+export function summaryText(d: AccountTotals & { krPreviousDay?: boolean; usPreviousDay?: boolean }): string {
   const top = d.contributions[0];
   const line1 = `당일 ${won(d.dayPnl)}${d.dayRate !== null ? ` (${formatRate(d.dayRate)})` : ""}${top ? ` · 기여 1위 ${top.name} ${won(top.amount)}` : ""}`;
   const line2 = `총 평가금액 ${won(d.totalValue, false)}${d.fx.status === "computed" ? ` · 환율 효과 ${won(d.fx.fxEffect!)}` : ""}`;
-  return [line1, line2, ...(d.krPreviousDay ? [KR_PREVIOUS_DAY_NOTE] : [])].join("\n");
+  return [line1, line2, ...(d.krPreviousDay ? [KR_PREVIOUS_DAY_NOTE] : []), ...(d.usPreviousDay ? [US_PREVIOUS_DAY_NOTE] : [])].join("\n");
 }
 
 function contributionLine(r: AccountRow, rank: number): string {
@@ -425,8 +462,9 @@ function scheduleLines(s: AccountSchedule): string[] {
     `한국: ${s.kr.tradingDay ? `오늘 거래일, ${s.kr.hours}` : `오늘 휴장${s.kr.nextOpen ? ` (다음 개장 ${kstShort(s.kr.nextOpen)})` : ""}`}. 지금: ${s.kr.now}`,
     `미국: ${s.us.tradingDay ? `${Number(s.us.date.slice(5, 7))}/${Number(s.us.date.slice(8, 10))}(현지) ${s.us.hours}` : `${Number(s.us.date.slice(5, 7))}/${Number(s.us.date.slice(8, 10))}(현지) 휴장`}. 지금: ${s.us.now}`,
   ];
-  if (s.disclosures.length) out.push(`최근 공시: ${s.disclosures.map((x) => `${x.name} "${x.title}" (${x.filedAt})`).join(" / ")}`);
-  else out.push("최근 공시: 보유 국내 종목의 최근 3일 공시 없음(종목 브리핑이 받아 둔 것 기준)");
+  // 공시 건수를 적어 둔다 — 기본 문장의 '최근 공시 N건'이 사실 안의 숫자가 되게. 기간은 숫자 없이('3일'이 '3일 연속' 같은 지어낸 말을 통과시키지 않게)
+  if (s.disclosures.length) out.push(`최근 공시 ${s.disclosures.length}건: ${s.disclosures.map((x) => `${x.name} "${x.title}" (${x.filedAt})`).join(" / ")}`);
+  else out.push("최근 공시: 보유 국내 종목의 최근 사흘(오늘 포함) 공시 없음(종목 브리핑이 받아 둔 것 기준)");
   return out;
 }
 
@@ -438,13 +476,14 @@ export function factsText(d: AccountData): string {
   lines.push(`- 총 평가금액: ${won(d.totalValue, false)} (보유 ${d.holdings}종목${d.stale ? `, 시세 지연 ${d.stale}종목` : ""})`);
   lines.push(`- 당일 손익: ${won(d.dayPnl)}${d.dayRate !== null ? ` (${formatRate(d.dayRate)})` : ""}`);
   if (d.krPreviousDay) lines.push("- 참고: 오늘 한국은 휴장이라 국내 종목의 등락률과 당일 손익은 직전 거래일 것입니다(앱 잔고 화면과 같은 기준)");
+  if (d.usPreviousDay) lines.push("- 참고: 지난밤 미국은 휴장이라 미국 종목의 등락률과 당일 손익은 직전 거래일 것입니다(앞 브리핑에 이미 담긴 움직임, 앱 잔고 화면과 같은 기준)");
   lines.push(`- 누적 평가손익: ${won(d.totalProfit)}${d.totalProfitRate !== null ? ` (${formatRate(d.totalProfitRate)})` : ""}`);
   const m: string[] = [];
   if (d.markets.kr) m.push(`국내 보유분 ${d.markets.kr.count}종목 ${won(d.markets.kr.day)}${d.markets.kr.dayRate !== null ? ` (${formatRate(d.markets.kr.dayRate)})` : ""}`);
   if (d.markets.us) m.push(`미국 보유분 ${d.markets.us.count}종목 ${won(d.markets.us.day)}${d.markets.us.dayRate !== null ? ` (${formatRate(d.markets.us.dayRate)})` : ""}`);
   if (m.length) lines.push(`- 시장별 당일 손익: ${m.join(" / ")}`);
   if (d.contributions.length) {
-    lines.push("- 당일 손익 기여 상위:");
+    lines.push(`- 당일 손익 기여 상위 ${d.contributions.length}종목:`);
     d.contributions.forEach((r, i) => lines.push(`  ${contributionLine(r, i + 1)}`));
     if (d.others) lines.push(`  그 외 ${d.others.count}종목: ${won(d.others.amount)}`);
   }
@@ -465,6 +504,7 @@ export function templateNarrative(d: AccountData): string {
   const top = d.contributions[0];
   out.push(`- ${SESSION_KO[d.session]} 기준 당일 손익은 ${won(d.dayPnl)}${d.dayRate !== null ? `(${formatRate(d.dayRate)})` : ""}입니다.${top ? ` 가장 크게 기여한 종목은 ${top.name}(${won(top.amount)})입니다.` : ""}`);
   if (d.krPreviousDay) out.push("- 오늘 한국은 휴장이라 국내 종목의 당일 손익은 직전 거래일 등락입니다.");
+  if (d.usPreviousDay) out.push("- 지난밤 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).");
   if (d.contributions.length > 1 || d.others) {
     const listed = d.contributions.map((r) => `${r.name} ${won(r.amount)}`).join(", ");
     out.push(`- 기여 순서: ${listed}${d.others ? `, 그 외 ${d.others.count}종목 ${won(d.others.amount)}` : ""}.`);
@@ -484,8 +524,8 @@ export function templateNarrative(d: AccountData): string {
 // ── 모델 설명 검사 ────────────────────────────────────────────
 
 /**
- * 글 속 숫자 하나. 날짜·시각은 key("9/25"·"22:30")로, 나머지는 값·단위·부호를 함께 맞춰 본다.
- * (값만 보면 '20% 하락'이 장 시간 20:00 으로, '+30,089원'이 -30,089원으로, '약 8%'가 순서 8 로 통과한다)
+ * 글 속 숫자 하나. 날짜·시각은 key("9/25"·"22:30")로, 나머지는 값·단위·부호·말로 적은 방향을 함께 맞춰 본다.
+ * (값만 보면 '20% 하락'이 장 시간 20:00 으로, '+30,089원'이 -30,089원으로, '8.06% 올랐'이 -8.06% 로, '9종목'이 순위 9 로 통과한다)
  */
 export interface NumberToken {
   /** 글에 적힌 모양 (부호·단위 포함, 이유 표시용) */
@@ -494,12 +534,20 @@ export interface NumberToken {
   /** date: "9/25" · time: "22:30" · num: "" */
   key: string;
   value: number;
-  /** num 의 단위: % · %p · 원 · pt(포인트) · 만(억·조·천) · 달러 · count(순서·개수: 위·종목·건·줄·개·일…) · 년 · 월 · ""(없음) */
+  /**
+   * num 의 단위: % · %p · 원 · pt(포인트) · 만(억·조·천) · 달러 · 년 · 월 ·
+   * 개수 낱말 그대로(종목·건·주·일·회·개·곳·줄·가지) · 순서(위·번째) · 기간('3일 연속'·'2주째') ·
+   * rank(사실의 목록 번호 '1. 리게티 컴퓨팅') · ?(모르는 접미어: '4거래일'·'2배') · ""(없음)
+   */
   unit: string;
   /** 적혀 있는 부호. 부호 없이 쓴 숫자는 null */
   sign: "+" | "-" | null;
   /** 소수점이 있는지 */
   decimal: boolean;
+  /** 숫자 바로 뒤에 말로 적은 방향: 올랐·상승·이익 +1, 내렸·하락·손실 -1, 없으면 0 */
+  dir: 1 | -1 | 0;
+  /** 방향으로 읽은 말 (이유 표시용) */
+  dirWord: string;
 }
 
 const DATE_TIME: Array<{ re: RegExp; kind: "date" | "time"; key: (m: RegExpExecArray) => string }> = [
@@ -511,20 +559,45 @@ const DATE_TIME: Array<{ re: RegExp; kind: "date" | "time"; key: (m: RegExpExecA
   { re: /(?<![\d.,])(\d{1,2})시(?![간세작])(?:\s?(\d{1,2})분)?/g, kind: "time", key: (m) => `${Number(m[1])}:${String(Number(m[2] ?? 0)).padStart(2, "0")}` },
 ];
 
-/** 숫자 바로 뒤(빈칸 하나까지)의 단위 → 정규화한 단위 */
-const UNIT_RE = /^\s?(%p|%포인트|%|퍼센트|원|포인트|pt(?![A-Za-z])|p(?![A-Za-z])|만|억|조|천|달러|종목|번째|가지|위|건|줄|개|일|곳|회|주|년|월)/;
-const COUNT_UNITS = new Set(["종목", "번째", "가지", "위", "건", "줄", "개", "일", "곳", "회", "주"]);
+/** 숫자 바로 뒤(빈칸 하나까지)의 단위 → 정규화한 단위. '3일 연속'·'2주째' 같은 기간은 따로('기간') 본다 */
+const UNIT_RE = /^\s?(%p|%포인트|%|퍼센트|원|포인트|pt(?![A-Za-z])|p(?![A-Za-z])|만|억|조|천|달러|종목|번째|가지|위|건|줄|개|[일주]\s?(?:연속|동안|째|간)|일|곳|회|주|년|월)/;
 function normUnit(u: string | undefined): string {
   if (!u) return "";
   if (u === "%" || u === "퍼센트") return "%";
   if (u === "%p" || u === "%포인트") return "%p";
   if (u === "포인트" || u === "pt" || u === "p") return "pt";
   if (u === "억" || u === "조" || u === "천") return "만";
-  if (COUNT_UNITS.has(u)) return "count";
-  return u; // 원 · 만 · 달러 · 년 · 월
+  if (/^[일주]\s?(?:연속|동안|째|간)$/.test(u)) return "기간";
+  // 원 · 만 · 달러 · 년 · 월, 개수 단위는 낱말 그대로(종목·건·주·일·회·개…: 같은 낱말끼리만 맞춰 본다), 순서(위·번째)
+  return u;
 }
 /** 부호로 읽는 문자 바로 앞에 올 수 있는 것 (글자·숫자 뒤의 '-' 는 이음표로 본다) */
 const SIGN_BEFORE = /[\s(\[{:,·~=/]/;
+/** 숫자에 바로 붙어도 단위가 아닌 조사 ('3,412.35로'). 이것이 아닌 글자가 붙으면('4거래일'·'2배') 모르는 단위('?')로 본다 */
+const JOSA_RE = /^(?:으로|로|에서|에|까지|부터|보다|은|는|이|가|을|를|와|과|도|의|였|입|인|라|며|나)/;
+/** 방향을 말로 적은 것 (숫자 바로 뒤). '수익률'은 방향이 아니다 */
+const DIR_UP = /상승|올라|오른|올랐|오르|올렸|이익|수익(?!률)|플러스|늘어|늘었|늘린|증가|벌었|뛰었|뛰어|급등/;
+const DIR_DOWN = /하락|내려|내린|내렸|내리|떨어|손실|마이너스|줄어|줄었|줄인|감소|잃었|빠졌|빠져|밀렸|밀려|급락/;
+
+/**
+ * 숫자 바로 뒤에 말로 적은 방향: 붙은 글자와 다음 두 어절 안에 '올랐·상승·이익'이면 +1, '내렸·하락·손실'이면 -1.
+ * 쉼표·마침표·괄호 열기·다음 숫자에서 멈춘다 (다른 숫자의 방향을 가져오지 않게)
+ */
+function directionAfter(s: string): { dir: 1 | -1 | 0; word: string } {
+  const stop = s.search(/[\d,.;·/|(\n]/);
+  const scope = (stop < 0 ? s : s.slice(0, stop)).split(/\s+/).slice(0, 3).join(" ");
+  const up = DIR_UP.exec(scope);
+  const down = DIR_DOWN.exec(scope);
+  if (up && (!down || up.index < down.index)) return { dir: 1, word: up[0] };
+  if (down) return { dir: -1, word: down[0] };
+  return { dir: 0, word: "" };
+}
+
+/** 줄 머리의 목록 번호('  1. 리게티 컴퓨팅', '- 1. RGTX')인지 — 사실의 기여 순위. 글의 'N위'는 이것과 맞춰 본다 */
+function isListNumber(rest: string, at: number, len: number): boolean {
+  const lineStart = rest.lastIndexOf("\n", at - 1) + 1;
+  return /^[ \t]*(?:[-*][ \t]*)?$/.test(rest.slice(lineStart, at)) && /^\.(?:\s|$)/.test(rest.slice(at + len));
+}
 
 /** 글 속 숫자들. malformed: '30,0890'처럼 쉼표 자리가 틀린 표기 (틀린 숫자로 본다) */
 export function numberTokens(text: string): { tokens: NumberToken[]; malformed: string[] } {
@@ -535,20 +608,32 @@ export function numberTokens(text: string): { tokens: NumberToken[]; malformed: 
   for (const d of DATE_TIME) {
     rest = rest.replace(d.re, (...args) => {
       const m = args.slice(0, -2) as unknown as RegExpExecArray;
-      tokens.push({ raw: m[0], kind: d.kind, key: d.key(m), value: Number.NaN, unit: "", sign: null, decimal: false });
+      tokens.push({ raw: m[0], kind: d.kind, key: d.key(m), value: Number.NaN, unit: "", sign: null, decimal: false, dir: 0, dirWord: "" });
       return " ".repeat(m[0].length);
     });
   }
-  // 2) 나머지 숫자: 부호(앞이 빈칸·괄호 등일 때만) + 숫자(쉼표·소수) + 단위
+  // 2) 나머지 숫자: 부호(앞이 빈칸·괄호 등일 때만) + 숫자(쉼표·소수) + 단위(또는 모르는 접미어) + 뒤에 말로 적은 방향
   for (const m of rest.matchAll(/([+\-−–]?)(\d[\d,]*(?:\.\d+)?)/g)) {
     const at = m.index!;
     const body = m[2]!.replace(/,+$/, "");
     const signChar = m[1] ?? "";
     const prev = at > 0 ? rest[at - 1]! : "";
     const sign = signChar && (prev === "" || SIGN_BEFORE.test(prev)) ? (signChar === "+" ? "+" : "-") : null;
-    const u = UNIT_RE.exec(rest.slice(at + m[0].length - (m[2]!.length - body.length)));
-    const unit = normUnit(u?.[1]);
-    const shown = `${sign ?? ""}${body}${u ? u[0] : ""}`.trim();
+    const afterNum = rest.slice(at + m[0].length - (m[2]!.length - body.length));
+    const u = UNIT_RE.exec(afterNum);
+    let unit = normUnit(u?.[1]);
+    let tail = u ? u[0] : "";
+    if (!u) {
+      // 단위가 아닌 글자가 붙은 숫자: 조사면 단위 없는 숫자, 아니면('4거래일'·'2배'·'4 거래일') 모르는 단위 — 사실의 단위 없는 같은 값과만 맞춘다
+      const w = /^(\s?)([가-힣A-Za-z]+)/.exec(afterNum);
+      if (w && !(w[1] === "" && JOSA_RE.test(w[2]!))) {
+        unit = "?";
+        tail = w[0];
+      }
+    }
+    const shown = `${sign ?? ""}${body}${tail}`.trim();
+    const { dir, word: dirWord } = directionAfter(afterNum.slice(tail.length));
+    if (!sign && !u && !tail && isListNumber(rest, at, m[0].length)) unit = "rank";
     const [intPart = "", frac] = body.split(".");
     const groups = intPart.split(",");
     if (groups.length > 1 && (groups[0]!.length > 3 || groups.slice(1).some((g) => g.length > 3))) {
@@ -556,48 +641,78 @@ export function numberTokens(text: string): { tokens: NumberToken[]; malformed: 
       continue;
     }
     if (groups.length > 1 && groups.slice(1).some((g) => g.length < 3)) {
-      // '1,2위' 처럼 쉼표로 늘어놓은 숫자: 따로 읽는다 (부호는 첫 수, 단위는 마지막 수에)
+      // '1,2위' 처럼 쉼표로 늘어놓은 숫자: 따로 읽는다 (부호는 첫 수, 단위·방향은 마지막 수에)
       groups.forEach((g, i) => {
         const last = i === groups.length - 1;
         const raw = last && frac !== undefined ? `${g}.${frac}` : g;
-        tokens.push({ raw: `${i === 0 ? (sign ?? "") : ""}${raw}${last && u ? u[0].trim() : ""}`, kind: "num", key: "", value: Number(raw), unit: last ? unit : "", sign: i === 0 ? sign : null, decimal: last && frac !== undefined });
+        tokens.push({
+          raw: `${i === 0 ? (sign ?? "") : ""}${raw}${last ? tail.trim() : ""}`,
+          kind: "num",
+          key: "",
+          value: Number(raw),
+          unit: last ? unit : "",
+          sign: i === 0 ? sign : null,
+          decimal: last && frac !== undefined,
+          dir: last ? dir : 0,
+          dirWord: last ? dirWord : "",
+        });
       });
       continue;
     }
-    tokens.push({ raw: shown, kind: "num", key: "", value: Number(body.replace(/,/g, "")), unit, sign, decimal: frac !== undefined });
+    tokens.push({ raw: shown, kind: "num", key: "", value: Number(body.replace(/,/g, "")), unit, sign, decimal: frac !== undefined, dir, dirWord });
   }
   return { tokens, malformed };
 }
 
-/** 순서·개수(1위·3종목·2건)로 쓴 10 이하 정수는 숫자를 지어낸 것으로 보지 않는다. %·원·포인트가 붙거나 부호·소수가 있으면 봐주지 않는다 */
-const SMALL_COUNT_MAX = 10;
-const isSmallCount = (t: NumberToken) => t.kind === "num" && t.unit === "count" && t.sign === null && !t.decimal && Number.isInteger(t.value) && t.value <= SMALL_COUNT_MAX;
+/**
+ * 글의 단위 tu 가 사실의 단위 fu 를 옮겨 쓴 것인지.
+ *  - 같은 단위 (개수는 같은 낱말끼리: '9종목'은 사실의 'N종목'과만, '6건'은 'N건'과만)
+ *  - 단위를 빼고 옮긴 것(''), 지수 값 뒤에 붙인 '포인트'
+ *  - 순위 'N위': 사실의 기여 순위 줄 번호('1. 리게티 컴퓨팅')
+ *  - 모르는 접미어('4거래일'·'2배'): 사실의 단위 없는 같은 값만 (지수 값 등)
+ * '번째'·'기간'(3일 연속)은 사실에 없으므로 늘 거절된다
+ */
+function unitMatches(tu: string, fu: string): boolean {
+  if (tu === fu) return true;
+  if (tu === "") return true;
+  if ((tu === "pt" || tu === "?") && fu === "") return true;
+  return tu === "위" && fu === "rank";
+}
 
-/** 글의 숫자 t 가 사실의 숫자 f 를 옮겨 쓴 것인지: 값이 같고, 단위가 맞고(단위 없이 옮긴 것은 봐줌), 부호를 적었으면 부호도 같다 */
+/** 글의 숫자 t 가 사실의 숫자 f 를 옮겨 쓴 것인지: 값이 같고, 단위가 맞고, 부호를 적었으면 부호도 같다 */
 function sameNumber(t: NumberToken, f: NumberToken): boolean {
   if (t.kind !== f.kind) return false;
   if (t.kind !== "num") return t.key === f.key;
   if (t.value !== f.value) return false;
-  const unitOk = t.unit === f.unit || t.unit === "" || (t.unit === "pt" && f.unit === "");
-  if (!unitOk) return false;
+  if (!unitMatches(t.unit, f.unit)) return false;
   return t.sign === null || t.sign === f.sign;
 }
 
-/** '24일'·'9월'처럼 날짜의 일·월만 쓴 것은 사실의 날짜(공시일·장 날짜)에 그 일·월이 있으면 옮겨 쓴 것으로 본다 */
+/** 말로 적은 방향(올랐·손실…)이 사실의 부호와 맞는지. 방향을 적지 않았거나 사실에 부호가 없으면(지수 값·0) 맞는 것으로 */
+function sameDirection(t: NumberToken, f: NumberToken): boolean {
+  if (!t.dir || f.sign === null) return true;
+  return (t.dir > 0) === (f.sign === "+");
+}
+
+/** '24일'·'9월'처럼 날짜의 일·월만 쓴 것은 사실의 날짜(공시일·장 날짜)에 그 일·월이 있으면 옮겨 쓴 것으로 본다 ('3일 연속'은 기간이라 해당 없음) */
 function partOfKnownDate(t: NumberToken, known: readonly NumberToken[]): boolean {
   if (t.kind !== "num" || t.sign !== null || t.decimal) return false;
   const dates = known.filter((f) => f.kind === "date").map((f) => f.key.split("/").map(Number));
-  if (t.unit === "count" && t.raw.endsWith("일")) return dates.some(([, d]) => d === t.value);
+  if (t.unit === "일") return dates.some(([, d]) => d === t.value);
   if (t.unit === "월") return dates.some(([m]) => m === t.value);
   return false;
 }
 
 /**
- * 설명에 나오면 안 되는 말: 매매 지시·행동 제안·전망/예측 (나오면 기본 문장으로).
+ * 설명에 나오면 안 되는 말 (나오면 기본 문장으로):
+ *  - 매매 지시·권유: 매수·매도·추천…, 명령·권고형 어미(세요·십시오·시길·바랍니다)
+ *  - 행동 제안: 비중·손절·권장·바람직·처분·정리하·차익·물타기·매집·담아·기회·타이밍…
+ *  - 전망/예측: 전망·예상·가능성·반등·앞으로·향후·당분간·여력·'것으로 보'·'수 있습니다'·이어질·지속될·'내일도'…
+ *    ('내일 새벽 05:00'처럼 장 시간을 말하는 '내일'은 뺀다)
  * '예상액'(기준 문장의 수수료·세금 예상액)은 사실에 있는 말이라 뺀다
  */
 const FORBIDDEN =
-  /매수|매도|추천|권유|권합|전망|목표가|목표 ?주가|오를 것|내릴 것|오를 수|내릴 수|오르겠|내리겠|사야|팔아야|사 두|사두|살 때|팔 때|손절|익절|비중|반등|반락|예측|예상(?!액)|가능성|기대|좋겠|고려해|고려할|유망|주목할|하세요|하십시오/g;
+  /매수|매도|추천|권유|권합|권장|전망|목표가|목표 ?주가|오를 것|내릴 것|오를 수|내릴 수|오르겠|내리겠|떨어질|상승할|하락할|사야|팔아야|사 두|사두|살 때|팔 때|손절|익절|비중|반등|반락|예측|예상(?!액)|가능성|기대|좋겠|고려해|고려할|유망|주목할|세요|십시오|시길|바랍니다|바람직|처분|정리하(?!면|자면)|정리해야|차익|물타기|매집|담아|기회|타이밍|앞으로|향후|당분간|여력|것으로 보|수 있습니다|수 있어|이어질|지속될|내일(?! ?(?:새벽|오전|아침|\d))/g;
 
 /**
  * 금지어가 사실 목록에 그대로 있는 더 긴 말(공시 제목 '주식매수선택권부여에관한신고'·'공개매수신고서'·종목 이름)의 일부면 넘어간다.
@@ -619,7 +734,10 @@ function forbiddenIn(text: string, facts: string): string | null {
  * 모델 설명을 그대로 써도 되는지. 아래면 이유와 함께 false (서비스는 기본 문장을 쓴다):
  *  - 빈 응답·너무 김
  *  - 쉼표 자리가 틀린 숫자('-30,0890원')
- *  - 사실에 없는 숫자: 값·단위·부호(적었으면)가 모두 맞는 숫자가 사실에 없음. 날짜·시각은 사실의 날짜·시각과만 맞춰 본다
+ *  - 사실에 없는 숫자: 값·단위·부호(적었으면)가 모두 맞는 숫자가 사실에 없음. 개수(9종목·6건·10주)도 사실의 같은 낱말 개수와 맞춰 보고,
+ *    순위(N위)는 사실의 기여 순위 번호와, 모르는 접미어(4거래일·2배)는 사실의 단위 없는 같은 값과만 맞춘다. '번째'·'3일 연속' 같은 기간은 늘 거절.
+ *    날짜·시각은 사실의 날짜·시각과만 맞춰 본다
+ *  - 말로 뒤집은 방향: 숫자 바로 뒤의 '올랐·상승·이익'(또는 '내렸·하락·손실')이 사실의 부호와 반대 ('8.06% 올랐' ← 실제 -8.06%)
  *  - 매매 지시·행동 제안·전망 표현 (사실에 있는 공시 제목 속 말은 제외)
  */
 export function checkNarrative(text: string, facts: string): { ok: true } | { ok: false; reason: string } {
@@ -628,8 +746,16 @@ export function checkNarrative(text: string, facts: string): { ok: true } | { ok
   const got = numberTokens(text);
   if (got.malformed.length) return { ok: false, reason: `숫자 표기가 틀림: ${[...new Set(got.malformed)].slice(0, 3).join(", ")}` };
   const known = numberTokens(facts).tokens;
-  const unknown = [...new Set(got.tokens.filter((t) => !isSmallCount(t) && !partOfKnownDate(t, known) && !known.some((f) => sameNumber(t, f))).map((t) => t.raw))];
-  if (unknown.length) return { ok: false, reason: `입력에 없는 숫자: ${unknown.slice(0, 5).join(", ")}` };
+  const unknown = new Set<string>();
+  const flipped = new Set<string>();
+  for (const t of got.tokens) {
+    if (partOfKnownDate(t, known)) continue;
+    const same = known.filter((f) => sameNumber(t, f));
+    if (!same.length) unknown.add(t.raw);
+    else if (!same.some((f) => sameDirection(t, f))) flipped.add(`${t.raw} ${t.dirWord}`);
+  }
+  if (unknown.size) return { ok: false, reason: `입력에 없는 숫자: ${[...unknown].slice(0, 5).join(", ")}` };
+  if (flipped.size) return { ok: false, reason: `방향이 사실과 반대: ${[...flipped].slice(0, 3).join(", ")}` };
   const bad = forbiddenIn(text, facts);
   if (bad) return { ok: false, reason: `쓰지 않는 표현: ${bad}` };
   return { ok: true };

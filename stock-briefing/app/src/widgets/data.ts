@@ -363,14 +363,15 @@ export async function loadNotifyPrefs(): Promise<(NotifyPrefs & { running: boole
 
 /**
  * 최근 계좌 한 장 브리핑 (3-31). 알림 규칙에서 accountBriefing 이 켜져 있을 때만 부른다.
- * 받지 못하면(예전 서버 404·끊김) 빈 목록 → 세션 알림은 계좌 요약 없이 예전 문구로 (알림을 미루지 않는다)
+ * 받지 못하면(끊김·5xx·시간 초과·예전 서버 404) null — '빈 목록'과 구분한다. 받지 못한 목록의 계좌 브리핑을 '본 것'으로 적지 않게
  */
-export async function loadAccountBriefings(): Promise<AccountBriefing[]> {
+export async function loadAccountBriefings(): Promise<AccountBriefing[] | null> {
   const { apiUrl, apiToken } = await readSettings();
   try {
-    return await getJson<AccountBriefing[]>(`${apiUrl}/api/account-briefings?limit=4`, apiToken);
+    const list = await getJson<AccountBriefing[]>(`${apiUrl}/api/account-briefings?limit=4`, apiToken);
+    return Array.isArray(list) ? list : null;
   } catch {
-    return [];
+    return null;
   }
 }
 

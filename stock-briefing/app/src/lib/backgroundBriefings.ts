@@ -32,6 +32,11 @@ const INTERVAL_KEY = "bg.intervalMin";
 /** 알림 규칙을 연달아 못 받은 횟수. 3번이면 규칙 없이 예전처럼 종목마다 알린다 (알림이 끝없이 밀리지 않게) */
 const PREFS_FAIL_KEY = "notify.prefsFail";
 export const PREFS_FAIL_LIMIT = 3;
+/**
+ * 계좌 브리핑 목록(3-31)을 연달아 못 받은 횟수. 못 받으면 이번엔 넘긴다(세션 알림이 계좌 요약 없는 것·계좌 요약만 있는 것 두 건으로 쪼개지지 않게).
+ * PREFS_FAIL_LIMIT 번이면 계좌 요약 없이 종목 브리핑만 알린다 — 계좌 브리핑은 '본 것'으로 적지 않아 목록을 받으면 알린다
+ */
+const ACCOUNTS_FAIL_KEY = "notify.accountsFail";
 
 async function seenIds(): Promise<Set<number>> {
   try {
@@ -77,9 +82,12 @@ export async function notifyNewBriefings(
     prefs?: NotifyPrefs;
     rates?: Map<string, number | null>;
     now?: Date;
-    /** 최근 계좌 브리핑 목록 (3-31, 플래그가 켜져 있을 때만 받는다) */
+    /** 최근 계좌 브리핑 목록 (3-31, 플래그가 켜져 있고 목록을 받았을 때만 넘긴다. 없으면 계좌 브리핑 기준을 적지 않는다) */
     accounts?: AccountBriefing[];
-    /** 위젯 응답의 최근 계좌 브리핑 id. 목록을 받지 않았어도(묶음·플래그 꺼짐) "본 것"으로 적어 매번 다시 묻지 않게 */
+    /**
+     * 위젯 응답의 최근 계좌 브리핑 id. 목록과 함께, 또는 묶음을 끈 채 플래그만 켜져 있을 때(계좌 요약을 쓰지 않음) "본 것"으로 적어 매번 다시 묻지 않게.
+     * 목록을 받지 못했을 때는 넘기지 않는다 (그 계좌 브리핑의 알림이 사라지지 않게)
+     */
     accountIds?: readonly number[];
     /** 등록한 모든 종목 코드. 모두 알림을 꺼 두었으면 계좌 요약도 보내지 않는다 (서버와 같은 규칙) */
     codes?: readonly string[];
@@ -151,11 +159,28 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
         // 규칙을 못 받았거나 서버가 아직 브리핑을 만드는 중이면(17종목 약 7분) 이번엔 넘긴다 — 한 세션이 두 알림으로 쪼개지지 않게.
         // "본 것"으로 적지 않으므로 다음 확인(15분 뒤)에서 한 번에 알린다. 묶음을 끈 서버는 예전처럼 바로
         if (prefs && !(prefs.digest && prefs.running)) {
-          const latest = data.latestIds ? await loadLatestBriefings() : data.briefings;
-          const rates = new Map(data.stocks.map((s) => [s.code, s.quote?.changeRate ?? null] as const));
-          // 계좌 한 장 브리핑(3-31): 서버 플래그가 켜져 있을 때만 묻는다 (끄면 요청 0, 알림은 예전 그대로)
-          const accounts = prefs.digest && prefs.accountBriefing ? await loadAccountBriefings() : [];
-          await notifyNewBriefings(latest, { prefs, rates, accounts, ...(data.accountIds ? { accountIds: data.accountIds } : {}), codes: data.stocks.map((s) => s.code) });
+          // 계좌 한 장 브리핑(3-31): 서버 플래그가 켜져 있고 묶음일 때만 묻는다. 끄면 요청 0, 계좌 브리핑 기록(본 것·기준)도 건드리지 않는다
+          let accounts: AccountBriefing[] | null = null;
+          let proceed = true;
+          if (prefs.digest && prefs.accountBriefing === true) {
+            accounts = await loadAccountBriefings();
+            // 목록을 못 받음(끊김·5xx·시간 초과): 이번엔 넘기고 다음 확인에서 한 번에 1건. 연달아 PREFS_FAIL_LIMIT 번이면 계좌 요약 없이 알린다
+            const fails = accounts ? 0 : Number((await AsyncStorage.getItem(ACCOUNTS_FAIL_KEY).catch(() => null)) ?? 0) + 1;
+            await AsyncStorage.setItem(ACCOUNTS_FAIL_KEY, String(fails)).catch(() => undefined);
+            proceed = accounts !== null || fails >= PREFS_FAIL_LIMIT;
+          }
+          if (proceed) {
+            const latest = data.latestIds ? await loadLatestBriefings() : data.briefings;
+            const rates = new Map(data.stocks.map((s) => [s.code, s.quote?.changeRate ?? null] as const));
+            // 계좌 브리핑 기록('본 것'·기준): 목록을 받았을 때만 살펴보고 적는다 — 받지 못한 목록의 계좌 브리핑을 본 것으로 적으면 그 알림이 사라진다.
+            // 묶음을 끈 채 플래그만 켜져 있으면(계좌 요약을 쓰지 않음) 위젯의 id 만 본 것으로 — 매번 다시 묻지 않게. 플래그가 꺼져 있으면 건드리지 않는다
+            const accountOpts = accounts
+              ? { accounts, ...(data.accountIds ? { accountIds: data.accountIds } : {}) }
+              : !prefs.digest && prefs.accountBriefing === true && data.accountIds
+                ? { accountIds: data.accountIds }
+                : {};
+            await notifyNewBriefings(latest, { prefs, rates, codes: data.stocks.map((s) => s.code), ...accountOpts });
+          }
         }
       }
     }

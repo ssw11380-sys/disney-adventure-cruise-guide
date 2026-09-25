@@ -23,6 +23,9 @@ import {
   pickIndices,
   summaryText,
   templateNarrative,
+  US_PREVIOUS_DAY_NOTE,
+  usLastSessionDate,
+  usPreviousDay,
   usRegularKst,
   usSessionDate,
   type AccountData,
@@ -246,6 +249,33 @@ describe("계좌 숫자 (순수 계산)", () => {
     expect(summaryText(dataFrom(fixture.holdings)).split("\n")).toHaveLength(2);
   });
 
+  it("지난밤 미국 평일 휴장: 오전·오후 모두 표시하고, 주말 뒤(월요일)·평소·미국 종목이 없으면 표시하지 않는다", () => {
+    const a = computeAccount(fixture.holdings, { usdKrw: fixture.usdKrw });
+    const krOnly = computeAccount([holding("005930", "삼성전자", 100)]);
+    // 추수감사절(11/26, 목) 다음 날 오전·오후: 지난밤 정규장이 휴장 → 미국 등락은 11/25 것 (전날 오전 브리핑에 이미 담김)
+    expect(usLastSessionDate(new Date("2026-11-27T08:30:00+09:00"))).toBe("2026-11-26");
+    expect(usLastSessionDate(new Date("2026-11-27T16:05:00+09:00"))).toBe("2026-11-26");
+    expect(usPreviousDay(new Date("2026-11-27T08:30:00+09:00"), a)).toBe(true);
+    expect(usPreviousDay(new Date("2026-11-27T16:05:00+09:00"), a)).toBe(true);
+    expect(usPreviousDay(new Date("2026-11-27T08:30:00+09:00"), krOnly)).toBe(false);
+    // 추수감사절 당일 오전(지난밤 11/25 정규장은 열림)·평소
+    expect(usPreviousDay(new Date("2026-11-26T08:30:00+09:00"), a)).toBe(false);
+    expect(usPreviousDay(new Date("2026-09-25T08:30:00+09:00"), a)).toBe(false);
+    // 독립기념일 대체 휴장(7/3, 금) 다음 날 오전은 표시, 주말 뒤 월요일 오전(지난밤 일요일)은 표시하지 않는다
+    expect(usPreviousDay(new Date("2026-07-04T08:30:00+09:00"), a)).toBe(true);
+    expect(usPreviousDay(new Date("2026-07-06T08:30:00+09:00"), a)).toBe(false);
+    // 요약·사실·기본 문장
+    const d = dataFrom(fixture.holdings, { usPreviousDay: true });
+    expect(summaryText(d).split("\n")).toEqual([expect.stringMatching(/^당일 /), expect.stringMatching(/^총 평가금액 /), US_PREVIOUS_DAY_NOTE]);
+    expect(summaryText({ ...d, krPreviousDay: true }).split("\n").slice(2)).toEqual([KR_PREVIOUS_DAY_NOTE, US_PREVIOUS_DAY_NOTE]);
+    expect(factsText(d)).toContain("- 참고: 지난밤 미국은 휴장이라 미국 종목의 등락률과 당일 손익은 직전 거래일 것입니다");
+    expect(templateNarrative(d)).toContain("- 지난밤 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다");
+    expect(checkNarrative(templateNarrative(d), factsText(d))).toEqual({ ok: true });
+    // 알림 본문에도 한 줄
+    const m = buildDigest("morning", "2026-11-27", [], { id: 1, dayPnl: -1000, dayRate: null, top: [{ name: "애플", amount: -1000 }], usPreviousDay: true })!;
+    expect(m.body).toBe(`기여 1위 애플 -1,000원\n${US_PREVIOUS_DAY_NOTE}`);
+  });
+
   it("모델 설명 검사: 사실에 없는 숫자·매매·전망 표현은 거절, 순서 같은 작은 정수와 표기 그대로 옮긴 숫자는 통과", () => {
     const facts = "- 당일 손익: -2,868,108원 (-1.23%)\n- 1. RGTX: -1,234,567원 (등락률 -8.10%)\n- 코스피 3,412.35 (-0.80%)";
     const toks = numberTokens("-2,868,108원 과 1.23% · 9/25 22:30 · 3종목");
@@ -254,8 +284,18 @@ describe("계좌 숫자 (순수 계산)", () => {
       ["time", "22:30", "", null],
       ["num", 2868108, "원", "-"],
       ["num", 1.23, "%", null],
-      ["num", 3, "count", null],
+      ["num", 3, "종목", null],
     ]);
+    // 개수는 낱말 그대로, 순위·기간·모르는 접미어·목록 번호·말로 적은 방향
+    expect(numberTokens("2위 · 2번째 · 3일 연속 · 4거래일 · 2배 · 8.06% 올랐고").tokens.map((t) => [t.value, t.unit, t.dir])).toEqual([
+      [2, "위", 0],
+      [2, "번째", 0],
+      [3, "기간", 0],
+      [4, "?", 0],
+      [2, "?", 0],
+      [8.06, "%", 1],
+    ]);
+    expect(numberTokens("- 1. RGTX: -1원\n  2. 애플: +1원").tokens.filter((t) => t.unit === "rank").map((t) => t.value)).toEqual([1, 2]);
     expect(checkNarrative("- 당일 손익은 -2,868,108원(-1.23%)입니다.\n- 1위는 RGTX(-1,234,567원, -8.10%)입니다.\n- 코스피는 -0.80%였습니다.", facts)).toEqual({ ok: true });
     // 부호 없이 옮기거나 단위를 빼고 옮긴 것, 지수 값 뒤 '포인트'는 통과
     expect(checkNarrative("- 당일 손실은 2,868,108원(1.23%)입니다.\n- 코스피는 3,412.35포인트, 0.80% 내렸습니다.", facts)).toEqual({ ok: true });
@@ -288,6 +328,65 @@ describe("계좌 숫자 (순수 계산)", () => {
     expect(checkNarrative("- 미국 정규장은 9월 25일 22:30(한국 시간)에 열립니다.\n- 1위 리게티 컴퓨팅, 2위 엔비디아이고 그 외 2종목이 있습니다.", facts)).toEqual({ ok: true });
   });
 
+  it("모델 설명 검사 (2차 검증): 지어낸 개수·연속일·순서·모르는 접미어는 거절 — 작은 정수라고 봐주지 않는다", () => {
+    const d = dataFrom(fixture.holdings);
+    const facts = factsText(d);
+    // 사실: 보유 7종목, 그 외 2종목, 국내 4종목·미국 3종목, 기여 순위 1~5, 공시 없음. 6·8·9·10 은 없다
+    expect(facts).toContain("보유 7종목");
+    expect(facts).toContain("그 외 2종목");
+    expect(facts).not.toMatch(/\d일 공시/); // 공시 기간을 숫자로 적지 않는다 ('3일 연속'이 통과하지 않게)
+    const cases: Array<[string, string]> = [
+      ["- 보유 9종목 가운데 리게티 컴퓨팅이 가장 크게 움직였습니다.", "입력에 없는 숫자: 9종목"],
+      ["- 그 외 8종목은 합쳐 -4,669원입니다.", "입력에 없는 숫자: 8종목"],
+      ["- 오늘 공시 6건이 나왔습니다.", "입력에 없는 숫자: 6건"],
+      ["- 리게티 컴퓨팅 10주가 계좌를 끌어내렸습니다.", "입력에 없는 숫자: 10주"],
+      ["- 리게티 컴퓨팅은 4거래일 연속 하락했습니다.", "입력에 없는 숫자: 4거래일"],
+      ["- 리게티 컴퓨팅은 4 거래일째 하락했습니다.", "입력에 없는 숫자: 4 거래일째"],
+      ["- 이번 주 들어 2번째 급락입니다.", "입력에 없는 숫자: 2번째"],
+      ["- 리게티 컴퓨팅은 3일 연속 하락했습니다.", "입력에 없는 숫자: 3일 연속"],
+      ["- 리게티 컴퓨팅 손실이 엔비디아 이익의 2배입니다.", "입력에 없는 숫자: 2배입니다"],
+      ["- 기여 7위는 없습니다.", "입력에 없는 숫자: 7위"], // 순위는 사실의 기여 순서 번호(1~5)만
+    ];
+    for (const [text, reason] of cases) expect(checkNarrative(text, facts), text).toEqual({ ok: false, reason });
+    // 사실에 있는 개수·순위·지수 값은 통과
+    for (const text of [
+      "- 보유 7종목 가운데 1위는 리게티 컴퓨팅, 5위는 삼성전자입니다.",
+      "- 국내 보유분 4종목과 미국 보유분 3종목이 있고, 그 외 2종목은 -4,669원입니다.",
+      "- 당일 손익 기여 상위 5종목이 대부분을 차지했습니다.",
+      "- 코스피는 3,412.35로 마감했습니다.",
+      "- S&P500 지수는 받지 못했습니다.",
+    ]) expect(checkNarrative(text, facts), text).toEqual({ ok: true });
+    // 공시가 있으면 건수가 사실에 들어가 기본 문장의 '최근 공시 N건'이 통과하고, 다른 건수는 거절
+    const withDisc = dataFrom(fixture.holdings, { schedule: buildSchedule(null, new Date("2026-09-25T16:05:00+09:00"), [{ code: "005930", name: "삼성전자", title: "분기보고서", filedAt: "2026-09-24", url: null }]) });
+    expect(factsText(withDisc)).toContain("최근 공시 1건: ");
+    expect(templateNarrative(withDisc)).toContain("최근 공시 1건.");
+    expect(checkNarrative(templateNarrative(withDisc), factsText(withDisc))).toEqual({ ok: true });
+    expect(checkNarrative("- 최근 공시 2건이 있습니다.", factsText(withDisc))).toEqual({ ok: false, reason: "입력에 없는 숫자: 2건" });
+  });
+
+  it("모델 설명 검사 (2차 검증): 부호 없이 말로 방향을 뒤집으면 거절, 사실과 같은 방향은 통과", () => {
+    const facts = factsText(dataFrom(fixture.holdings));
+    // 사실: 당일 -250,267원 (-2.66%), 리게티 컴퓨팅 -8.06%, 엔비디아 +1.82% · +39,240원, 원/달러 +5.20원
+    const cases: Array<[string, string]> = [
+      ["- 리게티 컴퓨팅이 8.06% 올랐습니다.", "방향이 사실과 반대: 8.06% 올랐"],
+      ["- 리게티 컴퓨팅이 8.06% 올라 가장 크게 기여했습니다.", "방향이 사실과 반대: 8.06% 올라"],
+      ["- 당일 손익은 250,267원 이익입니다.", "방향이 사실과 반대: 250,267원 이익"],
+      ["- 계좌는 2.66% 상승했습니다.", "방향이 사실과 반대: 2.66% 상승"],
+      ["- 엔비디아는 1.82% 하락했습니다.", "방향이 사실과 반대: 1.82% 하락"],
+      ["- 엔비디아에서 39,240원 손실이 났습니다.", "방향이 사실과 반대: 39,240원 손실"],
+      ["- 리게티 컴퓨팅은 -8.06% 올랐습니다.", "방향이 사실과 반대: -8.06% 올랐"], // 부호를 적어도 말이 반대면
+    ];
+    for (const [text, reason] of cases) expect(checkNarrative(text, facts), text).toEqual({ ok: false, reason });
+    for (const text of [
+      "- 리게티 컴퓨팅은 8.06% 내려 268,838원 손실을 냈습니다.",
+      "- 당일 손실은 250,267원(2.66%)입니다.",
+      "- 코스피는 -0.80% 내렸고 나스닥은 +0.35% 올랐습니다.",
+      "- 원/달러가 +5.20원 올라 환율 효과 +24,717원이 생겼습니다.",
+      "- 엔비디아(+39,240원)가 올렸지만 리게티 컴퓨팅(-268,838원)이 끌어내렸습니다.",
+      "- 당일 손익은 -250,267원으로, 나스닥 +0.35%와 달리 계좌는 하락했습니다.", // 다른 숫자 뒤의 방향을 가져오지 않는다
+    ]) expect(checkNarrative(text, facts), text).toEqual({ ok: true });
+  });
+
   it("모델 설명 검사: 권유·전망 표현은 거절, 사실에 있는 공시 제목·'예상액'은 통과", () => {
     const facts = factsText(dataFrom(fixture.holdings, {
       basis: "총 평가금액은 수수료·세금 예상액을 뺀 값",
@@ -305,10 +404,35 @@ describe("계좌 숫자 (순수 계산)", () => {
       ["- 지금은 팔 때입니다.", "팔 때"],
       ["- 반도체 업황 회복이 기대됩니다.", "기대"],
       ["- 리게티 컴퓨팅을 줄이는 것을 고려해 볼 만합니다.", "고려해"],
-      ["- 환율을 확인하세요.", "하세요"],
+      ["- 환율을 확인하세요.", "세요"],
       ["- 실적 전망이 밝습니다.", "전망"],
       ["- 공개매수에 응하는 것을 추천합니다.", "추천"],
+      // 2차 검증에서 통과하던 권유·행동 제안·전망
+      ["- 지금 사세요.", "세요"],
+      ["- 리게티 컴퓨팅은 파세요.", "세요"],
+      ["- 차익 실현을 검토해 보세요.", "차익"],
+      ["- 리게티 컴퓨팅을 처분하는 것이 바람직합니다.", "처분"],
+      ["- 미국 종목을 줄여 나가시길 권장드립니다.", "시길"],
+      ["- 비율을 줄이는 것을 권장합니다.", "권장"],
+      ["- 저가 매집 기회입니다.", "매집"],
+      ["- 지금이 담아 둘 때입니다.", "담아"],
+      ["- 지금이 좋은 기회입니다.", "기회"],
+      ["- 들어갈 타이밍입니다.", "타이밍"],
+      ["- 앞으로 코스피가 더 떨어질 것으로 보입니다.", "앞으로"],
+      ["- 코스피가 더 떨어질 것으로 보입니다.", "떨어질"],
+      ["- 영향이 컸던 것으로 보입니다.", "것으로 보"],
+      ["- 내일도 하락세가 이어질 수 있습니다.", "내일"],
+      ["- 하락세가 이어질 수 있습니다.", "이어질"],
+      ["- 원/달러가 오르면 환율 효과가 커질 수 있습니다.", "수 있습니다"],
+      ["- 향후 흐름을 지켜봐야 합니다.", "향후"],
+      ["- 당분간 변동이 클 듯합니다.", "당분간"],
+      ["- 추가 상승 여력이 남았습니다.", "여력"],
+      ["- 손실 종목은 정리하는 편이 낫습니다.", "정리하"],
+      ["- 참고하시기 바랍니다.", "바랍니다"],
+      ["- 환율을 확인하십시오.", "십시오"],
     ] as const) expect(checkNarrative(text, facts), text).toEqual({ ok: false, reason: `쓰지 않는 표현: ${word}` });
+    // 장 시간을 말하는 '내일 새벽'·요약하는 '정리하면'은 괜찮다
+    expect(checkNarrative("- 미국 정규장은 9/25 22:30부터 내일 새벽 05:00까지입니다.\n- 정리하면 당일 손익은 -250,267원입니다.", facts)).toEqual({ ok: true });
     // 공시일의 '일'만 쓴 것은 통과, 사실에 없는 날은 거절
     expect(checkNarrative("- 삼성전자는 24일 공시를 냈습니다.", facts)).toEqual({ ok: true });
     expect(checkNarrative("- 삼성전자는 23일 공시를 냈습니다.", facts)).toEqual({ ok: false, reason: "입력에 없는 숫자: 23일" });
@@ -487,6 +611,7 @@ describe("계좌 브리핑 (서버)", () => {
     expect(d.fx.status).toBe("computed");
     expect(d.fx.priceEffect! + d.fx.fxEffect!).toBe(d.fx.usdHoldingsKrwChange!);
     expect(d.krPreviousDay).toBe(false);
+    expect(d.usPreviousDay).toBe(false);
     expect(d.indices.map((i) => i.code)).toEqual(["KOSPI", "KOSDAQ", "NASDAQ", "SPX"]);
     expect(d.schedule.us.hours).toBe("정규장 9/25 22:30~9/26 05:00 (한국 시간)");
     expect(detail.detail).toBe("- 오늘 계좌의 당일 손익은 -16,589원 (-0.65%)입니다.\n- 가장 크게 움직인 종목은 애플: -18,089원 (등락률 -1.59%)입니다.\n- 환율 효과는 당일 손익과 따로 봅니다.");
@@ -641,14 +766,53 @@ describe("계좌 브리핑 (서버)", () => {
       ["- 추가 상승이 예상됩니다.", "쓰지 않는 표현: 예상"],
       ["- SK하이닉스는 반등할 가능성이 큽니다.", "쓰지 않는 표현: 반등"],
       ["- 애플은 팔 때입니다.", "쓰지 않는 표현: 팔 때"],
+      // 2차 검증: 3종목 보유인데 지어낸 개수·주식 수·연속일·공시 건수
+      ["- 보유 9종목입니다.", "입력에 없는 숫자: 9종목"],
+      ["- 애플 5주가 움직였습니다.", "입력에 없는 숫자: 5주"],
+      ["- 3일 연속 하락했습니다.", "입력에 없는 숫자: 3일 연속"],
+      ["- 공시 7건이 나왔습니다.", "입력에 없는 숫자: 7건"],
+      ["- 애플은 2거래일째 내렸습니다.", "입력에 없는 숫자: 2거래일째"],
+      // 부호 없이 말로 뒤집은 방향 (실제 애플 -1.59%, 당일 -16,589원)
+      ["- 애플이 1.59% 올랐습니다.", "방향이 사실과 반대: 1.59% 올랐"],
+      ["- 당일 손익은 16,589원 이익입니다.", "방향이 사실과 반대: 16,589원 이익"],
+      ["- 계좌는 0.65% 상승했습니다.", "방향이 사실과 반대: 0.65% 상승"],
+      // 권유·행동 제안·전망
+      ["- 지금 사세요.", "쓰지 않는 표현: 세요"],
+      ["- 애플은 파세요.", "쓰지 않는 표현: 세요"],
+      ["- 차익 실현을 검토해 보세요.", "쓰지 않는 표현: 차익"],
+      ["- 애플을 처분하는 것이 바람직합니다.", "쓰지 않는 표현: 처분"],
+      ["- 애플을 줄여 나가시길 권장드립니다.", "쓰지 않는 표현: 시길"],
+      ["- 저가 매집 기회입니다.", "쓰지 않는 표현: 매집"],
+      ["- 앞으로 코스피가 더 떨어질 것으로 보입니다.", "쓰지 않는 표현: 앞으로"],
+      ["- 내일도 하락세가 이어질 수 있습니다.", "쓰지 않는 표현: 내일"],
     ];
     for (const [text, reason] of rejected) {
       const d = await run(text);
       expect(d.data.narrative, text).toEqual({ source: "template", reason });
       expect(d.detail).toContain("- 오후 기준 당일 손익은 -16,589원(-0.65%)입니다.");
+      expect(d.detail).not.toContain(text.slice(2)); // 모델 문장은 화면에 나가지 않는다
     }
-    const ok = await run("- 당일 손익은 -16,589원 (-0.65%)입니다.\n- 1위는 애플(-18,089원, -1.59%), 2위는 SK하이닉스(+13,500원)입니다.\n- 미국 정규장은 9/25 22:30(한국 시간)에 열립니다.");
+    const ok = await run("- 당일 손익은 -16,589원 (-0.65%)입니다.\n- 보유 3종목 가운데 1위는 애플(-18,089원, -1.59%), 2위는 SK하이닉스(+13,500원)입니다.\n- 애플은 1.59% 내렸습니다.\n- 미국 정규장은 9/25 22:30(한국 시간)에 열립니다.");
     expect(ok.data.narrative).toEqual({ source: "llm", reason: null });
+  });
+
+  it("지난밤 미국만 평일 휴장(추수감사절 다음 날 오전): 미국 등락이 직전 거래일 것임을 요약·알림·사실·기본 문장에 밝힌다", async () => {
+    const gen = new AccountGen();
+    gen.mode = "fail"; // 기본 문장도 확인
+    const { push } = await setup({ gen, at: "2026-11-27T08:30:00+09:00" });
+    await app.briefingService.runSession("morning", { trigger: "schedule" });
+    const b = (await list())[0]!;
+    expect(b).toMatchObject({ date: "2026-11-27", session: "morning" });
+    expect(b.headline).toMatchObject({ usPreviousDay: true });
+    expect(b.headline).not.toHaveProperty("krPreviousDay");
+    expect(b.summary.split("\n")[2]).toBe(US_PREVIOUS_DAY_NOTE);
+    expect(US_PREVIOUS_DAY_NOTE).toBe("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]!.body.split("\n")).toContain(US_PREVIOUS_DAY_NOTE);
+    const d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json() as { detail: string; data: AccountData };
+    expect(d.data.usPreviousDay).toBe(true);
+    expect(d.detail).toContain("지난밤 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다");
+    expect(factsText(d.data)).toContain("참고: 지난밤 미국은 휴장이라");
   });
 
   it("한국만 휴장인 날: 국내 등락이 직전 거래일 것임을 요약·알림·사실에 밝힌다 (당일 손익은 앱 잔고 화면과 같은 기준 그대로)", async () => {

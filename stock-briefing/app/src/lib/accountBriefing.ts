@@ -51,8 +51,53 @@ export function accountCardSpeech(b: AccountBriefing): string {
     h ? `총 평가금액 ${speakAmount(formatWon(h.totalValue))}` : null,
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
     h?.krPreviousDay ? "오늘 한국 휴장, 국내 종목은 직전 거래일 등락" : null,
+    h?.usPreviousDay ? "지난밤 미국 휴장, 미국 종목은 직전 거래일 등락" : null,
     "자세히 보기",
   ]);
+}
+
+const profitText = (label: string, v: number) => `${label} ${speakProfit(formatWon(v, { sign: true }), Math.sign(v)) ?? "없음"}`;
+
+/**
+ * 화면 읽기: 상세 화면 맨 위 요약 카드 한 문장. 화면의 요약 줄('당일 -250,267원 (-2.66%) · 기여 1위 …')과 같은 숫자를
+ * 기호 없이 말로 ("당일손익 250,267원 손실, 2.66% 하락, 기여 1위 리게티 컴퓨팅 268,838원 손실, …")
+ */
+export function summarySpeech(d: AccountData): string {
+  const top = d.contributions[0];
+  return sentence([
+    "요약",
+    profitText("당일손익", d.dayPnl),
+    speakRate(d.dayRate),
+    top ? profitText(`기여 1위 ${top.name}`, top.amount) : null,
+    `총 평가금액 ${speakAmount(formatWon(d.totalValue))}`,
+    d.fx.status === "computed" && d.fx.fxEffect !== null ? profitText("환율 효과", d.fx.fxEffect) : null,
+    d.krPreviousDay ? "오늘 한국 휴장, 국내 종목은 직전 거래일 등락" : null,
+    d.usPreviousDay ? "지난밤 미국 휴장, 미국 종목은 직전 거래일 등락" : null,
+  ]);
+}
+
+/** 화면 읽기: 환율 효과 등식 줄 한 문장 ("미국 보유분 원화 평가 변화 209,723원 손실, 가격 효과 234,440원 손실, 환율 효과 24,717원 이익, …") */
+export function fxEquationSpeech(fx: AccountData["fx"]): string | null {
+  if (fx.status !== "computed" || fx.usdHoldingsKrwChange === null || fx.priceEffect === null || fx.fxEffect === null) return null;
+  return sentence([
+    profitText("미국 보유분 원화 평가 변화", fx.usdHoldingsKrwChange),
+    `가격 효과와 환율 효과의 합`,
+    profitText("가격 효과", fx.priceEffect),
+    profitText("환율 효과", fx.fxEffect),
+    "환율 효과는 원달러 전일 대비 변동으로 계산하며 당일 손익에는 넣지 않습니다",
+  ]);
+}
+
+/**
+ * 모델 설명 대신 기본 설명을 쓴 이유를 화면에 보일 말로. 숫자 검사 탈락·모델 오류의 자세한 이유(지어낸 숫자·오류 문구)는
+ * 화면에 옮기지 않는다 — 틀린 숫자를 실제 값으로 읽지 않게 (자세한 이유는 서버 기록과 data 에만)
+ */
+export function templateNote(reason: string | null | undefined): string {
+  const r = reason ?? "";
+  if (/설정되지 않음/.test(r)) return "모델이 설정되지 않아 위 숫자로 만든 기본 설명을 보여 드립니다.";
+  if (/^(입력에 없는 숫자|숫자 표기|방향이|쓰지 않는 표현|빈 응답|설명이 너무)/.test(r)) return "모델 설명이 검사를 통과하지 못해 위 숫자로 만든 기본 설명을 보여 드립니다.";
+  if (/^(모델 호출 실패|모델 응답 시간)/.test(r)) return "모델 설명을 받지 못해 위 숫자로 만든 기본 설명을 보여 드립니다.";
+  return "위 숫자로 만든 기본 설명입니다.";
 }
 
 /** 미국 정규장 날짜 "9/25(현지)" */

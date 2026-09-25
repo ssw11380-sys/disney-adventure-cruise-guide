@@ -12,6 +12,9 @@ import { render, type HostNode } from "./miniRender";
 const h = vi.hoisted(() => ({
   flags: {} as Record<string, boolean>,
   flagsLoaded: true,
+  /** 플래그 요청이 실패함(끊김·서버 오류): data 없음, 받는 중 아님 */
+  flagsFailed: false,
+  refetchFlags: vi.fn(),
   params: { id: "7" } as { id?: string },
   list: [] as unknown[],
   detail: null as unknown,
@@ -47,8 +50,8 @@ vi.mock("@/components/ui", () => ({
 vi.mock("@/api/hooks", () => {
   const q = (data: unknown) => ({ data, isError: false, error: null, isSuccess: true, refetch: vi.fn(async () => undefined), dataUpdatedAt: 1, errorUpdatedAt: 0, fetchStatus: "idle" });
   return {
-    useFeature: (key: string, fallback: boolean) => (h.flagsLoaded ? (h.flags[key] ?? fallback) : fallback),
-    useFeatures: () => ({ data: h.flagsLoaded ? { features: h.flags } : undefined, isFetching: !h.flagsLoaded }),
+    useFeature: (key: string, fallback: boolean) => (h.flagsLoaded && !h.flagsFailed ? (h.flags[key] ?? fallback) : fallback),
+    useFeatures: () => ({ data: h.flagsLoaded && !h.flagsFailed ? { features: h.flags } : undefined, isFetching: !h.flagsLoaded && !h.flagsFailed, refetch: h.refetchFlags }),
     useAccountBriefings: (enabled: boolean) => {
       h.listEnabled.push(enabled);
       return q(enabled ? h.list : undefined);
@@ -124,6 +127,8 @@ const labels = (r: ReturnType<typeof render>) => r.all().map((n) => n.props.acce
 beforeEach(() => {
   h.flags = {};
   h.flagsLoaded = true;
+  h.flagsFailed = false;
+  h.refetchFlags.mockReset();
   h.params = { id: "7" };
   h.list = [ITEM];
   h.detail = DETAIL;
@@ -185,6 +190,20 @@ describe("계좌 브리핑 상세 화면", () => {
     expect(ofType(r, "CardsSkeleton")).toHaveLength(1);
   });
 
+  it("(2차 검증) 플래그를 받지 못하면(오프라인·서버 오류) '꺼져 있다'가 아니라 연결 확인 안내와 다시 시도", () => {
+    h.flagsFailed = true;
+    const r = render(<AccountBriefingScreen />);
+    const empty = ofType(r, "Empty")[0]!;
+    expect(empty.props.title).toBe("계좌 브리핑을 불러오지 못했습니다");
+    expect(String(empty.props.hint)).toContain("연결을 확인해 주세요");
+    expect(String(empty.props.hint)).not.toContain("꺼져 있습니다");
+    expect(h.detailEnabled.every((e) => e === false)).toBe(true);
+    const retry = empty.props.action as React.ReactElement<{ title: string; onPress: () => void }>;
+    expect(retry.props.title).toBe("다시 시도");
+    retry.props.onPress();
+    expect(h.refetchFlags).toHaveBeenCalledTimes(1);
+  });
+
   it("요약·총 평가·기여 표(줄 + 그 외 = 합계 = 당일 손익)·지수·환율 영향·오늘 일정·설명·고지", () => {
     h.flags = { accountBriefing: true };
     const r = render(<AccountBriefingScreen />);
@@ -194,7 +213,7 @@ describe("계좌 브리핑 상세 화면", () => {
     const text = r.text();
     for (const s of ["내 계좌 브리핑", "당일 -250,267원 (-2.66%)", "9,157,673원", "당일 손익 기여", "합계 (= 당일 손익)", "지수·환율 영향", "오늘 일정", "무엇이 계좌를 움직였나", "시세 지연 1종목"]) expect(text, s).toContain(s);
     // 기여 표: 5줄 + 그 외 2종목 + 합계. 합계 금액 = 당일 손익
-    const rows = labels(r).filter((l) => l.includes(", 기여 "));
+    const rows = labels(r).filter((l) => l.includes(", 기여 ") && !l.startsWith("요약,"));
     expect(rows).toHaveLength(6);
     expect(rows[0]).toBe("리게티 컴퓨팅, 기여 268,838원 손실, 8.06% 하락");
     expect(rows[5]).toBe("그 외 2종목, 기여 4,669원 손실");
@@ -212,21 +231,56 @@ describe("계좌 브리핑 상세 화면", () => {
     expect(ofType(r, "MarkdownView")[0]!.children).toEqual(["- 설명 한 줄"]);
   });
 
-  it("기본 설명·환율 효과를 계산하지 못한 경우를 그대로 알린다", () => {
+  it("기본 설명·환율 효과를 계산하지 못한 경우를 알린다 — 기본 설명으로 바꾼 자세한 이유(모델이 지어낸 숫자·오류 문구)는 화면에 옮기지 않는다", () => {
     h.flags = { accountBriefing: true };
-    h.detail = { ...DETAIL, template: true, data: { ...DATA, narrative: { source: "template", reason: "입력에 없는 숫자: 12" }, fx: { ...DATA.fx, status: "unavailable", reason: "원/달러 전일 대비 변동을 받지 못해 환율 효과를 계산하지 못했습니다", usdHoldingsKrwChange: null, priceEffect: null, fxEffect: null } } };
-    const r = render(<AccountBriefingScreen />);
-    const text = r.text();
+    const withReason = (reason: string | null): AccountBriefingWithData => ({ ...DETAIL, template: true, data: { ...DATA, narrative: { source: "template", reason }, fx: { ...DATA.fx, status: "unavailable", reason: "원/달러 전일 대비 변동을 받지 못해 환율 효과를 계산하지 못했습니다", usdHoldingsKrwChange: null, priceEffect: null, fxEffect: null } } });
+    h.detail = withReason("입력에 없는 숫자: +16,589원");
+    let r = render(<AccountBriefingScreen />);
+    let text = r.text();
     expect(text).toContain("숫자로 만든 기본 설명");
-    expect(text).toContain("(입력에 없는 숫자: 12)");
+    expect(text).toContain("모델 설명이 검사를 통과하지 못해 위 숫자로 만든 기본 설명을 보여 드립니다.");
+    expect(text).not.toContain("16,589");
+    expect(text).not.toContain("입력에 없는 숫자");
     expect(text).toContain("환율 효과를 계산하지 못했습니다");
     expect(labels(r).some((l) => l.startsWith("환율 효과,"))).toBe(false);
+    for (const [reason, note] of [
+      ["숫자 표기가 틀림: -30,0890원", "모델 설명이 검사를 통과하지 못해"],
+      ["방향이 사실과 반대: 8.06% 올랐", "모델 설명이 검사를 통과하지 못해"],
+      ["쓰지 않는 표현: 세요", "모델 설명이 검사를 통과하지 못해"],
+      ["모델 호출 실패 (api: 429 rate_limit_error {\"type\":\"error\"})", "모델 설명을 받지 못해"],
+      ["모델 응답 시간 초과(90초)", "모델 설명을 받지 못해"],
+      ["브리핑 모델이 설정되지 않음", "모델이 설정되지 않아"],
+    ] as const) {
+      h.detail = withReason(reason);
+      r = render(<AccountBriefingScreen />);
+      text = r.text();
+      expect(text, reason).toContain(note);
+      expect(text, reason).not.toContain(reason);
+    }
+    h.detail = withReason(null);
+    expect(render(<AccountBriefingScreen />).text()).toContain("위 숫자로 만든 기본 설명입니다.");
+  });
+
+  it("(2차 검증) 숫자가 여럿인 요약 카드·환율 효과 등식 줄은 화면 읽기에서 기호 없이 한 문장 (디자인 규칙)", () => {
+    h.flags = { accountBriefing: true };
+    const r = render(<AccountBriefingScreen />);
+    const all = labels(r);
+    const summary = all.find((l) => l.startsWith("요약,"))!;
+    expect(summary).toBe("요약, 당일손익 250,267원 손실, 2.66% 하락, 기여 1위 리게티 컴퓨팅 268,838원 손실, 총 평가금액 9,157,673원, 환율 효과 23,440원 이익");
+    const summaryNode = r.all().find((n) => n.props.accessibilityLabel === summary)!;
+    expect(summaryNode.props.accessible).toBe(true);
+    const eq = all.find((l) => l.startsWith("미국 보유분 원화 평가 변화"))!;
+    expect(eq).toBe("미국 보유분 원화 평가 변화 211,000원 손실, 가격 효과와 환율 효과의 합, 가격 효과 234,440원 손실, 환율 효과 23,440원 이익, 환율 효과는 원달러 전일 대비 변동으로 계산하며 당일 손익에는 넣지 않습니다");
+    for (const l of [summary, eq]) expect(l, l).not.toMatch(/[+=·]|-\d|\(/);
+    // 휴장 줄도 말로
+    h.detail = { ...DETAIL, data: { ...DATA, krPreviousDay: true, usPreviousDay: true } };
+    expect(labels(render(<AccountBriefingScreen />)).find((l) => l.startsWith("요약,"))).toMatch(/오늘 한국 휴장, 국내 종목은 직전 거래일 등락, 지난밤 미국 휴장, 미국 종목은 직전 거래일 등락$/);
   });
 
   it("기여 표 숫자 칸(합계 줄의 등락률 포함)은 모두 한 줄 맞춤 — 글자 140%에서 두 줄로 꺾이지 않게 (디자인 규칙)", () => {
     h.flags = { accountBriefing: true };
     const r = render(<AccountBriefingScreen />);
-    const rows = r.all().filter((n) => typeof n.props.accessibilityLabel === "string" && (String(n.props.accessibilityLabel).includes(", 기여 ") || String(n.props.accessibilityLabel).startsWith("합계, 당일 손익")));
+    const rows = r.all().filter((n) => typeof n.props.accessibilityLabel === "string" && ((String(n.props.accessibilityLabel).includes(", 기여 ") && !String(n.props.accessibilityLabel).startsWith("요약,")) || String(n.props.accessibilityLabel).startsWith("합계, 당일 손익")));
     expect(rows).toHaveLength(7);
     for (const row of rows) {
       const cells = row.children.filter((c): c is HostNode => typeof c !== "string" && c.type === "Text");
@@ -246,6 +300,15 @@ describe("계좌 브리핑 상세 화면", () => {
     const card = render(<AccountBriefingCard briefing={{ ...ITEM, headline: { ...ITEM.headline!, krPreviousDay: true } }} />);
     expect(card.text()).toContain("오늘 한국 휴장 · 국내 종목은 직전 거래일 등락");
     expect(render(<AccountBriefingCard briefing={ITEM} />).text()).not.toContain("직전 거래일");
+  });
+
+  it("(2차 검증) 지난밤 미국 평일 휴장이면 기여 표 아래·브리핑 탭 카드(화면 읽기 포함)에 미국 등락이 직전 거래일 것임을 밝힌다", () => {
+    h.flags = { accountBriefing: true };
+    h.detail = { ...DETAIL, data: { ...DATA, usPreviousDay: true } };
+    expect(render(<AccountBriefingScreen />).text()).toContain("지난밤 미국은 휴장이라 미국 종목은 직전 거래일 등락입니다");
+    const card = render(<AccountBriefingCard briefing={{ ...ITEM, headline: { ...ITEM.headline!, usPreviousDay: true } }} />);
+    expect(card.text()).toContain("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(labels(card).find((l) => l.startsWith("내 계좌 브리핑"))).toContain("지난밤 미국 휴장, 미국 종목은 직전 거래일 등락");
   });
 
   it("잘못된 주소는 요청하지 않고 안내", () => {

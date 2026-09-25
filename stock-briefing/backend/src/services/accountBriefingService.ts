@@ -20,6 +20,7 @@ import {
   sessionKo,
   summaryText,
   templateNarrative,
+  usPreviousDay,
   type AccountData,
   type AccountDisclosure,
   type AccountHolding,
@@ -36,6 +37,8 @@ export interface AccountHeadline {
   top: Array<{ code: string; name: string; amount: number; changeRate: number | null }>;
   /** 오늘 한국 휴장이라 국내 종목의 등락이 직전 거래일 것 (그럴 때만 true 로 넣는다 — 예전 앱은 모르는 칸) */
   krPreviousDay?: true;
+  /** 지난밤 미국 평일 휴장이라 미국 종목의 등락이 직전 거래일 것 (그럴 때만 true) */
+  usPreviousDay?: true;
 }
 
 export interface AccountBriefing {
@@ -178,6 +181,7 @@ export class AccountBriefingService {
       narrative: { source: "template", reason: null },
     };
     data.krPreviousDay = krPreviousDay(data.schedule, totals);
+    data.usPreviousDay = usPreviousDay(now, totals);
     if (data.holdings === 0) {
       data.narrative.reason = "시세를 받지 못함";
       return await this.save(date, session, { status: "failed", summary: "시세를 받지 못해 계좌 브리핑을 만들지 못했습니다", detail: "", data, model: "template" });
@@ -319,6 +323,7 @@ export function digestAccount(b: AccountBriefing | null | undefined): DigestAcco
     dayRate: b.headline.dayRate,
     top: b.headline.top.map((t) => ({ name: t.name, amount: t.amount })),
     ...(b.headline.krPreviousDay ? { krPreviousDay: true } : {}),
+    ...(b.headline.usPreviousDay ? { usPreviousDay: true } : {}),
   };
 }
 
@@ -350,6 +355,7 @@ function toBriefing(r: { id: number; briefing_date: string; session: string; sta
           holdings: d.holdings,
           top: d.contributions.slice(0, 3).map((c) => ({ code: c.code, name: c.name, amount: c.amount, changeRate: c.changeRate })),
           ...(d.krPreviousDay ? { krPreviousDay: true as const } : {}),
+          ...(d.usPreviousDay ? { usPreviousDay: true as const } : {}),
         }
       : null,
   };
