@@ -437,14 +437,21 @@ export default function StockDetailScreen() {
   // 오른쪽 칸(좌우 배치) · 윗줄 오른쪽(윗줄+아랫줄 배치): 내 보유 → 시세 → 52주 (한 줄에 칸 2개, 큰 글씨는 1개)
   const sideW = sideWidth(win.fontScale);
   const sideCols = statColumns(sideW - space.lg * 2, win.fontScale, 2);
+  // 큰 글씨로 한 줄에 한 칸이면 달러 종목의 원화 기준 4칸을 시세 뒤로 보낸다 (시가·고가·저가·거래량이 먼저 보이게)
+  const krwLast = sideCols === 1 && krwStats.length > 0;
+  const krwSide = krwStats.length ? (
+    <>
+      {krwBlock}
+      <PairGrid items={krwStats} cols={sideCols} />
+    </>
+  ) : null;
   const sideStats = (
     <View style={styles.side}>
       {ev ? (
         <View>
           <PaneTitle title="내 보유" note={holdNote} />
           <PairGrid items={holdStats} cols={sideCols} />
-          {krwBlock}
-          {krwStats.length ? <PairGrid items={krwStats} cols={sideCols} /> : null}
+          {krwLast ? null : krwSide}
           {memo}
         </View>
       ) : null}
@@ -455,6 +462,7 @@ export default function StockDetailScreen() {
           {range}
         </View>
       ) : null}
+      {ev && krwLast ? <View>{krwSide}</View> : null}
     </View>
   );
 

@@ -40,6 +40,12 @@ vi.mock("@/components/Freshness", () => ({ usePull: () => ({ pulling: false, onP
 vi.mock("@/components/MarketStrip", () => ({ MarketStrip: "MarketStrip", formatIndexValue: (v: number) => v.toFixed(2) }));
 vi.mock("@/components/Screen", () => ({ Screen: "Screen" }));
 vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBoundary" }));
+// 넓은 창 머리(components/StockDetailParts)가 함께 불러오는 것
+vi.mock("@/components/MarkdownView", () => ({ MarkdownView: "MarkdownView" }));
+vi.mock("@/components/BriefingCard", () => ({ BriefingCard: "BriefingCard" }));
+vi.mock("@/components/FlashPrice", () => ({ FlashPrice: "FlashPrice" }));
+vi.mock("@/components/ui", () => ({ Button: "Button", Card: "Card", ErrorView: "ErrorView", LiveDot: "LiveDot", Loading: "Loading", Muted: "Muted", SectionTitle: "SectionTitle", Stat: "Stat" }));
+vi.mock("@/lib/settings", () => ({ useSettings: () => ({ apiUrl: "http://x", sort: "created", afterCost: false, showKrw: false }) }));
 
 const { default: MarketIndexScreen } = await import("@/app/market/[code]");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");

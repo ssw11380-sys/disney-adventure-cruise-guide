@@ -148,8 +148,8 @@ export interface DetailHeaderInput {
   state: string[];
   /** ‹ n/17 › 묶음이 있는지와 가운데 글자 */
   pager: string | null;
-  /** 오른쪽 버튼 글자 (수정 = null 아이콘만, 관심 추가 = '관심 추가') */
-  action: string | null;
+  /** 오른쪽 버튼 글자 (수정 = null 아이콘만, 관심 추가 = "관심 추가", 버튼 없음 = false) */
+  action: string | null | false;
 }
 
 export interface DetailHeaderLayout {
@@ -183,14 +183,15 @@ export function detailHeaderLayout(o: DetailHeaderInput): DetailHeaderLayout {
   const s = clampScale(o.fontScale, fontCap.chrome);
   const w = (text: string | null, size: number) => (text ? estimateTextWidth(text, size * s) : 0);
   const chars = [...o.name];
-  const nameMin = Math.max(w(chars.length <= NAME_KEEP ? o.name : `${chars.slice(0, NAME_KEEP).join("")}…`, font.h2), Math.min(w(o.sub, font.small), w("000000 · KOSPI", font.small)));
+  // 이름 칸이 지키는 폭: 이름 앞 NAME_KEEP 자, 아래 줄은 종목 코드(6자)까지 — 시장·업종은 '…'로 줄어들 수 있다
+  const nameMin = Math.max(w(chars.length <= NAME_KEEP ? o.name : `${chars.slice(0, NAME_KEEP).join("")}…`, font.h2), Math.min(w(o.sub, font.small), w("000000", font.small)));
   // 가격 묶음: 가격(hero) 단위(body) 등락(body) 등락률(body)
   const quote = o.price ? w(o.price, font.hero) + space.xs + w(o.unit, font.body) + space.s + w(o.change, font.body) + space.s + w(o.rate, font.body) : 0;
   const state = o.state.length ? Math.max(...o.state.map((l) => w(l, font.small))) : 0;
   // 오른쪽: ‹ n/17 › (버튼 44 둘 + 가운데 글자) · 수정(44) 또는 관심 추가(별 + 글자)
   const pager = o.pager ? touch.min * 2 + w(o.pager, font.small) + space.xs * 2 : 0;
-  const action = o.action ? w(o.action, font.small) + font.title + space.xs * 3 : touch.min;
-  const fixed = HEAD_PAD * 2 + touch.min + space.sm + nameMin + (pager ? space.sm + pager : 0) + space.sm + action;
+  const action = o.action === false ? 0 : o.action ? w(o.action, font.small) + font.title + space.xs * 3 : touch.min;
+  const fixed = HEAD_PAD * 2 + touch.min + space.sm + nameMin + (pager ? space.sm + pager : 0) + (action ? space.sm + action : 0);
   const gaps = space.md;
   if (fixed + (quote ? gaps + quote : 0) + (state ? gaps + state : 0) <= o.width) return { tier: "one" };
   if (fixed + (quote ? gaps + quote : 0) <= o.width) return { tier: "stateBelow" };

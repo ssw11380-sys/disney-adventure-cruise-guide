@@ -393,7 +393,8 @@ export function DetailHeader({
   onPrev: () => void;
   onNext: () => void;
   onBack: () => void;
-  action: HeaderAction;
+  /** 오른쪽 버튼 (지수 상세처럼 없으면 null) */
+  action: HeaderAction | null;
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
@@ -411,7 +412,7 @@ export function DetailHeader({
       rate: quote?.rate ?? null,
       state: lines,
       pager: nav ? navLabel(nav) : null,
-      action: action.kind === "watch" ? "관심 추가" : null,
+      action: action?.kind === "watch" ? "관심 추가" : action ? null : false,
     }).tier;
   // 긴 표기로 한 줄에 들어가지 않으면 짧은 표기(기준 시각 "9/23 20:00")로 다시 어림하고, 그래도 안 되면 둘째 줄로
   const long = fit(state.map((l) => l.text));
@@ -478,7 +479,7 @@ export function DetailHeader({
             </Pressable>
           </View>
         ) : null}
-        {action.kind === "edit" ? (
+        {!action ? null : action.kind === "edit" ? (
           <Pressable onPress={action.onPress} accessibilityRole="button" accessibilityLabel="보유 정보 수정" style={styles.icon}>
             <Ionicons name="create-outline" size={HEADER_ICON} color={t.ink} />
           </Pressable>
