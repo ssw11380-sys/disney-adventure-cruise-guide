@@ -186,32 +186,41 @@ export function planNotifications(
   return out;
 }
 
+/** 설정 화면의 조용한 시간 안내 한 줄. warn: 알림이 가지 않거나 가지 않을 수 있음(주의 색), 아니면 알림이 가는 안내 */
+export interface QuietNote {
+  text: string;
+  warn: boolean;
+}
+
 /**
- * 브리핑 시간이 조용한 시간에 걸리면 알림이 가지 않는다고 미리 알린다 (예: 오전 06:30).
- * 서버는 세션이 끝난 시각(모든 종목을 만든 뒤)으로 조용한 시간을 본다 (BH-58) → 시작 시각과 예상 끝 시각(runSeconds 뒤, 종목 수 × 약 25초)을 함께 본다:
- *  - 둘 다 조용한 시간이면 "가지 않습니다"
- *  - 하나만 걸치면(06:55 → 약 07:02, 21:55 → 약 22:02) 끝나는 시각에 달렸다고 그 시각과 함께 알린다 — 예상 시각이라 단정하지 않는다
- * runSeconds 를 모르면(0) 시작 시각만 본다
+ * 브리핑 시간이 조용한 시간에 걸리면 알림이 어떻게 되는지 미리 알린다 (예: 오전 06:30 → 가지 않습니다).
+ * 서버는 세션이 끝난 시각(모든 종목을 만든 뒤)으로 조용한 시간을 본다 (BH-58) → 시작 시각과 예상 끝 시각(runSeconds 뒤, lib/briefingRun sessionSeconds)을 함께 보고
+ * 서버가 볼 끝 시각 기준의 결과를 말한다:
+ *  - 둘 다 조용한 시간이면 "가지 않습니다" (주의)
+ *  - 조용한 시간에 시작해 끝난 뒤 끝나면(06:55 → 약 07:02) "알림이 갑니다(예상)" (안내)
+ *  - 조용한 시간 전에 시작해 그 안에서 끝나면(21:55 → 약 22:02) "가지 않을 수 있습니다" (주의)
+ * 끝 시각은 예상이라 단정하지 않는다. runSeconds 를 모르면(0) 시작 시각만 본다
  */
 export function quietWarnings(
   s: { quietEnabled?: boolean; quietStart?: string; quietEnd?: string; morningTime: string; afternoonTime: string; morningEnabled: boolean; afternoonEnabled: boolean },
   runSeconds = 0,
-): string[] {
+): QuietNote[] {
   if (!s.quietEnabled || !s.quietStart || !s.quietEnd) return [];
   const q = { quietEnabled: true, quietStart: s.quietStart, quietEnd: s.quietEnd };
   const at = (hhmm: string) => new Date(`2026-01-05T${hhmm}:00+09:00`);
-  const warn = (label: string, hhmm: string): string | null => {
+  const note = (label: string, hhmm: string): QuietNote | null => {
     const start = at(hhmm);
     const end = new Date(start.getTime() + Math.max(0, runSeconds) * 1_000);
     const quietStart = inQuietHours(q, start);
     const quietEnd = inQuietHours(q, end);
-    if (quietStart && quietEnd) return `${label} 브리핑(${hhmm})이 조용한 시간 안이라 알림이 가지 않습니다`;
-    if (quietStart || quietEnd) return `${label} 브리핑(${hhmm})은 약 ${kstHhmm(end)}에 다 만들어져, 그때가 조용한 시간이면 알림이 가지 않습니다`;
+    if (quietStart && quietEnd) return { text: `${label} 브리핑(${hhmm})이 조용한 시간 안이라 알림이 가지 않습니다`, warn: true };
+    if (quietStart) return { text: `${label} 브리핑(${hhmm})은 약 ${kstHhmm(end)}에 다 만들어져, 조용한 시간이 끝난 뒤라 알림이 갑니다 (예상)`, warn: false };
+    if (quietEnd) return { text: `${label} 브리핑(${hhmm})은 약 ${kstHhmm(end)}에 다 만들어져, 조용한 시간이라 알림이 가지 않을 수 있습니다`, warn: true };
     return null;
   };
-  const out: string[] = [];
-  const morning = s.morningEnabled ? warn("오전", s.morningTime) : null;
-  const afternoon = s.afternoonEnabled ? warn("오후", s.afternoonTime) : null;
+  const out: QuietNote[] = [];
+  const morning = s.morningEnabled ? note("오전", s.morningTime) : null;
+  const afternoon = s.afternoonEnabled ? note("오후", s.afternoonTime) : null;
   if (morning) out.push(morning);
   if (afternoon) out.push(afternoon);
   return out;

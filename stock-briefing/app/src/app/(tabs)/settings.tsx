@@ -24,11 +24,13 @@ export default function SettingsScreen() {
   const t = useTheme();
   const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost } = useSettings();
   const health = useHealth();
-  const notifySettings = useNotificationSettings();
+  // 알림·토스 카드는 토큰이 맞는 서버에서만 보인다 (토큰이 없으면 서버가 401 을 주므로 묻지 않는다)
+  const full = !!health.data && !health.data.limited;
+  const notifySettings = useNotificationSettings(full);
   const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
-  // 당겨서 새로고침: 서버 상태와 알림 설정('다음 실행' 시각)을 함께 (BH-16)
-  const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), notifySettings.refetch()]));
+  // 당겨서 새로고침: 서버 상태와, 알림 카드가 보이면 알림 설정('다음 실행' 시각)도 함께 (BH-16)
+  const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full ? notifySettings.refetch() : undefined]));
 
   return (
     <Screen refreshing={pulling} onRefresh={onPull}>
@@ -70,8 +72,8 @@ export default function SettingsScreen() {
         </View>
       </Card>
 
-      {health.data && !health.data.limited ? <NotificationSettingsCard /> : null}
-      {health.data && !health.data.limited ? <TossOpenApiCard /> : null}
+      {full ? <NotificationSettingsCard /> : null}
+      {full ? <TossOpenApiCard /> : null}
       <AppUpdateCard />
 
       <Card>

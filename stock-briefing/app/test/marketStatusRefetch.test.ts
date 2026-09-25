@@ -1,4 +1,4 @@
-import { environmentManager, isServer, QueryClient, QueryObserver } from "@tanstack/react-query";
+import { environmentManager, focusManager, isServer, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MarketState, MarketStatus } from "@/api/types";
 
@@ -37,6 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  focusManager.setFocused(undefined);
   environmentManager.setIsServer(() => isServer);
 });
 
@@ -115,5 +116,32 @@ describe("장 상태: 개장·마감 경계에서 바로 다시 받는다 (BH-60
     expect(m.calls()).toBe(2);
     expect(again.getCurrentResult().data?.US.isOpen).toBe(true);
     off();
+  });
+
+  it("앱이 뒤에 있는 동안 경계가 지나면(경계 1초 뒤 갱신은 건너뜀) 앱으로 돌아오자마자 다시 받는다 (예전: 다음 주기 22:33 까지 닫힘)", async () => {
+    const m = await mount(kst("22:27:00"));
+    m.qc.mount(); // 앱처럼 포커스 이벤트를 받는다 (_layout 이 AppState 를 focusManager 로)
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    focusManager.setFocused(false); // 22:29 폰 잠금
+    await vi.advanceTimersByTimeAsync(kst("22:31:00") - Date.now());
+    expect(m.calls()).toBe(1); // 뒤에 있는 동안은 주기 갱신이 멈춘다
+    focusManager.setFocused(true); // 22:31 다시 켬
+    await vi.advanceTimersByTimeAsync(0);
+    expect(m.calls()).toBe(2);
+    expect(m.usOpen()).toBe(true);
+    m.unsubscribe();
+    m.qc.unmount();
+  });
+
+  it("오래되지 않았으면(경계 전·5분 안) 앱으로 돌아와도 묻지 않는다", async () => {
+    const m = await mount(kst("22:27:00"));
+    m.qc.mount();
+    focusManager.setFocused(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    focusManager.setFocused(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(m.calls()).toBe(1);
+    m.unsubscribe();
+    m.qc.unmount();
   });
 });

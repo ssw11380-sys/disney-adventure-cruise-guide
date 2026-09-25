@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDigest, byMove, DEFAULT_PREFS, inQuietHours, planNotifications, quietWarnings } from "@/lib/briefingDigest";
-import { estimateText, orderForTab, runConfirm } from "@/lib/briefingRun";
+import { estimateText, orderForTab, runConfirm, sessionSeconds } from "@/lib/briefingRun";
 
 const item = (code: string, changeRate: number | null, session: "morning" | "afternoon" = "afternoon", date = "2026-09-24") => ({
   briefingId: Number(code.replace(/\D/g, "")) || 1,
@@ -62,32 +62,38 @@ describe("브리핑 탭·수동 생성 (3-19)", () => {
 });
 
 describe("설정 경고 (3-19 리뷰)", () => {
+  const warn = (text: string) => ({ text, warn: true });
   it("브리핑 시간이 조용한 시간 안이면 경고", () => {
     const base = { quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", morningTime: "06:30", afternoonTime: "16:00", morningEnabled: true, afternoonEnabled: true };
-    expect(quietWarnings(base)).toEqual(["오전 브리핑(06:30)이 조용한 시간 안이라 알림이 가지 않습니다"]);
+    expect(quietWarnings(base)).toEqual([warn("오전 브리핑(06:30)이 조용한 시간 안이라 알림이 가지 않습니다")]);
     expect(quietWarnings({ ...base, morningTime: "08:30" })).toEqual([]);
     expect(quietWarnings({ ...base, morningEnabled: false })).toEqual([]);
     expect(quietWarnings({ ...base, quietEnabled: false })).toEqual([]);
   });
 
-  // BH-58: 서버는 세션이 끝난 시각(모든 종목을 만든 뒤)으로 조용한 시간을 본다 — 경고도 시작 시각만이 아니라 끝나는 시각으로
-  it("조용한 시간 경계에 걸치면 시작 시각이 아니라 끝나는 시각(17종목 약 7분 뒤) 기준이라고 알린다", () => {
+  // BH-58: 서버는 세션이 끝난 시각(모든 종목과 계좌 요약을 만든 뒤)으로 조용한 시간을 본다 — 안내도 끝나는 시각 기준의 결과를 말한다
+  it("조용한 시간 경계에 걸치면 끝나는 예상 시각(17종목 약 7분 뒤) 기준으로 알림이 가는지·안 가는지를 말한다", () => {
     const base = { quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", morningTime: "06:55", afternoonTime: "21:55", morningEnabled: true, afternoonEnabled: true };
-    const run = 17 * 25; // 17종목 × 약 25초 = 07:02:05 · 22:02:05 에 끝남
-    const w = quietWarnings(base, run);
-    // 06:55 시작 → 07:02 끝: 서버는 알림을 보낸다 → "가지 않습니다"라고 단정하지 않는다
-    expect(w).not.toContain("오전 브리핑(06:55)이 조용한 시간 안이라 알림이 가지 않습니다");
-    expect(w).toContain("오전 브리핑(06:55)은 약 07:02에 다 만들어져, 그때가 조용한 시간이면 알림이 가지 않습니다");
-    // 21:55 시작 → 22:02 끝: 서버는 알림을 보내지 않는다 → 경고가 있어야 한다
-    expect(w).toContain("오후 브리핑(21:55)은 약 22:02에 다 만들어져, 그때가 조용한 시간이면 알림이 가지 않습니다");
-    expect(w).toHaveLength(2);
+    const w = quietWarnings(base, sessionSeconds(17)); // 18 × 25초 = 7분 30초 → 07:02:30 · 22:02:30 에 끝남
+    expect(w).toEqual([
+      // 06:55 시작 → 07:02 끝: 서버는 알림을 보낸다 → 가는 쪽으로 안내 (주의 색 아님)
+      { text: "오전 브리핑(06:55)은 약 07:02에 다 만들어져, 조용한 시간이 끝난 뒤라 알림이 갑니다 (예상)", warn: false },
+      // 21:55 시작 → 22:02 끝: 서버는 알림을 보내지 않는다 → 주의
+      warn("오후 브리핑(21:55)은 약 22:02에 다 만들어져, 조용한 시간이라 알림이 가지 않을 수 있습니다"),
+    ]);
   });
 
   it("시작과 끝이 모두 조용한 시간이면 예전처럼 단정하고, 모두 밖이면 경고 없음", () => {
     const base = { quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", morningTime: "06:30", afternoonTime: "16:00", morningEnabled: true, afternoonEnabled: true };
-    expect(quietWarnings(base, 17 * 25)).toEqual(["오전 브리핑(06:30)이 조용한 시간 안이라 알림이 가지 않습니다"]);
-    expect(quietWarnings({ ...base, morningTime: "08:30" }, 17 * 25)).toEqual([]);
+    expect(quietWarnings(base, sessionSeconds(17))).toEqual([warn("오전 브리핑(06:30)이 조용한 시간 안이라 알림이 가지 않습니다")]);
+    expect(quietWarnings({ ...base, morningTime: "08:30" }, sessionSeconds(17))).toEqual([]);
     // 자정을 넘겨 끝나도 (23:58 → 00:05, 둘 다 조용한 시간)
-    expect(quietWarnings({ ...base, afternoonTime: "23:58", morningEnabled: false }, 17 * 25)).toEqual(["오후 브리핑(23:58)이 조용한 시간 안이라 알림이 가지 않습니다"]);
+    expect(quietWarnings({ ...base, afternoonTime: "23:58", morningEnabled: false }, sessionSeconds(17))).toEqual([warn("오후 브리핑(23:58)이 조용한 시간 안이라 알림이 가지 않습니다")]);
+  });
+
+  it("실행 예상 시간: 종목마다 약 25초에 앞뒤 작업(토스 잔고 읽기·계좌 요약) 몫 한 종목을 더한다. 종목 수를 모르면 0 (시작 시각만)", () => {
+    expect(sessionSeconds(17)).toBe(18 * 25);
+    expect(sessionSeconds(1)).toBe(50);
+    expect(sessionSeconds(0)).toBe(0);
   });
 });

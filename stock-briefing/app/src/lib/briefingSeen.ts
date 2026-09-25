@@ -26,6 +26,19 @@ export async function saveSeen(ids: Set<number>): Promise<void> {
   }
 }
 
+let turn: Promise<unknown> = Promise.resolve();
+
+/**
+ * 알림 기록을 읽고 고쳐 쓰는 일(백그라운드 확인의 알림·수동 실행의 markRunSeen)을 한 번에 하나씩 한다.
+ * 확인이 기록을 읽고 알림을 띄우는 사이에 다시 만들기 결과가 적히면, 확인이 자기가 읽은 옛 기록으로 덮어써 방금 적은 id 가 사라지고
+ * 그 브리핑이 다음 확인에서 다시 울렸다 (BH-67 검증). 앞 일이 실패해도 다음 일은 한다
+ */
+export function withSeen<T>(fn: () => Promise<T>): Promise<T> {
+  const run = turn.then(fn);
+  turn = run.catch(() => undefined);
+  return run;
+}
+
 /** 알림 기준을 적었는지. 표시가 없던 예전 앱에서 올라온 기기는 본 기록이 있으면 적은 것으로 본다 */
 export async function initialized(seen: Set<number>): Promise<boolean> {
   if (seen.size > 0) return true;
@@ -42,12 +55,14 @@ export async function markRunSeen(codes: readonly string[] | undefined, r: Pick<
   if (!codes?.length) return;
   const ids = r.results.flatMap((x) => (x.status === "ok" && x.briefingId ? [x.briefingId] : []));
   if (!ids.length) return;
-  const seen = await seenIds();
-  if (!(await initialized(seen))) return;
-  // 최근 것으로 뒤에 (saveSeen 은 뒤의 200개만 남긴다)
-  for (const id of ids) {
-    seen.delete(id);
-    seen.add(id);
-  }
-  await saveSeen(seen);
+  await withSeen(async () => {
+    const seen = await seenIds();
+    if (!(await initialized(seen))) return;
+    // 최근 것으로 뒤에 (saveSeen 은 뒤의 200개만 남긴다)
+    for (const id of ids) {
+      seen.delete(id);
+      seen.add(id);
+    }
+    await saveSeen(seen);
+  });
 }

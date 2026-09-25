@@ -5,7 +5,7 @@ import * as TaskManager from "expo-task-manager";
 import { Platform } from "react-native";
 import type { AccountBriefing, LatestBriefing } from "@/api/types";
 import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefingDigest";
-import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds } from "@/lib/briefingSeen";
+import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload } from "@/widgets/data";
 import { shouldSkipFetch } from "@/widgets/payload";
@@ -55,29 +55,33 @@ export function briefingTrigger(): Notifications.NotificationTriggerInput {
   return Platform.OS === "android" ? { channelId: ANDROID_CHANNEL } : null;
 }
 
+interface NotifyOpts {
+  first?: boolean;
+  prefs?: NotifyPrefs;
+  rates?: Map<string, number | null>;
+  now?: Date;
+  /** 최근 계좌 브리핑 목록 (3-31, 플래그가 켜져 있고 목록을 받았을 때만 넘긴다. 없으면 계좌 브리핑 기준을 적지 않는다) */
+  accounts?: AccountBriefing[];
+  /**
+   * 위젯 응답의 최근 계좌 브리핑 id. 목록과 함께, 또는 묶음을 끈 채 플래그만 켜져 있을 때(계좌 요약을 쓰지 않음) "본 것"으로 적어 매번 다시 묻지 않게.
+   * 목록을 받지 못했을 때는 넘기지 않는다 (그 계좌 브리핑의 알림이 사라지지 않게)
+   */
+  accountIds?: readonly number[];
+  /** 등록한 모든 종목 코드. 모두 알림을 꺼 두었으면 계좌 요약도 보내지 않는다 (서버와 같은 규칙) */
+  codes?: readonly string[];
+}
+
 /**
  * 새 브리핑을 찾아 로컬 알림. 처음 실행(기준 없음)에는 알리지 않고 현재 상태만 기억한다.
  * 3-19: 세션(날짜·오전/오후)마다 1건으로 묶고, 조용한 시간에는 보내지 않으며, 알림을 끈 종목은 뺀다 (서버 알림과 같은 규칙).
- * 조용한 시간에 만들어진 브리핑도 "본 것"으로 적는다 — 아침에 한꺼번에 울리지 않게 (브리핑 탭에는 그대로 있다)
+ * 조용한 시간에 만들어진 브리핑도 "본 것"으로 적는다 — 아침에 한꺼번에 울리지 않게 (브리핑 탭에는 그대로 있다).
+ * 기록 읽기부터 쓰기까지는 수동 실행이 적는 기록(markRunSeen)과 겹치지 않게 한 번에 하나씩 (withSeen)
  */
-export async function notifyNewBriefings(
-  latest: LatestBriefing[],
-  opts: {
-    first?: boolean;
-    prefs?: NotifyPrefs;
-    rates?: Map<string, number | null>;
-    now?: Date;
-    /** 최근 계좌 브리핑 목록 (3-31, 플래그가 켜져 있고 목록을 받았을 때만 넘긴다. 없으면 계좌 브리핑 기준을 적지 않는다) */
-    accounts?: AccountBriefing[];
-    /**
-     * 위젯 응답의 최근 계좌 브리핑 id. 목록과 함께, 또는 묶음을 끈 채 플래그만 켜져 있을 때(계좌 요약을 쓰지 않음) "본 것"으로 적어 매번 다시 묻지 않게.
-     * 목록을 받지 못했을 때는 넘기지 않는다 (그 계좌 브리핑의 알림이 사라지지 않게)
-     */
-    accountIds?: readonly number[];
-    /** 등록한 모든 종목 코드. 모두 알림을 꺼 두었으면 계좌 요약도 보내지 않는다 (서버와 같은 규칙) */
-    codes?: readonly string[];
-  } = {},
-): Promise<number> {
+export function notifyNewBriefings(latest: LatestBriefing[], opts: NotifyOpts = {}): Promise<number> {
+  return withSeen(() => notifyUnseen(latest, opts));
+}
+
+async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise<number> {
   const seen = await seenIds();
   const isFirst = opts.first ?? !(await initialized(seen));
   const now = opts.now ?? new Date();

@@ -1,4 +1,4 @@
-import { focusManager, QueryClient, QueryObserver } from "@tanstack/react-query";
+import { environmentManager, focusManager, isServer, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LatestBriefing } from "@/api/types";
 
@@ -9,7 +9,7 @@ vi.mock("expo-device", () => ({ isDevice: true, modelName: "test" }));
 vi.mock("react-native", () => ({ Platform: { OS: "android" }, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
 
-const { latestBriefingsQuery } = await import("@/api/hooks");
+const { accountBriefingsQuery, latestBriefingsQuery, notificationSettingsQuery } = await import("@/api/hooks");
 const { refreshBriefingsFor } = await import("@/lib/notifications");
 
 /**
@@ -29,10 +29,13 @@ const TODAY_AM = [item(2, "morning", "2026-09-25")];
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(AT_0800);
+  // 앱(RN)처럼: 노드에서는 react-query 가 서버로 보고 구독이 없는 쿼리도 지우지 않는다(gcTime 무한) → 앱에서는 기본 5분 뒤 지운다
+  environmentManager.setIsServer(() => false);
 });
 afterEach(() => {
   vi.useRealTimers();
   focusManager.setFocused(undefined);
+  environmentManager.setIsServer(() => isServer);
 });
 
 /** 브리핑 탭과 같은 옵션의 쿼리를 08:00 에 구독한다 (앱처럼 QueryClient 를 붙여 포커스 이벤트를 받는다) */
@@ -130,5 +133,109 @@ describe("브리핑 탭 목록 다시 받기 (BH-16)", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(tab.server.calls).toBe(1);
     tab.unmount();
+  });
+});
+
+type Opts = ConstructorParameters<typeof QueryObserver>[1];
+/** 화면의 쿼리 옵션 (쿼리마다 데이터 타입이 달라 unknown 으로 받는다) */
+type Make = (focused: boolean, fetch: () => Promise<never>) => unknown;
+
+/**
+ * 탭을 떠났다가(useQuery 처럼 구독을 끊고 subscribed false) awayMs 뒤 돌아온다. 돌아올 때는 서버(집 PC)에 닿지 않는다.
+ * first: 돌아온 순간 그리는 결과(useQuery 의 낙관적 결과), after: 다시 받기가 실패한 뒤
+ */
+async function awayAndBack(make: Make, awayMs: number) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
+  qc.mount();
+  const server = { online: true, calls: 0 };
+  const fetch = async (): Promise<never> => {
+    server.calls++;
+    if (!server.online) throw new Error("서버에 닿지 않음");
+    return "받아 둔 값" as never;
+  };
+  const opts = (focused: boolean) => make(focused, fetch) as Opts;
+  const observer = new QueryObserver(qc, opts(true));
+  let off = observer.subscribe(() => undefined);
+  await vi.advanceTimersByTimeAsync(0);
+  off();
+  observer.setOptions(opts(false));
+  await vi.advanceTimersByTimeAsync(awayMs);
+  server.online = false;
+  const first = observer.getOptimisticResult({ ...qc.defaultQueryOptions(opts(true)), _optimisticResults: "optimistic" });
+  observer.setOptions(opts(true));
+  off = observer.subscribe(() => undefined);
+  await vi.advanceTimersByTimeAsync(10_000);
+  const after = observer.getCurrentResult();
+  off();
+  qc.unmount();
+  return { first, after, calls: server.calls };
+}
+
+describe("탭을 오래 떠나 있어도 받아 둔 것을 지우지 않는다 (BH-16 검증)", () => {
+  // 탭이 가려지면 구독을 끊으므로, 앱(RN)의 기본값이면 5분 뒤 캐시가 지워져 돌아올 때 뼈대가 보이고 서버에 닿지 않으면 오류 화면만 보였다
+  const cases: Array<[string, Make]> = [
+    ["브리핑 탭 목록", (f, fetch) => latestBriefingsQuery({ latestBriefings: fetch }, API, f)],
+    ["계좌 브리핑 카드", (f, fetch) => accountBriefingsQuery({ accountBriefings: fetch }, API, f, true)],
+    ["알림 설정 카드", (f, fetch) => notificationSettingsQuery({ getNotificationSettings: fetch }, API, f)],
+  ];
+  for (const [name, make] of cases) {
+    it(`${name}: 다른 탭·브리핑 상세에 6시간 있다 돌아와도 받아 둔 것을 먼저 보이고, 다시 받기가 실패해도 그대로 둔다`, async () => {
+      const r = await awayAndBack(make, 6 * 3_600_000);
+      expect(r.first.status).toBe("success");
+      expect(r.first.data).toBe("받아 둔 값");
+      expect(r.calls).toBeGreaterThanOrEqual(2); // 30초 지났으니 다시 받으러는 간다
+      expect(r.after.isError).toBe(true);
+      expect(r.after.data).toBe("받아 둔 값");
+    });
+  }
+
+  it("대조: 보존 시간을 두지 않으면(기본값) 앱에서는 6분 만에 지워져 뼈대 → 오류 화면이 된다", async () => {
+    const r = await awayAndBack((f, fetch) => ({ subscribed: f, queryKey: [API, "briefings", "latest"], queryFn: fetch, staleTime: 30_000 }), 6 * 60_000);
+    expect(r.first.status).toBe("pending");
+    expect(r.after.data).toBeUndefined();
+  });
+});
+
+describe("카드가 없거나 플래그가 꺼져 있으면 묻지 않는다 (BH-16 검증)", () => {
+  it("설정 화면에서 enabled false(토큰 없음·제한 모드)면 탭에 돌아와도·앱으로 돌아와도 묻지 않는다 — 늘 401 이라", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
+    qc.mount();
+    let calls = 0;
+    const api = {
+      getNotificationSettings: async (): Promise<never> => {
+        calls++;
+        throw new Error("401");
+      },
+    };
+    const observer = new QueryObserver(qc, notificationSettingsQuery(api, API, true, false));
+    const off = observer.subscribe(() => undefined);
+    focusManager.setFocused(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    focusManager.setFocused(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(0);
+    off();
+    qc.unmount();
+  });
+
+  it("계좌 브리핑도 플래그가 꺼져 있으면(enabled false) 탭·앱으로 돌아와도 묻지 않는다 (3-31 그대로)", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
+    qc.mount();
+    let calls = 0;
+    const api = {
+      accountBriefings: async (): Promise<never> => {
+        calls++;
+        throw new Error("404");
+      },
+    };
+    const observer = new QueryObserver(qc, accountBriefingsQuery(api, API, true, false));
+    const off = observer.subscribe(() => undefined);
+    focusManager.setFocused(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    focusManager.setFocused(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(0);
+    off();
+    qc.unmount();
   });
 });
