@@ -366,7 +366,7 @@ describe("좁은 창·플래그 꺼짐: 3-42 이전 화면과 똑같다 (기록�
 
 // ─────────────────────────── 넓은 창 (플래그 켜짐 + 폭 600 이상) ───────────────────────────
 
-const { pickDiscoverCols, heatColumns, DISCOVER_PAD, DISCOVER_GAP } = await import("@/lib/discoverColumns");
+const { pickDiscoverCols, heatColumns, themeListColumns, DISCOVER_PAD, DISCOVER_GAP } = await import("@/lib/discoverColumns");
 const { allocationGrid, settingsTwoColumns, BESIDE, LEGEND_SWATCH, legendCols } = await import("@/lib/foldScreens");
 const { foldScreens, space, touch, light, dark } = await import("@/tokens");
 const { railWidth } = await import("@/lib/windowClass");
@@ -396,14 +396,14 @@ describe("발견 순위 표의 열 고르기 (lib/discoverColumns)", () => {
 
   it("폴드8 펼침 가로(탭 막대를 뺀 853)·울트라 펼침 세로 859·폴드8 펼침 세로 704: 글자 100% 에서 8칸 모두", () => {
     for (const w of [853, 859, 704, 954]) expect(keys(w, 1), `${w}`).toEqual(ALL);
-    // 이름 칸: 704 → 182 (최소 146 이상). 853 은 331 이 남지만 최대 200 을 넘는 만큼 숫자 열에 고루 나눠(열마다 +21) 205
-    expect(pickDiscoverCols(704, 1, "tradingValue").name).toBe(182);
+    // 이름 칸은 최대 160 을 넘는 만큼 숫자 열에 고루 나눈다: 704 는 182 → 164 (열마다 +3), 853 은 331 → 163 (열마다 +28)
+    expect(pickDiscoverCols(704, 1, "tradingValue").name).toBe(164);
     const f8l = pickDiscoverCols(853, 1, "tradingValue");
-    expect(f8l.name).toBe(205);
-    expect(f8l.cols.map((c) => c.width)).toEqual([86, 62, 76, 64, 76, 44].map((w) => w + 21));
+    expect(f8l.name).toBe(163);
+    expect(f8l.cols.map((c) => c.width)).toEqual([86, 62, 76, 64, 76, 44].map((w) => w + 28));
   });
 
-  it("이름 칸은 최대 폭(200, 글자 배율만큼 넓힘)을 크게 넘지 않는다 — 넓은 창에서 이름과 현재가 사이가 멀어지지 않게", () => {
+  it("이름 칸은 최대 폭(160, 글자 배율만큼 넓힘)을 크게 넘지 않는다 — 넓은 창에서 이름과 현재가 사이가 멀어지지 않게", () => {
     for (const w of [704, 853, 859, 954, 1200])
       for (const s of [1, 1.3]) {
         const t = pickDiscoverCols(w, s, "volume");
@@ -485,6 +485,17 @@ describe("설정·비중 배치 계산 (lib/foldScreens)", () => {
       if (g.beside) expect(name, `${w}/${s}`).toBeGreaterThanOrEqual(foldScreens.legendNameMin);
     }
     expect(allocationGrid(1200, 1).donut).toBe(foldScreens.donutMax);
+    // 큰 글씨: 이름 칸 최소 폭도 배율만큼 넓혀 본다 → 울트라 펼침 세로 130% 는 원 아래 범례, 폴드8 펼침 가로 130% 는 원 옆 그대로
+    expect(allocationGrid(859, 1.3).beside).toBe(false);
+    expect(allocationGrid(933, 1.3)).toEqual({ colW: 462, donut: 120, beside: true });
+  });
+
+  it("테마 목록 두 칸: 한 칸 400(큰 글씨는 넓힘) 이상일 때만 — 853·859 두 칸, 704 한 칸", () => {
+    expect(themeListColumns(853, 1)).toBe(2);
+    expect(themeListColumns(859, 1)).toBe(2);
+    expect(themeListColumns(704, 1)).toBe(1);
+    expect(themeListColumns(853, 1.3)).toBe(1);
+    expect(themeListColumns(0, 1)).toBe(1);
   });
 });
 
@@ -502,10 +513,10 @@ describe("발견 탭 (넓은 창)", () => {
     expect(nodes(r, "Chip").map((c) => c.props.label)).toEqual(["거래대금", "거래량", "급상승", "급하락", "테마"]);
     const bar = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.props.accessibilityRole === "tablist"))!;
     expect(styleOf(bar)).toMatchObject({ flexDirection: "row", minHeight: touch.min });
-    // 표: 재기 전에는 창 폭 − 왼쪽 탭 막대(80)로 어림 → 이름 칸 205, 잰 뒤(853)도 같다
+    // 표: 재기 전에는 창 폭 − 왼쪽 탭 막대(80)로 어림 → 이름 칸 163, 잰 뒤(853)도 같다
     const nameW = () => styleOf(inside(tableRows(r)[0]!).find((n) => n.type === "View" && styleOf(n).flex === 1)!);
     expect(nameW()).toMatchObject({ flex: 1 });
-    expect(nodes(r, "TableHead")[0]!.children.filter((c): c is HostNode => typeof c !== "string").map((c) => styleOf(c).width)).toEqual([30, undefined, 107, 83, 97, 85, 97, 65]);
+    expect(nodes(r, "TableHead")[0]!.children.filter((c): c is HostNode => typeof c !== "string").map((c) => styleOf(c).width)).toEqual([30, undefined, 114, 90, 104, 92, 104, 72]);
     layoutTo(r, r.tree[0] as HostNode, 853);
     expect(textOf(nodes(r, "TableHead")[0]!)).toBe("순위종목현재가등락률거래대금거래량시가총액보유");
     const rows = tableRows(r);
@@ -584,10 +595,13 @@ describe("발견 탭 (넓은 창)", () => {
     expect(flatList(r).props).toMatchObject({ numColumns: 5 });
     const tile = () => r.byLabel("조선, 3.42% 상승, 오른 종목 10개, 내린 종목 3개");
     expect(styleOf(tile()).width).toBe("20%");
-    // 폭이 704 로 줄면 4칸
+    // 폭이 704 로 줄면 히트맵 4칸, 목록은 한 칸 (한 칸이 접은 화면보다 좁아지지 않게)
     layoutTo(r, r.tree[0] as HostNode, 704);
     expect(flatList(r).props).toMatchObject({ numColumns: 4 });
     expect(styleOf(tile()).width).toBe("25%");
+    r.act(() => (r.byLabel("목록으로 보기").props.onPress as () => void)());
+    expect(flatList(r).props).toMatchObject({ numColumns: 1 });
+    expect(styleOf(nodes(r, "Pressable").find((n) => /^1위, 조선 테마/.test(String(n.props.accessibilityLabel)))!).width).toBeUndefined();
   });
 
   it("접고 펴도 테마 보드의 선택(업종·히트맵)이 남는다 (목록 자리가 두 배치에서 같다)", () => {

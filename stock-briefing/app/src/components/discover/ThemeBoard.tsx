@@ -6,10 +6,9 @@ import { useDiscoverThemes } from "@/api/hooks";
 import type { DiscoverMarket, ThemeKind, ThemePeriod, ThemeSummary } from "@/api/types";
 import { Empty, ErrorView } from "@/components/ui";
 import { speakRate } from "@/lib/a11y";
-import { heatColumns } from "@/lib/discoverColumns";
+import { heatColumns, themeListColumns } from "@/lib/discoverColumns";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { changeColor, font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
-import { foldScreens } from "@/tokens";
 import { DISCLAIMER } from "@/components/Screen";
 import { StatusLine, usePull } from "./shared";
 import { SkeletonRows } from "./Skeleton";
@@ -37,7 +36,8 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
   const wide = wideW !== undefined;
   // 히트맵 칸 수: 좌우 여백(heatRow)을 뺀 폭으로
   const heatCols = wide ? heatColumns(wideW - 2 * HEAT_PAD, fontScale) : 3;
-  const listCols = wide ? foldScreens.themeListCols : 1;
+  // 목록 칸 수: 한 칸이 접은 화면보다 좁아지지 않을 때만 두 칸 (폴드8 펼침 세로 704 는 한 칸)
+  const listCols = wide ? themeListColumns(wideW, fontScale) : 1;
   const [kind, setKind] = useState<ThemeKind>("theme");
   const [period, setPeriod] = useState<ThemePeriod>("day");
   const [view, setView] = useState<"list" | "heat">("list");

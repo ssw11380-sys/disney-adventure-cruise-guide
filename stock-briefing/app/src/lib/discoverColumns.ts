@@ -75,6 +75,13 @@ export function pickDiscoverCols(width: number, fontScale: number, metric: Disco
   };
 }
 
+/** 넓은 창 테마 목록 칸 수: 한 칸이 themeCellMin(큰 글씨는 배율의 절반만큼 넓힘) 이상이면 themeListCols(2), 아니면 한 칸 */
+export function themeListColumns(width: number, fontScale: number): number {
+  if (!(Number.isFinite(width) && width > 0)) return 1;
+  const cell = foldScreens.themeCellMin * (1 + (clampScale(fontScale, fontCap.row) - 1) / 2);
+  return width >= foldScreens.themeListCols * cell ? foldScreens.themeListCols : 1;
+}
+
 /** 넓은 창 테마 히트맵 칸 수: 폭 ÷ 타일 기준 폭(큰 글씨는 배율의 절반만큼 넓힘), 적어도 지금의 3칸 */
 export function heatColumns(width: number, fontScale: number): number {
   if (!(Number.isFinite(width) && width > 0)) return 3;

@@ -61,7 +61,9 @@ export function allocationGrid(width: number, fontScale: number): AllocationGrid
   const { amount, pct } = legendCols(fontScale);
   // 원 옆 범례 한 줄의 내용 폭 = 칸 − 왼쪽 여백 − 원 − 간격 − 줄 좌우 여백
   const rowContent = (donut: number) => colW - BESIDE.padL - donut - BESIDE.gap - BESIDE.rowL - BESIDE.rowR;
-  const legendNeed = (name: number) => LEGEND_FIXED + name + amount + pct;
+  // 이름 칸 폭은 글자 배율(최대 140%)만큼 넓혀서 본다 — 큰 글씨에서 이름이 몇 글자만 남으면 원 아래 범례가 낫다
+  const k = clampScale(fontScale, fontCap.row);
+  const legendNeed = (name: number) => LEGEND_FIXED + Math.round(name * k) + amount + pct;
   const donut = Math.max(foldScreens.donutMin, Math.min(foldScreens.donutMax, rowContent(0) - legendNeed(foldScreens.legendNameIdeal)));
   const beside = rowContent(donut) >= legendNeed(foldScreens.legendNameMin);
   return { colW, donut: beside ? donut : foldScreens.donutMin, beside };
