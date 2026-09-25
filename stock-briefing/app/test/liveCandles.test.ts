@@ -290,7 +290,10 @@ describe("차트 봉 주기 갱신 (PF-04)", () => {
     expect(tradingNow("AAPL", usClosed, Date.parse("2026-09-25T10:30:00+09:00"))).toBe(true); // 뉴욕 목 21:30
     expect(tradingNow("AAPL", usClosed, Date.parse("2026-09-28T10:30:00+09:00"))).toBe(true); // 뉴욕 일 21:30 (월요일 세션)
     expect(tradingNow("AAPL", usClosed, Date.parse("2026-09-26T10:30:00+09:00"))).toBe(false); // 뉴욕 금 21:30 — 주간거래 없음
-    expect(tradingNow("AAPL", usClosed, Date.parse("2026-09-25T20:00:00+09:00"))).toBe(false); // 뉴욕 07:00 은 서버 달력대로
+    // 뉴욕 07:00(프리마켓)·17:00(애프터마켓)도 거래가 있다 — 토스 달력 isOpen 은 정규장만이라 요일·시각으로 (예전에는 멈췄다)
+    expect(tradingNow("AAPL", usClosed, Date.parse("2026-09-25T20:00:00+09:00"))).toBe(true);
+    expect(tradingNow("AAPL", usClosed, Date.parse("2026-09-26T06:00:00+09:00"))).toBe(true);
+    expect(tradingNow("AAPL", usClosed, Date.parse("2026-09-26T09:30:00+09:00"))).toBe(false); // 뉴욕 금 20:30 — 토요일 세션 없음
     expect(tradingNow("005930", usClosed, Date.parse("2026-09-26T10:30:00+09:00"))).toBe(true); // 한국은 서버 값 그대로
   });
 

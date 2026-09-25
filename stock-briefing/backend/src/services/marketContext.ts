@@ -56,7 +56,12 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
       return {
         market: "KR",
         phase: "extended",
-        label: pre ? (p.minutes < 8 * 60 + 50 ? "한국 정규장 개장 전, 넥스트레이드(NXT) 프리마켓 중" : "한국 정규장 개장 직전") : `오늘(${md(p.date)}) 한국 정규장은 15:30 에 마감, 지금은 넥스트레이드(NXT) 애프터마켓 시간(20:00 까지)`,
+        // 애프터마켓: 넥스트레이드 15:40~20:00, 한국거래소 16:00~20:00 (2026-09-14 부터, ETF·ETN 제외)
+        label: pre
+          ? p.minutes < 8 * 60 + 50
+            ? "한국 정규장 개장 전, 넥스트레이드(NXT) 프리마켓 중"
+            : "한국 정규장 개장 직전"
+          : `오늘(${md(p.date)}) 한국 정규장은 15:30 에 마감, 지금은 ${p.minutes < 16 * 60 ? "넥스트레이드(NXT) 애프터마켓 시간(한국거래소 애프터마켓은 16:00 부터, 20:00 까지)" : "애프터마켓 시간(한국거래소·넥스트레이드, 20:00 까지)"}`,
         lastRegularDate: pre ? lastClose : p.date,
         todayIncomplete: pre,
       };
@@ -64,7 +69,7 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
     const closedLabel = `${tradingDay ? "한국 장 마감 상태" : "한국 휴장일"}${lastClose ? ` (마지막 거래일 ${md(lastClose)})` : ""}`;
     return { market: "KR", phase: "closed", label: closedLabel, lastRegularDate: lastClose ?? (tradingDay && p.minutes >= 20 * 60 ? p.date : null), todayIncomplete: false };
   }
-  // 미국: 토스 달력의 isOpen 은 프리~애프터를 모두 포함하므로 정규장 여부는 뉴욕 시각으로 가린다
+  // 미국: 토스 달력의 isOpen 은 정규장뿐이라(프리·애프터·주간거래는 닫힘) 세션은 뉴욕 시각으로 가린다
   const ny = parts(now, "America/New_York");
   const weekday = ny.weekday >= 1 && ny.weekday <= 5;
   const tradingDay = (status ? status.US.isTradingDay : weekday) && !US_HOLIDAYS.has(ny.date);
@@ -77,10 +82,10 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
     return { market: "US", phase: "extended", label: `미국 프리마켓 중(정규장 개장 전). 마지막 정규장은 ${last}(현지)`, lastRegularDate: lastRegular, todayIncomplete: false };
   if (afterClose && ny.minutes < 20 * 60)
     return { market: "US", phase: "extended", label: `미국 정규장은 ${last}(현지) 마감, 지금은 애프터마켓 중`, lastRegularDate: lastRegular, todayIncomplete: false };
-  // 한국 낮 시간(대략 10:00~17:30 KST)은 미국 주간거래(블루오션) 시간 — 정규장은 전날 밤 끝났다
-  const kst = parts(now, "Asia/Seoul");
-  // 주간거래(뉴욕 저녁~밤)는 다음 날 정규장에 딸린 세션 → 한국 날짜가 미국 거래일일 때만 (추수감사절 등 휴장일 전날 밤엔 없다)
-  if (isUsTradingDate(kst.date) && kst.weekday >= 1 && kst.weekday <= 5 && kst.minutes >= 10 * 60 && kst.minutes < 17 * 60 + 30)
+  // 뉴욕 20:00~다음 날 04:00 은 미국 주간거래(한국 낮: 서머타임 09:00~17:00, 표준시 10:00~18:00) — 정규장은 전날 밤 끝났다.
+  // 주간거래는 다음 날 정규장에 딸린 세션 → 그날이 미국 거래일일 때만 (추수감사절 등 휴장일 전날 밤엔 없다). services/liveSession 과 같은 규칙
+  const overnight = ny.minutes >= 20 * 60 ? isUsTradingDate(nextDate(ny.date)) : ny.minutes < 4 * 60 && isUsTradingDate(ny.date);
+  if (overnight)
     return { market: "US", phase: "extended", label: `미국 주간거래(한국 낮 시간) 중. 마지막 정규장은 ${last}(현지)에 끝났고 다음 정규장은 아직 열리지 않았습니다`, lastRegularDate: lastRegular, todayIncomplete: false };
   return { market: "US", phase: "closed", label: `미국 정규장 마감 상태 (마지막 정규장 ${last}, 현지)`, lastRegularDate: lastRegular, todayIncomplete: false };
 }
@@ -101,6 +106,13 @@ export function tradingDate(iso: string, kr: boolean): string {
   const open = () => (kr ? d.getUTCDay() >= 1 && d.getUTCDay() <= 5 : isUsTradingDate(day()));
   for (let i = 0; i < 7 && !open(); i++) d.setUTCDate(d.getUTCDate() - 1);
   return day();
+}
+
+/** 다음 달력 날짜 */
+function nextDate(date: string): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 /** 직전 미국 거래일 (주말·휴장일 건너뜀) */

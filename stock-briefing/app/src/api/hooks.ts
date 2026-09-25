@@ -4,6 +4,7 @@ import { focusManager, keepPreviousData, queryOptions, useInfiniteQuery, useMuta
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { isTradingHoursKst } from "@/lib/format";
 import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/freshness";
+import { capToBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
 import { useLiveStream, withLastTick } from "@/lib/liveStream";
 import { tradingNow } from "@/lib/marketTime";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
@@ -67,15 +68,16 @@ export function useMarketIndices() {
   return useQuery({ subscribed: focused, queryKey: useKey("indices"), queryFn: api.marketIndices, staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: false, retry: 0 });
 }
 
-/** 한국·미국 중 하나라도 거래 중이면 true. 서버 상태가 없으면 시간 기반 추정 */
+/**
+ * 한국·미국 중 하나라도 거래 중이면 true. 서버 상태가 없으면 시간 기반 추정.
+ * 토스 달력 기준이라 미국은 정규장만 연다(프리·애프터·주간거래는 닫힘) — 새 서버의 종목별 세션(quote.session, lib/liveDot)이 있으면 그쪽을 먼저 쓰고,
+ * 이 값은 예전 서버일 때(잔고 상태 줄의 닫힘 문구·폴링 주기)에만 쓴다. 문구는 위젯 칩과 같은 함수(lib/liveDot marketChip, 세션 없이 달력만)
+ */
 export function useAnyMarketOpen(): { open: boolean; label: string; loaded: boolean } {
   const m = useMarketStatus();
   if (!m.data) return { open: isTradingHoursKst(), label: isTradingHoursKst() ? "실시간" : "장 마감", loaded: false };
-  const kr = m.data.KR, us = m.data.US;
-  if (kr.isOpen || us.isOpen) return { open: true, label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", loaded: true };
-  if (!kr.isTradingDay && !us.isTradingDay) return { open: false, label: "휴장", loaded: true };
-  if (!kr.isTradingDay) return { open: false, label: "한국 휴장", loaded: true };
-  return { open: false, label: "장 마감", loaded: true };
+  const chip = marketChip(m.data);
+  return { open: chip.open, label: chip.label, loaded: true };
 }
 
 /**
@@ -87,16 +89,28 @@ export function useAnyMarketOpen(): { open: boolean; label: string; loaded: bool
  * 스트림 중 보정용 30초는 그 목록(상세는 그 종목)의 가격이 30초보다 촘촘히 바뀌는 동안 돌지 않는다 — 거래량처럼 체결에 없는 값은 당겨서 새로고침하거나
  * 체결이 뜸해질 때 바로잡힌다. 차트 봉(candlesQuery)처럼 마지막으로 받은 때부터 재려면 이 캐시 쓰기는 받은 시각을 새로 찍으므로("시세 지연" 판단이 쓴다)
  * 서버에서 받은 시각을 따로 적어야 하고, 받는 동안 온 체결을 받은 값에 다시 얹어야(withLastTick 처럼) 옛 가격으로 되돌아가지 않아 여기서는 바꾸지 않았다
+ * "장중"은 받은 목록·상세의 종목별 세션으로 본다(lib/liveDot sessionOpen — 미국 프리·애프터·주간거래 포함). 예전 서버(세션 없음)면 useAnyMarketOpen.
+ * 가장 가까운 세션 경계 1초 뒤에는 한 번 더 받는다 → 세션이 바뀌는 순간 초록 점·상태 줄이 바로 바뀐다
  */
 export function useLivePoll(): (q: Query<any, any, any, any>) => number {
   const { open } = useAnyMarketOpen();
   const stream = useLiveStream();
-  return (q) =>
-    pollInterval({
-      open,
-      streamFresh: streamFresh(stream, Date.now()),
+  return (q) => {
+    const now = Date.now();
+    const quotes = quotesOf(q.state.data);
+    const every = pollInterval({
+      open: sessionOpen(quotes) ?? open,
+      // 체결 스트림은 등록 종목만 보낸다 → 미등록 종목 상세(발견 탭에서 연 종목)는 스트림이 있어도 3초 폴링으로
+      streamFresh: streamed(q.state.data) && streamFresh(stream, now),
       failing: q.state.status === "error" || q.state.fetchFailureCount > 0,
     });
+    return capToBoundary(every, nextBoundary(quotes, now), now);
+  };
+}
+
+/** 체결 스트림이 이 값(잔고 목록 · 등록 종목 상세)을 고쳐 주는지. 미등록 종목 상세(registered: false)는 아니다 */
+function streamed(data: unknown): boolean {
+  return !(data && !Array.isArray(data) && (data as { registered?: boolean }).registered === false);
 }
 
 export function useStocks() {

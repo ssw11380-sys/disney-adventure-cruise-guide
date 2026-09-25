@@ -225,6 +225,29 @@ describe("체결 묶어 보내기 (3-17)", () => {
     expect(asked.length - before).toBeLessThanOrEqual(1); // 닫혀 있으면 1초에 한 번
     stream.stop();
   });
+
+  it("열림 판단에 등록 종목을 넘긴다 — 미국 주간거래처럼 토스 달력은 닫힘이어도 등록 종목 시장의 세션이 열려 있으면 3초 폴링", async () => {
+    const { anySessionOpen } = await import("../src/services/liveSession.js");
+    const { stateFromSession } = await import("../src/providers/market/calendar.js");
+    // 한국 추석 휴장 · 뉴욕 목 20:59 (주간거래). 토스 달력 isOpen 은 둘 다 false
+    const at = new Date("2026-09-25T09:59:00+09:00");
+    const cal = { now: at.toISOString(), KR: stateFromSession("KR", at, "2026-09-23T11:00:00Z", "2026-09-27T23:00:00Z"), US: stateFromSession("US", at, "2026-09-24T20:00:00Z", "2026-09-25T13:30:00Z") };
+    expect(cal.KR.isOpen || cal.US.isOpen).toBe(false); // 예전 규칙이면 30초로 늦췄다
+    const run = async (codes: string[]) => {
+      const asked: string[][] = [];
+      const seen: string[][] = [];
+      const quick: QuickPriceSource = { name: "toss", getMany: async (c) => (asked.push(c), new Map()) };
+      const stream = new PriceStream({ quickPrices: quick, codes: async () => codes, pollMs: 10, closedPollMs: 60_000, marketOpen: async (c) => (seen.push(c), anySessionOpen(c, cal, at)) });
+      stream.attach(new FakeSocket());
+      await new Promise((r) => setTimeout(r, 45));
+      stream.stop();
+      return { asked: asked.length, seen: seen[0] };
+    };
+    const both = await run(["035420", "VRT"]);
+    expect(both.seen).toEqual(["035420", "VRT"]);
+    expect(both.asked).toBeGreaterThan(2); // 늦추지 않고 계속
+    expect((await run(["035420"])).asked).toBe(1); // 한국 종목만이면 휴장 → 접속 직후 한 번 뒤로는 늦춘다
+  });
 });
 
 describe("웹소켓이 받는 종목 판단 (3-17 리뷰)", () => {
@@ -238,6 +261,39 @@ describe("웹소켓이 받는 종목 판단 (3-17 리뷰)", () => {
     expect(wsCovered({ connected: false, subscribed: ["trade:kr:005930"], lastMessageAt: "2026-09-24T09:59:59Z" }, now)).toBeNull();
     // 체결이 없어도 PING 응답이 오면 살아 있는 것으로
     expect(wsCovered({ connected: true, subscribed: ["trade:kr:005930"], lastMessageAt: "2026-09-24T09:00:00Z", lastAliveAt: "2026-09-24T09:59:40Z" }, now)).not.toBeNull();
+  });
+
+  it("구독 중이어도 웹소켓이 이번 세션 체결을 주지 않는 종목(wsServed 밖)은 토스 웹으로 폴링한다 — 초록 점과 같은 기준", async () => {
+    // 미국 주간거래: 웹소켓은 붙어 VRT·APH 를 구독 중이지만 20:00 뒤 미국 체결을 준 적이 없다 → 초록 점은 토스 웹 3초 갱신으로 켜진다.
+    // 스트림이 구독 종목이라고 폴링하지 않으면 앱 가격은 30초(보정) 마다만 바뀐다
+    const live = new FakeLive();
+    const subscribed: LiveTicks["status"] = () => ({ enabled: true, connected: true, subscribed: ["trade:us:VRT", "trade:us:APH"], lastMessageAt: new Date().toISOString(), lastError: null });
+    live.status = subscribed as unknown as FakeLive["status"];
+    const run = async (served: string[] | Error) => {
+      const asked: string[][] = [];
+      const quick: QuickPriceSource = { name: "toss", getMany: async (c) => (asked.push(c), new Map(c.map((x) => [x, { code: x, price: 100.7, volume: null, timestamp: new Date().toISOString(), receivedAt: Date.now() }]))) };
+      const stream = new PriceStream({
+        live: live as unknown as LiveTicks & EventEmitter,
+        quickPrices: quick,
+        codes: async () => ["VRT", "APH"],
+        pollMs: 60_000,
+        wsServed: async () => {
+          if (served instanceof Error) throw served;
+          return new Set(served);
+        },
+      });
+      const socket = new FakeSocket();
+      stream.attach(socket);
+      await new Promise((r) => setTimeout(r, 300)); // 접속 직후 한 번 폴링 + 250ms 묶음
+      stream.stop();
+      return { asked: asked[0] ?? [], ticks: socket.messages("tick").map((m) => m["code"]) };
+    };
+    const none = await run([]);
+    expect(none.asked).toEqual(["VRT", "APH"]);
+    expect(none.ticks.sort()).toEqual(["APH", "VRT"]);
+    expect((await run(["VRT"])).asked).toEqual(["APH"]); // VRT 는 웹소켓이 이번 세션 체결을 준다
+    expect((await run(["VRT", "APH"])).asked).toEqual([]);
+    expect((await run(new Error("달력 실패"))).asked).toEqual(["VRT", "APH"]); // 모르면 폴링한다 (더 부르는 쪽으로)
   });
 });
 

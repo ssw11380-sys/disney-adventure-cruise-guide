@@ -17,6 +17,25 @@ export interface AfterMarketQuote {
   asOf: string;
 }
 
+/**
+ * 종목의 지금 거래 세션 (서버 services/liveSession 과 같은 모양).
+ * phase — 한국: nxt_pre · auction(동시호가) · regular · nxt_after(15:40~16:00) · after(한국거래소+NXT 애프터마켓 16:00~20:00),
+ * 미국: overnight(주간거래) · pre · regular · after, 공통: closed · holiday
+ */
+export interface QuoteSession {
+  market: "KR" | "US";
+  phase: string;
+  /** "미국 주간거래" · "한국 애프터마켓" · "한국 휴장" … */
+  label: string;
+  /** 그 시장이 지금 연속 거래 중 (동시호가·장 마감·휴장이면 false) */
+  open: boolean;
+  /** 이 종목이 지금 세션의 거래 대상인지 (NXT·주간거래·애프터마켓 대상, 거래정지 아님). 모르면 null (이 세션에 체결이 있어야 점) */
+  eligible: boolean | null;
+  halted?: boolean;
+  /** 다음 세션 경계 (ISO) */
+  until: string | null;
+}
+
 export interface ListedStock {
   code: string;
   name: string;
@@ -51,7 +70,12 @@ export interface Quote {
   afterMarket?: AfterMarketQuote | null;
   priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
   priceKrw?: number | null; // 미국 종목 원화 환산
-  live?: boolean; // 실시간 체결로 덮어쓴 현재가
+  /** 실시간 체결로 스냅샷과 다른 가격을 덮어쓴 현재가 (예전 서버의 초록 점 기준 — 새 서버면 realtime·session 을 쓴다, lib/liveDot) */
+  live?: boolean;
+  /** 이 종목의 지금 거래 세션 (새 서버 잔고·상세만). 잔고 상태 줄 "미국 주간거래 · 한국 휴장" 과 점이 없는 까닭 */
+  session?: QuoteSession | null;
+  /** 초록 점: 지금 열린 세션에서 이 종목 가격이 실시간으로 갱신되고 있다 (새 서버만. 없으면 예전 서버 → live) */
+  realtime?: boolean;
   /** 서버가 시세를 새로 받지 못해 마지막 값을 그대로 준 경우 (asOf 는 원래 시각). 회색 "시세 지연"으로 표시 */
   stale?: boolean;
   fxRate?: number | null; // 미국 종목: 1달러당 원화

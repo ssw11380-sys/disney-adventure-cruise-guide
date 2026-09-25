@@ -2,7 +2,7 @@ import { isIntraday, type AfterMarketQuote, type Candle, type CandlePeriod, type
 import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
-import type { LiveTick } from "./tossRealtime.js";
+import type { LiveTick, StockSessionFacts } from "./tossRealtime.js";
 import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
 
 /**
@@ -13,6 +13,7 @@ import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
  *            한국은 KRX+NXT "통합" 가격(토스 앱에 보이는 그 숫자), 미국은 USD + 원화 환산.
  *  - 봉:     GET  /api/v1/c-chart/{kr-s|us-s}/{productCode}/{day|week|month}:1?count=N  (최신순), 분봉은 min:1|min:5|min:30
  *  - 종목:   GET  /api/v2/stock-infos/{productCode}  (이름, 시장, 발행주식수 → 시가총액)
+ *            GET  /api/v1/stock-infos?codes=A035420,US20100629001  (200개씩: 주간거래·NXT 대상, 거래정지, ETF·ETN → 초록 점의 세션 자격)
  *  - 검색:   POST /api/v3/search-all/wts-auto-complete  (한글로 미국 종목 검색 가능: "테슬라" → TSLA)
  *
  * 상품 코드: 한국은 "A"+종목코드. 미국은 "US20100629001" 같은 내부 코드라 티커로 검색해서 알아낸 뒤
@@ -26,6 +27,40 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 const TOSS_MARKET: Record<string, Market> = { KSP: "KOSPI", KSQ: "KOSDAQ", NSQ: "NASDAQ", NYS: "NYSE", AMX: "AMEX" };
 const PERIOD_PATH: Record<CandlePeriod, string> = { "1m": "min:1", "5m": "min:5", "30m": "min:30", D: "day", W: "week", M: "month" };
+/** 세션 자격(주간거래·NXT 대상·거래정지)을 다시 받는 간격 — 거래정지는 장중에도 바뀔 수 있어 하루가 아니라 1시간 */
+const SESSION_INFO_TTL_MS = 60 * 60_000;
+/** 세션 자격 조회가 실패하면 이만큼 쉰다 (그동안은 모름으로 → 체결 증거가 있는 종목만 점) */
+const SESSION_INFO_RETRY_MS = 5 * 60_000;
+/** stock-infos 일괄 조회 한 번에 넣는 종목 수 */
+const SESSION_INFO_BATCH = 200;
+
+interface SessionInfo {
+  at: number;
+  daytime: boolean | null;
+  nxt: boolean | null;
+  halted: boolean | null;
+  nxtHalted: boolean | null;
+  etp: boolean | null;
+}
+
+const bool = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+
+/**
+ * stock-infos 한 행 → 세션 자격. 칸이 없으면 모름(null). 거래정지는 둘 중 하나라도 true 면 정지.
+ * ETF·ETN 은 상품 구분(group.code: ST 주권 · FS 외국주권 · EF ETF · EN ETN …)으로 — 한국거래소 애프터마켓 대상이 아니다
+ */
+export function parseSessionInfo(r: Record<string, unknown>, at: number): SessionInfo {
+  const stops = [bool(r["tradingSuspended"]), bool(r["krxTradingSuspended"])];
+  const group = (r["group"] as Record<string, unknown> | null | undefined)?.["code"];
+  return {
+    at,
+    daytime: bool(r["daytimePriceSupported"]),
+    nxt: bool(r["nxtSupported"]),
+    halted: stops.includes(true) ? true : stops.every((x) => x === null) ? null : false,
+    nxtHalted: bool(r["nxtTradingSuspended"]),
+    etp: typeof group === "string" && group ? group === "EF" || group === "EN" : null,
+  };
+}
 
 type Json = Record<string, unknown>;
 
@@ -237,6 +272,12 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
   /** 토스 웹이 기준가를 주지 않은 코드(예: 상품코드가 Q 로 시작하는 ETN) — 10분 동안 다시 묻지 않는다 */
   private readonly baseMissing = new Map<string, number>();
   private fxCache: { at: number; rate: number } | null = null;
+  /** 종목별 세션 자격 (stock-infos, 1시간) */
+  private readonly sessionInfo = new Map<string, SessionInfo>();
+  /** 종목별 토스 시세 거래소 구분 ("integrated" = KRX+NXT, "krx") — 일괄 시세를 받을 때마다 */
+  private readonly exchangeOf = new Map<string, string>();
+  private sessionInfoFailedAt = -Infinity;
+  private sessionInfoInflight: Promise<void> | null = null;
 
   /**
    * 토스 앱이 달러 종목을 원화로 보여줄 때 쓰는 환율 (1분 캐시). 시세 응답의 closeKrw / close 로 구한다.
@@ -333,6 +374,8 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
         const next = Date.parse(String(r["nextTradingStart"] ?? ""));
         this.baseCache.set(code, { at: t, base, until: Number.isNaN(next) || next <= t ? t + 60_000 : next });
       }
+      const exchange = r?.["exchange"];
+      if (typeof exchange === "string" && exchange) this.exchangeOf.set(code, exchange);
       if (!r || price === null) {
         this.tickMissAt.set(code, t);
         continue;
@@ -393,6 +436,76 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
       this.baseInflight.set(code, p);
     }
     return p;
+  }
+
+  // ── 세션 사실 (초록 점: services/liveSession) ──────────────────────
+
+  /**
+   * 종목별 세션 사실: 주간거래·NXT 대상·거래정지(stock-infos), 토스 시세 거래소 구분, 마지막으로 가격을 받은 시각.
+   * 받아 둔 값만 바로 돌려준다(잔고 응답을 기다리게 하지 않는다). 없거나 1시간 지난 종목은 뒤에서 일괄로 새로 받는다
+   */
+  sessionFacts(codes: string[]): Map<string, StockSessionFacts> {
+    const list = [...new Set(codes.map(normalizeCode))].filter((c) => CODE_RE.test(c));
+    void this.refreshSessionInfos(list);
+    const out = new Map<string, StockSessionFacts>();
+    for (const c of list) {
+      const info = this.sessionInfo.get(c);
+      const tick = this.tickCache.get(c);
+      out.set(c, {
+        daytime: info?.daytime ?? null,
+        nxt: info?.nxt ?? null,
+        halted: info?.halted ?? null,
+        nxtHalted: info?.nxtHalted ?? null,
+        etp: info?.etp ?? null,
+        exchange: this.exchangeOf.get(c) ?? null,
+        // 그 뒤 일괄 시세가 실패했으면(토스 웹 장애) 받는 중이 아니다
+        pricedAt: tick && tick.receivedAt > this.pricesFailedAt ? tick.receivedAt : null,
+      });
+    }
+    return out;
+  }
+
+  /** 세션 자격을 새로 받는다 (없거나 1시간 지난 종목만, 200개씩 한 번에). 실패하면 5분 쉬고, 나가 있는 요청이 있으면 그것을 기다린다 */
+  refreshSessionInfos(codes: string[]): Promise<void> {
+    if (this.sessionInfoInflight) return this.sessionInfoInflight;
+    const t = this.now().getTime();
+    if (t - this.sessionInfoFailedAt < SESSION_INFO_RETRY_MS) return Promise.resolve();
+    const need = [...new Set(codes.map(normalizeCode))].filter((c) => {
+      const h = this.sessionInfo.get(c);
+      return CODE_RE.test(c) && (!h || t - h.at >= SESSION_INFO_TTL_MS);
+    });
+    if (need.length === 0) return Promise.resolve();
+    const p = this.fetchSessionInfos(need)
+      .catch(() => {
+        this.sessionInfoFailedAt = this.now().getTime();
+      })
+      .finally(() => {
+        this.sessionInfoInflight = null;
+      });
+    this.sessionInfoInflight = p;
+    return p;
+  }
+
+  private async fetchSessionInfos(codes: string[]): Promise<void> {
+    const pcs: Array<[string, string]> = [];
+    for (const c of codes) {
+      try {
+        pcs.push([c, await this.productCode(c)]);
+      } catch {
+        /* 모르는 티커는 건너뜀 (자격 모름) */
+      }
+    }
+    for (let i = 0; i < pcs.length; i += SESSION_INFO_BATCH) {
+      const batch = pcs.slice(i, i + SESSION_INFO_BATCH);
+      const rows = await this.request(`/v1/stock-infos?codes=${batch.map((p) => encodeURIComponent(p[1])).join(",")}`);
+      const byPc = new Map((Array.isArray(rows) ? (rows as Json[]) : []).map((r) => [String(r["code"] ?? ""), r]));
+      const at = this.now().getTime();
+      for (const [code, pc] of batch) {
+        const r = byPc.get(pc);
+        // 응답에 없는 종목도 받은 것으로 적어 1시간 동안 다시 묻지 않는다 (자격은 모름)
+        this.sessionInfo.set(code, r ? parseSessionInfo(r, at) : { at, daytime: null, nxt: null, halted: null, nxtHalted: null, etp: null });
+      }
+    }
   }
 
   private async fetchChart(productCode: string, kr: boolean, period: CandlePeriod, count: number): Promise<Candle[]> {

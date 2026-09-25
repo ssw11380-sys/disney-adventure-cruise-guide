@@ -60,8 +60,18 @@ export interface Quote {
   priceBasis?: string;
   /** 미국 종목의 원화 환산 현재가 (소스가 주는 경우만) */
   priceKrw?: number | null;
-  /** 실시간 체결(웹소켓)로 price 를 덮어쓴 경우 true */
+  /**
+   * 실시간 체결(웹소켓·토스 웹)로 스냅샷과 다른 price 를 덮어쓴 경우 true. 예전 앱(초록 점을 이 값으로 그림)을 위해 뜻을 바꾸지 않고 둔다.
+   * 새 앱의 초록 점은 realtime + session 으로 그린다
+   */
   live?: boolean;
+  /** 이 종목의 지금 거래 세션 (잔고 목록·상세·/quote 응답만). 잔고 상태 줄의 "미국 주간거래 · 한국 휴장" 과 점이 없는 까닭 */
+  session?: QuoteSession;
+  /**
+   * 초록 점: 지금 열린 세션에서 이 종목 가격이 실시간(웹소켓 체결 또는 토스 웹 3초 갱신)으로 바뀌고 있다 (체결이 아직 없어도).
+   * 세션·거래 대상(NXT·주간거래·거래정지)·서버 수신 상태로 정한다 (services/liveSession). 잔고 목록·상세·/quote 응답만
+   */
+  realtime?: boolean;
   /** 미국 종목: 1달러당 원화 환율 (원화 환산 표시용) */
   fxRate?: number | null;
   /** 주당 배당금 (종목 통화) */
@@ -77,6 +87,32 @@ export interface Quote {
   stale?: boolean;
   /** 전일 종가(prevClose) 출처: 거래소 기준가(base) 또는 기준가를 못 받아 대신 쓴 일봉 종가(candle, NXT 포함 통합 종가) */
   prevCloseBasis?: "base" | "candle";
+}
+
+/**
+ * 거래 세션 단계. 한국: nxt_pre(NXT 프리마켓) · auction(동시호가) · regular · nxt_after(NXT 애프터마켓 15:40~16:00)
+ * · after(한국거래소+NXT 애프터마켓 16:00~20:00), 미국: overnight(토스 주간거래) · pre · regular · after.
+ * 공통: closed(거래일의 장 밖) · holiday(휴장일·주말)
+ */
+export type SessionPhase = "nxt_pre" | "auction" | "regular" | "nxt_after" | "overnight" | "pre" | "after" | "closed" | "holiday";
+
+/** 종목의 지금 거래 세션 (services/liveSession.sessionAt) */
+export interface QuoteSession {
+  market: "KR" | "US";
+  phase: SessionPhase;
+  /** "미국 주간거래" · "한국 애프터마켓" · "한국 휴장" … (잔고 상태 줄에 그대로) */
+  label: string;
+  /** 그 시장이 지금 연속 거래 중인지 (동시호가·장 마감·휴장이면 false) */
+  open: boolean;
+  /**
+   * 이 종목이 지금 세션의 거래 대상인지 (NXT·주간거래·한국거래소 애프터마켓 대상, 거래정지 아님). 닫힌 세션은 null.
+   * 모르면 null — 이때는 이 세션에 체결이 있었던 종목만 realtime (토스 정보를 못 받음, 한국거래소 애프터마켓 대상 목록 없음, 토스 달력으로 거래일을 확인 못 함)
+   */
+  eligible: boolean | null;
+  /** 거래정지라 대상이 아님 */
+  halted?: true;
+  /** 다음 세션 경계 (ISO). 앱은 이때 다시 받고, 지난 점은 끈다 */
+  until: string | null;
 }
 
 export interface AfterMarketQuote {

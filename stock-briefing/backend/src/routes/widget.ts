@@ -19,6 +19,9 @@ import { buildWidgetPayload, type WidgetFeatures } from "../services/widgetPaylo
  *  - board: widgetMarket 이 켜져 있고 앱이 ?board=1 로 물을 때만(지수·환율 위젯이 있는 1.4.0 앱) 같은 목록에서 9개.
  *    indices 와 board 를 함께 물어도 지수 목록은 한 번만 부른다. 못 받으면 빼고 보낸다(위젯은 마지막 판을 둔다)
  *  - accountIds: accountBriefing(3-31)이 켜져 있으면 최근 성공한 계좌 브리핑 id (앱 백그라운드 알림용). 끄거나 없으면 넣지 않는다(응답이 예전과 같다)
+ *  - sessions: 앱이 &sessions=1 로 물을 때만 장 상태 칩에 보유 종목의 세션 이름(미국 주간거래 등)을 쓴다 (widgetPayload.marketChip).
+ *    그 앱은 위젯을 바로 그릴 때(WidgetBridge)도 같은 칩을 그린다. 예전 앱(쿼리 없음)의 WidgetBridge 는 달력만 본 칩을 그리므로
+ *    예전처럼 달력만 본 칩을 준다 — 서버가 OTA 보다 먼저 배포돼도 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀌지 않게
  */
 export const widgetRoutes: FastifyPluginAsync<{
   stocks: StockService;
@@ -39,9 +42,10 @@ export const widgetRoutes: FastifyPluginAsync<{
   };
   app.get("/", async (req, reply) => {
     const features = flags();
-    const q = req.query as { indices?: unknown; board?: unknown } | undefined;
+    const q = req.query as { indices?: unknown; board?: unknown; sessions?: unknown } | undefined;
     const wantsIndices = q?.indices === "1";
     const wantsBoard = q?.board === "1";
+    const wantsSessions = q?.sessions === "1";
     const indices = features.then((f) =>
       deps.indices && ((wantsIndices && f?.widgetIndexLine) || (wantsBoard && f?.widgetMarket)) ? deps.indices.list({ stale: true }).catch(() => null) : null,
     );
@@ -53,7 +57,7 @@ export const widgetRoutes: FastifyPluginAsync<{
             .catch(() => null)
         : null;
     const [list, latest, status, f, idx, accountIds] = await Promise.all([deps.stocks.listWithQuotes(), deps.briefings.latestPerStock(), deps.calendar.status().catch(() => null), features, indices, accounts]);
-    const body = JSON.stringify(buildWidgetPayload(list, latest, status, { features: f, indices: wantsIndices ? idx : null, board: wantsBoard ? idx : null, accountIds }));
+    const body = JSON.stringify(buildWidgetPayload(list, latest, status, { features: f, indices: wantsIndices ? idx : null, board: wantsBoard ? idx : null, accountIds, sessions: wantsSessions }));
     const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 16)}"`;
     reply.header("etag", etag).header("cache-control", "no-cache").header("vary", "accept-encoding");
     // 프록시가 약한 ETag(W/"…")로 바꾸거나 여러 개를 보내도 맞춰 본다

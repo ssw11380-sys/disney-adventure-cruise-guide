@@ -52,7 +52,7 @@ vi.mock("@/api/hooks", () => ({
 vi.mock("@/components/Screen", () => ({ Screen: "Screen" }));
 vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBoundary" }));
 vi.mock("@/components/ui", () => ({ Button: "Button", Empty: "Empty", ErrorView: "ErrorView", Loading: "Loading", TableHead: "TableHead" }));
-vi.mock("@/components/Freshness", () => ({ LiveStatus: "LiveStatus", StaleBanner: "StaleBanner", usePull: () => ({ pulling: false, onPull: vi.fn() }) }));
+vi.mock("@/components/Freshness", () => ({ LiveStatus: "LiveStatus", StaleBanner: "StaleBanner", usePull: () => ({ pulling: false, onPull: vi.fn() }), useFeedState: () => ({ now: 0, feedOk: true }) }));
 vi.mock("@/components/MarketStrip", () => ({ MarketStrip: "MarketStrip" }));
 vi.mock("@/components/Skeleton", () => ({ HoldingsSkeleton: "HoldingsSkeleton" }));
 vi.mock("@/components/StockRow", () => ({ StockRow: "StockRow" }));

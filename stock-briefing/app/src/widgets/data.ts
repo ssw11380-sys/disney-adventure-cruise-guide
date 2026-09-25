@@ -258,13 +258,17 @@ function boardOf(v: Pick<WidgetData, "board" | "boardAt" | "fetchedAt"> | null):
   return v?.board?.length ? { at: v.boardAt ?? v.fetchedAt, list: v.board } : null;
 }
 
-/** 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단) */
+/**
+ * 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단).
+ * 지금 앱의 요청 주소(WIDGET_PATH)로 받은 것만 — 주소가 바뀌기 전(OTA 전 ?indices=1)에 받은 응답은 서버가 다른 칩(달력만 본 칩)을 준 것이라,
+ * 다시 쓰면 앱이 바로 그린 세션 칩("미국 주간거래")과 위젯이 스스로 갱신할 때의 옛 칩("한국 휴장")이 최대 2시간 번갈아 보인다
+ */
 export async function readCachedPayload(apiUrl?: string): Promise<{ at: number; etag: string | null; body: WidgetPayload } | null> {
   try {
     const url = apiUrl ?? (await readSettings()).apiUrl;
     const raw = await AsyncStorage.getItem(PAYLOAD_KEY);
-    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; etag?: unknown; body?: unknown }) : null;
-    if (!v || typeof v.at !== "number" || v.apiUrl !== url || !v.body) return null;
+    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; path?: unknown; etag?: unknown; body?: unknown }) : null;
+    if (!v || typeof v.at !== "number" || v.apiUrl !== url || v.path !== WIDGET_PATH || !v.body) return null;
     return { at: v.at, etag: typeof v.etag === "string" ? v.etag : null, body: v.body as WidgetPayload };
   } catch {
     return null;
@@ -292,9 +296,12 @@ async function legacyUntil(apiUrl: string): Promise<number> {
 
 /**
  * 위젯 응답 주소. indices=1 은 "지수 줄을 그릴 수 있는 앱"이라는 표시다 — 서버는 이 표시가 있을 때만 지수를 넣는다
- * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다
+ * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다.
+ * sessions=1 은 "앱이 위젯을 바로 그릴 때도 세션 이름 칩을 그린다"는 표시다 (components/WidgetBridge → lib/liveDot widgetChip) —
+ * 서버는 이 표시가 있을 때만 칩에 보유 종목 세션 이름(미국 주간거래 등)을 쓴다. 예전 앱(표시 없음)은 달력만 본 칩을 그리므로 서버도 그렇게 준다
+ * (둘이 다르면 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀐다)
  */
-const WIDGET_PATH = "/api/widget?indices=1";
+const WIDGET_PATH = "/api/widget?indices=1&sessions=1";
 /**
  * 지수·환율 위젯이 있을 때만 &board=1 (서버는 widgetMarket 이 켜져 있고 이 표시가 있을 때만 판 9개를 넣는다).
  * 위젯이 없는 사용자의 응답·ETag 는 그대로다. ETag 는 본문으로 만들므로 board 가 있는 응답과 없는 응답의 ETag 가 섞여도 304 가 잘못 나지 않는다
@@ -323,7 +330,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
     else throw new HttpError(res.status);
     // 모양이 다르면(예전·다른 서버) 예전 API 로
     if (!body || body.v !== 1 || !Array.isArray(body.stocks)) return legacy();
-    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, etag: res.headers.get("etag"), body })).catch(() => undefined);
+    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, path: WIDGET_PATH, etag: res.headers.get("etag"), body })).catch(() => undefined);
     return body;
   } finally {
     clearTimeout(timer);

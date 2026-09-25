@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Alert, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { useAnalysis, useAnyMarketOpen, useBriefings, useCandles, useStock, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
@@ -8,13 +8,14 @@ import { BriefingCard } from "@/components/BriefingCard";
 import { CandleChart } from "@/components/CandleChart";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { FlashPrice } from "@/components/FlashPrice";
-import { ChartNotice, StaleBanner, usePull } from "@/components/Freshness";
+import { ChartNotice, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { DetailSkeleton } from "@/components/Skeleton";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Segmented, Stat, StatGrid } from "@/components/ui";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, relativeTime, toDisplay } from "@/lib/format";
 import { analysisView, openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
+import { quoteLive, sessionNote, sessionOpen } from "@/lib/liveDot";
 import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
 import { changeColor, font, slopFor, space, touch, useTheme } from "@/theme";
@@ -48,6 +49,11 @@ export default function StockDetailScreen() {
   const candles = useCandles(c, period, CANDLE_COUNT[period]);
   const briefings = useBriefings({ code: c, limit: 3 }, !!c);
   const { pulling, onPull } = usePull(() => Promise.all([stock.refetch(), candles.refetch()]));
+  // 초록 점·"실시간": 이 종목 가격이 지금 열린 세션에서 실시간으로 갱신되고, 앱도 값을 제때 받을 때만 (lib/liveDot)
+  const detailQuote = stock.data?.quote ?? null;
+  const detailQuotes = useMemo(() => [detailQuote], [detailQuote]);
+  // 미등록 종목(발견 탭에서 연 종목)은 체결 스트림이 오지 않아 폴링 값으로만 본다
+  const { now, feedOk } = useFeedState(stock, detailQuotes, stock.data?.registered !== false);
 
   if (!c) return <Screen><ErrorView error={new Error("종목 주소가 올바르지 않습니다")} retryLabel="잔고로" onRetry={() => router.dismissTo("/")} /></Screen>;
   const view = viewState(stock);
@@ -88,13 +94,18 @@ export default function StockDetailScreen() {
   const range52 = q && q.high52w && q.low52w && q.high52w > q.low52w ? Math.min(1, Math.max(0, (q.price - q.low52w) / (q.high52w - q.low52w))) : null;
 
   const up = changeColor(t, q?.change);
+  const realtime = quoteLive(q, now, feedOk);
+  // 점이 없을 때 까닭: 주간거래 미지원 · NXT 비대상 · 거래정지 · 닫힌 세션 (예전 서버면 없음)
+  const note = realtime ? null : sessionNote(q);
+  // 지연 띠의 장중 판단: 이 종목 세션(미국 프리·애프터·주간거래 포함). 예전 서버면 장 상태
+  const open = sessionOpen(q ? [q] : []) ?? live.open;
 
   return (
     <Screen
       disclaimer
       refreshing={pulling}
       onRefresh={onPull}
-      top={<StaleBanner query={stock} open={live.open} maxAgeMs={openMaxAge} />}
+      top={<StaleBanner query={stock} open={open} maxAgeMs={openMaxAge} />}
     >
       <Stack.Screen
         options={{
@@ -129,7 +140,7 @@ export default function StockDetailScreen() {
                 `현재가 ${quote(q.price)}${displayCur === "KRW" ? "원" : "달러"}`,
                 speakMove(`${arrow(q.change)}${displayCur === "KRW" ? "원" : "달러"}`, Math.sign(q.change)),
                 speakRate(q.changeRate),
-                q.live ? "실시간" : null,
+                realtime ? "실시간" : note,
               ])}
               style={{ gap: space.xxs }}
             >
@@ -140,11 +151,15 @@ export default function StockDetailScreen() {
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
               <Text style={[styles.change, { color: up }]}>{arrow(q.change)}</Text>
               <Text style={[styles.change, { color: up }]}>{formatPct(q.changeRate)}</Text>
-              {q.live ? (
+              {realtime ? (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
                   <LiveDot />
                   <Text style={{ color: t.live, fontSize: font.tiny, fontWeight: "700" }}>실시간</Text>
                 </View>
+              ) : note ? (
+                <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1 }} numberOfLines={2}>
+                  {note}
+                </Text>
               ) : null}
             </View>
             </View>
