@@ -42,6 +42,11 @@ export const WIDTH_MEDIUM = 600;
 export const WIDTH_EXPANDED = 840;
 /** 화면 짧은 변이 이 이상이면 펼친 안쪽 화면으로 본다 (접었을 때 바깥 화면은 짧은 변 400dp 안팎) */
 export const UNFOLDED_MIN_DP = 600;
+/**
+ * 긴 변 ÷ 짧은 변이 이보다 작으면(정사각형에 가까우면) 펼친 안쪽 화면으로 본다 — 화면 확대를 최대로 해 짧은 변이 600dp 아래로 내려가도
+ * 펼침으로 읽게. 폴드8 안쪽 1.32·울트라 안쪽 1.11, 바깥 1.58·2.33 (삼성 사양 해상도)
+ */
+export const UNFOLDED_MAX_RATIO = 1.45;
 /** 창이 화면보다 이만큼 넘게 작으면 화면 분할·팝업 창으로 본다 (상태 표시줄·내비게이션 바 몫은 봐준다) */
 export const WINDOW_SLACK_DP = 100;
 
@@ -73,7 +78,10 @@ export function isLandscape(s: Size): boolean {
  * 창이 아니라 화면을 보므로 화면 분할·팝업 창이어도 펼친 상태는 펼침이다
  */
 export function foldGuess(screen: Size): "folded" | "unfolded" {
-  return Math.min(screen.width, screen.height) >= UNFOLDED_MIN_DP ? "unfolded" : "folded";
+  const short = Math.min(screen.width, screen.height);
+  const long = Math.max(screen.width, screen.height);
+  if (short >= UNFOLDED_MIN_DP) return "unfolded";
+  return ok(short) && long / short < UNFOLDED_MAX_RATIO ? "unfolded" : "folded";
 }
 
 /** 창이 화면보다 눈에 띄게 작으면 화면 분할·팝업 창 */
@@ -121,7 +129,8 @@ export function screenInfoRows(i: ScreenInfoInput): InfoRow[] {
     { label: "글자 배율", value: fontScaleText(i.fontScale) },
     { label: "가로/세로", value: isLandscape(i.window) ? "가로" : "세로" },
     { label: "접힘/펼침", value: `${foldGuess(i.screen) === "unfolded" ? "펼침(안쪽 화면)" : "접힘(바깥 화면)"}으로 추정 · 짧은 변 ${dp(shortSide)}dp` },
-    { label: "창 상태", value: isWindowed(i.window, i.screen) ? "화면 분할·팝업 창으로 추정" : "전체 화면" },
+    // 삼성·안드로이드 화면 비율 설정으로 가운데 모아 그린 창도 작게 나온다 (안쪽 화면이 가로로 도는지와 이어진 설정)
+    { label: "창 상태", value: isWindowed(i.window, i.screen) ? "화면 분할·팝업 창 또는 화면 비율 제한으로 추정" : "전체 화면" },
     { label: "폭 등급", value: WIDTH_CLASS_TEXT[widthClass(i.window.width)] },
     { label: "화면 여백", value: `위 ${dp(i.insets.top)} · 아래 ${dp(i.insets.bottom)} · 왼쪽 ${dp(i.insets.left)} · 오른쪽 ${dp(i.insets.right)} dp` },
   ];

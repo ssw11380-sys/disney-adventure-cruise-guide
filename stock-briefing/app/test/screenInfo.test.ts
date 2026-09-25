@@ -62,12 +62,12 @@ describe("화면 정보 줄", () => {
 
   it("화면 분할: 창이 화면보다 작다 — 펼침이지만 폭 등급은 창 기준 좁음", () => {
     const r = rows({ window: { width: 412, height: 750 }, screen: innerLand });
-    expect(r["창 상태"]).toBe("화면 분할·팝업 창으로 추정");
+    expect(r["창 상태"]).toBe("화면 분할·팝업 창 또는 화면 비율 제한으로 추정");
     expect(r["접힘/펼침"]).toMatch(/^펼침\(안쪽 화면\)/);
     expect(r["폭 등급"]).toBe("좁음 (600dp 미만)");
     expect(r["앱 창 크기"]).toBe("412×750 dp");
     // 위아래로 나눈 화면 분할도
-    expect(rows({ window: { width: 750, height: 400 }, screen: inner })["창 상태"]).toBe("화면 분할·팝업 창으로 추정");
+    expect(rows({ window: { width: 750, height: 400 }, screen: inner })["창 상태"]).toBe("화면 분할·팝업 창 또는 화면 비율 제한으로 추정");
   });
 
   it("글자 배율 130% (소수점 오차도 반올림)", () => {
@@ -138,5 +138,27 @@ describe("공유 글", () => {
 
   it("앱 버전을 모르면 머리 줄에서 뺀다", () => {
     expect(screenInfoText({ ...base, appVersion: null }, new Date("2026-09-25T05:03:00Z")).split("\n")[0]).toBe("[화면 정보] 2026-09-25 14:03 한국 시각");
+  });
+});
+
+describe("폴드8 삼성 사양으로 계산한 크기 (420dpi 기준, 최대 확대 포함)", () => {
+  it("일반(SM-F971N) 바깥 475×751 접힘·좁음, 안쪽 가로 933×704 펼침·넓음, 안쪽 세로 704×933 펼침·중간", () => {
+    expect(foldGuess({ width: 475, height: 751 })).toBe("folded");
+    expect(widthClass(475)).toBe("compact");
+    expect(foldGuess({ width: 933, height: 704 })).toBe("unfolded");
+    expect(widthClass(933)).toBe("expanded");
+    expect(foldGuess({ width: 704, height: 933 })).toBe("unfolded");
+    expect(widthClass(704)).toBe("medium");
+  });
+  it("울트라(SM-F976N) 바깥 411×960 접힘, 안쪽 859×954 펼침·넓음", () => {
+    expect(foldGuess({ width: 411, height: 960 })).toBe("folded");
+    expect(foldGuess({ width: 859, height: 954 })).toBe("unfolded");
+    expect(widthClass(859)).toBe("expanded");
+  });
+  it("화면 확대 최대(약 520dpi): 일반 안쪽 753×569 는 짧은 변이 600 아래여도 정사각형에 가까워 펼침, 바깥 384×607 은 접힘", () => {
+    expect(foldGuess({ width: 753, height: 569 })).toBe("unfolded");
+    expect(foldGuess({ width: 569, height: 753 })).toBe("unfolded");
+    expect(foldGuess({ width: 384, height: 607 })).toBe("folded");
+    expect(foldGuess({ width: 332, height: 775 })).toBe("folded");
   });
 });
