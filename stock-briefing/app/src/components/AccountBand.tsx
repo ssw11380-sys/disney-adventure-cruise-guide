@@ -135,14 +135,15 @@ export function AccountBand({ data, oneLine, pad, onAllocation }: { data: Accoun
         </View>
       ) : (
         <>
-          <View accessible accessibilityLabel={label} style={[styles.cells, styles.line2, { paddingHorizontal: pad }]}>
+          {/* 두 줄 띠는 큰 글씨에서 칸이 한 줄에 다 안 들어가면 줄여 자르지 않고 다음 줄로 넘긴다 (flexWrap) */}
+          <View accessible accessibilityLabel={label} style={[styles.row1, { paddingHorizontal: pad }]}>
             {total}
             {profitCell}
             {day}
           </View>
           <View style={[styles.line2, styles.second, { paddingHorizontal: pad, borderTopColor: t.line }]}>
             {/* 숫자는 위 요약 문장에 들어 있다 → 조각으로 한 번 더 읽히지 않게 숨긴다 */}
-            <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={styles.cells}>
+            <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[styles.cells, styles.wrap]}>
               {split(true, true)}
               <Cell first={!showSplit} label="매입금액" value={formatPrice(main.cost, "KRW")} />
             </View>
@@ -165,9 +166,21 @@ function Cell({ label, value, unit, color, sub, subColor, big = false, first = f
       </Text>
       {/* 숫자는 말줄임 없이: 칸이 모자라면 글자를 줄여 한 줄에 */}
       <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} maxFontSizeMultiplier={fontCap.row}>
-        <Text style={{ color: color ?? t.ink, fontSize: big ? font.title : font.h2, fontWeight: big ? "800" : "700" }}>{value}</Text>
-        {unit ? <Text style={{ color: t.muted, fontSize: font.small, fontWeight: "500" }}> {unit}</Text> : null}
-        {sub ? <Text style={{ color: subColor ?? t.muted, fontSize: font.small, fontWeight: "600" }}> {sub}</Text> : null}
+        <Text style={{ color: color ?? t.ink, fontSize: big ? font.title : font.h2, fontWeight: big ? "800" : "700" }} maxFontSizeMultiplier={fontCap.row}>
+          {value}
+        </Text>
+        {unit ? (
+          <Text style={{ color: t.muted, fontSize: font.small, fontWeight: "500" }} maxFontSizeMultiplier={fontCap.row}>
+            {" "}
+            {unit}
+          </Text>
+        ) : null}
+        {sub ? (
+          <Text style={{ color: subColor ?? t.muted, fontSize: font.small, fontWeight: "600" }} maxFontSizeMultiplier={fontCap.row}>
+            {" "}
+            {sub}
+          </Text>
+        ) : null}
       </Text>
     </View>
   );
@@ -178,8 +191,11 @@ const styles = StyleSheet.create({
   line: { flexDirection: "row", alignItems: "center", minHeight: layout.bandH },
   // 두 줄 띠의 한 줄
   line2: { flexDirection: "row", alignItems: "center", minHeight: layout.bandRowH },
+  // 두 줄 띠의 첫 줄 (칸 묶음 자체)
+  row1: { flexDirection: "row", flexWrap: "wrap", alignItems: "stretch", minHeight: layout.bandRowH },
   second: { borderTopWidth: StyleSheet.hairlineWidth },
   cells: { flex: 1, flexDirection: "row", alignItems: "stretch" },
+  wrap: { flexWrap: "wrap" },
   // 칸 폭은 내용에 맞추고(남는 폭은 나눠 가짐), 모자라면 줄어든다 (숫자는 글자를 줄여 맞춤)
   cell: { flexGrow: 1, flexShrink: 1, flexBasis: "auto", justifyContent: "center", gap: space.xxs, paddingVertical: space.xs, paddingRight: space.sm },
   value: { fontVariant: ["tabular-nums"] },
