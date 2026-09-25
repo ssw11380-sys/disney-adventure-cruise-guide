@@ -241,6 +241,19 @@ describe("넓은 창 (플래그 켜짐)", () => {
     expect(byType(r, "AccountBand")[0]!.props.oneLine).toBe(false);
   });
 
+  it("창이 바뀌면(접고 펴거나 돌리면) 지난 창에서 잰 표 폭을 버리고 새 창 폭으로 어림한다", () => {
+    const r = wide(933, 704);
+    const list = byType(r, "ScrollView")[0]!;
+    r.act(() => (list.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 0, width: 840, height: 600 } } }));
+    expect(byType(r, "TableHeadRow")[0]!.props.plan).toEqual(pickCols(840, 1));
+    // 폰을 세로로 돌림: 704 창 (막대 없음) — 지난 창의 840 이 아니라 704 로 고른다
+    forgetWindowClass();
+    size(704, 933);
+    r.rerender();
+    expect(byType(r, "TableHeadRow")[0]!.props.plan).toEqual(pickCols(704, 1));
+    expect(byType(r, "AccountBand")[0]!.props.oneLine).toBe(false);
+  });
+
   it("펼친 폴드8 세로(704): 아래 탭 바 그대로, 계좌 띠 두 줄 · 숫자 6칸", () => {
     const r = wide(704, 933);
     expect(byType(r, "AccountBand")[0]!.props.oneLine).toBe(false);

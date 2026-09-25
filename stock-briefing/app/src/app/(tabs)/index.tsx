@@ -60,9 +60,11 @@ export default function StocksScreen() {
   const wide = fold.on && isWide(fold);
   const insets = useSafeAreaInsets();
   const { width: winW, fontScale } = useWindowDimensions();
-  // 표 폭: 표가 실제로 받은 폭(onLayout). 재기 전 한 번은 창 폭에서 세로 탭 막대·좌우 화면 여백을 빼 어림한다
-  const [measuredW, setMeasuredW] = useState<number | null>(null);
-  const tableW = measuredW ?? winW - (fold.rail ? railWidth(fontScale) + insets.left : insets.left) - insets.right;
+  // 표 폭: 표가 실제로 받은 폭(onLayout). 잰 값은 그 창 크기·탭 막대에서만 쓴다 — 접고 펴서 창이 바뀌면 새로 잴 때까지는
+  // 창 폭에서 세로 탭 막대·좌우 화면 여백을 뺀 어림값 (지난 창의 폭으로 열을 한 번 잘못 고르지 않게)
+  const sizeKey = `${winW}:${fold.rail ? "rail" : "bar"}`;
+  const [measured, setMeasured] = useState<{ key: string; w: number } | null>(null);
+  const tableW = measured?.key === sizeKey ? measured.w : winW - (fold.rail ? railWidth(fontScale) + insets.left : insets.left) - insets.right;
   const heldPlan = useMemo(() => (wide ? pickCols(tableW, fontScale) : null), [wide, tableW, fontScale]);
   const watchPlan = useMemo(() => (heldPlan ? pickWatchCols(tableW, fontScale, heldPlan.nameW) : null), [heldPlan, tableW, fontScale]);
   const oneLineBand = bandOneLine(tableW, fontScale);
@@ -102,7 +104,13 @@ export default function StocksScreen() {
   const longPress = useCallback((s: RegisteredWithQuote) => confirmRef.current(s), []);
   // 줄 위치 → 이어 보기 (늘 같은 함수: 줄의 memo 비교를 깨지 않게)
   const rowLayout = useCallback((s: RegisteredWithQuote, y: number, h: number) => anchor.row(s.code, isHolding(s) ? "held" : "watch", y, h), [anchor]);
-  const onTableLayout = useCallback((e: LayoutChangeEvent) => setMeasuredW(e.nativeEvent.layout.width), []);
+  const onTableLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      const w = e.nativeEvent.layout.width;
+      setMeasured((m) => (m?.key === sizeKey && m.w === w ? m : { key: sizeKey, w }));
+    },
+    [sizeKey],
+  );
 
   const account: AccountData = {
     total: summary.krw,
