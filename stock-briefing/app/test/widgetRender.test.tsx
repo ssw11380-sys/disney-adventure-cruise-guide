@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { LatestBriefing } from "@/api/types";
 import { contrast } from "@/lib/color";
 import { dark, light } from "@/tokens";
 
@@ -691,12 +692,13 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
 
   it("2. 지수 줄: 미국 보유가 크면 나스닥·S&P500 먼저, 지난 세션 값은 흐리게 + 날짜, 원/달러는 끝·등락률까지", () => {
     // 큰 위젯(4×3 이상)은 두 줄까지: 첫 시장 둘 / 둘째 시장 대표 + 원/달러
-    const tall = nodes(draw({}, { width: 330, height: 470 })).find((n) => String(n.props.accessibilityLabel).startsWith("나스닥"))!;
+    const tall = indexLineOf(draw({}, { width: 330, height: 470 }))!;
     expect(words(tall)).toEqual(["나스닥", "22,936.04", "-1.13%", "·", "S&P500", "6,650.12", "+0.19%", "코스피", "7,080.92", "+0.90%", "9/23", "·", "원/달러", "1,391.50", "+0.38%"]);
     // 한 줄(4×2): 좁으면 둘째 지수부터 빼고, 시장마다 하나 + 원/달러는 남긴다 (둘째 시장 지수는 값을 빼고 등락률만)
-    const line = nodes(draw({}, { width: 420, height: 260 })).find((n) => String(n.props.accessibilityLabel).startsWith("나스닥"))!;
+    const lineTree = draw({}, { width: 420, height: 260 });
+    const line = indexLineOf(lineTree)!;
     expect(words(line)).toEqual(["나스닥", "22,936.04", "-1.13%", "·", "코스피", "+0.90%", "9/23", "·", "원/달러", "1,391.50", "+0.38%"]);
-    expect(line.props.accessibilityLabel).toBe("나스닥 22,936.04 1.13% 하락, 코스피 0.90% 상승 9월 23일 값, 원/달러 1,391.50 0.38% 상승");
+    expect(indexSpeechOf(lineTree)).toBe("나스닥 22,936.04 1.13% 하락, 코스피 0.90% 상승 9월 23일 값, 원/달러 1,391.50 0.38% 상승");
     // 전체 순서와 표기 (원/달러는 늘 끝)
     const { polishedIndexItems } = model;
     const us = polishedIndexItems(LINE, T, true);
@@ -708,10 +710,11 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
     expect(us.find((i) => i.code === "USDKRW")).toMatchObject({ label: "원/달러", value: "1,391.50", rate: "+0.38%", stale: false });
     // 한국 보유가 크면 코스피부터 — 흐린 색 + 날짜로 그린다
     const krHeavy = polishedPayload({ stocks: [SAMSUNG, WATCH] });
-    const krLine = nodes(draw({}, WIDE, krHeavy)).find((n) => String(n.props.accessibilityLabel).startsWith("코스피"))!;
+    const krTree = draw({}, WIDE, krHeavy);
+    const krLine = indexLineOf(krTree)!;
     expect(words(krLine).slice(0, 4)).toEqual(["코스피", "7,080.92", "+0.90%", "9/23"]);
     expect(texts(krLine).find((p) => p.text === "7,080.92")!.color).toBe(dark.muted);
-    expect(krLine.props.accessibilityLabel).toContain("코스피 7,080.92 0.90% 상승 9월 23일 값");
+    expect(indexSpeechOf(krTree)).toContain("코스피 7,080.92 0.90% 상승 9월 23일 값");
     // 출처 조회 실패는 예전처럼 "지연"
     expect(polishedIndexItems([{ ...LINE[4]!, stale: true }], T, true)[0]).toMatchObject({ stale: true, tag: "지연" });
   });
@@ -813,7 +816,14 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
 
   // ── 검증 지적 반영 ──
   const krHeavyStocks = [{ ...NVDA, qty: 1, e: [182.3, 120, null, 157_200, "exact"] as E }, { ...SAMSUNG, qty: 100, e: [7_000_000, 8_000_000, null, null, null] as E }, WATCH];
-  const indexLineOf = (t: Tree) => nodes(t).find((n) => n.props.clickAction === "OPEN_URI" && String(n.props.accessibilityLabel).includes("원/달러"));
+  // 지수 줄: 위젯 검토 7번부터 항목마다 누르는 칸(그 지수·환율 차트 market/코드)이다 — 항목 칸을 모두 담은 가장 안쪽 칸이 줄,
+  // 화면 읽기는 항목마다 (이어 붙이면 예전 줄 한 문장과 같다)
+  const indexItemsOf = (t: Tree) => byClick(t, "OPEN_URI").filter((n) => String((n.props.clickActionData as { uri?: string } | undefined)?.uri).startsWith(`${HOME_URI}market/`));
+  const indexLineOf = (t: Tree) => {
+    const items = indexItemsOf(t);
+    return items.length ? nodes(t).filter((n) => items.every((i) => nodes(n).includes(i))).at(-1) : undefined;
+  };
+  const indexSpeechOf = (t: Tree) => indexItemsOf(t).map((n) => n.props.accessibilityLabel).join(", ");
 
   it("검증 지적: 원/달러(등락률까지)는 330~640dp 어디서나 보인다 — 미국 비중이 크면 330~400dp 에서도 흐린 '코스피 … 9/23'이 보인다", () => {
     for (const width of [330, 360, 400, 480, 560, 640])
@@ -835,10 +845,11 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
           expect(w.slice(k, k + 4).includes("9/23"), at).toBe(true);
         }
     // 330dp 미국 비중: "나스닥 -1.13% · 코스피 +0.90% 9/23 · 원/달러 1,391.50 +0.38%" (지수는 값을 빼고 등락률만)
-    const narrow = indexLineOf(draw({}, { width: 330, height: 230 }))!;
+    const narrowTree = draw({}, { width: 330, height: 230 });
+    const narrow = indexLineOf(narrowTree)!;
     expect(words(narrow)).toEqual(["나스닥", "-1.13%", "·", "코스피", "+0.90%", "9/23", "·", "원/달러", "1,391.50", "+0.38%"]);
     expect(texts(narrow).find((p) => p.text === "+0.90%")!.color).toBe(dark.muted);
-    expect(narrow.props.accessibilityLabel).toBe("나스닥 1.13% 하락, 코스피 0.90% 상승 9월 23일 값, 원/달러 1,391.50 0.38% 상승");
+    expect(indexSpeechOf(narrowTree)).toBe("나스닥 1.13% 하락, 코스피 0.90% 상승 9월 23일 값, 원/달러 1,391.50 0.38% 상승");
   });
 
   it("검증 지적: 칩 색은 보이는 시장으로 — 한국만 보유한 23:00(미국 정규장)의 '한국 장 마감'·미국만 보유한 09:30 의 '미국 장 마감'은 회색", () => {
@@ -1003,6 +1014,159 @@ describe("BH-68: 브리핑 위젯 안내 문구는 서버의 브리핑 시간·�
     shared.widgets = { [WIDGET_NAMES.briefing]: [WIDE] };
     await refreshWidgets({ stocks: d.stocks, showKrw: false, afterCost: false, market: null });
     expect((await loadCachedWidgetData()).brief).toEqual(brief());
+  });
+});
+
+describe("위젯 검토 7번 앞부분: 앱이 브리핑 위젯도 바로 갱신 · 누르면 맞는 화면 (widgetPolish)", () => {
+  const BRIEFINGS_URI = `${HOME_URI}briefings`;
+  const POLISH = { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true };
+  const CLASSIC = { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true };
+  // 엔비디아 40주 × $182.30 × 1,391.50 ≈ 1,015 만원 > 삼성전자 70 만원 > 관심종목 (평가 없음)
+  const NVDA = { c: "NVDA", n: "엔비디아", qty: 40, avg: 120, q: [182.3, 2.13, 1.18, "USD", AT, 1391.5, 0] as Q, e: [7292, 4800, null, 6_288_000, "exact"] as E };
+  const SAMSUNG = { c: "005930", n: "삼성전자", qty: 10, avg: 80_000, q: [70_000, 100, 1.5, "KRW", AT, null, 0] as Q, e: [700_000, 800_000, null, null, null] as E };
+  const WATCH = { c: "999990", n: "관심종목", qty: null, avg: null, q: [5_000, -50, -0.99, "KRW", AT, null, 0] as Q, e: null };
+  // 위젯(백그라운드 작업)이 16:00 에 받은 응답: 삼성전자 오전 브리핑 하나 (오후 브리핑은 16:05 부터 생긴다)
+  const T0 = Date.parse("2026-09-24T16:00:00+09:00");
+  const MORNING = { id: 1, code: "005930", name: "삼성전자", session: "morning", date: "2026-09-24", summary: "오전 삼성", createdAt: "2026-09-24T08:35:00+09:00" };
+  const widgetPayload = (features: Record<string, boolean>, over: Record<string, unknown> = {}) =>
+    payload({ stocks: [NVDA, SAMSUNG, WATCH], briefings: [MORNING], latestIds: [1], features, ...over });
+  /** 앱이 받은 /api/briefings/latest 한 항목 (종목마다 최신 하나 — 상세 본문까지) */
+  const latest = (code: string, name: string, id: number, createdAt: string, status: "ok" | "failed" = "ok"): LatestBriefing => ({
+    code,
+    name,
+    latest: { id, code, name, session: "afternoon", date: "2026-09-24", status, summary: `${name} 오후 요약\n둘째 줄`, detail: "## 긴 본문", missing: [], model: "test", error: null, createdAt },
+  });
+  // 등록 순서 그대로 (서버처럼 보유 비중으로 고르면 엔비디아 → 삼성전자 → 관심종목, 버티브는 실패라 빠진다)
+  const LATEST = [
+    latest("999990", "관심종목", 14, "2026-09-24T16:07:00+09:00"),
+    latest("005930", "삼성전자", 12, "2026-09-24T16:05:00+09:00"),
+    latest("NVDA", "엔비디아", 13, "2026-09-24T16:06:00+09:00"),
+    latest("VRT", "버티브", 15, "2026-09-24T16:08:00+09:00", "failed"),
+  ];
+  /** 위젯이 T0 에 /api/widget 을 받아 그려 둔 상태. 그 뒤로는 서버를 부르지 않는다 (앱 즉시 갱신은 서버 재호출 없음) */
+  const prime = async (features: Record<string, boolean>) => {
+    vi.setSystemTime(T0);
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify(widgetPayload(features)), { status: 200, headers: { etag: '"w7"' } }));
+    await loadWidgetData({ stocks: true, briefings: true });
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("부르면 안 됨");
+    });
+    shared.widgets = { [WIDGET_NAMES.briefing]: [WIDE], [WIDGET_NAMES.holdings]: [WIDE] };
+    shared.updates = [];
+    vi.setSystemTime(T0 + 12 * 60_000);
+  };
+  const stocks = () => fromPayload(widgetPayload(POLISH)).stocks;
+  const push = (appAt: number, list: LatestBriefing[] = LATEST, features?: { at: number; flags: ReturnType<typeof widgetFeatures> }) =>
+    refreshWidgets({ stocks: stocks(), showKrw: false, afterCost: false, market: null, appBriefings: { at: appAt, list }, ...(features ? { features } : {}) });
+  const briefingUpdates = () => shared.updates.filter((u) => u.widgetName === WIDGET_NAMES.briefing);
+  const lastBriefing = () => build((briefingUpdates().at(-1)!.rendered as { dark: React.JSX.Element }).dark);
+  const savedIds = async () => (await (await import("@/widgets/data")).loadCachedWidgetData()).briefings.map((b) => b.latest!.id);
+  const uriOf = (n: Tree) => (n.props.clickActionData as { uri?: string } | undefined)?.uri ?? "";
+
+  it("재현: 앱이 잔고를 넘길 때 브리핑 위젯은 그대로였다 → 앱이 받은 최신 브리핑으로 바로 다시 그린다 (서버와 같은 3종목·순서, 요약 첫 줄)", async () => {
+    await prime(POLISH);
+    await push(T0 + 10 * 60_000);
+    expect(briefingUpdates()).toHaveLength(1);
+    const t = lastBriefing();
+    const w = words(t);
+    expect(w.filter((x) => ["엔비디아", "삼성전자", "관심종목", "버티브"].includes(x))).toEqual(["엔비디아", "삼성전자", "관심종목"]);
+    expect(w).toContain("엔비디아 오후 요약");
+    expect(w).not.toContain("오전 삼성");
+    expect(w).not.toContain("둘째 줄");
+    expect(w.at(-1)).toBe(DISCLAIMER_SHORT);
+    // 누르면 그 브리핑 상세 (지금과 같은 주소)
+    expect(byClick(t, "OPEN_URI").map(uriOf)).toEqual(expect.arrayContaining([`${HOME_URI}briefings/13`, `${HOME_URI}briefings/12`, `${HOME_URI}briefings/14`]));
+    // 저장해 둔 그림(손익 전환·↻ '갱신 중'이 다시 쓰는 값)도 같은 브리핑 — 요약 첫 줄만, 상세 본문은 적지 않는다
+    const { loadCachedWidgetData } = await import("@/widgets/data");
+    const saved = (await loadCachedWidgetData()).briefings;
+    expect(saved.map((b) => b.latest!.id)).toEqual([13, 12, 14]);
+    expect(saved.every((b) => b.latest!.detail === "" && !b.latest!.summary.includes("\n"))).toBe(true);
+    // 잔고 위젯도 지금처럼 함께 그린다
+    expect(shared.updates.some((u) => u.widgetName === WIDGET_NAMES.holdings)).toBe(true);
+  });
+
+  it("플래그 꺼짐(예전 서버·관리자가 끔)이면 지금 그대로: 앱은 브리핑 위젯을 다시 그리지 않고 저장해 둔 브리핑도 바꾸지 않는다", async () => {
+    await prime(CLASSIC);
+    await push(T0 + 10 * 60_000);
+    expect(briefingUpdates()).toHaveLength(0);
+    expect(shared.updates.some((u) => u.widgetName === WIDGET_NAMES.holdings)).toBe(true);
+    expect(await savedIds()).toEqual([1]);
+    // 앱에 남은 옛 플래그(켜짐)가 위젯이 더 늦게 받은 꺼짐을 되살리지 않는다
+    await push(T0 + 10 * 60_000, LATEST, { at: T0 - 3_600_000, flags: { pnlToggle: true, indexLine: true, market: true, polish: true } });
+    expect(briefingUpdates()).toHaveLength(0);
+    expect(await savedIds()).toEqual([1]);
+  });
+
+  it("앱 목록이 위젯이 받은 응답보다 먼저 받은 것이면(어제 연 브리핑 탭이 메모리에 남음) 덮지 않는다 · 성공한 브리핑이 없는 목록도 덮지 않는다", async () => {
+    await prime(POLISH);
+    await push(T0 - 60_000);
+    expect(briefingUpdates()).toHaveLength(0);
+    expect(await savedIds()).toEqual([1]);
+    await push(T0 + 10 * 60_000, [LATEST[3]!]);
+    expect(briefingUpdates()).toHaveLength(0);
+    expect(await savedIds()).toEqual([1]);
+    // 백그라운드 작업이 넘기는 브리핑(서버가 고른 것)은 지금처럼 그대로 쓴다 — 앱 목록보다 먼저
+    await refreshWidgets({ stocks: stocks(), showKrw: false, afterCost: false, market: null, briefings: fromPayload(widgetPayload(POLISH)).briefings, appBriefings: { at: T0 + 10 * 60_000, list: LATEST } });
+    expect(briefingUpdates()).toHaveLength(1);
+    expect(await savedIds()).toEqual([1]);
+  });
+
+  it("누르는 곳: 브리핑 위젯 제목(48dp 머리 줄)과 안내 문구는 브리핑 탭으로 — 꺼져 있으면 지금처럼 제목은 잔고 탭, 안내는 누르는 칸이 아님", () => {
+    const draw = (features: Record<string, boolean>, over: Record<string, unknown> = {}) =>
+      build(renderBoth(WIDGET_NAMES.briefing, data(widgetPayload(features, over)), { ...WIDE, fontScale: 1, now: NOW, pnlMode: "cumulative" }).dark);
+    const head = (t: Tree) => byClick(t, "OPEN_URI").find((n) => String(n.props.accessibilityLabel).startsWith("브리핑"))!;
+    const holding = (t: Tree, prefix: string) => byClick(t, "OPEN_URI").filter((n) => words(n).some((x) => x.startsWith(prefix)));
+    const failedBrief = { morning: "08:30", afternoon: "16:00", weekdaysOnly: true, failed: 3 };
+    const FAILED = "브리핑 생성 실패 3종목. 앱의 브리핑 탭에서 확인해 주세요.";
+
+    const on = draw(POLISH);
+    expect(head(on).props.clickActionData).toEqual({ uri: BRIEFINGS_URI });
+    expect(head(on).props.height).toBe(WIDGET_TOUCH);
+    // 종목 브리핑은 지금처럼 그 브리핑 상세
+    expect(byClick(on, "OPEN_URI").map(uriOf)).toContain(`${HOME_URI}briefings/1`);
+    const failed = draw(POLISH, { briefings: [], latestIds: [], brief: failedBrief });
+    const notice = holding(failed, "브리핑 생성 실패");
+    expect(notice).toHaveLength(1);
+    expect(notice[0]!.props.clickActionData).toEqual({ uri: BRIEFINGS_URI });
+    expect(notice[0]!.props.accessibilityLabel).toBe(FAILED);
+    expect(words(failed)).toContain(FAILED);
+    expect(words(failed).at(-1)).toBe(DISCLAIMER_SHORT);
+    const none = holding(draw(POLISH, { briefings: [], latestIds: [] }), "아직 브리핑이 없습니다");
+    expect(none.map((n) => n.props.clickActionData)).toEqual([{ uri: BRIEFINGS_URI }]);
+    // 조회 실패 안내("… ↻ 로 다시 시도")는 누르는 칸이 아니다 (↻ 를 누르라는 말)
+    const err = build(<BriefingWidget briefings={[]} fetchedAt={NOW} error="Network request failed" now={NOW} polish {...WIDE} />);
+    expect(words(err)).toContain("갱신 실패 · 연결 안 됨 · ↻ 로 다시 시도");
+    expect(holding(err, "갱신 실패")).toHaveLength(0);
+    expect(head(err).props.clickActionData).toEqual({ uri: BRIEFINGS_URI });
+
+    const off = draw(CLASSIC);
+    expect(head(off).props.clickActionData).toEqual({ uri: HOME_URI });
+    const offFailed = draw(CLASSIC, { briefings: [], latestIds: [], brief: failedBrief });
+    expect(words(offFailed)).toContain(FAILED);
+    expect(holding(offFailed, "브리핑 생성 실패")).toHaveLength(0);
+    expect(byClick(offFailed, "OPEN_URI").map(uriOf)).not.toContain(BRIEFINGS_URI);
+  });
+
+  it("누르는 곳: 다듬은 잔고 위젯 지수 줄은 항목마다 그 지수·환율 차트(market/코드)를 연다 — 꺼져 있으면 지금처럼 줄 전체가 잔고 탭", () => {
+    const draw = (features: Record<string, boolean>, box = WIDE) =>
+      build(renderBoth(WIDGET_NAMES.holdings, data(widgetPayload(features)), { ...box, fontScale: 1, now: NOW, pnlMode: "cumulative" }).dark);
+    const MARKET = `${HOME_URI}market/`;
+    for (const box of [WIDE, { width: 330, height: 230 }]) {
+      const t = draw(POLISH, box);
+      const items = byClick(t, "OPEN_URI").filter((n) => uriOf(n).startsWith(MARKET));
+      const codes = items.map((n) => uriOf(n).slice(MARKET.length));
+      // 미국 보유가 커서 나스닥부터, 원/달러는 끝 (보이는 순서 그대로 한 칸씩)
+      expect(codes).toEqual(["NASDAQ", "KOSPI", "USDKRW"]);
+      // 항목마다 그 항목만 읽는다 (보이는 이름으로 시작)
+      expect(items.map((n) => String(n.props.accessibilityLabel).split(" ")[0])).toEqual(["나스닥", "코스피", "원/달러"]);
+      expect(items.map((n) => words(n)[0])).toEqual(["나스닥", "코스피", "원/달러"]);
+      // 줄 전체를 잔고 탭으로 여는 칸은 없다
+      expect(byClick(t, "OPEN_URI").some((n) => uriOf(n) === HOME_URI && words(n).includes("나스닥"))).toBe(false);
+    }
+    const off = draw(CLASSIC);
+    const line = byClick(off, "OPEN_URI").find((n) => String(n.props.accessibilityLabel).startsWith("코스피"))!;
+    expect(line.props.clickActionData).toEqual({ uri: HOME_URI });
+    expect(byClick(off, "OPEN_URI").some((n) => uriOf(n).startsWith(MARKET))).toBe(false);
   });
 });
 

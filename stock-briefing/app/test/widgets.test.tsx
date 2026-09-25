@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RegisteredWithQuote } from "@/api/types";
@@ -254,6 +255,73 @@ describe("위젯-13: 누르면 잔고 탭", () => {
     const holdings = all(render(<HoldingsWidget stocks={book()} showKrw={false} fetchedAt={NOW} error={null} now={NOW} />));
     expect(holdings.filter((n) => n.props.clickAction === "OPEN_APP")).toHaveLength(0);
     expect(holdings.some((n) => (n.props.clickActionData as { uri?: string })?.uri === HOME_URI)).toBe(true);
+  });
+});
+
+const { pickWidgetBriefings } = await import("@/widgets/refresh");
+const { indexLineTargets } = await import("@/widgets/widgets");
+
+describe("위젯 검토 7번: 앱이 브리핑 위젯에 넘기는 3종목은 서버(/api/widget briefings)와 같은 규칙", () => {
+  type Latest = Parameters<typeof pickWidgetBriefings>[0][number];
+  const latest = (code: string, name: string, id: number, createdAt: string, status: "ok" | "failed" = "ok", summary = `${name} 첫 줄\n둘째 줄`): Latest => ({
+    code,
+    name,
+    latest: { id, code, name, session: "afternoon", date: "2026-09-24", status, summary, detail: "## 긴 본문", missing: [], model: "test", error: null, createdAt },
+  });
+  // 원화 환산 평가금액: 애플 3주 × $200 × 1,300 = 780,000 · 삼성전자 10주 × 70,000 = 700,000 · 테슬라 2주 × $250 × (환율 모름 → 1,400) = 700,000
+  // 엔비디아는 가장 크지만 최신 브리핑이 실패, 관심종목은 평가 없음(0), 000660 은 목록에 없는 종목(0)
+  const stocks = [
+    holding("005930", quote("005930", 70_000), 10, 60_000, undefined, "삼성전자"),
+    holding("AAPL", quote("AAPL", 200, { currency: "USD", fxRate: 1300 }), 3, 150, undefined, "애플"),
+    holding("TSLA", quote("TSLA", 250, { currency: "USD", fxRate: null }), 2, 200, undefined, "테슬라"),
+    holding("NVDA", quote("NVDA", 180, { currency: "USD", fxRate: 1300 }), 100, 100, undefined, "엔비디아"),
+    holding("999990", quote("999990", 5_000), null, null, undefined, "관심종목"),
+  ];
+  const list: Latest[] = [
+    latest("005930", "삼성전자", 11, "2026-09-24T16:02:00+09:00"),
+    latest("AAPL", "애플", 12, "2026-09-24T16:01:00+09:00", "ok", "\n  \n애플 첫 줄\n둘째 줄"),
+    latest("TSLA", "테슬라", 13, "2026-09-24T16:05:00+09:00"),
+    latest("NVDA", "엔비디아", 14, "2026-09-24T16:06:00+09:00", "failed"),
+    latest("999990", "관심종목", 15, "2026-09-24T16:09:00+09:00"),
+    latest("000660", "SK하이닉스", 16, "2026-09-24T16:08:00+09:00"),
+    { code: "035420", name: "NAVER", latest: null },
+  ];
+
+  it("보유 비중 큰 순(달러는 그 시세의 환율, 모르면 1,400원), 같으면 최신 순, 성공한 것만 3개 — 요약은 첫 줄만, 상세 본문은 넘기지 않는다", () => {
+    const picked = pickWidgetBriefings(list, stocks);
+    expect(picked.map((b) => b.code)).toEqual(["AAPL", "TSLA", "005930"]);
+    expect(picked.map((b) => b.latest!.summary)).toEqual(["애플 첫 줄", "테슬라 첫 줄", "삼성전자 첫 줄"]);
+    expect(picked.every((b) => b.latest!.status === "ok" && b.latest!.detail === "")).toBe(true);
+    // 평가가 0 인 종목끼리는 최신 순 (보유가 적으면 관심·목록에 없는 종목이 들어온다)
+    expect(pickWidgetBriefings(list, []).map((b) => b.code)).toEqual(["999990", "000660", "TSLA"]);
+    expect(pickWidgetBriefings([], stocks)).toEqual([]);
+    // 받은 목록은 바꾸지 않는다 (앱 캐시를 그대로 둔다)
+    expect(list.map((b) => b.code)).toEqual(["005930", "AAPL", "TSLA", "NVDA", "999990", "000660", "035420"]);
+  });
+
+  it("서버 buildWidgetPayload 와 같은 입력이면 같은 3종목·같은 순서·같은 요약 (서버 코드를 직접 불러 견준다)", async () => {
+    // 타입 검사는 앱 설정으로 서버 파일을 보지 않게 경로를 변수로 (서버 파일은 타입만 가져오는 순수 함수)
+    const path = fileURLToPath(new URL("../../backend/src/services/widgetPayload.ts", import.meta.url));
+    const server = (await import(/* @vite-ignore */ path)) as {
+      buildWidgetPayload: (s: unknown[], l: unknown[], status: null) => { briefings: { id: number; code: string; name: string; session: string; date: string; summary: string; createdAt: string }[] };
+    };
+    for (const s of [stocks, [], stocks.slice(0, 2), [...stocks].reverse()]) {
+      const fromServer = server.buildWidgetPayload(s, list, null).briefings;
+      const fromApp = pickWidgetBriefings(list, s).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary, createdAt: b.latest!.createdAt }));
+      expect(fromApp).toEqual(fromServer);
+    }
+  });
+});
+
+describe("위젯 검토 7번: 다듬은 잔고 위젯 지수 줄 — 항목마다 따로 누를 수 있는지", () => {
+  const item = (code: string, label: string, rate: string | null) => ({ code, label, value: "1", rate, stale: false, short: true });
+  it("항목이 모두 48dp 이상이면 항목마다, 하나라도 좁으면 줄 전체가 첫 항목(그 지수 차트) 한 칸", () => {
+    const wide = { font: 10, height: 15, lines: [[item("NASDAQ", "나스닥", "-1.13%"), item("KOSPI", "코스피", "+0.90%")], [item("USDKRW", "원/달러", "+0.38%")]] };
+    expect(indexLineTargets(wide, 1)).toBe("each");
+    const narrow = { font: 10, height: 15, lines: [[item("SPX", "S", null), item("NASDAQ", "나스닥", "-1.13%")]] };
+    expect(indexLineTargets(narrow, 1)).toEqual({ single: "SPX" });
+    // 글자를 줄이면(배율 < 1) 좁아질 수 있다
+    expect(indexLineTargets({ ...wide, lines: [[item("KOSPI", "코", null)]] }, 0.85)).toEqual({ single: "KOSPI" });
   });
 });
 

@@ -34,10 +34,12 @@ import {
   type PnlMode,
 } from "./model";
 import { currentMarket, isDelayed, openMarketAsOf, type WidgetBrief, type WidgetIndex, type WidgetMarket } from "./payload";
+import { marketUri } from "./board";
 import {
   CHIP_PAD_Y,
   EMPTY_LINES,
   GLYPH_GAP,
+  indexItemWidth,
   indexTag,
   PAD,
   planAsset,
@@ -52,6 +54,7 @@ import {
   textWidth,
   VALUE_LABEL,
   type HeaderPlan,
+  type IndexInput,
   type IndexPlan,
   type RowInput,
   type RowsPlan,
@@ -142,14 +145,18 @@ function RefreshBox({ refreshing, c }: { refreshing: boolean; c: WidgetPalette }
   );
 }
 
+/** 브리핑 탭 딥링크 (앱 라우트 (tabs)/briefings). 다듬은 모습(widgetPolish)의 브리핑 위젯 제목·안내 문구가 연다 (위젯 검토 7번) */
+export const BRIEFINGS_URI = `${DEEP_LINK}briefings`;
+
 /**
- * 머리 줄 (48dp): 왼쪽 묶음을 누르면 잔고 탭으로, 오른쪽 ↻ 칸(48×48dp)은 새로고침.
+ * 머리 줄 (48dp): 왼쪽 묶음을 누르면 uri(기본 잔고 탭)로, 오른쪽 ↻ 칸(48×48dp)은 새로고침.
+ * 다듬은 모습의 브리핑 위젯은 브리핑 탭(BRIEFINGS_URI)을 연다 — 제목이 "브리핑"인데 잔고 탭이 열리지 않게 (위젯 검토 7번).
  * 갱신 중이면 기준 시각 자리에 "갱신 중"
  */
-function Header({ title, plan, market, refreshing, label, c }: { title: string; plan: HeaderPlan; market: WidgetMarket | null; refreshing: boolean; label: string; c: WidgetPalette }) {
+function Header({ title, plan, market, refreshing, label, uri = HOME_URI, c }: { title: string; plan: HeaderPlan; market: WidgetMarket | null; refreshing: boolean; label: string; uri?: string; c: WidgetPalette }) {
   return (
     <FlexWidget style={{ width: "match_parent", height: TOUCH, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-      <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={label} style={{ height: TOUCH, flexDirection: "row", alignItems: "center", flexGap: space.s }}>
+      <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri }} accessibilityLabel={label} style={{ height: TOUCH, flexDirection: "row", alignItems: "center", flexGap: space.s }}>
         <TextWidget text={title} maxLines={1} style={{ color: c.ink, fontSize: F.title, fontWeight: "700" }} />
         {plan.chip && market ? <Chip market={market} c={c} /> : null}
         {plan.sub ? <TextWidget text={plan.sub} maxLines={1} style={{ color: refreshing ? c.accent : c.muted, fontSize: F.sm }} /> : null}
@@ -368,23 +375,47 @@ function polishedRowView(s: RegisteredWithQuote, filled: string[], showKrw: bool
 }
 
 /**
- * 다듬은 지수 줄 (한 줄, 큰 위젯은 두 줄까지 · 아래 여백 0): 항목마다 묶고, 항목 사이 " · " 는 좁게(POLISH_SEP_GAP — layout polishedSepWidth).
- * 누르면 앱 (홈 지수 띠), 화면 읽기는 보이는 항목을 한 문장으로
+ * 다듬은 지수 줄의 누르는 칸 (위젯 검토 7번 — 예전: 줄 전체가 잔고 탭): 보이는 항목이 모두 48dp(WIDGET_TOUCH) 넘게 넓으면 항목마다 그 지수·환율 차트("each"),
+ * 하나라도 좁으면(아주 작은 글자 배율 등) 옆 항목을 잘못 누르기 쉬우므로 줄 전체를 한 칸으로 해 첫 항목의 차트를 연다({ single }).
+ * 줄 높이(글자 한 줄)가 48dp 보다 낮은 것은 줄 전체가 잔고 탭을 열던 때와 같은 예외다 (종목 줄 약 38dp 처럼)
  */
-function PolishedIndexLine({ plan, c }: { plan: IndexPlan<IndexItemText>; c: WidgetPalette }) {
-  return (
-    <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={indexSpeech(plan.lines.flat())} style={{ width: "match_parent", flexDirection: "column" }}>
-      {plan.lines.map((line) => (
-        <FlexWidget key={line.map((i) => i.code).join("-")} style={{ flexDirection: "row", alignItems: "center", flexGap: POLISH_SEP_GAP }}>
-          {line.flatMap((it, n) => [
-            ...(n ? [indexSep(it.code, plan.font, c)] : []),
-            <FlexWidget key={it.code} style={{ flexDirection: "row", alignItems: "center", flexGap: space.xs }}>
-              {indexParts(it, plan.font, c)}
-            </FlexWidget>,
-          ])}
-        </FlexWidget>
-      ))}
+export function indexLineTargets(plan: IndexPlan<IndexInput & { code: string }>, scale: number): "each" | { single: string } {
+  const shown = plan.lines.flat();
+  if (shown.every((it) => indexItemWidth(it, plan.font, scale) >= TOUCH)) return "each";
+  return { single: shown[0]!.code };
+}
+
+/**
+ * 다듬은 지수 줄 (한 줄, 큰 위젯은 두 줄까지 · 아래 여백 0): 항목마다 묶고, 항목 사이 " · " 는 좁게(POLISH_SEP_GAP — layout polishedSepWidth).
+ * 항목을 누르면 그 지수·환율 차트(market/코드 — 지수·환율 위젯 칸과 같은 곳), 화면 읽기도 항목마다.
+ * 항목이 좁으면 줄 전체가 첫 항목의 차트 한 칸이고 보이는 항목을 한 문장으로 읽는다 (indexLineTargets)
+ */
+function PolishedIndexLine({ plan, scale, c }: { plan: IndexPlan<IndexItemText>; scale: number; c: WidgetPalette }) {
+  const target = indexLineTargets(plan, scale);
+  const single = target === "each" ? null : target.single;
+  const itemStyle: FlexWidgetStyle = { flexDirection: "row", alignItems: "center", flexGap: space.xs };
+  const lines = plan.lines.map((line) => (
+    <FlexWidget key={line.map((i) => i.code).join("-")} style={{ flexDirection: "row", alignItems: "center", flexGap: POLISH_SEP_GAP }}>
+      {line.flatMap((it, n) => [
+        ...(n ? [indexSep(it.code, plan.font, c)] : []),
+        single ? (
+          <FlexWidget key={it.code} style={itemStyle}>
+            {indexParts(it, plan.font, c)}
+          </FlexWidget>
+        ) : (
+          <FlexWidget key={it.code} clickAction="OPEN_URI" clickActionData={{ uri: marketUri(it.code) }} accessibilityLabel={indexSpeech([it])} style={itemStyle}>
+            {indexParts(it, plan.font, c)}
+          </FlexWidget>
+        ),
+      ])}
     </FlexWidget>
+  ));
+  return single ? (
+    <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: marketUri(single) }} accessibilityLabel={indexSpeech(plan.lines.flat())} style={{ width: "match_parent", flexDirection: "column" }}>
+      {lines}
+    </FlexWidget>
+  ) : (
+    <FlexWidget style={{ width: "match_parent", flexDirection: "column" }}>{lines}</FlexWidget>
   );
 }
 
@@ -600,7 +631,7 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
       {plan.compact && plan.total && total && pnl ? <TopRow plan={plan.total} total={total} pnl={pnl} refresh refreshing={refreshing} c={c} /> : null}
       <FlexWidget style={{ width: "match_parent", flexDirection: "column", paddingRight: PAD }}>
         {!plan.compact && plan.total && total && pnl ? <TopRow plan={plan.total} total={total} pnl={pnl} refresh={false} refreshing={refreshing} c={c} /> : null}
-        {plan.index ? <PolishedIndexLine plan={plan.index} c={c} /> : null}
+        {plan.index ? <PolishedIndexLine plan={plan.index} scale={scale} c={c} /> : null}
         {plan.note ? <TextWidget text={plan.note} maxLines={1} style={{ color: c.muted, fontSize: F.sm }} /> : null}
         {rows.length === 0 && !error && !refreshing ? <TextWidget text="등록된 종목이 없습니다" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
         {rows.length === 0 && error && !refreshing ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
@@ -716,10 +747,15 @@ function speakDate(date: string, session: string): string {
 
 /**
  * 브리핑: 서버가 고른 보유 비중 상위 3종목(예전 서버면 최신 3개)의 요약 첫 줄 + 고지 한 줄 (항상).
- * 보여 줄 브리핑이 없으면 안내 문구 — 서버가 준 브리핑 시간·최신 브리핑 실패 수(brief)로 (BH-68)
+ * 보여 줄 브리핑이 없으면 안내 문구 — 서버가 준 브리핑 시간·최신 브리핑 실패 수(brief)로 (BH-68).
+ * 다듬은 모습(polish = widgetPolish, 위젯 검토 7번): 제목(48dp 머리 줄)과 안내 문구("브리핑 생성 실패 …"·"아직 브리핑이 없습니다 …")를 누르면
+ * 브리핑 탭 (예전: 제목은 잔고 탭, 안내는 누르는 칸이 아님). 조회 실패 안내("… ↻ 로 다시 시도")는 ↻ 를 누르라는 말이라 그대로 둔다
  */
-export function BriefingWidget(props: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number; market?: WidgetMarket | null; refreshing?: boolean; brief?: WidgetBrief | null } & WidgetFrame) {
+export function BriefingWidget(
+  props: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number; market?: WidgetMarket | null; refreshing?: boolean; brief?: WidgetBrief | null; polish?: boolean } & WidgetFrame,
+) {
   const { briefings, fetchedAt, error, now } = props;
+  const polish = props.polish === true;
   const c = props.palette ?? WIDGET_COLORS;
   const width = dp(props.width, DEFAULT_LIST.width);
   const height = dp(props.height, DEFAULT_LIST.height);
@@ -733,9 +769,10 @@ export function BriefingWidget(props: { briefings: LatestBriefing[]; fetchedAt: 
   const plan = planBriefing({ width, height, scale, header: { title: "브리핑", chip: market?.label ?? null, sub, delayed }, count: items.length });
   const content = width - PAD * 2;
   const headerLabel = sentence(["브리핑", market?.label, refreshing ? "갱신 중" : sub[0], delayed ? "시세 지연" : null]);
+  const message = briefingEmptyText(error, props.brief);
   return (
     <FlexWidget style={listRootStyle(c)}>
-      <Header title="브리핑" plan={plan.header} market={market} refreshing={refreshing} label={headerLabel} c={c} />
+      <Header title="브리핑" plan={plan.header} market={market} refreshing={refreshing} label={headerLabel} uri={polish ? BRIEFINGS_URI : HOME_URI} c={c} />
       {items.length ? (
         plan.items ? (
           <FlexWidget style={{ width: "match_parent", flexDirection: "column", paddingRight: PAD, flexGap: space.xxs }}>
@@ -773,12 +810,18 @@ export function BriefingWidget(props: { briefings: LatestBriefing[]; fetchedAt: 
             })}
           </FlexWidget>
         ) : null
-      ) : refreshing ? null : (
-        <TextWidget
-          text={briefingEmptyText(error, props.brief)}
-          maxLines={plan.messageLines}
-          style={{ color: c.muted, fontSize: F.md, marginTop: plan.messageGap, marginRight: PAD }}
-        />
+      ) : refreshing ? null : polish && !error ? (
+        // 안내 문구 칸: 글자와 같은 자리·같은 크기 (여백은 칸 바깥에) — 누르면 브리핑 탭. 높이는 글자 줄만큼이라 48dp 보다 낮을 수 있다 (종목 브리핑 칸과 같은 예외)
+        <FlexWidget
+          clickAction="OPEN_URI"
+          clickActionData={{ uri: BRIEFINGS_URI }}
+          accessibilityLabel={message}
+          style={{ width: "match_parent", flexDirection: "column", marginTop: plan.messageGap, paddingRight: PAD }}
+        >
+          <TextWidget text={message} maxLines={plan.messageLines} style={{ color: c.muted, fontSize: F.md }} />
+        </FlexWidget>
+      ) : (
+        <TextWidget text={message} maxLines={plan.messageLines} style={{ color: c.muted, fontSize: F.md, marginTop: plan.messageGap, marginRight: PAD }} />
       )}
       <TextWidget text={DISCLAIMER_SHORT} maxLines={1} style={{ color: c.muted, fontSize: F.xs, marginTop: space.xs, marginRight: PAD }} />
     </FlexWidget>
