@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { useHealth } from "@/api/hooks";
+import { useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
@@ -24,9 +24,11 @@ export default function SettingsScreen() {
   const t = useTheme();
   const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost } = useSettings();
   const health = useHealth();
+  const notifySettings = useNotificationSettings();
   const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
-  const { pulling, onPull } = usePull(health.refetch);
+  // 당겨서 새로고침: 서버 상태와 알림 설정('다음 실행' 시각)을 함께 (BH-16)
+  const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), notifySettings.refetch()]));
 
   return (
     <Screen refreshing={pulling} onRefresh={onPull}>

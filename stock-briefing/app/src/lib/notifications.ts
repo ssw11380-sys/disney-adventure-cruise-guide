@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { QueryClient } from "@tanstack/react-query";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
@@ -124,6 +125,16 @@ export async function getStoredToken(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * 브리핑 알림(세션 묶음·종목·계좌)이면 브리핑 캐시(목록·계좌 브리핑·지난 브리핑)를 무효화한다. 알림을 받았을 때·눌렀을 때 NotificationBridge 가 부른다 —
+ * 브리핑 탭은 가려져도 마운트된 채라, 새 브리핑 알림을 눌러 들어와도 전에 받은 목록이 그대로 보였다 (BH-16). 브리핑 알림이면 true
+ */
+export function refreshBriefingsFor(qc: Pick<QueryClient, "invalidateQueries">, apiUrl: string, data: Record<string, unknown> | undefined): boolean {
+  if (data?.["type"] !== "briefing") return false;
+  void qc.invalidateQueries({ queryKey: [apiUrl, "briefings"] });
+  return true;
 }
 
 /** 알림을 눌렀을 때 이동할 경로 */

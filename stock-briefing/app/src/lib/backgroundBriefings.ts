@@ -5,6 +5,7 @@ import * as TaskManager from "expo-task-manager";
 import { Platform } from "react-native";
 import type { AccountBriefing, LatestBriefing } from "@/api/types";
 import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefingDigest";
+import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload } from "@/widgets/data";
 import { shouldSkipFetch } from "@/widgets/payload";
@@ -17,9 +18,7 @@ import { marketWidgetPlaced, refreshWidgets } from "@/widgets/refresh";
  * (배터리 절약·네트워크 조건에 따라 시스템이 미룰 수 있어 정확한 시각은 보장되지 않는다. 즉시 알림은 FCM 설정 필요.)
  */
 export const BRIEFING_TASK = "check-new-briefings";
-const SEEN_KEY = "briefings.notified"; // JSON: number[] (알림 보낸 브리핑 id, 최근 200개. 계좌 브리핑(3-31)은 -id 로 같은 목록에)
-/** "1" 이면 알림 기준(그때까지의 브리핑)을 이미 적었다. 브리핑이 0건이라 SEEN 이 비어 있어도 처음으로 보지 않게 (N3) */
-const INIT_KEY = "briefings.notifyInit";
+// 알림 보낸 브리핑 기록(SEEN_KEY)·알림 기준(INIT_KEY)은 lib/briefingSeen — 앱의 수동 실행도 같은 기록에 적는다 (BH-67)
 /**
  * "1" 이면 계좌 브리핑(3-31)의 알림 기준을 적었다. 없으면(알림을 막 켬·3-31 전부터 켜 둔 기기) 그때 있는 계좌 브리핑을 알리지 않고 "본 것"으로만 적는다 —
  * 업데이트 직후 옛 계좌 브리핑이 따로 울리지 않게
@@ -38,29 +37,6 @@ export const PREFS_FAIL_LIMIT = 3;
  */
 const ACCOUNTS_FAIL_KEY = "notify.accountsFail";
 
-async function seenIds(): Promise<Set<number>> {
-  try {
-    const raw = await AsyncStorage.getItem(SEEN_KEY);
-    return new Set(raw ? (JSON.parse(raw) as number[]) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-async function saveSeen(ids: Set<number>): Promise<void> {
-  try {
-    await AsyncStorage.setItem(SEEN_KEY, JSON.stringify([...ids].slice(-200)));
-  } catch {
-    /* ignore */
-  }
-}
-
-/** 알림 기준을 적었는지. 표시가 없던 예전 앱에서 올라온 기기는 본 기록이 있으면 적은 것으로 본다 */
-async function initialized(seen: Set<number>): Promise<boolean> {
-  if (seen.size > 0) return true;
-  return (await AsyncStorage.getItem(INIT_KEY).catch(() => null)) === "1";
-}
-
 /**
  * 아직 알리지 않은 브리핑 id 가 있는지 (기준을 아직 안 적었으면 true → 현재 상태를 기억하게).
  * accountIds(3-31): 위젯 응답의 최근 계좌 브리핑 id — 종목 브리핑이 모두 실패하고 계좌 브리핑만 생긴 세션도 알아보게 (서버 푸시와 같게)
@@ -68,6 +44,15 @@ async function initialized(seen: Set<number>): Promise<boolean> {
 export async function hasUnseen(ids: number[], accountIds: readonly number[] = []): Promise<boolean> {
   const seen = await seenIds();
   return !(await initialized(seen)) || ids.some((id) => !seen.has(id)) || accountIds.some((id) => !seen.has(-id));
+}
+
+/**
+ * 로컬 알림을 바로 띄우는 trigger — 서버 푸시와 같은 '브리핑 알림' 채널로 (BH-28).
+ * Android 는 채널을 trigger 에서만 읽는다: content 에 넣은 channelId 는 버려지고, trigger 가 null 이면 expo 기본 채널(Miscellaneous)로 가서
+ * 기기 설정에서 '브리핑 알림'을 끄거나 소리를 바꿔도 로컬 알림에는 적용되지 않았다. 채널 trigger 도 바로 뜬다 (다른 플랫폼은 null 과 같다)
+ */
+export function briefingTrigger(): Notifications.NotificationTriggerInput {
+  return Platform.OS === "android" ? { channelId: ANDROID_CHANNEL } : null;
 }
 
 /**
@@ -124,10 +109,7 @@ export async function notifyNewBriefings(
       ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now, opts.accounts ?? [], { newAccountIds, ...(opts.codes?.length ? { codes: opts.codes } : {}) })
       : [];
   for (const m of messages) {
-    await Notifications.scheduleNotificationAsync({
-      content: { title: m.title, body: m.body, data: m.data, sound: "default", ...(Platform.OS === "android" ? { channelId: ANDROID_CHANNEL } : {}) },
-      trigger: null,
-    });
+    await Notifications.scheduleNotificationAsync({ content: { title: m.title, body: m.body, data: m.data, sound: "default" }, trigger: briefingTrigger() });
   }
   await saveSeen(seen);
   // 빈 목록이어도 기준을 적은 것으로 — 다음에 생기는 첫 브리핑을 알린다

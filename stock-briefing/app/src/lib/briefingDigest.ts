@@ -186,13 +186,39 @@ export function planNotifications(
   return out;
 }
 
-/** 브리핑 시간이 조용한 시간 안이면 알림이 가지 않는다고 미리 알린다 (예: 오전 06:30) */
-export function quietWarnings(s: { quietEnabled?: boolean; quietStart?: string; quietEnd?: string; morningTime: string; afternoonTime: string; morningEnabled: boolean; afternoonEnabled: boolean }): string[] {
+/**
+ * 브리핑 시간이 조용한 시간에 걸리면 알림이 가지 않는다고 미리 알린다 (예: 오전 06:30).
+ * 서버는 세션이 끝난 시각(모든 종목을 만든 뒤)으로 조용한 시간을 본다 (BH-58) → 시작 시각과 예상 끝 시각(runSeconds 뒤, 종목 수 × 약 25초)을 함께 본다:
+ *  - 둘 다 조용한 시간이면 "가지 않습니다"
+ *  - 하나만 걸치면(06:55 → 약 07:02, 21:55 → 약 22:02) 끝나는 시각에 달렸다고 그 시각과 함께 알린다 — 예상 시각이라 단정하지 않는다
+ * runSeconds 를 모르면(0) 시작 시각만 본다
+ */
+export function quietWarnings(
+  s: { quietEnabled?: boolean; quietStart?: string; quietEnd?: string; morningTime: string; afternoonTime: string; morningEnabled: boolean; afternoonEnabled: boolean },
+  runSeconds = 0,
+): string[] {
   if (!s.quietEnabled || !s.quietStart || !s.quietEnd) return [];
   const q = { quietEnabled: true, quietStart: s.quietStart, quietEnd: s.quietEnd };
   const at = (hhmm: string) => new Date(`2026-01-05T${hhmm}:00+09:00`);
+  const warn = (label: string, hhmm: string): string | null => {
+    const start = at(hhmm);
+    const end = new Date(start.getTime() + Math.max(0, runSeconds) * 1_000);
+    const quietStart = inQuietHours(q, start);
+    const quietEnd = inQuietHours(q, end);
+    if (quietStart && quietEnd) return `${label} 브리핑(${hhmm})이 조용한 시간 안이라 알림이 가지 않습니다`;
+    if (quietStart || quietEnd) return `${label} 브리핑(${hhmm})은 약 ${kstHhmm(end)}에 다 만들어져, 그때가 조용한 시간이면 알림이 가지 않습니다`;
+    return null;
+  };
   const out: string[] = [];
-  if (s.morningEnabled && inQuietHours(q, at(s.morningTime))) out.push(`오전 브리핑(${s.morningTime})이 조용한 시간 안이라 알림이 가지 않습니다`);
-  if (s.afternoonEnabled && inQuietHours(q, at(s.afternoonTime))) out.push(`오후 브리핑(${s.afternoonTime})이 조용한 시간 안이라 알림이 가지 않습니다`);
+  const morning = s.morningEnabled ? warn("오전", s.morningTime) : null;
+  const afternoon = s.afternoonEnabled ? warn("오후", s.afternoonTime) : null;
+  if (morning) out.push(morning);
+  if (afternoon) out.push(afternoon);
   return out;
+}
+
+/** 한국 시간 "HH:MM" (기기 시간대와 상관없이) */
+function kstHhmm(d: Date): string {
+  const kst = new Date(d.getTime() + 9 * 3_600_000);
+  return `${String(kst.getUTCHours()).padStart(2, "0")}:${String(kst.getUTCMinutes()).padStart(2, "0")}`;
 }
