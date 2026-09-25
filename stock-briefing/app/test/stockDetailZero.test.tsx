@@ -43,7 +43,7 @@ vi.mock("@/lib/chartPrefs", () => ({ CANDLE_COUNT: { D: 800, W: 520, M: 240 } })
 vi.mock("@/components/BriefingCard", () => ({ BriefingCard: "BriefingCard" }));
 vi.mock("@/components/CandleChart", () => ({ CandleChart: "CandleChart" }));
 vi.mock("@/components/FlashPrice", () => ({ FlashPrice: "FlashPrice" }));
-vi.mock("@/components/Freshness", () => ({ ChartNotice: "ChartNotice", StaleBanner: "StaleBanner", usePull: () => ({ pulling: false, onPull: () => undefined }) }));
+vi.mock("@/components/Freshness", () => ({ ChartNotice: "ChartNotice", StaleBanner: "StaleBanner", usePull: () => ({ pulling: false, onPull: () => undefined }), useFeedState: () => ({ now: Date.now(), feedOk: true }) }));
 vi.mock("@/components/Skeleton", () => ({ DetailSkeleton: "DetailSkeleton" }));
 vi.mock("@/components/MarkdownView", () => ({ MarkdownView: "MarkdownView" }));
 vi.mock("@/components/Screen", () => ({ Screen: "Screen" }));
