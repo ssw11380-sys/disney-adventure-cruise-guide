@@ -390,7 +390,17 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     financialsUs: opts.providers.financialsUs,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
-  await app.register(accountBriefingRoutes, { prefix: "/api/account-briefings", service: accountBriefings, busy: () => briefingService.isRunning || accountBriefings.isRunning, now });
+  await app.register(accountBriefingRoutes, {
+    prefix: "/api/account-briefings",
+    service: accountBriefings,
+    busy: () => briefingService.isRunning || accountBriefings.isRunning,
+    now,
+    // 관리용 실행은 그 세션의 브리핑 시각(알림 설정) 뒤에만 — 아직 오지 않은 세션을 미리 만들어 예약 실행이 건너뛰지 않게
+    sessionTime: async (session) => {
+      const s = await settingsStore.get();
+      return session === "morning" ? s.morningTime : s.afternoonTime;
+    },
+  });
   await app.register(featureRoutes, { prefix: "/api/features", features });
   // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
   await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings });
