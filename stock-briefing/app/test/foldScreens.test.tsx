@@ -157,22 +157,29 @@ vi.mock("@/components/StockLine", async () => {
     useLineCols: () => s.lineCols(h.win.fontScale),
   };
 });
-vi.mock("@/components/ui", () => ({
-  Badge: "Badge",
-  Button: "Button",
-  Card: "Card",
-  Chip: "Chip",
-  Empty: "Empty",
-  ErrorView: "ErrorView",
-  Loading: "Loading",
-  Muted: "Muted",
-  RateBox: "RateBox",
-  Row: "Row",
-  SectionTitle: "SectionTitle",
-  Segmented: "Segmented",
-  TableHead: "TableHead",
-  Toggle: "Toggle",
-}));
+vi.mock("@/components/ui", async () => {
+  const R = await import("react");
+  // 이름·값 줄 줄바꿈(넓은 창 설정): 켜져 있을 때만 wrap 속성을 남긴다 (꺼져 있으면 지금과 같은 트리 — 스냅숏 그대로)
+  const RowWrapContext = R.createContext(false);
+  const Row = (p: Record<string, unknown>) => R.createElement("Row", R.useContext(RowWrapContext) ? { ...p, wrap: true } : p);
+  return {
+    Badge: "Badge",
+    Button: "Button",
+    Card: "Card",
+    Chip: "Chip",
+    Empty: "Empty",
+    ErrorView: "ErrorView",
+    Loading: "Loading",
+    Muted: "Muted",
+    RateBox: "RateBox",
+    Row,
+    RowWrapContext,
+    SectionTitle: "SectionTitle",
+    Segmented: "Segmented",
+    TableHead: "TableHead",
+    Toggle: "Toggle",
+  };
+});
 
 const FX = 1391.5;
 const stock = (code: string, name: string, price: number, rate: number, extra: Partial<DiscoverStock> = {}): DiscoverStock => ({
@@ -482,43 +489,33 @@ describe("발견 순위 표의 열 고르기 (lib/discoverColumns)", () => {
 });
 
 describe("설정·비중 배치 계산 (lib/foldScreens)", () => {
-  it("설정 두 칸: 한 칸 340 × 글자 배율(최대 140%) 이상일 때만 — 글자 100% 는 폭 688 부터, 130% 는 울트라 펼침 가로 954 만", () => {
-    expect(settingsTwoColumns(853, 1)).toBe(true);
-    expect(settingsTwoColumns(859, 1)).toBe(true);
-    expect(settingsTwoColumns(704, 1)).toBe(true);
-    expect(settingsTwoColumns(688, 1)).toBe(true);
-    expect(settingsTwoColumns(687, 1)).toBe(false);
+  it("설정 두 칸: 한 칸 340 이상일 때만 (글자 크기와 상관없음) — 폭 688 부터. 큰 글씨도 폴드8 펼침 가로·세로·울트라 펼침 모두 두 칸", () => {
+    expect(settingsTwoColumns(853)).toBe(true);
+    expect(settingsTwoColumns(859)).toBe(true);
+    expect(settingsTwoColumns(704)).toBe(true);
+    expect(settingsTwoColumns(688)).toBe(true);
+    expect(settingsTwoColumns(687)).toBe(false);
     // 폭 600~640 창(칸 약 298): 토스 카드 줄 이름이 '자동 동기/화' 처럼 끊기던 곳 → 한 칸
-    expect(settingsTwoColumns(604, 1)).toBe(false);
-    expect(settingsTwoColumns(640, 1)).toBe(false);
-    // 글자 130%: 칸이 442 이상이어야 두 칸 (폴드8 펼침 가로 853·세로 704·울트라 펼침 세로 859 는 한 칸 — 칸 422 에서도 이름이 끊겼다)
-    expect(settingsTwoColumns(954, 1.3)).toBe(true);
-    expect(settingsTwoColumns(933 - railWidth(1.3), 1.3)).toBe(false);
-    expect(settingsTwoColumns(859, 1.3)).toBe(false);
-    expect(settingsTwoColumns(704, 1.3)).toBe(false);
-    expect(settingsTwoColumns(954, 1.4)).toBe(false);
-    expect(settingsTwoColumns(954, 2)).toBe(false);
-    expect(settingsTwoColumns(0, 1)).toBe(false);
-    // 두 칸이면 한 칸은 늘 최소 폭(글자 배율만큼, 설계 범위 310~430 의 안쪽) 이상
+    expect(settingsTwoColumns(604)).toBe(false);
+    expect(settingsTwoColumns(640)).toBe(false);
+    // 큰 글씨 130%: 펼친 폴드8 가로(탭 막대를 뺀 폭)도 두 칸 — 한 칸이면 이름과 스위치가 600dp 넘게 벌어진다 (검증 must)
+    expect(settingsTwoColumns(933 - railWidth(1.3))).toBe(true);
+    expect(settingsTwoColumns(933 - railWidth(2))).toBe(true);
+    expect(settingsTwoColumns(0)).toBe(false);
+    // 두 칸이면 한 칸은 늘 최소 폭(설계 범위 310~430 의 안쪽) 이상
     expect(foldScreens.settingsColMin).toBeGreaterThanOrEqual(310);
-    for (const [w, s] of [
-      [688, 1],
-      [704, 1],
-      [853, 1],
-      [954, 1.3],
-      [1300, 1.4],
-    ] as const) {
-      expect(settingsTwoColumns(w, s), `${w}/${s}`).toBe(true);
-      expect((w - FOLD_COL_GAP) / 2, `${w}/${s}`).toBeGreaterThanOrEqual(foldScreens.settingsColMin * Math.min(s, 1.4));
+    for (const w of [688, 704, 853, 954, 1300]) {
+      expect(settingsTwoColumns(w), `${w}`).toBe(true);
+      expect((w - FOLD_COL_GAP) / 2, `${w}`).toBeGreaterThanOrEqual(foldScreens.settingsColMin);
     }
   });
 
-  it("설정 칸 최대 폭 400 × 글자 배율(최대 140%) — 이름과 스위치 사이 300dp 이하 (설계 칸 폭 범위 310~430 안)", () => {
-    expect(settingsColumnMax(1)).toBe(400);
-    expect(settingsColumnMax(1.3)).toBe(520);
-    expect(settingsColumnMax(1.4)).toBe(560);
-    expect(settingsColumnMax(2)).toBe(560);
-    expect(settingsColumnMax(1)).toBeGreaterThanOrEqual(foldScreens.settingsColMin);
+  it("설정 칸 최대 폭 430 (글자 크기와 상관없음, 설계 칸 폭 범위 310~430 의 위 끝) — 이름과 스위치 사이 300dp 이하", () => {
+    expect(settingsColumnMax()).toBe(430);
+    expect(settingsColumnMax()).toBeGreaterThanOrEqual(foldScreens.settingsColMin);
+    // 칸 안쪽 = 칸 − 카드 좌우 여백. 스위치 줄의 가장 짧은 이름(한글 네 글자 약 64, 글자 100%) + 스위치(약 52) 를 빼도 300 이하
+    // (웹 미리보기 실측: 칸 400 에서 가장 먼 것 221dp → 430 이면 약 251dp)
+    expect(settingsColumnMax() - 2 * space.lg - 64 - 52).toBeLessThanOrEqual(300);
   });
 
   /** 격자가 쓸 높이 = 창 − 상태 표시줄 24 − 작업 표시줄 48 − 머리·요약·고지 어림(176, 글자 배율만큼). 범례 줄 수: 윗줄 2 · 아랫줄 11 (보유 17종목) */
@@ -659,7 +656,7 @@ describe("켜기·끄기 여유 (stickyStep, 히스테리시스)", () => {
   });
 
   it("기준선을 오가는 창 끌기 (678 ↔ 698) 에서 두 칸·한 칸이 번갈아 바뀌지 않는다", () => {
-    const two = (w: number) => (settingsTwoColumns(w, 1) ? 1 : 0);
+    const two = (w: number) => (settingsTwoColumns(w) ? 1 : 0);
     let v: number | null = null;
     const seen: number[] = [];
     for (const w of [720, 698, 678, 698, 678, 698, 660, 678, 698, 678, 720]) {
@@ -1000,6 +997,10 @@ describe("설정 (넓은 창)", () => {
     ["울트라 펼침 세로", 859, 954, 1],
     ["폴드8 펼침 세로", 704, 933, 1],
     ["울트라 펼침 가로 · 글자 130%", 954, 859, 1.3],
+    // 큰 글씨도 두 칸 (검증 must: 한 칸으로 돌아가면 이름과 스위치가 600dp 넘게 벌어졌다)
+    ["폴드8 펼침 가로 · 글자 130%", 933, 704, 1.3],
+    ["폴드8 펼침 세로 · 글자 130%", 704, 933, 1.3],
+    ["울트라 펼침 세로 · 글자 130%", 859, 954, 1.3],
   ] as const)("%s: 카드 두 칸 — 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보", (_n, w, hh, s) => {
     wideOn(w, hh, s);
     const r = render(<SettingsScreen />);
@@ -1010,17 +1011,21 @@ describe("설정 (넓은 창)", () => {
     const [left, right] = cols.children as HostNode[];
     expect(cardsIn(left!)).toEqual(["표시", "NotificationSettingsCard", "정보"]);
     expect(cardsIn(right!)).toEqual(["TossOpenApiCard", "AppUpdateCard", "서버", "서버 연결", "ScreenInfoCard"]);
-    // 칸은 최대 폭(400 × 글자 배율)까지만, 남는 폭은 두 칸 사이로만 — 칸은 화면 양 끝에 붙는다 (가운데로 모으지 않는다)
+    // 칸은 최대 폭(430)까지만, 남는 폭은 두 칸 사이로만 — 칸은 화면 양 끝에 붙는다 (가운데로 모으지 않는다)
     expect(styleOf(cols).justifyContent).toBe("space-between");
-    for (const c of [left!, right!]) expect(styleOf(c)).toMatchObject({ flex: 1, maxWidth: settingsColumnMax(s) });
+    for (const c of [left!, right!]) expect(styleOf(c)).toMatchObject({ flex: 1, maxWidth: settingsColumnMax() });
+    // 이름·값 줄은 좁은 칸에서 값이 이름 아래 줄로 (넓은 창만)
+    const rows = r.all().filter((n) => n.type === "Row");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.props.wrap).toBe(true);
+    expect(s).toBeGreaterThan(0);
     // 고지 문구는 그대로
     expect(r.text()).toContain("투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.");
   });
 
   it.each([
-    ["폴드8 펼침 가로 · 글자 130%", 933, 704, 1.3],
-    ["폴드8 펼침 세로 · 글자 130%", 704, 933, 1.3],
     ["폭 640 창", 640, 933, 1],
+    ["폭 640 창 · 글자 130%", 640, 933, 1.3],
   ] as const)("%s: 두 칸이 안 들어가면 같은 틀을 세로로 쌓은 한 칸 — 카드 차례는 휴대폰과 같다 (정보는 맨 끝)", (_n, w, hh, s) => {
     wideOn(w, hh, s);
     const r = render(<SettingsScreen />);
@@ -1047,7 +1052,7 @@ describe("설정 (넓은 창)", () => {
     // 680 으로 좁혀도 두 칸 그대로 (여유 없이 재면 한 칸), 660 이면 한 칸
     size(680, 933);
     r.rerender();
-    expect(settingsTwoColumns(680, 1)).toBe(false);
+    expect(settingsTwoColumns(680)).toBe(false);
     expect(columns(r)).toBeDefined();
     size(660, 933);
     r.rerender();
@@ -1072,7 +1077,7 @@ describe("설정 (넓은 창)", () => {
     wideOn(700, 933);
     const fresh = render(<SettingsScreen />);
     expect(columns(fresh)).toBeDefined();
-    expect(settingsTwoColumns(700 - foldScreens.hysteresis, 1)).toBe(false);
+    expect(settingsTwoColumns(700 - foldScreens.hysteresis)).toBe(false);
     wideOn(475, 751);
     const r = render(<SettingsScreen />);
     expect(frame(r)).toBeUndefined();
@@ -1111,10 +1116,45 @@ describe("설정 (넓은 창)", () => {
     expect(r.byLabel("API 토큰").props.value).toBe("tok-draft");
   });
 
-  it("'화면' 칩은 '잔고 정렬'처럼 이름 아래 왼쪽 (진단 38) · 두 칸이 안 들어가는 큰 글씨(704·140%)는 한 칸", () => {
+  it.each([
+    ["폴드8 접힘 · 플래그 켜짐", 475, 751, true],
+    ["폴드8 펼침 가로 · 플래그 꺼짐", 933, 704, false],
+    ["폴드8 펼침 가로 · 플래그 켜짐", 933, 704, true],
+  ] as const)("%s: '서버 연결'을 접으면 저장하지 않은 입력을 버린다 — 다시 펴면 저장된 주소·토큰 (3-42 이전과 같다)", (_n, w, hh, flag) => {
+    h.flag = flag;
+    forgetWindowClass();
+    size(w, hh);
+    const r = render(<SettingsScreen />);
+    press(r, "서버 연결");
+    r.act(() => (r.byLabel("서버 주소").props.onChangeText as (v: string) => void)("https://typed.test"));
+    r.act(() => (r.byLabel("API 토큰").props.onChangeText as (v: string) => void)("tok-typed"));
+    expect(r.byLabel("서버 주소").props.value).toBe("https://typed.test");
+    press(r, "서버 연결");
+    expect(r.has("서버 주소")).toBe(false);
+    press(r, "서버 연결");
+    expect(r.byLabel("서버 주소").props.value).toBe("https://api.test");
+    expect(r.byLabel("API 토큰").props.value).toBe("");
+  });
+
+  it("좁은 창·플래그 꺼짐에서는 이름·값 줄을 줄바꿈하지 않는다 (지금 그대로)", () => {
+    for (const [w, hh, flag] of [
+      [475, 751, true],
+      [933, 704, false],
+    ] as const) {
+      h.flag = flag;
+      forgetWindowClass();
+      size(w, hh);
+      const r = render(<SettingsScreen />);
+      const rows = r.all().filter((n) => n.type === "Row");
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(row.props).not.toHaveProperty("wrap");
+    }
+  });
+
+  it("'화면' 칩은 '잔고 정렬'처럼 이름 아래 왼쪽 (진단 38) · 큰 글씨(704·140%)도 두 칸", () => {
     wideOn(704, 933, 1.4);
     const r = render(<SettingsScreen />);
-    expect(columns(r)).toBeUndefined();
+    expect(columns(r)).toBeDefined();
     const label = r.all().find((n) => n.type === "Text" && textOf(n) === "화면")!;
     const box = r.all().find((n) => n.type === "View" && n.children.includes(label))!;
     // 이름과 칩이 세로로 (한 줄 양 끝이 아님)

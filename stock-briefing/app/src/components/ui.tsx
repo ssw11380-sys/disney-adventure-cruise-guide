@@ -235,12 +235,33 @@ export function Empty({ title, hint, action }: { title: string; hint?: string; a
 }
 
 /** 한 줄 항목: 왼쪽 이름, 오른쪽 값 */
+/**
+ * 이름·값 줄(Row)을 좁은 칸에서 줄바꿈할지 (3-42 넓은 창 설정 두 칸 — 기능 플래그 foldLayout).
+ * 켜면 이름과 값이 한 줄에 안 들어갈 때 값이 이름 아래 줄 오른쪽으로 내려간다 → 이름('자동 동기화')이 글자 중간에서 끊기지 않는다.
+ * 기본 false = 지금 그대로 (휴대폰·접은 화면·플래그 꺼짐)
+ */
+export const RowWrapContext = React.createContext(false);
+
 export function Row({ label, value, valueStyle }: { label: string; value: React.ReactNode; valueStyle?: StyleProp<TextStyle> }) {
   const t = useTheme();
+  const wrap = React.useContext(RowWrapContext);
+  const shown =
+    typeof value === "string" || typeof value === "number" ? (
+      <Text style={[{ color: t.ink, fontSize: font.small, fontWeight: "600" }, NUM, wrap ? styles.kvWrapText : null, valueStyle]}>{value}</Text>
+    ) : (
+      value
+    );
+  if (!wrap)
+    return (
+      <View style={[styles.kv, { borderBottomColor: t.line }]}>
+        <Text style={{ color: t.muted, fontSize: font.small }}>{label}</Text>
+        {shown}
+      </View>
+    );
   return (
-    <View style={[styles.kv, { borderBottomColor: t.line }]}>
-      <Text style={{ color: t.muted, fontSize: font.small }}>{label}</Text>
-      {typeof value === "string" || typeof value === "number" ? <Text style={[{ color: t.ink, fontSize: font.small, fontWeight: "600" }, NUM, valueStyle]}>{value}</Text> : value}
+    <View style={[styles.kv, styles.kvWrap, { borderBottomColor: t.line }]}>
+      <Text style={[{ color: t.muted, fontSize: font.small }, styles.kvWrapLabel]}>{label}</Text>
+      <View style={styles.kvWrapValue}>{shown}</View>
     </View>
   );
 }
@@ -305,6 +326,11 @@ const styles = StyleSheet.create({
   rateBox: { minWidth: 64, alignItems: "flex-end", borderRadius: 3, paddingHorizontal: space.s, paddingVertical: space.xxs },
   center: { alignItems: "center", justifyContent: "center", padding: space.xl },
   kv: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
+  // 줄바꿈 이름·값 줄 (RowWrapContext): 한 줄에 안 들어가면 값이 이름 아래 줄 오른쪽으로 (이름은 줄이지 않는다)
+  kvWrap: { flexWrap: "wrap", columnGap: space.md, rowGap: space.xxs },
+  kvWrapLabel: { flexShrink: 0, maxWidth: "100%" },
+  kvWrapValue: { flexShrink: 1, marginLeft: "auto", alignItems: "flex-end", maxWidth: "100%" },
+  kvWrapText: { textAlign: "right" },
   grid: { flexDirection: "row", flexWrap: "wrap", columnGap: space.lg },
   stat: { width: "47%", flexGrow: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.s },
   statDense: { paddingVertical: space.xs },

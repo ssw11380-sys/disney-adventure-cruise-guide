@@ -29,20 +29,20 @@ export function stickyStep(prev: number | null, width: number, f: (w: number) =>
 /**
  * 설정 카드를 두 칸(표시·알림·정보 | 토스·업데이트·서버·서버 연결·화면 정보)으로 놓을지.
  * width 는 설정 화면이 실제로 받은 폭(잰 값, 재기 전에는 창 폭 − 왼쪽 세로 탭 막대).
- * 한 칸이 settingsColMin × 글자 배율(최대 140%)보다 좁아지면 한 칸 그대로: 카드 안 이름·값 줄(토스 '자동 동기화' 등)은
- * 글자만큼 길어지므로 칸 폭도 글자 배율만큼 넓어야 이름이 단어 중간에서 끊기지 않는다
+ * 한 칸 최소 폭(settingsColMin)은 글자 크기와 상관없다: 큰 글씨에서 한 칸으로 돌아가면 이름과 스위치가 600dp 넘게 벌어지므로(진단 32),
+ * 두 칸을 지키고 좁은 칸에서는 이름·값 줄(토스 '자동 동기화' 등)의 값이 이름 아래 줄로 내려간다 (ui RowWrapContext)
  */
-export function settingsTwoColumns(width: number, fontScale: number): boolean {
+export function settingsTwoColumns(width: number): boolean {
   if (!(Number.isFinite(width) && width > 0)) return false;
-  return width >= 2 * foldScreens.settingsColMin * clampScale(fontScale, fontCap.row) + FOLD_COL_GAP;
+  return width >= 2 * foldScreens.settingsColMin + FOLD_COL_GAP;
 }
 
 /**
- * 설정 두 칸에서 한 칸의 최대 폭 (settingsColMax × 글자 배율, 최대 140%): 이름과 스위치 사이가 300dp 이하로 가깝게.
+ * 설정 두 칸에서 한 칸의 최대 폭 (글자 크기와 상관없음): 이름과 스위치 사이가 300dp 이하로 가깝게.
  * 이보다 넓게 남는 폭은 두 칸 사이 간격으로만 간다 (칸은 화면 양 끝에 붙는다 — 가운데로 모으지 않는다)
  */
-export function settingsColumnMax(fontScale: number): number {
-  return Math.round(foldScreens.settingsColMax * clampScale(fontScale, fontCap.row));
+export function settingsColumnMax(): number {
+  return foldScreens.settingsColMax;
 }
 
 /** 비중 카드 범례 열 폭 (넓은 창). 큰 글씨는 종목 줄처럼 배율의 1/4 만큼 넓히고, 그래도 넘치는 숫자는 글자를 줄인다 */

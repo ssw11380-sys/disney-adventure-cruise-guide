@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useFeature, useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
@@ -11,7 +11,7 @@ import { NotificationSettingsCard } from "@/components/NotificationSettingsCard"
 import { ScreenInfoCard } from "@/components/ScreenInfoCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
-import { Badge, Button, Card, Chip, Muted, Row, SectionTitle, Toggle } from "@/components/ui";
+import { Badge, Button, Card, Chip, Muted, Row, RowWrapContext, SectionTitle, Toggle } from "@/components/ui";
 import { FOLD_COL_GAP, settingsColumnMax, settingsTwoColumns } from "@/lib/foldScreens";
 import { formatDateKo } from "@/lib/format";
 import { SORT_OPTIONS, THEME_OPTIONS, useSettings, WIDGET_ROW_OPTIONS } from "@/lib/settings";
@@ -42,8 +42,9 @@ export default function SettingsScreen() {
   const [advanced, setAdvanced] = useState(false);
   // 당겨서 새로고침: 서버 상태와, 알림 카드가 보이면 알림 설정('다음 실행' 시각)도 함께 (BH-16)
   const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full ? notifySettings.refetch() : undefined]));
-  // 서버 연결 입력 중인 주소·토큰: 한 칸 ↔ 두 칸, 접기 ↔ 펴기로 카드가 새로 그려져도 지워지지 않게 화면이 들고 있는다.
-  // 저장된 값이 바뀌면(저장·다른 곳에서 변경) 새 값으로 다시 시작한다
+  // 서버 연결 입력 중인 주소·토큰: 한 칸 ↔ 두 칸, 폰 접기 ↔ 펴기로 카드가 새로 그려져도 지워지지 않게 화면이 들고 있는다.
+  // 저장된 값이 바뀌면(저장·다른 곳에서 변경) 새 값으로 다시 시작하고, 사용자가 '서버 연결'을 접으면 저장하지 않은 입력을 버린다
+  // (지금과 같다 — 다시 펴면 저장된 주소·토큰)
   const saved = `${apiUrl}|${apiToken}`;
   const [draft, setDraft] = useState({ saved, url: apiUrl, token: apiToken });
   const form = draft.saved === saved ? draft : { saved, url: apiUrl, token: apiToken };
@@ -51,16 +52,15 @@ export default function SettingsScreen() {
   // 넓은 창(3-42, 플래그 foldLayout + 폭 600 이상): '화면' 칩을 '잔고 정렬'처럼 이름 아래 왼쪽에 (진단 38), 카드는 두 칸이 들어가면 두 칸.
   // 좁은 창(접은 화면)·플래그 꺼짐은 지금 그대로
   const fold = useFoldLayout();
-  const { fontScale } = useWindowDimensions();
   const wide = fold.on && isWide(fold);
   // 설정 탭이 실제로 받은 폭 (카드 틀에 onLayout, 재기 전에는 창 폭 − 왼쪽 세로 탭 막대).
   // 두 칸 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스 — 창을 끌 때 한 칸·두 칸이 번갈아 바뀌지 않게).
   // 좁은 창에서는 바로 전 배치를 지운다(null) — 접은 화면에서 펴면 처음 연 것과 같은 배치
   const [boxW, onLayout] = useBoxWidth(fold.rail);
-  const twoSticky = useSticky(wide ? boxW : null, (w) => (settingsTwoColumns(w, fontScale) ? 1 : 0));
+  const twoSticky = useSticky(wide ? boxW : null, (w) => (settingsTwoColumns(w) ? 1 : 0));
   const two = wide && twoSticky === 1;
   // 두 칸의 한 칸 최대 폭: 이름과 스위치가 멀어지지 않게 (남는 폭은 두 칸 사이로만)
-  const colMax = settingsColumnMax(fontScale);
+  const colMax = settingsColumnMax();
   const chips = (
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
       {THEME_OPTIONS.map((o) => (
@@ -159,7 +159,11 @@ export default function SettingsScreen() {
   const connect = (
     <Card>
       <Pressable
-        onPress={() => setAdvanced((v) => !v)}
+        onPress={() => {
+          // 접으면 저장하지 않은 입력을 버린다 (지금과 같다)
+          if (advanced) setDraft({ saved, url: apiUrl, token: apiToken });
+          setAdvanced(!advanced);
+        }}
         accessibilityRole="button"
         accessibilityLabel="서버 연결"
         accessibilityState={{ expanded: advanced }}
@@ -220,9 +224,11 @@ export default function SettingsScreen() {
   if (wide)
     return (
       <Screen refreshing={pulling} onRefresh={onPull}>
+        {/* 넓은 창: 칸이 좁으면 이름·값 줄의 값이 이름 아래 줄로 (큰 글씨에서도 두 칸을 지킨다) */}
+        <RowWrapContext.Provider value={true}>
         {/* 두 칸: 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보. 화면 읽기는 왼쪽 칸을 끝까지 읽고 오른쪽 칸으로.
             칸은 최대 폭(colMax)까지만 넓어지고, 남는 폭은 두 칸 사이로만 (칸은 화면 양 끝에 붙는다 — 가운데로 모으지 않는다).
-            두 칸이 안 들어가는 넓은 창(큰 글씨 등)은 같은 틀을 세로로 쌓아 한 칸: 카드 차례는 휴대폰과 같고(정보는 맨 끝),
+            두 칸이 안 들어가는 넓은 창(폭 600~687 — 한 칸 최소 폭은 글자 크기와 상관없다)은 같은 틀을 세로로 쌓아 한 칸: 카드 차례는 휴대폰과 같고(정보는 맨 끝),
             한 칸 ↔ 두 칸이 바뀌어도 카드가 같은 자리에 남아 펼침 상태·입력 중인 값이 그대로다 (정보 카드만 옮겨진다 — 상태 없음) */}
         <View style={two ? styles.columns : styles.stacked} onLayout={onLayout}>
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
@@ -239,6 +245,7 @@ export default function SettingsScreen() {
             {two ? null : info}
           </View>
         </View>
+        </RowWrapContext.Provider>
       </Screen>
     );
   return (
