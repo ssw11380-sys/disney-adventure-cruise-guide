@@ -1,7 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { contrast, deltaE2000 } from "@/lib/color";
+import { PIE_SLOTS } from "@/lib/allocation";
+import { contrast, deltaE2000, hexRgb } from "@/lib/color";
 import { HEAT_MAX, heatColor } from "@/lib/heat";
 import { dark, light, type Theme } from "@/tokens";
+
+/**
+ * 색약 시뮬레이션 (Machado·Oliveira·Fernandes 2009, 강도 1.0, 선형 RGB) + OKLab 거리 ×100.
+ * 원 차트 조각처럼 서로 닿는 색이 적색맹·녹색맹에게도 구분되는지 본다 (목표 8 이상). 테스트에서만 쓴다
+ */
+const MACHADO = {
+  protan: [
+    [0.152286, 1.052583, -0.204868],
+    [0.114503, 0.786281, 0.099216],
+    [-0.003882, -0.048116, 1.051998],
+  ],
+  deutan: [
+    [0.367322, 0.860646, -0.227968],
+    [0.280085, 0.672501, 0.047413],
+    [-0.01182, 0.04294, 0.968881],
+  ],
+} as const;
+const toLinear = (hex: string) => hexRgb(hex).map((v) => (v / 255 <= 0.04045 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+function oklab([r, g, b]: number[]): [number, number, number] {
+  const l = Math.cbrt(0.4122214708 * r! + 0.5363325363 * g! + 0.0514459929 * b!);
+  const m = Math.cbrt(0.2119034982 * r! + 0.6806995451 * g! + 0.1073969566 * b!);
+  const s = Math.cbrt(0.0883024619 * r! + 0.2817188376 * g! + 0.6299787005 * b!);
+  return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+}
+function oklabDelta(a: string, b: string, cvd?: keyof typeof MACHADO): number {
+  const sim = (hex: string) => {
+    const c = toLinear(hex);
+    if (!cvd) return c;
+    return MACHADO[cvd].map((row) => Math.min(1, Math.max(0, row[0] * c[0]! + row[1] * c[1]! + row[2] * c[2]!)));
+  };
+  const [x, y] = [oklab(sim(a)), oklab(sim(b))];
+  return 100 * Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
+}
 
 /** 글자로 쓰는 색 (바탕 3종 위에서 4.5 이상) */
 const TEXT = ["ink", "sub", "muted", "accent", "gold", "up", "down", "live", "warn", "danger"] as const;
@@ -32,6 +66,7 @@ describe.each([
       macd: t.chart.macd,
       signal: t.chart.signal,
       ...Object.fromEntries(Object.entries(t.chart.ma).map(([p, c]) => [`ma${p}`, c])),
+      ...Object.fromEntries(t.chart.pie.map((c, i) => [`pie${i}`, c])),
     };
     const near: string[] = [];
     for (const [k, c] of Object.entries(aux)) {
@@ -60,6 +95,42 @@ describe.each([
     expect(near).toEqual([]);
   });
 
+  describe("비중 원 차트 조각 색 (비중 보기)", () => {
+    const pie = t.chart.pie;
+    /** 원에서 서로 닿는 조각: 차례대로 이웃, 첫 조각과 마지막 조각(조각 수는 2~7개라 첫 색은 모든 색과 닿을 수 있다), 회색은 7번째·첫 조각과 */
+    const touching = (): [string, string, string, string][] => {
+      const out: [string, string, string, string][] = [];
+      for (let i = 0; i + 1 < pie.length; i++) out.push([`pie${i}`, pie[i]!, `pie${i + 1}`, pie[i + 1]!]);
+      for (let k = 2; k < pie.length; k++) out.push(["pie0", pie[0]!, `pie${k}`, pie[k]!]);
+      out.push(["pieOther", t.chart.pieOther, "pie0", pie[0]!], ["pieOther", t.chart.pieOther, `pie${pie.length - 1}`, pie.at(-1)!]);
+      return out;
+    };
+
+    it("색 칸 수가 비중 계산의 칸 수와 같다 (8번째부터는 회색)", () => expect(pie).toHaveLength(PIE_SLOTS));
+
+    it("조각 색·회색은 바탕 3종에서 3:1 이상 (그래픽 대비)", () => {
+      const low = [...pie, t.chart.pieOther].flatMap((c) => BACK.filter((b) => contrast(c, t[b]) < 3).map((b) => `${c}/${b} ${contrast(c, t[b]).toFixed(2)}`));
+      expect(low).toEqual([]);
+    });
+
+    it("모든 조각 색끼리 ΔE2000 15 이상 (범례 네모만 보고도 다른 색)", () => {
+      const near: string[] = [];
+      for (let i = 0; i < pie.length; i++)
+        for (let j = i + 1; j < pie.length; j++) if (deltaE2000(pie[i]!, pie[j]!) < 15) near.push(`pie${i}~pie${j} ${deltaE2000(pie[i]!, pie[j]!).toFixed(1)}`);
+      expect(near).toEqual([]);
+    });
+
+    it("닿는 조각끼리: 보통 시각 OKLab ΔE 15 이상, 적색맹·녹색맹 시뮬레이션에서도 8 이상", () => {
+      const near: string[] = [];
+      for (const [an, a, bn, b] of touching()) {
+        const n = oklabDelta(a, b);
+        const c = Math.min(oklabDelta(a, b, "protan"), oklabDelta(a, b, "deutan"));
+        if (n < 15 || c < 8) near.push(`${an}~${bn} 보통 ${n.toFixed(1)} 색약 ${c.toFixed(1)}`);
+      }
+      expect(near).toEqual([]);
+    });
+  });
+
   it("히트맵 타일: 모든 등락률·기간에서 글자 대비 4.5 이상", () => {
     const low: string[] = [];
     for (const max of Object.values(HEAT_MAX))
@@ -78,5 +149,13 @@ describe("색 계산", () => {
     expect(deltaE2000("#3D8EFF", "#3D8EFF")).toBe(0);
     expect(deltaE2000("#FF0000", "#0000FF")).toBeCloseTo(52.88, 1);
     expect(deltaE2000("#0000FF", "#FF0000")).toBeCloseTo(deltaE2000("#FF0000", "#0000FF"), 10);
+  });
+
+  it("색약 시뮬레이션 거리: 검정–흰색 100, 빨강–초록은 녹색맹에게 가깝다 (시뮬레이션이 실제로 도는지)", () => {
+    expect(oklabDelta("#000000", "#FFFFFF")).toBeCloseTo(100, 0);
+    expect(oklabDelta("#D11A22", "#16762F")).toBeGreaterThan(30);
+    expect(oklabDelta("#D11A22", "#16762F", "deutan")).toBeLessThan(10);
+    // 데이터 시각화 검사 도구(validate_palette.js)가 같은 쌍에 낸 값
+    expect(oklabDelta("#C27405", "#007E68", "protan")).toBeCloseTo(10.2, 1);
   });
 });

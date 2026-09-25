@@ -112,6 +112,7 @@ function Navigator() {
       <Stack.Screen name="briefings/[id]" options={{ title: "브리핑" }} />
       <Stack.Screen name="market/[code]" options={{ title: "지수" }} />
       <Stack.Screen name="discover/theme/[id]" options={{ title: "테마" }} />
+      <Stack.Screen name="portfolio/allocation" options={{ title: "비중" }} />
     </Stack>
   );
 }

@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
+import { useAnyMarketOpen, useFeature, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
@@ -12,6 +12,7 @@ import { StockRow } from "@/components/StockRow";
 import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
 import { Button, ErrorView, TableHead } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
+import { gated } from "@/lib/features";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
 import { evalView } from "@/lib/liveTick";
@@ -30,6 +31,9 @@ export default function StocksScreen() {
   const live = useAnyMarketOpen();
   const [sortOpen, setSortOpen] = useState(false);
   const col = useLineCols();
+  // 비중 보기 (새 기능): 서버가 켤 때만 계좌 평가 패널에 '비중' 버튼
+  const allocationOn = useFeature("allocationView", false);
+  const openAllocation = useCallback(() => router.push("/portfolio/allocation"), []);
   // 값이 있으면 재조회가 실패해도 화면을 지우지 않고, 끊김·지연을 띠와 상태 글자로 알린다
   const { pulling, onPull } = usePull(refetch);
 
@@ -114,6 +118,7 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
+          onAllocation={gated(allocationOn, openAllocation)}
           status={<LiveStatus query={stocks} open={live.open} closedLabel={live.label} maxAgeMs={openMaxAge} suffix={holdingsSuffix({ held: summary.held, watch: summary.watch, stale: staleQuoteCount(stocks.data) })} />}
         />
       ) : null}
@@ -227,6 +232,7 @@ function AccountPanel({
   showKrw,
   fx,
   status,
+  onAllocation,
 }: {
   total: Totals | null;
   byCur: Record<Currency, Totals>;
@@ -238,6 +244,8 @@ function AccountPanel({
   showKrw: boolean;
   fx: number | null;
   status: React.ReactNode;
+  /** 비중 보기 화면 열기 (플래그 allocationView 가 꺼져 있으면 없음 → 버튼도 없음) */
+  onAllocation?: () => void;
 }) {
   const t = useTheme();
   // 합계는 원화로(환율을 모르면 원화 종목만). 해외 행은 설정에 따라 달러 또는 원화
@@ -322,6 +330,12 @@ function AccountPanel({
           ) : null}
         </View>
       ) : null}
+      {/* 요약 문장(accessible) 밖에 둔다: 안에 두면 화면 읽기로 버튼을 고를 수 없다 (3-22) */}
+      {onAllocation ? (
+        <View style={styles.panelActions}>
+          <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -385,6 +399,8 @@ const styles = StyleSheet.create({
   splitPl: { flexDirection: "row", marginLeft: "auto" },
   splitGap: { paddingLeft: space.xs },
   splitNum: { fontSize: font.small, fontVariant: ["tabular-nums"], textAlign: "right" },
+  // 비중 버튼(보이는 높이 32, hitSlop 으로 44): 위는 숫자·환율 글자라 넓혀도 겹치는 버튼이 없다
+  panelActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: space.xs },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
   empty: { margin: space.lg, padding: space.lg, gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   backdrop: { flex: 1, justifyContent: "flex-end" },

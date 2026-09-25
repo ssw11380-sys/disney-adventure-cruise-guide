@@ -21,7 +21,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
       now: NOW,
     });
     try {
-      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true }, updatedAt: null });
+      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, allocationView: true }, updatedAt: null });
       const history = async () => ((await app.inject({ method: "GET", url: "/api/admin/toss/reconcile" })).json() as { history: unknown[] }).history.length;
       expect((await app.inject({ method: "POST", url: "/api/admin/toss/import-holdings" })).statusCode).toBe(200);
       await vi.waitFor(async () => expect(await history()).toBe(1)); // 대조는 동기화를 기다리지 않고 뒤에서 돈다
@@ -72,7 +72,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect((await new FeatureService(db, NOW).all()).features).toMatchObject({ tossReconcile: false, briefingSources: false });
     await db.updateTable("meta").set({ value: JSON.stringify({ overrides: { briefingSources: false, removedFlag: true }, updatedAt: "x" }) }).where("key", "=", "features").execute();
     const b = new FeatureService(db, NOW);
-    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
+    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, allocationView: true });
     await db.destroy();
   });
 
@@ -87,6 +87,20 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect(await two.enabled("tossReconcile")).toBe(false);
     const broken = new FeatureService({ selectFrom: () => { throw new Error("db down"); } } as never, NOW);
     expect(await broken.enabled("tossReconcile")).toBe(false);
+    await db.destroy();
+  });
+
+  it("비중 보기(allocationView)는 앱만 쓰는 플래그: 기본 켜짐, 끄면 앱이 받는 값이 꺼짐 (서버 작업·다른 응답은 그대로)", async () => {
+    const db = await createMigratedDb(":memory:");
+    const f = new FeatureService(db, NOW);
+    expect((await f.all()).features.allocationView).toBe(true);
+    await f.set({ allocationView: false });
+    const all = await f.all();
+    expect(all.features.allocationView).toBe(false);
+    expect(all.features.widgetMarket).toBe(true);
+    const detail = (await f.detail()).find((x) => x.key === "allocationView");
+    expect(detail).toMatchObject({ enabled: false, default: true, overridden: true });
+    expect(detail?.description).toContain("비중");
     await db.destroy();
   });
 });
