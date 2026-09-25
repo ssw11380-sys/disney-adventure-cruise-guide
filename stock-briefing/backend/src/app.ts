@@ -203,6 +203,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       // 자동 동기화를 껐으면(TOSS_SYNC_MINUTES=0) 하지 않는다 — 잠금이 풀려 직접 고친 값을 덮어쓰지 않게
       ...(tossDeps?.autoSync.enabled ? { beforeRun: () => tossDeps!.autoSync.beforeBriefing() } : {}),
       log,
+      now,
     });
     scheduler.start();
     app.addHook("onClose", async () => scheduler?.stop());
