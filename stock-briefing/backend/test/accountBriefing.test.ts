@@ -1027,7 +1027,7 @@ describe("계좌 브리핑 (서버)", () => {
     await db?.destroy();
   });
 
-  const setup = async (o: { at?: string; gen?: AccountGen; holdings?: boolean; disabledModel?: boolean; holiday?: boolean | "kr" } = {}) => {
+  const setup = async (o: { at?: string; gen?: AccountGen; holdings?: boolean; disabledModel?: boolean; holiday?: boolean | "kr"; llm?: boolean } = {}) => {
     db = await createMigratedDb(":memory:");
     const push = new FakePush();
     const gen = o.gen ?? new AccountGen();
@@ -1042,6 +1042,8 @@ describe("계좌 브리핑 (서버)", () => {
       receiptDelayMs: 0,
       now: () => new Date(o.at ?? "2026-09-25T16:05:00+09:00"),
     });
+    // 모델 설명(플래그 accountBriefingLlm, 기본 꺼짐)의 검사를 시험하려고 켠다. 기본값 경로는 llm:false 로 따로 본다
+    if (o.llm !== false) await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accountBriefingLlm: true } });
     await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
     const h = o.holdings !== false;
     await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "000660", ...(h ? { quantity: 3, avgPrice: 250_000 } : {}) } });
@@ -1127,6 +1129,26 @@ describe("계좌 브리핑 (서버)", () => {
     d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json();
     expect(b).toMatchObject({ status: "ok", template: true });
     expect(d.data.narrative.reason).toMatch(/^모델 호출 실패/);
+  });
+
+  it("기본값(accountBriefingLlm 꺼짐)에서는 모델을 부르지 않고 숫자로 만든 기본 문장만 쓴다. 켜면 모델 설명", async () => {
+    const { gen, push } = await setup({ llm: false });
+    expect((await app.inject({ method: "GET", url: "/api/features" })).json().features).toMatchObject({ accountBriefing: true, accountBriefingLlm: false });
+    await app.briefingService.runSession("afternoon", { trigger: "schedule" });
+    const b = (await list())[0]!;
+    expect(b).toMatchObject({ status: "ok", template: true, model: "template" });
+    expect(accountCalls(gen)).toBe(0);
+    const d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json();
+    expect(d.data.narrative).toEqual({ source: "template", reason: "모델 설명 꺼짐" });
+    expect(d.detail).toContain("당일 손익은 -16,589원");
+    // 숫자·알림은 그대로 (설명 문단만 기본 문장)
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]!.title).toBe("오후 계좌 브리핑 · 당일 -16,589원 (-0.65%)");
+
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accountBriefingLlm: true } });
+    await app.inject({ method: "POST", url: "/api/account-briefings/run", payload: { session: "afternoon", force: true } });
+    expect(accountCalls(gen)).toBe(1);
+    expect((await list())[0]).toMatchObject({ template: false, model: "fake-model" });
   });
 
   it("모델 키가 없으면 모델을 부르지 않고 기본 문장", async () => {

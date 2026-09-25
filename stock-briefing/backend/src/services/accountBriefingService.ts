@@ -68,7 +68,7 @@ export interface AccountBriefingDeps {
   calendar: { status(): Promise<MarketStatus> } | null;
   generator: TextGenerator;
   prompts: PromptStore;
-  features: { enabled(key: "accountBriefing"): Promise<boolean> };
+  features: { enabled(key: "accountBriefing" | "accountBriefingLlm"): Promise<boolean> };
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -82,7 +82,7 @@ const DISCLOSURE_MAX = 8;
 /**
  * 계좌 한 장 브리핑 (3-31). 세션(오전·오후)마다 종목별 브리핑이 끝난 뒤 계좌 전체 요약 한 건을 만든다.
  *  - 숫자(총 평가·당일 손익·기여도·지수·환율 효과·일정)는 accountNumbers 에서 코드로 계산한다
- *  - 설명은 모델이 그 숫자만 옮겨 쓰게 하고, 입력에 없는 숫자나 매매·전망 표현이 나오면 숫자만으로 만든 기본 문장을 쓴다.
+ *  - 설명은 기본으로 숫자만으로 만든 기본 문장. 플래그 accountBriefingLlm 을 켜면 모델이 그 숫자만 옮겨 쓰게 하고, 입력에 없는 숫자나 매매·전망 표현이 나오면 숫자만으로 만든 기본 문장을 쓴다.
  *    모델이 없거나 실패해도 기본 문장으로 저장한다(실패로 두지 않음)
  *  - 날짜·세션마다 1건. 이미 있으면 force(수동 전체 실행) 때만 다시 만든다
  *  - 플래그 accountBriefing 을 끄면 아무것도 하지 않는다(시세·지수 조회·모델 호출 0)
@@ -195,6 +195,8 @@ export class AccountBriefingService {
   private async narrative(data: AccountData): Promise<{ text: string; model: string; source: "llm" | "template"; reason: string | null }> {
     const template = (reason: string) => ({ text: templateNarrative(data), model: "template", source: "template" as const, reason });
     const gen = this.deps.generator;
+    // 모델 설명은 플래그 accountBriefingLlm 을 켰을 때만 (기본 꺼짐 — 숫자는 늘 코드가 쓴다)
+    if (!(await this.deps.features.enabled("accountBriefingLlm").catch(() => false))) return template("모델 설명 꺼짐");
     if (gen.model === "disabled") return template("브리핑 모델이 설정되지 않음");
     const facts = factsText(data);
     try {
