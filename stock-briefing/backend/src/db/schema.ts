@@ -94,6 +94,19 @@ export interface AppErrorTable {
   platform: string | null;
 }
 
+/** 계좌 한 장 브리핑 (3-31): 세션(날짜·오전/오후)마다 1건. 숫자는 data(JSON)에 코드로 계산해 두고, detail 은 그 숫자를 설명한 마크다운 */
+export interface AccountBriefingTable {
+  id: Generated<number>;
+  briefing_date: string; // YYYY-MM-DD (KST)
+  session: string; // 'morning' | 'afternoon'
+  status: string; // 'ok' | 'failed'
+  summary: string; // 알림·카드용 요약 (코드로 만든 문장)
+  detail: string; // 설명 마크다운 (모델 또는 기본 문장)
+  data: string; // JSON(AccountData)
+  model: string; // 설명을 쓴 모델 이름, 기본 문장이면 'template'
+  created_at: string;
+}
+
 export interface Database {
   listed_stocks: ListedStockTable;
   registered_stocks: RegisteredStockTable;
@@ -104,4 +117,5 @@ export interface Database {
   dart_corp_codes: DartCorpCodeTable;
   devices: DeviceTable;
   app_errors: AppErrorTable;
+  account_briefings: AccountBriefingTable;
 }

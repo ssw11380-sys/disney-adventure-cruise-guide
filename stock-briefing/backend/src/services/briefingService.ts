@@ -73,8 +73,12 @@ export interface SessionDone {
   /** 일부 종목만 실행(codes 지정, 예: 상세의 "이 종목 다시 만들기") */
   partial: boolean;
   created: Array<{ briefing: Briefing; changeRate: number | null }>;
+  /** 이미 만든 브리핑도 다시 만들었는지 (수동 실행의 force). 계좌 브리핑(3-31)도 이때만 덮어쓴다 */
+  force?: boolean;
 }
 export type SessionListener = (done: SessionDone) => Promise<void> | void;
+/** 실행 한 번이 끝날 때마다 (새로 만든 브리핑이 없어도, 도중에 예외로 끝나도). 계좌 브리핑(3-31)과 세션 알림이 여기에 붙는다 */
+export type RunDoneListener = (done: SessionDone & { force: boolean; results: RunResult["results"] }) => Promise<void> | void;
 /** 실행 한 번이 시작될 때 (알림이 이 실행 동안 쓸 플래그 값을 여기서 정한다) */
 export type SessionStartListener = (start: { session: BriefingSession; trigger: "schedule" | "manual"; partial: boolean }) => Promise<void> | void;
 
@@ -87,6 +91,7 @@ export class BriefingService {
   private readonly listeners: BriefingListener[] = [];
   private readonly sessionListeners: SessionListener[] = [];
   private readonly startListeners: SessionStartListener[] = [];
+  private readonly runDoneListeners: RunDoneListener[] = [];
   private running = false;
   private _lastRun: LastRun | null = null;
 
@@ -110,6 +115,14 @@ export class BriefingService {
 
   onSessionStart(listener: SessionStartListener): void {
     this.startListeners.push(listener);
+  }
+
+  /**
+   * 실행 한 번이 끝나면 늘 (예약·수동, 새로 만든 브리핑이 없어도). 리스너가 끝날 때까지 실행 중(isRunning)으로 본다 —
+   * 계좌 브리핑을 만드는 동안 앱 백그라운드 알림이 기다렸다가 한 번에 알리고, 다른 실행이 겹쳐 시작하지 않게
+   */
+  onRunDone(listener: RunDoneListener): void {
+    this.runDoneListeners.push(listener);
   }
 
   get isRunning(): boolean {
@@ -162,17 +175,25 @@ export class BriefingService {
         results.push({ code: b.code, name: stock.name, status: b.status, briefingId: b.id, error: b.error, summary: b.status === "ok" ? b.summary : null });
       }
     } finally {
-      this.running = false;
       // 도중에 예외로 끝나도 이미 만든 브리핑은 알린다
+      const done = { session, date, trigger, partial, created, force: opts.force === true, results };
       if (created.length > 0) {
         for (const l of this.sessionListeners) {
           try {
-            await l({ session, date, trigger, partial, created });
+            await l(done);
           } catch (e) {
             this.deps.log?.warn({ err: (e as Error).message }, "세션 리스너 오류");
           }
         }
       }
+      for (const l of this.runDoneListeners) {
+        try {
+          await l(done);
+        } catch (e) {
+          this.deps.log?.warn({ err: (e as Error).message }, "실행 완료 리스너 오류");
+        }
+      }
+      this.running = false;
     }
     const finishedAt = seoulIso(this.now());
     this._lastRun = {

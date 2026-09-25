@@ -62,6 +62,8 @@ export function newTradingDay(quote: Quote | null, tick: StreamTick): boolean {
  * 등락은 전일 종가 기준으로 다시 계산하고, 미국 종목은 환율로 원화 환산가도 갱신한다.
  * 시세보다 오래된 체결이거나 값이 같으면 원본을 그대로 돌려준다(참조 유지 → 리렌더 없음).
  * 시세와 거래일이 다른 체결도 그대로 둔다 — 어제 시세의 전일 종가에 오늘 체결을 대면 등락이 이틀치가 된다 (서버 sameTradingDay 와 같다)
+ * live: true 는 예전 서버(realtime 없음)일 때만 초록 점에 쓰인다. 새 서버면 점은 서버가 준 realtime·session 으로만 (lib/liveDot) —
+ * 체결은 가격만 바꾸고 점을 켜거나 끄지 않는다 (가격 반짝임은 FlashPrice 가 값이 바뀔 때 따로)
  */
 export function applyTick(quote: Quote | null, tick: StreamTick): Quote | null {
   if (!quote || quote.code !== tick.code) return quote;

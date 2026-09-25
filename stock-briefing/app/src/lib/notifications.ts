@@ -129,6 +129,9 @@ export async function getStoredToken(): Promise<string | null> {
 /** 알림을 눌렀을 때 이동할 경로 */
 export function routeForNotification(data: Record<string, unknown> | undefined): string | null {
   if (!data) return null;
+  // 계좌 브리핑이 앞머리인 세션 알림(3-31)은 계좌 브리핑 화면으로. 예전 앱은 이 칸을 몰라 아래 digest 규칙대로 브리핑 탭으로 간다
+  const account = data["accountBriefingId"];
+  if ((typeof account === "number" && account > 0) || (typeof account === "string" && /^[1-9]\d*$/.test(account))) return `/briefings/account/${account}`;
   // 세션 묶음 알림은 브리핑 탭으로 (변동 큰 순으로 모두 보인다). 예전 앱은 digest 를 몰라 1위 종목 브리핑으로 간다
   if (data["digest"] === true) return "/briefings";
   if (data["type"] === "briefing" && typeof data["briefingId"] === "number") return `/briefings/${data["briefingId"]}`;

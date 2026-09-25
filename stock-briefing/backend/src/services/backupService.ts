@@ -20,7 +20,7 @@ import { seoulIso } from "../lib/time.js";
  */
 
 /** Postgres JSON 백업에 넣는 표 (다시 받을 수 있는 캐시 — 종목 마스터·현재가·DART 코드 — 는 뺌) */
-export const BACKUP_TABLES = ["registered_stocks", "meta", "briefings", "analyses", "devices", "app_errors"] as const;
+export const BACKUP_TABLES = ["registered_stocks", "meta", "briefings", "analyses", "devices", "app_errors", "account_briefings"] as const;
 const MAGIC = Buffer.from("SBBK2\n");
 /** 헤더: MAGIC(6) + 종류(1) + salt(16) + iv(12), 끝에 인증 태그(16) */
 const HEADER = MAGIC.length + 1 + 16 + 12;

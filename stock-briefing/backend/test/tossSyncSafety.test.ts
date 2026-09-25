@@ -1,4 +1,4 @@
-import { Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, type CompiledQuery, type DatabaseConnection, type QueryResult } from "kysely";
+import { Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, sql, type CompiledQuery, type DatabaseConnection, type QueryResult } from "kysely";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
@@ -399,12 +399,18 @@ describe("BH-78 자동 동기화를 끄면(TOSS_SYNC_MINUTES=0) 브리핑 직전
 });
 
 describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
-  /** 실행한 SQL 만 기록하는 Postgres 방언 Kysely (서버 없이 마이그레이션 문장을 확인) */
-  function recordingPostgres() {
+  /**
+   * 실행한 SQL 만 기록하는 Postgres 방언 Kysely (서버 없이 마이그레이션 문장을 확인).
+   * applied: schema_version 에 이미 있는 버전 (이미 운영 중인 DB 흉내)
+   */
+  function recordingPostgres(applied: number[] = []) {
     const sqls: string[] = [];
+    const inserted: number[] = [];
     const conn: DatabaseConnection = {
       executeQuery: async <R>(q: CompiledQuery): Promise<QueryResult<R>> => {
         sqls.push(q.sql);
+        if (/^select version from schema_version/i.test(q.sql.trim())) return { rows: applied.map((version) => ({ version })) as R[] };
+        if (/^insert into schema_version/i.test(q.sql.trim())) inserted.push(Number(q.parameters[0]));
         return { rows: [] };
       },
       streamQuery: async function* () {
@@ -427,8 +433,11 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
         createQueryCompiler: () => new PostgresQueryCompiler(),
       },
     });
-    return { db, sqls };
+    return { db, sqls, inserted };
   }
+
+  const versionsOf = async (db: Kysely<Database>) =>
+    (await sql<{ version: number }>`select version from schema_version order by version`.execute(db)).rows.map((r) => Number(r.version));
 
   it("quantity·avg_price 를 double precision(8바이트)으로 바꾸는 마이그레이션이 있다 (real 은 4바이트라 16.123456 → 16.123455)", async () => {
     const { db, sqls } = recordingPostgres();
@@ -447,5 +456,46 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
       .execute();
     expect(await db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", "VRT").executeTakeFirst()).toEqual({ quantity: 16.123456, avg_price: 1234.5678 });
     await db.destroy();
+  });
+
+  it("정밀도 마이그레이션은 버전 6 이다: 이미 5(계좌 한 장 브리핑)까지 올라간 Postgres DB 에도 적용된다", async () => {
+    const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5]);
+    await migrate(db, "postgres");
+    expect(inserted).toEqual([6]);
+    expect(sqls.some((s) => /create table.*"?account_briefings"?/i.test(s))).toBe(false); // 5 는 다시 돌지 않는다
+    const alter = sqls.filter((s) => /alter table\s+"?registered_stocks"?/i.test(s)).join("\n");
+    expect(alter).toMatch(/"?quantity"?\s+type\s+double precision/i);
+    expect(alter).toMatch(/"?avg_price"?\s+type\s+double precision/i);
+    await db.destroy();
+
+    // 새 Postgres DB 는 1~6 을 한 번씩 기록한다
+    const fresh = recordingPostgres();
+    await migrate(fresh.db, "postgres");
+    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6]);
+    await fresh.db.destroy();
+  });
+
+  it("새 SQLite DB 는 버전 1~6 을 한 번씩 기록하고, 5 까지 올라간 DB 도 6 만 더해 깨끗이 올라간다", async () => {
+    const db = await createMigratedDb(":memory:");
+    try {
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6]);
+      // 버전 5 까지만 올라간 운영 DB 흉내: 계좌 브리핑·보유 종목이 이미 있다
+      await sql`delete from schema_version where version = 6`.execute(db);
+      await db
+        .insertInto("account_briefings")
+        .values({ briefing_date: "2026-09-24", session: "morning", status: "ok", summary: "s", detail: "d", data: "{}", model: "m", created_at: "x" })
+        .execute();
+      await db
+        .insertInto("registered_stocks")
+        .values({ code: "VRT", name: "VRT", market: "NYSE", quantity: 16.123456, avg_price: 201234.57, memo: null, created_at: "x", updated_at: "x" })
+        .execute();
+      await migrate(db, "sqlite");
+      await migrate(db, "sqlite"); // 두 번 돌아도 안전
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(await db.selectFrom("account_briefings").select(["briefing_date", "session"]).execute()).toEqual([{ briefing_date: "2026-09-24", session: "morning" }]);
+      expect(await db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", "VRT").executeTakeFirst()).toEqual({ quantity: 16.123456, avg_price: 201234.57 });
+    } finally {
+      await db.destroy();
+    }
   });
 });

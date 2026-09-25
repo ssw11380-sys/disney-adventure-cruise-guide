@@ -16,6 +16,7 @@ import { HoldingsAutoSync, TossSyncService } from "./services/tossSyncService.js
 import { analysisRoutes } from "./routes/analysis.js";
 import { appErrorAdminRoutes, appErrorRoutes } from "./routes/appErrors.js";
 import { briefingRoutes } from "./routes/briefings.js";
+import { accountBriefingRoutes } from "./routes/accountBriefings.js";
 import { deviceRoutes, notificationRoutes } from "./routes/notifications.js";
 import { marketRoutes } from "./routes/market.js";
 import { MarketIndices } from "./providers/market/indices.js";
@@ -28,10 +29,12 @@ import { stockRoutes } from "./routes/stocks.js";
 import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
 import { BriefingService } from "./services/briefingService.js";
+import { AccountBriefingService } from "./services/accountBriefingService.js";
 import { DataCollector } from "./services/collector.js";
 import { DeviceService } from "./services/deviceService.js";
 import { NotificationService } from "./services/notificationService.js";
 import { PriceStream } from "./services/priceStream.js";
+import { anySessionOpen } from "./services/liveSession.js";
 import { AppErrorService } from "./services/appErrorService.js";
 import { StockService } from "./services/stockService.js";
 import { BackupService } from "./services/backupService.js";
@@ -156,11 +159,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     live: opts.providers.live,
     quickPrices: opts.providers.quickPrices,
     codes: async () => (await stockService.list()).map((s) => s.code),
-    // 두 시장이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시)
-    marketOpen: async () => {
-      const st = await opts.providers.calendar.status();
-      return st.KR.isOpen || st.US.isOpen;
-    },
+    // 등록 종목 시장의 거래 세션이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시).
+    // 토스 달력 isOpen 은 미국 정규장만이라 세션(프리·애프터·주간거래 포함)으로 본다 — 그래야 웹소켓이 없는 종목도 3초마다 바뀐다
+    marketOpen: async (codes) => anySessionOpen(codes, await opts.providers.calendar.status(), now()),
+    // 웹소켓이 이번 세션 체결을 주는 종목만 폴링에서 뺀다 (초록 점과 같은 기준 — 구독만으로 빼면 점은 켜졌는데 가격은 30초마다만 바뀐다)
+    wsServed: (codes) => stockService.wsServed(codes),
     log,
   });
   app.addHook("onClose", async () => priceStream.stop());
@@ -213,13 +216,32 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     now,
     ...(opts.receiptDelayMs !== undefined ? { receiptDelayMs: opts.receiptDelayMs } : {}),
   });
+  // 지수 띠와 잔고 위젯 지수 줄, 계좌 브리핑(3-31)이 같은 목록(30초 캐시·stale 규칙)을 쓰게 하나만 만든다
+  const marketIndices = opts.providers.indices ?? new MarketIndices();
+  // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
+  const accountBriefings = new AccountBriefingService({
+    db: opts.db,
+    stocks: stockService,
+    indices: marketIndices,
+    calendar: opts.providers.calendar,
+    generator: opts.providers.generator,
+    prompts,
+    features,
+    now,
+    log,
+  });
   briefingService.onBriefing(notificationService.onBriefing);
   briefingService.onSessionStart(notificationService.onSessionStart);
-  briefingService.onSessionDone(notificationService.onSession);
+  // 실행이 끝나면 계좌 브리핑을 먼저 만들고, 세션 알림 1건(3-19)의 앞머리에 쓴다. 새 종목 브리핑도 새 계좌 브리핑도 없으면 알림 없음(예전과 같음)
+  briefingService.onRunDone(async (done) => {
+    const account = await accountBriefings.afterRun(done);
+    if (done.created.length > 0 || account) await notificationService.onSession({ ...done, account });
+  });
   app.addHook("onClose", async () => notificationService.stop());
 
   app.decorate("stockService", stockService);
   app.decorate("briefingService", briefingService);
+  app.decorate("accountBriefings", accountBriefings);
   app.decorate("analysisService", analysisService);
   app.decorate("scheduler", scheduler);
   app.decorate("deviceService", deviceService);
@@ -322,8 +344,6 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   // 없는 경로도 앱 표준 오류 형식으로
   app.setNotFoundHandler((req, reply) => reply.code(404).send({ error: "NOT_FOUND", message: `없는 주소입니다: ${req.method} ${req.url.split("?")[0]}` }));
 
-  // 지수 띠와 잔고 위젯 지수 줄이 같은 목록(30초 캐시·stale 규칙)을 쓰게 하나만 만든다
-  const marketIndices = opts.providers.indices ?? new MarketIndices();
   await app.register(marketRoutes, { prefix: "/api/market", calendar: opts.providers.calendar, indices: marketIndices });
   // 발견 탭: 순위·테마·업종 (네이버 공개 JSON). 미국 테마는 토스 테마 분류 + 네이버 정규장 시세. 미국 원화 환산은 토스 표시 환율
   const discoverNaver = opts.providers.discover ?? new NaverDiscover();
@@ -372,13 +392,26 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     financialsUs: opts.providers.financialsUs,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
+  await app.register(accountBriefingRoutes, {
+    prefix: "/api/account-briefings",
+    service: accountBriefings,
+    busy: () => briefingService.isRunning || accountBriefings.isRunning,
+    now,
+    // 관리용 실행은 그 세션의 브리핑 시각(알림 설정) 뒤에만 — 아직 오지 않은 세션을 미리 만들어 예약 실행이 건너뛰지 않게
+    sessionTime: async (session) => {
+      const s = await settingsStore.get();
+      return session === "morning" ? s.morningTime : s.afternoonTime;
+    },
+  });
   await app.register(featureRoutes, { prefix: "/api/features", features });
-  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices });
+  // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
+  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings });
   await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
-  const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler, features, isRunning: () => briefingService.isRunning };
+  // running: 종목 브리핑과 이어지는 계좌 브리핑을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
+  const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler, features, isRunning: () => briefingService.isRunning || accountBriefings.isRunning };
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });
 
@@ -389,6 +422,7 @@ declare module "fastify" {
   interface FastifyInstance {
     stockService: StockService;
     briefingService: BriefingService;
+    accountBriefings: AccountBriefingService;
     analysisService: AnalysisService;
     scheduler: BriefingScheduler | null;
     deviceService: DeviceService;

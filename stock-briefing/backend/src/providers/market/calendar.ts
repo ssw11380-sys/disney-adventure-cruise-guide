@@ -13,7 +13,11 @@ export type MarketKey = "KR" | "US";
 export interface MarketState {
   market: MarketKey;
   isTradingDay: boolean; // 현지 날짜 기준 오늘 장이 열리는 날인지
-  isOpen: boolean; // 지금 거래 시간인지 (한국은 KRX+NXT 통합 08:00~20:00, 미국은 프리~애프터)
+  /**
+   * 지금 거래 시간인지. 토스 달력 기준 한국은 KRX+NXT 통합 08:00~20:00, 미국은 정규장(09:30~16:00 ET)만 —
+   * 미국 프리·애프터·주간거래는 false 다(세션별 판단은 services/liveSession). 달력을 못 받은 추정값(fallback)은 미국 04:00~20:00
+   */
+  isOpen: boolean;
   opensAt: string | null; // ISO, 다음(또는 오늘) 개장
   closesAt: string | null; // ISO, 현재/다음 세션 종료
   /** 장이 닫혀 있을 때 마지막 세션이 끝난 시각(ISO, 휴장일을 건너뛴 실제 값). 장중이거나 모르면 null */

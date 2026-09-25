@@ -1,6 +1,7 @@
 import { buildDigest, inQuietHours } from "../notifications/digest.js";
 import type { PushMessage, PushSender } from "../notifications/push.js";
 import type { NotificationSettingsStore } from "../notifications/settings.js";
+import { digestAccount, type AccountBriefing } from "./accountBriefingService.js";
 import type { Briefing, SessionDone } from "./briefingService.js";
 import type { DeviceService } from "./deviceService.js";
 
@@ -62,7 +63,12 @@ export class NotificationService {
     this.sessionDigest = await this.digestOn();
   };
 
-  readonly onSession = async (done: SessionDone): Promise<void> => {
+  /**
+   * account: 이번 실행에서 새로 만든 계좌 브리핑(3-31, 플래그 accountBriefing). 있으면 알림 앞머리가 계좌 요약이 되고,
+   * 새 종목 브리핑이 알릴 것이 없어도(모델 장애로 모두 실패, 알림을 끈 종목만 성공) 계좌 브리핑으로 1건. 없으면 예전 그대로.
+   * 단 이번 실행의 종목(results)을 모두 알림 끔으로 둔 사용자에게는 계좌 요약도 보내지 않는다 — 예전처럼 0건 (앱 로컬 알림과 같은 규칙)
+   */
+  readonly onSession = async (done: SessionDone & { account?: AccountBriefing | null; results?: ReadonlyArray<{ code: string }> }): Promise<void> => {
     const digest = this.sessionDigest ?? (await this.digestOn());
     this.sessionDigest = null;
     if (!digest) return;
@@ -78,7 +84,9 @@ export class NotificationService {
     const items = done.created
       .filter((c) => !muted.has(c.briefing.code))
       .map((c) => ({ briefingId: c.briefing.id, code: c.briefing.code, name: c.briefing.name ?? c.briefing.code, summary: c.briefing.summary, changeRate: c.changeRate }));
-    const msg = buildDigest(done.session, done.date, items);
+    const codes = done.results?.map((r) => r.code) ?? done.created.map((c) => c.briefing.code);
+    const allMuted = codes.length > 0 && codes.every((c) => muted.has(c));
+    const msg = buildDigest(done.session, done.date, items, allMuted ? null : digestAccount(done.account));
     if (!msg) {
       this.deps.log?.info({ session: done.session, muted: done.created.length }, "알림을 끈 종목뿐이라 보내지 않음");
       return;

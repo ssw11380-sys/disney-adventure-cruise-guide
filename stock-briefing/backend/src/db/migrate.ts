@@ -159,8 +159,29 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
   {
     version: 5,
     up: async (db, dialect) => {
-      // Postgres 의 real 은 4바이트라 토스 소수 수량·평단 끝자리가 달라진다(16.123456 → 16.123455) → 8바이트로.
-      // 값은 지금까지 읽히던 표기(::text) 그대로 옮긴다. SQLite 의 REAL 은 이미 8바이트라 바꾸지 않는다
+      // 계좌 한 장 브리핑 (3-31). 새 표만 추가하고 기존 표는 건드리지 않는다. 날짜·세션마다 1건 (다시 만들면 덮어쓴다)
+      await db.schema
+        .createTable("account_briefings")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("briefing_date", "text", (c) => c.notNull())
+        .addColumn("session", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("summary", "text", (c) => c.notNull())
+        .addColumn("detail", "text", (c) => c.notNull())
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("model", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_account_briefings_date_session on account_briefings (briefing_date, session)`.execute(db);
+    },
+  },
+  {
+    version: 6,
+    up: async (db, dialect) => {
+      // BH-48. Postgres 의 real 은 4바이트라 토스 소수 수량·평단 끝자리가 달라진다(16.123456 → 16.123455) → 8바이트로.
+      // 값은 지금까지 읽히던 표기(::text) 그대로 옮긴다. SQLite 의 REAL 은 이미 8바이트라 바꾸지 않는다 (버전만 기록).
+      // 5(계좌 한 장 브리핑)가 이미 배포돼 있어 6 이다. 번호는 겹치면 안 된다 (겹치면 새 DB 는 기록 충돌, 5 까지 올라간 DB 는 건너뜀)
       if (dialect !== "postgres") return;
       await sql`alter table registered_stocks
         alter column quantity type double precision using quantity::text::double precision,

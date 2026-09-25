@@ -51,7 +51,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it("수량·평단은 8바이트(double precision)라 토스 소수 값이 끝자리까지 그대로 돌아온다 (BH-48)", async () => {
@@ -69,13 +69,15 @@ describe.skipIf(!url)("postgres dialect", () => {
     const read = () => db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", "VRT").executeTakeFirst();
     try {
       expect(await read()).toEqual({ quantity: 16.123456, avg_price: 201234.57 });
-      // 버전 5 이전 DB(real 4바이트)에 있던 값은 지금까지 읽히던 값 그대로 옮긴다
+      // 버전 6 이전 DB(real 4바이트, 5 = 계좌 한 장 브리핑까지 적용됨)에 있던 값은 지금까지 읽히던 값 그대로 옮긴다
       await sql`alter table registered_stocks alter column quantity type real, alter column avg_price type real`.execute(db);
       await db.updateTable("registered_stocks").set({ quantity: 16.123456, avg_price: 1234.5678 }).where("code", "=", "VRT").execute();
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
-      await sql`delete from schema_version where version = 5`.execute(db);
+      await sql`delete from schema_version where version = 6`.execute(db);
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
+      const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {
@@ -102,6 +104,13 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect(run.results[0].status).toBe("ok");
     const again = (await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", force: true } })).json();
     expect(again.results[0].briefingId).toBe(run.results[0].briefingId); // upsert (unique index)
+
+    // 계좌 한 장 브리핑 (3-31): 실행마다 날짜·세션당 1건, force 면 같은 행을 덮어쓴다
+    const accounts = (await app.inject({ method: "GET", url: "/api/account-briefings?limit=5" })).json();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]).toMatchObject({ date: "2026-09-22", session: "morning", status: "ok", headline: { dayPnl: 3000, holdings: 1 } });
+    const account = (await app.inject({ method: "GET", url: `/api/account-briefings/${accounts[0].id}` })).json();
+    expect(account.data.contributions[0]).toMatchObject({ code: "000660", amount: 3000 });
 
     const detail = (await app.inject({ method: "GET", url: `/api/briefings/${run.results[0].briefingId}` })).json();
     expect(detail.name).toBe("SK하이닉스");

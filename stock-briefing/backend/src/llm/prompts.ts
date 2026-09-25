@@ -13,7 +13,8 @@ export type PromptName =
   | "briefing_summary"
   | "company_overview"
   | "value_analysis"
-  | "technical_analysis";
+  | "technical_analysis"
+  | "account_briefing";
 
 export interface PromptTemplate {
   name: PromptName;
