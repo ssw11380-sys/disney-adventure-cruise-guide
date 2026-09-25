@@ -6,9 +6,11 @@ import React from "react";
  *  - 같은 자리·같은 타입·같은 key 면 상태 유지, key 나 타입이 바뀌면 새로 만든다 (React 재조정 규칙)
  *  - 훅: useState·useReducer·useEffect·useLayoutEffect·useMemo·useCallback·useRef·useContext(가까운 Provider 값, 없으면 기본값)
  *    · useSyncExternalStore(react-query 의 useQuery 가 쓴다): 그린 뒤 구독하고, 저장소가 알려 오면 값이 바뀐 경우에만 바로 다시 그린다
- *      → 체결이 와도 다시 그리지 않는지(렌더 횟수)를 실제 QueryClient 로 볼 수 있다
+ *      → 체결이 와도 다시 그리지 않는지(렌더 횟수)를 실제 QueryClient 로 볼 수 있다. 바뀐 컴포넌트는 memo 건너뛰기에서도 다시 그린다
  *  - 그리는 중 자기 상태를 바꾸면(이전 렌더 값 저장 패턴) 그 컴포넌트를 바로 다시 그린다
  *  - 문자열 타입 요소만 결과 트리에 남긴다 (RN 부품은 테스트에서 문자열 타입으로 가짜 모듈을 둔다)
+ *  - React.memo: 기본은 속성 비교 없이 늘 다시 그린다. render(el, { memo: true }) 면 React 처럼 속성이 같고(compare 가 있으면 그것으로)
+ *    그 아래에서 상태·바깥 저장소가 바뀌지 않았으면 다시 그리지 않고 지난 결과를 쓴다 (다시 그리지 않는지 보는 회귀 테스트용)
  */
 export interface HostNode {
   type: string;
@@ -24,6 +26,8 @@ interface EffectHook {
 interface Instance {
   hooks: unknown[];
   dead: boolean;
+  /** memo 부품의 지난 속성·결과·그 아래 인스턴스 id ({ memo: true } 일 때만) */
+  memo?: { props: Record<string, unknown>; out: (HostNode | string)[]; ids: Set<string> };
 }
 interface Dispatcher {
   [name: string]: unknown;
@@ -34,7 +38,24 @@ const internals = (React as unknown as { __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_U
 
 const changed = (a: Deps, b: Deps) => !a || !b || a.length !== b.length || a.some((v, i) => !Object.is(v, b[i]));
 
-export function render(element: React.ReactElement) {
+const shallowEqual = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && Object.is(a[k], b[k]));
+};
+
+/** 아직 닫지 않은 렌더들 (cleanupRenders 가 닫는다) */
+const liveRenders = new Set<() => void>();
+
+/**
+ * 지금까지 만든 렌더를 모두 닫는다 (testing-library 의 cleanup 과 같다): 인스턴스를 지우고 effect 정리·바깥 저장소 구독 해제.
+ * 바깥 저장소가 알리면 바로 다시 그리므로, 앞 테스트의 화면이 열린 채 남아 있으면 모듈 저장소를 지울 때 그 화면이 다시 그려져
+ * 다음 테스트에 끼어든다 → 모듈 저장소를 쓰는 테스트 파일은 beforeEach 에서 부른다
+ */
+export function cleanupRenders(): void {
+  for (const close of [...liveRenders]) close();
+}
+
+export function render(element: React.ReactElement, opts: { memo?: boolean } = {}) {
   let root = element;
   let tree: (HostNode | string)[] = [];
   const instances = new Map<string, Instance>();
@@ -46,6 +67,9 @@ export function render(element: React.ReactElement) {
   let cursor = 0;
   let again = false;
   let pendingEffects: { i: number; create: () => unknown; deps: Deps }[] = [];
+  /** 지난 그리기 뒤에 상태·바깥 저장소가 바뀐 인스턴스 (memo 건너뛰기를 막는다). touchedNow 는 이번 그리기에서 보는 몫 */
+  const touched = new Set<Instance>();
+  let touchedNow = new Set<Instance>();
 
   let nextTypeId = 0;
   const typeId = (t: object) => {
@@ -71,7 +95,10 @@ export function render(element: React.ReactElement) {
       if (Object.is(next, hook.value)) return;
       hook.value = next;
       if (current === inst) again = true;
-      else dirty = true;
+      else {
+        dirty = true;
+        touched.add(inst);
+      }
     };
     return [hook.value, hook.dispatch];
   }
@@ -99,6 +126,7 @@ export function render(element: React.ReactElement) {
         subscribe(() => {
           if (inst.dead || Object.is(box.get(), box.value)) return;
           dirty = true;
+          touched.add(inst);
           if (!flushing) flush();
         }),
       [subscribe],
@@ -161,6 +189,18 @@ export function render(element: React.ReactElement) {
       inst = { hooks: [], dead: false };
       instances.set(iid, inst);
     }
+    const memoOn = isMemo && opts.memo === true;
+    if (memoOn && inst.memo) {
+      const compare = (type as unknown as { compare?: ((a: unknown, b: unknown) => boolean) | null }).compare ?? shallowEqual;
+      const quiet = !touchedNow.has(inst) && ![...inst.memo.ids].some((x) => {
+        const d = instances.get(x);
+        return d !== undefined && touchedNow.has(d);
+      });
+      if (quiet && compare(inst.memo.props, props)) {
+        for (const x of inst.memo.ids) seen.add(x);
+        return inst.memo.out;
+      }
+    }
     let out: React.ReactNode;
     let tries = 0;
     do {
@@ -184,11 +224,19 @@ export function render(element: React.ReactElement) {
         hook.cleanup = typeof c === "function" ? (c as () => void) : undefined;
       });
     }
-    return node(out, iid, 0, seen);
+    if (!memoOn) return node(out, iid, 0, seen);
+    // memo 부품: 그 아래 인스턴스 id 를 따로 모아 두었다가, 다음에 건너뛸 때 살아 있는 것으로 센다
+    const sub = new Set<string>();
+    const result = node(out, iid, 0, sub);
+    for (const x of sub) seen.add(x);
+    inst.memo = { props, out: result, ids: sub };
+    return result;
   };
 
   const pass = () => {
     const seen = new Set<string>();
+    touchedNow = new Set(touched);
+    touched.clear();
     const prev = internals.H;
     internals.H = dispatcher;
     try {
@@ -222,6 +270,17 @@ export function render(element: React.ReactElement) {
 
   flush();
 
+  function unmount() {
+    liveRenders.delete(unmount);
+    for (const [iid, inst] of instances) {
+      inst.dead = true;
+      instances.delete(iid);
+      for (const h of inst.hooks) (h as EffectHook | undefined)?.cleanup?.();
+    }
+    tree = [];
+  }
+  liveRenders.add(unmount);
+
   const all = (nodes: (HostNode | string)[] = tree): HostNode[] => nodes.flatMap((n) => (typeof n === "string" ? [] : [n, ...all(n.children)]));
 
   return {
@@ -239,6 +298,8 @@ export function render(element: React.ReactElement) {
       flush();
     },
     all,
+    /** 화면을 닫는다 (effect 정리·바깥 저장소 구독 해제) */
+    unmount,
     /** 이름표(accessibilityLabel)로 요소 하나 */
     byLabel(label: string): HostNode {
       const hits = all().filter((n) => n.props.accessibilityLabel === label);

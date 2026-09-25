@@ -103,7 +103,8 @@ describe("누르는 크기 44 이상", () => {
   });
 
   it("누르는 요소는 hitSlop 이 있거나 최소 높이가 44 이상이다", () => {
-    const big = /minHeight: (touch\.min|LINE_H|HEAT_TILE_H)|height: (rowH|lineH)|absoluteFill/;
+    // FB.rowH·FB.accountRowH: 넓은 창 브리핑 목록 줄 56·60 (3-42 — 44 이상인지는 test/foldBriefings.test.tsx 가 지킨다)
+    const big = /minHeight: (touch\.min|LINE_H|HEAT_TILE_H|FB\.(rowH|accountRowH))|height: (rowH|lineH)|absoluteFill/;
     const small = of("Pressable").filter((e) => !excepted(e) && !e.attrs.has("hitSlop") && !big.test(e.attrs.get("style") ?? "") && !big.test(e.styleDefs));
     expect(small.map((e) => e.where)).toEqual([]);
   });

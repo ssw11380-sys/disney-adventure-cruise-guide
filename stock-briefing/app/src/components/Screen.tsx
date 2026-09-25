@@ -42,6 +42,8 @@ interface ScreenProps {
    *   3-42 최종 설계는 넓어진 폭을 가운데로 모아 빈칸으로 두지 않고 숫자 칸·두 번째 칸으로 채운다 (test/foldHoldings 가 지킨다)
    */
   readable?: boolean;
+  /** 스크롤을 부르는 쪽이 옮길 때 (3-42 접고 펴기 이어 보기: 넓은 창에서 보던 브리핑 줄로). scroll=false 면 쓰지 않는다 */
+  scrollRef?: React.Ref<ScrollView>;
 }
 
 /**
@@ -64,7 +66,7 @@ function ReadableScreen(props: ScreenProps) {
   return <ScreenBody {...props} frame={frame} />;
 }
 
-function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentStyle, disclaimer = false, top, frame }: ScreenProps & { frame?: ViewStyle }) {
+function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentStyle, disclaimer = false, top, frame, scrollRef }: ScreenProps & { frame?: ViewStyle }) {
   const t = useTheme();
   const inTabs = /^\/(\(tabs\))?\/?(briefings|settings)?$/.test(usePathname());
   return (
@@ -72,6 +74,7 @@ function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentSty
       {top}
       {scroll ? (
         <ScrollView
+          ref={scrollRef}
           style={styles.root}
           contentContainerStyle={[styles.content, contentStyle, frame]}
           keyboardShouldPersistTaps="handled"
