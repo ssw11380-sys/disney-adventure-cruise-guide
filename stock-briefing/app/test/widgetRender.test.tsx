@@ -901,13 +901,16 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
     expect((await loadCachedWidgetData()).market).toStrictEqual(plain);
   });
 
-  it("검증 지적(누르는 칸): 종목 줄(약 38dp)은 목록 전체를 한 칸으로 묶어 잔고 탭을 연다 — 예전 모습은 줄마다 그 종목", () => {
+  it("누르는 칸: 종목 줄(약 38dp)도 예전 모습처럼 줄마다 그 종목 상세를 연다 (위젯에서 종목으로 바로 가는 길을 없애지 않는다)", () => {
     const list = nodes(draw()).find((n) => n.type === "ListWidget")!;
-    expect(list.children!.map((r) => r.props.clickActionData)).toEqual(list.children!.map(() => ({ uri: HOME_URI })));
+    expect(list.children![0]!.props.clickActionData).toEqual({ uri: `${HOME_URI}stocks/NVDA` });
     // 화면 읽기 이름표는 줄마다 그대로
     expect(list.children![0]!.props.accessibilityLabel).toMatch(/^엔비디아 /);
+    // 예전 모습과 같은 순서·같은 곳 (줄마다 그 종목)
     const classic = nodes(draw({ polish: false })).find((n) => n.type === "ListWidget")!;
-    expect(classic.children![0]!.props.clickActionData).toEqual({ uri: `${HOME_URI}stocks/NVDA` });
+    const uris = list.children!.map((r) => r.props.clickActionData);
+    expect(uris).toEqual(classic.children!.map((r) => r.props.clickActionData));
+    expect(new Set(uris.map((u) => JSON.stringify(u))).size).toBe(uris.length);
     // 제목 줄은 위 여백까지 누르는 칸이고, 바로 아래 합계 칸과 같은 곳(잔고 탭)을 연다
     const t = draw({}, { width: 330, height: 230 });
     expect(head(t).props.padding).toMatchObject({ top: 8 });

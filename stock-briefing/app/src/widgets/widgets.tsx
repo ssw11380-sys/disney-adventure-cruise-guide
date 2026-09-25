@@ -346,15 +346,18 @@ function polishedRowView(s: RegisteredWithQuote, filled: string[], showKrw: bool
   } else if (isHeld(s)) subs = [`${Number((s.quantity ?? 0).toFixed(4))}주 · 시세 없음`, "시세 없음"];
   else subs = ["관심"];
   const price = q ? money(q.price, q.currency, fx, showKrw) : "-";
+  const rate = q ? formatPct(q.changeRate) : null;
   return {
     code: s.code,
     name: s.name,
     price,
-    rate: q ? formatPct(q.changeRate) : null,
+    rate,
     subs: [...new Set(subs)],
     hasQuote: !!q,
     change: q?.change ?? 0,
-    subColor: ev ? tone(ev.profit, c) : c.muted,
+    // 예전 줄과 같이 보이는 값의 부호로 색 ("수익 0.00% 0원"·"오늘 0.00%" 는 기본 글자색, BH-38)
+    rateSign: q && rate ? shownSign(q.changeRate, rate) : 0,
+    subColor: (text) => (ev ? tone(shownSign(ev.profit, text), c) : c.muted),
     speech: polishedRowSpeech(s.name, q ? price : null, q?.changeRate, ev?.profitRate),
     label: q ? DAY_LABEL : null,
   };
@@ -452,7 +455,7 @@ function TopRow({ plan, total, pnl, refresh, refreshing, c }: { plan: TotalPlan;
   );
 }
 
-/** 다듬은 종목 줄 오른쪽: 가격(등락색) · 작은 "오늘"(회색) + 등락률 */
+/** 다듬은 종목 줄 오른쪽: 가격(전일 대비 방향 색) · 작은 "오늘"(회색) + 등락률(보이는 값의 부호 색, BH-38) */
 function PolishedRowRight({ r, rows, c }: { r: PolishedRow; rows: RowsPlan; c: WidgetPalette }) {
   if (!r.hasQuote) return <TextWidget text="-" maxLines={1} style={{ color: c.muted, fontSize: F.md }} />;
   const color = tone(r.change, c);
@@ -460,7 +463,7 @@ function PolishedRowRight({ r, rows, c }: { r: PolishedRow; rows: RowsPlan; c: W
   const rate = (
     <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.xxs }}>
       {r.label ? <TextWidget text={r.label} maxLines={1} style={{ color: c.muted, fontSize: F.xs }} /> : null}
-      <TextWidget text={r.rate ?? "-"} maxLines={1} style={{ color, fontSize: F.md, fontWeight: "700", width: rows.rateW, textAlign: "right" }} />
+      <TextWidget text={r.rate ?? "-"} maxLines={1} style={{ color: tone(r.rateSign, c), fontSize: F.md, fontWeight: "700", width: rows.rateW, textAlign: "right" }} />
     </FlexWidget>
   );
   return rows.stacked ? (
@@ -487,7 +490,7 @@ export const polishedRowUri = (code: string) => `${DEEP_LINK}stocks/${code}`;
  *  1. 칩에 두 시장의 지금 세션 — 원화 보유액이 큰 시장부터 ("미국 주간거래 · 한국 휴장"), 좁으면 앞 시장만. 보이는 시장 중 장중(달력)이 있을 때만 금색
  *  2. 지수 줄: 계좌 비중 순서(미국이 크면 나스닥·S&P500 먼저), 원/달러는 끝·등락률까지, 지난 세션 값은 흐리게 + 날짜.
  *     좁으면 둘째 지수부터 빼고 지수는 등락률만 — 시장마다 하나와 원/달러는 330dp 에도 보인다. 4×3 이상은 두 줄까지
- *  3. 종목 줄: 왼쪽 "수익 …"(누적, 합계와 같은 통화 — 기본 원화), 오른쪽 "오늘 …". 누르면 잔고 탭 (줄이 48dp 보다 낮아 목록을 한 칸으로)
+ *  3. 종목 줄: 왼쪽 "수익 …"(누적, 합계와 같은 통화 — 기본 원화), 오른쪽 "오늘 …". 누르면 예전처럼 그 종목 상세 (polishedRowUri)
  *  4. 손익 전환 칸에 ⇅ 와 "누적"/"오늘", 화면 읽기는 "눌러서 당일 손익 보기"
  *  5. 제목 "보유 17 · 관심 1" (좁으면 "보유 17")
  *  6. 세로 빈칸 줄이기: ↻ 를 합계 줄로 옮겨 머리 줄을 글자 높이로, 지수 줄·종목 줄·아래 여백을 줄인다 (layout.ts planHoldingsPolished)
@@ -568,7 +571,7 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
               >
                 <FlexWidget style={{ flexDirection: "column", width: plan.rows.leftW }}>
                   <TextWidget text={r.name} truncate="END" maxLines={1} style={{ color: c.ink, fontSize: F.base, fontWeight: "600" }} />
-                  {subText ? <TextWidget text={subText} maxLines={1} style={{ color: r.subColor, fontSize: plan.rows.subFont }} /> : null}
+                  {subText ? <TextWidget text={subText} maxLines={1} style={{ color: r.subColor(subText), fontSize: plan.rows.subFont }} /> : null}
                 </FlexWidget>
                 <PolishedRowRight r={r} rows={plan.rows} c={c} />
               </FlexWidget>

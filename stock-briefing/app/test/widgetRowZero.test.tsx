@@ -101,3 +101,28 @@ describe("BH-38: 위젯 종목 줄 — 등락률", () => {
     expect(find(tx, "$0.05").color).toBe(DOWN);
   });
 });
+
+describe("BH-38: 다듬은 잔고 위젯(widgetPolish)의 종목 줄도 같은 규칙", () => {
+  const polished = (stocks: ReturnType<typeof holding>[], showKrw = false) =>
+    rowTexts(render(<HoldingsWidget polish stocks={stocks} showKrw={showKrw} afterCost={false} fetchedAt={NOW} error={null} now={NOW} width={420} height={260} />));
+
+  it("'수익 0.00% $0.00'·'수익 0.00% 0원' 은 기본 글자색", () => {
+    expect(find(polished([toss()]), "수익 0.00% $0.00").color).toBe(INK);
+    expect(find(polished([toss()], true), "수익 0.00% 0원").color).toBe(INK);
+  });
+
+  it("보이는 손실·이익은 부호 색", () => {
+    const loss = holding("005930", quote("005930", 1800, { asOf: AT }), 2, 1833, undefined, "삼성전자");
+    const gain = holding("000660", quote("000660", 1900, { asOf: AT }), 1, 1833, undefined, "하이닉스");
+    const tx = polished([loss, gain]);
+    expect(find(tx, "수익 -1.80% -66원").color).toBe(DOWN);
+    expect(find(tx, "수익 +3.66% +67원").color).toBe(UP);
+  });
+
+  it("'오늘 0.00%': 현재가는 하락 색, 등락률 '0.00%' 는 기본 글자색 (1센트 하락한 230달러 종목)", () => {
+    const tx = polished([holding("AAPL", quote("AAPL", 229.99, { currency: "USD", change: -0.01, changeRate: -0.0043, asOf: AT }), null, null, undefined, "애플")]);
+    expect(find(tx, "$229.99").color).toBe(DOWN);
+    expect(find(tx, "0.00%").color).toBe(INK);
+    expect(find(tx, "오늘").color).toBe(WIDGET_COLORS.muted); // "오늘" 은 회색 작은 글자
+  });
+});
