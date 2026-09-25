@@ -7,8 +7,11 @@ import {
   estimateTextWidth,
   fadeEdges,
   formatChartValue,
+  headerButtonsRoom,
+  headerNeedsTwoLines,
   maLegendItems,
   NAME_MIN_CHARS,
+  nameMinWidth,
   NO_FADE,
 } from "@/lib/chartLayout";
 import { LINE } from "@/lib/textScale";
@@ -221,142 +224,129 @@ describe("넓은 창 차트 높이의 하한과 폭 600 경계 (chartMinH · cha
   });
 });
 
-describe("전체 화면 차트 머리 (chartHeaderLayout, 진단 8번)", () => {
+describe("전체 화면 차트 머리 (headerNeedsTwoLines · chartHeaderLayout, 진단 8번 — 깨질 때만 고친다)", () => {
   const NAME = "한화에어로스페이스";
   const PRICE = "912,000원";
   // 화면과 같은 글자 (chart.tsx: formatPrice(change, sign) + 등락률)
   const CHANGE = "+12,000원 (+1.33%)";
   /** 전체 화면 차트 판의 좌우 여백 (chart.tsx pad = space.md) */
   const PAD = space.md * 2;
-  const head = (winW: number, fontScale: number, buttons = 2, name = NAME) => chartHeaderLayout({ width: winW - PAD, fontScale, name, price: PRICE, change: CHANGE, buttons });
+  /**
+   * 한 줄 머리를 그렸을 때 잰 값 흉내 (React Native 의 줄 배치와 같게): 다 들어가면 글자 폭 그대로,
+   * 넘치면 글자 묶음은 쓸 수 있는 폭까지만, 이름이 그만큼 줄어든다(가격·등락은 줄지 않는다).
+   * 글꼴 폭은 어림(estimateTextWidth) × em — em 1 은 어림만큼 넓은 글꼴, 1 보다 작으면 좁은 글꼴
+   */
+  const oneLine = (o: { width: number; fontScale: number; name: string; price: string; change: string; buttons: number; em?: number }) => {
+    const s = Math.min(Math.max(o.fontScale, 1), fontCap.chrome);
+    const w = (text: string, size: number) => estimateTextWidth(text, size * s) * (o.em ?? 1);
+    const room = o.width - headerButtonsRoom(o.buttons);
+    const quote = space.sm + w(o.price, font.body) + space.sm + w(o.change, font.small);
+    const name = w(o.name, font.h2);
+    return name + quote <= room ? { title: name + quote, nameWidth: name } : { title: room, nameWidth: Math.max(0, room - quote) };
+  };
+  const decide = (winW: number, fontScale: number, buttons = 2, name = NAME, change = CHANGE, em = 1) => {
+    const width = winW - PAD;
+    return headerNeedsTwoLines({ width, buttons, fontScale, name, ...oneLine({ width, fontScale, name, price: PRICE, change, buttons, em }) });
+  };
 
-  it("접힌 화면 100%: 이름만 줄이고(…) 가격·등락은 같은 줄 — 높이 44 그대로", () => {
-    for (const w of [475, 411]) expect(head(w, 1), `${w}`).toEqual({ twoLines: false, height: touch.min });
+  it("다 들어가면 늘 한 줄 (3-42 이전 머리 그대로): 360 창 삼성전자 — 웹 미리보기에서 잰 폭(글자 묶음 227, 이름 59)", () => {
+    // 이름 x12–71 · 가격 79–132.5 · 등락 140.5–239, 버튼은 280 부터 (머리 폭 336, 쓸 수 있는 폭 336 − 84 = 252)
+    for (const buttons of [2, 1]) expect(headerNeedsTwoLines({ width: 360 - PAD, buttons, fontScale: 1, name: "삼성전자", title: 227, nameWidth: 59 }), `${buttons}`).toBe(false);
+    // 예전 어림 기준(글자 폭을 넉넉히 어림해 합 342.7 > 336)은 이 머리를 두 줄로 내렸다 — 이제 어림으로는 정하지 않는다
+    const est = estimateTextWidth("삼성전자", font.h2) + space.sm + estimateTextWidth("74,500원", font.body) + space.sm + estimateTextWidth("+1,200원 (+1.64%)", font.small);
+    expect(est + headerButtonsRoom(2)).toBeGreaterThan(360 - PAD);
   });
 
-  it("폴드8 접힘 115% 는 이름을 줄여 한 줄에 들어간다", () => {
-    expect(head(475, 1.15)).toEqual({ twoLines: false, height: touch.min });
+  it("다 들어가면 이름이 짧아도(어림 네 글자보다 좁아도) 한 줄", () => {
+    expect(headerNeedsTwoLines({ width: 336, buttons: 2, fontScale: 1.5, name: "LG", title: 150, nameWidth: 20 })).toBe(false);
+    // 쓸 수 있는 폭보다 0.5 넘게 좁으면 다 들어간 것
+    expect(headerNeedsTwoLines({ width: 336, buttons: 2, fontScale: 1, name: "삼성전자", title: 251.4, nameWidth: 10 })).toBe(false);
   });
 
-  it("좁은 창 + 큰 글씨(접힌 화면 130% 이상)는 가격·등락을 둘째 줄로 내리고 머리를 두 줄 높이로", () => {
+  it("접힌 화면 100%·115%: 긴 이름은 넘쳐도 이름만 줄이면(…) 네 글자가 남아 한 줄", () => {
+    expect(decide(475, 1)).toBe(false);
+    expect(decide(411, 1)).toBe(false);
+    expect(decide(475, 1.15)).toBe(false);
+    // 411 은 넘치긴 한다 (예전 머리라면 가격이 쪼개지던 경우)
+    const width = 411 - PAD;
+    expect(oneLine({ width, fontScale: 1, name: NAME, price: PRICE, change: CHANGE, buttons: 2 }).title).toBe(width - headerButtonsRoom(2));
+  });
+
+  it("좁은 창 + 큰 글씨(접힌 화면 130% 이상): 이름에 네 글자도 남지 않아 두 줄", () => {
     for (const [w, s] of [
       [411, 1.15],
       [411, 1.3],
       [475, 1.3],
       [475, 1.5],
       [411, 2],
-    ]) {
-      const r = head(w!, s!);
-      expect(r.twoLines, `${w} ${s}`).toBe(true);
-      // 첫 줄(버튼 34 와 이름 중 높은 쪽) + 둘째 줄(가격 한 줄)이 머리 안에 들어간다 → 아래 도구 줄과 겹치지 않는다
-      expect(r.height, `${w} ${s}`).toBeGreaterThanOrEqual(CHART_ICON_BTN + Math.ceil(font.body * LINE * Math.min(s!, fontCap.chrome)));
-      expect(r.height, `${w} ${s}`).toBeGreaterThan(touch.min);
+    ] as const) {
+      expect(decide(w, s), `${w} ${s}`).toBe(true);
     }
   });
 
-  it("두 줄 머리 높이: 100% 59 · 130% 65 · 150% 이상 69 (최소 44 보다 크고, 글자에 맞춰 늘어난다)", () => {
-    const two = (s: number) => chartHeaderLayout({ width: 100, fontScale: s, name: NAME, price: PRICE, change: CHANGE, buttons: 2 });
-    expect([1, 1.3, 1.5, 2].map((s) => two(s))).toEqual([
+  it("넓은 창·돌려 그린 가로 판은 큰 글씨에서도 한 줄", () => {
+    for (const w of [933, 704, 859, 954, 751, 960]) for (const s of [1, 1.3, 1.5, 2]) expect(decide(w, s), `${w} ${s}`).toBe(false);
+  });
+
+  it("버튼이 하나면(가로 창에서 가로로 보기를 숨김) 그만큼 한 줄에 더 들어간다", () => {
+    expect(decide(411, 1.15, 2)).toBe(true);
+    expect(decide(411, 1.15, 1)).toBe(false);
+    expect(headerButtonsRoom(2)).toBe(2 * CHART_ICON_BTN + space.sm + space.sm);
+    expect(headerButtonsRoom(1)).toBe(CHART_ICON_BTN + space.sm);
+    expect(headerButtonsRoom(0)).toBe(0);
+  });
+
+  it("좁은 글꼴이면 같은 창에서도 한 줄에 더 들어간다 (어림이 아니라 잰 폭을 따른다)", () => {
+    expect(decide(411, 1.15)).toBe(true);
+    expect(decide(411, 1.15, 2, NAME, CHANGE, 0.8)).toBe(false);
+  });
+
+  it("이름이 지키는 폭: 앞 네 글자 + '…'(짧은 이름은 전부), 글자 배율은 fontCap.chrome 까지", () => {
+    expect(NAME_MIN_CHARS).toBe(4);
+    expect(nameMinWidth(NAME, 1)).toBe(estimateTextWidth("한화에어…", font.h2));
+    expect(nameMinWidth(`${NAME}우선주`, 1)).toBe(nameMinWidth(NAME, 1));
+    expect(nameMinWidth("삼성전자", 1)).toBe(estimateTextWidth("삼성전자", font.h2));
+    expect(nameMinWidth("삼성전자", 1)).toBeLessThan(nameMinWidth(NAME, 1));
+    expect(nameMinWidth(NAME, 2)).toBe(nameMinWidth(NAME, fontCap.chrome));
+    expect(nameMinWidth(NAME, 0.85)).toBe(nameMinWidth(NAME, 1));
+    // 넘쳤을 때: 이름 폭이 그보다 좁으면 두 줄, 같거나 넓으면 한 줄
+    const room = 336 - headerButtonsRoom(2);
+    const at = (nameWidth: number) => headerNeedsTwoLines({ width: 336, buttons: 2, fontScale: 1, name: NAME, title: room, nameWidth });
+    expect(at(nameMinWidth(NAME, 1))).toBe(false);
+    expect(at(nameMinWidth(NAME, 1) - 1)).toBe(true);
+    expect(at(0)).toBe(true);
+  });
+
+  it("잰 값이 이상하면(NaN) 한 줄 (3-42 이전 머리)", () => {
+    expect(headerNeedsTwoLines({ width: 336, buttons: 2, fontScale: 1, name: NAME, title: Number.NaN, nameWidth: 0 })).toBe(false);
+    expect(headerNeedsTwoLines({ width: Number.NaN, buttons: 2, fontScale: 1, name: NAME, title: 300, nameWidth: 0 })).toBe(false);
+  });
+
+  it("머리 높이: 한 줄은 100~200% 모두 44 (3-42 이전과 같은 높이), 두 줄은 100% 59 · 130% 65 · 150% 이상 69", () => {
+    for (const s of [0.85, 1, 1.15, 1.3, 1.5, 2]) expect(chartHeaderLayout({ fontScale: s, quote: true, twoLines: false }), `${s}`).toEqual({ twoLines: false, height: touch.min });
+    expect([1, 1.3, 1.5, 2].map((s) => chartHeaderLayout({ fontScale: s, quote: true, twoLines: true }))).toEqual([
       { twoLines: true, height: 59 },
       { twoLines: true, height: 65 },
       { twoLines: true, height: 69 },
       { twoLines: true, height: 69 },
     ]);
-  });
-
-  it("머리 높이는 최소 44, 글자 배율은 fontCap.chrome(150%) 까지만 반영한다", () => {
-    for (const w of [411, 475, 933]) {
-      for (const s of [1, 1.15, 1.3, 1.5, 2]) {
-        const r = head(w, s);
-        expect(r.height, `${w} ${s}`).toBeGreaterThanOrEqual(touch.min);
-        const c = Math.min(s, fontCap.chrome);
-        if (r.twoLines) expect(r.height, `${w} ${s}`).toBeGreaterThanOrEqual(Math.max(CHART_ICON_BTN, font.h2 * LINE * c) + font.body * LINE * c);
-        else expect(r.height, `${w} ${s}`).toBeGreaterThanOrEqual(font.h2 * LINE * c);
-      }
-      // 200% 는 150% 와 같다 (머리가 화면을 다 먹지 않게)
-      expect(head(w, 2), `${w}`).toEqual(head(w, 1.5));
+    for (const s of [1, 1.15, 1.3, 1.5, 2]) {
+      const c = Math.min(s, fontCap.chrome);
+      const two = chartHeaderLayout({ fontScale: s, quote: true, twoLines: true });
+      // 첫 줄(버튼 34 와 이름 중 높은 쪽) + 둘째 줄(가격 한 줄)이 머리 안에 들어간다 → 아래 도구 줄과 겹치지 않는다
+      expect(two.height, `${s}`).toBeGreaterThanOrEqual(Math.max(CHART_ICON_BTN, font.h2 * LINE * c) + font.body * LINE * c);
+      expect(chartHeaderLayout({ fontScale: s, quote: true, twoLines: false }).height, `${s}`).toBeGreaterThanOrEqual(font.h2 * LINE * c);
     }
-    // 작은 글씨(85%)는 100% 로 본다
-    expect(head(411, 0.85)).toEqual(head(411, 1));
   });
 
-  it("넓은 창·돌려 그린 가로 판은 큰 글씨에서도 한 줄", () => {
-    for (const w of [933, 704, 859, 954, 751, 960]) for (const s of [1, 1.3, 1.5, 2]) expect(head(w, s).twoLines, `${w} ${s}`).toBe(false);
-  });
-
-  it("버튼이 하나면(가로 창에서 가로로 보기를 숨김) 그만큼 한 줄에 더 들어간다", () => {
-    expect(head(411, 1.15, 2).twoLines).toBe(true);
-    expect(head(411, 1.15, 1).twoLines).toBe(false);
-  });
-
-  it("시세가 없으면(이름만) 늘 한 줄", () => {
-    expect(chartHeaderLayout({ width: 200, fontScale: 2, name: NAME, price: null, change: null, buttons: 2 })).toEqual({ twoLines: false, height: touch.min });
-    // 전에 두 줄이었어도 둘째 줄에 둘 것이 없으면 한 줄
-    expect(chartHeaderLayout({ width: 200, fontScale: 2, name: NAME, price: null, change: null, buttons: 2, prevTwoLines: true })).toEqual({ twoLines: false, height: touch.min });
-  });
-
-  describe("시세가 바뀔 때마다 한 줄 ↔ 두 줄로 뛰지 않는다 (prevTwoLines)", () => {
-    // 울트라 접힘(411) · 글자 115%: 'SK하이닉스 171,500원' 에 등락 +990원 은 한 줄, +1,000원 은 두 줄에 걸린다.
-    // 예전에는 시세가 990 ↔ 1,000 을 오갈 때마다 머리가 44 ↔ 62 로 뛰고 차트도 18dp 씩 오르내렸다
-    const HYNIX = "SK하이닉스";
-    const HPRICE = "171,500원";
-    const at = (change: string, prevTwoLines?: boolean, width = 411 - PAD, fontScale = 1.15) =>
-      chartHeaderLayout({ width, fontScale, name: HYNIX, price: HPRICE, change, buttons: 2, prevTwoLines });
-    /** 화면처럼 바로 전 결정을 넘기며 시세를 차례로 바꾼다 */
-    const run = (changes: string[], width?: number, fontScale?: number) => {
-      let prev: boolean | undefined;
-      return changes.map((c) => {
-        const r = at(c, prev, width, fontScale);
-        prev = r.twoLines;
-        return r.height;
-      });
-    };
-    const FIT = "+990원 (+0.58%)";
-    const OVER = "+1,000원 (+0.59%)";
-
-    it("경계 사례 확인: 처음 정할 때는 +990원 한 줄, +1,000원 두 줄 (넘치면 늘 두 줄 — 잘리지 않게)", () => {
-      expect(at(FIT)).toEqual({ twoLines: false, height: touch.min });
-      expect(at(OVER)).toEqual({ twoLines: true, height: 62 });
-      // 전에 한 줄이었어도 넘치면 두 줄
-      expect(at(OVER, false)).toEqual({ twoLines: true, height: 62 });
-    });
-
-    it("990 ↔ 1,000 을 오가도 한 번 두 줄이 되면 두 줄 그대로 (44 ↔ 62 로 뛰지 않는다)", () => {
-      expect(run([FIT, OVER, FIT, OVER, FIT, "+980원 (+0.57%)"])).toEqual([44, 62, 62, 62, 62, 62]);
-    });
-
-    it("보합(0원) ↔ ±100원 처럼 부호·자릿수가 한꺼번에 바뀌어도 그대로", () => {
-      expect(run([OVER, "0원 (0.00%)", "+100원 (+0.06%)", "0원 (0.00%)", "-100원 (-0.06%)"])).toEqual([62, 62, 62, 62, 62]);
-      // 한 줄로 시작하면 들어가는 동안은 한 줄
-      expect(run(["0원 (0.00%)", "+100원 (+0.06%)", "-100원 (-0.06%)", FIT])).toEqual([44, 44, 44, 44]);
-    });
-
-    it("넉넉한 창(폴드8 접힘 115%)은 +1,000원 도 한 줄 — 전 결정이 없으면(창·글자·종목이 바뀜) 새로 정한다", () => {
-      expect(run([FIT, OVER, FIT], 475 - PAD)).toEqual([44, 44, 44]);
-      expect(at(FIT, undefined)).toEqual({ twoLines: false, height: touch.min });
-    });
-  });
-
-  it("한 줄 기준: 이름 앞 네 글자 + '…'(짧은 이름은 전부) + 가격 + 등락 + 버튼이 폭에 들어가는가", () => {
-    expect(NAME_MIN_CHARS).toBe(4);
-    const buttons = 2 * CHART_ICON_BTN + space.sm + space.sm;
-    const need = (nameMin: string) => estimateTextWidth(nameMin, font.h2) + space.sm + estimateTextWidth(PRICE, font.body) + space.sm + estimateTextWidth(CHANGE, font.small) + buttons;
-    const at = (width: number, name: string) => chartHeaderLayout({ width, fontScale: 1, name, price: PRICE, change: CHANGE, buttons: 2 }).twoLines;
-    // 긴 이름: 앞 네 글자 + … 만 지키면 된다 (그 뒤는 줄어든다)
-    expect(at(need("한화에어…"), NAME)).toBe(false);
-    expect(at(need("한화에어…") - 1, NAME)).toBe(true);
-    // 이름이 더 길어도 기준은 같다
-    expect(at(need("한화에어…"), `${NAME}우선주`)).toBe(false);
-    // 네 글자 이하 이름은 다 보여야 한다
-    expect(at(need("삼성전자"), "삼성전자")).toBe(false);
-    expect(at(need("삼성전자") - 1, "삼성전자")).toBe(true);
-    expect(need("삼성전자")).toBeLessThan(need("한화에어…"));
+  it("시세가 없으면(이름만) 두 줄로 정했어도 한 줄", () => {
+    expect(chartHeaderLayout({ fontScale: 2, quote: false, twoLines: true })).toEqual({ twoLines: false, height: touch.min });
   });
 
   it("글자 폭 어림: 한글은 숫자보다 넓고, 쉼표·공백은 좁다 (실제 글꼴보다 조금 넓게)", () => {
     expect(estimateTextWidth("가", 10)).toBeGreaterThan(estimateTextWidth("1", 10));
     expect(estimateTextWidth("1", 10)).toBeGreaterThan(estimateTextWidth(",", 10));
-    // Roboto 숫자 폭 0.56em 보다 넓게 어림한다 (한 줄에 들어간다고 본 것은 폰에서도 들어가게)
+    // Roboto 숫자 폭 0.56em 보다 넓게 어림한다
     expect(estimateTextWidth("1234567890", 14)).toBeGreaterThan(10 * 0.56 * 14);
     expect(estimateTextWidth("", 14)).toBe(0);
   });

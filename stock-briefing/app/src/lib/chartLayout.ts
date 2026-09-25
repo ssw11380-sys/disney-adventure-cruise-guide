@@ -7,9 +7,9 @@ import { font, fontCap, layout, space, touch } from "@/tokens";
 /**
  * 차트 화면 배치 계산 (3-42 접는 폰 · 폴드 진단 8·22·24·25·6·7번). React Native 를 불러오지 않는 순수 모듈 (테스트용).
  *  - candleChartSize: 종목·지수 상세 차트 그림의 폭·높이 (휴대폰 화면은 3-42 이전 식 그대로 — phoneChartWidth)
- *  - chartHeaderLayout: 전체 화면 차트 머리 (이름·가격·등락을 한 줄에 둘지, 가격·등락을 둘째 줄로 내릴지, 머리 높이)
- *  - maLegendItems: 차트 아래 이동평균 값 줄의 항목 (한 항목이 두 줄로 나뉘지 않게)
- *  - fadeEdges: 옆으로 넘기는 칩 띠에서 흐리게 칠할 가장자리
+ *  - headerNeedsTwoLines · chartHeaderLayout: 전체 화면 차트 머리 (한 줄로 그려 재 보고 넘칠 때만 가격·등락을 둘째 줄로, 머리 높이)
+ *  - maLegendItems: 차트 아래 이동평균 값 줄의 항목 (한 항목이 두 줄로 나뉘지 않게 — 넓은 창만)
+ *  - fadeEdges: 옆으로 넘기는 칩 띠에서 흐리게 칠할 가장자리 (넓은 창만)
  * 기준 숫자는 tokens.ts 의 layout·space·font (폰 실측 전 추정값은 토큰만 바꾼다)
  */
 
@@ -88,8 +88,10 @@ export function candleChartSize(o: ChartSizeInput): { width: number; height: num
 export const CHART_ICON_BTN = 34;
 /** 머리 한 줄에서 이름이 줄어들어도 남기는 글자 수. 이만큼도 남지 않으면 가격·등락을 둘째 줄로 내린다 */
 export const NAME_MIN_CHARS = 4;
-/** 글자 폭 어림 여유 (실제 글꼴보다 조금 넓게 잡아, 한 줄에 들어간다고 본 것은 폰에서도 들어가게) */
+/** 글자 폭 어림 여유 (실제 글꼴보다 조금 넓게 잡는다 — 넓은 창 상세 머리 lib/detailLayout 도 쓴다) */
 const WIDTH_SLACK = 1.05;
+/** 잰 폭의 소수점 오차 (이만큼 안쪽이면 꽉 찬 것으로 본다) */
+const FIT_EPS = 0.5;
 
 /** 글자 한 자의 폭 (글자 크기 대비). Roboto·삼성 기본 글꼴 값보다 조금 넓게 */
 function charEm(ch: string): number {
@@ -112,59 +114,83 @@ export function estimateTextWidth(text: string, size: number): number {
   return em * size * WIDTH_SLACK;
 }
 
-export interface ChartHeaderInput {
+/**
+ * 머리 오른쪽 버튼 묶음이 차지하는 폭 + 왼쪽 글자 묶음과의 간격 (chart.tsx: 버튼 사이 space.sm, 머리 줄 gap space.sm).
+ * 머리 폭에서 이것을 뺀 것이 이름·가격·등락 한 줄이 쓸 수 있는 폭이다
+ */
+export function headerButtonsRoom(buttons: number): number {
+  return buttons > 0 ? buttons * CHART_ICON_BTN + (buttons - 1) * space.sm + space.sm : 0;
+}
+
+/** 이름이 한 줄 머리에서 지켜야 하는 폭 (어림): 앞 NAME_MIN_CHARS 자 + '…' (그보다 짧은 이름은 전부), 글자 배율은 fontCap.chrome 까지 */
+export function nameMinWidth(name: string, fontScale: number): number {
+  const chars = [...name];
+  const keep = chars.length <= NAME_MIN_CHARS ? name : `${chars.slice(0, NAME_MIN_CHARS).join("")}…`;
+  return estimateTextWidth(keep, font.h2 * clampScale(fontScale, fontCap.chrome));
+}
+
+export interface ChartHeaderMeasure {
   /** 머리가 쓰는 폭 (차트 판의 좌우 여백을 뺀 값) */
   width: number;
-  /** 시스템 글자 배율 (1 = 100%). 머리는 fontCap.chrome(150%) 까지만 커진다 */
-  fontScale: number;
-  name: string;
-  /** 가격·등락 글자 (시세가 없으면 null) */
-  price: string | null;
-  change: string | null;
   /** 오른쪽 둥근 버튼 수 (가로로 보기 + 닫기 = 2, 가로 창에서 가로로 보기를 숨기면 1) */
   buttons: number;
+  /** 시스템 글자 배율 (1 = 100%) */
+  fontScale: number;
+  name: string;
+  /** 한 줄 머리에서 잰 글자 묶음(이름·가격·등락) 폭 (onLayout) */
+  title: number;
+  /** 한 줄 머리에서 잰 이름 폭 — 자리가 모자라 줄어든 뒤의 폭 (onLayout) */
+  nameWidth: number;
+}
+
+/**
+ * 한 줄로 그려 본 머리를 재서, 가격·등락을 둘째 줄로 내려야 하는지 정한다 (진단 8번, 버그 수정 — 깨질 때만 고친다).
+ *  - 글자 묶음이 쓸 수 있는 폭보다 좁으면(다 들어감) 늘 한 줄 → 3-42 이전(main)과 똑같은 머리 (사용자 결정 '접은 화면은 그대로').
+ *    어림이 아니라 실제 글꼴로 잰 폭이라, 다 들어가는 짧은 이름(360 창 삼성전자 등)이 어림 때문에 두 줄로 가지 않는다
+ *  - 꽉 찼으면(예전 머리라면 넘쳐서 가격이 '912,000 / 원'처럼 쪼개지던 경우) 이름만 '…'로 줄어든다.
+ *    그래도 이름에 NAME_MIN_CHARS 자 폭(어림)도 남지 않으면 두 줄
+ */
+export function headerNeedsTwoLines(m: ChartHeaderMeasure): boolean {
+  const room = m.width - headerButtonsRoom(m.buttons);
+  if (![room, m.title, m.nameWidth].every(Number.isFinite)) return false;
+  if (m.title < room - FIT_EPS) return false;
+  return m.nameWidth < nameMinWidth(m.name, m.fontScale) - FIT_EPS;
+}
+
+export interface ChartHeaderInput {
+  /** 시스템 글자 배율 (1 = 100%). 머리는 fontCap.chrome(150%) 까지만 커진다 */
+  fontScale: number;
+  /** 가격·등락이 있는가 (시세가 없으면 이름만 — 늘 한 줄) */
+  quote: boolean;
   /**
-   * 같은 창 폭·글자 배율·버튼 수·종목 이름에서 바로 전에 정한 값 (그 밖의 것이 바뀌었으면 넘기지 않는다 → 새로 정한다).
-   * true 면 시세가 바뀌어 한 줄에 다시 들어가도 두 줄로 둔다 (시세가 움직일 때마다 머리가 44 ↔ 62 로 뛰지 않게)
+   * 두 줄로 정했는가: headerNeedsTwoLines 로 잰 결과를 같은 창 폭·글자 배율·버튼 수·종목 이름 동안 기억한 값 (chart.tsx).
+   * 한 번 두 줄이 되면 시세가 바뀌어 한 줄에 다시 들어가도 두 줄로 둔다 (시세가 움직일 때마다 머리가 44 ↔ 62 로 뛰지 않게)
    */
-  prevTwoLines?: boolean;
+  twoLines: boolean;
 }
 
 export interface ChartHeaderLayout {
-  /** 가격·등락을 이름 아래 둘째 줄로 내린다 (좁은 창 + 큰 글씨) */
+  /** 가격·등락을 이름 아래 둘째 줄로 내린다 (좁은 창 + 큰 글씨 + 긴 이름) */
   twoLines: boolean;
   /** 머리 최소 높이: 44 와 글자 배율(fontCap.chrome 까지)에 맞춘 줄 높이 중 큰 값 → 아래 도구 줄과 겹치지 않는다 */
   height: number;
 }
 
 /**
- * 전체 화면 차트 머리 배치 (진단 8번, 버그 수정).
- * 이름이 길면(한화에어로스페이스) 이름만 '…'로 줄이고 가격·등락은 줄이지 않는다. 그래도 이름이 NAME_MIN_CHARS 자도
- * 남지 않으면(좁은 바깥 화면 + 글자 130% 등) 가격·등락을 둘째 줄로 내린다 → 가격이 '912,000 / 원'처럼 쪼개지지 않는다.
- * 머리 높이는 고정 44 대신 최소 44 에 글자 배율을 반영한다 (두 줄이면 두 줄 높이).
+ * 전체 화면 차트 머리 배치 (진단 8번). 높이는 고정 44 대신 최소 44 에 글자 배율을 반영한다 (두 줄이면 두 줄 높이).
+ * 한 줄이면 100~150% 글자에서 44 그대로 — 3-42 이전 머리와 같은 높이라 차트 크기도 같다.
  *
- * 한 번 두 줄이 되면(prevTwoLines) 같은 창·글자·종목에서는 두 줄 그대로 둔다. 등락이 +990원 ↔ +1,000원, 보합 0원 ↔ ±100원처럼
- * 오가면 필요한 폭이 한 틱에 13~35dp 씩 바뀌어, 기준선에 걸린 창(울트라 접힘 115% 등)에서 머리가 44 ↔ 62 로 뛰고 차트도 오르내렸다.
- * 두 줄은 늘 안전하다(잘리지 않는다). 한 줄 → 두 줄은 넘칠 때 바로 바꾼다 (잘리지 않게, 창·시세 모두)
+ * 두 줄로 갈지는 그려 본 한 줄 머리를 재서 정한다 (headerNeedsTwoLines). 재기 전(첫 그림)은 한 줄.
+ * 한 번 두 줄이 되면(twoLines) 같은 창·글자·종목에서는 두 줄 그대로 둔다. 등락이 +990원 ↔ +1,000원, 보합 0원 ↔ ±100원처럼
+ * 오가면 필요한 폭이 한 틱에 13~35dp 씩 바뀌어, 기준선에 걸린 창에서 머리가 44 ↔ 62 로 뛰고 차트도 오르내렸다.
+ * 두 줄은 늘 안전하다(잘리지 않는다). 한 줄 → 두 줄은 넘쳐서 이름이 모자랄 때 바로 바꾼다
  */
 export function chartHeaderLayout(o: ChartHeaderInput): ChartHeaderLayout {
   const s = clampScale(o.fontScale, fontCap.chrome);
   // 첫 줄: 이름(h2)과 둥근 버튼 중 높은 쪽. 둘째 줄: 가격(body) 한 줄 + 도구 줄과의 틈
   const line1 = Math.max(CHART_ICON_BTN, Math.ceil(font.h2 * LINE * s));
-  const one = Math.max(touch.min, line1);
-  const two = Math.max(touch.min, line1 + space.xxs + Math.ceil(font.body * LINE * s) + space.xs);
-  const quote = [o.price ? estimateTextWidth(o.price, font.body * s) : null, o.change ? estimateTextWidth(o.change, font.small * s) : null].filter(
-    (w): w is number => w !== null,
-  );
-  if (!quote.length) return { twoLines: false, height: one };
-  // 전에 두 줄이었으면 그대로 (시세 숫자가 바뀔 때마다 번갈아 뛰지 않게)
-  if (o.prevTwoLines) return { twoLines: true, height: two };
-  const chars = [...o.name];
-  const nameMin = estimateTextWidth(chars.length <= NAME_MIN_CHARS ? o.name : `${chars.slice(0, NAME_MIN_CHARS).join("")}…`, font.h2 * s);
-  // 오른쪽 버튼 묶음 (버튼 사이 간격 + 왼쪽 글자 묶음과의 간격)
-  const buttons = o.buttons > 0 ? o.buttons * CHART_ICON_BTN + (o.buttons - 1) * space.sm + space.sm : 0;
-  const need = nameMin + quote.reduce((sum, w) => sum + space.sm + w, 0) + buttons;
-  return need <= o.width ? { twoLines: false, height: one } : { twoLines: true, height: two };
+  if (!o.quote || !o.twoLines) return { twoLines: false, height: Math.max(touch.min, line1) };
+  return { twoLines: true, height: Math.max(touch.min, line1 + space.xxs + Math.ceil(font.body * LINE * s) + space.xs) };
 }
 
 // ── 이동평균 값 줄 ──

@@ -1,14 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, router, useLocalSearchParams } from "expo-router";
-import React, { useState } from "react";
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import React, { useRef, useState } from "react";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCandles, useStock } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
 import { CandleChart } from "@/components/CandleChart";
 import { ChartNotice } from "@/components/Freshness";
 import { ChangeText, ErrorView } from "@/components/ui";
-import { CHART_ICON_BTN, chartHeaderLayout } from "@/lib/chartLayout";
+import { CHART_ICON_BTN, chartHeaderLayout, headerNeedsTwoLines } from "@/lib/chartLayout";
 import { CANDLE_COUNT, parseCandlePeriod } from "@/lib/chartPrefs";
 import { currencyOfMarket, formatPct, formatPrice } from "@/lib/format";
 import { parseStockCode } from "@/lib/freshness";
@@ -23,8 +23,10 @@ import { font, fontCap, slopFor, space, useTheme } from "@/theme";
  * 폰을 따라 가로로 돈다 → 거기서 또 90도 돌리면 차트가 옆으로 눕는다. 가로 창에서는 창을 그대로 쓰고 가로 버튼을 끈다.
  * 넓은 창 배치(3-42, 플래그 foldLayout)가 켜져 있으면 꺼진 버튼을 흐리게 두지 않고 아예 숨겨 닫기만 남긴다 (폴드 진단 26번).
  *
- * 머리(폴드 진단 8번): 이름이 길면 이름만 '…'로 줄이고 가격·등락은 한 줄 그대로. 그래도 좁으면(바깥 화면 + 큰 글씨)
- * 가격·등락을 이름 아래 둘째 줄로 내린다. 머리 높이는 최소 44 에 글자 배율(fontCap.chrome 까지)을 반영한다 (lib/chartLayout).
+ * 머리(폴드 진단 8번, 깨질 때만 고친다): 늘 3-42 이전처럼 한 줄로 그리고, 그린 머리를 재서(onLayout) 넘칠 때만 바꾼다.
+ * 다 들어가면 3-42 이전과 똑같은 머리 (접은 화면은 그대로). 넘치면 이름만 '…'로 줄이고 가격·등락은 한 줄 그대로,
+ * 그래도 이름이 네 글자도 남지 않으면(바깥 화면 + 큰 글씨) 가격·등락을 이름 아래 둘째 줄로 내린다.
+ * 머리 높이는 최소 44 에 글자 배율(fontCap.chrome 까지)을 반영한다 (lib/chartLayout).
  * 한 번 두 줄이 되면 같은 창·글자 크기·종목에서는 시세가 바뀌어도 두 줄 그대로 둔다 (머리·차트 높이가 틱마다 뛰지 않게)
  */
 export default function FullscreenChartScreen() {
@@ -49,8 +51,10 @@ export default function FullscreenChartScreen() {
   // 늘어날 때만 반영한다(방향·폭이 바뀌면 새로) → 십자선을 움직일 때 읽기 줄이 한 줄 늘었다 줄었다 해도 차트 높이가 흔들리지 않는다
   const [chrome, setChrome] = useState<{ key: string; h: number }>({ key: "", h: 170 });
   // 머리를 두 줄로 정했는지와 그때의 배치(창 폭·글자 배율·버튼 수·이름). 같은 배치에서 두 줄이 되면 시세가 바뀌어도 두 줄로 둔다
-  // (등락 +990원 ↔ +1,000원을 오갈 때마다 머리 44 ↔ 62, 차트 높이가 뛰지 않게). 배치가 바뀌면 새로 정한다
+  // (등락 +990원 ↔ +1,000원을 오갈 때마다 머리 44 ↔ 62, 차트 높이가 뛰지 않게). 배치가 바뀌면 한 줄로 다시 그려 새로 잰다
   const [headMemo, setHeadMemo] = useState<{ key: string; twoLines: boolean }>({ key: "", twoLines: false });
+  // 한 줄 머리에서 잰 글자 묶음·이름 폭 (onLayout 은 따로따로 온다 → 둘 다 모이면 판단). 배치가 바뀌면 버린다
+  const headSize = useRef<{ key: string; title: number | null; name: number | null }>({ key: "", title: null, name: null });
   const stock = useStock(c);
   const candles = useCandles(c, period, CANDLE_COUNT[period]);
   const s = stock.data;
@@ -68,21 +72,24 @@ export default function FullscreenChartScreen() {
   const availW = landscape ? frameH : frameW;
   const availH = landscape ? frameW : frameH;
   const chartW = availW - pad * 2;
-  // 머리: 한 줄에 다 들어가는지, 가격·등락을 둘째 줄로 내릴지, 높이 (글자 배율은 fontCap.chrome 까지)
+  // 머리: 가격·등락을 둘째 줄로 내렸는지(잰 결과), 높이 (글자 배율은 fontCap.chrome 까지)
   const headButtons = hideRotate ? 1 : 2;
   const headKey = `${Math.round(chartW)}:${fontScale}:${headButtons}:${name}`;
-  const head = chartHeaderLayout({
-    width: chartW,
-    fontScale,
-    name,
-    price: priceText,
-    change: changeText,
-    buttons: headButtons,
-    prevTwoLines: headMemo.key === headKey ? headMemo.twoLines : undefined,
-  });
-  // 그리는 중에 바로 기억한다 (위 rotation 과 같은 방식 — 같은 값이면 다시 그리지 않는다)
-  if (headMemo.key !== headKey || headMemo.twoLines !== head.twoLines) setHeadMemo({ key: headKey, twoLines: head.twoLines });
+  const head = chartHeaderLayout({ fontScale, quote: q !== null, twoLines: headMemo.key === headKey && headMemo.twoLines });
   const headerH = head.height;
+  // 한 줄 머리를 잰다: 넘쳐서 이름이 네 글자도 남지 않으면 두 줄로 정하고 기억한다 (다 들어가면 3-42 이전 머리 그대로)
+  const measureHead =
+    q && !head.twoLines
+      ? (part: "title" | "name") => (e: LayoutChangeEvent) => {
+          const m = headSize.current.key === headKey ? headSize.current : { key: headKey, title: null, name: null };
+          m[part] = e.nativeEvent.layout.width;
+          headSize.current = m;
+          if (m.title === null || m.name === null) return;
+          if (headerNeedsTwoLines({ width: chartW, buttons: headButtons, fontScale, name, title: m.title, nameWidth: m.name })) {
+            setHeadMemo({ key: headKey, twoLines: true });
+          }
+        }
+      : null;
   // 남는 높이에서 도구 모음 높이를 뺀 만큼만 차트로 → 하단 토글이 화면 밖으로 잘리지 않는다
   const layoutKey = `${landscape ? "L" : "P"}:${Math.round(chartW)}`;
   const chromeH = chrome.key === layoutKey ? chrome.h : 170;
@@ -98,7 +105,7 @@ export default function FullscreenChartScreen() {
 
   // 이름은 먼저 줄어들고('…'), 가격·등락은 줄지 않는다. 머리 글자는 fontCap.chrome(150%) 까지만 커진다
   const nameText = (
-    <Text style={[styles.name, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome}>
+    <Text style={[styles.name, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome} onLayout={measureHead ? measureHead("name") : undefined}>
       {name}
     </Text>
   );
@@ -147,7 +154,7 @@ export default function FullscreenChartScreen() {
           </>
         ) : (
           <View style={styles.headerRow}>
-            <View style={styles.titleRow}>
+            <View style={styles.titleRow} onLayout={measureHead ? measureHead("title") : undefined}>
               {nameText}
               {quoteTexts}
             </View>

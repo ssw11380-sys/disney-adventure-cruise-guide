@@ -44,7 +44,7 @@ vi.mock("@/components/ui", () => ({ ChangeText: "ChangeText", ErrorView: "ErrorV
 const { default: ChartScreen } = await import("@/app/stocks/[code]/chart");
 const { font, fontCap, light, space, touch } = await import("@/tokens");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
-const { chartHeaderLayout, CHART_ICON_BTN } = await import("@/lib/chartLayout");
+const { chartHeaderLayout, CHART_ICON_BTN, estimateTextWidth, headerButtonsRoom } = await import("@/lib/chartLayout");
 
 type R = ReturnType<typeof render>;
 const PAD = space.md * 2; // 차트 좌우 여백
@@ -195,7 +195,7 @@ describe("가로 창에서 가로로 보기 버튼 (폴드 진단 26번, 플래�
   });
 });
 
-describe("전체 화면 차트 머리 (폴드 진단 8번): 가격이 쪼개지거나 도구 줄과 겹치지 않는다", () => {
+describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친다): 한 줄로 그려 재 보고 넘칠 때만 바꾼다", () => {
   const LONG = {
     code: "012450",
     name: "한화에어로스페이스",
@@ -205,13 +205,33 @@ describe("전체 화면 차트 머리 (폴드 진단 8번): 가격이 쪼개지�
   };
   const PRICE = "912,000원";
   const CHANGE = "+12,000원 (+1.33%)";
-  const texts =(r: R) => r.all().filter((n) => n.type === "Text" || n.type === "ChangeText");
-  const nameNode = (r: R) => texts(r).find((n) => n.children.includes(LONG.name))!;
-  const priceNode = (r: R) => texts(r).find((n) => n.children.includes(PRICE))!;
+  const texts = (r: R) => r.all().filter((n) => n.type === "Text" || n.type === "ChangeText");
+  const nameNode = (r: R, name = LONG.name) => texts(r).find((n) => n.children.includes(name))!;
+  const priceNode = (r: R, price = PRICE) => texts(r).find((n) => n.children.includes(price))!;
   const changeNode = (r: R) => r.all().find((n) => n.type === "ChangeText")!;
   const header = (r: R) => r.all().find((n) => flatStyle(n).minHeight !== undefined)!;
   /** 이 노드를 바로 품은 View */
   const parentOf = (r: R, node: HostNode) => r.all().find((n) => n.children.includes(node))!;
+  type Layout = (e: unknown) => void;
+  /** 한 줄 머리의 글자 묶음·이름이 잰 폭을 알린다 (onLayout) */
+  const measure = (r: R, m: { title: number; name: number }, name = LONG.name) =>
+    r.act(() => {
+      const n = nameNode(r, name);
+      (parentOf(r, n).props.onLayout as Layout)({ nativeEvent: { layout: { width: m.title, height: 22, x: 0, y: 0 } } });
+      (n.props.onLayout as Layout)({ nativeEvent: { layout: { width: m.name, height: 22, x: 0, y: 0 } } });
+    });
+  /**
+   * 한 줄 머리를 그렸을 때 폰이 잴 값 흉내: 글꼴 폭 = 어림(estimateTextWidth). 다 들어가면 글자 폭 그대로,
+   * 넘치면 글자 묶음은 쓸 수 있는 폭까지, 이름이 그만큼 줄어든다 (가격·등락은 줄지 않는다)
+   */
+  const phone = (winW: number, fontScale: number, name: string, price: string, change: string, buttons = 2) => {
+    const s = Math.min(Math.max(fontScale, 1), fontCap.chrome);
+    const room = winW - PAD - headerButtonsRoom(buttons);
+    const quote = space.sm + estimateTextWidth(price, font.body * s) + space.sm + estimateTextWidth(change, font.small * s);
+    const nm = estimateTextWidth(name, font.h2 * s);
+    return nm + quote <= room ? { title: nm + quote, name: nm } : { title: room, name: Math.max(0, room - quote) };
+  };
+  const oneLineState = (hh: number) => ({ head: touch.min, twoLines: false, chartH: expectedH(hh) });
 
   it("이름만 줄어들고(…) 가격·등락은 한 줄로 줄지 않는다. 글자는 fontCap.chrome 까지만 커진다", () => {
     h.stock = LONG;
@@ -227,33 +247,59 @@ describe("전체 화면 차트 머리 (폴드 진단 8번): 가격이 쪼개지�
     for (const n of [nameNode(r), priceNode(r), changeNode(r)]) expect(n.props.maxFontSizeMultiplier).toBe(fontCap.chrome);
   });
 
-  it("폴드8 접힘 100%·115%, 울트라 접힘 100%: 이름·가격·등락이 한 줄, 머리 높이 44 (차트 높이도 전과 같은 계산)", () => {
+  it("360×780 삼성전자 (플래그 켬·끔): 재기 전에도, 잰 뒤에도 3-42 이전과 같은 한 줄 머리 44 · 차트 336×(780 − 44 − 도구)", () => {
+    const SAMSUNG = { code: "005930", name: "삼성전자", market: "KOSPI", avgPrice: null, quote: { price: 74500, change: 1200, changeRate: 1.64, currency: "KRW" } };
+    for (const flag of [undefined, false, true]) {
+      h.stock = SAMSUNG;
+      h.flag = flag;
+      h.win = { width: 360, height: 780, fontScale: 1 };
+      forgetWindowClass();
+      const r = render(<ChartScreen />);
+      const state = () => ({ head: flatStyle(header(r)).minHeight, twoLines: header(r).children.length === 2, chartH: chart(r).h });
+      const row = () => parentOf(r, nameNode(r, "삼성전자"));
+      expect(state(), `${flag}`).toEqual(oneLineState(780));
+      expect(chart(r).w).toBe(360 - PAD);
+      expect(row().children).toContain(priceNode(r, "74,500원"));
+      // 웹 미리보기에서 잰 값: 이름 x12–71, 가격 79–132.5, 등락 140.5–239 (글자 묶음 227), 버튼은 280 부터
+      measure(r, { title: 227, name: 59 }, "삼성전자");
+      expect(state(), `${flag}`).toEqual(oneLineState(780));
+      expect(row().children).toContain(changeNode(r));
+      // 예전 어림 기준은 이 머리를 두 줄로 내렸다 (어림 합 342.7 > 머리 폭 336 → 머리 59, 차트 15 낮아짐)
+      expect(estimateTextWidth("삼성전자", font.h2) + space.sm + estimateTextWidth("74,500원", font.body) + space.sm + estimateTextWidth("+1,200원 (+1.64%)", font.small) + headerButtonsRoom(2)).toBeGreaterThan(360 - PAD);
+    }
+  });
+
+  it("폴드8 접힘 100%·115%, 울트라 접힘 100%: 긴 이름이 넘쳐도 이름만 줄여 한 줄, 머리 높이 44 (차트 높이도 전과 같은 계산)", () => {
     h.stock = LONG;
     for (const [w, hh, fontScale] of [
       [475, 751, 1],
       [475, 751, 1.15],
       [411, 960, 1],
-    ]) {
-      h.win = { width: w!, height: hh!, fontScale };
+    ] as const) {
+      h.win = { width: w, height: hh, fontScale };
       const r = render(<ChartScreen />);
+      measure(r, phone(w, fontScale, LONG.name, PRICE, CHANGE));
       const row = parentOf(r, nameNode(r));
       expect(row.children, `${w} ${fontScale}`).toContain(priceNode(r));
       expect(row.children, `${w} ${fontScale}`).toContain(changeNode(r));
       expect(flatStyle(header(r)).minHeight).toBe(touch.min);
-      expect(chart(r)).toEqual({ w: w! - PAD, h: expectedH(hh!) });
+      expect(chart(r)).toEqual({ w: w - PAD, h: expectedH(hh) });
     }
   });
 
-  it("접힌 화면 130%(폴드8·울트라): 이름을 네 글자로 줄여도 모자라 가격·등락을 이름 아래 둘째 줄로, 머리가 커진 만큼 차트를 줄인다", () => {
+  it("접힌 화면 130%(폴드8·울트라): 첫 그림은 한 줄, 재 보니 이름에 네 글자도 남지 않으면 가격·등락을 둘째 줄로, 머리가 커진 만큼 차트를 줄인다", () => {
     h.stock = LONG;
     for (const [w, hh] of [
       [475, 751],
       [411, 960],
-    ]) {
-      h.win = { width: w!, height: hh!, fontScale: 1.3 };
+    ] as const) {
+      h.win = { width: w, height: hh, fontScale: 1.3 };
       const r = render(<ChartScreen />);
-      const head = chartHeaderLayout({ width: w! - PAD, fontScale: 1.3, name: LONG.name, price: PRICE, change: CHANGE, buttons: 2 });
-      expect(head.twoLines, `${w}`).toBe(true);
+      // 재기 전: 3-42 이전처럼 한 줄
+      expect(header(r).children).toHaveLength(1);
+      expect(flatStyle(header(r)).minHeight).toBe(touch.min);
+      measure(r, phone(w, 1.3, LONG.name, PRICE, CHANGE));
+      const head = chartHeaderLayout({ fontScale: 1.3, quote: true, twoLines: true });
       // 이름 줄 = [이름, 버튼 묶음], 둘째 줄 = [가격, 등락]
       const nameRow = parentOf(r, nameNode(r));
       expect(nameRow.children).not.toContain(priceNode(r));
@@ -264,19 +310,28 @@ describe("전체 화면 차트 머리 (폴드 진단 8번): 가격이 쪼개지�
       expect(header(r).children).toEqual([nameRow, quoteRow]);
       expect(flatStyle(header(r)).minHeight).toBe(head.height);
       expect(head.height).toBeGreaterThan(CHART_ICON_BTN + font.body * 1.3);
-      expect(chart(r).h).toBe(Math.max(160, hh! - head.height - CHROME - space.sm));
+      expect(chart(r).h).toBe(Math.max(160, hh - head.height - CHROME - space.sm));
+      // 두 줄 머리는 더 재지 않는다
+      expect(nameNode(r).props.onLayout).toBeUndefined();
     }
   });
 
-  it("시세가 바뀌어도 머리가 한 줄 ↔ 두 줄로 뛰지 않는다 (울트라 접힘 115%, +990원 ↔ +1,000원). 창이 바뀌면 새로 정한다", () => {
+  it("시세가 바뀌어도 머리가 한 줄 ↔ 두 줄로 뛰지 않는다 (울트라 접힘 115%, +990원 ↔ +1,000원). 창이 바뀌면 한 줄로 다시 재서 정한다", () => {
     const quote = (change: number, changeRate: number) => ({ price: 171500, change, changeRate, currency: "KRW" });
     const HYNIX = { code: "000660", name: "SK하이닉스", market: "KOSPI", avgPrice: null, quote: quote(990, 0.58) };
+    const changeOf = (c: number, rate: number) => `${c > 0 ? "+" : ""}${c.toLocaleString("ko-KR")}원 (${rate > 0 ? "+" : ""}${rate.toFixed(2)}%)`;
     h.stock = HYNIX;
     h.win = { width: 411, height: 960, fontScale: 1.15 };
     const r = render(<ChartScreen />);
     const state = () => ({ head: flatStyle(header(r)).minHeight, twoLines: header(r).children.length === 2, chartH: chart(r).h });
-    const one = { head: touch.min, twoLines: false, chartH: Math.max(160, 960 - touch.min - CHROME - space.sm) };
+    /** 한 줄 머리면 폰처럼 재서 알린다 (두 줄 머리는 재지 않는다) */
+    const settle = (c: number, rate: number, winW = 411, fontScale = 1.15) => {
+      const n = nameNode(r, HYNIX.name);
+      if (n.props.onLayout) measure(r, phone(winW, fontScale, HYNIX.name, "171,500원", changeOf(c, rate)), HYNIX.name);
+    };
+    const one = oneLineState(960);
     const two = { head: 62, twoLines: true, chartH: Math.max(160, 960 - 62 - CHROME - space.sm) };
+    settle(990, 0.58);
     expect(state()).toEqual(one);
     const seq: [number, number][] = [
       [1000, 0.59],
@@ -289,27 +344,42 @@ describe("전체 화면 차트 머리 (폴드 진단 8번): 가격이 쪼개지�
     const seen = seq.map(([c, rate]) => {
       h.stock = { ...HYNIX, quote: quote(c, rate) };
       r.rerender();
+      settle(c, rate);
       return state();
     });
     // 예전: 62 → 44 → 62 → 44 … (차트 높이도 18dp 씩 오르내림)
     expect(seen).toEqual(seq.map(() => two));
-    // 폴드8 접힘(475)으로 창이 바뀌면 새로 정한다 → +1,000원 도 한 줄에 들어간다
+    // 폴드8 접힘(475)으로 창이 바뀌면 한 줄로 다시 그려 잰다 → +1,000원 도 한 줄에 들어간다
     h.stock = { ...HYNIX, quote: quote(1000, 0.59) };
     h.win = { width: 475, height: 751, fontScale: 1.15 };
     r.rerender();
+    expect(header(r).children).toHaveLength(1);
+    settle(1000, 0.59, 475);
     expect(flatStyle(header(r)).minHeight).toBe(touch.min);
     expect(header(r).children).toHaveLength(1);
   });
 
-  it("시세가 없으면 이름만 한 줄 (전과 같음)", () => {
+  it("잰 값 하나만 와서는 정하지 않는다 (글자 묶음·이름 둘 다 모여야)", () => {
+    h.stock = LONG;
+    h.win = { width: 411, height: 960, fontScale: 1.3 };
+    const r = render(<ChartScreen />);
+    const m = phone(411, 1.3, LONG.name, PRICE, CHANGE);
+    r.act(() => (parentOf(r, nameNode(r)).props.onLayout as Layout)({ nativeEvent: { layout: { width: m.title, height: 22, x: 0, y: 0 } } }));
+    expect(header(r).children).toHaveLength(1);
+    r.act(() => (nameNode(r).props.onLayout as Layout)({ nativeEvent: { layout: { width: m.name, height: 22, x: 0, y: 0 } } }));
+    expect(header(r).children).toHaveLength(2);
+  });
+
+  it("시세가 없으면 이름만 한 줄 (전과 같음) — 재지도 않는다", () => {
     h.stock = { ...LONG, quote: null };
     h.win = { width: 411, height: 960, fontScale: 1.5 };
     const r = render(<ChartScreen />);
     expect(priceNode(r)).toBeUndefined();
     expect(flatStyle(header(r)).minHeight).toBe(touch.min);
+    expect(nameNode(r).props.onLayout).toBeUndefined();
   });
 
-  it("차트 칩 띠 끝은 전체 화면 바탕색(t.bg)으로 흐린다", () => {
+  it("차트 칩 띠 끝은 전체 화면 바탕색(t.bg)으로 흐린다 (넓은 창만 — CandleChart 가 정한다)", () => {
     const r = render(<ChartScreen />);
     expect(r.all().find((n) => n.type === "CandleChart")!.props.backdrop).toBe(light.bg);
   });
