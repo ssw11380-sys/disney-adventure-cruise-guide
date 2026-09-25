@@ -106,8 +106,9 @@ export function themeLeaderLineW(cellW: number, fontScale: number): number {
 }
 
 /**
- * 글자 폭 어림 (글자 크기의 배수, 넉넉하게): 한글·한자 1 · 영문 대문자 0.72 · 그 밖의 영문·숫자·기호 0.6 · 점·쉼표 0.32 · 빈칸 0.3 · % 0.9.
- * 대표 종목을 몇 개 보일지 정할 때만 쓰고, 실제 줄은 마지막 이름이 줄어들어 맞춘다
+ * 글자 폭 어림 (글자 크기의 배수, 넉넉하게): 한글·한자 1 · 영문 대문자 0.72 · 그 밖의 영문·숫자·기호 0.6 · 점·쉼표·가운뎃점 0.32 · 빈칸 0.3 · % 0.9.
+ * 대표 종목을 몇 개 보일지 정할 때만 쓰고, 실제 줄은 마지막 이름이 줄어들어 맞춘다.
+ * 가운뎃점(구분 " · ")은 마침표만큼 좁다 — 0.6 으로 잡으면 들어갈 자리가 있는 대표 종목도 뺐다 (폴드8 펼침 세로 한 칸 '한국전력 +1.94%')
  */
 export function textEm(s: string): number {
   let em = 0;
@@ -115,7 +116,7 @@ export function textEm(s: string): number {
     if (/[ᄀ-ᇿ㄰-㆏가-힣一-鿿]/.test(ch)) em += 1;
     else if (/[A-Z]/.test(ch)) em += 0.72;
     else if (ch === " ") em += 0.3;
-    else if (ch === "." || ch === ",") em += 0.32;
+    else if (ch === "." || ch === "," || ch === "·") em += 0.32;
     else if (ch === "%") em += 0.9;
     else em += 0.6;
   }

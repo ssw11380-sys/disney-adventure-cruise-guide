@@ -17,7 +17,8 @@ import { formatDateKo } from "@/lib/format";
 import { SORT_OPTIONS, THEME_OPTIONS, useSettings, WIDGET_ROW_OPTIONS } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useSticky } from "@/lib/useSticky";
-import { isWide, railWidth } from "@/lib/windowClass";
+import { useBoxWidth } from "@/lib/useBoxWidth";
+import { isWide } from "@/lib/windowClass";
 import { font, radius, space, touch, useTheme } from "@/theme";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
 
@@ -41,16 +42,24 @@ export default function SettingsScreen() {
   const [advanced, setAdvanced] = useState(false);
   // 당겨서 새로고침: 서버 상태와, 알림 카드가 보이면 알림 설정('다음 실행' 시각)도 함께 (BH-16)
   const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full ? notifySettings.refetch() : undefined]));
+  // 서버 연결 입력 중인 주소·토큰: 한 칸 ↔ 두 칸, 접기 ↔ 펴기로 카드가 새로 그려져도 지워지지 않게 화면이 들고 있는다.
+  // 저장된 값이 바뀌면(저장·다른 곳에서 변경) 새 값으로 다시 시작한다
+  const saved = `${apiUrl}|${apiToken}`;
+  const [draft, setDraft] = useState({ saved, url: apiUrl, token: apiToken });
+  const form = draft.saved === saved ? draft : { saved, url: apiUrl, token: apiToken };
+  if (form !== draft) setDraft(form);
   // 넓은 창(3-42, 플래그 foldLayout + 폭 600 이상): '화면' 칩을 '잔고 정렬'처럼 이름 아래 왼쪽에 (진단 38), 카드는 두 칸이 들어가면 두 칸.
   // 좁은 창(접은 화면)·플래그 꺼짐은 지금 그대로
   const fold = useFoldLayout();
-  const { width, fontScale } = useWindowDimensions();
+  const { fontScale } = useWindowDimensions();
   const wide = fold.on && isWide(fold);
-  // 설정 탭이 받는 폭: 왼쪽 세로 탭 막대가 켜져 있으면 막대 폭만큼 좁다.
-  // 두 칸 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스 — 창을 끌 때 한 칸·두 칸이 번갈아 바뀌지 않게)
-  const twoSticky = useSticky(width - (fold.rail ? railWidth(fontScale) : 0), (w) => (settingsTwoColumns(w, fontScale) ? 1 : 0));
+  // 설정 탭이 실제로 받은 폭 (카드 틀에 onLayout, 재기 전에는 창 폭 − 왼쪽 세로 탭 막대).
+  // 두 칸 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스 — 창을 끌 때 한 칸·두 칸이 번갈아 바뀌지 않게).
+  // 좁은 창에서는 바로 전 배치를 지운다(null) — 접은 화면에서 펴면 처음 연 것과 같은 배치
+  const [boxW, onLayout] = useBoxWidth(fold.rail);
+  const twoSticky = useSticky(wide ? boxW : null, (w) => (settingsTwoColumns(w, fontScale) ? 1 : 0));
   const two = wide && twoSticky === 1;
-  // 두 칸의 한 칸 최대 폭: 이름과 스위치가 멀어지지 않게 (남는 폭은 칸 사이·양옆에 고루)
+  // 두 칸의 한 칸 최대 폭: 이름과 스위치가 멀어지지 않게 (남는 폭은 두 칸 사이로만)
   const colMax = settingsColumnMax(fontScale);
   const chips = (
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
@@ -161,9 +170,11 @@ export default function SettingsScreen() {
       </Pressable>
       {advanced ? (
         <ApiUrlForm
-          key={`${apiUrl}|${apiToken}`}
           apiUrl={apiUrl}
           apiToken={apiToken}
+          draft={form.url}
+          tokenDraft={form.token}
+          onDraft={(url, token) => setDraft({ saved, url, token })}
           authRequired={health.data?.authRequired ?? false}
           onSave={async (url, token) => {
             // 주소·토큰을 한 번에 — 따로 바꾸면 새 서버로 옛 토큰이 먼저 나간다 (BH-27)
@@ -206,23 +217,26 @@ export default function SettingsScreen() {
   const notify = full ? <NotificationSettingsCard /> : null;
   const toss = full ? <TossOpenApiCard /> : null;
 
-  if (two)
+  if (wide)
     return (
       <Screen refreshing={pulling} onRefresh={onPull}>
         {/* 두 칸: 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보. 화면 읽기는 왼쪽 칸을 끝까지 읽고 오른쪽 칸으로.
-            칸은 최대 폭(colMax)까지만 넓어지고, 남는 폭은 칸 사이·양옆에 고루 (울트라 펼침 가로 등 아주 넓은 창) */}
-        <View style={styles.columns}>
-          <View style={[styles.column, { maxWidth: colMax }]}>
+            칸은 최대 폭(colMax)까지만 넓어지고, 남는 폭은 두 칸 사이로만 (칸은 화면 양 끝에 붙는다 — 가운데로 모으지 않는다).
+            두 칸이 안 들어가는 넓은 창(큰 글씨 등)은 같은 틀을 세로로 쌓아 한 칸: 카드 차례는 휴대폰과 같고(정보는 맨 끝),
+            한 칸 ↔ 두 칸이 바뀌어도 카드가 같은 자리에 남아 펼침 상태·입력 중인 값이 그대로다 (정보 카드만 옮겨진다 — 상태 없음) */}
+        <View style={two ? styles.columns : styles.stacked} onLayout={onLayout}>
+          <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
             {display}
             {notify}
-            {info}
+            {two ? info : null}
           </View>
-          <View style={[styles.column, { maxWidth: colMax }]}>
+          <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
             {toss}
             <AppUpdateCard />
             {server}
             {connect}
             <ScreenInfoCard />
+            {two ? null : info}
           </View>
         </View>
       </Screen>
@@ -241,9 +255,13 @@ export default function SettingsScreen() {
   );
 }
 
+/** 서버 주소·토큰 입력 (입력 중인 값은 설정 화면이 들고 있다 — 카드가 새로 그려져도 남게) */
 function ApiUrlForm({
   apiUrl,
   apiToken,
+  draft,
+  tokenDraft,
+  onDraft,
   authRequired,
   onSave,
   onCheck,
@@ -251,14 +269,17 @@ function ApiUrlForm({
 }: {
   apiUrl: string;
   apiToken: string;
+  draft: string;
+  tokenDraft: string;
+  onDraft: (url: string, token: string) => void;
   authRequired: boolean;
   onSave: (url: string, token: string) => Promise<void>;
   onCheck: () => void;
   checking: boolean;
 }) {
   const t = useTheme();
-  const [draft, setDraft] = useState(apiUrl);
-  const [tokenDraft, setTokenDraft] = useState(apiToken);
+  const setDraft = (url: string) => onDraft(url, tokenDraft);
+  const setTokenDraft = (token: string) => onDraft(draft, token);
   const dirty = draft.trim().replace(/\/+$/, "") !== apiUrl || tokenDraft.trim() !== apiToken;
   return (
     <View style={{ gap: space.sm }}>
@@ -296,9 +317,13 @@ const styles = {
     input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
     // 큰 글씨에서 오른쪽 칩·스위치가 넘치면 다음 줄로
     line: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", rowGap: space.s, paddingVertical: space.s },
-    // 넓은 창 두 칸 (3-42): 칸 폭이 곧 버튼 최대 폭. 칸 안 카드 사이 간격은 화면(Screen)의 카드 간격과 같다
-    columns: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-evenly", gap: FOLD_COL_GAP },
+    // 넓은 창 두 칸 (3-42): 칸 폭이 곧 버튼 최대 폭. 칸이 최대 폭에 걸리면 남는 폭은 두 칸 사이로만 (양 끝에 붙는다).
+    // 칸 안 카드 사이 간격은 화면(Screen)의 카드 간격과 같다
+    columns: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: FOLD_COL_GAP },
     column: { flex: 1, minWidth: 0, gap: space.sm },
+    // 넓은 창 한 칸 (두 칸이 안 들어갈 때): 같은 틀을 세로로 쌓는다 — 카드 사이 간격은 화면(Screen)과 같다
+    stacked: { gap: space.sm },
+    stackedPart: { gap: space.sm },
   }),
   label: (color: string) => ({ color, fontSize: font.body, fontWeight: "600" as const }),
 };

@@ -37,11 +37,12 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
   const fontScale = useFontScale();
   const wide = wideW !== undefined;
   // 히트맵 칸 수: 좌우 여백(heatRow)을 뺀 폭으로. 목록 칸 수: 한 칸이 themeCellMin 이상이면 두 칸.
-  // 둘 다 기준선 근처에서는 바로 전 값을 지킨다 (히스테리시스 — 칸 수가 바뀌면 목록을 새로 만들어 스크롤 위치를 잃으므로)
-  const heatSticky = useSticky(wide ? wideW - 2 * HEAT_PAD : 0, (w) => heatColumns(w, fontScale));
-  const listSticky = useSticky(wide ? wideW : 0, (w) => themeListColumns(w, fontScale));
-  const heatCols = wide ? heatSticky : 3;
-  const listCols = wide ? listSticky : 1;
+  // 둘 다 기준선 근처에서는 바로 전 값을 지킨다 (히스테리시스 — 칸 수가 바뀌면 목록을 새로 만들어 스크롤 위치를 잃으므로).
+  // 좁은 창에서는 바로 전 값을 지운다(null): 접은 화면에서 펴면 처음 연 것과 같은 칸 수
+  const heatSticky = useSticky(wide ? wideW - 2 * HEAT_PAD : null, (w) => heatColumns(w, fontScale));
+  const listSticky = useSticky(wide ? wideW : null, (w) => themeListColumns(w, fontScale));
+  const heatCols = wide ? (heatSticky ?? 3) : 3;
+  const listCols = wide ? (listSticky ?? 1) : 1;
   // 여러 칸이면 한 칸의 대표 종목 줄 폭 (줄마다 들어가는 만큼만 대표 종목을 보이고, 등락률은 말줄임 없이)
   const lineW = wide && listCols > 1 ? themeLeaderLineW(wideW / listCols, fontScale) : 0;
   const [kind, setKind] = useState<ThemeKind>("theme");

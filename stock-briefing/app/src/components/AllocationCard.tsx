@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-na
 import { Path, Svg } from "react-native-svg";
 import { arcPath, chartSummary, donutArcs, pctText, sliceLabel, type AllocationChart, type Slice } from "@/lib/allocation";
 import { formatWon } from "@/lib/format";
-import { BESIDE, LEGEND_SWATCH, legendCols, WIDE_CARD } from "@/lib/foldScreens";
+import { BESIDE, LEGEND_SWATCH, legendCols, WIDE_CARD, type LegendMode } from "@/lib/foldScreens";
 import { isBigText } from "@/lib/textScale";
 import { font, fontCap, radius, space, useFontScale, useTheme, type Theme } from "@/theme";
 import { TableHead } from "./ui";
@@ -25,10 +25,15 @@ export function sliceColor(t: Theme, s: Pick<Slice, "slot">): string {
   return s.slot === null ? t.chart.pieOther : (t.chart.pie[s.slot] ?? t.chart.pieOther);
 }
 
-/** 넓은 창 카드 모양 (3-42, lib/foldScreens allocationGrid): 원 지름, 원 옆에 범례를 둘지 */
+/**
+ * 넓은 창 카드 모양 (3-42, lib/foldScreens allocationGrid): 원 지름, 원 옆에 범례를 둘지,
+ * 범례 줄 모양(한 줄 / 평가금액을 이름 아래로 내린 두 줄 — 없으면 한 줄), 줄 여백을 줄인 촘촘한 범례인지
+ */
 export interface AllocationCardWide {
   donut: number;
   beside: boolean;
+  legend?: LegendMode;
+  dense?: boolean;
 }
 
 /**
@@ -118,11 +123,14 @@ export function AllocationCard({ chart, wide }: { chart: AllocationChart; wide?:
 /**
  * 넓은 창 카드: 범례 머리 첫 칸이 곧 차트 제목(화면 읽기 머리글), 줄은 위아래 여백을 줄인 한 줄.
  * beside 면 [원 | 범례], 아니면 원 아래 범례. 이름은 한 줄(넘치면 이름만 말줄임), 종목 수는 이름과 떼어 줄이지 않고, 금액·비중은 말줄임 없이 글자를 줄인다.
- * 화면 읽기는 원을 제목보다 먼저 읽으므로 원 요약 앞에 차트 제목을 붙인다 ("업종 원 차트, 반도체 36.8%, …")
+ * legend 'stack'(칸이 좁은 원 옆 범례): 평가금액 열을 없애고 금액 · 종목 수를 이름 아래 둘째 줄로 — 이름 칸이 평가금액 열만큼 넓어진다.
+ * dense: 카드 4장이 한 화면에 들어가게 줄 위아래 여백을 줄인다 (보통 여백으로 안 들어갈 때만).
+ * 화면 읽기는 원을 제목보다 먼저 읽으므로 원 요약 앞에 차트 제목을 붙인다 ("업종 원 차트, 반도체 36.8%, …"). 범례 한 줄은 어느 모양이든 같은 한 문장
  */
 function WideCard({ chart, wide, scale }: { chart: AllocationChart; wide: AllocationCardWide; scale: number }) {
   const t = useTheme();
   const col = legendCols(scale);
+  const stack = wide.beside && wide.legend === "stack";
   const donutLabel = `${chart.title} 원 차트, ${chartSummary(chart)}`;
   const legend = (
     <View style={styles.wideLegend}>
@@ -130,30 +138,52 @@ function WideCard({ chart, wide, scale }: { chart: AllocationChart; wide: Alloca
         <Text style={[styles.wideTitle, { color: t.ink }]} accessibilityRole="header" numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
           {chart.title}
         </Text>
-        <Text style={[styles.headText, { color: t.muted, width: col.amount }]} {...FIT}>
-          평가금액
-        </Text>
+        {stack ? null : (
+          <Text style={[styles.headText, { color: t.muted, width: col.amount }]} {...FIT}>
+            평가금액
+          </Text>
+        )}
         <Text style={[styles.headText, { color: t.muted, width: col.pct }]} {...FIT}>
           비중
         </Text>
       </TableHead>
       {chart.slices.map((s, i) => (
-        <View key={s.key} accessible accessibilityLabel={sliceLabel(s)} style={[styles.wideRow, wide.beside && styles.besideRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.line }]}>
+        <View
+          key={s.key}
+          accessible
+          accessibilityLabel={sliceLabel(s)}
+          style={[styles.wideRow, wide.beside && styles.besideRow, wide.dense && styles.denseRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.line }]}
+        >
           <View style={[styles.swatch, { backgroundColor: sliceColor(t, s) }]} />
-          {/* 이름만 줄어들고(말줄임), 종목 수는 떼어 두어 잘리지 않는다 */}
-          <View style={styles.wideName}>
-            <Text style={[styles.wideNameText, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
-              {s.label}
-            </Text>
-            {s.count > 1 ? (
-              <Text style={[styles.wideCount, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
-                {` · ${s.count}종목`}
+          {stack ? (
+            // 두 줄: 이름(말줄임) / 평가금액 · 종목 수 (말줄임 없이 글자를 줄인다)
+            <View style={styles.stackName}>
+              <Text style={[styles.wideNameText, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+                {s.label}
               </Text>
-            ) : null}
-          </View>
-          <Text style={[styles.num, styles.cell, { color: t.sub, width: col.amount }]} {...FIT}>
-            {formatWon(s.won)}
-          </Text>
+              <Text style={[styles.num, styles.stackSub, { color: t.sub }]} {...FIT}>
+                {formatWon(s.won)}
+                {s.count > 1 ? ` · ${s.count}종목` : ""}
+              </Text>
+            </View>
+          ) : (
+            // 이름만 줄어들고(말줄임), 종목 수는 떼어 두어 잘리지 않는다
+            <View style={styles.wideName}>
+              <Text style={[styles.wideNameText, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+                {s.label}
+              </Text>
+              {s.count > 1 ? (
+                <Text style={[styles.wideCount, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+                  {` · ${s.count}종목`}
+                </Text>
+              ) : null}
+            </View>
+          )}
+          {stack ? null : (
+            <Text style={[styles.num, styles.cell, { color: t.sub, width: col.amount }]} {...FIT}>
+              {formatWon(s.won)}
+            </Text>
+          )}
           <Text style={[styles.num, styles.cell, { color: t.ink, width: col.pct, fontWeight: "700" }]} {...FIT}>
             {pctText(s.pct)}
           </Text>
@@ -208,5 +238,10 @@ const styles = StyleSheet.create({
   wideName: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "baseline" },
   wideNameText: { flexShrink: 1, fontSize: font.small },
   wideCount: { flexShrink: 0, fontSize: font.small },
+  // 촘촘한 범례: 줄 위아래 여백 xs → xxs (lib/foldScreens DENSE_CUT 과 같은 차이)
+  denseRow: { paddingVertical: space.xxs },
+  // 두 줄 범례 (원 옆, 좁은 칸): 이름 / 평가금액 · 종목 수
+  stackName: { flex: 1, minWidth: 0 },
+  stackSub: { fontSize: font.tiny },
 });
 
