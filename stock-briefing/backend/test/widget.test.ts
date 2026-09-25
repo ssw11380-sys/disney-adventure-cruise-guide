@@ -19,6 +19,20 @@ describe("위젯 장 상태 칩 (3-16): 앱 잔고 탭 띠와 같은 규칙", ()
     expect(marketChip(st(m("KR", false, false), m("US", false, true))).label).toBe("한국 휴장");
     expect(marketChip(st(m("KR", false, true), m("US", false, true))).label).toBe("장 마감");
   });
+
+  it("달력으로는 닫혀 있어도 보유 미국 종목의 주간거래·프리·애프터가 열려 있으면 그 이름 (앱 잔고 상태 줄과 같은 말). 금색·갱신 정책은 그대로", () => {
+    // 2026-09-25 09:59 KST: 한국 추석 휴장, 미국 정규장은 닫힘(토스 달력) · 주간거래 중 (뉴욕 04:00 = 08:00Z 까지)
+    const s = { ...st(m("KR", false, false, "2026-09-27T23:00:00Z"), m("US", false, true, "2026-09-25T13:30:00Z")), now: "2026-09-25T00:59:00.000Z" };
+    const overnight = { market: "US" as const, phase: "overnight" as const, label: "미국 주간거래", open: true, eligible: true, until: "2026-09-25T08:00:00.000Z" };
+    const krHoliday = { market: "KR" as const, phase: "holiday" as const, label: "한국 휴장", open: false, eligible: null, until: "2026-09-27T23:00:00.000Z" };
+    expect(marketChip(s, [krHoliday, overnight])).toEqual({ label: "미국 주간거래", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T08:00:00.000Z" });
+    // 미국 종목이 없으면(한국만 보유) 예전과 같다
+    expect(marketChip(s, [krHoliday])).toEqual({ label: "한국 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T13:30:00Z" });
+    // 세션 경계가 지난 값은 쓰지 않는다
+    expect(marketChip({ ...s, now: "2026-09-25T08:00:00.000Z" }, [overnight]).label).toBe("한국 휴장");
+    // 달력으로 열려 있으면 예전 문구 그대로
+    expect(marketChip(st(m("KR", true, true, "2026-09-22T11:00:00Z"), m("US", false, true)), [overnight]).label).toBe("한국 장중");
+  });
 });
 
 describe("GET /api/widget (3-16)", () => {

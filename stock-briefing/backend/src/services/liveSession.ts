@@ -10,9 +10,11 @@ import { US_HOLIDAYS } from "./marketContext.js";
  * 체결이 아직 없어도, 세션이 열려 있고 이 종목이 그 세션의 거래 대상이며 서버가 값을 받고 있으면 켠다.
  * (예전에는 "스냅샷과 다른 가격의 체결이 왔다"여서 거래가 뜸한 종목은 같은 세션에서도 점이 없었다)
  *
- * 한국 (서울 시각. 거래일은 토스 달력 — 한국 평일 휴장일 목록은 따로 없다)
+ * 한국 (서울 시각. 거래일은 토스 달력 — 한국 평일 휴장일 목록은 따로 없어, 달력으로 확인하지 못한 날은 체결 증거가 있는 종목만)
  *   08:00~08:50 NXT 프리마켓(NXT 대상만) · 08:50~09:00 동시호가 · 09:00~15:20 정규장(모든 종목)
- *   · 15:20~15:30 동시호가 · 15:30~15:40 장 마감(NXT 애프터마켓 전) · 15:40~20:00 NXT 애프터마켓(NXT 대상만)
+ *   · 15:20~15:30 동시호가 · 15:30~15:40 장 마감 · 15:40~16:00 NXT 애프터마켓(NXT 대상만 — 한국거래소는 시간외 종가라 가격이 안 바뀜)
+ *   · 16:00~20:00 애프터마켓(한국거래소 애프터마켓 2026-09-14~ + NXT. 한국거래소는 ETF·ETN·관리·투자경고 종목 등이 빠지고 목록이 없어,
+ *     NXT 종목은 대상, ETF·ETN 은 아님, 그 밖은 모름 → 이 세션에 체결이 있었던 종목만)
  * 미국 (뉴욕 시각·서머타임. 정규장 거래일은 토스 달력 → 없으면 US_HOLIDAYS)
  *   전날 20:00~04:00 주간거래(토스 주간거래 대상만, 다음 날이 정규장인 밤만) · 04:00~09:30 프리마켓
  *   · 09:30~마감 정규장 · 마감~마감+4시간 애프터마켓(보통 16:00~20:00, 조기 폐장 13:00 이면 17:00 까지) — 프리·정규·애프터는 모든 종목
@@ -83,6 +85,38 @@ const iso = (t: number) => new Date(t).toISOString();
 /** 토스 달력을 믿을 수 있을 때만 (요일 추정 fallback 은 미국을 04:00~20:00 로 보는 등 기준이 달라 쓰지 않는다) */
 const tossState = (s: MarketState | null | undefined): MarketState | null => (s && s.source === "toss" ? s : null);
 
+/**
+ * 토스 달력이 알려 주는 날짜별 거래일 여부 (그 시장 현지 날짜): 지금 세션·마지막 세션·다음 세션의 날짜는 거래일, 마지막과 다음 사이는 휴장.
+ * 날짜로 적어 두므로 몇 시간·며칠 전에 받은 달력이어도(조회가 실패해 마지막 값을 쓸 때, keepTossCalendar) 아는 날은 틀리지 않는다.
+ * 모르는 날은 넣지 않는다 (isTradingDay 는 받은 날 기준이라 쓰지 않는다)
+ */
+function knownDays(cal: MarketState | null, tz: string): Map<string, boolean> {
+  const known = new Map<string, boolean>();
+  if (!cal) return known;
+  const day = (x: string | null | undefined) => (x ? zoned(Date.parse(x), tz).date : null);
+  if (cal.isOpen) {
+    const c = day(cal.closesAt);
+    if (c) known.set(c, true);
+    return known;
+  }
+  const last = day(cal.lastClose);
+  const next = day(cal.opensAt);
+  if (last) known.set(last, true);
+  if (next) known.set(next, true);
+  if (last && next) for (let d = addDays(last, 1); d < next && known.size < 40; d = addDays(d, 1)) known.set(d, false);
+  return known;
+}
+
+/**
+ * 달력 조회가 실패해 요일 추정(fallback)이 오면 시장별로 마지막에 받은 토스 달력을 그대로 쓴다.
+ * 날짜별 사실(knownDays)로만 읽으므로 오래된 값이어도 틀리지 않는다 — 추석 같은 평일 휴장일에 조회가 한 번 실패해도 장중으로 보지 않게
+ */
+export function keepTossCalendar(prev: MarketStatus | null, next: MarketStatus): MarketStatus {
+  if (!prev) return next;
+  const pick = (m: "KR" | "US"): MarketState => (next[m].source !== "toss" && prev[m].source === "toss" ? prev[m] : next[m]);
+  return { ...next, KR: pick("KR"), US: pick("US") };
+}
+
 // ── 한국 ──────────────────────────────────────────────────────────
 
 const KR_NXT_PRE = 8 * 60;
@@ -91,13 +125,20 @@ const KR_REGULAR = 9 * 60;
 const KR_CLOSE_AUCTION = 15 * 60 + 20;
 const KR_REGULAR_END = 15 * 60 + 30;
 const KR_NXT_AFTER = 15 * 60 + 40;
+/** 한국거래소 애프터마켓 시작 (2026-09-14 부터 16:00~20:00 연속 매매. 15:40~16:00 은 한국거래소 시간외 종가라 가격이 바뀌지 않는다) */
+const KR_KRX_AFTER = 16 * 60;
 const KR_END = 20 * 60;
 
-/** 한국 거래일: 토스 달력(삼성전자 거래 시간)으로. 받은 뒤 날짜가 바뀌었을 수 있어 알려진 개장·마감 날짜로도 본다. 달력이 없으면 평일 */
-function krTradingDay(date: string, cal: MarketState | null): boolean {
-  if (!cal) return weekday(date);
-  if (cal.isTradingDay) return true;
-  return [cal.opensAt, cal.closesAt, cal.lastClose].some((x) => !!x && zoned(Date.parse(x), TZ.KR).date === date);
+type KrOpenPhase = "nxt_pre" | "regular" | "nxt_after" | "after";
+const KR_LABEL: Record<KrOpenPhase, string> = { nxt_pre: "한국 NXT 프리마켓", regular: "한국 정규장", nxt_after: "한국 NXT 애프터마켓", after: "한국 애프터마켓" };
+
+/**
+ * 한국 거래일: 토스 달력(삼성전자 거래 시간)이 아는 날이면 그대로(known). 모르는 날(달력을 못 받았거나 범위 밖)은 평일로 짐작한다 —
+ * 한국 평일 휴장일(추석 등) 목록이 없어 짐작한 날은 known=false (점은 체결 증거가 있는 종목만)
+ */
+function krTradingDay(date: string, cal: MarketState | null): { day: boolean; known: boolean } {
+  const k = knownDays(cal, TZ.KR).get(date);
+  return k === undefined ? { day: weekday(date), known: false } : { day: k, known: true };
 }
 
 /** 다음 한국 개장(08:00): 달력의 다음 개장, 없으면 다음 평일 */
@@ -122,20 +163,26 @@ function krSession(t: number, calendar: MarketStatus | null | undefined, stock: 
     start: null,
     until,
   });
-  if (!krTradingDay(date, cal)) return closed("holiday", iso(nextKrOpen(t, date, cal)));
+  const { day, known } = krTradingDay(date, cal);
+  if (!day) return closed("holiday", iso(nextKrOpen(t, date, cal)));
   if (m < KR_NXT_PRE) return closed("closed", at(KR_NXT_PRE));
   const halted = stock?.halted === true;
   const nxtHalted = halted || stock?.nxtHalted === true;
   // NXT 대상: 토스 stock-infos(nxtSupported) → 없으면 토스 시세의 거래소 구분(integrated = KRX+NXT, krx = KRX 만) → 모름
   const nxt = stock?.nxt ?? (stock?.exchange === "integrated" ? true : stock?.exchange === "krx" ? false : null);
-  const open = (phase: "nxt_pre" | "regular" | "nxt_after", from: number, to: number): StockSession => {
+  // 16:00~20:00 대상: NXT 종목은 NXT 에서도 거래되니 대상. 아니면 한국거래소 애프터마켓 — ETF·ETN 은 빠지고,
+  // 관리·투자경고 종목과 그날 정규장 체결이 없던 종목도 빠지는데 그 목록은 없어 모름(null → 이 세션에 체결이 있었던 종목만)
+  const after = nxt === true ? true : stock?.etp === true ? false : null;
+  const open = (phase: KrOpenPhase, from: number, to: number): StockSession => {
     const stop = phase === "regular" ? halted : nxtHalted;
+    const eligible = stop ? false : phase === "regular" ? true : phase === "after" ? after : nxt;
     return {
       market: "KR",
       phase,
-      label: phase === "regular" ? "한국 정규장" : phase === "nxt_pre" ? "한국 NXT 프리마켓" : "한국 NXT 애프터마켓",
+      label: KR_LABEL[phase],
       open: true,
-      eligible: stop ? false : phase === "regular" ? true : nxt,
+      // 토스 달력으로 거래일을 확인하지 못한 날(요일로 짐작)은 평일 휴장일일 수 있다 → "대상"을 모름으로 낮춰 이 세션 체결이 있었던 종목만 켠다
+      eligible: eligible === true && !known ? null : eligible,
       ...(stop ? { halted: true as const } : {}),
       start: at(from),
       until: at(to),
@@ -146,7 +193,8 @@ function krSession(t: number, calendar: MarketStatus | null | undefined, stock: 
   if (m < KR_CLOSE_AUCTION) return open("regular", KR_REGULAR, KR_CLOSE_AUCTION);
   if (m < KR_REGULAR_END) return closed("auction", at(KR_REGULAR_END));
   if (m < KR_NXT_AFTER) return closed("closed", at(KR_NXT_AFTER));
-  if (m < KR_END) return open("nxt_after", KR_NXT_AFTER, KR_END);
+  if (m < KR_KRX_AFTER) return open("nxt_after", KR_NXT_AFTER, KR_KRX_AFTER);
+  if (m < KR_END) return open("after", KR_KRX_AFTER, KR_END);
   return closed("closed", iso(nextKrOpen(t, date, cal)));
 }
 
@@ -163,18 +211,7 @@ const US_OVERNIGHT = 20 * 60;
  * 모르는 날은 평일이면서 US_HOLIDAYS 에 없는 날 — 목록 밖 임시 휴장도 달력이 알려 주면 지킨다
  */
 function usRegularDays(cal: MarketState | null): (date: string) => boolean {
-  const known = new Map<string, boolean>();
-  const day = (x: string | null | undefined) => (x ? zoned(Date.parse(x), TZ.US).date : null);
-  if (cal?.isOpen) {
-    const c = day(cal.closesAt);
-    if (c) known.set(c, true);
-  } else if (cal) {
-    const last = day(cal.lastClose);
-    const next = day(cal.opensAt);
-    if (last) known.set(last, true);
-    if (next) known.set(next, true);
-    if (last && next) for (let d = addDays(last, 1); d < next && known.size < 40; d = addDays(d, 1)) known.set(d, false);
-  }
+  const known = knownDays(cal, TZ.US);
   return (date) => known.get(date) ?? (weekday(date) && !US_HOLIDAYS.has(date));
 }
 
@@ -256,7 +293,10 @@ export interface RealtimeInput {
   stale: boolean;
   /** 받아 둔 스냅샷이 지금 거래일에 받은 것 (지난 세션 스냅샷에는 새 체결을 붙이지 않으므로 값이 움직이지 않는다) */
   snapshotCurrent: boolean;
-  /** 거래일이 바뀐 체결을 스냅샷을 다시 받을 때까지 보류 중 (가격이 그 체결을 따라가지 않는 중) */
+  /**
+   * 새 거래일의 웹소켓 체결(실제 체결 시각)을 스냅샷을 다시 받을 때까지 보류 중 (가격이 그 체결을 따라가지 않는 중).
+   * 토스 웹 가격은 받은 시각이 찍혀 체결 증거가 아니므로 여기에 넣지 않는다 — 넣으면 이번 거래일에 아직 체결이 없는 종목이 늘 꺼진다
+   */
   held: boolean;
   /** 실제 체결 시각의 증거 (웹소켓 체결 시각·공식 API 마지막 체결 시각·3초 갱신에서 본 가격 변화). 자격을 모를 때만 쓴다 */
   tradedAt: number | null;

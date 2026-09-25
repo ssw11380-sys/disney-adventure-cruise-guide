@@ -47,6 +47,8 @@ export interface StockSessionFacts {
   halted: boolean | null;
   /** NXT 거래정지 (nxtTradingSuspended) */
   nxtHalted: boolean | null;
+  /** ETF·ETN (stock-infos group.code EF·EN) — 한국거래소 애프터마켓(16:00~20:00)에서 거래되지 않는다. 모르면 null */
+  etp: boolean | null;
   /** 토스 시세의 거래소 구분: "integrated"(KRX+NXT) · "krx"(KRX 만). 모르면 null */
   exchange: string | null;
   /** 토스 웹 일괄 시세로 이 종목 가격을 마지막으로 받은 시각(ms). 그 뒤 일괄 조회가 실패했거나 받은 적 없으면 null */

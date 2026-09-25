@@ -1,3 +1,4 @@
+import type { QuoteSession } from "../domain/types.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { MarketIndex } from "../providers/market/indices.js";
 import type { Briefing } from "./briefingService.js";
@@ -6,7 +7,8 @@ import type { RegisteredWithQuote } from "./stockService.js";
 /**
  * 홈 화면 위젯 한 번에 필요한 것만 (3-16). 위젯 3종이 이 응답 하나를 같이 쓴다.
  *  - 시세는 위젯이 쓰는 칸만(가격·등락·통화·시각·환율·지연 표시), 평가는 그대로
- *  - 장 상태 칩: 앱 잔고 탭 띠와 같은 규칙(/api/market/status 기준)
+ *  - 장 상태 칩: 앱 잔고 탭 띠와 같은 규칙(/api/market/status 기준). 달력으로는 닫혀 있어도 보유 미국 종목의 프리·애프터·주간거래가 열려 있으면
+ *    문구만 그 세션 이름(앱 잔고 상태 줄과 같은 말)
  *  - 브리핑: 보유 비중(원화 환산 평가금) 상위 3종목의 최신 요약 첫 줄 (위젯이 한 줄만 보여 준다)
  *  - features: 위젯이 쓰는 기능 플래그만 (위젯은 /api/features 를 따로 받지 않는다). 예전 앱은 모르는 칸이라 무시한다
  *  - indices: 잔고 위젯 지수 줄 (코스피·나스닥·원/달러). widgetIndexLine 이 켜져 있고 새 앱이 물을 때(?indices=1)만 — 아니면 지수를 부르지도
@@ -16,7 +18,7 @@ import type { RegisteredWithQuote } from "./stockService.js";
  */
 
 export interface WidgetMarket {
-  /** 칩 문구: 실시간 / 한국 장중 / 미국 장중 / 휴장 / 한국 휴장 / 장 마감 */
+  /** 칩 문구: 실시간 / 한국 장중 / 미국 장중 / 미국 주간거래·프리마켓·애프터마켓 / 휴장 / 한국 휴장 / 장 마감 */
   label: string;
   open: boolean;
   /** 시장별 거래 중 (지연 판단은 열린 시장의 시세만 본다) */
@@ -100,13 +102,25 @@ export function widgetIndices(list: readonly MarketIndex[], codes: readonly stri
   });
 }
 
-/** 앱 useAnyMarketOpen 과 같은 규칙 */
-export function marketChip(s: MarketStatus): WidgetMarket {
+/**
+ * 앱 useAnyMarketOpen 과 같은 규칙 (토스 달력: 한국 08:00~20:00, 미국은 정규장만).
+ * 달력으로는 두 시장이 닫혀 있어도 보유 종목(sessions — 잔고 시세의 session)의 미국 세션(프리·애프터·주간거래)이 열려 있으면 문구만 그 세션 이름으로 —
+ * 앱 잔고 상태 줄("미국 주간거래 · 한국 휴장")과 같은 말이 되게 (예전에는 이때 "한국 휴장"·"장 마감"). open(금색)·kr·us 는 그대로 두어
+ * 위젯의 갱신 주기·지연 판단은 바뀌지 않고, 그 세션이 끝나는 때를 nextChangeAt 에 넣어 세션이 바뀌면 칩을 감추고 다시 받게 한다
+ */
+export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | null | undefined)[] = [], now: number = Date.parse(s.now)): WidgetMarket {
   const kr = s.KR, us = s.US;
   const bounds = [kr, us].map((m) => (m.isOpen ? m.closesAt : m.opensAt)).filter((x): x is string => !!x).sort();
   const nextChangeAt = bounds[0] ?? null;
   const base = { kr: kr.isOpen, us: us.isOpen, nextChangeAt };
   if (kr.isOpen || us.isOpen) return { label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", open: true, ...base };
+  const t = Number.isFinite(now) ? now : Date.now();
+  const ext = sessions.find((x) => x?.market === "US" && x.open && !(x.until && Date.parse(x.until) <= t));
+  if (ext) {
+    const until = ext.until ? Date.parse(ext.until) : NaN;
+    const next = Number.isFinite(until) && (nextChangeAt === null || until < Date.parse(nextChangeAt)) ? new Date(until).toISOString() : nextChangeAt;
+    return { label: ext.label, open: false, ...base, nextChangeAt: next };
+  }
   if (!kr.isTradingDay && !us.isTradingDay) return { label: "휴장", open: false, ...base };
   if (!kr.isTradingDay) return { label: "한국 휴장", open: false, ...base };
   return { label: "장 마감", open: false, ...base };
@@ -154,7 +168,7 @@ export function buildWidgetPayload(
   });
   const payload: WidgetPayload = {
     v: 1,
-    market: status ? marketChip(status) : null,
+    market: status ? marketChip(status, stocks.map((x) => x.quote?.session)) : null,
     stocks: stocks.map(slim),
     latestIds: ok.map((b) => b.latest!.id).sort((a, b) => a - b),
     briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary.split("\n").find((l) => l.trim()) ?? "", createdAt: b.latest!.createdAt })),

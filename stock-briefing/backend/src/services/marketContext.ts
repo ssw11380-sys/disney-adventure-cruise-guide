@@ -55,7 +55,12 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
       return {
         market: "KR",
         phase: "extended",
-        label: pre ? (p.minutes < 8 * 60 + 50 ? "한국 정규장 개장 전, 넥스트레이드(NXT) 프리마켓 중" : "한국 정규장 개장 직전") : `오늘(${md(p.date)}) 한국 정규장은 15:30 에 마감, 지금은 넥스트레이드(NXT) 애프터마켓 시간(20:00 까지)`,
+        // 애프터마켓: 넥스트레이드 15:40~20:00, 한국거래소 16:00~20:00 (2026-09-14 부터, ETF·ETN 제외)
+        label: pre
+          ? p.minutes < 8 * 60 + 50
+            ? "한국 정규장 개장 전, 넥스트레이드(NXT) 프리마켓 중"
+            : "한국 정규장 개장 직전"
+          : `오늘(${md(p.date)}) 한국 정규장은 15:30 에 마감, 지금은 ${p.minutes < 16 * 60 ? "넥스트레이드(NXT) 애프터마켓 시간(한국거래소 애프터마켓은 16:00 부터, 20:00 까지)" : "애프터마켓 시간(한국거래소·넥스트레이드, 20:00 까지)"}`,
         lastRegularDate: pre ? lastClose : p.date,
         todayIncomplete: pre,
       };

@@ -90,8 +90,9 @@ export interface Quote {
 }
 
 /**
- * 거래 세션 단계. 한국: nxt_pre(NXT 프리마켓) · auction(동시호가) · regular · nxt_after(NXT 애프터마켓),
- * 미국: overnight(토스 주간거래) · pre · regular · after. 공통: closed(거래일의 장 밖) · holiday(휴장일·주말)
+ * 거래 세션 단계. 한국: nxt_pre(NXT 프리마켓) · auction(동시호가) · regular · nxt_after(NXT 애프터마켓 15:40~16:00)
+ * · after(한국거래소+NXT 애프터마켓 16:00~20:00), 미국: overnight(토스 주간거래) · pre · regular · after.
+ * 공통: closed(거래일의 장 밖) · holiday(휴장일·주말)
  */
 export type SessionPhase = "nxt_pre" | "auction" | "regular" | "nxt_after" | "overnight" | "pre" | "after" | "closed" | "holiday";
 
@@ -99,11 +100,14 @@ export type SessionPhase = "nxt_pre" | "auction" | "regular" | "nxt_after" | "ov
 export interface QuoteSession {
   market: "KR" | "US";
   phase: SessionPhase;
-  /** "미국 주간거래" · "한국 NXT 애프터마켓" · "한국 휴장" … (잔고 상태 줄에 그대로) */
+  /** "미국 주간거래" · "한국 애프터마켓" · "한국 휴장" … (잔고 상태 줄에 그대로) */
   label: string;
   /** 그 시장이 지금 연속 거래 중인지 (동시호가·장 마감·휴장이면 false) */
   open: boolean;
-  /** 이 종목이 지금 세션의 거래 대상인지 (NXT·주간거래 지원, 거래정지 아님). 모르면 null, 닫힌 세션도 null */
+  /**
+   * 이 종목이 지금 세션의 거래 대상인지 (NXT·주간거래·한국거래소 애프터마켓 대상, 거래정지 아님). 닫힌 세션은 null.
+   * 모르면 null — 이때는 이 세션에 체결이 있었던 종목만 realtime (토스 정보를 못 받음, 한국거래소 애프터마켓 대상 목록 없음, 토스 달력으로 거래일을 확인 못 함)
+   */
   eligible: boolean | null;
   /** 거래정지라 대상이 아님 */
   halted?: true;

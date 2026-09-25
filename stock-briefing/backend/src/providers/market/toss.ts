@@ -13,7 +13,7 @@ import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
  *            한국은 KRX+NXT "통합" 가격(토스 앱에 보이는 그 숫자), 미국은 USD + 원화 환산.
  *  - 봉:     GET  /api/v1/c-chart/{kr-s|us-s}/{productCode}/{day|week|month}:1?count=N  (최신순), 분봉은 min:1|min:5|min:30
  *  - 종목:   GET  /api/v2/stock-infos/{productCode}  (이름, 시장, 발행주식수 → 시가총액)
- *            GET  /api/v1/stock-infos?codes=A035420,US20100629001  (200개씩: 주간거래·NXT 대상, 거래정지 → 초록 점의 세션 자격)
+ *            GET  /api/v1/stock-infos?codes=A035420,US20100629001  (200개씩: 주간거래·NXT 대상, 거래정지, ETF·ETN → 초록 점의 세션 자격)
  *  - 검색:   POST /api/v3/search-all/wts-auto-complete  (한글로 미국 종목 검색 가능: "테슬라" → TSLA)
  *
  * 상품 코드: 한국은 "A"+종목코드. 미국은 "US20100629001" 같은 내부 코드라 티커로 검색해서 알아낸 뒤
@@ -40,19 +40,25 @@ interface SessionInfo {
   nxt: boolean | null;
   halted: boolean | null;
   nxtHalted: boolean | null;
+  etp: boolean | null;
 }
 
 const bool = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
 
-/** stock-infos 한 행 → 세션 자격. 칸이 없으면 모름(null). 거래정지는 둘 중 하나라도 true 면 정지 */
+/**
+ * stock-infos 한 행 → 세션 자격. 칸이 없으면 모름(null). 거래정지는 둘 중 하나라도 true 면 정지.
+ * ETF·ETN 은 상품 구분(group.code: ST 주권 · FS 외국주권 · EF ETF · EN ETN …)으로 — 한국거래소 애프터마켓 대상이 아니다
+ */
 export function parseSessionInfo(r: Record<string, unknown>, at: number): SessionInfo {
   const stops = [bool(r["tradingSuspended"]), bool(r["krxTradingSuspended"])];
+  const group = (r["group"] as Record<string, unknown> | null | undefined)?.["code"];
   return {
     at,
     daytime: bool(r["daytimePriceSupported"]),
     nxt: bool(r["nxtSupported"]),
     halted: stops.includes(true) ? true : stops.every((x) => x === null) ? null : false,
     nxtHalted: bool(r["nxtTradingSuspended"]),
+    etp: typeof group === "string" && group ? group === "EF" || group === "EN" : null,
   };
 }
 
@@ -450,6 +456,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
         nxt: info?.nxt ?? null,
         halted: info?.halted ?? null,
         nxtHalted: info?.nxtHalted ?? null,
+        etp: info?.etp ?? null,
         exchange: this.exchangeOf.get(c) ?? null,
         // 그 뒤 일괄 시세가 실패했으면(토스 웹 장애) 받는 중이 아니다
         pricedAt: tick && tick.receivedAt > this.pricesFailedAt ? tick.receivedAt : null,
@@ -496,7 +503,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
       for (const [code, pc] of batch) {
         const r = byPc.get(pc);
         // 응답에 없는 종목도 받은 것으로 적어 1시간 동안 다시 묻지 않는다 (자격은 모름)
-        this.sessionInfo.set(code, r ? parseSessionInfo(r, at) : { at, daytime: null, nxt: null, halted: null, nxtHalted: null });
+        this.sessionInfo.set(code, r ? parseSessionInfo(r, at) : { at, daytime: null, nxt: null, halted: null, nxtHalted: null, etp: null });
       }
     }
   }

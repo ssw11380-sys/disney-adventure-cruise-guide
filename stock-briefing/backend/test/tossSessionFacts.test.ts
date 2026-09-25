@@ -2,13 +2,15 @@ import { describe, expect, it } from "vitest";
 import { parseSessionInfo, TossProvider, type CodeStore } from "../src/providers/market/toss.js";
 
 /**
- * 초록 점의 종목 자격 (주간거래·NXT 대상·거래정지) — 토스 웹 stock-infos 일괄 조회 (로그인 없는 공개 JSON, 시세와 같은 서버).
+ * 초록 점의 종목 자격 (주간거래·NXT 대상·거래정지·ETF·ETN) — 토스 웹 stock-infos 일괄 조회 (로그인 없는 공개 JSON, 시세와 같은 서버).
  * 칸 이름과 참/거짓 값은 2026-09-25 01:05Z(뉴욕 21:05, 주간거래 중) 실제 응답과 같다 (이 기능이 읽는 칸만 남김).
+ * 상품 구분(group.code)은 02:20Z 에 본 값: NAVER ST(주권) · 윙입푸드 FS(외국주권) · KODEX 200 EF(ETF) · 삼성 레버리지 WTI원유 선물 ETN EN(ETN).
  * 미국 상품 코드·가격은 예시 값
  */
 const INFOS: Record<string, Record<string, unknown>> = {
-  A035420: { code: "A035420", symbol: "035420", name: "NAVER", market: { code: "KSP" }, status: "N", daytimePriceSupported: false, nxtSupported: true, nxtOpenDate: "2025-03-04", tradingSuspended: false, krxTradingSuspended: false, nxtTradingSuspended: false, userTradingSuspended: false },
-  A900340: { code: "A900340", symbol: "900340", name: "윙입푸드", market: { code: "KSQ" }, status: "N", daytimePriceSupported: false, nxtSupported: false, tradingSuspended: false, krxTradingSuspended: false, nxtTradingSuspended: false },
+  A035420: { code: "A035420", symbol: "035420", name: "NAVER", market: { code: "KSP" }, group: { code: "ST", displayName: "주권" }, status: "N", daytimePriceSupported: false, nxtSupported: true, nxtOpenDate: "2025-03-04", tradingSuspended: false, krxTradingSuspended: false, nxtTradingSuspended: false, userTradingSuspended: false },
+  A900340: { code: "A900340", symbol: "900340", name: "윙입푸드", market: { code: "KSQ" }, group: { code: "FS", displayName: "외국주권" }, status: "N", daytimePriceSupported: false, nxtSupported: false, tradingSuspended: false, krxTradingSuspended: false, nxtTradingSuspended: false },
+  A069500: { code: "A069500", symbol: "069500", name: "KODEX 200", market: { code: "KSP" }, group: { code: "EF", displayName: "ETF" }, status: "N", daytimePriceSupported: false, nxtSupported: false, tradingSuspended: false, krxTradingSuspended: false, nxtTradingSuspended: false },
   US20200205001: { code: "US20200205001", symbol: "VRT", name: "버티브 홀딩스", market: { code: "NYS" }, status: "N", daytimePriceSupported: true, nxtSupported: false, tradingSuspended: false },
   // 칸이 빠진 응답 (비공식 API 가 바뀐 경우) → 모름
   US20990101001: { code: "US20990101001", symbol: "NEWX", name: "새 종목", market: { code: "NSQ" }, status: "N" },
@@ -54,7 +56,7 @@ function provider(t: { now: number }, o: { failInfos?: () => boolean; failPrices
   return { p: new TossProvider(fetchFn, new Store(), () => new Date(t.now)), calls };
 }
 
-const CODES = ["035420", "900340", "VRT", "NEWX"];
+const CODES = ["035420", "900340", "069500", "VRT", "NEWX"];
 
 describe("토스 세션 사실 (stock-infos · stock-prices)", () => {
   it("받아 둔 값만 바로 주고(처음엔 모름), 뒤에서 한 번에 받은 뒤에는 자격·거래소 구분·가격 받은 시각을 준다", async () => {
@@ -65,11 +67,12 @@ describe("토스 세션 사실 (stock-infos · stock-prices)", () => {
     await p.refreshSessionInfos(CODES); // 이미 나간 요청을 같이 기다린다
     await p.getMany(CODES);
     const f = p.sessionFacts(CODES);
-    expect(f.get("035420")).toEqual({ daytime: false, nxt: true, halted: false, nxtHalted: false, exchange: "integrated", pricedAt: t.now });
-    expect(f.get("900340")).toMatchObject({ nxt: false, exchange: "krx" });
+    expect(f.get("035420")).toEqual({ daytime: false, nxt: true, halted: false, nxtHalted: false, etp: false, exchange: "integrated", pricedAt: t.now });
+    expect(f.get("900340")).toMatchObject({ nxt: false, etp: false, exchange: "krx" });
+    expect(f.get("069500")).toMatchObject({ nxt: false, etp: true }); // ETF — 한국거래소 애프터마켓 대상 아님
     expect(f.get("VRT")).toMatchObject({ daytime: true, halted: false });
-    expect(f.get("NEWX")).toMatchObject({ daytime: null, nxt: null, halted: null, nxtHalted: null }); // 칸이 없으면 모름 — 아무 값으로 채우지 않는다
-    expect(calls.filter((u) => u.includes("/v1/stock-infos")).length).toBe(1); // 4종목 한 번에
+    expect(f.get("NEWX")).toMatchObject({ daytime: null, nxt: null, halted: null, nxtHalted: null, etp: null }); // 칸이 없으면 모름 — 아무 값으로 채우지 않는다
+    expect(calls.filter((u) => u.includes("/v1/stock-infos")).length).toBe(1); // 5종목 한 번에
   });
 
   it("1시간 안에는 다시 묻지 않고, 지나면 다시 받는다 (거래정지는 장중에도 바뀔 수 있다)", async () => {
@@ -117,5 +120,14 @@ describe("토스 세션 사실 (stock-infos · stock-prices)", () => {
     expect(parseSessionInfo({ tradingSuspended: false }, 0).halted).toBe(false);
     expect(parseSessionInfo({}, 0).halted).toBeNull();
     expect(parseSessionInfo({ daytimePriceSupported: "Y" }, 0).daytime).toBeNull(); // 불리언이 아니면 모름
+  });
+
+  it("ETF·ETN: 상품 구분 EF·EN 이면 true, 다른 구분이면 false, 칸이 없으면 모름", () => {
+    expect(parseSessionInfo({ group: { code: "EF" } }, 0).etp).toBe(true);
+    expect(parseSessionInfo({ group: { code: "EN" } }, 0).etp).toBe(true);
+    expect(parseSessionInfo({ group: { code: "ST" } }, 0).etp).toBe(false);
+    expect(parseSessionInfo({ group: { code: "FS" } }, 0).etp).toBe(false);
+    expect(parseSessionInfo({}, 0).etp).toBeNull();
+    expect(parseSessionInfo({ group: null }, 0).etp).toBeNull();
   });
 });

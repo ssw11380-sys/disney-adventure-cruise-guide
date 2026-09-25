@@ -19,16 +19,17 @@ export interface AfterMarketQuote {
 
 /**
  * 종목의 지금 거래 세션 (서버 services/liveSession 과 같은 모양).
- * phase — 한국: nxt_pre · auction(동시호가) · regular · nxt_after, 미국: overnight(주간거래) · pre · regular · after, 공통: closed · holiday
+ * phase — 한국: nxt_pre · auction(동시호가) · regular · nxt_after(15:40~16:00) · after(한국거래소+NXT 애프터마켓 16:00~20:00),
+ * 미국: overnight(주간거래) · pre · regular · after, 공통: closed · holiday
  */
 export interface QuoteSession {
   market: "KR" | "US";
   phase: string;
-  /** "미국 주간거래" · "한국 NXT 애프터마켓" · "한국 휴장" … */
+  /** "미국 주간거래" · "한국 애프터마켓" · "한국 휴장" … */
   label: string;
   /** 그 시장이 지금 연속 거래 중 (동시호가·장 마감·휴장이면 false) */
   open: boolean;
-  /** 이 종목이 지금 세션의 거래 대상인지 (NXT·주간거래 지원, 거래정지 아님). 모르면 null */
+  /** 이 종목이 지금 세션의 거래 대상인지 (NXT·주간거래·애프터마켓 대상, 거래정지 아님). 모르면 null (이 세션에 체결이 있어야 점) */
   eligible: boolean | null;
   halted?: boolean;
   /** 다음 세션 경계 (ISO) */

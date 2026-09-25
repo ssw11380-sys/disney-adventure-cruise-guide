@@ -55,13 +55,17 @@ export function marketSessions(quotes: Quotes, now: number): MarketSessionView[]
   return [...pick.values()].sort((a, b) => Number(b.open) - Number(a.open) || order(a.market) - order(b.market)).map(({ market, label, open }) => ({ market, label, open }));
 }
 
-/** 점이 켜진 종목 수와, 지금 열린 세션의 거래 대상(또는 모름) 종목 수 */
+/**
+ * 점이 켜진 종목 수와, 지금 열린 세션의 거래 대상으로 확인된 종목 수 (상태 줄의 "지연" 판단).
+ * 대상인지 모르는 종목(eligible null — 토스 정보를 못 받음, 한국거래소 애프터마켓 대상 목록 없음)은 세지 않는다:
+ * 그런 종목은 이 세션에 체결이 있어야 점이 켜지므로, 점이 없다고 "지연"이라 하면 서버·앱이 멀쩡한데도 지연으로 보인다
+ */
 export function liveCounts(quotes: Quotes, now: number, feedOk: boolean): { live: number; eligible: number } {
   let live = 0;
   let eligible = 0;
   for (const q of quotes) {
     if (quoteLive(q, now, feedOk)) live++;
-    if (q?.session?.open && q.session.eligible !== false) eligible++;
+    if (q?.session?.open && q.session.eligible === true) eligible++;
   }
   return { live, eligible };
 }
@@ -140,8 +144,9 @@ export function quotesOf(data: unknown): Quotes {
  *  - 열린 시장이 없음: 세션만 ("한국 장 마감", "미국 휴장 · 한국 휴장")
  *  - 앱이 값을 제때 못 받음: "… · 지연"
  *  - 점이 켜진 종목이 있음: "… · 실시간 N종목" (초록)
- *  - 열린 세션의 거래 대상이 있는데 점이 하나도 없음(서버가 값을 못 받는 중): "… · 지연"
- *  - 열린 세션에 거래 대상 종목이 없음(예: NXT 비대상만 보유한 애프터마켓): "… · 실시간 종목 없음"
+ *  - 열린 세션의 거래 대상(확인된 종목)이 있는데 점이 하나도 없음(서버가 값을 못 받는 중): "… · 지연"
+ *  - 열린 세션에 거래 대상으로 확인된 종목이 없음(예: NXT 비대상만 보유한 NXT 프리마켓, 대상인지 모르는 종목만 있고 체결이 아직 없음):
+ *    "… · 실시간 종목 없음" (회색)
  */
 export function sessionStatus(o: { sessions: readonly MarketSessionView[]; liveCount: number; eligibleCount: number; feedOk: boolean; offline: boolean }): { text: string; tone: LiveTone } {
   const head = o.sessions.map((s) => s.label).join(" · ");
@@ -154,7 +159,10 @@ export function sessionStatus(o: { sessions: readonly MarketSessionView[]; liveC
   return { text: with_("실시간 종목 없음"), tone: "closed" };
 }
 
-/** 상세 화면: 점이 없을 때 그 까닭 한 줄 (거래정지 · 주간거래 미지원 · NXT 비대상 · 닫힌 세션). 보여 줄 게 없으면 null */
+/**
+ * 상세 화면: 점이 없을 때 그 까닭 한 줄 (거래정지 · 주간거래 미지원 · NXT 비대상 · 애프터마켓 비대상 · 닫힌 세션). 보여 줄 게 없으면 null.
+ * NXT 애프터마켓(15:40~16:00) 비대상은 16:00 한국거래소 애프터마켓에서 거래될 수도 있어(ETF·ETN 등은 아님) 다음 갱신 시각을 약속하지 않는다
+ */
 export function sessionNote(q: Quote | null | undefined): string | null {
   const s = q?.session;
   if (!s) return null;
@@ -162,6 +170,8 @@ export function sessionNote(q: Quote | null | undefined): string | null {
   if (!s.open) return s.label;
   if (s.eligible !== false) return null;
   if (s.phase === "overnight") return "주간거래 미지원 종목";
-  if (s.phase === "nxt_pre" || s.phase === "nxt_after") return "NXT 거래 대상 아님 · 09:00 정규장부터 갱신";
+  if (s.phase === "nxt_pre") return "NXT 거래 대상 아님 · 09:00 정규장부터 갱신";
+  if (s.phase === "nxt_after") return "NXT 거래 대상 아님";
+  if (s.market === "KR" && s.phase === "after") return "애프터마켓 거래 대상 아님";
   return null;
 }

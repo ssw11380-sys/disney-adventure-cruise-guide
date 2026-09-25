@@ -72,8 +72,8 @@ describe("잔고 상태 줄: 시장별 세션", () => {
   });
 
   it("NXT 애프터마켓에 NXT 비대상 종목이 섞이면 실시간 수가 한국 보유 수보다 작다", () => {
-    const after: QuoteSession = { market: "KR", phase: "nxt_after", label: "한국 NXT 애프터마켓", open: true, eligible: true, until: "2026-09-22T11:00:00Z" };
-    const t = Date.parse("2026-09-22T16:00:00+09:00");
+    const after: QuoteSession = { market: "KR", phase: "nxt_after", label: "한국 NXT 애프터마켓", open: true, eligible: true, until: "2026-09-22T07:00:00Z" };
+    const t = Date.parse("2026-09-22T15:45:00+09:00");
     const list = [
       quote("035420", 1, { session: after, realtime: true }),
       quote("005930", 1, { session: after, realtime: true }),
@@ -82,6 +82,24 @@ describe("잔고 상태 줄: 시장별 세션", () => {
     const live = list.filter((q) => quoteLive(q, t, true)).length;
     expect(live).toBe(2);
     expect(sessionStatus({ sessions: marketSessions(list, t), liveCount: live, eligibleCount: 2, feedOk: true, offline: false }).text).toBe("한국 NXT 애프터마켓 · 실시간 2종목");
+  });
+
+  it("애프터마켓(16:00~20:00): 대상인지 모르는 종목(한국거래소만 거래)은 체결이 있어야 켜지고, 점이 없어도 '지연'으로 세지 않는다", () => {
+    const after: QuoteSession = { market: "KR", phase: "after", label: "한국 애프터마켓", open: true, eligible: true, until: "2026-09-22T11:00:00Z" };
+    const t = Date.parse("2026-09-22T16:30:00+09:00");
+    const list = [
+      quote("035420", 1, { session: after, realtime: true }), // NXT 종목
+      quote("000660", 1, { session: { ...after, eligible: null }, realtime: true }), // 16:10 체결 있음
+      quote("900340", 1, { session: { ...after, eligible: null }, realtime: false }), // 체결 없음 — 대상인지 모름
+      quote("069500", 1, { session: { ...after, eligible: false }, realtime: false }), // ETF
+    ];
+    const c = liveCounts(list, t, true);
+    expect(c).toEqual({ live: 2, eligible: 1 });
+    expect(sessionStatus({ sessions: marketSessions(list, t), liveCount: c.live, eligibleCount: c.eligible, feedOk: true, offline: false }).text).toBe("한국 애프터마켓 · 실시간 2종목");
+    // 대상인지 모르는 종목만 있고 아직 체결이 없으면: 지연이 아니라 "실시간 종목 없음"(회색)
+    const unknownOnly = [list[2]!, list[3]!];
+    const u = liveCounts(unknownOnly, t, true);
+    expect(sessionStatus({ sessions: marketSessions(unknownOnly, t), liveCount: u.live, eligibleCount: u.eligible, feedOk: true, offline: false })).toEqual({ text: "한국 애프터마켓 · 실시간 종목 없음", tone: "closed" });
   });
 });
 
@@ -130,16 +148,23 @@ describe("recheckIn: 화면이 시각을 새로 읽을 때 (몇 초마다 화면
   });
 });
 
-describe("liveCounts: 점이 켜진 수와 열린 세션의 거래 대상 수", () => {
-  it("주간거래 미지원·닫힌 시장은 대상에서 뺀다", () => {
+describe("liveCounts: 점이 켜진 수와 열린 세션의 거래 대상으로 확인된 수", () => {
+  it("주간거래 미지원·대상인지 모름·닫힌 시장은 대상에서 뺀다", () => {
     const list = [
       quote("VRT", 1, { session: US_OVERNIGHT, realtime: true }),
       quote("X", 1, { session: { ...US_OVERNIGHT, eligible: false }, realtime: false }),
-      quote("Y", 1, { session: { ...US_OVERNIGHT, eligible: null }, realtime: false }), // 모름 → 대상으로 센다 (점이 없으면 "지연")
+      // 모름(토스 정보를 못 받음) → 세지 않는다: 이 세션 체결이 없어 점이 없는 것이지 지연이 아니다
+      quote("Y", 1, { session: { ...US_OVERNIGHT, eligible: null }, realtime: false }),
       quote("035420", 1, { session: KR_HOLIDAY, realtime: false }),
     ];
-    expect(liveCounts(list, NOW, true)).toEqual({ live: 1, eligible: 2 });
-    expect(liveCounts(list, NOW, false)).toEqual({ live: 0, eligible: 2 });
+    expect(liveCounts(list, NOW, true)).toEqual({ live: 1, eligible: 1 });
+    expect(liveCounts(list, NOW, false)).toEqual({ live: 0, eligible: 1 });
+  });
+
+  it("모든 종목의 자격을 모르고 아직 체결이 없으면(주간거래가 막 시작) 상태 줄은 '지연'이 아니다", () => {
+    const unknown = [quote("VRT", 1, { session: { ...US_OVERNIGHT, eligible: null }, realtime: false }), quote("035420", 1, { session: KR_HOLIDAY })];
+    const c = liveCounts(unknown, NOW, true);
+    expect(sessionStatus({ sessions: marketSessions(unknown, NOW), liveCount: c.live, eligibleCount: c.eligible, feedOk: true, offline: false })).toEqual({ text: "미국 주간거래 · 한국 휴장 · 실시간 종목 없음", tone: "closed" });
   });
 });
 
@@ -148,6 +173,11 @@ describe("상세 화면: 점이 없을 때 까닭", () => {
     expect(sessionNote(quote("X", 1, { session: { ...US_OVERNIGHT, eligible: false } }))).toBe("주간거래 미지원 종목");
     const nxt: QuoteSession = { market: "KR", phase: "nxt_pre", label: "한국 NXT 프리마켓", open: true, eligible: false, until: null };
     expect(sessionNote(quote("900340", 1, { session: nxt }))).toBe("NXT 거래 대상 아님 · 09:00 정규장부터 갱신");
+    // 15:40~16:00: 16:00 한국거래소 애프터마켓에서 거래될 수도 있어 다음 갱신 시각을 약속하지 않는다
+    expect(sessionNote(quote("900340", 1, { session: { ...nxt, phase: "nxt_after", label: "한국 NXT 애프터마켓" } }))).toBe("NXT 거래 대상 아님");
+    const after: QuoteSession = { market: "KR", phase: "after", label: "한국 애프터마켓", open: true, eligible: false, until: null };
+    expect(sessionNote(quote("069500", 1, { session: after }))).toBe("애프터마켓 거래 대상 아님"); // ETF·ETN
+    expect(sessionNote(quote("900340", 1, { session: { ...after, eligible: null } }))).toBeNull(); // 대상인지 모름 — 까닭을 지어내지 않는다
     expect(sessionNote(quote("900340", 1, { session: { ...nxt, phase: "regular", label: "한국 정규장", halted: true } }))).toBe("거래정지");
     expect(sessionNote(quote("035420", 1, { session: KR_HOLIDAY }))).toBe("한국 휴장");
     expect(sessionNote(quote("VRT", 1, { session: US_OVERNIGHT }))).toBeNull();

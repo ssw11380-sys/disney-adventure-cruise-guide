@@ -3,7 +3,7 @@ import { EXCLUDED_KEY, parseCodes, parseTossDetail, SNAPSHOT_KEY, tossBasisFor, 
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import { CandleCache } from "./candleCache.js";
 import { marketContext, tradingDate } from "./marketContext.js";
-import { realtimeOf, sessionAt, toQuoteSession } from "./liveSession.js";
+import { keepTossCalendar, realtimeOf, sessionAt, toQuoteSession } from "./liveSession.js";
 import { wsCovered } from "./priceStream.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { Db } from "../db/index.js";
@@ -70,8 +70,9 @@ const TICK_FRESH_MS = 60_000;
 /** 밸류에이션·환율 보강을 기다리는 최대 시간 (넘으면 보강 없이 시세만 저장) */
 const ENRICH_WAIT_MS = 3_000;
 /**
- * 거래일이 바뀌었는데(세션 시작: 한국 08:00·미국 뉴욕 20:00) 지난 거래일에 받은 스냅샷이거나, 새 거래일 체결을 보류 중이면
- * ttl(1분)을 기다리지 않고 이만큼 지난 스냅샷은 다시 받는다 — 세션이 시작되자마자 초록 점과 새 체결이 붙게
+ * 거래일이 바뀌었는데(세션 시작: 한국 08:00·미국 뉴욕 20:00) 지난 거래일에 받은 스냅샷이거나, 새 거래일 체결을 보류 중이거나,
+ * 지난 거래일 스냅샷과 다른 토스 웹 가격이 보이면(조용한 종목의 이번 거래일 첫 체결) ttl(1분)을 기다리지 않고 이만큼 지난 스냅샷은 다시 받는다
+ * — 세션이 시작되자마자 초록 점과 새 체결이 붙게
  */
 const ROLL_REFRESH_MS = 10_000;
 
@@ -156,6 +157,12 @@ export class StockService {
   private readonly quickLast = new Map<string, LiveTick>();
   /** 토스 웹 일괄 가격이 바뀐 것을 본 때, 바뀌기 전 값을 받은 시각 (자격을 모르는 종목의 "이 세션에 체결이 있었다" 증거) */
   private readonly quickMovedAt = new Map<string, number>();
+  /**
+   * 토스 웹 가격이 지난 거래일 스냅샷(공식 API asOf 가 지난 거래일)과 값이 다른 것을 본 때의 그 가격과 스냅샷 (종목별).
+   * 이번 거래일 첫 체결일 수 있어 붙이지 않고(전일 종가가 하루 밀려 등락이 이틀치가 될 수 있다) 그 스냅샷을 한 번 다시 받는다(rolled).
+   * 다시 받아도 그대로면(두 출처의 가격 기준 차이) 같은 가격으로는 더 조르지 않는다 — 스냅샷 객체가 바뀌었는지로 본다
+   */
+  private readonly quickAhead = new Map<string, { price: number; snapshot: Held }>();
   /** 마지막으로 받은 장 상태 (달력 조회를 기다리지 않고 세션을 정할 때) */
   private calendarLast: MarketStatus | null = null;
   private readonly inflight = new Map<string, Promise<void>>();
@@ -538,7 +545,7 @@ export class StockService {
       const p = this.refreshQuotes(expired);
       // 캐시가 없거나 오래된(밤새 쉬었다 연 경우 등) 종목이 있으면 잠깐 기다린다 — 어제 스냅샷에 오늘 체결가를 섞어 보여 주지 않게.
       // 새 거래일 체결을 보류 중인 종목도 (스냅샷을 다시 받으면 바로 그 체결이 붙는다)
-      if (expired.some((c) => this.old(c, t) || this.heldTick(c))) await within(p, COLD_WAIT_MS, undefined);
+      if (expired.some((c) => this.old(c, t) || this.catchingUp(c))) await within(p, COLD_WAIT_MS, undefined);
     }
     const quick = await quickP;
     const ctx = this.sessionContext(codes, await calendarP);
@@ -595,7 +602,7 @@ export class StockService {
     if (h && !opts.fresh) {
       if (this.due(code, t)) {
         const p = this.refreshQuotes([code]);
-        if (this.old(code, t) || this.heldTick(code)) await within(p, COLD_WAIT_MS, undefined);
+        if (this.old(code, t) || this.catchingUp(code)) await within(p, COLD_WAIT_MS, undefined);
       }
     } else {
       await this.refreshQuotes([code]);
@@ -746,9 +753,19 @@ export class StockService {
     return t - (this.failedAt.get(code) ?? -Infinity) >= RETRY_AFTER_FAIL_MS;
   }
 
-  /** 받은 지 ROLL_REFRESH_MS 가 지났고, 그 뒤 거래일이 바뀌었거나(세션 시작) 새 거래일 체결을 보류 중 */
+  /** 받은 지 ROLL_REFRESH_MS 가 지났고, 그 뒤 거래일이 바뀌었거나(세션 시작) 스냅샷에 없는 새 거래일 가격이 보인다(catchingUp) */
   private rolled(code: string, h: Held, t: number): boolean {
-    return t - h.at >= ROLL_REFRESH_MS && (!this.snapshotCurrent(code, h, t) || this.heldTick(code));
+    return t - h.at >= ROLL_REFRESH_MS && (!this.snapshotCurrent(code, h, t) || this.catchingUp(code));
+  }
+
+  /**
+   * 스냅샷을 다시 받아야 새 거래일 가격이 붙는 종목: 새 거래일 웹소켓 체결을 보류 중이거나(heldTick),
+   * 스냅샷을 받은 뒤 토스 웹 가격이 지난 거래일 스냅샷과 달라졌다(quickAhead — 한 번 다시 받으면 그 가격으로는 더 조르지 않는다)
+   */
+  private catchingUp(code: string): boolean {
+    if (this.heldTick(code)) return true;
+    const h = this.book.get(code);
+    return !!h && this.quickAhead.get(code)?.snapshot === h;
   }
 
   /** 스냅샷을 받은 때가 지금과 같은 거래일인지 (한국 08:00, 미국 뉴욕 20:00 에 거래일이 바뀐다 — marketContext.tradingDate) */
@@ -786,8 +803,9 @@ export class StockService {
   private calendarNow(): Promise<MarketStatus | null> {
     const cal = this.deps.calendar;
     if (!cal) return Promise.resolve(null);
+    // 조회가 실패해 요일 추정(fallback)이 오면 마지막으로 받은 토스 달력을 시장별로 그대로 쓴다 (추석 같은 평일 휴장일을 장중으로 보지 않게)
     const p = cal.status().then(
-      (s) => (this.calendarLast = s),
+      (s) => (this.calendarLast = keepTossCalendar(this.calendarLast, s)),
       () => this.calendarLast,
     );
     return within(p, this.calendarLast ? QUICK_WAIT_MS : COLD_WAIT_MS, this.calendarLast);
@@ -855,11 +873,20 @@ export class StockService {
     const h = this.book.get(code);
     if (!h) return null;
     const t = this.now().getTime();
-    let tick = this.liveTick(h.quote, quick);
+    const pick = this.liveTick(h.quote, quick);
+    let tick = pick?.tick ?? null;
     // 스냅샷(asOf)과 체결의 거래일(현지 날짜)이 다르면 섞지 않는다 — 어제 스냅샷의 전일 종가에 오늘 체결을 대면 등락이 이틀치가 된다.
     // 스냅샷을 새로 받으면(10초~1분 안, rolled) 같은 날이 되어 다시 붙는다
-    const held = tick !== null && !sameTradingDay(h.quote, tick.timestamp);
-    if (held) tick = null;
+    const newDay = pick !== null && !sameTradingDay(h.quote, pick.tick.timestamp);
+    //  - 웹소켓 체결은 실제 체결 시각이라, 새 거래일 것이면 스냅샷에 없는 체결이다 → 보류(held). 가격이 따라가지 않으니 초록 점도 끈다
+    //  - 토스 웹 가격은 받은 시각이 찍혀 거래일로는 새 체결인지 알 수 없다. 값이 스냅샷과 같으면 붙일 것이 없고 그 값이 지금 가격이다 →
+    //    보류가 아니다 (이번 거래일에 아직 체결이 없는 조용한 종목 — 공식 API asOf 가 지난 거래일 — 도 점이 켜진다).
+    //    값이 다르면 붙이지 않고 스냅샷을 곧 다시 받는다(quickAhead) — 점은 끄지 않는다 (두 출처의 기준 차이로 계속 다를 수 있어서)
+    const held = newDay && !pick.polled;
+    const ahead = newDay && pick.polled && pick.tick.price !== h.quote.price;
+    // 토스 웹 가격을 따져 본 때만 적는다 (이번 응답에 토스 웹 가격이 없으면 그대로 둔다 — 지웠다 다시 적어 같은 가격으로 또 조르지 않게)
+    if (pick?.polled) this.noteQuickAhead(code, ahead ? pick.tick : null, h);
+    if (held || ahead) tick = null;
     const q = tick ? this.applyTick(h.quote, tick) : h.quote;
     const tickFresh = tick !== null && Math.abs(t - tick.receivedAt) <= TICK_FRESH_MS;
     const stale = !tickFresh && this.isStale(code, h, t);
@@ -890,15 +917,31 @@ export class StockService {
    * REST 일괄 조회는 토스 통합 가격이라 같은 기준(toss 계열)의 스냅샷에만 적용한다 — 네이버 정규장 종가에 섞이면 등락이 틀어진다.
    * 스냅샷보다 오래된 체결은 쓰지 않는다
    */
-  private liveTick(quote: Quote, quick?: Map<string, LiveTick>): LiveTick | null {
+  private liveTick(quote: Quote, quick?: Map<string, LiveTick>): { tick: LiveTick; polled: boolean } | null {
     const quoteAt = Date.parse(quote.asOf);
     const usable = (tick: LiveTick | null | undefined): LiveTick | null => {
       if (!tick) return null;
       const tickAt = Date.parse(tick.timestamp);
       return Number.isNaN(tickAt) || (!Number.isNaN(quoteAt) && tickAt < quoteAt) ? null : tick;
     };
-    // 웹소켓 마지막 체결이 스냅샷보다 오래됐으면(예: 웹소켓이 이 세션 체결을 아직 안 줌) 토스 웹 일괄 가격으로 — 웹소켓이 멈춘 종목도 3초 갱신이 붙게
-    return usable(this.deps.live?.get(quote.code)) ?? (quick && quote.source.startsWith("toss") ? usable(quick.get(quote.code)) : null);
+    // 웹소켓 마지막 체결이 스냅샷보다 오래됐으면(예: 웹소켓이 이 세션 체결을 아직 안 줌) 토스 웹 일괄 가격으로 — 웹소켓이 멈춘 종목도 3초 갱신이 붙게.
+    // polled = 토스 웹 가격 (timestamp 가 체결 시각이 아니라 받은 시각)
+    const ws = usable(this.deps.live?.get(quote.code));
+    if (ws) return { tick: ws, polled: false };
+    const polled = quick && quote.source.startsWith("toss") ? usable(quick.get(quote.code)) : null;
+    return polled ? { tick: polled, polled: true } : null;
+  }
+
+  /**
+   * quickAhead 를 적는다: 지난 거래일 스냅샷(h)과 다른 토스 웹 가격(tick)이 처음 보이거나 그 가격이 바뀐 때만 새로(그 스냅샷을 다시 받게),
+   * 같은 가격이면 그대로(이미 다시 받았으면 더 조르지 않게), 토스 웹 가격이 스냅샷에 붙거나 같으면(null) 지운다
+   */
+  private noteQuickAhead(code: string, tick: LiveTick | null, h: Held): void {
+    if (!tick) {
+      this.quickAhead.delete(code);
+      return;
+    }
+    if (this.quickAhead.get(code)?.price !== tick.price) this.quickAhead.set(code, { price: tick.price, snapshot: h });
   }
 
   private applyTick(quote: Quote, tick: LiveTick): Quote {
