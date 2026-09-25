@@ -9,7 +9,7 @@ import { GenerationError, type GenerateRequest, type GenerateResult, type TextGe
 import { PromptStore } from "../src/llm/prompts.js";
 import { buildDigest } from "../src/notifications/digest.js";
 import type { PushMessage, PushSender, PushSendResult } from "../src/notifications/push.js";
-import type { MarketStatus } from "../src/providers/market/calendar.js";
+import { MarketCalendar, type MarketStatus } from "../src/providers/market/calendar.js";
 import type { MarketIndex } from "../src/providers/market/indices.js";
 import type { QuoteProvider } from "../src/providers/market/types.js";
 import {
@@ -1039,10 +1039,12 @@ describe("계좌 브리핑 (서버)", () => {
     if (o.disabledModel) gen.model = "disabled";
     const quotes = new MixedQuotes();
     const indices = fakeIndices(fakeIndexSource({ fx: { close: "1,391.00", change: "5.20", rate: "0.38" } }), () => new Date(o.at ?? "2026-09-25T16:05:00+09:00"));
+    // 휴장 달력을 주지 않으면: 토스 달력 조회는 실패하고, 요일 추정(fallback)은 테스트 시각으로 한다 (실제 오늘이 주말이어도 결과가 같게)
+    const calendar = o.holiday ? (o.holiday === "kr" ? krHolidayCalendar : holidayCalendar) : new MarketCalendar(async () => new Response("{}", { status: 500 }), () => new Date(o.at ?? "2026-09-25T16:05:00+09:00"));
     app = await buildApp({
       config: loadConfig({ DATABASE_URL: ":memory:" }),
       db,
-      providers: fakeProviders({ push, generator: gen, quotes, indices, search: new FakeSearchProvider([AAPL]), ...(o.holiday ? { calendar: (o.holiday === "kr" ? krHolidayCalendar : holidayCalendar) as never } : {}) }),
+      providers: fakeProviders({ push, generator: gen, quotes, indices, search: new FakeSearchProvider([AAPL]), calendar: calendar as never }),
       logger: false,
       receiptDelayMs: 0,
       now: () => new Date(o.at ?? "2026-09-25T16:05:00+09:00"),
