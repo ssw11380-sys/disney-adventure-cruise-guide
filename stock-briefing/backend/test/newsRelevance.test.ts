@@ -125,6 +125,18 @@ describe("종목 뉴스 관련도 (3-12, 운영에서 뽑은 제목)", () => {
     expect(newsQuery({ code: "GOOGL", name: "알파벳 A" })).toBe('"알파벳" when:30d');
   });
 
+  it("두 글자 조사(까지·부터·보다·처럼·마저·조차·으로)가 붙은 이름도 알아본다 (BH-76)", () => {
+    const nameSearch = (stock: { code: string; name: string }, titles: string[]) => filterNews(stock, titles.map((t) => item(t)), NOW, true).map((x) => x.title);
+    expect(nameSearch({ code: "CPNG", name: "쿠팡" }, ["쿠팡으로 몰리는 외국인…주가 급등", "쿠팡은 3분기 실적 호조"])).toHaveLength(2);
+    expect(nameSearch({ code: "NVDA", name: "엔비디아" }, ["엔비디아까지 급락, 반도체주 약세", "엔비디아보다 더 오른 AI 수혜주", "엔비디아가 급락"])).toHaveLength(3);
+    expect(nameSearch({ code: "TSLA", name: "테슬라" }, ["테슬라처럼 오를까…로봇주 강세"])).toHaveLength(1);
+    expect(nameSearch({ code: "PLTR", name: "팔란티어 테크놀로지스" }, ["팔란티어부터 오라클까지…"])).toHaveLength(1);
+    expect(nameSearch({ code: "005930", name: "삼성전자" }, ["삼성전자마저 신저가…외국인 매도", "삼성전자조차 버티지 못했다"])).toHaveLength(2);
+    // 조사가 아니라 다른 말로 이어지면 여전히 뺀다 (LG엔솔 ≠ LG, 메타버스 ≠ 메타)
+    expect(nameSearch({ code: "003550", name: "LG" }, ["LG엔솔 급등"])).toEqual([]);
+    expect(nameSearch({ code: "META", name: "메타 플랫폼스" }, ["메타버스 플랫폼 경쟁"])).toEqual([]);
+  });
+
   it("이름 뒤 수식어(홀딩스·컴퓨팅·(ADR))는 떼고 찾는다", () => {
     expect(coreName("버티브 홀딩스")).toBe("버티브");
     expect(coreName("윙입푸드(ADR)")).toBe("윙입푸드");

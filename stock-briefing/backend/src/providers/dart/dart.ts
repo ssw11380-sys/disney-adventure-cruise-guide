@@ -1,7 +1,8 @@
 import { unzipSync } from "fflate";
 import type { Db } from "../../db/index.js";
-import { ProviderError } from "../../lib/errors.js";
+import { isTimeoutError, ProviderError } from "../../lib/errors.js";
 import { seoulDateCompact, seoulDateCompactDaysAgo, seoulIso } from "../../lib/time.js";
+import { fetchWithTimeout } from "../../lib/timedFetch.js";
 import type { FetchFn } from "../market/types.js";
 import type {
   AnnualFinancials,
@@ -13,7 +14,7 @@ import type {
 
 /**
  * 금융감독원 DART Open API. https://opendart.fss.or.kr 에서 무료 키 발급 (일 20,000회).
- * - corpCode.xml : 종목코드 → 고유번호(corp_code) 매핑 (zip). DB(dart_corp_codes)에 캐시.
+ * - corpCode.xml : 종목코드 → 고유번호(corp_code) 매핑 (zip). DB(dart_corp_codes)에 캐시, 없는 종목을 만나면 하루에 한 번까지 다시 받는다.
  * - company.json : 회사 개요
  * - list.json    : 공시 목록
  * - fnlttSinglAcnt.json : 단일회사 주요계정 (당기/전기/전전기 3개년을 한 번에)
@@ -23,6 +24,12 @@ import type {
 
 const BASE = "https://opendart.fss.or.kr/api";
 const ANNUAL_REPORT = "11011";
+/** corpCode.xml(수 MB zip) 다운로드 제한 시간. 나머지 요청은 기본(10초) */
+const CORP_CODE_TIMEOUT_MS = 60_000;
+/** 표에 없는 종목을 만나면 표가 이보다 오래됐을 때만 다시 받는다 (첫 다운로드 뒤 새로 상장한 종목) */
+const CORP_CODE_STALE_MS = 24 * 3_600_000;
+/** 다시 받기가 실패한 뒤 다음 시도까지 (없는 코드로 부를 때마다 내려받지 않게) */
+const CORP_CODE_RETRY_MS = 10 * 60_000;
 
 type DartStatus = { status?: string; message?: string };
 
@@ -37,6 +44,9 @@ export class DartProvider implements FinancialsProvider {
   readonly name = "dart";
   private readonly fetchFn: FetchFn;
   private readonly now: () => Date;
+  /** 진행 중인 corpCode.xml 받기 (겹친 호출은 이것을 같이 기다린다) */
+  private refreshing: Promise<number> | null = null;
+  private lastRefreshTry = 0;
 
   constructor(private readonly opts: DartOptions) {
     this.fetchFn = opts.fetchFn ?? fetch;
@@ -47,9 +57,9 @@ export class DartProvider implements FinancialsProvider {
     const q = new URLSearchParams({ crtfc_key: this.opts.apiKey, ...params });
     let res: Response;
     try {
-      res = await this.fetchFn(`${BASE}/${path}?${q.toString()}`);
+      res = await fetchWithTimeout(this.fetchFn, `${BASE}/${path}?${q.toString()}`);
     } catch (e) {
-      throw new ProviderError(this.name, `네트워크 오류: ${path}`, e);
+      throw new ProviderError(this.name, `${isTimeoutError(e) ? "시간 초과" : "네트워크 오류"}: ${path}`, e);
     }
     if (!res.ok) throw new ProviderError(this.name, `HTTP ${res.status}: ${path}`);
     const json = (await res.json()) as T;
@@ -61,13 +71,21 @@ export class DartProvider implements FinancialsProvider {
 
   // ── corp_code 매핑 ────────────────────────────────────────────
 
-  /** corpCode.xml 을 내려받아 상장사(stock_code 있는 것)만 DB에 저장 */
+  /** corpCode.xml 을 내려받아 상장사(stock_code 있는 것)만 DB에 저장. 여러 호출이 겹쳐도 한 번만 받는다 */
   async refreshCorpCodes(): Promise<number> {
+    this.refreshing ??= this.downloadCorpCodes().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  private async downloadCorpCodes(): Promise<number> {
+    this.lastRefreshTry = this.now().getTime();
     let res: Response;
     try {
-      res = await this.fetchFn(`${BASE}/corpCode.xml?crtfc_key=${encodeURIComponent(this.opts.apiKey)}`);
+      res = await fetchWithTimeout(this.fetchFn, `${BASE}/corpCode.xml?crtfc_key=${encodeURIComponent(this.opts.apiKey)}`, {}, CORP_CODE_TIMEOUT_MS);
     } catch (e) {
-      throw new ProviderError(this.name, "corpCode.xml 다운로드 실패", e);
+      throw new ProviderError(this.name, `corpCode.xml 다운로드 실패${isTimeoutError(e) ? " (시간 초과)" : ""}`, e);
     }
     if (!res.ok) throw new ProviderError(this.name, `corpCode.xml HTTP ${res.status}`);
     const buf = new Uint8Array(await res.arrayBuffer());
@@ -97,17 +115,33 @@ export class DartProvider implements FinancialsProvider {
       this.opts.db.selectFrom("dart_corp_codes").select("corp_code").where("stock_code", "=", stockCode).executeTakeFirst();
     let row = await find();
     if (!row) {
-      const cnt = await this.opts.db
-        .selectFrom("dart_corp_codes")
-        .select((eb) => eb.fn.countAll<number>().as("c"))
-        .executeTakeFirst();
-      if (Number(cnt?.c ?? 0) === 0) {
-        await this.refreshCorpCodes();
-        row = await find();
-      }
+      await this.refreshIfStale();
+      row = await find();
     }
     if (!row) throw new ProviderError(this.name, `DART 고유번호를 찾을 수 없음: ${stockCode}`);
     return row.corp_code;
+  }
+
+  /**
+   * 표에 없는 종목을 만났을 때: 표가 비었으면 받고, 아니면 하루 넘게 묵었을 때만 다시 받는다 (BH-44).
+   * 첫 다운로드 뒤 상장한 종목은 다시 받아야 찾을 수 있다. ETF 처럼 원래 없는 코드로 매번 내려받지는 않는다.
+   */
+  private async refreshIfStale(): Promise<void> {
+    if (this.refreshing) {
+      await this.refreshing;
+      return;
+    }
+    const r = await this.opts.db
+      .selectFrom("dart_corp_codes")
+      .select((eb) => [eb.fn.countAll<number>().as("c"), eb.fn.max("updated_at").as("at")])
+      .executeTakeFirst();
+    if (Number(r?.c ?? 0) > 0) {
+      const t = this.now().getTime();
+      const at = Date.parse(String(r?.at ?? ""));
+      if (Number.isFinite(at) && t - at < CORP_CODE_STALE_MS) return;
+      if (t - this.lastRefreshTry < CORP_CODE_RETRY_MS) return;
+    }
+    await this.refreshCorpCodes();
   }
 
   // ── 조회 ──────────────────────────────────────────────────────

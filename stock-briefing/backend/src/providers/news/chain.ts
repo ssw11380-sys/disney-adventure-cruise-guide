@@ -1,4 +1,4 @@
-import { ProviderError } from "../../lib/errors.js";
+import { isTimeoutError, ProviderError } from "../../lib/errors.js";
 import type { ChainLogger } from "../market/chain.js";
 import { coreName, filterNews, newsQuery } from "./relevance.js";
 import type { NewsItem, NewsProvider } from "./types.js";
@@ -6,6 +6,9 @@ import type { NewsItem, NewsProvider } from "./types.js";
 const NAME_CACHE_MS = 10 * 60_000;
 /** 이름 검색은 호출한 곳(브리핑 8건·뉴스 탭 15건)과 관계없이 넉넉히 받아 캐시를 함께 쓴다 */
 const NAME_SEARCH_SIZE = 45;
+
+/** 제한 시간에 끊긴 요청인지 (소스가 ProviderError 로 감싼 경우 포함) */
+const timedOut = (e: unknown) => isTimeoutError(e) || (e instanceof ProviderError && isTimeoutError(e.cause));
 
 export class NewsProviderChain implements NewsProvider {
   readonly name: string;
@@ -20,9 +23,13 @@ export class NewsProviderChain implements NewsProvider {
   }
 
   async search(query: string, limit: number): Promise<NewsItem[]> {
+    return this.searchAmong(this.providers, query, limit);
+  }
+
+  private async searchAmong(providers: NewsProvider[], query: string, limit: number): Promise<NewsItem[]> {
     const attempted: string[] = [];
     let lastErr: unknown;
-    for (const p of this.providers) {
+    for (const p of providers) {
       attempted.push(p.name);
       try {
         return await p.search(query, limit);
@@ -84,12 +91,22 @@ export class NewsProviderChain implements NewsProvider {
     const hit = this.nameCache.get(key);
     if (hit && now - hit.at < NAME_CACHE_MS && hit.size >= limit) return hit.items;
     const once = () => (adv ? adv.search(query, limit) : this.search(query, limit));
-    // 구글은 연달아 부르면 잠깐 503 을 낸다 → 1.5초 뒤 한 번만 다시
-    const items = await once().catch(async (e: unknown) => {
-      this.log.warn({ code: stock.code, err: e instanceof Error ? e.message : String(e) }, "이름 검색 실패, 한 번 더");
-      await new Promise((r) => setTimeout(r, this.retryDelayMs));
-      return once();
-    });
+    let items: NewsItem[];
+    try {
+      // 구글은 연달아 부르면 잠깐 503 을 낸다 → 1.5초 뒤 한 번만 다시 (시간 초과는 다시 불러도 또 그만큼 걸리므로 바로 넘긴다)
+      items = await once().catch(async (e: unknown) => {
+        if (timedOut(e)) throw e;
+        this.log.warn({ code: stock.code, err: e instanceof Error ? e.message : String(e) }, "이름 검색 실패, 한 번 더");
+        await new Promise((r) => setTimeout(r, this.retryDelayMs));
+        return once();
+      });
+    } catch (e) {
+      // 구글이 끝내 실패하면 검색 문법이 필요 없는 소스(네이버 검색 API, 키가 있을 때)로 이름만 한 번 (BH-74)
+      const plain = adv ? this.providers.filter((p) => p !== adv && !p.advancedQuery && !p.forStock) : [];
+      if (plain.length === 0) throw e;
+      this.log.warn({ code: stock.code, err: e instanceof Error ? e.message : String(e) }, "이름 검색 실패, 다른 검색 소스로");
+      items = await this.searchAmong(plain, coreName(stock.name), limit);
+    }
     for (const [k, v] of this.nameCache) if (now - v.at >= NAME_CACHE_MS) this.nameCache.delete(k);
     this.nameCache.set(key, { at: now, size: limit, items });
     return items;

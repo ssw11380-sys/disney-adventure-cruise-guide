@@ -85,8 +85,11 @@ export function isAmbiguous(stock: StockRef): boolean {
   return isLatinOnly(core) && (core.toUpperCase() === stock.code.toUpperCase() || core.replace(/\s/g, "").length <= 5);
 }
 
-/** 이름 바로 뒤에 붙는 조사 (네이버서·이튼의·쿠팡이) */
-const PARTICLE = /[은는이가을를의에서와과도로만]/;
+/**
+ * 이름 바로 뒤에 붙는 조사 (네이버서·이튼의·쿠팡이, 두 글자: 엔비디아까지·쿠팡으로·테슬라처럼).
+ * '엔'·'랑' 같은 말은 넣지 않는다 (LG엔솔 ≠ LG)
+ */
+const PARTICLE = /^(까지|부터|보다|처럼|마저|조차|한테|으로|라도|[은는이가을를의에서와과도로만])/;
 
 /**
  * 앞이 글자(한글·영문·숫자)로 이어지지 않는 위치에 word 가 있는지 (영문 이름은 대소문자 무시).
@@ -103,7 +106,7 @@ function hasWord(text: string, word: string): boolean {
     while (i >= 0) {
       const before = i > 0 ? hay[i - 1]! : "";
       const after = hay[i + w.length] ?? "";
-      if (!letter.test(before) && (!letter.test(after) || PARTICLE.test(after))) return true;
+      if (!letter.test(before) && (!letter.test(after) || PARTICLE.test(hay.slice(i + w.length)))) return true;
       i = hay.indexOf(w, i + 1);
     }
   }
