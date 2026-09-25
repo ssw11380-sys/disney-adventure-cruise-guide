@@ -1,0 +1,231 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`지수 상세: 플래그 꺼짐·좁은 창은 지금 화면 그대로 (바꾸기 전 스냅숏) > 플래그 꺼짐 · 폴드8 펼침 가로 크기 1`] = `
+[
+  {
+    "children": [
+      {
+        "children": [],
+        "props": {
+          "options": {
+            "title": "코스피",
+          },
+        },
+        "type": "StackScreen",
+      },
+      {
+        "children": [],
+        "props": {
+          "onSelect": "[fn]",
+          "selected": "KOSPI",
+        },
+        "type": "MarketStrip",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "코스피",
+              "",
+              {
+                "children": [
+                  " · ",
+                  "장 마감",
+                ],
+                "props": {
+                  "style": null,
+                },
+                "type": "Text",
+              },
+            ],
+            "props": {
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  "3478.12",
+                ],
+                "props": {
+                  "style": [
+                    {
+                      "fontSize": 28,
+                      "fontVariant": [
+                        "tabular-nums",
+                      ],
+                      "fontWeight": "800",
+                      "letterSpacing": -0.6,
+                    },
+                    {
+                      "color": "#D11A22",
+                    },
+                  ],
+                },
+                "type": "Text",
+              },
+            ],
+            "props": {
+              "style": {
+                "alignItems": "baseline",
+                "flexDirection": "row",
+                "gap": 6,
+                "marginTop": 2,
+              },
+            },
+            "type": "View",
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  "▲",
+                  "29.35",
+                ],
+                "props": {
+                  "style": [
+                    {
+                      "fontSize": 14,
+                      "fontVariant": [
+                        "tabular-nums",
+                      ],
+                      "fontWeight": "700",
+                    },
+                    {
+                      "color": "#D11A22",
+                    },
+                  ],
+                },
+                "type": "Text",
+              },
+              {
+                "children": [
+                  "+0.85%",
+                ],
+                "props": {
+                  "style": [
+                    {
+                      "fontSize": 14,
+                      "fontVariant": [
+                        "tabular-nums",
+                      ],
+                      "fontWeight": "700",
+                    },
+                    {
+                      "color": "#D11A22",
+                    },
+                  ],
+                },
+                "type": "Text",
+              },
+            ],
+            "props": {
+              "style": {
+                "alignItems": "center",
+                "flexDirection": "row",
+                "gap": 8,
+              },
+            },
+            "type": "View",
+          },
+          {
+            "children": [
+              "9월 23일 (수) 15:30",
+              " 기준",
+            ],
+            "props": {
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+              },
+            },
+            "type": "Text",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "gap": 2,
+              "paddingBottom": 12,
+              "paddingHorizontal": 14,
+              "paddingTop": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderBottomColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "props": {
+              "candles": undefined,
+              "currency": "PT",
+              "hasVolume": true,
+              "loading": false,
+              "onPeriodChange": "[fn]",
+              "period": "D",
+              "quote": {
+                "fxRate": null,
+                "high52w": null,
+                "live": false,
+                "low52w": null,
+                "prevClose": 3448.77,
+                "price": 3478.12,
+                "priceKrw": null,
+              },
+            },
+            "type": "CandleChart",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "marginTop": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          "출처: 네이버 증권",
+        ],
+        "props": {
+          "style": {
+            "color": "#646B77",
+            "fontSize": 11,
+            "paddingHorizontal": 14,
+            "paddingTop": 8,
+          },
+        },
+        "type": "Text",
+      },
+    ],
+    "props": {
+      "onRefresh": "[fn]",
+      "refreshing": false,
+    },
+    "type": "Screen",
+  },
+]
+`;

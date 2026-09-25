@@ -405,9 +405,18 @@ export interface RowsPlan {
   rowH: number;
   /** 등락률 앞 작은 글자("오늘") 칸 폭 — 다듬은 모습만, 예전 모습은 0 */
   labelW: number;
+  /**
+   * 넓은 위젯의 평가금액 칸 폭 (가격 왼쪽, "평가금액" 작은 글자 위에 금액) — 다듬은 모습의 넓은 위젯만(planRowsWide).
+   * 없으면 칸도 없다 (예전 모습·좁은 위젯은 지금 그대로)
+   */
+  valueW?: number;
+  /** 평가금액 칸이 있을 때 오른쪽(가격 · 오늘 등락률) 칸 폭 — 줄마다 가격 폭이 달라도 평가금액 칸이 같은 자리에 오게 */
+  rightW?: number;
 }
 
 const ROW_GAP = space.sm;
+/** 평가금액 칸 위 작은 글자 */
+export const VALUE_LABEL = "평가금액";
 
 /**
  * 목록 줄 배치: [가격 등락률 한 줄, sm] → [가격/등락률 위아래, sm] → xs 순으로, 모든 줄의 손익이 온전히 들어가는 첫 배치.
@@ -422,21 +431,54 @@ export function planRowsPolished(rows: readonly RowInput[], width: number, scale
   return rowsPlan(rows, width, scale, { label, padY: POLISH_ROW_PAD });
 }
 
-function rowsPlan(rows: readonly RowInput[], width: number, scale: number, o: { label: string | null; padY: number }): RowsPlan {
+/**
+ * 넓은 위젯 기준 (3-42 폴드 3단계, 다듬은 모습 widgetPolish 만). 모두 dp 토큰이라 폰에서 잰 값을 받으면 여기만 고친다 (docs/폴드-위젯.md).
+ * 폴드8·울트라 바깥 화면 4칸(약 380~460dp)·안쪽 화면 반쪽(커버 화면 미러링, 약 420~450dp)·흔한 폰 위젯(250~420dp)은
+ * 모두 이 기준보다 좁아 지금 모습 그대로다. 미러링을 끈 안쪽 화면에 5칸 이상으로 늘린 위젯만 넓은 모습이 된다
+ */
+export const WIDE = {
+  /** 잔고: 종목 줄에 평가금액 칸을 더하는 최소 열 폭 (한 열이면 위젯 폭 약 504dp 이상) */
+  valueMin: 480,
+  /** 잔고: 종목을 두 열로 나란히 두는 한 열의 최소 폭 — 흔한 폰 4×2 본문(306dp)쯤 (위젯 폭 약 644dp 이상) */
+  columnMin: 300,
+  /** 잔고: 두 열 사이 */
+  columnGap: space.xl,
+  /** 지수·환율: 구역 안에서도 칸을 가로로 나란히 둘 수 있는 최소 위젯 폭 */
+  boardMin: 540,
+  /** 지수·환율: 구역 안 가로 칸 사이 */
+  tileGap: space.md,
+} as const;
+
+/**
+ * 넓은 위젯의 목록 줄: 열 폭이 WIDE.valueMin 이상이고 평가금액이 있으면 가격 왼쪽에 평가금액 칸을 더한다.
+ * 칸을 더해도 좁은 모습보다 나빠지지 않을 때만 — 가격·등락률을 위아래로 쌓게 되거나 손익 줄이 짧아지면 칸 없이 지금 모습
+ */
+export function planRowsWide(rows: readonly RowInput[], width: number, scale: number, label: string, values: readonly (string | null)[]): RowsPlan {
+  const plain = planRowsPolished(rows, width, scale, label);
+  if (width < WIDE.valueMin || !values.some((v) => !!v)) return plain;
+  const valueW = Math.ceil(Math.max(textWidth(VALUE_LABEL, F.xs, scale), ...values.map((v) => (v ? textWidth(v, F.base, scale, true) : 0))));
+  const withValue = rowsPlan(rows, width, scale, { label, padY: POLISH_ROW_PAD, valueW });
+  const same = withValue.stacked === plain.stacked && withValue.subFont === plain.subFont && withValue.sub.every((x, n) => x === plain.sub[n]);
+  return same ? withValue : plain;
+}
+
+function rowsPlan(rows: readonly RowInput[], width: number, scale: number, o: { label: string | null; padY: number; valueW?: number }): RowsPlan {
   // 등락률 칸은 정수 폭으로 그리므로 올림한 값으로 나머지를 나눈다
   const priceW = Math.ceil(Math.max(0, ...rows.map((r) => textWidth(r.price, F.base, scale, true))));
   const rateW = Math.ceil(Math.max(0, ...rows.map((r) => (r.rate ? textWidth(r.rate, F.md, scale, true) : 0))));
   const labelW = o.label && rateW ? Math.ceil(textWidth(o.label, F.xs, scale) + space.xxs) : 0;
   const minName = textWidth("가나", F.base, scale, true);
   const leftH = lineHeight(F.base, scale) + lineHeight(F.sm, scale);
+  // 평가금액 칸(넓은 위젯만): 칸 폭 + 앞 간격. 높이는 작은 글자 + 금액 두 줄이라 왼쪽 두 줄(이름·손익)보다 높지 않다
+  const valueW = o.valueW ?? 0;
   const make = (stacked: boolean, subFont: number): RowsPlan => {
     const rate = labelW + rateW;
     const right = stacked ? Math.max(priceW, rate) : priceW + (rateW ? ROW_GAP + rate : 0);
-    const leftW = Math.floor(width - right - ROW_GAP);
+    const leftW = Math.floor(width - right - ROW_GAP - (valueW ? valueW + ROW_GAP : 0));
     const sub = rows.map((r) => r.subs.find((s) => textWidth(s, subFont, scale) <= leftW) ?? null);
     // 다듬은 모습은 위아래로 쌓은 오른쪽(가격 / 오늘 등락률)이 왼쪽 두 줄보다 높을 수 있다
     const contentH = o.label !== null && stacked ? Math.max(leftH, lineHeight(F.base, scale) + lineHeight(F.md, scale)) : leftH;
-    return { stacked, leftW, rateW, subFont, sub, rowH: contentH + o.padY * 2 + 1, labelW };
+    return { stacked, leftW, rateW, subFont, sub, rowH: contentH + o.padY * 2 + 1, labelW, ...(valueW ? { valueW, rightW: Math.ceil(right) } : {}) };
   };
   const tries = [make(false, F.sm), make(true, F.sm), make(false, F.xs), make(true, F.xs)].filter((p) => p.leftW >= minName);
   const full = tries.find((p) => p.sub.every((s, n) => s === rows[n]!.subs[0]));
@@ -723,6 +765,16 @@ export interface PolishedInput<T extends IndexInput = IndexInput> {
   rowLabel: string;
   note: string[];
   alert: string | null;
+  /** 줄마다 평가금액 글자 (rows 와 같은 순서, 없으면 null) — 넓은 위젯의 평가금액 칸 (planRowsWide). 주지 않으면 칸 없음 */
+  values?: (string | null)[];
+}
+
+/** 넓은 위젯의 두 열 모양 (다듬은 모습만): 종목을 줄마다 둘씩 (왼쪽 → 오른쪽, 위 → 아래 — 평가금액 순서 그대로) */
+export interface WideColumns {
+  /** 한 열 폭 (목록 줄 배치 rows 는 이 폭으로 고른 것) */
+  columnW: number;
+  /** 두 열 사이 */
+  gap: number;
 }
 
 export interface PolishedPlan<T extends IndexInput = IndexInput> {
@@ -740,6 +792,8 @@ export interface PolishedPlan<T extends IndexInput = IndexInput> {
   list: boolean;
   listH: number;
   rows: RowsPlan;
+  /** 넓은 위젯이면 두 열 (없으면 지금처럼 한 줄에 한 종목) */
+  wide?: WideColumns;
 }
 
 /** 다듬은 지수 줄을 두 줄로 쓰는 위젯: 두 줄을 넣고도 종목이 이만큼 넘게 보일 때 (4×3 이상. 4×2 는 한 줄) */
@@ -769,7 +823,9 @@ export function planHoldingsPolished<T extends IndexInput>(i: PolishedInput<T>):
   const s = i.scale;
   const size = listSize(i.height);
   const content = i.width - PAD * 2;
-  const rows = planRowsPolished(i.rows, content, s, i.rowLabel);
+  // 넓은 위젯(3-42): 한 열이 WIDE.columnMin 이상이면 종목을 두 열로, 열이 WIDE.valueMin 이상이면 평가금액 칸도 (좁으면 지금 그대로)
+  const wide: WideColumns | null = content >= WIDE.columnMin * 2 + WIDE.columnGap ? { columnW: Math.floor((content - WIDE.columnGap) / 2), gap: WIDE.columnGap } : null;
+  const rows = planRowsWide(i.rows, wide ? wide.columnW : content, s, i.rowLabel, i.values ?? []);
   const noteText = fitJoin(i.note, content, F.sm, s);
   const noteH = noteText ? lineHeight(F.sm, s) : 0;
   const t = i.total;
@@ -828,7 +884,7 @@ export function planHoldingsPolished<T extends IndexInput>(i: PolishedInput<T>):
       listH -= plan.height;
     }
   }
-  return { size, content, compact, title, total: pick.total, index, note, list: pick.list, listH, rows };
+  return { size, content, compact, title, total: pick.total, index, note, list: pick.list, listH, rows, ...(wide ? { wide } : {}) };
 }
 
 // ── 브리핑 위젯 ───────────────────────────────────────────────────────
@@ -1009,6 +1065,8 @@ export interface MarketInput {
   sub: string[];
   /** 구역(세로 칸): 국내 · 미국 · 환율. 빈 배열이면 판 없이 안내 문구만 */
   columns: BoardColumnInput[];
+  /** 넓은 위젯 모양을 쓸 수 있는지 (다듬은 모습 widgetPolish). 켜져 있어도 폭이 WIDE.boardMin 미만이면 지금 그대로 */
+  wide?: boolean;
 }
 
 /**
@@ -1037,7 +1095,16 @@ export interface MarketPlan {
    * 구역마다 보여 줄 항목(위에서 아래로)과 글자 폭(구분선·여백 뺀 폭, 정수). 4×3 이상은 9개 모두, 4×2 는 구역마다 2개(3×2 격자), 더 낮으면 1개.
    * 폭은 구역마다 필요한 만큼(가장 긴 줄) 주고 남는 폭은 되도록 고르게 나눈다 — 이름이 긴 미국 구역이 조금 넓을 수 있다
    */
-  columns: { key: string; label: string; codes: string[]; width: number }[];
+  columns: {
+    key: string;
+    label: string;
+    codes: string[];
+    width: number;
+    /** 넓은 위젯(planMarketWide)만: 구역 안 가로 칸 수 (2 면 칸을 왼쪽 → 오른쪽, 위 → 아래로). 없으면 1 (세로로만) */
+    cols?: number;
+    /** 넓은 위젯만: 구역 안 한 칸 폭 (정수, cols 개 + 사이 WIDE.tileGap 이 구역 폭 안) */
+    tileW?: number;
+  }[];
   nameFont: number;
   valueFont: number;
   changeFont: number;
@@ -1227,8 +1294,16 @@ interface BoardCandidate {
  *  - 값 글자가 comfort(12sp) 이상인 첫 배치 → 없으면 min(9sp) → 없으면 1sp (있을 수 없을 만큼 긴 값). 4×3 이상은 9개 모두가 먼저
  *  - 이름은 줄이지 않는다("S&P5…"·"원/…"처럼 다른 이름으로 읽히지 않게). 지연 항목은 "지연" 글자가 안 들어가면 경고색 점
  *  - 값 글자는 모든 칸이 같은 크기. 남는 높이는 칸 사이·구역 이름 아래 여백으로 (간격 토큰 단계)
+ *  - 넓은 위젯(다듬은 모습 wide · 폭 WIDE.boardMin 이상)은 planMarketWide 가 더 나을 때 그것 (구역 안에서도 칸을 가로로 — 낮고 넓은 위젯에 9개 모두)
  */
 export function planMarket(i: MarketInput): MarketPlan {
+  const narrow = planMarketNarrow(i);
+  if (!i.wide || i.width < WIDE.boardMin || !narrow.columns.length) return narrow;
+  return planMarketWide(i, narrow) ?? narrow;
+}
+
+/** 지금(좁은 위젯) 배치 — 넓은 위젯이 아니거나 넓은 배치가 더 낫지 않을 때 */
+function planMarketNarrow(i: MarketInput): MarketPlan {
   const s = i.scale;
   const size = listSize(i.height);
   const room = boardRoom(i.height);
@@ -1366,5 +1441,121 @@ export function planMarket(i: MarketInput): MarketPlan {
     rowPad: BOARD_ROW_PADS[0],
     captionGap: CAPTION_GAPS[0],
     bodyH: tileH,
+  };
+}
+
+// ── 넓은 지수·환율 위젯 (3-42 폴드 3단계, 다듬은 모습 widgetPolish 만) ──────────
+
+/** 넓은 위젯의 이름·등락 글자 단계 (큰 것부터) */
+export const WIDE_BOARD_FONTS = [F.base, F.md, F.sm] as const;
+/** 넓은 위젯의 칸 사이 여백 단계: 좁은 위젯 단계에 더 큰 간격 토큰 둘 (남는 높이를 칸 사이로) */
+export const WIDE_ROW_PADS = [...BOARD_ROW_PADS, space.lg, space.xl] as const;
+
+/** 좁은 배치의 점수 (planMarketWide 가 견줄 때 — BoardCandidate 점수와 같은 규칙) */
+function marketScore(p: MarketPlan): number {
+  const changes = Object.values(p.change).filter((x): x is string => !!x);
+  const detail = p.shape === "full" ? changes.some((x) => x.includes(" ")) : p.shape === "brief" ? changes.length > 0 : false;
+  const stale = Object.values(p.mark).includes("staleText");
+  return p.valueFont + (p.captions ? CAPTION_BONUS : 0) + (detail ? DETAIL_BONUS[p.shape] : 0) + (stale ? STALE_TEXT_BONUS : 0);
+}
+
+/**
+ * 넓은 지수·환율 위젯 (폴드 안쪽 화면에 5칸 이상으로 늘린 위젯 등): 9개 모두를 보이고, 구역 안에서도 칸을 가로로 나란히 둘 수 있다.
+ *  - 줄 수 r(가장 긴 구역의 칸 수 → 1)마다 구역의 가로 칸 수 = ⌈구역 칸 수 ÷ r⌉
+ *    (4줄 = 지금처럼 세로로만, 2줄 = 국내 1 · 미국 2 · 환율 2, 1줄 = 9칸 한 줄). 한 구역 안의 칸 폭은 모두 같다
+ *  - 좁은 배치와 같은 점수(값 글자 + 구역 이름 · 등락폭 · "지연")가 가장 높은 것, 같으면 줄이 많은 쪽(지금 모습에 가까운 쪽).
+ *    값 글자는 BOARD.value.wideMax 까지, 이름·등락 글자는 WIDE_BOARD_FONTS. 숫자는 자르지 않고 이름도 줄이지 않는다
+ *  - 좁은 배치(narrow)보다 칸이 많거나(값 글자 comfort 이상 · 등락률이 보이는 모양일 때만), 칸 수가 같고 더 나을 때만 쓴다. 아니면 null
+ */
+function planMarketWide(i: MarketInput, narrow: MarketPlan): MarketPlan | null {
+  const s = i.scale;
+  const room = narrow.room;
+  const total = boardTextRoom(i.width, i.columns.length);
+  const deepest = Math.max(...i.columns.map((c) => c.tiles.length));
+  const ems = new Map<string, number>();
+  const em = (text: string) => {
+    let e = ems.get(text);
+    if (e === undefined) ems.set(text, (e = textEm(text)));
+    return e;
+  };
+  const measure = (text: string, font: number) => em(text) * font * s * BOLD + SLACK;
+  const tiles = i.columns.flatMap((c) => c.tiles);
+  const hasStale = tiles.some((t) => t.marker === "stale");
+  // 구역마다 가장 긴 값 (값 줄 폭은 크기마다 이것으로)
+  const valueEm = i.columns.map((col) => Math.max(0, ...col.tiles.map((t) => em(t.value))));
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  type Wide = BoardCandidate & { rows: number; grid: number[]; needs: number[] };
+  const out: Wide[] = [];
+  for (let r = deepest; r >= 1; r--) {
+    const grid = i.columns.map((c) => Math.max(1, Math.ceil(c.tiles.length / r)));
+    const rows = Math.max(...i.columns.map((c, k) => Math.ceil(c.tiles.length / grid[k]!)));
+    if (rows !== r) continue; // 같은 모양은 한 번만
+    for (const L of LAYOUTS)
+      for (const staleText of hasStale ? [true, false] : [true])
+        for (const nameFont of WIDE_BOARD_FONTS)
+          for (const changeFont of L.shape === "full" ? WIDE_BOARD_FONTS : [nameFont]) {
+            // 값 줄을 뺀 칸 폭 (이름 줄 · 등락 줄), 구역 이름 폭
+            const fixedTile = i.columns.map((col) =>
+              Math.max(0, ...col.tiles.map((t) => boardTileWidth(t, { shape: L.shape, mark: tileMark(t, staleText), change: tileChange(t, L.shape, L.detail), nameFont, valueFont: 0, changeFont }, s, measure))),
+            );
+            const caption = i.columns.map((col) => (L.captions ? Math.ceil(measure(col.label, F.xs)) : 0));
+            const needAt = (v: number) =>
+              i.columns.map((_, k) => Math.max(caption[k]!, grid[k]! * Math.ceil(Math.max(fixedTile[k]!, valueEm[k]! * v * s * BOLD + SLACK)) + (grid[k]! - 1) * WIDE.tileGap));
+            if (sum(needAt(0)) > total) continue;
+            for (let v = BOARD.value.wideMax; v >= 1; v--) {
+              const tileH = boardTileHeight(L.shape, nameFont, v, changeFont, s);
+              if (boardBodyHeight(rows, tileH, WIDE_ROW_PADS[0], L.captions, s) > room) continue;
+              const needs = needAt(v);
+              if (sum(needs) > total) continue;
+              const score = v + (L.captions ? CAPTION_BONUS : 0) + (L.detail ? DETAIL_BONUS[L.shape] : 0) + (hasStale && staleText ? STALE_TEXT_BONUS : 0);
+              out.push({ ...L, staleText, nameFont, changeFont, valueFont: v, score, depth: deepest, rows, grid, needs });
+              break;
+            }
+          }
+  }
+  // 값 글자 하한 → 등락률이 보이는 배치(full·inline) → brief 순, 같은 단계에서는 점수가 가장 높은 것 (같으면 먼저 본 것 = 줄이 많은 쪽)
+  let best: Wide | null = null;
+  pick: for (const floor of [BOARD.value.comfort, BOARD.value.min])
+    for (const brief of [false, true]) {
+      for (const c of out) if ((c.shape === "brief") === brief && c.valueFont >= floor && (!best || c.score > best.score)) best = c;
+      if (best) break pick;
+    }
+  if (!best) return null;
+  const narrowCount = narrow.columns.reduce((a, c) => a + c.codes.length, 0);
+  if (tiles.length > narrowCount) {
+    // 칸을 더 보이는 대신 값이 너무 작거나 등락률이 사라지면 좁은 배치
+    if (best.shape === "brief" || best.valueFont < BOARD.value.comfort) return null;
+  } else if (best.valueFont < narrow.valueFont || (best.valueFont === narrow.valueFont && best.score <= marketScore(narrow))) return null;
+  const c = best;
+  const widths = spreadWidths(c.needs, total);
+  const tileH = boardTileHeight(c.shape, c.nameFont, c.valueFont, c.changeFont, s);
+  const body = (pad: number, gap: number) => boardBodyHeight(c.rows, tileH, pad, c.captions, s, gap);
+  const rowPad = c.rows > 1 ? ([...WIDE_ROW_PADS].reverse().find((p) => body(p, CAPTION_GAPS[0]) <= room) ?? WIDE_ROW_PADS[0]) : WIDE_ROW_PADS[0];
+  const captionGap = c.captions ? ([...CAPTION_GAPS].reverse().find((g) => body(rowPad, g) <= room) ?? CAPTION_GAPS[0]) : CAPTION_GAPS[0];
+  return {
+    size: narrow.size,
+    sub: narrow.sub,
+    room,
+    messageLines: narrow.messageLines,
+    shape: c.shape,
+    captions: c.captions,
+    columns: i.columns.map((col, k) => ({
+      key: col.key,
+      label: col.label,
+      codes: col.tiles.map((t) => t.code),
+      width: widths[k]!,
+      cols: c.grid[k]!,
+      tileW: Math.floor((widths[k]! - (c.grid[k]! - 1) * WIDE.tileGap) / c.grid[k]!),
+    })),
+    nameFont: c.nameFont,
+    valueFont: c.valueFont,
+    changeFont: c.changeFont,
+    nameW: Object.fromEntries(tiles.map((t) => [t.code, null])),
+    mark: Object.fromEntries(tiles.map((t) => [t.code, tileMark(t, c.staleText)])),
+    change: Object.fromEntries(tiles.map((t) => [t.code, tileChange(t, c.shape, c.detail)])),
+    tileH,
+    rowPad,
+    captionGap,
+    bodyH: body(rowPad, captionGap),
   };
 }

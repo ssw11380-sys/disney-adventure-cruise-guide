@@ -54,7 +54,8 @@ describe("플래그 (accountBriefing, 앱 fallback 꺼짐)", () => {
     expect(tab).toContain('const accountOn = useFeature("accountBriefing", false);');
     expect(tab).toContain("useAccountBriefings(accountOn)");
     expect(tab).toContain("accountCardItem(accountOn, accounts.data)");
-    const detail = src("app/briefings/account/[id].tsx");
+    // 상세 본문은 components/AccountBriefingBody 로 떼어냈다 (3-42 웨이브 D) — 경로 화면과 브리핑 탭 2단 오른쪽 칸이 같이 쓴다
+    const detail = src("components/AccountBriefingBody.tsx");
     expect(detail).toContain('useFeature("accountBriefing", false)');
     expect(detail).toMatch(/useAccountBriefing\(numId \?\? 0, on && numId !== null\)/);
     // 훅은 받은 플래그 값을 쿼리 옵션(accountBriefingsQuery)의 enabled 로 그대로 넘긴다

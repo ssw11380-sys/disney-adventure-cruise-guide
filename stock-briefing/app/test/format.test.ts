@@ -49,6 +49,9 @@ describe("큰 금액 단위 경계", () => {
     expect(formatKrwCompact(9_999.4e8)).toBe("9,999억원");
     expect(formatKrwCompact(9_999.5e8)).toBe("1.0조원");
     expect(formatKrwCompact(12.3e12)).toBe("12조원");
+    // 1,000조원 이상도 천 단위 쉼표 (발견 표 시가총액 · 원화 보기 — 억 단위와 같은 표기)
+    expect(formatKrwCompact(5_381.2e12)).toBe("5,381조원");
+    expect(formatKrwCompact(-14_317e12)).toBe("-14,317조원");
     expect(formatKrwCompact(-3e8)).toBe("-3억원");
   });
   it("달러 K·M·B·T", () => {

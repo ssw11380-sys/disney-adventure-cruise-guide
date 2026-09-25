@@ -20,8 +20,13 @@ vi.mock("react-native", () => ({
   Pressable: "Pressable",
   Alert: { alert: () => undefined },
   Linking: { openURL: async () => undefined },
+  ScrollView: "ScrollView",
+  RefreshControl: "RefreshControl",
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
+  // 넓은 창 배치(3-42)는 플래그가 꺼져 있어 휴대폰 화면 그대로
+  useWindowDimensions: () => ({ width: 400, height: 800, scale: 2, fontScale: 1 }),
 }));
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
 vi.mock("expo-router", () => ({ Stack: { Screen: "StackScreen" }, router: { back: vi.fn(), dismissTo: vi.fn(), push: vi.fn() }, useLocalSearchParams: () => ({ code: "005930" }) }));
 vi.mock("@/theme", async () => {
@@ -37,16 +42,19 @@ vi.mock("@/api/hooks", () => ({
   useStockNews: () => idle,
   useAnyMarketOpen: () => ({ open: false, fresh: false }),
   useStockMutations: () => ({ register: { mutate: vi.fn() }, refreshAnalysis: { mutate: vi.fn(), isPending: false, isError: false, error: null } }),
+  useFeature: (_key: string, fallback = false) => fallback,
+  useApi: () => ({ listStocks: async () => [] }),
 }));
+vi.mock("@/lib/holdingsNav", () => ({ useHoldingsNav: () => null, useCachedRow: () => null, rememberNav: vi.fn() }));
 vi.mock("@/lib/settings", () => ({ useSettings: () => h.settings }));
-vi.mock("@/lib/chartPrefs", () => ({ CANDLE_COUNT: { D: 800, W: 520, M: 240 } }));
+vi.mock("@/lib/chartPrefs", () => ({ CANDLE_COUNT: { D: 800, W: 520, M: 240 }, parseCandlePeriod: () => "D" }));
 vi.mock("@/components/BriefingCard", () => ({ BriefingCard: "BriefingCard" }));
 vi.mock("@/components/CandleChart", () => ({ CandleChart: "CandleChart" }));
 vi.mock("@/components/FlashPrice", () => ({ FlashPrice: "FlashPrice" }));
 vi.mock("@/components/Freshness", () => ({ ChartNotice: "ChartNotice", StaleBanner: "StaleBanner", usePull: () => ({ pulling: false, onPull: () => undefined }), useFeedState: () => ({ now: Date.now(), feedOk: true }) }));
 vi.mock("@/components/Skeleton", () => ({ DetailSkeleton: "DetailSkeleton" }));
 vi.mock("@/components/MarkdownView", () => ({ MarkdownView: "MarkdownView" }));
-vi.mock("@/components/Screen", () => ({ Screen: "Screen" }));
+vi.mock("@/components/Screen", () => ({ Screen: "Screen", Disclaimer: "Disclaimer" }));
 vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBoundary" }));
 vi.mock("@/components/ui", () => ({
   Button: "Button",

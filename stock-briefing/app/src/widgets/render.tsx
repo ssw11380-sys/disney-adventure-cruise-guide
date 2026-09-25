@@ -49,6 +49,8 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
           error={data.error}
           now={o.now}
           refreshing={o.refreshing}
+          // 넓은 위젯 모양은 다듬은 모습(widgetPolish)과 함께 (3-42 폴드 — 꺼져 있으면 지금 모습 그대로)
+          polish={data.features.polish}
           {...frame}
         />
       );

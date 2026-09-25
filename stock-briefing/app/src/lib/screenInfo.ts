@@ -1,3 +1,5 @@
+import { layout } from "@/tokens";
+
 /**
  * 설정 > 화면 정보 (접는 폰 측정). 창·화면 크기, 밀도, 글자 배율을 읽기 쉬운 줄과 붙여 넣을 글로 바꾼다.
  * React Native 를 불러오지 않는 순수 모듈 (테스트용). 값을 읽는 쪽은 components/ScreenInfoCard.tsx
@@ -37,9 +39,12 @@ export interface ScreenInfoInput {
   build?: string | null;
 }
 
-/** 폭 등급 기준 (dp). 안드로이드 창 크기 등급과 같다: 600 미만 좁음, 600~839 중간, 840 이상 넓음 */
-export const WIDTH_MEDIUM = 600;
-export const WIDTH_EXPANDED = 840;
+/**
+ * 폭 등급 기준 (dp). 안드로이드 창 크기 등급과 같다: 600 미만 좁음, 600~839 중간, 840 이상 넓음.
+ * 값은 토큰(tokens.ts layout) 한 곳에 두어, 넓은 창 배치(lib/windowClass)와 이 카드가 늘 같은 등급을 보인다
+ */
+export const WIDTH_MEDIUM = layout.mediumMin;
+export const WIDTH_EXPANDED = layout.expandedMin;
 /** 화면 짧은 변이 이 이상이면 펼친 안쪽 화면으로 본다 (접었을 때 바깥 화면은 짧은 변 400dp 안팎) */
 export const UNFOLDED_MIN_DP = 600;
 /**

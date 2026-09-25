@@ -103,7 +103,8 @@ describe("누르는 크기 44 이상", () => {
   });
 
   it("누르는 요소는 hitSlop 이 있거나 최소 높이가 44 이상이다", () => {
-    const big = /minHeight: (touch\.min|LINE_H|HEAT_TILE_H)|height: (rowH|lineH)|absoluteFill/;
+    // FB.rowH·FB.accountRowH: 넓은 창 브리핑 목록 줄 56·60 (3-42 — 44 이상인지는 test/foldBriefings.test.tsx 가 지킨다)
+    const big = /minHeight: (touch\.min|LINE_H|HEAT_TILE_H|FB\.(rowH|accountRowH))|height: (rowH|lineH)|absoluteFill/;
     const small = of("Pressable").filter((e) => !excepted(e) && !e.attrs.has("hitSlop") && !big.test(e.attrs.get("style") ?? "") && !big.test(e.styleDefs));
     expect(small.map((e) => e.where)).toEqual([]);
   });
@@ -116,11 +117,19 @@ describe("누르는 크기 44 이상", () => {
   });
 
   it("가로 스크롤 안의 칩은 스크롤 영역이 44 를 품는다 (안드로이드는 스크롤 영역 밖 터치를 자식에게 주지 않는다)", () => {
-    // 차트 칩: 영역을 위아래 hitSlop 만큼 넓히고 같은 만큼 음수 여백 → 보이는 배치는 그대로
+    // 차트 칩 띠(chart/ChipStrip, 3-42 에서 끝 흐림과 함께 옮김): 스크롤 틀을 위아래 hitSlop 만큼 넓히고 같은 만큼 음수 여백 → 보이는 배치는 그대로.
+    // 스크롤 영역은 그 틀을 위아래로 꽉 채운다 (내용 위아래 여백 = hitSlop)
+    const strip = read("components/chart/ChipStrip.tsx");
+    expect(strip).toMatch(/chipScroll: \{ marginVertical: -CHIP_SLOP\.top \}/);
+    expect(strip).toMatch(/chips: \{[^}]*paddingVertical: CHIP_SLOP\.top/);
+    expect(strip).toMatch(/<View style=\{\[styles\.chipScroll, style\]\}>\s*<ScrollView/);
+    expect(strip).toMatch(/contentContainerStyle=\{styles\.chips\}/);
+    // 흐린 가장자리는 누르기를 가로채지 않는다
+    expect(strip).toMatch(/fade: \{[^}]*pointerEvents: "none"/);
+    // 차트의 두 칩 띠(조작 줄·오버레이 줄)가 모두 이 틀을 쓴다
     const chart = read("components/CandleChart.tsx");
-    expect(chart).toMatch(/chipScroll: \{ marginVertical: -CHIP_SLOP\.top \}/);
-    expect(chart).toMatch(/chips: \{[^}]*paddingVertical: CHIP_SLOP\.top/);
-    expect(chart.match(/style=\{\[?styles\.chipScroll/g)?.length).toBe(2);
+    expect(chart.match(/<ChipStrip\b/g)?.length).toBe(2);
+    expect(chart).not.toMatch(/<ScrollView\b/);
     // 발견 칩 줄: 위아래 여백(8)이 칩 hitSlop(6) 보다 크다
     expect(read("app/(tabs)/discover.tsx")).toMatch(/chips: \{[^}]*paddingVertical: space\.sm/);
     expect(space.sm).toBeGreaterThanOrEqual(slopFor(32).top);

@@ -37,6 +37,8 @@ vi.mock("@/api/hooks", () => ({
     h.candleArgs.push(args);
     return { data: undefined, isLoading: false, isError: false, error: null, refetch: vi.fn() };
   },
+  // 넓은 창 배치 플래그(foldLayout)는 못 받은 것으로 (휴대폰 화면 그대로)
+  useFeature: (_key: string, fallback = false) => fallback,
 }));
 vi.mock("@/components/CandleChart", () => ({ CandleChart: "CandleChart" }));
 vi.mock("@/components/Freshness", () => ({ ChartNotice: "ChartNotice" }));

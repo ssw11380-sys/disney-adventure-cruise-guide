@@ -4,20 +4,35 @@ import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useDiscoverTheme } from "@/api/hooks";
 import type { DiscoverMarket, DiscoverStock, ThemeKind, ThemePeriod } from "@/api/types";
 import { DiscoverRow, useDiscoverRowH } from "@/components/discover/DiscoverRow";
+import { DiscoverTableHead, DiscoverTableRow } from "@/components/discover/DiscoverTable";
 import { LineHead } from "@/components/StockLine";
-import { openStock, StatusLine, useAddWatch, useMarks, usePull } from "@/components/discover/shared";
+import { openStock, StatusLine, useAddWatch, useBoxWidth, useMarks, usePull } from "@/components/discover/shared";
 import { SkeletonRows } from "@/components/discover/Skeleton";
 import { DISCLAIMER } from "@/components/Screen";
 import { Empty, ErrorView } from "@/components/ui";
+import { pickDiscoverCols } from "@/lib/discoverColumns";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
 import { headlineRate } from "@/lib/themeSummary";
-import { changeColor, font, space, useTheme } from "@/theme";
+import { useFoldLayout } from "@/lib/useFoldLayout";
+import { isWide } from "@/lib/windowClass";
+import { changeColor, font, space, useFontScale, useTheme } from "@/theme";
+import { layout } from "@/tokens";
 
-/** 테마 상세: 테마 전체 등락률·상승/보합/하락 요약 → 구성 종목(등락률순) */
+/**
+ * 테마 상세: 테마 전체 등락률·상승/보합/하락 요약 → 구성 종목(등락률순).
+ * 넓은 창(3-42, 기능 플래그 foldLayout + 폭 600 이상)에서는 구성 종목을 발견 순위와 같은 한 줄 표(44)로 보인다. 좁은 창은 지금 그대로
+ */
 export default function ThemeDetailScreen() {
   const t = useTheme();
-  const rowH = useDiscoverRowH();
+  const phoneRowH = useDiscoverRowH();
+  const fold = useFoldLayout();
+  const wide = fold.on && isWide(fold);
+  const [boxW, onLayout] = useBoxWidth();
+  const fontScale = useFontScale();
+  // 등락률순 목록이라 표의 기준 열은 등락률, 늘 보이는 값은 거래대금 (좁은 화면의 오른쪽 열과 같음)
+  const table = useMemo(() => (wide ? pickDiscoverCols(boxW, fontScale, "tradingValue") : null), [wide, boxW, fontScale]);
+  const rowH = table ? layout.rowH : phoneRowH;
   const { id, market: m, name, kind: k, period: p, rate } = useLocalSearchParams<{ id: string; market?: string; name?: string; kind?: string; period?: string; rate?: string }>();
   const market: DiscoverMarket = m === "US" ? "US" : "KR";
   const kind: ThemeKind = k === "sector" ? "sector" : "theme";
@@ -33,10 +48,13 @@ export default function ThemeDetailScreen() {
   const items = useMemo(() => [...(q.data?.items ?? [])].sort((a, b) => b.changeRate - a.changeRate), [q.data]);
   const fx = q.data?.fxRate ?? null;
   const renderItem = useCallback(
-    ({ item, index }: { item: DiscoverStock; index: number }) => (
-      <DiscoverRow item={item} rank={index + 1} metric="tradingValue" mark={marks.get(item.code) ?? null} showKrw={showKrw} fxRate={fx} onPress={openStock} onLongPress={addWatch} />
-    ),
-    [marks, showKrw, fx, addWatch],
+    ({ item, index }: { item: DiscoverStock; index: number }) =>
+      table ? (
+        <DiscoverTableRow item={item} rank={index + 1} table={table} metric="tradingValue" mark={marks.get(item.code) ?? null} showKrw={showKrw} fxRate={fx} onPress={openStock} onLongPress={addWatch} />
+      ) : (
+        <DiscoverRow item={item} rank={index + 1} metric="tradingValue" mark={marks.get(item.code) ?? null} showKrw={showKrw} fxRate={fx} onPress={openStock} onLongPress={addWatch} />
+      ),
+    [table, marks, showKrw, fx, addWatch],
   );
   const total = theme ? theme.up + theme.flat + theme.down : 0;
   // 상승·보합·하락은 출처 목록 기준(거래정지 제외)이라, 구성 수는 보이는 줄(거래정지 포함)과 잘린 경우의 전체 수 중 큰 값
@@ -92,12 +110,13 @@ export default function ThemeDetailScreen() {
         ) : null}
       </View>
       {q.data ? <StatusLine market={market} open={q.data.marketOpen} session={q.data.session} asOf={q.data.asOf} /> : null}
-      <LineHead rank right="거래대금" />
+      {table ? <DiscoverTableHead table={table} emphasis="rate" /> : <LineHead rank right="거래대금" />}
     </>
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: t.bg }}>
+    // 넓은 창에서만 폭을 잰다 (표의 열 고르기) — 좁은 창은 지금과 같은 속성
+    <View style={{ flex: 1, backgroundColor: t.bg }} {...(wide ? { onLayout } : null)}>
       <Stack.Screen options={{ title: theme?.name ?? name ?? "테마" }} />
       {q.isLoading ? (
         <View>

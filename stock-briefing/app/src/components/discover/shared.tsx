@@ -55,6 +55,9 @@ export function useAddWatch(): (item: DiscoverStock) => void {
 // 당겨서 새로고침 상태는 공용(components/Freshness)으로 옮겼다
 export { usePull } from "@/components/Freshness";
 
+// 넓은 창에서 틀이 실제로 받은 폭 (설정 탭도 함께 써서 lib 로 옮겼다)
+export { useBoxWidth } from "@/lib/useBoxWidth";
+
 export function openStock(item: DiscoverStock): void {
   router.push(`/stocks/${item.code}`);
 }

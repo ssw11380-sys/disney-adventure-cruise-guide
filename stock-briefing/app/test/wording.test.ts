@@ -52,8 +52,11 @@ describe("고지 문구", () => {
   it("설정 화면에 고지가 있다", () => expect(read("app/src/app/(tabs)/settings.tsx")).toContain(DISCLAIMER));
   it("브리핑 목록·상세·종목 상세 화면이 고지를 붙인다", () => {
     expect(read("app/src/app/(tabs)/briefings.tsx")).toMatch(/<Screen[^>]*\bdisclaimer\b/);
-    expect(read("app/src/app/briefings/[id].tsx")).toMatch(/<Screen[^>]*\bdisclaimer\b/);
-    expect(read("app/src/app/briefings/account/[id].tsx")).toMatch(/<Screen[^>]*\bdisclaimer\b/); // 계좌 한 장 브리핑 (3-31)
+    // 상세 본문은 components 로 떼어냈다 (3-42 웨이브 D): 경로 화면은 본문을 그대로 쓰고, 본문은 폰(stack)·넓은 창 두 칸(split)·2단 오른쪽 칸(pane) 모두 고지를 붙인다
+    expect(read("app/src/app/briefings/[id].tsx")).toMatch(/<BriefingBody\b/);
+    expect(read("app/src/app/briefings/account/[id].tsx")).toMatch(/<AccountBriefingBody\b/); // 계좌 한 장 브리핑 (3-31)
+    expect(read("app/src/components/BriefingBody.tsx").match(/<Screen[^>]*\bdisclaimer\b/g)?.length).toBe(5); // 본문 3곳(폰·두 칸·2단) + 2단 오른쪽 칸 불러오는 중·오류 (3-42 통합: 2단은 고지가 오른쪽 칸에만 있어 늘 붙인다)
+    expect(read("app/src/components/AccountBriefingBody.tsx").match(/<Screen[^>]*\bdisclaimer\b/g)?.length).toBe(7); // 본문 2곳 + 2단 오른쪽 칸 불러오는 중·오류·꺼짐 5곳
     expect(read("app/src/app/stocks/[code]/index.tsx")).toMatch(/<Screen[\s\S]{0,200}?\bdisclaimer\b/);
   });
 });

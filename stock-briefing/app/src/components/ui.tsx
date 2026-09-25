@@ -138,13 +138,32 @@ export function Badge({ children, tone = "neutral" }: { children: React.ReactNod
   );
 }
 
-/** 등락 색: 한국 관례 (상승 빨강, 하락 파랑) */
-export function ChangeText({ value, text, style }: { value: number | null | undefined; text: string; style?: StyleProp<TextStyle> }) {
+/**
+ * 등락 색: 한국 관례 (상승 빨강, 하락 파랑).
+ * numberOfLines·maxFontSizeMultiplier 는 머리처럼 한 줄·글자 확대 상한이 필요한 곳에서만 준다 (주지 않으면 지금과 같음)
+ */
+export function ChangeText({
+  value,
+  text,
+  style,
+  numberOfLines,
+  maxFontSizeMultiplier,
+}: {
+  value: number | null | undefined;
+  text: string;
+  style?: StyleProp<TextStyle>;
+  numberOfLines?: number;
+  maxFontSizeMultiplier?: number;
+}) {
   const t = useTheme();
   // 보합(0)은 앱 전체 공통 규칙(changeColor)대로 기본 글자색, 값 없음("-")은 회색.
   // 부호는 보이는 글자로: "$0.00 (0.00%)"·"0원" 처럼 0 으로 보이는 값은 손실·이익 색으로 칠하지 않는다 (BH-38)
   const color = value === null || value === undefined ? t.muted : changeColor(t, shownSign(value, text));
-  return <Text style={[{ color }, NUM, style]}>{text}</Text>;
+  return (
+    <Text style={[{ color }, NUM, style]} numberOfLines={numberOfLines} maxFontSizeMultiplier={maxFontSizeMultiplier}>
+      {text}
+    </Text>
+  );
 }
 
 /** 등락률 상자 (HTS 목록의 색 칠한 등락률 칸) */
@@ -216,22 +235,46 @@ export function Empty({ title, hint, action }: { title: string; hint?: string; a
 }
 
 /** 한 줄 항목: 왼쪽 이름, 오른쪽 값 */
+/**
+ * 이름·값 줄(Row)을 좁은 칸에서 줄바꿈할지 (3-42 넓은 창 설정 두 칸 — 기능 플래그 foldLayout).
+ * 켜면 이름과 값이 한 줄에 안 들어갈 때 값이 이름 아래 줄 오른쪽으로 내려간다 → 이름('자동 동기화')이 글자 중간에서 끊기지 않는다.
+ * 기본 false = 지금 그대로 (휴대폰·접은 화면·플래그 꺼짐)
+ */
+export const RowWrapContext = React.createContext(false);
+
 export function Row({ label, value, valueStyle }: { label: string; value: React.ReactNode; valueStyle?: StyleProp<TextStyle> }) {
   const t = useTheme();
+  const wrap = React.useContext(RowWrapContext);
+  const shown =
+    typeof value === "string" || typeof value === "number" ? (
+      <Text style={[{ color: t.ink, fontSize: font.small, fontWeight: "600" }, NUM, wrap ? styles.kvWrapText : null, valueStyle]}>{value}</Text>
+    ) : (
+      value
+    );
+  if (!wrap)
+    return (
+      <View style={[styles.kv, { borderBottomColor: t.line }]}>
+        <Text style={{ color: t.muted, fontSize: font.small }}>{label}</Text>
+        {shown}
+      </View>
+    );
   return (
-    <View style={[styles.kv, { borderBottomColor: t.line }]}>
-      <Text style={{ color: t.muted, fontSize: font.small }}>{label}</Text>
-      {typeof value === "string" || typeof value === "number" ? <Text style={[{ color: t.ink, fontSize: font.small, fontWeight: "600" }, NUM, valueStyle]}>{value}</Text> : value}
+    <View style={[styles.kv, styles.kvWrap, { borderBottomColor: t.line }]}>
+      <Text style={[{ color: t.muted, fontSize: font.small }, styles.kvWrapLabel]}>{label}</Text>
+      <View style={styles.kvWrapValue}>{shown}</View>
     </View>
   );
 }
 
-/** 시세표 한 칸: 왼쪽 항목명, 오른쪽 값 (2열 격자에 쓴다) */
-export function Stat({ label, value, tone, change }: { label: string; value: React.ReactNode; tone?: "up" | "down"; change?: number | null }) {
+/**
+ * 시세표 한 칸: 왼쪽 항목명, 오른쪽 값 (2열 격자에 쓴다).
+ * dense: 넓은 창 종목 상세 시세표(3-42)의 촘촘한 줄 — 글자 크기는 같고 위아래 여백만 줄인다 (설계 목업의 줄 높이 약 26)
+ */
+export function Stat({ label, value, tone, change, dense = false }: { label: string; value: React.ReactNode; tone?: "up" | "down"; change?: number | null; dense?: boolean }) {
   const t = useTheme();
   const color = tone === "up" ? t.up : tone === "down" ? t.down : change !== undefined ? changeColor(t, change) : t.ink;
   return (
-    <View style={[styles.stat, { borderBottomColor: t.line }]}>
+    <View style={[styles.stat, dense ? styles.statDense : null, { borderBottomColor: t.line }]}>
       <Text style={{ color: t.muted, fontSize: font.small }}>{label}</Text>
       {typeof value === "string" || typeof value === "number" ? (
         <Text style={[{ color, fontSize: font.small, fontWeight: "600" }, NUM]} numberOfLines={1} adjustsFontSizeToFit>
@@ -283,7 +326,13 @@ const styles = StyleSheet.create({
   rateBox: { minWidth: 64, alignItems: "flex-end", borderRadius: 3, paddingHorizontal: space.s, paddingVertical: space.xxs },
   center: { alignItems: "center", justifyContent: "center", padding: space.xl },
   kv: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
+  // 줄바꿈 이름·값 줄 (RowWrapContext): 한 줄에 안 들어가면 값이 이름 아래 줄 오른쪽으로 (이름은 줄이지 않는다)
+  kvWrap: { flexWrap: "wrap", columnGap: space.md, rowGap: space.xxs },
+  kvWrapLabel: { flexShrink: 0, maxWidth: "100%" },
+  kvWrapValue: { flexShrink: 1, marginLeft: "auto", alignItems: "flex-end", maxWidth: "100%" },
+  kvWrapText: { textAlign: "right" },
   grid: { flexDirection: "row", flexWrap: "wrap", columnGap: space.lg },
   stat: { width: "47%", flexGrow: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.s },
+  statDense: { paddingVertical: space.xs },
   tableHead: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.s, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
 });

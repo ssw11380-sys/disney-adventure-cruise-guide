@@ -6,7 +6,8 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
 import { axisWidth, labelSide, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
-import { formatPct, formatPrice, formatVolume, shownSign } from "@/lib/format";
+import { formatChartValue, maLegendItems } from "@/lib/chartLayout";
+import { formatPct, formatVolume, shownSign } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
 import { changeColor, font, space, useFontScale, useTheme, type Theme } from "@/theme";
 
@@ -42,6 +43,11 @@ export interface PriceChartProps {
   showBollinger: boolean;
   /** 차트 아래 이동평균 값 줄 (전체 화면은 끔 — 칩 색으로 구분) */
   showMaValues?: boolean;
+  /**
+   * 이동평균 값 줄을 항목('■ 120일 77,120원') 단위로 줄바꿈 (폴드 진단 24번 — 넓은 창만, CandleChart 가 정한다).
+   * 끄면(기본 — 휴대폰·접힌 화면·플래그 꺼짐) 3-42 이전과 똑같은 한 줄 글자 (사용자 결정 '접은 화면은 지금 그대로')
+   */
+  maItems?: boolean;
   showVolume: boolean;
   /** 거래량이 없는 시계열(환율)이면 false: 읽기 줄에서 거래량을 뺀다 */
   hasVolume?: boolean;
@@ -78,11 +84,8 @@ function axisPrice(v: number, currency: ChartUnit, digits?: number): string {
   return Math.round(v).toLocaleString("ko-KR");
 }
 
-/** 읽기 줄의 값 (통화는 원·달러 표기, PT 는 소수 둘째 자리) */
-export function formatChartValue(v: number, unit: ChartUnit): string {
-  if (unit === "PT") return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return formatPrice(v, unit);
-}
+/** 읽기 줄의 값 (통화는 원·달러 표기, PT 는 소수 둘째 자리). 순수 함수는 lib/chartLayout 에 있다 */
+export { formatChartValue };
 
 function labelOf(c: Candle, period: CandlePeriod, prev: Candle | undefined, dense: boolean): string {
   if (c.time) {
@@ -497,7 +500,11 @@ export function PriceChart(p: PriceChartProps) {
           showVolume={p.hasVolume !== false}
           part="bottom"
           />
-          <MaLine mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} />
+          {p.maItems ? (
+            <MaItems mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} />
+          ) : (
+            <MaLine mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} />
+          )}
         </>
       ) : null}
     </View>
@@ -631,7 +638,10 @@ function Readout({
   );
 }
 
-/** 차트 아래 이동평균 값 (십자선이 잡은 봉, 없으면 마지막 봉). 색은 네모에만 — 선 색은 글자 대비 4.5 를 보장하지 않는다 */
+/**
+ * 차트 아래 이동평균 값 (십자선이 잡은 봉, 없으면 마지막 봉). 색은 네모에만 — 선 색은 글자 대비 4.5 를 보장하지 않는다.
+ * 휴대폰·접힌 화면(넓은 창이 아님): 3-42 이전과 똑같은 한 줄 글자 (두 줄까지, 공백에서 줄이 바뀐다)
+ */
 function MaLine({ mas, index, currency, period }: { mas: { period: number; values: Series }[]; index: number; currency: ChartUnit; period: CandlePeriod }) {
   const t = useTheme();
   if (!mas.length) return null;
@@ -651,7 +661,29 @@ function MaLine({ mas, index, currency, period }: { mas: { period: number; value
   );
 }
 
+/**
+ * 넓은 창의 이동평균 값 (폴드 진단 24번). 항목('■ 120일 77,120원')마다 따로 묶어 줄바꿈 줄(flexWrap)에 놓는다 →
+ * 글자를 키워도 항목 단위로만 다음 줄로 가고, '120일'과 값이 떨어지거나 색 네모만 윗줄에 남지 않는다 (lib/chartLayout maLegendItems)
+ */
+function MaItems({ mas, index, currency, period }: { mas: { period: number; values: Series }[]; index: number; currency: ChartUnit; period: CandlePeriod }) {
+  const t = useTheme();
+  if (!mas.length) return null;
+  return (
+    <View style={styles.maLine}>
+      {maLegendItems(mas, index, currency, period).map((it) => (
+        <View key={it.period} style={styles.maItem}>
+          <Ionicons name="square" size={font.tiny} color={maColor(t, it.period)} />
+          <Text style={[styles.readoutText, { color: t.muted }]}>{it.text}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   readout: { minHeight: 16, justifyContent: "center" },
   readoutText: { fontSize: font.tiny, fontVariant: ["tabular-nums"] },
+  // 넓은 창 이동평균 값 줄: 항목 사이는 예전 두 칸 띄어쓰기만큼, 네모와 글자 사이는 한 칸만큼. 줄 사이 간격은 두지 않는다
+  maLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: 0 },
+  maItem: { flexDirection: "row", alignItems: "center", gap: space.xxs },
 });

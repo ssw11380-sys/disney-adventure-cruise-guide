@@ -69,8 +69,8 @@ export const WIDGET_PALETTES: Record<WidgetScheme, WidgetPalette> = {
 /** 다크 팔레트 (부르는 쪽이 팔레트를 넘기지 않을 때의 기본값) */
 export const WIDGET_COLORS = WIDGET_PALETTES.dark;
 
-/** 위젯 글자 크기 (sp). 2×2 칸에 맞춘 작은 단계 */
-export const WIDGET_FONT = { xs: 9, sm: 10, md: 11, base: 12, title: 13, icon: 14, big: 18, bigger: 19 } as const;
+/** 위젯 글자 크기 (sp). 2×2 칸에 맞춘 작은 단계. huge 는 넓은 지수·환율 위젯의 값 상한만 (3-42 폴드) */
+export const WIDGET_FONT = { xs: 9, sm: 10, md: 11, base: 12, title: 13, icon: 14, big: 18, bigger: 19, huge: 24 } as const;
 
 /** 잔고 위젯 합계를 칸에 맞춰 줄이는 단계 (sp, 큰 것부터) */
 export const WIDGET_TOTAL_FONTS = [WIDGET_FONT.big, 16, WIDGET_FONT.icon] as const;
@@ -98,5 +98,6 @@ export const WIDGET_BOARD = {
   dot: 5,
   /** 칸 사이 구분선 (dp) */
   hairline: 1,
-  value: { max: WIDGET_FONT.bigger, comfort: WIDGET_FONT.base, min: WIDGET_FONT.xs },
+  /** wideMax: 넓은 위젯(다듬은 모습, layout.ts planMarketWide)의 값 글자 상한 — 폴드 안쪽 화면처럼 넓은 칸이 비지 않게 */
+  value: { max: WIDGET_FONT.bigger, comfort: WIDGET_FONT.base, min: WIDGET_FONT.xs, wideMax: WIDGET_FONT.huge },
 } as const;
