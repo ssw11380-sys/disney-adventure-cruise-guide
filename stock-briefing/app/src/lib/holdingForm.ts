@@ -17,15 +17,37 @@ export function parseNum(s: string): number | null {
   return t ? Number(t) : null;
 }
 
+export type HoldingPatch = { quantity?: number | null; avgPrice?: number | null } | { error: string };
+const BAD_NUMBER = "수량과 평균 단가는 0보다 큰 숫자여야 합니다.";
+
 /** 바뀐 칸만 담은 수정 내용. 잘못된 값이면 error */
 export function holdingPatch(
   initial: { quantity: string; avgPrice: string },
   now: { quantity: string; avgPrice: string },
-): { quantity?: number | null; avgPrice?: number | null } | { error: string } {
+): HoldingPatch {
   const out: { quantity?: number | null; avgPrice?: number | null } = {};
   if (now.quantity.trim() !== initial.quantity.trim()) out.quantity = parseNum(now.quantity);
   if (now.avgPrice.trim() !== initial.avgPrice.trim()) out.avgPrice = parseNum(now.avgPrice);
-  for (const v of [out.quantity, out.avgPrice]) if (v !== undefined && v !== null && !(v > 0)) return { error: "수량과 평균 단가는 0보다 큰 숫자여야 합니다." };
+  for (const v of [out.quantity, out.avgPrice]) if (v !== undefined && v !== null && !(v > 0)) return { error: BAD_NUMBER };
+  return out;
+}
+
+/**
+ * 체결 반영 저장 내용 (BH-55). 계산한 거래 후 수량·평단을 서버 값(전체 자리)과 숫자로 비교해 바뀐 것만 보낸다.
+ * 칸 글자(평단은 미국 소수 2자리·국내 정수로 줄여 보임)와 비교하면 새 평단이 같은 글자로 줄어들 때 평단이 빠져
+ * 서버에 예전 평단이 남는다 (예: $0.0537 1,000주 + $0.0463 1,000주 → 새 평단 0.05 가 칸의 "0.05" 와 같아 수량만 저장).
+ * 수량 0(전부 매도)이면 수량·평단을 비운다. 숫자가 아니면(위 칸에 잘못 넣음) 보유를 지우지 않고 error
+ */
+export function tradePatch(
+  server: { quantity: number | null; avgPrice: number | null },
+  next: { quantity: number; avgPrice: number | null },
+): HoldingPatch {
+  const quantity = next.quantity === 0 ? null : next.quantity;
+  const avgPrice = quantity === null ? null : next.avgPrice;
+  for (const v of [quantity, avgPrice]) if (v !== null && !(v > 0 && Number.isFinite(v))) return { error: BAD_NUMBER };
+  const out: { quantity?: number | null; avgPrice?: number | null } = {};
+  if (quantity !== server.quantity) out.quantity = quantity;
+  if (avgPrice !== server.avgPrice) out.avgPrice = avgPrice;
   return out;
 }
 

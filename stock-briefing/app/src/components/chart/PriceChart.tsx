@@ -6,7 +6,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
 import { axisWidth, labelSide, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
-import { formatPct, formatPrice, formatVolume } from "@/lib/format";
+import { formatPct, formatPrice, formatVolume, shownSign } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
 import { changeColor, font, space, useFontScale, useTheme, type Theme } from "@/theme";
 
@@ -593,7 +593,8 @@ function Readout({
   // 등락 기준(lib/chartBasis): 최신 일봉은 십자선이어도 헤더와 같은 전일 종가, 지난 봉은 직전 봉 종가, 분봉은 봉 시가
   const basis = readoutBasis({ period, isLatest, latestBase, latestDate, candleDate: c.date, prevClose: prev?.close, open: c.open });
   const chg = basis.base ? ((c.close - basis.base) / basis.base) * 100 : null;
-  const color = chg === null ? t.muted : changeColor(t, chg);
+  // 등락 색은 보이는 등락률로 — "(0.00%)" 로 보이는 1센트 미만 움직임을 손실·이익 색으로 칠하지 않게 (BH-38)
+  const color = chg === null ? t.muted : changeColor(t, shownSign(chg, formatPct(chg)));
   // 날짜는 짧게(연도 빼고), 분봉은 시각까지. 값은 단위(원) 없이 — 한 줄에 종가·등락·고·저가 들어가게 (3-21 리뷰)
   // 분봉은 시각만 (날짜는 차트 아래 축에 있다) — 십자선으로 옮겨도 한 줄에 들어가게
   const when = c.time ? c.time.slice(11, 16) : c.date.slice(5);

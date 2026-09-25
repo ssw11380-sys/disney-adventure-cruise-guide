@@ -1,4 +1,5 @@
 import type { Currency, RegisteredWithQuote } from "@/api/types";
+import { shownAmount } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 
 /**
@@ -19,6 +20,13 @@ export interface Bucket {
   count: number;
 }
 export const zeroBucket = (): Bucket => ({ value: 0, cost: 0, day: 0, count: 0 });
+
+/**
+ * 합계는 표시 단위(원은 정수, 달러는 센트)로 반올림해 돌려준다 — 1원·1센트 미만 합계가 "0원" 인데 손실·이익 색으로 칠해지지 않게 (BH-38).
+ * 손익(평가 − 매입)도 반올림한 두 금액의 차라 화면의 평가·매입금액과 맞는다
+ */
+const shown = (n: number, cur: Currency) => shownAmount(n, cur) ?? n;
+const shownBucket = (b: Bucket, cur: Currency): Bucket => ({ ...b, value: shown(b.value, cur), cost: shown(b.cost, cur), day: shown(b.day, cur) });
 
 export interface HoldingsSummary {
   held: number;
@@ -74,7 +82,16 @@ export function summarize(list: RegisteredWithQuote[], afterCost: boolean): Hold
     }
   }
   const fx = held.map(fxOf).find((x) => x) ?? null;
-  return { held: held.length, byCur, usdInKrw, krw: convertible && held.length ? krw : null, fx, estimated, currentBasis, watch: list.length - held.length };
+  return {
+    held: held.length,
+    byCur: { KRW: shownBucket(byCur.KRW, "KRW"), USD: shownBucket(byCur.USD, "USD") },
+    usdInKrw: shownBucket(usdInKrw, "KRW"),
+    krw: convertible && held.length ? shownBucket(krw, "KRW") : null,
+    fx,
+    estimated,
+    currentBasis,
+    watch: list.length - held.length,
+  };
 }
 
 export interface Totals {
@@ -94,7 +111,7 @@ export function totals(stocks: RegisteredWithQuote[], showKrw: boolean, afterCos
   if (held.length === 0) return null;
   const currencies = new Set(held.map((s) => s.quote!.currency ?? "KRW"));
   const native = currencies.size === 1 && (currencies.has("KRW") || !showKrw);
-  let value = 0, day = 0, profit = 0, mixed = false;
+  let value = 0, day = 0, cost = 0, mixed = false;
   for (const s of held) {
     const cur = s.quote!.currency ?? "KRW";
     const fx = fxOf(s);
@@ -104,9 +121,11 @@ export function totals(stocks: RegisteredWithQuote[], showKrw: boolean, afterCos
       continue;
     }
     value += v.marketValue;
-    profit += v.profit;
+    cost += v.costBasis;
     day += s.quote!.change * (s.quantity ?? 0) * (!native && cur === "USD" ? fx! : 1);
   }
   const currency: Currency = native ? ((currencies.values().next().value as Currency) ?? "KRW") : "KRW";
-  return { value, day, profit, currency, mixed };
+  // 잔고 화면(summarize)과 같게: 표시 단위로 반올림, 손익 = 반올림한 평가금액 − 반올림한 매입금액 (BH-38)
+  const shownValue = shown(value, currency);
+  return { value: shownValue, day: shown(day, currency), profit: shownValue - shown(cost, currency) || 0, currency, mixed };
 }

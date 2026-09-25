@@ -30,9 +30,11 @@ export function speakAmount(text: string): string {
 /** 등락률: "2.86% 상승" · "1.20% 하락" · "보합" */
 export function speakRate(v: number | null | undefined): string | null {
   if (v === null || v === undefined || !Number.isFinite(v)) return null;
-  if (v === 0) return "보합";
   const a = Math.abs(v);
-  return `${a >= 1000 ? a.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : a.toFixed(2)}% ${v > 0 ? "상승" : "하락"}`;
+  const s = a >= 1000 ? a.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : a.toFixed(2);
+  // 화면에 "0.00%" 로 보이는 값은 보합으로 읽는다 (BH-38)
+  if (!/[1-9]/.test(s)) return "보합";
+  return `${s}% ${v > 0 ? "상승" : "하락"}`;
 }
 
 /** 손익: "20,000원 이익" · "1,500원 손실" · "손익 없음" (amount 는 화면 표기 그대로) */

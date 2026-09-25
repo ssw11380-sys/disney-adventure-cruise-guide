@@ -42,14 +42,20 @@ export function rsi(values: number[], period = 14): Series {
     else loss -= d;
   }
   let avgGain = gain / period, avgLoss = loss / period;
-  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  out[period] = toRsi(avgGain, avgLoss);
   for (let i = period + 1; i < values.length; i++) {
     const d = values[i]! - values[i - 1]!;
     avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
     avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
-    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    out[i] = toRsi(avgGain, avgLoss);
   }
   return out;
+}
+
+/** 서버 toRsi 와 같다: 내린 폭이 0 이면 100, 오른 폭도 0 이면(가격 변동 없음 — 거래정지 등) 과매수가 아니라 중립 50 (BH-56) */
+function toRsi(avgGain: number, avgLoss: number): number {
+  if (avgLoss === 0) return avgGain === 0 ? 50 : 100;
+  return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
 export interface Macd {

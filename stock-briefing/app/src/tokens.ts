@@ -150,7 +150,10 @@ export const light: Theme = {
   },
 };
 
-/** 등락 색 (0 이면 기본 글자색) */
+/**
+ * 등락 색 (0 이면 기본 글자색). 값의 단위(원·달러·%)를 모르므로 반올림하지 않는다 —
+ * 표기가 0 으로 보이는 값은 부르는 쪽이 format 의 shownSign 으로 0 을 넘긴다 (BH-38)
+ */
 export function changeColor(t: Theme, v: number | null | undefined): string {
   if (v === null || v === undefined || v === 0 || !Number.isFinite(v)) return t.ink;
   return v > 0 ? t.up : t.down;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatArrow, formatKrwCompact, formatPct, formatPrice, formatQuote, formatVolume, formatWon, isTradingHoursKst, toDisplay } from "@/lib/format";
+import { formatArrow, formatKrwCompact, formatMoney, formatPct, formatPrice, formatQuote, formatUsd, formatVolume, formatWon, isTradingHoursKst, shownAmount, shownSign, toDisplay } from "@/lib/format";
+import { speakRate } from "@/lib/a11y";
+import { changeColor, dark, light } from "@/tokens";
 
 describe("금액 표기", () => {
   it("원화: 반올림·부호", () => {
@@ -61,6 +63,70 @@ describe("큰 금액 단위 경계", () => {
     expect(formatVolume(9_999)).toBe("9,999");
     expect(formatVolume(123_456)).toBe("12만");
     expect(formatVolume(9_999.5e4)).toBe("1.0억");
+  });
+});
+
+describe("BH-38: 표시 자리에서 반올림하면 0 인 값은 부호 없이 (-0원·+0원·-0.00%·-$0.00·▼0 이 아니게)", () => {
+  it("원화", () => {
+    expect(formatWon(-0.4)).toBe("0원");
+    expect(formatWon(-0.4, { sign: true })).toBe("0원");
+    expect(formatWon(0.4, { sign: true })).toBe("0원");
+    expect(formatWon(-0)).toBe("0원");
+    expect(formatWon(-0.5, { sign: true })).toBe("-1원"); // 반올림해 1원이면 부호 유지
+    expect(formatWon(0.6, { sign: true })).toBe("+1원");
+  });
+  it("달러", () => {
+    expect(formatUsd(-0.004, { sign: true })).toBe("$0.00");
+    expect(formatUsd(-0.004)).toBe("$0.00");
+    expect(formatUsd(0.004, { sign: true })).toBe("$0.00");
+    expect(formatUsd(-0.006, { sign: true })).toBe("-$0.01");
+    expect(formatPrice(-0.3, "USD", { sign: true })).toBe("-$0.30");
+  });
+  it("등락률", () => {
+    expect(formatPct(-0.004)).toBe("0.00%");
+    expect(formatPct(0.004)).toBe("0.00%");
+    expect(formatPct(-0.0043)).toBe("0.00%"); // 230달러 종목 1분봉의 1센트 하락
+    expect(formatPct(-0.006)).toBe("-0.01%");
+  });
+  it("화살표·원화 보기·큰 금액 단위", () => {
+    expect(formatArrow(-0.001, "KRW")).toBe("0");
+    expect(formatArrow(-0.004, "USD")).toBe("0");
+    expect(formatArrow(0.004, "USD")).toBe("0");
+    expect(formatArrow(-0.3, "USD")).toBe("▼0.30");
+    expect(formatMoney(-0.0002, "USD", 1360, true, { sign: true })).toBe("0원");
+    expect(formatKrwCompact(-0.3)).toBe("0원");
+    expect(formatKrwCompact(-0.3, "USD")).toBe("$0");
+    expect(formatKrwCompact(-3)).toBe("-3원");
+  });
+  it("표시 단위로 반올림한 값: 부호·색은 이 값으로", () => {
+    expect(shownAmount(-0.33, "KRW")).toBe(0);
+    expect(shownAmount(-0.5, "KRW")).toBe(-1);
+    expect(shownAmount(-0.004, "USD")).toBe(0);
+    expect(shownAmount(-0.3, "USD")).toBe(-0.3);
+    expect(shownAmount(null, "KRW")).toBeNull();
+  });
+  it("보이는 부호: 표기의 숫자가 모두 0 이면 0", () => {
+    expect(shownSign(-0.004, formatPct(-0.004))).toBe(0);
+    expect(shownSign(-7.41, formatPct(-7.41))).toBe(-1);
+    expect(shownSign(-0.33, formatWon(-0.33, { sign: true }))).toBe(0);
+    expect(shownSign(0.6, formatWon(0.6, { sign: true }))).toBe(1);
+    expect(shownSign(-0.004, formatArrow(-0.004, "USD"))).toBe(0);
+    expect(shownSign(-0.004 * 1360, formatArrow(-0.004 * 1360, "KRW"))).toBe(-1); // ▼5
+    expect(shownSign(null, "-")).toBe(0);
+    expect(shownSign(Number.NaN, "-")).toBe(0);
+  });
+  it("등락 색은 값 그대로 (단위를 모르므로 반올림하지 않는다 — 1센트 미만 등락의 동전주도 방향 색, 검증 지적 회귀)", () => {
+    for (const t of [light, dark]) {
+      expect(changeColor(t, -0.004)).toBe(t.down);
+      expect(changeColor(t, 0.004)).toBe(t.up);
+      expect(changeColor(t, 0)).toBe(t.ink);
+      expect(changeColor(t, shownSign(-0.004, formatPct(-0.004)))).toBe(t.ink);
+    }
+  });
+  it("화면 읽기: '0.00%' 로 보이는 등락률은 보합", () => {
+    expect(speakRate(-0.004)).toBe("보합");
+    expect(speakRate(0.0043)).toBe("보합");
+    expect(speakRate(-0.006)).toBe("0.01% 하락");
   });
 });
 

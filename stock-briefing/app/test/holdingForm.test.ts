@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avgText, draftOf, editDraft, holdingPatch, normNum, normText, rebaseDraft } from "@/lib/holdingForm";
+import { avgText, draftOf, editDraft, holdingPatch, normNum, normText, rebaseDraft, tradePatch } from "@/lib/holdingForm";
 
 describe("보유 수정 칸 (3-10)", () => {
   it("평단은 미국 소수 2자리, 국내 정수", () => {
@@ -14,6 +14,21 @@ describe("보유 수정 칸 (3-10)", () => {
     expect(holdingPatch(init, { quantity: "9", avgPrice: "" })).toEqual({ avgPrice: null });
     expect(holdingPatch(init, { quantity: "0", avgPrice: "232555" })).toEqual({ error: expect.any(String) });
     expect(holdingPatch(init, { quantity: "1,000", avgPrice: "232555" })).toEqual({ quantity: 1000 });
+  });
+});
+
+describe("체결 반영 저장 내용 (BH-55)", () => {
+  it("칸 글자가 아니라 서버의 원래 평단과 숫자로 비교한다 (칸 '0.05' 인 0.0537 → 새 평단 0.05 도 보냄)", () => {
+    expect(tradePatch({ quantity: 1000, avgPrice: 0.0537 }, { quantity: 2000, avgPrice: 0.05 })).toEqual({ quantity: 2000, avgPrice: 0.05 });
+    expect(tradePatch({ quantity: 4, avgPrice: 70000.25 }, { quantity: 8, avgPrice: 70000 })).toEqual({ quantity: 8, avgPrice: 70000 });
+  });
+  it("바뀌지 않은 값은 보내지 않는다", () => {
+    expect(tradePatch({ quantity: 1000, avgPrice: 0.0537 }, { quantity: 600, avgPrice: 0.0537 })).toEqual({ quantity: 600 });
+  });
+  it("전부 팔면 수량·평단을 비우고, 숫자가 아니면 error (보유를 지우지 않음)", () => {
+    expect(tradePatch({ quantity: 1000, avgPrice: 0.0537 }, { quantity: 0, avgPrice: null })).toEqual({ quantity: null, avgPrice: null });
+    expect(tradePatch({ quantity: 1000, avgPrice: 0.0537 }, { quantity: NaN, avgPrice: 0.05 })).toEqual({ error: expect.any(String) });
+    expect(tradePatch({ quantity: 1000, avgPrice: 0.0537 }, { quantity: 10, avgPrice: 0 })).toEqual({ error: expect.any(String) });
   });
 });
 
