@@ -560,7 +560,7 @@ export function planHoldings<T extends IndexInput>(i: HoldingsInput & { indices:
  *  - 지수 줄 아래 여백 0 (위의 48dp 합계 줄 안에 빈 곳이 있다), 목록 줄 위아래 여백 xs → xxs, 아래 여백 PAD(12) → sm(8)
  *  - 합계가 없으면(보유 종목 시세 없음·관심만) 예전처럼 48dp 머리 줄에 ↻
  * 누르는 칸: ↻·손익 전환은 그대로 48×48dp 이상. 제목 줄은 위 여백까지 누르는 칸이고 바로 아래 합계 칸과 같은 곳(잔고 탭)을 연다.
- * 종목 줄은 약 38dp 라 줄마다 다른 종목을 열지 않고 목록 전체를 한 칸으로 묶어 잔고 탭을 연다 (widgets.tsx POLISHED_ROW_URI)
+ * 종목 줄은 약 38dp 이고 예전처럼 줄마다 그 종목 상세를 연다 (widgets.tsx polishedRowUri)
  */
 
 /** 제목 줄 위 여백 */

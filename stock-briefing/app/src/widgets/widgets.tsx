@@ -477,11 +477,10 @@ function PolishedRowRight({ r, rows, c }: { r: PolishedRow; rows: RowsPlan; c: W
 }
 
 /**
- * 다듬은 잔고 위젯의 종목 줄을 누르면 여는 곳: 잔고 탭 (합계·제목과 같은 곳).
- * 줄이 48dp 보다 낮으므로(약 38dp — 같은 크기에 종목이 더 보이게) 줄마다 다른 종목을 열지 않고 목록 전체를 한 칸으로 묶는다 —
- * 잘못 눌러 옆 종목이 열리는 일이 없고, 종목은 잔고 탭의 큰 줄에서 고른다 (예전 모습은 줄마다 그 종목 상세)
+ * 다듬은 잔고 위젯의 종목 줄을 누르면 여는 곳: 예전처럼 그 종목 상세. 줄은 약 38dp 로 48dp 보다 낮지만
+ * (같은 크기에 종목이 더 보이게) 예전 줄(약 37dp)도 줄마다 종목을 열었고, 위젯에서 종목으로 바로 가는 길을 없애지 않는다
  */
-export const POLISHED_ROW_URI = HOME_URI;
+export const polishedRowUri = (code: string) => `${DEEP_LINK}stocks/${code}`;
 
 /**
  * 다듬은 잔고 위젯 (widgetPolish, 2026-09-25 위젯 검토 "전부 수정해줘"):
@@ -563,7 +562,7 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
               <FlexWidget
                 key={r.code}
                 clickAction="OPEN_URI"
-                clickActionData={{ uri: POLISHED_ROW_URI }}
+                clickActionData={{ uri: polishedRowUri(r.code) }}
                 accessibilityLabel={r.speech}
                 style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: POLISH_ROW_PAD, borderTopWidth: 1, borderTopColor: c.line }}
               >
