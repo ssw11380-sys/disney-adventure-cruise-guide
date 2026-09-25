@@ -14,6 +14,7 @@ import type { ChainLogger } from "../providers/market/chain.js";
  *  - 토스 웹소켓이 붙어 있으면 웹소켓이 맡은 종목은 폴링하지 않고, 등록 종목 시장의 세션이 모두 닫혀 있으면 폴링을 30초로 늦춘다
  *    (미국 프리·애프터·주간거래도 세션 — 이때도 3초라야 웹소켓이 없는 종목의 초록 점이 "3초 갱신"과 맞는다).
  *    웹소켓이 맡은 종목 = wsServed(초록 점·가격 출처와 같은 기준: 구독 중이고, 세션이 닫혔거나 그 종목 가격을 이번 세션 웹소켓 체결이 따라감 — StockService.wsFollows). 없으면 구독 목록(wsCovered)
+ *    토스 웹 가격이 정규장 종가일 뿐인 종목(webOff — 미국 공식 API 시세의 애프터마켓·장 마감·휴장)도 폴링하지 않는다
  *  - 앱은 tick 의 price 로 등락·환산가를 스스로 계산한다(prevClose·환율은 이미 받은 시세에 있음).
  */
 
@@ -51,6 +52,11 @@ export interface PriceStreamDeps {
    * 없으면 웹소켓이 구독한 종목 전부(wsCovered). 실패하면 모두 폴링한다 (덜 부르는 쪽으로 틀리면 점이 켜진 종목의 가격이 멈춘다)
    */
   wsServed?: (codes: string[]) => Promise<Set<string>>;
+  /**
+   * 토스 웹 가격이 지금 시세와 기준이 달라 폴링하지 않는 종목 (StockService.webOff — 미국 공식 API 시세의 애프터마켓·장 마감·휴장에는
+   * 토스 웹 close 가 정규장 종가라, 보내면 앱이 시간외 가격을 덮어쓴다). 없거나 실패하면 빼지 않는다 (예전처럼)
+   */
+  webOff?: (codes: string[]) => Promise<Set<string>>;
   closedPollMs?: number;
   log?: ChainLogger;
 }
@@ -159,7 +165,9 @@ export class PriceStream {
       const covered = this.deps.wsServed
         ? await this.deps.wsServed(all).catch(() => null)
         : wsCovered(this.deps.live?.status() ?? null, Date.now());
-      const codes = all.filter((c) => !covered?.has(c));
+      // 토스 웹 가격이 정규장 종가일 뿐인 종목(미국 공식 API 시세의 애프터마켓·주말)은 보내지 않는다
+      const off = this.deps.webOff ? await this.deps.webOff(all).catch(() => null) : null;
+      const codes = all.filter((c) => !covered?.has(c) && !off?.has(c));
       if (codes.length === 0) return;
       const ticks = await q.getMany(codes);
       for (const [code, tick] of ticks) {

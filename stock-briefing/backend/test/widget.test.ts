@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
-import type { QuoteSession } from "../src/domain/types.js";
+import type { Quote, QuoteSession } from "../src/domain/types.js";
 import type { MarketCalendar, MarketState, MarketStatus } from "../src/providers/market/calendar.js";
 import type { StockSessionFacts } from "../src/providers/market/tossRealtime.js";
 import { sessionAt, toQuoteSession } from "../src/services/liveSession.js";
+import type { RegisteredWithQuote } from "../src/services/stockService.js";
 import { buildWidgetPayload, marketChip, sessionViews } from "../src/services/widgetPayload.js";
 import { fakeIndexSource, fakeIndices, fakeProviders, FakeGenerator } from "./helpers.js";
 
@@ -29,13 +30,52 @@ describe("위젯 장 상태 칩 (3-16): 앱 잔고 탭 띠와 같은 규칙", ()
     const s = { ...st(m("KR", false, false, "2026-09-27T23:00:00Z"), m("US", false, true, "2026-09-25T13:30:00Z")), now: "2026-09-25T00:59:00.000Z" };
     const overnight = { market: "US" as const, phase: "overnight" as const, label: "미국 주간거래", open: true, eligible: true, until: "2026-09-25T08:00:00.000Z" };
     const krHoliday = { market: "KR" as const, phase: "holiday" as const, label: "한국 휴장", open: false, eligible: null, until: "2026-09-27T23:00:00.000Z" };
+    // markets: 두 시장을 한 칩에 그리는 새 앱용 시장별 문구 (widgetPolish — { markets: true } 로 물을 때만)
     expect(marketChip(s, [krHoliday, overnight])).toEqual({ label: "미국 주간거래", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T08:00:00.000Z" });
+    expect(marketChip(s, [krHoliday, overnight], undefined, { markets: true })).toEqual({
+      label: "미국 주간거래",
+      open: false,
+      kr: false,
+      us: false,
+      nextChangeAt: "2026-09-25T08:00:00.000Z",
+      markets: [
+        { market: "US", label: "미국 주간거래" },
+        { market: "KR", label: "한국 휴장" },
+      ],
+    });
     // 미국 종목이 없으면(한국만 보유) 예전과 같다
     expect(marketChip(s, [krHoliday])).toEqual({ label: "한국 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T13:30:00Z" });
+    expect(marketChip(s, [krHoliday], undefined, { markets: true })).toEqual({ label: "한국 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T13:30:00Z", markets: [{ market: "KR", label: "한국 휴장" }] });
+    // 세션이 없으면(예전 앱) markets 도 없다 — 예전 칩 그대로
+    expect(marketChip(s, [], undefined, { markets: true })).not.toHaveProperty("markets");
     // 세션 경계가 지난 값은 쓰지 않는다
     expect(marketChip({ ...s, now: "2026-09-25T08:00:00.000Z" }, [overnight]).label).toBe("한국 휴장");
     // 달력으로 열려 있으면 예전 문구 그대로
     expect(marketChip(st(m("KR", true, true, "2026-09-22T11:00:00Z"), m("US", false, true)), [overnight]).label).toBe("한국 장중");
+  });
+
+  it("검증 지적: 한국이 달력으로 열려 있으면 시장별 문구를 그리지 않는 칩(예전 앱·플래그 꺼짐)의 nextChangeAt 은 달력 마감 그대로 — 미국 세션 경계(09:00)를 넣지 않는다", () => {
+    const s = { ...st(m("KR", true, true, "2026-09-22T11:00:00.000Z"), m("US", false, true, "2026-09-22T13:30:00.000Z")), now: "2026-09-21T23:30:00.000Z" };
+    const after = { market: "US" as const, phase: "after" as const, label: "미국 애프터마켓", open: true, eligible: true, until: "2026-09-22T00:00:00.000Z" };
+    const kr = { market: "KR" as const, phase: "nxt_pre" as const, label: "한국 NXT 프리마켓", open: true, eligible: true, until: "2026-09-21T23:50:00.000Z" };
+    expect(marketChip(s, [kr, after])).toEqual({ label: "한국 장중", open: true, kr: true, us: false, nextChangeAt: "2026-09-22T11:00:00.000Z" });
+    // 다듬은 잔고 위젯은 미국 쪽 문구가 09:00 에 바뀌므로 그때
+    expect(marketChip(s, [kr, after], undefined, { markets: true }).nextChangeAt).toBe("2026-09-22T00:00:00.000Z");
+  });
+
+  it("검증 지적(2027-03-01 삼일절): 두 시장이 닫혀 있을 때 그린 칩도 아직 열리지 않은 세션(10:00 미국 주간거래)의 시작에 바뀐다", () => {
+    const s: MarketStatus = {
+      now: "2027-03-01T00:29:00.000Z",
+      KR: { market: "KR", isTradingDay: false, isOpen: false, opensAt: "2027-03-01T23:00:00.000Z", closesAt: null, lastClose: "2027-02-26T11:00:00.000Z", source: "toss" },
+      US: { market: "US", isTradingDay: false, isOpen: false, opensAt: "2027-03-01T14:30:00.000Z", closesAt: null, lastClose: "2027-02-26T21:00:00.000Z", source: "toss" },
+    };
+    const facts: StockSessionFacts = { daytime: true, nxt: true, halted: false, nxtHalted: false, etp: false, exchange: "integrated", pricedAt: null };
+    const at = (iso: string) => ["005930", "VRT"].map((c) => toQuoteSession(sessionAt(c, new Date(iso), { calendar: s, stock: facts })));
+    const before = marketChip(s, at(s.now));
+    expect(before.label).toBe("휴장");
+    expect(before.nextChangeAt).toBe("2027-03-01T01:00:00.000Z"); // 예전: 14:30Z(23:30 KST) — 10:00 주간거래 시작을 몰라 위젯이 '휴장'을 계속 그렸다
+    const after = marketChip({ ...s, now: "2027-03-01T01:05:00.000Z" }, at("2027-03-01T01:05:00.000Z"));
+    expect(after.label).toBe("미국 주간거래");
   });
 });
 
@@ -53,6 +93,7 @@ describe("위젯 칩 공용 픽스처 (앱 WidgetBridge 와 같은 칩)", () => 
       status: MarketStatus;
       holdings: { code: string; facts: StockSessionFacts | null; session: QuoteSession | null }[];
       chip: unknown;
+      polished: unknown;
       head: string;
     }[];
   };
@@ -68,6 +109,8 @@ describe("위젯 칩 공용 픽스처 (앱 WidgetBridge 와 같은 칩)", () => 
       const sessions = c.holdings.map((h) => h.session);
       // /api/widget?sessions=1(새 앱)과 같은 부름 (now 는 장 상태의 now)
       expect(marketChip(c.status, sessions)).toStrictEqual(c.chip);
+      // &ui=2 · widgetPolish (다듬은 잔고 위젯)
+      expect(marketChip(c.status, sessions, undefined, { markets: true })).toStrictEqual(c.polished);
       expect(sessionViews(sessions, Date.parse(c.now)).map((v) => v.label).join(" · ")).toBe(c.head);
     });
   }
@@ -79,7 +122,7 @@ describe("위젯 칩 공용 픽스처 (앱 WidgetBridge 와 같은 칩)", () => 
  * &sessions=1 이 있을 때만 (새 앱의 WidgetBridge 는 같은 세션 이름 칩을 그린다 — 공용 픽스처)
  */
 describe("GET /api/widget 장 상태 칩: 세션 이름은 새 앱(&sessions=1)에만", () => {
-  const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketChip.json", import.meta.url), "utf8")) as { cases: { name: string; now: string; status: MarketStatus; chip: unknown }[] };
+  const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketChip.json", import.meta.url), "utf8")) as { cases: { name: string; now: string; status: MarketStatus; chip: unknown; polished: unknown }[] };
   const c = fixture.cases.find((x) => x.name === "추석 09:59 · 미국 주간거래 · 한국 휴장")!;
   let db: Db;
   let app: Awaited<ReturnType<typeof buildApp>>;
@@ -110,9 +153,27 @@ describe("GET /api/widget 장 상태 칩: 세션 이름은 새 앱(&sessions=1)�
   it("새 앱(&sessions=1): 보유 미국 종목의 주간거래 이름 — 앱 WidgetBridge 가 그리는 칩(공용 픽스처)과 같다", async () => {
     for (const url of ["/api/widget?indices=1&sessions=1", "/api/widget?indices=1&board=1&sessions=1"]) {
       const body = (await app.inject({ method: "GET", url })).json();
+      // 시장별 문구(markets)는 다듬은 잔고 위젯을 그리는 앱(&ui=2)에만 — 이 앱의 응답은 예전과 같다
       expect(body.market, url).toEqual(c.chip);
       expect(body.market.label).toBe("미국 주간거래");
     }
+    for (const url of ["/api/widget?indices=1&sessions=1&ui=2", "/api/widget?indices=1&board=1&sessions=1&ui=2"]) {
+      const body = (await app.inject({ method: "GET", url })).json();
+      expect(body.market, url).toEqual(c.polished);
+      expect(body.market.markets).toEqual([
+        { market: "US", label: "미국 주간거래" },
+        { market: "KR", label: "한국 휴장" },
+      ]);
+    }
+  });
+
+  it("widgetPolish 를 끄면 새 앱(&ui=2)에도 시장별 문구를 넣지 않는다 (예전 칩 그대로)", async () => {
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetPolish: false } });
+    const body = (await app.inject({ method: "GET", url: "/api/widget?indices=1&sessions=1&ui=2" })).json();
+    expect(body.market).not.toHaveProperty("markets");
+    expect(body.market).toEqual(c.chip);
+    expect(body.market.label).toBe("미국 주간거래");
+    expect(body.features.widgetPolish).toBe(false);
   });
 });
 
@@ -168,6 +229,49 @@ describe("GET /api/widget (3-16)", () => {
   });
 });
 
+describe("BH-68: /api/widget 에 브리핑 시간·최신 브리핑 실패 수 (새 앱 &ui=2)", () => {
+  let db: Db;
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  let generator: FakeGenerator;
+  let clock: Date;
+  const NEW = "/api/widget?indices=1&sessions=1&ui=2";
+  beforeEach(async () => {
+    db = await createMigratedDb(":memory:");
+    generator = new FakeGenerator();
+    clock = new Date("2026-09-22T08:40:00+09:00");
+    app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ generator }), logger: false, enableScheduler: false, now: () => clock });
+    await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
+    await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "000660", quantity: 10, avgPrice: 150_000 } });
+    await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "005930", quantity: 1, avgPrice: 70_000 } });
+  });
+  afterEach(async () => {
+    await app.close();
+    await db.destroy();
+  });
+
+  it("오전은 성공, 오후가 모두 실패하면 위젯 목록은 비고 failed 에 실패 수 — 위젯이 '아직 없음'으로 실패를 숨기지 않게", async () => {
+    await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", force: true } });
+    clock = new Date("2026-09-22T16:10:00+09:00");
+    generator.opts.failKind = "config"; // 크레딧 소진 같은 설정 오류
+    await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "afternoon", force: true } });
+    const latest = (await app.inject({ method: "GET", url: "/api/briefings/latest" })).json() as { latest: { status: string } | null }[];
+    const failed = latest.filter((b) => b.latest?.status === "failed").length;
+    expect(failed).toBeGreaterThan(0);
+    const body = (await app.inject({ method: "GET", url: NEW })).json();
+    expect(body.briefings).toEqual(latest.every((b) => b.latest?.status !== "ok") ? [] : expect.any(Array));
+    expect(body.brief).toEqual({ morning: "08:30", afternoon: "16:00", weekdaysOnly: true, failed });
+  });
+
+  it("브리핑 시간은 알림 설정 그대로 (바꾼 시간 · 끈 세션 · 매일)", async () => {
+    await app.inject({ method: "PUT", url: "/api/notifications/settings", payload: { morningTime: "07:30", afternoonTime: "21:50", weekdaysOnly: false, morningEnabled: false } });
+    expect((await app.inject({ method: "GET", url: NEW })).json().brief).toEqual({ morning: null, afternoon: "21:50", weekdaysOnly: false, failed: 0 });
+  });
+
+  it("예전 앱(&ui=2 없음)의 응답에는 넣지 않는다 (예전 칸 그대로)", async () => {
+    for (const url of ["/api/widget", "/api/widget?indices=1", "/api/widget?indices=1&sessions=1"]) expect((await app.inject({ method: "GET", url })).json(), url).not.toHaveProperty("brief");
+  });
+});
+
 describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
   let db: Db;
   let app: Awaited<ReturnType<typeof buildApp>>;
@@ -202,7 +306,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
 
   it("플래그 두 개와 코스피·나스닥·원/달러를 순서대로, 앱 지수 띠(stale=1)와 같은 값으로 준다", async () => {
     const body = (await get()).json();
-    expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
+    expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
     expect(body.indices.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
     expect(body.indices[0]).toEqual({ code: "KOSPI", name: "코스피", value: 3412.35, change: 30.45, changeRate: 0.9, open: true, asOf: "2026-09-22T10:00:00+09:00" });
     expect(body.indices[2]).toMatchObject({ code: "USDKRW", name: "원/달러", value: 1360.5, change: -2.1, changeRate: -0.15 });
@@ -250,7 +354,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     const r = await get();
     expect(r.statusCode).toBe(200);
     expect(r.json()).not.toHaveProperty("indices");
-    expect(r.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
+    expect(r.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
   });
 
   it("widgetIndexLine 을 끄면 지수를 부르지도 넣지도 않는다 (응답·ETag 가 지수와 무관), 켜면 다시", async () => {
@@ -258,7 +362,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     expect(put.statusCode).toBe(200);
     const r1 = await get();
     expect(r1.json()).not.toHaveProperty("indices");
-    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: false, widgetMarket: true });
+    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: false, widgetMarket: true, widgetPolish: true });
     expect(indices.calls).toBe(0); // 서버 작업 0건
     source.close = "3,999.99";
     later(31);
@@ -270,16 +374,29 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     expect(r2.json().indices[0].value).toBe(3999.99);
   });
 
+  it("다듬은 잔고 위젯(&ui=2 · widgetPolish): 지수 줄 다섯 개(코스피·코스닥·나스닥·S&P500·원/달러, 순서는 앱이 계좌 비중으로), 끄면 예전 세 개 — 예전 앱은 늘 세 개", async () => {
+    const codes = (b: { indices: { code: string }[] }) => b.indices.map((i) => i.code);
+    const NEW = "/api/widget?indices=1&sessions=1&ui=2";
+    const polished = (await app.inject({ method: "GET", url: NEW })).json();
+    expect(codes(polished)).toEqual(["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "USDKRW"]);
+    expect(polished.indices.find((i: { code: string }) => i.code === "USDKRW")).toMatchObject({ changeRate: -0.15 }); // 환율 등락률도 준다
+    expect(codes((await get()).json())).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetPolish: false } });
+    const off = (await app.inject({ method: "GET", url: NEW })).json();
+    expect(codes(off)).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
+    expect(off.features.widgetPolish).toBe(false);
+  });
+
   it("widgetPnlToggle 을 끄면 features 에 false (앱은 누적만, 전환 없음)", async () => {
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetPnlToggle: false } });
-    expect((await get()).json().features).toEqual({ widgetPnlToggle: false, widgetIndexLine: true, widgetMarket: true });
+    expect((await get()).json().features).toEqual({ widgetPnlToggle: false, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
   });
 
   it("검토 지적: 예전 앱(?indices=1 없음)에는 지수를 넣지도 부르지도 않는다 — 나스닥·환율이 바뀌어도 304 그대로", async () => {
     const r1 = await getOld();
     expect(r1.statusCode).toBe(200);
     expect(r1.json()).not.toHaveProperty("indices");
-    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
+    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
     expect(indices.calls).toBe(0);
     const etag = String(r1.headers["etag"]);
     source.close = "3,500.00";
@@ -315,7 +432,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
 
     it("?board=1 이면 9개를 국내 → 미국 → 환율 순서로, 앱 지수 띠(stale=1)와 같은 값으로 준다 (지수 목록은 한 번만 부른다)", async () => {
       const body = (await getBoard()).json();
-      expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true });
+      expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
       expect(body.board.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "DJI", "SOX", "USDKRW", "JPYKRW", "CNYKRW"]);
       expect(body.board.map((i: { name: string }) => i.name)).toEqual(["코스피", "코스닥", "나스닥", "S&P500", "다우", "필라반도체", "원/달러", "원/100엔", "원/위안"]);
       // 지수 줄도 그대로 (같은 목록에서)
@@ -350,7 +467,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
       await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetMarket: false } });
       const off = await getBoard("board=1");
       expect(off.json()).not.toHaveProperty("board");
-      expect(off.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: false });
+      expect(off.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: false, widgetPolish: true });
       expect(indices.calls).toBe(0);
       await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetMarket: null } });
       expect((await getBoard("board=1")).json().board).toHaveLength(9);
@@ -379,5 +496,40 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
       expect(buildWidgetPayload([], [], null, { features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true }, board: [] })).not.toHaveProperty("board");
       expect(buildWidgetPayload([], [], null, { features: { widgetPnlToggle: true, widgetIndexLine: true }, board: [] })).not.toHaveProperty("board");
     });
+  });
+});
+
+/** 버그 점검 BH-04: 서버 보강이 시간 초과로 끝나 환율이 빠진 달러 시세 — 위젯이 그 종목을 합계에서 말없이 빼지 않게 환율을 채워 보낸다 */
+describe("위젯 응답: 환율이 빠진 달러 시세 (BH-04)", () => {
+  const row = (code: string, quote: Partial<Quote> | null, quantity: number | null = 10): RegisteredWithQuote => ({
+    code,
+    name: code,
+    market: quote?.currency === "USD" ? "NASDAQ" : "KOSPI",
+    quantity,
+    avgPrice: quantity ? 100 : null,
+    memo: null,
+    createdAt: "",
+    updatedAt: "",
+    quoteError: null,
+    evaluation: null,
+    quote: quote ? ({ code, currency: "KRW", price: 100, change: 0, changeRate: 0, asOf: "2026-09-22T10:00:00+09:00", ...quote } as Quote) : null,
+  });
+  const fxOfRow = (p: ReturnType<typeof buildWidgetPayload>, code: string) => p.stocks.find((s) => s.c === code)!.q![5];
+
+  it("같은 응답의 다른 달러 시세 환율로 채운다 (관심 종목 시세 포함)", () => {
+    const p = buildWidgetPayload([row("005930", { price: 72_000 }), row("NVDA", { currency: "USD", price: 180, priceKrw: 250_200 }), row("AAPL", { currency: "USD", price: 200, fxRate: 1391.5 }, null)], [], null);
+    expect(fxOfRow(p, "NVDA")).toBe(1391.5);
+    expect(fxOfRow(p, "AAPL")).toBe(1391.5);
+    expect(fxOfRow(p, "005930")).toBeNull(); // 원화 종목은 그대로 없음
+  });
+
+  it("다른 환율이 없으면 원화 환산가 ÷ 가격", () => {
+    const p = buildWidgetPayload([row("NVDA", { currency: "USD", price: 180, priceKrw: 250_200 })], [], null);
+    expect(fxOfRow(p, "NVDA")).toBe(1390);
+  });
+
+  it("둘 다 없으면 예전처럼 null", () => {
+    const p = buildWidgetPayload([row("NVDA", { currency: "USD", price: 180 })], [], null);
+    expect(fxOfRow(p, "NVDA")).toBeNull();
   });
 });

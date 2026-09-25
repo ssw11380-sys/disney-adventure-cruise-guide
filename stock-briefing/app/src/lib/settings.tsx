@@ -8,6 +8,7 @@ import { Platform } from "react-native";
  *  - apiUrl/apiToken: 서버 주소·토큰. 기본값 EXPO_PUBLIC_API_URL → app.json extra.apiUrl → 플랫폼별 localhost.
  *  - sort: 내 종목 정렬
  *  - showKrw: 미국 종목을 원화로 환산해 표시
+ *  - widgetRowCurrency: 잔고 위젯(다듬은 모습) 종목 줄의 손익 금액 통화 — 원화(기본, 합계와 같은 기준) · 종목 통화
  * 위젯(백그라운드)도 같은 키를 읽으므로 키 이름을 바꾸면 widgets/ 쪽도 같이 바꿔야 한다.
  */
 
@@ -18,7 +19,17 @@ export const STORAGE_KEYS = {
   showKrw: "settings.showKrw",
   themeMode: "settings.themeMode",
   afterCost: "settings.afterCost",
+  widgetRowCurrency: "settings.widgetRowCurrency",
 } as const;
+
+/** 잔고 위젯 종목 줄 손익 금액: 원화(기본) · 종목 통화 */
+export type WidgetRowCurrency = "krw" | "native";
+export const WIDGET_ROW_OPTIONS: { value: WidgetRowCurrency; label: string }[] = [
+  { value: "krw", label: "원화" },
+  { value: "native", label: "종목 통화" },
+];
+/** 저장값 → 설정 (모르는 값·없음은 원화) */
+export const widgetRowCurrencyOf = (v: string | null | undefined): WidgetRowCurrency => (v === "native" ? "native" : "krw");
 
 export type ThemeMode = "dark" | "light" | "system";
 export const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -59,6 +70,8 @@ interface Settings {
   themeMode: ThemeMode;
   /** 평가금액·손익에서 매도 예상 수수료·세금을 뺀다 (토스 앱 기준, 기본 켬) */
   afterCost: boolean;
+  /** 잔고 위젯 종목 줄 손익 금액 통화 (기본 원화) */
+  widgetRowCurrency: WidgetRowCurrency;
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
   setApiToken: (token: string) => Promise<void>;
@@ -68,6 +81,7 @@ interface Settings {
   setShowKrw: (on: boolean) => Promise<void>;
   setThemeMode: (m: ThemeMode) => Promise<void>;
   setAfterCost: (on: boolean) => Promise<void>;
+  setWidgetRowCurrency: (v: WidgetRowCurrency) => Promise<void>;
 }
 
 /**
@@ -95,7 +109,24 @@ function initialThemeMode(): ThemeMode {
     return "dark";
   }
 }
-const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, themeMode: "dark", afterCost: true, ready: false, setApiUrl: noop, setApiToken: noop, setCredentials: noop, setSort: noop, setShowKrw: noop, setThemeMode: noop, setAfterCost: noop });
+const Ctx = createContext<Settings>({
+  apiUrl: defaultApiUrl(),
+  apiToken: "",
+  sort: "created",
+  showKrw: false,
+  themeMode: "dark",
+  afterCost: true,
+  widgetRowCurrency: "krw",
+  ready: false,
+  setApiUrl: noop,
+  setApiToken: noop,
+  setCredentials: noop,
+  setSort: noop,
+  setShowKrw: noop,
+  setThemeMode: noop,
+  setAfterCost: noop,
+  setWidgetRowCurrency: noop,
+});
 
 async function persist(key: string, value: string | null): Promise<void> {
   try {
@@ -149,10 +180,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   // 휴대폰은 저장된 설정을 읽을 때까지 스플래시가 가려 준다(_layout 의 SplashGate). 웹은 스플래시가 없어 저장소를 바로 읽는다
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => initialThemeMode());
   const [afterCost, setAfterCostState] = useState(true);
+  const [widgetRowCurrency, setWidgetRowCurrencyState] = useState<WidgetRowCurrency>("krw");
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost])
+    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency])
       .then((pairs) => {
         const m = new Map(pairs);
         const u = m.get(STORAGE_KEYS.apiUrl);
@@ -170,6 +202,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         if (tm && THEME_OPTIONS.some((o) => o.value === tm)) setThemeModeState(tm as ThemeMode);
         const ac = m.get(STORAGE_KEYS.afterCost);
         if (ac) setAfterCostState(ac === "1");
+        setWidgetRowCurrencyState(widgetRowCurrencyOf(m.get(STORAGE_KEYS.widgetRowCurrency)));
       })
       .catch(() => {})
       .finally(() => {
@@ -220,9 +253,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     await persist(STORAGE_KEYS.afterCost, on ? "1" : "0");
   }, []);
 
+  const setWidgetRowCurrency = useCallback(async (v: WidgetRowCurrency) => {
+    setWidgetRowCurrencyState(v);
+    await persist(STORAGE_KEYS.widgetRowCurrency, v);
+  }, []);
+
   const value = useMemo(
-    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost }),
-    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost],
+    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency }),
+    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

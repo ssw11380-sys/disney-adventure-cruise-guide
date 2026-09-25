@@ -15,13 +15,26 @@ import {
   planAsset,
   planBriefing,
   planHoldings,
+  planHoldingsPolished,
+  planPolishedIndex,
+  GLYPH_LEAD,
+  PNL_GLYPH,
+  INDEX_MIN_ROWS,
+  INDEX_TWO_LINE_ROWS,
+  POLISH_BOTTOM,
+  polishedHeadHeight,
+  polishedListMin,
+  polishedSepWidth,
   textWidth,
+  titleWidth,
   totalBlock,
   type AssetInput,
   type AssetPlan,
   type HoldingsInput,
   type HoldingsPlan,
   type IndexInput,
+  type PolishedInput,
+  type PolishedPlan,
 } from "@/widgets/layout";
 import {
   BOARD_GAP,
@@ -437,6 +450,228 @@ describe("3-23 잔고 위젯: 4×2·4×4 × 글자 100·130% 숫자 잘림 0", (
       expect(tall.note).not.toBeNull();
       expect(tall.header.sub).not.toBe("갱신 실패");
     });
+  });
+});
+
+// ── 다듬은 잔고 위젯 (widgetPolish) ────────────────────────────────────
+
+const P_ROWS = ROWS.map((r) => ({ ...r, subs: r.subs.map((s) => (/^(이전 값 · )?[+-]/.test(s) ? s.replace(/^(이전 값 · )?/, "$1수익 ") : s)) }));
+const P_DAY = { amount: "오늘 -2,868,108원", rate: "(-3.78%)" };
+/** 미국 비중이 큰 계좌의 지수 줄 (model.polishedIndexItems 와 같은 keep·canShort: 나스닥 → 원/달러 → 코스피 → S&P500 → 코스닥 순으로 남긴다) */
+const P_INDICES: IndexInput[] = [
+  { label: "나스닥", value: "26,936.04", rate: "-1.13%", stale: false, tag: null, keep: 0, canShort: true },
+  { label: "S&P500", value: "6,650.12", rate: "+0.19%", stale: false, tag: null, keep: 3, canShort: true },
+  { label: "코스피", value: "3,412.35", rate: "+0.90%", stale: true, tag: "9/23", keep: 2, canShort: true },
+  { label: "코스닥", value: "862.15", rate: "-0.37%", stale: true, tag: "지연", keep: 4, canShort: true },
+  { label: "원/달러", value: "1,391.50", rate: "+0.38%", stale: false, tag: null, keep: 1, canShort: false },
+];
+
+function polishedInput(width: number, height: number, scale: number, mode: "cumulative" | "day" = "cumulative", toggle = true, note: string[] = NOTE): PolishedInput {
+  return {
+    width,
+    height,
+    scale,
+    title: { titles: ["보유 17 · 관심 1", "보유 17"], chips: ["미국 주간거래 · 한국 휴장", "미국 주간거래"], sub: ["9/23 15:30 기준", "9/23 15:30", "15:30"], delayed: true },
+    total: { total: LONG_TOTAL, fixed: CUM, toggle: toggle ? (mode === "day" ? P_DAY : CUM) : null },
+    indices: P_INDICES,
+    rows: P_ROWS,
+    rowLabel: "오늘",
+    note,
+    alert: note.some((n) => n.startsWith("갱신 실패")) ? "갱신 실패" : null,
+  };
+}
+
+/** 계획대로 그렸을 때 칸을 넘는 글자 (없어야 한다) */
+function polishedOverflow(i: PolishedInput, p: PolishedPlan): string[] {
+  const bad: string[] = [];
+  const s = i.scale;
+  const content = i.width - PAD * 2;
+  // 제목 줄: 한 줄 합계 줄에 ↻ 를 두면 좌우 여백 뺀 폭, 48dp 머리 줄이면 ↻ 칸을 뺀 폭
+  const room = p.compact ? content : headerRoom(i.width);
+  if (titleWidth(p.title, s) > room) bad.push(`제목 줄 ${titleWidth(p.title, s).toFixed(0)} > ${room}`);
+  if (!i.title.titles.includes(p.title.title)) bad.push(`모르는 제목 ${p.title.title}`);
+  if (p.title.chip && !i.title.chips.includes(p.title.chip)) bad.push(`모르는 칩 ${p.title.chip}`);
+  if (!p.title.delayed) bad.push("'지연'이 빠짐");
+  if (p.total) {
+    const t = textWidth(i.total!.total, p.total.totalFont, s, true);
+    const glyph = p.total.toggle ? textWidth(PNL_GLYPH, p.total.pnlFont, s, true) + space.xxs : 0;
+    const pnl = Math.max(...p.total.pnl.map((l) => textWidth(l, p.total!.pnlFont, s, true))) + glyph + p.total.pnlPadX * 2;
+    // ⇅ 가 있으면 합계와의 최소 간격은 GLYPH_LEAD (⇅ 가 둘을 갈라 준다)
+    const w = (p.total.inline ? t + (glyph ? GLYPH_LEAD : space.sm) + pnl : Math.max(t, pnl)) + (p.compact ? space.sm + TOUCH : 0);
+    const rowRoom = p.compact ? i.width - PAD : content;
+    if (w > rowRoom) bad.push(`합계 줄 ${w.toFixed(0)} > ${rowRoom}`);
+    const want = p.total.toggle ? i.total!.toggle : i.total!.fixed;
+    const joined = p.total.pnl.join(" ");
+    if (!want) bad.push("플래그가 꺼졌는데 전환 칸");
+    else if (!joined.includes(want.amount) || (want.rate && !joined.includes(want.rate))) bad.push(`손익 빠짐 ${joined}`);
+    if (p.total.toggle && p.total.pnlH < TOUCH) bad.push(`손익 누르는 칸 ${p.total.pnlH} < 48`);
+    if (p.compact && p.total.height < TOUCH) bad.push(`↻ 줄 ${p.total.height} < 48`);
+  } else if (p.compact) bad.push("합계 없이 제목 줄 모양");
+  if (p.index) {
+    // 두 줄은 두 줄을 넣고도 종목이 INDEX_TWO_LINE_ROWS 줄 넘게 보이는 큰 위젯만
+    if (p.index.lines.length > 2 || (p.index.lines.length === 2 && p.listH < INDEX_TWO_LINE_ROWS * p.rows.rowH)) bad.push(`지수 줄이 ${p.index.lines.length}줄`);
+    for (const line of p.index.lines) {
+      const w = line.reduce((a, it) => a + indexItemWidth(it, p.index!.font, s), 0) + polishedSepWidth(p.index.font, s) * (line.length - 1);
+      if (w > content) bad.push(`지수 줄 ${w.toFixed(0)} > ${content}`);
+    }
+    // 보이는 순서는 받은 순서 그대로(계좌 비중 순서, 원/달러 끝), 값을 뺀 짧은 모양은 지수만
+    const shown = p.index.lines.flat();
+    const order = shown.map((it) => i.indices.findIndex((x) => x.label === it.label));
+    if (order.some((o, n) => o < 0 || (n > 0 && o <= order[n - 1]!))) bad.push("지수 줄 순서");
+    if (shown.some((it) => it.short && !it.canShort)) bad.push("원/달러 값을 뺐다");
+    // 덜 중요한 것부터 뺀다: 보인 항목보다 keep 이 작은(더 중요한) 항목이 빠지지 않는다
+    const maxKeep = Math.max(...shown.map((it) => it.keep ?? 0));
+    if (i.indices.some((x) => (x.keep ?? 0) < maxKeep && !shown.some((it) => it.label === x.label))) bad.push("중요한 지수를 먼저 뺐다");
+  }
+  if (p.note && textWidth(p.note, F.sm, s) > content) bad.push(`메모 ${p.note}`);
+  const r = p.rows;
+  i.rows.forEach((row, n) => {
+    const price = textWidth(row.price, F.base, s, true);
+    const rate = row.rate ? textWidth(row.rate, F.md, s, true) : 0;
+    if (rate > r.rateW) bad.push(`등락률 칸 ${row.rate}`);
+    const right = r.stacked ? Math.max(price, r.labelW + r.rateW) : price + space.sm + r.labelW + r.rateW;
+    if (r.leftW + space.sm + right > content) bad.push(`줄 ${row.name}`);
+    const sub = r.sub[n];
+    if (sub && textWidth(sub, r.subFont, s) > r.leftW) bad.push(`손익 줄 ${sub}`);
+    if (sub && !row.subs.includes(sub)) bad.push(`모르는 손익 줄 ${sub}`);
+  });
+  if (i.rows.some((x) => x.rate) && r.labelW < textWidth("오늘", F.xs, s)) bad.push("'오늘' 칸이 좁다");
+  return bad;
+}
+
+/** 세로 합: 머리(제목 줄 또는 48dp) + 합계 줄 + 지수 줄 + 메모 + 아래 여백 ≤ 높이, 목록은 첫 줄이 보일 때만 */
+function polishedVertical(i: PolishedInput, p: PolishedPlan): string[] {
+  const bad: string[] = [];
+  const s = i.scale;
+  const used = polishedHeadHeight(p.compact, s) + totalBlock(p.total) + (p.index ? p.index.height : 0) + (p.note ? lineHeight(F.sm, s) : 0) + POLISH_BOTTOM;
+  if (used > i.height) bad.push(`세로 ${used} > ${i.height}`);
+  const listH = i.height - used;
+  if (p.list) {
+    if (listH < polishedListMin(s)) bad.push(`목록 ${listH} < 첫 줄 ${polishedListMin(s)}`);
+    if (Math.abs(p.listH - listH) > 0.001) bad.push(`목록 어림 ${p.listH} ≠ ${listH}`);
+  }
+  if (p.index && i.rows.length && (!p.list || listH < INDEX_MIN_ROWS * p.rows.rowH)) bad.push("지수 줄 때문에 목록이 한 줄 반도 안 보임");
+  if (p.index && !i.rows.length && listH < EMPTY_LINES * lineHeight(F.md, s)) bad.push("지수 줄 때문에 빈 목록 안내가 안 보임");
+  return bad;
+}
+
+describe("다듬은 잔고 위젯 배치 (widgetPolish): 숫자 잘림 0 · 높이 넘침 0 · 같은 크기에 종목 줄이 더 보인다", () => {
+  it("폭 250~420dp, 높이 110~480dp, 글자 90~130% × 전환 켬·끔 × 메모 있음·없음 × 종목 있음·없음: 가로·세로 모두 넘치지 않는다", () => {
+    const bad: string[] = [];
+    let cases = 0;
+    for (let w = 250; w <= 420; w += 10)
+      for (let h = 110; h <= 480; h += 10)
+        for (const s of [0.9, 1, 1.15, 1.3])
+          for (const toggle of [true, false])
+            for (const note of [NOTE, []])
+              for (const rows of [P_ROWS, []]) {
+                const input = { ...polishedInput(w, h, s, "day", toggle, note), rows };
+                const plan = planHoldingsPolished(input);
+                const o = [...polishedOverflow(input, plan), ...polishedVertical(input, plan)];
+                if (!rows.length && plan.list) o.push("종목이 없는데 목록");
+                if (o.length) bad.push(`${w}×${h}@${s} 전환 ${toggle} 메모 ${note.length} 종목 ${rows.length}: ${o.join(", ")}`);
+                cases++;
+              }
+    expect(bad.slice(0, 5)).toEqual([]);
+    expect(cases).toBe(18 * 38 * 4 * 2 * 2 * 2);
+  }, 30_000); // 배치 수만 개 — CI 에서 기본 5초를 넘었다 (5.2초)
+
+  it("같은 크기에 종목 줄이 더 보인다: 4×2(330×230) 2.5 → 3줄 넘게, 4×2·4×3·4×4·5×2 모두 예전보다 많다 (글자 100%)", () => {
+    const rowsOf = (p: { list: boolean; listH: number; rows: { rowH: number } }) => (p.list ? p.listH / p.rows.rowH : 0);
+    const table: Record<string, [number, number]> = {};
+    for (const [name, [w, h]] of Object.entries({ "4x2": [330, 230], "4x2 낮음": [330, 180], "4x3": [330, 350], "4x4": [330, 470], "5x2": [400, 200] } as const)) {
+      const before = rowsOf(planHoldings(holdingsInput(w, h, 1, "cumulative", true, [])));
+      const after = rowsOf(planHoldingsPolished(polishedInput(w, h, 1, "cumulative", true, [])));
+      table[name] = [Math.round(before * 10) / 10, Math.round(after * 10) / 10];
+      expect(after, name).toBeGreaterThan(before + 0.5);
+    }
+    expect(table["4x2"]![0]).toBeLessThan(2.6); // 예전: 약 2.5줄 (검토 화면)
+    expect(table["4x2"]![1]).toBeGreaterThanOrEqual(3);
+    // 큰 글자(130%)에서도 예전보다 줄지 않는다 (↻ 를 넣으면 합계가 두 줄로 내려갈 때는 48dp 머리 줄 + 한 줄 합계)
+    for (const [w, h] of [
+      [330, 230],
+      [330, 350],
+      [330, 470],
+      [400, 200],
+    ] as const) {
+      const before = planHoldings(holdingsInput(w, h, 1.3, "cumulative", true, []));
+      const after = planHoldingsPolished(polishedInput(w, h, 1.3, "cumulative", true, []));
+      expect(after.listH + (after.index?.height ?? 0), `${w}×${h}`).toBeGreaterThanOrEqual(before.listH + (before.index ? before.index.height + space.xs : 0));
+    }
+  });
+
+  it("누르는 칸: ↻·손익 전환은 48dp, 두 칸을 한 줄에 모아(제목 줄은 글자 높이) 머리 줄 48dp 를 줄인다", () => {
+    const p = planHoldingsPolished(polishedInput(330, 230, 1, "cumulative", true, []));
+    expect(p.compact).toBe(true);
+    expect(p.total!.toggle).toBe(true);
+    expect(p.total!.height).toBeGreaterThanOrEqual(TOUCH);
+    expect(p.total!.pnlH).toBeGreaterThanOrEqual(TOUCH);
+    expect(polishedHeadHeight(true, 1)).toBeLessThan(TOUCH / 2 + space.sm);
+    expect(p.rows.rowH).toBeLessThan(planHoldings(holdingsInput(330, 230, 1)).rows.rowH);
+  });
+
+  it("좁으면 제목·칩·기준 시각 순서대로 줄인다: '기준' → '· 관심 1' → 둘째 시장 → 날짜 → 칩 (제목과 '지연'은 늘)", () => {
+    const at = (w: number, s = 1) => planHoldingsPolished(polishedInput(w, 300, s, "cumulative", true, [])).title;
+    expect(at(420)).toMatchObject({ title: "보유 17 · 관심 1", chip: "미국 주간거래 · 한국 휴장", sub: "9/23 15:30 기준" });
+    const mid = at(330);
+    expect(mid.chip).toBe("미국 주간거래 · 한국 휴장");
+    const narrow = at(250, 1.3);
+    expect(narrow.title).toBe("보유 17");
+    expect(narrow.delayed).toBe(true);
+    // 제목 줄 폭 어림은 칩·기준 시각을 모두 더한다
+    expect(titleWidth({ title: "보유 17", chip: null, sub: null, delayed: false }, 1)).toBeLessThan(titleWidth({ title: "보유 17", chip: "미국 주간거래", sub: null, delayed: false }, 1));
+  });
+
+  it("지수 줄: 4×2 는 한 줄, 좁으면 덜 중요한 것부터 빼고 시장마다 하나 + 원/달러를 남긴다 (검증 지적: 뒤에서부터 빼면 원/달러가 늘 빠졌다)", () => {
+    const labels = (p: { lines: IndexInput[][] } | null) => p?.lines.map((l) => l.map((it) => (it.short ? `${it.label}(짧게)` : it.label)).join(" · "));
+    // 330×230 (4×2): 한 줄 — 지수는 값을 빼고 등락률만
+    const at330 = planHoldingsPolished(polishedInput(330, 230, 1, "cumulative", true, [])).index;
+    expect(labels(at330)).toEqual(["나스닥(짧게) · 코스피(짧게) · 원/달러"]);
+    // 폭이 넓어질수록 값을 되살리고 둘째 지수를 더한다
+    expect(labels(planPolishedIndex(P_INDICES, 400 - PAD * 2, 1, 1))).toEqual(["나스닥 · 코스피(짧게) · 원/달러"]);
+    expect(labels(planPolishedIndex(P_INDICES, 480 - PAD * 2, 1, 1))).toEqual(["나스닥 · 코스피 · 원/달러"]);
+    expect(labels(planPolishedIndex(P_INDICES, 640 - PAD * 2, 1, 1))).toEqual(["나스닥 · S&P500 · 코스피 · 원/달러"]);
+    // 큰 위젯(4×3 이상)은 두 줄까지
+    expect(labels(planHoldingsPolished(polishedInput(330, 470, 1, "cumulative", true, [])).index)).toEqual(["나스닥 · S&P500", "코스피 · 원/달러"]);
+    // 아주 좁으면 둘째 시장을 빼도 원/달러는 남는다 → 마지막에 첫 시장 하나
+    expect(labels(planPolishedIndex(P_INDICES, 250 - PAD * 2, 1, 1))).toEqual(["나스닥(짧게) · 원/달러"]);
+    expect(labels(planPolishedIndex(P_INDICES, 100, 1, 1))).toEqual(["나스닥(짧게)"]);
+    // 흐린 값의 날짜('9/23')도 폭에 넣고, 짧은 모양은 값 폭을 뺀다
+    expect(indexItemWidth(P_INDICES[2]!, F.sm, 1)).toBeGreaterThan(indexItemWidth({ ...P_INDICES[2]!, tag: null }, F.sm, 1));
+    expect(indexItemWidth({ ...P_INDICES[0]!, short: true }, F.sm, 1)).toBeLessThan(indexItemWidth(P_INDICES[0]!, F.sm, 1));
+    expect(polishedSepWidth(F.sm, 1)).toBeLessThan(indexSepWidth(F.sm, 1));
+  });
+
+  it("검증 지적: 원/달러는 330~640dp·글자 100% 어디서나 남는다 (4×2·4×4, 미국·한국 비중 모두)", () => {
+    const kr = [P_INDICES[2]!, P_INDICES[3]!, P_INDICES[0]!, P_INDICES[1]!, P_INDICES[4]!].map((x, n) => ({ ...x, keep: [0, 3, 2, 4, 1][n]! }));
+    for (const indices of [P_INDICES, kr])
+      for (let w = 330; w <= 640; w += 10)
+        for (const h of [200, 230, 350, 470]) {
+          const p = planHoldingsPolished({ ...polishedInput(w, h, 1, "cumulative", true, []), indices });
+          const shown = p.index?.lines.flat().map((it) => it.label) ?? [];
+          expect(shown, `${w}×${h} ${indices[0]!.label}`).toContain("원/달러");
+          expect(shown, `${w}×${h}`).toContain("나스닥");
+          expect(shown, `${w}×${h}`).toContain("코스피");
+        }
+  });
+
+  it("검증 지적: 같은 크기·같은 글자에서 종목 줄이 예전보다 적게 보이지 않는다 (폭 250~420 · 높이 110~480 · 글자 90~130%)", () => {
+    const rowsOf = (p: { list: boolean; listH: number; rows: { rowH: number } }) => (p.list ? p.listH / p.rows.rowH : 0);
+    const worse: string[] = [];
+    for (let w = 250; w <= 420; w += 10)
+      for (let h = 110; h <= 480; h += 10)
+        for (const s of [0.9, 1, 1.15, 1.3])
+          for (const toggle of [true, false]) {
+            const b = planHoldings(holdingsInput(w, h, s, "cumulative", toggle, []));
+            const a = planHoldingsPolished(polishedInput(w, h, s, "cumulative", toggle, []));
+            // 목록이 있던 크기는 목록이 남고, 한 줄 이상 보이던 크기는 줄 수가 줄지 않는다.
+            // (한 줄도 다 안 보이는 아주 낮은 위젯은 예전에는 전환 칸을 빼고 목록을 넣었고, 다듬은 모습은 전환 칸도 둔 채 목록이 들어가 조각 줄 길이만 다를 수 있다)
+            if ((b.list && !a.list) || (rowsOf(b) >= 1 && rowsOf(a) + 1e-9 < rowsOf(b))) worse.push(`${w}×${h}@${s} 전환 ${toggle}: ${rowsOf(b).toFixed(2)} → ${rowsOf(a).toFixed(2)}`);
+          }
+    expect(worse).toEqual([]);
+    // 330×180 · 글자 130% (검증 지적: 1.4 → 1.2줄이던 곳)
+    const b = rowsOf(planHoldings(holdingsInput(330, 180, 1.3, "cumulative", true, [])));
+    expect(rowsOf(planHoldingsPolished(polishedInput(330, 180, 1.3, "cumulative", true, [])))).toBeGreaterThanOrEqual(b);
   });
 });
 

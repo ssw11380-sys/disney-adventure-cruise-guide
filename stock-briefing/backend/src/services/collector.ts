@@ -156,7 +156,7 @@ export class DataCollector {
           : (notes.push("수급: KIS/토스 Open API 키가 없어 받지 않음"), Promise.resolve(null)),
       this.marketStatus(),
     ]);
-    // 지표는 끝난 봉까지만 (정규장 중인 오늘 봉·주간거래로 생긴 봉은 빼고)
+    // 지표는 끝난 봉까지만 (정규장 중인 오늘 봉·20:00 전 한국 통합 봉·주간거래로 생긴 봉은 빼고)
     const market = marketContext(stock.code, status, now);
     const candles = series ? completedCandles(series.candles, market, now) : null;
     const technical = candles ? computeTechnicalSummary(candles) : null;

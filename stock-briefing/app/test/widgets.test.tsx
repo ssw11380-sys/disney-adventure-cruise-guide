@@ -150,6 +150,24 @@ describe("위젯-3: 시세 없는 보유 종목", () => {
     expect(fillFromLast(now, today, NOW).stocks[0]!.quote!.change).toBe(5_000);
   });
 
+  it("BH-40: 미국 종목은 뉴욕 거래일로 본다 — 한국 자정이 지나도 같은 뉴욕 세션이면 등락 유지, 한국 날짜가 같아도 다른 뉴욕 세션이면 0", () => {
+    const nvda = (asOf: string) => [holding("NVDA", quote("NVDA", 180, { currency: "USD", fxRate: 1_400, change: 5, changeRate: 2.86, asOf }), 10, 150)];
+    const gone = (s: RegisteredWithQuote[]) => [{ ...s[0]!, quote: null, evaluation: null }];
+    // 9/22 23:50 KST(뉴욕 10:50 정규장)에 받은 +5 → 00:01·01:00 KST(뉴욕 11:01·12:00, 같은 정규장)에 채워도 +5
+    const last = nvda("2026-09-22T23:50:00+09:00");
+    for (const t of ["2026-09-22T23:59:00+09:00", "2026-09-23T00:01:00+09:00", "2026-09-23T01:00:00+09:00"]) {
+      const f = fillFromLast(gone(last), last, Date.parse(t));
+      expect(f.filled, t).toEqual(["NVDA"]);
+      expect(f.stocks[0]!.quote!.change, t).toBe(5);
+      expect(f.stocks[0]!.quote!.changeRate, t).toBe(2.86);
+    }
+    // 반대: 08:30 KST(뉴욕 전날 19:30 애프터마켓 — 9/22 거래일) 값을 23:00 KST(뉴욕 10:00 — 9/23 정규장)에 채우면 지난 세션 등락이라 0
+    const morning = nvda("2026-09-23T08:30:00+09:00");
+    const f = fillFromLast(gone(morning), morning, Date.parse("2026-09-23T23:00:00+09:00"));
+    expect(f.stocks[0]!.quote!.change).toBe(0);
+    expect(f.stocks[0]!.quote!.changeRate).toBe(0);
+  });
+
   it("7일 넘은 값·수량이 바뀐 종목은 채우지 않음", () => {
     const old = [holding("005930", quote("005930", 70_000, { asOf: "2026-09-16T15:30:00+09:00" }), 10, 60_000)];
     const now = [{ ...old[0]!, quote: null, evaluation: null }];
@@ -284,7 +302,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     const a = await loadWidgetData({ stocks: true, briefings: true });
     const b = await loadWidgetData({ stocks: true, briefings: true });
     // 새 앱은 지수 줄을 그릴 수 있다고 알린다 (?indices=1 — 서버는 이 표시가 있을 때만 지수를 넣는다)
-    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1&sessions=1`, `${API}/api/widget?indices=1&sessions=1`]);
+    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2`, `${API}/api/widget?indices=1&sessions=1&ui=2`]);
     expect(calls[1]!.inm).toBe('"abc"');
     expect(b.stocks.map((s) => s.code)).toEqual(a.stocks.map((s) => s.code));
     expect(b.market?.label).toBe("한국 장중");
@@ -299,7 +317,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
       return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
     });
     const d = await loadWidgetData({ stocks: true, briefings: true });
-    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
+    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1&ui=2`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
     expect(d.stocks).toHaveLength(18);
     expect(d.market).toBeNull();
   });
@@ -405,7 +423,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
       return new Response(JSON.stringify({ ...payload, market: { label: "미국 주간거래", open: false, nextChangeAt: "2026-09-25T08:00:00Z", kr: false, us: false } }), { status: 200, headers: { etag: '"new"' } });
     });
     const d = await loadWidgetData({ stocks: true, briefings: true, reuse: true });
-    expect(calls).toEqual([{ url: `${API}/api/widget?indices=1&sessions=1`, inm: null }]);
+    expect(calls).toEqual([{ url: `${API}/api/widget?indices=1&sessions=1&ui=2`, inm: null }]);
     expect(d.market?.label).toBe("미국 주간거래");
     // 새 주소로 받아 둔 응답은 그대로 다시 쓴다
     await loadWidgetData({ stocks: true, briefings: true, reuse: true });

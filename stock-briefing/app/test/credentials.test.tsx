@@ -79,6 +79,9 @@ vi.mock("@/api/hooks", async () => {
       h.renders.push(`${apiUrl}|${apiToken}`);
       return { data: undefined, isError: false, error: null, isFetching: false, refetch: async () => undefined };
     },
+    // 설정 탭의 알림 설정('다음 실행' 시각, BH-16)과 기능 플래그(widgetPolish 의 '위젯 종목 금액') — 서버 주소·토큰 저장과는 상관없다
+    useNotificationSettings: () => ({ data: undefined, isError: false, error: null, isFetching: false, refetch: async () => undefined }),
+    useFeature: (_key: string, fallback = false) => fallback,
   };
 });
 vi.mock("@/lib/liveStream", () => ({ useLiveStream: () => ({ connected: false, connectedAt: null, lastTickAt: null, ticks: 0 }) }));

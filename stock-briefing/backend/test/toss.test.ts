@@ -23,6 +23,8 @@ const SEARCH_ITEMS: Record<string, unknown[]> = {
 const PRICES: Record<string, unknown> = {
   A035420: { exchange: "integrated", productCode: "A035420", currency: "KRW", base: 197900, close: 201500, changeType: "UP", volume: 1050258 },
   US20100629001: { productCode: "US20100629001", currency: "USD", base: 375.3, baseKrw: 519527, close: 376.31, closeKrw: 520925, changeType: "UP", volume: 11094719, afterMarketClose: 377.0, afterMarketCloseKrw: 521880 },
+  // 1달러 미만 미국 종목 (2026-09 실제 값 모양): 전일 $0.0603 → $0.0562 (-6.80%)
+  US20240101001: { productCode: "US20240101001", currency: "USD", base: 0.0603, baseKrw: 83, close: 0.0562, closeKrw: 78, changeType: "DOWN", volume: 101000000 },
 };
 
 const CHART_KR = {
@@ -137,6 +139,14 @@ describe("TossProvider", () => {
     await new TossProvider(fakeFetch(calls2), store, NOW).getCandles("TSLA", "D", 2);
     expect(calls2.some((c) => c.includes("search-all"))).toBe(false);
     expect(calls2.some((c) => c.includes("/us-s/US20100629001/day:1?count=2"))).toBe(true);
+  });
+
+  // 버그 점검 BH-29 · BH-54: 등락을 센트로 반올림한 뒤 등락률을 내면 1달러 미만 종목이 -6.80% 대신 0.00% 가 된다
+  it("1달러 미만 미국 종목: 등락률은 반올림 전 차이로, 등락은 소수 4자리까지", async () => {
+    const store = new MemoryStore();
+    store.map.set("toss:product:DCX", "US20240101001");
+    const q = await new TossProvider(fakeFetch(), store, NOW).getQuote("DCX");
+    expect(q).toMatchObject({ code: "DCX", currency: "USD", price: 0.0562, prevClose: 0.0603, change: -0.0041, changeRate: -6.8 });
   });
 
   it("getMany 는 여러 종목 현재가를 요청 1개로 받고 2초 동안 재사용한다", async () => {
@@ -287,5 +297,113 @@ describe("토스 표시 환율", () => {
     expect(await p.usdKrw()).toBe(1360);
     await p.usdKrw();
     expect(calls).toBe(1);
+  });
+});
+
+// ── 버그 점검 BH-08: 토스 웹 환율이 한 번 성공한 뒤 영원히 옛 값으로 남아 토스 Open API·네이버 환율로 넘어가지 않음 ──────
+describe("토스 표시 환율이 오래되면 다음 소스로 (BH-08)", () => {
+  it("새로 받지 못한 마지막 값은 5분까지만 쓰고, 그 뒤엔 null 이라 토스 Open API → 네이버 순서로 넘어간다", async () => {
+    const { NaverFundamentals } = await import("../src/providers/market/fundamentals.js");
+    let t = Date.parse("2026-09-25T09:00:00+09:00");
+    let web: "up" | "down" | "empty" = "up";
+    const tossFetch = (async () => {
+      if (web === "down") return new Response("blocked", { status: 403 });
+      const rows = web === "empty" ? [] : [{ productCode: "US19801212001", close: 100, closeKrw: 138000 }, { productCode: "US20100629001", close: 200, closeKrw: 276000 }, { productCode: "US19990122001", close: 50, closeKrw: 69000 }];
+      return new Response(JSON.stringify({ result: rows }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const toss = new TossProvider(tossFetch, null, () => new Date(t));
+    expect(await toss.usdKrw()).toBe(1380);
+    web = "down";
+    t += 2 * 60_000;
+    expect(await toss.usdKrw()).toBe(1380); // 잠깐 실패하면 마지막 값 (출처가 오락가락하지 않게)
+    web = "empty";
+    t += 2 * 60_000;
+    expect(await toss.usdKrw()).toBe(1380);
+    web = "down";
+    t += 2 * 60_000;
+    expect(await toss.usdKrw()).toBeNull();
+
+    // providers/index.ts 처럼 이어 붙인다: 토스 웹 → 토스 Open API 매매기준율 → 네이버
+    let openApi: number | null = 1411;
+    let naverCalls = 0;
+    const naverFetch = (async () => {
+      naverCalls++;
+      return new Response(JSON.stringify({ exchangeInfo: { closePrice: "1,412.50" } }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const f = new NaverFundamentals(naverFetch, () => new Date(t));
+    f.fxPrimary = async () => (await toss.usdKrw()) ?? openApi;
+    t += 60 * 60_000; // 한 시간째 토스 웹 장애
+    expect(await f.usdKrw()).toBe(1411);
+    openApi = null;
+    t += 61_000;
+    expect(await f.usdKrw()).toBe(1412.5);
+    expect(naverCalls).toBe(1);
+    web = "up";
+    t += 61_000;
+    expect(await f.usdKrw()).toBe(1380); // 토스 웹이 돌아오면 다시 토스 앱 환율
+  });
+});
+
+// ── 버그 점검 BH-21: 토스 웹 차트는 한 번에 봉 450개까지 — 앱 기본값(일봉 800·1분봉 600)이 늘 HTTP 400 ──────
+describe("토스 웹 봉 개수 한도 (BH-21)", () => {
+  /** 실제 토스 웹처럼 count 가 450 을 넘으면 HTTP 400, 아니면 최신순 count 개 */
+  function chartFetch(calls: string[]): typeof fetch {
+    return (async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      const count = Number(new URL(url).searchParams.get("count"));
+      if (count > 450) return new Response(JSON.stringify({ error: { statusCode: 400 } }), { status: 400 });
+      const intraday = url.includes("/min:");
+      const top = Date.parse("2026-09-22T06:00:00Z");
+      const candles = Array.from({ length: count }, (_, i) => {
+        const dt = intraday ? new Date(top - i * 60_000).toISOString() : `${new Date(top - i * 86_400_000).toISOString().slice(0, 10)}T00:00:00+09:00`;
+        return { dt, open: 100, high: 101, low: 99, close: 100, volume: 10 };
+      });
+      return new Response(JSON.stringify({ result: { candles } }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+  }
+
+  it("450개보다 많이 청하면 450개로 줄여 받는다 — 일봉 800·1분봉 600 도 실패하지 않는다", async () => {
+    const calls: string[] = [];
+    const p = new TossProvider(chartFetch(calls), null, NOW);
+    expect((await p.getCandles("035420", "D", 800)).candles.length).toBe(450);
+    expect((await p.getCandles("035420", "1m", 600)).candles.length).toBe(450);
+    expect((await p.getCandles("035420", "W", 260)).candles.length).toBe(260); // 한도 안이면 그대로
+    expect(calls.map((c) => Number(new URL(c).searchParams.get("count")))).toEqual([450, 450, 260]);
+  });
+});
+
+// ── 버그 점검 BH-61: 한국 낮(미국 주간거래)의 토스 웹 미국 가격을 '정규장'이라고 적음 ──────
+describe("토스 웹 미국 시세의 가격 기준 (BH-61)", () => {
+  /** 마지막 일봉 날짜만 바꾼 차트 (토스는 뉴욕 20:00 부터 다음 거래일 봉을 새로 연다). null 이면 차트 장애 */
+  function withLatest(latest: string | null): typeof fetch {
+    const base = fakeFetch();
+    return (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/v1/c-chart/us-s/US20100629001/")) {
+        if (!latest) return new Response("nope", { status: 500 });
+        const candles = [{ ...CHART_US.candles[0]!, dt: `${latest}T00:00:00-04:00` }, ...CHART_US.candles.slice(1)];
+        return new Response(JSON.stringify({ result: { ...CHART_US, candles } }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return base(input, init);
+    }) as typeof fetch;
+  }
+  const basis = async (now: string, latest: string | null) => (await new TossProvider(withLatest(latest), null, () => new Date(now)).getQuote("TSLA")).priceBasis;
+
+  it("한국 낮(뉴욕 20:00~04:00)에 다음 거래일 봉이 열려 있으면 '주간거래', 프리마켓이면 '최근 체결(시간외 포함)'", async () => {
+    expect(await basis("2026-09-25T11:19:00+09:00", "2026-09-25")).toBe("주간거래"); // 뉴욕 9/24 22:19
+    expect(await basis("2026-09-25T15:30:00+09:00", "2026-09-25")).toBe("주간거래"); // 뉴욕 9/25 02:30
+    expect(await basis("2026-09-25T19:00:00+09:00", "2026-09-25")).toBe("최근 체결(시간외 포함)"); // 뉴욕 9/25 06:00 프리마켓
+  });
+
+  it("정규장 중·정규장이 끝난 뒤(애프터마켓 가격은 afterMarket 으로 따로)·주말은 '정규장'", async () => {
+    expect(await basis("2026-09-25T23:30:00+09:00", "2026-09-25")).toBe("정규장"); // 뉴욕 10:30
+    expect(await basis("2026-09-25T06:30:00+09:00", "2026-09-24")).toBe("정규장"); // 뉴욕 9/24 17:30 애프터마켓
+    expect(await basis("2026-09-26T14:00:00+09:00", "2026-09-25")).toBe("정규장"); // 토요일
+    expect(await basis("2026-09-25T11:19:00+09:00", "2026-09-24")).toBe("정규장"); // 주간거래 체결이 없는 종목 (새 봉이 없음)
+  });
+
+  it("봉을 받지 못해 모르면 공식 API 와 같은 '최근 체결(시간외 포함)'", async () => {
+    expect(await basis("2026-09-25T11:19:00+09:00", null)).toBe("최근 체결(시간외 포함)");
   });
 });

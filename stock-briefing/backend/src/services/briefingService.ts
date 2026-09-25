@@ -55,8 +55,8 @@ export interface BriefingServiceDeps {
   collector: DataCollector;
   generator: TextGenerator;
   prompts: PromptStore;
-  /** 휴장일이면 해당 시장 종목을 건너뛴다 */
-  calendar?: { isTradingDay(code: string): Promise<boolean> } | null;
+  /** 세션이 다루는 그 시장의 거래일(briefingMarketDate)이 휴장일이면 해당 시장 종목을 건너뛴다 (providers/market/calendar.MarketCalendar) */
+  calendar?: { isTradingDate(market: "KR" | "US", date: string): Promise<boolean> } | null;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -93,6 +93,8 @@ export class BriefingService {
   private readonly startListeners: SessionStartListener[] = [];
   private readonly runDoneListeners: RunDoneListener[] = [];
   private running = false;
+  /** 지금 실행이 끝나기를 기다리는 정기 실행 (wait) */
+  private idleWaiters: Array<() => void> = [];
   private _lastRun: LastRun | null = null;
 
   constructor(private readonly deps: BriefingServiceDeps) {
@@ -129,8 +131,18 @@ export class BriefingService {
     return this.running;
   }
 
-  async runSession(session: BriefingSession, opts: { codes?: string[]; force?: boolean; trigger?: "schedule" | "manual" } = {}): Promise<RunResult> {
-    if (this.running) throw new Error("브리핑이 이미 실행 중입니다");
+  /**
+   * wait: 다른 실행(수동)이 도는 중이면 오류 대신 끝날 때까지 기다렸다가 이어서 돈다 (정기 실행용 — 예약 시각에 겹쳐도 회차가 사라지지 않게)
+   * staleBefore: 이 시각보다 먼저 만든 성공 브리핑은 이미 있어도 다시 만든다 (정기 실행이 예약 시각을 넘긴다 —
+   *   예약 시각 전에 수동으로 미리 만든 장중·장전 브리핑이 그날 회차로 남거나 회차 알림에서 빠지지 않게)
+   */
+  async runSession(
+    session: BriefingSession,
+    opts: { codes?: string[]; force?: boolean; trigger?: "schedule" | "manual"; wait?: boolean; staleBefore?: Date } = {},
+  ): Promise<RunResult> {
+    if (this.running && !opts.wait) throw new Error("브리핑이 이미 실행 중입니다");
+    // 끝나는 순간 여럿이 깨어나도 먼저 잡은 쪽만 돌고 나머지는 다시 기다린다 (검사와 잡기 사이에 await 없음)
+    while (this.running) await new Promise<void>((r) => this.idleWaiters.push(r));
     this.running = true;
     const startedAt = seoulIso(this.now());
     const date = seoulDate(this.now());
@@ -138,6 +150,18 @@ export class BriefingService {
     const created: SessionDone["created"] = [];
     const trigger = opts.trigger ?? "manual";
     const partial = !!opts.codes?.length;
+    // 휴장 판단은 세션마다 시장별로 한 번 — 세션 날짜(date)가 다루는 현지 거래일로 (자정을 넘겨도, 달력을 다시 받아도 종목마다 달라지지 않게)
+    const trading = new Map<"KR" | "US", Promise<boolean>>();
+    const tradingFor = (code: string): Promise<boolean> => {
+      const market = isKrCode(code) ? "KR" : "US";
+      let p = trading.get(market);
+      if (!p) {
+        const cal = this.deps.calendar;
+        p = cal ? Promise.resolve().then(() => cal.isTradingDate(market, briefingMarketDate(market, session, date))).catch(() => true) : Promise.resolve(true);
+        trading.set(market, p);
+      }
+      return p;
+    };
     for (const l of this.startListeners) {
       try {
         await l({ session, trigger, partial });
@@ -156,23 +180,20 @@ export class BriefingService {
         };
         if (!opts.force) {
           const existing = await this.find(stock.code, date, session);
-          if (existing && existing.status === "ok") {
+          if (existing && existing.status === "ok" && !madeBefore(existing, opts.staleBefore)) {
             results.push({ code: stock.code, name: stock.name, status: "ok", briefingId: existing.id, error: null, summary: existing.summary });
             continue;
           }
           // 휴장일(공휴일·주말)에는 시세가 움직이지 않아 의미 없는 브리핑이 되므로 건너뛴다 (강제 실행은 예외)
-          if (this.deps.calendar) {
-            const trading = await this.deps.calendar.isTradingDay(stock.code).catch(() => true);
-            if (!trading) {
-              this.deps.log?.info({ code: stock.code, session }, "휴장일이라 브리핑 건너뜀");
-              results.push({ code: stock.code, name: stock.name, status: "skipped", briefingId: null, error: "휴장일", summary: null });
-              continue;
-            }
+          if (!(await tradingFor(stock.code))) {
+            this.deps.log?.info({ code: stock.code, session }, "휴장일이라 브리핑 건너뜀");
+            results.push({ code: stock.code, name: stock.name, status: "skipped", briefingId: null, error: "휴장일", summary: null });
+            continue;
           }
         }
-        const { briefing: b, changeRate } = await this.generate(stock, session, date);
-        if (b.status === "ok") created.push({ briefing: b, changeRate });
-        results.push({ code: b.code, name: stock.name, status: b.status, briefingId: b.id, error: b.error, summary: b.status === "ok" ? b.summary : null });
+        const { briefing: b, changeRate, error } = await this.generate(stock, session, date);
+        if (!error) created.push({ briefing: b, changeRate });
+        results.push({ code: b.code, name: stock.name, status: error ? "failed" : "ok", briefingId: b.id, error, summary: error ? null : b.summary });
       }
     } finally {
       // 도중에 예외로 끝나도 이미 만든 브리핑은 알린다
@@ -194,6 +215,7 @@ export class BriefingService {
         }
       }
       this.running = false;
+      for (const w of this.idleWaiters.splice(0)) w();
     }
     const finishedAt = seoulIso(this.now());
     this._lastRun = {
@@ -229,8 +251,15 @@ export class BriefingService {
     return (await this.generate(stock, session, date)).briefing;
   }
 
-  /** 브리핑 한 건 + 브리핑 시점 등락률 (알림 묶음용) */
-  private async generate(stock: RegisteredStock, session: BriefingSession, date: string): Promise<{ briefing: Briefing; changeRate: number | null }> {
+  /**
+   * 브리핑 한 건 + 브리핑 시점 등락률 (알림 묶음용). error 는 이번 생성이 실패했을 때의 사유.
+   * 실패해도 같은 날짜·회차에 성공 브리핑이 이미 있으면(강제 다시 만들기) 그 본문을 지우지 않고 그대로 둔다 — briefing 은 남은 성공 브리핑
+   */
+  private async generate(
+    stock: RegisteredStock,
+    session: BriefingSession,
+    date: string,
+  ): Promise<{ briefing: Briefing; changeRate: number | null; error: string | null }> {
     const log = this.deps.log;
     const [snapshot, previous] = await Promise.all([this.deps.collector.collectBriefing(stock), this.previousSummary(stock.code, date, session)]);
     // 평균 단가는 종목 통화로 저장된다 (미국은 달러). JSON 의 quote.currency 와 맞추고, 시세를 못 받았으면 코드 규칙으로
@@ -298,10 +327,14 @@ export class BriefingService {
     await this.deps.db
       .insertInto("briefings")
       .values(values)
-      .onConflict((oc) => oc.columns(["code", "briefing_date", "session"]).doUpdateSet(values))
+      .onConflict((oc) => {
+        const update = oc.columns(["code", "briefing_date", "session"]).doUpdateSet(values);
+        // 실패 기록은 성공 브리핑을 덮어쓰지 않는다 (없거나 실패였던 행만)
+        return status === "ok" ? update : update.where("briefings.status", "<>", "ok");
+      })
       .execute();
     const saved = (await this.find(stock.code, date, session))!;
-    if (saved.status === "ok") {
+    if (status === "ok") {
       for (const l of this.listeners) {
         try {
           await l(saved);
@@ -309,8 +342,11 @@ export class BriefingService {
           log?.warn({ err: (e as Error).message }, "브리핑 리스너 오류");
         }
       }
+    } else if (saved.status === "ok") {
+      log?.info({ code: stock.code, session, date }, "다시 만들기 실패 — 이전 브리핑을 그대로 둠");
+      error = `${error} (이전 브리핑은 그대로 둡니다)`;
     }
-    return { briefing: saved, changeRate: snapshot.quote?.changeRate ?? null };
+    return { briefing: saved, changeRate: snapshot.quote?.changeRate ?? null, error };
   }
 
   // ── 조회 ──────────────────────────────────────────────────────
@@ -399,12 +435,33 @@ function toBriefing(r: {
   };
 }
 
+/** cutoff(정기 실행 시각)보다 먼저 만든 브리핑인지. 저장 시각은 초 단위라 cutoff 도 초로 내려 비교한다 */
+function madeBefore(b: Briefing, cutoff: Date | undefined): boolean {
+  if (!cutoff) return false;
+  const t = Date.parse(b.createdAt);
+  return !Number.isNaN(t) && t < Math.floor(cutoff.getTime() / 1000) * 1000;
+}
+
 function safeJson<T>(s: string): T | null {
   try {
     return JSON.parse(s) as T;
   } catch {
     return null;
   }
+}
+
+/**
+ * 브리핑 세션(서울 날짜 date)이 다루는 그 시장의 현지 거래일 — 휴장 판단 기준 ("지금"의 현지 날짜가 아니다).
+ *  - 한국: 세션 날짜 그대로 (오전은 장 시작 전, 오후는 장 마감 후)
+ *  - 미국 오후: 세션 날짜 (한국 오후는 뉴욕 새벽, 그날 밤 열릴 정규장에 딸린 주간거래 중)
+ *  - 미국 오전: 지난밤(세션 날짜 전날) 정규장. 월요일은 주말을 건너 금요일 — 금요일 정규장은 토요일 새벽(한국)에 끝나
+ *    평일 오전 브리핑이 아직 보지 못했다 (뉴욕 날짜로 오늘을 보면 일요일이라 휴장으로 빠졌다)
+ */
+export function briefingMarketDate(market: "KR" | "US", session: BriefingSession, date: string): string {
+  if (market === "KR" || session === "afternoon") return date;
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - (d.getUTCDay() === 1 ? 3 : 1));
+  return d.toISOString().slice(0, 10);
 }
 
 /** 요약은 알림 본문이므로 마크다운 기호를 걷어내고 3줄로 제한 */

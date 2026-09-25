@@ -164,6 +164,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     marketOpen: async (codes) => anySessionOpen(codes, await opts.providers.calendar.status(), now()),
     // 웹소켓이 이번 세션 체결을 주는 종목만 폴링에서 뺀다 (초록 점과 같은 기준 — 구독만으로 빼면 점은 켜졌는데 가격은 30초마다만 바뀐다)
     wsServed: (codes) => stockService.wsServed(codes),
+    // 미국 공식 API 시세의 애프터마켓·주말엔 토스 웹 가격이 정규장 종가라 보내지 않는다 (앱이 시간외 가격을 덮어쓰지 않게)
+    webOff: (codes) => stockService.webOff(codes),
     log,
   });
   app.addHook("onClose", async () => priceStream.stop());
@@ -201,6 +203,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       // 자동 동기화를 껐으면(TOSS_SYNC_MINUTES=0) 하지 않는다 — 잠금이 풀려 직접 고친 값을 덮어쓰지 않게
       ...(tossDeps?.autoSync.enabled ? { beforeRun: () => tossDeps!.autoSync.beforeBriefing() } : {}),
       log,
+      now,
     });
     scheduler.start();
     app.addHook("onClose", async () => scheduler?.stop());
@@ -408,7 +411,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   });
   await app.register(featureRoutes, { prefix: "/api/features", features });
   // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
-  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings });
+  // schedule: 브리핑 위젯 안내에 설정한 브리핑 시간을 쓴다 (BH-68 — 예전에는 늘 '평일 08:30·16:00')
+  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get() });
   await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });

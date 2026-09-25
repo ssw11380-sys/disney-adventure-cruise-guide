@@ -6,6 +6,14 @@ import { byMove } from "./briefingDigest";
  */
 export const SECONDS_PER_STOCK = 25;
 
+/**
+ * 예약 실행 한 번이 시작부터 알림 판단까지 걸리는 예상 시간(초). 종목마다 약 25초에, 앞뒤 작업(실행 전 토스 잔고 읽기·실행 뒤 계좌 요약) 몫으로
+ * 한 종목만큼 더한다 — 서버는 이것까지 끝난 시각으로 조용한 시간을 본다 (BH-58). 종목 수를 모르면(0) 0
+ */
+export function sessionSeconds(stocks: number): number {
+  return stocks > 0 ? (stocks + 1) * SECONDS_PER_STOCK : 0;
+}
+
 const SESSION_KO = { morning: "오전", afternoon: "오후" } as const;
 
 /** "약 7분" / "약 30초" */

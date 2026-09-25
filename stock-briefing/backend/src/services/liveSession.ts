@@ -1,8 +1,8 @@
 import type { QuoteSession } from "../domain/types.js";
 import { isKrCode } from "../lib/codes.js";
-import type { MarketState, MarketStatus } from "../providers/market/calendar.js";
+import { knownTradingDays, type MarketState, type MarketStatus } from "../providers/market/calendar.js";
 import type { StockSessionFacts } from "../providers/market/tossRealtime.js";
-import { US_HOLIDAYS } from "./marketContext.js";
+import { US_HOLIDAYS, usRegularCloseMinutes } from "./marketContext.js";
 
 /**
  * 종목 하나의 "지금 거래 세션"과 초록 점(실시간) 판단 — 순수 함수 (단위 테스트: test/liveSession.test.ts).
@@ -82,34 +82,12 @@ function localToUtc(date: string, minutes: number, tz: string): number {
 
 const iso = (t: number) => new Date(t).toISOString();
 
-/** 토스 달력을 믿을 수 있을 때만 (요일 추정 fallback 은 미국을 04:00~20:00 로 보는 등 기준이 달라 쓰지 않는다) */
+/** 토스 달력을 믿을 수 있을 때만 (요일 추정 fallback 은 한국 평일 휴장일·조기 폐장 시각을 몰라 쓰지 않는다) */
 const tossState = (s: MarketState | null | undefined): MarketState | null => (s && s.source === "toss" ? s : null);
 
 /**
- * 토스 달력이 알려 주는 날짜별 거래일 여부 (그 시장 현지 날짜): 지금 세션·마지막 세션·다음 세션의 날짜는 거래일, 마지막과 다음 사이는 휴장.
- * 날짜로 적어 두므로 몇 시간·며칠 전에 받은 달력이어도(조회가 실패해 마지막 값을 쓸 때, keepTossCalendar) 아는 날은 틀리지 않는다.
- * 모르는 날은 넣지 않는다 (isTradingDay 는 받은 날 기준이라 쓰지 않는다)
- */
-function knownDays(cal: MarketState | null, tz: string): Map<string, boolean> {
-  const known = new Map<string, boolean>();
-  if (!cal) return known;
-  const day = (x: string | null | undefined) => (x ? zoned(Date.parse(x), tz).date : null);
-  if (cal.isOpen) {
-    const c = day(cal.closesAt);
-    if (c) known.set(c, true);
-    return known;
-  }
-  const last = day(cal.lastClose);
-  const next = day(cal.opensAt);
-  if (last) known.set(last, true);
-  if (next) known.set(next, true);
-  if (last && next) for (let d = addDays(last, 1); d < next && known.size < 40; d = addDays(d, 1)) known.set(d, false);
-  return known;
-}
-
-/**
  * 달력 조회가 실패해 요일 추정(fallback)이 오면 시장별로 마지막에 받은 토스 달력을 그대로 쓴다.
- * 날짜별 사실(knownDays)로만 읽으므로 오래된 값이어도 틀리지 않는다 — 추석 같은 평일 휴장일에 조회가 한 번 실패해도 장중으로 보지 않게
+ * 날짜별 사실(calendar.knownTradingDays)로만 읽으므로 오래된 값이어도 틀리지 않는다 — 추석 같은 평일 휴장일에 조회가 한 번 실패해도 장중으로 보지 않게
  */
 export function keepTossCalendar(prev: MarketStatus | null, next: MarketStatus): MarketStatus {
   if (!prev) return next;
@@ -137,7 +115,7 @@ const KR_LABEL: Record<KrOpenPhase, string> = { nxt_pre: "한국 NXT 프리마�
  * 한국 평일 휴장일(추석 등) 목록이 없어 짐작한 날은 known=false (점은 체결 증거가 있는 종목만)
  */
 function krTradingDay(date: string, cal: MarketState | null): { day: boolean; known: boolean } {
-  const k = knownDays(cal, TZ.KR).get(date);
+  const k = knownTradingDays("KR", cal).get(date);
   return k === undefined ? { day: weekday(date), known: false } : { day: k, known: true };
 }
 
@@ -202,7 +180,6 @@ function krSession(t: number, calendar: MarketStatus | null | undefined, stock: 
 
 const US_PRE = 4 * 60;
 const US_REGULAR = 9 * 60 + 30;
-const US_CLOSE = 16 * 60;
 const US_AFTER_LEN = 4 * 60;
 const US_OVERNIGHT = 20 * 60;
 
@@ -211,16 +188,8 @@ const US_OVERNIGHT = 20 * 60;
  * 모르는 날은 평일이면서 US_HOLIDAYS 에 없는 날 — 목록 밖 임시 휴장도 달력이 알려 주면 지킨다
  */
 function usRegularDays(cal: MarketState | null): (date: string) => boolean {
-  const known = knownDays(cal, TZ.US);
+  const known = knownTradingDays("US", cal);
   return (date) => known.get(date) ?? (weekday(date) && !US_HOLIDAYS.has(date));
-}
-
-/** 그날 정규장 마감(분): 토스 달력의 마감 시각이 그날이면 그 값(조기 폐장 13:00), 아니면 16:00 */
-function usCloseMinutes(cal: MarketState | null, date: string): number {
-  const end = cal ? (cal.isOpen ? cal.closesAt : (cal.lastClose ?? null)) : null;
-  if (!end) return US_CLOSE;
-  const z = zoned(Date.parse(end), TZ.US);
-  return z.date === date && z.minutes >= 10 * 60 && z.minutes <= 17 * 60 ? z.minutes : US_CLOSE;
 }
 
 function usSession(t: number, calendar: MarketStatus | null | undefined, stock: StockSessionFacts | null | undefined): StockSession {
@@ -242,7 +211,8 @@ function usSession(t: number, calendar: MarketStatus | null | undefined, stock: 
   });
   const tomorrow = addDays(date, 1);
   if (regularDay(date)) {
-    const close = usCloseMinutes(cal, date);
+    // 그날 정규장 마감: 토스 달력의 마감 시각(조기 폐장 13:00) → 조기 폐장 목록 → 16:00 (브리핑 장 상태와 같은 값)
+    const close = usRegularCloseMinutes(date, cal);
     if (m < US_PRE) return open("overnight", at(addDays(date, -1), US_OVERNIGHT), at(date, US_PRE));
     if (m < US_REGULAR) return open("pre", at(date, US_PRE), at(date, US_REGULAR));
     if (m < close) return open("regular", at(date, US_REGULAR), at(date, close));

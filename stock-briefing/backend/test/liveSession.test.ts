@@ -659,10 +659,12 @@ describe("세션 표 — 미국 (서머타임·표준시, 토스 웹이 모든 �
     expect(r).toEqual({ [NVR]: { phase: "pre", realtime: true } });
   });
 
-  it("정규장 10:00 EDT·애프터마켓 17:00 EDT: 모든 종목", async () => {
+  it("정규장 10:00 EDT·애프터마켓 17:00 EDT: 모든 종목 — 애프터마켓은 웹소켓이 이번 세션 시간외 체결을 줄 때 (토스 웹 가격은 정규장 종가라 3초 갱신이 아니다, BH-20)", async () => {
     const us: [string, string] = ["2026-09-22T20:00:00Z", "2026-09-23T13:30:00Z"];
     expect(await table({ now: "2026-09-22T10:00:00-04:00", asOf: { [NVR]: "2026-09-21T16:00:00-04:00" }, facts: { [NVR]: US_NO_DAY }, kr: KR_922, us })).toEqual({ [NVR]: { phase: "regular", realtime: true } });
-    expect(await table({ now: "2026-09-22T17:00:00-04:00", asOf: { [NVR]: "2026-09-22T16:00:00-04:00" }, facts: { [NVR]: US_NO_DAY }, kr: KR_922, us })).toEqual({ [NVR]: { phase: "after", realtime: true } });
+    const after = { now: "2026-09-22T17:00:00-04:00", asOf: { [NVR]: "2026-09-22T16:00:00-04:00" }, facts: { [NVR]: US_NO_DAY }, kr: KR_922, us };
+    expect(await table({ ...after, ws: { [NVR]: { price: 100.2, ts: "2026-09-22T16:59:30-04:00" } } })).toEqual({ [NVR]: { phase: "after", realtime: true } });
+    expect(await table(after)).toEqual({ [NVR]: { phase: "after", realtime: false } });
   });
 
   it("주간거래 21:00 EST(1월): 지원 종목은 체결이 없어도 켜고, 미지원은 끄고, 모르면 이 세션(20:00 뒤) 체결이 있을 때만", async () => {
@@ -915,10 +917,11 @@ describe("미국 애프터마켓: 마감 시각에 찍힌 정규장 종가 체�
     expect(r["RTX"]).toMatchObject({ phase: "after", realtime: true });
   });
 
-  it("토스 웹 정상: 실시간 스트림은 종가 체결뿐인 종목을 계속 토스 웹으로 폴링한다 (wsServed 에서 뺀다)", async () => {
+  it("토스 웹 정상이어도: 종가 체결뿐인 종목은 웹소켓이 맡은 종목이 아니고(wsServed 밖), 애프터마켓 토스 웹 가격은 정규장 종가라 붙이지 않고 스트림도 폴링하지 않는다 (webOff, BH-20)", async () => {
     const only = await afterClose({ now: "2026-09-23T16:05:00-04:00", close: CLOSE, ws: { VRT: CLOSE }, codes: ["VRT"], kr: KR_CHUSEOK, us: US_923 });
-    expect((await only.poll(100.3))["VRT"]).toMatchObject({ price: 100.3, realtime: true }); // 토스 웹 3초 갱신으로 켜지고 가격도 따라간다
+    expect((await only.poll(100.3))["VRT"]).toMatchObject({ price: 100, realtime: false }); // 공식 API 가격 그대로, 3초 갱신이 아니니 점도 없다
     expect([...(await only.service.wsServed(["VRT"]))]).toEqual([]);
+    expect([...(await only.service.webOff(["VRT"]))]).toEqual(["VRT"]);
   });
 
   it("다른 종목이 시간외 체결을 웹소켓으로 받아도: 종목별로 그 종목의 웹소켓 체결이 이번 세션 것이고 조용하지 않을 때만 폴링에서 뺀다 (가격 출처 liveTick 과 같은 기준)", async () => {
@@ -928,5 +931,46 @@ describe("미국 애프터마켓: 마감 시각에 찍힌 정규장 종가 체�
     const r = await s.poll(100);
     expect(Object.values(r).every((x) => x.realtime)).toBe(true);
     expect([...(await s.service.wsServed(["RTX", "GD", "VRT", "NVR"]))]).toEqual(["RTX"]);
+  });
+});
+
+// ── 버그 점검 BH-20: 미국 공식 API 시세(최근 체결, 시간외 포함)를 토스 웹 정규장 종가로 덮어씀 ──────
+// 토스 웹 stock-prices 의 미국 close 는 정규장이 끝난 뒤엔 정규장 종가다 (애프터마켓 가격은 afterMarketClose 로 따로, 일봉에도 시간외는 없다).
+// 웹소켓 체결이 없는 종목(서버를 막 다시 켬·거래가 뜸함·웹소켓 끊김)은 애프터마켓·주말 내내 시간외 가격이 정규장 종가로 바뀌었다
+describe("미국 공식 API 의 시간외 가격을 토스 웹 정규장 종가로 덮어쓰지 않는다 (BH-20)", () => {
+  const US_923: [string, string] = ["2026-09-23T20:00:00Z", "2026-09-24T13:30:00Z"];
+  const CLOSE = "2026-09-23T16:00:00-04:00";
+
+  it("애프터마켓(16:30 EDT)에 웹소켓 체결이 없으면: 가격은 공식 API 시간외 가격, 등락도 그 가격으로, 토스 웹 3초 갱신으로 점을 켜지 않는다", async () => {
+    const s = await afterClose({ now: "2026-09-23T16:30:00-04:00", close: CLOSE, ws: {}, codes: ["TSLA"], kr: KR_CHUSEOK, us: US_923 });
+    s.rest["TSLA"] = { price: 377, asOf: "2026-09-23T16:29:40-04:00" };
+    expect((await s.poll(376.31))["TSLA"]).toEqual({ price: 377, realtime: false, phase: "after" });
+    // 실시간 스트림도 이 종목은 토스 웹으로 폴링하지 않는다 (앱이 시간외 가격을 정규장 종가로 덮어쓰지 않게)
+    expect([...(await s.service.webOff(["TSLA"]))]).toEqual(["TSLA"]);
+  });
+
+  it("웹소켓이 이번 세션 시간외 체결을 주면 그 체결을 따라가고 점도 켠다", async () => {
+    const s = await afterClose({ now: "2026-09-23T16:30:00-04:00", close: CLOSE, ws: { TSLA: "2026-09-23T16:29:58-04:00" }, codes: ["TSLA"], kr: KR_CHUSEOK, us: US_923 });
+    s.rest["TSLA"] = { price: 377, asOf: "2026-09-23T16:29:40-04:00" };
+    expect((await s.poll(376.31))["TSLA"]).toEqual({ price: 100, realtime: true, phase: "after" }); // 웹소켓 체결가(가짜 100)
+  });
+
+  it("주말(토 14:00 KST): 금요일 시간외 가격 그대로 — 서버를 다시 켜도 토스 웹 정규장 종가로 바뀌지 않는다", async () => {
+    const us: [string, string] = ["2026-09-25T20:00:00Z", "2026-09-28T13:30:00Z"];
+    const s = await afterClose({ now: "2026-09-26T14:00:00+09:00", close: "2026-09-25T16:00:00-04:00", ws: {}, codes: ["CPB"], kr: KR_CHUSEOK, us });
+    s.rest["CPB"] = { price: 20.1, asOf: "2026-09-25T19:58:00-04:00" };
+    expect((await s.poll(19.85))["CPB"]).toEqual({ price: 20.1, realtime: false, phase: "holiday" });
+    expect([...(await s.service.webOff(["CPB"]))]).toEqual(["CPB"]);
+  });
+
+  it("정규장·주간거래에는 그대로 토스 웹 가격을 따라간다 (그때 토스 웹 close 도 그 세션 체결가)", async () => {
+    const reg = await afterClose({ now: "2026-09-24T10:00:00-04:00", close: CLOSE, ws: {}, codes: ["TSLA"], kr: KR_CHUSEOK, us: US_923 });
+    reg.rest["TSLA"] = { price: 377, asOf: "2026-09-24T09:59:40-04:00" };
+    expect((await reg.poll(377.2))["TSLA"]).toEqual({ price: 377.2, realtime: true, phase: "regular" });
+    expect((await reg.service.webOff(["TSLA"])).size).toBe(0);
+    const night = await afterClose({ now: "2026-09-23T21:00:00-04:00", close: CLOSE, ws: {}, codes: ["TSLA"], kr: KR_CHUSEOK, us: US_923 });
+    night.rest["TSLA"] = { price: 377, asOf: "2026-09-23T20:59:30-04:00" };
+    expect((await night.poll(377.4))["TSLA"]).toEqual({ price: 377.4, realtime: true, phase: "overnight" });
+    expect((await night.service.webOff(["TSLA"])).size).toBe(0);
   });
 });

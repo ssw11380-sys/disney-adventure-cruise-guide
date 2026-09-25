@@ -2,15 +2,15 @@ import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { sentence, speakAmount } from "@/lib/a11y";
 import { formatWon, isUsMarket } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
-import { fxOf } from "@/lib/portfolio";
+import { fxOf, isHolding, sharedFx } from "@/lib/portfolio";
 
 /**
  * 비중 보기 (플래그 allocationView): 잔고를 국내·해외 / 통화 / 업종 / 종목으로 나눈 원화 비중.
  * React Native 를 불러오지 않는 순수 모듈 (단위 테스트). 사실(금액·비중)만 보여 주고 판단 문구는 넣지 않는다.
  *
  * 금액은 잔고 탭 총 평가금액과 같은 기준에서 나온다 (portfolio.summarize 와 같은 evalView·환율·비용 차감 설정):
- *  - 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목은 그 종목 시세의 환율(fxOf)로 원화 환산
- *  - 환율을 모르는 해외 종목이 하나라도 있으면 잔고 탭 합계가 "원화 종목"만이므로 여기서도 원화 종목만 센다
+ *  - 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목은 그 종목 시세의 환율(fxOf)로 원화 환산 — 시세에 환율이 없으면 다른 달러 시세의 환율(sharedFx)
+ *  - 환율을 끝내 모르는 해외 종목이 하나라도 있으면 잔고 탭 합계가 "원화 종목"만이므로 여기서도 원화 종목만 센다
  *  - 수량이 있는데 시세·평가가 없는 종목은 잔고 합계에 없으므로 빼고, 몇 종목인지 알린다
  * 비중은 소수 첫째 자리로 최대 나머지 방식 반올림을 해 차트마다 합이 정확히 100.0 이다.
  * 금액도 같은 방식으로 원 단위를 맞춰, 차트마다 합이 화면의 총 평가금액(원 단위 반올림)과 같다.
@@ -163,15 +163,16 @@ export function allocation(list: RegisteredWithQuote[], afterCost: boolean): All
   // 잔고 합계(summarize)에 들어가는 종목: 평가와 시세가 모두 있는 것
   const held: RegisteredWithQuote[] = [];
   for (const s of list) {
-    const owned = (s.quantity ?? 0) > 0 || !!s.evaluation;
-    if (!owned) continue; // 관심 종목
+    if (!isHolding(s)) continue; // 관심 종목
     if (!s.quote) excluded.noQuote += 1;
     else if (!s.evaluation) excluded.noEval += 1;
     else held.push(s);
   }
-  // 환율을 모르는 해외 종목이 하나라도 있으면 잔고 탭도 원화 종목만 합친다 → 같은 기준
+  // 환율을 끝내 모르는 해외 종목이 하나라도 있으면 잔고 탭도 원화 종목만 합친다 → 같은 기준 (시세에 환율이 없으면 다른 달러 시세의 환율, BH-04)
   const curOf = (s: RegisteredWithQuote): Currency => s.quote!.currency ?? "KRW";
-  const krwOnly = held.some((s) => curOf(s) === "USD" && !fxOf(s));
+  const shared = sharedFx(list);
+  const fxFor = (s: RegisteredWithQuote) => fxOf(s) ?? (curOf(s) === "USD" ? shared : null);
+  const krwOnly = held.some((s) => curOf(s) === "USD" && !fxFor(s));
   const items: Item[] = [];
   for (const s of held) {
     const cur = curOf(s);
@@ -179,7 +180,7 @@ export function allocation(list: RegisteredWithQuote[], afterCost: boolean): All
       excluded.noFx += 1;
       continue;
     }
-    const v = evalView(s.evaluation, { afterCost, toKrw: true, currency: cur, fx: fxOf(s) });
+    const v = evalView(s.evaluation, { afterCost, toKrw: true, currency: cur, fx: fxFor(s) });
     if (!v) continue;
     const industry = s.quote!.industry?.trim() || null;
     items.push({ code: s.code, name: s.name, us: isUsMarket(s.market), currency: cur, industry, value: Math.max(0, v.marketValue) });

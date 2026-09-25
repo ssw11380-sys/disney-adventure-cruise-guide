@@ -36,7 +36,7 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
   const frame = { width: o.width, height: o.height, fontScale: o.fontScale, palette };
   switch (name) {
     case WIDGET_NAMES.briefing:
-      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={o.now} market={data.market} refreshing={o.refreshing} {...frame} />;
+      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={o.now} market={data.market} refreshing={o.refreshing} brief={data.brief ?? null} {...frame} />;
     case WIDGET_NAMES.asset:
       return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={o.now} market={data.market} {...frame} />;
     case WIDGET_NAMES.market:
@@ -68,6 +68,8 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
           indexLine={data.features.indexLine}
           indices={agedIndices(data.indices, data.indicesAt, o.now)}
           refreshing={o.refreshing}
+          polish={data.features.polish}
+          rowKrw={data.rowKrw !== false}
           {...frame}
         />
       );

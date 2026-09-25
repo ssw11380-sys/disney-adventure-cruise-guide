@@ -62,6 +62,8 @@ export interface RowSpeech {
   /** 관심 종목의 전일 대비·거래량 */
   move?: { text: string; sign: number | null } | null;
   volume?: string;
+  /** 맨 끝에 읽을 안내 (평가가 없는 보유 종목의 "합계 제외") */
+  note?: string;
 }
 
 /**
@@ -83,5 +85,6 @@ export function stockRowLabel(r: RowSpeech): string {
     h && speakRate(h.profitRate) ? `수익률 ${speakRate(h.profitRate)}` : null,
     !h && r.move ? (speakMove(r.move.text, r.move.sign) ? `전일 대비 ${speakMove(r.move.text, r.move.sign)}` : null) : null,
     !h && r.volume ? `거래량 ${r.volume}` : null,
+    r.note,
   ]);
 }

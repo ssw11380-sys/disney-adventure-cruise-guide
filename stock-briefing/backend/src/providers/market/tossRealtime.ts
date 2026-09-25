@@ -59,14 +59,26 @@ export interface StockSessionFacts {
 export interface SocketLike extends EventEmitter {
   send(data: string): void;
   close(): void;
+  /** 핸드셰이크 중이어도 바로 끊는다 (ws). 없으면 close() */
+  terminate?(): void;
   readyState?: number;
 }
 export type SocketFactory = (url: string, headers: Record<string, string>) => SocketLike;
 
-const defaultSocketFactory: SocketFactory = (url, headers) => new WebSocket(url, { headers }) as unknown as SocketLike;
+/** 핸드셰이크 응답을 기다리는 최대 시간. 넘으면 ws 가 끊고 close 를 낸다 (멈춘 핸드셰이크가 소켓을 붙잡지 않게) */
+const HANDSHAKE_TIMEOUT_MS = 10_000;
+/** 첫 재연결 대기. 실패할 때마다 두 배, 최대 2분 */
+const RECONNECT_MS = 5_000;
 
 export class TossRealtime extends EventEmitter implements LiveTicks {
   private socket: SocketLike | null = null;
+  /** 토큰을 받는 중 (연결 시도는 한 번에 하나 — 겹치면 소켓이 둘 생겨 옛 소켓의 close 가 살아 있는 연결을 끊긴 것으로 만든다) */
+  private connecting = false;
+  /**
+   * 핸드셰이크가 401(토큰 무효)로 거절된 토큰 → 다음 연결은 이보다 새 토큰으로 (REST 가 그 사이 새로 받았으면 그것을, 아니면 한 번 새로 받는다).
+   * 조건 없이 새로 받으면 REST 요청들이 방금 받은 토큰을 무효로 만든다 (클라이언트당 토큰 1개)
+   */
+  private rejectedToken: string | null = null;
   private codes: string[] = [];
   /** 내 주문·체결 이벤트(personal:order)를 받을 계좌 */
   private accounts: string[] = [];
@@ -75,7 +87,7 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
   private readonly ticks = new Map<string, LiveTick>();
   private pingTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private backoffMs = 5000;
+  private backoffMs: number;
   private stopped = false;
   private connected = false;
   private lastMessageAt: string | null = null;
@@ -88,10 +100,15 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
       socketFactory?: SocketFactory;
       url?: string;
       pingIntervalMs?: number;
+      /** 첫 재연결 대기 (기본 5초) */
+      reconnectMs?: number;
+      /** 핸드셰이크 응답 대기 (기본 10초, 기본 소켓만) */
+      handshakeTimeoutMs?: number;
       now?: () => Date;
     } = {},
   ) {
     super();
+    this.backoffMs = opts.reconnectMs ?? RECONNECT_MS;
   }
 
   private get log(): TossOpenApiLogger {
@@ -134,10 +151,14 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
 
   stop(): void {
     this.stopped = true;
+    const socket = this.socket;
+    if (socket) this.detach(socket);
     this.clearTimers();
-    this.socket?.close();
-    this.socket = null;
-    this.connected = false;
+    try {
+      socket?.close();
+    } catch {
+      /* 이미 닫힘 */
+    }
   }
 
   private clearTimers(): void {
@@ -147,22 +168,33 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
     this.reconnectTimer = null;
   }
 
+  /** 연결 시도. 이미 소켓이 있거나 토큰을 받는 중이면 아무것도 하지 않는다 (setCodes·setAccounts·재연결 타이머가 겹쳐도 소켓은 하나) */
   private async connect(): Promise<void> {
-    if (this.stopped || this.socket) return;
+    if (this.stopped || this.socket || this.connecting) return;
+    this.connecting = true;
     let token: string;
     try {
-      token = await this.client.getToken();
+      // 401 로 거절된 뒤면 거절된 토큰은 다시 쓰지 않는다
+      token = await this.client.getToken(this.rejectedToken ?? undefined);
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e);
       this.scheduleReconnect();
       return;
+    } finally {
+      this.connecting = false;
     }
-    const factory = this.opts.socketFactory ?? defaultSocketFactory;
+    // 토큰을 기다리는 사이 멈췄으면 만들지 않는다
+    if (this.stopped || this.socket) return;
+    this.rejectedToken = null;
+    const factory: SocketFactory =
+      this.opts.socketFactory ?? ((url, headers) => new WebSocket(url, { headers, handshakeTimeout: this.opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS }) as unknown as SocketLike);
     const socket = factory(this.opts.url ?? TOSS_OPENAPI_WS, { authorization: `Bearer ${token}` });
     this.socket = socket;
+    // 이벤트는 지금 소켓의 것만 처리한다 — 버린 소켓(멈춤·거절)의 늦은 close·오류가 새 연결의 상태·핑 타이머를 건드리지 않게
     socket.on("open", () => {
+      if (this.socket !== socket) return this.hangUp(socket);
       this.connected = true;
-      this.backoffMs = 5000;
+      this.backoffMs = this.opts.reconnectMs ?? RECONNECT_MS;
       this.lastError = null;
       this.declare();
       this.pingTimer = setInterval(() => {
@@ -174,23 +206,47 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
       }, this.opts.pingIntervalMs ?? 60_000);
       this.emit("open");
     });
-    socket.on("message", (data: unknown) => this.onMessage(String(data)));
+    socket.on("message", (data: unknown) => {
+      if (this.socket === socket) this.onMessage(String(data));
+    });
     socket.on("error", (err: unknown) => {
+      if (this.socket !== socket) return; // 핸드셰이크를 직접 끊을 때 나는 오류가 거절 까닭(lastError)을 덮지 않게
       this.lastError = err instanceof Error ? err.message : String(err);
       this.log.warn({ err: this.lastError }, "토스증권 실시간 소켓 오류");
     });
     socket.on("unexpected-response", (_req: unknown, res: { statusCode?: number }) => {
-      this.lastError = `handshake HTTP ${res?.statusCode ?? "?"}${res?.statusCode === 403 ? " (허용 IP 미등록?)" : res?.statusCode === 401 ? " (토큰 무효)" : ""}`;
-      if (res?.statusCode === 401) this.client.getToken(true).catch(() => undefined);
+      if (this.socket !== socket) return;
+      const status = res?.statusCode;
+      this.lastError = `handshake HTTP ${status ?? "?"}${status === 403 ? " (허용 IP 미등록?)" : status === 401 ? " (토큰 무효)" : ""}`;
+      this.log.warn({ err: this.lastError }, "토스증권 실시간 핸드셰이크 거절");
+      if (status === 401) this.rejectedToken = token;
+      // 이 이벤트를 들으면 ws 는 핸드셰이크를 끊지 않고 close 도 내지 않는다 → 직접 버리고 끊은 뒤 기다렸다 다시 연결
+      // (예전: 소켓이 연결 중 상태로 남아 서버를 다시 켤 때까지 다시 연결하지 않았다)
+      this.detach(socket);
+      this.hangUp(socket);
     });
-    socket.on("close", () => {
-      this.connected = false;
-      this.subscribed = [];
-      this.socket = null;
-      this.clearTimers();
-      this.emit("close");
-      if (!this.stopped) this.scheduleReconnect();
-    });
+    socket.on("close", () => this.detach(socket));
+  }
+
+  /** 지금 소켓을 버린다: 연결 상태·구독·타이머를 정리하고 (멈춘 게 아니면) 재연결을 건다. 이미 버린 소켓이면 아무것도 하지 않는다 */
+  private detach(socket: SocketLike): void {
+    if (this.socket !== socket) return;
+    this.socket = null;
+    this.connected = false;
+    this.subscribed = [];
+    this.clearTimers();
+    this.emit("close");
+    if (!this.stopped) this.scheduleReconnect();
+  }
+
+  /** 소켓을 끊는다 (핸드셰이크 중이어도 — ws terminate, 없으면 close). 끊다 나는 오류는 무시 */
+  private hangUp(socket: SocketLike): void {
+    try {
+      if (socket.terminate) socket.terminate();
+      else socket.close();
+    } catch {
+      /* 이미 닫힘 */
+    }
   }
 
   private scheduleReconnect(): void {

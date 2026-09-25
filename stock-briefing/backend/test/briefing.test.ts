@@ -137,6 +137,43 @@ describe("briefing pipeline", () => {
     expect(again.status).toBe("ok");
   });
 
+  it("강제 다시 만들기가 실패해도 이미 있던 정상 브리핑은 그대로 두고, 실패는 결과로만 알린다 (BH-12·BH-17)", async () => {
+    await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning" } });
+    type Row = { id: number; code: string; status: string; summary: string; detail: string };
+    const morningRows = async () => ((await app.inject({ method: "GET", url: "/api/briefings?date=2026-09-22&session=morning" })).json() as Row[]).sort((a, b) => a.id - b.id);
+    const before = await morningRows();
+    expect(before.map((b) => b.status)).toEqual(["ok", "ok"]);
+
+    // 상세의 '이 종목 다시 만들기' (한 종목, force) 가 모델 장애로 실패
+    gen.opts.failKind = "api";
+    const one = (await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", codes: ["000660"], force: true } })).json();
+    expect(one.results[0]).toMatchObject({ code: "000660", status: "failed" });
+    expect(await morningRows()).toEqual(before);
+
+    // 탭의 전체 수동 생성 (force) 도 실패
+    const all = (await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", force: true } })).json();
+    expect(all.results.map((r: { status: string }) => r.status)).toEqual(["failed", "failed"]);
+
+    const after = await morningRows();
+    expect(after.map((b) => [b.id, b.status, b.summary, b.detail])).toEqual(before.map((b) => [b.id, b.status, b.summary, b.detail]));
+    const latest = (await app.inject({ method: "GET", url: "/api/briefings/latest" })).json() as Array<{ latest: { status: string } }>;
+    expect(latest.map((l) => l.latest.status)).toEqual(["ok", "ok"]);
+    // 앱의 '다시 만들기 실패' 창: 실패 사유와 함께 이전 브리핑이 남았다고 알린다 (다시 누르면 되는 id 도 그대로)
+    expect(one.results[0].error).toContain("가짜 실패");
+    expect(one.results[0].error).toContain("이전 브리핑");
+    expect(one.results[0].briefingId).toBe(before[0]!.id);
+    // 상태 배너(/health)에는 이번 실행의 실패가 남는다
+    expect(app.briefingService.lastRun).toMatchObject({ ok: 0, failed: 2 });
+
+    // 이미 실패로 남은 건은 새 실패 사유로 바뀐다 (성공 브리핑이 없을 때만 실패를 저장)
+    await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "afternoon", codes: ["005930"] } });
+    gen.opts.failKind = "refusal";
+    await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "afternoon", codes: ["005930"], force: true } });
+    const [pm] = (await app.inject({ method: "GET", url: "/api/briefings?code=005930&session=afternoon" })).json();
+    expect(pm).toMatchObject({ status: "failed" });
+    expect(pm.error).toContain("refusal");
+  });
+
   it("latest 는 등록 종목별 최근 브리핑을 준다 (없으면 null)", async () => {
     await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", codes: ["000660"] } });
     const latest = (await app.inject({ method: "GET", url: "/api/briefings/latest" })).json();

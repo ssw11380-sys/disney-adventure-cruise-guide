@@ -7,7 +7,7 @@ import { keepTossCalendar, realtimeOf, sessionAt, toQuoteSession, tradedInSessio
 import { wsCovered } from "./priceStream.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { Db } from "../db/index.js";
-import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock } from "../domain/types.js";
+import type { CandlePeriod, CandleSeries, ListedStock, Quote, RegisteredStock, SessionPhase } from "../domain/types.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
 import { mapLimit } from "../lib/concurrency.js";
 import { holdingsWriteLock } from "../lib/mutex.js";
@@ -100,6 +100,20 @@ interface WsTrust {
   wsLive: boolean;
   start: number;
   now: number;
+}
+
+/**
+ * 토스 웹 미국 close 가 정규장 종가인 세션: 정규장이 끝난 뒤(애프터마켓)·장 마감·휴장(주말 포함).
+ * 애프터마켓 체결은 afterMarketClose 로 따로 오고 일봉·close 에는 없다 (주간거래·프리마켓은 다음 거래일 봉과 close 에 들어간다)
+ */
+const US_WEB_REGULAR_CLOSE: ReadonlySet<SessionPhase> = new Set(["after", "closed", "holiday"]);
+
+/**
+ * 토스 웹 가격이 이 시세보다 뒤처진 정규장 종가인지: 미국 공식 API 시세("최근 체결(시간외 포함)")의 애프터마켓·장 마감·휴장.
+ * 붙이면 공식 API 의 시간외 가격이 정규장 종가로 되돌아간다 (예전: 웹소켓 체결이 없는 종목 — 서버를 막 다시 켬·거래가 뜸함·끊김 — 은 애프터마켓·주말 내내)
+ */
+function webIsRegularClose(quote: Quote, phase: SessionPhase): boolean {
+  return !isKrCode(quote.code) && quote.source.startsWith("toss") && quote.source !== "toss" && US_WEB_REGULAR_CLOSE.has(phase);
 }
 
 /** 스냅샷과 체결이 같은 거래일인지 (한국은 서울 날짜 — 08:00 전은 전날, 미국은 뉴욕 날짜 — 20:00 이후 주간거래는 다음 거래일. 앱 lib/marketTime 과 같다) */
@@ -917,6 +931,24 @@ export class StockService {
   }
 
   /**
+   * 지금 토스 웹 가격을 붙이지 않는 종목 (webIsRegularClose — 미국 공식 API 시세의 애프터마켓·장 마감·휴장: 토스 웹 close 가 정규장 종가).
+   * 실시간 스트림(PriceStream)은 이 종목들을 토스 웹으로 폴링하지 않는다 — 보내면 앱이 공식 API 시간외 가격을 정규장 종가로 덮어쓴다.
+   * 시세를 아직 받지 않은 종목은 모르니 넣지 않는다 (예전처럼 폴링)
+   */
+  async webOff(codes: string[]): Promise<Set<string>> {
+    if (codes.length === 0) return new Set();
+    await this.hydrate();
+    const calendar = await this.calendarNow();
+    const now = this.now();
+    return new Set(
+      codes.filter((c) => {
+        const h = this.book.get(c);
+        return !!h && webIsRegularClose(h.quote, sessionAt(c, now, { calendar }).phase);
+      }),
+    );
+  }
+
+  /**
    * 지금 세션과 초록 점(realtime)을 붙인다 (services/liveSession 규칙). 가격·live 는 그대로.
    * polledAt: 보여 주는 가격이 토스 웹 가격을 따라가고 있을 때(current 가 토스 웹 가격을 골랐고 붙일 수 있음)만 그 가격을 받은 때 — 아니면 null.
    * 가격이 따라가지 않는데 "토스 웹 가격을 15초 안에 받았다"는 이유로 점을 켜지 않게 (웹소켓 옛 체결을 쓰는 중 · 공식 API 가 이번 거래일 체결을 모름)
@@ -959,7 +991,8 @@ export class StockService {
     // 세션·웹소켓 신뢰(초록 점과 같은 기준)를 먼저 — 가격 출처도 이것으로 고른다 (열린 세션에서만. 닫힌 세션은 예전처럼 웹소켓 체결 먼저)
     const view = ctx ? this.sessionView(code, ctx) : null;
     const trust = view?.session.open ? { wsLive: view.wsLive, start: view.start, now: t } : null;
-    const pick = this.liveTick(h.quote, quick, trust);
+    const phase = (view?.session ?? sessionAt(code, new Date(t))).phase;
+    const pick = this.liveTick(h.quote, quick, trust, phase);
     let tick = pick?.tick ?? null;
     // 스냅샷(asOf)과 체결의 거래일(현지 날짜)이 다르면 섞지 않는다 — 어제 스냅샷의 전일 종가에 오늘 체결을 대면 등락이 이틀치가 된다.
     // 스냅샷을 새로 받으면(10초~1분 안, rolled) 같은 날이 되어 다시 붙는다
@@ -1012,8 +1045,9 @@ export class StockService {
    *  - 이 체결이 스냅샷보다 새것이 아니고(스냅샷에 이미 든 체결) 1분 넘게 새 체결이 없음
    * 예전에는 웹소켓 체결이 스냅샷보다 오래되지만 않으면 먼저 써서, 지난 세션 마지막 체결 = 스냅샷 asOf 인 조용한 종목은
    * 이번 세션 내내 가격이 멈췄다 (점은 토스 웹 가격을 받는다는 이유로 켜짐)
+   * 미국 공식 API 시세의 애프터마켓·장 마감·휴장(phase)에는 토스 웹 가격이 정규장 종가라 쓰지 않는다 (webIsRegularClose) — 웹소켓 체결만
    */
-  private liveTick(quote: Quote, quick?: Map<string, LiveTick>, trust?: WsTrust | null): { tick: LiveTick; polled: boolean } | null {
+  private liveTick(quote: Quote, quick: Map<string, LiveTick> | undefined, trust: WsTrust | null, phase: SessionPhase): { tick: LiveTick; polled: boolean } | null {
     const quoteAt = Date.parse(quote.asOf);
     const usable = (tick: LiveTick | null | undefined): LiveTick | null => {
       if (!tick) return null;
@@ -1023,7 +1057,7 @@ export class StockService {
     // 웹소켓 마지막 체결이 스냅샷보다 오래됐으면(예: 웹소켓이 이 세션 체결을 아직 안 줌) 토스 웹 일괄 가격으로 — 웹소켓이 멈춘 종목도 3초 갱신이 붙게.
     // polled = 토스 웹 가격 (timestamp 가 체결 시각이 아니라 받은 시각)
     const ws = usable(this.deps.live?.get(quote.code));
-    const polled = quick && quote.source.startsWith("toss") ? usable(quick.get(quote.code)) : null;
+    const polled = quick && quote.source.startsWith("toss") && !webIsRegularClose(quote, phase) ? usable(quick.get(quote.code)) : null;
     if (ws && polled && trust && polled.receivedAt >= ws.receivedAt && !this.wsFollows(ws, quoteAt, trust)) return { tick: polled, polled: true };
     if (ws) return { tick: ws, polled: false };
     return polled ? { tick: polled, polled: true } : null;
@@ -1051,8 +1085,10 @@ export class StockService {
   private applyTick(quote: Quote, tick: LiveTick): Quote {
     if (tick.price === quote.price) return quote;
     const prevClose = quote.prevClose ?? (quote.change ? quote.price - quote.change : null);
-    const change = prevClose !== null ? Math.round((tick.price - prevClose) * 100) / 100 : quote.change;
-    const changeRate = prevClose ? Math.round((change / prevClose) * 10000) / 100 : quote.changeRate;
+    // 등락률은 반올림 전 차이로, 등락은 소수 4자리까지 (센트로 반올림한 등락으로 내면 1달러 미만 미국 종목이 틀린다 — 앱 liveTick.applyTick 과 같은 식)
+    const diff = prevClose !== null ? tick.price - prevClose : null;
+    const change = diff !== null ? Math.round(diff * 1e4) / 1e4 : quote.change;
+    const changeRate = prevClose && diff !== null ? Math.round((diff / prevClose) * 10000) / 100 : quote.changeRate;
     // 원화 환산은 화면에 함께 보이는 환율(fxRate)로 — 옛 원화가/달러가 비율로 곱하면 반올림 때문에 1원씩 어긋난다
     const priceKrw = quote.fxRate ? Math.round(tick.price * quote.fxRate) : quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * tick.price) : (quote.priceKrw ?? null);
     return {

@@ -1,12 +1,12 @@
 import type { Candle } from "../domain/types.js";
-import type { MarketStatus } from "../providers/market/calendar.js";
+import type { MarketState, MarketStatus } from "../providers/market/calendar.js";
 
 /**
  * 브리핑 시점의 장 상태 (순수 함수 → 단위 테스트). 모델이 "마감"·"정규장"을 잘못 쓰지 않게 사실을 문장으로 넘긴다.
  * 가격이 어느 거래를 반영하는지는 시세의 priceBasis 가 말하므로 여기서는 세션만 말한다.
- *  - 미국: 정규장(09:30~16:00 ET) 진행 중 / 프리마켓 / 애프터마켓 / 주간거래(한국 낮, 정규장은 전날 밤 마감) / 정규장 마감
- *  - 한국: 정규장(09:00~15:30) 진행 중 / NXT 프리·애프터마켓 / 장 마감
- * 지표는 끝나지 않은 봉을 빼고 계산한다 (완성된 마지막 정규장까지만)
+ *  - 미국: 정규장(09:30~16:00 ET, 조기 폐장일 13:00) 진행 중 / 프리마켓 / 애프터마켓 / 주간거래(뉴욕 20:00~04:00) / 정규장 마감
+ *  - 한국: 정규장(09:00~15:30, 수능일 등 특수일은 KR_SPECIAL_HOURS) 진행 중 / NXT 프리·애프터마켓 / 장 마감
+ * 지표는 끝나지 않은 봉을 빼고 계산한다. 한국 일봉은 KRX+NXT 통합 봉이라 애프터마켓이 끝나는 20:00 에 확정된다
  */
 
 export interface MarketContext {
@@ -17,7 +17,7 @@ export interface MarketContext {
   label: string;
   /** 마지막으로 끝난 정규장의 현지 날짜 (YYYY-MM-DD). 모르면 null */
   lastRegularDate: string | null;
-  /** 오늘(현지) 봉이 아직 끝나지 않음 (정규장 중·한국 NXT 프리마켓) */
+  /** 오늘(현지) 봉이 아직 끝나지 않음 (정규장 중·한국 08:00~20:00 — 통합 봉은 애프터마켓이 끝나는 20:00 에 확정) */
   todayIncomplete: boolean;
 }
 
@@ -30,6 +30,8 @@ function parts(d: Date, tz: string): { date: string; minutes: number; weekday: n
 }
 
 const md = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
+/** 자정부터 분 → "HH:MM" */
+const hm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 
 /** 뉴욕증권거래소 휴장일 (현지 날짜). 해마다 추가 — 없으면 평일로 본다. 앱 lib/marketTime 에 같은 목록이 있다 (app/test 가 같은지·내년 끝까지 있는지 본다) */
 export const US_HOLIDAYS = new Set([
@@ -43,27 +45,72 @@ export const isUsTradingDate = (date: string) => {
   return wd >= 1 && wd <= 5 && !US_HOLIDAYS.has(date);
 };
 
+/** 뉴욕증권거래소 조기 폐장일(13:00 ET, 현지 날짜) — 추수감사절 다음 날·평일 크리스마스이브. 해마다 추가 (토스 달력이 그날 마감을 알려 주면 그 값이 먼저) */
+export const US_EARLY_CLOSES = new Set(["2026-11-27", "2026-12-24", "2027-11-26"]);
+
+const US_CLOSE = 16 * 60;
+
+/**
+ * 뉴욕 날짜의 정규장 마감(자정부터 분, 애프터마켓은 그 뒤 4시간): 토스 달력이 그날 마감 시각을 알려 주면 그 값(조기 폐장 13:00 등),
+ * 아니면 US_EARLY_CLOSES 13:00, 아니면 16:00. services/liveSession 과 달력 추정값(fallbackState)도 이 값을 쓴다
+ */
+export function usRegularCloseMinutes(date: string, cal?: MarketState | null): number {
+  const end = cal?.source === "toss" ? (cal.isOpen ? cal.closesAt : (cal.lastClose ?? null)) : null;
+  if (end && !Number.isNaN(Date.parse(end))) {
+    const z = parts(new Date(end), "America/New_York");
+    if (z.date === date && z.minutes >= 10 * 60 && z.minutes <= 17 * 60) return z.minutes;
+  }
+  return US_EARLY_CLOSES.has(date) ? 13 * 60 : US_CLOSE;
+}
+
+/**
+ * 한국거래소 정규장 시각이 평소(09:00~15:30)와 다른 날 (서울 날짜, 자정부터 분). 해마다 추가 — 없으면 평소 시각.
+ * 수능일은 개장·마감이 1시간씩 늦고(10:00~16:30), 새해 첫 거래일은 10:00 에 연다
+ */
+export const KR_SPECIAL_HOURS: Readonly<Record<string, { open: number; close: number; reason: string }>> = {
+  "2026-11-19": { open: 10 * 60, close: 16 * 60 + 30, reason: "수능일" },
+  "2027-01-04": { open: 10 * 60, close: 15 * 60 + 30, reason: "새해 첫 거래일" },
+};
+
+/** 서울 날짜의 한국거래소 정규장 (특수일이면 reason) */
+export function krRegularHours(date: string): { open: number; close: number; reason: string | null } {
+  return KR_SPECIAL_HOURS[date] ?? { open: 9 * 60, close: 15 * 60 + 30, reason: null };
+}
+
 export function marketContext(code: string, status: MarketStatus | null, now: Date): MarketContext {
   const kr = /^\d/.test(code);
   if (kr) {
     const p = parts(now, "Asia/Seoul");
     const tradingDay = status ? status.KR.isTradingDay : p.weekday >= 1 && p.weekday <= 5;
     const lastClose = status?.KR.lastClose ? parts(new Date(status.KR.lastClose), "Asia/Seoul").date : null;
-    if (tradingDay && p.minutes >= 9 * 60 && p.minutes < 15 * 60 + 30)
-      return { market: "KR", phase: "regular", label: `한국 정규장 진행 중(15:30 마감 전). 오늘 봉은 아직 끝나지 않았습니다`, lastRegularDate: lastClose, todayIncomplete: true };
-    if (tradingDay && p.minutes >= 8 * 60 && p.minutes < 20 * 60) {
-      const pre = p.minutes < 9 * 60;
+    const h = krRegularHours(p.date);
+    if (tradingDay && p.minutes >= h.open && p.minutes < h.close) {
+      const special = h.reason ? ` — 오늘은 ${h.reason}이라 ${hm(h.open)}~${hm(h.close)}` : "";
+      return { market: "KR", phase: "regular", label: `한국 정규장 진행 중(${hm(h.close)} 마감 전${special}). 오늘 봉은 아직 끝나지 않았습니다`, lastRegularDate: lastClose, todayIncomplete: true };
+    }
+    if (tradingDay && p.minutes >= 8 * 60 && p.minutes < h.open) {
+      const label =
+        p.minutes >= h.open - 10
+          ? "한국 정규장 개장 직전"
+          : h.reason
+            ? `한국 정규장 개장 전(오늘은 ${h.reason}이라 ${hm(h.open)} 개장)`
+            : "한국 정규장 개장 전, 넥스트레이드(NXT) 프리마켓 중";
+      return { market: "KR", phase: "extended", label, lastRegularDate: lastClose, todayIncomplete: true };
+    }
+    if (tradingDay && p.minutes >= h.close && p.minutes < 20 * 60) {
+      // 애프터마켓: 넥스트레이드 15:40~20:00, 한국거래소 16:00~20:00 (2026-09-14 부터, ETF·ETN 제외).
+      // 일봉(토스)은 KRX+NXT 통합 봉이라 종가·고저·거래량이 20:00 까지 바뀐다 → 오늘 정규장은 끝났어도 오늘 봉은 끝나지 않은 봉(지표·최근 봉에서 뺀다)
+      const session = h.reason
+        ? "애프터마켓 시간(20:00 까지)"
+        : p.minutes < 16 * 60
+          ? "넥스트레이드(NXT) 애프터마켓 시간(한국거래소 애프터마켓은 16:00 부터, 20:00 까지)"
+          : "애프터마켓 시간(한국거래소·넥스트레이드, 20:00 까지)";
       return {
         market: "KR",
         phase: "extended",
-        // 애프터마켓: 넥스트레이드 15:40~20:00, 한국거래소 16:00~20:00 (2026-09-14 부터, ETF·ETN 제외)
-        label: pre
-          ? p.minutes < 8 * 60 + 50
-            ? "한국 정규장 개장 전, 넥스트레이드(NXT) 프리마켓 중"
-            : "한국 정규장 개장 직전"
-          : `오늘(${md(p.date)}) 한국 정규장은 15:30 에 마감, 지금은 ${p.minutes < 16 * 60 ? "넥스트레이드(NXT) 애프터마켓 시간(한국거래소 애프터마켓은 16:00 부터, 20:00 까지)" : "애프터마켓 시간(한국거래소·넥스트레이드, 20:00 까지)"}`,
-        lastRegularDate: pre ? lastClose : p.date,
-        todayIncomplete: pre,
+        label: `오늘(${md(p.date)}) 한국 정규장은 ${hm(h.close)} 에 마감, 지금은 ${session}. 오늘 봉(KRX+NXT 통합)은 20:00 에 끝나 아직 확정되지 않았고, 지금 가격은 정규장 종가가 아닙니다`,
+        lastRegularDate: p.date,
+        todayIncomplete: true,
       };
     }
     const closedLabel = `${tradingDay ? "한국 장 마감 상태" : "한국 휴장일"}${lastClose ? ` (마지막 거래일 ${md(lastClose)})` : ""}`;
@@ -73,15 +120,24 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
   const ny = parts(now, "America/New_York");
   const weekday = ny.weekday >= 1 && ny.weekday <= 5;
   const tradingDay = (status ? status.US.isTradingDay : weekday) && !US_HOLIDAYS.has(ny.date);
-  const afterClose = tradingDay && ny.minutes >= 16 * 60;
+  // 정규장 마감: 조기 폐장일(추수감사절 다음 날·크리스마스이브)은 13:00 ET, 애프터마켓은 마감 뒤 4시간(17:00)까지
+  const close = usRegularCloseMinutes(ny.date, status?.US);
+  const early = close !== US_CLOSE;
+  const afterClose = tradingDay && ny.minutes >= close;
   const lastRegular = afterClose ? ny.date : prevTradingDate(ny.date);
   const last = md(lastRegular);
-  if (tradingDay && ny.minutes >= 9 * 60 + 30 && ny.minutes < 16 * 60)
-    return { market: "US", phase: "regular", label: "미국 정규장 진행 중(16:00 ET 마감 전). 오늘 봉은 아직 끝나지 않았습니다", lastRegularDate: lastRegular, todayIncomplete: true };
+  if (tradingDay && ny.minutes >= 9 * 60 + 30 && ny.minutes < close)
+    return { market: "US", phase: "regular", label: `미국 정규장 진행 중(${early ? `오늘은 조기 폐장이라 ${hm(close)}` : "16:00"} ET 마감 전). 오늘 봉은 아직 끝나지 않았습니다`, lastRegularDate: lastRegular, todayIncomplete: true };
   if (tradingDay && ny.minutes >= 4 * 60 && ny.minutes < 9 * 60 + 30)
     return { market: "US", phase: "extended", label: `미국 프리마켓 중(정규장 개장 전). 마지막 정규장은 ${last}(현지)`, lastRegularDate: lastRegular, todayIncomplete: false };
-  if (afterClose && ny.minutes < 20 * 60)
-    return { market: "US", phase: "extended", label: `미국 정규장은 ${last}(현지) 마감, 지금은 애프터마켓 중`, lastRegularDate: lastRegular, todayIncomplete: false };
+  if (afterClose && ny.minutes < close + 4 * 60)
+    return {
+      market: "US",
+      phase: "extended",
+      label: early ? `미국 정규장은 ${last}(현지) ${hm(close)} ET 에 조기 마감, 지금은 애프터마켓 중(${hm(close + 4 * 60)} ET 까지)` : `미국 정규장은 ${last}(현지) 마감, 지금은 애프터마켓 중`,
+      lastRegularDate: lastRegular,
+      todayIncomplete: false,
+    };
   // 뉴욕 20:00~다음 날 04:00 은 미국 주간거래(한국 낮: 서머타임 09:00~17:00, 표준시 10:00~18:00) — 정규장은 전날 밤 끝났다.
   // 주간거래는 다음 날 정규장에 딸린 세션 → 그날이 미국 거래일일 때만 (추수감사절 등 휴장일 전날 밤엔 없다). services/liveSession 과 같은 규칙
   const overnight = ny.minutes >= 20 * 60 ? isUsTradingDate(nextDate(ny.date)) : ny.minutes < 4 * 60 && isUsTradingDate(ny.date);

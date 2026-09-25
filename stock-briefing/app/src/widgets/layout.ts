@@ -272,6 +272,19 @@ export interface IndexInput {
   value: string;
   rate: string | null;
   stale: boolean;
+  /** 흐린 값 뒤 글자 (다듬은 모습: 지난 세션 날짜 "9/23" · "지연"). 없으면 stale 일 때 "지연" */
+  tag?: string | null;
+  /** 다듬은 모습: 좁을 때 남기는 순서 (작을수록 오래 남는다 — planPolishedIndex) */
+  keep?: number;
+  /** 다듬은 모습: 값을 빼고 등락률만 보일 수 있다 (지수. 원/달러는 값이 중요해 아님) */
+  canShort?: boolean;
+  /** 값을 뺀 짧은 모양 ("나스닥 -1.13%") — planPolishedIndex 가 좁을 때 붙인다 */
+  short?: boolean;
+}
+
+/** 지수 항목 끝의 흐린 글자: 다듬은 모습은 tag, 예전 모습은 stale 이면 "지연" */
+export function indexTag(i: Pick<IndexInput, "stale" | "tag">): string | null {
+  return i.tag !== undefined ? i.tag : i.stale ? "지연" : null;
 }
 
 export interface IndexPlan<T extends IndexInput = IndexInput> {
@@ -282,11 +295,15 @@ export interface IndexPlan<T extends IndexInput = IndexInput> {
 }
 
 const ITEM_GAP = space.xs;
+/** 다듬은 지수 줄 항목 사이 여백 (항목 안은 ITEM_GAP) */
+export const POLISH_SEP_GAP = space.xxs;
 
 export function indexItemWidth(i: IndexInput, font: number, scale: number): number {
-  const parts = [textWidth(i.label, font, scale), textWidth(i.value, font, scale, true)];
+  const parts = [textWidth(i.label, font, scale)];
+  if (!i.short) parts.push(textWidth(i.value, font, scale, true));
   if (i.rate) parts.push(textWidth(i.rate, font, scale, true));
-  if (i.stale) parts.push(textWidth("지연", font, scale));
+  const tag = indexTag(i);
+  if (tag) parts.push(textWidth(tag, font, scale));
   return parts.reduce((a, b) => a + b, 0) + ITEM_GAP * (parts.length - 1);
 }
 
@@ -295,14 +312,19 @@ export function indexSepWidth(font: number, scale: number): number {
   return textWidth("·", font, scale) + ITEM_GAP * 2;
 }
 
-/** 앞에서부터 줄에 채운다. maxLines 안에 다 못 넣으면 null */
-function pack<T extends IndexInput>(items: T[], font: number, width: number, scale: number, maxLines: number): T[][] | null {
+/** 다듬은 지수 줄의 항목 사이 " · " 칸 폭: 항목끼리는 xxs 로 좁게 (항목 안은 ITEM_GAP) — 330dp 에 시장마다 하나 + 원/달러가 들어가게 */
+export function polishedSepWidth(font: number, scale: number): number {
+  return textWidth("·", font, scale) + POLISH_SEP_GAP * 2;
+}
+
+/** 앞에서부터 줄에 채운다. maxLines 안에 다 못 넣으면 null. sep: 항목 사이 칸 폭 */
+function pack<T extends IndexInput>(items: T[], font: number, width: number, scale: number, maxLines: number, sep = indexSepWidth(font, scale)): T[][] | null {
   const lines: T[][] = [];
   let cur: T[] = [];
   let used = 0;
   for (const it of items) {
     const w = indexItemWidth(it, font, scale);
-    const add = cur.length ? indexSepWidth(font, scale) + w : w;
+    const add = cur.length ? sep + w : w;
     if (used + add <= width) {
       cur.push(it);
       used += add;
@@ -325,6 +347,35 @@ export function planIndexLine<T extends IndexInput>(items: T[], width: number, s
       if (lines) return { font, lines, height: lines.length * lineHeight(font, scale) };
     }
   }
+  return null;
+}
+
+/**
+ * 다듬은 지수 줄 (검증 지적: 뒤에서부터 빼면 늘 끝인 원/달러가 먼저 빠져 330~640dp 어디서도 보이지 않았다).
+ * 보이는 순서는 받은 그대로(계좌 비중 순서, 원/달러 끝)이고, 좁으면 덜 중요한 것(keep 이 큰 것)부터 뺀다 —
+ * 둘째 시장의 둘째 지수 → 첫 시장의 둘째 지수. 시장마다 하나 + 원/달러(셋)가 안 들어가면 지수의 값을 빼고 등락률만(short — 둘째 시장부터),
+ * 그래도 안 되면 둘째 시장 지수를 뺀다. 각 단계에서 글자는 sm → xs. 항목 사이는 좁게(POLISH_SEP_GAP).
+ * 예 (330dp, 글자 100%, 미국 비중이 큼): "나스닥 -1.13% · 코스피 +0.90% 9/23 · 원/달러 1,391.50 +0.38%"
+ */
+export function planPolishedIndex<T extends IndexInput>(items: T[], width: number, scale: number, maxLines: 1 | 2): IndexPlan<T> | null {
+  const byKeep = [...items].sort((a, b) => (a.keep ?? 0) - (b.keep ?? 0));
+  const tries: T[][] = [];
+  for (let n = items.length; n > 0; n--) {
+    const kept = new Set(byKeep.slice(0, n));
+    let cur = items.filter((i) => kept.has(i));
+    tries.push(cur);
+    // 시장마다 하나 + 원/달러 이하로 줄었을 때만 짧은 모양을 쓴다 (넷·다섯이면 하나를 빼는 편이 읽기 쉽다)
+    if (n > 3) continue;
+    for (const s of cur.filter((i) => i.canShort).sort((a, b) => (b.keep ?? 0) - (a.keep ?? 0))) {
+      cur = cur.map((i) => (i === s ? { ...i, short: true } : i));
+      tries.push(cur);
+    }
+  }
+  for (const t of tries)
+    for (const font of [F.sm, F.xs]) {
+      const lines = pack(t, font, width, scale, maxLines, polishedSepWidth(font, scale));
+      if (lines) return { font, lines, height: lines.length * lineHeight(font, scale) };
+    }
   return null;
 }
 
@@ -352,6 +403,8 @@ export interface RowsPlan {
   sub: (string | null)[];
   /** 한 줄 높이 */
   rowH: number;
+  /** 등락률 앞 작은 글자("오늘") 칸 폭 — 다듬은 모습만, 예전 모습은 0 */
+  labelW: number;
 }
 
 const ROW_GAP = space.sm;
@@ -361,16 +414,29 @@ const ROW_GAP = space.sm;
  * 그런 배치가 없으면 줄마다 들어가는 가장 긴 손익(없으면 비움)
  */
 export function planRows(rows: readonly RowInput[], width: number, scale: number): RowsPlan {
+  return rowsPlan(rows, width, scale, { label: null, padY: space.xs });
+}
+
+/** 다듬은 잔고 위젯의 목록 줄: 등락률 앞에 작은 "오늘"(label), 줄 위아래 여백은 POLISH_ROW_PAD */
+export function planRowsPolished(rows: readonly RowInput[], width: number, scale: number, label: string): RowsPlan {
+  return rowsPlan(rows, width, scale, { label, padY: POLISH_ROW_PAD });
+}
+
+function rowsPlan(rows: readonly RowInput[], width: number, scale: number, o: { label: string | null; padY: number }): RowsPlan {
   // 등락률 칸은 정수 폭으로 그리므로 올림한 값으로 나머지를 나눈다
   const priceW = Math.ceil(Math.max(0, ...rows.map((r) => textWidth(r.price, F.base, scale, true))));
   const rateW = Math.ceil(Math.max(0, ...rows.map((r) => (r.rate ? textWidth(r.rate, F.md, scale, true) : 0))));
+  const labelW = o.label && rateW ? Math.ceil(textWidth(o.label, F.xs, scale) + space.xxs) : 0;
   const minName = textWidth("가나", F.base, scale, true);
-  const rowH = lineHeight(F.base, scale) + lineHeight(F.sm, scale) + space.xs * 2 + 1;
+  const leftH = lineHeight(F.base, scale) + lineHeight(F.sm, scale);
   const make = (stacked: boolean, subFont: number): RowsPlan => {
-    const right = stacked ? Math.max(priceW, rateW) : priceW + (rateW ? ROW_GAP + rateW : 0);
+    const rate = labelW + rateW;
+    const right = stacked ? Math.max(priceW, rate) : priceW + (rateW ? ROW_GAP + rate : 0);
     const leftW = Math.floor(width - right - ROW_GAP);
     const sub = rows.map((r) => r.subs.find((s) => textWidth(s, subFont, scale) <= leftW) ?? null);
-    return { stacked, leftW, rateW, subFont, sub, rowH };
+    // 다듬은 모습은 위아래로 쌓은 오른쪽(가격 / 오늘 등락률)이 왼쪽 두 줄보다 높을 수 있다
+    const contentH = o.label !== null && stacked ? Math.max(leftH, lineHeight(F.base, scale) + lineHeight(F.md, scale)) : leftH;
+    return { stacked, leftW, rateW, subFont, sub, rowH: contentH + o.padY * 2 + 1, labelW };
   };
   const tries = [make(false, F.sm), make(true, F.sm), make(false, F.xs), make(true, F.xs)].filter((p) => p.leftW >= minName);
   const full = tries.find((p) => p.sub.every((s, n) => s === rows[n]!.subs[0]));
@@ -484,6 +550,285 @@ export function planHoldings<T extends IndexInput>(i: HoldingsInput & { indices:
     }
   }
   return { size, content, header, total: pick.total, index, note, list: pick.list, listH, rows };
+}
+
+// ── 다듬은 잔고 위젯 (widgetPolish) ──────────────────────────────────
+/*
+ * 같은 크기에 종목이 더 보이게 세로 빈칸을 줄인다 (4×2 330×230dp: 약 2.5줄 → 3.5줄).
+ *  - ↻(48×48)를 합계 줄 오른쪽 끝으로 옮겨, 48dp 누르는 칸 둘(↻·손익 전환)을 한 줄(48dp)에 모은다.
+ *    그래서 머리 줄(48dp)은 글자 높이만큼의 제목 줄(보유 17 · 관심 1 · 칩 · 기준 시각)이 된다 — 누르면 앱(합계와 같은 곳)
+ *  - 지수 줄 아래 여백 0 (위의 48dp 합계 줄 안에 빈 곳이 있다), 목록 줄 위아래 여백 xs → xxs, 아래 여백 PAD(12) → sm(8)
+ *  - 합계가 없으면(보유 종목 시세 없음·관심만) 예전처럼 48dp 머리 줄에 ↻
+ * 누르는 칸: ↻·손익 전환은 그대로 48×48dp 이상. 제목 줄은 위 여백까지 누르는 칸이고 바로 아래 합계 칸과 같은 곳(잔고 탭)을 연다.
+ * 종목 줄은 약 38dp 이고 예전처럼 줄마다 그 종목 상세를 연다 (widgets.tsx polishedRowUri)
+ */
+
+/** 제목 줄 위 여백 */
+export const POLISH_TOP = space.sm;
+/** 목록 아래 여백 (예전 PAD) */
+export const POLISH_BOTTOM = space.sm;
+/** 목록 한 줄 위아래 여백 (예전 space.xs) */
+export const POLISH_ROW_PAD = space.xxs;
+/** 손익 전환 칸 앞 표시: 누르면 누적 ↔ 오늘이 바뀐다는 뜻 */
+export const PNL_GLYPH = "⇅";
+/** 표시와 손익 글자 사이 */
+export const GLYPH_GAP = space.xxs;
+/** 합계와 ⇅ 사이 최소 간격 (⇅ 가 없으면 TOTAL_GAP) */
+export const GLYPH_LEAD = space.xs;
+/** 칩 위아래 여백 (widgets.tsx Chip 과 같다) */
+export const CHIP_PAD_Y = space.xxs;
+
+/** 칩 높이: 글자 + 위아래 여백 + 테두리 */
+export function chipHeight(scale: number): number {
+  return lineHeight(F.xs, scale) + CHIP_PAD_Y * 2 + 2;
+}
+
+/** 제목 줄 높이 (제목 글자와 칩 중 높은 쪽) */
+export function titleLineHeight(scale: number): number {
+  return Math.max(lineHeight(F.title, scale), chipHeight(scale));
+}
+
+export interface TitleInput {
+  /** 제목 후보 (긴 것부터): "보유 17 · 관심 1" → "보유 17" */
+  titles: string[];
+  /** 칩 후보 (긴 것부터): "미국 주간거래 · 한국 휴장" → "미국 주간거래". 칩이 없으면 [] */
+  chips: string[];
+  /** 기준 시각 후보 (긴 것부터, asOfVariants). 갱신 중이면 ["갱신 중"], 메모를 뺐으면 맨 앞에 "갱신 실패" */
+  sub: string[];
+  delayed: boolean;
+}
+
+export interface TitlePlan {
+  title: string;
+  chip: string | null;
+  sub: string | null;
+  delayed: boolean;
+}
+
+/** 제목 줄 폭: 제목 · 칩 · 기준 시각 · 지연 + 간격 */
+export function titleWidth(p: TitlePlan, scale: number): number {
+  const parts = [textWidth(p.title, F.title, scale, true)];
+  if (p.chip) parts.push(textWidth(p.chip, F.xs, scale, true) + CHIP_EXTRA);
+  if (p.sub) parts.push(textWidth(p.sub, F.sm, scale));
+  if (p.delayed) parts.push(textWidth("지연", F.sm, scale, true));
+  return parts.reduce((a, b) => a + b, 0) + HEADER_GAP * (parts.length - 1);
+}
+
+/**
+ * 좁을 때 버리는 값 (작을수록 먼저 버린다): 기준 시각의 "기준" 1 < 제목의 "· 관심 N" 2 < 칩의 둘째 시장 4 < 기준 시각의 날짜 5
+ * < 칩 전체 8 < 기준 시각 전체 12. 제목(짧은 것)과 "지연"은 늘 남긴다
+ */
+const TITLE_COST = { title: [0, 2], chip: [0, 4], noChip: 8, sub: [0, 1, 5], noSub: 12 } as const;
+
+/** 제목 줄: 폭(room)에 들어가는 조합 중 버리는 값이 가장 작은 것 (같으면 긴 제목·긴 칩·긴 기준 시각 쪽) */
+export function planTitle(i: TitleInput, room: number, scale: number): TitlePlan {
+  const chips = [...i.chips.map((c, k) => ({ c, cost: TITLE_COST.chip[Math.min(k, 1)]! })), { c: null, cost: TITLE_COST.noChip }];
+  const subs = [...i.sub.map((s, k) => ({ s, cost: TITLE_COST.sub[Math.min(k, 2)]! })), { s: null, cost: TITLE_COST.noSub }];
+  let best: TitlePlan | null = null;
+  let bestCost = Infinity;
+  for (let k = 0; k < i.titles.length; k++)
+    for (const c of chips)
+      for (const s of subs) {
+        const plan: TitlePlan = { title: i.titles[k]!, chip: c.c, sub: s.s, delayed: i.delayed };
+        const cost = TITLE_COST.title[Math.min(k, 1)]! + c.cost + s.cost;
+        if (cost < bestCost && titleWidth(plan, scale) <= room) {
+          best = plan;
+          bestCost = cost;
+        }
+      }
+  return best ?? { title: i.titles[i.titles.length - 1] ?? "", chip: null, sub: null, delayed: i.delayed };
+}
+
+/** 합계 줄 한 가지 배치 (다듬은 모습): 손익 칸 앞 ⇅ 표시, 오른쪽 끝 ↻ 칸(48×48) */
+export interface TopLine extends TotalLine {
+  /** 손익 전환 칸의 ⇅ (전환 칸일 때만 그린다) */
+  glyph: string;
+}
+
+/** refresh: 합계 줄 오른쪽 끝에 ↻ 칸(48×48)을 둔다 (아니면 예전처럼 48dp 머리 줄에) */
+function topPlan(i: TopLine, inline: boolean, totalFont: number, pnlFont: number, twoLines: boolean, scale: number, refresh: boolean): TotalPlan & { width: number } {
+  const pnl = twoLines && i.rate ? [i.amount, i.rate] : [i.rate ? `${i.amount} ${i.rate}` : i.amount];
+  const textW = Math.max(...pnl.map((l) => textWidth(l, pnlFont, scale, true)));
+  const glyphW = i.toggle ? textWidth(i.glyph, pnlFont, scale, true) + GLYPH_GAP : 0;
+  const pnlPadX = i.toggle ? Math.max(0, Math.ceil((TOUCH - textW - glyphW) / 2)) : 0;
+  const pnlW = textW + glyphW + pnlPadX * 2;
+  const linesH = pnl.length * lineHeight(pnlFont, scale);
+  const pnlH = i.toggle ? Math.max(TOUCH, linesH) : linesH;
+  const tW = textWidth(i.total, totalFont, scale, true);
+  const tLine = lineHeight(totalFont, scale);
+  // ↻ 칸(48dp)이 같은 줄에 있으면 줄은 48dp 이상. 48dp 칸이 있는 줄은 위아래 여백을 두지 않는다 (칸 안에 빈 곳이 있다)
+  const min = refresh ? TOUCH : 0;
+  const height = inline ? Math.max(tLine, pnlH, min) : Math.max(tLine + pnlH, min);
+  return {
+    inline,
+    totalFont,
+    pnlFont,
+    pnl,
+    pnlPadX,
+    pnlH,
+    totalH: inline ? height : tLine,
+    height,
+    toggle: i.toggle,
+    gapY: refresh || i.toggle ? 0 : space.xs,
+    // ⇅ 가 합계와 손익 사이를 갈라 주므로 그 앞 최소 간격은 GLYPH_LEAD (그리는 쪽은 양 끝 정렬이라 남는 폭은 이 사이로 간다).
+    // 8dp 를 두면 300dp·글자 130% 에서 ⇅ 때문에 합계가 두 줄로 내려가 예전보다 종목이 덜 보였다
+    width: (inline ? tW + (glyphW ? GLYPH_LEAD : TOTAL_GAP) + pnlW : Math.max(tW, pnlW)) + (refresh ? TOTAL_GAP + TOUCH : 0),
+  };
+}
+
+/**
+ * 합계 줄 후보 (다듬은 모습, 앞의 것이 더 좋은 배치): totalOptions 와 같은 순서 (+ 오른쪽 ↻ 칸이면 그 폭).
+ * 하나도 안 들어가면 합계 아래로 내리고 글자를 칸에 맞게
+ */
+export function topOptions(i: TopLine, width: number, scale: number, refresh = true): TotalPlan[] {
+  const [big, mid, small] = TOTAL_FONTS;
+  const tries: [boolean, number, number, boolean][] = [
+    [true, big, F.md, false],
+    [true, big, F.md, true],
+    [true, mid, F.md, true],
+    [true, small, F.sm, true],
+    [true, small, F.xs, true],
+    [false, big, F.md, false],
+    [false, big, F.sm, false],
+    [false, big, F.sm, true],
+    [false, mid, F.xs, true],
+    [false, small, F.sm, false],
+    [false, small, F.xs, false],
+    [false, small, F.xs, true],
+  ];
+  const out: TotalPlan[] = [];
+  for (const [inline, tf, pf, two] of tries) {
+    const p = topPlan(i, inline, tf, pf, two, scale, refresh);
+    if (p.width <= width) out.push(strip(p));
+  }
+  if (out.length) return out;
+  const room = width - (refresh ? TOTAL_GAP + TOUCH : 0);
+  const tf = fitFont(i.total, room, F.big, scale, true);
+  const lines = i.rate ? [i.amount, i.rate] : [i.amount];
+  const glyph = i.toggle ? textWidth(i.glyph, F.xs, scale, true) + GLYPH_GAP : 0;
+  const pf = Math.min(...lines.map((l) => fitFont(l, room - glyph, F.xs, scale, true)));
+  return [strip(topPlan(i, false, tf, pf, true, scale, refresh))];
+}
+
+export interface PolishedInput<T extends IndexInput = IndexInput> {
+  width: number;
+  height: number;
+  scale: number;
+  title: TitleInput;
+  total: TotalInput | null;
+  /** 지수 줄 항목 (계좌 비중 순서, 플래그가 꺼져 있거나 서버가 주지 않으면 빈 배열) */
+  indices: T[];
+  rows: RowInput[];
+  /** 종목 줄 등락률 앞 작은 글자 ("오늘") */
+  rowLabel: string;
+  note: string[];
+  alert: string | null;
+}
+
+export interface PolishedPlan<T extends IndexInput = IndexInput> {
+  size: SizeClass;
+  content: number;
+  /**
+   * 제목 줄 + 합계 줄(↻ 포함) 모양. false 면 예전처럼 48dp 머리 줄에 ↻ — 합계가 없을 때, 또는 큰 글자·좁은 폭에서
+   * ↻ 를 넣으면 합계 줄이 두 줄로 내려가 더 높아질 때 (48dp 머리 줄 + 한 줄 합계가 더 낮다)
+   */
+  compact: boolean;
+  title: TitlePlan;
+  total: TotalPlan | null;
+  index: IndexPlan<T> | null;
+  note: string | null;
+  list: boolean;
+  listH: number;
+  rows: RowsPlan;
+}
+
+/** 다듬은 지수 줄을 두 줄로 쓰는 위젯: 두 줄을 넣고도 종목이 이만큼 넘게 보일 때 (4×3 이상. 4×2 는 한 줄) */
+export const INDEX_TWO_LINE_ROWS = 4;
+/** 다듬은 지수 줄을 넣는 위젯: 넣고도 종목이 이만큼 넘게 보일 때 (예전 모습은 한 줄) */
+export const INDEX_MIN_ROWS = 1.5;
+
+/** 다듬은 모습의 목록을 넣을 최소 높이: 첫 줄의 이름·가격 줄이 보일 만큼 */
+export function polishedListMin(scale: number): number {
+  return POLISH_ROW_PAD + 1 + lineHeight(F.base, scale);
+}
+
+/** 제목 줄(위 여백 포함) 또는 48dp 머리 줄 높이 */
+export function polishedHeadHeight(compact: boolean, scale: number): number {
+  return compact ? POLISH_TOP + titleLineHeight(scale) : TOUCH;
+}
+
+/**
+ * 다듬은 잔고 위젯 배치 (planHoldings 와 같은 규칙: 숫자는 자르지 않고, 높이가 모자라면 목록 > 메모 > 손익 전환 칸 순으로 지킨다).
+ * 세로 순서: [제목 줄 → 합계 줄(↻)] 또는 [48dp 머리 줄(↻) → 합계 줄] → [지수 줄] → [메모] → 목록 (아래 여백 POLISH_BOTTOM).
+ * 합계 줄은 들어가는 후보 중 목록 자리가 가장 큰 것 (같으면 앞의 것): ↻ 를 합계 줄에 둔 한 줄 배치 → 48dp 머리 줄 + 한 줄 합계 → 합계 아래로 내린 배치.
+ * 예전 모습과 같은 모양(48dp 머리 줄 + 한 줄 합계)도 후보라 같은 크기·글자에서 예전보다 목록이 줄지 않는다 (검증 지적: 330×180 130% — test/widgetLayout 전수 검사).
+ * 지수 줄은 compact(낮은 위젯) 크기가 아니고 넣은 뒤에도 목록이 INDEX_MIN_ROWS 줄 넘게 보일 때만 (planPolishedIndex — 좁으면 덜 중요한 것부터 빼고
+ * 시장마다 하나 + 원/달러를 남긴다). 두 줄을 넣고도 목록이 INDEX_TWO_LINE_ROWS 줄 넘게 보이는 큰 위젯은 두 줄까지
+ */
+export function planHoldingsPolished<T extends IndexInput>(i: PolishedInput<T>): PolishedPlan<T> {
+  const s = i.scale;
+  const size = listSize(i.height);
+  const content = i.width - PAD * 2;
+  const rows = planRowsPolished(i.rows, content, s, i.rowLabel);
+  const noteText = fitJoin(i.note, content, F.sm, s);
+  const noteH = noteText ? lineHeight(F.sm, s) : 0;
+  const t = i.total;
+  const hasRows = i.rows.length > 0;
+  const listMin = polishedListMin(s);
+  type Opt = { total: TotalPlan | null; compact: boolean };
+  /** 머리(제목 줄 또는 48dp 머리 줄) + 합계 줄 */
+  const headOf = (o: Opt) => polishedHeadHeight(o.compact, s) + totalBlock(o.total);
+  const optionsFor = (toggle: boolean): Opt[] => {
+    if (!t) return [{ total: null, compact: false }];
+    const line = { total: t.total, ...(toggle && t.toggle ? t.toggle : t.fixed), toggle: toggle && !!t.toggle, glyph: PNL_GLYPH };
+    // ↻ 를 합계 줄에 두면 왼쪽 여백만 (↻ 칸이 오른쪽 끝에 붙는다), 머리 줄에 두면 좌우 여백
+    const compact = topOptions(line, i.width - PAD, s, true).map((total) => ({ total, compact: true }));
+    const classic = topOptions(line, content, s, false).map((total) => ({ total, compact: false }));
+    const inline = (o: Opt) => o.total?.inline === true;
+    return [...compact.filter(inline), ...classic.filter(inline), ...compact.filter((o) => !inline(o)), ...classic.filter((o) => !inline(o))];
+  };
+  const toggles = t?.toggle ? [true, false] : [false];
+  type Pick = Opt & { list: boolean; note: boolean; room: number };
+  const tryFit = (): Pick | null => {
+    for (const list of hasRows ? [true, false] : [false])
+      for (const note of noteText ? [true, false] : [true])
+        for (const toggle of toggles) {
+          // 들어가는 배치 중 목록 자리가 가장 큰 것 (같으면 앞의 것 — 한 줄 · ↻ 를 합계 줄에). 예전 모습과 같은 모양(48dp 머리 줄 + 한 줄 합계)도 후보다
+          let best: Pick | null = null;
+          for (const o of optionsFor(toggle)) {
+            const room = i.height - POLISH_BOTTOM - headOf(o) - (note ? noteH : 0);
+            if (room >= (list ? listMin : 0) && (!best || room > best.room)) best = { ...o, list, note, room };
+          }
+          if (best) return best;
+        }
+    return null;
+  };
+  let pick = tryFit();
+  if (!pick) {
+    // 마지막: 전환 칸·목록·메모 없이 가장 낮은 배치
+    const lowest = optionsFor(false).reduce((a, b) => (headOf(b) < headOf(a) ? b : a));
+    pick = { ...lowest, list: false, note: false, room: i.height - POLISH_BOTTOM - headOf(lowest) };
+  }
+  const compact = pick.compact;
+  const note = pick.note ? noteText : null;
+  // 메모를 뺐으면 갱신 실패는 제목 줄 기준 시각 자리에
+  const titleIn = !pick.note && noteText && i.alert ? { ...i.title, sub: [i.alert, ...i.title.sub] } : i.title;
+  const title = planTitle(titleIn, compact ? content : headerRoom(i.width), s);
+  let listH = pick.room;
+  let index: IndexPlan<T> | null = null;
+  // 지수 줄을 넣어도 종목이 INDEX_MIN_ROWS 줄 넘게 보일 때만 (낮은 위젯·큰 글자에서 예전보다 종목이 덜 보이지 않게 — 검증 지적 330×180 130%)
+  const keep = hasRows ? (pick.list && size !== "compact" ? INDEX_MIN_ROWS * rows.rowH : null) : EMPTY_LINES * lineHeight(F.md, s);
+  if (keep !== null && i.indices.length) {
+    // 한 줄. 두 줄로 다 넣어도 종목이 INDEX_TWO_LINE_ROWS 줄 넘게 보이는 큰 위젯(4×3 이상)만 두 줄까지
+    const two = hasRows ? planPolishedIndex(i.indices, content, s, 2) : null;
+    const one = planPolishedIndex(i.indices, content, s, 1);
+    const plan = two && two.lines.flat().length > (one?.lines.flat().length ?? 0) && listH - two.height >= INDEX_TWO_LINE_ROWS * rows.rowH ? two : one;
+    if (plan && listH - plan.height >= keep) {
+      index = plan;
+      listH -= plan.height;
+    }
+  }
+  return { size, content, compact, title, total: pick.total, index, note, list: pick.list, listH, rows };
 }
 
 // ── 브리핑 위젯 ───────────────────────────────────────────────────────
