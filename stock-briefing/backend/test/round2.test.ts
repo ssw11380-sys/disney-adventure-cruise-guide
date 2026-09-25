@@ -101,9 +101,11 @@ describe("EdgarProvider", () => {
   it("티커 → CIK, 10-K 연간 값만 골라 재무제표를 만든다", async () => {
     const e = new EdgarProvider(fetchFn, now);
     const fin = await e.getAnnualFinancials("tsla", 5);
+    // 금액 통화와, 비우거나 계산한 값의 사유(notes)가 같이 온다 (AI 분석 입력용)
+    const noOp = "영업이익: 영업이익 항목에서 이 해 값을 찾지 못해 비워 둠 (세전이익으로 대신하지 않음)";
     expect(fin).toEqual([
-      { year: 2024, basis: "CFS", revenue: 97690000000, operatingIncome: null, netIncome: 7091000000, totalAssets: 122070000000, totalLiabilities: null, totalEquity: null },
-      { year: 2025, basis: "CFS", revenue: 100000000000, operatingIncome: null, netIncome: 5000000000, totalAssets: 130000000000, totalLiabilities: 50000000000, totalEquity: 80000000000 },
+      { year: 2024, basis: "CFS", revenue: 97690000000, operatingIncome: null, netIncome: 7091000000, totalAssets: 122070000000, totalLiabilities: null, totalEquity: null, currency: "USD", notes: [noOp, "부채총계: 항목을 찾지 못했고 자산총계 − 자본총계로도 계산할 수 없어 비워 둠"] },
+      { year: 2025, basis: "CFS", revenue: 100000000000, operatingIncome: null, netIncome: 5000000000, totalAssets: 130000000000, totalLiabilities: 50000000000, totalEquity: 80000000000, currency: "USD", notes: [noOp, "부채총계: 회사가 따로 보고하지 않아 자산총계 − 자본총계로 계산"] },
     ]);
   });
 
