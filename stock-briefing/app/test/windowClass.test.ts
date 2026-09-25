@@ -3,6 +3,7 @@ import { WIDTH_EXPANDED, WIDTH_MEDIUM } from "@/lib/screenInfo";
 import {
   classifyWindow,
   COMPACT,
+  DETAIL_MIN,
   FOLD_OFF,
   foldLayoutOf,
   isWide,
@@ -41,10 +42,13 @@ function drag(widths: number[], height: number, fontScale = 1): WindowClass[] {
 
 describe("기준 토큰 (폰 실측 전 추정값, tokens.ts layout 한 곳)", () => {
   it("요청한 기준값 그대로이고, 2단을 끄는 폭은 켜는 폭보다 낮다", () => {
-    expect(layout).toMatchObject({ twoPaneMin: 840, twoPaneExit: 816, listPaneW: 400, readableMax: 720, shortHeight: 760, mediumMin: 600, expandedMin: 840 });
+    expect(layout).toMatchObject({ twoPaneMin: 840, twoPaneExit: 816, listPaneW: 400, readableMax: 720, shortHeight: 760, mediumMin: 600, expandedMin: 840, railHysteresis: 24 });
     expect(layout.twoPaneExit).toBeLessThan(layout.twoPaneMin);
-    // 2단일 때 오른쪽 상세 칸(끄기 직전 816 − 400 = 416)이 가장 좁은 바깥 화면(울트라 접힘 411)보다 좁아지지 않는다
-    expect(layout.twoPaneExit - layout.listPaneW).toBeGreaterThanOrEqual(ULTRA_FOLDED.width);
+    // 탭 막대의 끄기 여유는 2단 켜기·끄기 폭 차이와 같다 (둘이 같은 폭에서 꺼진다)
+    expect(layout.expandedMin - layout.railHysteresis).toBe(layout.twoPaneExit);
+    // 2단일 때 오른쪽 상세 칸의 최소(끄기 직전 816 − 목록 400 − 구분선 1 = 415)가 가장 좁은 바깥 화면(울트라 접힘 411)보다 좁지 않다
+    expect(DETAIL_MIN).toBe(415);
+    expect(DETAIL_MIN).toBeGreaterThanOrEqual(ULTRA_FOLDED.width);
   });
 
   it("설정 '화면 정보'의 폭 등급과 같은 토큰을 쓴다", () => {
@@ -102,11 +106,34 @@ describe("기준선 근처에서 깜빡이지 않기 (히스테리시스)", () =
     expect(drag([835, 845, 835, 845], 900).map((c) => c.twoPane)).toEqual([false, true, true, true]);
   });
 
-  it("왼쪽 탭 막대도 같은 켜기·끄기 폭 (높이가 짧은 창에서만)", () => {
+  it("왼쪽 탭 막대: 폭 '넓음'(840)에서 켜고, 켜진 뒤에는 816 아래로 좁아져야 끈다 (높이가 짧은 창에서만)", () => {
     expect(drag([800, 840, 820, 816, 815, 830, 840], 704).map((c) => c.rail)).toEqual([false, true, true, true, false, false, true]);
-    // 높이가 넉넉해지면 바로 꺼진다 (울트라 가로 859)
+    // 높이가 넉넉해지면 꺼진다 (울트라 가로 859)
     expect(drag([933, 933], 704).map((c) => c.rail)).toEqual([true, true]);
     expect(classifyWindow({ width: 933, height: 859, fontScale: 1 }, at(FOLD8_LAND)).rail).toBe(false);
+  });
+
+  it("왼쪽 탭 막대는 폭 등급 '넓음'을 그대로 따른다: 처음 켤 때는 넓음 + 높이 짧음일 때만", () => {
+    for (let w = 560; w <= 1000; w += 7)
+      for (const hh of [500, 700, 759, 760, 783, 784, 900])
+        for (const f of [1, 1.4, 2]) {
+          const c = at({ width: w, height: hh }, f);
+          expect(c.rail).toBe(c.width === "expanded" && c.short);
+        }
+    // 경계: 폭 등급 기준(expandedMin) 한 칸 아래는 켜지지 않는다
+    expect(at({ width: layout.expandedMin - 1, height: 704 }).rail).toBe(false);
+    expect(at({ width: layout.expandedMin, height: 704 }).rail).toBe(true);
+  });
+
+  it("왼쪽 탭 막대: 높이도 기준선 근처(760~783)에서 전 상태를 지킨다 — 팝업 창을 위아래로 끌어도 깜빡이지 않는다", () => {
+    const heights = [700, 759, 770, 783, 770, 784, 770, 759, 770];
+    let prev: WindowClass | null = null;
+    const seen = heights.map((height) => (prev = classifyWindow({ width: 933, height, fontScale: 1 }, prev)));
+    expect(seen.map((c) => c.rail)).toEqual([true, true, true, true, true, false, false, true, true]);
+    // '높이 짧음' 값 자체는 창 그대로 (기준선 여유 없음)
+    expect(seen.map((c) => c.short)).toEqual([true, true, false, false, false, false, false, true, false]);
+    // 처음 계산이면 760 이상은 켜지지 않는다
+    expect(at({ width: 933, height: 770 }).rail).toBe(false);
   });
 
   it("처음 계산(prev 없음)은 켜는 폭 기준이다 — 앱을 828dp 창에서 열면 한 단", () => {
@@ -144,12 +171,43 @@ describe("큰 글씨 (글자 배율)", () => {
     expect(at(FOLD8_LAND, 2)).toMatchObject({ width: "expanded", short: true, rail: true });
   });
 
-  it("실제 왼쪽 칸 폭: 오른쪽 칸이 416dp 보다 좁아지면 줄이되 400 아래로는 줄이지 않는다", () => {
+  it("실제 왼쪽 칸 폭: 오른쪽 칸(구분선 뺀 폭)이 415dp 보다 좁아지면 줄이되 400 아래로는 줄이지 않는다", () => {
     expect(leftPaneWidth(933, 1)).toBe(400);
     expect(leftPaneWidth(933, 1.4)).toBe(480);
-    expect(leftPaneWidth(880, 1.4)).toBe(880 - 416);
+    expect(leftPaneWidth(880, 1.4)).toBe(880 - layout.divider - DETAIL_MIN);
     expect(leftPaneWidth(700, 1.4)).toBe(400);
     expect(leftPaneWidth(0, 1.3)).toBe(460);
+    // 2단을 끄기 직전 폭(816): 목록 400 + 구분선 1 + 상세 415
+    expect(leftPaneWidth(816, 1)).toBe(400);
+    expect(816 - leftPaneWidth(816, 1) - layout.divider).toBe(DETAIL_MIN);
+  });
+
+  it("틀 폭이 816 이상이면 어떤 글자 크기에서도 오른쪽 칸 ≥ 415 · 목록 400~480", () => {
+    for (let box = layout.twoPaneExit; box <= 1400; box++)
+      for (const f of [0.85, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 2]) {
+        const left = leftPaneWidth(box, f);
+        expect(left).toBeGreaterThanOrEqual(layout.listPaneW);
+        expect(left).toBeLessThanOrEqual(listPaneWidth(f));
+        expect(box - left - layout.divider).toBeGreaterThanOrEqual(DETAIL_MIN);
+      }
+  });
+
+  it("펼친 폴드8 가로(933)에서 왼쪽 탭 막대를 뺀 틀로 나누면 모든 글자 크기에서 오른쪽 칸 ≥ 415", () => {
+    const got = [1, 1.1, 1.3, 1.4, 1.5, 2].map((f) => {
+      const box = FOLD8_LAND.width - railWidth(f);
+      const left = leftPaneWidth(box, f);
+      return { box, left, right: box - left - layout.divider };
+    });
+    // 100%: 막대 80 → 틀 853 · 목록 400 · 상세 452 / 130%: 막대 92 → 841 · 425 · 415 / 140%: 막대 96 → 837 · 421 · 415
+    expect(got[0]).toEqual({ box: 853, left: 400, right: 452 });
+    expect(got[2]).toEqual({ box: 841, left: 425, right: 415 });
+    expect(got[3]).toEqual({ box: 837, left: 421, right: 415 });
+    for (const g of got) {
+      expect(g.box).toBeGreaterThanOrEqual(layout.twoPaneExit);
+      expect(g.right).toBeGreaterThanOrEqual(DETAIL_MIN);
+    }
+    // 창 폭(933)으로 나누던 때는 130% 에서 상세가 933 − 92 − 460 − 1 = 380 으로 좁아졌다
+    expect(FOLD8_LAND.width - railWidth(1.3) - listPaneWidth(1.3) - layout.divider).toBe(380);
   });
 
   it("왼쪽 탭 막대 폭: 100% 80 · 150% 이상 100 (탭 이름 상한 fontCap.chrome)", () => {

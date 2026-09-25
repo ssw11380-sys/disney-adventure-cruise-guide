@@ -50,12 +50,13 @@ vi.mock("@/api/hooks", () => ({
 }));
 vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBoundary" }));
 
-const { useFoldLayout, useWindowClass } = await import("@/lib/useFoldLayout");
+const { forgetWindowClass, useFoldLayout, useWindowClass } = await import("@/lib/useFoldLayout");
 const { TwoPane } = await import("@/components/TwoPane");
 const { Screen } = await import("@/components/Screen");
 const { default: TabsLayout } = await import("@/app/(tabs)/_layout");
 const { dark, layout, light, space } = await import("@/tokens");
 const { tabBarH } = await import("@/lib/textScale");
+const { DETAIL_MIN, railWidth } = await import("@/lib/windowClass");
 
 type R = ReturnType<typeof render>;
 const flat = (n: HostNode, key = "style"): Record<string, unknown> => Object.assign({}, ...[n.props[key]].flat(Infinity).filter(Boolean));
@@ -79,6 +80,8 @@ beforeEach(() => {
   h.featureCalls.length = 0;
   h.dark = false;
   h.path = "/";
+  // 앱 전체가 기억하는 전 등급을 지운다 (테스트마다 앱을 새로 연 것처럼)
+  forgetWindowClass();
 });
 
 describe("창 등급 훅 (useWindowClass)", () => {
@@ -108,6 +111,33 @@ describe("창 등급 훅 (useWindowClass)", () => {
       seen.push(value(r).twoPane);
     }
     expect(seen).toEqual([true, true, true, true, false, false, false, true]);
+  });
+
+  it("여러 화면이 같은 전 상태를 본다: 기준선 근처(830)에서 새로 연 화면도 먼저 떠 있던 탭 틀과 같은 등급", () => {
+    size(933, 704);
+    const tabs = render(<Probe />);
+    size(830, 704);
+    tabs.rerender();
+    expect(value(tabs)).toEqual({ width: "medium", short: true, twoPane: true, rail: true });
+    // 화면별로 따로 기억하던 때는 새 화면만 {twoPane:false, rail:false} 였다
+    const fresh = render(<Probe />);
+    expect(value(fresh)).toEqual(value(tabs));
+    expect(value(fresh)).toBe(value(tabs));
+    // 816 아래로 좁아지면 둘 다 같이 꺼지고, 그 뒤 830 에서 새로 연 화면도 꺼진 채
+    size(810, 704);
+    tabs.rerender();
+    fresh.rerender();
+    expect(value(tabs)).toMatchObject({ twoPane: false, rail: false });
+    expect(value(fresh)).toEqual(value(tabs));
+    size(830, 704);
+    tabs.rerender();
+    expect(value(render(<Probe />))).toEqual(value(tabs));
+    expect(value(tabs)).toMatchObject({ twoPane: false, rail: false });
+  });
+
+  it("앱을 기준선 근처 폭에서 처음 열면(기억 없음) 켜는 폭 기준 → 한 단·아래 탭", () => {
+    size(830, 704);
+    expect(value(render(<Probe />))).toEqual({ width: "medium", short: true, twoPane: false, rail: false });
   });
 
   it("등급이 같으면 같은 객체를 돌려준다 (받는 쪽이 다시 계산하지 않게)", () => {
@@ -189,6 +219,41 @@ describe("2단 틀 (TwoPane)", () => {
     expect(r.text()).toBe("종목 목록종목 상세");
     // empty 도 없으면 빈 칸
     expect(two({ right: undefined, empty: undefined }).text()).toBe("종목 목록");
+  });
+
+  const layoutTo = (r: R, width: number) =>
+    r.act(() => (panes(r).root.props.onLayout as (e: { nativeEvent: { layout: { width: number; height: number } } }) => void)({ nativeEvent: { layout: { width, height: 600 } } }));
+  const rightW = (r: R, box: number) => box - (flat(panes(r).left).width as number) - layout.divider - ((flat(panes(r).right).paddingRight as number) ?? 0);
+
+  it("창 폭이 아니라 틀이 받은 폭(onLayout)으로 나눈다: 왼쪽 탭 막대가 켜진 폴드8 가로에서도 상세 ≥ 415", () => {
+    for (const [f, left, right] of [
+      [1, 400, 452],
+      [1.3, 425, 415],
+      [1.4, 421, 415],
+      [2, 417, 415],
+    ] as const) {
+      size(933, 704, f);
+      const r = two();
+      // 재기 전 한 번은 창 폭(933)으로 어림
+      expect(flat(panes(r).left).width).toBe(Math.min(Math.round(layout.listPaneW * (1 + (Math.min(f, 1.4) - 1) / 2)), 933 - layout.divider - DETAIL_MIN));
+      const box = 933 - railWidth(f);
+      layoutTo(r, box);
+      expect(flat(panes(r).left).width).toBe(left);
+      expect(rightW(r, box)).toBe(right);
+      expect(rightW(r, box)).toBeGreaterThanOrEqual(DETAIL_MIN);
+    }
+  });
+
+  it("틀 폭이 바뀌면(폰을 돌리거나 막대가 생기고 사라지면) 다시 나눈다 · 좌우 화면 여백은 틀 폭에서 뺀다", () => {
+    size(933, 704, 1.3);
+    h.insets = { top: 24, bottom: 0, left: 32, right: 48 };
+    const r = two();
+    // 틀 933 − 여백 80 = 853 → 목록 853 − 1 − 415 = 437 → 상한 460 아래라 437
+    layoutTo(r, 933);
+    expect(flat(panes(r).left)).toMatchObject({ width: 437 + 32, paddingLeft: 32 });
+    expect(rightW(r, 933)).toBe(DETAIL_MIN);
+    layoutTo(r, 1100);
+    expect(flat(panes(r).left)).toMatchObject({ width: 460 + 32 });
   });
 
   it("큰 글씨에서는 목록 폭을 배율의 절반만큼 넓힌다 (130% → 460, 200% → 480 상한)", () => {
@@ -296,6 +361,8 @@ describe("탭 바", () => {
     expect(o).not.toHaveProperty("tabBarVariant");
     expect(o).not.toHaveProperty("tabBarActiveBackgroundColor");
     expect(o.tabBarStyle).toEqual(bottomStyle());
+    expect(o.sceneStyle).toEqual({ backgroundColor: light.bg });
+    expect(o).not.toHaveProperty("headerLeftContainerStyle");
   });
 
   it("플래그를 아직 못 받았을 때(fallback 꺼짐)도 펼친 가로 창에서 아래 탭 바", () => {
@@ -315,6 +382,57 @@ describe("탭 바", () => {
     expect(o.tabBarActiveBackgroundColor).toBe(light.surfaceAlt);
     // 높이·위아래 여백을 주지 않는다 (막대가 화면 높이를 다 쓰고, 라이브러리가 화면 여백을 더한다). 폭에는 왼쪽 여백을 더한다
     expect(o.tabBarStyle).toEqual({ backgroundColor: light.surface, borderColor: light.line, width: layout.railW + 32 });
+    // 머리의 왼쪽 여백은 막대가 이미 차지 → 라이브러리가 머리 왼쪽에 더하는 여백(marginStart: 왼쪽 여백)을 뺀다
+    expect(o.headerLeftContainerStyle).toEqual({ marginStart: 0 });
+  });
+
+  it("세로 막대일 때 탭 화면 아래에 시스템 내비게이션 바 여백을 둔다 (고지 한 줄·목록 끝이 그 밑에 깔리지 않게)", () => {
+    h.flag = true;
+    h.insets = { top: 24, bottom: 48, left: 0, right: 0 };
+    size(933, 704);
+    const o = tabs();
+    expect(o.tabBarPosition).toBe("left");
+    expect(o.sceneStyle).toEqual({ backgroundColor: light.bg, paddingBottom: 48 });
+    // 다크 테마도 같은 여백, 배경만 다크
+    h.dark = true;
+    expect(tabs().sceneStyle).toEqual({ backgroundColor: dark.bg, paddingBottom: 48 });
+  });
+
+  it.each([0, 24, 48])("어떤 창·플래그에서도 시스템 내비게이션 바(아래 여백 %ddp) 자리를 아래 탭 바나 탭 화면 여백 중 하나가 딱 한 번 맡는다", (bottom) => {
+    h.insets = { top: 24, bottom, left: 0, right: 0 };
+    for (const flag of [undefined, false, true])
+      for (const [w, hh] of [...Object.values(SIZES), [840, 600], [1200, 700]] as [number, number][]) {
+        h.flag = flag;
+        forgetWindowClass();
+        size(w, hh);
+        const o = tabs();
+        const scene = o.sceneStyle as { paddingBottom?: number };
+        const bar = o.tabBarStyle as { paddingBottom?: number };
+        if (o.tabBarPosition === "left") {
+          expect(scene.paddingBottom).toBe(bottom);
+          expect(bar.paddingBottom).toBeUndefined();
+        } else {
+          expect(scene.paddingBottom).toBeUndefined();
+          expect(bar.paddingBottom).toBe(bottom + space.s);
+        }
+      }
+  });
+
+  it("브리핑 탭 고지 한 줄: 세로 막대일 때 아래 여백 = 탭 화면 여백(시스템 바) + 고지 자체 여백", () => {
+    h.flag = true;
+    h.insets = { top: 24, bottom: 48, left: 0, right: 0 };
+    h.path = "/briefings";
+    size(933, 704);
+    const scene = tabs().sceneStyle as { paddingBottom: number };
+    const r = render(
+      <Screen disclaimer>
+        {null}
+      </Screen>,
+    );
+    const note = r.all().find((n) => n.type === "View" && typeof flat(n).borderTopWidth === "number")!;
+    // 탭 안 고지는 작은 여백만 두고(아래 탭 바·탭 화면 여백이 시스템 바를 맡는다), 탭 화면 여백이 시스템 바 48 을 비운다
+    expect(flat(note).paddingBottom).toBe(space.sm);
+    expect(scene.paddingBottom + (flat(note).paddingBottom as number)).toBe(48 + space.sm);
   });
 
   it.each(["폴드8 접힘", "폴드8 펼침 세로", "울트라 접힘", "울트라 펼침 세로", "울트라 펼침 가로"] as const)("켜져 있어도 %s 은 아래 탭 바 그대로", (name) => {

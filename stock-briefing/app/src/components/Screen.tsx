@@ -12,7 +12,8 @@ export { DISCLAIMER };
 
 /**
  * 모든 화면 하단에 붙는 고지.
- * 탭 화면에서는 탭 바가 시스템 내비게이션 인셋을 이미 차지하므로 여백을 더하지 않고,
+ * 탭 화면에서는 시스템 내비게이션 인셋을 아래 탭 바가, 탭이 왼쪽 세로 막대일 때(3-42)는 탭 화면 아래 여백
+ * ((tabs)/_layout 의 sceneStyle)이 이미 차지하므로 여백을 더하지 않고,
  * 탭 밖(상세·모달)에서는 인셋만큼 아래 여백을 준다.
  */
 export function Disclaimer({ inTabs = false }: { inTabs?: boolean }) {

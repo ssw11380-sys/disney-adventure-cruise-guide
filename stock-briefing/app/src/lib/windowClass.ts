@@ -23,6 +23,10 @@ export interface WindowSize {
   fontScale: number;
 }
 
+/**
+ * width·short 는 지금 창 그대로의 값이고(기준선 여유 없음), twoPane·rail 은 켜기·끄기 기준이 다른 결정 값이다 (히스테리시스).
+ * 그래서 기준선 근처 띠에서는 width 가 '중간'이거나 short 가 false 인데도 rail 이 켜져 있을 수 있다 (켜진 상태를 지키는 중)
+ */
 export interface WindowClass {
   /** 폭 등급: 좁음(600 미만)·중간(600~839)·넓음(840 이상) — 설정 '화면 정보'의 폭 등급과 같다 */
   width: WidthClass;
@@ -30,7 +34,10 @@ export interface WindowClass {
   short: boolean;
   /** 2단(왼쪽 목록 + 오른쪽 상세)을 쓸 만큼 넓다. 기준선 근처에서는 이전 값을 따른다 (히스테리시스) */
   twoPane: boolean;
-  /** 넓고 높이가 짧은 창: 탭을 왼쪽 세로 막대로 옮긴다 (넓음은 2단과 같은 켜기·끄기 폭, 글자 100% 기준) */
+  /**
+   * 탭을 왼쪽 세로 막대로 옮긴다: 폭 등급 '넓음' + 높이 짧음일 때 켠다.
+   * 켜진 뒤에는 폭이 expandedMin − railHysteresis 아래로 좁아지거나 높이가 shortHeight + railHysteresis 이상이 되어야 끈다
+   */
   rail: boolean;
 }
 
@@ -50,8 +57,9 @@ export function listPaneWidth(fontScale: number): number {
 }
 
 /**
- * 2단을 켜는·끄는 창 폭. 큰 글씨로 목록이 넓어진 만큼 기준도 올려서, 오른쪽 상세 칸은 늘 같은 폭 이상 남는다
- * (100%: 840 에서 켜고 816 아래로 좁아지면 끔 / 140%: 920·896 — 울트라 펼침 세로 859 는 큰 글씨에서 한 단)
+ * 2단을 켜는·끄는 창 폭. 큰 글씨로 목록이 넓어진 만큼 기준도 올려서, 오른쪽 상세 칸이 넉넉히 남게 한다
+ * (100%: 840 에서 켜고 816 아래로 좁아지면 끔 / 140%: 920·896 — 울트라 펼침 세로 859 는 큰 글씨에서 한 단).
+ * 창 폭 기준이다: 탭 막대가 차지한 폭은 2단 틀이 제 폭을 재어 목록을 줄여 맞춘다 (leftPaneWidth)
  */
 export function twoPaneWidths(fontScale: number): { enter: number; exit: number } {
   const extra = listPaneWidth(fontScale) - layout.listPaneW;
@@ -69,7 +77,11 @@ export function classifyWindow(size: WindowSize, prev: WindowClass | null = null
   const short = size.height < layout.shortHeight;
   const pane = twoPaneWidths(size.fontScale);
   const twoPane = size.width >= (prev?.twoPane ? pane.exit : pane.enter);
-  const rail = short && size.width >= (prev?.rail ? layout.twoPaneExit : layout.twoPaneMin);
+  // 탭 막대: 켤 때는 폭 등급 '넓음'(expandedMin — 실측 뒤 바뀌어도 폭 등급을 그대로 따른다) + 높이 짧음.
+  // 켜진 뒤에는 폭·높이 모두 railHysteresis 만큼 여유를 두고 끈다 (창을 끌며 기준선을 오갈 때 깜빡임 방지)
+  const rail = prev?.rail
+    ? size.width >= layout.expandedMin - layout.railHysteresis && size.height < layout.shortHeight + layout.railHysteresis
+    : width === "expanded" && short;
   return { width, short, twoPane, rail };
 }
 
@@ -96,14 +108,22 @@ export function isWide(l: WindowClass): boolean {
 }
 
 /**
- * 2단 화면의 왼쪽 목록 실제 폭. listPaneWidth 를 쓰되, 창이 좁아 오른쪽 칸이
- * (layout.twoPaneExit − layout.listPaneW = 416) 보다 좁아지면 그만큼 줄인다. 목록은 layout.listPaneW 아래로는 줄이지 않는다
+ * 2단 오른쪽 상세 칸이 지키는 최소 폭: 2단을 끄기 직전 폭(twoPaneExit 816)에서 목록(listPaneW 400)과 구분선(divider 1)을 뺀 415.
+ * 가장 좁은 바깥 화면(울트라 접힘 411)보다 넓어, 2단의 상세는 접었을 때 화면보다 좁아지지 않는다
  */
-export function leftPaneWidth(windowWidth: number, fontScale: number): number {
+export const DETAIL_MIN = layout.twoPaneExit - layout.listPaneW - layout.divider;
+
+/**
+ * 2단 화면의 왼쪽 목록 실제 폭. boxWidth 는 창 폭이 아니라 2단 틀이 실제로 받은 폭(좌우 화면 여백 제외)이다 —
+ * 탭 화면에서 왼쪽 세로 탭 막대가 켜져 있으면 창 폭보다 막대 폭(railWidth)만큼 좁다 (components/TwoPane 이 onLayout 으로 잰다).
+ * listPaneWidth 를 쓰되 오른쪽 칸이 DETAIL_MIN(415)보다 좁아지면 그만큼 목록을 줄이고, 목록은 layout.listPaneW(400) 아래로는 줄이지 않는다.
+ *  → 틀 폭이 twoPaneExit(816) 이상이면 오른쪽 칸은 늘 415 이상. 펼친 폴드8 가로(933)는 막대를 빼도 틀이 833~853 이라 모든 글자 크기에서 지켜진다.
+ *  → 틀이 816 보다 좁으면(막대가 켜진 폭 약 840~915 의 낮은 팝업·분할 창) 목록 400 을 지키고 오른쪽이 그만큼 좁아진다 (100% · 840×600 → 359)
+ */
+export function leftPaneWidth(boxWidth: number, fontScale: number): number {
   const want = listPaneWidth(fontScale);
-  if (!ok(windowWidth)) return want;
-  const detailMin = layout.twoPaneExit - layout.listPaneW;
-  return Math.max(layout.listPaneW, Math.min(want, Math.floor(windowWidth - detailMin)));
+  if (!ok(boxWidth)) return want;
+  return Math.max(layout.listPaneW, Math.min(want, Math.floor(boxWidth - layout.divider - DETAIL_MIN)));
 }
 
 /** 왼쪽 세로 탭 막대 폭: 탭 이름을 150% 까지 키우므로(fontCap.chrome) 늘어난 배율의 절반만큼 넓힌다 (150% → 100) */

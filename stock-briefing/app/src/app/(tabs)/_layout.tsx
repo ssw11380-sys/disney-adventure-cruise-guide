@@ -31,10 +31,16 @@ export default function TabsLayout() {
         tabBarActiveBackgroundColor: t.surfaceAlt,
         // 높이·위아래 여백은 주지 않는다: 세로 막대는 화면 높이를 다 쓰고, 라이브러리가 위아래·왼쪽 화면 여백을 더한다. 폭에는 왼쪽 여백을 더한다
         tabBarStyle: { backgroundColor: t.surface, borderColor: t.line, width: railWidth(scale) + insets.left },
+        // 아래 탭 바가 없으니 시스템 내비게이션 바(제스처·3버튼·작업 표시줄) 자리는 탭 화면 아래 여백으로 비운다
+        // → 브리핑 탭 고지 한 줄과 잔고·발견·설정 목록의 끝이 그 밑에 깔리지 않는다 (고지는 탭 안에서 이 여백을 믿고 작은 여백만 둔다 — components/Screen Disclaimer)
+        sceneStyle: { backgroundColor: t.bg, paddingBottom: insets.bottom },
+        // 화면 머리: 왼쪽 화면 여백(카메라 구멍 등)은 세로 막대가 이미 차지했으므로, 라이브러리가 머리 왼쪽에 또 더하는 여백을 뺀다
+        headerLeftContainerStyle: { marginStart: 0 },
       }
     : {
         // 고정 height 를 주면 시스템 내비게이션 바(제스처/3버튼) 영역이 무시되어 탭이 그 밑에 깔린다 → 인셋만큼 더한다
         tabBarStyle: { backgroundColor: t.surface, borderTopColor: t.line, height: tabH + insets.bottom, paddingTop: space.s, paddingBottom: insets.bottom + space.s },
+        sceneStyle: { backgroundColor: t.bg },
       };
   return (
     <Tabs
@@ -57,7 +63,6 @@ export default function TabsLayout() {
         ),
         tabBarActiveTintColor: t.ink,
         tabBarInactiveTintColor: t.muted,
-        sceneStyle: { backgroundColor: t.bg },
         // 보이지 않는 탭은 얼려 둔다: 체결·폴링으로 캐시가 바뀌어도 숨은 탭은 다시 그리지 않는다 (3-17)
         freezeOnBlur: true,
       }}

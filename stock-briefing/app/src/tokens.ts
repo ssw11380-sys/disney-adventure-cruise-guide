@@ -214,6 +214,12 @@ export const layout = {
   shortHeight: 760,
   /** 왼쪽 세로 탭 막대 폭 (글자 100%, 화면 여백 제외) */
   railW: 80,
+  /**
+   * 왼쪽 세로 탭 막대의 끄기 여유 (히스테리시스). 막대는 폭 '넓음'(expandedMin) + 높이 짧음(shortHeight 미만)에서 켜고,
+   * 켜진 뒤에는 폭이 expandedMin − 24 = 816 아래로 좁아지거나 높이가 shortHeight + 24 = 784 이상이 되어야 끈다
+   * → 팝업 창을 끌어 크기를 바꿀 때 기준선 근처에서 탭이 아래·왼쪽을 번갈아 오가지 않는다 (2단 켜기·끄기 폭 차이와 같은 24)
+   */
+  railHysteresis: 24,
   /** 2단 사이 구분선 두께 */
   divider: 1,
 } as const;
