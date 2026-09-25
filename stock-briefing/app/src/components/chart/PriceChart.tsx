@@ -652,7 +652,8 @@ function MaLine({ mas, index, currency, period }: { mas: { period: number; value
 const styles = StyleSheet.create({
   readout: { minHeight: 16, justifyContent: "center" },
   readoutText: { fontSize: font.tiny, fontVariant: ["tabular-nums"] },
-  // 이동평균 값 줄: 항목 사이는 예전 두 칸 띄어쓰기만큼, 네모와 글자 사이는 한 칸만큼
-  maLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: space.xxs },
+  // 이동평균 값 줄: 항목 사이는 예전 두 칸 띄어쓰기만큼, 네모와 글자 사이는 한 칸만큼.
+  // 줄 사이 간격은 두지 않는다 — 두 줄이 되어도 예전 두 줄 글자와 같은 높이 (접은 화면 첫 화면이 3-42 이전과 같게)
+  maLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: 0 },
   maItem: { flexDirection: "row", alignItems: "center", gap: space.xxs },
 });

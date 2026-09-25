@@ -8,7 +8,7 @@ import { formatNumber } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide } from "@/lib/windowClass";
-import { font, radius, slopFor, space, useTheme } from "@/theme";
+import { font, radius, slopFor, space, touch, useTheme } from "@/theme";
 import { CHIP_H, CHIP_SLOP, ChipStrip } from "./chart/ChipStrip";
 import { clampView, maColor, PriceChart, type ChartView, type IndicatorKind } from "./chart/PriceChart";
 
@@ -67,15 +67,16 @@ export function CandleChart({
 }) {
   const t = useTheme();
   const { width: winW, height: winH } = useWindowDimensions();
-  // 넓은 창 배치 (3-42, 플래그 foldLayout): 켜져 있고 폭 등급이 중간 이상이면 폭 상한(720)을 풀고 높이를 창 높이에 맞춰 제한한다.
-  // 꺼져 있거나 좁은 창(휴대폰·접힌 화면)이면 지금처럼 720 에서 멈춘다 (lib/chartLayout candleChartSize)
+  // 넓은 창 배치 (3-42, 플래그 foldLayout): 켜져 있고 폭 등급이 중간 이상일 때만 새 크기·누르는 영역을 쓴다.
+  // 꺼져 있거나 좁은 창(휴대폰·접힌 화면)이면 3-42 이전과 똑같다 (사용자 결정 '접은 화면은 지금 그대로')
   const fold = useFoldLayout();
-  // 차트 묶음이 실제로 받은 폭 (패널 안쪽, onLayout). 재기 전 첫 그림은 창 폭 − 패널 여백으로 어림한다 — 종목·지수 상세는 어림과 잰 값이 같다.
-  // 폰을 접어 창이 좁아졌는데 아직 다시 재지 못했으면(onLayout 이 한 박자 늦다) 잰 값 대신 창 쪽으로 줄여 화면 밖으로 넘치지 않는다.
-  // 넓은 창 높이는 창 높이 × 0.5 까지, 하한 chartMinH, 폭 600 경계에서는 서서히 (candleChartSize).
-  // 부르는 쪽이 폭을 정하면(전체 화면) 재지 않는다
+  const wide = fold.on && isWide(fold);
+  // 넓은 창: 차트 묶음이 실제로 받은 폭 (패널 안쪽, onLayout). 재기 전 첫 그림은 창 폭 − 패널 여백으로 어림한다 — 종목·지수 상세는 어림과 잰 값이 같다.
+  // 창이 바뀌었는데 아직 다시 재지 못했으면(onLayout 이 한 박자 늦다) 잰 값 대신 창 쪽으로 줄여 화면 밖으로 넘치지 않는다.
+  // 높이는 창 높이 × 0.5 까지, 하한 chartMinH, 폭 600 경계에서는 서서히. 휴대폰 화면은 잰 폭을 쓰지 않고 예전 식(창 폭 − 56, 720 상한) 그대로
+  // (lib/chartLayout candleChartSize). 부르는 쪽이 폭을 정하면(전체 화면) 재지 않는다
   const [box, setBox] = useState<number | null>(null);
-  const size = candleChartSize({ box, window: { width: winW, height: winH }, wide: fold.on && isWide(fold), width: widthProp, height });
+  const size = candleChartSize({ box, window: { width: winW, height: winH }, wide, width: widthProp, height });
   const width = size.width;
   const chartH = size.height;
   const fadeBg = backdrop ?? t.surface;
@@ -126,14 +127,18 @@ export function CandleChart({
       <Text style={chipText(o.value === period)}>{o.label}</Text>
     </Pressable>
   );
-  const chipStyle = (active: boolean) => [styles.chip, { borderColor: active ? t.accent : t.line, backgroundColor: active ? t.surfaceAlt : "transparent" }];
+  // 넓은 창(3-42): 칩·아이콘 버튼의 보이는 폭을 44 이상으로 → 누르는 영역 44×44 (높이는 32 + 위아래 hitSlop 6). 좌우 hitSlop 은 그대로
+  // 간격(6)의 절반이라 이웃과 겹치지 않고, 가로 스크롤 끝(첫·마지막 칩)에서 잘려도 44 를 지킨다. 휴대폰 화면은 지금 그대로
+  const roomy = wide ? styles.chipWide : null;
+  const iconRoomy = wide ? styles.iconWide : null;
+  const chipStyle = (active: boolean) => [styles.chip, roomy, { borderColor: active ? t.accent : t.line, backgroundColor: active ? t.surfaceAlt : "transparent" }];
   const chipText = (active: boolean) => ({ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? ("700" as const) : ("500" as const) });
   const overlayChips = (
     <>
         {MA_CHOICES.map((per) => {
           const on = prefs.maPeriods.includes(per);
           return (
-            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="switch" accessibilityLabel={`${per} 이동평균선`} accessibilityState={{ checked: on }} hitSlop={CHIP_SLOP} style={[styles.chip, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
+            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="switch" accessibilityLabel={`${per} 이동평균선`} accessibilityState={{ checked: on }} hitSlop={CHIP_SLOP} style={[styles.chip, roomy, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
               <View style={[styles.swatch, { backgroundColor: maColor(t, per) }]} />
               <Text style={chipText(on)}>{per}</Text>
             </Pressable>
@@ -184,14 +189,14 @@ export function CandleChart({
           {TOOL_ORDER.slice(3).map((o) => periodChip(o))}
           {compact ? overlayChips : null}
         </ChipStrip>
-        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityRole="button" accessibilityState={{ disabled: clamped.offset >= maxOffset }} accessibilityLabel="과거로" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
+        <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityRole="button" accessibilityState={{ disabled: clamped.offset >= maxOffset }} accessibilityLabel="과거로" hitSlop={SLOP} style={[styles.icon, iconRoomy, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
           <Ionicons name="chevron-back" size={font.small} color={t.ink} />
         </Pressable>
-        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityRole="button" accessibilityState={{ disabled: clamped.offset === 0 }} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={SLOP} style={[styles.icon, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
+        <Pressable onPress={() => shift(-1)} disabled={clamped.offset === 0} accessibilityRole="button" accessibilityState={{ disabled: clamped.offset === 0 }} accessibilityLabel={clamped.offset > 0 ? `최신으로 (지금 ${clamped.offset}${UNIT[period]} 전)` : "최신으로"} hitSlop={SLOP} style={[styles.icon, iconRoomy, { borderColor: clamped.offset > 0 ? t.accent : t.line, opacity: clamped.offset === 0 ? 0.4 : 1 }]}>
           <Ionicons name="chevron-forward" size={font.small} color={t.ink} />
         </Pressable>
         {onFullscreen ? (
-          <Pressable onPress={onFullscreen} accessibilityRole="button" accessibilityLabel="차트 크게 보기" hitSlop={SLOP} style={[styles.icon, { borderColor: t.line }]}>
+          <Pressable onPress={onFullscreen} accessibilityRole="button" accessibilityLabel="차트 크게 보기" hitSlop={SLOP} style={[styles.icon, iconRoomy, { borderColor: t.line }]}>
             <Ionicons name="expand-outline" size={font.small} color={t.ink} />
           </Pressable>
         ) : null}
@@ -241,5 +246,8 @@ const styles = StyleSheet.create({
   grow: { flex: 1 },
   chip: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth, minHeight: CHIP_H },
   icon: { width: ICON, height: ICON, alignItems: "center", justifyContent: "center", borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  // 넓은 창만 (3-42): 보이는 폭 44 — 누르는 영역 44×44 (위 roomy 설명)
+  chipWide: { minWidth: touch.min, justifyContent: "center" },
+  iconWide: { width: touch.min },
   swatch: { width: 8, height: 2 },
 });

@@ -6,9 +6,10 @@ import { render, type HostNode } from "./miniRender";
 
 /**
  * 상세 차트 묶음(CandleChart)의 크기와 칩 띠 (3-42 접는 폰 3단계 1) · 폴드 진단 22·25·6·7번).
- *  - 폭은 창 폭이 아니라 차트 묶음이 실제로 받은 폭(onLayout) — 28dp 빈 띠 버그 수정은 플래그와 상관없음
- *  - foldLayout 이 켜져 있고 폭 등급이 중간 이상이면 720 상한을 풀고 높이를 창 높이 × 0.5 로 제한, 꺼져 있으면 지금처럼 720 상한
- *  - 옆으로 넘기는 칩 띠는 넘길 내용이 있는 쪽 끝만 바탕색으로 흐리게
+ *  - 휴대폰 화면(좁은 창 · foldLayout 꺼짐)은 3-42 이전 크기 그대로: 폭 min(창 폭 − 56, 720), 높이 폭 × 0.62 (사용자 결정 '접은 화면은 지금 그대로')
+ *  - foldLayout 이 켜져 있고 폭 등급이 중간 이상이면: 폭은 차트 묶음이 실제로 받은 폭(onLayout — 28dp 빈 띠 없음), 720 상한을 풀고
+ *    높이를 창 높이 × 0.5 로 제한, 칩·버튼 누르는 영역 44×44
+ *  - 옆으로 넘기는 칩 띠는 넘길 내용이 있는 쪽 끝만 바탕색으로 흐리게 (덧칠만 — 배치는 그대로)
  */
 const h = vi.hoisted(() => ({
   win: { width: 475, height: 751, fontScale: 1 },
@@ -49,7 +50,7 @@ vi.mock("@/components/chart/PriceChart", () => ({
 const { CandleChart } = await import("@/components/CandleChart");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const { candleChartSize } = await import("@/lib/chartLayout");
-const { clearOf, dark, layout, light, space } = await import("@/tokens");
+const { clearOf, dark, layout, light, space, touch } = await import("@/tokens");
 
 type R = ReturnType<typeof render>;
 const flat = (n: HostNode): Record<string, unknown> => Object.assign({}, ...[n.props.style].flat(Infinity).filter(Boolean));
@@ -89,29 +90,37 @@ beforeEach(() => {
   forgetWindowClass();
 });
 
-describe("상세 차트 폭: 차트 묶음이 받은 폭을 잰다 (진단 22번 — 28dp 빈 띠, 플래그와 상관없음)", () => {
-  it("접힌 화면: 첫 그림부터 패널 안쪽 폭을 다 쓴다 (예전: 창 폭 − 56 → 오른쪽 28dp 가 비었다)", () => {
-    for (const [w, hh] of [SIZES["폴드8 접힘"], SIZES["울트라 접힘"]]) {
-      size(w, hh);
-      const r = open();
-      expect(chart(r)).toEqual({ width: inner(w), height: Math.round(inner(w) * 0.62) });
-      // 잰 폭이 어림과 같으면 그대로 (다시 그려도 같은 크기)
-      layoutAs(r, inner(w));
-      expect(chart(r)).toEqual({ width: inner(w), height: Math.round(inner(w) * 0.62) });
-      expect(chart(r).width - Math.min(w - space.lg * 4, 720)).toBe(space.lg * 2);
-    }
-  });
+/** 3-42 이전(main) 차트 크기: 폭 min(창 폭 − 56, 720), 높이 폭 × 0.62 — 휴대폰 화면(좁은 창·플래그 꺼짐)은 이 값 그대로 */
+const mainSize = (w: number) => {
+  const width = Math.min(w - space.lg * 2 - space.lg * 2, 720);
+  return { width, height: Math.round(width * 0.62) };
+};
 
-  it("잰 폭이 어림과 다르면 잰 폭을 쓴다 (다른 여백의 패널·2단 칸)", () => {
-    const r = open();
-    layoutAs(r, 400.6);
-    expect(chart(r)).toEqual({ width: 400, height: 248 });
+describe("휴대폰 화면(좁은 창 · 플래그 꺼짐)은 3-42 이전 차트 크기 그대로 (사용자 결정 '접은 화면은 지금 그대로')", () => {
+  it("360·411·475 창 × 플래그 못 받음·꺼짐·켜짐: 첫 그림부터 창 폭 − 56 (304×188 · 355×220 · 419×260), 잰 폭이 와도 그대로", () => {
+    const want = { 360: { width: 304, height: 188 }, 411: { width: 355, height: 220 }, 475: { width: 419, height: 260 } } as const;
+    for (const [w, hh] of [[360, 780], [411, 960], [475, 751]] as const) {
+      for (const flag of [undefined, false, true]) {
+        size(w, hh);
+        h.flag = flag;
+        forgetWindowClass();
+        const r = open();
+        expect(chart(r), `${w} ${flag}`).toEqual(want[w]);
+        expect(chart(r), `${w} ${flag}`).toEqual(mainSize(w));
+        // 패널 안쪽 폭(창 폭 − 28)을 재어 알려 와도 예전 식 그대로 (오른쪽 28dp 띠도 예전처럼)
+        layoutAs(r, inner(w));
+        expect(chart(r), `${w} ${flag}`).toEqual(want[w]);
+        // 다른 폭을 알려 와도 (다른 여백의 패널 등)
+        layoutAs(r, 400.6);
+        expect(chart(r), `${w} ${flag}`).toEqual(want[w]);
+      }
+    }
   });
 
   it("데이터가 없을 때 자리 표시 칸도 같은 높이", () => {
     const r = open({ candles: [] });
     const box = r.all().find((n) => n.type === "View" && flat(n).borderRadius !== undefined && flat(n).height !== undefined)!;
-    expect(flat(box).height).toBe(Math.round(inner(475) * 0.62));
+    expect(flat(box).height).toBe(mainSize(475).height);
   });
 
   it("부르는 쪽이 폭·높이를 정하면(전체 화면 차트) 재지 않고 그대로", () => {
@@ -123,7 +132,7 @@ describe("상세 차트 폭: 차트 묶음이 받은 폭을 잰다 (진단 22번
   });
 });
 
-describe("넓은 창 배치 (진단 6·7번, 플래그 foldLayout)", () => {
+describe("넓은 창 배치 (진단 6·7·22번, 플래그 foldLayout)", () => {
   const each = (flag: boolean | undefined) =>
     Object.fromEntries(
       (Object.keys(SIZES) as (keyof typeof SIZES)[]).map((name) => {
@@ -137,26 +146,27 @@ describe("넓은 창 배치 (진단 6·7번, 플래그 foldLayout)", () => {
       }),
     );
 
-  it("플래그 꺼짐(못 받음 포함): 어느 크기에서도 지금처럼 720 상한, 높이 = 폭 × 0.62", () => {
+  it("플래그 꺼짐(못 받음 포함): 어느 크기에서도 3-42 이전 식 그대로 (720 상한, 높이 = 폭 × 0.62)", () => {
     for (const flag of [undefined, false]) {
       expect(each(flag)).toEqual({
-        "폴드8 접힘": { width: 447, height: 277 },
+        "폴드8 접힘": { width: 419, height: 260 },
         "폴드8 펼침 가로": { width: 720, height: 446 },
-        "폴드8 펼침 세로": { width: 676, height: 419 },
-        "울트라 접힘": { width: 383, height: 237 },
+        "폴드8 펼침 세로": { width: 648, height: 402 },
+        "울트라 접힘": { width: 355, height: 220 },
         "울트라 펼침 세로": { width: 720, height: 446 },
         "울트라 펼침 가로": { width: 720, height: 446 },
       });
+      for (const [name, s] of Object.entries(each(flag))) expect(s, name).toEqual(mainSize(SIZES[name as keyof typeof SIZES][0]));
     }
   });
 
-  it("플래그 켜짐: 넓은 창은 패널 폭을 다 쓰고 높이는 창 높이의 절반까지, 접힌 화면은 그대로", () => {
+  it("플래그 켜짐: 넓은 창은 잰 패널 폭을 다 쓰고(28dp 빈 띠 없음) 높이는 창 높이의 절반까지, 접힌 화면은 그대로", () => {
     expect(each(true)).toEqual({
-      "폴드8 접힘": { width: 447, height: 277 },
+      "폴드8 접힘": { width: 419, height: 260 },
       // 933×704: 높이 352 → 날짜 줄·이동평균 칩까지 첫 화면에 (예전 446 은 아래가 화면 밖)
       "폴드8 펼침 가로": { width: 905, height: 352 },
       "폴드8 펼침 세로": { width: 676, height: 419 },
-      "울트라 접힘": { width: 383, height: 237 },
+      "울트라 접힘": { width: 355, height: 220 },
       "울트라 펼침 세로": { width: 831, height: 477 },
       "울트라 펼침 가로": { width: 926, height: 430 },
     });
@@ -164,6 +174,15 @@ describe("넓은 창 배치 (진단 6·7번, 플래그 foldLayout)", () => {
       const [, hh] = SIZES[name as keyof typeof SIZES];
       expect(s.height, name).toBeLessThanOrEqual(Math.round(hh * layout.chartMaxHRatio));
     }
+  });
+
+  it("넓은 창: 잰 폭이 어림과 다르면 잰 폭을 쓴다 (다른 여백의 패널·2단 칸)", () => {
+    size(933, 704);
+    h.flag = true;
+    const r = open();
+    expect(chart(r)).toEqual({ width: 905, height: 352 });
+    layoutAs(r, 400.6);
+    expect(chart(r)).toEqual({ width: 400, height: 248 });
   });
 
   it("같은 계산을 쓴다 (lib/chartLayout candleChartSize)", () => {
@@ -184,10 +203,10 @@ describe("넓은 창 배치 (진단 6·7번, 플래그 foldLayout)", () => {
       expect(chart(r), `${flag}`).toEqual(flag ? { width: 905, height: 352 } : { width: 720, height: 446 });
       size(475, 751);
       r.rerender();
-      // 잰 폭은 아직 펼쳤을 때의 905 — 예전에는 720×446 으로 그려 화면 밖으로 273dp 넘쳤다
-      expect(chart(r), `${flag}`).toEqual({ width: 447, height: 277 });
+      // 잰 폭은 아직 펼쳤을 때의 905 — 휴대폰 화면은 잰 폭을 쓰지 않아 바로 예전 크기 (화면 밖으로 넘치지 않는다)
+      expect(chart(r), `${flag}`).toEqual(mainSize(475));
       layoutAs(r, inner(475));
-      expect(chart(r), `${flag}`).toEqual({ width: 447, height: 277 });
+      expect(chart(r), `${flag}`).toEqual(mainSize(475));
     }
   });
 
@@ -198,7 +217,7 @@ describe("넓은 창 배치 (진단 6·7번, 플래그 foldLayout)", () => {
     layoutAs(r, inner(954));
     size(411, 960);
     r.rerender();
-    expect(chart(r)).toEqual({ width: 383, height: 237 });
+    expect(chart(r)).toEqual(mainSize(411));
 
     size(933, 704);
     forgetWindowClass();
@@ -209,7 +228,7 @@ describe("넓은 창 배치 (진단 6·7번, 플래그 foldLayout)", () => {
     expect(chart(r2)).toEqual({ width: 676, height: 419 });
   });
 
-  it("낮은 창에서도 높이 하한 chartMinH, 폭 599 ↔ 600 에서 높이가 뛰지 않는다", () => {
+  it("낮은 창에서도 높이 하한 chartMinH, 폭 600 부터 높이 상한을 서서히", () => {
     h.flag = true;
     const at = (w: number, hh: number) => {
       size(w, hh);
@@ -220,10 +239,69 @@ describe("넓은 창 배치 (진단 6·7번, 플래그 foldLayout)", () => {
     };
     // 펼친 폴드8 가로를 위아래로 나눈 창: 예전 150
     expect(at(933, 300)).toEqual({ width: 905, height: layout.chartMinH });
-    // 좁음(599) → 중간(600): 예전 354 → 200
-    expect(at(599, 400)).toEqual({ width: 571, height: 354 });
+    // 좁음(599)은 휴대폰 화면 그대로 → 중간(600)은 잰 폭, 높이 상한은 아직 거의 쓰지 않는다 (예전 354 → 200 처럼 뛰지 않는다)
+    expect(at(599, 400)).toEqual(mainSize(599));
     expect(at(600, 400)).toEqual({ width: 572, height: 355 });
     expect(at(layout.mediumMin + layout.chartCapRamp, 400).height).toBe(layout.chartMinH);
+  });
+});
+
+describe("넓은 창의 차트 칩·버튼은 누르는 영역 44×44 (3-42, 플래그 foldLayout)", () => {
+  const PERIODS = ["일봉", "주봉", "월봉", "1분봉", "5분봉", "30분봉"];
+  const MA = [5, 10, 20, 60, 120, 200].map((p) => `${p} 이동평균선`);
+  const ICONS = ["과거로", "최신으로", "차트 크게 보기"];
+  const press = (r: R, label: string) => r.all().find((n) => n.type === "Pressable" && n.props.accessibilityLabel === label)!;
+  type Slop = { top: number; bottom: number; left: number; right: number };
+  const target = (n: HostNode) => {
+    const s = flat(n);
+    const slop = n.props.hitSlop as Slop;
+    const w = Math.max(Number(s.minWidth ?? 0), Number(s.width ?? 0));
+    const hgt = Math.max(Number(s.minHeight ?? 0), Number(s.height ?? 0));
+    return { w, h: hgt + slop.top + slop.bottom, slop };
+  };
+  const draw = (w: number, hh: number, flag: boolean | undefined, props: Partial<React.ComponentProps<typeof CandleChart>> = {}) => {
+    size(w, hh);
+    h.flag = flag;
+    forgetWindowClass();
+    return open({ onFullscreen: () => undefined, ...props });
+  };
+
+  it("넓은 창(펼친 폴드8 가로·세로·울트라): 기간 칩 · 과거로/최신으로/크게 보기 · 이동평균 스위치의 보이는 폭 44 이상 + 높이 32 + 위아래 6 = 44", () => {
+    for (const [w, hh] of [SIZES["폴드8 펼침 가로"], SIZES["폴드8 펼침 세로"], SIZES["울트라 펼침 세로"], [600, 800]] as const) {
+      const r = draw(w, hh, true);
+      for (const label of [...PERIODS, ...MA, ...ICONS]) {
+        const t = target(press(r, label));
+        // 폭은 hitSlop 없이 보이는 폭만으로 44 (가로 스크롤 끝의 첫·마지막 칩은 좌우 hitSlop 이 스크롤 틀 밖이라 잘린다)
+        expect(t.w, `${w} ${label}`).toBeGreaterThanOrEqual(touch.min);
+        expect(t.h, `${w} ${label}`).toBeGreaterThanOrEqual(touch.min);
+        // 이웃과 겹치지 않는다: 좌우 hitSlop 은 칩·버튼 간격(6)의 절반 이하
+        expect(t.slop.left + t.slop.right, `${w} ${label}`).toBeLessThanOrEqual(space.s);
+      }
+      // 글자는 가운데 (좁은 칩 '일' 이 44 로 넓어져도)
+      expect(flat(press(r, "일봉")).justifyContent).toBe("center");
+    }
+  });
+
+  it("전체 화면 차트(한 줄로 합친 도구)도 넓은 창이면 44", () => {
+    const r = draw(933, 704, true, { compact: true, width: 909, height: 480, onFullscreen: undefined });
+    for (const label of [...PERIODS, ...MA, "과거로", "최신으로"]) {
+      const t = target(press(r, label));
+      expect(t.w, label).toBeGreaterThanOrEqual(touch.min);
+      expect(t.h, label).toBeGreaterThanOrEqual(touch.min);
+    }
+  });
+
+  it("휴대폰 화면(접힌 화면 · 플래그 꺼짐)은 지금 그대로: 칩은 글자 폭, 아이콘 버튼은 32×32", () => {
+    for (const [w, hh, flag] of [[475, 751, true], [411, 960, true], [360, 780, undefined], [933, 704, false], [933, 704, undefined]] as const) {
+      const r = draw(w, hh, flag);
+      for (const label of [...PERIODS, ...MA]) {
+        const s = flat(press(r, label));
+        expect(s.minWidth, `${w} ${flag} ${label}`).toBeUndefined();
+        expect(s.minHeight, `${w} ${flag} ${label}`).toBe(32);
+        expect(s.justifyContent, `${w} ${flag} ${label}`).toBeUndefined();
+      }
+      for (const label of ICONS) expect(flat(press(r, label)), `${w} ${flag} ${label}`).toMatchObject({ width: 32, height: 32 });
+    }
   });
 });
 
@@ -275,6 +353,8 @@ describe("칩 띠 끝 흐림 (진단 25번)", () => {
       expect(left!.props.colors).toEqual([t.surface, clearOf(t.surface)]);
       for (const f of [left!, right!]) {
         expect(flat(f).pointerEvents).toBe("none");
+        // 위에 덧칠만 한다 (자리를 차지하지 않아 칩·차트 배치는 3-42 이전 그대로)
+        expect(flat(f).position).toBe("absolute");
         expect(f.props.importantForAccessibility).toBe("no-hide-descendants");
         expect(f.props.accessibilityElementsHidden).toBe(true);
         expect(flat(f).width).toBe(space.xl);

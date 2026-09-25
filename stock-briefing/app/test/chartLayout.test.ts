@@ -38,43 +38,59 @@ const WIDE: Record<SizeName, boolean> = {
 };
 
 describe("상세 차트 크기 (candleChartSize)", () => {
-  // 패널 안쪽 폭 = 창 폭 − 패널 좌우 여백(14 × 2). 종목·지수 상세의 차트 묶음이 실제로 받는 폭
+  // 패널 안쪽 폭 = 창 폭 − 패널 좌우 여백(14 × 2). 넓은 창에서 종목·지수 상세의 차트 묶음이 실제로 받는 폭
   const inner = (w: number) => w - CHART_PANEL_PAD * 2;
+  // 3-42 이전(main) 식: min(창 폭 − 56, 720) — 패널 여백을 두 번 빼서 오른쪽 28dp 가 빈다. 휴대폰 화면은 이 식 그대로 (사용자 결정)
+  const mainW = (w: number) => Math.min(w - space.lg * 2 - space.lg * 2, 720);
+  const main = (w: number) => ({ width: mainW(w), height: Math.round(mainW(w) * 0.62) });
   const size = (name: SizeName, flagOn: boolean, box: number | null = inner(SIZES[name][0])) => {
     const [width, height] = SIZES[name];
     return candleChartSize({ box, window: { width, height }, wide: flagOn && WIDE[name] });
   };
 
-  it("패널 여백을 한 번만 뺀다: 모든 크기에서 오른쪽 28dp 빈 띠가 없다 (진단 22번, 버그 수정 — 플래그와 상관없음)", () => {
+  it("휴대폰 화면(좁은 창 · 플래그 꺼짐)은 3-42 이전 식 그대로: 폭 min(창 폭 − 56, 720), 높이 폭 × 0.62 (사용자 결정 '접은 화면은 지금 그대로')", () => {
     expect(CHART_PANEL_PAD).toBe(space.lg);
-    for (const name of Object.keys(SIZES) as SizeName[]) {
-      const w = SIZES[name][0];
-      const s = size(name, false);
-      // 예전 식: min(창 폭 − 56, 720) → 좁은 창에서 패널 안쪽보다 28 좁았다
-      const before = Math.min(w - space.lg * 4, 720);
-      if (inner(w) <= layout.chartMaxW) {
-        expect(s.width, name).toBe(inner(w));
-        expect(s.width - before, name).toBe(space.lg * 2);
-      } else {
-        // 넓은 창(플래그 꺼짐)은 지금처럼 720 에서 멈춘다
-        expect(s.width, name).toBe(layout.chartMaxW);
+    // 360·411·475 창: 304×188 · 355×220 · 419×260 (main 과 같은 값 — 잰 폭이 무엇이든)
+    const want = { 360: { width: 304, height: 188 }, 411: { width: 355, height: 220 }, 475: { width: 419, height: 260 } } as const;
+    for (const w of [360, 411, 475] as const) {
+      for (const box of [null, inner(w), 905, 0, Number.NaN, 200.5]) {
+        expect(candleChartSize({ box, window: { width: w, height: 800 }, wide: false }), `${w} ${box}`).toEqual(want[w]);
+        expect(candleChartSize({ box, window: { width: w, height: 800 }, wide: false }), `${w} ${box}`).toEqual(main(w));
       }
     }
+    // 소수점 창 폭도 예전처럼 그대로 (내리지 않는다): 411.43 → 355.43 × 220
+    expect(candleChartSize({ box: 383, window: { width: 411.43, height: 960 }, wide: false })).toEqual({ width: 411.43 - 56, height: Math.round((411.43 - 56) * 0.62) });
+    // 폭을 모르는 창은 0 (그림 없음)
+    expect(candleChartSize({ box: null, window: { width: Number.NaN, height: 800 }, wide: false }).width).toBe(0);
+    // 플래그가 꺼져 있으면 넓은 창도 예전 식 (펼친 폴드8 세로 704 → 648×402, 가로 933 → 720×446)
+    expect(candleChartSize({ box: 676, window: { width: 704, height: 933 }, wide: false })).toEqual({ width: 648, height: 402 });
+    expect(candleChartSize({ box: 905, window: { width: 933, height: 704 }, wide: false })).toEqual({ width: 720, height: 446 });
+  });
+
+  it("넓은 창(플래그 켜짐 + 폭 중간 이상)만 패널 여백을 한 번만 뺀다: 오른쪽 28dp 빈 띠가 없다 (진단 22번)", () => {
+    for (const name of Object.keys(SIZES) as SizeName[]) {
+      if (!WIDE[name]) continue;
+      const w = SIZES[name][0];
+      expect(size(name, true).width, name).toBe(inner(w));
+    }
+    // 펼친 폴드8 세로(704): 예전 식 648 → 676 (+28)
+    expect(size("폴드8 펼침 세로", true).width - mainW(704)).toBe(space.lg * 2);
   });
 
   it("6가지 창 크기 × 플래그 꺼짐·켜짐 (추정 창 크기로 계산한 값)", () => {
     const table = Object.fromEntries((Object.keys(SIZES) as SizeName[]).map((n) => [n, { off: size(n, false), on: size(n, true) }]));
     expect(table).toEqual({
-      // 접힌 화면: 플래그와 상관없이 같다 (휴대폰 화면 그대로 + 28dp 버그 수정)
-      "폴드8 접힘": { off: { width: 447, height: 277 }, on: { width: 447, height: 277 } },
-      "울트라 접힘": { off: { width: 383, height: 237 }, on: { width: 383, height: 237 } },
+      // 접힌 화면: 플래그와 상관없이 3-42 이전과 같다 (휴대폰 화면 그대로)
+      "폴드8 접힘": { off: { width: 419, height: 260 }, on: { width: 419, height: 260 } },
+      "울트라 접힘": { off: { width: 355, height: 220 }, on: { width: 355, height: 220 } },
       // 펼친 폴드8 가로(높이 704): 꺼짐은 720 상한 그대로(오른쪽 185dp 빈 칸), 켜짐은 폭을 다 쓰고 높이를 창 높이의 절반(352)으로
       "폴드8 펼침 가로": { off: { width: 720, height: 446 }, on: { width: 905, height: 352 } },
-      // 펼친 폴드8 세로: 폭이 720 보다 좁아 켜도 같다 (높이 상한 467 보다 폭 × 0.62 = 419 가 작다)
-      "폴드8 펼침 세로": { off: { width: 676, height: 419 }, on: { width: 676, height: 419 } },
+      // 펼친 폴드8 세로: 꺼짐은 예전 식(648), 켜짐은 패널 폭(676) — 높이 상한 467 보다 폭 × 0.62 = 419 가 작다
+      "폴드8 펼침 세로": { off: { width: 648, height: 402 }, on: { width: 676, height: 419 } },
       "울트라 펼침 세로": { off: { width: 720, height: 446 }, on: { width: 831, height: 477 } },
       "울트라 펼침 가로": { off: { width: 720, height: 446 }, on: { width: 926, height: 430 } },
     });
+    for (const name of Object.keys(SIZES) as SizeName[]) expect(size(name, false), name).toEqual(main(SIZES[name][0]));
   });
 
   it("플래그 꺼짐: 높이는 지금처럼 폭 × 0.62, 폭은 720 에서 멈춘다", () => {
@@ -102,36 +118,36 @@ describe("상세 차트 크기 (candleChartSize)", () => {
     expect(candleChartSize({ box: 905, window: { width: 933, height: 704 }, wide: false })).toEqual({ width: 720, height: 446 });
   });
 
-  it("재기 전(첫 그림)은 창 폭 − 패널 여백으로 어림하고, 잰 뒤에는 잰 폭을 쓴다 (2단 오른쪽 칸 등 창보다 좁은 자리)", () => {
+  it("넓은 창: 재기 전(첫 그림)은 창 폭 − 패널 여백으로 어림하고, 잰 뒤에는 잰 폭을 쓴다 (2단 오른쪽 칸 등 창보다 좁은 자리)", () => {
     const win = { width: 933, height: 704 };
     expect(candleChartSize({ box: null, window: win, wide: true })).toEqual({ width: 905, height: 352 });
     // 2단 오른쪽 칸처럼 창보다 좁은 자리: 잰 폭 그대로, 높이는 폭 × 0.62 가 창 높이 상한보다 작으면 그 값
     expect(candleChartSize({ box: 500, window: win, wide: true })).toEqual({ width: 500, height: 310 });
     // 소수점 폭은 내린다 (그림이 패널 밖으로 넘치지 않게)
-    expect(candleChartSize({ box: 383.43, window: { width: 411.43, height: 960 }, wide: false }).width).toBe(383);
+    expect(candleChartSize({ box: 500.6, window: win, wide: true }).width).toBe(500);
     // 잴 수 없는 값(0·NaN)은 어림으로
-    expect(candleChartSize({ box: 0, window: { width: 475, height: 751 }, wide: false }).width).toBe(447);
-    expect(candleChartSize({ box: Number.NaN, window: { width: 475, height: 751 }, wide: false }).width).toBe(447);
+    expect(candleChartSize({ box: 0, window: win, wide: true }).width).toBe(905);
+    expect(candleChartSize({ box: Number.NaN, window: win, wide: true }).width).toBe(905);
   });
 
-  it("창이 좁아졌는데 잰 폭이 아직 넓을 때(접은 직후, onLayout 전)는 창 폭 − 패널 여백으로 줄인다 → 화면 밖으로 넘치지 않는다", () => {
-    // 펼친 폴드8 가로(933)에서 잰 905 가 남은 채 접힘(475): 예전에는 720×446 으로 그려 273dp 가 화면 밖으로 넘쳤다
-    expect(candleChartSize({ box: 905, window: { width: 475, height: 751 }, wide: false })).toEqual({ width: 447, height: 277 });
+  it("창이 바뀌었는데 잰 폭이 아직 넓을 때(onLayout 전): 넓은 창은 창 폭 − 패널 여백으로 줄이고, 접힌 화면은 잰 폭을 쓰지 않는다 → 화면 밖으로 넘치지 않는다", () => {
+    // 펼친 폴드8 가로(933)에서 잰 905 가 남은 채 접힘(475): 예전 식 그대로 419×260 (잰 폭과 상관없음)
+    expect(candleChartSize({ box: 905, window: { width: 475, height: 751 }, wide: false })).toEqual({ width: 419, height: 260 });
     // 울트라 펼침 가로(잰 926) → 접힘(411)
-    expect(candleChartSize({ box: 926, window: { width: 411, height: 960 }, wide: false })).toEqual({ width: 383, height: 237 });
+    expect(candleChartSize({ box: 926, window: { width: 411, height: 960 }, wide: false })).toEqual({ width: 355, height: 220 });
     // 넓은 창끼리(펼친 가로 → 펼친 세로): 잰 905 가 남아도 704 − 28 = 676
     expect(candleChartSize({ box: 905, window: { width: 704, height: 933 }, wide: true })).toEqual({ width: 676, height: 419 });
     // 창보다 좁은 자리(2단 오른쪽 칸·탭 막대 옆)는 잰 폭 그대로
     expect(candleChartSize({ box: 500, window: { width: 933, height: 704 }, wide: true }).width).toBe(500);
-    expect(candleChartSize({ box: 400.6, window: { width: 475, height: 751 }, wide: false }).width).toBe(400);
     // 어떤 잰 값이 남아 있어도 창 폭 − 패널 여백을 넘지 않는다
     for (const name of Object.keys(SIZES) as SizeName[]) {
       const [w, hh] = SIZES[name];
-      for (const stale of [383, 447, 676, 831, 905, 926]) {
+      for (const stale of [355, 383, 419, 447, 676, 831, 905, 926]) {
         for (const flagOn of [false, true]) {
-          const s = candleChartSize({ box: stale, window: { width: w, height: hh }, wide: flagOn && WIDE[name] });
+          const wide = flagOn && WIDE[name];
+          const s = candleChartSize({ box: stale, window: { width: w, height: hh }, wide });
           expect(s.width, `${name} ${stale}`).toBeLessThanOrEqual(inner(w));
-          expect(s.width, `${name} ${stale}`).toBe(Math.min(stale, inner(w), flagOn && WIDE[name] ? Infinity : layout.chartMaxW));
+          expect(s.width, `${name} ${stale}`).toBe(wide ? Math.min(stale, inner(w)) : mainW(w));
         }
       }
     }
@@ -169,16 +185,22 @@ describe("넓은 창 차트 높이의 하한과 폭 600 경계 (chartMinH · cha
     expect(at(933, 300, 250)).toEqual({ width: 250, height: 155 });
   });
 
-  it("폭 599 ↔ 600 (좁음 ↔ 중간): 높이가 354 → 200 으로 뛰지 않는다 — 600 부터 chartCapRamp(96) 만큼에 걸쳐 서서히 낮춘다", () => {
-    // 좁은 창(599)은 휴대폰 화면 그대로, 600 은 아직 상한을 거의 쓰지 않는다
-    expect(at(599, 400)).toEqual({ width: 571, height: 354 });
+  it("폭 599 ↔ 600 (좁음 ↔ 중간): 높이가 355 → 200 으로 뛰지 않는다 — 600 부터 chartCapRamp(96) 만큼에 걸쳐 서서히 낮춘다", () => {
+    // 좁은 창(599)은 휴대폰 화면 그대로(예전 식 543), 600 은 잰 폭(572)을 쓰되 아직 높이 상한을 거의 쓰지 않는다
+    expect(at(599, 400)).toEqual({ width: 543, height: 337 });
     expect(at(600, 400)).toEqual({ width: 572, height: 355 });
-    // 창을 끌어 폭을 1dp 씩 바꿔도 높이는 3dp 넘게 뛰지 않는다 (낮은 창 400·300, 보통 창 704)
+    // 창을 끌어 폭을 1dp 씩 바꿔도 높이는 3dp 넘게 뛰지 않는다 (낮은 창 400·300, 보통 창 704).
+    // 단 599 → 600 한 번은 폭 식이 휴대폰 식 → 잰 폭으로 바뀌어 폭이 29dp, 높이가 그만큼(약 18dp) 달라진다 (접은 화면을 3-42 이전과 같게 둔 대가)
     for (const hh of [300, 400, 704]) {
-      let prev = at(560, hh).height;
+      let prev = at(560, hh);
       for (let w = 561; w <= 960; w++) {
-        const cur = at(w, hh).height;
-        expect(Math.abs(cur - prev), `${w}×${hh}`).toBeLessThanOrEqual(3);
+        const cur = at(w, hh);
+        if (w === layout.mediumMin) {
+          expect(cur.width - prev.width, `${w}×${hh}`).toBe(space.lg * 2 + 1);
+          expect(Math.abs(cur.height - prev.height), `${w}×${hh}`).toBeLessThanOrEqual(Math.round((space.lg * 2 + 1) * layout.chartAspect) + 1);
+        } else {
+          expect(Math.abs(cur.height - prev.height), `${w}×${hh}`).toBeLessThanOrEqual(3);
+        }
         prev = cur;
       }
     }

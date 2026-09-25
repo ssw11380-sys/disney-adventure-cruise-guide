@@ -6,7 +6,7 @@ import { font, fontCap, layout, space, touch } from "@/tokens";
 
 /**
  * 차트 화면 배치 계산 (3-42 접는 폰 · 폴드 진단 8·22·24·25·6·7번). React Native 를 불러오지 않는 순수 모듈 (테스트용).
- *  - candleChartSize: 종목·지수 상세 차트 그림의 폭·높이
+ *  - candleChartSize: 종목·지수 상세 차트 그림의 폭·높이 (휴대폰 화면은 3-42 이전 식 그대로 — phoneChartWidth)
  *  - chartHeaderLayout: 전체 화면 차트 머리 (이름·가격·등락을 한 줄에 둘지, 가격·등락을 둘째 줄로 내릴지, 머리 높이)
  *  - maLegendItems: 차트 아래 이동평균 값 줄의 항목 (한 항목이 두 줄로 나뉘지 않게)
  *  - fadeEdges: 옆으로 넘기는 칩 띠에서 흐리게 칠할 가장자리
@@ -20,7 +20,8 @@ export const CHART_PANEL_PAD = space.lg;
 
 export interface ChartSizeInput {
   /**
-   * 차트 묶음이 실제로 받은 폭 (onLayout). 아직 재지 못했으면 null → 창 폭 − 패널 좌우 여백으로 어림.
+   * 차트 묶음이 실제로 받은 폭 (onLayout). 넓은 창(wide)에서만 쓴다 — 휴대폰 화면은 예전처럼 창 폭으로 정한다.
+   * 아직 재지 못했으면 null → 창 폭 − 패널 좌우 여백으로 어림.
    * 잰 값이 창 폭 − 패널 여백보다 넓으면(창이 좁아졌는데 새 폭을 아직 재지 못함) 창 쪽으로 줄인다
    */
   box: number | null;
@@ -34,30 +35,46 @@ export interface ChartSizeInput {
 }
 
 /**
+ * 휴대폰 화면(좁은 창 · foldLayout 꺼짐)의 상세 차트 폭: 3-42 이전 식 그대로 min(창 폭 − 패널 여백 × 4, 720).
+ * 패널 여백을 두 번 빼서 오른쪽에 28dp 빈 띠가 남지만(진단 22번), 사용자 결정 '접은 화면은 지금 그대로'(2026-09-26)에 따라
+ * 휴대폰 화면에서는 고치지 않는다 — 고치면 차트가 커져 첫 화면 핵심 숫자가 줄었다(폴드8 접힘 419×260 → 447×277, 5개 → 3개).
+ * 소수점 창 폭도 예전처럼 그대로 쓴다 (내리지 않는다). 창 폭을 모르면(0·NaN) 0
+ */
+export function phoneChartWidth(windowWidth: number): number {
+  const w = Math.min(windowWidth - CHART_PANEL_PAD * 4, layout.chartMaxW);
+  return Number.isFinite(w) && w > 0 ? w : 0;
+}
+
+/**
  * 상세 차트 그림 크기.
- *  - 폭은 창 폭이 아니라 차트 묶음이 실제로 받은 폭(패널 안쪽)이다. 예전에는 창 폭에서 패널 여백을 두 번 빼서(− 56)
- *    모든 크기에서 오른쪽 28dp 가 비었다 (진단 22번, 버그 수정 — 플래그와 상관없음)
- *  - 잰 폭은 창 폭 − 패널 여백을 넘지 않게 줄인다. 폰을 접으면 창은 바로 좁아지지만 onLayout 은 한 박자 늦어, 그 사이
- *    펼쳤을 때 잰 905 로 720×446 을 그려 접힌 화면(475) 밖으로 273dp 넘쳤다. 창보다 좁은 자리(2단 오른쪽 칸·탭 막대 옆)는 잰 폭 그대로
- *  - 좁은 창이거나 foldLayout 이 꺼져 있으면 지금처럼 폭 layout.chartMaxW(720) 에서 멈추고 높이 = 폭 × chartAspect(0.62)
- *  - 넓은 창(wide)이면 폭 상한 없이 다 쓰고, 높이 = min(폭 × 0.62, 창 높이 × chartMaxHRatio(0.5)) →
- *    낮고 넓은 창(펼친 폴드8 가로 933×704)에서도 날짜 줄까지 첫 화면에 들어온다 (진단 6·7번).
- *    단 창이 아주 낮아도 chartMinH(200) 아래로는 줄이지 않고(그 폭의 폭 × 0.62 보다 높이지도 않는다),
- *    창 폭 600(좁음 ↔ 중간 경계)부터 chartCapRamp(96) 만큼에 걸쳐 상한을 서서히 건다 → 경계에서 높이가 354 → 200 처럼 뛰지 않는다
+ *  - 좁은 창(휴대폰·접힌 화면)이거나 foldLayout 이 꺼져 있으면(wide=false) 3-42 이전과 똑같다: 폭 = phoneChartWidth(창 폭),
+ *    높이 = 폭 × chartAspect(0.62). 잰 폭(box)은 쓰지 않는다 → 접은 화면 첫 화면이 main 과 같다 (사용자 결정 '접은 화면은 지금 그대로')
+ *  - 넓은 창(wide = 플래그 켜짐 + 폭 등급 중간 이상)만 새 규칙:
+ *    · 폭은 창 폭이 아니라 차트 묶음이 실제로 받은 폭(패널 안쪽) — 28dp 빈 띠가 없다 (진단 22번)
+ *    · 잰 폭은 창 폭 − 패널 여백을 넘지 않게 줄인다. 창이 바뀌었는데 onLayout 이 한 박자 늦을 때(펼친 가로 → 세로 등)
+ *      지난 창에서 잰 폭으로 그려 화면 밖으로 넘치지 않게. 창보다 좁은 자리(2단 오른쪽 칸·탭 막대 옆)는 잰 폭 그대로
+ *    · 폭 상한 없이 다 쓰고, 높이 = min(폭 × 0.62, 창 높이 × chartMaxHRatio(0.5)) →
+ *      낮고 넓은 창(펼친 폴드8 가로 933×704)에서도 날짜 줄까지 첫 화면에 들어온다 (진단 6·7번).
+ *      단 창이 아주 낮아도 chartMinH(200) 아래로는 줄이지 않고(그 폭의 폭 × 0.62 보다 높이지도 않는다),
+ *      창 폭 600(좁음 ↔ 중간 경계)부터 chartCapRamp(96) 만큼에 걸쳐 상한을 서서히 건다 → 경계에서 높이가 355 → 200 처럼 뛰지 않는다.
+ *      (경계 599 → 600 에서는 폭 식이 휴대폰 식 → 잰 폭으로 바뀌어 폭이 28dp, 높이가 그 폭만큼(약 18dp) 한 번 달라진다)
  */
 export function candleChartSize(o: ChartSizeInput): { width: number; height: number } {
   if (o.width !== undefined) return { width: o.width, height: o.height ?? Math.round(o.width * layout.chartAspect) };
+  if (!o.wide) {
+    const width = phoneChartWidth(o.window.width);
+    return { width, height: o.height ?? Math.round(width * layout.chartAspect) };
+  }
   const guess = o.window.width - CHART_PANEL_PAD * 2;
   const guessOk = Number.isFinite(guess) && guess > 0;
   const boxOk = o.box !== null && Number.isFinite(o.box) && o.box > 0;
   // 잰 폭 우선, 단 창 폭 − 패널 여백보다 넓으면 창 쪽으로 (창이 좁아졌는데 아직 다시 재지 못함)
   const measured = boxOk ? (guessOk ? Math.min(o.box!, guess) : o.box!) : guess;
   // 소수점 폭은 내림 (그림이 패널 밖으로 1px 넘치지 않게)
-  const room = Math.max(0, Math.floor(Number.isFinite(measured) ? measured : 0));
-  const width = o.wide ? room : Math.min(room, layout.chartMaxW);
+  const width = Math.max(0, Math.floor(Number.isFinite(measured) ? measured : 0));
   const natural = Math.round(width * layout.chartAspect);
   if (o.height !== undefined) return { width, height: o.height };
-  if (!o.wide || !(o.window.height > 0)) return { width, height: natural };
+  if (!(o.window.height > 0)) return { width, height: natural };
   // 넓은 창 높이 상한: 창 높이 × 0.5, 하한 chartMinH. 어느 쪽도 그 폭의 폭 × 0.62(natural) 보다 높이지 않는다
   const capped = Math.min(natural, Math.max(layout.chartMinH, Math.round(o.window.height * layout.chartMaxHRatio)));
   // 폭 600 에서 0 → 600 + chartCapRamp 에서 1: 상한을 거는 정도 (좁은 창 높이와 이어지게)
