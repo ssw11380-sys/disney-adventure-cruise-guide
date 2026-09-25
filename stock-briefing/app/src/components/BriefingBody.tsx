@@ -241,9 +241,9 @@ export function BriefingBody({
     );
   }
 
-  // 브리핑 탭 2단의 오른쪽 칸
+  // 브리핑 탭 2단의 오른쪽 칸 (끊김·지연 띠는 탭 위쪽에 한 번만 — 브리핑 본문은 만든 뒤 바뀌지 않는다)
   return (
-    <Screen disclaimer top={<StaleBanner query={b} />}>
+    <Screen disclaimer>
       <View>
         <Head d={d} />
         {toolbar}

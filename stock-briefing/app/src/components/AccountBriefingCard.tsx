@@ -106,18 +106,21 @@ export function AccountBriefingRow({ briefing, selected, onPress, role }: { brie
           생성 실패 · {briefing.summary}
         </Text>
       ) : (
-        <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
-          당일{" "}
-          <Text style={[styles.num, { color: changeColor(t, shownSign(h.dayPnl, formatWon(h.dayPnl, { sign: true }))), fontSize: font.body, fontWeight: "700" }]}>{formatWon(h.dayPnl, { sign: true })}</Text>
-          {h.dayRate !== null ? <Text style={[styles.num, { color: changeColor(t, shownSign(h.dayRate, formatPct(h.dayRate))) }]}> {formatPct(h.dayRate)}</Text> : null}
+        // 두 묶음(당일 손익 · 기여 1위)을 따로 두어, 폭이 모자라면 묶음째 다음 줄로 (금액 가운데에서 줄이 꺾이지 않게)
+        <View style={styles.rowNums}>
+          <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
+            당일{" "}
+            <Text style={[styles.num, { color: changeColor(t, shownSign(h.dayPnl, formatWon(h.dayPnl, { sign: true }))), fontSize: font.body, fontWeight: "700" }]}>{formatWon(h.dayPnl, { sign: true })}</Text>
+            {h.dayRate !== null ? <Text style={[styles.num, { color: changeColor(t, shownSign(h.dayRate, formatPct(h.dayRate))) }]}> {formatPct(h.dayRate)}</Text> : null}
+          </Text>
           {top ? (
-            <>
-              {" · 기여 1위 "}
+            <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
+              {"· 기여 1위 "}
               <Text style={{ color: t.ink }}>{top.name}</Text>{" "}
               <Text style={[styles.num, { color: changeColor(t, shownSign(top.amount, formatWon(top.amount, { sign: true }))) }]}>{formatWon(top.amount, { sign: true })}</Text>
-            </>
+            </Text>
           ) : null}
-        </Text>
+        </View>
       )}
     </Pressable>
   );
@@ -131,6 +134,7 @@ const styles = StyleSheet.create({
   selBar: { position: "absolute", left: 0, top: 0, bottom: 0, width: FB.selBar },
   rowHead: { flexDirection: "row", alignItems: "center", gap: space.s },
   rowWhen: { marginLeft: "auto", fontSize: font.small, flexShrink: 0 },
+  rowNums: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", columnGap: space.xs },
   press: { minHeight: touch.min, gap: space.sm },
   head: { flexDirection: "row", alignItems: "center", gap: space.xs, flexWrap: "wrap" },
   when: { flexGrow: 1, textAlign: "right" },

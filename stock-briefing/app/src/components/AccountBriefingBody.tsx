@@ -55,7 +55,8 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   const view = viewState(q);
   if (view === "error") return <Screen><ErrorView error={q.error} onRetry={() => void q.refetch()} /></Screen>;
   if (view === "loading" || !data) return <Screen><CardsSkeleton count={3} /></Screen>;
-  return <AccountBriefingView b={data} top={<StaleBanner query={q} />} layout={layout} title={title} />;
+  // 2단 오른쪽 칸은 끊김·지연 띠를 탭 위쪽에 한 번만 둔다
+  return <AccountBriefingView b={data} top={layout === "pane" ? null : <StaleBanner query={q} />} layout={layout} title={title} />;
 }
 
 function AccountBriefingView({ b, top, layout, title }: { b: AccountBriefingWithData; top: React.ReactNode; layout: BodyLayout; title?: (b: AccountBriefingWithData) => React.ReactNode }) {
@@ -148,7 +149,8 @@ function AccountBriefingView({ b, top, layout, title }: { b: AccountBriefingWith
       ) : (
         <>
           {summary}
-          <TotalsCard d={d} />
+          {/* 2단 오른쪽 칸은 넓은 창 두 칸과 같은 한 줄 띠 (폰 화면은 큰 숫자 카드 그대로) */}
+          {layout === "pane" ? <TotalsBand d={d} /> : <TotalsCard d={d} />}
           <ContributionCard d={d} />
           <ImpactCard d={d} />
           <ScheduleCard s={d.schedule} asOf={d.asOf} />
@@ -417,7 +419,7 @@ const styles = StyleSheet.create({
   kpis: { flexDirection: "row", flexWrap: "wrap", gap: space.md },
   kpi: { flexGrow: 1, flexBasis: 140, gap: space.xxs },
   kpiValue: { fontSize: font.h2, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  band: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xl, rowGap: space.sm, alignItems: "flex-end" },
+  band: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xl, rowGap: space.sm, alignItems: "flex-start" },
   bandItem: { flexShrink: 0, gap: space.xxs },
   bandValue: { fontWeight: "700", fontVariant: ["tabular-nums"] },
   num: { fontVariant: ["tabular-nums"] },
