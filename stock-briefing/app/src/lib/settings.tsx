@@ -108,8 +108,9 @@ async function persist(key: string, value: string | null): Promise<void> {
 
 /**
  * 사용자가 비운 토큰을 저장소에 적는 값 (공백 한 칸). 키를 지우면 "저장한 적 없음"이 되어 앱(다음 실행)과 위젯이 번들 기본 토큰을
- * 다시 쓴다 — 다른 서버로 바꾸고 토큰을 비워도 운영 토큰이 그 서버로 나간다 (BH-66). 위젯은 저장된 값이 비어 있지 않으면 그대로 쓰므로
- * 빈 값이 아닌 공백으로 적는다: 앱은 읽을 때 trim 해서 빈 토큰(헤더 없음), 위젯은 "Bearer " 뒤가 빈 헤더(토큰 없음과 같음)를 보낸다
+ * 다시 쓴다 — 다른 서버로 바꾸고 토큰을 비워도 운영 토큰이 그 서버로 나간다 (BH-66). 앱과 위젯(widgets/data readSettings)은 읽을 때 trim 해서
+ * 빈 토큰(헤더 없음)으로 본다. 빈 문자열이 아니라 공백인 것은 예전 번들(OTA 되돌림)이 읽어도 번들 토큰으로 바꾸지 않게 하려는 것.
+ * 예전 앱에서 이미 비운(키를 지운) 토큰은 "저장한 적 없음"과 구분할 수 없어 번들 토큰으로 남는다
  */
 const CLEARED_TOKEN = " ";
 const tokenForStorage = (token: string) => token || CLEARED_TOKEN;

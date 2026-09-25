@@ -419,6 +419,36 @@ describe("BH-55·70: 체결 반영 (직접 입력 종목)", () => {
     expect(h.update.mock.calls[0][0]).toEqual({ code: "SNDL", quantity: 2000, avgPrice: 0.04935, memo: null });
   });
 
+  it("처음 매수(보유 0)한 동전주 체결가는 자르지 않고 그대로 저장, 미리보기도 '$0.00' 이 아니라 그 값 (검증 지적: 0.0001234 → 0.000123)", () => {
+    const r = open(manual({ quantity: null, avgPrice: null }));
+    trade(r, "buy", "1000", "0.0001234");
+    expect(row(r, "거래 후 평단")).toBe("$0.0001234");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toEqual({ code: "SNDL", quantity: 1000, avgPrice: 0.0001234, memo: null });
+  });
+
+  it("1센트 미만 평단끼리의 가중 평균도 자르지 않는다", () => {
+    const r = open(manual({ quantity: 1000, avgPrice: 0.0001234 }));
+    trade(r, "buy", "1000", "0.00013");
+    expect(row(r, "거래 후 평단")).toBe("$0.0001267");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toMatchObject({ quantity: 2000, avgPrice: 0.0001267 });
+  });
+
+  it("미리보기 '거래 후 평단': 1달러 미만은 센트 아래 자리까지, 그 밖에는 평소 표기 (저장값은 부동소수 꼬리만 뺌)", () => {
+    const r = open(manual({}));
+    trade(r, "buy", "1000", "0.0612");
+    expect(row(r, "거래 후 평단")).toBe("$0.05745");
+    const r2 = open(manual({ quantity: 1, avgPrice: 0.4 }));
+    trade(r2, "buy", "1", "0.6");
+    expect(row(r2, "거래 후 평단")).toBe("$0.50");
+    const r3 = open(manual({ code: "AAPL", name: "애플", quantity: 3, avgPrice: 183.4567 }));
+    trade(r3, "buy", "7", "190.1234");
+    expect(row(r3, "거래 후 평단")).toBe("$188.12");
+    saveTrade(r3);
+    expect(h.update.mock.calls.at(-1)![0]).toMatchObject({ quantity: 10, avgPrice: 188.12339 });
+  });
+
   it("국내 종목 평단은 예전처럼 소수 둘째 자리까지", () => {
     const r = open(manual({ code: "005930", name: "삼성전자", market: "KOSPI", quantity: 3, avgPrice: 70000 }));
     trade(r, "buy", "1", "70001");

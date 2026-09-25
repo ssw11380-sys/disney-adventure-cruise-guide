@@ -1,7 +1,7 @@
 import React from "react";
 import { FlexWidget, ListWidget, TextWidget, type FlexWidgetStyle } from "react-native-android-widget";
 import type { Currency, LatestBriefing, RegisteredWithQuote } from "@/api/types";
-import { formatPct, formatPrice, toDisplay } from "@/lib/format";
+import { formatPct, formatPrice, shownSign, toDisplay } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, totals } from "@/lib/portfolio";
 import { DISCLAIMER_SHORT } from "@/lib/disclaimer";
@@ -151,7 +151,10 @@ interface RowView extends RowInput {
   code: string;
   hasQuote: boolean;
   change: number;
-  subColor: `#${string}`;
+  /** 등락률 글자의 부호 — "0.00%" 로 보이면 0 (앱 잔고 줄과 같게, BH-38) */
+  rateSign: number;
+  /** 고른 아랫줄의 색: 그 줄에 보이는 값의 부호로 ("0.00% $0.00"·"0.00% 0원" 은 기본 글자색, BH-38) */
+  subColor: (text: string) => `#${string}`;
   speech: string;
 }
 
@@ -168,15 +171,17 @@ function rowView(s: RegisteredWithQuote, filled: string[], showKrw: boolean, aft
   } else if (isHeld(s)) subs = [`${Number((s.quantity ?? 0).toFixed(4))}주 · 시세 없음`, "시세 없음"];
   else subs = ["관심"];
   const price = q ? money(q.price, q.currency, fx, showKrw) : "-";
+  const rate = q ? formatPct(q.changeRate) : null;
   return {
     code: s.code,
     name: s.name,
     price,
-    rate: q ? formatPct(q.changeRate) : null,
+    rate,
     subs: [...new Set(subs)],
     hasQuote: !!q,
     change: q?.change ?? 0,
-    subColor: ev ? tone(ev.profit, c) : c.muted,
+    rateSign: q && rate ? shownSign(q.changeRate, rate) : 0,
+    subColor: (text) => (ev ? tone(shownSign(ev.profit, text), c) : c.muted),
     speech: rowSpeech(s.name, q ? price : null, q?.changeRate),
   };
 }
@@ -247,8 +252,9 @@ function IndexLine({ plan, items, c }: { plan: IndexPlan<IndexItemText>; items: 
 function RowRight({ r, rows, c }: { r: RowView; rows: RowsPlan; c: WidgetPalette }) {
   if (!r.hasQuote) return <TextWidget text="-" maxLines={1} style={{ color: c.muted, fontSize: F.md }} />;
   const color = tone(r.change, c);
+  // 현재가는 전일 대비 방향 색, 등락률은 보이는 값의 부호 색 — 1센트 움직인 230달러 종목의 "0.00%" 는 기본 글자색 (앱 잔고 줄과 같게, BH-38)
   const price = <TextWidget text={r.price} maxLines={1} style={{ color, fontSize: F.base, fontWeight: "700" }} />;
-  const rate = <TextWidget text={r.rate ?? "-"} maxLines={1} style={{ color, fontSize: F.md, fontWeight: "700", width: rows.rateW, textAlign: "right" }} />;
+  const rate = <TextWidget text={r.rate ?? "-"} maxLines={1} style={{ color: tone(r.rateSign, c), fontSize: F.md, fontWeight: "700", width: rows.rateW, textAlign: "right" }} />;
   return rows.stacked ? (
     <FlexWidget style={{ flexDirection: "column", alignItems: "flex-end" }}>
       {price}
@@ -326,7 +332,7 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
               >
                 <FlexWidget style={{ flexDirection: "column", width: plan.rows.leftW }}>
                   <TextWidget text={r.name} truncate="END" maxLines={1} style={{ color: c.ink, fontSize: F.base, fontWeight: "600" }} />
-                  {subText ? <TextWidget text={subText} maxLines={1} style={{ color: r.subColor, fontSize: plan.rows.subFont }} /> : null}
+                  {subText ? <TextWidget text={subText} maxLines={1} style={{ color: r.subColor(subText), fontSize: plan.rows.subFont }} /> : null}
                 </FlexWidget>
                 <RowRight r={r} rows={plan.rows} c={c} />
               </FlexWidget>

@@ -211,6 +211,8 @@ describe("BH-66: 토큰 칸을 비워 저장하면 비운 채로 남는다", () 
     expect.soft(w.url).toBe("http://192.168.0.10:3000/api/briefings/latest");
     expect.soft(w.auth ?? "").not.toContain(BUNDLED);
     expect.soft(noCredential(w.auth)).toBe(true);
+    // 위젯도 앱과 같은 규칙: 빈 토큰이면 "Bearer " 같은 빈 헤더가 아니라 헤더 자체를 보내지 않는다 (검증 지적)
+    expect.soft(w.auth).toBeUndefined();
     // 다시 켠 앱 (요청·웹소켓·오류 보고가 쓰는 값과 설정 화면 토큰 칸)
     const again = await restart();
     expect.soft(again.creds).toEqual({ apiUrl: "http://192.168.0.10:3000", apiToken: "" });

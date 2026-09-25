@@ -46,11 +46,13 @@ const MANUAL_KRW_NOTE =
 
 /** 소수 주식 계산의 0.30000000000000004 같은 꼬리 제거 (소수 6자리) */
 const roundQty = (q: number) => Math.round(q * 1e6) / 1e6;
+/** 달러 평단: 부동소수 꼬리(188.12339000000003)만 지우고 동전주의 작은 자리(0.0001234)는 자르지 않는다 (유효숫자 12자리) */
+const roundUsdAvg = (n: number) => Number(n.toPrecision(12));
 
 /**
  * 매수: 수량 가중 평균으로 평단 재계산. 매도: 수량만 줄고 평단은 유지.
  * 수량은 저장할 값 그대로(꼬리 제거) 돌려준다 — 미리보기와 저장값이 같게 (BH-70).
- * 평단은 국내 소수 2자리, 미국 소수 6자리까지 둔다 — 센트로 반올림하면 1달러 미만 종목의 매입금액이 몇 %씩 틀어진다 (BH-55)
+ * 평단은 국내 소수 2자리, 미국은 꼬리만 지운 값 — 센트나 소수 몇 자리로 자르면 1달러 미만 종목의 매입금액이 몇 %씩 틀어진다 (BH-55)
  */
 export function applyTrade(
   current: { quantity: number | null; avgPrice: number | null },
@@ -64,8 +66,7 @@ export function applyTrade(
   if (side === "buy") {
     const total = q0 + qty;
     const avg = q0 > 0 && current.avgPrice !== null ? (q0 * a0 + qty * price) / total : price;
-    const unit = currency === "USD" ? 1e6 : 100;
-    return { quantity: roundQty(total), avgPrice: Math.round(avg * unit) / unit };
+    return { quantity: roundQty(total), avgPrice: currency === "USD" ? roundUsdAvg(avg) : Math.round(avg * 100) / 100 };
   }
   const q = roundQty(Math.max(0, q0 - qty));
   return { quantity: q, avgPrice: q === 0 ? null : current.avgPrice };
@@ -74,6 +75,17 @@ export function applyTrade(
 /** 거래 후 수량 표기: 자리 구분, 소수 주식은 소수 6자리까지 (저장값과 같은 자리) */
 function formatQty(q: number): string {
   return q.toLocaleString("ko-KR", { maximumFractionDigits: 6 });
+}
+
+/**
+ * 거래 후 평단 표기. 1달러 미만 미국 종목은 센트 아래 자리까지 유효숫자 4자리("$0.05745"·"$0.0001234") —
+ * 센트로 줄이면 저장할 평단이 "$0.00" 으로 보인다 (BH-55). 그 밖에는 평소 가격 표기
+ */
+function formatTradeAvg(avg: number, cur: "KRW" | "USD"): string {
+  if (cur !== "USD" || !(avg > 0) || avg >= 1) return formatPrice(avg, cur);
+  const digits = Math.min(10, Math.max(2, 3 - Math.floor(Math.log10(avg))));
+  // 소수 둘째 자리 뒤의 끝 0 은 뺀다 ("0.5000" → "0.50")
+  return `$${avg.toFixed(digits).replace(/(\.\d\d\d*?)0+$/, "$1")}`;
 }
 
 function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluation | null } }) {
@@ -241,7 +253,7 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
         {preview && !("error" in preview) ? (
           <View>
             <Row label="거래 후 수량" value={`${formatQty(preview.quantity)}주`} />
-            <Row label="거래 후 평단" value={preview.avgPrice !== null ? formatPrice(preview.avgPrice, cur) : "-"} />
+            <Row label="거래 후 평단" value={preview.avgPrice !== null ? formatTradeAvg(preview.avgPrice, cur) : "-"} />
           </View>
         ) : null}
         <Button title="반영해 저장" variant="secondary" icon="calculator-outline" disabled={!preview || "error" in preview} loading={update.isPending} onPress={saveTrade} />
