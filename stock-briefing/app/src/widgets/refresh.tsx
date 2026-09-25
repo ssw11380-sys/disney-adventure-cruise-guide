@@ -34,6 +34,18 @@ export function pickWidgetBriefings(latest: readonly LatestBriefing[], stocks: r
 }
 
 /**
+ * 앱 → 위젯 즉시 넘김(WidgetBridge)의 '브리핑 목록이 바뀌었는지' 키: 성공한 최신 브리핑의 id·만든 시각을 정렬해 잇는다.
+ * 시세(보유 비중)는 보지 않는다 — 고른 3종목의 순서를 키로 쓰면, 원화 평가금액이 비슷한 두 종목이 체결마다 뒤집힐 때마다
+ * 1분 규칙(3-16)을 건너뛰고 넘겼다 (검증 지적). 다시 만들기·새 브리핑·실패로 바뀐 목록만 바로 넘긴다
+ */
+export function widgetBriefingsKey(latest: readonly LatestBriefing[]): string {
+  return latest
+    .flatMap((b) => (b.latest?.status === "ok" ? [`${b.latest.id}@${b.latest.createdAt}`] : []))
+    .sort()
+    .join(",");
+}
+
+/**
  * 앱이 받은 브리핑 목록으로 브리핑 위젯을 다시 그릴지 (다듬은 모습 widgetPolish 가 켜져 있을 때만 부른다).
  * 위젯이 마지막으로 받은 /api/widget 응답보다 늦게(같게) 받은 목록일 때만 — 앱이 며칠 떠 있으면 어제 연 브리핑 탭의 목록이 메모리에 남아,
  * 백그라운드 작업이 받아 그린 오늘 브리핑을 옛것으로 덮을 수 있다. 성공한 브리핑이 하나도 없으면 위젯이 받은 것(과 안내 문구)을 그대로 둔다

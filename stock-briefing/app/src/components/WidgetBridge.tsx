@@ -7,7 +7,7 @@ import { widgetChip } from "@/lib/liveDot";
 import { useSettings } from "@/lib/settings";
 import { pickBoard, pickWidgetIndices, widgetFeatures } from "@/widgets/payload";
 import { widgetPushDue } from "@/widgets/pushPolicy";
-import { pickWidgetBriefings, refreshWidgets } from "@/widgets/refresh";
+import { refreshWidgets, widgetBriefingsKey } from "@/widgets/refresh";
 
 /**
  * 앱 → 홈 화면 위젯 즉시 갱신 (3-16 규칙: 시세만 바뀌면 1분에 한 번, 표시 설정·장 상태가 바뀌거나 앱을 떠날 때는 바로).
@@ -16,7 +16,7 @@ import { pickWidgetBriefings, refreshWidgets } from "@/widgets/refresh";
  * 지수·플래그 캐시는 기기에 며칠 남은 옛 값일 수 있어(플래그는 브리핑·설정 화면에서만 다시 받는다) 받은 시각을 함께 넘기고,
  * 위젯이 받아 둔 /api/widget 응답이 더 새것이면 그쪽을 쓴다 (data.ts pushWidgetData).
  * 브리핑 위젯 (위젯 검토 7번, 다듬은 모습 widgetPolish): 브리핑 탭이 받은 최신 브리핑 목록과 받은 시각도 넘긴다 — 위젯은 서버와 같은 규칙으로 3종목을 고르고,
- * 위젯이 받아 둔 응답보다 늦게 받은 목록일 때만 쓴다 (refresh.tsx). 목록이 캐시에 없으면 처음부터 받지는 않는다
+ * 위젯이 받아 둔 응답보다 늦게 받은 목록일 때만 쓴다 (refresh.tsx). 목록은 캐시에 있거나 누가 무효화했을 때만(다시 만들기·브리핑 알림) 받는다 — 앱을 켰다고 처음부터 받지는 않는다
  */
 export function WidgetBridge() {
   const api = useApi();
@@ -33,13 +33,15 @@ export function WidgetBridge() {
   const idx = useQuery<{ indices: MarketIndex[] }>({ queryKey: [apiUrl, "indices"], queryFn: api.marketIndices, enabled: false });
   const features = useMemo(() => (flags ? { at: flagsAt, flags: widgetFeatures(flags.features) } : null), [flags, flagsAt]);
   const polish = features?.flags.polish === true;
-  // 최신 브리핑 목록 (브리핑 탭 쿼리 [apiUrl, "briefings", "latest"] 의 캐시). 다듬은 모습이 켜져 있고 목록이 이미 캐시에 있을 때만 이 관찰자가 켜진다:
+  // 최신 브리핑 목록 (브리핑 탭 쿼리 [apiUrl, "briefings", "latest"] 의 캐시). 다듬은 모습이 켜져 있고, 목록이 이미 캐시에 있거나 무효화됐을 때만 이 관찰자가 켜진다:
   // 다시 만들기(useStockMutations run)·브리핑 알림(NotificationBridge)이 목록을 무효화하면, 브리핑 탭이 가려져 구독을 끊었어도(탭은 돌아올 때 받는다)
-  // 여기서 다시 받아 위젯에 바로 넘긴다. 스스로는 받지 않는다 (마운트·포커스·재연결에 다시 받지 않고, 목록이 없으면 꺼져 있다). 꺼짐이면 지금처럼 읽기만
+  // 여기서 다시 받아 위젯에 바로 넘긴다. 이번 실행에서 브리핑 탭을 연 적이 없어도(목록은 기기에 저장하지 않는다 — queryPersist) 무효화되면 한 번 받는다:
+  // 앱을 새로 켜 위젯 항목·알림으로 브리핑 상세에 바로 들어가 '이 종목만 다시 만들기'를 누르는 흔한 흐름 (검증 지적).
+  // 스스로는 받지 않는다 (마운트·포커스·재연결에 다시 받지 않고, 목록이 없고 무효화되지 않았으면 꺼져 있다 — 토큰을 바꿔 캐시를 비워도 받지 않음). 꺼짐이면 지금처럼 읽기만
   const briefQ = useQuery<LatestBriefing[]>({
     queryKey: [apiUrl, "briefings", "latest"],
     queryFn: api.latestBriefings,
-    enabled: (q) => polish && q.state.data !== undefined,
+    enabled: (q) => polish && (q.state.data !== undefined || q.state.isInvalidated),
     staleTime: Infinity,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
@@ -61,8 +63,10 @@ export function WidgetBridge() {
   const fetchedThisSession = !restoring && dataAt > mountedAt;
   // 플래그가 바뀌어도 바로 (손익 전환·지수 줄이 켜지고 꺼지는 것을 1분 기다리지 않게)
   const flagKey = features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}|${features.flags.polish}` : "";
-  // 브리핑 위젯에 들어갈 3종목이 바뀌면 바로 (다시 만들기·새 브리핑). 다듬은 모습이 꺼져 있으면 넣지 않는다 — 지금처럼 브리핑 때문에 넘기지 않게
-  const briefKey = useMemo(() => (briefList && data ? pickWidgetBriefings(briefList, data).map((b) => `${b.latest!.id}@${b.latest!.createdAt}`).join(",") : ""), [briefList, data]);
+  // 브리핑 목록이 바뀌면 바로 (다시 만들기·새 브리핑). 다듬은 모습이 꺼져 있으면 넣지 않는다 — 지금처럼 브리핑 때문에 넘기지 않게.
+  // 목록(성공한 최신 브리핑의 id·만든 시각)만 보고 시세는 보지 않는다: 3종목을 고르는 순서(원화 평가금액)를 넣으면 금액이 비슷한 두 종목이
+  // 체결마다 뒤집힐 때마다 1분 규칙을 건너뛰고 넘긴다 (검증 지적). 시세 때문에 바뀐 순서·구성은 다음 1분 넘김(그때 시세로 고름)에 따라간다
+  const briefKey = useMemo(() => (briefList ? widgetBriefingsKey(briefList) : ""), [briefList]);
   const last = useRef({ at: 0, key: "" });
   const push = useRef<(leaving: boolean) => void>(() => undefined);
   useEffect(() => {

@@ -852,6 +852,25 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
     expect(indexSpeechOf(narrowTree)).toBe("나스닥 1.13% 하락, 코스피 0.90% 상승 9월 23일 값, 원/달러 1,391.50 0.38% 상승");
   });
 
+  it("검증 지적 (위젯 검토 7번): 지수 줄이 두 줄이면(4x3 이상·폴드8 커버 4x2 크게 460×290) 줄 전체가 첫 항목의 차트 한 칸 — 약 10dp 칸이 위아래로 붙지 않게", () => {
+    for (const box of [
+      { width: 330, height: 470 },
+      { width: 460, height: 290 },
+    ]) {
+      const t = draw({}, box);
+      const at = `${box.width}×${box.height}`;
+      const items = indexItemsOf(t);
+      // 누르는 칸은 하나(나스닥 차트)이고, 그 칸이 두 줄을 모두 담는다 (윗줄·아랫줄 항목이 따로 누르는 칸이 아니다)
+      expect(items.map((n) => (n.props.clickActionData as { uri: string }).uri), at).toEqual([`${HOME_URI}market/NASDAQ`]);
+      expect(items[0]!.children, at).toHaveLength(2);
+      expect(nodes(items[0]!).filter((n) => n !== items[0] && n.props.clickAction), at).toHaveLength(0);
+      // 화면 읽기는 보이는 항목을 한 문장으로
+      expect(String(items[0]!.props.accessibilityLabel), at).toMatch(/^나스닥 .*원\/달러 1,391\.50 0\.38% 상승$/);
+    }
+    // 한 줄(4x2 420×260)은 지금처럼 항목마다
+    expect(indexItemsOf(draw({}, WIDE)).length).toBeGreaterThan(1);
+  });
+
   it("검증 지적: 칩 색은 보이는 시장으로 — 한국만 보유한 23:00(미국 정규장)의 '한국 장 마감'·미국만 보유한 09:30 의 '미국 장 마감'은 회색", () => {
     const chipColor = (t: Tree, text: string) => texts(t).find((p) => p.text === text)?.color;
     const later = "2026-09-25T20:00:00.000Z";
@@ -1131,13 +1150,25 @@ describe("위젯 검토 7번 앞부분: 앱이 브리핑 위젯도 바로 갱신
     expect(notice[0]!.props.accessibilityLabel).toBe(FAILED);
     expect(words(failed)).toContain(FAILED);
     expect(words(failed).at(-1)).toBe(DISCLAIMER_SHORT);
+    // 검증 지적: 안내 문구 칸은 글자 한 줄(약 13dp)이 아니라 머리 줄 아래 남는 높이 전체(flex → weight)다 — 고지 줄도 같은 자리로 칸 안에 (한 번만)
+    expect(notice[0]!.props.weight).toBe(1);
+    expect(words(notice[0]!)).toEqual([FAILED, DISCLAIMER_SHORT]);
+    expect(words(failed).filter((x) => x === DISCLAIMER_SHORT)).toHaveLength(1);
     const none = holding(draw(POLISH, { briefings: [], latestIds: [] }), "아직 브리핑이 없습니다");
     expect(none.map((n) => n.props.clickActionData)).toEqual([{ uri: BRIEFINGS_URI }]);
+    expect(none[0]!.props.weight).toBe(1);
+    // 브리핑이 있으면 고지 줄은 예전처럼 목록 아래 따로 (누르는 칸이 아님)
+    expect(byClick(on, "OPEN_URI").some((n) => words(n).includes(DISCLAIMER_SHORT))).toBe(false);
+    expect(words(on).at(-1)).toBe(DISCLAIMER_SHORT);
     // 조회 실패 안내("… ↻ 로 다시 시도")는 누르는 칸이 아니다 (↻ 를 누르라는 말)
     const err = build(<BriefingWidget briefings={[]} fetchedAt={NOW} error="Network request failed" now={NOW} polish {...WIDE} />);
     expect(words(err)).toContain("갱신 실패 · 연결 안 됨 · ↻ 로 다시 시도");
     expect(holding(err, "갱신 실패")).toHaveLength(0);
     expect(head(err).props.clickActionData).toEqual({ uri: BRIEFINGS_URI });
+    // (머리 줄 space-between 이 넣는 빈 칸 말고) 글자를 담고 남는 높이를 차지하는 칸이 없다
+    const fills = (t: Tree) => nodes(t).filter((n) => n.props.weight !== undefined && words(n).length > 0);
+    expect(fills(err)).toHaveLength(0);
+    expect(words(err).at(-1)).toBe(DISCLAIMER_SHORT);
 
     const off = draw(CLASSIC);
     expect(head(off).props.clickActionData).toEqual({ uri: HOME_URI });
@@ -1145,6 +1176,9 @@ describe("위젯 검토 7번 앞부분: 앱이 브리핑 위젯도 바로 갱신
     expect(words(offFailed)).toContain(FAILED);
     expect(holding(offFailed, "브리핑 생성 실패")).toHaveLength(0);
     expect(byClick(offFailed, "OPEN_URI").map(uriOf)).not.toContain(BRIEFINGS_URI);
+    // 꺼져 있으면 모양도 지금 그대로 (남는 높이를 차지하는 칸 없음, 고지 줄은 따로 끝에)
+    expect(fills(offFailed)).toHaveLength(0);
+    expect(words(offFailed).at(-1)).toBe(DISCLAIMER_SHORT);
   });
 
   it("누르는 곳: 다듬은 잔고 위젯 지수 줄은 항목마다 그 지수·환율 차트(market/코드)를 연다 — 꺼져 있으면 지금처럼 줄 전체가 잔고 탭", () => {

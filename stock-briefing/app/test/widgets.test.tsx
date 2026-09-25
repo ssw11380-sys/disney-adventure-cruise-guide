@@ -258,7 +258,7 @@ describe("위젯-13: 누르면 잔고 탭", () => {
   });
 });
 
-const { pickWidgetBriefings } = await import("@/widgets/refresh");
+const { pickWidgetBriefings, widgetBriefingsKey } = await import("@/widgets/refresh");
 const { indexLineTargets } = await import("@/widgets/widgets");
 
 describe("위젯 검토 7번: 앱이 브리핑 위젯에 넘기는 3종목은 서버(/api/widget briefings)와 같은 규칙", () => {
@@ -315,13 +315,42 @@ describe("위젯 검토 7번: 앱이 브리핑 위젯에 넘기는 3종목은 �
 
 describe("위젯 검토 7번: 다듬은 잔고 위젯 지수 줄 — 항목마다 따로 누를 수 있는지", () => {
   const item = (code: string, label: string, rate: string | null) => ({ code, label, value: "1", rate, stale: false, short: true });
-  it("항목이 모두 48dp 이상이면 항목마다, 하나라도 좁으면 줄 전체가 첫 항목(그 지수 차트) 한 칸", () => {
-    const wide = { font: 10, height: 15, lines: [[item("NASDAQ", "나스닥", "-1.13%"), item("KOSPI", "코스피", "+0.90%")], [item("USDKRW", "원/달러", "+0.38%")]] };
+  it("한 줄이고 항목이 모두 48dp 이상이면 항목마다, 하나라도 좁으면 줄 전체가 첫 항목(그 지수 차트) 한 칸", () => {
+    const wide = { font: 10, height: 15, lines: [[item("NASDAQ", "나스닥", "-1.13%"), item("KOSPI", "코스피", "+0.90%"), item("USDKRW", "원/달러", "+0.38%")]] };
     expect(indexLineTargets(wide, 1)).toBe("each");
     const narrow = { font: 10, height: 15, lines: [[item("SPX", "S", null), item("NASDAQ", "나스닥", "-1.13%")]] };
     expect(indexLineTargets(narrow, 1)).toEqual({ single: "SPX" });
     // 글자를 줄이면(배율 < 1) 좁아질 수 있다
     expect(indexLineTargets({ ...wide, lines: [[item("KOSPI", "코", null)]] }, 0.85)).toEqual({ single: "KOSPI" });
+  });
+
+  it("검증 지적: 두 줄이면(4x3 이상·폴드8 커버 4x2 크게) 항목이 넓어도 줄 전체가 첫 항목 한 칸 — 약 10dp 높이 칸이 위아래로 붙어 윗줄을 누르면 아랫줄이 열리지 않게", () => {
+    const two = { font: 10, height: 15, lines: [[item("NASDAQ", "나스닥", "-1.13%"), item("SPX", "S&P500", "+0.19%")], [item("KOSPI", "코스피", "+0.90%"), item("USDKRW", "원/달러", "+0.38%")]] };
+    expect(indexLineTargets(two, 1)).toEqual({ single: "NASDAQ" });
+    // 같은 항목을 한 줄에 두면 항목마다 (높이 규칙만 다르다)
+    expect(indexLineTargets({ ...two, lines: [two.lines.flat()] }, 1)).toBe("each");
+  });
+});
+
+describe("검증 지적: 앱 → 위젯 즉시 넘김의 브리핑 목록 키는 시세(보유 비중 순서)를 보지 않는다", () => {
+  type Latest = Parameters<typeof widgetBriefingsKey>[0][number];
+  const latest = (code: string, id: number, createdAt: string, status: "ok" | "failed" = "ok"): Latest => ({
+    code,
+    name: code,
+    latest: { id, code, name: code, session: "afternoon", date: "2026-09-24", status, summary: "요약", detail: "", missing: [], model: "test", error: null, createdAt },
+  });
+  const a = latest("005930", 1, "2026-09-24T16:05:00+09:00");
+  const b = latest("000660", 2, "2026-09-24T16:06:00+09:00");
+  const c = latest("NVDA", 3, "2026-09-24T16:07:00+09:00");
+  it("받은 순서와 상관없이 같고, 성공한 브리핑의 id·만든 시각이 바뀔 때만 바뀐다", () => {
+    const key = widgetBriefingsKey([a, b, c]);
+    expect(widgetBriefingsKey([c, a, b])).toBe(key);
+    // 실패한 것·브리핑 없는 종목은 넣지 않는다 (위젯에 들어가지 않으므로)
+    expect(widgetBriefingsKey([a, b, c, latest("TSLA", 4, "2026-09-24T16:08:00+09:00", "failed"), { code: "AAPL", name: "애플", latest: null }])).toBe(key);
+    // 다시 만들기(새 id)·최신이 실패로 바뀜은 키가 바뀐다
+    expect(widgetBriefingsKey([latest("005930", 5, "2026-09-24T16:20:00+09:00"), b, c])).not.toBe(key);
+    expect(widgetBriefingsKey([latest("005930", 6, "2026-09-24T16:20:00+09:00", "failed"), b, c])).not.toBe(key);
+    expect(widgetBriefingsKey([])).toBe("");
   });
 });
 
