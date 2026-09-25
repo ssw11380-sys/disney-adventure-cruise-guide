@@ -40,8 +40,8 @@ export default function FullscreenChartScreen() {
   const c = parseStockCode(code) ?? "";
   const [period, setPeriod] = useState<CandlePeriod>(() => parseCandlePeriod(initial));
   const winLandscape = winW > winH;
-  // 가로 창에서 돌리기 버튼: 플래그가 꺼져 있으면 지금처럼 흐리게 꺼 두고, 켜져 있으면 숨긴다
-  const hideRotate = fold.on && winLandscape;
+  // 가로 창에서 돌리기 버튼: 넓은 창(펼친 안쪽 화면)이면 숨기고, 그 밖(플래그 꺼짐·접은 화면을 나눠 쓴 좁은 가로 창)은 지금처럼 흐리게 꺼 둔다
+  const hideRotate = fold.on && fold.width !== "compact" && winLandscape;
   // 가로 버튼 상태와 그때의 창 크기. 창이 바뀌면(폰을 돌림·접음·폄·창 크기 조절) 그리는 중에 바로 돌리기를 푼다
   // → 가로 창에서 두 번 돌지 않고, 같은 크기의 세로 창으로 돌아와도 옆으로 누운 차트가 갑자기 나오지 않는다
   const winKey = `${Math.round(winW)}x${Math.round(winH)}`;
@@ -79,9 +79,11 @@ export default function FullscreenChartScreen() {
   const head = chartHeaderLayout({ fontScale, quote: q !== null, twoLines: headMemo.key === headKey && headMemo.twoLines });
   const headerH = head.height;
   // 한 줄 머리를 잰다: 넘쳐서 이름이 네 글자도 남지 않으면 두 줄로 정하고 기억한다 (다 들어가면 3-42 이전 머리 그대로)
+  // 시세가 오기 전에도 붙여 둔다 — 처음 그릴 때 onLayout 이 없던 요소는 나중에 붙여도 재지 않는 환경이 있다(react-native-web). 시세가 없으면 거른다
   const measureHead =
-    q && !head.twoLines
+    !head.twoLines
       ? (part: "title" | "name") => (e: LayoutChangeEvent) => {
+          if (!q) return;
           const m = headSize.current.key === headKey ? headSize.current : { key: headKey, title: null, name: null };
           m[part] = e.nativeEvent.layout.width;
           headSize.current = m;

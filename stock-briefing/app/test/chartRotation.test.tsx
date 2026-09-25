@@ -180,6 +180,15 @@ describe("가로 창에서 가로로 보기 버튼 (폴드 진단 26번, 플래�
     expect(chart(r)).toEqual({ w: 933 - PAD, h: expectedH(704) });
   });
 
+  it("플래그 켜짐 + 좁은 가로 창(접은 바깥 화면을 위아래로 나눠 쓴 475×370): 접은 화면이라 지금처럼 흐리게 꺼 둔다", () => {
+    h.win = { width: 475, height: 370 };
+    h.flag = true;
+    const r = render(<ChartScreen />);
+    expect(toggle(r).props.disabled).toBe(true);
+    expect(flatStyle(toggle(r)).opacity).toBeLessThan(1);
+    expect(buttonsRow(r).children).toHaveLength(2);
+  });
+
   it("플래그 켜짐 + 세로 창: 버튼이 그대로 있고 돌릴 수 있다. 돌린 판(가로)에서도 '세로로 보기'로 남는다", () => {
     h.flag = true;
     const r = render(<ChartScreen />);
@@ -443,13 +452,17 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
     expect(header(r).children).toHaveLength(2);
   });
 
-  it("시세가 없으면 이름만 한 줄 (전과 같음) — 재지도 않는다", () => {
+  it("시세가 없으면 이름만 한 줄 (전과 같음) — 잰 값이 와도 바꾸지 않는다 (재는 함수는 시세가 늦게 올 때를 위해 처음부터 붙어 있다)", () => {
     h.stock = { ...LONG, quote: null };
     h.win = { width: 411, height: 960, fontScale: 1.5 };
     const r = render(<ChartScreen />);
     expect(priceNode(r)).toBeUndefined();
     expect(headBox(r)).toEqual(MAIN_HEAD);
-    expect(nameNode(r).props.onLayout).toBeUndefined();
+    const onLayout = nameNode(r).props.onLayout as ((e: unknown) => void) | undefined;
+    expect(typeof onLayout).toBe("function");
+    onLayout!({ nativeEvent: { layout: { width: 400, height: 20, x: 0, y: 0 } } });
+    r.rerender();
+    expect(headBox(r)).toEqual(MAIN_HEAD);
   });
 
   it("차트 칩 띠 끝은 전체 화면 바탕색(t.bg)으로 흐린다 (넓은 창만 — CandleChart 가 정한다)", () => {
