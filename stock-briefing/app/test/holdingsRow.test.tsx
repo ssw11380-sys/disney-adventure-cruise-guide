@@ -7,7 +7,7 @@ import { render } from "./miniRender";
 /**
  * 넓은 잔고 표의 한 줄 (3-42 웨이브 B): StockRow 에 columns 를 주면 한 줄 표(components/HoldingsTable TableLine).
  * 휴대폰 줄과 같은 표기 함수·같은 부호 규칙(BH-38)·같은 화면 읽기 문장 + 당일손익·평가금액·비중.
- * 미국 종목 금액은 설정 '원화로 보기'를 따른다 (기본 달러 — 사용자 결정).
+ * 미국 종목: 금액 열(평가손익·당일손익·평가금액)만 설정 '원화로 보기'를 따르고(기본 달러), 현재가·평단·전일대비는 늘 달러 (사용자 결정).
  */
 vi.mock("react-native", () => ({ StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 }, Platform: { OS: "android" } }));
 vi.mock("@/theme", async () => {
@@ -75,13 +75,23 @@ describe("보유 줄", () => {
     expect(l.accessibilityLabel).toContain("당일손익 123.00달러 손실, 평가금액 7,632.00달러, 비중 14.8%");
   });
 
-  it("설정 '원화로 보기'면 미국 종목도 원화 (평단·손익은 매수 당시 환율 기준 — 휴대폰 줄과 같음)", () => {
+  it("설정 '원화로 보기'면 금액 열만 원화 (손익은 매수 당시 환율 기준 — 휴대폰 줄과 같음), 현재가·평단은 달러 그대로 (사용자 결정)", () => {
     const l = draw(apple, { showKrw: true });
-    expect(l.price!.text).toBe("356,160");
+    // 주당 값: 설정과 상관없이 현지 통화
+    expect(l.price!.text).toBe("$254.40");
+    expect(l.cells.avg.text).toBe("$180.00");
+    // 금액 열: 원화
     expect(l.cells.value.text).toBe("10,684,800");
     expect(l.cells.profit.text).toBe("+3,684,800");
     expect(l.cells.day).toEqual({ text: "-172,200", color: light.down });
-    expect(l.cells.avg.text).toBe("233,333");
+    // 화면 읽기도 보이는 값 그대로: 평단·현재가는 달러, 금액은 원
+    expect(l.accessibilityLabel).toContain("평단 180.00달러, 현재가 254.40달러");
+    expect(l.accessibilityLabel).toContain("평가손익 3,684,800원 이익");
+    expect(l.accessibilityLabel).toContain("당일손익 172,200원 손실, 평가금액 10,684,800원");
+    // 설정을 꺼도 주당 값은 같다 (원화 보기가 바꾸는 것은 금액 열뿐)
+    const off = draw(apple);
+    expect(off.price!.text).toBe(l.price!.text);
+    expect(off.cells.avg.text).toBe(l.cells.avg.text);
   });
 
   it("BH-38: 0 으로 보이는 당일손익·손익은 부호·색 없이", () => {
@@ -115,6 +125,14 @@ describe("관심 줄", () => {
     expect(l.weight).toBeNull();
     expect(l.accessibilityLabel).toBe("브로드컴, 미국, 관심, 현재가 345.20달러, 1.74% 상승, 전일 대비 5.90달러 상승, 거래량 2,230만주");
   });
+
+  it("원화로 보기를 켜도 관심 표의 현재가·전일대비는 달러 그대로 (주당 값)", () => {
+    const w = holding("AVGO", quote("AVGO", 345.2, { currency: "USD", change: 5.9, changeRate: 1.74, volume: 22_300_000, fxRate: 1400 }), null, null, undefined, "브로드컴");
+    const l = draw(w, { plan: WATCH, showKrw: true });
+    expect(l.price!.text).toBe("$345.20");
+    expect(l.cells.move).toEqual({ text: "▲5.90", color: light.up });
+    expect(l.accessibilityLabel).toContain("현재가 345.20달러, 1.74% 상승, 전일 대비 5.90달러 상승");
+  });
 });
 
 describe("다시 그리기 조건 (3-17): 한 줄 표도 체결이 온 줄만", () => {
@@ -138,6 +156,15 @@ describe("휴대폰 줄(columns 없음)은 지금 그대로", () => {
     expect(line.props.sub).toBe("120주 · 71,000");
     // 휴대폰 줄 문장에는 당일손익·평가금액·비중을 더하지 않는다
     expect(String(line.props.accessibilityLabel)).not.toContain("당일손익");
+  });
+
+  it("휴대폰 줄은 원화로 보기를 켜면 지금처럼 현재가·평단도 원화 (넓은 표만 주당 값을 달러로 둔다)", () => {
+    const r = render(<StockRow stock={apple} onPress={() => undefined} showKrw afterCost={false} />);
+    const line = r.all().find((n) => n.type === "StockLine")!;
+    const price = line.props.price as { text: string };
+    expect(price.text.startsWith("$")).toBe(false);
+    expect(line.props.sub).toBe("30주 · 233,333원");
+    expect(String(line.props.accessibilityLabel)).toContain("평단 233,333원, 현재가 356,160원");
   });
 
   it("위치 재기를 주면 줄 위치(y·높이)를 종목과 함께 알린다", () => {

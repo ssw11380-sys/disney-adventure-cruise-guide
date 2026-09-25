@@ -134,7 +134,8 @@ export function TableLine({
       accessibilityLabel={accessibilityLabel}
       accessibilityActions={accessibilityActions}
       onAccessibilityAction={onAccessibilityAction ? (e) => onAccessibilityAction(e.nativeEvent.actionName) : undefined}
-      style={({ pressed }) => [styles.row, { minHeight: layout.rowH, paddingHorizontal: plan.pad, backgroundColor: pressed ? t.surfaceAlt : zebra ? t.zebra : t.surface }]}
+      // 누른 줄은 줄무늬와 확실히 다른 t.rowPressed (surfaceAlt 는 줄무늬와 거의 같아 줄무늬 줄을 눌러도 표시가 안 보였다)
+      style={({ pressed }) => [styles.row, { minHeight: layout.rowH, paddingHorizontal: plan.pad, backgroundColor: pressed ? t.rowPressed : zebra ? t.zebra : t.surface }]}
     >
       <View style={[styles.name, { width: plan.nameW }]}>
         {badge}

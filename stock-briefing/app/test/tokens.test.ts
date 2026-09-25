@@ -41,6 +41,8 @@ function oklabDelta(a: string, b: string, cvd?: keyof typeof MACHADO): number {
 const TEXT = ["ink", "sub", "muted", "accent", "gold", "up", "down", "live", "warn", "danger"] as const;
 /** zebra: 넓은 잔고 표의 줄무늬 바탕 (3-42) — 그 위의 숫자·등락 글자도 4.5 이상 */
 const BACK = ["bg", "surface", "surfaceAlt", "zebra"] as const;
+/** 글자 대비만 보는 바탕: 넓은 잔고 표에서 누른 줄 (3-42) — 눌린 동안에도 숫자·등락 글자 4.5 이상 */
+const TEXT_BACK = [...BACK, "rowPressed"] as const;
 
 describe.each([
   ["다크", dark],
@@ -48,11 +50,17 @@ describe.each([
 ] as [string, Theme][])("디자인 토큰 %s (3-20)", (_name, t) => {
   it("글자/바탕 조합 대비 4.5 이상", () => {
     const low: string[] = [];
-    for (const fg of TEXT) for (const bg of BACK) if (contrast(t[fg], t[bg]) < 4.5) low.push(`${fg}/${bg} ${contrast(t[fg], t[bg]).toFixed(2)}`);
+    for (const fg of TEXT) for (const bg of TEXT_BACK) if (contrast(t[fg], t[bg]) < 4.5) low.push(`${fg}/${bg} ${contrast(t[fg], t[bg]).toFixed(2)}`);
     for (const [fg, bg] of [["accentInk", "accent"], ["onFill", "upFill"], ["onFill", "downFill"]] as const) {
       if (contrast(t[fg], t[bg]) < 4.5) low.push(`${fg}/${bg} ${contrast(t[fg], t[bg]).toFixed(2)}`);
     }
     expect(low).toEqual([]);
+  });
+
+  it("넓은 잔고 표에서 누른 줄은 줄무늬·바탕과 눈에 띄게 다르다 (ΔE2000 3 이상 — 예전 눌림색 surfaceAlt 는 줄무늬와 거의 같았다)", () => {
+    expect(deltaE2000(t.rowPressed, t.zebra)).toBeGreaterThanOrEqual(3);
+    expect(deltaE2000(t.rowPressed, t.surface)).toBeGreaterThanOrEqual(3);
+    expect(deltaE2000(t.surfaceAlt, t.zebra)).toBeLessThan(deltaE2000(t.rowPressed, t.zebra));
   });
 
   it("강조색·보조선·실시간·평단 색은 상승·하락색과 ΔE2000 20 이상", () => {

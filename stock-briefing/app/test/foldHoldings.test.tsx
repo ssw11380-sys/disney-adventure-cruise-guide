@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   setSort: vi.fn(),
   push: vi.fn(),
   showKrw: false,
+  afterCost: false,
 }));
 
 vi.mock("react-native", () => ({
@@ -53,7 +54,7 @@ vi.mock("@/lib/settings", () => ({
     { value: "profit", label: "평가손익" },
     { value: "value", label: "평가금액" },
   ],
-  useSettings: () => ({ afterCost: false, showKrw: h.showKrw, sort: "created", setSort: h.setSort }),
+  useSettings: () => ({ afterCost: h.afterCost, showKrw: h.showKrw, sort: "created", setSort: h.setSort }),
 }));
 vi.mock("@/api/hooks", () => ({
   useFeature: (key: string, fallback = false) => h.flags[key] ?? fallback,
@@ -81,10 +82,11 @@ vi.mock("@/components/AccountBand", async (orig) => ({ ...(await orig<typeof imp
 const { default: StocksScreen } = await import("@/app/(tabs)/index");
 const { default: TabsLayout } = await import("@/app/(tabs)/_layout");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
-const { forgetHoldingsAnchor } = await import("@/lib/holdingsAnchor");
+const { forgetHoldingsAnchor, holdingsAnchorMemory } = await import("@/lib/holdingsAnchor");
+const { summarize } = await import("@/lib/portfolio");
 const { pickCols, pickWatchCols } = await import("@/lib/holdingsColumns");
 const { railWidth } = await import("@/lib/windowClass");
-const { layout, space } = await import("@/tokens");
+const { layout, space, touch } = await import("@/tokens");
 
 const SIZES = {
   "폴드8 접힘": [475, 751],
@@ -112,6 +114,7 @@ beforeEach(() => {
   h.flags = { allocationView: true };
   h.stocks = STOCKS;
   h.showKrw = false;
+  h.afterCost = false;
   h.setSort.mockReset();
   h.push.mockReset();
   forgetWindowClass();
@@ -151,7 +154,16 @@ describe("플래그가 꺼져 있으면 어떤 창에서도 지금 휴대폰 화
     // 계좌 패널: 상태 줄에 보유·관심 수 (지금과 같은 말)
     const status = byType(r, "LiveStatus")[0]!;
     expect(status.props.suffix).toBe("보유 3 · 관심 1");
+    expect(status.props).not.toHaveProperty("twoLine");
     expect(r.has("비중 보기")).toBe(true);
+  });
+});
+
+describe("휴대폰 계좌 패널의 환율 안내 (넓은 창 계좌 띠와 같은 함수 fxNote 로 — 문구는 지금 그대로)", () => {
+  it("'토스 적용 환율 1,400원 · 원화 손익은 매수 당시 환율 기준'", () => {
+    h.flags = { allocationView: true, foldLayout: false };
+    const r = render(<StocksScreen />);
+    expect(r.text()).toContain("토스 적용 환율 1,400원 · 원화 손익은 매수 당시 환율 기준");
   });
 });
 
@@ -172,6 +184,9 @@ describe("켜져 있어도 접힌 화면은 지금과 같은 모양 (접고 펼 
     expect(list.props).not.toHaveProperty("onLayout");
     expect(byType(r, "TableHead")).toHaveLength(2);
     expect(byType(r, "LiveStatus")[0]!.props.suffix).toBe("보유 3 · 관심 1");
+    expect(byType(r, "LiveStatus")[0]!.props).not.toHaveProperty("twoLine");
+    // 이어 보기: 휴대폰 목록 배치 이름
+    expect(holdingsAnchorMemory().mode).toBe("list");
   });
 });
 
@@ -196,11 +211,12 @@ describe("넓은 창 (플래그 켜짐)", () => {
     expect(flat(search.props.style)).toMatchObject({ width: 44, minHeight: 44 });
     (search.props.onPress as () => void)();
     expect(h.push).toHaveBeenCalledWith("/stocks/add");
-    // 시장 상태는 보유·관심 수 없이 (표 머리에 있다)
+    // 시장 상태는 보유·관심 수 없이 (표 머리에 있다), 세션 / 실시간·시각 두 줄
     expect(byType(end, "LiveStatus")[0]!.props.suffix).toBe("");
-    // 계좌 띠: 한 줄, 표와 같은 좌우 여백, 비중 버튼
+    expect(byType(end, "LiveStatus")[0]!.props.twoLine).toBe(true);
+    // 계좌 띠: 한 줄 + 국내·해외 수익률(설계 F8L), 표와 같은 좌우 여백, 비중 버튼
     const band = byType(r, "AccountBand")[0]!;
-    expect(band.props).toMatchObject({ oneLine: true, pad: space.md });
+    expect(band.props).toMatchObject({ oneLine: true, rates: true, pad: space.md });
     expect(typeof band.props.onAllocation).toBe("function");
     // 표 폭 = 창 933 − 세로 막대 80 → 숫자 8칸, 이름 157
     const plan = pickCols(933 - railWidth(1), 1);
@@ -265,18 +281,52 @@ describe("넓은 창 (플래그 켜짐)", () => {
     expect(byType(r2, "Screen")[0]!.props.contentStyle).toEqual({ paddingLeft: 16, paddingRight: 8 });
   });
 
-  it("울트라 펼침 세로(859): 계좌 띠 한 줄 · 숫자 8칸 (막대 없음)", () => {
+  it("울트라 펼침 세로(859): 계좌 띠 한 줄(국내·해외 수익률까지 들어감) · 숫자 8칸 (막대 없음)", () => {
     const r = wide(859, 954);
-    expect(byType(r, "AccountBand")[0]!.props.oneLine).toBe(true);
+    expect(byType(r, "AccountBand")[0]!.props).toMatchObject({ oneLine: true, rates: true });
     expect((byType(r, "TableHeadRow")[0]!.props.plan as ReturnType<typeof pickCols>).cols).toHaveLength(8);
   });
 
-  it("큰 글씨 130%: 열이 넓어져 칸 수가 줄고, 계좌 띠는 두 줄", () => {
+  it("큰 글씨 130%: 열이 넓어져 칸 수가 줄고(펼친 폴드8 가로 6칸 — 설계와 같음), 계좌 띠는 두 줄", () => {
     const r = wide(933, 704, 1.3);
     const plan = byType(r, "TableHeadRow")[0]!.props.plan as ReturnType<typeof pickCols>;
     expect(plan).toEqual(pickCols(933 - railWidth(1.3), 1.3));
-    expect(plan.cols.length).toBeLessThan(8);
+    expect(plan.cols).toHaveLength(6);
     expect(byType(r, "AccountBand")[0]!.props.oneLine).toBe(false);
+  });
+
+  it("좁은 한 줄 띠(표 폭 800~839, 예: 820 창)는 국내·해외 금액만", () => {
+    const r = wide(820, 1000);
+    expect(byType(r, "AccountBand")[0]!.props).toMatchObject({ oneLine: true, rates: false });
+  });
+
+  it("당일 등락률 기준: 비용 차감이 켜져 있으면 비용 차감 전 평가금액을 띠에 넘긴다 (당일손익과 같은 기준)", () => {
+    h.afterCost = true;
+    const on = wide(933, 704);
+    const g = summarize(STOCKS, false);
+    expect((byType(on, "AccountBand")[0]!.props.data as { grossValue: number | null }).grossValue).toBe((g.krw ?? g.byCur.KRW).value);
+    h.afterCost = false;
+    const off = render(<StocksScreen />);
+    expect((byType(off, "AccountBand")[0]!.props.data as { grossValue: number | null }).grossValue).toBeNull();
+  });
+
+  it("이어 보기 배치 이름에 탭 막대 위치·열 수를 넣는다: 큰 글씨에서 펼친 폴드8 을 돌려(세로 704 ↔ 가로 933) 띠가 둘 다 두 줄이어도 다시 맞춘다", () => {
+    const r = wide(933, 704, 1.3);
+    expect(holdingsAnchorMemory().mode).toBe("table-2-rail-6");
+    forgetWindowClass();
+    size(704, 933, 1.3);
+    r.rerender();
+    expect(byType(r, "AccountBand")[0]!.props.oneLine).toBe(false);
+    expect(holdingsAnchorMemory().mode).toBe(`table-2-bar-${pickCols(704, 1.3).cols.length}`);
+    // 100% 에서 울트라 가로(954, 아래 탭)와 폴드8 가로(933, 막대)도 띠·열이 같아도 탭 위치가 달라 다른 이름
+    forgetWindowClass();
+    size(954, 787, 1);
+    r.rerender();
+    const ul = holdingsAnchorMemory().mode;
+    forgetWindowClass();
+    size(933, 632, 1);
+    r.rerender();
+    expect(holdingsAnchorMemory().mode).not.toBe(ul);
   });
 
   it("표 머리의 열 이름을 누르면 설정의 정렬 값으로 바꾸고, '등록순 ▾' 는 정렬 창을 연다", () => {
@@ -351,8 +401,11 @@ describe("가운데 모으기(Screen readable)는 주 화면에 쓰지 않는다
     expect(hits).toEqual([]);
   });
 
-  it("넓은 표 토큰: 줄 44(누르는 크기 이상) · 머리 40 · 맨 위 띠 48 · 계좌 띠 52", () => {
-    expect(layout.rowH).toBeGreaterThanOrEqual(44);
-    expect(layout).toMatchObject({ rowH: 44, headH: 40, stripH: 48, bandH: 52, bandRowH: 48, colGap: 14, nameMinW: 146 });
+  it("넓은 표 토큰: 줄 44 · 머리 44(누르는 크기 — 고정 머리라 hitSlop 으로 넓히지 않는다) · 맨 위 띠 48 · 계좌 띠 52", () => {
+    expect(layout.rowH).toBeGreaterThanOrEqual(touch.min);
+    expect(layout.headH).toBeGreaterThanOrEqual(touch.min);
+    expect(layout).toMatchObject({ rowH: 44, headH: 44, stripH: 48, bandH: 52, bandRowH: 48, colGap: 14, nameMinW: 146, nameMinWrapW: 132, bandRatesMin: 840 });
+    // 쓰는 곳이 없는 토큰은 두지 않는다 (탭 가운데 정렬은 margin auto)
+    expect(layout).not.toHaveProperty("railTabH");
   });
 });

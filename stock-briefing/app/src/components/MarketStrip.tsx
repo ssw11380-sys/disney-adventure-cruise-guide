@@ -6,7 +6,7 @@ import type { MarketIndex } from "@/api/types";
 import { formatIndexValue, formatPct } from "@/lib/format";
 import { clockLabel, indexLive, indicesAsOf } from "@/lib/freshness";
 import { useNow } from "@/lib/useNow";
-import { changeColor, font, layout, space, touch, useTheme } from "@/theme";
+import { changeColor, font, fontCap, layout, space, touch, useTheme } from "@/theme";
 import { sentence, speakRate } from "@/lib/a11y";
 
 /** 지수·환율 값 표기 (잔고 위젯 지수 줄과 같은 함수) */
@@ -16,7 +16,8 @@ export { formatIndexValue };
  * 홈 상단 지수 띠: 지수명 / 값 / 등락률. 옆으로 밀어 보고, 누르면 그 지수·환율 차트로 간다.
  * selected·onSelect 를 주면(지수 차트 화면) 고른 항목을 표시하고 화면을 바꾸지 않고 전환한다.
  * dense 면 넓은 창의 맨 위 띠 (3-42, 기능 플래그 foldLayout — 잔고 탭이 넓은 창에서만 켠다):
- *  - 칸이 두 줄(이름 + 등락률 / 값)이라 띠 높이가 layout.stripH(48). 큰 글씨에서는 글자만큼 높아진다
+ *  - 칸이 두 줄(이름 + 등락률 11 / 값 14 굵게 — 목업 크기)이라 띠 높이가 layout.stripH(48)
+ *  - 글자 확대는 탭 머리와 같은 상한(fontCap.chrome 150%): 큰 글씨에서도 띠가 표를 밀어내지 않게 (200% 에서 띠 약 60)
  *  - trailing(시장 상태·검색 버튼)을 오른쪽 끝에 고정한다. 지수를 아직 못 받았어도 trailing 은 그린다 (검색 버튼이 사라지지 않게)
  * dense 를 주지 않으면 지금과 똑같다.
  */
@@ -43,6 +44,8 @@ export function MarketStrip({ selected, onSelect, dense = false, trailing }: { s
   // 기준 시각은 서버가 출처에서 받은 시각 (앱이 응답을 받은 시각이 아니라). 출처 조회가 실패 중인 항목이 있으면 경고색
   const basis = indicesAsOf(list, q.dataUpdatedAt);
   const warn = basis.stale || q.isError || q.failureCount > 0;
+  // 넓은 띠 글자만 확대 상한 (휴대폰 띠는 지금 그대로)
+  const cap = dense ? { maxFontSizeMultiplier: fontCap.chrome } : null;
   const strip = (
     <ScrollView ref={scroll} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={dense ? styles.denseRow : styles.row} style={dense ? styles.fill : undefined}>
       {list.map((i, n) => {
@@ -52,7 +55,7 @@ export function MarketStrip({ selected, onSelect, dense = false, trailing }: { s
         // 초록 점 = 장중 확인, 경고색 점 = 출처 조회 실패로 마지막 값
         const dot = live ? <View style={[styles.dot, { backgroundColor: t.live }]} /> : i.stale ? <View style={[styles.dot, { backgroundColor: t.warn }]} /> : null;
         const name = (
-          <Text style={{ color: on ? t.ink : t.muted, fontSize: font.tiny, fontWeight: "600" }}>
+          <Text style={{ color: on ? t.ink : t.muted, fontSize: font.tiny, fontWeight: "600" }} {...cap}>
             {i.name}
             {/* 잔고 패널의 "토스 적용 환율"과 구분 */}
             {i.kind === "fx" ? <Text style={{ fontWeight: "400" }}> 시장</Text> : null}
@@ -82,10 +85,14 @@ export function MarketStrip({ selected, onSelect, dense = false, trailing }: { s
                 {/* 두 줄 칸: 이름 + 등락률 / 값 (전일 대비 금액은 넓은 띠에서 뺀다 — 화면 읽기 문장은 같다) */}
                 <View style={styles.inline}>
                   {name}
-                  <Text style={[styles.rateDense, { color: c }]}>{formatPct(i.changeRate)}</Text>
+                  <Text style={[styles.rateDense, { color: c }]} {...cap}>
+                    {formatPct(i.changeRate)}
+                  </Text>
                   {dot}
                 </View>
-                <Text style={[styles.valueDense, { color: c }]}>{formatIndexValue(i.value)}</Text>
+                <Text style={[styles.valueDense, { color: c }]} {...cap}>
+                  {formatIndexValue(i.value)}
+                </Text>
               </>
             ) : (
               <>
@@ -106,8 +113,12 @@ export function MarketStrip({ selected, onSelect, dense = false, trailing }: { s
       {/* 띠 끝에 기준 시각 (지수는 30초마다 받음). 서버가 출처에서 새로 받지 못하는 동안은 마지막으로 받은 시각이 남는다 */}
       {basis.at !== null ? (
         <View style={[dense ? styles.itemDense : styles.item, styles.asOf, { borderLeftColor: t.line }]} accessible accessibilityLabel={sentence([`지수 기준 시각 ${clockLabel(basis.at, now)}`, basis.stale ? "시세 지연" : null])}>
-          <Text style={{ color: warn ? t.warn : t.muted, fontSize: font.tiny }}>{clockLabel(basis.at, now)}</Text>
-          <Text style={{ color: t.muted, fontSize: font.tiny }}>기준</Text>
+          <Text style={{ color: warn ? t.warn : t.muted, fontSize: font.tiny }} {...cap}>
+            {clockLabel(basis.at, now)}
+          </Text>
+          <Text style={{ color: t.muted, fontSize: font.tiny }} {...cap}>
+            기준
+          </Text>
         </View>
       ) : null}
     </ScrollView>
@@ -136,6 +147,7 @@ const styles = StyleSheet.create({
   denseRow: { paddingHorizontal: space.xs, alignItems: "stretch" },
   // 두 줄 칸: 높이는 띠(48)를 채우고, 누르는 크기 44 이상
   itemDense: { minHeight: touch.min, justifyContent: "center", paddingVertical: space.xs, paddingHorizontal: space.md, gap: space.xxs },
-  rateDense: { fontSize: font.small, fontWeight: "600", fontVariant: ["tabular-nums"] },
-  valueDense: { fontSize: font.h2, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  // 목업 크기: 이름·등락률 11, 값 14 굵게
+  rateDense: { fontSize: font.tiny, fontWeight: "600", fontVariant: ["tabular-nums"] },
+  valueDense: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
 });

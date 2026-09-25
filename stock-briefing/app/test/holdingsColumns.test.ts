@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { bandOneLine, COL_LABEL, COL_SORT, HELD_COLS, holdingWeights, pickCols, pickWatchCols, usedWidth, WATCH_COLS } from "@/lib/holdingsColumns";
+import { bandOneLine, bandRates, COL_LABEL, COL_SORT, HELD_COLS, holdingWeights, nameMinFor, pickCols, pickWatchCols, usedWidth, WATCH_COLS } from "@/lib/holdingsColumns";
+import { railWidth } from "@/lib/windowClass";
 import { fontCap, layout, space } from "@/tokens";
 import { holding, quote } from "./helpers";
 
@@ -14,7 +15,7 @@ const keys = (w: number, s = 1) => pickCols(w, s).cols.map((c) => c.key);
 const HELD = HELD_COLS.map((c) => c.key);
 
 describe("pickCols: 폭·글자 배율별 열", () => {
-  it.each(WIDTHS.flatMap((w) => SCALES.map((s) => [w, s] as const)))("폭 %i · 글자 %s: 앞에서부터 우선 · 합계가 폭을 넘지 않음 · 이름 칸 146 이상", (w, s) => {
+  it.each(WIDTHS.flatMap((w) => SCALES.map((s) => [w, s] as const)))("폭 %i · 글자 %s: 앞에서부터 우선 · 합계가 폭을 넘지 않음 · 이름 칸 최소 폭(100% 146, 큰 글씨 132) 이상", (w, s) => {
     const p = pickCols(w, s);
     const inner = w - p.pad * 2;
     // 열은 휴대폰에서 보던 순서 그대로, 앞에서부터 (뒤에서부터 뺀다)
@@ -23,12 +24,12 @@ describe("pickCols: 폭·글자 배율별 열", () => {
     expect(p.cols.length).toBeGreaterThanOrEqual(4);
     // 합계(이름 + 숫자 열 + 구분선 칸)가 표 폭 그대로
     expect(p.nameW + usedWidth(p.cols)).toBe(inner);
-    expect(p.nameW).toBeGreaterThanOrEqual(layout.nameMinW);
+    expect(p.nameW).toBeGreaterThanOrEqual(nameMinFor(s));
     // 한 열을 더 넣으면 이름 칸이 최소 폭보다 좁아진다 (넣을 수 있는 만큼 넣었다)
     if (p.cols.length < HELD.length) {
       const next = HELD_COLS[p.cols.length]!;
       const extra = Math.ceil(layout.cols[next.key] * Math.min(s, fontCap.row)) + (next.group !== HELD_COLS[p.cols.length - 1]!.group ? layout.colGap : 0);
-      expect(p.nameW - extra).toBeLessThan(layout.nameMinW);
+      expect(p.nameW - extra).toBeLessThan(nameMinFor(s));
     }
     // 열 폭은 글자 배율(최대 140%)만큼 넓힌다 → 숫자가 잘리지 않는다
     for (const c of p.cols) expect(c.width).toBe(Math.ceil(layout.cols[c.key as keyof typeof layout.cols] * Math.min(s, fontCap.row)));
@@ -52,6 +53,12 @@ describe("pickCols: 폭·글자 배율별 열", () => {
 
   it("큰 글씨는 열이 넓어져 칸 수가 줄어든다 (130% → 펼친 폴드8 가로 8칸 → 6칸, 140% → 5칸)", () => {
     expect(keys(853, 1.3)).toHaveLength(6);
+    // 실제 펼친 폴드8 가로 130%: 세로 탭 막대가 글자만큼 넓어져(92) 표 폭 841 — 그래도 6칸 (이름 칸 142, 두 줄까지 접힘).
+    // 예전(이름 최소 146)에는 5칸으로 줄고 이름 칸이 265 로 벌어져 이름과 현재가 사이에 약 200dp 빈칸이 생겼다
+    const f8l130 = pickCols(933 - railWidth(1.3), 1.3);
+    expect(railWidth(1.3)).toBe(92);
+    expect(f8l130.cols.map((c) => c.key)).toEqual(["price", "rate", "profit", "profitRate", "day", "value"]);
+    expect(f8l130.nameW).toBe(142);
     expect(keys(853, 1.4)).toHaveLength(5);
     // 140% 넘는 글자는 줄 글자 상한(fontCap.row)이라 열도 140% 그대로
     expect(pickCols(853, 2)).toEqual(pickCols(853, 1.4));
@@ -102,6 +109,16 @@ describe("열 이름·정렬", () => {
   });
 });
 
+describe("이름 칸 최소 폭 (nameMinFor)", () => {
+  it("100% 는 146(한 줄 이름), 큰 글씨는 이름이 두 줄까지 접혀 132 — 100% 미만은 100% 로 본다", () => {
+    expect(nameMinFor(1)).toBe(layout.nameMinW);
+    expect(nameMinFor(0.85)).toBe(layout.nameMinW);
+    expect(nameMinFor(1.1)).toBe(layout.nameMinWrapW);
+    expect(nameMinFor(2)).toBe(layout.nameMinWrapW);
+    expect(layout.nameMinWrapW).toBeLessThan(layout.nameMinW);
+  });
+});
+
 describe("계좌 띠 한 줄/두 줄", () => {
   it("표 폭 800 이상이면 한 줄 (펼친 폴드8 가로 853·울트라 859), 704 는 두 줄. 큰 글씨는 배율만큼 기준을 올린다", () => {
     expect(bandOneLine(853)).toBe(true);
@@ -110,6 +127,17 @@ describe("계좌 띠 한 줄/두 줄", () => {
     expect(bandOneLine(853, 1.3)).toBe(false);
     expect(bandOneLine(1100, 1.3)).toBe(true);
     expect(bandOneLine(Number.NaN)).toBe(false);
+  });
+
+  it("한 줄 띠의 국내·해외 수익률: 표 폭 840 이상 (펼친 폴드8 가로 853 · 울트라 859·954 는 넣고, 800~839 는 금액만)", () => {
+    expect(bandRates(933 - railWidth(1))).toBe(true);
+    expect(bandRates(859)).toBe(true);
+    expect(bandRates(954)).toBe(true);
+    expect(bandRates(820)).toBe(false);
+    expect(bandOneLine(820)).toBe(true);
+    // 큰 글씨는 배율만큼 기준을 올린다 (그 폭이면 띠가 이미 두 줄이다 — 두 줄 띠는 늘 수익률)
+    expect(bandRates(853, 1.3)).toBe(false);
+    expect(bandRates(Number.NaN)).toBe(false);
   });
 });
 

@@ -2,7 +2,7 @@ import type { RegisteredWithQuote } from "@/api/types";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, isHolding, sharedFx } from "@/lib/portfolio";
 import type { SortKey } from "@/lib/settings";
-import { clampScale } from "@/lib/textScale";
+import { clampScale, isBigText } from "@/lib/textScale";
 import { fontCap, layout, space } from "@/tokens";
 
 /**
@@ -13,7 +13,8 @@ import { fontCap, layout, space } from "@/tokens";
  *  - 열은 휴대폰에서 보던 순서 그대로 두고, 넓어진 만큼 오른쪽에 더한다 (앞일수록 우선):
  *    종목 | 현재가 · 등락률 ‖ 평가손익 · 수익률 ‖ 당일손익 · 평가금액 · 비중 · 평단 · 수량
  *  - 열 폭은 tokens layout.cols (글자 100%). 큰 글씨는 배율(최대 fontCap.row = 140%)만큼 넓힌다 → 숫자는 잘리지 않는다
- *  - 이름 칸이 layout.nameMinW(146) 보다 좁아지면 숫자 열을 뒤에서부터 뺀다. 남는 폭은 모두 이름 칸
+ *  - 이름 칸이 layout.nameMinW(146) 보다 좁아지면 숫자 열을 뒤에서부터 뺀다. 남는 폭은 모두 이름 칸.
+ *    큰 글씨(100% 초과)는 이름이 두 줄까지 접히므로 최소 폭을 layout.nameMinWrapW(132)로 (nameMinFor)
  *  - 열 묶음(시세 ‖ 평가손익 ‖ 그 밖)이 바뀌는 자리에 구분선 칸(layout.colGap)
  * 폭(width)은 창 폭이 아니라 표가 실제로 받은 폭이다 (왼쪽 세로 탭 막대·화면 여백을 뺀 값, 좌우 여백 포함)
  */
@@ -93,6 +94,11 @@ export function colScale(fontScale: number): number {
   return clampScale(fontScale, fontCap.row);
 }
 
+/** 이름 칸 최소 폭: 100% 는 한 줄 이름이라 layout.nameMinW, 큰 글씨는 이름이 두 줄까지 접히므로(표 줄과 같은 isBigText) layout.nameMinWrapW */
+export function nameMinFor(fontScale: number): number {
+  return isBigText(fontScale) ? layout.nameMinWrapW : layout.nameMinW;
+}
+
 function build<K extends ColKey>(defs: readonly ColDef<K>[], s: number): PlannedCol<K>[] {
   return defs.map((d, i) => ({ key: d.key, width: Math.ceil(layout.cols[d.key] * s), divider: i > 0 && defs[i - 1]!.group !== d.group }));
 }
@@ -119,9 +125,10 @@ function plan<K extends ColKey>(width: number, fontScale: number, defs: readonly
 /**
  * 보유 표 열 고르기. width 는 표 폭(좌우 여백 포함), fontScale 은 시스템 글자 배율.
  * 예 (글자 100%): 853(펼친 폴드8 가로, 막대 뺀 폭)·859(울트라 펼침 세로) → 숫자 8칸(평단까지), 704(폴드8 펼침 세로) → 6칸(평가금액까지)
+ * 글자 130%: 펼친 폴드8 가로(막대 92 를 뺀 841) → 6칸
  */
 export function pickCols(width: number, fontScale = 1): ColumnPlan<HeldCol> {
-  return plan(width, fontScale, HELD_COLS, layout.nameMinW);
+  return plan(width, fontScale, HELD_COLS, nameMinFor(fontScale));
 }
 
 /**
@@ -131,12 +138,21 @@ export function pickCols(width: number, fontScale = 1): ColumnPlan<HeldCol> {
 export function pickWatchCols(width: number, fontScale = 1, heldNameW?: number): ColumnPlan<WatchCol> {
   const aligned = heldNameW !== undefined ? plan(width, fontScale, WATCH_COLS, heldNameW) : null;
   if (aligned && aligned.cols.length === WATCH_COLS.length) return { ...aligned, nameW: heldNameW! };
-  return plan(width, fontScale, WATCH_COLS, layout.nameMinW);
+  return plan(width, fontScale, WATCH_COLS, nameMinFor(fontScale));
 }
 
 /** 계좌 띠를 한 줄로 쓸지: 표 폭이 layout.bandOneLineMin × 글자 배율 이상이면 한 줄, 아니면 두 줄 */
 export function bandOneLine(width: number, fontScale = 1): boolean {
   return Number.isFinite(width) && width >= layout.bandOneLineMin * colScale(fontScale);
+}
+
+/**
+ * 한 줄 계좌 띠에 국내·해외 수익률까지 넣을지 (3-42 설계: 펼친 폴드8 가로 '국내+% | 해외·환율+%').
+ * 표 폭이 layout.bandRatesMin(840) × 글자 배율 이상이면 넣는다 → 펼친 폴드8 가로 853 · 울트라 펼침 859·954 는 넣고,
+ * 800~839 의 좁은 한 줄 띠는 금액만. 두 줄 띠는 늘 넣는다 (부르는 쪽이 한 줄일 때만 본다)
+ */
+export function bandRates(width: number, fontScale = 1): boolean {
+  return Number.isFinite(width) && width >= layout.bandRatesMin * colScale(fontScale);
 }
 
 export interface Weights {

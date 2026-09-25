@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { anchorOffset, forgetHoldingsAnchor, holdingsAnchorMemory, topAnchor, useHoldingsAnchor, type HoldingsAnchor, type RowPos } from "@/lib/holdingsAnchor";
+import { anchorOffset, forgetHoldingsAnchor, holdingsAnchorMemory, holdingsLayoutKey, topAnchor, useHoldingsAnchor, type HoldingsAnchor, type RowPos } from "@/lib/holdingsAnchor";
 import { render } from "./miniRender";
 
 /**
@@ -79,6 +79,33 @@ describe("이어 보기 훅 (useHoldingsAnchor)", () => {
     expect(scrollTo).toHaveBeenLastCalledWith({ y: 698 - 66, animated: false });
   });
 
+  it("목록 끝 근처라 넓은 표에서 그 줄을 맨 위로 못 올려도(스크롤이 끝에서 멈춤) 기억은 처음 종목 그대로 → 다시 접으면 그 종목. 사용자가 끌면 다시 기억한다", () => {
+    const r = render(<Probe mode="list" />);
+    const scrollTo = vi.fn();
+    out.a!.ref.current = { scrollTo } as never;
+    out.a!.head("held", layout(400, 66));
+    rows(58, 466, CODES).forEach((p) => out.a!.row(p.code, p.section, p.y, p.h));
+    // 휴대폰에서 H 가 맨 위
+    out.a!.onScroll(scroll(466 + 7 * 58 - 66));
+    expect(holdingsAnchorMemory().code).toBe("H");
+    // 펼침: H 로 맞추려 했지만 목록이 짧아 스크롤이 더 앞(E 가 맨 위)에서 멈추고, 그 위치의 스크롤 이벤트가 온다
+    r.rerender(<Probe mode="table-2" />);
+    out.a!.head("held", layout(96, 44));
+    rows(44, 140, CODES).forEach((p) => out.a!.row(p.code, p.section, p.y, p.h));
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: 140 + 7 * 44 - 44, animated: false });
+    out.a!.onScroll(scroll(140 + 4 * 44 - 44));
+    expect(holdingsAnchorMemory().code).toBe("H");
+    // 다시 접으면 H 로
+    r.rerender(<Probe mode="list" />);
+    out.a!.head("held", layout(400, 66));
+    rows(58, 466, CODES).forEach((p) => out.a!.row(p.code, p.section, p.y, p.h));
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: 466 + 7 * 58 - 66, animated: false });
+    // 사용자가 직접 끌어 내리면 그때부터 다시 맨 위 종목을 기억한다
+    out.a!.onScrollBeginDrag();
+    out.a!.onScroll(scroll(466 + 2 * 58 - 66));
+    expect(holdingsAnchorMemory().code).toBe("C");
+  });
+
   it("맨 위였으면(표를 안 내렸으면) 배치가 바뀌어도 맨 위로", () => {
     const r = render(<Probe mode="list" />);
     const scrollTo = vi.fn();
@@ -118,5 +145,21 @@ describe("이어 보기 훅 (useHoldingsAnchor)", () => {
     r.rerender(<Probe mode="list" />);
     expect(out.a!.row).toBe(first.row);
     expect(out.a!.onScroll).toBe(first.onScroll);
+  });
+});
+
+describe("배치 이름 (holdingsLayoutKey): 줄 위치가 달라질 수 있는 것은 모두 이름에", () => {
+  it("휴대폰 목록은 list, 넓은 표는 계좌 띠 줄 수 · 탭 막대 위치 · 열 수", () => {
+    expect(holdingsLayoutKey({ wide: false, oneLineBand: false, rail: false, cols: 0 })).toBe("list");
+    expect(holdingsLayoutKey({ wide: true, oneLineBand: true, rail: true, cols: 8 })).toBe("table-1-rail-8");
+    expect(holdingsLayoutKey({ wide: true, oneLineBand: false, rail: false, cols: 6 })).toBe("table-2-bar-6");
+  });
+
+  it("큰 글씨로 펼친 폴드8 을 돌리면(세로 아래 탭 ↔ 가로 세로 막대) 띠가 둘 다 두 줄이어도 이름이 달라 맨 위 종목으로 다시 맞춘다", () => {
+    const portrait = holdingsLayoutKey({ wide: true, oneLineBand: false, rail: false, cols: 4 });
+    const landscape = holdingsLayoutKey({ wide: true, oneLineBand: false, rail: true, cols: 4 });
+    expect(portrait).not.toBe(landscape);
+    // 열 수만 달라도 다른 이름
+    expect(holdingsLayoutKey({ wide: true, oneLineBand: true, rail: false, cols: 8 })).not.toBe(holdingsLayoutKey({ wide: true, oneLineBand: true, rail: false, cols: 9 }));
   });
 });

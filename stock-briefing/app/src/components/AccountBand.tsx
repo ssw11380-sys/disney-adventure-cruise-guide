@@ -23,6 +23,11 @@ export interface AccountData {
   fx: number | null;
   /** 합계에서 뺀 보유 종목 안내 ("시세 없음 1종목 · 환율 없음 1종목 제외"). 없으면 null */
   excluded: string | null;
+  /**
+   * 비용 차감 전 평가금액 (총 평가금액과 같은 합계 기준 — 원화 합계, 환율을 모르면 원화 종목만). 당일 등락률의 전일 평가금액을
+   * 당일손익(비용 차감 전 전일 대비 금액)과 같은 기준으로 내려고 쓴다. 없으면(비용 차감 꺼짐 등) 총 평가금액 그대로
+   */
+  grossValue?: number | null;
 }
 
 export interface AccountLine {
@@ -47,6 +52,16 @@ export function accountFigures(d: AccountData) {
 export function lineProfit(l: AccountLine): { p: number; r: number } {
   const p = l.tot.value - l.tot.cost;
   return { p, r: l.tot.cost > 0 ? (p / l.tot.cost) * 100 : 0 };
+}
+
+/**
+ * 당일 등락률(%) = 당일손익 ÷ 전일 평가금액. 당일손익은 비용 차감 전 전일 대비 금액(전일 대비 × 수량)이라, 전일 평가금액도
+ * 비용 차감 전 평가금액에서 당일손익을 뺀 값으로 낸다 (설정 '비용 차감'이 켜져 있어도 기준이 섞이지 않게). 전일 평가금액이 0 이하면 null
+ */
+export function dayRateOf(d: AccountData): number | null {
+  const { main } = accountFigures(d);
+  const prev = (d.grossValue ?? main.value) - main.day;
+  return prev > 0 ? (main.day / prev) * 100 : null;
 }
 
 /** 화면 읽기: 계좌 요약을 한 문장으로 (3-22). 상태 줄(실시간·지연)은 따로 읽는다 */
@@ -77,19 +92,19 @@ export function fxNote(d: AccountData): string | null {
 /**
  * 넓은 창 계좌 띠 (3-42 웨이브 B, 기능 플래그 foldLayout — 잔고 탭이 넓은 창에서만 쓴다).
  *  - 한 줄(oneLine, 펼친 폴드8 가로·울트라 펼침): 총 평가금액 | 평가손익·수익률 | 당일손익·% | 국내·% | 해외·환율·% | [비중]
- *  - 두 줄(펼친 폴드8 세로 704 · 큰 글씨): 총 평가금액 | 평가손익·수익률 | 당일손익·% / 국내 | 해외 | 매입금액 | [비중]
- * 숫자는 칸이 모자라면 말줄임 대신 글자를 줄여 한 줄에 다 보인다. 화면 읽기는 휴대폰 패널과 같은 한 문장 (칸 조각은 숨긴다),
- * '비중' 버튼은 문장 밖에 두어 따로 고를 수 있다
+ *    국내·해외 수익률은 rates(표 폭 layout.bandRatesMin 이상 — lib/holdingsColumns bandRates)일 때만. 좁은 한 줄 띠는 금액만
+ *  - 두 줄(펼친 폴드8 세로 704 · 큰 글씨): 총 평가금액 | 평가손익·수익률 | 당일손익·% / 국내·% | 해외·환율·% | 매입금액 | [비중]
+ * 글자는 목업 크기: 칸 이름 11 · 값 14 굵게 · 총액 16 더 굵게 · 등락률 12 (펼쳤다고 키우지 않는다 — 띠 높이 52 / 48×2 를 지킨다).
+ * 숫자는 칸이 모자라면 말줄임 대신 글자를 줄여 한 줄에 다 보인다. 글자 확대는 표 줄과 같은 상한(fontCap.row).
+ * 화면 읽기는 휴대폰 패널과 같은 한 문장 (칸 조각은 숨긴다), '비중' 버튼은 문장 밖에 두어 따로 고를 수 있다
  */
-export function AccountBand({ data, oneLine, pad, onAllocation }: { data: AccountData; oneLine: boolean; pad: number; onAllocation?: () => void }) {
+export function AccountBand({ data, oneLine, rates = true, pad, onAllocation }: { data: AccountData; oneLine: boolean; rates?: boolean; pad: number; onAllocation?: () => void }) {
   const t = useTheme();
   const { main, profit, rate, lines, showSplit } = accountFigures(data);
   const pc = changeColor(t, profit);
   const dayText = formatPrice(main.day, "KRW", { sign: true });
   const dc = changeColor(t, shownSign(main.day, dayText));
-  // 당일 등락률: 당일손익 ÷ 전일 평가금액(지금 평가금액 − 당일손익)
-  const prevValue = main.value - main.day;
-  const dayRate = prevValue > 0 ? (main.day / prevValue) * 100 : null;
+  const dayRate = dayRateOf(data);
   const dayRateText = dayRate === null ? null : formatPct(dayRate);
   const total = (
     <Cell key="total" first label={`총 평가금액${data.total ? "" : " (원화 종목)"}${data.afterCost ? " · 비용 차감" : ""}`} value={formatQuote(main.value, "KRW")} unit="원" big />
@@ -97,7 +112,7 @@ export function AccountBand({ data, oneLine, pad, onAllocation }: { data: Accoun
   const profitCell = <Cell key="profit" label="평가손익 · 수익률" value={formatPrice(profit, "KRW", { sign: true })} color={pc} sub={formatPct(rate)} subColor={pc} />;
   const day = <Cell key="day" label="당일손익" value={dayText} color={dc} sub={dayRateText} subColor={changeColor(t, dayRateText ? shownSign(dayRate, dayRateText) : 0)} />;
   // 국내·해외 칸 (firstAt0: 줄의 첫 칸이면 왼쪽 구분선 없음).
-  // 한 줄 띠는 폭이 빠듯해 국내·해외 수익률을 뺀다 (울트라 펼침 세로 목업과 같음 — 화면 읽기 문장에는 그대로 있다)
+  // 수익률은 두 줄 띠와 넓은 한 줄 띠(rates)에서 — 좁은 한 줄 띠(800~839)는 금액만 (화면 읽기 문장에는 늘 있다)
   const split = (firstAt0: boolean, withRate: boolean) =>
     showSplit
       ? lines.map((l, i) => {
@@ -129,7 +144,7 @@ export function AccountBand({ data, oneLine, pad, onAllocation }: { data: Accoun
             {total}
             {profitCell}
             {day}
-            {split(false, false)}
+            {split(false, rates)}
           </View>
           {button}
         </View>
@@ -156,17 +171,18 @@ export function AccountBand({ data, oneLine, pad, onAllocation }: { data: Accoun
   );
 }
 
-/** 띠 한 칸: 위 이름(작게) / 아래 값(굵게) + 등락률 */
+/** 띠 한 칸: 위 이름(11) / 아래 값(14 굵게, 총액은 16 더 굵게) + 등락률(12) — 목업과 같은 크기 */
 function Cell({ label, value, unit, color, sub, subColor, big = false, first = false }: { label: string; value: string; unit?: string; color?: string; sub?: string | null; subColor?: string; big?: boolean; first?: boolean }) {
   const t = useTheme();
   return (
     <View style={[styles.cell, !first && { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: t.line, paddingLeft: space.sm }]}>
-      <Text style={{ color: t.muted, fontSize: font.tiny }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+      {/* 칸 이름도 값과 같은 확대 상한: 큰 글씨에서 이름이 숫자보다 커지지 않게 */}
+      <Text style={{ color: t.muted, fontSize: font.tiny }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} maxFontSizeMultiplier={fontCap.row}>
         {label}
       </Text>
       {/* 숫자는 말줄임 없이: 칸이 모자라면 글자를 줄여 한 줄에 */}
       <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} maxFontSizeMultiplier={fontCap.row}>
-        <Text style={{ color: color ?? t.ink, fontSize: big ? font.title : font.h2, fontWeight: big ? "800" : "700" }} maxFontSizeMultiplier={fontCap.row}>
+        <Text style={{ color: color ?? t.ink, fontSize: big ? font.h2 : font.body, fontWeight: big ? "800" : "700" }} maxFontSizeMultiplier={fontCap.row}>
           {value}
         </Text>
         {unit ? (

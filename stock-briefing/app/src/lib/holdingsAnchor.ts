@@ -9,10 +9,21 @@ import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent, Scroll
  */
 
 /**
- * 배치 이름: 줄 위치가 달라지는 배치마다 다른 이름 (휴대폰 목록 "list" / 넓은 표 "table-1"(계좌 띠 한 줄)·"table-2"(두 줄) 등).
+ * 배치 이름: 줄 위치가 달라지는 배치마다 다른 이름 (holdingsLayoutKey — 휴대폰 목록 "list" / 넓은 표 "table-1-rail-8" 등).
  * 이름이 바뀌면 맨 위 종목으로 다시 맞춘다. null 은 기능이 꺼져 있음 (추적하지 않는다 = 지금과 똑같다)
  */
 export type AnchorMode = string;
+
+/**
+ * 잔고 화면의 배치 이름 (useHoldingsAnchor 에 넘긴다). 줄 위치가 달라질 수 있는 것은 모두 이름에 넣는다:
+ *  - 휴대폰 목록: "list"
+ *  - 넓은 표: "table-{계좌 띠 줄 수}-{탭 위치}-{보유 숫자 열 수}". 탭 위치(왼쪽 세로 막대 rail / 아래 탭 바 bar)를 넣는 까닭:
+ *    펼친 폴드8 을 돌리면(세로 704 ↔ 가로 933) 큰 글씨에서는 띠·열 수가 같아도 탭 막대가 아래↔왼쪽으로 옮겨 가며 탭 틀이 화면을
+ *    다시 붙여 스크롤이 맨 위로 돌아갈 수 있다 → 탭 위치가 바뀌면 늘 맨 위 종목으로 다시 맞춘다
+ */
+export function holdingsLayoutKey(o: { wide: boolean; oneLineBand: boolean; rail: boolean; cols: number }): AnchorMode {
+  return o.wide ? `table-${o.oneLineBand ? 1 : 2}-${o.rail ? "rail" : "bar"}-${o.cols}` : "list";
+}
 
 export interface RowPos {
   code: string;
@@ -65,7 +76,10 @@ type Tagged<T> = T & { mode: AnchorMode };
 export interface HoldingsAnchor {
   ref: RefObject<ScrollView | null>;
   onScroll: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
-  /** 사용자가 직접 끌기 시작하면 아직 못 맞춘 복원은 버린다 (사라진 종목을 기다리며 기억을 막지 않게) */
+  /**
+   * 사용자가 직접 끌기 시작하면 아직 못 맞춘 복원은 버리고(사라진 종목을 기다리며 기억을 막지 않게),
+   * 되맞춘 뒤 멈춰 두었던 기억 갱신을 다시 켠다
+   */
   onScrollBeginDrag: () => void;
   /** 줄 위치 (스크롤 내용 기준 y) */
   row: (code: string, section: string, y: number, h: number) => void;
@@ -84,6 +98,11 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
   const cur = useRef<AnchorMode | null>(mode);
   /** 배치가 바뀐 뒤 맞출 종목 (code null = 맨 위로). 없으면 맞출 것 없음 */
   const pending = useRef<{ code: string | null } | null>(null);
+  /**
+   * 되맞춘 뒤 사용자가 직접 끌기 전까지는 기억한 종목을 바꾸지 않는다. 목록 끝에 가까운 종목은 넓은 표에서 맨 위로 올릴 수 없어
+   * 스크롤이 끝에서 멈추는데(그 위치의 맨 위는 다른 종목), 그 위치로 기억을 바꾸면 다시 접을 때 처음 보던 종목이 아니라 다른 종목으로 돌아간다
+   */
+  const hold = useRef(false);
 
   const tryRestore = useCallback(() => {
     const p = pending.current;
@@ -101,6 +120,7 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
     ref.current?.scrollTo({ y: anchorOffset(r, h), animated: false });
     pending.current = null;
     memory.code = p.code;
+    hold.current = true;
   }, []);
 
   // 그린 직후(줄 위치를 재기 전)에 배치를 바꾼다: 바뀌었으면 기억한 맨 위 종목으로 맞출 준비
@@ -119,7 +139,8 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
 
   const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const m = cur.current;
-    if (!m || pending.current) return;
+    // 되맞추는 중이거나 되맞춘 스크롤(사용자가 아직 끌지 않음)의 이벤트는 기억에 반영하지 않는다
+    if (!m || pending.current || hold.current) return;
     const list = [...rows.current.values()].filter((r) => r.mode === m);
     const hs: Record<string, HeadPos> = {};
     for (const [k, h] of heads.current) if (h.mode === m) hs[k] = h;
@@ -129,6 +150,7 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
 
   const onScrollBeginDrag = useCallback(() => {
     pending.current = null;
+    hold.current = false;
   }, []);
 
   const row = useCallback(

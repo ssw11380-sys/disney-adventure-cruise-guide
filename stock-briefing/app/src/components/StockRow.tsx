@@ -18,7 +18,9 @@ import { LINE_COL, LineMark, LineValue, StockLine, type LinePrice } from "./Stoc
  * columns 를 주면 넓은 창의 한 줄 표 (3-42 웨이브 B, 기능 플래그 foldLayout — components/HoldingsTable):
  *  보유:  종목 | 현재가 · 등락률 ‖ 평가손익 · 수익률 ‖ 당일손익 · 평가금액 · 비중 · 평단 · 수량 (열은 창 폭·글자 크기에 따라)
  *  관심:  종목 | 현재가 · 등락률 ‖ 전일대비 · 거래량
- *  금액은 휴대폰 줄과 같은 기준·같은 표기 함수(부호·색은 보이는 값으로 — BH-38). 미국 종목은 설정 '원화로 보기'를 따른다 (기본 달러).
+ *  금액은 휴대폰 줄과 같은 기준·같은 표기 함수(부호·색은 보이는 값으로 — BH-38).
+ *  미국 종목 (사용자 결정 2026-09-25): 금액 열(평가손익·당일손익·평가금액)만 설정 '원화로 보기'를 따르고(기본 달러),
+ *  주당 값인 현재가·평단·전일대비는 설정과 상관없이 늘 현지 통화(달러) — 화면 읽기 문장도 같은 값으로 읽는다.
  *  화면 읽기 문장은 휴대폰 줄 문장에 당일손익·평가금액·비중을 덧붙인다.
  */
 export const COL = LINE_COL;
@@ -85,18 +87,22 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
   const held = isHolding(stock);
   // 현재가 색은 전일 대비 방향 그대로 (1센트 미만 등락의 동전주도 위젯처럼 방향 색)
   const c = changeColor(t, q?.change);
+  // 주당 값(현재가·평단·전일대비)을 원화로 바꿀지: 휴대폰 줄은 설정 그대로, 넓은 표는 늘 현지 통화 (사용자 결정 — 금액 열만 설정을 따른다)
+  const perShareKrw = columns ? false : showKrw;
   // 등락·손익 글자의 부호·색은 그 글자에 보이는 값으로 — "0"·"$0.00"·"0.00%" 로 보이는 값을 손실·이익 색으로 칠하지 않게 (BH-38)
   const rateText = q ? formatPct(q.changeRate) : "";
-  const arrowText = q ? formatArrowDisplay(q.change, cur, fx, showKrw) : "";
-  const moveText = q ? formatMoney(q.change, cur, fx, showKrw) : "";
+  const arrowText = q ? formatArrowDisplay(q.change, cur, fx, perShareKrw) : "";
+  const moveText = q ? formatMoney(q.change, cur, fx, perShareKrw) : "";
+  const priceText = q ? formatMoney(q.price, cur, fx, perShareKrw) : "";
   const profitText = ev ? formatPrice(ev.profit, ev.currency, { sign: true }) : "";
   const profitRateText = ev ? formatPct(ev.profitRate) : "";
   const profitSign = ev ? shownSign(ev.profit, profitText) : 0;
   const pc = changeColor(t, profitSign);
   const rc = changeColor(t, ev ? shownSign(ev.profitRate, profitRateText) : 0);
-  // 원화 보기의 미국 종목 평단은 손익과 같은 기준(매수 당시 환율의 원화 매입금액 ÷ 수량)으로
-  const krwAvg = showKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity ? formatPrice(ev.costBasis / stock.quantity, "KRW") : null;
-  const avgText = stock.avgPrice === null ? "평단 없음" : (krwAvg ?? formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw));
+  // 원화 보기의 미국 종목 평단은 손익과 같은 기준(매수 당시 환율의 원화 매입금액 ÷ 수량)으로 (휴대폰 줄만 — 넓은 표 평단은 늘 현지 통화)
+  const krwAvg = perShareKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity ? formatPrice(ev.costBasis / stock.quantity, "KRW") : null;
+  const avgMoney = stock.avgPrice === null ? null : (krwAvg ?? formatMoney(stock.avgPrice, cur, fx, perShareKrw));
+  const avgText = stock.avgPrice === null ? "평단 없음" : (krwAvg ?? formatQuoteDisplay(stock.avgPrice, cur, fx, perShareKrw));
   // 화면 읽기: 줄 전체를 한 문장으로 (3-22). 금액은 단위를 붙여 읽는다
   const label = stockRowLabel({
     name: stock.name,
@@ -104,13 +110,13 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
     holding: held
       ? {
           quantity: formatQty(stock.quantity),
-          avg: stock.avgPrice === null ? "없음" : (krwAvg ?? formatMoney(stock.avgPrice, cur, fx, showKrw)),
+          avg: avgMoney ?? "없음",
           profit: ev ? formatPrice(ev.profit, ev.currency) : "-",
           profitSign,
           profitRate: ev ? ev.profitRate : null,
         }
       : null,
-    price: q ? { text: formatMoney(q.price, cur, fx, showKrw), changeRate: q.changeRate, live } : null,
+    price: q ? { text: priceText, changeRate: q.changeRate, live } : null,
     missing: stock.quoteError ? "시세 없음" : undefined,
     move: q ? { text: moveText, sign: shownSign(q.change, moveText) } : null,
     volume: formatVol(q?.volume),
@@ -146,7 +152,8 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
         cells.profit = { text: "-", color: t.muted };
         cells.profitRate = { text: EXCLUDED, color: t.muted, note: true };
       }
-      cells.avg = { text: stock.avgPrice === null ? "없음" : cellMoney(krwAvg ?? formatMoney(stock.avgPrice, cur, fx, showKrw)), color: t.sub };
+      // 평단은 주당 값이라 늘 현지 통화 (avgMoney 는 넓은 표에서 원화로 바꾸지 않는다)
+      cells.avg = { text: avgMoney === null ? "없음" : cellMoney(avgMoney), color: t.sub };
       cells.qty = { text: formatQty(stock.quantity), color: t.sub };
     } else if (q) {
       cells.move = { text: arrowText, color: changeColor(t, shownSign(q.change, arrowText)) };
@@ -159,7 +166,7 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
         zebra={zebra}
         name={stock.name}
         badge={badge}
-        price={q ? { value: q.price, text: cellMoney(formatMoney(q.price, cur, fx, showKrw)), color: c, live } : null}
+        price={q ? { value: q.price, text: cellMoney(priceText), color: c, live } : null}
         priceMissing={stock.quoteError ? "시세 없음" : "-"}
         cells={cells}
         weight={held && ev ? { pct: weight, rel: weightMax > 0 && weight !== null ? weight / weightMax : 0, color: us ? t.chart.pie[1]! : t.chart.pie[0]! } : null}

@@ -5,7 +5,7 @@ import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnyMarketOpen, useFeature, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
-import { AccountBand, accountFigures, accountSpeech, lineProfit, type AccountData } from "@/components/AccountBand";
+import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type AccountData } from "@/components/AccountBand";
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
 import { MarketStrip } from "@/components/MarketStrip";
@@ -17,15 +17,15 @@ import { Button, ErrorView, TableHead } from "@/components/ui";
 import { gated } from "@/lib/features";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
-import { useHoldingsAnchor } from "@/lib/holdingsAnchor";
-import { bandOneLine, holdingWeights, pickCols, pickWatchCols } from "@/lib/holdingsColumns";
+import { holdingsLayoutKey, useHoldingsAnchor } from "@/lib/holdingsAnchor";
+import { bandOneLine, bandRates, holdingWeights, pickCols, pickWatchCols } from "@/lib/holdingsColumns";
 import { quoteLive, sessionOpen } from "@/lib/liveDot";
 import { excludedLabel, isHolding, sortHoldings, splitHoldings, summarize } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { TAB_ICON } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide, railWidth } from "@/lib/windowClass";
-import { changeColor, font, layout, space, touch, useTheme } from "@/theme";
+import { changeColor, font, fontCap, layout, space, touch, useFontScale, useTheme } from "@/theme";
 
 /**
  * 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표.
@@ -68,12 +68,20 @@ export default function StocksScreen() {
   const heldPlan = useMemo(() => (wide ? pickCols(tableW, fontScale) : null), [wide, tableW, fontScale]);
   const watchPlan = useMemo(() => (heldPlan ? pickWatchCols(tableW, fontScale, heldPlan.nameW) : null), [heldPlan, tableW, fontScale]);
   const oneLineBand = bandOneLine(tableW, fontScale);
-  // 접고 펼 때 맨 위에 보이던 종목으로 다시 맞춘다 (플래그가 꺼져 있으면 추적하지 않는다).
-  // 줄 위치가 달라지는 배치마다 다른 이름: 휴대폰 목록 / 넓은 표(계좌 띠 한 줄·두 줄)
-  const anchor = useHoldingsAnchor(fold.on ? (wide ? (oneLineBand ? "table-1" : "table-2") : "list") : null);
+  // 접고 펼 때 맨 위에 보이던 종목으로 다시 맞춘다. 줄 위치가 달라질 수 있는 배치마다 다른 이름 (휴대폰 목록 / 넓은 표의 계좌 띠 줄 수·
+  // 탭 막대 위치·열 수 — lib/holdingsAnchor holdingsLayoutKey). 플래그가 꺼져 있으면 추적하지 않는다 (지금과 똑같다).
+  // ※ 플래그가 켜진 접힌 화면(보통 휴대폰 포함)은 모양은 지금과 같고, 이어 보기용으로 스크롤 위치(0.1초 간격)·줄 위치 재기만 더한다
+  //   (접은 화면에서 본 종목을 펼친 뒤 이어 보려면 접힌 동안에도 재야 한다). 플래그 값을 처음 받는 순간 목록을 한 번 새로 그린다 (아래 key)
+  const anchor = useHoldingsAnchor(fold.on ? holdingsLayoutKey({ wide, oneLineBand, rail: fold.rail, cols: heldPlan?.cols.length ?? 0 }) : null);
 
   // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
   const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
+  // 넓은 창 계좌 띠의 당일 등락률 기준: 비용 차감 전 평가금액 (당일손익이 비용 차감 전 금액이라 — AccountBand dayRateOf). 차감이 꺼져 있으면 같은 값
+  const grossValue = useMemo(() => {
+    if (!wide || !afterCost) return null;
+    const g = summarize(data ?? [], false);
+    return (g.krw ?? g.byCur.KRW).value;
+  }, [wide, data, afterCost]);
   // 표의 비중 열: 계좌 총 평가금액과 같은 기준 (환율을 모르는 해외 종목이 있으면 원화 종목만)
   const weights = useMemo(() => (wide ? holdingWeights(data ?? [], afterCost, (summary.krw ?? summary.byCur.KRW).value, !summary.krw) : null), [wide, data, afterCost, summary]);
 
@@ -122,6 +130,7 @@ export default function StocksScreen() {
     showKrw,
     fx: summary.fx,
     excluded: excludedLabel(summary.excluded),
+    grossValue,
   };
   const stale = staleQuoteCount(stocks.data);
   const status = (
@@ -134,6 +143,8 @@ export default function StocksScreen() {
       feed={{ now, feedOk }}
       // 넓은 창 맨 위 띠: 보유·관심 수는 표 머리에 있으니 지연 종목 수만
       suffix={wide ? (stale ? `시세 지연 ${stale}` : "") : holdingsSuffix({ held: summary.held, watch: summary.watch, stale })}
+      // 넓은 창 맨 위 띠: 세션 / 실시간·시각 두 줄 (목업과 같음), 글자는 탭 머리와 같은 상한 — 휴대폰 패널은 지금처럼 한 줄
+      {...(wide ? { twoLine: true } : null)}
     />
   );
   // 넓은 창 맨 위 띠: 탭 화면 머리(숨김)를 대신하므로 상태 표시줄 높이만큼 내려 그리고, 검색 버튼을 오른쪽 끝에 둔다
@@ -171,7 +182,9 @@ export default function StocksScreen() {
 
   const header = wide ? (
     <View>
-      {summary.held > 0 && heldPlan ? <AccountBand data={account} oneLine={oneLineBand} pad={heldPlan.pad} onAllocation={gated(allocationOn, openAllocation)} /> : null}
+      {summary.held > 0 && heldPlan ? (
+        <AccountBand data={account} oneLine={oneLineBand} rates={bandRates(tableW, fontScale)} pad={heldPlan.pad} onAllocation={gated(allocationOn, openAllocation)} />
+      ) : null}
     </View>
   ) : (
     <View>
@@ -286,12 +299,16 @@ export default function StocksScreen() {
 /** 이어 보기용 스크롤 이벤트 간격 (ms) — 맨 위 종목만 고르므로 자주 받을 필요가 없다 */
 const SCROLL_THROTTLE = 100;
 
-/** 넓은 창 맨 위 띠 오른쪽 끝: 시장 상태 두 줄 + 검색 버튼 (탭 화면 머리의 검색과 같은 동작) */
+/**
+ * 넓은 창 맨 위 띠 오른쪽 끝: 시장 상태 두 줄 + 검색 버튼 (탭 화면 머리의 검색과 같은 동작).
+ * 상태 칸은 글자 폭에 맞추고(목업 약 140), 세션 이름이 길면 최대 폭(layout.stripStatusMaxW × 글자 배율, 탭 글자 상한 150% 까지)에서 접는다
+ */
 function StripEnd({ status }: { status: React.ReactNode }) {
   const t = useTheme();
+  const scale = useFontScale(fontCap.chrome);
   return (
     <View style={[styles.stripEnd, { borderLeftColor: t.line }]}>
-      <View style={styles.stripStatus}>{status}</View>
+      <View style={[styles.stripStatus, { maxWidth: Math.round(layout.stripStatusMaxW * scale) }]}>{status}</View>
       <Pressable onPress={() => router.push("/stocks/add")} accessibilityRole="button" accessibilityLabel="종목 검색" style={styles.searchBtn}>
         <Ionicons name="search" size={TAB_ICON} color={t.ink} />
       </Pressable>
@@ -345,7 +362,7 @@ function AccountPanel({
   onAllocation?: () => void;
 }) {
   const t = useTheme();
-  const { total, afterCost, fx, estimated, currentBasis, excluded } = data;
+  const { total, afterCost, fx, excluded } = data;
   // 합계는 원화로(환율을 모르면 원화 종목만). 해외 행은 설정에 따라 달러 또는 원화
   const { main, profit, rate, lines, showSplit } = accountFigures(data);
   const pc = changeColor(t, profit);
@@ -401,12 +418,8 @@ function AccountPanel({
             );
           })}
           </View>
-          {fx ? (
-            <Text style={{ color: t.muted, fontSize: font.tiny, textAlign: "right" }}>
-              토스 적용 환율 {fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원 · 원화 손익은 매수 당시 환율 기준{estimated ? " (일부 추정)" : ""}
-              {currentBasis ? ` · ${currentBasis}종목은 현재 환율 환산` : ""}
-            </Text>
-          ) : null}
+          {/* 환율 안내: 넓은 창 계좌 띠와 같은 함수 (문구를 한 곳에서만 고친다) */}
+          {fx ? <Text style={{ color: t.muted, fontSize: font.tiny, textAlign: "right" }}>{fxNote(data)}</Text> : null}
         </View>
       ) : null}
       {/* 요약 문장(accessible) 밖에 둔다: 안에 두면 화면 읽기로 버튼을 고를 수 없다 (3-22) */}
@@ -487,8 +500,8 @@ const styles = StyleSheet.create({
   sheetItem: { minHeight: touch.min, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.lg, borderTopWidth: StyleSheet.hairlineWidth },
   // ── 넓은 창 맨 위 띠 오른쪽 끝 ──
   stripEnd: { flexDirection: "row", alignItems: "stretch", borderLeftWidth: StyleSheet.hairlineWidth },
-  // 시장 상태: 폭을 정해 두 줄로 접는다 (큰 글씨면 줄이 늘고 띠가 높아진다)
-  stripStatus: { width: layout.stripStatusW, justifyContent: "center", paddingHorizontal: space.sm },
+  // 시장 상태: 세션 / 실시간·시각 두 줄, 칸 폭은 글자에 맞춘다 (최대 폭은 StripEnd 가 글자 배율로)
+  stripStatus: { flexShrink: 0, justifyContent: "center", alignItems: "flex-end", paddingHorizontal: space.sm },
   searchBtn: { width: touch.min, minHeight: touch.min, alignItems: "center", justifyContent: "center" },
 });
 

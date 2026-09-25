@@ -6,7 +6,7 @@ import { chartNotice, clockLabel, connection, liveLabel, OPEN_MAX_AGE_MS, staleB
 import { feedHealthy, liveCounts, marketSessions, recheckIn, sessionStatus } from "@/lib/liveDot";
 import { useLiveStream } from "@/lib/liveStream";
 import { useNow } from "@/lib/useNow";
-import { font, space, useTheme } from "@/theme";
+import { font, fontCap, space, useTheme } from "@/theme";
 
 /**
  * 끊김·지연 띠: "연결 끊김 · 14:03:21 기준 · 다시 연결 중". 값은 그대로 두고 위에 한 줄만 얹는다.
@@ -62,8 +62,29 @@ export function useFeedState(query: QueryLike, quotes: readonly (Quote | null | 
  *  - 예전 서버: "실시간 · 14:03:21 · 보유 17". 체결이 30초 끊기면 5초 안에 "지연 3초"/"지연"으로 바뀐다
  * feed: 줄의 점과 같은 시각·수신 상태 (화면의 useFeedState). 주면 세션·점 수를 그 값으로 따진다 — 세션 경계에서 줄 점이 꺼지는 순간 상태 줄도 같이 바뀌게
  * (5초마다 읽는 시각만 쓰면 경계 뒤 최대 5초 동안 점은 모두 꺼졌는데 "실시간 N종목"으로 남았다)
+ * twoLine: 넓은 창 맨 위 띠 (3-42, 기능 플래그 foldLayout — 잔고 탭이 넓은 창에서만 켠다). 세션 / 나머지(실시간 N종목 · 시각 · 지연 수)를
+ * 두 줄로 나눠 오른쪽에 붙이고(목업 '● 미국 프리마켓 · 한국 휴장 / 실시간 9종목 · 20:42:16'), 글자는 탭 머리와 같은 상한(fontCap.chrome).
+ * 화면 읽기는 한 줄일 때와 같은 한 문장. 주지 않으면 지금과 똑같다
  */
-export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix, quotes, feed }: { query: QueryLike; open: boolean; closedLabel: string; maxAgeMs: (fresh: boolean) => number; suffix: string; quotes?: readonly (Quote | null)[]; feed?: { now: number; feedOk: boolean } }) {
+export function LiveStatus({
+  query,
+  open,
+  closedLabel,
+  maxAgeMs,
+  suffix,
+  quotes,
+  feed,
+  twoLine = false,
+}: {
+  query: QueryLike;
+  open: boolean;
+  closedLabel: string;
+  maxAgeMs: (fresh: boolean) => number;
+  suffix: string;
+  quotes?: readonly (Quote | null)[];
+  feed?: { now: number; feedOk: boolean };
+  twoLine?: boolean;
+}) {
   const t = useTheme();
   const stream = useLiveStream();
   const now = useNow(5_000);
@@ -84,7 +105,28 @@ export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix, quotes,
     warn = s.tone === "offline" || (s.tone === "delayed" && conn.stale);
   }
   // suffix 가 비면(넓은 창 맨 위 띠 — 보유·관심 수는 표 머리에 있다, 3-42) 끝의 " · " 없이
-  const text = `${s.text}${conn.asOf ? ` · ${clockLabel(conn.asOf, now)}` : ""}${suffix ? ` · ${suffix}` : ""}`;
+  const clock = conn.asOf ? clockLabel(conn.asOf, now) : null;
+  const text = `${s.text}${clock ? ` · ${clock}` : ""}${suffix ? ` · ${suffix}` : ""}`;
+  if (twoLine) {
+    const color = warn ? t.warn : t.muted;
+    const { top, rest } = statusLines(s.text, sessions.map((x) => x.label).join(" · "));
+    const bottom = [rest, clock, suffix].filter(Boolean).join(" · ");
+    return (
+      <View style={styles.twoLine} accessible accessibilityLabel={text}>
+        <View style={styles.lineTop}>
+          <View style={[styles.dot, { backgroundColor: s.tone === "live" ? t.live : warn ? t.warn : t.muted }]} />
+          <Text style={{ color, fontSize: font.tiny, textAlign: "right", flexShrink: 1 }} maxFontSizeMultiplier={fontCap.chrome}>
+            {top}
+          </Text>
+        </View>
+        {bottom ? (
+          <Text style={{ color, fontSize: font.tiny, textAlign: "right", fontVariant: ["tabular-nums"] }} maxFontSizeMultiplier={fontCap.chrome}>
+            {bottom}
+          </Text>
+        ) : null}
+      </View>
+    );
+  }
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, flexShrink: 1 }} accessible accessibilityLabel={text}>
       <View style={[styles.dot, { backgroundColor: s.tone === "live" ? t.live : warn ? t.warn : t.muted }]} />
@@ -118,7 +160,18 @@ export function usePull(refetch: () => Promise<unknown>): { pulling: boolean; on
   return { pulling, onPull };
 }
 
+/**
+ * 두 줄 상태(LiveStatus twoLine)의 윗줄·나머지: 상태 글자가 세션 이름들(head)로 시작하면 윗줄은 세션, 나머지는 그 뒤
+ * ("미국 정규장 · 한국 휴장 · 실시간 9종목" → "미국 정규장 · 한국 휴장" / "실시간 9종목"). 세션이 없거나(예전 서버) 다르면 윗줄에 전부
+ */
+export function statusLines(text: string, head: string): { top: string; rest: string } {
+  if (!head || !text.startsWith(head)) return { top: text, rest: "" };
+  return { top: head, rest: text.slice(head.length).replace(/^ · /, "") };
+}
+
 const styles = StyleSheet.create({
   bar: { flexDirection: "row", alignItems: "center", gap: space.s, paddingHorizontal: space.lg, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   dot: { width: 5, height: 5, borderRadius: 3 },
+  twoLine: { alignItems: "flex-end", flexShrink: 1 },
+  lineTop: { flexDirection: "row", alignItems: "center", gap: space.xs, flexShrink: 1 },
 });
