@@ -446,6 +446,31 @@ describe("접고 펴기 이어 보기", () => {
     expect(pick.currentPick()).toEqual({ pick: { kind: "stock", id: 512 }, highlight: true });
   });
 
+  it("계좌 브리핑도 같다: 넓은 창에서 연 전체 화면 계좌 브리핑을 읽다가 접어도 폰 목록 강조를 끄지 않는다 (종목 브리핑 상세와 같은 seenWide)", () => {
+    h.flags.foldLayout = true;
+    h.params = { id: "12" };
+    size(933, 632);
+    const r = render(<AccountBriefingScreen />);
+    expect(pick.currentPick()).toEqual({ pick: { kind: "account", id: 12 }, highlight: true });
+    size(475, 679);
+    r.rerender();
+    expect(pick.currentPick()).toEqual({ pick: { kind: "account", id: 12 }, highlight: true });
+    // 다시 펴도 그대로
+    size(933, 632);
+    r.rerender();
+    expect(pick.currentPick()).toEqual({ pick: { kind: "account", id: 12 }, highlight: true });
+  });
+
+  it("접은 채로 연 계좌 브리핑은 강조하지 않는다 (접은 화면만 쓰면 지금과 똑같다) · 펴면 그때부터 강조", () => {
+    h.flags.foldLayout = true;
+    h.params = { id: "12" };
+    const r = render(<AccountBriefingScreen />);
+    expect(pick.currentPick()).toEqual({ pick: { kind: "account", id: 12 }, highlight: false });
+    size(933, 632);
+    r.rerender();
+    expect(pick.currentPick()).toEqual({ pick: { kind: "account", id: 12 }, highlight: true });
+  });
+
   it("카드 격자의 계좌 줄(link)도 고른 것이면 화면 읽기에 '선택됨'", async () => {
     pick.pickBriefing({ kind: "account", id: 12 }, { highlight: true });
     h.flags.foldLayout = true;
