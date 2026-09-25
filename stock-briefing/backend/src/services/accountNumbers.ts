@@ -308,7 +308,8 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
     stale: rows.filter((r) => r.stale).length,
     totalValue: Math.round(valueRaw),
     totalCost: Math.round(costRaw),
-    totalProfit: Math.round(valueRaw - costRaw),
+    // 앱 잔고 합계처럼 평가·매입을 따로 반올림한 뒤 뺀다 (한 번에 반올림하면 .5 를 사이에 두고 1원 달라짐)
+    totalProfit: Math.round(valueRaw) - Math.round(costRaw),
     totalProfitRate: costRaw > 0 ? round2(((valueRaw - costRaw) / costRaw) * 100) : null,
     dayPnl,
     dayRate: prevRaw > 0 ? round2((dayRaw / prevRaw) * 100) : null,

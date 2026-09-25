@@ -11,7 +11,7 @@ import { Badge, Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle,
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, localDay, summarySpeech, templateNote } from "@/lib/accountBriefing";
 import { gated } from "@/lib/features";
-import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL } from "@/lib/format";
+import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
 import { parseBriefingId, viewState } from "@/lib/freshness";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 
@@ -134,8 +134,8 @@ function TotalsCard({ d }: { d: AccountData }) {
           {formatWon(d.totalValue)}
         </Text>
         <View style={styles.kpis}>
-          <Kpi label="당일 손익" value={formatWon(d.dayPnl, { sign: true })} sub={d.dayRate !== null ? formatPct(d.dayRate) : null} tone={d.dayPnl} />
-          <Kpi label="평가손익" value={formatWon(d.totalProfit, { sign: true })} sub={d.totalProfitRate !== null ? formatPct(d.totalProfitRate) : null} tone={d.totalProfit} />
+          <Kpi label="당일 손익" value={formatWon(d.dayPnl, { sign: true })} sub={d.dayRate !== null ? formatPct(d.dayRate) : null} tone={d.dayPnl} rate={d.dayRate} />
+          <Kpi label="평가손익" value={formatWon(d.totalProfit, { sign: true })} sub={d.totalProfitRate !== null ? formatPct(d.totalProfitRate) : null} tone={d.totalProfit} rate={d.totalProfitRate} />
         </View>
       </View>
       <Muted>보유 {d.holdings}종목 합계 · 앱 잔고 화면과 같은 기준</Muted>
@@ -144,16 +144,18 @@ function TotalsCard({ d }: { d: AccountData }) {
   );
 }
 
-function Kpi({ label, value, sub, tone }: { label: string; value: string; sub: string | null; tone: number }) {
+/** 색은 그 글자에 보이는 값으로 — "0원"·"0.00%" 로 보이는 값을 손실·이익 색으로 칠하지 않게 (BH-38) */
+function Kpi({ label, value, sub, tone, rate }: { label: string; value: string; sub: string | null; tone: number; rate: number | null }) {
   const t = useTheme();
-  const color = changeColor(t, tone);
+  const color = changeColor(t, shownSign(tone, value));
+  const subColor = changeColor(t, sub ? shownSign(rate, sub) : 0);
   return (
     <View style={styles.kpi}>
       <Muted>{label}</Muted>
       <Text style={[styles.kpiValue, { color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
         {value}
       </Text>
-      {sub ? <Text style={[styles.num, { color, fontSize: font.small }]}>{sub}</Text> : null}
+      {sub ? <Text style={[styles.num, { color: subColor, fontSize: font.small }]}>{sub}</Text> : null}
     </View>
   );
 }

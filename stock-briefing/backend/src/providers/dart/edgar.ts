@@ -110,9 +110,9 @@ const FORMS: Record<string, { name: string; short: string; rank: 0 | 1 | 2; amen
   "SCHEDULE 13D": { name: "5% 이상 보유 보고", short: "13D", rank: 1, amend: true },
   "SC 13G": { name: "5% 이상 보유 보고", short: "13G", rank: 1, amend: true },
   "SC 13D": { name: "5% 이상 보유 보고", short: "13D", rank: 1, amend: true },
+  // Form 4 는 대형주에서 90일에 수십 건이라, 다른 서식을 다 넣고 남은 칸에만 (빈 칸이 남으면 채운다 — 공시 탭이 비어 보이지 않게)
   "4": { name: "내부자 거래", short: "Form 4", rank: 2 },
 };
-/** Form 4 는 대형주에서 90일에 수십 건이라, 다른 서식을 다 넣고 남은 칸에만 (빈 칸이 남으면 채운다 — 공시 탭이 비어 보이지 않게) */
 
 function formInfo(form: string): { label: string; rank: 0 | 1 | 2 } | null {
   const amended = form.endsWith("/A");
