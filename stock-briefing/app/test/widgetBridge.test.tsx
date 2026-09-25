@@ -14,6 +14,8 @@ import { holding, quote } from "./helpers";
 const API = "https://server.test";
 const h = vi.hoisted(() => ({
   calls: [] as Record<string, unknown>[],
+  /** 브리핑 위젯만 다시 그리기 (refreshBriefingWidget) 에 넘긴 값 */
+  briefOnly: [] as ({ at: number; list: unknown[] } | null | undefined)[],
   latest: [] as unknown[],
   fetches: 0,
   appState: [] as ((s: string) => void)[],
@@ -52,6 +54,7 @@ vi.mock("@/api/hooks", () => ({
 vi.mock("@/widgets/refresh", async (orig) => ({
   ...(await orig<typeof import("@/widgets/refresh")>()),
   refreshWidgets: async (o: Record<string, unknown>) => void h.calls.push(o),
+  refreshBriefingWidget: async (a: { at: number; list: unknown[] } | null | undefined) => void h.briefOnly.push(a),
 }));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
@@ -86,9 +89,24 @@ async function open(o: { polish: boolean; briefings?: LatestBriefing[]; stocks?:
   return client;
 }
 
+/**
+ * 앱을 새로 켜 위젯 종목 브리핑·알림으로 브리핑 상세에 바로 들어간 실행: 잔고 탭이 아래에 가려져 이번 실행에서 잔고를 받지 않는다.
+ * 잔고 캐시는 기기 저장값뿐(stored: 앱을 연 시각보다 먼저 받은 것)이거나 아예 없다
+ */
+async function coldOpen(o: { polish: boolean; stored: boolean }) {
+  const client = new QueryClient();
+  client.setQueryData([API, "features"], flags(o.polish), { updatedAt: T - 60_000 });
+  if (o.stored) client.setQueryData([API, "stocks"], STOCKS, { updatedAt: T - 3_600_000 });
+  render(React.createElement(QueryClientProvider, { client }, React.createElement(WidgetBridge)));
+  await settle();
+  return client;
+}
+const briefOnlyIds = () => h.briefOnly.map((a) => ((a?.list ?? []) as LatestBriefing[]).map((b) => b.latest!.id));
+
 beforeEach(() => {
   cleanupRenders();
   h.calls.length = 0;
+  h.briefOnly.length = 0;
   h.latest = [];
   h.fetches = 0;
   h.appState.length = 0;
@@ -199,6 +217,8 @@ describe("WidgetBridge: 브리핑 위젯에도 앱이 받은 최신 브리핑을
     const client = await open({ polish: true, briefings: list, stocks: ticked(70_010) });
     const before = h.calls.length;
     expect(before).toBeGreaterThanOrEqual(1);
+    // (그리기 전 잔고가 오기 전 한순간은 브리핑만 그렸을 수 있다 — 아래는 잔고를 받은 뒤라 더 늘지 않는다)
+    const onlyBefore = h.briefOnly.length;
     const { pickWidgetBriefings } = await import("@/widgets/refresh");
     const picks = new Set<string>();
     for (let i = 0; i < 10; i++) {
@@ -223,5 +243,78 @@ describe("WidgetBridge: 브리핑 위젯에도 앱이 받은 최신 브리핑을
     await settle();
     expect(h.calls.length).toBe(before + 2);
     expect(pushedIds(h.calls.at(-1))).toEqual([2, 4, 5, 6]);
+    // 잔고를 받은 실행에서는 잔고와 함께 넘기므로 브리핑만 그리기는 쓰지 않는다
+    expect(h.briefOnly).toHaveLength(onlyBefore);
+  });
+
+  // ── 검증 지적 (2차) ──
+  it("회귀: 잔고를 이번 실행에서 받지 않았어도(잔고 캐시는 기기 저장값뿐) 다시 만들기·브리핑 알림 뒤 브리핑 위젯만 바로 다시 그린다", async () => {
+    // 예전: 목록은 1번 받지만 넘김은 0번 (widgetPushDue 가 '이번 실행에서 받은 잔고'가 아니라고 막음), 앱을 떠나도 0번
+    const client = await coldOpen({ polish: true, stored: true });
+    expect(h.calls).toHaveLength(0);
+    expect(h.briefOnly).toHaveLength(0);
+    expect(h.fetches).toBe(0);
+    h.latest = REMADE;
+    await client.invalidateQueries({ queryKey: [API, "briefings"] });
+    await settle();
+    expect(h.fetches).toBe(1);
+    // 브리핑 위젯만 (받은 목록과 받은 시각). 잔고 위젯은 3-16 규칙대로 기기 저장값 잔고로 덮지 않는다
+    expect(briefOnlyIds()).toEqual([[3, 2]]);
+    expect(h.briefOnly[0]!.at).toBeGreaterThan(0);
+    expect(h.calls).toHaveLength(0);
+    // 앱을 떠나도·같은 목록을 다시 받아도 더 그리지 않는다
+    for (const f of [...h.appState]) f("background");
+    await client.invalidateQueries({ queryKey: [API, "briefings"] });
+    await settle();
+    expect(h.fetches).toBe(2);
+    expect(h.briefOnly).toHaveLength(1);
+    expect(h.calls).toHaveLength(0);
+    // 목록이 또 바뀌면(다른 종목 다시 만들기) 다시 브리핑 위젯만
+    h.latest = [REMADE[0]!, latest("NVDA", "엔비디아", 7, "2026-09-24T16:15:00+09:00")];
+    await client.invalidateQueries({ queryKey: [API, "briefings"] });
+    await settle();
+    expect(briefOnlyIds()).toEqual([
+      [3, 2],
+      [3, 7],
+    ]);
+    // 잔고를 받은 뒤로는(잔고 탭으로 돌아감) 잔고와 함께 넘긴다 — 브리핑만 그리기는 더 하지 않는다
+    client.setQueryData([API, "stocks"], [...STOCKS], { updatedAt: Date.now() + 1_000 });
+    await settle();
+    expect(h.calls).toHaveLength(1);
+    expect(pushedIds(h.calls[0])).toEqual([3, 7]);
+    h.latest = [latest("005930", "삼성전자", 8, "2026-09-24T16:20:00+09:00"), REMADE[1]!];
+    await client.invalidateQueries({ queryKey: [API, "briefings"] });
+    await settle();
+    expect(h.calls).toHaveLength(2);
+    expect(pushedIds(h.calls[1])).toEqual([8, 2]);
+    expect(h.briefOnly).toHaveLength(2);
+  });
+
+  it("회귀: 잔고 캐시가 아예 없어도(기기 저장값도 없음) 브리핑 위젯만 다시 그린다 · 플래그 꺼짐이면 지금처럼 받지도 그리지도 않는다", async () => {
+    const on = await coldOpen({ polish: true, stored: false });
+    h.latest = REMADE;
+    await on.invalidateQueries({ queryKey: [API, "briefings"] });
+    await settle();
+    expect(briefOnlyIds()).toEqual([[3, 2]]);
+    expect(h.calls).toHaveLength(0);
+    cleanupRenders();
+    h.briefOnly.length = 0;
+    h.fetches = 0;
+    const off = await coldOpen({ polish: false, stored: true });
+    await off.invalidateQueries({ queryKey: [API, "briefings"] });
+    off.setQueryData([API, "briefings", "latest"], REMADE);
+    await settle();
+    expect(h.fetches).toBe(0);
+    expect(h.briefOnly).toHaveLength(0);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it("성공한 브리핑이 없는 목록은 브리핑만 그리기를 하지 않는다 (위젯이 받은 것·안내 문구를 그대로)", async () => {
+    const client = await coldOpen({ polish: true, stored: true });
+    h.latest = [{ code: "005930", name: "삼성전자", latest: { ...REMADE[0]!.latest!, status: "failed" } }];
+    await client.invalidateQueries({ queryKey: [API, "briefings"] });
+    await settle();
+    expect(h.fetches).toBe(1);
+    expect(h.briefOnly).toHaveLength(0);
   });
 });

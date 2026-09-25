@@ -375,21 +375,22 @@ function polishedRowView(s: RegisteredWithQuote, filled: string[], showKrw: bool
 }
 
 /**
- * 다듬은 지수 줄의 누르는 칸 (위젯 검토 7번 — 예전: 줄 전체가 잔고 탭): 한 줄이고 보이는 항목이 모두 48dp(WIDGET_TOUCH) 넘게 넓으면 항목마다 그 지수·환율 차트("each").
- * 하나라도 좁거나(아주 작은 글자 배율 등) 두 줄이면(4x3 이상·폴드8 커버 4x2 크게 — 글자 한 줄 높이 약 10dp 칸이 위아래로 붙어 윗줄을 누르면 아랫줄이 열리기 쉽다, 검증 지적)
- * 잘못 누르기 쉬우므로 줄 전체를 한 칸으로 해 첫 항목의 차트를 연다({ single } — 차트 화면 위 띠에서 다른 지수·환율로 바로 바꿀 수 있다).
- * 한 줄 높이(글자 한 줄)가 48dp 보다 낮은 것은 줄 전체가 잔고 탭을 열던 때와 같은 예외다 (종목 줄 약 38dp 처럼)
+ * 다듬은 지수 줄의 누르는 칸 (위젯 검토 7번 — 예전: 줄 전체가 잔고 탭): 보이는 항목이 모두 48dp(WIDGET_TOUCH) 넘게 넓으면 한 줄이든 두 줄이든
+ * 항목마다 그 지수·환율 차트("each"). 하나라도 좁으면(아주 작은 글자 배율 등) 따로 누르기 어려우므로 줄 전체를 한 칸으로 해 첫 항목의 차트를 연다
+ * ({ single } — 차트 화면 위 띠에서 다른 지수·환율로 바로 바꿀 수 있다).
+ * 두 줄(4x3 이상·폴드8 커버 4x2 크게)을 한 칸으로 묶으면 사용자의 주 크기에서 '코스피'·'원/달러'를 눌러도 '나스닥'이 열려(검증 지적 2차) 항목마다 둔다.
+ * 줄 높이(글자 한 줄 약 10~15dp)가 48dp 보다 낮은 것은 한 줄일 때와 같은 예외다 — 줄 전체가 잔고 탭을 열던 때·종목 줄(약 38dp)처럼
  */
 export function indexLineTargets(plan: IndexPlan<IndexInput & { code: string }>, scale: number): "each" | { single: string } {
   const shown = plan.lines.flat();
-  if (plan.lines.length === 1 && shown.every((it) => indexItemWidth(it, plan.font, scale) >= TOUCH)) return "each";
+  if (shown.every((it) => indexItemWidth(it, plan.font, scale) >= TOUCH)) return "each";
   return { single: shown[0]!.code };
 }
 
 /**
  * 다듬은 지수 줄 (한 줄, 큰 위젯은 두 줄까지 · 아래 여백 0): 항목마다 묶고, 항목 사이 " · " 는 좁게(POLISH_SEP_GAP — layout polishedSepWidth).
- * 한 줄이면 항목을 누르면 그 지수·환율 차트(market/코드 — 지수·환율 위젯 칸과 같은 곳), 화면 읽기도 항목마다.
- * 항목이 좁거나 두 줄이면 줄 전체가 첫 항목의 차트 한 칸이고 보이는 항목을 한 문장으로 읽는다 (indexLineTargets)
+ * 항목을 누르면 그 지수·환율 차트(market/코드 — 지수·환율 위젯 칸과 같은 곳), 화면 읽기도 항목마다 (두 줄이어도).
+ * 항목이 좁으면 줄 전체가 첫 항목의 차트 한 칸이고 보이는 항목을 한 문장으로 읽는다 (indexLineTargets)
  */
 function PolishedIndexLine({ plan, scale, c }: { plan: IndexPlan<IndexItemText>; scale: number; c: WidgetPalette }) {
   const target = indexLineTargets(plan, scale);
@@ -817,14 +818,16 @@ export function BriefingWidget(
       ) : refreshing ? null : noticeTap ? (
         // 안내 문구 칸 — 누르면 브리핑 탭. 글자 자리는 예전과 같고(여백은 칸 바깥에), 칸은 머리 줄 아래 남는 높이를 모두 차지한다(flex):
         // 한 줄(약 13dp)만 누르는 칸이면 아래 100dp 넘는 빈 곳을 눌러도 아무 일이 없어 초보 사용자가 겨누기 어렵다 (검증 지적).
-        // 그래서 고지 한 줄도 이 칸 안에 같은 자리로 둔다 (고지를 눌러도 브리핑 탭)
+        // 그래서 고지 한 줄도 이 칸 안에 같은 자리로 둔다 (고지를 눌러도 브리핑 탭).
+        // 화면 읽기는 누르는 칸의 이름표만 읽으므로(칸 안 글자는 읽지 않음) 고지 문구도 이름표에 넣는다 (검증 지적 2차).
+        // 안내가 한 줄뿐인 크기(4x1·글자 130%)에서 문장이 말줄임 없이 잘리지 않게 끝을 '…'로 줄인다 (검증 지적 2차 — 누르면 브리핑 탭에서 전체를 본다)
         <FlexWidget
           clickAction="OPEN_URI"
           clickActionData={{ uri: BRIEFINGS_URI }}
-          accessibilityLabel={message}
+          accessibilityLabel={sentence([message, DISCLAIMER_SHORT])}
           style={{ width: "match_parent", flex: 1, flexDirection: "column", marginTop: plan.messageGap, paddingRight: PAD }}
         >
-          <TextWidget text={message} maxLines={plan.messageLines} style={{ color: c.muted, fontSize: F.md }} />
+          <TextWidget text={message} maxLines={plan.messageLines} truncate="END" style={{ color: c.muted, fontSize: F.md }} />
           <TextWidget text={DISCLAIMER_SHORT} maxLines={1} style={{ color: c.muted, fontSize: F.xs, marginTop: space.xs }} />
         </FlexWidget>
       ) : (

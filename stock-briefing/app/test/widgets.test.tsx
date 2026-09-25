@@ -324,11 +324,13 @@ describe("위젯 검토 7번: 다듬은 잔고 위젯 지수 줄 — 항목마�
     expect(indexLineTargets({ ...wide, lines: [[item("KOSPI", "코", null)]] }, 0.85)).toEqual({ single: "KOSPI" });
   });
 
-  it("검증 지적: 두 줄이면(4x3 이상·폴드8 커버 4x2 크게) 항목이 넓어도 줄 전체가 첫 항목 한 칸 — 약 10dp 높이 칸이 위아래로 붙어 윗줄을 누르면 아랫줄이 열리지 않게", () => {
+  it("검증 지적 (2차): 두 줄이어도(4x3 이상·폴드8 커버 4x2 크게) 항목이 모두 48dp 이상이면 항목마다 — 첫 항목 한 칸은 항목이 좁을 때만", () => {
+    // 예전(1차 반영): 두 줄이면 늘 줄 전체가 첫 항목(나스닥) 한 칸 → '코스피'·'원/달러'를 눌러도 나스닥 차트가 열렸다
     const two = { font: 10, height: 15, lines: [[item("NASDAQ", "나스닥", "-1.13%"), item("SPX", "S&P500", "+0.19%")], [item("KOSPI", "코스피", "+0.90%"), item("USDKRW", "원/달러", "+0.38%")]] };
-    expect(indexLineTargets(two, 1)).toEqual({ single: "NASDAQ" });
-    // 같은 항목을 한 줄에 두면 항목마다 (높이 규칙만 다르다)
+    expect(indexLineTargets(two, 1)).toBe("each");
     expect(indexLineTargets({ ...two, lines: [two.lines.flat()] }, 1)).toBe("each");
+    // 어느 줄이든 좁은 항목이 있으면 줄 전체가 첫 항목(윗줄 첫 항목) 한 칸
+    expect(indexLineTargets({ ...two, lines: [two.lines[0]!, [item("KOSPI", "코", null)]] }, 0.85)).toEqual({ single: "NASDAQ" });
   });
 });
 

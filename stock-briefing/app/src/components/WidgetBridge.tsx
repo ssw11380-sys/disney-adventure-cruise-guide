@@ -7,7 +7,7 @@ import { widgetChip } from "@/lib/liveDot";
 import { useSettings } from "@/lib/settings";
 import { pickBoard, pickWidgetIndices, widgetFeatures } from "@/widgets/payload";
 import { widgetPushDue } from "@/widgets/pushPolicy";
-import { refreshWidgets, widgetBriefingsKey } from "@/widgets/refresh";
+import { refreshBriefingWidget, refreshWidgets, widgetBriefingsKey } from "@/widgets/refresh";
 
 /**
  * 앱 → 홈 화면 위젯 즉시 갱신 (3-16 규칙: 시세만 바뀌면 1분에 한 번, 표시 설정·장 상태가 바뀌거나 앱을 떠날 때는 바로).
@@ -16,7 +16,8 @@ import { refreshWidgets, widgetBriefingsKey } from "@/widgets/refresh";
  * 지수·플래그 캐시는 기기에 며칠 남은 옛 값일 수 있어(플래그는 브리핑·설정 화면에서만 다시 받는다) 받은 시각을 함께 넘기고,
  * 위젯이 받아 둔 /api/widget 응답이 더 새것이면 그쪽을 쓴다 (data.ts pushWidgetData).
  * 브리핑 위젯 (위젯 검토 7번, 다듬은 모습 widgetPolish): 브리핑 탭이 받은 최신 브리핑 목록과 받은 시각도 넘긴다 — 위젯은 서버와 같은 규칙으로 3종목을 고르고,
- * 위젯이 받아 둔 응답보다 늦게 받은 목록일 때만 쓴다 (refresh.tsx). 목록은 캐시에 있거나 누가 무효화했을 때만(다시 만들기·브리핑 알림) 받는다 — 앱을 켰다고 처음부터 받지는 않는다
+ * 위젯이 받아 둔 응답보다 늦게 받은 목록일 때만 쓴다 (refresh.tsx). 목록은 캐시에 있거나 누가 무효화했을 때만(다시 만들기·브리핑 알림·종목 등록·수정·삭제) 받는다 —
+ * 앱을 켰다고 처음부터 받지는 않는다. 잔고를 이번 실행에서 받지 않았으면(위젯·알림으로 브리핑 상세에 바로 들어감) 브리핑 위젯만 다시 그린다
  */
 export function WidgetBridge() {
   const api = useApi();
@@ -37,6 +38,7 @@ export function WidgetBridge() {
   // 다시 만들기(useStockMutations run)·브리핑 알림(NotificationBridge)이 목록을 무효화하면, 브리핑 탭이 가려져 구독을 끊었어도(탭은 돌아올 때 받는다)
   // 여기서 다시 받아 위젯에 바로 넘긴다. 이번 실행에서 브리핑 탭을 연 적이 없어도(목록은 기기에 저장하지 않는다 — queryPersist) 무효화되면 한 번 받는다:
   // 앱을 새로 켜 위젯 항목·알림으로 브리핑 상세에 바로 들어가 '이 종목만 다시 만들기'를 누르는 흔한 흐름 (검증 지적).
+  // 종목 등록·수정·삭제(useStockMutations 의 같은 무효화)도 한 번씩 다시 받는다 — 삭제한 종목의 브리핑이 위젯에서 빠지게. 목록이 같으면 넘기지 않는다.
   // 스스로는 받지 않는다 (마운트·포커스·재연결에 다시 받지 않고, 목록이 없고 무효화되지 않았으면 꺼져 있다 — 토큰을 바꿔 캐시를 비워도 받지 않음). 꺼짐이면 지금처럼 읽기만
   const briefQ = useQuery<LatestBriefing[]>({
     queryKey: [apiUrl, "briefings", "latest"],
@@ -89,6 +91,16 @@ export function WidgetBridge() {
     };
     push.current(false);
   }, [data, dataAt, flagKey, briefKey, showKrw, afterCost, rowKrw, ms, fetchedThisSession, features, indices, board, appBriefings]);
+  // 잔고를 이번 실행에서 받지 않았을 때 (검증 지적): 위젯 종목 브리핑·알림으로 앱을 새로 켜 브리핑 상세에 바로 들어가면 잔고 탭이 아래에 가려져
+  // 잔고를 받지 않으므로 위의 넘김은 3-16 규칙(기기 저장값 잔고로 위젯을 덮지 않음)에 막힌다. 그래도 목록이 바뀌면(다시 만들기·브리핑 알림으로 받음)
+  // 브리핑 위젯만 바로 다시 그린다 — 잔고·자산·지수 위젯과 저장된 잔고·칩은 그대로, 3종목은 저장된 잔고로 고른다 (refresh.tsx refreshBriefingWidget).
+  // 잔고를 받은 뒤로는 위의 넘김이 브리핑까지 함께 넘긴다 (키에 목록). 같은 목록은 다시 그리지 않는다
+  const briefOnlyKey = useRef("");
+  useEffect(() => {
+    if (!appBriefings || !briefKey || (data && fetchedThisSession) || briefOnlyKey.current === briefKey) return;
+    briefOnlyKey.current = briefKey;
+    void refreshBriefingWidget(appBriefings);
+  }, [appBriefings, briefKey, data, fetchedThisSession]);
   useEffect(() => {
     const sub = AppState.addEventListener("change", (st) => {
       if (st === "background") push.current(true);

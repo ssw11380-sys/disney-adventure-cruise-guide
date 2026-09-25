@@ -50,7 +50,7 @@ const { FlexWidget } = await import("react-native-android-widget");
 const { HoldingsWidget, AssetWidget, BriefingWidget, WIDGET_NAMES } = await import("@/widgets/widgets");
 const { renderBoth, errorView } = await import("@/widgets/render");
 const { widgetTaskHandler } = await import("@/widgets/widgetTaskHandler");
-const { refreshWidgets } = await import("@/widgets/refresh");
+const { refreshWidgets, refreshBriefingWidget } = await import("@/widgets/refresh");
 const { loadWidgetData, readPnlMode } = await import("@/widgets/data");
 const { fromPayload, widgetFeatures } = await import("@/widgets/payload");
 const { HOME_URI, indexItems } = await import("@/widgets/model");
@@ -852,22 +852,39 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
     expect(indexSpeechOf(narrowTree)).toBe("나스닥 1.13% 하락, 코스피 0.90% 상승 9월 23일 값, 원/달러 1,391.50 0.38% 상승");
   });
 
-  it("검증 지적 (위젯 검토 7번): 지수 줄이 두 줄이면(4x3 이상·폴드8 커버 4x2 크게 460×290) 줄 전체가 첫 항목의 차트 한 칸 — 약 10dp 칸이 위아래로 붙지 않게", () => {
-    for (const box of [
-      { width: 330, height: 470 },
-      { width: 460, height: 290 },
-    ]) {
-      const t = draw({}, box);
-      const at = `${box.width}×${box.height}`;
+  it("검증 지적 (위젯 검토 7번 2차): 지수 줄이 두 줄이어도(4x3 이상·폴드8 커버 4x2 크게 460×290·안쪽 4x4·6x3 큰 글자) 항목이 48dp 넘게 넓으면 항목마다 그 지수·환율 차트", () => {
+    // 예전(1차 반영): 두 줄이면 줄 전체가 '나스닥' 차트 한 칸 → 사용자의 주 크기(커버 4x2 크게)에서 '코스피'·'원/달러'를 눌러도 나스닥이 열렸다
+    const NAME = new Map(LINE.map((i) => [i.code, i.name]));
+    const cases = [
+      { width: 330, height: 470, fontScale: 1 },
+      { width: 460, height: 290, fontScale: 0.85 },
+      { width: 460, height: 290, fontScale: 1 },
+      { width: 445, height: 480, fontScale: 0.85 },
+      { width: 445, height: 480, fontScale: 1 },
+      { width: 445, height: 480, fontScale: 1.3 },
+      { width: 780, height: 350, fontScale: 1.3 },
+    ];
+    for (const { fontScale, ...box } of cases) {
+      const t = draw({ fontScale }, box);
+      const at = `${box.width}×${box.height} ${fontScale}`;
+      const line = indexLineOf(t)!;
+      expect(line.children, at).toHaveLength(2);
+      // 줄 전체를 한 칸으로 감싸지 않는다 — 누르는 칸은 항목마다, 칸 안에 다른 누르는 칸이 없다
+      expect(line.props.clickAction, at).toBeUndefined();
       const items = indexItemsOf(t);
-      // 누르는 칸은 하나(나스닥 차트)이고, 그 칸이 두 줄을 모두 담는다 (윗줄·아랫줄 항목이 따로 누르는 칸이 아니다)
-      expect(items.map((n) => (n.props.clickActionData as { uri: string }).uri), at).toEqual([`${HOME_URI}market/NASDAQ`]);
-      expect(items[0]!.children, at).toHaveLength(2);
-      expect(nodes(items[0]!).filter((n) => n !== items[0] && n.props.clickAction), at).toHaveLength(0);
-      // 화면 읽기는 보이는 항목을 한 문장으로
-      expect(String(items[0]!.props.accessibilityLabel), at).toMatch(/^나스닥 .*원\/달러 1,391\.50 0\.38% 상승$/);
+      const codes = items.map((n) => (n.props.clickActionData as { uri: string }).uri.slice(`${HOME_URI}market/`.length));
+      expect(new Set(codes).size, at).toBe(codes.length);
+      expect(codes.length, at).toBeGreaterThanOrEqual(3);
+      for (const [k, n] of items.entries()) {
+        const name = NAME.get(codes[k]!)!;
+        expect(words(n)[0], at).toBe(name);
+        expect(String(n.props.accessibilityLabel).startsWith(`${name} `), at).toBe(true);
+        expect(nodes(n).filter((x) => x !== n && x.props.clickAction), at).toHaveLength(0);
+      }
+      // 윗줄·아랫줄 모두 누르는 칸이 있다 (윗줄 첫 항목 하나만이 아니다)
+      for (const row of line.children!) expect(row.children!.filter((x) => items.includes(x)).length, at).toBeGreaterThanOrEqual(1);
     }
-    // 한 줄(4x2 420×260)은 지금처럼 항목마다
+    // 한 줄(4x2 420×260)도 지금처럼 항목마다
     expect(indexItemsOf(draw({}, WIDE)).length).toBeGreaterThan(1);
   });
 
@@ -1130,6 +1147,114 @@ describe("위젯 검토 7번 앞부분: 앱이 브리핑 위젯도 바로 갱신
     expect(await savedIds()).toEqual([1]);
   });
 
+  // ── 검증 지적 (2차) ──
+  /** 브리핑 위젯이 스스로 갱신한다 (태스크 핸들러 — 주기·크기 변경은 받아 둔 응답을 다시 쓰고, ↻ 는 서버에 묻는다). 마지막으로 그린 것 */
+  const handle = async (widgetAction: string, extra: Record<string, unknown> = {}) => {
+    const out: { dark: React.JSX.Element }[] = [];
+    await widgetTaskHandler({ widgetInfo: { widgetName: WIDGET_NAMES.briefing, widgetId: 1, ...WIDE, screenInfo: {} }, widgetAction, renderWidget: (r: unknown) => void out.push(r as { dark: React.JSX.Element }), ...extra } as never);
+    return build(out.at(-1)!.dark);
+  };
+  /** 그린 브리핑 위젯의 종목 브리핑 id (누르면 여는 briefings/<id> 순서대로) */
+  const drawnIds = (t: Tree) => byClick(t, "OPEN_URI").flatMap((n) => /briefings\/(\d+)$/.exec(uriOf(n))?.slice(1).map(Number) ?? []);
+
+  it("검증 지적 회귀: 앱이 넘긴 새 브리핑이 위젯이 스스로 갱신할 때 옛 브리핑으로 되돌아가지 않는다 — 폴드 접고 펴기(WIDGET_RESIZED)·주기 갱신(받아 둔 응답 재사용)·조회 실패", async () => {
+    await prime(POLISH); // 16:00 위젯이 받은 응답: 삼성전자 오전 브리핑(1)
+    await push(T0 + 10 * 60_000); // 16:10 에 받은 목록을 16:12 앱이 넘김: 엔비디아(13)·삼성전자(12)·관심종목(14)
+    expect(await savedIds()).toEqual([13, 12, 14]);
+    // 16:14 폴드를 펴면 크기 변경 → 16:00 응답을 다시 쓴다 (예전: '오전 삼성'(1)으로 되돌아가고 저장값도 덮였다 — 휴장이면 최대 2시간)
+    vi.setSystemTime(T0 + 14 * 60_000);
+    let t = await handle("WIDGET_RESIZED");
+    expect(drawnIds(t)).toEqual([13, 12, 14]);
+    expect(words(t)).not.toContain("오전 삼성");
+    expect(await savedIds()).toEqual([13, 12, 14]);
+    t = await handle("WIDGET_UPDATE");
+    expect(drawnIds(t)).toEqual([13, 12, 14]);
+    // 16:20 재사용 시간(15분)이 지나 서버에 묻는데 실패 → 받아 둔 응답으로 그린다 (예전: 역시 '오전 삼성')
+    vi.setSystemTime(T0 + 20 * 60_000);
+    t = await handle("WIDGET_UPDATE");
+    expect(drawnIds(t)).toEqual([13, 12, 14]);
+    expect(await savedIds()).toEqual([13, 12, 14]);
+    // 서버가 바뀐 것이 없다고(304) 답하면 그대로 — 받아 둔 응답의 ETag 는 위젯이 받은 그대로다
+    const etags: (string | null)[] = [];
+    vi.stubGlobal("fetch", async (_u: string, init?: RequestInit) => {
+      etags.push(new Headers(init?.headers).get("if-none-match"));
+      return new Response(null, { status: 304, headers: { etag: '"w7"' } });
+    });
+    t = await handle("WIDGET_CLICK", { clickAction: "REFRESH" });
+    expect(etags).toEqual(['"w7"']);
+    expect(drawnIds(t)).toEqual([13, 12, 14]);
+    // 서버가 새 응답(200)을 주면 서버가 고른 목록 (앱이 적은 것은 서버 응답이 오면 사라진다)
+    const SERVER = { id: 21, code: "NVDA", name: "엔비디아", session: "afternoon", date: "2026-09-24", summary: "서버 새 요약", createdAt: "2026-09-24T16:18:00+09:00" };
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify(widgetPayload(POLISH, { briefings: [SERVER], latestIds: [21, 12, 14] })), { status: 200, headers: { etag: '"w8"' } }));
+    t = await handle("WIDGET_CLICK", { clickAction: "REFRESH" });
+    expect(drawnIds(t)).toEqual([21]);
+    vi.setSystemTime(T0 + 22 * 60_000);
+    expect(drawnIds(await handle("WIDGET_RESIZED"))).toEqual([21]);
+  });
+
+  it("검증 지적: 받아 둔 응답에 적는 것은 브리핑뿐 — 받은 시각·ETag·잔고·지수·알림용 id 는 그대로, 플래그 꺼짐·먼저 받은 목록이면 응답을 건드리지 않는다", async () => {
+    await prime(CLASSIC);
+    const classic = store.get("widget.payload");
+    await push(T0 + 10 * 60_000);
+    expect(store.get("widget.payload")).toBe(classic);
+    vi.setSystemTime(T0 + 14 * 60_000);
+    expect(drawnIds(await handle("WIDGET_RESIZED"))).toEqual([1]);
+
+    await prime(POLISH);
+    const before = JSON.parse(store.get("widget.payload")!) as { at: number; etag: string; body: Record<string, unknown> };
+    await push(T0 - 60_000);
+    expect(JSON.parse(store.get("widget.payload")!)).toEqual(before);
+    await push(T0 + 10 * 60_000);
+    const after = JSON.parse(store.get("widget.payload")!) as typeof before;
+    expect({ ...after, body: { ...after.body, briefings: null } }).toEqual({ ...before, body: { ...before.body, briefings: null } });
+    // 서버 응답과 같은 모양 (짧은 키 · 요약 첫 줄) — 위젯은 이것을 fromPayload 로 되돌려 그린다
+    expect(after.body.briefings).toEqual([
+      { id: 13, code: "NVDA", name: "엔비디아", session: "afternoon", date: "2026-09-24", summary: "엔비디아 오후 요약", createdAt: "2026-09-24T16:06:00+09:00" },
+      { id: 12, code: "005930", name: "삼성전자", session: "afternoon", date: "2026-09-24", summary: "삼성전자 오후 요약", createdAt: "2026-09-24T16:05:00+09:00" },
+      { id: 14, code: "999990", name: "관심종목", session: "afternoon", date: "2026-09-24", summary: "관심종목 오후 요약", createdAt: "2026-09-24T16:07:00+09:00" },
+    ]);
+  });
+
+  it("검증 지적 회귀: 잔고를 이번 실행에서 받지 않았을 때(위젯 종목 브리핑·알림으로 앱을 새로 켬) 브리핑 위젯만 다시 그린다 — 잔고·자산·지수 위젯과 저장된 잔고·칩·기준 시각은 그대로", async () => {
+    await prime(POLISH);
+    shared.widgets = { [WIDGET_NAMES.briefing]: [WIDE], [WIDGET_NAMES.holdings]: [WIDE], [WIDGET_NAMES.asset]: [{ width: 160, height: 72 }], [WIDGET_NAMES.market]: [WIDE] };
+    const { loadCachedWidgetData } = await import("@/widgets/data");
+    const before = await loadCachedWidgetData();
+    await refreshBriefingWidget({ at: T0 + 10 * 60_000, list: LATEST });
+    // 브리핑 위젯만 (잔고 위젯은 3-16 규칙대로 기기 저장값 잔고로 다시 그리지 않는다)
+    expect(shared.updates.map((u) => u.widgetName)).toEqual([WIDGET_NAMES.briefing]);
+    // 3종목은 저장된 잔고의 보유 비중 순 (엔비디아 → 삼성전자 → 관심종목, 실패한 버티브는 빠진다)
+    expect(drawnIds(lastBriefing())).toEqual([13, 12, 14]);
+    expect(words(lastBriefing())).toContain("엔비디아 오후 요약");
+    const after = await loadCachedWidgetData();
+    expect(after.briefings.map((b) => b.latest!.id)).toEqual([13, 12, 14]);
+    expect({ ...after, briefings: [] }).toEqual({ ...before, briefings: [] });
+    // 저장된 그림은 위젯이 쓰는 서버 주소로 적는다 (주소가 다르면 위젯이 그 그림을 버린다)
+    const view = JSON.parse(store.get("widget.view")!) as { apiUrl: string; view: { briefings: LatestBriefing[] } };
+    expect(view.apiUrl).toBe(API);
+    expect(view.view.briefings.map((b) => b.latest!.id)).toEqual([13, 12, 14]);
+    // 위젯이 스스로 갱신해도(폴드 접고 펴기) 새 브리핑 그대로
+    vi.setSystemTime(T0 + 14 * 60_000);
+    expect(drawnIds(await handle("WIDGET_RESIZED"))).toEqual([13, 12, 14]);
+  });
+
+  it("브리핑만 그리기도 같은 규칙: 플래그 꺼짐·위젯이 받은 응답보다 먼저 받은 목록·성공한 브리핑이 없는 목록·목록 없음이면 아무것도 바꾸지 않는다", async () => {
+    await prime(CLASSIC);
+    const classic = store.get("widget.payload");
+    await refreshBriefingWidget({ at: T0 + 10 * 60_000, list: LATEST });
+    expect(shared.updates).toHaveLength(0);
+    expect(await savedIds()).toEqual([1]);
+    expect(store.get("widget.payload")).toBe(classic);
+    await prime(POLISH);
+    const polished = store.get("widget.payload");
+    await refreshBriefingWidget({ at: T0 - 60_000, list: LATEST });
+    await refreshBriefingWidget({ at: T0 + 10 * 60_000, list: [LATEST[3]!] });
+    await refreshBriefingWidget(null);
+    expect(shared.updates).toHaveLength(0);
+    expect(await savedIds()).toEqual([1]);
+    expect(store.get("widget.payload")).toBe(polished);
+  });
+
   it("누르는 곳: 브리핑 위젯 제목(48dp 머리 줄)과 안내 문구는 브리핑 탭으로 — 꺼져 있으면 지금처럼 제목은 잔고 탭, 안내는 누르는 칸이 아님", () => {
     const draw = (features: Record<string, boolean>, over: Record<string, unknown> = {}) =>
       build(renderBoth(WIDGET_NAMES.briefing, data(widgetPayload(features, over)), { ...WIDE, fontScale: 1, now: NOW, pnlMode: "cumulative" }).dark);
@@ -1147,7 +1272,8 @@ describe("위젯 검토 7번 앞부분: 앱이 브리핑 위젯도 바로 갱신
     const notice = holding(failed, "브리핑 생성 실패");
     expect(notice).toHaveLength(1);
     expect(notice[0]!.props.clickActionData).toEqual({ uri: BRIEFINGS_URI });
-    expect(notice[0]!.props.accessibilityLabel).toBe(FAILED);
+    // 검증 지적 (2차): 누르는 칸 안의 글자는 화면 읽기가 읽지 않으므로(칸 이름표만 읽는다) 고지 문구도 이름표에 넣는다
+    expect(notice[0]!.props.accessibilityLabel).toBe(`${FAILED}, ${DISCLAIMER_SHORT}`);
     expect(words(failed)).toContain(FAILED);
     expect(words(failed).at(-1)).toBe(DISCLAIMER_SHORT);
     // 검증 지적: 안내 문구 칸은 글자 한 줄(약 13dp)이 아니라 머리 줄 아래 남는 높이 전체(flex → weight)다 — 고지 줄도 같은 자리로 칸 안에 (한 번만)
@@ -1179,6 +1305,26 @@ describe("위젯 검토 7번 앞부분: 앱이 브리핑 위젯도 바로 갱신
     // 꺼져 있으면 모양도 지금 그대로 (남는 높이를 차지하는 칸 없음, 고지 줄은 따로 끝에)
     expect(fills(offFailed)).toHaveLength(0);
     expect(words(offFailed).at(-1)).toBe(DISCLAIMER_SHORT);
+    expect(texts(offFailed).find((p) => p.text === FAILED)!.truncate).toBeUndefined();
+  });
+
+  it("검증 지적 (2차): 4x1(330×110)·글자 130% 처럼 안내가 한 줄뿐이면 누르는 칸의 안내 문장 끝을 '…'로 줄인다 (말줄임 없이 잘리지 않게) — 꺼짐이면 지금 그대로", () => {
+    const failedBrief = { morning: "08:30", afternoon: "16:00", weekdaysOnly: true, failed: 3 };
+    const FAILED = "브리핑 생성 실패 3종목. 앱의 브리핑 탭에서 확인해 주세요.";
+    const draw = (features: Record<string, boolean>, over: Record<string, unknown>) =>
+      build(renderBoth(WIDGET_NAMES.briefing, data(widgetPayload(features, over)), { width: 330, height: 110, fontScale: 1.3, now: NOW, pnlMode: "cumulative" }).dark);
+    for (const over of [{ briefings: [], latestIds: [], brief: failedBrief }, { briefings: [], latestIds: [] }]) {
+      const on = draw(POLISH, over);
+      const msg = byClick(on, "OPEN_URI").find((n) => n.props.clickActionData && (n.props.clickActionData as { uri: string }).uri === BRIEFINGS_URI && n.props.weight === 1)!;
+      const p = texts(msg)[0]!;
+      expect(p.maxLines).toBe(1);
+      expect(p.truncate).toBe("END");
+      // 고지 줄은 짧아 자르지 않는다
+      expect(texts(msg)[1]).toMatchObject({ text: DISCLAIMER_SHORT, maxLines: 1 });
+      expect(texts(msg)[1]!.truncate).toBeUndefined();
+    }
+    const off = draw(CLASSIC, { briefings: [], latestIds: [], brief: failedBrief });
+    expect(texts(off).find((p) => p.text === FAILED)!.truncate).toBeUndefined();
   });
 
   it("누르는 곳: 다듬은 잔고 위젯 지수 줄은 항목마다 그 지수·환율 차트(market/코드)를 연다 — 꺼져 있으면 지금처럼 줄 전체가 잔고 탭", () => {
