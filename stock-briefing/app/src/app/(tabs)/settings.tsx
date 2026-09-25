@@ -8,6 +8,7 @@ import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
 import { flushErrors, reportError } from "@/lib/errorReport";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
+import { ScreenInfoCard } from "@/components/ScreenInfoCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, SectionTitle, Toggle } from "@/components/ui";
@@ -17,8 +18,9 @@ import { font, radius, space, touch, useTheme } from "@/theme";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
 
 /**
- * 설정: 표시(원화 환산·정렬) → 알림 → 토스증권 연동 → 앱 업데이트 → 서버 상태 → 고급(서버 주소·토큰, 접힘) → 정보
+ * 설정: 표시(원화 환산·정렬) → 알림 → 토스증권 연동 → 앱 업데이트 → 서버 상태 → 고급(서버 주소·토큰 / 화면 정보, 각각 접힘) → 정보
  * 서버 주소 같은 운영 항목은 맨 아래 "고급"에 두어 일반 사용자는 볼 일이 없게 한다.
+ * 화면 정보는 접는 폰에서 창 크기·글자 배율을 재어 붙여 넣는 측정용 (기능 플래그 없이 늘 보인다)
  */
 export default function SettingsScreen() {
   const t = useTheme();
@@ -164,6 +166,8 @@ export default function SettingsScreen() {
           />
         ) : null}
       </Card>
+
+      <ScreenInfoCard />
 
       <Card>
         <SectionTitle>정보</SectionTitle>

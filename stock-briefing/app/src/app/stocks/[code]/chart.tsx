@@ -16,6 +16,9 @@ import { font, slopFor, space, useTheme } from "@/theme";
 /**
  * 전체 화면 차트. 앱은 세로 고정이라 "가로" 버튼을 누르면 화면을 90도 돌려 그린다(가로 모드처럼 넓게).
  * 제스처 좌표는 회전된 뷰 기준으로 들어오므로 그대로 동작한다.
+ *
+ * 창이 이미 가로면 돌리지 않는다. 안드로이드 16 부터 큰 화면(펼친 접는 폰 안쪽 화면 등)은 앱의 세로 고정을 무시하고
+ * 폰을 따라 가로로 돈다 → 거기서 또 90도 돌리면 차트가 옆으로 눕는다. 가로 창에서는 창을 그대로 쓰고 가로 버튼을 끈다.
  */
 export default function FullscreenChartScreen() {
   const t = useTheme();
@@ -25,7 +28,13 @@ export default function FullscreenChartScreen() {
   // 다른 앱·웹 페이지도 이 주소를 열 수 있다 → 상세 화면처럼 검증을 통과한 코드만 서버에 묻고, 모르는 기간은 일봉으로 (BH-36)
   const c = parseStockCode(code) ?? "";
   const [period, setPeriod] = useState<CandlePeriod>(() => parseCandlePeriod(initial));
-  const [landscape, setLandscape] = useState(false);
+  const winLandscape = winW > winH;
+  // 가로 버튼 상태와 그때의 창 크기. 창이 바뀌면(폰을 돌림·접음·폄·창 크기 조절) 그리는 중에 바로 돌리기를 푼다
+  // → 가로 창에서 두 번 돌지 않고, 같은 크기의 세로 창으로 돌아와도 옆으로 누운 차트가 갑자기 나오지 않는다
+  const winKey = `${Math.round(winW)}x${Math.round(winH)}`;
+  const [rotation, setRotation] = useState({ on: false, win: winKey });
+  if (rotation.win !== winKey) setRotation({ on: false, win: winKey });
+  const landscape = !winLandscape && rotation.on && rotation.win === winKey;
   // 차트 아래·위 도구 모음(기간·봉 수·읽기 줄·오버레이 줄)의 실제 높이. 글자 크기·화면 폭에 따라 달라지므로 그려 본 뒤 잰다.
   // 늘어날 때만 반영한다(방향·폭이 바뀌면 새로) → 십자선을 움직일 때 읽기 줄이 한 줄 늘었다 줄었다 해도 차트 높이가 흔들리지 않는다
   const [chrome, setChrome] = useState<{ key: string; h: number }>({ key: "", h: 170 });
@@ -36,9 +45,12 @@ export default function FullscreenChartScreen() {
   const cur = q?.currency ?? currencyOfMarket(s?.market);
 
   const pad = space.md;
-  // 회전하면 폭·높이가 바뀐다. 상태바·내비게이션 영역은 피한다
-  const availW = landscape ? winH - insets.top - insets.bottom : winW;
-  const availH = landscape ? winW : winH - insets.top - insets.bottom;
+  // 상태바·내비게이션 바·화면 구멍 영역은 피한다 (가로 창에서는 왼쪽·오른쪽에 올 수 있다)
+  const frameW = winW - insets.left - insets.right;
+  const frameH = winH - insets.top - insets.bottom;
+  // 돌려 그리면 폭·높이가 바뀐다
+  const availW = landscape ? frameH : frameW;
+  const availH = landscape ? frameW : frameH;
   const headerH = 44;
   const chartW = availW - pad * 2;
   // 남는 높이에서 도구 모음 높이를 뺀 만큼만 차트로 → 하단 토글이 화면 밖으로 잘리지 않는다
@@ -48,7 +60,7 @@ export default function FullscreenChartScreen() {
 
   if (!c) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bg, paddingTop: insets.top, paddingBottom: insets.bottom }}>
+      <View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bg, paddingTop: insets.top, paddingBottom: insets.bottom, paddingLeft: insets.left, paddingRight: insets.right }}>
         <ErrorView error={new Error("종목 주소가 올바르지 않습니다")} retryLabel="잔고로" onRetry={() => router.dismissTo("/")} />
       </View>
     );
@@ -69,8 +81,18 @@ export default function FullscreenChartScreen() {
           ) : null}
         </View>
         <View style={{ flexDirection: "row", gap: space.sm }}>
-          <Pressable onPress={() => setLandscape((v) => !v)} accessibilityRole="button" accessibilityLabel={landscape ? "세로로 보기" : "가로로 보기"} hitSlop={slopFor(ICON_BTN, space.xs)} style={[styles.iconBtn, { borderColor: t.line }]}>
-            <Ionicons name={landscape ? "phone-portrait-outline" : "phone-landscape-outline"} size={18} color={t.ink} />
+          {/* 이미 가로 창이면 돌릴 것이 없어 끈다 (화면 읽기로는 까닭을 말한다) */}
+          <Pressable
+            onPress={() => setRotation({ on: !landscape, win: winKey })}
+            disabled={winLandscape}
+            accessibilityRole="button"
+            accessibilityLabel={landscape ? "세로로 보기" : "가로로 보기"}
+            accessibilityHint={winLandscape ? "이미 가로 화면이라 차트를 돌리지 않습니다" : undefined}
+            accessibilityState={{ disabled: winLandscape }}
+            hitSlop={slopFor(ICON_BTN, space.xs)}
+            style={[styles.iconBtn, { borderColor: t.line, opacity: winLandscape ? OFF_OPACITY : 1 }]}
+          >
+            <Ionicons name={landscape ? "phone-portrait-outline" : "phone-landscape-outline"} size={18} color={winLandscape ? t.muted : t.ink} />
           </Pressable>
           <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="차트 닫기" hitSlop={slopFor(ICON_BTN, space.xs)} style={[styles.iconBtn, { borderColor: t.line }]}>
             <Ionicons name="close" size={18} color={t.ink} />
@@ -103,10 +125,10 @@ export default function FullscreenChartScreen() {
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingBottom: insets.bottom }}>
+    <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingBottom: insets.bottom, paddingLeft: insets.left, paddingRight: insets.right }}>
       <Stack.Screen options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
       {landscape ? (
-        <View style={{ width: winW, height: winH - insets.top - insets.bottom, alignItems: "center", justifyContent: "center" }}>
+        <View style={{ width: frameW, height: frameH, alignItems: "center", justifyContent: "center" }}>
           <View style={{ width: availW, height: availH, transform: [{ rotate: "90deg" }] }}>{body}</View>
         </View>
       ) : (
@@ -118,6 +140,8 @@ export default function FullscreenChartScreen() {
 
 /** 둥근 아이콘 버튼 크기 34 → hitSlop 으로 44 */
 const ICON_BTN = 34;
+/** 꺼진 버튼 흐림 (ui 의 Button 과 같은 값) */
+const OFF_OPACITY = 0.45;
 
 const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
