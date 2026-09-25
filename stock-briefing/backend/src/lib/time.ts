@@ -24,6 +24,15 @@ export function seoulDate(date: Date = new Date()): string {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
+/**
+ * 시각 문자열(오프셋 무관: Z, +09:00 …)의 한국 날짜 YYYY-MM-DD. 못 읽으면 앞 10글자 그대로.
+ * 구글 RSS·네이버 검색 뉴스는 Z(UTC) 로 와서 앞 10글자만 자르면 한국 00:00~08:59 기사가 전날이 된다
+ */
+export function seoulDateOf(iso: string): string {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? iso.slice(0, 10) : seoulDate(new Date(t));
+}
+
 /** YYYYMMDD (KIS API 등 날짜 파라미터용) */
 export function seoulDateCompact(date: Date = new Date()): string {
   return seoulDate(date).replace(/-/g, "");

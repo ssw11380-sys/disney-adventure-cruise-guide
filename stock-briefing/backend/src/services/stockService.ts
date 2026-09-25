@@ -147,8 +147,19 @@ export class StockService {
 
   // ── 종목 마스터 ────────────────────────────────────────────────
 
-  async refreshMaster(): Promise<{ count: number; refreshedAt: string }> {
+  /**
+   * minKeepRatio: 자동 갱신용. 받은 목록이 비었거나 지금 목록의 이 비율보다 적으면 바꾸지 않고 ProviderError
+   * (출처 일시 장애로 반쪽 목록을 받아 종목이 사라지지 않게). 0 이면 빈 목록만 막는다. 수동 갱신은 넘기지 않는다
+   */
+  async refreshMaster(opts: { minKeepRatio?: number } = {}): Promise<{ count: number; refreshedAt: string }> {
     const stocks = await this.deps.master.fetchAll();
+    if (opts.minKeepRatio !== undefined) {
+      const { count } = await this.masterStatus();
+      if (stocks.length === 0) throw new ProviderError(this.deps.master.name, "받은 종목이 없어 종목 마스터를 바꾸지 않았습니다");
+      if (stocks.length < count * opts.minKeepRatio) {
+        throw new ProviderError(this.deps.master.name, `받은 종목이 ${stocks.length}건으로 지금 ${count}건보다 크게 적어 종목 마스터를 바꾸지 않았습니다`);
+      }
+    }
     const refreshedAt = seoulIso(this.now());
     await this.deps.db.transaction().execute(async (trx) => {
       await trx.deleteFrom("listed_stocks").execute();
