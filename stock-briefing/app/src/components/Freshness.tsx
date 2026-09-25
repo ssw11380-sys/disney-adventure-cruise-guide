@@ -1,7 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { chartNotice, clockLabel, connection, liveLabel, staleBanner, streamFresh, type QueryLike } from "@/lib/freshness";
+import type { Quote } from "@/api/types";
+import { chartNotice, clockLabel, connection, liveLabel, OPEN_MAX_AGE_MS, staleBanner, streamFresh, type LiveTone, type QueryLike } from "@/lib/freshness";
+import { feedHealthy, liveCounts, marketSessions, recheckIn, sessionStatus } from "@/lib/liveDot";
 import { useLiveStream } from "@/lib/liveStream";
 import { useNow } from "@/lib/useNow";
 import { font, space, useTheme } from "@/theme";
@@ -33,16 +35,50 @@ export function StaleBanner({ query, open = false, maxAgeMs }: { query: QueryLik
 }
 
 /**
- * 잔고 패널의 상태 점 + 글자: "실시간 · 14:03:21 · 보유 17". 체결이 30초 끊기면 5초 안에 "지연 3초"/"지연"으로 바뀐다.
+ * 초록 점을 켤 때 쓰는 시각과 앱 수신 상태 (lib/liveDot quoteLive 에 그대로 넘긴다).
+ *  - feedOk: 앱이 값을 제때 받고 있는지 (feedHealthy — 체결 스트림 연결 또는 폴링 15초 안, 오프라인 아님)
+ *  - now: 결과가 바뀔 수 있는 때(받은 값이 15초가 되는 때 · 가장 가까운 세션 경계)에만 새로 읽는다 → 화면 전체를 몇 초마다 다시 그리지 않는다
+ *    (그 사이 새 값을 받으면 그 값은 방금 받은 것이라 지연이 아니다). 잔고 줄은 점 값(불리언)만 받아 점이 바뀐 줄만 다시 그린다
+ * streamed=false: 체결 스트림이 이 값을 고쳐 주지 않는다(미등록 종목 상세) → 스트림 연결은 보지 않고 폴링 값만 본다
  */
-export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix }: { query: QueryLike; open: boolean; closedLabel: string; maxAgeMs: (fresh: boolean) => number; suffix: string }) {
+export function useFeedState(query: QueryLike, quotes: readonly (Quote | null | undefined)[], streamed = true): { now: number; feedOk: boolean } {
+  const connected = useLiveStream().connected && streamed;
+  const [now, setNow] = useState(() => Date.now());
+  const { dataUpdatedAt } = query;
+  useEffect(() => {
+    const due = recheckIn(now, Date.now(), dataUpdatedAt, quotes, OPEN_MAX_AGE_MS);
+    if (due === null) return;
+    const id = setTimeout(() => setNow(Date.now()), due);
+    return () => clearTimeout(id);
+  }, [dataUpdatedAt, quotes, now]);
+  return { now, feedOk: feedHealthy(connected, connection(query, now, OPEN_MAX_AGE_MS)) };
+}
+
+/**
+ * 잔고 패널의 상태 점 + 글자.
+ *  - 새 서버(종목별 세션이 있음): "미국 주간거래 · 한국 휴장 · 실시간 9종목 · 14:03:21 · 보유 10" (lib/liveDot sessionStatus).
+ *    초록 점은 점이 켜진 종목이 있고 앱이 값을 제때 받을 때만
+ *  - 예전 서버: "실시간 · 14:03:21 · 보유 17". 체결이 30초 끊기면 5초 안에 "지연 3초"/"지연"으로 바뀐다
+ */
+export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix, quotes }: { query: QueryLike; open: boolean; closedLabel: string; maxAgeMs: (fresh: boolean) => number; suffix: string; quotes?: readonly (Quote | null)[] }) {
   const t = useTheme();
   const stream = useLiveStream();
   const now = useNow(5_000);
   const fresh = streamFresh(stream, now);
   const conn = connection(query, now, maxAgeMs(fresh));
-  const s = liveLabel({ open, closedLabel, streamFresh: fresh, offline: conn.offline, stale: conn.stale });
-  const warn = s.tone === "offline" || (s.tone === "delayed" && conn.stale);
+  const sessions = quotes ? marketSessions(quotes, now) : [];
+  let s: { text: string; tone: LiveTone };
+  let warn: boolean;
+  if (sessions.length > 0) {
+    // 줄의 점과 같은 기준 (useFeedState · quoteLive)
+    const feedOk = feedHealthy(stream.connected, connection(query, now, OPEN_MAX_AGE_MS));
+    const counts = liveCounts(quotes ?? [], now, feedOk);
+    s = sessionStatus({ sessions, liveCount: counts.live, eligibleCount: counts.eligible, feedOk, offline: conn.offline });
+    warn = s.tone === "offline" || s.tone === "delayed";
+  } else {
+    s = liveLabel({ open, closedLabel, streamFresh: fresh, offline: conn.offline, stale: conn.stale });
+    warn = s.tone === "offline" || (s.tone === "delayed" && conn.stale);
+  }
   const text = `${s.text}${conn.asOf ? ` · ${clockLabel(conn.asOf, now)}` : ""} · ${suffix}`;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, flexShrink: 1 }} accessible accessibilityLabel={text}>

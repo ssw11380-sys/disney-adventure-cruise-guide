@@ -30,6 +30,27 @@ export interface LiveTicks {
 export interface QuickPriceSource {
   readonly name: string;
   getMany(codes: string[]): Promise<Map<string, LiveTick>>;
+  /**
+   * 종목별 세션 사실 (초록 점 판단용, services/liveSession). 받아 둔 값만 바로 돌려주고, 없거나 오래됐으면 뒤에서 새로 받는다.
+   * 없는 소스(예전·가짜)면 세션은 시각·달력만으로, 자격은 모름(null)으로 본다
+   */
+  sessionFacts?(codes: string[]): Map<string, StockSessionFacts>;
+}
+
+/** 종목 하나의 세션 사실. 모르는 칸은 null (토스 웹 비공식 응답이라 칸이 빠질 수 있다 → 모름으로, 아무 값으로나 채우지 않는다) */
+export interface StockSessionFacts {
+  /** 미국 주간거래(데이마켓) 대상 — 토스 stock-infos daytimePriceSupported */
+  daytime: boolean | null;
+  /** 넥스트레이드(NXT) 거래 대상 — stock-infos nxtSupported */
+  nxt: boolean | null;
+  /** 거래정지 (tradingSuspended·krxTradingSuspended) */
+  halted: boolean | null;
+  /** NXT 거래정지 (nxtTradingSuspended) */
+  nxtHalted: boolean | null;
+  /** 토스 시세의 거래소 구분: "integrated"(KRX+NXT) · "krx"(KRX 만). 모르면 null */
+  exchange: string | null;
+  /** 토스 웹 일괄 시세로 이 종목 가격을 마지막으로 받은 시각(ms). 그 뒤 일괄 조회가 실패했거나 받은 적 없으면 null */
+  pricedAt: number | null;
 }
 
 /** 테스트에서 가짜 소켓을 넣기 위한 최소 인터페이스 */

@@ -32,6 +32,7 @@ import { DataCollector } from "./services/collector.js";
 import { DeviceService } from "./services/deviceService.js";
 import { NotificationService } from "./services/notificationService.js";
 import { PriceStream } from "./services/priceStream.js";
+import { anySessionOpen } from "./services/liveSession.js";
 import { AppErrorService } from "./services/appErrorService.js";
 import { StockService } from "./services/stockService.js";
 import { BackupService } from "./services/backupService.js";
@@ -156,11 +157,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     live: opts.providers.live,
     quickPrices: opts.providers.quickPrices,
     codes: async () => (await stockService.list()).map((s) => s.code),
-    // 두 시장이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시)
-    marketOpen: async () => {
-      const st = await opts.providers.calendar.status();
-      return st.KR.isOpen || st.US.isOpen;
-    },
+    // 등록 종목 시장의 거래 세션이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시).
+    // 토스 달력 isOpen 은 미국 정규장만이라 세션(프리·애프터·주간거래 포함)으로 본다 — 그래야 웹소켓이 없는 종목도 3초마다 바뀐다
+    marketOpen: async (codes) => anySessionOpen(codes, await opts.providers.calendar.status(), now()),
     log,
   });
   app.addHook("onClose", async () => priceStream.stop());

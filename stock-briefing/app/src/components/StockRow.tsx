@@ -14,19 +14,31 @@ import { LINE_COL, LineMark, LineValue, StockLine, type LinePrice } from "./Stoc
  */
 export const COL = LINE_COL;
 
-type StockRowProps = { stock: RegisteredWithQuote; onPress: (stock: RegisteredWithQuote) => void; onLongPress?: (stock: RegisteredWithQuote) => void; showKrw: boolean; afterCost?: boolean };
+type StockRowProps = {
+  stock: RegisteredWithQuote;
+  onPress: (stock: RegisteredWithQuote) => void;
+  onLongPress?: (stock: RegisteredWithQuote) => void;
+  showKrw: boolean;
+  afterCost?: boolean;
+  /**
+   * 초록 점: 이 종목 가격이 지금 열린 세션에서 실시간으로 갱신되고 있음. 부르는 쪽이 lib/liveDot quoteLive(시세, 시각, 앱 수신 상태)로 정해 넘긴다
+   * (시각은 그릴 때 읽지 않는다 — 점이 바뀐 줄만 다시 그리게). 주지 않으면 예전처럼 시세의 live
+   */
+  live?: boolean;
+};
 
-/** 다시 그릴지: 종목 객체(체결이 오면 그 종목만 새 객체)·표시 설정·누름 처리 함수가 같으면 그대로 (3-17) */
+/** 다시 그릴지: 종목 객체(체결이 오면 그 종목만 새 객체)·표시 설정·누름 처리 함수·초록 점이 같으면 그대로 (3-17) */
 export function sameRow(a: StockRowProps, b: StockRowProps): boolean {
-  return a.stock === b.stock && a.showKrw === b.showKrw && a.afterCost === b.afterCost && a.onPress === b.onPress && a.onLongPress === b.onLongPress;
+  return a.stock === b.stock && a.showKrw === b.showKrw && a.afterCost === b.afterCost && a.onPress === b.onPress && a.onLongPress === b.onLongPress && a.live === b.live;
 }
 
 /** 체결이 온 줄만 다시 그린다: 부르는 쪽은 onPress·onLongPress 를 안정된 함수(종목을 인자로 받음)로 넘긴다 */
 export const StockRow = React.memo(StockRowView, sameRow);
 
-function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }: StockRowProps) {
+function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp }: StockRowProps) {
   const t = useTheme();
   const q = stock.quote;
+  const live = liveProp ?? q?.live === true;
   const cur = q?.currency;
   const fx = q?.fxRate ?? (q?.priceKrw && q.price ? q.priceKrw / q.price : null);
   const ev = evalView(stock.evaluation, { afterCost, toKrw: showKrw, currency: cur, fx });
@@ -52,13 +64,13 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
           profitRate: ev.profitRate,
         }
       : null,
-    price: q ? { text: formatMoney(q.price, cur, fx, showKrw), changeRate: q.changeRate, live: q.live } : null,
+    price: q ? { text: formatMoney(q.price, cur, fx, showKrw), changeRate: q.changeRate, live } : null,
     missing: stock.quoteError ? "시세 없음" : undefined,
     move: q ? { text: formatMoney(q.change, cur, fx, showKrw), sign: Math.sign(q.change) } : null,
     volume: formatVol(q?.volume),
   });
   const price: LinePrice | null = q
-    ? { value: q.price, text: formatQuoteDisplay(q.price, cur, fx, showKrw), color: c, rate: formatPct(q.changeRate), rateColor: c, live: q.live }
+    ? { value: q.price, text: formatQuoteDisplay(q.price, cur, fx, showKrw), color: c, rate: formatPct(q.changeRate), rateColor: c, live }
     : null;
   return (
     <StockLine

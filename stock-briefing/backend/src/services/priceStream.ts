@@ -11,7 +11,8 @@ import type { ChainLogger } from "../providers/market/chain.js";
  *  - 메시지: {type:"snapshot", ticks:[...]} 접속 직후 1회, 가격 변동은 조용할 땐 바로·몰리면 250ms 마다 모아서, {type:"ping"} 25초마다.
  *    앱이 {type:"hello", batch:true} 를 보내면 {type:"ticks", ticks:[...]} 한 통으로(초당 최대 4통), 아니면(예전 앱) 종목별 {type:"tick"} 으로.
  *    같은 종목의 체결이 250ms 안에 여러 번 오면 마지막 값만 보낸다 (장중 체결이 몰려도 앱이 초당 4번만 다시 그리게, 3-17)
- *  - 토스 웹소켓이 붙어 있으면 웹소켓이 구독한 종목은 폴링하지 않고, 두 시장이 모두 닫혀 있으면 폴링을 30초로 늦춘다.
+ *  - 토스 웹소켓이 붙어 있으면 웹소켓이 구독한 종목은 폴링하지 않고, 등록 종목 시장의 세션이 모두 닫혀 있으면 폴링을 30초로 늦춘다
+ *    (미국 프리·애프터·주간거래도 세션 — 이때도 3초라야 웹소켓이 없는 종목의 초록 점이 "3초 갱신"과 맞는다).
  *  - 앱은 tick 의 price 로 등락·환산가를 스스로 계산한다(prevClose·환율은 이미 받은 시세에 있음).
  */
 
@@ -39,8 +40,11 @@ export interface PriceStreamDeps {
   pingMs?: number;
   /** 체결을 모아 보내는 간격 (기본 250ms) */
   batchMs?: number;
-  /** 한 시장이라도 열려 있는지 (없으면 늘 열린 것으로). 닫혀 있으면 폴링을 closedPollMs 로 늦춘다 */
-  marketOpen?: () => Promise<boolean>;
+  /**
+   * 등록 종목(codes) 시장 중 하나라도 거래 세션이 열려 있는지 (없으면 늘 열린 것으로). 닫혀 있으면 폴링을 closedPollMs 로 늦춘다.
+   * 미국 프리·애프터·주간거래도 열림이다 (services/liveSession.anySessionOpen — 토스 달력 isOpen 은 미국 정규장만)
+   */
+  marketOpen?: (codes: string[]) => Promise<boolean>;
   closedPollMs?: number;
   log?: ChainLogger;
 }
@@ -139,13 +143,14 @@ export class PriceStream {
     if (!q || this.polling || this.clients.size === 0) return;
     this.polling = true;
     try {
-      // 두 시장이 모두 닫혀 있으면 closedPollMs(기본 30초)에 한 번만
-      const open = this.deps.marketOpen ? await this.deps.marketOpen().catch(() => true) : true;
+      const all = await this.deps.codes();
+      // 등록 종목 시장이 모두 닫혀 있으면(세션 기준) closedPollMs(기본 30초)에 한 번만
+      const open = this.deps.marketOpen ? await this.deps.marketOpen(all).catch(() => true) : true;
       if (!open && Date.now() - this.lastPollAt < (this.deps.closedPollMs ?? 30_000)) return;
       this.lastPollAt = Date.now();
       // 토스 웹소켓이 살아 있으면(최근 90초 안에 메시지) 구독한 종목은 체결을 바로 받으므로 폴링하지 않는다
       const covered = wsCovered(this.deps.live?.status() ?? null, Date.now());
-      const codes = (await this.deps.codes()).filter((c) => !covered?.has(c));
+      const codes = all.filter((c) => !covered?.has(c));
       if (codes.length === 0) return;
       const ticks = await q.getMany(codes);
       for (const [code, tick] of ticks) {

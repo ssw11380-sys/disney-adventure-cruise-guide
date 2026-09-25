@@ -15,4 +15,11 @@ describe("잔고 줄 다시 그리기 조건 (3-17)", () => {
     expect(sameRow(base, { ...base, showKrw: true })).toBe(false);
     expect(sameRow(base, { ...base, onPress: () => undefined })).toBe(false);
   });
+
+  it("초록 점(부모가 세션·앱 수신 상태로 정한 값)이 바뀐 줄만 다시 그린다 — 5초마다 시각이 바뀌어도 점이 같으면 그대로", async () => {
+    const { sameRow } = await import("@/components/StockRow");
+    const base = { stock: { code: "VRT" } as never, onPress: () => undefined, showKrw: false, afterCost: true, live: true };
+    expect(sameRow(base, { ...base, live: true })).toBe(true);
+    expect(sameRow(base, { ...base, live: false })).toBe(false);
+  });
 });

@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useAnyMarketOpen, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { Currency, RegisteredWithQuote } from "@/api/types";
-import { LiveStatus, StaleBanner, usePull } from "@/components/Freshness";
+import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
 import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
@@ -14,6 +14,7 @@ import { Button, ErrorView, TableHead } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
+import { quoteLive, sessionOpen } from "@/lib/liveDot";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
@@ -32,6 +33,12 @@ export default function StocksScreen() {
   const col = useLineCols();
   // 값이 있으면 재조회가 실패해도 화면을 지우지 않고, 끊김·지연을 띠와 상태 글자로 알린다
   const { pulling, onPull } = usePull(refetch);
+  // 초록 점: 서버가 실시간이라 하고(세션·거래 대상·서버 수신) 앱도 값을 제때 받고 세션이 안 끝났을 때만 (lib/liveDot).
+  // 상태 줄은 종목별 세션으로 "미국 주간거래 · 한국 휴장 · 실시간 N종목"
+  const quotes = useMemo(() => (data ?? []).map((s) => s.quote), [data]);
+  const { now, feedOk } = useFeedState(stocks, quotes);
+  // 장중 판단(지연 띠): 새 서버는 종목별 세션(미국 프리·애프터·주간거래 포함), 예전 서버는 장 상태
+  const open = sessionOpen(quotes) ?? live.open;
 
   // 합계는 토스 앱과 같은 기준: 평가금액은 (설정 시) 수수료·세금 차감 후, 해외 종목 원화 손익은 매수 당시 환율의 원화 매입금액 기준
   const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
@@ -114,7 +121,7 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
-          status={<LiveStatus query={stocks} open={live.open} closedLabel={live.label} maxAgeMs={openMaxAge} suffix={holdingsSuffix({ held: summary.held, watch: summary.watch, stale: staleQuoteCount(stocks.data) })} />}
+          status={<LiveStatus query={stocks} open={open} closedLabel={live.label} maxAgeMs={openMaxAge} quotes={quotes} suffix={holdingsSuffix({ held: summary.held, watch: summary.watch, stale: staleQuoteCount(stocks.data) })} />}
         />
       ) : null}
     </View>
@@ -161,7 +168,7 @@ export default function StocksScreen() {
   }
 
   return (
-    <Screen scroll={false} top={<StaleBanner query={stocks} open={live.open} maxAgeMs={openMaxAge} />}>
+    <Screen scroll={false} top={<StaleBanner query={stocks} open={open} maxAgeMs={openMaxAge} />}>
       {/* 잔고는 수십 줄이라 가상화 목록 대신 스크롤 + 고정 머리글로 그린다: 체결 묶음마다 목록 내부의 두 번째 커밋이 없고,
           체결이 온 줄만 다시 그린다 (3-17) */}
       <ScrollView
@@ -174,7 +181,9 @@ export default function StocksScreen() {
           ? empty
           : sections.flatMap((section) => [
               <View key={`h-${section.key}`}>{sectionHeader(section)}</View>,
-              ...section.data.map((item) => <StockRow key={item.code} stock={item} showKrw={showKrw} afterCost={afterCost} onPress={openStock} onLongPress={longPress} />),
+              ...section.data.map((item) => (
+                <StockRow key={item.code} stock={item} showKrw={showKrw} afterCost={afterCost} live={quoteLive(item.quote, now, feedOk)} onPress={openStock} onLongPress={longPress} />
+              )),
             ])}
       </ScrollView>
       <SortSheet visible={sortOpen} value={sort} onClose={() => setSortOpen(false)} onPick={(k) => void setSort(k)} />

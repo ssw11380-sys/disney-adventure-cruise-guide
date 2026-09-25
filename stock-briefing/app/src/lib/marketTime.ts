@@ -86,7 +86,6 @@ const KR_SESSION_FROM_H = 8;
 const KR_SESSION_TO_H = 20;
 /** 미국 주간거래(블루오션)가 시작되는 뉴욕 시각. 여기부터 다음 날 04:00(프리마켓 시작)까지는 다음 날 정규장에 딸린 세션 */
 const US_OVERNIGHT_FROM_H = 20;
-const US_OVERNIGHT_TO_H = 4;
 
 /**
  * 뉴욕증권거래소 평일 휴장일 (현지 날짜). 서버 marketContext.US_HOLIDAYS 와 같은 목록 — 해마다 둘 다 추가한다(app/test 가 두 목록이 같은지, 내년 끝까지 있는지 본다).
@@ -159,16 +158,15 @@ export function inTradingHours(iso: string, code: string): boolean {
 
 /**
  * 지금 그 종목에 거래가 있는 시간인지 (차트 봉 주기 갱신용, PF-04).
- *  - 서버 장 상태가 있으면 그 값. 미국은 토스 달력 isOpen 이 프리~애프터(뉴욕 04:00~20:00)뿐이라 주간거래(뉴욕 20:00~04:00, 다음 날이 거래일인 밤)를 더한다
+ *  - 한국은 서버 장 상태(토스 달력: KRX+NXT 08:00~20:00, 휴장일 포함)가 있으면 그 값
+ *  - 미국은 토스 달력 isOpen 이 정규장(09:30~16:00)뿐이라 요일·시각·휴장일(inTradingHours: 주간거래 20:00~04:00 · 프리 04:00~ · 정규 · 애프터 ~20:00)을 더한다
+ *    (예전에는 주간거래만 더해 프리·애프터마켓에는 차트가 멈췄다)
  *  - 장 상태를 모르면(못 받음) 요일·시각으로 (inTradingHours)
  */
 export function tradingNow(code: string, status: Pick<MarketStatus, "KR" | "US"> | undefined, now = Date.now()): boolean {
-  const iso = new Date(now).toISOString();
-  const open = inTradingHours(iso, code);
+  const open = inTradingHours(new Date(now).toISOString(), code);
   if (isKrCode(code)) return status ? status.KR.isOpen : open;
-  if (!status) return open;
-  const hour = Number(marketClock(iso, code)?.local.slice(11, 13) ?? 12);
-  return status.US.isOpen || (open && (hour >= US_OVERNIGHT_FROM_H || hour < US_OVERNIGHT_TO_H));
+  return (status?.US.isOpen ?? false) || open;
 }
 
 /** 일·주·월봉 구간 키 (서버 aggregateCandles 와 같다: 주는 월요일 시작, 월은 YYYY-MM, 일은 날짜 그대로) */
