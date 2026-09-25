@@ -9,7 +9,8 @@ import { render, type HostNode } from "./miniRender";
  *  - 휴대폰 화면(좁은 창 · foldLayout 꺼짐)은 3-42 이전 크기 그대로: 폭 min(창 폭 − 56, 720), 높이 폭 × 0.62 (사용자 결정 '접은 화면은 지금 그대로')
  *  - foldLayout 이 켜져 있고 폭 등급이 중간 이상이면: 폭은 차트 묶음이 실제로 받은 폭(onLayout — 28dp 빈 띠 없음), 720 상한을 풀고
  *    높이를 창 높이 × 0.5 로 제한, 칩·버튼 누르는 영역 44×44
- *  - 옆으로 넘기는 칩 띠는 넘길 내용이 있는 쪽 끝만 바탕색으로 흐리게 (덧칠만 — 배치는 그대로)
+ *  - 넓은 창만: 옆으로 넘기는 칩 띠는 넘길 내용이 있는 쪽 끝만 바탕색으로 흐리게, 이동평균 값 줄은 항목 단위 줄바꿈.
+ *    휴대폰 화면은 3-42 이전과 똑같은 스크롤 띠·한 줄 글자
  */
 const h = vi.hoisted(() => ({
   win: { width: 475, height: 751, fontScale: 1 },
@@ -305,7 +306,7 @@ describe("넓은 창의 차트 칩·버튼은 누르는 영역 44×44 (3-42, 플
   });
 });
 
-describe("칩 띠 끝 흐림 (진단 25번)", () => {
+describe("칩 띠 끝 흐림 (진단 25번 — 넓은 창만)", () => {
   const strips = (r: R) => r.all().filter((n) => n.type === "ScrollView");
   const fades = (r: R) => r.all().filter((n) => n.type === "LinearGradient");
   const scroll = (r: R, i: number, m: { view?: number; content?: number; x?: number }) =>
@@ -316,14 +317,23 @@ describe("칩 띠 끝 흐림 (진단 25번)", () => {
       if (m.x !== undefined) (s.props.onScroll as (e: unknown) => void)({ nativeEvent: { contentOffset: { x: m.x, y: 0 } } });
     });
   const side = (n: HostNode) => (flat(n).right === 0 ? "right" : flat(n).left === 0 ? "left" : "?");
+  /** 펼친 폴드8 가로 + 플래그 켜짐 (넓은 창) */
+  const wideOpen = (props: Partial<React.ComponentProps<typeof CandleChart>> = {}) => {
+    size(933, 704);
+    h.flag = true;
+    forgetWindowClass();
+    return open(props);
+  };
 
   it("상세 화면에는 칩 띠가 둘(조작 줄·이동평균 줄), 전체 화면은 하나(한 줄로 합침)", () => {
     expect(strips(open())).toHaveLength(2);
     expect(strips(open({ compact: true, width: 400, height: 300 }))).toHaveLength(1);
+    expect(strips(wideOpen())).toHaveLength(2);
+    expect(strips(wideOpen({ compact: true, width: 400, height: 300 }))).toHaveLength(1);
   });
 
-  it("칩이 다 보이면 칠하지 않고, 넘길 칩이 있는 쪽만 칠한다", () => {
-    const r = open();
+  it("넓은 창: 칩이 다 보이면 칠하지 않고, 넘길 칩이 있는 쪽만 칠한다", () => {
+    const r = wideOpen();
     expect(fades(r)).toHaveLength(0);
     // 다 보임
     scroll(r, 0, { view: 400, content: 380 });
@@ -342,18 +352,18 @@ describe("칩 띠 끝 흐림 (진단 25번)", () => {
     expect(fades(r)).toHaveLength(2);
   });
 
-  it("바탕색 토큰에서 투명으로 칠하고(라이트·다크), 누르기·화면 읽기를 가로채지 않는다", () => {
+  it("넓은 창: 바탕색 토큰에서 투명으로 칠하고(라이트·다크), 누르기·화면 읽기를 가로채지 않는다", () => {
     for (const isDark of [false, true]) {
       h.dark = isDark;
       const t = isDark ? dark : light;
-      const r = open();
+      const r = wideOpen();
       scroll(r, 0, { view: 300, content: 500, x: 50 });
       const [left, right] = fades(r);
       expect(right!.props.colors).toEqual([clearOf(t.surface), t.surface]);
       expect(left!.props.colors).toEqual([t.surface, clearOf(t.surface)]);
       for (const f of [left!, right!]) {
         expect(flat(f).pointerEvents).toBe("none");
-        // 위에 덧칠만 한다 (자리를 차지하지 않아 칩·차트 배치는 3-42 이전 그대로)
+        // 위에 덧칠만 한다 (자리를 차지하지 않는다)
         expect(flat(f).position).toBe("absolute");
         expect(f.props.importantForAccessibility).toBe("no-hide-descendants");
         expect(f.props.accessibilityElementsHidden).toBe(true);
@@ -362,20 +372,81 @@ describe("칩 띠 끝 흐림 (진단 25번)", () => {
     }
   });
 
-  it("바탕이 다른 화면(전체 화면 t.bg)은 그 색으로", () => {
-    const r = open({ compact: true, width: 400, height: 300, backdrop: light.bg });
+  it("넓은 창: 바탕이 다른 화면(전체 화면 t.bg)은 그 색으로", () => {
+    const r = wideOpen({ compact: true, width: 400, height: 300, backdrop: light.bg });
     scroll(r, 0, { view: 300, content: 500, x: 0 });
     expect(fades(r)[0]!.props.colors).toEqual([clearOf(light.bg), light.bg]);
   });
 
-  it("누르는 영역: 띠 틀을 위아래로 넓히고(음수 여백) 스크롤 영역이 그 틀을 채운다 — 보이는 배치는 그대로", async () => {
+  it("넓은 창 누르는 영역: 띠 틀을 위아래로 넓히고(음수 여백) 스크롤 영역이 그 틀을 채운다 — 보이는 배치는 그대로", async () => {
     const { CHIP_SLOP } = await import("@/components/chart/ChipStrip");
-    const r = open();
+    const r = wideOpen();
     const s = strips(r)[0]!;
     const frame = r.all().find((n) => n.children.includes(s))!;
     expect(flat(frame).marginVertical).toBe(-CHIP_SLOP.top);
     expect(flat({ ...s, props: { style: s.props.contentContainerStyle } })).toMatchObject({ paddingVertical: CHIP_SLOP.top });
     expect(CHIP_SLOP.top * 2 + 32).toBeGreaterThanOrEqual(44);
+  });
+
+  it("휴대폰 화면(360·411·475 창 × 플래그 못 받음·꺼짐·켜짐, 넓은 창 + 플래그 꺼짐)은 3-42 이전과 똑같은 스크롤 띠: 틀·흐림·스크롤 추적 없음", async () => {
+    const { CHIP_SLOP } = await import("@/components/chart/ChipStrip");
+    const cases: [number, number, boolean | undefined][] = [];
+    for (const [w, hh] of [[360, 780], [411, 960], [475, 751]] as const) for (const flag of [undefined, false, true]) cases.push([w, hh, flag]);
+    cases.push([933, 704, false], [933, 704, undefined]);
+    for (const [w, hh, flag] of cases) {
+      size(w, hh);
+      h.flag = flag;
+      h.dark = false;
+      forgetWindowClass();
+      for (const props of [{}, { compact: true, width: 400, height: 300, backdrop: light.bg }]) {
+        const r = open(props);
+        const list = strips(r);
+        expect(list, `${w} ${flag}`).toHaveLength("compact" in props ? 1 : 2);
+        list.forEach((s, i) => {
+          // 3-42 이전: ScrollView 스스로 음수 여백(누르는 영역 44), 조작 줄 띠만 flex 1
+          expect(flat(s), `${w} ${flag} ${i}`).toEqual(i === 0 ? { marginVertical: -CHIP_SLOP.top, flex: 1 } : { marginVertical: -CHIP_SLOP.top });
+          expect(s.props.horizontal).toBe(true);
+          expect(s.props.showsHorizontalScrollIndicator).toBe(false);
+          expect(s.props.contentContainerStyle).toEqual({ flexDirection: "row", gap: space.s, alignItems: "center", paddingVertical: CHIP_SLOP.top });
+          for (const k of ["onScroll", "onLayout", "onContentSizeChange", "scrollEventThrottle"]) expect(s.props[k], `${w} ${flag} ${k}`).toBeUndefined();
+          // 둘레 틀이 없다: ScrollView 의 부모는 조작 줄(가로 줄) 또는 차트 묶음
+          const parent = r.all().find((n) => n.children.includes(s))!;
+          expect(flat(parent).marginVertical, `${w} ${flag} ${i}`).toBeUndefined();
+        });
+        expect(fades(r), `${w} ${flag}`).toHaveLength(0);
+      }
+    }
+  });
+});
+
+describe("이동평균 값 줄: 넓은 창만 항목 단위 줄바꿈 (진단 24번)", () => {
+  const maItems = (r: R) => r.all().find((n) => n.type === "PriceChart")!.props.maItems;
+
+  it("휴대폰 화면(360·411·475 × 플래그 못 받음·꺼짐·켜짐, 넓은 창 + 플래그 꺼짐)은 3-42 이전 한 줄 글자 (maItems 꺼짐)", () => {
+    for (const [w, hh, flag] of [
+      [360, 780, undefined],
+      [360, 780, false],
+      [360, 780, true],
+      [411, 960, true],
+      [475, 751, true],
+      [475, 751, false],
+      [933, 704, false],
+      [933, 704, undefined],
+    ] as const) {
+      size(w, hh);
+      h.flag = flag;
+      forgetWindowClass();
+      expect(maItems(open()), `${w} ${flag}`).toBe(false);
+    }
+  });
+
+  it("넓은 창(플래그 켜짐, 폭 600 이상)은 항목 단위 (maItems 켜짐)", () => {
+    for (const [w, hh] of [[933, 704], [704, 933], [859, 954], [600, 800]] as const) {
+      size(w, hh);
+      h.flag = true;
+      forgetWindowClass();
+      expect(maItems(open()), `${w}`).toBe(true);
+    }
   });
 });
 

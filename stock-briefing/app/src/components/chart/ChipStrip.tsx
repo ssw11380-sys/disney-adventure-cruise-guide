@@ -11,15 +11,34 @@ export const CHIP_SLOP = slopFor(CHIP_H, space.s / 2);
 const FADE_W = space.xl;
 
 /**
- * 옆으로 넘기는 칩 띠 (차트의 기간·봉 수·이동평균 칩). 넘길 내용이 더 있는 쪽 끝을 바탕색으로 흐리게 칠해,
- * 반쯤 잘린 마지막 칩('30')이 깨진 글자가 아니라 넘길 수 있다는 표시로 보이게 한다 (폴드 진단 25번).
- * 넘길 수 없으면(칩이 다 보이면) 칠하지 않는다. backdrop 은 띠 뒤 바탕색(패널 t.surface, 전체 화면 t.bg)
+ * 옆으로 넘기는 칩 띠 (차트의 기간·봉 수·이동평균 칩).
  *
- * 누르는 영역: 가로 스크롤 안의 칩은 스크롤 영역 밖 터치를 받지 못한다(안드로이드) → 띠 전체를 위아래 6씩 넓혀
+ * 누르는 영역: 가로 스크롤 안의 칩은 스크롤 영역 밖 터치를 받지 못한다(안드로이드) → 띠를 위아래 6씩 넓혀
  * 칩 hitSlop(44)이 들어가게 하고, 같은 만큼 음수 여백을 줘서 보이는 배치(칩 줄 32)는 그대로 둔다 (3-22 리뷰).
- * 스크롤 영역은 이 틀을 위아래로 꽉 채운다
+ *
+ * 끝 흐림(fade, 폴드 진단 25번 — 넓은 창만): 넘길 내용이 더 있는 쪽 끝을 바탕색으로 흐리게 칠해, 반쯤 잘린 마지막 칩('30')이
+ * 깨진 글자가 아니라 넘길 수 있다는 표시로 보이게 한다. 넘길 수 없으면(칩이 다 보이면) 칠하지 않는다.
+ * backdrop 은 띠 뒤 바탕색(패널 t.surface, 전체 화면 t.bg). 스크롤 영역은 흐림을 얹는 틀을 위아래로 꽉 채운다.
+ * fade 가 꺼져 있으면(휴대폰·접힌 화면·플래그 꺼짐) 3-42 이전과 똑같은 스크롤 띠 하나만 그린다
+ * (틀·흐림·스크롤 위치 추적 없음 — 사용자 결정 '접은 화면은 지금 그대로')
  */
-export function ChipStrip({ children, backdrop, style }: { children: React.ReactNode; backdrop: string; style?: StyleProp<ViewStyle> }) {
+export function ChipStrip({ children, backdrop, fade, style }: { children: React.ReactNode; backdrop: string; fade: boolean; style?: StyleProp<ViewStyle> }) {
+  if (fade) {
+    return (
+      <FadingStrip backdrop={backdrop} style={style}>
+        {children}
+      </FadingStrip>
+    );
+  }
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.chipScroll, style]} contentContainerStyle={styles.chips}>
+      {children}
+    </ScrollView>
+  );
+}
+
+/** 끝 흐림이 있는 칩 띠 (넓은 창). 따로 둔 컴포넌트라 접고 펼 때마다 잰 값·흐림 상태가 새로 시작한다 */
+function FadingStrip({ children, backdrop, style }: { children: React.ReactNode; backdrop: string; style?: StyleProp<ViewStyle> }) {
   // 폭·내용 폭·스크롤 위치는 이벤트 때만 바뀌므로 ref 에 두고, 가장자리가 바뀔 때만 다시 그린다 (넘기는 동안 매번 그리지 않게)
   const metrics = useRef({ view: 0, content: 0, x: 0 });
   const [edges, setEdges] = useState<FadeEdges>(NO_FADE);

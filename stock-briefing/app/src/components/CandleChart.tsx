@@ -62,13 +62,13 @@ export function CandleChart({
   compact?: boolean;
   /** 거래량이 없는 시계열(환율)이면 false: 거래량 pane·토글·읽기를 뺀다 */
   hasVolume?: boolean;
-  /** 차트 뒤 바탕색 (칩 띠 끝을 이 색으로 흐리게 칠한다). 기본은 패널 색 t.surface, 전체 화면은 t.bg */
+  /** 차트 뒤 바탕색 (넓은 창에서 칩 띠 끝을 이 색으로 흐리게 칠한다). 기본은 패널 색 t.surface, 전체 화면은 t.bg */
   backdrop?: string;
 }) {
   const t = useTheme();
   const { width: winW, height: winH } = useWindowDimensions();
-  // 넓은 창 배치 (3-42, 플래그 foldLayout): 켜져 있고 폭 등급이 중간 이상일 때만 새 크기·누르는 영역을 쓴다.
-  // 꺼져 있거나 좁은 창(휴대폰·접힌 화면)이면 3-42 이전과 똑같다 (사용자 결정 '접은 화면은 지금 그대로')
+  // 넓은 창 배치 (3-42, 플래그 foldLayout): 켜져 있고 폭 등급이 중간 이상일 때만 새 크기·누르는 영역·칩 띠 끝 흐림·
+  // 항목 단위 이동평균 값 줄을 쓴다. 꺼져 있거나 좁은 창(휴대폰·접힌 화면)이면 3-42 이전과 똑같다 (사용자 결정 '접은 화면은 지금 그대로')
   const fold = useFoldLayout();
   const wide = fold.on && isWide(fold);
   // 넓은 창: 차트 묶음이 실제로 받은 폭 (패널 안쪽, onLayout). 재기 전 첫 그림은 창 폭 − 패널 여백으로 어림한다 — 종목·지수 상세는 어림과 잰 값이 같다.
@@ -167,9 +167,9 @@ export function CandleChart({
   return (
     <View style={{ gap: space.s }} onLayout={widthProp === undefined ? (e) => setBox(e.nativeEvent.layout.width) : undefined}>
       {/* 조작 한 줄 (3-21): [일 주 월 | 봉 수 | 1분 5분 30분] 은 가로로 넘기고, 과거·최신·크게 보기는 오른쪽에 고정.
-          자주 쓰는 일·주·월과 봉 수를 앞에 둔다 (분봉은 넘겨서). 넘길 칩이 더 있는 쪽 끝은 흐리게 (ChipStrip) */}
+          자주 쓰는 일·주·월과 봉 수를 앞에 둔다 (분봉은 넘겨서). 넓은 창이면 넘길 칩이 더 있는 쪽 끝은 흐리게 (ChipStrip) */}
       <View style={styles.toolRow}>
-        <ChipStrip backdrop={fadeBg} style={styles.grow}>
+        <ChipStrip backdrop={fadeBg} fade={wide} style={styles.grow}>
           {TOOL_ORDER.slice(0, 3).map((o) => periodChip(o))}
           <Pressable
             onPress={() => pickWindow((windowIdx + 1) % WINDOWS[period].length)}
@@ -229,11 +229,16 @@ export function CandleChart({
           high52w={conv(quote?.high52w)}
           low52w={conv(quote?.low52w)}
           showMaValues={!compact}
+          maItems={wide}
         />
       )}
 
       {/* 오버레이 · 지표 (전체 화면이면 위 조작 줄 안으로 합쳐 차트를 더 크게, 3-21) */}
-      {compact ? null : <ChipStrip backdrop={fadeBg}>{overlayChips}</ChipStrip>}
+      {compact ? null : (
+        <ChipStrip backdrop={fadeBg} fade={wide}>
+          {overlayChips}
+        </ChipStrip>
+      )}
       {toKrw ? <Text style={{ color: t.muted, fontSize: font.tiny }}>원화 환산 · 1달러 {formatNumber(fx, 2)}원 (과거 봉 동일 환율)</Text> : null}
     </View>
   );

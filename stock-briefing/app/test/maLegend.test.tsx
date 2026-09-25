@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { render, type HostNode } from "./miniRender";
 
 /**
- * 차트 아래 이동평균 값 줄 (폴드 진단 24번, 버그 수정 — 플래그와 상관없음).
+ * 차트 아래 이동평균 값 줄 (폴드 진단 24번).
  * 예전에는 한 줄 글자 안에 '■ 120일 77,120원' 을 이어 써서, 글자 130% 에서 '120일'과 '77,120원'이 다른 줄로 떨어지거나
- * 색 네모만 윗줄에 혼자 남았다. 이제 항목마다 [색 네모 + 글자] 묶음을 줄바꿈 줄(flexWrap)에 놓고, 항목 안 공백은 줄바꿈 없는 공백.
+ * 색 네모만 윗줄에 혼자 남았다. 넓은 창(maItems — CandleChart 가 플래그 foldLayout + 폭 600 이상일 때 켠다)은 항목마다
+ * [색 네모 + 글자] 묶음을 줄바꿈 줄(flexWrap)에 놓고, 항목 안 공백은 줄바꿈 없는 공백.
+ * 휴대폰·접힌 화면은 사용자 결정 '접은 화면은 지금 그대로'에 따라 3-42 이전 한 줄 글자 그대로 (1px 도 달라지지 않게)
  */
 vi.mock("react-native", () => ({
   View: "View",
@@ -26,9 +28,9 @@ vi.mock("@/theme", async () => {
 });
 
 const { PriceChart, maColor } = await import("@/components/chart/PriceChart");
-const { estimateTextWidth, maLegendItems } = await import("@/lib/chartLayout");
+const { formatChartValue, maLegendItems } = await import("@/lib/chartLayout");
 const { sma } = await import("@/lib/indicators");
-const { font, light, space } = await import("@/tokens");
+const { font, light } = await import("@/tokens");
 
 const DAY = 86_400_000;
 const CANDLES = Array.from({ length: 130 }, (_, i) => {
@@ -56,12 +58,19 @@ const draw = (props: Partial<React.ComponentProps<typeof PriceChart>> = {}) =>
   );
 const flat = (n: HostNode): Record<string, unknown> => Object.assign({}, ...[n.props.style].flat(Infinity).filter(Boolean));
 const legend = (r: ReturnType<typeof draw>) => r.all().find((n) => n.type === "View" && flat(n).flexWrap === "wrap");
+/** 3-42 이전 한 줄 글자: 두 줄까지인 Text 안에 [색 네모 아이콘 + 글자] Text 들 (읽기 줄 Text 와 구분) */
+const isIcon = (c: HostNode | string) => typeof c !== "string" && c.type === "Ionicons";
+const oldLine = (r: ReturnType<typeof draw>) =>
+  r.all().find((n) => n.type === "Text" && n.props.numberOfLines === 2 && n.children.some((c) => typeof c !== "string" && c.type === "Text" && c.children.some(isIcon)));
+/** 글자 노드 안의 글자만 이어 붙인다 (색 네모 아이콘은 '■') */
+const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.type === "Ionicons" ? "■" : n.children.map(textOf).join(""));
 
-describe("이동평균 값 줄: 항목 단위로만 줄이 바뀐다", () => {
+describe("넓은 창 이동평균 값 줄 (maItems): 항목 단위로만 줄이 바뀐다", () => {
   it("항목마다 [색 네모, 글자] 한 묶음을 줄바꿈 줄에 놓는다", () => {
-    const r = draw();
+    const r = draw({ maItems: true });
     const line = legend(r)!;
     expect(flat(line)).toMatchObject({ flexDirection: "row", flexWrap: "wrap" });
+    expect(oldLine(r)).toBeUndefined();
     const items = line.children as HostNode[];
     expect(items).toHaveLength(MA.length);
     const closes = CANDLES.map((c) => c.close);
@@ -83,87 +92,53 @@ describe("이동평균 값 줄: 항목 단위로만 줄이 바뀐다", () => {
     expect(String((items[3]!.children[1] as HostNode).children[0])).toMatch(/^120일 [\d,]+원$/);
   });
 
+  it("줄 사이 간격은 0", () => {
+    expect(flat(legend(draw({ maItems: true }))!).rowGap).toBe(0);
+  });
+
   it("전체 화면(값 줄 끔)에서는 그리지 않는다", () => {
-    expect(legend(draw({ showMaValues: false }))).toBeUndefined();
+    for (const maItems of [true, false]) {
+      const r = draw({ showMaValues: false, maItems });
+      expect(legend(r)).toBeUndefined();
+      expect(oldLine(r)).toBeUndefined();
+    }
   });
 
   it("이동평균을 하나도 고르지 않으면 줄이 없다", () => {
-    expect(legend(draw({ maPeriods: [] }))).toBeUndefined();
+    for (const maItems of [true, false]) {
+      const r = draw({ maPeriods: [], maItems });
+      expect(legend(r)).toBeUndefined();
+      expect(oldLine(r)).toBeUndefined();
+    }
   });
 });
 
-describe("접은 화면 첫 화면: 이동평균 값 줄의 줄 수·높이는 3-42 이전과 같다 (사용자 결정 '접은 화면은 지금 그대로', 결정 테스트)", () => {
-  /**
-   * 3-42 이전: 한 줄 글자 '■ 5일 84,300원  ■ 20일 …'(numberOfLines 2) 를 공백 단위로 줄바꿈 → 항목 안에서 끊길 수 있었다.
-   * 지금: 항목 [■ + '5일 84,300원'] 단위로 줄바꿈 (항목 사이 6, 네모와 글자 사이 2, 줄 사이 0).
-   * 휴대폰 차트 폭(3-42 이전 식 그대로: 360 → 304 · 411 → 355 · 475 → 419)과 기본 이동평균(5·20·60·120)에서
-   * 두 방식의 줄 수가 같고, 줄 사이 간격이 0 이라 높이도 같다 → 차트 아래 숫자들이 예전 자리 그대로다.
-   * 글자 폭은 lib/chartLayout estimateTextWidth 어림 (두 방식에 같은 어림을 쓴다)
-   */
-  const f = font.tiny;
-  const ICON_W = f;
-  /** 예전: 공백으로 나눈 낱말을 앞에서부터 채운다 (넘치면 다음 줄) */
-  const oldLines = (texts: string[], width: number) => {
-    const space1 = estimateTextWidth(" ", f);
-    const words = texts.flatMap((tx) => [ICON_W, ...tx.split(" ").map((p) => estimateTextWidth(p, f))]);
-    let lines = 1;
-    let x = 0;
-    for (const w of words) {
-      const add = x === 0 ? w : space1 + w;
-      if (x > 0 && x + add > width) {
-        lines++;
-        x = w;
-      } else x += add;
-    }
-    return lines;
-  };
-  /** 지금: 항목(네모 + 2 + 글자)을 앞에서부터 채운다, 항목 사이 6 */
-  const newLines = (texts: string[], width: number) => {
-    let lines = 1;
-    let x = 0;
-    for (const tx of texts) {
-      const w = ICON_W + space.xxs + estimateTextWidth(tx, f);
-      const add = x === 0 ? w : space.s + w;
-      if (x > 0 && x + add > width) {
-        lines++;
-        x = w;
-      } else x += add;
-    }
-    return lines;
-  };
-  const CASES: [string, "KRW" | "USD" | "PT", number[]][] = [
-    ["국내 5자리", "KRW", [84_300, 83_950, 81_200, 76_540]],
-    ["국내 6자리", "KRW", [351_000, 348_500, 330_250, 290_800]],
-    ["국내 7자리", "KRW", [1_034_000, 1_021_000, 998_000, 951_000]],
-    ["미국", "USD", [254.4, 251.12, 240.33, 228.9]],
-    ["지수 4자리", "PT", [2650.12, 2641.5, 2600.33, 2580.1]],
-    ["지수 5자리", "PT", [41000.12, 40811.5, 40200.33, 39850.1]],
-  ];
-
-  it("360·411·475 창의 휴대폰 차트 폭에서 기본 이동평균 줄 수가 예전과 같다 (1줄 또는 2줄)", () => {
-    const got: Record<string, number> = {};
-    for (const [win, width] of [[360, 304], [411, 355], [475, 419]] as const) {
-      for (const [name, unit, vals] of CASES) {
-        const texts = maLegendItems(MA.map((p, i) => ({ period: p, values: [vals[i]!] })), 0, unit, "D").map((it) => it.text.replace(/\u00a0/g, " "));
-        const before = oldLines(texts, width);
-        const now = newLines(texts, width);
-        expect(now, `${win} ${name}`).toBe(before);
-        expect(now, `${win} ${name}`).toBeLessThanOrEqual(2);
-        got[`${win} ${name}`] = now;
-      }
-    }
-    // 폴드8 접힘(475)은 7자리 가격만 두 줄, 나머지는 한 줄 · 360·411 은 모두 두 줄
-    expect(Object.entries(got).filter(([k]) => k.startsWith("475")).map(([k, v]) => `${k}:${v}`)).toEqual([
-      "475 국내 5자리:1",
-      "475 국내 6자리:1",
-      "475 국내 7자리:2",
-      "475 미국:1",
-      "475 지수 4자리:1",
-      "475 지수 5자리:1",
-    ]);
+describe("휴대폰·접힌 화면(maItems 꺼짐 — 기본)은 3-42 이전과 똑같은 한 줄 글자 (사용자 결정 '접은 화면은 지금 그대로')", () => {
+  it("한 Text(두 줄까지) 안에 '■ 5일 값  ■ 20일 값  …' 을 이어 쓴다 — 줄바꿈 줄·항목 묶음 없음", () => {
+    const r = draw();
+    expect(legend(r)).toBeUndefined();
+    const line = oldLine(r)!;
+    expect(flat(line)).toEqual({ fontSize: font.tiny, fontVariant: ["tabular-nums"], color: light.muted });
+    const parts = line.children as HostNode[];
+    expect(parts).toHaveLength(MA.length);
+    const closes = CANDLES.map((c) => c.close);
+    const value = (p: number) => formatChartValue(sma(closes, p)[CANDLES.length - 1]!, "KRW");
+    parts.forEach((part, i) => {
+      expect(part.type).toBe("Text");
+      // 색 네모(아이콘)가 글자 안에 섞여 있고, 공백은 보통 공백 (예전처럼 공백에서 줄이 바뀔 수 있다)
+      const [square] = part.children as HostNode[];
+      expect(square!.type).toBe("Ionicons");
+      expect(square!.props).toMatchObject({ name: "square", size: font.tiny, color: maColor(light, MA[i]!) });
+      expect(textOf(part)).toBe(`■ ${MA[i]}일 ${value(MA[i]!)}  `);
+    });
+    expect(textOf(line)).not.toMatch(/ /);
   });
 
-  it("줄 사이 간격은 0 (두 줄이 되어도 예전 두 줄 글자와 같은 높이)", () => {
-    expect(flat(legend(draw())!).rowGap).toBe(0);
+  it("주봉·월봉·분봉 단위, 값이 없으면 '-' (예전과 같다)", () => {
+    expect(textOf(oldLine(draw({ period: "W" }))!)).toMatch(/^■ 5주 /);
+    expect(textOf(oldLine(draw({ period: "M" }))!)).toMatch(/^■ 5월 /);
+    expect(textOf(oldLine(draw({ period: "5m" }))!)).toMatch(/^■ 5봉 /);
+    // 봉이 모자라면(200일선) 값 없음
+    expect(textOf(oldLine(draw({ maPeriods: [200] }))!)).toBe("■ 200일 -  ");
   });
 });
