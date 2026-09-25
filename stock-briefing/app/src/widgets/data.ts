@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import type { AccountBriefing, LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { fillFromLast, type PnlMode } from "./model";
 import { canReuse, fromPayload, NO_FEATURES, REUSE_OPEN_MS, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
@@ -346,6 +346,8 @@ export async function loadNotifyPrefs(): Promise<(NotifyPrefs & { running: boole
     if (s.digest === undefined) return { ...DEFAULT_PREFS, digest: false, running };
     return {
       digest: s.digest,
+      // 3-31 서버부터. 없으면(예전 서버) 꺼짐 → 계좌 브리핑 목록을 묻지 않는다
+      accountBriefing: s.accountBriefing === true,
       quietEnabled: s.quietEnabled ?? DEFAULT_PREFS.quietEnabled,
       quietStart: s.quietStart ?? DEFAULT_PREFS.quietStart,
       quietEnd: s.quietEnd ?? DEFAULT_PREFS.quietEnd,
@@ -354,6 +356,19 @@ export async function loadNotifyPrefs(): Promise<(NotifyPrefs & { running: boole
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * 최근 계좌 한 장 브리핑 (3-31). 알림 규칙에서 accountBriefing 이 켜져 있을 때만 부른다.
+ * 받지 못하면(예전 서버 404·끊김) 빈 목록 → 세션 알림은 계좌 요약 없이 예전 문구로 (알림을 미루지 않는다)
+ */
+export async function loadAccountBriefings(): Promise<AccountBriefing[]> {
+  const { apiUrl, apiToken } = await readSettings();
+  try {
+    return await getJson<AccountBriefing[]>(`${apiUrl}/api/account-briefings?limit=4`, apiToken);
+  } catch {
+    return [];
   }
 }
 

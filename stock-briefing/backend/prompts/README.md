@@ -23,11 +23,15 @@
 | `company_overview.md` | 종목 상세 > 회사 소개 | `{{stock_name}}` `{{stock_code}}` `{{date}}` `{{data_json}}` `{{missing_list}}` `{{notes_list}}` |
 | `value_analysis.md` | 종목 상세 > 가치투자 분석 | `{{stock_name}}` `{{stock_code}}` `{{date}}` `{{data_json}}` `{{missing_list}}` `{{notes_list}}` |
 | `technical_analysis.md` | 종목 상세 > 기술적 분석 | `{{stock_name}}` `{{stock_code}}` `{{date}}` `{{data_json}}` `{{missing_list}}` `{{notes_list}}` `{{market_state}}` |
+| `account_briefing.md` | 계좌 한 장 브리핑의 설명 (3-31) | `{{date}}` `{{session_label}}` `{{facts}}` |
 
 - `{{data_json}}`: 수집된 데이터 전체(JSON). 없는 항목은 `null` 이고 `{{missing_list}}` 에 받으려다 실패한 항목 이름이 나열됩니다.
 - `{{notes_list}}`: 원래 제공되지 않는 데이터(미국 종목 수급, DART 키 없음, SEC 에 없는 ETF 등). 실패가 아닙니다.
 - `{{market_state}}`: 그 시점의 장 상태 한 줄 (한국 정규장·NXT·휴장, 미국 정규장·프리·애프터·주간거래).
 - `{{avg_price}}` / `{{quantity}}`: 보유 정보가 없으면 "미입력" 으로 들어갑니다.
+- `{{facts}}` (계좌 브리핑): 코드로 계산한 사실 목록(총 평가금액·당일 손익·기여 상위와 그 외·지수·원/달러와 환율 효과·오늘 일정·최근 공시). `backend/src/services/accountNumbers.ts` 의 `factsText` 가 만듭니다.
+  - 모델 설명에 이 목록에 없는 숫자(10 이하 정수는 순서로 보고 허용)나 매수·매도·추천·전망 같은 말이 있으면 설명을 버리고 숫자로 만든 기본 설명을 씁니다.
+  - 그래서 숫자는 목록의 표기 그대로 옮기라는 규칙을 지우면 기본 설명이 자주 쓰입니다.
 
 ## 주의
 

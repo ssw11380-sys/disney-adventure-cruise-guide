@@ -53,6 +53,7 @@ describe("고지 문구", () => {
   it("브리핑 목록·상세·종목 상세 화면이 고지를 붙인다", () => {
     expect(read("app/src/app/(tabs)/briefings.tsx")).toMatch(/<Screen[^>]*\bdisclaimer\b/);
     expect(read("app/src/app/briefings/[id].tsx")).toMatch(/<Screen[^>]*\bdisclaimer\b/);
+    expect(read("app/src/app/briefings/account/[id].tsx")).toMatch(/<Screen[^>]*\bdisclaimer\b/); // 계좌 한 장 브리핑 (3-31)
     expect(read("app/src/app/stocks/[code]/index.tsx")).toMatch(/<Screen[\s\S]{0,200}?\bdisclaimer\b/);
   });
 });

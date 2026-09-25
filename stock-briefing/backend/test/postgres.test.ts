@@ -51,7 +51,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("종목 마스터 → 검색 → 등록 → 브리핑 → 조회 전체 흐름", async () => {
@@ -73,6 +73,13 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect(run.results[0].status).toBe("ok");
     const again = (await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", force: true } })).json();
     expect(again.results[0].briefingId).toBe(run.results[0].briefingId); // upsert (unique index)
+
+    // 계좌 한 장 브리핑 (3-31): 실행마다 날짜·세션당 1건, force 면 같은 행을 덮어쓴다
+    const accounts = (await app.inject({ method: "GET", url: "/api/account-briefings?limit=5" })).json();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]).toMatchObject({ date: "2026-09-22", session: "morning", status: "ok", headline: { dayPnl: 3000, holdings: 1 } });
+    const account = (await app.inject({ method: "GET", url: `/api/account-briefings/${accounts[0].id}` })).json();
+    expect(account.data.contributions[0]).toMatchObject({ code: "000660", amount: 3000 });
 
     const detail = (await app.inject({ method: "GET", url: `/api/briefings/${run.results[0].briefingId}` })).json();
     expect(detail.name).toBe("SK하이닉스");

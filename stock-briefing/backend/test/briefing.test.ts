@@ -58,6 +58,8 @@ describe("briefing pipeline", () => {
       "briefing_summary:000660",
       "briefing_detail:005930",
       "briefing_summary:005930",
+      // 종목 브리핑이 끝난 뒤 계좌 한 장 브리핑 1건 (3-31, 보유 종목이 있을 때)
+      "account_briefing",
     ]);
     // 상세 프롬프트에 데이터와 보유 정보가 들어간다
     const detailReq = gen.requests[0]!;
@@ -89,12 +91,13 @@ describe("briefing pipeline", () => {
   });
 
   it("같은 날 같은 세션은 force 없이는 건너뛰고, force 면 덮어쓴다", async () => {
+    // 종목 2 × (상세·요약) + 계좌 브리핑 1 (3-31)
     await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning" } });
-    expect(gen.requests).toHaveLength(4);
+    expect(gen.requests).toHaveLength(5);
     await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning" } });
-    expect(gen.requests).toHaveLength(4);
+    expect(gen.requests).toHaveLength(5); // 계좌 브리핑도 이미 있으면 건너뜀
     await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", codes: ["000660"], force: true } });
-    expect(gen.requests).toHaveLength(6);
+    expect(gen.requests).toHaveLength(7); // 일부 종목 실행은 계좌 브리핑을 만들지 않음
     const list = (await app.inject({ method: "GET", url: "/api/briefings?code=000660&date=2026-09-22" })).json();
     expect(list).toHaveLength(1); // 덮어쓰기 (unique index)
 

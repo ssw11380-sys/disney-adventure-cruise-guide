@@ -3,10 +3,10 @@ import * as BackgroundTask from "expo-background-task";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
 import { Platform } from "react-native";
-import type { LatestBriefing } from "@/api/types";
+import type { AccountBriefing, LatestBriefing } from "@/api/types";
 import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefingDigest";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
-import { loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload } from "@/widgets/data";
+import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload } from "@/widgets/data";
 import { shouldSkipFetch } from "@/widgets/payload";
 import { marketWidgetPlaced, refreshWidgets } from "@/widgets/refresh";
 
@@ -64,7 +64,7 @@ export async function hasUnseen(ids: number[]): Promise<boolean> {
  */
 export async function notifyNewBriefings(
   latest: LatestBriefing[],
-  opts: { first?: boolean; prefs?: NotifyPrefs; rates?: Map<string, number | null>; now?: Date } = {},
+  opts: { first?: boolean; prefs?: NotifyPrefs; rates?: Map<string, number | null>; now?: Date; accounts?: AccountBriefing[] } = {},
 ): Promise<number> {
   const seen = await seenIds();
   const isFirst = opts.first ?? !(await initialized(seen));
@@ -79,7 +79,8 @@ export async function notifyNewBriefings(
     if (now.getTime() - Date.parse(b.createdAt) > 24 * 3_600_000) continue;
     fresh.push({ briefingId: b.id, code: b.code, name: item.name, summary: b.summary, changeRate: opts.rates?.get(b.code) ?? null, session: b.session, date: b.date });
   }
-  const messages = fresh.length ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now) : [];
+  // 3-31: 같은 세션의 계좌 브리핑이 있으면 그 세션 알림 앞머리를 계좌 요약으로 (여전히 세션당 1건)
+  const messages = fresh.length ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now, opts.accounts ?? []) : [];
   for (const m of messages) {
     await Notifications.scheduleNotificationAsync({
       content: { title: m.title, body: m.body, data: m.data, sound: "default", ...(Platform.OS === "android" ? { channelId: ANDROID_CHANNEL } : {}) },
@@ -115,7 +116,9 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
         if (prefs && !(prefs.digest && prefs.running)) {
           const latest = data.latestIds ? await loadLatestBriefings() : data.briefings;
           const rates = new Map(data.stocks.map((s) => [s.code, s.quote?.changeRate ?? null] as const));
-          await notifyNewBriefings(latest, { prefs, rates });
+          // 계좌 한 장 브리핑(3-31): 서버 플래그가 켜져 있을 때만 묻는다 (끄면 요청 0, 알림은 예전 그대로)
+          const accounts = prefs.digest && prefs.accountBriefing ? await loadAccountBriefings() : [];
+          await notifyNewBriefings(latest, { prefs, rates, accounts });
         }
       }
     }

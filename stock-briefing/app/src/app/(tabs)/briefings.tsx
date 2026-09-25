@@ -1,14 +1,16 @@
 import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
-import { useFeature, useHealth, useLatestBriefings, useMarketStatus, useRegisteredStocks, useStockMutations } from "@/api/hooks";
+import { useAccountBriefings, useFeature, useHealth, useLatestBriefings, useMarketStatus, useRegisteredStocks, useStockMutations } from "@/api/hooks";
 import type { BriefingSession } from "@/api/types";
+import { AccountBriefingCard } from "@/components/AccountBriefingCard";
 import { BriefingCard } from "@/components/BriefingCard";
 import { StaleBanner, usePull } from "@/components/Freshness";
 import { CardsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, Segmented } from "@/components/ui";
 import { orderForTab, runConfirm } from "@/lib/briefingRun";
+import { accountCardItem } from "@/lib/accountBriefing";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { font, slopFor, space, useTheme } from "@/theme";
@@ -18,7 +20,7 @@ type Mode = "line" | "summary" | "detail";
 type Order = "movers" | "registered";
 
 /**
- * 브리핑 탭: 서버 상태 배너 → (3-19) 변동 큰 3종목 → 종목별 최신 브리핑(한 줄/요약/상세) → 수동 실행.
+ * 브리핑 탭: (3-31) 내 계좌 브리핑 → 서버 상태 배너 → (3-19) 변동 큰 3종목 → 종목별 최신 브리핑(한 줄/요약/상세) → 수동 실행.
  * briefingTabMovers 플래그가 켜져 있으면 기본 정렬은 '변동 큰 순'(오늘 등락률 절댓값), 아니면 등록순(예전)
  */
 export default function BriefingsScreen() {
@@ -27,13 +29,17 @@ export default function BriefingsScreen() {
   const latest = useLatestBriefings();
   const { data, error, refetch } = latest;
   const stocks = useRegisteredStocks();
-  // 당겨서 새로고침: 브리핑과 등락률을 함께
-  const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch()]));
   const { run } = useStockMutations();
   const health = useHealth();
   const market = useMarketStatus();
   const moversOn = useFeature("briefingTabMovers", false);
   const confirmOn = useFeature("briefingManualRun", false);
+  // 3-31 계좌 한 장 브리핑: 서버가 켤 때만 부르고 보인다. 예전 서버(404)·없음이면 카드가 없다
+  const accountOn = useFeature("accountBriefing", false);
+  const accounts = useAccountBriefings(accountOn);
+  const account = accountCardItem(accountOn, accounts.data);
+  // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑이 켜져 있으면 그것도)을 함께
+  const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : [])]));
   const [order, setOrder] = useState<Order>("movers");
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);
 
@@ -80,6 +86,7 @@ export default function BriefingsScreen() {
 
   return (
     <Screen disclaimer refreshing={pulling} onRefresh={onPull} top={<StaleBanner query={latest} />}>
+      {account ? <AccountBriefingCard briefing={account} /> : null}
       {llmOff || (last && last.failed > 0) ? (
         <Card style={{ borderLeftWidth: 3, borderLeftColor: t.danger }}>
           <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>

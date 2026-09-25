@@ -37,7 +37,8 @@ export const US_HOLIDAYS = new Set([
   "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 ]);
 
-const isUsTradingDate = (date: string) => {
+/** 뉴욕 현지 날짜 YYYY-MM-DD 가 미국 정규장이 열리는 날인지 (주말·US_HOLIDAYS 제외) */
+export const isUsTradingDate = (date: string) => {
   const wd = new Date(`${date}T12:00:00Z`).getUTCDay();
   return wd >= 1 && wd <= 5 && !US_HOLIDAYS.has(date);
 };

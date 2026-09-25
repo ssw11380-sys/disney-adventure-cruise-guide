@@ -1,4 +1,6 @@
 import type { AppErrorSummary, Evaluation,
+  AccountBriefing,
+  AccountBriefingWithData,
   DiscoverMarket,
   DiscoverRank,
   RankCategory,
@@ -129,6 +131,9 @@ export function createApi(baseUrl: string, token = "") {
     getBriefing: (id: number) => get<BriefingWithData>(`/api/briefings/${id}`),
     runBriefings: (session: BriefingSession, codes?: string[], force = false) =>
       send<RunResult>("POST", "/api/briefings/run", { session, codes, force }, 600_000),
+    /** 계좌 한 장 브리핑 (3-31). 예전 서버는 404 → 부르는 쪽이 "없음"으로 본다 */
+    accountBriefings: (limit = 5) => get<AccountBriefing[]>(`/api/account-briefings?limit=${limit}`, 15_000),
+    getAccountBriefing: (id: number) => get<AccountBriefingWithData>(`/api/account-briefings/${id}`, 15_000),
 
     registerDevice: (body: { token: string; platform: "android" | "ios" | "unknown"; deviceName?: string | null }) => send<Device>("POST", "/api/devices", body),
     unregisterDevice: (token: string) => send<void>("DELETE", `/api/devices/${encodeURIComponent(token)}`),

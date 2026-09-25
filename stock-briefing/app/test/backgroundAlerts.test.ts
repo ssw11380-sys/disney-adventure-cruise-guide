@@ -155,6 +155,61 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     });
   });
 
+  describe("3-31 계좌 한 장 브리핑", () => {
+    const account = {
+      id: 77, date: "2026-09-24", session: "afternoon", status: "ok", summary: "", detail: "", model: "m", template: false, createdAt: "2026-09-24T16:10:00+09:00",
+      headline: { totalValue: 123_456_789, dayPnl: -2_868_108, dayRate: -1.23, holdings: 17, top: [{ code: "RGTX", name: "RGTX", amount: -1_234_567, changeRate: -8.1 }] },
+    };
+    /** serve 와 같고 계좌 브리핑 목록도 준다 ("404" 면 예전 서버). 받은 주소를 돌려준다 */
+    const serveWith = (list: typeof latest, p: Record<string, unknown>, accounts: unknown[] | "404") => {
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", async (url: string) => {
+        calls.push(url);
+        if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+        if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(p), { status: 200 });
+        if (url.includes("/api/account-briefings")) return accounts === "404" ? new Response(JSON.stringify({ error: "NOT_FOUND" }), { status: 404 }) : new Response(JSON.stringify(accounts), { status: 200 });
+        return new Response(JSON.stringify(list), { status: 200 });
+      });
+      return calls;
+    };
+    const title = (i: number) => (scheduled[i] as { content: { title: string } }).content.title;
+
+    it("서버 플래그가 켜져 있으면 세션 알림 1건의 앞머리가 계좌 요약, 누르면 계좌 브리핑", async () => {
+      await enableLocalBriefingAlerts();
+      serveWith([...latest, ...newOnes(5)], { ...prefs, accountBriefing: true }, [account]);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 계좌 브리핑 · 당일 -2,868,108원 (-1.23%)");
+      const content = (scheduled[0] as { content: { body: string; data: Record<string, unknown> } }).content;
+      expect(content.body).toBe("기여 1위 RGTX -1,234,567원\n종목 브리핑 5종목");
+      expect(content.data).toMatchObject({ digest: true, accountBriefingId: 77, count: 5 });
+    });
+
+    it("플래그가 꺼져 있으면 계좌 브리핑 목록을 묻지 않고 예전 문구", async () => {
+      await enableLocalBriefingAlerts();
+      const calls = serveWith([...latest, ...newOnes(5)], prefs, [account]);
+      await runBriefingCheck();
+      expect(calls.filter((u) => u.includes("/api/account-briefings"))).toHaveLength(0);
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 브리핑 5종목");
+    });
+
+    it("계좌 브리핑 목록을 못 받으면(예전 서버 404) 계좌 요약 없이 그대로 1건", async () => {
+      await enableLocalBriefingAlerts();
+      serveWith([...latest, ...newOnes(5)], { ...prefs, accountBriefing: true }, "404");
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 브리핑 5종목");
+    });
+
+    it("다른 세션의 계좌 브리핑은 쓰지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      serveWith([...latest, ...newOnes(2)], { ...prefs, accountBriefing: true }, [{ ...account, session: "morning" }]);
+      await runBriefingCheck();
+      expect(title(0)).toBe("오후 브리핑 2종목");
+    });
+  });
+
   describe("브리핑이 0건일 때 알림 켜기 (N3)", () => {
     it("빈 목록에서 켠 뒤 첫 신규 브리핑은 1건 알리고, 다음 확인에서 다시 알리지 않는다", async () => {
       serve([], prefs);
