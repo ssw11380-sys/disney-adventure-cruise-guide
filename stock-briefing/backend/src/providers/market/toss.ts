@@ -83,6 +83,11 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** 등락: 1달러 미만 미국 종목은 $0.0001 단위로 거래되므로 소수 4자리까지 */
+function round4(n: number): number {
+  return Math.round(n * 1e4) / 1e4;
+}
+
 export function tossMarket(code: string | undefined): Market {
   return (code ? TOSS_MARKET[code] : undefined) ?? "UNKNOWN";
 }
@@ -206,8 +211,9 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
     const price = num(p["close"]);
     const base = num(p["base"]);
     if (price === null) throw new ProviderError(this.name, `${code} 현재가 없음`);
-    const change = base !== null ? round2(price - base) : 0;
-    const changeRate = base ? round2((change / base) * 100) : 0;
+    // 등락률은 반올림 전 차이로 (센트로 반올림한 등락으로 내면 1달러 미만 미국 종목이 0.00% 가 된다), 등락은 소수 4자리까지
+    const change = base !== null ? round4(price - base) : 0;
+    const changeRate = base ? round2(((price - base) / base) * 100) : 0;
     const currency = String(p["currency"] ?? (kr ? "KRW" : "USD")) === "USD" ? "USD" : "KRW";
     const latest = chart.at(-1) ?? null; // 오늘(또는 마지막 거래일) 봉
     const shares = num(info?.["sharesOutstanding"]);

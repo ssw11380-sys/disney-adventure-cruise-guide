@@ -43,6 +43,29 @@ describe("applyTick (실시간 체결 덮어쓰기)", () => {
     const us = quote("AAPL", 200, { currency: "USD", prevClose: 198, priceKrw: 272_000 });
     expect(applyTick(us, tick("AAPL", 210))!.priceKrw).toBe(285_600);
   });
+
+  // 버그 점검 BH-29 · BH-35 · BH-54: 등락을 센트로 반올림한 뒤 등락률을 내면 1달러 미만 종목이 틀린다
+  it("1달러 미만 미국 종목: 등락률은 반올림 전 차이로, 등락은 소수 4자리까지", () => {
+    const penny = quote("DCX", 0.4321, { currency: "USD", prevClose: 0.4321, fxRate: 1390 });
+    const up = applyTick(penny, tick("DCX", 0.4381))!;
+    expect(up.change).toBe(0.006);
+    expect(up.changeRate).toBe(1.39); // 예전: 0.01 → 2.31%
+    const flat = applyTick(penny, tick("DCX", 0.434))!;
+    expect(flat.change).toBe(0.0019);
+    expect(flat.changeRate).toBe(0.44); // 예전: 0 → 0.00% (보합 색)
+    const down = applyTick(penny, tick("DCX", 0.4299))!;
+    expect(down.changeRate).toBe(-0.51);
+    const tiny = applyTick(quote("GCDT", 0.05, { currency: "USD", prevClose: 0.05 }), tick("GCDT", 0.0537))!;
+    expect(tiny.change).toBe(0.0037);
+    expect(tiny.changeRate).toBe(7.4);
+    // 당일 손익(등락 × 수량)도 1만 주면 +$60 (예전 +$100)
+    expect(up.change * 10_000).toBeCloseTo(60, 6);
+  });
+
+  it("1달러 이상 종목은 예전과 같은 값", () => {
+    const us = quote("AAPL", 201.37, { currency: "USD", prevClose: 201.37 });
+    expect(applyTick(us, tick("AAPL", 203.12))).toMatchObject({ change: 1.75, changeRate: 0.87 });
+  });
 });
 
 describe("streamUrl", () => {

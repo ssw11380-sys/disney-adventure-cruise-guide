@@ -9,6 +9,7 @@ import { Screen } from "@/components/Screen";
 import { LineHead, LineMark, StockLine } from "@/components/StockLine";
 import { Button, Card, Muted } from "@/components/ui";
 import { formatPct, formatQuote, isUsMarket } from "@/lib/format";
+import { holdingInput, NO_AVG_NOTE } from "@/lib/holdingForm";
 import { useRecentSearches, type RecentStock } from "@/lib/recentSearch";
 import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
 
@@ -49,19 +50,12 @@ export default function AddStockScreen() {
     setAvgPrice("");
   };
 
-  const submit = () => {
-    if (!selected) return;
-    const qty = quantity.trim() ? Number(quantity.replace(/,/g, "")) : null;
-    const avg = avgPrice.trim() ? Number(avgPrice.replace(/,/g, "")) : null;
-    if ((qty !== null && !(qty > 0)) || (avg !== null && !(avg > 0))) {
-      Alert.alert("입력 확인", "수량과 평균 단가는 0보다 큰 숫자여야 합니다.");
-      return;
-    }
+  const send = (stock: ListedStock, qty: number | null, avg: number | null) => {
     register.mutate(
-      { code: selected.code, quantity: qty, avgPrice: avg },
+      { code: stock.code, quantity: qty, avgPrice: avg },
       {
         onSuccess: () => {
-          if (Platform.OS === "android") ToastAndroid.show(`${selected.name} 등록됨`, ToastAndroid.SHORT);
+          if (Platform.OS === "android") ToastAndroid.show(`${stock.name} 등록됨`, ToastAndroid.SHORT);
           router.back();
         },
         onError: (e) => {
@@ -69,13 +63,31 @@ export default function AddStockScreen() {
           if (e instanceof ApiRequestError && e.status === 409 && e.code === "CONFLICT") {
             refreshRegistered();
             select(null);
-            Alert.alert("이미 등록된 종목", `${selected.name}은(는) 이미 등록되어 있습니다. 수량·평단은 종목 상세에서 바꿀 수 있습니다.`);
+            Alert.alert("이미 등록된 종목", `${stock.name}은(는) 이미 등록되어 있습니다. 수량·평단은 종목 상세에서 바꿀 수 있습니다.`);
             return;
           }
           Alert.alert("등록 실패", e instanceof Error ? e.message : String(e));
         },
       },
     );
+  };
+
+  const submit = () => {
+    if (!selected) return;
+    const input = holdingInput(quantity, avgPrice);
+    if ("error" in input) {
+      Alert.alert("입력 확인", input.error);
+      return;
+    }
+    // 수량만 있고 평단이 없으면 평가손익을 못 내 합계에서 빠진다 → 그대로 등록할지 먼저 묻는다 (BH-26)
+    if (input.noAvg) {
+      Alert.alert("평균 단가 없음", NO_AVG_NOTE, [
+        { text: "취소", style: "cancel" },
+        { text: "그대로 등록", onPress: () => send(selected, input.quantity, input.avgPrice) },
+      ]);
+      return;
+    }
+    send(selected, input.quantity, input.avgPrice);
   };
 
   return (
@@ -117,7 +129,7 @@ export default function AddStockScreen() {
               <Ionicons name="close" size={22} color={t.muted} />
             </Pressable>
           </View>
-          <Muted>보유 정보는 선택 사항입니다. 비우면 관심 종목으로 등록됩니다.</Muted>
+          <Muted>보유 정보는 선택 사항입니다. 비우면 관심 종목으로 등록되고, 평균 단가까지 넣어야 평가손익이 계산됩니다.</Muted>
           <View style={{ flexDirection: "row", gap: space.sm }}>
             <TextInput
               value={quantity}

@@ -3,6 +3,7 @@ import type { RegisteredWithQuote } from "@/api/types";
 import { stockRowLabel } from "@/lib/a11y";
 import { formatArrowDisplay, formatMoney, formatPct, formatPrice, formatQuoteDisplay, isUsMarket } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
+import { isHolding } from "@/lib/portfolio";
 import { changeColor, useTheme } from "@/theme";
 import { LINE_COL, LineMark, LineValue, StockLine, type LinePrice } from "./StockLine";
 
@@ -39,35 +40,36 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
   const t = useTheme();
   const q = stock.quote;
   const live = liveProp ?? q?.live === true;
-  const cur = q?.currency;
+  const us = isUsMarket(stock.market);
+  // 첫 시세를 아직 못 받았으면 시장으로 통화를 정한다 (미국 종목 평단이 원화로 보이지 않게)
+  const cur = q ? q.currency : us ? "USD" : "KRW";
   const fx = q?.fxRate ?? (q?.priceKrw && q.price ? q.priceKrw / q.price : null);
   const ev = evalView(stock.evaluation, { afterCost, toKrw: showKrw, currency: cur, fx });
-  const us = isUsMarket(stock.market);
-  const held = !!ev;
+  // 보유: 수량이 있으면 평단·시세가 없어 평가가 없어도 보유 줄 (BH-26 · BH-30). 평가가 없으면 손익 칸에 "합계 제외"
+  const held = isHolding(stock);
   const c = changeColor(t, q?.change);
   const pc = changeColor(t, ev?.profit);
   // 원화 보기의 미국 종목 평단은 손익과 같은 기준(매수 당시 환율의 원화 매입금액 ÷ 수량)으로
-  const avgText =
-    showKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity
-      ? formatPrice(ev.costBasis / stock.quantity, "KRW")
-      : formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw);
+  const krwAvg = showKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity ? formatPrice(ev.costBasis / stock.quantity, "KRW") : null;
+  const avgText = stock.avgPrice === null ? "평단 없음" : (krwAvg ?? formatQuoteDisplay(stock.avgPrice, cur, fx, showKrw));
   // 화면 읽기: 줄 전체를 한 문장으로 (3-22). 금액은 단위를 붙여 읽는다
   const label = stockRowLabel({
     name: stock.name,
     us,
-    holding: ev
+    holding: held
       ? {
           quantity: formatQty(stock.quantity),
-          avg: showKrw && cur === "USD" && ev.currency === "KRW" && stock.quantity ? formatPrice(ev.costBasis / stock.quantity, "KRW") : formatMoney(stock.avgPrice, cur, fx, showKrw),
-          profit: formatPrice(ev.profit, ev.currency),
-          profitSign: Math.sign(ev.profit),
-          profitRate: ev.profitRate,
+          avg: stock.avgPrice === null ? "없음" : (krwAvg ?? formatMoney(stock.avgPrice, cur, fx, showKrw)),
+          profit: ev ? formatPrice(ev.profit, ev.currency) : "-",
+          profitSign: ev ? Math.sign(ev.profit) : 0,
+          profitRate: ev ? ev.profitRate : null,
         }
       : null,
     price: q ? { text: formatMoney(q.price, cur, fx, showKrw), changeRate: q.changeRate, live } : null,
     missing: stock.quoteError ? "시세 없음" : undefined,
     move: q ? { text: formatMoney(q.change, cur, fx, showKrw), sign: Math.sign(q.change) } : null,
     volume: formatVol(q?.volume),
+    note: held && !ev ? EXCLUDED : undefined,
   });
   const price: LinePrice | null = q
     ? { value: q.price, text: formatQuoteDisplay(q.price, cur, fx, showKrw), color: c, rate: formatPct(q.changeRate), rateColor: c, live }
@@ -80,8 +82,10 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
       price={price}
       priceMissing={stock.quoteError ? "시세 없음" : "-"}
       right={
-        !q ? null : held ? (
-          <LineValue main={formatPrice(ev!.profit, ev!.currency, { sign: true }).replace("원", "")} mainColor={pc} sub={formatPct(ev!.profitRate)} subColor={pc} />
+        held && !ev ? (
+          <LineValue main="-" mainColor={t.muted} sub={EXCLUDED} />
+        ) : !q ? null : ev ? (
+          <LineValue main={formatPrice(ev.profit, ev.currency, { sign: true }).replace("원", "")} mainColor={pc} sub={formatPct(ev.profitRate)} subColor={pc} />
         ) : (
           <LineValue main={formatArrowDisplay(q.change, cur, fx, showKrw)} mainColor={c} sub={formatVol(q.volume)} />
         )
@@ -94,6 +98,9 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
     />
   );
 }
+
+/** 평가가 없는 보유 종목(평단·시세 없음)의 손익 칸: 계좌 합계에서 빠졌음을 알린다 */
+const EXCLUDED = "합계 제외";
 
 /** 화면 읽기의 길게 누르기 안내를 "수정·삭제"로 (TalkBack 이 "두 번 탭하고 길게 눌러 수정·삭제"라고 읽는다) */
 const LONG_PRESS_ACTION = [{ name: "longpress", label: "수정·삭제" }];

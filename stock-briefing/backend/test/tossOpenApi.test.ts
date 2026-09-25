@@ -6,7 +6,8 @@ import { aggregateCandles, TossOpenApiClient, TossOpenApiProvider, toCandle } fr
 import { TossRealtime, type SocketLike } from "../src/providers/market/tossRealtime.js";
 import { StockService } from "../src/services/stockService.js";
 import { TossSyncService } from "../src/services/tossSyncService.js";
-import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider } from "./helpers.js";
+import type { Quote } from "../src/domain/types.js";
+import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider, makeQuote } from "./helpers.js";
 import { client, fakeFetch, NOW, type Call } from "./tossFake.js";
 
 
@@ -530,5 +531,55 @@ describe("TossOpenApiProvider 일괄 현재가 (3-9)", () => {
     t += 24 * 3_600_000;
     const b = await p.getQuote("035420");
     expect(b.prevClose).toBe(a.prevClose);
+  });
+});
+
+/**
+ * 버그 점검 BH-29 · BH-35 · BH-54: 등락을 센트로 반올림한 뒤 그 값으로 등락률을 내면 1달러 미만 미국 종목이 틀린다
+ * ($0.0500 → $0.0537 이 등락 0 · 0.00% 로). 등락률은 반올림 전 차이로, 등락은 소수 4자리까지
+ */
+describe("1달러 미만 미국 종목 등락", () => {
+  /** 토스 Open API 가짜 서버에 DCX (전일 $0.0500, 현재 $0.0537) 를 더한다 */
+  const pennyFetch = (): typeof fetch => {
+    const base = fakeFetch();
+    return (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      if (url.includes("/api/v1/prices") && url.includes("DCX")) return ok({ result: [{ symbol: "DCX", timestamp: "2026-09-22T13:59:00.000+09:00", lastPrice: "0.0537", currency: "USD" }] });
+      if (url.includes("/api/v1/candles") && url.includes("symbol=DCX"))
+        return ok({
+          result: {
+            candles: [
+              { timestamp: "2026-09-21T00:00:00-04:00", openPrice: "0.049", highPrice: "0.051", lowPrice: "0.048", closePrice: "0.05", volume: "1000", currency: "USD" },
+              { timestamp: "2026-09-18T00:00:00-04:00", openPrice: "0.047", highPrice: "0.049", lowPrice: "0.046", closePrice: "0.048", volume: "1000", currency: "USD" },
+            ],
+            nextBefore: null,
+          },
+        });
+      if (url.includes("/api/v1/stocks?") && url.includes("DCX")) return ok({ result: [{ symbol: "DCX", name: "DCX", market: "NASDAQ", securityType: "FOREIGN_STOCK", status: "ACTIVE", currency: "USD", sharesOutstanding: "1000000" }] });
+      return base(input, init);
+    }) as typeof fetch;
+  };
+
+  it("토스 Open API 시세: $0.0500 → $0.0537 은 +$0.0037 · +7.40%", async () => {
+    const p = new TossOpenApiProvider(new TossOpenApiClient({ clientId: "c", clientSecret: "s", fetchFn: pennyFetch(), now: NOW, maxRetryWaitMs: 0 }), { now: NOW });
+    const q = await p.getQuote("DCX");
+    expect(q).toMatchObject({ currency: "USD", price: 0.0537, prevClose: 0.05, change: 0.0037, changeRate: 7.4 });
+    // 1달러 이상은 예전과 같다
+    expect(await p.getQuote("TSLA")).toMatchObject({ change: 2.2, changeRate: 0.59 });
+  });
+
+  it("서버 실시간 체결 반영: $0.4321 → $0.4381 은 +$0.006 · +1.39%, $0.4340 은 +0.44%", async () => {
+    const db = await createMigratedDb(":memory:");
+    const penny: Quote = { ...makeQuote("DCX", "x"), currency: "USD", price: 0.4321, change: 0, changeRate: 0, open: 0.43, high: 0.44, low: 0.43, prevClose: 0.4321, asOf: "2026-09-22T10:00:00+09:00", fxRate: 1390, priceKrw: 601 };
+    const quotes = new FakeQuoteProvider("x");
+    quotes.getQuote = async () => penny;
+    const ticks = new Map([["DCX", { code: "DCX", price: 0.4381, volume: 10, timestamp: "2026-09-22T14:30:00+09:00", receivedAt: 0 }]]);
+    const live = { get: (c: string) => ticks.get(c) ?? null, setCodes: () => {}, status: () => ({ enabled: true, connected: true, subscribed: [], lastMessageAt: null, lastError: null }) };
+    const service = new StockService({ db, quotes, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, now: NOW });
+    expect(await service.getQuote("DCX")).toMatchObject({ price: 0.4381, change: 0.006, changeRate: 1.39, live: true });
+    ticks.set("DCX", { code: "DCX", price: 0.434, volume: 1, timestamp: "2026-09-22T14:31:00+09:00", receivedAt: 0 });
+    expect(await service.getQuote("DCX")).toMatchObject({ price: 0.434, change: 0.0019, changeRate: 0.44 });
+    await db.destroy();
   });
 });

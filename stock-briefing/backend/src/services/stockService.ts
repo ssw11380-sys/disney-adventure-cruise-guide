@@ -1037,8 +1037,10 @@ export class StockService {
   private applyTick(quote: Quote, tick: LiveTick): Quote {
     if (tick.price === quote.price) return quote;
     const prevClose = quote.prevClose ?? (quote.change ? quote.price - quote.change : null);
-    const change = prevClose !== null ? Math.round((tick.price - prevClose) * 100) / 100 : quote.change;
-    const changeRate = prevClose ? Math.round((change / prevClose) * 10000) / 100 : quote.changeRate;
+    // 등락률은 반올림 전 차이로, 등락은 소수 4자리까지 (센트로 반올림한 등락으로 내면 1달러 미만 미국 종목이 틀린다 — 앱 liveTick.applyTick 과 같은 식)
+    const diff = prevClose !== null ? tick.price - prevClose : null;
+    const change = diff !== null ? Math.round(diff * 1e4) / 1e4 : quote.change;
+    const changeRate = prevClose && diff !== null ? Math.round((diff / prevClose) * 10000) / 100 : quote.changeRate;
     // 원화 환산은 화면에 함께 보이는 환율(fxRate)로 — 옛 원화가/달러가 비율로 곱하면 반올림 때문에 1원씩 어긋난다
     const priceKrw = quote.fxRate ? Math.round(tick.price * quote.fxRate) : quote.priceKrw && quote.price ? Math.round((quote.priceKrw / quote.price) * tick.price) : (quote.priceKrw ?? null);
     return {

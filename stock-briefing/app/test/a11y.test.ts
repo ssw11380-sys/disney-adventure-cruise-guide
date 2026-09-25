@@ -224,6 +224,21 @@ describe("화면 읽기 문장", () => {
     expect(stockRowLabel({ name: "SOXL", us: true, price: null, missing: "시세 없음" })).toBe("SOXL, 미국, 관심, 시세 없음");
   });
 
+  it("평단·시세가 없는 보유 종목은 보유로 읽고 합계 제외를 알린다 (BH-26 · BH-30)", () => {
+    expect(
+      stockRowLabel({
+        name: "SK하이닉스",
+        us: false,
+        holding: { quantity: "10", avg: "없음", profit: "-", profitSign: 0, profitRate: null },
+        price: { text: "300,000원", changeRate: 1.2 },
+        note: "합계 제외",
+      }),
+    ).toBe("SK하이닉스, 국내, 10주 보유, 평단 없음, 현재가 300,000원, 1.20% 상승, 평가손익 없음, 합계 제외");
+    expect(stockRowLabel({ name: "애플", us: true, holding: { quantity: "10", avg: "200.00달러", profit: "-", profitSign: 0, profitRate: null }, price: null, missing: "시세 없음", note: "합계 제외" })).toBe(
+      "애플, 미국, 10주 보유, 평단 200.00달러, 시세 없음, 평가손익 없음, 합계 제외",
+    );
+  });
+
   it("잔고 줄·계좌 요약·발견 줄이 이 문장 도구를 쓴다", () => {
     expect(read("components/StockRow.tsx")).toMatch(/stockRowLabel\(/);
     expect(read("app/(tabs)/index.tsx")).toMatch(/<View accessible accessibilityLabel=\{label\}/);

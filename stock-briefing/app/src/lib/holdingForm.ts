@@ -1,5 +1,5 @@
 /**
- * 보유 수정 화면 규칙 (순수 함수 → 단위 테스트).
+ * 보유 수정·종목 등록 화면 규칙 (순수 함수 → 단위 테스트).
  *  - 평단 칸은 미국 소수 2자리, 국내 정수로 보여 준다 (서버 값이 232555.333333 이어도)
  *  - 저장할 때는 사용자가 바꾼 칸만 보낸다 → 메모만 고치면 수량·평단은 그대로 (보여 주려고 반올림한 값으로 덮어쓰지 않음)
  */
@@ -17,6 +17,22 @@ export function parseNum(s: string): number | null {
   return t ? Number(t) : null;
 }
 
+const BAD_NUMBER = "수량과 평균 단가는 0보다 큰 숫자여야 합니다.";
+
+/**
+ * 종목 등록 양식의 수량·평단 (둘 다 선택). 잘못된 값이면 error.
+ * noAvg: 수량만 있고 평단이 없음 → 평가손익을 낼 수 없어 계좌 합계에서 빠지므로, 등록 전에 알리고 고르게 한다 (BH-26)
+ */
+export function holdingInput(quantity: string, avgPrice: string): { quantity: number | null; avgPrice: number | null; noAvg: boolean } | { error: string } {
+  const qty = parseNum(quantity);
+  const avg = parseNum(avgPrice);
+  if ((qty !== null && !(qty > 0)) || (avg !== null && !(avg > 0))) return { error: BAD_NUMBER };
+  return { quantity: qty, avgPrice: avg, noAvg: qty !== null && avg === null };
+}
+
+/** 평단 없이 수량만 넣었을 때의 안내 (등록 확인 창) */
+export const NO_AVG_NOTE = "평균 단가가 없으면 평가손익을 계산할 수 없어 총 평가금액·손익 합계에서 빠집니다. 보유 종목으로는 표시되며, 평균 단가는 나중에 종목 상세의 보유 정보 수정에서 넣을 수 있습니다.";
+
 /** 바뀐 칸만 담은 수정 내용. 잘못된 값이면 error */
 export function holdingPatch(
   initial: { quantity: string; avgPrice: string },
@@ -25,7 +41,7 @@ export function holdingPatch(
   const out: { quantity?: number | null; avgPrice?: number | null } = {};
   if (now.quantity.trim() !== initial.quantity.trim()) out.quantity = parseNum(now.quantity);
   if (now.avgPrice.trim() !== initial.avgPrice.trim()) out.avgPrice = parseNum(now.avgPrice);
-  for (const v of [out.quantity, out.avgPrice]) if (v !== undefined && v !== null && !(v > 0)) return { error: "수량과 평균 단가는 0보다 큰 숫자여야 합니다." };
+  for (const v of [out.quantity, out.avgPrice]) if (v !== undefined && v !== null && !(v > 0)) return { error: BAD_NUMBER };
   return out;
 }
 
