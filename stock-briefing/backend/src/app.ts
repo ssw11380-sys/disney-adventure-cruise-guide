@@ -164,6 +164,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     marketOpen: async (codes) => anySessionOpen(codes, await opts.providers.calendar.status(), now()),
     // 웹소켓이 이번 세션 체결을 주는 종목만 폴링에서 뺀다 (초록 점과 같은 기준 — 구독만으로 빼면 점은 켜졌는데 가격은 30초마다만 바뀐다)
     wsServed: (codes) => stockService.wsServed(codes),
+    // 미국 공식 API 시세의 애프터마켓·주말엔 토스 웹 가격이 정규장 종가라 보내지 않는다 (앱이 시간외 가격을 덮어쓰지 않게)
+    webOff: (codes) => stockService.webOff(codes),
     log,
   });
   app.addHook("onClose", async () => priceStream.stop());

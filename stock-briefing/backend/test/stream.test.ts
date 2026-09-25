@@ -295,6 +295,33 @@ describe("웹소켓이 받는 종목 판단 (3-17 리뷰)", () => {
     expect((await run(["VRT", "APH"])).asked).toEqual([]);
     expect((await run(new Error("달력 실패"))).asked).toEqual(["VRT", "APH"]); // 모르면 폴링한다 (더 부르는 쪽으로)
   });
+
+  it("토스 웹 가격이 시세와 기준이 다른 종목(webOff — 미국 공식 API 시세의 애프터마켓·주말)은 폴링하지 않는다 (BH-20)", async () => {
+    // 애프터마켓의 토스 웹 close 는 정규장 종가다. 보내면 앱이 공식 API 시간외 가격을 정규장 종가로 덮어쓴다
+    const run = async (off: string[] | Error) => {
+      const asked: string[][] = [];
+      const quick: QuickPriceSource = { name: "toss", getMany: async (c) => (asked.push(c), new Map(c.map((x) => [x, { code: x, price: 376.31, volume: null, timestamp: new Date().toISOString(), receivedAt: Date.now() }]))) };
+      const stream = new PriceStream({
+        quickPrices: quick,
+        codes: async () => ["TSLA", "005930"],
+        pollMs: 60_000,
+        webOff: async () => {
+          if (off instanceof Error) throw off;
+          return new Set(off);
+        },
+      });
+      const socket = new FakeSocket();
+      stream.attach(socket);
+      await new Promise((r) => setTimeout(r, 300));
+      stream.stop();
+      return { asked: asked[0] ?? [], ticks: socket.messages("tick").map((m) => m["code"]) };
+    };
+    const after = await run(["TSLA"]);
+    expect(after.asked).toEqual(["005930"]);
+    expect(after.ticks).toEqual(["005930"]);
+    expect((await run([])).asked).toEqual(["TSLA", "005930"]);
+    expect((await run(new Error("달력 실패"))).asked).toEqual(["TSLA", "005930"]); // 모르면 예전처럼 폴링
+  });
 });
 
 describe("GET /api/stream (websocket)", () => {
