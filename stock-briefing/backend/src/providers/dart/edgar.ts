@@ -59,13 +59,29 @@ const REVENUE = [
   ifrs("RevenueFromContractsWithCustomers"),
   ifrs("RevenueFromSaleOfGoods"), // 제약사(NVS) 등 제품 매출만 보고하는 IFRS 회사
 ];
-/** 은행·금융사의 RevenueFromContract… 는 이자수익이 빠진 수수료 매출이라 매출로 쓰지 않는다 (HBAN: 순이익보다 작음) */
-const FEE_ONLY = new Set(["RevenueFromContractWithCustomerExcludingAssessedTax", "RevenueFromContractWithCustomerIncludingAssessedTax"]);
+/** 은행·금융사의 RevenueFromContract…(IFRS: RevenueFromContractsWithCustomers) 는 이자수익이 빠진 수수료 매출이라 매출로 쓰지 않는다
+ *  (HBAN: 순이익보다 작음, BCS: 순이자이익보다 작음, BCH: 일부 부문 매출) */
+const FEE_ONLY = new Set([
+  "RevenueFromContractWithCustomerExcludingAssessedTax",
+  "RevenueFromContractWithCustomerIncludingAssessedTax",
+  "RevenueFromContractsWithCustomers",
+]);
 /** 은행 순영업수익 = 순이자이익 + 비이자이익 (JPM·BAC·WFC·SOFI 등이 Revenues·RevenuesNetOfInterestExpense 로 보고하는 값과 같은 기준) */
 const BANK_NII = gaap("InterestIncomeExpenseNet");
 const BANK_NONII = gaap("NoninterestIncome");
+/** 순이자이익 (IFRS: InterestRevenueExpense). 은행 매출 합계는 비이자이익이 음수인 해가 아니면 이보다 작을 수 없다 */
+const NET_INTEREST = [BANK_NII, ifrs("InterestRevenueExpense")];
 /** 은행 판별에 쓰는 이자 쪽 항목: 순이자이익, 이자수익 (일반 회사도 예금 이자를 이 태그로 적는 일이 있어 크기를 같이 본다) */
-const BANK_INTEREST = [BANK_NII, gaap("InterestAndDividendIncomeOperating")];
+const BANK_INTEREST = [
+  ...NET_INTEREST,
+  gaap("InterestAndDividendIncomeOperating"),
+  ifrs("RevenueFromInterest"),
+  ifrs("InterestRevenueCalculatedUsingEffectiveInterestMethod"),
+];
+/** 은행 판별에 쓰는 이자 외 수익: 비이자이익 (IFRS: 수수료·위탁 수익) */
+const BANK_OTHER_INCOME = [BANK_NONII, ifrs("FeeAndCommissionIncome"), ifrs("FeeAndCommissionIncomeExpense")];
+/** 은행 매출 항목이 해마다 순영업수익의 이 비율에도 못 미치면 부분 합계로 본다 (HDB 의 충당금 뺀 순수익은 84~94% 라 합계로 둔다) */
+const PARTIAL_RATIO = 0.8;
 /** 영업이익. 세전이익은 영업이익이 아니므로 대신 쓰지 않는다 (없으면 비워 두고 사유를 남김) */
 const OPERATING = [gaap("OperatingIncomeLoss"), ifrs("ProfitLossFromOperatingActivities")];
 const NET = [gaap("NetIncomeLoss"), ifrs("ProfitLossAttributableToOwnersOfParent"), gaap("ProfitLoss"), ifrs("ProfitLoss")];
@@ -490,9 +506,11 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
   //   은행으로 보는 해: 이자수익(순이자이익)이 같은 해 수수료 매출보다 크고, 비이자이익을 보고하거나 수수료 매출이 순이익보다도 작은 해
   //   (수수료 매출이 없는 해는 비이자이익이 있어야). 최근 5년 중 이런 해가 수수료 매출이 매출인 해보다 많을 때만 은행.
   //   예금 이자를 이자수익 태그로 적는 일반 회사(ORLY·DGX·CELH)나 이자수익이 매출보다 큰 적자 바이오 회사는 은행으로 보지 않는다
+  //   IFRS 회사도 같은 기준 (이자수익·순이자이익 ifrs-full 태그, 비이자이익 대신 수수료·위탁 수익: BCS·BCH)
   const feeSeries = REVENUE.filter((c) => FEE_ONLY.has(c.name)).map((c) => series(c, true));
   const interestSeries = BANK_INTEREST.map((c) => series(c, true));
   const nonInterest = series(BANK_NONII, true);
+  const otherIncome = BANK_OTHER_INCOME.map((c) => series(c, true));
   const netSeries = NET.map((c) => series(c, true));
   const largest = (list: Series[], y: number): number | undefined => {
     const vals = list.flatMap((s) => (s.has(y) ? [s.get(y)!.val] : []));
@@ -504,9 +522,8 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
     const fee = largest(feeSeries, y);
     const interest = largest(interestSeries, y);
     const profit = largest(netSeries, y);
-    const bankLike =
-      interest !== undefined &&
-      (fee === undefined ? nonInterest.has(y) : interest > fee && (nonInterest.has(y) || (profit !== undefined && fee < profit)));
+    const other = otherIncome.some((s) => s.has(y));
+    const bankLike = interest !== undefined && (fee === undefined ? other : interest > fee && (other || (profit !== undefined && fee < profit)));
     if (bankLike) bankYears++;
     else if (fee !== undefined) feeYears++;
   }
@@ -520,14 +537,64 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
     }
   }
   // 매출이 0 이하인 값은 같은 해 다른 매출 항목이 양수면 버린다 (FLS: 'Revenues' 를 해마다 0 으로 보고, 실제 매출은 RevenueFromContract…)
-  const rawRevenue = [...(bank ? REVENUE.filter((c) => !FEE_ONLY.has(c.name)) : REVENUE).map((c) => series(c, true)), bankRevenue];
+  const revenueConcepts = bank ? REVENUE.filter((c) => !FEE_ONLY.has(c.name)) : REVENUE;
+  const rawRevenue = [...revenueConcepts.map((c) => series(c, true)), bankRevenue];
   const revenueList = rawRevenue.map((s) => {
     const kept: Series = new Map();
     for (const [y, p] of s) if (p.val > 0 || !rawRevenue.some((o) => (o.get(y)?.val ?? 0) > 0)) kept.set(y, p);
     return kept;
   });
   const bankComputed = revenueList.length - 1;
-  const revenue = choose(revenueList, true);
+  const bankReported = revenueConcepts.findIndex((c) => c.name === "RevenuesNetOfInterestExpense");
+  let revenue = choose(revenueList, true);
+  // 은행: 고른 매출이 합계인지 순영업수익(RevenuesNetOfInterestExpense, 없으면 순이자이익 + 비이자이익)과 순이자이익으로 검산한다
+  //   ZION 의 'Revenues' 는 수수료 + 기타 비이자이익(순이자이익의 1/4)이라 매출로 쓰면 순이익이 매출보다 커진다
+  const partialYears = new Set<number>(); // 부분 합계라 버린 해 (다른 값으로 못 채우면 사유를 남긴다)
+  if (bank) {
+    const niiList = NET_INTEREST.map((c) => series(c, true));
+    const isNet = (idx: number) => idx === bankReported || idx === bankComputed;
+    const netRevenue = (y: number): { idx: number; val: number } | undefined => {
+      for (const idx of [bankReported, bankComputed]) {
+        const p = revenueList[idx]!.get(y);
+        if (p) return { idx, val: p.val };
+      }
+      return undefined;
+    };
+    // 부분 합계: 순영업수익이 있으면 그 80% 미만, 없으면 순이자이익보다도 작은 값. 검산할 값이 없으면 undefined
+    //   0 이하인 값은 여기서 보지 않는다 (음수 매출은 아래에서 따로 비우고 사유를 남긴다: LYG 2022)
+    const partial = (y: number, v: number): boolean | undefined => {
+      if (v <= 0) return undefined;
+      const net = netRevenue(y);
+      if (net) return v < net.val * PARTIAL_RATIO;
+      const nii = largest(niiList, y);
+      return nii !== undefined && nii > 0 ? v < nii : undefined;
+    };
+    // 회사 단위: 고른 항목이 최근 5년 중 검산한 해의 과반에서 부분 합계면 이 회사에는 그 항목을 쓰지 않고 다시 고른다 (연도마다 섞지 않게)
+    for (;;) {
+      const votes = new Map<number, number>(); // 후보 번호 → 부분 합계인 해 수 − 합계인 해 수
+      for (const [y, v] of revenue.values) {
+        const idx = revenue.from.get(y)!;
+        if (isNet(idx) || y <= latest - CHOICE_WINDOW) continue;
+        const p = partial(y, v);
+        if (p !== undefined) votes.set(idx, (votes.get(idx) ?? 0) + (p ? 1 : -1));
+      }
+      const drop = [...votes].filter(([, n]) => n > 0).map(([idx]) => idx);
+      if (!drop.length) break;
+      for (const [y, idx] of revenue.from) if (drop.includes(idx)) partialYears.add(y);
+      for (const idx of drop) revenueList[idx] = new Map();
+      revenue = choose(revenueList, true);
+    }
+    // 해마다: 그래도 순이자이익보다 작은 값은 합계가 아니다 → 순영업수익으로 바꾸고, 없으면 비운다
+    //   순영업수익과 같은 값이면 비이자이익이 음수인 해라 합계가 맞다 (TFC 2024: 증권 매각 손실)
+    for (const [y, v] of [...revenue.values]) {
+      const nii = largest(niiList, y);
+      const net = netRevenue(y);
+      if (isNet(revenue.from.get(y)!) || v <= 0 || nii === undefined || nii <= 0 || v >= nii || (net && sameValue(v, net.val))) continue;
+      partialYears.add(y);
+      if (net) revenue.values.set(y, net.val), revenue.from.set(y, net.idx);
+      else revenue.values.delete(y), revenue.from.delete(y);
+    }
+  }
   const operating = pick(OPERATING, true);
   const net = pick(NET, true);
   const assets = pick(ASSETS, false);
@@ -542,18 +609,30 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
     const notes: string[] = [];
     const reported = revenue.values.get(year) ?? null;
     const reportedOp = operating.values.get(year) ?? null;
+    const netIncome = net.values.get(year) ?? null;
     // 회사가 태그 뜻을 다르게 쓴 원자료: 음수 매출(LYG 2022), 매출과 똑같은 영업이익(ING) → 비우고 사유를 남긴다 (영업이익률 계산에 쓰이지 않게)
-    const revenueVal = reported !== null && reported < 0 ? null : reported;
+    const negative = reported !== null && reported < 0;
     const operatingVal = reportedOp !== null && reported !== null && reported !== 0 && reportedOp === reported ? null : reportedOp;
+    // 합계일 수 없는 매출: 영업이익이 매출보다 크거나, 영업이익 없이 순이익이 매출보다 크면 부분 매출(부문·수수료)로 보고 그해만 비운다
+    //   영업이익이 매출 안에 있으면 순이익이 더 커도 매출은 그대로 둔다 (EBAY 2021: 사업 매각 이익)
+    const overBy = ((): "영업이익" | "순이익" | null => {
+      if (reported === null || reported <= 0) return null;
+      if (operatingVal !== null) return operatingVal > reported ? "영업이익" : null;
+      return netIncome !== null && netIncome > reported ? "순이익" : null;
+    })();
+    const revenueVal = negative || overBy ? null : reported;
     if (currency !== "USD") notes.push(`금액 통화: ${currency} (주가 통화와 다를 수 있음, 달러로 환산하지 않은 값)`);
     if (year === years[0] && before.length) notes.push(`금액 통화: 이 해보다 앞선 연도는 다른 통화(${before.join("·")})로 보고해 넣지 않음`);
     // 비우거나 계산한 값은 사유를 남긴다 (AI 분석이 "0" 이나 "감소"로 읽지 않게)
-    if (reported !== null && revenueVal === null) notes.push("매출: 회사가 보고한 값이 음수라 매출로 쓰지 않고 비워 둠 (해마다 기준이 다른 항목일 수 있음)");
+    if (negative) notes.push("매출: 회사가 보고한 값이 음수라 매출로 쓰지 않고 비워 둠 (해마다 기준이 다른 항목일 수 있음)");
+    else if (overBy) notes.push(`매출: ${overBy}이 매출보다 커서 매출 항목이 합계가 아닐 수 있어 비움 (영업이익률도 계산하지 않음)`);
     else if (revenueVal === null)
       notes.push(
-        bank && !bankRevenue.has(year)
-          ? "매출: 은행·금융사라 이자수익이 빠진 수수료 매출은 매출로 쓰지 않았고, 순이자이익 + 비이자이익도 확인되지 않아 비워 둠"
-          : "매출: 매출 합계 항목에서 이 해 값을 찾지 못해 비워 둠 (기준이 다른 값으로 채우지 않음)",
+        partialYears.has(year)
+          ? "매출: 은행·금융사인데 매출 항목이 순이자이익·순영업수익에 못 미치는 부분 합계라 매출로 쓰지 않고 비워 둠"
+          : bank && !bankRevenue.has(year) && feeSeries.some((s) => s.has(year))
+            ? "매출: 은행·금융사라 이자수익이 빠진 수수료 매출은 매출로 쓰지 않았고, 순이자이익 + 비이자이익도 확인되지 않아 비워 둠"
+            : "매출: 매출 합계 항목에서 이 해 값을 찾지 못해 비워 둠 (기준이 다른 값으로 채우지 않음)",
       );
     else if (revenue.from.get(year) === bankComputed) notes.push("매출: 은행·금융사라 순이자이익 + 비이자이익(순영업수익)으로 계산");
     if (reportedOp !== null && operatingVal === null) notes.push("영업이익: 회사가 매출과 같은 값으로 보고해 영업이익으로 보지 않고 비워 둠");
@@ -574,7 +653,7 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
       basis: "CFS" as const,
       revenue: revenueVal,
       operatingIncome: operatingVal,
-      netIncome: net.values.get(year) ?? null,
+      netIncome,
       totalAssets,
       totalLiabilities,
       totalEquity: equity.values.get(year) ?? null,

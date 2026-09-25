@@ -358,6 +358,175 @@ describe("EDGAR 재무: 은행 판별·이상한 원자료 (BH-03 검증 지적)
   });
 });
 
+describe("EDGAR 재무: 합계가 아닌 매출은 보여 주지 않는다 (BH-03·BH-24 마지막 지적)", () => {
+  const years = [2021, 2022, 2023, 2024, 2025];
+  const revenueNote = (r: { notes?: string[] }) => r.notes?.find((n) => n.startsWith("매출:"));
+
+  it("ZION: 은행의 'Revenues' 가 순이자이익보다도 작은 부분 합계면 순이자이익 + 비이자이익으로 계산한다", async () => {
+    const nii = [2_208, 2_520, 2_438, 2_430, 2_627];
+    const nonII = [703, 632, 677, 700, 758];
+    const ZION = facts({
+      Revenues: years.map((y, i) => cy(y, [575, 614, 616, 639, 662][i]! * M)), // 수수료 매출 + 기타 비이자이익
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y, i) => cy(y, [449, 495, 503, 513, 529][i]! * M)),
+      InterestIncomeExpenseNet: years.map((y, i) => cy(y, nii[i]! * M)),
+      NoninterestIncome: years.map((y, i) => cy(y, nonII[i]! * M)),
+      InterestAndDividendIncomeOperating: years.map((y) => cy(y, 4_000 * M)),
+      NetIncomeLoss: years.map((y, i) => cy(y, [1_129, 907, 680, 784, 899][i]! * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("MTB")]: ZION }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("MTB", 5);
+    expect(fin.map((r) => r.revenue)).toEqual(years.map((_, i) => (nii[i]! + nonII[i]!) * M));
+    expect(fin.every((r) => r.notes?.includes("매출: 은행·금융사라 순이자이익 + 비이자이익(순영업수익)으로 계산"))).toBe(true);
+
+    // 회사가 순영업수익(RevenuesNetOfInterestExpense)을 따로 보고하면 그 값을 쓴다
+    const WITH_NET = facts({
+      Revenues: years.map((y) => cy(y, 600 * M)),
+      RevenuesNetOfInterestExpense: years.map((y) => cy(y, 3_100 * M)),
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 500 * M)),
+      InterestIncomeExpenseNet: years.map((y) => cy(y, 2_400 * M)),
+      NoninterestIncome: years.map((y) => cy(y, 690 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 800 * M)),
+    });
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("MTB")]: WITH_NET }).fetchFn, NOW);
+    const withNet = await e2.getAnnualFinancials("MTB", 5);
+    expect(withNet.map((r) => r.revenue)).toEqual(years.map(() => 3_100 * M));
+  });
+
+  it("은행 매출이 순이자이익보다 작은데 순영업수익을 계산할 수 없으면 비우고 사유를 남긴다", async () => {
+    const SUB = facts({
+      Revenues: years.map((y) => cy(y, 600 * M)),
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 400 * M)),
+      InterestIncomeExpenseNet: years.map((y) => cy(y, 2_400 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 500 * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("HBAN")]: SUB }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("HBAN", 5);
+    expect(fin.map((r) => r.revenue)).toEqual([null, null, null, null, null]);
+    expect(fin.every((r) => revenueNote(r)?.startsWith("매출: 은행·금융사") && revenueNote(r)?.includes("부분 합계"))).toBe(true);
+
+    // 한 해만 순이자이익보다 작으면(회사 단위로는 합계) 그해만 비운다
+    const ONE = facts({
+      Revenues: years.map((y) => cy(y, (y === 2023 ? 1_500 : 3_000) * M)),
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 400 * M)),
+      InterestIncomeExpenseNet: years.map((y) => cy(y, 2_400 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 500 * M)),
+    });
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("HBAN")]: ONE }).fetchFn, NOW);
+    const one = await e2.getAnnualFinancials("HBAN", 5);
+    expect(one.map((r) => r.revenue)).toEqual([3_000 * M, 3_000 * M, null, 3_000 * M, 3_000 * M]);
+    expect(revenueNote(one[2]!)).toMatch(/부분 합계/);
+  });
+
+  it("합계가 맞는 은행 매출은 그대로: 비이자이익이 음수라 순이자이익보다 작은 해(TFC 2024), 충당금 뒤 순수익(HDB)", async () => {
+    const nii = [13_006, 14_313, 14_524, 14_091, 14_423];
+    const nonII = [9_290, 5_660, 5_498, -813, 5_896];
+    const TFC = facts({
+      Revenues: years.map((y, i) => cy(y, (nii[i]! + nonII[i]!) * M)),
+      RevenuesNetOfInterestExpense: years.map((y, i) => cy(y, (nii[i]! + nonII[i]!) * M)),
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 4_000 * M)),
+      InterestIncomeExpenseNet: years.map((y, i) => cy(y, nii[i]! * M)),
+      NoninterestIncome: years.map((y, i) => cy(y, nonII[i]! * M)),
+      NetIncomeLoss: years.map((y, i) => cy(y, [6_437, 6_267, -1_047, 4_840, 5_307][i]! * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("MTB")]: TFC }).fetchFn, NOW);
+    const tfc = await e.getAnnualFinancials("MTB", 5);
+    expect(tfc.map((r) => r.revenue)).toEqual(years.map((_, i) => (nii[i]! + nonII[i]!) * M));
+    expect(tfc.some((r) => revenueNote(r))).toBe(false);
+
+    // HDB: 'Revenues' 가 충당금을 뺀 순수익이라 순이자이익 + 비이자이익의 85~94% (부분 합계가 아님)
+    const hdbRev = [782_429, 892_434, 1_131_161, 1_853_871, 2_190_128];
+    const hdbNii = [683_687, 748_840, 913_989, 1_248_003, 1_404_486];
+    const hdbNon = [252_976, 270_574, 291_387, 738_931, 967_023];
+    const HDB = facts({
+      Revenues: years.map((y, i) => cy(y, hdbRev[i]! * M)),
+      InterestIncomeExpenseNet: years.map((y, i) => cy(y, hdbNii[i]! * M)),
+      NoninterestIncome: years.map((y, i) => cy(y, hdbNon[i]! * M)),
+      InterestAndDividendIncomeOperating: years.map((y, i) => cy(y, hdbNii[i]! * 2 * M)),
+      NetIncomeLoss: years.map((y, i) => cy(y, [325_977, 386_000, 495_447, 622_657, 673_508][i]! * M)),
+    });
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("HBAN")]: HDB }).fetchFn, NOW);
+    expect((await e2.getAnnualFinancials("HBAN", 5)).map((r) => r.revenue)).toEqual(hdbRev.map((v) => v * M));
+  });
+
+  it("IFRS 은행(BCS·BCH): 수수료 매출(RevenueFromContractsWithCustomers)은 매출로 쓰지 않고, 합계 항목이 없으면 비운다", async () => {
+    const f20 = { form: "20-F" };
+    const ifrsBank = (fee: number[]) =>
+      facts(
+        {
+          RevenueFromContractsWithCustomers: years.map((y, i) => cy(y, fee[i]! * M, f20)),
+          InterestRevenueExpense: years.map((y, i) => cy(y, [8_073, 10_572, 12_709, 12_936, 14_501][i]! * M, f20)),
+          InterestRevenueCalculatedUsingEffectiveInterestMethod: years.map((y, i) => cy(y, [11_240, 19_096, 35_075, 38_326, 36_189][i]! * M, f20)),
+          FeeAndCommissionIncome: years.map((y, i) => cy(y, [9_880, 9_637, 10_121, 10_847, 11_282][i]! * M, f20)),
+          ProfitLossFromOperatingActivities: [cy(2021, 22_593 * M, f20)], // 은행 '순영업수익'을 영업이익 태그로
+          ProfitLossAttributableToOwnersOfParent: years.map((y, i) => cy(y, [7_009, 5_928, 5_259, 6_307, 7_172][i]! * M, f20)),
+        },
+        { tax: "ifrs-full", unit: "GBP" },
+      );
+    for (const fee of [
+      [9_759, 9_494, 9_982, 10_710, 11_110], // BCS: 순이자이익보다 작은 수수료 매출
+      [103, 92, 95, 99, 101], // BCH: 일부 부문 매출
+    ]) {
+      const e = new EdgarProvider(edgarFetch({ [cikOf("NVS")]: ifrsBank(fee) }).fetchFn, NOW);
+      const fin = await e.getAnnualFinancials("NVS", 5);
+      expect(fin.map((r) => r.revenue)).toEqual([null, null, null, null, null]);
+      expect(fin.every((r) => revenueNote(r)?.startsWith("매출: 은행·금융사"))).toBe(true);
+    }
+
+    // 합계(Revenue)를 보고하는 IFRS 은행(DB·LYG)은 그 값을 쓴다
+    const DB = facts(
+      {
+        Revenue: years.map((y, i) => cy(y, [25_538, 27_063, 31_155, 31_504, 31_434][i]! * M, f20)),
+        RevenueFromContractsWithCustomers: years.map((y) => cy(y, 10_000 * M, f20)),
+        InterestRevenueExpense: years.map((y) => cy(y, 15_000 * M, f20)),
+        FeeAndCommissionIncome: years.map((y) => cy(y, 14_000 * M, f20)),
+        ProfitLossAttributableToOwnersOfParent: years.map((y) => cy(y, 5_000 * M, f20)),
+      },
+      { tax: "ifrs-full", unit: "EUR" },
+    );
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("NVS")]: DB }).fetchFn, NOW);
+    const db = await e2.getAnnualFinancials("NVS", 5);
+    expect(db.map((r) => r.revenue)).toEqual([25_538, 27_063, 31_155, 31_504, 31_434].map((v) => v * M));
+    expect(db.some((r) => revenueNote(r))).toBe(false);
+  });
+
+  it("어느 회사든 영업이익이 매출보다 크거나, 영업이익 없이 순이익이 매출보다 크면 그해 매출을 비워 영업이익률을 만들지 않는다", async () => {
+    const OP = facts({
+      Revenues: [cy(2023, 1_000 * M), cy(2024, 100 * M), cy(2025, 1_200 * M)], // 2024 는 한 부문만
+      OperatingIncomeLoss: [cy(2023, 300 * M), cy(2024, 300 * M), cy(2025, 350 * M)],
+      NetIncomeLoss: [cy(2023, 200 * M), cy(2024, 210 * M), cy(2025, 230 * M)],
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: OP }).fetchFn, NOW);
+    const op = await e.getAnnualFinancials("IONQ", 5);
+    expect(op.map((r) => [r.year, r.revenue, r.operatingIncome])).toEqual([
+      [2023, 1_000 * M, 300 * M],
+      [2024, null, 300 * M],
+      [2025, 1_200 * M, 350 * M],
+    ]);
+    expect(revenueNote(op[1]!)).toMatch(/매출 항목이 합계가 아닐 수 있어 비움/);
+    expect(revenueNote(op[0]!)).toBeUndefined();
+
+    const NET = facts({
+      Revenues: [cy(2023, 500 * M), cy(2024, 50 * M), cy(2025, 600 * M)],
+      NetIncomeLoss: [cy(2023, 100 * M), cy(2024, 120 * M), cy(2025, 110 * M)],
+    });
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: NET }).fetchFn, NOW);
+    const net = await e2.getAnnualFinancials("IONQ", 5);
+    expect(net.map((r) => r.revenue)).toEqual([500 * M, null, 600 * M]);
+    expect(revenueNote(net[1]!)).toMatch(/매출 항목이 합계가 아닐 수 있어 비움/);
+
+    // EBAY 2021: 사업 매각 이익으로 순이익이 매출보다 커도, 영업이익이 매출 안에 있으면 매출은 그대로
+    const EBAY = facts({
+      Revenues: [cy(2020, 8_894 * M), cy(2021, 10_420 * M), cy(2022, 9_795 * M)],
+      OperatingIncomeLoss: [cy(2020, 2_636 * M), cy(2021, 2_923 * M), cy(2022, 2_350 * M)],
+      NetIncomeLoss: [cy(2020, 5_667 * M), cy(2021, 13_608 * M), cy(2022, -1_269 * M)],
+    });
+    const e3 = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: EBAY }).fetchFn, NOW);
+    const ebay = await e3.getAnnualFinancials("IONQ", 5);
+    expect(ebay.map((r) => r.revenue)).toEqual([8_894 * M, 10_420 * M, 9_795 * M]);
+    expect(ebay.some((r) => revenueNote(r))).toBe(false);
+  });
+});
+
 describe("EDGAR 부채총계 (BH-11)", () => {
   it("AMZN: 부채총계 태그가 없으면 유동부채가 아니라 자산총계 − 자본총계로 계산한다", async () => {
     const AMZN = facts({
