@@ -132,6 +132,7 @@ describe("종목 뉴스 관련도 (3-12, 운영에서 뽑은 제목)", () => {
     expect(nameSearch({ code: "TSLA", name: "테슬라" }, ["테슬라처럼 오를까…로봇주 강세"])).toHaveLength(1);
     expect(nameSearch({ code: "PLTR", name: "팔란티어 테크놀로지스" }, ["팔란티어부터 오라클까지…"])).toHaveLength(1);
     expect(nameSearch({ code: "005930", name: "삼성전자" }, ["삼성전자마저 신저가…외국인 매도", "삼성전자조차 버티지 못했다"])).toHaveLength(2);
+    expect(nameSearch({ code: "NVDA", name: "엔비디아" }, ["엔비디아랑 AMD 동반 급등"])).toHaveLength(1);
     // 조사가 아니라 다른 말로 이어지면 여전히 뺀다 (LG엔솔 ≠ LG, 메타버스 ≠ 메타)
     expect(nameSearch({ code: "003550", name: "LG" }, ["LG엔솔 급등"])).toEqual([]);
     expect(nameSearch({ code: "META", name: "메타 플랫폼스" }, ["메타버스 플랫폼 경쟁"])).toEqual([]);

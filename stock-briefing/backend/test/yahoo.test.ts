@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { YahooProvider, yahooSymbol } from "../src/providers/market/yahoo.js";
+import { rangeQuery, YahooProvider, yahooSymbol } from "../src/providers/market/yahoo.js";
 import type { FetchFn } from "../src/providers/market/types.js";
 
 function chartResponse(meta: Record<string, unknown>, closes: number[]): unknown {
@@ -86,6 +86,38 @@ describe("YahooProvider", () => {
     expect(f.prevClose).toBe(100);
     expect(f.change).toBe(-3);
     expect(f.changeRate).toBe(-3);
+  });
+
+  it("직전 거래일 행이 비어(null) 그 전날 봉을 잡으면, Yahoo 등락률과 어긋나므로 등락률로 전일 종가를 되짚는다 (BH-22)", async () => {
+    // 2026-09 BRK-B 실측처럼 하루치 행이 null 로 오는 경우: 09-22 가 비어 있고 정규장 거래일은 09-23
+    const at = (iso: string) => Date.parse(iso) / 1000;
+    const brk = (price: number, rate: number | undefined, close22: number | null) => ({
+      chart: {
+        result: [
+          {
+            meta: { currency: "USD", exchangeTimezoneName: "America/New_York", regularMarketPrice: price, regularMarketTime: at("2026-09-23T20:00:03Z"), regularMarketChangePercent: rate },
+            timestamp: [at("2026-09-21T13:30:00Z"), at("2026-09-22T13:30:00Z"), at("2026-09-23T13:30:00Z")],
+            indicators: { quote: [{ open: [502, close22, 505], high: [503, close22, 508], low: [501, close22, 504], close: [502.01, close22, price], volume: [1, close22, 3] }] },
+          },
+        ],
+      },
+    });
+    // 실제 전일(09-22) 종가 504.65 → 507.17 은 +0.499%. 09-21 종가(502.01)와 비교하면 +1.03% 로 틀린다
+    const q = await new YahooProvider(fakeFetch(() => brk(507.17, 0.499, null))).getQuote("BRK.B");
+    expect(q.prevClose).toBeCloseTo(504.65, 1);
+    expect(q.change).toBeCloseTo(2.52, 1);
+    expect(q.changeRate).toBe(0.5);
+    // 행이 다 있으면 봉 종가를 그대로 쓴다 (등락률로 되짚은 값의 반올림 오차 없이)
+    const full = await new YahooProvider(fakeFetch(() => brk(507.17, 0.499, 504.65))).getQuote("BRK.B");
+    expect(full.prevClose).toBe(504.65);
+    expect(full.change).toBe(2.52);
+    // 등락률이 없으면 직전 봉 그대로
+    expect((await new YahooProvider(fakeFetch(() => brk(507.17, undefined, null))).getQuote("BRK.B")).prevClose).toBe(502.01);
+    // 원화 종목을 등락률로 되짚으면 1원 단위
+    const kr = fakeFetch(() => chartResponse({ currency: "KRW", regularMarketPrice: 285_500, regularMarketChangePercent: 3.255 }, [261_000, 285_500]));
+    const k = await new YahooProvider(kr, async () => "KOSPI").getQuote("005930");
+    expect(k.prevClose).toBe(276_500);
+    expect(k.change).toBe(9_000);
   });
 
   it("클래스 주식(BRK.B·BF.B)은 Yahoo 형식(BRK-B)으로 조회한다 (BH-62)", async () => {
@@ -179,6 +211,36 @@ describe("YahooProvider", () => {
       expect(weeks.at(-1)).toBe("2026-09-21");
       expect(w.every((c) => c.date <= "2026-09-24")).toBe(true);
       expect(w.at(-1)!.close).toBe(closeAt(days.length - 1));
+    });
+
+    it("10년 넘는 봉은 range=max(일봉을 달래도 3mo 봉을 줌) 대신 기간(period1·period2)으로 받는다", async () => {
+      expect(rangeQuery("M", 120)).toBe("range=10y");
+      expect(rangeQuery("W", 260)).toBe("range=5y");
+      expect(rangeQuery("D", 120)).toBe("range=1y");
+      const now = Date.parse("2026-09-25T00:00:00Z");
+      const q = new URLSearchParams(rangeQuery("M", 200, now));
+      expect(Number(q.get("period2"))).toBe(now / 1000);
+      expect(Number(q.get("period1"))).toBeLessThan(Date.parse("2010-02-01T00:00:00Z") / 1000);
+      expect(rangeQuery("W", 1000, now)).toMatch(/^period1=\d+&period2=\d+$/);
+
+      const long: number[] = [];
+      for (let t = Date.parse("2006-01-02T14:30:00Z"); t <= Date.parse("2026-09-24T13:30:00Z"); t += 86_400_000) {
+        const wd = new Date(t).getUTCDay();
+        if (wd !== 0 && wd !== 6) long.push(t / 1000);
+      }
+      const urls: string[] = [];
+      const maxFetch = fakeFetch((url) => {
+        urls.push(url);
+        if (url.includes("range=max")) return reply("3mo", [long[0]!], [10]); // AAPL 실측: range=max&interval=1d → 3mo
+        return reply("1d", [...long, LIVE], [...long.map((_, i) => closeAt(i)), closeAt(long.length - 1)]);
+      });
+      const m = (await new YahooProvider(maxFetch).getCandles("AAPL", "M", 200)).candles;
+      expect(urls.every((u) => !u.includes("range=max") && u.includes("period1="))).toBe(true);
+      const months = m.map((c) => c.date.slice(0, 7));
+      expect(months).toHaveLength(200);
+      expect(new Set(months).size).toBe(200);
+      expect(months[0]).toBe("2010-02");
+      expect(months.at(-1)).toBe("2026-09");
     });
 
     it("일봉 날짜는 거래소 현지 날짜 (미국 종목의 마지막 봉이 서울 날짜로 다음 날이 되지 않는다)", async () => {

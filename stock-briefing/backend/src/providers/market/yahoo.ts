@@ -15,6 +15,8 @@ import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
 const UA = "Mozilla/5.0 (compatible; stock-briefing/0.1)";
 const SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search";
 const CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
+/** 봉으로 낸 등락률과 meta 등락률(소수 셋째 자리)이 이만큼(%p) 넘게 어긋나면 직전 봉을 믿지 않는다 */
+const RATE_TOLERANCE = 0.05;
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -25,10 +27,15 @@ export function yahooSymbol(code: string, market: string): string {
   return `${code}.${market === "KOSDAQ" ? "KQ" : "KS"}`;
 }
 
-/** 봉 수 → 조회 범위. 주·월봉도 일봉으로 받아 묶는다 */
-function rangeFor(period: CandlePeriod, count: number): string {
+/**
+ * 봉 수 → 조회 범위(쿼리). 주·월봉도 일봉으로 받아 묶는다.
+ * 10년 넘게는 range=max 대신 기간(period1·period2)으로 받는다: range=max 는 일봉을 달라고 해도 3mo 봉으로 준다 (BH-71)
+ */
+export function rangeQuery(period: CandlePeriod, count: number, nowMs = Date.now()): string {
   const years = period === "W" ? count / 52 : period === "M" ? count / 12 : count / 250;
-  return years <= 1 ? "1y" : years <= 2 ? "2y" : years <= 5 ? "5y" : years <= 10 ? "10y" : "max";
+  if (years <= 10) return `range=${years <= 1 ? "1y" : years <= 2 ? "2y" : years <= 5 ? "5y" : "10y"}`;
+  const to = Math.floor(nowMs / 1000);
+  return `period1=${to - Math.ceil((years + 1) * 366 * 86_400)}&period2=${to}`;
 }
 
 export class YahooProvider implements QuoteProvider, StockSearchProvider {
@@ -77,9 +84,9 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
   /**
    * 일봉 차트 (날짜는 거래소 현지 날짜). 주·월봉은 이 일봉을 묶는다:
    * Yahoo 의 1wk·1mo 는 range 에 따라 주봉·분기봉으로 바뀌어 오고(dataGranularity), 끝에 하루치 live 행을 따로 붙여
-   * 같은 주·달에 봉이 둘 생긴다 (BH-71).
+   * 같은 주·달에 봉이 둘 생긴다 (BH-71). span 은 조회 범위 쿼리 (range=1y 또는 period1=…&period2=…)
    */
-  private async fetchChart(code: string, range: string): Promise<{
+  private async fetchChart(code: string, span: string): Promise<{
     meta: Record<string, unknown>;
     candles: Candle[];
   }> {
@@ -88,7 +95,7 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
     let lastErr: unknown;
     for (const market of markets) {
       const symbol = yahooSymbol(code, market);
-      const url = `${CHART_URL}/${symbol}?range=${range}&interval=1d&includePrePost=false`;
+      const url = `${CHART_URL}/${symbol}?${span}&interval=1d&includePrePost=false`;
       try {
         const json = (await this.getJson(url)) as {
           chart?: { result?: Array<Record<string, unknown>> | null; error?: unknown };
@@ -107,7 +114,7 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
   }
 
   async getQuote(code: string): Promise<Quote> {
-    const { meta, candles } = await this.fetchChart(code, "1y");
+    const { meta, candles } = await this.fetchChart(code, "range=1y");
     const last = candles.at(-1);
     const price = num(meta["regularMarketPrice"]) ?? last?.close ?? null;
     if (price === null) throw new ProviderError(this.name, `${code} 현재가 없음`);
@@ -118,15 +125,20 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
     const prevBar = tradeDate ? [...candles].reverse().find((c) => c.date < tradeDate) : candles.at(-2);
     const metaChange = num(meta["regularMarketChange"]);
     const metaRate = num(meta["regularMarketChangePercent"]);
+    const fromRate = metaRate !== null && metaRate > -100 ? price / (1 + metaRate / 100) : null;
     let prevClose: number | null = metaChange !== null ? price - metaChange : (prevBar?.close ?? null);
-    if (prevClose === null && metaRate !== null && metaRate > -100) prevClose = price / (1 + metaRate / 100);
-    if (prevClose !== null) prevClose = round4(prevClose);
+    // 직전 거래일 행이 비어(null) 그 전날 봉을 잡으면 등락이 틀린다 → 봉으로 낸 등락률이 Yahoo 등락률과 어긋나면 등락률로 되짚는다
+    if (metaChange === null && fromRate !== null && (!prevClose || Math.abs(((price - prevClose) / prevClose) * 100 - metaRate!) > RATE_TOLERANCE)) {
+      prevClose = fromRate;
+    }
+    const currency = meta["currency"] === "USD" ? "USD" : "KRW";
+    if (prevClose !== null) prevClose = currency === "KRW" ? Math.round(prevClose) : round4(prevClose); // 원화는 1원 단위
     const change = prevClose !== null ? round4(price - prevClose) : 0;
     const changeRate = prevClose ? (change / prevClose) * 100 : 0;
     const closes = candles.map((c) => c.close);
     return {
       code,
-      currency: meta["currency"] === "USD" ? "USD" : "KRW",
+      currency,
       price,
       change,
       changeRate: round2(changeRate),
@@ -149,7 +161,7 @@ export class YahooProvider implements QuoteProvider, StockSearchProvider {
 
   async getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
     if (isIntraday(period)) throw new ProviderError(this.name, "분봉은 지원하지 않습니다");
-    const { candles } = await this.fetchChart(code, rangeFor(period, count));
+    const { candles } = await this.fetchChart(code, rangeQuery(period, count));
     // 주는 월요일 시작, 월은 그 달, 봉 날짜는 기간의 첫 거래일 (토스 Open API 와 같은 규칙)
     return { code, period, candles: aggregateCandles(candles, period).slice(-count), source: this.name };
   }

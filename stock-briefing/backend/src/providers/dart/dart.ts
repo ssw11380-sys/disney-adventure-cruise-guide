@@ -127,21 +127,20 @@ export class DartProvider implements FinancialsProvider {
    * 첫 다운로드 뒤 상장한 종목은 다시 받아야 찾을 수 있다. ETF 처럼 원래 없는 코드로 매번 내려받지는 않는다.
    */
   private async refreshIfStale(): Promise<void> {
-    if (this.refreshing) {
-      await this.refreshing;
-      return;
+    if (!this.refreshing) {
+      const r = await this.opts.db
+        .selectFrom("dart_corp_codes")
+        .select((eb) => [eb.fn.countAll<number>().as("c"), eb.fn.max("updated_at").as("at")])
+        .executeTakeFirst();
+      // 표를 읽는 사이 겹친 호출이 받기를 시작했으면(lastRefreshTry 가 방금으로 바뀜) 건너뛰지 말고 그것을 같이 기다린다
+      if (!this.refreshing && Number(r?.c ?? 0) > 0) {
+        const t = this.now().getTime();
+        const at = Date.parse(String(r?.at ?? ""));
+        if (Number.isFinite(at) && t - at < CORP_CODE_STALE_MS) return;
+        if (t - this.lastRefreshTry < CORP_CODE_RETRY_MS) return;
+      }
     }
-    const r = await this.opts.db
-      .selectFrom("dart_corp_codes")
-      .select((eb) => [eb.fn.countAll<number>().as("c"), eb.fn.max("updated_at").as("at")])
-      .executeTakeFirst();
-    if (Number(r?.c ?? 0) > 0) {
-      const t = this.now().getTime();
-      const at = Date.parse(String(r?.at ?? ""));
-      if (Number.isFinite(at) && t - at < CORP_CODE_STALE_MS) return;
-      if (t - this.lastRefreshTry < CORP_CODE_RETRY_MS) return;
-    }
-    await this.refreshCorpCodes();
+    await this.refreshCorpCodes(); // 진행 중인 받기가 있으면 그것을 기다린다
   }
 
   // ── 조회 ──────────────────────────────────────────────────────
