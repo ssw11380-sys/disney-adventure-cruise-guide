@@ -426,7 +426,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       placed.market = true;
       const urls = serveBoard();
       await runBriefingCheck();
-      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&board=1"]);
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2&board=1"]);
       const r = refreshed[0] as { board: { at: number; list: { code: string }[] } | null; features: { flags: { market: boolean } } | null };
       expect(r.board!.list.map((i) => i.code)).toEqual(["KOSPI", "USDKRW"]);
       expect(r.board!.at).toBe(NOW);
@@ -436,7 +436,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     it("위젯이 없으면 판을 묻지 않는다 (응답·ETag 가 예전과 같다)", async () => {
       const urls = serveBoard();
       await runBriefingCheck();
-      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1"]);
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2"]);
       expect((refreshed[0] as { board: unknown }).board).toBeNull();
     });
   });

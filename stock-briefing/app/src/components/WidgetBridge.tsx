@@ -18,7 +18,9 @@ import { refreshWidgets } from "@/widgets/refresh";
  */
 export function WidgetBridge() {
   const api = useApi();
-  const { apiUrl, showKrw, afterCost } = useSettings();
+  const { apiUrl, showKrw, afterCost, widgetRowCurrency } = useSettings();
+  // 다듬은 잔고 위젯 종목 줄 손익 통화 (설정 "위젯 종목 금액") — 바꾸면 바로 다시 그린다 (key)
+  const rowKrw = widgetRowCurrency === "krw";
   const stocks = useQuery<RegisteredWithQuote[]>({ queryKey: [apiUrl, "stocks"], queryFn: api.listStocks, enabled: false });
   const data = stocks.data;
   const dataAt = stocks.dataUpdatedAt;
@@ -39,7 +41,7 @@ export function WidgetBridge() {
   const restoring = useIsRestoring();
   const fetchedThisSession = !restoring && dataAt > mountedAt;
   // 플래그가 바뀌어도 바로 (손익 전환·지수 줄이 켜지고 꺼지는 것을 1분 기다리지 않게)
-  const flagKey = features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}` : "";
+  const flagKey = features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}|${features.flags.polish}` : "";
   const last = useRef({ at: 0, key: "" });
   const push = useRef<(leaving: boolean) => void>(() => undefined);
   useEffect(() => {
@@ -49,15 +51,19 @@ export function WidgetBridge() {
       // 장 상태 칩: 위젯이 스스로 받는 /api/widget(&sessions=1 — 이 앱이 붙이는 표시)과 같은 함수(lib/liveDot widgetChip = 서버 widgetPayload.marketChip) — 장 상태와 잔고 시세의 세션으로.
       // 예전에는 달력만 봐서(useAnyMarketOpen) 추석 미국 주간거래에 앱이 그리면 "한국 휴장", 위젯이 받으면 "미국 주간거래"로 번갈아 바뀌었다.
       // 넘기는 순간의 시각으로 잔고를 새로 받을 때마다(세션 경계 1초 뒤 포함) 다시 계산하고, 칩 문구가 바뀌면 바로 넘긴다.
-      // 세션이 끝나는 때(nextChangeAt)가 지나면 위젯이 칩을 감춘다
+      // 칩이 바뀌는 때(nextChangeAt)가 지나면 위젯이 칩을 감춘다.
+      // 다듬은 잔고 위젯(widgetPolish)은 시장별 문구(markets)로 두 시장을 한 칩에 그리고, 그 문구가 바뀌는 세션 경계에서도 감춘다 —
+      // 예전 모습은 그 경계에서 감추면 안 되므로(한국 장중 09:00 에 칩·'지연'이 사라짐) 두 칩을 넘기고, 위젯이 실제로 쓰는 플래그로 고른다 (data.ts pushWidgetData)
       const market = widgetChip(ms, data, now);
-      const key = `${showKrw}|${afterCost}|${market?.label ?? ""}|${flagKey}`;
+      const marketPolished = widgetChip(ms, data, now, { markets: true });
+      const chipKey = [market?.label ?? "", ...(marketPolished?.markets ?? []).map((m) => m.label)].join("·");
+      const key = `${showKrw}|${afterCost}|${rowKrw}|${chipKey}|${flagKey}`;
       if (!widgetPushDue({ now, fetchedThisSession, lastAt: last.current.at, lastKey: last.current.key, key, leaving })) return;
       last.current = { at: now, key };
-      void refreshWidgets({ stocks: data, showKrw, afterCost, market, features, indices, board });
+      void refreshWidgets({ stocks: data, showKrw, afterCost, rowKrw, market, marketPolished, features, indices, board });
     };
     push.current(false);
-  }, [data, dataAt, flagKey, showKrw, afterCost, ms, fetchedThisSession, features, indices, board]);
+  }, [data, dataAt, flagKey, showKrw, afterCost, rowKrw, ms, fetchedThisSession, features, indices, board]);
   useEffect(() => {
     const sub = AppState.addEventListener("change", (st) => {
       if (st === "background") push.current(true);
