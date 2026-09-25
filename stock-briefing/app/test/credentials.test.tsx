@@ -64,7 +64,11 @@ vi.mock("react-native", () => ({
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
   Alert: { alert: vi.fn() },
   Platform: { OS: "android" },
+  // 넓은 창 배치(3-42, 플래그 foldLayout)가 창 크기를 읽는다 — 휴대폰(접은 폴드8) 크기
+  useWindowDimensions: () => ({ width: 475, height: 751, scale: 2.625, fontScale: 1 }),
 }));
+// 넓은 창에서 설정 탭이 받은 폭을 어림할 때 화면 여백을 읽는다 (lib/useBoxWidth)
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { version: "1.4.0", extra: { apiUrl: "https://prod.test" } } } }));
 vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
 vi.mock("@/theme", async () => {
