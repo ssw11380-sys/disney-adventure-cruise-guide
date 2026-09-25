@@ -813,7 +813,7 @@ describe("EDGAR 공시 목록 (BH-32·BH-73)", () => {
   });
   const day = (d: number) => new Date(Date.parse("2026-09-24T00:00:00Z") - d * 86_400_000).toISOString().slice(0, 10);
 
-  it("Form 4 가 수십 건이어도 10-Q·8-K 가 밀려나지 않고, Form 4 는 한도 안에서만", async () => {
+  it("Form 4 가 수십 건이어도 10-Q·8-K 가 밀려나지 않고, Form 4 는 남은 칸만 채운다", async () => {
     const rows: Array<[string, string]> = [];
     for (let i = 0; i < 20; i++) rows.push(["4", day(i)]); // 09-24 ~ 09-05
     rows.push(["8-K", day(21)]); // 09-03
@@ -827,9 +827,9 @@ describe("EDGAR 공시 목록 (BH-32·BH-73)", () => {
     expect(titles.filter((t) => t.includes("10-Q"))).toHaveLength(1);
     expect(titles.filter((t) => t.includes("8-K"))).toHaveLength(3);
     const form4 = titles.filter((t) => t.includes("Form 4")).length;
-    expect(form4).toBeGreaterThan(0);
-    expect(form4).toBeLessThanOrEqual(4);
-    expect(d.length).toBeLessThanOrEqual(10);
+    // 10-Q 1 + 8-K 3 을 먼저 넣고 남은 6칸은 Form 4 (빈 칸으로 두지 않음)
+    expect(form4).toBe(6);
+    expect(d.length).toBe(10);
     // 최신순 유지
     expect(d.map((x) => x.filedAt)).toEqual([...d.map((x) => x.filedAt)].sort().reverse());
     // 공시 탭(30일·15건)에서도 8-K 가 빠지지 않는다

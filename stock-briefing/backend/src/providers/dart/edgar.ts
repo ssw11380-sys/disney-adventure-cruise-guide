@@ -112,8 +112,7 @@ const FORMS: Record<string, { name: string; short: string; rank: 0 | 1 | 2; amen
   "SC 13D": { name: "5% 이상 보유 보고", short: "13D", rank: 1, amend: true },
   "4": { name: "내부자 거래", short: "Form 4", rank: 2 },
 };
-/** Form 4 는 대형주에서 90일에 수십 건이라, 다른 서식을 다 넣고 남은 칸에만, 전체의 1/3 까지 */
-const INSIDER_SHARE = 1 / 3;
+/** Form 4 는 대형주에서 90일에 수십 건이라, 다른 서식을 다 넣고 남은 칸에만 (빈 칸이 남으면 채운다 — 공시 탭이 비어 보이지 않게) */
 
 function formInfo(form: string): { label: string; rank: 0 | 1 | 2 } | null {
   const amended = form.endsWith("/A");
@@ -275,14 +274,10 @@ export class EdgarProvider implements FinancialsProvider {
     const inRange = s.filings.filter((f) => f.filed >= since);
     // 정기 보고서 → 수시·지분 공시 → 내부자 거래 순으로 칸을 채우고, 보여 줄 때는 원래(최신) 순서
     const picked = new Set<(typeof inRange)[number]>();
-    const insiderCap = Math.ceil(limit * INSIDER_SHARE);
     for (const rank of [0, 1, 2] as const) {
-      let taken = 0;
       for (const f of inRange) {
-        if (picked.size >= limit || (rank === 2 && taken >= insiderCap)) break;
-        if (formInfo(f.form)?.rank !== rank) continue;
-        picked.add(f);
-        taken++;
+        if (picked.size >= limit) break;
+        if (formInfo(f.form)?.rank === rank) picked.add(f);
       }
     }
     return inRange
