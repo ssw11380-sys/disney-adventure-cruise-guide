@@ -574,7 +574,7 @@ describe("다듬은 잔고 위젯 배치 (widgetPolish): 숫자 잘림 0 · 높�
               }
     expect(bad.slice(0, 5)).toEqual([]);
     expect(cases).toBe(18 * 38 * 4 * 2 * 2 * 2);
-  });
+  }, 30_000); // 배치 수만 개 — CI 에서 기본 5초를 넘었다 (5.2초)
 
   it("같은 크기에 종목 줄이 더 보인다: 4×2(330×230) 2.5 → 3줄 넘게, 4×2·4×3·4×4·5×2 모두 예전보다 많다 (글자 100%)", () => {
     const rowsOf = (p: { list: boolean; listH: number; rows: { rowH: number } }) => (p.list ? p.listH / p.rows.rowH : 0);
