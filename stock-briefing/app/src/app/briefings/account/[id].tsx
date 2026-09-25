@@ -9,7 +9,7 @@ import { Screen } from "@/components/Screen";
 import { CardsSkeleton } from "@/components/Skeleton";
 import { Badge, Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, TableHead } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
-import { contributionSpeech, contributionTable, fxEquationSpeech, localDay, summarySpeech, templateNote } from "@/lib/accountBriefing";
+import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, localDay, summarySpeech, templateNote } from "@/lib/accountBriefing";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL } from "@/lib/format";
 import { parseBriefingId, viewState } from "@/lib/freshness";
@@ -97,7 +97,7 @@ function AccountBriefingView({ b, top }: { b: AccountBriefingWithData; top: Reac
           <TotalsCard d={d} />
           <ContributionCard d={d} />
           <ImpactCard d={d} />
-          <ScheduleCard s={d.schedule} />
+          <ScheduleCard s={d.schedule} asOf={d.asOf} />
           <Card>
             <SectionTitle right={b.template ? <Badge>기본 설명</Badge> : null}>무엇이 계좌를 움직였나</SectionTitle>
             <MarkdownView>{b.detail}</MarkdownView>
@@ -248,14 +248,15 @@ function ImpactCard({ d }: { d: AccountData }) {
   );
 }
 
-/** 오늘 일정: 한국·미국 장 운영과 지금 상태, 보유 국내 종목의 최근 공시 */
-function ScheduleCard({ s }: { s: AccountSchedule }) {
+/** 오늘 일정: 한국·미국 장 운영과 브리핑을 만든 때의 장 상태, 보유 국내 종목의 최근 공시 */
+function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
   const t = useTheme();
+  const at = briefingTime(asOf);
   return (
     <Card>
       <SectionTitle>오늘 일정</SectionTitle>
-      <Info label="한국" value={s.kr.tradingDay ? (s.kr.hours ?? "거래일") : `휴장${s.kr.nextOpen ? ` · 다음 개장 ${formatDateKo(s.kr.nextOpen, true)}` : ""}`} note={s.kr.now} />
-      <Info label="미국" value={s.us.tradingDay ? `${localDay(s.us.date)} ${s.us.hours ?? ""}` : `${localDay(s.us.date)} 휴장`} note={s.us.now} />
+      <Info label="한국" value={s.kr.tradingDay ? (s.kr.hours ?? "거래일") : `휴장${s.kr.nextOpen ? ` · 다음 개장 ${formatDateKo(s.kr.nextOpen, true)}` : ""}`} note={s.kr.now} at={at} />
+      <Info label="미국" value={s.us.tradingDay ? `${localDay(s.us.date)} ${s.us.hours ?? ""}` : `${localDay(s.us.date)} 휴장`} note={s.us.now} at={at} />
       <Text style={{ color: t.muted, fontSize: font.small, marginTop: space.xs }}>최근 공시 (보유 국내 종목, 3일)</Text>
       {s.disclosures.length ? (
         s.disclosures.map((x) =>
@@ -305,14 +306,18 @@ function Line({ label, speech, children }: { label: string; speech: string; chil
   );
 }
 
-/** 이름 위, 값·설명 아래 (긴 문장용) */
-function Info({ label, value, note }: { label: string; value: string; note: string }) {
+/** 이름 위, 값·설명 아래 (긴 문장용). 설명(장 상태)은 브리핑을 만든 시각 기준임을 밝힌다 */
+function Info({ label, value, note, at }: { label: string; value: string; note: string; at: string }) {
   const t = useTheme();
+  const basis = at ? `브리핑 시각(${at}) 기준` : "브리핑 시각 기준";
+  const spoken = at ? `브리핑 시각 ${at} 기준` : "브리핑 시각 기준";
   return (
-    <View accessible accessibilityLabel={sentence([label, value, note])} style={[styles.info, { borderBottomColor: t.line }]}>
+    <View accessible accessibilityLabel={sentence([label, value, `${spoken} ${note}`])} style={[styles.info, { borderBottomColor: t.line }]}>
       <Text style={{ color: t.muted, fontSize: font.small }}>{label}</Text>
       <Text style={{ color: t.ink, fontSize: font.body }}>{value}</Text>
-      <Muted>지금: {note}</Muted>
+      <Muted>
+        {basis}: {note}
+      </Muted>
     </View>
   );
 }

@@ -95,9 +95,19 @@ export function fxEquationSpeech(fx: AccountData["fx"]): string | null {
 export function templateNote(reason: string | null | undefined): string {
   const r = reason ?? "";
   if (/설정되지 않음/.test(r)) return "모델이 설정되지 않아 위 숫자로 만든 기본 설명을 보여 드립니다.";
-  if (/^(입력에 없는 숫자|숫자 표기|방향이|쓰지 않는 표현|빈 응답|설명이 너무)/.test(r)) return "모델 설명이 검사를 통과하지 못해 위 숫자로 만든 기본 설명을 보여 드립니다.";
+  if (/^(입력에 없는 숫자|숫자 표기|방향이|부호가 빠진|쓰지 않는 표현|쓰지 않는 표기|빈 응답|설명이 너무)/.test(r)) return "모델 설명이 검사를 통과하지 못해 위 숫자로 만든 기본 설명을 보여 드립니다.";
   if (/^(모델 호출 실패|모델 응답 시간)/.test(r)) return "모델 설명을 받지 못해 위 숫자로 만든 기본 설명을 보여 드립니다.";
   return "위 숫자로 만든 기본 설명입니다.";
+}
+
+/**
+ * 브리핑을 만든 한국 시각 "08:35". 오늘 일정 카드의 장 상태는 이 시각의 것이다 — 오전 브리핑은 오후 브리핑이 생길 때까지
+ * 맨 위 카드로 남으므로 '지금'이라고 보이면 정오에 연 사람이 한국 정규장이 열려 있는데도 '개장 전'으로 읽는다
+ */
+export function briefingTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
 }
 
 /** 미국 정규장 날짜 "9/25(현지)" */

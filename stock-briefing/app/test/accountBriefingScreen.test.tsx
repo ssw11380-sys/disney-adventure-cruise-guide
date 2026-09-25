@@ -224,7 +224,10 @@ describe("계좌 브리핑 상세 화면", () => {
     expect(text).toContain("미국 보유분 원화 평가 변화 -211,000원 = 가격 효과 -234,440원 + 환율 효과 +23,440원");
     // 오늘 일정: 한국 휴장·미국 정규장, 공시 링크
     expect(labels(r).find((l) => l.startsWith("한국, 휴장"))).toBeTruthy();
-    expect(labels(r)).toContain("미국, 9/25(현지) 정규장 9/25 22:30~9/26 05:00 (한국 시간), 미국 정규장 마감 상태");
+    // 장 상태는 브리핑을 만든 때의 것 — '지금'이 아니라 '브리핑 시각(08:35) 기준' (오후 브리핑이 생기기 전까지 맨 위 카드로 남는다)
+    expect(labels(r)).toContain("미국, 9/25(현지) 정규장 9/25 22:30~9/26 05:00 (한국 시간), 브리핑 시각 08:35 기준 미국 정규장 마감 상태");
+    expect(text).toContain("브리핑 시각(08:35) 기준: 한국 휴장일");
+    expect(text).not.toContain("지금:");
     const disclosure = r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel).includes("DART 에서 열기"))!;
     expect(disclosure.props.accessibilityRole).toBe("link");
     // 설명
@@ -247,6 +250,8 @@ describe("계좌 브리핑 상세 화면", () => {
       ["숫자 표기가 틀림: -30,0890원", "모델 설명이 검사를 통과하지 못해"],
       ["방향이 사실과 반대: 8.06% 올랐", "모델 설명이 검사를 통과하지 못해"],
       ["쓰지 않는 표현: 세요", "모델 설명이 검사를 통과하지 못해"],
+      ["부호가 빠진 숫자: 8.06%", "모델 설명이 검사를 통과하지 못해"],
+      ["쓰지 않는 표기: &plus;", "모델 설명이 검사를 통과하지 못해"],
       ["모델 호출 실패 (api: 429 rate_limit_error {\"type\":\"error\"})", "모델 설명을 받지 못해"],
       ["모델 응답 시간 초과(90초)", "모델 설명을 받지 못해"],
       ["브리핑 모델이 설정되지 않음", "모델이 설정되지 않아"],
