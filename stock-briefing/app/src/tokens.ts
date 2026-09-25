@@ -159,6 +159,14 @@ export function changeColor(t: Theme, v: number | null | undefined): string {
   return v > 0 ? t.up : t.down;
 }
 
+/**
+ * 같은 색의 완전히 투명한 값 (#RRGGBB → #RRGGBB00). 가장자리를 바탕색에서 투명으로 흐리게 칠할 때(그러데이션) 쓴다 —
+ * 'transparent'(투명한 검정)에서 칠하면 라이트 테마에서 가운데가 회색으로 비친다. #RRGGBB 가 아니면 'transparent'
+ */
+export function clearOf(color: string): string {
+  return /^#[0-9A-Fa-f]{6}$/.test(color) ? `${color}00` : "transparent";
+}
+
 /** 간격 7단계. 이 밖의 값은 쓰지 않는다 (0 은 허용) */
 export const space = { xxs: 2, xs: 4, s: 6, sm: 8, md: 12, lg: 14, xl: 20 } as const;
 export const radius = { sm: 4, md: 6, lg: 8 } as const;
@@ -222,4 +230,16 @@ export const layout = {
   railHysteresis: 24,
   /** 2단 사이 구분선 두께 */
   divider: 1,
+  /**
+   * 종목·지수 상세 차트의 폭 상한. foldLayout 이 꺼져 있거나 좁은 창(휴대폰·접힌 화면)이면 지금처럼 이 폭에서 멈춘다.
+   * 켜져 있고 폭 등급이 중간 이상이면 상한 없이 패널 폭을 다 쓰고, 높이를 chartMaxHRatio 로 제한한다 (3-42 진단 6·7번)
+   */
+  chartMaxW: 720,
+  /** 상세 차트 높이 = 차트 폭 × 이 비율 (지금 값 그대로) */
+  chartAspect: 0.62,
+  /**
+   * 넓은 창(foldLayout 켜짐 + 폭 등급 중간 이상)에서 상세 차트 높이 상한 = 창 높이 × 이 비율.
+   * 펼친 폴드8 가로(933×704)에서 차트가 352dp 로 줄어 날짜 줄까지 첫 화면에 들어온다 (추정 — 실측 뒤 조정)
+   */
+  chartMaxHRatio: 0.5,
 } as const;

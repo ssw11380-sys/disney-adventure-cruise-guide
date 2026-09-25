@@ -138,13 +138,32 @@ export function Badge({ children, tone = "neutral" }: { children: React.ReactNod
   );
 }
 
-/** 등락 색: 한국 관례 (상승 빨강, 하락 파랑) */
-export function ChangeText({ value, text, style }: { value: number | null | undefined; text: string; style?: StyleProp<TextStyle> }) {
+/**
+ * 등락 색: 한국 관례 (상승 빨강, 하락 파랑).
+ * numberOfLines·maxFontSizeMultiplier 는 머리처럼 한 줄·글자 확대 상한이 필요한 곳에서만 준다 (주지 않으면 지금과 같음)
+ */
+export function ChangeText({
+  value,
+  text,
+  style,
+  numberOfLines,
+  maxFontSizeMultiplier,
+}: {
+  value: number | null | undefined;
+  text: string;
+  style?: StyleProp<TextStyle>;
+  numberOfLines?: number;
+  maxFontSizeMultiplier?: number;
+}) {
   const t = useTheme();
   // 보합(0)은 앱 전체 공통 규칙(changeColor)대로 기본 글자색, 값 없음("-")은 회색.
   // 부호는 보이는 글자로: "$0.00 (0.00%)"·"0원" 처럼 0 으로 보이는 값은 손실·이익 색으로 칠하지 않는다 (BH-38)
   const color = value === null || value === undefined ? t.muted : changeColor(t, shownSign(value, text));
-  return <Text style={[{ color }, NUM, style]}>{text}</Text>;
+  return (
+    <Text style={[{ color }, NUM, style]} numberOfLines={numberOfLines} maxFontSizeMultiplier={maxFontSizeMultiplier}>
+      {text}
+    </Text>
+  );
 }
 
 /** 등락률 상자 (HTS 목록의 색 칠한 등락률 칸) */

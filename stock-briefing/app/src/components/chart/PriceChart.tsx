@@ -6,7 +6,8 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
 import { axisWidth, labelSide, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
-import { formatPct, formatPrice, formatVolume, shownSign } from "@/lib/format";
+import { formatChartValue, maLegendItems } from "@/lib/chartLayout";
+import { formatPct, formatVolume, shownSign } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
 import { changeColor, font, space, useFontScale, useTheme, type Theme } from "@/theme";
 
@@ -78,11 +79,8 @@ function axisPrice(v: number, currency: ChartUnit, digits?: number): string {
   return Math.round(v).toLocaleString("ko-KR");
 }
 
-/** 읽기 줄의 값 (통화는 원·달러 표기, PT 는 소수 둘째 자리) */
-export function formatChartValue(v: number, unit: ChartUnit): string {
-  if (unit === "PT") return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return formatPrice(v, unit);
-}
+/** 읽기 줄의 값 (통화는 원·달러 표기, PT 는 소수 둘째 자리). 순수 함수는 lib/chartLayout 에 있다 */
+export { formatChartValue };
 
 function labelOf(c: Candle, period: CandlePeriod, prev: Candle | undefined, dense: boolean): string {
   if (c.time) {
@@ -631,27 +629,30 @@ function Readout({
   );
 }
 
-/** 차트 아래 이동평균 값 (십자선이 잡은 봉, 없으면 마지막 봉). 색은 네모에만 — 선 색은 글자 대비 4.5 를 보장하지 않는다 */
+/**
+ * 차트 아래 이동평균 값 (십자선이 잡은 봉, 없으면 마지막 봉). 색은 네모에만 — 선 색은 글자 대비 4.5 를 보장하지 않는다.
+ * 항목('■ 120일 77,120원')마다 따로 묶어 줄바꿈 줄(flexWrap)에 놓는다 → 글자를 키워도 항목 단위로만 다음 줄로 가고,
+ * '120일'과 값이 떨어지거나 색 네모만 윗줄에 남지 않는다 (폴드 진단 24번, lib/chartLayout maLegendItems)
+ */
 function MaLine({ mas, index, currency, period }: { mas: { period: number; values: Series }[]; index: number; currency: ChartUnit; period: CandlePeriod }) {
   const t = useTheme();
   if (!mas.length) return null;
-  const unit = period === "W" ? "주" : period === "M" ? "월" : period === "D" ? "일" : "봉";
   return (
-    <Text style={[styles.readoutText, { color: t.muted }]} numberOfLines={2}>
-      {mas.map((m) => {
-        const v = m.values[index];
-        return (
-          <Text key={m.period}>
-            <Ionicons name="square" size={font.tiny} color={maColor(t, m.period)} /> {m.period}
-            {unit} {v === null || v === undefined ? "-" : formatChartValue(v, currency)}{"  "}
-          </Text>
-        );
-      })}
-    </Text>
+    <View style={styles.maLine}>
+      {maLegendItems(mas, index, currency, period).map((it) => (
+        <View key={it.period} style={styles.maItem}>
+          <Ionicons name="square" size={font.tiny} color={maColor(t, it.period)} />
+          <Text style={[styles.readoutText, { color: t.muted }]}>{it.text}</Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   readout: { minHeight: 16, justifyContent: "center" },
   readoutText: { fontSize: font.tiny, fontVariant: ["tabular-nums"] },
+  // 이동평균 값 줄: 항목 사이는 예전 두 칸 띄어쓰기만큼, 네모와 글자 사이는 한 칸만큼
+  maLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: space.xxs },
+  maItem: { flexDirection: "row", alignItems: "center", gap: space.xxs },
 });
