@@ -40,7 +40,10 @@ const ifrs = (name: string): Concept => ({ tax: "ifrs-full", name });
 
 /*
  * 항목별 태그 우선순위. 한 회사에는 항목마다 태그 하나만 고른다 (연도마다 섞지 않음).
- * 고르는 순서: ① 회사의 가장 최근 회계연도 값이 있는 태그 ② 최근 5개 연도를 가장 많이 덮는 태그 ③ 아래 목록 순서.
+ * 매출: ① 회사의 가장 최근 회계연도 값이 있는 태그 ② 최근 5개 연도 중 2개 연도 이상 있는 태그 (한 해만 섞여 든 값 제외)
+ *   ③ 아래 목록 순서. 합계 태그가 앞이라, 부분 매출인 RevenueFromContract… 가 더 많은 해를 덮어도 합계 태그를 고른다 (SE).
+ * 나머지 항목: ① 가장 최근 회계연도 값이 있는 태그 ② 최근 5개 연도를 가장 많이 덮는 태그 ③ 목록 순서.
+ *   후보끼리 범위 차이가 작아(순이익: 지배주주 몫 ↔ 비지배지분 포함) 한 태그로 여러 해를 잇는 편이 낫다.
  * 다른 태그는 고른 태그와 겹치는 연도 값이 모두 같을 때만(태그 이름만 바꾼 경우) 빈 연도를 채운다.
  */
 const REVENUE = [
@@ -54,7 +57,14 @@ const REVENUE = [
   gaap("OperatingRevenue"),
   ifrs("Revenue"),
   ifrs("RevenueFromContractsWithCustomers"),
+  ifrs("RevenueFromSaleOfGoods"), // 제약사(NVS) 등 제품 매출만 보고하는 IFRS 회사
 ];
+/** 은행·금융사 표시. 이 항목이 있으면 RevenueFromContract… 는 이자수익이 빠진 수수료 매출이라 매출로 쓰지 않는다 (HBAN: 순이익보다 작음) */
+const BANK_HINT = [gaap("NoninterestIncome"), gaap("InterestAndDividendIncomeOperating")];
+const FEE_ONLY = new Set(["RevenueFromContractWithCustomerExcludingAssessedTax", "RevenueFromContractWithCustomerIncludingAssessedTax"]);
+/** 은행 순영업수익 = 순이자이익 + 비이자이익 (JPM·BAC·WFC·SOFI 등이 Revenues·RevenuesNetOfInterestExpense 로 보고하는 값과 같은 기준) */
+const BANK_NII = gaap("InterestIncomeExpenseNet");
+const BANK_NONII = gaap("NoninterestIncome");
 /** 영업이익. 세전이익은 영업이익이 아니므로 대신 쓰지 않는다 (없으면 비워 두고 사유를 남김) */
 const OPERATING = [gaap("OperatingIncomeLoss"), ifrs("ProfitLossFromOperatingActivities")];
 const NET = [gaap("NetIncomeLoss"), ifrs("ProfitLossAttributableToOwnersOfParent"), gaap("ProfitLoss"), ifrs("ProfitLoss")];
@@ -328,6 +338,33 @@ function sameValue(a: number, b: number): boolean {
   return Math.abs(a - b) <= 0.005 * Math.max(Math.abs(a), Math.abs(b));
 }
 
+/** 끝자리 0 개수 */
+function trailingZeros(v: number): number {
+  let n = 0;
+  for (let x = Math.abs(Math.round(v)); x !== 0 && x % 10 === 0 && n < 15; x /= 10) n++;
+  return n;
+}
+
+/** coarse 가 fine 을 더 큰 단위로 반올림만 한 값인지 (예: 2,291,413M → 2,291,000M) */
+function isRoundingOf(coarse: number, fine: number): boolean {
+  const z = trailingZeros(coarse);
+  if (z <= trailingZeros(fine) || !sameValue(coarse, fine)) return false;
+  const unit = 10 ** z;
+  return Math.sign(fine) * Math.round(Math.abs(fine) / unit) * unit === coarse;
+}
+
+type Point = { end: string; filed: string; val: number };
+type Series = Map<number, Point>;
+
+/** 같은 연도에 둘 중 어느 값을 둘지: 기간 끝이 늦은 값 → 같은 기간이면 나중에 제출한 값(정정·재작성 반영).
+ *  다만 한쪽이 다른 쪽을 반올림만 한 값이면(Citi 2021 자산: 나중 보고서는 2,291,000M) 자세한 값을 둔다 */
+function better(next: Point, prev: Point): boolean {
+  if (next.end !== prev.end) return next.end > prev.end;
+  if (isRoundingOf(next.val, prev.val)) return false;
+  if (isRoundingOf(prev.val, next.val)) return true;
+  return next.filed > prev.filed;
+}
+
 /** companyfacts → 연도별 재무 (전체 연도, 오래된 순). 연간 값이 하나도 없으면 빈 배열 */
 export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
   const facts = (f["facts"] as Json | undefined) ?? {};
@@ -348,7 +385,7 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
     [ASSETS, false],
   ];
 
-  // 1) 통화 하나: 연간 값이 가장 많은 통화 (외국 기업은 현지 통화 + 최근 해만 달러 환산인 경우가 많다)
+  // 1) 통화 하나: 최근 5년 안의 연간 값이 가장 많은 통화 (외국 기업은 현지 통화 + 최근 해만 달러 환산인 경우가 많고, 보고 통화를 바꾼 회사는 지금 통화)
   const ends = new Map<string, Set<string>>();
   for (const [cs, d] of KEY)
     for (const c of cs)
@@ -358,38 +395,51 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
         for (const r of annual(rows, d)) set.add(r.end);
         ends.set(unit, set);
       }
-  const currency = [...ends].filter(([, s]) => s.size > 0).sort((a, b) => b[1].size - a[1].size || Number(b[0] === "USD") - Number(a[0] === "USD") || a[0].localeCompare(b[0]))[0]?.[0];
+  const lastEnd = Math.max(...[...ends.values()].flatMap((s) => [...s].map((e) => Date.parse(e))));
+  const recentEnds = (s: Set<string>) => [...s].filter((e) => Date.parse(e) > lastEnd - CHOICE_WINDOW * 366 * DAY_MS).length;
+  const currency = [...ends]
+    .filter(([, s]) => s.size > 0)
+    .sort((a, b) => recentEnds(b[1]) - recentEnds(a[1]) || b[1].size - a[1].size || Number(b[0] === "USD") - Number(a[0] === "USD") || a[0].localeCompare(b[0]))[0]?.[0];
   if (!currency) return [];
   const rowsOf = (c: Concept, d: boolean) => annual(unitsOf(c)[currency] ?? [], d);
 
-  // 2) 회계연도 이름: 보고서(accn)마다 가장 늦은 기간 끝이 그 보고서의 회계연도(fy). 그 차이를 다수결로 정해 회사가 쓰는 연도 이름에 맞춘다
-  const byAccn = new Map<string, { end: string; fy: number }>();
+  // 2) 회계연도 이름: 기본은 기간 끝 연도(52/53주 회계연도 보정). 보고서(accn)의 fy 가 이와 1 다르면(TGT·HD: 2026-01-31 에 끝난 해가 2025 회계연도)
+  //    그 이름을 따르되, 가장 최근 보고서와 최근 5개 보고서 과반이 같은 차이를 보일 때만. fy 는 보고서마다 틀린 값이 섞여 있어서다:
+  //    TJX·MUFG 는 2021년 전 보고서만 1 작고, CRWD 는 세 해만, CRM 은 최근 한 해만 1 작다 → 모두 기간 끝 연도
+  const byAccn = new Map<string, { end: string; fy: number; filed: string }>();
   for (const [cs, d] of KEY)
     for (const c of cs)
       for (const r of rowsOf(c, d)) {
         if (!r.accn || typeof r.fy !== "number") continue;
         const prev = byAccn.get(r.accn);
-        if (!prev || r.end > prev.end) byAccn.set(r.accn, { end: r.end, fy: r.fy });
+        if (!prev || r.end > prev.end) byAccn.set(r.accn, { end: r.end, fy: r.fy, filed: r.filed ?? "" });
       }
-  const votes = new Map<number, number>();
-  for (const { end, fy } of byAccn.values()) {
-    const diff = fy - shiftedYear(end);
-    if (Math.abs(diff) <= 1) votes.set(diff, (votes.get(diff) ?? 0) + 1);
+  // 같은 기간을 다룬 보고서가 여럿이면(정정 등) 나중에 낸 것
+  const byEnd = new Map<string, { fy: number; filed: string }>();
+  for (const v of byAccn.values()) {
+    const prev = byEnd.get(v.end);
+    if (!prev || v.filed > prev.filed) byEnd.set(v.end, v);
   }
-  const offset = [...votes].sort((a, b) => b[1] - a[1] || Math.abs(a[0]) - Math.abs(b[0]))[0]?.[0] ?? 0;
+  const diffs = [...byEnd]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .slice(0, CHOICE_WINDOW)
+    .map(([end, v]) => v.fy - shiftedYear(end));
+  const lastDiff = diffs[0] ?? 0;
+  const offset = Math.abs(lastDiff) === 1 && diffs.filter((x) => x === lastDiff).length * 2 > diffs.length ? lastDiff : 0;
 
-  // 3) 태그별 연도 값: 같은 연도는 기간 끝이 늦은 값, 같은 기간이면 나중에 제출한(정정 반영) 값
-  const memo = new Map<string, Map<number, { end: string; filed: string; val: number }>>();
-  const series = (c: Concept, d: boolean) => {
+  // 3) 태그별 연도 값 (같은 연도에 값이 여럿이면 better() 참고)
+  //    같은 태그라도 보고서마다 뜻이 바뀐 경우가 있다(SE 의 RevenueFromContract… 는 2023년부터 부분 매출). 그래서 4) 에서 합계 태그를 앞에 둔다
+  const memo = new Map<string, Series>();
+  const series = (c: Concept, d: boolean): Series => {
     const k = `${c.tax}:${c.name}`;
     const hit = memo.get(k);
     if (hit) return hit;
-    const by = new Map<number, { end: string; filed: string; val: number }>();
+    const by: Series = new Map();
     for (const r of rowsOf(c, d)) {
       const year = shiftedYear(r.end) + offset;
-      const filed = r.filed ?? "";
+      const next = { end: r.end, filed: r.filed ?? "", val: r.val };
       const prev = by.get(year);
-      if (!prev || r.end > prev.end || (r.end === prev.end && filed > prev.filed)) by.set(year, { end: r.end, filed, val: r.val });
+      if (!prev || better(next, prev)) by.set(year, next);
     }
     memo.set(k, by);
     return by;
@@ -400,39 +450,66 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
   const latest = Math.max(...keyYears);
   const inWindow = (s: Map<number, unknown>) => [...s.keys()].filter((y) => y > latest - CHOICE_WINDOW && y <= latest).length;
 
-  // 4) 항목마다 태그 하나 (위 우선순위 설명 참고). reported: 최근 5개 연도에 이 항목을 보고했는지
-  const choose = (cs: Concept[], d: boolean): { values: Map<number, number>; reported: boolean } => {
-    const cands = cs.map((c, idx) => ({ idx, s: series(c, d) })).filter((x) => x.s.size > 0);
+  // 4) 항목마다 후보 하나 (위 우선순위 설명 참고). totalFirst: 매출처럼 목록 순서(합계 우선)를 연도 수보다 앞에. from: 연도별로 값을 준 후보 번호
+  const choose = (list: Series[], totalFirst = false): { values: Map<number, number>; from: Map<number, number> } => {
+    const cands = list.map((s, idx) => ({ idx, s, n: inWindow(s) })).filter((x) => x.s.size > 0);
     const values = new Map<number, number>();
-    const first = [...cands].sort((a, b) => Number(b.s.has(latest)) - Number(a.s.has(latest)) || inWindow(b.s) - inWindow(a.s) || a.idx - b.idx)[0];
-    if (!first) return { values, reported: false };
-    for (const [y, v] of first.s) values.set(y, v.val);
+    const from = new Map<number, number>();
+    const enough = Math.min(2, Math.max(0, ...cands.map((x) => x.n)));
+    const first = [...cands].sort(
+      (a, b) =>
+        Number(b.s.has(latest)) - Number(a.s.has(latest)) ||
+        (totalFirst ? Number(b.n >= enough) - Number(a.n >= enough) || a.idx - b.idx : b.n - a.n || a.idx - b.idx),
+    )[0];
+    if (!first) return { values, from };
+    for (const [y, v] of first.s) values.set(y, v.val), from.set(y, first.idx);
     for (const x of cands) {
       if (x === first) continue;
       const overlap = [...x.s.keys()].filter((y) => values.has(y));
       if (!overlap.length || !overlap.every((y) => sameValue(values.get(y)!, x.s.get(y)!.val))) continue;
-      for (const [y, v] of x.s) if (!values.has(y)) values.set(y, v.val);
+      for (const [y, v] of x.s) if (!values.has(y)) values.set(y, v.val), from.set(y, x.idx);
     }
-    return { values, reported: inWindow(values) > 0 };
+    return { values, from };
   };
-  const revenue = choose(REVENUE, true);
-  const operating = choose(OPERATING, true);
-  const net = choose(NET, true);
-  const assets = choose(ASSETS, false);
-  const liabilities = choose(LIABILITIES, false);
-  const equity = choose(EQUITY, false);
-  const equityParent = choose(EQUITY_PARENT, false);
-  const equityWithNci = choose(EQUITY_WITH_NCI, false);
-  const nci = choose(NCI, false);
+  const pick = (cs: Concept[], d: boolean) => choose(cs.map((c) => series(c, d)));
+
+  // 은행·금융사: 수수료 매출(RevenueFromContract…)은 빼고, 합계 태그가 없으면 순이자이익 + 비이자이익으로 계산 (HBAN·FITB·MTB 2024~)
+  const bank = BANK_HINT.some((c) => inWindow(series(c, true)) > 0);
+  const bankRevenue: Series = new Map();
+  if (bank) {
+    const nii = series(BANK_NII, true);
+    for (const [y, p] of series(BANK_NONII, true)) {
+      const q = nii.get(y);
+      if (q && q.end === p.end) bankRevenue.set(y, { end: p.end, filed: p.filed > q.filed ? p.filed : q.filed, val: q.val + p.val });
+    }
+  }
+  const revenueList = [...(bank ? REVENUE.filter((c) => !FEE_ONLY.has(c.name)) : REVENUE).map((c) => series(c, true)), bankRevenue];
+  const bankComputed = revenueList.length - 1;
+  const revenue = choose(revenueList, true);
+  const operating = pick(OPERATING, true);
+  const net = pick(NET, true);
+  const assets = pick(ASSETS, false);
+  const liabilities = pick(LIABILITIES, false);
+  const equity = pick(EQUITY, false);
+  const equityParent = pick(EQUITY_PARENT, false);
+  const equityWithNci = pick(EQUITY_WITH_NCI, false);
+  const nci = pick(NCI, false);
 
   const years = [...new Set([...revenue.values.keys(), ...net.values.keys(), ...assets.values.keys()])].sort((a, b) => a - b);
   return years.map((year) => {
     const notes: string[] = [];
     const revenueVal = revenue.values.get(year) ?? null;
     const operatingVal = operating.values.get(year) ?? null;
-    if (currency !== "USD") notes.push(`금액 통화: ${currency} (주가 통화와 다를 수 있음)`);
-    if (revenueVal === null && !revenue.reported) notes.push("매출: 회사가 매출 합계 항목을 보고하지 않아 비워 둠");
-    if (operatingVal === null && !operating.reported) notes.push("영업이익: 회사가 영업이익 항목을 보고하지 않아 비워 둠 (세전이익으로 대신하지 않음)");
+    if (currency !== "USD") notes.push(`금액 통화: ${currency} (주가 통화와 다를 수 있음, 달러로 환산하지 않은 값)`);
+    // 비우거나 계산한 값은 사유를 남긴다 (AI 분석이 "0" 이나 "감소"로 읽지 않게)
+    if (revenueVal === null)
+      notes.push(
+        bank && !bankRevenue.has(year)
+          ? "매출: 은행·금융사라 이자수익이 빠진 수수료 매출은 매출로 쓰지 않았고, 순이자이익 + 비이자이익도 확인되지 않아 비워 둠"
+          : "매출: 매출 합계 항목에서 이 해 값을 찾지 못해 비워 둠 (기준이 다른 값으로 채우지 않음)",
+      );
+    else if (revenue.from.get(year) === bankComputed) notes.push("매출: 은행·금융사라 순이자이익 + 비이자이익(순영업수익)으로 계산");
+    if (operatingVal === null) notes.push("영업이익: 영업이익 항목에서 이 해 값을 찾지 못해 비워 둠 (세전이익으로 대신하지 않음)");
     const totalAssets = assets.values.get(year) ?? null;
     let totalLiabilities = liabilities.values.get(year) ?? null;
     if (totalLiabilities === null) {
@@ -442,7 +519,7 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
       if (totalAssets !== null && eq !== undefined) {
         totalLiabilities = totalAssets - eq;
         notes.push("부채총계: 회사가 따로 보고하지 않아 자산총계 − 자본총계로 계산");
-      } else if (!liabilities.reported) notes.push("부채총계: 회사가 따로 보고하지 않아 비워 둠");
+      } else notes.push("부채총계: 항목을 찾지 못했고 자산총계 − 자본총계로도 계산할 수 없어 비워 둠");
     }
     return {
       year,

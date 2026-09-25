@@ -1,6 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import { PromptStore } from "../src/llm/prompts.js";
 import { EdgarProvider } from "../src/providers/dart/edgar.js";
 
 /** 버그 점검 BH-03·11·24·32·42·45·73·77, BH-23(EDGAR 부분) 회귀 테스트. 네트워크 없이 가짜 SEC 응답만 쓴다 */
@@ -32,6 +33,13 @@ const TICKERS = {
   "10": { cik_str: 813672, ticker: "CDNS", title: "CADENCE DESIGN SYSTEMS INC" },
   "11": { cik_str: 1000001, ticker: "SIXK", title: "Six-K Only Ltd" },
   "12": { cik_str: 1000002, ticker: "NCI", title: "Holding With Minority Inc" },
+  "13": { cik_str: 1703399, ticker: "SE", title: "Sea Ltd" },
+  "14": { cik_str: 36270, ticker: "MTB", title: "M&T BANK CORP" },
+  "15": { cik_str: 49196, ticker: "HBAN", title: "HUNTINGTON BANCSHARES INC /MD/" },
+  "16": { cik_str: 831001, ticker: "C", title: "CITIGROUP INC" },
+  "17": { cik_str: 109198, ticker: "TJX", title: "TJX COMPANIES INC /DE/" },
+  "18": { cik_str: 1114448, ticker: "NVS", title: "NOVARTIS AG" },
+  "19": { cik_str: 1535527, ticker: "CRWD", title: "CrowdStrike Holdings, Inc." },
 };
 const cikOf = (t: string) => String(Object.values(TICKERS).find((v) => v.ticker === t)!.cik_str).padStart(10, "0");
 
@@ -119,6 +127,100 @@ describe("EDGAR 재무: 태그는 회사마다 하나로 (BH-03)", () => {
       [2022, null],
     ]);
     expect(fin.every((r) => r.notes?.some((n) => n.startsWith("영업이익:")))).toBe(true);
+  });
+
+  it("SE: 부분 매출(RevenueFromContract…)이 더 많은 해를 덮어도 최근 해가 있는 합계 태그(Revenues)를 고르고, 섞지 않은 해는 사유와 함께 비운다", async () => {
+    const f20 = { form: "20-F" };
+    // RevenueFromContract… 는 2023년부터 부분 매출로 뜻이 바뀌었다 (2021·2022 는 합계와 같던 값)
+    const rfc = [9_955, 12_450, 11_454, 14_734, 19_625];
+    const total = [13_064, 16_820, 22_938];
+    const SE = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: [2021, 2022, 2023, 2024, 2025].map((y, i) => cy(y, rfc[i]! * M, f20)),
+      Revenues: [2023, 2024, 2025].map((y, i) => cy(y, total[i]! * M, f20)),
+      OperatingIncomeLoss: [2021, 2022, 2023, 2024, 2025].map((y) => cy(y, (y === 2025 ? 1_985.3 : 100) * M, f20)),
+      NetIncomeLoss: [2021, 2022, 2023, 2024, 2025].map((y) => cy(y, 10 * M, f20)),
+      Assets: [2021, 2022, 2023, 2024, 2025].map((y) => cyi(y, 20_000 * M, f20)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("SE")]: SE }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("SE", 5);
+    expect(fin.map((r) => [r.year, r.revenue])).toEqual([
+      [2021, null],
+      [2022, null],
+      [2023, 13_064 * M],
+      [2024, 16_820 * M],
+      [2025, 22_938 * M],
+    ]);
+    // 2025 영업이익률이 부분 매출 기준 10.1% 가 아니라 합계 기준 8.7%
+    expect(Math.round((fin[4]!.operatingIncome! / fin[4]!.revenue!) * 1000) / 10).toBe(8.7);
+    expect(fin[0]!.notes).toContain("매출: 매출 합계 항목에서 이 해 값을 찾지 못해 비워 둠 (기준이 다른 값으로 채우지 않음)");
+    expect(fin[2]!.notes?.some((n) => n.startsWith("매출:"))).toBe(false);
+  });
+
+  it("최근 해에 한 번만 섞여 든 합계 태그 값이 회사가 꾸준히 쓰는 매출 태그를 밀어내지 않는다", async () => {
+    const STRAY = facts({
+      Revenues: [cy(2025, 99_000 * M)],
+      RevenueFromContractWithCustomerExcludingAssessedTax: [2021, 2022, 2023, 2024, 2025].map((y, i) => cy(y, (100 + i * 10) * M)),
+      NetIncomeLoss: [2021, 2022, 2023, 2024, 2025].map((y) => cy(y, 5 * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: STRAY }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("IONQ", 5);
+    expect(fin.map((r) => r.revenue)).toEqual([100 * M, 110 * M, 120 * M, 130 * M, 140 * M]);
+  });
+
+  it("은행(MTB·HBAN): 수수료 매출(RevenueFromContract…)은 매출로 쓰지 않고, 합계 태그가 없는 해는 순이자이익 + 비이자이익으로 계산한다", async () => {
+    const years = [2021, 2022, 2023, 2024, 2025];
+    const nii = [3_825, 5_822, 7_115, 6_852, 6_948];
+    const nonII = [2_167, 2_357, 2_528, 2_427, 2_742];
+    const MTB = facts({
+      Revenues: [2021, 2022, 2023].map((y, i) => cy(y, (nii[i]! + nonII[i]!) * M)), // 2024년부터 합계 태그를 안 씀
+      RevenueFromContractWithCustomerExcludingAssessedTax: [2022, 2023, 2024, 2025].map((y, i) => cy(y, [1_525, 1_484, 1_541, 1_657][i]! * M)),
+      InterestIncomeExpenseNet: years.map((y, i) => cy(y, nii[i]! * M)),
+      NoninterestIncome: years.map((y, i) => cy(y, nonII[i]! * M)),
+      InterestAndDividendIncomeOperating: years.map((y) => cy(y, 10_000 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 2_600 * M)),
+      Assets: years.map((y) => cyi(y, 208_000 * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("MTB")]: MTB }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("MTB", 5);
+    expect(fin.map((r) => r.revenue)).toEqual([5_992, 8_179, 9_643, 9_279, 9_690].map((v) => v * M));
+    expect(fin.at(-1)!.notes).toContain("매출: 은행·금융사라 순이자이익 + 비이자이익(순영업수익)으로 계산");
+
+    // HBAN: 합계 태그 없이 수수료 매출(순이익보다 작음)만 있는 은행
+    const HBAN = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 1_562 * M)),
+      InterestIncomeExpenseNet: years.map((y) => cy(y, 5_991 * M)),
+      NoninterestIncome: years.map((y) => cy(y, 2_175 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 2_211 * M)),
+      Assets: years.map((y) => cyi(y, 225_106 * M)),
+    });
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("HBAN")]: HBAN }).fetchFn, NOW);
+    expect((await e2.getAnnualFinancials("HBAN", 5)).map((r) => r.revenue)).toEqual(years.map(() => 8_166 * M));
+
+    // 순이자이익·비이자이익도 없으면 수수료 매출을 쓰지 않고 비운다
+    const FEE = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 1_562 * M)),
+      InterestAndDividendIncomeOperating: years.map((y) => cy(y, 10_310 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 2_211 * M)),
+    });
+    const e3 = new EdgarProvider(edgarFetch({ [cikOf("HBAN")]: FEE }).fetchFn, NOW);
+    const fee = await e3.getAnnualFinancials("HBAN", 5);
+    expect(fee.map((r) => r.revenue)).toEqual([null, null, null, null, null]);
+    expect(fee.at(-1)!.notes?.some((n) => n.startsWith("매출: 은행·금융사라"))).toBe(true);
+  });
+
+  it("같은 기간 값은 나중 보고서를 따르되, 나중 값이 반올림만 한 값이면 자세한 값을 둔다 (Citi 2021 자산)", async () => {
+    const C = facts({
+      Revenues: [cy(2021, 71_884 * M, { filed: "2022-02-28" }), cy(2022, 75_338 * M, { filed: "2023-02-27" })],
+      Assets: [
+        cyi(2021, 2_291_413 * M, { filed: "2022-02-28" }),
+        cyi(2021, 2_291_000 * M, { filed: "2024-02-23" }), // 나중 보고서의 비교 연도: 10억 단위로 반올림
+        cyi(2022, 2_416_676 * M, { filed: "2023-02-27" }),
+        cyi(2022, 2_417_500 * M, { filed: "2024-02-23" }), // 반올림이 아닌 재작성 → 나중 값
+      ],
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("C")]: C }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("C", 5);
+    expect(fin.map((r) => r.totalAssets)).toEqual([2_291_413 * M, 2_417_500 * M]);
   });
 
   it("태그 이름만 바꾼 회사는 겹치는 해 값이 같을 때만 옛 태그로 앞 연도를 채운다", async () => {
@@ -230,6 +332,35 @@ describe("EDGAR 외국 기업 20-F·40-F·6-K (BH-24)", () => {
     });
   });
 
+  it("IFRS 제품 매출만 보고하는 회사(NVS: RevenueFromSaleOfGoods)도 매출을 읽는다", async () => {
+    const f20 = { form: "20-F" };
+    const NVS = facts(
+      {
+        RevenueFromSaleOfGoods: [cy(2024, 50_317 * M, f20), cy(2025, 54_532 * M, f20)],
+        RevenueFromRoyalties: [cy(2024, 37 * M, f20), cy(2025, 379 * M, f20)],
+        ProfitLossAttributableToOwnersOfParent: [cy(2024, 11_941 * M, f20), cy(2025, 13_984 * M, f20)],
+        Assets: [cyi(2024, 102_246 * M, f20), cyi(2025, 110_949 * M, f20)],
+      },
+      { tax: "ifrs-full" },
+    );
+    const e = new EdgarProvider(edgarFetch({ [cikOf("NVS")]: NVS }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("NVS", 5);
+    expect(fin.map((r) => [r.year, r.revenue])).toEqual([
+      [2024, 50_317 * M],
+      [2025, 54_532 * M],
+    ]);
+    expect(fin.every((r) => !r.notes?.some((n) => n.startsWith("매출:")))).toBe(true);
+  });
+
+  it("가치·회사 분석 프롬프트는 재무 금액을 주가 통화(quote.currency)가 아니라 financials 행의 currency 로 읽게 한다", async () => {
+    const store = new PromptStore();
+    for (const name of ["value_analysis", "company_overview"] as const) {
+      const t = await store.load(name);
+      expect(t.system, name).toMatch(/financials 행의 currency/);
+      expect(t.system, name).toMatch(/환산하지 않/);
+    }
+  });
+
   it("연간 보고서 값이 하나도 없으면(6-K 만) 빈 성공이 아니라 실패로 알린다", async () => {
     const SIXK = facts({ Revenues: [cy(2025, 10 * M, { form: "6-K" })] });
     const e = new EdgarProvider(edgarFetch({ [cikOf("SIXK")]: SIXK }).fetchFn, NOW);
@@ -311,6 +442,44 @@ describe("EDGAR 회계연도 이름 (BH-42)", () => {
       [2024, 106_566 * M],
       [2025, 104_800 * M],
     ]);
+  });
+});
+
+describe("EDGAR 회계연도 이름: 보고서 fy 가 섞여 있어도 최근 보고서 기준 (BH-42 검증 지적)", () => {
+  /** 1월 말 결산 회사의 10-K 들: 보고서마다 3개 연도(당해+비교 2년), fy 는 diff(기간 끝 연도 기준 차이)로 */
+  const JAN_ENDS = [
+    "2010-01-30", "2011-01-29", "2012-01-28", "2013-02-02", "2014-02-01", "2015-01-31", "2016-01-30", "2017-01-28", "2018-02-03",
+    "2019-02-02", "2020-02-01", "2021-01-30", "2022-01-29", "2023-01-28", "2024-02-03", "2025-02-01", "2026-01-31",
+  ];
+  const tenKs = (fyDiff: (end: string, i: number) => number) => {
+    const rows: Row[] = [];
+    JAN_ENDS.forEach((end, i) => {
+      const fy = Number(end.slice(0, 4)) + fyDiff(end, i);
+      for (let k = Math.max(0, i - 2); k <= i; k++) {
+        const e = JAN_ENDS[k]!;
+        const s = new Date(Date.parse(e) - 363 * 86_400_000).toISOString().slice(0, 10);
+        rows.push(dur(s, e, (1_000 + k) * M, { fy, accn: `acc-${i}`, filed: `${end.slice(0, 4)}-03-30` }));
+      }
+    });
+    return facts({ Revenues: rows });
+  };
+  const labels = async (ticker: string, body: unknown) =>
+    (await new EdgarProvider(edgarFetch({ [cikOf(ticker)]: body }).fetchFn, NOW).getAnnualFinancials(ticker, 5)).map((r) => [r.year, r.revenue]);
+  const endYears = [2022, 2023, 2024, 2025, 2026].map((y, j) => [y, (1_000 + 12 + j) * M]);
+
+  it("TJX: 2021년 전 보고서 12건은 fy 가 1 작고 최근 5건은 기간 끝 연도 → 2026-01-31 에 끝난 해는 2026", async () => {
+    expect(await labels("TJX", tenKs((end) => (end < "2022" ? -1 : 0)))).toEqual(endYears);
+  });
+
+  it("CRWD(세 해만 1 작음)·CRM(최근 한 해만 1 작음)처럼 fy 가 들쭉날쭉하면 기간 끝 연도를 따른다", async () => {
+    const crwd = new Set(["2023-01-28", "2024-02-03", "2025-02-01"]);
+    expect(await labels("CRWD", tenKs((end) => (crwd.has(end) ? -1 : 0)))).toEqual(endYears);
+    expect(await labels("CRWD", tenKs((end) => (end === "2026-01-31" ? -1 : 0)))).toEqual(endYears);
+  });
+
+  it("최근 보고서와 최근 5건 과반이 1 작으면(TGT·KR) 회사 이름을 따른다", async () => {
+    const kr = new Set(["2023-01-28", "2024-02-03"]); // 중간 두 해만 기간 끝 연도
+    expect(await labels("TGT", tenKs((end) => (kr.has(end) ? 0 : -1)))).toEqual(endYears.map(([y, v]) => [y! - 1, v]));
   });
 });
 
