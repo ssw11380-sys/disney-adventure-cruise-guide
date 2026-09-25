@@ -266,10 +266,17 @@ describe("CandleChart 를 쓰는 화면 모두 확인", () => {
   it("종목 상세·지수 상세는 폭을 넘기지 않아 잰 폭·넓은 창 규칙을 따른다", () => {
     for (const rel of ["app/stocks/[code]/index.tsx", "app/market/[code].tsx"]) {
       const found = uses(rel);
-      expect(found, rel).toHaveLength(1);
+      // 종목 상세는 휴대폰 화면 1개 + 넓은 창 배치(3-42 웨이브 C) 1개
+      expect(found, rel).toHaveLength(rel.startsWith("app/stocks") ? 2 : 1);
       expect(found[0], rel).not.toMatch(/\bwidth=/);
       expect(found[0], rel).not.toMatch(/\bheight=/);
     }
+  });
+
+  it("종목 상세 넓은 창 배치는 폭을 넘기지 않고(잰 폭), 높이만 칸에 맞춰 넘긴다 (lib/detailLayout)", () => {
+    const wide = uses("app/stocks/[code]/index.tsx")[1]!;
+    expect(wide).not.toMatch(/\bwidth=/);
+    expect(wide).toMatch(/\bheight=\{height\}/);
   });
 
   it("전체 화면 차트는 창에서 계산한 폭·높이를 넘기고 바탕색(t.bg)을 알린다", () => {

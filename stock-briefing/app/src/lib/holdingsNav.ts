@@ -27,8 +27,16 @@ export interface HoldingsOrder {
 
 export type NavKind = "held" | "watch";
 
+/** 넘기는 구역과 그 순서 */
+export interface NavSection {
+  kind: NavKind;
+  items: readonly NavItem[];
+}
+
 export interface HoldingsNav {
   kind: NavKind;
+  /** 넘기는 순서 전체 (고정한 순서) */
+  items: readonly NavItem[];
   /** 0부터 */
   index: number;
   total: number;
@@ -45,7 +53,7 @@ export function holdingsOrder(list: readonly RegisteredWithQuote[], sort: SortKe
 }
 
 /** 이 종목이 든 구역 (없으면 null — 미등록 종목) */
-export function sectionOf(order: HoldingsOrder, code: string): { kind: NavKind; items: NavItem[] } | null {
+export function sectionOf(order: HoldingsOrder, code: string): NavSection | null {
   if (order.held.some((s) => s.code === code)) return { kind: "held", items: order.held };
   if (order.watch.some((s) => s.code === code)) return { kind: "watch", items: order.watch };
   return null;
@@ -55,7 +63,7 @@ export function sectionOf(order: HoldingsOrder, code: string): { kind: NavKind; 
 export function navAt(kind: NavKind, items: readonly NavItem[], code: string): HoldingsNav | null {
   const index = items.findIndex((s) => s.code === code);
   if (index < 0) return null;
-  return { kind, index, total: items.length, prev: items[index - 1] ?? null, next: items[index + 1] ?? null };
+  return { kind, items, index, total: items.length, prev: items[index - 1] ?? null, next: items[index + 1] ?? null };
 }
 
 /** 가운데 글자 '3/17' */
@@ -70,7 +78,7 @@ export function navSpeech(nav: HoldingsNav): string {
 
 // ── 모듈 저장소 ──
 
-const memory: { kind: NavKind | null; items: NavItem[] | null; last: string | null } = { kind: null, items: null, last: null };
+const memory: { kind: NavKind | null; items: readonly NavItem[] | null; last: string | null } = { kind: null, items: null, last: null };
 
 /** 테스트용: 기억을 지운다 (앱을 새로 연 것과 같다) */
 export function forgetHoldingsNav(): void {
@@ -79,10 +87,13 @@ export function forgetHoldingsNav(): void {
   memory.last = null;
 }
 
-/** ‹ › 로 넘기기 전에 지금 순서를 남긴다. 다음 화면이 같은 순서를 이어 쓴다 */
-export function rememberNav(kind: NavKind, items: NavItem[], to: string): void {
-  memory.kind = kind;
-  memory.items = items;
+/**
+ * ‹ › 로 넘길 때: 지금 화면이 쓰는 순서(고정한 순서)를 남기고, 넘어갈 종목을 '마지막에 본 종목'으로 둔다.
+ * 다음 화면(fromNav)이 같은 순서를 이어 쓴다
+ */
+export function rememberNav(nav: HoldingsNav, to: string): void {
+  memory.kind = nav.kind;
+  memory.items = nav.items;
   memory.last = to;
 }
 
@@ -99,7 +110,7 @@ export function takeLastViewed(): string | null {
 /**
  * 넘기는 동안 이어 쓸 순서: ‹ › 로 온 화면(fromNav)이고 기억한 순서에 이 종목이 있으면 그 순서, 아니면 null(지금 캐시로 새로 만든다)
  */
-export function recallNav(code: string, fromNav: boolean): { kind: NavKind; items: NavItem[] } | null {
+export function recallNav(code: string, fromNav: boolean): NavSection | null {
   if (!fromNav || !memory.items || !memory.kind) return null;
   return memory.items.some((s) => s.code === code) ? { kind: memory.kind, items: memory.items } : null;
 }
@@ -111,14 +122,14 @@ export function recallNav(code: string, fromNav: boolean): { kind: NavKind; item
 export function useHoldingsNav(code: string, fromNav: boolean, active: boolean): HoldingsNav | null {
   const api = useApi();
   const { apiUrl, sort, afterCost } = useSettings();
-  const [frozen, setFrozen] = useState<{ kind: NavKind; items: NavItem[] } | null>(() => recallNav(code, fromNav));
+  const [frozen, setFrozen] = useState<NavSection | null>(() => recallNav(code, fromNav));
   const want = active && !frozen;
   const select = useCallback(
     (list: RegisteredWithQuote[]) => (want ? sectionOf(holdingsOrder(list, sort, afterCost), code) : null),
     [want, sort, afterCost, code],
   );
   // 잔고 목록 캐시를 읽기만 한다 (enabled: false — 서버에 묻지 않음). 고정한 뒤에는 select 가 null 이라 체결이 와도 다시 그리지 않는다
-  const fresh = useQuery<RegisteredWithQuote[], Error, { kind: NavKind; items: NavItem[] } | null>({ queryKey: [apiUrl, "stocks"], queryFn: api.listStocks, enabled: false, select }).data;
+  const fresh = useQuery<RegisteredWithQuote[], Error, NavSection | null>({ queryKey: [apiUrl, "stocks"], queryFn: api.listStocks, enabled: false, select }).data;
   if (want && fresh) setFrozen(fresh);
   const section = frozen ?? null;
   useEffect(() => {

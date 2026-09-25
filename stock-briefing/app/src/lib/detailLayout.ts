@@ -109,6 +109,26 @@ export function analysisTab(pick: DetailTab | null): AnalysisKind {
   return pick === "company" || pick === "value" || pick === "technical" ? pick : "company";
 }
 
+/**
+ * AI 분석 미리보기 글 (윗줄+아랫줄 배치 오른쪽 칸): 마크다운 제목·구분선·표 줄은 빼고, 목록 기호·강조 기호·링크 주소를 걷어 한 문단으로.
+ * 앞 몇 줄만 보이고(foldDetail.previewLines) '더 보기'로 원래 마크다운 전체를 보인다
+ */
+export function markdownPreview(md: string): string {
+  return md
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*_]{3,}$/.test(l) && !l.startsWith("|"))
+    .map((l) =>
+      l
+        .replace(/^>\s?/, "")
+        .replace(/^[-*+]\s+/, "")
+        .replace(/^\d+\.\s+/, "")
+        .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+        .replace(/\*\*|__|`/g, ""),
+    )
+    .join(" ");
+}
+
 // ── 합친 머리 ──
 
 export interface DetailHeaderInput {
@@ -138,6 +158,15 @@ export interface DetailHeaderLayout {
    * (이름은 '…'로 줄어들 수 있지만 가격·등락 숫자는 줄이지 않는다)
    */
   tier: "one" | "stateBelow" | "quoteBelow";
+}
+
+/** 시세 기준 시각 짧은 표기 "9/23 20:00" (한국 시간) — 합친 머리가 한 줄에 들어가지 않을 때 긴 표기 대신 쓴다 */
+export function shortStamp(iso: string | null | undefined): string {
+  const ms = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(ms)) return "-";
+  const d = new Date(ms + 9 * 3_600_000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
 /** 머리에서 이름이 줄어들어도 남기는 글자 수 */
