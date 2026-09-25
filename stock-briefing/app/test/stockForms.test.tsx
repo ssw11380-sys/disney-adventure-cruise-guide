@@ -449,6 +449,50 @@ describe("BH-55·70: 체결 반영 (직접 입력 종목)", () => {
     expect(h.update.mock.calls.at(-1)![0]).toMatchObject({ quantity: 10, avgPrice: 188.12339 });
   });
 
+  it("새 평단이 칸에 줄여 보이던 글자와 같아도 평단을 보낸다 (재현: $0.0537 칸 '0.05' + $0.0463 매수 → 평단 0.05 를 안 보내 매입금액 $107.40 이 남던 경우, 실제 $100)", () => {
+    const r = open(manual({}));
+    expect(value(r, "평균 단가")).toBe("0.05");
+    trade(r, "buy", "1000", "0.0463");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toEqual({ code: "SNDL", quantity: 2000, avgPrice: 0.05, memo: null });
+  });
+
+  it("국내도 같다 (재현: 70,000.25원 4주 칸 '70000' + 69,999.75원 4주 → 평단 70,000 을 안 보내 수량만 저장되던 경우)", () => {
+    const r = open(manual({ code: "005930", name: "삼성전자", market: "KOSPI", quantity: 4, avgPrice: 70000.25 }));
+    expect(value(r, "평균 단가")).toBe("70000");
+    trade(r, "buy", "4", "69999.75");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toEqual({ code: "005930", quantity: 8, avgPrice: 70000, memo: null });
+  });
+
+  it("매도는 평단이 그대로라 수량만, 전부 팔면 수량·평단을 비운다", () => {
+    const r = open(manual({}));
+    trade(r, "sell", "400", "0.07");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toEqual({ code: "SNDL", quantity: 600, memo: null });
+    const r2 = open(manual({}));
+    trade(r2, "sell", "1000", "0.07");
+    saveTrade(r2);
+    expect(h.update.mock.calls[1][0]).toEqual({ code: "SNDL", quantity: null, avgPrice: null, memo: null });
+  });
+
+  it("위 칸에서 고친 평단으로 계산한 체결은 그 평단으로 저장한다", () => {
+    const r = open(manual({}));
+    typeIn(r, "평균 단가", "0.06");
+    trade(r, "sell", "500", "0.07");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toEqual({ code: "SNDL", quantity: 500, avgPrice: 0.06, memo: null });
+  });
+
+  it("위 칸의 수량이 숫자가 아니면 수량을 비우지 않고 입력 확인을 띄운다", () => {
+    const r = open(manual({}));
+    typeIn(r, "보유 수량", "abc");
+    trade(r, "buy", "10", "0.05");
+    saveTrade(r);
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.alert.mock.calls[0][0]).toBe("입력 확인");
+  });
+
   it("국내 종목 평단은 예전처럼 소수 둘째 자리까지", () => {
     const r = open(manual({ code: "005930", name: "삼성전자", market: "KOSPI", quantity: 3, avgPrice: 70000 }));
     trade(r, "buy", "1", "70001");

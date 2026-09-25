@@ -10,7 +10,7 @@ import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { formatPrice, isUsMarket } from "@/lib/format";
 import { parseStockCode } from "@/lib/freshness";
-import { avgText, draftOf, editDraft, holdingPatch, normNum, normText, parseNum, qtyText, rebaseDraft, type Draft, type Norm } from "@/lib/holdingForm";
+import { avgText, draftOf, editDraft, holdingPatch, normNum, normText, parseNum, qtyText, rebaseDraft, tradePatch, type Draft, type HoldingPatch, type Norm } from "@/lib/holdingForm";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 보유 수량/평단/메모 수정, 매수·매도 기록(평단 자동 계산), 삭제 */
@@ -139,8 +139,8 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
   const num = parseNum;
 
   /** 바꾼 칸만 보낸다 (메모만 고치면 수량·평단은 그대로). 토스 종목은 메모만 */
-  const save = (values: { quantity: string; avgPrice: string } = { quantity, avgPrice }) => {
-    const patch = locked ? {} : holdingPatch(initial, values);
+  const save = (changes: HoldingPatch = holdingPatch(initial, { quantity, avgPrice })) => {
+    const patch = locked ? {} : changes;
     if ("error" in patch) {
       Alert.alert("입력 확인", patch.error);
       return;
@@ -167,10 +167,13 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     return applyTrade({ quantity: num(quantity), avgPrice: avg0 }, side, q, p, cur);
   })();
 
-  /** 체결을 반영해 바로 저장 (예전: 위 칸에 반영 → 저장, 2단계). 수량·평단은 미리보기에 보인 값 그대로 (applyTrade 가 자리를 맞춤) */
+  /**
+   * 체결을 반영해 바로 저장 (예전: 위 칸에 반영 → 저장, 2단계). 수량·평단은 미리보기에 보인 값 그대로 (applyTrade 가 자리를 맞춤).
+   * 칸 글자가 아니라 서버의 원래 값과 숫자로 비교한다 — 새 평단이 칸의 줄인 글자("0.05")와 같아도 빠뜨리지 않게 (BH-55)
+   */
   const saveTrade = () => {
     if (!preview || "error" in preview) return;
-    save({ quantity: preview.quantity > 0 ? String(preview.quantity) : "", avgPrice: preview.avgPrice !== null ? String(preview.avgPrice) : "" });
+    save(tradePatch(stock, preview));
   };
 
   const confirmRemove = () => {
