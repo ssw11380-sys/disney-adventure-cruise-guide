@@ -1,5 +1,5 @@
 import React from "react";
-import { Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
+import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type StyleProp, type TextStyle } from "react-native";
 import { isBigText, LINE_COL, LINE_H, lineCols, lineH } from "@/lib/textScale";
 import { font, fontCap, space, useFontScale, useTheme } from "@/theme";
 import { FlashPrice } from "./FlashPrice";
@@ -53,6 +53,7 @@ export function StockLine({
   accessibilityHint,
   accessibilityActions,
   onAccessibilityAction,
+  onLayout,
   fixedHeight = false,
 }: {
   rank?: number;
@@ -74,6 +75,8 @@ export function StockLine({
   accessibilityHint?: string;
   accessibilityActions?: { name: string; label?: string }[];
   onAccessibilityAction?: (name: string) => void;
+  /** 줄 위치 (잔고: 접고 펼 때 이어 보기, 3-42). 주지 않으면 지금과 같다 */
+  onLayout?: (e: LayoutChangeEvent) => void;
   /** 높이를 LINE_H 로 고정 (FlatList getItemLayout 을 쓰는 목록). 아니면 최소 높이만 — 큰 글씨에서 줄이 늘어난다 */
   fixedHeight?: boolean;
 }) {
@@ -88,6 +91,7 @@ export function StockLine({
     <Pressable
       onPress={onPress}
       onLongPress={onLongPress}
+      onLayout={onLayout}
       delayLongPress={350}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? `${name}${sub ? `, ${sub}` : ""}${price ? `, 현재가 ${price.text}, ${price.rate}` : ""}`}

@@ -5,8 +5,15 @@ import { Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { headerH, TAB_ICON as ICON, tabBarH } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
-import { railWidth } from "@/lib/windowClass";
+import { isWide, railWidth } from "@/lib/windowClass";
 import { font, fontCap, slopFor, space, useFontScale, useTheme } from "@/theme";
+
+/**
+ * 넓은 창(폭 등급 중간 이상 + 플래그 foldLayout)에서 탭 화면 머리(52)를 숨기는 탭 (3-42 공통 틀).
+ * 숨기는 탭은 제 화면 안에 이름·검색을 직접 그린다 — 잔고: 맨 위 띠 오른쪽 끝의 검색 버튼 (app/(tabs)/index).
+ * 아직 넓은 창 배치가 없는 탭은 머리를 그대로 둔다 (제 화면을 넓은 창용으로 바꿀 때 여기서 켠다)
+ */
+const WIDE_HEADERLESS: Readonly<Record<"index" | "discover" | "briefings" | "settings", boolean>> = { index: true, discover: false, briefings: false, settings: false };
 
 export default function TabsLayout() {
   const t = useTheme();
@@ -17,7 +24,15 @@ export default function TabsLayout() {
   const headH = headerH(scale);
   // 넓고 높이가 짧은 창(펼친 폴드8 가로 933×704 등)은 탭을 왼쪽 세로 막대로 옮겨 세로 공간을 되찾는다 (3-42, 플래그 foldLayout).
   // 플래그가 꺼져 있거나 그 밖의 창은 지금처럼 아래 탭 바
-  const { rail } = useFoldLayout();
+  const fold = useFoldLayout();
+  const { rail } = fold;
+  const wide = fold.on && isWide(fold);
+  // 탭마다: 넓은 창이면 머리를 숨길지, 세로 막대면 탭 묶음을 막대 세로 가운데로 (첫 탭 위·마지막 탭 아래 여백을 자동으로 나눠 가짐 —
+  // 라이브러리의 세로 막대 안쪽 칸이 flex:1 세로 줄이라 margin 'auto' 로 가운데에 모인다. 직접 그리는 탭 막대는 필요 없다)
+  const perTab = (name: keyof typeof WIDE_HEADERLESS, edge?: "first" | "last") => ({
+    ...(wide && WIDE_HEADERLESS[name] ? { headerShown: false } : null),
+    ...(rail && edge ? { tabBarItemStyle: edge === "first" ? { marginTop: "auto" as const } : { marginBottom: "auto" as const } } : null),
+  });
   const icon = (name: keyof typeof Ionicons.glyphMap, onPress: () => void, label: string) => (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} hitSlop={slopFor(ICON, space.sm)} style={{ paddingHorizontal: space.sm }}>
       <Ionicons name={name} size={ICON} color={t.ink} />
@@ -74,6 +89,7 @@ export default function TabsLayout() {
           tabBarAccessibilityLabel: "잔고",
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "wallet" : "wallet-outline"} size={ICON} color={color} />,
           headerRight: () => <View style={{ flexDirection: "row", marginRight: space.sm }}>{icon("search", () => router.push("/stocks/add"), "종목 검색")}</View>,
+          ...perTab("index", "first"),
         }}
       />
       <Tabs.Screen
@@ -83,15 +99,26 @@ export default function TabsLayout() {
           tabBarAccessibilityLabel: "발견",
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "compass" : "compass-outline"} size={ICON + 1} color={color} />,
           headerRight: () => <View style={{ flexDirection: "row", marginRight: space.sm }}>{icon("search", () => router.push("/stocks/add"), "종목 검색")}</View>,
+          ...perTab("discover"),
         }}
       />
       <Tabs.Screen
         name="briefings"
-        options={{ title: "브리핑", tabBarAccessibilityLabel: "브리핑", tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "document-text" : "document-text-outline"} size={ICON} color={color} /> }}
+        options={{
+          title: "브리핑",
+          tabBarAccessibilityLabel: "브리핑",
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "document-text" : "document-text-outline"} size={ICON} color={color} />,
+          ...perTab("briefings"),
+        }}
       />
       <Tabs.Screen
         name="settings"
-        options={{ title: "설정", tabBarAccessibilityLabel: "설정", tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "options" : "options-outline"} size={ICON} color={color} /> }}
+        options={{
+          title: "설정",
+          tabBarAccessibilityLabel: "설정",
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "options" : "options-outline"} size={ICON} color={color} />,
+          ...perTab("settings", "last"),
+        }}
       />
     </Tabs>
   );
