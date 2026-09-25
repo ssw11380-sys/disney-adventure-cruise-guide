@@ -197,8 +197,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       morningCron: settings.morningEnabled ? timeToCron(settings.morningTime, settings.weekdaysOnly) : null,
       afternoonCron: settings.afternoonEnabled ? timeToCron(settings.afternoonTime, settings.weekdaysOnly) : null,
       timezone: opts.config.timezone,
-      // 브리핑 직전에 토스 계좌를 한 번 더 읽어 수량·평단이 최신이 되게 한다
-      ...(tossDeps ? { beforeRun: async () => void (await tossDeps!.autoSync.run("briefing")) } : {}),
+      // 브리핑 직전에 토스 계좌를 한 번 더 읽어 수량·평단이 최신이 되게 한다 (상한 30초).
+      // 자동 동기화를 껐으면(TOSS_SYNC_MINUTES=0) 하지 않는다 — 잠금이 풀려 직접 고친 값을 덮어쓰지 않게
+      ...(tossDeps?.autoSync.enabled ? { beforeRun: () => tossDeps!.autoSync.beforeBriefing() } : {}),
       log,
     });
     scheduler.start();

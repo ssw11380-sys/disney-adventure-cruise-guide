@@ -51,7 +51,38 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("수량·평단은 8바이트(double precision)라 토스 소수 값이 끝자리까지 그대로 돌아온다 (BH-48)", async () => {
+    const types = await sql<{ column_name: string; data_type: string }>`
+      select column_name, data_type from information_schema.columns
+      where table_name = 'registered_stocks' and column_name in ('quantity', 'avg_price') order by column_name`.execute(db);
+    expect(types.rows).toEqual([
+      { column_name: "avg_price", data_type: "double precision" },
+      { column_name: "quantity", data_type: "double precision" },
+    ]);
+    await db
+      .insertInto("registered_stocks")
+      .values({ code: "VRT", name: "VRT", market: "NYSE", quantity: 16.123456, avg_price: 201234.57, memo: null, created_at: "x", updated_at: "x" })
+      .execute();
+    const read = () => db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", "VRT").executeTakeFirst();
+    try {
+      expect(await read()).toEqual({ quantity: 16.123456, avg_price: 201234.57 });
+      // 버전 6 이전 DB(real 4바이트, 5 = 계좌 한 장 브리핑까지 적용됨)에 있던 값은 지금까지 읽히던 값 그대로 옮긴다
+      await sql`alter table registered_stocks alter column quantity type real, alter column avg_price type real`.execute(db);
+      await db.updateTable("registered_stocks").set({ quantity: 16.123456, avg_price: 1234.5678 }).where("code", "=", "VRT").execute();
+      expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
+      await sql`delete from schema_version where version = 6`.execute(db);
+      await migrate(db, "postgres");
+      expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
+      const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6]);
+      const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
+      expect(Number(doubles.rows[0]!.n)).toBe(2);
+    } finally {
+      await db.deleteFrom("registered_stocks").where("code", "=", "VRT").execute();
+    }
   });
 
   it("종목 마스터 → 검색 → 등록 → 브리핑 → 조회 전체 흐름", async () => {

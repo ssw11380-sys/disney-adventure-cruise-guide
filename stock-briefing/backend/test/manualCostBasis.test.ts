@@ -118,7 +118,8 @@ describe("PF-05 잠금이 풀린 뒤 직접 고친 평단", () => {
     it(`${mode}: 지웠다가 수량·평단을 넣어 다시 등록해도 옛 토스 매입금액을 쓰지 않는다`, async () => {
       const { db, svc, code } = await seed(mode);
       await svc.refreshMaster();
-      expect(await svc.remove(code)).toEqual({ tossExcluded: false });
+      // 토스 키가 있으면(동기화가 멈췄거나 자동 동기화가 꺼져 잠금만 풀린 경우) 마지막 토스 스냅샷에 있던 종목이라 동기화에서도 뺀다 (BH-46, 다시 등록하면 다시 맞춤)
+      expect(await svc.remove(code)).toEqual({ tossExcluded: mode !== "no-api" });
       await svc.register({ code, quantity: 10, avgPrice: 200 });
       expect((await evaluationOf(svc, code)).evaluation).toMatchObject({ costBasis: 2000, profit: -500 });
       await db.destroy();

@@ -478,7 +478,8 @@ export class StockService {
   }
 
   private async removeNow(code: string): Promise<{ tossExcluded: boolean }> {
-    const synced = (await this.tossSynced()).has(code);
+    // 동기화가 오래 멈췄거나 자동 동기화가 꺼져 잠그지 않아도 마지막 토스 스냅샷에 있던 종목이면 뺀다 (다음 동기화가 지운 종목을 다시 넣지 않게)
+    const synced = (await this.tossSynced(true)).has(code);
     const r = await this.deps.db.deleteFrom("registered_stocks").where("code", "=", code).executeTakeFirst();
     if (Number(r.numDeletedRows) === 0) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
     if (synced) await this.setExcluded(code, true);
@@ -518,19 +519,21 @@ export class StockService {
    * 토스 계좌에서 맞추는 종목 = 마지막 동기화 때 토스에 있던 종목 − 사용자가 뺀 종목.
    * 토스 연동이 꺼져 있으면(키 없음) 잠그지 않는다
    */
-  private syncedFrom(snapshot: string | null, excluded: string | null, detail: string | null): Set<string> {
-    if (!this.deps.tossOpenApi || this.deps.tossSyncMinutes === 0) return new Set();
-    // 동기화가 멈춘 지(3시간) 오래면 잠그지 않는다 — 옛 값에 묶여 고칠 수 없게 되지 않게
+  private syncedFrom(snapshot: string | null, excluded: string | null, detail: string | null, evenIfStale = false): Set<string> {
+    if (!this.deps.tossOpenApi) return new Set();
+    // 자동 동기화를 껐거나(0분) 동기화가 멈춘 지(3시간) 오래면 잠그지 않는다 — 옛 값에 묶여 고칠 수 없게 되지 않게.
+    // evenIfStale: 삭제는 잠금과 상관없이 마지막 토스 스냅샷에 있던 종목이면 동기화에서 뺀다 (수동 동기화·재개 때 다시 나타나지 않게)
+    if (!evenIfStale && this.deps.tossSyncMinutes === 0) return new Set();
     const syncedAt = detail ? Date.parse(((): string => { try { return String((JSON.parse(detail) as { syncedAt?: string }).syncedAt ?? ""); } catch { return ""; } })()) : NaN;
-    if (Number.isNaN(syncedAt) || this.now().getTime() - syncedAt > 3 * 3_600_000) return new Set();
+    if (!evenIfStale && (Number.isNaN(syncedAt) || this.now().getTime() - syncedAt > 3 * 3_600_000)) return new Set();
     const ex = new Set(parseCodes(excluded));
     return new Set(parseCodes(snapshot).filter((c) => !ex.has(c)));
   }
 
-  async tossSynced(): Promise<Set<string>> {
+  async tossSynced(evenIfStale = false): Promise<Set<string>> {
     const rows = await this.deps.db.selectFrom("meta").select(["key", "value"]).where("key", "in", [SNAPSHOT_KEY, EXCLUDED_KEY, TOSS_DETAIL_KEY]).execute();
     const v = (k: string) => rows.find((r) => r.key === k)?.value ?? null;
-    return this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY));
+    return this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY), evenIfStale);
   }
 
   private async setExcluded(code: string, on: boolean): Promise<void> {
