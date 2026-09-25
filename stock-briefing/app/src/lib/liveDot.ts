@@ -83,7 +83,8 @@ export interface MarketChip {
 
 /**
  * 위젯 장 상태 칩 — 서버 services/widgetPayload.ts 의 marketChip 과 같은 함수 (공용 픽스처 shared/fixtures/marketChip.json).
- * 위젯이 스스로 받은 값(/api/widget)과 앱이 바로 넘기는 값(WidgetBridge)이 번갈아 그려지므로 둘이 다르면 칩이 오락가락한다.
+ * 위젯이 스스로 받은 값(/api/widget?…&sessions=1 — widgets/data.ts WIDGET_PATH)과 앱이 바로 넘기는 값(WidgetBridge)이 번갈아 그려지므로
+ * 둘이 다르면 칩이 오락가락한다. 서버는 sessions=1 이 없는 예전 앱에는 달력만 본 칩(sessions 없이 부른 이 함수)을 준다 — 예전 앱의 WidgetBridge 와 같게.
  *  - 토스 달력(한국 08:00~20:00, 미국은 정규장만)으로 열린 시장이 있으면: 실시간 / 한국 장중 / 미국 장중 (금색)
  *  - 두 시장이 달력으로 닫혀 있어도 보유 종목 세션에 열린 세션(미국 프리·애프터·주간거래)이 있으면 문구만 그 세션 이름 — 잔고 상태 줄 맨 앞 세션과 같은 말.
  *    open(금색)·kr·us 는 달력 그대로(위젯 갱신 주기·지연 판단은 그대로), 그 세션이 끝나는 때를 nextChangeAt 에 넣는다

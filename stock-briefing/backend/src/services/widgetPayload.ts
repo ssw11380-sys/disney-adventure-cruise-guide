@@ -7,8 +7,9 @@ import type { RegisteredWithQuote } from "./stockService.js";
 /**
  * 홈 화면 위젯 한 번에 필요한 것만 (3-16). 위젯 3종이 이 응답 하나를 같이 쓴다.
  *  - 시세는 위젯이 쓰는 칸만(가격·등락·통화·시각·환율·지연 표시), 평가는 그대로
- *  - 장 상태 칩: 앱 잔고 탭 띠와 같은 규칙(/api/market/status 기준). 달력으로는 닫혀 있어도 보유 미국 종목의 프리·애프터·주간거래가 열려 있으면
- *    문구만 그 세션 이름(앱 잔고 상태 줄과 같은 말)
+ *  - 장 상태 칩: 앱 잔고 탭 띠와 같은 규칙(/api/market/status 기준). 새 앱이 물을 때(?sessions=1)만, 달력으로는 닫혀 있어도 보유 미국 종목의
+ *    프리·애프터·주간거래가 열려 있으면 문구만 그 세션 이름(앱 잔고 상태 줄과 같은 말). 예전 앱(쿼리 없음)에는 예전처럼 달력만 본 칩 —
+ *    예전 앱이 위젯을 바로 그릴 때(WidgetBridge)의 칩이 달력만 보기 때문이다 (다르면 앱을 열고 닫을 때마다 칩이 번갈아 바뀐다)
  *  - 브리핑: 보유 비중(원화 환산 평가금) 상위 3종목의 최신 요약 첫 줄 (위젯이 한 줄만 보여 준다)
  *  - features: 위젯이 쓰는 기능 플래그만 (위젯은 /api/features 를 따로 받지 않는다). 예전 앱은 모르는 칸이라 무시한다
  *  - indices: 잔고 위젯 지수 줄 (코스피·나스닥·원/달러). widgetIndexLine 이 켜져 있고 새 앱이 물을 때(?indices=1)만 — 아니면 지수를 부르지도
@@ -138,6 +139,7 @@ export function sessionViews(sessions: readonly (QuoteSession | null | undefined
  *    앱 잔고 상태 줄("미국 주간거래 · 한국 휴장")의 맨 앞 세션과 같은 말 (sessionViews 로 같은 세션을 고른다. 예전에는 이때 "한국 휴장"·"장 마감").
  *    open(금색)·kr·us 는 그대로 두어 위젯의 갱신 주기·지연 판단은 바뀌지 않고, 그 세션이 끝나는 때를 nextChangeAt 에 넣어 세션이 바뀌면 칩을 감추고 다시 받게 한다
  *  - 아니면 휴장 / 한국 휴장 / 장 마감
+ * sessions 를 비우면(예전 앱이 물을 때 — /api/widget 에 &sessions=1 없음) 달력만 본 예전 칩이다 (예전 앱의 WidgetBridge 와 같은 값)
  */
 export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | null | undefined)[] = [], now: number = Date.parse(s.now)): WidgetMarket {
   const kr = s.KR, us = s.US;
@@ -188,7 +190,13 @@ export function buildWidgetPayload(
   stocks: RegisteredWithQuote[],
   latest: Array<{ code: string; name: string; latest: Briefing | null }>,
   status: MarketStatus | null,
-  extra: { features?: WidgetFeatures | undefined; indices?: readonly MarketIndex[] | null | undefined; board?: readonly MarketIndex[] | null | undefined } = {},
+  extra: {
+    features?: WidgetFeatures | undefined;
+    indices?: readonly MarketIndex[] | null | undefined;
+    board?: readonly MarketIndex[] | null | undefined;
+    /** 새 앱(?sessions=1): 칩에 보유 종목 세션 이름을 쓴다. 아니면 달력만 본 칩 (예전 앱의 WidgetBridge 와 같게) */
+    sessions?: boolean | undefined;
+  } = {},
 ): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
   const ok = latest.filter((b) => b.latest?.status === "ok");
@@ -200,7 +208,7 @@ export function buildWidgetPayload(
   });
   const payload: WidgetPayload = {
     v: 1,
-    market: status ? marketChip(status, stocks.map((x) => x.quote?.session)) : null,
+    market: status ? marketChip(status, extra.sessions ? stocks.map((x) => x.quote?.session) : []) : null,
     stocks: stocks.map(slim),
     latestIds: ok.map((b) => b.latest!.id).sort((a, b) => a - b),
     briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary.split("\n").find((l) => l.trim()) ?? "", createdAt: b.latest!.createdAt })),

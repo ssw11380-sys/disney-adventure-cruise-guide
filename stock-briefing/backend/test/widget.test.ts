@@ -5,7 +5,7 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { QuoteSession } from "../src/domain/types.js";
-import type { MarketState, MarketStatus } from "../src/providers/market/calendar.js";
+import type { MarketCalendar, MarketState, MarketStatus } from "../src/providers/market/calendar.js";
 import type { StockSessionFacts } from "../src/providers/market/tossRealtime.js";
 import { sessionAt, toQuoteSession } from "../src/services/liveSession.js";
 import { buildWidgetPayload, marketChip, sessionViews } from "../src/services/widgetPayload.js";
@@ -66,11 +66,54 @@ describe("위젯 칩 공용 픽스처 (앱 WidgetBridge 와 같은 칩)", () => 
         if (h.session) expect(toQuoteSession(sessionAt(h.code, new Date(c.sessionsAt ?? c.now), { calendar: c.status, stock: h.facts }))).toStrictEqual(h.session);
       }
       const sessions = c.holdings.map((h) => h.session);
-      // /api/widget 과 같은 부름 (now 는 장 상태의 now)
+      // /api/widget?sessions=1(새 앱)과 같은 부름 (now 는 장 상태의 now)
       expect(marketChip(c.status, sessions)).toStrictEqual(c.chip);
       expect(sessionViews(sessions, Date.parse(c.now)).map((v) => v.label).join(" · ")).toBe(c.head);
     });
   }
+});
+
+/**
+ * 예전 앱(runtime 1.4.0 에 OTA 전 · 1.3.0)의 앱 쪽 칩(WidgetBridge)은 달력만 본다(useAnyMarketOpen). 서버가 먼저 배포돼도
+ * 위젯이 스스로 받는 칩이 그와 같아야 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀌지 않는다 → 세션 이름 칩은 새 앱이 붙이는
+ * &sessions=1 이 있을 때만 (새 앱의 WidgetBridge 는 같은 세션 이름 칩을 그린다 — 공용 픽스처)
+ */
+describe("GET /api/widget 장 상태 칩: 세션 이름은 새 앱(&sessions=1)에만", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketChip.json", import.meta.url), "utf8")) as { cases: { name: string; now: string; status: MarketStatus; chip: unknown }[] };
+  const c = fixture.cases.find((x) => x.name === "추석 09:59 · 미국 주간거래 · 한국 휴장")!;
+  let db: Db;
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  beforeEach(async () => {
+    db = await createMigratedDb(":memory:");
+    await db
+      .insertInto("registered_stocks")
+      .values(["035420", "VRT"].map((code, i) => ({ code, name: code, market: code === "VRT" ? "NYSE" : "KOSPI", quantity: 1, avg_price: 100, memo: null, created_at: `2026-09-01T00:00:0${i}+09:00`, updated_at: "2026-09-01T00:00:00+09:00" })))
+      .execute();
+    const calendar = { status: async () => c.status } as unknown as MarketCalendar;
+    app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ generator: new FakeGenerator(), calendar }), logger: false, enableScheduler: false, now: () => new Date(c.now) });
+  });
+  afterEach(async () => {
+    await app.close();
+    await db.destroy();
+  });
+
+  it("예전 앱(쿼리 없음 · ?indices=1 · &board=1): 달력만 본 칩 — main 서버와 같다 (추석 미국 주간거래에 '한국 휴장')", async () => {
+    const calendarOnly = { label: "한국 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T13:30:00.000Z" };
+    expect(marketChip(c.status)).toEqual(calendarOnly); // main 의 marketChip(status) 와 같은 값
+    for (const url of ["/api/widget", "/api/widget?indices=1", "/api/widget?indices=1&board=1"]) {
+      const body = (await app.inject({ method: "GET", url })).json();
+      expect(body.stocks.map((s: { c: string }) => s.c)).toEqual(["035420", "VRT"]);
+      expect(body.market, url).toEqual(calendarOnly);
+    }
+  });
+
+  it("새 앱(&sessions=1): 보유 미국 종목의 주간거래 이름 — 앱 WidgetBridge 가 그리는 칩(공용 픽스처)과 같다", async () => {
+    for (const url of ["/api/widget?indices=1&sessions=1", "/api/widget?indices=1&board=1&sessions=1"]) {
+      const body = (await app.inject({ method: "GET", url })).json();
+      expect(body.market, url).toEqual(c.chip);
+      expect(body.market.label).toBe("미국 주간거래");
+    }
+  });
 });
 
 describe("GET /api/widget (3-16)", () => {

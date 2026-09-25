@@ -290,9 +290,12 @@ async function legacyUntil(apiUrl: string): Promise<number> {
 
 /**
  * 위젯 응답 주소. indices=1 은 "지수 줄을 그릴 수 있는 앱"이라는 표시다 — 서버는 이 표시가 있을 때만 지수를 넣는다
- * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다
+ * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다.
+ * sessions=1 은 "앱이 위젯을 바로 그릴 때도 세션 이름 칩을 그린다"는 표시다 (components/WidgetBridge → lib/liveDot widgetChip) —
+ * 서버는 이 표시가 있을 때만 칩에 보유 종목 세션 이름(미국 주간거래 등)을 쓴다. 예전 앱(표시 없음)은 달력만 본 칩을 그리므로 서버도 그렇게 준다
+ * (둘이 다르면 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀐다)
  */
-const WIDGET_PATH = "/api/widget?indices=1";
+const WIDGET_PATH = "/api/widget?indices=1&sessions=1";
 /**
  * 지수·환율 위젯이 있을 때만 &board=1 (서버는 widgetMarket 이 켜져 있고 이 표시가 있을 때만 판 9개를 넣는다).
  * 위젯이 없는 사용자의 응답·ETag 는 그대로다. ETag 는 본문으로 만들므로 board 가 있는 응답과 없는 응답의 ETag 가 섞여도 304 가 잘못 나지 않는다

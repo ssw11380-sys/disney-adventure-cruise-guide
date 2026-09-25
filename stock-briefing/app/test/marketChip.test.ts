@@ -5,7 +5,7 @@ import { liveCounts, marketChip, marketSessions, sessionStatus, widgetChip, type
 import { quote } from "./helpers";
 
 /**
- * 위젯 장 상태 칩: 위젯이 스스로 받은 값(서버 /api/widget — widgetPayload.marketChip)과 앱이 위젯에 바로 넘기는 값
+ * 위젯 장 상태 칩: 위젯이 스스로 받은 값(서버 /api/widget?sessions=1 — widgetPayload.marketChip)과 앱이 위젯에 바로 넘기는 값
  * (components/WidgetBridge — lib/liveDot widgetChip)이 같아야 한다. 다르면 앱·위젯이 번갈아 그릴 때마다 칩이
  * "미국 주간거래" ↔ "한국 휴장"으로 바뀐다 (2026-09-25 09:59 추석 · 미국 주간거래).
  * 서버가 만든 공용 픽스처(stock-briefing/shared/fixtures/marketChip.json)로 세션 표 전체를 묶고, 잔고 상태 줄 앞머리도 같은 세션을 말하는지 본다.

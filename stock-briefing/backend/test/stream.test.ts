@@ -262,6 +262,39 @@ describe("웹소켓이 받는 종목 판단 (3-17 리뷰)", () => {
     // 체결이 없어도 PING 응답이 오면 살아 있는 것으로
     expect(wsCovered({ connected: true, subscribed: ["trade:kr:005930"], lastMessageAt: "2026-09-24T09:00:00Z", lastAliveAt: "2026-09-24T09:59:40Z" }, now)).not.toBeNull();
   });
+
+  it("구독 중이어도 웹소켓이 이번 세션 체결을 주지 않는 종목(wsServed 밖)은 토스 웹으로 폴링한다 — 초록 점과 같은 기준", async () => {
+    // 미국 주간거래: 웹소켓은 붙어 VRT·APH 를 구독 중이지만 20:00 뒤 미국 체결을 준 적이 없다 → 초록 점은 토스 웹 3초 갱신으로 켜진다.
+    // 스트림이 구독 종목이라고 폴링하지 않으면 앱 가격은 30초(보정) 마다만 바뀐다
+    const live = new FakeLive();
+    const subscribed: LiveTicks["status"] = () => ({ enabled: true, connected: true, subscribed: ["trade:us:VRT", "trade:us:APH"], lastMessageAt: new Date().toISOString(), lastError: null });
+    live.status = subscribed as unknown as FakeLive["status"];
+    const run = async (served: string[] | Error) => {
+      const asked: string[][] = [];
+      const quick: QuickPriceSource = { name: "toss", getMany: async (c) => (asked.push(c), new Map(c.map((x) => [x, { code: x, price: 100.7, volume: null, timestamp: new Date().toISOString(), receivedAt: Date.now() }]))) };
+      const stream = new PriceStream({
+        live: live as unknown as LiveTicks & EventEmitter,
+        quickPrices: quick,
+        codes: async () => ["VRT", "APH"],
+        pollMs: 60_000,
+        wsServed: async () => {
+          if (served instanceof Error) throw served;
+          return new Set(served);
+        },
+      });
+      const socket = new FakeSocket();
+      stream.attach(socket);
+      await new Promise((r) => setTimeout(r, 300)); // 접속 직후 한 번 폴링 + 250ms 묶음
+      stream.stop();
+      return { asked: asked[0] ?? [], ticks: socket.messages("tick").map((m) => m["code"]) };
+    };
+    const none = await run([]);
+    expect(none.asked).toEqual(["VRT", "APH"]);
+    expect(none.ticks.sort()).toEqual(["APH", "VRT"]);
+    expect((await run(["VRT"])).asked).toEqual(["APH"]); // VRT 는 웹소켓이 이번 세션 체결을 준다
+    expect((await run(["VRT", "APH"])).asked).toEqual([]);
+    expect((await run(new Error("달력 실패"))).asked).toEqual(["VRT", "APH"]); // 모르면 폴링한다 (더 부르는 쪽으로)
+  });
 });
 
 describe("GET /api/stream (websocket)", () => {

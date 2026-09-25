@@ -160,6 +160,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // 등록 종목 시장의 거래 세션이 모두 닫혀 있으면 토스 웹 폴링을 30초로 늦춘다 (달력은 5분 캐시).
     // 토스 달력 isOpen 은 미국 정규장만이라 세션(프리·애프터·주간거래 포함)으로 본다 — 그래야 웹소켓이 없는 종목도 3초마다 바뀐다
     marketOpen: async (codes) => anySessionOpen(codes, await opts.providers.calendar.status(), now()),
+    // 웹소켓이 이번 세션 체결을 주는 종목만 폴링에서 뺀다 (초록 점과 같은 기준 — 구독만으로 빼면 점은 켜졌는데 가격은 30초마다만 바뀐다)
+    wsServed: (codes) => stockService.wsServed(codes),
     log,
   });
   app.addHook("onClose", async () => priceStream.stop());

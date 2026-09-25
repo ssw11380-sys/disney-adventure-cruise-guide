@@ -284,7 +284,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     const a = await loadWidgetData({ stocks: true, briefings: true });
     const b = await loadWidgetData({ stocks: true, briefings: true });
     // 새 앱은 지수 줄을 그릴 수 있다고 알린다 (?indices=1 — 서버는 이 표시가 있을 때만 지수를 넣는다)
-    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1`, `${API}/api/widget?indices=1`]);
+    expect(calls.map((c) => c.url)).toEqual([`${API}/api/widget?indices=1&sessions=1`, `${API}/api/widget?indices=1&sessions=1`]);
     expect(calls[1]!.inm).toBe('"abc"');
     expect(b.stocks.map((s) => s.code)).toEqual(a.stocks.map((s) => s.code));
     expect(b.market?.label).toBe("한국 장중");
@@ -299,7 +299,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
       return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
     });
     const d = await loadWidgetData({ stocks: true, briefings: true });
-    expect(urls).toEqual([`${API}/api/widget?indices=1`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
+    expect(urls).toEqual([`${API}/api/widget?indices=1&sessions=1`, `${API}/api/stocks?quotes=1`, `${API}/api/briefings/latest`]);
     expect(d.stocks).toHaveLength(18);
     expect(d.market).toBeNull();
   });

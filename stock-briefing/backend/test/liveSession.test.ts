@@ -319,7 +319,7 @@ class ScenarioQuick implements QuickPriceSource {
  * quickAll(기본 true): 운영처럼 토스 웹이 모든 종목 가격을 준다 (체결이 없던 종목은 스냅샷과 같은 가격). quick 으로 종목별 가격을 바꾼다.
  * quickFails: 토스 웹 장애. wsEmpty: 웹소켓 체결 목록이 비었다 (서버를 막 다시 켬)
  */
-async function scenario(o: { live?: boolean; facts?: boolean; sessionTicks?: boolean; pricedAgo?: number; quick?: Record<string, number>; quickAll?: boolean; quickFails?: boolean; wsEmpty?: boolean; gdAfterHoursTick?: boolean } = {}) {
+async function scenario(o: { live?: boolean; facts?: boolean; sessionTicks?: boolean; quick?: Record<string, number>; quickAll?: boolean; quickFails?: boolean; wsEmpty?: boolean; gdAfterHoursTick?: boolean } = {}) {
   const t = { now: Date.parse("2026-09-25T09:59:00+09:00") };
   const db = await createMigratedDb(":memory:");
   await db
@@ -362,8 +362,7 @@ async function scenario(o: { live?: boolean; facts?: boolean; sessionTicks?: boo
   if (o.quickAll ?? true) quick.prices.set(NAVER, 250_000);
   for (const [c, p] of Object.entries(o.quick ?? {})) quick.prices.set(c, p);
   if (o.facts ?? true) {
-    const pricedAt = o.pricedAgo === undefined ? null : t.now - o.pricedAgo;
-    for (const c of US_HOLDINGS) quick.facts.set(c, { daytime: true, nxt: false, halted: false, nxtHalted: false, etp: false, exchange: null, pricedAt });
+    for (const c of US_HOLDINGS) quick.facts.set(c, { daytime: true, nxt: false, halted: false, nxtHalted: false, etp: false, exchange: null, pricedAt: null });
     quick.facts.set(NAVER, { daytime: false, nxt: true, halted: false, nxtHalted: false, etp: false, exchange: "integrated", pricedAt: null });
   }
   const now = at("2026-09-25T09:59:00+09:00");
@@ -400,14 +399,16 @@ describe("보고된 장면: 09:59 KST 잔고 (미국 주간거래 중, 한국 �
     expect(await service.getQuote(NAVER)).toMatchObject({ realtime: false, session: { phase: "holiday" } });
   });
 
-  it("웹소켓이 붙어 구독 중이어도 이번 세션(20:00 뒤) 미국 체결이 하나도 안 왔으면 웹소켓만으로는 켜지 않는다 — 토스 웹 가격을 15초 안에 받으면 켠다", async () => {
+  it("웹소켓이 붙어 구독 중이어도 이번 세션(20:00 뒤) 미국 체결이 하나도 안 왔으면 웹소켓만으로는 켜지 않는다 — 토스 웹 가격을 15초 안에 받아 그 가격을 쓰면 켠다", async () => {
     // 토스 웹소켓이 주간거래 체결을 주는지는 확인하지 못했다 → 이 세션 체결을 실제로 받은 뒤에만 웹소켓을 믿는다
     const quiet = await scenario({ sessionTicks: false, quickAll: false });
     expect((await quiet.service.listWithQuotes()).some((s) => s.quote?.realtime)).toBe(false);
-    const polled = await scenario({ sessionTicks: false, quickAll: false, pricedAgo: 3_000 });
+    const polled = await scenario({ sessionTicks: false });
     expect((await polled.service.listWithQuotes()).filter((s) => s.quote?.realtime).map((s) => s.code)).toEqual(US_HOLDINGS);
-    const late = await scenario({ sessionTicks: false, quickAll: false, pricedAgo: 20_000 }); // 3초 갱신이 멈춤
-    expect((await late.service.listWithQuotes()).some((s) => s.quote?.realtime)).toBe(false);
+    // 3초 갱신이 멈춤: 20초 전에 받은 토스 웹 가격뿐
+    polled.quick.fail = true;
+    polled.t.now += 20_000;
+    expect((await polled.service.listWithQuotes()).some((s) => s.quote?.realtime)).toBe(false);
   });
 
   it("서버를 막 다시 켜 웹소켓 체결 목록이 비었어도 토스 웹 가격을 받는 중이면 거래 대상 9종목 모두 켠다", async () => {
@@ -696,5 +697,122 @@ describe("세션 표 — 서버 수신 상태", () => {
     expect(Object.values(covered).every((x) => x.realtime)).toBe(true); // 웹소켓이 살아 있고 구독 중 — 체결이 없던 900340 도
     const down = await table({ now: at10, asOf, facts, kr: KR_922, us: US_922, quickFails: true, ws, wsConnected: false });
     expect(Object.values(down).some((x) => x.realtime)).toBe(false);
+  });
+});
+
+// ── 검증 지적: 웹소켓 마지막 체결이 스냅샷 asOf 와 같고(같은 공식 API) 이번 세션 웹소켓 체결은 없는데 토스 웹 가격만 움직이는 종목 ──────
+// 예전에는 웹소켓 옛 체결(= 스냅샷)을 먼저 써서 가격은 멈추고, 점은 토스 웹 가격을 15초 안에 받았다는 이유로 켜졌다 (점과 가격 출처가 다른 기준)
+
+/**
+ * 한 종목. 웹소켓은 붙어 구독 중이지만 이번 세션 체결을 준 적이 없다 (마지막 체결 = 스냅샷에 든 체결).
+ * 토스 웹 가격은 3초마다 받는다 (poll 이 가격과 pricedAt = 지금을 넣는다). rest 를 바꾸면 공식 API 를 다음에 다시 받을 때 그 값
+ */
+async function wsBehind(o: { code: string; now: string; facts: StockSessionFacts; asOf: string; kr: [string, string]; us: [string, string] }) {
+  const t = { now: Date.parse(o.now) };
+  const kr = /^\d/.test(o.code);
+  const db = await createMigratedDb(":memory:");
+  await db
+    .insertInto("registered_stocks")
+    .values({ code: o.code, name: o.code, market: kr ? "KOSPI" : "NYSE", quantity: 1, avg_price: 100, memo: null, created_at: "2026-09-01T00:00:00+09:00", updated_at: "2026-09-01T00:00:00+09:00" })
+    .execute();
+  const rest = { price: 100, asOf: o.asOf };
+  let fetches = 0;
+  const quotes: QuoteProvider = {
+    name: "toss-openapi",
+    getQuote: async () => {
+      throw new ProviderError("toss-openapi", "unused");
+    },
+    getQuotes: async (cs: string[]) => (fetches++, new Map(cs.map((c): [string, Quote] => [c, { ...makeQuote(c, "toss-openapi", rest.price), currency: kr ? "KRW" : "USD", asOf: rest.asOf }]))),
+    getCandles: async () => {
+      throw new ProviderError("toss-openapi", "unused");
+    },
+  };
+  const tick: LiveTick = { code: o.code, price: 100, volume: 1, timestamp: o.asOf, receivedAt: Date.parse(o.asOf) };
+  const live = new (class extends EventEmitter implements LiveTicks {
+    get = (c: string) => (c === o.code ? tick : null);
+    setCodes() {}
+    status() {
+      const a = new Date(t.now).toISOString();
+      return { enabled: true, connected: true, subscribed: [`trade:${kr ? "kr" : "us"}:${o.code}`], lastMessageAt: a, lastAliveAt: a, lastError: null };
+    }
+  })();
+  const quick = new ScenarioQuick(() => t.now);
+  const cal = { status: async () => calendar(new Date(t.now), o.kr, o.us) };
+  const service = new StockService({ db, quotes, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, quickPrices: quick, calendar: cal, now: () => new Date(t.now) });
+  /** 토스 웹 가격을 price 로 (방금 받음) 바꾸고 잔고를 한 번 받는다 */
+  const poll = async (price: number) => {
+    quick.prices.set(o.code, price);
+    quick.facts.set(o.code, { ...o.facts, pricedAt: t.now });
+    const q = (await service.listWithQuotes())[0]!.quote!;
+    return { price: q.price, realtime: q.realtime };
+  };
+  return { t, rest, poll, service, fetches: () => fetches };
+}
+
+describe("초록 점이 켜지면 가격도 따라간다 (웹소켓 마지막 체결 = 스냅샷, 토스 웹 가격만 움직임)", () => {
+  // 2026-09-25 09:58:45 KST = 뉴욕 9/24 20:58:45 (미국 주간거래, 20:00 시작). VRT 는 주간거래 지원.
+  // 공식 API 스냅샷 asOf 08:59:30 KST(뉴욕 19:59:30 애프터마켓) · 100 = 웹소켓 마지막 체결. 20:00 뒤 미국 웹소켓 체결은 없다
+  const vrt = () => wsBehind({ code: "VRT", now: "2026-09-25T09:58:45+09:00", facts: US_DAY, asOf: "2026-09-25T08:59:30+09:00", kr: KR_CHUSEOK, us: US_924 });
+  /** 15초마다 받은 토스 웹 가격 (09:59:00 부터) */
+  const moves = [100.7, 100.9, 101.1, 101.0, 101.1];
+
+  it("공식 API 가 주간거래 체결을 주면: 웹소켓 옛 체결 대신 토스 웹 가격을 쓰고, 스냅샷을 다시 받은 뒤로는 그 가격을 따라간다", async () => {
+    const s = await vrt();
+    expect(await s.poll(100)).toEqual({ price: 100, realtime: true }); // 이번 거래일 체결이 아직 없음 — 조용한 종목도 켠다
+    const seen = [];
+    for (const p of moves) {
+      s.t.now += 15_000;
+      Object.assign(s.rest, { price: p, asOf: new Date(s.t.now - 1_000).toISOString() }); // 공식 API 도 1초 전 체결을 안다
+      seen.push(await s.poll(p));
+    }
+    // 처음 본 새 거래일 가격은 스냅샷을 다시 받을 때까지(10초 안) 붙이지 않는다 (전일 종가가 하루 밀려 등락이 이틀치가 되지 않게) — 점은 그대로
+    expect(seen[0]).toEqual({ price: 100, realtime: true });
+    expect(seen.slice(1)).toEqual(moves.slice(1).map((p) => ({ price: p, realtime: true })));
+  });
+
+  it("공식 API 도 주간거래 체결을 주지 않으면: 다시 받아도 붙일 수 없으니 점을 끈다 — 가격이 멈춘 채 점만 켜지지 않는다", async () => {
+    const s = await vrt();
+    expect(await s.poll(100)).toEqual({ price: 100, realtime: true });
+    const seen = [];
+    for (const p of moves) {
+      s.t.now += 15_000;
+      seen.push(await s.poll(p));
+    }
+    expect(s.fetches()).toBeGreaterThan(1); // 새 거래일 가격을 보고 스냅샷을 다시 받았다
+    expect(seen[0]).toEqual({ price: 100, realtime: true }); // 다시 받기 전(10초 안)
+    // 다시 받아도 스냅샷이 지난 거래일 것 그대로 → 토스 웹 가격을 붙일 수 없다 → 점도 끈다
+    expect(seen.slice(1)).toEqual(moves.slice(1).map(() => ({ price: 100, realtime: false })));
+  });
+
+  it("공식 API 가 뒤늦게 이번 거래일 체결을 주면 다시 켜진다", async () => {
+    const s = await vrt();
+    await s.poll(100);
+    for (const p of moves.slice(0, 3)) {
+      s.t.now += 15_000;
+      await s.poll(p);
+    }
+    expect((await s.poll(101.1)).realtime).toBe(false);
+    Object.assign(s.rest, { price: 101.05, asOf: new Date(s.t.now).toISOString() });
+    s.t.now += 61_000; // 1분(ttl) 지나 다시 받는다
+    expect(await s.poll(101.2)).toEqual({ price: 101.2, realtime: true });
+  });
+
+  it("한국 16:00~20:00 애프터마켓도 같다: 웹소켓 마지막 체결이 15:30 종가(= 스냅샷)여도 토스 웹 가격을 따라간다", async () => {
+    const s = await wsBehind({ code: NAVER, now: "2026-09-22T16:29:45+09:00", facts: NXT, asOf: "2026-09-22T15:30:00+09:00", kr: KR_922, us: US_922 });
+    expect(await s.poll(100)).toEqual({ price: 100, realtime: true });
+    for (const p of [100.5, 100.8, 100.6]) {
+      s.t.now += 15_000;
+      expect(await s.poll(p)).toEqual({ price: p, realtime: true }); // 예전: 웹소켓 15:30 체결(100)을 먼저 써 가격은 멈추고 점만 켜졌다
+    }
+  });
+
+  it("웹소켓 체결 목록: 이번 세션에 그 시장 체결을 웹소켓으로 받은 종목(또는 세션이 닫힌 종목)만 토스 웹 폴링 없이 둔다 — 실시간 스트림도 같은 기준", async () => {
+    const quiet = await scenario({ sessionTicks: false });
+    // 미국: 이번 세션(뉴욕 20:00 뒤) 웹소켓 체결이 없다 → 토스 웹으로 폴링. NAVER: 추석 휴장이라 폴링할 것이 없다
+    expect([...(await quiet.service.wsServed([...US_HOLDINGS, NAVER]))].sort()).toEqual([NAVER]);
+    const busy = await scenario();
+    expect([...(await busy.service.wsServed([...US_HOLDINGS, NAVER]))].sort()).toEqual([...US_HOLDINGS, NAVER].sort());
+    const down = await scenario({ live: false });
+    expect((await down.service.wsServed([...US_HOLDINGS, NAVER])).size).toBe(0);
   });
 });
