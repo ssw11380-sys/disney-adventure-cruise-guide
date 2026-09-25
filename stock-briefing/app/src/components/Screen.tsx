@@ -40,6 +40,8 @@ interface ScreenProps {
    * 플래그가 꺼져 있거나 좁은 창(휴대폰·접힌 화면)이면 지금과 똑같다. 한 화면 안에서는 바꾸지 않는 고정 값으로 쓴다
    */
   readable?: boolean;
+  /** 스크롤을 부르는 쪽이 옮길 때 (3-42 접고 펴기 이어 보기: 넓은 창에서 보던 브리핑 줄로). scroll=false 면 쓰지 않는다 */
+  scrollRef?: React.Ref<ScrollView>;
 }
 
 /**
@@ -62,7 +64,7 @@ function ReadableScreen(props: ScreenProps) {
   return <ScreenBody {...props} frame={frame} />;
 }
 
-function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentStyle, disclaimer = false, top, frame }: ScreenProps & { frame?: ViewStyle }) {
+function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentStyle, disclaimer = false, top, frame, scrollRef }: ScreenProps & { frame?: ViewStyle }) {
   const t = useTheme();
   const inTabs = /^\/(\(tabs\))?\/?(briefings|settings)?$/.test(usePathname());
   return (
@@ -70,6 +72,7 @@ function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentSty
       {top}
       {scroll ? (
         <ScrollView
+          ref={scrollRef}
           style={styles.root}
           contentContainerStyle={[styles.content, contentStyle, frame]}
           keyboardShouldPersistTaps="handled"

@@ -5,6 +5,7 @@ import React from "react";
  * 입력 칸의 초안이 다시 그릴 때 남는지·지워지는지 같은 회귀(PF-06·07)를 노드 환경에서 본다.
  *  - 같은 자리·같은 타입·같은 key 면 상태 유지, key 나 타입이 바뀌면 새로 만든다 (React 재조정 규칙)
  *  - 훅: useState·useReducer·useEffect·useLayoutEffect·useMemo·useCallback·useRef·useContext(가까운 Provider 값, 없으면 기본값)
+ *    ·useSyncExternalStore(바깥 저장소 — 바뀌면 다음 flush 에서 다시 그림)
  *  - 그리는 중 자기 상태를 바꾸면(이전 렌더 값 저장 패턴) 그 컴포넌트를 바로 다시 그린다
  *  - 문자열 타입 요소만 결과 트리에 남긴다 (RN 부품은 테스트에서 문자열 타입으로 가짜 모듈을 둔다)
  */
@@ -89,7 +90,23 @@ export function render(element: React.ReactElement) {
     return inst.hooks[i];
   }
 
+  // 바깥 저장소 구독: 그릴 때 값을 읽고, 구독 함수가 바뀌면 다시 구독한다. 저장소가 바뀌면 다음 flush 에서 다시 그린다 (지우면 구독 해제)
+  function externalStoreHook<T>(subscribe: (onChange: () => void) => () => void, getSnapshot: () => T): T {
+    const { inst, i } = hookOf();
+    const prev = inst.hooks[i] as (EffectHook & { subscribe?: unknown }) | undefined;
+    if (!prev || prev.subscribe !== subscribe) {
+      prev?.cleanup?.();
+      const hook: EffectHook & { subscribe?: unknown } = { subscribe };
+      inst.hooks[i] = hook;
+      hook.cleanup = subscribe(() => {
+        if (!inst.dead) dirty = true;
+      });
+    }
+    return getSnapshot();
+  }
+
   const dispatcher: Dispatcher = {
+    useSyncExternalStore: externalStoreHook,
     useState: stateHook,
     useReducer: reducerHook,
     useEffect: effect,

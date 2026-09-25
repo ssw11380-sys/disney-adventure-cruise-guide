@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { Briefing } from "@/api/types";
 import { formatDateKo, formatPct, SESSION_LABEL } from "@/lib/format";
 import { font, slopFor, space, useTheme } from "@/theme";
+import { foldBriefings as FB } from "@/tokens";
 import { sentence, speakRate } from "@/lib/a11y";
 import { MarkdownView } from "./MarkdownView";
 import { Badge, Card, ChangeText, Muted } from "./ui";
@@ -13,14 +14,29 @@ import { Badge, Card, ChangeText, Muted } from "./ui";
  * 브리핑 카드. mode=line 이면 첫 줄만, summary 면 3줄 요약, detail 이면 마크다운 전체.
  * 제목을 누르면 브리핑 상세 화면으로.
  */
-export function BriefingCard({ briefing, mode, showName = true, rate }: { briefing: Briefing; mode: "line" | "summary" | "detail"; showName?: boolean; /** 오늘 등락률 (브리핑 탭 '변동 큰 순'일 때) */ rate?: number | null }) {
+export function BriefingCard({
+  briefing,
+  mode,
+  showName = true,
+  rate,
+  selected = false,
+}: {
+  briefing: Briefing;
+  mode: "line" | "summary" | "detail";
+  showName?: boolean;
+  /** 오늘 등락률 (브리핑 탭 '변동 큰 순'일 때) */
+  rate?: number | null;
+  /** 넓은 창에서 보던 브리핑 (3-42 접고 펴기 이어 보기 — 접은 화면에서 이 카드를 강조). 기본 false = 지금 모양 그대로 */
+  selected?: boolean;
+}) {
   const t = useTheme();
   const failed = briefing.status === "failed";
   const lines = briefing.summary.split("\n").filter(Boolean);
   return (
-    <Card>
+    <Card style={selected ? { borderLeftWidth: FB.selBar, borderLeftColor: t.accent, paddingLeft: space.lg - FB.selBar } : undefined}>
       <Pressable
         onPress={() => router.push(`/briefings/${briefing.id}`)}
+        {...(selected ? { accessibilityState: { selected: true } } : {})}
         accessibilityRole="link"
         accessibilityLabel={sentence([
           showName ? (briefing.name ?? briefing.code) : null,

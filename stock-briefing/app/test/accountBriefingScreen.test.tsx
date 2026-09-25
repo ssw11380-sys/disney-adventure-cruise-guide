@@ -31,9 +31,14 @@ vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
   Linking: { openURL: vi.fn() },
   Platform: { OS: "android" },
+  ScrollView: "ScrollView",
+  RefreshControl: "RefreshControl",
+  useWindowDimensions: () => ({ width: 411, height: 888, scale: 2.625, fontScale: 1 }),
 }));
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
 vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
-vi.mock("expo-router", () => ({ router: { push: h.push, dismissTo: vi.fn(), replace: vi.fn() }, Stack: { Screen: "StackScreen" }, useLocalSearchParams: () => h.params }));
+vi.mock("expo-router", () => ({ router: { push: h.push, dismissTo: vi.fn(), replace: vi.fn() }, Stack: { Screen: "StackScreen" }, Tabs: { Screen: "TabsScreen" }, useLocalSearchParams: () => h.params }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
   return { ...tokens, useTheme: () => tokens.dark };
@@ -45,7 +50,7 @@ vi.mock("@/components/Skeleton", () => ({ CardsSkeleton: "CardsSkeleton" }));
 vi.mock("@/components/MarkdownView", () => ({ MarkdownView: "MarkdownView" }));
 vi.mock("@/components/BriefingCard", () => ({ BriefingCard: "BriefingCard" }));
 vi.mock("@/components/ui", () => ({
-  Badge: "Badge", Button: "Button", Card: "Card", ChangeText: "ChangeText", Empty: "Empty", ErrorView: "ErrorView", Muted: "Muted", SectionTitle: "SectionTitle", Segmented: "Segmented", TableHead: "TableHead",
+  Badge: "Badge", Button: "Button", Card: "Card", ChangeText: "ChangeText", Empty: "Empty", ErrorView: "ErrorView", Muted: "Muted", Row: "Row", SectionTitle: "SectionTitle", Segmented: "Segmented", TableHead: "TableHead",
 }));
 vi.mock("@/api/hooks", () => {
   const q = (data: unknown) => ({ data, isError: false, error: null, isSuccess: true, refetch: vi.fn(async () => undefined), dataUpdatedAt: 1, errorUpdatedAt: 0, fetchStatus: "idle" });
