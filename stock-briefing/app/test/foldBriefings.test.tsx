@@ -3,6 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccountBriefing, AccountBriefingWithData, AccountData, Briefing, BriefingWithData } from "@/api/types";
 import { cleanupRenders, render, type HostNode } from "./miniRender";
 
+// 이 파일은 왼쪽 세로 탭 막대 배치도 시험한다. 앱 기본은 막대를 쓰지 않으므로(layout.railOn 꺼짐 — 2026-09-26 사용자 선택: 펼쳐도 아래 탭 바)
+// 막대를 켠 앱으로 시험한다. 기본값(아래 탭 바)은 test/bottomTabs.test.ts
+vi.mock("@/tokens", async (importOriginal) => {
+  const m = await importOriginal<typeof import("@/tokens")>();
+  return { ...m, layout: { ...m.layout, railOn: true } };
+});
+
 /**
  * 넓은 창 브리핑 (3-42 웨이브 D, 기능 플래그 foldLayout).
  *  - 플래그가 꺼져 있거나 좁은 창(접은 화면)이면 브리핑 탭·브리핑 상세·계좌 브리핑 상세가 지금과 똑같다 (창 크기와 상관없이 같은 트리)

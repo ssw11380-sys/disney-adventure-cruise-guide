@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it , vi } from "vitest";
 import { WIDTH_EXPANDED, WIDTH_MEDIUM } from "@/lib/screenInfo";
 import {
   classifyWindow,
@@ -15,6 +15,13 @@ import {
   type WindowClass,
 } from "@/lib/windowClass";
 import { layout, touch } from "@/tokens";
+
+// 이 파일은 왼쪽 세로 탭 막대 배치도 시험한다. 앱 기본은 막대를 쓰지 않으므로(layout.railOn 꺼짐 — 2026-09-26 사용자 선택: 펼쳐도 아래 탭 바)
+// 막대를 켠 앱으로 시험한다. 기본값(아래 탭 바)은 test/bottomTabs.test.ts
+vi.mock("@/tokens", async (importOriginal) => {
+  const m = await importOriginal<typeof import("@/tokens")>();
+  return { ...m, layout: { ...m.layout, railOn: true } };
+});
 
 /**
  * 창 크기 등급 (3-42 접는 폰, 플래그 foldLayout 의 기반). 순수 함수만 본다 — 훅·화면은 test/foldLayout.test.tsx

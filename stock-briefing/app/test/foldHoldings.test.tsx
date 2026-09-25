@@ -7,6 +7,13 @@ import type { RegisteredWithQuote } from "@/api/types";
 import { holding, quote } from "./helpers";
 import { render, type HostNode } from "./miniRender";
 
+// 이 파일은 왼쪽 세로 탭 막대 배치도 시험한다. 앱 기본은 막대를 쓰지 않으므로(layout.railOn 꺼짐 — 2026-09-26 사용자 선택: 펼쳐도 아래 탭 바)
+// 막대를 켠 앱으로 시험한다. 기본값(아래 탭 바)은 test/bottomTabs.test.ts
+vi.mock("@/tokens", async (importOriginal) => {
+  const m = await importOriginal<typeof import("@/tokens")>();
+  return { ...m, layout: { ...m.layout, railOn: true } };
+});
+
 /**
  * 잔고 탭 넓은 표 + 공통 틀 (3-42 웨이브 B, 기능 플래그 foldLayout).
  *  - 플래그가 꺼져 있거나(서버 값을 못 받았을 때 포함) 좁은 창(접힌 화면)이면 지금 휴대폰 화면 그대로
