@@ -84,6 +84,9 @@ async function request<T>(baseUrl: string, token: string, path: string, init: Re
   return json as T;
 }
 
+/** 종목 한 개의 API 경로. 코드는 한 경로 칸으로 인코딩한다 — 딥링크에서 온 값의 / ? # 가 다른 API 경로·쿼리가 되지 않게 (BH-36, 정상 코드는 그대로) */
+const stockPath = (code: string) => `/api/stocks/${encodeURIComponent(code)}`;
+
 /** 백엔드 REST 클라이언트. baseUrl/token 은 설정에서 온다. */
 export function createApi(baseUrl: string, token = "") {
   const get = <T>(path: string, timeoutMs?: number) => request<T>(baseUrl, token, path, {}, timeoutMs);
@@ -104,17 +107,17 @@ export function createApi(baseUrl: string, token = "") {
     listStocks: () => get<RegisteredWithQuote[]>("/api/stocks?quotes=1", 15_000),
     /** registered: false 면 등록하지 않은 종목의 미리 보기(발견 탭 등). 구버전 서버는 필드 없음(= 등록 종목) */
     getStock: (code: string) =>
-      get<RegisteredStock & { registered?: boolean; quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(`/api/stocks/${code}`, 15_000),
+      get<RegisteredStock & { registered?: boolean; quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(stockPath(code), 15_000),
     registerStock: (body: { code: string; quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
       send<RegisteredStock>("POST", "/api/stocks", body),
     updateStock: (code: string, body: { quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
-      send<RegisteredStock>("PATCH", `/api/stocks/${code}`, body),
-    removeStock: (code: string) => send<void>("DELETE", `/api/stocks/${code}`),
-    getQuote: (code: string, fresh = false) => get<Quote>(`/api/stocks/${code}/quote${fresh ? "?fresh=1" : ""}`),
-    getCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`/api/stocks/${code}/candles?period=${period}&count=${count}`),
+      send<RegisteredStock>("PATCH", stockPath(code), body),
+    removeStock: (code: string) => send<void>("DELETE", stockPath(code)),
+    getQuote: (code: string, fresh = false) => get<Quote>(`${stockPath(code)}/quote${fresh ? "?fresh=1" : ""}`),
+    getCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`${stockPath(code)}/candles?period=${period}&count=${count}`),
     getAnalysis: (code: string, kind: AnalysisKind, refresh = false) =>
-      get<Analysis>(`/api/stocks/${code}/analysis/${kind}${refresh ? "?refresh=1" : ""}`, 180_000),
-    getStockNews: (code: string) => get<StockNews>(`/api/stocks/${code}/news`),
+      get<Analysis>(`${stockPath(code)}/analysis/${kind}${refresh ? "?refresh=1" : ""}`, 180_000),
+    getStockNews: (code: string) => get<StockNews>(`${stockPath(code)}/news`),
 
     latestBriefings: () => get<LatestBriefing[]>("/api/briefings/latest"),
     listBriefings: (filter: { code?: string; date?: string; session?: BriefingSession; limit?: number } = {}) => {

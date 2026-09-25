@@ -136,9 +136,12 @@ export const light: Theme = {
   },
 };
 
-/** 등락 색 (0 이면 기본 글자색) */
+/**
+ * 등락 색 (0 이면 기본 글자색). 등락률·달러·지수는 소수 둘째 자리까지 보이므로 반올림해 0.00 인 값도 0 으로 본다 —
+ * "0.00%" 를 손실 색으로 칠하지 않게 (BH-38). 원 단위 금액은 부르는 쪽이 표시 단위로 반올림한 값(format 의 shownAmount)을 넘긴다
+ */
 export function changeColor(t: Theme, v: number | null | undefined): string {
-  if (v === null || v === undefined || v === 0 || !Number.isFinite(v)) return t.ink;
+  if (v === null || v === undefined || !Number.isFinite(v) || Math.round(Math.abs(v) * 100) === 0) return t.ink;
   return v > 0 ? t.up : t.down;
 }
 

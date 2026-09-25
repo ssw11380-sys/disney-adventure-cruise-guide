@@ -1,7 +1,7 @@
 import React from "react";
 import type { RegisteredWithQuote } from "@/api/types";
 import { stockRowLabel } from "@/lib/a11y";
-import { formatArrowDisplay, formatMoney, formatPct, formatPrice, formatQuoteDisplay, isUsMarket } from "@/lib/format";
+import { formatArrowDisplay, formatMoney, formatPct, formatPrice, formatQuoteDisplay, isUsMarket, shownAmount } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 import { changeColor, useTheme } from "@/theme";
 import { LINE_COL, LineMark, LineValue, StockLine, type LinePrice } from "./StockLine";
@@ -33,7 +33,10 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
   const us = isUsMarket(stock.market);
   const held = !!ev;
   const c = changeColor(t, q?.change);
-  const pc = changeColor(t, ev?.profit);
+  // 손익 부호·색은 화면에 보이는 금액(원 정수·센트)과 수익률(소수 둘째 자리)로 — "0"·"0.00%" 로 보이는 손익을 손실·이익 색으로 칠하지 않게 (BH-38)
+  const shownProfit = ev ? shownAmount(ev.profit, ev.currency) : null;
+  const pc = changeColor(t, shownProfit);
+  const rc = changeColor(t, ev?.profitRate);
   // 원화 보기의 미국 종목 평단은 손익과 같은 기준(매수 당시 환율의 원화 매입금액 ÷ 수량)으로
   const avgText =
     showKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity
@@ -48,7 +51,7 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
           quantity: formatQty(stock.quantity),
           avg: showKrw && cur === "USD" && ev.currency === "KRW" && stock.quantity ? formatPrice(ev.costBasis / stock.quantity, "KRW") : formatMoney(stock.avgPrice, cur, fx, showKrw),
           profit: formatPrice(ev.profit, ev.currency),
-          profitSign: Math.sign(ev.profit),
+          profitSign: Math.sign(shownProfit ?? 0),
           profitRate: ev.profitRate,
         }
       : null,
@@ -69,7 +72,7 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
       priceMissing={stock.quoteError ? "시세 없음" : "-"}
       right={
         !q ? null : held ? (
-          <LineValue main={formatPrice(ev!.profit, ev!.currency, { sign: true }).replace("원", "")} mainColor={pc} sub={formatPct(ev!.profitRate)} subColor={pc} />
+          <LineValue main={formatPrice(ev!.profit, ev!.currency, { sign: true }).replace("원", "")} mainColor={pc} sub={formatPct(ev!.profitRate)} subColor={rc} />
         ) : (
           <LineValue main={formatArrowDisplay(q.change, cur, fx, showKrw)} mainColor={c} sub={formatVol(q.volume)} />
         )

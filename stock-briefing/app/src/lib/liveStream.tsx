@@ -213,15 +213,33 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       } else flushTimer ??= setTimeout(() => applyNow(), 100);
     };
 
-    const armWatchdog = () => {
+    const closeQuietly = (ws: WebSocket) => {
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+    };
+    /**
+     * 지금 소켓을 놓는다(끊김으로 알리고 다시 붙을 준비). 옛 소켓(socket !== ws)에서 늦게 온 close 는 무시한다 —
+     * 새 연결의 체결을 지우거나 새 연결을 끊김으로 굳히지 않게 (BH-15)
+     */
+    const drop = (ws: WebSocket) => {
+      if (socket !== ws) return;
+      socket = null;
+      forgetTicks();
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = null;
+      setState((s) => ({ ...s, connected: false }));
+      scheduleReconnect();
+    };
+
+    const armWatchdog = (ws: WebSocket) => {
       if (watchdog) clearTimeout(watchdog);
       watchdog = setTimeout(() => {
-        // 서버 ping(25초)도 못 받았으면 죽은 연결 → 닫아서 재접속 경로를 태운다
-        try {
-          socket?.close();
-        } catch {
-          /* ignore */
-        }
+        // 서버 ping(25초)도 못 받았으면 죽은 연결 → 닫고 바로 다시 붙는다 (죽은 망의 닫기 핸드셰이크를 기다리지 않음, 늦은 close 는 drop 이 무시)
+        closeQuietly(ws);
+        drop(ws);
       }, 45_000);
     };
 
@@ -237,7 +255,13 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         return;
       }
       socket = ws;
+      // 이벤트는 지금 소켓(socket === ws)의 것만 처리한다. RN 안드로이드는 연결 중(CONNECTING)에 부른 close() 를 무시해서, 앱이 뒤로 가며
+      // 놓은 소켓이 나중에 열린다 → 열리는 즉시 닫는다(열린 뒤에는 닫힌다). 서버가 붙은 앱으로 보고 폴링을 계속하지 않게 (BH-15)
       ws.onopen = () => {
+        if (closed || socket !== ws) {
+          closeQuietly(ws);
+          return;
+        }
         backoff = 1000;
         // 체결을 묶음으로 받겠다고 알린다 (예전 서버는 무시하고 낱개로 보낸다)
         try {
@@ -246,10 +270,12 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
           /* ignore */
         }
         setState((s) => ({ ...s, connected: true, connectedAt: Date.now() }));
-        armWatchdog();
+        armWatchdog(ws);
       };
       ws.onmessage = (ev) => {
-        armWatchdog();
+        // 놓은 소켓의 메시지로 캐시를 고치거나 감시 타이머를 다시 걸지 않는다 (진짜 소켓이 죽은 것을 못 알아채게 됨)
+        if (socket !== ws) return;
+        armWatchdog(ws);
         let msg: StreamMessage;
         try {
           msg = JSON.parse(String(ev.data));
@@ -269,15 +295,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       ws.onerror = () => {
         /* onclose 가 이어서 온다 */
       };
-      ws.onclose = () => {
-        if (socket === ws) {
-          socket = null;
-          forgetTicks(); // 이미 새로 붙은 뒤 늦게 온 옛 연결의 close 는 새 연결의 체결을 지우지 않는다
-        }
-        setState((s) => ({ ...s, connected: false }));
-        if (watchdog) clearTimeout(watchdog);
-        scheduleReconnect();
-      };
+      ws.onclose = () => drop(ws);
     };
 
     const scheduleReconnect = () => {
@@ -297,11 +315,8 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       const ws = socket;
       socket = null;
       forgetTicks();
-      try {
-        ws?.close();
-      } catch {
-        /* ignore */
-      }
+      // 연결 중인 소켓은 여기서 닫히지 않을 수 있다 → 나중에 열리면 onopen 이 닫는다
+      if (ws) closeQuietly(ws);
       setState((s) => ({ ...s, connected: false }));
     };
 

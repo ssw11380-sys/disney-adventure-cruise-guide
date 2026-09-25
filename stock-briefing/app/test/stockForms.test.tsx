@@ -12,6 +12,8 @@ type Held = RegisteredStock & { evaluation?: Evaluation | null };
 const h = vi.hoisted(() => ({
   params: {} as { code?: string },
   stock: null as unknown,
+  /** useStock 에 넘어간 종목 코드 (서버에 물을 코드) */
+  stockCodes: [] as string[],
   catalog: [] as unknown[],
   recent: [] as unknown[],
   register: vi.fn(),
@@ -72,7 +74,10 @@ vi.mock("@/components/StockLine", async () => {
 });
 vi.mock("@/api/hooks", () => ({
   useApi: () => ({ setKrwCost: h.setKrwCost }),
-  useStock: () => ({ data: h.stock, isError: false, error: null, refetch: vi.fn() }),
+  useStock: (code: string) => {
+    h.stockCodes.push(code);
+    return { data: code ? h.stock : undefined, isError: false, error: null, refetch: vi.fn() };
+  },
   useStockMutations: () => ({
     register: { mutate: h.register, isPending: false },
     update: { mutate: h.update, isPending: false },
@@ -355,5 +360,89 @@ describe("PF-07: 보유 수정 — 같은 종목의 서버 값이 바뀌어도 �
     expect(r.text()).not.toContain(STALE);
     r.act(() => (button(r, "저장").props.onPress as () => void)());
     expect(h.update.mock.calls[0][0]).toEqual({ code: "005930", memo: DRAFT });
+  });
+});
+
+describe("BH-36: 보유 수정 딥링크 — 검증을 통과하지 못한 종목 코드는 서버에 묻지 않는다", () => {
+  it("stocks/AAPL%2Fanalysis...%23/edit 는 요청 없이 안내만 하고 삭제 버튼도 없다 (재현)", () => {
+    h.params = { code: "AAPL/analysis/company?refresh=1#" };
+    h.stock = null;
+    h.stockCodes.length = 0;
+    const r = render(<EditStockScreen />);
+    expect(h.stockCodes.every((c) => c === "")).toBe(true);
+    const err = r.all().find((n) => n.type === "ErrorView");
+    expect((err?.props.error as Error | undefined)?.message).toBe("종목 주소가 올바르지 않습니다");
+    expect(r.all().some((n) => n.type === "Button" && n.props.title === "종목 삭제")).toBe(false);
+  });
+});
+
+describe("BH-55·70: 체결 반영 (직접 입력 종목)", () => {
+  const manual = (extra: Partial<Held>): Held => ({
+    code: "SNDL",
+    name: "소수점 종목",
+    market: "NASDAQ",
+    quantity: 1000,
+    avgPrice: 0.0537,
+    memo: null,
+    createdAt: "2026-09-24T05:00:00.000Z",
+    updatedAt: "2026-09-24T05:00:00.000Z",
+    tossSynced: false,
+    evaluation: null,
+    ...extra,
+  });
+  const open = (stock: Held) => {
+    h.params = { code: stock.code };
+    h.stock = stock;
+    return render(<EditStockScreen />);
+  };
+  const trade = (r: Screen, side: "buy" | "sell", qty: string, price: string) => {
+    const seg = r.all().find((n) => n.type === "Segmented");
+    r.act(() => (seg!.props.onChange as (v: string) => void)(side));
+    const label = side === "buy" ? "매수" : "매도";
+    typeIn(r, `${label} 수량`, qty);
+    typeIn(r, `${label} 체결가`, price);
+  };
+  const row = (r: Screen, label: string) => r.all().find((n) => n.type === "Row" && n.props.label === label)?.props.value;
+  const saveTrade = (r: Screen) => r.act(() => (button(r, "반영해 저장").props.onPress as () => void)());
+
+  it("1달러 미만 미국 종목: 매수 뒤 평단을 센트로 반올림하지 않고 저장한다 (재현: 0.05745 → 0.06)", () => {
+    const r = open(manual({}));
+    trade(r, "buy", "1000", "0.0612");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toEqual({ code: "SNDL", quantity: 2000, avgPrice: 0.05745, memo: null });
+  });
+
+  it("반올림한 평단이 칸에 보이던 값과 같아도 새 평단을 보낸다 (0.04935 가 0.05 로 줄어 평단을 안 보내 예전 평단이 남던 경우)", () => {
+    const r = open(manual({}));
+    trade(r, "buy", "1000", "0.045");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toEqual({ code: "SNDL", quantity: 2000, avgPrice: 0.04935, memo: null });
+  });
+
+  it("국내 종목 평단은 예전처럼 소수 둘째 자리까지", () => {
+    const r = open(manual({ code: "005930", name: "삼성전자", market: "KOSPI", quantity: 3, avgPrice: 70000 }));
+    trade(r, "buy", "1", "70001");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toEqual({ code: "005930", quantity: 4, avgPrice: 70000.25, memo: null });
+  });
+
+  it("소수 주식 미리보기 '거래 후 수량'에 부동소수 꼬리가 없고 저장값과 같다 (재현: 0.30000000000000004주)", () => {
+    const r = open(manual({ quantity: 0.1, avgPrice: 100 }));
+    trade(r, "buy", "0.2", "100");
+    expect(row(r, "거래 후 수량")).toBe("0.3주");
+    saveTrade(r);
+    expect(h.update.mock.calls[0][0]).toMatchObject({ quantity: 0.3 });
+    const r2 = open(manual({ quantity: 0.8, avgPrice: 100 }));
+    trade(r2, "sell", "0.1", "100");
+    expect(row(r2, "거래 후 수량")).toBe("0.7주");
+    const r3 = open(manual({ quantity: 1.1, avgPrice: 100 }));
+    trade(r3, "buy", "2.2", "100");
+    expect(row(r3, "거래 후 수량")).toBe("3.3주");
+  });
+
+  it("큰 수량은 자리 구분", () => {
+    const r = open(manual({ code: "005930", name: "삼성전자", market: "KOSPI", quantity: 1200, avgPrice: 70000 }));
+    trade(r, "buy", "34", "70000");
+    expect(row(r, "거래 후 수량")).toBe("1,234주");
   });
 });

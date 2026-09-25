@@ -53,6 +53,12 @@ export const PERIOD_OPTIONS: { value: CandlePeriod; label: string }[] = [
   { value: "M", label: "월" },
 ];
 
+/** 딥링크의 기간 파라미터 검증: 여러 번 넣었으면(배열) 첫 값, 모르는 값이면 일봉 (차트가 첫 렌더에서 멈추지 않게, BH-36) */
+export function parseCandlePeriod(raw: string | string[] | undefined): CandlePeriod {
+  const s = Array.isArray(raw) ? raw[0] : raw;
+  return PERIOD_OPTIONS.find((o) => o.value === s)?.value ?? "D";
+}
+
 /** 서버에 요청할 봉 수 (과거 이동과 120 이평선을 위해 넉넉히) */
 export const CANDLE_COUNT: Record<CandlePeriod, number> = { "1m": 600, "5m": 400, "30m": 300, D: 800, W: 260, M: 120 };
 

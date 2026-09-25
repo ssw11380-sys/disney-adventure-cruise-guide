@@ -4,7 +4,7 @@ import React from "react";
  * 렌더러 패키지(react-dom·react-test-renderer) 없이 화면 함수 컴포넌트를 "훅 상태·key 를 지키며" 다시 그려 보는 최소 렌더러.
  * 입력 칸의 초안이 다시 그릴 때 남는지·지워지는지 같은 회귀(PF-06·07)를 노드 환경에서 본다.
  *  - 같은 자리·같은 타입·같은 key 면 상태 유지, key 나 타입이 바뀌면 새로 만든다 (React 재조정 규칙)
- *  - 훅: useState·useReducer·useEffect·useLayoutEffect·useMemo·useCallback·useRef·useContext(기본값)
+ *  - 훅: useState·useReducer·useEffect·useLayoutEffect·useMemo·useCallback·useRef·useContext(가까운 Provider 값, 없으면 기본값)
  *  - 그리는 중 자기 상태를 바꾸면(이전 렌더 값 저장 패턴) 그 컴포넌트를 바로 다시 그린다
  *  - 문자열 타입 요소만 결과 트리에 남긴다 (RN 부품은 테스트에서 문자열 타입으로 가짜 모듈을 둔다)
  */
@@ -115,9 +115,23 @@ export function render(element: React.ReactElement) {
     const id = `${parent}/${e.key !== null ? `k:${e.key}` : `i:${index}`}`;
     const { type, props } = e;
     if (type === React.Fragment) return children(props.children as React.ReactNode, id, seen);
+    // 컨텍스트 공급자(React 19 는 Context 자체가 Provider): 그 아래를 그리는 동안만 값을 바꾼다
+    if (typeof type === "object" && type !== null && (type as { $$typeof?: symbol }).$$typeof === Symbol.for("react.context")) {
+      const ctx = type as unknown as { _currentValue: unknown };
+      const prev = ctx._currentValue;
+      ctx._currentValue = props.value;
+      try {
+        return children(props.children as React.ReactNode, id, seen);
+      } finally {
+        ctx._currentValue = prev;
+      }
+    }
     if (typeof type === "string") return [{ type, props, children: children(props.children as React.ReactNode, id, seen) }];
-    if (typeof type !== "function") throw new Error(`지원하지 않는 요소: ${String(type)}`);
-    const iid = `${id}:${typeId(type)}`;
+    // React.memo 는 속성 비교 없이 늘 다시 그린다 (결과는 같다)
+    const isMemo = typeof type === "object" && type !== null && (type as { $$typeof?: symbol }).$$typeof === Symbol.for("react.memo");
+    const fn: unknown = isMemo ? (type as unknown as { type: unknown }).type : type;
+    if (typeof fn !== "function") throw new Error(`지원하지 않는 요소: ${String(type)}`);
+    const iid = `${id}:${typeId(fn)}`;
     seen.add(iid);
     let inst = instances.get(iid);
     if (!inst) {
@@ -131,7 +145,7 @@ export function render(element: React.ReactElement) {
       current = inst;
       cursor = 0;
       pendingEffects = [];
-      out = (type as (p: unknown) => React.ReactNode)(props);
+      out = (fn as (p: unknown) => React.ReactNode)(props);
       if (++tries > 25) throw new Error("그리는 중 상태 변경이 끝나지 않습니다");
     } while (again);
     current = null;

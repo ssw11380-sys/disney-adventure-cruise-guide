@@ -1,19 +1,33 @@
 import type { Currency, Market } from "@/api/types";
 
+/**
+ * 절댓값 표기(body)에 부호를 붙인다. 부호는 반올림한 뒤 보이는 값으로 정한다 — 0 으로 보이면(숫자가 모두 0) 부호 없이
+ * ("-0원"·"+0원"·"-$0.00"·"-0.00%" 대신 "0원"·"$0.00"·"0.00%", BH-38)
+ */
+function withSign(n: number, body: string, sign: boolean | undefined): string {
+  if (!/[1-9]/.test(body)) return body;
+  if (sign && n > 0) return `+${body}`;
+  return n < 0 ? `-${body}` : body;
+}
+
 export function formatWon(n: number | null | undefined, opts: { sign?: boolean } = {}): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
-  const abs = Math.abs(n);
-  const body = `${Math.round(abs).toLocaleString("ko-KR")}원`;
-  if (opts.sign) return n > 0 ? `+${body}` : n < 0 ? `-${body}` : body;
-  return n < 0 ? `-${body}` : body;
+  return withSign(n, `${Math.round(Math.abs(n)).toLocaleString("ko-KR")}원`, opts.sign);
 }
 
 export function formatUsd(n: number | null | undefined, opts: { sign?: boolean } = {}): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
-  const abs = Math.abs(n);
-  const body = `$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  if (opts.sign) return n > 0 ? `+${body}` : n < 0 ? `-${body}` : body;
-  return n < 0 ? `-${body}` : body;
+  return withSign(n, `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, opts.sign);
+}
+
+/**
+ * 금액을 표시 단위로 반올림한 값 (원은 정수, 달러는 센트). 금액의 부호·등락 색을 이 값으로 정하면 화면에 0 으로 보이는 금액을
+ * 손실·이익 색으로 칠하지 않는다 (BH-38). 반올림해 0 이면 0 (-0 아님)
+ */
+export function shownAmount(n: number | null | undefined, currency: Currency | undefined): number | null {
+  if (n === null || n === undefined || !Number.isFinite(n)) return null;
+  const unit = currency === "USD" ? 100 : 1;
+  return Math.sign(n) * (Math.round(Math.abs(n) * unit) / unit) || 0;
 }
 
 /** 통화에 맞춘 가격 표기. KRW 는 "201,000원", USD 는 "$340.22" */
@@ -70,7 +84,7 @@ export function formatPct(n: number | null | undefined, opts: { sign?: boolean }
   const a = Math.abs(n);
   const s = `${a >= 1000 ? a.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : a.toFixed(2)}%`;
   if (!opts.sign) return s;
-  return n > 0 ? `+${s}` : n < 0 ? `-${s}` : s;
+  return withSign(n, s, true);
 }
 
 /** 큰 금액을 억/조 단위로 (시가총액, 매출 등). USD 는 B/M 단위 */
@@ -84,12 +98,12 @@ export function formatKrwCompact(n: number | null | undefined, currency: Currenc
     if (abs >= 999.95e6) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
     if (abs >= 999.5e3) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
     if (abs >= 1e4) return `${sign}$${Math.round(abs / 1e3).toLocaleString("en-US")}K`;
-    return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
+    return withSign(n, `$${Math.round(abs).toLocaleString("en-US")}`, false);
   }
   if (abs >= 9_999.5e8) return `${sign}${(abs / 1e12).toFixed(abs >= 9.95e12 ? 0 : 1)}조원`;
   if (abs >= 9_999.5e4) return `${sign}${Math.round(abs / 1e8).toLocaleString("ko-KR")}억원`;
   if (abs >= 1e4) return `${sign}${Math.round(abs / 1e4).toLocaleString("ko-KR")}만원`;
-  return `${sign}${Math.round(abs).toLocaleString("ko-KR")}원`;
+  return withSign(n, `${Math.round(abs).toLocaleString("ko-KR")}원`, false);
 }
 
 export function formatVolume(n: number | null | undefined): string {
@@ -146,8 +160,10 @@ export function formatQuote(n: number | null | undefined, currency: Currency | u
 /** 전일 대비 화살표 표기: "▲2,500" / "▼0.30" / "0" */
 export function formatArrow(n: number | null | undefined, currency: Currency | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "-";
-  if (n === 0) return "0";
-  return `${n > 0 ? "▲" : "▼"}${formatQuote(Math.abs(n), currency)}`;
+  const body = formatQuote(Math.abs(n), currency);
+  // 반올림해 0 으로 보이면 화살표 없이 (BH-38)
+  if (!/[1-9]/.test(body)) return "0";
+  return `${n > 0 ? "▲" : "▼"}${body}`;
 }
 
 /** showKrw 를 반영한 호가 표기 */

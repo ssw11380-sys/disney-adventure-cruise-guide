@@ -22,7 +22,7 @@ import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
  */
 export default function SettingsScreen() {
   const t = useTheme();
-  const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost } = useSettings();
+  const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost } = useSettings();
   const health = useHealth();
   const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
@@ -119,8 +119,8 @@ export default function SettingsScreen() {
             apiToken={apiToken}
             authRequired={health.data?.authRequired ?? false}
             onSave={async (url, token) => {
-              await setApiUrl(url);
-              await setApiToken(token);
+              // 주소·토큰을 한 번에 — 따로 바꾸면 새 서버로 옛 토큰이 먼저 나간다 (BH-27)
+              await setCredentials(url, token);
               await health.refetch();
             }}
             onCheck={() => void health.refetch()}
