@@ -175,6 +175,24 @@ export function placeInsideLabels(o: { plotW: number; plotH: number; bars: reado
 }
 
 /**
+ * 그림 위쪽에 덧그리는 상자(과거 구간 안내 버튼)를 가운데·왼쪽·오른쪽 중 어디에 둘지 (순수 함수 → 단위 테스트).
+ * 폭 width · 위에서 bottom 까지의 상자가 가리는 봉이 가장 적은 곳, 같으면 가운데 → 왼쪽 → 오른쪽.
+ * 급등한 봉 꼭대기(RGTX 6월)나 최신 봉을 버튼이 덮지 않게 한다
+ */
+export function topOverlayAlign(o: { plotW: number; width: number; bottom: number; bars: readonly Box[]; edge?: number }): "center" | "left" | "right" {
+  const edge = o.edge ?? LABEL_EDGE;
+  const w = Math.min(o.width, o.plotW - edge * 2);
+  const lefts = { center: (o.plotW - w) / 2, left: edge, right: o.plotW - edge - w } as const;
+  let best: { align: "center" | "left" | "right"; hits: number } | null = null;
+  for (const align of ["center", "left", "right"] as const) {
+    const box = { left: lefts[align], right: lefts[align] + w, top: 0, bottom: o.bottom };
+    const hits = o.bars.filter((b) => overlaps(b, box)).length;
+    if (!best || hits < best.hits) best = { align, hits };
+  }
+  return best!.align;
+}
+
+/**
  * 거래량 막대 경로(SVG path). 상승·하락 막대는 거래량 비율 높이로 채우고, 거래량을 아직 모르는 임시 봉(volumeUnknown — 실시간 체결로 만든 봉)은
  * 0 처럼 비워 두지 않고 pane 높이의 점선 빈 막대(unknown)로 따로 준다 (PF-04, 서버 봉을 다시 받으면 채워진다)
  */

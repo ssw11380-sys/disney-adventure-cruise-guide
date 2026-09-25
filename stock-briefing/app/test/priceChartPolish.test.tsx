@@ -153,9 +153,19 @@ describe("과거 구간 안내 버튼 (기능 플래그 detailPolish — pastVie
     expect(style.minHeight! + slop.top + slop.bottom).toBeGreaterThanOrEqual(touch.min);
     const wrap = r.all().find((n) => n.children.includes(b))!;
     expect(flat(wrap)).toMatchObject({ position: "absolute", pointerEvents: "box-none" });
-    // 그림 칸 폭(가격 축 제외) 안 가운데
-    expect(flat(wrap).alignItems).toBe("center");
+    // 그림 칸 폭(가격 축 제외) 안
+    expect(["center", "flex-start", "flex-end"]).toContain(flat(wrap).alignItems);
     expect(flat(wrap).width).toBeLessThan(419);
+  });
+
+  it("가운데에 급등한 봉 꼭대기가 있으면 그 봉을 덮지 않게 옆으로 (RGTX 6월 급등 모양), 위가 비어 있으면 가운데", () => {
+    // 보이는 120봉(128~247) 중 앞쪽 25~35번째에 급등 (캡처처럼 왼쪽 가운데) → 버튼은 오른쪽
+    const spike = RGTX.map((c, i) => (i >= 128 + 25 && i <= 128 + 35 ? { ...c, high: 60_000, close: 50_000, open: 45_000 } : c));
+    const past = { text: "2일 전까지 보는 중", onLatest: () => undefined };
+    const wrapOf = (r: ReturnType<typeof draw>) => r.all().find((n) => n.children.includes(button(r)!))!;
+    expect(flat(wrapOf(draw({ candles: spike, view: { count: 120, offset: 2 }, pastView: past }))).alignItems).toBe("flex-end");
+    // 봉이 모두 아래쪽에 있는 그림(평단이 위 끝을 넓힘)은 가운데
+    expect(flat(wrapOf(draw({ view: { count: 120, offset: 2 }, avgPrice: 19_000, pastView: past }))).alignItems).toBe("center");
   });
 
   it("라이트·다크 모두 바탕·글자는 테마 토큰", () => {

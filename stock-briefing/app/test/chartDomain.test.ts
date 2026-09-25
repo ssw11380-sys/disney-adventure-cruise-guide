@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AVG_BAND, DOMAIN_PAD, LINE_OVERSHOOT, placeInsideLabels, priceDomain, textWidth, type Box } from "@/lib/chartBasis";
+import { AVG_BAND, DOMAIN_PAD, LINE_OVERSHOOT, placeInsideLabels, priceDomain, textWidth, topOverlayAlign, type Box } from "@/lib/chartBasis";
 import { pastViewText } from "@/lib/chartLayout";
 import { bollinger, sma } from "@/lib/indicators";
 
@@ -161,6 +161,24 @@ describe("그림 안쪽 글자 자리 (placeInsideLabels)", () => {
     const b = bars((i) => (i <= 10 ? [0, 30] : [100, 140]));
     const [s] = place(b, [{ y: 12, text: "평단(범위 위) 18,599", prefer: "left", fixed: true }]);
     expect(s).toMatchObject({ side: "right", ty: 12 });
+  });
+});
+
+describe("과거 구간 안내 버튼 자리 (topOverlayAlign)", () => {
+  // 폭 300 그림, 봉 30개. 버튼 폭 120 · 위에서 36 까지
+  const bars = (f: (i: number) => number): Box[] => Array.from({ length: 30 }, (_, i) => ({ left: i * 10 + 2, right: i * 10 + 8, top: f(i), bottom: 190 }));
+  const align = (b: Box[]) => topOverlayAlign({ plotW: 300, width: 120, bottom: 36, bars: b });
+
+  it("위쪽이 비어 있으면 가운데", () => expect(align(bars(() => 100))).toBe("center"));
+  it("가운데에 급등한 봉 꼭대기가 있으면 비어 있는 쪽 (RGTX 6월 급등)", () => {
+    expect(align(bars((i) => (i >= 12 && i <= 17 ? 5 : 100)))).toBe("left");
+  });
+  it("오르는 종목(최신 봉이 오른쪽 위)은 가운데가 비어 있으면 가운데, 가운데도 막히면 왼쪽", () => {
+    expect(align(bars((i) => (i >= 25 ? 5 : 100)))).toBe("center");
+    expect(align(bars((i) => (i >= 12 ? 5 : 100)))).toBe("left");
+  });
+  it("내리는 종목(옛 봉이 왼쪽 위)·가운데 막힘이면 오른쪽", () => {
+    expect(align(bars((i) => (i <= 18 ? 5 : 100)))).toBe("right");
   });
 });
 

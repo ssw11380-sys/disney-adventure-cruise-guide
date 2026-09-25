@@ -5,8 +5,8 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { ClipPath, Defs, G, Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
-import { axisWidth, placeInsideLabels, priceDomain, readoutBasis, volumeBars, type InsideLabel, type LabelSpot } from "@/lib/chartBasis";
-import { formatChartValue, maLegendItems } from "@/lib/chartLayout";
+import { axisWidth, placeInsideLabels, priceDomain, readoutBasis, topOverlayAlign, volumeBars, type InsideLabel, type LabelSpot } from "@/lib/chartBasis";
+import { estimateTextWidth, formatChartValue, maLegendItems } from "@/lib/chartLayout";
 import { formatPct, formatVolume, shownSign } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
 import { changeColor, font, fontCap, radius, slopFor, space, useFontScale, useTheme, type Theme } from "@/theme";
@@ -159,6 +159,9 @@ export function PriceChart(p: PriceChartProps) {
 
   const yOf = useCallback((v: number) => priceH - ((v - domain[0]) / (domain[1] - domain[0])) * priceH, [domain, priceH]);
   const xOf = useCallback((i: number) => i * step + step / 2, [step]);
+  // 보이는 봉의 상자 (그림 안 글자·과거 구간 안내가 봉을 가리지 않는 자리를 고를 때)
+  const barBoxes = useMemo(() => visible.map((c, i) => ({ left: xOf(i) - bodyW / 2, right: xOf(i) + bodyW / 2, top: yOf(c.high), bottom: yOf(c.low) })), [visible, xOf, yOf, bodyW]);
+  const chromeScale = useFontScale(fontCap.chrome);
 
   // ── 캔들 path (상승/하락 각각 몸통·꼬리 하나의 path 로) ──
   const candlePaths = useMemo(() => {
@@ -330,11 +333,14 @@ export function PriceChart(p: PriceChartProps) {
     if (high52In) want.push({ key: "h52", y: yOf(p.high52w!), text: "52주 최고", prefer: "right" });
     if (low52In) want.push({ key: "l52", y: yOf(p.low52w!), text: "52주 최저", prefer: "right" });
     if (!want.length) return {} as Partial<Record<"avg" | "h52" | "l52", LabelSpot & { text: string }>>;
-    const bars = visible.map((c, i) => ({ left: xOf(i) - bodyW / 2, right: xOf(i) + bodyW / 2, top: yOf(c.high), bottom: yOf(c.low) }));
-    const placed = placeInsideLabels({ plotW, plotH: priceH, bars, labels: want });
+    const placed = placeInsideLabels({ plotW, plotH: priceH, bars: barBoxes, labels: want });
     return Object.fromEntries(want.map((w, i) => [w.key, { ...placed[i]!, text: w.text }])) as Partial<Record<"avg" | "h52" | "l52", LabelSpot & { text: string }>>;
   })();
   const labelBg = p.labelBg ?? t.surface;
+  // 과거 구간 안내 버튼 자리: 그림 위쪽 가운데·왼쪽·오른쪽 중 봉을 가장 적게 가리는 곳 (급등한 봉 꼭대기·최신 봉을 덮지 않게)
+  const pastAlign = p.pastView
+    ? topOverlayAlign({ plotW, width: pastViewWidth(p.pastView.text, chromeScale), bottom: space.xs + BANNER_H, bars: barBoxes, edge: space.xs })
+    : "center";
 
   return (
     <View style={{ width, gap: space.xs }}>
@@ -489,7 +495,7 @@ export function PriceChart(p: PriceChartProps) {
           </Svg>
         </View>
       </GestureDetector>
-      {p.pastView ? <PastViewButton text={p.pastView.text} onPress={p.pastView.onLatest} plotW={plotW} /> : null}
+      {p.pastView ? <PastViewButton text={p.pastView.text} onPress={p.pastView.onLatest} plotW={plotW} align={pastAlign} /> : null}
       </View>
       {/* 이동평균 값은 차트 아래 (위쪽 조작·읽기 줄을 한 줄로 유지, 3-21) */}
       {p.showMaValues !== false ? (
@@ -590,15 +596,20 @@ function LabelText({ spot, label, color, bg, bold }: { spot: LabelSpot; label: s
   );
 }
 
+/** 과거 구간 안내 버튼의 폭 어림 (글자 폭 + 아이콘 둘 + 사이 간격 + 좌우 안쪽 여백). 자리 고르기에만 쓴다 */
+function pastViewWidth(text: string, scale: number): number {
+  return estimateTextWidth(`${text} · 최신으로`, font.small * scale) + font.small * 2 + space.xs * 2 + space.sm * 2;
+}
+
 /**
- * 과거 구간 안내 (기능 플래그 detailPolish): 차트를 과거로 옮겼으면 그림 위 가운데에 '2일 전까지 보는 중 · 최신으로'.
- * 누르면 최신 구간으로. 보이는 높이 32 + 위아래 hitSlop = 누르는 영역 44. 그림 칸(가격 축 제외) 가운데에 놓고 칸을 넘지 않게 한 줄로 줄인다.
+ * 과거 구간 안내 (기능 플래그 detailPolish): 차트를 과거로 옮겼으면 그림 위쪽에 '2일 전까지 보는 중 · 최신으로'.
+ * 누르면 최신 구간으로. 보이는 높이 32 + 위아래 hitSlop = 누르는 영역 44. 그림 칸(가격 축 제외)의 가운데·왼쪽·오른쪽 중 봉을 가장 덜 가리는 곳(topOverlayAlign)에 놓고 칸을 넘지 않게 한 줄로 줄인다.
  * 둘레 틀은 누르기를 통과시켜(box-none) 버튼 밖 그림은 그대로 드래그·십자선이 된다
  */
-function PastViewButton({ text, onPress, plotW }: { text: string; onPress: () => void; plotW: number }) {
+function PastViewButton({ text, onPress, plotW, align }: { text: string; onPress: () => void; plotW: number; align: "center" | "left" | "right" }) {
   const t = useTheme();
   return (
-    <View style={[styles.pastWrap, { width: plotW }]}>
+    <View style={[styles.pastWrap, { width: plotW, alignItems: align === "left" ? "flex-start" : align === "right" ? "flex-end" : "center" }]}>
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
@@ -738,8 +749,8 @@ const styles = StyleSheet.create({
   // 넓은 창 이동평균 값 줄: 항목 사이는 예전 두 칸 띄어쓰기만큼, 네모와 글자 사이는 한 칸만큼. 줄 사이 간격은 두지 않는다
   maLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: 0 },
   maItem: { flexDirection: "row", alignItems: "center", gap: space.xxs },
-  // 과거 구간 안내: 그림 위 가운데 (자리를 차지하지 않고 덧그린다). 둘레 틀은 누르기를 통과시킨다
-  pastWrap: { position: "absolute", top: space.xs, left: 0, alignItems: "center", pointerEvents: "box-none" },
+  // 과거 구간 안내: 그림 위쪽 (가운데·왼쪽·오른쪽 중 봉을 덜 가리는 곳 — 자리를 차지하지 않고 덧그린다). 둘레 틀은 누르기를 통과시킨다
+  pastWrap: { position: "absolute", top: space.xs, left: 0, paddingHorizontal: space.xs, pointerEvents: "box-none" },
   past: {
     flexDirection: "row",
     alignItems: "center",
