@@ -17,6 +17,7 @@ export async function refreshWidgets({
   afterCost,
   filled: given,
   market,
+  marketPolished,
   briefings,
   features,
   indices,
@@ -32,6 +33,8 @@ export async function refreshWidgets({
   filled?: string[];
   /** 장 상태 칩 */
   market?: WidgetMarket | null;
+  /** 다듬은 잔고 위젯용 칩 (시장별 문구와 그 경계, 앱 WidgetBridge). 위젯이 쓰는 플래그가 켜져 있을 때만 이것을 그린다 */
+  marketPolished?: WidgetMarket | null;
   /** 주면 브리핑 위젯도 다시 그린다 (백그라운드 작업) */
   briefings?: LatestBriefing[];
   /** 위젯 기능 플래그와 받은 시각 (앱이 받은 /api/features 또는 위젯 응답). 위젯이 받아 둔 것과 견줘 새것을 쓴다 */
@@ -47,7 +50,20 @@ export async function refreshWidgets({
     const fetchedAt = Date.now();
     // 시세가 빠진 종목은 마지막 값으로 채우고(위젯이 직접 받을 때와 같은 규칙), 다음 실패 대비로 적어 둔다
     const { stocks, filled } = given ? { stocks: raw, filled: given } : await withLastGood(raw, fetchedAt);
-    const data = await pushWidgetData({ stocks, filled, showKrw, afterCost, fetchedAt, market: market ?? null, briefings, features, indices, board, ...(rowKrw !== undefined ? { rowKrw } : {}) });
+    const data = await pushWidgetData({
+      stocks,
+      filled,
+      showKrw,
+      afterCost,
+      fetchedAt,
+      market: market ?? null,
+      ...(marketPolished !== undefined ? { marketPolished } : {}),
+      briefings,
+      features,
+      indices,
+      board,
+      ...(rowKrw !== undefined ? { rowKrw } : {}),
+    });
     const pnlMode = await readPnlMode();
     const fontScale = fontScaleNow();
     const draw = (name: string) => (info: WidgetInfo) => renderBoth(name, data, { width: info.width, height: info.height, fontScale, now: fetchedAt, pnlMode });

@@ -217,6 +217,8 @@ export async function pushWidgetData(o: {
   afterCost: boolean;
   fetchedAt: number;
   market: WidgetMarket | null;
+  /** 다듬은 잔고 위젯용 칩 (시장별 문구와 그 경계). 아래에서 고른 플래그가 widgetPolish 일 때만 market 대신 쓴다 — 주지 않으면 market */
+  marketPolished?: WidgetMarket | null;
   briefings?: LatestBriefing[];
   /** 앱이 받은 기능 플래그와 받은 시각 (react-query dataUpdatedAt) */
   features?: { at: number; flags: WidgetFeatures } | null;
@@ -248,12 +250,14 @@ export async function pushWidgetData(o: {
     showKrw: o.showKrw,
     afterCost: o.afterCost,
     rowKrw: o.rowKrw ?? rowKrw,
-    // 브리핑 안내는 위젯이 받은 것 (앱은 따로 받지 않는다)
-    brief: prev?.brief ?? p?.brief ?? null,
+    // 브리핑 안내(BH-68)는 위젯이 마지막으로 받은 응답의 것 — 앱은 따로 받지 않는다. 백그라운드 작업은 방금 받은 응답을 적어 두고 부르므로 그 값이다.
+    // 마지막으로 그린 데이터(앱이 넘긴 것은 그보다 앞선 응답의 값을 옮겨 적은 것)보다 받아 둔 응답을 먼저 본다
+    brief: p ? p.brief : (prev?.brief ?? null),
     fetchedAt: o.fetchedAt,
     error: null,
     filled: o.filled,
-    market: o.market,
+    // 다듬은 모습을 그릴 때만 시장별 문구가 있는 칩 (예전 모습은 그 경계에서 칩을 감추면 안 된다)
+    market: flags?.flags.polish && o.marketPolished !== undefined ? o.marketPolished : o.market,
     ...(prev?.latestIds ? { latestIds: prev.latestIds } : {}),
     indices: idx?.list ?? null,
     ...(idx ? { indicesAt: idx.at } : {}),

@@ -58,7 +58,7 @@ const { formatIndexValue, formatPct, formatPrice } = await import("@/lib/format"
 const { DISCLAIMER_SHORT } = await import("@/lib/disclaimer");
 const { pnlLine, pnlSpeech } = await import("@/widgets/model");
 const model = await import("@/widgets/model");
-const { widgetChip } = await import("@/lib/liveDot");
+const { marketChip, widgetChip } = await import("@/lib/liveDot");
 
 interface Tree {
   type: string;
@@ -690,10 +690,14 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
   });
 
   it("2. 지수 줄: 미국 보유가 크면 나스닥·S&P500 먼저, 지난 세션 값은 흐리게 + 날짜, 원/달러는 끝·등락률까지", () => {
+    // 큰 위젯(4×3 이상)은 두 줄까지: 첫 시장 둘 / 둘째 시장 대표 + 원/달러
+    const tall = nodes(draw({}, { width: 330, height: 470 })).find((n) => String(n.props.accessibilityLabel).startsWith("나스닥"))!;
+    expect(words(tall)).toEqual(["나스닥", "22,936.04", "-1.13%", "·", "S&P500", "6,650.12", "+0.19%", "코스피", "7,080.92", "+0.90%", "9/23", "·", "원/달러", "1,391.50", "+0.38%"]);
+    // 한 줄(4×2): 좁으면 둘째 지수부터 빼고, 시장마다 하나 + 원/달러는 남긴다 (둘째 시장 지수는 값을 빼고 등락률만)
     const line = nodes(draw({}, { width: 420, height: 260 })).find((n) => String(n.props.accessibilityLabel).startsWith("나스닥"))!;
-    const w = words(line);
-    expect(w.slice(0, 7)).toEqual(["나스닥", "22,936.04", "-1.13%", "·", "S&P500", "6,650.12", "+0.19%"]);
-    // 전체 순서와 표기 (좁으면 뒤에서부터 뺀다 — 환율이 끝)
+    expect(words(line)).toEqual(["나스닥", "22,936.04", "-1.13%", "·", "코스피", "+0.90%", "9/23", "·", "원/달러", "1,391.50", "+0.38%"]);
+    expect(line.props.accessibilityLabel).toBe("나스닥 22,936.04 1.13% 하락, 코스피 0.90% 상승 9월 23일 값, 원/달러 1,391.50 0.38% 상승");
+    // 전체 순서와 표기 (원/달러는 늘 끝)
     const { polishedIndexItems } = model;
     const us = polishedIndexItems(LINE, T, true);
     expect(us.map((i) => i.label)).toEqual(["나스닥", "S&P500", "코스피", "코스닥", "원/달러"]);
@@ -806,6 +810,121 @@ describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정�
     const settingsScreen = readFileSync(new URL("../src/app/(tabs)/settings.tsx", import.meta.url), "utf8");
     expect(settingsScreen).toContain("위젯 종목 금액");
   });
+
+  // ── 검증 지적 반영 ──
+  const krHeavyStocks = [{ ...NVDA, qty: 1, e: [182.3, 120, null, 157_200, "exact"] as E }, { ...SAMSUNG, qty: 100, e: [7_000_000, 8_000_000, null, null, null] as E }, WATCH];
+  const indexLineOf = (t: Tree) => nodes(t).find((n) => n.props.clickAction === "OPEN_URI" && String(n.props.accessibilityLabel).includes("원/달러"));
+
+  it("검증 지적: 원/달러(등락률까지)는 330~640dp 어디서나 보인다 — 미국 비중이 크면 330~400dp 에서도 흐린 '코스피 … 9/23'이 보인다", () => {
+    for (const width of [330, 360, 400, 480, 560, 640])
+      for (const height of [200, 230, 470])
+        for (const [mix, stocks] of [
+          ["us", [NVDA, SAMSUNG, WATCH]],
+          ["kr", krHeavyStocks],
+        ] as const) {
+          const line = indexLineOf(draw({}, { width, height }, polishedPayload({ stocks })));
+          const at = `${width}×${height} ${mix}`;
+          expect(line, at).toBeDefined();
+          const w = words(line!);
+          const fx = w.indexOf("원/달러");
+          expect(w.slice(fx), at).toEqual(["원/달러", "1,391.50", "+0.38%"]);
+          // 시장마다 하나: 나스닥과 코스피가 모두 보인다 (지난 세션 코스피는 날짜와 함께)
+          expect(w, at).toContain("나스닥");
+          const k = w.indexOf("코스피");
+          expect(k, at).toBeGreaterThanOrEqual(0);
+          expect(w.slice(k, k + 4).includes("9/23"), at).toBe(true);
+        }
+    // 330dp 미국 비중: "나스닥 -1.13% · 코스피 +0.90% 9/23 · 원/달러 1,391.50 +0.38%" (지수는 값을 빼고 등락률만)
+    const narrow = indexLineOf(draw({}, { width: 330, height: 230 }))!;
+    expect(words(narrow)).toEqual(["나스닥", "-1.13%", "·", "코스피", "+0.90%", "9/23", "·", "원/달러", "1,391.50", "+0.38%"]);
+    expect(texts(narrow).find((p) => p.text === "+0.90%")!.color).toBe(dark.muted);
+    expect(narrow.props.accessibilityLabel).toBe("나스닥 1.13% 하락, 코스피 0.90% 상승 9월 23일 값, 원/달러 1,391.50 0.38% 상승");
+  });
+
+  it("검증 지적: 칩 색은 보이는 시장으로 — 한국만 보유한 23:00(미국 정규장)의 '한국 장 마감'·미국만 보유한 09:30 의 '미국 장 마감'은 회색", () => {
+    const chipColor = (t: Tree, text: string) => texts(t).find((p) => p.text === text)?.color;
+    const later = "2026-09-25T20:00:00.000Z";
+    // 한국만 보유 · 23:00 KST: 달력은 미국 정규장이 열려 있어 예전 칩은 '미국 장중'(금색)
+    const krOnly = polishedPayload({ stocks: [SAMSUNG, WATCH], market: { label: "미국 장중", open: true, kr: false, us: true, nextChangeAt: later, markets: [{ market: "KR", label: "한국 장 마감" }] } });
+    expect(chipColor(draw({}, WIDE, krOnly), "한국 장 마감")).toBe(dark.muted);
+    // 미국만 보유 · 09:30 KST: 달력은 한국이 열려 있어 예전 칩은 '한국 장중'(금색)
+    const usOnly = polishedPayload({ stocks: [NVDA], market: { label: "한국 장중", open: true, kr: true, us: false, nextChangeAt: later, markets: [{ market: "US", label: "미국 장 마감" }] } });
+    expect(chipColor(draw({}, WIDE, usOnly), "미국 장 마감")).toBe(dark.muted);
+    // 보이는 시장에 달력으로 열린 시장이 있으면 금색, 좁아서 그 시장이 빠지면 회색
+    const both = polishedPayload({
+      market: { label: "한국 장중", open: true, kr: true, us: false, nextChangeAt: later, markets: [{ market: "KR", label: "한국 장중" }, { market: "US", label: "미국 주간거래" }] },
+    });
+    expect(chipColor(draw({}, WIDE, both), "미국 주간거래 · 한국 장중")).toBe(dark.gold);
+    expect(chipColor(draw({}, { width: 250, height: 180 }, both), "미국 주간거래")).toBe(dark.muted);
+    // 시장별 문구가 없으면(플래그 꺼진 서버) 예전처럼 market.open
+    expect(chipColor(draw({}, WIDE, polishedPayload({ market: { label: "한국 장중", open: true, kr: true, us: false, nextChangeAt: later } })), "한국 장중")).toBe(dark.gold);
+  });
+
+  it("검증 지적: 플래그 꺼짐·예전 앱 — 08:30 에 받은 칩으로 09:05 에 다시 그려도 '한국 장중' 칩이 남는다 (미국 애프터마켓 09:00 경계를 넣지 않음)", () => {
+    const status = {
+      now: "2026-09-21T23:30:00.000Z",
+      KR: { market: "KR", isTradingDay: true, isOpen: true, opensAt: null, closesAt: "2026-09-22T11:00:00.000Z", lastClose: null, source: "toss" },
+      US: { market: "US", isTradingDay: true, isOpen: false, opensAt: "2026-09-22T13:30:00.000Z", closesAt: null, lastClose: "2026-09-21T20:00:00.000Z", source: "toss" },
+    } as const;
+    const sessions = [
+      { market: "KR" as const, phase: "regular" as const, label: "한국 정규장", open: true, eligible: true, until: "2026-09-22T06:30:00.000Z" },
+      { market: "US" as const, phase: "after" as const, label: "미국 애프터마켓", open: true, eligible: true, until: "2026-09-22T00:00:00.000Z" },
+    ];
+    // 서버 /api/widget?…&sessions=1 (widgetPolish 꺼짐·예전 앱) = 앱 WidgetBridge 의 예전 모습용 칩
+    const chip = marketChip(status as never, sessions, Date.parse(status.now));
+    const at905 = Date.parse("2026-09-22T09:05:00+09:00");
+    const d = fromPayload(payload({ market: chip }));
+    const drawn = (market: unknown, polish: boolean) =>
+      words(build(<HoldingsWidget stocks={d.stocks} showKrw={false} afterCost={false} fetchedAt={at905 - 10 * 60_000} error={null} now={at905} market={market as never} pnlToggle indexLine={false} indices={null} polish={polish} {...WIDE} />));
+    expect(drawn(d.market, false).slice(0, 2)).toEqual(["잔고 2", "한국 장중"]);
+    // 다듬은 모습용 칩은 그 경계(09:00)에서 감추고 다시 받는다 (미국 쪽 문구가 바뀌므로)
+    const polished = marketChip(status as never, sessions, Date.parse(status.now), { markets: true });
+    expect(polished.nextChangeAt).toBe("2026-09-22T00:00:00.000Z");
+    expect(drawn(polished, true).some((x) => x.includes("애프터마켓") || x.includes("한국 장중"))).toBe(false);
+  });
+
+  it("검증 지적: 앱이 넘기는 칩 — 위젯이 실제로 쓰는 플래그로 고른다 (예전 모습에는 시장별 경계가 없는 칩)", async () => {
+    const c = fromPayload(polishedPayload());
+    const plain = { label: "미국 주간거래", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T08:00:00.000Z" };
+    shared.widgets = { [WIDGET_NAMES.holdings]: [WIDE] };
+    vi.setSystemTime(T);
+    const { loadCachedWidgetData } = await import("@/widgets/data");
+    const flags = (polish: boolean) => ({ pnlToggle: true, indexLine: true, market: true, polish });
+    await refreshWidgets({ stocks: c.stocks, showKrw: false, afterCost: false, market: plain, marketPolished: CHIP, features: { at: T, flags: flags(false) } });
+    expect((await loadCachedWidgetData()).market).toStrictEqual(plain);
+    expect(words(build((shared.updates.at(-1)!.rendered as { dark: React.JSX.Element }).dark))).toContain("잔고 3");
+    await refreshWidgets({ stocks: c.stocks, showKrw: false, afterCost: false, market: plain, marketPolished: CHIP, features: { at: T + 1, flags: flags(true) } });
+    expect((await loadCachedWidgetData()).market).toStrictEqual(CHIP);
+    expect(words(build((shared.updates.at(-1)!.rendered as { dark: React.JSX.Element }).dark))).toContain("미국 주간거래 · 한국 휴장");
+    // 백그라운드 작업처럼 한 칩만 주면 그 칩 (서버가 플래그에 맞춰 준 것)
+    await refreshWidgets({ stocks: c.stocks, showKrw: false, afterCost: false, market: plain, features: { at: T + 2, flags: flags(true) } });
+    expect((await loadCachedWidgetData()).market).toStrictEqual(plain);
+  });
+
+  it("검증 지적(누르는 칸): 종목 줄(약 38dp)은 목록 전체를 한 칸으로 묶어 잔고 탭을 연다 — 예전 모습은 줄마다 그 종목", () => {
+    const list = nodes(draw()).find((n) => n.type === "ListWidget")!;
+    expect(list.children!.map((r) => r.props.clickActionData)).toEqual(list.children!.map(() => ({ uri: HOME_URI })));
+    // 화면 읽기 이름표는 줄마다 그대로
+    expect(list.children![0]!.props.accessibilityLabel).toMatch(/^엔비디아 /);
+    const classic = nodes(draw({ polish: false })).find((n) => n.type === "ListWidget")!;
+    expect(classic.children![0]!.props.clickActionData).toEqual({ uri: `${HOME_URI}stocks/NVDA` });
+    // 제목 줄은 위 여백까지 누르는 칸이고, 바로 아래 합계 칸과 같은 곳(잔고 탭)을 연다
+    const t = draw({}, { width: 330, height: 230 });
+    expect(head(t).props.padding).toMatchObject({ top: 8 });
+    const total = byClick(t, "OPEN_URI").find((n) => String(n.props.accessibilityLabel).startsWith("총 평가"))!;
+    expect(total.props.clickActionData).toEqual(head(t).props.clickActionData);
+  });
+
+  it("검증 지적: 합계가 달러(모두 미국 종목·원화 표시 꺼짐)면 종목 줄 손익도 달러 — 합계와 같은 통화", () => {
+    const usOnly = polishedPayload({ stocks: [NVDA] });
+    const t = draw({}, WIDE, usOnly);
+    expect(words(t)).toContain("$7,292.00"); // 합계 $
+    const row = nodes(t).find((n) => n.type === "ListWidget")!.children![0]!;
+    expect(words(row)[1]).toBe("수익 +51.92% +$2,492.00");
+    // 원화 표시를 켜면 합계·줄 모두 원화
+    const krw = nodes(draw({ showKrw: true }, WIDE, usOnly)).find((n) => n.type === "ListWidget")!.children![0]!;
+    expect(words(krw)[1]).toBe("수익 +61.37% +3,858,818원");
+  });
 });
 
 describe("BH-41: 앱이 위젯에 넘기는 장 상태 칩에도 다음 바뀌는 시각이 있다", () => {
@@ -870,6 +989,17 @@ describe("BH-68: 브리핑 위젯 안내 문구는 서버의 브리핑 시간·�
     expect(d.brief).toEqual(brief({ failed: 2 }));
     const { loadCachedWidgetData } = await import("@/widgets/data");
     expect((await loadCachedWidgetData()).brief).toEqual(brief({ failed: 2 }));
+  });
+
+  it("검증 지적: 앱이 위젯을 바로 그릴 때 브리핑 안내는 마지막으로 그린 값보다 위젯이 마지막으로 받은 응답을 먼저 본다", async () => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify(payload({ briefings: [], latestIds: [], brief: brief() })), { status: 200, headers: { etag: '"b2"' } }));
+    const d = await loadWidgetData({ stocks: true, briefings: true });
+    // 그린 데이터에 옛 실패 수가 남아 있어도 (예: 앞선 응답의 값을 옮겨 적은 그림)
+    const { saveWidgetView, loadCachedWidgetData } = await import("@/widgets/data");
+    await saveWidgetView({ ...d, brief: brief({ failed: 2 }) }, API);
+    shared.widgets = { [WIDGET_NAMES.briefing]: [WIDE] };
+    await refreshWidgets({ stocks: d.stocks, showKrw: false, afterCost: false, market: null });
+    expect((await loadCachedWidgetData()).brief).toEqual(brief());
   });
 });
 

@@ -214,6 +214,10 @@ export interface IndexItemText {
   tag?: string | null;
   /** tag 를 화면 읽기가 읽는 말 ("9월 23일 값" · "시세 지연") */
   tagSpeech?: string | null;
+  /** 다듬은 모습: 좁을 때 남기는 순서 · 값을 뺄 수 있음 · 값을 뺀 모양 (layout IndexInput) */
+  keep?: number;
+  canShort?: boolean;
+  short?: boolean;
 }
 
 /** 위젯 한 줄에 맞춘 짧은 이름 (없는 코드는 서버 이름 그대로) */
@@ -242,7 +246,8 @@ export function indexItems(list: readonly WidgetIndexLike[] | null | undefined):
 
 /** 지수 줄을 화면 읽기가 읽는 문장: "코스피 3,412.35 0.90% 상승, 나스닥 …, 원/달러 1,360.50" (다듬은 모습은 지난 세션 값에 "9월 23일 값") */
 export function indexSpeech(items: readonly IndexItemText[]): string {
-  return items.map((i) => [i.name, i.value, i.rate ? speakRate(i.changeRate) : null, i.tagSpeech !== undefined ? i.tagSpeech : i.stale ? "시세 지연" : null].filter(Boolean).join(" ")).join(", ");
+  // 값을 뺀 짧은 모양(다듬은 모습의 좁은 줄)은 보이는 대로 이름·등락률만
+  return items.map((i) => [i.name, i.short ? null : i.value, i.rate ? speakRate(i.changeRate) : null, i.tagSpeech !== undefined ? i.tagSpeech : i.stale ? "시세 지연" : null].filter(Boolean).join(" ")).join(", ");
 }
 
 /** 기준 시각 글자를 긴 것부터: "9/23 15:30 기준" → "9/23 15:30" → "15:30" (칸이 좁으면 뒤의 것으로) */
@@ -306,24 +311,40 @@ export function accountMix(stocks: RegisteredWithQuote[], fxOf: (s: RegisteredWi
   return mix;
 }
 
+/** 칩 글자 한 가지와 그 색 (open: 금색) */
+export interface ChipText {
+  text: string;
+  open: boolean;
+}
+
 /**
  * 장 상태 칩 글자 후보 (긴 것부터): 보유 시장의 지금 세션을 원화 보유액이 큰 시장부터 "미국 주간거래 · 한국 휴장" → 좁으면 앞 시장만 "미국 주간거래".
- * 시장별 문구(market.markets)가 없으면(예전 서버·세션 모름) 예전 칩 한 개. 보유 종목이 없으면(관심만) 등록 종목의 시장 모두
+ * 시장별 문구(market.markets)가 없으면(예전 서버·세션 모름) 예전 칩 한 개. 보유 종목이 없으면(관심만) 등록 종목의 시장 모두.
+ * 색은 보이는 글자의 시장으로: 그중 토스 달력으로 열린 시장("한국 장중"·"미국 장중")이 있을 때만 금색 — 장중은 금색, 그 밖은 회색.
+ * market.open 은 보유하지 않은 시장의 달력도 보므로(한국만 보유한 23:00 에 미국 정규장이 열려 있음) 쓰지 않는다 (검증 지적: '한국 장 마감'이 금색)
  */
-export function chipTexts(market: WidgetMarket | null, stocks: readonly RegisteredWithQuote[], usFirst: boolean): string[] {
+export function chipTexts(market: WidgetMarket | null, stocks: readonly RegisteredWithQuote[], usFirst: boolean): ChipText[] {
   if (!market) return [];
   const held = new Set(stocks.filter(isHeld).map(marketOf));
   const parts = (market.markets ?? []).filter((m) => !held.size || held.has(m.market));
-  if (!parts.length) return [market.label];
+  if (!parts.length) return [{ text: market.label, open: market.open }];
   const rank = (m: "KR" | "US") => (m === "US" ? (usFirst ? 0 : 1) : usFirst ? 1 : 0);
   const sorted = [...parts].sort((a, b) => rank(a.market) - rank(b.market));
-  return [...new Set([sorted.map((p) => p.label).join(" · "), sorted[0]!.label])];
+  const calOpen = (m: "KR" | "US") => (m === "KR" ? market.kr : market.us) === true;
+  const all: ChipText = { text: sorted.map((p) => p.label).join(" · "), open: sorted.some((p) => calOpen(p.market)) };
+  const first: ChipText = { text: sorted[0]!.label, open: calOpen(sorted[0]!.market) };
+  return sorted.length > 1 ? [all, first] : [all];
 }
 
 /** 다듬은 지수 줄 이름 (환율은 무엇의 환율인지 보이게 "원/달러") */
 export const LINE_LABEL: Record<string, string> = { KOSPI: "코스피", KOSDAQ: "코스닥", NASDAQ: "나스닥", SPX: "S&P500", USDKRW: "원/달러" };
-/** 계좌 비중 순서: 미국 보유가 크면 미국 지수부터. 환율은 늘 끝 (좁으면 뒤에서부터 뺀다) */
+/** 계좌 비중 순서: 미국 보유가 크면 미국 지수부터. 환율은 늘 끝 */
 const LINE_ORDER = { kr: ["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "USDKRW"], us: ["NASDAQ", "SPX", "KOSPI", "KOSDAQ", "USDKRW"] } as const;
+/**
+ * LINE_ORDER 자리별로 좁을 때 남기는 순서 (layout planPolishedIndex, 작을수록 오래 남는다):
+ * 첫 시장 대표 지수 → 원/달러 → 둘째 시장 대표 지수 → 첫 시장 둘째 지수 → 둘째 시장 둘째 지수. 시장마다 하나와 원/달러가 끝까지 남는다
+ */
+const LINE_KEEP = [0, 3, 2, 4, 1] as const;
 /** 거래일 규칙을 고르는 대표 코드 (lib/marketTime 은 종목 코드로 한국·미국을 가린다). 원/달러는 서울 */
 const KR_REF = "005930";
 const US_REF = "AAPL";
@@ -348,11 +369,11 @@ export function lastOpenedSession(now: number, ref: string): string | null {
 /**
  * 다듬은 지수 줄 항목: 계좌 비중 순서(미국 보유가 크면 나스닥·S&P500 먼저, 아니면 코스피·코스닥 먼저, 원/달러는 끝), 환율도 등락률.
  * 지금 세션 값이 아닌 것(가장 최근 열린 정규장보다 앞선 날의 값 — 예: 추석 휴장 중 9/23 코스피)은 흐리게 + 그 날짜,
- * 출처 조회가 실패한 값은 흐리게 + "지연"
+ * 출처 조회가 실패한 값은 흐리게 + "지연". 좁으면 layout planPolishedIndex 가 keep 순서로 빼고 지수는 값을 빼(canShort) 시장마다 하나와 원/달러를 남긴다
  */
 export function polishedIndexItems(list: readonly (WidgetIndexLike & { asOf?: string | null })[] | null | undefined, now: number, usFirst: boolean): IndexItemText[] {
   const byCode = new Map((list ?? []).filter((i) => Number.isFinite(i.value)).map((i) => [i.code, i]));
-  return LINE_ORDER[usFirst ? "us" : "kr"].flatMap((code) => {
+  return LINE_ORDER[usFirst ? "us" : "kr"].flatMap((code, pos) => {
     const i = byCode.get(code);
     if (!i) return [];
     const ref = code === "NASDAQ" || code === "SPX" ? US_REF : KR_REF;
@@ -373,6 +394,8 @@ export function polishedIndexItems(list: readonly (WidgetIndexLike & { asOf?: st
         name: i.name,
         tag,
         tagSpeech: past ? `${Number(m)}월 ${Number(d)}일 값` : i.stale ? "시세 지연" : null,
+        keep: LINE_KEEP[pos],
+        canShort: !isFx(code),
       },
     ];
   });

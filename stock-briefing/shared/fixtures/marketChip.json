@@ -1,5 +1,5 @@
 {
-  "note": "위젯 장 상태 칩과 잔고 상태 줄 앞머리. 서버 widgetPayload.marketChip/sessionViews 로 만들었다 (chip.markets 는 다듬은 잔고 위젯의 시장별 문구, nextChangeAt 은 아직 열리지 않은 세션의 시작까지 본다). backend/test/widget.test.ts 가 서버(세션은 sessionAt 으로 다시 만든다)와, app/test/marketChip.test.ts 가 앱(위젯에 바로 그리는 WidgetBridge · 잔고 상태 줄)과 같은지 확인한다.",
+  "note": "위젯 장 상태 칩과 잔고 상태 줄 앞머리. 서버 widgetPayload.marketChip/sessionViews 로 만들었다. chip 은 새 앱(&sessions=1)·widgetPolish 꺼짐의 칩(두 시장이 달력으로 닫혀 있으면 nextChangeAt 이 아직 열리지 않은 세션의 시작까지 본다), polished 는 다듬은 잔고 위젯의 칩(marketChip(…, { markets: true }) — 시장별 문구 markets 와 달력으로 닫힌 시장의 세션 경계). backend/test/widget.test.ts 가 서버(세션은 sessionAt 으로 다시 만든다)와, app/test/marketChip.test.ts 가 앱(위젯에 바로 그리는 WidgetBridge · 잔고 상태 줄)과 같은지 확인한다.",
   "cases": [
     {
       "name": "평일 07:30 · 한국 개장 전 · 미국 애프터마켓",
@@ -92,6 +92,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-21T23:00:00.000Z"
+      },
+      "head": "미국 애프터마켓 · 한국 장 마감",
+      "polished": {
+        "label": "미국 애프터마켓",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-21T23:00:00.000Z",
         "markets": [
           {
@@ -103,8 +111,7 @@
             "label": "한국 장 마감"
           }
         ]
-      },
-      "head": "미국 애프터마켓 · 한국 장 마감"
+      }
     },
     {
       "name": "평일 07:30 · 한국만 보유",
@@ -157,6 +164,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-21T23:00:00.000Z"
+      },
+      "head": "한국 장 마감",
+      "polished": {
+        "label": "장 마감",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-21T23:00:00.000Z",
         "markets": [
           {
@@ -164,8 +179,7 @@
             "label": "한국 장 마감"
           }
         ]
-      },
-      "head": "한국 장 마감"
+      }
     },
     {
       "name": "평일 08:30 · 한국 NXT 프리마켓(달력 열림) · 미국 애프터마켓",
@@ -258,6 +272,14 @@
         "open": true,
         "kr": true,
         "us": false,
+        "nextChangeAt": "2026-09-22T11:00:00.000Z"
+      },
+      "head": "한국 NXT 프리마켓 · 미국 애프터마켓",
+      "polished": {
+        "label": "한국 장중",
+        "open": true,
+        "kr": true,
+        "us": false,
         "nextChangeAt": "2026-09-22T00:00:00.000Z",
         "markets": [
           {
@@ -269,8 +291,7 @@
             "label": "미국 애프터마켓"
           }
         ]
-      },
-      "head": "한국 NXT 프리마켓 · 미국 애프터마켓"
+      }
     },
     {
       "name": "평일 08:55 · 한국 동시호가(달력 열림)",
@@ -363,6 +384,14 @@
         "open": true,
         "kr": true,
         "us": false,
+        "nextChangeAt": "2026-09-22T11:00:00.000Z"
+      },
+      "head": "미국 애프터마켓 · 한국 동시호가",
+      "polished": {
+        "label": "한국 장중",
+        "open": true,
+        "kr": true,
+        "us": false,
         "nextChangeAt": "2026-09-22T00:00:00.000Z",
         "markets": [
           {
@@ -374,8 +403,7 @@
             "label": "한국 장중"
           }
         ]
-      },
-      "head": "미국 애프터마켓 · 한국 동시호가"
+      }
     },
     {
       "name": "평일 10:00 · 한국 정규장 · 미국 주간거래",
@@ -468,6 +496,14 @@
         "open": true,
         "kr": true,
         "us": false,
+        "nextChangeAt": "2026-09-22T11:00:00.000Z"
+      },
+      "head": "한국 정규장 · 미국 주간거래",
+      "polished": {
+        "label": "한국 장중",
+        "open": true,
+        "kr": true,
+        "us": false,
         "nextChangeAt": "2026-09-22T08:00:00.000Z",
         "markets": [
           {
@@ -479,8 +515,7 @@
             "label": "미국 주간거래"
           }
         ]
-      },
-      "head": "한국 정규장 · 미국 주간거래"
+      }
     },
     {
       "name": "평일 10:00 · 미국만 보유 · 한국 달력 열림",
@@ -533,6 +568,14 @@
         "open": true,
         "kr": true,
         "us": false,
+        "nextChangeAt": "2026-09-22T11:00:00.000Z"
+      },
+      "head": "미국 주간거래",
+      "polished": {
+        "label": "한국 장중",
+        "open": true,
+        "kr": true,
+        "us": false,
         "nextChangeAt": "2026-09-22T08:00:00.000Z",
         "markets": [
           {
@@ -540,8 +583,7 @@
             "label": "미국 주간거래"
           }
         ]
-      },
-      "head": "미국 주간거래"
+      }
     },
     {
       "name": "평일 15:35 · 한국 장 마감 틈(달력 열림)",
@@ -634,6 +676,14 @@
         "open": true,
         "kr": true,
         "us": false,
+        "nextChangeAt": "2026-09-22T11:00:00.000Z"
+      },
+      "head": "미국 주간거래 · 한국 장 마감",
+      "polished": {
+        "label": "한국 장중",
+        "open": true,
+        "kr": true,
+        "us": false,
         "nextChangeAt": "2026-09-22T08:00:00.000Z",
         "markets": [
           {
@@ -645,8 +695,7 @@
             "label": "한국 장중"
           }
         ]
-      },
-      "head": "미국 주간거래 · 한국 장 마감"
+      }
     },
     {
       "name": "평일 17:30 · 한국 애프터마켓 · 미국 프리마켓",
@@ -739,6 +788,14 @@
         "open": true,
         "kr": true,
         "us": false,
+        "nextChangeAt": "2026-09-22T11:00:00.000Z"
+      },
+      "head": "한국 애프터마켓 · 미국 프리마켓",
+      "polished": {
+        "label": "한국 장중",
+        "open": true,
+        "kr": true,
+        "us": false,
         "nextChangeAt": "2026-09-22T11:00:00.000Z",
         "markets": [
           {
@@ -750,8 +807,7 @@
             "label": "미국 프리마켓"
           }
         ]
-      },
-      "head": "한국 애프터마켓 · 미국 프리마켓"
+      }
     },
     {
       "name": "평일 20:30 · 한국 마감 · 미국 프리마켓",
@@ -844,6 +900,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-22T13:30:00.000Z"
+      },
+      "head": "미국 프리마켓 · 한국 장 마감",
+      "polished": {
+        "label": "미국 프리마켓",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-22T13:30:00.000Z",
         "markets": [
           {
@@ -855,8 +919,7 @@
             "label": "한국 장 마감"
           }
         ]
-      },
-      "head": "미국 프리마켓 · 한국 장 마감"
+      }
     },
     {
       "name": "평일 20:30 · 한국만 보유",
@@ -909,6 +972,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-22T13:30:00.000Z"
+      },
+      "head": "한국 장 마감",
+      "polished": {
+        "label": "장 마감",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-22T13:30:00.000Z",
         "markets": [
           {
@@ -916,8 +987,7 @@
             "label": "한국 장 마감"
           }
         ]
-      },
-      "head": "한국 장 마감"
+      }
     },
     {
       "name": "평일 20:30 · 주간거래 미지원 미국 종목만 (프리마켓은 모든 종목)",
@@ -970,6 +1040,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-22T13:30:00.000Z"
+      },
+      "head": "미국 프리마켓",
+      "polished": {
+        "label": "미국 프리마켓",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-22T13:30:00.000Z",
         "markets": [
           {
@@ -977,8 +1055,7 @@
             "label": "미국 프리마켓"
           }
         ]
-      },
-      "head": "미국 프리마켓"
+      }
     },
     {
       "name": "평일 23:00 · 미국 정규장",
@@ -1071,6 +1148,14 @@
         "open": true,
         "kr": false,
         "us": true,
+        "nextChangeAt": "2026-09-22T20:00:00.000Z"
+      },
+      "head": "미국 정규장 · 한국 장 마감",
+      "polished": {
+        "label": "미국 장중",
+        "open": true,
+        "kr": false,
+        "us": true,
         "nextChangeAt": "2026-09-22T20:00:00.000Z",
         "markets": [
           {
@@ -1082,8 +1167,7 @@
             "label": "한국 장 마감"
           }
         ]
-      },
-      "head": "미국 정규장 · 한국 장 마감"
+      }
     },
     {
       "name": "평일 23:00 · 한국만 보유 · 미국 달력 열림",
@@ -1136,6 +1220,14 @@
         "open": true,
         "kr": false,
         "us": true,
+        "nextChangeAt": "2026-09-22T20:00:00.000Z"
+      },
+      "head": "한국 장 마감",
+      "polished": {
+        "label": "미국 장중",
+        "open": true,
+        "kr": false,
+        "us": true,
         "nextChangeAt": "2026-09-22T20:00:00.000Z",
         "markets": [
           {
@@ -1143,8 +1235,7 @@
             "label": "한국 장 마감"
           }
         ]
-      },
-      "head": "한국 장 마감"
+      }
     },
     {
       "name": "새벽 05:30 · 미국 애프터마켓",
@@ -1237,6 +1328,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-22T23:00:00.000Z"
+      },
+      "head": "미국 애프터마켓 · 한국 장 마감",
+      "polished": {
+        "label": "미국 애프터마켓",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-22T23:00:00.000Z",
         "markets": [
           {
@@ -1248,8 +1347,7 @@
             "label": "한국 장 마감"
           }
         ]
-      },
-      "head": "미국 애프터마켓 · 한국 장 마감"
+      }
     },
     {
       "name": "추석 09:59 · 미국 주간거래 · 한국 휴장",
@@ -1342,6 +1440,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-25T08:00:00.000Z"
+      },
+      "head": "미국 주간거래 · 한국 휴장",
+      "polished": {
+        "label": "미국 주간거래",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-25T08:00:00.000Z",
         "markets": [
           {
@@ -1353,8 +1459,7 @@
             "label": "한국 휴장"
           }
         ]
-      },
-      "head": "미국 주간거래 · 한국 휴장"
+      }
     },
     {
       "name": "추석 09:59 · 미국만 보유",
@@ -1407,6 +1512,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-25T08:00:00.000Z"
+      },
+      "head": "미국 주간거래",
+      "polished": {
+        "label": "미국 주간거래",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-25T08:00:00.000Z",
         "markets": [
           {
@@ -1414,8 +1527,7 @@
             "label": "미국 주간거래"
           }
         ]
-      },
-      "head": "미국 주간거래"
+      }
     },
     {
       "name": "추석 09:59 · 주간거래 미지원 종목만 (세션은 열림)",
@@ -1468,6 +1580,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-25T08:00:00.000Z"
+      },
+      "head": "미국 주간거래",
+      "polished": {
+        "label": "미국 주간거래",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-25T08:00:00.000Z",
         "markets": [
           {
@@ -1475,8 +1595,7 @@
             "label": "미국 주간거래"
           }
         ]
-      },
-      "head": "미국 주간거래"
+      }
     },
     {
       "name": "추석 09:59 · 한국만 보유",
@@ -1529,6 +1648,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-25T13:30:00.000Z"
+      },
+      "head": "한국 휴장",
+      "polished": {
+        "label": "한국 휴장",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-25T13:30:00.000Z",
         "markets": [
           {
@@ -1536,8 +1663,7 @@
             "label": "한국 휴장"
           }
         ]
-      },
-      "head": "한국 휴장"
+      }
     },
     {
       "name": "추석 09:59 · 예전 서버 (세션 없음)",
@@ -1611,7 +1737,14 @@
         "us": false,
         "nextChangeAt": "2026-09-25T13:30:00.000Z"
       },
-      "head": ""
+      "head": "",
+      "polished": {
+        "label": "한국 휴장",
+        "open": false,
+        "kr": false,
+        "us": false,
+        "nextChangeAt": "2026-09-25T13:30:00.000Z"
+      }
     },
     {
       "name": "추석 09:59 · 보유 없음",
@@ -1645,7 +1778,14 @@
         "us": false,
         "nextChangeAt": "2026-09-25T13:30:00.000Z"
       },
-      "head": ""
+      "head": "",
+      "polished": {
+        "label": "한국 휴장",
+        "open": false,
+        "kr": false,
+        "us": false,
+        "nextChangeAt": "2026-09-25T13:30:00.000Z"
+      }
     },
     {
       "name": "추석 17:00 · 주간거래가 끝난 순간 (받아 둔 세션은 주간거래)",
@@ -1739,6 +1879,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-25T13:30:00.000Z"
+      },
+      "head": "미국 주간거래 · 한국 휴장",
+      "polished": {
+        "label": "한국 휴장",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-25T13:30:00.000Z",
         "markets": [
           {
@@ -1746,8 +1894,7 @@
             "label": "한국 휴장"
           }
         ]
-      },
-      "head": "미국 주간거래 · 한국 휴장"
+      }
     },
     {
       "name": "추석 17:30 · 미국 프리마켓",
@@ -1840,6 +1987,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-25T13:30:00.000Z"
+      },
+      "head": "미국 프리마켓 · 한국 휴장",
+      "polished": {
+        "label": "미국 프리마켓",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-25T13:30:00.000Z",
         "markets": [
           {
@@ -1851,8 +2006,7 @@
             "label": "한국 휴장"
           }
         ]
-      },
-      "head": "미국 프리마켓 · 한국 휴장"
+      }
     },
     {
       "name": "추석 23:00 · 미국 정규장",
@@ -1945,6 +2099,14 @@
         "open": true,
         "kr": false,
         "us": true,
+        "nextChangeAt": "2026-09-25T20:00:00.000Z"
+      },
+      "head": "미국 정규장 · 한국 휴장",
+      "polished": {
+        "label": "미국 장중",
+        "open": true,
+        "kr": false,
+        "us": true,
         "nextChangeAt": "2026-09-25T20:00:00.000Z",
         "markets": [
           {
@@ -1956,8 +2118,7 @@
             "label": "한국 휴장"
           }
         ]
-      },
-      "head": "미국 정규장 · 한국 휴장"
+      }
     },
     {
       "name": "토 05:30 · 미국 애프터마켓 · 한국 휴장",
@@ -2050,6 +2211,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-26T00:00:00.000Z"
+      },
+      "head": "미국 애프터마켓 · 한국 휴장",
+      "polished": {
+        "label": "미국 애프터마켓",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-26T00:00:00.000Z",
         "markets": [
           {
@@ -2061,8 +2230,7 @@
             "label": "한국 휴장"
           }
         ]
-      },
-      "head": "미국 애프터마켓 · 한국 휴장"
+      }
     },
     {
       "name": "토 12:00 · 미국 장 마감 · 한국 휴장",
@@ -2155,6 +2323,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-27T23:00:00.000Z"
+      },
+      "head": "한국 휴장 · 미국 장 마감",
+      "polished": {
+        "label": "한국 휴장",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-27T23:00:00.000Z",
         "markets": [
           {
@@ -2166,8 +2342,7 @@
             "label": "미국 장 마감"
           }
         ]
-      },
-      "head": "한국 휴장 · 미국 장 마감"
+      }
     },
     {
       "name": "일 12:00 · 두 시장 휴장",
@@ -2260,6 +2435,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-27T23:00:00.000Z"
+      },
+      "head": "한국 휴장 · 미국 휴장",
+      "polished": {
+        "label": "휴장",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-27T23:00:00.000Z",
         "markets": [
           {
@@ -2271,8 +2454,7 @@
             "label": "미국 휴장"
           }
         ]
-      },
-      "head": "한국 휴장 · 미국 휴장"
+      }
     },
     {
       "name": "월 07:30 · 한국 개장 전 · 미국 휴장(일요일 밤 주간거래 전)",
@@ -2365,6 +2547,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2026-09-27T23:00:00.000Z"
+      },
+      "head": "한국 장 마감 · 미국 휴장",
+      "polished": {
+        "label": "장 마감",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2026-09-27T23:00:00.000Z",
         "markets": [
           {
@@ -2376,8 +2566,7 @@
             "label": "미국 휴장"
           }
         ]
-      },
-      "head": "한국 장 마감 · 미국 휴장"
+      }
     },
     {
       "name": "월 09:30 · 한국 정규장 · 미국 주간거래",
@@ -2470,6 +2659,14 @@
         "open": true,
         "kr": true,
         "us": false,
+        "nextChangeAt": "2026-09-28T11:00:00.000Z"
+      },
+      "head": "한국 정규장 · 미국 주간거래",
+      "polished": {
+        "label": "한국 장중",
+        "open": true,
+        "kr": true,
+        "us": false,
         "nextChangeAt": "2026-09-28T08:00:00.000Z",
         "markets": [
           {
@@ -2481,8 +2678,7 @@
             "label": "미국 주간거래"
           }
         ]
-      },
-      "head": "한국 정규장 · 미국 주간거래"
+      }
     },
     {
       "name": "달력 조회 실패(요일 추정) · 추석 09:59",
@@ -2573,6 +2769,14 @@
         "open": true,
         "kr": true,
         "us": false,
+        "nextChangeAt": null
+      },
+      "head": "한국 정규장 · 미국 주간거래",
+      "polished": {
+        "label": "한국 장중",
+        "open": true,
+        "kr": true,
+        "us": false,
         "nextChangeAt": "2026-09-25T08:00:00.000Z",
         "markets": [
           {
@@ -2584,8 +2788,7 @@
             "label": "미국 주간거래"
           }
         ]
-      },
-      "head": "한국 정규장 · 미국 주간거래"
+      }
     },
     {
       "name": "삼일절 09:29 · 두 시장 휴장 · 10:00 미국 주간거래 시작 전 (검증 지적)",
@@ -2658,6 +2861,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2027-03-01T01:00:00.000Z"
+      },
+      "head": "한국 휴장 · 미국 휴장",
+      "polished": {
+        "label": "휴장",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2027-03-01T01:00:00.000Z",
         "markets": [
           {
@@ -2669,8 +2880,7 @@
             "label": "미국 휴장"
           }
         ]
-      },
-      "head": "한국 휴장 · 미국 휴장"
+      }
     },
     {
       "name": "삼일절 10:05 · 미국 주간거래 · 한국 휴장",
@@ -2743,6 +2953,14 @@
         "open": false,
         "kr": false,
         "us": false,
+        "nextChangeAt": "2027-03-01T09:00:00.000Z"
+      },
+      "head": "미국 주간거래 · 한국 휴장",
+      "polished": {
+        "label": "미국 주간거래",
+        "open": false,
+        "kr": false,
+        "us": false,
         "nextChangeAt": "2027-03-01T09:00:00.000Z",
         "markets": [
           {
@@ -2754,8 +2972,7 @@
             "label": "한국 휴장"
           }
         ]
-      },
-      "head": "미국 주간거래 · 한국 휴장"
+      }
     }
   ]
 }

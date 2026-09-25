@@ -29,8 +29,9 @@ describe("위젯 장 상태 칩 (3-16): 앱 잔고 탭 띠와 같은 규칙", ()
     const s = { ...st(m("KR", false, false, "2026-09-27T23:00:00Z"), m("US", false, true, "2026-09-25T13:30:00Z")), now: "2026-09-25T00:59:00.000Z" };
     const overnight = { market: "US" as const, phase: "overnight" as const, label: "미국 주간거래", open: true, eligible: true, until: "2026-09-25T08:00:00.000Z" };
     const krHoliday = { market: "KR" as const, phase: "holiday" as const, label: "한국 휴장", open: false, eligible: null, until: "2026-09-27T23:00:00.000Z" };
-    // markets: 두 시장을 한 칩에 그리는 새 앱용 시장별 문구 (widgetPolish)
-    expect(marketChip(s, [krHoliday, overnight])).toEqual({
+    // markets: 두 시장을 한 칩에 그리는 새 앱용 시장별 문구 (widgetPolish — { markets: true } 로 물을 때만)
+    expect(marketChip(s, [krHoliday, overnight])).toEqual({ label: "미국 주간거래", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T08:00:00.000Z" });
+    expect(marketChip(s, [krHoliday, overnight], undefined, { markets: true })).toEqual({
       label: "미국 주간거래",
       open: false,
       kr: false,
@@ -42,13 +43,23 @@ describe("위젯 장 상태 칩 (3-16): 앱 잔고 탭 띠와 같은 규칙", ()
       ],
     });
     // 미국 종목이 없으면(한국만 보유) 예전과 같다
-    expect(marketChip(s, [krHoliday])).toEqual({ label: "한국 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T13:30:00Z", markets: [{ market: "KR", label: "한국 휴장" }] });
+    expect(marketChip(s, [krHoliday])).toEqual({ label: "한국 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T13:30:00Z" });
+    expect(marketChip(s, [krHoliday], undefined, { markets: true })).toEqual({ label: "한국 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-25T13:30:00Z", markets: [{ market: "KR", label: "한국 휴장" }] });
     // 세션이 없으면(예전 앱) markets 도 없다 — 예전 칩 그대로
-    expect(marketChip(s)).not.toHaveProperty("markets");
+    expect(marketChip(s, [], undefined, { markets: true })).not.toHaveProperty("markets");
     // 세션 경계가 지난 값은 쓰지 않는다
     expect(marketChip({ ...s, now: "2026-09-25T08:00:00.000Z" }, [overnight]).label).toBe("한국 휴장");
     // 달력으로 열려 있으면 예전 문구 그대로
     expect(marketChip(st(m("KR", true, true, "2026-09-22T11:00:00Z"), m("US", false, true)), [overnight]).label).toBe("한국 장중");
+  });
+
+  it("검증 지적: 한국이 달력으로 열려 있으면 시장별 문구를 그리지 않는 칩(예전 앱·플래그 꺼짐)의 nextChangeAt 은 달력 마감 그대로 — 미국 세션 경계(09:00)를 넣지 않는다", () => {
+    const s = { ...st(m("KR", true, true, "2026-09-22T11:00:00.000Z"), m("US", false, true, "2026-09-22T13:30:00.000Z")), now: "2026-09-21T23:30:00.000Z" };
+    const after = { market: "US" as const, phase: "after" as const, label: "미국 애프터마켓", open: true, eligible: true, until: "2026-09-22T00:00:00.000Z" };
+    const kr = { market: "KR" as const, phase: "nxt_pre" as const, label: "한국 NXT 프리마켓", open: true, eligible: true, until: "2026-09-21T23:50:00.000Z" };
+    expect(marketChip(s, [kr, after])).toEqual({ label: "한국 장중", open: true, kr: true, us: false, nextChangeAt: "2026-09-22T11:00:00.000Z" });
+    // 다듬은 잔고 위젯은 미국 쪽 문구가 09:00 에 바뀌므로 그때
+    expect(marketChip(s, [kr, after], undefined, { markets: true }).nextChangeAt).toBe("2026-09-22T00:00:00.000Z");
   });
 
   it("검증 지적(2027-03-01 삼일절): 두 시장이 닫혀 있을 때 그린 칩도 아직 열리지 않은 세션(10:00 미국 주간거래)의 시작에 바뀐다", () => {
@@ -81,6 +92,7 @@ describe("위젯 칩 공용 픽스처 (앱 WidgetBridge 와 같은 칩)", () => 
       status: MarketStatus;
       holdings: { code: string; facts: StockSessionFacts | null; session: QuoteSession | null }[];
       chip: unknown;
+      polished: unknown;
       head: string;
     }[];
   };
@@ -96,6 +108,8 @@ describe("위젯 칩 공용 픽스처 (앱 WidgetBridge 와 같은 칩)", () => 
       const sessions = c.holdings.map((h) => h.session);
       // /api/widget?sessions=1(새 앱)과 같은 부름 (now 는 장 상태의 now)
       expect(marketChip(c.status, sessions)).toStrictEqual(c.chip);
+      // &ui=2 · widgetPolish (다듬은 잔고 위젯)
+      expect(marketChip(c.status, sessions, undefined, { markets: true })).toStrictEqual(c.polished);
       expect(sessionViews(sessions, Date.parse(c.now)).map((v) => v.label).join(" · ")).toBe(c.head);
     });
   }
@@ -107,7 +121,7 @@ describe("위젯 칩 공용 픽스처 (앱 WidgetBridge 와 같은 칩)", () => 
  * &sessions=1 이 있을 때만 (새 앱의 WidgetBridge 는 같은 세션 이름 칩을 그린다 — 공용 픽스처)
  */
 describe("GET /api/widget 장 상태 칩: 세션 이름은 새 앱(&sessions=1)에만", () => {
-  const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketChip.json", import.meta.url), "utf8")) as { cases: { name: string; now: string; status: MarketStatus; chip: unknown }[] };
+  const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketChip.json", import.meta.url), "utf8")) as { cases: { name: string; now: string; status: MarketStatus; chip: unknown; polished: unknown }[] };
   const c = fixture.cases.find((x) => x.name === "추석 09:59 · 미국 주간거래 · 한국 휴장")!;
   let db: Db;
   let app: Awaited<ReturnType<typeof buildApp>>;
@@ -136,16 +150,15 @@ describe("GET /api/widget 장 상태 칩: 세션 이름은 새 앱(&sessions=1)�
   });
 
   it("새 앱(&sessions=1): 보유 미국 종목의 주간거래 이름 — 앱 WidgetBridge 가 그리는 칩(공용 픽스처)과 같다", async () => {
-    const { markets: _m, ...single } = c.chip as { markets?: unknown };
     for (const url of ["/api/widget?indices=1&sessions=1", "/api/widget?indices=1&board=1&sessions=1"]) {
       const body = (await app.inject({ method: "GET", url })).json();
       // 시장별 문구(markets)는 다듬은 잔고 위젯을 그리는 앱(&ui=2)에만 — 이 앱의 응답은 예전과 같다
-      expect(body.market, url).toEqual(single);
+      expect(body.market, url).toEqual(c.chip);
       expect(body.market.label).toBe("미국 주간거래");
     }
     for (const url of ["/api/widget?indices=1&sessions=1&ui=2", "/api/widget?indices=1&board=1&sessions=1&ui=2"]) {
       const body = (await app.inject({ method: "GET", url })).json();
-      expect(body.market, url).toEqual(c.chip);
+      expect(body.market, url).toEqual(c.polished);
       expect(body.market.markets).toEqual([
         { market: "US", label: "미국 주간거래" },
         { market: "KR", label: "한국 휴장" },
@@ -157,6 +170,7 @@ describe("GET /api/widget 장 상태 칩: 세션 이름은 새 앱(&sessions=1)�
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetPolish: false } });
     const body = (await app.inject({ method: "GET", url: "/api/widget?indices=1&sessions=1&ui=2" })).json();
     expect(body.market).not.toHaveProperty("markets");
+    expect(body.market).toEqual(c.chip);
     expect(body.market.label).toBe("미국 주간거래");
     expect(body.features.widgetPolish).toBe(false);
   });

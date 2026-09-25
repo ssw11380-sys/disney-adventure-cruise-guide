@@ -169,26 +169,31 @@ export function sessionViews(sessions: readonly (QuoteSession | null | undefined
  *    앱 잔고 상태 줄("미국 주간거래 · 한국 휴장")의 맨 앞 세션과 같은 말 (sessionViews 로 같은 세션을 고른다. 예전에는 이때 "한국 휴장"·"장 마감").
  *    open(금색)·kr·us 는 그대로 두어 위젯의 갱신 주기·지연 판단은 바뀌지 않는다
  *  - 아니면 휴장 / 한국 휴장 / 장 마감
- *  - markets: 시장별 문구 (다듬은 잔고 위젯이 "미국 주간거래 · 한국 휴장"처럼 두 시장을 한 칩에). 달력으로 열린 시장은 "한국 장중"·"미국 장중",
+ *  - markets: 시장별 문구 (다듬은 잔고 위젯이 "미국 주간거래 · 한국 휴장"처럼 두 시장을 한 칩에, o.markets 일 때만). 달력으로 열린 시장은 "한국 장중"·"미국 장중",
  *    닫힌 시장은 그 시장 세션 이름. 경계가 지난 세션(오프라인으로 옛 값만 있음)은 지금 세션처럼 보이지 않게 뺀다
- *  - nextChangeAt: 칩이 바뀌는 가장 이른 때 = 달력 경계(개장·마감)와, 달력으로 닫힌 시장의 지금 세션 경계 — 열린 세션이 끝나는 때뿐 아니라
- *    아직 열리지 않은 세션이 시작하는 때도 (예: 삼일절 09:29 "휴장" → 10:00 미국 주간거래. 예전에는 23:30 정규장까지 "휴장"을 그렸다)
+ *  - nextChangeAt: 달력 경계(개장·마감)와, 칩 글자가 바뀔 수 있을 때만 보유 종목 세션 경계 — 열린 세션이 끝나는 때와 아직 열리지 않은 세션이 시작하는 때.
+ *    세션 경계를 넣는 때: 두 시장이 달력으로 닫혀 있음(예전 칩 한 개도 세션 이름·휴장이 바뀐다 — 삼일절 09:29 "휴장"이 10:00 미국 주간거래에 바뀌게),
+ *    또는 시장별 문구를 그림(o.markets — 달력으로 닫힌 시장의 세션). 달력으로 열린 시장이 있는데 시장별 문구를 그리지 않으면(예전 앱·플래그 꺼짐)
+ *    "한국 장중"은 달력 마감까지 바뀌지 않으므로 넣지 않는다 — 넣으면 예전 위젯이 09:00(미국 애프터마켓 끝)에 칩과 '지연'을 감춘다 (검증 지적)
+ *  - o.markets: 시장별 문구를 넣는다 (다듬은 잔고 위젯 — 서버는 &ui=2 이고 widgetPolish 가 켜져 있을 때, 앱은 WidgetBridge 가 다듬은 모습용으로)
  * sessions 를 비우면(예전 앱이 물을 때 — /api/widget 에 &sessions=1 없음) 달력만 본 예전 칩이다 (예전 앱의 WidgetBridge 와 같은 값, markets 없음)
  */
-export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | null | undefined)[] = [], now: number = Date.parse(s.now)): WidgetMarket {
+export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | null | undefined)[] = [], now: number = Date.parse(s.now), o: { markets?: boolean } = {}): WidgetMarket {
   const kr = s.KR, us = s.US;
   const t = Number.isFinite(now) ? now : Date.now();
   const calOpen = (m: "KR" | "US") => (m === "KR" ? kr : us).isOpen;
   const views = sessionViews(sessions, t);
   const bounds = [kr, us].map((m) => (m.isOpen ? m.closesAt : m.opensAt)).filter((x): x is string => !!x).sort();
   let nextChangeAt = bounds[0] ?? null;
+  // 세션 경계는 칩 글자가 바뀔 수 있을 때만 (위 설명)
+  const watch = (!kr.isOpen && !us.isOpen) || o.markets === true;
   for (const v of views) {
     // 경계가 지난 세션(받아 둔 시세가 지난 세션 것)은 쓰지 않는다
-    const until = v.current && v.until && !calOpen(v.market) ? Date.parse(v.until) : NaN;
+    const until = watch && v.current && v.until && !calOpen(v.market) ? Date.parse(v.until) : NaN;
     if (Number.isFinite(until) && (nextChangeAt === null || until < Date.parse(nextChangeAt))) nextChangeAt = new Date(until).toISOString();
   }
   const markets = views.flatMap((v): ChipMarket[] => (calOpen(v.market) ? [{ market: v.market, label: v.market === "KR" ? "한국 장중" : "미국 장중" }] : v.current ? [{ market: v.market, label: v.label }] : []));
-  const base = { kr: kr.isOpen, us: us.isOpen, nextChangeAt, ...(views.length ? { markets } : {}) };
+  const base = { kr: kr.isOpen, us: us.isOpen, nextChangeAt, ...(o.markets && views.length ? { markets } : {}) };
   if (kr.isOpen || us.isOpen) return { label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", open: true, ...base };
   const ext = views.find((v) => v.open && v.current);
   if (ext) return { label: ext.label, open: false, ...base };
@@ -271,9 +276,8 @@ export function buildWidgetPayload(
     if (Number.isFinite(d) && d !== 0) return d;
     return a.latest!.createdAt < b.latest!.createdAt ? 1 : -1;
   });
-  const market = status ? marketChip(status, extra.sessions ? stocks.map((x) => x.quote?.session) : []) : null;
-  // 시장별 문구는 다듬은 잔고 위젯을 그리는 새 앱에만 (예전 앱의 응답·ETag 는 그대로)
-  if (market && !extra.polish) delete market.markets;
+  // 시장별 문구(와 그 경계의 nextChangeAt)는 다듬은 잔고 위젯을 그리는 새 앱에만 (예전 앱·플래그 꺼짐의 칩은 예전 그대로)
+  const market = status ? marketChip(status, extra.sessions ? stocks.map((x) => x.quote?.session) : [], undefined, { markets: extra.polish === true }) : null;
   const payload: WidgetPayload = {
     v: 1,
     market,
