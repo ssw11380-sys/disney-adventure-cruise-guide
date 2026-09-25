@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useFeature, useStocks } from "@/api/hooks";
 import { AllocationCard } from "@/components/AllocationCard";
 import { usePull } from "@/components/Freshness";
@@ -7,9 +7,12 @@ import { Screen } from "@/components/Screen";
 import { Empty, ErrorView, Loading } from "@/components/ui";
 import { sentence, speakAmount } from "@/lib/a11y";
 import { allocation, excludedNote } from "@/lib/allocation";
+import { allocationGrid, FOLD_COL_GAP } from "@/lib/foldScreens";
 import { formatQuote, formatWon } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { useSettings } from "@/lib/settings";
+import { useFoldLayout } from "@/lib/useFoldLayout";
+import { isWide } from "@/lib/windowClass";
 import { font, space, useTheme } from "@/theme";
 
 /**
@@ -34,6 +37,10 @@ function AllocationBody() {
   const { afterCost } = useSettings();
   const { pulling, onPull } = usePull(stocks.refetch);
   const a = useMemo(() => allocation(stocks.data ?? [], afterCost), [stocks.data, afterCost]);
+  // 넓은 창(3-42, 플래그 foldLayout + 폭 600 이상): 카드 4장을 2×2 격자로, 원 옆에 범례 → 4장이 한 화면에. 좁은 창은 지금 그대로
+  const fold = useFoldLayout();
+  const { width, fontScale } = useWindowDimensions();
+  const grid = fold.on && isWide(fold) ? allocationGrid(width, fontScale) : null;
 
   const view = viewState(stocks);
   if (view === "loading")
@@ -58,13 +65,47 @@ function AllocationBody() {
     );
 
   const heading = `총 평가금액${a.krwOnly ? " (원화 종목)" : ""}`;
+  const summaryLabel = sentence([`${heading} ${speakAmount(formatWon(a.total))}`, afterCost ? "비용 차감" : null, `${a.count}종목 기준`, note]);
+  if (grid) {
+    const cardWide = { donut: grid.donut, beside: grid.beside };
+    // 두 장씩 한 줄 (같은 줄 두 카드는 높이를 맞춘다). 화면 읽기 순서: 요약 → 국내/해외 → 통화 → 업종 → 종목별
+    const rows = [a.charts.slice(0, 2), a.charts.slice(2, 4)].filter((r) => r.length);
+    return (
+      <Screen refreshing={pulling} onRefresh={onPull} disclaimer>
+        {/* 요약 한 줄: 왼쪽 "총 평가금액  71,445,875 원", 오른쪽 설명 (카드 격자에 높이를 넘긴다) */}
+        <View accessible accessibilityLabel={summaryLabel} style={[styles.summaryWide, { backgroundColor: t.surface, borderColor: t.line }]}>
+          <View style={styles.summaryTotal}>
+            <Text style={{ color: t.muted, fontSize: font.small }}>
+              {heading}
+              {afterCost ? " · 비용 차감" : ""}
+            </Text>
+            <Text style={[styles.total, styles.totalWide, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              {formatQuote(a.total, "KRW")}
+              <Text style={{ fontSize: font.body, color: t.muted, fontWeight: "500" }}> 원</Text>
+            </Text>
+          </View>
+          <View style={styles.summaryNote}>
+            <Text style={{ color: t.muted, fontSize: font.small }}>
+              보유 {a.count}종목의 원화 평가금액으로 나눈 비중입니다. 잔고 탭 총 평가금액과 같은 기준입니다.
+            </Text>
+            {note ? <Text style={{ color: t.warn, fontSize: font.small }}>{note}</Text> : null}
+          </View>
+        </View>
+        {rows.map((row) => (
+          <View key={row.map((c) => c.kind).join("|")} style={styles.gridRow}>
+            {row.map((c) => (
+              <View key={c.kind} style={styles.gridCell}>
+                <AllocationCard chart={c} wide={cardWide} />
+              </View>
+            ))}
+          </View>
+        ))}
+      </Screen>
+    );
+  }
   return (
     <Screen refreshing={pulling} onRefresh={onPull} disclaimer>
-      <View
-        accessible
-        accessibilityLabel={sentence([`${heading} ${speakAmount(formatWon(a.total))}`, afterCost ? "비용 차감" : null, `${a.count}종목 기준`, note])}
-        style={[styles.summary, { backgroundColor: t.surface, borderColor: t.line }]}
-      >
+      <View accessible accessibilityLabel={summaryLabel} style={[styles.summary, { backgroundColor: t.surface, borderColor: t.line }]}>
         <Text style={{ color: t.muted, fontSize: font.small }}>
           {heading}
           {afterCost ? " · 비용 차감" : ""}
@@ -88,6 +129,14 @@ function AllocationBody() {
 const styles = StyleSheet.create({
   summary: { borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.xs },
   total: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.5, fontVariant: ["tabular-nums"] },
+  // 넓은 창 (3-42)
+  summaryWide: { flexDirection: "row", alignItems: "center", gap: space.xl, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingVertical: space.sm },
+  // 이름과 총액을 한 줄에 (글자 아래선 맞춤)
+  summaryTotal: { flexDirection: "row", alignItems: "baseline", flexShrink: 1, maxWidth: "55%", gap: space.sm },
+  totalWide: { flexShrink: 1 },
+  summaryNote: { flex: 1, minWidth: 0, gap: space.xxs },
+  gridRow: { flexDirection: "row", gap: FOLD_COL_GAP },
+  gridCell: { flex: 1, minWidth: 0 },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)

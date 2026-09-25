@@ -6,8 +6,10 @@ import { useDiscoverThemes } from "@/api/hooks";
 import type { DiscoverMarket, ThemeKind, ThemePeriod, ThemeSummary } from "@/api/types";
 import { Empty, ErrorView } from "@/components/ui";
 import { speakRate } from "@/lib/a11y";
+import { heatColumns } from "@/lib/discoverColumns";
 import { formatDateKo, formatPct } from "@/lib/format";
-import { changeColor, font, slopFor, space, useTheme } from "@/theme";
+import { changeColor, font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
+import { foldScreens } from "@/tokens";
 import { DISCLAIMER } from "@/components/Screen";
 import { StatusLine, usePull } from "./shared";
 import { SkeletonRows } from "./Skeleton";
@@ -24,9 +26,18 @@ const PERIOD_WORD: Record<ThemePeriod, string> = { day: "오늘", week: "1주", 
 /**
  * 테마·업종 보드: [테마|업종] · 기간(오늘/1주/1개월) · 보기(목록/히트맵) · 정렬(상승/하락).
  * 머리에 전체 분포(오른 테마 vs 내린 테마 막대)와 가장 강한·약한 테마를 보여 준 뒤, 목록 또는 색 타일 히트맵을 그린다.
+ * 넓은 창(3-42, wideW = 보드가 받은 폭 — 플래그 foldLayout 이 켜진 폭 600 이상에서만 부르는 쪽이 준다):
+ *  - 히트맵 칸 수 = 폭 ÷ 150 (접은 화면은 지금처럼 3칸) · 목록은 2칸
+ *  - 테마/업종·기간·보기 버튼은 폭도 44 이상 (진단 34)
+ * wideW 가 없으면 지금과 똑같다
  */
-export function ThemeBoard({ market }: { market: DiscoverMarket }) {
+export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: number }) {
   const t = useTheme();
+  const fontScale = useFontScale();
+  const wide = wideW !== undefined;
+  // 히트맵 칸 수: 좌우 여백(heatRow)을 뺀 폭으로
+  const heatCols = wide ? heatColumns(wideW - 2 * HEAT_PAD, fontScale) : 3;
+  const listCols = wide ? foldScreens.themeListCols : 1;
   const [kind, setKind] = useState<ThemeKind>("theme");
   const [period, setPeriod] = useState<ThemePeriod>("day");
   const [view, setView] = useState<"list" | "heat">("list");
@@ -59,11 +70,39 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
       ),
     [market, shownKind, shownPeriod],
   );
-  const renderRow = useCallback(({ item, index }: { item: ThemeSummary; index: number }) => <ThemeRow theme={item} rank={index + 1} kindWord={kindWord} onPress={open} />, [open, kindWord]);
-  const renderTile = useCallback(({ item }: { item: ThemeSummary }) => <HeatTile theme={item} max={max} onPress={open} />, [max, open]);
+  // 여러 칸 목록의 칸 모양: 칸 폭을 나눠 갖고(마지막 줄 한 칸도 늘어나지 않게), 마지막 칸이 아니면 오른쪽에 구분선. 줄마다 같은 객체 (ThemeRow memo 유지)
+  const cells = useMemo(() => Array.from({ length: listCols }, (_, i) => ({ width: `${100 / listCols}%` as const, divider: i < listCols - 1 })), [listCols]);
+  const renderRow = useCallback(
+    ({ item, index }: { item: ThemeSummary; index: number }) =>
+      listCols > 1 ? (
+        <ThemeRow theme={item} rank={index + 1} kindWord={kindWord} onPress={open} cell={cells[index % listCols]} />
+      ) : (
+        <ThemeRow theme={item} rank={index + 1} kindWord={kindWord} onPress={open} />
+      ),
+    [open, kindWord, listCols, cells],
+  );
+  const renderTile = useCallback(
+    ({ item }: { item: ThemeSummary }) => (wide ? <HeatTile theme={item} max={max} onPress={open} width={`${100 / heatCols}%`} /> : <HeatTile theme={item} max={max} onPress={open} />),
+    [max, open, wide, heatCols],
+  );
 
-  const seg = (active: boolean) => [styles.seg, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.line }];
+  const seg = (active: boolean) =>
+    wide
+      ? [styles.seg, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.line }, styles.segWide]
+      : [styles.seg, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.line }];
   const segText = (active: boolean) => ({ color: active ? t.ink : t.muted, fontSize: font.small, fontWeight: active ? ("700" as const) : ("500" as const) });
+  /** 넓은 창의 가장 강한·약한 칸: 이름만 말줄임, 등락률은 줄이지 않는다 */
+  const extremeWide = (label: string, th: ThemeSummary) => (
+    <Pressable onPress={() => open(th)} style={styles.extremeWide} hitSlop={EXTREME_SLOP} accessibilityRole="button" accessibilityLabel={`${label} ${kindWord} ${th.name}, ${speakRate(th.changeRate) ?? "등락률 없음"}`}>
+      <Text style={{ color: t.muted, fontSize: font.tiny }}>{label}</Text>
+      <View style={styles.extremeLine}>
+        <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700", flexShrink: 1 }} numberOfLines={1}>
+          {th.name}
+        </Text>
+        <Text style={{ color: changeColor(t, th.changeRate), fontSize: font.small, fontWeight: "700", flexShrink: 0 }}>{formatPct(th.changeRate)}</Text>
+      </View>
+    </Pressable>
+  );
 
   const head = (
     <View>
@@ -102,6 +141,13 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
               {PERIOD_WORD[shownPeriod]} {kindWord} {all.length}개 · 상승 <Text style={{ color: t.up, fontWeight: "800" }}>{rising}</Text> · 하락{" "}
               <Text style={{ color: t.down, fontWeight: "800" }}>{falling}</Text>
             </Text>
+            {/* 넓은 창: 가장 강한·약한을 이 줄에 합쳐 목록에 높이를 넘긴다 */}
+            {wide ? (
+              <View style={styles.extremesInline}>
+                {best ? extremeWide("가장 강한", best) : null}
+                {worst ? extremeWide("가장 약한", worst) : null}
+              </View>
+            ) : null}
             <Pressable
               onPress={() => setOrder(order === "up" ? "down" : "up")}
               accessibilityRole="button"
@@ -118,24 +164,26 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
             {flat ? <View style={{ flex: flat, backgroundColor: t.lineStrong }} /> : null}
             {falling ? <View style={{ flex: falling, backgroundColor: t.down }} /> : null}
           </View>
-          <View style={styles.extremes}>
-            {best ? (
-              <Pressable onPress={() => open(best)} style={styles.extreme} hitSlop={EXTREME_SLOP} accessibilityRole="button" accessibilityLabel={`가장 강한 ${kindWord} ${best.name}, ${speakRate(best.changeRate) ?? "등락률 없음"}`}>
-                <Text style={{ color: t.muted, fontSize: font.tiny }}>가장 강한</Text>
-                <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700", flexShrink: 1 }} numberOfLines={1}>
-                  {best.name} <Text style={{ color: changeColor(t, best.changeRate) }}>{formatPct(best.changeRate)}</Text>
-                </Text>
-              </Pressable>
-            ) : null}
-            {worst ? (
-              <Pressable onPress={() => open(worst)} style={styles.extreme} hitSlop={EXTREME_SLOP} accessibilityRole="button" accessibilityLabel={`가장 약한 ${kindWord} ${worst.name}, ${speakRate(worst.changeRate) ?? "등락률 없음"}`}>
-                <Text style={{ color: t.muted, fontSize: font.tiny }}>가장 약한</Text>
-                <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700", flexShrink: 1 }} numberOfLines={1}>
-                  {worst.name} <Text style={{ color: changeColor(t, worst.changeRate) }}>{formatPct(worst.changeRate)}</Text>
-                </Text>
-              </Pressable>
-            ) : null}
-          </View>
+          {wide ? null : (
+            <View style={styles.extremes}>
+              {best ? (
+                <Pressable onPress={() => open(best)} style={styles.extreme} hitSlop={EXTREME_SLOP} accessibilityRole="button" accessibilityLabel={`가장 강한 ${kindWord} ${best.name}, ${speakRate(best.changeRate) ?? "등락률 없음"}`}>
+                  <Text style={{ color: t.muted, fontSize: font.tiny }}>가장 강한</Text>
+                  <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700", flexShrink: 1 }} numberOfLines={1}>
+                    {best.name} <Text style={{ color: changeColor(t, best.changeRate) }}>{formatPct(best.changeRate)}</Text>
+                  </Text>
+                </Pressable>
+              ) : null}
+              {worst ? (
+                <Pressable onPress={() => open(worst)} style={styles.extreme} hitSlop={EXTREME_SLOP} accessibilityRole="button" accessibilityLabel={`가장 약한 ${kindWord} ${worst.name}, ${speakRate(worst.changeRate) ?? "등락률 없음"}`}>
+                  <Text style={{ color: t.muted, fontSize: font.tiny }}>가장 약한</Text>
+                  <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700", flexShrink: 1 }} numberOfLines={1}>
+                    {worst.name} <Text style={{ color: changeColor(t, worst.changeRate) }}>{formatPct(worst.changeRate)}</Text>
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+          )}
           {view === "heat" ? <HeatLegend max={max} /> : null}
         </View>
       ) : null}
@@ -165,14 +213,32 @@ export function ThemeBoard({ market }: { market: DiscoverMarket }) {
 
   return view === "heat" ? (
     <FlatList
-      key="heat"
+      // 칸 수가 바뀌면 목록을 새로 만든다 (FlatList 는 numColumns 를 그리는 중에 바꿀 수 없다)
+      key={wide ? `heat${heatCols}` : "heat"}
       data={themes}
       keyExtractor={(it) => it.id}
       renderItem={renderTile}
-      numColumns={3}
+      numColumns={heatCols}
       columnWrapperStyle={styles.heatRow}
       style={{ opacity: switching ? 0.55 : 1 }}
       initialNumToRender={24}
+      windowSize={9}
+      ListHeaderComponent={head}
+      ListEmptyComponent={empty}
+      ListFooterComponent={footer}
+      refreshControl={refresh}
+    />
+  ) : wide ? (
+    // 넓은 창: 두 칸 목록 (1·2위가 첫 줄). getItemLayout 의 index 는 줄 번호
+    <FlatList
+      key={`list${listCols}`}
+      data={themes}
+      keyExtractor={(it) => it.id}
+      renderItem={renderRow}
+      numColumns={listCols}
+      getItemLayout={(_, index) => ({ length: rowH, offset: rowH * index, index })}
+      style={{ opacity: switching ? 0.55 : 1 }}
+      initialNumToRender={16}
       windowSize={9}
       ListHeaderComponent={head}
       ListEmptyComponent={empty}
@@ -203,17 +269,25 @@ const SEG_H = 32;
 const SEG_SLOP = slopFor(SEG_H, space.xxs);
 /** 가장 강한·약한 칸(두 줄, 약 33) — 100% 배치는 그대로 두고 누르는 영역만 44 로 */
 const EXTREME_SLOP = slopFor(33);
+/** 히트맵 줄 좌우 여백 (heatRow) */
+const HEAT_PAD = space.sm;
 
 const styles = StyleSheet.create({
   controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   group: { flexDirection: "row", gap: space.xs },
   seg: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.sm, paddingVertical: space.xs, minHeight: SEG_H, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  // 넓은 창: 버튼 폭도 44 이상 (아이콘·'1주' 버튼이 31~35 로 좁았다 — 진단 34). 이웃과 겹치지 않게 hitSlop 대신 폭을 키운다
+  segWide: { minWidth: touch.min, justifyContent: "center" },
+  // 넓은 창: 분포 줄 가운데에 가장 강한·약한 두 칸
+  extremesInline: { flex: 1, minWidth: 0, flexDirection: "row", gap: space.md, paddingHorizontal: space.md },
+  extremeWide: { flex: 1, minWidth: 0, gap: space.xxs },
+  extremeLine: { flexDirection: "row", alignItems: "baseline", gap: space.xs },
   breadth: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.sm, gap: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   breadthTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
   breadthBar: { height: 6, borderRadius: 3, overflow: "hidden", flexDirection: "row" },
   sortBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.s, paddingVertical: space.xs, minHeight: SEG_H, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
   extremes: { flexDirection: "row", gap: space.md },
   extreme: { flex: 1, gap: space.xxs },
-  heatRow: { gap: 0, paddingHorizontal: space.sm },
+  heatRow: { gap: 0, paddingHorizontal: HEAT_PAD },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
 });

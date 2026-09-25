@@ -1,5 +1,5 @@
 import React, { memo } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View, type DimensionValue } from "react-native";
 import type { ThemeSummary } from "@/api/types";
 import { RateBox } from "@/components/ui";
 import { sentence, speakRate } from "@/lib/a11y";
@@ -18,7 +18,20 @@ export function useThemeRowH(): number {
  * 테마 한 줄: 순위 · 테마명 / 대표 종목 · 상승·보합·하락 비율 막대 | 테마 등락률 상자.
  * 막대는 구성 종목 중 오른 종목(빨강)·보합(회색)·내린 종목(파랑)의 비율이라, 등락률과 함께 테마 전체의 힘을 보여 준다.
  */
-export const ThemeRow = memo(function ThemeRow({ theme, rank, kindWord = "테마", onPress }: { theme: ThemeSummary; rank: number; kindWord?: string; onPress: (t: ThemeSummary) => void }) {
+export const ThemeRow = memo(function ThemeRow({
+  theme,
+  rank,
+  kindWord = "테마",
+  onPress,
+  cell,
+}: {
+  theme: ThemeSummary;
+  rank: number;
+  kindWord?: string;
+  onPress: (t: ThemeSummary) => void;
+  /** 넓은 창 여러 칸 목록(3-42)의 한 칸: 칸 폭, 오른쪽 구분선. 없으면 지금처럼 한 줄 전체 */
+  cell?: { width: DimensionValue; divider: boolean };
+}) {
   const t = useTheme();
   const total = theme.up + theme.flat + theme.down;
   const rowH = useThemeRowH();
@@ -27,7 +40,11 @@ export const ThemeRow = memo(function ThemeRow({ theme, rank, kindWord = "테마
       onPress={() => onPress(theme)}
       accessibilityRole="button"
       accessibilityLabel={sentence([`${rank}위`, `${theme.name} ${kindWord}`, speakRate(theme.changeRate), total > 0 ? `오른 종목 ${theme.up}개, 내린 종목 ${theme.down}개` : null])}
-      style={({ pressed }) => [styles.row, { height: rowH, backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
+      style={({ pressed }) =>
+        cell
+          ? [styles.row, { height: rowH, backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }, { width: cell.width, borderRightWidth: cell.divider ? StyleSheet.hairlineWidth : 0, borderRightColor: t.line }]
+          : [styles.row, { height: rowH, backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]
+      }
     >
       <Text style={[styles.rank, { color: rank <= 3 ? t.ink : t.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
         {rank}

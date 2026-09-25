@@ -1,5 +1,5 @@
 import React, { memo } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View, type DimensionValue } from "react-native";
 import type { ThemeSummary } from "@/api/types";
 import { sentence, speakRate } from "@/lib/a11y";
 import { formatPct } from "@/lib/format";
@@ -9,8 +9,11 @@ import { HEAT_TILE_H, heatColor } from "@/lib/heat";
 
 export { HEAT_MAX, HEAT_TILE_H, heatColor } from "@/lib/heat";
 
-/** 히트맵 타일 하나: 테마명 · 등락률 · 오른/내린 종목 수 */
-export const HeatTile = memo(function HeatTile({ theme, max, onPress }: { theme: ThemeSummary; max: number; onPress: (t: ThemeSummary) => void }) {
+/**
+ * 히트맵 타일 하나: 테마명 · 등락률 · 오른/내린 종목 수.
+ * width 는 넓은 창(3-42)에서 칸 수가 3이 아닐 때 한 칸 폭 (예: "20%"). 없으면 지금처럼 1/3
+ */
+export const HeatTile = memo(function HeatTile({ theme, max, onPress, width }: { theme: ThemeSummary; max: number; onPress: (t: ThemeSummary) => void; width?: DimensionValue }) {
   const t = useTheme();
   const c = heatColor(t, theme.changeRate, max);
   return (
@@ -18,7 +21,11 @@ export const HeatTile = memo(function HeatTile({ theme, max, onPress }: { theme:
       onPress={() => onPress(theme)}
       accessibilityRole="button"
       accessibilityLabel={sentence([theme.name, speakRate(theme.changeRate), theme.up + theme.flat + theme.down > 0 ? `오른 종목 ${theme.up}개, 내린 종목 ${theme.down}개` : null])}
-      style={({ pressed }) => [styles.tile, { backgroundColor: c.bg, opacity: pressed ? 0.75 : 1, borderColor: t.bg }]}
+      style={({ pressed }) =>
+        width === undefined
+          ? [styles.tile, { backgroundColor: c.bg, opacity: pressed ? 0.75 : 1, borderColor: t.bg }]
+          : [styles.tile, { backgroundColor: c.bg, opacity: pressed ? 0.75 : 1, borderColor: t.bg }, { width }]
+      }
     >
       <Text style={[styles.name, { color: c.fg }]} numberOfLines={2} maxFontSizeMultiplier={fontCap.row}>
         {theme.name}
