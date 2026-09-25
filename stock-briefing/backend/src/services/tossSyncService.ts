@@ -3,7 +3,7 @@ import { seoulIso } from "../lib/time.js";
 import type { MarketCalendar } from "../providers/market/calendar.js";
 import type { TossHolding, TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import { toMarket } from "../providers/market/kisMaster.js";
-import { ProviderError } from "../lib/errors.js";
+import { ProviderError, within } from "../lib/errors.js";
 import { holdingsWriteLock } from "../lib/mutex.js";
 import { KrwCostBook, RateNotFoundError, type AccountForBook, type OverviewForBook, type SetExactResult } from "./krwCostBook.js";
 
@@ -12,6 +12,7 @@ import { KrwCostBook, RateNotFoundError, type AccountForBook, type OverviewForBo
  *  - 보유 중인 종목: 없으면 등록, 있으면 수량·평단(·이름)을 토스 값으로 맞춘다. 메모는 유지.
  *  - 지난 동기화 때 토스에 있었는데 이번에 없는 종목(전량 매도): 지우지 않고 수량·평단을 비워 관심 종목으로 남긴다.
  *    실수로 사라진 것처럼 보이지 않게 하고, 브리핑·차트는 계속 볼 수 있게 하기 위해서다.
+ *    계좌가 목록에서 잠깐 빠졌거나 보유 목록이 계좌 요약과 맞지 않게 비면 일시 오류일 수 있어, 다음 동기화에서도 없을 때 확정한다.
  *  - 토스에서 가져온 적 없는 등록 종목은 건드리지 않는다(관심 종목이거나 다른 증권사 보유일 수 있으므로).
  * 마지막으로 토스에서 본 종목 목록은 meta 테이블(toss_holdings_codes)에 남겨 재시작 후에도 전량 매도를 알아본다.
  */
@@ -30,6 +31,8 @@ export interface ImportResult {
 export const SNAPSHOT_KEY = "toss_holdings_codes";
 /** 사용자가 "동기화 제외"한 종목 (앱에서 삭제한 토스 종목). 동기화가 다시 넣지 않는다 */
 export const EXCLUDED_KEY = "toss_sync_excluded";
+/** 지난 동기화의 계좌 목록과, 토스 응답이 계좌 요약과 맞지 않아 전량 매도 처리를 한 번 미룬 종목 ({ accounts, codes }) */
+export const UNCONFIRMED_KEY = "toss_holdings_unconfirmed";
 
 export function parseCodes(value: string | null | undefined): string[] {
   if (!value) return [];
@@ -84,7 +87,7 @@ export class TossSyncService {
     private readonly now: () => Date = () => new Date(),
     /** 토스가 원화 평가에 쓰는 표시 환율 (없으면 원화 장부 보정을 건너뛴다) */
     private readonly displayFx: (() => Promise<number | null>) | null = null,
-    log?: { warn(obj: Record<string, unknown>, msg: string): void },
+    private readonly log?: { warn(obj: Record<string, unknown>, msg: string): void },
   ) {
     this.costBook = new KrwCostBook({
       db,
@@ -154,8 +157,30 @@ export class TossSyncService {
       .execute();
   }
 
-  private async saveDetail(holdings: TossHolding[]): Promise<void> {
+  private async unconfirmed(): Promise<{ accounts: number[]; codes: string[] }> {
+    const row = await this.db.selectFrom("meta").select("value").where("key", "=", UNCONFIRMED_KEY).executeTakeFirst();
+    try {
+      const v = JSON.parse(row?.value ?? "{}") as { accounts?: unknown; codes?: unknown } | null;
+      return {
+        accounts: Array.isArray(v?.accounts) ? v.accounts.filter((x): x is number => typeof x === "number") : [],
+        codes: Array.isArray(v?.codes) ? v.codes.filter((x): x is string => typeof x === "string") : [],
+      };
+    } catch {
+      return { accounts: [], codes: [] };
+    }
+  }
+
+  /** keep: 전량 매도를 미룬 종목 — 지난 평가 기준을 그대로 둔다 */
+  private async saveDetail(holdings: TossHolding[], keep: string[] = []): Promise<void> {
     const detail: Record<string, TossHoldingDetail> = {};
+    if (keep.length) {
+      const row = await this.db.selectFrom("meta").select("value").where("key", "=", DETAIL_KEY).executeTakeFirst();
+      const old = parseTossDetail(row?.value);
+      for (const c of keep) {
+        const d = old.get(c);
+        if (d) detail[c] = d;
+      }
+    }
     for (const h of holdings) {
       const mv = h.marketValue ?? null, after = h.marketValueAfterCost ?? null;
       detail[h.code] = {
@@ -203,11 +228,15 @@ export class TossSyncService {
     const holdings = [...merged.values()].filter((h) => h.quantity > 0);
     const infos = holdings.length ? await this.toss.stockInfos(holdings.map((h) => h.code)).catch(() => new Map()) : new Map();
     // 여기부터 DB 쓰기: 앱의 등록·수정·삭제와 겹치지 않게 한 줄로
-    return holdingsWriteLock.run(() => this.applyHoldings(accounts.length, holdings, infos, perAccount));
+    const result = await holdingsWriteLock.run(() => this.applyHoldings(accounts.map((a) => a.accountSeq), holdings, infos, perAccount));
+    // 원화 장부는 토스(주문 내역·과거 환율)를 부르므로 쓰기 잠금 밖에서 한다 — 토스가 느려도 앱의 등록·수정·삭제가 기다리지 않게.
+    // 장부는 자기 잠금으로 한 줄로 저장하고, 등록 종목 쓰기와는 겹치는 데이터가 없다
+    await this.updateCostBook(perAccount);
+    return result;
   }
 
-  private async applyHoldings(accountCount: number, holdings: TossHolding[], infos: Map<string, unknown>, perAccount: PerAccount[]): Promise<ImportResult> {
-    const result: ImportResult = { accounts: accountCount, added: [], updated: [], unchanged: [], removed: [], excluded: [], holdings: [] };
+  private async applyHoldings(accountSeqs: number[], holdings: TossHolding[], infos: Map<string, unknown>, perAccount: PerAccount[]): Promise<ImportResult> {
+    const result: ImportResult = { accounts: accountSeqs.length, added: [], updated: [], unchanged: [], removed: [], excluded: [], holdings: [] };
     const ts = seoulIso(this.now());
     const excluded = await this.excluded();
     for (const h of holdings) {
@@ -238,24 +267,42 @@ export class TossSyncService {
         result.unchanged.push(h.code);
       }
     }
-    // 전량 매도: 지난번엔 토스에 있었는데 지금은 없는 종목 → 보유 정보만 비운다
+    // 전량 매도: 지난번엔 토스에 있었는데 지금은 없는 종목 → 보유 정보만 비운다.
+    // 단 이번 응답만으로 확정하는 건 지난번 계좌가 모두 목록에 있고, 보유가 빈 계좌는 요약의 매입금액도 0 일 때뿐이다.
+    // 계좌가 목록에서 잠깐 빠졌거나 응답이 통째로 비면 일시 오류일 수 있어(원화 장부와 같은 기준) 다음 동기화에서도 없을 때 확정한다
     const nowCodes = new Set(holdings.map((h) => h.code));
+    const prev = await this.unconfirmed();
+    const listed = new Set(accountSeqs);
+    const trusted =
+      prev.accounts.every((a) => listed.has(a)) &&
+      perAccount.every((a) => a.holdings.some((h) => h.quantity > 0) || (a.overview.purchaseUsd === 0 && a.overview.purchaseKrw === 0));
+    const sold = (code: string) => trusted || prev.codes.includes(code);
+    /** 이번엔 없지만 전량 매도로 확정하지 않은 종목 (스냅샷·제외 목록·평가 기준을 그대로 두고 다음에 다시 본다) */
+    const pending: string[] = [];
     for (const code of await this.lastSnapshot()) {
       if (nowCodes.has(code) || excluded.has(code)) continue;
+      if (!sold(code)) {
+        pending.push(code);
+        continue;
+      }
       const existing = await this.db.selectFrom("registered_stocks").select(["code", "quantity"]).where("code", "=", code).executeTakeFirst();
       if (!existing || !existing.quantity) continue;
       await this.db.updateTable("registered_stocks").set({ quantity: null, avg_price: null, updated_at: ts }).where("code", "=", code).execute();
       result.removed.push(code);
     }
-    await this.saveSnapshot([...nowCodes]);
+    for (const c of excluded) if (!nowCodes.has(c) && !sold(c)) pending.push(c);
+    if (pending.length) this.log?.warn({ codes: pending }, "토스 보유 응답이 계좌 목록·요약과 맞지 않아 전량 매도 처리를 다음 동기화로 미룸");
+    await this.saveSnapshot([...nowCodes, ...pending]);
     // 토스에서 전량 매도된 종목은 제외 목록에서도 뺀다 — 나중에 다시 사면 다시 가져온다
-    const keep = [...excluded].filter((c) => nowCodes.has(c));
+    const keep = [...excluded].filter((c) => nowCodes.has(c) || pending.includes(c));
     if (keep.length !== excluded.size) {
       const value = JSON.stringify(keep.sort());
       await this.db.insertInto("meta").values({ key: EXCLUDED_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
     }
-    await this.saveDetail(holdings);
-    await this.updateCostBook(perAccount);
+    const state = JSON.stringify({ accounts: [...listed].sort((a, b) => a - b), codes: pending.sort() });
+    if (state !== JSON.stringify({ accounts: [...prev.accounts].sort((a, b) => a - b), codes: [...prev.codes].sort() }))
+      await this.db.insertInto("meta").values({ key: UNCONFIRMED_KEY, value: state }).onConflict((oc) => oc.column("key").doUpdateSet({ value: state })).execute();
+    await this.saveDetail(holdings, pending);
     return result;
   }
 
@@ -374,6 +421,8 @@ export class HoldingsAutoSync {
       intervalMin: number;
       idleIntervalMin?: number;
       startupDelayMs?: number;
+      /** 정기 브리핑 직전 동기화를 기다리는 최대 시간(ms). 기본 30초 */
+      briefingWaitMs?: number;
       log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
       now?: () => Date;
     },
@@ -440,8 +489,17 @@ export class HoldingsAutoSync {
     }, delayMs);
   }
 
-  /** 한 번 동기화. 이미 실행 중이면 그 결과를 같이 기다린다. 실패해도 던지지 않고 lastError 에 남긴다(manual 은 던짐) */
+  /** 정기 브리핑 직전 동기화. 토스가 느려도 브리핑이 오래 밀리지 않게 briefingWaitMs 까지만 기다린다 (동기화는 뒤에서 마저 끝난다) */
+  async beforeBriefing(): Promise<void> {
+    await within(this.run("briefing"), this.deps.briefingWaitMs ?? 30_000, null);
+  }
+
+  /**
+   * 한 번 동기화. 이미 실행 중이면 그 결과를 같이 기다린다. 실패해도 던지지 않고 lastError 에 남긴다(manual 은 던짐).
+   * 자동 동기화를 껐으면(intervalMin 0) 수동 실행만 한다 — 꺼져 있으면 잠그지 않아 직접 고친 수량·평단을 브리핑 직전 동기화가 덮어쓰지 않게
+   */
   async run(trigger: SyncTrigger): Promise<ImportResult | null> {
+    if (!this.enabled && trigger !== "manual") return null;
     if (this.running) {
       // 수동 실행은 자기 결과(와 오류)를 받아야 한다 → 진행 중인 실행이 끝나면 새로 한 번
       if (trigger === "manual") {

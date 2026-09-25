@@ -156,6 +156,17 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await db.schema.createIndex("idx_app_errors_at").ifNotExists().on("app_errors").column("at").execute();
     },
   },
+  {
+    version: 5,
+    up: async (db, dialect) => {
+      // Postgres 의 real 은 4바이트라 토스 소수 수량·평단 끝자리가 달라진다(16.123456 → 16.123455) → 8바이트로.
+      // 값은 지금까지 읽히던 표기(::text) 그대로 옮긴다. SQLite 의 REAL 은 이미 8바이트라 바꾸지 않는다
+      if (dialect !== "postgres") return;
+      await sql`alter table registered_stocks
+        alter column quantity type double precision using quantity::text::double precision,
+        alter column avg_price type double precision using avg_price::text::double precision`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

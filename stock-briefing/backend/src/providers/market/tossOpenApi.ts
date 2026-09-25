@@ -35,7 +35,17 @@ export interface TossOpenApiClientOptions {
   baseUrl?: string;
   /** 429 재시도 대기 상한(ms). 테스트에서 0 */
   maxRetryWaitMs?: number;
+  /** 요청 하나(응답 본문 읽기까지)의 제한 시간(ms). 기본 REQUEST_TIMEOUT_MS */
+  timeoutMs?: number;
 }
+
+/**
+ * 요청 하나(응답 본문 읽기까지)의 제한 시간. 연결은 받고 답이 없으면(undici 기본은 300초) 시세 체인이 다음 소스로 넘어가지 못하고,
+ * 동기화·차트 요청이 몇 분씩 붙잡힌다. 시간 초과는 다시 불러도 또 그만큼 걸리므로 재시도하지 않는다
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
+/** 종목 마스터(마켓별 전체 종목)는 응답이 커서 더 기다린다 */
+const MASTER_TIMEOUT_MS = 30_000;
 
 export interface TossOpenApiStatus {
   configured: boolean;
@@ -71,6 +81,7 @@ export class TossOpenApiClient {
   private readonly log: TossOpenApiLogger;
   private readonly baseUrl: string;
   private readonly maxRetryWaitMs: number;
+  private readonly timeoutMs: number;
   private token: { value: string; expiresAt: number } | null = null;
   private tokenPromise: Promise<string> | null = null;
   readonly status: TossOpenApiStatus;
@@ -81,34 +92,69 @@ export class TossOpenApiClient {
     this.log = opts.log ?? { warn: () => {} };
     this.baseUrl = opts.baseUrl ?? TOSS_OPENAPI_BASE;
     this.maxRetryWaitMs = opts.maxRetryWaitMs ?? 3000;
+    this.timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
     this.status = { configured: Boolean(opts.clientId && opts.clientSecret), tokenIssuedAt: null, lastOkAt: null, lastError: null, ipBlocked: false };
   }
 
-  /** 유효한 액세스 토큰. 만료 5분 전부터 재발급. 동시 호출은 한 번만 발급한다. */
-  async getToken(force = false): Promise<string> {
+  /**
+   * 유효한 액세스 토큰. 만료 5분 전부터 재발급. 동시 호출은 한 번만 발급하고, 발급 중이면 그 결과를 같이 기다린다
+   * (재발급하면 이전 토큰이 바로 무효라 발급 중에 옛 토큰으로 보내면 401 이 난다).
+   * force: 토큰이 거절됐을 때(401). rejected 로 거절된 토큰을 주면, 그 사이 다른 요청이 이미 새로 받은 토큰이 있을 때 그것을 쓴다 —
+   * 클라이언트당 토큰이 1개라 늦게 도착한 401 마다 새로 받으면 방금 받은 토큰을 서로 무효로 만든다
+   */
+  async getToken(force = false, rejected?: string): Promise<string> {
+    if (this.tokenPromise) return this.tokenPromise;
     const t = this.now().getTime();
-    if (!force && this.token && this.token.expiresAt - t > 5 * 60_000) return this.token.value;
-    if (!this.tokenPromise) {
-      this.tokenPromise = this.issueToken().finally(() => {
-        this.tokenPromise = null;
-      });
-    }
+    const cur = this.token && this.token.expiresAt - t > 5 * 60_000 ? this.token.value : null;
+    if (cur !== null && (!force || (rejected !== undefined && cur !== rejected))) return cur;
+    this.tokenPromise = this.issueToken().finally(() => {
+      this.tokenPromise = null;
+    });
     return this.tokenPromise;
+  }
+
+  /**
+   * fetch 와 본문(JSON) 읽기를 제한 시간 안에. 넘기면 요청을 끊고 ProviderError (fetchFn 이 signal 을 무시해도 기다리지 않는다).
+   * 본문이 JSON 이 아니면 body 는 null
+   */
+  private async send(url: string, init: RequestInit, what: { network: string; timeout: string }, timeoutMs: number): Promise<{ res: Response; body: unknown }> {
+    const ctrl = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        ctrl.abort();
+        reject(new ProviderError(this.name, `${what.timeout} (${timeoutMs / 1000}초)`));
+      }, timeoutMs);
+    });
+    try {
+      let res: Response;
+      try {
+        res = await Promise.race([this.fetchFn(url, { ...init, signal: ctrl.signal }), late]);
+      } catch (e) {
+        throw e instanceof ProviderError ? e : new ProviderError(this.name, what.network, e);
+      }
+      const body = await Promise.race([res.json().catch(() => null), late]);
+      return { res, body };
+    } catch (e) {
+      throw this.fail(e instanceof ProviderError ? e : new ProviderError(this.name, what.network, e));
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async issueToken(): Promise<string> {
     const body = new URLSearchParams({ grant_type: "client_credentials", client_id: this.opts.clientId, client_secret: this.opts.clientSecret });
-    let res: Response;
-    try {
-      res = await this.fetchFn(`${this.baseUrl}/oauth2/token`, {
+    const { res, body: raw } = await this.send(
+      `${this.baseUrl}/oauth2/token`,
+      {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
         body: body.toString(),
-      });
-    } catch (e) {
-      throw this.fail(new ProviderError(this.name, "토큰 발급 네트워크 오류", e));
-    }
-    const json = (await res.json().catch(() => ({}))) as Json;
+      },
+      { network: "토큰 발급 네트워크 오류", timeout: "토큰 발급 응답 시간 초과" },
+      this.timeoutMs,
+    );
+    const json = (raw && typeof raw === "object" ? raw : {}) as Json;
     if (!res.ok) {
       if (res.status === 403) this.status.ipBlocked = true;
       const desc = String(json["error_description"] ?? (json["error"] as Json | undefined)?.["message"] ?? json["error"] ?? "");
@@ -129,33 +175,42 @@ export class TossOpenApiClient {
     return e;
   }
 
-  /** GET /api/v1/... 공통. 401 이면 토큰 재발급 후 1회, 429 면 Retry-After 만큼 기다린 뒤 1회 재시도 */
-  async get<T = unknown>(path: string, params: Record<string, string | number | boolean | undefined> = {}, extraHeaders: Record<string, string> = {}): Promise<T> {
+  /** GET /api/v1/... 공통. 401 이면 토큰 재발급 후 1회, 429 면 Retry-After 만큼 기다린 뒤 1회 재시도. 요청마다 제한 시간(opts.timeoutMs) */
+  async get<T = unknown>(
+    path: string,
+    params: Record<string, string | number | boolean | undefined> = {},
+    extraHeaders: Record<string, string> = {},
+    opts: { timeoutMs?: number } = {},
+  ): Promise<T> {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
     const url = `${this.baseUrl}${path}${qs.size ? `?${qs.toString()}` : ""}`;
     let refreshed = false;
     let waited = false;
+    /** 방금 401 을 받은 토큰 (다음 시도에서 한 번만 새 토큰을 청한다) */
+    let rejected: string | null = null;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const token = await this.getToken(refreshed);
-      let res: Response;
-      try {
-        res = await this.fetchFn(url, { headers: { authorization: `Bearer ${token}`, accept: "application/json", ...extraHeaders } });
-      } catch (e) {
-        throw this.fail(new ProviderError(this.name, `네트워크 오류: ${path}`, e));
-      }
+      const token: string = rejected === null ? await this.getToken() : await this.getToken(true, rejected);
+      rejected = null;
+      const { res, body } = await this.send(
+        url,
+        { headers: { authorization: `Bearer ${token}`, accept: "application/json", ...extraHeaders } },
+        { network: `네트워크 오류: ${path}`, timeout: `응답 시간 초과: ${path}` },
+        opts.timeoutMs ?? this.timeoutMs,
+      );
       if (res.ok) {
+        if (!body || typeof body !== "object") throw this.fail(new ProviderError(this.name, `응답 형식 오류: ${path}`));
         this.status.lastOkAt = seoulIso(this.now());
         this.status.lastError = null;
         this.status.ipBlocked = false;
-        const json = (await res.json()) as Json;
-        return json["result"] as T;
+        return (body as Json)["result"] as T;
       }
-      const json = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
+      const json = (body && typeof body === "object" ? body : {}) as { error?: { code?: string; message?: string } };
       const code = json.error?.code ?? "";
       const message = json.error?.message ?? "";
       if (res.status === 401 && !refreshed) {
         refreshed = true; // expired-token / token-revoked / invalid-token → 새 토큰으로 한 번 더
+        rejected = token;
         continue;
       }
       if (res.status === 429 && !waited) {
@@ -634,7 +689,7 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     for (let i = 0; i < markets.length; i++) {
       if (i > 0) await sleep(1100);
       const m = markets[i]!;
-      const rows = (await this.client.get<Json[]>("/api/v1/stocks/all", { market: m, status: "ACTIVE" })) ?? [];
+      const rows = (await this.client.get<Json[]>("/api/v1/stocks/all", { market: m, status: "ACTIVE" }, {}, { timeoutMs: MASTER_TIMEOUT_MS })) ?? [];
       for (const r of rows) {
         const code = String(r["symbol"] ?? "").toUpperCase();
         if (!CODE_RE.test(code) || seen.has(code)) continue;
