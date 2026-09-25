@@ -9,11 +9,14 @@ import { isWide, railWidth } from "@/lib/windowClass";
 import { font, fontCap, slopFor, space, useFontScale, useTheme } from "@/theme";
 
 /**
- * 넓은 창(폭 등급 중간 이상 + 플래그 foldLayout)에서 탭 화면 머리(52)를 숨기는 탭 (3-42 공통 틀).
- * 숨기는 탭은 제 화면 안에 이름·검색을 직접 그린다 — 잔고: 맨 위 띠 오른쪽 끝의 검색 버튼 (app/(tabs)/index).
- * 아직 넓은 창 배치가 없는 탭은 머리를 그대로 둔다 (제 화면을 넓은 창용으로 바꿀 때 여기서 켠다)
+ * 넓은 창(폭 등급 중간 이상 + 플래그 foldLayout)에서 탭 화면 머리(52)를 숨기는 탭 (3-42 공통 틀 — 네 탭 모두).
+ * 탭을 오갈 때 머리가 생겼다 없어졌다 하지 않게 모든 탭이 같다. 숨긴 탭은 제 화면 안에 상태 표시줄 여백과 이름·검색을 직접 그린다:
+ *  - 잔고: 맨 위 띠 오른쪽 끝의 검색 버튼 (app/(tabs)/index)
+ *  - 발견: 맨 위 한 줄(시장·분류) 오른쪽 끝의 검색 버튼 (app/(tabs)/discover)
+ *  - 브리핑: 목록 머리의 제목 (app/(tabs)/briefings — 서버가 플래그를 끈 뒤 머리를 되돌리는 것도 그 화면이 맡는다)
+ *  - 설정: 카드 제목 (휴대폰 머리에도 버튼이 없다)
  */
-const WIDE_HEADERLESS: Readonly<Record<"index" | "discover" | "briefings" | "settings", boolean>> = { index: true, discover: false, briefings: false, settings: false };
+const WIDE_HEADERLESS: Readonly<Record<"index" | "discover" | "briefings" | "settings", boolean>> = { index: true, discover: true, briefings: true, settings: true };
 
 export default function TabsLayout() {
   const t = useTheme();

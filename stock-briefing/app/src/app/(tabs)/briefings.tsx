@@ -23,7 +23,7 @@ import { viewState } from "@/lib/freshness";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide } from "@/lib/windowClass";
 import { font, fontCap, slopFor, space, useTheme } from "@/theme";
-import { foldBriefings as FB } from "@/tokens";
+import { foldBriefings as FB, layout as L } from "@/tokens";
 import { sentence, speakRate } from "@/lib/a11y";
 
 type Mode = "line" | "summary" | "detail";
@@ -489,7 +489,7 @@ function WideBriefings(p: WideProps) {
   const hl = p.picked.highlight ? sel : null;
   const hlRow = p.picked.highlight ? rowId : null;
   const inner = (gridW ?? winW) - 2 * space.md;
-  const cols = gridColumns(inner, fontScale, { minW: FB.cardMinW, gap: space.sm, max: FB.cardMaxCols, cap: fontCap.row });
+  const cols = gridColumns(inner, fontScale, { minW: L.briefCardMinW, gap: space.sm, max: FB.cardMaxCols, cap: fontCap.row });
   const cardW = Math.floor((inner - (cols - 1) * space.sm) / cols);
   return (
     <WideFrame rail={p.rail}>
@@ -542,13 +542,13 @@ const TOP_ROW_SLOP = slopFor(31);
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   listPane: { flex: 1 },
-  listHead: { minHeight: FB.headH, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.lg, paddingRight: space.md, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth },
+  listHead: { minHeight: FB.listHeadH, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.lg, paddingRight: space.md, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth },
   headRight: { marginLeft: "auto", flexDirection: "row", alignItems: "center", gap: space.xs },
   toolEnd: { marginLeft: "auto" },
   listContent: { paddingBottom: space.xl },
   listFoot: { gap: space.sm, paddingTop: space.sm },
   criterion: { paddingHorizontal: space.lg, fontSize: font.tiny },
-  tool: { minHeight: FB.headH, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth },
+  tool: { minHeight: FB.listHeadH, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, paddingHorizontal: space.md },
 });
 

@@ -17,7 +17,7 @@ import { headlineRate } from "@/lib/themeSummary";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide } from "@/lib/windowClass";
 import { changeColor, font, space, useFontScale, useTheme } from "@/theme";
-import { foldScreens } from "@/tokens";
+import { layout } from "@/tokens";
 
 /**
  * 테마 상세: 테마 전체 등락률·상승/보합/하락 요약 → 구성 종목(등락률순).
@@ -32,7 +32,7 @@ export default function ThemeDetailScreen() {
   const fontScale = useFontScale();
   // 등락률순 목록이라 표의 기준 열은 등락률, 늘 보이는 값은 거래대금 (좁은 화면의 오른쪽 열과 같음)
   const table = useMemo(() => (wide ? pickDiscoverCols(boxW, fontScale, "tradingValue") : null), [wide, boxW, fontScale]);
-  const rowH = table ? foldScreens.tableRowH : phoneRowH;
+  const rowH = table ? layout.rowH : phoneRowH;
   const { id, market: m, name, kind: k, period: p, rate } = useLocalSearchParams<{ id: string; market?: string; name?: string; kind?: string; period?: string; rate?: string }>();
   const market: DiscoverMarket = m === "US" ? "US" : "KR";
   const kind: ThemeKind = k === "sector" ? "sector" : "theme";

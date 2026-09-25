@@ -26,9 +26,9 @@ export function detailMode(fold: FoldLayout, win: { width: number; height: numbe
   return "wide";
 }
 
-/** 오른쪽 칸 폭: 100% 는 foldDetail.sideW(340), 큰 글씨는 늘어난 배율(최대 140%)의 절반만큼 넓힌다 (140% → 408) */
+/** 오른쪽 칸 폭: 100% 는 layout.detailSideW(340), 큰 글씨는 늘어난 배율(최대 140%)의 절반만큼 넓힌다 (140% → 408) */
 export function sideWidth(fontScale: number): number {
-  return Math.round(foldDetail.sideW * (1 + (clampScale(fontScale, fontCap.row) - 1) / 2));
+  return Math.round(layout.detailSideW * (1 + (clampScale(fontScale, fontCap.row) - 1) / 2));
 }
 
 /**

@@ -358,7 +358,7 @@ describe("넓은 창 (플래그 켜짐)", () => {
   });
 });
 
-describe("탭 틀: 넓은 창에서 잔고 탭 머리 숨김 · 세로 막대 탭을 세로 가운데로", () => {
+describe("탭 틀: 넓은 창에서 네 탭 모두 머리 숨김 · 세로 막대 탭을 세로 가운데로", () => {
   const screens = () => byType(render(<TabsLayout />), "TabsScreen").map((n) => ({ name: n.props.name as string, o: n.props.options as Record<string, unknown> }));
 
   it.each(Object.entries(SIZES))("플래그가 꺼져 있으면 %s 도 모든 탭 머리 그대로 · 탭 칸 모양 그대로", (_n, [w, hh]) => {
@@ -370,19 +370,21 @@ describe("탭 틀: 넓은 창에서 잔고 탭 머리 숨김 · 세로 막대 �
     }
   });
 
-  it("넓은 창이면 잔고 탭만 머리를 숨긴다 (검색은 맨 위 띠로). 다른 탭은 제 넓은 화면을 만들 때까지 그대로", () => {
+  it("넓은 창이면 네 탭 모두 머리를 숨긴다 (탭을 오가도 머리가 생겼다 없어졌다 하지 않게 — 검색은 잔고·발견 맨 위 줄 오른쪽 끝으로)", () => {
     h.flags = { foldLayout: true };
-    for (const [w, hh] of [SIZES["폴드8 펼침 가로"], SIZES["폴드8 펼침 세로"], SIZES["울트라 펼침 세로"]]) {
+    for (const [w, hh] of [SIZES["폴드8 펼침 가로"], SIZES["폴드8 펼침 세로"], SIZES["울트라 펼침 세로"], SIZES["울트라 펼침 가로"]]) {
       forgetWindowClass();
       size(w, hh);
       const s = screens();
-      expect(s.find((x) => x.name === "index")!.o.headerShown).toBe(false);
-      for (const x of s.filter((y) => y.name !== "index")) expect(x.o).not.toHaveProperty("headerShown");
+      expect(s.map((x) => x.name)).toEqual(["index", "discover", "briefings", "settings"]);
+      for (const x of s) expect(x.o.headerShown, `${w}×${hh} ${x.name}`).toBe(false);
     }
     // 접힌 화면은 머리 그대로
-    forgetWindowClass();
-    size(475, 751);
-    expect(screens().find((x) => x.name === "index")!.o).not.toHaveProperty("headerShown");
+    for (const [w, hh] of [SIZES["폴드8 접힘"], SIZES["울트라 접힘"]]) {
+      forgetWindowClass();
+      size(w, hh);
+      for (const x of screens()) expect(x.o).not.toHaveProperty("headerShown");
+    }
   });
 
   it("세로 막대(펼친 폴드8 가로)면 첫 탭 위·마지막 탭 아래를 자동 여백으로 → 탭 4개가 막대 세로 가운데", () => {

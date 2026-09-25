@@ -1,5 +1,5 @@
 import { clampScale } from "@/lib/textScale";
-import { font, fontCap, foldScreens, space } from "@/tokens";
+import { font, fontCap, foldScreens, layout, space } from "@/tokens";
 
 /**
  * 발견 순위 표의 열 고르기 (3-42 웨이브 E, 넓은 창 + 기능 플래그 foldLayout).
@@ -54,7 +54,7 @@ export function pickDiscoverCols(width: number, fontScale: number, metric: Disco
   const k = clampScale(fontScale, fontCap.row);
   // 순위 숫자는 120% 까지만 커진다 (StockLine 과 같음)
   const rank = Math.round(foldScreens.discoverCol.rank * Math.min(k, 1.2));
-  const nameMin = Math.round(foldScreens.discoverNameMin * k);
+  const nameMin = Math.round(layout.nameMinW * k);
   const w = Number.isFinite(width) && width > 0 ? width : 0;
   const colW = (key: DiscoverColKey) => Math.round(foldScreens.discoverCol[key] * k);
   let keys = [...DISCOVER_COL_ORDER];
@@ -155,6 +155,6 @@ export function fitThemeLeaders(leaders: readonly { name: string; changeRate: nu
 /** 넓은 창 테마 히트맵 칸 수: 폭 ÷ 타일 기준 폭(큰 글씨는 배율의 절반만큼 넓힘), 적어도 지금의 3칸 */
 export function heatColumns(width: number, fontScale: number): number {
   if (!(Number.isFinite(width) && width > 0)) return 3;
-  const tile = foldScreens.heatTileW * (1 + (clampScale(fontScale, fontCap.row) - 1) / 2);
+  const tile = layout.heatTileW * (1 + (clampScale(fontScale, fontCap.row) - 1) / 2);
   return Math.max(3, Math.floor(width / tile));
 }

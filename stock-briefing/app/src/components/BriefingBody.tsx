@@ -34,7 +34,7 @@ export function BriefingBody({
   layout,
   onPick,
   title,
-  side = FB.sideW,
+  side = L.detailSideW,
 }: {
   id: number;
   layout: BodyLayout;
@@ -424,7 +424,7 @@ const styles = StyleSheet.create({
   kv: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xl, rowGap: space.sm },
   kvItem: { flexShrink: 0, gap: space.xxs },
   kvValue: { fontSize: font.h2, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  tool: { minHeight: FB.headH, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth },
+  tool: { minHeight: FB.listHeadH, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth },
   text: { paddingHorizontal: space.lg, paddingTop: space.md, gap: space.xs },
   textFlush: { paddingTop: 0 },
   split: { flex: 1, flexDirection: "row" },

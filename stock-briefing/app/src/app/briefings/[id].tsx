@@ -9,7 +9,7 @@ import { SESSION_LABEL } from "@/lib/format";
 import { parseBriefingId } from "@/lib/freshness";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide } from "@/lib/windowClass";
-import { foldBriefings as FB } from "@/tokens";
+import { foldBriefings as FB, layout } from "@/tokens";
 
 /**
  * 브리핑 상세: 요약/상세 토글, 당시 시세 스냅샷, 같은 종목 지난 브리핑 날짜 목록 (본문은 components/BriefingBody).
@@ -34,7 +34,7 @@ export default function BriefingDetailScreen() {
     <BriefingBody
       id={numId}
       layout={wide ? "split" : "stack"}
-      side={fold.width === "expanded" ? FB.sideW : FB.sideNarrowW}
+      side={fold.width === "expanded" ? layout.detailSideW : FB.sideNarrowW}
       title={(d) => <Stack.Screen options={{ title: `${d.name ?? d.code} · ${SESSION_LABEL[d.session]}` }} />}
     />
   );

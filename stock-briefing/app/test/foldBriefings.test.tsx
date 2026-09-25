@@ -97,7 +97,7 @@ const { default: AccountBriefingScreen } = await import("@/app/briefings/account
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const pick = await import("@/lib/briefingPick");
 const readStore = await import("@/lib/briefingRead");
-const { foldBriefings: FB, space, touch, slopFor, dark } = await import("@/tokens");
+const { foldBriefings: FB, layout: L, space, touch, slopFor, dark } = await import("@/tokens");
 const { AccountBriefingBody } = await import("@/components/AccountBriefingBody");
 const RN = await import("react-native");
 
@@ -377,7 +377,7 @@ describe("카드 격자 (펼친 폴드8 세로 704×861)", () => {
     expect(tabs.map((n) => n.props.accessibilityLabel)).toEqual(["정렬", "보기"]);
     // 두 알약이 같은 줄(도구 줄)에
     const tool = r.all().find((n) => n.children.filter((c) => typeof c !== "string" && c.props.accessibilityRole === "tablist").length === 2)!;
-    expect(flat(tool)).toMatchObject({ flexDirection: "row", minHeight: FB.headH });
+    expect(flat(tool)).toMatchObject({ flexDirection: "row", minHeight: FB.listHeadH });
     const tiles = rowNodes(r);
     expect(tiles).toHaveLength(5);
     // 704 − 좌우 12×2 = 680 → 2열, 칸 (680 − 8) / 2 = 336
@@ -712,7 +712,7 @@ describe("전체 화면 브리핑 상세 (알림·위젯·종목 상세에서 �
 
   it("넓은 창(폴드8 가로·세로)은 두 칸: 왼쪽 머리·숫자·근거·지난 브리핑 | 오른쪽 요약|상세·본문 (칸마다 스크롤, 고지는 아래)", () => {
     h.flags.foldLayout = true;
-    for (const [w, hh, side] of [[933, 632, FB.sideW], [704, 861, FB.sideNarrowW]] as const) {
+    for (const [w, hh, side] of [[933, 632, L.detailSideW], [704, 861, FB.sideNarrowW]] as const) {
       size(w, hh);
       forgetWindowClass();
       pick.forgetPick();
@@ -874,7 +874,7 @@ describe("'⋯' 수동 생성 (목업)", () => {
     expect(flat(more)).toMatchObject({ minWidth: touch.min, minHeight: FB.pillH });
     const slop = more.props.hitSlop as { top: number; bottom: number };
     expect(FB.pillH + slop.top + slop.bottom).toBeGreaterThanOrEqual(touch.min);
-    expect(FB.pillH + 2 * space.xs).toBeLessThanOrEqual(FB.headH);
+    expect(FB.pillH + 2 * space.xs).toBeLessThanOrEqual(FB.listHeadH);
     const right = r.all().find((n) => n.children.includes(more))!;
     expect(right.children.filter((c): c is HostNode => typeof c !== "string").map((c) => String(c.props.accessibilityLabel))).toEqual(["정렬", "수동 생성"]);
     alert.mockClear();
@@ -1102,7 +1102,7 @@ describe("순수 함수", () => {
   });
 
   it("카드 열 수: 폴드8 세로 2열 · 울트라 큰 글씨 2열 · 좁으면 1열 · 최대 3열", () => {
-    const o = { minW: FB.cardMinW, gap: space.sm, max: FB.cardMaxCols, cap: 1.4 };
+    const o = { minW: L.briefCardMinW, gap: space.sm, max: FB.cardMaxCols, cap: 1.4 };
     expect(pick.gridColumns(680, 1, o)).toBe(2);
     expect(pick.gridColumns(680, 1.3, o)).toBe(1);
     expect(pick.gridColumns(835, 1.4, o)).toBe(2);

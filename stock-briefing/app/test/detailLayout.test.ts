@@ -57,7 +57,7 @@ describe("배치 고르기 (detailMode)", () => {
 
 describe("오른쪽 칸 폭 · 시세표 칸 수", () => {
   it("오른쪽 칸: 100% 는 340, 큰 글씨는 늘어난 배율의 절반만큼 (140% 이상 408)", () => {
-    expect(sideWidth(1)).toBe(foldDetail.sideW);
+    expect(sideWidth(1)).toBe(layout.detailSideW);
     expect(sideWidth(1.3)).toBe(391);
     expect(sideWidth(2)).toBe(408);
   });

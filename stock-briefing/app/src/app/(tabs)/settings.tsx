@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature, useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
@@ -53,6 +54,7 @@ export default function SettingsScreen() {
   // 좁은 창(접은 화면)·플래그 꺼짐은 지금 그대로
   const fold = useFoldLayout();
   const wide = fold.on && isWide(fold);
+  const insets = useSafeAreaInsets();
   // 설정 탭이 실제로 받은 폭 (카드 틀에 onLayout, 재기 전에는 창 폭 − 왼쪽 세로 탭 막대).
   // 두 칸 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스 — 창을 끌 때 한 칸·두 칸이 번갈아 바뀌지 않게).
   // 좁은 창에서는 바로 전 배치를 지운다(null) — 접은 화면에서 펴면 처음 연 것과 같은 배치
@@ -223,6 +225,8 @@ export default function SettingsScreen() {
 
   if (wide)
     return (
+      // 넓은 창은 탭 화면 머리를 숨기므로(공통 틀) 상태 표시줄·좌우 화면 여백을 여기서 둔다 (왼쪽은 세로 탭 막대가 있으면 막대가 맡는다)
+      <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingLeft: fold.rail ? 0 : insets.left, paddingRight: insets.right }}>
       <Screen refreshing={pulling} onRefresh={onPull}>
         {/* 넓은 창: 칸이 좁으면 이름·값 줄의 값이 이름 아래 줄로 (큰 글씨에서도 두 칸을 지킨다) */}
         <RowWrapContext.Provider value={true}>
@@ -247,6 +251,7 @@ export default function SettingsScreen() {
         </View>
         </RowWrapContext.Provider>
       </Screen>
+      </View>
     );
   return (
     <Screen refreshing={pulling} onRefresh={onPull}>

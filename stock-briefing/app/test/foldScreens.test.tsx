@@ -403,7 +403,7 @@ describe("좁은 창·플래그 꺼짐: 3-42 이전 화면과 똑같다 (기록�
 const { pickDiscoverCols, heatColumns, themeListColumns, themeLeaderLineW, fitThemeLeaders, textEm, DISCOVER_PAD, DISCOVER_GAP } = await import("@/lib/discoverColumns");
 const { allocationGrid, allocationStep, besideNameW, settingsTwoColumns, settingsColumnMax, stickyStep, BESIDE, DENSE_CUT, FOLD_COL_GAP, WIDE_CARD } = await import("@/lib/foldScreens");
 const { formatPct } = await import("@/lib/format");
-const { foldScreens, space, touch, light, dark } = await import("@/tokens");
+const { foldScreens, layout, space, touch, light, dark } = await import("@/tokens");
 const { railWidth } = await import("@/lib/windowClass");
 
 /** 누르는 요소의 style 은 함수일 수 있다 (누르기 전 모양) */
@@ -453,8 +453,8 @@ describe("발견 순위 표의 열 고르기 (lib/discoverColumns)", () => {
         const sum = 2 * DISCOVER_PAD + t.rank + DISCOVER_GAP + t.name + t.cols.reduce((a, c) => a + DISCOVER_GAP + c.width, 0);
         expect(sum, `${w}/${s}`).toBe(w);
         // 뺄 수 있는 열이 남아 있으면 이름 칸은 (배율만큼 넓힌) 최소 폭 이상. 가장 적은 열(3칸)까지 뺀 경우에도 100% 최소 폭(146)은 지킨다
-        if (t.cols.length > 3) expect(t.name, `${w}/${s}`).toBeGreaterThanOrEqual(Math.round(foldScreens.discoverNameMin * Math.min(s, 1.4)));
-        else expect(t.name, `${w}/${s}`).toBeGreaterThanOrEqual(foldScreens.discoverNameMin);
+        if (t.cols.length > 3) expect(t.name, `${w}/${s}`).toBeGreaterThanOrEqual(Math.round(layout.nameMinW * Math.min(s, 1.4)));
+        else expect(t.name, `${w}/${s}`).toBeGreaterThanOrEqual(layout.nameMinW);
         // 열 순서는 늘 표 순서
         expect(t.cols.map((c) => c.key), `${w}/${s}`).toEqual(ALL.filter((k) => t.cols.some((c) => c.key === k)));
       }
@@ -716,6 +716,42 @@ describe("테마 한 칸의 대표 종목 (lib/discoverColumns)", () => {
 });
 
 describe("발견 탭 (넓은 창)", () => {
+  it("탭 화면 머리를 숨기므로(공통 틀) 상태 표시줄·좌우 여백을 두고, 검색은 맨 위 한 줄 오른쪽 끝 (머리의 검색과 같은 동작)", () => {
+    wideOn(704, 933);
+    h.insets = { top: 24, bottom: 48, left: 32, right: 16 };
+    const r = render(<DiscoverScreen />);
+    const root = r.tree[0] as HostNode;
+    // 세로 탭 막대가 없는 창: 왼쪽 여백도 이 화면이 둔다
+    expect(styleOf(root)).toMatchObject({ paddingTop: 24, paddingLeft: 32, paddingRight: 16 });
+    // 표 폭 = 잰 틀 폭 − 좌우 여백 (704 − 48 = 656)
+    layoutTo(r, root, 704);
+    // (여백을 빼지 않은 704 면 보유 열까지 8칸, 656 이면 보유 열이 빠진다)
+    expect(pickDiscoverCols(704, 1, "tradingValue").cols.map((c) => c.key)).toContain("mark");
+    expect(pickDiscoverCols(656, 1, "tradingValue").cols.map((c) => c.key)).not.toContain("mark");
+    expect(textOf(nodes(r, "TableHead")[0]!)).toBe("순위종목현재가등락률거래대금거래량시가총액");
+    const search = r.byLabel("종목 검색");
+    expect(styleOf(search)).toMatchObject({ width: touch.min, minHeight: touch.min, marginLeft: "auto" });
+    // 맨 위 한 줄의 마지막 요소
+    const bar = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.props.accessibilityRole === "tablist"))!;
+    expect(bar.children.at(-1)).toBe(search);
+    (search.props.onPress as () => void)();
+    expect(h.push).toHaveBeenCalledWith("/stocks/add");
+    // 세로 탭 막대(펼친 폴드8 가로)면 왼쪽 여백은 막대가 맡는다
+    wideOn(933, 704);
+    const r2 = render(<DiscoverScreen />);
+    expect(styleOf(r2.tree[0] as HostNode)).toMatchObject({ paddingTop: 24, paddingLeft: 0, paddingRight: 16 });
+  });
+
+  it("접은 화면·플래그 꺼짐은 검색 버튼 없이 지금 그대로 (검색은 탭 화면 머리에)", () => {
+    for (const [, w, hh, flag] of PHONE) {
+      h.flag = flag;
+      forgetWindowClass();
+      size(w, hh);
+      const r = render(<DiscoverScreen />);
+      expect(r.has("종목 검색"), `${w}×${hh}`).toBe(false);
+    }
+  });
+
   it("폴드8 펼침 가로: 시장·분류가 한 줄(44)로 합쳐지고, 순위는 한 줄 44 표 8칸", () => {
     wideOn(933, 704);
     const r = render(<DiscoverScreen />);
@@ -737,7 +773,7 @@ describe("발견 탭 (넓은 창)", () => {
     expect(textOf(nodes(r, "TableHead")[0]!)).toBe("순위종목현재가등락률거래대금거래량시가총액보유");
     const rows = tableRows(r);
     expect(rows).toHaveLength(4);
-    expect(styleOf(rows[0]!).height).toBe(foldScreens.tableRowH);
+    expect(styleOf(rows[0]!).height).toBe(layout.rowH);
     expect(flatList(r).props.itemLayout).toEqual([0, 1, 2].map((i) => ({ length: 44, offset: 44 * i, index: i })));
     // 한 줄 한 문장 (보이는 열 모두)
     expect(rows[0]!.props.accessibilityLabel).toBe("1위, 삼성전자, 보유, 현재가 84,300원, 1.44% 상승, 거래대금 1,041억원, 거래량 123만주, 시가총액 42조원");
@@ -979,6 +1015,16 @@ describe("테마 상세 (넓은 창)", () => {
 });
 
 describe("설정 (넓은 창)", () => {
+  it("탭 화면 머리를 숨기므로(공통 틀) 상태 표시줄·좌우 여백을 이 화면이 둔다 — 가운데로 모으지 않는다", () => {
+    wideOn(704, 933);
+    h.insets = { top: 24, bottom: 48, left: 32, right: 16 };
+    const r = render(<SettingsScreen />);
+    const root = r.tree[0] as HostNode;
+    expect(styleOf(root)).toMatchObject({ flex: 1, paddingTop: 24, paddingLeft: 32, paddingRight: 16 });
+    expect(styleOf(root)).not.toHaveProperty("maxWidth");
+    expect(styleOf(root)).not.toHaveProperty("alignSelf");
+  });
+
   const columns = (r: R) => r.all().find((n) => n.type === "View" && styleOf(n).flexDirection === "row" && n.children.length === 2 && n.children.every((c) => typeof c !== "string" && styleOf(c).flex === 1));
   /** 넓은 창의 카드 틀 (두 칸이든 한 칸이든 같은 틀 — 폭을 재는 onLayout 이 달려 있다) */
   const frame = (r: R) => r.all().find((n) => n.type === "View" && typeof n.props.onLayout === "function");

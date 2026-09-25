@@ -8,7 +8,7 @@ import { sentence, speakAmount, speakRate } from "@/lib/a11y";
 import { DISCOVER_GAP, DISCOVER_PAD, type DiscoverColKey, type DiscoverMetric, type DiscoverTableCols } from "@/lib/discoverColumns";
 import { formatKrwCompact, formatMoney, formatPct, formatQuoteDisplay, formatVolume } from "@/lib/format";
 import { changeColor, font, fontCap, space, useTheme } from "@/theme";
-import { foldScreens } from "@/tokens";
+import { layout } from "@/tokens";
 import type { HoldingMark } from "./DiscoverRow";
 
 /**
@@ -20,7 +20,7 @@ import type { HoldingMark } from "./DiscoverRow";
  */
 
 /** 한 줄 높이 = 누르는 크기 44 (글자는 fontCap.row 까지만 커져 한 줄에 들어간다) */
-const rowH = foldScreens.tableRowH;
+const rowH = layout.rowH;
 /** 숫자 칸: 좁으면 이 비율까지 줄여 한 줄에 다 보인다 (말줄임 없이) */
 const FIT = { numberOfLines: 1, adjustsFontSizeToFit: true, minimumFontScale: 0.6, maxFontSizeMultiplier: fontCap.row } as const;
 const HEAD: Record<DiscoverColKey, string> = { price: "현재가", rate: "등락률", tradingValue: "거래대금", volume: "거래량", marketCap: "시가총액", mark: "보유" };
@@ -149,7 +149,8 @@ export const DiscoverTableRow = memo(function DiscoverTableRow({
 });
 
 const styles = StyleSheet.create({
-  head: { height: foldScreens.tableHeadH, paddingVertical: 0, paddingHorizontal: DISCOVER_PAD, gap: DISCOVER_GAP },
+  // 머리 높이는 잔고 표 머리와 같은 44 (두 탭의 표가 같은 모양)
+  head: { height: layout.headH, paddingVertical: 0, paddingHorizontal: DISCOVER_PAD, gap: DISCOVER_GAP },
   th: { fontSize: font.tiny },
   nameHead: { flex: 1, textAlign: "left" },
   row: { flexDirection: "row", alignItems: "center", paddingHorizontal: DISCOVER_PAD, gap: DISCOVER_GAP, borderBottomWidth: StyleSheet.hairlineWidth },
