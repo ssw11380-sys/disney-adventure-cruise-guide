@@ -212,6 +212,12 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
     }
     const qty = s.quantity ?? 0;
     const native = afterCost && ev.afterCost ? ev.afterCost.marketValue : ev.marketValue;
+    if (!Number.isFinite(q.price) || !Number.isFinite(native)) {
+      excluded.push({ code: s.code, name: s.name, reason: "시세를 받지 못해 합계에서 뺐습니다" });
+      continue;
+    }
+    // 등락을 모르면(출처가 빈 값) 당일 손익 0 으로 본다 — 합계가 NaN 이 되지 않게
+    const change = Number.isFinite(q.change) ? q.change : 0;
     rows.push({
       code: s.code,
       name: s.name,
@@ -221,10 +227,10 @@ export function computeAccount(list: readonly AccountHolding[], opts: { afterCos
       stale: q.stale === true,
       value: native * fx,
       cost: currency === "USD" ? (ev.costBasisKrw ?? ev.costBasis * fx) : ev.costBasis,
-      day: q.change * qty * fx,
-      prev: (q.price - q.change) * qty * fx,
+      day: change * qty * fx,
+      prev: (q.price - change) * qty * fx,
       nowUsd: currency === "USD" ? q.price * qty : 0,
-      prevUsd: currency === "USD" ? (q.price - q.change) * qty : 0,
+      prevUsd: currency === "USD" ? (q.price - change) * qty : 0,
     });
   }
 

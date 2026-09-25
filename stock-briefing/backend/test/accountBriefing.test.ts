@@ -155,6 +155,11 @@ describe("계좌 숫자 (순수 계산)", () => {
       ["005930", "시세를 받지 못해 합계에서 뺐습니다"],
     ]);
     expect(a).toMatchObject({ holdings: 1, dayPnl: 1000 });
+    // 등락을 모르는 종목(빈 값)은 당일 0 으로, 합계가 NaN 이 되지 않는다
+    const noChange = holding("035420", "NAVER", 100);
+    const b = computeAccount([{ ...noChange, quote: { ...noChange.quote!, change: Number.NaN } }, holding("000660", "SK하이닉스", 1000)]);
+    expect(b).toMatchObject({ holdings: 2, dayPnl: 1000 });
+    expect(b.contributions.map((c) => c.amount)).toEqual([1000, 0]);
   });
 
   it("오늘 일정: 한국 휴장(다음 개장), 미국 정규장을 한국 시간으로 (서머타임·겨울·휴장일)", () => {
