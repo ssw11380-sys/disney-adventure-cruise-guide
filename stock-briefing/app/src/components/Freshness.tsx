@@ -57,6 +57,7 @@ export function useFeedState(query: QueryLike, quotes: readonly (Quote | null | 
 /**
  * 잔고 패널의 상태 점 + 글자.
  *  - 새 서버(종목별 세션이 있음): "미국 주간거래 · 한국 휴장 · 실시간 9종목 · 14:03:21 · 보유 10" (lib/liveDot sessionStatus).
+ *    세션은 위젯 칩(marketChip)과 같은 sessionViews 로 고른다 → 칩이 세션 이름이면 여기 맨 앞 세션과 같은 말
  *    초록 점은 점이 켜진 종목이 있고 앱이 값을 제때 받을 때만
  *  - 예전 서버: "실시간 · 14:03:21 · 보유 17". 체결이 30초 끊기면 5초 안에 "지연 3초"/"지연"으로 바뀐다
  */

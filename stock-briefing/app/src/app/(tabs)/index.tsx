@@ -34,7 +34,8 @@ export default function StocksScreen() {
   // 값이 있으면 재조회가 실패해도 화면을 지우지 않고, 끊김·지연을 띠와 상태 글자로 알린다
   const { pulling, onPull } = usePull(refetch);
   // 초록 점: 서버가 실시간이라 하고(세션·거래 대상·서버 수신) 앱도 값을 제때 받고 세션이 안 끝났을 때만 (lib/liveDot).
-  // 상태 줄은 종목별 세션으로 "미국 주간거래 · 한국 휴장 · 실시간 N종목"
+  // 상태 줄은 종목별 세션으로 "미국 주간거래 · 한국 휴장 · 실시간 N종목" — 위젯 칩과 같은 함수로 세션을 고른다(lib/liveDot sessionViews · marketChip,
+  // 예전 서버의 닫힘 문구 live.label 도 marketChip). 칩이 세션 이름("미국 주간거래")이면 늘 상태 줄 맨 앞 세션과 같다
   const quotes = useMemo(() => (data ?? []).map((s) => s.quote), [data]);
   const { now, feedOk } = useFeedState(stocks, quotes);
   // 장중 판단(지연 띠): 새 서버는 종목별 세션(미국 프리·애프터·주간거래 포함), 예전 서버는 장 상태

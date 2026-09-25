@@ -4,7 +4,7 @@ import { focusManager, keepPreviousData, queryOptions, useInfiniteQuery, useMuta
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { isTradingHoursKst } from "@/lib/format";
 import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/freshness";
-import { capToBoundary, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
+import { capToBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
 import { useLiveStream, withLastTick } from "@/lib/liveStream";
 import { tradingNow } from "@/lib/marketTime";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
@@ -71,16 +71,13 @@ export function useMarketIndices() {
 /**
  * 한국·미국 중 하나라도 거래 중이면 true. 서버 상태가 없으면 시간 기반 추정.
  * 토스 달력 기준이라 미국은 정규장만 연다(프리·애프터·주간거래는 닫힘) — 새 서버의 종목별 세션(quote.session, lib/liveDot)이 있으면 그쪽을 먼저 쓰고,
- * 이 값은 예전 서버일 때와 위젯 칩에만 쓴다
+ * 이 값은 예전 서버일 때(잔고 상태 줄의 닫힘 문구·폴링 주기)에만 쓴다. 문구는 위젯 칩과 같은 함수(lib/liveDot marketChip, 세션 없이 달력만)
  */
 export function useAnyMarketOpen(): { open: boolean; label: string; loaded: boolean } {
   const m = useMarketStatus();
   if (!m.data) return { open: isTradingHoursKst(), label: isTradingHoursKst() ? "실시간" : "장 마감", loaded: false };
-  const kr = m.data.KR, us = m.data.US;
-  if (kr.isOpen || us.isOpen) return { open: true, label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", loaded: true };
-  if (!kr.isTradingDay && !us.isTradingDay) return { open: false, label: "휴장", loaded: true };
-  if (!kr.isTradingDay) return { open: false, label: "한국 휴장", loaded: true };
-  return { open: false, label: "장 마감", loaded: true };
+  const chip = marketChip(m.data);
+  return { open: chip.open, label: chip.label, loaded: true };
 }
 
 /**

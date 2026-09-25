@@ -102,11 +102,42 @@ export function widgetIndices(list: readonly MarketIndex[], codes: readonly stri
   });
 }
 
+/** 시장 하나의 지금 세션 (잔고 상태 줄 앞머리 한 칸 · 위젯 칩이 고르는 세션) */
+export interface SessionView {
+  market: "KR" | "US";
+  label: string;
+  open: boolean;
+  /** 세션 경계(until)가 아직 안 지남 */
+  current: boolean;
+  until: string | null;
+}
+
 /**
- * 앱 useAnyMarketOpen 과 같은 규칙 (토스 달력: 한국 08:00~20:00, 미국은 정규장만).
- * 달력으로는 두 시장이 닫혀 있어도 보유 종목(sessions — 잔고 시세의 session)의 미국 세션(프리·애프터·주간거래)이 열려 있으면 문구만 그 세션 이름으로 —
- * 앱 잔고 상태 줄("미국 주간거래 · 한국 휴장")과 같은 말이 되게 (예전에는 이때 "한국 휴장"·"장 마감"). open(금색)·kr·us 는 그대로 두어
- * 위젯의 갱신 주기·지연 판단은 바뀌지 않고, 그 세션이 끝나는 때를 nextChangeAt 에 넣어 세션이 바뀌면 칩을 감추고 다시 받게 한다
+ * 보유 종목 세션 → 시장별 지금 세션. 열린 시장 먼저, 같으면 한국 → 미국. 시장마다 경계가 아직 안 지난 세션을 쓴다 (모두 지났으면 그대로 — current false).
+ * 앱 lib/liveDot 의 sessionViews 와 같은 함수다 (앱 잔고 상태 줄 marketSessions 와 위젯 칩 marketChip 이 이걸로 세션을 고른다).
+ * 앱과 서버가 같은 답을 내는지는 공용 픽스처(stock-briefing/shared/fixtures/marketChip.json)로 묶어 둔다 — 한쪽을 고치면 다른 쪽도 같이
+ */
+export function sessionViews(sessions: readonly (QuoteSession | null | undefined)[], now: number): SessionView[] {
+  const pick = new Map<"KR" | "US", SessionView>();
+  for (const s of sessions) {
+    if (!s) continue;
+    const until = s.until ? Date.parse(s.until) : NaN;
+    const current = !(Number.isFinite(until) && now >= until);
+    const had = pick.get(s.market);
+    if (!had || (!had.current && current)) pick.set(s.market, { market: s.market, label: s.label, open: s.open, current, until: s.until });
+  }
+  const order = (m: "KR" | "US") => (m === "KR" ? 0 : 1);
+  return [...pick.values()].sort((a, b) => Number(b.open) - Number(a.open) || order(a.market) - order(b.market));
+}
+
+/**
+ * 위젯 장 상태 칩. 앱이 위젯을 바로 그릴 때(앱 components/WidgetBridge → lib/liveDot marketChip)도 같은 함수라
+ * 위젯이 받은 값과 앱이 넘긴 값이 번갈아 그려져도 칩이 바뀌지 않는다 (공용 픽스처 shared/fixtures/marketChip.json).
+ *  - 토스 달력(한국 08:00~20:00, 미국은 정규장만)으로 열린 시장이 있으면 예전 문구: 실시간 / 한국 장중 / 미국 장중 (금색)
+ *  - 두 시장이 달력으로 닫혀 있어도 보유 종목(sessions — 잔고 시세의 session)에 열린 세션(미국 프리·애프터·주간거래)이 있으면 문구만 그 세션 이름 —
+ *    앱 잔고 상태 줄("미국 주간거래 · 한국 휴장")의 맨 앞 세션과 같은 말 (sessionViews 로 같은 세션을 고른다. 예전에는 이때 "한국 휴장"·"장 마감").
+ *    open(금색)·kr·us 는 그대로 두어 위젯의 갱신 주기·지연 판단은 바뀌지 않고, 그 세션이 끝나는 때를 nextChangeAt 에 넣어 세션이 바뀌면 칩을 감추고 다시 받게 한다
+ *  - 아니면 휴장 / 한국 휴장 / 장 마감
  */
 export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | null | undefined)[] = [], now: number = Date.parse(s.now)): WidgetMarket {
   const kr = s.KR, us = s.US;
@@ -115,7 +146,8 @@ export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | n
   const base = { kr: kr.isOpen, us: us.isOpen, nextChangeAt };
   if (kr.isOpen || us.isOpen) return { label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", open: true, ...base };
   const t = Number.isFinite(now) ? now : Date.now();
-  const ext = sessions.find((x) => x?.market === "US" && x.open && !(x.until && Date.parse(x.until) <= t));
+  // 경계가 지난 세션(받아 둔 시세가 지난 세션 것)은 쓰지 않는다
+  const ext = sessionViews(sessions, t).find((v) => v.open && v.current);
   if (ext) {
     const until = ext.until ? Date.parse(ext.until) : NaN;
     const next = Number.isFinite(until) && (nextChangeAt === null || until < Date.parse(nextChangeAt)) ? new Date(until).toISOString() : nextChangeAt;

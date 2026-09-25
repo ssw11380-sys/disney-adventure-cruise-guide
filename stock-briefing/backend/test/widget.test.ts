@@ -1,10 +1,14 @@
+import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
+import type { QuoteSession } from "../src/domain/types.js";
 import type { MarketState, MarketStatus } from "../src/providers/market/calendar.js";
-import { buildWidgetPayload, marketChip } from "../src/services/widgetPayload.js";
+import type { StockSessionFacts } from "../src/providers/market/tossRealtime.js";
+import { sessionAt, toQuoteSession } from "../src/services/liveSession.js";
+import { buildWidgetPayload, marketChip, sessionViews } from "../src/services/widgetPayload.js";
 import { fakeIndexSource, fakeIndices, fakeProviders, FakeGenerator } from "./helpers.js";
 
 const m = (market: "KR" | "US", isOpen: boolean, isTradingDay: boolean, at: string | null = null): MarketState => ({ market, isOpen, isTradingDay, opensAt: isOpen ? null : at, closesAt: isOpen ? at : null, source: "toss" });
@@ -33,6 +37,40 @@ describe("위젯 장 상태 칩 (3-16): 앱 잔고 탭 띠와 같은 규칙", ()
     // 달력으로 열려 있으면 예전 문구 그대로
     expect(marketChip(st(m("KR", true, true, "2026-09-22T11:00:00Z"), m("US", false, true)), [overnight]).label).toBe("한국 장중");
   });
+});
+
+/**
+ * 앱이 위젯에 바로 넘기는 칩(app lib/liveDot widgetChip)과 같은지 공용 픽스처(stock-briefing/shared/fixtures/marketChip.json)로 묶어 둔다.
+ * 서버 함수로 만든 표이고, 앱 테스트(app/test/marketChip.test.ts)가 같은 입력에서 같은 칩·같은 상태 줄 앞머리가 나오는지 본다.
+ * 서버 규칙을 바꿨다면 이 테스트가 먼저 깨진다 → 픽스처와 앱 marketChip·sessionViews 를 같이 고칠 것
+ */
+describe("위젯 칩 공용 픽스처 (앱 WidgetBridge 와 같은 칩)", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketChip.json", import.meta.url), "utf8")) as {
+    cases: {
+      name: string;
+      now: string;
+      sessionsAt?: string;
+      status: MarketStatus;
+      holdings: { code: string; facts: StockSessionFacts | null; session: QuoteSession | null }[];
+      chip: unknown;
+      head: string;
+    }[];
+  };
+
+  it("세션 표가 충분하다", () => expect(fixture.cases.length).toBeGreaterThanOrEqual(20));
+
+  for (const c of fixture.cases) {
+    it(`서버 칩·세션이 픽스처와 같다: ${c.name}`, () => {
+      // 표의 세션은 서버 sessionAt 이 그 시각에 내는 값 그대로 (예전 서버 칸은 세션 없음)
+      for (const h of c.holdings) {
+        if (h.session) expect(toQuoteSession(sessionAt(h.code, new Date(c.sessionsAt ?? c.now), { calendar: c.status, stock: h.facts }))).toStrictEqual(h.session);
+      }
+      const sessions = c.holdings.map((h) => h.session);
+      // /api/widget 과 같은 부름 (now 는 장 상태의 now)
+      expect(marketChip(c.status, sessions)).toStrictEqual(c.chip);
+      expect(sessionViews(sessions, Date.parse(c.now)).map((v) => v.label).join(" · ")).toBe(c.head);
+    });
+  }
 });
 
 describe("GET /api/widget (3-16)", () => {

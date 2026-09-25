@@ -1,4 +1,4 @@
-import type { Quote } from "@/api/types";
+import type { MarketStatus, Quote, QuoteSession } from "@/api/types";
 import type { Connection, LiveTone } from "./freshness";
 
 /**
@@ -37,22 +37,81 @@ export interface MarketSessionView {
   open: boolean;
 }
 
+/** 시장 하나의 지금 세션과 경계 (잔고 상태 줄 앞머리 한 칸 · 위젯 칩이 고르는 세션) */
+export interface SessionView extends MarketSessionView {
+  /** 세션 경계(until)가 아직 안 지남 */
+  current: boolean;
+  until: string | null;
+}
+
+/**
+ * 보유 종목 세션 → 시장별 지금 세션. 열린 시장 먼저, 같으면 한국 → 미국. 시장마다 경계가 아직 안 지난 세션을 쓴다 (모두 지났으면 그대로 — current false).
+ * 잔고 상태 줄(marketSessions)과 위젯 칩(marketChip)이 이 함수 하나로 세션을 고른다 → 칩의 세션 이름은 늘 상태 줄 맨 앞 세션이다.
+ * 서버 services/widgetPayload.ts 의 sessionViews 와 같은 함수 (공용 픽스처 stock-briefing/shared/fixtures/marketChip.json — 한쪽을 고치면 다른 쪽도 같이)
+ */
+export function sessionViews(sessions: readonly (QuoteSession | null | undefined)[], now: number): SessionView[] {
+  const pick = new Map<"KR" | "US", SessionView>();
+  for (const s of sessions) {
+    if (!s) continue;
+    const until = s.until ? Date.parse(s.until) : NaN;
+    const current = !(Number.isFinite(until) && now >= until);
+    const had = pick.get(s.market);
+    if (!had || (!had.current && current)) pick.set(s.market, { market: s.market, label: s.label, open: s.open, current, until: s.until });
+  }
+  const order = (m: "KR" | "US") => (m === "KR" ? 0 : 1);
+  return [...pick.values()].sort((a, b) => Number(b.open) - Number(a.open) || order(a.market) - order(b.market));
+}
+
 /**
  * 목록에 있는 시장의 지금 세션 (잔고 상태 줄 앞머리). 열린 시장 먼저, 같으면 한국 → 미국.
  * 시장마다 경계가 아직 안 지난 종목의 세션을 쓴다 (모두 지났으면 그대로 — 경계 1초 뒤 다시 받는다). 세션 정보가 없으면(예전 서버) 빈 배열
  */
 export function marketSessions(quotes: Quotes, now: number): MarketSessionView[] {
-  const pick = new Map<"KR" | "US", MarketSessionView & { current: boolean }>();
-  for (const q of quotes) {
-    const s = q?.session;
-    if (!s) continue;
-    const until = s.until ? Date.parse(s.until) : NaN;
-    const current = !(Number.isFinite(until) && now >= until);
-    const had = pick.get(s.market);
-    if (!had || (!had.current && current)) pick.set(s.market, { market: s.market, label: s.label, open: s.open, current });
+  return sessionViews(quotes.map((q) => q?.session), now).map(({ market, label, open }) => ({ market, label, open }));
+}
+
+/** 위젯 장 상태 칩 (widgets/payload WidgetMarket 과 같은 모양) */
+export interface MarketChip {
+  label: string;
+  open: boolean;
+  /** 시장별 거래 중 (토스 달력. 위젯 지연 판단은 열린 시장의 시세만 본다) */
+  kr: boolean;
+  us: boolean;
+  /** 다음에 칩이 바뀌는 시각 (위젯은 이때 칩을 감추고, 휴장 중 건너뛰던 갱신을 다시 한다) */
+  nextChangeAt: string | null;
+}
+
+/**
+ * 위젯 장 상태 칩 — 서버 services/widgetPayload.ts 의 marketChip 과 같은 함수 (공용 픽스처 shared/fixtures/marketChip.json).
+ * 위젯이 스스로 받은 값(/api/widget)과 앱이 바로 넘기는 값(WidgetBridge)이 번갈아 그려지므로 둘이 다르면 칩이 오락가락한다.
+ *  - 토스 달력(한국 08:00~20:00, 미국은 정규장만)으로 열린 시장이 있으면: 실시간 / 한국 장중 / 미국 장중 (금색)
+ *  - 두 시장이 달력으로 닫혀 있어도 보유 종목 세션에 열린 세션(미국 프리·애프터·주간거래)이 있으면 문구만 그 세션 이름 — 잔고 상태 줄 맨 앞 세션과 같은 말.
+ *    open(금색)·kr·us 는 달력 그대로(위젯 갱신 주기·지연 판단은 그대로), 그 세션이 끝나는 때를 nextChangeAt 에 넣는다
+ *  - 아니면 휴장 / 한국 휴장 / 장 마감. sessions 가 비면(예전 서버·보유 없음) 달력만 — useAnyMarketOpen(잔고 상태 줄의 예전 서버 문구)도 이것
+ * now 는 세션 경계가 지났는지 볼 때만 쓴다 (기본: 장 상태를 받은 시각)
+ */
+export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | null | undefined)[] = [], now: number = Date.parse(s.now)): MarketChip {
+  const kr = s.KR, us = s.US;
+  const bounds = [kr, us].map((m) => (m.isOpen ? m.closesAt : m.opensAt)).filter((x): x is string => !!x).sort();
+  const nextChangeAt = bounds[0] ?? null;
+  const base = { kr: kr.isOpen, us: us.isOpen, nextChangeAt };
+  if (kr.isOpen || us.isOpen) return { label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", open: true, ...base };
+  const t = Number.isFinite(now) ? now : Date.now();
+  // 경계가 지난 세션(받아 둔 시세가 지난 세션 것)은 쓰지 않는다
+  const ext = sessionViews(sessions, t).find((v) => v.open && v.current);
+  if (ext) {
+    const until = ext.until ? Date.parse(ext.until) : NaN;
+    const next = Number.isFinite(until) && (nextChangeAt === null || until < Date.parse(nextChangeAt)) ? new Date(until).toISOString() : nextChangeAt;
+    return { label: ext.label, open: false, ...base, nextChangeAt: next };
   }
-  const order = (m: "KR" | "US") => (m === "KR" ? 0 : 1);
-  return [...pick.values()].sort((a, b) => Number(b.open) - Number(a.open) || order(a.market) - order(b.market)).map(({ market, label, open }) => ({ market, label, open }));
+  if (!kr.isTradingDay && !us.isTradingDay) return { label: "휴장", open: false, ...base };
+  if (!kr.isTradingDay) return { label: "한국 휴장", open: false, ...base };
+  return { label: "장 마감", open: false, ...base };
+}
+
+/** 앱이 위젯에 바로 넘기는 칩 (WidgetBridge): 장 상태(/api/market/status)와 잔고 시세의 세션으로. 장 상태를 모르면 null */
+export function widgetChip(status: MarketStatus | null | undefined, stocks: readonly { quote?: Quote | null }[], now: number): MarketChip | null {
+  return status ? marketChip(status, stocks.map((s) => s.quote?.session), now) : null;
 }
 
 /**
