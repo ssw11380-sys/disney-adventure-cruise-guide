@@ -209,9 +209,17 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
   const nameNode = (r: R, name = LONG.name) => texts(r).find((n) => n.children.includes(name))!;
   const priceNode = (r: R, price = PRICE) => texts(r).find((n) => n.children.includes(price))!;
   const changeNode = (r: R) => r.all().find((n) => n.type === "ChangeText")!;
-  const header = (r: R) => r.all().find((n) => flatStyle(n).minHeight !== undefined)!;
   /** 이 노드를 바로 품은 View */
   const parentOf = (r: R, node: HostNode) => r.all().find((n) => n.children.includes(node))!;
+  /** 머리 = 닫기 버튼 → 버튼 묶음 → 머리 줄 → 머리 */
+  const header = (r: R) => parentOf(r, parentOf(r, parentOf(r, r.byLabel("차트 닫기"))));
+  /** 머리 높이: 한 줄은 3-42 이전처럼 고정 높이(height), 두 줄은 최소 높이(minHeight) */
+  const headBox = (r: R) => {
+    const st = flatStyle(header(r));
+    return { height: st.height, minHeight: st.minHeight };
+  };
+  /** 3-42 이전(main) 한 줄 머리: 높이 44 고정 */
+  const MAIN_HEAD = { height: HEADER, minHeight: undefined };
   type Layout = (e: unknown) => void;
   /** 한 줄 머리의 글자 묶음·이름이 잰 폭을 알린다 (onLayout) */
   const measure = (r: R, m: { title: number; name: number }, name = LONG.name) =>
@@ -225,26 +233,86 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
    * 넘치면 글자 묶음은 쓸 수 있는 폭까지, 이름이 그만큼 줄어든다 (가격·등락은 줄지 않는다)
    */
   const phone = (winW: number, fontScale: number, name: string, price: string, change: string, buttons = 2) => {
-    const s = Math.min(Math.max(fontScale, 1), fontCap.chrome);
+    // 한 줄 머리는 3-42 이전처럼 글자 배율 상한이 없다 (시스템 글자 200% 면 200% 로 그려 잰다)
+    const s = Math.max(fontScale, 1);
     const room = winW - PAD - headerButtonsRoom(buttons);
     const quote = space.sm + estimateTextWidth(price, font.body * s) + space.sm + estimateTextWidth(change, font.small * s);
     const nm = estimateTextWidth(name, font.h2 * s);
     return nm + quote <= room ? { title: nm + quote, name: nm } : { title: room, name: Math.max(0, room - quote) };
   };
-  const oneLineState = (hh: number) => ({ head: touch.min, twoLines: false, chartH: expectedH(hh) });
+  const oneLineState = (hh: number) => ({ head: MAIN_HEAD, twoLines: false, chartH: expectedH(hh) });
+  /** 3-42 이전(main) 한 줄 머리의 글자 속성: 이름만 한 줄 말줄임, 가격·등락은 줄 수 제한 없음, 셋 다 글자 배율 상한 없음 */
+  const expectMainTexts = (r: R, label: string, name = LONG.name, price = PRICE) => {
+    expect(nameNode(r, name).props.numberOfLines, label).toBe(1);
+    expect(nameNode(r, name).props.maxFontSizeMultiplier, label).toBeUndefined();
+    for (const n of [priceNode(r, price), changeNode(r)]) {
+      expect(n.props.numberOfLines, label).toBeUndefined();
+      expect(n.props.maxFontSizeMultiplier, label).toBeUndefined();
+    }
+  };
 
-  it("이름만 줄어들고(…) 가격·등락은 한 줄로 줄지 않는다. 글자는 fontCap.chrome 까지만 커진다", () => {
-    h.stock = LONG;
-    h.win = { width: 475, height: 751 };
-    const r = render(<ChartScreen />);
-    expect(nameNode(r).props.numberOfLines).toBe(1);
-    expect(flatStyle(nameNode(r)).flexShrink).toBe(1);
-    expect(priceNode(r).props.numberOfLines).toBe(1);
-    expect(flatStyle(priceNode(r)).flexShrink).toBe(0);
-    expect(changeNode(r).props.numberOfLines).toBe(1);
-    expect(flatStyle(changeNode(r)).flexShrink).toBe(0);
-    expect(changeNode(r).props.text).toBe(CHANGE);
-    for (const n of [nameNode(r), priceNode(r), changeNode(r)]) expect(n.props.maxFontSizeMultiplier).toBe(fontCap.chrome);
+  it("한 줄 머리는 3-42 이전(main)과 같은 글자 (플래그 켬·끔, 글자 100~200%): 상한·줄 수 제한을 새로 두지 않는다", () => {
+    // 검증 보고: 160~200% 에서 한 줄에 다 들어가던 머리 글자가 150% 로 줄었고(maxFontSizeMultiplier),
+    // 100% 에서도 가격 끝 글자가 번지는 1px 가 잘렸다(numberOfLines → overflow:hidden). 한 줄 머리는 main 그대로여야 한다
+    for (const flag of [undefined, false, true])
+      for (const [w, hh] of [
+        [475, 751],
+        [411, 960],
+        [360, 780],
+      ] as const)
+        for (const fontScale of [1, 1.3, 1.6, 1.8, 2]) {
+          h.stock = LONG;
+          h.flag = flag;
+          h.win = { width: w, height: hh, fontScale };
+          forgetWindowClass();
+          const r = render(<ChartScreen />);
+          const label = `${flag} ${w} ${fontScale}`;
+          expect(header(r).children, label).toHaveLength(1);
+          expect(headBox(r), label).toEqual(MAIN_HEAD);
+          expectMainTexts(r, label);
+          // 이름은 자리가 모자랄 때만 줄어든다(다 들어가면 main 과 같은 자리). 가격·등락은 줄지 않는다
+          expect(flatStyle(nameNode(r)).flexShrink, label).toBe(1);
+          expect(flatStyle(priceNode(r)).flexShrink, label).toBe(0);
+          expect(flatStyle(changeNode(r)).flexShrink, label).toBe(0);
+          expect(changeNode(r).props.text, label).toBe(CHANGE);
+          expect(chart(r), label).toEqual({ w: w - PAD, h: expectedH(hh) });
+        }
+  });
+
+  it("다 들어가는 머리는 잰 뒤에도 main 그대로 (검증 보고의 475·411 160~200% 짧은 이름, 플래그 켬·끔)", () => {
+    const STOCKS = {
+      삼성전자: { code: "005930", market: "KOSPI", quote: { price: 74500, change: 1200, changeRate: 1.64, currency: "KRW" } },
+      엔비디아: { code: "NVDA", market: "NASDAQ", quote: { price: 181.2, change: 2.1, changeRate: 1.17, currency: "USD" } },
+      애플: { code: "AAPL", market: "NASDAQ", quote: { price: 231.5, change: -1.2, changeRate: -0.52, currency: "USD" } },
+    } as const;
+    // 검증 보고에서 main 은 한 줄에 다 들어갔는데 새 머리는 150% 로 줄었던 경우
+    const CASES: [keyof typeof STOCKS, number, number][] = [
+      ["삼성전자", 475, 1.6],
+      ["엔비디아", 475, 1.6],
+      ["애플", 475, 1.6],
+      ["엔비디아", 475, 1.8],
+      ["애플", 475, 1.8],
+      ["엔비디아", 411, 1.8],
+      ["애플", 411, 1.8],
+      ["애플", 475, 2],
+    ];
+    for (const flag of [undefined, false, true])
+      for (const [name, w, fontScale] of CASES) {
+        const st = STOCKS[name];
+        h.stock = { ...st, name, avgPrice: null };
+        h.flag = flag;
+        h.win = { width: w, height: 900, fontScale };
+        forgetWindowClass();
+        const r = render(<ChartScreen />);
+        const label = `${flag} ${name} ${w} ${fontScale}`;
+        const priceText = texts(r).find((n) => n.type === "Text" && n !== nameNode(r, name))!.children[0] as string;
+        // 검증 보고 실측: main 머리는 이 창·글자에서 한 줄에 다 들어갔다 → 잰 글자 묶음은 쓸 수 있는 폭보다 좁고, 이름은 줄지 않은 폭
+        measure(r, { title: w - PAD - headerButtonsRoom(2) - 10, name: estimateTextWidth(name, font.h2 * fontScale) }, name);
+        expect(header(r).children, label).toHaveLength(1);
+        expect(headBox(r), label).toEqual(MAIN_HEAD);
+        expectMainTexts(r, label, name, priceText);
+        expect(chart(r), label).toEqual({ w: w - PAD, h: expectedH(900) });
+      }
   });
 
   it("360×780 삼성전자 (플래그 켬·끔): 재기 전에도, 잰 뒤에도 3-42 이전과 같은 한 줄 머리 44 · 차트 336×(780 − 44 − 도구)", () => {
@@ -255,7 +323,7 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
       h.win = { width: 360, height: 780, fontScale: 1 };
       forgetWindowClass();
       const r = render(<ChartScreen />);
-      const state = () => ({ head: flatStyle(header(r)).minHeight, twoLines: header(r).children.length === 2, chartH: chart(r).h });
+      const state = () => ({ head: headBox(r), twoLines: header(r).children.length === 2, chartH: chart(r).h });
       const row = () => parentOf(r, nameNode(r, "삼성전자"));
       expect(state(), `${flag}`).toEqual(oneLineState(780));
       expect(chart(r).w).toBe(360 - PAD);
@@ -282,7 +350,7 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
       const row = parentOf(r, nameNode(r));
       expect(row.children, `${w} ${fontScale}`).toContain(priceNode(r));
       expect(row.children, `${w} ${fontScale}`).toContain(changeNode(r));
-      expect(flatStyle(header(r)).minHeight).toBe(touch.min);
+      expect(headBox(r)).toEqual(MAIN_HEAD);
       expect(chart(r)).toEqual({ w: w - PAD, h: expectedH(hh) });
     }
   });
@@ -297,7 +365,7 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
       const r = render(<ChartScreen />);
       // 재기 전: 3-42 이전처럼 한 줄
       expect(header(r).children).toHaveLength(1);
-      expect(flatStyle(header(r)).minHeight).toBe(touch.min);
+      expect(headBox(r)).toEqual(MAIN_HEAD);
       measure(r, phone(w, 1.3, LONG.name, PRICE, CHANGE));
       const head = chartHeaderLayout({ fontScale: 1.3, quote: true, twoLines: true });
       // 이름 줄 = [이름, 버튼 묶음], 둘째 줄 = [가격, 등락]
@@ -308,11 +376,16 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
       expect(quoteRow.children).toEqual([priceNode(r), changeNode(r)]);
       // 두 줄이 모두 머리 안에 (최소 높이 = 버튼 줄 + 가격 줄), 차트는 그만큼 낮아진다 → 도구 줄과 겹치지 않는다
       expect(header(r).children).toEqual([nameRow, quoteRow]);
-      expect(flatStyle(header(r)).minHeight).toBe(head.height);
+      expect(headBox(r)).toEqual({ height: undefined, minHeight: head.height });
       expect(head.height).toBeGreaterThan(CHART_ICON_BTN + font.body * 1.3);
       expect(chart(r).h).toBe(Math.max(160, hh - head.height - CHROME - space.sm));
       // 두 줄 머리는 더 재지 않는다
       expect(nameNode(r).props.onLayout).toBeUndefined();
+      // 두 줄로 바꾼 머리(예전이면 깨지던 경우)에서만 글자를 fontCap.chrome(150%) 까지로, 가격·등락은 한 줄로 (쪼개지지 않게)
+      for (const n of [nameNode(r), priceNode(r), changeNode(r)]) {
+        expect(n.props.maxFontSizeMultiplier).toBe(fontCap.chrome);
+        expect(n.props.numberOfLines).toBe(1);
+      }
     }
   });
 
@@ -323,14 +396,14 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
     h.stock = HYNIX;
     h.win = { width: 411, height: 960, fontScale: 1.15 };
     const r = render(<ChartScreen />);
-    const state = () => ({ head: flatStyle(header(r)).minHeight, twoLines: header(r).children.length === 2, chartH: chart(r).h });
+    const state = () => ({ head: headBox(r), twoLines: header(r).children.length === 2, chartH: chart(r).h });
     /** 한 줄 머리면 폰처럼 재서 알린다 (두 줄 머리는 재지 않는다) */
     const settle = (c: number, rate: number, winW = 411, fontScale = 1.15) => {
       const n = nameNode(r, HYNIX.name);
       if (n.props.onLayout) measure(r, phone(winW, fontScale, HYNIX.name, "171,500원", changeOf(c, rate)), HYNIX.name);
     };
     const one = oneLineState(960);
-    const two = { head: 62, twoLines: true, chartH: Math.max(160, 960 - 62 - CHROME - space.sm) };
+    const two = { head: { height: undefined, minHeight: 62 }, twoLines: true, chartH: Math.max(160, 960 - 62 - CHROME - space.sm) };
     settle(990, 0.58);
     expect(state()).toEqual(one);
     const seq: [number, number][] = [
@@ -355,7 +428,7 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
     r.rerender();
     expect(header(r).children).toHaveLength(1);
     settle(1000, 0.59, 475);
-    expect(flatStyle(header(r)).minHeight).toBe(touch.min);
+    expect(headBox(r)).toEqual(MAIN_HEAD);
     expect(header(r).children).toHaveLength(1);
   });
 
@@ -375,7 +448,7 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
     h.win = { width: 411, height: 960, fontScale: 1.5 };
     const r = render(<ChartScreen />);
     expect(priceNode(r)).toBeUndefined();
-    expect(flatStyle(header(r)).minHeight).toBe(touch.min);
+    expect(headBox(r)).toEqual(MAIN_HEAD);
     expect(nameNode(r).props.onLayout).toBeUndefined();
   });
 

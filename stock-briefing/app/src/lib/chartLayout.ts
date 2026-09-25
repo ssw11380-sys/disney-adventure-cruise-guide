@@ -86,6 +86,8 @@ export function candleChartSize(o: ChartSizeInput): { width: number; height: num
 
 /** 전체 화면 차트 머리의 둥근 아이콘 버튼(가로로 보기·닫기) 크기. 누르는 영역은 hitSlop 으로 44 */
 export const CHART_ICON_BTN = 34;
+/** 한 줄 머리 높이: 3-42 이전(main) 고정값 그대로 (접은 화면은 그대로 — 글자 배율과 상관없이 44) */
+export const CHART_HEADER_H = 44;
 /** 머리 한 줄에서 이름이 줄어들어도 남기는 글자 수. 이만큼도 남지 않으면 가격·등락을 둘째 줄로 내린다 */
 export const NAME_MIN_CHARS = 4;
 /** 글자 폭 어림 여유 (실제 글꼴보다 조금 넓게 잡는다 — 넓은 창 상세 머리 lib/detailLayout 도 쓴다) */
@@ -122,11 +124,14 @@ export function headerButtonsRoom(buttons: number): number {
   return buttons > 0 ? buttons * CHART_ICON_BTN + (buttons - 1) * space.sm + space.sm : 0;
 }
 
-/** 이름이 한 줄 머리에서 지켜야 하는 폭 (어림): 앞 NAME_MIN_CHARS 자 + '…' (그보다 짧은 이름은 전부), 글자 배율은 fontCap.chrome 까지 */
+/**
+ * 이름이 한 줄 머리에서 지켜야 하는 폭 (어림): 앞 NAME_MIN_CHARS 자 + '…' (그보다 짧은 이름은 전부).
+ * 한 줄 머리는 3-42 이전처럼 글자 배율 상한 없이 그리므로(시스템 글자 200% 면 200%) 어림도 상한 없이 그 배율로 한다
+ */
 export function nameMinWidth(name: string, fontScale: number): number {
   const chars = [...name];
   const keep = chars.length <= NAME_MIN_CHARS ? name : `${chars.slice(0, NAME_MIN_CHARS).join("")}…`;
-  return estimateTextWidth(keep, font.h2 * clampScale(fontScale, fontCap.chrome));
+  return estimateTextWidth(keep, font.h2 * clampScale(fontScale));
 }
 
 export interface ChartHeaderMeasure {
@@ -158,7 +163,7 @@ export function headerNeedsTwoLines(m: ChartHeaderMeasure): boolean {
 }
 
 export interface ChartHeaderInput {
-  /** 시스템 글자 배율 (1 = 100%). 머리는 fontCap.chrome(150%) 까지만 커진다 */
+  /** 시스템 글자 배율 (1 = 100%). 두 줄 머리만 fontCap.chrome(150%) 까지 반영한다 (한 줄 머리는 44 고정) */
   fontScale: number;
   /** 가격·등락이 있는가 (시세가 없으면 이름만 — 늘 한 줄) */
   quote: boolean;
@@ -172,13 +177,16 @@ export interface ChartHeaderInput {
 export interface ChartHeaderLayout {
   /** 가격·등락을 이름 아래 둘째 줄로 내린다 (좁은 창 + 큰 글씨 + 긴 이름) */
   twoLines: boolean;
-  /** 머리 최소 높이: 44 와 글자 배율(fontCap.chrome 까지)에 맞춘 줄 높이 중 큰 값 → 아래 도구 줄과 겹치지 않는다 */
+  /**
+   * 머리 높이. 한 줄: 3-42 이전 고정 높이 CHART_HEADER_H(44) 그대로 (chart.tsx 는 height 로 둔다).
+   * 두 줄: 최소 높이 — 44 와 글자 배율(fontCap.chrome 까지)에 맞춘 두 줄 높이 중 큰 값 → 아래 도구 줄과 겹치지 않는다 (minHeight)
+   */
   height: number;
 }
 
 /**
- * 전체 화면 차트 머리 배치 (진단 8번). 높이는 고정 44 대신 최소 44 에 글자 배율을 반영한다 (두 줄이면 두 줄 높이).
- * 한 줄이면 100~150% 글자에서 44 그대로 — 3-42 이전 머리와 같은 높이라 차트 크기도 같다.
+ * 전체 화면 차트 머리 배치 (진단 8번). 한 줄이면 3-42 이전 머리와 같은 고정 높이 44 (글자 배율과 상관없이) — 차트 크기도 같다.
+ * 두 줄이면 최소 44 에 글자 배율(fontCap.chrome 까지)을 반영한 두 줄 높이.
  *
  * 두 줄로 갈지는 그려 본 한 줄 머리를 재서 정한다 (headerNeedsTwoLines). 재기 전(첫 그림)은 한 줄.
  * 한 번 두 줄이 되면(twoLines) 같은 창·글자·종목에서는 두 줄 그대로 둔다. 등락이 +990원 ↔ +1,000원, 보합 0원 ↔ ±100원처럼
@@ -186,10 +194,10 @@ export interface ChartHeaderLayout {
  * 두 줄은 늘 안전하다(잘리지 않는다). 한 줄 → 두 줄은 넘쳐서 이름이 모자랄 때 바로 바꾼다
  */
 export function chartHeaderLayout(o: ChartHeaderInput): ChartHeaderLayout {
+  if (!o.quote || !o.twoLines) return { twoLines: false, height: CHART_HEADER_H };
   const s = clampScale(o.fontScale, fontCap.chrome);
   // 첫 줄: 이름(h2)과 둥근 버튼 중 높은 쪽. 둘째 줄: 가격(body) 한 줄 + 도구 줄과의 틈
   const line1 = Math.max(CHART_ICON_BTN, Math.ceil(font.h2 * LINE * s));
-  if (!o.quote || !o.twoLines) return { twoLines: false, height: Math.max(touch.min, line1) };
   return { twoLines: true, height: Math.max(touch.min, line1 + space.xxs + Math.ceil(font.body * LINE * s) + space.xs) };
 }
 

@@ -24,9 +24,10 @@ import { font, fontCap, slopFor, space, useTheme } from "@/theme";
  * 넓은 창 배치(3-42, 플래그 foldLayout)가 켜져 있으면 꺼진 버튼을 흐리게 두지 않고 아예 숨겨 닫기만 남긴다 (폴드 진단 26번).
  *
  * 머리(폴드 진단 8번, 깨질 때만 고친다): 늘 3-42 이전처럼 한 줄로 그리고, 그린 머리를 재서(onLayout) 넘칠 때만 바꾼다.
- * 다 들어가면 3-42 이전과 똑같은 머리 (접은 화면은 그대로). 넘치면 이름만 '…'로 줄이고 가격·등락은 한 줄 그대로,
+ * 다 들어가면 3-42 이전과 똑같은 머리 (접은 화면은 그대로 — 높이 44 고정, 글자 배율 상한·가격 줄 수 제한 없음).
+ * 넘치면 이름만 '…'로 줄이고 가격·등락은 한 줄 그대로,
  * 그래도 이름이 네 글자도 남지 않으면(바깥 화면 + 큰 글씨) 가격·등락을 이름 아래 둘째 줄로 내린다.
- * 머리 높이는 최소 44 에 글자 배율(fontCap.chrome 까지)을 반영한다 (lib/chartLayout).
+ * 두 줄 머리만 글자를 fontCap.chrome(150%) 까지로 두고, 높이는 최소 44 에 그 글자 배율을 반영한다 (lib/chartLayout).
  * 한 번 두 줄이 되면 같은 창·글자 크기·종목에서는 시세가 바뀌어도 두 줄 그대로 둔다 (머리·차트 높이가 틱마다 뛰지 않게)
  */
 export default function FullscreenChartScreen() {
@@ -72,7 +73,7 @@ export default function FullscreenChartScreen() {
   const availW = landscape ? frameH : frameW;
   const availH = landscape ? frameW : frameH;
   const chartW = availW - pad * 2;
-  // 머리: 가격·등락을 둘째 줄로 내렸는지(잰 결과), 높이 (글자 배율은 fontCap.chrome 까지)
+  // 머리: 가격·등락을 둘째 줄로 내렸는지(잰 결과), 높이 (한 줄은 44 고정, 두 줄은 글자 배율 fontCap.chrome 까지 반영)
   const headButtons = hideRotate ? 1 : 2;
   const headKey = `${Math.round(chartW)}:${fontScale}:${headButtons}:${name}`;
   const head = chartHeaderLayout({ fontScale, quote: q !== null, twoLines: headMemo.key === headKey && headMemo.twoLines });
@@ -103,18 +104,23 @@ export default function FullscreenChartScreen() {
     );
   }
 
-  // 이름은 먼저 줄어들고('…'), 가격·등락은 줄지 않는다. 머리 글자는 fontCap.chrome(150%) 까지만 커진다
+  // 이름은 먼저 줄어들고('…'), 가격·등락은 줄지 않는다.
+  // 한 줄 머리는 3-42 이전(main)과 같은 글자: 이름만 한 줄 말줄임, 가격·등락은 줄 수 제한 없음, 글자 배율 상한 없음
+  // (상한·줄 수 제한을 두면 다 들어가던 머리도 150% 로 줄거나 가격 끝 글자가 잘린다 — 접은 화면은 그대로).
+  // 두 줄로 바꾼 머리(예전이면 깨지던 경우)에서만 글자를 fontCap.chrome(150%) 까지로, 가격·등락을 한 줄로 묶는다
+  const headCap = head.twoLines ? fontCap.chrome : undefined;
+  const quoteLines = head.twoLines ? 1 : undefined;
   const nameText = (
-    <Text style={[styles.name, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome} onLayout={measureHead ? measureHead("name") : undefined}>
+    <Text style={[styles.name, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={headCap} onLayout={measureHead ? measureHead("name") : undefined}>
       {name}
     </Text>
   );
   const quoteTexts = q ? (
     <>
-      <Text style={[styles.price, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome}>
+      <Text style={[styles.price, { color: t.ink }]} numberOfLines={quoteLines} maxFontSizeMultiplier={headCap}>
         {priceText}
       </Text>
-      <ChangeText value={q.change} text={changeText ?? ""} style={styles.change} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome} />
+      <ChangeText value={q.change} text={changeText ?? ""} style={styles.change} numberOfLines={quoteLines} maxFontSizeMultiplier={headCap} />
     </>
   ) : null;
   const buttons = (
@@ -142,8 +148,8 @@ export default function FullscreenChartScreen() {
 
   const body = (
     <View style={{ width: availW, height: availH, backgroundColor: t.bg, paddingHorizontal: pad }}>
-      {/* 머리: 높이는 최소값(겹치지 않게 글자에 맞춰 늘어날 수 있다). 두 줄이면 [이름 · 버튼] 아래 [가격 · 등락] */}
-      <View style={[styles.header, { minHeight: headerH }]}>
+      {/* 머리: 한 줄은 3-42 이전처럼 높이 44 고정. 두 줄이면 [이름 · 버튼] 아래 [가격 · 등락], 높이는 최소값(글자에 맞춰 늘 수 있다) */}
+      <View style={[styles.header, head.twoLines ? { minHeight: headerH } : { height: headerH }]}>
         {head.twoLines ? (
           <>
             <View style={styles.headerRow}>
