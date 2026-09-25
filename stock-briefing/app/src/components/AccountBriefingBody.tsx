@@ -1,6 +1,6 @@
 import { router } from "expo-router";
-import React from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import React, { useState } from "react";
+import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAccountBriefing, useFeature, useFeatures } from "@/api/hooks";
 import type { AccountBriefingWithData, AccountData, AccountSchedule } from "@/api/types";
@@ -49,9 +49,14 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
         </Screen>
       );
     }
+    // 2단 오른쪽 칸은 이미 브리핑 탭 안이라 '브리핑 탭으로' 버튼을 두지 않는다 (누르면 아무 일도 없는 버튼이 되므로)
     return (
       <Screen>
-        <Empty title="계좌 브리핑을 볼 수 없습니다" hint="지금은 계좌 브리핑이 꺼져 있습니다. 종목별 브리핑은 브리핑 탭에 있습니다." action={<Button title="브리핑 탭으로" variant="secondary" compact onPress={() => router.dismissTo("/briefings")} />} />
+        <Empty
+          title="계좌 브리핑을 볼 수 없습니다"
+          hint={layout === "pane" ? "지금은 계좌 브리핑이 꺼져 있습니다. 왼쪽 목록에서 종목 브리핑을 고르세요." : "지금은 계좌 브리핑이 꺼져 있습니다. 종목별 브리핑은 브리핑 탭에 있습니다."}
+          action={layout === "pane" ? undefined : <Button title="브리핑 탭으로" variant="secondary" compact onPress={() => router.dismissTo("/briefings")} />}
+        />
       </Screen>
     );
   }
@@ -91,11 +96,16 @@ function AccountBriefingView({ b, top, layout, title }: { b: AccountBriefingWith
     <Card>
       {/* 한 줄에 숫자가 여럿이라 화면 읽기는 기호 없이 한 문장으로 (디자인 규칙) */}
       <View accessible accessibilityLabel={summarySpeech(d)}>
-        {b.summary.split("\n").map((line, i) => (
-          <Text key={i} style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.6 }}>
-            {line}
-          </Text>
-        ))}
+        {b.summary.split("\n").map((line, i) =>
+          // 넓은 창(두·세 칸)은 칸이 좁아(약 260) ' · ' 로 나뉜 묶음째 줄을 바꾼다 — '엔비|디아'·'등|락' 처럼 낱말 가운데서 꺾이지 않게. 폰은 그대로
+          layout === "stack" ? (
+            <Text key={i} style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.6 }}>
+              {line}
+            </Text>
+          ) : (
+            <Chunks key={i} parts={line.split(" · ")} joiner=" ·" style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.6 }} />
+          ),
+        )}
       </View>
     </Card>
   ) : null;
@@ -131,7 +141,7 @@ function AccountBriefingView({ b, top, layout, title }: { b: AccountBriefingWith
           {summary}
           {/* 2단 오른쪽 칸은 넓은 창 두 칸과 같은 한 줄 띠 (폰 화면은 큰 숫자 카드 그대로) */}
           {layout === "pane" ? <TotalsBand d={d} /> : <TotalsCard d={d} />}
-          <ContributionCard d={d} />
+          <ContributionCard d={d} wide={layout === "pane"} />
           <ImpactCard d={d} />
           <ScheduleCard s={d.schedule} asOf={d.asOf} />
           {narrative}
@@ -151,7 +161,12 @@ function AccountBriefingView({ b, top, layout, title }: { b: AccountBriefingWith
 function AccountSplit({ d, top, head, header, summary, narrative, basis }: { d: AccountData; top: React.ReactNode; head: React.ReactNode; header: React.ReactNode; summary: React.ReactNode; narrative: React.ReactNode; basis: React.ReactNode }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const three = accountColumns(width - insets.left - insets.right, { contribW: FB.accountContribW, minW: FB.accountColMinW, divider: L.divider }) === 3;
+  // 바로 전 칸 수: 3칸은 912 에서 켜고 888 아래로 좁아져야 끈다 (창 크기를 끌어 바꿀 때 깜빡이지 않게).
+  // 지난 그리기의 값을 상태로 기억한다 (바뀌었을 때만 적는 React 의 '이전 값 저장' 방식)
+  const [prev, setPrev] = useState<2 | 3 | null>(null);
+  const cols = accountColumns(width - insets.left - insets.right, { contribW: FB.accountContribW, minW: FB.accountColMinW, divider: L.divider, hysteresis: FB.accountColsHysteresis }, prev);
+  if (cols !== prev) setPrev(cols);
+  const three = cols === 3;
   const impact = (
     <>
       <ImpactCard d={d} />
@@ -172,7 +187,7 @@ function AccountSplit({ d, top, head, header, summary, narrative, basis }: { d: 
               {basis}
             </>
           }
-          middle={<ContributionCard d={d} />}
+          middle={<ContributionCard d={d} wide />}
           middleW={FB.accountContribW}
           right={impact}
         />
@@ -183,7 +198,7 @@ function AccountSplit({ d, top, head, header, summary, narrative, basis }: { d: 
               {header}
               {summary}
               <TotalsBand d={d} />
-              <ContributionCard d={d} />
+              <ContributionCard d={d} wide />
             </>
           }
           right={
@@ -285,8 +300,24 @@ function Kpi({ label, value, sub, tone, rate }: { label: string; value: string; 
   );
 }
 
-/** 당일 손익 기여: 상위 종목 + 그 외 = 당일 손익 */
-function ContributionCard({ d }: { d: AccountData }) {
+/**
+ * 한 줄을 묶음째 줄바꿈하는 글 (넓은 창): 칸이 모자라면 묶음 사이에서만 다음 줄로 — 낱말 가운데서 꺾이지 않게.
+ * joiner 는 마지막이 아닌 묶음 끝에 붙인다 (' ·' → 다음 줄이 '·' 로 시작하지 않음)
+ */
+function Chunks({ parts, joiner = "", style, cap }: { parts: string[]; joiner?: string; style: StyleProp<TextStyle>; cap?: number }) {
+  return (
+    <View style={styles.chunks}>
+      {parts.map((p, i) => (
+        <Text key={i} style={style} maxFontSizeMultiplier={cap}>
+          {i < parts.length - 1 ? `${p}${joiner}` : p}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+/** 당일 손익 기여: 상위 종목 + 그 외 = 당일 손익. wide(넓은 창 칸)면 합계 이름을 '합계' / '(= 당일 손익)' 묶음째 줄바꿈 */
+function ContributionCard({ d, wide = false }: { d: AccountData; wide?: boolean }) {
   const t = useTheme();
   const table = contributionTable(d);
   if (!table.lines.length) return null;
@@ -312,9 +343,15 @@ function ContributionCard({ d }: { d: AccountData }) {
         </View>
       ))}
       <View accessible accessibilityLabel={sentence(["합계, 당일 손익", speakProfit(formatWon(table.sum, { sign: true }), Math.sign(table.sum))])} style={[styles.tr, { borderBottomColor: t.line, backgroundColor: t.surfaceAlt }]}>
-        <Text style={[styles.colName, { color: t.ink, fontSize: font.body, fontWeight: "700" }]} maxFontSizeMultiplier={fontCap.row}>
-          합계 (= 당일 손익)
-        </Text>
+        {wide ? (
+          <View style={styles.colName}>
+            <Chunks parts={["합계", "(= 당일 손익)"]} style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} cap={fontCap.row} />
+          </View>
+        ) : (
+          <Text style={[styles.colName, { color: t.ink, fontSize: font.body, fontWeight: "700" }]} maxFontSizeMultiplier={fontCap.row}>
+            합계 (= 당일 손익)
+          </Text>
+        )}
         <Text style={[styles.num, styles.colAmount, { color: changeColor(t, table.sum), fontSize: font.body, fontWeight: "700" }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} maxFontSizeMultiplier={fontCap.row}>
           {formatWon(table.sum, { sign: true })}
         </Text>
@@ -473,4 +510,5 @@ const styles = StyleSheet.create({
   info: { gap: space.xxs, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   disclosure: { minHeight: touch.min, flexDirection: "row", alignItems: "center", paddingVertical: space.xs },
   basis: { paddingHorizontal: space.lg, fontSize: font.tiny },
+  chunks: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs },
 });

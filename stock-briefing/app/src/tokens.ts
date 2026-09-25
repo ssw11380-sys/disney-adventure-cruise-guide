@@ -265,4 +265,9 @@ export const foldBriefings = {
   accountContribW: 350,
   /** 계좌 브리핑 상세 3칸의 양옆 칸 최소 폭. 창이 기여 표 칸 + 이 폭 × 2 보다 좁으면 2칸(반씩) — lib/briefingPick accountColumns */
   accountColMinW: 280,
+  /**
+   * 계좌 브리핑 상세 3칸을 끄는 여유 (히스테리시스): 3칸은 912 에서 켜고, 켜진 뒤에는 912 − 24 = 888 아래로 좁아져야 2칸으로.
+   * 창 크기를 끌어 바꿀 때 기준선 근처에서 칸 수가 번갈아 바뀌지 않게 (2단 켜기 840·끄기 816 차이와 같은 24)
+   */
+  accountColsHysteresis: 24,
 } as const;

@@ -40,11 +40,39 @@ export function samePick(a: BriefingPick | null | undefined, b: BriefingPick | n
 
 const codeOf = (p: BriefingPick | null | undefined) => (p?.kind === "stock" ? p.code : undefined);
 
+/**
+ * 2단이 저절로 고른 종목 브리핑 id (사용자가 누르지 않고 오른쪽 칸에 보이기만 한 것). 아직 읽음으로 적지 않았다.
+ * 사용자가 이것을 보다가 다른 브리핑을 고르면(pickByUser) 그때 읽음으로 적는다 — 본문을 본 뒤 떠난 것이므로.
+ * 탭을 열자마자 다른 탭으로 떠나면 적지 않는다
+ */
+let autoId: number | null = null;
+
 /** 브리핑을 고른다. 같은 값이면 알리지 않는다 (다시 그리지 않게) */
 export function pickBriefing(pick: BriefingPick | null, opts: { highlight: boolean }): void {
+  // 저절로 고른 것이 아닌 다른 브리핑으로 바뀌면(알림·전체 화면으로 연 것 등) 저절로 고른 기록은 버린다
+  if (!(pick?.kind === "stock" && pick.id === autoId)) autoId = null;
   if (samePick(state.pick, pick) && state.highlight === opts.highlight && codeOf(state.pick) === codeOf(pick)) return;
   state = pick ? { pick, highlight: opts.highlight } : EMPTY;
   for (const l of listeners) l();
+}
+
+/** 2단이 처음 열 때 첫 미확인(없으면 맨 위)을 저절로 고른다. 읽음으로는 아직 적지 않는다 */
+export function pickAuto(pick: BriefingPick): void {
+  pickBriefing(pick, { highlight: true });
+  autoId = pick.kind === "stock" ? pick.id : null;
+}
+
+/**
+ * 사용자가 2단에서 브리핑을 고른다 (목록 줄·계좌 줄·오른쪽 칸의 지난 브리핑).
+ * 저절로 골라져 오른쪽에 보이던 종목 브리핑을 두고 다른 것으로 옮겨 가면 그 id 를 돌려준다 — 부르는 쪽이 읽음으로 적는다.
+ * 같은 것을 다시 누르거나, 보이던 것이 저절로 고른 것이 아니면 null
+ */
+export function pickByUser(pick: BriefingPick): number | null {
+  const cur = state.pick;
+  const left = autoId !== null && cur?.kind === "stock" && cur.id === autoId && !samePick(cur, pick) ? autoId : null;
+  autoId = null;
+  pickBriefing(pick, { highlight: true });
+  return left;
 }
 
 /** 테스트용: 이 모듈의 기억(고른 것·마지막으로 본 세션·탭 머리를 숨긴 적)을 지운다 (앱을 새로 연 것과 같다) */
@@ -52,6 +80,7 @@ export function forgetPick(): void {
   state = EMPTY;
   seenSession = null;
   headHidden = false;
+  autoId = null;
   for (const l of listeners) l();
 }
 
@@ -163,10 +192,14 @@ export function gridColumns(width: number, fontScale: number, opts: { minW: numb
 /**
  * 넓은 창 계좌 브리핑 상세의 칸 수 (3-42 SPEC): 가운데 기여 표 칸(contribW) 양옆에 minW 칸 둘이 들어가면 3칸
  * (펼친 폴드8 가로 933·울트라 가로 954 — 요약·수치 | 기여 표 | 지수·환율·일정), 아니면 2칸 (울트라 세로 859·폴드8 세로 704).
- * width 는 좌우 화면 여백을 뺀 폭. 칸 안의 글은 줄바꿈으로 받으므로 글자 크기로 칸 수를 바꾸지 않는다
+ * width 는 좌우 화면 여백을 뺀 폭. 칸 안의 글은 줄바꿈으로 받으므로 글자 크기로 칸 수를 바꾸지 않는다.
+ * prev 가 3(바로 전에 3칸)이면 기준보다 hysteresis 만큼 좁아져야 2칸으로 돌아간다 — 팝업 창·화면 분할을 끌어 크기를 바꿀 때
+ * 기준선(912) 근처에서 3칸과 2칸이 번갈아 깜빡이지 않게 (2단·세로 탭 막대의 켜기·끄기 폭 차이와 같은 방식)
  */
-export function accountColumns(width: number, opts: { contribW: number; minW: number; divider: number }): 2 | 3 {
-  return Number.isFinite(width) && width >= opts.contribW + 2 * opts.minW + 2 * opts.divider ? 3 : 2;
+export function accountColumns(width: number, opts: { contribW: number; minW: number; divider: number; hysteresis?: number }, prev: 2 | 3 | null = null): 2 | 3 {
+  if (!Number.isFinite(width)) return 2;
+  const need = opts.contribW + 2 * opts.minW + 2 * opts.divider;
+  return width >= (prev === 3 ? need - (opts.hysteresis ?? 0) : need) ? 3 : 2;
 }
 
 /** 넓은 창에서 브리핑 탭을 처음 열 때 고를 브리핑: 보이는 순서에서 첫 미확인, 없으면 맨 위 */

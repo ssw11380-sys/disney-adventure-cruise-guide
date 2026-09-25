@@ -97,7 +97,9 @@ const { default: AccountBriefingScreen } = await import("@/app/briefings/account
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const pick = await import("@/lib/briefingPick");
 const readStore = await import("@/lib/briefingRead");
-const { foldBriefings: FB, space, touch, slopFor } = await import("@/tokens");
+const { foldBriefings: FB, space, touch, slopFor, dark } = await import("@/tokens");
+const { AccountBriefingBody } = await import("@/components/AccountBriefingBody");
+const RN = await import("react-native");
 
 const B = (id: number, code: string, name: string, date: string, session: "morning" | "afternoon", over: Partial<Briefing> = {}): Briefing => ({
   id, code, name, session, date, status: "ok", summary: `${name} 요약 첫 줄\n둘째 줄`, detail: `## 한 줄 요약\n${name}`, missing: [], model: "m", error: null, createdAt: `${date}T${session === "morning" ? "08:02" : "16:10"}:00+09:00`, ...over,
@@ -321,7 +323,8 @@ describe("2단 (펼친 폴드8 가로 933×632 · 울트라 펼침)", () => {
     // 목록에 없는 지난 브리핑을 보는 동안은 같은 종목(테슬라) 줄을 강조한다
     expect(selectedRows(r)).toEqual([expect.stringContaining("테슬라")]);
     await settle(r);
-    expect(JSON.parse(h.store.get("briefings.read")!)).toEqual([512, 513, 900]);
+    // 저절로 골라져 보이던 엔비디아(510)는 떠날 때 읽음, 누른 테슬라(513)·지난 브리핑(900)도 읽음
+    expect(JSON.parse(h.store.get("briefings.read")!)).toEqual([512, 510, 513, 900]);
   });
 
   it("계좌 줄(60)을 누르면 오른쪽 칸에 계좌 브리핑", async () => {
@@ -594,29 +597,49 @@ describe("2단 첫 선택 · 새 세션 · 목록 안내", () => {
     expect(ofType(r, "BriefingCard").filter((c) => c.props.selected).map((c) => (c.props.briefing as Briefing).id)).toEqual([512]);
   });
 
-  it("목록 위 안내는 한 줄로 모은다 (휴장 · 변동 큰 순 기준 · 매매 권유 아님)", async () => {
+  it("목록 위 안내: 2단(목록 400)은 휴장만 한 줄 (목업 — 첫 화면 9줄), 변동 큰 순 기준·매매 권유 아님은 목록 아래 · 카드 격자는 위 안내 한 줄에 모두", async () => {
     h.market = { KR: { isTradingDay: false, opensAt: "2026-09-28T08:00:00+09:00" }, US: { isTradingDay: true } };
     let r = await open();
     const notices = r.all().filter((n) => n.type === "View" && flat(n).minHeight === FB.noticeH);
     expect(notices).toHaveLength(1);
     const text = JSON.stringify(norm(notices[0]!));
     expect(text).toContain("한국 휴장일");
-    expect(text).toContain("변동 큰 순 = 전일 대비 등락률 크기 순 · 매매 권유가 아닙니다");
-    // 카드 격자도 한 줄
+    expect(text).not.toContain("변동 큰 순 =");
+    // 기준·매매 권유 아님은 목록 칸 아래 (수동 생성 카드 위)
+    const foot = r.all().find((n) => n.type === "Muted" && n.children.join("") === "변동 큰 순 = 전일 대비 등락률 크기 순 · 매매 권유가 아닙니다")!;
+    const footBox = r.all().find((n) => n.children.includes(foot))!;
+    expect(footBox.children.filter((c): c is HostNode => typeof c !== "string").map((c) => c.type)).toEqual(["Muted", "Card", "Muted"]);
+    // 평일(휴장 아님)은 위 안내 줄이 없다
+    h.market = { KR: { isTradingDay: true, opensAt: null }, US: { isTradingDay: true } };
+    pick.forgetPick();
+    r = await open();
+    expect(r.all().filter((n) => n.type === "View" && flat(n).minHeight === FB.noticeH)).toHaveLength(0);
+    expect(r.text()).toContain("변동 큰 순 = 전일 대비 등락률 크기 순 · 매매 권유가 아닙니다");
+    // 카드 격자도 한 줄 (휴장 · 기준)
+    h.market = { KR: { isTradingDay: false, opensAt: "2026-09-28T08:00:00+09:00" }, US: { isTradingDay: true } };
     size(704, 861);
     forgetWindowClass();
     r = render(<BriefingsScreen />);
-    expect(r.all().filter((n) => n.type === "View" && flat(n).minHeight === FB.noticeH)).toHaveLength(1);
+    const grid = r.all().filter((n) => n.type === "View" && flat(n).minHeight === FB.noticeH);
+    expect(grid).toHaveLength(1);
+    expect(JSON.stringify(norm(grid[0]!))).toContain("변동 큰 순 = 전일 대비 등락률 크기 순 ·");
+    expect(JSON.stringify(norm(grid[0]!))).toContain("매매 권유가 아닙니다");
   });
 
-  it("오른쪽 본문 머리 한 줄: 이름 · 날짜·만든 시각 · [종목 보기] (줄바꿈 허용) → 도구 줄 → 본문이 한 묶음, 제목으로 시작하면 위 여백 없음", async () => {
+  it("오른쪽 본문 머리: 이름 · 날짜·만든 시각 (이 묶음만 줄바꿈) | [종목 보기]는 늘 첫 줄 오른쪽 → 도구 줄 → 본문이 한 묶음, 제목으로 시작하면 위 여백 없음", async () => {
     const r = await open();
-    const headRow = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.props.accessibilityRole === "header" && c.children.join("") === "엔비디아"))!;
-    const kids = headRow.children.filter((c): c is HostNode => typeof c !== "string");
-    expect(kids.map((c) => c.type)).toEqual(["Text", "Muted", "Button"]);
+    const textGroup = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.props.accessibilityRole === "header" && c.children.join("") === "엔비디아"))!;
+    const kids = textGroup.children.filter((c): c is HostNode => typeof c !== "string");
+    expect(kids.map((c) => c.type)).toEqual(["Text", "Muted"]);
     expect(JSON.stringify(norm(kids[1]!))).toContain("08:02");
-    expect(flat(headRow)).toMatchObject({ flexDirection: "row", flexWrap: "wrap" });
-    expect(kids[2]!.props).toMatchObject({ title: "종목 보기", style: { marginLeft: "auto" } });
+    expect(flat(textGroup)).toMatchObject({ flexDirection: "row", flexWrap: "wrap", flex: 1 });
+    // 버튼은 줄바꿈 묶음 밖 (미확인 배지·긴 날짜로 글이 넘쳐도 버튼만 둘째 줄로 떨어지지 않는다)
+    const headRow = r.all().find((n) => n.children.includes(textGroup))!;
+    const row = headRow.children.filter((c): c is HostNode => typeof c !== "string");
+    expect(row.map((c) => c.type)).toEqual(["View", "Button"]);
+    expect(flat(headRow)).toMatchObject({ flexDirection: "row" });
+    expect(flat(headRow)).not.toHaveProperty("flexWrap");
+    expect(row[1]!.props).toMatchObject({ title: "종목 보기", style: { flexShrink: 0 } });
     const body = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.type === "MarkdownView"))!;
     expect(flat(body).paddingTop).toBe(0);
     const group = r.all().find((n) => n.children.includes(body))!;
@@ -779,6 +802,280 @@ describe("계좌 브리핑 상세", () => {
   });
 });
 
+describe("체결이 와도 2단 오른쪽 본문은 다시 그리지 않는다 (DetailPane · React.memo)", () => {
+  const bodyRenders = (id: number) => h.briefingIds.filter((x) => x === id).length;
+  const tick = (rate: number) => {
+    h.stocks = Object.entries({ ...RATES, NVDA: rate }).map(([code, changeRate]) => ({ code, quote: { changeRate } }));
+  };
+  const openMemo = async (memo: boolean) => {
+    h.flags.foldLayout = true;
+    h.store.set("briefings.read", JSON.stringify([512]));
+    size(933, 632);
+    // memo: true → React 처럼 속성이 같은 memo 부품은 건너뛴다
+    const r = render(<BriefingsScreen />, { memo });
+    await settle(r);
+    return r;
+  };
+
+  it("등락률만 바뀌면(장중 체결 약 0.1초마다) 목록 줄의 등락률은 바뀌고, 오른쪽 본문(BriefingBody → 마크다운)은 다시 그리지 않는다", async () => {
+    const r = await openMemo(true);
+    expect(pick.currentPick().pick).toMatchObject({ kind: "stock", id: 510 });
+    const before = bodyRenders(510);
+    expect(before).toBeGreaterThan(0);
+    for (const rate of [1.8, 1.9, 2.05]) {
+      tick(rate);
+      r.rerender();
+    }
+    expect(rowNodes(r).find((n) => String(n.props.accessibilityLabel).includes("엔비디아"))!.props.accessibilityLabel).toContain("2.05% 상승");
+    expect(bodyRenders(510)).toBe(before);
+    // 본문은 그대로 보인다 (지난 결과를 그대로 씀)
+    expect(ofType(r, "MarkdownView")).toHaveLength(1);
+    // 다른 줄을 누르면 그때 오른쪽이 바뀌고, 그 뒤 체결에도 다시 그리지 않는다
+    press(r, rowNodes(r).find((n) => String(n.props.accessibilityLabel).includes("테슬라"))!);
+    const afterPick = bodyRenders(513);
+    expect(afterPick).toBeGreaterThan(0);
+    tick(2.2);
+    r.rerender();
+    expect(bodyRenders(513)).toBe(afterPick);
+  });
+
+  it("오른쪽 칸 안의 상태(요약|상세 바꾸기)는 그대로 다시 그린다", async () => {
+    const r = await openMemo(true);
+    expect(ofType(r, "MarkdownView")).toHaveLength(1);
+    press(r, r.all().find((n) => n.props.accessibilityRole === "tab" && n.props.accessibilityLabel === "요약")!);
+    expect(ofType(r, "MarkdownView")).toHaveLength(0);
+    expect(r.text()).toContain("엔비디아 요약 첫 줄");
+  });
+
+  it("(대조) memo 를 보지 않는 렌더러에서는 같은 체결에 본문을 다시 그린다 — 위 테스트가 실제로 건너뛰기를 재는지", async () => {
+    const r = await openMemo(false);
+    const before = bodyRenders(510);
+    tick(1.8);
+    r.rerender();
+    expect(bodyRenders(510)).toBeGreaterThan(before);
+  });
+});
+
+describe("'⋯' 수동 생성 (목업)", () => {
+  const alert = vi.mocked(RN.Alert.alert);
+  const buttonsOf = (i: number) => alert.mock.calls[i]![2] as { text: string; onPress?: () => void }[];
+
+  it("2단 목록 머리: 브리핑 · [변동 큰 순|등록순] · ⋯ — 누르면 오전·오후를 고르고, 고르면 목록 아래 카드와 같은 확인 창", async () => {
+    h.flags.foldLayout = true;
+    size(933, 632);
+    const r = render(<BriefingsScreen />);
+    await settle(r);
+    const more = r.byLabel("수동 생성");
+    expect(more.props.accessibilityRole).toBe("button");
+    // 보이는 44×34 (머리 줄 44 를 늘리지 않게) + 위아래 hitSlop 으로 44
+    expect(flat(more)).toMatchObject({ minWidth: touch.min, minHeight: FB.pillH });
+    const slop = more.props.hitSlop as { top: number; bottom: number };
+    expect(FB.pillH + slop.top + slop.bottom).toBeGreaterThanOrEqual(touch.min);
+    expect(FB.pillH + 2 * space.xs).toBeLessThanOrEqual(FB.headH);
+    const right = r.all().find((n) => n.children.includes(more))!;
+    expect(right.children.filter((c): c is HostNode => typeof c !== "string").map((c) => String(c.props.accessibilityLabel))).toEqual(["정렬", "수동 생성"]);
+    alert.mockClear();
+    press(r, more);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0]![0]).toBe("수동 생성");
+    expect(buttonsOf(0).map((b) => b.text)).toEqual(["취소", "오전 브리핑", "오후 브리핑"]);
+    buttonsOf(0)[2]!.onPress!();
+    // briefingManualRun 이 켜져 있으면 확인 창 (종목 수·걸리는 시간)
+    expect(alert).toHaveBeenCalledTimes(2);
+    expect(alert.mock.calls[1]![0]).toMatch(/^오후 브리핑 \d+종목 새로 만들기$/);
+  });
+
+  it("카드 격자(폴드8 세로) 도구 줄: [정렬] [보기] ⋯(오른쪽 끝) 한 줄 · 등록 종목이 없으면 ⋯ 없음 · 폰 화면은 지금 그대로(⋯ 없음)", async () => {
+    h.flags.foldLayout = true;
+    size(704, 861);
+    let r = render(<BriefingsScreen />);
+    await settle(r);
+    const tool = r.all().find((n) => n.children.filter((c) => typeof c !== "string" && c.props.accessibilityRole === "tablist").length === 2)!;
+    const end = tool.children.filter((c): c is HostNode => typeof c !== "string").at(-1)!;
+    expect(flat(end)).toMatchObject({ marginLeft: "auto" });
+    expect(end.children.some((c) => typeof c !== "string" && c.props.accessibilityLabel === "수동 생성")).toBe(true);
+    h.latest = [];
+    r = render(<BriefingsScreen />);
+    await settle(r);
+    expect(r.has("수동 생성")).toBe(false);
+    h.latest = LIST;
+    size(475, 679);
+    forgetWindowClass();
+    r = render(<BriefingsScreen />);
+    expect(r.has("수동 생성")).toBe(false);
+  });
+});
+
+describe("2단 읽음 · 계좌 브리핑 · 빈 목록 · 안내", () => {
+  const open = async (read: number[] = [512]) => {
+    h.flags.foldLayout = true;
+    h.store.set("briefings.read", JSON.stringify(read));
+    size(933, 632);
+    const r = render(<BriefingsScreen />);
+    await settle(r);
+    return r;
+  };
+  const acctRow = (r: R) => r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel).startsWith("내 계좌 브리핑"))!;
+  const noticeTexts = (r: R) =>
+    r
+      .all()
+      .find((n) => n.type === "View" && flat(n).minHeight === FB.noticeH)!
+      .children.filter((c): c is HostNode => typeof c !== "string")
+      .map((c) => c.children.join(""));
+
+  it("저절로 골라진 브리핑을 보다가 다른 줄을 누르면 그것도 읽음 → 앱을 새로 켜면 다음 미확인(애플) · 계좌 줄로 떠나도 같다", async () => {
+    const r = await open();
+    expect(pick.currentPick().pick).toMatchObject({ id: 510 });
+    press(r, rowNodes(r).find((n) => String(n.props.accessibilityLabel).includes("테슬라"))!);
+    await settle(r);
+    expect(JSON.parse(h.store.get("briefings.read")!)).toEqual([512, 510, 513]);
+    expect(rowNodes(r).find((n) => String(n.props.accessibilityLabel).includes("엔비디아"))!.props.accessibilityLabel).toMatch(/^변동 큰 순 2위, 엔비디아/);
+    // 앱을 새로 켬 (읽은 기록은 기기에 남아 있다)
+    pick.forgetPick();
+    readStore.forgetRead();
+    forgetWindowClass();
+    const again = render(<BriefingsScreen />);
+    await settle(again);
+    expect(pick.currentPick().pick).toEqual({ kind: "stock", id: 509, code: "AAPL" });
+    press(again, acctRow(again));
+    await settle(again);
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 12 });
+    expect(JSON.parse(h.store.get("briefings.read")!)).toEqual([512, 510, 513, 509]);
+  });
+
+  it("오른쪽에 계좌 브리핑을 보던 중 서버가 계좌 브리핑을 끄면: 막다른 안내 대신 첫 미확인 종목 브리핑을 다시 고른다", async () => {
+    const r = await open();
+    press(r, acctRow(r));
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 12 });
+    h.flags.accountBriefing = false;
+    r.rerender();
+    await settle(r);
+    // 엔비디아(510)는 계좌 줄로 떠날 때 읽음이 되어 다음 미확인은 애플
+    expect(pick.currentPick().pick).toEqual({ kind: "stock", id: 509, code: "AAPL" });
+    expect(r.text()).not.toContain("계좌 브리핑을 볼 수 없습니다");
+    expect(r.all().filter((n) => n.type === "Text" && n.props.accessibilityRole === "header").map((n) => n.children.join(""))).toContain("애플");
+  });
+
+  it("계좌 브리핑 목록을 받는 중에는 고른 계좌 브리핑을 없어졌다고 보지 않는다 (알림으로 열고 돌아온 직후)", async () => {
+    pick.pickBriefing({ kind: "account", id: 12 }, { highlight: true });
+    h.accounts = undefined as unknown as unknown[];
+    const r = await open();
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 12 });
+    h.accounts = [ACCOUNT];
+    r.rerender();
+    await settle(r);
+    expect(pick.currentPick().pick).toEqual({ kind: "account", id: 12 });
+  });
+
+  it("2단 오른쪽 칸의 계좌 브리핑 본문은 꺼져 있어도 '브리핑 탭으로' 버튼을 두지 않는다 (이미 탭 안) · 전체 화면은 그대로", () => {
+    h.flags.accountBriefing = false;
+    const pane = render(<AccountBriefingBody numId={12} layout="pane" />);
+    const empty = ofType(pane, "Empty")[0]!;
+    expect(empty.props.title).toBe("계좌 브리핑을 볼 수 없습니다");
+    expect(empty.props.action).toBeUndefined();
+    const stack = render(<AccountBriefingBody numId={12} layout="stack" />);
+    expect((ofType(stack, "Empty")[0]!.props.action as React.ReactElement<{ title: string }>).props.title).toBe("브리핑 탭으로");
+  });
+
+  it("등록 종목·계좌 브리핑이 모두 없으면 안내는 목록 칸에만 ('등록된 종목이 없습니다'가 두 번 보이지 않음)", async () => {
+    h.latest = [];
+    h.accounts = [];
+    const r = await open();
+    expect(ofType(r, "Empty").map((e) => e.props.title)).toEqual(["등록된 종목이 없습니다", "브리핑 본문"]);
+  });
+
+  it("목록 위 안내: ' · ' 묶음째 줄바꿈, 구분점은 앞 묶음 끝에 (둘째 줄이 '·' 로 시작하지 않고 '9월 28일 / (월)' 처럼 꺾이지 않음) · 휴장 문구는 짧게 — 폰 화면 문구는 그대로", async () => {
+    h.market = { KR: { isTradingDay: false, opensAt: "2026-09-28T08:00:00+09:00" }, US: { isTradingDay: true } };
+    let r = await open();
+    expect(noticeTexts(r)).toEqual(["한국 휴장일 ·", "국내 종목은 직전 거래일 등락 ·", "다음 개장 9월 28일 (월)"]);
+    expect(flat(r.all().find((n) => n.type === "View" && flat(n).minHeight === FB.noticeH)!)).toMatchObject({ flexDirection: "row", flexWrap: "wrap" });
+    expect(r.text()).not.toContain("국내 종목 브리핑 없음");
+    // 등락률을 못 받은 안내까지 둘이면 앞 안내 끝에만 구분점 (둘째 줄이 '·' 로 시작하지 않음)
+    h.stocksError = true;
+    r = await open();
+    const two = noticeTexts(r);
+    expect(two).toEqual(["한국 휴장일 ·", "국내 종목은 직전 거래일 등락 ·", "다음 개장 9월 28일 (월) ·", "등락률을 불러오지 못해 등록순으로 보여 줍니다 ·", "당겨서 다시 시도"]);
+    expect(two.some((x) => x.startsWith("·"))).toBe(false);
+    h.stocksError = false;
+    // 카드 격자: 휴장 · 기준 (구분점은 앞 안내 끝)
+    size(704, 861);
+    forgetWindowClass();
+    const grid = render(<BriefingsScreen />);
+    await settle(grid);
+    expect(noticeTexts(grid)).toEqual(["한국 휴장일 ·", "국내 종목은 직전 거래일 등락 ·", "다음 개장 9월 28일 (월) ·", "변동 큰 순 = 전일 대비 등락률 크기 순 ·", "매매 권유가 아닙니다"]);
+    // 폰(접은 화면)은 지금 문구 그대로
+    size(475, 679);
+    forgetWindowClass();
+    expect(render(<BriefingsScreen />).text()).toContain("한국 휴장일 · 국내 종목 브리핑 없음");
+  });
+
+  it("오른쪽 본문 도구 줄의 '근거 뉴스 N'은 강조색 링크 — 누르면 같은 칸 아래 근거 자료로 스크롤 · 전체 화면 두 칸은 글자만(근거가 왼쪽 칸에 보임)", async () => {
+    const r = await open();
+    const link = r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel).endsWith("근거 자료로 이동"))!;
+    expect(link.props.accessibilityLabel).toBe("근거 뉴스 0, 근거 자료로 이동");
+    expect(link.props.accessibilityRole).toBe("link");
+    const slop = link.props.hitSlop as { top: number; bottom: number };
+    expect(Math.round(12 * 1.45) + slop.top + slop.bottom).toBeGreaterThanOrEqual(touch.min);
+    expect(flat(link.children[0] as HostNode).color).toBe(dark.accent);
+    const screen = ofType(r, "Screen").find((s) => s.props.scrollRef)!;
+    const scrollTo = vi.fn();
+    (screen.props.scrollRef as { current: unknown }).current = { scrollTo };
+    const wrap = r.all().find((n) => n.type === "View" && typeof n.props.onLayout === "function" && n.children.some((c) => typeof c !== "string" && c.type === "BriefingSources"))!;
+    (wrap.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 640, width: 450, height: 200 } } });
+    press(r, link);
+    expect(scrollTo).toHaveBeenCalledWith({ y: 640, animated: true });
+    // 전체 화면 두 칸: 링크 없이 글자만
+    const d = render(<BriefingDetailScreen />);
+    expect(d.all().some((n) => String(n.props.accessibilityLabel ?? "").endsWith("근거 자료로 이동"))).toBe(false);
+    expect(d.text()).toContain("근거 뉴스 0");
+  });
+});
+
+describe("계좌 브리핑 상세 3칸·2칸 깜빡임 방지 · 좁은 칸 줄바꿈", () => {
+  it("넓은 창 칸(약 260)의 요약은 ' · ' 묶음째 줄바꿈 ('엔비|디아' 처럼 낱말 가운데서 꺾이지 않게) · 합계 이름도 '합계' / '(= 당일 손익)' 묶음 — 폰 화면은 한 줄 글 그대로", () => {
+    h.flags.foldLayout = true;
+    h.params = { id: "12" };
+    size(933, 632);
+    const r = render(<AccountBriefingScreen />);
+    const summary = r.all().find((n) => n.props.accessibilityLabel !== undefined && n.props.accessible === true && JSON.stringify(norm(n)).includes("기여 1위 엔비디아"))!;
+    const chunks = summary.children.filter((c): c is HostNode => typeof c !== "string");
+    expect(chunks.map((c) => c.type)).toEqual(["View"]);
+    expect(flat(chunks[0]!)).toMatchObject({ flexDirection: "row", flexWrap: "wrap" });
+    expect(chunks[0]!.children.map((c) => (c as HostNode).children.join(""))).toEqual(["당일 +423,788원 (+0.60%) ·", "기여 1위 엔비디아 +169,763원"]);
+    const total = r.all().find((n) => n.props.accessible === true && String(n.props.accessibilityLabel).startsWith("합계, 당일 손익"))!;
+    expect(JSON.stringify(norm(total))).toContain('"합계"');
+    expect(JSON.stringify(norm(total))).toContain('"(= 당일 손익)"');
+    // 폰(플래그 꺼짐): 한 줄 글 그대로
+    h.flags.foldLayout = false;
+    forgetWindowClass();
+    const phone = render(<AccountBriefingScreen />);
+    expect(phone.all().some((n) => n.type === "Text" && n.children.join("") === "당일 +423,788원 (+0.60%) · 기여 1위 엔비디아 +169,763원")).toBe(true);
+    expect(phone.all().some((n) => n.type === "Text" && n.children.join("") === "합계 (= 당일 손익)")).toBe(true);
+  });
+
+  it("창 크기를 끌어 바꿀 때: 912 에서 3칸, 켜진 뒤에는 888 아래로 좁아져야 2칸, 2칸에서는 다시 912 가 되어야 3칸", () => {
+    h.flags.foldLayout = true;
+    h.params = { id: "12" };
+    size(912, 787);
+    const r = render(<AccountBriefingScreen />);
+    const cols = () => ofType(r, "ScrollView").length;
+    expect(cols()).toBe(3);
+    const steps: [number, number][] = [
+      [900, 3],
+      [888, 3],
+      [887, 2],
+      [900, 2],
+      [911, 2],
+      [912, 3],
+    ];
+    for (const [w, want] of steps) {
+      size(w, 787);
+      r.rerender();
+      expect(cols(), `${w}`).toBe(want);
+    }
+  });
+});
+
 describe("순수 함수", () => {
   const b = (id: number, date: string, session: "morning" | "afternoon", status: "ok" | "failed" = "ok") => ({ id, date, session, status });
 
@@ -882,6 +1179,45 @@ describe("순수 함수", () => {
     expect(pick.accountColumns(Number.NaN, o)).toBe(2);
     // SPEC 의 기여 표 열(이름 132·금액 110·등락률 64) + 좌우 여백·간격이 가운데 칸에 들어간다
     expect(FB.accountContribW).toBeGreaterThanOrEqual(132 + 110 + 64 + 2 * space.lg + 2 * space.sm);
+  });
+
+  it("계좌 브리핑 상세 칸 수 깜빡임 방지: 바로 전이 3칸이면 912 − 24 = 888 까지 3칸, 2칸이면 912 가 되어야 3칸", () => {
+    const o = { contribW: FB.accountContribW, minW: FB.accountColMinW, divider: 1, hysteresis: FB.accountColsHysteresis };
+    expect(pick.accountColumns(900, o, 3)).toBe(3);
+    expect(pick.accountColumns(888, o, 3)).toBe(3);
+    expect(pick.accountColumns(887, o, 3)).toBe(2);
+    expect(pick.accountColumns(900, o, 2)).toBe(2);
+    expect(pick.accountColumns(900, o, null)).toBe(2);
+    expect(pick.accountColumns(912, o, 2)).toBe(3);
+    expect(pick.accountColumns(Number.NaN, o, 3)).toBe(2);
+    expect(FB.accountColsHysteresis).toBe(24);
+  });
+
+  it("저절로 고른 것: 사용자가 다른 브리핑으로 옮겨 갈 때만 그 id 를 돌려준다 (부르는 쪽이 읽음으로 적음)", () => {
+    pick.pickAuto({ kind: "stock", id: 1, code: "A" });
+    expect(pick.currentPick()).toEqual({ pick: { kind: "stock", id: 1, code: "A" }, highlight: true });
+    // 같은 줄을 누름 → 떠난 것이 아니다 (누른 것으로 읽음)
+    expect(pick.pickByUser({ kind: "stock", id: 1, code: "A" })).toBeNull();
+    pick.pickAuto({ kind: "stock", id: 2 });
+    expect(pick.pickByUser({ kind: "account", id: 7 })).toBe(2);
+    // 이미 사용자가 고른 것에서 떠남
+    expect(pick.pickByUser({ kind: "stock", id: 3 })).toBeNull();
+    // 저절로 고른 뒤 알림·전체 화면으로 다른 브리핑이 골라졌으면 기록을 버린다
+    pick.pickAuto({ kind: "stock", id: 4 });
+    pick.pickBriefing({ kind: "stock", id: 5 }, { highlight: false });
+    expect(pick.pickByUser({ kind: "stock", id: 6 })).toBeNull();
+    // 같은 것에 강조만 다시 켜는 것은 기록을 지우지 않는다 (접었다 펴기)
+    pick.pickAuto({ kind: "stock", id: 8 });
+    pick.pickBriefing({ kind: "stock", id: 8 }, { highlight: false });
+    pick.pickBriefing({ kind: "stock", id: 8 }, { highlight: true });
+    expect(pick.pickByUser({ kind: "stock", id: 9 })).toBe(8);
+    // 계좌 브리핑을 저절로 고른 것은 적을 것이 없다
+    pick.pickAuto({ kind: "account", id: 9 });
+    expect(pick.pickByUser({ kind: "stock", id: 1 })).toBeNull();
+    pick.pickAuto({ kind: "stock", id: 10 });
+    pick.forgetPick();
+    pick.pickBriefing({ kind: "stock", id: 10 }, { highlight: true });
+    expect(pick.pickByUser({ kind: "stock", id: 11 })).toBeNull();
   });
 
   it("알약 선택 칸: 보이는 34 + 위아래 hitSlop = 44", () => {

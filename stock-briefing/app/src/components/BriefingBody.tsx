@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useBriefing, useBriefings, useFeature, useStockMutations } from "@/api/hooks";
@@ -52,6 +52,9 @@ export function BriefingBody({
   const sourcesOn = useFeature("briefingSources", true); // 이미 나간 기능(3-12)
   const { run } = useStockMutations();
   const regenOn = useFeature("briefingManualRun", false); // 새 기능(3-19): 서버가 켤 때만
+  // 2단 오른쪽 칸: 도구 줄의 '근거 뉴스 N · 공시 N' 을 누르면 아래 근거 자료로 스크롤한다
+  const scrollRef = useRef<ScrollView | null>(null);
+  const sourcesY = useRef<number | null>(null);
 
   const view = viewState(b);
   if (view === "loading") return <Screen><CardsSkeleton count={2} /></Screen>;
@@ -120,7 +123,10 @@ export function BriefingBody({
       </View>
     ) : null;
 
-  const sources = sourcesOn ? <BriefingSources data={d.data} /> : null;
+  const sources = sourcesOn && d.data ? <BriefingSources data={d.data} /> : null;
+  const toSources = () => {
+    if (sourcesY.current !== null) scrollRef.current?.scrollTo({ y: sourcesY.current, animated: true });
+  };
   const failedCard = (
     <Card>
       <Text style={{ color: t.danger }}>{d.error ?? d.summary}</Text>
@@ -205,7 +211,8 @@ export function BriefingBody({
         value={mode}
         onChange={setMode}
       />
-      <SourceCount d={d} on={sourcesOn} />
+      {/* 2단 오른쪽 칸은 근거 자료가 같은 칸 아래에 있어 링크로 (전체 화면 두 칸은 왼쪽 칸에 이미 보인다) */}
+      <SourceCount d={d} on={sourcesOn} onPress={layout === "pane" && sources ? toSources : undefined} />
     </View>
   );
   // 상세가 제목(## …)으로 시작하면 제목의 위 여백(14)만 두고 본문 위 여백은 뺀다 (도구 줄과 첫 제목 사이가 비지 않게)
@@ -246,13 +253,13 @@ export function BriefingBody({
   // 브리핑 탭 2단의 오른쪽 칸 (끊김·지연 띠는 탭 위쪽에 한 번만 — 브리핑 본문은 만든 뒤 바뀌지 않는다).
   // 머리·도구 줄·본문은 한 묶음 (화면 간격 없이 목업처럼 붙인다)
   return (
-    <Screen disclaimer>
+    <Screen disclaimer scrollRef={scrollRef}>
       <View>
         <Head d={d} />
         {toolbar}
         {bodyText}
       </View>
-      {sources}
+      {sources ? <View onLayout={(e) => (sourcesY.current = e.nativeEvent.layout.y)}>{sources}</View> : null}
       {regen}
       {past}
     </Screen>
@@ -262,24 +269,40 @@ export function BriefingBody({
 /** 마크다운이 제목으로 시작하는지 */
 const HEADING_FIRST = /^\s*#{1,6}\s/;
 
-/** 근거 개수 "근거 뉴스 2 · 공시 1" (근거 기능이 꺼져 있거나 스냅샷이 없으면 없음) */
-function SourceCount({ d, on }: { d: BriefingWithData; on: boolean }) {
+/**
+ * 근거 개수 "근거 뉴스 2 · 공시 1" (근거 기능이 꺼져 있거나 스냅샷이 없으면 없음).
+ * onPress 가 있으면(2단 오른쪽 칸) 강조색 링크 — 누르면 같은 칸 아래 근거 자료로 스크롤 (목업)
+ */
+function SourceCount({ d, on, onPress }: { d: BriefingWithData; on: boolean; onPress?: () => void }) {
   const t = useTheme();
   if (!on || !d.data) return null;
   const news = d.data.news === null ? null : d.data.news.length;
   const disc = d.data.disclosures?.length ?? 0;
   const text = [news === null ? null : `근거 뉴스 ${news}`, disc ? `공시 ${disc}` : null].filter(Boolean).join(" · ");
   if (!text) return null;
+  if (!onPress) {
+    return (
+      <Text style={{ marginLeft: "auto", color: t.sub, fontSize: font.small, flexShrink: 1 }} maxFontSizeMultiplier={fontCap.row}>
+        {text}
+      </Text>
+    );
+  }
   return (
-    <Text style={{ marginLeft: "auto", color: t.sub, fontSize: font.small, flexShrink: 1 }} maxFontSizeMultiplier={fontCap.row}>
-      {text}
-    </Text>
+    <Pressable onPress={onPress} accessibilityRole="link" accessibilityLabel={`${text}, 근거 자료로 이동`} hitSlop={SOURCE_SLOP} style={styles.sourceLink}>
+      <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }} maxFontSizeMultiplier={fontCap.row}>
+        {text}
+      </Text>
+    </Pressable>
   );
 }
 
+/** 근거 링크 글자(12 × 줄 간격 약 1.45) → 위아래로 넓혀 44 */
+const SOURCE_SLOP = slopFor(Math.round(font.small * 1.45));
+
 /**
- * 넓은 창 본문 머리 (목업): 이름 · 날짜·세션·만든 시각 · (배지) · [종목 보기] 를 한 줄에 / 숫자 칸(라벨 위, 숫자 아래).
- * 폭이 모자라면 날짜 묶음이 통째로 다음 줄로 간다 (날짜 가운데서 꺾이지 않게). 이름만 말줄임할 수 있다
+ * 넓은 창 본문 머리 (목업): 이름 · 날짜·세션·만든 시각 · (배지) | [종목 보기] / 숫자 칸(라벨 위, 숫자 아래).
+ * [종목 보기]는 늘 첫 줄 오른쪽 끝에 두고, 왼쪽 글 묶음만 줄바꿈한다 — 폭이 모자라면 날짜·배지 묶음이 통째로 이름 아래 줄로 간다
+ * (날짜 가운데서 꺾이지 않고, 버튼이 혼자 둘째 줄로 떨어지지 않게). 이름만 말줄임할 수 있다
  */
 function Head({ d }: { d: BriefingWithData }) {
   const t = useTheme();
@@ -289,14 +312,16 @@ function Head({ d }: { d: BriefingWithData }) {
   return (
     <View style={[styles.head, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
       <View style={styles.headRow}>
-        <Text style={[styles.headName, { color: t.ink }]} accessibilityRole="header" numberOfLines={1}>
-          {name}
-        </Text>
-        <Muted style={styles.headWhen}>
-          {formatDateKo(d.date)} {SESSION_LABEL[d.session]} 브리핑 · {time ?? formatDateKo(d.createdAt, true)} 생성
-        </Muted>
-        {failed ? <Badge tone="bad">생성 실패</Badge> : null}
-        {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
+        <View style={styles.headText}>
+          <Text style={[styles.headName, { color: t.ink }]} accessibilityRole="header" numberOfLines={1}>
+            {name}
+          </Text>
+          <Muted style={styles.headWhen}>
+            {formatDateKo(d.date)} {SESSION_LABEL[d.session]} 브리핑 · {time ?? formatDateKo(d.createdAt, true)} 생성
+          </Muted>
+          {failed ? <Badge tone="bad">생성 실패</Badge> : null}
+          {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
+        </View>
         <Button title="종목 보기" variant="secondary" compact style={styles.headButton} onPress={() => router.push(`/stocks/${d.code}`)} accessibilityLabel={`${name} 종목 화면으로`} />
       </View>
       <Numbers d={d} />
@@ -390,10 +415,12 @@ export function BriefingSplit({ left, middle, right, side, middleW }: { left: Re
 const styles = StyleSheet.create({
   historyRow: { minHeight: touch.min, flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: StyleSheet.hairlineWidth },
   head: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
-  headRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.md, rowGap: space.xxs },
+  headRow: { flexDirection: "row", alignItems: "center", gap: space.md },
+  headText: { flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.md, rowGap: space.xxs },
   headName: { flexShrink: 1, minWidth: 0, fontSize: font.title, fontWeight: "700" },
   headWhen: { flexShrink: 1 },
-  headButton: { marginLeft: "auto" },
+  headButton: { flexShrink: 0 },
+  sourceLink: { marginLeft: "auto", flexShrink: 1, justifyContent: "center" },
   kv: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xl, rowGap: space.sm },
   kvItem: { flexShrink: 0, gap: space.xxs },
   kvValue: { fontSize: font.h2, fontWeight: "700", fontVariant: ["tabular-nums"] },

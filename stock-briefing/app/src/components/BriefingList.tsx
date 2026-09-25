@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import type { Briefing } from "@/api/types";
@@ -15,6 +16,7 @@ import { Badge } from "./ui";
  *  - BriefingRow: 2단 목록 한 줄 56 (미확인 점 · 이름 · 바로 옆 등락률 · 시각 / 요약 한 줄)
  *  - BriefingTile: 펼친 폴드8 세로 카드 격자의 한 칸 (이름 · 등락률 · 시각 / 요약 최대 3줄)
  *  - ListNotice: 목록 위 안내 한 줄 (휴장·정렬 기준)
+ *  - MoreButton: 목록 머리·도구 줄 끝의 '⋯' (수동 생성)
  * 숫자(등락률·시각)는 줄이지 않고, 모자라면 이름만 말줄임한다
  */
 
@@ -48,19 +50,43 @@ export function Pills<T extends string>({ options, value, onChange, label, style
 const PILL_SLOP = slopFor(FB.pillH);
 
 /**
- * 목록 위 안내 한 줄 (휴장 · 정렬 기준 · 등락률 못 받음을 ' · ' 로 이어 한 줄에). 폭이 모자라면 안내 묶음째 다음 줄로 —
- * 한 안내의 가운데(예: '변동 큰 순 =' / '전일 대비 …')에서 줄이 꺾이지 않게
+ * 목록 위 안내 한 줄 (휴장 · 정렬 기준 · 등락률 못 받음을 ' · ' 로 이어 한 줄에). 폭이 모자라면 ' · ' 로 나뉜 묶음째 다음 줄로 —
+ * 묶음 가운데(예: '다음 개장 9월 28일' / '(월)', '변동 큰 순 =' / '전일 대비 …')에서 줄이 꺾이지 않게.
+ * 구분점은 앞 묶음의 끝에 붙인다 → 줄이 넘어가도 다음 줄이 '· …' 로 시작하지 않는다
  */
 export function ListNotice({ items }: { items: string[] }) {
   const t = useTheme();
+  const parts = items.flatMap((s) => s.split(" · "));
   return (
     <View style={[styles.notice, { backgroundColor: t.bg, borderBottomColor: t.line }]}>
-      {items.map((s, i) => (
-        <Text key={s} style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>
-          {i > 0 ? `· ${s}` : s}
+      {parts.map((s, i) => (
+        <Text key={`${i}:${s}`} style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>
+          {i < parts.length - 1 ? `${s} ·` : s}
         </Text>
       ))}
     </View>
+  );
+}
+
+/**
+ * 목록 머리·도구 줄 오른쪽 끝의 '⋯' (목업): 누르면 수동 생성(오전·오후 브리핑 새로 만들기)을 고른다.
+ * 보이는 크기 44×34 (알약과 같은 높이 — 머리 줄 44 를 늘리지 않게) + 위아래 hitSlop 으로 44×44. 만드는 중에는 누를 수 없다
+ */
+export function MoreButton({ onPress, busy }: { onPress: () => void; busy: boolean }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={busy}
+      accessibilityRole="button"
+      accessibilityLabel="수동 생성"
+      accessibilityHint="오전·오후 브리핑을 새로 만듭니다"
+      accessibilityState={{ disabled: busy, busy }}
+      hitSlop={PILL_SLOP}
+      style={({ pressed }) => [styles.more, { backgroundColor: pressed ? t.surfaceAlt : "transparent", opacity: busy ? 0.45 : 1 }]}
+    >
+      <Ionicons name="ellipsis-horizontal" size={font.title} color={t.sub} />
+    </Pressable>
   );
 }
 
@@ -232,6 +258,7 @@ const TILE_LINE = Math.round(font.body * 1.5);
 const styles = StyleSheet.create({
   pills: { flexDirection: "row", borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, overflow: "hidden", flexShrink: 0 },
   pill: { minHeight: FB.pillH, minWidth: FB.pillMinW, paddingHorizontal: space.md, alignItems: "center", justifyContent: "center" },
+  more: { minWidth: touch.min, minHeight: FB.pillH, borderRadius: radius.md, alignItems: "center", justifyContent: "center", flexShrink: 0 },
   notice: { minHeight: FB.noticeH, flexDirection: "row", flexWrap: "wrap", alignItems: "center", alignContent: "center", columnGap: space.xs, paddingHorizontal: space.md, paddingVertical: space.xxs, borderBottomWidth: StyleSheet.hairlineWidth },
   num: { fontVariant: ["tabular-nums"] },
   // 높이는 최소만: 큰 글씨(140%)에서 숫자가 칸 밖으로 넘치지 않게 글자만큼 커진다
