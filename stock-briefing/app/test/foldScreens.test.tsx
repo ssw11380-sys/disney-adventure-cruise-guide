@@ -510,12 +510,12 @@ describe("설정·비중 배치 계산 (lib/foldScreens)", () => {
     }
   });
 
-  it("설정 칸 최대 폭 430 (글자 크기와 상관없음, 설계 칸 폭 범위 310~430 의 위 끝) — 이름과 스위치 사이 300dp 이하", () => {
-    expect(settingsColumnMax()).toBe(430);
+  it("설정 칸 최대 폭 400 (글자 크기와 상관없음) — 이름과 스위치 사이 300dp 이하", () => {
+    expect(settingsColumnMax()).toBe(400);
     expect(settingsColumnMax()).toBeGreaterThanOrEqual(foldScreens.settingsColMin);
-    // 칸 안쪽 = 칸 − 카드 좌우 여백. 스위치 줄의 가장 짧은 이름(한글 네 글자 약 64, 글자 100%) + 스위치(약 52) 를 빼도 300 이하
-    // (웹 미리보기 실측: 칸 400 에서 가장 먼 것 221dp → 430 이면 약 251dp)
-    expect(settingsColumnMax() - 2 * space.lg - 64 - 52).toBeLessThanOrEqual(300);
+    // 칸 안쪽 = 칸 − 카드 좌우 여백. 스위치 줄의 가장 짧은 이름('평일만' 약 42, 글자 100%) + 스위치(약 52) 를 빼도 300 이하
+    // (통합 웹 미리보기 실측: 칸 430 이면 '평일만'↔스위치 316dp)
+    expect(settingsColumnMax() - 2 * space.lg - 42 - 52).toBeLessThanOrEqual(300);
   });
 
   /** 격자가 쓸 높이 = 창 − 상태 표시줄 24 − 작업 표시줄 48 − 머리·요약·고지 어림(176, 글자 배율만큼). 범례 줄 수: 윗줄 2 · 아랫줄 11 (보유 17종목) */
@@ -1071,7 +1071,7 @@ describe("설정 (넓은 창)", () => {
     const [left, right] = cols.children as HostNode[];
     expect(cardsIn(left!)).toEqual(["표시", "NotificationSettingsCard", "정보"]);
     expect(cardsIn(right!)).toEqual(["TossOpenApiCard", "AppUpdateCard", "서버", "서버 연결", "ScreenInfoCard"]);
-    // 칸은 최대 폭(430)까지만, 남는 폭은 두 칸 사이로만 — 칸은 화면 양 끝에 붙는다 (가운데로 모으지 않는다)
+    // 칸은 최대 폭(400)까지만, 남는 폭은 두 칸 사이로만 — 칸은 화면 양 끝에 붙는다 (가운데로 모으지 않는다)
     expect(styleOf(cols).justifyContent).toBe("space-between");
     for (const c of [left!, right!]) expect(styleOf(c)).toMatchObject({ flex: 1, maxWidth: settingsColumnMax() });
     // 이름·값 줄은 좁은 칸에서 값이 이름 아래 줄로 (넓은 창만)
