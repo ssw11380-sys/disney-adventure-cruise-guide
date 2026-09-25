@@ -117,7 +117,8 @@ describe("분석 갱신 실패 안내 (AI-01)", () => {
   });
 
   it("종목 상세 화면의 분석 탭이 갱신(뮤테이션) 상태를 넘기고 실패 안내를 그린다", () => {
-    const src = readFileSync(new URL("../src/app/stocks/[code]/index.tsx", import.meta.url), "utf8");
+    // 분석 탭은 종목 상세 조각(components/StockDetailParts)으로 옮겼다 (3-42 넓은 창 배치가 같은 탭을 쓴다)
+    const src = readFileSync(new URL("../src/components/StockDetailParts.tsx", import.meta.url), "utf8");
     const body = src.slice(src.indexOf("function AnalysisTab("), src.indexOf("function NewsTab("));
     expect(body).toMatch(/analysisView\(\{[^}]*refresh: refreshAnalysis/);
     expect(body).toMatch(/refreshError \?/);

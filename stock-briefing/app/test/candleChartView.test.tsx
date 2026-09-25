@@ -306,9 +306,18 @@ describe("CandleChart 를 쓰는 화면 모두 확인", () => {
   it("종목 상세·지수 상세는 폭을 넘기지 않아 잰 폭·넓은 창 규칙을 따른다", () => {
     for (const rel of ["app/stocks/[code]/index.tsx", "app/market/[code].tsx"]) {
       const found = uses(rel);
-      expect(found, rel).toHaveLength(1);
+      // 휴대폰 화면 1개 + 넓은 창 배치(3-42 웨이브 C) 1개
+      expect(found, rel).toHaveLength(2);
       expect(found[0], rel).not.toMatch(/\bwidth=/);
       expect(found[0], rel).not.toMatch(/\bheight=/);
+    }
+  });
+
+  it("종목·지수 상세 넓은 창 배치는 폭을 넘기지 않고(잰 폭), 높이만 칸에 맞춰 넘긴다 (lib/detailLayout)", () => {
+    for (const rel of ["app/stocks/[code]/index.tsx", "app/market/[code].tsx"]) {
+      const wide = uses(rel)[1]!;
+      expect(wide, rel).not.toMatch(/\bwidth=/);
+      expect(wide, rel).toMatch(/\bheight=\{height\}/);
     }
   });
 

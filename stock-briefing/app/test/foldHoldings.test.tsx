@@ -181,7 +181,10 @@ describe("켜져 있어도 접힌 화면은 지금과 같은 모양 (접고 펼 
     }
     const list = byType(r, "ScrollView")[0]!;
     expect(list.props.scrollEventThrottle).toBeGreaterThan(0);
-    expect(list.props).not.toHaveProperty("onLayout");
+    // 목록 칸 높이 재기: 종목 상세 ‹ › 뒤 돌아온 줄을 목록 가운데쯤에 두려고 (웨이브 C). 표 폭 재기는 넓은 창에서만
+    expect(typeof list.props.onLayout).toBe("function");
+    (list.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 600 } } });
+    expect(byType(r, "TableHeadRow")).toHaveLength(0);
     expect(byType(r, "TableHead")).toHaveLength(2);
     expect(byType(r, "LiveStatus")[0]!.props.suffix).toBe("보유 3 · 관심 1");
     expect(byType(r, "LiveStatus")[0]!.props).not.toHaveProperty("twoLine");
@@ -243,9 +246,10 @@ describe("넓은 창 (플래그 켜짐)", () => {
     const total = 10_116_000 + 3_480_000 + 7_632 * FX;
     expect(held.map((x) => x.props.weight)).toEqual([10_116_000, 3_480_000, 7_632 * FX].map((v) => Math.round((v / total) * 1000) / 10));
     expect(held[0]!.props.weightMax).toBe(Math.max(...(held.map((x) => x.props.weight) as number[])));
-    // 관심 줄: 관심 열 계획, 비중 없음
+    // 관심 줄: 관심 열 계획, 비중 없음 (최대 비중이 바뀌어도 관심 줄은 다시 그리지 않게 비중 값을 넘기지 않는다)
     expect(rows[3]!.props.columns).toEqual(pickWatchCols(853, 1, 157));
-    expect(rows[3]!.props.weight).toBeNull();
+    expect(rows[3]!.props).not.toHaveProperty("weight");
+    expect(rows[3]!.props).not.toHaveProperty("weightMax");
     for (const row of rows) expect(typeof row.props.onLayoutRow).toBe("function");
   });
 

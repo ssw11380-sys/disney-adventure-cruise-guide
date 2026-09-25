@@ -9,6 +9,7 @@ import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type Ac
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
 import { MarketStrip } from "@/components/MarketStrip";
+import { useReturnMark } from "@/components/ReturnMark";
 import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { StockRow } from "@/components/StockRow";
@@ -60,9 +61,9 @@ export default function StocksScreen() {
   const wide = fold.on && isWide(fold);
   const insets = useSafeAreaInsets();
   const { width: winW, fontScale } = useWindowDimensions();
-  // 표 폭: 표가 실제로 받은 폭(onLayout). 잰 값은 그 창 크기·탭 막대에서만 쓴다 — 접고 펴서 창이 바뀌면 새로 잴 때까지는
+  // 표 폭: 표가 실제로 받은 폭(onLayout). 잰 값은 그 창 크기·탭 막대·글자 크기(탭 막대 폭이 글자 배율을 따른다)에서만 쓴다 — 접고 펴서 창이 바뀌면 새로 잴 때까지는
   // 창 폭에서 세로 탭 막대·좌우 화면 여백을 뺀 어림값 (지난 창의 폭으로 열을 한 번 잘못 고르지 않게)
-  const sizeKey = `${winW}:${fold.rail ? "rail" : "bar"}`;
+  const sizeKey = `${winW}:${fold.rail ? "rail" : "bar"}:${fontScale}`;
   const [measured, setMeasured] = useState<{ key: string; w: number } | null>(null);
   const tableW = measured?.key === sizeKey ? measured.w : winW - (fold.rail ? railWidth(fontScale) + insets.left : insets.left) - insets.right;
   const heldPlan = useMemo(() => (wide ? pickCols(tableW, fontScale) : null), [wide, tableW, fontScale]);
@@ -154,11 +155,14 @@ export default function StocksScreen() {
       <MarketStrip dense trailing={<StripEnd status={status} />} />
     </View>
   ) : null;
+  // 종목 상세에서 ‹ › 로 넘겨 본 뒤 돌아오면 마지막에 본 줄로 스크롤해 잠깐 강조 (3-42, ‹ › 를 안 썼으면 지금 그대로)
+  // 목록 ref 는 이어 보기(anchor)와 같은 것을 쓴다 (ScrollView 에는 ref 를 하나만 달 수 있다)
+  const mark = useReturnMark((y) => anchor.ref.current?.scrollTo({ y, animated: true }));
 
   const view = viewState(stocks);
   if (view === "loading")
     return wide ? (
-      <Screen scroll={false} top={wideTop}>
+      <Screen scroll={false} top={wideTop} contentStyle={sideInsets}>
         <HoldingsSkeleton />
       </Screen>
     ) : (
@@ -169,7 +173,7 @@ export default function StocksScreen() {
     );
   if (view === "error")
     return wide ? (
-      <Screen top={wideTop}>
+      <Screen top={wideTop} contentStyle={sideInsets}>
         <ErrorView error={error} onRetry={() => void refetch()} />
       </Screen>
     ) : (
@@ -236,8 +240,20 @@ export default function StocksScreen() {
     stickyIndices.push(childIndex);
     childIndex += 1 + sec.data.length;
   }
-  // 이어 보기(플래그가 켜져 있을 때만): 스크롤 위치·구역 머리·줄 위치를 잰다. 꺼져 있으면 아무것도 붙이지 않는다 (지금과 똑같다)
-  const tracking = fold.on ? { ref: anchor.ref, onScroll: anchor.onScroll, onScrollBeginDrag: anchor.onScrollBeginDrag, scrollEventThrottle: SCROLL_THROTTLE } : null;
+  // 이어 보기·돌아온 줄 강조(플래그가 켜져 있을 때만): 스크롤 위치·목록 칸 높이·구역 머리·줄 위치를 잰다. 넓은 창이면 표 폭도 잰다.
+  // 꺼져 있으면 아무것도 붙이지 않는다 (지금과 똑같다 — 종목 상세 ‹ › 도 플래그가 켜진 넓은 창에만 있어 강조할 줄이 생기지 않는다)
+  const tracking = fold.on
+    ? {
+        ref: anchor.ref,
+        onScroll: anchor.onScroll,
+        onScrollBeginDrag: anchor.onScrollBeginDrag,
+        scrollEventThrottle: SCROLL_THROTTLE,
+        onLayout: (e: LayoutChangeEvent) => {
+          mark.onViewLayout(e);
+          if (wide) onTableLayout(e);
+        },
+      }
+    : null;
   const plans = wide && weights ? { held: heldPlan, watch: watchPlan } : null;
 
   return (
@@ -265,7 +281,6 @@ export default function StocksScreen() {
         refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
         contentContainerStyle={{ paddingBottom: space.xl }}
         {...tracking}
-        {...(wide ? { onLayout: onTableLayout } : null)}
       >
         {header}
         {sections.length === 0
@@ -274,21 +289,30 @@ export default function StocksScreen() {
               <View key={`h-${section.key}`} {...(fold.on ? { onLayout: (e: LayoutChangeEvent) => anchor.head(section.key, e) } : null)}>
                 {plans ? tableHeader(section) : sectionHeader(section)}
               </View>,
-              ...section.data.map((item, i) => (
-                <StockRow
-                  key={item.code}
-                  stock={item}
-                  showKrw={showKrw}
-                  afterCost={afterCost}
-                  live={quoteLive(item.quote, now, feedOk)}
-                  onPress={openStock}
-                  onLongPress={longPress}
-                  {...(fold.on ? { onLayoutRow: rowLayout } : null)}
-                  {...(plans
-                    ? { columns: section.key === "held" ? plans.held : plans.watch, zebra: i % 2 === 1, weight: weights!.byCode.get(item.code) ?? null, weightMax: weights!.max }
-                    : null)}
-                />
-              )),
+              // 줄은 목록에 바로 놓는다. 종목 상세에서 ‹ › 로 넘겨 본 뒤 돌아오면 마지막에 본 줄만 강조 틀(mark.wrap)로 감싼다 —
+              // 감싼 줄은 틀 안에서 y=0 이므로 이어 보기 줄 위치는 줄 대신 틀이 알린다 (휴대폰 목록·넓은 표 모두)
+              ...section.data.map((item, i) => {
+                const marked = mark.code === item.code;
+                const row = (
+                  <StockRow
+                    key={item.code}
+                    stock={item}
+                    showKrw={showKrw}
+                    afterCost={afterCost}
+                    live={quoteLive(item.quote, now, feedOk)}
+                    onPress={openStock}
+                    onLongPress={longPress}
+                    {...(fold.on && !marked ? { onLayoutRow: rowLayout } : null)}
+                    {...(plans
+                      ? section.key === "held"
+                        ? { columns: plans.held, zebra: i % 2 === 1, weight: weights!.byCode.get(item.code) ?? null, weightMax: weights!.max }
+                        : // 관심 줄은 비중을 쓰지 않는다: 최대 비중이 바뀔 때마다 관심 줄까지 다시 그리지 않게
+                          { columns: plans.watch, zebra: i % 2 === 1 }
+                      : null)}
+                  />
+                );
+                return mark.wrap(item.code, row, fold.on ? (e) => rowLayout(item, e.nativeEvent.layout.y, e.nativeEvent.layout.height) : undefined);
+              }),
             ])}
       </ScrollView>
       <SortSheet visible={sortOpen} value={sort} onClose={() => setSortOpen(false)} onPick={(k) => void setSort(k)} />

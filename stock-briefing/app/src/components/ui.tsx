@@ -245,12 +245,15 @@ export function Row({ label, value, valueStyle }: { label: string; value: React.
   );
 }
 
-/** 시세표 한 칸: 왼쪽 항목명, 오른쪽 값 (2열 격자에 쓴다) */
-export function Stat({ label, value, tone, change }: { label: string; value: React.ReactNode; tone?: "up" | "down"; change?: number | null }) {
+/**
+ * 시세표 한 칸: 왼쪽 항목명, 오른쪽 값 (2열 격자에 쓴다).
+ * dense: 넓은 창 종목 상세 시세표(3-42)의 촘촘한 줄 — 글자 크기는 같고 위아래 여백만 줄인다 (설계 목업의 줄 높이 약 26)
+ */
+export function Stat({ label, value, tone, change, dense = false }: { label: string; value: React.ReactNode; tone?: "up" | "down"; change?: number | null; dense?: boolean }) {
   const t = useTheme();
   const color = tone === "up" ? t.up : tone === "down" ? t.down : change !== undefined ? changeColor(t, change) : t.ink;
   return (
-    <View style={[styles.stat, { borderBottomColor: t.line }]}>
+    <View style={[styles.stat, dense ? styles.statDense : null, { borderBottomColor: t.line }]}>
       <Text style={{ color: t.muted, fontSize: font.small }}>{label}</Text>
       {typeof value === "string" || typeof value === "number" ? (
         <Text style={[{ color, fontSize: font.small, fontWeight: "600" }, NUM]} numberOfLines={1} adjustsFontSizeToFit>
@@ -304,5 +307,6 @@ const styles = StyleSheet.create({
   kv: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   grid: { flexDirection: "row", flexWrap: "wrap", columnGap: space.lg },
   stat: { width: "47%", flexGrow: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.s },
+  statDense: { paddingVertical: space.xs },
   tableHead: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.s, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
 });

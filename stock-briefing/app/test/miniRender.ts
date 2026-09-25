@@ -5,6 +5,8 @@ import React from "react";
  * 입력 칸의 초안이 다시 그릴 때 남는지·지워지는지 같은 회귀(PF-06·07)를 노드 환경에서 본다.
  *  - 같은 자리·같은 타입·같은 key 면 상태 유지, key 나 타입이 바뀌면 새로 만든다 (React 재조정 규칙)
  *  - 훅: useState·useReducer·useEffect·useLayoutEffect·useMemo·useCallback·useRef·useContext(가까운 Provider 값, 없으면 기본값)
+ *    · useSyncExternalStore(react-query 의 useQuery 가 쓴다): 그린 뒤 구독하고, 저장소가 알려 오면 값이 바뀐 경우에만 바로 다시 그린다
+ *      → 체결이 와도 다시 그리지 않는지(렌더 횟수)를 실제 QueryClient 로 볼 수 있다
  *  - 그리는 중 자기 상태를 바꾸면(이전 렌더 값 저장 패턴) 그 컴포넌트를 바로 다시 그린다
  *  - 문자열 타입 요소만 결과 트리에 남긴다 (RN 부품은 테스트에서 문자열 타입으로 가짜 모듈을 둔다)
  */
@@ -38,6 +40,7 @@ export function render(element: React.ReactElement) {
   const instances = new Map<string, Instance>();
   const typeIds = new WeakMap<object, number>();
   let dirty = false;
+  let flushing = false;
   const effects: (() => void)[] = [];
   let current: Instance | null = null;
   let cursor = 0;
@@ -83,6 +86,25 @@ export function render(element: React.ReactElement) {
     inst.hooks[i] = { value, deps };
     return value;
   }
+  // 외부 저장소: 그린 뒤 구독(effect 와 같은 때), 알림이 오면 값이 바뀐 경우에만 다시 그린다 (React 와 같은 규칙)
+  function storeHook(subscribe: (onChange: () => void) => () => void, getSnapshot: () => unknown) {
+    const { inst, i } = hookOf();
+    const value = getSnapshot();
+    if (!(i in inst.hooks)) inst.hooks[i] = { value, get: getSnapshot };
+    const box = inst.hooks[i] as { value: unknown; get: () => unknown };
+    box.value = value;
+    box.get = getSnapshot;
+    effect(
+      () =>
+        subscribe(() => {
+          if (inst.dead || Object.is(box.get(), box.value)) return;
+          dirty = true;
+          if (!flushing) flush();
+        }),
+      [subscribe],
+    );
+    return value;
+  }
   function refHook(init: unknown) {
     const { inst, i } = hookOf();
     if (!(i in inst.hooks)) inst.hooks[i] = { current: init };
@@ -99,6 +121,7 @@ export function render(element: React.ReactElement) {
     useCallback: (fn: unknown, deps: Deps) => memoHook(() => fn, deps),
     useRef: refHook,
     useContext: (ctx: { _currentValue: unknown }) => ctx._currentValue,
+    useSyncExternalStore: storeHook,
     useDebugValue() {},
   };
 
@@ -183,14 +206,19 @@ export function render(element: React.ReactElement) {
     while (effects.length) effects.shift()!();
   };
 
-  const flush = () => {
+  function flush() {
     let n = 0;
-    do {
-      dirty = false;
-      pass();
-      if (++n > 25) throw new Error("다시 그리기가 끝나지 않습니다");
-    } while (dirty);
-  };
+    flushing = true;
+    try {
+      do {
+        dirty = false;
+        pass();
+        if (++n > 25) throw new Error("다시 그리기가 끝나지 않습니다");
+      } while (dirty);
+    } finally {
+      flushing = false;
+    }
+  }
 
   flush();
 

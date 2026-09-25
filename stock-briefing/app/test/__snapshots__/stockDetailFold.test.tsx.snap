@@ -1,0 +1,2126 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`플래그 꺼짐·좁은 창: 지금 화면 그대로 (바꾸기 전 스냅숏) > apple: 폴드8 펼침 가로 크기라도 플래그가 꺼져 있으면 지금 화면 1`] = `
+[
+  {
+    "children": [
+      {
+        "children": [],
+        "props": {
+          "options": {
+            "headerRight": "[fn]",
+            "title": "애플",
+          },
+        },
+        "type": "StackScreen",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "AAPL",
+              " · ",
+              "NASDAQ",
+              "",
+              "",
+            ],
+            "props": {
+              "numberOfLines": 1,
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 28,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "800",
+                          "letterSpacing": -0.6,
+                        },
+                        {
+                          "color": "#1E62E6",
+                        },
+                      ],
+                      "text": "254.40",
+                      "value": 254.4,
+                    },
+                    "type": "FlashPrice",
+                  },
+                  {
+                    "children": [
+                      "USD",
+                    ],
+                    "props": {
+                      "style": {
+                        "color": "#646B77",
+                        "fontSize": 14,
+                      },
+                    },
+                    "type": "Text",
+                  },
+                ],
+                "props": {
+                  "style": {
+                    "alignItems": "baseline",
+                    "flexDirection": "row",
+                    "gap": 6,
+                    "marginTop": 2,
+                  },
+                },
+                "type": "View",
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "▼4.10",
+                    ],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 14,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "700",
+                        },
+                        {
+                          "color": "#1E62E6",
+                        },
+                      ],
+                    },
+                    "type": "Text",
+                  },
+                  {
+                    "children": [
+                      "-1.59%",
+                    ],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 14,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "700",
+                        },
+                        {
+                          "color": "#1E62E6",
+                        },
+                      ],
+                    },
+                    "type": "Text",
+                  },
+                ],
+                "props": {
+                  "style": {
+                    "alignItems": "center",
+                    "flexDirection": "row",
+                    "gap": 8,
+                  },
+                },
+                "type": "View",
+              },
+            ],
+            "props": {
+              "accessibilityLabel": "현재가 254.40달러, 4.10달러 하락, 1.59% 하락",
+              "accessible": true,
+              "style": {
+                "gap": 2,
+              },
+            },
+            "type": "View",
+          },
+          {
+            "children": [
+              "353,998원",
+              " · 환율 ",
+              "1,391.50",
+            ],
+            "props": {
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+                "fontVariant": [
+                  "tabular-nums",
+                ],
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              "TEST",
+              " · ",
+              "9월 23일 (수) 10:00",
+              "",
+            ],
+            "props": {
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+                "fontVariant": [
+                  "tabular-nums",
+                ],
+              },
+            },
+            "type": "Text",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "gap": 2,
+              "paddingBottom": 12,
+              "paddingHorizontal": 14,
+              "paddingTop": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderBottomColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "props": {
+              "avgPrice": 180,
+              "candles": undefined,
+              "currency": "USD",
+              "loading": false,
+              "onFullscreen": "[fn]",
+              "onPeriodChange": "[fn]",
+              "period": "D",
+              "quote": {
+                "asOf": "2026-09-23T10:00:00+09:00",
+                "bps": null,
+                "change": -4.1,
+                "changeRate": -1.59,
+                "code": "AAPL",
+                "currency": "USD",
+                "eps": null,
+                "fxRate": 1391.5,
+                "high": 257,
+                "high52w": null,
+                "low": 253,
+                "low52w": null,
+                "marketCap": 3780000000000,
+                "open": 256,
+                "pbr": null,
+                "per": null,
+                "prevClose": 258.5,
+                "price": 254.4,
+                "source": "test",
+                "volume": 48210000,
+              },
+            },
+            "type": "CandleChart",
+          },
+          {
+            "children": [],
+            "props": {
+              "query": {
+                "data": undefined,
+                "error": null,
+                "isError": false,
+                "isLoading": false,
+                "refetch": "[fn]",
+              },
+            },
+            "type": "ChartNotice",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "시세",
+            ],
+            "props": {
+              "style": {
+                "color": "#15181D",
+                "fontSize": 14,
+                "fontWeight": "700",
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "props": {
+                  "change": -2.5,
+                  "label": "시가",
+                  "value": "256.00",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "전일",
+                  "value": "258.50",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": -1.5,
+                  "label": "고가",
+                  "value": "257.00",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "거래량",
+                  "value": "4,821만",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": -5.5,
+                  "label": "저가",
+                  "value": "253.00",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "시가총액",
+                  "value": "$3.78T",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "52주 최고",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "52주 최저",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "PER",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "PBR",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "EPS",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "BPS",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "배당수익률",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "주당배당",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+            ],
+            "props": {},
+            "type": "StatGrid",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "잔고",
+            ],
+            "props": {
+              "style": {
+                "color": "#15181D",
+                "fontSize": 14,
+                "fontWeight": "700",
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "props": {
+                  "label": "보유수량",
+                  "value": "30주",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "평균단가",
+                  "value": "180.00",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "평가금액",
+                  "value": "$7,632.00",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "매입금액",
+                  "value": "$5,400.00",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": 1,
+                  "label": "평가손익",
+                  "value": "+$2,232.00",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": 1,
+                  "label": "수익률",
+                  "value": "+41.33%",
+                },
+                "type": "Stat",
+              },
+            ],
+            "props": {},
+            "type": "StatGrid",
+          },
+          {
+            "children": [
+              "원화 기준 (매수 당시 환율)",
+            ],
+            "props": {
+              "style": [
+                {
+                  "color": "#646B77",
+                  "fontSize": 12,
+                  "fontVariant": [
+                    "tabular-nums",
+                  ],
+                },
+                {
+                  "marginTop": 4,
+                },
+              ],
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "props": {
+                  "label": "평가금액",
+                  "value": "10,619,928원",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "매입금액",
+                  "value": "7,302,600원",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": 1,
+                  "label": "평가손익",
+                  "value": "+3,317,328원",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": 1,
+                  "label": "수익률",
+                  "value": "+45.43%",
+                },
+                "type": "Stat",
+              },
+            ],
+            "props": {},
+            "type": "StatGrid",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [],
+        "props": {
+          "onChange": "[fn]",
+          "options": [
+            {
+              "label": "기업개요",
+              "value": "company",
+            },
+            {
+              "label": "가치분석",
+              "value": "value",
+            },
+            {
+              "label": "기술분석",
+              "value": "technical",
+            },
+            {
+              "label": "뉴스·공시",
+              "value": "news",
+            },
+          ],
+          "style": {
+            "marginTop": 2,
+          },
+          "value": "company",
+        },
+        "type": "Segmented",
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "props": {
+              "label": "분석 생성 중",
+            },
+            "type": "Loading",
+          },
+        ],
+        "props": {},
+        "type": "Card",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "최근 브리핑",
+            ],
+            "props": {
+              "style": [
+                {
+                  "color": "#15181D",
+                  "fontSize": 14,
+                  "fontWeight": "700",
+                },
+                {
+                  "paddingHorizontal": 14,
+                  "paddingTop": 8,
+                },
+              ],
+            },
+            "type": "Text",
+          },
+          {
+            "children": [],
+            "props": {
+              "briefing": {
+                "code": "005930",
+                "createdAt": "2026-09-23T11:00:00Z",
+                "date": "2026-09-23",
+                "detail": "# 상세 2",
+                "error": null,
+                "id": 2,
+                "missing": [],
+                "model": "m",
+                "name": "삼성전자",
+                "session": "afternoon",
+                "status": "ok",
+                "summary": "요약 2 첫 줄
+둘째 줄",
+              },
+              "mode": "summary",
+              "showName": false,
+            },
+            "type": "BriefingCard",
+          },
+          {
+            "children": [],
+            "props": {
+              "briefing": {
+                "code": "005930",
+                "createdAt": "2026-09-23T11:00:00Z",
+                "date": "2026-09-23",
+                "detail": "# 상세 1",
+                "error": null,
+                "id": 1,
+                "missing": [],
+                "model": "m",
+                "name": "삼성전자",
+                "session": "morning",
+                "status": "ok",
+                "summary": "요약 1 첫 줄
+둘째 줄",
+              },
+              "mode": "summary",
+              "showName": false,
+            },
+            "type": "BriefingCard",
+          },
+        ],
+        "props": {
+          "style": {
+            "gap": 8,
+          },
+        },
+        "type": "View",
+      },
+    ],
+    "props": {
+      "disclaimer": true,
+      "onRefresh": "[fn]",
+      "refreshing": false,
+      "top": {
+        "el": "StaleBanner",
+        "key": null,
+        "props": {
+          "maxAgeMs": "[fn]",
+          "open": false,
+          "query": {
+            "data": {
+              "avgPrice": 180,
+              "code": "AAPL",
+              "createdAt": "",
+              "evaluation": {
+                "afterCost": null,
+                "costBasis": 5400,
+                "costBasisKrw": 7302600,
+                "costRate": null,
+                "krwCostSource": null,
+                "marketValue": 7632,
+                "profit": 2232,
+                "profitRate": 41.33,
+              },
+              "market": "NASDAQ",
+              "memo": null,
+              "name": "애플",
+              "quantity": 30,
+              "quote": {
+                "asOf": "2026-09-23T10:00:00+09:00",
+                "bps": null,
+                "change": -4.1,
+                "changeRate": -1.59,
+                "code": "AAPL",
+                "currency": "USD",
+                "eps": null,
+                "fxRate": 1391.5,
+                "high": 257,
+                "high52w": null,
+                "low": 253,
+                "low52w": null,
+                "marketCap": 3780000000000,
+                "open": 256,
+                "pbr": null,
+                "per": null,
+                "prevClose": 258.5,
+                "price": 254.4,
+                "source": "test",
+                "volume": 48210000,
+              },
+              "quoteError": null,
+              "registered": true,
+              "updatedAt": "",
+            },
+            "error": null,
+            "isError": false,
+            "isLoading": false,
+            "refetch": "[fn]",
+          },
+        },
+      },
+    },
+    "type": "Screen",
+  },
+]
+`;
+
+exports[`플래그 꺼짐·좁은 창: 지금 화면 그대로 (바꾸기 전 스냅숏) > samsung: 폴드8 펼침 가로 크기라도 플래그가 꺼져 있으면 지금 화면 1`] = `
+[
+  {
+    "children": [
+      {
+        "children": [],
+        "props": {
+          "options": {
+            "headerRight": "[fn]",
+            "title": "삼성전자",
+          },
+        },
+        "type": "StackScreen",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "005930",
+              " · ",
+              "KOSPI",
+              "",
+              "",
+            ],
+            "props": {
+              "numberOfLines": 1,
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 28,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "800",
+                          "letterSpacing": -0.6,
+                        },
+                        {
+                          "color": "#D11A22",
+                        },
+                      ],
+                      "text": "84,300",
+                      "value": 84300,
+                    },
+                    "type": "FlashPrice",
+                  },
+                  {
+                    "children": [
+                      "원",
+                    ],
+                    "props": {
+                      "style": {
+                        "color": "#646B77",
+                        "fontSize": 14,
+                      },
+                    },
+                    "type": "Text",
+                  },
+                ],
+                "props": {
+                  "style": {
+                    "alignItems": "baseline",
+                    "flexDirection": "row",
+                    "gap": 6,
+                    "marginTop": 2,
+                  },
+                },
+                "type": "View",
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "▲1,200",
+                    ],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 14,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "700",
+                        },
+                        {
+                          "color": "#D11A22",
+                        },
+                      ],
+                    },
+                    "type": "Text",
+                  },
+                  {
+                    "children": [
+                      "+1.44%",
+                    ],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 14,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "700",
+                        },
+                        {
+                          "color": "#D11A22",
+                        },
+                      ],
+                    },
+                    "type": "Text",
+                  },
+                ],
+                "props": {
+                  "style": {
+                    "alignItems": "center",
+                    "flexDirection": "row",
+                    "gap": 8,
+                  },
+                },
+                "type": "View",
+              },
+            ],
+            "props": {
+              "accessibilityLabel": "현재가 84,300원, 1,200원 상승, 1.44% 상승",
+              "accessible": true,
+              "style": {
+                "gap": 2,
+              },
+            },
+            "type": "View",
+          },
+          {
+            "children": [
+              "KRX+NXT 통합",
+              " · ",
+              "9월 23일 (수) 10:00",
+              "",
+            ],
+            "props": {
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+                "fontVariant": [
+                  "tabular-nums",
+                ],
+              },
+            },
+            "type": "Text",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "gap": 2,
+              "paddingBottom": 12,
+              "paddingHorizontal": 14,
+              "paddingTop": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderBottomColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "props": {
+              "avgPrice": 71000,
+              "candles": undefined,
+              "currency": "KRW",
+              "loading": false,
+              "onFullscreen": "[fn]",
+              "onPeriodChange": "[fn]",
+              "period": "D",
+              "quote": {
+                "asOf": "2026-09-23T10:00:00+09:00",
+                "bps": 59786,
+                "change": 1200,
+                "changeRate": 1.44,
+                "code": "005930",
+                "currency": "KRW",
+                "dividendPerShare": 1444,
+                "dividendYieldPct": 1.71,
+                "eps": 5688,
+                "high": 84900,
+                "high52w": 88800,
+                "low": 82800,
+                "low52w": 53000,
+                "marketCap": 503000000000000,
+                "open": 83500,
+                "pbr": 1.41,
+                "per": 14.82,
+                "prevClose": 83100,
+                "price": 84300,
+                "priceBasis": "KRX+NXT 통합",
+                "source": "test",
+                "volume": 14832110,
+              },
+            },
+            "type": "CandleChart",
+          },
+          {
+            "children": [],
+            "props": {
+              "query": {
+                "data": undefined,
+                "error": null,
+                "isError": false,
+                "isLoading": false,
+                "refetch": "[fn]",
+              },
+            },
+            "type": "ChartNotice",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "시세",
+            ],
+            "props": {
+              "style": {
+                "color": "#15181D",
+                "fontSize": 14,
+                "fontWeight": "700",
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "props": {
+                  "change": 400,
+                  "label": "시가",
+                  "value": "83,500",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "전일",
+                  "value": "83,100",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": 1800,
+                  "label": "고가",
+                  "value": "84,900",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "거래량",
+                  "value": "1,483만",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": -300,
+                  "label": "저가",
+                  "value": "82,800",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "시가총액",
+                  "value": "503조원",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "52주 최고",
+                  "value": "88,800",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "52주 최저",
+                  "value": "53,000",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "PER",
+                  "value": "14.82배",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "PBR",
+                  "value": "1.41배",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "EPS",
+                  "value": "5,688",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "BPS",
+                  "value": "59,786",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "배당수익률",
+                  "value": "1.71%",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "주당배당",
+                  "value": "1,444",
+                },
+                "type": "Stat",
+              },
+            ],
+            "props": {},
+            "type": "StatGrid",
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [],
+                    "props": {
+                      "style": [
+                        {
+                          "borderRadius": 1,
+                          "height": 12,
+                          "marginLeft": -4,
+                          "position": "absolute",
+                          "top": -4,
+                          "width": 8,
+                        },
+                        {
+                          "backgroundColor": "#D11A22",
+                          "left": "87%",
+                        },
+                      ],
+                    },
+                    "type": "View",
+                  },
+                ],
+                "props": {
+                  "style": [
+                    {
+                      "borderRadius": 2,
+                      "height": 4,
+                      "justifyContent": "center",
+                    },
+                    {
+                      "backgroundColor": "#F5F6F8",
+                    },
+                  ],
+                },
+                "type": "View",
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "52주 저 ",
+                      "53,000",
+                    ],
+                    "props": {
+                      "style": {
+                        "color": "#646B77",
+                        "fontSize": 12,
+                        "fontVariant": [
+                          "tabular-nums",
+                        ],
+                      },
+                    },
+                    "type": "Text",
+                  },
+                  {
+                    "children": [
+                      "87",
+                      "%",
+                    ],
+                    "props": {
+                      "style": {
+                        "color": "#646B77",
+                        "fontSize": 12,
+                        "fontVariant": [
+                          "tabular-nums",
+                        ],
+                      },
+                    },
+                    "type": "Text",
+                  },
+                  {
+                    "children": [
+                      "고 ",
+                      "88,800",
+                    ],
+                    "props": {
+                      "style": {
+                        "color": "#646B77",
+                        "fontSize": 12,
+                        "fontVariant": [
+                          "tabular-nums",
+                        ],
+                      },
+                    },
+                    "type": "Text",
+                  },
+                ],
+                "props": {
+                  "style": {
+                    "flexDirection": "row",
+                    "justifyContent": "space-between",
+                  },
+                },
+                "type": "View",
+              },
+            ],
+            "props": {
+              "style": {
+                "gap": 2,
+                "marginTop": 6,
+              },
+            },
+            "type": "View",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "잔고",
+            ],
+            "props": {
+              "style": {
+                "color": "#15181D",
+                "fontSize": 14,
+                "fontWeight": "700",
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "props": {
+                  "label": "보유수량",
+                  "value": "120주",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "평균단가",
+                  "value": "71,000",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "평가금액",
+                  "value": "10,116,000원",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "매입금액",
+                  "value": "8,520,000원",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": 1,
+                  "label": "평가손익",
+                  "value": "+1,596,000원",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": 1,
+                  "label": "수익률",
+                  "value": "+18.73%",
+                },
+                "type": "Stat",
+              },
+            ],
+            "props": {},
+            "type": "StatGrid",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [],
+        "props": {
+          "onChange": "[fn]",
+          "options": [
+            {
+              "label": "기업개요",
+              "value": "company",
+            },
+            {
+              "label": "가치분석",
+              "value": "value",
+            },
+            {
+              "label": "기술분석",
+              "value": "technical",
+            },
+            {
+              "label": "뉴스·공시",
+              "value": "news",
+            },
+          ],
+          "style": {
+            "marginTop": 2,
+          },
+          "value": "company",
+        },
+        "type": "Segmented",
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "props": {
+              "label": "분석 생성 중",
+            },
+            "type": "Loading",
+          },
+        ],
+        "props": {},
+        "type": "Card",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "최근 브리핑",
+            ],
+            "props": {
+              "style": [
+                {
+                  "color": "#15181D",
+                  "fontSize": 14,
+                  "fontWeight": "700",
+                },
+                {
+                  "paddingHorizontal": 14,
+                  "paddingTop": 8,
+                },
+              ],
+            },
+            "type": "Text",
+          },
+          {
+            "children": [],
+            "props": {
+              "briefing": {
+                "code": "005930",
+                "createdAt": "2026-09-23T11:00:00Z",
+                "date": "2026-09-23",
+                "detail": "# 상세 2",
+                "error": null,
+                "id": 2,
+                "missing": [],
+                "model": "m",
+                "name": "삼성전자",
+                "session": "afternoon",
+                "status": "ok",
+                "summary": "요약 2 첫 줄
+둘째 줄",
+              },
+              "mode": "summary",
+              "showName": false,
+            },
+            "type": "BriefingCard",
+          },
+          {
+            "children": [],
+            "props": {
+              "briefing": {
+                "code": "005930",
+                "createdAt": "2026-09-23T11:00:00Z",
+                "date": "2026-09-23",
+                "detail": "# 상세 1",
+                "error": null,
+                "id": 1,
+                "missing": [],
+                "model": "m",
+                "name": "삼성전자",
+                "session": "morning",
+                "status": "ok",
+                "summary": "요약 1 첫 줄
+둘째 줄",
+              },
+              "mode": "summary",
+              "showName": false,
+            },
+            "type": "BriefingCard",
+          },
+        ],
+        "props": {
+          "style": {
+            "gap": 8,
+          },
+        },
+        "type": "View",
+      },
+    ],
+    "props": {
+      "disclaimer": true,
+      "onRefresh": "[fn]",
+      "refreshing": false,
+      "top": {
+        "el": "StaleBanner",
+        "key": null,
+        "props": {
+          "maxAgeMs": "[fn]",
+          "open": false,
+          "query": {
+            "data": {
+              "avgPrice": 71000,
+              "code": "005930",
+              "createdAt": "",
+              "evaluation": {
+                "afterCost": null,
+                "costBasis": 8520000,
+                "costBasisKrw": null,
+                "costRate": null,
+                "krwCostSource": null,
+                "marketValue": 10116000,
+                "profit": 1596000,
+                "profitRate": 18.73,
+              },
+              "market": "KOSPI",
+              "memo": null,
+              "name": "삼성전자",
+              "quantity": 120,
+              "quote": {
+                "asOf": "2026-09-23T10:00:00+09:00",
+                "bps": 59786,
+                "change": 1200,
+                "changeRate": 1.44,
+                "code": "005930",
+                "currency": "KRW",
+                "dividendPerShare": 1444,
+                "dividendYieldPct": 1.71,
+                "eps": 5688,
+                "high": 84900,
+                "high52w": 88800,
+                "low": 82800,
+                "low52w": 53000,
+                "marketCap": 503000000000000,
+                "open": 83500,
+                "pbr": 1.41,
+                "per": 14.82,
+                "prevClose": 83100,
+                "price": 84300,
+                "priceBasis": "KRX+NXT 통합",
+                "source": "test",
+                "volume": 14832110,
+              },
+              "quoteError": null,
+              "registered": true,
+              "updatedAt": "",
+            },
+            "error": null,
+            "isError": false,
+            "isLoading": false,
+            "refetch": "[fn]",
+          },
+        },
+      },
+    },
+    "type": "Screen",
+  },
+]
+`;
+
+exports[`플래그 꺼짐·좁은 창: 지금 화면 그대로 (바꾸기 전 스냅숏) > unregistered: 폴드8 펼침 가로 크기라도 플래그가 꺼져 있으면 지금 화면 1`] = `
+[
+  {
+    "children": [
+      {
+        "children": [],
+        "props": {
+          "options": {
+            "headerRight": "[fn]",
+            "title": "카카오",
+          },
+        },
+        "type": "StackScreen",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "035720",
+              " · ",
+              "KOSPI",
+              "",
+              " · 미등록",
+            ],
+            "props": {
+              "numberOfLines": 1,
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 28,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "800",
+                          "letterSpacing": -0.6,
+                        },
+                        {
+                          "color": "#1E62E6",
+                        },
+                      ],
+                      "text": "41,000",
+                      "value": 41000,
+                    },
+                    "type": "FlashPrice",
+                  },
+                  {
+                    "children": [
+                      "원",
+                    ],
+                    "props": {
+                      "style": {
+                        "color": "#646B77",
+                        "fontSize": 14,
+                      },
+                    },
+                    "type": "Text",
+                  },
+                ],
+                "props": {
+                  "style": {
+                    "alignItems": "baseline",
+                    "flexDirection": "row",
+                    "gap": 6,
+                    "marginTop": 2,
+                  },
+                },
+                "type": "View",
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      "▼300",
+                    ],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 14,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "700",
+                        },
+                        {
+                          "color": "#1E62E6",
+                        },
+                      ],
+                    },
+                    "type": "Text",
+                  },
+                  {
+                    "children": [
+                      "-0.73%",
+                    ],
+                    "props": {
+                      "style": [
+                        {
+                          "fontSize": 14,
+                          "fontVariant": [
+                            "tabular-nums",
+                          ],
+                          "fontWeight": "700",
+                        },
+                        {
+                          "color": "#1E62E6",
+                        },
+                      ],
+                    },
+                    "type": "Text",
+                  },
+                ],
+                "props": {
+                  "style": {
+                    "alignItems": "center",
+                    "flexDirection": "row",
+                    "gap": 8,
+                  },
+                },
+                "type": "View",
+              },
+            ],
+            "props": {
+              "accessibilityLabel": "현재가 41,000원, 300원 하락, 0.73% 하락",
+              "accessible": true,
+              "style": {
+                "gap": 2,
+              },
+            },
+            "type": "View",
+          },
+          {
+            "children": [
+              "TEST",
+              " · ",
+              "9월 23일 (수) 10:00",
+              "",
+            ],
+            "props": {
+              "style": {
+                "color": "#646B77",
+                "fontSize": 12,
+                "fontVariant": [
+                  "tabular-nums",
+                ],
+              },
+            },
+            "type": "Text",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "gap": 2,
+              "paddingBottom": 12,
+              "paddingHorizontal": 14,
+              "paddingTop": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderBottomColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "props": {
+              "avgPrice": null,
+              "candles": undefined,
+              "currency": "KRW",
+              "loading": false,
+              "onFullscreen": "[fn]",
+              "onPeriodChange": "[fn]",
+              "period": "D",
+              "quote": {
+                "asOf": "2026-09-23T10:00:00+09:00",
+                "bps": null,
+                "change": -300,
+                "changeRate": -0.73,
+                "code": "035720",
+                "currency": "KRW",
+                "eps": null,
+                "high": null,
+                "high52w": null,
+                "low": null,
+                "low52w": null,
+                "marketCap": null,
+                "open": null,
+                "pbr": null,
+                "per": null,
+                "prevClose": null,
+                "price": 41000,
+                "source": "test",
+                "volume": null,
+              },
+            },
+            "type": "CandleChart",
+          },
+          {
+            "children": [],
+            "props": {
+              "query": {
+                "data": undefined,
+                "error": null,
+                "isError": false,
+                "isLoading": false,
+                "refetch": "[fn]",
+              },
+            },
+            "type": "ChartNotice",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "시세",
+            ],
+            "props": {
+              "style": {
+                "color": "#15181D",
+                "fontSize": 14,
+                "fontWeight": "700",
+              },
+            },
+            "type": "Text",
+          },
+          {
+            "children": [
+              {
+                "children": [],
+                "props": {
+                  "change": null,
+                  "label": "시가",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "전일",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": null,
+                  "label": "고가",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "거래량",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "change": null,
+                  "label": "저가",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "시가총액",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "52주 최고",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "52주 최저",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "PER",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "PBR",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "EPS",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "BPS",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "배당수익률",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+              {
+                "children": [],
+                "props": {
+                  "label": "주당배당",
+                  "value": "-",
+                },
+                "type": "Stat",
+              },
+            ],
+            "props": {},
+            "type": "StatGrid",
+          },
+        ],
+        "props": {
+          "style": [
+            {
+              "borderBottomWidth": 1,
+              "borderTopWidth": 1,
+              "gap": 8,
+              "paddingHorizontal": 14,
+              "paddingVertical": 12,
+            },
+            {
+              "backgroundColor": "#FFFFFF",
+              "borderColor": "#E4E7EB",
+            },
+          ],
+        },
+        "type": "View",
+      },
+      {
+        "children": [],
+        "props": {
+          "onChange": "[fn]",
+          "options": [
+            {
+              "label": "기업개요",
+              "value": "company",
+            },
+            {
+              "label": "가치분석",
+              "value": "value",
+            },
+            {
+              "label": "기술분석",
+              "value": "technical",
+            },
+            {
+              "label": "뉴스·공시",
+              "value": "news",
+            },
+          ],
+          "style": {
+            "marginTop": 2,
+          },
+          "value": "company",
+        },
+        "type": "Segmented",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.",
+            ],
+            "props": {},
+            "type": "Muted",
+          },
+          {
+            "children": [],
+            "props": {
+              "icon": "sparkles",
+              "onPress": "[fn]",
+              "title": "AI 분석 만들기",
+            },
+            "type": "Button",
+          },
+        ],
+        "props": {},
+        "type": "Card",
+      },
+      {
+        "children": [
+          {
+            "children": [
+              "최근 브리핑",
+            ],
+            "props": {
+              "style": [
+                {
+                  "color": "#15181D",
+                  "fontSize": 14,
+                  "fontWeight": "700",
+                },
+                {
+                  "paddingHorizontal": 14,
+                  "paddingTop": 8,
+                },
+              ],
+            },
+            "type": "Text",
+          },
+          {
+            "children": [],
+            "props": {
+              "briefing": {
+                "code": "005930",
+                "createdAt": "2026-09-23T11:00:00Z",
+                "date": "2026-09-23",
+                "detail": "# 상세 2",
+                "error": null,
+                "id": 2,
+                "missing": [],
+                "model": "m",
+                "name": "삼성전자",
+                "session": "afternoon",
+                "status": "ok",
+                "summary": "요약 2 첫 줄
+둘째 줄",
+              },
+              "mode": "summary",
+              "showName": false,
+            },
+            "type": "BriefingCard",
+          },
+          {
+            "children": [],
+            "props": {
+              "briefing": {
+                "code": "005930",
+                "createdAt": "2026-09-23T11:00:00Z",
+                "date": "2026-09-23",
+                "detail": "# 상세 1",
+                "error": null,
+                "id": 1,
+                "missing": [],
+                "model": "m",
+                "name": "삼성전자",
+                "session": "morning",
+                "status": "ok",
+                "summary": "요약 1 첫 줄
+둘째 줄",
+              },
+              "mode": "summary",
+              "showName": false,
+            },
+            "type": "BriefingCard",
+          },
+        ],
+        "props": {
+          "style": {
+            "gap": 8,
+          },
+        },
+        "type": "View",
+      },
+    ],
+    "props": {
+      "disclaimer": true,
+      "onRefresh": "[fn]",
+      "refreshing": false,
+      "top": {
+        "el": "StaleBanner",
+        "key": null,
+        "props": {
+          "maxAgeMs": "[fn]",
+          "open": false,
+          "query": {
+            "data": {
+              "avgPrice": null,
+              "code": "035720",
+              "createdAt": "",
+              "evaluation": null,
+              "market": "KOSPI",
+              "memo": null,
+              "name": "카카오",
+              "quantity": null,
+              "quote": {
+                "asOf": "2026-09-23T10:00:00+09:00",
+                "bps": null,
+                "change": -300,
+                "changeRate": -0.73,
+                "code": "035720",
+                "currency": "KRW",
+                "eps": null,
+                "high": null,
+                "high52w": null,
+                "low": null,
+                "low52w": null,
+                "marketCap": null,
+                "open": null,
+                "pbr": null,
+                "per": null,
+                "prevClose": null,
+                "price": 41000,
+                "source": "test",
+                "volume": null,
+              },
+              "quoteError": null,
+              "registered": false,
+              "updatedAt": "",
+            },
+            "error": null,
+            "isError": false,
+            "isLoading": false,
+            "refetch": "[fn]",
+          },
+        },
+      },
+    },
+    "type": "Screen",
+  },
+]
+`;
