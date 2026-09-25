@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
-import type { QuoteSession } from "../src/domain/types.js";
+import type { Quote, QuoteSession } from "../src/domain/types.js";
 import type { MarketCalendar, MarketState, MarketStatus } from "../src/providers/market/calendar.js";
 import type { StockSessionFacts } from "../src/providers/market/tossRealtime.js";
 import { sessionAt, toQuoteSession } from "../src/services/liveSession.js";
+import type { RegisteredWithQuote } from "../src/services/stockService.js";
 import { buildWidgetPayload, marketChip, sessionViews } from "../src/services/widgetPayload.js";
 import { fakeIndexSource, fakeIndices, fakeProviders, FakeGenerator } from "./helpers.js";
 
@@ -379,5 +380,40 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
       expect(buildWidgetPayload([], [], null, { features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true }, board: [] })).not.toHaveProperty("board");
       expect(buildWidgetPayload([], [], null, { features: { widgetPnlToggle: true, widgetIndexLine: true }, board: [] })).not.toHaveProperty("board");
     });
+  });
+});
+
+/** 버그 점검 BH-04: 서버 보강이 시간 초과로 끝나 환율이 빠진 달러 시세 — 위젯이 그 종목을 합계에서 말없이 빼지 않게 환율을 채워 보낸다 */
+describe("위젯 응답: 환율이 빠진 달러 시세 (BH-04)", () => {
+  const row = (code: string, quote: Partial<Quote> | null, quantity: number | null = 10): RegisteredWithQuote => ({
+    code,
+    name: code,
+    market: quote?.currency === "USD" ? "NASDAQ" : "KOSPI",
+    quantity,
+    avgPrice: quantity ? 100 : null,
+    memo: null,
+    createdAt: "",
+    updatedAt: "",
+    quoteError: null,
+    evaluation: null,
+    quote: quote ? ({ code, currency: "KRW", price: 100, change: 0, changeRate: 0, asOf: "2026-09-22T10:00:00+09:00", ...quote } as Quote) : null,
+  });
+  const fxOfRow = (p: ReturnType<typeof buildWidgetPayload>, code: string) => p.stocks.find((s) => s.c === code)!.q![5];
+
+  it("같은 응답의 다른 달러 시세 환율로 채운다 (관심 종목 시세 포함)", () => {
+    const p = buildWidgetPayload([row("005930", { price: 72_000 }), row("NVDA", { currency: "USD", price: 180, priceKrw: 250_200 }), row("AAPL", { currency: "USD", price: 200, fxRate: 1391.5 }, null)], [], null);
+    expect(fxOfRow(p, "NVDA")).toBe(1391.5);
+    expect(fxOfRow(p, "AAPL")).toBe(1391.5);
+    expect(fxOfRow(p, "005930")).toBeNull(); // 원화 종목은 그대로 없음
+  });
+
+  it("다른 환율이 없으면 원화 환산가 ÷ 가격", () => {
+    const p = buildWidgetPayload([row("NVDA", { currency: "USD", price: 180, priceKrw: 250_200 })], [], null);
+    expect(fxOfRow(p, "NVDA")).toBe(1390);
+  });
+
+  it("둘 다 없으면 예전처럼 null", () => {
+    const p = buildWidgetPayload([row("NVDA", { currency: "USD", price: 180 })], [], null);
+    expect(fxOfRow(p, "NVDA")).toBeNull();
   });
 });

@@ -94,8 +94,9 @@ describe("비중 보기: 잔고 탭과 같은 기준", () => {
     expect(allocation([samsung, apple], true).charts[0]!.slices.map((s) => s.slot)).toEqual([0, 1]);
   });
 
-  it("환율을 모르는 해외 종목이 있으면 잔고 탭처럼 원화 종목만: 해외는 빼고 알린다", () => {
-    const list = [samsung, apple, noFx];
+  it("환율을 끝내 모르는 해외 종목이 있으면 잔고 탭처럼 원화 종목만: 해외는 빼고 알린다", () => {
+    const usd2 = holding("NVDA", quote("NVDA", 180, { currency: "USD" }), 1, 150, undefined, "엔비디아");
+    const list = [samsung, usd2, noFx];
     const a = allocation(list, true);
     expect(a.krwOnly).toBe(true);
     expect(a.total).toBe(720_000);
@@ -103,6 +104,17 @@ describe("비중 보기: 잔고 탭과 같은 기준", () => {
     expect(a.excluded).toEqual({ noQuote: 0, noEval: 0, noFx: 2 });
     expect(excludedNote(a.excluded)).toBe("환율 정보가 없는 해외 2종목 제외");
     expect(chart(a, "market").slices.map((s) => [s.label, s.pct])).toEqual([["국내", 100]]);
+    expectConsistent(a);
+  });
+
+  // 버그 점검 BH-04: 환율이 빠진 달러 시세는 다른 달러 시세의 환율로 (잔고 탭 합계와 같은 기준)
+  it("환율이 빠진 해외 종목은 다른 달러 시세의 환율로 환산해 넣는다", () => {
+    const list = [samsung, apple, noFx];
+    const a = allocation(list, true);
+    expect(a.krwOnly).toBe(false);
+    expect(a.total).toBe(720_000 + 800 * FX + 500 * FX);
+    expect(a.total).toBe(accountTotal(list, true));
+    expect(a.excluded).toEqual({ noQuote: 0, noEval: 0, noFx: 0 });
     expectConsistent(a);
   });
 

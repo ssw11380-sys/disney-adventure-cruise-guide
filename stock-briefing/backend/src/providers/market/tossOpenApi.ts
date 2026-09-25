@@ -76,6 +76,11 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** 등락: 1달러 미만 미국 종목은 $0.0001 단위로 거래되므로 소수 4자리까지 */
+function round4(n: number): number {
+  return Math.round(n * 1e4) / 1e4;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** 토큰 발급·갱신과 공통 요청 처리 */
@@ -627,8 +632,9 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
     // 다음 소스(기준가를 주는 토스 웹)로 넘긴다 — 상장 첫날 +280% 종목이 "0 · 0.00%"로 보이지 않게
     if (prevClose === null)
       throw new ProviderError(this.name, dailyError ? `${code} 일봉을 받지 못해 전일 종가를 모름` : `${code} 전일 종가 없음 (상장 첫날)`, dailyError ?? undefined);
-    const change = round2(price - prevClose);
-    const changeRate = prevClose ? round2((change / prevClose) * 100) : 0;
+    // 등락률은 반올림 전 차이로 — 센트로 반올림한 등락으로 내면 $0.0500 → $0.0537 이 0.00% 가 된다 (+7.40%)
+    const change = round4(price - prevClose);
+    const changeRate = prevClose ? round2(((price - prevClose) / prevClose) * 100) : 0;
     const currency = String(p["currency"] ?? (kr ? "KRW" : "USD")) === "USD" ? "USD" : "KRW";
     const shares = num(info?.sharesOutstanding);
     const yearAgo = new Date(this.now().getTime() - 365 * 86_400_000).toISOString().slice(0, 10);

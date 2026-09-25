@@ -209,6 +209,33 @@ describe("PF-06: 종목 등록 양식 — 다른 종목을 고르면 수량·평
     press(r, "삼성전자 등록");
     expect(h.register.mock.calls[0][0]).toEqual({ code: "005930", quantity: 10, avgPrice: 70000 });
   });
+
+  // 버그 점검 BH-26: 평단 없이 수량만 넣으면 평가손익을 못 내 합계에서 빠진다 → 등록 전에 알리고 고르게 한다
+  it("수량만 넣고 평단을 비우면 합계에서 빠진다고 먼저 묻고, '그대로 등록'이면 등록한다", () => {
+    const r = open();
+    search(r, "삼성");
+    press(r, "삼성전자 등록");
+    fill(r, "10", "");
+    press(r, "삼성전자 등록");
+    expect(h.register).not.toHaveBeenCalled();
+    expect(h.alert).toHaveBeenCalledTimes(1);
+    const [title, body, buttons] = h.alert.mock.calls[0] as [string, string, { text: string; style?: string; onPress?: () => void }[]];
+    expect(title).toBe("평균 단가 없음");
+    expect(body).toContain("합계에서 빠집니다");
+    expect(buttons.map((b) => b.text)).toEqual(["취소", "그대로 등록"]);
+    r.act(() => buttons[1]!.onPress!());
+    expect(h.register.mock.calls[0][0]).toEqual({ code: "005930", quantity: 10, avgPrice: null });
+  });
+
+  it("평단만 넣고 수량을 비우면 관심 종목으로 (묻지 않음)", () => {
+    const r = open();
+    search(r, "삼성");
+    press(r, "삼성전자 등록");
+    fill(r, "", "70000");
+    press(r, "삼성전자 등록");
+    expect(h.alert).not.toHaveBeenCalled();
+    expect(h.register.mock.calls[0][0]).toEqual({ code: "005930", quantity: null, avgPrice: 70000 });
+  });
 });
 
 describe("PF-07: 보유 수정 — 같은 종목의 서버 값이 바뀌어도 입력 중인 초안을 지킨다", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fxOf, summarize, totals } from "@/lib/portfolio";
+import { excludedLabel, fxOf, isHolding, sortHoldings, splitHoldings, summarize, totals } from "@/lib/portfolio";
 import { excludedCount, widgetOrder as order } from "@/widgets/model";
 import { holding, quote } from "./helpers";
 
@@ -73,7 +73,7 @@ describe("위젯 합계 totals", () => {
 
   it("원화만: 원화 합계", () => {
     const t = totals([samsung, hynix], false)!;
-    expect(t).toEqual({ value: 1_410_000, day: 4000, profit: 1_410_000 - 1_450_000, currency: "KRW", mixed: false });
+    expect(t).toEqual({ value: 1_410_000, day: 4000, profit: 1_410_000 - 1_450_000, currency: "KRW", mixed: false, excluded: { noQuote: 0, noEval: 0, noFx: 0 } });
   });
 
   it("달러만 + 원화 표시 꺼짐: 달러 그대로", () => {
@@ -154,5 +154,117 @@ describe("위젯-3: 시세 없는 보유 종목", () => {
   it("합계에서 빠진 수를 센다", () => {
     expect(excludedCount([noQuoteHeld, hynix, watchOnly])).toBe(1);
     expect(totals([noQuoteHeld, hynix], false)!.value).toBe(690_000);
+  });
+});
+
+/** 버그 점검 BH-04: 환율을 모르는 달러 종목이 합계에서 말없이 빠지던 문제 */
+describe("BH-04: 환율 모르는 달러 종목", () => {
+  // 위젯 응답처럼 환율·원화 환산가가 모두 빠진 달러 시세 (서버 보강이 시간 초과로 끝난 경우)
+  const nvda = holding("NVDA", quote("NVDA", 180, { currency: "USD", change: 2 }), 100, 120, { costBasisKrw: 16_500_000, krwCostSource: "exact" }, "엔비디아");
+
+  it("다른 달러 시세의 환율로 원화 환산한다 (잔고 화면)", () => {
+    const s = summarize([samsung, apple, nvda], false);
+    expect(s.krw).not.toBeNull();
+    expect(s.krw!.value).toBe(720_000 + 800 * FX + 18_000 * FX);
+    expect(s.krw!.cost).toBe(700_000 + 950_000 + 16_500_000);
+    expect(s.krw!.day).toBe(10 * 1000 + 4 * 1.5 * FX + 100 * 2 * FX);
+    expect(s.excluded).toEqual({ noQuote: 0, noEval: 0, noFx: 0 });
+  });
+
+  it("위젯 합계도 같은 환율로 (잔고 화면과 같은 값)", () => {
+    const list = [samsung, apple, nvda];
+    const t = totals(list, true)!;
+    const s = summarize(list, true);
+    expect(t.value).toBe(s.krw!.value);
+    expect(t.profit).toBe(s.krw!.value - s.krw!.cost);
+    expect(t.day).toBe(s.krw!.day);
+    expect(t.excluded.noFx).toBe(0);
+  });
+
+  it("관심 종목의 달러 시세 환율도 쓴다", () => {
+    const watchUs = holding("MSFT", quote("MSFT", 400, { currency: "USD", fxRate: FX }), null, null, undefined, "마이크로소프트");
+    expect(totals([samsung, nvda, watchUs], true)!.value).toBe(720_000 + 18_000 * FX);
+  });
+
+  it("환율을 끝내 모르면 뺀 종목 수를 알린다 (잔고 화면·위젯 합계)", () => {
+    const s = summarize([samsung, nvda], false);
+    expect(s.krw).toBeNull();
+    expect(s.excluded.noFx).toBe(1);
+    expect(excludedLabel(s.excluded)).toBe("환율 없음 1종목 제외");
+    const t = totals([samsung, nvda], true)!;
+    expect(t.value).toBe(720_000);
+    expect(t.excluded.noFx).toBe(1);
+    expect(excludedLabel(t.excluded)).toBe("환율 없음 1종목 제외");
+  });
+
+  it("달러 종목만 있고 환율을 모르면 0원 대신 달러 합계", () => {
+    const t = totals([nvda], true)!;
+    expect(t.currency).toBe("USD");
+    expect(t.value).toBe(18_000);
+    expect(t.day).toBe(200);
+    expect(t.excluded.noFx).toBe(0);
+  });
+});
+
+/** 버그 점검 BH-26 · BH-30: 평단 없이 수량만 넣은 종목, 첫 시세를 아직 못 받은 보유 종목 */
+describe("BH-26 · BH-30: 평단·시세 없는 보유 종목은 보유로 세고 합계 제외를 알린다", () => {
+  const noAvg = holding("000660", quote("000660", 300_000, { change: 5000 }), 10, null, undefined, "SK하이닉스");
+  const noQuote = { ...holding("AAPL", null, 10, 200, undefined, "애플"), quoteError: "시세를 불러오는 중입니다" };
+
+  it("잔고 요약: 보유 3 · 관심 1, 뺀 이유별 수", () => {
+    const s = summarize([samsung, noAvg, noQuote, watchOnly], false);
+    expect(s.held).toBe(3);
+    expect(s.watch).toBe(1);
+    expect(s.krw!.value).toBe(720_000);
+    expect(s.excluded).toEqual({ noQuote: 1, noEval: 1, noFx: 0 });
+    expect(excludedLabel(s.excluded)).toBe("시세 없음 1종목 · 평단 없음 1종목 제외");
+    expect(excludedLabel({ noQuote: 0, noEval: 0, noFx: 0 })).toBeNull();
+  });
+
+  it("보유가 이런 종목뿐이어도 계좌 평가는 남는다 (held > 0, 0원 + 제외 안내)", () => {
+    const s = summarize([noQuote], false);
+    expect(s.held).toBe(1);
+    expect(s.krw).toEqual({ value: 0, cost: 0, day: 0, count: 0 });
+    expect(excludedLabel(s.excluded)).toBe("시세 없음 1종목 제외");
+  });
+
+  it("잔고 표 구역: 수량이 있으면 보유 (평가 유무와 무관)", () => {
+    const { held, watch } = splitHoldings([watchOnly, noAvg, samsung, noQuote]);
+    expect(held.map((s) => s.code)).toEqual(["000660", "005930", "AAPL"]);
+    expect(watch.map((s) => s.code)).toEqual(["035720"]);
+    expect(isHolding(noAvg)).toBe(true);
+    expect(isHolding(watchOnly)).toBe(false);
+  });
+
+  it("위젯 합계도 뺀 이유를 센다", () => {
+    const t = totals([samsung, noAvg, noQuote], false)!;
+    expect(t.value).toBe(720_000);
+    expect(t.excluded).toEqual({ noQuote: 1, noEval: 1, noFx: 0 });
+  });
+});
+
+/** 버그 점검 BH-51: '평가손익' 정렬이 수익률 순이던 문제 */
+describe("BH-51: 평가손익 정렬은 원화 환산 손익 금액 순", () => {
+  const a = holding("A1", quote("A1", 3_300), 1000, 3_000, undefined, "가"); // +300,000 (+10%)
+  const b = holding("B1", quote("B1", 3_500), 100, 2_500, undefined, "나"); // +100,000 (+40%)
+  const c = holding("C1", quote("C1", 45_000), 1000, 50_000, undefined, "다"); // -5,000,000 (-10%)
+  const d = holding("D1", quote("D1", 500), 100, 1_000, undefined, "라"); // -50,000 (-50%)
+  // 애플: +$80 (+11.1%) → 원화로 800 × 1360 − 950,000 = +138,000
+
+  it("금액 큰 순, 손실은 금액이 큰 것이 맨 아래", () => {
+    const order = sortHoldings([b, d, apple, c, a], "profit", false).map((s) => s.code);
+    expect(order).toEqual(["A1", "AAPL", "B1", "D1", "C1"]);
+  });
+
+  it("달러 종목도 원화로 바꿔 비교한다 (+$80 = +138,000원 > +100,000원)", () => {
+    expect(sortHoldings([b, apple], "profit", true).map((s) => s.code)).toEqual(["AAPL", "B1"]);
+  });
+
+  it("평가금액·등락률·이름 정렬은 그대로", () => {
+    expect(sortHoldings([b, a], "value", true).map((s) => s.code)).toEqual(["A1", "B1"]);
+    const up = holding("U1", quote("U1", 100, { change: 3, changeRate: 3.09 }), 1, 90);
+    const down = holding("D2", quote("D2", 100, { change: -1, changeRate: -0.99 }), 1, 90);
+    expect(sortHoldings([down, up], "changeRate", true).map((s) => s.code)).toEqual(["U1", "D2"]);
+    expect(sortHoldings([b, a], "name", true).map((s) => s.name)).toEqual(["가", "나"]);
   });
 });

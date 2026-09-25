@@ -72,8 +72,11 @@ export function applyTick(quote: Quote | null, tick: StreamTick): Quote | null {
   if (Number.isNaN(tickAt) || (!Number.isNaN(quoteAt) && tickAt < quoteAt) || tick.price === quote.price) return quote;
   if (!sameTradingDay(quote.asOf, tick.timestamp, quote.code)) return quote;
   const prevClose = quote.prevClose ?? (quote.change ? quote.price - quote.change : null);
-  const change = prevClose !== null ? Math.round((tick.price - prevClose) * 100) / 100 : quote.change;
-  const changeRate = prevClose ? Math.round((change / prevClose) * 10000) / 100 : quote.changeRate;
+  // 등락률은 반올림 전 차이로, 등락은 소수 4자리까지 — 센트로 반올림한 등락으로 등락률을 내면 1달러 미만 미국 종목이
+  // 틀린다 ($0.4321 → $0.4381 이 +1.39% 대신 +2.31%, 당일 손익도 등락 × 수량이라 함께). 서버 applyTick 과 같은 식
+  const diff = prevClose !== null ? tick.price - prevClose : null;
+  const change = diff !== null ? Math.round(diff * 1e4) / 1e4 : quote.change;
+  const changeRate = prevClose && diff !== null ? Math.round((diff / prevClose) * 10000) / 100 : quote.changeRate;
   const fx = quote.fxRate ?? (quote.priceKrw && quote.price ? quote.priceKrw / quote.price : null);
   const priceKrw = fx ? Math.round(tick.price * fx) : (quote.priceKrw ?? null);
   return {

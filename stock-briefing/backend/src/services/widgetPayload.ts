@@ -1,4 +1,4 @@
-import type { QuoteSession } from "../domain/types.js";
+import type { Quote, QuoteSession } from "../domain/types.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { MarketIndex } from "../providers/market/indices.js";
 import type { Briefing } from "./briefingService.js";
@@ -171,15 +171,25 @@ const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
 /** "2026-09-24T12:03:51.000+09:00" → "2026-09-24T12:03:51+09:00" */
 const shortIso = (iso: string) => iso.replace(/\.000(?=[Z+-])/, "");
 
-function slim(s: RegisteredWithQuote): WidgetStock {
+/**
+ * 위젯에 싣는 환율 (BH-04). 위젯은 원화 환산가를 받지 않아 환율이 비면 그 달러 종목을 원화 합계에서 뺀다 →
+ * 시세에 환율이 없으면(서버 보강이 시간 초과로 끝난 시세 등) 같은 응답의 다른 달러 시세 환율, 그것도 없으면 원화 환산가 ÷ 가격
+ */
+function fxFor(q: Quote, shared: number | null): number | null {
+  if (q.currency !== "USD") return q.fxRate ?? null;
+  return q.fxRate ?? shared ?? (q.priceKrw && q.price ? q.priceKrw / q.price : null);
+}
+
+function slim(s: RegisteredWithQuote, shared: number | null): WidgetStock {
   const q = s.quote;
   const e = s.evaluation;
+  const fx = q ? fxFor(q, shared) : null;
   return {
     c: s.code,
     n: s.name,
     qty: s.quantity,
     avg: s.avgPrice,
-    q: q ? [r4(q.price), r4(q.change), r2(q.changeRate), q.currency, shortIso(q.asOf), q.fxRate == null ? null : r4(q.fxRate), q.stale ? 1 : 0] : null,
+    q: q ? [r4(q.price), r4(q.change), r2(q.changeRate), q.currency, shortIso(q.asOf), fx == null ? null : r4(fx), q.stale ? 1 : 0] : null,
     // 금액은 소수 4자리까지 (달러 금액을 원화로 바꿔도 1원 미만 차이 — 앱 잔고와 같은 숫자가 되게)
     e: e ? [r4(e.marketValue), r4(e.costBasis), e.afterCost ? r4(e.afterCost.marketValue) : null, e.costBasisKrw === null ? null : r4(e.costBasisKrw), e.krwCostSource] : null,
   };
@@ -212,10 +222,12 @@ export function buildWidgetPayload(
     if (Number.isFinite(d) && d !== 0) return d;
     return a.latest!.createdAt < b.latest!.createdAt ? 1 : -1;
   });
+  // 달러 환율은 종목마다 같다 → 환율이 빠진 달러 시세는 다른 달러 시세(관심 종목 포함)의 환율로
+  const sharedFx = stocks.find((s) => s.quote?.currency === "USD" && s.quote.fxRate)?.quote?.fxRate ?? null;
   const payload: WidgetPayload = {
     v: 1,
     market: status ? marketChip(status, extra.sessions ? stocks.map((x) => x.quote?.session) : []) : null,
-    stocks: stocks.map(slim),
+    stocks: stocks.map((s) => slim(s, sharedFx)),
     latestIds: ok.map((b) => b.latest!.id).sort((a, b) => a - b),
     briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary.split("\n").find((l) => l.trim()) ?? "", createdAt: b.latest!.createdAt })),
   };

@@ -16,8 +16,7 @@ import { gated } from "@/lib/features";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
 import { quoteLive, sessionOpen } from "@/lib/liveDot";
-import { evalView } from "@/lib/liveTick";
-import { fxOf, summarize, type Bucket as Totals } from "@/lib/portfolio";
+import { excludedLabel, sortHoldings, splitHoldings, summarize, type Bucket as Totals } from "@/lib/portfolio";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { changeColor, font, space, touch, useTheme } from "@/theme";
 
@@ -49,41 +48,14 @@ export default function StocksScreen() {
   const summary = useMemo(() => summarize(data ?? [], afterCost), [data, afterCost]);
 
   const sections = useMemo(() => {
-    const list = [...(data ?? [])];
-    const num = (s: RegisteredWithQuote, k: SortKey): number => {
-      const q = s.quote;
-      if (!q) return Number.NEGATIVE_INFINITY;
-      if (k === "changeRate") return q.changeRate;
-      // 수익률은 화면에 보이는 기준(원화 보기 여부)대로, 평가금액은 통화를 맞춰야 비교되므로 항상 원화로
-      if (k === "profit") {
-        const v = evalView(s.evaluation, { afterCost, toKrw: showKrw, currency: q.currency, fx: fxOf(s) });
-        return v ? v.profitRate : Number.NEGATIVE_INFINITY;
-      }
-      const v = evalView(s.evaluation, { afterCost, toKrw: true, currency: q.currency, fx: fxOf(s) });
-      if (k === "value") return v ? v.marketValue : Number.NEGATIVE_INFINITY;
-      return 0;
-    };
-    const sorted = (() => {
-      switch (sort) {
-        case "name":
-          return list.sort((a, b) => a.name.localeCompare(b.name, "ko"));
-        case "market":
-          return list.sort((a, b) => a.market.localeCompare(b.market) || a.name.localeCompare(b.name, "ko"));
-        case "changeRate":
-        case "profit":
-        case "value":
-          return list.sort((a, b) => num(b, sort) - num(a, sort));
-        default:
-          return list;
-      }
-    })();
-    const held = sorted.filter((s) => s.evaluation);
-    const watch = sorted.filter((s) => !s.evaluation);
+    // 평가손익·평가금액 정렬은 원화 환산 금액으로 (lib/portfolio sortHoldings). 보유는 수량으로 나눈다 —
+    // 평단·첫 시세가 없어도 관심으로 내리지 않고, 합계에서 뺀 수는 계좌 패널이 알린다 (BH-26 · BH-30)
+    const { held, watch } = splitHoldings(sortHoldings(data ?? [], sort, afterCost));
     return [
       ...(held.length ? [{ key: "held", title: `보유 ${held.length}`, data: held }] : []),
       ...(watch.length ? [{ key: "watch", title: `관심 ${watch.length}`, data: watch }] : []),
     ];
-  }, [data, sort, afterCost, showKrw]);
+  }, [data, sort, afterCost]);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
     // 토스 연동 종목은 삭제하면 동기화에서도 빠진다는 것을 먼저 알린다 (수정 화면과 같은 문구)
@@ -126,6 +98,7 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
+          excluded={excludedLabel(summary.excluded)}
           onAllocation={gated(allocationOn, openAllocation)}
           status={<LiveStatus query={stocks} open={open} closedLabel={live.label} maxAgeMs={openMaxAge} quotes={quotes} feed={{ now, feedOk }} suffix={holdingsSuffix({ held: summary.held, watch: summary.watch, stale: staleQuoteCount(stocks.data) })} />}
         />
@@ -148,7 +121,7 @@ export default function StocksScreen() {
         <HeadCell label="종목명" a11y="이름순 정렬" active={sort === "name"} onPress={() => void setSort("name")} flex />
         <HeadCell label={PRICE_HEAD} a11y="등락률순 정렬" active={sort === "changeRate"} onPress={() => void setSort("changeRate")} width={col.price} />
         {section.key === "held" ? (
-          <HeadCell label="평가손익·수익률" a11y="수익률순 정렬" active={sort === "profit"} onPress={() => void setSort("profit")} width={col.right} />
+          <HeadCell label="평가손익·수익률" a11y="평가손익순 정렬" active={sort === "profit"} onPress={() => void setSort("profit")} width={col.right} />
         ) : (
           <HeadCell label="전일대비·거래량" width={col.right} />
         )}
@@ -241,6 +214,7 @@ function AccountPanel({
   afterCost,
   showKrw,
   fx,
+  excluded,
   status,
   onAllocation,
 }: {
@@ -253,6 +227,8 @@ function AccountPanel({
   afterCost: boolean;
   showKrw: boolean;
   fx: number | null;
+  /** 합계에서 뺀 보유 종목 안내 ("시세 없음 1종목 · 환율 없음 1종목 제외"). 없으면 null */
+  excluded: string | null;
   status: React.ReactNode;
   /** 비중 보기 화면 열기 (플래그 allocationView 가 꺼져 있으면 없음 → 버튼도 없음) */
   onAllocation?: () => void;
@@ -305,6 +281,8 @@ function AccountPanel({
         <Kpi label="당일손익" value={formatPrice(main.day, "KRW", { sign: true })} color={dc} />
       </View>
       </View>
+      {/* 합계에서 뺀 보유 종목(시세·평단·환율 없음)을 알린다 — 말없이 빠져 총액이 작아 보이지 않게 (BH-04 · BH-26 · BH-30) */}
+      {excluded ? <Text style={{ color: t.warn, fontSize: font.tiny }}>{excluded}</Text> : null}
       {showSplit ? (
         <View style={[styles.split, { borderTopColor: t.line }]}>
           {/* 숫자는 위 요약 문장에 들어 있다 → 조각으로 한 번 더 읽히지 않게 숨기고, 환율 안내 한 줄만 읽는다 */}
