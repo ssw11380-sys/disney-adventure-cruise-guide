@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RunResult } from "@/api/types";
 
 // 백그라운드 알림 경로를 가짜 모듈로 (알림 예약 횟수만 본다)
 const scheduled: unknown[] = [];
+// 알림을 띄우는 도중에 멈춰 둘 수 있게 (hold 가 있으면 풀릴 때까지 기다린다. reached: 알림을 띄우기 시작함)
+const gate: { hold: Promise<void> | null; reached: () => void } = { hold: null, reached: () => undefined };
 vi.mock("expo-notifications", () => ({
   getPermissionsAsync: async () => ({ status: "granted" }),
   requestPermissionsAsync: async () => ({ status: "granted" }),
-  scheduleNotificationAsync: async (x: unknown) => void scheduled.push(x),
+  scheduleNotificationAsync: async (x: unknown) => {
+    scheduled.push(x);
+    gate.reached();
+    if (gate.hold) await gate.hold;
+  },
 }));
 // 공용 태스크(check-new-briefings)의 등록 상태를 기억한다 — 알림을 꺼도 위젯 갱신용으로 남는지 본다 (N2)
 const task = { registered: false };
@@ -34,7 +41,8 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   },
 }));
 
-const { disableLocalBriefingAlerts, enableLocalBriefingAlerts, ensureBackgroundTaskRegistered, runBriefingCheck } = await import("@/lib/backgroundBriefings");
+const { briefingTrigger, disableLocalBriefingAlerts, enableLocalBriefingAlerts, ensureBackgroundTaskRegistered, runBriefingCheck } = await import("@/lib/backgroundBriefings");
+const { markRunSeen } = await import("@/lib/briefingSeen");
 
 const NOW = Date.parse("2026-09-24T17:00:00+09:00");
 const latest = Array.from({ length: 15 }, (_, i) => ({
@@ -55,6 +63,8 @@ const prefs = { digest: true, quietEnabled: true, quietStart: "22:00", quietEnd:
 
 beforeEach(() => {
   store.clear();
+  gate.hold = null;
+  gate.reached = () => undefined;
   scheduled.length = 0;
   refreshed.length = 0;
   task.registered = false;
@@ -428,6 +438,98 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       await runBriefingCheck();
       expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1"]);
       expect((refreshed[0] as { board: unknown }).board).toBeNull();
+    });
+  });
+
+  describe("알림 채널 (BH-28)", () => {
+    it("로컬 브리핑 알림은 trigger 에 '브리핑 알림' 채널을 싣는다 — Android 는 채널을 trigger 에서만 읽어, null 이면 기본 채널(Miscellaneous)로 간다", async () => {
+      await enableLocalBriefingAlerts();
+      serve([...latest, ...newOnes(2)], prefs);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      const req = scheduled[0] as { content: Record<string, unknown>; trigger: unknown };
+      expect(req.trigger).toEqual({ channelId: "briefings" });
+      expect(req.content).not.toHaveProperty("channelId"); // content 에 넣은 채널은 버려진다
+    });
+
+    it("설정 화면의 테스트 알림도 같은 채널 (briefingTrigger)", () => {
+      expect(briefingTrigger()).toEqual({ channelId: "briefings" });
+    });
+  });
+
+  describe("앱에서 다시 만든 브리핑 (BH-67)", () => {
+    /** 서버처럼: 위젯 응답의 최신 id 는 성공한 것만, 전체 목록(/api/briefings/latest)에는 실패도 */
+    const serveRows = (list: typeof latest) =>
+      vi.stubGlobal("fetch", async (url: string) => {
+        if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.filter((b) => b.latest.status === "ok").map((b) => b.latest.id) }), { status: 200 });
+        if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(prefs), { status: 200 });
+        return new Response(JSON.stringify(list), { status: 200 });
+      });
+    // 16:05 정기 실행에서 종목0(id 100)만 실패 → 16:40 상세의 "이 종목 다시 만들기"로 같은 id 가 성공으로 (서버 upsert)
+    const failedFirst = latest.map((b, i) => (i === 0 ? { ...b, latest: { ...b.latest, status: "failed" } } : b));
+    const regenerated = latest.map((b, i) => (i === 0 ? { ...b, latest: { ...b.latest, createdAt: "2026-09-24T16:40:00+09:00" } } : b));
+    const result: RunResult = { session: "afternoon", date: "2026-09-24", results: [{ code: "000000", name: "종목0", status: "ok", briefingId: 100, error: null, summary: "요약" }] };
+
+    it("실패했던 종목을 다시 만들어 읽은 브리핑은 다음 확인에서 다시 알리지 않는다 — 서버도 이 실행(일부 종목 수동)은 알리지 않는다", async () => {
+      serveRows(failedFirst);
+      await enableLocalBriefingAlerts();
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      await markRunSeen(["000000"], result);
+      serveRows(regenerated);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+    });
+
+    it("전체 수동 생성(종목 지정 없음)은 서버처럼 알린다", async () => {
+      serveRows(failedFirst);
+      await enableLocalBriefingAlerts();
+      await markRunSeen(undefined, result);
+      serveRows(regenerated);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect((scheduled[0] as { content: { title: string } }).content.title).toBe("종목0 오후 브리핑");
+    });
+
+    it("실패한 결과는 적지 않는다 (다음에 성공하면 알린다)", async () => {
+      serveRows(failedFirst);
+      await enableLocalBriefingAlerts();
+      await markRunSeen(["000000"], { ...result, results: [{ ...result.results[0]!, status: "failed", summary: null, error: "모델 오류" }] });
+      serveRows(regenerated);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
+
+    it("알림 기준을 아직 적지 않았으면 건드리지 않는다 — 첫 확인이 기준을 잡아 옛 브리핑이 쏟아지지 않게", async () => {
+      vi.stubGlobal("fetch", async () => new Response("down", { status: 503 }));
+      await enableLocalBriefingAlerts(); // 켤 때 목록을 못 받음 → 기준 없음
+      await markRunSeen(["000000"], result);
+      serveRows(regenerated);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+    });
+
+    it("백그라운드 확인이 기록을 읽고 알림을 띄우는 사이에 다시 만들기 결과가 적혀도 사라지지 않는다 (검증: 기록을 덮어써 다시 울림)", async () => {
+      serveRows(failedFirst);
+      await enableLocalBriefingAlerts();
+      // 16:59 다른 새 브리핑(id 500)이 생겨 확인이 알림을 띄우는 도중에 멈춰 둔다 — 종목0(id 100)은 아직 실패
+      serveRows([...failedFirst, ...newOnes(1)]);
+      let release = () => undefined as void;
+      gate.hold = new Promise<void>((r) => (release = r));
+      const reached = new Promise<void>((r) => (gate.reached = r));
+      const check = runBriefingCheck();
+      await reached;
+      // 그 사이 상세의 다시 만들기가 끝나 종목0(id 100)을 '본 것'으로 적는다 (예전에는 여기서 바로 적히고, 확인이 옛 기록으로 덮어썼다)
+      const mark = markRunSeen(["000000"], result);
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      release();
+      await Promise.all([check, mark]);
+      expect(scheduled).toHaveLength(1);
+      expect(JSON.parse(store.get("briefings.notified") ?? "[]")).toEqual(expect.arrayContaining([100, 500]));
+      // 다음 확인: 종목0 이 같은 id 로 성공이어도 다시 알리지 않는다
+      serveRows([...regenerated, ...newOnes(1)]);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
     });
   });
 });

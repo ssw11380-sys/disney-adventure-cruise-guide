@@ -166,6 +166,19 @@ export function nextBoundary(quotes: Quotes, now: number): number | null {
 }
 
 /**
+ * 장 상태(/api/market/status)의 가장 가까운 경계(ms): 열린 시장은 마감(closesAt), 닫힌 시장은 개장(opensAt).
+ * 방금(10초 안) 지난 경계도 포함 — nextBoundary 와 같은 규칙 (capToBoundary 가 짧게 다시 받게). 없으면 null
+ */
+export function marketBoundary(s: Pick<MarketStatus, "KR" | "US"> | null | undefined, now: number): number | null {
+  let best: number | null = null;
+  for (const m of s ? [s.KR, s.US] : []) {
+    const at = Date.parse((m.isOpen ? m.closesAt : m.opensAt) ?? "");
+    if (Number.isFinite(at) && at > now - BOUNDARY_GRACE_MS && (best === null || at < best)) best = at;
+  }
+  return best;
+}
+
+/**
  * 폴링 간격을 세션 경계에 맞춘다: 경계 1초 뒤에 한 번 더 받아 점·상태 줄이 경계에서 바로 바뀌게.
  * 방금 지난 경계면(받은 값이 아직 지난 세션 것) 3초 뒤 한 번 더. 오래전에 지났으면(기기 시계가 서버보다 한참 빠른 경우 등)
  * 원래 간격 — 1초마다 두드리지 않는다

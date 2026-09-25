@@ -57,7 +57,9 @@ describe("플래그 (accountBriefing, 앱 fallback 꺼짐)", () => {
     const detail = src("app/briefings/account/[id].tsx");
     expect(detail).toContain('useFeature("accountBriefing", false)');
     expect(detail).toMatch(/useAccountBriefing\(numId \?\? 0, on && numId !== null\)/);
-    expect(src("api/hooks.ts")).toMatch(/export function useAccountBriefings\(enabled: boolean\)[\s\S]{0,300}enabled \}\)/);
+    // 훅은 받은 플래그 값을 쿼리 옵션(accountBriefingsQuery)의 enabled 로 그대로 넘긴다
+    expect(src("api/hooks.ts")).toMatch(/export function useAccountBriefings\(enabled: boolean\)[\s\S]{0,200}accountBriefingsQuery\(api, apiUrl, useScreenFocused\(\), enabled\)/);
+    expect(src("api/hooks.ts")).toMatch(/export function accountBriefingsQuery\([^)]*enabled: boolean\)[\s\S]{0,500}\benabled,\s/);
   });
 });
 

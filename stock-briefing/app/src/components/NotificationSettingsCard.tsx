@@ -4,7 +4,8 @@ import React, { useEffect, useState } from "react";
 import { Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useApi, useNotificationMutations, useNotificationSettings, useRegisteredStocks } from "@/api/hooks";
 import { quietWarnings } from "@/lib/briefingDigest";
-import { disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
+import { sessionSeconds } from "@/lib/briefingRun";
+import { briefingTrigger, disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
 import { font, radius, slopFor, space, touch, useTheme } from "@/theme";
 import { Button, Card, Loading, Muted, Row, SectionTitle, Toggle } from "./ui";
@@ -30,8 +31,10 @@ export function NotificationSettingsCard() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
   const [showMuted, setShowMuted] = useState(false);
-  // 종목 목록은 "종목별 알림"을 펼쳤을 때만 받는다
+  // 종목 목록은 "종목별 알림"을 펼쳤을 때만 받는다 (펼치기 전에는 잔고 캐시 — 기기에 저장된 값)
   const stocks = useRegisteredStocks(showMuted);
+  // 조용한 시간 안내는 세션이 끝나는 예상 시각까지 본다 — 서버가 다 만든 시각으로 판단한다 (BH-58). 종목 수를 모르면 시작 시각만
+  const runSeconds = sessionSeconds(stocks.data?.length ?? 0);
 
   useEffect(() => {
     let alive = true;
@@ -163,9 +166,10 @@ export function NotificationSettingsCard() {
         </View>
       ) : null}
 
+      {/* 설정 탭에 돌아올 때 다시 받다 실패해도(서버에 닿지 않음) 받아 둔 설정은 그대로 보인다 — 연결 상태는 아래 서버 상태 카드가 알린다 */}
       {settings.isLoading ? (
         <Loading />
-      ) : settings.isError ? (
+      ) : settings.isError && !s ? (
         <Text style={{ color: t.danger, fontSize: font.small }}>{settings.error instanceof Error ? settings.error.message : "설정을 불러오지 못했습니다"}</Text>
       ) : s ? (
         <View style={{ gap: space.xs }}>
@@ -188,9 +192,9 @@ export function NotificationSettingsCard() {
                 <TimeChip time={s.quietEnd} enabled={!!s.quietEnabled} label="조용한 시간 끝" onPick={() => pickTime("quietEnd")} />
                 <Muted style={{ flex: 1, fontSize: font.tiny }}>이 사이 브리핑은 알리지 않고 탭에만</Muted>
               </View>
-              {quietWarnings(s).map((w) => (
-                <Text key={w} style={{ color: t.warn, fontSize: font.tiny }}>
-                  {w}
+              {quietWarnings(s, runSeconds).map((w) => (
+                <Text key={w.text} style={{ color: w.warn ? t.warn : t.muted, fontSize: font.tiny }}>
+                  {w.text}
                 </Text>
               ))}
               <Pressable onPress={() => setShowMuted((v) => !v)} accessibilityRole="button" accessibilityLabel={`종목별 알림, ${mutedCount > 0 ? `${mutedCount}종목 끔` : "모두 받음"}`} accessibilityState={{ expanded: showMuted }} style={[styles.switchRow, { minHeight: touch.min }]}>
@@ -230,9 +234,10 @@ export function NotificationSettingsCard() {
         onPress={() => {
           if (localMode && !token) {
             setBusy(true);
+            // 브리핑 알림과 같은 채널로 (BH-28) — 기기 설정의 '브리핑 알림' 채널 설정이 테스트에도 그대로 적용되게
             void Notifications.scheduleNotificationAsync({
               content: { title: "주식 브리핑 테스트 알림", body: "알림이 정상적으로 도착했습니다.\n브리핑이 생성되면 이렇게 도착합니다.", sound: "default" },
-              trigger: null,
+              trigger: briefingTrigger(),
             })
               .then(() => runBriefingCheck())
               .catch((e) => Alert.alert("테스트 실패", e instanceof Error ? e.message : String(e)))

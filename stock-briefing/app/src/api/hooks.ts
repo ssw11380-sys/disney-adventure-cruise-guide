@@ -2,9 +2,10 @@ import { useIsFocused } from "expo-router";
 import { featureOn } from "@/lib/features";
 import { focusManager, keepPreviousData, queryOptions, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type Query } from "@tanstack/react-query";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { markRunSeen } from "@/lib/briefingSeen";
 import { isTradingHoursKst } from "@/lib/format";
 import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/freshness";
-import { capToBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
+import { capToBoundary, marketBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
 import { useLiveStream, withLastTick } from "@/lib/liveStream";
 import { tradingNow } from "@/lib/marketTime";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
@@ -55,10 +56,41 @@ export function useHealth() {
   return useQuery({ queryKey: useKey("health"), queryFn: api.health, staleTime: 30_000, retry: 0, refetchInterval: 60_000, refetchIntervalInBackground: false });
 }
 
-/** 장 운영 상태 (서버가 토스 달력으로 판단, 5분 캐시). 실패하면 요일·시간 추정 */
+/** 장 상태를 다시 받는 기본 간격 */
+const MARKET_EVERY = 5 * 60_000;
+
+/**
+ * 장 운영 상태 쿼리 옵션 (useMarketStatus 와 테스트가 같이 쓴다). 5분마다 다시 받되, 받은 상태의 가장 가까운 개장·마감 1초 뒤에는 한 번 더 받는다 —
+ * 서버도 캐시를 그 경계까지만 두므로 경계 직후에 물으면 바뀐 상태가 온다. 예전에는 고정 5분이라 개장·마감 직후 최대 5분 동안
+ * 잔고 상태 줄("장 마감"/"장중")·시세 폴링 주기·차트 봉 갱신·위젯 칩이 옛 상태였다 (BH-60).
+ * 받은 값도 그 경계가 지나면 오래된 것으로 본다 → 경계 뒤에 새로 붙는 화면이 옛 상태를 쓰지 않고 다시 받는다.
+ * 앱으로 돌아올 때도 오래됐으면(경계가 지났거나 5분) 바로 다시 받는다 — 앱이 뒤에 있는 동안에는 주기 갱신이 멈춰 경계 1초 뒤 갱신을 건너뛰므로,
+ * 그러지 않으면 다음 주기(최대 5분 뒤)까지 옛 상태였다. 오래되지 않았으면 묻지 않는다
+ */
+export function marketStatusQuery(api: Pick<Api, "marketStatus">, apiUrl: string) {
+  return queryOptions({
+    queryKey: [apiUrl, "market"],
+    queryFn: api.marketStatus,
+    refetchOnWindowFocus: true,
+    staleTime: (q) => {
+      const at = q.state.dataUpdatedAt;
+      const b = marketBoundary(q.state.data, at);
+      // 받을 때 이미 막 지난 경계(서버 시계가 조금 늦음)면 받은 값이 옛 상태일 수 있어 3초
+      return b === null ? MARKET_EVERY : Math.min(MARKET_EVERY, Math.max(b - at + 1_000, 3_000));
+    },
+    refetchInterval: (q) => {
+      const now = Date.now();
+      return capToBoundary(MARKET_EVERY, marketBoundary(q.state.data, now), now);
+    },
+    retry: 0,
+  });
+}
+
+/** 장 운영 상태 (서버가 토스 달력으로 판단, 가장 가까운 개장·마감까지 캐시). 실패하면 요일·시간 추정 */
 export function useMarketStatus() {
   const api = useApi();
-  return useQuery({ queryKey: useKey("market"), queryFn: api.marketStatus, staleTime: 5 * 60_000, refetchInterval: 5 * 60_000, retry: 0 });
+  const { apiUrl } = useSettings();
+  return useQuery(marketStatusQuery(api, apiUrl));
 }
 
 /** 지수 띠. 서버가 30초 캐시하므로 30초마다 */
@@ -375,9 +407,29 @@ export function useStockNews(code: string, enabled = true) {
   return useQuery({ queryKey: useKey("news", code), queryFn: () => api.getStockNews(code), enabled, staleTime: 5 * 60_000 });
 }
 
+/**
+ * 탭이 가려지면 구독을 끊는(subscribed: focused) 브리핑 목록·계좌 브리핑·알림 설정을 캐시에 남겨 두는 시간.
+ * react-query 기본값이면 앱(RN)에서는 구독이 없는 쿼리를 5분 뒤 지운다 → 5분 넘게 다른 탭·브리핑 상세에 있다 돌아오면 받아 둔 목록 대신 뼈대가,
+ * 서버(집 PC)에 닿지 않으면 오류 화면만 보였다. 구독을 끊기 전(가려져도 늘 구독이라 지워지지 않음)처럼 지우지 않는다 —
+ * 돌아오면 받아 둔 것을 먼저 보이고 30초 지났으면 뒤에서 다시 받는다. 기기에는 저장하지 않는다(lib/queryPersist)
+ */
+const KEEP_WHILE_AWAY = Infinity;
+
+/**
+ * 브리핑 탭 목록 쿼리 옵션 (useLatestBriefings 와 테스트가 같이 쓴다). 브리핑은 하루 두 번 생기므로 주기 갱신은 없고, 대신 (BH-16)
+ *  - 탭이 가려지면 구독을 끊었다가(focused) 돌아올 때 30초 지났으면 다시 받는다 — 탭은 가려져도 마운트된 채(freezeOnBlur)라 다시 마운트되지 않는다.
+ *    가려져 있는 동안에도 캐시는 지우지 않는다 (KEEP_WHILE_AWAY)
+ *  - 브리핑 탭을 보던 채로 앱으로 돌아올 때(포커스)도 30초 지났으면 다시 받는다 (앱 기본값은 포커스 재조회 꺼짐)
+ *  - 브리핑 알림을 받거나 누르면 NotificationBridge 가 무효화한다 (lib/notifications refreshBriefingsFor)
+ */
+export function latestBriefingsQuery(api: Pick<Api, "latestBriefings">, apiUrl: string, focused = true) {
+  return queryOptions({ subscribed: focused, gcTime: KEEP_WHILE_AWAY, queryKey: [apiUrl, "briefings", "latest"], queryFn: api.latestBriefings, staleTime: 30_000, refetchOnWindowFocus: true });
+}
+
 export function useLatestBriefings() {
   const api = useApi();
-  return useQuery({ queryKey: useKey("briefings", "latest"), queryFn: api.latestBriefings, staleTime: 30_000 });
+  const { apiUrl } = useSettings();
+  return useQuery(latestBriefingsQuery(api, apiUrl, useScreenFocused()));
 }
 
 export function useBriefings(filter: { code?: string; date?: string; session?: BriefingSession; limit?: number }, enabled = true) {
@@ -392,11 +444,26 @@ export function useBriefing(id: number) {
 
 /**
  * 계좌 한 장 브리핑 목록 (3-31). 플래그가 켜졌을 때만 부른다(enabled). 예전 서버(404)는 빈 목록 → 카드가 숨는다.
- * 쿼리 키가 "briefings" 아래라 수동 생성이 끝나면 함께 다시 받는다
+ * 쿼리 키가 "briefings" 아래라 수동 생성이 끝나면·브리핑 알림을 받거나 누르면 함께 다시 받는다.
+ * 브리핑 탭 목록과 같이 탭에 돌아올 때·앱으로 돌아올 때도 30초 지났으면 다시 받고, 가려져 있는 동안 캐시는 지우지 않는다 (BH-16)
  */
+export function accountBriefingsQuery(api: Pick<Api, "accountBriefings">, apiUrl: string, focused: boolean, enabled: boolean) {
+  return queryOptions({
+    subscribed: focused,
+    gcTime: KEEP_WHILE_AWAY,
+    queryKey: [apiUrl, "briefings", "account", "list"],
+    queryFn: () => orEmptyOn404(api.accountBriefings(5)),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    retry: 0,
+    enabled,
+  });
+}
+
 export function useAccountBriefings(enabled: boolean) {
   const api = useApi();
-  return useQuery({ queryKey: useKey("briefings", "account", "list"), queryFn: () => orEmptyOn404(api.accountBriefings(5)), staleTime: 30_000, retry: 0, enabled });
+  const { apiUrl } = useSettings();
+  return useQuery(accountBriefingsQuery(api, apiUrl, useScreenFocused(), enabled));
 }
 
 export function useAccountBriefing(id: number, enabled: boolean) {
@@ -414,9 +481,28 @@ export async function orEmptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
   }
 }
 
-export function useNotificationSettings() {
+/**
+ * 알림 설정 ('다음 오전/오후 실행' 시각 포함). 설정 탭에 돌아올 때·설정 탭을 보던 채로 앱으로 돌아올 때 30초 지났으면 다시 받는다 —
+ * 지난 실행 시각이 그대로 남지 않게. 가려져 있는 동안 캐시는 지우지 않는다 (BH-16).
+ * enabled: 설정 화면은 알림 카드가 보일 때(토큰이 맞는 서버)만 — 토큰이 없으면 늘 401 이라 묻지 않는다
+ */
+export function notificationSettingsQuery(api: Pick<Api, "getNotificationSettings">, apiUrl: string, focused: boolean, enabled = true) {
+  return queryOptions({
+    subscribed: focused,
+    gcTime: KEEP_WHILE_AWAY,
+    queryKey: [apiUrl, "notificationSettings"],
+    queryFn: api.getNotificationSettings,
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    retry: 0,
+    enabled,
+  });
+}
+
+export function useNotificationSettings(enabled = true) {
   const api = useApi();
-  return useQuery({ queryKey: useKey("notificationSettings"), queryFn: api.getNotificationSettings, staleTime: 30_000, retry: 0 });
+  const { apiUrl } = useSettings();
+  return useQuery(notificationSettingsQuery(api, apiUrl, useScreenFocused(), enabled));
 }
 
 export function useDevices() {
@@ -488,7 +574,11 @@ export function useStockMutations() {
     remove: useMutation({ mutationFn: api.removeStock, onSuccess: invalidate }),
     run: useMutation({
       mutationFn: ({ session, codes, force }: { session: BriefingSession; codes?: string[]; force?: boolean }) => api.runBriefings(session, codes, force),
-      onSuccess: invalidate,
+      onSuccess: (r, v) => {
+        invalidate();
+        // 일부 종목 수동 실행(상세의 다시 만들기)으로 만든 브리핑은 백그라운드 확인이 다시 알리지 않게 — 서버도 알리지 않는다 (BH-67)
+        void markRunSeen(v.codes, r);
+      },
     }),
     refreshAnalysis: useMutation({
       mutationFn: ({ code, kind }: { code: string; kind: AnalysisKind }) => api.getAnalysis(code, kind, true),
