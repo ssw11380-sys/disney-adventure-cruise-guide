@@ -1,6 +1,7 @@
 import { router } from "expo-router";
 import React from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAccountBriefing, useFeature, useFeatures } from "@/api/hooks";
 import type { AccountBriefingWithData, AccountData, AccountSchedule } from "@/api/types";
 import { BriefingSplit, type BodyLayout } from "@/components/BriefingBody";
@@ -11,10 +12,12 @@ import { CardsSkeleton } from "@/components/Skeleton";
 import { Badge, Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, TableHead } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, localDay, summarySpeech, templateNote } from "@/lib/accountBriefing";
+import { accountColumns } from "@/lib/briefingPick";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
+import { foldBriefings as FB, layout as L } from "@/tokens";
 
 /**
  * 계좌 한 장 브리핑 본문 (3-31, 3-42 웨이브 D1: app/briefings/account/[id].tsx 에서 떼어냄): 오늘 내 계좌가 왜 움직였는지 한 화면에.
@@ -22,7 +25,7 @@ import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
  * 숫자는 모두 서버가 계산한 값 그대로다. 플래그 accountBriefing 이 꺼져 있으면 아무것도 불러오지 않는다.
  * 배치 (components/BriefingBody 와 같은 이름):
  *  - stack: 지금 폰 화면 그대로 / pane: 브리핑 탭 2단의 오른쪽 칸 (쌓는 순서는 같고 화면 머리 제목만 바꾸지 않는다)
- *  - split: 넓은 창 전체 화면 두 칸 — 왼쪽 요약·총 평가·기여 표 | 오른쪽 지수·환율·오늘 일정·설명
+ *  - split: 넓은 창 전체 화면 — 3칸(요약·총 평가·설명 | 기여 표 | 지수·환율·오늘 일정, 펼친 폴드8 가로·울트라 가로) 또는 2칸(요약·총 평가·기여 표 | 지수·환율·일정·설명)
  */
 export function AccountBriefingBody({ numId, layout, title }: { numId: number | null; layout: BodyLayout; title?: (b: AccountBriefingWithData) => React.ReactNode }) {
   const on = useFeature("accountBriefing", false); // 새 기능: 서버가 켤 때만
@@ -113,30 +116,7 @@ function AccountBriefingView({ b, top, layout, title }: { b: AccountBriefingWith
   ) : null;
 
   if (layout === "split" && !failed && d) {
-    // 넓은 창 전체 화면: 왼쪽 요약·수치·기여 표 | 오른쪽 지수·환율·오늘 일정·설명
-    return (
-      <Screen scroll={false} disclaimer top={top}>
-        {title?.(b)}
-        <BriefingSplit
-          left={
-            <>
-              {header}
-              {summary}
-              <TotalsBand d={d} />
-              <ContributionCard d={d} />
-            </>
-          }
-          right={
-            <>
-              <ImpactCard d={d} />
-              <ScheduleCard s={d.schedule} asOf={d.asOf} />
-              {narrative}
-              {basis}
-            </>
-          }
-        />
-      </Screen>
-    );
+    return <AccountSplit d={d} top={top} head={title?.(b)} header={header} summary={summary} narrative={narrative} basis={basis} />;
   }
 
   // stack(지금 폰 화면)·pane(2단 오른쪽 칸)·실패: 한 줄로 쌓기
@@ -157,6 +137,63 @@ function AccountBriefingView({ b, top, layout, title }: { b: AccountBriefingWith
           {narrative}
           {basis}
         </>
+      )}
+    </Screen>
+  );
+}
+
+/**
+ * 넓은 창 전체 화면 (3-42 SPEC, 칸마다 스크롤):
+ *  - 3칸 (펼친 폴드8 가로·울트라 가로): 요약·총 평가·설명 | 당일 손익 기여 표 | 지수·환율·오늘 일정 → 기여 표가 첫 화면에 다 들어온다
+ *  - 2칸 (울트라 세로·폴드8 세로 — 창이 3칸에 모자람): 요약·총 평가·기여 표 | 지수·환율·오늘 일정·설명
+ * 칸 수는 좌우 화면 여백을 뺀 창 폭으로 정한다 (lib/briefingPick accountColumns)
+ */
+function AccountSplit({ d, top, head, header, summary, narrative, basis }: { d: AccountData; top: React.ReactNode; head: React.ReactNode; header: React.ReactNode; summary: React.ReactNode; narrative: React.ReactNode; basis: React.ReactNode }) {
+  const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const three = accountColumns(width - insets.left - insets.right, { contribW: FB.accountContribW, minW: FB.accountColMinW, divider: L.divider }) === 3;
+  const impact = (
+    <>
+      <ImpactCard d={d} />
+      <ScheduleCard s={d.schedule} asOf={d.asOf} />
+    </>
+  );
+  return (
+    <Screen scroll={false} disclaimer top={top}>
+      {head}
+      {three ? (
+        <BriefingSplit
+          left={
+            <>
+              {header}
+              {summary}
+              <TotalsBand d={d} />
+              {narrative}
+              {basis}
+            </>
+          }
+          middle={<ContributionCard d={d} />}
+          middleW={FB.accountContribW}
+          right={impact}
+        />
+      ) : (
+        <BriefingSplit
+          left={
+            <>
+              {header}
+              {summary}
+              <TotalsBand d={d} />
+              <ContributionCard d={d} />
+            </>
+          }
+          right={
+            <>
+              {impact}
+              {narrative}
+              {basis}
+            </>
+          }
+        />
       )}
     </Screen>
   );

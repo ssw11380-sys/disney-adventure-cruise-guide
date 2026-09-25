@@ -47,14 +47,19 @@ export function Pills<T extends string>({ options, value, onChange, label, style
 
 const PILL_SLOP = slopFor(FB.pillH);
 
-/** 목록 위 안내 한 줄 (글자가 길면 다음 줄로) */
-export function ListNotice({ children }: { children: React.ReactNode }) {
+/**
+ * 목록 위 안내 한 줄 (휴장 · 정렬 기준 · 등락률 못 받음을 ' · ' 로 이어 한 줄에). 폭이 모자라면 안내 묶음째 다음 줄로 —
+ * 한 안내의 가운데(예: '변동 큰 순 =' / '전일 대비 …')에서 줄이 꺾이지 않게
+ */
+export function ListNotice({ items }: { items: string[] }) {
   const t = useTheme();
   return (
     <View style={[styles.notice, { backgroundColor: t.bg, borderBottomColor: t.line }]}>
-      <Text style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>
-        {children}
-      </Text>
+      {items.map((s, i) => (
+        <Text key={s} style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>
+          {i > 0 ? `· ${s}` : s}
+        </Text>
+      ))}
     </View>
   );
 }
@@ -153,41 +158,64 @@ export function BriefingRow(p: ItemProps) {
   );
 }
 
-/** 카드 격자 한 칸. 누르면 전체 화면 브리핑 */
+/**
+ * 카드 격자 한 칸. 누르면 전체 화면 브리핑.
+ * '상세' 보기의 본문(마크다운)은 누르는 영역 밖에 둔다 — 화면 읽기가 본문을 따로 읽고, 본문 속 링크가 카드 누르기와 겹치지 않게
+ * (폰 BriefingCard 와 같은 방식). 한 줄·요약 보기는 카드 전체가 누르는 영역이다
+ */
 export function BriefingTile(p: ItemProps & { mode: "line" | "summary" | "detail"; width: number }) {
   const t = useTheme();
   const b = p.briefing;
   const failed = b.status === "failed";
   const lines = b.summary.split("\n").filter((l) => l.trim());
+  const detail = p.mode === "detail" && !failed;
+  const head = (
+    <View style={styles.line1}>
+      {p.rank ? <RankMark n={p.rank} /> : null}
+      {p.unread ? <Dot /> : null}
+      <Text style={[styles.name, { color: t.ink, fontSize: font.h2 }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+        {p.name}
+      </Text>
+      <Rate value={p.rate} size={font.body} />
+      {failed ? <Badge tone="bad">생성 실패</Badge> : b.missing.length && p.mode === "detail" ? <Badge>일부 데이터 없음</Badge> : null}
+      <Text style={[styles.when, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+        {briefingWhen(b)}
+      </Text>
+    </View>
+  );
+  // 카드 테두리·강조 막대 (강조 막대만큼 안쪽 여백을 줄여 글자 위치는 그대로)
+  const frame = (pressed: boolean) => [
+    { width: p.width, backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: p.selected ? t.accent : t.line },
+    p.selected && { borderLeftWidth: FB.selBar, paddingLeft: space.md - FB.selBar },
+  ];
+  const selected = p.selected ? { selected: true } : undefined;
+  if (detail) {
+    return (
+      <View style={[styles.tile, frame(false)]}>
+        <Pressable
+          onPress={p.onPress}
+          accessibilityRole="link"
+          accessibilityLabel={briefingItemSpeech(p, "")}
+          accessibilityState={selected}
+          style={({ pressed }) => [styles.tileHead, pressed && { backgroundColor: t.surfaceAlt }]}
+        >
+          {head}
+        </Pressable>
+        <MarkdownView>{b.detail}</MarkdownView>
+      </View>
+    );
+  }
   return (
     <Pressable
       onPress={p.onPress}
       accessibilityRole="link"
-      accessibilityLabel={briefingItemSpeech(p, p.mode === "detail" ? "" : (failed ? firstLine(b) : p.mode === "line" ? (lines[0] ?? "") : lines.join(" ")))}
-      accessibilityState={p.selected ? { selected: true } : undefined}
-      style={({ pressed }) => [
-        styles.tile,
-        { width: p.width, backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: p.selected ? t.accent : t.line },
-        // 강조 막대만큼 안쪽 여백을 줄여 글자 위치는 그대로
-        p.selected && { borderLeftWidth: FB.selBar, paddingLeft: space.md - FB.selBar },
-      ]}
+      accessibilityLabel={briefingItemSpeech(p, failed ? firstLine(b) : p.mode === "line" ? (lines[0] ?? "") : lines.join(" "))}
+      accessibilityState={selected}
+      style={({ pressed }) => [styles.tile, frame(pressed)]}
     >
-      <View style={styles.line1}>
-        {p.rank ? <RankMark n={p.rank} /> : null}
-        {p.unread ? <Dot /> : null}
-        <Text style={[styles.name, { color: t.ink, fontSize: font.h2 }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
-          {p.name}
-        </Text>
-        <Rate value={p.rate} size={font.body} />
-        {failed ? <Badge tone="bad">생성 실패</Badge> : b.missing.length && p.mode === "detail" ? <Badge>일부 데이터 없음</Badge> : null}
-        <Text style={[styles.when, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
-          {briefingWhen(b)}
-        </Text>
-      </View>
+      {head}
       {failed ? (
         <Text style={{ color: t.danger, fontSize: font.small }}>{firstLine(b)}</Text>
-      ) : p.mode === "detail" ? (
-        <MarkdownView>{b.detail}</MarkdownView>
       ) : (
         <Text style={{ color: t.sub, fontSize: font.body, lineHeight: TILE_LINE }} numberOfLines={p.mode === "line" ? 1 : FB.cardLines}>
           {p.mode === "line" ? (lines[0] ?? "") : lines.join("\n")}
@@ -204,9 +232,10 @@ const TILE_LINE = Math.round(font.body * 1.5);
 const styles = StyleSheet.create({
   pills: { flexDirection: "row", borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, overflow: "hidden", flexShrink: 0 },
   pill: { minHeight: FB.pillH, minWidth: FB.pillMinW, paddingHorizontal: space.md, alignItems: "center", justifyContent: "center" },
-  notice: { minHeight: FB.noticeH, justifyContent: "center", paddingHorizontal: space.md, paddingVertical: space.xxs, borderBottomWidth: StyleSheet.hairlineWidth },
+  notice: { minHeight: FB.noticeH, flexDirection: "row", flexWrap: "wrap", alignItems: "center", alignContent: "center", columnGap: space.xs, paddingHorizontal: space.md, paddingVertical: space.xxs, borderBottomWidth: StyleSheet.hairlineWidth },
   num: { fontVariant: ["tabular-nums"] },
-  rank: { minWidth: FB.rank, height: FB.rank, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  // 높이는 최소만: 큰 글씨(140%)에서 숫자가 칸 밖으로 넘치지 않게 글자만큼 커진다
+  rank: { minWidth: FB.rank, minHeight: FB.rank, paddingHorizontal: space.xxs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, alignItems: "center", justifyContent: "center", flexShrink: 0 },
   dot: { width: FB.dot, height: FB.dot, borderRadius: FB.dot / 2, flexShrink: 0 },
   row: { minHeight: FB.rowH, justifyContent: "center", gap: space.xxs, paddingLeft: space.lg, paddingRight: space.md, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   selBar: { position: "absolute", left: 0, top: 0, bottom: 0, width: FB.selBar },
@@ -214,4 +243,6 @@ const styles = StyleSheet.create({
   name: { fontWeight: "700", flexShrink: 1 },
   when: { marginLeft: "auto", fontSize: font.small, flexShrink: 0, paddingLeft: space.xs },
   tile: { minHeight: touch.min, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.lg, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.md, gap: space.xs },
+  /** '상세' 보기 카드의 누르는 머리 줄 (44 이상) */
+  tileHead: { minHeight: touch.min, justifyContent: "center", borderRadius: radius.sm },
 });

@@ -38,8 +38,8 @@ export function BriefingBody({
 }: {
   id: number;
   layout: BodyLayout;
-  /** 다른 브리핑을 열 때 (2단 오른쪽 칸). 없으면 주소를 바꿔 끼운다 */
-  onPick?: (id: number) => void;
+  /** 다른 브리핑을 열 때 (2단 오른쪽 칸 — 같은 종목의 지난 브리핑·다시 만든 브리핑). 없으면 주소를 바꿔 끼운다 */
+  onPick?: (id: number, code: string) => void;
   /** 전체 화면일 때 머리 제목 (Stack.Screen) — 2단 오른쪽 칸은 탭 머리를 바꾸지 않으므로 넘기지 않는다 */
   title?: (d: BriefingWithData) => React.ReactNode;
   /** split 왼쪽 칸 폭 */
@@ -59,7 +59,7 @@ export function BriefingBody({
   const d = b.data!;
   const q = d.data?.quote ?? null;
   const failed = d.status === "failed";
-  const open = (next: number) => (onPick ? onPick(next) : router.replace(`/briefings/${next}`));
+  const open = (next: number) => (onPick ? onPick(next, d.code) : router.replace(`/briefings/${next}`));
 
   const regen = regenOn ? (
     <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm, gap: space.xs }}>
@@ -208,8 +208,10 @@ export function BriefingBody({
       <SourceCount d={d} on={sourcesOn} />
     </View>
   );
+  // 상세가 제목(## …)으로 시작하면 제목의 위 여백(14)만 두고 본문 위 여백은 뺀다 (도구 줄과 첫 제목 사이가 비지 않게)
+  const headingFirst = mode === "detail" && HEADING_FIRST.test(d.detail);
   const bodyText = failed ? failedCard : (
-    <View style={styles.text}>
+    <View style={[styles.text, headingFirst && styles.textFlush]}>
       {text}
       {missing}
     </View>
@@ -231,30 +233,34 @@ export function BriefingBody({
             </>
           }
           right={
-            <>
+            <View>
               {toolbar}
               {bodyText}
-            </>
+            </View>
           }
         />
       </Screen>
     );
   }
 
-  // 브리핑 탭 2단의 오른쪽 칸 (끊김·지연 띠는 탭 위쪽에 한 번만 — 브리핑 본문은 만든 뒤 바뀌지 않는다)
+  // 브리핑 탭 2단의 오른쪽 칸 (끊김·지연 띠는 탭 위쪽에 한 번만 — 브리핑 본문은 만든 뒤 바뀌지 않는다).
+  // 머리·도구 줄·본문은 한 묶음 (화면 간격 없이 목업처럼 붙인다)
   return (
     <Screen disclaimer>
       <View>
         <Head d={d} />
         {toolbar}
+        {bodyText}
       </View>
-      {bodyText}
       {sources}
       {regen}
       {past}
     </Screen>
   );
 }
+
+/** 마크다운이 제목으로 시작하는지 */
+const HEADING_FIRST = /^\s*#{1,6}\s/;
 
 /** 근거 개수 "근거 뉴스 2 · 공시 1" (근거 기능이 꺼져 있거나 스냅샷이 없으면 없음) */
 function SourceCount({ d, on }: { d: BriefingWithData; on: boolean }) {
@@ -271,7 +277,10 @@ function SourceCount({ d, on }: { d: BriefingWithData; on: boolean }) {
   );
 }
 
-/** 넓은 창 본문 머리: 이름 · 날짜·세션·만든 시각 · [종목 보기] / 배지 / 숫자 칸(라벨 위, 숫자 아래) */
+/**
+ * 넓은 창 본문 머리 (목업): 이름 · 날짜·세션·만든 시각 · (배지) · [종목 보기] 를 한 줄에 / 숫자 칸(라벨 위, 숫자 아래).
+ * 폭이 모자라면 날짜 묶음이 통째로 다음 줄로 간다 (날짜 가운데서 꺾이지 않게). 이름만 말줄임할 수 있다
+ */
 function Head({ d }: { d: BriefingWithData }) {
   const t = useTheme();
   const failed = d.status === "failed";
@@ -280,20 +289,16 @@ function Head({ d }: { d: BriefingWithData }) {
   return (
     <View style={[styles.head, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
       <View style={styles.headRow}>
-        <Text style={[styles.headName, { color: t.ink }]} accessibilityRole="header">
+        <Text style={[styles.headName, { color: t.ink }]} accessibilityRole="header" numberOfLines={1}>
           {name}
         </Text>
-        <Button title="종목 보기" variant="secondary" compact onPress={() => router.push(`/stocks/${d.code}`)} accessibilityLabel={`${name} 종목 화면으로`} />
+        <Muted style={styles.headWhen}>
+          {formatDateKo(d.date)} {SESSION_LABEL[d.session]} 브리핑 · {time ?? formatDateKo(d.createdAt, true)} 생성
+        </Muted>
+        {failed ? <Badge tone="bad">생성 실패</Badge> : null}
+        {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
+        <Button title="종목 보기" variant="secondary" compact style={styles.headButton} onPress={() => router.push(`/stocks/${d.code}`)} accessibilityLabel={`${name} 종목 화면으로`} />
       </View>
-      <Muted>
-        {formatDateKo(d.date)} {SESSION_LABEL[d.session]} 브리핑 · {time ?? formatDateKo(d.createdAt, true)} 생성
-      </Muted>
-      {failed || d.missing.length ? (
-        <View style={styles.badges}>
-          {failed ? <Badge tone="bad">생성 실패</Badge> : null}
-          {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
-        </View>
-      ) : null}
       <Numbers d={d} />
     </View>
   );
@@ -353,19 +358,28 @@ function Numbers({ d }: { d: BriefingWithData }) {
 }
 
 /**
- * 넓은 창 전체 화면 두 칸 (브리핑 상세·계좌 브리핑 상세). 칸마다 따로 스크롤한다.
- * side 가 있으면 왼쪽 칸 폭 고정, 없으면 반씩. 좌우 화면 여백(카메라 구멍·가로 내비게이션 바)만큼 안쪽으로.
- * 화면 읽기 순서는 왼쪽 → 오른쪽 (구분선은 건너뛴다)
+ * 넓은 창 전체 화면 두 칸·세 칸 (브리핑 상세·계좌 브리핑 상세). 칸마다 따로 스크롤한다.
+ * side 가 있으면 왼쪽 칸 폭 고정, 없으면 나눠 쓴다. middle 이 있으면 세 칸(가운데 폭 middleW 고정, 양옆은 반씩).
+ * 좌우 화면 여백(카메라 구멍·가로 내비게이션 바)만큼 안쪽으로. 화면 읽기 순서는 왼쪽 → (가운데) → 오른쪽 (구분선은 건너뛴다)
  */
-export function BriefingSplit({ left, right, side }: { left: React.ReactNode; right: React.ReactNode; side?: number }) {
+export function BriefingSplit({ left, middle, right, side, middleW }: { left: React.ReactNode; middle?: React.ReactNode; right: React.ReactNode; side?: number; middleW?: number }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
+  const divider = <View style={[styles.divider, { width: L.divider, backgroundColor: t.line }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden />;
   return (
     <View style={[styles.split, { paddingLeft: insets.left, paddingRight: insets.right }]}>
       <ScrollView style={side === undefined ? styles.half : { width: side, flexGrow: 0, flexShrink: 0 }} contentContainerStyle={styles.col}>
         {left}
       </ScrollView>
-      <View style={[styles.divider, { width: L.divider, backgroundColor: t.line }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden />
+      {divider}
+      {middle !== undefined ? (
+        <>
+          <ScrollView style={middleW === undefined ? styles.half : { width: middleW, flexGrow: 0, flexShrink: 0 }} contentContainerStyle={styles.col}>
+            {middle}
+          </ScrollView>
+          {divider}
+        </>
+      ) : null}
       <ScrollView style={styles.half} contentContainerStyle={styles.col}>
         {right}
       </ScrollView>
@@ -376,14 +390,16 @@ export function BriefingSplit({ left, right, side }: { left: React.ReactNode; ri
 const styles = StyleSheet.create({
   historyRow: { minHeight: touch.min, flexDirection: "row", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.md, borderBottomWidth: StyleSheet.hairlineWidth },
   head: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
-  headRow: { flexDirection: "row", alignItems: "center", gap: space.md },
-  headName: { flex: 1, minWidth: 0, fontSize: font.title, fontWeight: "700" },
-  badges: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
+  headRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.md, rowGap: space.xxs },
+  headName: { flexShrink: 1, minWidth: 0, fontSize: font.title, fontWeight: "700" },
+  headWhen: { flexShrink: 1 },
+  headButton: { marginLeft: "auto" },
   kv: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xl, rowGap: space.sm },
   kvItem: { flexShrink: 0, gap: space.xxs },
   kvValue: { fontSize: font.h2, fontWeight: "700", fontVariant: ["tabular-nums"] },
   tool: { minHeight: FB.headH, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth },
   text: { paddingHorizontal: space.lg, paddingTop: space.md, gap: space.xs },
+  textFlush: { paddingTop: 0 },
   split: { flex: 1, flexDirection: "row" },
   half: { flex: 1, minWidth: 0 },
   col: { paddingBottom: space.xl, gap: space.sm },
