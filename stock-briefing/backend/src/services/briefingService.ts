@@ -55,8 +55,8 @@ export interface BriefingServiceDeps {
   collector: DataCollector;
   generator: TextGenerator;
   prompts: PromptStore;
-  /** 휴장일이면 해당 시장 종목을 건너뛴다 */
-  calendar?: { isTradingDay(code: string): Promise<boolean> } | null;
+  /** 세션이 다루는 그 시장의 거래일(briefingMarketDate)이 휴장일이면 해당 시장 종목을 건너뛴다 (providers/market/calendar.MarketCalendar) */
+  calendar?: { isTradingDate(market: "KR" | "US", date: string): Promise<boolean> } | null;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -138,6 +138,18 @@ export class BriefingService {
     const created: SessionDone["created"] = [];
     const trigger = opts.trigger ?? "manual";
     const partial = !!opts.codes?.length;
+    // 휴장 판단은 세션마다 시장별로 한 번 — 세션 날짜(date)가 다루는 현지 거래일로 (자정을 넘겨도, 달력을 다시 받아도 종목마다 달라지지 않게)
+    const trading = new Map<"KR" | "US", Promise<boolean>>();
+    const tradingFor = (code: string): Promise<boolean> => {
+      const market = isKrCode(code) ? "KR" : "US";
+      let p = trading.get(market);
+      if (!p) {
+        const cal = this.deps.calendar;
+        p = cal ? Promise.resolve().then(() => cal.isTradingDate(market, briefingMarketDate(market, session, date))).catch(() => true) : Promise.resolve(true);
+        trading.set(market, p);
+      }
+      return p;
+    };
     for (const l of this.startListeners) {
       try {
         await l({ session, trigger, partial });
@@ -161,13 +173,10 @@ export class BriefingService {
             continue;
           }
           // 휴장일(공휴일·주말)에는 시세가 움직이지 않아 의미 없는 브리핑이 되므로 건너뛴다 (강제 실행은 예외)
-          if (this.deps.calendar) {
-            const trading = await this.deps.calendar.isTradingDay(stock.code).catch(() => true);
-            if (!trading) {
-              this.deps.log?.info({ code: stock.code, session }, "휴장일이라 브리핑 건너뜀");
-              results.push({ code: stock.code, name: stock.name, status: "skipped", briefingId: null, error: "휴장일", summary: null });
-              continue;
-            }
+          if (!(await tradingFor(stock.code))) {
+            this.deps.log?.info({ code: stock.code, session }, "휴장일이라 브리핑 건너뜀");
+            results.push({ code: stock.code, name: stock.name, status: "skipped", briefingId: null, error: "휴장일", summary: null });
+            continue;
           }
         }
         const { briefing: b, changeRate } = await this.generate(stock, session, date);
@@ -405,6 +414,20 @@ function safeJson<T>(s: string): T | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 브리핑 세션(서울 날짜 date)이 다루는 그 시장의 현지 거래일 — 휴장 판단 기준 ("지금"의 현지 날짜가 아니다).
+ *  - 한국: 세션 날짜 그대로 (오전은 장 시작 전, 오후는 장 마감 후)
+ *  - 미국 오후: 세션 날짜 (한국 오후는 뉴욕 새벽, 그날 밤 열릴 정규장에 딸린 주간거래 중)
+ *  - 미국 오전: 지난밤(세션 날짜 전날) 정규장. 월요일은 주말을 건너 금요일 — 금요일 정규장은 토요일 새벽(한국)에 끝나
+ *    평일 오전 브리핑이 아직 보지 못했다 (뉴욕 날짜로 오늘을 보면 일요일이라 휴장으로 빠졌다)
+ */
+export function briefingMarketDate(market: "KR" | "US", session: BriefingSession, date: string): string {
+  if (market === "KR" || session === "afternoon") return date;
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - (d.getUTCDay() === 1 ? 3 : 1));
+  return d.toISOString().slice(0, 10);
 }
 
 /** 요약은 알림 본문이므로 마크다운 기호를 걷어내고 3줄로 제한 */

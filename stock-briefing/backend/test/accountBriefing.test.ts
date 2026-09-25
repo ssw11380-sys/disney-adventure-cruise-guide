@@ -1011,10 +1011,14 @@ class AccountGen implements TextGenerator {
 
 /** 두 시장 모두 휴장인 날 */
 const closed = (market: "KR" | "US") => ({ market, isTradingDay: false, isOpen: false, opensAt: "2026-09-28T23:00:00.000Z", closesAt: null, source: "toss" as const });
-const holidayCalendar = { status: async (): Promise<MarketStatus> => ({ now: "", KR: closed("KR"), US: closed("US") }), isTradingDay: async () => false };
+const holidayCalendar = { status: async (): Promise<MarketStatus> => ({ now: "", KR: closed("KR"), US: closed("US") }), isTradingDay: async () => false, isTradingDate: async () => false };
 /** 한국만 휴장인 날 (추석 등): 국내 종목 브리핑은 건너뛰고 미국은 만든다 */
 const openUs = { market: "US" as const, isTradingDay: true, isOpen: false, opensAt: "2026-09-25T13:30:00.000Z", closesAt: null, source: "toss" as const };
-const krHolidayCalendar = { status: async (): Promise<MarketStatus> => ({ now: "", KR: closed("KR"), US: openUs }), isTradingDay: async (code: string) => !/^\d/.test(code) };
+const krHolidayCalendar = {
+  status: async (): Promise<MarketStatus> => ({ now: "", KR: closed("KR"), US: openUs }),
+  isTradingDay: async (code: string) => !/^\d/.test(code),
+  isTradingDate: async (market: "KR" | "US") => market === "US",
+};
 
 const AAPL: ListedStock = { code: "AAPL", name: "애플", market: "NASDAQ", isinCode: null, groupCode: null };
 const TOKEN = "ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]";
