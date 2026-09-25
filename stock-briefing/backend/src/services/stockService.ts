@@ -429,7 +429,7 @@ export class StockService {
   }
 
   private async removeNow(code: string): Promise<{ tossExcluded: boolean }> {
-    // 동기화가 오래 멈춰 잠금이 풀렸어도 마지막 토스 스냅샷에 있던 종목이면 뺀다 (동기화가 살아나면 지운 종목을 다시 넣지 않게)
+    // 동기화가 오래 멈췄거나 자동 동기화가 꺼져 잠그지 않아도 마지막 토스 스냅샷에 있던 종목이면 뺀다 (다음 동기화가 지운 종목을 다시 넣지 않게)
     const synced = (await this.tossSynced(true)).has(code);
     const r = await this.deps.db.deleteFrom("registered_stocks").where("code", "=", code).executeTakeFirst();
     if (Number(r.numDeletedRows) === 0) throw new NotFoundError(`등록되지 않은 종목입니다: ${code}`);
@@ -471,8 +471,10 @@ export class StockService {
    * 토스 연동이 꺼져 있으면(키 없음) 잠그지 않는다
    */
   private syncedFrom(snapshot: string | null, excluded: string | null, detail: string | null, evenIfStale = false): Set<string> {
-    if (!this.deps.tossOpenApi || this.deps.tossSyncMinutes === 0) return new Set();
-    // 동기화가 멈춘 지(3시간) 오래면 잠그지 않는다 — 옛 값에 묶여 고칠 수 없게 되지 않게 (evenIfStale: 삭제는 잠금과 상관없이 동기화에서 뺀다)
+    if (!this.deps.tossOpenApi) return new Set();
+    // 자동 동기화를 껐거나(0분) 동기화가 멈춘 지(3시간) 오래면 잠그지 않는다 — 옛 값에 묶여 고칠 수 없게 되지 않게.
+    // evenIfStale: 삭제는 잠금과 상관없이 마지막 토스 스냅샷에 있던 종목이면 동기화에서 뺀다 (수동 동기화·재개 때 다시 나타나지 않게)
+    if (!evenIfStale && this.deps.tossSyncMinutes === 0) return new Set();
     const syncedAt = detail ? Date.parse(((): string => { try { return String((JSON.parse(detail) as { syncedAt?: string }).syncedAt ?? ""); } catch { return ""; } })()) : NaN;
     if (!evenIfStale && (Number.isNaN(syncedAt) || this.now().getTime() - syncedAt > 3 * 3_600_000)) return new Set();
     const ex = new Set(parseCodes(excluded));

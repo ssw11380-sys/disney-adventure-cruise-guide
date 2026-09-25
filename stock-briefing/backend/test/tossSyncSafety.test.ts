@@ -6,7 +6,7 @@ import { createMigratedDb, migrate } from "../src/db/index.js";
 import type { Database } from "../src/db/schema.js";
 import { TossOpenApiProvider, type TossHolding } from "../src/providers/market/tossOpenApi.js";
 import { StockService } from "../src/services/stockService.js";
-import { HoldingsAutoSync, TossSyncService } from "../src/services/tossSyncService.js";
+import { ACCOUNTS_KEY, HoldingsAutoSync, TossSyncService } from "../src/services/tossSyncService.js";
 import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider, fakeProviders } from "./helpers.js";
 import { client, NOW as TOSS_NOW } from "./tossFake.js";
 
@@ -21,15 +21,20 @@ class FakeToss {
   accountsList = [1];
   holdings: Record<number, TossHolding[]> = { 1: [] };
   glitch: Record<number, TossHolding[]> = {};
+  /** 계좌 요약의 달러 매입금액을 모름(null)으로 주는 계좌 */
+  usdUnknown = new Set<number>();
+  holdingsCalls = 0;
   ordersGate: Promise<void> | null = null;
   ordersCalled = false;
   async accounts() {
     return this.accountsList.map((s) => ({ accountNo: String(s), accountSeq: s, accountType: "BROKERAGE" }));
   }
   async holdingsWithOverview(seq: number) {
+    this.holdingsCalls++;
     const real = this.holdings[seq] ?? [];
     const sum = (cur: "KRW" | "USD") => real.filter((x) => x.currency === cur).reduce((s, x) => s + x.quantity * (x.avgPrice ?? 0), 0);
-    return { items: this.glitch[seq] ?? real, overview: { purchaseKrw: sum("KRW"), purchaseUsd: sum("USD"), afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } };
+    const purchaseUsd = this.usdUnknown.has(seq) ? null : sum("USD");
+    return { items: this.glitch[seq] ?? real, overview: { purchaseKrw: sum("KRW"), purchaseUsd, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } };
   }
   async ordersForBook() {
     this.ordersCalled = true;
@@ -69,7 +74,7 @@ async function setup(opts: { syncMinutes?: number } = {}) {
   const sync = new TossSyncService(db, toss.asProvider(), now);
   const excluded = async () => (await db.selectFrom("meta").select("value").where("key", "=", "toss_sync_excluded").executeTakeFirst())?.value ?? null;
   const codes = async () => (await stocks.list()).map((s) => s.code).sort();
-  return { db, toss, stocks, sync, advance, excluded, codes };
+  return { db, toss, stocks, sync, now, advance, excluded, codes };
 }
 
 describe("BH-14 원화 장부 갱신(토스 호출)은 등록 종목 쓰기 잠금 밖에서", () => {
@@ -140,7 +145,70 @@ describe("BH-34 보유 응답이 한 번 비거나 계좌가 잠깐 빠져도 �
     await db.destroy();
   });
 
-  it("진짜 전량 매도는 그대로 반영한다: 요약도 0 이면 바로, 요약과 맞지 않는 빈 응답이 두 번 연속이면 그때", async () => {
+  it("같은 일시 오류를 몇 초 사이 두 번 봐도(체결 동기화 + 바로 이어진 재실행) 확정하지 않는다", async () => {
+    const { db, toss, stocks, sync, now, excluded, codes } = await setup();
+    toss.holdings[1] = [us("SOXL", 100, 30), kr("005930", 3, 70000)];
+    await sync.importHoldings();
+    await stocks.remove("005930");
+    toss.glitch[1] = [];
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 10, now });
+    const first = auto.run("order");
+    await auto.run("order"); // 실행 중 체결 알림 → 끝나면 한 번 더
+    await first;
+    await vi.waitFor(() => expect(toss.holdingsCalls).toBe(3));
+    await vi.waitFor(() => expect(auto.status().running).toBe(false));
+    expect(auto.status().lastChanges).toMatchObject({ removed: 0 });
+    expect(await stocks.get("SOXL")).toMatchObject({ quantity: 100, avgPrice: 30 });
+    expect(await excluded()).toBe('["005930"]');
+
+    delete toss.glitch[1];
+    const r = await sync.importHoldings();
+    expect(r.added).toEqual([]);
+    expect(await codes()).toEqual(["SOXL"]);
+    await db.destroy();
+  });
+
+  it("계좌가 10분 간격 동기화 두 번 동안 빠져도 그 계좌 종목을 관심으로 바꾸지 않고, 돌아오면 지운 종목도 그대로 빠져 있다", async () => {
+    const { db, toss, stocks, sync, advance, excluded, codes } = await setup();
+    toss.accountsList = [3, 7];
+    toss.holdings = { 3: [kr("005930", 3, 70000)], 7: [us("NVDA", 5, 120), us("AMD", 2, 150)] };
+    await sync.importHoldings();
+    await stocks.remove("AMD");
+    toss.accountsList = [3];
+    expect((await sync.importHoldings()).removed).toEqual([]);
+    advance(10 * 60_000);
+    expect((await sync.importHoldings()).removed).toEqual([]);
+    expect(await stocks.get("NVDA")).toMatchObject({ quantity: 5, avgPrice: 120 });
+    expect(await excluded()).toBe('["AMD"]');
+
+    toss.accountsList = [3, 7];
+    advance(10 * 60_000);
+    expect((await sync.importHoldings()).added).toEqual([]);
+    expect(await codes()).toEqual(["005930", "NVDA"]);
+    await db.destroy();
+  });
+
+  it("믿지 않는 계좌 몫만 미룬다: 다른 계좌가 비어 있거나 잠깐 빠져도 이 계좌의 진짜 전량 매도는 바로 반영한다", async () => {
+    const { db, toss, stocks, sync } = await setup();
+    toss.accountsList = [1, 2];
+    toss.holdings = { 1: [us("SOXL", 100, 30), kr("005930", 3, 70000)], 2: [] };
+    toss.usdUnknown.add(2); // 계좌 2: 보유 없음 + 요약의 달러 매입금액 모름
+    await sync.importHoldings();
+    toss.holdings[1] = [kr("005930", 3, 70000)]; // 계좌 1 에서 SOXL 전량 매도
+    expect((await sync.importHoldings()).removed).toEqual(["SOXL"]);
+    expect(await stocks.get("SOXL")).toMatchObject({ quantity: null, avgPrice: null });
+
+    // 보유가 있던 계좌 2 가 목록에서 빠진 사이에도 계좌 1 의 매도는 바로
+    toss.holdings = { 1: [kr("005930", 3, 70000)], 2: [us("NVDA", 5, 120)] };
+    await sync.importHoldings();
+    toss.accountsList = [1];
+    toss.holdings[1] = [];
+    expect((await sync.importHoldings()).removed).toEqual(["005930"]);
+    expect(await stocks.get("NVDA")).toMatchObject({ quantity: 5, avgPrice: 120 });
+    await db.destroy();
+  });
+
+  it("진짜 전량 매도는 반영한다: 요약도 0 이면 바로, 요약과 맞지 않는 응답·빠진 계좌는 24시간 넘게 두 번 이상 이어지면 그때", async () => {
     const a = await setup();
     a.toss.holdings[1] = [us("SOXL", 100, 30)];
     await a.sync.importHoldings();
@@ -155,9 +223,40 @@ describe("BH-34 보유 응답이 한 번 비거나 계좌가 잠깐 빠져도 �
     await b.stocks.remove("005930");
     b.toss.glitch[1] = [];
     expect((await b.sync.importHoldings()).removed).toEqual([]);
-    expect((await b.sync.importHoldings()).removed).toEqual(["SOXL"]); // 두 번 연속 없으면 전량 매도로 본다
+    b.advance(23 * 3_600_000);
+    expect((await b.sync.importHoldings()).removed).toEqual([]); // 두 번째지만 아직 24시간 전
+    expect(await b.excluded()).toBe('["005930"]');
+    b.advance(2 * 3_600_000);
+    expect((await b.sync.importHoldings()).removed).toEqual(["SOXL"]);
     expect(await b.excluded()).toBe("[]");
     await b.db.destroy();
+
+    // 동기화가 하루 넘게 멈췄다가 처음 한 번 빠진 것만으로는 지우지 않는다 (처음 빠진 시각부터 센다)
+    const c = await setup();
+    c.toss.accountsList = [3, 7];
+    c.toss.holdings = { 3: [kr("005930", 3, 70000)], 7: [us("NVDA", 5, 120)] };
+    await c.sync.importHoldings();
+    c.advance(48 * 3_600_000);
+    c.toss.accountsList = [3];
+    expect((await c.sync.importHoldings()).removed).toEqual([]);
+    c.advance(10 * 60_000);
+    expect((await c.sync.importHoldings()).removed).toEqual([]);
+    c.advance(24 * 3_600_000);
+    expect((await c.sync.importHoldings()).removed).toEqual(["NVDA"]); // 해지·권한 해제로 보고 반영
+    expect(await c.stocks.get("NVDA")).toMatchObject({ quantity: null, avgPrice: null });
+    expect(await c.stocks.get("005930")).toMatchObject({ quantity: 3 });
+    await c.db.destroy();
+  });
+
+  it("계좌별 기록이 없던 서버에서 넘어온 첫 동기화도 요약과 맞지 않는 빈 응답을 전량 매도로 보지 않는다", async () => {
+    const { db, toss, stocks, sync } = await setup();
+    toss.holdings[1] = [us("SOXL", 100, 30)];
+    await sync.importHoldings();
+    await db.deleteFrom("meta").where("key", "=", ACCOUNTS_KEY).execute(); // 이전 서버에서 동기화한 상태
+    toss.glitch[1] = [];
+    expect((await sync.importHoldings()).removed).toEqual([]);
+    expect(await stocks.get("SOXL")).toMatchObject({ quantity: 100, avgPrice: 30 });
+    await db.destroy();
   });
 });
 
@@ -174,6 +273,26 @@ describe("BH-46 동기화가 3시간 넘게 멈춘 사이 지운 토스 종목",
     expect(r.added).toEqual([]);
     expect(r.excluded).toEqual(["035420"]);
     expect(await codes()).toEqual(["TSLA"]);
+    await db.destroy();
+  });
+
+  it("자동 동기화가 꺼져 있어도(0분) 토스에서 가져온 종목을 지우면 수동 동기화가 다시 넣지 않는다 (다시 등록하면 다시 맞춤)", async () => {
+    const { db, toss, stocks, sync, excluded, codes } = await setup({ syncMinutes: 0 });
+    toss.holdings[1] = [kr("005930", 3, 70000), us("TSLA", 4, 320)];
+    const auto = new HoldingsAutoSync({ sync, intervalMin: 0, now: NOW });
+    await auto.run("manual");
+    expect((await stocks.tossSynced()).size).toBe(0); // 꺼져 있으면 잠그지 않는다
+    expect(await stocks.remove("005930")).toEqual({ tossExcluded: true });
+
+    const r = await auto.run("manual");
+    expect(r?.added).toEqual([]);
+    expect(r?.excluded).toEqual(["005930"]);
+    expect(await codes()).toEqual(["TSLA"]);
+
+    await stocks.register({ code: "005930" });
+    expect(await excluded()).toBe("[]");
+    await auto.run("manual");
+    expect(await stocks.get("005930")).toMatchObject({ quantity: 3, avgPrice: 70000 });
     await db.destroy();
   });
 });
