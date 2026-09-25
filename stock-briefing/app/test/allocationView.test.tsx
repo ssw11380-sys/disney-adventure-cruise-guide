@@ -27,7 +27,10 @@ vi.mock("react-native", () => ({
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1, absoluteFill: {} },
   Alert: { alert: vi.fn() },
   Platform: { OS: "android" },
+  // 잔고 탭의 넓은 창 배치 판단(3-42, 플래그 foldLayout — 여기서는 꺼짐 → 휴대폰 화면)
+  useWindowDimensions: () => ({ width: 411, height: 900, scale: 2.625, fontScale: 1 }),
 }));
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("react-native-svg", () => ({ Svg: "Svg", Path: "Path" }));
 vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: h.push } }));

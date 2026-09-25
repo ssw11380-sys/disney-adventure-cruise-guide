@@ -30,6 +30,8 @@ export interface Theme {
   bg: string; // 화면 바탕
   surface: string; // 패널
   surfaceAlt: string; // 표 머리·눌림·입력칸
+  /** 넓은 잔고 표의 줄무늬 (짝수 줄 바탕, 3-42). surface 와 번갈아 칠해 줄을 눈으로 따라가게 한다 */
+  zebra: string;
   line: string; // 구분선
   lineStrong: string;
   ink: string;
@@ -69,6 +71,7 @@ export const dark: Theme = {
   bg: "#0B0D11",
   surface: "#12151B",
   surfaceAlt: "#1A1E26",
+  zebra: "#161A21",
   line: "#20252E",
   lineStrong: "#2C323D",
   ink: "#E8EAED",
@@ -112,6 +115,7 @@ export const light: Theme = {
   bg: "#EEF0F3",
   surface: "#FFFFFF",
   surfaceAlt: "#F5F6F8",
+  zebra: "#F7F8FA",
   line: "#E4E7EB",
   lineStrong: "#D3D7DD",
   ink: "#15181D",
@@ -208,7 +212,10 @@ export const layout = {
   twoPaneExit: 816,
   /** 2단 왼쪽 목록 폭 (글자 100%). 큰 글씨에서는 lib/windowClass 의 listPaneWidth 로 넓힌다 */
   listPaneW: 400,
-  /** 한 단 화면을 넓은 창 가운데에 모을 때 내용의 최대 폭 (Screen readable) */
+  /**
+   * 한 단 화면을 넓은 창 가운데에 모을 때 내용의 최대 폭 (Screen readable).
+   * 긴 글 전용 — 주 화면(잔고·발견·브리핑·설정·종목 상세)에는 쓰지 않는다 (3-42 최종 설계: 넓어진 폭은 숫자 칸·두 번째 칸으로 채운다)
+   */
   readableMax: 720,
   /** 창 높이가 이보다 낮으면 '높이 짧음' (펼친 폴드8 가로 704 는 짧음, 울트라 가로 859 는 아님) */
   shortHeight: 760,
@@ -222,4 +229,34 @@ export const layout = {
   railHysteresis: 24,
   /** 2단 사이 구분선 두께 */
   divider: 1,
+  /** 세로 탭 막대의 탭 한 칸 높이 (글자 100%). 탭 4개를 막대 세로 가운데에 모은다 */
+  railTabH: 64,
+
+  // ── 넓은 잔고 표 (3-42 웨이브 B) ──
+  /** 넓은 창 맨 위 띠 높이: 지수 칸 두 줄(이름+등락률 / 값) + 오른쪽 시장 상태·검색 */
+  stripH: 48,
+  /** 맨 위 띠 오른쪽 시장 상태 칸 폭 (두 줄로 접힌다. 큰 글씨면 줄이 늘고 띠가 높아진다) */
+  stripStatusW: 220,
+  /** 계좌 띠 한 줄 높이 */
+  bandH: 52,
+  /** 계좌 띠가 두 줄일 때 한 줄 높이 (48 × 2) */
+  bandRowH: 48,
+  /** 계좌 띠를 한 줄로 쓰는 최소 폭 (글자 100%, 큰 글씨는 배율만큼 높인다). 이보다 좁으면 두 줄 (펼친 폴드8 세로 704) */
+  bandOneLineMin: 800,
+  /** 표 머리 높이 (정렬 칸은 hitSlop 으로 44) */
+  headH: 40,
+  /** 표 한 줄 높이 (휴대폰 줄 58 보다 낮은 한 줄 표) */
+  rowH: 44,
+  /**
+   * 표 숫자 열 폭 (글자 100%). 큰 글씨는 lib/holdingsColumns pickCols 가 배율(최대 fontCap.row)만큼 넓힌다.
+   * 보유: 현재가·등락률 ‖ 평가손익·수익률 ‖ 당일손익·평가금액·비중·평단·수량 / 관심: 현재가·등락률 ‖ 전일대비·거래량
+   */
+  cols: { price: 86, rate: 62, profit: 106, profitRate: 66, day: 82, value: 94, weight: 76, avg: 72, qty: 56, move: 82, volume: 72 },
+  /** 열 묶음 사이 구분선 칸 폭 (가운데에 세로선) */
+  colGap: 14,
+  /** 종목 이름 칸 최소 폭. 이보다 좁아지면 숫자 열을 뒤에서부터 뺀다 */
+  nameMinW: 146,
+  /** 비중 칸 막대 길이·두께 */
+  weightBarW: 30,
+  weightBarH: 4,
 } as const;

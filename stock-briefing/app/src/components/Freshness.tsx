@@ -83,7 +83,8 @@ export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix, quotes,
     s = liveLabel({ open, closedLabel, streamFresh: fresh, offline: conn.offline, stale: conn.stale });
     warn = s.tone === "offline" || (s.tone === "delayed" && conn.stale);
   }
-  const text = `${s.text}${conn.asOf ? ` · ${clockLabel(conn.asOf, now)}` : ""} · ${suffix}`;
+  // suffix 가 비면(넓은 창 맨 위 띠 — 보유·관심 수는 표 머리에 있다, 3-42) 끝의 " · " 없이
+  const text = `${s.text}${conn.asOf ? ` · ${clockLabel(conn.asOf, now)}` : ""}${suffix ? ` · ${suffix}` : ""}`;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, flexShrink: 1 }} accessible accessibilityLabel={text}>
       <View style={[styles.dot, { backgroundColor: s.tone === "live" ? t.live : warn ? t.warn : t.muted }]} />

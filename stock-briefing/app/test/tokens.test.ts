@@ -39,7 +39,8 @@ function oklabDelta(a: string, b: string, cvd?: keyof typeof MACHADO): number {
 
 /** 글자로 쓰는 색 (바탕 3종 위에서 4.5 이상) */
 const TEXT = ["ink", "sub", "muted", "accent", "gold", "up", "down", "live", "warn", "danger"] as const;
-const BACK = ["bg", "surface", "surfaceAlt"] as const;
+/** zebra: 넓은 잔고 표의 줄무늬 바탕 (3-42) — 그 위의 숫자·등락 글자도 4.5 이상 */
+const BACK = ["bg", "surface", "surfaceAlt", "zebra"] as const;
 
 describe.each([
   ["다크", dark],
