@@ -200,6 +200,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       // 브리핑 직전에 토스 계좌를 한 번 더 읽어 수량·평단이 최신이 되게 한다
       ...(tossDeps ? { beforeRun: async () => void (await tossDeps!.autoSync.run("briefing")) } : {}),
       log,
+      now,
     });
     scheduler.start();
     app.addHook("onClose", async () => scheduler?.stop());

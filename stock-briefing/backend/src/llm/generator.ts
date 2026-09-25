@@ -139,19 +139,23 @@ export class ClaudeGenerator implements TextGenerator {
   }
 }
 
+/**
+ * SDK 재시도(maxRetries)를 다 쓴 뒤의 오류 → 사용자에게 보이는 문구 (브리핑 카드·상태 배너·분석 화면).
+ * 실패한 브리핑을 서버가 나중에 저절로 다시 만들지는 않으므로 "자동 재시도"를 약속하지 않는다
+ */
 function toGenerationError(e: unknown): GenerationError {
   if (e instanceof Anthropic.AuthenticationError) return new GenerationError("API 키/자격 증명이 올바르지 않습니다 (401)", "config", e);
   if (e instanceof Anthropic.PermissionDeniedError) {
     return new GenerationError("권한이 없습니다 (403). Bedrock 이면 모델 접근 권한(Model access)과 IAM 정책(bedrock-mantle:CreateInference)을 확인하세요", "config", e);
   }
   if (e instanceof Anthropic.NotFoundError) return new GenerationError(`모델을 찾을 수 없습니다 (404): 모델 ID 와 리전을 확인하세요. ${(e as Error).message}`, "config", e);
-  if (e instanceof Anthropic.RateLimitError) return new GenerationError("API 사용량 제한에 걸렸습니다 (429). 잠시 후 자동 재시도됩니다", "api", e);
+  if (e instanceof Anthropic.RateLimitError) return new GenerationError("API 사용량 제한에 걸렸습니다 (429). 잠시 뒤 다시 시도해 주세요", "api", e);
   if (e instanceof Anthropic.APIError) {
     const msg = `${e.message}`.toLowerCase();
     if (e.status === 402 || msg.includes("credit balance") || msg.includes("billing") || msg.includes("insufficient")) {
       return new GenerationError("Anthropic 크레딧이 부족합니다. console.anthropic.com → Billing 에서 충전하세요", "config", e);
     }
-    if (e.status !== undefined && e.status >= 500) return new GenerationError(`Anthropic 서버 장애 (${e.status}). 다음 실행에서 자동 재시도됩니다`, "api", e);
+    if (e.status !== undefined && e.status >= 500) return new GenerationError(`Anthropic 서버 장애 (${e.status}). 잠시 뒤 다시 시도해 주세요`, "api", e);
     return new GenerationError(`API 오류 ${e.status ?? ""}: ${e.message}`, "api", e);
   }
   return new GenerationError(`모델 호출 실패: ${(e as Error).message}`, "api", e);
