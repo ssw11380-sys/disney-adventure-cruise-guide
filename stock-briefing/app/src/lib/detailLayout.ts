@@ -2,7 +2,7 @@ import type { AnalysisKind } from "@/api/types";
 import { estimateTextWidth } from "@/lib/chartLayout";
 import { clampScale } from "@/lib/textScale";
 import type { FoldLayout } from "@/lib/windowClass";
-import { font, fontCap, foldDetail, space, touch } from "@/tokens";
+import { font, fontCap, foldDetail, layout, space, touch } from "@/tokens";
 
 /**
  * 종목 상세의 넓은 창 배치 계산 (3-42 웨이브 C, 기능 플래그 foldLayout). React Native 를 불러오지 않는 순수 모듈 (테스트용).
@@ -67,19 +67,21 @@ export function chunkRows<T>(items: readonly T[], n: number): T[][] {
 
 /**
  * 폭 중간 한 단 배치(wide)의 차트 그림 높이 상한 = 창 높이 × foldDetail.wideChartHRatio.
- * CandleChart 의 기본(폭 × 0.62, 창 높이 × 0.5)보다 낮게 잡아, 차트와 시세·보유 숫자가 첫 화면에 함께 들어온다
+ * CandleChart 의 기본(폭 × layout.chartAspect(0.62), 창 높이 × 0.5)보다 낮게 잡아, 차트와 시세·보유 숫자가 첫 화면에 함께 들어온다.
+ * 하한은 상세 차트 공통 layout.chartMinH — 단 그 폭의 기본 높이(폭 × chartAspect)보다 높이지는 않는다 (CandleChart 와 같은 규칙)
  */
 export function wideChartHeight(chartW: number, winH: number): number {
-  return Math.max(foldDetail.chartMinH, Math.round(Math.min(chartW * 0.62, winH * foldDetail.wideChartHRatio)));
+  const natural = chartW * layout.chartAspect;
+  return Math.round(Math.max(Math.min(layout.chartMinH, natural), Math.min(natural, winH * foldDetail.wideChartHRatio)));
 }
 
 /**
  * 좌우 배치 왼쪽 칸의 차트 그림 높이: 칸 높이에서 차트 둘레(기간 칩·읽기 줄·이동평균 값·지표 칩·안내)를 뺀 나머지.
- * 둘레 높이는 그려 본 뒤 잰 값(처음에는 어림)이다. 최소 foldDetail.chartMinH — 더 낮은 창에서는 왼쪽 칸이 스크롤된다
+ * 둘레 높이는 그려 본 뒤 잰 값(처음에는 어림)이다. 최소 layout.chartMinH(상세 차트 공통 최소 높이) — 더 낮은 창에서는 왼쪽 칸이 스크롤된다
  */
 export function fillChartHeight(paneH: number, chromeH: number): number {
-  if (!(paneH > 0)) return foldDetail.chartMinH;
-  return Math.max(foldDetail.chartMinH, Math.floor(paneH - chromeH));
+  if (!(paneH > 0)) return layout.chartMinH;
+  return Math.max(layout.chartMinH, Math.floor(paneH - chromeH));
 }
 
 // ── 탭 ──
@@ -104,14 +106,9 @@ export function wideTab(pick: DetailTab | null): DetailTab {
   return pick ?? "briefing";
 }
 
-/** 윗줄+아랫줄 배치: 브리핑·뉴스·공시는 아랫줄에 늘 보이므로 오른쪽 칸 탭은 AI 분석 셋만 — 그 밖의 값이면 기업개요 */
-export function analysisTab(pick: DetailTab | null): AnalysisKind {
-  return pick === "company" || pick === "value" || pick === "technical" ? pick : "company";
-}
-
 /**
  * AI 분석 미리보기 글 (윗줄+아랫줄 배치 오른쪽 칸): 마크다운 제목·구분선·표 줄은 빼고, 목록 기호·강조 기호·링크 주소를 걷어 한 문단으로.
- * 앞 몇 줄만 보이고(foldDetail.previewLines) '더 보기'로 원래 마크다운 전체를 보인다
+ * 앞 몇 줄만 보이고(foldDetail.previewCompanyLines · previewTechLines) '더 보기'로 원래 마크다운 전체를 보인다
  */
 export function markdownPreview(md: string): string {
   return md

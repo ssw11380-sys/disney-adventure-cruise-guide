@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   win: { width: 475, height: 751, scale: 2.625, fontScale: 1 },
   flag: undefined as boolean | undefined,
   params: { code: "KOSPI" } as Record<string, string>,
+  insets: { top: 0, bottom: 0, left: 0, right: 0 },
 }));
 
 vi.mock("react-native", () => ({
@@ -21,7 +22,7 @@ vi.mock("react-native", () => ({
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
   useWindowDimensions: () => h.win,
 }));
-vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => h.insets }));
 vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
 vi.mock("expo-router", () => ({ Stack: { Screen: "StackScreen" }, router: { setParams: vi.fn(), back: vi.fn() }, useLocalSearchParams: () => h.params }));
 vi.mock("@/theme", async () => {
@@ -73,6 +74,7 @@ const size = (width: number, height: number, fontScale = 1) => {
 beforeEach(() => {
   size(475, 751);
   h.flag = undefined;
+  h.insets = { top: 0, bottom: 0, left: 0, right: 0 };
   forgetWindowClass();
 });
 
@@ -80,6 +82,13 @@ describe("지수 상세: 플래그 꺼짐·좁은 창은 지금 화면 그대로
   it("플래그 꺼짐 · 폴드8 펼침 가로 크기", () => {
     size(933, 704);
     expect(tree(render(<MarketIndexScreen />).tree)).toMatchSnapshot();
+  });
+
+  it("플래그가 꺼져 있으면 화면 여백(safe area)이 있어도 지금 화면과 같다", () => {
+    size(933, 704);
+    const golden = tree(render(<MarketIndexScreen />).tree);
+    h.insets = { top: 32, bottom: 48, left: 24, right: 0 };
+    expect(tree(render(<MarketIndexScreen />).tree)).toEqual(golden);
   });
 
   it("플래그가 꺼져 있으면 여섯 크기 모두, 켜져 있어도 접힌 화면은 같은 결과", () => {
@@ -133,6 +142,44 @@ describe("지수 상세 넓은 창", () => {
       expect(typeof screen.props.onRefresh).toBe("function");
       expect(render(screen.props.top as React.ReactElement).has("뒤로")).toBe(true);
       expect(all(r).find((n) => n.type === "CandleChart")!.props.height).toBeUndefined();
+    }
+  });
+});
+
+describe("지수 상세 넓은 창: 아래 작업 표시줄 · 좌우 카메라 구멍 여백 (앱은 화면 끝까지 그린다)", () => {
+  const all = (r: ReturnType<typeof render>) => r.all();
+  const flat = (n: HostNode): Record<string, unknown> => Object.assign({}, ...[n.props.style].flat(Infinity).filter(Boolean));
+  const INSETS = { top: 24, bottom: 48, left: 32, right: 16 };
+
+  it("좌우 배치: 차트 칸이 작업 표시줄(48) 위에서 끝나고 좌우 여백을 비운다 — 차트는 그 안쪽 높이에 맞춘다", () => {
+    h.flag = true;
+    h.insets = INSETS;
+    size(933, 704);
+    const r = render(<MarketIndexScreen />);
+    const outer = all(r).find((n) => flat(n).flex === 1 && flat(n).paddingBottom === INSETS.bottom)!;
+    expect(outer).toBeDefined();
+    expect([flat(outer).paddingLeft, flat(outer).paddingRight]).toEqual([INSETS.left, INSETS.right]);
+    // 재는 칸은 여백 안쪽 (여백을 뺀 높이를 받는다)
+    const body = outer.children.find((c): c is HostNode => typeof c !== "string" && typeof c.props.onLayout === "function")!;
+    r.act(() => (body.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 933 - 48, height: 430 } } }));
+    expect(all(r).find((n) => n.type === "CandleChart")!.props.height).toBe(430 - 120);
+    // 지수 띠도 좌우 여백 안쪽
+    const strip = all(r).find((n) => n.type === "MarketStrip")!;
+    expect(all(r).some((n) => n.children.includes(strip) && flat(n).paddingLeft === INSETS.left && flat(n).paddingRight === INSETS.right)).toBe(true);
+  });
+
+  it("한 단(펼침 세로): 끝까지 내리면 출처 줄이 작업 표시줄 위에 (아래 여백 = 기본 + 48), 차트 칸 좌우도 여백 안쪽", () => {
+    h.flag = true;
+    h.insets = INSETS;
+    for (const [w, hh] of [[704, 933], [859, 954]] as const) {
+      forgetWindowClass();
+      size(w, hh);
+      const r = render(<MarketIndexScreen />);
+      const screen = all(r).find((n) => n.type === "Screen")!;
+      expect(flat({ ...screen, props: { style: screen.props.contentStyle } } as HostNode).paddingBottom, `${w}x${hh}`).toBeGreaterThanOrEqual(INSETS.bottom + 8);
+      const panel = all(r).find((n) => n.children.some((c) => typeof c !== "string" && c.type === "CandleChart"))!;
+      expect(flat(panel).paddingLeft).toBeGreaterThan(INSETS.left);
+      expect(flat(panel).paddingRight).toBeGreaterThan(INSETS.right);
     }
   });
 });

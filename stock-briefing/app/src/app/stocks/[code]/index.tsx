@@ -13,12 +13,12 @@ import { ChartNotice, StaleBanner, useFeedState, usePull } from "@/components/Fr
 import { DetailSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { SplitScreen } from "@/components/SplitScreen";
-import { AnalysisTab, BriefingList, DetailHeader, FillChart, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
+import { AnalysisPreview, AnalysisTab, BriefingList, DetailHeader, FillChart, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
 import { ErrorView, LiveDot, Segmented, Stat, StatGrid } from "@/components/ui";
-import { analysisTab, detailMode, parseDetailTab, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
+import { detailMode, parseDetailTab, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, shownSign, toDisplay } from "@/lib/format";
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
-import { rememberNav, useHoldingsNav, type NavItem } from "@/lib/holdingsNav";
+import { rememberNav, useCachedRow, useHoldingsNav, type NavItem } from "@/lib/holdingsNav";
 import { quoteLive, sessionNote, sessionOpen } from "@/lib/liveDot";
 import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
@@ -42,12 +42,6 @@ const WIDE_TABS: { value: DetailTab; label: string }[] = [
   { value: "value", label: "가치" },
   { value: "technical", label: "기술" },
 ];
-/** 윗줄+아랫줄 배치의 오른쪽 칸 AI 분석 탭 (브리핑·뉴스·공시는 아랫줄에 늘 보인다) */
-const ANALYSIS_TABS: { value: AnalysisKind; label: string }[] = [
-  { value: "company", label: "기업개요" },
-  { value: "value", label: "가치분석" },
-  { value: "technical", label: "기술분석" },
-];
 
 /** 시세표 항목 (휴대폰 화면 2열 격자의 가로 먼저 순서) */
 type QuoteId = "open" | "prev" | "high" | "volume" | "low" | "cap" | "h52" | "l52" | "per" | "pbr" | "eps" | "bps" | "dy" | "dps";
@@ -59,10 +53,11 @@ const COLUMN_ORDER: QuoteId[] = ["open", "high", "low", "prev", "volume", "cap",
  * 종목 상세: 시세 헤더, 52주 위치, 지표 격자, 캔들 차트, 4개 탭, 최근 브리핑.
  * 넓은 창(3-42 웨이브 C, 기능 플래그 foldLayout)에서는 합친 머리 아래 배치를 바꾼다 (lib/detailLayout detailMode):
  *  - split (펼친 폴드8 가로·울트라 가로): 왼쪽 차트 고정 | 오른쪽 칸(보유·시세·52주·탭)만 스크롤
- *  - rows (울트라 펼침 세로): 윗줄 차트 | 보유·시세·AI 분석, 아랫줄 최근 브리핑 · 뉴스 · 공시
+ *  - rows (울트라 펼침 세로): 윗줄 차트 | 보유·시세·AI 분석 미리보기(탭 없이), 아랫줄 최근 브리핑 · 뉴스 · 공시
  *  - wide (폴드8 펼침 세로): 차트 전체 폭 → 보유·시세 여러 칸 → 탭
  * 플래그가 꺼져 있거나 좁은 창(접힌 화면)이면 지금 화면 그대로다 (phone).
- * 차트 기간·탭은 주소 검색어(period·tab)에도 남겨, 접고 펼 때 화면을 다시 만들거나 ‹ › 로 다음 종목으로 넘어가도 이어진다
+ * 차트 기간·탭은 주소 검색어(period·tab)에도 남겨, 접고 펼 때 화면을 다시 만들거나 ‹ › 로 다음 종목으로 넘어가도 이어진다.
+ * 넓은 창에서 첫 응답 전에는 잔고 목록에 받아 둔 그 종목 값으로 먼저 그려(‹ › 로 넘길 때) 휴대폰용 뼈대 화면이 번쩍이지 않게 한다
  */
 export default function StockDetailScreen() {
   const t = useTheme();
@@ -112,12 +107,54 @@ export default function StockDetailScreen() {
   const detailQuotes = useMemo(() => [detailQuote], [detailQuote]);
   // 미등록 종목(발견 탭에서 연 종목)은 체결 스트림이 오지 않아 폴링 값으로만 본다
   const { now, feedOk } = useFeedState(stock, detailQuotes, stock.data?.registered !== false);
+  // 넓은 창에서 첫 응답 전: 잔고 목록 캐시의 그 종목 줄 (휴대폰 화면은 읽지 않는다 — 지금 그대로 뼈대 화면)
+  const cachedRow = useCachedRow(c, mode !== "phone" && stock.data === undefined && !stock.isError);
+  const go = (to: NavItem | null) => {
+    if (!to || !nav) return;
+    // 넘기는 동안 같은 순서를 쓰도록 남기고, 뒤로 가기에 쌓지 않게 바꿔 끼운다 (뒤로 1번이면 잔고). 차트 기간·탭은 이어진다
+    rememberNav(nav, to);
+    router.replace({ pathname: "/stocks/[code]", params: { code: to.code, period, tab: wideTab(tabPick), nav: "1" } } as never);
+  };
+  const onBack = () => (router.canGoBack() ? router.back() : router.dismissTo("/"));
 
   if (!c) return <Screen><ErrorView error={new Error("종목 주소가 올바르지 않습니다")} retryLabel="잔고로" onRetry={() => router.dismissTo("/")} /></Screen>;
   const view = viewState(stock);
-  if (view === "loading") return <Screen><DetailSkeleton /></Screen>;
-  if (view === "error") return <Screen><ErrorView error={stock.error} onRetry={() => void stock.refetch()} /></Screen>;
-  const s = stock.data!;
+  const seed = view === "loading" ? cachedRow : null;
+  if (view !== "ready" && !seed) {
+    const body = view === "loading" ? <DetailSkeleton /> : <ErrorView error={stock.error} onRetry={() => void stock.refetch()} />;
+    // 휴대폰 화면: 지금 그대로 (넓은 창에서 숨겼던 머리만 되살린다)
+    if (mode === "phone")
+      return (
+        <Screen>
+          {hidHeader ? <Stack.Screen options={{ headerShown: true }} /> : null}
+          {body}
+        </Screen>
+      );
+    // 넓은 창: 처음부터 합친 머리(뒤로 · 이름 · ‹ n/17 ›)로 — 받은 뒤 Stack 머리에서 합친 머리로 바뀌며 화면이 뛰지 않게
+    return (
+      <Screen
+        top={
+          <DetailHeader
+            name={nav?.items[nav.index]?.name ?? c}
+            sub={c}
+            quote={null}
+            quoteError={view === "loading" ? "불러오는 중…" : "시세를 불러오지 못했습니다"}
+            state={[]}
+            nav={nav}
+            onPrev={() => go(nav?.prev ?? null)}
+            onNext={() => go(nav?.next ?? null)}
+            onBack={onBack}
+            action={null}
+          />
+        }
+      >
+        <Stack.Screen options={{ headerShown: false }} />
+        {body}
+      </Screen>
+    );
+  }
+  // 목록 캐시 줄은 상세 응답과 같은 모양 (registered 가 없으면 등록 종목 — 잔고 목록에 있으니 맞다)
+  const s: NonNullable<typeof stock.data> = stock.data ?? seed!;
   const q = s.quote;
   // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가
   const unregistered = s.registered === false;
@@ -200,7 +237,7 @@ export default function StockDetailScreen() {
         ]
       : [];
   const krwNote = evKrw ? (evKrw.krwBasis === "current" ? "원화 기준 (현재 환율 환산)" : `원화 기준 (매수 당시 환율${evKrw.estimated ? " · 추정" : ""})`) : "";
-  const range = q && range52 !== null ? <Range52 range={range52} low={quote(q.low52w)} high={quote(q.high52w)} color={up === t.ink ? t.sub : up} /> : null;
+  const range = (compact = false) => (q && range52 !== null ? <Range52 range={range52} low={quote(q.low52w)} high={quote(q.high52w)} color={up === t.ink ? t.sub : up} compact={compact} /> : null);
   // 화면 읽기: 가격·등락을 한 문장으로 (3-22)
   const priceSpeech = q
     ? sentence([
@@ -231,8 +268,8 @@ export default function StockDetailScreen() {
                   <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{adding ? "추가 중" : "관심 추가"}</Text>
                 </Pressable>
               ) : (
-                <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityRole="button" accessibilityLabel="보유 정보 수정" hitSlop={slopFor(HEADER_ICON, space.sm)}>
-                  <Ionicons name="create-outline" size={HEADER_ICON} color={t.ink} />
+                <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityRole="button" accessibilityLabel="보유 정보 수정" hitSlop={slopFor(foldDetail.headIcon, space.sm)}>
+                  <Ionicons name="create-outline" size={foldDetail.headIcon} color={t.ink} />
                 </Pressable>
               ),
           }}
@@ -312,7 +349,7 @@ export default function StockDetailScreen() {
                 <Stat key={id} {...quoteStats[id]} />
               ))}
             </StatGrid>
-            {range}
+            {range()}
           </View>
         ) : null}
 
@@ -362,12 +399,6 @@ export default function StockDetailScreen() {
   // ── 넓은 창 (3-42 웨이브 C) ──
   const us = isUsMarket(s.market);
   const requestAi = (k: AnalysisKind) => setAsked((m) => ({ ...m, [k]: true }));
-  const go = (to: NavItem | null) => {
-    if (!to || !nav) return;
-    // 넘기는 동안 같은 순서를 쓰도록 남기고, 뒤로 가기에 쌓지 않게 바꿔 끼운다 (뒤로 1번이면 잔고). 차트 기간·탭은 이어진다
-    rememberNav(nav, to.code);
-    router.replace({ pathname: "/stocks/[code]", params: { code: to.code, period, tab: wideTab(tabPick), nav: "1" } } as never);
-  };
   const action: HeaderAction = unregistered ? { kind: "watch", busy: adding, onPress: addWatch } : { kind: "edit", onPress: () => router.push(`/stocks/${c}/edit`) };
   // 시장 상태 줄: 실시간(초록 점) 또는 까닭 · 달러 종목 원화 환산 · 시간외 · 시세 기준과 시각
   const state: StateLine[] = q
@@ -402,7 +433,7 @@ export default function StockDetailScreen() {
       nav={nav}
       onPrev={() => go(nav?.prev ?? null)}
       onNext={() => go(nav?.next ?? null)}
-      onBack={() => (router.canGoBack() ? router.back() : router.dismissTo("/"))}
+      onBack={onBack}
       action={action}
     />
   );
@@ -424,9 +455,9 @@ export default function StockDetailScreen() {
   const krwBlock = krwStats.length ? <Text style={[styles.sub(t.muted), { marginTop: space.xs }]}>{krwNote}</Text> : null;
   const memo = s.memo ? <Text style={styles.sub(t.muted)}>메모 {s.memo}</Text> : null;
   const wTab = wideTab(tabPick);
-  const tabBody =
+  const tabBody = (briefMax?: number) =>
     wTab === "briefing" ? (
-      <BriefingList query={briefings} />
+      <BriefingList query={briefings} max={briefMax} />
     ) : wTab === "news" ? (
       <NewsTab code={c} us={us} />
     ) : (
@@ -459,7 +490,7 @@ export default function StockDetailScreen() {
         <View>
           <PaneTitle title="시세" />
           <PairGrid items={PHONE_ORDER.map((id) => quoteStats[id])} cols={sideCols} />
-          {range}
+          {range()}
         </View>
       ) : null}
       {ev && krwLast ? <View>{krwSide}</View> : null}
@@ -491,7 +522,7 @@ export default function StockDetailScreen() {
             <>
               <View style={{ backgroundColor: t.surface }}>{sideStats}</View>
               {tabs}
-              <View style={styles.tabBody}>{tabBody}</View>
+              <View style={styles.tabBody}>{tabBody()}</View>
             </>
           }
         />
@@ -499,7 +530,6 @@ export default function StockDetailScreen() {
     );
 
   if (mode === "rows") {
-    const aTab = analysisTab(tabPick);
     const vline = <View style={[styles.vline, { backgroundColor: t.line }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden />;
     return (
       <Screen
@@ -538,16 +568,17 @@ export default function StockDetailScreen() {
             }}
           >
             {sideStats}
-            <View style={styles.side}>
-              <PaneTitle title="AI 분석" />
+            {/* AI 분석: 설계 목업처럼 탭 없이 기업개요 3줄 · 기술분석 2줄을 함께, 가치분석은 제목 줄만 ('더 보기'로 펼침) */}
+            <View style={[styles.side, styles.sideEnd]}>
+              <AnalysisPreview key={`${c}:company`} code={c} kind="company" title="AI 기업개요" lines={foldDetail.previewCompanyLines} requested={!unregistered || !!asked.company} onRequest={requestAi} />
+              <AnalysisPreview key={`${c}:technical`} code={c} kind="technical" title="AI 기술분석" lines={foldDetail.previewTechLines} requested={!unregistered || !!asked.technical} onRequest={requestAi} />
+              <AnalysisPreview key={`${c}:value`} code={c} kind="value" title="AI 가치분석" lines={0} defaultOpen={tabPick === "value"} requested={!unregistered || !!asked.value} onRequest={requestAi} />
             </View>
-            <Segmented options={ANALYSIS_TABS} value={aTab} onChange={setTab} />
-            <AnalysisTab key={`${c}:${aTab}`} code={c} kind={aTab} requested={!unregistered || !!asked[aTab]} onRequest={requestAi} preview />
           </View>
         </View>
         {/* 아랫줄: 최근 브리핑 · 뉴스 · 공시 — 탭을 누르지 않아도 함께 보인다 */}
         <View style={[styles.rowsFeed, { backgroundColor: t.surface, paddingLeft: insets.left, paddingRight: insets.right }]}>
-          <View style={styles.feedBrief}>
+          <View style={[styles.feedBrief, { flex: foldDetail.rowsBriefFlex }]}>
             <View style={styles.side}>
               <PaneTitle title="최근 브리핑" />
             </View>
@@ -575,6 +606,7 @@ export default function StockDetailScreen() {
             key: "hold",
             title: "내 보유",
             note: shortNote,
+            flex: foldDetail.holdColFlex,
             body: (
               <>
                 <StatList items={holdStats} />
@@ -584,7 +616,7 @@ export default function StockDetailScreen() {
               </>
             ),
           },
-          ...(krwCol ? [{ key: "krw", title: "원화 기준", note: krwNote.replace(/^원화 기준 \((.*)\)$/, "$1"), body: <StatList items={krwStats} /> }] : []),
+          ...(krwCol ? [{ key: "krw", title: "원화 기준", note: krwNote.replace(/^원화 기준 \((.*)\)$/, "$1"), flex: foldDetail.holdColFlex, body: <StatList items={krwStats} /> }] : []),
         ]
       : []),
     ...(quoteStats
@@ -594,7 +626,7 @@ export default function StockDetailScreen() {
           body: (
             <>
               <StatList items={items} />
-              {i === quoteCols.length - 1 ? range : null}
+              {i === quoteCols.length - 1 ? range(quoteCols.length > 1) : null}
             </>
           ),
         }))
@@ -624,7 +656,7 @@ export default function StockDetailScreen() {
         </View>
       ) : null}
       {tabs}
-      <View style={styles.tabBody}>{tabBody}</View>
+      <View style={styles.tabBody}>{tabBody(foldDetail.wideBriefings)}</View>
     </Screen>
   );
 }
@@ -645,15 +677,13 @@ const styles = {
     rowsChart: { flex: 1, minWidth: 0, alignSelf: "flex-start" },
     rowsSide: { alignSelf: "flex-start" },
     rowsFeed: { flexDirection: "row", alignItems: "stretch" },
-    feedBrief: { flex: 1, minWidth: 0, paddingBottom: space.md, gap: space.xs },
+    feedBrief: { minWidth: 0, paddingBottom: space.md, gap: space.xs },
+    sideEnd: { paddingBottom: space.md },
     vline: { width: StyleSheet.hairlineWidth, alignSelf: "stretch" },
   }),
   sub: (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] }),
   panelTitle: (color: string) => ({ color, fontSize: font.body, fontWeight: "700" as const }),
 };
-
-/** 머리 오른쪽 아이콘 크기 */
-const HEADER_ICON = 21;
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)
 export { RouteErrorBoundary as ErrorBoundary } from "@/components/RouteError";

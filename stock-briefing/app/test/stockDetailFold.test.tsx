@@ -14,6 +14,10 @@ const h = vi.hoisted(() => ({
   flag: undefined as boolean | undefined,
   params: { code: "005930" } as Record<string, string | undefined>,
   stock: undefined as unknown,
+  stockError: false,
+  /** 잔고 목록 캐시에서 찾은 줄 (useCachedRow) */
+  cached: null as unknown,
+  cachedArgs: [] as unknown[][],
   briefings: undefined as Briefing[] | undefined,
   news: undefined as unknown,
   settings: { showKrw: false, afterCost: false, sort: "created", apiUrl: "http://x" },
@@ -54,7 +58,7 @@ vi.mock("@/theme", async () => {
 });
 const idle = { data: undefined, isLoading: false, isError: false, error: null, refetch: async () => undefined };
 vi.mock("@/api/hooks", () => ({
-  useStock: () => ({ ...idle, data: h.stock }),
+  useStock: () => ({ ...idle, data: h.stock, isError: h.stockError, error: h.stockError ? new Error("시세 서버 오류") : null }),
   useCandles: () => idle,
   useBriefings: () => ({ ...idle, data: h.briefings }),
   useAnalysis: () => ({ ...idle, isLoading: true }),
@@ -70,6 +74,10 @@ vi.mock("@/lib/holdingsNav", async (orig) => ({
   useHoldingsNav: (...args: unknown[]) => {
     h.navArgs.push(args);
     return args[2] ? h.nav : null;
+  },
+  useCachedRow: (...args: unknown[]) => {
+    h.cachedArgs.push(args);
+    return args[1] ? h.cached : null;
   },
 }));
 vi.mock("@/lib/chartPrefs", () => ({ CANDLE_COUNT: { D: 800, W: 520, M: 240 }, parseCandlePeriod: (raw: unknown) => (raw === "W" || raw === "M" ? raw : "D") }));
@@ -97,7 +105,7 @@ vi.mock("@/components/ui", () => ({
 const { default: StockDetailScreen } = await import("@/app/stocks/[code]/index");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const { navAt } = await import("@/lib/holdingsNav");
-const { foldDetail, space } = await import("@/tokens");
+const { foldDetail, layout, space } = await import("@/tokens");
 const { sideWidth, statColumns, wideChartHeight } = await import("@/lib/detailLayout");
 
 /** 결과 트리를 비교할 수 있는 값으로: 함수는 '[fn]', 속성으로 넘긴 요소(top·refreshControl 등)는 이름과 속성만 */
@@ -161,6 +169,9 @@ beforeEach(() => {
   h.settings = { showKrw: false, afterCost: false, sort: "created", apiUrl: "http://x" };
   h.nav = null;
   h.navArgs.length = 0;
+  h.stockError = false;
+  h.cached = null;
+  h.cachedArgs.length = 0;
   h.replace.mockReset();
   h.setParams.mockReset();
   h.back.mockReset();
@@ -289,7 +300,7 @@ describe("좌우 배치 (펼친 폴드8 가로 · 울트라 가로)", () => {
     expect(chart(r).props.height).toBe(540 - 170);
     // 아주 낮은 창이면 최소 높이 (왼쪽 칸이 스크롤된다)
     r.act(() => (pane.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 592, height: 200 } } }));
-    expect(chart(r).props.height).toBe(foldDetail.chartMinH);
+    expect(chart(r).props.height).toBe(layout.chartMinH);
   });
 
   it("큰 글씨(130%)는 오른쪽 칸을 넓히고 한 줄에 한 칸", () => {
@@ -357,8 +368,57 @@ describe("윗줄+아랫줄 배치 (울트라 펼침 세로)", () => {
     expect(r.all().filter((n) => /^공시:/.test(String(n.props.accessibilityLabel ?? "")))).toHaveLength(foldDetail.rowsDisclosures);
     r.act(() => (r.byLabel("뉴스 더 보기").props.onPress as () => void)());
     expect(r.all().filter((n) => /^뉴스:/.test(String(n.props.accessibilityLabel ?? "")))).toHaveLength(6);
-    // 오른쪽 칸의 탭은 AI 분석 셋 (브리핑·뉴스는 아랫줄에)
-    expect((segmented(r)[0]!.props.options as { value: string }[]).map((o) => o.value)).toEqual(["company", "value", "technical"]);
+    // 아랫줄 브리핑 칸은 뉴스·공시 칸보다 넓다 (설계 329 | 265 | 265 — 카드 머리가 한 줄에)
+    expect(r.all().some((n) => flat(n).flex === foldDetail.rowsBriefFlex)).toBe(true);
+  });
+
+  it("오른쪽 칸 AI 분석: 탭 없이 기업개요 · 기술분석 미리보기를 함께, 가치분석은 제목 줄만 ('더 보기'로 펼침)", () => {
+    size("UP");
+    const r = open(samsung(), { flag: true });
+    // 탭(Segmented)이 없다 — 설계 목업과 같이
+    expect(segmented(r)).toHaveLength(0);
+    expect(r.text()).toContain("AI 기업개요");
+    expect(r.text()).toContain("AI 기술분석");
+    expect(r.text()).toContain("AI 가치분석");
+    // 기업개요·기술분석은 받는 중(가짜 useAnalysis 가 불러오는 중), 가치분석은 접혀 있어 받지 않는다
+    expect(r.all().filter((n) => n.type === "Loading")).toHaveLength(2);
+    r.act(() => (r.byLabel("AI 가치분석 더 보기").props.onPress as () => void)());
+    expect(r.all().filter((n) => n.type === "Loading")).toHaveLength(3);
+    expect(r.byLabel("AI 가치분석 접기").props.accessibilityState).toEqual({ expanded: true });
+  });
+
+  it("오른쪽 칸 AI 분석: 받은 분석은 앞 몇 줄만(기업개요 3 · 기술분석 2), '더 보기'로 그 자리에서 전체 + 갱신", async () => {
+    size("UP");
+    const hooks = await import("@/api/hooks");
+    const spy = vi.spyOn(hooks, "useAnalysis").mockImplementation(((_code: string, kind: string) => ({ ...idle, data: { content: `# 제목\n- ${kind} 첫째\n- 둘째`, missing: [], createdAt: "2026-09-25T00:00:00Z" } })) as never);
+    try {
+      const r = open(samsung(), { flag: true });
+      const previews = r.all().filter((n) => n.type === "Text" && typeof n.props.numberOfLines === "number" && n.children.some((c) => typeof c === "string" && /첫째/.test(c)));
+      expect(previews.map((n) => n.props.numberOfLines)).toEqual([foldDetail.previewCompanyLines, foldDetail.previewTechLines]);
+      expect(r.text()).toContain("company 첫째 둘째");
+      expect(r.text()).toContain("9/25 09:00 기준");
+      expect(r.all().some((n) => n.type === "MarkdownView")).toBe(false);
+      r.act(() => (r.byLabel("AI 기업개요 더 보기").props.onPress as () => void)());
+      expect(r.all().filter((n) => n.type === "MarkdownView")).toHaveLength(1);
+      expect(r.all().some((n) => n.type === "Button" && n.props.title === "갱신")).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("주소 검색어가 가치분석(tab=value)이면 가치분석을 펼친 채 연다", () => {
+    size("UP");
+    const r = open(samsung(), { flag: true, params: { code: "005930", tab: "value" } });
+    expect(r.all().filter((n) => n.type === "Loading")).toHaveLength(3);
+  });
+
+  it("미등록 종목: 미리보기마다 'AI 분석 만들기' (누르면 그 분석만 만든다)", () => {
+    size("UP");
+    const r = open(unregistered(), { flag: true });
+    const make = r.all().filter((n) => n.type === "Button" && n.props.title === "AI 분석 만들기");
+    expect(make).toHaveLength(2);
+    r.act(() => (make[0]!.props.onPress as () => void)());
+    expect(r.all().filter((n) => n.type === "Button" && n.props.title === "AI 분석 만들기")).toHaveLength(1);
   });
 
   it("차트는 옆 칸 높이에 맞추되 기본 크기보다 작아지지 않는다", () => {
@@ -368,7 +428,7 @@ describe("윗줄+아랫줄 배치 (울트라 펼침 세로)", () => {
     r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 600 } } }));
     expect(chart(r).props.height).toBe(600 - 120);
     r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 200 } } }));
-    expect(chart(r).props.height).toBeGreaterThan(foldDetail.chartMinH);
+    expect(chart(r).props.height).toBeGreaterThan(layout.chartMinH);
     // AI 분석을 펼쳐 옆 칸이 아주 길어져도 창 높이 × rowsChartMaxRatio 에서 멈춘다
     r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 3000 } } }));
     expect(chart(r).props.height).toBe(Math.round(882 * foldDetail.rowsChartMaxRatio));
@@ -398,10 +458,32 @@ describe("한 단 배치 (폴드8 펼침 세로)", () => {
     expect(chart(r).props.height).toBe(wideChartHeight(704 - space.lg * 2, 861));
     const cols = columns(r);
     expect(cols).toHaveLength(4);
+    // 내 보유 칸은 시세 칸보다 넓다 (설계 200 | 168 × 3)
+    expect(cols.map((c) => flat(c).flex)).toEqual([foldDetail.holdColFlex, 1, 1, 1]);
     expect(statsIn(cols[0]!)).toEqual(["보유수량", "평균단가", "평가금액", "매입금액", "평가손익", "수익률"]);
     expect(statsIn(cols[1]!)).toEqual(["시가", "고가", "저가", "전일", "거래량"]);
     expect(statsIn(cols[2]!)).toEqual(["시가총액", "52주 최고", "52주 최저", "PER", "PBR"]);
     expect(statsIn(cols[3]!)).toEqual(["EPS", "BPS", "배당수익률", "주당배당"]);
+  });
+
+  it("52주 막대: 좁은 마지막 칸은 '52주 저 · % · 고'만 (값은 같은 표의 52주 최고·최저 줄에), 좌우 배치 오른쪽 칸은 값까지", () => {
+    size("F8P");
+    const text = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(text).join(""));
+    const last = columns(open(samsung(), { flag: true })).at(-1)!;
+    expect(text(last)).toContain("52주 저");
+    expect(text(last)).not.toContain("52주 저 53,000");
+    forgetWindowClass();
+    size("F8L");
+    expect(open(samsung(), { flag: true }).text()).toContain("52주 저 53,000");
+  });
+
+  it("최근 브리핑은 처음 2건, 나머지는 '더 보기' (설계 2건)", () => {
+    size("F8P");
+    h.briefings = [brief(3, "afternoon"), brief(2, "morning"), brief(1, "afternoon")];
+    const r = open(samsung(), { flag: true });
+    expect(r.all().filter((n) => n.type === "BriefingCard")).toHaveLength(foldDetail.wideBriefings);
+    r.act(() => (r.byLabel("최근 브리핑 더 보기").props.onPress as () => void)());
+    expect(r.all().filter((n) => n.type === "BriefingCard")).toHaveLength(3);
   });
 
   it("달러 종목: 원화 기준 4칸은 따로 한 칸, 시세는 두 칸", () => {
@@ -409,6 +491,7 @@ describe("한 단 배치 (폴드8 펼침 세로)", () => {
     const r = open(apple(), { flag: true });
     const cols = columns(r);
     expect(cols).toHaveLength(4);
+    expect(cols.map((c) => flat(c).flex)).toEqual([foldDetail.holdColFlex, foldDetail.holdColFlex, 1, 1]);
     expect(statsIn(cols[1]!)).toEqual(["평가금액", "매입금액", "평가손익", "수익률"]);
     expect(statsIn(cols[2]!)).toHaveLength(7);
     expect(r.text()).toContain("원화 기준");
@@ -436,5 +519,72 @@ describe("고지 문구", () => {
       const screen = open(samsung(), { flag: true }).all().find((n) => n.type === "Screen")!;
       expect(screen.props.disclaimer, k).toBe(true);
     }
+  });
+});
+
+describe("불러오는 중·오류: 넓은 창은 처음부터 합친 머리 (Stack 머리 · 휴대폰 뼈대가 번쩍이지 않게)", () => {
+  const loading = (extra: Partial<typeof h> = {}) => {
+    h.stock = undefined;
+    Object.assign(h, extra);
+    return render(<StockDetailScreen />);
+  };
+
+  it("휴대폰 화면(플래그 꺼짐 · 접힌 화면)은 지금 그대로: Screen 안에 뼈대만, Stack 옵션을 건드리지 않고 캐시도 읽지 않는다", () => {
+    for (const flag of [undefined, true]) {
+      forgetWindowClass();
+      size(flag ? "F8C" : "F8L");
+      h.cached = samsung();
+      const r = loading({ flag });
+      expect(r.all().some((n) => n.type === "StackScreen")).toBe(false);
+      expect(tree(r.tree)).toEqual([{ type: "Screen", props: {}, children: [{ type: "DetailSkeleton", props: {}, children: [] }] }]);
+      expect(h.cachedArgs.every((a) => a[1] === false)).toBe(true);
+    }
+  });
+
+  it("넓은 창 · 목록 캐시에 있으면(‹ › 로 넘길 때) 받아 둔 값으로 바로 넓은 배치를 그린다", () => {
+    size("F8L");
+    h.cached = samsung();
+    const r = loading({ flag: true });
+    expect(h.cachedArgs.at(-1)).toEqual(["005930", true]);
+    expect(stack(r)).toEqual({ headerShown: false });
+    expect(r.all().some((n) => n.type === "DetailSkeleton")).toBe(false);
+    expect(r.all().some((n) => n.type === "FlashPrice" && n.props.text === "84,300")).toBe(true);
+    expect(r.all().filter((n) => n.type === "Stat").map((n) => n.props.label).slice(0, 2)).toEqual(["보유수량", "평균단가"]);
+    // 받은 뒤에는 캐시를 읽지 않는다
+    h.stock = samsung();
+    h.cachedArgs.length = 0;
+    r.rerender();
+    expect(h.cachedArgs.every((a) => a[1] === false)).toBe(true);
+  });
+
+  it("넓은 창 · 캐시에 없으면 합친 머리(뒤로 · 이름 · ‹ n/17 ›) + 뼈대, ‹ › 도 누를 수 있다", () => {
+    size("F8L");
+    const r = loading({ flag: true, nav: navAt("held", NAV_ITEMS, "005930"), params: { code: "005930", nav: "1" } });
+    expect(stack(r)).toEqual({ headerShown: false });
+    const top = render(r.all().find((n) => n.type === "Screen")!.props.top as React.ReactElement);
+    expect(top.has("뒤로")).toBe(true);
+    expect(top.text()).toContain("삼성전자");
+    expect(top.text()).toContain("불러오는 중…");
+    expect(r.all().some((n) => n.type === "DetailSkeleton")).toBe(true);
+    top.act(() => (top.byLabel("다음 종목, SK하이닉스").props.onPress as () => void)());
+    expect(h.replace).toHaveBeenCalledWith({ pathname: "/stocks/[code]", params: { code: "000660", period: "D", tab: "briefing", nav: "1" } });
+  });
+
+  it("넓은 창 · 오류도 합친 머리 + 다시 시도", () => {
+    size("UP");
+    const r = loading({ flag: true, stockError: true });
+    expect(stack(r)).toEqual({ headerShown: false });
+    expect(r.all().some((n) => n.type === "ErrorView")).toBe(true);
+    const top = render(r.all().find((n) => n.type === "Screen")!.props.top as React.ReactElement);
+    expect(top.text()).toContain("시세를 불러오지 못했습니다");
+  });
+
+  it("넓은 창에서 숨긴 머리는 불러오는 중에 접어도 되살린다", () => {
+    size("F8L");
+    const r = loading({ flag: true });
+    expect(stack(r)).toEqual({ headerShown: false });
+    size("F8C");
+    r.rerender();
+    expect(stack(r)).toEqual({ headerShown: true });
   });
 });

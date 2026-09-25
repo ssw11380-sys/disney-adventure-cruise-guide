@@ -1,6 +1,7 @@
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMarketCandles, useMarketIndices } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
 import { CandleChart } from "@/components/CandleChart";
@@ -23,7 +24,9 @@ const US_INDEX = new Set(["NASDAQ", "SPX", "DJI", "SOX"]);
  * 위쪽 띠에서 다른 지수·환율을 누르면 이 화면 안에서 바로 바뀐다.
  * 넓은 창(3-42 웨이브 C, 기능 플래그 foldLayout)에서는 값 머리를 종목 상세와 같은 한 줄 머리로 합치고,
  * 넓고 낮은 가로 창(펼친 폴드8 가로·울트라 가로)은 차트를 남은 높이에 맞춰 날짜 줄·지표 칩까지 스크롤 없이 보인다.
- * 플래그가 꺼져 있거나 좁은 창이면 지금 화면 그대로다
+ * 플래그가 꺼져 있거나 좁은 창이면 지금 화면 그대로다.
+ * 앱은 화면 끝까지 그리므로(edge-to-edge) 넓은 창 배치는 아래 작업 표시줄·좌우 카메라 구멍 여백(safe area)을 직접 비운다 —
+ * 지표 칩과 출처 줄이 작업 표시줄 밑에 가려 보이지도 눌리지도 않는 일이 없게
  */
 export default function MarketIndexScreen() {
   const t = useTheme();
@@ -34,6 +37,7 @@ export default function MarketIndexScreen() {
   const candles = useMarketCandles(code, period, CANDLE_COUNT[period]);
   const fold = useFoldLayout();
   const win = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const mode = detailMode(fold, win);
   // 넓은 창에서 Stack 머리를 숨긴 적이 있으면, 다시 좁아질 때 머리를 되살린다 (화면 옵션은 합쳐지므로 숨김이 남는다)
   const [hidHeader, setHidHeader] = useState(false);
@@ -166,36 +170,45 @@ export default function MarketIndexScreen() {
       <Text style={{ color: t.muted, fontSize: font.tiny }}>출처: 네이버 증권</Text>
     </>
   );
-  const strip = <MarketStrip selected={code} onSelect={(c) => router.setParams({ code: c })} />;
+  // 좌우 여백 (가로로 든 폴드의 카메라 구멍 쪽)
+  const sides = { paddingLeft: insets.left, paddingRight: insets.right };
+  const strip = (
+    <View style={sides}>
+      <MarketStrip selected={code} onSelect={(c) => router.setParams({ code: c })} />
+    </View>
+  );
 
   if (mode === "split")
     return (
       <Screen scroll={false} top={header}>
         <Stack.Screen options={{ headerShown: false }} />
         {strip}
-        {/* 지수 띠 아래 남은 높이에 차트를 맞춘다. 창이 아주 낮으면 이 칸만 스크롤된다 */}
-        <View
-          style={styles.fill}
-          onLayout={(e) => {
-            const h = Math.round(e.nativeEvent.layout.height);
-            if (h !== bodyH) setBodyH(h);
-          }}
-        >
-          <ScrollView
+        {/* 지수 띠 아래 남은 높이(아래 작업 표시줄 여백을 뺀)에 차트를 맞춘다. 창이 아주 낮으면 이 칸만 스크롤된다 */}
+        <View style={[styles.fill, sides, { paddingBottom: insets.bottom }]}>
+          <View
             style={styles.fill}
-            refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
+            onLayout={(e) => {
+              const h = Math.round(e.nativeEvent.layout.height);
+              if (h !== bodyH) setBodyH(h);
+            }}
           >
-            <FillChart height={bodyH} style={{ backgroundColor: t.surface }} render={(h) => chartBody(h)} />
-          </ScrollView>
+            <ScrollView
+              style={styles.fill}
+              refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
+            >
+              <FillChart height={bodyH} style={{ backgroundColor: t.surface }} render={(h) => chartBody(h)} />
+            </ScrollView>
+          </View>
         </View>
       </Screen>
     );
 
+  // 한 단(폴드8 펼침 세로 · 울트라 펼침 세로): 끝까지 내리면 출처 줄이 아래 작업 표시줄 위에 온다
   return (
-    <Screen refreshing={pulling} onRefresh={onPull} top={header}>
+    <Screen refreshing={pulling} onRefresh={onPull} top={header} contentStyle={{ paddingBottom: space.xl + insets.bottom }}>
       <Stack.Screen options={{ headerShown: false }} />
       {strip}
-      <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>{chartBody()}</View>
+      <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line, paddingLeft: space.lg + insets.left, paddingRight: space.lg + insets.right }]}>{chartBody()}</View>
     </Screen>
   );
 }

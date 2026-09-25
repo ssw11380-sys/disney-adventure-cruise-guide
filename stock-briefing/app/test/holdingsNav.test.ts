@@ -6,7 +6,8 @@ import { holding, quote } from "./helpers";
  * 넘기는 동안에는 처음 순서를 이어 쓰고(모듈 저장소), 끝에서는 돌지 않는다
  */
 vi.mock("@/api/hooks", () => ({ useApi: () => ({ listStocks: async () => [] }) }));
-vi.mock("@/lib/settings", () => ({ useSettings: () => ({ apiUrl: "http://x", sort: "created", afterCost: false }) }));
+const h = vi.hoisted(() => ({ settings: { apiUrl: "http://x", sort: "created" as string, afterCost: false } }));
+vi.mock("@/lib/settings", () => ({ useSettings: () => h.settings }));
 
 const nav = await import("@/lib/holdingsNav");
 const { sortHoldings, splitHoldings } = await import("@/lib/portfolio");
@@ -19,7 +20,10 @@ const LIST = [
   holding("068270", quote("068270", 171_000, { changeRate: -0.7 }), null, null, {}, "셀트리온"),
 ];
 
-beforeEach(() => nav.forgetHoldingsNav());
+beforeEach(() => {
+  nav.forgetHoldingsNav();
+  h.settings = { apiUrl: "http://x", sort: "created", afterCost: false };
+});
 
 describe("잔고와 같은 순서", () => {
   it("정렬 설정마다 잔고 화면의 보유·관심 구역 순서와 같다", () => {
@@ -66,7 +70,7 @@ describe("넘기는 동안 순서 고정 (모듈 저장소)", () => {
   it("‹ › 로 온 화면은 넘기기 전 순서를 그대로 쓰고, 잔고에서 새로 연 화면은 새로 만든다", () => {
     const items = nav.holdingsOrder(LIST, "changeRate", false).held;
     const here = nav.navAt("held", items, "005930")!;
-    nav.rememberNav(here, "035420");
+    nav.rememberNav(here, { code: "035420", name: "NAVER" });
     // 시세가 바뀌어 정렬이 달라져도 넘겨 온 화면은 기억한 순서
     expect(nav.recallNav("035420", true)?.items.map((s) => s.code)).toEqual(["005930", "035420", "000660"]);
     // 잔고에서 새로 연 화면(주소에 nav 없음) · 기억한 순서에 없는 종목은 새로
@@ -76,8 +80,8 @@ describe("넘기는 동안 순서 고정 (모듈 저장소)", () => {
 
   it("마지막에 본 종목은 한 번 읽으면 지운다 (잔고로 돌아가 그 줄을 강조할 때)", () => {
     const items = nav.holdingsOrder(LIST, "created", false).held;
-    nav.rememberNav(nav.navAt("held", items, "005930")!, "000660");
-    expect(nav.takeLastViewed()).toBe("000660");
+    nav.rememberNav(nav.navAt("held", items, "005930")!, { code: "000660", name: "SK하이닉스" });
+    expect(nav.takeLastViewed()).toEqual({ code: "000660", name: "SK하이닉스" });
     expect(nav.takeLastViewed()).toBeNull();
   });
 });

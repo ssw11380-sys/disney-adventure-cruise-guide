@@ -45,7 +45,7 @@ vi.mock("@/api/hooks", () => ({
   useFeature: (_key: string, fallback = false) => fallback,
   useApi: () => ({ listStocks: async () => [] }),
 }));
-vi.mock("@/lib/holdingsNav", () => ({ useHoldingsNav: () => null, rememberNav: vi.fn() }));
+vi.mock("@/lib/holdingsNav", () => ({ useHoldingsNav: () => null, useCachedRow: () => null, rememberNav: vi.fn() }));
 vi.mock("@/lib/settings", () => ({ useSettings: () => h.settings }));
 vi.mock("@/lib/chartPrefs", () => ({ CANDLE_COUNT: { D: 800, W: 520, M: 240 }, parseCandlePeriod: () => "D" }));
 vi.mock("@/components/BriefingCard", () => ({ BriefingCard: "BriefingCard" }));

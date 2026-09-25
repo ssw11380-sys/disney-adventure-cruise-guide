@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  analysisTab,
   chunkRows,
   detailHeaderLayout,
   detailMode,
@@ -17,7 +16,7 @@ import {
   type DetailHeaderInput,
 } from "@/lib/detailLayout";
 import { classifyWindow, foldLayoutOf } from "@/lib/windowClass";
-import { foldDetail, space } from "@/tokens";
+import { foldDetail, layout, space } from "@/tokens";
 
 /**
  * 종목 상세 넓은 창 배치 계산 (3-42 웨이브 C). 추정 창 크기(앱이 쓰는 창 = 창 − 상태 표시줄 24 − 작업 표시줄 48)로 본다
@@ -88,13 +87,13 @@ describe("차트 높이", () => {
   it("한 단(폴드8 펼침 세로): 창 높이 × 0.32 (폭 × 0.62 보다 낮으면)", () => {
     expect(wideChartHeight(676, 861)).toBe(Math.round(861 * foldDetail.wideChartHRatio));
     expect(wideChartHeight(300, 2000)).toBe(186);
-    expect(wideChartHeight(676, 100)).toBe(foldDetail.chartMinH);
+    expect(wideChartHeight(676, 100)).toBe(layout.chartMinH);
   });
 
   it("좌우 배치: 칸 높이 − 차트 둘레, 최소 chartMinH", () => {
     expect(fillChartHeight(560, 170)).toBe(390);
-    expect(fillChartHeight(200, 170)).toBe(foldDetail.chartMinH);
-    expect(fillChartHeight(0, 170)).toBe(foldDetail.chartMinH);
+    expect(fillChartHeight(200, 170)).toBe(layout.chartMinH);
+    expect(fillChartHeight(0, 170)).toBe(layout.chartMinH);
   });
 });
 
@@ -112,8 +111,6 @@ describe("탭 값 (주소 검색어 tab)", () => {
     expect(phoneTab("technical")).toBe("technical");
     expect(wideTab(null)).toBe("briefing");
     expect(wideTab("news")).toBe("news");
-    expect(analysisTab("news")).toBe("company");
-    expect(analysisTab("value")).toBe("value");
   });
 });
 

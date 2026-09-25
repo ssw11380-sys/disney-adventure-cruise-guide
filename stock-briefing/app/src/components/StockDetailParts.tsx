@@ -8,7 +8,7 @@ import { BriefingCard } from "@/components/BriefingCard";
 import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
-import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, markdownPreview } from "@/lib/detailLayout";
+import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
 import { analysisView } from "@/lib/freshness";
 import { navLabel, navSpeech, type HoldingsNav } from "@/lib/holdingsNav";
@@ -22,8 +22,12 @@ import { foldDetail } from "@/tokens";
 
 // ── 휴대폰 화면에서 옮겨 온 조각 (그리는 결과는 예전과 같다) ──
 
-/** 52주 위치 막대: 저가 ~ 고가 사이 현재가 위치 */
-export function Range52({ range, low, high, color }: { range: number; low: string; high: string; color: string }) {
+/**
+ * 52주 위치 막대: 저가 ~ 고가 사이 현재가 위치.
+ * compact: 좁은 칸(폴드8 펼침 세로 시세표의 마지막 칸, 폭 약 150) — 저·고 값은 같은 표의 '52주 최고·최저' 줄에 있으므로
+ * 막대 아래에는 '52주 저 · 위치 % · 고'만 둔다 (값이 서로 붙어 읽히지 않게, 설계 목업과 같다)
+ */
+export function Range52({ range, low, high, color, compact = false }: { range: number; low: string; high: string; color: string; compact?: boolean }) {
   const t = useTheme();
   return (
     <View style={{ gap: space.xxs, marginTop: space.s }}>
@@ -31,9 +35,9 @@ export function Range52({ range, low, high, color }: { range: number; low: strin
         <View style={[styles.rangeKnob, { left: `${Math.round(range * 100)}%`, backgroundColor: color }]} />
       </View>
       <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-        <Text style={sub(t.muted)}>52주 저 {low}</Text>
+        {compact ? <Text style={sub(t.muted)}>52주 저</Text> : <Text style={sub(t.muted)}>52주 저 {low}</Text>}
         <Text style={sub(t.muted)}>{Math.round(range * 100)}%</Text>
-        <Text style={sub(t.muted)}>고 {high}</Text>
+        {compact ? <Text style={sub(t.muted)}>고</Text> : <Text style={sub(t.muted)}>고 {high}</Text>}
       </View>
     </View>
   );
@@ -42,13 +46,11 @@ export function Range52({ range, low, high, color }: { range: number; low: strin
 /**
  * requested=false: 발견 탭 등에서 잠깐 들여다보는 미등록 종목 — AI 분석은 눌렀을 때만 만든다 (비용·시간).
  * 이미 받아 둔 분석(캐시)이 있으면 누르지 않아도 보여 준다.
- * preview: 넓은 창 오른쪽 칸의 미리보기 — 앞 몇 줄만 보이고 '더 보기'로 전체 (휴대폰 화면은 쓰지 않는다)
  */
-export function AnalysisTab({ code, kind, requested, onRequest, preview = false }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void; preview?: boolean }) {
+export function AnalysisTab({ code, kind, requested, onRequest }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void }) {
   const t = useTheme();
   const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
-  const [more, setMore] = useState(false);
   // 갱신 실패는 조회 오류와 따로: 이전 분석은 두고 실패를 알린다 (AI-01)
   const { state, refreshError } = analysisView({ requested, query: a, refresh: refreshAnalysis, code, kind });
   if (state === "ask")
@@ -68,22 +70,79 @@ export function AnalysisTab({ code, kind, requested, onRequest, preview = false 
           {refreshError}
         </Text>
       ) : null}
-      {preview && !more ? (
-        <Text style={{ color: t.ink, fontSize: font.body, lineHeight: PREVIEW_LINE }} numberOfLines={foldDetail.previewLines}>
-          {markdownPreview(d.content)}
-        </Text>
-      ) : (
-        <MarkdownView>{d.content}</MarkdownView>
-      )}
+      <MarkdownView>{d.content}</MarkdownView>
       {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
         <Muted>
           {formatDateKo(d.createdAt, true)} 기준
         </Muted>
-        {preview ? <MoreToggle open={more} onPress={() => setMore((m) => !m)} label="분석" /> : null}
         <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
       </View>
     </Card>
+  );
+}
+
+/**
+ * 윗줄+아랫줄 배치(울트라 펼침 세로) 오른쪽 칸의 AI 분석 미리보기 — 설계 목업처럼 탭 없이 여러 분석을 함께 둔다.
+ *  - 제목 줄: 제목 · 기준 시각 · '더 보기'. lines 줄만 보이고, '더 보기'를 누르면 그 자리에서 전체 분석(갱신 버튼 포함)을 펼친다
+ *  - lines = 0 이면 제목 줄만 둔다 (가치분석). 펼칠 때 처음 받는다 — 접힌 동안에는 서버에 묻지 않는다
+ *  - 미등록 종목(아직 만들지 않음)은 '만들기' 버튼, 불러오는 중·오류는 휴대폰 AI 분석 탭과 같은 안내
+ */
+export function AnalysisPreview({ code, kind, title, lines, requested, onRequest, defaultOpen = false }: { code: string; kind: AnalysisKind; title: string; lines: number; requested: boolean; onRequest: (kind: AnalysisKind) => void; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const toggle = <MoreToggle open={open} onPress={() => setOpen((o) => !o)} label={title} />;
+  if (lines <= 0 && !open)
+    return (
+      <View>
+        <PaneTitle title={title} action={toggle} />
+      </View>
+    );
+  return <AnalysisPeek code={code} kind={kind} title={title} lines={open ? null : lines} requested={requested} onRequest={onRequest} toggle={toggle} />;
+}
+
+/** AnalysisPreview 의 내용 (받은 분석이 있을 때만 '더 보기'를 둔다). lines = null 이면 전체 */
+function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }: { code: string; kind: AnalysisKind; title: string; lines: number | null; requested: boolean; onRequest: (kind: AnalysisKind) => void; toggle: React.ReactNode }) {
+  const t = useTheme();
+  const a = useAnalysis(code, kind, requested);
+  const { refreshAnalysis } = useStockMutations();
+  const { state, refreshError } = analysisView({ requested, query: a, refresh: refreshAnalysis, code, kind });
+  const d = state === "ready" ? a.data : undefined;
+  return (
+    <View style={{ gap: space.xs }}>
+      <PaneTitle title={title} note={d ? `${shortStamp(d.createdAt)} 기준` : null} action={d || lines === null ? toggle : null} />
+      {state === "ask" ? (
+        <View style={styles.askRow}>
+          <Muted>관심 종목이 아니라 미리 만들지 않았습니다.</Muted>
+          <Button title="AI 분석 만들기" icon="sparkles" variant="secondary" compact onPress={() => onRequest(kind)} />
+        </View>
+      ) : state === "error" ? (
+        <ErrorView error={a.error} onRetry={() => void a.refetch()} />
+      ) : state === "loading" || !d ? (
+        <Loading label="분석 생성 중" />
+      ) : (
+        <>
+          {refreshError ? (
+            <Text style={{ color: t.danger, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">
+              {refreshError}
+            </Text>
+          ) : null}
+          {lines !== null ? (
+            <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>
+              {markdownPreview(d.content)}
+            </Text>
+          ) : (
+            <>
+              <MarkdownView>{d.content}</MarkdownView>
+              {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <Muted>{formatDateKo(d.createdAt, true)} 기준</Muted>
+                <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
+              </View>
+            </>
+          )}
+        </>
+      )}
+    </View>
   );
 }
 
@@ -154,7 +213,7 @@ export interface StatProps {
   change?: number | null;
 }
 
-/** 시세표 격자: 한 줄에 cols 칸씩 (가로 먼저). 모자란 칸은 빈 칸으로 채워 열을 맞춘다. 항목명은 왼쪽, 값은 오른쪽 */
+/** 시세표 격자: 한 줄에 cols 칸씩 (가로 먼저). 모자란 칸은 빈 칸으로 채워 열을 맞춘다. 항목명은 왼쪽, 값은 오른쪽 (촘촘한 줄) */
 export function PairGrid({ items, cols }: { items: StatProps[]; cols: number }) {
   return (
     <View>
@@ -162,7 +221,7 @@ export function PairGrid({ items, cols }: { items: StatProps[]; cols: number }) 
         <View key={r} style={styles.gridRow}>
           {row.map((s, i) => (
             <View key={s.label + i} style={styles.cell}>
-              <Stat {...s} />
+              <Stat {...s} dense />
             </View>
           ))}
           {Array.from({ length: cols - row.length }, (_, k) => (
@@ -174,21 +233,21 @@ export function PairGrid({ items, cols }: { items: StatProps[]; cols: number }) 
   );
 }
 
-/** 시세표 한 줄 목록 (칸 하나 = 세로 목록) */
+/** 시세표 한 줄 목록 (칸 하나 = 세로 목록, 촘촘한 줄) */
 export function StatList({ items }: { items: StatProps[] }) {
   return (
     <View>
       {items.map((s, i) => (
         <View key={s.label + i} style={styles.cell}>
-          <Stat {...s} />
+          <Stat {...s} dense />
         </View>
       ))}
     </View>
   );
 }
 
-/** 칸 제목 줄: 굵은 제목 + 오른쪽 작은 안내. 제목이 없는 칸은 같은 높이의 빈 줄 (옆 칸과 줄을 맞춘다) */
-export function PaneTitle({ title, note }: { title?: string; note?: string | null }) {
+/** 칸 제목 줄: 굵은 제목 + 오른쪽 작은 안내(+ 더 보기 같은 버튼). 제목이 없는 칸은 같은 높이의 빈 줄 (옆 칸과 줄을 맞춘다) */
+export function PaneTitle({ title, note, action }: { title?: string; note?: string | null; action?: React.ReactNode }) {
   const t = useTheme();
   return (
     <View style={styles.paneTitle}>
@@ -203,20 +262,21 @@ export function PaneTitle({ title, note }: { title?: string; note?: string | nul
       )}
       {/* 안내는 좁은 칸에서 한 줄로 줄어든다 (숫자가 아닌 설명 글) */}
       {note ? (
-        <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1, textAlign: "right" }} numberOfLines={1}>
+        <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1, textAlign: "right", marginLeft: "auto" }} numberOfLines={1}>
           {note}
         </Text>
       ) : null}
+      {action ?? null}
     </View>
   );
 }
 
-/** 여러 칸 시세표 (폴드8 펼침 세로: 내 보유 | 시세 | 시세 | 시세 + 52주). 칸마다 위에서 아래로 */
-export function StatColumns({ columns }: { columns: { key: string; title?: string; note?: string | null; body: React.ReactNode }[] }) {
+/** 여러 칸 시세표 (폴드8 펼침 세로: 내 보유 | 시세 | 시세 | 시세 + 52주). 칸마다 위에서 아래로. flex 는 칸 폭 비율 (없으면 1) */
+export function StatColumns({ columns }: { columns: { key: string; title?: string; note?: string | null; flex?: number; body: React.ReactNode }[] }) {
   return (
     <View style={styles.columns}>
       {columns.map((c) => (
-        <View key={c.key} style={styles.column}>
+        <View key={c.key} style={[styles.column, c.flex ? { flex: c.flex } : null]}>
           <PaneTitle title={c.title} note={c.note} />
           {c.body}
         </View>
@@ -304,9 +364,6 @@ export function NewsColumns({ code, us, divider }: { code: string; us: boolean; 
   );
 }
 
-/** 좌우 배치 왼쪽 칸 차트 둘레(기간 칩·읽기 줄·이동평균 값·지표 칩·안내·패널 여백)의 처음 어림. 실제보다 작게 잡아 재어 본 뒤 늘린다 */
-const CHROME_GUESS = 120;
-
 /**
  * 칸 높이에 맞춘 차트 패널: 패널 전체 높이가 height 가 되도록 차트 그림 높이를 정한다 (차트 전체 화면과 같은 방식 — 둘레 높이를 그려 본 뒤 잰다).
  *  - 좌우 배치: 왼쪽 칸 높이 → 차트가 스크롤 없이 칸을 채운다
@@ -316,9 +373,9 @@ const CHROME_GUESS = 120;
  */
 export function FillChart({ height, minH = 0, maxH = Infinity, render, style }: { height: number | null; minH?: number; maxH?: number; render: (chartH: number | undefined) => React.ReactNode; style?: StyleProp<ViewStyle> }) {
   const [boxW, setBoxW] = useState<number | null>(null);
-  const [chrome, setChrome] = useState<{ key: string; h: number }>({ key: "", h: CHROME_GUESS });
+  const [chrome, setChrome] = useState<{ key: string; h: number }>({ key: "", h: foldDetail.chromeGuess });
   const key = height !== null && height > 0 ? `${Math.round(boxW ?? 0)}x${Math.round(height)}` : "";
-  const chromeH = chrome.key === key ? chrome.h : CHROME_GUESS;
+  const chromeH = chrome.key === key ? chrome.h : foldDetail.chromeGuess;
   // 칸에 맞춘 높이를 minH ~ maxH 안으로 (maxH 가 minH 보다 작으면 minH)
   const chartH = key ? Math.max(Math.round(minH), Math.min(Math.round(maxH), fillChartHeight(height!, chromeH))) : undefined;
   return (
@@ -364,9 +421,6 @@ export interface StateLine {
 
 /** 오른쪽 버튼: 보유 정보 수정 또는 (미등록 종목) 관심 추가 */
 export type HeaderAction = { kind: "edit"; onPress: () => void } | { kind: "watch"; busy: boolean; onPress: () => void };
-
-/** 머리 오른쪽 아이콘 크기 */
-const HEADER_ICON = 21;
 
 /**
  * 넓은 창 종목 상세의 합친 머리 (Stack 머리 대신): ← | 이름·코드·시장 | 가격 · 등락 | 시장 상태 | ‹ n/17 › | 수정.
@@ -469,20 +523,20 @@ export function DetailHeader({
         <View style={styles.spacer} />
         {nav ? (
           <View style={[styles.pager, { borderColor: t.line }]}>
-            <Pressable onPress={onPrev} disabled={!nav.prev} accessibilityRole="button" accessibilityLabel={nav.prev ? `이전 종목, ${nav.prev.name}` : "이전 종목 없음"} accessibilityState={{ disabled: !nav.prev }} style={[styles.icon, { opacity: nav.prev ? 1 : OFF_OPACITY }]}>
+            <Pressable onPress={onPrev} disabled={!nav.prev} accessibilityRole="button" accessibilityLabel={nav.prev ? `이전 종목, ${nav.prev.name}` : "이전 종목 없음"} accessibilityState={{ disabled: !nav.prev }} style={[styles.icon, { opacity: nav.prev ? 1 : foldDetail.offOpacity }]}>
               <Ionicons name="chevron-back" size={font.title} color={t.ink} />
             </Pressable>
             <Text style={[styles.pagerText, { color: t.ink }]} accessibilityLabel={navSpeech(nav)} maxFontSizeMultiplier={cap}>
               {navLabel(nav)}
             </Text>
-            <Pressable onPress={onNext} disabled={!nav.next} accessibilityRole="button" accessibilityLabel={nav.next ? `다음 종목, ${nav.next.name}` : "다음 종목 없음"} accessibilityState={{ disabled: !nav.next }} style={[styles.icon, { opacity: nav.next ? 1 : OFF_OPACITY }]}>
+            <Pressable onPress={onNext} disabled={!nav.next} accessibilityRole="button" accessibilityLabel={nav.next ? `다음 종목, ${nav.next.name}` : "다음 종목 없음"} accessibilityState={{ disabled: !nav.next }} style={[styles.icon, { opacity: nav.next ? 1 : foldDetail.offOpacity }]}>
               <Ionicons name="chevron-forward" size={font.title} color={t.ink} />
             </Pressable>
           </View>
         ) : null}
         {!action ? null : action.kind === "edit" ? (
           <Pressable onPress={action.onPress} accessibilityRole="button" accessibilityLabel="보유 정보 수정" style={styles.icon}>
-            <Ionicons name="create-outline" size={HEADER_ICON} color={t.ink} />
+            <Ionicons name="create-outline" size={foldDetail.headIcon} color={t.ink} />
           </Pressable>
         ) : (
           <Pressable onPress={action.onPress} disabled={action.busy} accessibilityRole="button" accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: action.busy, disabled: action.busy }} style={styles.watch}>
@@ -503,11 +557,6 @@ export function DetailHeader({
   );
 }
 
-/** 꺼진 버튼 흐림 (ui 의 Button 과 같은 값) */
-const OFF_OPACITY = 0.45;
-/** AI 분석 미리보기 줄 높이 (브리핑 요약 줄과 같다) */
-const PREVIEW_LINE = 22;
-
 const sub = (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] });
 
 const styles = StyleSheet.create({
@@ -517,10 +566,11 @@ const styles = StyleSheet.create({
   gridRow: { flexDirection: "row", columnGap: space.lg },
   // ui 의 Stat 은 폭 47%·늘어남이라, 가로 줄 칸에 넣으면 칸을 꽉 채운다
   cell: { flex: 1, flexDirection: "row", minWidth: 0 },
-  paneTitle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm, minHeight: touch.min - space.md, paddingBottom: space.xxs },
+  paneTitle: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm, minHeight: foldDetail.paneTitleH, paddingBottom: space.xxs },
   columns: { flexDirection: "row", columnGap: space.lg, alignItems: "flex-start" },
   column: { flex: 1, minWidth: 0 },
   more: { flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xs },
+  askRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", columnGap: space.sm, rowGap: space.xs },
   moreRow: { flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: space.lg },
   feedCol: { flex: 1, minWidth: 0, paddingHorizontal: space.lg, paddingVertical: space.md },
   fillPanel: { paddingHorizontal: space.md, paddingVertical: space.s, gap: space.xs },

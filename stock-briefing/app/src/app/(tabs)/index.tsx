@@ -6,6 +6,7 @@ import { useAnyMarketOpen, useFeature, useHealth, useStockMutations, useStocks }
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { MarketStrip } from "@/components/MarketStrip";
+import { useReturnMark } from "@/components/ReturnMark";
 import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { StockRow } from "@/components/StockRow";
@@ -72,6 +73,9 @@ export default function StocksScreen() {
   });
   const openStock = useCallback((s: RegisteredWithQuote) => router.push(`/stocks/${s.code}`), []);
   const longPress = useCallback((s: RegisteredWithQuote) => confirmRef.current(s), []);
+  // 종목 상세에서 ‹ › 로 넘겨 본 뒤 돌아오면 마지막에 본 줄로 스크롤해 잠깐 강조 (3-42, ‹ › 를 안 썼으면 지금 그대로)
+  const listRef = useRef<ScrollView>(null);
+  const mark = useReturnMark((y) => listRef.current?.scrollTo({ y, animated: true }));
 
   const view = viewState(stocks);
   if (view === "loading")
@@ -151,6 +155,8 @@ export default function StocksScreen() {
       {/* 잔고는 수십 줄이라 가상화 목록 대신 스크롤 + 고정 머리글로 그린다: 체결 묶음마다 목록 내부의 두 번째 커밋이 없고,
           체결이 온 줄만 다시 그린다 (3-17) */}
       <ScrollView
+        ref={listRef}
+        onLayout={mark.onViewLayout}
         stickyHeaderIndices={stickyIndices}
         refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
         contentContainerStyle={{ paddingBottom: space.xl }}
@@ -160,9 +166,9 @@ export default function StocksScreen() {
           ? empty
           : sections.flatMap((section) => [
               <View key={`h-${section.key}`}>{sectionHeader(section)}</View>,
-              ...section.data.map((item) => (
-                <StockRow key={item.code} stock={item} showKrw={showKrw} afterCost={afterCost} live={quoteLive(item.quote, now, feedOk)} onPress={openStock} onLongPress={longPress} />
-              )),
+              ...section.data.map((item) =>
+                mark.wrap(item.code, <StockRow key={item.code} stock={item} showKrw={showKrw} afterCost={afterCost} live={quoteLive(item.quote, now, feedOk)} onPress={openStock} onLongPress={longPress} />),
+              ),
             ])}
       </ScrollView>
       <SortSheet visible={sortOpen} value={sort} onClose={() => setSortOpen(false)} onPick={(k) => void setSort(k)} />

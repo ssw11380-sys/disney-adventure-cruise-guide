@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { useApi } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
@@ -11,6 +11,7 @@ import { useSettings, type SortKey } from "@/lib/settings";
  *    보유 종목이면 보유 구역에서, 관심 종목이면 관심 구역에서 넘긴다 (미등록 종목은 넘길 목록이 없다)
  *  - 넘기는 동안에는 처음 연 때의 순서를 그대로 쓴다 (등락률순이면 체결마다 순서가 바뀌어 ‹ › 가 튀지 않게) — 모듈 저장소
  *  - 잔고 목록은 서버에 새로 묻지 않고 잔고 화면·체결 스트림이 채운 캐시를 읽기만 한다 (위젯 브리지와 같은 방식)
+ *  - ‹ › 로 마지막에 연 종목은 잔고 화면이 돌아왔을 때 그 줄로 스크롤해 강조한다 (components/ReturnMark)
  * 순서 계산은 React Native 를 쓰지 않는 순수 함수로 두어 테스트한다
  */
 
@@ -78,7 +79,7 @@ export function navSpeech(nav: HoldingsNav): string {
 
 // ── 모듈 저장소 ──
 
-const memory: { kind: NavKind | null; items: readonly NavItem[] | null; last: string | null } = { kind: null, items: null, last: null };
+const memory: { kind: NavKind | null; items: readonly NavItem[] | null; last: NavItem | null } = { kind: null, items: null, last: null };
 
 /** 테스트용: 기억을 지운다 (앱을 새로 연 것과 같다) */
 export function forgetHoldingsNav(): void {
@@ -91,17 +92,17 @@ export function forgetHoldingsNav(): void {
  * ‹ › 로 넘길 때: 지금 화면이 쓰는 순서(고정한 순서)를 남기고, 넘어갈 종목을 '마지막에 본 종목'으로 둔다.
  * 다음 화면(fromNav)이 같은 순서를 이어 쓴다
  */
-export function rememberNav(nav: HoldingsNav, to: string): void {
+export function rememberNav(nav: HoldingsNav, to: NavItem): void {
   memory.kind = nav.kind;
   memory.items = nav.items;
   memory.last = to;
 }
 
 /**
- * ‹ › 로 마지막에 연 종목 코드. 잔고 화면이 돌아왔을 때 그 줄로 스크롤해 강조할 때 한 번 읽고 지운다
- * (잔고 화면 쪽 연결은 잔고 표 작업에서 — 이 모듈은 값만 둔다)
+ * ‹ › 로 마지막에 연 종목(코드·이름). 잔고 화면이 다시 보일 때 한 번 읽고 지운다 → 그 줄로 스크롤해 강조 (components/ReturnMark useReturnMark).
+ * ‹ › 를 쓰지 않았으면 null 이라 잔고 화면은 지금 그대로다
  */
-export function takeLastViewed(): string | null {
+export function takeLastViewed(): NavItem | null {
   const last = memory.last;
   memory.last = null;
   return last;
@@ -140,4 +141,16 @@ export function useHoldingsNav(code: string, fromNav: boolean, active: boolean):
     }
   }, [section]);
   return active && section ? navAt(section.kind, section.items, code) : null;
+}
+
+/**
+ * 종목 상세를 여는 동안(첫 응답 전) 잔고 목록 캐시에 있는 그 종목 줄. 넓은 창에서 ‹ › 로 넘길 때 휴대폰용 뼈대 화면이 번쩍이지 않게
+ * 받아 둔 목록 값으로 먼저 그린다 (상세 응답과 같은 모양: 종목 · 시세 · 평가). active 가 false(휴대폰 화면 · 이미 받음)면 읽지 않는다.
+ * 캐시를 그릴 때 한 번 읽기만 하고 구독하지 않는다 (체결이 와도 이것 때문에 다시 그리지 않는다)
+ */
+export function useCachedRow(code: string, active: boolean): RegisteredWithQuote | null {
+  const client = useQueryClient();
+  const { apiUrl } = useSettings();
+  if (!active) return null;
+  return client.getQueryData<RegisteredWithQuote[]>([apiUrl, "stocks"])?.find((s) => s.code === code) ?? null;
 }
