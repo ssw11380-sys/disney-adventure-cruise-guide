@@ -390,7 +390,8 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     expect(canReuse(null, t)).toBe(false);
   });
 
-  it("주기 갱신(reuse)은 서버를 부르지 않고, 예전 서버는 한 번 404 뒤 6시간 동안 /api/widget 을 묻지 않는다", async () => {
+  // 예전 서버 모드는 10분만, JSON 404(정말 /api/widget 이 없는 예전 서버)일 때만 — HTML 404·HTML 200 은 연결 오류 (위젯 리뷰 6, test/widgetReliability.test.tsx)
+  it("주기 갱신(reuse)은 서버를 부르지 않고, 예전 서버는 한 번 404 뒤 10분 동안 /api/widget 을 묻지 않는다", async () => {
     const urls: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {
       urls.push(url);
@@ -405,7 +406,7 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     urls.length = 0;
     vi.stubGlobal("fetch", async (url: string) => {
       urls.push(url);
-      if (url.includes("/api/widget")) return new Response("<html>not found</html>", { status: 404 });
+      if (url.includes("/api/widget")) return new Response(JSON.stringify({ message: "Route GET:/api/widget not found", error: "Not Found", statusCode: 404 }), { status: 404, headers: { "content-type": "application/json" } });
       return new Response(JSON.stringify(url.includes("briefings") ? [] : book()), { status: 200 });
     });
     await loadWidgetData({ stocks: true, briefings: true });

@@ -2,8 +2,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { AccountBriefing, LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS, widgetRowCurrencyOf } from "@/lib/settings";
 import { fillFromLast, type PnlMode } from "./model";
-import { canReuse, cleanBrief, fromPayload, NO_FEATURES, REUSE_OPEN_MS, type WidgetBrief, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
+import { canReuse, cleanBrief, fromPayload, gateExtended, NO_FEATURES, payloadMarket, REUSE_OPEN_MS, withExtended, type WidgetBrief, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
 import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
+import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 
 /**
  * 위젯은 앱과 별도의 JS 컨텍스트에서 돌아가므로(react-native-android-widget 태스크 핸들러) react-query 나
@@ -245,6 +246,10 @@ export async function pushWidgetData(o: {
     prev && prev.featuresAt !== undefined ? { at: prev.featuresAt, flags: prev.features } : null,
     p && cached ? { at: cached.at, flags: p.features } : null,
   ]);
+  const features = flags?.flags ?? NO_FEATURES;
+  // 다듬은 모습을 그릴 때만 시장별 문구가 있는 칩 (예전 모습은 그 경계에서 칩을 감추면 안 된다).
+  // 연장 세션 표시(ext, widgetExtended)는 서버와 같은 규칙으로 잔고 시세의 세션에서 붙인다 — 서버 칩과 같은 갱신 주기·'지연' (위젯 리뷰 1)
+  const chip = features.polish && o.marketPolished !== undefined ? o.marketPolished : o.market;
   const data: WidgetData = {
     stocks: o.stocks,
     briefings: o.briefings ?? prev?.briefings ?? p?.briefings ?? [],
@@ -257,17 +262,19 @@ export async function pushWidgetData(o: {
     fetchedAt: o.fetchedAt,
     error: null,
     filled: o.filled,
-    // 다듬은 모습을 그릴 때만 시장별 문구가 있는 칩 (예전 모습은 그 경계에서 칩을 감추면 안 된다)
-    market: flags?.flags.polish && o.marketPolished !== undefined ? o.marketPolished : o.market,
+    market: withExtended(chip, features, o.stocks, o.fetchedAt),
     ...(prev?.latestIds ? { latestIds: prev.latestIds } : {}),
     indices: idx?.list ?? null,
     ...(idx ? { indicesAt: idx.at } : {}),
     board: board?.list ?? null,
     ...(board ? { boardAt: board.at } : {}),
-    features: flags?.flags ?? NO_FEATURES,
+    features,
     ...(flags ? { featuresAt: flags.at } : {}),
   };
   await saveWidgetView(data, apiUrl);
+  // 자동 갱신 기록 (위젯 리뷰 2): 앱이 바로 그린 것만 app 으로 — 앱(WidgetBridge)은 늘 rowKrw 를 넘기고, 백그라운드 작업은 넘기지 않는다
+  // (refresh.tsx 의 약속. 백그라운드 작업은 lib/backgroundBriefings 가 background 로 따로 적는다)
+  if (o.rowKrw !== undefined) await logWidgetRefresh("app", "ok", { at: o.fetchedAt });
   return data;
 }
 
@@ -300,9 +307,35 @@ class HttpError extends Error {
 }
 
 const LEGACY_KEY = "widget.legacyServer";
-const LEGACY_RECHECK_MS = 6 * 3_600_000;
+/**
+ * 예전 서버(/api/widget 없음)로 본 뒤 다시 묻기까지 (위젯 리뷰 6): 예전 6시간 → 10분. 지금 쓰는 서버는 모두 /api/widget 이 있어
+ * 이 모드에 들어가는 것은 거의 늘 잘못 본 것(배포 중 404 등)이고, 그동안 지수·환율 위젯이 '표시할 수 없습니다'로 바뀌고 잔고 위젯 칩이 빠졌다
+ */
+const LEGACY_RECHECK_MS = 10 * 60_000;
 
-/** 예전 서버라 /api/widget 이 없던 기록 (6시간 동안은 묻지 않고 예전 API 로 — 호출이 늘지 않게) */
+/**
+ * 받은 본문이 JSON 이 아님 (와이파이 로그인 페이지·프록시 오류 페이지 같은 HTML). 서버에 닿지 못한 것이므로 '갱신 실패 · 연결 안 됨'
+ * (model.failureText 가 '연결'로 알아본다) — 예전에는 예전 서버로 보고 6시간 동안 예전 API 로 바꿨다
+ */
+const NOT_JSON = "연결 안 됨: 서버 대신 다른 페이지가 응답함";
+
+/** 본문을 JSON 으로 (HTML·깨진 본문이면 연결 오류) */
+async function jsonBody<T>(res: Response): Promise<T> {
+  const text = await res.text().catch(() => "");
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(NOT_JSON);
+  }
+}
+
+/** HTML 페이지 응답인지 (로그인 페이지·프록시 오류 페이지). 본문을 읽으므로 이 응답의 본문은 더 쓰지 않을 때만 */
+async function isHtml(res: Response): Promise<boolean> {
+  if (/text\/html/i.test(res.headers.get("content-type") ?? "")) return true;
+  return /^\s*</.test(await res.text().catch(() => ""));
+}
+
+/** 예전 서버라 /api/widget 이 없던 기록 (10분 동안은 묻지 않고 예전 API 로 — 호출이 늘지 않게) */
 async function legacyUntil(apiUrl: string): Promise<number> {
   try {
     const v = JSON.parse((await AsyncStorage.getItem(LEGACY_KEY)) ?? "null") as { apiUrl?: string; until?: number } | null;
@@ -328,9 +361,14 @@ const WIDGET_PATH = "/api/widget?indices=1&sessions=1&ui=2";
  */
 const BOARD_QUERY = "&board=1";
 
-/** /api/widget 한 번: 304 면 저장해 둔 본문, 받으면 저장. 예전 서버(404·모양이 다른 응답)면 null */
+/**
+ * /api/widget 한 번: 304 면 저장해 둔 본문, 받으면 저장. 예전 서버(JSON·빈 본문 404, 모양이 다른 JSON 응답)면 null.
+ * HTML(와이파이 로그인 페이지·프록시)이나 JSON 이 아닌 본문은 연결 오류로 던진다 — 예전 서버로 보지 않는다 (위젯 리뷰 6)
+ */
 async function fetchPayload(apiUrl: string, token: string, now: number, board = false): Promise<WidgetPayload | null> {
-  if (now < (await legacyUntil(apiUrl))) return null;
+  const until = await legacyUntil(apiUrl);
+  // 예전 앱이 적은 6시간짜리 기록(지금 규칙보다 긴 것)은 쓰지 않는다 — OTA 직후 바로 다시 묻게
+  if (now < until && until - now <= LEGACY_RECHECK_MS) return null;
   const legacy = async () => {
     await AsyncStorage.setItem(LEGACY_KEY, JSON.stringify({ apiUrl, until: now + LEGACY_RECHECK_MS })).catch(() => undefined);
     return null;
@@ -343,10 +381,14 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
-    if (res.status === 404) return legacy();
+    if (res.status === 404) {
+      // 로그인 페이지·프록시의 HTML 404 는 서버에 닿지 못한 것 (예전 서버의 404 는 JSON 오류 본문 — Fastify)
+      if (await isHtml(res)) throw new Error(NOT_JSON);
+      return legacy();
+    }
     let body: WidgetPayload | null;
     if (res.status === 304 && cached) body = cached.body;
-    else if (res.ok) body = (await res.json().catch(() => null)) as WidgetPayload | null; // 프록시의 HTML 대체 페이지 등
+    else if (res.ok) body = await jsonBody<WidgetPayload | null>(res); // 프록시의 HTML 대체 페이지 등은 연결 오류
     else throw new HttpError(res.status);
     // 모양이 다르면(예전·다른 서버) 예전 API 로
     if (!body || body.v !== 1 || !Array.isArray(body.stocks)) return legacy();
@@ -408,7 +450,7 @@ async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promi
   try {
     const res = await fetch(url, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return (await res.json()) as T;
+    return await jsonBody<T>(res);
   } finally {
     clearTimeout(timer);
   }
@@ -442,8 +484,9 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   try {
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
+    // 칩은 플래그로 거른 것 (연장 세션 ext 는 widgetExtended 가 켜져 있을 때만 장중처럼 15분)
     const reuse =
-      reused && canReuse({ at: reused.at, market: reused.body.market }, out.fetchedAt) && (!opts.board || boardReusable(reused.body, prevView?.boardAt, out.fetchedAt)) ? reused : null;
+      reused && canReuse({ at: reused.at, market: payloadMarket(reused.body) }, out.fetchedAt) && (!opts.board || boardReusable(reused.body, prevView?.boardAt, out.fetchedAt)) ? reused : null;
     if (reuse) out.fetchedAt = reuse.at;
     const payload = reuse ? reuse.body : await fetchPayload(apiUrl, apiToken, out.fetchedAt, opts.board === true);
     let stocks: RegisteredWithQuote[];
@@ -470,16 +513,24 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       ]);
       // 예전 서버는 등록 순서라 최신 순으로 (위젯은 앞의 3개를 보여 준다)
       out.briefings = [...out.briefings].sort((a, b) => ((a.latest?.createdAt ?? "") < (b.latest?.createdAt ?? "") ? 1 : -1));
+      // 예전 API 로 받는 동안에도 마지막 플래그는 그대로 (위젯 리뷰 6 — 배포 중 404 한 번에 지수·환율 위젯이 '표시할 수 없습니다'로,
+      // 잔고 위젯이 손익 전환·지수 줄 없는 예전 모습으로 번갈아 바뀌지 않게). 정말 예전 서버면 앱이 적은 플래그도 꺼짐이다
+      if (prevView) {
+        out.features = prevView.features;
+        if (prevView.featuresAt !== undefined) out.featuresAt = prevView.featuresAt;
+      }
     }
     const f = fillFromLast(stocks, last?.stocks ?? null, out.fetchedAt);
     out.stocks = f.stocks;
     out.filled = f.filled;
-    // 채운 결과를 적는다: 채운 종목은 옛 시세 시각을 그대로 갖고 있어 7일이 지나면 더는 쓰이지 않는다
-    if (stocks.length || payload) await saveLastStocks(f.stocks, out.fetchedAt, apiUrl);
+    // 채운 결과를 적는다: 채운 종목은 옛 시세 시각을 그대로 갖고 있어 7일이 지나면 더는 쓰이지 않는다.
+    // 마지막 잔고가 이 응답보다 늦게 받은 것이면(앱 즉시 갱신 뒤 받아 둔 옛 응답을 다시 씀) 덮지 않는다 — 다음 조회가 실패했을 때 옛 숫자로 되돌아가지 않게 (위젯 리뷰 5)
+    if ((stocks.length || payload) && !(last && last.at > out.fetchedAt)) await saveLastStocks(f.stocks, out.fetchedAt, apiUrl);
   } catch (e) {
     out.error = e instanceof Error ? e.message : String(e);
     const cached = await readCachedPayload(apiUrl);
-    out.market = cached?.body.market ?? null;
+    // 칩: 받아 둔 응답의 것(플래그로 거름), 없으면(업데이트 직후 등) 마지막으로 그린 것 — 실패했다고 칩이 사라지지 않게
+    out.market = cached ? payloadMarket(cached.body) : (prevView?.market ?? null);
     if (cached) {
       const p = fromPayload(cached.body);
       out.briefings = p.briefings;
@@ -506,7 +557,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.fetchedAt = last.at;
     }
   }
-  // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 지수·플래그를 옛 응답으로 덮지 않는다
+  // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 잔고·칩·기준 시각·지수·플래그를 옛 응답으로 덮지 않는다
   if (full && !fresh) await keepNewer(out, apiUrl);
   keepBoard(out, prevView);
   await saveWidgetView(full ? out : await mergeLegacy(out, apiUrl, opts), apiUrl);
@@ -528,11 +579,21 @@ function keepBoard(out: WidgetData, prev: Pick<WidgetData, "board" | "boardAt" |
 /**
  * 받아 둔 /api/widget 응답을 다시 쓸 때(위젯 스스로 갱신 — 장중 15분·휴장 2시간까지 재사용, 조회 실패):
  * 마지막으로 그린 데이터(앱 즉시 갱신이 적은 것)의 지수·플래그가 그 응답보다 늦게 받은 것이면 그쪽을 쓴다 (pushWidgetData 와 같은 규칙).
- * 그러지 않으면 앱 갱신과 위젯 갱신이 번갈아 가며 손익 전환 칸·지수 줄이 켜졌다 꺼졌다 한다
+ * 그러지 않으면 앱 갱신과 위젯 갱신이 번갈아 가며 손익 전환 칸·지수 줄이 켜졌다 꺼졌다 한다.
+ * 잔고·칩·기준 시각(fetchedAt)도 같은 규칙 (위젯 리뷰 5): 10:08 앱이 그린 뒤 10:10 크기 변경(폴드 펼침)·주기 갱신이 백그라운드가
+ * 10:00 에 받아 둔 응답을 다시 쓰면서 숫자·칩·'10:00 기준'으로 되돌아가 "방금 앱에서 본 금액과 다르다"가 되지 않게.
+ * 조회 실패로 그린 기록의 fetchedAt 은 마지막으로 받은 잔고의 시각이라 그대로 견줄 수 있다 (잔고가 비어 있는 기록은 쓰지 않는다)
  */
 async function keepNewer(out: WidgetData, apiUrl: string): Promise<void> {
   const prev = await readWidgetView(apiUrl);
-  if (!prev || out.featuresAt === undefined) return;
+  if (!prev) return;
+  if (prev.fetchedAt > out.fetchedAt && prev.stocks.length) {
+    out.stocks = prev.stocks;
+    out.filled = prev.filled;
+    out.market = prev.market;
+    out.fetchedAt = prev.fetchedAt;
+  }
+  if (out.featuresAt === undefined) return;
   const at = out.featuresAt;
   // 응답에 지수가 없어도(플래그 꺼짐·조회 실패) 그 응답의 시각으로 견준다 — 더 옛 지수가 되살아나지 않게
   const idx = newest([{ at: out.indicesAt ?? at, list: out.indices }, prev.indices ? { at: prev.indicesAt ?? prev.fetchedAt, list: prev.indices } : null]);
@@ -545,6 +606,8 @@ async function keepNewer(out: WidgetData, apiUrl: string): Promise<void> {
     out.features = flags.flags;
     out.featuresAt = flags.at;
   }
+  // 고른 칩과 고른 플래그가 서로 다른 기록에서 왔을 수 있다 → 연장 세션 표시는 고른 플래그로 다시 거른다
+  out.market = gateExtended(out.market, out.features);
 }
 
 /** 예전 서버에서 한쪽만 받았으면(잔고만·브리핑만) 받지 않은 쪽은 마지막으로 그린 값을 남긴다 */

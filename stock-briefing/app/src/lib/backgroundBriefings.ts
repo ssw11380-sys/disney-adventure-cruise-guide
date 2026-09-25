@@ -7,8 +7,11 @@ import type { AccountBriefing, LatestBriefing } from "@/api/types";
 import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefingDigest";
 import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
-import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload } from "@/widgets/data";
-import { shouldSkipFetch } from "@/widgets/payload";
+import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
+import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload, type WidgetData } from "@/widgets/data";
+import { failureText } from "@/widgets/model";
+import { payloadMarket, shouldSkipFetch } from "@/widgets/payload";
+import { redrawAllWidgets } from "@/widgets/redraw";
 import { marketWidgetPlaced, refreshWidgets } from "@/widgets/refresh";
 
 /**
@@ -36,6 +39,19 @@ export const PREFS_FAIL_LIMIT = 3;
  * PREFS_FAIL_LIMIT 번이면 계좌 요약 없이 종목 브리핑만 알린다 — 계좌 브리핑은 '본 것'으로 적지 않아 목록을 받으면 알린다
  */
 const ACCOUNTS_FAIL_KEY = "notify.accountsFail";
+/**
+ * 백그라운드 위젯 갱신(서버 조회)이 연달아 실패한 횟수 (위젯 리뷰 6). BG_FAIL_REDRAW 번째부터 실패할 때마다 위젯 4종을
+ * 마지막으로 받은 값 + '갱신 실패 · …'로 다시 그린다 — 한 번은 일시적일 수 있어 깜빡이지 않게. 성공하면 지운다
+ */
+const BG_FAIL_KEY = "widget.bgFail";
+export const BG_FAIL_REDRAW = 2;
+
+/** 실패 한 번 더: 연달아 BG_FAIL_REDRAW 번 이상이면 받은 값(마지막 숫자 + 오류)으로 위젯을 다시 그린다 */
+async function noteWidgetFailure(data: WidgetData): Promise<void> {
+  const fails = Number((await AsyncStorage.getItem(BG_FAIL_KEY).catch(() => null)) ?? 0) + 1;
+  await AsyncStorage.setItem(BG_FAIL_KEY, String(fails)).catch(() => undefined);
+  if (fails >= BG_FAIL_REDRAW) await redrawAllWidgets(data);
+}
 
 /**
  * 아직 알리지 않은 브리핑 id 가 있는지 (기준을 아직 안 적었으면 true → 현재 상태를 기억하게).
@@ -123,16 +139,29 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
   return messages.length;
 }
 
-/** 태스크 본체. 앱 진입점(index.js)에서 defineTask 로 전역 등록해야 한다 */
+/**
+ * 태스크 본체. 앱 진입점(index.js)에서 defineTask 로 전역 등록해야 한다.
+ * 돌 때마다 자동 갱신 기록(lib/widgetRefreshLog — 설정 화면 '마지막 자동 갱신')에 성공·건너뜀·실패를 적는다 (위젯 리뷰 2)
+ */
 export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskResult> {
   try {
-    // 두 시장이 모두 닫혀 있으면 2시간에 한 번만 서버에 묻는다 (휴장 중 위젯 트래픽을 줄이려고, 3-16)
+    // 두 시장이 모두 닫혀 있으면 2시간에 한 번만 서버에 묻는다 (휴장 중 위젯 트래픽을 줄이려고, 3-16).
+    // 보유 종목의 연장 세션(미국 프리·애프터·주간거래 등, 칩의 ext — widgetExtended)이 열려 있으면 장중처럼 묻는다 (위젯 리뷰 1)
     const cached = await readCachedPayload();
-    if (shouldSkipFetch(cached ? { at: cached.at, market: cached.body.market } : null, Date.now())) return BackgroundTask.BackgroundTaskResult.Success;
+    if (shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, Date.now())) {
+      await logWidgetRefresh("background", "skipped");
+      return BackgroundTask.BackgroundTaskResult.Success;
+    }
     const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
     // 지수·환율 위젯이 홈 화면에 있을 때만 판 9개를 함께 묻는다 (같은 요청 한 번, 없으면 응답이 예전과 같다)
     const data = await loadWidgetData({ stocks: true, briefings: true, board: await marketWidgetPlaced() });
-    if (data.error) return BackgroundTask.BackgroundTaskResult.Failed;
+    if (data.error) {
+      // 연달아 두 번째 실패부터는 위젯에도 보이게 (위젯이 스스로 갱신하다 실패했을 때와 같은 '갱신 실패 · …') — 위젯 리뷰 6
+      await noteWidgetFailure(data);
+      await logWidgetRefresh("background", "failed", { error: failureText(data.error) });
+      return BackgroundTask.BackgroundTaskResult.Failed;
+    }
+    await AsyncStorage.removeItem(BG_FAIL_KEY).catch(() => undefined);
     if (local) {
       // 새 서버는 최신 브리핑 id 만 준다 → 아직 알리지 않은 id 가 있을 때만 전체 목록과 알림 규칙을 받아 알린다 (예전 서버는 briefings 가 전체 목록)
       // 계좌 브리핑 id(3-31 서버, 플래그 켜짐)도 함께 본다 — 계좌 브리핑만 새로 생긴 세션도 알리게
@@ -181,8 +210,10 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
       indices: data.indices ? { at: data.indicesAt ?? data.fetchedAt, list: data.indices } : null,
       board: data.board ? { at: data.boardAt ?? data.fetchedAt, list: data.board } : null,
     });
+    await logWidgetRefresh("background", "ok");
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {
+    await logWidgetRefresh("background", "failed");
     return BackgroundTask.BackgroundTaskResult.Failed;
   }
 }
