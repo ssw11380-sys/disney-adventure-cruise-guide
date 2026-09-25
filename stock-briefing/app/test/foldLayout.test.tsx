@@ -2,6 +2,13 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, type HostNode } from "./miniRender";
 
+// 이 파일은 왼쪽 세로 탭 막대 배치도 시험한다. 앱 기본은 막대를 쓰지 않으므로(layout.railOn 꺼짐 — 2026-09-26 사용자 선택: 펼쳐도 아래 탭 바)
+// 막대를 켠 앱으로 시험한다. 기본값(아래 탭 바)은 test/bottomTabs.test.ts
+vi.mock("@/tokens", async (importOriginal) => {
+  const m = await importOriginal<typeof import("@/tokens")>();
+  return { ...m, layout: { ...m.layout, railOn: true } };
+});
+
 /**
  * 넓은 창 공통 기반 (3-42 접는 폰, 플래그 foldLayout): 창 등급 훅 · 2단 틀(TwoPane) · 가운데 읽기 폭(Screen readable) · 탭 바.
  * 플래그가 꺼져 있으면(서버 값을 못 받았을 때 포함) 어떤 창에서도 지금 휴대폰 화면과 똑같아야 한다.

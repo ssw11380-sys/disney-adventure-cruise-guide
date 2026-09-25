@@ -71,7 +71,7 @@ export function twoPaneWidths(fontScale: number): { enter: number; exit: number 
  * 2단·탭 막대는 켤 때와 끌 때 기준 폭이 달라서, 창 크기를 끌어 바꾸는 중에 기준선 근처에서 번갈아 바뀌지 않는다.
  * 크기를 모르면(0·NaN) 휴대폰 화면 그대로 본다
  */
-export function classifyWindow(size: WindowSize, prev: WindowClass | null = null): WindowClass {
+export function classifyWindow(size: WindowSize, prev: WindowClass | null = null, opts: { rail?: boolean } = {}): WindowClass {
   if (!ok(size.width) || !ok(size.height)) return COMPACT;
   const width = widthClass(size.width);
   const short = size.height < layout.shortHeight;
@@ -79,9 +79,13 @@ export function classifyWindow(size: WindowSize, prev: WindowClass | null = null
   const twoPane = size.width >= (prev?.twoPane ? pane.exit : pane.enter);
   // 탭 막대: 켤 때는 폭 등급 '넓음'(expandedMin — 실측 뒤 바뀌어도 폭 등급을 그대로 따른다) + 높이 짧음.
   // 켜진 뒤에는 폭·높이 모두 railHysteresis 만큼 여유를 두고 끈다 (창을 끌며 기준선을 오갈 때 깜빡임 방지)
-  const rail = prev?.rail
-    ? size.width >= layout.expandedMin - layout.railHysteresis && size.height < layout.shortHeight + layout.railHysteresis
-    : width === "expanded" && short;
+  // 막대를 쓰지 않으면(layout.railOn 꺼짐 — 사용자 선택) 늘 아래 탭 바
+  const railOn = opts.rail ?? layout.railOn;
+  const rail = !railOn
+    ? false
+    : prev?.rail
+      ? size.width >= layout.expandedMin - layout.railHysteresis && size.height < layout.shortHeight + layout.railHysteresis
+      : width === "expanded" && short;
   return { width, short, twoPane, rail };
 }
 
