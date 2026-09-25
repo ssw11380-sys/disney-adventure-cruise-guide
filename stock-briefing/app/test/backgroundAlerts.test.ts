@@ -155,6 +155,172 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     });
   });
 
+  describe("3-31 계좌 한 장 브리핑", () => {
+    const account = {
+      id: 77, date: "2026-09-24", session: "afternoon", status: "ok", summary: "", detail: "", model: "m", template: false, createdAt: "2026-09-24T16:10:00+09:00",
+      headline: { totalValue: 123_456_789, dayPnl: -2_868_108, dayRate: -1.23, holdings: 17, top: [{ code: "RGTX", name: "RGTX", amount: -1_234_567, changeRate: -8.1 }] },
+    };
+    /** serve 와 같고 계좌 브리핑 목록도 준다 ("404" 면 예전 서버). accountIds: 위젯 응답의 최근 계좌 브리핑 id (3-31 서버). 받은 주소를 돌려준다 */
+    const serveWith = (list: typeof latest, p: Record<string, unknown>, accounts: unknown[] | "404" | "500", extra: { accountIds?: number[]; stocks?: unknown[] } = {}) => {
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", async (url: string) => {
+        calls.push(url);
+        if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id), ...extra }), { status: 200 });
+        if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(p), { status: 200 });
+        if (url.includes("/api/account-briefings")) {
+          if (accounts === "404") return new Response(JSON.stringify({ error: "NOT_FOUND" }), { status: 404 });
+          if (accounts === "500") return new Response("down", { status: 500 });
+          return new Response(JSON.stringify(accounts), { status: 200 });
+        }
+        return new Response(JSON.stringify(list), { status: 200 });
+      });
+      return calls;
+    };
+    const seen = () => JSON.parse(store.get("briefings.notified") ?? "[]") as number[];
+    const title = (i: number) => (scheduled[i] as { content: { title: string } }).content.title;
+
+    it("서버 플래그가 켜져 있으면 세션 알림 1건의 앞머리가 계좌 요약, 누르면 계좌 브리핑", async () => {
+      await enableLocalBriefingAlerts();
+      serveWith([...latest, ...newOnes(5)], { ...prefs, accountBriefing: true }, [account]);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 계좌 브리핑 · 당일 -2,868,108원 (-1.23%)");
+      const content = (scheduled[0] as { content: { body: string; data: Record<string, unknown> } }).content;
+      expect(content.body).toBe("기여 1위 RGTX -1,234,567원\n종목 브리핑 5종목");
+      expect(content.data).toMatchObject({ digest: true, accountBriefingId: 77, count: 5 });
+    });
+
+    it("플래그가 꺼져 있으면 계좌 브리핑 목록을 묻지 않고 예전 문구", async () => {
+      await enableLocalBriefingAlerts();
+      const calls = serveWith([...latest, ...newOnes(5)], prefs, [account]);
+      await runBriefingCheck();
+      expect(calls.filter((u) => u.includes("/api/account-briefings"))).toHaveLength(0);
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 브리핑 5종목");
+    });
+
+    it("계좌 브리핑 목록을 못 받으면 이번엔 넘기고('본 것'으로 적지 않음), 다음 확인에서 계좌 요약과 함께 한 번에 1건", async () => {
+      await enableLocalBriefingAlerts();
+      serveWith([...latest, ...newOnes(5)], { ...prefs, accountBriefing: true }, "500", { accountIds: [77] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      expect(seen()).not.toContain(-77);
+      expect(store.get("accountBriefings.notifyInit")).toBeUndefined();
+      serveWith([...latest, ...newOnes(5)], { ...prefs, accountBriefing: true }, [account], { accountIds: [77] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 계좌 브리핑 · 당일 -2,868,108원 (-1.23%)");
+    });
+
+    it("계좌 브리핑 목록을 3번 연달아 못 받으면(예전 서버 404 포함) 계좌 요약 없이 종목 브리핑만 1건, 계좌 브리핑은 '본 것'으로 적지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      serveWith([...latest, ...newOnes(5)], { ...prefs, accountBriefing: true }, "404", { accountIds: [77] });
+      await runBriefingCheck();
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 브리핑 5종목");
+      expect(seen()).not.toContain(-77);
+    });
+
+    it("(2차 검증) 계좌 브리핑만 새로 생긴 세션에서 목록 요청이 한 번 실패해도 알림이 사라지지 않는다 — 서버가 회복되면 1건", async () => {
+      await enableLocalBriefingAlerts();
+      serveWith(latest, on, [old], { accountIds: [55] }); // 기준 적기 (55)
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      // 새 계좌 브리핑 77 만 생겼는데 목록 요청이 500
+      serveWith(latest, on, "500", { accountIds: [77, 55] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      expect(seen()).not.toContain(-77);
+      // 서버 회복: 1건
+      serveWith(latest, on, [account, old], { accountIds: [77, 55] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 계좌 브리핑 · 당일 -2,868,108원 (-1.23%)");
+      expect(seen()).toContain(-77);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
+
+    it("(2차 검증) 플래그가 꺼져 있으면 계좌 브리핑 기록(기준·본 것)을 쓰지 않고, 나중에 켜도 같은 세션이 두 번 울리지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      // 플래그 꺼짐: 서버는 accountIds 를 주지 않는다. 세션 알림 1건 (예전 문구)
+      serveWith([...latest, ...newOnes(3)], prefs, [account]);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 브리핑 3종목");
+      expect(store.get("accountBriefings.notifyInit")).toBeUndefined();
+      expect(store.get("notify.accountsFail")).toBeUndefined();
+      expect(seen().some((id) => id < 0)).toBe(false);
+      // 플래그를 켬: 켜기 전에 만든 같은 세션의 계좌 브리핑(77)은 기준으로만 적고 따로 울리지 않는다
+      serveWith([...latest, ...newOnes(3)], on, [account], { accountIds: [77] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(store.get("accountBriefings.notifyInit")).toBe("1");
+      expect(seen()).toContain(-77);
+    });
+
+    it("다른 세션의 계좌 브리핑은 쓰지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      serveWith([...latest, ...newOnes(2)], { ...prefs, accountBriefing: true }, [{ ...account, session: "morning" }]);
+      await runBriefingCheck();
+      expect(title(0)).toBe("오후 브리핑 2종목");
+    });
+
+    const on = { ...prefs, accountBriefing: true };
+    const old = { ...account, id: 55, session: "morning", createdAt: "2026-09-24T08:40:00+09:00" };
+
+    it("종목 브리핑이 모두 실패하고 계좌 브리핑만 새로 생긴 세션도 1건 (서버 푸시와 같게), 다음 확인에서 다시 울리지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      // 알림을 켠 뒤 첫 확인: 그때 있던 계좌 브리핑(55)은 기준으로만 적는다
+      serveWith(latest, on, [old], { accountIds: [55] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      // 새 종목 브리핑 없이 계좌 브리핑(77)만 생김
+      const calls = serveWith(latest, on, [account, old], { accountIds: [77, 55] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      expect(title(0)).toBe("오후 계좌 브리핑 · 당일 -2,868,108원 (-1.23%)");
+      expect((scheduled[0] as { content: { data: Record<string, unknown> } }).content.data).toEqual({ type: "briefing", digest: true, session: "afternoon", date: "2026-09-24", count: 0, accountBriefingId: 77 });
+      expect(calls.filter((u) => u.includes("/api/account-briefings"))).toHaveLength(1);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+      // 이미 본 것뿐이면 알림 규칙·목록을 다시 묻지 않는다
+      expect(calls.filter((u) => u.endsWith("/api/notifications/settings"))).toHaveLength(1);
+    });
+
+    it("업데이트 직후(계좌 브리핑 기준이 없는 기기)에는 이미 있던 계좌 브리핑을 따로 울리지 않는다", async () => {
+      store.set("push.localMode", "1");
+      store.set("briefings.notified", JSON.stringify(latest.map((b) => b.latest.id)));
+      store.set("briefings.notifyInit", "1");
+      serveWith(latest, on, [account], { accountIds: [77] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      // 그 뒤 새로 생긴 계좌 브리핑은 알린다
+      serveWith(latest, on, [{ ...account, id: 78, createdAt: "2026-09-24T16:50:00+09:00" }, account], { accountIds: [78, 77] });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
+
+    it("등록한 모든 종목의 알림을 끈 사용자에게는 계좌 브리핑만 있는 세션도 알리지 않는다 (예전처럼 0건, 서버와 같은 규칙)", async () => {
+      const stocks = [{ c: "005930", n: "삼성전자", qty: 1, avg: 70000, q: null, e: null }, { c: "AAPL", n: "애플", qty: 1, avg: 190, q: null, e: null }];
+      await enableLocalBriefingAlerts();
+      serveWith(latest, on, [old], { accountIds: [55], stocks }); // 기준 적기
+      await runBriefingCheck();
+      serveWith(latest, { ...on, mutedCodes: ["005930", "AAPL"] }, [account, old], { accountIds: [77, 55], stocks });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(0);
+      // 하나라도 켜 두었으면 1건
+      serveWith(latest, { ...on, mutedCodes: ["005930"] }, [{ ...account, id: 79 }, account, old], { accountIds: [79, 77, 55], stocks });
+      await runBriefingCheck();
+      expect(scheduled).toHaveLength(1);
+    });
+  });
+
   describe("브리핑이 0건일 때 알림 켜기 (N3)", () => {
     it("빈 목록에서 켠 뒤 첫 신규 브리핑은 1건 알리고, 다음 확인에서 다시 알리지 않는다", async () => {
       serve([], prefs);
@@ -250,7 +416,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       placed.market = true;
       const urls = serveBoard();
       await runBriefingCheck();
-      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&board=1"]);
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&board=1"]);
       const r = refreshed[0] as { board: { at: number; list: { code: string }[] } | null; features: { flags: { market: boolean } } | null };
       expect(r.board!.list.map((i) => i.code)).toEqual(["KOSPI", "USDKRW"]);
       expect(r.board!.at).toBe(NOW);
@@ -260,7 +426,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     it("위젯이 없으면 판을 묻지 않는다 (응답·ETag 가 예전과 같다)", async () => {
       const urls = serveBoard();
       await runBriefingCheck();
-      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1"]);
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1"]);
       expect((refreshed[0] as { board: unknown }).board).toBeNull();
     });
   });

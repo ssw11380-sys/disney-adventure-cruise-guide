@@ -89,6 +89,7 @@ describe("briefing pipeline", () => {
   });
 
   it("같은 날 같은 세션은 force 없이는 건너뛰고, force 면 덮어쓴다", async () => {
+    // 종목 2 × (상세·요약). 계좌 브리핑(3-31)은 기본으로 모델을 부르지 않는다 (accountBriefingLlm 꺼짐)
     await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning" } });
     expect(gen.requests).toHaveLength(4);
     await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning" } });

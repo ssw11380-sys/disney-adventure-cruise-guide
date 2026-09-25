@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import type { AccountBriefing, LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { fillFromLast, type PnlMode } from "./model";
 import { canReuse, fromPayload, NO_FEATURES, REUSE_OPEN_MS, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
@@ -24,6 +24,8 @@ export interface WidgetData {
   market: WidgetMarket | null;
   /** 모든 종목의 최신 브리핑 id (새 서버). 없으면 briefings 가 전체 목록(예전 서버) */
   latestIds?: number[];
+  /** 최근 계좌 한 장 브리핑 id (3-31 서버, 플래그 accountBriefing 이 켜져 있을 때). 백그라운드 알림이 새 계좌 브리핑을 알아보게 */
+  accountIds?: number[];
   /** 지수 줄 (코스피·나스닥·원/달러). 예전 서버·플래그 꺼짐이면 null */
   indices: WidgetIndex[] | null;
   /** indices 를 받은 시각 (앱이 받은 지수와 어느 쪽이 새것인지 견줄 때) */
@@ -256,13 +258,17 @@ function boardOf(v: Pick<WidgetData, "board" | "boardAt" | "fetchedAt"> | null):
   return v?.board?.length ? { at: v.boardAt ?? v.fetchedAt, list: v.board } : null;
 }
 
-/** 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단) */
+/**
+ * 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단).
+ * 지금 앱의 요청 주소(WIDGET_PATH)로 받은 것만 — 주소가 바뀌기 전(OTA 전 ?indices=1)에 받은 응답은 서버가 다른 칩(달력만 본 칩)을 준 것이라,
+ * 다시 쓰면 앱이 바로 그린 세션 칩("미국 주간거래")과 위젯이 스스로 갱신할 때의 옛 칩("한국 휴장")이 최대 2시간 번갈아 보인다
+ */
 export async function readCachedPayload(apiUrl?: string): Promise<{ at: number; etag: string | null; body: WidgetPayload } | null> {
   try {
     const url = apiUrl ?? (await readSettings()).apiUrl;
     const raw = await AsyncStorage.getItem(PAYLOAD_KEY);
-    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; etag?: unknown; body?: unknown }) : null;
-    if (!v || typeof v.at !== "number" || v.apiUrl !== url || !v.body) return null;
+    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; path?: unknown; etag?: unknown; body?: unknown }) : null;
+    if (!v || typeof v.at !== "number" || v.apiUrl !== url || v.path !== WIDGET_PATH || !v.body) return null;
     return { at: v.at, etag: typeof v.etag === "string" ? v.etag : null, body: v.body as WidgetPayload };
   } catch {
     return null;
@@ -290,9 +296,12 @@ async function legacyUntil(apiUrl: string): Promise<number> {
 
 /**
  * 위젯 응답 주소. indices=1 은 "지수 줄을 그릴 수 있는 앱"이라는 표시다 — 서버는 이 표시가 있을 때만 지수를 넣는다
- * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다
+ * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다.
+ * sessions=1 은 "앱이 위젯을 바로 그릴 때도 세션 이름 칩을 그린다"는 표시다 (components/WidgetBridge → lib/liveDot widgetChip) —
+ * 서버는 이 표시가 있을 때만 칩에 보유 종목 세션 이름(미국 주간거래 등)을 쓴다. 예전 앱(표시 없음)은 달력만 본 칩을 그리므로 서버도 그렇게 준다
+ * (둘이 다르면 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀐다)
  */
-const WIDGET_PATH = "/api/widget?indices=1";
+const WIDGET_PATH = "/api/widget?indices=1&sessions=1";
 /**
  * 지수·환율 위젯이 있을 때만 &board=1 (서버는 widgetMarket 이 켜져 있고 이 표시가 있을 때만 판 9개를 넣는다).
  * 위젯이 없는 사용자의 응답·ETag 는 그대로다. ETag 는 본문으로 만들므로 board 가 있는 응답과 없는 응답의 ETag 가 섞여도 304 가 잘못 나지 않는다
@@ -321,7 +330,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
     else throw new HttpError(res.status);
     // 모양이 다르면(예전·다른 서버) 예전 API 로
     if (!body || body.v !== 1 || !Array.isArray(body.stocks)) return legacy();
-    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, etag: res.headers.get("etag"), body })).catch(() => undefined);
+    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, path: WIDGET_PATH, etag: res.headers.get("etag"), body })).catch(() => undefined);
     return body;
   } finally {
     clearTimeout(timer);
@@ -346,12 +355,28 @@ export async function loadNotifyPrefs(): Promise<(NotifyPrefs & { running: boole
     if (s.digest === undefined) return { ...DEFAULT_PREFS, digest: false, running };
     return {
       digest: s.digest,
+      // 3-31 서버부터. 없으면(예전 서버) 꺼짐 → 계좌 브리핑 목록을 묻지 않는다
+      accountBriefing: s.accountBriefing === true,
       quietEnabled: s.quietEnabled ?? DEFAULT_PREFS.quietEnabled,
       quietStart: s.quietStart ?? DEFAULT_PREFS.quietStart,
       quietEnd: s.quietEnd ?? DEFAULT_PREFS.quietEnd,
       mutedCodes: s.mutedCodes ?? [],
       running,
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 최근 계좌 한 장 브리핑 (3-31). 알림 규칙에서 accountBriefing 이 켜져 있을 때만 부른다.
+ * 받지 못하면(끊김·5xx·시간 초과·예전 서버 404) null — '빈 목록'과 구분한다. 받지 못한 목록의 계좌 브리핑을 '본 것'으로 적지 않게
+ */
+export async function loadAccountBriefings(): Promise<AccountBriefing[] | null> {
+  const { apiUrl, apiToken } = await readSettings();
+  try {
+    const list = await getJson<AccountBriefing[]>(`${apiUrl}/api/account-briefings?limit=4`, apiToken);
+    return Array.isArray(list) ? list : null;
   } catch {
     return null;
   }
@@ -414,6 +439,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.features = p.features;
       out.featuresAt = out.fetchedAt;
       if (payload.latestIds) out.latestIds = payload.latestIds;
+      if (Array.isArray(payload.accountIds)) out.accountIds = payload.accountIds.filter((id) => Number.isInteger(id) && id > 0);
       full = true;
       fresh = !reuse;
     } else {

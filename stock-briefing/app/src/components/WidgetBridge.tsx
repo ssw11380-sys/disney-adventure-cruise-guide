@@ -1,8 +1,9 @@
 import { useIsRestoring, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
-import { useAnyMarketOpen, useApi, useMarketStatus } from "@/api/hooks";
+import { useApi, useMarketStatus } from "@/api/hooks";
 import type { FeatureFlags, MarketIndex, RegisteredWithQuote } from "@/api/types";
+import { widgetChip } from "@/lib/liveDot";
 import { useSettings } from "@/lib/settings";
 import { pickBoard, pickWidgetIndices, widgetFeatures } from "@/widgets/payload";
 import { widgetPushDue } from "@/widgets/pushPolicy";
@@ -32,31 +33,31 @@ export function WidgetBridge() {
   const indices = useMemo(() => (idxList ? { at: idxAt, list: pickWidgetIndices(idxList) } : null), [idxList, idxAt]);
   // 지수·환율 위젯 판: 같은 지수 띠 9개 (앱이 새 지수를 받으면 위젯도 같은 숫자로)
   const board = useMemo(() => (idxList ? { at: idxAt, list: pickBoard(idxList) } : null), [idxList, idxAt]);
-  const live = useAnyMarketOpen();
   const ms = useMarketStatus().data;
-  const krOpen = ms?.KR.isOpen ?? false;
-  const usOpen = ms?.US.isOpen ?? false;
-  const market = useMemo(
-    () => (live.loaded ? { label: live.label, open: live.open, nextChangeAt: null, kr: krOpen, us: usOpen } : null),
-    [live.loaded, live.label, live.open, krOpen, usOpen],
-  );
   // 이번 실행에서 서버에서 받은 잔고인지: 받은 시각이 앱을 연 뒤인지로 본다 (기기 저장값 복원·오프라인 실패로 옛 잔고를 넘기지 않게)
   const [mountedAt] = useState(() => Date.now());
   const restoring = useIsRestoring();
   const fetchedThisSession = !restoring && dataAt > mountedAt;
   // 플래그가 바뀌어도 바로 (손익 전환·지수 줄이 켜지고 꺼지는 것을 1분 기다리지 않게)
-  const pushKey = `${showKrw}|${afterCost}|${market?.label ?? ""}|${features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}` : ""}`;
+  const flagKey = features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}` : "";
   const last = useRef({ at: 0, key: "" });
   const push = useRef<(leaving: boolean) => void>(() => undefined);
   useEffect(() => {
     push.current = (leaving: boolean) => {
       const now = Date.now();
-      if (!data || !widgetPushDue({ now, fetchedThisSession, lastAt: last.current.at, lastKey: last.current.key, key: pushKey, leaving })) return;
-      last.current = { at: now, key: pushKey };
+      if (!data) return;
+      // 장 상태 칩: 위젯이 스스로 받는 /api/widget(&sessions=1 — 이 앱이 붙이는 표시)과 같은 함수(lib/liveDot widgetChip = 서버 widgetPayload.marketChip) — 장 상태와 잔고 시세의 세션으로.
+      // 예전에는 달력만 봐서(useAnyMarketOpen) 추석 미국 주간거래에 앱이 그리면 "한국 휴장", 위젯이 받으면 "미국 주간거래"로 번갈아 바뀌었다.
+      // 넘기는 순간의 시각으로 잔고를 새로 받을 때마다(세션 경계 1초 뒤 포함) 다시 계산하고, 칩 문구가 바뀌면 바로 넘긴다.
+      // 세션이 끝나는 때(nextChangeAt)가 지나면 위젯이 칩을 감춘다
+      const market = widgetChip(ms, data, now);
+      const key = `${showKrw}|${afterCost}|${market?.label ?? ""}|${flagKey}`;
+      if (!widgetPushDue({ now, fetchedThisSession, lastAt: last.current.at, lastKey: last.current.key, key, leaving })) return;
+      last.current = { at: now, key };
       void refreshWidgets({ stocks: data, showKrw, afterCost, market, features, indices, board });
     };
     push.current(false);
-  }, [data, dataAt, pushKey, showKrw, afterCost, market, fetchedThisSession, features, indices, board]);
+  }, [data, dataAt, flagKey, showKrw, afterCost, ms, fetchedThisSession, features, indices, board]);
   useEffect(() => {
     const sub = AppState.addEventListener("change", (st) => {
       if (st === "background") push.current(true);

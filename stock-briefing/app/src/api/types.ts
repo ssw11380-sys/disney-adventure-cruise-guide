@@ -17,6 +17,25 @@ export interface AfterMarketQuote {
   asOf: string;
 }
 
+/**
+ * 종목의 지금 거래 세션 (서버 services/liveSession 과 같은 모양).
+ * phase — 한국: nxt_pre · auction(동시호가) · regular · nxt_after(15:40~16:00) · after(한국거래소+NXT 애프터마켓 16:00~20:00),
+ * 미국: overnight(주간거래) · pre · regular · after, 공통: closed · holiday
+ */
+export interface QuoteSession {
+  market: "KR" | "US";
+  phase: string;
+  /** "미국 주간거래" · "한국 애프터마켓" · "한국 휴장" … */
+  label: string;
+  /** 그 시장이 지금 연속 거래 중 (동시호가·장 마감·휴장이면 false) */
+  open: boolean;
+  /** 이 종목이 지금 세션의 거래 대상인지 (NXT·주간거래·애프터마켓 대상, 거래정지 아님). 모르면 null (이 세션에 체결이 있어야 점) */
+  eligible: boolean | null;
+  halted?: boolean;
+  /** 다음 세션 경계 (ISO) */
+  until: string | null;
+}
+
 export interface ListedStock {
   code: string;
   name: string;
@@ -51,7 +70,12 @@ export interface Quote {
   afterMarket?: AfterMarketQuote | null;
   priceBasis?: string; // "KRX+NXT 통합" | "KRX 정규장" | "정규장"
   priceKrw?: number | null; // 미국 종목 원화 환산
-  live?: boolean; // 실시간 체결로 덮어쓴 현재가
+  /** 실시간 체결로 스냅샷과 다른 가격을 덮어쓴 현재가 (예전 서버의 초록 점 기준 — 새 서버면 realtime·session 을 쓴다, lib/liveDot) */
+  live?: boolean;
+  /** 이 종목의 지금 거래 세션 (새 서버 잔고·상세만). 잔고 상태 줄 "미국 주간거래 · 한국 휴장" 과 점이 없는 까닭 */
+  session?: QuoteSession | null;
+  /** 초록 점: 지금 열린 세션에서 이 종목 가격이 실시간으로 갱신되고 있다 (새 서버만. 없으면 예전 서버 → live) */
+  realtime?: boolean;
   /** 서버가 시세를 새로 받지 못해 마지막 값을 그대로 준 경우 (asOf 는 원래 시각). 회색 "시세 지연"으로 표시 */
   stale?: boolean;
   fxRate?: number | null; // 미국 종목: 1달러당 원화
@@ -180,6 +204,115 @@ export interface BriefingWithData extends Briefing {
     holding: { profit: number; profitRate: number; marketValue: number } | null;
     missing: string[];
   } | null;
+}
+
+/** 계좌 한 장 브리핑 (3-31). 서버 backend/src/services/accountNumbers.ts 의 AccountData 와 같은 모양 */
+export interface AccountRow {
+  code: string;
+  name: string;
+  currency: Currency;
+  /** 당일 손익 기여(원, 정수). 줄 + 그 외 = 당일 손익 */
+  amount: number;
+  changeRate: number | null;
+  /** 원화 평가금액 */
+  value: number;
+}
+
+export interface AccountMarketBucket {
+  count: number;
+  value: number;
+  day: number;
+  dayRate: number | null;
+}
+
+export interface AccountFx {
+  /** computed = 나눠 계산함, none = 미국 종목 없음, unavailable = 원/달러 변동을 받지 못함 */
+  status: "computed" | "none" | "unavailable";
+  reason: string | null;
+  usdKrw: { value: number; change: number; changeRate: number; stale: boolean } | null;
+  appliedRate: number | null;
+  usdHoldingsKrwChange: number | null;
+  /** 가격 효과 = 당일 손익의 미국 몫 */
+  priceEffect: number | null;
+  /** 환율 효과 (당일 손익에 들어가지 않음) */
+  fxEffect: number | null;
+}
+
+export interface AccountIndexRow {
+  code: string;
+  name: string;
+  value: number;
+  change: number;
+  changeRate: number;
+  open: boolean;
+  stale: boolean;
+}
+
+export interface AccountSchedule {
+  kr: { date: string; tradingDay: boolean; now: string; hours: string | null; nextOpen: string | null };
+  us: { date: string; tradingDay: boolean; now: string; hours: string | null };
+  disclosures: { code: string; name: string; title: string; filedAt: string; url: string | null }[];
+}
+
+export interface AccountData {
+  version: number;
+  session: BriefingSession;
+  date: string;
+  asOf: string;
+  basis: string;
+  afterCost: boolean;
+  holdings: number;
+  stale: number;
+  totalValue: number;
+  totalCost: number;
+  totalProfit: number;
+  totalProfitRate: number | null;
+  dayPnl: number;
+  dayRate: number | null;
+  contributions: AccountRow[];
+  others: { count: number; amount: number } | null;
+  markets: { kr: AccountMarketBucket | null; us: AccountMarketBucket | null };
+  excluded: { code: string; name: string; reason: string }[];
+  fx: AccountFx;
+  indices: AccountIndexRow[];
+  missingIndices: string[];
+  schedule: AccountSchedule;
+  narrative: { source: "llm" | "template"; reason: string | null };
+  /** 오늘 한국 휴장이라 국내 종목의 등락·당일 손익이 직전 거래일 것 (예전 기록에는 없음) */
+  krPreviousDay?: boolean;
+  /** 지난밤 미국 평일 휴장이라 미국 종목의 등락·당일 손익이 직전 거래일 것 (앞 브리핑에 담긴 움직임. 예전 기록·서버에는 없음) */
+  usPreviousDay?: boolean;
+}
+
+export interface AccountHeadline {
+  totalValue: number;
+  dayPnl: number;
+  dayRate: number | null;
+  holdings: number;
+  /** 당일 손익 기여 상위 3 */
+  top: { code: string; name: string; amount: number; changeRate: number | null }[];
+  /** 오늘 한국 휴장이라 국내 종목의 등락이 직전 거래일 것 (그럴 때만 옴) */
+  krPreviousDay?: boolean;
+  /** 지난밤 미국 평일 휴장이라 미국 종목의 등락이 직전 거래일 것 (그럴 때만 옴) */
+  usPreviousDay?: boolean;
+}
+
+export interface AccountBriefing {
+  id: number;
+  date: string;
+  session: BriefingSession;
+  status: "ok" | "failed";
+  summary: string;
+  detail: string;
+  model: string;
+  /** 모델 설명 없이 숫자만으로 만든 기본 문장 */
+  template: boolean;
+  createdAt: string;
+  headline: AccountHeadline | null;
+}
+
+export interface AccountBriefingWithData extends AccountBriefing {
+  data: AccountData | null;
 }
 
 export interface LatestBriefing {
@@ -336,12 +469,14 @@ export interface NotificationSettings {
   quietEnd?: string;
   mutedCodes?: string[];
   digest?: boolean;
+  /** 계좌 한 장 브리핑 플래그 (3-31 서버부터). 켜져 있으면 세션 알림 앞머리가 계좌 요약 */
+  accountBriefing?: boolean;
   /** 브리핑 실행 중 (3-19 서버부터) */
   running?: boolean;
   schedule: Health["schedule"];
 }
 
-export type NotificationSettingsPatch = Partial<Omit<NotificationSettings, "schedule" | "digest" | "running">> & { mute?: { code: string; muted: boolean } };
+export type NotificationSettingsPatch = Partial<Omit<NotificationSettings, "schedule" | "digest" | "running" | "accountBriefing">> & { mute?: { code: string; muted: boolean } };
 
 export interface SendSummary {
   sent: number;

@@ -34,7 +34,7 @@ export interface LinePrice {
   color: string;
   rate: string;
   rateColor: string;
-  /** 실시간 체결 중 (초록 점) */
+  /** 초록 점: 지금 열린 세션에서 가격이 실시간으로 갱신되는 중 (잔고는 lib/liveDot quoteLive). 반짝임(FlashPrice)과는 따로 */
   live?: boolean;
 }
 

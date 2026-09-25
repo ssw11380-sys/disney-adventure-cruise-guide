@@ -110,8 +110,10 @@ function Navigator() {
       <Stack.Screen name="stocks/[code]/edit" options={{ title: "잔고 수정", presentation: "modal" }} />
       <Stack.Screen name="stocks/[code]/chart" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
       <Stack.Screen name="briefings/[id]" options={{ title: "브리핑" }} />
+      <Stack.Screen name="briefings/account/[id]" options={{ title: "계좌 브리핑" }} />
       <Stack.Screen name="market/[code]" options={{ title: "지수" }} />
       <Stack.Screen name="discover/theme/[id]" options={{ title: "테마" }} />
+      <Stack.Screen name="portfolio/allocation" options={{ title: "비중" }} />
     </Stack>
   );
 }

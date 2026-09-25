@@ -59,6 +59,8 @@ export interface WidgetPayload {
   indices?: WidgetIndex[];
   /** 지수·환율 위젯 판 9개 (widgetMarket 이 켜진 서버가 ?board=1 로 물은 앱에만). 예전 서버·플래그 꺼짐이면 없음 */
   board?: WidgetIndex[];
+  /** 최근 계좌 한 장 브리핑 id (3-31, accountBriefing 이 켜진 서버만). 백그라운드 알림용 — 위젯은 쓰지 않는다 */
+  accountIds?: number[];
 }
 
 /** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket) */
