@@ -11,7 +11,7 @@ import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
  *
  *  - 시세:   GET  /api/v3/stock-prices?productCodes=A035420,US20100629001
  *            한국은 KRX+NXT "통합" 가격(토스 앱에 보이는 그 숫자), 미국은 USD + 원화 환산.
- *  - 봉:     GET  /api/v1/c-chart/{kr-s|us-s}/{productCode}/{day|week|month}:1?count=N  (최신순), 분봉은 min:1|min:5|min:30
+ *  - 봉:     GET  /api/v1/c-chart/{kr-s|us-s}/{productCode}/{day|week|month}:1?count=N  (최신순, N 은 450 까지), 분봉은 min:1|min:5|min:30
  *  - 종목:   GET  /api/v2/stock-infos/{productCode}  (이름, 시장, 발행주식수 → 시가총액)
  *            GET  /api/v1/stock-infos?codes=A035420,US20100629001  (200개씩: 주간거래·NXT 대상, 거래정지, ETF·ETN → 초록 점의 세션 자격)
  *  - 검색:   POST /api/v3/search-all/wts-auto-complete  (한글로 미국 종목 검색 가능: "테슬라" → TSLA)
@@ -33,6 +33,13 @@ const SESSION_INFO_TTL_MS = 60 * 60_000;
 const SESSION_INFO_RETRY_MS = 5 * 60_000;
 /** stock-infos 일괄 조회 한 번에 넣는 종목 수 */
 const SESSION_INFO_BATCH = 200;
+/** c-chart 가 한 번에 주는 봉 최대 개수. 넘게 청하면 HTTP 400 이라(일봉 800·1분봉 600 등) 이만큼으로 줄여 받는다 */
+const CHART_MAX_COUNT = 450;
+/**
+ * 환율을 새로 받지 못해도 마지막 값을 쓰는 한도. 잠깐 실패하면 출처가 오락가락하지 않게 마지막 값, 넘으면 null →
+ * 다음 소스(토스 Open API 매매기준율 → 네이버)로 넘어간다 (예전: 한 번 받은 값을 장애 내내 썼다)
+ */
+const FX_KEEP_MS = 5 * 60_000;
 
 interface SessionInfo {
   at: number;
@@ -247,7 +254,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
       low52w: lows.length ? Math.min(...lows) : null,
       asOf: seoulIso(this.now()),
       source: this.name,
-      priceBasis: kr ? "KRX+NXT 통합" : "정규장",
+      priceBasis: kr ? "KRX+NXT 통합" : usPriceBasis(latest?.date ?? null, this.now()),
       priceKrw: currency === "USD" ? num(p["closeKrw"]) : null,
       afterMarket,
     };
@@ -286,6 +293,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
   async usdKrw(): Promise<number | null> {
     const t = this.now().getTime();
     if (this.fxCache && t - this.fxCache.at < 60_000) return this.fxCache.rate;
+    const kept = () => (this.fxCache && t - this.fxCache.at < FX_KEEP_MS ? this.fxCache.rate : null);
     try {
       // 거래가 많은 미국 종목 몇 개(애플·테슬라·엔비디아)의 비율 중앙값
       const rows = (await this.request(`/v3/stock-prices?productCodes=US19801212001,US20100629001,US19990122001`)) as Json[];
@@ -296,12 +304,12 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
         })
         .filter((x): x is number => x !== null && x > 500 && x < 5000)
         .sort((a, b) => a - b);
-      if (rates.length === 0) return this.fxCache?.rate ?? null;
+      if (rates.length === 0) return kept();
       const rate = Math.round(rates[Math.floor(rates.length / 2)]! * 100) / 100;
       this.fxCache = { at: t, rate };
       return rate;
     } catch {
-      return this.fxCache?.rate ?? null;
+      return kept();
     }
   }
 
@@ -510,7 +518,9 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
 
   private async fetchChart(productCode: string, kr: boolean, period: CandlePeriod, count: number): Promise<Candle[]> {
     const intraday = isIntraday(period);
-    const path = `/v1/c-chart/${kr ? "kr-s" : "us-s"}/${encodeURIComponent(productCode)}/${PERIOD_PATH[period]}${intraday ? "" : ":1"}?count=${count}`;
+    // 한 번에 450개까지만 준다 (넘으면 HTTP 400) → 더 많이 청하면 최근 450개만 (이어 받는 쿼리는 확인하지 못했다)
+    const n = Math.min(count, CHART_MAX_COUNT);
+    const path = `/v1/c-chart/${kr ? "kr-s" : "us-s"}/${encodeURIComponent(productCode)}/${PERIOD_PATH[period]}${intraday ? "" : ":1"}?count=${n}`;
     const result = (await this.request(path)) as { candles?: Json[] };
     const out: Candle[] = [];
     for (const c of result.candles ?? []) {
@@ -536,6 +546,27 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
 
 function isKrMarket(market: string): boolean {
   return market === "KSP" || market === "KSQ";
+}
+
+const NY_CLOCK = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+
+/**
+ * 토스 웹 미국 시세(close)가 어느 거래의 가격인지 (priceBasis). 토스는 뉴욕 20:00 부터 다음 거래일 봉을 새로 열어 주간거래(·프리마켓) 체결을 넣고
+ * close 도 그 봉의 가격이 된다. 정규장이 끝난 뒤의 애프터마켓 체결은 봉·close 에 넣지 않는다 (afterMarketClose 로 따로 → afterMarket).
+ *  - 마지막 봉이 뉴욕 오늘보다 뒤 날짜(20:00 뒤)이거나 오늘 봉인데 04:00 전: "주간거래" (한국 낮)
+ *  - 오늘 봉인데 04:00~09:30 (프리마켓 — 주간거래 체결일 수도 있다): "최근 체결(시간외 포함)"
+ *  - 그 밖 (정규장 중·마감 뒤·주말·휴장일, 주간거래 체결이 없어 새 봉이 없는 종목): "정규장"
+ *  - 봉을 받지 못해 모르면 공식 API 와 같은 "최근 체결(시간외 포함)"
+ */
+function usPriceBasis(latestDate: string | null, now: Date): string {
+  if (!latestDate) return "최근 체결(시간외 포함)";
+  const p: Record<string, string> = {};
+  for (const x of NY_CLOCK.formatToParts(now)) p[x.type] = x.value;
+  const today = `${p["year"]}-${p["month"]}-${p["day"]}`;
+  const minutes = (Number(p["hour"]) % 24) * 60 + Number(p["minute"]);
+  if (latestDate > today || (latestDate === today && minutes < 4 * 60)) return "주간거래";
+  if (latestDate === today && minutes < 9 * 60 + 30) return "최근 체결(시간외 포함)";
+  return "정규장";
 }
 
 function toListed(it: Json): ListedStock | null {

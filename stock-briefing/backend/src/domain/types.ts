@@ -56,7 +56,7 @@ export interface Quote {
    * 토스·네이버 앱이 장 마감 후 보여주는 값이 이것이라 정규장 종가와 다를 수 있다. 소스가 제공하지 않으면 없음.
    */
   afterMarket?: AfterMarketQuote | null;
-  /** price 가 어떤 기준인지 ("KRX 정규장", "KRX+NXT 통합", "정규장"). 소스마다 다르므로 표시용 */
+  /** price 가 어떤 기준인지 ("KRX 정규장", "KRX+NXT 통합", "정규장", "주간거래", "최근 체결(시간외 포함)"). 소스마다 다르므로 표시용 */
   priceBasis?: string;
   /** 미국 종목의 원화 환산 현재가 (소스가 주는 경우만) */
   priceKrw?: number | null;
