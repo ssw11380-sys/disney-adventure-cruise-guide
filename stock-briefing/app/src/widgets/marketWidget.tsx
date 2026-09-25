@@ -3,7 +3,7 @@ import { FlexWidget, TextWidget, type FlexWidgetStyle } from "react-native-andro
 import { sentence } from "@/lib/a11y";
 import { space } from "@/tokens";
 import { BOARD_TITLE, boardColumns, boardTiles, type BoardTile } from "./board";
-import { BOARD_GAP, MARKER_GAP, PAD, planMarket, STALE_TEXT, type MarketPlan } from "./layout";
+import { BOARD_GAP, MARKER_GAP, PAD, planMarket, STALE_TEXT, WIDE, type MarketPlan } from "./layout";
 import { asOfVariants, failureText, HOME_URI, tone } from "./model";
 import type { WidgetIndex } from "./payload";
 import { WIDGET_BOARD as BOARD, WIDGET_COLORS, WIDGET_FONT as F, WIDGET_TOUCH as TOUCH, type WidgetPalette } from "./palette";
@@ -19,6 +19,7 @@ import { WIDGET_CLICK, type WidgetFrame } from "./widgets";
  *  - 칸을 누르면 그 지수·환율 차트(market/[code]), 머리를 누르면 앱, ↻ 는 새로고침(48dp, 누르면 바로 "갱신 중")
  *  - 출처 조회가 실패한 항목은 마지막 값을 흐리게 + "지연", 위젯 조회가 실패하면 마지막 값을 두고 머리에 "갱신 실패 …"
  *  - 플래그가 꺼져 있거나 모르면(예전 서버) 값 대신 짧은 안내
+ *  - 넓은 위젯(3-42 폴드, 다듬은 모습 widgetPolish 만 · 폭 WIDE.boardMin 이상): 구역 안에서도 칸을 가로로 놓아 낮고 넓은 위젯에도 9개 모두, 값은 더 크게 (layout.ts planMarketWide)
  * 라이브러리가 null 을 돌려주는 컴포넌트를 다룰 수 없으므로 조건부 칸은 부모에서 `cond ? <X/> : null` 로 넣는다 (widgets.tsx 와 같은 규칙)
  */
 
@@ -40,6 +41,11 @@ export interface MarketWidgetProps extends WidgetFrame {
   error: string | null;
   now: number;
   refreshing?: boolean;
+  /**
+   * 다듬은 모습 (widgetPolish, 3-42): 넓은 위젯(폴드 안쪽 화면에 늘린 위젯 등)은 구역 안에서도 칸을 가로로 놓아 9개 모두·큰 값.
+   * 꺼져 있거나 모르면(예전 서버), 또는 폭이 WIDE.boardMin 미만이면 지금 모습 그대로
+   */
+  polish?: boolean;
 }
 
 const rootStyle = (c: WidgetPalette): FlexWidgetStyle => ({
@@ -67,14 +73,15 @@ const Dot = ({ color }: { color: WidgetPalette["live"] }) => (
  *  - inline: 이름(+장중 점) ··· 등락률 / 값      - brief: 이름(+장중 점) ··· ▲/▼ / 값   (지연 항목은 오른쪽에 "지연")
  * 이름은 다 들어가면 글자 폭대로 두어 점·"지연"이 이름 바로 뒤에 붙는다 (줄일 때만 폭을 준다)
  */
-function Tile({ t, plan, first, last, c }: { t: BoardTile; plan: MarketPlan; first: boolean; last: boolean; c: WidgetPalette }) {
+function Tile({ t, plan, first, last, width, c }: { t: BoardTile; plan: MarketPlan; first: boolean; last: boolean; width?: number; c: WidgetPalette }) {
   const color = t.stale || !t.has ? c.muted : tone(t.change, c);
   const mark = plan.mark[t.code] ?? null;
   const change = plan.change[t.code] ?? null;
   const nameW = plan.nameW[t.code] ?? null;
   const full = plan.shape === "full";
   const style: FlexWidgetStyle = {
-    width: "match_parent",
+    // 넓은 위젯의 가로 칸은 정해진 폭 (가로 줄에서 match_parent 는 뒤 칸을 밀어낸다)
+    width: width ?? "match_parent",
     flexDirection: "column",
     paddingTop: first ? 0 : plan.rowPad,
     paddingBottom: last ? 0 : plan.rowPad,
@@ -126,12 +133,22 @@ function Column({ col, index, count, plan, tiles, c }: { col: MarketPlan["column
     ...(first ? {} : { borderLeftWidth: BOARD.hairline, borderLeftColor: c.line }),
   };
   const shown = col.codes.map((code) => tiles.get(code)).filter((t): t is BoardTile => !!t);
+  const per = col.cols ?? 1;
+  // 넓은 위젯(3-42): 구역 안에서도 칸을 가로로 per 개씩 (왼쪽 → 오른쪽, 위 → 아래). 칸마다 따로 누르고 따로 읽는다
+  const lines: BoardTile[][] = [];
+  if (per > 1) for (let k = 0; k < shown.length; k += per) lines.push(shown.slice(k, k + per));
   return (
     <FlexWidget style={style}>
       {plan.captions ? <TextWidget text={col.label} maxLines={1} style={{ color: c.gold, fontSize: F.xs, fontWeight: "700", marginBottom: plan.captionGap }} /> : null}
-      {shown.map((t, n) => (
-        <Tile key={t.code} t={t} plan={plan} first={n === 0} last={n === shown.length - 1} c={c} />
-      ))}
+      {per > 1
+        ? lines.map((line, n) => (
+            <FlexWidget key={line.map((t) => t.code).join("-")} style={{ width: "match_parent", flexDirection: "row", flexGap: WIDE.tileGap }}>
+              {line.map((t) => (
+                <Tile key={t.code} t={t} plan={plan} first={n === 0} last={n === lines.length - 1} width={col.tileW} c={c} />
+              ))}
+            </FlexWidget>
+          ))
+        : shown.map((t, n) => <Tile key={t.code} t={t} plan={plan} first={n === 0} last={n === shown.length - 1} c={c} />)}
     </FlexWidget>
   );
 }
@@ -148,7 +165,7 @@ export function MarketWidget(props: MarketWidgetProps) {
   // 제목 옆: 갱신 중 → 갱신 실패(마지막 값을 두고) → 기준 시각 (판을 받은 시각)
   const sub = refreshing ? ["갱신 중"] : fail ? [fail, "갱신 실패"] : hasData && props.boardAt ? asOfVariants(props.boardAt, props.now) : [];
   const byCode = new Map(tiles.map((t) => [t.code, t]));
-  const plan = planMarket({ width, height, scale, title: BOARD_TITLE, sub, columns: hasData ? boardColumns(tiles) : [] });
+  const plan = planMarket({ width, height, scale, title: BOARD_TITLE, sub, columns: hasData ? boardColumns(tiles) : [], wide: props.polish === true });
   const headerLabel = sentence([BOARD_TITLE, refreshing ? "갱신 중" : sub[0]]);
   // 판이 없을 때: 플래그 꺼짐·모름 → 짧은 안내, 켜져 있는데 못 받음 → 다시 시도 안내 (갱신 중에는 비움)
   const message = !props.enabled ? MARKET_OFF_TEXT : hasData || refreshing ? null : MARKET_EMPTY_TEXT;
