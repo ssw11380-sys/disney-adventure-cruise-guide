@@ -95,6 +95,10 @@ vi.mock("@/components/ui", () => ({
 }));
 
 const { default: StockDetailScreen } = await import("@/app/stocks/[code]/index");
+const { forgetWindowClass } = await import("@/lib/useFoldLayout");
+const { navAt } = await import("@/lib/holdingsNav");
+const { foldDetail, space } = await import("@/tokens");
+const { sideWidth, statColumns, wideChartHeight } = await import("@/lib/detailLayout");
 
 /** 결과 트리를 비교할 수 있는 값으로: 함수는 '[fn]', 속성으로 넘긴 요소(top·refreshControl 등)는 이름과 속성만 */
 function ser(v: unknown): unknown {
@@ -153,7 +157,7 @@ beforeEach(() => {
   h.flag = undefined;
   h.params = { code: "005930" };
   h.briefings = [brief(2, "afternoon"), brief(1, "morning")];
-  h.news = undefined;
+  h.news = { code: "005930", name: "삼성전자", news: [], newsError: null, disclosures: [], disclosuresError: null };
   h.settings = { showKrw: false, afterCost: false, sort: "created", apiUrl: "http://x" };
   h.nav = null;
   h.navArgs.length = 0;
@@ -161,7 +165,31 @@ beforeEach(() => {
   h.setParams.mockReset();
   h.back.mockReset();
   h.canGoBack = true;
+  forgetWindowClass();
 });
+
+/** 창 크기 (앱이 쓰는 창) */
+const SIZE = {
+  F8C: [475, 679],
+  UC: [411, 888],
+  F8L: [933, 632],
+  F8P: [704, 861],
+  UP: [859, 882],
+  UL: [954, 787],
+} as const;
+const size = (k: keyof typeof SIZE, fontScale = 1) => {
+  const [width, height] = SIZE[k];
+  h.win = { width, height, scale: 2.625, fontScale };
+};
+const flat = (n: HostNode): Record<string, unknown> => Object.assign({}, ...[n.props.style].flat(Infinity).filter(Boolean));
+const stack = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "StackScreen")!.props.options as Record<string, unknown>;
+const segmented = (r: ReturnType<typeof render>) => r.all().filter((n) => n.type === "Segmented");
+const chart = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "CandleChart")!;
+const NAV_ITEMS = [
+  { code: "005930", name: "삼성전자" },
+  { code: "000660", name: "SK하이닉스" },
+  { code: "035420", name: "NAVER" },
+];
 
 describe("플래그 꺼짐·좁은 창: 지금 화면 그대로 (바꾸기 전 스냅숏)", () => {
   for (const [name, make] of Object.entries(CASES)) {
@@ -170,5 +198,240 @@ describe("플래그 꺼짐·좁은 창: 지금 화면 그대로 (바꾸기 전 �
       const r = open(make());
       expect(tree(r.tree)).toMatchSnapshot();
     });
+
+    it(`${name}: 플래그가 꺼져 있으면 여섯 크기 모두, 켜져 있어도 접힌 화면 두 크기는 스냅숏과 같은 결과`, () => {
+      h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+      const golden = tree(open(make()).tree);
+      for (const k of Object.keys(SIZE) as (keyof typeof SIZE)[]) {
+        forgetWindowClass();
+        size(k);
+        expect(tree(open(make()).tree), `꺼짐 ${k}`).toEqual(golden);
+      }
+      for (const k of ["F8C", "UC"] as const) {
+        forgetWindowClass();
+        size(k);
+        expect(tree(open(make(), { flag: true }).tree), `켜짐 ${k}`).toEqual(golden);
+        h.flag = undefined;
+      }
+    });
   }
+
+  it("플래그가 꺼져 있으면 기간·탭을 바꿔도 주소 검색어를 건드리지 않는다 (지금 그대로)", () => {
+    size("F8L");
+    const r = open(samsung());
+    r.act(() => (chart(r).props.onPeriodChange as (p: string) => void)("W"));
+    r.act(() => (segmented(r)[0]!.props.onChange as (v: string) => void)("news"));
+    expect(h.setParams).not.toHaveBeenCalled();
+    expect(chart(r).props.period).toBe("W");
+    expect(segmented(r)[0]!.props.value).toBe("news");
+  });
+});
+
+describe("좌우 배치 (펼친 폴드8 가로 · 울트라 가로)", () => {
+  const openSplit = (k: "F8L" | "UL" = "F8L", extra: Partial<typeof h> = {}) => {
+    size(k);
+    return open(samsung(), { flag: true, ...extra });
+  };
+
+  it("Stack 머리를 숨기고 합친 머리(뒤로 · 이름 · 가격 · 수정)를 그린다", () => {
+    const r = openSplit();
+    expect(stack(r)).toEqual({ headerShown: false });
+    expect(r.has("뒤로")).toBe(true);
+    expect(r.has("보유 정보 수정")).toBe(true);
+    expect(r.text()).toContain("삼성전자");
+    expect(r.all().some((n) => n.type === "FlashPrice" && n.props.text === "84,300")).toBe(true);
+    // 위 화면 여백은 머리가 맡는다
+    const head = r.byLabel("뒤로");
+    expect(r.all().some((n) => flat(n).paddingTop === h.insets.top && n.children.some((c) => typeof c !== "string" && c.children.includes(head)))).toBe(true);
+  });
+
+  it("오른쪽 칸만 스크롤·당겨서 새로고침, 고지는 맨 아래", () => {
+    const r = openSplit();
+    const scrolls = r.all().filter((n) => n.type === "ScrollView");
+    expect(scrolls).toHaveLength(2);
+    expect(scrolls[0]!.props.refreshControl).toBeUndefined();
+    expect(React.isValidElement(scrolls[1]!.props.refreshControl)).toBe(true);
+    expect(r.all().filter((n) => n.type === "Disclaimer")).toHaveLength(1);
+    expect(r.tree.at(-1)).toBeDefined();
+    // 오른쪽 칸 폭 = sideWidth
+    expect(r.all().some((n) => flat(n).width === sideWidth(1))).toBe(true);
+  });
+
+  it("오른쪽 칸: 내 보유 6칸 · 시세 14칸을 한 줄 2칸으로, 탭은 브리핑부터", () => {
+    const r = openSplit();
+    const labels = r.all().filter((n) => n.type === "Stat").map((n) => n.props.label);
+    expect(labels.slice(0, 6)).toEqual(["보유수량", "평균단가", "평가금액", "매입금액", "평가손익", "수익률"]);
+    expect(labels.slice(6)).toEqual(["시가", "전일", "고가", "거래량", "저가", "시가총액", "52주 최고", "52주 최저", "PER", "PBR", "EPS", "BPS", "배당수익률", "주당배당"]);
+    const tabs = segmented(r)[0]!;
+    expect((tabs.props.options as { value: string }[]).map((o) => o.value)).toEqual(["briefing", "news", "company", "value", "technical"]);
+    expect(tabs.props.value).toBe("briefing");
+    expect(r.all().filter((n) => n.type === "BriefingCard")).toHaveLength(2);
+  });
+
+  it("왼쪽 칸 높이에 맞춰 차트 그림 높이를 정한다 (둘레를 잰 뒤 칸 − 둘레)", () => {
+    const r = openSplit();
+    expect(chart(r).props.height).toBeUndefined();
+    const pane = r.all().find((n) => typeof n.props.onLayout === "function" && flat(n).flex === 1 && flat(n).minWidth === 0)!;
+    r.act(() => (pane.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 592, height: 540 } } }));
+    const first = chart(r).props.height as number;
+    expect(first).toBe(540 - 120);
+    // 패널의 onLayout 은 그릴 때마다 새로 만든다 → 매번 지금 트리에서 찾는다
+    const layoutPanel = (height: number) => {
+      const panel = r.all().find((n) => typeof n.props.onLayout === "function" && n.children.some((c) => typeof c !== "string" && c.type === "CandleChart"))!;
+      r.act(() => (panel.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 592, height } } }));
+    };
+    // 실제 둘레가 170 이면 차트를 줄여 칸에 맞춘다 (첫 번째는 패널 폭을 재고, 두 번째에 둘레를 잰다)
+    layoutPanel(first + 170);
+    layoutPanel((chart(r).props.height as number) + 170);
+    expect(chart(r).props.height).toBe(540 - 170);
+    // 둘레가 줄어도(십자선 읽기 줄) 차트는 다시 커지지 않는다 — 흔들림 방지
+    layoutPanel((chart(r).props.height as number) + 150);
+    expect(chart(r).props.height).toBe(540 - 170);
+    // 아주 낮은 창이면 최소 높이 (왼쪽 칸이 스크롤된다)
+    r.act(() => (pane.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 592, height: 200 } } }));
+    expect(chart(r).props.height).toBe(foldDetail.chartMinH);
+  });
+
+  it("큰 글씨(130%)는 오른쪽 칸을 넓히고 한 줄에 한 칸", () => {
+    size("F8L", 1.3);
+    const r = open(samsung(), { flag: true });
+    expect(r.all().some((n) => flat(n).width === sideWidth(1.3))).toBe(true);
+    expect(statColumns(sideWidth(1.3) - space.lg * 2, 1.3, 2)).toBe(1);
+  });
+
+  it("‹ n/17 ›: 다음 종목으로 바꿔 끼우고(뒤로 가기에 쌓지 않음) 차트 기간·탭을 넘긴다", () => {
+    const r = openSplit("F8L", { nav: navAt("held", NAV_ITEMS, "005930") });
+    expect(r.has("보유 3종목 중 1번째")).toBe(true);
+    expect(r.byLabel("이전 종목 없음").props.disabled).toBe(true);
+    r.act(() => (chart(r).props.onPeriodChange as (p: string) => void)("W"));
+    expect(h.setParams).toHaveBeenLastCalledWith({ period: "W" });
+    r.act(() => (segmented(r)[0]!.props.onChange as (v: string) => void)("news"));
+    expect(h.setParams).toHaveBeenLastCalledWith({ tab: "news" });
+    r.act(() => (r.byLabel("다음 종목, SK하이닉스").props.onPress as () => void)());
+    expect(h.replace).toHaveBeenCalledWith({ pathname: "/stocks/[code]", params: { code: "000660", period: "W", tab: "news", nav: "1" } });
+  });
+
+  it("주소 검색어의 기간·탭으로 연다 (접고 펴기 · ‹ › 로 온 화면)", () => {
+    const r = openSplit("F8L", { params: { code: "005930", period: "W", tab: "value", nav: "1" } });
+    expect(chart(r).props.period).toBe("W");
+    expect(segmented(r)[0]!.props.value).toBe("value");
+    expect(h.navArgs.at(-1)).toEqual(["005930", true, true]);
+  });
+
+  it("미등록 종목은 수정 대신 관심 추가, 뒤로는 쌓인 화면이 없으면 잔고로", () => {
+    size("F8L");
+    h.canGoBack = false;
+    const r = open(unregistered(), { flag: true });
+    expect(r.has("관심 종목에 추가")).toBe(true);
+    expect(r.has("보유 정보 수정")).toBe(false);
+    r.act(() => (r.byLabel("뒤로").props.onPress as () => void)());
+    expect(h.back).not.toHaveBeenCalled();
+  });
+
+  it("넓은 창에서 숨긴 Stack 머리는 접으면 되살린다 (화면 옵션이 합쳐져 숨김이 남지 않게)", () => {
+    size("F8L");
+    const r = open(samsung(), { flag: true });
+    expect(stack(r)).toEqual({ headerShown: false });
+    size("F8C");
+    r.rerender();
+    expect(stack(r)).toMatchObject({ headerShown: true, title: "삼성전자" });
+  });
+});
+
+describe("윗줄+아랫줄 배치 (울트라 펼침 세로)", () => {
+  const NEWS = {
+    code: "005930",
+    name: "삼성전자",
+    news: Array.from({ length: 6 }, (_, i) => ({ title: `뉴스 ${i}`, url: `https://n/${i}`, source: "언론", publishedAt: "2026-09-25T00:00:00Z", summary: null })),
+    newsError: null,
+    disclosures: Array.from({ length: 4 }, (_, i) => ({ receiptNo: `r${i}`, title: `공시 ${i}`, filedAt: "2026-09-23", filer: "삼성전자", url: `https://d/${i}` })),
+    disclosuresError: null,
+  };
+
+  it("아랫줄에 최근 브리핑 2 · 뉴스 4 · 공시 3 이 탭 없이 함께, 나머지는 더 보기", () => {
+    size("UP");
+    h.briefings = [brief(3, "afternoon"), brief(2, "morning"), brief(1, "afternoon")];
+    const r = open(samsung(), { flag: true, news: NEWS });
+    expect(r.all().filter((n) => n.type === "BriefingCard")).toHaveLength(foldDetail.rowsBriefings);
+    expect(r.all().filter((n) => /^뉴스:/.test(String(n.props.accessibilityLabel ?? "")))).toHaveLength(foldDetail.rowsNews);
+    expect(r.all().filter((n) => /^공시:/.test(String(n.props.accessibilityLabel ?? "")))).toHaveLength(foldDetail.rowsDisclosures);
+    r.act(() => (r.byLabel("뉴스 더 보기").props.onPress as () => void)());
+    expect(r.all().filter((n) => /^뉴스:/.test(String(n.props.accessibilityLabel ?? "")))).toHaveLength(6);
+    // 오른쪽 칸의 탭은 AI 분석 셋 (브리핑·뉴스는 아랫줄에)
+    expect((segmented(r)[0]!.props.options as { value: string }[]).map((o) => o.value)).toEqual(["company", "value", "technical"]);
+  });
+
+  it("차트는 옆 칸 높이에 맞추되 기본 크기보다 작아지지 않는다", () => {
+    size("UP");
+    const r = open(samsung(), { flag: true });
+    const side = r.all().find((n) => typeof n.props.onLayout === "function" && flat(n).alignSelf === "flex-start" && flat(n).width !== undefined)!;
+    r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 700 } } }));
+    expect(chart(r).props.height).toBe(700 - 120);
+    r.act(() => (side.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 340, height: 200 } } }));
+    expect(chart(r).props.height).toBeGreaterThan(foldDetail.chartMinH);
+  });
+});
+
+describe("한 단 배치 (폴드8 펼침 세로)", () => {
+  const columns = (r: ReturnType<typeof render>) =>
+    r
+      .all()
+      .filter((n) => flat(n).flexDirection === "row" && flat(n).alignItems === "flex-start" && flat(n).columnGap === space.lg)[0]!
+      .children.filter((c): c is HostNode => typeof c !== "string");
+  const statsIn = (col: HostNode): string[] => {
+    const out: string[] = [];
+    const walk = (n: HostNode | string) => {
+      if (typeof n === "string") return;
+      if (n.type === "Stat") out.push(String(n.props.label));
+      n.children.forEach(walk);
+    };
+    walk(col);
+    return out;
+  };
+
+  it("차트 전체 폭(높이 = 창 × 0.32) → 내 보유 | 시세 세 칸 (위에서 아래로)", () => {
+    size("F8P");
+    const r = open(samsung(), { flag: true });
+    expect(chart(r).props.height).toBe(wideChartHeight(704 - space.lg * 2, 861));
+    const cols = columns(r);
+    expect(cols).toHaveLength(4);
+    expect(statsIn(cols[0]!)).toEqual(["보유수량", "평균단가", "평가금액", "매입금액", "평가손익", "수익률"]);
+    expect(statsIn(cols[1]!)).toEqual(["시가", "고가", "저가", "전일", "거래량"]);
+    expect(statsIn(cols[2]!)).toEqual(["시가총액", "52주 최고", "52주 최저", "PER", "PBR"]);
+    expect(statsIn(cols[3]!)).toEqual(["EPS", "BPS", "배당수익률", "주당배당"]);
+  });
+
+  it("달러 종목: 원화 기준 4칸은 따로 한 칸, 시세는 두 칸", () => {
+    size("F8P");
+    const r = open(apple(), { flag: true });
+    const cols = columns(r);
+    expect(cols).toHaveLength(4);
+    expect(statsIn(cols[1]!)).toEqual(["평가금액", "매입금액", "평가손익", "수익률"]);
+    expect(statsIn(cols[2]!)).toHaveLength(7);
+    expect(r.text()).toContain("원화 기준");
+  });
+
+  it("관심 종목(보유 없음)은 시세만 네 칸", () => {
+    size("F8P");
+    const r = open(unregistered(), { flag: true });
+    const cols = columns(r);
+    expect(cols).toHaveLength(4);
+    expect(cols.flatMap(statsIn)).not.toContain("보유수량");
+  });
+});
+
+describe("고지 문구", () => {
+  it("넓은 창 배치 모두 고지를 붙인다 (좌우 배치는 SplitScreen 이, 나머지는 Screen disclaimer)", () => {
+    for (const k of ["F8L", "UL"] as const) {
+      forgetWindowClass();
+      size(k);
+      expect(open(samsung(), { flag: true }).all().filter((n) => n.type === "Disclaimer"), k).toHaveLength(1);
+    }
+    for (const k of ["UP", "F8P"] as const) {
+      forgetWindowClass();
+      size(k);
+      const screen = open(samsung(), { flag: true }).all().find((n) => n.type === "Screen")!;
+      expect(screen.props.disclaimer, k).toBe(true);
+    }
+  });
 });

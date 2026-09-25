@@ -81,4 +81,58 @@ describe("지수 상세: 플래그 꺼짐·좁은 창은 지금 화면 그대로
     size(933, 704);
     expect(tree(render(<MarketIndexScreen />).tree)).toMatchSnapshot();
   });
+
+  it("플래그가 꺼져 있으면 여섯 크기 모두, 켜져 있어도 접힌 화면은 같은 결과", () => {
+    size(933, 704);
+    const golden = tree(render(<MarketIndexScreen />).tree);
+    for (const [w, hh] of [[475, 679], [411, 888], [933, 632], [704, 861], [859, 882], [954, 787]] as const) {
+      forgetWindowClass();
+      size(w, hh);
+      expect(tree(render(<MarketIndexScreen />).tree), `꺼짐 ${w}x${hh}`).toEqual(golden);
+    }
+    h.flag = true;
+    for (const [w, hh] of [[475, 679], [411, 888]] as const) {
+      forgetWindowClass();
+      size(w, hh);
+      expect(tree(render(<MarketIndexScreen />).tree), `켜짐 ${w}x${hh}`).toEqual(golden);
+    }
+  });
+});
+
+describe("지수 상세 넓은 창", () => {
+  const all = (r: ReturnType<typeof render>) => r.all();
+  const flat = (n: HostNode): Record<string, unknown> => Object.assign({}, ...[n.props.style].flat(Infinity).filter(Boolean));
+
+  it("펼친 폴드8 가로: 한 줄 머리(수정 버튼·이전/다음 없음) + 지수 띠 아래 남은 높이에 차트를 맞춘다", () => {
+    h.flag = true;
+    size(933, 632);
+    const r = render(<MarketIndexScreen />);
+    expect(all(r).find((n) => n.type === "StackScreen")!.props.options).toEqual({ headerShown: false });
+    // 머리는 Screen 의 top (스크롤과 상관없이 맨 위)
+    const head = render(all(r).find((n) => n.type === "Screen")!.props.top as React.ReactElement);
+    expect(head.has("뒤로")).toBe(true);
+    expect(head.has("보유 정보 수정")).toBe(false);
+    expect(head.all().some((n) => /종목 중/.test(String(n.props.accessibilityLabel ?? "")))).toBe(false);
+    expect(head.text()).toContain("장 마감");
+    const chart = () => all(r).find((n) => n.type === "CandleChart")!;
+    expect(chart().props.height).toBeUndefined();
+    const body = all(r).find((n) => typeof n.props.onLayout === "function" && flat(n).flex === 1)!;
+    r.act(() => (body.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 933, height: 480 } } }));
+    expect(chart().props.height).toBe(480 - 120);
+    // 당겨서 새로고침은 차트 칸 스크롤에
+    expect(React.isValidElement(all(r).find((n) => n.type === "ScrollView")!.props.refreshControl)).toBe(true);
+  });
+
+  it("폴드8 펼침 세로·울트라 펼침 세로: 한 줄 머리 + 지금처럼 스크롤 (차트는 기본 크기)", () => {
+    h.flag = true;
+    for (const [w, hh] of [[704, 861], [859, 882]] as const) {
+      forgetWindowClass();
+      size(w, hh);
+      const r = render(<MarketIndexScreen />);
+      const screen = all(r).find((n) => n.type === "Screen")!;
+      expect(typeof screen.props.onRefresh).toBe("function");
+      expect(render(screen.props.top as React.ReactElement).has("뒤로")).toBe(true);
+      expect(all(r).find((n) => n.type === "CandleChart")!.props.height).toBeUndefined();
+    }
+  });
 });
