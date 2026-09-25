@@ -540,8 +540,11 @@ export interface NumberToken {
    * rank(사실의 목록 번호 '1. 리게티 컴퓨팅') · ?(모르는 접미어: '4거래일'·'2배') · ""(없음)
    */
   unit: string;
-  /** 적혀 있는 부호. 부호 없이 쓴 숫자는 null */
-  sign: "+" | "-" | null;
+  /**
+   * 적혀 있는 부호 (+·-·−·전각·'플러스/마이너스'·▲▼, 강조·따옴표에 싸여 있어도). 부호 없이 쓴 숫자는 null.
+   * "?": 뜻이 갈리는 표시(△·±)이거나 부호끼리 어긋남('플러스 -3원') — 어느 사실과도 맞추지 않는다
+   */
+  sign: "+" | "-" | "?" | null;
   /** 소수점이 있는지 */
   decimal: boolean;
   /** 숫자 바로 뒤에 말로 적은 방향: 올랐·상승·이익 +1, 내렸·하락·손실 -1, 없으면 0 */
@@ -571,21 +574,75 @@ function normUnit(u: string | undefined): string {
   // 원 · 만 · 달러 · 년 · 월, 개수 단위는 낱말 그대로(종목·건·주·일·회·개…: 같은 낱말끼리만 맞춰 본다), 순서(위·번째)
   return u;
 }
-/** 부호로 읽는 문자 바로 앞에 올 수 있는 것 (글자·숫자 뒤의 '-' 는 이음표로 본다) */
-const SIGN_BEFORE = /[\s(\[{:,·~=/]/;
+/**
+ * 숫자를 읽기 전에 모양을 맞춘다: 전각 숫자·부호('＋２５０，２６７')·특수 빈칸은 NFKC 로 보통 글자로 바꾸고,
+ * 폭 없는 글자(부호와 숫자 사이에 숨은 것)는 지운다. 글과 사실을 똑같이 바꾸므로 옮겨 쓴 숫자는 그대로 맞는다
+ */
+function normalizeNumbers(text: string): string {
+  return text.normalize("NFKC").replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/g, "");
+}
+/**
+ * 숫자 바로 앞의 부호 표시 (문자열 끝에 붙은 것): [플러스·마이너스] [화살표] [부호] [강조·따옴표] 숫자.
+ *  - 부호 앞 글자는 숫자만 빼고 가리지 않는다 ('엔비디아-39,240원'·'→+8.06%'·'**+250,267원**'). +·-·− 는 한 칸 띄워도 부호, 긴 줄표(– — ‒ ― ‐)는 붙어 있을 때만
+ *  - 강조·따옴표(* _ ` " ' ‘ ’ …)는 부호 앞뒤 어디에 끼어도 건너뛴다
+ * 줄 머리의 '- '(글머리표)와 숫자에 바로 붙은 빼기 모양('1-2위')은 부호가 아니다 (signBefore 에서 가린다)
+ */
+const SIGN_EXPR = /(?:(마이너스|플러스)\s?)?(?:([▲△▼▽↑↓⬆⬇🔺🔻±∓])\s?)?(?:([+\-−])([ \t]?)|([–—‒―‐]))?[*_`"'“”‘’«»「」『』〈〉《》]*$/u;
+const ARROW_UP = /[▲↑⬆🔺]/u;
+const ARROW_DOWN = /[▼▽↓⬇🔻]/u;
+/** 숫자에 바로 붙은 뒤 화살표 ('8.06%↑'). 다음 숫자 앞에 놓인 화살표('1.99% ▼12,000원')는 그 숫자의 것이라 빈칸 없이 붙은 것만 */
+const ARROW_AFTER = /^[*_`"'“”‘’«»「」『』〈〉《》]*([▲↑⬆🔺▼▽↓⬇🔻])(?![ \t]?[+\-−–—‒―‐\d])/u;
+
+/** 숫자 앞의 부호: 읽은 부호, 부호 표시가 시작하는 곳, 이유에 보일 모양 */
+function signBefore(rest: string, at: number): { sign: NumberToken["sign"]; start: number; shown: string } {
+  const from = Math.max(0, at - 24);
+  const m = SIGN_EXPR.exec(rest.slice(from, at))!; // 모두 생략 가능이라 늘 맞는다 (빈 문자열)
+  const start = from + m.index;
+  const signs = new Set<"+" | "-" | "?">();
+  const shown: string[] = [];
+  if (m[1]) {
+    signs.add(m[1] === "플러스" ? "+" : "-");
+    shown.push(`${m[1]} `);
+  }
+  if (m[2]) {
+    signs.add(ARROW_UP.test(m[2]) ? "+" : ARROW_DOWN.test(m[2]) ? "-" : "?");
+    shown.push(m[2]);
+  }
+  const ch = m[3] ?? m[5];
+  if (ch) {
+    // 줄 머리에서 한 칸 띄운 '- ' 는 글머리표 ('- 1. 리게티 컴퓨팅'), 숫자에 바로 붙은 빼기 모양은 범위·이음표 ('1-2위')
+    const signAt = start + m[0].indexOf(ch);
+    const bullet = !!m[4] && /(?:^|\n)[ \t]*$/.test(rest.slice(0, signAt));
+    const range = ch !== "+" && /\d/.test(rest[signAt - 1] ?? "");
+    if (!bullet && !range) {
+      signs.add(ch === "+" ? "+" : "-");
+      shown.push(ch === "+" ? "+" : "-");
+    }
+  }
+  const sign = signs.size === 0 ? null : signs.size > 1 || signs.has("?") ? "?" : [...signs][0]!;
+  return { sign, start, shown: shown.join("") };
+}
+
 /** 숫자에 바로 붙어도 단위가 아닌 조사 ('3,412.35로'). 이것이 아닌 글자가 붙으면('4거래일'·'2배') 모르는 단위('?')로 본다 */
 const JOSA_RE = /^(?:으로|로|에서|에|까지|부터|보다|은|는|이|가|을|를|와|과|도|의|였|입|인|라|며|나)/;
 /** 방향을 말로 적은 것 (숫자 바로 뒤). '수익률'은 방향이 아니다 */
 const DIR_UP = /상승|올라|오른|올랐|오르|올렸|이익|수익(?!률)|플러스|늘어|늘었|늘린|증가|벌었|뛰었|뛰어|급등/;
 const DIR_DOWN = /하락|내려|내린|내렸|내리|떨어|손실|마이너스|줄어|줄었|줄인|감소|잃었|빠졌|빠져|밀렸|밀려|급락/;
+/** 숫자 바로 앞 어절이 방향 낱말로 시작하면 ('손실 39,240원'·'이익은 250,267원'·'상승률 8.06%'). 동사('내려')는 앞 숫자의 말이라 보지 않는다 */
+const DIR_BEFORE_UP = /^(?:상승|이익|수익(?!률)|플러스|증가|급등)/;
+const DIR_BEFORE_DOWN = /^(?:하락|손실|마이너스|감소|급락)/;
 
 /**
  * 숫자 바로 뒤에 말로 적은 방향: 붙은 글자와 다음 두 어절 안에 '올랐·상승·이익'이면 +1, '내렸·하락·손실'이면 -1.
- * 쉼표·마침표·괄호 열기·다음 숫자에서 멈춘다 (다른 숫자의 방향을 가져오지 않게)
+ * 쉼표·마침표·괄호 열기·다음 숫자에서 멈춘다 (다른 숫자의 방향을 가져오지 않게). 다음 숫자 바로 앞의 '플러스·마이너스'는 그 숫자의 부호다
  */
 function directionAfter(s: string): { dir: 1 | -1 | 0; word: string } {
+  const arrow = ARROW_AFTER.exec(s);
+  if (arrow) return { dir: ARROW_UP.test(arrow[1]!) ? 1 : -1, word: arrow[1]! };
   const stop = s.search(/[\d,.;·/|(\n]/);
-  const scope = (stop < 0 ? s : s.slice(0, stop)).split(/\s+/).slice(0, 3).join(" ");
+  let head = stop < 0 ? s : s.slice(0, stop);
+  if (stop >= 0 && /\d/.test(s[stop]!)) head = head.replace(/(?:마이너스|플러스)\s?$/, "");
+  const scope = head.split(/\s+/).slice(0, 3).join(" ");
   const up = DIR_UP.exec(scope);
   const down = DIR_DOWN.exec(scope);
   if (up && (!down || up.index < down.index)) return { dir: 1, word: up[0] };
@@ -593,18 +650,39 @@ function directionAfter(s: string): { dir: 1 | -1 | 0; word: string } {
   return { dir: 0, word: "" };
 }
 
+/** 숫자 바로 앞 어절(빈칸 하나까지, 강조 기호는 건너뜀)에 적은 방향 */
+function directionBefore(before: string): { dir: 1 | -1 | 0; word: string } {
+  const w = /([가-힣]+)[*_`"'“”‘’]*\s?[*_`"'“”‘’]*$/.exec(before.slice(-24))?.[1];
+  if (!w) return { dir: 0, word: "" };
+  const up = DIR_BEFORE_UP.exec(w);
+  if (up) return { dir: 1, word: up[0] };
+  const down = DIR_BEFORE_DOWN.exec(w);
+  if (down) return { dir: -1, word: down[0] };
+  return { dir: 0, word: "" };
+}
+
+/**
+ * 숫자를 한글로 적은 금액·비율 ('이십오만 원'·'만 육천 원'·'수만 원'·'팔 퍼센트') — 사실의 숫자와 맞춰 볼 수 없으니 입력에 없는 숫자로 본다.
+ * '원화'·'원/달러'는 금액이 아니고, 숫자 뒤의 '만 원'('287만 원')은 숫자로 따로 읽는다
+ */
+const KO_NUMERAL =
+  /(?<![가-힣]|[\d.,]\s?)(?:[일이삼사오육칠팔구수몇]?[십백천만억조]\s?)+[일이삼사오육칠팔구]?\s?(?:원(?!화|\/|달러)|퍼센트|달러)|(?<![가-힣]|[\d.,]\s?)[일이삼사오육칠팔구수몇]+\s?퍼센트/g;
+
 /** 줄 머리의 목록 번호('  1. 리게티 컴퓨팅', '- 1. RGTX')인지 — 사실의 기여 순위. 글의 'N위'는 이것과 맞춰 본다 */
 function isListNumber(rest: string, at: number, len: number): boolean {
   const lineStart = rest.lastIndexOf("\n", at - 1) + 1;
   return /^[ \t]*(?:[-*][ \t]*)?$/.test(rest.slice(lineStart, at)) && /^\.(?:\s|$)/.test(rest.slice(at + len));
 }
 
-/** 글 속 숫자들. malformed: '30,0890'처럼 쉼표 자리가 틀린 표기 (틀린 숫자로 본다) */
+/**
+ * 글 속 숫자들. malformed: 틀린 표기 (틀린 숫자로 본다) — 쉼표 자리가 틀림('30,0890'), 빈칸으로 끊어 적음('250 267원'),
+ * 0으로 시작하는 덩어리('1, 000원'·'8. 06%'의 '000'·'06')
+ */
 export function numberTokens(text: string): { tokens: NumberToken[]; malformed: string[] } {
   const tokens: NumberToken[] = [];
   const malformed: string[] = [];
   // 1) 날짜·시각을 먼저 읽고 지운다 — 그 안의 숫자(20:00 의 20, 9/25 의 25)를 따로 세지 않게
-  let rest = text;
+  let rest = normalizeNumbers(text);
   for (const d of DATE_TIME) {
     rest = rest.replace(d.re, (...args) => {
       const m = args.slice(0, -2) as unknown as RegExpExecArray;
@@ -612,14 +690,12 @@ export function numberTokens(text: string): { tokens: NumberToken[]; malformed: 
       return " ".repeat(m[0].length);
     });
   }
-  // 2) 나머지 숫자: 부호(앞이 빈칸·괄호 등일 때만) + 숫자(쉼표·소수) + 단위(또는 모르는 접미어) + 뒤에 말로 적은 방향
-  for (const m of rest.matchAll(/([+\-−–]?)(\d[\d,]*(?:\.\d+)?)/g)) {
+  // 2) 나머지 숫자: 앞의 부호 표시 + 숫자(쉼표·소수) + 단위(또는 모르는 접미어) + 뒤(없으면 바로 앞 어절)에 말로 적은 방향
+  for (const m of rest.matchAll(/\d[\d,]*(?:\.\d+)?/g)) {
     const at = m.index!;
-    const body = m[2]!.replace(/,+$/, "");
-    const signChar = m[1] ?? "";
-    const prev = at > 0 ? rest[at - 1]! : "";
-    const sign = signChar && (prev === "" || SIGN_BEFORE.test(prev)) ? (signChar === "+" ? "+" : "-") : null;
-    const afterNum = rest.slice(at + m[0].length - (m[2]!.length - body.length));
+    const body = m[0].replace(/,+$/, "");
+    const { sign, start, shown: signShown } = signBefore(rest, at);
+    const afterNum = rest.slice(at + body.length);
     const u = UNIT_RE.exec(afterNum);
     let unit = normUnit(u?.[1]);
     let tail = u ? u[0] : "";
@@ -631,8 +707,10 @@ export function numberTokens(text: string): { tokens: NumberToken[]; malformed: 
         tail = w[0];
       }
     }
-    const shown = `${sign ?? ""}${body}${tail}`.trim();
-    const { dir, word: dirWord } = directionAfter(afterNum.slice(tail.length));
+    const shown = `${signShown}${body}${tail}`.trim();
+    // 방향: 숫자 뒤의 말이 먼저, 없고 부호도 없으면 바로 앞 어절 ('손실 39,240원')
+    let { dir, word: dirWord } = directionAfter(afterNum.slice(tail.length));
+    if (!dir && !sign) ({ dir, word: dirWord } = directionBefore(rest.slice(0, start)));
     if (!sign && !u && !tail && isListNumber(rest, at, m[0].length)) unit = "rank";
     const [intPart = "", frac] = body.split(".");
     const groups = intPart.split(",");
@@ -640,13 +718,25 @@ export function numberTokens(text: string): { tokens: NumberToken[]; malformed: 
       malformed.push(shown);
       continue;
     }
-    if (groups.length > 1 && groups.slice(1).some((g) => g.length < 3)) {
+    // 0으로 시작하는 덩어리('000원'·'06%'·'8,06%'의 06): 끊어 적은 숫자의 뒷부분
+    const listed = groups.length > 1 && groups.slice(1).some((g) => g.length < 3);
+    if (/^0\d/.test(groups[0]!) || (listed && groups.slice(1).some((g) => /^0\d/.test(g)))) {
+      malformed.push(shown);
+      continue;
+    }
+    // 빈칸 하나로 끊어 적은 세 자리('250 267원'·'9 157 673원'): 앞 숫자와 함께 보인다
+    const split = /(\d[\d,.]*)[ \t]$/.exec(rest.slice(Math.max(0, at - 24), at));
+    if (split && groups.length === 1 && intPart.length === 3) {
+      malformed.push(`${split[1]} ${body}${tail}`.trim());
+      continue;
+    }
+    if (listed) {
       // '1,2위' 처럼 쉼표로 늘어놓은 숫자: 따로 읽는다 (부호는 첫 수, 단위·방향은 마지막 수에)
       groups.forEach((g, i) => {
         const last = i === groups.length - 1;
         const raw = last && frac !== undefined ? `${g}.${frac}` : g;
         tokens.push({
-          raw: `${i === 0 ? (sign ?? "") : ""}${raw}${last ? tail.trim() : ""}`,
+          raw: `${i === 0 ? signShown : ""}${raw}${last ? tail.trim() : ""}`,
           kind: "num",
           key: "",
           value: Number(raw),
@@ -733,19 +823,24 @@ function forbiddenIn(text: string, facts: string): string | null {
 /**
  * 모델 설명을 그대로 써도 되는지. 아래면 이유와 함께 false (서비스는 기본 문장을 쓴다):
  *  - 빈 응답·너무 김
- *  - 쉼표 자리가 틀린 숫자('-30,0890원')
+ *  - 틀린 표기의 숫자: 쉼표 자리('-30,0890원'), 빈칸으로 끊어 적음('250 267원'), 0으로 시작하는 조각('1, 000원')
  *  - 사실에 없는 숫자: 값·단위·부호(적었으면)가 모두 맞는 숫자가 사실에 없음. 개수(9종목·6건·10주)도 사실의 같은 낱말 개수와 맞춰 보고,
  *    순위(N위)는 사실의 기여 순위 번호와, 모르는 접미어(4거래일·2배)는 사실의 단위 없는 같은 값과만 맞춘다. '번째'·'3일 연속' 같은 기간은 늘 거절.
- *    날짜·시각은 사실의 날짜·시각과만 맞춰 본다
- *  - 말로 뒤집은 방향: 숫자 바로 뒤의 '올랐·상승·이익'(또는 '내렸·하락·손실')이 사실의 부호와 반대 ('8.06% 올랐' ← 실제 -8.06%)
+ *    날짜·시각은 사실의 날짜·시각과만 맞춰 본다. 부호는 꾸밈에 싸여 있어도 읽는다(**+250,267원**·`-39,240원`·→+8.06%·전각 ＋·'플러스'·▲▼),
+ *    뜻이 갈리는 △·± 는 어느 사실과도 맞추지 않는다. 한글로 적은 금액·비율('이십오만 원'·'팔 퍼센트')도 맞춰 볼 수 없어 거절
+ *  - 말로 뒤집은 방향: 숫자 바로 뒤의 '올랐·상승·이익'·붙은 화살표(↑↓), 없으면 바로 앞 어절의 '손실·이익·상승률…'이 사실의 부호와 반대
+ *    ('8.06% 올랐'·'8.06%↑'·'손실 39,240원' ← 실제 -8.06%·+39,240원)
  *  - 매매 지시·행동 제안·전망 표현 (사실에 있는 공시 제목 속 말은 제외)
  */
 export function checkNarrative(text: string, facts: string): { ok: true } | { ok: false; reason: string } {
   if (!text.trim()) return { ok: false, reason: "빈 응답" };
   if (text.length > 3000) return { ok: false, reason: "설명이 너무 김" };
   const got = numberTokens(text);
-  if (got.malformed.length) return { ok: false, reason: `숫자 표기가 틀림: ${[...new Set(got.malformed)].slice(0, 3).join(", ")}` };
-  const known = numberTokens(facts).tokens;
+  const fact = numberTokens(facts);
+  // 사실에도 똑같이 있는 틀린 표기(공시 제목 속 숫자 등)를 옮겨 쓴 것은 넘어간다
+  const malformed = [...new Set(got.malformed)].filter((m) => !fact.malformed.includes(m));
+  if (malformed.length) return { ok: false, reason: `숫자 표기가 틀림: ${malformed.slice(0, 3).join(", ")}` };
+  const known = fact.tokens;
   const unknown = new Set<string>();
   const flipped = new Set<string>();
   for (const t of got.tokens) {
@@ -754,6 +849,7 @@ export function checkNarrative(text: string, facts: string): { ok: true } | { ok
     if (!same.length) unknown.add(t.raw);
     else if (!same.some((f) => sameDirection(t, f))) flipped.add(`${t.raw} ${t.dirWord}`);
   }
+  for (const m of text.matchAll(KO_NUMERAL)) if (!facts.includes(m[0])) unknown.add(m[0].trim());
   if (unknown.size) return { ok: false, reason: `입력에 없는 숫자: ${[...unknown].slice(0, 5).join(", ")}` };
   if (flipped.size) return { ok: false, reason: `방향이 사실과 반대: ${[...flipped].slice(0, 3).join(", ")}` };
   const bad = forbiddenIn(text, facts);
