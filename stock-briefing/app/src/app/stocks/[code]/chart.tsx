@@ -24,7 +24,8 @@ import { font, fontCap, slopFor, space, useTheme } from "@/theme";
  * 넓은 창 배치(3-42, 플래그 foldLayout)가 켜져 있으면 꺼진 버튼을 흐리게 두지 않고 아예 숨겨 닫기만 남긴다 (폴드 진단 26번).
  *
  * 머리(폴드 진단 8번): 이름이 길면 이름만 '…'로 줄이고 가격·등락은 한 줄 그대로. 그래도 좁으면(바깥 화면 + 큰 글씨)
- * 가격·등락을 이름 아래 둘째 줄로 내린다. 머리 높이는 최소 44 에 글자 배율(fontCap.chrome 까지)을 반영한다 (lib/chartLayout)
+ * 가격·등락을 이름 아래 둘째 줄로 내린다. 머리 높이는 최소 44 에 글자 배율(fontCap.chrome 까지)을 반영한다 (lib/chartLayout).
+ * 한 번 두 줄이 되면 같은 창·글자 크기·종목에서는 시세가 바뀌어도 두 줄 그대로 둔다 (머리·차트 높이가 틱마다 뛰지 않게)
  */
 export default function FullscreenChartScreen() {
   const t = useTheme();
@@ -47,6 +48,9 @@ export default function FullscreenChartScreen() {
   // 차트 아래·위 도구 모음(기간·봉 수·읽기 줄·오버레이 줄)의 실제 높이. 글자 크기·화면 폭에 따라 달라지므로 그려 본 뒤 잰다.
   // 늘어날 때만 반영한다(방향·폭이 바뀌면 새로) → 십자선을 움직일 때 읽기 줄이 한 줄 늘었다 줄었다 해도 차트 높이가 흔들리지 않는다
   const [chrome, setChrome] = useState<{ key: string; h: number }>({ key: "", h: 170 });
+  // 머리를 두 줄로 정했는지와 그때의 배치(창 폭·글자 배율·버튼 수·이름). 같은 배치에서 두 줄이 되면 시세가 바뀌어도 두 줄로 둔다
+  // (등락 +990원 ↔ +1,000원을 오갈 때마다 머리 44 ↔ 62, 차트 높이가 뛰지 않게). 배치가 바뀌면 새로 정한다
+  const [headMemo, setHeadMemo] = useState<{ key: string; twoLines: boolean }>({ key: "", twoLines: false });
   const stock = useStock(c);
   const candles = useCandles(c, period, CANDLE_COUNT[period]);
   const s = stock.data;
@@ -65,7 +69,19 @@ export default function FullscreenChartScreen() {
   const availH = landscape ? frameW : frameH;
   const chartW = availW - pad * 2;
   // 머리: 한 줄에 다 들어가는지, 가격·등락을 둘째 줄로 내릴지, 높이 (글자 배율은 fontCap.chrome 까지)
-  const head = chartHeaderLayout({ width: chartW, fontScale, name, price: priceText, change: changeText, buttons: hideRotate ? 1 : 2 });
+  const headButtons = hideRotate ? 1 : 2;
+  const headKey = `${Math.round(chartW)}:${fontScale}:${headButtons}:${name}`;
+  const head = chartHeaderLayout({
+    width: chartW,
+    fontScale,
+    name,
+    price: priceText,
+    change: changeText,
+    buttons: headButtons,
+    prevTwoLines: headMemo.key === headKey ? headMemo.twoLines : undefined,
+  });
+  // 그리는 중에 바로 기억한다 (위 rotation 과 같은 방식 — 같은 값이면 다시 그리지 않는다)
+  if (headMemo.key !== headKey || headMemo.twoLines !== head.twoLines) setHeadMemo({ key: headKey, twoLines: head.twoLines });
   const headerH = head.height;
   // 남는 높이에서 도구 모음 높이를 뺀 만큼만 차트로 → 하단 토글이 화면 밖으로 잘리지 않는다
   const layoutKey = `${landscape ? "L" : "P"}:${Math.round(chartW)}`;

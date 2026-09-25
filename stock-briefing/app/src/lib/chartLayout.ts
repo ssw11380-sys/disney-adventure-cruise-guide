@@ -19,7 +19,10 @@ import { font, fontCap, layout, space, touch } from "@/tokens";
 export const CHART_PANEL_PAD = space.lg;
 
 export interface ChartSizeInput {
-  /** 차트 묶음이 실제로 받은 폭 (onLayout). 아직 재지 못했으면 null → 창 폭 − 패널 좌우 여백으로 어림 */
+  /**
+   * 차트 묶음이 실제로 받은 폭 (onLayout). 아직 재지 못했으면 null → 창 폭 − 패널 좌우 여백으로 어림.
+   * 잰 값이 창 폭 − 패널 여백보다 넓으면(창이 좁아졌는데 새 폭을 아직 재지 못함) 창 쪽으로 줄인다
+   */
   box: number | null;
   /** 창 크기 (useWindowDimensions) */
   window: { width: number; height: number };
@@ -34,19 +37,32 @@ export interface ChartSizeInput {
  * 상세 차트 그림 크기.
  *  - 폭은 창 폭이 아니라 차트 묶음이 실제로 받은 폭(패널 안쪽)이다. 예전에는 창 폭에서 패널 여백을 두 번 빼서(− 56)
  *    모든 크기에서 오른쪽 28dp 가 비었다 (진단 22번, 버그 수정 — 플래그와 상관없음)
+ *  - 잰 폭은 창 폭 − 패널 여백을 넘지 않게 줄인다. 폰을 접으면 창은 바로 좁아지지만 onLayout 은 한 박자 늦어, 그 사이
+ *    펼쳤을 때 잰 905 로 720×446 을 그려 접힌 화면(475) 밖으로 273dp 넘쳤다. 창보다 좁은 자리(2단 오른쪽 칸·탭 막대 옆)는 잰 폭 그대로
  *  - 좁은 창이거나 foldLayout 이 꺼져 있으면 지금처럼 폭 layout.chartMaxW(720) 에서 멈추고 높이 = 폭 × chartAspect(0.62)
  *  - 넓은 창(wide)이면 폭 상한 없이 다 쓰고, 높이 = min(폭 × 0.62, 창 높이 × chartMaxHRatio(0.5)) →
- *    낮고 넓은 창(펼친 폴드8 가로 933×704)에서도 날짜 줄까지 첫 화면에 들어온다 (진단 6·7번)
+ *    낮고 넓은 창(펼친 폴드8 가로 933×704)에서도 날짜 줄까지 첫 화면에 들어온다 (진단 6·7번).
+ *    단 창이 아주 낮아도 chartMinH(200) 아래로는 줄이지 않고(그 폭의 폭 × 0.62 보다 높이지도 않는다),
+ *    창 폭 600(좁음 ↔ 중간 경계)부터 chartCapRamp(96) 만큼에 걸쳐 상한을 서서히 건다 → 경계에서 높이가 354 → 200 처럼 뛰지 않는다
  */
 export function candleChartSize(o: ChartSizeInput): { width: number; height: number } {
   if (o.width !== undefined) return { width: o.width, height: o.height ?? Math.round(o.width * layout.chartAspect) };
-  const measured = o.box !== null && Number.isFinite(o.box) && o.box > 0 ? o.box : o.window.width - CHART_PANEL_PAD * 2;
+  const guess = o.window.width - CHART_PANEL_PAD * 2;
+  const guessOk = Number.isFinite(guess) && guess > 0;
+  const boxOk = o.box !== null && Number.isFinite(o.box) && o.box > 0;
+  // 잰 폭 우선, 단 창 폭 − 패널 여백보다 넓으면 창 쪽으로 (창이 좁아졌는데 아직 다시 재지 못함)
+  const measured = boxOk ? (guessOk ? Math.min(o.box!, guess) : o.box!) : guess;
   // 소수점 폭은 내림 (그림이 패널 밖으로 1px 넘치지 않게)
   const room = Math.max(0, Math.floor(Number.isFinite(measured) ? measured : 0));
   const width = o.wide ? room : Math.min(room, layout.chartMaxW);
   const natural = Math.round(width * layout.chartAspect);
-  const cap = o.wide && o.window.height > 0 ? Math.round(o.window.height * layout.chartMaxHRatio) : Infinity;
-  return { width, height: o.height ?? Math.min(natural, cap) };
+  if (o.height !== undefined) return { width, height: o.height };
+  if (!o.wide || !(o.window.height > 0)) return { width, height: natural };
+  // 넓은 창 높이 상한: 창 높이 × 0.5, 하한 chartMinH. 어느 쪽도 그 폭의 폭 × 0.62(natural) 보다 높이지 않는다
+  const capped = Math.min(natural, Math.max(layout.chartMinH, Math.round(o.window.height * layout.chartMaxHRatio)));
+  // 폭 600 에서 0 → 600 + chartCapRamp 에서 1: 상한을 거는 정도 (좁은 창 높이와 이어지게)
+  const ramp = Math.min(1, Math.max(0, (o.window.width - layout.mediumMin) / layout.chartCapRamp));
+  return { width, height: Math.round(natural - (natural - capped) * (Number.isFinite(ramp) ? ramp : 1)) };
 }
 
 // ── 전체 화면 차트 머리 ──
@@ -90,6 +106,11 @@ export interface ChartHeaderInput {
   change: string | null;
   /** 오른쪽 둥근 버튼 수 (가로로 보기 + 닫기 = 2, 가로 창에서 가로로 보기를 숨기면 1) */
   buttons: number;
+  /**
+   * 같은 창 폭·글자 배율·버튼 수·종목 이름에서 바로 전에 정한 값 (그 밖의 것이 바뀌었으면 넘기지 않는다 → 새로 정한다).
+   * true 면 시세가 바뀌어 한 줄에 다시 들어가도 두 줄로 둔다 (시세가 움직일 때마다 머리가 44 ↔ 62 로 뛰지 않게)
+   */
+  prevTwoLines?: boolean;
 }
 
 export interface ChartHeaderLayout {
@@ -103,7 +124,11 @@ export interface ChartHeaderLayout {
  * 전체 화면 차트 머리 배치 (진단 8번, 버그 수정).
  * 이름이 길면(한화에어로스페이스) 이름만 '…'로 줄이고 가격·등락은 줄이지 않는다. 그래도 이름이 NAME_MIN_CHARS 자도
  * 남지 않으면(좁은 바깥 화면 + 글자 130% 등) 가격·등락을 둘째 줄로 내린다 → 가격이 '912,000 / 원'처럼 쪼개지지 않는다.
- * 머리 높이는 고정 44 대신 최소 44 에 글자 배율을 반영한다 (두 줄이면 두 줄 높이)
+ * 머리 높이는 고정 44 대신 최소 44 에 글자 배율을 반영한다 (두 줄이면 두 줄 높이).
+ *
+ * 한 번 두 줄이 되면(prevTwoLines) 같은 창·글자·종목에서는 두 줄 그대로 둔다. 등락이 +990원 ↔ +1,000원, 보합 0원 ↔ ±100원처럼
+ * 오가면 필요한 폭이 한 틱에 13~35dp 씩 바뀌어, 기준선에 걸린 창(울트라 접힘 115% 등)에서 머리가 44 ↔ 62 로 뛰고 차트도 오르내렸다.
+ * 두 줄은 늘 안전하다(잘리지 않는다). 한 줄 → 두 줄은 넘칠 때 바로 바꾼다 (잘리지 않게, 창·시세 모두)
  */
 export function chartHeaderLayout(o: ChartHeaderInput): ChartHeaderLayout {
   const s = clampScale(o.fontScale, fontCap.chrome);
@@ -115,6 +140,8 @@ export function chartHeaderLayout(o: ChartHeaderInput): ChartHeaderLayout {
     (w): w is number => w !== null,
   );
   if (!quote.length) return { twoLines: false, height: one };
+  // 전에 두 줄이었으면 그대로 (시세 숫자가 바뀔 때마다 번갈아 뛰지 않게)
+  if (o.prevTwoLines) return { twoLines: true, height: two };
   const chars = [...o.name];
   const nameMin = estimateTextWidth(chars.length <= NAME_MIN_CHARS ? o.name : `${chars.slice(0, NAME_MIN_CHARS).join("")}…`, font.h2 * s);
   // 오른쪽 버튼 묶음 (버튼 사이 간격 + 왼쪽 글자 묶음과의 간격)

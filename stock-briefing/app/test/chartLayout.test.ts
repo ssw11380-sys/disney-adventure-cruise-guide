@@ -114,6 +114,29 @@ describe("상세 차트 크기 (candleChartSize)", () => {
     expect(candleChartSize({ box: Number.NaN, window: { width: 475, height: 751 }, wide: false }).width).toBe(447);
   });
 
+  it("창이 좁아졌는데 잰 폭이 아직 넓을 때(접은 직후, onLayout 전)는 창 폭 − 패널 여백으로 줄인다 → 화면 밖으로 넘치지 않는다", () => {
+    // 펼친 폴드8 가로(933)에서 잰 905 가 남은 채 접힘(475): 예전에는 720×446 으로 그려 273dp 가 화면 밖으로 넘쳤다
+    expect(candleChartSize({ box: 905, window: { width: 475, height: 751 }, wide: false })).toEqual({ width: 447, height: 277 });
+    // 울트라 펼침 가로(잰 926) → 접힘(411)
+    expect(candleChartSize({ box: 926, window: { width: 411, height: 960 }, wide: false })).toEqual({ width: 383, height: 237 });
+    // 넓은 창끼리(펼친 가로 → 펼친 세로): 잰 905 가 남아도 704 − 28 = 676
+    expect(candleChartSize({ box: 905, window: { width: 704, height: 933 }, wide: true })).toEqual({ width: 676, height: 419 });
+    // 창보다 좁은 자리(2단 오른쪽 칸·탭 막대 옆)는 잰 폭 그대로
+    expect(candleChartSize({ box: 500, window: { width: 933, height: 704 }, wide: true }).width).toBe(500);
+    expect(candleChartSize({ box: 400.6, window: { width: 475, height: 751 }, wide: false }).width).toBe(400);
+    // 어떤 잰 값이 남아 있어도 창 폭 − 패널 여백을 넘지 않는다
+    for (const name of Object.keys(SIZES) as SizeName[]) {
+      const [w, hh] = SIZES[name];
+      for (const stale of [383, 447, 676, 831, 905, 926]) {
+        for (const flagOn of [false, true]) {
+          const s = candleChartSize({ box: stale, window: { width: w, height: hh }, wide: flagOn && WIDE[name] });
+          expect(s.width, `${name} ${stale}`).toBeLessThanOrEqual(inner(w));
+          expect(s.width, `${name} ${stale}`).toBe(Math.min(stale, inner(w), flagOn && WIDE[name] ? Infinity : layout.chartMaxW));
+        }
+      }
+    }
+  });
+
   it("부르는 쪽이 폭·높이를 정하면(전체 화면 차트) 그대로 쓴다", () => {
     expect(candleChartSize({ box: 300, window: { width: 933, height: 704 }, wide: true, width: 909, height: 480 })).toEqual({ width: 909, height: 480 });
     expect(candleChartSize({ box: null, window: { width: 400, height: 800 }, wide: false, width: 376 })).toEqual({ width: 376, height: Math.round(376 * 0.62) });
@@ -123,6 +146,56 @@ describe("상세 차트 크기 (candleChartSize)", () => {
     expect(layout.chartMaxW).toBe(720);
     expect(layout.chartAspect).toBe(0.62);
     expect(layout.chartMaxHRatio).toBe(0.5);
+    expect(layout.chartMinH).toBe(200);
+    expect(layout.chartCapRamp).toBe(96);
+  });
+});
+
+describe("넓은 창 차트 높이의 하한과 폭 600 경계 (chartMinH · chartCapRamp)", () => {
+  /** foldLayout 켜짐: 폭 등급 중간(600) 이상이면 넓은 창 배치 (useFoldLayout + isWide 와 같은 기준) */
+  const at = (w: number, hh: number, box: number | null = null) => candleChartSize({ box, window: { width: w, height: hh }, wide: w >= layout.mediumMin });
+
+  it("낮은 창에서도 chartMinH(200) 아래로 줄지 않는다 (예전: 933×300 → 150)", () => {
+    // 펼친 폴드8 가로를 위아래로 나눈 창
+    expect(at(933, 300)).toEqual({ width: 905, height: 200 });
+    // 펼친 폴드8 세로를 위아래로 나눈 창 704×460: 창 높이 × 0.5 = 230 은 하한보다 커서 그대로
+    expect(at(704, 460)).toEqual({ width: 676, height: 230 });
+    expect(at(704, 360)).toEqual({ width: 676, height: 200 });
+    for (const hh of [120, 200, 300, 399]) expect(at(933, hh).height, `${hh}`).toBe(layout.chartMinH);
+  });
+
+  it("하한도 그 폭의 플래그 꺼짐 높이(폭 × 0.62)보다 높이지는 않는다 (2단 오른쪽 칸처럼 좁은 자리)", () => {
+    expect(at(933, 300, 300)).toEqual({ width: 300, height: 186 });
+    expect(at(933, 300, 250)).toEqual({ width: 250, height: 155 });
+  });
+
+  it("폭 599 ↔ 600 (좁음 ↔ 중간): 높이가 354 → 200 으로 뛰지 않는다 — 600 부터 chartCapRamp(96) 만큼에 걸쳐 서서히 낮춘다", () => {
+    // 좁은 창(599)은 휴대폰 화면 그대로, 600 은 아직 상한을 거의 쓰지 않는다
+    expect(at(599, 400)).toEqual({ width: 571, height: 354 });
+    expect(at(600, 400)).toEqual({ width: 572, height: 355 });
+    // 창을 끌어 폭을 1dp 씩 바꿔도 높이는 3dp 넘게 뛰지 않는다 (낮은 창 400·300, 보통 창 704)
+    for (const hh of [300, 400, 704]) {
+      let prev = at(560, hh).height;
+      for (let w = 561; w <= 960; w++) {
+        const cur = at(w, hh).height;
+        expect(Math.abs(cur - prev), `${w}×${hh}`).toBeLessThanOrEqual(3);
+        prev = cur;
+      }
+    }
+    // 600 + 96 = 696 부터 다 적용 (펼친 폴드8 세로 704 와 그 분할 창은 이미 다 적용)
+    expect(at(layout.mediumMin + layout.chartCapRamp, 400).height).toBe(200);
+    expect(at(704, 400).height).toBe(200);
+    // 가운데(648)는 절반쯤
+    const mid = at(648, 400);
+    expect(mid.height).toBeGreaterThan(200);
+    expect(mid.height).toBeLessThan(Math.round(mid.width * layout.chartAspect));
+  });
+
+  it("높은 창·펼친 화면은 그대로 (6가지 창 크기 표와 같은 값)", () => {
+    expect(at(933, 704)).toEqual({ width: 905, height: 352 });
+    expect(at(704, 933)).toEqual({ width: 676, height: 419 });
+    expect(at(859, 954)).toEqual({ width: 831, height: 477 });
+    expect(at(954, 859)).toEqual({ width: 926, height: 430 });
   });
 });
 
@@ -196,6 +269,50 @@ describe("전체 화면 차트 머리 (chartHeaderLayout, 진단 8번)", () => {
 
   it("시세가 없으면(이름만) 늘 한 줄", () => {
     expect(chartHeaderLayout({ width: 200, fontScale: 2, name: NAME, price: null, change: null, buttons: 2 })).toEqual({ twoLines: false, height: touch.min });
+    // 전에 두 줄이었어도 둘째 줄에 둘 것이 없으면 한 줄
+    expect(chartHeaderLayout({ width: 200, fontScale: 2, name: NAME, price: null, change: null, buttons: 2, prevTwoLines: true })).toEqual({ twoLines: false, height: touch.min });
+  });
+
+  describe("시세가 바뀔 때마다 한 줄 ↔ 두 줄로 뛰지 않는다 (prevTwoLines)", () => {
+    // 울트라 접힘(411) · 글자 115%: 'SK하이닉스 171,500원' 에 등락 +990원 은 한 줄, +1,000원 은 두 줄에 걸린다.
+    // 예전에는 시세가 990 ↔ 1,000 을 오갈 때마다 머리가 44 ↔ 62 로 뛰고 차트도 18dp 씩 오르내렸다
+    const HYNIX = "SK하이닉스";
+    const HPRICE = "171,500원";
+    const at = (change: string, prevTwoLines?: boolean, width = 411 - PAD, fontScale = 1.15) =>
+      chartHeaderLayout({ width, fontScale, name: HYNIX, price: HPRICE, change, buttons: 2, prevTwoLines });
+    /** 화면처럼 바로 전 결정을 넘기며 시세를 차례로 바꾼다 */
+    const run = (changes: string[], width?: number, fontScale?: number) => {
+      let prev: boolean | undefined;
+      return changes.map((c) => {
+        const r = at(c, prev, width, fontScale);
+        prev = r.twoLines;
+        return r.height;
+      });
+    };
+    const FIT = "+990원 (+0.58%)";
+    const OVER = "+1,000원 (+0.59%)";
+
+    it("경계 사례 확인: 처음 정할 때는 +990원 한 줄, +1,000원 두 줄 (넘치면 늘 두 줄 — 잘리지 않게)", () => {
+      expect(at(FIT)).toEqual({ twoLines: false, height: touch.min });
+      expect(at(OVER)).toEqual({ twoLines: true, height: 62 });
+      // 전에 한 줄이었어도 넘치면 두 줄
+      expect(at(OVER, false)).toEqual({ twoLines: true, height: 62 });
+    });
+
+    it("990 ↔ 1,000 을 오가도 한 번 두 줄이 되면 두 줄 그대로 (44 ↔ 62 로 뛰지 않는다)", () => {
+      expect(run([FIT, OVER, FIT, OVER, FIT, "+980원 (+0.57%)"])).toEqual([44, 62, 62, 62, 62, 62]);
+    });
+
+    it("보합(0원) ↔ ±100원 처럼 부호·자릿수가 한꺼번에 바뀌어도 그대로", () => {
+      expect(run([OVER, "0원 (0.00%)", "+100원 (+0.06%)", "0원 (0.00%)", "-100원 (-0.06%)"])).toEqual([62, 62, 62, 62, 62]);
+      // 한 줄로 시작하면 들어가는 동안은 한 줄
+      expect(run(["0원 (0.00%)", "+100원 (+0.06%)", "-100원 (-0.06%)", FIT])).toEqual([44, 44, 44, 44]);
+    });
+
+    it("넉넉한 창(폴드8 접힘 115%)은 +1,000원 도 한 줄 — 전 결정이 없으면(창·글자·종목이 바뀜) 새로 정한다", () => {
+      expect(run([FIT, OVER, FIT], 475 - PAD)).toEqual([44, 44, 44]);
+      expect(at(FIT, undefined)).toEqual({ twoLines: false, height: touch.min });
+    });
   });
 
   it("한 줄 기준: 이름 앞 네 글자 + '…'(짧은 이름은 전부) + 가격 + 등락 + 버튼이 폭에 들어가는가", () => {

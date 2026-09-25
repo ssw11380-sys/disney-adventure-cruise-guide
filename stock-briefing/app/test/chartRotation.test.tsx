@@ -268,6 +268,39 @@ describe("전체 화면 차트 머리 (폴드 진단 8번): 가격이 쪼개지�
     }
   });
 
+  it("시세가 바뀌어도 머리가 한 줄 ↔ 두 줄로 뛰지 않는다 (울트라 접힘 115%, +990원 ↔ +1,000원). 창이 바뀌면 새로 정한다", () => {
+    const quote = (change: number, changeRate: number) => ({ price: 171500, change, changeRate, currency: "KRW" });
+    const HYNIX = { code: "000660", name: "SK하이닉스", market: "KOSPI", avgPrice: null, quote: quote(990, 0.58) };
+    h.stock = HYNIX;
+    h.win = { width: 411, height: 960, fontScale: 1.15 };
+    const r = render(<ChartScreen />);
+    const state = () => ({ head: flatStyle(header(r)).minHeight, twoLines: header(r).children.length === 2, chartH: chart(r).h });
+    const one = { head: touch.min, twoLines: false, chartH: Math.max(160, 960 - touch.min - CHROME - space.sm) };
+    const two = { head: 62, twoLines: true, chartH: Math.max(160, 960 - 62 - CHROME - space.sm) };
+    expect(state()).toEqual(one);
+    const seq: [number, number][] = [
+      [1000, 0.59],
+      [990, 0.58],
+      [1000, 0.59],
+      [0, 0],
+      [-100, -0.06],
+      [980, 0.57],
+    ];
+    const seen = seq.map(([c, rate]) => {
+      h.stock = { ...HYNIX, quote: quote(c, rate) };
+      r.rerender();
+      return state();
+    });
+    // 예전: 62 → 44 → 62 → 44 … (차트 높이도 18dp 씩 오르내림)
+    expect(seen).toEqual(seq.map(() => two));
+    // 폴드8 접힘(475)으로 창이 바뀌면 새로 정한다 → +1,000원 도 한 줄에 들어간다
+    h.stock = { ...HYNIX, quote: quote(1000, 0.59) };
+    h.win = { width: 475, height: 751, fontScale: 1.15 };
+    r.rerender();
+    expect(flatStyle(header(r)).minHeight).toBe(touch.min);
+    expect(header(r).children).toHaveLength(1);
+  });
+
   it("시세가 없으면 이름만 한 줄 (전과 같음)", () => {
     h.stock = { ...LONG, quote: null };
     h.win = { width: 411, height: 960, fontScale: 1.5 };
