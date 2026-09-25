@@ -20,6 +20,7 @@ import {
   computeAccount,
   factsText,
   KR_PREVIOUS_DAY_NOTE,
+  leaders,
   numberTokens,
   pickIndices,
   summaryText,
@@ -1070,7 +1071,7 @@ describe("계좌 브리핑 (서버)", () => {
 
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]!.title).toBe("오후 계좌 브리핑 · 당일 -16,589원 (-0.65%)");
-    expect(push.sent[0]!.body).toBe("기여 1위 애플 -18,089원 · 2위 SK하이닉스 +13,500원\n종목 브리핑 3종목 · 변동 상위 SK하이닉스 +1.99% · 삼성전자 -1.65%");
+    expect(push.sent[0]!.body).toBe("기여 1위 애플 -18,089원 · 2위 삼성전자 -12,000원\n종목 브리핑 3종목 · 변동 상위 SK하이닉스 +1.99% · 삼성전자 -1.65%");
     expect(push.sent[0]!.data).toMatchObject({ type: "briefing", digest: true, count: 3, accountBriefingId: b.id });
     expect(accountCalls(gen)).toBe(1);
 
@@ -1399,7 +1400,7 @@ describe("계좌 브리핑 (서버)", () => {
     expect(b.headline).toMatchObject({ dayPnl: -16_589, krPreviousDay: true });
     expect(b.summary.split("\n")).toEqual(["당일 -16,589원 (-0.65%) · 기여 1위 애플 -18,089원", `총 평가금액 ${b.headline.totalValue.toLocaleString("ko-KR")}원 · 환율 효과 +4,259원`, "오늘 한국 휴장 · 국내 종목은 직전 거래일 등락"]);
     expect(push.sent).toHaveLength(1);
-    expect(push.sent[0]!.body).toBe("기여 1위 애플 -18,089원 · 2위 SK하이닉스 +13,500원\n오늘 한국 휴장 · 국내 종목은 직전 거래일 등락\n종목 브리핑 1종목 · 변동 상위 애플 -1.59%");
+    expect(push.sent[0]!.body).toBe("기여 1위 애플 -18,089원 · 2위 삼성전자 -12,000원\n오늘 한국 휴장 · 국내 종목은 직전 거래일 등락\n종목 브리핑 1종목 · 변동 상위 애플 -1.59%");
     const d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json().data as AccountData;
     expect(d.krPreviousDay).toBe(true);
     expect(gen.requests.find((q) => q.label === "account_briefing")!.user).toContain("참고: 오늘 한국은 휴장이라");
@@ -1443,5 +1444,15 @@ describe("계좌 브리핑 (서버)", () => {
     expect((await app.inject({ method: "GET", url: "/api/widget" })).json().accountIds).toEqual([id]);
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accountBriefing: false } });
     expect((await app.inject({ method: "GET", url: "/api/widget" })).json()).not.toHaveProperty("accountIds");
+  });
+});
+
+describe("기여 1위는 당일 손익과 같은 방향 (2026-09-25 캡처: 오른 날 '기여 1위 애플 -171,154원')", () => {
+  const row = (name: string, amount: number) => ({ code: name, name, currency: "KRW" as const, amount, changeRate: 0, value: 0 });
+  it("오른 날은 올린 종목, 내린 날은 내린 종목만 크기 순. 0 이면 크기 순 그대로", () => {
+    const contributions = [row("애플", -171_154), row("엔비디아", 169_763), row("퀀티넘", 148_403), row("SK하이닉스", -81_000)];
+    expect(leaders({ dayPnl: 423_788, contributions }).map((r) => r.name)).toEqual(["엔비디아", "퀀티넘"]);
+    expect(leaders({ dayPnl: -5_000, contributions }).map((r) => r.name)).toEqual(["애플", "SK하이닉스"]);
+    expect(leaders({ dayPnl: 0, contributions }).map((r) => r.name)).toEqual(["애플", "엔비디아", "퀀티넘", "SK하이닉스"]);
   });
 });
