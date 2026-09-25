@@ -57,6 +57,8 @@ const { WIDGET_PALETTES, WIDGET_TOUCH } = await import("@/widgets/palette");
 const { formatIndexValue, formatPct, formatPrice } = await import("@/lib/format");
 const { DISCLAIMER_SHORT } = await import("@/lib/disclaimer");
 const { pnlLine, pnlSpeech } = await import("@/widgets/model");
+const model = await import("@/widgets/model");
+const { widgetChip } = await import("@/lib/liveDot");
 
 interface Tree {
   type: string;
@@ -151,7 +153,7 @@ describe("라이브러리 트리 빌더로 그려도 깨지지 않는다", () =>
   it("위젯 4종(지수·환율 포함) × 라이트·다크 × 크기·글자 배율 × 장 상태 없음·갱신 중·실패·빈 목록·플래그 꺼짐", () => {
     const d = data();
     const empty = { ...d, stocks: [], briefings: [], board: null };
-    const cases = [d, { ...d, market: null }, { ...d, error: "Network request failed", filled: ["005930"] }, empty, { ...d, indices: null, features: { pnlToggle: false, indexLine: false, market: false } }];
+    const cases = [d, { ...d, market: null }, { ...d, error: "Network request failed", filled: ["005930"] }, empty, { ...d, indices: null, features: { pnlToggle: false, indexLine: false, market: false, polish: false } }];
     let built = 0;
     for (const name of Object.values(WIDGET_NAMES))
       for (const c of cases)
@@ -255,7 +257,7 @@ describe("손익 전환 (widgetPnlToggle)", () => {
 
   it("예전 서버(플래그 없음)면 꺼짐으로 본다", () => {
     const d = fromPayload(payload({ features: undefined, indices: undefined }));
-    expect(d.features).toEqual({ pnlToggle: false, indexLine: false, market: false });
+    expect(d.features).toEqual({ pnlToggle: false, indexLine: false, market: false, polish: false });
     const t = holdings({ pnlToggle: d.features.pnlToggle, indexLine: d.features.indexLine, indices: d.indices });
     expect(byClick(t, "PNL_TOGGLE")).toHaveLength(0);
     expect(words(t)).not.toContain("코스피");
@@ -615,6 +617,262 @@ describe("태스크 핸들러", () => {
   });
 });
 
+describe("다듬은 잔고 위젯 (widgetPolish · 위젯 검토 '전부 수정해줘')", () => {
+  // 2026-09-25 10:00 KST 추석: 한국 휴장 · 미국 주간거래, 코스피는 9/23 값. 미국 보유가 원화로 더 크다
+  const T = Date.parse("2026-09-25T10:00:00+09:00");
+  const US_AT = "2026-09-25T09:59:40+09:00";
+  const KR_AT = "2026-09-23T15:30:00+09:00";
+  const CHIP = {
+    label: "미국 주간거래",
+    open: false,
+    nextChangeAt: "2026-09-25T08:00:00.000Z",
+    kr: false,
+    us: false,
+    markets: [
+      { market: "US" as const, label: "미국 주간거래" },
+      { market: "KR" as const, label: "한국 휴장" },
+    ],
+  };
+  const LINE = [
+    { code: "KOSPI", name: "코스피", value: 7080.92, change: 63.01, changeRate: 0.9, open: false, asOf: KR_AT },
+    { code: "KOSDAQ", name: "코스닥", value: 862.15, change: -3.2, changeRate: -0.37, open: false, asOf: KR_AT },
+    { code: "NASDAQ", name: "나스닥", value: 22936.04, change: -261.9, changeRate: -1.13, open: false, asOf: "2026-09-24T16:00:00-04:00" },
+    { code: "SPX", name: "S&P500", value: 6650.12, change: 12.4, changeRate: 0.19, open: false, asOf: "2026-09-24T16:00:00-04:00" },
+    { code: "USDKRW", name: "원/달러", value: 1391.5, change: 5.25, changeRate: 0.38, open: true, asOf: "2026-09-25T09:59:00+09:00" },
+  ];
+  // 엔비디아 40주 × $182.30 × 1,391.50 ≈ 1,015 만원 (원화 매입 628 만원) > 삼성전자 10주 70 만원
+  const NVDA = { c: "NVDA", n: "엔비디아", qty: 40, avg: 120, q: [182.3, 2.13, 1.18, "USD", US_AT, 1391.5, 0] as Q, e: [7292, 4800, null, 6_288_000, "exact"] as E };
+  const SAMSUNG = { c: "005930", n: "삼성전자", qty: 10, avg: 80_000, q: [70_000, 100, 1.5, "KRW", KR_AT, null, 0] as Q, e: [700_000, 800_000, null, null, null] as E };
+  const WATCH = { c: "999990", n: "관심종목", qty: null, avg: null, q: [5_000, -50, -0.99, "KRW", KR_AT, null, 0] as Q, e: null };
+  const polishedPayload = (over: Record<string, unknown> = {}) =>
+    payload({ market: CHIP, stocks: [NVDA, SAMSUNG, WATCH], features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true }, indices: LINE, ...over });
+  const draw = (over: Record<string, unknown> = {}, box = WIDE, p = polishedPayload()) => {
+    const d = fromPayload(p);
+    return build(
+      <HoldingsWidget stocks={d.stocks} showKrw={false} afterCost={false} fetchedAt={T} error={null} now={T} market={d.market} pnlToggle indexLine indices={d.indices} polish={d.features.polish} rowKrw {...box} {...over} />,
+    );
+  };
+  const head = (t: Tree) => byClick(t, "OPEN_URI").find((n) => String(n.props.accessibilityLabel).startsWith("보유"))!;
+
+  it("플래그: 서버가 widgetPolish 를 주면 켜짐, 없으면(예전 서버) 꺼짐 → 예전 모습 그대로('잔고 3', 칩 한 개, '누적 …', 지수 세 개)", () => {
+    expect(fromPayload(polishedPayload()).features.polish).toBe(true);
+    const old = fromPayload(polishedPayload({ features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true } }));
+    expect(old.features.polish).toBe(false);
+    const t = build(renderBoth(WIDGET_NAMES.holdings, { ...old, showKrw: false, afterCost: false, fetchedAt: T, error: null, filled: [] }, { ...WIDE, fontScale: 1, now: T, pnlMode: "cumulative" }).dark);
+    const w = words(t);
+    expect(w).toContain("잔고 3");
+    expect(w).toContain("미국 주간거래");
+    expect(w).not.toContain("미국 주간거래 · 한국 휴장");
+    expect(w.some((x) => x.startsWith("보유"))).toBe(false);
+    expect(w.some((x) => x.startsWith("수익 "))).toBe(false);
+    expect(w).not.toContain("⇅");
+    expect(w).not.toContain("S&P500"); // 앱 지수 띠가 다섯 개를 넘겨도 예전 줄은 세 개
+    expect(w).not.toContain("오늘");
+  });
+
+  it("1. 칩: 두 시장의 지금 세션, 원화 보유액이 큰 시장부터 — 좁으면 앞 시장만, 한국만 보유하면 한국만", () => {
+    expect(words(draw())).toContain("미국 주간거래 · 한국 휴장");
+    // 한국 보유가 더 크면 한국부터
+    const krHeavy = polishedPayload({ stocks: [{ ...NVDA, qty: 1, e: [182.3, 120, null, 157_200, "exact"] as E }, { ...SAMSUNG, qty: 100, e: [7_000_000, 8_000_000, null, null, null] as E }, WATCH] });
+    expect(words(draw({}, WIDE, krHeavy))).toContain("한국 휴장 · 미국 주간거래");
+    // 좁은 4×2: 둘째 시장을 뺀다 (숫자·제목은 그대로)
+    const narrow = words(draw({}, { width: 250, height: 180 }));
+    expect(narrow).toContain("미국 주간거래");
+    expect(narrow).not.toContain("미국 주간거래 · 한국 휴장");
+    // 한국 종목만 보유: 보유하지 않은 미국 세션은 넣지 않는다
+    const krOnly = polishedPayload({ stocks: [SAMSUNG, WATCH] });
+    expect(words(draw({}, WIDE, krOnly))).toContain("한국 휴장");
+    expect(words(draw({}, WIDE, krOnly))).not.toContain("미국 주간거래");
+    // 화면 읽기도 두 시장
+    expect(head(draw()).props.accessibilityLabel).toContain("미국 주간거래 · 한국 휴장");
+    // 서버가 시장별 문구를 주지 않으면(플래그 꺼진 서버) 예전 칩 한 개
+    expect(words(draw({}, WIDE, polishedPayload({ market: { ...CHIP, markets: undefined } })))).toContain("미국 주간거래");
+  });
+
+  it("2. 지수 줄: 미국 보유가 크면 나스닥·S&P500 먼저, 지난 세션 값은 흐리게 + 날짜, 원/달러는 끝·등락률까지", () => {
+    const line = nodes(draw({}, { width: 420, height: 260 })).find((n) => String(n.props.accessibilityLabel).startsWith("나스닥"))!;
+    const w = words(line);
+    expect(w.slice(0, 7)).toEqual(["나스닥", "22,936.04", "-1.13%", "·", "S&P500", "6,650.12", "+0.19%"]);
+    // 전체 순서와 표기 (좁으면 뒤에서부터 뺀다 — 환율이 끝)
+    const { polishedIndexItems } = model;
+    const us = polishedIndexItems(LINE, T, true);
+    expect(us.map((i) => i.label)).toEqual(["나스닥", "S&P500", "코스피", "코스닥", "원/달러"]);
+    expect(polishedIndexItems(LINE, T, false).map((i) => i.label)).toEqual(["코스피", "코스닥", "나스닥", "S&P500", "원/달러"]);
+    const kospi = us.find((i) => i.code === "KOSPI")!;
+    expect(kospi).toMatchObject({ value: "7,080.92", rate: "+0.90%", stale: true, tag: "9/23" }); // 추석 휴장 중 9/23 값
+    expect(us.find((i) => i.code === "NASDAQ")).toMatchObject({ stale: false, tag: null }); // 어젯밤(뉴욕 9/24) 정규장 값은 지금 값
+    expect(us.find((i) => i.code === "USDKRW")).toMatchObject({ label: "원/달러", value: "1,391.50", rate: "+0.38%", stale: false });
+    // 한국 보유가 크면 코스피부터 — 흐린 색 + 날짜로 그린다
+    const krHeavy = polishedPayload({ stocks: [SAMSUNG, WATCH] });
+    const krLine = nodes(draw({}, WIDE, krHeavy)).find((n) => String(n.props.accessibilityLabel).startsWith("코스피"))!;
+    expect(words(krLine).slice(0, 4)).toEqual(["코스피", "7,080.92", "+0.90%", "9/23"]);
+    expect(texts(krLine).find((p) => p.text === "7,080.92")!.color).toBe(dark.muted);
+    expect(krLine.props.accessibilityLabel).toContain("코스피 7,080.92 0.90% 상승 9월 23일 값");
+    // 출처 조회 실패는 예전처럼 "지연"
+    expect(polishedIndexItems([{ ...LINE[4]!, stale: true }], T, true)[0]).toMatchObject({ stale: true, tag: "지연" });
+  });
+
+  it("3. 종목 줄: 왼쪽 '수익 …'(누적, 기본 원화 — 합계와 같은 기준), 오른쪽 '오늘 …'(작은 회색 이름표) · 가격은 원화 표시 설정 그대로", () => {
+    const list = nodes(draw()).find((n) => n.type === "ListWidget")!;
+    const nvda = list.children![0]!;
+    const w = words(nvda);
+    expect(w[0]).toBe("엔비디아");
+    // 원화 매입금액(6,288,000원) 기준: 7,292 × 1,391.5 − 6,288,000 = 3,858,818원, +61.37% (달러 기준 +51.92% 가 아니라 합계와 같은 원화 기준)
+    expect(w[1]).toBe("수익 +61.37% +3,858,818원");
+    expect(w).toContain("$182.30");
+    expect(w).toContain("오늘");
+    expect(w).toContain("+1.18%");
+    expect(texts(nvda).find((p) => p.text === "오늘")!.color).toBe(dark.muted);
+    expect(nvda.props.accessibilityLabel).toBe("엔비디아 182.30달러, 오늘 1.18% 상승, 수익 61.37% 상승");
+    // 설정 '위젯 종목 금액: 종목 통화'면 달러
+    expect(words(nodes(draw({ rowKrw: false })).find((n) => n.type === "ListWidget")!.children![0]!)[1]).toBe("수익 +51.92% +$2,492.00");
+    // 가격 칸은 원화 표시 설정(showKrw)을 따른다
+    expect(words(nodes(draw({ showKrw: true })).find((n) => n.type === "ListWidget")!.children![0]!)).toContain("253,670원");
+    // 관심 종목은 그대로 "관심", 시세가 없는 줄에는 "오늘"이 없다
+    const watch = list.children!.find((r) => words(r)[0] === "관심종목")!;
+    expect(words(watch)).toContain("관심");
+  });
+
+  it("4. 손익 전환 칸: ⇅ 와 '누적'/'오늘'이 보이고 48dp, 화면 읽기는 '눌러서 당일 손익 보기'", () => {
+    const toggle = byClick(draw(), "PNL_TOGGLE")[0]!;
+    expect(toggle.props.height).toBeGreaterThanOrEqual(WIDGET_TOUCH);
+    expect(words(toggle)[0]).toBe("⇅");
+    expect(words(toggle).join(" ")).toMatch(/^⇅ 누적 \+[\d,]+원/);
+    expect(toggle.props.accessibilityLabel).toMatch(/^누적 손익 [\d,]+원 이익, 수익률 [\d.]+% 상승, 눌러서 당일 손익 보기$/);
+    expect(toggle.props.clickActionData).toEqual({ mode: "cumulative" });
+    const day = byClick(draw({ pnlMode: "day" }), "PNL_TOGGLE")[0]!;
+    expect(words(day).join(" ")).toMatch(/^⇅ 오늘 [+-][\d,]+원/);
+    expect(day.props.accessibilityLabel).toMatch(/, 눌러서 누적 손익 보기$/);
+    // 플래그 widgetPnlToggle 이 꺼져 있으면 ⇅ 도 없다 (누르면 앱)
+    expect(words(draw({ pnlToggle: false }))).not.toContain("⇅");
+  });
+
+  it("5. 제목 '보유 2 · 관심 1' (보유 = 수량·평단), 관심이 없으면 '보유 2', 좁으면 '보유 2'", () => {
+    expect(words(draw())).toContain("보유 2 · 관심 1");
+    expect(head(draw()).props.accessibilityLabel).toMatch(/^보유 2종목, 관심 1종목, /);
+    expect(words(draw({}, WIDE, polishedPayload({ stocks: [NVDA, SAMSUNG] })))).toContain("보유 2");
+    expect(words(draw({}, WIDE, polishedPayload({ stocks: [NVDA, SAMSUNG] })))).not.toContain("보유 2 · 관심 0");
+    const narrow = words(draw({ fontScale: 1.3 }, { width: 250, height: 250 }));
+    expect(narrow).toContain("보유 2");
+    expect(narrow).not.toContain("잔고 3");
+  });
+
+  it("6. ↻ 는 합계 줄 오른쪽 끝(48×48), 제목 줄은 글자 높이 — 같은 크기에 종목 줄이 더 보인다 (330×230: 3줄 넘게)", () => {
+    const t = draw({}, { width: 330, height: 230 });
+    const r = byClick(t, "REFRESH");
+    expect(r).toHaveLength(1);
+    expect(r[0]!.props.width).toBeGreaterThanOrEqual(WIDGET_TOUCH);
+    expect(r[0]!.props.height).toBeGreaterThanOrEqual(WIDGET_TOUCH);
+    // 갱신 중: ↻ 강조색·기준 시각 자리에 '갱신 중'
+    const busy = draw({ refreshing: true });
+    expect(byClick(busy, "REFRESH")[0]!.props.accessibilityLabel).toBe("갱신 중");
+    expect(texts(busy).find((p) => p.text === "갱신 중")!.color).toBe(dark.accent);
+    // 목록 줄 위아래 여백은 xxs (예전 xs)
+    const row = nodes(t).find((n) => n.type === "ListWidget")!.children![0]!;
+    expect(row.props.padding).toMatchObject({ top: 2, bottom: 2 });
+  });
+
+  it("라이트·다크 두 벌은 색만 다르다, 갱신 실패·빈 목록·관심만·아주 작은 크기에서도 그려진다", () => {
+    const d = { ...fromPayload(polishedPayload()), showKrw: false, afterCost: false, fetchedAt: T, error: null, filled: [] };
+    const strip = (t: Tree): unknown => {
+      const { color: _c, backgroundColor: _b, borderColor: _bc, ...rest } = t.props;
+      return { type: t.type, props: rest, children: (t.children ?? []).map(strip) };
+    };
+    const r = renderBoth(WIDGET_NAMES.holdings, d, { ...WIDE, fontScale: 1, now: T, pnlMode: "cumulative" });
+    expect(strip(build(r.light))).toEqual(strip(build(r.dark)));
+    for (const c of [d, { ...d, error: "Network request failed", filled: ["NVDA"] }, { ...d, stocks: [] }, { ...d, stocks: d.stocks.filter((s) => s.code === "999990") }, { ...d, market: null }])
+      for (const box of [{ width: 110, height: 40 }, { width: 250, height: 110 }, { width: 250, height: 130 }, { width: 330, height: 180 }, WIDE])
+        for (const fontScale of [1, 1.3])
+          for (const refreshing of [false, true]) {
+            const x = renderBoth(WIDGET_NAMES.holdings, c, { ...box, fontScale, now: T, pnlMode: "day", refreshing });
+            build(x.light);
+            build(x.dark);
+          }
+    // 합계가 없으면(관심만) 예전처럼 48dp 머리 줄에 ↻
+    const watchOnly = build(renderBoth(WIDGET_NAMES.holdings, { ...d, stocks: d.stocks.filter((s) => s.code === "999990") }, { ...WIDE, fontScale: 1, now: T, pnlMode: "cumulative" }).dark);
+    expect(words(watchOnly)).toContain("관심 1");
+    expect(byClick(watchOnly, "REFRESH")).toHaveLength(1);
+  });
+
+  it("설정 '위젯 종목 금액'은 AsyncStorage 에 두고 위젯이 읽는다 (기본 원화)", async () => {
+    const { STORAGE_KEYS } = await import("@/lib/settings");
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify(polishedPayload()), { status: 200, headers: { etag: '"p1"' } }));
+    expect((await loadWidgetData({ stocks: true, briefings: false })).rowKrw).toBe(true);
+    store.set(STORAGE_KEYS.widgetRowCurrency, "native");
+    const d = await loadWidgetData({ stocks: true, briefings: false });
+    expect(d.rowKrw).toBe(false);
+    const t = build(renderBoth(WIDGET_NAMES.holdings, d, { ...WIDE, fontScale: 1, now: T, pnlMode: "cumulative" }).dark);
+    expect(words(t).some((w) => w.startsWith("수익 ") && w.includes("$"))).toBe(true);
+    const settingsScreen = readFileSync(new URL("../src/app/(tabs)/settings.tsx", import.meta.url), "utf8");
+    expect(settingsScreen).toContain("위젯 종목 금액");
+  });
+});
+
+describe("BH-41: 앱이 위젯에 넘기는 장 상태 칩에도 다음 바뀌는 시각이 있다", () => {
+  it("04:59 미국 장중에 앱을 떠난 뒤 07:30 에 손익을 눌러 다시 그려도 '미국 장중'·'지연'을 그리지 않는다 (서버 칩과 같게)", async () => {
+    const left = Date.parse("2026-09-25T04:59:00+09:00");
+    vi.setSystemTime(left);
+    const status = {
+      now: new Date(left).toISOString(),
+      KR: { market: "KR", isTradingDay: false, isOpen: false, opensAt: "2026-09-27T23:00:00.000Z", closesAt: null, lastClose: "2026-09-23T11:00:00.000Z", source: "toss" },
+      US: { market: "US", isTradingDay: true, isOpen: true, opensAt: null, closesAt: "2026-09-24T20:00:00.000Z", lastClose: "2026-09-23T20:00:00.000Z", source: "toss" },
+    } as const;
+    const us = fromPayload(
+      payload({ stocks: [{ c: "VRT", n: "버티브", qty: 2, avg: 200, q: [250, 1, 0.4, "USD", "2026-09-25T04:59:00+09:00", 1360, 0] as Q, e: [500, 400, null, 540_000, "exact"] as E }] }),
+    ).stocks;
+    // WidgetBridge 와 같은 부름
+    const market = widgetChip(status as never, us, left)!;
+    expect(market).toMatchObject({ label: "미국 장중", open: true, nextChangeAt: "2026-09-24T20:00:00.000Z" });
+    shared.widgets = { [WIDGET_NAMES.holdings]: [WIDE] };
+    await refreshWidgets({ stocks: us, showKrw: false, afterCost: false, market, features: { at: left, flags: { pnlToggle: true, indexLine: true, market: true, polish: false } } });
+    expect(words(build((shared.updates.at(-1)!.rendered as { dark: React.JSX.Element }).dark))).toContain("미국 장중");
+    vi.setSystemTime(Date.parse("2026-09-25T07:30:00+09:00"));
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("부르면 안 됨");
+    });
+    const out: { dark: React.JSX.Element }[] = [];
+    await widgetTaskHandler({ widgetInfo: { widgetName: WIDGET_NAMES.holdings, widgetId: 1, ...WIDE, screenInfo: {} }, widgetAction: "WIDGET_CLICK", clickAction: "PNL_TOGGLE", renderWidget: (x: unknown) => void out.push(x as { dark: React.JSX.Element }) } as never);
+    const w = words(build(out[0]!.dark));
+    expect(w).not.toContain("미국 장중");
+    expect(w).not.toContain("지연");
+  });
+});
+
+describe("BH-68: 브리핑 위젯 안내 문구는 서버의 브리핑 시간·실패를 따른다", () => {
+  const brief = (over: Record<string, unknown> = {}) => ({ morning: "07:30", afternoon: "21:50", weekdaysOnly: false, failed: 0, ...over });
+  const briefingWords = (p: ReturnType<typeof payload>, box = WIDE) => words(build(renderBoth(WIDGET_NAMES.briefing, data(p), { ...box, fontScale: 1, now: NOW, pnlMode: "cumulative" }).dark));
+  const message = (w: string[]) => w.find((x) => x.startsWith("아직") || x.startsWith("브리핑 생성"));
+
+  it("최신 브리핑이 모두 실패했으면 '아직 브리핑이 없습니다' 대신 실패를 알린다 (예전: 실패를 숨김)", () => {
+    const w = briefingWords(payload({ briefings: [], latestIds: [], brief: brief({ failed: 3 }) }));
+    expect(message(w)).toBe("브리핑 생성 실패 3종목. 앱의 브리핑 탭에서 확인해 주세요.");
+    expect(w.some((x) => x.startsWith("아직 브리핑이 없습니다"))).toBe(false);
+    expect(w.at(-1)).toBe(DISCLAIMER_SHORT);
+  });
+
+  it("아직 없을 때 시간은 서버 설정 그대로 (매일·평일, 한쪽만 켬, 모두 끔) — 예전: 늘 '평일 08:30·16:00'", () => {
+    expect(message(briefingWords(payload({ briefings: [], brief: brief() })))).toBe("아직 브리핑이 없습니다. 매일 07:30·21:50 에 생성됩니다.");
+    expect(message(briefingWords(payload({ briefings: [], brief: brief({ morning: null, afternoon: "16:10", weekdaysOnly: true }) })))).toBe("아직 브리핑이 없습니다. 평일 16:10 에 생성됩니다.");
+    expect(message(briefingWords(payload({ briefings: [], brief: brief({ morning: null, afternoon: null }) })))).toBe("아직 브리핑이 없습니다. 자동 생성이 꺼져 있습니다.");
+  });
+
+  it("예전 서버(시간을 모름)면 시간을 지어내지 않는다, 조회 실패는 예전처럼 '↻ 로 다시 시도'", () => {
+    const w = briefingWords(payload({ briefings: [] }));
+    expect(message(w)).toBe("아직 브리핑이 없습니다. 설정한 브리핑 시간에 생성됩니다.");
+    expect(w.join(" ")).not.toContain("08:30");
+    const failed = words(build(<BriefingWidget briefings={[]} fetchedAt={NOW} error="Network request failed" now={NOW} {...WIDE} />));
+    expect(failed).toContain("갱신 실패 · 연결 안 됨 · ↻ 로 다시 시도");
+  });
+
+  it("받아 둔 브리핑 시간·실패 수는 손익 전환·↻ 의 '갱신 중' 그림(저장해 둔 값)에도 그대로", async () => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify(payload({ briefings: [], latestIds: [], brief: brief({ failed: 2 }) })), { status: 200, headers: { etag: '"b1"' } }));
+    const d = await loadWidgetData({ stocks: false, briefings: true });
+    expect(d.brief).toEqual(brief({ failed: 2 }));
+    const { loadCachedWidgetData } = await import("@/widgets/data");
+    expect((await loadCachedWidgetData()).brief).toEqual(brief({ failed: 2 }));
+  });
+});
+
 describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
   it("두 벌을 위젯 크기대로 그리고, 앱이 받은 지수(더 새것)와 플래그를 쓴다. 그린 값은 손익 전환 때 다시 쓴다", async () => {
     // 위젯이 받아 둔 응답(지수 옛 값)
@@ -625,7 +883,7 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
     shared.widgets = { [WIDGET_NAMES.holdings]: [WIDE], [WIDGET_NAMES.asset]: [{ width: 160, height: 72 }] };
     const d = data();
     const appIndices = { at: NOW - 30_000, list: [{ code: "KOSPI", name: "코스피", value: 3500, change: 10, changeRate: 0.29, open: true }] };
-    await refreshWidgets({ stocks: d.stocks, showKrw: false, afterCost: false, market: null, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true } }, indices: appIndices });
+    await refreshWidgets({ stocks: d.stocks, showKrw: false, afterCost: false, market: null, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true, polish: false } }, indices: appIndices });
     expect(shared.updates.map((u) => u.widgetName)).toEqual([WIDGET_NAMES.holdings, WIDGET_NAMES.asset]);
     const r = shared.updates[0]!.rendered as { light: React.JSX.Element; dark: React.JSX.Element };
     expect(build(r.light).props.backgroundColor).toBe(light.surface);
@@ -665,7 +923,7 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
     it("킬 스위치: 관리자가 끈 widgetPnlToggle·widgetIndexLine 을 앱에 남은 3일 전 /api/features(켜짐)가 되살리지 않는다 · 눌러도 당일로 바뀌지 않는다", async () => {
       await widgetFetched(5 * 60_000, payload({ features: { widgetPnlToggle: false, widgetIndexLine: false }, indices: undefined }));
       // 홈 탭만 쓰면 앱은 플래그를 다시 받지 않는다 (기기에 저장된 3일 전 값)
-      await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 3 * 86_400_000, flags: { pnlToggle: true, indexLine: true, market: true } } });
+      await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 3 * 86_400_000, flags: { pnlToggle: true, indexLine: true, market: true, polish: false } } });
       const t = holdingsTree();
       expect(byClick(t, "PNL_TOGGLE")).toHaveLength(0);
       expect(words(t)).toContain("누적 -100,000원 (-12.50%)");
@@ -681,7 +939,7 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
     it("배포 직후: 서버 배포 전에 저장된 앱 플래그(새 키 없음 → 꺼짐)가 위젯이 새로 받은 켜짐을 덮지 않는다 — 앱 갱신·위젯 갱신이 번갈아도 같은 모습", async () => {
       await widgetFetched(10 * 60_000);
       const before = { at: NOW - 86_400_000, flags: widgetFeatures({ briefingDigest: true }) };
-      expect(before.flags).toEqual({ pnlToggle: false, indexLine: false, market: false });
+      expect(before.flags).toEqual({ pnlToggle: false, indexLine: false, market: false, polish: false });
       await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: before });
       const app = holdingsTree();
       expect(byClick(app, "PNL_TOGGLE")).toHaveLength(1);
@@ -704,7 +962,7 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
 
       it("켜기: 관리자가 켠 직후 앱이 받은 켜짐 → 위젯 주기 갱신(10분 전 응답 재사용, 꺼짐)도 켜짐", async () => {
         await widgetFetched(10 * 60_000, payload({ features: { widgetPnlToggle: false, widgetIndexLine: false } }));
-        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true } } });
+        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true, polish: false } } });
         expect(byClick(holdingsTree(), "PNL_TOGGLE")).toHaveLength(1);
         const calls = noServer();
         const own = await tap(null);
@@ -712,14 +970,14 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
         expect(byClick(own, "PNL_TOGGLE")).toHaveLength(1);
         expect(words(own)).toContain("코스피");
         // 한 번 더 번갈아도 같은 모습
-        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true } } });
+        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true, polish: false } } });
         expect(byClick(holdingsTree(), "PNL_TOGGLE")).toHaveLength(1);
         expect(byClick(await tap(null), "PNL_TOGGLE")).toHaveLength(1);
       });
 
       it("끄기: 관리자가 끈 뒤 앱이 먼저 받은 꺼짐 → 위젯 주기 갱신(10분 전 응답 재사용, 켜짐)도 꺼짐", async () => {
         await widgetFetched(10 * 60_000);
-        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: false, indexLine: false, market: false } } });
+        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: false, indexLine: false, market: false, polish: false } } });
         expect(byClick(holdingsTree(), "PNL_TOGGLE")).toHaveLength(0);
         noServer();
         const own = await tap(null);
@@ -729,7 +987,7 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
 
       it("조회 실패(받아 둔 응답이 3시간 전이라 다시 묻다가 실패)도 앱이 더 늦게 받은 켜짐을 쓴다", async () => {
         await widgetFetched(3 * 3_600_000, payload({ features: { widgetPnlToggle: false, widgetIndexLine: true } }));
-        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true } } });
+        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true, polish: false } } });
         const calls = noServer();
         const own = await tap(null);
         expect(calls).toHaveLength(1); // 재사용하지 않고 물었다가 실패
@@ -749,7 +1007,7 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
 
       it("↻ 로 서버에서 방금 받은 값은 그대로 쓴다 (앱 값이 더 늦다고 옛 값을 덮지 않음)", async () => {
         await widgetFetched(10 * 60_000);
-        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true } } });
+        await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true, polish: false } } });
         vi.stubGlobal("fetch", async () => new Response(JSON.stringify(payload({ features: { widgetPnlToggle: false, widgetIndexLine: true } })), { status: 200, headers: { etag: '"e9"' } }));
         const fresh = await tap("REFRESH");
         expect(byClick(fresh, "PNL_TOGGLE")).toHaveLength(0);
@@ -761,7 +1019,7 @@ describe("앱 → 위젯 즉시 갱신 (refreshWidgets)", () => {
 
     it("앱이 더 늦게 받은 플래그는 바로 쓴다 (관리자가 켠 직후 앱이 받은 값)", async () => {
       await widgetFetched(10 * 60_000, payload({ features: { widgetPnlToggle: false, widgetIndexLine: true } }));
-      await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true } } });
+      await refreshWidgets({ stocks: data().stocks, showKrw: false, afterCost: false, features: { at: NOW - 30_000, flags: { pnlToggle: true, indexLine: true, market: true, polish: false } } });
       expect(byClick(holdingsTree(), "PNL_TOGGLE")).toHaveLength(1);
       // 그린 값(켜짐)을 적어 두어, 서버를 부르지 않는 손익 전환도 켜진 것으로
       vi.stubGlobal("fetch", async () => {

@@ -6,7 +6,7 @@ import type { MarketIndices } from "../providers/market/indices.js";
 import type { BriefingService } from "../services/briefingService.js";
 import type { FeatureService } from "../services/featureService.js";
 import type { StockService } from "../services/stockService.js";
-import { buildWidgetPayload, type WidgetFeatures } from "../services/widgetPayload.js";
+import { buildWidgetPayload, widgetBrief, type BriefSchedule, type WidgetFeatures } from "../services/widgetPayload.js";
 
 /**
  * GET /api/widget — 홈 화면 위젯(잔고·브리핑·자산, 1.4.0 부터 지수·환율까지)이 같이 쓰는 한 번의 응답 (3-16).
@@ -22,6 +22,8 @@ import { buildWidgetPayload, type WidgetFeatures } from "../services/widgetPaylo
  *  - sessions: 앱이 &sessions=1 로 물을 때만 장 상태 칩에 보유 종목의 세션 이름(미국 주간거래 등)을 쓴다 (widgetPayload.marketChip).
  *    그 앱은 위젯을 바로 그릴 때(WidgetBridge)도 같은 칩을 그린다. 예전 앱(쿼리 없음)의 WidgetBridge 는 달력만 본 칩을 그리므로
  *    예전처럼 달력만 본 칩을 준다 — 서버가 OTA 보다 먼저 배포돼도 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀌지 않게
+ *  - ui=2: 다듬은 잔고 위젯·브리핑 안내를 그릴 수 있는 새 앱. brief(브리핑 시간·최신 브리핑 실패 수, BH-68)를 넣고,
+ *    widgetPolish 가 켜져 있으면 칩의 시장별 문구와 지수 줄 다섯 개(코스피·코스닥·나스닥·S&P500·원/달러)를 준다. 예전 앱(표시 없음)의 응답은 그대로
  */
 export const widgetRoutes: FastifyPluginAsync<{
   stocks: StockService;
@@ -30,22 +32,27 @@ export const widgetRoutes: FastifyPluginAsync<{
   features?: FeatureService;
   indices?: MarketIndices;
   accounts?: { recentOkIds(limit?: number): Promise<number[]> };
+  /** 알림 설정의 브리핑 시간 (브리핑 위젯 안내 BH-68). 없거나 못 읽으면 안내에 시간을 넣지 않는다 */
+  schedule?: () => Promise<BriefSchedule>;
 }> = async (app, deps) => {
   const flags = async (): Promise<WidgetFeatures | undefined> => {
     if (!deps.features) return undefined;
-    const [widgetPnlToggle, widgetIndexLine, widgetMarket] = await Promise.all([
+    const [widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish] = await Promise.all([
       deps.features.enabled("widgetPnlToggle"),
       deps.features.enabled("widgetIndexLine"),
       deps.features.enabled("widgetMarket"),
+      deps.features.enabled("widgetPolish"),
     ]);
-    return { widgetPnlToggle, widgetIndexLine, widgetMarket };
+    return { widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish };
   };
   app.get("/", async (req, reply) => {
     const features = flags();
-    const q = req.query as { indices?: unknown; board?: unknown; sessions?: unknown } | undefined;
+    const q = req.query as { indices?: unknown; board?: unknown; sessions?: unknown; ui?: unknown } | undefined;
     const wantsIndices = q?.indices === "1";
     const wantsBoard = q?.board === "1";
     const wantsSessions = q?.sessions === "1";
+    const newUi = q?.ui === "2";
+    const schedule = newUi && deps.schedule ? deps.schedule().catch(() => null) : null;
     const indices = features.then((f) =>
       deps.indices && ((wantsIndices && f?.widgetIndexLine) || (wantsBoard && f?.widgetMarket)) ? deps.indices.list({ stale: true }).catch(() => null) : null,
     );
@@ -56,8 +63,18 @@ export const widgetRoutes: FastifyPluginAsync<{
             .then((on) => (on ? deps.accounts!.recentOkIds(4) : null))
             .catch(() => null)
         : null;
-    const [list, latest, status, f, idx, accountIds] = await Promise.all([deps.stocks.listWithQuotes(), deps.briefings.latestPerStock(), deps.calendar.status().catch(() => null), features, indices, accounts]);
-    const body = JSON.stringify(buildWidgetPayload(list, latest, status, { features: f, indices: wantsIndices ? idx : null, board: wantsBoard ? idx : null, accountIds, sessions: wantsSessions }));
+    const [list, latest, status, f, idx, accountIds, sched] = await Promise.all([deps.stocks.listWithQuotes(), deps.briefings.latestPerStock(), deps.calendar.status().catch(() => null), features, indices, accounts, schedule]);
+    const body = JSON.stringify(
+      buildWidgetPayload(list, latest, status, {
+        features: f,
+        indices: wantsIndices ? idx : null,
+        board: wantsBoard ? idx : null,
+        accountIds,
+        sessions: wantsSessions,
+        polish: newUi && f?.widgetPolish === true,
+        brief: newUi ? widgetBrief(latest, sched) : null,
+      }),
+    );
     const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 16)}"`;
     reply.header("etag", etag).header("cache-control", "no-cache").header("vary", "accept-encoding");
     // 프록시가 약한 ETag(W/"…")로 바꾸거나 여러 개를 보내도 맞춰 본다

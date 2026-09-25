@@ -76,6 +76,12 @@ export function marketSessions(quotes: Quotes, now: number): MarketSessionView[]
   return sessionViews(quotes.map((q) => q?.session), now).map(({ market, label, open, current }) => ({ market, label, open: open && current }));
 }
 
+/** 칩에 넣는 시장 하나 (다듬은 잔고 위젯): 달력으로 열려 있으면 "한국 장중"·"미국 장중", 아니면 그 시장 보유 종목의 지금 세션 이름 */
+export interface ChipMarket {
+  market: "KR" | "US";
+  label: string;
+}
+
 /** 위젯 장 상태 칩 (widgets/payload WidgetMarket 과 같은 모양) */
 export interface MarketChip {
   label: string;
@@ -85,6 +91,8 @@ export interface MarketChip {
   us: boolean;
   /** 다음에 칩이 바뀌는 시각 (위젯은 이때 칩을 감추고, 휴장 중 건너뛰던 갱신을 다시 한다) */
   nextChangeAt: string | null;
+  /** 시장별 문구 (보유 종목 세션을 넘겼을 때만). 경계가 지난 세션은 넣지 않는다 */
+  markets?: ChipMarket[];
 }
 
 /**
@@ -93,24 +101,31 @@ export interface MarketChip {
  * 둘이 다르면 칩이 오락가락한다. 서버는 sessions=1 이 없는 예전 앱에는 달력만 본 칩(sessions 없이 부른 이 함수)을 준다 — 예전 앱의 WidgetBridge 와 같게.
  *  - 토스 달력(한국 08:00~20:00, 미국은 정규장만)으로 열린 시장이 있으면: 실시간 / 한국 장중 / 미국 장중 (금색)
  *  - 두 시장이 달력으로 닫혀 있어도 보유 종목 세션에 열린 세션(미국 프리·애프터·주간거래)이 있으면 문구만 그 세션 이름 — 잔고 상태 줄 맨 앞 세션과 같은 말.
- *    open(금색)·kr·us 는 달력 그대로(위젯 갱신 주기·지연 판단은 그대로), 그 세션이 끝나는 때를 nextChangeAt 에 넣는다
+ *    open(금색)·kr·us 는 달력 그대로(위젯 갱신 주기·지연 판단은 그대로)
  *  - 아니면 휴장 / 한국 휴장 / 장 마감. sessions 가 비면(예전 서버·보유 없음) 달력만 — useAnyMarketOpen(잔고 상태 줄의 예전 서버 문구)도 이것
+ *  - markets: 시장별 문구 (다듬은 잔고 위젯의 "미국 주간거래 · 한국 휴장"). 달력으로 열린 시장은 "한국 장중"·"미국 장중", 닫힌 시장은 그 시장 세션 이름.
+ *    경계가 지난 세션(오프라인으로 옛 값만 있음)은 지금 세션처럼 보이지 않게 뺀다
+ *  - nextChangeAt: 달력 경계와, 달력으로 닫힌 시장의 지금 세션 경계 중 가장 이른 때 — 열린 세션이 끝나는 때와 아직 열리지 않은 세션이 시작하는 때
+ *    (삼일절 09:29 "휴장"이 10:00 미국 주간거래에 바뀌게)
  * now 는 세션 경계가 지났는지 볼 때만 쓴다 (기본: 장 상태를 받은 시각)
  */
 export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | null | undefined)[] = [], now: number = Date.parse(s.now)): MarketChip {
   const kr = s.KR, us = s.US;
-  const bounds = [kr, us].map((m) => (m.isOpen ? m.closesAt : m.opensAt)).filter((x): x is string => !!x).sort();
-  const nextChangeAt = bounds[0] ?? null;
-  const base = { kr: kr.isOpen, us: us.isOpen, nextChangeAt };
-  if (kr.isOpen || us.isOpen) return { label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", open: true, ...base };
   const t = Number.isFinite(now) ? now : Date.now();
-  // 경계가 지난 세션(받아 둔 시세가 지난 세션 것)은 쓰지 않는다
-  const ext = sessionViews(sessions, t).find((v) => v.open && v.current);
-  if (ext) {
-    const until = ext.until ? Date.parse(ext.until) : NaN;
-    const next = Number.isFinite(until) && (nextChangeAt === null || until < Date.parse(nextChangeAt)) ? new Date(until).toISOString() : nextChangeAt;
-    return { label: ext.label, open: false, ...base, nextChangeAt: next };
+  const calOpen = (m: "KR" | "US") => (m === "KR" ? kr : us).isOpen;
+  const views = sessionViews(sessions, t);
+  const bounds = [kr, us].map((m) => (m.isOpen ? m.closesAt : m.opensAt)).filter((x): x is string => !!x).sort();
+  let nextChangeAt = bounds[0] ?? null;
+  for (const v of views) {
+    // 경계가 지난 세션(받아 둔 시세가 지난 세션 것)은 쓰지 않는다
+    const until = v.current && v.until && !calOpen(v.market) ? Date.parse(v.until) : NaN;
+    if (Number.isFinite(until) && (nextChangeAt === null || until < Date.parse(nextChangeAt))) nextChangeAt = new Date(until).toISOString();
   }
+  const markets = views.flatMap((v): ChipMarket[] => (calOpen(v.market) ? [{ market: v.market, label: v.market === "KR" ? "한국 장중" : "미국 장중" }] : v.current ? [{ market: v.market, label: v.label }] : []));
+  const base = { kr: kr.isOpen, us: us.isOpen, nextChangeAt, ...(views.length ? { markets } : {}) };
+  if (kr.isOpen || us.isOpen) return { label: kr.isOpen && us.isOpen ? "실시간" : kr.isOpen ? "한국 장중" : "미국 장중", open: true, ...base };
+  const ext = views.find((v) => v.open && v.current);
+  if (ext) return { label: ext.label, open: false, ...base };
   if (!kr.isTradingDay && !us.isTradingDay) return { label: "휴장", open: false, ...base };
   if (!kr.isTradingDay) return { label: "한국 휴장", open: false, ...base };
   return { label: "장 마감", open: false, ...base };

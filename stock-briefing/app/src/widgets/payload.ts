@@ -12,6 +12,16 @@ export interface WidgetMarket {
   /** 시장별 거래 중 (예전 응답에는 없음) */
   kr?: boolean;
   us?: boolean;
+  /** 시장별 문구 (다듬은 잔고 위젯이 두 시장을 한 칩에: "미국 주간거래 · 한국 휴장"). 예전 서버·플래그 꺼짐이면 없음 → label 한 개 */
+  markets?: { market: "KR" | "US"; label: string }[];
+}
+
+/** 브리핑 위젯 안내 (BH-68): 설정한 브리핑 시각(끈 세션은 null)과 최신 브리핑이 실패한 종목 수. 예전 서버면 없음 */
+export interface WidgetBrief {
+  morning: string | null;
+  afternoon: string | null;
+  weekdaysOnly: boolean;
+  failed: number;
 }
 
 export interface WidgetStock {
@@ -61,9 +71,11 @@ export interface WidgetPayload {
   board?: WidgetIndex[];
   /** 최근 계좌 한 장 브리핑 id (3-31, accountBriefing 이 켜진 서버만). 백그라운드 알림용 — 위젯은 쓰지 않는다 */
   accountIds?: number[];
+  /** 브리핑 시간·최신 브리핑 실패 수 (BH-68, &ui=2 로 물은 새 앱에만) */
+  brief?: WidgetBrief;
 }
 
-/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket) */
+/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish) */
 export interface WidgetFeatures {
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
@@ -71,9 +83,11 @@ export interface WidgetFeatures {
   indexLine: boolean;
   /** 지수·환율 위젯 (APK 1.4.0). 꺼져 있거나 모르면 짧은 안내만 */
   market: boolean;
+  /** 다듬은 잔고 위젯 (두 시장 칩·지수 줄 순서·'수익'/'오늘'·⇅·'보유 17 · 관심 1'·줄 간격). 꺼져 있거나 모르면 예전 모습 그대로 */
+  polish: boolean;
 }
 
-export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false };
+export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
 
 /** 받은 플래그 → 위젯 기능. 모르는 키·예전 서버(없음)면 꺼짐 (새 기능은 fallback false, docs/기능-플래그.md) */
 export function widgetFeatures(features: Record<string, boolean> | null | undefined): WidgetFeatures {
@@ -82,20 +96,30 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     pnlToggle: featureOn(flags, "widgetPnlToggle", false),
     indexLine: featureOn(flags, "widgetIndexLine", false),
     market: featureOn(flags, "widgetMarket", false),
+    polish: featureOn(flags, "widgetPolish", false),
   };
 }
 
 /** 위젯 지수 줄에 넣는 항목과 순서 (서버 widgetPayload.ts 의 WIDGET_INDEX_CODES 와 같다) */
 export const WIDGET_INDEX_CODES = ["KOSPI", "NASDAQ", "USDKRW"] as const;
 
+/**
+ * 다듬은 잔고 위젯(widgetPolish)의 지수 줄 후보: 국내 둘 · 미국 둘 · 원/달러 (서버 widgetPayload.ts 의 WIDGET_LINE_CODES 와 같다).
+ * 순서는 그릴 때 계좌 비중으로 고른다 (model.ts polishedIndexItems). 예전 모습은 이 중 WIDGET_INDEX_CODES 세 개만 받은 순서대로 그린다
+ */
+export const WIDGET_LINE_CODES = ["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "USDKRW"] as const;
+
 /** 지수·환율 위젯 판의 항목과 순서: 국내 → 미국 → 환율 (서버 widgetPayload.ts 의 WIDGET_BOARD_CODES, board.ts 의 구역과 같다) */
 export const WIDGET_BOARD_CODES = ["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "DJI", "SOX", "USDKRW", "JPYKRW", "CNYKRW"] as const;
 
 type IndexRow = { code: string; name: string; value: number; change: number; changeRate: number; open: boolean; stale?: boolean; asOf?: string | null };
 
-/** 앱이 받은 지수 띠 목록(/api/market/indices?stale=1)에서 위젯 줄에 넣을 것만, 서버와 같은 순서·같은 모양으로 */
+/**
+ * 앱이 받은 지수 띠 목록(/api/market/indices?stale=1)에서 위젯 줄에 넣을 것만, 서버와 같은 순서·같은 모양으로.
+ * 다듬은 모습이 쓰는 다섯 개(WIDGET_LINE_CODES)를 모두 넘긴다 — 예전 모습은 그릴 때 세 개만 고른다(model.ts indexItems)
+ */
 export function pickWidgetIndices(list: readonly IndexRow[]): WidgetIndex[] {
-  return pickCodes(list, WIDGET_INDEX_CODES);
+  return pickCodes(list, WIDGET_LINE_CODES);
 }
 
 /** 앱이 받은 지수 띠 목록에서 지수·환율 위젯 판 9개 (서버가 주는 board 와 같은 순서·같은 모양) */
@@ -130,6 +154,16 @@ function cleanIndices(list: unknown): WidgetIndex[] | null {
   return list.filter((i): i is WidgetIndex => !!i && typeof i === "object" && typeof (i as WidgetIndex).code === "string" && Number.isFinite((i as WidgetIndex).value) && Number.isFinite((i as WidgetIndex).change) && Number.isFinite((i as WidgetIndex).changeRate));
 }
 
+const HHMM = /^\d{2}:\d{2}$/;
+/** 모양이 맞는 브리핑 안내만 (예전·다른 서버의 이상한 값은 버린다 → 모름) */
+export function cleanBrief(b: unknown): WidgetBrief | null {
+  if (!b || typeof b !== "object") return null;
+  const v = b as Partial<WidgetBrief>;
+  const time = (t: unknown) => (typeof t === "string" && HHMM.test(t) ? t : null);
+  if (typeof v.weekdaysOnly !== "boolean" || !Number.isInteger(v.failed) || (v.failed as number) < 0) return null;
+  return { morning: time(v.morning), afternoon: time(v.afternoon), weekdaysOnly: v.weekdaysOnly, failed: v.failed as number };
+}
+
 const rate = (profit: number, cost: number) => (cost > 0 ? Math.round((profit / cost) * 10000) / 100 : 0);
 
 export function fromPayload(p: WidgetPayload): {
@@ -139,6 +173,7 @@ export function fromPayload(p: WidgetPayload): {
   indices: WidgetIndex[] | null;
   board: WidgetIndex[] | null;
   features: WidgetFeatures;
+  brief: WidgetBrief | null;
 } {
   const stocks = p.stocks.map((s): RegisteredWithQuote => {
     const quote: Quote | null = s.q
@@ -164,7 +199,7 @@ export function fromPayload(p: WidgetPayload): {
     name: b.name,
     latest: { id: b.id, code: b.code, name: b.name, session: b.session as "morning" | "afternoon", date: b.date, status: "ok", summary: b.summary, detail: "", missing: [], model: "", error: null, createdAt: b.createdAt },
   }));
-  return { stocks, briefings, market: p.market, indices: cleanIndices(p.indices), board: cleanIndices(p.board), features: widgetFeatures(p.features) };
+  return { stocks, briefings, market: p.market, indices: cleanIndices(p.indices), board: cleanIndices(p.board), features: widgetFeatures(p.features), brief: cleanBrief(p.brief) };
 }
 
 /**

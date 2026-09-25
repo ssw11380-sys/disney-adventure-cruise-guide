@@ -1,8 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { AccountBriefing, LatestBriefing, RegisteredWithQuote } from "@/api/types";
-import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
+import { defaultApiUrl, STORAGE_KEYS, widgetRowCurrencyOf } from "@/lib/settings";
 import { fillFromLast, type PnlMode } from "./model";
-import { canReuse, fromPayload, NO_FEATURES, REUSE_OPEN_MS, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
+import { canReuse, cleanBrief, fromPayload, NO_FEATURES, REUSE_OPEN_MS, type WidgetBrief, type WidgetFeatures, type WidgetIndex, type WidgetMarket, type WidgetPayload } from "./payload";
 import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 
 /**
@@ -15,6 +15,10 @@ export interface WidgetData {
   briefings: LatestBriefing[];
   showKrw: boolean;
   afterCost: boolean;
+  /** 다듬은 잔고 위젯 종목 줄 손익을 원화로 (설정 "위젯 종목 금액", 기본 원화). 없으면 원화 */
+  rowKrw?: boolean;
+  /** 브리핑 위젯 안내: 브리핑 시간·최신 브리핑 실패 수 (BH-68, 새 서버). 예전 서버면 null·없음 */
+  brief?: WidgetBrief | null;
   fetchedAt: number;
   /** 이번 조회 실패 사유 (실패해도 stocks 에는 마지막으로 받은 값이 들어 있을 수 있다) */
   error: string | null;
@@ -76,14 +80,15 @@ export async function withLastGood(stocks: RegisteredWithQuote[], now: number): 
   return f;
 }
 
-async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showKrw: boolean; afterCost: boolean }> {
-  const pairs = await AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.showKrw, STORAGE_KEYS.afterCost]).catch(() => []);
+async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showKrw: boolean; afterCost: boolean; rowKrw: boolean }> {
+  const pairs = await AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.showKrw, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency]).catch(() => []);
   const m = new Map(pairs);
   return {
     apiUrl: m.get(STORAGE_KEYS.apiUrl) || defaultApiUrl(),
     apiToken: m.get(STORAGE_KEYS.apiToken) || process.env.EXPO_PUBLIC_API_TOKEN || "",
     showKrw: m.get(STORAGE_KEYS.showKrw) === "1",
     afterCost: m.get(STORAGE_KEYS.afterCost) !== "0",
+    rowKrw: widgetRowCurrencyOf(m.get(STORAGE_KEYS.widgetRowCurrency)) === "krw",
   };
 }
 
@@ -92,7 +97,7 @@ const VIEW_KEY = "widget.view";
 const PNL_KEY = "widget.pnlMode";
 
 /** 마지막으로 그린 데이터 (표시 설정 제외). 손익 전환·↻ 직후에 서버를 부르지 않고 바로 다시 그릴 때 쓴다 */
-type StoredView = Omit<WidgetData, "showKrw" | "afterCost">;
+type StoredView = Omit<WidgetData, "showKrw" | "afterCost" | "rowKrw">;
 
 /** 브리핑 위젯은 앞의 3개 요약 첫 줄만 쓰므로 그만큼만 적는다 (예전 서버의 전체 목록·상세를 저장하지 않게) */
 function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
@@ -103,7 +108,7 @@ function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
 }
 
 export async function saveWidgetView(data: WidgetData, apiUrl: string): Promise<void> {
-  const { showKrw: _k, afterCost: _a, ...rest } = data;
+  const { showKrw: _k, afterCost: _a, rowKrw: _r, ...rest } = data;
   const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
   try {
     await AsyncStorage.setItem(VIEW_KEY, JSON.stringify({ apiUrl, view }));
@@ -133,6 +138,7 @@ async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
       ...(typeof d.boardAt === "number" ? { boardAt: d.boardAt } : {}),
       features: { ...NO_FEATURES, ...(d.features ?? {}) },
       ...(typeof d.featuresAt === "number" ? { featuresAt: d.featuresAt } : {}),
+      brief: cleanBrief(d.brief),
     };
   } catch {
     return null;
@@ -164,9 +170,9 @@ export async function togglePnlMode(): Promise<PnlMode> {
  * 아직 적어 둔 것이 없으면(업데이트 직후) 마지막 잔고·마지막 /api/widget 응답으로 만든다
  */
 export async function loadCachedWidgetData(): Promise<WidgetData> {
-  const { apiUrl, showKrw, afterCost } = await readSettings();
+  const { apiUrl, showKrw, afterCost, rowKrw } = await readSettings();
   const view = await readWidgetView(apiUrl);
-  if (view) return { ...view, showKrw, afterCost };
+  if (view) return { ...view, showKrw, afterCost, rowKrw };
   const [last, cached] = await Promise.all([readLastStocks(apiUrl), readCachedPayload(apiUrl)]);
   const p = cached ? fromPayload(cached.body) : null;
   return {
@@ -174,6 +180,8 @@ export async function loadCachedWidgetData(): Promise<WidgetData> {
     briefings: p?.briefings ?? [],
     showKrw,
     afterCost,
+    rowKrw,
+    brief: p?.brief ?? null,
     fetchedAt: last?.at ?? cached?.at ?? Date.now(),
     error: null,
     filled: [],
@@ -215,8 +223,10 @@ export async function pushWidgetData(o: {
   indices?: { at: number; list: WidgetIndex[] } | null;
   /** 지수·환율 위젯 판 (앱 지수 띠 9개와 받은 시각) */
   board?: { at: number; list: WidgetIndex[] } | null;
+  /** 종목 줄 손익을 원화로 (앱 설정 값). 주지 않으면(백그라운드 작업) 저장된 설정 */
+  rowKrw?: boolean;
 }): Promise<WidgetData> {
-  const { apiUrl } = await readSettings();
+  const { apiUrl, rowKrw } = await readSettings();
   const [prev, cached] = await Promise.all([readWidgetView(apiUrl), readCachedPayload(apiUrl)]);
   const p = cached ? fromPayload(cached.body) : null;
   const idx = newest([
@@ -237,6 +247,9 @@ export async function pushWidgetData(o: {
     briefings: o.briefings ?? prev?.briefings ?? p?.briefings ?? [],
     showKrw: o.showKrw,
     afterCost: o.afterCost,
+    rowKrw: o.rowKrw ?? rowKrw,
+    // 브리핑 안내는 위젯이 받은 것 (앱은 따로 받지 않는다)
+    brief: prev?.brief ?? p?.brief ?? null,
     fetchedAt: o.fetchedAt,
     error: null,
     filled: o.filled,
@@ -299,9 +312,11 @@ async function legacyUntil(apiUrl: string): Promise<number> {
  * (지수를 그리지 않는 예전 앱은 지수 때문에 304 대신 200 을 받지 않게). 예전 서버는 모르는 쿼리를 무시한다.
  * sessions=1 은 "앱이 위젯을 바로 그릴 때도 세션 이름 칩을 그린다"는 표시다 (components/WidgetBridge → lib/liveDot widgetChip) —
  * 서버는 이 표시가 있을 때만 칩에 보유 종목 세션 이름(미국 주간거래 등)을 쓴다. 예전 앱(표시 없음)은 달력만 본 칩을 그리므로 서버도 그렇게 준다
- * (둘이 다르면 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀐다)
+ * (둘이 다르면 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀐다).
+ * ui=2 는 "다듬은 잔고 위젯(widgetPolish)과 브리핑 안내(BH-68)를 그릴 수 있는 앱"이라는 표시다 — 서버는 이때만 brief(브리핑 시간·실패 수)와,
+ * 플래그가 켜져 있으면 칩의 시장별 문구·지수 줄 다섯 개를 넣는다 (예전 앱의 응답은 그대로). 주소가 바뀌어 OTA 뒤 첫 갱신은 받아 둔 응답을 다시 쓰지 않고 한 번 묻는다
  */
-const WIDGET_PATH = "/api/widget?indices=1&sessions=1";
+const WIDGET_PATH = "/api/widget?indices=1&sessions=1&ui=2";
 /**
  * 지수·환율 위젯이 있을 때만 &board=1 (서버는 widgetMarket 이 켜져 있고 이 표시가 있을 때만 판 9개를 넣는다).
  * 위젯이 없는 사용자의 응답·ETag 는 그대로다. ETag 는 본문으로 만들므로 board 가 있는 응답과 없는 응답의 ETag 가 섞여도 304 가 잘못 나지 않는다
@@ -411,8 +426,8 @@ function boardReusable(body: WidgetPayload, prevBoardAt: number | undefined, now
  *  - board: 지수·환율 위젯 판도 묻는다 (&board=1). 판은 받지 못해도(실패·묻지 않음) 마지막으로 받은 것을 둔다
  */
 export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boolean; reuse?: boolean; board?: boolean } = { stocks: true, briefings: true }): Promise<WidgetData> {
-  const { apiUrl, apiToken, showKrw, afterCost } = await readSettings();
-  const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, fetchedAt: Date.now(), error: null, filled: [], market: null, indices: null, board: null, features: NO_FEATURES };
+  const { apiUrl, apiToken, showKrw, afterCost, rowKrw } = await readSettings();
+  const out: WidgetData = { stocks: [], briefings: [], showKrw, afterCost, rowKrw, brief: null, fetchedAt: Date.now(), error: null, filled: [], market: null, indices: null, board: null, features: NO_FEATURES };
   const last = await readLastStocks(apiUrl);
   // 판은 이번에 못 받아도 마지막 것을 둔다 (조회 전에 읽어 둔다 — 아래에서 이번 결과를 적으므로)
   const prevView = await readWidgetView(apiUrl);
@@ -438,6 +453,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       if (p.board) out.boardAt = out.fetchedAt;
       out.features = p.features;
       out.featuresAt = out.fetchedAt;
+      out.brief = p.brief;
       if (payload.latestIds) out.latestIds = payload.latestIds;
       if (Array.isArray(payload.accountIds)) out.accountIds = payload.accountIds.filter((id) => Number.isInteger(id) && id > 0);
       full = true;
@@ -469,6 +485,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       if (p.board) out.boardAt = cached.at;
       out.features = p.features;
       out.featuresAt = cached.at;
+      out.brief = p.brief;
       full = true;
     } else if (prevView) {
       // 받아 둔 응답이 없으면(업데이트 직후 첫 조회 등) 마지막으로 그린 데이터(앱 즉시 갱신이 적은 것)의 지수·플래그를 그대로 —
@@ -477,6 +494,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       if (prevView.indicesAt !== undefined) out.indicesAt = prevView.indicesAt;
       out.features = prevView.features;
       if (prevView.featuresAt !== undefined) out.featuresAt = prevView.featuresAt;
+      out.brief = prevView.brief ?? null;
     }
     if (last) {
       out.stocks = last.stocks;

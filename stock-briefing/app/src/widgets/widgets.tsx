@@ -7,17 +7,24 @@ import { fxOf, totals } from "@/lib/portfolio";
 import { DISCLAIMER_SHORT } from "@/lib/disclaimer";
 import { sentence, speakAmount, speakProfit } from "@/lib/a11y";
 import {
+  accountMix,
   asOfMs,
   asOfVariants,
   assetLine,
+  briefingEmptyText,
+  chipTexts,
+  DAY_LABEL,
   excludedCount,
   failureText,
+  holdingsTitles,
   HOME_URI,
   indexItems,
   indexSpeech,
   isHeld,
   pnlLine,
   pnlSpeech,
+  polishedIndexItems,
+  polishedRowSpeech,
   rowSpeech,
   tone,
   widgetOrder,
@@ -25,8 +32,29 @@ import {
   type PnlLine,
   type PnlMode,
 } from "./model";
-import { currentMarket, isDelayed, openMarketAsOf, type WidgetIndex, type WidgetMarket } from "./payload";
-import { EMPTY_LINES, PAD, planAsset, planBriefing, planHoldings, textWidth, type HeaderPlan, type IndexPlan, type RowInput, type RowsPlan, type TotalPlan } from "./layout";
+import { currentMarket, isDelayed, openMarketAsOf, type WidgetBrief, type WidgetIndex, type WidgetMarket } from "./payload";
+import {
+  CHIP_PAD_Y,
+  EMPTY_LINES,
+  GLYPH_GAP,
+  indexTag,
+  PAD,
+  planAsset,
+  planBriefing,
+  planHoldings,
+  planHoldingsPolished,
+  PNL_GLYPH,
+  POLISH_BOTTOM,
+  POLISH_ROW_PAD,
+  POLISH_TOP,
+  textWidth,
+  type HeaderPlan,
+  type IndexPlan,
+  type RowInput,
+  type RowsPlan,
+  type TitlePlan,
+  type TotalPlan,
+} from "./layout";
 import { space } from "@/tokens";
 import { CHIP_RADIUS, WIDGET_COLORS, WIDGET_FONT as F, WIDGET_RADIUS, WIDGET_TOUCH as TOUCH, type WidgetPalette } from "./palette";
 
@@ -85,11 +113,24 @@ const rootStyle = (c: WidgetPalette): FlexWidgetStyle => ({
 /** 잔고·브리핑: ↻ 칸이 오른쪽 위 끝에 붙게 위·오른쪽 여백은 두지 않는다 (본문이 오른쪽 여백을 따로 둔다) */
 const listRootStyle = (c: WidgetPalette): FlexWidgetStyle => ({ ...rootStyle(c), paddingLeft: PAD, paddingBottom: PAD });
 
-/** 장 상태 칩 (장중은 금색, 그 밖은 회색). 없을 때는 부르는 쪽에서 넣지 않는다 */
-function Chip({ market, c }: { market: WidgetMarket; c: WidgetPalette }) {
+/** 장 상태 칩 (장중은 금색, 그 밖은 회색). 없을 때는 부르는 쪽에서 넣지 않는다. text: 다듬은 모습의 두 시장 글자 (없으면 market.label) */
+function Chip({ market, text, c }: { market: WidgetMarket; text?: string; c: WidgetPalette }) {
   return (
-    <FlexWidget style={{ borderRadius: CHIP_RADIUS, paddingHorizontal: space.xs, paddingVertical: space.xxs, borderWidth: 1, borderColor: market.open ? c.gold : c.line }}>
-      <TextWidget text={market.label} maxLines={1} style={{ color: market.open ? c.gold : c.muted, fontSize: F.xs, fontWeight: "700" }} />
+    <FlexWidget style={{ borderRadius: CHIP_RADIUS, paddingHorizontal: space.xs, paddingVertical: CHIP_PAD_Y, borderWidth: 1, borderColor: market.open ? c.gold : c.line }}>
+      <TextWidget text={text ?? market.label} maxLines={1} style={{ color: market.open ? c.gold : c.muted, fontSize: F.xs, fontWeight: "700" }} />
+    </FlexWidget>
+  );
+}
+
+/** ↻ 칸 (48×48dp): 누르면 새로고침, 갱신 중이면 강조색 */
+function RefreshBox({ refreshing, c }: { refreshing: boolean; c: WidgetPalette }) {
+  return (
+    <FlexWidget
+      clickAction={WIDGET_CLICK.refresh}
+      accessibilityLabel={refreshing ? "갱신 중" : "새로 고침"}
+      style={{ width: TOUCH, height: TOUCH, flexDirection: "column", alignItems: "center", justifyContent: "center" }}
+    >
+      <TextWidget text="↻" style={{ color: refreshing ? c.accent : c.muted, fontSize: F.icon }} />
     </FlexWidget>
   );
 }
@@ -107,13 +148,7 @@ function Header({ title, plan, market, refreshing, label, c }: { title: string; 
         {plan.sub ? <TextWidget text={plan.sub} maxLines={1} style={{ color: refreshing ? c.accent : c.muted, fontSize: F.sm }} /> : null}
         {plan.delayed ? <TextWidget text="지연" maxLines={1} style={{ color: c.warn, fontSize: F.sm, fontWeight: "700" }} /> : null}
       </FlexWidget>
-      <FlexWidget
-        clickAction={WIDGET_CLICK.refresh}
-        accessibilityLabel={refreshing ? "갱신 중" : "새로 고침"}
-        style={{ width: TOUCH, height: TOUCH, flexDirection: "column", alignItems: "center", justifyContent: "center" }}
-      >
-        <TextWidget text="↻" style={{ color: refreshing ? c.accent : c.muted, fontSize: F.icon }} />
-      </FlexWidget>
+      <RefreshBox refreshing={refreshing} c={c} />
     </FlexWidget>
   );
 }
@@ -145,6 +180,10 @@ export interface HoldingsExtra {
   indices?: WidgetIndex[] | null;
   /** ↻ 를 누른 직후 "갱신 중" */
   refreshing?: boolean;
+  /** 다듬은 모습 (widgetPolish). 꺼져 있거나 모르면(예전 서버) 예전 모습 그대로 */
+  polish?: boolean;
+  /** 다듬은 모습의 종목 줄 손익 금액을 원화로 (설정 "위젯 종목 금액", 기본 원화). 가격 칸은 showKrw 를 따른다 */
+  rowKrw?: boolean;
 }
 
 interface RowView extends RowInput {
@@ -218,23 +257,27 @@ function TotalRow({ plan, total, pnl, c }: { plan: TotalPlan; total: string; pnl
   );
 }
 
-/** 지수 한 항목: 이름(회색) 값 등락률(등락색). 출처 조회가 실패한 항목은 모두 회색 + "지연" */
+/**
+ * 지수 한 항목: 이름(회색) 값 등락률(등락색). 출처 조회가 실패한 항목은 모두 회색 + "지연".
+ * 다듬은 모습은 지난 세션 값도 모두 회색 + 그 날짜("9/23")
+ */
 function indexNodes(it: IndexItemText, first: boolean, font: number, c: WidgetPalette): React.JSX.Element[] {
   const color = it.stale ? c.muted : tone(it.change, c);
+  const tag = indexTag(it);
   const out: React.JSX.Element[] = [];
   if (!first) out.push(<TextWidget key={`${it.code}-sep`} text="·" style={{ color: c.muted, fontSize: font }} />);
   out.push(<TextWidget key={`${it.code}-label`} text={it.label} maxLines={1} style={{ color: c.muted, fontSize: font }} />);
   out.push(<TextWidget key={`${it.code}-value`} text={it.value} maxLines={1} style={{ color, fontSize: font, fontWeight: "700" }} />);
   if (it.rate) out.push(<TextWidget key={`${it.code}-rate`} text={it.rate} maxLines={1} style={{ color, fontSize: font, fontWeight: "700" }} />);
-  if (it.stale) out.push(<TextWidget key={`${it.code}-stale`} text="지연" maxLines={1} style={{ color: c.muted, fontSize: font }} />);
+  if (tag) out.push(<TextWidget key={`${it.code}-stale`} text={tag} maxLines={1} style={{ color: c.muted, fontSize: font }} />);
   return out;
 }
 
-/** 합계 아래 지수·환율 한 줄 (large 는 두 줄까지). 누르면 앱 (홈 지수 띠), 화면 읽기는 한 문장 */
-function IndexLine({ plan, items, c }: { plan: IndexPlan<IndexItemText>; items: IndexItemText[]; c: WidgetPalette }) {
+/** 합계 아래 지수·환율 한 줄 (large 는 두 줄까지, 다듬은 모습은 한 줄·아래 여백 0). 누르면 앱 (홈 지수 띠), 화면 읽기는 한 문장 */
+function IndexLine({ plan, items, gap = space.xs, c }: { plan: IndexPlan<IndexItemText>; items: IndexItemText[]; gap?: number; c: WidgetPalette }) {
   const shown = plan.lines.flat();
   return (
-    <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={indexSpeech(shown.length ? shown : items)} style={{ width: "match_parent", flexDirection: "column", marginBottom: space.xs }}>
+    <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={indexSpeech(shown.length ? shown : items)} style={{ width: "match_parent", flexDirection: "column", marginBottom: gap }}>
       {plan.lines.map((line) => (
         <FlexWidget key={line.map((i) => i.code).join("-")} style={{ flexDirection: "row", alignItems: "center", flexGap: space.xs }}>
           {line.flatMap((it, n) => indexNodes(it, n === 0, plan.font, c))}
@@ -262,7 +305,225 @@ function RowRight({ r, rows, c }: { r: RowView; rows: RowsPlan; c: WidgetPalette
   );
 }
 
+// ── 다듬은 잔고 위젯 (widgetPolish) ────────────────────────────────────
+
+interface PolishedRow extends RowView {
+  /** 등락률 앞 작은 글자 ("오늘", 시세가 없으면 없음) */
+  label: string | null;
+}
+
+/**
+ * 다듬은 모습의 종목 한 줄: 왼쪽 아래는 "수익 +12.34% +1,234,000원"(누적, 합계와 같은 원화 기준 — 설정 "위젯 종목 금액"이 종목 통화면 그 통화),
+ * 오른쪽은 가격(원화 표시 설정 그대로)과 "오늘 +1.20%"
+ */
+function polishedRowView(s: RegisteredWithQuote, filled: string[], showKrw: boolean, rowKrw: boolean, afterCost: boolean, c: WidgetPalette): PolishedRow {
+  const q = s.quote;
+  const fx = fxOf(s);
+  const ev = evalView(s.evaluation, { afterCost, toKrw: rowKrw, currency: q?.currency, fx });
+  const old = filled.includes(s.code) ? "이전 값 · " : "";
+  let subs: string[];
+  if (ev) {
+    const pct = formatPct(ev.profitRate);
+    subs = [`${old}수익 ${pct} ${formatPrice(ev.profit, ev.currency, { sign: true })}`, `${old}수익 ${pct}`, `수익 ${pct}`, pct];
+  } else if (isHeld(s)) subs = [`${Number((s.quantity ?? 0).toFixed(4))}주 · 시세 없음`, "시세 없음"];
+  else subs = ["관심"];
+  const price = q ? money(q.price, q.currency, fx, showKrw) : "-";
+  return {
+    code: s.code,
+    name: s.name,
+    price,
+    rate: q ? formatPct(q.changeRate) : null,
+    subs: [...new Set(subs)],
+    hasQuote: !!q,
+    change: q?.change ?? 0,
+    subColor: ev ? tone(ev.profit, c) : c.muted,
+    speech: polishedRowSpeech(s.name, q ? price : null, q?.changeRate, ev?.profitRate),
+    label: q ? DAY_LABEL : null,
+  };
+}
+
+/** 제목 · 칩 · 기준 시각 · 지연 (누르면 잔고 탭). 다듬은 모습의 제목 줄과 48dp 머리 줄이 같이 쓴다 */
+function TitleGroup({ plan, market, refreshing, label, height, c }: { plan: TitlePlan; market: WidgetMarket | null; refreshing: boolean; label: string; height?: number; c: WidgetPalette }) {
+  return (
+    <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={label} style={{ ...(height ? { height } : {}), flexDirection: "row", alignItems: "center", flexGap: space.s }}>
+      <TextWidget text={plan.title} maxLines={1} style={{ color: c.ink, fontSize: F.title, fontWeight: "700" }} />
+      {plan.chip && market ? <Chip market={market} text={plan.chip} c={c} /> : null}
+      {plan.sub ? <TextWidget text={plan.sub} maxLines={1} style={{ color: refreshing ? c.accent : c.muted, fontSize: F.sm }} /> : null}
+      {plan.delayed ? <TextWidget text="지연" maxLines={1} style={{ color: c.warn, fontSize: F.sm, fontWeight: "700" }} /> : null}
+    </FlexWidget>
+  );
+}
+
+/**
+ * 다듬은 합계 줄: 합계(누르면 앱) · 손익(⇅ + 누적/오늘, 누르면 전환 — 플래그가 꺼져 있거나 낮은 위젯이면 앱) · [↻ (48×48)].
+ * refresh: 누르는 칸 둘(손익 전환·↻)을 한 줄(48dp)에 모아 머리 줄 48dp 를 줄인 모양. 아니면 ↻ 는 48dp 머리 줄에 있다. 좁으면 합계 아래에 손익
+ */
+function TopRow({ plan, total, pnl, refresh, refreshing, c }: { plan: TotalPlan; total: string; pnl: PnlLine; refresh: boolean; refreshing: boolean; c: WidgetPalette }) {
+  const toggle = plan.toggle;
+  const color = tone(pnl.sign, c);
+  const totalLabel = `총 평가 ${speakAmount(total)}`;
+  const totalBox = (
+    <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={totalLabel} style={{ height: plan.totalH, flexDirection: "column", justifyContent: "center" }}>
+      <TextWidget text={total} maxLines={1} style={{ color: c.ink, fontSize: plan.totalFont, fontWeight: "800" }} />
+    </FlexWidget>
+  );
+  const lines = plan.pnl.map((line) => <TextWidget key={line} text={line} maxLines={1} style={{ color, fontSize: plan.pnlFont, fontWeight: "700" }} />);
+  const pnlStyle: FlexWidgetStyle = { height: plan.pnlH, paddingHorizontal: plan.pnlPadX, flexDirection: "row", alignItems: "center", flexGap: GLYPH_GAP };
+  const pnlBox = toggle ? (
+    // 보여 주는 쪽을 함께 보낸다: 태스크 핸들러가 그 반대로 저장한다
+    <FlexWidget clickAction={WIDGET_CLICK.pnlToggle} clickActionData={{ mode: pnl.mode }} accessibilityLabel={pnlSpeech(pnl, true, true)} style={pnlStyle}>
+      <TextWidget text={PNL_GLYPH} maxLines={1} style={{ color: c.muted, fontSize: plan.pnlFont, fontWeight: "700" }} />
+      <FlexWidget style={{ flexDirection: "column", alignItems: plan.inline ? "flex-end" : "flex-start" }}>{lines}</FlexWidget>
+    </FlexWidget>
+  ) : (
+    <FlexWidget clickAction="OPEN_URI" clickActionData={{ uri: HOME_URI }} accessibilityLabel={pnlSpeech(pnl, false)} style={pnlStyle}>
+      <FlexWidget style={{ flexDirection: "column", alignItems: plan.inline ? "flex-end" : "flex-start" }}>{lines}</FlexWidget>
+    </FlexWidget>
+  );
+  const row: FlexWidgetStyle = { width: "match_parent", height: plan.height, flexDirection: "row", justifyContent: "space-between", marginTop: plan.gapY, marginBottom: plan.gapY };
+  if (plan.inline) {
+    return (
+      <FlexWidget style={{ ...row, alignItems: "center" }}>
+        {totalBox}
+        <FlexWidget style={{ flexDirection: "row", alignItems: "center" }}>
+          {pnlBox}
+          {refresh ? <RefreshBox refreshing={refreshing} c={c} /> : null}
+        </FlexWidget>
+      </FlexWidget>
+    );
+  }
+  return (
+    <FlexWidget style={{ ...row, alignItems: "flex-start" }}>
+      <FlexWidget style={{ flexDirection: "column" }}>
+        {totalBox}
+        {pnlBox}
+      </FlexWidget>
+      {refresh ? <RefreshBox refreshing={refreshing} c={c} /> : null}
+    </FlexWidget>
+  );
+}
+
+/** 다듬은 종목 줄 오른쪽: 가격(등락색) · 작은 "오늘"(회색) + 등락률 */
+function PolishedRowRight({ r, rows, c }: { r: PolishedRow; rows: RowsPlan; c: WidgetPalette }) {
+  if (!r.hasQuote) return <TextWidget text="-" maxLines={1} style={{ color: c.muted, fontSize: F.md }} />;
+  const color = tone(r.change, c);
+  const price = <TextWidget text={r.price} maxLines={1} style={{ color, fontSize: F.base, fontWeight: "700" }} />;
+  const rate = (
+    <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.xxs }}>
+      {r.label ? <TextWidget text={r.label} maxLines={1} style={{ color: c.muted, fontSize: F.xs }} /> : null}
+      <TextWidget text={r.rate ?? "-"} maxLines={1} style={{ color, fontSize: F.md, fontWeight: "700", width: rows.rateW, textAlign: "right" }} />
+    </FlexWidget>
+  );
+  return rows.stacked ? (
+    <FlexWidget style={{ flexDirection: "column", alignItems: "flex-end" }}>
+      {price}
+      {rate}
+    </FlexWidget>
+  ) : (
+    <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: space.sm }}>
+      {price}
+      {rate}
+    </FlexWidget>
+  );
+}
+
+/**
+ * 다듬은 잔고 위젯 (widgetPolish, 2026-09-25 위젯 검토 "전부 수정해줘"):
+ *  1. 칩에 두 시장의 지금 세션 — 원화 보유액이 큰 시장부터 ("미국 주간거래 · 한국 휴장"), 좁으면 앞 시장만
+ *  2. 지수 줄: 계좌 비중 순서(미국이 크면 나스닥·S&P500 먼저), 원/달러는 끝·등락률까지, 지난 세션 값은 흐리게 + 날짜
+ *  3. 종목 줄: 왼쪽 "수익 …"(누적, 기본 원화), 오른쪽 "오늘 …"
+ *  4. 손익 전환 칸에 ⇅ 와 "누적"/"오늘", 화면 읽기는 "눌러서 당일 손익 보기"
+ *  5. 제목 "보유 17 · 관심 1" (좁으면 "보유 17")
+ *  6. 세로 빈칸 줄이기: ↻ 를 합계 줄로 옮겨 머리 줄을 글자 높이로, 지수 줄·종목 줄·아래 여백을 줄인다 (layout.ts planHoldingsPolished)
+ */
+function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsExtra) {
+  const { stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given } = props;
+  const rowKrw = props.rowKrw !== false;
+  const c = props.palette ?? WIDGET_COLORS;
+  const width = dp(props.width, DEFAULT_LIST.width);
+  const height = dp(props.height, DEFAULT_LIST.height);
+  const scale = props.fontScale ?? 1;
+  const refreshing = props.refreshing === true;
+  const t = totals(stocks, showKrw, afterCost);
+  const signed = (n: number) => formatPrice(n, t?.currency, { sign: true });
+  const pct = (n: number) => formatPct(n);
+  const cum = t ? pnlLine("cumulative", t, signed, pct, DAY_LABEL) : null;
+  const chosen = t && props.pnlToggle === true ? pnlLine(props.pnlMode ?? "cumulative", t, signed, pct, DAY_LABEL) : null;
+  const total = t ? formatPrice(t.value, t.currency) : null;
+  const rows = widgetOrder(stocks, fxOf).map((s) => polishedRowView(s, filled, showKrw, rowKrw, afterCost, c));
+  const asOf = asOfMs(stocks, fetchedAt);
+  const market = currentMarket(given, now);
+  const delayed = isDelayed({ openAsOf: openMarketAsOf(stocks, market), fetchedAt, error, now });
+  const mix = accountMix(stocks, fxOf);
+  const usFirst = mix.us > mix.kr;
+  const items = props.indexLine ? polishedIndexItems(props.indices, now, usFirst) : [];
+  const head = holdingsTitles(stocks);
+  const chips = chipTexts(market, stocks, usFirst);
+  const sub = refreshing ? ["갱신 중"] : asOfVariants(asOf, now);
+  const alert = !refreshing && failureText(error) ? "갱신 실패" : null;
+  const plan = planHoldingsPolished({
+    width,
+    height,
+    scale,
+    title: { titles: head.titles, chips, sub, delayed },
+    total: total && cum ? { total, fixed: { amount: cum.amount, rate: cum.rate }, toggle: chosen ? { amount: chosen.amount, rate: chosen.rate } : null } : null,
+    indices: items,
+    rows,
+    rowLabel: DAY_LABEL,
+    note: noteParts(refreshing ? null : error, filled.length, excludedCount(stocks)),
+    alert,
+  });
+  const pnl = plan.total?.toggle ? chosen : cum;
+  const headerLabel = sentence([head.speech, chips[0], alert && plan.title.sub === alert ? alert : null, refreshing ? "갱신 중" : sub[0], delayed ? "시세 지연" : null]);
+  const titleGroup = <TitleGroup plan={plan.title} market={market} refreshing={refreshing} label={headerLabel} height={plan.compact ? undefined : TOUCH} c={c} />;
+  return (
+    <FlexWidget style={{ ...rootStyle(c), paddingLeft: PAD, paddingBottom: POLISH_BOTTOM }}>
+      {plan.compact ? (
+        <FlexWidget style={{ width: "match_parent", flexDirection: "row", paddingTop: POLISH_TOP, paddingRight: PAD }}>{titleGroup}</FlexWidget>
+      ) : (
+        <FlexWidget style={{ width: "match_parent", height: TOUCH, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          {titleGroup}
+          <RefreshBox refreshing={refreshing} c={c} />
+        </FlexWidget>
+      )}
+      {plan.compact && plan.total && total && pnl ? <TopRow plan={plan.total} total={total} pnl={pnl} refresh refreshing={refreshing} c={c} /> : null}
+      <FlexWidget style={{ width: "match_parent", flexDirection: "column", paddingRight: PAD }}>
+        {!plan.compact && plan.total && total && pnl ? <TopRow plan={plan.total} total={total} pnl={pnl} refresh={false} refreshing={refreshing} c={c} /> : null}
+        {plan.index ? <IndexLine plan={plan.index} items={items} gap={0} c={c} /> : null}
+        {plan.note ? <TextWidget text={plan.note} maxLines={1} style={{ color: c.muted, fontSize: F.sm }} /> : null}
+        {rows.length === 0 && !error && !refreshing ? <TextWidget text="등록된 종목이 없습니다" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
+        {rows.length === 0 && error && !refreshing ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
+      </FlexWidget>
+      {/* 목록은 첫 줄이 보일 높이가 있을 때만 (높이 0 인 목록은 라이브러리가 그리지 못해 위젯이 갱신되지 않는다) */}
+      {plan.list && rows.length > 0 ? (
+        <ListWidget style={{ height: "match_parent", width: "match_parent", marginRight: PAD }}>
+          {rows.map((r, n) => {
+            const subText = plan.rows.sub[n];
+            return (
+              <FlexWidget
+                key={r.code}
+                clickAction="OPEN_URI"
+                clickActionData={{ uri: `${DEEP_LINK}stocks/${r.code}` }}
+                accessibilityLabel={r.speech}
+                style={{ width: "match_parent", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: POLISH_ROW_PAD, borderTopWidth: 1, borderTopColor: c.line }}
+              >
+                <FlexWidget style={{ flexDirection: "column", width: plan.rows.leftW }}>
+                  <TextWidget text={r.name} truncate="END" maxLines={1} style={{ color: c.ink, fontSize: F.base, fontWeight: "600" }} />
+                  {subText ? <TextWidget text={subText} maxLines={1} style={{ color: r.subColor, fontSize: plan.rows.subFont }} /> : null}
+                </FlexWidget>
+                <PolishedRowRight r={r} rows={plan.rows} c={c} />
+              </FlexWidget>
+            );
+          })}
+        </ListWidget>
+      ) : null}
+    </FlexWidget>
+  );
+}
+
 export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsExtra) {
+  // 다듬은 모습 (widgetPolish). 꺼져 있으면 아래 예전 모습 그대로
+  if (props.polish) return <PolishedHoldingsWidget {...props} />;
   const { stocks, showKrw, afterCost = true, fetchedAt, error, filled = [], now, market: given } = props;
   const c = props.palette ?? WIDGET_COLORS;
   const width = dp(props.width, DEFAULT_LIST.width);
@@ -344,8 +605,11 @@ function speakDate(date: string, session: string): string {
   return `${Number(m)}월 ${Number(d)}일 ${session}`;
 }
 
-/** 브리핑: 서버가 고른 보유 비중 상위 3종목(예전 서버면 최신 3개)의 요약 첫 줄 + 고지 한 줄 (항상) */
-export function BriefingWidget(props: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number; market?: WidgetMarket | null; refreshing?: boolean } & WidgetFrame) {
+/**
+ * 브리핑: 서버가 고른 보유 비중 상위 3종목(예전 서버면 최신 3개)의 요약 첫 줄 + 고지 한 줄 (항상).
+ * 보여 줄 브리핑이 없으면 안내 문구 — 서버가 준 브리핑 시간·최신 브리핑 실패 수(brief)로 (BH-68)
+ */
+export function BriefingWidget(props: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number; market?: WidgetMarket | null; refreshing?: boolean; brief?: WidgetBrief | null } & WidgetFrame) {
   const { briefings, fetchedAt, error, now } = props;
   const c = props.palette ?? WIDGET_COLORS;
   const width = dp(props.width, DEFAULT_LIST.width);
@@ -402,7 +666,7 @@ export function BriefingWidget(props: { briefings: LatestBriefing[]; fetchedAt: 
         ) : null
       ) : refreshing ? null : (
         <TextWidget
-          text={error ? `${failureText(error)} · ↻ 로 다시 시도` : "아직 브리핑이 없습니다. 평일 08:30·16:00 에 생성됩니다."}
+          text={briefingEmptyText(error, props.brief)}
           maxLines={plan.messageLines}
           style={{ color: c.muted, fontSize: F.md, marginTop: plan.messageGap, marginRight: PAD }}
         />

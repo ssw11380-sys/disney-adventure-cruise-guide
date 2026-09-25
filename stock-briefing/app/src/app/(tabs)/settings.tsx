@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { useHealth } from "@/api/hooks";
+import { useFeature, useHealth } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
@@ -12,7 +12,7 @@ import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, SectionTitle, Toggle } from "@/components/ui";
 import { formatDateKo } from "@/lib/format";
-import { SORT_OPTIONS, THEME_OPTIONS, useSettings } from "@/lib/settings";
+import { SORT_OPTIONS, THEME_OPTIONS, useSettings, WIDGET_ROW_OPTIONS } from "@/lib/settings";
 import { font, radius, space, touch, useTheme } from "@/theme";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
 
@@ -22,7 +22,9 @@ import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
  */
 export default function SettingsScreen() {
   const t = useTheme();
-  const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost } = useSettings();
+  const { apiUrl, apiToken, setApiUrl, setApiToken, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency } = useSettings();
+  // 다듬은 잔고 위젯(widgetPolish)에서만 쓰는 설정이라 플래그가 켜져 있을 때만 보인다
+  const widgetPolishOn = useFeature("widgetPolish", false);
   const health = useHealth();
   const stream = useLiveStream();
   const [advanced, setAdvanced] = useState(false);
@@ -66,6 +68,19 @@ export default function SettingsScreen() {
           <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
           <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
         </View>
+        {widgetPolishOn ? (
+          <View style={{ gap: space.s, paddingTop: space.sm }}>
+            <View style={{ gap: space.xxs }}>
+              <Text style={styles.label(t.ink)}>위젯 종목 금액</Text>
+              <Muted style={{ fontSize: font.tiny }}>잔고 위젯 종목 줄의 수익 금액 통화. 원화는 위젯 합계와 같은 기준</Muted>
+            </View>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
+              {WIDGET_ROW_OPTIONS.map((o) => (
+                <Chip key={o.value} label={o.label} accessibilityLabel={`위젯 종목 금액 ${o.label}`} active={widgetRowCurrency === o.value} onPress={() => void setWidgetRowCurrency(o.value)} />
+              ))}
+            </View>
+          </View>
+        ) : null}
       </Card>
 
       {health.data && !health.data.limited ? <NotificationSettingsCard /> : null}

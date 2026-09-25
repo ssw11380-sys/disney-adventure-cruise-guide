@@ -21,10 +21,13 @@ export async function refreshWidgets({
   features,
   indices,
   board,
+  rowKrw,
 }: {
   stocks: RegisteredWithQuote[];
   showKrw: boolean;
   afterCost: boolean;
+  /** 다듬은 잔고 위젯 종목 줄 손익을 원화로 (앱 설정). 주지 않으면(백그라운드 작업) 저장된 설정 */
+  rowKrw?: boolean;
   /** 이미 마지막 값으로 채운 데이터(백그라운드 작업)면 채운 종목 코드. 없으면 여기서 채운다 */
   filled?: string[];
   /** 장 상태 칩 */
@@ -44,7 +47,7 @@ export async function refreshWidgets({
     const fetchedAt = Date.now();
     // 시세가 빠진 종목은 마지막 값으로 채우고(위젯이 직접 받을 때와 같은 규칙), 다음 실패 대비로 적어 둔다
     const { stocks, filled } = given ? { stocks: raw, filled: given } : await withLastGood(raw, fetchedAt);
-    const data = await pushWidgetData({ stocks, filled, showKrw, afterCost, fetchedAt, market: market ?? null, briefings, features, indices, board });
+    const data = await pushWidgetData({ stocks, filled, showKrw, afterCost, fetchedAt, market: market ?? null, briefings, features, indices, board, ...(rowKrw !== undefined ? { rowKrw } : {}) });
     const pnlMode = await readPnlMode();
     const fontScale = fontScaleNow();
     const draw = (name: string) => (info: WidgetInfo) => renderBoth(name, data, { width: info.width, height: info.height, fontScale, now: fetchedAt, pnlMode });
