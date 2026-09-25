@@ -1,6 +1,6 @@
 import type { Db } from "../db/index.js";
 import { NotFoundError } from "../lib/errors.js";
-import { seoulDate, seoulIso } from "../lib/time.js";
+import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
 import type { TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptName, type PromptStore } from "../llm/prompts.js";
 import type { AnalysisSnapshot, DataCollector } from "./collector.js";
@@ -36,6 +36,8 @@ export interface AnalysisServiceDeps {
   collector: DataCollector;
   generator: TextGenerator;
   prompts: PromptStore;
+  /** 등록 종목·종목 마스터에 없을 때 이름·시장 찾기 (StockService.preview: 외부 검색으로 대신 찾는다 — 신규 상장 등). 모르면 null */
+  lookup?: (code: string) => Promise<{ code: string; name: string; market: string } | null>;
   now?: () => Date;
 }
 
@@ -64,7 +66,9 @@ export class AnalysisService {
   private async generate(code: string, kind: AnalysisKind): Promise<Analysis> {
     const stock =
       (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
-      (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst());
+      (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
+      // 마스터를 받은 뒤 상장한 종목도 상세 화면·뉴스 탭처럼 찾는다 (코드가 정확히 같은 종목만)
+      (await this.lookup(code));
     if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
 
     const snapshot = await this.deps.collector.collectAnalysis(stock, kind);
@@ -101,6 +105,11 @@ export class AnalysisService {
     return { id: inserted.id, code, kind, content: result.text, missing: snapshot.missing, model: result.model, createdAt, cached: false };
   }
 
+  private async lookup(code: string): Promise<{ code: string; name: string; market: string } | null> {
+    const found = await this.deps.lookup?.(code).catch(() => null);
+    return found && found.code === code ? { code: found.code, name: found.name, market: found.market } : null;
+  }
+
   async latest(code: string, kind: AnalysisKind): Promise<Analysis | null> {
     const r = await this.deps.db
       .selectFrom("analyses")
@@ -130,7 +139,8 @@ function snapshotForPrompt(s: AnalysisSnapshot, kind: AnalysisKind): Record<stri
       financials: s.financials,
       ratios: s.ratios,
       disclosures: s.disclosures?.map((d) => ({ title: d.title, filedAt: d.filedAt })),
-      news: s.news?.map((n) => ({ title: n.title, source: n.source, publishedAt: n.publishedAt.slice(0, 10) })),
+      // 뉴스 날짜는 한국 날짜로 (네이버는 +09:00, 구글·네이버 검색은 Z 로 와서 그냥 자르면 한국 오전 기사가 전날이 된다)
+      news: s.news?.map((n) => ({ title: n.title, source: n.source, publishedAt: seoulDateOf(n.publishedAt) })),
     };
   }
   if (kind === "value") {

@@ -392,19 +392,38 @@ describe("MarketIndices", () => {
       }) as unknown as typeof fetch;
       const m = new MarketIndices(fetchFn, NOW);
       const all = (await m.candles("NASDAQ", "1m", 100))!.candles;
+      // 누적 거래량은 천주 단위 → 주 단위 (BH-75)
       expect(all.slice(0, 2).map((c) => [c.time, c.volume])).toEqual([
         ["2026-09-21T12:14:00-04:00", 0],
-        ["2026-09-21T12:15:00-04:00", 1602],
+        ["2026-09-21T12:15:00-04:00", 1_602_000],
       ]);
       const one = all.slice(2);
       // 당일 첫 봉 시가는 응답의 당일 시가 (밤사이 갭을 한 봉에 넣지 않는다)
-      expect(one[0]).toEqual({ date: "2026-09-22", time: "2026-09-22T09:30:00-04:00", open: 27161.197, high: 27180, low: 27161.197, close: 27180, volume: 100 });
-      expect(one[1]).toMatchObject({ open: 27180, close: 27213, high: 27213, low: 27180, volume: 60 });
+      expect(one[0]).toEqual({ date: "2026-09-22", time: "2026-09-22T09:30:00-04:00", open: 27161.197, high: 27180, low: 27161.197, close: 27180, volume: 100_000 });
+      expect(one[1]).toMatchObject({ open: 27180, close: 27213, high: 27213, low: 27180, volume: 60_000 });
       const five = (await m.candles("NASDAQ", "5m", 100))!.candles;
       expect(five.slice(-2).map((c) => [c.time, c.open, c.high, c.low, c.close])).toEqual([
         ["2026-09-22T09:30:00-04:00", 27161.197, 27213, 27161.197, 27213],
         ["2026-09-22T09:35:00-04:00", 27213, 27213, 27200, 27200],
       ]);
+    });
+
+    it("해외 지수 차트 거래량도 천주 단위 → 주 단위 (나스닥 9/24 1,375,034천주 = 약 13.8억 주) (BH-75)", async () => {
+      const fetchFn = (async (url: string) => {
+        if (url.includes("/chart/foreign/index/.IXIC/day?")) return json([{ localDate: "20260924", closePrice: 27100, openPrice: 27000, highPrice: 27200, lowPrice: 26900, accumulatedTradingVolume: 1375034 }]);
+        if (url.includes("/chart/foreign/index/.IXIC?periodType=day"))
+          return json({
+            openPrice: 27000,
+            priceInfos: [
+              { localDateTime: "20260924093000", currentPrice: 27010, accumulatedTradingVolume: 5000 },
+              { localDateTime: "20260924093100", currentPrice: 27020, accumulatedTradingVolume: 8000 },
+            ],
+          });
+        return new Response("x", { status: 404 });
+      }) as unknown as typeof fetch;
+      const m = new MarketIndices(fetchFn, () => new Date("2026-09-24T21:00:00Z"));
+      expect((await m.candles("NASDAQ", "D", 10))!.candles.map((c) => c.volume)).toEqual([1_375_034_000]);
+      expect((await m.candles("NASDAQ", "1m", 10))!.candles.map((c) => c.volume)).toEqual([5_000_000, 3_000_000]);
     });
 
     it("환율: 당일 고시 회차는 분봉으로 묶고, 일별 종가는 시가를 직전 종가로 채우며, 월봉은 주별을 묶는다", async () => {

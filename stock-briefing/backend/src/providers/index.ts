@@ -140,7 +140,7 @@ export function describeProviders(cfg: AppConfig): Record<string, string> {
   return {
     quotes: [cfg.kisEnabled ? "kis" : null, cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : null, "toss(웹)", "naver", "yahoo"].filter(Boolean).join(" → ") + (cfg.tossOpenApiEnabled ? "" : " (토스 Open API 키 없음)"),
     search: cfg.tossOpenApiEnabled ? "토스 마스터(한국+미국) + toss → yahoo" : "toss → yahoo (+ KIS 종목 마스터)",
-    news: cfg.NAVER_CLIENT_ID ? "naver 종목뉴스 → naver 검색 → google-rss" : "naver 종목뉴스 → google-rss",
+    news: cfg.NAVER_CLIENT_ID ? "naver 종목뉴스 → google-rss → naver 검색" : "naver 종목뉴스 → google-rss",
     financials: (cfg.DART_API_KEY ? "dart(한국)" : "없음(DART 키 없음)") + " · edgar(미국)",
     investorFlow: cfg.kisEnabled ? "kis" : cfg.tossOpenApiEnabled ? "toss-openapi(공식)" : "없음 (KIS/토스 Open API 키 없음)",
     realtime: cfg.tossOpenApiEnabled ? "toss-openapi 웹소켓 + toss 웹 3초 갱신" : "toss 웹 3초 갱신 (Open API 키 있으면 웹소켓)",

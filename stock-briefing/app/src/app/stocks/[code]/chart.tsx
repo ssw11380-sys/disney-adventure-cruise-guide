@@ -7,9 +7,10 @@ import { useCandles, useStock } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
 import { CandleChart } from "@/components/CandleChart";
 import { ChartNotice } from "@/components/Freshness";
-import { ChangeText } from "@/components/ui";
-import { CANDLE_COUNT } from "@/lib/chartPrefs";
+import { ChangeText, ErrorView } from "@/components/ui";
+import { CANDLE_COUNT, parseCandlePeriod } from "@/lib/chartPrefs";
 import { currencyOfMarket, formatPct, formatPrice } from "@/lib/format";
+import { parseStockCode } from "@/lib/freshness";
 import { font, slopFor, space, useTheme } from "@/theme";
 
 /**
@@ -21,8 +22,9 @@ export default function FullscreenChartScreen() {
   const insets = useSafeAreaInsets();
   const { width: winW, height: winH } = useWindowDimensions();
   const { code, period: initial } = useLocalSearchParams<{ code: string; period?: string }>();
-  const c = code ?? "";
-  const [period, setPeriod] = useState<CandlePeriod>((initial as CandlePeriod) || "D");
+  // 다른 앱·웹 페이지도 이 주소를 열 수 있다 → 상세 화면처럼 검증을 통과한 코드만 서버에 묻고, 모르는 기간은 일봉으로 (BH-36)
+  const c = parseStockCode(code) ?? "";
+  const [period, setPeriod] = useState<CandlePeriod>(() => parseCandlePeriod(initial));
   const [landscape, setLandscape] = useState(false);
   // 차트 아래·위 도구 모음(기간·봉 수·읽기 줄·오버레이 줄)의 실제 높이. 글자 크기·화면 폭에 따라 달라지므로 그려 본 뒤 잰다.
   // 늘어날 때만 반영한다(방향·폭이 바뀌면 새로) → 십자선을 움직일 때 읽기 줄이 한 줄 늘었다 줄었다 해도 차트 높이가 흔들리지 않는다
@@ -43,6 +45,14 @@ export default function FullscreenChartScreen() {
   const layoutKey = `${landscape ? "L" : "P"}:${Math.round(chartW)}`;
   const chromeH = chrome.key === layoutKey ? chrome.h : 170;
   const chartH = Math.max(160, availH - headerH - chromeH - space.sm);
+
+  if (!c) {
+    return (
+      <View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bg, paddingTop: insets.top, paddingBottom: insets.bottom }}>
+        <ErrorView error={new Error("종목 주소가 올바르지 않습니다")} retryLabel="잔고로" onRetry={() => router.dismissTo("/")} />
+      </View>
+    );
+  }
 
   const body = (
     <View style={{ width: availW, height: availH, backgroundColor: t.bg, paddingHorizontal: pad }}>

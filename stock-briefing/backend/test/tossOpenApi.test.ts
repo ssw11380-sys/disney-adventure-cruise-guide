@@ -236,7 +236,9 @@ describe("토스 연동 종목 잠금 (3-10)", () => {
     const origin = p2.holdingsWithOverview.bind(p2);
     p2.holdingsWithOverview = async (seq: number) => {
       const r = await origin(seq);
-      return { ...r, items: r.items.filter((h) => h.code !== "TSLA") };
+      const items = r.items.filter((h) => h.code !== "TSLA");
+      // 전량 매도해 빈 계좌는 요약의 매입금액도 0 이다 (요약과 맞지 않는 빈 응답은 일시 오류로 보고 한 번 미룬다)
+      return { items, overview: items.length ? r.overview : { ...r.overview, purchaseKrw: 0, purchaseUsd: 0 } };
     };
     await new TossSyncService(db, p2, NOW).importHoldings();
     expect((await row())?.value).toBe("[]");

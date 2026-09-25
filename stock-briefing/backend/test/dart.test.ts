@@ -1,5 +1,7 @@
+import { strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { parseCorpCodeXml, parseDividends, parseSingleAccount } from "../src/providers/dart/dart.js";
+import { createMigratedDb } from "../src/db/index.js";
+import { DartProvider, parseCorpCodeXml, parseDividends, parseSingleAccount } from "../src/providers/dart/dart.js";
 
 describe("DART parsers", () => {
   it("corpCode.xml 에서 상장사(6자리 종목코드)만 골라낸다", () => {
@@ -42,5 +44,77 @@ describe("DART parsers", () => {
     ];
     expect(parseDividends(list, 2025)).toEqual({ year: 2025, cashDividendPerShare: 1200, dividendYieldPct: 0.6, payoutRatioPct: 5.1 });
     expect(parseDividends([], 2025)).toBeNull();
+  });
+});
+
+describe("DART 고유번호 표 (BH-44)", () => {
+  const xmlOf = (codes: string[]) =>
+    `<?xml version="1.0"?><result>${codes.map((c, i) => `<list><corp_code>0099${String(i).padStart(4, "0")}</corp_code><corp_name>회사${c}</corp_name><stock_code>${c}</stock_code><modify_date>20260101</modify_date></list>`).join("")}</result>`;
+
+  function dartFake(listed: () => string[], delayMs = 5) {
+    const counts = { corpCode: 0 };
+    const fetchFn = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/corpCode.xml")) {
+        counts.corpCode++;
+        await new Promise((r) => setTimeout(r, delayMs)); // 내려받는 동안 다른 호출이 겹치게
+        return new Response(zipSync({ "CORPCODE.xml": strToU8(xmlOf(listed())) }), { status: 200 });
+      }
+      if (url.includes("/company.json")) return new Response(JSON.stringify({ status: "000", corp_name: "회사", ceo_nm: "대표" }), { status: 200 });
+      return new Response(JSON.stringify({ status: "013", list: [] }), { status: 200 });
+    }) as typeof fetch;
+    return { counts, fetchFn };
+  }
+
+  it("처음 쓸 때 여러 호출이 겹쳐도 corpCode.xml 은 한 번만 받는다", async () => {
+    const db = await createMigratedDb(":memory:");
+    const { counts, fetchFn } = dartFake(() => ["005930"]);
+    const dart = new DartProvider({ apiKey: "k", db, fetchFn, now: () => new Date("2026-09-25T09:00:00+09:00") });
+    await Promise.all([dart.getCompany("005930"), dart.getDisclosures("005930", 7, 5), dart.getDividends("005930", 1), dart.getAnnualFinancials("005930", 1)]);
+    expect(counts.corpCode).toBe(1);
+    await db.destroy();
+  });
+
+  it("표에 없는 종목(첫 다운로드 뒤 상장)은 표가 하루 넘게 묵었으면 다시 받아 찾는다. 하루 안에는 다시 받지 않는다", async () => {
+    const db = await createMigratedDb(":memory:");
+    let listed = ["005930"];
+    let now = new Date("2026-09-25T09:00:00+09:00");
+    const { counts, fetchFn } = dartFake(() => listed);
+    const dart = new DartProvider({ apiKey: "k", db, fetchFn, now: () => now });
+    await dart.getCompany("005930");
+    expect(counts.corpCode).toBe(1);
+    // 같은 날 없는 코드: 곧바로 다시 받지 않는다 (ETF 처럼 원래 없는 코드로 매번 내려받지 않게)
+    await expect(dart.getCompany("999990")).rejects.toThrow("DART 고유번호를 찾을 수 없음");
+    expect(counts.corpCode).toBe(1);
+    // 며칠 뒤 새로 상장한 종목
+    listed = ["005930", "999990"];
+    now = new Date("2026-09-28T09:00:00+09:00");
+    expect((await dart.getCompany("999990")).name).toBe("회사");
+    expect(counts.corpCode).toBe(2);
+    // 방금 새로 받았으니 또 없는 코드여도 다시 받지 않는다
+    await expect(dart.getCompany("888880")).rejects.toThrow("DART 고유번호를 찾을 수 없음");
+    expect(counts.corpCode).toBe(2);
+    await db.destroy();
+  });
+
+  it.each([0, 10, 200])("묵은 표에서 새 상장 종목을 여러 호출이 겹쳐 찾아도 모두 진행 중인 받기를 기다려 찾는다 (지연 %ims)", async (delayMs) => {
+    const db = await createMigratedDb(":memory:");
+    let listed = ["005930"];
+    let now = new Date("2026-09-25T09:00:00+09:00");
+    const { counts, fetchFn } = dartFake(() => listed, delayMs);
+    const dart = new DartProvider({ apiKey: "k", db, fetchFn, now: () => now });
+    await dart.getCompany("005930");
+    listed = ["005930", "999990"];
+    now = new Date("2026-09-28T09:00:00+09:00");
+    // collectAnalysis 처럼 회사 개요·재무제표·배당·공시를 한꺼번에
+    const results = await Promise.allSettled([
+      dart.getCompany("999990"),
+      dart.getAnnualFinancials("999990", 1),
+      dart.getDividends("999990", 1),
+      dart.getDisclosures("999990", 7, 5),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled", "fulfilled", "fulfilled"]);
+    expect(counts.corpCode).toBe(2);
+    await db.destroy();
   });
 });

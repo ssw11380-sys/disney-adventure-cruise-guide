@@ -182,7 +182,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   const prompts = opts.promptStore ?? new PromptStore();
   const briefingService = new BriefingService({ db: opts.db, collector, generator: opts.providers.generator, prompts, calendar: opts.providers.calendar, log, now });
-  const analysisService = new AnalysisService({ db: opts.db, collector, generator: opts.providers.generator, prompts, now });
+  const analysisService = new AnalysisService({ db: opts.db, collector, generator: opts.providers.generator, prompts, lookup: (code) => stockService.preview(code), now });
 
   // 알림/시간 설정: DB 에 저장된 값이 .env 기본값을 덮어쓴다
   const settingsStore = new NotificationSettingsStore(
@@ -197,8 +197,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       morningCron: settings.morningEnabled ? timeToCron(settings.morningTime, settings.weekdaysOnly) : null,
       afternoonCron: settings.afternoonEnabled ? timeToCron(settings.afternoonTime, settings.weekdaysOnly) : null,
       timezone: opts.config.timezone,
-      // 브리핑 직전에 토스 계좌를 한 번 더 읽어 수량·평단이 최신이 되게 한다
-      ...(tossDeps ? { beforeRun: async () => void (await tossDeps!.autoSync.run("briefing")) } : {}),
+      // 브리핑 직전에 토스 계좌를 한 번 더 읽어 수량·평단이 최신이 되게 한다 (상한 30초).
+      // 자동 동기화를 껐으면(TOSS_SYNC_MINUTES=0) 하지 않는다 — 잠금이 풀려 직접 고친 값을 덮어쓰지 않게
+      ...(tossDeps?.autoSync.enabled ? { beforeRun: () => tossDeps!.autoSync.beforeBriefing() } : {}),
       log,
     });
     scheduler.start();
@@ -298,16 +299,19 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     return reply.code(500).send({ error: "INTERNAL", message: "서버 오류" });
   });
 
-  /** 브라우저로 주소만 열었을 때 보이는 안내 페이지 */
-  app.get("/", async (_req, reply) => {
-    const h = await deviceService.enabledTokens();
-    const jobs = scheduler?.status().jobs ?? [];
+  /** 브라우저로 주소만 열었을 때 보이는 안내 페이지. 모델·알림 기기 수·브리핑 시각은 /health 처럼 토큰을 설정하지 않았거나 맞는 토큰을 보낸 요청에만 */
+  app.get("/", async (req, reply) => {
+    const auth = req.headers.authorization;
+    const detail = !opts.config.API_TOKEN || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), opts.config.API_TOKEN));
+    const h = detail ? await deviceService.enabledTokens() : [];
+    const jobs = detail ? (scheduler?.status().jobs ?? []) : [];
+    const protectedApi = Boolean(opts.config.API_TOKEN);
     const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>주식 브리핑 서버</title>
-<style>body{font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;max-width:640px;margin:40px auto;padding:0 16px;line-height:1.6;color:#1b221d;background:#f5f6f3}h1{font-size:1.4rem}code{background:#eef0eb;padding:2px 6px;border-radius:4px}.ok{color:#1f6f5c;font-weight:600}small{color:#5f6a63}</style></head>
+<style>body{font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;max-width:640px;margin:40px auto;padding:0 16px;line-height:1.6;color:#1b221d;background:#f5f6f3}h1{font-size:1.4rem}code{background:#eef0eb;padding:2px 6px;border-radius:4px}.ok{color:#1f6f5c;font-weight:600}.warn{color:#b3261e;font-weight:600}small{color:#5f6a63}</style></head>
 <body><h1>주식 브리핑 서버 <span class="ok">정상 작동 중</span></h1>
 <p>이 주소는 휴대폰 앱이 접속하는 서버입니다. 앱의 <b>설정 탭 → 서버 주소</b>에 이 주소를 입력하세요.</p>
-<ul><li>서버 시각: ${seoulIso(now())}</li><li>브리핑 모델: ${describeProviders(opts.config).llm}</li><li>등록된 알림 기기: ${h.length}대</li>${jobs.map((j) => `<li>다음 ${j.session === "morning" ? "오전" : "오후"} 브리핑: ${j.nextRun ? new Date(j.nextRun).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "-"}</li>`).join("")}</ul>
-<p><small>상태 확인: <a href="/health">/health</a> · API 는 토큰이 필요합니다.</small></p>
+<ul><li>서버 시각: ${seoulIso(now())}</li>${detail ? `<li>브리핑 모델: ${describeProviders(opts.config).llm}</li><li>등록된 알림 기기: ${h.length}대</li>` : ""}${jobs.map((j) => `<li>다음 ${j.session === "morning" ? "오전" : "오후"} 브리핑: ${j.nextRun ? new Date(j.nextRun).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "-"}</li>`).join("")}</ul>
+${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정되지 않아 누구나 API 에 접근할 수 있습니다. 인터넷에 공개한 서버라면 서버 설정에 API_TOKEN 을 넣으세요.</p>\n`}<p><small>상태 확인: <a href="/health">/health</a>${protectedApi ? " · API 는 토큰이 필요합니다." : ""}</small></p>
 <p><small>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</small></p></body></html>`;
     return reply.type("text/html; charset=utf-8").send(html);
   });
@@ -446,18 +450,30 @@ function logPath(p: unknown): unknown {
   return typeof p === "string" ? redactToken(p) : p;
 }
 
-/** 요청 로그: Fastify 기본 항목과 같되, 주소의 token 쿼리(웹소켓 인증)는 가린다 (서버 로그에 API 토큰이 남지 않게) */
+/** 요청 로그: Fastify 기본 항목과 같되, 주소의 token 쿼리(웹소켓 인증)와 경로의 푸시 토큰은 가린다 (서버 로그에 API 토큰·푸시 토큰이 남지 않게) */
 function logReq(req: FastifyRequest): { method: string; url: string; host: string; remoteAddress: string; version?: string; remotePort?: number } {
   const version = req.headers?.["accept-version"];
   const port = req.socket?.remotePort;
   return {
     method: req.method,
-    url: redactToken(req.url),
+    url: redactToken(redactPushToken(req.url, req.routeOptions?.url)),
     host: req.host,
     remoteAddress: req.ip,
     ...(typeof version === "string" ? { version } : {}),
     ...(port !== undefined ? { remotePort: port } : {}),
   };
+}
+
+/**
+ * 경로에 실린 Expo 푸시 토큰을 가린다 (알림 끄기 DELETE /api/devices/:token — 토큰만 알면 그 기기로 알림을 보낼 수 있다).
+ * 그 라우트로 온 요청은 경로를 라우트 모양으로 적고(UUID 모양 토큰·인코딩한 경로 포함), 다른 주소는 ExponentPushToken[…] 모양만 가린다
+ */
+function redactPushToken(url: string, route: string | undefined): string {
+  if (route === "/api/devices/:token") {
+    const q = url.search(/[?#;]/);
+    return `/api/devices/[redacted]${q < 0 ? "" : url.slice(q)}`;
+  }
+  return url.replace(/(Expo(?:nent)?PushToken)(?:\[|%5B)[^/?#;&]*/gi, "$1[redacted]");
 }
 
 /**

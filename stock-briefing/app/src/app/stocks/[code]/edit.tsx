@@ -9,14 +9,17 @@ import { useSettings } from "@/lib/settings";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { formatPrice, isUsMarket } from "@/lib/format";
-import { avgText, draftOf, editDraft, holdingPatch, normNum, normText, parseNum, qtyText, rebaseDraft, type Draft, type Norm } from "@/lib/holdingForm";
+import { parseStockCode } from "@/lib/freshness";
+import { avgText, draftOf, editDraft, holdingPatch, normNum, normText, parseNum, qtyText, rebaseDraft, tradePatch, type Draft, type HoldingPatch, type Norm } from "@/lib/holdingForm";
 import { font, radius, space, useTheme } from "@/theme";
 
 /** 보유 수량/평단/메모 수정, 매수·매도 기록(평단 자동 계산), 삭제 */
 export default function EditStockScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
-  const stock = useStock(code ?? "");
-  if (!code) return null;
+  // 잘못된 딥링크(다른 앱·웹 페이지가 연 주소 등)는 서버에 묻지 않고 안내만 한다 — 상세 화면과 같은 규칙 (BH-36)
+  const c = parseStockCode(code) ?? "";
+  const stock = useStock(c);
+  if (!c) return <Screen><ErrorView error={new Error("종목 주소가 올바르지 않습니다")} retryLabel="잔고로" onRetry={() => router.dismissTo("/")} /></Screen>;
   // 입력 중에 재조회가 실패해도 폼을 지우지 않는다(값이 한 번이라도 왔으면 폼 유지)
   if (!stock.data && !stock.isError) return <Screen><Loading /></Screen>;
   if (!stock.data) return <Screen><ErrorView error={stock.error ?? new Error("종목을 찾을 수 없습니다")} onRetry={() => void stock.refetch()} /></Screen>;
@@ -41,17 +44,48 @@ const STALE_NOTE = "입력하는 사이 저장된 값이 바뀌었습니다. 저
 const MANUAL_KRW_NOTE =
   "직접 고친 수량·평단으로 평가 중이라, 원화 매입금액은 다음 토스 동기화 뒤에 쓰입니다 (설정 → 토스증권 연동 → 지금 계좌 동기화). 동기화하면 수량·평단도 토스 계좌 값으로 돌아갑니다.";
 
-/** 매수: 수량 가중 평균으로 평단 재계산. 매도: 수량만 줄고 평단은 유지 */
-export function applyTrade(current: { quantity: number | null; avgPrice: number | null }, side: "buy" | "sell", qty: number, price: number): { quantity: number; avgPrice: number | null } {
+/** 소수 주식 계산의 0.30000000000000004 같은 꼬리 제거 (소수 6자리) */
+const roundQty = (q: number) => Math.round(q * 1e6) / 1e6;
+/** 달러 평단: 부동소수 꼬리(188.12339000000003)만 지우고 동전주의 작은 자리(0.0001234)는 자르지 않는다 (유효숫자 12자리) */
+const roundUsdAvg = (n: number) => Number(n.toPrecision(12));
+
+/**
+ * 매수: 수량 가중 평균으로 평단 재계산. 매도: 수량만 줄고 평단은 유지.
+ * 수량은 저장할 값 그대로(꼬리 제거) 돌려준다 — 미리보기와 저장값이 같게 (BH-70).
+ * 평단은 국내 소수 2자리, 미국은 꼬리만 지운 값 — 센트나 소수 몇 자리로 자르면 1달러 미만 종목의 매입금액이 몇 %씩 틀어진다 (BH-55)
+ */
+export function applyTrade(
+  current: { quantity: number | null; avgPrice: number | null },
+  side: "buy" | "sell",
+  qty: number,
+  price: number,
+  currency: "KRW" | "USD" = "KRW",
+): { quantity: number; avgPrice: number | null } {
   const q0 = current.quantity ?? 0;
   const a0 = current.avgPrice ?? 0;
   if (side === "buy") {
-    const q = q0 + qty;
-    const avg = q0 > 0 && current.avgPrice !== null ? (q0 * a0 + qty * price) / q : price;
-    return { quantity: q, avgPrice: Math.round(avg * 100) / 100 };
+    const total = q0 + qty;
+    const avg = q0 > 0 && current.avgPrice !== null ? (q0 * a0 + qty * price) / total : price;
+    return { quantity: roundQty(total), avgPrice: currency === "USD" ? roundUsdAvg(avg) : Math.round(avg * 100) / 100 };
   }
-  const q = Math.max(0, q0 - qty);
+  const q = roundQty(Math.max(0, q0 - qty));
   return { quantity: q, avgPrice: q === 0 ? null : current.avgPrice };
+}
+
+/** 거래 후 수량 표기: 자리 구분, 소수 주식은 소수 6자리까지 (저장값과 같은 자리) */
+function formatQty(q: number): string {
+  return q.toLocaleString("ko-KR", { maximumFractionDigits: 6 });
+}
+
+/**
+ * 거래 후 평단 표기. 1달러 미만 미국 종목은 센트 아래 자리까지 유효숫자 4자리("$0.05745"·"$0.0001234") —
+ * 센트로 줄이면 저장할 평단이 "$0.00" 으로 보인다 (BH-55). 그 밖에는 평소 가격 표기
+ */
+function formatTradeAvg(avg: number, cur: "KRW" | "USD"): string {
+  if (cur !== "USD" || !(avg > 0) || avg >= 1) return formatPrice(avg, cur);
+  const digits = Math.min(10, Math.max(2, 3 - Math.floor(Math.log10(avg))));
+  // 소수 둘째 자리 뒤의 끝 0 은 뺀다 ("0.5000" → "0.50")
+  return `$${avg.toFixed(digits).replace(/(\.\d\d\d*?)0+$/, "$1")}`;
 }
 
 function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluation | null } }) {
@@ -105,8 +139,8 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
   const num = parseNum;
 
   /** 바꾼 칸만 보낸다 (메모만 고치면 수량·평단은 그대로). 토스 종목은 메모만 */
-  const save = (values: { quantity: string; avgPrice: string } = { quantity, avgPrice }) => {
-    const patch = locked ? {} : holdingPatch(initial, values);
+  const save = (changes: HoldingPatch = holdingPatch(initial, { quantity, avgPrice })) => {
+    const patch = locked ? {} : changes;
     if ("error" in patch) {
       Alert.alert("입력 확인", patch.error);
       return;
@@ -130,14 +164,16 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     if (side === "sell" && q > (num(quantity) ?? 0)) return { error: "보유 수량보다 많이 매도할 수 없습니다" as const };
     // 평단 칸을 고치지 않았으면 화면에 줄여 보인 값이 아니라 저장된 원래 값으로 계산한다
     const avg0 = avgPrice.trim() === initial.avgPrice.trim() ? stock.avgPrice : num(avgPrice);
-    return applyTrade({ quantity: num(quantity), avgPrice: avg0 }, side, q, p);
+    return applyTrade({ quantity: num(quantity), avgPrice: avg0 }, side, q, p, cur);
   })();
 
-  /** 체결을 반영해 바로 저장 (예전: 위 칸에 반영 → 저장, 2단계) */
+  /**
+   * 체결을 반영해 바로 저장 (예전: 위 칸에 반영 → 저장, 2단계). 수량·평단은 미리보기에 보인 값 그대로 (applyTrade 가 자리를 맞춤).
+   * 칸 글자가 아니라 서버의 원래 값과 숫자로 비교한다 — 새 평단이 칸의 줄인 글자("0.05")와 같아도 빠뜨리지 않게 (BH-55)
+   */
   const saveTrade = () => {
     if (!preview || "error" in preview) return;
-    const q = Math.round(preview.quantity * 1e6) / 1e6; // 소수 주식 계산의 0.30000000000000004 같은 꼬리 제거
-    save({ quantity: q > 0 ? String(q) : "", avgPrice: preview.avgPrice !== null ? String(preview.avgPrice) : "" });
+    save(tradePatch(stock, preview));
   };
 
   const confirmRemove = () => {
@@ -219,8 +255,8 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
         {preview && "error" in preview ? <Text style={{ color: t.danger, fontSize: font.small }}>{preview.error}</Text> : null}
         {preview && !("error" in preview) ? (
           <View>
-            <Row label="거래 후 수량" value={`${preview.quantity}주`} />
-            <Row label="거래 후 평단" value={preview.avgPrice !== null ? formatPrice(preview.avgPrice, cur) : "-"} />
+            <Row label="거래 후 수량" value={`${formatQty(preview.quantity)}주`} />
+            <Row label="거래 후 평단" value={preview.avgPrice !== null ? formatTradeAvg(preview.avgPrice, cur) : "-"} />
           </View>
         ) : null}
         <Button title="반영해 저장" variant="secondary" icon="calculator-outline" disabled={!preview || "error" in preview} loading={update.isPending} onPress={saveTrade} />

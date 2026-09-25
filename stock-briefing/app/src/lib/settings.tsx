@@ -45,6 +45,11 @@ export function defaultApiUrl(): string {
   return Platform.OS === "android" ? "http://10.0.2.2:3000" : "http://localhost:3000";
 }
 
+/** 서버 주소 입력값 정리 (앞뒤 공백·끝의 / 제거). 비우면 저장하지 않아 다음 실행부터 번들 기본 주소 */
+function cleanApiUrl(url: string): string {
+  return url.trim().replace(/\/+$/, "");
+}
+
 interface Settings {
   apiUrl: string;
   /** 서버 API_TOKEN 과 같은 값. 비어 있으면 헤더를 보내지 않는다 */
@@ -57,6 +62,8 @@ interface Settings {
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
   setApiToken: (token: string) => Promise<void>;
+  /** 서버 주소와 토큰을 한 번에 바꾼다 — 새 주소로 옛 토큰이 나가는 순간이 없게 (설정 화면 저장) */
+  setCredentials: (url: string, token: string) => Promise<void>;
   setSort: (sort: SortKey) => Promise<void>;
   setShowKrw: (on: boolean) => Promise<void>;
   setThemeMode: (m: ThemeMode) => Promise<void>;
@@ -88,12 +95,47 @@ function initialThemeMode(): ThemeMode {
     return "dark";
   }
 }
-const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, themeMode: "dark", afterCost: true, ready: false, setApiUrl: noop, setApiToken: noop, setSort: noop, setShowKrw: noop, setThemeMode: noop, setAfterCost: noop });
+const Ctx = createContext<Settings>({ apiUrl: defaultApiUrl(), apiToken: "", sort: "created", showKrw: false, themeMode: "dark", afterCost: true, ready: false, setApiUrl: noop, setApiToken: noop, setCredentials: noop, setSort: noop, setShowKrw: noop, setThemeMode: noop, setAfterCost: noop });
 
 async function persist(key: string, value: string | null): Promise<void> {
   try {
     if (value === null || value === "") await AsyncStorage.removeItem(key);
     else await AsyncStorage.setItem(key, value);
+  } catch {
+    /* 저장 실패해도 세션 동안은 유지 */
+  }
+}
+
+/**
+ * 사용자가 비운 토큰을 저장소에 적는 값 (공백 한 칸). 키를 지우면 "저장한 적 없음"이 되어 앱(다음 실행)과 위젯이 번들 기본 토큰을
+ * 다시 쓴다 — 다른 서버로 바꾸고 토큰을 비워도 운영 토큰이 그 서버로 나간다 (BH-66). 앱과 위젯(widgets/data readSettings)은 읽을 때 trim 해서
+ * 빈 토큰(헤더 없음)으로 본다. 빈 문자열이 아니라 공백인 것은 예전 번들(OTA 되돌림)이 읽어도 번들 토큰으로 바꾸지 않게 하려는 것.
+ * 예전 앱에서 이미 비운(키를 지운) 토큰은 "저장한 적 없음"과 구분할 수 없어 번들 토큰으로 남는다
+ */
+const CLEARED_TOKEN = " ";
+const tokenForStorage = (token: string) => token || CLEARED_TOKEN;
+/** 저장된 토큰. 저장한 적 없으면(null) 번들 기본 토큰, 사용자가 비웠으면 빈 값 */
+function storedToken(raw: string | null | undefined): string {
+  return raw === null || raw === undefined ? (process.env.EXPO_PUBLIC_API_TOKEN ?? "") : raw.trim();
+}
+
+/**
+ * 서버 주소·토큰을 저장소에 함께 적는다. 위젯·백그라운드 작업은 두 키를 따로 읽으므로 새 주소와 옛 토큰이 짝지어 보이는 순간이 없게
+ * 한 번에(multiSet) 적는다. 주소를 비우면(번들 기본 주소로) 키를 지워야 해서 한 번에 못 적으므로, 토큰부터 비운 뒤 주소를 지우고 새 토큰을 적는다 (BH-27)
+ */
+async function persistCredentials(url: string, token: string): Promise<void> {
+  const stored = tokenForStorage(token);
+  try {
+    if (url) {
+      await AsyncStorage.multiSet([
+        [STORAGE_KEYS.apiUrl, url],
+        [STORAGE_KEYS.apiToken, stored],
+      ]);
+      return;
+    }
+    await AsyncStorage.setItem(STORAGE_KEYS.apiToken, CLEARED_TOKEN);
+    await AsyncStorage.removeItem(STORAGE_KEYS.apiUrl);
+    if (stored !== CLEARED_TOKEN) await AsyncStorage.setItem(STORAGE_KEYS.apiToken, stored);
   } catch {
     /* 저장 실패해도 세션 동안은 유지 */
   }
@@ -114,13 +156,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       .then((pairs) => {
         const m = new Map(pairs);
         const u = m.get(STORAGE_KEYS.apiUrl);
-        const t = m.get(STORAGE_KEYS.apiToken);
+        // 토큰은 키가 있으면(사용자가 비운 값 포함) 그 값 — 번들 기본 토큰으로 되돌리지 않는다 (BH-66)
+        const t = storedToken(m.get(STORAGE_KEYS.apiToken));
         const s = m.get(STORAGE_KEYS.sort);
         const k = m.get(STORAGE_KEYS.showKrw);
         if (u) setUrl(u);
-        if (t) setToken(t);
+        setToken(t);
         if (u) latest.apiUrl = u;
-        if (t) latest.apiToken = t;
+        latest.apiToken = t;
         if (s && SORT_OPTIONS.some((o) => o.value === s)) setSortState(s as SortKey);
         if (k) setShowKrwState(k === "1");
         const tm = m.get(STORAGE_KEYS.themeMode);
@@ -139,13 +182,24 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const clean = token.trim();
     latest.apiToken = clean;
     setToken(clean);
-    await persist(STORAGE_KEYS.apiToken, clean);
+    await persist(STORAGE_KEYS.apiToken, tokenForStorage(clean));
   }, []);
   const setApiUrl = useCallback(async (url: string) => {
-    const clean = url.trim().replace(/\/+$/, "");
+    const clean = cleanApiUrl(url);
     latest.apiUrl = clean;
     setUrl(clean);
     await persist(STORAGE_KEYS.apiUrl, clean);
+  }, []);
+  // 주소·토큰을 같은 동기 구간에서 바꿔 한 번에 그린다 (따로 바꾸면 저장을 기다리는 사이 새 주소 + 옛 토큰으로 한 번 그려져
+  // 요청·웹소켓이 옛 토큰을 새 서버로 보낸다, BH-27)
+  const setCredentials = useCallback(async (url: string, token: string) => {
+    const u = cleanApiUrl(url);
+    const tk = token.trim();
+    latest.apiUrl = u;
+    latest.apiToken = tk;
+    setUrl(u);
+    setToken(tk);
+    await persistCredentials(u, tk);
   }, []);
   const setSort = useCallback(async (s: SortKey) => {
     setSortState(s);
@@ -167,8 +221,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, ready, setApiUrl, setApiToken, setSort, setShowKrw, setThemeMode, setAfterCost }),
-    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, ready, setApiUrl, setApiToken, setSort, setShowKrw, setThemeMode, setAfterCost],
+    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost }),
+    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

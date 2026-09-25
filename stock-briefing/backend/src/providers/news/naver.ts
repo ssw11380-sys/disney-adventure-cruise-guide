@@ -1,4 +1,5 @@
-import { ProviderError } from "../../lib/errors.js";
+import { isTimeoutError, ProviderError } from "../../lib/errors.js";
+import { fetchWithTimeout } from "../../lib/timedFetch.js";
 import type { FetchFn } from "../market/types.js";
 import { stripHtml, toIso, type NewsItem, type NewsProvider } from "./types.js";
 
@@ -22,11 +23,11 @@ export class NaverNewsProvider implements NewsProvider {
     )}&sort=date`;
     let res: Response;
     try {
-      res = await this.fetchFn(url, {
+      res = await fetchWithTimeout(this.fetchFn, url, {
         headers: { "X-Naver-Client-Id": this.clientId, "X-Naver-Client-Secret": this.clientSecret },
       });
     } catch (e) {
-      throw new ProviderError(this.name, "네트워크 오류", e);
+      throw new ProviderError(this.name, isTimeoutError(e) ? "시간 초과" : "네트워크 오류", e);
     }
     if (!res.ok) throw new ProviderError(this.name, `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const json = (await res.json()) as { items?: Array<Record<string, string>> };

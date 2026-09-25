@@ -81,7 +81,8 @@ async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showK
   const m = new Map(pairs);
   return {
     apiUrl: m.get(STORAGE_KEYS.apiUrl) || defaultApiUrl(),
-    apiToken: m.get(STORAGE_KEYS.apiToken) || process.env.EXPO_PUBLIC_API_TOKEN || "",
+    // 토큰은 앱(lib/settings storedToken)과 같은 규칙: 저장한 적 없으면 번들 기본 토큰, 사용자가 비웠으면(공백) 빈 값 → 헤더를 보내지 않는다 (BH-66)
+    apiToken: (m.get(STORAGE_KEYS.apiToken) ?? process.env.EXPO_PUBLIC_API_TOKEN ?? "").trim(),
     showKrw: m.get(STORAGE_KEYS.showKrw) === "1",
     afterCost: m.get(STORAGE_KEYS.afterCost) !== "0",
   };

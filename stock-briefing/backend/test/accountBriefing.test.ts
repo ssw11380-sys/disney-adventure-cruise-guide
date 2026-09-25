@@ -1456,3 +1456,13 @@ describe("기여 1위는 당일 손익과 같은 방향 (2026-09-25 캡처: 오�
     expect(leaders({ dayPnl: 0, contributions }).map((r) => r.name)).toEqual(["애플", "엔비디아", "퀀티넘", "SK하이닉스"]);
   });
 });
+
+describe("평가손익은 앱 잔고 합계와 같은 반올림 (통합 리뷰)", () => {
+  it("평가 1,000,000.6원 · 매입 900,000.4원 → 100,001원 (한 번에 반올림한 100,000원이 아님)", () => {
+    const h = holding("005930", "삼성전자", 0, { qty: 1, price: 1_000_000.6 });
+    const a = computeAccount([{ ...h, evaluation: { ...h.evaluation, marketValue: 1_000_000.6, costBasis: 900_000.4 } }], { afterCost: false });
+    expect(a.totalValue).toBe(1_000_001);
+    expect(a.totalCost).toBe(900_000);
+    expect(a.totalProfit).toBe(a.totalValue - a.totalCost);
+  });
+});
