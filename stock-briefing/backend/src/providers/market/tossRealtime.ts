@@ -74,8 +74,11 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
   private socket: SocketLike | null = null;
   /** 토큰을 받는 중 (연결 시도는 한 번에 하나 — 겹치면 소켓이 둘 생겨 옛 소켓의 close 가 살아 있는 연결을 끊긴 것으로 만든다) */
   private connecting = false;
-  /** 핸드셰이크가 401(토큰 무효)로 거절됐다 → 다음 연결은 새 토큰을 받아서 */
-  private tokenRejected = false;
+  /**
+   * 핸드셰이크가 401(토큰 무효)로 거절된 토큰 → 다음 연결은 이보다 새 토큰으로 (REST 가 그 사이 새로 받았으면 그것을, 아니면 한 번 새로 받는다).
+   * 조건 없이 새로 받으면 REST 요청들이 방금 받은 토큰을 무효로 만든다 (클라이언트당 토큰 1개)
+   */
+  private rejectedToken: string | null = null;
   private codes: string[] = [];
   /** 내 주문·체결 이벤트(personal:order)를 받을 계좌 */
   private accounts: string[] = [];
@@ -171,8 +174,8 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
     this.connecting = true;
     let token: string;
     try {
-      // 401 로 거절된 뒤면 캐시된 토큰을 쓰지 않고 새로 받는다
-      token = await this.client.getToken(this.tokenRejected);
+      // 401 로 거절된 뒤면 거절된 토큰은 다시 쓰지 않는다
+      token = await this.client.getToken(this.rejectedToken ?? undefined);
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e);
       this.scheduleReconnect();
@@ -182,7 +185,7 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
     }
     // 토큰을 기다리는 사이 멈췄으면 만들지 않는다
     if (this.stopped || this.socket) return;
-    this.tokenRejected = false;
+    this.rejectedToken = null;
     const factory: SocketFactory =
       this.opts.socketFactory ?? ((url, headers) => new WebSocket(url, { headers, handshakeTimeout: this.opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS }) as unknown as SocketLike);
     const socket = factory(this.opts.url ?? TOSS_OPENAPI_WS, { authorization: `Bearer ${token}` });
@@ -216,7 +219,7 @@ export class TossRealtime extends EventEmitter implements LiveTicks {
       const status = res?.statusCode;
       this.lastError = `handshake HTTP ${status ?? "?"}${status === 403 ? " (허용 IP 미등록?)" : status === 401 ? " (토큰 무효)" : ""}`;
       this.log.warn({ err: this.lastError }, "토스증권 실시간 핸드셰이크 거절");
-      if (status === 401) this.tokenRejected = true;
+      if (status === 401) this.rejectedToken = token;
       // 이 이벤트를 들으면 ws 는 핸드셰이크를 끊지 않고 close 도 내지 않는다 → 직접 버리고 끊은 뒤 기다렸다 다시 연결
       // (예전: 소켓이 연결 중 상태로 남아 서버를 다시 켤 때까지 다시 연결하지 않았다)
       this.detach(socket);

@@ -133,12 +133,15 @@ describe("BH-10 동시에 받은 401 은 새 토큰 하나를 같이 쓴다", ()
     }
   }
 
-  /** 실시간 소켓이 연결에 쓴 토큰을 받게 하고, 시계를 움직일 수 있게 */
+  /**
+   * 실시간 소켓이 연결에 쓴 토큰을 받게 한다. 핸드셰이크 401 이면 소켓은 버리고 reconnectMs 뒤 다시 연결한다 (BH-01) —
+   * 그 다시 연결이 어떤 토큰을 쓰는지(거절된 토큰보다 새 토큰, 새로 받는 건 필요할 때 한 번)를 본다
+   */
   async function withRealtime(delays: Record<string, number[]>) {
-    const clock = { t: Date.parse("2026-09-22T14:00:00+09:00") };
-    const srv = oneTokenServer(delays, () => new Date(clock.t));
+    const srv = oneTokenServer(delays);
     const sockets: Array<{ socket: FakeSocket; auth: string }> = [];
     const rt = new TossRealtime(srv.client, {
+      reconnectMs: 10,
       socketFactory: (_url, headers) => {
         const socket = new FakeSocket();
         sockets.push({ socket, auth: headers["authorization"] ?? "" });
@@ -148,36 +151,55 @@ describe("BH-10 동시에 받은 401 은 새 토큰 하나를 같이 쓴다", ()
     rt.start();
     rt.setCodes(["005930"]);
     await vi.waitFor(() => expect(sockets).toHaveLength(1));
-    return { ...srv, clock, rt, sockets };
+    return { ...srv, rt, sockets };
   }
 
-  it("실시간 소켓 핸드셰이크 401 이 방금 REST 가 받은 토큰을 다시 무효로 만들지 않는다 (소켓은 거절된 토큰을 넘기지 않는다)", async () => {
-    const { state, client, clock, rt, sockets } = await withRealtime({ A: [0, 100] });
+  it("실시간 소켓 핸드셰이크 401 이 방금 REST 가 받은 토큰을 다시 무효로 만들지 않는다 (소켓은 REST 가 새로 받은 토큰으로 다시 연결)", async () => {
+    const { state, client, rt, sockets } = await withRealtime({ A: [0, 100] });
     expect(sockets[0]!.auth).toBe("Bearer tok-1");
-    clock.t += 10 * 60_000; // 토큰을 받은 지 한참 뒤
     state.valid = "external"; // 들고 있던 토큰이 무효
     const before = state.issued;
-    // REST: 바로 401 → 새 토큰 → 재시도는 100ms 뒤 도착. 그 사이 소켓(옛 토큰)의 핸드셰이크도 401
+    // REST: 바로 401 → 새 토큰 → 재시도는 100ms 뒤 도착. 그 사이 소켓(옛 토큰)의 핸드셰이크도 401 → 10ms 뒤 다시 연결
     const rest = client.get("/api/v1/prices", { symbols: "A" }).then(
       () => "ok",
       (e: unknown) => String((e as Error).message),
     );
     await sleep(30);
     sockets[0]!.socket.emit("unexpected-response", {}, { statusCode: 401 });
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    expect(sockets[1]!.auth).toBe("Bearer tok-2"); // REST 가 받은 토큰 그대로 (또 새로 받지 않는다)
     expect(await rest).toBe("ok");
     expect(state.issued - before).toBe(1);
-    expect(await client.getToken()).toBe(state.valid); // 다음 소켓 연결도 이 토큰
+    expect(await client.getToken()).toBe(state.valid);
     rt.stop();
   });
 
-  it("소켓만 지금 토큰으로 401 을 받으면 새 토큰을 받아 다음 연결에 쓴다", async () => {
-    const { state, client, clock, rt, sockets } = await withRealtime({});
-    clock.t += 10 * 60_000;
-    state.valid = "external";
+  it("소켓만 지금 토큰으로 401 을 받으면 — 발급 직후라도 — 새 토큰을 한 번 받아 다음 연결에 쓴다", async () => {
+    const { state, client, rt, sockets } = await withRealtime({});
+    state.valid = "external"; // 받은 지 몇 ms 안 된 토큰이 무효 (예전 '30초 안 된 토큰은 그대로' 짐작이면 거절된 토큰으로 다시 연결)
     const before = state.issued;
     sockets[0]!.socket.emit("unexpected-response", {}, { statusCode: 401 });
-    await vi.waitFor(() => expect(state.issued - before).toBe(1));
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    expect(state.issued - before).toBe(1);
+    expect(sockets[1]!.auth).toBe(`Bearer ${state.valid}`);
     expect(await client.getToken()).toBe(state.valid);
+    rt.stop();
+  });
+
+  it("REST 의 늦은 401 도 소켓이 방금 새로 받은 토큰을 다시 무효로 만들지 않는다", async () => {
+    // 소켓 401 → 소켓이 tok-2 를 받는다. 그 뒤 옛 토큰(tok-1)으로 보낸 REST 요청이 늦게 401 → tok-2 로 재시도
+    const { state, client, rt, sockets } = await withRealtime({ B: [60, 0] });
+    state.valid = "external";
+    const before = state.issued;
+    const rest = client.get("/api/v1/prices", { symbols: "B" }).then(
+      () => "ok",
+      (e: unknown) => String((e as Error).message),
+    );
+    sockets[0]!.socket.emit("unexpected-response", {}, { statusCode: 401 });
+    await vi.waitFor(() => expect(sockets).toHaveLength(2));
+    expect(sockets[1]!.auth).toBe("Bearer tok-2");
+    expect(await rest).toBe("ok");
+    expect(state.issued - before).toBe(1);
     rt.stop();
   });
 
