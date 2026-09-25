@@ -19,7 +19,12 @@ export function quoteLive(q: Quote | null | undefined, now: number, feedOk: bool
   if (!q) return false;
   if (q.realtime === undefined) return q.live === true;
   if (!q.realtime || !feedOk) return false;
-  const until = q.session?.until ? Date.parse(q.session.until) : NaN;
+  return beforeUntil(q.session, now);
+}
+
+/** 세션 경계(until)가 아직 안 지났는지. 지났으면 받아 둔 세션은 끝난 것이다 (다시 받기 전 — 줄 점·상태 줄·위젯 칩이 같이 본다) */
+function beforeUntil(s: QuoteSession | null | undefined, now: number): boolean {
+  const until = s?.until ? Date.parse(s.until) : NaN;
   return !(Number.isFinite(until) && now >= until);
 }
 
@@ -53,8 +58,7 @@ export function sessionViews(sessions: readonly (QuoteSession | null | undefined
   const pick = new Map<"KR" | "US", SessionView>();
   for (const s of sessions) {
     if (!s) continue;
-    const until = s.until ? Date.parse(s.until) : NaN;
-    const current = !(Number.isFinite(until) && now >= until);
+    const current = beforeUntil(s, now);
     const had = pick.get(s.market);
     if (!had || (!had.current && current)) pick.set(s.market, { market: s.market, label: s.label, open: s.open, current, until: s.until });
   }
@@ -64,10 +68,12 @@ export function sessionViews(sessions: readonly (QuoteSession | null | undefined
 
 /**
  * 목록에 있는 시장의 지금 세션 (잔고 상태 줄 앞머리). 열린 시장 먼저, 같으면 한국 → 미국.
- * 시장마다 경계가 아직 안 지난 종목의 세션을 쓴다 (모두 지났으면 그대로 — 경계 1초 뒤 다시 받는다). 세션 정보가 없으면(예전 서버) 빈 배열
+ * 시장마다 경계가 아직 안 지난 종목의 세션을 쓴다. 모두 지났으면 이름과 순서는 그대로 두고 닫힌 것으로 본다 (경계 1초 뒤 다시 받는다) —
+ * 경계에서 줄 점은 모두 꺼졌는데 상태 줄만 "실시간 N종목"(초록)이나 "지연"(주황)으로 남지 않게. 순서는 sessionViews 그대로다 (공용 픽스처의 head).
+ * 세션 정보가 없으면(예전 서버) 빈 배열
  */
 export function marketSessions(quotes: Quotes, now: number): MarketSessionView[] {
-  return sessionViews(quotes.map((q) => q?.session), now).map(({ market, label, open }) => ({ market, label, open }));
+  return sessionViews(quotes.map((q) => q?.session), now).map(({ market, label, open, current }) => ({ market, label, open: open && current }));
 }
 
 /** 위젯 장 상태 칩 (widgets/payload WidgetMarket 과 같은 모양) */
@@ -116,7 +122,7 @@ export function widgetChip(status: MarketStatus | null | undefined, stocks: read
 }
 
 /**
- * 점이 켜진 종목 수와, 지금 열린 세션의 거래 대상으로 확인된 종목 수 (상태 줄의 "지연" 판단).
+ * 점이 켜진 종목 수와, 지금 열린 세션의 거래 대상으로 확인된 종목 수 (상태 줄의 "지연" 판단). 경계(until)가 지난 세션은 세지 않는다 (줄 점과 같게).
  * 대상인지 모르는 종목(eligible null — 토스 정보를 못 받음, 한국거래소 애프터마켓 대상 목록 없음)은 세지 않는다:
  * 그런 종목은 이 세션에 체결이 있어야 점이 켜지므로, 점이 없다고 "지연"이라 하면 서버·앱이 멀쩡한데도 지연으로 보인다
  */
@@ -125,7 +131,7 @@ export function liveCounts(quotes: Quotes, now: number, feedOk: boolean): { live
   let eligible = 0;
   for (const q of quotes) {
     if (quoteLive(q, now, feedOk)) live++;
-    if (q?.session?.open && q.session.eligible === true) eligible++;
+    if (q?.session?.open && q.session.eligible === true && beforeUntil(q.session, now)) eligible++;
   }
   return { live, eligible };
 }

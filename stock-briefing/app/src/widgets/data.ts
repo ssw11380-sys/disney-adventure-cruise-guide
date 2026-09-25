@@ -256,13 +256,17 @@ function boardOf(v: Pick<WidgetData, "board" | "boardAt" | "fetchedAt"> | null):
   return v?.board?.length ? { at: v.boardAt ?? v.fetchedAt, list: v.board } : null;
 }
 
-/** 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단) */
+/**
+ * 마지막으로 받은 /api/widget 응답 (ETag 로 304 를 받으면 이걸 쓴다, 백그라운드 갱신이 휴장 중 호출을 건너뛸지 판단).
+ * 지금 앱의 요청 주소(WIDGET_PATH)로 받은 것만 — 주소가 바뀌기 전(OTA 전 ?indices=1)에 받은 응답은 서버가 다른 칩(달력만 본 칩)을 준 것이라,
+ * 다시 쓰면 앱이 바로 그린 세션 칩("미국 주간거래")과 위젯이 스스로 갱신할 때의 옛 칩("한국 휴장")이 최대 2시간 번갈아 보인다
+ */
 export async function readCachedPayload(apiUrl?: string): Promise<{ at: number; etag: string | null; body: WidgetPayload } | null> {
   try {
     const url = apiUrl ?? (await readSettings()).apiUrl;
     const raw = await AsyncStorage.getItem(PAYLOAD_KEY);
-    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; etag?: unknown; body?: unknown }) : null;
-    if (!v || typeof v.at !== "number" || v.apiUrl !== url || !v.body) return null;
+    const v = raw ? (JSON.parse(raw) as { at?: unknown; apiUrl?: unknown; path?: unknown; etag?: unknown; body?: unknown }) : null;
+    if (!v || typeof v.at !== "number" || v.apiUrl !== url || v.path !== WIDGET_PATH || !v.body) return null;
     return { at: v.at, etag: typeof v.etag === "string" ? v.etag : null, body: v.body as WidgetPayload };
   } catch {
     return null;
@@ -324,7 +328,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
     else throw new HttpError(res.status);
     // 모양이 다르면(예전·다른 서버) 예전 API 로
     if (!body || body.v !== 1 || !Array.isArray(body.stocks)) return legacy();
-    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, etag: res.headers.get("etag"), body })).catch(() => undefined);
+    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ at: now, apiUrl, path: WIDGET_PATH, etag: res.headers.get("etag"), body })).catch(() => undefined);
     return body;
   } finally {
     clearTimeout(timer);

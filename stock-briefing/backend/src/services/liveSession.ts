@@ -280,11 +280,25 @@ export function anySessionOpen(codes: readonly string[], status: MarketStatus | 
 /** 토스 웹 일괄 가격을 이 시간 안에 받았으면 "3초 갱신 중"으로 본다 (앱 폴링 3초 × 5번, 앱 OPEN_MAX_AGE_MS 와 같다) */
 export const POLL_FRESH_MS = 15_000;
 
+/**
+ * 세션이 시작되고 이만큼 지난 뒤의 체결만 "이번 세션 체결"로 센다.
+ * 미국 애프터마켓은 정규장 마감 시각(16:00:00, 조기 폐장이면 13:00:00)에 시작하는데, 정규장 종가 단일가 체결에 바로 이 시각이 찍힌다
+ * (뉴욕 20:00·04:00 경계와 한국 16:00 직전 시간외 종가처럼 앞 세션 체결이 경계 시각에 찍히는 것도 같다).
+ * 시작 시각부터(>=) 세면 웹소켓이 시간외 체결을 주지 않아도 종가 체결 하나로 애프터마켓 4시간 내내 "웹소켓이 이번 세션 체결을 줬다"가 되어,
+ * 가격은 공식 API 를 다시 받는 1분마다만 바뀌는데 점이 켜지고 실시간 스트림도 그 종목들을 토스 웹 폴링에서 뺐다
+ */
+export const SESSION_TRADE_GRACE_MS = 30_000;
+
+/** 체결 시각 at 이 start 에 시작한 세션의 체결인지 (시작 순간의 마감 단일가·경계에 찍힌 앞 세션 체결은 빼려고 SESSION_TRADE_GRACE_MS 뒤부터) */
+export function tradedInSession(at: number | null, start: number): boolean {
+  return at !== null && Number.isFinite(at) && Number.isFinite(start) && at > start + SESSION_TRADE_GRACE_MS;
+}
+
 export interface RealtimeInput {
   session: StockSession;
   now: number;
   /**
-   * ws: 토스 웹소켓이 이 종목을 구독 중이고 연결이 살아 있으며(priceStream.wsCovered), 이번 세션에 이 시장 체결을 웹소켓으로 받은 적이 있음
+   * ws: 토스 웹소켓이 이 종목을 구독 중이고 연결이 살아 있으며(priceStream.wsCovered), 이번 세션에 이 시장 체결을 웹소켓으로 받은 적이 있음(tradedInSession)
    * (주간거래·프리·애프터 체결을 웹소켓이 주는지 확인하지 못해 실제로 받은 뒤에만 — StockService 가 정한다).
    * polledAt: 토스 웹 가격을 마지막으로 받은 시각
    */
@@ -298,7 +312,7 @@ export interface RealtimeInput {
    * 토스 웹 가격은 받은 시각이 찍혀 체결 증거가 아니므로 여기에 넣지 않는다 — 넣으면 이번 거래일에 아직 체결이 없는 종목이 늘 꺼진다
    */
   held: boolean;
-  /** 실제 체결 시각의 증거 (웹소켓 체결 시각·공식 API 마지막 체결 시각·3초 갱신에서 본 가격 변화). 자격을 모를 때만 쓴다 */
+  /** 실제 체결 시각의 증거 (웹소켓 체결 시각·공식 API 마지막 체결 시각·3초 갱신에서 본 가격 변화). 자격을 모를 때만 쓴다 (이번 세션 체결인지는 tradedInSession) */
   tradedAt: number | null;
 }
 
@@ -313,6 +327,5 @@ export function realtimeOf(i: RealtimeInput): boolean {
   const polled = i.feed.polledAt !== null && Math.abs(i.now - i.feed.polledAt) <= POLL_FRESH_MS;
   if (!i.feed.ws && !polled) return false;
   if (s.eligible !== null) return s.eligible;
-  const start = s.start ? Date.parse(s.start) : NaN;
-  return i.tradedAt !== null && Number.isFinite(start) && i.tradedAt >= start;
+  return tradedInSession(i.tradedAt, s.start ? Date.parse(s.start) : NaN);
 }

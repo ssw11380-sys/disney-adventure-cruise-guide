@@ -60,20 +60,23 @@ export function useFeedState(query: QueryLike, quotes: readonly (Quote | null | 
  *    세션은 위젯 칩(marketChip)과 같은 sessionViews 로 고른다 → 칩이 세션 이름이면 여기 맨 앞 세션과 같은 말
  *    초록 점은 점이 켜진 종목이 있고 앱이 값을 제때 받을 때만
  *  - 예전 서버: "실시간 · 14:03:21 · 보유 17". 체결이 30초 끊기면 5초 안에 "지연 3초"/"지연"으로 바뀐다
+ * feed: 줄의 점과 같은 시각·수신 상태 (화면의 useFeedState). 주면 세션·점 수를 그 값으로 따진다 — 세션 경계에서 줄 점이 꺼지는 순간 상태 줄도 같이 바뀌게
+ * (5초마다 읽는 시각만 쓰면 경계 뒤 최대 5초 동안 점은 모두 꺼졌는데 "실시간 N종목"으로 남았다)
  */
-export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix, quotes }: { query: QueryLike; open: boolean; closedLabel: string; maxAgeMs: (fresh: boolean) => number; suffix: string; quotes?: readonly (Quote | null)[] }) {
+export function LiveStatus({ query, open, closedLabel, maxAgeMs, suffix, quotes, feed }: { query: QueryLike; open: boolean; closedLabel: string; maxAgeMs: (fresh: boolean) => number; suffix: string; quotes?: readonly (Quote | null)[]; feed?: { now: number; feedOk: boolean } }) {
   const t = useTheme();
   const stream = useLiveStream();
   const now = useNow(5_000);
   const fresh = streamFresh(stream, now);
   const conn = connection(query, now, maxAgeMs(fresh));
-  const sessions = quotes ? marketSessions(quotes, now) : [];
+  const at = feed?.now ?? now;
+  const sessions = quotes ? marketSessions(quotes, at) : [];
   let s: { text: string; tone: LiveTone };
   let warn: boolean;
   if (sessions.length > 0) {
     // 줄의 점과 같은 기준 (useFeedState · quoteLive)
-    const feedOk = feedHealthy(stream.connected, connection(query, now, OPEN_MAX_AGE_MS));
-    const counts = liveCounts(quotes ?? [], now, feedOk);
+    const feedOk = feed?.feedOk ?? feedHealthy(stream.connected, connection(query, now, OPEN_MAX_AGE_MS));
+    const counts = liveCounts(quotes ?? [], at, feedOk);
     s = sessionStatus({ sessions, liveCount: counts.live, eligibleCount: counts.eligible, feedOk, offline: conn.offline });
     warn = s.tone === "offline" || s.tone === "delayed";
   } else {

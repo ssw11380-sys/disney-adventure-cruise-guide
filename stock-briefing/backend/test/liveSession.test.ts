@@ -241,6 +241,9 @@ describe("실시간 판단 realtimeOf", () => {
     expect(realtimeOf({ ...base, session: s, tradedAt: NOW - 60_000 })).toBe(true); // 20:59 체결 (세션 시작 20:00 뒤)
     expect(realtimeOf({ ...base, session: s, tradedAt: Date.parse("2026-09-24T19:58:00-04:00") })).toBe(false); // 애프터마켓 체결
     expect(realtimeOf({ ...base, session: s, tradedAt: null })).toBe(false);
+    // 세션 경계(20:00:00)에 찍힌 체결은 앞 세션 체결일 수 있어 30초 뒤부터 센다
+    expect(realtimeOf({ ...base, session: s, tradedAt: Date.parse("2026-09-24T20:00:00-04:00") })).toBe(false);
+    expect(realtimeOf({ ...base, session: s, tradedAt: Date.parse("2026-09-24T20:00:31-04:00") })).toBe(true);
   });
   it("세션이 닫혀 있으면 아님", () => {
     const s = sessionAt("VRT", new Date(Date.parse("2026-09-26T12:00:00-04:00")), { stock: US_DAY });
@@ -487,7 +490,7 @@ describe("보고된 장면: 09:59 KST 잔고 (미국 주간거래 중, 한국 �
     quick.facts.set("VRT", { daytime: true, nxt: false, halted: false, nxtHalted: false, etp: false, exchange: null, pricedAt: null });
     const service = new StockService({ db, quotes, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, quickPrices: quick, now: () => new Date(t.now) });
     expect((await service.listWithQuotes())[0]!.quote!.session!.phase).toBe("after");
-    // 뉴욕 20:00:07 — 주간거래 시작. 웹소켓 체결이 막 왔다 (이 시장 체결 증거)
+    // 뉴욕 20:00:07 — 주간거래 시작. 웹소켓 체결이 막 왔다
     t.now = Date.parse("2026-09-25T09:00:07+09:00");
     live.aliveAt = new Date(t.now).toISOString();
     live.ticks.set("VRT", { code: "VRT", price: 100.5, volume: 1, timestamp: "2026-09-25T09:00:06+09:00", receivedAt: t.now });
@@ -502,7 +505,12 @@ describe("보고된 장면: 09:59 KST 잔고 (미국 주간거래 중, 한국 �
     release!();
     await new Promise((r) => setTimeout(r, 20));
     const fresh = (await service.listWithQuotes())[0]!.quote!;
-    expect(fresh).toMatchObject({ realtime: true, price: 100.5 });
+    expect(fresh.price).toBe(100.5);
+    // 점은 세션 시작 30초 뒤의 웹소켓 체결부터 믿는다 (20:00:06 체결은 경계에 찍힌 앞 세션 체결일 수 있다 — tradedInSession). 토스 웹 가격도 없어 아직 끈다
+    expect(fresh.realtime).toBe(false);
+    t.now = Date.parse("2026-09-25T09:00:40+09:00");
+    live.ticks.set("VRT", { code: "VRT", price: 100.6, volume: 1, timestamp: "2026-09-25T09:00:39+09:00", receivedAt: t.now });
+    expect((await service.listWithQuotes())[0]!.quote!).toMatchObject({ realtime: true, price: 100.6 });
   });
 
   it("토스 웹소켓이 끊기고 토스 웹 가격도 못 받으면 아무 종목도 실시간이 아니다", async () => {
@@ -806,13 +814,119 @@ describe("초록 점이 켜지면 가격도 따라간다 (웹소켓 마지막 �
     }
   });
 
-  it("웹소켓 체결 목록: 이번 세션에 그 시장 체결을 웹소켓으로 받은 종목(또는 세션이 닫힌 종목)만 토스 웹 폴링 없이 둔다 — 실시간 스트림도 같은 기준", async () => {
+  it("웹소켓 체결 목록: 이번 세션 웹소켓 체결이 가격 출처인 종목(또는 세션이 닫힌 종목)만 토스 웹 폴링 없이 둔다 — 실시간 스트림도 같은 기준", async () => {
     const quiet = await scenario({ sessionTicks: false });
     // 미국: 이번 세션(뉴욕 20:00 뒤) 웹소켓 체결이 없다 → 토스 웹으로 폴링. NAVER: 추석 휴장이라 폴링할 것이 없다
     expect([...(await quiet.service.wsServed([...US_HOLDINGS, NAVER]))].sort()).toEqual([NAVER]);
+    // 이 시장 체결을 웹소켓이 이번 세션에 줘도 종목마다 본다: VRT·QNT(방금 체결)만 빼고, APH(마지막 체결이 20:00 전)·체결이 없는 종목은 폴링 (가격 출처 liveTick 과 같다)
     const busy = await scenario();
-    expect([...(await busy.service.wsServed([...US_HOLDINGS, NAVER]))].sort()).toEqual([...US_HOLDINGS, NAVER].sort());
+    expect([...(await busy.service.wsServed([...US_HOLDINGS, NAVER]))].sort()).toEqual([NAVER, "QNT", "VRT"]);
     const down = await scenario({ live: false });
     expect((await down.service.wsServed([...US_HOLDINGS, NAVER])).size).toBe(0);
+  });
+});
+
+// ── 검증 지적: 미국 애프터마켓의 시작 시각(정규장 마감 16:00:00, 조기 폐장 13:00:00)에 찍힌 종가 단일가 체결을 "이번 세션 체결"로 셈 ──────
+// 웹소켓이 시간외 체결을 주지 않아도 등록 종목 하나가 종가 체결을 웹소켓으로 받으면, 애프터마켓 4시간 내내 미국 종목 전부를
+// "웹소켓이 이번 세션 체결을 줬다"로 보고 점을 켰다(가격은 공식 API 를 다시 받는 1분마다만 바뀜). 실시간 스트림도 그 종목들을 폴링에서 뺐다
+
+/**
+ * 미국 종목들. 웹소켓은 붙어 살아 있지만 ws 에 준 체결만 있다 (시간외 체결을 주지 않음 — 받은 시각 = 체결 시각).
+ * 공식 API 는 시간외 체결도 안다: rest 를 바꾸면 다음에 다시 받을 때(1분 ttl) 그 값. 토스 웹 가격은 poll 이 넣는다 (받은 시각 = 지금)
+ */
+async function afterClose(o: { now: string; close: string; ws: Record<string, string>; codes: string[]; kr: [string, string]; us: [string, string] }) {
+  const t = { now: Date.parse(o.now) };
+  const db = await createMigratedDb(":memory:");
+  await db
+    .insertInto("registered_stocks")
+    .values(o.codes.map((code, i) => ({ code, name: code, market: "NYSE", quantity: 1, avg_price: 100, memo: null, created_at: `2026-09-01T00:00:${String(i).padStart(2, "0")}+09:00`, updated_at: "2026-09-01T00:00:00+09:00" })))
+    .execute();
+  const rest: Record<string, { price: number; asOf: string }> = Object.fromEntries(o.codes.map((c) => [c, { price: 100, asOf: o.ws[c] ?? o.close }]));
+  const quotes: QuoteProvider = {
+    name: "toss-openapi",
+    getQuote: async () => {
+      throw new ProviderError("toss-openapi", "unused");
+    },
+    getQuotes: async (cs: string[]) => new Map(cs.map((c): [string, Quote] => [c, { ...makeQuote(c, "toss-openapi", rest[c]!.price), currency: "USD", asOf: rest[c]!.asOf }])),
+    getCandles: async () => {
+      throw new ProviderError("toss-openapi", "unused");
+    },
+  };
+  const live = new (class extends EventEmitter implements LiveTicks {
+    get = (c: string): LiveTick | null => (o.ws[c] ? { code: c, price: 100, volume: 1, timestamp: o.ws[c]!, receivedAt: Date.parse(o.ws[c]!) } : null);
+    setCodes() {}
+    status() {
+      const a = new Date(t.now).toISOString();
+      return { enabled: true, connected: true, subscribed: o.codes.map((c) => `trade:us:${c}`), lastMessageAt: a, lastAliveAt: a, lastError: null };
+    }
+  })();
+  const quick = new ScenarioQuick(() => t.now);
+  const cal = { status: async () => calendar(new Date(t.now), o.kr, o.us) };
+  const service = new StockService({ db, quotes, search: new FakeSearchProvider(), master: new FakeMasterProvider(), live, quickPrices: quick, calendar: cal, now: () => new Date(t.now) });
+  /** 토스 웹 가격을 price 로 (방금 받음) 바꾸고 잔고를 한 번 받는다 (토스 웹 장애면 가격은 들어가지 않는다) */
+  const poll = async (price: number) => {
+    for (const c of o.codes) {
+      quick.prices.set(c, price);
+      quick.facts.set(c, { ...US_DAY, pricedAt: quick.fail ? null : t.now });
+    }
+    const list = await service.listWithQuotes();
+    return Object.fromEntries(list.map((s) => [s.code, { price: s.quote!.price, realtime: s.quote!.realtime, phase: s.quote!.session!.phase }]));
+  };
+  return { t, rest, quick, service, poll };
+}
+
+describe("미국 애프터마켓: 마감 시각에 찍힌 정규장 종가 체결은 이번 세션 웹소켓 체결이 아니다", () => {
+  // 2026-09-23(수) 16:05 EDT. 토스 달력(애플): 마감 9/23 16:00 EDT · 다음 정규장 9/24 09:30 EDT. 한국은 추석 연휴
+  const US_923: [string, string] = ["2026-09-23T20:00:00Z", "2026-09-24T13:30:00Z"];
+  const CLOSE = "2026-09-23T16:00:00-04:00";
+  /** 공식 API 가 아는 실제 시간외 가격 (15초마다) */
+  const moves = [100.71, 100.32, 100.55, 100.9, 100.34, 100.61, 100.48, 100.8];
+
+  it("토스 웹 장애: 웹소켓 마지막 체결이 종가(16:00:00)뿐이면 점을 끈다 — 1분마다만 바뀌는 가격에 점이 켜지지 않게", async () => {
+    for (const close of [CLOSE, "2026-09-23T15:59:59-04:00"]) {
+      const s = await afterClose({ now: "2026-09-23T16:05:00-04:00", close, ws: { VRT: close }, codes: ["VRT"], kr: KR_CHUSEOK, us: US_923 });
+      s.quick.fail = true;
+      const seen = [];
+      for (const p of moves) {
+        s.rest["VRT"] = { price: p, asOf: new Date(s.t.now - 2_000).toISOString() };
+        seen.push((await s.poll(p))["VRT"]!);
+        s.t.now += 15_000;
+      }
+      expect(seen.every((x) => x.phase === "after"), close).toBe(true);
+      expect(seen.map((x) => x.realtime), close).toEqual(moves.map(() => false));
+    }
+  });
+
+  it("조기 폐장(11/27 13:00 EST)도 같다: 13:00:00 종가 체결뿐이면 애프터마켓 14:00 에 끈다", async () => {
+    const us: [string, string] = ["2026-11-27T18:00:00Z", "2026-11-30T14:30:00Z"];
+    const kr: [string, string] = ["2026-11-27T11:00:00Z", "2026-11-29T23:00:00Z"];
+    const close = "2026-11-27T13:00:00-05:00";
+    const s = await afterClose({ now: "2026-11-27T14:00:00-05:00", close, ws: { VRT: close }, codes: ["VRT"], kr, us });
+    s.quick.fail = true;
+    s.rest["VRT"] = { price: 100.4, asOf: "2026-11-27T13:59:40-05:00" };
+    expect((await s.poll(100.4))["VRT"]).toMatchObject({ phase: "after", realtime: false });
+  });
+
+  it("웹소켓이 시간외 체결을 30초 넘어 주면(16:00:40) 그때부터 웹소켓을 믿는다", async () => {
+    const s = await afterClose({ now: "2026-09-23T16:01:00-04:00", close: CLOSE, ws: { VRT: CLOSE, RTX: "2026-09-23T16:00:40-04:00" }, codes: ["VRT", "RTX"], kr: KR_CHUSEOK, us: US_923 });
+    s.quick.fail = true;
+    const r = await s.poll(100);
+    expect(r["VRT"]).toMatchObject({ phase: "after", realtime: true }); // 이 시장 체결을 웹소켓이 이번 세션에 준다 — 체결이 없던 종목도
+    expect(r["RTX"]).toMatchObject({ phase: "after", realtime: true });
+  });
+
+  it("토스 웹 정상: 실시간 스트림은 종가 체결뿐인 종목을 계속 토스 웹으로 폴링한다 (wsServed 에서 뺀다)", async () => {
+    const only = await afterClose({ now: "2026-09-23T16:05:00-04:00", close: CLOSE, ws: { VRT: CLOSE }, codes: ["VRT"], kr: KR_CHUSEOK, us: US_923 });
+    expect((await only.poll(100.3))["VRT"]).toMatchObject({ price: 100.3, realtime: true }); // 토스 웹 3초 갱신으로 켜지고 가격도 따라간다
+    expect([...(await only.service.wsServed(["VRT"]))]).toEqual([]);
+  });
+
+  it("다른 종목이 시간외 체결을 웹소켓으로 받아도: 종목별로 그 종목의 웹소켓 체결이 이번 세션 것이고 조용하지 않을 때만 폴링에서 뺀다 (가격 출처 liveTick 과 같은 기준)", async () => {
+    // RTX: 16:04:50 시간외 체결(방금) · GD: 16:02:00 체결이 스냅샷에 이미 들었고 1분 넘게 조용함 · VRT: 종가 체결뿐 · NVR: 웹소켓 체결 없음
+    const ws = { RTX: "2026-09-23T16:04:50-04:00", GD: "2026-09-23T16:02:00-04:00", VRT: CLOSE };
+    const s = await afterClose({ now: "2026-09-23T16:05:00-04:00", close: CLOSE, ws, codes: ["RTX", "GD", "VRT", "NVR"], kr: KR_CHUSEOK, us: US_923 });
+    const r = await s.poll(100);
+    expect(Object.values(r).every((x) => x.realtime)).toBe(true);
+    expect([...(await s.service.wsServed(["RTX", "GD", "VRT", "NVR"]))]).toEqual(["RTX"]);
   });
 });

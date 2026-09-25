@@ -122,7 +122,7 @@ export default function StocksScreen() {
           afterCost={afterCost}
           showKrw={showKrw}
           fx={summary.fx}
-          status={<LiveStatus query={stocks} open={open} closedLabel={live.label} maxAgeMs={openMaxAge} quotes={quotes} suffix={holdingsSuffix({ held: summary.held, watch: summary.watch, stale: staleQuoteCount(stocks.data) })} />}
+          status={<LiveStatus query={stocks} open={open} closedLabel={live.label} maxAgeMs={openMaxAge} quotes={quotes} feed={{ now, feedOk }} suffix={holdingsSuffix({ held: summary.held, watch: summary.watch, stale: staleQuoteCount(stocks.data) })} />}
         />
       ) : null}
     </View>

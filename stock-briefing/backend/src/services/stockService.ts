@@ -3,7 +3,7 @@ import { EXCLUDED_KEY, parseCodes, parseTossDetail, SNAPSHOT_KEY, tossBasisFor, 
 import { KrwCostBook, type KrwCost } from "./krwCostBook.js";
 import { CandleCache } from "./candleCache.js";
 import { marketContext, tradingDate } from "./marketContext.js";
-import { keepTossCalendar, realtimeOf, sessionAt, toQuoteSession, type StockSession } from "./liveSession.js";
+import { keepTossCalendar, realtimeOf, sessionAt, toQuoteSession, tradedInSession, type StockSession } from "./liveSession.js";
 import { wsCovered } from "./priceStream.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { Db } from "../db/index.js";
@@ -90,7 +90,16 @@ interface SessionContext {
 /** 종목 하나의 지금 세션과 웹소켓을 믿어도 되는지 (sessionView) */
 interface SessionView {
   session: StockSession;
+  /** 세션 시작 시각(ms). 닫혀 있으면 NaN */
+  start: number;
   wsLive: boolean;
+}
+
+/** 열린 세션에서 웹소켓 체결을 가격 출처로 믿어도 되는지 따질 때 쓰는 값 (wsFollows) */
+interface WsTrust {
+  wsLive: boolean;
+  start: number;
+  now: number;
 }
 
 /** 스냅샷과 체결이 같은 거래일인지 (한국은 서울 날짜 — 08:00 전은 전날, 미국은 뉴욕 날짜 — 20:00 이후 주간거래는 다음 거래일. 앱 lib/marketTime 과 같다) */
@@ -847,28 +856,48 @@ export class StockService {
    * 이 종목의 지금 세션과, 웹소켓을 믿어도 되는지 (wsLive — 초록 점의 웹소켓 조건).
    * 웹소켓 구독만으로는 이 세션 체결을 준다고 볼 수 없다 (주간거래·프리·애프터 체결을 토스 웹소켓이 주는지는 확인하지 못했다) →
    * 웹소켓이 붙어 이 종목을 구독 중이고, 이번 세션에 이 시장 체결이 웹소켓으로 한 번이라도 왔을 때만. 그 전에는 토스 웹 3초 갱신으로만 본다.
+   * "이번 세션 체결"은 세션 시작 뒤 30초부터다(tradedInSession) — 미국 애프터마켓 시작 시각(16:00:00)에 찍히는 정규장 종가 체결을 세지 않게.
    * 가격 출처 고르기(liveTick)·실시간 스트림 폴링(wsServed)도 이 값을 쓴다 — 점과 가격이 같은 기준을 따르게
    */
   private sessionView(code: string, ctx: SessionContext): SessionView {
     const session = sessionAt(code, ctx.now, { calendar: ctx.calendar, stock: ctx.facts.get(code) ?? null });
     const start = session.start ? Date.parse(session.start) : NaN;
-    const wsLive = (ctx.ws?.has(code) ?? false) && Number.isFinite(start) && ctx.wsTradeAt[session.market] >= start;
-    return { session, wsLive };
+    const wsLive = (ctx.ws?.has(code) ?? false) && tradedInSession(ctx.wsTradeAt[session.market], start);
+    return { session, start, wsLive };
+  }
+
+  /**
+   * 열린 세션에서 이 종목 가격을 웹소켓 체결만으로 따라가도 되는지 — 가격 출처(liveTick)와 실시간 스트림 폴링(wsServed)이 같이 쓴다.
+   * 아니면 토스 웹 가격(3초 갱신)을 쓴다:
+   *  - 웹소켓이 이번 세션에 이 시장 체결을 준 적이 없음(wsLive 아님 — 끊김 포함)
+   *  - 이 종목의 웹소켓 체결이 없거나, 마지막 체결이 이번 세션 것이 아님(세션 시작 전 · 시작 순간의 마감 단일가 — tradedInSession) 또는 스냅샷보다 오래됨
+   *  - 이 체결이 스냅샷보다 새것이 아니고(스냅샷에 이미 든 체결) 1분 넘게 새 체결이 없음
+   */
+  private wsFollows(tick: LiveTick | null | undefined, quoteAt: number, trust: WsTrust): boolean {
+    if (!trust.wsLive || !tick) return false;
+    const wsAt = Date.parse(tick.timestamp);
+    if (!tradedInSession(wsAt, trust.start) || (!Number.isNaN(quoteAt) && wsAt < quoteAt)) return false;
+    const quiet = !Number.isNaN(quoteAt) && wsAt <= quoteAt && trust.now - tick.receivedAt > TICK_FRESH_MS;
+    return !quiet;
   }
 
   /**
    * 토스 웹 폴링 없이 웹소켓 체결만으로 가격이 따라가는 종목 (실시간 스트림 PriceStream 이 폴링에서 뺀다).
-   * 웹소켓이 붙어 구독 중이고, 세션이 닫혀 있거나(가격이 바뀌지 않음) 이번 세션에 그 시장 체결을 웹소켓으로 받았다(wsLive — 초록 점과 같은 기준).
-   * 예전에는 구독만 보고 뺐다 → 웹소켓이 이번 세션 체결을 주지 않으면(미국 주간거래 등) 초록 점은 켜졌는데 앱 가격은 30초(보정)마다만 바뀌었다
+   * 웹소켓이 붙어 구독 중이고, 세션이 닫혀 있거나(가격이 바뀌지 않음) 가격 출처가 웹소켓 체결인 종목(wsFollows — 초록 점·liveTick 과 같은 기준).
+   * 예전에는 구독만 보고 뺐다 → 웹소켓이 이번 세션 체결을 주지 않으면(미국 주간거래 등) 초록 점은 켜졌는데 앱 가격은 30초(보정)마다만 바뀌었다.
+   * 그 뒤에도 시장 단위(wsLive)로만 보아, 다른 종목이 이번 세션 체결을 받으면 체결이 없거나 조용한 종목까지 뺐다
    */
   async wsServed(codes: string[]): Promise<Set<string>> {
     if (!this.deps.live || codes.length === 0) return new Set();
     const ctx = this.sessionContext(codes, await this.calendarNow());
+    const now = ctx.now.getTime();
     return new Set(
       codes.filter((c) => {
         if (!ctx.ws?.has(c)) return false;
         const v = this.sessionView(c, ctx);
-        return !v.session.open || v.wsLive;
+        if (!v.session.open) return true;
+        const h = this.book.get(c);
+        return this.wsFollows(this.deps.live?.get(c), h ? Date.parse(h.quote.asOf) : NaN, { wsLive: v.wsLive, start: v.start, now });
       }),
     );
   }
@@ -915,7 +944,7 @@ export class StockService {
     const t = this.now().getTime();
     // 세션·웹소켓 신뢰(초록 점과 같은 기준)를 먼저 — 가격 출처도 이것으로 고른다 (열린 세션에서만. 닫힌 세션은 예전처럼 웹소켓 체결 먼저)
     const view = ctx ? this.sessionView(code, ctx) : null;
-    const trust = view?.session.open ? { wsLive: view.wsLive, start: view.session.start ? Date.parse(view.session.start) : NaN, now: t } : null;
+    const trust = view?.session.open ? { wsLive: view.wsLive, start: view.start, now: t } : null;
     const pick = this.liveTick(h.quote, quick, trust);
     let tick = pick?.tick ?? null;
     // 스냅샷(asOf)과 체결의 거래일(현지 날짜)이 다르면 섞지 않는다 — 어제 스냅샷의 전일 종가에 오늘 체결을 대면 등락이 이틀치가 된다.
@@ -964,13 +993,13 @@ export class StockService {
    * 덮어쓸 체결가. 1순위 웹소켓 체결, 2순위 REST 일괄 조회(토스 웹).
    * REST 일괄 조회는 토스 통합 가격이라 같은 기준(toss 계열)의 스냅샷에만 적용한다 — 네이버 정규장 종가에 섞이면 등락이 틀어진다.
    * 스냅샷보다 오래된 체결은 쓰지 않는다.
-   * trust(열린 세션일 때 — 초록 점과 같은 기준): 웹소켓 체결을 믿을 수 없으면 그 뒤에 받은 토스 웹 가격이 먼저다
-   *  - 웹소켓이 이번 세션에 이 시장 체결을 준 적이 없음(wsLive 아님 — 끊김 포함), 또는 이 체결이 이번 세션 시작 전 것
+   * trust(열린 세션일 때 — 초록 점과 같은 기준): 웹소켓 체결을 믿을 수 없으면(wsFollows 아님 — 실시간 스트림 wsServed 와 같은 기준) 그 뒤에 받은 토스 웹 가격이 먼저다
+   *  - 웹소켓이 이번 세션에 이 시장 체결을 준 적이 없음(wsLive 아님 — 끊김 포함), 또는 이 체결이 이번 세션 것이 아님(시작 전 · 시작 순간의 마감 단일가)
    *  - 이 체결이 스냅샷보다 새것이 아니고(스냅샷에 이미 든 체결) 1분 넘게 새 체결이 없음
    * 예전에는 웹소켓 체결이 스냅샷보다 오래되지만 않으면 먼저 써서, 지난 세션 마지막 체결 = 스냅샷 asOf 인 조용한 종목은
    * 이번 세션 내내 가격이 멈췄다 (점은 토스 웹 가격을 받는다는 이유로 켜짐)
    */
-  private liveTick(quote: Quote, quick?: Map<string, LiveTick>, trust?: { wsLive: boolean; start: number; now: number } | null): { tick: LiveTick; polled: boolean } | null {
+  private liveTick(quote: Quote, quick?: Map<string, LiveTick>, trust?: WsTrust | null): { tick: LiveTick; polled: boolean } | null {
     const quoteAt = Date.parse(quote.asOf);
     const usable = (tick: LiveTick | null | undefined): LiveTick | null => {
       if (!tick) return null;
@@ -981,11 +1010,7 @@ export class StockService {
     // polled = 토스 웹 가격 (timestamp 가 체결 시각이 아니라 받은 시각)
     const ws = usable(this.deps.live?.get(quote.code));
     const polled = quick && quote.source.startsWith("toss") ? usable(quick.get(quote.code)) : null;
-    if (ws && polled && trust && polled.receivedAt >= ws.receivedAt) {
-      const wsAt = Date.parse(ws.timestamp);
-      const wsQuiet = !Number.isNaN(quoteAt) && wsAt <= quoteAt && trust.now - ws.receivedAt > TICK_FRESH_MS;
-      if (!trust.wsLive || !(wsAt >= trust.start) || wsQuiet) return { tick: polled, polled: true };
-    }
+    if (ws && polled && trust && polled.receivedAt >= ws.receivedAt && !this.wsFollows(ws, quoteAt, trust)) return { tick: polled, polled: true };
     if (ws) return { tick: ws, polled: false };
     return polled ? { tick: polled, polled: true } : null;
   }

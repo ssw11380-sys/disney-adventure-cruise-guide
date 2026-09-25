@@ -161,6 +161,16 @@ describe("liveCounts: 점이 켜진 수와 열린 세션의 거래 대상으로 
     expect(liveCounts(list, NOW, false)).toEqual({ live: 0, eligible: 1 });
   });
 
+  it("세션 경계가 지나면(다시 받기 전) 줄 점이 꺼지는 것과 같이 상태 줄도 '실시간 N종목'·'지연'이 아니라 세션만 (회색)", () => {
+    const list = [quote("VRT", 1, { session: US_OVERNIGHT, realtime: true }), quote("RTX", 1, { session: US_OVERNIGHT, realtime: true }), quote("035420", 1, { session: KR_HOLIDAY })];
+    const end = Date.parse(US_OVERNIGHT.until!) + 500; // 뉴욕 04:00:00.5 — 서버에 다시 묻는 중 (경계 1초 뒤)
+    const c = liveCounts(list, end, true);
+    expect(c).toEqual({ live: 0, eligible: 0 }); // 끝난 세션의 거래 대상은 세지 않는다
+    const sessions = marketSessions(list, end);
+    expect(sessions.map((s) => s.open)).toEqual([false, false]);
+    expect(sessionStatus({ sessions, liveCount: c.live, eligibleCount: c.eligible, feedOk: true, offline: false })).toEqual({ text: "미국 주간거래 · 한국 휴장", tone: "closed" });
+  });
+
   it("모든 종목의 자격을 모르고 아직 체결이 없으면(주간거래가 막 시작) 상태 줄은 '지연'이 아니다", () => {
     const unknown = [quote("VRT", 1, { session: { ...US_OVERNIGHT, eligible: null }, realtime: false }), quote("035420", 1, { session: KR_HOLIDAY })];
     const c = liveCounts(unknown, NOW, true);

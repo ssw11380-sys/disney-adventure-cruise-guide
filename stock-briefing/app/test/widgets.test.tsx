@@ -395,6 +395,23 @@ describe("3-16 위젯 데이터·갱신 주기", () => {
     expect(urls.filter((u) => u.includes("/api/widget"))).toHaveLength(1);
   });
 
+  it("주소가 바뀌기 전(OTA 전 ?indices=1)에 받아 둔 응답은 다시 쓰지 않는다 — 옛 달력 칩과 새 세션 칩이 번갈아 보이지 않게", async () => {
+    // OTA 전 앱이 적어 둔 응답 (요청 주소 표시 없음): 1분 전, 달력만 본 칩
+    const old = { ...payload, market: { label: "한국 휴장", open: false, nextChangeAt: "2026-09-27T23:00:00Z", kr: false, us: false } };
+    store.set("widget.payload", JSON.stringify({ at: Date.now() - 60_000, apiUrl: API, etag: '"old"', body: old }));
+    const calls: { url: string; inm: string | null }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      calls.push({ url, inm: new Headers(init?.headers).get("if-none-match") });
+      return new Response(JSON.stringify({ ...payload, market: { label: "미국 주간거래", open: false, nextChangeAt: "2026-09-25T08:00:00Z", kr: false, us: false } }), { status: 200, headers: { etag: '"new"' } });
+    });
+    const d = await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(calls).toEqual([{ url: `${API}/api/widget?indices=1&sessions=1`, inm: null }]);
+    expect(d.market?.label).toBe("미국 주간거래");
+    // 새 주소로 받아 둔 응답은 그대로 다시 쓴다
+    await loadWidgetData({ stocks: true, briefings: true, reuse: true });
+    expect(calls).toHaveLength(1);
+  });
+
   it("예전 서버의 브리핑은 최신 순으로 (등록 순서가 아니라)", async () => {
     const mk = (code: string, createdAt: string) => ({ code, name: code, latest: { id: code.length, code, name: code, session: "morning", date: "2026-09-24", status: "ok", summary: "s", detail: "", missing: [], model: "", error: null, createdAt } });
     vi.stubGlobal("fetch", async (url: string) => {
