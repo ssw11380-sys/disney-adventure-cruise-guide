@@ -174,16 +174,56 @@ describe("넓은 창 배치 (진단 6·7번, 플래그 foldLayout)", () => {
     expect(chart(r)).toEqual(candleChartSize({ box: 600, window: { width: 933, height: 704 }, wide: true }));
   });
 
-  it("폰을 접으면(넓은 창 → 좁은 창) 바로 휴대폰 화면 크기로", () => {
-    size(933, 704);
+  it("폰을 접으면(넓은 창 → 좁은 창) 바로 휴대폰 화면 크기로 — 새 폭을 재기(onLayout) 전 첫 그림부터", () => {
+    for (const flag of [true, false, undefined]) {
+      size(933, 704);
+      h.flag = flag;
+      forgetWindowClass();
+      const r = open();
+      layoutAs(r, inner(933));
+      expect(chart(r), `${flag}`).toEqual(flag ? { width: 905, height: 352 } : { width: 720, height: 446 });
+      size(475, 751);
+      r.rerender();
+      // 잰 폭은 아직 펼쳤을 때의 905 — 예전에는 720×446 으로 그려 화면 밖으로 273dp 넘쳤다
+      expect(chart(r), `${flag}`).toEqual({ width: 447, height: 277 });
+      layoutAs(r, inner(475));
+      expect(chart(r), `${flag}`).toEqual({ width: 447, height: 277 });
+    }
+  });
+
+  it("울트라 펼침 → 접힘, 펼친 가로 → 세로도 재기 전부터 창 안에", () => {
     h.flag = true;
+    size(954, 859);
     const r = open();
-    layoutAs(r, inner(933));
-    expect(chart(r)).toEqual({ width: 905, height: 352 });
-    size(475, 751);
+    layoutAs(r, inner(954));
+    size(411, 960);
     r.rerender();
-    layoutAs(r, inner(475));
-    expect(chart(r)).toEqual({ width: 447, height: 277 });
+    expect(chart(r)).toEqual({ width: 383, height: 237 });
+
+    size(933, 704);
+    forgetWindowClass();
+    const r2 = open();
+    layoutAs(r2, inner(933));
+    size(704, 933);
+    r2.rerender();
+    expect(chart(r2)).toEqual({ width: 676, height: 419 });
+  });
+
+  it("낮은 창에서도 높이 하한 chartMinH, 폭 599 ↔ 600 에서 높이가 뛰지 않는다", () => {
+    h.flag = true;
+    const at = (w: number, hh: number) => {
+      size(w, hh);
+      forgetWindowClass();
+      const r = open();
+      layoutAs(r, inner(w));
+      return chart(r);
+    };
+    // 펼친 폴드8 가로를 위아래로 나눈 창: 예전 150
+    expect(at(933, 300)).toEqual({ width: 905, height: layout.chartMinH });
+    // 좁음(599) → 중간(600): 예전 354 → 200
+    expect(at(599, 400)).toEqual({ width: 571, height: 354 });
+    expect(at(600, 400)).toEqual({ width: 572, height: 355 });
+    expect(at(layout.mediumMin + layout.chartCapRamp, 400).height).toBe(layout.chartMinH);
   });
 });
 

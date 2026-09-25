@@ -71,6 +71,8 @@ export function CandleChart({
   // 꺼져 있거나 좁은 창(휴대폰·접힌 화면)이면 지금처럼 720 에서 멈춘다 (lib/chartLayout candleChartSize)
   const fold = useFoldLayout();
   // 차트 묶음이 실제로 받은 폭 (패널 안쪽, onLayout). 재기 전 첫 그림은 창 폭 − 패널 여백으로 어림한다 — 종목·지수 상세는 어림과 잰 값이 같다.
+  // 폰을 접어 창이 좁아졌는데 아직 다시 재지 못했으면(onLayout 이 한 박자 늦다) 잰 값 대신 창 쪽으로 줄여 화면 밖으로 넘치지 않는다.
+  // 넓은 창 높이는 창 높이 × 0.5 까지, 하한 chartMinH, 폭 600 경계에서는 서서히 (candleChartSize).
   // 부르는 쪽이 폭을 정하면(전체 화면) 재지 않는다
   const [box, setBox] = useState<number | null>(null);
   const size = candleChartSize({ box, window: { width: winW, height: winH }, wide: fold.on && isWide(fold), width: widthProp, height });
