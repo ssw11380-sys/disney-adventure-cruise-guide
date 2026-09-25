@@ -16,6 +16,7 @@ import {
   computeAccount,
   factsText,
   krPreviousDay,
+  leaders,
   pickIndices,
   sessionKo,
   summaryText,
@@ -355,7 +356,8 @@ function toBriefing(r: { id: number; briefing_date: string; session: string; sta
           dayPnl: d.dayPnl,
           dayRate: d.dayRate,
           holdings: d.holdings,
-          top: d.contributions.slice(0, 3).map((c) => ({ code: c.code, name: c.name, amount: c.amount, changeRate: c.changeRate })),
+          // 같은 방향 기여 상위 (오른 날 '기여 1위'가 손실 종목이 아니게) — 저장된 예전 행도 읽을 때 다시 고른다
+          top: leaders(d).slice(0, 3).map((c) => ({ code: c.code, name: c.name, amount: c.amount, changeRate: c.changeRate })),
           ...(d.krPreviousDay ? { krPreviousDay: true as const } : {}),
           ...(d.usPreviousDay ? { usPreviousDay: true as const } : {}),
         }

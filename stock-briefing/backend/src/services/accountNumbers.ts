@@ -434,11 +434,20 @@ const signed = (v: number, text: string) => (v > 0 ? `+${text}` : v < 0 ? `-${te
 const SESSION_KO: Record<AccountSession, string> = { morning: "오전", afternoon: "오후" };
 
 /**
+ * 요약·알림·카드의 '기여 1위·2위': 당일 손익과 같은 방향(오른 날은 올린 종목, 내린 날은 내린 종목)만 크기 순으로.
+ * 표(contributions)는 크기 순 그대로 둔다 — 오른 날 '기여 1위'가 손실 종목으로 보이지 않게. 당일 손익이 0 이면 크기 순
+ */
+export function leaders(d: { dayPnl: number; contributions: readonly AccountRow[] }): AccountRow[] {
+  const dir = Math.sign(d.dayPnl);
+  return dir === 0 ? [...d.contributions] : d.contributions.filter((c) => Math.sign(c.amount) === dir);
+}
+
+/**
  * 알림·카드용 요약 두 줄 (코드로 만든다 — 숫자가 늘 맞게). 오늘 한국 휴장이면 국내 등락이, 지난밤 미국 평일 휴장이면 미국 등락이
  * 직전 거래일 것임을 다음 줄에 밝힌다
  */
 export function summaryText(d: AccountTotals & { krPreviousDay?: boolean; usPreviousDay?: boolean }): string {
-  const top = d.contributions[0];
+  const top = leaders(d)[0];
   const line1 = `당일 ${won(d.dayPnl)}${d.dayRate !== null ? ` (${formatRate(d.dayRate)})` : ""}${top ? ` · 기여 1위 ${top.name} ${won(top.amount)}` : ""}`;
   const line2 = `총 평가금액 ${won(d.totalValue, false)}${d.fx.status === "computed" ? ` · 환율 효과 ${won(d.fx.fxEffect!)}` : ""}`;
   return [line1, line2, ...(d.krPreviousDay ? [KR_PREVIOUS_DAY_NOTE] : []), ...(d.usPreviousDay ? [US_PREVIOUS_DAY_NOTE] : [])].join("\n");
@@ -503,7 +512,7 @@ export function factsText(d: AccountData): string {
  */
 export function templateNarrative(d: AccountData): string {
   const out: string[] = [];
-  const top = d.contributions[0];
+  const top = leaders(d)[0];
   out.push(`- ${SESSION_KO[d.session]} 기준 당일 손익은 ${won(d.dayPnl)}${d.dayRate !== null ? `(${formatRate(d.dayRate)})` : ""}입니다.${top ? ` 가장 크게 기여한 종목은 ${top.name}(${won(top.amount)})입니다.` : ""}`);
   if (d.krPreviousDay) out.push("- 오늘 한국은 휴장이라 국내 종목의 당일 손익은 직전 거래일 등락입니다.");
   if (d.usPreviousDay) out.push("- 지난밤 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).");
