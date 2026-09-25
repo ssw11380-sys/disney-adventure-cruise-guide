@@ -196,10 +196,11 @@ describe("EDGAR 재무: 태그는 회사마다 하나로 (BH-03)", () => {
     const e2 = new EdgarProvider(edgarFetch({ [cikOf("HBAN")]: HBAN }).fetchFn, NOW);
     expect((await e2.getAnnualFinancials("HBAN", 5)).map((r) => r.revenue)).toEqual(years.map(() => 8_166 * M));
 
-    // 순이자이익·비이자이익도 없으면 수수료 매출을 쓰지 않고 비운다
+    // 순이자이익이 없어 순영업수익을 계산할 수 없어도(비이자이익 + 이자수익만) 수수료 매출을 쓰지 않고 비운다
     const FEE = facts({
       RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 1_562 * M)),
       InterestAndDividendIncomeOperating: years.map((y) => cy(y, 10_310 * M)),
+      NoninterestIncome: years.map((y) => cy(y, 2_175 * M)),
       NetIncomeLoss: years.map((y) => cy(y, 2_211 * M)),
     });
     const e3 = new EdgarProvider(edgarFetch({ [cikOf("HBAN")]: FEE }).fetchFn, NOW);
@@ -240,6 +241,120 @@ describe("EDGAR 재무: 태그는 회사마다 하나로 (BH-03)", () => {
       [2024, 130 * M],
       [2025, 140 * M],
     ]);
+  });
+});
+
+describe("EDGAR 재무: 은행 판별·이상한 원자료 (BH-03 검증 지적)", () => {
+  const years = [2021, 2022, 2023, 2024, 2025];
+  const bankNote = (rows: Array<{ notes?: string[] }>) => rows.some((r) => r.notes?.some((n) => n.includes("은행")));
+
+  it("ORLY: 일반 회사가 예금 이자 7M 을 이자수익 태그로 한 번 적어도 은행으로 보지 않고 매출을 그대로 쓴다", async () => {
+    const sales = [13_328, 14_410, 15_812, 16_708, 17_782];
+    const ORLY = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y, i) => cy(y, sales[i]! * M)),
+      InterestAndDividendIncomeOperating: [cy(2024, 7 * M)],
+      OperatingIncomeLoss: years.map((y) => cy(y, 3_000 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 2_200 * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: ORLY }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("IONQ", 5);
+    expect(fin.map((r) => r.revenue)).toEqual(sales.map((v) => v * M));
+    expect(fin.map((r) => r.operatingIncome)).toEqual(years.map(() => 3_000 * M));
+    expect(bankNote(fin)).toBe(false);
+  });
+
+  it("DGX·CELH: 순이자 비용·이자수익이 해마다 있어도 비이자이익이 없고 수수료 매출보다 작으면 은행이 아니다", async () => {
+    const DGX = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 9_872 * M)),
+      InterestAndDividendIncomeOperating: years.map((y) => cy(y, 25 * M)),
+      InterestIncomeExpenseNet: years.map((y) => cy(y, -201 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 871 * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: DGX }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("IONQ", 5);
+    expect(fin.map((r) => r.revenue)).toEqual(years.map(() => 9_872 * M));
+    expect(bankNote(fin)).toBe(false);
+
+    // 은행처럼 보이는 해(비이자이익 + 이자수익, 수수료 매출 없음)가 한 해뿐이고 수수료 매출이 더 큰 해가 더 많으면 은행이 아니다
+    const MIXED = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: [2022, 2023, 2024, 2025].map((y) => cy(y, 1_356 * M)),
+      InterestAndDividendIncomeOperating: years.map((y) => cy(y, 3 * M)),
+      NoninterestIncome: [cy(2021, 5 * M), cy(2024, 5 * M)],
+      NetIncomeLoss: years.map((y) => cy(y, 145 * M)),
+    });
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: MIXED }).fetchFn, NOW);
+    const mixed = await e2.getAnnualFinancials("IONQ", 5);
+    expect(mixed.map((r) => r.revenue)).toEqual([null, 1_356 * M, 1_356 * M, 1_356 * M, 1_356 * M]);
+    expect(bankNote(mixed)).toBe(false);
+  });
+
+  it("비이자이익 태그가 없는 작은 은행(FVCB)은 수수료 매출이 순이익보다 작아서 은행으로 보고, 이자수익이 매출보다 큰 적자 바이오 회사는 은행이 아니다", async () => {
+    const FVCB = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 2 * M)),
+      InterestAndDividendIncomeOperating: years.map((y) => cy(y, 113 * M)),
+      InterestIncomeExpenseNet: years.map((y) => cy(y, 56 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 15 * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("HBAN")]: FVCB }).fetchFn, NOW);
+    const bank = await e.getAnnualFinancials("HBAN", 5);
+    expect(bank.map((r) => r.revenue)).toEqual([null, null, null, null, null]);
+    expect(bankNote(bank)).toBe(true);
+
+    const BIO = facts({
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y) => cy(y, 5 * M)),
+      InterestIncomeExpenseNet: years.map((y) => cy(y, 20 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, -120 * M)),
+    });
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: BIO }).fetchFn, NOW);
+    const bio = await e2.getAnnualFinancials("IONQ", 5);
+    expect(bio.map((r) => r.revenue)).toEqual(years.map(() => 5 * M));
+    expect(bankNote(bio)).toBe(false);
+  });
+
+  it("FLS: 'Revenues' 를 해마다 0 으로 적은 회사는 같은 해 양수인 매출 항목을 쓴다 (매출이 정말 0 인 회사는 0 그대로)", async () => {
+    const sales = [3_541, 3_615, 4_321, 4_558, 4_729];
+    const FLS = facts({
+      Revenues: years.map((y) => cy(y, 0)),
+      RevenueFromContractWithCustomerExcludingAssessedTax: years.map((y, i) => cy(y, sales[i]! * M)),
+      OperatingIncomeLoss: years.map((y) => cy(y, 400 * M)),
+      NetIncomeLoss: years.map((y) => cy(y, 300 * M)),
+    });
+    const e = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: FLS }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("IONQ", 5);
+    expect(fin.map((r) => r.revenue)).toEqual(sales.map((v) => v * M));
+
+    const PRE = facts({ Revenues: years.map((y) => cy(y, 0)), NetIncomeLoss: years.map((y) => cy(y, -50 * M)) });
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("IONQ")]: PRE }).fetchFn, NOW);
+    expect((await e2.getAnnualFinancials("IONQ", 5)).map((r) => r.revenue)).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it("LYG: 음수 매출은 비우고 사유를 남긴다, ING: 매출과 똑같은 영업이익은 비워 영업이익률 100% 를 만들지 않는다", async () => {
+    const f20 = { form: "20-F" };
+    const LYG = facts(
+      {
+        Revenue: [cy(2021, 38_950 * M, f20), cy(2022, -5_346 * M, f20), cy(2023, 18_629 * M, f20)],
+        ProfitLossAttributableToOwnersOfParent: [cy(2021, 5_784 * M, f20), cy(2022, 3_827 * M, f20), cy(2023, 5_460 * M, f20)],
+      },
+      { tax: "ifrs-full", unit: "GBP" },
+    );
+    const e = new EdgarProvider(edgarFetch({ [cikOf("NVS")]: LYG }).fetchFn, NOW);
+    const lyg = await e.getAnnualFinancials("NVS", 5);
+    expect(lyg.map((r) => r.revenue)).toEqual([38_950 * M, null, 18_629 * M]);
+    expect(lyg[1]!.notes?.some((n) => n.startsWith("매출:") && n.includes("음수"))).toBe(true);
+
+    const total = [20_093, 30_418, 18_121];
+    const ING = facts(
+      {
+        Revenue: [2023, 2024, 2025].map((y, i) => cy(y, total[i]! * M, f20)),
+        ProfitLossFromOperatingActivities: [2023, 2024, 2025].map((y, i) => cy(y, (y === 2025 ? 7_000 : total[i]!) * M, f20)),
+        ProfitLossAttributableToOwnersOfParent: [2023, 2024, 2025].map((y) => cy(y, 5_000 * M, f20)),
+      },
+      { tax: "ifrs-full", unit: "EUR" },
+    );
+    const e2 = new EdgarProvider(edgarFetch({ [cikOf("NVS")]: ING }).fetchFn, NOW);
+    const ing = await e2.getAnnualFinancials("NVS", 5);
+    expect(ing.map((r) => r.operatingIncome)).toEqual([null, null, 7_000 * M]);
+    expect(ing[0]!.notes).toContain("영업이익: 회사가 매출과 같은 값으로 보고해 영업이익으로 보지 않고 비워 둠");
   });
 });
 
@@ -302,6 +417,37 @@ describe("EDGAR 외국 기업 20-F·40-F·6-K (BH-24)", () => {
     ]);
     expect(fin.at(-1)).toMatchObject({ operatingIncome: 140_905 * M, netIncome: 129_470 * M, currency: "CNY" });
     expect(JSON.stringify(fin.at(-1))).toMatch(/CNY/);
+  });
+
+  it("보고 통화를 바꾼 회사(DEO: GBP → USD)는 옛 통화 값이 더 많아도 가장 최근 해가 있는 지금 통화를 고른다", async () => {
+    const f20 = { form: "20-F" };
+    const fy = (y: number, val: number) => dur(`${y - 1}-07-01`, `${y}-06-30`, val, f20);
+    const fyi = (y: number, val: number) => inst(`${y}-06-30`, val, f20);
+    const gbpYears = [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023];
+    const usd = { 2022: 29_751, 2023: 28_270, 2024: 27_891, 2025: 27_964 } as Record<number, number>;
+    const usdYears = [2022, 2023, 2024, 2025];
+    const DEO = {
+      facts: {
+        "ifrs-full": {
+          Revenue: {
+            units: {
+              GBP: gbpYears.map((y) => fy(y, (15_000 + (y - 2016) * 1_000) * M)),
+              USD: usdYears.map((y) => fy(y, usd[y]! * M)),
+            },
+          },
+          ProfitLossAttributableToOwnersOfParent: {
+            units: { GBP: gbpYears.map((y) => fy(y, 3_000 * M)), USD: usdYears.map((y) => fy(y, 4_000 * M)) },
+          },
+          Assets: { units: { GBP: gbpYears.map((y) => fyi(y, 35_000 * M)), USD: usdYears.map((y) => fyi(y, 45_000 * M)) } },
+        },
+      },
+    };
+    const e = new EdgarProvider(edgarFetch({ [cikOf("NVS")]: DEO }).fetchFn, NOW);
+    const fin = await e.getAnnualFinancials("NVS", 5);
+    expect(fin.map((r) => [r.year, r.revenue, r.currency])).toEqual(usdYears.map((y) => [y, usd[y]! * M, "USD"]));
+    // 바꾸기 전 연도(GBP)는 섞지 않고, 빠진 이유를 가장 오래된 해에 남긴다
+    expect(fin[0]!.notes?.some((n) => n.includes("GBP"))).toBe(true);
+    expect(fin.slice(1).every((r) => !r.notes?.some((n) => n.startsWith("금액 통화")))).toBe(true);
   });
 
   it("IFRS 20-F 제출사(TSM): ifrs-full 태그를 읽는다", async () => {

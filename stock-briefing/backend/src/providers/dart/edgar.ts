@@ -59,12 +59,13 @@ const REVENUE = [
   ifrs("RevenueFromContractsWithCustomers"),
   ifrs("RevenueFromSaleOfGoods"), // 제약사(NVS) 등 제품 매출만 보고하는 IFRS 회사
 ];
-/** 은행·금융사 표시. 이 항목이 있으면 RevenueFromContract… 는 이자수익이 빠진 수수료 매출이라 매출로 쓰지 않는다 (HBAN: 순이익보다 작음) */
-const BANK_HINT = [gaap("NoninterestIncome"), gaap("InterestAndDividendIncomeOperating")];
+/** 은행·금융사의 RevenueFromContract… 는 이자수익이 빠진 수수료 매출이라 매출로 쓰지 않는다 (HBAN: 순이익보다 작음) */
 const FEE_ONLY = new Set(["RevenueFromContractWithCustomerExcludingAssessedTax", "RevenueFromContractWithCustomerIncludingAssessedTax"]);
 /** 은행 순영업수익 = 순이자이익 + 비이자이익 (JPM·BAC·WFC·SOFI 등이 Revenues·RevenuesNetOfInterestExpense 로 보고하는 값과 같은 기준) */
 const BANK_NII = gaap("InterestIncomeExpenseNet");
 const BANK_NONII = gaap("NoninterestIncome");
+/** 은행 판별에 쓰는 이자 쪽 항목: 순이자이익, 이자수익 (일반 회사도 예금 이자를 이 태그로 적는 일이 있어 크기를 같이 본다) */
+const BANK_INTEREST = [BANK_NII, gaap("InterestAndDividendIncomeOperating")];
 /** 영업이익. 세전이익은 영업이익이 아니므로 대신 쓰지 않는다 (없으면 비워 두고 사유를 남김) */
 const OPERATING = [gaap("OperatingIncomeLoss"), ifrs("ProfitLossFromOperatingActivities")];
 const NET = [gaap("NetIncomeLoss"), ifrs("ProfitLossAttributableToOwnersOfParent"), gaap("ProfitLoss"), ifrs("ProfitLoss")];
@@ -385,7 +386,8 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
     [ASSETS, false],
   ];
 
-  // 1) 통화 하나: 최근 5년 안의 연간 값이 가장 많은 통화 (외국 기업은 현지 통화 + 최근 해만 달러 환산인 경우가 많고, 보고 통화를 바꾼 회사는 지금 통화)
+  // 1) 통화 하나: 가장 최근 결산일 값이 있는 통화 (보고 통화를 바꾼 회사는 지금 통화: DEO 는 FY2024 부터 GBP → USD)
+  //    그런 통화가 여럿이면 최근 5년 안의 연간 값이 가장 많은 통화 (외국 기업은 현지 통화 + 최근 해만 달러 환산인 경우가 많다: BABA)
   const ends = new Map<string, Set<string>>();
   for (const [cs, d] of KEY)
     for (const c of cs)
@@ -397,10 +399,21 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
       }
   const lastEnd = Math.max(...[...ends.values()].flatMap((s) => [...s].map((e) => Date.parse(e))));
   const recentEnds = (s: Set<string>) => [...s].filter((e) => Date.parse(e) > lastEnd - CHOICE_WINDOW * 366 * DAY_MS).length;
+  const hasLast = (s: Set<string>) => Number([...s].some((e) => Date.parse(e) === lastEnd));
   const currency = [...ends]
     .filter(([, s]) => s.size > 0)
-    .sort((a, b) => recentEnds(b[1]) - recentEnds(a[1]) || b[1].size - a[1].size || Number(b[0] === "USD") - Number(a[0] === "USD") || a[0].localeCompare(b[0]))[0]?.[0];
+    .sort(
+      (a, b) =>
+        hasLast(b[1]) - hasLast(a[1]) ||
+        recentEnds(b[1]) - recentEnds(a[1]) ||
+        b[1].size - a[1].size ||
+        Number(b[0] === "USD") - Number(a[0] === "USD") ||
+        a[0].localeCompare(b[0]),
+    )[0]?.[0];
   if (!currency) return [];
+  // 보고 통화를 바꾼 회사: 바꾸기 전 연도는 다른 통화라 넣지 않는다 → 가장 오래된 해에 사유를 남긴다
+  const firstEnd = Math.min(...[...ends.get(currency)!].map((e) => Date.parse(e)));
+  const before = [...ends].filter(([u, s]) => u !== currency && [...s].some((e) => Date.parse(e) < firstEnd)).map(([u]) => u);
   const rowsOf = (c: Concept, d: boolean) => annual(unitsOf(c)[currency] ?? [], d);
 
   // 2) 회계연도 이름: 기본은 기간 끝 연도(52/53주 회계연도 보정). 보고서(accn)의 fy 가 이와 1 다르면(TGT·HD: 2026-01-31 에 끝난 해가 2025 회계연도)
@@ -474,16 +487,45 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
   const pick = (cs: Concept[], d: boolean) => choose(cs.map((c) => series(c, d)));
 
   // 은행·금융사: 수수료 매출(RevenueFromContract…)은 빼고, 합계 태그가 없으면 순이자이익 + 비이자이익으로 계산 (HBAN·FITB·MTB 2024~)
-  const bank = BANK_HINT.some((c) => inWindow(series(c, true)) > 0);
+  //   은행으로 보는 해: 이자수익(순이자이익)이 같은 해 수수료 매출보다 크고, 비이자이익을 보고하거나 수수료 매출이 순이익보다도 작은 해
+  //   (수수료 매출이 없는 해는 비이자이익이 있어야). 최근 5년 중 이런 해가 수수료 매출이 매출인 해보다 많을 때만 은행.
+  //   예금 이자를 이자수익 태그로 적는 일반 회사(ORLY·DGX·CELH)나 이자수익이 매출보다 큰 적자 바이오 회사는 은행으로 보지 않는다
+  const feeSeries = REVENUE.filter((c) => FEE_ONLY.has(c.name)).map((c) => series(c, true));
+  const interestSeries = BANK_INTEREST.map((c) => series(c, true));
+  const nonInterest = series(BANK_NONII, true);
+  const netSeries = NET.map((c) => series(c, true));
+  const largest = (list: Series[], y: number): number | undefined => {
+    const vals = list.flatMap((s) => (s.has(y) ? [s.get(y)!.val] : []));
+    return vals.length ? Math.max(...vals) : undefined;
+  };
+  let bankYears = 0;
+  let feeYears = 0;
+  for (let y = latest - CHOICE_WINDOW + 1; y <= latest; y++) {
+    const fee = largest(feeSeries, y);
+    const interest = largest(interestSeries, y);
+    const profit = largest(netSeries, y);
+    const bankLike =
+      interest !== undefined &&
+      (fee === undefined ? nonInterest.has(y) : interest > fee && (nonInterest.has(y) || (profit !== undefined && fee < profit)));
+    if (bankLike) bankYears++;
+    else if (fee !== undefined) feeYears++;
+  }
+  const bank = bankYears > feeYears;
   const bankRevenue: Series = new Map();
   if (bank) {
     const nii = series(BANK_NII, true);
-    for (const [y, p] of series(BANK_NONII, true)) {
+    for (const [y, p] of nonInterest) {
       const q = nii.get(y);
       if (q && q.end === p.end) bankRevenue.set(y, { end: p.end, filed: p.filed > q.filed ? p.filed : q.filed, val: q.val + p.val });
     }
   }
-  const revenueList = [...(bank ? REVENUE.filter((c) => !FEE_ONLY.has(c.name)) : REVENUE).map((c) => series(c, true)), bankRevenue];
+  // 매출이 0 이하인 값은 같은 해 다른 매출 항목이 양수면 버린다 (FLS: 'Revenues' 를 해마다 0 으로 보고, 실제 매출은 RevenueFromContract…)
+  const rawRevenue = [...(bank ? REVENUE.filter((c) => !FEE_ONLY.has(c.name)) : REVENUE).map((c) => series(c, true)), bankRevenue];
+  const revenueList = rawRevenue.map((s) => {
+    const kept: Series = new Map();
+    for (const [y, p] of s) if (p.val > 0 || !rawRevenue.some((o) => (o.get(y)?.val ?? 0) > 0)) kept.set(y, p);
+    return kept;
+  });
   const bankComputed = revenueList.length - 1;
   const revenue = choose(revenueList, true);
   const operating = pick(OPERATING, true);
@@ -498,18 +540,24 @@ export function extractFinancials(f: Json): EdgarAnnualFinancials[] {
   const years = [...new Set([...revenue.values.keys(), ...net.values.keys(), ...assets.values.keys()])].sort((a, b) => a - b);
   return years.map((year) => {
     const notes: string[] = [];
-    const revenueVal = revenue.values.get(year) ?? null;
-    const operatingVal = operating.values.get(year) ?? null;
+    const reported = revenue.values.get(year) ?? null;
+    const reportedOp = operating.values.get(year) ?? null;
+    // 회사가 태그 뜻을 다르게 쓴 원자료: 음수 매출(LYG 2022), 매출과 똑같은 영업이익(ING) → 비우고 사유를 남긴다 (영업이익률 계산에 쓰이지 않게)
+    const revenueVal = reported !== null && reported < 0 ? null : reported;
+    const operatingVal = reportedOp !== null && reported !== null && reported !== 0 && reportedOp === reported ? null : reportedOp;
     if (currency !== "USD") notes.push(`금액 통화: ${currency} (주가 통화와 다를 수 있음, 달러로 환산하지 않은 값)`);
+    if (year === years[0] && before.length) notes.push(`금액 통화: 이 해보다 앞선 연도는 다른 통화(${before.join("·")})로 보고해 넣지 않음`);
     // 비우거나 계산한 값은 사유를 남긴다 (AI 분석이 "0" 이나 "감소"로 읽지 않게)
-    if (revenueVal === null)
+    if (reported !== null && revenueVal === null) notes.push("매출: 회사가 보고한 값이 음수라 매출로 쓰지 않고 비워 둠 (해마다 기준이 다른 항목일 수 있음)");
+    else if (revenueVal === null)
       notes.push(
         bank && !bankRevenue.has(year)
           ? "매출: 은행·금융사라 이자수익이 빠진 수수료 매출은 매출로 쓰지 않았고, 순이자이익 + 비이자이익도 확인되지 않아 비워 둠"
           : "매출: 매출 합계 항목에서 이 해 값을 찾지 못해 비워 둠 (기준이 다른 값으로 채우지 않음)",
       );
     else if (revenue.from.get(year) === bankComputed) notes.push("매출: 은행·금융사라 순이자이익 + 비이자이익(순영업수익)으로 계산");
-    if (operatingVal === null) notes.push("영업이익: 영업이익 항목에서 이 해 값을 찾지 못해 비워 둠 (세전이익으로 대신하지 않음)");
+    if (reportedOp !== null && operatingVal === null) notes.push("영업이익: 회사가 매출과 같은 값으로 보고해 영업이익으로 보지 않고 비워 둠");
+    else if (operatingVal === null) notes.push("영업이익: 영업이익 항목에서 이 해 값을 찾지 못해 비워 둠 (세전이익으로 대신하지 않음)");
     const totalAssets = assets.values.get(year) ?? null;
     let totalLiabilities = liabilities.values.get(year) ?? null;
     if (totalLiabilities === null) {
