@@ -244,3 +244,101 @@ describe("잔고 화면에 연결", () => {
     expect(typeof rowOf(r, "035420").props.onLayoutRow).toBe("function");
   });
 });
+
+describe("돌아온 줄 강조 스크롤과 접고 펴기 이어 보기가 겹칠 때 (‹ › 로 넘겨 본 뒤 접거나 펴고 돌아옴)", () => {
+  /**
+   * 넓은 표(933×704)에서 맨 위 종목 SK하이닉스를 기억한 채 상세로 가서 ‹ › 로 NAVER 까지 보고, 접은 뒤(475×751) 잔고로 돌아온다.
+   * 배치가 바뀌어(넓은 표 → 휴대폰 목록) 이어 보기는 SK하이닉스로 되맞추려 하고, 돌아온 줄 강조는 NAVER 를 가운데로 스크롤하려 한다.
+   * 강조 스크롤이 이긴다: 사용자가 가장 최근에 본 종목(NAVER)이 이어 보기가 기억한 맨 위 종목(상세로 가기 전)보다 새롭고,
+   * 설계가 '마지막에 본 줄로 스크롤해 강조'다. 강조 스크롤이 움직이면 아직 못 맞춘 되맞추기는 버리고, 그 뒤 스크롤부터 다시 기억한다
+   * (useHoldingsAnchor release — 손가락으로 끌기 시작할 때와 같다)
+   */
+  const LIST_H = 600;
+  const setup = () => {
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    const r = render(<StocksScreen />);
+    const list = () => r.all().find((n) => n.type === "ScrollView" && n.props.stickyHeaderIndices)!;
+    const scrollTo = vi.fn();
+    (list().props.ref as { current: unknown }).current = { scrollTo };
+    r.act(() => (list().props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 0, width: 853, height: LIST_H } } }));
+    // 넓은 표: 보유 머리(y 500, 44) 아래 줄 44 씩 → y 544 로 내리면 맨 위 종목은 SK하이닉스
+    const heldHead = () => list().children.find((c): c is HostNode => typeof c !== "string" && c.type === "View" && typeof c.props.onLayout === "function")!;
+    (heldHead().props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 500, width: 853, height: 44 } } });
+    const rowAt = (code: string, y: number, hh: number) => (rowOf(r, code).props.onLayoutRow as (s: unknown, y: number, h: number) => void)(rowOf(r, code).props.stock, y, hh);
+    rowAt("005930", 544, 44);
+    rowAt("000660", 588, 44);
+    rowAt("035420", 632, 44);
+    (list().props.onScroll as (e: unknown) => void)({ nativeEvent: { contentOffset: { x: 0, y: 544 } } });
+    expect(holdingsAnchorMemory().code).toBe("000660");
+    // 상세로 가서 ‹ › 로 NAVER 까지 보고, 상세에 있는 동안 접는다 → 잔고로 돌아온다
+    browsed();
+    h.focused = false;
+    r.rerender();
+    h.win = { width: 475, height: 751, scale: 2.625, fontScale: 1 };
+    r.rerender();
+    h.focused = true;
+    r.rerender();
+    r.act(() => vi.advanceTimersByTime(0));
+    // 휴대폰 목록으로 다시 그려졌고(표 머리 없음) NAVER 줄이 강조 틀에 싸였다
+    expect(r.all().filter((n) => n.type === "TableHeadRow")).toHaveLength(0);
+    const box = parentOf(r, rowOf(r, "035420"));
+    expect(box.type).toBe("View");
+    expect(box).not.toBe(list());
+    scrollTo.mockClear();
+    (list().props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 0, width: 475, height: LIST_H } } });
+    // 휴대폰 목록: 보유 머리(y 300, 40) 아래 줄 58 씩
+    (heldHead().props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 300, width: 475, height: 40 } } });
+    const markRow = () => (box.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 456, width: 475, height: 58 } } });
+    const markY = Math.round(456 - (LIST_H - 58) / 2);
+    return { r, list, scrollTo, rowAt, markRow, markY };
+  };
+
+  it("강조 줄이 먼저 자리를 알리면: 강조 스크롤만 하고, 뒤이어 온 이어 보기 줄 자리로 되맞추지 않는다 (강조 스크롤을 덮지 않는다)", () => {
+    const { list, scrollTo, rowAt, markRow, markY } = setup();
+    rowAt("005930", 340, 58);
+    markRow();
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: markY, animated: true });
+    // 이어 보기가 기다리던 SK하이닉스 줄이 이제 자리를 알린다 — 예전에는 여기서 y 358 로 되맞춰 강조 스크롤을 덮었다
+    rowAt("000660", 398, 58);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: markY, animated: true });
+    // 강조 스크롤이 움직이는 대로 맨 위 종목을 다시 기억한다 (y 420 → 맨 위는 NAVER)
+    (list().props.onScroll as (e: unknown) => void)({ nativeEvent: { contentOffset: { x: 0, y: 420 } } });
+    expect(holdingsAnchorMemory().code).toBe("035420");
+  });
+
+  it("이어 보기가 먼저 되맞춘 뒤 강조 줄이 자리를 알리면: 강조 스크롤이 마지막이고, 그 뒤 스크롤부터 다시 기억한다", () => {
+    const { list, scrollTo, rowAt, markRow, markY } = setup();
+    rowAt("005930", 340, 58);
+    rowAt("000660", 398, 58);
+    // 이어 보기: SK하이닉스가 머리(40) 바로 아래로
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: 358, animated: false });
+    markRow();
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: markY, animated: true });
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    // 되맞춘 뒤 멈춰 두던 기억 갱신도 강조 스크롤이 풀었다 → 강조 스크롤 자리로 기억 (예전에는 SK하이닉스에 머물렀다)
+    (list().props.onScroll as (e: unknown) => void)({ nativeEvent: { contentOffset: { x: 0, y: 420 } } });
+    expect(holdingsAnchorMemory().code).toBe("035420");
+  });
+
+  it("‹ › 를 쓰지 않았으면(강조 없음) 접고 펼 때 이어 보기는 지금처럼 되맞춘다", () => {
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    const r = render(<StocksScreen />);
+    const list = () => r.all().find((n) => n.type === "ScrollView" && n.props.stickyHeaderIndices)!;
+    const scrollTo = vi.fn();
+    (list().props.ref as { current: unknown }).current = { scrollTo };
+    const heldHead = () => list().children.find((c): c is HostNode => typeof c !== "string" && c.type === "View" && typeof c.props.onLayout === "function")!;
+    (heldHead().props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 500, width: 853, height: 44 } } });
+    const rowAt = (code: string, y: number, hh: number) => (rowOf(r, code).props.onLayoutRow as (s: unknown, y: number, h: number) => void)(rowOf(r, code).props.stock, y, hh);
+    rowAt("005930", 544, 44);
+    rowAt("000660", 588, 44);
+    (list().props.onScroll as (e: unknown) => void)({ nativeEvent: { contentOffset: { x: 0, y: 544 } } });
+    h.win = { width: 475, height: 751, scale: 2.625, fontScale: 1 };
+    r.rerender();
+    returnTo(r);
+    (heldHead().props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 300, width: 475, height: 40 } } });
+    rowAt("005930", 340, 58);
+    rowAt("000660", 398, 58);
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: 358, animated: false });
+  });
+});

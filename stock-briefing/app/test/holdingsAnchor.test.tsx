@@ -106,6 +106,30 @@ describe("이어 보기 훅 (useHoldingsAnchor)", () => {
     expect(holdingsAnchorMemory().code).toBe("C");
   });
 
+  it("release(다른 쪽 스크롤 — 돌아온 줄 강조): 아직 못 맞춘 되맞추기를 버리고, 그 뒤 스크롤부터 다시 기억한다", () => {
+    const r = render(<Probe mode="list" />);
+    const scrollTo = vi.fn();
+    out.a!.ref.current = { scrollTo } as never;
+    out.a!.head("held", layout(400, 66));
+    rows(58, 466, CODES).forEach((p) => out.a!.row(p.code, p.section, p.y, p.h));
+    out.a!.onScroll(scroll(466 + 4 * 58 - 66));
+    expect(holdingsAnchorMemory().code).toBe("E");
+    // 펼침: E 로 되맞출 준비 → 줄을 재기 전에 다른 쪽이 스크롤 자리를 정한다
+    r.rerender(<Probe mode="table-1" />);
+    out.a!.release();
+    out.a!.head("held", layout(52, 40));
+    rows(44, 92, CODES).forEach((p) => out.a!.row(p.code, p.section, p.y, p.h));
+    // 뒤늦게 줄을 재어도 되맞추지 않는다 (다른 쪽 스크롤을 덮지 않는다)
+    expect(scrollTo).not.toHaveBeenCalled();
+    // 그 스크롤이 간 자리의 맨 위 종목을 기억한다
+    out.a!.onScroll(scroll(92 + 2 * 44 - 40));
+    expect(holdingsAnchorMemory()).toEqual({ mode: "table-1", code: "C" });
+    // 늘 같은 함수 (줄 memo 비교를 깨지 않게)
+    const before = out.a!.release;
+    r.rerender(<Probe mode="table-1" />);
+    expect(out.a!.release).toBe(before);
+  });
+
   it("되맞춘 뒤 끌기가 아닌 스크롤(화면 읽기 자동 스크롤·휠·키보드)로도 줄 반 개 넘게 옮기면 다시 기억한다", () => {
     const r = render(<Probe mode="list" />);
     const scrollTo = vi.fn();

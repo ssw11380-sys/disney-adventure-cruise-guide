@@ -12,6 +12,8 @@ import { foldDetail } from "@/tokens";
  *  - 잔고 화면이 다시 보일 때 한 번 읽는다. 그 줄이 자리(onLayout)를 알려 주면 목록 칸 가운데쯤으로 한 번만 스크롤한다
  *    (등락률순이면 체결마다 줄 자리가 바뀌어도 다시 스크롤하지 않는다)
  *  - 테두리 강조는 foldDetail.returnMarkMs 뒤 사라진다. 화면 읽기(TalkBack)에는 '마지막에 본 종목, 이름' 을 알린다
+ *  - 스크롤은 부르는 쪽이 준 scrollTo 로 한다. 잔고 화면은 그 전에 접고 펴기 이어 보기의 남은 되맞추기를 버린다(useHoldingsAnchor release) —
+ *    상세에 있는 동안 접거나 펴서 돌아오면 둘이 함께 움직이는데, 뒤늦게 온 되맞추기가 이 스크롤을 덮지 않게 (강조 스크롤이 이긴다)
  */
 export interface ReturnMark {
   /** 강조 중인 종목 코드 (없으면 null) */

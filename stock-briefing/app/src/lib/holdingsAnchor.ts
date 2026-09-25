@@ -83,6 +83,11 @@ export interface HoldingsAnchor {
    * 되맞춘 뒤 멈춰 두었던 기억 갱신을 다시 켠다
    */
   onScrollBeginDrag: () => void;
+  /**
+   * 다른 쪽이 스크롤 자리를 정했다 (잔고로 돌아온 줄 강조 — components/ReturnMark). 손가락으로 끌기 시작할 때와 같이
+   * 아직 못 맞춘 되맞추기는 버리고 기억 갱신 멈춤을 푼다 → 뒤늦게 온 줄 자리로 되맞춰 그 스크롤을 덮지 않고, 그 스크롤이 간 자리부터 다시 기억한다
+   */
+  release: () => void;
   /** 줄 위치 (스크롤 내용 기준 y) */
   row: (code: string, section: string, y: number, h: number) => void;
   /** 구역 머리 위치 */
@@ -162,6 +167,7 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
     memory.code = topAnchor(list, hs, y);
   }, []);
 
+  // 끌기 시작 · 다른 쪽 스크롤(release): 아직 못 맞춘 되맞추기를 버리고, 되맞춘 뒤 멈춰 둔 기억 갱신을 다시 켠다
   const onScrollBeginDrag = useCallback(() => {
     pending.current = null;
     hold.current = false;
@@ -192,7 +198,7 @@ export function useHoldingsAnchor(mode: AnchorMode | null): HoldingsAnchor {
     for (const code of [...rows.current.keys()]) if (!codes.has(code)) rows.current.delete(code);
   }, []);
 
-  return useMemo(() => ({ ref, keep, onScroll, onScrollBeginDrag, row, head }), [keep, onScroll, onScrollBeginDrag, row, head]);
+  return useMemo(() => ({ ref, keep, onScroll, onScrollBeginDrag, release: onScrollBeginDrag, row, head }), [keep, onScroll, onScrollBeginDrag, row, head]);
 }
 
 /** 되맞춘 자리에서 이만큼(줄 반 개, dp) 넘게 움직이면 사용자가 옮긴 것으로 본다 */

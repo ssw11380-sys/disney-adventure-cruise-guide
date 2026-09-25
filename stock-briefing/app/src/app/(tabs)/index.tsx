@@ -161,8 +161,14 @@ export default function StocksScreen() {
     </View>
   ) : null;
   // 종목 상세에서 ‹ › 로 넘겨 본 뒤 돌아오면 마지막에 본 줄로 스크롤해 잠깐 강조 (3-42, ‹ › 를 안 썼으면 지금 그대로)
-  // 목록 ref 는 이어 보기(anchor)와 같은 것을 쓴다 (ScrollView 에는 ref 를 하나만 달 수 있다)
-  const mark = useReturnMark((y) => anchor.ref.current?.scrollTo({ y, animated: true }));
+  // 목록 ref 는 이어 보기(anchor)와 같은 것을 쓴다 (ScrollView 에는 ref 를 하나만 달 수 있다).
+  // 상세에 있는 동안 접거나 펴서 돌아오면 이어 보기의 되맞추기와 겹친다 → 강조 스크롤이 이긴다: 가장 최근에 본 종목이
+  // 이어 보기가 기억한 맨 위 종목(상세로 가기 전)보다 새롭고, 설계가 '마지막에 본 줄로 스크롤'이다. 강조 스크롤 때 이어 보기의
+  // 남은 되맞추기를 버리고(anchor.release — 끌기 시작과 같다), 그 스크롤이 간 자리부터 다시 기억한다
+  const mark = useReturnMark((y) => {
+    anchor.release();
+    anchor.ref.current?.scrollTo({ y, animated: true });
+  });
 
   const view = viewState(stocks);
   if (view === "loading")
