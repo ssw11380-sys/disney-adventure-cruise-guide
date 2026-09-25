@@ -6,8 +6,9 @@ import { useDiscoverThemes } from "@/api/hooks";
 import type { DiscoverMarket, ThemeKind, ThemePeriod, ThemeSummary } from "@/api/types";
 import { Empty, ErrorView } from "@/components/ui";
 import { speakRate } from "@/lib/a11y";
-import { heatColumns, themeListColumns } from "@/lib/discoverColumns";
+import { heatColumns, themeLeaderLineW, themeListColumns } from "@/lib/discoverColumns";
 import { formatDateKo, formatPct } from "@/lib/format";
+import { useSticky } from "@/lib/useSticky";
 import { changeColor, font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { DISCLAIMER } from "@/components/Screen";
 import { StatusLine, usePull } from "./shared";
@@ -26,7 +27,8 @@ const PERIOD_WORD: Record<ThemePeriod, string> = { day: "오늘", week: "1주", 
  * 테마·업종 보드: [테마|업종] · 기간(오늘/1주/1개월) · 보기(목록/히트맵) · 정렬(상승/하락).
  * 머리에 전체 분포(오른 테마 vs 내린 테마 막대)와 가장 강한·약한 테마를 보여 준 뒤, 목록 또는 색 타일 히트맵을 그린다.
  * 넓은 창(3-42, wideW = 보드가 받은 폭 — 플래그 foldLayout 이 켜진 폭 600 이상에서만 부르는 쪽이 준다):
- *  - 히트맵 칸 수 = 폭 ÷ 150 (접은 화면은 지금처럼 3칸) · 목록은 2칸
+ *  - 히트맵 칸 수 = 폭 ÷ 150 (접은 화면은 지금처럼 3칸) · 목록은 2칸 (한 칸에 들어가는 만큼만 대표 종목, 등락률은 말줄임 없음)
+ *  - 칸 수는 기준선에서 켜기·끄기 여유(foldScreens.hysteresis)를 둔다
  *  - 테마/업종·기간·보기 버튼은 폭도 44 이상 (진단 34)
  * wideW 가 없으면 지금과 똑같다
  */
@@ -34,10 +36,14 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
   const t = useTheme();
   const fontScale = useFontScale();
   const wide = wideW !== undefined;
-  // 히트맵 칸 수: 좌우 여백(heatRow)을 뺀 폭으로
-  const heatCols = wide ? heatColumns(wideW - 2 * HEAT_PAD, fontScale) : 3;
-  // 목록 칸 수: 한 칸이 접은 화면보다 좁아지지 않을 때만 두 칸 (폴드8 펼침 세로 704 는 한 칸)
-  const listCols = wide ? themeListColumns(wideW, fontScale) : 1;
+  // 히트맵 칸 수: 좌우 여백(heatRow)을 뺀 폭으로. 목록 칸 수: 한 칸이 themeCellMin 이상이면 두 칸.
+  // 둘 다 기준선 근처에서는 바로 전 값을 지킨다 (히스테리시스 — 칸 수가 바뀌면 목록을 새로 만들어 스크롤 위치를 잃으므로)
+  const heatSticky = useSticky(wide ? wideW - 2 * HEAT_PAD : 0, (w) => heatColumns(w, fontScale));
+  const listSticky = useSticky(wide ? wideW : 0, (w) => themeListColumns(w, fontScale));
+  const heatCols = wide ? heatSticky : 3;
+  const listCols = wide ? listSticky : 1;
+  // 여러 칸이면 한 칸의 대표 종목 줄 폭 (줄마다 들어가는 만큼만 대표 종목을 보이고, 등락률은 말줄임 없이)
+  const lineW = wide && listCols > 1 ? themeLeaderLineW(wideW / listCols, fontScale) : 0;
   const [kind, setKind] = useState<ThemeKind>("theme");
   const [period, setPeriod] = useState<ThemePeriod>("day");
   const [view, setView] = useState<"list" | "heat">("list");
@@ -70,8 +76,12 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
       ),
     [market, shownKind, shownPeriod],
   );
-  // 여러 칸 목록의 칸 모양: 칸 폭을 나눠 갖고(마지막 줄 한 칸도 늘어나지 않게), 마지막 칸이 아니면 오른쪽에 구분선. 줄마다 같은 객체 (ThemeRow memo 유지)
-  const cells = useMemo(() => Array.from({ length: listCols }, (_, i) => ({ width: `${100 / listCols}%` as const, divider: i < listCols - 1 })), [listCols]);
+  // 여러 칸 목록의 칸 모양: 칸 폭을 나눠 갖고(마지막 줄 한 칸도 늘어나지 않게), 마지막 칸이 아니면 오른쪽에 구분선, 대표 종목 줄 폭.
+  // 줄마다 같은 객체 (ThemeRow memo 유지)
+  const cells = useMemo(
+    () => Array.from({ length: listCols }, (_, i) => ({ width: `${100 / listCols}%` as const, divider: i < listCols - 1, lineW })),
+    [listCols, lineW],
+  );
   const renderRow = useCallback(
     ({ item, index }: { item: ThemeSummary; index: number }) =>
       listCols > 1 ? (

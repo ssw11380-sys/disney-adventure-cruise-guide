@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature, useStocks } from "@/api/hooks";
 import { AllocationCard } from "@/components/AllocationCard";
 import { usePull } from "@/components/Freshness";
@@ -11,9 +12,12 @@ import { allocationGrid, FOLD_COL_GAP } from "@/lib/foldScreens";
 import { formatQuote, formatWon } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { useSettings } from "@/lib/settings";
+import { clampScale } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
+import { useSticky } from "@/lib/useSticky";
 import { isWide } from "@/lib/windowClass";
 import { font, space, useTheme } from "@/theme";
+import { foldScreens } from "@/tokens";
 
 /**
  * 비중 보기 (플래그 allocationView, 잔고 탭 계좌 평가의 '비중' 버튼): 국내·해외 / 통화 / 업종 / 종목별 원 차트와 범례 표.
@@ -37,10 +41,20 @@ function AllocationBody() {
   const { afterCost } = useSettings();
   const { pulling, onPull } = usePull(stocks.refetch);
   const a = useMemo(() => allocation(stocks.data ?? [], afterCost), [stocks.data, afterCost]);
-  // 넓은 창(3-42, 플래그 foldLayout + 폭 600 이상): 카드 4장을 2×2 격자로, 원 옆에 범례 → 4장이 한 화면에. 좁은 창은 지금 그대로
+  // 넓은 창(3-42, 플래그 foldLayout + 폭 600 이상): 카드 4장을 2×2 격자로 → 4장이 한 화면에. 좁은 창은 지금 그대로.
+  // 범례 이름 칸을 먼저 확보한다: 원 옆에 이름 칸이 넉넉하면 원 옆 범례, 아니면 원 아래 범례 + 남는 높이만큼 원을 키운다
   const fold = useFoldLayout();
-  const { width, fontScale } = useWindowDimensions();
-  const grid = fold.on && isWide(fold) ? allocationGrid(width, fontScale) : null;
+  const { width, height, fontScale } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const wide = fold.on && isWide(fold);
+  const room = useMemo(() => {
+    const rows = [a.charts.slice(0, 2), a.charts.slice(2, 4)].filter((r) => r.length).map((r) => Math.max(...r.map((c) => c.slices.length)));
+    // 격자가 쓸 높이 = 창 − 시스템 막대(위·아래) − 화면 머리·요약·고지 어림 (글자가 크면 그만큼 크게 잡는다)
+    return { height: height - insets.top - Math.max(insets.bottom, space.sm) - Math.round(foldScreens.allocChromeH * clampScale(fontScale)), rows };
+  }, [a.charts, height, insets.top, insets.bottom, fontScale]);
+  // 원 옆·원 아래 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스)
+  const besideSticky = useSticky(width, (w) => (allocationGrid(w, fontScale, room).beside ? 1 : 0));
+  const grid = wide ? allocationGrid(width, fontScale, room, besideSticky === 1) : null;
 
   const view = viewState(stocks);
   if (view === "loading")

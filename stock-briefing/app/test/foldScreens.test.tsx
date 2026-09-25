@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   showKrw: false,
   params: {} as Record<string, string>,
   stocks: [] as unknown[],
+  /** 테마 목록을 바꿔 볼 때 (null = 기본 THEMES) */
+  themes: null as unknown[] | null,
   push: vi.fn(),
 }));
 
@@ -198,8 +200,9 @@ const THEMES: ThemeList["themes"] = Array.from({ length: 7 }, (_, i) => ({
   down: 3 + i,
   leaders: [{ code: "042660", name: "한화오션", changeRate: 4.11 }],
 }));
+const lead = (code: string, name: string, changeRate: number | null) => ({ code, name, changeRate });
 const themeList = (market: "KR" | "US"): ThemeList =>
-  ({ market, kind: "theme", period: "day", themes: THEMES, marketOpen: false, session: "closed", asOf: "2026-09-23T15:30:00+09:00", source: "toss", basis: "구성 종목 평균", note: null, updatedAt: null }) as ThemeList;
+  ({ market, kind: "theme", period: "day", themes: h.themes ?? THEMES, marketOpen: false, session: "closed", asOf: "2026-09-23T15:30:00+09:00", source: "toss", basis: "구성 종목 평균", note: null, updatedAt: null }) as ThemeList;
 const themeDetail: ThemeDetail = {
   market: "KR",
   kind: "theme",
@@ -306,6 +309,7 @@ beforeEach(() => {
   h.showKrw = false;
   h.params = { id: "t0", market: "KR", kind: "theme", name: "조선", period: "day", rate: "3.42" };
   h.stocks = HOLD;
+  h.themes = null;
   forgetWindowClass();
 });
 
@@ -366,8 +370,9 @@ describe("좁은 창·플래그 꺼짐: 3-42 이전 화면과 똑같다 (기록�
 
 // ─────────────────────────── 넓은 창 (플래그 켜짐 + 폭 600 이상) ───────────────────────────
 
-const { pickDiscoverCols, heatColumns, themeListColumns, DISCOVER_PAD, DISCOVER_GAP } = await import("@/lib/discoverColumns");
-const { allocationGrid, settingsTwoColumns, BESIDE, LEGEND_SWATCH, legendCols } = await import("@/lib/foldScreens");
+const { pickDiscoverCols, heatColumns, themeListColumns, themeLeaderLineW, fitThemeLeaders, textEm, DISCOVER_PAD, DISCOVER_GAP } = await import("@/lib/discoverColumns");
+const { allocationGrid, settingsTwoColumns, settingsColumnMax, stickyStep, BESIDE, LEGEND_SWATCH, WIDE_CARD, legendCols } = await import("@/lib/foldScreens");
+const { formatPct } = await import("@/lib/format");
 const { foldScreens, space, touch, light, dark } = await import("@/tokens");
 const { railWidth } = await import("@/lib/windowClass");
 
@@ -465,9 +470,18 @@ describe("설정·비중 배치 계산 (lib/foldScreens)", () => {
     expect(settingsTwoColumns(0, 1)).toBe(false);
   });
 
-  it("비중 2×2: 원 지름 120~180, 원 옆 범례 이름 칸이 최소 폭 이상일 때만 원 옆 (폴드8 펼침 세로 704 는 원 아래)", () => {
+  /** 원 옆 범례의 이름 칸 폭 (색 네모·간격·금액·비중을 뺀 나머지) */
+  const besideName = (g: { colW: number; donut: number }, s: number) => {
+    const { amount, pct } = legendCols(s);
+    return g.colW - BESIDE.padL - g.donut - BESIDE.gap - BESIDE.rowL - BESIDE.rowR - (LEGEND_SWATCH + 3 * space.sm) - amount - pct;
+  };
+
+  it("비중 2×2: 이름 칸을 먼저 — 가장 작은 원 옆에도 이름 칸이 바라는 폭(110, 큰 글씨는 넓힘)이 남을 때만 원 옆", () => {
+    // 폴드8 펼침 가로 933·울트라 펼침 가로 954: 원 옆 (이름 칸 110 을 남기고 원은 126·137)
     expect(allocationGrid(933, 1)).toEqual({ colW: 462, donut: 126, beside: true });
-    expect(allocationGrid(859, 1)).toEqual({ colW: 425, donut: 120, beside: true });
+    expect(allocationGrid(954, 1)).toEqual({ colW: 473, donut: 137, beside: true });
+    // 울트라 펼침 세로 859(이름 칸이 79 뿐이라 '전기장비 · 2…' 처럼 잘리던 곳)·폴드8 펼침 세로 704: 원 아래
+    expect(allocationGrid(859, 1)).toEqual({ colW: 425, donut: 120, beside: false });
     expect(allocationGrid(704, 1)).toEqual({ colW: 348, donut: 120, beside: false });
     for (const [w, s] of [
       [933, 1],
@@ -476,26 +490,127 @@ describe("설정·비중 배치 계산 (lib/foldScreens)", () => {
       [933, 1.3],
       [859, 1.3],
       [1200, 1],
+      [1200, 1.4],
     ] as const) {
       const g = allocationGrid(w, s);
       expect(g.donut).toBeGreaterThanOrEqual(foldScreens.donutMin);
       expect(g.donut).toBeLessThanOrEqual(foldScreens.donutMax);
-      const { amount, pct } = legendCols(s);
-      const name = g.colW - BESIDE.padL - g.donut - BESIDE.gap - BESIDE.rowL - BESIDE.rowR - (LEGEND_SWATCH + 3 * space.sm) - amount - pct;
-      if (g.beside) expect(name, `${w}/${s}`).toBeGreaterThanOrEqual(foldScreens.legendNameMin);
+      // 원 옆이면 이름 칸은 늘 바라는 폭(글자 배율만큼 넓힘) 이상
+      if (g.beside) expect(besideName(g, s), `${w}/${s}`).toBeGreaterThanOrEqual(Math.round(foldScreens.legendNameIdeal * Math.min(s, 1.4)));
     }
-    expect(allocationGrid(1200, 1).donut).toBe(foldScreens.donutMax);
-    // 큰 글씨: 이름 칸 최소 폭도 배율만큼 넓혀 본다 → 울트라 펼침 세로 130% 는 원 아래 범례, 폴드8 펼침 가로 130% 는 원 옆 그대로
+    expect(allocationGrid(1200, 1)).toMatchObject({ donut: foldScreens.donutMax, beside: true });
+    // 큰 글씨 130%: 폴드8 펼침 가로도 이름 칸(143)이 모자라 원 아래 범례
+    expect(allocationGrid(933, 1.3)).toEqual({ colW: 462, donut: 120, beside: false });
     expect(allocationGrid(859, 1.3).beside).toBe(false);
-    expect(allocationGrid(933, 1.3)).toEqual({ colW: 462, donut: 120, beside: true });
   });
 
-  it("테마 목록 두 칸: 한 칸 400(큰 글씨는 넓힘) 이상일 때만 — 853·859 두 칸, 704 한 칸", () => {
+  it("비중 원 아래 범례: 남는 높이가 있으면 원을 키운다 (카드 4장이 한 화면에 들어가는 만큼, 120~180 · 칸 폭 안)", () => {
+    // 격자가 쓸 높이 = 창 − 상태 표시줄 24 − 작업 표시줄 48 − 머리·요약·고지 어림(176). 범례 줄 수: 윗줄 2 · 아랫줄 11 (보유 17종목)
+    const room = (hh: number, rows = [2, 11]) => ({ height: hh - 24 - 48 - foldScreens.allocChromeH, rows });
+    const need = (donut: number, rows: number[]) => rows.reduce((a, n) => a + 2 * WIDE_CARD.padV + donut + WIDE_CARD.gap + foldScreens.legendHeadH + n * foldScreens.legendRowH, 0);
+    // 울트라 펼침 세로 859×954: 136 · 폴드8 펼침 세로 704×933: 125 — 어림한 카드 높이 합이 격자 높이를 넘지 않는다
+    for (const [w, hh, d] of [
+      [859, 954, 136],
+      [704, 933, 125],
+    ] as const) {
+      const g = allocationGrid(w, 1, room(hh));
+      expect(g, `${w}`).toEqual({ colW: Math.floor((w - 8) / 2), donut: d, beside: false });
+      expect(need(g.donut, [2, 11]), `${w}`).toBeLessThanOrEqual(room(hh).height);
+    }
+    // 종목이 적으면 원이 커진다 (가장 크게 180, 칸 폭 − 좌우 여백 안)
+    expect(allocationGrid(859, 1, room(954, [2, 4])).donut).toBe(foldScreens.donutMax);
+    expect(allocationGrid(704, 1, room(2000, [2, 2])).donut).toBe(foldScreens.donutMax);
+    // 높이가 모자라면 가장 작은 원 (예전과 같음) · 높이를 모르면 가장 작은 원
+    expect(allocationGrid(704, 1, room(700)).donut).toBe(foldScreens.donutMin);
+    expect(allocationGrid(704, 1, { height: Number.NaN, rows: [2, 11] }).donut).toBe(foldScreens.donutMin);
+    // 원 옆 배치의 원은 폭으로만 정한다 (높이와 상관없이 이름 칸을 먼저)
+    expect(allocationGrid(933, 1, room(704)).donut).toBe(126);
+    // 기준선 근처에서 바로 전 배치를 지킬 때 (besideOverride): 원 옆이면 원은 가장 작게라도 옆에, 아니면 원 아래
+    expect(allocationGrid(900, 1, undefined, true)).toMatchObject({ beside: true, donut: foldScreens.donutMin });
+    expect(allocationGrid(933, 1, undefined, false)).toMatchObject({ beside: false, donut: foldScreens.donutMin });
+  });
+
+  it("테마 목록 두 칸: 한 칸 340(큰 글씨는 넓힘) 이상일 때만 — 704·853·859·954 모두 두 칸, 큰 글씨 704 는 한 칸", () => {
     expect(themeListColumns(853, 1)).toBe(2);
     expect(themeListColumns(859, 1)).toBe(2);
-    expect(themeListColumns(704, 1)).toBe(1);
-    expect(themeListColumns(853, 1.3)).toBe(1);
+    expect(themeListColumns(704, 1)).toBe(2);
+    expect(themeListColumns(954, 1)).toBe(2);
+    expect(themeListColumns(853, 1.3)).toBe(2);
+    expect(themeListColumns(704, 1.3)).toBe(1);
+    expect(themeListColumns(640, 1)).toBe(1);
     expect(themeListColumns(0, 1)).toBe(1);
+  });
+
+  it("설정 칸 최대 폭 430 (큰 글씨는 배율의 절반만큼 넓힘)", () => {
+    expect(settingsColumnMax(1)).toBe(430);
+    expect(settingsColumnMax(1.4)).toBe(516);
+    expect(settingsColumnMax(2)).toBe(516);
+  });
+});
+
+describe("켜기·끄기 여유 (stickyStep, 히스테리시스)", () => {
+  const cols = (w: number) => Math.max(3, Math.floor(w / 150));
+  it("처음에는 그 폭의 값, 바로 전 값에서 여유(24)만큼 더 넘어야 바꾼다", () => {
+    expect(foldScreens.hysteresis).toBe(24);
+    expect(stickyStep(null, 760, cols)).toBe(5);
+    // 5칸(750 이상)에서 740 으로 줄여도 764 에서 5칸이면 그대로 → 725 까지 줄여야(749) 4칸
+    expect(stickyStep(5, 740, cols)).toBe(5);
+    expect(stickyStep(5, 726, cols)).toBe(5);
+    expect(stickyStep(5, 725, cols)).toBe(4);
+    // 4칸에서 760 으로 넓혀도 736 이 4칸이면 그대로 → 774 이상이어야 5칸
+    expect(stickyStep(4, 760, cols)).toBe(4);
+    expect(stickyStep(4, 774, cols)).toBe(5);
+    // 크게 바뀌면 (접고 펴기) 여유를 뺀 폭의 값으로 바로
+    expect(stickyStep(3, 1200, cols)).toBe(7);
+    expect(stickyStep(7, 475, cols)).toBe(3);
+  });
+
+  it("기준선을 오가는 창 끌기 (598 ↔ 618) 에서 두 칸·한 칸이 번갈아 바뀌지 않는다", () => {
+    const two = (w: number) => (settingsTwoColumns(w, 1) ? 1 : 0);
+    let v: number | null = null;
+    const seen: number[] = [];
+    for (const w of [640, 618, 598, 618, 598, 618, 580, 598, 618, 598, 640]) {
+      v = stickyStep(v, w, two);
+      seen.push(v);
+    }
+    expect(seen).toEqual([1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1]);
+  });
+});
+
+describe("테마 한 칸의 대표 종목 (lib/discoverColumns)", () => {
+  const L = (name: string, changeRate: number | null) => ({ name, changeRate });
+  const JOSEON = [L("한화오션", 4.11), L("HD현대중공업", 3.2), L("삼성중공업", 1.69)];
+  const DEFENSE = [L("현대로템", 7.35), L("한화에어로스페이스", 2.36)];
+
+  it("대표 종목 줄 폭: 칸 − 여백 28 − 순위 28 − 간격 16 − 등락률 상자 72 (큰 글씨는 상자가 넓어진다)", () => {
+    expect(themeLeaderLineW(853 / 2, 1)).toBe(282);
+    expect(themeLeaderLineW(704 / 2, 1)).toBe(208);
+    expect(themeLeaderLineW(954 / 2, 1)).toBe(333);
+    expect(themeLeaderLineW(954 / 2, 2)).toBeLessThan(themeLeaderLineW(954 / 2, 1));
+    expect(themeLeaderLineW(0, 1)).toBe(0);
+  });
+
+  it("글자 폭 어림: 한글 1 · 영문 대문자 0.72 · 숫자 0.6 · 점 0.32 · % 0.9", () => {
+    expect(textEm("삼성")).toBe(2);
+    expect(textEm("HD")).toBeCloseTo(1.44);
+    expect(textEm("+1.69%")).toBeCloseTo(0.6 * 4 + 0.32 + 0.9);
+  });
+
+  it("들어가는 만큼만: 다 들어가는 종목까지, 다음 종목은 이름 세 글자가 남으면 이름을 줄여 하나 더", () => {
+    // 한 칸 426(폴드8 펼침 가로): 조선 대표 종목 둘까지 다 들어가고, 셋째는 이름 세 글자도 안 남아 뺀다 (예전에는 '+1…' 로 잘림)
+    expect(fitThemeLeaders(JOSEON, 282, 1, formatPct)).toBe(2);
+    // 한 칸 477(울트라 펼침 가로): 셋 다
+    expect(fitThemeLeaders(JOSEON, 333, 1, formatPct)).toBe(3);
+    // 한 칸 352(폴드8 펼침 세로): 방위산업 — 현대로템은 다, 한화에어로스페이스는 이름을 줄여서
+    expect(fitThemeLeaders(DEFENSE, 208, 1, formatPct)).toBe(2);
+    // 아주 좁으면 첫 종목 하나 (이름이 줄어든다), 하나뿐이거나 없으면 그대로
+    expect(fitThemeLeaders(JOSEON, 60, 1, formatPct)).toBe(1);
+    expect(fitThemeLeaders([L("삼성전자", 1.44)], 10, 1, formatPct)).toBe(1);
+    expect(fitThemeLeaders([], 300, 1, formatPct)).toBe(0);
+    // 큰 글씨는 글자만큼 넓게 어림 → 덜 보인다
+    expect(fitThemeLeaders(JOSEON, 282, 1.4, formatPct)).toBeLessThanOrEqual(fitThemeLeaders(JOSEON, 282, 1, formatPct));
+    // 등락률이 없는 종목은 이름만 어림
+    expect(fitThemeLeaders([L("가", null), L("나", null), L("다", null)], 282, 1, formatPct)).toBe(3);
   });
 });
 
@@ -595,13 +710,99 @@ describe("발견 탭 (넓은 창)", () => {
     expect(flatList(r).props).toMatchObject({ numColumns: 5 });
     const tile = () => r.byLabel("조선, 3.42% 상승, 오른 종목 10개, 내린 종목 3개");
     expect(styleOf(tile()).width).toBe("20%");
-    // 폭이 704 로 줄면 히트맵 4칸, 목록은 한 칸 (한 칸이 접은 화면보다 좁아지지 않게)
+    // 폭이 704 로 줄면 히트맵 4칸, 목록은 그대로 두 칸 (한 칸 352 — 대표 종목은 들어가는 만큼만)
     layoutTo(r, r.tree[0] as HostNode, 704);
     expect(flatList(r).props).toMatchObject({ numColumns: 4 });
     expect(styleOf(tile()).width).toBe("25%");
     r.act(() => (r.byLabel("목록으로 보기").props.onPress as () => void)());
+    expect(flatList(r).props).toMatchObject({ numColumns: 2 });
+    expect(styleOf(nodes(r, "Pressable").find((n) => /^1위, 조선 테마/.test(String(n.props.accessibilityLabel)))!).width).toBe("50%");
+  });
+
+  it("큰 글씨(130%) · 폴드8 펼침 세로 704: 테마 목록은 한 칸 (휴대폰 줄 그대로)", () => {
+    wideOn(704, 933, 1.3);
+    const r = render(<DiscoverScreen />);
+    layoutTo(r, r.tree[0] as HostNode, 704);
+    r.act(() => (r.byLabel("테마 보기").props.onPress as () => void)());
     expect(flatList(r).props).toMatchObject({ numColumns: 1 });
     expect(styleOf(nodes(r, "Pressable").find((n) => /^1위, 조선 테마/.test(String(n.props.accessibilityLabel)))!).width).toBeUndefined();
+  });
+
+  it("테마 한 칸: 대표 종목은 들어가는 만큼만, 등락률은 이름과 떼어 말줄임 없이 · 이름은 마지막 하나만 줄어든다 (숫자 잘림 회귀)", () => {
+    h.themes = [
+      { ...THEMES[0]!, leaders: [lead("042660", "한화오션", 4.11), lead("329180", "HD현대중공업", 3.2), lead("010140", "삼성중공업", 1.69)] },
+      { ...THEMES[1]!, leaders: [lead("064350", "현대로템", 7.35), lead("012450", "한화에어로스페이스", 2.36)] },
+      { ...THEMES[2]!, leaders: [lead("034020", "두산에너빌리티", 6.12), lead("015760", "한국전력", null)] },
+    ];
+    const leaderTexts = (r: R, label: RegExp) => {
+      const row = nodes(r, "Pressable").find((n) => label.test(String(n.props.accessibilityLabel)))!;
+      const line = inside(row).find((n) => n.type === "View" && styleOf(n).alignItems === "baseline" && styleOf(n).overflow === "hidden")!;
+      return line.children.filter((c): c is HostNode => typeof c !== "string");
+    };
+    for (const [w, hh, box, n] of [
+      // 폴드8 펼침 가로: 한 칸 426 → 조선은 둘 (예전에는 셋째 '삼성중공업 +1…' 의 등락률이 잘렸다)
+      [933, 704, 853, 2],
+      // 울트라 펼침 가로: 한 칸 477 → 셋 다
+      [954, 859, 954, 3],
+    ] as const) {
+      wideOn(w, hh);
+      const r = render(<DiscoverScreen />);
+      layoutTo(r, r.tree[0] as HostNode, box);
+      r.act(() => (r.byLabel("테마 보기").props.onPress as () => void)());
+      const texts = leaderTexts(r, /^1위, 조선 테마/);
+      const rates = texts.filter((x) => /[+-]\d/.test(textOf(x)));
+      expect(rates.map(textOf), `${w}`).toEqual([" +4.11%", " +3.20%", " +1.69%"].slice(0, n));
+      // 등락률·구분점: 말줄임 없음, 줄지 않음
+      for (const x of texts.filter((x) => !/[가-힣A-Z]/.test(textOf(x)))) {
+        expect(x.props.numberOfLines, textOf(x)).toBeUndefined();
+        expect(styleOf(x).flexShrink, textOf(x)).toBe(0);
+      }
+      // 이름: 한 줄, 마지막 이름만 줄어든다
+      const names = texts.filter((x) => /[가-힣A-Z]/.test(textOf(x)));
+      expect(names.map((x) => styleOf(x).flexShrink), `${w}`).toEqual([...Array(n - 1).fill(0), 1]);
+      for (const x of names) expect(x.props.numberOfLines).toBe(1);
+    }
+    // 폴드8 펼침 세로 704: 한 칸 352 → 방위산업은 현대로템 다, 한화에어로스페이스는 이름을 줄여서 (등락률은 그대로)
+    wideOn(704, 933);
+    const r = render(<DiscoverScreen />);
+    layoutTo(r, r.tree[0] as HostNode, 704);
+    r.act(() => (r.byLabel("테마 보기").props.onPress as () => void)());
+    expect(leaderTexts(r, /^2위, 원자력발전 테마/).map(textOf)).toEqual(["현대로템", " +7.35%", " · ", "한화에어로스페이스", " +2.36%"]);
+    // 등락률이 없는 종목은 이름만
+    expect(leaderTexts(r, /^3위, 방위산업 테마/).map(textOf)).toEqual(["두산에너빌리티", " +6.12%", " · ", "한국전력"]);
+    // 휴대폰 줄(한 칸 목록)은 예전처럼 한 줄 글자 (접은 화면)
+    size(475, 751);
+    r.rerender();
+    const phone = nodes(r, "Pressable").find((n) => /^1위, 조선 테마/.test(String(n.props.accessibilityLabel)))!;
+    expect(inside(phone).some((n) => n.type === "View" && styleOf(n).alignItems === "baseline" && styleOf(n).overflow === "hidden")).toBe(false);
+    expect(textOf(phone)).toContain("한화오션 +4.11% · HD현대중공업 +3.20% · 삼성중공업 +1.69%");
+  });
+
+  it("칸 수 기준선 근처에서는 바로 전 칸 수를 지킨다 (히스테리시스) — 목록을 새로 만들지 않는다", () => {
+    wideOn(859, 954);
+    const r = render(<DiscoverScreen />);
+    const box = r.tree[0] as HostNode;
+    layoutTo(r, box, 859);
+    r.act(() => (r.byLabel("테마 보기").props.onPress as () => void)());
+    r.act(() => (r.byLabel("히트맵으로 보기").props.onPress as () => void)());
+    expect(flatList(r).props).toMatchObject({ numColumns: 5 });
+    // 5칸 기준(타일 150 × 5 + 여백 16 = 766) 바로 아래 760: 여유 24 안이라 5칸 그대로
+    layoutTo(r, r.tree[0] as HostNode, 760);
+    expect(flatList(r).props.numColumns).toBe(5);
+    // 여유를 넘어 740: 4칸
+    layoutTo(r, r.tree[0] as HostNode, 740);
+    expect(flatList(r).props.numColumns).toBe(4);
+    // 다시 770 으로 넓혀도 790(여유 24 를 뺀 폭이 766) 에 못 미치면 4칸, 800 이면 5칸
+    layoutTo(r, r.tree[0] as HostNode, 770);
+    expect(flatList(r).props.numColumns).toBe(4);
+    layoutTo(r, r.tree[0] as HostNode, 800);
+    expect(flatList(r).props.numColumns).toBe(5);
+    // 목록 두 칸(680 이상)도 같다: 670 은 두 칸 그대로, 650 은 한 칸
+    r.act(() => (r.byLabel("목록으로 보기").props.onPress as () => void)());
+    layoutTo(r, r.tree[0] as HostNode, 670);
+    expect(flatList(r).props.numColumns).toBe(2);
+    layoutTo(r, r.tree[0] as HostNode, 650);
+    expect(flatList(r).props.numColumns).toBe(1);
   });
 
   it("접고 펴도 테마 보드의 선택(업종·히트맵)이 남는다 (목록 자리가 두 배치에서 같다)", () => {
@@ -676,8 +877,34 @@ describe("설정 (넓은 창)", () => {
     const [left, right] = cols.children as HostNode[];
     expect(cardsIn(left!)).toEqual(["표시", "NotificationSettingsCard", "정보"]);
     expect(cardsIn(right!)).toEqual(["TossOpenApiCard", "AppUpdateCard", "서버", "서버 연결", "ScreenInfoCard"]);
+    // 칸은 최대 폭(430, 큰 글씨는 넓힘)까지만, 남는 폭은 칸 사이·양옆에 고루 (가운데 한 칸으로 모으지 않는다)
+    expect(styleOf(cols).justifyContent).toBe("space-evenly");
+    for (const c of [left!, right!]) expect(styleOf(c)).toMatchObject({ flex: 1, maxWidth: settingsColumnMax(s) });
     // 고지 문구는 그대로
     expect(r.text()).toContain("투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.");
+  });
+
+  it("두 칸 기준선(608) 근처에서는 바로 전 배치를 지킨다 (히스테리시스): 창을 끌어도 한 칸·두 칸이 번갈아 바뀌지 않는다", () => {
+    wideOn(604, 933);
+    const r = render(<SettingsScreen />);
+    // 처음 604: 한 칸
+    expect(columns(r)).toBeUndefined();
+    // 620 으로 넓혀도 여유(24) 안이라 한 칸 그대로, 640 이면 두 칸
+    size(620, 933);
+    r.rerender();
+    expect(columns(r)).toBeUndefined();
+    size(640, 933);
+    r.rerender();
+    expect(columns(r)).toBeDefined();
+    // 600 으로 좁혀도 두 칸 그대로 (여유 없이 재면 한 칸)
+    size(600, 933);
+    r.rerender();
+    expect(settingsTwoColumns(600, 1)).toBe(false);
+    expect(columns(r)).toBeDefined();
+    // 접으면(좁은 창) 휴대폰 화면
+    size(475, 751);
+    r.rerender();
+    expect(columns(r)).toBeUndefined();
   });
 
   it("'화면' 칩은 '잔고 정렬'처럼 이름 아래 왼쪽 (진단 38) · 두 칸이 안 들어가는 큰 글씨(704·140%)는 한 칸", () => {
@@ -725,13 +952,67 @@ describe("비중 (넓은 창)", () => {
     expect(nodes(r, "Screen")[0]!.props.disclaimer).toBe(true);
   });
 
-  it("폴드8 펼침 세로 704: 칸이 좁아 원(120) 아래에 범례", () => {
+  const besideCount = (r: R) => r.all().filter((n) => n.type === "View" && styleOf(n).paddingLeft === BESIDE.padL && styleOf(n).flexDirection === "row").length;
+
+  it("폴드8 펼침 세로 704: 칸이 좁아 원 아래에 범례, 원은 남는 높이만큼 (카드 4장이 한 화면에)", () => {
     wideOn(704, 933);
     many();
     const r = render(<AllocationScreen />);
     expect(gridRows(r)).toHaveLength(2);
-    expect(nodes(r, "Svg").map((s) => s.props.width)).toEqual([120, 120, 120, 120]);
-    expect(r.all().filter((n) => n.type === "View" && styleOf(n).paddingLeft === BESIDE.padL && styleOf(n).flexDirection === "row")).toHaveLength(0);
+    // 격자 높이 933 − 24 − 48 − 176 = 685, 범례 줄 수 윗줄 2 · 아랫줄 10 → (685 − 408) ÷ 2 = 138
+    expect(nodes(r, "Svg").map((s) => s.props.width)).toEqual([138, 138, 138, 138]);
+    expect(besideCount(r)).toBe(0);
+  });
+
+  it("울트라 펼침 세로 859: 원 옆 이름 칸이 모자라 원 아래 범례 (예전에는 원 옆에서 '전기장비 · 2…' 로 종목 수가 잘렸다)", () => {
+    wideOn(859, 954);
+    many();
+    const r = render(<AllocationScreen />);
+    expect(besideCount(r)).toBe(0);
+    expect(nodes(r, "Svg")[0]!.props.width).toBeGreaterThan(foldScreens.donutMin);
+  });
+
+  it("범례 종목 수는 이름과 떼어 줄이지 않는다 · 이름만 한 줄 말줄임 (숫자 잘림 회귀)", () => {
+    wideOn(933, 704);
+    many();
+    const r = render(<AllocationScreen />);
+    const counts = r.all().filter((n) => n.type === "Text" && /^ · \d+종목$/.test(textOf(n)));
+    expect(counts.length).toBeGreaterThanOrEqual(3);
+    for (const c of counts) {
+      expect(c.props.numberOfLines, textOf(c)).toBeUndefined();
+      expect(styleOf(c).flexShrink, textOf(c)).toBe(0);
+    }
+    // 이름: 한 줄, 줄어든다 (같은 줄의 종목 수와 형제)
+    const box = r.all().find((n) => n.type === "View" && n.children.includes(counts[0]!))!;
+    const name = box.children[0] as HostNode;
+    expect(name.props.numberOfLines).toBe(1);
+    expect(styleOf(name).flexShrink).toBe(1);
+    expect(styleOf(box)).toMatchObject({ flex: 1, minWidth: 0, flexDirection: "row" });
+  });
+
+  it("화면 읽기: 제목보다 먼저 읽는 원 요약 앞에 차트 제목을 붙인다", () => {
+    wideOn(933, 704);
+    many();
+    const r = render(<AllocationScreen />);
+    const donuts = r.all().filter((n) => n.props.accessibilityRole === "image");
+    expect(donuts.map((d) => String(d.props.accessibilityLabel).split(",")[0])).toEqual(["국내 / 해외 원 차트", "통화 원 차트", "업종 원 차트", "종목별 원 차트"]);
+    expect(String(donuts[0]!.props.accessibilityLabel)).toMatch(/^국내 \/ 해외 원 차트, 국내 [\d.]+%, 해외 [\d.]+%$/);
+  });
+
+  it("원 옆·원 아래 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스)", () => {
+    wideOn(933, 704);
+    many();
+    const r = render(<AllocationScreen />);
+    expect(besideCount(r)).toBe(4);
+    // 910: 여유 없이 재면 원 아래지만, 934 에서 원 옆이라 그대로
+    expect(allocationGrid(910, 1).beside).toBe(false);
+    size(910, 704);
+    r.rerender();
+    expect(besideCount(r)).toBe(4);
+    // 890: 여유(24)를 넘어 원 아래
+    size(890, 704);
+    r.rerender();
+    expect(besideCount(r)).toBe(0);
   });
 
   it.each([

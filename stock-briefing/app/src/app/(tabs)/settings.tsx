@@ -12,10 +12,11 @@ import { ScreenInfoCard } from "@/components/ScreenInfoCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, SectionTitle, Toggle } from "@/components/ui";
-import { FOLD_COL_GAP, settingsTwoColumns } from "@/lib/foldScreens";
+import { FOLD_COL_GAP, settingsColumnMax, settingsTwoColumns } from "@/lib/foldScreens";
 import { formatDateKo } from "@/lib/format";
 import { SORT_OPTIONS, THEME_OPTIONS, useSettings, WIDGET_ROW_OPTIONS } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
+import { useSticky } from "@/lib/useSticky";
 import { isWide, railWidth } from "@/lib/windowClass";
 import { font, radius, space, touch, useTheme } from "@/theme";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
@@ -45,8 +46,12 @@ export default function SettingsScreen() {
   const fold = useFoldLayout();
   const { width, fontScale } = useWindowDimensions();
   const wide = fold.on && isWide(fold);
-  // 설정 탭이 받는 폭: 왼쪽 세로 탭 막대가 켜져 있으면 막대 폭만큼 좁다
-  const two = wide && settingsTwoColumns(width - (fold.rail ? railWidth(fontScale) : 0), fontScale);
+  // 설정 탭이 받는 폭: 왼쪽 세로 탭 막대가 켜져 있으면 막대 폭만큼 좁다.
+  // 두 칸 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스 — 창을 끌 때 한 칸·두 칸이 번갈아 바뀌지 않게)
+  const twoSticky = useSticky(width - (fold.rail ? railWidth(fontScale) : 0), (w) => (settingsTwoColumns(w, fontScale) ? 1 : 0));
+  const two = wide && twoSticky === 1;
+  // 두 칸의 한 칸 최대 폭: 이름과 스위치가 멀어지지 않게 (남는 폭은 칸 사이·양옆에 고루)
+  const colMax = settingsColumnMax(fontScale);
   const chips = (
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
       {THEME_OPTIONS.map((o) => (
@@ -204,14 +209,15 @@ export default function SettingsScreen() {
   if (two)
     return (
       <Screen refreshing={pulling} onRefresh={onPull}>
-        {/* 두 칸: 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보. 화면 읽기는 왼쪽 칸을 끝까지 읽고 오른쪽 칸으로 */}
+        {/* 두 칸: 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보. 화면 읽기는 왼쪽 칸을 끝까지 읽고 오른쪽 칸으로.
+            칸은 최대 폭(colMax)까지만 넓어지고, 남는 폭은 칸 사이·양옆에 고루 (울트라 펼침 가로 등 아주 넓은 창) */}
         <View style={styles.columns}>
-          <View style={styles.column}>
+          <View style={[styles.column, { maxWidth: colMax }]}>
             {display}
             {notify}
             {info}
           </View>
-          <View style={styles.column}>
+          <View style={[styles.column, { maxWidth: colMax }]}>
             {toss}
             <AppUpdateCard />
             {server}
@@ -291,7 +297,7 @@ const styles = {
     // 큰 글씨에서 오른쪽 칩·스위치가 넘치면 다음 줄로
     line: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", rowGap: space.s, paddingVertical: space.s },
     // 넓은 창 두 칸 (3-42): 칸 폭이 곧 버튼 최대 폭. 칸 안 카드 사이 간격은 화면(Screen)의 카드 간격과 같다
-    columns: { flexDirection: "row", alignItems: "flex-start", gap: FOLD_COL_GAP },
+    columns: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-evenly", gap: FOLD_COL_GAP },
     column: { flex: 1, minWidth: 0, gap: space.sm },
   }),
   label: (color: string) => ({ color, fontSize: font.body, fontWeight: "600" as const }),

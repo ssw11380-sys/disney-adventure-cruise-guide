@@ -31,6 +31,8 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => ({ width: 475, height: 751, scale: 2.625, fontScale: 1 }),
 }));
 vi.mock("react-native-svg", () => ({ Svg: "Svg", Path: "Path" }));
+// 비중 넓은 창 배치(3-42)가 시스템 막대 높이를 읽는다
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 48, left: 0, right: 0 }) }));
 vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: h.push } }));
 vi.mock("@/theme", async () => {

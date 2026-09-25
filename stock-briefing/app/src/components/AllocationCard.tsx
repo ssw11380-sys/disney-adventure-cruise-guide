@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-na
 import { Path, Svg } from "react-native-svg";
 import { arcPath, chartSummary, donutArcs, pctText, sliceLabel, type AllocationChart, type Slice } from "@/lib/allocation";
 import { formatWon } from "@/lib/format";
-import { BESIDE, LEGEND_SWATCH, legendCols } from "@/lib/foldScreens";
+import { BESIDE, LEGEND_SWATCH, legendCols, WIDE_CARD } from "@/lib/foldScreens";
 import { isBigText } from "@/lib/textScale";
 import { font, fontCap, radius, space, useFontScale, useTheme, type Theme } from "@/theme";
 import { TableHead } from "./ui";
@@ -35,7 +35,7 @@ export interface AllocationCardWide {
  * 원 차트: 조각 + 가운데에 가장 큰 조각 이름·비중. 화면 읽기는 원을 "국내 62.3%, 해외 37.7%" 한 문장으로.
  * size 는 지름 (휴대폰 화면은 DONUT 148)
  */
-function Donut({ chart, size, style }: { chart: AllocationChart; size: number; style: StyleProp<ViewStyle> }) {
+function Donut({ chart, size, style, label }: { chart: AllocationChart; size: number; style: StyleProp<ViewStyle>; label?: string }) {
   const t = useTheme();
   const r = (size - RING) / 2;
   const arcs = donutArcs(chart.slices.map((s) => s.won), GAP / r);
@@ -45,7 +45,7 @@ function Donut({ chart, size, style }: { chart: AllocationChart; size: number; s
   // 가운데 구멍(지름 size - 2·RING) 안에만 쓴다
   const centerW = size === DONUT ? styles.centerText : [styles.centerText, { width: size - 2 * RING - 2 * space.sm }];
   return (
-    <View accessible accessibilityRole="image" accessibilityLabel={chartSummary(chart)} style={style}>
+    <View accessible accessibilityRole="image" accessibilityLabel={label ?? chartSummary(chart)} style={style}>
       <Svg width={size} height={size}>
         {arcs.map((a, i) => {
           const s = chart.slices[i]!;
@@ -117,11 +117,13 @@ export function AllocationCard({ chart, wide }: { chart: AllocationChart; wide?:
 
 /**
  * 넓은 창 카드: 범례 머리 첫 칸이 곧 차트 제목(화면 읽기 머리글), 줄은 위아래 여백을 줄인 한 줄.
- * beside 면 [원 | 범례], 아니면 원 아래 범례. 이름은 한 줄(넘치면 말줄임), 숫자는 말줄임 없이 글자를 줄인다
+ * beside 면 [원 | 범례], 아니면 원 아래 범례. 이름은 한 줄(넘치면 이름만 말줄임), 종목 수는 이름과 떼어 줄이지 않고, 금액·비중은 말줄임 없이 글자를 줄인다.
+ * 화면 읽기는 원을 제목보다 먼저 읽으므로 원 요약 앞에 차트 제목을 붙인다 ("업종 원 차트, 반도체 36.8%, …")
  */
 function WideCard({ chart, wide, scale }: { chart: AllocationChart; wide: AllocationCardWide; scale: number }) {
   const t = useTheme();
   const col = legendCols(scale);
+  const donutLabel = `${chart.title} 원 차트, ${chartSummary(chart)}`;
   const legend = (
     <View style={styles.wideLegend}>
       <TableHead style={wide.beside ? [styles.wideHead, styles.besideRow] : styles.wideHead}>
@@ -138,10 +140,17 @@ function WideCard({ chart, wide, scale }: { chart: AllocationChart; wide: Alloca
       {chart.slices.map((s, i) => (
         <View key={s.key} accessible accessibilityLabel={sliceLabel(s)} style={[styles.wideRow, wide.beside && styles.besideRow, i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.line }]}>
           <View style={[styles.swatch, { backgroundColor: sliceColor(t, s) }]} />
-          <Text style={[styles.name, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
-            {s.label}
-            {s.count > 1 ? <Text style={{ color: t.muted }}>{` · ${s.count}종목`}</Text> : null}
-          </Text>
+          {/* 이름만 줄어들고(말줄임), 종목 수는 떼어 두어 잘리지 않는다 */}
+          <View style={styles.wideName}>
+            <Text style={[styles.wideNameText, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+              {s.label}
+            </Text>
+            {s.count > 1 ? (
+              <Text style={[styles.wideCount, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+                {` · ${s.count}종목`}
+              </Text>
+            ) : null}
+          </View>
           <Text style={[styles.num, styles.cell, { color: t.sub, width: col.amount }]} {...FIT}>
             {formatWon(s.won)}
           </Text>
@@ -156,12 +165,12 @@ function WideCard({ chart, wide, scale }: { chart: AllocationChart; wide: Alloca
     <View style={[styles.wideCard, { backgroundColor: t.surface, borderColor: t.line }]}>
       {wide.beside ? (
         <View style={styles.beside}>
-          <Donut chart={chart} size={wide.donut} style={[styles.donutWide, { width: wide.donut, height: wide.donut }]} />
+          <Donut chart={chart} size={wide.donut} label={donutLabel} style={[styles.donutWide, { width: wide.donut, height: wide.donut }]} />
           {legend}
         </View>
       ) : (
         <>
-          <Donut chart={chart} size={wide.donut} style={[styles.donutWide, styles.donutTop, { width: wide.donut, height: wide.donut }]} />
+          <Donut chart={chart} size={wide.donut} label={donutLabel} style={[styles.donutWide, styles.donutTop, { width: wide.donut, height: wide.donut }]} />
           {legend}
         </>
       )}
@@ -184,7 +193,8 @@ const styles = StyleSheet.create({
   cell: { fontSize: font.small, textAlign: "right" },
   num: { fontVariant: ["tabular-nums"] },
   // 넓은 창 (3-42): 격자 한 칸을 채우고(같은 줄 두 카드 높이를 맞춘다), 위아래 여백을 줄인다
-  wideCard: { flex: 1, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: space.xs, gap: space.sm },
+  // 위아래 여백·원과 범례 사이 간격은 lib/foldScreens WIDE_CARD 와 같다 (남는 높이로 원을 키우는 계산이 이 값을 쓴다)
+  wideCard: { flex: 1, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: WIDE_CARD.padV, gap: WIDE_CARD.gap },
   // 원 옆 범례: 여백은 lib/foldScreens BESIDE 와 같다 (원 지름 계산이 이 값을 쓴다)
   beside: { flexDirection: "row", alignItems: "flex-start", gap: BESIDE.gap, paddingLeft: BESIDE.padL },
   besideRow: { paddingLeft: BESIDE.rowL, paddingRight: BESIDE.rowR },
@@ -194,5 +204,9 @@ const styles = StyleSheet.create({
   wideHead: { gap: space.sm },
   wideTitle: { flex: 1, fontSize: font.body, fontWeight: "700" },
   wideRow: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.xs },
+  // 범례 이름 칸: 이름(줄어듦) + 종목 수(줄지 않음)
+  wideName: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "baseline" },
+  wideNameText: { flexShrink: 1, fontSize: font.small },
+  wideCount: { flexShrink: 0, fontSize: font.small },
 });
 
