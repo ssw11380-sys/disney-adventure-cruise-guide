@@ -1,7 +1,8 @@
 import { isIntraday, type AfterMarketQuote, type Candle, type CandlePeriod, type CandleSeries, type Quote } from "../../domain/types.js";
 import { isKrCode } from "../../lib/codes.js";
-import { ProviderError } from "../../lib/errors.js";
+import { isTimeoutError, ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
+import { fetchWithTimeout } from "../../lib/timedFetch.js";
 import type { FetchFn, QuoteProvider } from "./types.js";
 
 /**
@@ -63,9 +64,9 @@ export class NaverFinanceProvider implements QuoteProvider {
   private async getJson(url: string): Promise<unknown> {
     let res: Response;
     try {
-      res = await this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" } });
+      res = await fetchWithTimeout(this.fetchFn, url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" } });
     } catch (e) {
-      throw new ProviderError(this.name, `네트워크 오류: ${url}`, e);
+      throw new ProviderError(this.name, `${isTimeoutError(e) ? "시간 초과" : "네트워크 오류"}: ${url}`, e);
     }
     if (!res.ok) throw new ProviderError(this.name, `HTTP ${res.status}: ${url}`);
     try {

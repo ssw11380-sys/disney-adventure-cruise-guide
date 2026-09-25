@@ -86,6 +86,64 @@ describe("NaverFundamentals", () => {
     expect(calls.filter((c) => c.includes("/stock/IONQ"))).toEqual([expect.stringContaining("/stock/IONQ.K/basic")]);
   });
 
+  it("한 번 받기에 실패하면 1시간 동안 '값 없음'으로 두지 않고 곧 다시 받는다 (BH-43)", async () => {
+    let t = Date.parse("2026-09-22T10:00:00+09:00");
+    const calls: string[] = [];
+    const ok = fakeFetch(calls);
+    let blip = true;
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (blip) {
+        calls.push(String(input));
+        throw new TypeError("fetch failed");
+      }
+      return ok(input, init);
+    }) as typeof fetch;
+    const f = new NaverFundamentals(fetchFn, () => new Date(t));
+    expect(await f.get("035420", "KOSPI")).toBeNull(); // 10:00 네트워크 오류
+    blip = false;
+    t += 5 * 60_000; // 10:05 네이버 회복
+    expect((await f.get("035420", "KOSPI"))?.per).toBe(15.6);
+    t += 5 * 60_000; // 성공한 값은 1시간 캐시
+    await f.get("035420", "KOSPI");
+    expect(calls.filter((c) => c.includes("/035420/"))).toHaveLength(2);
+  });
+
+  it("미국: 5xx·자동완성 실패도 잠깐만 기억하고, 실제로 없는 종목(409)은 1시간 캐시", async () => {
+    let t = Date.parse("2026-09-22T10:00:00+09:00");
+    const calls: string[] = [];
+    const ok = fakeFetch(calls);
+    let down = true;
+    const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (down) {
+        calls.push(String(input));
+        return new Response("busy", { status: 503 });
+      }
+      return ok(input, init);
+    }) as typeof fetch;
+    const f = new NaverFundamentals(fetchFn, () => new Date(t));
+    expect(await f.get("IONQ", "NYSE")).toBeNull();
+    down = false;
+    t += 5 * 60_000;
+    expect((await f.get("IONQ", "NYSE"))?.per).toBe(350.29);
+    // 없는 종목: 자동완성 빈 결과 + 후보 모두 409 → 1시간 동안 다시 묻지 않는다
+    expect(await f.get("ZZZZ", "NYSE")).toBeNull();
+    const n = calls.length;
+    t += 30 * 60_000;
+    expect(await f.get("ZZZZ", "NYSE")).toBeNull();
+    expect(calls).toHaveLength(n);
+  });
+
+  it("자동완성은 클래스 주식을 점 없이(BRKB) 묻고, 네이버 코드의 공백(BRK B)도 같은 종목으로 본다 (BH-33)", async () => {
+    const fetchFn = (async (input: string | URL | Request) => {
+      const url = String(input);
+      const body = url.includes("ac?q=BRKB&") ? { items: [{ code: "BRK B", name: "버크셔 해서웨이 B", reutersCode: "BRKb", nationCode: "USA" }] } : { items: [] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    const f = new NaverFundamentals(fetchFn, NOW);
+    expect(await f.resolveReuters("BRK.B")).toBe("BRKb");
+    expect(await f.resolveReuters("BRK-B")).toBe("BRKb");
+  });
+
   it("환율은 1분 캐시", async () => {
     const calls: string[] = [];
     const f = new NaverFundamentals(fakeFetch(calls), NOW);

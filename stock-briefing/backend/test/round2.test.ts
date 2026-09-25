@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { EdgarProvider } from "../src/providers/dart/edgar.js";
 import { fallbackState, MarketCalendar, stateFromSession } from "../src/providers/market/calendar.js";
+import { ProviderError } from "../src/lib/errors.js";
+import { NaverFundamentals } from "../src/providers/market/fundamentals.js";
 import { NewsProviderChain } from "../src/providers/news/chain.js";
 import { NaverStockNewsProvider } from "../src/providers/news/naverStock.js";
+import type { NewsProvider } from "../src/providers/news/types.js";
 import { FakeNewsProvider } from "./helpers.js";
 
 describe("MarketCalendar", () => {
@@ -167,5 +170,54 @@ describe("NaverStockNewsProvider + chain", () => {
     await chain.forStock({ code: "RGTI", name: "RGTI" }, 8); // 이름이 다르면 질의가 달라 캐시도 따로
     expect(google.queries).toHaveLength(2);
     expect(naverSearch.queries).toEqual([]);
+  });
+
+  it("미국 종목 뉴스: 클래스 주식·NYSE 종목은 시장에 맞는 로이터 코드로 찾고, 추측한 코드의 0건은 성공으로 보지 않는다 (BH-33)", async () => {
+    const urls: string[] = [];
+    const article = [{ total: 1, items: [{ officeId: "001", articleId: "1", officeName: "연합뉴스", datetime: "202609240900", title: "버크셔 해서웨이, 현금 보유 사상 최대", body: "버크셔 해서웨이는 …" }] }];
+    let acDown = false;
+    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200 });
+    const fetchFn = (async (input: string | URL | Request) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("ac.stock.naver.com")) {
+        if (acDown) return new Response("busy", { status: 503 });
+        return json(url.includes("q=BRKB&") ? { items: [{ code: "BRK B", reutersCode: "BRKb", nationCode: "USA" }] } : { items: [] });
+      }
+      if (url.includes("/news/stock/BRKb?") || url.includes("/news/stock/KO?")) return json(article);
+      return json([]); // 네이버는 없는 코드에도 200 + 빈 목록을 준다
+    }) as typeof fetch;
+    const p = new NaverStockNewsProvider(fetchFn, new NaverFundamentals(fetchFn));
+    expect(await p.forStock({ code: "BRK.B", name: "버크셔 해서웨이 B", market: "NYSE" }, 5)).toHaveLength(1);
+    expect(urls.some((u) => u.includes("/news/stock/BRK.B.O"))).toBe(false);
+    // 자동완성이 한 번 실패해도 NYSE 종목은 접미사 없는 코드(KO)로
+    acDown = true;
+    expect(await p.forStock({ code: "KO", name: "코카콜라", market: "NYSE" }, 5)).toHaveLength(1);
+    // 추측한 코드가 모두 0건이면 "뉴스 없음"으로 확정하지 않고 실패로 (체인이 다음 방법을 쓰게)
+    await expect(p.forStock({ code: "ZZZZ", name: "없는회사", market: "NYSE" }, 5)).rejects.toThrow(ProviderError);
+  });
+
+  it("체인: 구글 이름 검색이 두 번 실패하면 네이버 검색(키 있을 때)으로 이름만 한 번 더 (BH-74)", async () => {
+    const naverStock: NewsProvider = { name: "naver-stock", search: async () => [], forStock: async () => [] };
+    const naverSearch = new FakeNewsProvider();
+    const google = Object.assign(new FakeNewsProvider({ fail: true }), { advancedQuery: true });
+    const chain = new NewsProviderChain([naverStock, naverSearch, google], undefined, () => Date.parse("2026-09-24T00:00:00+09:00"), 0);
+    const items = await chain.forStock({ code: "SOFI", name: "소파이 테크놀로지스", market: "NASDAQ" }, 8);
+    expect(google.queries).toHaveLength(2);
+    expect(naverSearch.queries).toEqual(["소파이"]);
+    expect(items.map((x) => x.title)).toContain("소파이 뉴스 1");
+    // 종목 뉴스까지 실패해도 네이버 검색 결과로 (브리핑 '뉴스'가 빠지지 않게)
+    const failing: NewsProvider = { name: "naver-stock", search: async () => [], forStock: async () => { throw new ProviderError("naver-stock", "HTTP 500"); } };
+    const chain2 = new NewsProviderChain([failing, naverSearch, google], undefined, () => Date.parse("2026-09-24T00:00:00+09:00"), 0);
+    expect((await chain2.forStock({ code: "SOFI", name: "소파이 테크놀로지스", market: "NASDAQ" }, 8)).length).toBeGreaterThan(0);
+    // 구글이 제한 시간에 끊겼으면 다시 부르지 않고 바로 네이버 검색으로 (멈춘 출처를 두 번 기다리지 않게)
+    const slow = Object.assign(new FakeNewsProvider(), { advancedQuery: true });
+    slow.search = async (q: string) => {
+      slow.queries.push(q);
+      throw new ProviderError("google-news-rss", "시간 초과", new DOMException("시간 초과 10000ms", "TimeoutError"));
+    };
+    const chain3 = new NewsProviderChain([naverStock, naverSearch, slow], undefined, () => Date.parse("2026-09-24T00:00:00+09:00"), 0);
+    expect((await chain3.forStock({ code: "SOFI", name: "소파이 테크놀로지스", market: "NASDAQ" }, 8)).length).toBeGreaterThan(0);
+    expect(slow.queries).toHaveLength(1);
   });
 });

@@ -1,4 +1,5 @@
-import { ProviderError } from "../../lib/errors.js";
+import { isTimeoutError, ProviderError } from "../../lib/errors.js";
+import { fetchWithTimeout } from "../../lib/timedFetch.js";
 import type { FetchFn } from "../market/types.js";
 import { stripHtml, toIso, type NewsItem, type NewsProvider } from "./types.js";
 
@@ -15,9 +16,9 @@ export class GoogleNewsRssProvider implements NewsProvider {
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`;
     let res: Response;
     try {
-      res = await this.fetchFn(url, { headers: { "user-agent": "Mozilla/5.0 (compatible; stock-briefing/0.1)" } });
+      res = await fetchWithTimeout(this.fetchFn, url, { headers: { "user-agent": "Mozilla/5.0 (compatible; stock-briefing/0.1)" } });
     } catch (e) {
-      throw new ProviderError(this.name, "네트워크 오류", e);
+      throw new ProviderError(this.name, isTimeoutError(e) ? "시간 초과" : "네트워크 오류", e);
     }
     if (!res.ok) throw new ProviderError(this.name, `HTTP ${res.status}`);
     return parseGoogleRss(await res.text()).slice(0, limit);

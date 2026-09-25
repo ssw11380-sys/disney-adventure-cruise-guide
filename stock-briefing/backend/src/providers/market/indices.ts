@@ -258,8 +258,8 @@ export class MarketIndices {
     const base = `https://api.stock.naver.com/chart/${kr ? "domestic" : "foreign"}/index/${encodeURIComponent(src.naver)}`;
     const now = this.now();
     const range = (days: number) => `startDateTime=${stampKst(new Date(now.getTime() - days * 86_400_000)).slice(0, 8)}0000&endDateTime=${stampKst(now).slice(0, 8)}2359`;
-    // 국내 지수 차트의 거래량은 천주 단위 → 주 단위로 (종목 차트와 같게)
-    const volUnit = kr ? 1000 : 1;
+    // 지수 차트의 거래량은 국내·해외 모두 천주 단위 → 주 단위로 (종목 차트와 같게). 나스닥 1,375,034천주 = 약 13.8억 주 (BH-75)
+    const volUnit = 1000;
     if (period === "D" || period === "W" || period === "M") {
       const path = period === "D" ? "day" : period === "W" ? "week" : "month";
       const rows = (await this.json(`${base}/${path}?${range(RANGE_DAYS[period](want))}`)) as Json[];
@@ -273,7 +273,7 @@ export class MarketIndices {
     // 해외 지수 분봉: 직전·당일 세션의 1분 시세(종가만) → 1분봉 → 5·30분
     const d = (await this.json(`${base}?periodType=day`)) as Json;
     const ticks = [...((d["lastPriceInfos"] as Json[] | undefined) ?? []), ...((d["priceInfos"] as Json[] | undefined) ?? [])];
-    const minutes = ticksToMinutes(ticks, (date) => nyOffset(date), num(d["openPrice"]), true);
+    const minutes = ticksToMinutes(ticks, (date) => nyOffset(date), num(d["openPrice"]), true, volUnit);
     return aggregateIntraday(minutes, period === "1m" ? 1 : period === "5m" ? 5 : 30);
   }
 
@@ -368,9 +368,9 @@ function minuteCandle(r: Json, offset: string, volUnit = 1): Candle | null {
 
 /**
  * 시각별 가격(종가만, 누적 거래량 선택) → 1분봉. 같은 분의 가격들로 시·고·저·종을, 시가는 직전 분 종가(그날 첫 봉은 그날 시가)로.
- * cumulativeVolume 이면 누적 거래량의 차이를 그 분의 거래량으로 (날짜가 바뀌면 다시 센다. 세션 중간부터 온 날은 첫 값이 기준).
+ * cumulativeVolume 이면 누적 거래량의 차이를 그 분의 거래량으로 (날짜가 바뀌면 다시 센다. 세션 중간부터 온 날은 첫 값이 기준). volUnit 은 거래량 배율(천주 → 주).
  */
-function ticksToMinutes(ticks: Json[], offsetOf: (date: string) => string, firstOpen: number | null, cumulativeVolume: boolean): Candle[] {
+function ticksToMinutes(ticks: Json[], offsetOf: (date: string) => string, firstOpen: number | null, cumulativeVolume: boolean, volUnit = 1): Candle[] {
   const rows = ticks
     .map((r) => ({ p: splitStamp(String(r["localDateTime"] ?? "")), price: num(r["currentPrice"]), vol: num(r["accumulatedTradingVolume"]) }))
     .filter((x): x is { p: { date: string; hms: string }; price: number; vol: number | null } => !!x.p?.hms && x.price !== null)
@@ -387,7 +387,7 @@ function ticksToMinutes(ticks: Json[], offsetOf: (date: string) => string, first
       prevVol = p.hms <= "09:31:00" ? 0 : (vol ?? 0);
       prevDate = p.date;
     }
-    const v = cumulativeVolume && vol !== null ? Math.max(vol - prevVol, 0) : 0;
+    const v = cumulativeVolume && vol !== null ? Math.max(vol - prevVol, 0) * volUnit : 0;
     if (cumulativeVolume && vol !== null) prevVol = vol;
     const last = out.at(-1);
     if (last && last.time === minute) {
