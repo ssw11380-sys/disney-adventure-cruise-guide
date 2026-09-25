@@ -20,7 +20,7 @@ export interface SchedulerStatus {
 /**
  * node-cron 기반 스케줄러. 한국 시간 기준으로 오전/오후 브리핑을 돌린다.
  * 설정 화면에서 시간을 바꾸면 reschedule() 로 즉시 반영된다.
- * 휴장일(공휴일)에는 BriefingService 가 시장 달력을 보고 해당 종목을 건너뛴다.
+ * 휴장일(공휴일)에는 BriefingService 가 세션이 다루는 그 시장의 거래일(briefingMarketDate — 월요일 오전의 미국은 금요일)을 달력으로 보고 해당 종목을 건너뛴다.
  */
 export class BriefingScheduler {
   private tasks: Array<{ session: BriefingSession; expr: string; task: ScheduledTask }> = [];

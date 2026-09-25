@@ -20,13 +20,13 @@ describe("장 상태 (3-11)", () => {
     expect(completedCandles([candle("2026-09-23"), candle("2026-09-24")], ctx, now).map((c) => c.date)).toEqual(["2026-09-23"]);
   });
 
-  it("한국 15:30 이후 NXT 애프터마켓: 오늘 정규장은 끝났으니 오늘 봉을 쓴다", () => {
+  it("한국 15:30 이후 애프터마켓: 오늘 정규장은 끝났지만 통합(KRX+NXT) 봉은 20:00 에 확정되니 오늘 봉은 아직 쓰지 않는다 (BH-31)", () => {
     const now = at("2026-09-24T16:10:00+09:00");
     const ctx = marketContext("005930", st(true, true), now);
-    expect(ctx).toMatchObject({ phase: "extended", lastRegularDate: "2026-09-24", todayIncomplete: false });
+    expect(ctx).toMatchObject({ phase: "extended", lastRegularDate: "2026-09-24", todayIncomplete: true });
     expect(ctx.label).toContain("9/24");
     expect(ctx.label).toContain("애프터마켓");
-    expect(completedCandles([candle("2026-09-23"), candle("2026-09-24")], ctx, now)).toHaveLength(2);
+    expect(completedCandles([candle("2026-09-23"), candle("2026-09-24")], ctx, now).map((c) => c.date)).toEqual(["2026-09-23"]);
   });
 
   it("한국 NXT 프리마켓(08:30)과 휴장일", () => {
@@ -48,7 +48,7 @@ describe("장 상태 (3-11)", () => {
     expect(completedCandles([candle("2026-09-22"), candle("2026-09-23"), candle("2026-09-24")], ctx, now).map((c) => c.date)).toEqual(["2026-09-22", "2026-09-23"]);
   });
 
-  it("미국 정규장·프리·애프터 (토스 달력의 isOpen 은 프리~애프터를 모두 포함하므로 뉴욕 시각으로 가린다)", () => {
+  it("미국 정규장·프리·애프터 (토스 달력의 isOpen 은 정규장뿐이라 세션은 뉴욕 시각으로 가린다)", () => {
     const open = { ...st(true, true), US: { ...st(true, true).US, isOpen: true } };
     expect(marketContext("AAPL", open, at("2026-09-24T11:00:00-04:00"))).toMatchObject({ phase: "regular", todayIncomplete: true });
     expect(marketContext("AAPL", open, at("2026-09-24T05:00:00-04:00"))).toMatchObject({ phase: "extended", lastRegularDate: "2026-09-23" });
