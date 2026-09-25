@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatArrow, formatKrwCompact, formatMoney, formatPct, formatPrice, formatQuote, formatUsd, formatVolume, formatWon, isTradingHoursKst, shownAmount, toDisplay } from "@/lib/format";
+import { formatArrow, formatKrwCompact, formatMoney, formatPct, formatPrice, formatQuote, formatUsd, formatVolume, formatWon, isTradingHoursKst, shownAmount, shownSign, toDisplay } from "@/lib/format";
+import { speakRate } from "@/lib/a11y";
 import { changeColor, dark, light } from "@/tokens";
 
 describe("금액 표기", () => {
@@ -104,14 +105,28 @@ describe("BH-38: 표시 자리에서 반올림하면 0 인 값은 부호 없이 
     expect(shownAmount(-0.3, "USD")).toBe(-0.3);
     expect(shownAmount(null, "KRW")).toBeNull();
   });
-  it("등락 색: 소수 둘째 자리에서 0 이면 기본 글자색 (등락률·달러)", () => {
+  it("보이는 부호: 표기의 숫자가 모두 0 이면 0", () => {
+    expect(shownSign(-0.004, formatPct(-0.004))).toBe(0);
+    expect(shownSign(-7.41, formatPct(-7.41))).toBe(-1);
+    expect(shownSign(-0.33, formatWon(-0.33, { sign: true }))).toBe(0);
+    expect(shownSign(0.6, formatWon(0.6, { sign: true }))).toBe(1);
+    expect(shownSign(-0.004, formatArrow(-0.004, "USD"))).toBe(0);
+    expect(shownSign(-0.004 * 1360, formatArrow(-0.004 * 1360, "KRW"))).toBe(-1); // ▼5
+    expect(shownSign(null, "-")).toBe(0);
+    expect(shownSign(Number.NaN, "-")).toBe(0);
+  });
+  it("등락 색은 값 그대로 (단위를 모르므로 반올림하지 않는다 — 1센트 미만 등락의 동전주도 방향 색, 검증 지적 회귀)", () => {
     for (const t of [light, dark]) {
-      expect(changeColor(t, -0.004)).toBe(t.ink);
-      expect(changeColor(t, 0.004)).toBe(t.ink);
-      expect(changeColor(t, -0.3)).toBe(t.down);
-      expect(changeColor(t, 0.01)).toBe(t.up);
+      expect(changeColor(t, -0.004)).toBe(t.down);
+      expect(changeColor(t, 0.004)).toBe(t.up);
       expect(changeColor(t, 0)).toBe(t.ink);
+      expect(changeColor(t, shownSign(-0.004, formatPct(-0.004)))).toBe(t.ink);
     }
+  });
+  it("화면 읽기: '0.00%' 로 보이는 등락률은 보합", () => {
+    expect(speakRate(-0.004)).toBe("보합");
+    expect(speakRate(0.0043)).toBe("보합");
+    expect(speakRate(-0.006)).toBe("0.01% 하락");
   });
 });
 

@@ -1,7 +1,7 @@
 import React from "react";
 import type { RegisteredWithQuote } from "@/api/types";
 import { stockRowLabel } from "@/lib/a11y";
-import { formatArrowDisplay, formatMoney, formatPct, formatPrice, formatQuoteDisplay, isUsMarket, shownAmount } from "@/lib/format";
+import { formatArrowDisplay, formatMoney, formatPct, formatPrice, formatQuoteDisplay, isUsMarket, shownSign } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 import { changeColor, useTheme } from "@/theme";
 import { LINE_COL, LineMark, LineValue, StockLine, type LinePrice } from "./StockLine";
@@ -32,11 +32,17 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
   const ev = evalView(stock.evaluation, { afterCost, toKrw: showKrw, currency: cur, fx });
   const us = isUsMarket(stock.market);
   const held = !!ev;
+  // 현재가 색은 전일 대비 방향 그대로 (1센트 미만 등락의 동전주도 위젯처럼 방향 색)
   const c = changeColor(t, q?.change);
-  // 손익 부호·색은 화면에 보이는 금액(원 정수·센트)과 수익률(소수 둘째 자리)로 — "0"·"0.00%" 로 보이는 손익을 손실·이익 색으로 칠하지 않게 (BH-38)
-  const shownProfit = ev ? shownAmount(ev.profit, ev.currency) : null;
-  const pc = changeColor(t, shownProfit);
-  const rc = changeColor(t, ev?.profitRate);
+  // 등락·손익 글자의 부호·색은 그 글자에 보이는 값으로 — "0"·"$0.00"·"0.00%" 로 보이는 값을 손실·이익 색으로 칠하지 않게 (BH-38)
+  const rateText = q ? formatPct(q.changeRate) : "";
+  const arrowText = q ? formatArrowDisplay(q.change, cur, fx, showKrw) : "";
+  const moveText = q ? formatMoney(q.change, cur, fx, showKrw) : "";
+  const profitText = ev ? formatPrice(ev.profit, ev.currency, { sign: true }) : "";
+  const profitRateText = ev ? formatPct(ev.profitRate) : "";
+  const profitSign = ev ? shownSign(ev.profit, profitText) : 0;
+  const pc = changeColor(t, profitSign);
+  const rc = changeColor(t, ev ? shownSign(ev.profitRate, profitRateText) : 0);
   // 원화 보기의 미국 종목 평단은 손익과 같은 기준(매수 당시 환율의 원화 매입금액 ÷ 수량)으로
   const avgText =
     showKrw && cur === "USD" && ev?.currency === "KRW" && stock.quantity
@@ -51,17 +57,17 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
           quantity: formatQty(stock.quantity),
           avg: showKrw && cur === "USD" && ev.currency === "KRW" && stock.quantity ? formatPrice(ev.costBasis / stock.quantity, "KRW") : formatMoney(stock.avgPrice, cur, fx, showKrw),
           profit: formatPrice(ev.profit, ev.currency),
-          profitSign: Math.sign(shownProfit ?? 0),
+          profitSign,
           profitRate: ev.profitRate,
         }
       : null,
     price: q ? { text: formatMoney(q.price, cur, fx, showKrw), changeRate: q.changeRate, live: q.live } : null,
     missing: stock.quoteError ? "시세 없음" : undefined,
-    move: q ? { text: formatMoney(q.change, cur, fx, showKrw), sign: Math.sign(q.change) } : null,
+    move: q ? { text: moveText, sign: shownSign(q.change, moveText) } : null,
     volume: formatVol(q?.volume),
   });
   const price: LinePrice | null = q
-    ? { value: q.price, text: formatQuoteDisplay(q.price, cur, fx, showKrw), color: c, rate: formatPct(q.changeRate), rateColor: c, live: q.live }
+    ? { value: q.price, text: formatQuoteDisplay(q.price, cur, fx, showKrw), color: c, rate: rateText, rateColor: changeColor(t, shownSign(q.changeRate, rateText)), live: q.live }
     : null;
   return (
     <StockLine
@@ -72,9 +78,9 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true }
       priceMissing={stock.quoteError ? "시세 없음" : "-"}
       right={
         !q ? null : held ? (
-          <LineValue main={formatPrice(ev!.profit, ev!.currency, { sign: true }).replace("원", "")} mainColor={pc} sub={formatPct(ev!.profitRate)} subColor={rc} />
+          <LineValue main={profitText.replace("원", "")} mainColor={pc} sub={profitRateText} subColor={rc} />
         ) : (
-          <LineValue main={formatArrowDisplay(q.change, cur, fx, showKrw)} mainColor={c} sub={formatVol(q.volume)} />
+          <LineValue main={arrowText} mainColor={changeColor(t, shownSign(q.change, arrowText))} sub={formatVol(q.volume)} />
         )
       }
       onPress={() => onPress(stock)}

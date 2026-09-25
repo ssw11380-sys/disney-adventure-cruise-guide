@@ -13,7 +13,7 @@ import { DetailSkeleton } from "@/components/Skeleton";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Segmented, Stat, StatGrid } from "@/components/ui";
-import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, relativeTime, toDisplay } from "@/lib/format";
+import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, relativeTime, shownSign, toDisplay } from "@/lib/format";
 import { analysisView, openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
@@ -88,6 +88,9 @@ export default function StockDetailScreen() {
   const range52 = q && q.high52w && q.low52w && q.high52w > q.low52w ? Math.min(1, Math.max(0, (q.price - q.low52w) / (q.high52w - q.low52w))) : null;
 
   const up = changeColor(t, q?.change);
+  // 등락·손익 글자의 색은 그 글자에 보이는 값으로 — "0"·"0.00%"·"0원" 으로 보이는 값을 손실·이익 색으로 칠하지 않게 (BH-38)
+  const shownColor = (n: number | null | undefined, text: string) => changeColor(t, shownSign(n, text));
+  const shownStat = (n: number, text: string) => ({ value: text, change: shownSign(n, text) });
 
   return (
     <Screen
@@ -127,7 +130,7 @@ export default function StockDetailScreen() {
               accessible
               accessibilityLabel={sentence([
                 `현재가 ${quote(q.price)}${displayCur === "KRW" ? "원" : "달러"}`,
-                speakMove(`${arrow(q.change)}${displayCur === "KRW" ? "원" : "달러"}`, Math.sign(q.change)),
+                speakMove(`${arrow(q.change)}${displayCur === "KRW" ? "원" : "달러"}`, shownSign(q.change, arrow(q.change))),
                 speakRate(q.changeRate),
                 q.live ? "실시간" : null,
               ])}
@@ -138,8 +141,8 @@ export default function StockDetailScreen() {
               <Text style={{ color: t.muted, fontSize: font.body }}>{displayCur === "KRW" ? "원" : "USD"}</Text>
             </View>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-              <Text style={[styles.change, { color: up }]}>{arrow(q.change)}</Text>
-              <Text style={[styles.change, { color: up }]}>{formatPct(q.changeRate)}</Text>
+              <Text style={[styles.change, { color: shownColor(q.change, arrow(q.change)) }]}>{arrow(q.change)}</Text>
+              <Text style={[styles.change, { color: shownColor(q.changeRate, formatPct(q.changeRate)) }]}>{formatPct(q.changeRate)}</Text>
               {q.live ? (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
                   <LiveDot />
@@ -227,8 +230,8 @@ export default function StockDetailScreen() {
             <Stat label="평균단가" value={formatQuote(s.avgPrice, cur)} />
             <Stat label="평가금액" value={formatPrice(ev.marketValue, cur)} />
             <Stat label="매입금액" value={formatPrice(ev.costBasis, cur)} />
-            <Stat label="평가손익" value={formatPrice(ev.profit, cur, { sign: true })} change={ev.profit} />
-            <Stat label="수익률" value={formatPct(ev.profitRate)} change={ev.profit} />
+            <Stat label="평가손익" {...shownStat(ev.profit, formatPrice(ev.profit, cur, { sign: true }))} />
+            <Stat label="수익률" {...shownStat(ev.profitRate, formatPct(ev.profitRate))} />
           </StatGrid>
           {evKrw?.currency === "KRW" ? (
             <>
@@ -236,8 +239,8 @@ export default function StockDetailScreen() {
               <StatGrid>
                 <Stat label="평가금액" value={formatPrice(evKrw.marketValue, "KRW")} />
                 <Stat label="매입금액" value={formatPrice(evKrw.costBasis, "KRW")} />
-                <Stat label="평가손익" value={formatPrice(evKrw.profit, "KRW", { sign: true })} change={evKrw.profit} />
-                <Stat label="수익률" value={formatPct(evKrw.profitRate)} change={evKrw.profit} />
+                <Stat label="평가손익" {...shownStat(evKrw.profit, formatPrice(evKrw.profit, "KRW", { sign: true }))} />
+                <Stat label="수익률" {...shownStat(evKrw.profitRate, formatPct(evKrw.profitRate))} />
               </StatGrid>
             </>
           ) : null}

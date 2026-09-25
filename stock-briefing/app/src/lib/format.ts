@@ -21,7 +21,16 @@ export function formatUsd(n: number | null | undefined, opts: { sign?: boolean }
 }
 
 /**
- * 금액을 표시 단위로 반올림한 값 (원은 정수, 달러는 센트). 금액의 부호·등락 색을 이 값으로 정하면 화면에 0 으로 보이는 금액을
+ * 화면 표기에 보이는 부호 (-1·0·1). 표기의 숫자가 모두 0 이면(예: "0원"·"$0.00"·"0.00%"·"0") 0 —
+ * 등락 색(changeColor)·화면 읽기의 부호를 그 글자와 맞춘다 (BH-38). text 는 n 을 표기한 글자 그대로 넘긴다
+ */
+export function shownSign(n: number | null | undefined, text: string): number {
+  if (n === null || n === undefined || !Number.isFinite(n) || !/[1-9]/.test(text)) return 0;
+  return Math.sign(n);
+}
+
+/**
+ * 금액을 표시 단위로 반올림한 값 (원은 정수, 달러는 센트). 합계를 이 값으로 돌려주면 화면에 0 으로 보이는 합계를
  * 손실·이익 색으로 칠하지 않는다 (BH-38). 반올림해 0 이면 0 (-0 아님)
  */
 export function shownAmount(n: number | null | undefined, currency: Currency | undefined): number | null {

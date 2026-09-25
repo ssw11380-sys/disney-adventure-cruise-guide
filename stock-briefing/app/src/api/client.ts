@@ -84,7 +84,10 @@ async function request<T>(baseUrl: string, token: string, path: string, init: Re
   return json as T;
 }
 
-/** 종목 한 개의 API 경로. 코드는 한 경로 칸으로 인코딩한다 — 딥링크에서 온 값의 / ? # 가 다른 API 경로·쿼리가 되지 않게 (BH-36, 정상 코드는 그대로) */
+/**
+ * 종목 한 개의 API 경로. 코드는 한 경로 칸으로 인코딩한다 — 값의 / ? # 가 다른 API 경로·쿼리가 되지 않게 (BH-36, 정상 코드는 그대로).
+ * "." · ".." 는 인코딩해도 주소에서 경로 이동으로 풀리므로 막지 못한다 → 화면 주소의 코드는 parseStockCode 로 먼저 거른다
+ */
 const stockPath = (code: string) => `/api/stocks/${encodeURIComponent(code)}`;
 
 /** 백엔드 REST 클라이언트. baseUrl/token 은 설정에서 온다. */

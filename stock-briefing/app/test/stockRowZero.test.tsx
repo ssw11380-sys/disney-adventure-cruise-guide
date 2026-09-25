@@ -14,18 +14,19 @@ vi.mock("@/theme", async () => {
 });
 vi.mock("@/components/StockLine", async () => {
   const R = await import("react");
-  const StockLine = ({ right, accessibilityLabel }: { right: React.ReactNode; accessibilityLabel: string }) => R.createElement("StockLine", { accessibilityLabel }, right);
+  const StockLine = ({ right, accessibilityLabel, price }: { right: React.ReactNode; accessibilityLabel: string; price: unknown }) => R.createElement("StockLine", { accessibilityLabel, price }, right);
   return { LINE_COL: {}, LineMark: "LineMark", LineValue: "LineValue", StockLine };
 });
 
 const { StockRow } = await import("@/components/StockRow");
 const { light } = await import("@/tokens");
 
-const draw = (stock: ReturnType<typeof holding>) => {
-  const r = render(<StockRow stock={stock} onPress={() => undefined} showKrw={false} afterCost={false} />);
+const draw = (stock: ReturnType<typeof holding>, showKrw = false) => {
+  const r = render(<StockRow stock={stock} onPress={() => undefined} showKrw={showKrw} afterCost={false} />);
   const v = r.all().find((n) => n.type === "LineValue")!;
-  const label = String(r.all().find((n) => n.type === "StockLine")!.props.accessibilityLabel);
-  return { main: v.props.main, mainColor: v.props.mainColor, sub: v.props.sub, subColor: v.props.subColor, label };
+  const line = r.all().find((n) => n.type === "StockLine")!;
+  const price = line.props.price as { text: string; color: string; rate: string; rateColor: string };
+  return { main: v.props.main, mainColor: v.props.mainColor, sub: v.props.sub, subColor: v.props.subColor, label: String(line.props.accessibilityLabel), price };
 };
 
 describe("BH-38: 반올림하면 0 인 평가손익", () => {
@@ -56,5 +57,37 @@ describe("BH-38: 반올림하면 0 인 평가손익", () => {
     expect(up.main).toBe("+67");
     expect(up.mainColor).toBe(light.up);
     expect(up.subColor).toBe(light.up);
+  });
+});
+
+describe("BH-38 검증 지적: 1센트 미만으로 움직인 동전주 (전역 반올림 기준 회귀)", () => {
+  // 0.05달러 종목이 0.004달러(-7.41%) 내림: 등락률·원화 화살표는 뚜렷한 하락이다 → 하락 색 (위젯의 tone(change) 와 같게)
+  const penny = holding("SNDL", quote("SNDL", 0.05, { currency: "USD", change: -0.004, changeRate: -7.41, fxRate: 1360 }), null, null);
+
+  it("달러 보기: 현재가·'-7.41%' 는 하락 색, 0 으로 보이는 화살표만 기본 글자색", () => {
+    const row = draw(penny);
+    expect(row.price.rate).toBe("-7.41%");
+    expect(row.price.rateColor).toBe(light.down);
+    expect(row.price.color).toBe(light.down);
+    expect(row.main).toBe("0");
+    expect(row.mainColor).toBe(light.ink);
+    expect(row.label).toContain("7.41% 하락");
+  });
+
+  it("원화 보기: '▼5' 는 하락 색", () => {
+    const row = draw(penny, true);
+    expect(row.main).toBe("▼5");
+    expect(row.mainColor).toBe(light.down);
+    expect(row.price.rateColor).toBe(light.down);
+    expect(row.label).toContain("5원 하락");
+  });
+
+  it("230달러 종목 1센트 하락(-0.0043%): 화살표는 하락 색, '0.00%' 는 기본 글자색·보합으로 읽음", () => {
+    const row = draw(holding("AAPL", quote("AAPL", 229.99, { currency: "USD", change: -0.01, changeRate: -0.0043 }), null, null));
+    expect(row.main).toBe("▼0.01");
+    expect(row.mainColor).toBe(light.down);
+    expect(row.price.rate).toBe("0.00%");
+    expect(row.price.rateColor).toBe(light.ink);
+    expect(row.label).toContain("보합");
   });
 });
