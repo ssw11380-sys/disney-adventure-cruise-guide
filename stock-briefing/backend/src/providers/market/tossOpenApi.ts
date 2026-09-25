@@ -46,6 +46,11 @@ export interface TossOpenApiClientOptions {
 const REQUEST_TIMEOUT_MS = 10_000;
 /** 종목 마스터(마켓별 전체 종목)는 응답이 커서 더 기다린다 */
 const MASTER_TIMEOUT_MS = 30_000;
+/**
+ * 거절된 토큰을 모르는 재발급 요청(실시간 소켓 핸드셰이크 401)은 발급한 지 이보다 짧은 토큰을 다시 받지 않고 그대로 준다.
+ * 그 소켓은 이 토큰을 받기 전에 연결을 시작했을 가능성이 크고, 다시 받으면 방금 받은 요청들의 토큰이 무효가 된다
+ */
+const FRESH_TOKEN_MS = 30_000;
 
 export interface TossOpenApiStatus {
   configured: boolean;
@@ -82,7 +87,7 @@ export class TossOpenApiClient {
   private readonly baseUrl: string;
   private readonly maxRetryWaitMs: number;
   private readonly timeoutMs: number;
-  private token: { value: string; expiresAt: number } | null = null;
+  private token: { value: string; expiresAt: number; issuedAt: number } | null = null;
   private tokenPromise: Promise<string> | null = null;
   readonly status: TossOpenApiStatus;
 
@@ -100,13 +105,14 @@ export class TossOpenApiClient {
    * 유효한 액세스 토큰. 만료 5분 전부터 재발급. 동시 호출은 한 번만 발급하고, 발급 중이면 그 결과를 같이 기다린다
    * (재발급하면 이전 토큰이 바로 무효라 발급 중에 옛 토큰으로 보내면 401 이 난다).
    * force: 토큰이 거절됐을 때(401). rejected 로 거절된 토큰을 주면, 그 사이 다른 요청이 이미 새로 받은 토큰이 있을 때 그것을 쓴다 —
-   * 클라이언트당 토큰이 1개라 늦게 도착한 401 마다 새로 받으면 방금 받은 토큰을 서로 무효로 만든다
+   * 클라이언트당 토큰이 1개라 늦게 도착한 401 마다 새로 받으면 방금 받은 토큰을 서로 무효로 만든다.
+   * rejected 를 모르면(실시간 소켓) 발급한 지 FRESH_TOKEN_MS 가 안 된 토큰은 다른 요청이 방금 새로 받은 것으로 보고 그대로 쓴다
    */
   async getToken(force = false, rejected?: string): Promise<string> {
     if (this.tokenPromise) return this.tokenPromise;
     const t = this.now().getTime();
-    const cur = this.token && this.token.expiresAt - t > 5 * 60_000 ? this.token.value : null;
-    if (cur !== null && (!force || (rejected !== undefined && cur !== rejected))) return cur;
+    const cur = this.token && this.token.expiresAt - t > 5 * 60_000 ? this.token : null;
+    if (cur && (!force || (rejected !== undefined ? cur.value !== rejected : t - cur.issuedAt < FRESH_TOKEN_MS))) return cur.value;
     this.tokenPromise = this.issueToken().finally(() => {
       this.tokenPromise = null;
     });
@@ -163,7 +169,7 @@ export class TossOpenApiClient {
     const value = String(json["access_token"] ?? "");
     if (!value) throw this.fail(new ProviderError(this.name, "토큰 응답에 access_token 이 없습니다"));
     const expiresIn = num(json["expires_in"]) ?? 3600;
-    this.token = { value, expiresAt: this.now().getTime() + expiresIn * 1000 };
+    this.token = { value, expiresAt: this.now().getTime() + expiresIn * 1000, issuedAt: this.now().getTime() };
     this.status.tokenIssuedAt = seoulIso(this.now());
     this.status.ipBlocked = false;
     this.log.info?.({ expiresIn }, "토스증권 Open API 토큰 발급");

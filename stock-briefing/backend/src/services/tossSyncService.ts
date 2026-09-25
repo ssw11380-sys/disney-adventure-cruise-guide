@@ -13,7 +13,8 @@ import { ACCOUNT_GONE_MS, KrwCostBook, RateNotFoundError, type AccountForBook, t
  *  - 지난 동기화 때 토스에 있었는데 이번에 없는 종목(전량 매도): 지우지 않고 수량·평단을 비워 관심 종목으로 남긴다.
  *    실수로 사라진 것처럼 보이지 않게 하고, 브리핑·차트는 계속 볼 수 있게 하기 위해서다.
  *    계좌가 목록에서 빠졌거나 보유 목록이 계좌 요약과 맞지 않게 비면 일시 오류일 수 있어, 그 계좌가 갖고 있던 종목은
- *    그런 응답이 24시간 넘게·두 번 이상 이어질 때 확정한다 (다른 계좌의 전량 매도는 바로 반영).
+ *    그런 응답이 24시간 넘게·두 번 이상 이어질 때 확정한다 (요약에 달러 매입금액이 없어 확인할 수 없으면 30분, 다른 계좌의 전량 매도는 바로 반영).
+ *    그동안 다른 계좌에도 있는 그 종목의 수량·평단은 그 계좌 몫이 빠진 합계로 바꾸지 않는다.
  *  - 토스에서 가져온 적 없는 등록 종목은 건드리지 않는다(관심 종목이거나 다른 증권사 보유일 수 있으므로).
  * 마지막으로 토스에서 본 종목 목록은 meta 테이블(toss_holdings_codes)에 남겨 재시작 후에도 전량 매도를 알아본다.
  */
@@ -39,6 +40,11 @@ export const EXCLUDED_KEY = "toss_sync_excluded";
 export const ACCOUNTS_KEY = "toss_holdings_accounts";
 /** 믿지 않는 계좌 응답이 처음 본 뒤 이만큼 넘게, 두 번 이상 이어져야 그대로 받아들인다 (원화 장부의 계좌 해지 판단과 같은 24시간) */
 export const DOUBT_MS = ACCOUNT_GONE_MS;
+/**
+ * 보유 목록이 비었고 요약의 원화 매입금액은 0 인데 달러 매입금액이 빠져 확인할 수 없는 응답은 이만큼만 기다린다.
+ * 요약이 통째로 빠진 일시 오류와 구별할 수 없어 한 번에 믿지는 않지만, 전부 판 계좌를 하루씩 붙잡아 두지 않게
+ */
+export const UNSURE_MS = 30 * 60_000;
 type AccountsState = { held: Record<string, string[]>; doubt: Record<string, { since: string; count: number }> };
 
 export function parseCodes(value: string | null | undefined): string[] {
@@ -180,7 +186,7 @@ export class TossSyncService {
     }
   }
 
-  /** keep: 전량 매도를 미룬 종목 — 지난 평가 기준을 그대로 둔다 */
+  /** keep: 전량 매도·수량 반영을 미룬 종목 — 지난 평가 기준을 그대로 둔다 */
   private async saveDetail(holdings: TossHolding[], keep: string[] = []): Promise<void> {
     const detail: Record<string, TossHoldingDetail> = {};
     if (keep.length) {
@@ -249,6 +255,40 @@ export class TossSyncService {
     const result: ImportResult = { accounts: accountSeqs.length, added: [], updated: [], unchanged: [], removed: [], excluded: [], holdings: [] };
     const ts = seoulIso(this.now());
     const excluded = await this.excluded();
+    const nowCodes = new Set(holdings.map((h) => h.code));
+    const snapshot = await this.lastSnapshot();
+    // 계좌마다 이번 응답을 그 계좌의 보유로 믿을 수 있는지 본다. 계좌가 목록에서 빠졌거나, 보유 목록이 비었는데 요약의
+    // 매입금액이 0 이 아니거나 모르면(원화 장부도 이때는 지우지 않는다) 일시 오류일 수 있어, 그 계좌가 지난번 갖고 있던 종목은
+    // 처음 본 뒤 DOUBT_MS(달러 매입금액만 모르면 UNSURE_MS) 넘게·두 번 이상 이어질 때까지 믿지 않는다 (동기화가 몇 초 간격으로 몰려도 확정되지 않게)
+    const saved = await this.accountsState();
+    const prev: AccountsState = saved ?? { held: {}, doubt: {} };
+    const nowMs = this.now().getTime();
+    const listed = new Map(perAccount.map((a) => [a.account, a]));
+    const next: AccountsState = { held: {}, doubt: {} };
+    for (const acct of new Set([...listed.keys(), ...Object.keys(prev.held).map(Number)])) {
+      const a = listed.get(acct);
+      const codes = a ? a.holdings.filter((h) => h.quantity > 0).map((h) => h.code) : [];
+      const clear = !!a && (codes.length > 0 || (a.overview.purchaseUsd === 0 && a.overview.purchaseKrw === 0));
+      const unsure = !!a && codes.length === 0 && a.overview.purchaseKrw === 0 && a.overview.purchaseUsd === null;
+      // 계좌별 기록이 없으면(첫 동기화) 지난 스냅샷 중 지금 어느 계좌에도 없는 종목을 요약과 맞지 않는 빈 계좌 몫으로 본다
+      // (달러 요약만 없는 빈 계좌는 늘 빈 계좌일 수 있어 다른 계좌의 전량 매도를 붙잡지 않는다)
+      const kept = saved ? prev.held[String(acct)] ?? [] : unsure ? [] : snapshot.filter((c) => !nowCodes.has(c));
+      if (!clear && kept.length > 0) {
+        const d = prev.doubt[String(acct)];
+        const doubt = d ? { since: d.since, count: d.count + 1 } : { since: seoulIso(this.now()), count: 1 };
+        if (!(doubt.count >= 2 && nowMs - Date.parse(doubt.since) >= (unsure ? UNSURE_MS : DOUBT_MS))) {
+          next.held[String(acct)] = kept;
+          next.doubt[String(acct)] = doubt;
+          continue;
+        }
+      }
+      // 믿을 수 있는 응답(또는 오래 이어진 응답): 이번 보유가 그 계좌의 보유다. 목록에서 사라진 계좌는 기록을 지운다
+      if (a) next.held[String(acct)] = codes;
+    }
+    /** 믿지 않는 계좌가 지난번 갖고 있던 종목 (이번 합계에서 그 계좌 몫이 빠졌을 수 있어 지난 값·평가 기준·제외 목록을 그대로 둔다) */
+    const guarded = new Set(Object.keys(next.doubt).flatMap((a) => next.held[a] ?? []));
+    /** 다른 계좌에서는 보이지만 믿지 않는 계좌 몫이 빠졌을 수 있어 수량·평단을 고치지 않은 종목 */
+    const frozen: string[] = [];
     for (const h of holdings) {
       const info = infos.get(h.code) as { name?: string; market?: string } | undefined;
       const name = info?.name || h.name || h.code;
@@ -266,6 +306,9 @@ export class TossSyncService {
           .values({ code: h.code, name, market, quantity: h.quantity, avg_price: h.avgPrice, memo: null, created_at: ts, updated_at: ts })
           .execute();
         result.added.push(h.code);
+      } else if (guarded.has(h.code)) {
+        frozen.push(h.code);
+        result.unchanged.push(h.code);
       } else if (existing.quantity !== h.quantity || existing.avg_price !== h.avgPrice || existing.name !== name) {
         await this.db
           .updateTable("registered_stocks")
@@ -277,38 +320,7 @@ export class TossSyncService {
         result.unchanged.push(h.code);
       }
     }
-    // 전량 매도: 지난번엔 토스에 있었는데 지금은 없는 종목 → 보유 정보만 비운다.
-    // 단 그 종목을 갖고 있던 계좌의 이번 응답을 믿을 수 있을 때만. 계좌가 목록에서 빠졌거나, 보유 목록이 비었는데 요약의
-    // 매입금액이 0 이 아니거나 모르면(원화 장부도 이때는 지우지 않는다) 일시 오류일 수 있어, 그 계좌가 지난번 갖고 있던 종목은
-    // 처음 본 뒤 DOUBT_MS 넘게·두 번 이상 이어질 때까지 미룬다 (동기화가 몇 초 간격으로 몰려도 확정되지 않게)
-    const nowCodes = new Set(holdings.map((h) => h.code));
-    const snapshot = await this.lastSnapshot();
-    const saved = await this.accountsState();
-    const prev: AccountsState = saved ?? { held: {}, doubt: {} };
-    // 계좌별 기록이 없으면(첫 동기화) 지난 스냅샷 전체를 믿지 않는 계좌 몫으로 본다
-    const prevHeld = (acct: number) => (saved ? prev.held[String(acct)] ?? [] : snapshot);
-    const nowMs = this.now().getTime();
-    const listed = new Map(perAccount.map((a) => [a.account, a]));
-    const next: AccountsState = { held: {}, doubt: {} };
-    for (const acct of new Set([...listed.keys(), ...Object.keys(prev.held).map(Number)])) {
-      const a = listed.get(acct);
-      const codes = a ? a.holdings.filter((h) => h.quantity > 0).map((h) => h.code) : [];
-      const clear = !!a && (codes.length > 0 || (a.overview.purchaseUsd === 0 && a.overview.purchaseKrw === 0));
-      const kept = prevHeld(acct);
-      if (!clear && kept.length > 0) {
-        const d = prev.doubt[String(acct)];
-        const doubt = d ? { since: d.since, count: d.count + 1 } : { since: seoulIso(this.now()), count: 1 };
-        if (!(doubt.count >= 2 && nowMs - Date.parse(doubt.since) >= DOUBT_MS)) {
-          next.held[String(acct)] = kept;
-          next.doubt[String(acct)] = doubt;
-          continue;
-        }
-      }
-      // 믿을 수 있는 응답(또는 오래 이어진 응답): 이번 보유가 그 계좌의 보유다. 목록에서 사라진 계좌는 기록을 지운다
-      if (a) next.held[String(acct)] = codes;
-    }
-    /** 믿지 않는 계좌가 지난번 갖고 있던 종목 (이번에 없어도 전량 매도로 보지 않고 스냅샷·제외 목록·평가 기준을 그대로 둔다) */
-    const guarded = new Set(Object.keys(next.doubt).flatMap((a) => next.held[a] ?? []));
+    // 전량 매도: 지난번엔 토스에 있었는데 지금은 없는 종목 → 보유 정보만 비운다 (믿지 않는 계좌 몫은 미룬다)
     const pending = [...guarded].filter((c) => !nowCodes.has(c)).sort();
     for (const code of snapshot) {
       if (nowCodes.has(code) || excluded.has(code) || guarded.has(code)) continue;
@@ -317,7 +329,8 @@ export class TossSyncService {
       await this.db.updateTable("registered_stocks").set({ quantity: null, avg_price: null, updated_at: ts }).where("code", "=", code).execute();
       result.removed.push(code);
     }
-    if (pending.length) this.log?.warn({ codes: pending, doubt: next.doubt }, "토스 계좌 응답이 목록·요약과 맞지 않아 그 계좌 종목의 전량 매도 처리를 미룸");
+    if (pending.length || frozen.length)
+      this.log?.warn({ codes: pending, frozen, doubt: next.doubt }, "토스 계좌 응답이 목록·요약과 맞지 않아 그 계좌 종목의 전량 매도·수량 반영을 미룸");
     await this.saveSnapshot([...nowCodes, ...pending]);
     // 토스에서 전량 매도된(확정된) 종목은 제외 목록에서도 뺀다 — 나중에 다시 사면 다시 가져온다
     const keep = [...excluded].filter((c) => nowCodes.has(c) || guarded.has(c));
@@ -328,7 +341,8 @@ export class TossSyncService {
     const state = JSON.stringify(next);
     if (!saved || state !== JSON.stringify(prev))
       await this.db.insertInto("meta").values({ key: ACCOUNTS_KEY, value: state }).onConflict((oc) => oc.column("key").doUpdateSet({ value: state })).execute();
-    await this.saveDetail(holdings, pending);
+    const frozenSet = new Set(frozen);
+    await this.saveDetail(holdings.filter((h) => !frozenSet.has(h.code)), [...pending, ...frozen]);
     return result;
   }
 
