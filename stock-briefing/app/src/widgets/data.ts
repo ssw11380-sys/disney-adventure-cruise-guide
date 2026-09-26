@@ -189,11 +189,29 @@ export async function pendingRetry(apiUrl?: string): Promise<number | null> {
 }
 
 /**
- * 성공한 조회가 실패 표시를 지운다: 표시가 이 조회를 시작한 시각(started) 이전에 적힌 것일 때만 (함께 돌던 다른 조회가 이 조회를 시작한 뒤에
- * 실패했으면 그 위젯은 '갱신 실패'를 그렸으므로 표시를 남겨 다음 백그라운드 작업이 다시 묻게 한다). 이 서버 주소의 표시를 지웠으면 true
+ * 실패 표시 적기·지우기를 한 줄로 세운다 (검증 지적): 지우는 쪽이 표시를 읽은 뒤 지우기 전에 함께 돌던 조회가 새 실패 표시를 적으면,
+ * 예전에는 옛 표시를 보고 새 표시까지 지워 그 위젯의 '갱신 실패'가 다시 묻기 없이(휴장이면 최대 2시간) 남았다.
+ * 이제 읽고 지우는 동안 다른 적기는 기다렸다가 그 뒤에 적는다 (앱·위젯 태스크·백그라운드 작업은 한 JS 안에서 돈다)
  */
-async function clearRetry(apiUrl: string, started: number): Promise<boolean> {
-  try {
+let retryChain: Promise<unknown> = Promise.resolve();
+function retrySerial<T>(fn: () => Promise<T>): Promise<T> {
+  const run = retryChain.then(fn, fn);
+  retryChain = run.catch(() => undefined);
+  return run;
+}
+
+/** 실패 표시를 적는다 (실패 시각 at — 부른 순간). 지우기와 한 줄로 */
+async function markRetry(apiUrl: string, at: number): Promise<void> {
+  await retrySerial(() => AsyncStorage.setItem(RETRY_KEY, JSON.stringify({ at, apiUrl }))).catch(() => undefined);
+}
+
+/**
+ * 성공한 조회가 실패 표시를 지운다: 표시가 이 조회를 시작한 시각(started) 이전에 적힌 것일 때만 (함께 돌던 다른 조회가 이 조회를 시작한 뒤에
+ * 실패했으면 그 위젯은 '갱신 실패'를 그렸으므로 표시를 남겨 다음 백그라운드 작업이 다시 묻게 한다). 이 서버 주소의 표시를 지웠으면 true.
+ * 읽기와 지우기 사이에 다른 적기가 끼어들지 않게 한 줄로 (retrySerial)
+ */
+function clearRetry(apiUrl: string, started: number): Promise<boolean> {
+  return retrySerial(async () => {
     const v = JSON.parse((await AsyncStorage.getItem(RETRY_KEY)) ?? "null") as { at?: unknown; apiUrl?: unknown } | null;
     if (!v) return false;
     const at = typeof v.at === "number" && Number.isFinite(v.at) ? v.at : null;
@@ -201,9 +219,7 @@ async function clearRetry(apiUrl: string, started: number): Promise<boolean> {
     if (v.apiUrl === apiUrl && at !== null && at > started) return false;
     await AsyncStorage.removeItem(RETRY_KEY);
     return v.apiUrl === apiUrl && at !== null;
-  } catch {
-    return false;
-  }
+  }).catch(() => false);
 }
 
 /** 마지막으로 그린 데이터 (표시 설정 제외). 손익 전환·↻ 직후에 서버를 부르지 않고 바로 다시 그릴 때 쓴다 */
@@ -725,7 +741,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   if (!ok) {
     // 실패 표시: 다음 백그라운드 작업이 장 상태와 상관없이 다시 묻게. 그릴 값(오류 포함)을 적은 뒤에 적는다 — 함께 돌던 조회가 성공해
     // 표시를 지운 뒤에 이 조회의 '갱신 실패'가 그려져도, 표시가 남아 다음 작업이 다시 묻고 지운다
-    await AsyncStorage.setItem(RETRY_KEY, JSON.stringify({ at: Date.now(), apiUrl })).catch(() => undefined);
+    await markRetry(apiUrl, Date.now());
   } else if (out.asked && (await clearRetry(apiUrl, started))) {
     // 실패 뒤 서버에서 받는 데 성공: 부른 쪽이 다른 위젯의 '갱신 실패'도 지우게 알린다 (표시를 지운 조회 하나만)
     out.recovered = true;

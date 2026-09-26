@@ -45,9 +45,20 @@ vi.mock("expo-background-task", () => ({
 vi.mock("expo-task-manager", () => ({ isTaskDefined: () => true, defineTask: () => undefined, isTaskRegisteredAsync: async () => false }));
 vi.mock("@/lib/notifications", () => ({ ANDROID_CHANNEL: "briefings", ensureAndroidChannel: async () => undefined }));
 const store = new Map<string, string>();
+/** 실패 표시(widget.retry) 읽기를 붙잡아 두는 곳 — 읽은 값은 붙잡기 전에 정해진다 (지우는 쪽이 읽은 뒤 지우기 전에 다른 조회가 적는 경합 재현) */
+const hold = vi.hoisted(() => ({ key: null as string | null, gate: null as Promise<void> | null, held: 0 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
-    getItem: async (k: string) => store.get(k) ?? null,
+    getItem: async (k: string) => {
+      const v = store.get(k) ?? null;
+      if (hold.key === k && hold.gate) {
+        hold.held++;
+        const gate = hold.gate;
+        hold.key = null;
+        await gate;
+      }
+      return v;
+    },
     setItem: async (k: string, v: string) => void store.set(k, v),
     removeItem: async (k: string) => void store.delete(k),
     multiGet: async (keys: string[]) => keys.map((k) => [k, store.get(k) ?? null]),
@@ -124,6 +135,9 @@ const failing = () => Object.fromEntries(ALL.map((n) => [n, shared.updates.filte
 
 beforeEach(() => {
   store.clear();
+  hold.key = null;
+  hold.gate = null;
+  hold.held = 0;
   shared.widgets = {};
   shared.updates = [];
   vi.useFakeTimers();
@@ -319,6 +333,44 @@ describe("위젯 2차 (A): 실패하면 휴장에도 약 15분 뒤 다시 묻는
     expect(later).toEqual([BOARD_URL]);
     expect(await pendingRetry()).toBeNull();
     expect(failing()[WIDGET_NAMES.market]).toBe(false);
+  });
+
+  it("검증 지적 재현: 성공한 조회가 실패 표시를 읽은 뒤 지우기 전에 다른 위젯이 실패해 새 표시를 적어도, 새 표시는 지워지지 않는다 (읽고 지우기를 한 줄로)", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(await pendingRetry()).toBe(S("10:00"));
+    // 10:05 잔고 ↻ 는 성공하고, 실패 표시(10:00 — 시작 전에 적힌 것)를 읽는 순간 붙잡아 둔다
+    vi.setSystemTime(S("10:05"));
+    shared.updates = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.includes("board=1")) throw new TypeError("Network request failed");
+      return new Response(JSON.stringify(body(false)), { status: 200, headers: { etag: '"9"', "content-type": "application/json" } });
+    });
+    let release!: () => void;
+    hold.gate = new Promise<void>((resolve) => (release = resolve));
+    hold.key = "widget.retry";
+    const ok = run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    for (let k = 0; k < 2000 && hold.held === 0; k++) await Promise.resolve();
+    expect(hold.held).toBe(1);
+    // 그 사이 10:05:30 지수·환율 ↻ 가 실패해 새 표시를 적으려 한다 (예전: 곧바로 적고, 붙잡힌 쪽이 옛 값을 보고 새 표시까지 지웠다)
+    vi.setSystemTime(S("10:05") + 30_000);
+    const failed = run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    for (let k = 0; k < 2000; k++) await Promise.resolve();
+    release();
+    const [okR, failedR] = await Promise.all([ok, failed]);
+    expect(words(okR.at(-1)).join(" ")).not.toContain("갱신 실패");
+    expect(words(failedR.at(-1))).toContain(FAIL);
+    // 새 표시가 남아 다음 백그라운드 작업(휴장이라도)이 다시 묻고, 성공하면 지운다
+    expect(await pendingRetry()).toBe(S("10:05") + 30_000);
+    vi.setSystemTime(S("10:20"));
+    const later = serve();
+    await runBriefingCheck();
+    expect(later).toEqual([BOARD_URL]);
+    expect(await pendingRetry()).toBeNull();
   });
 
   it("다른 서버 주소에서 난 실패 표시는 쓰지 않는다 (주소를 바꾸면 예전 규칙)", async () => {

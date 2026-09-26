@@ -81,7 +81,7 @@ export interface WidgetPayload {
   brief?: WidgetBrief;
 }
 
-/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit·widgetFoldBoth) */
+/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit) */
 export interface WidgetFeatures {
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
@@ -97,16 +97,11 @@ export interface WidgetFeatures {
    */
   extended?: boolean;
   /**
-   * 폴드 위젯 크기 맞추기 (widgetFoldFit, 위젯 2차 — widgets/frame.ts): 접는 폰의 바깥 화면(짧은 변 600dp 미만)에서 그린 그림과
-   * 바깥 화면에서 본 적 있는 크기의 그림에는 넓은 모습(평가금액 칸·두 열·지수 옆 칸)을 쓰지 않고, 두 화면에서 본 크기를 위젯마다 기억한다.
-   * 켜져 있을 때만 true 칸이 있다 (fallback false — 꺼짐·모름은 지금 그림 그대로)
+   * 폴드 위젯 크기 맞추기 (widgetFoldFit, 위젯 2차): 넓은 모습(잔고 평가금액 칸·두 열, 지수·환율 옆 칸)은 위젯 폭이
+   * WIDE_EXTRAS_MIN_DP(560dp — 폴드8 바깥 화면 4x2 약 507~516dp 보다 넓게) 이상일 때만 (layout.ts wideExtrasOk — 폭 하나로만).
+   * 위젯 크기 진단 기록(sizeLog.ts)도 켜져 있을 때만 적는다. 켜져 있을 때만 true 칸이 있다 (fallback false — 꺼짐·모름은 예전 그림 그대로)
    */
   foldFit?: boolean;
-  /**
-   * 한 그림을 두 화면이 같이 쓰는 홈 화면(①)이면 두 화면에 모두 들어가는 카드로 그림 (widgetFoldBoth, 서버 기본 꺼짐 — widgetFoldFit 도 켜져 있어야 함).
-   * 켜져 있을 때만 true 칸이 있다 (fallback false)
-   */
-  foldBoth?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -121,7 +116,6 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     polish: featureOn(flags, "widgetPolish", false),
     ...(featureOn(flags, "widgetExtended", false) ? { extended: true } : {}),
     ...(featureOn(flags, "widgetFoldFit", false) ? { foldFit: true } : {}),
-    ...(featureOn(flags, "widgetFoldBoth", false) ? { foldBoth: true } : {}),
   };
 }
 

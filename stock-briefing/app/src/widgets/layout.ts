@@ -450,6 +450,23 @@ export const WIDE = {
 } as const;
 
 /**
+ * 폴드 위젯 크기 맞추기 (위젯 2차, 플래그 widgetFoldFit — 서버 기본 켜짐, 앱 fallback 꺼짐): 넓은 모습(잔고 평가금액 칸·두 열,
+ * 지수·환율 구역 안 옆 칸)을 쓰는 최소 위젯 폭 (dp). 켜져 있으면 위 WIDE 기준에 더해 위젯 폭이 이 값 이상이어야 한다.
+ * 폭 하나만 본다 — 화면 크기·방향·위젯마다의 기억은 보지 않는다 (docs/폴드-위젯.md 10절).
+ *  - 폴드8 바깥 화면 4x2: 2026-09-26 캡처에서 카드 1065px, 평가금액 칸이 그려졌으니 홈 화면이 알려 준 폭은 504dp 이상(칸 기준),
+ *    두 열은 없었으니 644dp 미만. 캡처와 맞는 밀도(약 1.99~2.11 — 2.1 이면 507dp, 330dpi 2.0625 면 516dp)로는 504~536dp.
+ *    560 은 그 위쪽 끝(536)보다 24dp, 잰 값(507·516)보다 약 9~10% 넓다 → 바깥 칸은 넓은 모습 없음.
+ *  - 폴드8 안쪽 화면 가로로 늘린 위젯(4~5칸, 약 777~780dp)과 두 열 기준(644dp)보다는 좁다 → 안쪽 넓은 위젯은 접힌 채 그려도 그대로.
+ *  - 캡처의 안쪽 잔고·지수(476dp)는 원래 넓은 모습이 없다. 달라지는 것은 폭 504~559dp(평가금액 칸)·540~559dp(지수 옆 칸) 위젯뿐
+ */
+export const WIDE_EXTRAS_MIN_DP = 560;
+
+/** 넓은 모습을 써도 되는 위젯 폭인지 (widgetFoldFit 이 꺼져 있으면 늘 true — 예전 WIDE 기준만) */
+export function wideExtrasOk(width: number, foldFit: boolean): boolean {
+  return !foldFit || width >= WIDE_EXTRAS_MIN_DP;
+}
+
+/**
  * 넓은 위젯의 목록 줄: 열 폭이 WIDE.valueMin 이상이고 평가금액이 있으면 가격 왼쪽에 평가금액 칸을 더한다.
  * 칸을 더해도 좁은 모습보다 나빠지지 않을 때만 — 가격·등락률을 위아래로 쌓게 되거나 손익 줄이 짧아지면 칸 없이 지금 모습
  */
@@ -767,11 +784,8 @@ export interface PolishedInput<T extends IndexInput = IndexInput> {
   alert: string | null;
   /** 줄마다 평가금액 글자 (rows 와 같은 순서, 없으면 null) — 넓은 위젯의 평가금액 칸 (planRowsWide). 주지 않으면 칸 없음 */
   values?: (string | null)[];
-  /**
-   * 넓은 모습(두 열·평가금액 칸)을 고를 때 쓰는 가장 넓은 위젯 폭 (폴드 위젯 2차 — 두 화면에서 본 가장 좁은 폭, 접는 폰의 바깥 화면에 보일 수 있으면 0 = 넓은 모습 없음,
-   * widgets/frame.ts). 주지 않으면 width. 배치 자체(칸 폭·줄 수)는 width 로 고른다
-   */
-  wideMax?: number;
+  /** false 면 넓은 모습(두 열·평가금액 칸)을 쓰지 않는다 — 폴드 위젯 2차 폭 규칙(wideExtrasOk, 플래그 widgetFoldFit). 없으면 폭 기준 그대로 */
+  wideExtras?: boolean;
 }
 
 /** 넓은 위젯의 두 열 모양 (다듬은 모습만): 종목을 줄마다 둘씩 (왼쪽 → 오른쪽, 위 → 아래 — 평가금액 순서 그대로) */
@@ -829,11 +843,10 @@ export function planHoldingsPolished<T extends IndexInput>(i: PolishedInput<T>):
   const size = listSize(i.height);
   const content = i.width - PAD * 2;
   // 넓은 위젯(3-42): 한 열이 WIDE.columnMin 이상이면 종목을 두 열로, 열이 WIDE.valueMin 이상이면 평가금액 칸도 (좁으면 지금 그대로).
-  // 폴드 위젯 2차: 고르는 기준 폭은 wideMax 까지 (바깥 화면에 보일 수 있는 그림이면 0 — 바깥 화면에서 넓은 모습이 나오지 않게)
-  const wideContent = Math.min(i.width, i.wideMax ?? i.width) - PAD * 2;
-  const wide: WideColumns | null = wideContent >= WIDE.columnMin * 2 + WIDE.columnGap ? { columnW: Math.floor((content - WIDE.columnGap) / 2), gap: WIDE.columnGap } : null;
-  const valueRoom = wide ? Math.floor((wideContent - WIDE.columnGap) / 2) : wideContent;
-  const rows = planRowsWide(i.rows, wide ? wide.columnW : content, s, i.rowLabel, valueRoom >= WIDE.valueMin ? (i.values ?? []) : []);
+  // 폴드 위젯 2차: wideExtras 가 false(위젯 폭 WIDE_EXTRAS_MIN_DP 미만 · widgetFoldFit)면 둘 다 없음
+  const allowWide = i.wideExtras !== false;
+  const wide: WideColumns | null = allowWide && content >= WIDE.columnMin * 2 + WIDE.columnGap ? { columnW: Math.floor((content - WIDE.columnGap) / 2), gap: WIDE.columnGap } : null;
+  const rows = planRowsWide(i.rows, wide ? wide.columnW : content, s, i.rowLabel, allowWide ? (i.values ?? []) : []);
   const noteText = fitJoin(i.note, content, F.sm, s);
   const noteH = noteText ? lineHeight(F.sm, s) : 0;
   const t = i.total;
