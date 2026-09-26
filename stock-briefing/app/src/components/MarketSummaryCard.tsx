@@ -1,16 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useCallback, useState } from "react";
-import { Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type StyleProp, type TextStyle } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type TextStyle } from "react-native";
 import type { MarketSummary, MarketSummaryData, SummaryIndex } from "@/api/types";
 import { formatDateKo, SESSION_LABEL, shownSign } from "@/lib/format";
 import {
   basisText,
   cardRows,
   cardSpeech,
+  chunkSegs,
   closeBadge,
   closeBadgeWarn,
-  glueSegs,
   holdingsShort,
   holidayText,
   indexCellCols,
@@ -22,6 +22,7 @@ import {
   SUMMARY_NOTE,
   summaryWhen,
   titleText,
+  wordGap,
   type Seg,
 } from "@/lib/marketSummary";
 import { sentence, speakRate } from "@/lib/a11y";
@@ -40,20 +41,44 @@ import { Badge, Card, Muted } from "./ui";
 
 /**
  * 줄 조각을 색 있는 글로 (등락은 한국 관례 색, 0 으로 보이는 값은 칠하지 않음).
- * 숫자와 그 이름표·출처 괄호가 다른 줄로 갈라지지 않게 묶어 그린다 (glueSegs — '비슷 / 2'·'(미 재 / 무부)' 막기)
+ * 줄바꿈 덩어리(chunkSegs)마다 한 줄짜리 글로 그려 flexWrap 줄에 놓는다 — 줄은 덩어리 사이(띄어쓰기 자리)에서만 바뀌어
+ * 한글 낱말이 음절 사이에서 갈라지지 않는다('비 / 슷 2'·'미 10년 / 물'·'(마이크로소프 / 트'·'지수와 차 / 이' 막기). 글자는 바꾸지 않는다.
+ * 덩어리 사이 간격은 그 글자 크기의 띄어쓰기 폭(wordGap). 덩어리가 칸보다 길 때만(아주 긴 종목 이름) 그 안에서 줄이 바뀐다.
+ * speak: 줄 전체를 화면 읽기 한 문장으로 (덩어리마다 따로 읽히지 않게 — 기호는 말로, speakText). label 을 주면 그 문장으로.
+ * 카드·요약 칸처럼 바깥이 이미 한 문장으로 읽히는 곳에서는 둘 다 쓰지 않는다. end = 오른쪽 정렬 (표의 숫자 칸 자리)
  */
-export function SegText({ segs, style, numberOfLines, cap }: { segs: Seg[]; style?: StyleProp<TextStyle>; numberOfLines?: number; cap?: number }) {
+export function SegText({ segs, style, cap, speak = false, label, end = false }: { segs: Seg[]; style?: TextStyle; cap?: number; speak?: boolean; label?: string; end?: boolean }) {
   const t = useTheme();
+  const scale = useFontScale(cap);
+  const gap = wordGap(style?.fontSize ?? font.body, scale);
+  const said = label ?? (speak ? speakText(segs.map((s) => s.text).join("").trim()) : null);
+  const a11y = said !== null ? { accessible: true, accessibilityLabel: said } : {};
   return (
-    <Text style={style} numberOfLines={numberOfLines} maxFontSizeMultiplier={cap}>
-      {glueSegs(segs).map((s, i) => (
-        <Text key={i} style={s.tone !== undefined ? { color: changeColor(t, shownSign(s.tone, s.text)) } : s.muted ? { color: t.muted } : undefined}>
-          {s.text}
+    <View testID="words" style={[styles.words, end ? styles.wordsEnd : null, { columnGap: gap }]} {...a11y}>
+      {chunkSegs(segs).map((c, i) => (
+        <Text key={i} style={[style, styles.chunk]} maxFontSizeMultiplier={cap}>
+          {c.map((s, j) =>
+            s.tone === undefined && !s.muted ? (
+              s.text
+            ) : (
+              <Text key={j} style={s.tone !== undefined ? { color: changeColor(t, shownSign(s.tone, s.text)) } : { color: t.muted }}>
+                {s.text}
+              </Text>
+            ),
+          )}
         </Text>
       ))}
-    </Text>
+    </View>
   );
 }
+
+/** 한 가지 색 글을 낱말 단위로 줄바꿈해 그린다 (SegText 와 같다 — 기준 줄·휴장 배너·안내 문단) */
+export function Words({ text, ...rest }: { text: string; style?: TextStyle; cap?: number; speak?: boolean; label?: string; end?: boolean }) {
+  return <SegText segs={[{ text }]} {...rest} />;
+}
+
+/** 흐린 글 줄 높이 (공용 Muted 와 같다) */
+export const MUTED_LH = 17;
 
 /** 지수 전일 대비 "+63.01" */
 const signedIndex = (v: number) => `${v > 0 ? "+" : v < 0 ? "-" : ""}${indexValueText(Math.abs(v))}`;
@@ -153,12 +178,14 @@ export const MarketSummaryCard = React.memo(function MarketSummaryCard({ summary
         {failed ? (
           <View style={styles.failed}>
             <Badge tone="bad">생성 실패</Badge>
-            <Text style={{ color: t.danger, fontSize: font.small, flexShrink: 1 }}>{summary.summary}</Text>
+            <View style={styles.grow}>
+              <Words text={summary.summary} style={{ color: t.danger, fontSize: font.small }} />
+            </View>
           </View>
         ) : (
           <CardBody d={d} view={view} />
         )}
-        <Muted style={{ fontSize: font.tiny }}>{SUMMARY_NOTE}</Muted>
+        <Words text={SUMMARY_NOTE} style={{ color: t.muted, fontSize: font.tiny, lineHeight: MUTED_LH }} />
       </Pressable>
     </Card>
   );
@@ -173,11 +200,13 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
   const banner = holidayText(d, view);
   return (
     <>
-      <Muted>{basisText(d, view)}</Muted>
+      <Words text={basisText(d, view)} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} />
       {banner ? (
         <View style={[styles.banner, { backgroundColor: t.surfaceAlt }]}>
           <Ionicons name="calendar-outline" size={16} color={t.gold} />
-          <Text style={{ color: t.ink, fontSize: font.body, flexShrink: 1 }}>{banner}</Text>
+          <View style={styles.grow}>
+            <Words text={banner} style={{ color: t.ink, fontSize: font.body }} />
+          </View>
         </View>
       ) : null}
       <IndexCells d={d} guess={cellsGuess} />
@@ -197,7 +226,7 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
                     {n.title}
                   </Text>
                 ))}
-                {r.more ? <Muted>외 {r.more}건 (상세에서 원문 제목·링크)</Muted> : null}
+                {r.more ? <Words text={`외 ${r.more}건 (상세에서 원문 제목·링크)`} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} /> : null}
               </>
             ) : (
               r.lines.map((segs, i) => <SegText key={i} segs={segs} style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.5 }} />)
@@ -242,17 +271,12 @@ export function MarketSummaryRow({ summary, selected, onPress, role }: { summary
         <Ionicons name="chevron-forward" size={16} color={t.muted} />
       </View>
       {failed ? (
-        <Text style={{ color: t.danger, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
-          생성 실패 · {summary.summary}
-        </Text>
+        <Words text={`생성 실패 · ${summary.summary}`} style={{ color: t.danger, fontSize: font.small }} cap={fontCap.row} />
       ) : (
         <>
           <IndexCells d={d} compact guess={cellsGuess} />
-          {hold ? (
-            <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row} accessibilityLabel={speakText(hold)}>
-              {hold}
-            </Text>
-          ) : null}
+          {/* 줄 전체의 화면 읽기 문장은 누르는 칸(cardSpeech)이 읽는다 */}
+          {hold ? <Words text={hold} style={{ color: t.sub, fontSize: font.small }} cap={fontCap.row} /> : null}
         </>
       )}
     </Pressable>
@@ -261,6 +285,12 @@ export function MarketSummaryRow({ summary, selected, onPress, role }: { summary
 
 const styles = StyleSheet.create({
   press: { minHeight: touch.min, gap: space.sm },
+  // 줄바꿈 덩어리 줄: 덩어리(한 줄짜리 글)를 옆으로 놓고 넘치면 다음 줄로 — 간격은 띄어쓰기 폭(columnGap, 그릴 때 넣는다)
+  words: { flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start" },
+  wordsEnd: { justifyContent: "flex-end" },
+  // 덩어리가 칸보다 길 때만 칸 폭으로 줄여 그 안에서 줄을 바꾼다 (보통은 한 줄 그대로)
+  chunk: { flexShrink: 1 },
+  grow: { flex: 1, minWidth: 0 },
   head: { flexDirection: "row", alignItems: "center", gap: space.xs, flexWrap: "wrap" },
   when: { flexGrow: 1, textAlign: "right" },
   failed: { flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap" },

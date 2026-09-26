@@ -295,6 +295,15 @@ export function eventsBody(d: Pick<MarketSummaryData, "events">, view: Date): st
   return list.length ? list.map((e) => eventText(e, view)).join(" · ") : null;
 }
 
+/**
+ * 뉴스 '원문' 링크로 열 주소: http·https 주소만 (서버도 이런 주소만 저장하지만, 예전에 저장한 요약·다른 출처 값도 한 번 더 본다 —
+ * javascript:·intent: 같은 주소는 열지 않고 '원문' 칸을 두지 않는다). 아니면 null
+ */
+export function newsLink(url: string | null | undefined): string | null {
+  const u = typeof url === "string" ? url.trim() : "";
+  return /^https?:\/\/\S+$/i.test(u) ? u : null;
+}
+
 /** 뉴스 시각: 요약 날짜와 같은 날이면 HH:MM, 아니면 M/D HH:MM (한국 시간) */
 export function newsTime(n: Pick<SummaryNews, "publishedAt">, date: string): string {
   const t = Date.parse(n.publishedAt);
@@ -394,34 +403,101 @@ export function cardRows(d: MarketSummaryData, view: Date): CardRow[] {
   return rows;
 }
 
-// ── 줄바꿈 묶음 (그릴 때만 — 글 함수·서버와 같은 글은 그대로) ─────────────
-
-/** 줄바꿈 없는 공백 */
-const NBSP = " ";
-/** 보이지 않는 줄바꿈 금지 글자 (한글은 글자마다 줄이 바뀔 수 있어 '기준'이 '기 / 준'으로 갈라지지 않게 글자 사이에 넣는다) */
-const WJ = "⁠";
-/** 한 덩어리로: 공백은 줄바꿈 없는 공백, 글자 사이에는 WJ */
-const glueAll = (s: string) => [...s].map((ch) => (ch === " " ? NBSP : ch)).join(WJ);
+// ── 줄바꿈 덩어리 (그릴 때만 — 글 함수·서버와 같은 글은 그대로) ─────────────
 
 /**
- * 숫자와 그 이름표가 다른 줄로 갈라지지 않게 줄 조각을 묶는다 (SegText 가 그릴 때 쓴다 — 화면 읽기 문장·서버와 같은 글은 바꾸지 않는다).
- *  - 흐린 조각(출처·기준 괄호 '(미 재무부)'·'(섹터 ETF 기준)'·'(9/23 고시)'·'9/25 기준 ·')은 통째로 한 덩어리 (앞뒤 공백은 줄바꿈 자리로 둔다)
- *  - 한글 이름표 뒤 숫자는 붙인다: '비슷 7'·'높음 2'·'미국 12종목'·'차이 +3.18%p'·'코스피 7,080.92'
- *  - 다음 조각이 등락 숫자면 그 앞 공백을 붙인다: '나스닥 +0.48%'·'5.17% -0.01%p'·'1,359.00원 +3.50원'
+ * 줄바꿈 덩어리: 그 안에서는 줄이 바뀌지 않는 조각 묶음. SegText 가 덩어리마다 한 줄짜리 글로 그려 flexWrap 줄에 놓으므로
+ * 줄은 덩어리 사이(공백 자리)에서만 바뀐다 — 안드로이드는 한글을 음절마다 끊을 수 있어 '비 / 슷 2'·'미 10년 / 물'·'(마이크로소프 / 트'·
+ * '지수와 차 / 이'처럼 낱말이 갈라졌다 (예전에는 보이지 않는 묶음 글자로 흐린 조각만 묶어, 흐리지 않은 이름표·종목 이름은 갈라졌다).
+ * 글자는 하나도 바꾸지 않으므로(보이지 않는 글자 없음) 화면 읽기 문장도 그대로다
  */
-export function glueSegs(segs: readonly Seg[]): Seg[] {
-  return segs.map((s, i) => {
-    let text = s.text;
+export type Chunk = Seg[];
+
+/** 앞 덩어리 끝에 붙이는 구분자 (줄 첫머리에 오지 않게) */
+const SEPARATORS = new Set(["·", "/"]);
+/** 숫자로 시작하는 낱말 ('7'·'+3.18%p)'·'12종목'·'10년물') 또는 괄호 속 날짜만 ('(9/23)') */
+const NUMERIC_START = /^(?:[+\-−]?\d|\(\d{1,2}\/\d{1,2}\)$)/;
+
+type Piece = { kind: "text"; text: string; seg: Seg } | { kind: "space" };
+
+/**
+ * 줄 조각을 줄바꿈 덩어리로 나눈다. 덩어리를 ' '로 이으면 원래 글(앞뒤 공백 뺀)과 같다.
+ * 공백은 줄바꿈 자리지만, 다음은 덩어리 안에 묶는다:
+ *  - 한글 이름표 뒤 숫자: '비슷 7'·'높음 2'·'차이 +3.18%p)'·'국내 5종목'·'코스피 7,080.92'·'10년물 5.17%'·'코스피 (9/23)'
+ *  - 등락 숫자(색 조각) 앞: '나스닥 +0.48%'·'5.17% -0.01%p'·'1,359.00원 +3.50원'·'(마이크로소프트 +3.66%,'
+ *  - 흐린 조각(출처·기준 괄호) 안: '(미 재무부)'·'(섹터 ETF 기준)'·'(9/23 고시)'·'9/25 기준 ·' (앞뒤 공백은 줄바꿈 자리)
+ *  - 한 글자 낱말 뒤: '내 미국'·'미 10년물'·'강 산업재'·'약 커뮤니케이션'·'장 마감', 줄 끝 한 글자 낱말·개수 앞: '±1%p 안'·'(+1.00%p 이상) 2'
+ *  - 구분자 '·'·'/'와 받지 못한 칸 '—' 앞: 앞 덩어리 끝에 붙인다
+ */
+export function chunkSegs(segs: readonly Seg[]): Chunk[] {
+  const pieces: Piece[] = [];
+  for (const s of segs) {
     if (s.muted) {
-      const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
-      if (m) text = `${m[1]}${glueAll(m[2]!)}${m[3]}`;
-    } else {
-      text = text.replace(/([가-힣]) (?=[+\-−]?\d)/g, `$1${NBSP}`);
+      const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(s.text)!;
+      if (m[1]) pieces.push({ kind: "space" });
+      if (m[2]) pieces.push({ kind: "text", text: m[2], seg: s });
+      if (m[3]) pieces.push({ kind: "space" });
+      continue;
     }
-    const next = segs[i + 1];
-    if (next?.tone !== undefined && text.endsWith(" ")) text = `${text.slice(0, -1)}${NBSP}`;
-    return text === s.text ? s : { ...s, text };
+    s.text.split(" ").forEach((part, i) => {
+      if (i > 0) pieces.push({ kind: "space" });
+      if (part) pieces.push({ kind: "text", text: part, seg: s });
+    });
+  }
+  const textAt = (k: number) => {
+    const p = pieces[k];
+    return p?.kind === "text" ? p.text : null;
+  };
+  /** i 번째 공백 앞 낱말 (공백 사이의 글 조각을 이은 것) */
+  const wordBefore = (i: number) => {
+    let w = "";
+    for (let k = i - 1; textAt(k) !== null; k--) w = textAt(k)! + w;
+    return w;
+  };
+  /** i 번째 공백 뒤 낱말과, 그것이 줄의 마지막 낱말인지 */
+  const wordAfter = (i: number) => {
+    let w = "";
+    let k = i + 1;
+    for (; textAt(k) !== null; k++) w += textAt(k)!;
+    return { w, last: !pieces.slice(k).some((p) => p.kind === "text") };
+  };
+  const glued = (i: number): boolean => {
+    const before = wordBefore(i);
+    const next = pieces[i + 1];
+    if (!before || next?.kind !== "text") return false;
+    const after = wordAfter(i);
+    if (SEPARATORS.has(after.w) || after.w === "—") return true;
+    if (SEPARATORS.has(before)) return false;
+    if (next.seg.tone !== undefined) return true;
+    if (/[가-힣]$/.test(before) && NUMERIC_START.test(after.w)) return true;
+    if (/^[가-힣]$/.test(before)) return true;
+    return after.last && /^(?:[가-힣]|\d+)$/.test(after.w);
+  };
+  const chunks: Chunk[] = [];
+  let cur: Seg[] = [];
+  const add = (text: string, seg: Seg) => {
+    const last = cur[cur.length - 1];
+    if (last && last.tone === seg.tone && !!last.muted === !!seg.muted) cur[cur.length - 1] = { ...last, text: last.text + text };
+    else cur.push({ text, ...(seg.tone !== undefined ? { tone: seg.tone } : {}), ...(seg.muted ? { muted: true } : {}) });
+  };
+  pieces.forEach((p, i) => {
+    if (p.kind === "text") add(p.text, p.seg);
+    else if (glued(i)) add(" ", (pieces[i - 1] as { seg: Seg }).seg);
+    else if (cur.length) {
+      chunks.push(cur);
+      cur = [];
+    }
   });
+  if (cur.length) chunks.push(cur);
+  return chunks;
+}
+
+/** 덩어리 하나의 글 */
+export const chunkText = (c: Chunk) => c.map((s) => s.text).join("");
+
+/** 줄바꿈 덩어리 사이 간격 (dp) = 그 글자 크기의 띄어쓰기 폭 어림. size = 글자 크기, scale = 글자 배율 */
+export function wordGap(size: number, scale: number): number {
+  return Math.max(2, Math.round(size * scale * 0.27));
 }
 
 // ── 카드 지수 칸 배치 ─────────────────────────────────────────
@@ -523,13 +599,15 @@ export function summaryWhen(s: Pick<MarketSummary, "date" | "session">): string 
  */
 export function speakText(text: string): string {
   return text
-    .replace(/±(\d+)%p/g, "플러스마이너스 $1%포인트")
+    .replace(/±(\d+(?:\.\d+)?)%p/g, "플러스마이너스 $1%포인트")
     // 금리 전일 대비는 지수와의 차이가 아니라 움직임이다: '미 10년물 5.17% -0.01%p' → '… 0.01%포인트 하락' ('낮음'으로 읽지 않게)
     .replace(/(미 10년물 \d[\d.]*%) ([+-])(\d[\d.]*)%p/g, (_m, head: string, s: string, n: string) => `${head} ${speakPointMove(`${s}${n}%p`)}`)
     .replace(/([+-])(\d[\d,]*\.?\d*)%p/g, (_m, s: string, n: string) => `${n}%포인트 ${s === "+" ? "높음" : "낮음"}`)
     .replace(/([+-])(\d[\d,]*\.?\d*)%/g, (_m, s: string, n: string) => `${n}% ${s === "+" ? "상승" : "하락"}`)
     .replace(/([+-])(\d[\d,]*\.?\d*)원/g, (_m, s: string, n: string) => `${n}원 ${s === "+" ? "상승" : "하락"}`)
-    .replace(/ —/g, " 받지 못함")
+    // 받지 못한 지수 칸 '나스닥 —' 만 '받지 못함'으로 (안내 문단의 줄표 ' — ' 는 쉼표로)
+    .replace(/ —(?= ·|$)/g, " 받지 못함")
+    .replace(/ — /g, ", ")
     .replace(/ · /g, ", ")
     .replace(/ \/ /g, ", ");
 }

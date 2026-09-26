@@ -13,7 +13,14 @@ import {
   closeBadgeWarn,
   digestLine,
   fitLines,
-  glueSegs,
+  chunkSegs,
+  chunkText,
+  holdingsSegs,
+  indexSegs,
+  newsLink,
+  sectorCardSegs,
+  summarySegLines,
+  wordGap,
   holdingsAux,
   holdingsShort,
   holdingsTableMode,
@@ -173,6 +180,10 @@ describe("카드 이름표 줄 (최대 6줄 규칙과 같은 줄)", () => {
     expect(speakText("미 10년물 5.17% -0.01%p (미 재무부)")).toBe("미 10년물 5.17% 0.01%포인트 하락 (미 재무부)");
     expect(speakText("미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)")).toBe("미 10년물 4.90% 0.02%포인트 상승 (11/25 기준, 미 재무부)");
     expect(speakPointMove("-0.01%p")).toBe("0.01%포인트 하락");
+    // 받지 못한 지수 칸 '—' 만 '받지 못함', 안내 문단의 줄표는 쉼표 (3차 검토: 상세 안내를 한 문장으로 읽게 되면서), '±1.00%p' 도 말로
+    expect(speakText("나스닥 — · S&P500 +0.51% · 다우 —")).toBe("나스닥 받지 못함, S&P500 0.51% 상승, 다우 받지 못함");
+    expect(speakText("정규장 종가 기준 — 잔고 화면 값과 다를 수 있음")).toBe("정규장 종가 기준, 잔고 화면 값과 다를 수 있음");
+    expect(speakText("'비슷'은 차이가 ±1.00%p 안")).toBe("'비슷'은 차이가 플러스마이너스 1.00%포인트 안");
     const s = cardSpeech(item(7, MORNING), at("2026-09-28T08:31:00+09:00"));
     expect(s).toContain("금요일(9/25) 미국 시장");
     expect(s).toContain("매매 권유가 아닙니다");
@@ -182,8 +193,6 @@ describe("카드 이름표 줄 (최대 6줄 규칙과 같은 줄)", () => {
 });
 
 describe("카드 지수 칸 배치·줄바꿈 묶음·출처 시각 (요구 검사 보정)", () => {
-  const NB = " ";
-  const WJ = "⁠";
   it("지수 칸: 칸이 등락률·종가 글자보다 좁으면 4칸을 2×2 로 — 울트라 411·130% 카드(칸 약 74dp, '+0.48%' 약 75dp)", () => {
     const card = (w: number) => w - 2 * space.lg;
     expect(textEm("+0.48%") * font.h2 * 1.3).toBeGreaterThan((card(411) - 3 * space.sm) / 4 - 2 * space.sm);
@@ -201,20 +210,46 @@ describe("카드 지수 칸 배치·줄바꿈 묶음·출처 시각 (요구 검�
     expect(indexCellCols(crash, 400 - space.lg - space.md, 1.4, true)).toBe(2);
   });
 
-  it("줄바꿈 묶음: 흐린 출처 괄호는 한 덩어리, 한글 이름표 뒤 숫자·등락 숫자 앞 공백은 붙는 공백 (글 자체는 그대로)", () => {
-    const g = (segs: Parameters<typeof glueSegs>[0]) => glueSegs(segs).map((s) => s.text).join("");
-    // 괄호 앞 공백은 줄바꿈 자리로 남고, 괄호 안은 글자마다 WJ (공백은 줄바꿈 없는 공백)
-    expect(g([{ text: "미 10년물 5.17%" }, { text: " " }, { text: "-0.01%p", tone: -0.01 }, { text: " (미 재무부)", muted: true }])).toBe(
-      `미${NB}10년물${NB}5.17%${NB}-0.01%p (${WJ}미${WJ}${NB}${WJ}재${WJ}무${WJ}부${WJ})`,
-    );
-    expect(g([{ text: "미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7" }])).toBe(`미국${NB}12종목 · 지수보다 높음${NB}2 · 낮음${NB}3 · 비슷${NB}7`);
-    expect(g([{ text: "나스닥 " }, { text: "+0.48%", tone: 0.48 }])).toBe(`나스닥${NB}+0.48%`);
-    // 조각 수·색(tone)·흐림(muted)은 그대로, 바뀌지 않는 조각은 같은 객체
-    const segs = [{ text: " · " }, { text: "+1%", tone: 1 }];
-    const out = glueSegs(segs);
-    expect(out).toHaveLength(2);
-    expect(out[1]).toBe(segs[1]);
-    expect(out[0]!.text).toBe(` ·${NB}`);
+  it("줄바꿈 덩어리: 한글 낱말은 덩어리 안에서 갈라지지 않고, 이름표+숫자·등락 숫자·출처 괄호·한 글자 낱말은 묶인다 — 글자는 그대로(보이지 않는 글자 없음) (3차 검토)", () => {
+    const texts = (segs: Parameters<typeof chunkSegs>[0]) => chunkSegs(segs).map(chunkText);
+    // 아침 카드 환율·금리: '미 10년물'이 '미 10년 / 물'로 갈라지지 않게 '미 10년물 5.17% -0.01%p' 한 덩어리, 출처 괄호도 한 덩어리
+    expect(texts(ratesSegs(MORNING)!)).toEqual(["원/달러 1,359.00원 +3.50원", "(9/23 고시) ·", "미 10년물 5.17% -0.01%p", "(미 재무부)"]);
+    // 내 종목: '비슷 7'·'높음 2'·'차이 +3.18%p)'·'(마이크로소프트 +3.66%,' — '지수와'·'마이크로소프트'는 통째로
+    const hold = texts(holdingsSegs(MORNING, { mine: false })!);
+    expect(hold).toEqual(["미국 12종목 ·", "지수보다", "높음 2", "(마이크로소프트 +3.66%,", "지수와", "차이 +3.18%p) ·", "낮음 3", "(메타 -3.33%,", "차이 -3.81%p) ·", "비슷 7"]);
+    // 한국 휴장 카드: 'M/D 기준 ·' 흐린 머리는 한 덩어리, '비슷 2'
+    const kh = chunkSegs(holdingsSegs(KR_HOLIDAY, { mine: false })!);
+    expect(kh[0]).toEqual([{ text: "9/23 기준 ·", muted: true }]);
+    expect(kh.map(chunkText).at(-1)).toBe("비슷 2");
+    // 업종 카드 줄: '강 석유와가스 +3.13% ·' (한 글자 이름표는 다음 낱말과), 긴 업종 이름은 통째로
+    expect(texts(sectorCardSegs(AFTERNOON)![0])).toEqual(["강 석유와가스 +3.13% ·", "반도체와반도체장비 +2.80%"]);
+    // 줄 끝 한 글자 낱말·개수는 앞 낱말과: '±1%p 안', '(+1.00%p 이상) 2'
+    expect(texts([{ text: "미국 3종목 모두 지수와 ±1%p 안" }])).toEqual(["미국 3종목", "모두", "지수와", "±1%p 안"]);
+    expect(texts([{ text: "지수보다 높음 (+1.00%p 이상) 2" }])).toEqual(["지수보다", "높음", "(+1.00%p", "이상) 2"]);
+    // 받지 못한 칸 '—' 과 괄호 속 날짜는 앞 이름과: '나스닥 —'·'코스피 (9/23) +0.90% ·'
+    expect(texts(indexSegs(KR_HOLIDAY)!)).toEqual(["코스피 (9/23) +0.90% ·", "코스닥 (9/23) +1.21%"]);
+    expect(texts([{ text: "나스닥 —" }, { text: " · " }, { text: "S&P500 " }, { text: "+0.51%", tone: 0.51 }])).toEqual(["나스닥 — ·", "S&P500 +0.51%"]);
+    // 색·흐림은 조각마다 그대로
+    const ratesChunks = chunkSegs(ratesSegs(MORNING)!);
+    expect(ratesChunks[0]).toEqual([{ text: "원/달러 1,359.00원 " }, { text: "+3.50원", tone: 3.5 }]);
+    // 모든 줄·카드 줄: 덩어리를 ' '로 이으면 원래 글 (글자를 바꾸지 않는다), 보이지 않는 글자(WJ·NBSP) 없음, 덩어리 끝·처음은 공백이 아니다
+    for (const d of [MORNING, AFTERNOON, KR_HOLIDAY]) {
+      const view = at(d.asOf);
+      const lines = [...summarySegLines(d, view).map((l) => l.segs), ...cardRows(d, view).flatMap((r) => (r.kind === "news" ? [] : r.lines))];
+      for (const segs of lines) {
+        const cs = chunkSegs(segs).map(chunkText);
+        expect(cs.join(" ")).toBe(segs.map((s) => s.text).join("").trim());
+        expect(cs.some((c) => /[⁠ ]/.test(c) || c !== c.trim() || !c)).toBe(false);
+      }
+    }
+    expect(wordGap(font.body, 1)).toBe(4);
+    expect(wordGap(font.body, 1.3)).toBe(5);
+  });
+
+  it("뉴스 원문 링크는 http(s) 주소만 연다 (javascript:·intent: 는 열지 않는다)", () => {
+    expect(newsLink("https://news.google.com/rss/articles/x")).toBe("https://news.google.com/rss/articles/x");
+    expect(newsLink(" http://a.b/c ")).toBe("http://a.b/c");
+    for (const u of ["javascript:alert(1)", "intent://x#Intent;end", "file:///etc/passwd", "", "https://a b", null, undefined]) expect(newsLink(u), String(u)).toBeNull();
   });
 
   it("지수 출처 시각: 저장한 현지 시각 그대로 '뉴욕 17:15'·'서울 20:15', 모르면 없음", () => {

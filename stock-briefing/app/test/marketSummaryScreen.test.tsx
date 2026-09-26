@@ -101,11 +101,15 @@ const KR_HOLIDAY = item(8, shared.cases[2]!.data);
 const US_HOLIDAY = item(9, shared.cases[3]!.data);
 
 type R = ReturnType<typeof render>;
-/** 그린 글 그대로 (줄바꿈 묶음 글자 포함) */
+/** 그린 글 그대로 */
 const rawOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(rawOf).join(""));
-/** 읽는 글: 줄바꿈 묶음 글자(줄바꿈 없는 공백·WJ)를 보통 글로 (SegText 가 숫자와 이름표를 묶어 그린다) */
-const textOf = (n: HostNode | string): string => rawOf(n).replace(/⁠/g, "").replace(/ /g, " ");
-const texts = (r: R) => r.all().filter((n) => n.type === "Text" || n.type === "Muted").map(textOf);
+/** 읽는 글 (보이지 않는 글자는 쓰지 않는다 — 덩어리 줄은 글자를 그대로 둔다) */
+const textOf = rawOf;
+/** 줄바꿈 덩어리 줄(SegText·Words: testID "words")들 — 덩어리 글들과, 그것을 ' '로 이은 한 줄 */
+const wordRows = (r: R) => r.all().filter((n) => n.type === "View" && n.props.testID === "words");
+const chunksOf = (row: HostNode) => row.children.filter((c): c is HostNode => typeof c !== "string").map(textOf);
+/** 화면의 글: 글 요소 하나하나 + 덩어리 줄을 이은 한 줄 (줄은 덩어리로 나뉘어 그려진다) */
+const texts = (r: R) => [...r.all().filter((n) => n.type === "Text" || n.type === "Muted").map(textOf), ...wordRows(r).map((row) => chunksOf(row).join(" "))];
 const labels = (r: R) => r.all().map((n) => n.props.accessibilityLabel).filter((x): x is string => typeof x === "string");
 /** 한 노드 아래 모든 노드 (자기 포함) */
 const collect = (n: HostNode): HostNode[] => [n, ...n.children.flatMap((c) => (typeof c === "string" ? [] : collect(c)))];
@@ -254,16 +258,52 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     expect(label).not.toContain("[예시] 뉴욕증시 마감 시황"); // 세 번째 제목은 카드에 없다
   });
 
-  it("숫자와 이름표·출처 괄호가 다른 줄로 갈라지지 않게 묶어 그린다 ('비슷 / 7'·'(미 재 / 무부)'·'(섹터 ETF 기 / 준)' 막기)", () => {
+  it("줄은 낱말(덩어리) 사이에서만 바뀐다: 카드 줄마다 덩어리 글이 따로 — '미 10년물'·'비슷 7'·'(마이크로소프트 +3.66%,'·'지수와'가 음절 사이에서 갈라지지 않게 (3차 검토, 475·411·130%)", () => {
     h.flags = { marketSummary: true };
-    const raw = render(<BriefingsScreen />).all().filter((n) => n.type === "Text").map(rawOf);
-    const hold = raw.find((x) => x.startsWith("미국 12종목"))!;
-    expect(hold).toContain("비슷 7");
-    expect(hold).toContain("높음 2");
-    const rates = raw.find((x) => x.startsWith("원/달러"))!;
-    expect(rates).toContain("5.17% -0.01%p");
-    expect(rates).toContain(["(", "미", " ", "재", "무", "부", ")"].join("⁠"));
-    expect(raw.some((x) => x.includes(["(", "섹", "터", " ", "E", "T", "F", " ", "기", "준", ")"].join("⁠")))).toBe(true);
+    for (const [width, scale] of [
+      [475, 1],
+      [411, 1],
+      [411, 1.3],
+      [475, 1.3],
+    ] as const) {
+      cleanupRenders();
+      h.win = { width, height: 900, scale: 2.625, fontScale: scale };
+      h.fontScale = scale;
+      const r = render(<BriefingsScreen />);
+      const rows = wordRows(r);
+      const chunks = rows.flatMap(chunksOf);
+      for (const c of ["미 10년물 5.17% -0.01%p", "(미 재무부)", "(9/23 고시) ·", "미국 12종목 ·", "높음 2", "(마이크로소프트 +3.66%,", "지수와", "차이 +3.18%p) ·", "낮음 3", "비슷 7", "(섹터 ETF 기준)", "강 산업재 +0.95% ·"]) expect(chunks, `${width}·${scale}: ${c}`).toContain(c);
+      // 덩어리 줄은 옆으로 놓고 넘치면 다음 줄로 (간격 = 띄어쓰기 폭, 글자 배율만큼)
+      for (const row of rows) {
+        const st = row.props.style as Array<Record<string, unknown> | null>;
+        expect(st.some((x) => x?.["flexWrap"] === "wrap")).toBe(true);
+      }
+      // 보이지 않는 묶음 글자(WJ·줄바꿈 없는 공백)는 쓰지 않는다 — 화면 읽기에 끼지 않게
+      expect(chunks.some((c) => /[⁠ ]/.test(c))).toBe(false);
+      // 카드 안 줄은 따로 읽히지 않는다 (카드 전체가 한 문장 — 누르는 칸 안에 화면 읽기 칸을 또 두지 않는다)
+      const card = cardOf(r)!;
+      expect(collect(card).filter((n) => n !== card && n.props.accessible === true && n.type === "View" && n.props.testID === "words")).toEqual([]);
+    }
+    // 간격은 글자 크기 × 배율의 띄어쓰기 폭
+    const gapAt = (scale: number) => {
+      cleanupRenders();
+      h.win = { width: 475, height: 900, scale: 2.625, fontScale: scale };
+      h.fontScale = scale;
+      const row = wordRows(render(<BriefingsScreen />)).find((x) => chunksOf(x).includes("비슷 7"))!;
+      return (row.props.style as Array<Record<string, unknown> | null>).find((y) => y?.["columnGap"] !== undefined)!["columnGap"];
+    };
+    expect(gapAt(1)).toBe(4);
+    expect(gapAt(1.3)).toBe(5);
+  });
+
+  it("한국 휴장 카드: '9/23 기준 ·' 흐린 머리와 '비슷 2'·'차이 -3.39%p)'가 덩어리째 (예전 '비 / 슷 2')", () => {
+    h.flags = { marketSummary: true };
+    h.list = [KR_HOLIDAY];
+    h.now = Date.parse("2026-09-25T16:05:00+09:00");
+    h.win = { width: 411, height: 900, scale: 2.625, fontScale: 1.3 };
+    h.fontScale = 1.3;
+    const chunks = wordRows(render(<BriefingsScreen />)).flatMap(chunksOf);
+    for (const c of ["9/23 기준 ·", "비슷 2", "거래일 9/23", "휴장(추석) ·", "반도체와반도체장비 +2.80%"]) expect(chunks).toContain(c);
   });
 
   it("예전 서버(404 → 빈 목록)면 카드가 없다", () => {
@@ -402,6 +442,72 @@ describe("상세 화면 /briefings/market/<id>", () => {
     const r = render(<MarketSummaryScreen />);
     expect(h.detailEnabled.every((e) => !e)).toBe(true);
     expect(r.all().some((n) => n.type === "Empty" && n.props.title === "시장 요약을 볼 수 없습니다")).toBe(true);
+  });
+});
+
+describe("상세 화면 — 3차 검토 보정 (낱말 줄바꿈·화면 읽기·ETF 안내·원문 링크)", () => {
+  it("'내 보유 종목과 지수' 머리 두 줄은 화면 읽기 한 칸 — 기호는 말로('+3.18%p' → '3.18%포인트 높음'), 보이지 않는 글자 없음", () => {
+    h.flags = { marketSummary: true };
+    const r = render(<MarketSummaryScreen />);
+    const head = r.all().find((n) => n.type === "View" && n.props.accessible === true && String(n.props.accessibilityLabel ?? "").startsWith("미국 12종목, 지수보다 높음 2"))!;
+    expect(head).toBeDefined();
+    const label = String(head.props.accessibilityLabel);
+    expect(label).toContain("(마이크로소프트 3.66% 상승, 지수와 차이 3.18%포인트 높음)");
+    expect(label).toContain("비슷 7. 내 미국 12종목: 상승 8, 하락 4, 나스닥 0.48% 상승, S&P500 0.51% 상승");
+    expect(label).not.toMatch(/[+±]|%p|[⁠ ]/);
+    // 두 줄 모두 이 칸 안 (따로 읽히지 않는다)
+    const inside = wordRows({ all: () => collect(head) } as unknown as R).map((row) => chunksOf(row).join(" "));
+    expect(inside).toEqual(["미국 12종목 · 지수보다 높음 2 (마이크로소프트 +3.66%, 지수와 차이 +3.18%p) · 낮음 3 (메타 -3.33%, 차이 -3.81%p) · 비슷 7", "내 미국 12종목: 상승 8 · 하락 4 / 나스닥 +0.48% · S&P500 +0.51%"]);
+    // 묶음 머리는 따로 적은 문장으로 ('+1.00%p' 를 '높음'으로 두 번 읽지 않게)
+    expect(labels(r)).toContain("지수보다 높음, 차이 1%포인트 이상, 2종목");
+    expect(labels(r)).toContain("비슷, 차이 플러스마이너스 1%포인트 안, 7종목");
+  });
+
+  it("상세의 안내 문단은 낱말 단위로 줄바꿈하고 한 문장으로 읽힌다 (덩어리마다 따로 읽히지 않게)", () => {
+    h.flags = { marketSummary: true };
+    const r = render(<MarketSummaryScreen />);
+    const foot = wordRows(r).find((row) => chunksOf(row).join(" ").startsWith("정규장 종가 기준(애프터마켓 제외)"))!;
+    expect(foot.props).toMatchObject({ accessible: true });
+    expect(String(foot.props.accessibilityLabel)).toContain("정규장 종가 기준(애프터마켓 제외), 잔고 화면 값과 조금 다를 수 있습니다, 나스닥 상장 종목은 나스닥");
+    expect(String(foot.props.accessibilityLabel)).not.toContain("받지 못함");
+    // 요약 줄(요약 칸이 한 문장으로 읽는다)은 따로 읽히지 않는다
+    const summaryRows = wordRows(r).filter((row) => chunksOf(row)[0]?.startsWith("나스닥 +0.48%"));
+    expect(summaryRows.length).toBeGreaterThan(0);
+    expect(summaryRows.every((row) => row.props.accessible !== true)).toBe(true);
+    // 넓은 창 2단 오른쪽 칸(933)에서도 '낮음 3'·'에너지 -0.89%'·'지수와'가 덩어리째
+    cleanupRenders();
+    h.flags = { marketSummary: true, foldLayout: true };
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    const chunks = wordRows(render(<MarketSummaryScreen />)).flatMap(chunksOf);
+    for (const c of ["낮음 3", "에너지 -0.89%", "지수와", "차이 +3.18%p) ·", "비슷 7"]) expect(chunks).toContain(c);
+  });
+
+  it("비교 안내: 이름으로 알아보지 못한 ETF 는 지수와 그대로 비교된다는 안내를 늘 적는다 (뺀 ETF 가 없어도), 한국은 코스닥 추종 ETF 를 코스닥과 비교한다고", () => {
+    h.flags = { marketSummary: true };
+    const d = shared.cases[0]!.data;
+    h.detail = item(7, { ...d, holdings: { ...d.holdings!, excluded: { leverage: [], overseas: [], bond: [], noQuote: [], noBenchmark: [] } } });
+    const us = texts(render(<MarketSummaryScreen />)).find((t) => t.startsWith("정규장 종가 기준"))!;
+    expect(us).toContain("알아보지 못한 ETF(금·변동성·채권 액티브·코인 ETF 등)는 지수와 그대로 비교됩니다");
+    expect(us).not.toContain("종목 제외");
+    cleanupRenders();
+    h.detail = item(7, shared.cases[1]!.data);
+    h.now = Date.parse("2026-09-23T16:05:00+09:00");
+    const kr = texts(render(<MarketSummaryScreen />)).find((t) => t.startsWith("KRX 정규장 종가 기준"))!;
+    expect(kr).toContain("코스피 상장 종목은 코스피, 코스닥 상장 종목과 코스닥 추종 ETF(코스피 시장 상장)는 코스닥과 비교");
+    expect(kr).toContain("알아보지 못한 ETF(해외 종목을 담은 액티브·테마 ETF 등)는 지수와 그대로 비교됩니다");
+    expect(kr).not.toContain("코스피 상장 종목은 코스피, 코스닥 상장 종목은 코스닥과 비교");
+  });
+
+  it("뉴스 '원문'은 http(s) 주소만 연다 — javascript: 같은 주소의 기사는 제목만 보이고 원문 칸이 없다", () => {
+    h.flags = { marketSummary: true };
+    const d = shared.cases[0]!.data;
+    h.detail = item(7, { ...d, news: { ...d.news, items: [{ ...d.news.items[0]!, url: "javascript:alert(1)" }, ...d.news.items.slice(1)] } });
+    const r = render(<MarketSummaryScreen />);
+    const links = r.all().filter((n) => n.type === "Pressable" && String(n.props.accessibilityLabel ?? "").includes("기사 원문 열기"));
+    expect(links).toHaveLength(2);
+    expect(texts(r)).toContain(d.news.items[0]!.title);
+    for (const l of links) r.act(() => (l.props.onPress as () => void)());
+    expect(h.openURL.mock.calls.map((c) => c[0])).toEqual(["https://news.google.com/rss/articles/example-2", "https://news.google.com/rss/articles/example-3"]);
   });
 });
 
