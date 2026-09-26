@@ -618,8 +618,44 @@ const TITLE_NUMBER_RE =
 export function titleNumbers(title: string): { start: number; end: number; digitEnd: boolean }[] {
   return [...title.matchAll(TITLE_NUMBER_RE)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, digitEnd: /\d$/.test(m[0]) }));
 }
-/** 끊은 자리 끝에 남기지 않을 글자 (띄어쓰기·구분자 '·'·'ㆍ'(U+318D)·'∙'·'‧'·여는 괄호·점 말줄임 '...') */
-const TRAILING_CUT_RE = /(?:[\s·ㆍ∙‧,…⋯‥\-–—([{【<|/]|\.{2,})+$/;
+/**
+ * 끊은 자리 끝에 남기지 않을 글자 (띄어쓰기·구분자 '·'·'ㆍ'(U+318D)·'∙'·'‧'·'・'·쌍점·쌍반점·물결·화살표 '→'·'▶'·붙임표·여는 괄호·
+ * 점 말줄임 '...'·여는 따옴표 ‘ “ — 검증 보정 3: '…원·달러 환율 ‘…'·'…부담에 하락;…'처럼 여는 따옴표·구분자가 남지 않게. 숫자 속 쌍점('15:30')은
+ * 숫자 규칙이 먼저 본다)
+ */
+const TRAILING_CUT_RE = /(?:[\s·ㆍ∙‧・,:;；~∼→▶…⋯‥\-‐‑–—([{【<《〈「『（［｢〔|｜/‘“]|\.{2,})+$/;
+/** 곧은 따옴표 (' " ` 와 전각 ＇ ＂) — 여는 것과 닫는 것이 같은 글자라 앞부분에서 짝이 맞는지로 가린다 */
+const STRAIGHT_QUOTES = "'\"`＇＂";
+/** 영문 사이 줄임표 ('Leader's'·'Moody’s')에 쓰는 글자 */
+const APOSTROPHES = "'’";
+const LATIN_LETTER_RE = /[A-Za-z]/;
+/** head 안의 곧은 따옴표 q 개수 — 영문 사이 줄임표('Leader's')는 세지 않는다 (next = head 뒤 원문 글자) */
+function quoteCount(head: string, q: string, next: string): number {
+  let n = 0;
+  for (let i = 0; i < head.length; i++) {
+    if (head[i] !== q) continue;
+    const after = i + 1 < head.length ? head[i + 1]! : next;
+    if (!(LATIN_LETTER_RE.test(head[i - 1] ?? "") && LATIN_LETTER_RE.test(after))) n++;
+  }
+  return n;
+}
+/**
+ * 끊은 자리 끝 정리 (head — title 의 앞부분): 구분자·여는 괄호·여는 따옴표(‘ “)를 떼고, 곧은 따옴표(' " `)는 앞부분에서 짝 없이 남은 것
+ * (여는 따옴표 — '…이제 시선은 '…'·'…반도체ETF '…')과 영문 사이 줄임표('Leader'|s')를 뗀다. 더 뗄 것이 없을 때까지 (검증 보정 3)
+ */
+function trimCutEnd(head: string, title: string): string {
+  for (;;) {
+    let h = head.replace(TRAILING_CUT_RE, "");
+    const last = h.slice(-1);
+    if (last && (STRAIGHT_QUOTES.includes(last) || APOSTROPHES.includes(last))) {
+      const next = title[h.length] ?? "";
+      const apostrophe = APOSTROPHES.includes(last) && LATIN_LETTER_RE.test(h[h.length - 2] ?? "") && LATIN_LETTER_RE.test(next);
+      if (apostrophe || (STRAIGHT_QUOTES.includes(last) && quoteCount(h, last, next) % 2 === 1)) h = h.slice(0, -1);
+    }
+    if (h === head) return h;
+    head = h;
+  }
+}
 
 /**
  * 낱말 글자 (한글·자모·영문·숫자, 'S&P'·'M&A'의 &) — 이 글자끼리 붙은 자리에서 끊으면 낱말 가운데다.
@@ -640,20 +676,46 @@ const HANGUL_TAIL_RE = /[가-힣]+$/;
  * '최고|가'·'닛케|이') '유…'·'주…'처럼 조각이 남았다
  */
 const PARTICLE_RE = /^(?:은|는|을|를|에|에서|으로|로|와|에게)$/;
-/** 두 음절 토씨의 가운데 ('실현으|로'·'거래소에|서'·'투자자에|게') — 끊은 자리 앞 글자 + 뒤 글자 */
+/**
+ * 두 음절 한글 덩어리부터 낱말로 보는 토씨 ('강세|에'·'반등|에서'·'몸값|으로'). 나머지 은·는·을·를·로·와는 풀이말 어미('늘리|는'·'몰리|는'·
+ * '흔드|는'·'불붙|은'·'돌아|와')나 낱말 끝('매크|로'·'그대|로'·'나홀|로')과 겹쳐 세 음절부터 (검증 보정 3 must — '…투자 늘리…'가 남았다)
+ */
+const FIRM_PARTICLE_RE = /^(?:에|에서|으로|에게)$/;
+/** 두 음절 토씨의 가운데 ('실현으|로'·'106.6으|로'·'거래소에|서'·'투자자에|게') — 끊은 자리 앞 글자 + 뒤 글자 */
 const SPLIT_PARTICLE_RE = /^(?:으로|에서|에게)$/;
-/** '상승하|는'·'결정되|는'처럼 풀이말 줄기 뒤의 '는·은'은 토씨가 아니다 (앞 조각이 낱말이 아님) */
-const VERB_STEM_END_RE = /[하되]$/;
+/**
+ * '는·은·을' 앞 풀이말 줄기 끝 — 앞 조각이 낱말이 아니다: '상승하|는'·'결정되|는'과 말뭉치에 나온 세 음절 풀이말의 끝('뒤흔드|는'·'두드리|는'·
+ * '흔들리|는'·'엇갈리|는'·'벌어지|는'·'멀어지|는'·'얼어붙|은'·'몰아치|는'·'이어가|는'·'바라보|는'·'갈아타|는'·'들썩이|는'·'사들이|는'·
+ * '끄떡없|는'·'얻어맞|은'·'만만찮|은'·'만든다|는'). 네 음절 이상 덩어리는 이 규칙과 상관없이 가운데서 끊을 수 있다
+ */
+const VERB_STEM_END_RE =
+  /(?:[하되히붙맞찮없있보다]|(?:흔|[어아려고])드|(?:들|갈|몰|늘|둘|쏠|풀|드)리|[어아여워]지|(?:아|넘|떨)치|[어아][가오내]|[아라]타|(?:썩|렁|들|직|보)이)$/;
+/** '로' 앞이 '대로'(예상대|로·계획대|로·법칙대|로)·'가까스로'의 앞부분이면 낱말이 아니다 */
+const RO_WORD_END_RE = /(?:대|가까스)$/;
 /**
  * 토씨 예외: 끊은 자리 앞 조각(frag, 끝 한글 덩어리 run)이 뒤(rest) 토씨 앞의 온전한 낱말인지 — 뒤가 헷갈리지 않는 토씨뿐이고,
- * 한글 덩어리가 두 음절 이상이거나('영업점|에'·'강세|에') 영문·숫자 머리에 한글이 붙은 낱말('AI주|는'·'10월|에'·'HD현대|로')일 때.
- * 한 음절 한글 조각('만|에'·'제|로')과 풀이말 줄기('상승하|는')는 낱말로 보지 않는다
+ * 한글 덩어리가 에·에서·으로·에게 앞이면 두 음절 이상('영업점|에'·'강세|에'), 은·는·을·를·로·와 앞이면 세 음절 이상('코스피|는'·'영업점|을')이거나
+ * 영문·숫자 머리에 한글이 붙은 낱말('AI주|는'·'7천|은'·'10월|에'·'HD현대|로')일 때.
+ * 한 음절 한글 조각('만|에'·'제|로'), 두 음절 조각 + 은·는·을·를·로·와('늘리|는'·'매크|로'), 두 음절 토씨의 첫 음절('6으|로'), 풀이말 줄기
+ * ('상승하|는'·'뒤흔드|는')는 낱말로 보지 않는다
  */
 function beforeParticle(frag: string, run: string, rest: string): boolean {
   if (!run || !PARTICLE_RE.test(rest)) return false;
-  if ((rest === "는" || rest === "은") && VERB_STEM_END_RE.test(run)) return false;
-  return Array.from(run).length >= 2 || frag.length > run.length;
+  if (SPLIT_PARTICLE_RE.test(run.slice(-1) + rest.slice(0, 1))) return false;
+  if ((rest === "는" || rest === "은" || rest === "을") && VERB_STEM_END_RE.test(run)) return false;
+  if (frag.length > run.length) return true;
+  if (rest === "로" && RO_WORD_END_RE.test(run)) return false;
+  return Array.from(run).length >= (FIRM_PARTICLE_RE.test(rest) ? 2 : 3);
 }
+/**
+ * 붙임표 낱말의 앞 조각 ('K-반도체'의 'K'·'D-1'의 'D'·'미-이란'의 '미'·'美-中'의 '美') — 한글·한자 한 글자 또는 영문·숫자 한두 글자.
+ * 두 음절 한글('미국-이란'·'급등-인플레'·'상향-BTIG')은 온전한 낱말이라 붙임표 앞에서 끊어도 된다 (방향 낱말 '급등'·'상향'을 지우지 않게)
+ */
+const HYPHEN_HEAD_RE = /(?<![가-힣A-Za-z0-9&一-鿿])(?:[가-힣一-鿿]|[A-Za-z0-9&]{1,2})$/;
+/** 붙임표 뒤가 낱말로 이어진다 ('-반도체'·'-1'·'-이란') */
+const HYPHEN_JOIN_RE = /^[-‐‑–][가-힣A-Za-z0-9&一-鿿]/;
+/** 끊은 자리 뒤가 범위·바뀜 표시 + 숫자 ('→2.4%'·'~4%'·' → 8400') — 앞 숫자와 한 덩어리로 본다 */
+const RANGE_NEXT_RE = /^\s?[→~∼]\s?[+\-−▲▼]?\d/;
 /**
  * 낱말 가운데서 끊을 때 이 글자 수 이하 조각이 남으면 그 낱말 앞에서 끊는다 (SS1/SS9: '…상승 마감…다…'·'…랠리…나스…'·'반도체·석…').
  * 조각 전체가 아니라 끝의 한글 덩어리(뒤가 한글일 때)·영문·숫자 덩어리(뒤가 영문·숫자일 때)로 잰다 (검증 보정 2 must: 'SK하이|닉스'·'원익IPS까|지'는
@@ -680,9 +742,11 @@ function isOrphan(frag: string, next: string, rest: string): boolean {
  * 낱말 가운데서 끊게 되면: 남는 조각(마지막 띄어쓰기·문장 부호 뒤)이 짧으면(isOrphan — 한글 낱말은 끝 한글 덩어리가 NEWS_ORPHAN_MAX 음절 이하)
  * 그 낱말 앞(영문·숫자 머리까지 — 'SK하이|닉스'는 'SK하이닉스' 앞)에서 끊는다
  * ('…상승 마감…다우'를 '…상승 마감…다…'가 아니라 '…상승 마감…'으로 — '다'로 끝난 문장처럼 읽히지 않게). 조각이 더 길면('Acquis…') 그대로 두어
- * 줄 끝 빈 곳을 작게 한다. 끊은 자리 뒤가 헷갈리지 않는 토씨뿐이고 앞 조각이 낱말이면('영업점|에') 두고(beforeParticle), 두 음절 토씨 가운데면
- * ('실현으|로') 토씨 앞으로 한 글자 물린다. 물린 뒤 남는 앞부분이 NEWS_MIN_HEAD 자보다 짧아지면 물리지 않는다 (아주 좁은 칸). 규칙들은 더 바뀌지 않을 때까지
- * 번갈아 본다 — 숫자 앞으로 물린 자리가 낱말 가운데이거나 낱말 앞으로 물린 자리가 숫자 덩어리 안일 수 있다 ('다우·S&P500' → 'S&P…'가 아니라 '다우…')
+ * 줄 끝 빈 곳을 작게 한다. 끊은 자리 뒤가 헷갈리지 않는 토씨뿐이고 앞 조각이 낱말이면('영업점|에'·'코스피|는') 두고(beforeParticle), 두 음절 토씨
+ * 가운데면('실현으|로'·'106.6으|로' — 앞 글자가 한글·숫자·영문 무엇이든) 토씨 앞으로 한 글자 물린 뒤 다른 규칙을 본다('…소비심리 106.6' → 숫자 앞
+ * '…소비심리'). 붙임표 낱말의 한두 글자 앞 조각('…K|-반도체'·'…FOMC D|-1'·'…미|-이란')에서 끊기면 그 붙임표 낱말 앞에서.
+ * 끝의 구분자·여는 따옴표는 뗀다(trimCutEnd). 물린 뒤 남는 앞부분이 NEWS_MIN_HEAD 자보다 짧아지면 물리지 않는다 (아주 좁은 칸). 규칙들은 더 바뀌지
+ * 않을 때까지 번갈아 본다 — 숫자 앞으로 물린 자리가 낱말 가운데이거나 낱말 앞으로 물린 자리가 숫자 덩어리 안일 수 있다 ('다우·S&P500' → 'S&P…'가 아니라 '다우…')
  */
 function cutTitle(title: string, avail: number): string {
   const chars = Array.from(title);
@@ -692,24 +756,39 @@ function cutTitle(title: string, avail: number): string {
   let head = chars.slice(0, k).join("");
   const numbers = titleNumbers(title);
   for (;;) {
-    head = head.replace(TRAILING_CUT_RE, "");
+    head = trimCutEnd(head, title);
     const cut = head.length;
-    const hit = numbers.find((n) => n.start < cut && (cut < n.end || (cut === n.end && n.digitEnd)));
+    // 숫자 덩어리 안이거나 숫자로 끝나는 덩어리 바로 뒤, 또는 범위·바뀜('2.6%→2.4%'·'5.4명→'·'3~4%')의 앞 숫자 바로 뒤면 그 숫자 앞에서 —
+    // 구분자를 뗀 '…성장률 2.6%…'가 바뀐 뒤 값처럼 읽히지 않게 (검증 보정 3)
+    const ranged = RANGE_NEXT_RE.test(title.slice(cut));
+    const hit = numbers.find((n) => n.start < cut && (cut < n.end || (cut === n.end && (n.digitEnd || ranged))));
     if (hit) {
       head = title.slice(0, hit.start);
       continue;
     }
-    // 두 음절 토씨 가운데('…실현으|로')면 토씨를 통째로 넘긴다 — '…실현으…'가 아니라 '…실현…' (그 뒤 '실현|으로'는 토씨 예외로 본다)
-    if (cut > 1 && HANGUL_CHAR_RE.test(head[cut - 2]!) && SPLIT_PARTICLE_RE.test(head[cut - 1]! + (title[cut] ?? "")) && visibleLength(head) > NEWS_MIN_HEAD) {
+    // 두 음절 토씨 가운데('…실현으|로'·'…106.6으|로'·'…NYSE에|서')면 토씨를 통째로 넘긴다 — '…실현으…'가 아니라 '…실현…'(그 뒤 '실현|으로'는
+    // 토씨 예외), '…106.6으…'가 아니라 숫자 규칙으로 '…소비심리…' (검증 보정 3 must: 앞 글자가 숫자·영문일 때도)
+    if (cut > 1 && SPLIT_PARTICLE_RE.test(head[cut - 1]! + (title[cut] ?? "")) && visibleLength(head) > NEWS_MIN_HEAD) {
       head = head.slice(0, -1);
       continue;
+    }
+    // 붙임표 낱말의 한두 글자 앞 조각('…K|-반도체'·'…FOMC D|-1'·'…뉴욕증시, 미|-이란')이면 붙임표 낱말 앞에서 (검증 보정 3)
+    if (HYPHEN_JOIN_RE.test(title.slice(cut))) {
+      const frag = HYPHEN_HEAD_RE.exec(head);
+      if (frag) {
+        const before = trimCutEnd(head.slice(0, frag.index), title);
+        if (visibleLength(before) >= NEWS_MIN_HEAD) {
+          head = before;
+          continue;
+        }
+      }
     }
     // 낱말 가운데: 앞 글자와 뒤 글자(원문)가 모두 낱말 글자
     if (cut > 0 && WORD_CHAR_RE.test(title[cut] ?? "") && WORD_CHAR_RE.test(head[cut - 1]!)) {
       const frag = WORD_TAIL_RE.exec(head);
       const rest = WORD_HEAD_RE.exec(title.slice(cut))?.[0] ?? "";
       if (frag && frag.index > 0 && isOrphan(frag[0], title[cut]!, rest)) {
-        const before = head.slice(0, frag.index).replace(TRAILING_CUT_RE, "");
+        const before = trimCutEnd(head.slice(0, frag.index), title);
         if (visibleLength(before) >= NEWS_MIN_HEAD) {
           head = before;
           continue;
@@ -752,7 +831,7 @@ export function fitNewsTitle(title: string, width: number, size: number, scale: 
       k += ch.length;
     }
     const hit = titleNumbers(title).find((n) => n.start < k && k < n.end);
-    two = title.slice(0, hit ? hit.end : k).replace(TRAILING_CUT_RE, "");
+    two = trimCutEnd(title.slice(0, hit ? hit.end : k), title);
   }
   return { text: two.length < title.length ? `${two}…` : title, lines: 2 };
 }

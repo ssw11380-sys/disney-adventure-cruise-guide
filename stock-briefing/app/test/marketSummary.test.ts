@@ -543,39 +543,76 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     expect(fitNewsTitle(t, rowWidth(411, 1.3), font.body, 1.3).lines).toBe(1);
   });
 
-  /** 헷갈리지 않는 토씨 (검증 must — 가·이·도·의·과·만 등은 낱말 끝 음절이기도 해서 뺐다) */
-  const PARTICLES = ["은", "는", "을", "를", "에", "에서", "으로", "로", "와", "에게"];
+  /** 두 음절 한글 덩어리부터 온전한 낱말로 볼 수 있는 토씨 */
+  const FIRM_PARTICLES = ["에", "에서", "으로", "에게"];
+  /** 풀이말 어미·낱말 끝과 겹쳐 세 음절 덩어리(또는 영문·숫자 머리 낱말)부터만 온전한 낱말로 보는 토씨 */
+  const AMBIG_PARTICLES = ["은", "는", "을", "를", "로", "와"];
   /**
-   * 테스트가 따로 보는 '낱말 가운데 조각' (앱 정규식을 쓰지 않는다 — 'ㆍ'·'·'는 낱말 글자가 아님): 잘린 자리 앞뒤가 모두 낱말 글자일 때,
-   * 뒤 글자가 한글이면 앞 조각 **끝 한글 덩어리**의 음절 수(영문·숫자 머리는 세지 않는다 — 'SK하이|닉스'는 '하이' 2, '원익IPS까|지'는 '까' 1),
-   * 뒤 글자가 영문·숫자면 끝 영문·숫자 덩어리의 글자 수('원익IP|S'는 'IP' 2), 그런 덩어리가 없으면(글자 갈래가 바뀌는 자리 'SK|하이닉스') 앞 조각 전체의
-   * 글자 수를 잰다. 그 수가 max(기본 3 — 앱과 같은 기준, 검증 기준은 2) 이하이고, 조각이 맨 앞이 아니며,
-   * 토씨 예외(뒤가 헷갈리지 않는 토씨뿐 + 한글 덩어리 두 음절 이상이거나 영문·숫자 머리 'AI주|는', 풀이말 줄기 '…하|는'은 아님)가 아니면
-   * 물려야 할 조각 — 돌려주는 값은 낱말 조각 전체('SK하이'), 없으면 null
+   * 뒤가 는·은·을·로·와일 때 낱말이 아닌 두세 음절 조각 — 검증에서 짚었거나 말뭉치에서 찾은 풀이말 줄기·부사·'대로' 앞부분 (테스트가 따로 적은 목록.
+   * 앱은 풀이말 줄기 끝 규칙으로 막는다 — 같은 정규식을 베끼지 않는다)
    */
-  const orphanOf = (title: string, shown: string, max = 3): string | null => {
+  const NOT_WORDS = ["늘리", "몰리", "흔드", "판치", "실리", "넓히", "불붙", "돌아", "매크", "그대", "나홀", "뒤흔드", "두드리", "흔들리", "엇갈리", "벌어지", "멀어지", "얼어붙", "이어가", "바라보", "쳐다보", "갈아타", "들썩이", "출렁이", "사들이", "끄떡없", "얻어맞", "만만찮", "심상찮", "만든다", "오른다", "통했다", "밀린다", "가까스", "예상대", "계획대", "법칙대", "상승하", "하락하", "결정되"];
+  type BadCut = { kind: "split" | "frag" | "latin" | "hyphen" | "opener" | "sep" | "range"; token: string };
+  /**
+   * 테스트가 따로 보는 '잘못 끊긴 자리' (검증 보정 3 — 앱의 토씨 예외·숫자·구분자 정규식을 베끼지 않고 요구 사항을 그대로 적은 판정. 예전 orphanOf 는
+   * 앱의 토씨 예외를 그대로 옮겨 앱과 같은 빈 곳('6으|로'·'늘리|는')을 못 잡았다). 잘린 앞부분과 원문의 다음 글자로 본다:
+   *  - split: 두 음절 토씨의 첫 음절로 끝남 ('실현으|로'·'106.6으|로'·'NYSE에|서') — 앞 글자가 한글·숫자·영문 무엇이든
+   *  - frag: 한글 낱말 가운데이고 끝 한글 덩어리가 1~3음절인데 '온전한 낱말 + 토씨'가 아님. 온전한 낱말 + 토씨는 뒤가 에·에서·으로·에게뿐이고
+   *    덩어리가 2음절 이상('강세|에')이거나, 뒤가 은·는·을·를·로·와뿐이고 덩어리가 3음절 이상('코스닥|은' — NOT_WORDS 로 끝나면 아님)이거나,
+   *    영문·숫자 머리 낱말 + 토씨('AI주|는'·'7천|은'·'10월|에'). 4음절 이상 덩어리는 가운데서 끊어도 된다 ('AI속도조절…' — 앱 규칙)
+   *  - latin: 영문 가운데 3자 이하 조각('ET|F'), 3자 이하 한글 낱말 뒤 영문·숫자('삼성|SDI'), 3자 이하 영문 낱말 뒤 한글('SK|하이닉스', 토씨 앞 'AI|는'은 괜찮음)
+   *  - hyphen: 붙임표 낱말의 앞 조각 — 한글·한자 한 글자, 영문·숫자 한두 글자 ('K|-반도체'·'D|-1'·'미|-이란')
+   *  - opener: 여는 따옴표·괄호로 끝남 (‘ “ ( [ 【 《 「, 앞부분에서 짝 없는 ' " ` ＇ ＂, 영문 사이 줄임표 'Leader'|s')
+   *  - sep: 구분자로 끝남 (띄어쓰기·가운뎃점·쉼표·붙임표·쌍점·쌍반점·물결·화살표·말줄임·빗금·세로줄)
+   *  - range: 범위·바뀜 표시('→'·'~') 앞 숫자에서 끝남 ('…성장률 2.6%|→3.7%'·'…닉스 3|~6%' — 바뀐 뒤 값·한 값처럼 읽힌다)
+   * 숫자 가운데는 cutsNumber 가 따로 본다. token 은 그 자리에서 물려야 할 끝 조각 (아주 좁은 칸의 8자 보장 예외를 가릴 때 쓴다)
+   */
+  const badCut = (title: string, shown: string): BadCut | null => {
     if (shown === title) return null;
     const head = shown.replace(/…$/, "");
-    const W = /[가-힣A-Za-z0-9&]/;
     const next = title.slice(head.length, head.length + 1);
-    if (!W.test(next) || !W.test(head.slice(-1))) return null;
-    const m = /[가-힣A-Za-z0-9&]+$/.exec(head)!;
-    const rest = /^[가-힣A-Za-z0-9&]+/.exec(title.slice(head.length))![0];
-    const run = /[가-힣]+$/.exec(m[0])?.[0] ?? "";
-    const same = /[가-힣]/.test(next) ? run : (/[A-Za-z0-9&]+$/.exec(m[0])?.[0] ?? "");
-    const size = Array.from(same || m[0]).length;
-    if (m.index === 0 || size > max) return null;
-    if (run && PARTICLES.includes(rest) && !(/[하되]$/.test(run) && (rest === "는" || rest === "은")) && (run.length >= 2 || m[0].length > run.length)) return null;
-    return m[0];
+    const prev = head.slice(-1);
+    const after = title.slice(head.length);
+    const tail = (re: RegExp) => re.exec(head)?.[0] ?? "";
+    const isHan = (c: string) => c >= "가" && c <= "힣";
+    const isLat = (c: string) => /^[A-Za-z]$/.test(c);
+    if (["으로", "에서", "에게"].includes(prev + next)) return { kind: "split", token: tail(/[가-힣A-Za-z0-9&.,]+$/) };
+    if (isHan(prev) && isHan(next)) {
+      const run = tail(/[가-힣]+$/);
+      const word = tail(/[가-힣A-Za-z0-9&]+$/);
+      const rest = /^[가-힣]+/.exec(after)![0];
+      const n = Array.from(run).length;
+      const latinHead = word.length > run.length;
+      if (n >= 4) return null;
+      if (FIRM_PARTICLES.includes(rest) && (n >= 2 || latinHead)) return null;
+      if (AMBIG_PARTICLES.includes(rest) && (n >= 3 || latinHead) && !NOT_WORDS.some((x) => run.endsWith(x))) return null;
+      return { kind: "frag", token: word };
+    }
+    if (isLat(prev) && isLat(next) && tail(/[A-Za-z]+$/).length <= 3) return { kind: "latin", token: tail(/[가-힣A-Za-z0-9&]+$/) };
+    if (isHan(prev) && /^[A-Za-z0-9]$/.test(next) && Array.from(tail(/[가-힣A-Za-z0-9&]+$/)).length <= 3) return { kind: "latin", token: tail(/[가-힣A-Za-z0-9&]+$/) };
+    if (isLat(prev) && isHan(next)) {
+      const word = tail(/[가-힣A-Za-z0-9&]+$/);
+      const rest = /^[가-힣]+/.exec(after)![0];
+      if (Array.from(word).length <= 3 && ![...FIRM_PARTICLES, ...AMBIG_PARTICLES].includes(rest)) return { kind: "latin", token: word };
+    }
+    const hy = /(?:^|[^가-힣A-Za-z0-9&一-鿿])([가-힣一-鿿]|[A-Za-z0-9&]{1,2})$/.exec(head);
+    if (hy && /^[-‐‑–][가-힣A-Za-z0-9&一-鿿]/.test(after)) return { kind: "hyphen", token: hy[1]! };
+    if (/[‘“《〈「『（(\[{【<［｢〔]$/.test(head)) return { kind: "opener", token: prev };
+    if ("'\"`＇＂’".includes(prev)) {
+      const chars = Array.from(head);
+      const between = (i: number) => isLat(chars[i - 1] ?? "") && isLat(chars[i + 1] ?? next);
+      if (between(chars.length - 1)) return { kind: "opener", token: prev };
+      const open = chars.filter((c, i) => c === prev && !between(i)).length;
+      if (prev !== "’" && open % 2 === 1) return { kind: "opener", token: prev };
+    }
+    if (/(?:[\s·ㆍ∙‧・,:;；~∼→▶…⋯‥\-‐‑–—/|｜]|\.{2,})$/.test(head)) return { kind: "sep", token: prev };
+    if (/\d[%A-Za-z가-힣]{0,3}$/.test(head) && /^\s?[→~∼]\s?\d/.test(after)) return { kind: "range", token: tail(/[\d.,%A-Za-z가-힣]+$/) };
+    return null;
   };
-  /** 두 음절 토씨 가운데서 끊겼는지 ('…실현으|로'·'…거래소에|서'·'…투자자에|게') */
-  const splitsParticle = (title: string, shown: string): boolean => {
-    if (shown === title) return false;
-    const head = shown.replace(/…$/, "");
-    return /[가-힣]$/.test(head.slice(0, -1)) && ["으로", "에서", "에게"].includes(head.slice(-1) + title.slice(head.length, head.length + 1));
-  };
-  /** 끊은 자리 끝에서 떼는 글자 (앱 TRAILING_CUT_RE 와 같은 뜻 — 테스트용 사본) */
-  const trimCut = (s: string) => s.replace(/(?:[\s·ㆍ∙‧,…⋯‥\-–—([{【<|/]|\.{2,})+$/, "");
+  /** 조각 token 을 물리면 앞부분이 8자(NEWS_MIN_HEAD)보다 짧아지는지 — 앱은 그런 아주 좁은 칸에서는 물리지 않는다 */
+  const guarded = (shown: string, b: BadCut) => visibleLength(trimCut(shown.replace(/…$/, "").slice(0, -b.token.length))) < NEWS_MIN_HEAD;
+  /** 끊은 자리 끝에서 떼는 글자 (테스트용 — 구분자·여는 괄호·따옴표) */
+  const trimCut = (s: string) => s.replace(/(?:[\s·ㆍ∙‧・,:;；~∼→▶…⋯‥\-‐‑–—([{【<《〈「『（［｢〔|｜/‘“'"`＇＂]|\.{2,})+$/, "");
   const ORPHAN_TITLES = [
     "뉴욕증시, 호르무즈 협상 기대에 3대 지수 일제히 상승 마감…다우 1.2%↑",
     "뉴욕 증시 일제히 상승 마감…다우 1%↑",
@@ -593,7 +630,7 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
       seen.add(f.text);
       expect(f.text.endsWith("…다…"), `${w}: ${f.text}`).toBe(false);
       // 물리면 앞부분이 8자보다 짧아지는 아주 좁은 폭('뉴욕증시, 호르무…')만 예외
-      if (w >= 160) expect(orphanOf(t, f.text), `${w}: ${f.text}`).toBeNull();
+      if (w >= 160) expect(badCut(t, f.text), `${w}: ${f.text}`).toBeNull();
       expect(cutsNumber(t, f.text), `${w}: ${f.text}`).toBe(false);
       expect(f.lines).toBe(1);
       expect((lineEm(f.text) + NEWS_FIT_MARGIN_EM) * font.body, `${w}: ${f.text}`).toBeLessThanOrEqual(w);
@@ -614,8 +651,8 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
           const f = fitNewsTitle(title, rowWidth(win, scale), font.body, scale);
           if (f.text === title) continue;
           cut++;
-          const o = orphanOf(title, f.text);
-          if (o && Array.from(trimCut(f.text.slice(0, -1).slice(0, -o.length))).length >= NEWS_MIN_HEAD) left.push(`${win}·${scale}: ${f.text}`);
+          const o = badCut(title, f.text);
+          if (o && !guarded(f.text, o)) left.push(`${o.kind} ${win}·${scale}: ${f.text}`);
           expect(cutsNumber(title, f.text), `${win}·${scale}: ${f.text}`).toBe(false);
         }
     expect(cut).toBeGreaterThan(150);
@@ -653,8 +690,8 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
             // 끊은 자리가 그 낱말 안(첫 음절 뒤 ~ 마지막 음절 앞)이 아니다
             expect(head.length > at && head.length < at + word.length, `${word} ${w}·${scale}: ${f.text}`).toBe(false);
             // 다른 낱말에서도 3자 이하 조각이 남지 않는다 (물리면 8자보다 짧아지는 아주 좁은 폭만 예외)
-            const o = orphanOf(title, f.text);
-            if (o) expect(Array.from(trimCut(head.slice(0, -o.length))).length, `${w}·${scale}: ${f.text}`).toBeLessThan(NEWS_MIN_HEAD);
+            const o = badCut(title, f.text);
+            if (o) expect(guarded(f.text, o), `${o.kind} ${w}·${scale}: ${f.text}`).toBe(true);
             expect(cutsNumber(title, f.text), `${w}·${scale}: ${f.text}`).toBe(false);
           }
         }
@@ -795,8 +832,8 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
           const inside = head.length > at && head.length < at + word.length && !allowed.includes(head.length);
           expect(inside, `${w}·${scale}: ${f.text}`).toBe(false);
           // 다른 낱말에서도 조각이 남지 않는다 (물리면 8자보다 짧아지는 아주 좁은 폭 '삼성자산운용, KOD…'만 예외)
-          const o = orphanOf(n.title, f.text);
-          if (o) expect(visibleLength(trimCut(head.slice(0, -o.length))), `${w}·${scale}: ${f.text}`).toBeLessThan(NEWS_MIN_HEAD);
+          const o = badCut(n.title, f.text);
+          if (o) expect(guarded(f.text, o), `${o.kind} ${w}·${scale}: ${f.text}`).toBe(true);
         }
       expect(shown, word).toContain(before);
     }
@@ -823,8 +860,8 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
           const f = fitNewsLine({ outlet, title }, w, font.body, scale);
           expect(f.text.endsWith("ㆍ…"), `${w}·${scale}: ${f.text}`).toBe(false);
           // 'ㆍ' 뒤 낱말이 가운데서 끊기면 그 낱말 앞에서 ('…AIㆍ반도체…'처럼 뒤가 토씨뿐인 온전한 낱말은 둔다)
-          const o = orphanOf(title, f.text);
-          if (o) expect(visibleLength(trimCut(f.text.replace(/…$/, "").slice(0, -o.length))), `${w}·${scale}: ${f.text}`).toBeLessThan(NEWS_MIN_HEAD);
+          const o = badCut(title, f.text);
+          if (o) expect(guarded(f.text, o), `${o.kind} ${w}·${scale}: ${f.text}`).toBe(true);
         }
   });
 
@@ -838,13 +875,144 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
       for (const scale of [1, 1.3])
         for (let x = 620; x >= 100; x--) {
           const f = fitNewsTitle(title, x, font.body, scale);
-          if (f.lines === 1) expect(splitsParticle(title, f.text), `${x}·${scale}: ${f.text}`).toBe(false);
+          if (f.lines === 1) expect(badCut(title, f.text)?.kind, `${x}·${scale}: ${f.text}`).not.toBe("split");
         }
     }
   });
 
-  it("검증 보정 2: 실제 말뭉치 제목(전 코드가 낱말 조각을 남긴 108건 + 'ㆍ' 8건 + 토씨 3건 + 표본 108건) × 폭 200~620dp(1dp마다) × 글자 100·130% — 1~2음절(3음절까지) 조각·두 음절 토씨 가운데·숫자 가운데로 끝나는 줄이 없고(물리면 8자보다 짧아지는 아주 좁은 칸만 예외), 머리가 붙은 줄은 늘 제목 전체", () => {
-    expect(NEWS_CUT_CORPUS.length).toBeGreaterThanOrEqual(220);
+  /** 말뭉치 픽스처 5)절 — 검증 보정 3에서 짚은 제목 */
+  const FIX3 = NEWS_CUT_CORPUS.slice(NEWS_CUT_CORPUS.findIndex(([, t]) => t.startsWith("증시 진정되고 소득 기대")));
+  const title3 = (start: string) => FIX3.find(([, t]) => t.startsWith(start))![1];
+  /** 폭을 1dp씩 줄여 가며(620~100dp × 글자 100·130%) 한 줄로 잘린 줄마다 판정 — 8자 보장 예외가 아닌 잘못 끊긴 자리·숫자 가운데를 모은다 */
+  const sweepBad = (title: string, from = 620, to = 100): string[] => {
+    const left: string[] = [];
+    for (const scale of [1, 1.3])
+      for (let w = from; w >= to; w--) {
+        const f = fitNewsTitle(title, w, font.body, scale);
+        if (f.lines !== 1 || f.text === title) continue;
+        const o = badCut(title, f.text);
+        if (o && !guarded(f.text, o)) left.push(`${o.kind} ${w}·${scale}: ${f.text}`);
+        if (cutsNumber(title, f.text)) left.push(`숫자 ${w}·${scale}: ${f.text}`);
+      }
+    return left;
+  };
+
+  it("검증 보정 3 must: 두 음절 토씨 가운데는 앞 글자가 숫자·영문이어도 넘긴다 — '…소비심리 106.6으…'가 아니라 숫자 앞 '…소비심리…'", () => {
+    const cpi = title3("증시 진정되고 소득 기대");
+    const kospi = title3("코스피 3% 가까이 급등 6894.23으로");
+    const kosdaq = title3("[서울데이터랩] 코스닥 819.63으로");
+    // 검증 캡처(405~409dp 창, 글자 100%)·말뭉치에서 '으…'로 끝나던 폭
+    expect(fitNewsTitle(cpi, rowWidth(409, 1), font.body, 1).text).toBe("증시 진정되고 소득 기대 커지며 소비심리…");
+    expect(fitNewsTitle(kospi, 228, font.body, 1).text).toBe("코스피 3% 가까이 급등…");
+    expect(fitNewsTitle(kosdaq, rowWidth(384, 1.3), font.body, 1.3).text).toBe("[서울데이터랩] 코스닥…");
+    // 영문 뒤 '에|서'도 토씨째 넘긴다 ('NYSE…' — 토씨 앞 온전한 영문 낱말은 둔다)
+    const nyse = "엔스케일 상장 첫날, NYSE에서 공모가 대비 급등 출발";
+    const shown = [...Array(300).keys()].map((i) => fitNewsTitle(nyse, 420 - i, font.body, 1).text);
+    expect(shown.some((t) => t.endsWith("에…"))).toBe(false);
+    expect(shown).toContain("엔스케일 상장 첫날, NYSE…");
+    // 폭 전체에서 두 음절 토씨 가운데·숫자 가운데로 끝나지 않는다
+    for (const t of [cpi, kospi, kosdaq, nyse]) expect(sweepBad(t), t).toEqual([]);
+  });
+
+  it("검증 보정 3 must: 두 음절 조각 + 은·는·을·를·로·와('늘리|는'·'매크|로')와 세 음절 풀이말 줄기('뒤흔드|는'·'이어가|는')는 낱말 앞에서 — '…투자 늘리…'가 아니라 '…투자…'", () => {
+    const at = (start: string, w: number, scale: number) => fitNewsTitle(title3(start), w, font.body, scale).text;
+    // 검증 캡처: 384dp 창·430dp 창, 글자 100%
+    expect(at("[경제 포커스]", rowWidth(384, 1), 1)).toBe("[경제 포커스] 환율 떨어지자 美 주식 투자…");
+    expect(at("앱을 닫아도", rowWidth(430, 1), 1)).toBe("앱을 닫아도 클라우드는 켜져 있다…AI 에이전트가…");
+    expect(at("해양쓰레기", rowWidth(430, 1), 1)).toBe("해양쓰레기·우주의약품·반도체 실증까지…누리호에…");
+    expect(at("[Why]", 352, 1)).toBe("[Why] 美中 갈등 속에도 돈은 월가로… 中 서학개미…");
+    expect(at("코스피 2% 넘게 올라", 398, 1)).toBe("코스피 2% 넘게 올라 6,894로 마감‥반도체주 강세에 외국인…");
+    // 세 음절 풀이말 줄기·'가까스로'·'대로'
+    expect(at("코스피가 미국 증시 뒤흔드는", 233, 1.3)).toBe("코스피가 미국 증시…");
+    expect(at("[포토] 연휴 앞두고", rowWidth(384, 1.3), 1.3)).toBe("[포토] 연휴 앞두고 상승세…");
+    expect(at("코스피, 2%대 상승분 반납", rowWidth(360, 1), 1)).toBe("코스피, 2%대 상승분 반납…7000선…");
+    expect(at("미국 이어 일본까지", rowWidth(360, 1), 1)).toBe("미국 이어 일본까지 금리 인상에도…");
+    // 온전한 낱말 + 토씨는 둔다: 세 음절 명사 + 은('…코스닥…'), 영문·숫자 머리 + 은('…7천…'). 두 음절 + 에('…영업점…')는 위 SS1/SS9
+    const kosdaq = "코스피, 0.04% 내린 6,715.41 마감…코스닥은 0.3% 상승";
+    expect([...Array(300).keys()].map((i) => fitNewsTitle(kosdaq, 420 - i, font.body, 1).text)).toContain("코스피, 0.04% 내린 6,715.41 마감…코스닥…");
+    expect([...Array(300).keys()].map((i) => fitNewsTitle(ORPHAN_TITLES[5]!, 420 - i, font.body, 1).text)).toContain("코스피, 금리 우려·재조정 물량 등 영향 0.25% 하락‥7천…");
+    // 5)절 풀이말·낱말 끝 제목 전부: 폭 전체에서 잘못 끊긴 자리가 없고, 짚은 조각('늘리…'·'흔드…'·'매크…'·'가까스…'·'예상대…' 등)으로 끝나지 않는다
+    const stems = FIX3.slice(3, 21);
+    expect(stems.length).toBe(18);
+    for (const [, t] of stems) {
+      expect(sweepBad(t), t).toEqual([]);
+      for (const scale of [1, 1.3])
+        for (let w = 620; w >= 200; w--) {
+          const f = fitNewsTitle(t, w, font.body, scale);
+          const head = f.text.replace(/…$/, "");
+          if (f.text !== t) expect(NOT_WORDS.some((x) => head.endsWith(x) && /^[는은을로와]/.test(t.slice(head.length))), `${w}·${scale}: ${f.text}`).toBe(false);
+        }
+    }
+  });
+
+  it("검증 보정 3 should: 여는 따옴표·짝 없는 따옴표·쌍점·쌍반점으로 끝나지 않는다 — '…원·달러 환율 '…'가 아니라 '…원·달러 환율…' (닫는 따옴표는 둔다)", () => {
+    const at = (start: string, w: number, scale: number) => fitNewsTitle(title3(start), w, font.body, scale).text;
+    expect(at("유가 100달러·국채금리 5% 뚫자", rowWidth(411, 1), 1)).toBe("유가 100달러·국채금리 5% 뚫자…원·달러 환율…");
+    expect(at("뉴욕증시 프리뷰, 유가 급락에", rowWidth(475, 1), 1)).toBe("뉴욕증시 프리뷰, 유가 급락에 美 주가 선물 반등…이제 시선은…");
+    expect(at("부동산 빼고", rowWidth(411, 1.3), 1.3)).toBe("부동산 빼고…저축·해외주식 끌어와…");
+    expect(at("AI 반도체 투자에 중국까지", rowWidth(411, 1.3), 1.3)).toBe("AI 반도체 투자에 중국까지…코미코…");
+    expect(at("[속보] 샌디스크", rowWidth(409, 1), 1)).toBe("[속보] 샌디스크 6.8% 뛰었다…나스닥, 나홀로…");
+    expect(at("아시아 증시, 채권 매도세", rowWidth(360, 1), 1)).toBe("아시아 증시, 채권 매도세 부담에 하락…");
+    expect(at("Aditxt,", rowWidth(411, 1.3), 1.3)).toBe("Aditxt, 나스닥에서 상장폐지 예정…");
+    // 영문 사이 줄임표('Leader’s')는 따옴표가 아니다 — 'Leader’…'로 끝나지 않는다
+    const leader = "Leader’s Advantage Acquisition, 나스닥에서 1억 5천만 달러 IPO 가격 확정";
+    expect(sweepBad(leader)).toEqual([]);
+    // 따옴표가 든 제목 전부(말뭉치 픽스처): 폭 전체에서 여는·짝 없는 따옴표로 끝나지 않고, 닫는 따옴표로 끝나는 줄은 남는다('…'반도체 강세'…')
+    let closed = 0;
+    for (const [, t] of NEWS_CUT_CORPUS.filter(([, x]) => /['"`‘“’”＇＂]/.test(x)))
+      for (const scale of [1, 1.3])
+        for (let w = 620; w >= 200; w--) {
+          const f = fitNewsTitle(t, w, font.body, scale);
+          if (f.lines !== 1 || f.text === t) continue;
+          const o = badCut(t, f.text);
+          if (o && (o.kind === "opener" || o.kind === "sep")) expect(guarded(f.text, o), `${o.kind} ${w}·${scale}: ${f.text}`).toBe(true);
+          if (/['"’”]…$/.test(f.text)) closed++;
+        }
+    expect(closed).toBeGreaterThan(100);
+  });
+
+  it("검증 보정 3: 범위·바뀜 표시('2.6%→3.7%'·'5.4명→5.0명'·'3~6%')의 앞 숫자에서 끊기면 그 숫자 앞에서 — '…성장률 2.6%…'(바뀐 뒤 값처럼 읽힘)가 아니라 '…성장률…'", () => {
+    const at = (start: string, w: number, scale: number) => fitNewsTitle(title3(start), w, font.body, scale).text;
+    expect(at("반도체 호황에…OECD", rowWidth(384, 1), 1)).toBe("반도체 호황에…OECD, 올해 韓성장률…");
+    expect(at("반도체 수출 늘었지만", rowWidth(475, 1), 1)).toBe("반도체 수출 늘었지만 일자리는 뒷걸음…취업유발계수…");
+    expect(at("미 금리인상 하루 만에", rowWidth(411, 1), 1)).toBe("미 금리인상 하루 만에 반등한 코스피…삼전·닉스…");
+    for (const [, t] of FIX3.filter(([, x]) => /\d[%명]?[→~]/.test(x))) expect(sweepBad(t, 620, 200), t).toEqual([]);
+  });
+
+  it("검증 보정 3: 붙임표 낱말의 한두 글자 앞 조각('…미|-이란'·'…FOMC D|-1'·'…K|-반도체')에서 끊기면 붙임표 낱말 앞에서, 두 음절 한글('미국-이란'·'급등-인플레')은 둔다", () => {
+    const at = (start: string, w: number, scale: number) => fitNewsTitle(title3(start), w, font.body, scale).text;
+    expect(at("[오늘의 글로벌마켓] 뉴욕증시, 미-이란", rowWidth(411, 1.3), 1.3)).toBe("[오늘의 글로벌마켓] 뉴욕증시…");
+    expect(at("[뉴스프레소]", rowWidth(430, 1), 1)).toBe("[뉴스프레소] 브레이크 없이 치솟는 국채금리… FOMC…");
+    expect(at("트럼프-시진핑", rowWidth(409, 1), 1)).toBe("트럼프-시진핑 ‘반도체 빅딜’ 가능성… 경보음 켜진…");
+    // 두 음절 한글은 온전한 낱말이라 붙임표 앞에서 끊어도 된다 ('급등' 같은 방향 낱말을 지우지 않는다)
+    expect(at("이틀째 급락 원·달러", rowWidth(384, 1), 1)).toBe("이틀째 급락 원·달러 환율 1350원대로…미국…");
+    expect(at("[뉴욕증시] 유가 급등-인플레", rowWidth(384, 1.3), 1.3)).toBe("[뉴욕증시] 유가 급등-인플레…");
+    for (const [, t] of FIX3.filter(([, x]) => /[가-힣A-Za-z0-9]-[가-힣A-Za-z0-9]/.test(x))) expect(sweepBad(t, 620, 200), t).toEqual([]);
+  });
+
+  it("검증 보정 3: 폰 폭(창 360·384·405~411·430·475dp × 글자 100·130%)에서 말뭉치 픽스처 제목 전부 — 잘못 끊긴 자리·숫자 가운데·넘침이 없다 (8자 보장 예외 없음)", () => {
+    const left: string[] = [];
+    let cut = 0;
+    for (const [outlet, title] of NEWS_CUT_CORPUS)
+      for (const win of [360, 384, 405, 406, 407, 408, 409, 410, 411, 430, 475])
+        for (const scale of [1, 1.3]) {
+          const w = rowWidth(win, scale);
+          const f = fitNewsLine({ outlet, title }, w, font.body, scale);
+          const at = `${win}·${scale}: ${f.outlet ? `${f.outlet} · ` : ""}${f.text}`;
+          expect(f.lines, at).toBe(1);
+          if (f.outlet || f.text === title) continue;
+          cut++;
+          const o = badCut(title, f.text);
+          if (o) left.push(`${o.kind} ${at}`);
+          if (cutsNumber(title, f.text)) left.push(`숫자 ${at}`);
+          if ((lineEm(f.text) + NEWS_FIT_MARGIN_EM) * font.body * scale > w + 1e-9) left.push(`넘침 ${at}`);
+        }
+    expect(left).toEqual([]);
+    expect(cut).toBeGreaterThan(3000);
+  });
+
+  it("검증 보정 2·3: 실제 말뭉치 제목(픽스처 1~5절 264건) × 폭 200~620dp(1dp마다) × 글자 100·130% — 따로 만든 판정(badCut)으로 잘못 끊긴 자리(조각·두 음절 토씨 가운데·붙임표 앞 조각·여는 따옴표·구분자·범위 앞 숫자)·숫자 가운데로 끝나는 줄이 없고(물리면 8자보다 짧아지는 아주 좁은 칸만 예외), 머리가 붙은 줄은 늘 제목 전체", () => {
+    expect(NEWS_CUT_CORPUS.length).toBeGreaterThanOrEqual(264);
     const left: string[] = [];
     let cut = 0;
     let heads = 0;
@@ -866,16 +1034,15 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
           if (!title.startsWith(head) || visibleLength(head) < NEWS_MIN_HEAD) left.push(`앞부분 ${at}`);
           if ((lineEm(f.text) + NEWS_FIT_MARGIN_EM) * font.body * scale > w + 1e-9) left.push(`넘침 ${at}`);
           if (cutsNumber(title, f.text)) left.push(`숫자 ${at}`);
-          if (splitsParticle(title, f.text)) left.push(`토씨 ${at}`);
-          const o = orphanOf(title, f.text);
+          const o = badCut(title, f.text);
           if (!o) continue;
           // 물리면 8자보다 짧아지는 아주 좁은 칸만 조각을 둔다 (NEWS_MIN_HEAD)
-          if (visibleLength(trimCut(head.slice(0, -o.length))) < NEWS_MIN_HEAD) guard++;
-          else left.push(`조각 ${o} ${at}`);
+          if (guarded(f.text, o)) guard++;
+          else left.push(`${o.kind} ${o.token} ${at}`);
         }
     expect(left).toEqual([]);
-    expect(cut).toBeGreaterThan(80_000); // 폭마다 대부분 잘린다 (자르는 길이 실제로 쓰였다)
+    expect(cut).toBeGreaterThan(90_000); // 폭마다 대부분 잘린다 (자르는 길이 실제로 쓰였다)
     expect(heads).toBeGreaterThan(10_000); // 넓은 폭에서는 머리 + 제목 전체
-    expect(guard).toBeLessThan(20);
+    expect(guard).toBeLessThan(40);
   });
 });
