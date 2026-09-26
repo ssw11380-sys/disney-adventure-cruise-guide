@@ -1477,14 +1477,20 @@ describe("뉴스 제목 고르기 (원문 그대로 · 창 · 거르기 · 같�
     expect(got.map((n) => n.title).sort()).toEqual(["[뉴욕증시] 호르무즈 재개방 협상, 기대는 하지만…혼조 마감", "달러-원, 뉴욕장서 1,350원 중반대 거래"]);
   });
 
-  it("SS3/SS7: 폭 없는 글자(U+200B~U+200F·U+2060·U+FEFF)는 제목·언론사 이름에서 지운다 — 실제 아주경제 '[속보] +U+200B×7 코스피, 63.01p(0.90%) 오른 7080.92 마감'", () => {
+  it("SS3/SS7: 뜻 없는 폭 없는 글자(U+200B·U+2060·U+FEFF)는 제목·언론사 이름에서 지운다 — 실제 아주경제 '[속보] +U+200B×7 코스피, 63.01p(0.90%) 오른 7080.92 마감'. ZWJ·ZWNJ·방향 표시는 둔다 (모든 뉴스 제목에 걸림)", () => {
     const ZW = "​".repeat(7);
     const clean = "[속보] 코스피, 63.01p(0.90%) 오른 7080.92 마감";
     // 실제 모양 그대로 (말머리 뒤 띄어쓰기 + U+200B 7개 + 코스피), 띄어쓰기가 앞뒤로 있어도 한 칸으로
     expect(stripHtml(`[속보] ${ZW}코스피, 63.01p(0.90%) 오른 7080.92 마감`)).toBe(clean);
     expect(stripHtml(`[속보] ${ZW} 코스피, 63.01p(0.90%) 오른 7080.92 마감`)).toBe(clean);
-    expect(stripHtml("[속보] &#8203;&#8203;코스피⁠, 63.01p﻿(0.90%) 오른‎ 7080.92 마감‏")).toBe(clean);
-    expect(stripHtml("아주경제​‌‍")).toBe("아주경제");
+    expect(stripHtml("[속보] &#8203;&#8203;코스피⁠, 63.01p﻿(0.90%) 오른 7080.92 마감&#xFEFF;")).toBe(clean);
+    expect(stripHtml("아주경제​﻿")).toBe("아주경제");
+    // 글자 모양을 바꾸는 글자는 그대로 (종목 뉴스 제목도 이 함수를 거친다): 이모지 묶음 ZWJ, ZWNJ, 방향 표시
+    const family = "\u{1F468}‍\u{1F469}‍\u{1F467}";
+    expect(stripHtml(`${family} 가족 펀드 출시`)).toBe(`${family} 가족 펀드 출시`);
+    expect(stripHtml("می‌خواهم")).toBe("می‌خواهم");
+    expect(stripHtml("A‎-B‏")).toBe("A‎-B‏");
+    expect(stripHtml("아주경제​‌‍")).toBe("아주경제‌‍");
     const got = parseGoogleRss(rss([{ title: `[속보] ${ZW}코스피, 63.01p(0.90%) 오른 7080.92 마감`, outlet: "아주경제​", at: "2026-09-23T06:36:00Z", id: "aj1" }]));
     expect(got).toHaveLength(1);
     expect(got[0]!.title).toBe(clean);

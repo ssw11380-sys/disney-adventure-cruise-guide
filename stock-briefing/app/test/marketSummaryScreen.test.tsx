@@ -275,7 +275,7 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     for (const t of titles) expect(String(cardOf(r)!.props.accessibilityLabel)).toContain(t);
   });
 
-  it("SS5·SS11: 언론사 머리는 제목이 12자 이상 남을 때만 — 좁으면 제목만(지금처럼), 넓으면 '연합뉴스 · 제목'. 화면 읽기는 언론사·시각·제목 그대로, 카드 줄 수는 그대로", () => {
+  it("SS5·SS11: 언론사 머리는 제목을 해치지 않을 때만 — 다 들어가거나 낱말 사이에서 12자 이상 남을 때 '연합뉴스 · 제목', 제목만이면 다 드는 제목은 머리 없이 전체. 화면 읽기는 언론사·시각·제목 그대로, 카드 줄 수는 그대로", () => {
     h.flags = { marketSummary: true };
     const d = MORNING.data!;
     const titles = ["[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥 0.48%↑", "뉴욕증시, 3대 지수 일제히 상승 마감…다우 0.9%↑"];
@@ -293,19 +293,19 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     expect(heads()).toEqual(["연합뉴스 · ", "MTN 머니투데이방송 · "]);
     expect(lines().map(titleOf)).toEqual(titles);
     expect(texts(r)).toContain("외 1건 · 시각·원문은 상세에서");
-    // 폰 폭(355dp — 475 접은 화면 카드의 뉴스 칸): 머리를 붙이고도 12자 이상 남으면 머리 + 잘린 제목
+    // 폰 폭(355dp — 475 접은 화면 카드의 뉴스 칸): 제목만이면 둘 다 다 들어가므로 머리를 붙여 자르지 않는다 (검증 should)
     layout(355);
-    let withHead = 0;
-    for (const [i, n] of lines().entries()) {
-      const shown = titleOf(n);
-      const own = n.children.some((c) => typeof c !== "string" && c.props.testID === "news-outlet");
-      expect(shown === titles[i] || titles[i]!.startsWith(shown.replace(/…$/, "")), shown).toBe(true);
-      if (own) {
-        withHead++;
-        if (shown !== titles[i]) expect(Array.from(shown.replace(/…$/, "")).length, shown).toBeGreaterThanOrEqual(12);
-      }
-    }
-    expect(withHead).toBeGreaterThan(0);
+    expect(heads()).toEqual([]);
+    expect(lines().map(titleOf)).toEqual(titles);
+    expect(texts(r)).toContain("외 1건 · 언론사·시각·원문은 상세에서");
+    // 300dp: 첫 제목은 어차피 잘리므로 낱말 사이에서 12자 이상 남는 머리 + 잘린 제목, 둘째 제목은 제목만이면 다 들어가므로 머리 없이 전체
+    layout(300);
+    expect(heads()).toEqual(["연합뉴스 · "]);
+    const [first, second] = lines().map(titleOf);
+    expect(first).toBe("[뉴욕마감]국채금리 급등에도 AI주…");
+    expect(Array.from(first!.replace(/…$/, "")).length).toBeGreaterThanOrEqual(12);
+    expect(second).toBe(titles[1]);
+    expect(texts(r)).toContain("외 1건 · 언론사·시각·원문은 상세에서");
     // 긴 언론사 이름은 좁으면 먼저 빠진다 (제목 12자를 지킬 수 없으면 제목만)
     layout(200);
     expect(heads()).not.toContain("MTN 머니투데이방송 · ");

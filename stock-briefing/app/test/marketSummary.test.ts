@@ -26,6 +26,8 @@ import {
   NEWS_MIN_HEAD,
   NEWS_OUTLET_MIN_TITLE,
   NEWS_OUTLET_SEP,
+  NEWS_OUTLET_SLACK_EM,
+  cutAtWordEnd,
   chunkSegs,
   chunkText,
   holdingsSegs,
@@ -542,7 +544,12 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     expect(fitNewsTitle(t, rowWidth(411, 1.3), font.body, 1.3).lines).toBe(1);
   });
 
-  /** 테스트가 따로 보는 '낱말 가운데 3자 이하 조각' (앱 정규식을 쓰지 않는다): 잘린 자리 앞뒤가 모두 낱말 글자이고, 앞 조각이 3자 이하·맨 앞이 아니며, 뒤가 토씨뿐이 아닌 것 */
+  /** 헷갈리지 않는 토씨 (검증 must — 가·이·도·의·과·만 등은 낱말 끝 음절이기도 해서 뺐다) */
+  const PARTICLES = ["은", "는", "을", "를", "에", "에서", "으로", "로", "와", "에게"];
+  /**
+   * 테스트가 따로 보는 '낱말 가운데 3자 이하 조각' (앱 정규식을 쓰지 않는다): 잘린 자리 앞뒤가 모두 낱말 글자이고, 앞 조각이 3자 이하·맨 앞이 아니며,
+   * 토씨 예외(두 음절 이상 한글 조각 + 헷갈리지 않는 토씨뿐, 풀이말 줄기 '…하|는'은 아님)가 아닌 것
+   */
   const orphanOf = (title: string, shown: string): string | null => {
     if (shown === title) return null;
     const head = shown.replace(/…$/, "");
@@ -551,9 +558,11 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     const m = /[가-힣A-Za-z0-9&]+$/.exec(head)!;
     const rest = /^[가-힣A-Za-z0-9&]+/.exec(title.slice(head.length))![0];
     if (m.index === 0 || Array.from(m[0]).length > 3) return null;
-    if (/^[가-힣]+$/.test(m[0]) && ["은", "는", "이", "가", "을", "를", "의", "에", "에서", "에게", "로", "으로", "와", "과", "도", "만", "엔", "까지", "부터", "보다"].includes(rest)) return null;
+    if (/^[가-힣]{2,}$/.test(m[0]) && PARTICLES.includes(rest) && !(/[하되]$/.test(m[0]) && (rest === "는" || rest === "은"))) return null;
     return m[0];
   };
+  /** 끊은 자리 끝에서 떼는 글자 (앱 TRAILING_CUT_RE 와 같은 뜻 — 테스트용 사본) */
+  const trimCut = (s: string) => s.replace(/(?:[\s·,…⋯‥\-–—([{【<|/]|\.{2,})+$/, "");
   const ORPHAN_TITLES = [
     "뉴욕증시, 호르무즈 협상 기대에 3대 지수 일제히 상승 마감…다우 1.2%↑",
     "뉴욕 증시 일제히 상승 마감…다우 1%↑",
@@ -600,6 +609,56 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     expect(left).toEqual([]);
   });
 
+  /** 검증 must: 흔한 낱말의 끝 음절(가·이·도·의)을 토씨로 보고 앞 조각('유…'·'주…'·'추…')을 남기던 실제 말뭉치 제목 — [언론사, 제목, 낱말] */
+  const SPLIT_WORDS: Array<[string, string, string]> = [
+    ["연합뉴스", "코스피, 미 금리인상에도 상승…유가 하락 영향", "유가"],
+    ["연합인포맥스", "[증시-마감] 코스피, AI 훈풍·유가 하락에 7,000선 안착…삼전 3%대 강세", "유가"],
+    ["MTN 머니투데이방송", "뉴욕증시 연준 금리 인상·추가 긴축 우려에 하락…다우 1.21%↓[뉴욕마감]", "추가"],
+    ["뉴스핌", "[장중수급포착] KCC, 외국인 5일 연속 순매수행진... 주가 +1.82%", "주가"],
+    ["서울경제TV", "원달러 환율 하락에도…서학개미, 9월 美주식 순매도 전환", "순매도"],
+    ["Chosunbiz", "美 국채 금리·유가 상승·AI 개발 속도 조절론에 뉴욕증시 일제히 하락 마감", "속도"],
+    ["미주조선일보", "[뉴욕증시 28일] 이란전 휴전 연장 합의 소식에 최고치", "합의"],
+    ["연합뉴스", "[글로벌증시] 뉴욕증시, 혼조세 마감…나스닥 또 최고가 경신", "최고가"],
+    ["뉴시스", "日증시, 美반도체주 강세에 상승 출발…닛케이 0.7%↑", "닛케이"],
+    // 한 음절 조각('만|에')·풀이말 줄기('하락하|는')도 토씨 예외가 아니다
+    ["Chosunbiz", "외국인, 8개월 만에 주식 순매수 전환…시총 34.8% 보유", "만에"],
+    ["버핏연구소", "[시황] 미국증시, 반도체 강세에 S&P500·나스닥 상승, 다우는 하락하는 혼조세 마감", "하락하는"],
+  ];
+
+  it("검증 must: 유|가·추|가·주|가·순매|도·속|도·합|의·최고|가·닛케|이 — 낱말 가운데서 끊으면 그 낱말 앞에서 (제목만·언론사 머리 모두, '유…'·'주…'·'추…'를 남기지 않는다)", () => {
+    for (const [outlet, title, word] of SPLIT_WORDS) {
+      const at = title.indexOf(word);
+      expect(at, word).toBeGreaterThan(0);
+      const before = `${trimCut(title.slice(0, at))}…`;
+      const shown = new Set<string>();
+      for (const scale of [1, 1.3])
+        for (let w = 620; w >= 100; w--) {
+          for (const f of [fitNewsTitle(title, w, font.body, scale), fitNewsLine({ outlet, title }, w, font.body, scale)]) {
+            if (f.lines !== 1 || f.text === title) continue;
+            const head = f.text.replace(/…$/, "");
+            shown.add(f.text);
+            // 끊은 자리가 그 낱말 안(첫 음절 뒤 ~ 마지막 음절 앞)이 아니다
+            expect(head.length > at && head.length < at + word.length, `${word} ${w}·${scale}: ${f.text}`).toBe(false);
+            // 다른 낱말에서도 3자 이하 조각이 남지 않는다 (물리면 8자보다 짧아지는 아주 좁은 폭만 예외)
+            const o = orphanOf(title, f.text);
+            if (o) expect(Array.from(trimCut(head.slice(0, -o.length))).length, `${w}·${scale}: ${f.text}`).toBeLessThan(NEWS_MIN_HEAD);
+            expect(cutsNumber(title, f.text), `${w}·${scale}: ${f.text}`).toBe(false);
+          }
+        }
+      // 낱말 가운데에 걸리던 폭에서는 그 낱말 앞에서 끊었다 ('코스피, 미 금리인상에도 상승…')
+      expect(shown, `${word}: ${before}`).toContain(before);
+    }
+    // 뒤가 헷갈리지 않는 토씨뿐이고 앞 조각이 두 음절 이상이면 둔다 ('영업점|에' → '…영업점…')
+    const kept = ORPHAN_TITLES[4]!;
+    const cuts = [...Array(300).keys()].map((i) => fitNewsTitle(kept, 420 - i, font.body, 1).text);
+    expect(cuts).toContain("[단독] 금융 당국 서학개미 마케팅 자제령에도… 증권사, 영업점…");
+    // 머리를 붙인 줄은 낱말 사이에서 끝난다 — '영업점…'(토씨 예외로 낱말 가운데)은 제목만 둔 줄에서만
+    for (let w = 420; w >= 120; w--) {
+      const f = fitNewsLine({ outlet: "연합뉴스", title: kept }, w, font.body, 1);
+      if (f.outlet && f.text !== kept) expect(cutAtWordEnd(kept, f.text.replace(/…$/, "")), `${w}: ${f.text}`).toBe(true);
+    }
+  });
+
   it("SS3/SS7: 폭 없는 글자(U+200B~U+200F·U+2060·U+FEFF)는 폭 0 — 실제 아주경제 '[속보] +U+200B×7 코스피, 63.01p(0.90%) 오른 7080.92 마감'이 보이는 제목과 같게 잘린다", () => {
     const ZW = "​".repeat(7);
     const clean = "[속보] 코스피, 63.01p(0.90%) 오른 7080.92 마감";
@@ -622,7 +681,34 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     }
   });
 
-  it("SS5/SS11: 카드 뉴스 줄 언론사 머리 — 제목이 다 들어가거나 12자 이상 남을 때만 '연합뉴스 · ', 아니면 제목만 (두 줄 모드에는 붙이지 않는다)", () => {
+  /** 머리 규칙 (a)(b)(c)를 한 줄에 대해 확인한다 — 머리를 붙였으면: 한 줄·폭 안·숫자 안 가름, 잘렸으면 낱말 사이·12자 이상·제목만보다 머리 폭 + 여유 넘게 짧지 않음. 제목만이면 다 드는 제목은 늘 다 보인다 */
+  const checkHead = (n: { outlet: string; title: string }, w: number, scale: number) => {
+    const f = fitNewsLine(n, w, font.body, scale);
+    const plain = fitNewsTitle(n.title, w, font.body, scale);
+    const at = `${w}·${scale}: ${f.outlet ?? ""} · ${f.text}`;
+    // (b) 제목만 두면 다 드는 제목을 머리 때문에 자르지 않는다
+    if (plain.text === n.title) expect(f.text, at).toBe(n.title);
+    if (!f.outlet) {
+      expect(f, at).toEqual({ ...plain, outlet: null });
+      return false;
+    }
+    expect(f.lines, at).toBe(1);
+    // 머리 + 제목의 어림 폭이 줄 폭을 넘지 않는다
+    expect((lineEm(`${f.outlet}${NEWS_OUTLET_SEP}${f.text}`) + NEWS_FIT_MARGIN_EM) * font.body * scale, at).toBeLessThanOrEqual(w + 1e-9);
+    expect(cutsNumber(n.title, f.text), at).toBe(false);
+    if (f.text !== n.title) {
+      // (c) 낱말 사이에서 끝나고(8자 보장·토씨 예외로 낱말 가운데 남은 조각이 아님), 12자 이상, 제목만 둔 줄보다 머리 폭 + 여유 넘게 짧지 않다
+      const cut = f.text.replace(/…$/, "");
+      const W = /[가-힣A-Za-z0-9&]/;
+      expect(W.test(cut.slice(-1)) && W.test(n.title.slice(cut.length, cut.length + 1)), at).toBe(false);
+      expect(cutAtWordEnd(n.title, cut), at).toBe(true);
+      expect(visibleLength(cut), at).toBeGreaterThanOrEqual(NEWS_OUTLET_MIN_TITLE);
+      expect(lineEm(cut), at).toBeGreaterThanOrEqual(lineEm(plain.text.replace(/…$/, "")) - lineEm(`${f.outlet}${NEWS_OUTLET_SEP}`) - NEWS_OUTLET_SLACK_EM - 1e-9);
+    }
+    return true;
+  };
+
+  it("SS5/SS11: 카드 뉴스 줄 언론사 머리 — 제목이 다 들어가거나 낱말 사이에서 12자 이상 남을 때만 '연합뉴스 · ', 아니면 제목만 (두 줄 모드에는 붙이지 않는다)", () => {
     const n = { outlet: "연합뉴스", title: "[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥 0.48%↑" };
     // 넓으면 머리 + 제목 전체
     expect(fitNewsLine(n, 600, font.body, 1)).toEqual({ outlet: "연합뉴스", text: n.title, lines: 1 });
@@ -631,19 +717,8 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     let withHead = 0;
     let without = 0;
     for (let w = 600; w >= 60; w--) {
-      const f = fitNewsLine(n, w, font.body, 1);
-      const plain = fitNewsTitle(n.title, w, font.body, 1);
-      if (f.outlet) {
-        withHead++;
-        expect(f.lines).toBe(1);
-        if (f.text !== n.title) expect(visibleLength(f.text.replace(/…$/, "")), `${w}: ${f.text}`).toBeGreaterThanOrEqual(NEWS_OUTLET_MIN_TITLE);
-        // 머리 + 제목의 어림 폭이 줄 폭을 넘지 않는다
-        expect((lineEm(`${f.outlet}${NEWS_OUTLET_SEP}${f.text}`) + NEWS_FIT_MARGIN_EM) * font.body, `${w}`).toBeLessThanOrEqual(w + 1e-9);
-        expect(cutsNumber(n.title, f.text), `${w}: ${f.text}`).toBe(false);
-      } else {
-        without++;
-        expect(f).toEqual({ ...plain, outlet: null });
-      }
+      if (checkHead(n, w, 1)) withHead++;
+      else without++;
     }
     expect(withHead).toBeGreaterThan(50);
     expect(without).toBeGreaterThan(50);
@@ -657,10 +732,32 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
         for (const scale of [1, 1.3]) {
           const f = fitNewsLine({ outlet, title }, rowWidth(win, scale), font.body, scale);
           expect(f.lines).toBe(1);
-          if (!f.outlet) continue;
-          shownHeads++;
-          if (f.text !== title) expect(visibleLength(f.text.replace(/…$/, ""))).toBeGreaterThanOrEqual(NEWS_OUTLET_MIN_TITLE);
+          if (checkHead({ outlet, title }, rowWidth(win, scale), scale)) shownHeads++;
         }
-    expect(shownHeads).toBeGreaterThan(REAL.length); // 대부분의 폰 폭에서 머리가 보인다
+    expect(shownHeads).toBeGreaterThan(REAL.length / 2); // 폰 폭에서도 머리가 자주 보인다
+  });
+
+  it("검증 should: 머리가 제목을 해치지 않는다 — 'BBS불교방송 · 미국 뉴욕증시, 국채금…'(8자 보장 예외로 낱말 가운데)·'연합뉴스 · …상승…유…'(다 들어가던 제목이 잘림)가 되지 않는다", () => {
+    const bbs = { outlet: "BBS불교방송", title: "미국 뉴욕증시, 국채금리 급등에 약세…나스닥 1%대 하락" };
+    const yna = { outlet: "연합뉴스", title: "코스피, 미 금리인상에도 상승…유가 하락 영향" };
+    // 411·130%: 예전에는 'BBS불교방송 · 미국 뉴욕증시, 국채금…' — 이제 제목만 낱말 사이에서
+    const b = fitNewsLine(bbs, rowWidth(411, 1.3), font.body, 1.3);
+    expect(b.text).not.toBe("미국 뉴욕증시, 국채금…");
+    expect(b).toEqual({ outlet: null, text: "미국 뉴욕증시, 국채금리 급등에 약세…", lines: 1 });
+    // 411·100%: 머리를 붙여도 낱말 사이('…약세…')에서 끝나면 붙인다
+    expect(fitNewsLine(bbs, rowWidth(411, 1), font.body, 1)).toEqual({ outlet: "BBS불교방송", text: "미국 뉴욕증시, 국채금리 급등에 약세…", lines: 1 });
+    // 475·130%·411·100%: 제목만이면 다 들어가므로 머리 없이 제목 전체 (예전 '연합뉴스 · 코스피, 미 금리인상에도 상승…유…')
+    for (const [win, scale] of [
+      [475, 1.3],
+      [411, 1],
+    ] as const) {
+      expect(fitNewsTitle(yna.title, rowWidth(win, scale), font.body, scale).text).toBe(yna.title);
+      expect(fitNewsLine(yna, rowWidth(win, scale), font.body, scale), `${win}·${scale}`).toEqual({ outlet: null, text: yna.title, lines: 1 });
+    }
+    // 475·100%: 머리를 붙여도 다 들어가면 붙인다
+    expect(fitNewsLine(yna, rowWidth(475, 1), font.body, 1)).toEqual({ outlet: "연합뉴스", text: yna.title, lines: 1 });
+    // 폭을 1dp씩 줄여도 (a)(b)(c)가 늘 지켜진다 — 위 제목과 낱말 가운데에 걸리던 실제 제목들
+    for (const n of [bbs, yna, ...SPLIT_WORDS.map(([outlet, title]) => ({ outlet, title }))])
+      for (const scale of [1, 1.3]) for (let w = 560; w >= 100; w--) checkHead(n, w, scale);
   });
 });

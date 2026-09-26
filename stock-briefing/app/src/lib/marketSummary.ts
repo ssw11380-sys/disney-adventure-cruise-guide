@@ -575,7 +575,10 @@ const ASCII_EM: Readonly<Record<string, number>> = (() => {
 })();
 const OTHER_EM: Readonly<Record<string, number>> = { "’": 0.23, "‘": 0.23, "“": 0.38, "”": 0.38, "…": 0.74, "·": 0.27, "–": 0.66, "•": 0.41, "×": 0.69, "÷": 0.69, "±": 0.69, "°": 0.38, "€": 0.57, "£": 0.59, "¥": 0.54, "″": 0.38, "′": 0.23 };
 const HANGUL_EM = 0.92;
-/** 폭 없는 글자·방향 표시 (U+200B~U+200F·U+2060·U+FEFF) — 서버가 제목에서 지우지만 예전 저장본·다른 출처에 대비해 폭 0 으로 센다 (SS3/SS7) */
+/**
+ * 폭 없는 글자·방향 표시 (U+200B~U+200F·U+2060·U+FEFF) — 폭 0 으로 센다 (SS3/SS7). 서버는 뜻 없는 U+200B·U+2060·U+FEFF 만 제목에서 지우고
+ * ZWJ·ZWNJ·방향 표시(글자 모양을 바꿈)는 두므로, 그것들과 예전 저장본에 남은 글자도 여기서 폭 0
+ */
 const isInvisible = (c: number) => (c >= 0x200b && c <= 0x200f) || c === 0x2060 || c === 0xfeff;
 /** 글자 하나의 폭 어림 */
 export function charEm(ch: string): number {
@@ -624,8 +627,19 @@ const WORD_CHAR_RE = /[가-힣ㄱ-ㆎA-Za-z0-9&]/;
 const WORD_TAIL_RE = /[가-힣ㄱ-ㆎA-Za-z0-9&]+$/;
 /** 끊은 자리 뒤에 남는 낱말 나머지 (다음 띄어쓰기·문장 부호 앞까지) */
 const WORD_HEAD_RE = /^[가-힣ㄱ-ㆎA-Za-z0-9&]+/;
-/** 끊은 자리 뒤가 이 토씨뿐이면 앞 조각은 온전한 낱말이다 ('영업점|에'·'코스피|는' — 물리지 않는다) */
-const PARTICLE_RE = /^(?:은|는|이|가|을|를|의|에|에서|에게|로|으로|와|과|도|만|엔|까지|부터|보다)$/;
+/**
+ * 끊은 자리 뒤가 이 토씨뿐이고 앞 조각이 두 음절 이상이면 앞 조각은 온전한 낱말이다 ('영업점|에'·'코스피|는' — 물리지 않는다).
+ * 헷갈리지 않는 토씨만 둔다 (검증 must): 가·이·도·의·과·만 등은 흔한 낱말의 끝 음절이기도 해서('유|가'·'주|가'·'추|가'·'순매|도'·'속|도'·'합|의'·
+ * '최고|가'·'닛케|이') '유…'·'주…'처럼 조각이 남았다. 한 음절 조각('만|에'·'제|로')은 낱말로 보지 않는다
+ */
+const PARTICLE_RE = /^(?:은|는|을|를|에|에서|으로|로|와|에게)$/;
+/** '상승하|는'·'결정되|는'처럼 풀이말 줄기 뒤의 '는·은'은 토씨가 아니다 (앞 조각이 낱말이 아님) */
+const VERB_STEM_END_RE = /[하되]$/;
+/** 끊은 자리 앞 조각(frag)이 뒤(rest) 토씨 앞의 온전한 낱말인지 — 토씨 예외 (두 음절 이상 한글 + 헷갈리지 않는 토씨) */
+function beforeParticle(frag: string, rest: string): boolean {
+  if (!/^[가-힣]{2,}$/.test(frag) || !PARTICLE_RE.test(rest)) return false;
+  return !((rest === "는" || rest === "은") && VERB_STEM_END_RE.test(frag));
+}
 /** 낱말 가운데서 끊을 때 이 글자 수 이하 조각이 남으면 그 낱말 앞에서 끊는다 (SS1/SS9: '…상승 마감…다…'·'…랠리…나스…'·'반도체·석…') */
 export const NEWS_ORPHAN_MAX = 3;
 
@@ -633,8 +647,8 @@ export const NEWS_ORPHAN_MAX = 3;
  * avail(글자 크기 배수) 안에 드는 가장 긴 앞부분 — 숫자 덩어리 안이거나 숫자로 끝나는 덩어리 바로 뒤면 그 덩어리 앞에서.
  * 낱말 가운데서 끊게 되면: 남는 조각(마지막 띄어쓰기·문장 부호 뒤)이 NEWS_ORPHAN_MAX 자 이하면 그 낱말 앞에서 끊는다
  * ('…상승 마감…다우'를 '…상승 마감…다…'가 아니라 '…상승 마감…'으로 — '다'로 끝난 문장처럼 읽히지 않게). 조각이 더 길면('Acquis…') 그대로 두어
- * 줄 끝 빈 곳을 작게 한다. 끊은 자리 뒤가 토씨뿐이면('영업점|에') 앞 조각이 온전한 낱말이라 두고, 물린 뒤 남는 앞부분이 NEWS_MIN_HEAD 자보다
- * 짧아지면 물리지 않는다 (아주 좁은 칸). 두 규칙은 더 바뀌지 않을 때까지 번갈아 본다 — 숫자 앞으로 물린 자리가 낱말 가운데일 수 있다
+ * 줄 끝 빈 곳을 작게 한다. 끊은 자리 뒤가 헷갈리지 않는 토씨뿐이고 앞 조각이 두 음절 이상이면('영업점|에') 온전한 낱말이라 두고(beforeParticle),
+ * 물린 뒤 남는 앞부분이 NEWS_MIN_HEAD 자보다 짧아지면 물리지 않는다 (아주 좁은 칸). 두 규칙은 더 바뀌지 않을 때까지 번갈아 본다 — 숫자 앞으로 물린 자리가 낱말 가운데일 수 있다
  * ('다우·S&P500' → 'S&P…'가 아니라 '다우…')
  */
 function cutTitle(title: string, avail: number): string {
@@ -656,7 +670,7 @@ function cutTitle(title: string, avail: number): string {
     if (cut > 0 && WORD_CHAR_RE.test(title[cut] ?? "") && WORD_CHAR_RE.test(head[cut - 1]!)) {
       const frag = WORD_TAIL_RE.exec(head);
       const rest = WORD_HEAD_RE.exec(title.slice(cut))?.[0] ?? "";
-      if (frag && frag.index > 0 && Array.from(frag[0]).length <= NEWS_ORPHAN_MAX && !(/^[가-힣]+$/.test(frag[0]) && PARTICLE_RE.test(rest))) {
+      if (frag && frag.index > 0 && Array.from(frag[0]).length <= NEWS_ORPHAN_MAX && !beforeParticle(frag[0], rest)) {
         const before = head.slice(0, frag.index).replace(TRAILING_CUT_RE, "");
         if (visibleLength(before) >= NEWS_MIN_HEAD) {
           head = before;
@@ -709,6 +723,18 @@ export function fitNewsTitle(title: string, width: number, size: number, scale: 
 export const NEWS_OUTLET_MIN_TITLE = 12;
 /** 언론사 머리와 제목 사이 */
 export const NEWS_OUTLET_SEP = " · ";
+/**
+ * 머리를 붙여 잘린 제목이 제목만 둔 줄보다 머리 폭보다 더 짧아져도 되는 폭 (글자 크기 배수 — 한글 약 3자, 낱말 하나를 앞으로 물리는 만큼).
+ * 이보다 더 짧아지면(긴 숫자·낱말 앞까지 물림) 머리를 붙이지 않는다
+ */
+export const NEWS_OUTLET_SLACK_EM = 3;
+
+/** 잘린 앞부분(head — title 의 앞부분)이 낱말 사이에서 끝나는지: 끊은 자리 앞 글자와 뒤 글자(원문)가 둘 다 낱말 글자면 낱말 가운데라 false */
+export function cutAtWordEnd(title: string, head: string): boolean {
+  if (!head || !title.startsWith(head)) return false;
+  if (head.length >= title.length) return true;
+  return !(WORD_CHAR_RE.test(head.slice(-1)) && WORD_CHAR_RE.test(title[head.length]!));
+}
 
 /** 카드 뉴스 줄: 흐린 언론사 머리(없으면 null) + 제목 글과 줄 수 */
 export interface NewsLineFit extends NewsFit {
@@ -716,20 +742,30 @@ export interface NewsLineFit extends NewsFit {
 }
 
 /**
- * 카드 뉴스 한 줄 (SS5·SS11): 줄 앞에 흐린 언론사 머리('연합뉴스 · ')를 붙여 누가 쓴 제목인지 카드에서도 보이게 한다.
- * 머리를 붙이고도 제목이 다 들어가거나 NEWS_OUTLET_MIN_TITLE 자 이상 한 줄에 남을 때만 — 아니면 지금처럼 제목만 (fitNewsTitle). 시각은 상세에만.
- * 두 줄 모드(아주 좁은 칸)에는 머리를 붙이지 않는다. 폭 계산은 머리 글자 폭(lineEm)을 줄 폭에서 뺀 나머지로 제목을 자른다
+ * 카드 뉴스 한 줄 (SS5·SS11): 줄 앞에 흐린 언론사 머리('연합뉴스 · ')를 붙여 누가 쓴 제목인지 카드에서도 보이게 한다. 시각은 상세에만.
+ * 머리는 제목을 해치지 않을 때만 붙인다 — 아니면 지금처럼 제목만 (fitNewsTitle):
+ *  (a) 머리를 붙이고도 제목이 다 들어가면 붙인다 ('코스피 상승 마감'처럼 짧아도)
+ *  (b) 제목만 두면 다 들어가는데 머리 때문에 잘리게 되면 붙이지 않는다 ('…상승…유가 하락 영향'이 '연합뉴스 · …상승…유…'가 되지 않게)
+ *  (c) 둘 다 잘리면: 머리를 붙인 쪽이 낱말 사이에서 끝나고(cutAtWordEnd — 8자 보장·토씨 예외로 낱말 가운데 남은 '국채금…'·'영업점…'은 안 됨),
+ *      NEWS_OUTLET_MIN_TITLE 자 이상 남고, 제목만 둔 줄보다 머리 폭 + NEWS_OUTLET_SLACK_EM 넘게 짧아지지 않을 때만 붙인다
+ * 두 줄 모드(아주 좁은 칸)에는 붙이지 않는다. 폭 계산은 머리 글자 폭(lineEm)을 줄 폭에서 뺀 나머지로 제목을 자른다
  */
 export function fitNewsLine(n: Pick<SummaryNews, "title" | "outlet">, width: number, size: number, scale: number): NewsLineFit {
   const plain = fitNewsTitle(n.title, width, size, scale);
+  const none: NewsLineFit = { ...plain, outlet: null };
   const outlet = (n.outlet ?? "").trim();
-  if (!outlet || plain.lines !== 1) return { ...plain, outlet: null };
-  const rest = width - lineEm(`${outlet}${NEWS_OUTLET_SEP}`) * size * scale;
-  if (!(rest > 0)) return { ...plain, outlet: null };
+  if (!outlet || plain.lines !== 1) return none;
+  const headEm = lineEm(`${outlet}${NEWS_OUTLET_SEP}`);
+  const rest = width - headEm * size * scale;
+  if (!(rest > 0)) return none;
   const f = fitNewsTitle(n.title, rest, size, scale);
-  // 제목이 다 들어가면 짧아도 머리를 붙인다 ('코스피 상승 마감'), 잘리면 앞부분이 NEWS_OUTLET_MIN_TITLE 자 이상일 때만
-  const ok = f.lines === 1 && (f.text === n.title || visibleLength(f.text.replace(/…$/, "")) >= NEWS_OUTLET_MIN_TITLE);
-  return ok ? { ...f, outlet } : { ...plain, outlet: null };
+  if (f.lines !== 1) return none;
+  if (f.text === n.title) return { ...f, outlet }; // (a)
+  if (plain.text === n.title) return none; // (b)
+  const cut = f.text.replace(/…$/, "");
+  const plainCut = plain.text.replace(/…$/, "");
+  const ok = cutAtWordEnd(n.title, cut) && visibleLength(cut) >= NEWS_OUTLET_MIN_TITLE && lineEm(cut) >= lineEm(plainCut) - headEm - NEWS_OUTLET_SLACK_EM;
+  return ok ? { ...f, outlet } : none;
 }
 
 /** 지수 칸 종가 줄: 아침 '27,068.72', 오후 '7,080.92 · +63.01' */
