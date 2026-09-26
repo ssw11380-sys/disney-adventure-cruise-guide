@@ -79,7 +79,11 @@ function IndexCell({ i, d, compact = false }: { i: SummaryIndex; d: MarketSummar
   );
 }
 
-export function MarketSummaryCard({ summary, selected = false }: { summary: MarketSummary; /** 넓은 창에서 보던 요약 (접고 펴기 이어 보기) */ selected?: boolean }) {
+/**
+ * 브리핑 탭은 체결(약 0.1초)마다 다시 그려지므로 카드는 속성(요약·강조)이 같으면 다시 그리지 않는다 (React.memo).
+ * '오늘/밤사이'는 안에서 1분마다 다시 본다
+ */
+export const MarketSummaryCard = React.memo(function MarketSummaryCard({ summary, selected = false }: { summary: MarketSummary; /** 넓은 창에서 보던 요약 (접고 펴기 이어 보기) */ selected?: boolean }) {
   const t = useTheme();
   const view = new Date(useNow(60_000));
   const d = summary.data;
@@ -114,7 +118,7 @@ export function MarketSummaryCard({ summary, selected = false }: { summary: Mark
       </Pressable>
     </Card>
   );
-}
+});
 
 function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
   const t = useTheme();

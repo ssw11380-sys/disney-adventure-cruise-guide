@@ -503,7 +503,8 @@ export function defaultSummarySources(d: {
       const t = now();
       const hit = newsCache.get(q);
       if (hit && t - hit.at < NEWS_CACHE_MS) return hit.items;
-      const once = () => d.news.search(q, 40);
+      // 구글 RSS 는 최신 순이라 넉넉히 받는다 (40개만 받으면 장 마감 직후 기사가 잘린다 — 2026-09-26 실측: 마감 뒤 6시간에 약 60건)
+      const once = () => d.news.search(q, 100);
       const items = await once().catch(async (e: unknown) => {
         if (isTimeoutError(e) || isTimeoutError((e as { cause?: unknown })?.cause)) throw e;
         await new Promise((res) => setTimeout(res, d.retryDelayMs ?? 1_500));

@@ -724,8 +724,11 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
 
   it("기본 출처: 구글 뉴스는 질의마다 10분 캐시, 503 은 한 번 다시, 시간 초과는 다시 부르지 않는다", async () => {
     let n = 0;
+    let asked = 0;
     const news = {
-      search: async () => {
+      // 구글 RSS 는 최신 순이라 넉넉히(100) 받는다 — 40개면 장 마감 직후 기사가 잘렸다 (2026-09-26 실제 출처로 확인)
+      search: async (_q: string, limit: number) => {
+        asked = limit;
         n++;
         if (n === 1) throw new Error("HTTP 503");
         return [{ title: "t", url: "u", source: "s", publishedAt: "2026-09-25T20:00:00Z", summary: null }];
@@ -735,6 +738,7 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
     const s = defaultSummarySources({ db: {} as Db, indices: { list: async () => [], candles: async () => null }, naver: {} as never, calendar: { isTradingDate: async () => true }, krSectors: async () => ({ themes: [], note: null }), news, now: () => t.now, retryDelayMs: 1 });
     expect(await s.news("뉴욕증시")).toHaveLength(1);
     expect(n).toBe(2);
+    expect(asked).toBe(100);
     await s.news("뉴욕증시");
     expect(n).toBe(2); // 캐시
     t.now += 11 * 60_000;
