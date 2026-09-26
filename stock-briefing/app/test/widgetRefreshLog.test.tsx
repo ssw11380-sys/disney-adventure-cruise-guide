@@ -131,21 +131,35 @@ describe("요약: '마지막 자동 갱신 10:47 · 오늘 평균 간격 18분'"
     expect(summarizeRefreshLog(list, T("10:31"), false).stale).toBe(false);
     // 자동 갱신이 한 번도 없어도, 기록이 시작된 지(앱 즉시 갱신 등) 1시간이 지났으면 경고 (작업이 아예 막힌 경우)
     expect(summarizeRefreshLog([{ t: T("09:00"), s: "app", r: "ok" }], T("10:31"), true).stale).toBe(true);
-    // 실패만 있으면 자동 갱신으로 세지 않는다
-    expect(summarizeRefreshLog([bg("10:00", "failed"), bg("10:15", "failed")], T("11:01"), true)).toMatchObject({ last: null, stale: true, failedToday: 2 });
-    // 받아 둔 응답 재사용(건너뜀)은 새 숫자가 아니다 — 서버 조회가 1시간 넘게 없으면 경고
-    expect(summarizeRefreshLog([bg("09:30"), per("10:00", "skipped"), per("10:30", "skipped")], T("10:40"), true).stale).toBe(true);
+    // 실패만 있으면 성공으로 세지 않는다 — 작업은 돌고 있으므로 절전(stale)이 아니라 실패(failing)
+    expect(summarizeRefreshLog([bg("10:00", "failed"), bg("10:15", "failed")], T("11:01"), true)).toMatchObject({ last: null, stale: false, failing: true, failedToday: 2 });
+    // 건너뜀(장중 15분 안의 응답 재사용·휴장 규칙)도 작업이 돈 것이다 — 경고하지 않는다
+    expect(summarizeRefreshLog([bg("09:30"), per("10:00", "skipped"), per("10:30", "skipped")], T("10:40"), true).stale).toBe(false);
   });
 
   it("통합 검증 지적: 작업은 도는데 실패만 하면 절전 탓이 아니다 (failing) — 아예 기록이 없을 때만 절전 안내", () => {
     const failing = summarizeRefreshLog([bg("09:30"), bg("09:45", "failed"), bg("10:00", "failed"), bg("10:15", "failed"), bg("10:30", "failed")], T("10:40"), true);
-    expect(failing).toMatchObject({ stale: true, failing: true, lastError: null });
+    expect(failing).toMatchObject({ stale: false, failing: true, lastError: null });
     const reason = summarizeRefreshLog([bg("09:30"), { t: T("10:30"), s: "background", r: "failed", e: "갱신 실패 · 연결 안 됨" }], T("10:40"), true);
-    expect(reason).toMatchObject({ stale: true, failing: true, lastError: "갱신 실패 · 연결 안 됨" });
+    expect(reason).toMatchObject({ stale: false, failing: true, lastError: "갱신 실패 · 연결 안 됨" });
     const quiet = summarizeRefreshLog([bg("09:30")], T("10:40"), true);
     expect(quiet).toMatchObject({ stale: true, failing: false });
     // 한 시간보다 전의 실패는 지금 멈춘 까닭이 아니다
     expect(summarizeRefreshLog([bg("09:20", "failed"), bg("09:30")], T("10:40"), true)).toMatchObject({ stale: true, failing: false });
+  });
+
+  it("통합 2차 검증 지적: 밤새 휴장 규칙으로 건너뛰다 개장하면 거짓 경고가 뜨지 않는다 (작업이 돈 기록으로 판단)", () => {
+    const night = [bg("06:05"), bg("06:20", "skipped"), bg("06:35", "skipped"), bg("06:50", "skipped"), bg("07:05", "skipped"), bg("07:20", "skipped"), bg("07:35", "skipped"), bg("07:50", "skipped")];
+    expect(summarizeRefreshLog(night, T("08:03"), true)).toMatchObject({ stale: false, failing: false });
+    // 작업이 정말 멈추면(마지막 기록 07:50 뒤로 1시간) 그때 경고
+    expect(summarizeRefreshLog(night, T("08:51"), true)).toMatchObject({ stale: true, failing: false });
+  });
+
+  it("실패 사유에 맞는 안내 (토큰·서버·연결)", () => {
+    const view = (e: string) => render(<WidgetRefreshView summary={{ last: T("09:30"), avgGapMin: 15, todayCount: 3, failedToday: 4, stale: false, failing: true, lastError: e }} now={T("10:40")} onOpenBattery={() => undefined} />).text();
+    expect(view("갱신 실패 · 토큰 확인")).toContain("토큰을 확인해 주세요");
+    expect(view("갱신 실패 · 서버 오류")).toContain("서버 쪽 문제일 수 있어요");
+    expect(view("갱신 실패 · 연결 안 됨")).toContain("인터넷 연결을 확인해 주세요");
   });
 
   it("기록이 없거나 오늘 한 번뿐이면 평균 간격 없이, 오늘이 아니면 날짜까지", () => {

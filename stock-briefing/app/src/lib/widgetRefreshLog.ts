@@ -96,9 +96,12 @@ export interface RefreshSummary {
   todayCount: number;
   /** 오늘 자동 갱신(백그라운드·주기 갱신) 실패 수 */
   failedToday: number;
-  /** 장중인데 자동 갱신 성공이 STALE_AUTO_MS 넘게 없음 (한 번도 없으면 기록이 시작된 때부터) */
+  /**
+   * 장중인데 자동 갱신 작업 자체가 STALE_AUTO_MS 넘게 돌지 않음 (성공·건너뜀·실패 어느 것도 없음 — 절전 의심).
+   * 휴장 규칙으로 건너뛴 기록도 '작업이 돌았다'로 센다: 밤새 건너뛰다 개장 직후 거짓 경고가 뜨지 않게
+   */
   stale: boolean;
-  /** stale 인데 그 사이 자동 갱신이 돌긴 했고 실패했다 → 절전 탓이 아니라 연결·서버 문제 (통합 검증 지적) */
+  /** 작업은 도는데 최근 STALE_AUTO_MS 안에 실패가 있고 그동안 성공이 없음 → 절전 탓이 아니라 연결·서버·토큰 문제 */
   failing: boolean;
   /** 가장 최근 자동 갱신 실패 사유 (failing 일 때 보여 준다). 모르면 null */
   lastError: string | null;
@@ -117,8 +120,9 @@ export function summarizeRefreshLog(list: readonly RefreshEntry[], now: number, 
   const todays = sorted.filter((e) => asked(e) && kstDate(e.t) === today).map((e) => e.t);
   const gaps = todays.slice(1).map((t, i) => t - todays[i]!);
   const last = sorted.filter((e) => isAuto(e) && e.r === "ok").at(-1)?.t ?? null;
-  const since = last ?? sorted[0]?.t ?? null;
-  const stale = marketOpen && since !== null && now - since > STALE_AUTO_MS;
+  // 작업이 마지막으로 돈 때 (결과 상관없음). 한 번도 없으면 기록이 시작된 때부터
+  const lastRun = sorted.filter(isAuto).at(-1)?.t ?? sorted[0]?.t ?? null;
+  const stale = marketOpen && lastRun !== null && now - lastRun > STALE_AUTO_MS;
   // 최근 한 시간 안의 자동 갱신 실패: 작업은 도는데 서버에서 못 받는 것 (절전으로 작업이 멈추면 기록 자체가 없다)
   const recentFails = sorted.filter((e) => isAuto(e) && e.r === "failed" && now - e.t <= STALE_AUTO_MS);
   return {
@@ -127,7 +131,7 @@ export function summarizeRefreshLog(list: readonly RefreshEntry[], now: number, 
     todayCount: todays.length,
     failedToday: sorted.filter((e) => isAuto(e) && e.r === "failed" && kstDate(e.t) === today).length,
     stale,
-    failing: stale && recentFails.length > 0,
+    failing: marketOpen && recentFails.length > 0 && (last === null || now - last > STALE_AUTO_MS),
     lastError: recentFails.at(-1)?.e ?? null,
   };
 }
