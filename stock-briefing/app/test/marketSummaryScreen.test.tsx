@@ -101,7 +101,10 @@ const KR_HOLIDAY = item(8, shared.cases[2]!.data);
 const US_HOLIDAY = item(9, shared.cases[3]!.data);
 
 type R = ReturnType<typeof render>;
-const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(textOf).join(""));
+/** 그린 글 그대로 (줄바꿈 묶음 글자 포함) */
+const rawOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(rawOf).join(""));
+/** 읽는 글: 줄바꿈 묶음 글자(줄바꿈 없는 공백·WJ)를 보통 글로 (SegText 가 숫자와 이름표를 묶어 그린다) */
+const textOf = (n: HostNode | string): string => rawOf(n).replace(/⁠/g, "").replace(/ /g, " ");
 const texts = (r: R) => r.all().filter((n) => n.type === "Text" || n.type === "Muted").map(textOf);
 const labels = (r: R) => r.all().map((n) => n.props.accessibilityLabel).filter((x): x is string => typeof x === "string");
 /** 한 노드 아래 모든 노드 (자기 포함) */
@@ -116,6 +119,12 @@ const widthOf = (n: HostNode): number | undefined => {
 /** 표 머리 글들 */
 const headsOf = (r: R) => r.all().filter((n) => n.type === "TableHead").map((n) => n.children.filter((c): c is HostNode => typeof c !== "string").map(textOf));
 const cardOf = (r: R) => r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel ?? "").includes("숫자로 만든 요약"));
+/** 지수 칸 줄들: 줄마다 칸 이름 (한 줄 4칸이면 [[4개]], 2×2 면 [[2개],[2개]]) */
+const cellRowsOf = (r: R) =>
+  r
+    .all()
+    .filter((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && /^(나스닥|S&P500|다우|필라반도체|코스피|코스닥)[ ,(]/.test(String(c.props.accessibilityLabel ?? ""))))
+    .map((row) => row.children.filter((c): c is HostNode => typeof c !== "string").map((c) => String(c.props.accessibilityLabel).split(/[,(]/)[0]!.trim()));
 const settle = async (r: R) => {
   for (let i = 0; i < 3; i++) await new Promise((res) => setTimeout(res, 0));
   r.rerender();
@@ -217,6 +226,46 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     expect(widthOf(label)).toBe(Math.round(MS.labelW * 1.3));
   });
 
+  it("울트라 411·글자 130%: 지수 4칸을 2×2 로 놓아 등락률이 '+0.4…'처럼 잘리지 않는다 (475·130%, 411·100% 는 4칸 그대로) — 숫자 칸은 글자를 줄여 넣기", () => {
+    h.flags = { marketSummary: true };
+    const rowsAt = (width: number, scale: number) => {
+      cleanupRenders();
+      h.win = { width, height: 900, scale: 2.625, fontScale: scale };
+      h.fontScale = scale;
+      return cellRowsOf(render(<BriefingsScreen />));
+    };
+    expect(rowsAt(411, 1.3)).toEqual([
+      ["나스닥", "S&P500"],
+      ["다우", "필라반도체"],
+    ]);
+    expect(rowsAt(475, 1.3)).toEqual([["나스닥", "S&P500", "다우", "필라반도체"]]);
+    expect(rowsAt(411, 1)).toEqual([["나스닥", "S&P500", "다우", "필라반도체"]]);
+    const r = render(<BriefingsScreen />);
+    const rate = r.all().find((n) => n.type === "Text" && textOf(n) === "+0.48%")!;
+    expect(rate.props).toMatchObject({ numberOfLines: 1, adjustsFontSizeToFit: true, minimumFontScale: 0.6 });
+    const value = r.all().find((n) => n.type === "Text" && textOf(n) === "27,068.72")!;
+    expect(value.props).toMatchObject({ numberOfLines: 1, adjustsFontSizeToFit: true });
+  });
+
+  it("카드 화면 읽기: 카드에 보이는 뉴스 제목 2개를 언론사·시각과 함께 읽는다 (카드 전체가 누르는 칸 하나라서)", () => {
+    h.flags = { marketSummary: true };
+    const label = String(cardOf(render(<BriefingsScreen />))!.props.accessibilityLabel);
+    expect(label).toContain("뉴스 3건, 뉴스1 9/26 05:32, [예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑, KBS 9/26 05:22, [예시] 뉴욕증시, 기술주 강세 속 상승 마감, 외 1건");
+    expect(label).not.toContain("[예시] 뉴욕증시 마감 시황"); // 세 번째 제목은 카드에 없다
+  });
+
+  it("숫자와 이름표·출처 괄호가 다른 줄로 갈라지지 않게 묶어 그린다 ('비슷 / 7'·'(미 재 / 무부)'·'(섹터 ETF 기 / 준)' 막기)", () => {
+    h.flags = { marketSummary: true };
+    const raw = render(<BriefingsScreen />).all().filter((n) => n.type === "Text").map(rawOf);
+    const hold = raw.find((x) => x.startsWith("미국 12종목"))!;
+    expect(hold).toContain("비슷 7");
+    expect(hold).toContain("높음 2");
+    const rates = raw.find((x) => x.startsWith("원/달러"))!;
+    expect(rates).toContain("5.17% -0.01%p");
+    expect(rates).toContain(["(", "미", " ", "재", "무", "부", ")"].join("⁠"));
+    expect(raw.some((x) => x.includes(["(", "섹", "터", " ", "E", "T", "F", " ", "기", "준", ")"].join("⁠")))).toBe(true);
+  });
+
   it("예전 서버(404 → 빈 목록)면 카드가 없다", () => {
     h.flags = { marketSummary: true };
     h.list = [];
@@ -261,6 +310,31 @@ describe("상세 화면 /briefings/market/<id>", () => {
     h.now = Date.parse("2026-09-25T16:05:00+09:00");
     const kr = texts(render(<MarketSummaryScreen />));
     expect(kr.some((t) => t.includes("9/23 고시값 (한국 휴장으로 갱신 없음)"))).toBe(true);
+  });
+
+  it("주요 지수 표에 출처 시각: 지수 이름 아래 '뉴욕 17:15'(나스닥)·'뉴욕 16:39'(S&P500), 한국은 '서울 20:15' — 화면 읽기에도", () => {
+    h.flags = { marketSummary: true };
+    const r = render(<MarketSummaryScreen />);
+    const nas = r.all().find((n) => n.type === "View" && String(n.props.accessibilityLabel ?? "").startsWith("나스닥, "))!;
+    expect(nas.props.accessibilityLabel).toBe("나스닥, 27,068.72, 0.48% 상승, 출처 시각 뉴욕 17:15");
+    expect(collect(nas).filter((n) => n.type === "Text").map(textOf)).toEqual(expect.arrayContaining(["나스닥", "뉴욕 17:15"]));
+    expect(texts(r)).toContain("뉴욕 16:39");
+    expect(texts(r).some((t) => t.includes("지수 이름 아래는 출처 시각(현지) — 네이버 최종값은 뉴욕 17:15 무렵"))).toBe(true);
+    cleanupRenders();
+    h.detail = item(7, shared.cases[1]!.data);
+    h.now = Date.parse("2026-09-23T16:05:00+09:00");
+    expect(texts(render(<MarketSummaryScreen />))).toContain("서울 20:15");
+  });
+
+  it("보유 종목 표 아래 안내: 시세 없음은 까닭을 단정하지 않고('조회 실패 등'), 금현물 같은 원자재 ETF 는 '해외 지수·원자재 ETF'", () => {
+    h.flags = { marketSummary: true };
+    const d = shared.cases[0]!.data;
+    h.detail = item(7, { ...d, holdings: { ...d.holdings!, excluded: { ...d.holdings!.excluded, noQuote: ["애플"], overseas: ["ACE KRX금현물"] } } });
+    const all = texts(render(<MarketSummaryScreen />));
+    const foot = all.find((t) => t.includes("시세 없음"))!;
+    expect(foot).toContain("시세 없음 1(애플) — 같은 날 정규장 시세를 받지 못함(거래정지·지연·조회 실패 등)");
+    expect(foot).not.toContain("거래정지·지연으로");
+    expect(foot).toContain("해외 지수·원자재 ETF 1종목 제외(ACE KRX금현물)");
   });
 
   it("금리 화면 읽기: 전일 대비는 '하락/상승' (지수와의 차이처럼 '낮음'으로 읽지 않는다)", () => {

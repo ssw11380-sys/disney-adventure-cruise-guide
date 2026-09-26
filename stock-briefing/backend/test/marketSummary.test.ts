@@ -26,13 +26,16 @@ import {
   holdingsAux,
   holdingsText,
   holidayText,
+  isLeverageName,
   krSectors,
   LEVERAGE_RE,
   naverYield,
   newsDays,
   newsWindow,
+  nextSessionOpenAt,
   parseTreasuryCsv,
   phaseOf,
+  pickFx,
   pickNews,
   ratesText,
   resolveDates,
@@ -147,6 +150,32 @@ describe("환율·금리 줄의 날짜 표기 (휴장이면 금리에도 'M/D �
     expect(fxText({ fx: { ...fx, date: null }, date: "2026-09-25" })).toBe("원/달러 1,359.00원 +3.50원 (고시일 확인 못 함)");
     expect(fxText({ fx: { ...fx, date: "2026-09-25" }, date: "2026-09-25" })).toBe("원/달러 1,359.00원 +3.50원");
   });
+
+  it("일별 시리즈에 오늘 점이 아직 없어도, 한국 영업일 10:00 뒤 새로 받은 띠 값은 오늘 고시값 — 평일 오후에 '(전날 고시)'가 틀리게 붙지 않는다", () => {
+    const daily = [{ date: "2026-09-21" }, { date: "2026-09-22" }];
+    const row = { value: 1359, change: 3.5, changeRate: 0.26 };
+    // 평일 16:00 오후 요약: 오늘(9/23) 고시값 → 날짜 표기 없음
+    const pm = pickFx(row, daily, "2026-09-23", { now: at("2026-09-23T16:00:00+09:00"), krOpenToday: true })!;
+    expect(pm.date).toBe("2026-09-23");
+    expect(fxText({ fx: pm, date: "2026-09-23" })).toBe("원/달러 1,359.00원 +3.50원");
+    // 아침 08:30 은 아직 오늘 고시 전 → 일별 시리즈 날짜 그대로
+    expect(pickFx(row, daily, "2026-09-23", { now: at("2026-09-23T08:30:00+09:00"), krOpenToday: true })!.date).toBe("2026-09-22");
+    // 한국 휴장일·받지 못해 이어 쓴 값(stale)은 오늘로 보지 않는다
+    expect(pickFx(row, daily, "2026-09-25", { now: at("2026-09-25T16:00:00+09:00"), krOpenToday: false })!.date).toBe("2026-09-22");
+    expect(pickFx({ ...row, stale: true }, daily, "2026-09-23", { now: at("2026-09-23T16:00:00+09:00"), krOpenToday: true })!.date).toBe("2026-09-22");
+    // 일별 시리즈를 못 받아도 영업일 오후 새 값이면 오늘
+    expect(pickFx(row, null, "2026-09-23", { now: at("2026-09-23T16:00:00+09:00"), krOpenToday: true })!.date).toBe("2026-09-23");
+    expect(pickFx(row, null, "2026-09-23")!.date).toBeNull();
+  });
+});
+
+describe("다음 장이 열리는 순간 (강제 재실행이 좋은 요약을 덮지 않게)", () => {
+  it("미국 금요일(9/25) 다음 개장은 월요일 09:30 ET(한국 22:30), 추수감사절 전날(11/25) 다음은 11/27, 한국 수능일은 10:00", () => {
+    expect(new Date(nextSessionOpenAt("US", "2026-09-25")).toISOString()).toBe("2026-09-28T13:30:00.000Z");
+    expect(new Date(nextSessionOpenAt("US", "2026-11-25")).toISOString()).toBe("2026-11-27T14:30:00.000Z");
+    expect(new Date(nextSessionOpenAt("KR", "2026-11-18")).toISOString()).toBe("2026-11-19T01:00:00.000Z");
+    expect(new Date(nextSessionOpenAt("KR", "2026-09-23")).toISOString()).toBe("2026-09-28T00:00:00.000Z"); // 추석 연휴 뒤
+  });
 });
 
 describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", () => {
@@ -258,6 +287,60 @@ describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", 
     for (const name of ["ProShares UltraPro QQQ", "ProShares Ultra S&P500", "Direxion Daily Semiconductor Bull 3X"]) expect(LEVERAGE_RE.test(name), name).toBe(true);
   });
 
+  it("미국 인버스: 'UltraShort'(−2배)·'Short QQQ/S&P500'(−1배)은 레버리지·인버스로 빼고, 짧은 만기 채권 ETF('Ultra-Short Income'·'Short Treasury Bond')는 채권으로", () => {
+    for (const name of ["ProShares UltraShort QQQ", "ProShares UltraShort S&P500", "ProShares UltraShort 20+ Year Treasury", "ProShares Short QQQ", "ProShares Short S&P500", "ProShares UltraPro Short QQQ", "프로셰어즈 울트라숏 QQQ"]) expect(isLeverageName(name), name).toBe(true);
+    for (const name of ["JPMorgan Ultra-Short Income ETF", "BlackRock Ultra Short-Term Bond ETF", "iShares Short Treasury Bond ETF", "Schwab Short-Term U.S. Treasury ETF", "Invesco Ultra Short Duration ETF", "마이크로소프트"]) expect(isLeverageName(name), name).toBe(false);
+    const indices = [idx("NASDAQ", "나스닥", 0.48, "2026-09-25"), idx("SPX", "S&P500", 0.51, "2026-09-25")];
+    const q = (rate: number, exchange: string, name: string) => ({ changeRate: rate, tradedAt: "2026-09-25T16:00:00-04:00", exchange, name });
+    const cmp = compareHoldings({
+      market: "US",
+      basisDate: "2026-09-25",
+      holdings: [
+        { code: "QID", name: "QID", market: "NASDAQ" },
+        { code: "SDS", name: "SDS", market: "NYSE" },
+        { code: "TBT", name: "TBT", market: "NYSE" },
+        { code: "PSQ", name: "PSQ", market: "NASDAQ" },
+        { code: "SH", name: "SH", market: "NYSE" },
+        { code: "SHV", name: "SHV", market: "NASDAQ" },
+        { code: "JPST", name: "JPST", market: "AMEX" },
+      ],
+      quotes: new Map([
+        ["QID", q(-0.96, "NSQ", "ProShares UltraShort QQQ")],
+        ["SDS", q(-1.02, "NYS", "ProShares UltraShort S&P500")],
+        ["TBT", q(0.4, "NYS", "ProShares UltraShort 20+ Year Treasury")],
+        ["PSQ", q(-0.48, "NSQ", "ProShares Short QQQ")],
+        ["SH", q(-0.51, "NYS", "ProShares Short S&P500")],
+        ["SHV", q(0.01, "NSQ", "iShares Short Treasury Bond ETF")],
+        ["JPST", q(0.02, "AMX", "JPMorgan Ultra-Short Income ETF")],
+      ]),
+      indices,
+    })!;
+    expect(cmp.compared).toBe(0);
+    expect(cmp.excluded.leverage).toEqual(["QID", "SDS", "TBT", "PSQ", "SH"]);
+    expect(cmp.excluded.bond).toEqual(["SHV", "JPST"]);
+  });
+
+  it("한국: 코스닥 추종 ETF 는 코스닥과, 금현물·원자재 ETF 는 빼고, 종목 마스터 분류가 없어도 한글 상표(히어로즈·마이다스)를 알아본다 ('파워로직스'는 종목)", () => {
+    const indices = [idx("KOSPI", "코스피", 0.9, "2026-09-23"), idx("KOSDAQ", "코스닥", 1.21, "2026-09-23")];
+    const q = (rate: number) => ({ changeRate: rate, tradedAt: "2026-09-23T15:30:00+09:00", exchange: "KS" });
+    const cmp = compareHoldings({
+      market: "KR",
+      basisDate: "2026-09-23",
+      holdings: [
+        { code: "229200", name: "KODEX 코스닥150", market: "KOSPI", groupCode: "EF" },
+        { code: "411060", name: "ACE KRX금현물", market: "KOSPI", groupCode: "EF" },
+        { code: "999001", name: "히어로즈 미국S&P500", market: "KOSPI", groupCode: null },
+        { code: "999002", name: "마이다스 KRX금현물", market: "KOSPI" },
+        { code: "047310", name: "파워로직스", market: "KOSDAQ", groupCode: null },
+      ],
+      quotes: new Map([["229200", q(1.5)], ["411060", q(-0.8)], ["999001", q(0.4)], ["999002", q(-0.8)], ["047310", { ...q(2.5), exchange: "KQ" }]]),
+      indices,
+    })!;
+    expect(cmp.similar.map((r) => `${r.name} ${r.benchmark.name} ${r.diff}`)).toEqual(["KODEX 코스닥150 코스닥 0.29"]);
+    expect(cmp.high.map((r) => `${r.name} ${r.benchmark.name}`)).toEqual(["파워로직스 코스닥"]);
+    expect(cmp.excluded.overseas).toEqual(["ACE KRX금현물", "히어로즈 미국S&P500", "마이다스 KRX금현물"]);
+  });
+
   it("보유 0 이면 null, 모두 비슷하면 '모두 지수와 ±1%p 안', 정렬은 차이 크기 → 이름 순", () => {
     const base = { market: "US" as const, basisDate: "2026-09-25", indices: [idx("NASDAQ", "나스닥", 0.5, "2026-09-25")] };
     expect(compareHoldings({ ...base, holdings: [], quotes: new Map() })).toBeNull();
@@ -364,6 +447,20 @@ describe("뉴스 제목 고르기 (원문 그대로 · 창 · 거르기 · 같�
     expect(newsDays("KR", "2026-09-23")).toEqual([23]);
     const picked = pickNews(items(), { from: "2026-09-25T19:00:00.000Z", to: "2026-09-26T05:00:00.000Z", days: [25, 26] });
     expect(picked.some((n) => /23일|살까|전망|목표가/.test(n.title))).toBe(false);
+  });
+
+  it("목표가는 '목표주가'·'목표 주가'까지 막는다 — 창 안 통신사 기사라도 카드 첫 제목이 되지 않는다 (요구 검사 must)", () => {
+    for (const t of ["[뉴욕증시] 모건스탠리, 엔비디아 목표주가 상향에 3%↑", "엔비디아 목표 주가 줄상향", "반도체주 목표가 줄상향"]) expect(blockedTitle(t), t).toBe(true);
+    const w = newsWindow("US", "2026-09-25", at("2026-09-28T08:30:00+09:00"));
+    const bad: NewsItem = { title: "[뉴욕증시] 모건스탠리, 엔비디아 목표주가 상향에 3%↑", url: "https://news.google.com/rss/articles/tp", source: "연합뉴스", publishedAt: "2026-09-25T20:30:00Z", summary: null };
+    const picked = pickNews([bad, ...items()], { ...w, days: newsDays("US", "2026-09-25") });
+    expect(picked.map((n) => n.outlet)).toEqual(["뉴스1", "KBS", "한국경제"]);
+    expect(picked.some((n) => n.title.includes("목표"))).toBe(false);
+  });
+
+  it("명령·권유형 제목('매수하라'·'지금 사라'·'적기'·'톱픽'·'투자의견'·'늘려라'·'살 때다'·'담을 때')도 뺀다 — '사라져'·'사라진'은 사실이라 둔다", () => {
+    for (const t of ["반도체 매수하라", "지금 사라, 반도체주", "지금이 저점 매수 적기", "매수 적기", "지금이 매수적기", "월가 톱픽은 엔비디아", "테슬라 투자의견 '매수'로 상향", "비중 늘려라", "지금이 살 때다", "반도체 담을 때", "현금 비중 줄여라"]) expect(blockedTitle(t), t).toBe(true);
+    for (const t of ["관세 불확실성 사라져…뉴욕증시 상승 마감", "공포 사라진 월가, 3대 지수 상승", "나스닥 0.48% 올라 마감", "반도체주 강세 속 상승 마감", "실적기대감에 반도체 강세"]) expect(blockedTitle(t), t).toBe(false);
   });
 });
 
@@ -790,7 +887,7 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
       const { src, calls } = fakeSources({ session: "afternoon", krToday: { date: "2026-11-19", trading: true, desc: null, latest: "2026-11-19" } });
       const t = { now: at("2026-11-19T15:00:00+09:00") };
       const kr = (code: string, name: string, rate: number): MarketIndex => ({ code, name, kind: "index", value: 100, change: 1, changeRate: rate, open: true, asOf: "2026-11-19T15:00:00+09:00", stale: false });
-      const svc = new MarketSummaryService({ db: dbx, sources: { ...src, indices: async () => (calls["indices"] = (calls["indices"] ?? 0) + 1, [kr("KOSPI", "코스피", 0.5), kr("KOSDAQ", "코스닥", -0.2)]) }, features: { enabled: async () => true }, now: () => t.now });
+      const svc = new MarketSummaryService({ db: dbx, sources: { ...src, indices: async () => (calls["indices"] = (calls["indices"] ?? 0) + 1, [kr("KOSPI", "코스피", 0.5), kr("KOSDAQ", "코스닥", -0.2)]) }, features: { enabled: async () => true }, now: () => t.now, timer: () => () => undefined });
       const early = await svc.generate("afternoon", { date: "2026-11-19" });
       expect(early?.data).toMatchObject({ phase: "intraday", closeTime: "16:30" });
       expect(basisText(early!.data!, t.now)).toBe("장중 값(15:00 기준) · 오늘 16:30 마감");
@@ -800,6 +897,71 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
       expect(calls["indices"]).toBe(2);
       await svc.afterRun({ session: "afternoon", date: "2026-11-19", partial: false });
       expect(calls["indices"]).toBe(2);
+    } finally {
+      await dbx.destroy();
+    }
+  });
+
+  it("장중에 만든 요약은 확정 시각(마감) + 5분에 저절로 다시 만든다 — 예약 실행을 기다리지 않고, 서버를 닫으면 예약을 취소", async () => {
+    const dbx = await createMigratedDb(":memory:");
+    try {
+      const { src, calls } = fakeSources({ session: "afternoon", krToday: { date: "2026-11-19", trading: true, desc: null, latest: "2026-11-19" } });
+      const t = { now: at("2026-11-19T16:00:00+09:00") };
+      const kr = (code: string, name: string, rate: number): MarketIndex => ({ code, name, kind: "index", value: 100, change: 1, changeRate: rate, open: true, asOf: "2026-11-19T16:00:00+09:00", stale: false });
+      const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+      const timer = (fn: () => void, ms: number) => {
+        const e = { fn, ms, cancelled: false };
+        timers.push(e);
+        return () => void (e.cancelled = true);
+      };
+      const svc = new MarketSummaryService({ db: dbx, sources: { ...src, indices: async () => (calls["indices"] = (calls["indices"] ?? 0) + 1, [kr("KOSPI", "코스피", 0.5), kr("KOSDAQ", "코스닥", -0.2)]) }, features: { enabled: async () => true }, now: () => t.now, timer });
+      const early = await svc.generate("afternoon", { date: "2026-11-19" });
+      expect(early?.data?.phase).toBe("intraday");
+      // 수능일 16:30 마감 + 5분 = 16:35 → 16:00 에서 35분 뒤
+      expect(timers.map((x) => x.ms)).toEqual([35 * 60_000]);
+      // 같은 날짜·세션은 한 번만 예약
+      await svc.generate("afternoon", { date: "2026-11-19", force: true });
+      expect(timers).toHaveLength(1);
+      t.now = at("2026-11-19T16:35:00+09:00");
+      timers[0]!.fn();
+      await new Promise((r) => setTimeout(r, 30));
+      expect((await svc.find("2026-11-19", "afternoon"))?.data?.phase).toBe("final");
+      expect(calls["indices"]).toBe(3);
+      // 확정 값은 예약하지 않는다
+      expect(timers).toHaveLength(1);
+      // 닫으면 남은 예약을 취소
+      const kr20 = (code: string, name: string, rate: number): MarketIndex => ({ ...kr(code, name, rate), asOf: "2026-11-20T15:00:00+09:00" });
+      const svc2 = new MarketSummaryService({ db: dbx, sources: { ...src, indices: async () => [kr20("KOSPI", "코스피", 0.5), kr20("KOSDAQ", "코스닥", -0.2)] }, features: { enabled: async () => true }, now: () => at("2026-11-20T15:00:00+09:00"), timer });
+      await svc2.generate("afternoon", { date: "2026-11-20" });
+      expect(timers).toHaveLength(2);
+      svc2.stop();
+      expect(timers[1]!.cancelled).toBe(true);
+    } finally {
+      await dbx.destroy();
+    }
+  });
+
+  it("강제 재실행이 좋은 요약을 '생성 실패'로 덮지 않는다: 다음 장이 열린 뒤(한국 22:30 뒤 수동 오전 브리핑)는 다시 만들지 않고, 다시 만든 것이 실패면 먼저 것을 둔다", async () => {
+    const dbx = await createMigratedDb(":memory:");
+    try {
+      const { src, calls } = fakeSources({ session: "morning" });
+      const t = { now: at("2026-09-28T08:30:05+09:00"), broken: false };
+      const svc = new MarketSummaryService({ db: dbx, sources: { ...src, indices: async () => (t.broken ? [] : src.indices()) }, features: { enabled: async () => true }, now: () => t.now });
+      const first = await svc.generate("morning", { date: "2026-09-28" });
+      expect(first?.status).toBe("ok");
+      // 뉴욕 월요일 09:30(한국 22:30) 뒤 수동 전체 실행: 출처를 부르지 않고 먼저 것을 그대로
+      t.now = at("2026-09-28T23:00:00+09:00");
+      const before = calls["indices"];
+      const again = await svc.afterRun({ session: "morning", date: "2026-09-28", partial: false, force: true });
+      expect(again).toMatchObject({ id: first!.id, status: "ok" });
+      expect(calls["indices"]).toBe(before);
+      // 개장 전이라도 다시 만든 것이 실패(지수를 못 받음)면 덮지 않는다
+      t.now = at("2026-09-28T12:00:00+09:00");
+      t.broken = true;
+      const kept = await svc.generate("morning", { date: "2026-09-28", force: true });
+      expect(kept).toMatchObject({ id: first!.id, status: "ok" });
+      expect((await svc.find("2026-09-28", "morning"))?.status).toBe("ok");
+      expect((await svc.find("2026-09-28", "morning"))?.summary).toBe(first!.summary);
     } finally {
       await dbx.destroy();
     }

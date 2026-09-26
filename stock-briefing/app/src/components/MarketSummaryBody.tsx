@@ -20,6 +20,7 @@ import {
   holdingsAuxSegs,
   holdingsSegs,
   holdingsTableMode,
+  indexSourceTime,
   indexValueText,
   indicesTableMode,
   md,
@@ -259,10 +260,11 @@ function holdingsFoot(d: MarketSummaryData, h: HoldingsCompare | null): string {
   if (h) {
     const ex = h.excluded;
     if (ex.leverage.length) parts.push(`레버리지·인버스 ETF ${ex.leverage.length}종목 제외(${ex.leverage.join(", ")}) — 이름으로 알아보지 못한 것은 포함됩니다`);
-    if (ex.overseas.length) parts.push(`해외 지수 ETF ${ex.overseas.length}종목 제외(${ex.overseas.join(", ")})`);
+    if (ex.overseas.length) parts.push(`해외 지수·원자재 ETF ${ex.overseas.length}종목 제외(${ex.overseas.join(", ")})`);
     // 채권·금리형 ETF 칸은 나중에 더해 예전에 저장한 요약에는 없다
     if (ex.bond?.length) parts.push(`채권·금리형 ETF ${ex.bond.length}종목 제외(${ex.bond.join(", ")}) — 주식 지수와 견주지 않음`);
-    if (ex.noQuote.length) parts.push(`시세 없음 ${ex.noQuote.length}(${ex.noQuote.join(", ")}) — 거래정지·지연으로 같은 날 시세가 아님`);
+    // 까닭을 단정하지 않는다: 거래정지·지연 말고도 시세 조회 실패·출처가 모르는 코드가 여기로 온다
+    if (ex.noQuote.length) parts.push(`시세 없음 ${ex.noQuote.length}(${ex.noQuote.join(", ")}) — 같은 날 정규장 시세를 받지 못함(거래정지·지연·조회 실패 등)`);
     if (ex.noBenchmark.length) parts.push(`비교 지수 없음 ${ex.noBenchmark.length}(${ex.noBenchmark.join(", ")})`);
   }
   return parts.join(" · ");
@@ -308,7 +310,7 @@ function CompareLine({ r, mode, scale }: { r: CompareRow; mode: "full" | "compac
 const signed = (v: number) => `${v > 0 ? "+" : v < 0 ? "-" : ""}${indexValueText(Math.abs(v))}`;
 
 /**
- * 주요 지수: 종가 · 전일 대비 · 등락률 · 출처 시각.
+ * 주요 지수: 종가 · 전일 대비 · 등락률 · 출처 시각 (지수 이름 아래 줄 '뉴욕 17:15' — 출처가 값을 마지막으로 고친 현지 시각이라 최종값인지 볼 수 있게).
  * 칸이 좁거나 글자가 크면(지수 이름 칸이 indexNameMinW 보다 좁아짐) 전일 대비를 종가 아래 줄로 내린 3칸 표 (indicesTableMode)
  */
 function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
@@ -316,12 +318,13 @@ function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
   const [width, onLayout] = useMeasuredWidth(fit.guess);
   const mode = indicesTableMode(width, fit.scale);
   const us = d.market === "US";
-  const foot =
+  const foot = `${
     d.phase === "intraday"
       ? "네이버 증권 · 장중 값 (마감 전)"
       : us
         ? `네이버 증권 · 뉴욕 장 마감 뒤 최종값${d.phase === "prelim" ? "이 오기 전 값" : ""}`
-        : `네이버 증권 · ${d.closeTime} 장 마감 확정값`;
+        : `네이버 증권 · ${d.closeTime} 장 마감 확정값`
+  } · 지수 이름 아래는 출처 시각(현지)${us ? " — 네이버 최종값은 뉴욕 17:15 무렵" : ""}`;
   const wValue = colW(MS.colValue, fit.scale);
   const wChange = colW(MS.colChange, fit.scale);
   const wRate = colW(MS.colRate, fit.scale);
@@ -350,11 +353,19 @@ function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
             ) : (
               <Text style={{ color: t.muted }}>—</Text>
             );
+          const src = i.changeRate !== null ? indexSourceTime(i, d.market) : null;
           return (
-            <View key={i.code} accessible accessibilityLabel={sentence([i.name, i.value !== null ? indexValueText(i.value) : "받지 못함", speakRate(i.changeRate)])} style={[styles.tr, { borderBottomColor: t.line }]}>
-              <Text style={[styles.colName, { color: t.ink, fontSize: font.body, fontWeight: "600" }]} maxFontSizeMultiplier={fontCap.row}>
-                {i.name}
-              </Text>
+            <View key={i.code} accessible accessibilityLabel={sentence([i.name, i.value !== null ? indexValueText(i.value) : "받지 못함", speakRate(i.changeRate), src ? `출처 시각 ${src}` : null])} style={[styles.tr, { borderBottomColor: t.line }]}>
+              <View style={styles.colName}>
+                <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }} maxFontSizeMultiplier={fontCap.row}>
+                  {i.name}
+                </Text>
+                {src ? (
+                  <Text style={[styles.num, { color: t.muted, fontSize: font.tiny }]} maxFontSizeMultiplier={fontCap.row}>
+                    {src}
+                  </Text>
+                ) : null}
+              </View>
               {i.changeRate === null ? (
                 <Text style={[styles.colMissing, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
                   받지 못함{i.missing ? ` · ${i.missing}` : ""}

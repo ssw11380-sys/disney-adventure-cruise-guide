@@ -1,5 +1,5 @@
-import type { CompareRow, HoldingsCompare, MarketSummary, MarketSummaryData, SectorRow, SummaryEvent, SummaryMarket, SummaryNews, SummaryYield } from "@/api/types";
-import { layout as LK, marketSummary as MSK, space } from "@/tokens";
+import type { CompareRow, HoldingsCompare, MarketSummary, MarketSummaryData, SectorRow, SummaryEvent, SummaryIndex, SummaryMarket, SummaryNews, SummaryYield } from "@/api/types";
+import { font, layout as LK, marketSummary as MSK, space } from "@/tokens";
 
 /**
  * 시장 전체 요약 문장 (플래그 marketSummary). 서버 backend/src/services/marketSummaryCalc.ts 의 문장 함수와 같은 글을 만든다 —
@@ -394,6 +394,86 @@ export function cardRows(d: MarketSummaryData, view: Date): CardRow[] {
   return rows;
 }
 
+// ── 줄바꿈 묶음 (그릴 때만 — 글 함수·서버와 같은 글은 그대로) ─────────────
+
+/** 줄바꿈 없는 공백 */
+const NBSP = " ";
+/** 보이지 않는 줄바꿈 금지 글자 (한글은 글자마다 줄이 바뀔 수 있어 '기준'이 '기 / 준'으로 갈라지지 않게 글자 사이에 넣는다) */
+const WJ = "⁠";
+/** 한 덩어리로: 공백은 줄바꿈 없는 공백, 글자 사이에는 WJ */
+const glueAll = (s: string) => [...s].map((ch) => (ch === " " ? NBSP : ch)).join(WJ);
+
+/**
+ * 숫자와 그 이름표가 다른 줄로 갈라지지 않게 줄 조각을 묶는다 (SegText 가 그릴 때 쓴다 — 화면 읽기 문장·서버와 같은 글은 바꾸지 않는다).
+ *  - 흐린 조각(출처·기준 괄호 '(미 재무부)'·'(섹터 ETF 기준)'·'(9/23 고시)'·'9/25 기준 ·')은 통째로 한 덩어리 (앞뒤 공백은 줄바꿈 자리로 둔다)
+ *  - 한글 이름표 뒤 숫자는 붙인다: '비슷 7'·'높음 2'·'미국 12종목'·'차이 +3.18%p'·'코스피 7,080.92'
+ *  - 다음 조각이 등락 숫자면 그 앞 공백을 붙인다: '나스닥 +0.48%'·'5.17% -0.01%p'·'1,359.00원 +3.50원'
+ */
+export function glueSegs(segs: readonly Seg[]): Seg[] {
+  return segs.map((s, i) => {
+    let text = s.text;
+    if (s.muted) {
+      const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
+      if (m) text = `${m[1]}${glueAll(m[2]!)}${m[3]}`;
+    } else {
+      text = text.replace(/([가-힣]) (?=[+\-−]?\d)/g, `$1${NBSP}`);
+    }
+    const next = segs[i + 1];
+    if (next?.tone !== undefined && text.endsWith(" ")) text = `${text.slice(0, -1)}${NBSP}`;
+    return text === s.text ? s : { ...s, text };
+  });
+}
+
+// ── 카드 지수 칸 배치 ─────────────────────────────────────────
+
+/**
+ * 글자 폭 어림 (글자 크기 1 에 대한 배수, 넉넉히): 숫자·부호 0.6, 쉼표·마침표·쌍점·공백 0.3, % 0.9, 한글 1.0, 그 밖 0.65.
+ * 숫자 칸이 말줄임 없이 들어가는지 볼 때만 쓴다 ('+0.48%' 16dp×130% ≈ 75 — 실측 74.3)
+ */
+export function textEm(s: string): number {
+  let em = 0;
+  for (const ch of s) em += /[0-9+\-−]/.test(ch) ? 0.6 : /[.,: ]/.test(ch) ? 0.3 : ch === "%" ? 0.9 : /[가-힣]/.test(ch) ? 1 : 0.65;
+  return em;
+}
+
+/** 지수 칸 종가 줄: 아침 '27,068.72', 오후 '7,080.92 · +63.01' */
+export function indexValueLine(i: Pick<SummaryIndex, "value" | "change">, market: SummaryMarket): string | null {
+  if (i.value === null) return null;
+  const change = market === "KR" && i.change !== null ? ` · ${sign(i.change)}${idx2(Math.abs(i.change))}` : "";
+  return `${idx2(i.value)}${change}`;
+}
+
+/**
+ * 지수 칸을 한 줄에 몇 개씩 놓을지 (카드 4칸·2칸, compact = 넓은 창 목록 줄의 작은 칸).
+ * 칸 안에 이름·등락률·종가가 말줄임 없이 들어가면 한 줄에 모두, 아니면 두 줄(4칸 → 2×2), 그래도 안 되면 한 줄에 하나.
+ * width = 칸들이 놓일 폭(dp), scale = 글자 배율(fontCap.row 까지) — 울트라 411·글자 130%에서 4칸이면 '+0.48%'가 '+0.4…'로 잘렸다
+ */
+export function indexCellCols(d: Pick<MarketSummaryData, "indices" | "market">, width: number, scale: number, compact = false): number {
+  const n = d.indices.length;
+  if (n <= 1) return Math.max(n, 1);
+  const need =
+    Math.max(
+      ...d.indices.map((i) =>
+        Math.max(
+          textEm(i.name) * (compact ? font.tiny : font.small),
+          textEm(i.changeRate === null ? "—" : rateText(i.changeRate)) * (compact ? font.body : font.h2),
+          compact ? 0 : textEm(indexValueLine(i, d.market) ?? "") * font.tiny,
+        ),
+      ),
+    ) * scale;
+  for (const cols of [n, Math.ceil(n / 2)]) {
+    const inner = (width - (cols - 1) * MSK.cellGap) / cols - 2 * MSK.cellPadX;
+    if (inner >= need) return cols;
+  }
+  return 1;
+}
+
+/** 지수 출처 시각 '뉴욕 17:15' · '서울 20:15' (출처가 값을 마지막으로 고친 현지 시각 — 저장한 시각 문자열 그대로). 모르면 null */
+export function indexSourceTime(i: Pick<SummaryIndex, "asOf">, market: SummaryMarket): string | null {
+  const m = /T(\d{2}):(\d{2})/.exec(i.asOf ?? "");
+  return m ? `${market === "US" ? "뉴욕" : "서울"} ${m[1]}:${m[2]}` : null;
+}
+
 // ── 상세 표 배치 ──────────────────────────────────────────────
 
 /** 표 한 줄의 좌우 안쪽 여백 합(space.lg ×2)과 칸 사이 간격(space.sm) — MarketSummaryBody 의 tr 스타일과 같다 */
@@ -459,11 +539,21 @@ export function speakPointMove(text: string): string {
   return text.replace(/([+-])(\d[\d.]*)%p/g, (_m, s: string, n: string) => `${n}%포인트 ${s === "+" ? "상승" : "하락"}`);
 }
 
-/** 카드·목록 줄을 한 문장으로 */
-export function cardSpeech(s: MarketSummary, view: Date): string {
+/**
+ * 카드·목록 줄을 한 문장으로. card = 브리핑 탭 맨 위 카드: 카드에 보이는 뉴스 제목(언론사·시각·원문 제목)도 읽는다 —
+ * 카드 전체가 누르는 칸 하나라 화면 읽기 사용자는 이 문장으로만 카드를 듣는다 (제목은 원문 그대로, 기호를 말로 바꾸지 않는다)
+ */
+export function cardSpeech(s: MarketSummary, view: Date, opts: { card?: boolean } = {}): string {
   const d = s.data;
   const when = `${md(s.date)} ${s.session === "afternoon" ? "오후" : "오전"}`;
   if (s.status === "failed" || !d) return `시장 요약, ${when}, 생성 실패, 자세히 보기`;
-  const lines = summaryLines(d, view).map((l) => speakText(l.text));
+  const news = opts.card ? cardRows(d, view).find((r) => r.kind === "news") : undefined;
+  const lines = summaryLines(d, view).map((l) => (l.kind === "news" && news?.kind === "news" ? newsSpeech(news, d) : speakText(l.text)));
   return [titleText(d, view), when, speakText(basisText(d, view)), ...lines, "숫자로 만든 요약, 매매 권유가 아닙니다", "자세히 보기"].join(", ");
+}
+
+/** 카드 뉴스 칸을 말로: '뉴스 3건, 뉴스1 9/26 05:32, <원문 제목>, KBS 9/26 05:22, <원문 제목>, 외 1건' */
+function newsSpeech(r: Extract<CardRow, { kind: "news" }>, d: Pick<MarketSummaryData, "news" | "date">): string {
+  const items = r.items.map((n) => `${n.outlet} ${newsTime(n, d.date)}, ${n.title}`);
+  return [`뉴스 ${d.news.items.length}건`, ...items, ...(r.more ? [`외 ${r.more}건`] : [])].join(", ");
 }

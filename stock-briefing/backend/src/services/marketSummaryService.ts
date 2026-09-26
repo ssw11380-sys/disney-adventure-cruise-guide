@@ -11,9 +11,11 @@ import type { DigestMarket } from "../notifications/digest.js";
 import { reutersCandidates } from "../providers/market/tossTics.js";
 import { briefingMarketDate } from "./briefingService.js";
 import { eventsCoverage, nextOpenEvent, upcomingEvents, type OfficialKind } from "./marketEvents.js";
+import { isKrTradingDate } from "./marketContext.js";
 import {
   compareHoldings,
   digestLine,
+  finalAt,
   krSectors,
   marketOf,
   naverYield,
@@ -21,6 +23,7 @@ import {
   NEWS_QUERY,
   newsDays,
   newsWindow,
+  nextSessionOpenAt,
   parseTreasuryCsv,
   phaseOf,
   pickFx,
@@ -100,9 +103,22 @@ export interface MarketSummaryDeps {
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
   /** 출처 하나를 기다리는 최대 시간 (기본 8초) */
   sourceTimeoutMs?: number;
+  /** 확정 뒤 다시 만들기 예약 (테스트는 가짜를 넣는다). 돌려준 함수를 부르면 취소 */
+  timer?: (fn: () => void, ms: number) => () => void;
 }
 
 const SOURCE_WAIT_MS = 8_000;
+/** 장중·최종값 전 요약을 확정 시각(finalAt) 뒤 이만큼 지나 다시 만든다 (확정 값이 출처에 자리 잡을 여유) */
+export const REFINAL_DELAY_MS = 5 * 60_000;
+/** 확정 시각이 이보다 멀면 예약하지 않는다 (그다음 실행의 outdated() 가 다시 만든다) */
+const REFINAL_MAX_MS = 12 * 3_600_000;
+
+/** 기본 예약: 프로세스를 붙잡지 않는 타이머 */
+const defaultTimer = (fn: () => void, ms: number): (() => void) => {
+  const t = setTimeout(fn, ms);
+  t.unref?.();
+  return () => clearTimeout(t);
+};
 
 /** p 를 ms 안에 끝내지 못하면 실패 (까닭을 남기려고 within 과 달리 오류로) */
 function timed<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -135,6 +151,9 @@ export class MarketSummaryService {
   private inflight = new Map<string, Promise<MarketSummary | null>>();
   private readonly now: () => Date;
   private warnedUnknown = "";
+  /** 확정 뒤 다시 만들기 예약 (날짜|세션 → 취소) */
+  private refinal = new Map<string, () => void>();
+  private stopped = false;
 
   constructor(private readonly deps: MarketSummaryDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -175,7 +194,9 @@ export class MarketSummaryService {
 
   /**
    * 한 건 만들기. 이미 성공한 건이 있고 force 가 아니면 그것을 돌려준다(새로 부르지 않음). 같은 날짜·세션을 겹쳐 부르면 하나를 같이 기다린다.
-   * 지수를 하나도 받지 못하면 실패로 저장한다 (카드에 '생성 실패', 다음 실행에서 다시 만든다)
+   * 지수를 하나도 받지 못하면 실패로 저장한다 (카드에 '생성 실패', 다음 실행에서 다시 만든다).
+   * 성공한 건이 있는데 그 거래일 다음 장이 이미 열렸으면(한국 22:30 뒤 수동 '오전 브리핑' 등) force 여도 다시 만들지 않는다 —
+   * 지수 띠가 새 거래일 값이라 다시 만들면 지수가 모두 빠져 좋은 요약이 '생성 실패'로 바뀐다
    */
   async generate(session: SummarySession, opts: { date: string; force?: boolean }): Promise<MarketSummary | null> {
     if (!(await this.enabled())) return null;
@@ -183,9 +204,14 @@ export class MarketSummaryService {
     const cur = this.inflight.get(key);
     if (cur) return cur;
     const p = (async () => {
-      if (!opts.force) {
-        const existing = await this.find(opts.date, session);
-        if (existing?.status === "ok" && !this.outdated(existing)) return existing;
+      const existing = await this.find(opts.date, session);
+      if (existing?.status === "ok") {
+        if (!opts.force && !this.outdated(existing)) return existing;
+        const d = existing.data;
+        if (d && this.now().getTime() >= nextSessionOpenAt(d.market, d.basisDate)) {
+          this.deps.log?.info({ date: opts.date, session, basisDate: d.basisDate }, "다음 장이 열린 뒤라 시장 요약을 다시 만들지 않고 먼저 만든 것을 둠");
+          return existing;
+        }
       }
       this.running++;
       try {
@@ -209,6 +235,35 @@ export class MarketSummaryService {
   private outdated(s: MarketSummary): boolean {
     const d = s.data;
     return !!d && d.phase !== "final" && phaseOf(d.market, d.basisDate, this.now()) === "final";
+  }
+
+  /**
+   * 장중·최종값 전 요약을 확정 시각 + REFINAL_DELAY_MS 에 한 번 다시 만든다 (예약 실행은 하루 한 번이라 그대로 두면 카드에 '장중 값'이 계속 남는다).
+   * 다시 만들 때는 generate(강제 아님) → outdated() 로 확정 값을 받아 덮는다. 알림은 새로 보내지 않는다. 서버를 닫으면(stop) 취소
+   */
+  private scheduleRefinal(s: MarketSummary): void {
+    const d = s.data;
+    if (this.stopped || s.status !== "ok" || !d || d.phase === "final") return;
+    const key = `${d.date}|${d.session}`;
+    if (this.refinal.has(key)) return;
+    const ms = finalAt(d.market, d.basisDate) + REFINAL_DELAY_MS - this.now().getTime();
+    if (ms <= 0 || ms > REFINAL_MAX_MS) return;
+    const cancel = (this.deps.timer ?? defaultTimer)(() => {
+      this.refinal.delete(key);
+      if (this.stopped) return;
+      this.generate(d.session, { date: d.date }).catch((e: unknown) => {
+        this.deps.log?.warn({ date: d.date, session: d.session, err: (e as Error).message }, "확정 뒤 시장 요약 다시 만들기 오류");
+      });
+    }, ms);
+    this.refinal.set(key, cancel);
+    this.deps.log?.info({ date: d.date, session: d.session, phase: d.phase, inMinutes: Math.round(ms / 60_000) }, "장중·최종값 전 시장 요약 — 확정 뒤 다시 만들기 예약");
+  }
+
+  /** 서버를 닫을 때: 예약한 다시 만들기를 모두 취소 */
+  stop(): void {
+    this.stopped = true;
+    for (const cancel of this.refinal.values()) cancel();
+    this.refinal.clear();
   }
 
   private src<T>(p: () => Promise<T>, label: string): Promise<Settled<T>> {
@@ -258,9 +313,11 @@ export class MarketSummaryService {
     ]);
 
     const fxRow = (idx.ok ? idx.value : []).find((i) => i.code === "USDKRW");
-    const fx = pickFx(fxRow, fxDaily.ok ? fxDaily.value : null, date);
+    // 오늘이 한국 영업일인지 (휴장일 목록 + 네이버 오늘 장 상태 + 오후 요약의 휴장 판단) — 영업일 10:00 뒤 띠 값은 오늘 고시값
+    const krOpenToday = isKrTradingDate(date) && !(kr?.today?.date === date && kr.isTradingDay === false) && !(market === "KR" && dates.holiday);
+    const fx = pickFx(fxRow, fxDaily.ok ? fxDaily.value : null, date, { now, krOpenToday });
     if (!fx) notes.push("원/달러를 받지 못함");
-    else if (!fxDaily.ok) notes.push("원/달러 고시 날짜를 확인하지 못함");
+    else if (!fx.date) notes.push("원/달러 고시 날짜를 확인하지 못함");
     const yield10y: SummaryYield | null = yieldR.ok ? yieldR.value : null;
     if (market === "US" && !yield10y) notes.push(`미 10년물을 받지 못함${yieldR.ok ? "" : ` (${yieldR.error})`}`);
 
@@ -328,7 +385,9 @@ export class MarketSummaryService {
     };
     const ok = indices.some((i) => i.changeRate !== null);
     const summary = ok ? summaryLines(data, now).map((l) => l.text).join("\n") : "지수를 받지 못해 시장 요약을 만들지 못했습니다";
-    return this.save(data, ok ? "ok" : "failed", summary);
+    const saved = await this.save(data, ok ? "ok" : "failed", summary);
+    this.scheduleRefinal(saved);
+    return saved;
   }
 
   /** 미 10년물: 재무부 CSV(기준 거래일 행, 1월 초는 전년 파일도) → 없으면 네이버(로이터) → 둘 다 없으면 null */
@@ -383,8 +442,16 @@ export class MarketSummaryService {
     this.deps.log?.warn({ unknown, coverage: eventsCoverage() }, "일정 목록이 끝난 종류가 있어 그 일정은 빼고 요약함 — marketEvents.ts 에 새 일정을 넣어 주세요");
   }
 
+  /** 저장 (날짜·세션마다 1건, 덮어쓴다). 새로 만든 것이 실패인데 이미 정상 요약이 있으면 덮지 않고 그것을 돌려준다 */
   private async save(data: MarketSummaryData, status: "ok" | "failed", summary: string): Promise<MarketSummary> {
-    const values = { summary_date: data.date, session: data.session, market: data.market, status, summary, data: JSON.stringify(data), created_at: seoulIso(this.now()) };
+    if (status === "failed") {
+      const cur = await this.find(data.date, data.session);
+      if (cur?.status === "ok") {
+        this.deps.log?.warn({ date: data.date, session: data.session, notes: data.notes }, "다시 만든 시장 요약이 실패라 먼저 만든 정상 요약을 그대로 둠");
+        return cur;
+      }
+    }
+    const values ={ summary_date: data.date, session: data.session, market: data.market, status, summary, data: JSON.stringify(data), created_at: seoulIso(this.now()) };
     await this.deps.db
       .insertInto("market_summaries")
       .values(values)

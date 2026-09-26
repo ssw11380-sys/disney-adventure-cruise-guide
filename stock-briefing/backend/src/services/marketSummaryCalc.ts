@@ -3,7 +3,7 @@ import type { NewsItem } from "../providers/news/types.js";
 import { nyWall } from "./accountNumbers.js";
 import { briefingMarketDate } from "./briefingService.js";
 import { isKrTradingDate, isUsTradingDate, KR_HOLIDAYS, krRegularHours, US_EARLY_CLOSES, US_HOLIDAY_NAMES } from "./marketContext.js";
-import { kstWall, prevKrTradingDate, type SummaryEvent } from "./marketEvents.js";
+import { kstWall, nextKrTradingDate, prevKrTradingDate, type SummaryEvent } from "./marketEvents.js";
 
 /**
  * 시장 전체 요약 — 계산과 문장 (순수 함수, DB·네트워크 없음 → 단위 테스트).
@@ -187,10 +187,14 @@ const US_FINAL_MIN = 17 * 60 + 15;
 /** 물음표 제목은 뺀다 (고치지 않는다) */
 const QUESTION_RE = /[?？]/;
 /**
- * 매매 권유형·전망형 낱말이 든 제목은 뺀다 (물음표 없이 묻거나 내다보는 제목 포함: '사도 될까'·'매수 기회'·'지속될 듯'·'다음주 증시 체크포인트'·'내주 FOMC')
+ * 매매 권유형·전망형 낱말이 든 제목은 뺀다 (물음표 없이 묻거나 내다보는 제목 포함: '사도 될까'·'매수 기회'·'지속될 듯'·'다음주 증시 체크포인트'·'내주 FOMC').
+ *  - 목표가는 줄임말과 '목표(주)가'·띄어 쓴 꼴까지 (목표\s?주?가)
+ *  - 명령·권유형: '매수하라'·'지금 사라'·'비중 늘려라'·'살 때다'·'담을 때'·'매수 적기'·'톱픽'·'투자의견'
+ *    ('사라'는 뒤에 글자가 없을 때만 — '사라져'·'사라진'은 사실을 적은 말이라 두고, 권유로 읽히는 '사라'는 뺀다)
+ *    ('적기'는 낱말 앞에서만 — '실적기대'의 '적기'는 아니다)
  */
 export const NEWS_BLOCK_RE =
-  /(살까|팔까|사야 할|사도 될|팔아야|팔아도 될|팔아라|추천|목표가|유망|담아라|매수 타이밍|매도 타이밍|매수 기회|매도 기회|저가 매수 기회|비중\s?확대|비중\s?축소|체크\s?포인트|전망|주간|이번\s?주|다음\s?주|내주(?=$|\s)|예상|향방|듯(?=$|[\s.,…·'"”’]))/;
+  /(살까|팔까|사야 할|사도 될|팔아야|팔아도 될|팔아라|추천|목표\s?주?가|유망|담아라|매수하라|매도하라|매수해라|매도해라|사라(?=$|[\s,.…!·'"”’])|늘려라|줄여라|(?<![가-힣])(?:살|팔|담을)\s?때(?:다)?(?![가-힣])|(?<![가-힣])적기|매수\s?적기|매도\s?적기|톱픽|탑픽|투자\s?의견|매수 의견|매도 의견|매수 타이밍|매도 타이밍|매수 기회|매도 기회|저가 매수 기회|비중\s?확대|비중\s?축소|체크\s?포인트|전망|주간|이번\s?주|다음\s?주|내주(?=$|\s)|예상|향방|듯(?=$|[\s.,…·'"”’]))/;
 
 /** 한글 음절의 받침이 ㄹ 인지 ('될'·'갈'·'를') */
 const hasRieulFinal = (ch: string) => {
@@ -211,15 +215,37 @@ const FLASH_RE = /\[(속보|1보|2보)\]|-\s?[12]보\]|\((속보|1보)\)/;
  * 'Ultra' 는 뒤에 Short 가 오면 뺀다 — 'Ultra-Short Income'·'Ultra Short-Term Bond' 는 초단기 채권 ETF 이지 레버리지가 아니다 (채권형으로 따로 센다)
  */
 export const LEVERAGE_RE = /(\b[23]x\b|ultra(?![\s-]*short)|\bbull\b|\bbear\b|인버스|레버리지|곱버스)/i;
+/** ProShares 'UltraShort'(−2배 인버스, 한 낱말)·'울트라숏'. 채권 낱말이 같이 있어도 인버스다 ('UltraShort 20+ Year Treasury' = TBT) */
+const ULTRASHORT_RE = /(ultrashort|울트라\s?숏)/i;
+/** −1배 인버스 'ProShares Short QQQ·Short S&P500'·'숏' (아래 채권 낱말이 같이 있으면 만기가 짧은 채권 ETF 라 인버스가 아니다) */
+const SHORT_RE = /(\bshort\b|(?<![가-힣])숏(?![가-힣]))/i;
+/** 'Short' 가 짧은 만기를 뜻하는 채권 ETF 낱말: 'Ultra-Short Income'·'Ultra Short-Term Bond'·'Short Treasury Bond'·'Short Duration' */
+const SHORT_BOND_RE = /(income|bond|\bterm\b|duration|maturity|muni|t-bill|floating)/i;
+/**
+ * 레버리지·인버스 ETF 인지 (이름으로). 'UltraShort'·'Short QQQ' 는 인버스, 'Ultra-Short Income'·'Short-Term Bond' 는 채권 ETF (BOND_ETF_RE 로 따로 센다).
+ * 인버스를 먼저 봐야 −2배 인버스가 '채권·금리형'으로, −1배 인버스가 S&P500 비교로 잘못 들어가지 않는다
+ */
+export function isLeverageName(names: string): boolean {
+  if (LEVERAGE_RE.test(names) || ULTRASHORT_RE.test(names)) return true;
+  return SHORT_RE.test(names) && !SHORT_BOND_RE.test(names);
+}
 /**
  * 채권·금리형 ETF (CD금리·KOFR·국고채·미국 국채·초단기 채권 등). 주식 지수와 견주면 높음·낮음이 구조적으로 틀려(해외 지수 ETF 와 같은 까닭) 빼고 개수만 적는다.
- * 이름으로만 알아보므로 알아보지 못한 것은 포함된다
+ * 이름으로만 알아보므로 알아보지 못한 것은 포함된다. 인버스(isLeverageName)를 먼저 본 뒤에 쓴다
  */
 export const BOND_ETF_RE = /(채권|국고채|국채|통안채|회사채|전단채|단기채|CD금리|KOFR|SOFR|머니마켓|MMF|금리액티브|treasury|\bbonds?\b|t-bill|ultra[\s-]*short)/i;
-/** 한국 ETF 상표 (종목 마스터 분류가 없을 때 이름으로) */
-const KR_ETF_BRAND_RE = /^(KODEX|TIGER|ACE|KBSTAR|RISE|SOL|HANARO|ARIRANG|KOSEF|PLUS|TIMEFOLIO|KIWOOM|WON|1Q|BNK|FOCUS|TRUSTON|UNICORN|VITA|ITF|TREX|마이다스|에셋플러스|파워|마이티|히어로즈|KCGI|DAISHIN343)\b/i;
-/** 한국 상장 해외 지수·상품 ETF (코스피와 비교하면 높음·낮음이 구조적으로 틀린다) */
-const KR_OVERSEAS_RE = /(미국|나스닥|S&P|필라델피아|다우존스|차이나|중국|항셍|홍콩|일본|니케이|닛케이|인도|베트남|유로|독일|글로벌|선진국|신흥국|MSCI|대만|브라질|원유|WTI|골드|금선물|은선물|구리|달러|엔화|해외|월드|아시아|멕시코|캐나다|호주|영국|사우디|인도네시아)/i;
+/**
+ * 한국 ETF 상표 (종목 마스터 분류가 없을 때 이름으로). 한글 상표 뒤에는 \b 가 성립하지 않아(한글은 낱말 글자가 아님) 공백·괄호·끝으로 본다 —
+ * '파워로직스' 같은 종목 이름은 상표가 아니다
+ */
+const KR_ETF_BRAND_RE = /^(?:(?:KODEX|TIGER|ACE|KBSTAR|RISE|SOL|HANARO|ARIRANG|KOSEF|PLUS|TIMEFOLIO|KIWOOM|WON|1Q|BNK|FOCUS|TRUSTON|UNICORN|VITA|ITF|TREX|KCGI|DAISHIN343)\b|(?:마이다스|에셋플러스|파워|마이티|히어로즈)(?=$|[\s(]))/i;
+/**
+ * 한국 상장 해외 지수·원자재·통화 ETF (코스피와 비교하면 높음·낮음이 구조적으로 틀린다). 금현물·원자재처럼 국내에서 거래해도 주식 지수를 따르지 않는 것도 여기로
+ */
+const KR_OVERSEAS_RE =
+  /(미국|나스닥|S&P|필라델피아|다우존스|차이나|중국|항셍|홍콩|일본|니케이|닛케이|인도|베트남|유로|독일|글로벌|선진국|신흥국|MSCI|대만|브라질|원유|WTI|골드|금선물|금현물|KRX\s?금|은선물|은현물|구리|원자재|농산물|천연가스|팔라듐|백금|귀금속|비철금속|탄소배출권|달러|엔화|해외|월드|아시아|멕시코|캐나다|호주|영국|사우디|인도네시아)/i;
+/** 한국 상장 코스닥 추종 ETF ('KODEX 코스닥150') — 상장은 코스피 시장이지만 코스닥과 비교한다 */
+const KR_KOSDAQ_ETF_RE = /코스닥/;
 /** 미국 상장 거래소 → 비교 지수 (나스닥 상장 → 나스닥 종합, 뉴욕·아멕스 상장 → S&P500). 그 밖(모르는 거래소)은 비교에서 뺀다 */
 const US_BENCHMARK: Record<string, "NASDAQ" | "SPX"> = { NSQ: "NASDAQ", NYS: "SPX", AMX: "SPX" };
 /** 네이버 시세의 거래소 이름 → 코드 */
@@ -231,6 +257,11 @@ const WD = ["일", "월", "화", "수", "목", "금", "토"];
 const pad = (n: number) => String(n).padStart(2, "0");
 export const kstDateOf = (t: number) => new Date(t + 9 * 3_600_000).toISOString().slice(0, 10);
 const kstHmOf = (t: number) => new Date(t + 9 * 3_600_000).toISOString().slice(11, 16);
+/** 서울 시각의 하루 중 분 (0~1439) */
+const kstMinutesOf = (t: number) => {
+  const d = new Date(t + 9 * 3_600_000);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+};
 export function addDays(date: string, n: number): string {
   const d = new Date(`${date}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
@@ -312,12 +343,35 @@ export function sessionClose(market: SummaryMarket, basisDate: string): { at: nu
   return { at: nyWall(basisDate, Math.floor(m / 60), m % 60), time: hm(m), early };
 }
 
+/** 값이 확정되는 순간: 한국은 정규장 마감, 미국은 네이버 최종값 시각(뉴욕 17:15) */
+export function finalAt(market: SummaryMarket, basisDate: string): number {
+  return market === "KR" ? sessionClose("KR", basisDate).at : nyWall(basisDate, Math.floor(US_FINAL_MIN / 60), US_FINAL_MIN % 60);
+}
+
 /** 실행 시각이 마감 전이면 장중, 미국은 마감 뒤 최종값 시각(17:15 ET) 전이면 잠정 */
 export function phaseOf(market: SummaryMarket, basisDate: string, now: Date): MarketSummaryData["phase"] {
   const close = sessionClose(market, basisDate);
   if (now.getTime() < close.at) return "intraday";
-  if (market === "US" && now.getTime() < nyWall(basisDate, Math.floor(US_FINAL_MIN / 60), US_FINAL_MIN % 60)) return "prelim";
+  if (now.getTime() < finalAt(market, basisDate)) return "prelim";
   return "final";
+}
+
+/** 다음 미국 거래일 (주말·US_HOLIDAYS 건너뜀) */
+export function nextUsTradingDate(date: string): string {
+  let d = addDays(date, 1);
+  for (let i = 0; i < 30 && !isUsTradingDate(d); i++) d = addDays(d, 1);
+  return d;
+}
+
+/**
+ * 기준 거래일 다음 정규장이 열리는 순간 (미국 09:30 ET, 한국 그날 개장 시각 — 수능일·새해 첫날 10:00).
+ * 이 뒤에는 지수 띠가 새 거래일 값이라 그 세션 요약을 다시 만들면 지수가 모두 빠진다 (강제 재실행이 좋은 요약을 덮지 않게)
+ */
+export function nextSessionOpenAt(market: SummaryMarket, basisDate: string): number {
+  if (market === "US") return nyWall(nextUsTradingDate(basisDate), 9, 30);
+  const next = nextKrTradingDate(basisDate);
+  const h = krRegularHours(next);
+  return kstWall(next, Math.floor(h.open / 60), h.open % 60);
 }
 
 /** 뉴스 창 (ISO) */
@@ -346,10 +400,26 @@ export function pickIndices(
   });
 }
 
-/** 원/달러: 지수 띠와 같은 값(하나은행 고시 매매기준율)과, 일별 시리즈 마지막 날짜 = 그 고시의 날짜 */
-export function pickFx(row: { value: number; change: number; changeRate: number; stale?: boolean } | null | undefined, daily: ReadonlyArray<{ date: string }> | null, today: string): SummaryFx | null {
+/** 한국 영업일 이 시각(서울, 분) 뒤에는 원/달러 띠 값이 그날 고시값이다 — 하나은행 첫 고시는 09시 무렵이라 넉넉히 10:00 */
+export const FX_TODAY_FROM_MIN = 10 * 60;
+
+/**
+ * 원/달러: 지수 띠와 같은 값(하나은행 고시 매매기준율)과, 일별 시리즈 마지막 날짜 = 그 고시의 날짜.
+ * 일별 시리즈에 '오늘' 점이 하루가 끝나야 들어오는 경우(아직 실측 전)에도 오후 요약에 '(전날 고시)'가 틀리게 붙지 않게,
+ * 오늘이 한국 영업일(krOpenToday)이고 10:00 뒤에 새로 받은 띠 값(stale 아님)이면 그 값의 날짜를 오늘로 본다.
+ * 띠의 시세 시각(localTradedAt)은 고시 시각이 아니라 받은 무렵의 시각일 때가 있어(토요일 05:45 등 — 녹화 값) 날짜로 쓰지 않는다
+ */
+export function pickFx(
+  row: { value: number; change: number; changeRate: number; stale?: boolean } | null | undefined,
+  daily: ReadonlyArray<{ date: string }> | null,
+  today: string,
+  opts: { now?: Date; krOpenToday?: boolean } = {},
+): SummaryFx | null {
   if (!row || !Number.isFinite(row.value)) return null;
-  const last = daily?.filter((c) => c.date <= today).at(-1)?.date ?? null;
+  let last = daily?.filter((c) => c.date <= today).at(-1)?.date ?? null;
+  const now = opts.now?.getTime();
+  const liveToday = opts.krOpenToday === true && now !== undefined && row.stale !== true && kstDateOf(now) === today && kstMinutesOf(now) >= FX_TODAY_FROM_MIN;
+  if (liveToday && (last === null || last < today)) last = today;
   return { value: row.value, change: row.change, changeRate: row.changeRate, date: last, stale: row.stale === true };
 }
 
@@ -458,11 +528,12 @@ export interface QuoteInput {
 /** 종목의 비교 지수 (없으면 뺀 까닭) */
 export function benchmarkOf(market: SummaryMarket, h: HoldingInput, q: QuoteInput | null): { code: string } | { exclude: "leverage" | "overseas" | "bond" | "noBenchmark" } {
   const names = `${h.name} ${q?.name ?? ""}`;
-  if (LEVERAGE_RE.test(names)) return { exclude: "leverage" };
+  if (isLeverageName(names)) return { exclude: "leverage" };
   if (market === "KR") {
     const etf = h.groupCode === "EF" || h.groupCode === "EN" || KR_ETF_BRAND_RE.test(h.name);
     if (etf && BOND_ETF_RE.test(h.name)) return { exclude: "bond" };
     if (etf && KR_OVERSEAS_RE.test(h.name)) return { exclude: "overseas" };
+    if (etf && KR_KOSDAQ_ETF_RE.test(h.name)) return { code: "KOSDAQ" };
     const m = h.market === "KOSPI" || h.market === "KOSDAQ" ? h.market : q?.exchange === "KS" ? "KOSPI" : q?.exchange === "KQ" ? "KOSDAQ" : null;
     return m ? { code: m } : { exclude: "noBenchmark" };
   }
@@ -474,9 +545,9 @@ export function benchmarkOf(market: SummaryMarket, h: HoldingInput, q: QuoteInpu
 
 /**
  * 보유 종목(수량 > 0)을 같은 세션 지수와 비교한다. 종목·지수 모두 정규장 종가(애프터·NXT 제외).
- *  - 시세가 없거나 시세 날짜가 기준 거래일과 다르면(거래정지·지연·모르는 코드) 빼고 '시세 없음'으로 센다
+ *  - 시세가 없거나 시세 날짜가 기준 거래일과 다르면(거래정지·지연·모르는 코드·시세 조회 실패) 빼고 '시세 없음'으로 센다
  *    (미국 비교 지수는 시세의 거래소로 정하므로, 시세가 없는 종목을 '비교 지수 없음'으로 세지 않게 시세부터 본다)
- *  - 레버리지·인버스, 채권·금리형 ETF, 한국 상장 해외 지수 ETF, 비교 지수를 정하지 못한 종목은 빼고 개수만
+ *  - 레버리지·인버스, 채권·금리형 ETF, 한국 상장 해외 지수·원자재 ETF(코스닥 추종 ETF 는 코스닥과 비교), 비교 지수를 정하지 못한 종목은 빼고 개수만
  *  - 정렬: 차이 크기 순, 같으면 이름 순. 보유가 0 이면 null
  */
 export function compareHoldings(input: {
@@ -494,7 +565,7 @@ export function compareHoldings(input: {
     const q = input.quotes.get(h.code) ?? null;
     const quoteOk = !!q && Number.isFinite(q.changeRate) && (q.tradedAt ?? "").slice(0, 10) === input.basisDate;
     const b = benchmarkOf(input.market, h, q);
-    // 이름으로 아는 제외(레버리지·채권·해외 지수 ETF)가 먼저, 그다음 시세, 마지막이 비교 지수
+    // 이름으로 아는 제외(레버리지·채권·해외 지수·원자재 ETF)가 먼저, 그다음 시세, 마지막이 비교 지수
     if ("exclude" in b && b.exclude !== "noBenchmark") {
       excluded[b.exclude].push(h.name);
       continue;

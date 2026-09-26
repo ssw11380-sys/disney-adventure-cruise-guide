@@ -13,20 +13,26 @@ import {
   closeBadgeWarn,
   digestLine,
   fitLines,
+  glueSegs,
   holdingsAux,
   holdingsShort,
   holdingsTableMode,
   holidayText,
+  indexCellCols,
+  indexSourceTime,
+  indexValueLine,
   indicesTableMode,
   marketCardItem,
   ratesSegs,
   speakPointMove,
   speakText,
   summaryLines,
+  textEm,
   titleText,
   type SummaryLine,
 } from "@/lib/marketSummary";
 import { KR_HOLIDAYS } from "@/lib/marketTime";
+import { font, space } from "@/tokens";
 
 /**
  * 시장 전체 요약 문장 (앱). 서버(backend marketSummaryCalc)와 같은 글인지 공용 픽스처로 본다 — 알림 첫 줄·카드·상세가 같은 숫자와 말을 쓰게.
@@ -172,6 +178,63 @@ describe("카드 이름표 줄 (최대 6줄 규칙과 같은 줄)", () => {
     expect(s).toContain("매매 권유가 아닙니다");
     expect(s).not.toMatch(/[+]\d/);
     expect(cardSpeech(item(8, MORNING, "failed"), at("2026-09-28T08:31:00+09:00"))).toContain("생성 실패");
+  });
+});
+
+describe("카드 지수 칸 배치·줄바꿈 묶음·출처 시각 (요구 검사 보정)", () => {
+  const NB = " ";
+  const WJ = "⁠";
+  it("지수 칸: 칸이 등락률·종가 글자보다 좁으면 4칸을 2×2 로 — 울트라 411·130% 카드(칸 약 74dp, '+0.48%' 약 75dp)", () => {
+    const card = (w: number) => w - 2 * space.lg;
+    expect(textEm("+0.48%") * font.h2 * 1.3).toBeGreaterThan((card(411) - 3 * space.sm) / 4 - 2 * space.sm);
+    expect(indexCellCols(MORNING, card(411), 1.3)).toBe(2);
+    expect(indexCellCols(MORNING, card(411), 1)).toBe(4);
+    expect(indexCellCols(MORNING, card(475), 1.3)).toBe(4);
+    expect(indexCellCols(MORNING, card(475), 1.4)).toBe(4);
+    // 두 자리 등락률('-10.33%')은 100%에서도 좁은 칸이면 2×2
+    const crash = { ...MORNING, indices: MORNING.indices.map((i) => ({ ...i, changeRate: -10.33 })) };
+    expect(indexCellCols(crash, card(411), 1.1)).toBe(2);
+    // 오후 2칸(종가 · 전일 대비 줄)은 411·140%에서도 한 줄
+    expect(indexCellCols(AFTERNOON, card(411), 1.4)).toBe(2);
+    // 넓은 창 목록 줄 작은 칸: 2단 목록(400)·글자 140%·두 자리 등락률이면 2×2
+    expect(indexCellCols(MORNING, 400 - space.lg - space.md, 1, true)).toBe(4);
+    expect(indexCellCols(crash, 400 - space.lg - space.md, 1.4, true)).toBe(2);
+  });
+
+  it("줄바꿈 묶음: 흐린 출처 괄호는 한 덩어리, 한글 이름표 뒤 숫자·등락 숫자 앞 공백은 붙는 공백 (글 자체는 그대로)", () => {
+    const g = (segs: Parameters<typeof glueSegs>[0]) => glueSegs(segs).map((s) => s.text).join("");
+    // 괄호 앞 공백은 줄바꿈 자리로 남고, 괄호 안은 글자마다 WJ (공백은 줄바꿈 없는 공백)
+    expect(g([{ text: "미 10년물 5.17%" }, { text: " " }, { text: "-0.01%p", tone: -0.01 }, { text: " (미 재무부)", muted: true }])).toBe(
+      `미${NB}10년물${NB}5.17%${NB}-0.01%p (${WJ}미${WJ}${NB}${WJ}재${WJ}무${WJ}부${WJ})`,
+    );
+    expect(g([{ text: "미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7" }])).toBe(`미국${NB}12종목 · 지수보다 높음${NB}2 · 낮음${NB}3 · 비슷${NB}7`);
+    expect(g([{ text: "나스닥 " }, { text: "+0.48%", tone: 0.48 }])).toBe(`나스닥${NB}+0.48%`);
+    // 조각 수·색(tone)·흐림(muted)은 그대로, 바뀌지 않는 조각은 같은 객체
+    const segs = [{ text: " · " }, { text: "+1%", tone: 1 }];
+    const out = glueSegs(segs);
+    expect(out).toHaveLength(2);
+    expect(out[1]).toBe(segs[1]);
+    expect(out[0]!.text).toBe(` ·${NB}`);
+  });
+
+  it("지수 출처 시각: 저장한 현지 시각 그대로 '뉴욕 17:15'·'서울 20:15', 모르면 없음", () => {
+    expect(indexSourceTime(MORNING.indices[0]!, "US")).toBe("뉴욕 17:15");
+    expect(indexSourceTime(MORNING.indices[1]!, "US")).toBe("뉴욕 16:39");
+    expect(indexSourceTime(AFTERNOON.indices[0]!, "KR")).toBe("서울 20:15");
+    expect(indexSourceTime({ asOf: null }, "US")).toBeNull();
+    expect(indexValueLine(AFTERNOON.indices[0]!, "KR")).toMatch(/^7,080\.92 · [+-]/);
+    expect(indexValueLine(MORNING.indices[0]!, "US")).toBe("27,068.72");
+  });
+
+  it("카드 화면 읽기(card): 카드에 보이는 뉴스 제목 2개를 원문 그대로, 목록 줄은 예전처럼 언론사·시각만", () => {
+    const view = at("2026-09-28T08:31:00+09:00");
+    const card = cardSpeech(item(7, MORNING), view, { card: true });
+    expect(card).toContain("뉴스 3건, 뉴스1 9/26 05:32, [예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑, KBS 9/26 05:22, [예시] 뉴욕증시, 기술주 강세 속 상승 마감, 외 1건");
+    const row = cardSpeech(item(7, MORNING), view);
+    expect(row).toContain("뉴스 3건, 뉴스1 9/26 05:32, KBS 9/26 05:22, 한국경제 9/26 05:38");
+    expect(row).not.toContain("[예시]");
+    // 휴장 카드처럼 뉴스 줄이 없으면 제목도 없다
+    expect(cardSpeech(item(8, KR_HOLIDAY), at("2026-09-25T16:01:00+09:00"), { card: true })).not.toContain("뉴스");
   });
 });
 

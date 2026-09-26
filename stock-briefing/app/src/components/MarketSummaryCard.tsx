@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React from "react";
-import { Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
+import React, { useCallback, useState } from "react";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type StyleProp, type TextStyle } from "react-native";
 import type { MarketSummary, MarketSummaryData, SummaryIndex } from "@/api/types";
 import { formatDateKo, SESSION_LABEL, shownSign } from "@/lib/format";
 import {
@@ -10,8 +10,10 @@ import {
   cardSpeech,
   closeBadge,
   closeBadgeWarn,
+  glueSegs,
   holdingsShort,
   holidayText,
+  indexCellCols,
   indexValueText,
   md,
   newsTime,
@@ -24,6 +26,7 @@ import {
 } from "@/lib/marketSummary";
 import { sentence, speakRate } from "@/lib/a11y";
 import { useNow } from "@/lib/useNow";
+import { listPaneWidth } from "@/lib/windowClass";
 import { changeColor, font, fontCap, space, touch, useFontScale, useTheme } from "@/theme";
 import { foldBriefings as FB, marketSummary as MS, radius } from "@/tokens";
 import { Badge, Card, Muted } from "./ui";
@@ -35,12 +38,15 @@ import { Badge, Card, Muted } from "./ui";
  * '밤사이/오늘'은 볼 때 날짜로 정한다 (자정·주말을 넘겨 보면 날짜로) — 1분마다 다시 본다
  */
 
-/** 줄 조각을 색 있는 글로 (등락은 한국 관례 색, 0 으로 보이는 값은 칠하지 않음) */
+/**
+ * 줄 조각을 색 있는 글로 (등락은 한국 관례 색, 0 으로 보이는 값은 칠하지 않음).
+ * 숫자와 그 이름표·출처 괄호가 다른 줄로 갈라지지 않게 묶어 그린다 (glueSegs — '비슷 / 2'·'(미 재 / 무부)' 막기)
+ */
 export function SegText({ segs, style, numberOfLines, cap }: { segs: Seg[]; style?: StyleProp<TextStyle>; numberOfLines?: number; cap?: number }) {
   const t = useTheme();
   return (
     <Text style={style} numberOfLines={numberOfLines} maxFontSizeMultiplier={cap}>
-      {segs.map((s, i) => (
+      {glueSegs(segs).map((s, i) => (
         <Text key={i} style={s.tone !== undefined ? { color: changeColor(t, shownSign(s.tone, s.text)) } : s.muted ? { color: t.muted } : undefined}>
           {s.text}
         </Text>
@@ -51,6 +57,36 @@ export function SegText({ segs, style, numberOfLines, cap }: { segs: Seg[]; styl
 
 /** 지수 전일 대비 "+63.01" */
 const signedIndex = (v: number) => `${v > 0 ? "+" : v < 0 ? "-" : ""}${indexValueText(Math.abs(v))}`;
+
+/** 숫자 칸: 한 줄, 칸보다 길면 글자를 줄여 넣는다 (말줄임 없이 — 안드로이드). 배치(indexCellCols)가 먼저 칸을 넓혀 두므로 거의 쓰이지 않는 마지막 안전판 */
+const FIT_NUM = { numberOfLines: 1, adjustsFontSizeToFit: true, minimumFontScale: 0.6, maxFontSizeMultiplier: fontCap.row } as const;
+
+/**
+ * 지수 칸 묶음: 칸 폭이 등락률·종가 글자보다 좁으면(울트라 411·큰 글씨) 4칸을 2×2 로 (indexCellCols). 폭은 실제로 잰 값(onLayout),
+ * 재기 전 첫 그림은 guess(창 폭으로 어림)
+ */
+function IndexCells({ d, compact = false, guess }: { d: MarketSummaryData; compact?: boolean; guess: number }) {
+  const scale = useFontScale(fontCap.row);
+  const [w, setW] = useState<number | null>(null);
+  const onLayout = useCallback((e: LayoutChangeEvent) => {
+    const x = Math.round(e.nativeEvent.layout.width);
+    if (x > 0) setW((p) => (p === x ? p : x));
+  }, []);
+  const cols = indexCellCols(d, w ?? guess, scale, compact);
+  const rows: SummaryIndex[][] = [];
+  for (let n = 0; n < d.indices.length; n += cols) rows.push(d.indices.slice(n, n + cols));
+  return (
+    <View style={styles.cellRows} onLayout={onLayout}>
+      {rows.map((r, n) => (
+        <View key={n} style={styles.cells}>
+          {r.map((i) => (
+            <IndexCell key={i.code} i={i} d={d} compact={compact} />
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
 
 /**
  * 지수 칸: 아침 4칸(등락률 굵게 + 종가), 오후 2칸(등락률 + 종가 · 전일 대비). 받지 못한 칸은 '—'.
@@ -73,12 +109,12 @@ function IndexCell({ i, d, compact = false }: { i: SummaryIndex; d: MarketSummar
       {i.changeRate === null ? (
         <Text style={[styles.cellRate, { color: t.muted, fontSize: compact ? font.body : font.h2 }]}>—</Text>
       ) : (
-        <Text style={[styles.cellRate, { color: changeColor(t, shownSign(i.changeRate, rateText(i.changeRate))), fontSize: compact ? font.body : font.h2 }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+        <Text style={[styles.cellRate, { color: changeColor(t, shownSign(i.changeRate, rateText(i.changeRate))), fontSize: compact ? font.body : font.h2 }]} {...FIT_NUM}>
           {rateText(i.changeRate)}
         </Text>
       )}
       {!compact && i.value !== null ? (
-        <Text style={[styles.num, { color: t.sub, fontSize: font.tiny }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+        <Text style={[styles.num, { color: t.sub, fontSize: font.tiny }]} {...FIT_NUM}>
           {indexValueText(i.value)}
           {d.market === "KR" && i.change !== null ? <Text style={{ color: changeColor(t, shownSign(i.change, indexValueText(Math.abs(i.change)))) }}>{` · ${signedIndex(i.change)}`}</Text> : null}
         </Text>
@@ -102,7 +138,7 @@ export const MarketSummaryCard = React.memo(function MarketSummaryCard({ summary
       <Pressable
         onPress={() => router.push(`/briefings/market/${summary.id}`)}
         accessibilityRole="link"
-        accessibilityLabel={cardSpeech(summary, view)}
+        accessibilityLabel={cardSpeech(summary, view, { card: true })}
         {...(selected ? { accessibilityState: { selected: true } } : {})}
         style={styles.press}
       >
@@ -132,6 +168,8 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
   const t = useTheme();
   // 이름표 칸 폭은 글자 배율만큼 늘린다 (큰 글씨에서 '환율·금리'가 '환율·금 / 리'로 쪼개지지 않게)
   const labelW = Math.round(MS.labelW * useFontScale(fontCap.row));
+  // 카드는 창 폭 그대로(좌우 여백 space.lg) — 지수 칸 배치의 첫 어림
+  const cellsGuess = useWindowDimensions().width - 2 * space.lg;
   const banner = holidayText(d, view);
   return (
     <>
@@ -142,11 +180,7 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
           <Text style={{ color: t.ink, fontSize: font.body, flexShrink: 1 }}>{banner}</Text>
         </View>
       ) : null}
-      <View style={styles.cells}>
-        {d.indices.map((i) => (
-          <IndexCell key={i.code} i={i} d={d} />
-        ))}
-      </View>
+      <IndexCells d={d} guess={cellsGuess} />
       {cardRows(d, view).map((r) => (
         <View key={r.kind} style={styles.row}>
           <Text style={[styles.label, { width: labelW, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
@@ -184,6 +218,9 @@ export function MarketSummaryRow({ summary, selected, onPress, role }: { summary
   const d = summary.data;
   const failed = summary.status === "failed" || !d;
   const hold = d ? holdingsShort(d.holdings) : null;
+  // 지수 작은 칸 배치의 첫 어림: 2단 왼쪽 목록(button)은 목록 폭, 카드 격자(link)는 창 폭 — 줄의 좌우 안쪽 여백을 뺀다
+  const win = useWindowDimensions();
+  const cellsGuess = (role === "button" ? listPaneWidth(win.fontScale || 1) : win.width) - space.lg - space.md;
   return (
     <Pressable
       onPress={onPress}
@@ -210,11 +247,7 @@ export function MarketSummaryRow({ summary, selected, onPress, role }: { summary
         </Text>
       ) : (
         <>
-          <View style={styles.cells}>
-            {d.indices.map((i) => (
-              <IndexCell key={i.code} i={i} d={d} compact />
-            ))}
-          </View>
+          <IndexCells d={d} compact guess={cellsGuess} />
           {hold ? (
             <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row} accessibilityLabel={speakText(hold)}>
               {hold}
@@ -232,9 +265,11 @@ const styles = StyleSheet.create({
   when: { flexGrow: 1, textAlign: "right" },
   failed: { flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap" },
   banner: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, paddingVertical: space.sm, borderRadius: radius.md },
-  cells: { flexDirection: "row", gap: space.sm },
-  cell: { flex: 1, minWidth: 0, gap: space.xxs, paddingHorizontal: space.sm, paddingVertical: space.sm, borderRadius: radius.md },
-  cellSmall: { flex: 1, minWidth: 0, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: radius.sm },
+  // 칸 사이 간격·안쪽 여백은 배치 계산(indexCellCols)과 같은 토큰
+  cellRows: { gap: MS.cellGap },
+  cells: { flexDirection: "row", gap: MS.cellGap },
+  cell: { flex: 1, minWidth: 0, gap: space.xxs, paddingHorizontal: MS.cellPadX, paddingVertical: space.sm, borderRadius: radius.md },
+  cellSmall: { flex: 1, minWidth: 0, paddingHorizontal: MS.cellPadX, paddingVertical: space.xs, borderRadius: radius.sm },
   cellRate: { fontWeight: "700", fontVariant: ["tabular-nums"] },
   num: { fontVariant: ["tabular-nums"] },
   row: { flexDirection: "row", gap: space.sm, alignItems: "flex-start" },

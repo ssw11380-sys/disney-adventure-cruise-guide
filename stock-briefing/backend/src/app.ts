@@ -420,6 +420,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     });
   }
   const summaries = marketSummaries;
+  // 장중·최종값 전 요약의 '확정 뒤 다시 만들기' 예약을 닫을 때 취소
+  if (summaries) app.addHook("onClose", async () => summaries.stop());
   app.decorate("marketSummaries", summaries);
   if (summaries) await app.register(marketSummaryRoutes, { prefix: "/api/market-summaries", service: summaries });
 

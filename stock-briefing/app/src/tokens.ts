@@ -530,6 +530,12 @@ export const foldScreens = {
 export const marketSummary = {
   /** 카드 이름표 칸 폭 (환율·금리 / 업종 / 내 종목 / 일정 / 뉴스 N건) — 목업 56, 글자 14 */
   labelW: 56,
+  /**
+   * 지수 칸 사이 간격 · 칸 좌우 안쪽 여백 (카드 칸과 목록 줄 작은 칸 같음). 칸 폭이 등락률·종가 글자보다 좁아지면(울트라 411·큰 글씨)
+   * 4칸을 2×2 로 놓는다 (lib/marketSummary indexCellCols — 숫자를 말줄임으로 자르지 않게)
+   */
+  cellGap: space.sm,
+  cellPadX: space.sm,
   /** 넓은 창 목록 맨 위 줄의 최소 높이 (제목 · 지수 작은 칸 · 내 종목 한 줄) */
   rowMinH: 96,
   /** 상세 업종 막대: 두께 · 한 줄 최소 높이 (길이는 칸 폭을 따른다 — 가장 큰 등락률이 반쪽 칸을 채움) */
