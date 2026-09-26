@@ -616,7 +616,7 @@ const WRAP_SLACK_EM = 3;
  * '1조 5000억'·'3시30분'·'9월 26일' — '나스닥 2만…'·'외국인 2조…'처럼 틀린 값으로 읽히는 자리에서 끊지 않게. 낱말 경계를 셀 때 한 낱말로 본다
  */
 const TITLE_NUMBER_RE =
-  /[+\-−▲▼△▽]?\d[\d,.:]*(?:%p|%|bp|pt|p|P|포인트|선|원|달러|엔|위안|유로|루피아|배|만|천|억|조|년|월|일|시|분|초|위|대|개|명|주|건|곳|종)*(?:(?<=[만천억조년월시])\s?\d[\d,.:]*(?:%p|%|bp|pt|p|P|포인트|선|원|달러|엔|위안|유로|루피아|배|만|천|억|조|년|월|일|시|분|초|위|대|개|명|주|건|곳|종)*)*[↑↓]?/g;
+  /[+\-−▲▼△▽]?[$€£¥₩]?\d[\d,.:]*(?:%p|%|bp|pt|p|P|포인트|선|원|달러|엔|위안|유로|루피아|배|만|천|억|조|년|월|일|시|분|초|위|대|개|명|주|건|곳|종)*(?:(?<=[만천억조년월시])\s?\d[\d,.:]*(?:%p|%|bp|pt|p|P|포인트|선|원|달러|엔|위안|유로|루피아|배|만|천|억|조|년|월|일|시|분|초|위|대|개|명|주|건|곳|종)*)*[↑↓]?/g;
 /**
  * 범위·바뀜 표시 — 앞뒤 숫자 덩어리를 한 덩어리로 잇는다 ('2.6%→3.7%'·'6,300~7,600'·'3~4%'·'5.4명 → 5.0명'·'3분기→4분기' — 앞 숫자에 붙은 글자
  * 3자까지). 앞 값만 보이면 바뀐 뒤 값·한 값처럼 읽혀서 ('…성장률 2.6%…')
@@ -637,7 +637,7 @@ function titleNumbers(title: string): { start: number; end: number; digitEnd: bo
  * 끊은 자리 끝에 남기지 않을 글자 (띄어쓰기·폭 없는 글자·구분자 '·'·'ㆍ'(U+318D)·'∙'·'‧'·'・'·쉼표·쌍점·쌍반점·물결·화살표 '→'·'▶'·붙임표·빗금·
  * 세로줄·여는 괄호·점 말줄임 '...'·여는 따옴표 ‘ “ — '…원·달러 환율 ‘…'·'…부담에 하락;…'처럼 여는 따옴표·구분자로 끝나지 않게)
  */
-const TRAILING_CUT_RE = /(?:[\s\u200B-\u200F\u2060\uFEFF·ㆍ∙‧・･•,:;；~∼→▶…⋯‥\-‐‑–—([{【<《〈「『（［｢〔|｜/‘“]|\.{2,})+$/;
+const TRAILING_CUT_RE = /(?:[\s\u200B-\u200F\u2060\uFEFF·ㆍ∙‧・･•,:;；~∼→▶…⋯‥\-‐‑–—([{【<《〈「『（［｢〔|｜/‘“=+$€£¥₩]|\.{2,})+$/;
 /** 곧은 따옴표 (' " ` 와 전각 ＇ ＂) — 여는 것과 닫는 것이 같은 글자라 앞부분에서 짝이 맞는지로 가린다 */
 const STRAIGHT_QUOTES = "'\"`＇＂";
 /** 영문 사이 줄임표 ('Leader's'·'Moody’s')에 쓰는 글자 */
@@ -688,6 +688,10 @@ const DIGIT_INNER_RE = /[.,:/\-‐‑–]/;
 /** 영문 사이에서는 낱말 속 글자 ('Leader’s'·'Moody's'·'U.S') */
 const LATIN_INNER_RE = /['’.]/;
 const DIGIT_RE = /[0-9]/;
+/** 낱말 글자 사이에서는 낱말 속 글자 ('1달러=145엔'·'공급난+HBM') — 끝에 남으면 trimCutEnd 가 뗀다 */
+const WORD_INNER_RE = /[=+]/;
+/** 낱말 뒤에 붙은 방향 화살표 ('일제히↓'·'국제유가↑') — 앞 낱말과 한 덩어리 (숫자 뒤 화살표는 숫자 덩어리가 맡음) */
+const ARROW_RE = /[↑↓]/;
 
 /**
  * 제목의 낱말 경계 (코드 포인트 자리 p = 앞 p 글자 뒤): ok[p] 가 true 면 거기서 끊어도 낱말 가운데가 아니다.
@@ -726,9 +730,11 @@ function wordBreaks(chars: readonly string[]): boolean[] {
     const inner =
       (DIGIT_INNER_RE.test(c) && DIGIT_RE.test(a) && DIGIT_RE.test(b)) ||
       (LATIN_INNER_RE.test(c) && LATIN_LETTER_RE.test(a) && LATIN_LETTER_RE.test(b)) ||
-      (JOINER_RE.test(c) && word[q - 1]! && word[q + 1]! && (short(q - 1, -1) || short(q + 1, 1)));
+      (JOINER_RE.test(c) && word[q - 1]! && word[q + 1]! && (short(q - 1, -1) || short(q + 1, 1))) ||
+      (WORD_INNER_RE.test(c) && word[q - 1]! && word[q + 1]!);
     if (inner) glue[q] = glue[q + 1] = true;
   }
+  for (let q = 1; q < m; q++) if (ARROW_RE.test(vis[q]!) && word[q - 1]!) glue[q] = true;
   // 숫자 덩어리 안은 끊지 않는다 (UTF-16 자리 → 보이는 글자 자리)
   const text = vis.join("");
   const qOf = new Map<number, number>();
@@ -738,7 +744,12 @@ function wordBreaks(chars: readonly string[]): boolean[] {
     u += c.length;
   });
   qOf.set(u, m);
-  for (const n of titleNumbers(text)) for (let q = qOf.get(n.start)! + 1; q < qOf.get(n.end)!; q++) glue[q] = true;
+  for (const n of titleNumbers(text)) {
+    const [qs, qe] = [qOf.get(n.start)!, qOf.get(n.end)!];
+    for (let q = qs + 1; q < qe; q++) glue[q] = true;
+    // 숫자 덩어리 뒤에 바로 붙은 낱말도 한 낱말 ('5.5%까지'·'23.21%로'·'5.86%급락' — '106.6으로'와 같게)
+    if (qe < m && word[qe]!) glue[qe] = true;
+  }
   const ok: boolean[] = [];
   let q = 0;
   for (let p = 0; p <= chars.length; p++) {
