@@ -1,0 +1,571 @@
+{
+ "note": "2026-09-26 08:40 KST 실측 (polling.finance.naver.com worldstock). 섹터 ETF 11개 + 보유 예시 종목. 필요한 칸만 남김",
+ "pollingInterval": 70000,
+ "datas": [
+  {
+   "reutersCode": "XLK",
+   "stockName": "State Street Technology Select Sector SPDR ETF",
+   "symbolCode": "XLK",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "196.27",
+   "compareToPreviousClosePrice": "1.56",
+   "fluctuationsRatio": "0.80",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "196.78",
+    "fluctuationsRatio": "0.26",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "196.27",
+   "compareToPreviousClosePriceRaw": "1.56",
+   "fluctuationsRatioRaw": "0.80"
+  },
+  {
+   "reutersCode": "XLF",
+   "stockName": "State Street Financial Sel Sec SPDR ETF",
+   "symbolCode": "XLF",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "54.84",
+   "compareToPreviousClosePrice": "0.31",
+   "fluctuationsRatio": "0.57",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "54.87",
+    "fluctuationsRatio": "0.05",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "54.84",
+   "compareToPreviousClosePriceRaw": "0.31",
+   "fluctuationsRatioRaw": "0.57"
+  },
+  {
+   "reutersCode": "XLV",
+   "stockName": "State Street Health Care Select Sector SPDR ETF",
+   "symbolCode": "XLV",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "170.70",
+   "compareToPreviousClosePrice": "0.83",
+   "fluctuationsRatio": "0.49",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "170.55",
+    "fluctuationsRatio": "-0.09",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "170.70",
+   "compareToPreviousClosePriceRaw": "0.83",
+   "fluctuationsRatioRaw": "0.49"
+  },
+  {
+   "reutersCode": "XLE",
+   "stockName": "State Street Energy Select Sector SPDR ETF",
+   "symbolCode": "XLE",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "62.04",
+   "compareToPreviousClosePrice": "-0.56",
+   "fluctuationsRatio": "-0.89",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "62.05",
+    "fluctuationsRatio": "0.02",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "62.04",
+   "compareToPreviousClosePriceRaw": "-0.56",
+   "fluctuationsRatioRaw": "-0.89"
+  },
+  {
+   "reutersCode": "XLI",
+   "stockName": "State Street Industrial Select Sector SPDR ETF",
+   "symbolCode": "XLI",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "170.43",
+   "compareToPreviousClosePrice": "1.60",
+   "fluctuationsRatio": "0.95",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": null,
+   "closePriceRaw": "170.43",
+   "compareToPreviousClosePriceRaw": "1.60",
+   "fluctuationsRatioRaw": "0.95"
+  },
+  {
+   "reutersCode": "XLY",
+   "stockName": "State Street Consumer Disc Sel Sect SPDR ETF",
+   "symbolCode": "XLY",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "110.56",
+   "compareToPreviousClosePrice": "0.24",
+   "fluctuationsRatio": "0.22",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "110.75",
+    "fluctuationsRatio": "0.17",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "110.56",
+   "compareToPreviousClosePriceRaw": "0.24",
+   "fluctuationsRatioRaw": "0.22"
+  },
+  {
+   "reutersCode": "XLP",
+   "stockName": "State Street Consumer Staples Sel Sect SPDR ETF",
+   "symbolCode": "XLP",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "82.06",
+   "compareToPreviousClosePrice": "0.36",
+   "fluctuationsRatio": "0.44",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "82.12",
+    "fluctuationsRatio": "0.07",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "82.06",
+   "compareToPreviousClosePriceRaw": "0.36",
+   "fluctuationsRatioRaw": "0.44"
+  },
+  {
+   "reutersCode": "XLU",
+   "stockName": "State Street Utilities Select Sector SPDR ETF",
+   "symbolCode": "XLU",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "39.51",
+   "compareToPreviousClosePrice": "0.15",
+   "fluctuationsRatio": "0.38",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "39.61",
+    "fluctuationsRatio": "0.25",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "39.51",
+   "compareToPreviousClosePriceRaw": "0.15",
+   "fluctuationsRatioRaw": "0.38"
+  },
+  {
+   "reutersCode": "XLB",
+   "stockName": "State Street Materials Select Sector SPDR ETF",
+   "symbolCode": "XLB",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "49.80",
+   "compareToPreviousClosePrice": "0.12",
+   "fluctuationsRatio": "0.24",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "49.78",
+    "fluctuationsRatio": "-0.04",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "49.80",
+   "compareToPreviousClosePriceRaw": "0.12",
+   "fluctuationsRatioRaw": "0.24"
+  },
+  {
+   "reutersCode": "XLRE.K",
+   "stockName": "State Street Real Estate Select Sector SPDR ETF",
+   "symbolCode": "XLRE",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "41.56",
+   "compareToPreviousClosePrice": "-0.09",
+   "fluctuationsRatio": "-0.22",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "41.51",
+    "fluctuationsRatio": "-0.10",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "41.56",
+   "compareToPreviousClosePriceRaw": "-0.09",
+   "fluctuationsRatioRaw": "-0.22"
+  },
+  {
+   "reutersCode": "XLC",
+   "stockName": "State Street Com Svc Sel Sec SPDR ETF",
+   "symbolCode": "XLC",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "112.96",
+   "compareToPreviousClosePrice": "-1.03",
+   "fluctuationsRatio": "-0.90",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "113.27",
+    "fluctuationsRatio": "0.29",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "112.96",
+   "compareToPreviousClosePriceRaw": "-1.03",
+   "fluctuationsRatioRaw": "-0.90"
+  },
+  {
+   "reutersCode": "NVDA.O",
+   "stockName": "엔비디아",
+   "symbolCode": "NVDA",
+   "stockExchangeType": {
+    "code": "NSQ",
+    "nameKor": "나스닥 증권거래소",
+    "nameEng": "NASDAQ Stock Exchange",
+    "name": "NASDAQ"
+   },
+   "closePrice": "225.07",
+   "compareToPreviousClosePrice": "0.49",
+   "fluctuationsRatio": "0.22",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "225.00",
+    "fluctuationsRatio": "-0.03",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "225.07",
+   "compareToPreviousClosePriceRaw": "0.49",
+   "fluctuationsRatioRaw": "0.22"
+  },
+  {
+   "reutersCode": "MSFT.O",
+   "stockName": "마이크로소프트",
+   "symbolCode": "MSFT",
+   "stockExchangeType": {
+    "code": "NSQ",
+    "nameKor": "나스닥 증권거래소",
+    "nameEng": "NASDAQ Stock Exchange",
+    "name": "NASDAQ"
+   },
+   "closePrice": "516.17",
+   "compareToPreviousClosePrice": "18.24",
+   "fluctuationsRatio": "3.66",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "517.91",
+    "fluctuationsRatio": "0.34",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "516.17",
+   "compareToPreviousClosePriceRaw": "18.24",
+   "fluctuationsRatioRaw": "3.66"
+  },
+  {
+   "reutersCode": "JPM",
+   "stockName": "제이피모간체이스",
+   "symbolCode": "JPM",
+   "stockExchangeType": {
+    "code": "NYS",
+    "nameKor": "뉴욕 거래소",
+    "nameEng": "New York Stock Exchange",
+    "name": "NYSE"
+   },
+   "closePrice": "343.06",
+   "compareToPreviousClosePrice": "4.50",
+   "fluctuationsRatio": "1.33",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "343.10",
+    "fluctuationsRatio": "0.01",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "343.06",
+   "compareToPreviousClosePriceRaw": "4.50",
+   "fluctuationsRatioRaw": "1.33"
+  },
+  {
+   "reutersCode": "KO",
+   "stockName": "코카콜라",
+   "symbolCode": "KO",
+   "stockExchangeType": {
+    "code": "NYS",
+    "nameKor": "뉴욕 거래소",
+    "nameEng": "New York Stock Exchange",
+    "name": "NYSE"
+   },
+   "closePrice": "87.81",
+   "compareToPreviousClosePrice": "-0.29",
+   "fluctuationsRatio": "-0.33",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "87.66",
+    "fluctuationsRatio": "-0.17",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "87.81",
+   "compareToPreviousClosePriceRaw": "-0.29",
+   "fluctuationsRatioRaw": "-0.33"
+  },
+  {
+   "reutersCode": "O",
+   "stockName": "리얼티 인컴",
+   "symbolCode": "O",
+   "stockExchangeType": {
+    "code": "NYS",
+    "nameKor": "뉴욕 거래소",
+    "nameEng": "New York Stock Exchange",
+    "name": "NYSE"
+   },
+   "closePrice": "55.54",
+   "compareToPreviousClosePrice": "0.13",
+   "fluctuationsRatio": "0.23",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "55.72",
+    "fluctuationsRatio": "0.32",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "55.54",
+   "compareToPreviousClosePriceRaw": "0.13",
+   "fluctuationsRatioRaw": "0.23"
+  },
+  {
+   "reutersCode": "SPY",
+   "stockName": "State Street SPDR S&P 500 ETF Trust",
+   "symbolCode": "SPY",
+   "stockExchangeType": {
+    "code": "AMX",
+    "nameKor": "아멕스 증권거래소",
+    "nameEng": "American Stock Exchange",
+    "name": "AMEX"
+   },
+   "closePrice": "771.35",
+   "compareToPreviousClosePrice": "4.17",
+   "fluctuationsRatio": "0.54",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "772.04",
+    "fluctuationsRatio": "0.09",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "771.35",
+   "compareToPreviousClosePriceRaw": "4.17",
+   "fluctuationsRatioRaw": "0.54"
+  },
+  {
+   "reutersCode": "QQQ.O",
+   "stockName": "Invesco QQQ Trust  Series 1",
+   "symbolCode": "QQQ",
+   "stockExchangeType": {
+    "code": "NSQ",
+    "nameKor": "나스닥 증권거래소",
+    "nameEng": "NASDAQ Stock Exchange",
+    "name": "NASDAQ"
+   },
+   "closePrice": "744.50",
+   "compareToPreviousClosePrice": "3.40",
+   "fluctuationsRatio": "0.46",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "745.40",
+    "fluctuationsRatio": "0.12",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "744.50",
+   "compareToPreviousClosePriceRaw": "3.40",
+   "fluctuationsRatioRaw": "0.46"
+  },
+  {
+   "reutersCode": "TQQQ.O",
+   "stockName": "ProShares UltraPro QQQ",
+   "symbolCode": "TQQQ",
+   "stockExchangeType": {
+    "code": "NSQ",
+    "nameKor": "나스닥 증권거래소",
+    "nameEng": "NASDAQ Stock Exchange",
+    "name": "NASDAQ"
+   },
+   "closePrice": "79.60",
+   "compareToPreviousClosePrice": "1.02",
+   "fluctuationsRatio": "1.30",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "localTradedAt": "2026-09-25T16:00:00-04:00",
+   "marketStatus": "CLOSE",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "79.85",
+    "fluctuationsRatio": "0.32",
+    "localTradedAt": "2026-09-25T20:00:00-04:00"
+   },
+   "closePriceRaw": "79.60",
+   "compareToPreviousClosePriceRaw": "1.02",
+   "fluctuationsRatioRaw": "1.30"
+  }
+ ]
+}

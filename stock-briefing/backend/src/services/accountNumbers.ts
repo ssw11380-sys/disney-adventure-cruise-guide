@@ -2,7 +2,7 @@ import { formatRate, formatWon, KR_PREVIOUS_DAY_LINE, US_PREVIOUS_DAY_LINE } fro
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { MarketIndex } from "../providers/market/indices.js";
 import { seoulDate } from "../lib/time.js";
-import { isUsTradingDate, marketContext } from "./marketContext.js";
+import { isKrTradingDate, isUsTradingDate, marketContext } from "./marketContext.js";
 import type { Evaluation } from "./stockService.js";
 
 /**
@@ -370,8 +370,8 @@ function offsetMin(tz: string, t: number): number {
   return Math.round((asUtc - Math.floor(t / 60_000) * 60_000) / 60_000);
 }
 
-/** 뉴욕 현지 날짜·시각 → 그 순간 (서머타임 반영) */
-function nyWall(date: string, h: number, m: number): number {
+/** 뉴욕 현지 날짜·시각 → 그 순간 (서머타임 반영). 시장 요약(marketSummaryCalc·marketEvents)도 쓴다 */
+export function nyWall(date: string, h: number, m: number): number {
   const guess = Date.parse(`${date}T${pad(h)}:${pad(m)}:00Z`);
   const off = offsetMin("America/New_York", guess);
   const t = guess - off * 60_000;
@@ -408,8 +408,8 @@ export function usRegularKst(nyDate: string): string {
 /** 오늘 일정: 한국·미국 장 운영(달력·휴장 목록)과 지금 상태, 종목 브리핑이 받아 둔 최근 공시 */
 export function buildSchedule(status: MarketStatus | null, now: Date, disclosures: AccountDisclosure[]): AccountSchedule {
   const date = seoulDate(now);
-  const wd = new Date(`${date}T12:00:00Z`).getUTCDay();
-  const krTrading = status ? status.KR.isTradingDay : wd >= 1 && wd <= 5;
+  // 달력이 없으면 요일과 한국 휴장일 목록(KR_HOLIDAYS)으로 짐작한다
+  const krTrading = status ? status.KR.isTradingDay : isKrTradingDate(date);
   const usDate = usSessionDate(now);
   const usTrading = isUsTradingDate(usDate);
   return {

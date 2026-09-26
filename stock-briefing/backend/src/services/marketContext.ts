@@ -39,10 +39,66 @@ export const US_HOLIDAYS = new Set([
   "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 ]);
 
+/** 미국 휴장일 이름 (시장 요약의 '지난밤 미국 휴장(추수감사절)' 줄). US_HOLIDAYS 와 같은 날짜 — 테스트가 빠진 이름이 없는지 본다 */
+export const US_HOLIDAY_NAMES: Readonly<Record<string, string>> = {
+  "2026-01-01": "신정", "2026-01-19": "마틴 루서 킹 데이", "2026-02-16": "대통령의 날", "2026-04-03": "성금요일", "2026-05-25": "메모리얼 데이",
+  "2026-06-19": "준틴스", "2026-07-03": "독립기념일 대체", "2026-09-07": "노동절", "2026-11-26": "추수감사절", "2026-12-25": "성탄절",
+  "2027-01-01": "신정", "2027-01-18": "마틴 루서 킹 데이", "2027-02-15": "대통령의 날", "2027-03-26": "성금요일", "2027-05-31": "메모리얼 데이",
+  "2027-06-18": "준틴스 대체", "2027-07-05": "독립기념일 대체", "2027-09-06": "노동절", "2027-11-25": "추수감사절", "2027-12-24": "성탄절 대체",
+};
+
+/**
+ * 한국거래소 평일 휴장일과 이름 (서울 날짜). 해마다 KRX 연간 휴장일 공지를 사람이 확인해 넣는다.
+ * 앱 lib/marketTime 에 같은 목록이 있다 (app/test 가 두 목록이 같은지·내년 끝까지 있는지 본다).
+ * 토스 달력이 실패해도 요일 추정(fallbackState·guessTradingDate)·거래일 계산(tradingDate)이 이 목록을 보고 휴장으로 안다 — 예전에는 한국 평일 휴장일을 몰라
+ * 추석 같은 날 토스 조회가 실패하면 '평일 = 거래일'로 짐작했다. 출처(네이버 장 상태·토스 달력)와 다르면 휴장 쪽으로 본다.
+ *  - 2026: 1~9월은 코스피 일봉에 없는 평일로 확인(2026-09-26 실측), 10/5(개천절 대체)·10/9·12/25·12/31 은 네이버 장 상태·공휴일 규정으로 확인
+ *  - 2027: 음력(설·추석·부처님오신날)과 대체공휴일 규정으로 계산한 값 — 12월 KRX 공지로 다시 확인한다 (제헌절 7/17 이 토요일이라 대체공휴일 여부 미정, 넣지 않음)
+ */
+export const KR_HOLIDAYS: Readonly<Record<string, string>> = {
+  "2026-01-01": "신정",
+  "2026-02-16": "설날 연휴",
+  "2026-02-17": "설날",
+  "2026-02-18": "설날 연휴",
+  "2026-03-02": "삼일절 대체공휴일",
+  "2026-05-01": "노동절",
+  "2026-05-05": "어린이날",
+  "2026-05-25": "부처님오신날 대체공휴일",
+  "2026-06-03": "지방선거",
+  "2026-07-17": "제헌절",
+  "2026-08-17": "광복절 대체공휴일",
+  "2026-09-24": "추석 연휴",
+  "2026-09-25": "추석",
+  "2026-10-05": "개천절 대체공휴일",
+  "2026-10-09": "한글날",
+  "2026-12-25": "성탄절",
+  "2026-12-31": "연말 휴장",
+  "2027-01-01": "신정",
+  "2027-02-08": "설날 연휴",
+  "2027-02-09": "설날 대체공휴일",
+  "2027-03-01": "삼일절",
+  "2027-05-05": "어린이날",
+  "2027-05-13": "부처님오신날",
+  "2027-08-16": "광복절 대체공휴일",
+  "2027-09-14": "추석 연휴",
+  "2027-09-15": "추석",
+  "2027-09-16": "추석 연휴",
+  "2027-10-04": "개천절 대체공휴일",
+  "2027-10-11": "한글날 대체공휴일",
+  "2027-12-27": "성탄절 대체공휴일",
+  "2027-12-31": "연말 휴장",
+};
+
 /** 뉴욕 현지 날짜 YYYY-MM-DD 가 미국 정규장이 열리는 날인지 (주말·US_HOLIDAYS 제외) */
 export const isUsTradingDate = (date: string) => {
   const wd = new Date(`${date}T12:00:00Z`).getUTCDay();
   return wd >= 1 && wd <= 5 && !US_HOLIDAYS.has(date);
+};
+
+/** 서울 날짜 YYYY-MM-DD 가 한국 정규장이 열리는 날인지 (주말·KR_HOLIDAYS 제외) */
+export const isKrTradingDate = (date: string) => {
+  const wd = new Date(`${date}T12:00:00Z`).getUTCDay();
+  return wd >= 1 && wd <= 5 && !(date in KR_HOLIDAYS);
 };
 
 /** 뉴욕증권거래소 조기 폐장일(13:00 ET, 현지 날짜) — 추수감사절 다음 날·평일 크리스마스이브. 해마다 추가 (토스 달력이 그날 마감을 알려 주면 그 값이 먼저) */
@@ -81,7 +137,8 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
   const kr = /^\d/.test(code);
   if (kr) {
     const p = parts(now, "Asia/Seoul");
-    const tradingDay = status ? status.KR.isTradingDay : p.weekday >= 1 && p.weekday <= 5;
+    // 달력이 없으면 요일과 한국 휴장일 목록(KR_HOLIDAYS)으로 짐작한다
+    const tradingDay = status ? status.KR.isTradingDay : isKrTradingDate(p.date);
     const lastClose = status?.KR.lastClose ? parts(new Date(status.KR.lastClose), "Asia/Seoul").date : null;
     const h = krRegularHours(p.date);
     if (tradingDay && p.minutes >= h.open && p.minutes < h.close) {
@@ -151,7 +208,7 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
  *  - 한국은 서울 날짜, 단 08:00(NXT 프리마켓 시작) 전은 전날 — 토스 웹·네이버 시세는 받은 시각이 asOf 라 장 시작 전에 받은 지난 거래일 시세에
  *    08:00 첫 체결을 붙이지 않게 (그 시간엔 한국 체결이 없다)
  *  - 미국은 뉴욕 날짜, 단 뉴욕 20:00 이후(애프터마켓이 끝난 뒤 주간거래)는 다음 날 정규장에 딸린 세션이라 다음 날 (토스도 다음 거래일 봉에 넣는다)
- *  - 거래가 없는 날(토·일, 미국 휴장일 US_HOLIDAYS)은 직전 거래일로 본다 (한국 평일 휴장일은 목록이 없어 보지 않는다 — 앱과 같게)
+ *  - 거래가 없는 날(토·일, 미국 휴장일 US_HOLIDAYS, 한국 평일 휴장일 KR_HOLIDAYS)은 직전 거래일로 본다 (앱과 같게)
  */
 export function tradingDate(iso: string, kr: boolean): string {
   const p = parts(new Date(iso), kr ? "Asia/Seoul" : "America/New_York");
@@ -159,7 +216,7 @@ export function tradingDate(iso: string, kr: boolean): string {
   if (kr && p.minutes < 8 * 60) d.setUTCDate(d.getUTCDate() - 1);
   if (!kr && p.minutes >= 20 * 60) d.setUTCDate(d.getUTCDate() + 1);
   const day = () => d.toISOString().slice(0, 10);
-  const open = () => (kr ? d.getUTCDay() >= 1 && d.getUTCDay() <= 5 : isUsTradingDate(day()));
+  const open = () => (kr ? isKrTradingDate(day()) : isUsTradingDate(day()));
   for (let i = 0; i < 7 && !open(); i++) d.setUTCDate(d.getUTCDate() - 1);
   return day();
 }

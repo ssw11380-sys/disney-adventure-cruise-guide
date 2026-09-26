@@ -13,26 +13,27 @@ const at = (iso: string) => new Date(iso);
 
 describe("장 상태 (3-11)", () => {
   it("한국 정규장 중: 오늘 봉은 끝나지 않았으니 지표에서 뺀다", () => {
-    const now = at("2026-09-24T10:30:00+09:00");
+    // 9/24·9/25 는 추석(KR_HOLIDAYS)이라 한국 평일 예시는 9/17(목)
+    const now = at("2026-09-17T10:30:00+09:00");
     const ctx = marketContext("005930", st(true, true), now);
     expect(ctx).toMatchObject({ market: "KR", phase: "regular", todayIncomplete: true });
     expect(ctx.label).toContain("정규장 진행 중");
-    expect(completedCandles([candle("2026-09-23"), candle("2026-09-24")], ctx, now).map((c) => c.date)).toEqual(["2026-09-23"]);
+    expect(completedCandles([candle("2026-09-16"), candle("2026-09-17")], ctx, now).map((c) => c.date)).toEqual(["2026-09-16"]);
   });
 
   it("한국 15:30 이후 애프터마켓: 오늘 정규장은 끝났지만 통합(KRX+NXT) 봉은 20:00 에 확정되니 오늘 봉은 아직 쓰지 않는다 (BH-31)", () => {
-    const now = at("2026-09-24T16:10:00+09:00");
+    const now = at("2026-09-17T16:10:00+09:00");
     const ctx = marketContext("005930", st(true, true), now);
-    expect(ctx).toMatchObject({ phase: "extended", lastRegularDate: "2026-09-24", todayIncomplete: true });
-    expect(ctx.label).toContain("9/24");
+    expect(ctx).toMatchObject({ phase: "extended", lastRegularDate: "2026-09-17", todayIncomplete: true });
+    expect(ctx.label).toContain("9/17");
     expect(ctx.label).toContain("애프터마켓");
-    expect(completedCandles([candle("2026-09-23"), candle("2026-09-24")], ctx, now).map((c) => c.date)).toEqual(["2026-09-23"]);
+    expect(completedCandles([candle("2026-09-16"), candle("2026-09-17")], ctx, now).map((c) => c.date)).toEqual(["2026-09-16"]);
   });
 
   it("한국 NXT 프리마켓(08:30)과 휴장일", () => {
-    const pre = marketContext("005930", st(true, true), at("2026-09-24T08:30:00+09:00"));
+    const pre = marketContext("005930", st(true, true), at("2026-09-17T08:30:00+09:00"));
     expect(pre).toMatchObject({ phase: "extended", todayIncomplete: true });
-    const holiday = marketContext("005930", st(false, true), at("2026-09-24T11:00:00+09:00"));
+    const holiday = marketContext("005930", st(false, true), at("2026-09-17T11:00:00+09:00"));
     expect(holiday.phase).toBe("closed");
     expect(holiday.label).toContain("휴장일");
   });
@@ -78,8 +79,36 @@ describe("장 상태 (3-11)", () => {
   });
 
   it("달력을 못 받으면 요일·시각으로 추정한다", () => {
-    expect(marketContext("005930", null, at("2026-09-24T10:00:00+09:00")).phase).toBe("regular");
+    expect(marketContext("005930", null, at("2026-09-17T10:00:00+09:00")).phase).toBe("regular");
     expect(marketContext("AAPL", null, at("2026-09-24T15:00:00+09:00")).phase).toBe("extended");
+  });
+});
+
+describe("한국 평일 휴장일 목록 KR_HOLIDAYS (시장 요약 휴장 판단 세 겹 중 ③)", () => {
+  it("추석(9/24·9/25)·개천절 대체(10/5)는 토스 달력이 없을 때(요일 추정)도 휴장으로 안다", async () => {
+    const { isKrTradingDate, KR_HOLIDAYS } = await import("../src/services/marketContext.js");
+    expect(KR_HOLIDAYS["2026-09-25"]).toBe("추석");
+    expect(KR_HOLIDAYS["2026-10-05"]).toBe("개천절 대체공휴일");
+    expect(isKrTradingDate("2026-09-24")).toBe(false);
+    expect(isKrTradingDate("2026-09-28")).toBe(true); // 9/28(월)은 개장 (네이버 next.tradeBaseAt)
+    expect(marketContext("005930", null, at("2026-09-24T10:00:00+09:00")).phase).toBe("closed");
+    expect(marketContext("005930", null, at("2026-09-24T10:00:00+09:00")).label).toContain("휴장일");
+  });
+
+  it("달력을 못 받았을 때의 추정(fallbackState)과 날짜별 거래일(isTradingDate)도 목록을 본다", async () => {
+    const { fallbackState, MarketCalendar } = await import("../src/providers/market/calendar.js");
+    expect(fallbackState("KR", at("2026-10-09T10:00:00+09:00")).isTradingDay).toBe(false); // 한글날
+    expect(fallbackState("KR", at("2026-10-08T10:00:00+09:00")).isTradingDay).toBe(true);
+    const cal = new MarketCalendar(async () => new Response("{}", { status: 500 }), () => at("2026-09-24T10:00:00+09:00"));
+    expect(await cal.isTradingDate("KR", "2026-09-24")).toBe(false);
+    expect(await cal.isTradingDate("KR", "2026-12-31")).toBe(false); // 연말 휴장
+    expect(await cal.isTradingDate("KR", "2026-09-28")).toBe(true);
+  });
+
+  it("미국 휴장일마다 이름이 있다 (시장 요약 '지난밤 미국 휴장(추수감사절)')", async () => {
+    const { US_HOLIDAYS, US_HOLIDAY_NAMES } = await import("../src/services/marketContext.js");
+    expect([...US_HOLIDAYS].filter((d) => !US_HOLIDAY_NAMES[d])).toEqual([]);
+    expect(US_HOLIDAY_NAMES["2026-11-26"]).toBe("추수감사절");
   });
 });
 
@@ -96,16 +125,19 @@ describe("체결·시세의 거래일 (앱 lib/marketTime.tradingDate 와 같은
     expect(tradingDate("2026-09-26T10:30:00+09:00", false)).toBe("2026-09-25");
     expect(tradingDate("2026-09-28T08:59:00+09:00", false)).toBe("2026-09-25");
     expect(tradingDate("2026-09-28T09:00:00+09:00", false)).toBe("2026-09-28");
-    expect(tradingDate("2026-09-24T20:30:00+09:00", true)).toBe("2026-09-24");
-    expect(tradingDate("2026-09-23T23:30:00Z", true)).toBe("2026-09-24");
-    expect(tradingDate("2026-09-26T10:00:00+09:00", true)).toBe("2026-09-25");
+    expect(tradingDate("2026-09-17T20:30:00+09:00", true)).toBe("2026-09-17");
+    expect(tradingDate("2026-09-16T23:30:00Z", true)).toBe("2026-09-17");
+    // 토요일 9/26 → 금 9/25·목 9/24 는 추석 휴장(KR_HOLIDAYS) → 수 9/23
+    expect(tradingDate("2026-09-26T10:00:00+09:00", true)).toBe("2026-09-23");
+    expect(tradingDate("2026-09-19T10:00:00+09:00", true)).toBe("2026-09-18");
   });
 
   it("한국 00:00~08:00 은 직전 거래일 — 장 시작 전에 받은 시세(받은 시각이 asOf)와 08:00 첫 체결을 다른 거래일로 본다", () => {
-    expect(tradingDate("2026-09-24T07:59:30+09:00", true)).toBe("2026-09-23");
-    expect(tradingDate("2026-09-24T08:00:05+09:00", true)).toBe("2026-09-24");
-    expect(tradingDate("2026-09-23T22:59:30Z", true)).toBe("2026-09-23");
-    expect(tradingDate("2026-09-28T07:00:00+09:00", true)).toBe("2026-09-25"); // 월 새벽 → 금
+    expect(tradingDate("2026-09-17T07:59:30+09:00", true)).toBe("2026-09-16");
+    expect(tradingDate("2026-09-17T08:00:05+09:00", true)).toBe("2026-09-17");
+    expect(tradingDate("2026-09-16T22:59:30Z", true)).toBe("2026-09-16");
+    expect(tradingDate("2026-09-21T07:00:00+09:00", true)).toBe("2026-09-18"); // 월 새벽 → 금
+    expect(tradingDate("2026-09-28T07:00:00+09:00", true)).toBe("2026-09-23"); // 월 새벽 → 추석 연휴(9/24~25) 건너 수
   });
 
   it("미국 휴장일(US_HOLIDAYS)은 직전 거래일 — 추수감사절 전날 밤 20:00 이후는 주간거래가 없다", () => {

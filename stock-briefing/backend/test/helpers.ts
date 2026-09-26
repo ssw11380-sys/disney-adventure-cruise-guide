@@ -160,6 +160,8 @@ export function fakeProviders(over: Partial<Providers> = {}): Providers {
     financialsUs: null,
     calendar: new MarketCalendar(async () => new Response("{}", { status: 500 })),
     indices: fakeIndices(),
+    // 시장 전체 요약은 출처를 넣은 테스트에서만 (기본은 서비스 없음 — 네트워크 없이)
+    marketSummary: null,
     investorFlow: null,
     generator: new FakeGenerator(),
     dart: null,

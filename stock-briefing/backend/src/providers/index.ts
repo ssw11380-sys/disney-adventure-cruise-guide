@@ -26,6 +26,7 @@ import { GoogleNewsRssProvider } from "./news/googleRss.js";
 import { NaverNewsProvider } from "./news/naver.js";
 import { NaverStockNewsProvider } from "./news/naverStock.js";
 import type { NewsProvider } from "./news/types.js";
+import type { MarketSummarySources } from "../services/marketSummaryService.js";
 
 export interface Providers {
   quotes: QuoteProvider;
@@ -52,6 +53,11 @@ export interface Providers {
   calendar: MarketCalendar;
   /** 지수 띠·잔고 위젯 지수 줄 (없으면 기본 네이버 공개 JSON) */
   indices?: MarketIndices | null;
+  /**
+   * 시장 전체 요약의 출처 묶음 (없으면 app.ts 가 실제 출처로 만든다). null = 요약 서비스를 두지 않음 —
+   * 네트워크 없이 도는 테스트 기본값(fakeProviders)이 쓴다 (플래그 marketSummary 가 켜져 있어도 출처를 부르지 않게)
+   */
+  marketSummary?: MarketSummarySources | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   generator: TextGenerator;
   dart: DartProvider | null;

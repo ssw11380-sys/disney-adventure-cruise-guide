@@ -1,4 +1,4 @@
-import { isUsTradingDate, usRegularCloseMinutes } from "../../services/marketContext.js";
+import { isKrTradingDate, isUsTradingDate, KR_HOLIDAYS, usRegularCloseMinutes } from "../../services/marketContext.js";
 import type { FetchFn } from "./types.js";
 
 /**
@@ -8,7 +8,7 @@ import type { FetchFn } from "./types.js";
  *  - 장중: nextTradingStart 가 tradingEnd 보다 뒤이고 now < tradingEnd (세션이 진행 중이면 nextTradingStart 는 다음 세션)
  *  - 정해진 날짜가 거래일인지(isTradingDate): 마지막·지금·다음 세션의 날짜는 거래일, 마지막과 다음 사이는 휴장 (knownTradingDays)
  * 토스가 알려 주는 세션은 한국 KRX+NXT(08:00~20:00), 미국 정규장(09:30~16:00 ET)이다 — isOpen 의 뜻도 그대로 (추정값도 같은 뜻).
- * 5분 캐시. 실패하면 요일 기반 추정으로 대체한다(주말·미국 휴장일 목록만 휴장 취급 — 한국 평일 휴장일은 모른다).
+ * 5분 캐시. 실패하면 요일 기반 추정으로 대체한다(주말·미국 휴장일 목록·한국 휴장일 목록 KR_HOLIDAYS 를 휴장 취급).
  */
 
 export type MarketKey = "KR" | "US";
@@ -56,11 +56,9 @@ function addDays(date: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** 달력 없이 짐작한 거래일: 평일, 미국은 US_HOLIDAYS 도 뺀다 (한국 평일 휴장일은 목록이 없어 모른다) */
+/** 달력 없이 짐작한 거래일: 평일, 미국은 US_HOLIDAYS, 한국은 KR_HOLIDAYS 도 뺀다 */
 function guessTradingDate(market: MarketKey, date: string): boolean {
-  if (market === "US") return isUsTradingDate(date);
-  const wd = new Date(`${date}T12:00:00Z`).getUTCDay();
-  return wd >= 1 && wd <= 5;
+  return market === "US" ? isUsTradingDate(date) : isKrTradingDate(date);
 }
 
 /** 달력을 못 받았을 때의 추정값 — isOpen 은 토스 달력과 같은 뜻(한국 08:00~20:00, 미국 정규장 09:30~16:00 ET·조기 폐장 13:00) */
@@ -173,9 +171,11 @@ export class MarketCalendar {
 
   /**
    * 그 시장 현지 날짜(YYYY-MM-DD)가 거래일인지 — "지금"이 아니라 정해진 날짜로 묻는다 (브리핑 세션이 다루는 거래일).
-   * 토스 달력이 아는 날이면 그대로(조회가 실패하면 마지막으로 받은 토스 달력), 모르면 요일(미국은 US_HOLIDAYS 도)로 짐작한다
+   * 토스 달력이 아는 날이면 그대로(조회가 실패하면 마지막으로 받은 토스 달력), 모르면 요일(미국은 US_HOLIDAYS, 한국은 KR_HOLIDAYS 도)로 짐작한다
    */
   async isTradingDate(market: MarketKey, date: string): Promise<boolean> {
+    // 한국 휴장일 목록에 있는 날은 달력이 거래일이라 해도 휴장 쪽으로 본다 (출처끼리 다르면 휴장)
+    if (market === "KR" && date in KR_HOLIDAYS) return false;
     const s = await this.status();
     const cal = s[market].source === "toss" ? s[market] : this.lastToss[market];
     return knownTradingDays(market, cal).get(date) ?? guessTradingDate(market, date);

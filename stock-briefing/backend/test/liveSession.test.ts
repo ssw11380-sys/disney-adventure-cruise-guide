@@ -134,7 +134,9 @@ describe("한국 세션 (서울 시각, 거래일은 토스 달력)", () => {
     const now = at("2026-09-25T10:00:00+09:00");
     const last = calendar(at("2026-09-25T09:55:00+09:00"), ["2026-09-23T11:00:00Z", "2026-09-27T23:00:00Z"], ["2026-09-24T20:00:00Z", "2026-09-25T13:30:00Z"]);
     const failed: MarketStatus = { now: now.toISOString(), KR: fallbackState("KR", now), US: fallbackState("US", now) };
-    expect(failed.KR.isOpen).toBe(true); // 요일 추정은 추석을 장중으로 본다
+    // 요일 추정도 이제 한국 휴장일 목록(KR_HOLIDAYS)으로 추석을 휴장으로 안다 — 그래도 마지막 토스 달력을 먼저 쓴다
+    expect(failed.KR.isOpen).toBe(false);
+    expect(failed.KR.isTradingDay).toBe(false);
     const kept = keepTossCalendar(last, failed);
     expect(kept.KR).toBe(last.KR);
     expect(kept.US).toBe(last.US);
