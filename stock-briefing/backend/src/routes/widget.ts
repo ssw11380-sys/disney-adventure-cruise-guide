@@ -40,14 +40,15 @@ export const widgetRoutes: FastifyPluginAsync<{
 }> = async (app, deps) => {
   const flags = async (): Promise<WidgetFeatures | undefined> => {
     if (!deps.features) return undefined;
-    const [widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish, widgetExtended] = await Promise.all([
+    const [widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish, widgetExtended, widgetFoldFit] = await Promise.all([
       deps.features.enabled("widgetPnlToggle"),
       deps.features.enabled("widgetIndexLine"),
       deps.features.enabled("widgetMarket"),
       deps.features.enabled("widgetPolish"),
       deps.features.enabled("widgetExtended"),
+      deps.features.enabled("widgetFoldFit"),
     ]);
-    return { widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish, widgetExtended };
+    return { widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish, widgetExtended, widgetFoldFit };
   };
   app.get("/", async (req, reply) => {
     const features = flags();

@@ -66,6 +66,11 @@ export interface WidgetData {
    * 평균 간격에 세도록 (lib/widgetRefreshLog, 통합 검증 지적). 저장하지 않는다
    */
   asked?: boolean;
+  /**
+   * 앞선 갱신이 실패한 뒤 이번에 서버에서 받는 데 성공했는지 (위젯 2차, loadWidgetData 만 채운다). 그러면 부른 쪽이 다른 위젯의
+   * '갱신 실패'도 지운다 (widgetTaskHandler — 백그라운드 작업은 원래 위젯 4종을 모두 그린다). 저장하지 않는다
+   */
+  recovered?: boolean;
 }
 
 const LAST_KEY = "widget.lastStocks";
@@ -162,6 +167,24 @@ async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showK
 const PAYLOAD_KEY = "widget.payload";
 const VIEW_KEY = "widget.view";
 const PNL_KEY = "widget.pnlMode";
+/**
+ * 위젯 갱신이 실패한 뒤 아직 성공하지 못했다는 표시 (위젯 2차): 마지막 실패 시각과 서버 주소. 어느 갱신이든(백그라운드 작업·위젯 주기·크기 변경·추가·↻)
+ * 서버 조회에 실패하면 적고, 서버에서 받는 데 성공하면 지운다. 이 표시가 있으면 다음 자동 갱신은 장 상태와 상관없이 서버에 다시 묻는다 —
+ * 휴장·주말에 받아 둔 응답을 2시간까지 다시 쓰는 규칙 때문에 잠깐의 실패('갱신 실패 · 연결 안 됨')가 최대 2시간 남던 것을 막는다
+ * (lib/backgroundBriefings runBriefingCheck 는 건너뛰지 않고, 아래 loadWidgetData 는 받아 둔 응답을 다시 쓰지 않는다 — 백그라운드 작업 약 15분 간격)
+ */
+const RETRY_KEY = "widget.retry";
+
+/** 실패 뒤 다시 묻기를 기다리는지: 마지막 실패 시각 (이 서버 주소의 것만). 없으면 null */
+export async function pendingRetry(apiUrl?: string): Promise<number | null> {
+  try {
+    const url = apiUrl ?? (await readSettings()).apiUrl;
+    const v = JSON.parse((await AsyncStorage.getItem(RETRY_KEY)) ?? "null") as { at?: unknown; apiUrl?: unknown } | null;
+    return v && v.apiUrl === url && typeof v.at === "number" && Number.isFinite(v.at) ? v.at : null;
+  } catch {
+    return null;
+  }
+}
 
 /** 마지막으로 그린 데이터 (표시 설정 제외). 손익 전환·↻ 직후에 서버를 부르지 않고 바로 다시 그릴 때 쓴다 */
 type StoredView = Omit<WidgetData, "showKrw" | "afterCost" | "rowKrw">;
@@ -175,7 +198,7 @@ function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
 }
 
 export async function saveWidgetView(data: WidgetData, apiUrl: string): Promise<void> {
-  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, ...rest } = data;
+  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, ...rest } = data;
   const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
   try {
     await AsyncStorage.setItem(VIEW_KEY, JSON.stringify({ apiUrl, view }));
@@ -587,12 +610,16 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   const last = await readLastStocks(apiUrl);
   // 판은 이번에 못 받아도 마지막 것을 둔다 (조회 전에 읽어 둔다 — 아래에서 이번 결과를 적으므로)
   const prevView = await readWidgetView(apiUrl);
+  // 앞선 갱신이 실패한 채면 받아 둔 응답을 다시 쓰지 않고 서버에 묻는다 (위젯 2차 — 휴장 2시간 재사용을 기다리지 않게)
+  const retry = await pendingRetry(apiUrl);
   let full = false;
   /** 방금 서버에서 받은 응답인지 (304 도 서버가 지금 값이라고 답한 것) */
   let fresh = false;
+  /** 조회가 끝까지 성공했는지 (예전 API 포함) */
+  let ok = false;
   try {
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
-    const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
+    const reused = opts.reuse && retry === null ? await readCachedPayload(apiUrl) : null;
     // 칩은 플래그로 거른 것 (연장 세션 ext 는 widgetExtended 가 켜져 있을 때만 장중처럼 15분)
     const reuse =
       reused && canReuse({ at: reused.at, market: payloadMarket(reused.body) }, out.fetchedAt) && (!opts.board || boardReusable(reused.body, prevView?.boardAt, out.fetchedAt)) ? reused : null;
@@ -637,8 +664,11 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     // 채운 결과를 적는다: 채운 종목은 옛 시세 시각을 그대로 갖고 있어 7일이 지나면 더는 쓰이지 않는다.
     // 마지막 잔고가 이 응답보다 늦게 받은 것이면(앱 즉시 갱신 뒤 받아 둔 옛 응답을 다시 씀) 덮지 않는다 — 다음 조회가 실패했을 때 옛 숫자로 되돌아가지 않게 (위젯 리뷰 5)
     if ((stocks.length || payload) && !(last && last.at > out.fetchedAt)) await saveLastStocks(f.stocks, out.fetchedAt, apiUrl);
+    ok = true;
   } catch (e) {
     out.error = e instanceof Error ? e.message : String(e);
+    // 실패 표시: 다음 자동 갱신이 장 상태와 상관없이 다시 묻게 (성공하면 아래에서 지운다)
+    await AsyncStorage.setItem(RETRY_KEY, JSON.stringify({ at: Date.now(), apiUrl })).catch(() => undefined);
     const cached = await readCachedPayload(apiUrl);
     // 칩: 받아 둔 응답의 것(플래그로 거름), 없으면(업데이트 직후 등) 마지막으로 그린 것 — 실패했다고 칩이 사라지지 않게
     out.market = cached ? payloadMarket(cached.body) : (prevView?.market ?? null);
@@ -669,6 +699,11 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.stocks = last.stocks;
       out.fetchedAt = last.at;
     }
+  }
+  // 실패 뒤 서버에서 받는 데 성공: 표시를 지우고, 부른 쪽이 다른 위젯의 '갱신 실패'도 지우게 알린다
+  if (ok && out.asked && retry !== null) {
+    out.recovered = true;
+    await AsyncStorage.removeItem(RETRY_KEY).catch(() => undefined);
   }
   // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 잔고·칩·기준 시각·지수·플래그를 옛 응답으로 덮지 않는다
   if (full && !fresh) await keepNewer(out, apiUrl);

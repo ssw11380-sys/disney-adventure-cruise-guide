@@ -81,7 +81,7 @@ export interface WidgetPayload {
   brief?: WidgetBrief;
 }
 
-/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended) */
+/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit) */
 export interface WidgetFeatures {
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
@@ -96,6 +96,11 @@ export interface WidgetFeatures {
    * 꺼짐·모름은 칸이 없어 예전에 적어 둔 값·예전 모양과 같다 (fallback false)
    */
   extended?: boolean;
+  /**
+   * 폴드 위젯 크기 맞추기 (widgetFoldFit, 위젯 2차 — widgets/frame.ts): 바깥·안쪽 두 화면에서 본 크기를 기억해 두 화면에 맞게 그리고,
+   * 앱이 떠 있을 때 접고 펴면 위젯을 다시 그린다. 켜져 있을 때만 true 칸이 있다 (fallback false — 꺼짐·모름은 지금 그림 그대로)
+   */
+  foldFit?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -109,6 +114,7 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     market: featureOn(flags, "widgetMarket", false),
     polish: featureOn(flags, "widgetPolish", false),
     ...(featureOn(flags, "widgetExtended", false) ? { extended: true } : {}),
+    ...(featureOn(flags, "widgetFoldFit", false) ? { foldFit: true } : {}),
   };
 }
 
