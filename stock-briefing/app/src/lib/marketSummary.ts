@@ -546,6 +546,68 @@ export function textEm(s: string): number {
   return em;
 }
 
+// ── 카드 뉴스 한 줄 자르기 ─────────────────────────────────────
+
+/**
+ * 뉴스 제목 한 줄의 글자 폭 어림 (글자 크기 1 에 대한 배수, 넉넉히 — 실제보다 좁게 재면 한 줄 말줄임이 다시 글자 단위로 자른다):
+ * 한글·한자·전각·말줄임표·화살표 1.0, 숫자 0.6, 영문 대문자 0.75·소문자 0.6, 공백 0.3, 문장 부호 0.35, 괄호 0.4, % 0.9, 그 밖 1.0
+ */
+export function lineEm(s: string): number {
+  let em = 0;
+  for (const ch of s)
+    em += /[0-9]/.test(ch)
+      ? 0.6
+      : /[A-Z]/.test(ch)
+        ? 0.75
+        : /[a-z]/.test(ch)
+          ? 0.6
+          : ch === " "
+            ? 0.3
+            : /[.,:;'"`!|’‘“”]/.test(ch)
+              ? 0.35
+              : /[()[\]{}]/.test(ch)
+                ? 0.4
+                : ch === "%"
+                  ? 0.9
+                  : 1;
+  return em;
+}
+
+/** 제목 속 숫자 덩어리 (부호·▲▼ + 숫자·쉼표·소수점 + 붙은 단위·화살표): '0.48%↑'·'7,080선'·'▲90.71p'·'1.21%↓'·'2.4조'·'15:30' */
+const TITLE_NUMBER_RE = /[+\-−▲▼]?\d[\d,.:]*(?:%p|%|bp|p|P|포인트|선|원|달러|배|만|천|억|조|년|월|일|시|분|위|대)*[↑↓]?/g;
+/** 끊은 자리 끝에 남기지 않을 글자 (띄어쓰기·구분자·여는 괄호) */
+const TRAILING_CUT_RE = /[\s·,…⋯‥\-–—([{【<|/]+$/;
+
+/**
+ * 카드 뉴스 한 줄 (7차 검토 must): '언론사 시각 ' + 제목이 줄 폭(width dp)에 들어가지 않으면, 말줄임을 안드로이드 한 줄 말줄임(글자 단위)에
+ * 맡기지 않고 여기서 자른다 — 잘릴 자리가 숫자(와 붙은 %·선·p·원·↑ 등) 안이거나 숫자 바로 뒤면 그 숫자 앞에서 끊고 '…'를 붙인다
+ * ('[뉴욕마감]…나스닥 0.4…'·'7,08…'·'다우 1.…'가 옆 지수 칸 값과 다르게 읽히지 않게).
+ * 폭은 lineEm(넉넉한 어림)으로 재고 말줄임표 한 자와 여유 반 자를 남긴다. 다 들어가면 제목 그대로. size = 글자 크기, scale = 글자 배율
+ */
+export function fitNewsTitle(prefix: string, title: string, width: number, size: number, scale: number): string {
+  const room = width / (size * scale);
+  const used = lineEm(prefix);
+  if (!(room > 0) || used + lineEm(title) <= room - 0.5) return title;
+  const avail = room - used - 1.5;
+  // 들어가는 가장 긴 앞부분 (글자 단위 — 서로게이트 쌍을 가르지 않게 Array.from)
+  const chars = Array.from(title);
+  let k = 0;
+  let em = 0;
+  while (k < chars.length && em + lineEm(chars[k]!) <= avail) em += lineEm(chars[k++]!);
+  let head = title.slice(0, chars.slice(0, k).join("").length);
+  // 숫자 덩어리 안이면 그 덩어리 앞에서. 숫자로 끝나는 덩어리 바로 뒤도 ('6715.41…'은 값이 잘린 것처럼 읽힌다) —
+  // 끝의 띄어쓰기·구분자를 뗀 뒤에 다시 본다 ('6715.41 마감'을 '6715.41 '에서 끊어도 '6715.41…'이 되지 않게)
+  const numbers = [...title.matchAll(TITLE_NUMBER_RE)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, digitEnd: /\d$/.test(m[0]) }));
+  for (;;) {
+    head = head.replace(TRAILING_CUT_RE, "");
+    const cut = head.length;
+    const hit = numbers.find((n) => n.start < cut && (cut < n.end || (cut === n.end && n.digitEnd)));
+    if (!hit) break;
+    head = title.slice(0, hit.start);
+  }
+  return `${head}…`;
+}
+
 /** 지수 칸 종가 줄: 아침 '27,068.72', 오후 '7,080.92 · +63.01' */
 export function indexValueLine(i: Pick<SummaryIndex, "value" | "change">, market: SummaryMarket): string | null {
   if (i.value === null) return null;

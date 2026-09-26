@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useCallback, useState } from "react";
 import { Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type TextStyle } from "react-native";
-import type { MarketSummary, MarketSummaryData, SummaryIndex } from "@/api/types";
+import type { MarketSummary, MarketSummaryData, SummaryIndex, SummaryNews } from "@/api/types";
 import { formatDateKo, SESSION_LABEL, shownSign } from "@/lib/format";
 import {
   basisText,
@@ -11,6 +11,7 @@ import {
   chunkSegs,
   closeBadge,
   closeBadgeWarn,
+  fitNewsTitle,
   holdingsShort,
   holidayText,
   indexCellCols,
@@ -197,6 +198,8 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
   const labelW = Math.round(MS.labelW * useFontScale(fontCap.row));
   // 카드는 창 폭 그대로(좌우 여백 space.lg) — 지수 칸 배치의 첫 어림
   const cellsGuess = useWindowDimensions().width - 2 * space.lg;
+  // 뉴스 줄 폭의 첫 어림: 카드 안쪽 폭 − 이름표 칸 − 칸 사이 간격 (재면 그 값으로)
+  const newsGuess = cellsGuess - labelW - space.sm;
   const banner = holidayText(d, view);
   return (
     <>
@@ -217,17 +220,7 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
           </Text>
           <View style={styles.rowBody}>
             {r.kind === "news" ? (
-              <>
-                {r.items.map((n) => (
-                  <Text key={n.url} style={{ color: t.ink, fontSize: font.body }} numberOfLines={1}>
-                    <Text style={{ color: t.sub }}>
-                      {n.outlet} {newsTime(n, d.date)}{" "}
-                    </Text>
-                    {n.title}
-                  </Text>
-                ))}
-                {r.more ? <Words text={`외 ${r.more}건 (상세에서 원문 제목·링크)`} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} /> : null}
-              </>
+              <NewsLines items={r.items} more={r.more} date={d.date} guess={newsGuess} />
             ) : (
               r.lines.map((segs, i) => <SegText key={i} segs={segs} style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.5 }} />)
             )}
@@ -235,6 +228,35 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
         </View>
       ))}
     </>
+  );
+}
+
+/**
+ * 카드 뉴스 칸: 제목마다 한 줄 ('언론사 시각 제목'). 줄 폭을 재서(onLayout, 재기 전은 guess) 들어가지 않는 제목은 fitNewsTitle 로 잘라 보낸다 —
+ * 한 줄 말줄임(numberOfLines)에 맡기면 글자 단위로 잘려 '나스닥 0.4…'·'7,08…'처럼 숫자 가운데서 끊겼다 (7차 검토 must).
+ * numberOfLines 는 어림이 빗나갈 때의 마지막 안전판으로 둔다. 화면 읽기는 카드 문장(cardSpeech)이 원문 제목 전체를 읽는다
+ */
+function NewsLines({ items, more, date, guess }: { items: SummaryNews[]; more: number; date: string; guess: number }) {
+  const t = useTheme();
+  const scale = useFontScale();
+  const [w, setW] = useState<number | null>(null);
+  const onLayout = useCallback((e: LayoutChangeEvent) => {
+    const x = Math.floor(e.nativeEvent.layout.width);
+    if (x > 0) setW((p) => (p === x ? p : x));
+  }, []);
+  return (
+    <View style={styles.newsLines} onLayout={onLayout}>
+      {items.map((n) => {
+        const head = `${n.outlet} ${newsTime(n, date)} `;
+        return (
+          <Text key={n.url} testID="news-line" style={{ color: t.ink, fontSize: font.body }} numberOfLines={1}>
+            <Text style={{ color: t.sub }}>{head}</Text>
+            {fitNewsTitle(head, n.title, w ?? guess, font.body, scale)}
+          </Text>
+        );
+      })}
+      {more ? <Words text={`외 ${more}건 (상세에서 원문 제목·링크)`} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} /> : null}
+    </View>
   );
 }
 
@@ -305,6 +327,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", gap: space.sm, alignItems: "flex-start" },
   label: { fontSize: font.small, lineHeight: font.body * 1.5 },
   rowBody: { flex: 1, minWidth: 0, gap: space.xxs },
+  newsLines: { gap: space.xxs },
   listRow: { minHeight: MS.rowMinH, justifyContent: "center", gap: space.xs, paddingLeft: space.lg, paddingRight: space.md, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   selBar: { position: "absolute", left: 0, top: 0, bottom: 0, width: FB.selBar },
   rowHead: { flexDirection: "row", alignItems: "center", gap: space.s },

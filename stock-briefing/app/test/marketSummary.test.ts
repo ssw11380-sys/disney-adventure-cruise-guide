@@ -17,6 +17,8 @@ import {
   SIMILAR_BAND_BP,
   SIMILAR_NOTE,
   fitLines,
+  fitNewsTitle,
+  lineEm,
   chunkSegs,
   chunkText,
   holdingsSegs,
@@ -354,5 +356,73 @@ describe("'비슷' 기준은 상수 하나 (6차 검토)", () => {
     // 상세 화면에 글자로 박아 둔 기준이 남아 있지 않다
     const body = readFileSync(join(root, "app/src/components/MarketSummaryBody.tsx"), "utf8");
     expect(body).not.toMatch(/1\.00%p|1%포인트/);
+  });
+});
+
+describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서 말줄임하지 않는다)", () => {
+  /** 서비스 창에서 실제로 뽑힌 제목 가운데 숫자가 든 것 (말뭉치 2026-09-08~25, 구글 뉴스 RSS) */
+  const REAL: Array<[string, string]> = [
+    ["뉴스1", "[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥 0.48%↑"],
+    ["뉴스1", "[뉴욕마감]국채금리 20년래 최고에 혼조…다우 0.31%↓·나스닥 0.01%↑"],
+    ["뉴스1", "[뉴욕마감] 美국채금리 상승에 증시 혼조 마감…다우 0.18%↓"],
+    ["뉴시스", "뉴욕증시, AI 훈풍에 상승 마감…나스닥 2.26%↑사상 최고"],
+    ["뉴시스", "뉴욕증시, 인플레 우려에 하락…美 10년물 금리 5.11% 돌파"],
+    ["마켓인", "유가 101달러·美10년물 4.85% 돌파…뉴욕증시 일제히 하락"],
+    ["MTN 머니투데이방송", "뉴욕증시 연준 금리 인상·추가 긴축 우려에 하락…다우 1.21%↓[뉴욕마감]"],
+    ["중소기업신문", "뉴욕증시, 유가 하락에 반등…다우 0.98%↑"],
+    ["뉴스핌", "[마감시황] 美 국채 금리 영향에…상승하던 코스피 0.85% 하락, 6627 마감"],
+    ["머니투데이", "[스팟] 코스피 2.56포인트(0.04%) 내린 6715.41 마감 - 머니투데이"],
+    ["뉴스1", "코스피, 0.90% 상승한 7080.92 마감…코스닥 1.21%↑(2보)"],
+    ["뉴시스", "코스피 2.68% 상승해 6,894.23 마감"],
+    ["연합뉴스", "[오늘의 증시] 코스피 7080선 상승 마감…반도체 강세에도 상승폭은 반납"],
+    ["뉴스1", "[코스피] 10.19p(0.15%) 오른 7017.91 마감"],
+  ];
+  const NUMBER = /[+\-−▲▼]?\d[\d,.:]*(?:%p|%|bp|p|P|포인트|선|원|달러|배|만|천|억|조|년|월|일|시|분|위|대)*[↑↓]?/g;
+  /** 잘린 글(끝 '…' 뺀)이 숫자 덩어리 안에서 끝나는지 */
+  const cutsNumber = (title: string, shown: string) => {
+    const kept = shown.slice(0, -1).length;
+    return [...title.matchAll(NUMBER)].some((m) => m.index! < kept && kept < m.index! + m[0].length);
+  };
+
+  it("다 들어가면 제목 그대로, 아니면 숫자 덩어리 앞에서 끊고 '…' — '나스닥 0.4…'가 아니라 '나스닥…'", () => {
+    const t = "[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥 0.48%↑";
+    expect(fitNewsTitle("뉴스1 05:32 ", t, 500, font.body, 1)).toBe(t);
+    // 폭을 1dp 씩 줄여 가며: 늘 원문의 앞부분 + '…', 숫자 가운데서 끝나지 않고, 어림 폭이 줄 폭을 넘지 않는다
+    const seen = new Set<string>();
+    for (let w = 520; w >= 120; w--) {
+      const s = fitNewsTitle("뉴스1 05:32 ", t, w, font.body, 1);
+      seen.add(s);
+      if (s === t) continue;
+      expect(s.endsWith("…"), `${w}: ${s}`).toBe(true);
+      expect(t.startsWith(s.slice(0, -1)), `${w}: ${s}`).toBe(true);
+      expect(cutsNumber(t, s), `${w}: ${s}`).toBe(false);
+      expect(lineEm(`뉴스1 05:32 ${s}`) * font.body, `${w}: ${s}`).toBeLessThanOrEqual(w);
+    }
+    // '0.48%↑' 가 들어가지 않는 폭에서는 숫자 앞 '나스닥' 뒤에서 끊는다
+    expect(seen).toContain("[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥…");
+    expect([...seen].some((s) => /\d…$|[.,]…$/.test(s))).toBe(false);
+    // 숫자 뒤 단위('선')까지 한 덩어리 — '7,08…'·'7,080…'이 아니라 숫자 앞에서
+    const k = "코스피 7,080선 상승 마감…반도체 강세";
+    for (let w = 300; w >= 60; w--) expect(cutsNumber(k, fitNewsTitle("", k, w, font.body, 1)), String(w)).toBe(false);
+  });
+
+  it("서비스 창에 실제로 뽑힌 제목(숫자가 든 14건): 폰 폭 475·411·360, 글자 100%·130% 에서 숫자 가운데서 끊기지 않는다", () => {
+    let cut = 0;
+    for (const [outlet, title] of REAL)
+      for (const win of [475, 411, 360])
+        for (const scale of [1, 1.3]) {
+          // 카드 뉴스 줄 폭 = 창 − 카드 안쪽 여백(좌우 space.lg) − 이름표 칸(글자 배율만큼) − 칸 사이 간격
+          const width = win - 2 * space.lg - Math.round(56 * scale) - space.sm;
+          const head = `${outlet} 05:32 `;
+          const s = fitNewsTitle(head, title, width, font.body, scale);
+          if (s === title) continue;
+          cut++;
+          expect(cutsNumber(title, s), `${win}·${scale}: ${s}`).toBe(false);
+          expect(/\d…$|[.,]…$/.test(s), `${win}·${scale}: ${s}`).toBe(false);
+          // 언론사·시각만으로 줄이 차는 경우(아주 긴 언론사 이름 + 좁은 폭 + 큰 글씨)는 제목 없이 '…'만 — 폭은 한 줄 말줄임이 맡는다
+          if (s === "…") continue;
+          expect(lineEm(head + s) * font.body * scale, `${win}·${scale}: ${s}`).toBeLessThanOrEqual(width);
+        }
+    expect(cut).toBeGreaterThan(20); // 좁은 폭에서는 대부분 잘린다 (자르는 길이 실제로 쓰였다)
   });
 });

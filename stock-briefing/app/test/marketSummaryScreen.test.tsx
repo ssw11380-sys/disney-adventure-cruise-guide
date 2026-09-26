@@ -229,6 +229,44 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     expect(all).toContain("원/달러 1,400.00원 -2.50원 (11/26 고시) · 미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)");
   });
 
+  it("뉴스 제목 한 줄은 숫자 가운데서 말줄임하지 않는다 — 줄 폭을 재서 숫자 앞에서 끊고 '…', 화면 읽기는 원문 제목 전체 (7차 검토 must)", () => {
+    h.flags = { marketSummary: true };
+    h.win = { width: 411, height: 960, scale: 2.625, fontScale: 1 };
+    const d = MORNING.data!;
+    const titles = ["[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥 0.48%↑", "[뉴욕마감]국채금리 20년래 최고에 혼조…다우 0.31%↓·나스닥 0.01%↑"];
+    h.list = [item(7, { ...d, news: { ...d.news, items: d.news.items.map((n, i) => ({ ...n, title: titles[i] ?? n.title })) } })];
+    const r = render(<BriefingsScreen />);
+    const lines = () => r.all().filter((n) => n.props.testID === "news-line");
+    /** 줄의 제목 부분 (앞 '언론사 시각 ' 조각 뒤) */
+    const shownOf = (n: HostNode) => n.children.filter((c) => typeof c === "string").join("");
+    const check = (label: string) => {
+      const got = lines().map(shownOf);
+      expect(got, label).toHaveLength(2);
+      got.forEach((s, i) => {
+        if (s === titles[i]) return;
+        expect(s.endsWith("…"), `${label}: ${s}`).toBe(true);
+        expect(titles[i]!.startsWith(s.slice(0, -1)), `${label}: ${s}`).toBe(true);
+        // '…' 바로 앞이 숫자·소수점·쉼표가 아니다 ('나스닥 0.4…'·'다우 0.…' 막기), 한 줄 말줄임은 안전판으로 남긴다
+        expect(/[\d.,%]…$/.test(s), `${label}: ${s}`).toBe(false);
+      });
+      expect(lines().every((n) => n.props.numberOfLines === 1)).toBe(true);
+      return got;
+    };
+    // 411 의 첫 어림 폭(재기 전): 둘 다 잘리고, 끊은 자리 앞에 숫자가 오지 않는다
+    const first = check("411 어림");
+    expect(first.every((s, i) => s !== titles[i])).toBe(true);
+    // 실제로 잰 폭(onLayout)으로 다시 자른다 — 더 좁으면 더 앞에서
+    const box = r.all().find((n) => n.type === "View" && typeof n.props.onLayout === "function" && n.children.some((c) => typeof c !== "string" && c.props.testID === "news-line"))!;
+    r.act(() => (box.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 210, height: 40, x: 0, y: 0 } } }));
+    const narrow = check("잰 폭 210");
+    expect(narrow[0]!.length).toBeLessThan(first[0]!.length);
+    // 넓으면(태블릿 세로 카드 등) 그대로
+    r.act(() => (box.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 900, height: 40, x: 0, y: 0 } } }));
+    expect(check("잰 폭 900")).toEqual(titles);
+    // 화면 읽기(카드 한 문장)는 자르지 않은 원문 제목
+    for (const t of titles) expect(String(cardOf(r)!.props.accessibilityLabel)).toContain(t);
+  });
+
   it("큰 글씨(130%): 카드 이름표 칸이 글자만큼 넓어진다 ('환율·금리'가 두 줄로 쪼개지지 않게)", () => {
     h.flags = { marketSummary: true };
     h.fontScale = 1.3;
