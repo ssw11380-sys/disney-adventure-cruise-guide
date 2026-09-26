@@ -69,7 +69,7 @@ function ScreenInfoBody() {
   const t = useTheme();
   const info = useScreenInfo();
   const share = async () => {
-    // 홈 화면 위젯 진단(위젯 번호·크기·크기 기억 — widgets/diagnose.ts)을 끝에 붙인다: 폴드에서 두 화면이 같은 위젯을 쓰는지 폰에서 확인하려고.
+    // 홈 화면 위젯 진단(위젯 번호·지금 크기·최근 받은 크기 — widgets/diagnose.ts, 그림에는 쓰지 않는 기록)을 끝에 붙인다: 폴드에서 두 화면이 같은 위젯을 쓰는지 폰에서 확인하려고.
     // 부를 때 읽고, 못 읽으면(위젯 모듈 없음 등) 화면 값만
     const widgets = await import("@/widgets/diagnose").then((m) => m.widgetReport()).catch(() => [] as string[]);
     const message = [screenInfoText(info), ...widgets].join("\n");
