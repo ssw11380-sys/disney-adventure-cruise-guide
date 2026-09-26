@@ -396,7 +396,7 @@ describe("크기 진단 기록 (sizeLog.ts — 그림에 쓰지 않는다)", () 
 });
 
 describe("설정 '화면 정보' 공유 글의 위젯 진단 (widgets/diagnose.ts)", () => {
-  it("위젯 수·기준 폭, 위젯마다 지금 크기·화면·밀도와 최근 크기(새것부터), 두 화면에서 그려졌는지 (고정 시계)", () => {
+  it("위젯 수·기준 폭, 위젯마다 지금 크기·화면·밀도와 최근 크기(새것부터), 두 화면에서 그려졌는지 (고정 시계, widgetFoldFit 켬)", () => {
     const l: SizeLog = {
       "12": [
         { w: 476, h: 611, sw: 1166, sh: 880, by: "resize", at: NOW - 2 * 3_600_000 },
@@ -412,6 +412,7 @@ describe("설정 '화면 정보' 공유 글의 위젯 진단 (widgets/diagnose.t
       ],
       l,
       NOW,
+      true,
     );
     expect(lines).toEqual([
       "[위젯] 잔고 1개 · 자산 0개 · 브리핑 0개 · 지수·환율 2개 · 넓은 모습은 폭 560dp 이상만",
@@ -421,7 +422,37 @@ describe("설정 '화면 정보' 공유 글의 위젯 진단 (widgets/diagnose.t
     ]);
   });
 
+  it("검증 지적: widgetFoldFit 이 꺼져 있으면 첫 줄은 예전 기준(504/540/644dp)·'크기 기록 안 함'이고, 남아 있던 옛 크기 기록은 보이지 않는다", () => {
+    const l: SizeLog = { "12": [{ w: 507, h: 222, sw: 594, sh: 939, by: "resize", at: NOW - 5 * 60_000 }] };
+    const list = [{ name: WIDGET_NAMES.holdings, widgetId: 12, width: 476, height: 611, screenInfo: INNER_SCREEN_2X }];
+    expect(widgetReportLines(list, l, NOW, false)).toEqual([
+      "[위젯] 잔고 1개 · 자산 0개 · 브리핑 0개 · 지수·환율 0개 · 넓은 모습은 예전 기준(평가금액 칸 504dp·지수 옆 칸 540dp·두 열 644dp 이상) · 크기 기록 안 함(widgetFoldFit 꺼짐)",
+      "[위젯] 잔고 #12: 지금 476×611dp (화면 1166×880 · 밀도 2.1)",
+    ]);
+    // 적힌 기준 숫자가 그림의 예전 기준과 같다 (layout.ts WIDE — 위 '예전 기준 확인' 테스트가 그림으로 확인)
+    expect([WIDE.valueMin + PAD * 2, WIDE.boardMin, WIDE.columnMin * 2 + WIDE.columnGap + PAD * 2]).toEqual([504, 540, 644]);
+  });
+
+  it("검증 지적: 첫 줄의 규칙은 위젯이 마지막으로 그린 데이터의 플래그를 따른다 — 켰다가 끈 뒤 남은 기록은 보이지 않고, 다시 켜면 보인다", async () => {
+    shared.widgets = { [WIDGET_NAMES.holdings]: [{ widgetId: 21, width: 507, height: 222, screenInfo: COVER_SCREEN_2X }] };
+    await noteWidgetSize({ widgetId: 21, width: 507, height: 222, screenInfo: COVER_SCREEN_2X }, "resize", NOW - 60_000);
+    await saveWidgetView(data(false), "https://server.test");
+    expect(await widgetReport(NOW)).toEqual([
+      "[위젯] 잔고 1개 · 자산 0개 · 브리핑 0개 · 지수·환율 0개 · 넓은 모습은 예전 기준(평가금액 칸 504dp·지수 옆 칸 540dp·두 열 644dp 이상) · 크기 기록 안 함(widgetFoldFit 꺼짐)",
+      "[위젯] 잔고 #21: 지금 507×222dp (화면 594×939 · 밀도 2.1)",
+    ]);
+    // 위젯 데이터를 아직 받은 적이 없어도(저장한 값 없음) 꺼짐과 같다 (그림도 꺼짐 기준으로 그린다)
+    store.delete("widget.view");
+    expect((await widgetReport(NOW))[0]).toMatch(/예전 기준.*크기 기록 안 함/);
+    await saveWidgetView(data(true), "https://server.test");
+    expect(await widgetReport(NOW)).toEqual([
+      "[위젯] 잔고 1개 · 자산 0개 · 브리핑 0개 · 지수·환율 0개 · 넓은 모습은 폭 560dp 이상만",
+      "[위젯] 잔고 #21: 지금 507×222dp (화면 594×939 · 밀도 2.1) · 최근 크기 변경 507×222 (화면 594×939) 1분 전",
+    ]);
+  });
+
   it("홈 화면 위젯과 기록을 읽어 만든다 — 같은 이름이 둘이면(두 화면에 따로 놓음) 둘 다 적는다", async () => {
+    await saveWidgetView(data(true), "https://server.test");
     shared.widgets = {
       [WIDGET_NAMES.holdings]: [
         { widgetId: 21, width: 507, height: 222, screenInfo: COVER_SCREEN_2X },

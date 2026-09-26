@@ -16,6 +16,10 @@ const h = vi.hoisted(() => ({
   alert: vi.fn(),
   /** 홈 화면 위젯 진단 줄 (widgets/diagnose.ts — 위젯 2차). null 이면 읽다 실패 */
   widgetLines: [] as string[] | null,
+  /** 진단을 읽은 횟수 */
+  widgetReads: 0,
+  /** 서버 기능 플래그 (useFeature — 없으면 fallback) */
+  flags: {} as Record<string, boolean>,
 }));
 
 vi.mock("react-native", () => ({
@@ -44,8 +48,10 @@ vi.mock("@/theme", async () => {
   return { ...tokens, useTheme: () => tokens.light };
 });
 vi.mock("@/components/ui", () => ({ Button: "Button", Card: "Card", Muted: "Muted", Row: "Row", SectionTitle: "SectionTitle" }));
+vi.mock("@/api/hooks", () => ({ useFeature: (key: string, fallback = false) => h.flags[key] ?? fallback }));
 vi.mock("@/widgets/diagnose", () => ({
   widgetReport: async () => {
+    h.widgetReads++;
     if (h.widgetLines === null) throw new Error("위젯 모듈 없음");
     return h.widgetLines;
   },
@@ -77,6 +83,8 @@ beforeEach(() => {
   h.share.mockClear();
   h.alert.mockClear();
   h.widgetLines = [];
+  h.widgetReads = 0;
+  h.flags = { widgetFoldFit: true };
 });
 
 describe("화면 정보 카드", () => {
@@ -151,6 +159,37 @@ describe("화면 정보 카드", () => {
     r.act(() => (r.all().find((n) => n.type === "Button")!.props.onPress as () => void)());
     await vi.waitFor(() => expect(h.share).toHaveBeenCalledTimes(1));
     expect(h.share.mock.calls[0][0].message).toMatch(/짐작한 값입니다\.$/);
+  });
+
+  it("검증 지적: 플래그 widgetFoldFit 이 꺼져 있거나 모르면 위젯 진단을 읽지도 붙이지도 않는다 — 공유 글이 예전과 같다", async () => {
+    h.widgetLines = ["[위젯] 잔고 1개 · 자산 0개 · 브리핑 0개 · 지수·환율 1개", "[위젯] 잔고 #12: 지금 476×611dp"];
+    const { screenInfoText } = await import("@/lib/screenInfo");
+    for (const flags of [{ widgetFoldFit: false }, {}] as Record<string, boolean>[]) {
+      h.flags = flags;
+      h.share.mockClear();
+      const r = open();
+      r.act(() => (r.all().find((n) => n.type === "Button")!.props.onPress as () => void)());
+      await vi.waitFor(() => expect(h.share).toHaveBeenCalledTimes(1));
+      const message = h.share.mock.calls[0][0].message;
+      expect(message).not.toContain("[위젯]");
+      expect(message).toMatch(/짐작한 값입니다\.$/);
+      // 예전(위젯 진단 전)과 같은 글: 화면 값만 (시각 줄은 분 단위라 같은 시각에 만든 글과 견준다)
+      const before = screenInfoText({
+        window: { width: 411, height: 914 },
+        screen: { width: 411, height: 914 },
+        density: 2.625,
+        fontScale: 1,
+        insets: h.insets,
+        manufacturer: "samsung",
+        modelName: "SM-F966N",
+        osVersion: "16",
+        apiLevel: 36,
+        appVersion: "1.4.0",
+        build: "내장 번들",
+      });
+      expect(message.split("\n").slice(1)).toEqual(before.split("\n").slice(1));
+    }
+    expect(h.widgetReads).toBe(0);
   });
 
   it("공유 창을 못 열면 글을 알림으로 보여 준다", async () => {

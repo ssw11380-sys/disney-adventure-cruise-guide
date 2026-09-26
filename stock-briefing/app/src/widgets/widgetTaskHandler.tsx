@@ -59,9 +59,11 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
     });
     // 손익 칸 설정은 받은 뒤에 읽는다: 받는 동안(최대 12초, "갱신 중") 손익을 눌러 바꾼 것을 옛 값으로 되돌려 그리지 않게
     renderWidget(await renderFor(name, data, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), by }));
-    // 실패 뒤 첫 성공 (위젯 2차): 다른 위젯에 남은 '갱신 실패 · …'도 방금 적은 값으로 지운다 (서버를 다시 부르지 않음).
-    // 실패 표시를 이 조회가 지웠을 때만 true 라, 여러 위젯이 한꺼번에 받아도 다시 그리기는 한 번이다 (data.ts)
-    if (data.recovered) await redrawAllWidgets(await loadCachedWidgetData());
+    // 실패 뒤 첫 성공 (위젯 2차): 다른 위젯에 남은 '갱신 실패 · …'도 방금 받은 값으로 지운다 (서버를 다시 부르지 않음).
+    // 저장해 둔 값(loadCachedWidgetData)이 아니라 이 조회의 값으로, 오류 없이 — 함께 돌던 조회가 그사이 실패해 적은 '갱신 실패' 화면이
+    // 모든 위젯에 번지지 않게 (그 조회의 실패 표시는 남아 다음 백그라운드 작업이 다시 묻는다). 실패 표시를 이 조회가 지웠을 때만 true 라,
+    // 여러 위젯이 한꺼번에 받아도 다시 그리기는 한 번이다 (data.ts)
+    if (data.recovered) await redrawAllWidgets({ ...data, error: null });
     // 자동 갱신 기록 (위젯 리뷰 2, 설정 화면 '마지막 자동 갱신'): 주기 갱신은 periodic, ↻ 는 button. 추가·크기 변경은 적지 않는다(폴드를 접고 펼 때마다 오므로 간격이 흐려진다).
     // 받아 둔 응답을 다시 써 서버를 부르지 않았으면 skipped — 평균 간격을 서버에 실제로 물은 갱신으로만 내게 (통합 검증 지적)
     const source = widgetAction === "WIDGET_UPDATE" ? "periodic" : click === WIDGET_CLICK.refresh ? "button" : null;
