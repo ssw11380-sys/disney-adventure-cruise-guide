@@ -28,8 +28,25 @@ export interface SegLine {
   segs: Seg[];
 }
 
-/** '비슷' 기준 ±1.00%p (서버 SIMILAR_BAND_BP 와 같다) */
+/** '비슷' 기준 ±1.00%p (서버 SIMILAR_BAND_BP 와 같다 — 앱 테스트가 두 값이 같은지 본다) */
 export const SIMILAR_BAND_BP = 100;
+/** 기준 글: 표 머리·안내는 '1.00', 화면 읽기는 '1' */
+const BAND_PP = (SIMILAR_BAND_BP / 100).toFixed(2);
+const BAND_SPOKEN = String(SIMILAR_BAND_BP / 100);
+/** 상세 '내 보유 종목과 지수' 묶음 머리 — 기준 상수로 만든다 (기준을 바꾸면 머리 글도 같이 바뀌어 분류와 어긋나지 않게) */
+export const GROUP_TITLE: Record<"high" | "similar" | "low", string> = {
+  high: `지수보다 높음 (+${BAND_PP}%p 이상)`,
+  similar: `비슷 (±${BAND_PP}%p 안)`,
+  low: `지수보다 낮음 (-${BAND_PP}%p 이하)`,
+};
+/** 묶음 머리 화면 읽기 ('+1.00%p' 를 '1%포인트 높음'처럼 두 번 읽지 않게 따로 적는다) */
+export const GROUP_SPEECH: Record<"high" | "similar" | "low", string> = {
+  high: `지수보다 높음, 차이 ${BAND_SPOKEN}%포인트 이상`,
+  similar: `비슷, 차이 플러스마이너스 ${BAND_SPOKEN}%포인트 안`,
+  low: `지수보다 낮음, 차이 마이너스 ${BAND_SPOKEN}%포인트 이하`,
+};
+/** 상세 '이 요약을 만든 기준'의 '비슷' 안내 */
+export const SIMILAR_NOTE = `'비슷'은 지수와의 차이가 ±${BAND_PP}%p 안인 종목입니다 (좋고 나쁨의 뜻이 아님).`;
 /** 카드·요약 줄 최대 수 */
 export const MAX_LINES = 6;
 /** 6줄이 넘으면 뒤에서부터 뺀다: 뉴스 → 일정 → 업종 (그다음 환율·금리) */

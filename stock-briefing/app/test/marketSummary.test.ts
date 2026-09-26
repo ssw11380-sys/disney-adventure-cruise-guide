@@ -12,6 +12,10 @@ import {
   closeBadge,
   closeBadgeWarn,
   digestLine,
+  GROUP_SPEECH,
+  GROUP_TITLE,
+  SIMILAR_BAND_BP,
+  SIMILAR_NOTE,
   fitLines,
   chunkSegs,
   chunkText,
@@ -337,5 +341,18 @@ describe("한국 평일 휴장일 목록 (서버 marketContext.KR_HOLIDAYS 와 �
     const last = Math.max(...Object.keys(KR_HOLIDAYS).map((d) => Number(d.slice(0, 4))));
     const need = new Date().getUTCFullYear() + 1;
     expect(last, `KR_HOLIDAYS 가 ${last}년까지뿐 — ${need}년 KRX 휴장일을 app/src/lib/marketTime.ts 와 backend/src/services/marketContext.ts 에 추가`).toBeGreaterThanOrEqual(need);
+  });
+});
+
+describe("'비슷' 기준은 상수 하나 (6차 검토)", () => {
+  it("앱 SIMILAR_BAND_BP 는 서버 값과 같고, 상세 묶음 머리·화면 읽기·안내 글은 그 상수로 만든다", () => {
+    const server = /export const SIMILAR_BAND_BP = (\d+);/.exec(readFileSync(join(root, "backend/src/services/marketSummaryCalc.ts"), "utf8"));
+    expect(Number(server?.[1])).toBe(SIMILAR_BAND_BP);
+    expect(GROUP_TITLE).toEqual({ high: "지수보다 높음 (+1.00%p 이상)", similar: "비슷 (±1.00%p 안)", low: "지수보다 낮음 (-1.00%p 이하)" });
+    expect(GROUP_SPEECH).toEqual({ high: "지수보다 높음, 차이 1%포인트 이상", similar: "비슷, 차이 플러스마이너스 1%포인트 안", low: "지수보다 낮음, 차이 마이너스 1%포인트 이하" });
+    expect(SIMILAR_NOTE).toBe("'비슷'은 지수와의 차이가 ±1.00%p 안인 종목입니다 (좋고 나쁨의 뜻이 아님).");
+    // 상세 화면에 글자로 박아 둔 기준이 남아 있지 않다
+    const body = readFileSync(join(root, "app/src/components/MarketSummaryBody.tsx"), "utf8");
+    expect(body).not.toMatch(/1\.00%p|1%포인트/);
   });
 });

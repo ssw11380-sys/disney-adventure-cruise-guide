@@ -17,6 +17,8 @@ import {
   basisText,
   bodyWidthGuess,
   eventText,
+  GROUP_SPEECH,
+  GROUP_TITLE,
   holdingsAuxSegs,
   holdingsSegs,
   holdingsTableMode,
@@ -29,6 +31,7 @@ import {
   newsTime,
   ppText,
   rateText,
+  SIMILAR_NOTE,
   speakPointMove,
   speakText,
   summarySegLines,
@@ -189,10 +192,6 @@ function SummaryLinesCard({ d, now }: { d: MarketSummaryData; now: Date }) {
     </Card>
   );
 }
-
-const GROUP_TITLE: Record<"high" | "similar" | "low", string> = { high: "지수보다 높음 (+1.00%p 이상)", similar: "비슷 (±1.00%p 안)", low: "지수보다 낮음 (-1.00%p 이하)" };
-/** 묶음 머리 화면 읽기 ('+1.00%p' 를 '1%포인트 높음'처럼 두 번 읽지 않게 따로 적는다) */
-const GROUP_SPEECH: Record<"high" | "similar" | "low", string> = { high: "지수보다 높음, 차이 1%포인트 이상", similar: "비슷, 차이 플러스마이너스 1%포인트 안", low: "지수보다 낮음, 차이 마이너스 1%포인트 이하" };
 
 /** 흐린 글 (공용 Muted 와 같은 모양) · 아주 작은 흐린 글 (표 아래 안내) */
 const mutedText = (t: Theme): TextStyle => ({ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH });
@@ -617,7 +616,7 @@ function NewsCard({ d }: { d: MarketSummaryData }) {
         <Words text="조건에 맞는 기사가 없습니다." style={mutedText(t)} speak />
       )}
       <Words
-        text={`구글 뉴스 검색 '${d.news.query}' · ${us ? "뉴욕" : "한국"} 장 마감 10분 전부터 마감 뒤 6시간(또는 요약 시각)까지의 기사 · 통신사 기사 먼저, 같은 기사·같은 언론사는 1건 · 물음표·매매 권유·전망 낱말 제목은 뺌 · 제목은 언론사가 쓴 그대로이며 앱의 설명이 아님`}
+        text={`구글 뉴스 검색 '${d.news.query}' · ${us ? "뉴욕" : "한국"} 장 마감 10분 전부터 마감 뒤 6시간(또는 요약 시각)까지의 기사 · 통신사 기사 먼저, 같은 기사·같은 언론사는 1건 · 물음·인용 발언·매매 권유·주가 평가·전망으로 읽히는 제목과 다른 날 장 기사는 뺌 · 제목은 언론사가 쓴 그대로이며 앱의 설명이 아님`}
         style={tinyText(t)}
         speak
       />
@@ -631,7 +630,7 @@ function BasisCard({ d }: { d: MarketSummaryData }) {
   const bullets = [
     "숫자는 모두 서버 코드가 공개 시세에서 계산합니다. AI(모델)가 쓴 문장은 없습니다.",
     "원인 설명·앞으로의 전망·사고팔기 권유를 담지 않습니다. 뉴스는 언론사 제목 원문으로만 보여 줍니다.",
-    "'비슷'은 지수와의 차이가 ±1.00%p 안인 종목입니다 (좋고 나쁨의 뜻이 아님).",
+    SIMILAR_NOTE,
   ];
   return (
     <Card>
