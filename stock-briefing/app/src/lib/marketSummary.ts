@@ -602,7 +602,10 @@ export function lineEm(s: string): number {
 
 /** 반올림·줄 폭 버림에 남기는 여유 (글자 크기 배수 — 14dp 에서 약 2.8dp. 표 값이 두 글꼴 가운데 넓은 쪽이라 실제 글은 대개 이보다 더 좁다) */
 export const NEWS_FIT_MARGIN_EM = 0.2;
-/** 아주 좁은 칸에서도 제목 앞부분을 이만큼(글자 수)은 보인다 — 한 줄에 이보다 적게 들어가면 두 줄로 */
+/**
+ * 제목 앞부분을 적어도 이만큼(보이는 글자 수)은 보인다. 낱말 경계에서 끊으면 이보다 적게 남는 아주 좁은 칸(큰 글씨 + 좁은 창)에서만
+ * 글자 단위로 끊고(아주 좁은 칸 예외 — 낱말 가운데일 수 있음, 숫자 덩어리 안에서는 그래도 끊지 않음), 그래도 모자라면 두 줄로
+ */
 export const NEWS_MIN_HEAD = 8;
 /** 두 줄로 놓을 때 첫 줄 끝에서 낱말째 넘어가며 비는 폭 어림 */
 const WRAP_SLACK_EM = 3;
@@ -610,20 +613,31 @@ const WRAP_SLACK_EM = 3;
 /**
  * 제목 속 숫자 덩어리 (부호·▲▼ + 숫자·쉼표·소수점 + 붙은 단위·화살표): '0.48%↑'·'7,080선'·'▲90.71p'·'1.21%↓'·'2.4조'·'15:30'.
  * (8차 검토 must) 만·천·억·조·년·월·시 뒤에 숫자가 이어지면(띄어 써도) 한 덩어리: '2만7000선'·'2조4907억원'·'27만3000원'·'7만 8581달러'·
- * '1조 5000억'·'3시30분'·'9월 26일' — '나스닥 2만…'·'외국인 2조…'처럼 틀린 값으로 읽히는 자리에서 끊지 않게
+ * '1조 5000억'·'3시30분'·'9월 26일' — '나스닥 2만…'·'외국인 2조…'처럼 틀린 값으로 읽히는 자리에서 끊지 않게. 낱말 경계를 셀 때 한 낱말로 본다
  */
 const TITLE_NUMBER_RE =
   /[+\-−▲▼△▽]?\d[\d,.:]*(?:%p|%|bp|pt|p|P|포인트|선|원|달러|엔|위안|유로|루피아|배|만|천|억|조|년|월|일|시|분|초|위|대|개|명|주|건|곳|종)*(?:(?<=[만천억조년월시])\s?\d[\d,.:]*(?:%p|%|bp|pt|p|P|포인트|선|원|달러|엔|위안|유로|루피아|배|만|천|억|조|년|월|일|시|분|초|위|대|개|명|주|건|곳|종)*)*[↑↓]?/g;
-/** 제목 속 숫자 덩어리 자리 (끝이 숫자인지 함께) — 테스트도 쓴다 */
-export function titleNumbers(title: string): { start: number; end: number; digitEnd: boolean }[] {
-  return [...title.matchAll(TITLE_NUMBER_RE)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, digitEnd: /\d$/.test(m[0]) }));
+/**
+ * 범위·바뀜 표시 — 앞뒤 숫자 덩어리를 한 덩어리로 잇는다 ('2.6%→3.7%'·'6,300~7,600'·'3~4%'·'5.4명 → 5.0명'·'3분기→4분기' — 앞 숫자에 붙은 글자
+ * 3자까지). 앞 값만 보이면 바뀐 뒤 값·한 값처럼 읽혀서 ('…성장률 2.6%…')
+ */
+const RANGE_GAP_RE = /^[가-힣A-Za-z]{0,3}\s?[→~∼]\s?$/;
+/** 제목 속 숫자 덩어리 자리 (UTF-16, 범위·바뀜 표시로 이어진 덩어리는 하나로, 끝이 숫자인지 함께) */
+function titleNumbers(title: string): { start: number; end: number; digitEnd: boolean }[] {
+  const out: { start: number; end: number; digitEnd: boolean }[] = [];
+  for (const m of title.matchAll(TITLE_NUMBER_RE)) {
+    const n = { start: m.index!, end: m.index! + m[0].length, digitEnd: /\d$/.test(m[0]) };
+    const last = out[out.length - 1];
+    if (last && RANGE_GAP_RE.test(title.slice(last.end, n.start))) Object.assign(last, { end: n.end, digitEnd: n.digitEnd });
+    else out.push(n);
+  }
+  return out;
 }
 /**
- * 끊은 자리 끝에 남기지 않을 글자 (띄어쓰기·구분자 '·'·'ㆍ'(U+318D)·'∙'·'‧'·'・'·쌍점·쌍반점·물결·화살표 '→'·'▶'·붙임표·여는 괄호·
- * 점 말줄임 '...'·여는 따옴표 ‘ “ — 검증 보정 3: '…원·달러 환율 ‘…'·'…부담에 하락;…'처럼 여는 따옴표·구분자가 남지 않게. 숫자 속 쌍점('15:30')은
- * 숫자 규칙이 먼저 본다)
+ * 끊은 자리 끝에 남기지 않을 글자 (띄어쓰기·폭 없는 글자·구분자 '·'·'ㆍ'(U+318D)·'∙'·'‧'·'・'·쉼표·쌍점·쌍반점·물결·화살표 '→'·'▶'·붙임표·빗금·
+ * 세로줄·여는 괄호·점 말줄임 '...'·여는 따옴표 ‘ “ — '…원·달러 환율 ‘…'·'…부담에 하락;…'처럼 여는 따옴표·구분자로 끝나지 않게)
  */
-const TRAILING_CUT_RE = /(?:[\s·ㆍ∙‧・,:;；~∼→▶…⋯‥\-‐‑–—([{【<《〈「『（［｢〔|｜/‘“]|\.{2,})+$/;
+const TRAILING_CUT_RE = /(?:[\s\u200B-\u200F\u2060\uFEFF·ㆍ∙‧・･•,:;；~∼→▶…⋯‥\-‐‑–—([{【<《〈「『（［｢〔|｜/‘“]|\.{2,})+$/;
 /** 곧은 따옴표 (' " ` 와 전각 ＇ ＂) — 여는 것과 닫는 것이 같은 글자라 앞부분에서 짝이 맞는지로 가린다 */
 const STRAIGHT_QUOTES = "'\"`＇＂";
 /** 영문 사이 줄임표 ('Leader's'·'Moody’s')에 쓰는 글자 */
@@ -641,7 +655,7 @@ function quoteCount(head: string, q: string, next: string): number {
 }
 /**
  * 끊은 자리 끝 정리 (head — title 의 앞부분): 구분자·여는 괄호·여는 따옴표(‘ “)를 떼고, 곧은 따옴표(' " `)는 앞부분에서 짝 없이 남은 것
- * (여는 따옴표 — '…이제 시선은 '…'·'…반도체ETF '…')과 영문 사이 줄임표('Leader'|s')를 뗀다. 더 뗄 것이 없을 때까지 (검증 보정 3)
+ * (여는 따옴표 — '…이제 시선은 '…'·'…반도체ETF '…')과 영문 사이 줄임표('Leader'|s')를 뗀다. 더 뗄 것이 없을 때까지
  */
 function trimCutEnd(head: string, title: string): string {
   for (;;) {
@@ -658,146 +672,114 @@ function trimCutEnd(head: string, title: string): string {
 }
 
 /**
- * 낱말 글자 (한글·자모·영문·숫자, 'S&P'·'M&A'의 &) — 이 글자끼리 붙은 자리에서 끊으면 낱말 가운데다.
- * 자모 범위에서 'ㆍ'(U+318D, 아래아 — 제목에서는 '우려ㆍ국채금리'처럼 가운뎃점으로 쓴다)는 뺀다: '·'처럼 낱말 사이 구분자 (검증 보정 2)
+ * 낱말 글자: 한글 음절·자모('ㆍ'(U+318D, 아래아)는 빼고 — 제목에서는 '우려ㆍ국채금리'처럼 가운뎃점으로 쓴다)·영문(라틴 확장 포함)·그리스·키릴 문자·
+ * 숫자·동그라미 숫자·로마 숫자('돈은③'·'국감Ⅱ')·위첨자 숫자·원 문자('㈜'·'㊤')·한자·가나·전각 영문·숫자, 'S&P'·'M&A'의 &.
+ * 유니코드 속성 이스케이프(\p{L})는 Hermes 에서 확인하지 않아 범위로 적는다. 'ʼ'(U+02BC)는 제목에서 닫는 따옴표로 쓰여('‘주춤ʼ') 뺀다
  */
-const WORD_CHAR_RE = /[가-힣ㄱ-\u318C\u318EA-Za-z0-9&]/;
-/** 끊은 자리 앞의 낱말 조각 (마지막 띄어쓰기·문장 부호 뒤) */
-const WORD_TAIL_RE = /[가-힣ㄱ-\u318C\u318EA-Za-z0-9&]+$/;
-/** 끊은 자리 뒤에 남는 낱말 나머지 (다음 띄어쓰기·문장 부호 앞까지) */
-const WORD_HEAD_RE = /^[가-힣ㄱ-\u318C\u318EA-Za-z0-9&]+/;
-/** 한글 음절 하나 */
-const HANGUL_CHAR_RE = /[가-힣]/;
-/** 낱말 조각 끝의 한글 덩어리 ('SK하이'의 '하이', '원익IPS까'의 '까') */
-const HANGUL_TAIL_RE = /[가-힣]+$/;
+const WORD_CHAR_RE =
+  /[가-힣ㄱ-\u318C\u318E\u1100-\u11FF\uFFA0-\uFFDCA-Za-z0-9&\u00B2\u00B3\u00B5\u00B9\u00BC-\u00BE\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF\u0370-\u037D\u037F-\u0386\u0388-\u03FF\u0400-\u04FF\u2070-\u2089\u2150-\u2189\u2460-\u24FF\u2776-\u2793\u3007\u3021-\u3029\u3192-\u3195\u3200-\u32FF\u3041-\u3096\u30A1-\u30FA\u30FC\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF10-\uFF19\uFF21-\uFF3A\uFF41-\uFF5A\uFF66-\uFF9D]/;
 /**
- * 끊은 자리 뒤가 이 토씨뿐이면 앞 조각은 온전한 낱말일 수 있다 ('영업점|에'·'코스피|는' — 물리지 않는다).
- * 헷갈리지 않는 토씨만 둔다 (검증 must): 가·이·도·의·과·만 등은 흔한 낱말의 끝 음절이기도 해서('유|가'·'주|가'·'추|가'·'순매|도'·'속|도'·'합|의'·
- * '최고|가'·'닛케|이') '유…'·'주…'처럼 조각이 남았다
+ * 두 낱말을 잇는 글자 (가운뎃점·붙임표·빗금). 한쪽 낱말이 한 글자(한글·한자 한 음절, 영문·숫자는 두 자까지)면 이어진 한 낱말로 본다 —
+ * '원·달러'·'미·이란'·'韓·美'·'AI·반도체주'·'K-반도체'·'D-1'·'원/달러'·'3·4분기'. 두 쪽 다 그보다 길면 낱말 사이 ('유가·국채금리'·'미국-이란'·'삼전·닉스')
  */
-const PARTICLE_RE = /^(?:은|는|을|를|에|에서|으로|로|와|에게)$/;
-/**
- * 두 음절 한글 덩어리부터 낱말로 보는 토씨 ('강세|에'·'반등|에서'·'몸값|으로'). 나머지 은·는·을·를·로·와는 풀이말 어미('늘리|는'·'몰리|는'·
- * '흔드|는'·'불붙|은'·'돌아|와')나 낱말 끝('매크|로'·'그대|로'·'나홀|로')과 겹쳐 세 음절부터 (검증 보정 3 must — '…투자 늘리…'가 남았다)
- */
-const FIRM_PARTICLE_RE = /^(?:에|에서|으로|에게)$/;
-/** 두 음절 토씨의 가운데 ('실현으|로'·'106.6으|로'·'거래소에|서'·'투자자에|게') — 끊은 자리 앞 글자 + 뒤 글자 */
-const SPLIT_PARTICLE_RE = /^(?:으로|에서|에게)$/;
-/**
- * '는·은·을' 앞 풀이말 줄기 끝 — 앞 조각이 낱말이 아니다: '상승하|는'·'결정되|는'과 말뭉치에 나온 세 음절 풀이말의 끝('뒤흔드|는'·'두드리|는'·
- * '흔들리|는'·'엇갈리|는'·'벌어지|는'·'멀어지|는'·'얼어붙|은'·'몰아치|는'·'이어가|는'·'바라보|는'·'갈아타|는'·'들썩이|는'·'사들이|는'·
- * '끄떡없|는'·'얻어맞|은'·'만만찮|은'·'만든다|는'). 네 음절 이상 덩어리는 이 규칙과 상관없이 가운데서 끊을 수 있다
- */
-const VERB_STEM_END_RE =
-  /(?:[하되히붙맞찮없있보다]|(?:흔|[어아려고])드|(?:들|갈|몰|늘|둘|쏠|풀|드)리|[어아여워]지|(?:아|넘|떨)치|[어아][가오내]|[아라]타|(?:썩|렁|들|직|보)이)$/;
-/** '로' 앞이 '대로'(예상대|로·계획대|로·법칙대|로)·'가까스로'의 앞부분이면 낱말이 아니다 */
-const RO_WORD_END_RE = /(?:대|가까스)$/;
-/**
- * 토씨 예외: 끊은 자리 앞 조각(frag, 끝 한글 덩어리 run)이 뒤(rest) 토씨 앞의 온전한 낱말인지 — 뒤가 헷갈리지 않는 토씨뿐이고,
- * 한글 덩어리가 에·에서·으로·에게 앞이면 두 음절 이상('영업점|에'·'강세|에'), 은·는·을·를·로·와 앞이면 세 음절 이상('코스피|는'·'영업점|을')이거나
- * 영문·숫자 머리에 한글이 붙은 낱말('AI주|는'·'7천|은'·'10월|에'·'HD현대|로')일 때.
- * 한 음절 한글 조각('만|에'·'제|로'), 두 음절 조각 + 은·는·을·를·로·와('늘리|는'·'매크|로'), 두 음절 토씨의 첫 음절('6으|로'), 풀이말 줄기
- * ('상승하|는'·'뒤흔드|는')는 낱말로 보지 않는다
- */
-function beforeParticle(frag: string, run: string, rest: string): boolean {
-  if (!run || !PARTICLE_RE.test(rest)) return false;
-  if (SPLIT_PARTICLE_RE.test(run.slice(-1) + rest.slice(0, 1))) return false;
-  if ((rest === "는" || rest === "은" || rest === "을") && VERB_STEM_END_RE.test(run)) return false;
-  if (frag.length > run.length) return true;
-  if (rest === "로" && RO_WORD_END_RE.test(run)) return false;
-  return Array.from(run).length >= (FIRM_PARTICLE_RE.test(rest) ? 2 : 3);
-}
-/**
- * 붙임표 낱말의 앞 조각 ('K-반도체'의 'K'·'D-1'의 'D'·'미-이란'의 '미'·'美-中'의 '美') — 한글·한자 한 글자 또는 영문·숫자 한두 글자.
- * 두 음절 한글('미국-이란'·'급등-인플레'·'상향-BTIG')은 온전한 낱말이라 붙임표 앞에서 끊어도 된다 (방향 낱말 '급등'·'상향'을 지우지 않게)
- */
-const HYPHEN_HEAD_RE = /(?<![가-힣A-Za-z0-9&一-鿿])(?:[가-힣一-鿿]|[A-Za-z0-9&]{1,2})$/;
-/** 붙임표 뒤가 낱말로 이어진다 ('-반도체'·'-1'·'-이란') */
-const HYPHEN_JOIN_RE = /^[-‐‑–][가-힣A-Za-z0-9&一-鿿]/;
-/** 끊은 자리 뒤가 범위·바뀜 표시 + 숫자 ('→2.4%'·'~4%'·' → 8400') — 앞 숫자와 한 덩어리로 본다 */
-const RANGE_NEXT_RE = /^\s?[→~∼]\s?[+\-−▲▼]?\d/;
-/**
- * 낱말 가운데서 끊을 때 이 글자 수 이하 조각이 남으면 그 낱말 앞에서 끊는다 (SS1/SS9: '…상승 마감…다…'·'…랠리…나스…'·'반도체·석…').
- * 조각 전체가 아니라 끝의 한글 덩어리(뒤가 한글일 때)·영문·숫자 덩어리(뒤가 영문·숫자일 때)로 잰다 (검증 보정 2 must: 'SK하이|닉스'·'원익IPS까|지'는
- * 영문까지 세면 4·6자라 '…SK하이…'·'…원익IPS까…'가 남았다 — isOrphan)
- */
-export const NEWS_ORPHAN_MAX = 3;
+const JOINER_RE = /[·ㆍ∙‧・･\-‐‑–/]/;
+/** 숫자 사이에서는 낱말 속 글자 ('7,080'·'106.6'·'15:30'·'9/23'·'2026-09-26') */
+const DIGIT_INNER_RE = /[.,:/\-‐‑–]/;
+/** 영문 사이에서는 낱말 속 글자 ('Leader’s'·'Moody's'·'U.S') */
+const LATIN_INNER_RE = /['’.]/;
+const DIGIT_RE = /[0-9]/;
 
-/** 낱말 조각 끝의 영문·숫자 덩어리 ('원익IP'의 'IP') */
-const LATIN_TAIL_RE = /[A-Za-z0-9&]+$/;
 /**
- * 끊은 자리(cut) 앞 낱말 조각이 그 낱말 앞으로 물려야 할 조각인지. 조각 끝에서 뒤 글자(원문)와 같은 글자 갈래의 덩어리로 잰다 —
- * 뒤가 한글이면 끝 한글 덩어리의 음절 수(영문·숫자 머리는 세지 않음 — 'SK하이|닉스'는 '하이' 2음절, '원익IPS까|지'는 '까' 1음절),
- * 뒤가 영문·숫자면 끝 영문·숫자 덩어리의 글자 수('원익IP|S'는 'IP' 2자, 'Acquis|ition'은 6자). 그 덩어리가 없으면(글자 갈래가 바뀌는 자리
- * 'SK|하이닉스'·'원익|IPS') 조각 전체의 글자 수. NEWS_ORPHAN_MAX 이하이고 토씨 예외가 아니면 물린다
+ * 제목의 낱말 경계 (코드 포인트 자리 p = 앞 p 글자 뒤): ok[p] 가 true 면 거기서 끊어도 낱말 가운데가 아니다.
+ * 띄어쓰기와 문장 부호(… ‥ · ㆍ , ; : / | [ ] ( ) 「 」 『 』 ‘ ’ “ ” 등)의 앞뒤가 낱말 경계이고, 다음은 한 낱말이다:
+ *  - 낱말 글자끼리 붙은 덩어리 — 한글·영문·숫자가 섞여도 ('SK하이닉스'·'106.6으로'·'국채금리까지'·'美증시'·'S&P500')
+ *  - 숫자 덩어리(복합 수·범위 — '7만 8581달러'·'2.6%→3.7%'), 숫자 사이 . , : / -, 영문 사이 줄임표·마침표
+ *  - 한쪽이 한 글자인 가운뎃점·붙임표·빗금 낱말 ('원·달러'·'K-반도체')
+ * 폭 없는 글자(U+200B 등)는 없는 것처럼 앞뒤 보이는 글자로 정한다
  */
-function isOrphan(frag: string, next: string, rest: string): boolean {
-  const hangul = HANGUL_TAIL_RE.exec(frag)?.[0] ?? "";
-  const run = HANGUL_CHAR_RE.test(next) ? hangul : (LATIN_TAIL_RE.exec(frag)?.[0] ?? "");
-  return Array.from(run || frag).length <= NEWS_ORPHAN_MAX && !beforeParticle(frag, hangul, rest);
+function wordBreaks(chars: readonly string[]): boolean[] {
+  const vis: string[] = [];
+  const visAt: number[] = [];
+  chars.forEach((c, i) => {
+    if (!isInvisible(c.codePointAt(0) ?? 0)) {
+      vis.push(c);
+      visAt.push(i);
+    }
+  });
+  const m = vis.length;
+  const word = vis.map((c) => WORD_CHAR_RE.test(c));
+  /** glue[q]: 보이는 글자 q-1 과 q 가 한 낱말 */
+  const glue = vis.map((_, q) => q > 0 && word[q - 1]! && word[q]!);
+  /** 가운뎃점·붙임표·빗금 한쪽 낱말이 한 글자인지 (숫자는 소수점·쉼표까지 한 덩어리로 센다 — '714억달러·78.3%'의 '78.3'은 한 글자가 아님) */
+  const short = (from: number, step: 1 | -1) => {
+    let s = "";
+    for (let j = from; j >= 0 && j < m; j += step) {
+      const inner = DIGIT_INNER_RE.test(vis[j]!) && DIGIT_RE.test(vis[j - 1] ?? "") && DIGIT_RE.test(vis[j + 1] ?? "");
+      if (!word[j] && !inner) break;
+      s += vis[j]!;
+    }
+    const n = Array.from(s).length;
+    return n === 1 || (n === 2 && /^[A-Za-z0-9]+$/.test(s));
+  };
+  for (let q = 1; q < m - 1; q++) {
+    const [a, c, b] = [vis[q - 1]!, vis[q]!, vis[q + 1]!];
+    const inner =
+      (DIGIT_INNER_RE.test(c) && DIGIT_RE.test(a) && DIGIT_RE.test(b)) ||
+      (LATIN_INNER_RE.test(c) && LATIN_LETTER_RE.test(a) && LATIN_LETTER_RE.test(b)) ||
+      (JOINER_RE.test(c) && word[q - 1]! && word[q + 1]! && (short(q - 1, -1) || short(q + 1, 1)));
+    if (inner) glue[q] = glue[q + 1] = true;
+  }
+  // 숫자 덩어리 안은 끊지 않는다 (UTF-16 자리 → 보이는 글자 자리)
+  const text = vis.join("");
+  const qOf = new Map<number, number>();
+  let u = 0;
+  vis.forEach((c, q) => {
+    qOf.set(u, q);
+    u += c.length;
+  });
+  qOf.set(u, m);
+  for (const n of titleNumbers(text)) for (let q = qOf.get(n.start)! + 1; q < qOf.get(n.end)!; q++) glue[q] = true;
+  const ok: boolean[] = [];
+  let q = 0;
+  for (let p = 0; p <= chars.length; p++) {
+    ok.push(q === 0 || q === m || !glue[q]);
+    if (visAt[q] === p) q++;
+  }
+  return ok;
 }
 
 /**
- * avail(글자 크기 배수) 안에 드는 가장 긴 앞부분 — 숫자 덩어리 안이거나 숫자로 끝나는 덩어리 바로 뒤면 그 덩어리 앞에서.
- * 낱말 가운데서 끊게 되면: 남는 조각(마지막 띄어쓰기·문장 부호 뒤)이 짧으면(isOrphan — 한글 낱말은 끝 한글 덩어리가 NEWS_ORPHAN_MAX 음절 이하)
- * 그 낱말 앞(영문·숫자 머리까지 — 'SK하이|닉스'는 'SK하이닉스' 앞)에서 끊는다
- * ('…상승 마감…다우'를 '…상승 마감…다…'가 아니라 '…상승 마감…'으로 — '다'로 끝난 문장처럼 읽히지 않게). 조각이 더 길면('Acquis…') 그대로 두어
- * 줄 끝 빈 곳을 작게 한다. 끊은 자리 뒤가 헷갈리지 않는 토씨뿐이고 앞 조각이 낱말이면('영업점|에'·'코스피|는') 두고(beforeParticle), 두 음절 토씨
- * 가운데면('실현으|로'·'106.6으|로' — 앞 글자가 한글·숫자·영문 무엇이든) 토씨 앞으로 한 글자 물린 뒤 다른 규칙을 본다('…소비심리 106.6' → 숫자 앞
- * '…소비심리'). 붙임표 낱말의 한두 글자 앞 조각('…K|-반도체'·'…FOMC D|-1'·'…미|-이란')에서 끊기면 그 붙임표 낱말 앞에서.
- * 끝의 구분자·여는 따옴표는 뗀다(trimCutEnd). 물린 뒤 남는 앞부분이 NEWS_MIN_HEAD 자보다 짧아지면 물리지 않는다 (아주 좁은 칸). 규칙들은 더 바뀌지
- * 않을 때까지 번갈아 본다 — 숫자 앞으로 물린 자리가 낱말 가운데이거나 낱말 앞으로 물린 자리가 숫자 덩어리 안일 수 있다 ('다우·S&P500' → 'S&P…'가 아니라 '다우…')
+ * avail(글자 크기 배수) 안에 드는 가장 긴 앞부분을 **낱말 경계에서만** 끊는다 (검증 보정 4 — 음절·토씨 규칙을 모두 걷어냄):
+ * 들어가는 가장 긴 앞부분에서 마지막 낱말 경계(wordBreaks)로 물린 뒤, 끝의 구분자·여는 괄호·여는 따옴표를 뗀다(trimCutEnd) — 그래서 보이는 글은
+ * 늘 원문 낱말을 통째로 보인 뒤에서 끝난다 ('…국채금리까…'가 아니라 '…돌파…', '…SK하이…'가 아니라 '…미국반도체에…', '…106.6으…'가 아니라
+ * '…소비심리…', '…원…'(원·달러)이 아니라 '…뚫자…'). 숫자도 낱말이라 덩어리 전체가 보이면 그 뒤에서 끊을 수 있다 ('…상승해 6,894.23…').
+ * 아주 좁은 칸 예외: 그렇게 끊어 보이는 글자가 NEWS_MIN_HEAD 자보다 적으면 예전처럼 글자 단위로 끊는다(낱말 가운데일 수 있음 — 숫자 덩어리
+ * 안이거나 숫자로 끝나는 덩어리 바로 뒤면 그 덩어리 앞에서)
  */
 function cutTitle(title: string, avail: number): string {
   const chars = Array.from(title);
   let k = 0;
   let em = 0;
   while (k < chars.length && em + charEm(chars[k]!) <= avail) em += charEm(chars[k++]!);
-  let head = chars.slice(0, k).join("");
+  const ok = wordBreaks(chars);
+  let head = "";
+  for (let p = k; ; ) {
+    while (p > 0 && !ok[p]) p--;
+    head = trimCutEnd(chars.slice(0, p).join(""), title);
+    p = Array.from(head).length;
+    if (ok[p]) break;
+  }
+  if (visibleLength(head) >= NEWS_MIN_HEAD) return head;
+  // 아주 좁은 칸 예외 (글자 단위 — 예전 규칙 그대로)
   const numbers = titleNumbers(title);
+  head = chars.slice(0, k).join("");
   for (;;) {
     head = trimCutEnd(head, title);
-    const cut = head.length;
-    // 숫자 덩어리 안이거나 숫자로 끝나는 덩어리 바로 뒤, 또는 범위·바뀜('2.6%→2.4%'·'5.4명→'·'3~4%')의 앞 숫자 바로 뒤면 그 숫자 앞에서 —
-    // 구분자를 뗀 '…성장률 2.6%…'가 바뀐 뒤 값처럼 읽히지 않게 (검증 보정 3)
-    const ranged = RANGE_NEXT_RE.test(title.slice(cut));
-    const hit = numbers.find((n) => n.start < cut && (cut < n.end || (cut === n.end && (n.digitEnd || ranged))));
-    if (hit) {
-      head = title.slice(0, hit.start);
-      continue;
-    }
-    // 두 음절 토씨 가운데('…실현으|로'·'…106.6으|로'·'…NYSE에|서')면 토씨를 통째로 넘긴다 — '…실현으…'가 아니라 '…실현…'(그 뒤 '실현|으로'는
-    // 토씨 예외), '…106.6으…'가 아니라 숫자 규칙으로 '…소비심리…' (검증 보정 3 must: 앞 글자가 숫자·영문일 때도)
-    if (cut > 1 && SPLIT_PARTICLE_RE.test(head[cut - 1]! + (title[cut] ?? "")) && visibleLength(head) > NEWS_MIN_HEAD) {
-      head = head.slice(0, -1);
-      continue;
-    }
-    // 붙임표 낱말의 한두 글자 앞 조각('…K|-반도체'·'…FOMC D|-1'·'…뉴욕증시, 미|-이란')이면 붙임표 낱말 앞에서 (검증 보정 3)
-    if (HYPHEN_JOIN_RE.test(title.slice(cut))) {
-      const frag = HYPHEN_HEAD_RE.exec(head);
-      if (frag) {
-        const before = trimCutEnd(head.slice(0, frag.index), title);
-        if (visibleLength(before) >= NEWS_MIN_HEAD) {
-          head = before;
-          continue;
-        }
-      }
-    }
-    // 낱말 가운데: 앞 글자와 뒤 글자(원문)가 모두 낱말 글자
-    if (cut > 0 && WORD_CHAR_RE.test(title[cut] ?? "") && WORD_CHAR_RE.test(head[cut - 1]!)) {
-      const frag = WORD_TAIL_RE.exec(head);
-      const rest = WORD_HEAD_RE.exec(title.slice(cut))?.[0] ?? "";
-      if (frag && frag.index > 0 && isOrphan(frag[0], title[cut]!, rest)) {
-        const before = trimCutEnd(head.slice(0, frag.index), title);
-        if (visibleLength(before) >= NEWS_MIN_HEAD) {
-          head = before;
-          continue;
-        }
-      }
-    }
-    break;
+    const at = head.length;
+    const hit = numbers.find((n) => n.start < at && (at < n.end || (at === n.end && n.digitEnd)));
+    if (!hit) return head;
+    head = title.slice(0, hit.start);
   }
-  return head;
 }
 
 /** 카드 뉴스 제목 줄: 보일 글과 줄 수 (보통 1, 아주 좁은 칸에서만 2) */
@@ -808,8 +790,8 @@ export interface NewsFit {
 
 /**
  * 카드 뉴스 제목 한 줄 (7차·8차 검토): 제목만 한 줄에 둔다 (언론사·시각은 상세에 — 화면 읽기는 카드 문장이 함께 읽는다).
- * 줄 폭(width dp)에 들어가지 않으면 말줄임을 안드로이드 한 줄 말줄임(글자 단위)에 맡기지 않고 여기서 자른다 — 잘릴 자리가 숫자(와 붙은 %·선·p·원·↑ 등,
- * '2만7000선' 같은 복합 수 전체) 안이거나 숫자 바로 뒤면 그 숫자 앞에서 끊고 '…'. 폭은 lineEm(실측 어림) + 여유 NEWS_FIT_MARGIN_EM 로 잰다.
+ * 줄 폭(width dp)에 들어가지 않으면 말줄임을 안드로이드 한 줄 말줄임(글자 단위)에 맡기지 않고 여기서 자른다 — 낱말 경계에서만 끊고 '…'
+ * (cutTitle: 숫자 덩어리·'2만7000선' 같은 복합 수·'2.6%→3.7%' 같은 범위도 한 낱말). 폭은 lineEm(실측 어림) + 여유 NEWS_FIT_MARGIN_EM 로 잰다.
  * 한 줄에 제목 앞부분이 NEWS_MIN_HEAD 자보다 적게 남는 아주 좁은 칸(큰 글씨 + 좁은 창)에서만 두 줄로 놓는다 ('…'만 남지 않게).
  * size = 글자 크기, scale = 글자 배율
  */
@@ -838,16 +820,6 @@ export function fitNewsTitle(title: string, width: number, size: number, scale: 
 
 /** 언론사 머리와 제목 사이 */
 export const NEWS_OUTLET_SEP = " · ";
-
-/**
- * 잘린 앞부분(head — title 의 앞부분)이 낱말 사이에서 끝나는지: 끊은 자리 앞 글자와 뒤 글자(원문)가 둘 다 낱말 글자면 낱말 가운데라 false
- * ('·'·'ㆍ'는 구분자 — '우려ㆍ|국채금리'는 낱말 사이). 테스트·측정이 쓴다
- */
-export function cutAtWordEnd(title: string, head: string): boolean {
-  if (!head || !title.startsWith(head)) return false;
-  if (head.length >= title.length) return true;
-  return !(WORD_CHAR_RE.test(head.slice(-1)) && WORD_CHAR_RE.test(title[head.length]!));
-}
 
 /** 카드 뉴스 줄: 흐린 언론사 머리(없으면 null) + 제목 글과 줄 수 */
 export interface NewsLineFit extends NewsFit {
