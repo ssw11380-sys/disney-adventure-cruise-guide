@@ -6,7 +6,7 @@ import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { buildDigest, KR_PREVIOUS_DAY_LINE, US_PREVIOUS_DAY_LINE, type DigestAccount, type DigestItem } from "../src/notifications/digest.js";
 import type { PushMessage, PushSendResult, PushSender } from "../src/notifications/push.js";
-import type { MarketStatus } from "../src/providers/market/calendar.js";
+import { MarketCalendar, type MarketStatus } from "../src/providers/market/calendar.js";
 import type { MarketIndex } from "../src/providers/market/indices.js";
 import { NaverDiscover } from "../src/providers/market/naverDiscover.js";
 import { parseGoogleRss } from "../src/providers/news/googleRss.js";
@@ -27,6 +27,7 @@ import {
   holdingsText,
   holidayText,
   isLeverageName,
+  isWebUrl,
   krSectors,
   LEVERAGE_RE,
   naverYield,
@@ -166,6 +167,25 @@ describe("환율·금리 줄의 날짜 표기 (휴장이면 금리에도 'M/D �
     // 일별 시리즈를 못 받아도 영업일 오후 새 값이면 오늘
     expect(pickFx(row, null, "2026-09-23", { now: at("2026-09-23T16:00:00+09:00"), krOpenToday: true })!.date).toBe("2026-09-23");
     expect(pickFx(row, null, "2026-09-23")!.date).toBeNull();
+  });
+
+  it("'10:00 뒤는 오늘 고시값' 규칙은 오후 요약에만 — 아침 요약을 10:00 뒤 다시 만들어도 직전 영업일 고시(일별 종가)와 '(M/D 고시)' (3차 검토)", () => {
+    // 추석 연휴 뒤 화요일(9/29): 일별 시리즈 9/23 1,359.00 → 9/28 1,362.00, 띠에는 12:00 에 오늘 고시값 1,365.00
+    const daily = [{ date: "2026-09-22", close: 1355.5 }, { date: "2026-09-23", close: 1359 }, { date: "2026-09-28", close: 1362 }];
+    const live = { value: 1365, change: 3, changeRate: 0.22 };
+    const noon = { now: at("2026-09-29T12:00:00+09:00"), krOpenToday: true } as const;
+    const am = pickFx(live, daily, "2026-09-29", { ...noon, session: "morning" })!;
+    expect(am).toEqual({ value: 1362, change: 3, changeRate: 0.22, date: "2026-09-28", stale: false });
+    expect(fxText({ fx: am, date: "2026-09-29" })).toBe("원/달러 1,362.00원 +3.00원 (9/28 고시)");
+    // 같은 때 오후 요약은 띠 값을 오늘 고시로
+    expect(pickFx(live, daily, "2026-09-29", { ...noon, session: "afternoon" })).toMatchObject({ value: 1365, date: "2026-09-29" });
+    // 아침 08:30(아직 오늘 고시 전)은 띠 값 그대로 + 일별 시리즈 날짜
+    const early = { value: 1362, change: 3, changeRate: 0.22 };
+    expect(pickFx(early, daily, "2026-09-29", { now: at("2026-09-29T08:30:00+09:00"), krOpenToday: true, session: "morning" })).toMatchObject({ value: 1362, date: "2026-09-28" });
+    // 10:00 뒤인데 종가를 모르면 오늘 값에 전날 날짜를 붙이지 않는다 ('고시일 확인 못 함')
+    const noClose = pickFx(live, [{ date: "2026-09-28" }], "2026-09-29", { ...noon, session: "morning" })!;
+    expect(noClose.date).toBeNull();
+    expect(fxText({ fx: noClose, date: "2026-09-29" })).toBe("원/달러 1,365.00원 +3.00원 (고시일 확인 못 함)");
   });
 });
 
@@ -462,6 +482,76 @@ describe("뉴스 제목 고르기 (원문 그대로 · 창 · 거르기 · 같�
     for (const t of ["반도체 매수하라", "지금 사라, 반도체주", "지금이 저점 매수 적기", "매수 적기", "지금이 매수적기", "월가 톱픽은 엔비디아", "테슬라 투자의견 '매수'로 상향", "비중 늘려라", "지금이 살 때다", "반도체 담을 때", "현금 비중 줄여라"]) expect(blockedTitle(t), t).toBe(true);
     for (const t of ["관세 불확실성 사라져…뉴욕증시 상승 마감", "공포 사라진 월가, 3대 지수 상승", "나스닥 0.48% 올라 마감", "반도체주 강세 속 상승 마감", "실적기대감에 반도체 강세"]) expect(blockedTitle(t), t).toBe(false);
   });
+
+  // 3차 검토 must: 앱의 권유 금지 목록(app/test/wording.test.ts BANNED) 17개 중 10개가 거르기를 통과했다 (예: 창 안 통신사 기사 '월가 "엔비디아 적극 매수"')
+  const BANNED = (() => {
+    const src = readFileSync(new URL("../../app/test/wording.test.ts", import.meta.url), "utf8");
+    const m = /const BANNED = (\[[^\]]*\]);/.exec(src);
+    return JSON.parse(m![1]!) as string[];
+  })();
+
+  it("앱 권유 금지 목록(wording.test BANNED)의 문구는 모두 막힌다 — 그 문구만 있어도, 통신사 제목 안에 있어도", () => {
+    expect(BANNED.length).toBeGreaterThanOrEqual(17);
+    for (const w of BANNED) {
+      expect(blockedTitle(w), w).toBe(true);
+      expect(blockedTitle(`[뉴욕증시] 월가 "엔비디아 ${w}"…나스닥 1%↑`), w).toBe(true);
+    }
+    // 창 안 통신사 기사라도 카드 첫 제목이 되지 않는다
+    const w = newsWindow("US", "2026-09-25", at("2026-09-28T08:30:00+09:00"));
+    const bad: NewsItem = { title: '[뉴욕증시] 월가 "엔비디아 적극 매수"…나스닥 1%↑', url: "https://news.google.com/rss/articles/ab", source: "연합뉴스", publishedAt: "2026-09-25T20:30:00Z", summary: null };
+    expect(pickNews([bad, ...parseGoogleRss(fixture("google-news-sample.xml"))], { ...w, days: newsDays("US", "2026-09-25") }).map((n) => n.outlet)).toEqual(["뉴스1", "KBS", "한국경제"]);
+  });
+
+  it("사는 쪽·파는 쪽 같은 꼴로 막는다 (당위·허락 묻기·명령·기회) — 사실을 적은 말은 둔다", () => {
+    for (const t of [
+      "엔비디아 지금 사야 한다",
+      "반도체주 사야 할 때",
+      "지금 사도 되나",
+      "지금 매수해도 된다…월가 낙관",
+      "지금 매도해도 될까",
+      "반도체 비중 늘려야",
+      "현금 비중 줄여야",
+      "AI 랠리 올라타라",
+      "지금이 기회",
+      "저가 매수 기회 왔다",
+      "테슬라 팔아야",
+      "지금 팔라",
+      "팔아도 되나",
+      "반도체 담아야",
+      "손절 타이밍",
+    ])
+      expect(blockedTitle(t), t).toBe(true);
+    for (const t of ["외국인 순매수에 코스피 0.9% 상승 마감", "개인 매수세 몰려", "기관 매도 우위", "팔라듐 가격 급등", "기회발전특구 지정", "기회비용 늘어", "회사야 어찌 되든", "공포 사라진 월가"]) expect(blockedTitle(t), t).toBe(false);
+  });
+
+  it("물음표 없는 물음('반등 오나'·'바닥 찍었나'·'랠리 계속되나'·'지금 들어가도 되나')과 예측 낱말('예측'·'관측'·'간다')도 뺀다 — '까지'·'내주며'·'관측소' 등은 둔다", () => {
+    for (const t of ["반등 오나", "반등 오나…나스닥 1%↑", "바닥 찍었나", "랠리 계속되나", "지금 들어가도 되나", "금리 인하 끝났나", "상승 이어가나", "대안 없나", "바닥 찍었는가", "코스피 3000 예측", "금리 동결 관측", "주가 2배 간다", "코스피 5000 간다…증권가"]) expect(blockedTitle(t), t).toBe(true);
+    for (const t of [
+      "반도체까지 오름세 넓어져",
+      "시총 1위 자리 내주며 하락",
+      "관세 불확실성 사라져…뉴욕증시 상승 마감",
+      "실적기대감에 반도체 강세",
+      "기상청 관측소 이전",
+      "가나 대통령 방한",
+      "3대 지수 중 하나만 올라",
+      "고점 지나 하락 마감",
+      "우리나라 수출 증가",
+      "나스닥 0.48% 올라 마감",
+      "뉴욕증시, 기술주 강세 속 상승 마감",
+      "시간외 거래 증가",
+    ])
+      expect(blockedTitle(t), t).toBe(false);
+  });
+
+  it("원문 링크는 http(s) 주소만 저장한다 (javascript:·intent: 같은 주소의 기사는 뺀다)", () => {
+    expect(isWebUrl("https://news.google.com/rss/articles/x")).toBe(true);
+    expect(isWebUrl("http://a.b/c")).toBe(true);
+    for (const u of ["javascript:alert(1)", "intent://x#Intent;end", "file:///etc/passwd", "", " ", null, undefined, "https://a b"]) expect(isWebUrl(u as string), String(u)).toBe(false);
+    const base: NewsItem = { title: "뉴욕증시 상승 마감", url: "javascript:alert(1)", source: "연합뉴스", publishedAt: "2026-09-25T20:30:00Z", summary: null };
+    const w = { from: "2026-09-25T19:50:00.000Z", to: "2026-09-26T02:00:00.000Z", days: [25, 26] };
+    expect(pickNews([base], w)).toEqual([]);
+    expect(pickNews([{ ...base, url: " https://news.google.com/rss/articles/ok " }], w).map((n) => n.url)).toEqual(["https://news.google.com/rss/articles/ok"]);
+  });
 });
 
 describe("세션 날짜·휴장 판단 (네이버 장 상태 → 토스 달력 → 휴장일 목록, 다르면 휴장 쪽)", () => {
@@ -493,6 +583,32 @@ describe("세션 날짜·휴장 판단 (네이버 장 상태 → 토스 달력 �
     expect(resolveDates({ session: "afternoon", date: "2026-09-23", kr: naver("2026-09-22", false, "x", "2026-09-21") })).toMatchObject({ basisDate: "2026-09-23", holiday: null });
     // 주말(평일만 돌기를 끈 경우)은 휴장 줄 없이 날짜만 직전 거래일로
     expect(resolveDates({ session: "afternoon", date: "2026-09-26" })).toMatchObject({ basisDate: "2026-09-23", holiday: null });
+  });
+
+  it("토스 달력과 휴장일 목록이 다르면 경고한다 (시장·날짜마다 한 번) — 한국은 휴장 쪽으로 본다 (3차 검토: 2027 목록은 계산값이라 틀리면 브리핑이 조용히 건너뛰어진다)", async () => {
+    const toss = (krEnd: string, krNext: string) =>
+      (async () =>
+        new Response(
+          JSON.stringify({ result: [{ productCode: "A005930", tradingEnd: krEnd, nextTradingStart: krNext }, { productCode: "US19801212001", tradingEnd: "2026-09-24T20:00:00Z", nextTradingStart: "2026-09-25T13:30:00Z" }] }),
+          { status: 200 },
+        )) as unknown as typeof fetch;
+    const warns: string[] = [];
+    const log = { warn: (_o: Record<string, unknown>, m: string) => void warns.push(m) };
+    // 토스는 9/25(추석)를 거래일로 알려 줌(장중) — 목록은 휴장 → 휴장으로 보고 경고 한 번
+    const cal = new MarketCalendar(toss("2026-09-25T11:00:00Z", "2026-09-27T23:00:00Z"), () => new Date("2026-09-25T03:00:00Z"), 60_000, log);
+    expect(await cal.isTradingDate("KR", "2026-09-25")).toBe(false);
+    expect(await cal.isTradingDate("KR", "2026-09-25")).toBe(false);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain("토스 달력은 거래일");
+    expect(warns[0]).toContain("목록 확인 필요");
+    // 토스는 10/1 을 휴장으로(9/30 마감 뒤 다음 개장 10/2) — 목록에는 없음 → 휴장으로 보고 경고
+    const cal2 = new MarketCalendar(toss("2026-09-30T11:00:00Z", "2026-10-01T23:00:00Z"), () => new Date("2026-10-01T03:00:00Z"), 60_000, log);
+    expect(await cal2.isTradingDate("KR", "2026-10-01")).toBe(false);
+    expect(warns[1]).toContain("토스 달력은 휴장");
+    // 같으면 조용하다
+    expect(await cal2.isTradingDate("KR", "2026-10-02")).toBe(true);
+    expect(await cal2.isTradingDate("KR", "2026-10-03")).toBe(false); // 토요일 (주말은 비교하지 않는다)
+    expect(warns).toHaveLength(2);
   });
 
   it("장중·잠정 라벨과 조기 폐장: 수능일 16:00 은 장중, 미국 겨울 07:00 은 최종값 전, 11/27 은 13:00 ET 마감", () => {
@@ -531,6 +647,28 @@ describe("일정 (정적 목록 · 24시간 안 · 가까운 순 2개)", () => {
     // 한국 휴장일 오후: 다음 개장(시각까지)
     expect(eventsText({ events: { within: [nextOpenEvent("2026-09-25")], next: null, unknown: [] } }, at("2026-09-25T16:00:00+09:00"))).toBe("일정 · 다음 개장 9/28(월) 09:00");
     expect(nextOpenEvent("2026-12-31")).toMatchObject({ date: "2027-01-04", time: "10:00" }); // 새해 첫 거래일 10:00 개장
+  });
+
+  it("이어진 휴장의 이름이 다르면 '연말·신정', 다음 개장이 특수일이면 시각까지 ('다음 개장 1/4(월) 10:00') — 3차 검토", () => {
+    expect(line("2026-12-30T16:00:00+09:00")).toBe("일정 · 12/31~1/1 연말·신정 연휴 한국 휴장 · 다음 개장 1/4(월) 10:00");
+    // 같은 이름(추석 연휴·추석)은 하나로, 평소 개장(09:00)은 시각 없이 그대로
+    expect(line("2026-09-23T16:00:00+09:00")).toBe("일정 · 9/24~9/25 추석 연휴 한국 휴장 · 다음 개장 9/28(월)");
+  });
+
+  it("다음 개장은 네이버 다음 거래일(next.tradeBaseAt)을 먼저 — 목록에 없는 임시공휴일이 끼어도 맞게, 없거나 맞지 않으면 목록으로", () => {
+    // 휴장일 오후: 네이버가 다음 거래일 10/2 를 알려 주면(10/1 임시공휴일 — 목록에 없음) 10/2
+    expect(nextOpenEvent("2026-09-30", { today: "2026-09-30", next: "2026-10-02" })).toMatchObject({ date: "2026-10-02", time: "09:00" });
+    expect(nextOpenEvent("2026-09-30")).toMatchObject({ date: "2026-10-01" });
+    // 다른 날 받은 값·오늘보다 앞선 값·주말은 쓰지 않는다
+    expect(nextOpenEvent("2026-09-30", { today: "2026-09-29", next: "2026-10-02" }).date).toBe("2026-10-01");
+    expect(nextOpenEvent("2026-09-30", { today: "2026-09-30", next: "2026-09-30" }).date).toBe("2026-10-01");
+    expect(nextOpenEvent("2026-09-30", { today: "2026-09-30", next: "2026-10-03" }).date).toBe("2026-10-01");
+    // 새해 첫 거래일은 10:00 개장
+    expect(nextOpenEvent("2026-12-31", { today: "2026-12-31", next: "2027-01-04" })).toMatchObject({ date: "2027-01-04", time: "10:00" });
+    // 연휴 줄의 다음 개장: 네이버 다음 거래일이 연휴 뒤면 그 날(9/28 이 임시공휴일인 경우), 연휴 안이면(출처가 다름) 목록으로
+    const ops = (next: string) => eventsText({ events: { within: upcomingEvents(at("2026-09-23T16:00:00+09:00"), { krNext: { today: "2026-09-23", next } }).within, next: null, unknown: [] } }, at("2026-09-23T16:00:00+09:00"));
+    expect(ops("2026-09-29")).toBe("일정 · 9/24~9/25 추석 연휴 한국 휴장 · 다음 개장 9/29(화)");
+    expect(ops("2026-09-24")).toBe("일정 · 9/24~9/25 추석 연휴 한국 휴장 · 다음 개장 9/28(월)");
   });
 
   it("목록이 끝난 종류는 '모름'으로 빼고(틀린 일정보다 없는 일정), 종류별 마지막 날짜를 알려 준다", () => {
@@ -647,7 +785,7 @@ class RecordingPush implements PushSender {
 const TOKEN = "ExponentPushToken[bbbbbbbbbbbbbbbbbbbbbb]";
 
 /** 출처별 호출 수를 세는 가짜 출처 묶음 (녹화한 응답으로 답한다) */
-function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: string; trading: boolean; desc: string | null; latest: string }; slowMs?: number; krSec?: { note: string | null; asOf?: string | null } } ) {
+function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: string; trading: boolean; desc: string | null; latest: string; next?: string }; slowMs?: number; krSec?: { note: string | null; asOf?: string | null } } ) {
   const calls: Record<string, number> = {};
   const count = (k: string) => {
     calls[k] = (calls[k] ?? 0) + 1;
@@ -668,7 +806,8 @@ function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: st
     exchangeStatus: async () => {
       count("exchangeStatus");
       const session = { kind: "closed" as const, label: "", openAt: null, closeAt: null, tradeBaseAt: kt.latest };
-      return { KR: { latest: session, next: null, isTradingDay: kt.trading, today: { date: kt.date, isWeekdayHoliday: !kt.trading, holidayDescription: kt.desc } } };
+      const next = kt.next ? { kind: "preopen" as const, label: "", openAt: null, closeAt: null, tradeBaseAt: kt.next } : null;
+      return { KR: { latest: session, next, isTradingDay: kt.trading, today: { date: kt.date, isWeekdayHoliday: !kt.trading, holidayDescription: kt.desc } } };
     },
     isTradingDate: async () => (count("isTradingDate"), true),
     treasuryCsv: async () => (count("treasury"), fixture("treasury-2026.csv")),
@@ -936,6 +1075,64 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
       expect(timers).toHaveLength(2);
       svc2.stop();
       expect(timers[1]!.cancelled).toBe(true);
+    } finally {
+      await dbx.destroy();
+    }
+  });
+
+  it("이른 수동 실행(12:00 장중)을 확정 + 5분(15:35)에 저절로 다시 만든 요약은 뉴스 창이 15:35 에 닫혀 있어, 16:00 예약 실행이 한 번 더 만들어 16:00 까지 넓힌다 (3차 검토)", async () => {
+    const dbx = await createMigratedDb(":memory:");
+    try {
+      const { src, calls } = fakeSources({ session: "afternoon" });
+      const t = { now: at("2026-09-23T12:00:00+09:00") };
+      const kr = (code: string, name: string, rate: number): MarketIndex => ({ code, name, kind: "index", value: 100, change: 1, changeRate: rate, open: true, asOf: "2026-09-23T12:00:00+09:00", stale: false });
+      const timers: Array<{ fn: () => void; ms: number }> = [];
+      const svc = new MarketSummaryService({
+        db: dbx,
+        sources: { ...src, indices: async () => ((calls["indices"] = (calls["indices"] ?? 0) + 1), [kr("KOSPI", "코스피", 0.5), kr("KOSDAQ", "코스닥", -0.2)]) },
+        features: { enabled: async () => true },
+        now: () => t.now,
+        timer: (fn, ms) => (timers.push({ fn, ms }), () => undefined),
+      });
+      expect((await svc.generate("afternoon", { date: "2026-09-23" }))?.data?.phase).toBe("intraday");
+      expect(timers.map((x) => x.ms)).toEqual([215 * 60_000]); // 12:00 → 15:35
+      t.now = at("2026-09-23T15:35:00+09:00");
+      timers[0]!.fn();
+      await new Promise((r) => setTimeout(r, 30));
+      const auto = await svc.find("2026-09-23", "afternoon");
+      expect(auto?.data).toMatchObject({ phase: "final", origin: "refinal", news: { to: "2026-09-23T06:35:00.000Z" } });
+      // 16:00 예약 실행: 강제가 아니어도 다시 만들어 뉴스 창을 16:00 까지 (알림 첫 줄도 이 요약)
+      t.now = at("2026-09-23T16:00:10+09:00");
+      const before = calls["indices"]!;
+      const sched = await svc.afterRun({ session: "afternoon", date: "2026-09-23", partial: false });
+      expect(calls["indices"]).toBe(before + 1);
+      expect(sched?.data?.origin).toBeUndefined();
+      expect(sched?.data?.news.to).toBe("2026-09-23T07:00:10.000Z");
+      // 그 뒤에는 다시 부르지 않는다 (예약 실행이 한 번 더 돌아도)
+      await svc.afterRun({ session: "afternoon", date: "2026-09-23", partial: false });
+      expect(calls["indices"]).toBe(before + 1);
+    } finally {
+      await dbx.destroy();
+    }
+  });
+
+  it("한국 휴장 오후의 다음 개장은 네이버 다음 거래일 — 목록에 없는 임시공휴일(10/1)이 끼면 10/2, 목록과 다르면 경고 (3차 검토)", async () => {
+    const dbx = await createMigratedDb(":memory:");
+    try {
+      const { src } = fakeSources({ session: "afternoon", krToday: { date: "2026-09-30", trading: false, desc: "임시공휴일", latest: "2026-09-29", next: "2026-10-02" } });
+      const kr = (code: string, name: string, rate: number): MarketIndex => ({ code, name, kind: "index", value: 100, change: 1, changeRate: rate, open: false, asOf: "2026-09-29T20:15:00+09:00", stale: false });
+      const warns: string[] = [];
+      const svc = new MarketSummaryService({
+        db: dbx,
+        sources: { ...src, indices: async () => [kr("KOSPI", "코스피", 0.5), kr("KOSDAQ", "코스닥", -0.2)] },
+        features: { enabled: async () => true },
+        now: () => at("2026-09-30T16:00:10+09:00"),
+        log: { info: () => undefined, warn: (_o, m) => void warns.push(m) },
+      });
+      const r = await svc.generate("afternoon", { date: "2026-09-30" });
+      expect(r?.data).toMatchObject({ holiday: { date: "2026-09-30", name: "임시공휴일" }, basisDate: "2026-09-29" });
+      expect(eventsText(r!.data!, at("2026-09-30T16:01:00+09:00"))).toBe("일정 · 다음 개장 10/2(금) 09:00");
+      expect(warns.some((m) => m.includes("다음 개장이 출처마다 다름"))).toBe(true);
     } finally {
       await dbx.destroy();
     }

@@ -77,6 +77,7 @@ export interface DigestAccount {
  * 요약만으로는 알림을 만들지 않는다
  */
 export interface DigestMarket {
+  /** 시장 요약 id — 알림 data 의 marketSummaryId 로 남겨 두기만 한다 (누름 처리는 읽지 않는다: 예전처럼 브리핑 탭으로 가고, 요약 카드가 그 탭 맨 위에 있다) */
   id: number;
   /** 보내는 순간의 문구 ('밤사이 미국 나스닥 +0.48% · …') */
   line: string;

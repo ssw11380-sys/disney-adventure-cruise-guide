@@ -141,6 +141,11 @@ export interface MarketSummaryData {
   news: { query: string; from: string; to: string; items: SummaryNews[]; fresh: boolean };
   /** 받지 못한 것·뺀 까닭 (상세 화면 안내) */
   notes: string[];
+  /**
+   * refinal = 장중·최종값 전 요약을 확정 시각 + 5분에 저절로 다시 만든 것 (뉴스 창이 그 시각에 닫혀 있다).
+   * 그날 그 세션의 예약·수동 실행이 뒤에 오면 한 번 더 만들어 뉴스 창을 정상(마감 뒤 6시간 또는 실행 시각)으로 넓힌다. 예전에 저장한 요약에는 없다
+   */
+  origin?: "refinal";
 }
 
 // ── 상수 ────────────────────────────────────────────────────
@@ -187,23 +192,48 @@ const US_FINAL_MIN = 17 * 60 + 15;
 /** 물음표 제목은 뺀다 (고치지 않는다) */
 const QUESTION_RE = /[?？]/;
 /**
- * 매매 권유형·전망형 낱말이 든 제목은 뺀다 (물음표 없이 묻거나 내다보는 제목 포함: '사도 될까'·'매수 기회'·'지속될 듯'·'다음주 증시 체크포인트'·'내주 FOMC').
+ * 매매 권유형 제목은 뺀다 — 사는 쪽·파는 쪽을 같은 꼴로 막는다 (명령·권유·허락 묻기·당위).
+ * 앱 test/wording.test.ts 의 금지 문구 목록 전체가 여기서 막힌다 (backend 테스트가 그 목록을 읽어 하나씩 넣어 본다).
+ * 이 파일도 금지 문구 검사를 받으므로 금지 문구를 글자 그대로 적지 않고 묶음 꼴로 적는다 ('(?:적극|강력)\s?매[수도]' 등).
  *  - 목표가는 줄임말과 '목표(주)가'·띄어 쓴 꼴까지 (목표\s?주?가)
- *  - 명령·권유형: '매수하라'·'지금 사라'·'비중 늘려라'·'살 때다'·'담을 때'·'매수 적기'·'톱픽'·'투자의견'
- *    ('사라'는 뒤에 글자가 없을 때만 — '사라져'·'사라진'은 사실을 적은 말이라 두고, 권유로 읽히는 '사라'는 뺀다)
- *    ('적기'는 낱말 앞에서만 — '실적기대'의 '적기'는 아니다)
+ *  - 명령·권유형: '매수하라'·'지금 사라'·'비중 늘려라'·'살 때다'·'담을 때'·'매수 적기'·'톱픽'·'투자의견'·'올라타라'·'지금이 기회'
+ *  - 당위·허락 묻기: '사야 한다'·'팔아야'·'늘려야'·'사도 되나'·'지금 매수해도 된다'
+ *  - 단정·보장: '무조건'·'반드시', 수익(률)·원금을 보장한다는 말, '손절'·'익절'
+ *  사실을 적은 말은 둔다: '사라져'·'사라진'('사라'는 뒤에 글자가 없을 때만), '실적기대'('적기'는 낱말 앞에서만), '팔라듐', '기회비용'·'기회발전특구',
+ *  '회사야'('사야'는 낱말 앞에서만), '순매수'·'매수세'
  */
-export const NEWS_BLOCK_RE =
-  /(살까|팔까|사야 할|사도 될|팔아야|팔아도 될|팔아라|추천|목표\s?주?가|유망|담아라|매수하라|매도하라|매수해라|매도해라|사라(?=$|[\s,.…!·'"”’])|늘려라|줄여라|(?<![가-힣])(?:살|팔|담을)\s?때(?:다)?(?![가-힣])|(?<![가-힣])적기|매수\s?적기|매도\s?적기|톱픽|탑픽|투자\s?의견|매수 의견|매도 의견|매수 타이밍|매도 타이밍|매수 기회|매도 기회|저가 매수 기회|비중\s?확대|비중\s?축소|체크\s?포인트|전망|주간|이번\s?주|다음\s?주|내주(?=$|\s)|예상|향방|듯(?=$|[\s.,…·'"”’]))/;
+const ADVICE_RE =
+  /(살까|팔까|추천|목표\s?주?가|유망|톱픽|탑픽|투자\s?의견|매[수도]\s?(?:의견|적기|타이밍)|(?<![가-힣])적기|비중\s?(?:확대|축소)|기회(?!비용|발전)|(?:적극|강력)\s?매[수도]|매[수도](?:하세요|하라|해라|하자|해야|해도)|[사파]세요|(?:담아|늘려|줄여|팔아)(?:라|야)|(?<![가-힣])사야(?:겠|지)?(?![가-힣])|(?<![가-힣])사도\s?(?:되|돼|될|괜찮)|팔아도\s?(?:되|돼|될|괜찮)|(?<![가-힣])[사팔]라(?=$|[\s,.…!·'"”’])|(?<![가-힣])(?:살|팔|담을)\s?때(?:다)?(?![가-힣])|올라[타탈]|(?:수익률?|원금)\s?보장|무조건|반드시|손절|익절)/;
+/**
+ * 전망형 제목은 뺀다 (사용자 규칙 '전망 없이' — 월요일·연휴 뒤 창에 섞이는 주간 전망 기사 등): '이번주 증시 전망'·'다음주 체크포인트'·'내주 FOMC'·'지속될 듯'·
+ * '실적 예상'·'예측'·'~할 것이란 관측'·'2배 간다'·'바닥은 어디인가 … 찍었는가'. '관측소'·'내주며'는 사실을 적은 말이라 둔다
+ */
+const OUTLOOK_RE =
+  /(전망|주간|이번\s?주|다음\s?주|내주(?=$|\s)|예상|예측|관측(?!소)|향방|체크\s?포인트|(?:듯|간다|는가)(?=$|[\s.,…·!'"”’\])]))/;
 
-/** 한글 음절의 받침이 ㄹ 인지 ('될'·'갈'·'를') */
-const hasRieulFinal = (ch: string) => {
+/** 한글 음절의 받침 번호 (0 = 받침 없음, 8 = ㄹ, 18 = ㅄ, 20 = ㅆ). 한글 음절이 아니면 -1 */
+const finalOf = (ch: string) => {
   const c = ch.charCodeAt(0) - 0xac00;
-  return c >= 0 && c < 11_172 && c % 28 === 8;
+  return c >= 0 && c < 11_172 ? c % 28 : -1;
 };
-/** '~ㄹ까'로 묻는 제목 (물음표 없이): '상승 이어갈까'·'지금 사도 될까'·'반등할까…' — '반도체까지' 같은 말은 아니다 */
+/** 낱말 끝 (뒤에 한글·영문·숫자가 오지 않음) */
+const WORD_END = /^(?:$|[\s.,…·!'"”’\])~])/;
+/**
+ * 물음표 없이 묻는 제목:
+ *  - '~ㄹ까': '상승 이어갈까'·'지금 사도 될까'·'반등할까…' ('반도체까지'는 아니다)
+ *  - 낱말 끝 '~나': 과거형(받침 ㅆ·ㅄ) '바닥 찍었나'·'끝났나'·'대안 없나', '되나'·'오나' ('랠리 계속되나'·'반등 오나'·'지금 들어가도 되나'),
+ *    '~가나'는 앞에 글자가 붙을 때만 ('이어가나'·'올라가나' — 나라 이름 '가나'는 아니다). '하나'·'지나'·'우리나라'는 아니다
+ */
 export function asksQuestion(title: string): boolean {
-  for (const m of title.matchAll(/([가-힣])까(?![가-힣])/g)) if (hasRieulFinal(m[1]!)) return true;
+  for (const m of title.matchAll(/([가-힣])까(?![가-힣])/g)) if (finalOf(m[1]!) === 8) return true;
+  for (const m of title.matchAll(/([가-힣])나/g)) {
+    const i = m.index!;
+    if (!WORD_END.test(title.slice(i + 2))) continue;
+    const prev = m[1]!;
+    const f = finalOf(prev);
+    if (f === 20 || f === 18 || prev === "되" || prev === "오") return true;
+    if (prev === "가" && i > 0 && finalOf(title[i - 1]!) >= 0) return true;
+  }
   return false;
 }
 /** 통신사 기사를 먼저 */
@@ -407,18 +437,31 @@ export const FX_TODAY_FROM_MIN = 10 * 60;
  * 원/달러: 지수 띠와 같은 값(하나은행 고시 매매기준율)과, 일별 시리즈 마지막 날짜 = 그 고시의 날짜.
  * 일별 시리즈에 '오늘' 점이 하루가 끝나야 들어오는 경우(아직 실측 전)에도 오후 요약에 '(전날 고시)'가 틀리게 붙지 않게,
  * 오늘이 한국 영업일(krOpenToday)이고 10:00 뒤에 새로 받은 띠 값(stale 아님)이면 그 값의 날짜를 오늘로 본다.
- * 띠의 시세 시각(localTradedAt)은 고시 시각이 아니라 받은 무렵의 시각일 때가 있어(토요일 05:45 등 — 녹화 값) 날짜로 쓰지 않는다
+ * 띠의 시세 시각(localTradedAt)은 고시 시각이 아니라 받은 무렵의 시각일 때가 있어(토요일 05:45 등 — 녹화 값) 날짜로 쓰지 않는다.
+ * 이 '10:00 뒤는 오늘 고시값' 규칙은 오후(한국) 요약에만 쓴다. 아침(미국) 요약의 원/달러는 직전 한국 영업일 고시(상세 화면 안내와 같다) —
+ * 10:00 뒤에 아침 요약을 다시 만들면(수동 전체 실행) 띠에는 오늘 고시값이 있으므로, 일별 시리즈의 직전 영업일 종가와 그 앞 종가로 값·전일 대비를 채운다
+ * (종가를 모르면 오늘 값에 전날 날짜를 붙이지 않고 '고시일 확인 못 함')
  */
 export function pickFx(
   row: { value: number; change: number; changeRate: number; stale?: boolean } | null | undefined,
-  daily: ReadonlyArray<{ date: string }> | null,
+  daily: ReadonlyArray<{ date: string; close?: number | null }> | null,
   today: string,
-  opts: { now?: Date; krOpenToday?: boolean } = {},
+  opts: { now?: Date; krOpenToday?: boolean; session?: SummarySession } = {},
 ): SummaryFx | null {
   if (!row || !Number.isFinite(row.value)) return null;
-  let last = daily?.filter((c) => c.date <= today).at(-1)?.date ?? null;
+  const past = daily?.filter((c) => c.date <= today) ?? [];
+  let last = past.at(-1)?.date ?? null;
   const now = opts.now?.getTime();
   const liveToday = opts.krOpenToday === true && now !== undefined && row.stale !== true && kstDateOf(now) === today && kstMinutesOf(now) >= FX_TODAY_FROM_MIN;
+  if (opts.session === "morning") {
+    if (!liveToday) return { value: row.value, change: row.change, changeRate: row.changeRate, date: last, stale: row.stale === true };
+    const closes = past.filter((c) => c.date < today && typeof c.close === "number" && Number.isFinite(c.close) && c.close > 0);
+    const cur = closes.at(-1);
+    const before = closes.at(-2);
+    if (!cur || !before) return { value: row.value, change: row.change, changeRate: row.changeRate, date: null, stale: row.stale === true };
+    const change = (Math.round(cur.close! * 100) - Math.round(before.close! * 100)) / 100;
+    return { value: cur.close!, change, changeRate: Math.round((change / before.close!) * 10_000) / 100, date: cur.date, stale: false };
+  }
   if (liveToday && (last === null || last < today)) last = today;
   return { value: row.value, change: row.change, changeRate: row.changeRate, date: last, stale: row.stale === true };
 }
@@ -625,13 +668,18 @@ export function titleDays(title: string): number[] {
   return out;
 }
 
-/** 걸러야 할 제목인지 (물음표·'~ㄹ까' 물음·권유 낱말·전망형 낱말) */
+/** 걸러야 할 제목인지 (물음표·물음표 없는 물음·권유 낱말·전망형 낱말) */
 export function blockedTitle(title: string): boolean {
-  return QUESTION_RE.test(title) || asksQuestion(title) || NEWS_BLOCK_RE.test(title);
+  return QUESTION_RE.test(title) || asksQuestion(title) || ADVICE_RE.test(title) || OUTLOOK_RE.test(title);
+}
+
+/** 원문 링크로 쓸 수 있는 주소인지 (http·https 만 — 다른 꼴(javascript:·intent: 등)은 저장하지도 열지도 않는다) */
+export function isWebUrl(url: string | null | undefined): url is string {
+  return typeof url === "string" && /^https?:\/\/[^\s]+$/i.test(url.trim());
 }
 
 /**
- * 뉴스 제목 고르기 (원문 그대로 — 고치지 않는다): 시간 창 안, 물음표·권유·전망 낱말 없음, 다른 날짜가 박힌 제목 없음.
+ * 뉴스 제목 고르기 (원문 그대로 — 고치지 않는다): 시간 창 안, 물음표·권유·전망 낱말 없음, 다른 날짜가 박힌 제목 없음, 링크는 http(s) 주소만.
  * 같은 기사(정규화 제목)·같은 언론사는 1건. 속보보다 본기사, 통신사 먼저, 그다음 이른 시각 순. 최대 NEWS_MAX
  */
 export function pickNews(items: readonly NewsItem[], opts: { from: string; to: string; days: number[] }): SummaryNews[] {
@@ -640,7 +688,7 @@ export function pickNews(items: readonly NewsItem[], opts: { from: string; to: s
   const allowed = new Set(opts.days);
   const cands = items.filter((it) => {
     const t = Date.parse(it.publishedAt);
-    if (!it.title || !it.source || !it.url || Number.isNaN(t) || t < from || t > to) return false;
+    if (!it.title || !it.source || !isWebUrl(it.url) || Number.isNaN(t) || t < from || t > to) return false;
     if (blockedTitle(it.title)) return false;
     return titleDays(it.title).every((d) => allowed.has(d));
   });
@@ -658,7 +706,7 @@ export function pickNews(items: readonly NewsItem[], opts: { from: string; to: s
     if (outlets.has(it.source!) || (key && titles.has(key))) continue;
     outlets.add(it.source!);
     if (key) titles.add(key);
-    out.push({ title: it.title, outlet: it.source!, publishedAt: new Date(Date.parse(it.publishedAt)).toISOString(), url: it.url });
+    out.push({ title: it.title, outlet: it.source!, publishedAt: new Date(Date.parse(it.publishedAt)).toISOString(), url: it.url.trim() });
     if (out.length >= NEWS_MAX) break;
   }
   return out;

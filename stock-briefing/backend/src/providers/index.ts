@@ -134,7 +134,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     news: new NewsProviderChain(newsChain, log),
     financials: dart,
     financialsUs: new EdgarProvider(),
-    calendar: new MarketCalendar(),
+    // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번)
+    calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log),
     investorFlow: kis ?? tossOpenApi,
     generator,
     dart,

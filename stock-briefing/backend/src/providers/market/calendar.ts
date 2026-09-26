@@ -56,6 +56,12 @@ function addDays(date: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** 평일(월~금)인지 */
+function guessWeekday(date: string): boolean {
+  const wd = new Date(`${date}T12:00:00Z`).getUTCDay();
+  return wd >= 1 && wd <= 5;
+}
+
 /** 달력 없이 짐작한 거래일: 평일, 미국은 US_HOLIDAYS, 한국은 KR_HOLIDAYS 도 뺀다 */
 function guessTradingDate(market: MarketKey, date: string): boolean {
   return market === "US" ? isUsTradingDate(date) : isKrTradingDate(date);
@@ -121,11 +127,15 @@ export class MarketCalendar {
     private readonly fetchFn: FetchFn = fetch,
     private readonly now: () => Date = () => new Date(),
     private readonly ttlMs = 5 * 60_000,
+    /** 출처(토스 달력·휴장일 목록)끼리 다를 때 경고 (시장·날짜마다 한 번) */
+    private readonly log: { warn(obj: Record<string, unknown>, msg: string): void } = { warn: () => {} },
   ) {}
 
   private inflight: Promise<MarketStatus> | null = null;
   /** 시장별로 마지막에 받은 토스 달력 — 조회가 실패해도 날짜별 사실(knownTradingDays)은 그대로 쓴다 */
   private lastToss: Partial<Record<MarketKey, MarketState>> = {};
+  /** 이미 경고한 '시장|날짜' (같은 날 여러 번 물어도 로그는 한 번) */
+  private warned = new Set<string>();
 
   async status(): Promise<MarketStatus> {
     const now = this.now();
@@ -171,13 +181,31 @@ export class MarketCalendar {
 
   /**
    * 그 시장 현지 날짜(YYYY-MM-DD)가 거래일인지 — "지금"이 아니라 정해진 날짜로 묻는다 (브리핑 세션이 다루는 거래일).
-   * 토스 달력이 아는 날이면 그대로(조회가 실패하면 마지막으로 받은 토스 달력), 모르면 요일(미국은 US_HOLIDAYS, 한국은 KR_HOLIDAYS 도)로 짐작한다
+   * 토스 달력이 아는 날이면 그대로(조회가 실패하면 마지막으로 받은 토스 달력), 모르면 요일(미국은 US_HOLIDAYS, 한국은 KR_HOLIDAYS 도)로 짐작한다.
+   * 한국 휴장일 목록에 있는 날은 토스 달력이 거래일이라 해도 휴장 쪽으로 본다(출처끼리 다르면 휴장).
+   * 평일인데 토스 달력과 휴장일 목록이 다르면 로그로 경고한다 — 2027 목록은 공지 전 계산값이라, 목록이 틀리면 실제 거래일의 한국 종목 브리핑이
+   * 조용히 건너뛰어지는 것을 로그로라도 알 수 있게 (미국은 지금처럼 토스 달력이 먼저, 경고만)
    */
   async isTradingDate(market: MarketKey, date: string): Promise<boolean> {
-    // 한국 휴장일 목록에 있는 날은 달력이 거래일이라 해도 휴장 쪽으로 본다 (출처끼리 다르면 휴장)
+    const listed = market === "KR" ? !(date in KR_HOLIDAYS) : isUsTradingDate(date);
+    const weekday = guessWeekday(date);
+    const s = await this.status().catch(() => null);
+    const cal = s?.[market].source === "toss" ? s[market] : this.lastToss[market];
+    const known = knownTradingDays(market, cal).get(date);
+    if (weekday && known !== undefined && known !== listed) this.warnOnce(market, date, known);
     if (market === "KR" && date in KR_HOLIDAYS) return false;
-    const s = await this.status();
-    const cal = s[market].source === "toss" ? s[market] : this.lastToss[market];
-    return knownTradingDays(market, cal).get(date) ?? guessTradingDate(market, date);
+    return known ?? guessTradingDate(market, date);
+  }
+
+  private warnOnce(market: MarketKey, date: string, toss: boolean): void {
+    const key = `${market}|${date}`;
+    if (this.warned.has(key)) return;
+    this.warned.add(key);
+    const list = market === "KR" ? "KR_HOLIDAYS" : "US_HOLIDAYS";
+    const kr = market === "KR";
+    const msg = toss
+      ? `${kr ? "한국" : "미국"} ${date}: 토스 달력은 거래일, 휴장일 목록(${list})은 휴장 → ${kr ? "휴장으로 봄 (목록이 틀렸으면 그날 한국 종목 브리핑이 건너뛰어짐 — 목록 확인 필요)" : "토스 달력을 따름 (목록 확인 필요)"}`
+      : `${kr ? "한국" : "미국"} ${date}: 토스 달력은 휴장, 휴장일 목록(${list})에는 없음 → 휴장으로 봄 (목록 확인 필요)`;
+    this.log.warn({ market, date, toss, list: !toss }, msg);
   }
 }

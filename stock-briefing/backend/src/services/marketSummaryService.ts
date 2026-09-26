@@ -10,7 +10,7 @@ import type { NewsItem } from "../providers/news/types.js";
 import type { DigestMarket } from "../notifications/digest.js";
 import { reutersCandidates } from "../providers/market/tossTics.js";
 import { briefingMarketDate } from "./briefingService.js";
-import { eventsCoverage, nextOpenEvent, upcomingEvents, type OfficialKind } from "./marketEvents.js";
+import { eventsCoverage, nextKrTradingDate, nextOpenEvent, upcomingEvents, type KrNextOpen, type OfficialKind } from "./marketEvents.js";
 import { isKrTradingDate } from "./marketContext.js";
 import {
   compareHoldings,
@@ -73,8 +73,8 @@ export interface UsQuoteLite {
 export interface MarketSummarySources {
   /** 지수 띠와 같은 목록 (MarketIndices, 30초 캐시·stale 규칙) */
   indices(): Promise<MarketIndex[]>;
-  /** 원/달러 일별 고시 (날짜만 쓴다) */
-  fxDaily(): Promise<Array<{ date: string }>>;
+  /** 원/달러 일별 고시 (날짜 = 고시일, close = 그날 마지막 고시 — 아침 요약을 10:00 뒤 다시 만들 때 직전 영업일 값으로 쓴다) */
+  fxDaily(): Promise<Array<{ date: string; close?: number | null }>>;
   /** 네이버 거래소 장 상태 (today·latest.tradeBaseAt) */
   exchangeStatus(): Promise<Partial<Record<"KR" | "US", ExchangeStatus>>>;
   /** 토스 달력의 그 날짜 거래일 여부 */
@@ -198,7 +198,7 @@ export class MarketSummaryService {
    * 성공한 건이 있는데 그 거래일 다음 장이 이미 열렸으면(한국 22:30 뒤 수동 '오전 브리핑' 등) force 여도 다시 만들지 않는다 —
    * 지수 띠가 새 거래일 값이라 다시 만들면 지수가 모두 빠져 좋은 요약이 '생성 실패'로 바뀐다
    */
-  async generate(session: SummarySession, opts: { date: string; force?: boolean }): Promise<MarketSummary | null> {
+  async generate(session: SummarySession, opts: { date: string; force?: boolean; refinal?: boolean }): Promise<MarketSummary | null> {
     if (!(await this.enabled())) return null;
     const key = `${opts.date}|${session}`;
     const cur = this.inflight.get(key);
@@ -206,7 +206,7 @@ export class MarketSummaryService {
     const p = (async () => {
       const existing = await this.find(opts.date, session);
       if (existing?.status === "ok") {
-        if (!opts.force && !this.outdated(existing)) return existing;
+        if (!opts.force && !this.outdated(existing, opts.refinal === true)) return existing;
         const d = existing.data;
         if (d && this.now().getTime() >= nextSessionOpenAt(d.market, d.basisDate)) {
           this.deps.log?.info({ date: opts.date, session, basisDate: d.basisDate }, "다음 장이 열린 뒤라 시장 요약을 다시 만들지 않고 먼저 만든 것을 둠");
@@ -215,7 +215,7 @@ export class MarketSummaryService {
       }
       this.running++;
       try {
-        return await this.build(session, opts.date);
+        return await this.build(session, opts.date, opts.refinal === true);
       } finally {
         this.running--;
       }
@@ -229,17 +229,22 @@ export class MarketSummaryService {
   }
 
   /**
-   * 장중·최종값 전에 만든 요약인데 지금은 확정된 뒤인지 (수동 실행을 브리핑 시각보다 먼저 돌린 경우 등) —
-   * 그러면 예약 실행이 '이미 있음'으로 건너뛰지 않고 확정 값으로 다시 만든다
+   * 다시 만들어야 하는 요약인지:
+   *  - 장중·최종값 전에 만든 요약인데 지금은 확정된 뒤 (수동 실행을 브리핑 시각보다 먼저 돌린 경우 등) — 예약 실행이 '이미 있음'으로 건너뛰지 않고 확정 값으로
+   *  - 확정 뒤 저절로 다시 만든 요약(origin 'refinal')인데 이번에는 세션 실행(예약·수동)이 부른 것 — 저절로 다시 만든 요약은 뉴스 창이 확정 + 5분에 닫혀
+   *    (예: 12:00 수동 실행 → 15:35 다시 만들기 → 15:20~15:35 기사만) 16:00 예약 실행이 뉴스 창을 정상으로 넓혀 한 번 더 만든다
    */
-  private outdated(s: MarketSummary): boolean {
+  private outdated(s: MarketSummary, byRefinal: boolean): boolean {
     const d = s.data;
-    return !!d && d.phase !== "final" && phaseOf(d.market, d.basisDate, this.now()) === "final";
+    if (!d) return false;
+    if (d.phase !== "final" && phaseOf(d.market, d.basisDate, this.now()) === "final") return true;
+    return !byRefinal && d.origin === "refinal";
   }
 
   /**
    * 장중·최종값 전 요약을 확정 시각 + REFINAL_DELAY_MS 에 한 번 다시 만든다 (예약 실행은 하루 한 번이라 그대로 두면 카드에 '장중 값'이 계속 남는다).
-   * 다시 만들 때는 generate(강제 아님) → outdated() 로 확정 값을 받아 덮는다. 알림은 새로 보내지 않는다. 서버를 닫으면(stop) 취소
+   * 다시 만들 때는 generate(강제 아님, refinal) → outdated() 로 확정 값을 받아 덮고 origin 'refinal' 로 적는다 — 그날 세션 실행이 뒤에 오면 그 실행이 한 번 더 만든다.
+   * 알림은 새로 보내지 않는다. 서버를 닫으면(stop) 취소
    */
   private scheduleRefinal(s: MarketSummary): void {
     const d = s.data;
@@ -251,7 +256,7 @@ export class MarketSummaryService {
     const cancel = (this.deps.timer ?? defaultTimer)(() => {
       this.refinal.delete(key);
       if (this.stopped) return;
-      this.generate(d.session, { date: d.date }).catch((e: unknown) => {
+      this.generate(d.session, { date: d.date, refinal: true }).catch((e: unknown) => {
         this.deps.log?.warn({ date: d.date, session: d.session, err: (e as Error).message }, "확정 뒤 시장 요약 다시 만들기 오류");
       });
     }, ms);
@@ -270,7 +275,7 @@ export class MarketSummaryService {
     return settle(timed(Promise.resolve().then(p), this.deps.sourceTimeoutMs ?? SOURCE_WAIT_MS, label));
   }
 
-  private async build(session: SummarySession, date: string): Promise<MarketSummary> {
+  private async build(session: SummarySession, date: string, refinal = false): Promise<MarketSummary> {
     const s = this.deps.sources;
     const now = this.now();
     const market = marketOf(session);
@@ -313,9 +318,10 @@ export class MarketSummaryService {
     ]);
 
     const fxRow = (idx.ok ? idx.value : []).find((i) => i.code === "USDKRW");
-    // 오늘이 한국 영업일인지 (휴장일 목록 + 네이버 오늘 장 상태 + 오후 요약의 휴장 판단) — 영업일 10:00 뒤 띠 값은 오늘 고시값
+    // 오늘이 한국 영업일인지 (휴장일 목록 + 네이버 오늘 장 상태 + 오후 요약의 휴장 판단) — 영업일 10:00 뒤 띠 값은 오늘 고시값.
+    // 오후 요약은 그 값을 오늘 고시로 적고, 아침 요약은 직전 영업일 고시(일별 종가)로 둔다 (pickFx)
     const krOpenToday = isKrTradingDate(date) && !(kr?.today?.date === date && kr.isTradingDay === false) && !(market === "KR" && dates.holiday);
-    const fx = pickFx(fxRow, fxDaily.ok ? fxDaily.value : null, date, { now, krOpenToday });
+    const fx = pickFx(fxRow, fxDaily.ok ? fxDaily.value : null, date, { now, krOpenToday, session });
     if (!fx) notes.push("원/달러를 받지 못함");
     else if (!fx.date) notes.push("원/달러 고시 날짜를 확인하지 못함");
     const yield10y: SummaryYield | null = yieldR.ok ? yieldR.value : null;
@@ -351,13 +357,16 @@ export class MarketSummaryService {
     if (!holdCmp) notes.push(`${market === "US" ? "미국" : "국내"} 보유 종목이 없어 내 종목 줄을 뺌`);
     else if (holdCmp.compared === 0) notes.push("지수 또는 종목 시세를 받지 못해 내 종목을 비교하지 못함");
 
-    const ev = upcomingEvents(now);
-    const within = [...ev.within];
+    // 네이버 장 상태의 한국 다음 거래일 (오늘 받은 값만) — 다음 개장은 이 값을 먼저 쓰고, 없으면 휴장일 목록으로 센다
+    const krNext: KrNextOpen | null = kr?.today?.date === date && kr.next?.tradeBaseAt ? { today: date, next: kr.next.tradeBaseAt } : null;
+    const ev = upcomingEvents(now, { krNext });
+    let within = [...ev.within];
     // 오늘 한국 휴장(오후 요약)이면 다음 개장을 맨 앞에 (시각까지)
     if (market === "KR" && dates.holiday) {
-      const open = nextOpenEvent(date);
-      if (!within.some((e) => e.kind === "kr-open" && e.date === open.date)) within.unshift(open);
-      else within.splice(within.findIndex((e) => e.kind === "kr-open" && e.date === open.date), 1, open);
+      const open = nextOpenEvent(date, krNext);
+      const listed = nextKrTradingDate(date);
+      if (open.date !== listed) this.deps.log?.warn({ session, date, naver: open.date, list: listed }, "한국 다음 개장이 출처마다 다름: 네이버 다음 거래일을 씀 (휴장일 목록 확인 필요)");
+      within = [open, ...within.filter((e) => e.kind !== "kr-open")];
     }
     this.warnUnknownEvents(ev.unknown, date);
 
@@ -382,6 +391,7 @@ export class MarketSummaryService {
       events: { within, next: ev.next, unknown: ev.unknown },
       news: { query: news.query, from: window.from, to: window.to, items: news.items, fresh: !dates.holiday && basisDate === dates.marketDate },
       notes: [...notes, ...news.notes],
+      ...(refinal ? { origin: "refinal" as const } : {}),
     };
     const ok = indices.some((i) => i.changeRate !== null);
     const summary = ok ? summaryLines(data, now).map((l) => l.text).join("\n") : "지수를 받지 못해 시장 요약을 만들지 못했습니다";
@@ -555,7 +565,7 @@ const NEWS_CACHE_MS = 10 * 60_000;
  */
 export function defaultSummarySources(d: {
   db: Db;
-  indices: { list(opts: { stale?: boolean }): Promise<MarketIndex[]>; candles(code: string, period: "D", count: number): Promise<{ candles: Array<{ date: string }> } | null> };
+  indices: { list(opts: { stale?: boolean }): Promise<MarketIndex[]>; candles(code: string, period: "D", count: number): Promise<{ candles: Array<{ date: string; close?: number | null }> } | null> };
   naver: { marketStatus(): ReturnType<MarketSummarySources["exchangeStatus"]>; usQuotes(r: string[]): Promise<ReadonlyMap<string, { changeRate: number; tradedAt: string | null; name: string; market: string; code: string }>>; krQuotes(c: string[]): Promise<ReadonlyMap<string, KrQuote>> };
   calendar: { isTradingDate(market: "KR" | "US", date: string): Promise<boolean> };
   krSectors: () => Promise<KrSectorList>;
@@ -569,7 +579,7 @@ export function defaultSummarySources(d: {
   const newsCache = new Map<string, { at: number; items: NewsItem[] }>();
   return {
     indices: () => d.indices.list({ stale: true }),
-    fxDaily: async () => (await d.indices.candles("USDKRW", "D", 10))?.candles ?? [],
+    fxDaily: async () => ((await d.indices.candles("USDKRW", "D", 10))?.candles ?? []).map((c) => ({ date: c.date, close: c.close ?? null })),
     exchangeStatus: () => d.naver.marketStatus(),
     isTradingDate: (m, date) => d.calendar.isTradingDate(m, date),
     treasuryCsv: async (y) => {

@@ -157,11 +157,37 @@ function holidayBase(name: string): string {
   return name.replace(/\s*(연휴|대체공휴일)$/, "").trim() || name;
 }
 
+/** 여러 날 휴장의 이름: 바탕 이름이 같으면 하나('추석'), 다르면 '·'로 ('연말·신정' — 12/31 연말 휴장과 1/1 신정이 이어질 때) */
+function rangeName(dates: readonly string[]): string {
+  return [...new Set(dates.map((d) => holidayBase(KR_HOLIDAYS[d] ?? "")).filter((x) => x))].join("·") || "휴장";
+}
+
+/** 한국 개장 시각 'HH:MM' (새해 첫 거래일·수능일 10:00 등 특수일) */
+const openHm = (date: string) => {
+  const h = krRegularHours(date);
+  return `${pad(Math.floor(h.open / 60))}:${pad(h.open % 60)}`;
+};
+
 /** 다음 한국 거래일 (주말·KR_HOLIDAYS 건너뜀) */
 export function nextKrTradingDate(date: string): string {
   let d = addDays(date, 1);
   for (let i = 0; i < 30 && !isKrTradingDate(d); i++) d = addDays(d, 1);
   return d;
+}
+
+/**
+ * 네이버 장 상태가 알려 준 한국 다음 거래일 (그날 받은 값). 목록에 없는 임시공휴일이 끼어도 다음 개장 날짜가 맞게 이 값을 먼저 쓴다 —
+ * today 는 네이버 값의 오늘 날짜(today.date), next 는 next.tradeBaseAt
+ */
+export interface KrNextOpen {
+  today: string;
+  next: string;
+}
+
+/** 쓸 수 있는 네이버 다음 거래일인지: 날짜 꼴이고, 기준 날짜(today)보다 뒤이고, 주말이 아니다 */
+function validNext(n: KrNextOpen | null | undefined, today: string): string | null {
+  if (!n || n.today !== today || !/^\d{4}-\d{2}-\d{2}$/.test(n.next) || n.next <= today || isWeekend(n.next)) return null;
+  return n.next;
 }
 
 /** 직전 한국 거래일 */
@@ -173,15 +199,19 @@ export function prevKrTradingDate(date: string): string {
 
 /**
  * 장 운영 일정: 한국 휴장(연속이면 'M/D~M/D 추석 연휴 한국 휴장' 한 건 + 다음 개장), 미국 휴장·조기 폐장, 한국 특수일(수능일 지연 개장).
- * 한국 휴장은 그날 09:00, 미국은 그날 09:30 ET(조기 폐장은 13:00 ET) 를 순간으로 본다
+ * 한국 휴장은 그날 09:00, 미국은 그날 09:30 ET(조기 폐장은 13:00 ET) 를 순간으로 본다.
+ *  - 이어진 휴장의 바탕 이름이 다르면 '·'로 잇는다 ('12/31~1/1 연말·신정 연휴 한국 휴장')
+ *  - 다음 개장: 네이버 다음 거래일(krNext)이 그 연휴 뒤면 그 날(목록에 없는 임시공휴일이 끼어도 맞게), 아니면 목록으로 센 날.
+ *    그날이 특수일(새해 첫 거래일·수능일)이면 개장 시각을 붙인다 ('다음 개장 1/4(월) 10:00')
  */
-function operations(from: number, to: number): SummaryEvent[] {
+function operations(from: number, to: number, krNext?: KrNextOpen | null): SummaryEvent[] {
   const out: SummaryEvent[] = [];
   const startDate = kstDate(from - 86_400_000);
   const endDate = kstDate(to + 86_400_000);
   // 한국 휴장: 날짜 순으로 보면서 사이에 주말만 있는 휴장은 한 범위로
   const kr = Object.keys(KR_HOLIDAYS).filter((d) => d >= startDate && d <= endDate).sort();
   for (let i = 0; i < kr.length; i++) {
+    const start = i;
     const first = kr[i]!;
     let last = first;
     while (i + 1 < kr.length) {
@@ -196,10 +226,11 @@ function operations(from: number, to: number): SummaryEvent[] {
     if (last === first) {
       out.push({ kind: "kr-holiday", date: first, time: null, text: `한국 휴장(${name})`, at: new Date(at).toISOString() });
     } else {
-      out.push({ kind: "kr-holiday", date: first, endDate: last, time: null, text: `${holidayBase(name)} 연휴 한국 휴장`, at: new Date(at).toISOString() });
+      out.push({ kind: "kr-holiday", date: first, endDate: last, time: null, text: `${rangeName(kr.slice(start, i + 1))} 연휴 한국 휴장`, at: new Date(at).toISOString() });
       // 긴 연휴는 다음 개장을 함께 적는다 (같은 줄 두 번째 칸)
-      const open = nextKrTradingDate(last);
-      out.push({ kind: "kr-open", date: open, time: null, text: "다음 개장", at: new Date(at + 1).toISOString() });
+      const naver = krNext && krNext.today < first ? validNext(krNext, krNext.today) : null;
+      const open = naver && naver > last ? naver : nextKrTradingDate(last);
+      out.push({ kind: "kr-open", date: open, time: krRegularHours(open).reason ? openHm(open) : null, text: "다음 개장", at: new Date(at + 1).toISOString() });
     }
   }
   // 한국 특수일 (수능일 10:00 개장 등)
@@ -229,24 +260,27 @@ function operations(from: number, to: number): SummaryEvent[] {
  */
 export function upcomingEvents(
   now: Date,
-  opts: { hours?: number; list?: readonly MarketEventDef[] } = {},
+  opts: { hours?: number; list?: readonly MarketEventDef[]; krNext?: KrNextOpen | null } = {},
 ): { within: SummaryEvent[]; next: SummaryEvent | null; unknown: OfficialKind[] } {
   const from = now.getTime();
   const to = from + (opts.hours ?? 24) * 3_600_000;
   const list = opts.list ?? MARKET_EVENTS;
   const unknown = unknownKinds(kstDate(from), list);
   const known = list.filter((e) => !unknown.includes(e.kind));
-  const within = [...known.filter((e) => eventInstant(e) >= from && eventInstant(e) < to).map(official), ...operations(from, to)].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const within = [...known.filter((e) => eventInstant(e) >= from && eventInstant(e) < to).map(official), ...operations(from, to, opts.krNext)].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const later = known
     .filter((e) => eventInstant(e) >= to)
     .sort((a, b) => eventInstant(a) - eventInstant(b))[0];
   return { within, next: later ? official(later) : null, unknown };
 }
 
-/** 오늘(한국 휴장일)의 다음 개장 한 건 — 시각까지 (특수일이면 그 개장 시각) */
-export function nextOpenEvent(today: string): SummaryEvent {
-  const open = nextKrTradingDate(today);
+/**
+ * 오늘(한국 휴장일)의 다음 개장 한 건 — 시각까지 (특수일이면 그 개장 시각).
+ * 네이버 장 상태의 다음 거래일(next.tradeBaseAt, 오늘 받은 값)이 있으면 그 날, 없으면 휴장일 목록으로 센 날 (목록에 없는 임시공휴일이 끼어도 맞게)
+ */
+export function nextOpenEvent(today: string, krNext?: KrNextOpen | null): SummaryEvent {
+  const open = validNext(krNext, today) ?? nextKrTradingDate(today);
   const h = krRegularHours(open);
   const at = kstWall(open, Math.floor(h.open / 60), h.open % 60);
-  return { kind: "kr-open", date: open, time: `${pad(Math.floor(h.open / 60))}:${pad(h.open % 60)}`, text: "다음 개장", at: new Date(at).toISOString() };
+  return { kind: "kr-open", date: open, time: openHm(open), text: "다음 개장", at: new Date(at).toISOString() };
 }
