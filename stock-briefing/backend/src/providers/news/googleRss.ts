@@ -40,7 +40,8 @@ export function parseGoogleRss(xml: string): NewsItem[] {
     let source: string | null = sourceTag || null;
     const dash = rawTitle.lastIndexOf(" - ");
     if (dash > 0) {
-      title = rawTitle.slice(0, dash).trim();
+      // '… 혼조 마감 | - 연합인포맥스'처럼 언론사 앞에 세로줄이 붙어 오면 그 세로줄도 뗀다 (카드에 '마감 |'가 보이지 않게)
+      title = rawTitle.slice(0, dash).replace(/(?:\s*[|｜])+\s*$/, "").trim();
       source = source ?? rawTitle.slice(dash + 3).trim();
     }
     if (!title) continue;
