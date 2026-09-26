@@ -67,8 +67,8 @@ export interface WidgetData {
    */
   asked?: boolean;
   /**
-   * 앞선 갱신이 실패한 뒤 이번에 서버에서 받는 데 성공했는지 (위젯 2차, loadWidgetData 만 채운다). 그러면 부른 쪽이 다른 위젯의
-   * '갱신 실패'도 지운다 (widgetTaskHandler — 백그라운드 작업은 원래 위젯 4종을 모두 그린다). 저장하지 않는다
+   * 앞선 갱신이 실패한 뒤 이번에 서버에서 받는 데 성공해 실패 표시를 이 조회가 지웠는지 (위젯 2차, loadWidgetData 만 채운다). 그러면 부른 쪽이 다른 위젯의
+   * '갱신 실패'도 지운다 (widgetTaskHandler — 백그라운드 작업은 원래 위젯 4종을 모두 그린다). 여러 조회가 한꺼번에 성공해도 하나만 true. 저장하지 않는다
    */
   recovered?: boolean;
 }
@@ -169,9 +169,11 @@ const VIEW_KEY = "widget.view";
 const PNL_KEY = "widget.pnlMode";
 /**
  * 위젯 갱신이 실패한 뒤 아직 성공하지 못했다는 표시 (위젯 2차): 마지막 실패 시각과 서버 주소. 어느 갱신이든(백그라운드 작업·위젯 주기·크기 변경·추가·↻)
- * 서버 조회에 실패하면 적고, 서버에서 받는 데 성공하면 지운다. 이 표시가 있으면 다음 자동 갱신은 장 상태와 상관없이 서버에 다시 묻는다 —
- * 휴장·주말에 받아 둔 응답을 2시간까지 다시 쓰는 규칙 때문에 잠깐의 실패('갱신 실패 · 연결 안 됨')가 최대 2시간 남던 것을 막는다
- * (lib/backgroundBriefings runBriefingCheck 는 건너뛰지 않고, 아래 loadWidgetData 는 받아 둔 응답을 다시 쓰지 않는다 — 백그라운드 작업 약 15분 간격)
+ * 서버 조회에 실패하면 그 조회를 다 마친 뒤(위젯에 그릴 값을 적은 뒤) 적고, 서버에서 받는 데 성공하면 지운다.
+ * 이 표시가 있으면 다음 백그라운드 작업(약 15분 간격)은 장 상태와 상관없이 서버에 다시 묻는다 (lib/backgroundBriefings runBriefingCheck) —
+ * 휴장·주말에 받아 둔 응답을 2시간까지 다시 쓰는 규칙 때문에 잠깐의 실패('갱신 실패 · 연결 안 됨')가 최대 2시간 남던 것을 막는다.
+ * 위젯이 스스로 하는 갱신(주기·크기 변경·추가)은 예전처럼 받아 둔 응답을 다시 쓸 수 있으면 쓴다 — 접고 펼 때 위젯 4종이 한꺼번에 서버에 묻거나,
+ * 연결이 나쁠 때 멀쩡히 다시 쓸 수 있던 위젯까지 '갱신 실패'로 바뀌지 않게 (검증 지적)
  */
 const RETRY_KEY = "widget.retry";
 
@@ -183,6 +185,24 @@ export async function pendingRetry(apiUrl?: string): Promise<number | null> {
     return v && v.apiUrl === url && typeof v.at === "number" && Number.isFinite(v.at) ? v.at : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * 성공한 조회가 실패 표시를 지운다: 표시가 이 조회를 시작한 시각(started) 이전에 적힌 것일 때만 (함께 돌던 다른 조회가 이 조회를 시작한 뒤에
+ * 실패했으면 그 위젯은 '갱신 실패'를 그렸으므로 표시를 남겨 다음 백그라운드 작업이 다시 묻게 한다). 이 서버 주소의 표시를 지웠으면 true
+ */
+async function clearRetry(apiUrl: string, started: number): Promise<boolean> {
+  try {
+    const v = JSON.parse((await AsyncStorage.getItem(RETRY_KEY)) ?? "null") as { at?: unknown; apiUrl?: unknown } | null;
+    if (!v) return false;
+    const at = typeof v.at === "number" && Number.isFinite(v.at) ? v.at : null;
+    // 다른 서버 주소의 표시(주소를 바꿈)·깨진 표시는 쓰지 않으므로 함께 지운다
+    if (v.apiUrl === apiUrl && at !== null && at > started) return false;
+    await AsyncStorage.removeItem(RETRY_KEY);
+    return v.apiUrl === apiUrl && at !== null;
+  } catch {
+    return false;
   }
 }
 
@@ -610,8 +630,8 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   const last = await readLastStocks(apiUrl);
   // 판은 이번에 못 받아도 마지막 것을 둔다 (조회 전에 읽어 둔다 — 아래에서 이번 결과를 적으므로)
   const prevView = await readWidgetView(apiUrl);
-  // 앞선 갱신이 실패한 채면 받아 둔 응답을 다시 쓰지 않고 서버에 묻는다 (위젯 2차 — 휴장 2시간 재사용을 기다리지 않게)
-  const retry = await pendingRetry(apiUrl);
+  /** 이 조회를 시작한 시각 — 성공했을 때 이보다 늦게 적힌 실패 표시는 지우지 않는다 (clearRetry) */
+  const started = out.fetchedAt;
   let full = false;
   /** 방금 서버에서 받은 응답인지 (304 도 서버가 지금 값이라고 답한 것) */
   let fresh = false;
@@ -619,7 +639,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   let ok = false;
   try {
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
-    const reused = opts.reuse && retry === null ? await readCachedPayload(apiUrl) : null;
+    const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
     // 칩은 플래그로 거른 것 (연장 세션 ext 는 widgetExtended 가 켜져 있을 때만 장중처럼 15분)
     const reuse =
       reused && canReuse({ at: reused.at, market: payloadMarket(reused.body) }, out.fetchedAt) && (!opts.board || boardReusable(reused.body, prevView?.boardAt, out.fetchedAt)) ? reused : null;
@@ -667,8 +687,6 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     ok = true;
   } catch (e) {
     out.error = e instanceof Error ? e.message : String(e);
-    // 실패 표시: 다음 자동 갱신이 장 상태와 상관없이 다시 묻게 (성공하면 아래에서 지운다)
-    await AsyncStorage.setItem(RETRY_KEY, JSON.stringify({ at: Date.now(), apiUrl })).catch(() => undefined);
     const cached = await readCachedPayload(apiUrl);
     // 칩: 받아 둔 응답의 것(플래그로 거름), 없으면(업데이트 직후 등) 마지막으로 그린 것 — 실패했다고 칩이 사라지지 않게
     out.market = cached ? payloadMarket(cached.body) : (prevView?.market ?? null);
@@ -700,15 +718,18 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.fetchedAt = last.at;
     }
   }
-  // 실패 뒤 서버에서 받는 데 성공: 표시를 지우고, 부른 쪽이 다른 위젯의 '갱신 실패'도 지우게 알린다
-  if (ok && out.asked && retry !== null) {
-    out.recovered = true;
-    await AsyncStorage.removeItem(RETRY_KEY).catch(() => undefined);
-  }
   // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 잔고·칩·기준 시각·지수·플래그를 옛 응답으로 덮지 않는다
   if (full && !fresh) await keepNewer(out, apiUrl);
   keepBoard(out, prevView);
   await saveWidgetView(full ? out : await mergeLegacy(out, apiUrl, opts), apiUrl);
+  if (!ok) {
+    // 실패 표시: 다음 백그라운드 작업이 장 상태와 상관없이 다시 묻게. 그릴 값(오류 포함)을 적은 뒤에 적는다 — 함께 돌던 조회가 성공해
+    // 표시를 지운 뒤에 이 조회의 '갱신 실패'가 그려져도, 표시가 남아 다음 작업이 다시 묻고 지운다
+    await AsyncStorage.setItem(RETRY_KEY, JSON.stringify({ at: Date.now(), apiUrl })).catch(() => undefined);
+  } else if (out.asked && (await clearRetry(apiUrl, started))) {
+    // 실패 뒤 서버에서 받는 데 성공: 부른 쪽이 다른 위젯의 '갱신 실패'도 지우게 알린다 (표시를 지운 조회 하나만)
+    out.recovered = true;
+  }
   return out;
 }
 

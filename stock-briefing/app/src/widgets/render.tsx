@@ -124,10 +124,17 @@ export function renderBoth(name: string, data: WidgetData, o: RenderOpts): Rende
 
 /**
  * 위젯 하나를 그 위젯의 지금 크기(box — widgetInfo: 번호·크기·화면)로 그린다. 폴드 위젯 2차(widgetFoldFit)가 켜져 있으면
- * 이 위젯을 두 화면에서 본 크기를 기억해 두 화면에 맞는 배치를 고른다 (frame.ts). 태스크 핸들러·앱 즉시 갱신·다시 그리기가 모두 이것을 쓴다
+ * 이 위젯을 두 화면에서 본 크기를 기억해 두 화면에 맞는 배치를 고른다 (frame.ts). 태스크 핸들러·앱 즉시 갱신·다시 그리기가 모두 이것을 쓴다.
+ * 크기 기억의 시각은 o.now (그리는 시각). resized: 크기 변경 알림(WIDGET_RESIZED) 때문에 그리는지 — 접고 펼 때 온 알림을 알아보는 데 쓴다 (frame.ts)
  */
-export async function renderFor(name: string, data: WidgetData, box: BoxInfo, o: Omit<RenderOpts, "width" | "height" | "wideWidth" | "outerWidth" | "outerHeight">): Promise<Rendered> {
-  const f = await frameFor(box, data.features.foldFit === true);
+export async function renderFor(
+  name: string,
+  data: WidgetData,
+  box: BoxInfo,
+  opts: Omit<RenderOpts, "width" | "height" | "wideWidth" | "outerWidth" | "outerHeight"> & { resized?: boolean },
+): Promise<Rendered> {
+  const { resized, ...o } = opts;
+  const f = await frameFor(box, data.features.foldFit === true, o.now, resized === true);
   return renderBoth(name, data, {
     ...o,
     width: f.width,

@@ -1,16 +1,18 @@
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RegisteredWithQuote } from "@/api/types";
 import { holding, quote } from "./helpers";
 
 /**
  * 위젯 2차 (B): 폴드8 커버 화면 미러링 — 한 위젯이 바깥(접힘, 세로)과 안쪽(펼침, 가로) 화면에 함께 보일 때 (플래그 widgetFoldFit).
  * 라이브러리는 그리는 순간의 방향 하나로 그림 크기를 고른다 (세로 = 가장 좁은 폭 × 가장 큰 높이, 가로 = 가장 넓은 폭 × 가장 작은 높이 —
- * RNWidgetUtil). 런처가 두 화면 크기를 모두 알려 주면(아래 '범위') 두 벌이 화면과 엇갈려, 펼쳐서 그린 넓고 낮은 그림(평가금액 칸)이
- * 접힌 바깥 화면에 보였다 (2026-09-26 토 10:32 캡처). 화면마다 크기를 따로 알려 주는 런처(아래 '화면마다')여도 같은 규칙으로 본다.
- *  - 두 화면의 크기를 다 알면: 넓은 모습(평가금액 칸·두 열·지수 옆 칸)은 두 화면 중 좁은 폭이 허락할 때만 — 바깥 화면에 넓은 모습이 나오지 않는다
+ * RNWidgetUtil). 런처가 두 화면 크기를 모두 알려 주면(아래 '범위') 두 벌이 화면과 엇갈린다. 2026-09-26 토 10:32 캡처는 런처가 화면마다
+ * 그 화면 크기로 다시 보내는 경우(아래 '화면마다')로 보이며, 바깥 칸(약 507dp)이 평가금액 칸 기준(504dp)을 넘어 접힌 바깥 화면에 평가금액 칸이 보였다.
+ *  - 두 화면의 크기를 다 알면: 넓은 모습(평가금액 칸·두 열·지수 옆 칸)은 본 것 중 가장 좁은 폭이 허락할 때만 — 바깥 화면에 넓은 모습이 나오지 않는다
  *  - '범위' 런처: 두 화면에 모두 들어가는 크기로 그리고 남는 곳은 투명 (카드가 두 화면 어디서나 같다)
- *  - 한 방향만 봤거나 같은 화면을 돌린 것(일반 폰)·플래그 꺼짐: 지금 그림과 한 글자도 다르지 않다
+ *  - '화면마다' 런처: 크기는 그 화면 그대로 (투명한 빈 곳 없음)
+ *  - 한 화면에서만 봤거나 같은 화면을 돌린 것(일반 폰)·플래그 꺼짐: 지금 그림과 한 글자도 다르지 않다
+ * 시각은 모두 고정 시계 (vi.useFakeTimers)
  */
 
 const lib = (p: string) => import(/* @vite-ignore */ p);
@@ -52,7 +54,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 }));
 
 const { buildWidgetTree } = await lib("react-native-android-widget/lib/commonjs/api/build-widget-tree.js");
-const { differentDisplays, forgetFrame, FRAME_FORGET_MS, frameFor, frameOf, orientationOf, remember, screenChanged } = await import("@/widgets/frame");
+const { DISPLAY_DIFF, differentDisplays, forgetFrame, FRAME_FORGET_MS, frameFor, frameOf, launcherOf, MAX_SEEN, orientationOf, remember, screenChanged } = await import("@/widgets/frame");
 const { renderBoth, renderFor } = await import("@/widgets/render");
 const { WIDGET_NAMES } = await import("@/widgets/widgets");
 const { WIDE, PAD } = await import("@/widgets/layout");
@@ -63,6 +65,7 @@ const { redrawForScreen } = await import("@/widgets/refresh");
 const { saveWidgetView } = await import("@/widgets/data");
 type WidgetData = import("@/widgets/data").WidgetData;
 type BoxInfo = import("@/widgets/frame").BoxInfo;
+type FrameMemo = import("@/widgets/frame").FrameMemo;
 
 interface Tree {
   type: string;
@@ -189,18 +192,24 @@ const INNERS: Place[] = [
  *  - perScreen: 런처가 접고 펼 때마다 그 화면 크기로 바꿔 알려 줌 (크기 변경 알림으로 그 화면에서 다시 그린다)
  */
 function libraryBoxes(cover: Place, inner: Place, mode: "range" | "perScreen", id: number): { p: BoxInfo; l: BoxInfo } {
-  if (mode === "perScreen") return { p: { widgetId: id, width: cover.width, height: cover.height, screenInfo: cover.screen }, l: { widgetId: id, width: inner.width, height: inner.height, screenInfo: inner.screen } };
+  // 한 폰의 두 화면은 밀도가 같다: 바깥이 캡처로 잰 밀도(약 2.1)면 안쪽 화면도 그 밀도의 크기로 (420dpi 추정 크기와 섞지 않는다)
+  const innerScreen = cover.screen === COVER_SCREEN_2X ? INNER_SCREEN_2X : inner.screen;
+  if (mode === "perScreen") return { p: { widgetId: id, width: cover.width, height: cover.height, screenInfo: cover.screen }, l: { widgetId: id, width: inner.width, height: inner.height, screenInfo: innerScreen } };
   return {
     p: { widgetId: id, width: Math.min(cover.width, inner.width), height: Math.max(cover.height, inner.height), screenInfo: cover.screen },
-    l: { widgetId: id, width: Math.max(cover.width, inner.width), height: Math.min(cover.height, inner.height), screenInfo: inner.screen },
+    l: { widgetId: id, width: Math.max(cover.width, inner.width), height: Math.min(cover.height, inner.height), screenInfo: innerScreen },
   };
 }
-/** 접고(세로) 펴고(가로) 다시 접고 펴며 그린다 — 두 방향을 다 본 뒤의 마지막 두 그림 */
-async function foldCycle(name: string, d: WidgetData, b: { p: BoxInfo; l: BoxInfo }) {
-  await renderFor(name, d, b.p, OPTS);
-  await renderFor(name, d, b.l, OPTS);
-  const p = tree(await renderFor(name, d, b.p, OPTS));
-  const l = tree(await renderFor(name, d, b.l, OPTS));
+/**
+ * 접고(세로) 펴고(가로) 다시 접고 펴며 그린다 — 두 방향을 다 본 뒤의 마지막 두 그림.
+ * resized: 접고 펼 때마다 크기 변경 알림(WIDGET_RESIZED)으로 그림 ('화면마다' 런처는 늘 그렇다. '범위' 런처는 접어도 옵션이 같아 알림이 없어 주기 갱신 등으로 그린다)
+ */
+async function foldCycle(name: string, d: WidgetData, b: { p: BoxInfo; l: BoxInfo }, resized = false) {
+  const o = { ...OPTS, resized };
+  await renderFor(name, d, b.p, o);
+  await renderFor(name, d, b.l, o);
+  const p = tree(await renderFor(name, d, b.p, o));
+  const l = tree(await renderFor(name, d, b.l, o));
   return { p, l };
 }
 const allows = (width: number) => ({ value: width - PAD * 2 >= WIDE.valueMin, twoColumns: width - PAD * 2 >= WIDE.columnMin * 2 + WIDE.columnGap, boardWide: width >= WIDE.boardMin });
@@ -212,11 +221,24 @@ beforeEach(() => {
   shared.widgets = {};
   shared.updates = [];
   vi.unstubAllGlobals();
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("크기 기억 (순수 함수)", () => {
   const P = { screenWidthDp: 475, screenHeightDp: 751 };
   const L = { screenWidthDp: 933, screenHeightDp: 704 };
+  /** 바깥 화면을 가로로 (게임·동영상) — 짧은 변은 세로일 때보다 조금 짧다 */
+  const COVER_L = { screenWidthDp: 939, screenHeightDp: 550 };
+  /** 안쪽 화면을 세로로 */
+  const INNER_P = { screenWidthDp: 880, screenHeightDp: 1166 };
+  /** 차례로 본다: [폭, 높이, 화면, 크기 변경 알림?] — 본 시각은 at 부터 1씩 */
+  const see = (m: FrameMemo | null, list: [number, number, typeof P, boolean?][], at = 0): FrameMemo =>
+    list.reduce<FrameMemo>((acc, [w, h, screenInfo, resized], k) => remember(acc, { width: w, height: h, screenInfo }, at + k, resized === true), m ?? { seen: [] });
+
   it("방향은 라이브러리와 같은 기준 (폭 > 높이면 가로), 화면을 모르면 null", () => {
     expect(orientationOf(P)).toBe("p");
     expect(orientationOf(L)).toBe("l");
@@ -225,55 +247,122 @@ describe("크기 기억 (순수 함수)", () => {
     expect(orientationOf(null)).toBeNull();
   });
 
-  it("다른 화면: 짧은 변이 10% 넘게 다를 때 (폴드 바깥 475 ↔ 안쪽 704). 폰을 돌린 것은 같은 화면", () => {
+  it("다른 화면: 짧은 변이 25% 넘게 다를 때 (폴드 바깥 ↔ 안쪽은 30% 넘게). 폰을 돌려 가로에서 상태 표시줄·아래 막대만큼 짧아진 것은 같은 화면", () => {
+    expect(DISPLAY_DIFF).toBe(0.25);
     expect(differentDisplays(475, 704)).toBe(true);
     expect(differentDisplays(594, 880)).toBe(true);
+    expect(differentDisplays(550, 880)).toBe(true); // 바깥 가로 ↔ 안쪽 가로
     expect(differentDisplays(411, 411)).toBe(false);
+    expect(differentDisplays(360, 320)).toBe(false); // 안드로이드 14 이하: 가로의 짧은 변에서 상태 표시줄 24 + 제스처 막대 16 이 빠짐 (11%)
+    expect(differentDisplays(411, 340)).toBe(false); // 17%
+    expect(differentDisplays(594, 550)).toBe(false); // 바깥 화면 세로 ↔ 가로
     expect(differentDisplays(700, 704)).toBe(false);
   });
 
   it("범위 런처(엇갈린 두 벌)는 두 화면에 모두 들어가는 크기 — 캡처 실측 잔고 (바깥 507×222 · 안쪽 476×611)", () => {
-    let m = remember(null, { width: 476, height: 611, screenInfo: COVER_SCREEN_2X }, 0);
-    expect(frameOf(m, { width: 476, height: 611 })).toEqual({ width: 476, height: 611, fit: "none" }); // 한 방향만 — 그대로
-    m = remember(m, { width: 507, height: 222, screenInfo: INNER_SCREEN_2X }, 1);
+    let m = see(null, [[476, 611, COVER_SCREEN_2X]]);
+    expect(frameOf(m, { width: 476, height: 611 })).toEqual({ width: 476, height: 611, fit: "none" }); // 한 화면만 — 그대로
+    m = see(m, [[507, 222, INNER_SCREEN_2X]], 1);
+    expect(launcherOf(m)).toBe("range");
     expect(frameOf(m, { width: 507, height: 222 })).toEqual({ width: 476, height: 222, fit: "both" });
     expect(frameOf(m, { width: 476, height: 611 })).toEqual({ width: 476, height: 222, fit: "both" });
   });
 
-  it("화면마다 크기를 알려 주는 런처는 지금 크기 그대로, 넓은 모습만 좁은 화면 폭까지", () => {
-    let m = remember(null, { width: 507, height: 222, screenInfo: COVER_SCREEN_2X }, 0);
-    m = remember(m, { width: 476, height: 611, screenInfo: INNER_SCREEN_2X }, 1);
+  it("화면마다 크기를 알려 주는 런처(캡처와 같은 경우)는 지금 크기 그대로, 넓은 모습만 가장 좁은 폭까지 — 모양만으로 바로 안다", () => {
+    let m = see(null, [[507, 222, COVER_SCREEN_2X]]);
+    m = see(m, [[476, 611, INNER_SCREEN_2X]], 1);
+    expect(launcherOf(m)).toBe("perScreen"); // 세로(바깥)가 가로(안쪽)보다 넓다 — 범위 런처라면 나올 수 없는 모양
     expect(frameOf(m, { width: 476, height: 611 })).toEqual({ width: 476, height: 611, fit: "none" }); // 좁은 쪽은 그대로
-    m = remember(m, { width: 507, height: 222, screenInfo: COVER_SCREEN_2X }, 2);
+    m = see(m, [[507, 222, COVER_SCREEN_2X]], 2);
     expect(frameOf(m, { width: 507, height: 222 })).toEqual({ width: 507, height: 222, wideWidth: 476, fit: "wide" });
   });
 
-  it("일반 폰을 돌린 것(같은 화면)은 지금 크기 그대로", () => {
-    let m = remember(null, { width: 380, height: 220, screenInfo: { screenWidthDp: 411, screenHeightDp: 914 } }, 0);
-    m = remember(m, { width: 700, height: 150, screenInfo: { screenWidthDp: 914, screenHeightDp: 411 } }, 1);
-    expect(frameOf(m, { width: 700, height: 150 })).toEqual({ width: 700, height: 150, fit: "none" });
-    expect(frameOf(m, { width: 380, height: 220 })).toEqual({ width: 380, height: 220, fit: "none" });
+  it("일반 폰을 돌린 것(같은 화면)은 지금 크기 그대로 — 가로에서 짧은 변이 상태 표시줄·아래 막대만큼 짧아도", () => {
+    for (const land of [{ screenWidthDp: 914, screenHeightDp: 411 }, { screenWidthDp: 914, screenHeightDp: 340 }]) {
+      const m = see(null, [[380, 220, { screenWidthDp: 411, screenHeightDp: 914 }], [700, 150, land]]);
+      expect(launcherOf(m)).toBe("one");
+      expect(frameOf(m, { width: 700, height: 150 })).toEqual({ width: 700, height: 150, fit: "none" });
+      expect(frameOf(m, { width: 380, height: 220 })).toEqual({ width: 380, height: 220, fit: "none" });
+    }
+    // 360dp 폰 (가로 짧은 변 320): 예전 기준(10%)이면 다른 화면으로 보아 세로 그림이 340×130 카드 + 아래 투명 띠가 됐다
+    const small = see(null, [[340, 200, { screenWidthDp: 360, screenHeightDp: 780 }], [640, 130, { screenWidthDp: 780, screenHeightDp: 320 }]]);
+    expect(frameOf(small, { width: 340, height: 200 }).fit).toBe("none");
   });
 
-  it("같은 방향에서 크기가 바뀌면(크기 조절·격자·화면 확대) 다른 방향의 옛 크기는 버린다 · 14일이 지나도 버린다", () => {
-    let m = remember(null, { width: 435, height: 290, screenInfo: P }, 0);
-    m = remember(m, { width: 460, height: 200, screenInfo: L }, 1);
+  it("같은 화면·방향에서 크기가 바뀌면(크기 조절·격자·화면 확대) 다른 기억과 증거는 버린다 · 14일 동안 못 본 줄도 버린다", () => {
+    const m = see(null, [[435, 290, P], [460, 200, L]]);
     expect(frameOf(m, { width: 460, height: 200 }).fit).toBe("both");
     const resized = remember(m, { width: 460, height: 290, screenInfo: L }, 2);
-    expect(resized.p).toBeUndefined();
+    expect(resized.seen).toEqual([{ o: "l", sw: 704, w: 460, h: 290, at: 2 }]);
     expect(frameOf(resized, { width: 460, height: 290 }).fit).toBe("none");
-    const old = remember(m, { width: 460, height: 200, screenInfo: L }, 1 + FRAME_FORGET_MS + 1);
-    expect(old.p).toBeUndefined();
+    const old = remember(m, { width: 460, height: 200, screenInfo: L }, FRAME_FORGET_MS + 1);
+    expect(old.seen.map((x) => x.o)).toEqual(["l"]);
     const fresh = remember(m, { width: 460, height: 200, screenInfo: L }, FRAME_FORGET_MS - 1);
-    expect(fresh.p).toBeDefined();
+    expect(fresh.seen.map((x) => x.o).sort()).toEqual(["l", "p"]);
   });
 
-  it("같은 크기를 안쪽 화면을 세로로 돌려서도 보면(범위 런처) 가장 짧은 화면 변을 둔다 — 바깥에도 보이는 위젯인 것을 잊지 않게", () => {
-    let m = remember(null, { width: 435, height: 290, screenInfo: P }, 0); // 바깥 (짧은 변 475)
-    m = remember(m, { width: 460, height: 200, screenInfo: L }, 1);
-    m = remember(m, { width: 435, height: 290, screenInfo: { screenWidthDp: 704, screenHeightDp: 933 } }, 2); // 안쪽 세로
-    expect(m.p!.sw).toBe(475);
-    expect(frameOf(m, { width: 435, height: 290 }).fit).toBe("both");
+  it("검증 지적 재현: 범위 런처에서 바깥 화면을 가로로 돌린 채 한 번 그려도 두 화면 기억을 잃지 않는다 (예전: 영영 '그대로'로 돌아감)", () => {
+    // 범위 런처: 어디서든 세로 = 476×611, 가로 = 507×222
+    let m = see(null, [[476, 611, COVER_SCREEN_2X], [507, 222, INNER_SCREEN_2X]]);
+    expect(frameOf(m, { width: 507, height: 222 }).fit).toBe("both");
+    // 접힌 채 가로로 돌린 바깥 화면에서 백그라운드 작업이 그림 (가로 = 507×222, 짧은 변 550)
+    m = see(m, [[507, 222, COVER_L]], 10);
+    expect(launcherOf(m)).toBe("range"); // 두 화면에서 같은 방향·같은 크기 = 범위 런처 (확실)
+    expect(frameOf(m, { width: 507, height: 222 })).toEqual({ width: 476, height: 222, fit: "both" });
+    for (let k = 0; k < 50; k++) m = see(m, [[476, 611, COVER_SCREEN_2X], [507, 222, INNER_SCREEN_2X]], 100 + k * 2);
+    expect(frameOf(m, { width: 476, height: 611 })).toEqual({ width: 476, height: 222, fit: "both" });
+    expect(m.seen).toHaveLength(3);
+    // 안쪽 화면을 세로로 돌려 봐도 (세로 = 476×611) 같다
+    m = see(m, [[476, 611, INNER_P]], 500);
+    expect(frameOf(m, { width: 476, height: 611 })).toEqual({ width: 476, height: 222, fit: "both" });
+  });
+
+  it("검증 지적 재현: 화면마다 런처에서 안쪽 화면을 세로로 돌려도·바깥 화면을 가로로 돌려도 바깥 화면 기억을 잃지 않는다", () => {
+    let m = see(null, [[507, 222, COVER_SCREEN_2X, true], [476, 611, INNER_SCREEN_2X, true]]);
+    // 안쪽 세로 칸 (700×400) — 예전: 세로 기억(바깥 507×222)을 덮고 가로 기억까지 버려, 다음에 접으면 바깥에 평가금액 칸이 다시 나왔다
+    m = see(m, [[700, 400, INNER_P, true]], 10);
+    m = see(m, [[507, 222, COVER_SCREEN_2X, true]], 20);
+    expect(frameOf(m, { width: 507, height: 222 })).toEqual({ width: 507, height: 222, wideWidth: 476, fit: "wide" });
+    // 바깥 가로 칸 (600×180)
+    m = see(m, [[600, 180, COVER_L, true]], 30);
+    m = see(m, [[507, 222, COVER_SCREEN_2X, true]], 40);
+    expect(frameOf(m, { width: 507, height: 222 })).toEqual({ width: 507, height: 222, wideWidth: 476, fit: "wide" });
+    expect(m.seen).toHaveLength(MAX_SEEN);
+  });
+
+  it("검증 지적 재현: 화면마다 런처인데 바깥 칸이 좁고 높으면(445×360 ↔ 안쪽 780×350) 접고 펼 때 온 크기 변경 알림으로 알아보고 안쪽을 제 크기로 그린다", () => {
+    // 처음 두 벌만 보면 범위 런처 모양이라 가릴 수 없다 → 두 화면에 들어가는 445×350
+    let m = see(null, [[445, 360, COVER_SCREEN, true], [780, 350, INNER_SCREEN, true]]);
+    expect(frameOf(m, { width: 780, height: 350 })).toEqual({ width: 445, height: 350, fit: "both" });
+    // 다시 접음: 크기 변경 알림이 바깥 칸의 기억과 같은 크기로 옴 = 런처가 화면마다 크기를 다시 보냄 (범위 런처는 접어도 옵션이 같아 알림이 없다)
+    m = see(m, [[445, 360, COVER_SCREEN, true]], 2);
+    expect(launcherOf(m)).toBe("perScreen");
+    expect(frameOf(m, { width: 445, height: 360 })).toEqual({ width: 445, height: 360, fit: "none" });
+    m = see(m, [[780, 350, INNER_SCREEN, true]], 3);
+    expect(frameOf(m, { width: 780, height: 350 })).toEqual({ width: 780, height: 350, wideWidth: 445, fit: "wide" }); // 투명 띠 없음
+    // 알림 없이 같은 크기로 다시 그린 것(주기 갱신)은 증거가 아니다
+    const periodic = see(null, [[445, 360, COVER_SCREEN], [780, 350, INNER_SCREEN], [445, 360, COVER_SCREEN]]);
+    expect(launcherOf(periodic)).toBe("range");
+  });
+
+  it("증거는 14일이 지나거나 크기가 바뀌면 버리고, 두 화면에서 같은 방향·같은 크기를 보면(범위 런처 확실) 증거보다 앞선다", () => {
+    const m = see(null, [[445, 360, COVER_SCREEN, true], [780, 350, INNER_SCREEN], [445, 360, COVER_SCREEN, true]]);
+    expect(m.ps).toBe(2);
+    expect(launcherOf(see(m, [[780, 350, INNER_SCREEN]], 2 + FRAME_FORGET_MS + 1))).toBe("one"); // 바깥 줄도 증거도 오래됨
+    expect(see(m, [[780, 300, INNER_SCREEN]], 5).ps).toBeUndefined();
+    // 바깥 화면을 가로로 돌려 가로 크기가 안쪽 가로와 같음 → 범위 런처
+    expect(launcherOf(see(m, [[780, 350, { screenWidthDp: 751, screenHeightDp: 475 }]], 6))).toBe("range");
+  });
+
+  it("화면·방향 줄은 최대 4개 (가장 오래 못 본 줄부터 버린다)", () => {
+    const m = see(null, [
+      [300, 200, { screenWidthDp: 300, screenHeightDp: 600 }],
+      [400, 200, P],
+      [500, 200, L],
+      [600, 200, INNER_P],
+      [700, 200, { screenWidthDp: 1400, screenHeightDp: 1300 }],
+    ]);
+    expect(m.seen.map((x) => x.w).sort()).toEqual([400, 500, 600, 700]);
   });
 
   it("화면 크기 변경: 접기·펴기·돌리기만 (1dp 미만 반올림 차이는 같다)", () => {
@@ -305,6 +394,39 @@ describe("저장 (위젯마다 AsyncStorage) · 플래그", () => {
     expect(io.writes).toBe(writes + 1);
     // 다른 위젯은 따로
     expect(await frameFor({ ...L_BOX, widgetId: 6 }, true, 1_000)).toMatchObject({ fit: "none" });
+  });
+
+  it("깨졌거나 예전 모양으로 적힌 기억은 없는 것으로 본다", async () => {
+    store.set("widget.frame.5", JSON.stringify({ p: { w: 435, h: 290, sw: 475, at: 0 } }));
+    expect(await frameFor(L_BOX, true, 1)).toMatchObject({ fit: "none" });
+    store.set("widget.frame.5", "{");
+    expect(await frameFor(L_BOX, true, 2)).toMatchObject({ fit: "none" });
+    store.set("widget.frame.5", JSON.stringify({ seen: [{ o: "x", w: 1, h: 1, sw: 1, at: 0 }, { o: "p", w: 435, h: 290, sw: 475, at: 0 }] }));
+    expect(await frameFor(L_BOX, true, 3)).toMatchObject({ fit: "both" });
+  });
+
+  it("고정 시계: renderFor 는 그리는 시각(now)으로 적는다 (기기 시계가 아니라)", async () => {
+    vi.setSystemTime(NOW + 5 * 86_400_000);
+    await renderFor(WIDGET_NAMES.holdings, data(true), P_BOX, OPTS);
+    expect(JSON.parse(store.get("widget.frame.5")!)).toEqual({ seen: [{ o: "p", sw: 475, w: 435, h: 290, at: NOW }] });
+  });
+
+  it("위젯 크기 변경 알림(WIDGET_RESIZED)이 기억과 같은 크기로 오면 '화면마다' 증거로 적는다 (태스크 핸들러)", async () => {
+    await saveWidgetView(data(true), "https://server.test");
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("Network request failed");
+    });
+    const info = (b: BoxInfo) => ({ widgetName: WIDGET_NAMES.holdings, ...b, screenInfo: { ...b.screenInfo, density: 2.1, densityDpi: 336 } });
+    const cover: BoxInfo = { widgetId: 8, width: 445, height: 360, screenInfo: COVER_SCREEN };
+    const inner: BoxInfo = { widgetId: 8, width: 780, height: 350, screenInfo: INNER_SCREEN };
+    const memo = () => JSON.parse(store.get("widget.frame.8")!) as FrameMemo;
+    for (const b of [cover, inner]) await widgetTaskHandler({ widgetInfo: info(b), widgetAction: "WIDGET_RESIZED", renderWidget: () => undefined } as never);
+    expect(memo().ps).toBeUndefined();
+    await widgetTaskHandler({ widgetInfo: info(cover), widgetAction: "WIDGET_UPDATE", renderWidget: () => undefined } as never);
+    expect(memo().ps).toBeUndefined(); // 주기 갱신은 증거가 아니다
+    await widgetTaskHandler({ widgetInfo: info(cover), widgetAction: "WIDGET_RESIZED", renderWidget: () => undefined } as never);
+    expect(memo().ps).toBe(Date.now());
+    expect(launcherOf(memo())).toBe("perScreen");
   });
 
   it("위젯을 지우면(WIDGET_DELETED) 그 위젯의 기억도 지운다", async () => {
@@ -339,13 +461,13 @@ describe("폴드8 크기: 두 화면을 다 알면 바깥 화면에 넓은 모�
     const cover = COVERS.find((c) => c.name === "바깥 4x2 캡처")!;
     const inner = INNERS.find((c) => c.name === "안쪽 캡처 잔고")!;
     for (const [n, mode] of MODES.entries()) {
-      const { p, l } = await foldCycle(WIDGET_NAMES.holdings, data(true), libraryBoxes(cover, inner, mode, 10 + n));
+      const { p, l } = await foldCycle(WIDGET_NAMES.holdings, data(true), libraryBoxes(cover, inner, mode, 10 + n), mode === "perScreen");
       expect(extras(p).value, mode).toBe(false);
       expect(extras(l).value, mode).toBe(false);
     }
   });
 
-  it("바깥 4x2 × 안쪽 8가지 × 두 런처 × 잔고·지수: 넓은 모습은 두 화면 중 좁은 폭이 허락할 때만, 범위 런처의 카드는 두 화면에 모두 들어간다", async () => {
+  it("바깥 4x2 × 안쪽 8가지 × 두 런처 × 잔고·지수: 넓은 모습은 두 화면 중 좁은 폭이 허락할 때만, 범위 런처의 카드는 두 화면에 모두 들어가고 화면마다 런처는 칸 크기 그대로", async () => {
     let id = 100;
     let checked = 0;
     for (const cover of COVERS)
@@ -353,7 +475,7 @@ describe("폴드8 크기: 두 화면을 다 알면 바깥 화면에 넓은 모�
         for (const mode of MODES)
           for (const name of NAMES) {
             const b = libraryBoxes(cover, inner, mode, id++);
-            const { p, l } = await foldCycle(name, data(true), b);
+            const { p, l } = await foldCycle(name, data(true), b, mode === "perScreen");
             const ok = allows(Math.min(cover.width, inner.width));
             const label = `${name} ${cover.name} ${cover.width}×${cover.height} · ${inner.name} ${inner.width}×${inner.height} · ${mode}`;
             for (const [side, t] of [["p", p], ["l", l]] as const) {
@@ -361,10 +483,13 @@ describe("폴드8 크기: 두 화면을 다 알면 바깥 화면에 넓은 모�
               if (e.value) expect(ok.value, `${label} ${side} 평가금액`).toBe(true);
               if (e.twoColumns) expect(ok.twoColumns, `${label} ${side} 두 열`).toBe(true);
               if (e.boardWide) expect(ok.boardWide, `${label} ${side} 지수 옆 칸`).toBe(true);
+              const c = card(t, b[side]);
               if (mode === "range") {
-                const c = card(t, b[side]);
                 expect(c.width, `${label} ${side} 카드 폭`).toBeLessThanOrEqual(Math.min(cover.width, inner.width));
                 expect(c.height, `${label} ${side} 카드 높이`).toBeLessThanOrEqual(Math.min(cover.height, inner.height));
+              } else {
+                // 화면마다 런처: 그 화면 칸 크기 그대로 (투명한 빈 곳 없음 — 바깥 칸이 좁고 높은 모양이어도)
+                expect(c, `${label} ${side} 카드 = 칸`).toEqual({ width: b[side].width, height: b[side].height });
               }
               checked++;
             }
@@ -374,11 +499,11 @@ describe("폴드8 크기: 두 화면을 다 알면 바깥 화면에 넓은 모�
 
   it("화면마다 런처 · 바깥 507 · 안쪽 6x3(780×350): 안쪽 그림은 바깥 폭이 허락하는 평가금액 칸까지만 (두 열·지수 옆 칸은 없다 — 예전에는 있었다)", async () => {
     const b = libraryBoxes(COVERS[3]!, INNERS[6]!, "perScreen", 40);
-    const { l } = await foldCycle(WIDGET_NAMES.holdings, data(true), b);
+    const { l } = await foldCycle(WIDGET_NAMES.holdings, data(true), b, true);
     expect(extras(l)).toMatchObject({ value: true, twoColumns: false });
     expect(card(l, b.l)).toEqual({ width: 780, height: 350 }); // 크기는 그대로 (안쪽 화면에서 그 화면 크기로 다시 그린다)
     expect(extras(tree(renderBoth(WIDGET_NAMES.holdings, data(true), { ...OPTS, width: 780, height: 350 })))).toMatchObject({ twoColumns: true });
-    const m = await foldCycle(WIDGET_NAMES.market, data(true), libraryBoxes(COVERS[3]!, INNERS[6]!, "perScreen", 41));
+    const m = await foldCycle(WIDGET_NAMES.market, data(true), libraryBoxes(COVERS[3]!, INNERS[6]!, "perScreen", 41), true);
     expect(extras(m.l).boardWide).toBe(false);
     expect(extras(tree(renderBoth(WIDGET_NAMES.market, data(true), { ...OPTS, width: 780, height: 350 }))).boardWide).toBe(true);
   });
@@ -467,7 +592,12 @@ describe("앱이 떠 있을 때 접고 펴면 다시 그리기 (refresh.tsx redr
     const h = tree(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.holdings)!.rendered as { dark: React.JSX.Element });
     expect(card(h, { width: 520, height: 230 })).toEqual({ width: 460, height: 230 });
     expect(extras(h).value).toBe(false);
-    expect(JSON.parse(store.get("widget.frame.1")!)).toMatchObject({ p: { w: 460, h: 290, sw: 475 }, l: { w: 520, h: 230, sw: 704 } });
+    expect(JSON.parse(store.get("widget.frame.1")!)).toEqual({
+      seen: [
+        { o: "p", w: 460, h: 290, sw: 475, at: NOW },
+        { o: "l", w: 520, h: 230, sw: 704, at: NOW },
+      ],
+    });
   });
 
   it("위젯이 쓰는 플래그가 꺼져 있으면 아무 일도 하지 않는다", async () => {
