@@ -503,7 +503,7 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     expect(cut).toBeGreaterThan(20); // 좁은 폭에서는 대부분 잘린다 (자르는 길이 실제로 쓰였다)
   });
 
-  it("줄 끝 빈 곳이 작다: 실측 어림(한글 0.92)으로 잘라 411·130% 에서 잘린 줄의 남는 폭 가운데 값이 한글 1.5자 이하", () => {
+  it("줄 끝 빈 곳이 작다: 실측 표(한글 0.92)로 잘라 475·411 × 100·130% 에서 잘린 줄의 남는 폭(어림) 가운데 값이 한글 1.5자 이하, 여유보다 좁지 않다", () => {
     const tails: number[] = [];
     for (const title of [...REAL.map((r) => r[1]), ...COMPOUND])
       for (const win of [475, 411])
@@ -520,7 +520,7 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     // 글자 폭 어림: 한글 0.92, 숫자·영문·문장 부호는 실측 표, 모르는 글자(한자·전각)는 1
     expect(lineEm("가나다")).toBeCloseTo(2.76);
     expect(lineEm("0123456789")).toBeCloseTo(5.7);
-    expect(lineEm("…·")).toBeCloseTo(1.02);
+    expect(lineEm("…·")).toBeCloseTo(1.01);
     expect(lineEm("美【")).toBe(2);
   });
 
