@@ -331,7 +331,7 @@ export class MarketSummaryService {
       market === "US" ? this.src(() => s.usQuotes([...US_SECTOR_ETFS.map((e) => e.reuters), ...[...usCands.values()].flat()]), "미국 시세") : Promise.resolve(null),
       market === "KR" && holdings.length ? this.src(() => s.krQuotes(holdings.map((h) => h.code)), "한국 시세") : Promise.resolve(null),
       market === "KR" ? this.src(() => s.krSectors(), "한국 업종") : Promise.resolve(null),
-      this.newsFor(market, basisDate, window),
+      this.newsFor(market, basisDate, window, indices),
     ]);
 
     const fxRow = (idx.ok ? idx.value : []).find((i) => i.code === "USDKRW");
@@ -441,8 +441,13 @@ export class MarketSummaryService {
     return { ok: false, error: `${cur.ok ? "재무부 값에 그날이 없음" : cur.error}${nv.ok ? "" : ` · ${nv.error}`}` };
   }
 
-  /** 뉴스: 질의 순서대로 모아 고른다 (앞 질의로 3건이 차면 다음 질의는 부르지 않는다) */
-  private async newsFor(market: SummaryMarket, basisDate: string, window: { from: string; to: string }): Promise<{ query: string; items: MarketSummaryData["news"]["items"]; notes: string[] }> {
+  /** 뉴스: 질의 순서대로 모아 고른다 (앞 질의로 3건이 차면 다음 질의는 부르지 않는다). 제목 속 지수 값이 기준일 종가와 다르면(다른 날 장 기사) 뺀다 */
+  private async newsFor(
+    market: SummaryMarket,
+    basisDate: string,
+    window: { from: string; to: string },
+    closes: ReadonlyArray<{ code: string; value: number | null }>,
+  ): Promise<{ query: string; items: MarketSummaryData["news"]["items"]; notes: string[] }> {
     const queries = NEWS_QUERY[market];
     const notes: string[] = [];
     const got: NewsItem[] = [];
@@ -456,7 +461,7 @@ export class MarketSummaryService {
         continue;
       }
       got.push(...r.value);
-      items = pickNews(got, { ...window, days: newsDays(market, basisDate) });
+      items = pickNews(got, { ...window, days: newsDays(market, basisDate), closes });
       if (items.length >= NEWS_MAX) break;
     }
     return { query: used.join(" · "), items, notes };

@@ -18,8 +18,13 @@ import {
   blockedTitle,
   blockReason,
   classify,
+  commands,
   compareHoldings,
   coreTitle,
+  forecastsTense,
+  otherDayIndexValue,
+  politeTalk,
+  proposes,
   diffBp,
   digestLine,
   eventsText,
@@ -983,6 +988,193 @@ describe("뉴스 제목 고르기 (원문 그대로 · 창 · 거르기 · 같�
     const picked = pickNews([...got, ...parseGoogleRss(fixture("google-news-sample.xml"))], mondayWindow());
     expect(picked.map((n) => n.outlet)).toEqual(["뉴스1", "KBS", "한국경제"]);
   });
+
+  // 6차 검토 must: 실제 RSS 말뭉치(2026-09-08~26, 고유 제목 1만여 건)에서 새어 나온 제목 — 모두 원문 그대로
+  const LEAKED_6 = {
+    목표가: [
+      "한미약품 주가 조정에 다시 상승..목표價 65만원↑",
+      "UBS, 팔란티어 테크 주가 목표 상향…강력한 AI 수요 모멘텀",
+      "BMO, 아카디아 파마 주가 목표 하향…임상시험 실패 영향",
+      "UBS, 매출 성장 우려에 페이첵스 주가 목표 하향 조정",
+      "Flywire 주가 목표 $19 유지, UBS",
+      "Bank of America Sees AMD at $720 on CPU Demand",
+    ],
+    권유: ["송편 먹고 엔비디아 사자…추석 연휴에도 해외주식 거래 OK", "SoundHound AI의 내부자 판매를 무시하지 마세요.", "지금 팔자…", "반도체 담자", "미국 국채에 투자하자"],
+    추천목록: [
+      "AMD 주가보다 중요한 AI 인프라 수혜주 3선",
+      "금리 인상기에도 버틸 고배당 가치주 3선",
+      "PER 28배 미만 AI 주식 3선 엔비디아 어도비 오라클",
+      "나이키 주식과 눈여겨볼 2개 배당주",
+      "[09/21 오늘장 공략주]",
+      "UBS, AI 데이터센터 전력 반도체 주요 종목 선정",
+      "#미국주식 : 황금종목 X 매매시나리오",
+      "+201% 수익률: AI가 선정한 기술주가 계속 상승하는 이유",
+      "19년 만의 금리 쇼크…오를수록 웃는 주식 따로 있다",
+      "고금리 수혜를 노리는 찰스 슈왑 주식과 머니마켓 관련주 핵심 정리",
+      "갑자기 고꾸라진 두산에너빌 주가…현 시점 전략 세워보니",
+      "[애널픽] 대한항공, 환율·유가 부담에도 내년 영업익 159%↑",
+      "AI 데이터센터에 수요 폭발…올해 주가만 50% 넘게 올랐다 [핫픽!미국주식]",
+      // 말뭉치 검토에서 더 찾은 것
+      "1000만원으로 1년 묵힐 종목, 전문가는 이것 뽑았다 [GMC]",
+      "2026년 9월 최고의 배당주",
+      "2026년, 이 7가지 주식을 모아가는 이유",
+      "AI가 선택한 미국 주식, 최고 61% 이상 급등",
+      "169% 이상 상승: AI가 선정한 4월 신규 종목 리스트 공개",
+      "모틀리풀이 꼽은 AI 반도체 5선 뒤에 놓인 한국 HBM의 무게",
+      "[서학개미 안테나] 버핏의 애플 17%↑…월가 거물들이 찜한 종목 성적표 By EBN",
+      "최대 5.8%의 배당 수익률을 제공하는 고품질 배당주 3종",
+      "금·달러도 못 믿는 시대…배당주가 답이다",
+      "2026년 해외주식 양도소득세 6월 1일 마감, 미신고 가산세 폭탄 피하는 법",
+      "[오늘 이 종목] 코스피 7000선 탈환…배당주부터 HBM 장비주까지",
+      "안정성 지키면서 美 증시 투자…3년 수익률 37% [ETF 줌인]",
+      "美 원전 수주 기대감에 두산그룹주 매수 [주식 초고수는 지금]",
+      "개인 투자자 필독! 폭발적 성장 잠재력의 소형 미국 주식 7개 분석",
+      "팔로알토, 놀라운 숫자 그 이상의 스토리 [돈 되는 해외 주식]",
+    ],
+    값매기기: [
+      "일리노이 툴 웍스(ITW) 주가, 오늘 실적 발표를 고려할 때 적정 수준으로 보인다",
+      "L3Harris(LHX) 주가, 현금흐름 기준으로 공정가치보다 낮은 것으로 보인다",
+      "AT&T(T) 주가는 실적 대비 할인된 가격에 거래되고 있다",
+      "AtriCure(ATRC) 주가는 매출 규모에 비해 비싸 보인다",
+      "Okta(OKTA) 주가, 3년간 147% 상승한 후 과열된 모습",
+      "클라우드플레어(NET) 주가는 약 7배나 급등했음에도 여전히 비싸 보인다",
+      "마이크론(MU) 주가, 3년간의 장기간 강세장 이후 할인된 가격에 거래 중",
+      "스노우플레이크(SNOW) 주가, 122% 급등으로 공정가치 상회하는 모습",
+      "팔란티어(PLTR) 주가는 미래 현금흐름 기준 공정가치에 근접한 것으로 보인다",
+      "코카콜라(KO) 주가는 89% 급등한 후 적정 수준에 도달한 것으로 보인다",
+      "WINTERGREEN ACQUISITION CORP WTG(WINTERGREEN ACQUISITION CORP) | 적정주가",
+      "비스트라: AI가 발전소 가치를 높이고 있지만 31% 하락에도 여전히 저렴하지 않다",
+      "리게티 컴퓨팅(RGTI) 주가, 신규 자금 조달 후 프리미엄 수준에서 거래 중",
+    ],
+    예측: [
+      "인텔, 주가 2배 상승도 가능… 애플·테슬라와 파운드리 계약 효과-멜리어스",
+      "반도체주 훈풍에 삼성전자·SK하이닉스 강세…코스피 상승 기대",
+      "LG, 자회사 호실적·주주환원 확대로 주가 재평가 기대",
+      "에릭슨(ERIC.N) 주파수 경쟁에도 수혜 상존..주가 상승 유효 By 알파경제 alphabiz",
+      "추석 전 쉬어가는 증시…연휴 뒤 반등 노리는 증권가",
+      "북미 정상회담이 주한미군 감축 논의로 이어지면 국내 증시 상당한 타격",
+      "AI가 시작한 반도체 호황, AI가 끝낼지도 모른다 [AI노스트라다무스⑧]",
+      "[성공예감] AI·반도체 호황, 이 가격 떨어지면 꺾이는 신호입니다 - 곽상준 대표 (매트릭스 투자자문)",
+      "Nucor Stock Fell 6.4% on a Guidance Miss. Here’s Where Shares Could Go Further.",
+      "Nvidia Forecast: Vera Rubin Ramp and a $108 Billion Guide Set the Stage for 2027",
+      // 검토의 경계 제목 중 앞일을 말하는 것
+      "나는 쉬어도 내 돈은 안 쉰다...연휴 美증시 이벤트",
+      "연준 불확실성 해소에 뉴욕 증시 상승...10월 금리 인상론에 힘 실려",
+      "국제유가 다시 100달러 위, 월요일 미국증시에 중요한 이유",
+      "SK하이닉스ADR, 美 최대 반도체 ETF 편입…5조원 유입 기대",
+      "SK하이닉스 ADR 담는 ETF 늘어난다…편입액 3000억 육박",
+      "1400원 다가서는 환율…추가 상승 vs 다시 하락",
+      "[김남현의 채권썰] 글로벌 긴축시대, 커브 플랫에 무게",
+      "금리보다 무서운 유가…FOMC 끝나도 증시 긴장 못 푼다",
+      "45조→63조 불어난 증권사 대출 … 반대매매가 낙폭 더 키운다",
+      "에코프로 주가 반등 열쇠는 신규 수주⋯전고체보다 실적이 분수령 [찐코노미]",
+      "미국이 올렸다면 한국도…기준금리 또 올라가면 벌어지는 일 [QnA]",
+      "금리 5%에도 버티는 반도체, 옵션 만기 이후가 더 중요합니다",
+    ],
+    존댓말명령: ["지금 반도체주 매도하십시오", "삼성전자 매수하시길", "배당주로 갈아타세요", "기술주 비중 줄이세요…", "하락장엔 인버스 ETF 사두세요", "현금 비중 늘리세요", "반도체 ETF 담으세요", "ETF로 분산 투자하세요", "지금 삽시다"],
+    광고: [
+      "화면 중앙에 집중해서 보는 eos 파워 볼 사이트 더블유 릴 영역",
+      "아이콘 설명이 제공되는지 살펴보는 크레이지타임 배팅법",
+      "잔액과 이번 결과를 나눠 보는 경마배팅 화면 정보",
+      "블랙잭 이븐머니 에 대한 궁금증을 해소하는 완벽한 가이드",
+      "화면의 안내 순서대로 익히는 한게임 섯다 머니 시세 첫 조작",
+      "화면에서 찾기 어려운 정보를 모은 오늘 무료 차익 거래 베팅 안내",
+      "테마부터 조작까지 이어지는 텔레그램 게임방 상세 탐색",
+      "비주얼 중심으로 둘러보는 스포츠 베팅 api 게임 디자인",
+      "게임 규칙에 나오는 라운드와 스핀, 양자컴퓨터 블록체인 용어 차이",
+      "ARM xStock 오늘 Indonesian Rupiah 가격 | 실시간 ARMX - IDR 변환기 및 환율",
+      "이더리움 관련 미국주식 의 모든 측면: 장점, 단점 및 활용 방법",
+    ],
+  };
+
+  it("6차 검토: 목표가 변형·청유·추천 목록·값 매기기·예측·존댓말 명령·광고 제목은 모두 막힌다 (그 제목만 있어도, 사실 제목 뒤에 붙어도)", () => {
+    for (const [kind, list] of Object.entries(LEAKED_6))
+      for (const t of list) {
+        expect(blockReason(t), `${kind}: ${t}`).not.toBeNull();
+        expect(blockedTitle(`코스피 0.9% 상승 마감…${t}`), `${kind}(뒤): ${t}`).toBe(true);
+      }
+    expect(blockReason("AT&T(T) 주가는 실적 대비 할인된 가격에 거래되고 있다")).toBe("평가");
+    expect(blockReason("배당주로 갈아타세요")).toBe("명령");
+    expect(blockReason("송편 먹고 엔비디아 사자…추석 연휴에도 해외주식 거래 OK")).toBe("권유");
+    expect(blockReason("Nvidia Forecast: Vera Rubin Ramp")).toBe("영문");
+  });
+
+  it("6차 검토: 끝 모양 함수 — 존댓말 명령(commands)·청유(proposes)·말투(politeTalk)·현재·미래 꼴(forecastsTense)·꾸미는 꼴 '~ㄹ 종목'(timingCall)", () => {
+    for (const t of ["매도하십시오", "매수하시길", "투자하길", "대비하시오", "지금 삽시다", "담읍시다"]) expect(commands(t), t).toBe(true);
+    for (const t of ["엔비디아 사자…", "지금 팔자", "저점에 줍자", "배당주 모으자", "AI주 올라타자"]) expect(proposes(t), t).toBe(true);
+    // 투자자 무리가 바로 앞에 오면 시장 낱말 '사자·팔자' (사실)
+    for (const t of ["외국인 사자에 코스피 상승", "외국인 사자·기관 팔자에 보합", "코스피 4일 연속 하락… 외인 '1.5조' 팔자 [MTN 마감시황]", "[마감] 코스피, 외인 7일 연속 팔자 약보합서 맴맴", "개미들 삼성전자 사자…"])
+      expect(proposes(t), t).toBe(false);
+    for (const t of ["꺾이는 신호입니다", "더 중요합니다", "투자 이렇게 해요", "반등했네요"]) expect(politeTalk(t), t).toBe(true);
+    for (const t of ["수요 급증", "주요 지수 상승", "필요 자금"]) expect(politeTalk(t), t).toBe(false);
+    for (const t of ["반대매매가 낙폭 더 키운다", "코스닥 부담 커진다", "삼전은 판다", "국내 ETF로도 투자한다", "수주 쌓인다"]) expect(forecastsTense(t), t).toBe(true);
+    for (const t of ["혼다 주가 급등", "코스피는 올랐다", "외국인 2조원 순매도", "AI 어젠다 논의"]) expect(forecastsTense(t), t).toBe(false);
+    for (const t of ["1년 묵힐 종목", "오를 주식", "주목할 종목"]) expect(timingCall(t), t).toBe(true);
+    for (const t of ["개별 종목 장세", "반도체주만이 아니다: 9월 상승세를 이끈 개별 종목들", "대출 종목관리 부실", "9월 주식 시장", "선물 종목 시세", "기술 주식 강세", "OG닷컴, 미국 개별주식 선물 등록 절차 착수"])
+      expect(timingCall(t), t).toBe(false);
+  });
+
+  it("6차 검토: 사실을 적은 말은 계속 둔다 (거르기를 넓혀도 — 말뭉치에서 잘못 막히던 것 포함)", () => {
+    for (const t of [
+      "외국인 사자에 코스피 상승",
+      "코스피 4일 연속 하락… 외인 '1.5조' 팔자 [MTN 마감시황]",
+      "저가 매수세 유입에 반등",
+      "30살 때부터 모은 주식",
+      "공매도 잔고 줄어",
+      "美·이란 협상 기대에 뉴욕증시 상승",
+      "(뉴욕증시) 미·이란 협상 기대, 유가하락에 상승 - 경제",
+      "[속보]뉴욕증시 혼조 마감…금리 급등 vs 호르무즈 재개 기대",
+      "환율 이틀 연속 급락해 1,350원대로…달러매도·중동대화 기대",
+      "[뉴욕증시 13일] 트럼프 호르무즈 통행료 예고에 하락",
+      "SK그룹 전문경영인 부회장 3명, 하이닉스로 보임…반도체에 집중",
+      "뇌신경마취학회 영양 해결책",
+      "블룸버그에 따르면 반도체주 강세",
+      "라면 수출 급증에 음식료주 강세",
+      "시총 기준 강화로 코스닥서 8개 종목 퇴출",
+      "코스피 7000선 회복",
+      "[오늘의 증시] 코스피 7080선 상승 마감…반도체 강세에도 상승폭은 반납",
+      "서학개미, 다시 반도체 베팅…이틀간 9천억 원 넘게 사들여",
+      "게임주 강세에 코스닥 상승",
+      "AI 스타트업, 시리즈B 라운드 투자 유치",
+      "Nvidia sell-off deepens as yields jump",
+      "Apple buyback lifts shares",
+      "[속보] 코스피 63.01p(0.90%) 오른 7080.92 마감",
+      "원·달러 환율, 22.8원 내린 1358.2원 마감",
+      "코스피, 오픈AI 훈풍에 7000선 턱밑 마감",
+    ])
+      expect(blockReason(t), t).toBeNull();
+    // 조건 '~면'은 막고, 이름씨·출처는 둔다
+    for (const t of ["환율 1400원 넘어서면 수입물가 급등", "유가 떨어지면 반등", "코스피 7000 올라가면"]) expect(blockedTitle(t), t).toBe(true);
+  });
+
+  it("다른 날 장 기사는 뺀다 (6차 검토): 제목 속 지수 값이 기준일 종가와 다르면 — 실제 9/16 오후 창의 '코스피 6627.26 마감'(9/15 종가) 기사", () => {
+    const closes = [
+      { code: "KOSPI", value: 6717.97 },
+      { code: "KOSDAQ", value: 815.98 },
+    ];
+    expect(otherDayIndexValue("코스피 6627.26 마감…5거래일 하락에 외국인·기관 2.4조 동반 매도", closes)).toBe(true);
+    expect(otherDayIndexValue("[속보] 코스피 6717.97(▲90.71p, 1.37%) 마감, 원·달러 환율 1368.6원", closes)).toBe(false);
+    expect(otherDayIndexValue("코스피 6,717.97 코스닥 815.98", closes)).toBe(false);
+    expect(otherDayIndexValue("코스피 6,717.97 코스닥 812.41", closes)).toBe(true); // 코스닥 값이 다른 날
+    expect(otherDayIndexValue("코스피 1.37% 오른 6717선 마감…환율 1,368.60원", closes)).toBe(false); // 환율(원)·소수 없는 값은 보지 않는다
+    expect(otherDayIndexValue("코스피200 선물 870.12", closes)).toBe(false); // 다른 지수
+    expect(otherDayIndexValue("코스피 6627.26 마감", [{ code: "KOSPI", value: null }])).toBe(false); // 종가를 모르면 그대로
+    expect(otherDayIndexValue("다우 312.45포인트 상승…51,828.62 마감", [{ code: "DJI", value: 51828.62 }])).toBe(false);
+    expect(otherDayIndexValue("다우 51,516.17 마감", [{ code: "DJI", value: 51828.62 }])).toBe(true);
+    // 종가와 장중 값을 함께 적은 같은 날 기사는 둔다 (말뭉치 9/22 오후 창의 실제 제목), 다른 날 값만 적은 기사는 뺀다 (9/21 창에 찍혀 온 9/23 값)
+    expect(otherDayIndexValue("[EBN 데이터센터] 코스피 7017.91로 강보합 마감...장중 7171.44까지 올랐지만 상승폭 축소", [{ code: "KOSPI", value: 7017.91 }])).toBe(false);
+    expect(otherDayIndexValue("코스피 0.90% 오른 7080.92 마감...코스닥 1.21% 상승", [{ code: "KOSPI", value: 7007.72 }])).toBe(true);
+    // 실제 파서로 읽은 창 안 기사: 다른 날 값 기사는 뽑히지 않고, 같은 날 값 기사는 뽑힌다
+    const got = parseGoogleRss(
+      rss([
+        { title: "코스피 6627.26 마감…5거래일 하락에 외국인·기관 2.4조 동반 매도", outlet: "데일리 이코노미", at: "2026-09-16T06:33:00Z", id: "od1" },
+        { title: "[속보] 코스피 6717.97(▲90.71p, 1.37%) 마감, 원·달러 환율 1368.6원", outlet: "파이낸셜뉴스", at: "2026-09-16T06:34:00Z", id: "od2" },
+      ]),
+    );
+    const w = { ...newsWindow("KR", "2026-09-16", at("2026-09-16T16:00:00+09:00")), days: newsDays("KR", "2026-09-16") };
+    expect(pickNews(got, w).map((n) => n.outlet)).toEqual(["데일리 이코노미", "파이낸셜뉴스"]); // 종가를 모르면 둘 다
+    expect(pickNews(got, { ...w, closes }).map((n) => n.outlet)).toEqual(["파이낸셜뉴스"]);
+  });
 });
 
 describe("세션 날짜·휴장 판단 (네이버 장 상태 → 토스 달력 → 휴장일 목록, 다르면 휴장 쪽)", () => {
@@ -1229,7 +1421,7 @@ class RecordingPush implements PushSender {
 const TOKEN = "ExponentPushToken[bbbbbbbbbbbbbbbbbbbbbb]";
 
 /** 출처별 호출 수를 세는 가짜 출처 묶음 (녹화한 응답으로 답한다) */
-function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: string; trading: boolean; desc: string | null; latest: string; next?: string }; slowMs?: number; krSec?: { note: string | null; asOf?: string | null } } ) {
+function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: string; trading: boolean; desc: string | null; latest: string; next?: string }; slowMs?: number; krSec?: { note: string | null; asOf?: string | null }; krNews?: NewsItem[] } ) {
   const calls: Record<string, number> = {};
   const count = (k: string) => {
     calls[k] = (calls[k] ?? 0) + 1;
@@ -1265,7 +1457,7 @@ function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: st
     },
     news: async (q) => {
       count("news");
-      return slow(q === "뉴욕증시" ? parseGoogleRss(fixture("google-news-sample.xml")) : ([] as NewsItem[]));
+      return slow(q === "뉴욕증시" ? parseGoogleRss(fixture("google-news-sample.xml")) : q === "코스피 마감" && o.krNews ? o.krNews : ([] as NewsItem[]));
     },
     holdings: async () => {
       count("holdings");
@@ -1314,10 +1506,10 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
     db = null;
   });
 
-  const setup = async (o: { now: string; session: "morning" | "afternoon"; calendar?: unknown; krToday?: Parameters<typeof fakeSources>[0]["krToday"]; krSec?: Parameters<typeof fakeSources>[0]["krSec"] }) => {
+  const setup = async (o: { now: string; session: "morning" | "afternoon"; calendar?: unknown; krToday?: Parameters<typeof fakeSources>[0]["krToday"]; krSec?: Parameters<typeof fakeSources>[0]["krSec"]; krNews?: NewsItem[] }) => {
     db = await createMigratedDb(":memory:");
     const push = new RecordingPush();
-    const { src, calls } = fakeSources({ session: o.session, ...(o.krToday ? { krToday: o.krToday } : {}), ...(o.krSec ? { krSec: o.krSec } : {}) });
+    const { src, calls } = fakeSources({ session: o.session, ...(o.krToday ? { krToday: o.krToday } : {}), ...(o.krSec ? { krSec: o.krSec } : {}), ...(o.krNews ? { krNews: o.krNews } : {}) });
     app = await buildApp({
       config: loadConfig({ DATABASE_URL: ":memory:" }),
       db,
@@ -1398,6 +1590,24 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
     expect(calls["treasury"]).toBeUndefined();
     expect(calls["usQuotes"]).toBeUndefined();
     expect(calls["news"]).toBe(2);
+  });
+
+  it("오후 뉴스: 제목 속 코스피 값이 그날 종가(7080.92)와 다른 기사(다른 날 장 기사)는 카드·상세에 오르지 않는다 (6차 검토)", async () => {
+    const krNews = parseGoogleRss(
+      `<rss><channel>${[
+        ["코스피 7033.92 마감…중동 악재에도 7000선 사수", "머니S", "2026-09-23T06:33:00Z", "k1"],
+        ["[속보] 코스피 63.01p(0.90%) 오른 7080.92 마감", "뉴스1", "2026-09-23T06:31:00Z", "k2"],
+        ["코스피, 반도체 강세에 7080선 마감…삼성전자 3%↑", "아시아경제", "2026-09-23T06:40:00Z", "k3"],
+      ]
+        .map(([t, o, d, id]) => `<item><title>${t} - ${o}</title><link>https://news.google.com/rss/articles/${id}</link><pubDate>${new Date(d!).toUTCString()}</pubDate><source url="https://x">${o}</source></item>`)
+        .join("")}</channel></rss>`,
+    );
+    expect(krNews).toHaveLength(3);
+    await setup({ now: "2026-09-23T16:00:10+09:00", session: "afternoon", krNews });
+    await app!.briefingService.runSession("afternoon", { trigger: "schedule" });
+    const d = ((await app!.inject({ method: "GET", url: "/api/market-summaries/latest" })).json() as { data: MarketSummaryData }).data;
+    expect(d.news.items.map((n) => n.outlet)).toEqual(["아시아경제", "뉴스1"]); // 속보는 본기사 뒤
+    expect(d.news.items.some((n) => n.title.includes("7033.92"))).toBe(false);
   });
 
   it("오후: 발견 탭이 출처가 비운 시간이라 전날 저장본을 주면 업종 줄을 뺀다 (전날 업종이 오늘 업종처럼 보이지 않게)", async () => {
