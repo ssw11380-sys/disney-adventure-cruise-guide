@@ -1,7 +1,8 @@
 import { requestWidgetUpdate, type WidgetTaskHandlerProps } from "react-native-android-widget";
+import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 import { loadCachedWidgetData, loadWidgetData, readPnlMode, setPnlMode, togglePnlMode, type WidgetData } from "./data";
 import { fontScaleNow } from "./fontScale";
-import type { PnlMode } from "./model";
+import { failureText, type PnlMode } from "./model";
 import { errorView, renderBoth } from "./render";
 import { WIDGET_CLICK, WIDGET_NAMES } from "./widgets";
 
@@ -48,6 +49,10 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
     });
     // 손익 칸 설정은 받은 뒤에 읽는다: 받는 동안(최대 12초, "갱신 중") 손익을 눌러 바꾼 것을 옛 값으로 되돌려 그리지 않게
     renderWidget(renderBoth(name, data, { ...frame, now: Date.now(), pnlMode: await readPnlMode() }));
+    // 자동 갱신 기록 (위젯 리뷰 2, 설정 화면 '마지막 자동 갱신'): 주기 갱신은 periodic, ↻ 는 button. 추가·크기 변경은 적지 않는다(폴드를 접고 펼 때마다 오므로 간격이 흐려진다).
+    // 받아 둔 응답을 다시 써 서버를 부르지 않았으면 skipped — 평균 간격을 서버에 실제로 물은 갱신으로만 내게 (통합 검증 지적)
+    const source = widgetAction === "WIDGET_UPDATE" ? "periodic" : click === WIDGET_CLICK.refresh ? "button" : null;
+    if (source) await logWidgetRefresh(source, data.error ? "failed" : data.asked === false ? "skipped" : "ok", { error: failureText(data.error) });
   } catch (e) {
     // 렌더 중 예외가 나면 위젯이 빈 채로 남으므로 오류를 글로 보여 준다
     renderWidget(errorView(e));

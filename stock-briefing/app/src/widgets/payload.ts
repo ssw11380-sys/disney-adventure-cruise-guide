@@ -1,4 +1,4 @@
-import type { LatestBriefing, Quote, RegisteredWithQuote } from "@/api/types";
+import type { LatestBriefing, Quote, QuoteSession, RegisteredWithQuote } from "@/api/types";
 import { featureOn } from "@/lib/features";
 
 /**
@@ -14,6 +14,12 @@ export interface WidgetMarket {
   us?: boolean;
   /** 시장별 문구 (다듬은 잔고 위젯이 두 시장을 한 칩에: "미국 주간거래 · 한국 휴장"). 예전 서버·플래그 꺼짐이면 없음 → label 한 개 */
   markets?: { market: "KR" | "US"; label: string }[];
+  /**
+   * 시장별 연장 세션 열림 (위젯 리뷰 1, 플래그 widgetExtended — extendedOpen): 달력으로는 닫혀 있지만 보유 종목이 거래되는 세션
+   * (미국 프리·애프터·주간거래 등). 이때도 장중처럼 15분마다 갱신하고(shouldSkipFetch·canReuse) 그 시장 시세로 '지연'을 따진다(openMarketAsOf).
+   * 예전 서버·플래그 꺼짐이면 없음 → 예전처럼 휴장 규칙
+   */
+  ext?: { kr: boolean; us: boolean };
 }
 
 /** 브리핑 위젯 안내 (BH-68): 설정한 브리핑 시각(끈 세션은 null)과 최신 브리핑이 실패한 종목 수. 예전 서버면 없음 */
@@ -75,7 +81,7 @@ export interface WidgetPayload {
   brief?: WidgetBrief;
 }
 
-/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish) */
+/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended) */
 export interface WidgetFeatures {
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
@@ -85,6 +91,11 @@ export interface WidgetFeatures {
   market: boolean;
   /** 다듬은 잔고 위젯 (두 시장 칩·지수 줄 순서·'수익'/'오늘'·⇅·'보유 17 · 관심 1'·줄 간격). 꺼져 있거나 모르면 예전 모습 그대로 */
   polish: boolean;
+  /**
+   * 연장 세션(프리·애프터·주간거래)도 장중처럼 갱신·'지연' 판단 (widgetExtended). 켜져 있을 때만 true 칸이 있다 —
+   * 꺼짐·모름은 칸이 없어 예전에 적어 둔 값·예전 모양과 같다 (fallback false)
+   */
+  extended?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -97,6 +108,7 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     indexLine: featureOn(flags, "widgetIndexLine", false),
     market: featureOn(flags, "widgetMarket", false),
     polish: featureOn(flags, "widgetPolish", false),
+    ...(featureOn(flags, "widgetExtended", false) ? { extended: true } : {}),
   };
 }
 
@@ -199,7 +211,61 @@ export function fromPayload(p: WidgetPayload): {
     name: b.name,
     latest: { id: b.id, code: b.code, name: b.name, session: b.session as "morning" | "afternoon", date: b.date, status: "ok", summary: b.summary, detail: "", missing: [], model: "", error: null, createdAt: b.createdAt },
   }));
-  return { stocks, briefings, market: p.market, indices: cleanIndices(p.indices), board: cleanIndices(p.board), features: widgetFeatures(p.features), brief: cleanBrief(p.brief) };
+  const features = widgetFeatures(p.features);
+  return { stocks, briefings, market: gateExtended(p.market, features), indices: cleanIndices(p.indices), board: cleanIndices(p.board), features, brief: cleanBrief(p.brief) };
+}
+
+/**
+ * 시장별 연장 세션 열림 (widgetExtended): 달력(토스 — 한국 08:00~20:00, 미국은 정규장만)으로는 닫혀 있지만, 보유 종목 중
+ * 지금 세션이 열려 있고(open) 그 세션의 거래 대상으로 확인됐고(eligible true) 경계(until) 전인 종목이 있으면 true.
+ * 잔고 상태 줄의 '지연' 판단(lib/liveDot liveCounts)과 같은 조건 — 대상인지 모르거나(eligible null) 주간거래 미지원(false)이면 가격이 바뀌지 않는다.
+ * 서버 services/widgetPayload.ts 의 extendedOpen 과 같은 함수 (공용 픽스처 shared/fixtures/widgetExtended.json — 한쪽을 고치면 다른 쪽도 같이)
+ */
+export function extendedOpen(calendar: { kr: boolean; us: boolean }, sessions: readonly (QuoteSession | null | undefined)[], now: number): { kr: boolean; us: boolean } {
+  const on = (market: "KR" | "US", calOpen: boolean) =>
+    !calOpen &&
+    sessions.some((s) => {
+      if (!s || s.market !== market || !s.open || s.eligible !== true) return false;
+      const until = s.until ? Date.parse(s.until) : NaN;
+      return !(Number.isFinite(until) && now >= until);
+    });
+  return { kr: on("KR", calendar.kr), us: on("US", calendar.us) };
+}
+
+/** 칩의 연장 세션 표시를 쓸지: 위젯이 쓰는 플래그(widgetExtended)가 켜져 있을 때만. 꺼져 있거나 모르면 ext 를 뗀 칩 (예전 휴장 규칙) */
+export function gateExtended(market: WidgetMarket | null, features: WidgetFeatures): WidgetMarket | null {
+  if (!market?.ext || features.extended === true) return market;
+  const { ext: _ext, ...rest } = market;
+  return rest;
+}
+
+/** 받아 둔 /api/widget 응답의 칩 (플래그로 거른 것 — 백그라운드 작업·위젯 재사용이 갱신을 건너뛸지 볼 때) */
+export function payloadMarket(body: Pick<WidgetPayload, "market" | "features">): WidgetMarket | null {
+  return gateExtended(body.market ?? null, widgetFeatures(body.features));
+}
+
+/** 보유 종목의 연장 세션이 열려 있는 시장이 있는지 */
+function extOpen(market: WidgetMarket | null | undefined): boolean {
+  return market?.ext?.kr === true || market?.ext?.us === true;
+}
+
+/**
+ * 연장 세션 표시(ext)와 그 '지연' 판단에 쓰는 종목: 보유 종목(수량 > 0)만 (통합 검증 지적). 관심 종목만 프리마켓이면 15분 갱신·'지연'을 하지 않는다.
+ * 서버 services/widgetPayload.ts buildWidgetPayload 의 ext 계산과 같은 조건
+ */
+export function heldForExtended(s: { quantity?: number | null }): boolean {
+  return (s.quantity ?? 0) > 0;
+}
+
+/**
+ * 앱이 바로 그리는 칩(WidgetBridge — 서버 칩과 같은 marketChip)에 연장 세션 표시를 붙인다 (pushWidgetData).
+ * 플래그가 켜져 있고 칩에 아직 없으면 보유 종목 시세의 세션으로 서버와 같은 규칙(extendedOpen — 관심 종목은 보지 않는다). 꺼져 있으면 뗀다.
+ * 백그라운드 작업이 넘기는 칩(서버 응답)은 서버가 이미 붙였으므로 그대로
+ */
+export function withExtended(market: WidgetMarket | null, features: WidgetFeatures, stocks: readonly { quantity?: number | null; quote?: Quote | null }[], now: number): WidgetMarket | null {
+  if (!market || features.extended !== true) return gateExtended(market, features);
+  if (market.ext) return market;
+  return { ...market, ext: extendedOpen({ kr: market.kr === true, us: market.us === true }, stocks.filter(heldForExtended).map((s) => s.quote?.session), now) };
 }
 
 /**
@@ -212,14 +278,20 @@ export function currentMarket(market: WidgetMarket | null | undefined, now: numb
   return Number.isFinite(next) && now >= next ? null : market;
 }
 
-/** 지금 열린 시장 종목의 가장 늦은 시세 시각 (한국 장중이면 한국 종목만). 열린 시장 종목이 없으면 null */
+/**
+ * 지금 열린 시장 종목의 가장 늦은 시세 시각 (한국 장중이면 한국 종목만). 열린 시장 종목이 없으면 null.
+ * 연장 세션(ext — 미국 프리·애프터·주간거래 등, widgetExtended)이 열린 시장도 열린 시장으로 본다 — 이때 숫자가 30분 넘게 묵으면 '지연'.
+ * 연장 세션으로만 열린 시장은 보유 종목(수량 > 0) 시세만 본다 (통합 검증 지적 — ext 를 켠 것과 같은 종목. 관심 종목의 새 시세가 멈춘 보유 종목을 가리지 않게).
+ * 달력으로 열린 시장은 예전처럼 모든 종목
+ */
 export function openMarketAsOf(stocks: RegisteredWithQuote[], market: WidgetMarket | null): number | null {
-  if (!market?.open) return null;
+  if (!market || (!market.open && !extOpen(market))) return null;
   const byMarket = market.kr !== undefined || market.us !== undefined;
   let best: number | null = null;
   for (const s of stocks) {
     if (!s.quote) continue;
-    const isOpen = !byMarket || (s.quote.currency === "USD" ? market.us : market.kr);
+    const held = heldForExtended(s);
+    const isOpen = !byMarket || (s.quote.currency === "USD" ? market.us === true || (market.ext?.us === true && held) : market.kr === true || (market.ext?.kr === true && held));
     const t = Date.parse(s.quote.asOf);
     if (isOpen && Number.isFinite(t) && (best === null || t > best)) best = t;
   }
@@ -235,7 +307,7 @@ export function isDelayed(opts: { openAsOf: number | null; fetchedAt: number; er
 
 /**
  * 위젯이 스스로 갱신할 때(주기·추가·크기 변경) 서버를 다시 부르지 않고 저장해 둔 응답을 쓸지.
- * 장중엔 15분 안에 받은 값(백그라운드 작업이 15분마다 받는다), 두 시장이 닫혀 있으면 shouldSkipFetch 규칙
+ * 장중(연장 세션 포함)엔 15분 안에 받은 값(백그라운드 작업이 15분마다 받는다), 두 시장이 닫혀 있으면 shouldSkipFetch 규칙
  */
 export const REUSE_OPEN_MS = 15 * 60_000;
 export function canReuse(last: { at: number; market: WidgetMarket | null } | null, now: number): boolean {
@@ -246,11 +318,13 @@ export function canReuse(last: { at: number; market: WidgetMarket | null } | nul
 
 /**
  * 백그라운드 갱신에서 서버 호출을 건너뛸지: 두 시장이 모두 닫혀 있고, 다음 개장 전이고, 마지막으로 받은 지 2시간 안이면 건너뛴다.
- * 브리핑이 나오는 시간(08:20~09:30, 15:50~17:00 KST)은 휴장이어도 건너뛰지 않는다 (알림이 늦지 않게)
+ * 브리핑이 나오는 시간(08:20~09:30, 15:50~17:00 KST)은 휴장이어도 건너뛰지 않는다 (알림이 늦지 않게).
+ * 보유 종목의 연장 세션(ext — 미국 프리·애프터·주간거래 등)이 열려 있으면 장중처럼 건너뛰지 않는다 (위젯 리뷰 1 — 예전에는 이 시간에 최대 2시간 멈췄다).
+ * 받아 둔 응답의 칩은 플래그로 거른 것(payloadMarket)을 넘긴다
  */
 export const CLOSED_REFRESH_MS = 2 * 3_600_000;
 export function shouldSkipFetch(last: { at: number; market: WidgetMarket | null } | null, now: number): boolean {
-  if (!last?.market || last.market.open) return false;
+  if (!last?.market || last.market.open || extOpen(last.market)) return false;
   if (now - last.at >= CLOSED_REFRESH_MS) return false;
   const next = last.market.nextChangeAt ? Date.parse(last.market.nextChangeAt) : NaN;
   if (!Number.isFinite(next) || now >= next) return false;

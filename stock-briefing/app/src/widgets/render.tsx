@@ -36,7 +36,8 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
   const frame = { width: o.width, height: o.height, fontScale: o.fontScale, palette };
   switch (name) {
     case WIDGET_NAMES.briefing:
-      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={o.now} market={data.market} refreshing={o.refreshing} brief={data.brief ?? null} {...frame} />;
+      // 제목·안내 문구를 누르면 브리핑 탭은 다듬은 모습(widgetPolish)에서만 (위젯 검토 7번 — 꺼져 있으면 지금처럼 잔고 탭)
+      return <BriefingWidget briefings={data.briefings} fetchedAt={data.fetchedAt} error={data.error} now={o.now} market={data.market} refreshing={o.refreshing} brief={data.brief ?? null} polish={data.features.polish} {...frame} />;
     case WIDGET_NAMES.asset:
       return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={o.now} market={data.market} {...frame} />;
     case WIDGET_NAMES.market:

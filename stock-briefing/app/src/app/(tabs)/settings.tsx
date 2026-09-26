@@ -11,6 +11,7 @@ import { flushErrors, reportError } from "@/lib/errorReport";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
 import { ScreenInfoCard } from "@/components/ScreenInfoCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
+import { WidgetRefreshStatus } from "@/components/WidgetRefreshStatus";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, RowWrapContext, SectionTitle, Toggle } from "@/components/ui";
 import { FOLD_COL_GAP, settingsColumnMax, settingsTwoColumns } from "@/lib/foldScreens";
@@ -35,6 +36,8 @@ export default function SettingsScreen() {
   const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency } = useSettings();
   // 다듬은 잔고 위젯(widgetPolish)에서만 쓰는 설정이라 플래그가 켜져 있을 때만 보인다
   const widgetPolishOn = useFeature("widgetPolish", false);
+  // 위젯 자동 갱신 기록 요약·배터리 설정 열기 (위젯 리뷰 2). 기록은 늘 적고 보여 주는 것만 플래그 뒤에
+  const widgetLogOn = useFeature("widgetRefreshLog", false);
   const health = useHealth();
   // 알림·토스 카드는 토큰이 맞는 서버에서만 보인다 (토큰이 없으면 서버가 401 을 주므로 묻지 않는다)
   const full = !!health.data && !health.data.limited;
@@ -110,6 +113,7 @@ export default function SettingsScreen() {
       <View style={{ gap: space.xxs, paddingTop: space.sm }}>
         <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
         <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
+        {widgetLogOn ? <WidgetRefreshStatus /> : null}
       </View>
       {widgetPolishOn ? (
         <View style={{ gap: space.s, paddingTop: space.sm }}>

@@ -24,6 +24,9 @@ import { buildWidgetPayload, widgetBrief, type BriefSchedule, type WidgetFeature
  *    예전처럼 달력만 본 칩을 준다 — 서버가 OTA 보다 먼저 배포돼도 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀌지 않게
  *  - ui=2: 다듬은 잔고 위젯·브리핑 안내를 그릴 수 있는 새 앱. brief(브리핑 시간·최신 브리핑 실패 수, BH-68)를 넣고,
  *    widgetPolish 가 켜져 있으면 칩의 시장별 문구와 지수 줄 다섯 개(코스피·코스닥·나스닥·S&P500·원/달러)를 준다. 예전 앱(표시 없음)의 응답은 그대로
+ *  - widgetExtended 가 켜져 있고 &sessions=1 이면 칩에 시장별 연장 세션 열림(market.ext — 미국 프리·애프터·주간거래 등). 새 앱은 이때도 장중처럼
+ *    15분마다 갱신하고 '지연'을 따진다. 새 요청 표시를 더하지 않는 것은 1.4.0 지금 JS 도 &sessions=1 로 묻고 모르는 칸을 무시하기 때문이다
+ *    (주소를 바꾸면 받아 둔 응답을 한 번 버린다). 칩의 다른 칸은 그대로라 예전 앱의 모습·갱신 주기는 바뀌지 않는다
  */
 export const widgetRoutes: FastifyPluginAsync<{
   stocks: StockService;
@@ -37,13 +40,14 @@ export const widgetRoutes: FastifyPluginAsync<{
 }> = async (app, deps) => {
   const flags = async (): Promise<WidgetFeatures | undefined> => {
     if (!deps.features) return undefined;
-    const [widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish] = await Promise.all([
+    const [widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish, widgetExtended] = await Promise.all([
       deps.features.enabled("widgetPnlToggle"),
       deps.features.enabled("widgetIndexLine"),
       deps.features.enabled("widgetMarket"),
       deps.features.enabled("widgetPolish"),
+      deps.features.enabled("widgetExtended"),
     ]);
-    return { widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish };
+    return { widgetPnlToggle, widgetIndexLine, widgetMarket, widgetPolish, widgetExtended };
   };
   app.get("/", async (req, reply) => {
     const features = flags();
@@ -73,6 +77,7 @@ export const widgetRoutes: FastifyPluginAsync<{
         sessions: wantsSessions,
         polish: newUi && f?.widgetPolish === true,
         brief: newUi ? widgetBrief(latest, sched) : null,
+        extended: wantsSessions && f?.widgetExtended === true,
       }),
     );
     const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 16)}"`;

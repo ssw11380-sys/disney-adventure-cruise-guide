@@ -18,6 +18,7 @@ import type { RegisteredWithQuote } from "./stockService.js";
  *    위젯이 없는 사용자의 응답·ETag 는 판과 무관하다
  *  - 새 앱(&ui=2 — 다듬은 잔고 위젯·브리핑 안내를 그릴 수 있는 앱)에만: brief(브리핑 시간·최신 브리핑 실패 수, BH-68).
  *    widgetPolish 가 켜져 있으면 칩의 시장별 문구(market.markets)와 지수 줄 다섯 개(코스피·코스닥·나스닥·S&P500·원/달러)도. 예전 앱의 응답은 그대로다
+ *  - 세션 칩을 묻는 앱(&sessions=1)이고 widgetExtended 가 켜져 있으면 칩에 시장별 연장 세션 열림(market.ext, extendedOpen) — 칩의 다른 칸은 그대로
  */
 
 /** 칩에 넣는 시장 하나 (다듬은 잔고 위젯): 달력으로 열려 있으면 "한국 장중"·"미국 장중", 아니면 그 시장 보유 종목의 지금 세션 이름 */
@@ -37,6 +38,12 @@ export interface WidgetMarket {
   nextChangeAt: string | null;
   /** 시장별 문구 (보유 종목 세션을 넘겼을 때만 — 새 앱이 두 시장을 한 칩에 그린다). 경계가 지난 세션은 넣지 않는다 */
   markets?: ChipMarket[];
+  /**
+   * 시장별 연장 세션 열림 (widgetExtended, extendedOpen): 달력으로는 닫혀 있지만 보유 종목이 거래되는 세션(미국 프리·애프터·주간거래 등)이 열려 있음.
+   * 새 앱은 이때도 장중처럼 15분마다 갱신하고, 그 시장 시세가 30분 넘게 묵으면 '지연'을 띄운다.
+   * 세션 이름 칩을 묻는 앱(&sessions=1)에만, 플래그가 켜져 있을 때만 넣는다. 예전 앱은 모르는 칸이라 무시한다
+   */
+  ext?: { kr: boolean; us: boolean };
 }
 
 /** 브리핑 위젯 안내 (BH-68): 알림 설정의 브리핑 시각(끈 세션은 null)과, 최신 브리핑이 실패한 종목 수 */
@@ -96,6 +103,8 @@ export interface WidgetFeatures {
   widgetMarket?: boolean;
   /** 다듬은 잔고 위젯 (없으면 새 앱은 꺼짐 — 예전 모습) */
   widgetPolish?: boolean;
+  /** 연장 세션(프리·애프터·주간거래)도 장중처럼 갱신·'지연' 판단 (없으면 새 앱은 꺼짐 — 예전처럼 휴장 규칙) */
+  widgetExtended?: boolean;
 }
 
 export interface WidgetPayload {
@@ -202,6 +211,25 @@ export function marketChip(s: MarketStatus, sessions: readonly (QuoteSession | n
   return { label: "장 마감", open: false, ...base };
 }
 
+/**
+ * 시장별 연장 세션 열림 (widgetExtended): 달력(토스 — 한국 08:00~20:00, 미국은 정규장만)으로는 닫혀 있지만, 보유 종목 중
+ * 지금 세션이 열려 있고(open) 그 세션의 거래 대상으로 확인됐고(eligible true) 경계(until) 전인 종목이 있으면 true.
+ * 앱 잔고 상태 줄이 '지연'을 따지는 조건(lib/liveDot liveCounts)과 같다 — 거래 대상인지 모르는 종목(eligible null)이나
+ * 주간거래 미지원 종목(eligible false)만 있으면 가격이 바뀌지 않으니 장중처럼 갱신하거나 '지연'이라 하지 않는다.
+ * 달력으로 열린 시장은 예전 규칙(kr·us)이 이미 장중으로 보므로 false. 앱 widgets/payload.ts 의 extendedOpen 과 같은 함수
+ * (공용 픽스처 shared/fixtures/widgetExtended.json — 한쪽을 고치면 다른 쪽도 같이)
+ */
+export function extendedOpen(calendar: { kr: boolean; us: boolean }, sessions: readonly (QuoteSession | null | undefined)[], now: number): { kr: boolean; us: boolean } {
+  const on = (market: "KR" | "US", calOpen: boolean) =>
+    !calOpen &&
+    sessions.some((s) => {
+      if (!s || s.market !== market || !s.open || s.eligible !== true) return false;
+      const until = s.until ? Date.parse(s.until) : NaN;
+      return !(Number.isFinite(until) && now >= until);
+    });
+  return { kr: on("KR", calendar.kr), us: on("US", calendar.us) };
+}
+
 /** 위젯 표시에 필요한 자릿수만 (등락률 소수 2자리, 금액·가격·환율 4자리) */
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
@@ -276,6 +304,8 @@ export function buildWidgetPayload(
     polish?: boolean | undefined;
     /** 새 앱(&ui=2)에만: 브리핑 시간·실패 수 */
     brief?: WidgetBrief | null | undefined;
+    /** 세션 칩을 묻는 앱(&sessions=1)이고 widgetExtended 가 켜져 있음: 칩에 시장별 연장 세션 열림(ext) */
+    extended?: boolean | undefined;
   } = {},
 ): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
@@ -290,6 +320,13 @@ export function buildWidgetPayload(
   const sharedFx = stocks.find((s) => s.quote?.currency === "USD" && s.quote.fxRate)?.quote?.fxRate ?? null;
   // 시장별 문구(와 그 경계의 nextChangeAt)는 다듬은 잔고 위젯을 그리는 새 앱에만 (예전 앱·플래그 꺼짐의 칩은 예전 그대로)
   const market = status ? marketChip(status, extra.sessions ? stocks.map((x) => x.quote?.session) : [], undefined, { markets: extra.polish === true }) : null;
+  // 연장 세션(프리·애프터·주간거래): 칩의 다른 칸은 그대로 두고 표시만 더한다 (칩 문구·금색·nextChangeAt 은 앱 WidgetBridge 와 같은 marketChip 그대로).
+  // 보유 종목(수량 > 0)의 세션만 본다 (통합 검증 지적) — 관심 종목만 프리마켓이면 새 앱이 15분 갱신·'지연'을 하지 않게. 앱 widgets/payload.ts withExtended·openMarketAsOf 와 같은 조건
+  if (market && status && extra.extended) {
+    const t = Date.parse(status.now);
+    const held = stocks.filter((x) => (x.quantity ?? 0) > 0);
+    market.ext = extendedOpen({ kr: status.KR.isOpen, us: status.US.isOpen }, held.map((x) => x.quote?.session), Number.isFinite(t) ? t : Date.now());
+  }
   const payload: WidgetPayload = {
     v: 1,
     market,

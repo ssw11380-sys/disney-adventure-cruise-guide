@@ -14,6 +14,8 @@ import { fakeIndexSource, fakeIndices, fakeProviders, FakeGenerator } from "./he
 
 const m = (market: "KR" | "US", isOpen: boolean, isTradingDay: boolean, at: string | null = null): MarketState => ({ market, isOpen, isTradingDay, opensAt: isOpen ? null : at, closesAt: isOpen ? at : null, source: "toss" });
 const st = (kr: MarketState, us: MarketState): MarketStatus => ({ now: "", KR: kr, US: us });
+/** 칩에서 연장 세션 표시(ext, widgetExtended)를 뺀 것 — 나머지 칸이 예전과 같은지 볼 때 */
+const withoutExt = ({ ext: _ext, ...rest }: Record<string, unknown>) => rest;
 
 describe("위젯 장 상태 칩 (3-16): 앱 잔고 탭 띠와 같은 규칙", () => {
   it("장중·휴장·장 마감, 다음 바뀌는 시각", () => {
@@ -153,13 +155,14 @@ describe("GET /api/widget 장 상태 칩: 세션 이름은 새 앱(&sessions=1)�
   it("새 앱(&sessions=1): 보유 미국 종목의 주간거래 이름 — 앱 WidgetBridge 가 그리는 칩(공용 픽스처)과 같다", async () => {
     for (const url of ["/api/widget?indices=1&sessions=1", "/api/widget?indices=1&board=1&sessions=1"]) {
       const body = (await app.inject({ method: "GET", url })).json();
-      // 시장별 문구(markets)는 다듬은 잔고 위젯을 그리는 앱(&ui=2)에만 — 이 앱의 응답은 예전과 같다
-      expect(body.market, url).toEqual(c.chip);
+      // 시장별 문구(markets)는 다듬은 잔고 위젯을 그리는 앱(&ui=2)에만 — 이 앱의 응답은 예전과 같다.
+      // 연장 세션 표시(ext, widgetExtended)는 칩에 더해지기만 한다 (test/widgetExtended.test.ts)
+      expect(withoutExt(body.market), url).toEqual(c.chip);
       expect(body.market.label).toBe("미국 주간거래");
     }
     for (const url of ["/api/widget?indices=1&sessions=1&ui=2", "/api/widget?indices=1&board=1&sessions=1&ui=2"]) {
       const body = (await app.inject({ method: "GET", url })).json();
-      expect(body.market, url).toEqual(c.polished);
+      expect(withoutExt(body.market), url).toEqual(c.polished);
       expect(body.market.markets).toEqual([
         { market: "US", label: "미국 주간거래" },
         { market: "KR", label: "한국 휴장" },
@@ -171,7 +174,7 @@ describe("GET /api/widget 장 상태 칩: 세션 이름은 새 앱(&sessions=1)�
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetPolish: false } });
     const body = (await app.inject({ method: "GET", url: "/api/widget?indices=1&sessions=1&ui=2" })).json();
     expect(body.market).not.toHaveProperty("markets");
-    expect(body.market).toEqual(c.chip);
+    expect(withoutExt(body.market)).toEqual(c.chip);
     expect(body.market.label).toBe("미국 주간거래");
     expect(body.features.widgetPolish).toBe(false);
   });
@@ -306,7 +309,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
 
   it("플래그 두 개와 코스피·나스닥·원/달러를 순서대로, 앱 지수 띠(stale=1)와 같은 값으로 준다", async () => {
     const body = (await get()).json();
-    expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
+    expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true });
     expect(body.indices.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "NASDAQ", "USDKRW"]);
     expect(body.indices[0]).toEqual({ code: "KOSPI", name: "코스피", value: 3412.35, change: 30.45, changeRate: 0.9, open: true, asOf: "2026-09-22T10:00:00+09:00" });
     expect(body.indices[2]).toMatchObject({ code: "USDKRW", name: "원/달러", value: 1360.5, change: -2.1, changeRate: -0.15 });
@@ -354,7 +357,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     const r = await get();
     expect(r.statusCode).toBe(200);
     expect(r.json()).not.toHaveProperty("indices");
-    expect(r.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
+    expect(r.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true });
   });
 
   it("widgetIndexLine 을 끄면 지수를 부르지도 넣지도 않는다 (응답·ETag 가 지수와 무관), 켜면 다시", async () => {
@@ -362,7 +365,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
     expect(put.statusCode).toBe(200);
     const r1 = await get();
     expect(r1.json()).not.toHaveProperty("indices");
-    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: false, widgetMarket: true, widgetPolish: true });
+    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: false, widgetMarket: true, widgetPolish: true, widgetExtended: true });
     expect(indices.calls).toBe(0); // 서버 작업 0건
     source.close = "3,999.99";
     later(31);
@@ -389,14 +392,14 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
 
   it("widgetPnlToggle 을 끄면 features 에 false (앱은 누적만, 전환 없음)", async () => {
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetPnlToggle: false } });
-    expect((await get()).json().features).toEqual({ widgetPnlToggle: false, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
+    expect((await get()).json().features).toEqual({ widgetPnlToggle: false, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true });
   });
 
   it("검토 지적: 예전 앱(?indices=1 없음)에는 지수를 넣지도 부르지도 않는다 — 나스닥·환율이 바뀌어도 304 그대로", async () => {
     const r1 = await getOld();
     expect(r1.statusCode).toBe(200);
     expect(r1.json()).not.toHaveProperty("indices");
-    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
+    expect(r1.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true });
     expect(indices.calls).toBe(0);
     const etag = String(r1.headers["etag"]);
     source.close = "3,500.00";
@@ -432,7 +435,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
 
     it("?board=1 이면 9개를 국내 → 미국 → 환율 순서로, 앱 지수 띠(stale=1)와 같은 값으로 준다 (지수 목록은 한 번만 부른다)", async () => {
       const body = (await getBoard()).json();
-      expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true });
+      expect(body.features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true });
       expect(body.board.map((i: { code: string }) => i.code)).toEqual(["KOSPI", "KOSDAQ", "NASDAQ", "SPX", "DJI", "SOX", "USDKRW", "JPYKRW", "CNYKRW"]);
       expect(body.board.map((i: { name: string }) => i.name)).toEqual(["코스피", "코스닥", "나스닥", "S&P500", "다우", "필라반도체", "원/달러", "원/100엔", "원/위안"]);
       // 지수 줄도 그대로 (같은 목록에서)
@@ -467,7 +470,7 @@ describe("GET /api/widget 기능 플래그·지수 줄 (위젯 요청)", () => {
       await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetMarket: false } });
       const off = await getBoard("board=1");
       expect(off.json()).not.toHaveProperty("board");
-      expect(off.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: false, widgetPolish: true });
+      expect(off.json().features).toEqual({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: false, widgetPolish: true, widgetExtended: true });
       expect(indices.calls).toBe(0);
       await app.inject({ method: "PUT", url: "/api/admin/features", payload: { widgetMarket: null } });
       expect((await getBoard("board=1")).json().board).toHaveLength(9);
