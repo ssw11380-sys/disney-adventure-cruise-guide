@@ -57,6 +57,9 @@ vi.mock("@/api/hooks", () => {
   return {
     useFeature: (key: string, fallback: boolean) => (h.flagsLoaded && !h.flagsFailed ? (h.flags[key] ?? fallback) : fallback),
     useFeatures: () => ({ data: h.flagsLoaded && !h.flagsFailed ? { features: h.flags } : undefined, isFetching: !h.flagsLoaded && !h.flagsFailed, refetch: h.refetchFlags }),
+    // 시장 전체 요약(플래그 marketSummary)은 이 테스트에서 꺼져 있다 — 켜진 모습은 test/marketSummaryScreen.test.tsx
+    useMarketSummaries: () => q(undefined),
+    useMarketSummary: () => q(undefined),
     useAccountBriefings: (enabled: boolean) => {
       h.listEnabled.push(enabled);
       return q(enabled ? h.list : undefined);

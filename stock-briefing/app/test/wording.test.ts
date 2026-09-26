@@ -50,6 +50,12 @@ describe("고지 문구", () => {
   it("위젯 고지 한 줄은 권유가 아님을 밝힌다", () => expect(read("app/src/lib/disclaimer.ts")).toMatch(/DISCLAIMER_SHORT = ".*투자 권유가 아닙니다"/));
   it("서버 고지 문구가 앱과 같다", () => expect(read("backend/src/app.ts")).toContain(`DISCLAIMER = "${DISCLAIMER}"`));
   it("설정 화면에 고지가 있다", () => expect(read("app/src/app/(tabs)/settings.tsx")).toContain(DISCLAIMER));
+  it("시장 전체 요약: 상세는 모든 배치에서 고지를 붙이고, 카드 맨 아래에 '숫자로 만든 요약 · … · 매매 권유가 아닙니다'", () => {
+    expect(read("app/src/app/briefings/market/[id].tsx")).toMatch(/<MarketSummaryBody\b/);
+    expect(read("app/src/components/MarketSummaryBody.tsx").match(/<Screen[^>]*\bdisclaimer\b/g)?.length).toBeGreaterThanOrEqual(6);
+    expect(read("app/src/lib/marketSummary.ts")).toContain('SUMMARY_NOTE = "숫자로 만든 요약 · 뉴스 제목은 언론사 원문 · 매매 권유가 아닙니다"');
+    expect(read("app/src/components/MarketSummaryCard.tsx")).toContain("{SUMMARY_NOTE}");
+  });
   it("브리핑 목록·상세·종목 상세 화면이 고지를 붙인다", () => {
     expect(read("app/src/app/(tabs)/briefings.tsx")).toMatch(/<Screen[^>]*\bdisclaimer\b/);
     // 상세 본문은 components 로 떼어냈다 (3-42 웨이브 D): 경로 화면은 본문을 그대로 쓰고, 본문은 폰(stack)·넓은 창 두 칸(split)·2단 오른쪽 칸(pane) 모두 고지를 붙인다

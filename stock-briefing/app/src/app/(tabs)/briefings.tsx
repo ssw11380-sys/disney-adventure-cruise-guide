@@ -2,10 +2,12 @@ import { router, Tabs } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useAccountBriefings, useBriefing, useFeature, useHealth, useLatestBriefings, useMarketStatus, useRegisteredStocks, useStockMutations } from "@/api/hooks";
-import type { AccountBriefing, BriefingSession, LatestBriefing } from "@/api/types";
+import { useAccountBriefings, useBriefing, useFeature, useHealth, useLatestBriefings, useMarketStatus, useMarketSummaries, useRegisteredStocks, useStockMutations } from "@/api/hooks";
+import type { AccountBriefing, BriefingSession, LatestBriefing, MarketSummary } from "@/api/types";
 import { AccountBriefingBody } from "@/components/AccountBriefingBody";
 import { AccountBriefingCard, AccountBriefingRow } from "@/components/AccountBriefingCard";
+import { MarketSummaryBody } from "@/components/MarketSummaryBody";
+import { MarketSummaryCard, MarketSummaryRow } from "@/components/MarketSummaryCard";
 import { BriefingBody } from "@/components/BriefingBody";
 import { BriefingCard } from "@/components/BriefingCard";
 import { BriefingRow, BriefingTile, ListNotice, MoreButton, Pills } from "@/components/BriefingList";
@@ -16,6 +18,7 @@ import { TwoPane } from "@/components/TwoPane";
 import { Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, Segmented } from "@/components/ui";
 import { orderForTab, runConfirm } from "@/lib/briefingRun";
 import { accountCardItem } from "@/lib/accountBriefing";
+import { marketCardItem } from "@/lib/marketSummary";
 import { firstPick, gridColumns, isUnread, latestSession, noteListSession, noteTabHeadHidden, pickAuto, pickBriefing, pickByUser, selectedRowId, tabHeadOptions, usePick, type BriefingPick, type PickState } from "@/lib/briefingPick";
 import { markBriefingRead, useReadBriefings } from "@/lib/briefingRead";
 import { formatDateKo, formatPct } from "@/lib/format";
@@ -30,7 +33,7 @@ type Mode = "line" | "summary" | "detail";
 type Order = "movers" | "registered";
 
 /**
- * 브리핑 탭: (3-31) 내 계좌 브리핑 → 서버 상태 배너 → (3-19) 변동 큰 3종목 → 종목별 최신 브리핑(한 줄/요약/상세) → 수동 실행.
+ * 브리핑 탭: 시장 전체 요약(플래그 marketSummary) → (3-31) 내 계좌 브리핑 → 서버 상태 배너 → (3-19) 변동 큰 3종목 → 종목별 최신 브리핑(한 줄/요약/상세) → 수동 실행.
  * briefingTabMovers 플래그가 켜져 있으면 기본 정렬은 '변동 큰 순'(오늘 등락률 절댓값), 아니면 등록순(예전)
  *
  * 넓은 창 (3-42 웨이브 D, 플래그 foldLayout — 꺼져 있거나 좁은 창·접은 화면은 위 그대로):
@@ -57,8 +60,12 @@ export default function BriefingsScreen() {
   const accountOn = useFeature("accountBriefing", false);
   const accounts = useAccountBriefings(accountOn);
   const account = accountCardItem(accountOn, accounts.data);
-  // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑이 켜져 있으면 그것도)을 함께
-  const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : [])]));
+  // 시장 전체 요약: 서버가 켤 때만 부르고 보인다 (앱 fallback 꺼짐). 예전 서버(404)·없음이면 카드가 없다
+  const summaryOn = useFeature("marketSummary", false);
+  const summaries = useMarketSummaries(summaryOn);
+  const summary = marketCardItem(summaryOn, summaries.data);
+  // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약이 켜져 있으면 그것도)을 함께
+  const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : []), ...(summaryOn ? [summaries.refetch()] : [])]));
   const [order, setOrder] = useState<Order>("movers");
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);
   // 3-42 넓은 창: 플래그가 꺼져 있으면 on=false → 아래는 모두 지금 그대로
@@ -180,6 +187,8 @@ export default function BriefingsScreen() {
         account={account}
         // 계좌 브리핑 목록을 알고 있는지 (받는 중에는 고른 계좌 브리핑을 '없어졌다'고 보지 않는다)
         accountSettled={!accountOn || accounts.data !== undefined || accounts.isError}
+        market={summary}
+        marketSettled={!summaryOn || summaries.data !== undefined || summaries.isError}
         holiday={wideHoliday}
         criterion={movers ? "변동 큰 순 = 전일 대비 등락률 크기 순 · 매매 권유가 아닙니다" : null}
         ratesFail={ratesFailText}
@@ -208,6 +217,7 @@ export default function BriefingsScreen() {
   return (
     <Screen disclaimer refreshing={pulling} onRefresh={onPull} top={<StaleBanner query={latest} />} {...(hlId !== null ? { scrollRef } : {})}>
       {head}
+      {summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} /> : null}
       {account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} /> : null}
       {banner}
       {krHoliday ? <Muted style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>한국 휴장일 · 국내 종목 브리핑 없음{market.data?.KR.opensAt ? ` · 다음 개장 ${formatDateKo(market.data.KR.opensAt, true)}` : ""}</Muted> : null}
@@ -291,6 +301,10 @@ interface WideProps {
   account: AccountBriefing | undefined;
   /** 계좌 브리핑 목록을 알고 있는지 (꺼짐·받음·못 받음). 받는 중이면 false */
   accountSettled: boolean;
+  /** 시장 전체 요약 (플래그 marketSummary) — 목록 맨 위 줄 */
+  market: MarketSummary | undefined;
+  /** 시장 요약 목록을 알고 있는지 (꺼짐·받음·못 받음) */
+  marketSettled: boolean;
   /** 목록 위 안내: 휴장 (넓은 창용 짧은 문구) */
   holiday: string | null;
   /** 변동 큰 순의 기준·매매 권유 아님 ('변동 큰 종목' 카드 대신). 2단은 목록 아래, 카드 격자는 목록 위 안내에 */
@@ -336,6 +350,7 @@ function WideFrame({ rail, sides = true, children }: { rail: boolean; sides?: bo
  * 고른 것은 저장소(lib/briefingPick)의 같은 객체, onPick 은 고정 함수(useCallback)로 넘긴다
  */
 const DetailPane = React.memo(function DetailPane({ sel, pending, onPick }: { sel: BriefingPick | null; pending: boolean; onPick: (id: number, code: string) => void }) {
+  if (sel?.kind === "market") return <MarketSummaryBody key={`m${sel.id}`} numId={sel.id} layout="pane" />;
   if (sel) return sel.kind === "account" ? <AccountBriefingBody key={`a${sel.id}`} numId={sel.id} layout="pane" /> : <BriefingBody key={`s${sel.id}`} id={sel.id} layout="pane" onPick={onPick} />;
   if (!pending) return null;
   // 고지는 2단에서 이 칸에만 있으므로 뼈대에도 붙인다
@@ -366,6 +381,7 @@ function WideBriefings(p: WideProps) {
   const latestKey = latestSession(briefs);
   const sel = p.picked.pick;
   const accountId = p.account?.id ?? null;
+  const marketId = p.market?.id ?? null;
   // 고른 브리핑의 종목 코드: 알림·전체 화면에서 연 브리핑은 코드를 모르므로 받아 둔 브리핑에서 (오른쪽 칸과 같은 요청이라 다시 받지 않는다)
   const selInfo = useBriefing(sel?.kind === "stock" && !sel.code ? sel.id : 0);
   const selCode = sel?.kind === "stock" ? (sel.code ?? selInfo.data?.code ?? null) : null;
@@ -379,6 +395,15 @@ function WideBriefings(p: WideProps) {
   // 단, 앱이 켜진 채 다음 세션 브리핑이 와서 고른 것이 목록에서 사라졌으면 새 목록의 첫 미확인을 다시 고른다.
   // 보던 계좌 브리핑이 없어지면(서버가 계좌 브리핑을 끔·목록이 빔) 막다른 안내 대신 바로 첫 미확인을 다시 고른다
   const accountGone = sel?.kind === "account" && accountId === null && p.accountSettled;
+  // 시장 요약도 같다: 보던 요약이 없어지면(서버가 끔) 첫 미확인을 다시 고르고, 새 요약이 오면 보던 것을 새 것으로 옮긴다
+  const marketGone = sel?.kind === "market" && marketId === null && p.marketSettled;
+  const prevMarketId = useRef(marketId);
+  useEffect(() => {
+    const prev = prevMarketId.current;
+    prevMarketId.current = marketId;
+    if (!p.twoPane || prev === marketId || marketId === null) return;
+    if (sel?.kind === "market" && sel.id === prev) pickBriefing({ kind: "market", id: marketId }, { highlight: true });
+  }, [p.twoPane, marketId, sel]);
   // 목록의 계좌 브리핑이 바뀌었을 때(같은 날 오후 등 새 계좌 브리핑이 옴) 바로 전 계좌 브리핑을 보던 중이면 새 것으로 옮긴다.
   // (알림으로 연 지난 계좌 브리핑처럼 목록과 다른 것을 일부러 보던 경우는 그대로)
   const prevAccountId = useRef(accountId);
@@ -391,8 +416,8 @@ function WideBriefings(p: WideProps) {
   useEffect(() => {
     if (!p.twoPane || !settled) return;
     const fresh = noteListSession(latestKey);
-    const gone = sel !== null && (sel.kind === "stock" ? !briefs.some((b) => b.id === sel.id) : sel.id !== accountId);
-    if (sel && !(fresh && gone) && !accountGone) {
+    const gone = sel !== null && (sel.kind === "stock" ? !briefs.some((b) => b.id === sel.id) : sel.kind === "market" ? sel.id !== marketId : sel.id !== accountId);
+    if (sel && !(fresh && gone) && !accountGone && !marketGone) {
       if (!p.picked.highlight) pickBriefing(sel, { highlight: true });
       return;
     }
@@ -401,7 +426,7 @@ function WideBriefings(p: WideProps) {
     if (first) pickAuto({ kind: "stock", id: first.id, code: first.code });
     else if (accountId !== null) pickAuto({ kind: "account", id: accountId });
     else if (sel) pickBriefing(null, { highlight: false });
-  }, [p.twoPane, settled, sel, p.picked.highlight, briefs, read, accountId, latestKey, accountGone]);
+  }, [p.twoPane, settled, sel, p.picked.highlight, briefs, read, accountId, marketId, latestKey, accountGone, marketGone]);
 
   // 사용자가 누른 브리핑만 읽음으로 적는다 (저절로 골라진 첫 미확인은 점을 남겨, 탭을 열었다 바로 떠나도 읽은 것이 되지 않게).
   // 고정 함수 — 오른쪽 칸(DetailPane)이 체결마다 다시 그려지지 않게
@@ -437,6 +462,9 @@ function WideBriefings(p: WideProps) {
           </View>
         </View>
         {notice}
+        {p.market ? (
+          <MarketSummaryRow summary={p.market} role="button" selected={sel?.kind === "market" && sel.id === p.market.id} onPress={() => chooseBriefing({ kind: "market", id: p.market!.id })} />
+        ) : null}
         {p.account ? (
           <AccountBriefingRow
             briefing={p.account}
@@ -516,6 +544,9 @@ function WideBriefings(p: WideProps) {
             ) : null}
           </View>
           {notice}
+          {p.market ? (
+            <MarketSummaryRow summary={p.market} role="link" selected={hl?.kind === "market" && hl.id === p.market.id} onPress={() => router.push(`/briefings/market/${p.market!.id}`)} />
+          ) : null}
           {p.account ? (
             <AccountBriefingRow briefing={p.account} role="link" selected={hl?.kind === "account" && hl.id === p.account.id} onPress={() => router.push(`/briefings/account/${p.account!.id}`)} />
           ) : null}

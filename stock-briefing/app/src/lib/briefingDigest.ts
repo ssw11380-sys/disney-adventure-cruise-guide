@@ -1,7 +1,10 @@
+import type { MarketSummary } from "@/api/types";
+import { digestLine } from "./marketSummary";
+
 /**
  * 브리핑 알림 묶음 (3-19). 서버 backend/src/notifications/digest.ts 와 같은 규칙·문구 —
  * 백그라운드 확인(로컬 알림)도 세션마다 1건, 조용한 시간에는 0건, 알림을 끈 종목은 뺀다.
- * React Native 를 불러오지 않는 순수 모듈 (테스트·백그라운드 태스크에서 씀)
+ * React Native 를 불러오지 않는 순수 모듈 (테스트·백그라운드 태스크에서 씀). 시장 요약 첫 줄은 lib/marketSummary(역시 순수 모듈)
  */
 
 export interface DigestItem {
@@ -69,6 +72,26 @@ export interface DigestAccount {
   usPreviousDay?: boolean;
 }
 
+/**
+ * 시장 전체 요약(서버 플래그 marketSummary)의 알림 본문 첫 줄 (서버 DigestMarket 과 같다). 제목·다른 줄은 그대로, 세션당 1건 그대로.
+ * 요약만으로는 알림을 만들지 않는다
+ */
+export interface DigestMarket {
+  id: number;
+  /** 보내는 순간의 문구 ('밤사이 미국 나스닥 +0.48% · …') */
+  line: string;
+  market: "US" | "KR";
+  /** 첫 줄이 그 시장 휴장을 말한다 → 같은 시장의 예전 휴장 줄은 뺀다 */
+  holiday: boolean;
+}
+
+/** 시장 요약 목록 항목(/api/market-summaries) → 알림 첫 줄 (성공하고 지수가 있을 때만). at = 보내는 순간 */
+export function digestMarketOf(s: Pick<MarketSummary, "id" | "status" | "market" | "data"> | null | undefined, at: Date): DigestMarket | null {
+  if (!s || s.status !== "ok" || !s.data) return null;
+  const line = digestLine(s.data, at);
+  return line ? { id: s.id, line, market: s.market, holiday: s.data.holiday !== null } : null;
+}
+
 /** 계좌 브리핑 알림 본문에 붙이는 한 줄 (서버 digest.ts KR_PREVIOUS_DAY_LINE 과 같다) */
 export const KR_PREVIOUS_DAY_LINE = "오늘 한국 휴장 · 국내 종목은 직전 거래일 등락";
 /** 지난밤 미국 평일 휴장일 때 붙이는 한 줄 (서버 digest.ts US_PREVIOUS_DAY_LINE 과 같다) */
@@ -105,30 +128,35 @@ export function byMove<T>(items: T[], rate: (item: T) => number | null | undefin
  * 세션 알림 한 건 (서버 buildDigest 와 같은 문구). account(3-31)가 있으면 앞머리가 계좌 요약이고,
  * 종목 브리핑이 없어도(모두 끈 종목) 계좌 브리핑만으로 1건. 누르면 계좌 브리핑 화면(accountBriefingId)
  */
-export function buildDigest(session: "morning" | "afternoon", date: string, items: DigestItem[], account?: DigestAccount | null): DigestMessage | null {
-  if (account) return accountDigest(session, date, items, account);
+export function buildDigest(session: "morning" | "afternoon", date: string, items: DigestItem[], account?: DigestAccount | null, market?: DigestMarket | null): DigestMessage | null {
+  if (account) return accountDigest(session, date, items, account, market ?? null);
+  // 시장 요약만으로는 알림을 만들지 않는다 (서버와 같게)
   if (items.length === 0) return null;
   const label = SESSION_KO[session];
+  const m = market ? { marketSummaryId: market.id } : {};
   if (items.length === 1) {
     const b = items[0]!;
-    return { title: `${b.name} ${label} 브리핑`, body: b.summary, data: { type: "briefing", briefingId: b.briefingId, code: b.code, session, date } };
+    return { title: `${b.name} ${label} 브리핑`, body: market ? `${market.line}\n${b.summary}` : b.summary, data: { type: "briefing", briefingId: b.briefingId, code: b.code, session, date, ...m } };
   }
   const ranked = byMove(items, (i) => i.changeRate);
   const top = ranked.filter((i) => i.changeRate !== null).slice(0, 2);
   const lines: string[] = [];
+  if (market) lines.push(market.line);
   if (top.length) lines.push(`변동 상위 ${top.map((i) => `${i.name} ${formatRate(i.changeRate!)}`).join(" · ")}`);
   const first = (ranked[0]!.summary.split("\n")[0] ?? "").trim();
   if (first) lines.push(`${ranked[0]!.name}: ${first}`);
-  return { title: `${label} 브리핑 ${items.length}종목`, body: lines.join("\n"), data: { type: "briefing", digest: true, session, date, count: items.length, briefingId: ranked[0]!.briefingId, code: ranked[0]!.code } };
+  return { title: `${label} 브리핑 ${items.length}종목`, body: lines.join("\n"), data: { type: "briefing", digest: true, session, date, count: items.length, briefingId: ranked[0]!.briefingId, code: ranked[0]!.code, ...m } };
 }
 
-function accountDigest(session: "morning" | "afternoon", date: string, items: DigestItem[], a: DigestAccount): DigestMessage {
+function accountDigest(session: "morning" | "afternoon", date: string, items: DigestItem[], a: DigestAccount, market: DigestMarket | null): DigestMessage {
   const label = SESSION_KO[session];
   const lines: string[] = [];
+  if (market) lines.push(market.line);
   const top = a.top.slice(0, 2);
   if (top.length) lines.push(top.map((t, i) => `${i === 0 ? "기여 1위" : "2위"} ${t.name} ${formatWonSigned(t.amount)}`).join(" · "));
-  if (a.krPreviousDay) lines.push(KR_PREVIOUS_DAY_LINE);
-  if (a.usPreviousDay) lines.push(US_PREVIOUS_DAY_LINE);
+  // 첫 줄이 같은 시장의 휴장을 이미 말하면 그 시장의 예전 휴장 줄만 뺀다 (서버와 같게)
+  if (a.krPreviousDay && !(market?.market === "KR" && market.holiday)) lines.push(KR_PREVIOUS_DAY_LINE);
+  if (a.usPreviousDay && !(market?.market === "US" && market.holiday)) lines.push(US_PREVIOUS_DAY_LINE);
   const ranked = byMove(items, (i) => i.changeRate);
   if (items.length) {
     const movers = ranked.filter((i) => i.changeRate !== null).slice(0, 2);
@@ -138,7 +166,7 @@ function accountDigest(session: "morning" | "afternoon", date: string, items: Di
   return {
     title: `${label} 계좌 브리핑 · 당일 ${formatWonSigned(a.dayPnl)}${a.dayRate !== null ? ` (${formatRate(a.dayRate)})` : ""}`,
     body: lines.join("\n"),
-    data: { type: "briefing", digest: true, session, date, count: items.length, accountBriefingId: a.id, ...(first ? { briefingId: first.briefingId, code: first.code } : {}) },
+    data: { type: "briefing", digest: true, session, date, count: items.length, accountBriefingId: a.id, ...(first ? { briefingId: first.briefingId, code: first.code } : {}), ...(market ? { marketSummaryId: market.id } : {}) },
   };
 }
 
@@ -148,13 +176,15 @@ function accountDigest(session: "morning" | "afternoon", date: string, items: Di
  *  - opts.newAccountIds: 아직 알리지 않은 계좌 브리핑. 그 세션에 새 종목 브리핑이 없어도(모두 실패) 계좌 브리핑만으로 1건 (서버 푸시와 같게)
  *  - opts.codes: 등록한 모든 종목. 모두 알림을 꺼 두었으면 계좌 요약도 보내지 않는다 — 예전처럼 0건 (서버와 같은 규칙).
  *    모르면 그 세션의 새 종목 브리핑 종목으로 본다
+ *  - opts.markets: 최근 시장 요약 (서버 플래그 marketSummary). 같은 날짜·세션의 성공한 요약이 있으면 알림 본문 첫 줄 (보내는 순간 now 의 문구).
+ *    요약만으로는 알림을 만들지 않는다
  */
 export function planNotifications(
   fresh: (DigestItem & { session: "morning" | "afternoon"; date: string })[],
   prefs: NotifyPrefs,
   now: Date,
   accounts: readonly (Parameters<typeof digestAccountOf>[0] & { date: string; session: "morning" | "afternoon" })[] = [],
-  opts: { newAccountIds?: readonly number[]; codes?: readonly string[] } = {},
+  opts: { newAccountIds?: readonly number[]; codes?: readonly string[]; markets?: readonly Pick<MarketSummary, "id" | "date" | "session" | "status" | "market" | "data">[] } = {},
 ): DigestMessage[] {
   // 묶음을 끄면(플래그) 예전 그대로: 종목마다 1건, 조용한 시간·끈 종목 없음 (서버와 같게)
   if (!prefs.digest) return fresh.map((f) => buildDigest(f.session, f.date, [f])!);
@@ -180,7 +210,8 @@ export function planNotifications(
     const codes = opts.codes ?? g.codes;
     const allMuted = codes.length > 0 && codes.every((c) => muted.has(c));
     const account = prefs.accountBriefing && !allMuted ? digestAccountOf(accounts.find((a) => a && a.date === g.date && a.session === g.session)) : null;
-    const m = buildDigest(g.session, g.date, g.items, account);
+    const market = digestMarketOf(opts.markets?.find((x) => x.date === g.date && x.session === g.session), now);
+    const m = buildDigest(g.session, g.date, g.items, account, market);
     if (m) out.push(m);
   }
   return out;
