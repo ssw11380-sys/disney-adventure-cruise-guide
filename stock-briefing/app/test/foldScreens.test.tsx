@@ -150,6 +150,8 @@ vi.mock("@/components/TossOpenApiCard", async () => {
   };
 });
 vi.mock("@/components/ScreenInfoCard", () => ({ ScreenInfoCard: "ScreenInfoCard" }));
+// 위젯 자동 갱신 기록 칸 (플래그 widgetRefreshLog): 기기 기록·장 상태를 읽는 부품이라 이름만 남긴다 (꺼져 있으면 그리지 않아 스냅숏과 무관)
+vi.mock("@/components/WidgetRefreshStatus", () => ({ WidgetRefreshStatus: "WidgetRefreshStatus" }));
 vi.mock("@/components/StockLine", async () => {
   const s = await import("@/lib/textScale");
   return {
@@ -1227,6 +1229,37 @@ describe("설정 (넓은 창)", () => {
     // 이름과 칩이 세로로 (한 줄 양 끝이 아님)
     expect(styleOf(box).flexDirection).toBeUndefined();
     expect(styleOf(box)).toMatchObject({ gap: space.s });
+  });
+});
+
+describe("설정: 위젯 자동 갱신 기록 칸 (위젯 리뷰 2, 플래그 widgetRefreshLog — 통합 검증 지적)", () => {
+  const card = (r: R) => r.all().find((n) => n.type === "WidgetRefreshStatus");
+  /** 기록 칸이 든 묶음 (제목 '홈 화면 위젯 갱신'과 도움말 바로 아래여야 한다) */
+  const group = (r: R) => r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.type === "WidgetRefreshStatus"));
+
+  it("켜져 있으면 표시 카드의 '홈 화면 위젯 갱신' 아래에 보인다 — 접은 화면·펼친 화면(플래그 꺼짐·못 받음)·넓은 창 두 칸 모두", () => {
+    h.flags = { allocationView: true, widgetRefreshLog: true };
+    for (const [name, w, hh, flag] of PHONE) {
+      h.flag = flag;
+      forgetWindowClass();
+      size(w, hh);
+      const r = render(<SettingsScreen />);
+      expect(card(r), name).toBeDefined();
+      const g = group(r)!;
+      expect(textOf(g), name).toContain("홈 화면 위젯 갱신");
+      expect((g.children.at(-1) as HostNode).type, name).toBe("WidgetRefreshStatus");
+    }
+    wideOn(933, 704);
+    expect(card(render(<SettingsScreen />))).toBeDefined();
+  });
+
+  it("꺼져 있거나 못 받았으면 없다 (기록은 기기에 계속 적는다 — 화면에만 안 보임)", () => {
+    h.flags = { allocationView: true };
+    expect(card(render(<SettingsScreen />))).toBeUndefined();
+    h.flags = { allocationView: true, widgetRefreshLog: false };
+    expect(card(render(<SettingsScreen />))).toBeUndefined();
+    wideOn(933, 704);
+    expect(card(render(<SettingsScreen />))).toBeUndefined();
   });
 });
 

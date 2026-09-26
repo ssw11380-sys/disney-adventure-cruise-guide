@@ -201,6 +201,8 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     }
     await refreshWidgets({
       stocks: data.stocks,
+      // 잔고를 받은 시각 = 방금 위젯 조회 시각 (앱이 그 사이 더 새 잔고를 그렸으면 그쪽을 둔다)
+      dataAt: data.fetchedAt,
       showKrw: data.showKrw,
       afterCost: data.afterCost,
       filled: data.filled,

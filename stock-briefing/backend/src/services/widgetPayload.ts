@@ -320,10 +320,12 @@ export function buildWidgetPayload(
   const sharedFx = stocks.find((s) => s.quote?.currency === "USD" && s.quote.fxRate)?.quote?.fxRate ?? null;
   // 시장별 문구(와 그 경계의 nextChangeAt)는 다듬은 잔고 위젯을 그리는 새 앱에만 (예전 앱·플래그 꺼짐의 칩은 예전 그대로)
   const market = status ? marketChip(status, extra.sessions ? stocks.map((x) => x.quote?.session) : [], undefined, { markets: extra.polish === true }) : null;
-  // 연장 세션(프리·애프터·주간거래): 칩의 다른 칸은 그대로 두고 표시만 더한다 (칩 문구·금색·nextChangeAt 은 앱 WidgetBridge 와 같은 marketChip 그대로)
+  // 연장 세션(프리·애프터·주간거래): 칩의 다른 칸은 그대로 두고 표시만 더한다 (칩 문구·금색·nextChangeAt 은 앱 WidgetBridge 와 같은 marketChip 그대로).
+  // 보유 종목(수량 > 0)의 세션만 본다 (통합 검증 지적) — 관심 종목만 프리마켓이면 새 앱이 15분 갱신·'지연'을 하지 않게. 앱 widgets/payload.ts withExtended·openMarketAsOf 와 같은 조건
   if (market && status && extra.extended) {
     const t = Date.parse(status.now);
-    market.ext = extendedOpen({ kr: status.KR.isOpen, us: status.US.isOpen }, stocks.map((x) => x.quote?.session), Number.isFinite(t) ? t : Date.now());
+    const held = stocks.filter((x) => (x.quantity ?? 0) > 0);
+    market.ext = extendedOpen({ kr: status.KR.isOpen, us: status.US.isOpen }, held.map((x) => x.quote?.session), Number.isFinite(t) ? t : Date.now());
   }
   const payload: WidgetPayload = {
     v: 1,

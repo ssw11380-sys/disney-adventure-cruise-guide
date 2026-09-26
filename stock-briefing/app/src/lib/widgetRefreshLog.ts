@@ -5,9 +5,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
  *  - background: 백그라운드 작업(WorkManager, 15분 이상 간격 — lib/backgroundBriefings runBriefingCheck)
  *  - periodic: 위젯 주기 갱신(안드로이드 updatePeriodMillis 30분 — widgets/widgetTaskHandler WIDGET_UPDATE)
  *  - app: 앱이 떠 있을 때 위젯을 바로 그림(widgets/data pushWidgetData) · button: 위젯의 ↻
- *  - 결과: ok(그림) · skipped(두 시장이 닫혀 서버를 묻지 않음) · failed(조회 실패)
- * 기록은 이 기기 AsyncStorage 에만 두고(서버로 보내지 않음) 최근 REFRESH_LOG_MAX 줄·3일만 남긴다. 적기는 늘 하고,
- * 설정 화면에 보여 주는 것만 플래그 widgetRefreshLog 뒤에 둔다. 적다가 실패해도 갱신 자체에는 영향이 없다
+ *  - 결과: ok(서버에서 받아 그림) · skipped(서버를 부르지 않음 — 백그라운드는 두 시장이 닫혀 건너뜀, 주기 갱신은 받아 둔 응답을 다시 씀) · failed(조회 실패)
+ * 기록은 이 기기 AsyncStorage 에만 두고(서버로 보내지 않음) 3일치만 남긴다 (줄 수 한도 REFRESH_LOG_MAX 는 안전장치 — 보통은 3일이 먼저 걸린다).
+ * 적기는 늘 하고, 설정 화면에 보여 주는 것만 플래그 widgetRefreshLog 뒤에 둔다. 적다가 실패해도 갱신 자체에는 영향이 없다
  */
 
 export type RefreshSource = "background" | "periodic" | "app" | "button";
@@ -25,7 +25,11 @@ export interface RefreshEntry {
 }
 
 export const REFRESH_LOG_KEY = "widget.refreshLog";
-export const REFRESH_LOG_MAX = 150;
+/**
+ * 줄 수 한도 (안전장치). 3일치가 먼저 걸리게 넉넉히: 백그라운드 15분(하루 96줄) + 주기 갱신 30분(위젯 여러 개는 1분 안에 한 줄로, 서버 조회·재사용 두 줄까지 하루 96줄)
+ * + 앱 즉시 갱신(15분에 한 줄, 켜 둔 동안) ≈ 하루 300줄 이하 → 3일 900줄. 한 줄 약 45자라 약 45KB (예전 150줄은 하루치 남짓이었다 — 통합 검증 지적)
+ */
+export const REFRESH_LOG_MAX = 1000;
 const KEEP_MS = 3 * 86_400_000;
 /** 같은 출처·결과를 한 줄로 합치는 간격: 위젯 4개의 주기 갱신이 거의 같이 온다 (1분). 앱 즉시 갱신은 켜 둔 동안 1분마다 오므로 15분 */
 const MERGE_MS: Record<RefreshSource, number> = { background: 60_000, periodic: 60_000, button: 60_000, app: 15 * 60_000 };
@@ -81,37 +85,50 @@ export function logWidgetRefresh(s: RefreshSource, r: RefreshResult, o: { at?: n
 export const STALE_AUTO_MS = 60 * 60_000;
 
 export interface RefreshSummary {
-  /** 마지막 자동 갱신 (백그라운드 성공·건너뜀, 위젯 주기 갱신 성공). 없으면 null */
+  /** 마지막 자동 갱신 — 백그라운드·주기 갱신이 서버에서 받아 그린 때 (건너뜀·재사용은 새 숫자가 아니라 세지 않는다). 없으면 null */
   last: number | null;
-  /** 오늘(한국 날짜) 자동 갱신 사이 평균 간격(분). 두 번 미만이면 null */
+  /**
+   * 오늘(한국 날짜) 자동 갱신이 서버에 물은 사이 평균 간격(분) — 백그라운드·주기 갱신의 성공·실패만 (통합 검증 지적: 건너뜀·받아 둔 응답 재사용·앱·↻ 를 섞으면
+   * 실제로 숫자가 바뀌는 간격보다 짧게 보여 3-26 실측이 흐려졌다). 두 번 미만이면 null
+   */
   avgGapMin: number | null;
-  /** 오늘 자동 갱신 수 */
+  /** 오늘 자동 갱신이 서버에 물은 수 (성공·실패) */
   todayCount: number;
-  /** 오늘 백그라운드 갱신 실패 수 */
+  /** 오늘 자동 갱신(백그라운드·주기 갱신) 실패 수 */
   failedToday: number;
-  /** 장중인데 자동 갱신이 STALE_AUTO_MS 넘게 없음 (한 번도 없으면 기록이 시작된 때부터) */
+  /** 장중인데 자동 갱신 성공이 STALE_AUTO_MS 넘게 없음 (한 번도 없으면 기록이 시작된 때부터) */
   stale: boolean;
+  /** stale 인데 그 사이 자동 갱신이 돌긴 했고 실패했다 → 절전 탓이 아니라 연결·서버 문제 (통합 검증 지적) */
+  failing: boolean;
+  /** 가장 최근 자동 갱신 실패 사유 (failing 일 때 보여 준다). 모르면 null */
+  lastError: string | null;
 }
 
 const kstDate = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(0, 10);
-/** 자동 갱신으로 세는 줄: 작업이 제때 돌았다는 뜻 (건너뜀도 두 시장이 닫혀 일부러 묻지 않은 것) */
-const isAuto = (e: RefreshEntry) => (e.s === "background" && (e.r === "ok" || e.r === "skipped")) || (e.s === "periodic" && e.r === "ok");
+/** 자동 갱신(앱·↻ 가 아닌 것): 백그라운드 작업·위젯 주기 갱신 */
+const isAuto = (e: RefreshEntry) => e.s === "background" || e.s === "periodic";
+/** 자동 갱신이 서버에 물은 줄 (성공·실패). 건너뜀은 서버를 부르지 않았다 */
+const asked = (e: RefreshEntry) => isAuto(e) && (e.r === "ok" || e.r === "failed");
 
 /** 설정 화면 요약 (순수 함수). marketOpen: 지금 한국·미국 중 달력으로 열린 시장이 있음 */
 export function summarizeRefreshLog(list: readonly RefreshEntry[], now: number, marketOpen: boolean): RefreshSummary {
   const sorted = [...list].sort((a, b) => a.t - b.t);
-  const autos = sorted.filter(isAuto);
   const today = kstDate(now);
-  const todays = autos.filter((e) => kstDate(e.t) === today).map((e) => e.t);
+  const todays = sorted.filter((e) => asked(e) && kstDate(e.t) === today).map((e) => e.t);
   const gaps = todays.slice(1).map((t, i) => t - todays[i]!);
-  const last = autos.at(-1)?.t ?? null;
+  const last = sorted.filter((e) => isAuto(e) && e.r === "ok").at(-1)?.t ?? null;
   const since = last ?? sorted[0]?.t ?? null;
+  const stale = marketOpen && since !== null && now - since > STALE_AUTO_MS;
+  // 최근 한 시간 안의 자동 갱신 실패: 작업은 도는데 서버에서 못 받는 것 (절전으로 작업이 멈추면 기록 자체가 없다)
+  const recentFails = sorted.filter((e) => isAuto(e) && e.r === "failed" && now - e.t <= STALE_AUTO_MS);
   return {
     last,
     avgGapMin: gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length / 60_000) : null,
     todayCount: todays.length,
-    failedToday: sorted.filter((e) => e.s === "background" && e.r === "failed" && kstDate(e.t) === today).length,
-    stale: marketOpen && since !== null && now - since > STALE_AUTO_MS,
+    failedToday: sorted.filter((e) => isAuto(e) && e.r === "failed" && kstDate(e.t) === today).length,
+    stale,
+    failing: stale && recentFails.length > 0,
+    lastError: recentFails.at(-1)?.e ?? null,
   };
 }
 

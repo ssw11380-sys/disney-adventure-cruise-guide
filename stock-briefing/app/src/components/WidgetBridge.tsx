@@ -87,7 +87,8 @@ export function WidgetBridge() {
       const key = `${showKrw}|${afterCost}|${rowKrw}|${chipKey}|${flagKey}|${briefKey}`;
       if (!widgetPushDue({ now, fetchedThisSession, lastAt: last.current.at, lastKey: last.current.key, key, leaving })) return;
       last.current = { at: now, key };
-      void refreshWidgets({ stocks: data, showKrw, afterCost, rowKrw, market, marketPolished, features, indices, board, appBriefings });
+      // 잔고를 받은 시각(dataAt)도 넘긴다: 위젯이 이미 더 새 잔고를 가졌으면(앱이 다른 탭에 있는 동안 백그라운드 작업이 받음) 그쪽을 둔다 (통합 검증 지적)
+      void refreshWidgets({ stocks: data, dataAt, showKrw, afterCost, rowKrw, market, marketPolished, features, indices, board, appBriefings });
     };
     push.current(false);
   }, [data, dataAt, flagKey, briefKey, showKrw, afterCost, rowKrw, ms, fetchedThisSession, features, indices, board, appBriefings]);

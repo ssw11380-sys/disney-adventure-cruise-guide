@@ -64,6 +64,16 @@ describe("buildWidgetPayload: 칩의 ext 는 묻고(extended) 켜져 있을 때�
     expect(off.market).not.toHaveProperty("ext");
     expect({ ...on.market, ext: undefined }).toEqual({ ...off.market, ext: undefined });
   });
+
+  it("통합 검증 지적: ext 는 보유 종목(수량 > 0)의 세션만 — 관심 종목(수량 0·없음)만 프리마켓이면 켜지 않는다 (15분 갱신·'지연'을 관심 종목 때문에 하지 않게)", () => {
+    const watch = stocks.map((s) => ({ ...s, quantity: 0 }));
+    expect(buildWidgetPayload(watch as never, [], status, { sessions: true, extended: true }).market?.ext).toEqual({ kr: false, us: false });
+    const none = stocks.map((s) => ({ ...s, quantity: null }));
+    expect(buildWidgetPayload(none as never, [], status, { sessions: true, extended: true }).market?.ext).toEqual({ kr: false, us: false });
+    // 보유 종목이 하나라도 그 세션이면 켜진다
+    const mixed = [...watch.filter((s) => s.code !== "VRT"), ...stocks.filter((s) => s.code === "VRT")];
+    expect(buildWidgetPayload(mixed as never, [], status, { sessions: true, extended: true }).market?.ext?.us).toBe(true);
+  });
 });
 
 describe("GET /api/widget: ext 는 세션 칩을 묻는 앱(&sessions=1)에만, widgetExtended 가 켜져 있을 때만", () => {

@@ -3,9 +3,9 @@ import { Platform } from "react-native";
 import type { WidgetInfo } from "react-native-android-widget";
 import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
-import { loadCachedWidgetData, pushWidgetData, readCachedPayload, readPnlMode, saveWidgetView, withLastGood } from "./data";
+import { carryBriefingsIntoPayload, loadCachedWidgetData, pushWidgetData, readCachedPayload, readPnlMode, saveWidgetView, withLastGood } from "./data";
 import { fontScaleNow } from "./fontScale";
-import type { WidgetBriefing, WidgetFeatures, WidgetIndex, WidgetMarket, WidgetPayload } from "./payload";
+import type { WidgetFeatures, WidgetIndex, WidgetMarket } from "./payload";
 import { renderBoth } from "./render";
 import { WIDGET_NAMES } from "./widgets";
 
@@ -50,40 +50,15 @@ export function widgetBriefingsKey(latest: readonly LatestBriefing[]): string {
 /**
  * 앱이 받은 브리핑 목록으로 브리핑 위젯을 다시 그릴지 (다듬은 모습 widgetPolish 가 켜져 있을 때만 부른다).
  * 위젯이 마지막으로 받은 /api/widget 응답보다 늦게(같게) 받은 목록일 때만 — 앱이 며칠 떠 있으면 어제 연 브리핑 탭의 목록이 메모리에 남아,
- * 백그라운드 작업이 받아 그린 오늘 브리핑을 옛것으로 덮을 수 있다. 성공한 브리핑이 하나도 없으면 위젯이 받은 것(과 안내 문구)을 그대로 둔다
+ * 백그라운드 작업이 받아 그린 오늘 브리핑을 옛것으로 덮을 수 있다. 그 응답에 앱 목록을 적은 적이 있으면(briefingsAt — data.ts carryBriefingsIntoPayload)
+ * 그 목록보다도 늦게(같게) 받은 것이어야 한다. 성공한 브리핑이 하나도 없으면 위젯이 받은 것(과 안내 문구)을 그대로 둔다
  */
 async function appBriefingsToDraw(app: { at: number; list: readonly LatestBriefing[] } | null | undefined, stocks: readonly RegisteredWithQuote[]): Promise<LatestBriefing[] | null> {
   if (!app) return null;
   const picked = pickWidgetBriefings(app.list, stocks);
   if (!picked.length) return null;
   const cached = await readCachedPayload();
-  return cached && cached.at > app.at ? null : picked;
-}
-
-/** 위젯이 받아 둔 /api/widget 응답을 적는 키 (data.ts PAYLOAD_KEY 와 같다 — 테스트가 실제 loadWidgetData 로 확인한다) */
-const PAYLOAD_KEY = "widget.payload";
-
-/**
- * 앱이 브리핑 위젯에 넘긴 3종목을 위젯이 받아 둔 /api/widget 응답에도 적는다 (검증 지적 — 새 브리핑 → 옛 브리핑 되돌아감 막기).
- * 위젯이 스스로 갱신할 때(주기·추가·크기 변경 — 폴드8 은 접고 펼 때마다)와 조회에 실패했을 때는 이 응답을 다시 쓰고(data.ts loadWidgetData),
- * 브리핑도 그 응답의 것으로 그려 앱이 넘긴 새 브리핑이 옛것으로 되돌아갔다 (휴장이면 최대 2시간). 앱 목록이 그 응답보다 늦게 받은 것이므로(appBriefingsToDraw)
- * 응답의 브리핑만 바꾸고 받은 시각·ETag·잔고·지수·칩·알림용 id 는 그대로 둔다: 서버가 바뀐 것 없다고(304) 답하면 이 브리핑 그대로, 새 응답(200)이면 서버 목록.
- * 고르는 동안 위젯·백그라운드 작업이 새 응답을 받아 적었으면(받은 시각이 다름) 건드리지 않는다. 실패해도 그린 것은 그대로다
- */
-async function carryIntoCachedPayload(picked: readonly LatestBriefing[], appAt: number): Promise<void> {
-  try {
-    const cached = await readCachedPayload();
-    if (!cached || cached.at > appAt) return;
-    const raw = await AsyncStorage.getItem(PAYLOAD_KEY);
-    const v = raw ? (JSON.parse(raw) as { at?: unknown; body?: WidgetPayload }) : null;
-    if (!v?.body || v.at !== cached.at) return;
-    const briefings = picked.flatMap((b): WidgetBriefing[] =>
-      b.latest ? [{ id: b.latest.id, code: b.code, name: b.name, session: b.latest.session, date: b.latest.date, summary: b.latest.summary, createdAt: b.latest.createdAt }] : [],
-    );
-    await AsyncStorage.setItem(PAYLOAD_KEY, JSON.stringify({ ...v, body: { ...v.body, briefings } }));
-  } catch {
-    /* 적지 못하면 다음 서버 응답까지 위젯이 스스로 갱신할 때 옛 브리핑이 보일 수 있다 (예전과 같음) */
-  }
+  return cached && Math.max(cached.at, cached.briefingsAt ?? 0) > app.at ? null : picked;
 }
 
 /** 위젯 코드가 쓰는 서버 주소 (data.ts readSettings 와 같은 규칙 — 저장된 그림은 이 주소와 함께 적는다) */
@@ -112,7 +87,7 @@ export async function refreshBriefingWidget(app: { at: number; list: readonly La
     // 고르는 동안 다른 갱신이 새 그림을 적었을 수 있으니 적기 직전에 다시 읽어 브리핑만 바꾼다
     const data = { ...(await loadCachedWidgetData()), briefings: picked };
     await saveWidgetView(data, await storedApiUrl());
-    await carryIntoCachedPayload(picked, app.at);
+    await carryBriefingsIntoPayload(picked, app.at);
     const pnlMode = await readPnlMode();
     const fontScale = fontScaleNow();
     await requestWidgetUpdate({
@@ -130,6 +105,7 @@ export async function refreshBriefingWidget(app: { at: number; list: readonly La
  */
 export async function refreshWidgets({
   stocks: raw,
+  dataAt,
   showKrw,
   afterCost,
   filled: given,
@@ -143,6 +119,11 @@ export async function refreshWidgets({
   rowKrw,
 }: {
   stocks: RegisteredWithQuote[];
+  /**
+   * 잔고를 받은 시각 (앱: 잔고 쿼리의 react-query dataUpdatedAt, 백그라운드 작업: 위젯 조회 시각). 위젯이 이미 가진 잔고와 어느 쪽이 새 데이터인지
+   * 견줄 때 쓴다 (통합 검증 지적 — 넘긴 시각으로 견주면 앱이 떠날 때 넘긴 옛 잔고가 더 새 서버 응답을 이겼다). 없으면 지금
+   */
+  dataAt?: number;
   showKrw: boolean;
   afterCost: boolean;
   /** 다듬은 잔고 위젯 종목 줄 손익을 원화로 (앱 설정). 주지 않으면(백그라운드 작업) 저장된 설정 */
@@ -170,8 +151,10 @@ export async function refreshWidgets({
   if (Platform.OS !== "android") return;
   try {
     const { requestWidgetUpdate } = await import("react-native-android-widget");
-    const fetchedAt = Date.now();
-    // 시세가 빠진 종목은 마지막 값으로 채우고(위젯이 직접 받을 때와 같은 규칙), 다음 실패 대비로 적어 둔다
+    const now = Date.now();
+    // 기준 시각은 잔고를 받은 시각 (미래 시각은 지금으로)
+    const fetchedAt = dataAt !== undefined && dataAt > 0 ? Math.min(dataAt, now) : now;
+    // 시세가 빠진 종목은 마지막 값으로 채우고(위젯이 직접 받을 때와 같은 규칙), 다음 실패 대비로 적어 둔다 (더 새 마지막 잔고는 덮지 않는다)
     const { stocks, filled } = given ? { stocks: raw, filled: given } : await withLastGood(raw, fetchedAt);
     const push = {
       stocks,
@@ -194,11 +177,12 @@ export async function refreshWidgets({
     if (fromApp && appBriefings) {
       data = await pushWidgetData({ ...push, briefings: fromApp });
       // 위젯이 스스로 갱신할 때(받아 둔 응답 재사용·조회 실패) 옛 브리핑으로 되돌아가지 않게 받아 둔 응답에도 적는다 (검증 지적)
-      await carryIntoCachedPayload(fromApp, appBriefings.at);
+      await carryBriefingsIntoPayload(fromApp, appBriefings.at);
     }
     const pnlMode = await readPnlMode();
     const fontScale = fontScaleNow();
-    const draw = (name: string) => (info: WidgetInfo) => renderBoth(name, data, { width: info.width, height: info.height, fontScale, now: fetchedAt, pnlMode });
+    // 그리는 시각은 지금 ('지연'·칩 만료·오늘 날짜 판단) — 잔고를 받은 시각이 아니다
+    const draw = (name: string) => (info: WidgetInfo) => renderBoth(name, data, { width: info.width, height: info.height, fontScale, now, pnlMode });
     await requestWidgetUpdate({ widgetName: WIDGET_NAMES.holdings, renderWidget: draw(WIDGET_NAMES.holdings) });
     await requestWidgetUpdate({ widgetName: WIDGET_NAMES.asset, renderWidget: draw(WIDGET_NAMES.asset) });
     if (briefings || fromApp) await requestWidgetUpdate({ widgetName: WIDGET_NAMES.briefing, renderWidget: draw(WIDGET_NAMES.briefing) });

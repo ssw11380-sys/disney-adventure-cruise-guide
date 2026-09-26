@@ -134,6 +134,17 @@ describe("'지연': 연장 세션 시장의 시세도 본다", () => {
     expect(openMarketAsOf(usAt(at), { ...preChip(), ext: { kr: true, us: false } })).toBeNull();
   });
 
+  it("통합 검증 지적: 연장 세션 시장은 보유 종목(수량 > 0) 시세만 본다 — 관심 종목의 새 시세가 멈춘 보유 종목의 '지연'을 가리지 않고, 관심 종목만 있으면 따지지 않는다", () => {
+    const held = usAt("2026-09-22T20:20:00+09:00");
+    const watch = [holding("IONQ", quote("IONQ", 70, { currency: "USD", fxRate: 1_400, asOf: "2026-09-22T20:59:00+09:00" }), null, null, undefined, "아이온큐")];
+    const zero = [holding("NVDA", quote("NVDA", 180, { currency: "USD", fxRate: 1_400, asOf: "2026-09-22T20:58:00+09:00" }), 0, 150, undefined, "엔비디아")];
+    expect(openMarketAsOf([...held, ...watch, ...zero], preChip())).toBe(Date.parse("2026-09-22T20:20:00+09:00"));
+    expect(openMarketAsOf([...watch, ...zero], preChip())).toBeNull();
+    // 달력으로 열린 시장(정규장)은 예전처럼 모든 종목
+    const regular = { label: "미국 장중", open: true, kr: false, us: true, nextChangeAt: "2026-09-23T05:00:00.000Z" };
+    expect(openMarketAsOf([...held, ...watch], regular)).toBe(Date.parse("2026-09-22T20:59:00+09:00"));
+  });
+
   it("재현: 21:00 프리마켓인데 위젯 숫자가 20:20 값이면 '지연' (예전: '미국 프리마켓' 칩만 보이고 지연 없음)", () => {
     const stocks = usAt("2026-09-22T20:20:00+09:00");
     const shown = words(render(<HoldingsWidget stocks={stocks} showKrw={false} afterCost={false} fetchedAt={NOW - 40 * 60_000} error={null} now={NOW} market={preChip()} />));
@@ -162,6 +173,65 @@ describe("앱이 바로 그리는 칩(WidgetBridge → pushWidgetData)에도 같
 
   it("꺼져 있으면 붙이지 않고, 받은 칩에 있던 ext 도 뗀다", async () => {
     const d = await pushWidgetData({ stocks, filled: [], showKrw: false, afterCost: false, fetchedAt: NOW, market: { ...appChip, ext: { kr: false, us: true } }, features: flags(false) });
+    expect(d.market).not.toHaveProperty("ext");
+  });
+
+  it("통합 검증 지적: 관심 종목(수량 없음·0)만 프리마켓이면 ext 를 켜지 않는다 (서버 buildWidgetPayload 와 같게 보유 종목만)", async () => {
+    const watchOnly = [
+      holding("VRT", quote("VRT", 250, { currency: "USD", fxRate: 1_400, asOf: "2026-09-22T20:59:00+09:00", session: pre }), null, null, undefined, "버티브"),
+      holding("NVDA", quote("NVDA", 180, { currency: "USD", fxRate: 1_400, asOf: "2026-09-22T20:59:00+09:00", session: pre }), 0, 150, undefined, "엔비디아"),
+    ];
+    const d = await pushWidgetData({ stocks: watchOnly, filled: [], showKrw: false, afterCost: false, fetchedAt: NOW, market: appChip, features: flags(true) });
+    expect(d.market?.ext).toEqual({ kr: false, us: false });
+    expect(shouldSkipFetch({ at: NOW - 30 * 60_000, market: d.market }, NOW)).toBe(true);
+  });
+});
+
+describe("통합 검증 지적: 칩과 플래그가 서로 다른 기록에서 오면 ext 를 고른 플래그로 다시 거른다 (keepNewer)", () => {
+  const pre: QuoteSession = { market: "US", phase: "pre", label: "미국 프리마켓", open: true, eligible: true, until: PRE_END };
+  const appChip = { label: "미국 프리마켓", open: false, kr: false, us: false, nextChangeAt: PRE_END };
+  const at = (hm: string) => Date.parse(`2026-09-22T${hm}:00+09:00`);
+  const vrt = (asOf: string, price = 250) => [holding("VRT", quote("VRT", price, { currency: "USD", fxRate: 1_400, asOf, session: pre }), 2, 200, undefined, "버티브")];
+  const body = (extended: boolean, asOf: string) => ({
+    v: 1 as const,
+    market: preChip(extended),
+    stocks: [{ c: "VRT", n: "버티브", qty: 2, avg: 200, q: [250, 1, 0.4, "USD", asOf, 1_400, 0] as const, e: [700_000, 560_000, null, null, null] as const }],
+    briefings: [],
+    latestIds: [],
+    features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetExtended: extended },
+  });
+  const cache = (atMs: number, b: unknown) => store.set("widget.payload", JSON.stringify({ at: atMs, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2", etag: '"x"', body: b }));
+  const flags = (atMs: number, extended: boolean) => ({ at: atMs, flags: widgetFeatures({ widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetExtended: extended }) });
+
+  it("칩은 더 새 앱 잔고의 것(ext 켜짐), 플래그는 더 늦게 받은 응답의 것(꺼짐) → ext 를 뗀다", async () => {
+    vi.setSystemTime(at("20:40"));
+    cache(at("20:40"), body(true, "2026-09-22T20:39:00+09:00"));
+    vi.setSystemTime(at("20:50"));
+    const pushed = await pushWidgetData({ stocks: vrt("2026-09-22T20:50:00+09:00", 251), filled: [], showKrw: false, afterCost: false, fetchedAt: at("20:50"), market: appChip, features: flags(at("20:30"), true) });
+    expect(pushed.market?.ext).toEqual({ kr: false, us: true });
+    // 20:45 에 묻기 시작한 백그라운드 응답이 늦게 적힘: 관리자가 widgetExtended 를 껐다
+    cache(at("20:45"), body(false, "2026-09-22T20:44:00+09:00"));
+    vi.setSystemTime(at("20:55"));
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(d.stocks[0]!.quote!.price).toBe(251); // 잔고·칩은 더 새 앱 것
+    expect(d.features.extended).not.toBe(true); // 플래그는 더 늦게 받은 응답 것
+    expect(d.market?.label).toBe("미국 프리마켓");
+    expect(d.market).not.toHaveProperty("ext");
+  });
+
+  it("칩은 응답의 것(ext 켜짐), 플래그는 더 늦게 받은 앱 플래그(꺼짐) → ext 를 뗀다", async () => {
+    vi.setSystemTime(at("20:50"));
+    cache(at("20:50"), body(true, "2026-09-22T20:49:00+09:00"));
+    await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    vi.setSystemTime(at("20:58"));
+    // 앱 잔고는 20:45 에 받은 것(응답보다 옛것), 플래그는 20:58 에 받은 것(꺼짐)
+    const pushed = await pushWidgetData({ stocks: vrt("2026-09-22T20:45:00+09:00", 249), filled: [], showKrw: false, afterCost: false, fetchedAt: at("20:45"), market: appChip, features: flags(at("20:58"), false) });
+    expect(pushed.stocks[0]!.quote!.price).toBe(250); // 더 새 응답 잔고
+    expect(pushed.market).not.toHaveProperty("ext");
+    vi.setSystemTime(at("21:00"));
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(d.stocks[0]!.quote!.price).toBe(250);
+    expect(d.market?.label).toBe("미국 프리마켓");
     expect(d.market).not.toHaveProperty("ext");
   });
 });

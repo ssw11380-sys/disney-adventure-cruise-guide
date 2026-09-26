@@ -250,14 +250,22 @@ function extOpen(market: WidgetMarket | null | undefined): boolean {
 }
 
 /**
+ * 연장 세션 표시(ext)와 그 '지연' 판단에 쓰는 종목: 보유 종목(수량 > 0)만 (통합 검증 지적). 관심 종목만 프리마켓이면 15분 갱신·'지연'을 하지 않는다.
+ * 서버 services/widgetPayload.ts buildWidgetPayload 의 ext 계산과 같은 조건
+ */
+export function heldForExtended(s: { quantity?: number | null }): boolean {
+  return (s.quantity ?? 0) > 0;
+}
+
+/**
  * 앱이 바로 그리는 칩(WidgetBridge — 서버 칩과 같은 marketChip)에 연장 세션 표시를 붙인다 (pushWidgetData).
- * 플래그가 켜져 있고 칩에 아직 없으면 잔고 시세의 세션으로 서버와 같은 규칙(extendedOpen). 꺼져 있으면 뗀다.
+ * 플래그가 켜져 있고 칩에 아직 없으면 보유 종목 시세의 세션으로 서버와 같은 규칙(extendedOpen — 관심 종목은 보지 않는다). 꺼져 있으면 뗀다.
  * 백그라운드 작업이 넘기는 칩(서버 응답)은 서버가 이미 붙였으므로 그대로
  */
-export function withExtended(market: WidgetMarket | null, features: WidgetFeatures, stocks: readonly { quote?: Quote | null }[], now: number): WidgetMarket | null {
+export function withExtended(market: WidgetMarket | null, features: WidgetFeatures, stocks: readonly { quantity?: number | null; quote?: Quote | null }[], now: number): WidgetMarket | null {
   if (!market || features.extended !== true) return gateExtended(market, features);
   if (market.ext) return market;
-  return { ...market, ext: extendedOpen({ kr: market.kr === true, us: market.us === true }, stocks.map((s) => s.quote?.session), now) };
+  return { ...market, ext: extendedOpen({ kr: market.kr === true, us: market.us === true }, stocks.filter(heldForExtended).map((s) => s.quote?.session), now) };
 }
 
 /**
@@ -272,7 +280,9 @@ export function currentMarket(market: WidgetMarket | null | undefined, now: numb
 
 /**
  * 지금 열린 시장 종목의 가장 늦은 시세 시각 (한국 장중이면 한국 종목만). 열린 시장 종목이 없으면 null.
- * 연장 세션(ext — 미국 프리·애프터·주간거래 등, widgetExtended)이 열린 시장도 열린 시장으로 본다 — 이때 숫자가 30분 넘게 묵으면 '지연'
+ * 연장 세션(ext — 미국 프리·애프터·주간거래 등, widgetExtended)이 열린 시장도 열린 시장으로 본다 — 이때 숫자가 30분 넘게 묵으면 '지연'.
+ * 연장 세션으로만 열린 시장은 보유 종목(수량 > 0) 시세만 본다 (통합 검증 지적 — ext 를 켠 것과 같은 종목. 관심 종목의 새 시세가 멈춘 보유 종목을 가리지 않게).
+ * 달력으로 열린 시장은 예전처럼 모든 종목
  */
 export function openMarketAsOf(stocks: RegisteredWithQuote[], market: WidgetMarket | null): number | null {
   if (!market || (!market.open && !extOpen(market))) return null;
@@ -280,7 +290,8 @@ export function openMarketAsOf(stocks: RegisteredWithQuote[], market: WidgetMark
   let best: number | null = null;
   for (const s of stocks) {
     if (!s.quote) continue;
-    const isOpen = !byMarket || (s.quote.currency === "USD" ? market.us === true || market.ext?.us === true : market.kr === true || market.ext?.kr === true);
+    const held = heldForExtended(s);
+    const isOpen = !byMarket || (s.quote.currency === "USD" ? market.us === true || (market.ext?.us === true && held) : market.kr === true || (market.ext?.kr === true && held));
     const t = Date.parse(s.quote.asOf);
     if (isOpen && Number.isFinite(t) && (best === null || t > best)) best = t;
   }

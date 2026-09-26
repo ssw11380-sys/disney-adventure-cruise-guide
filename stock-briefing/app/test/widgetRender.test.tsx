@@ -1205,14 +1205,33 @@ describe("위젯 검토 7번 앞부분: 앱이 브리핑 위젯도 바로 갱신
     await push(T0 - 60_000);
     expect(JSON.parse(store.get("widget.payload")!)).toEqual(before);
     await push(T0 + 10 * 60_000);
-    const after = JSON.parse(store.get("widget.payload")!) as typeof before;
-    expect({ ...after, body: { ...after.body, briefings: null } }).toEqual({ ...before, body: { ...before.body, briefings: null } });
+    const after = JSON.parse(store.get("widget.payload")!) as typeof before & { briefingsAt?: number };
+    // 더한 것은 앱 목록을 받은 시각(briefingsAt, 통합 — 적는 곳을 data.ts 로 옮김)뿐
+    expect(after.briefingsAt).toBe(T0 + 10 * 60_000);
+    expect({ ...after, briefingsAt: undefined, body: { ...after.body, briefings: null } }).toEqual({ ...before, body: { ...before.body, briefings: null } });
     // 서버 응답과 같은 모양 (짧은 키 · 요약 첫 줄) — 위젯은 이것을 fromPayload 로 되돌려 그린다
     expect(after.body.briefings).toEqual([
       { id: 13, code: "NVDA", name: "엔비디아", session: "afternoon", date: "2026-09-24", summary: "엔비디아 오후 요약", createdAt: "2026-09-24T16:06:00+09:00" },
       { id: 12, code: "005930", name: "삼성전자", session: "afternoon", date: "2026-09-24", summary: "삼성전자 오후 요약", createdAt: "2026-09-24T16:05:00+09:00" },
       { id: 14, code: "999990", name: "관심종목", session: "afternoon", date: "2026-09-24", summary: "관심종목 오후 요약", createdAt: "2026-09-24T16:07:00+09:00" },
     ]);
+  });
+
+  it("통합: 앱 목록을 받은 시각(briefingsAt)을 받아 둔 응답에 함께 적는다 — 그보다 먼저 받은 앱 목록(메모리에 남은 옛 목록)은 다시 덮지 않는다", async () => {
+    await prime(POLISH);
+    await push(T0 + 10 * 60_000);
+    expect(await savedIds()).toEqual([13, 12, 14]);
+    shared.updates = [];
+    // 16:05 에 받은 목록(삼성전자만): 위젯 응답(16:00)보다는 늦지만 이미 그린 16:10 목록보다 옛것
+    await push(T0 + 5 * 60_000, [LATEST[1]!]);
+    await refreshBriefingWidget({ at: T0 + 5 * 60_000, list: [LATEST[1]!] });
+    expect(briefingUpdates()).toHaveLength(0);
+    expect(await savedIds()).toEqual([13, 12, 14]);
+    vi.setSystemTime(T0 + 12 * 60_000);
+    expect(drawnIds(await handle("WIDGET_RESIZED"))).toEqual([13, 12, 14]);
+    // 같은 목록(같은 받은 시각)은 지금처럼 다시 그린다 (1분 규칙으로 다시 넘길 때)
+    await push(T0 + 10 * 60_000);
+    expect(briefingUpdates()).toHaveLength(1);
   });
 
   it("검증 지적 회귀: 잔고를 이번 실행에서 받지 않았을 때(위젯 종목 브리핑·알림으로 앱을 새로 켬) 브리핑 위젯만 다시 그린다 — 잔고·자산·지수 위젯과 저장된 잔고·칩·기준 시각은 그대로", async () => {

@@ -177,6 +177,73 @@ describe("리뷰 5: 앱에서 방금 본 숫자가 위젯에서 되돌아가지 
     const r = await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_RESIZED" });
     expect(dark(r[0])).toContain("720,000원");
   });
+
+  // ── 통합 검증 지적 (a·b): 넘긴 시각이 아니라 데이터가 새것인지로 견준다 · 칩은 비어 있는 것으로 덮지 않는다 ──
+  /** 10:00 백그라운드가 받은 응답: 72,000원 → 평가 720,000원 */
+  const seed720 = async () => {
+    serve(payload({ stocks: [{ ...payload().stocks[0]!, q: [72_000, 2_100, 3, "KRW", "2026-09-24T10:00:00+09:00", null, 0] as Q, e: [720_000, 800_000, null, null, null] as E }] }));
+    await loadWidgetData({ stocks: true, briefings: true });
+  };
+  /** 앱이 09:48 에 받아 둔 잔고 (70,500원 → 705,000원). 잔고 탭이 가려져 그 뒤로 다시 받지 않았다 */
+  const stocks0948 = () => [holding("005930", quote("005930", 70_500, { change: 600, changeRate: 0.86, asOf: "2026-09-24T09:48:00+09:00" }), 10, 80_000, undefined, "삼성전자")];
+
+  it("재현: 10:08 앱이 09:48 에 받은 잔고를 넘겨도 10:00 서버 응답을 이기지 못한다 — 넘긴 순간·크기 변경·조회 실패 모두 10:00 값", async () => {
+    await seed720();
+    vi.setSystemTime(T("10:08"));
+    shared.widgets = { [WIDGET_NAMES.holdings]: [WIDE] };
+    // 앱이 떠날 때 넘김: 잔고를 받은 시각(react-query dataUpdatedAt)을 함께 넘긴다
+    await refreshWidgets({ stocks: stocks0948(), dataAt: T("09:48"), showKrw: false, afterCost: false, rowKrw: true, market: APP_CHIP });
+    expect(dark(shared.updates.at(-1)!.rendered)).toContain("720,000원");
+    vi.setSystemTime(T("10:10"));
+    offline();
+    const r = await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_RESIZED" });
+    const w = dark(r[0]);
+    expect(w).toContain("720,000원");
+    expect(w).not.toContain("705,000원");
+    expect(w).toContain("10:00 기준");
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(d.fetchedAt).toBe(T("10:00"));
+    // 조회 실패 때 쓰는 마지막 잔고도 09:48 값으로 덮이지 않는다
+    expect((await readLastStocks(API))?.stocks[0]!.quote!.price).toBe(72_000);
+    vi.setSystemTime(T("10:11"));
+    const failed = await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(dark(failed.at(-1))).toContain("720,000원");
+  });
+
+  it("받은 시각을 모르는 기록(업데이트 전 앱이 넘긴 것)도 시세 시각이 더 옛것이면 이기지 못한다", async () => {
+    await seed720();
+    vi.setSystemTime(T("10:08"));
+    await refreshWidgets({ stocks: stocks0948(), showKrw: false, afterCost: false, rowKrw: true, market: APP_CHIP });
+    vi.setSystemTime(T("10:10"));
+    offline();
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(d.stocks[0]!.quote!.price).toBe(72_000);
+  });
+
+  it("앱 잔고가 정말 더 새것이면(10:07 에 받음) 지금처럼 앱 값", async () => {
+    await seed720();
+    vi.setSystemTime(T("10:08"));
+    const fresh = [holding("005930", quote("005930", 71_000, { asOf: "2026-09-24T10:07:00+09:00" }), 10, 80_000, undefined, "삼성전자")];
+    await refreshWidgets({ stocks: fresh, dataAt: T("10:07"), showKrw: false, afterCost: false, rowKrw: true, market: APP_CHIP });
+    vi.setSystemTime(T("10:10"));
+    offline();
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(d.stocks[0]!.quote!.price).toBe(71_000);
+    // 기준 시각은 앱이 잔고를 받은 시각 (넘긴 시각 10:08 이 아니라)
+    expect(d.fetchedAt).toBe(T("10:07"));
+  });
+
+  it("재현: 앱이 장 상태를 받기 전에(칩 없음) 넘긴 더 새 잔고여도, 받아 둔 응답의 멀쩡한 칩은 지우지 않는다", async () => {
+    serve();
+    await loadWidgetData({ stocks: true, briefings: true });
+    vi.setSystemTime(T("10:08"));
+    await refreshWidgets({ stocks: appStocks(), showKrw: false, afterCost: false, rowKrw: true, market: null });
+    vi.setSystemTime(T("10:10"));
+    offline();
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(d.stocks[0]!.quote!.price).toBe(71_000); // 잔고는 더 새 앱 값
+    expect(d.market).toEqual(KR_OPEN); // 칩은 응답의 것 (예전: null — 최대 15분 칩·'지연' 판단이 사라졌다)
+  });
 });
 
 describe("리뷰 6: 실패가 위젯에 바로 보인다", () => {
@@ -262,6 +329,80 @@ describe("리뷰 6: 실패가 위젯에 바로 보인다", () => {
     expect(urls.filter((u) => u.includes("/api/widget"))).toHaveLength(1); // 예전: 6시간
   });
 
+  it.each([
+    [511, "text/html", "<html><body>네트워크 로그인이 필요합니다</body></html>"],
+    [403, "text/html; charset=utf-8", "<!doctype html><p>접근이 막혔습니다</p>"],
+    [407, "", "  <html>프록시 인증</html>"],
+  ])("재현: 와이파이 로그인·프록시의 HTML %i 도 '갱신 실패 · 연결 안 됨' (예전: 서버 오류·갱신 실패)", async (status, type, html) => {
+    vi.stubGlobal("fetch", async () => new Response(html, { status, headers: type ? { "content-type": type } : {} }));
+    const d = await loadWidgetData({ stocks: true, briefings: true });
+    expect(failureText(d.error)).toBe("갱신 실패 · 연결 안 됨");
+  });
+
+  it("서버가 준 오류는 그대로: JSON 503 은 '서버 오류', JSON 401 은 '토큰 확인', 호스팅의 HTML 502 도 '서버 오류' (서버에는 닿았다)", async () => {
+    const answer = (status: number, body: string, type: string) => vi.stubGlobal("fetch", async () => new Response(body, { status, headers: { "content-type": type } }));
+    answer(503, JSON.stringify({ statusCode: 503 }), "application/json");
+    expect(failureText((await loadWidgetData({ stocks: true, briefings: true })).error)).toBe("갱신 실패 · 서버 오류");
+    answer(401, JSON.stringify({ statusCode: 401 }), "application/json");
+    expect(failureText((await loadWidgetData({ stocks: true, briefings: true })).error)).toBe("갱신 실패 · 토큰 확인");
+    answer(502, "<html>Application failed to respond</html>", "text/html");
+    expect(failureText((await loadWidgetData({ stocks: true, briefings: true })).error)).toBe("갱신 실패 · 서버 오류");
+  });
+
+  it("예전 서버 모드(JSON 404) 10분 동안: 칩·지수 줄은 없음(예전 API 에는 없다), 플래그는 마지막 값 그대로 · 10분 뒤 다시 /api/widget 이면 칩이 돌아온다", async () => {
+    const INDICES = [{ code: "KOSPI", name: "코스피", value: 3_400, change: 10, changeRate: 0.3, open: true }];
+    serve(payload({ indices: INDICES }));
+    const first = await loadWidgetData({ stocks: true, briefings: true });
+    expect(first.market).toEqual(KR_OPEN);
+    expect(first.indices).toHaveLength(1);
+    const urls: string[] = [];
+    let legacy = true;
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      if (url.includes("/api/widget"))
+        return legacy
+          ? new Response(JSON.stringify({ statusCode: 404, error: "Not Found" }), { status: 404, headers: { "content-type": "application/json" } })
+          : new Response(JSON.stringify(payload({ indices: INDICES })), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.setSystemTime(T("10:01"));
+    const d = await loadWidgetData({ stocks: true, briefings: true });
+    expect(d.error).toBeNull();
+    expect(d.market).toBeNull();
+    expect(d.indices).toBeNull();
+    expect(d.features).toMatchObject({ pnlToggle: true, indexLine: true, market: true });
+    vi.setSystemTime(T("10:10"));
+    urls.length = 0;
+    const within = await loadWidgetData({ stocks: true, briefings: true });
+    expect(urls.some((u) => u.includes("/api/widget"))).toBe(false);
+    expect(within.market).toBeNull();
+    expect(within.features.indexLine).toBe(true);
+    legacy = false;
+    vi.setSystemTime(T("10:12"));
+    const back = await loadWidgetData({ stocks: true, briefings: true });
+    expect(urls.filter((u) => u.includes("/api/widget"))).toHaveLength(1);
+    expect(back.market).toEqual(KR_OPEN);
+    expect(back.indices).toHaveLength(1);
+  });
+
+  it("재현: 받아 둔 응답이 없을 때(업데이트 직후 등) 연속 실패로 다시 그려도 브리핑 위젯의 브리핑 줄이 사라지지 않는다", async () => {
+    const ALL = [WIDGET_NAMES.holdings, WIDGET_NAMES.asset, WIDGET_NAMES.briefing, WIDGET_NAMES.market];
+    shared.widgets = Object.fromEntries(ALL.map((n) => [n, [WIDE]]));
+    serve();
+    await runBriefingCheck(); // 그린 데이터에 브리핑 '첫 줄'이 적힌다
+    store.delete("widget.payload");
+    offline();
+    vi.setSystemTime(T("10:15"));
+    await runBriefingCheck();
+    const d = await loadWidgetData({ stocks: true, briefings: true });
+    expect(d.briefings.map((b) => b.latest?.summary)).toEqual(["첫 줄"]);
+    shared.updates = [];
+    vi.setSystemTime(T("10:30"));
+    await runBriefingCheck();
+    const briefing = dark(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.briefing)!.rendered);
+    expect(briefing.join(" ")).toContain("첫 줄");
+  });
+
   it("예전 앱이 적어 둔 6시간짜리 예전 서버 기록은 쓰지 않는다 (OTA 직후에도 바로 /api/widget)", async () => {
     store.set("widget.legacyServer", JSON.stringify({ apiUrl: API, until: T("10:00") + 5 * 3_600_000 }));
     const urls = serve();
@@ -339,6 +480,24 @@ describe("리뷰 2: 자동 갱신 기록 (기기 안, 설정 화면 '마지막 �
     expect(log.map((e) => [e.t, e.s, e.r])).toEqual([
       [T("10:00"), "periodic", "ok"],
       [T("10:05"), "button", "failed"],
+    ]);
+  });
+
+  it("통합 검증 지적: 주기 갱신이 받아 둔 응답을 다시 쓰면(서버를 부르지 않음) skipped, 서버에 물었으면 ok — 평균 간격이 실제 조회 간격이 되게", async () => {
+    serve();
+    await runBriefingCheck(); // 10:00 백그라운드가 받음
+    vi.setSystemTime(T("10:05"));
+    const urls = serve();
+    await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_UPDATE" });
+    expect(urls).toEqual([]);
+    vi.setSystemTime(T("10:20")); // 15분 지남 → 서버에 묻는다
+    await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_UPDATE" });
+    expect(urls).toHaveLength(1);
+    const log = await readWidgetRefreshLog();
+    expect(log.map((e) => [e.t, e.s, e.r])).toEqual([
+      [T("10:00"), "background", "ok"],
+      [T("10:05"), "periodic", "skipped"],
+      [T("10:20"), "periodic", "ok"],
     ]);
   });
 
