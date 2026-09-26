@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useState } from "react";
+import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 import { useFeature, useFeatures, useMarketSummary } from "@/api/hooks";
 import type { CompareRow, HoldingsCompare, MarketSummary, MarketSummaryData, SummaryEvent } from "@/api/types";
 import { BriefingSplit, type BodyLayout } from "@/components/BriefingBody";
@@ -15,15 +15,19 @@ import { formatDateKo, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import {
   basisText,
+  bodyWidthGuess,
   eventText,
   holdingsAuxSegs,
   holdingsSegs,
+  holdingsTableMode,
   indexValueText,
+  indicesTableMode,
   md,
   mdw,
   newsTime,
   ppText,
   rateText,
+  speakPointMove,
   speakText,
   summarySegLines,
   titleText,
@@ -34,7 +38,7 @@ import {
   yieldValueText,
 } from "@/lib/marketSummary";
 import { useNow } from "@/lib/useNow";
-import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
+import { changeColor, font, fontCap, space, touch, useFontScale, useTheme } from "@/theme";
 import { marketSummary as MS, radius } from "@/tokens";
 import { SegText } from "./MarketSummaryCard";
 
@@ -77,9 +81,29 @@ export function MarketSummaryBody({ numId, layout, title }: { numId: number | nu
   return <SummaryView s={data} top={layout === "pane" ? null : <StaleBanner query={q} />} layout={layout} title={title} />;
 }
 
+/**
+ * 칸의 실제 폭 (onLayout). 받기 전 첫 그림은 창 크기로 어림한 폭(guess)을 쓴다 — 좁은 칸에서 4칸 표를 한 번 그렸다 바꾸지 않게
+ */
+function useMeasuredWidth(guess: number): [number, (e: LayoutChangeEvent) => void] {
+  const [w, setW] = useState<number | null>(null);
+  const onLayout = useCallback((e: LayoutChangeEvent) => {
+    const x = Math.round(e.nativeEvent.layout.width);
+    if (x > 0) setW((p) => (p === x ? p : x));
+  }, []);
+  return [w ?? guess, onLayout];
+}
+
+/** 표 배치에 쓰는 것: 칸 폭 어림과 글자 배율(fontCap.row 까지 — 표 글자도 이만큼만 커진다) */
+interface Fit {
+  guess: number;
+  scale: number;
+}
+
 function SummaryView({ s, top, layout, title }: { s: MarketSummary; top: React.ReactNode; layout: BodyLayout; title?: (s: MarketSummary) => React.ReactNode }) {
   const t = useTheme();
   const now = new Date(useNow(60_000));
+  const win = useWindowDimensions();
+  const fit: Fit = { guess: bodyWidthGuess(win.width, layout), scale: useFontScale(fontCap.row) };
   const d = s.data;
   const failed = s.status === "failed" || !d;
   const header = (
@@ -112,12 +136,12 @@ function SummaryView({ s, top, layout, title }: { s: MarketSummary; top: React.R
     );
   }
   const summary = <SummaryLinesCard d={d} now={now} />;
-  const holdings = <HoldingsCard d={d} />;
+  const holdings = <HoldingsCard d={d} fit={fit} />;
   const rest = (
     <>
-      <IndicesCard d={d} />
-      <SectorsCard d={d} />
-      <RatesCard d={d} />
+      <IndicesCard d={d} fit={fit} />
+      <SectorsCard d={d} scale={fit.scale} />
+      <RatesCard d={d} scale={fit.scale} />
       <EventsCard d={d} now={now} />
       <NewsCard d={d} />
       <BasisCard d={d} />
@@ -168,15 +192,23 @@ function SummaryLinesCard({ d, now }: { d: MarketSummaryData; now: Date }) {
 
 const GROUP_TITLE: Record<"high" | "similar" | "low", string> = { high: "지수보다 높음 (+1.00%p 이상)", similar: "비슷 (±1.00%p 안)", low: "지수보다 낮음 (-1.00%p 이하)" };
 
-/** 내 보유 종목과 지수: 높음·비슷·낮음으로 묶은 표 (종목 | 등락률 | 비교 지수 | 차이 %p) */
-function HoldingsCard({ d }: { d: MarketSummaryData }) {
+/** 글자 배율만큼 늘린 열 폭 (dp) */
+const colW = (w: number, scale: number) => Math.round(w * scale);
+
+/**
+ * 내 보유 종목과 지수: 높음·비슷·낮음으로 묶은 표 (종목 | 등락률 | 비교 지수 | 차이 %p).
+ * 칸이 좁거나 글자가 크면(이름 칸이 nameMinW 보다 좁아짐) 비교 지수를 종목 이름 아래 줄로 내린 3칸 표 (holdingsTableMode)
+ */
+function HoldingsCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
   const t = useTheme();
+  const [width, onLayout] = useMeasuredWidth(fit.guess);
+  const mode = holdingsTableMode(width, fit.scale);
   const h = d.holdings;
   const us = d.market === "US";
   const segs = holdingsSegs(d, { mine: false });
   return (
     <Card padded={false}>
-      <View style={styles.cardHead}>
+      <View style={styles.cardHead} onLayout={onLayout}>
         <SectionTitle>내 보유 종목과 지수</SectionTitle>
         {segs ? <SegText segs={segs} style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.5 }} /> : null}
         {h && h.compared > 0 ? <SegText segs={holdingsAuxSegs(h)} style={{ color: t.sub, fontSize: font.small }} /> : null}
@@ -185,10 +217,16 @@ function HoldingsCard({ d }: { d: MarketSummaryData }) {
       {h && h.compared > 0 ? (
         <>
           <TableHead>
-            <Text style={[styles.th, styles.colName, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>종목</Text>
-            <Text style={[styles.th, styles.colRate, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>등락률</Text>
-            <Text style={[styles.th, styles.colBench, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>비교 지수</Text>
-            <Text style={[styles.th, styles.colDiff, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>차이</Text>
+            <Text style={[styles.th, styles.colName, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+              {mode === "compact" ? "종목 · 비교 지수" : "종목"}
+            </Text>
+            <Text style={[styles.th, styles.right, { width: colW(MS.colRate, fit.scale), color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>등락률</Text>
+            {mode === "full" ? (
+              <Text style={[styles.th, styles.right, { width: colW(MS.colBench, fit.scale), color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+                비교 지수
+              </Text>
+            ) : null}
+            <Text style={[styles.th, styles.right, { width: colW(MS.colDiff, fit.scale), color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>차이</Text>
           </TableHead>
           {(["high", "similar", "low"] as const).map((g) =>
             h[g].length ? (
@@ -197,7 +235,7 @@ function HoldingsCard({ d }: { d: MarketSummaryData }) {
                   {GROUP_TITLE[g]} {h[g].length}
                 </Text>
                 {h[g].map((r) => (
-                  <CompareLine key={r.code} r={r} />
+                  <CompareLine key={r.code} r={r} mode={mode} scale={fit.scale} />
                 ))}
               </View>
             ) : null,
@@ -222,28 +260,45 @@ function holdingsFoot(d: MarketSummaryData, h: HoldingsCompare | null): string {
     const ex = h.excluded;
     if (ex.leverage.length) parts.push(`레버리지·인버스 ETF ${ex.leverage.length}종목 제외(${ex.leverage.join(", ")}) — 이름으로 알아보지 못한 것은 포함됩니다`);
     if (ex.overseas.length) parts.push(`해외 지수 ETF ${ex.overseas.length}종목 제외(${ex.overseas.join(", ")})`);
+    // 채권·금리형 ETF 칸은 나중에 더해 예전에 저장한 요약에는 없다
+    if (ex.bond?.length) parts.push(`채권·금리형 ETF ${ex.bond.length}종목 제외(${ex.bond.join(", ")}) — 주식 지수와 견주지 않음`);
     if (ex.noQuote.length) parts.push(`시세 없음 ${ex.noQuote.length}(${ex.noQuote.join(", ")}) — 거래정지·지연으로 같은 날 시세가 아님`);
     if (ex.noBenchmark.length) parts.push(`비교 지수 없음 ${ex.noBenchmark.length}(${ex.noBenchmark.join(", ")})`);
   }
   return parts.join(" · ");
 }
 
-function CompareLine({ r }: { r: CompareRow }) {
+/** 표 한 줄. compact 면 비교 지수를 이름 아래 줄로 (이름 칸을 넓게) */
+function CompareLine({ r, mode, scale }: { r: CompareRow; mode: "full" | "compact"; scale: number }) {
   const t = useTheme();
   const label = sentence([r.name, speakRate(r.changeRate), `비교 지수 ${r.benchmark.name} ${speakRate(r.benchmark.changeRate) ?? ""}`, `차이 ${speakText(ppText(r.diff))}`]);
+  const bench = (
+    <>
+      {r.benchmark.name} <Text style={{ color: changeColor(t, shownSign(r.benchmark.changeRate, rateText(r.benchmark.changeRate))) }}>{rateText(r.benchmark.changeRate)}</Text>
+    </>
+  );
   return (
     <View accessible accessibilityLabel={label} style={[styles.tr, { borderBottomColor: t.line }]}>
-      <Text style={[styles.colName, { color: t.ink, fontSize: font.body, fontWeight: "600" }]} numberOfLines={2} maxFontSizeMultiplier={fontCap.row}>
-        {r.name}
-      </Text>
-      <Text style={[styles.num, styles.colRate, { color: changeColor(t, shownSign(r.changeRate, rateText(r.changeRate))), fontSize: font.body }]} maxFontSizeMultiplier={fontCap.row}>
+      <View style={styles.colName}>
+        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }} numberOfLines={2} maxFontSizeMultiplier={fontCap.row}>
+          {r.name}
+        </Text>
+        {mode === "compact" ? (
+          <Text style={{ color: t.sub, fontSize: font.small }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+            {bench}
+          </Text>
+        ) : null}
+      </View>
+      <Text style={[styles.num, styles.right, { width: colW(MS.colRate, scale), color: changeColor(t, shownSign(r.changeRate, rateText(r.changeRate))), fontSize: font.body }]} maxFontSizeMultiplier={fontCap.row}>
         {rateText(r.changeRate)}
       </Text>
-      <Text style={[styles.colBench, { color: t.sub, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
-        {r.benchmark.name} <Text style={{ color: changeColor(t, shownSign(r.benchmark.changeRate, rateText(r.benchmark.changeRate))) }}>{rateText(r.benchmark.changeRate)}</Text>
-      </Text>
+      {mode === "full" ? (
+        <Text style={[styles.right, { width: colW(MS.colBench, scale), color: t.sub, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
+          {bench}
+        </Text>
+      ) : null}
       {/* 차이에는 색을 칠하지 않는다 (좋고 나쁨이 아니라 비교 사실) */}
-      <Text style={[styles.num, styles.colDiff, { color: t.ink, fontSize: font.body, fontWeight: "700" }]} maxFontSizeMultiplier={fontCap.row}>
+      <Text style={[styles.num, styles.right, { width: colW(MS.colDiff, scale), color: t.ink, fontSize: font.body, fontWeight: "700" }]} maxFontSizeMultiplier={fontCap.row}>
         {ppText(r.diff)}
       </Text>
     </View>
@@ -252,9 +307,14 @@ function CompareLine({ r }: { r: CompareRow }) {
 
 const signed = (v: number) => `${v > 0 ? "+" : v < 0 ? "-" : ""}${indexValueText(Math.abs(v))}`;
 
-/** 주요 지수: 종가 · 전일 대비 · 등락률 · 출처 시각 */
-function IndicesCard({ d }: { d: MarketSummaryData }) {
+/**
+ * 주요 지수: 종가 · 전일 대비 · 등락률 · 출처 시각.
+ * 칸이 좁거나 글자가 크면(지수 이름 칸이 indexNameMinW 보다 좁아짐) 전일 대비를 종가 아래 줄로 내린 3칸 표 (indicesTableMode)
+ */
+function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
   const t = useTheme();
+  const [width, onLayout] = useMeasuredWidth(fit.guess);
+  const mode = indicesTableMode(width, fit.scale);
   const us = d.market === "US";
   const foot =
     d.phase === "intraday"
@@ -262,48 +322,79 @@ function IndicesCard({ d }: { d: MarketSummaryData }) {
       : us
         ? `네이버 증권 · 뉴욕 장 마감 뒤 최종값${d.phase === "prelim" ? "이 오기 전 값" : ""}`
         : `네이버 증권 · ${d.closeTime} 장 마감 확정값`;
+  const wValue = colW(MS.colValue, fit.scale);
+  const wChange = colW(MS.colChange, fit.scale);
+  const wRate = colW(MS.colRate, fit.scale);
   return (
     <Card padded={false}>
-      <SectionTitle style={styles.cardHead} right={<Muted>{d.holiday ? `직전 거래일 ${mdw(d.basisDate)}` : `${mdw(d.basisDate)} ${d.phase === "intraday" ? "장중" : "마감"}`}</Muted>}>
-        주요 지수
-      </SectionTitle>
-      <TableHead>
-        <Text style={[styles.th, styles.colName, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>지수</Text>
-        <Text style={[styles.th, styles.colValue, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>종가</Text>
-        <Text style={[styles.th, styles.colChange, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>전일 대비</Text>
-        <Text style={[styles.th, styles.colRate, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>등락률</Text>
-      </TableHead>
-      {d.indices.map((i) => (
-        <View key={i.code} accessible accessibilityLabel={sentence([i.name, i.value !== null ? indexValueText(i.value) : "받지 못함", speakRate(i.changeRate)])} style={[styles.tr, { borderBottomColor: t.line }]}>
-          <Text style={[styles.colName, { color: t.ink, fontSize: font.body, fontWeight: "600" }]} maxFontSizeMultiplier={fontCap.row}>
-            {i.name}
+      <View onLayout={onLayout}>
+        <SectionTitle style={styles.cardHead} right={<Muted>{d.holiday ? `직전 거래일 ${mdw(d.basisDate)}` : `${mdw(d.basisDate)} ${d.phase === "intraday" ? "장중" : "마감"}`}</Muted>}>
+          주요 지수
+        </SectionTitle>
+        <TableHead>
+          <Text style={[styles.th, styles.colName, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>지수</Text>
+          <Text style={[styles.th, styles.right, { width: wValue, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+            {mode === "compact" ? "종가 · 전일 대비" : "종가"}
           </Text>
-          {i.changeRate === null ? (
-            <Text style={[styles.colMissing, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
-              받지 못함{i.missing ? ` · ${i.missing}` : ""}
+          {mode === "full" ? (
+            <Text style={[styles.th, styles.right, { width: wChange, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+              전일 대비
             </Text>
-          ) : (
-            <>
-              <Text style={[styles.num, styles.colValue, { color: t.ink, fontSize: font.body }]} maxFontSizeMultiplier={fontCap.row}>
-                {i.value !== null ? indexValueText(i.value) : "—"}
+          ) : null}
+          <Text style={[styles.th, styles.right, { width: wRate, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>등락률</Text>
+        </TableHead>
+        {d.indices.map((i) => {
+          const change =
+            i.change !== null ? (
+              <Text style={[styles.num, { color: changeColor(t, shownSign(i.change, indexValueText(Math.abs(i.change)))) }]}>{signed(i.change)}</Text>
+            ) : (
+              <Text style={{ color: t.muted }}>—</Text>
+            );
+          return (
+            <View key={i.code} accessible accessibilityLabel={sentence([i.name, i.value !== null ? indexValueText(i.value) : "받지 못함", speakRate(i.changeRate)])} style={[styles.tr, { borderBottomColor: t.line }]}>
+              <Text style={[styles.colName, { color: t.ink, fontSize: font.body, fontWeight: "600" }]} maxFontSizeMultiplier={fontCap.row}>
+                {i.name}
               </Text>
-              <Text style={[styles.num, styles.colChange, { color: i.change !== null ? changeColor(t, shownSign(i.change, indexValueText(Math.abs(i.change)))) : t.muted, fontSize: font.body }]} maxFontSizeMultiplier={fontCap.row}>
-                {i.change !== null ? signed(i.change) : "—"}
-              </Text>
-              <Text style={[styles.num, styles.colRate, { color: changeColor(t, shownSign(i.changeRate, rateText(i.changeRate))), fontSize: font.body, fontWeight: "700" }]} maxFontSizeMultiplier={fontCap.row}>
-                {rateText(i.changeRate)}
-              </Text>
-            </>
-          )}
-        </View>
-      ))}
+              {i.changeRate === null ? (
+                <Text style={[styles.colMissing, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
+                  받지 못함{i.missing ? ` · ${i.missing}` : ""}
+                </Text>
+              ) : (
+                <>
+                  <View style={{ width: wValue }}>
+                    <Text style={[styles.num, styles.right, { color: t.ink, fontSize: font.body }]} maxFontSizeMultiplier={fontCap.row}>
+                      {i.value !== null ? indexValueText(i.value) : "—"}
+                    </Text>
+                    {mode === "compact" ? (
+                      <Text style={[styles.right, { fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
+                        {change}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {mode === "full" ? (
+                    <Text style={[styles.right, { width: wChange, fontSize: font.body }]} maxFontSizeMultiplier={fontCap.row}>
+                      {change}
+                    </Text>
+                  ) : null}
+                  <Text style={[styles.num, styles.right, { width: wRate, color: changeColor(t, shownSign(i.changeRate, rateText(i.changeRate))), fontSize: font.body, fontWeight: "700" }]} maxFontSizeMultiplier={fontCap.row}>
+                    {rateText(i.changeRate)}
+                  </Text>
+                </>
+              )}
+            </View>
+          );
+        })}
+      </View>
       <Muted style={[styles.cardFoot, { fontSize: font.tiny }]}>{foot}</Muted>
     </Card>
   );
 }
 
-/** 업종: 미국은 섹터 ETF 11개 막대, 한국은 위아래 2개씩 + 뺀 업종 안내 */
-function SectorsCard({ d }: { d: MarketSummaryData }) {
+/**
+ * 업종: 미국은 섹터 ETF 11개 막대, 한국은 위아래 2개씩 + 뺀 업종 안내.
+ * 막대는 칸 폭을 따라 줄고 늘며(이름 칸과 막대 칸을 반씩, 막대 길이는 칸 안의 비율), 이름은 두 줄까지 — 펼친 세로 두 칸(약 350dp)에서도 이름이 사라지지 않게
+ */
+function SectorsCard({ d, scale }: { d: MarketSummaryData; scale: number }) {
   const t = useTheme();
   const s = d.sectors;
   const rows = s ? (s.basis === "etf" ? s.all : [...s.strong, ...s.weak]) : [];
@@ -316,20 +407,30 @@ function SectorsCard({ d }: { d: MarketSummaryData }) {
       ) : (
         <>
           {rows.map((r) => {
-            const w = Math.max(2, Math.round((Math.abs(r.changeRate) / max) * MS.barMaxW));
             const color = changeColor(t, shownSign(r.changeRate, rateText(r.changeRate)));
+            // 막대 길이: 가장 큰 등락률이 반쪽 칸을 꽉 채우는 비율 (0 이 아닌 값은 최소 2%로 보이게)
+            const pct = Math.max(2, Math.round((Math.abs(r.changeRate) / max) * 100));
+            const bar = <View style={{ width: `${pct}%`, height: MS.barH, backgroundColor: color, borderRadius: radius.sm }} />;
             return (
               <View key={r.code} accessible accessibilityLabel={sentence([r.name, speakRate(r.changeRate)])} style={styles.barRow}>
-                <Text style={[styles.barName, { color: t.ink, fontSize: font.small }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
-                  {r.name}
-                  <Text style={{ color: t.muted, fontSize: font.tiny }}>{s.basis === "etf" ? ` ${r.code}` : r.count ? ` ${r.count}종목` : ""}</Text>
-                </Text>
-                <View style={styles.barTrack}>
-                  <View style={[styles.barHalf, { alignItems: "flex-end" }]}>{r.changeRate < 0 ? <View style={{ width: w, height: MS.barH, backgroundColor: color, borderRadius: radius.sm }} /> : null}</View>
-                  <View style={[styles.barAxis, { backgroundColor: t.line }]} />
-                  <View style={styles.barHalf}>{r.changeRate > 0 ? <View style={{ width: w, height: MS.barH, backgroundColor: color, borderRadius: radius.sm }} /> : null}</View>
+                {/* 한국 업종의 구성 종목 수는 이름 아래 줄로 ('반도체와반도체장비 90 / 종목'처럼 숫자와 '종목'이 갈라지지 않게) */}
+                <View style={styles.barName}>
+                  <Text style={{ color: t.ink, fontSize: font.small }} numberOfLines={2} maxFontSizeMultiplier={fontCap.row}>
+                    {r.name}
+                    {s.basis === "etf" ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{` ${r.code}`}</Text> : null}
+                  </Text>
+                  {s.basis !== "etf" && r.count ? (
+                    <Text style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>
+                      {r.count}종목
+                    </Text>
+                  ) : null}
                 </View>
-                <Text style={[styles.num, styles.barRate, { color, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
+                <View style={styles.barTrack}>
+                  <View style={[styles.barHalf, { alignItems: "flex-end" }]}>{r.changeRate < 0 ? bar : null}</View>
+                  <View style={[styles.barAxis, { backgroundColor: t.line }]} />
+                  <View style={styles.barHalf}>{r.changeRate > 0 ? bar : null}</View>
+                </View>
+                <Text style={[styles.num, styles.right, { width: colW(MS.colRate, scale), color, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row}>
                   {rateText(r.changeRate)}
                 </Text>
               </View>
@@ -348,17 +449,20 @@ function SectorsCard({ d }: { d: MarketSummaryData }) {
 }
 
 /** 환율·금리: 고시일·출처 표기 */
-function RatesCard({ d }: { d: MarketSummaryData }) {
+function RatesCard({ d, scale }: { d: MarketSummaryData; scale: number }) {
   const t = useTheme();
   const f = d.fx;
   const y = d.yield10y;
   const morning = d.market === "US";
+  const labelW = colW(MS.labelW, scale);
+  // '한국 휴장으로 갱신 없음'은 한국 휴장(오후 요약의 휴장)일 때만 — 아침 요약의 holiday 는 미국 휴장이라 원/달러 고시와 무관하다 (11/27 추수감사절 다음 날 등)
+  const krHolidayStale = d.market === "KR" && !!d.holiday && !!f?.date && f.date < d.date;
   return (
     <Card>
       <SectionTitle>{morning ? "환율·금리" : "환율"}</SectionTitle>
       {f ? (
         <View accessible accessibilityLabel={sentence(["원달러", wonText(f.value), speakText(wonChangeText(f.change)), speakRate(f.changeRate)])} style={styles.rate}>
-          <Text style={{ color: t.muted, fontSize: font.small, width: MS.labelW }}>원/달러</Text>
+          <Text style={{ color: t.muted, fontSize: font.small, width: labelW }} maxFontSizeMultiplier={fontCap.row}>원/달러</Text>
           <Text style={[styles.num, { color: t.ink, fontSize: font.h2, fontWeight: "700" }]}>{wonText(f.value)}</Text>
           <Text style={[styles.num, { color: changeColor(t, shownSign(f.change, wonChangeText(f.change))), fontSize: font.body }]}>
             {wonChangeText(f.change)} ({rateText(f.changeRate)})
@@ -370,15 +474,15 @@ function RatesCard({ d }: { d: MarketSummaryData }) {
       {f ? (
         <Muted style={{ fontSize: font.tiny }}>
           하나은행 고시 매매기준율{f.date ? ` · ${md(f.date)} 고시값` : " · 고시일 확인 못 함"}
-          {d.holiday && f.date && f.date < d.date ? " (한국 휴장으로 갱신 없음)" : ""} · 서울외환시장 15:30 종가가 아니라 은행 고시값입니다
+          {krHolidayStale ? " (한국 휴장으로 갱신 없음)" : ""} · 서울외환시장 15:30 종가가 아니라 은행 고시값입니다
           {morning ? " · 아침의 원/달러는 밤사이 변화가 아니라 직전 한국 영업일 고시의 전일 대비입니다" : ""}
         </Muted>
       ) : null}
       {morning ? (
         y ? (
           <>
-            <View accessible accessibilityLabel={sentence(["미국 10년물 금리", yieldValueText(y), y.change !== null ? speakText(yieldChangeText(y)) : null, yieldSourceText(y)])} style={styles.rate}>
-              <Text style={{ color: t.muted, fontSize: font.small, width: MS.labelW }}>미 10년물</Text>
+            <View accessible accessibilityLabel={sentence(["미국 10년물 금리", yieldValueText(y), y.change !== null ? speakPointMove(yieldChangeText(y)) : null, yieldSourceText(y)])} style={styles.rate}>
+              <Text style={{ color: t.muted, fontSize: font.small, width: labelW }} maxFontSizeMultiplier={fontCap.row}>미 10년물</Text>
               <Text style={[styles.num, { color: t.ink, fontSize: font.h2, fontWeight: "700" }]}>{yieldValueText(y)}</Text>
               {y.change !== null ? <Text style={[styles.num, { color: changeColor(t, shownSign(y.change, yieldChangeText(y))), fontSize: font.body }]}>{yieldChangeText(y)}</Text> : null}
             </View>
@@ -496,19 +600,15 @@ const styles = StyleSheet.create({
   group: { fontSize: font.small, fontWeight: "700", paddingHorizontal: space.lg, paddingVertical: space.s },
   tr: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   colName: { flex: 1, minWidth: 0 },
-  colRate: { width: MS.colRate, textAlign: "right" },
-  colBench: { width: MS.colBench, textAlign: "right" },
-  colDiff: { width: MS.colDiff, textAlign: "right" },
-  colValue: { width: MS.colValue, textAlign: "right" },
-  colChange: { width: MS.colChange, textAlign: "right" },
+  // 숫자 칸 폭은 글자 배율만큼 늘려 줄마다 넣는다 (colW)
+  right: { textAlign: "right" },
   colMissing: { flex: 2, textAlign: "right" },
   num: { fontVariant: ["tabular-nums"] },
   barRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: MS.barRowH },
   barName: { flex: 1, minWidth: 0 },
-  barTrack: { flexDirection: "row", alignItems: "center" },
-  barHalf: { width: MS.barMaxW },
+  barTrack: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center" },
+  barHalf: { flex: 1, minWidth: 0 },
   barAxis: { width: 1, height: MS.barH + space.xs },
-  barRate: { width: MS.colRate, textAlign: "right" },
   rate: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", columnGap: space.sm },
   event: { flexDirection: "row", alignItems: "center", gap: space.sm },
   news: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },

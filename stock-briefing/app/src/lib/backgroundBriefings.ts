@@ -198,7 +198,8 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
               : !prefs.digest && prefs.accountBriefing === true && data.accountIds
                 ? { accountIds: data.accountIds }
                 : {};
-            // 시장 전체 요약 첫 줄: 묶음 알림일 때만 한 번 묻는다. 못 받거나(끊김·예전 서버) 서버가 꺼 두었으면 첫 줄 없이 지금과 같다
+            // 시장 전체 요약 첫 줄: 묶음 알림이고 앱이 마지막으로 받은 플래그(marketSummary)가 켜져 있을 때만 한 번 묻는다 (꺼져 있거나 모르면 요청 0 — loadMarketSummaries).
+            // 못 받거나(끊김·예전 서버) 서버가 꺼 두었으면 첫 줄 없이 지금과 같다
             const markets = prefs.digest ? await loadMarketSummaries() : null;
             await notifyNewBriefings(latest, { prefs, rates, codes: data.stocks.map((s) => s.code), ...accountOpts, ...(markets?.length ? { markets } : {}) });
           }

@@ -97,7 +97,8 @@ export interface HoldingsCompare {
   high: CompareRow[];
   similar: CompareRow[];
   low: CompareRow[];
-  excluded: { leverage: string[]; overseas: string[]; noQuote: string[]; noBenchmark: string[] };
+  /** 뺀 종목 이름. bond(채권·금리형 ETF)는 나중에 더한 칸이라 예전에 저장한 요약에는 없다 */
+  excluded: { leverage: string[]; overseas: string[]; bond: string[]; noQuote: string[]; noBenchmark: string[] };
   /** 비교에 쓴 지수 (보조 줄 '나스닥 +0.48% · S&P500 +0.51%') */
   benchmarks: Array<{ code: string; name: string; changeRate: number }>;
 }
@@ -185,14 +186,36 @@ const US_FINAL_MIN = 17 * 60 + 15;
 
 /** 물음표 제목은 뺀다 (고치지 않는다) */
 const QUESTION_RE = /[?？]/;
-/** 매매 권유형·전망형 낱말이 든 제목은 뺀다 */
-export const NEWS_BLOCK_RE = /(살까|팔까|사야 할|팔아야|팔아라|추천|목표가|유망|담아라|매수 타이밍|매도 타이밍|전망|주간|이번\s?주|예상|향방)/;
+/**
+ * 매매 권유형·전망형 낱말이 든 제목은 뺀다 (물음표 없이 묻거나 내다보는 제목 포함: '사도 될까'·'매수 기회'·'지속될 듯'·'다음주 증시 체크포인트'·'내주 FOMC')
+ */
+export const NEWS_BLOCK_RE =
+  /(살까|팔까|사야 할|사도 될|팔아야|팔아도 될|팔아라|추천|목표가|유망|담아라|매수 타이밍|매도 타이밍|매수 기회|매도 기회|저가 매수 기회|비중\s?확대|비중\s?축소|체크\s?포인트|전망|주간|이번\s?주|다음\s?주|내주(?=$|\s)|예상|향방|듯(?=$|[\s.,…·'"”’]))/;
+
+/** 한글 음절의 받침이 ㄹ 인지 ('될'·'갈'·'를') */
+const hasRieulFinal = (ch: string) => {
+  const c = ch.charCodeAt(0) - 0xac00;
+  return c >= 0 && c < 11_172 && c % 28 === 8;
+};
+/** '~ㄹ까'로 묻는 제목 (물음표 없이): '상승 이어갈까'·'지금 사도 될까'·'반등할까…' — '반도체까지' 같은 말은 아니다 */
+export function asksQuestion(title: string): boolean {
+  for (const m of title.matchAll(/([가-힣])까(?![가-힣])/g)) if (hasRieulFinal(m[1]!)) return true;
+  return false;
+}
 /** 통신사 기사를 먼저 */
 const WIRE_OUTLETS = new Set(["연합뉴스", "연합인포맥스", "뉴스1", "뉴시스"]);
 const FLASH_RE = /\[(속보|1보|2보)\]|-\s?[12]보\]|\((속보|1보)\)/;
 
-/** 레버리지·인버스 ETF (지수와 차이가 구조적으로 커 비교에서 빼고 개수만 적는다). 알아보지 못한 것은 포함된다고 상세에 밝힌다 */
-export const LEVERAGE_RE = /(\b[23]x\b|ultra|\bbull\b|\bbear\b|인버스|레버리지|곱버스)/i;
+/**
+ * 레버리지·인버스 ETF (지수와 차이가 구조적으로 커 비교에서 빼고 개수만 적는다). 알아보지 못한 것은 포함된다고 상세에 밝힌다.
+ * 'Ultra' 는 뒤에 Short 가 오면 뺀다 — 'Ultra-Short Income'·'Ultra Short-Term Bond' 는 초단기 채권 ETF 이지 레버리지가 아니다 (채권형으로 따로 센다)
+ */
+export const LEVERAGE_RE = /(\b[23]x\b|ultra(?![\s-]*short)|\bbull\b|\bbear\b|인버스|레버리지|곱버스)/i;
+/**
+ * 채권·금리형 ETF (CD금리·KOFR·국고채·미국 국채·초단기 채권 등). 주식 지수와 견주면 높음·낮음이 구조적으로 틀려(해외 지수 ETF 와 같은 까닭) 빼고 개수만 적는다.
+ * 이름으로만 알아보므로 알아보지 못한 것은 포함된다
+ */
+export const BOND_ETF_RE = /(채권|국고채|국채|통안채|회사채|전단채|단기채|CD금리|KOFR|SOFR|머니마켓|MMF|금리액티브|treasury|\bbonds?\b|t-bill|ultra[\s-]*short)/i;
 /** 한국 ETF 상표 (종목 마스터 분류가 없을 때 이름으로) */
 const KR_ETF_BRAND_RE = /^(KODEX|TIGER|ACE|KBSTAR|RISE|SOL|HANARO|ARIRANG|KOSEF|PLUS|TIMEFOLIO|KIWOOM|WON|1Q|BNK|FOCUS|TRUSTON|UNICORN|VITA|ITF|TREX|마이다스|에셋플러스|파워|마이티|히어로즈|KCGI|DAISHIN343)\b/i;
 /** 한국 상장 해외 지수·상품 ETF (코스피와 비교하면 높음·낮음이 구조적으로 틀린다) */
@@ -433,15 +456,17 @@ export interface QuoteInput {
 }
 
 /** 종목의 비교 지수 (없으면 뺀 까닭) */
-export function benchmarkOf(market: SummaryMarket, h: HoldingInput, q: QuoteInput | null): { code: string } | { exclude: "leverage" | "overseas" | "noBenchmark" } {
+export function benchmarkOf(market: SummaryMarket, h: HoldingInput, q: QuoteInput | null): { code: string } | { exclude: "leverage" | "overseas" | "bond" | "noBenchmark" } {
   const names = `${h.name} ${q?.name ?? ""}`;
   if (LEVERAGE_RE.test(names)) return { exclude: "leverage" };
   if (market === "KR") {
     const etf = h.groupCode === "EF" || h.groupCode === "EN" || KR_ETF_BRAND_RE.test(h.name);
+    if (etf && BOND_ETF_RE.test(h.name)) return { exclude: "bond" };
     if (etf && KR_OVERSEAS_RE.test(h.name)) return { exclude: "overseas" };
     const m = h.market === "KOSPI" || h.market === "KOSDAQ" ? h.market : q?.exchange === "KS" ? "KOSPI" : q?.exchange === "KQ" ? "KOSDAQ" : null;
     return m ? { code: m } : { exclude: "noBenchmark" };
   }
+  if (BOND_ETF_RE.test(names)) return { exclude: "bond" };
   const ex = q?.exchange ? US_EXCHANGE_CODE[q.exchange] : undefined;
   const code = ex ? US_BENCHMARK[ex] : undefined;
   return code ? { code } : { exclude: "noBenchmark" };
@@ -449,8 +474,9 @@ export function benchmarkOf(market: SummaryMarket, h: HoldingInput, q: QuoteInpu
 
 /**
  * 보유 종목(수량 > 0)을 같은 세션 지수와 비교한다. 종목·지수 모두 정규장 종가(애프터·NXT 제외).
- *  - 시세 날짜가 기준 거래일과 다르면(거래정지·지연) 빼고 '시세 없음'으로 센다
- *  - 레버리지·인버스, 한국 상장 해외 지수 ETF, 비교 지수를 정하지 못한 종목은 빼고 개수만
+ *  - 시세가 없거나 시세 날짜가 기준 거래일과 다르면(거래정지·지연·모르는 코드) 빼고 '시세 없음'으로 센다
+ *    (미국 비교 지수는 시세의 거래소로 정하므로, 시세가 없는 종목을 '비교 지수 없음'으로 세지 않게 시세부터 본다)
+ *  - 레버리지·인버스, 채권·금리형 ETF, 한국 상장 해외 지수 ETF, 비교 지수를 정하지 못한 종목은 빼고 개수만
  *  - 정렬: 차이 크기 순, 같으면 이름 순. 보유가 0 이면 null
  */
 export function compareHoldings(input: {
@@ -461,18 +487,24 @@ export function compareHoldings(input: {
   indices: readonly SummaryIndex[];
 }): HoldingsCompare | null {
   if (!input.holdings.length) return null;
-  const excluded: HoldingsCompare["excluded"] = { leverage: [], overseas: [], noQuote: [], noBenchmark: [] };
+  const excluded: HoldingsCompare["excluded"] = { leverage: [], overseas: [], bond: [], noQuote: [], noBenchmark: [] };
   const rows: CompareRow[] = [];
   const used = new Map<string, { code: string; name: string; changeRate: number }>();
   for (const h of input.holdings) {
     const q = input.quotes.get(h.code) ?? null;
+    const quoteOk = !!q && Number.isFinite(q.changeRate) && (q.tradedAt ?? "").slice(0, 10) === input.basisDate;
     const b = benchmarkOf(input.market, h, q);
-    if ("exclude" in b) {
+    // 이름으로 아는 제외(레버리지·채권·해외 지수 ETF)가 먼저, 그다음 시세, 마지막이 비교 지수
+    if ("exclude" in b && b.exclude !== "noBenchmark") {
       excluded[b.exclude].push(h.name);
       continue;
     }
-    if (!q || !Number.isFinite(q.changeRate) || (q.tradedAt ?? "").slice(0, 10) !== input.basisDate) {
+    if (!quoteOk || !q) {
       excluded.noQuote.push(h.name);
+      continue;
+    }
+    if ("exclude" in b) {
+      excluded.noBenchmark.push(h.name);
       continue;
     }
     const idx = input.indices.find((i) => i.code === b.code);
@@ -522,9 +554,9 @@ export function titleDays(title: string): number[] {
   return out;
 }
 
-/** 걸러야 할 제목인지 (물음표·권유 낱말·전망형 낱말) */
+/** 걸러야 할 제목인지 (물음표·'~ㄹ까' 물음·권유 낱말·전망형 낱말) */
 export function blockedTitle(title: string): boolean {
-  return QUESTION_RE.test(title) || NEWS_BLOCK_RE.test(title);
+  return QUESTION_RE.test(title) || asksQuestion(title) || NEWS_BLOCK_RE.test(title);
 }
 
 /**
@@ -585,12 +617,17 @@ const marketWord = (m: SummaryMarket) => (m === "US" ? "미국" : "국내");
 /** 보는 날짜(한국) */
 export const viewDateOf = (at: Date) => kstDateOf(at.getTime());
 
-/** 제목에 쓰는 날짜: 휴장이면 그 휴장일(세션 날짜), 아니면 숫자의 거래일 */
-const titleDate = (d: Pick<MarketSummaryData, "holiday" | "marketDate" | "basisDate">) => (d.holiday ? d.marketDate : d.basisDate);
+/**
+ * 제목에 쓰는 날짜.
+ *  - 미국: 숫자의 거래일(basisDate). 월요일·휴장 다음 날에는 숫자가 어젯밤 것이 아니므로 '밤사이'가 아니라 그 거래일로
+ *    (11/27 추수감사절 다음 날 → '수요일(11/25) 미국 시장', 노동절 다음 날 9/8 → '금요일(9/4) 미국 시장'). 휴장은 배너가 따로 알린다
+ *  - 한국: 휴장이면 그 휴장일('오늘 한국 시장' + 휴장 배지·배너), 아니면 거래일
+ */
+const titleDate = (d: Pick<MarketSummaryData, "market" | "holiday" | "marketDate" | "basisDate">) => (d.market === "KR" && d.holiday ? d.marketDate : d.basisDate);
 
 /**
  * 제목: '밤사이 미국 시장' / '금요일(9/25) 미국 시장' · '오늘 한국 시장' / '9/23(수) 한국 시장'.
- * 볼 때 날짜로 정한다 — 월요일·휴장 다음 날·다음 날 아침·주말에 보면 날짜로
+ * 볼 때 날짜로 정한다 — '밤사이'는 숫자의 거래일이 보는 날(한국)의 전날일 때만. 월요일·휴장 다음 날·다음 날 아침·주말에 보면 날짜로
  */
 export function titleText(d: Pick<MarketSummaryData, "market" | "holiday" | "marketDate" | "basisDate">, view: Date): string {
   return `${sessionWord(d, view)} 시장`;
@@ -648,21 +685,30 @@ export function indexText(d: Pick<MarketSummaryData, "market" | "indices" | "hol
     .join(" · ");
 }
 
+/** 원/달러 고시일 표기: 고시일이 요약 날짜와 같으면 없음, 다르면 '(9/23 고시)', 고시일을 확인하지 못했으면 '(고시일 확인 못 함)' — 날짜 없는 값이 오늘 값처럼 보이지 않게 */
+export function fxDateNote(f: Pick<SummaryFx, "date">, date: string): string {
+  if (!f.date) return " (고시일 확인 못 함)";
+  return f.date !== date ? ` (${md(f.date)} 고시)` : "";
+}
+
 /** 원/달러 한 칸: '원/달러 1,359.00원 +3.50원 (9/23 고시)' — 고시일이 요약 날짜와 같으면 날짜를 붙이지 않는다 */
 export function fxText(d: Pick<MarketSummaryData, "fx" | "date">): string | null {
   const f = d.fx;
   if (!f) return null;
-  return `원/달러 ${idx2(f.value)}원 ${wonChange(f.change)}${f.date && f.date !== d.date ? ` (${md(f.date)} 고시)` : ""}`;
+  return `원/달러 ${idx2(f.value)}원 ${wonChange(f.change)}${fxDateNote(f, d.date)}`;
 }
 
-/** 미 10년물 한 칸 (출처 표기 필수): '미 10년물 5.17% -0.01%p (미 재무부)' */
-export function yieldLine(y: SummaryYield | null): string | null {
-  return y ? `미 10년물 ${yieldText(y)} (${YIELD_SOURCE[y.source]})` : null;
+/**
+ * 미 10년물 한 칸 (출처 표기 필수): '미 10년물 5.17% -0.01%p (미 재무부)'.
+ * withDate(휴장 다음 날처럼 숫자가 직전 거래일 값일 때): '미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)'
+ */
+export function yieldLine(y: SummaryYield | null, withDate = false): string | null {
+  return y ? `미 10년물 ${yieldText(y)} (${withDate ? `${md(y.date)} 기준 · ` : ""}${YIELD_SOURCE[y.source]})` : null;
 }
 
-/** 환율·금리 줄 */
-export function ratesText(d: Pick<MarketSummaryData, "fx" | "date" | "yield10y">): string | null {
-  const parts = [fxText(d), yieldLine(d.yield10y)].filter((x): x is string => !!x);
+/** 환율·금리 줄 (휴장이면 금리에도 'M/D 기준' — 원/달러는 고시일을 따로 적는다) */
+export function ratesText(d: Pick<MarketSummaryData, "fx" | "date" | "yield10y" | "holiday">): string | null {
+  const parts = [fxText(d), yieldLine(d.yield10y, !!d.holiday)].filter((x): x is string => !!x);
   return parts.length ? parts.join(" · ") : null;
 }
 

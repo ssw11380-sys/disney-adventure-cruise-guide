@@ -85,7 +85,7 @@ export interface MarketSummarySources {
   /** 한국 KRX 정규장 종가 */
   krQuotes(codes: string[]): Promise<ReadonlyMap<string, KrQuote>>;
   /** 네이버 한국 업종 (발견 탭과 같은 값: 시가총액 가중·상장 첫날 보정) */
-  krSectors(): Promise<{ themes: Array<{ id: string; name: string; changeRate: number; up: number; flat: number; down: number }>; note: string | null }>;
+  krSectors(): Promise<KrSectorList>;
   /** 뉴스 제목 검색 (구글 뉴스 RSS) */
   news(query: string): Promise<NewsItem[]>;
   /** 등록 종목 (수량·상장 시장·종목 마스터 분류) */
@@ -283,7 +283,7 @@ export class MarketSummaryService {
       const tradeBase = kr?.latest.tradeBaseAt ?? null;
       if (!krSec || !krSec.ok) notes.push(`한국 업종을 받지 못함${krSec && !krSec.ok ? ` (${krSec.error})` : ""}`);
       else if (tradeBase !== basisDate) notes.push(`한국 업종 날짜를 확인하지 못해 업종 줄을 뺌 (네이버 거래일 ${tradeBase ?? "모름"})`);
-      else if (krSec.value.note && /0으로|비웠/.test(krSec.value.note)) notes.push(`한국 업종: ${krSec.value.note}`);
+      else if (krSectorsStale(krSec.value, basisDate)) notes.push(`한국 업종: ${krSec.value.note ?? "저장해 둔 값"} — 기준 거래일(${basisDate}) 값인지 확인하지 못해 업종 줄을 뺌`);
       else {
         const sec = krSectors(krSec.value.themes, basisDate);
         if ("reason" in sec) notes.push(sec.reason);
@@ -428,6 +428,25 @@ export class MarketSummaryService {
   }
 }
 
+/** 한국 업종 목록 (발견 탭 계산 결과). asOf 는 값의 기준 시각(서울 ISO) — 출처가 값을 비워 저장본을 줄 때 그 저장본의 날짜를 보려고 */
+export interface KrSectorList {
+  themes: Array<{ id: string; name: string; changeRate: number; up: number; flat: number; down: number }>;
+  note: string | null;
+  asOf?: string | null;
+}
+
+/**
+ * 한국 업종 값을 쓰면 안 되는지.
+ *  - 출처가 등락률을 0으로 비운 값('0으로 비웠습니다') → 쓰지 않는다
+ *  - 출처가 값을 비워 저장해 둔 직전 값('값을 비워 저장해 둔 직전 값') → 그 저장본이 기준 거래일 값일 때만 쓴다 (전날 저장본이 오늘 업종처럼 보이지 않게)
+ */
+export function krSectorsStale(l: Pick<KrSectorList, "note" | "asOf">, basisDate: string): boolean {
+  const note = l.note ?? "";
+  if (/0으로|비웠/.test(note)) return true;
+  if (/비워|저장해 둔/.test(note)) return (l.asOf ?? "").slice(0, 10) !== basisDate;
+  return false;
+}
+
 /** 세션 알림 첫 줄 (보내는 순간 at 의 문구). 성공한 요약이고 지수가 있을 때만 */
 export function digestMarket(s: MarketSummary | null | undefined, at: Date): DigestMarket | null {
   if (!s || s.status !== "ok" || !s.data) return null;
@@ -472,7 +491,7 @@ export function defaultSummarySources(d: {
   indices: { list(opts: { stale?: boolean }): Promise<MarketIndex[]>; candles(code: string, period: "D", count: number): Promise<{ candles: Array<{ date: string }> } | null> };
   naver: { marketStatus(): ReturnType<MarketSummarySources["exchangeStatus"]>; usQuotes(r: string[]): Promise<ReadonlyMap<string, { changeRate: number; tradedAt: string | null; name: string; market: string; code: string }>>; krQuotes(c: string[]): Promise<ReadonlyMap<string, KrQuote>> };
   calendar: { isTradingDate(market: "KR" | "US", date: string): Promise<boolean> };
-  krSectors: () => Promise<{ themes: Array<{ id: string; name: string; changeRate: number; up: number; flat: number; down: number }>; note: string | null }>;
+  krSectors: () => Promise<KrSectorList>;
   news: { search(query: string, limit: number): Promise<NewsItem[]> };
   fetchFn?: FetchFn;
   now?: () => number;

@@ -22,16 +22,19 @@ import {
   digestLine,
   eventsText,
   fitLines,
+  fxText,
   holdingsAux,
   holdingsText,
   holidayText,
   krSectors,
+  LEVERAGE_RE,
   naverYield,
   newsDays,
   newsWindow,
   parseTreasuryCsv,
   phaseOf,
   pickNews,
+  ratesText,
   resolveDates,
   sessionClose,
   summaryLines,
@@ -44,7 +47,7 @@ import {
   type SummaryIndex,
   type SummaryLine,
 } from "../src/services/marketSummaryCalc.js";
-import { defaultSummarySources, digestMarket, MarketSummaryService, type MarketSummarySources } from "../src/services/marketSummaryService.js";
+import { defaultSummarySources, digestMarket, krSectorsStale, MarketSummaryService, type MarketSummarySources } from "../src/services/marketSummaryService.js";
 import { fakeIndices, fakeProviders, FakeSearchProvider, SAMPLE_MASTER } from "./helpers.js";
 
 /**
@@ -111,6 +114,41 @@ describe("공용 픽스처 — 서버 문장 (앱 lib/marketSummary 와 같은 �
   });
 });
 
+describe("미국 제목은 숫자의 거래일로 — '밤사이'는 그 거래일이 보는 날의 전날일 때만 (요구 검사 보정: 월요일·휴장 다음 날)", () => {
+  const titleAt = (date: string, view: string) => titleText({ market: "US", ...resolveDates({ session: "morning", date }) }, at(view));
+  it("추수감사절 다음 날(11/27)은 11/25 값이라 '수요일(11/25) 미국 시장', 노동절 다음 날(9/8)은 '금요일(9/4)', 성금요일 다음 월요일(2027-03-29)은 '목요일(3/25)'", () => {
+    expect(titleAt("2026-11-27", "2026-11-27T08:31:00+09:00")).toBe("수요일(11/25) 미국 시장");
+    expect(titleAt("2026-09-08", "2026-09-08T08:31:00+09:00")).toBe("금요일(9/4) 미국 시장");
+    expect(titleAt("2027-03-29", "2027-03-29T08:31:00+09:00")).toBe("목요일(3/25) 미국 시장");
+    // 휴장 배너·알림 첫 줄은 그대로 '지난밤 미국 휴장(…)' (휴장 사실은 어젯밤 것이 맞다)
+    const labor = { market: "US" as const, ...resolveDates({ session: "morning", date: "2026-09-08" }) };
+    expect(holidayText(labor, at("2026-09-08T08:31:00+09:00"))).toBe("지난밤 미국 휴장(노동절) · 아래는 직전 거래일 9/4(금) 기준");
+    // 평일 보통 아침은 그대로 '밤사이'
+    expect(titleAt("2026-09-25", "2026-09-25T08:31:00+09:00")).toBe("밤사이 미국 시장");
+    // 한국 휴장 오후는 그날 '오늘 한국 시장'(휴장 배지·배너) 그대로
+    expect(titleText({ market: "KR", ...resolveDates({ session: "afternoon", date: "2026-09-25" }) }, at("2026-09-25T16:01:00+09:00"))).toBe("오늘 한국 시장");
+  });
+
+  it("휴장 다음 날 알림 첫 줄: 휴장이 아닌 월요일은 날짜로, 휴장 다음 날은 '지난밤 미국 휴장(…) · … (M/D 기준)'", () => {
+    const c = shared.cases.find((x) => x.name.includes("추수감사절"))!;
+    expect(digestLine(c.data, at("2026-11-27T08:31:00+09:00"))).toBe("지난밤 미국 휴장(추수감사절) · 나스닥 -0.20% · S&P500 +0.30% (11/25 기준)");
+    expect(titleText(c.data, at("2026-11-27T08:31:00+09:00"))).toBe("수요일(11/25) 미국 시장");
+  });
+});
+
+describe("환율·금리 줄의 날짜 표기 (휴장이면 금리에도 'M/D 기준', 고시일을 모르면 그렇다고)", () => {
+  const fx = { value: 1359, change: 3.5, changeRate: 0.26, stale: false };
+  const y = { value: 4.9, change: 0.02, date: "2026-11-25", prevValue: 4.88, prevDate: "2026-11-24", source: "treasury" as const, dp: { value: 2, change: 2 } };
+  it("휴장 다음 날: '미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)', 평소에는 날짜 없이", () => {
+    expect(ratesText({ fx: { ...fx, date: "2026-11-26" }, date: "2026-11-27", yield10y: y, holiday: { date: "2026-11-26", name: "추수감사절" } })).toBe("원/달러 1,359.00원 +3.50원 (11/26 고시) · 미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)");
+    expect(ratesText({ fx: { ...fx, date: "2026-11-26" }, date: "2026-11-27", yield10y: y, holiday: null })).toBe("원/달러 1,359.00원 +3.50원 (11/26 고시) · 미 10년물 4.90% +0.02%p (미 재무부)");
+  });
+  it("원/달러 고시일을 확인하지 못했으면(일별 시리즈 실패) 날짜 없는 값이 오늘 값처럼 보이지 않게 '(고시일 확인 못 함)'", () => {
+    expect(fxText({ fx: { ...fx, date: null }, date: "2026-09-25" })).toBe("원/달러 1,359.00원 +3.50원 (고시일 확인 못 함)");
+    expect(fxText({ fx: { ...fx, date: "2026-09-25" }, date: "2026-09-25" })).toBe("원/달러 1,359.00원 +3.50원");
+  });
+});
+
 describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", () => {
   it("차이는 출처 소수 둘째 자리 값을 그대로 빼고, ±1.00%p 경계는 높음·낮음에 넣는다", () => {
     expect(1.15 - 0.15).toBeLessThan(1); // 부동소수로 빼면 0.9999… (비슷으로 잘못 분류) — 정수 1/100 로 뺀다
@@ -136,6 +174,9 @@ describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", 
         { code: "TQQQ", name: "TQQQ", market: "NASDAQ" },
         { code: "ZZZ", name: "모르는 거래소", market: "US" },
         { code: "OLD", name: "거래정지", market: "NYSE" },
+        { code: "AAPL", name: "애플", market: "NASDAQ" },
+        { code: "JPST", name: "JPST", market: "AMEX" },
+        { code: "SGOV", name: "아이셰어즈 0-3개월 미국 국채 ETF", market: "AMEX" },
       ],
       quotes: new Map([
         ["MSFT", q(3.66, "NASDAQ")],
@@ -144,6 +185,9 @@ describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", 
         ["TQQQ", q(1.3, "NASDAQ", "2026-09-25", "ProShares UltraPro QQQ")],
         ["ZZZ", q(2, "PCX")],
         ["OLD", q(9, "NYSE", "2026-09-10")],
+        // AAPL: 시세가 오지 않음(거래정지·코드를 못 찾음) → 비교 지수가 아니라 '시세 없음'으로 센다
+        ["JPST", q(0.02, "AMEX", "2026-09-25", "JPMorgan Ultra-Short Income ETF")],
+        ["SGOV", q(0.01, "AMEX")],
       ]),
       indices,
     })!;
@@ -151,7 +195,7 @@ describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", 
     expect(cmp.high.map((r) => [r.name, r.benchmark.code, r.diff])).toEqual([["마이크로소프트", "NASDAQ", 3.18]]);
     expect(cmp.low.map((r) => [r.name, r.benchmark.code, r.diff])).toEqual([["기술 섹터 ETF", "SPX", -1.31]]);
     expect(cmp.similar.map((r) => [r.name, r.benchmark.code, r.diff])).toEqual([["JP모건", "SPX", 0.82]]);
-    expect(cmp.excluded).toEqual({ leverage: ["TQQQ"], overseas: [], noQuote: ["거래정지"], noBenchmark: ["모르는 거래소"] });
+    expect(cmp.excluded).toEqual({ leverage: ["TQQQ"], overseas: [], bond: ["JPST", "아이셰어즈 0-3개월 미국 국채 ETF"], noQuote: ["거래정지", "애플"], noBenchmark: ["모르는 거래소"] });
     expect(cmp.benchmarks.map((b) => b.code)).toEqual(["NASDAQ", "SPX"]);
     // 기준 지수를 받지 못하면 그 종목은 비교하지 못함으로
     const noIdx = compareHoldings({ market: "US", basisDate: "2026-09-25", holdings: [{ code: "MSFT", name: "MS", market: "NASDAQ" }], quotes: new Map([["MSFT", q(1, "NASDAQ")]]), indices: [] })!;
@@ -187,8 +231,31 @@ describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", 
     expect(cmp.high.map((r) => `${r.name} ${r.diff}`)).toEqual(["삼성전자 2.72"]);
     expect(cmp.low.map((r) => `${r.name} ${r.diff}`)).toEqual(["NAVER -3.39"]);
     expect(cmp.similar.map((r) => `${r.name} ${r.benchmark.name} ${r.diff}`)).toEqual(["SK하이닉스 코스피 0.35", "KODEX 200 코스피 0.23", "에코프로비엠 코스닥 -0.06"]);
-    expect(cmp.excluded).toEqual({ leverage: ["KODEX 레버리지"], overseas: ["TIGER 미국나스닥100"], noQuote: [], noBenchmark: ["코넥스 종목"] });
+    expect(cmp.excluded).toEqual({ leverage: ["KODEX 레버리지"], overseas: ["TIGER 미국나스닥100"], bond: [], noQuote: [], noBenchmark: ["코넥스 종목"] });
     expect(holdingsText({ holdings: cmp, holiday: null, basisDate: "2026-09-23" })).toBe("내 국내 5종목 · 지수보다 높음 1 (삼성전자 +3.62%, 지수와 차이 +2.72%p) · 낮음 1 (NAVER -2.49%, 차이 -3.39%p) · 비슷 3");
+  });
+
+  it("채권·금리형 ETF(CD금리·KOFR·국고채·미국 국채)는 주식 지수와 견주지 않고 개수만, 'Ultra-Short' 는 레버리지가 아니다", () => {
+    const indices = [idx("KOSPI", "코스피", 1.5, "2026-09-23"), idx("KOSDAQ", "코스닥", 1.21, "2026-09-23")];
+    const q = (rate: number) => ({ changeRate: rate, tradedAt: "2026-09-23T15:30:00+09:00", exchange: "KS" });
+    const cmp = compareHoldings({
+      market: "KR",
+      basisDate: "2026-09-23",
+      holdings: [
+        { code: "459580", name: "KODEX CD금리액티브(합성)", market: "KOSPI", groupCode: "EF" },
+        { code: "423160", name: "KODEX KOFR금리액티브(합성)", market: "KOSPI", groupCode: "EF" },
+        { code: "114820", name: "TIGER 국채3년", market: "KOSPI", groupCode: "EF" },
+        { code: "305080", name: "TIGER 미국채10년선물", market: "KOSPI", groupCode: "EF" },
+        { code: "005930", name: "삼성전자", market: "KOSPI", groupCode: "ST" },
+      ],
+      quotes: new Map([["459580", q(0.01)], ["423160", q(0.01)], ["114820", q(-0.05)], ["305080", q(0.2)], ["005930", q(3.62)]]),
+      indices,
+    })!;
+    expect(cmp.compared).toBe(1);
+    expect(cmp.excluded.bond).toEqual(["KODEX CD금리액티브(합성)", "KODEX KOFR금리액티브(합성)", "TIGER 국채3년", "TIGER 미국채10년선물"]);
+    expect(cmp.low).toEqual([]);
+    for (const name of ["JPMorgan Ultra-Short Income ETF", "BlackRock Ultra Short-Term Bond ETF"]) expect(LEVERAGE_RE.test(name), name).toBe(false);
+    for (const name of ["ProShares UltraPro QQQ", "ProShares Ultra S&P500", "Direxion Daily Semiconductor Bull 3X"]) expect(LEVERAGE_RE.test(name), name).toBe(true);
   });
 
   it("보유 0 이면 null, 모두 비슷하면 '모두 지수와 ±1%p 안', 정렬은 차이 크기 → 이름 순", () => {
@@ -235,6 +302,16 @@ describe("업종 (미국 섹터 ETF 11개 · 한국 네이버 업종)", () => {
     expect(s.excluded.map((x) => x.name)).toEqual(["가정용품", "작은 업종"]);
     expect(s.total).toBe(7);
   });
+
+  it("한국 업종: 출처가 0으로 비운 값은 쓰지 않고, 비워서 준 저장본은 기준 거래일 값일 때만 쓴다 (발견 탭 문구 그대로)", () => {
+    const zero = "출처가 잠시 등락률을 0으로 비웠습니다 (곧 다시 채워집니다)";
+    const snap = "출처가 잠시 값을 비워 저장해 둔 직전 값을 보여 줍니다";
+    expect(krSectorsStale({ note: zero, asOf: "2026-09-23T15:30:00+09:00" }, "2026-09-23")).toBe(true);
+    expect(krSectorsStale({ note: snap, asOf: "2026-09-22T15:30:00+09:00" }, "2026-09-23")).toBe(true); // 전날 저장본
+    expect(krSectorsStale({ note: snap, asOf: null }, "2026-09-23")).toBe(true); // 날짜를 모름
+    expect(krSectorsStale({ note: snap, asOf: "2026-09-23T15:30:00+09:00" }, "2026-09-23")).toBe(false);
+    expect(krSectorsStale({ note: null, asOf: "2026-09-23T15:30:00+09:00" }, "2026-09-23")).toBe(false);
+  });
 });
 
 describe("미 10년물 (재무부 → 네이버 대체, 출처 표기)", () => {
@@ -277,6 +354,10 @@ describe("뉴스 제목 고르기 (원문 그대로 · 창 · 거르기 · 같�
   it("거르는 제목: 물음표·권유 낱말·전망/주간/이번주/예상/향방, 다른 날짜가 박힌 제목", () => {
     for (const t of ["지금 살까?", "반도체주 목표가 줄상향", "이번주 증시 전망", "이번 주 뉴욕증시", "금리 향방 주목", "실적 예상 웃돌아", "주간 증시 결산", "유망 종목 추천", "지금 담아라"]) expect(blockedTitle(t), t).toBe(true);
     expect(blockedTitle("뉴욕증시 상승 마감…다우 0.9%↑")).toBe(false);
+    // 물음표 없이 묻거나 권하거나 내다보는 제목
+    for (const t of ["지금 사도 될까", "상승 이어갈까…외국인 매수세", "저가 매수 기회 왔다", "코스피 강세 지속될 듯", "다음주 증시 체크포인트", "내주 FOMC 촉각", "반도체 비중 확대 필요"]) expect(blockedTitle(t), t).toBe(true);
+    // 사실을 적은 제목은 그대로 둔다 ('까지'·'내주며'·'순매수')
+    for (const t of ["반도체까지 오름세 넓어져", "시총 1위 자리 내주며 하락", "외국인 순매수에 코스피 0.9% 상승 마감"]) expect(blockedTitle(t), t).toBe(false);
     expect(titleDays("[뉴욕증시 23일] 금리 부담에 하락")).toEqual([23]);
     expect(titleDays("25일(현지시간) 뉴욕증시 상승")).toEqual([25]);
     expect(titleDays("이란 7일 계획에 유가 하락")).toEqual([]); // 날짜가 아닌 '7일'
@@ -469,7 +550,7 @@ class RecordingPush implements PushSender {
 const TOKEN = "ExponentPushToken[bbbbbbbbbbbbbbbbbbbbbb]";
 
 /** 출처별 호출 수를 세는 가짜 출처 묶음 (녹화한 응답으로 답한다) */
-function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: string; trading: boolean; desc: string | null; latest: string }; slowMs?: number } ) {
+function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: string; trading: boolean; desc: string | null; latest: string }; slowMs?: number; krSec?: { note: string | null; asOf?: string | null } } ) {
   const calls: Record<string, number> = {};
   const count = (k: string) => {
     calls[k] = (calls[k] ?? 0) + 1;
@@ -500,7 +581,7 @@ function fakeSources(o: { session: "morning" | "afternoon"; krToday?: { date: st
     krSectors: async () => {
       count("krSectors");
       const t = (name: string, changeRate: number, n: number) => ({ id: name, name, changeRate, up: n, flat: 0, down: 0 });
-      return { themes: [t("석유와가스", 3.13, 18), t("반도체와반도체장비", 2.8, 90), t("은행", 0.3, 10), t("철강", -2.92, 54), t("건설", -4.19, 72)], note: null };
+      return { themes: [t("석유와가스", 3.13, 18), t("반도체와반도체장비", 2.8, 90), t("은행", 0.3, 10), t("철강", -2.92, 54), t("건설", -4.19, 72)], note: o.krSec?.note ?? null, asOf: o.krSec?.asOf ?? null };
     },
     news: async (q) => {
       count("news");
@@ -553,10 +634,10 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
     db = null;
   });
 
-  const setup = async (o: { now: string; session: "morning" | "afternoon"; calendar?: unknown; krToday?: Parameters<typeof fakeSources>[0]["krToday"] }) => {
+  const setup = async (o: { now: string; session: "morning" | "afternoon"; calendar?: unknown; krToday?: Parameters<typeof fakeSources>[0]["krToday"]; krSec?: Parameters<typeof fakeSources>[0]["krSec"] }) => {
     db = await createMigratedDb(":memory:");
     const push = new RecordingPush();
-    const { src, calls } = fakeSources({ session: o.session, ...(o.krToday ? { krToday: o.krToday } : {}) });
+    const { src, calls } = fakeSources({ session: o.session, ...(o.krToday ? { krToday: o.krToday } : {}), ...(o.krSec ? { krSec: o.krSec } : {}) });
     app = await buildApp({
       config: loadConfig({ DATABASE_URL: ":memory:" }),
       db,
@@ -637,6 +718,22 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
     expect(calls["treasury"]).toBeUndefined();
     expect(calls["usQuotes"]).toBeUndefined();
     expect(calls["news"]).toBe(2);
+  });
+
+  it("오후: 발견 탭이 출처가 비운 시간이라 전날 저장본을 주면 업종 줄을 뺀다 (전날 업종이 오늘 업종처럼 보이지 않게)", async () => {
+    await setup({ now: "2026-09-23T16:00:10+09:00", session: "afternoon", krSec: { note: "출처가 잠시 값을 비워 저장해 둔 직전 값을 보여 줍니다", asOf: "2026-09-22T15:30:00+09:00" } });
+    await app!.briefingService.runSession("afternoon", { trigger: "schedule" });
+    const d = ((await app!.inject({ method: "GET", url: "/api/market-summaries/latest" })).json() as { data: MarketSummaryData }).data;
+    expect(d.sectors).toBeNull();
+    expect(d.notes.some((n) => n.includes("업종 줄을 뺌"))).toBe(true);
+    expect(summaryLines(d, at("2026-09-23T16:01:00+09:00")).some((l) => l.kind === "sectors")).toBe(false);
+  });
+
+  it("오후: 같은 날 저장본이면 업종 줄을 그대로 넣는다", async () => {
+    await setup({ now: "2026-09-23T16:00:10+09:00", session: "afternoon", krSec: { note: "출처가 잠시 값을 비워 저장해 둔 직전 값을 보여 줍니다", asOf: "2026-09-23T15:30:00+09:00" } });
+    await app!.briefingService.runSession("afternoon", { trigger: "schedule" });
+    const d = ((await app!.inject({ method: "GET", url: "/api/market-summaries/latest" })).json() as { data: MarketSummaryData }).data;
+    expect(d.sectors?.strong.map((s) => s.name)).toEqual(["석유와가스", "반도체와반도체장비"]);
   });
 
   it("한국 휴장 오후(추석): 네이버 장 상태로 휴장 이름·직전 거래일, 뉴스 줄은 빼고 다음 개장, 두 시장 모두 쉬면 알림 0건이지만 요약은 저장", async () => {

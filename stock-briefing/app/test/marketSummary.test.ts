@@ -6,15 +6,21 @@ import type { MarketSummary, MarketSummaryData } from "@/api/types";
 import { buildDigest, digestMarketOf, KR_PREVIOUS_DAY_LINE, planNotifications, US_PREVIOUS_DAY_LINE, type DigestAccount, type NotifyPrefs } from "@/lib/briefingDigest";
 import {
   basisText,
+  bodyWidthGuess,
   cardRows,
   cardSpeech,
   closeBadge,
+  closeBadgeWarn,
   digestLine,
   fitLines,
   holdingsAux,
   holdingsShort,
+  holdingsTableMode,
   holidayText,
+  indicesTableMode,
   marketCardItem,
+  ratesSegs,
+  speakPointMove,
   speakText,
   summaryLines,
   titleText,
@@ -60,6 +66,45 @@ describe("공용 픽스처 — 앱 문장이 서버와 같다", () => {
   }
 });
 
+describe("미국 제목은 숫자의 거래일로 (월요일·휴장 다음 날은 '밤사이'가 아니라 날짜 — 서버와 같다)", () => {
+  const us = (marketDate: string, basisDate: string, holiday: { date: string; name: string | null } | null) => ({ market: "US" as const, marketDate, basisDate, holiday });
+  it("추수감사절 다음 날 '수요일(11/25)', 노동절 다음 날 '금요일(9/4)', 성금요일 다음 월요일 '목요일(3/25)', 평일 보통 아침은 '밤사이'", () => {
+    expect(titleText(us("2026-11-26", "2026-11-25", { date: "2026-11-26", name: "추수감사절" }), at("2026-11-27T08:31:00+09:00"))).toBe("수요일(11/25) 미국 시장");
+    expect(titleText(us("2026-09-07", "2026-09-04", { date: "2026-09-07", name: "노동절" }), at("2026-09-08T08:31:00+09:00"))).toBe("금요일(9/4) 미국 시장");
+    expect(titleText(us("2027-03-26", "2027-03-25", { date: "2027-03-26", name: "성금요일" }), at("2027-03-29T08:31:00+09:00"))).toBe("목요일(3/25) 미국 시장");
+    expect(titleText(us("2026-09-24", "2026-09-24", null), at("2026-09-25T08:31:00+09:00"))).toBe("밤사이 미국 시장");
+    // 휴장 배너는 그대로 '지난밤 미국 휴장(…)'
+    expect(holidayText(us("2026-09-07", "2026-09-04", { date: "2026-09-07", name: "노동절" }), at("2026-09-08T08:31:00+09:00"))).toBe("지난밤 미국 휴장(노동절) · 아래는 직전 거래일 9/4(금) 기준");
+    // 한국 휴장 오후는 '오늘 한국 시장' 그대로
+    expect(titleText(KR_HOLIDAY, at("2026-09-25T16:01:00+09:00"))).toBe("오늘 한국 시장");
+  });
+
+  it("휴장 다음 날 환율·금리 줄: 금리에 '11/25 기준', 원/달러 고시일을 모르면 '(고시일 확인 못 함)'", () => {
+    const text = (segs: { text: string }[] | null) => (segs ?? []).map((x) => x.text).join("");
+    const ushol = shared.cases[3]!.data;
+    expect(text(ratesSegs(ushol))).toBe("원/달러 1,400.00원 -2.50원 (11/26 고시) · 미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)");
+    expect(text(ratesSegs({ ...MORNING, fx: { ...MORNING.fx!, date: null } }))).toBe("원/달러 1,359.00원 +3.50원 (고시일 확인 못 함) · 미 10년물 5.17% -0.01%p (미 재무부)");
+  });
+});
+
+describe("상세 표 배치 (좁은 칸·큰 글씨에서 이름이 쪼개지지 않게 3칸으로)", () => {
+  it("폴드8 접은 화면(475) 글자 100%는 목업처럼 4칸, 펼친 세로 두 칸(704 → 한 칸 약 350)은 두 표 모두 3칸", () => {
+    expect(holdingsTableMode(bodyWidthGuess(475, "stack"), 1)).toBe("full");
+    expect(indicesTableMode(bodyWidthGuess(475, "stack"), 1)).toBe("full");
+    expect(bodyWidthGuess(704, "split")).toBe(351);
+    expect(holdingsTableMode(bodyWidthGuess(704, "split"), 1)).toBe("compact");
+    expect(indicesTableMode(bodyWidthGuess(704, "split"), 1)).toBe("compact");
+  });
+  it("큰 글씨(130%): 475 에서 보유 종목 표는 3칸(지수 표는 4칸 그대로), 울트라 바깥 화면(411)은 보유 종목 표가 3칸, 2단 오른쪽 칸(933 → 532)은 4칸", () => {
+    expect(holdingsTableMode(475, 1.3)).toBe("compact");
+    expect(indicesTableMode(475, 1.3)).toBe("full");
+    expect(holdingsTableMode(411, 1)).toBe("compact");
+    expect(indicesTableMode(411, 1)).toBe("full");
+    expect(bodyWidthGuess(933, "pane")).toBe(532);
+    expect(holdingsTableMode(532, 1.3)).toBe("full");
+  });
+});
+
 describe("카드 이름표 줄 (최대 6줄 규칙과 같은 줄)", () => {
   it("아침: 환율·금리 / 업종(강·약 두 줄, 섹터 ETF 기준) / 내 종목('내 ' 없이) / 뉴스 3건(제목 2개 + 외 1건)", () => {
     const rows = cardRows(MORNING, at("2026-09-28T08:31:00+09:00"));
@@ -102,6 +147,10 @@ describe("카드 이름표 줄 (최대 6줄 규칙과 같은 줄)", () => {
     expect(closeBadge(MORNING)).toBe("9/25(금) 마감");
     expect(closeBadge(KR_HOLIDAY)).toBe("휴장");
     expect(closeBadge(shared.cases[4]!.data)).toBe("장중");
+    // 미국 마감 직후 최종값 전이면 목록 줄에서도 '최종값 전' (경고색)
+    expect(closeBadge({ ...MORNING, phase: "prelim" })).toBe("최종값 전");
+    expect(closeBadgeWarn({ ...MORNING, phase: "prelim" })).toBe(true);
+    expect(closeBadgeWarn(MORNING)).toBe(false);
     expect(holdingsShort(MORNING.holdings)).toBe("내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7");
     expect(holdingsShort(null)).toBeNull();
     expect(marketCardItem(false, [item(1, MORNING)])).toBeUndefined();
@@ -114,6 +163,10 @@ describe("카드 이름표 줄 (최대 6줄 규칙과 같은 줄)", () => {
     expect(speakText("지수와 차이 +3.18%p · 차이 -3.81%p")).toBe("지수와 차이 3.18%포인트 높음, 차이 3.81%포인트 낮음");
     expect(speakText("원/달러 1,359.00원 +3.50원")).toBe("원/달러 1,359.00원 3.50원 상승");
     expect(speakText("내 미국 3종목 모두 지수와 ±1%p 안")).toBe("내 미국 3종목 모두 지수와 플러스마이너스 1%포인트 안");
+    // 금리 전일 대비는 지수와의 차이(높음·낮음)가 아니라 움직임(상승·하락)으로 읽는다
+    expect(speakText("미 10년물 5.17% -0.01%p (미 재무부)")).toBe("미 10년물 5.17% 0.01%포인트 하락 (미 재무부)");
+    expect(speakText("미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)")).toBe("미 10년물 4.90% 0.02%포인트 상승 (11/25 기준, 미 재무부)");
+    expect(speakPointMove("-0.01%p")).toBe("0.01%포인트 하락");
     const s = cardSpeech(item(7, MORNING), at("2026-09-28T08:31:00+09:00"));
     expect(s).toContain("금요일(9/25) 미국 시장");
     expect(s).toContain("매매 권유가 아닙니다");

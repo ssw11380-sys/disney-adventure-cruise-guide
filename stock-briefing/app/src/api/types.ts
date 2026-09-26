@@ -401,7 +401,8 @@ export interface HoldingsCompare {
   high: CompareRow[];
   similar: CompareRow[];
   low: CompareRow[];
-  excluded: { leverage: string[]; overseas: string[]; noQuote: string[]; noBenchmark: string[] };
+  /** 뺀 종목 이름. bond(채권·금리형 ETF)는 나중에 더한 칸이라 예전에 저장한 요약에는 없다 */
+  excluded: { leverage: string[]; overseas: string[]; bond?: string[]; noQuote: string[]; noBenchmark: string[] };
   benchmarks: { code: string; name: string; changeRate: number }[];
 }
 

@@ -1,4 +1,5 @@
 import type { CompareRow, HoldingsCompare, MarketSummary, MarketSummaryData, SectorRow, SummaryEvent, SummaryMarket, SummaryNews, SummaryYield } from "@/api/types";
+import { layout as LK, marketSummary as MSK, space } from "@/tokens";
 
 /**
  * 시장 전체 요약 문장 (플래그 marketSummary). 서버 backend/src/services/marketSummaryCalc.ts 의 문장 함수와 같은 글을 만든다 —
@@ -111,9 +112,14 @@ const join = (segs: Seg[]) => segs.map((s) => s.text).join("");
 
 // ── 제목·기준·휴장 ────────────────────────────────────────────
 
-const titleDate = (d: Pick<MarketSummaryData, "holiday" | "marketDate" | "basisDate">) => (d.holiday ? d.marketDate : d.basisDate);
+/**
+ * 제목에 쓰는 날짜 (서버와 같다).
+ *  - 미국: 숫자의 거래일(basisDate). 월요일·휴장 다음 날에는 숫자가 어젯밤 것이 아니므로 '밤사이'가 아니라 그 거래일로 ('수요일(11/25) 미국 시장')
+ *  - 한국: 휴장이면 그 휴장일('오늘 한국 시장' + 휴장 배지·배너), 아니면 거래일
+ */
+const titleDate = (d: Pick<MarketSummaryData, "market" | "holiday" | "marketDate" | "basisDate">) => (d.market === "KR" && d.holiday ? d.marketDate : d.basisDate);
 
-/** '밤사이 미국' · '금요일(9/25) 미국' · '오늘 한국' · '9/23(수) 한국' (알림 첫 줄 앞머리) */
+/** '밤사이 미국'(숫자의 거래일이 보는 날의 전날일 때만) · '금요일(9/25) 미국' · '오늘 한국' · '9/23(수) 한국' (알림 첫 줄 앞머리) */
 export function sessionWord(d: Pick<MarketSummaryData, "market" | "holiday" | "marketDate" | "basisDate">, view: Date): string {
   const today = viewDateOf(view);
   const td = titleDate(d);
@@ -157,11 +163,17 @@ export function basisText(d: Pick<MarketSummaryData, "market" | "holiday" | "bas
   return `${d.holiday ? "직전 거래일 " : ""}${mdw(d.basisDate)} ${d.closeTime} 장 마감 기준`;
 }
 
-/** 목록 줄 배지 '9/25(금) 마감' · '장중' · '휴장' */
+/** 목록 줄 배지 '9/25(금) 마감' · '장중' · '최종값 전'(미국 마감 직후, 네이버 최종값 전) · '휴장' — 확정 전 값은 목록 줄에서도 알 수 있게 */
 export function closeBadge(d: MarketSummaryData): string {
   if (d.phase === "intraday") return "장중";
+  if (d.phase === "prelim") return "최종값 전";
   if (d.holiday) return "휴장";
   return `${mdw(d.basisDate)} 마감`;
+}
+
+/** 목록 줄 배지를 경고색(warn)으로 칠할지: 휴장·장중·최종값 전 */
+export function closeBadgeWarn(d: MarketSummaryData): boolean {
+  return !!d.holiday || d.phase !== "final";
 }
 
 // ── 줄 조각 ───────────────────────────────────────────────────
@@ -183,22 +195,33 @@ export function indexSegs(d: Pick<MarketSummaryData, "market" | "indices" | "hol
   return out;
 }
 
+/** 원/달러 고시일 표기 (서버 fxDateNote 와 같다): 요약 날짜와 같으면 없음, 다르면 ' (9/23 고시)', 확인하지 못했으면 ' (고시일 확인 못 함)' */
+export function fxDateNote(f: { date: string | null }, date: string): string {
+  if (!f.date) return " (고시일 확인 못 함)";
+  return f.date !== date ? ` (${md(f.date)} 고시)` : "";
+}
+
 /** 원/달러 칸: '원/달러 1,359.00원 +3.50원 (9/23 고시)' — 고시일이 요약 날짜와 같으면 날짜를 붙이지 않는다 */
 export function fxSegs(d: Pick<MarketSummaryData, "fx" | "date">): Seg[] | null {
   const f = d.fx;
   if (!f) return null;
-  return [{ text: `원/달러 ${idx2(f.value)}원 ` }, { text: wonChange(f.change), tone: f.change }, ...(f.date && f.date !== d.date ? [{ text: ` (${md(f.date)} 고시)`, muted: true }] : [])];
+  const note = fxDateNote(f, d.date);
+  return [{ text: `원/달러 ${idx2(f.value)}원 ` }, { text: wonChange(f.change), tone: f.change }, ...(note ? [{ text: note, muted: true }] : [])];
 }
 
-/** 미 10년물 칸 (출처 표기 필수) */
-export function yieldSegs(y: SummaryYield | null): Seg[] | null {
+/** 미 10년물 칸 (출처 표기 필수). withDate(휴장 다음 날): ' (11/25 기준 · 미 재무부)' */
+export function yieldSegs(y: SummaryYield | null, withDate = false): Seg[] | null {
   if (!y) return null;
-  return [{ text: `미 10년물 ${yieldValueText(y)}` }, ...(y.change !== null ? [{ text: " " }, { text: yieldChangeText(y), tone: y.change }] : []), { text: ` (${YIELD_SOURCE[y.source]})`, muted: true }];
+  return [
+    { text: `미 10년물 ${yieldValueText(y)}` },
+    ...(y.change !== null ? [{ text: " " }, { text: yieldChangeText(y), tone: y.change }] : []),
+    { text: ` (${withDate ? `${md(y.date)} 기준 · ` : ""}${YIELD_SOURCE[y.source]})`, muted: true },
+  ];
 }
 
-/** 환율·금리 줄 */
-export function ratesSegs(d: Pick<MarketSummaryData, "fx" | "date" | "yield10y">): Seg[] | null {
-  const parts = [fxSegs(d), yieldSegs(d.yield10y)].filter((x): x is Seg[] => !!x);
+/** 환율·금리 줄 (휴장이면 금리에도 'M/D 기준' — 원/달러는 고시일을 따로 적는다) */
+export function ratesSegs(d: Pick<MarketSummaryData, "fx" | "date" | "yield10y" | "holiday">): Seg[] | null {
+  const parts = [fxSegs(d), yieldSegs(d.yield10y, !!d.holiday)].filter((x): x is Seg[] => !!x);
   if (!parts.length) return null;
   return parts.flatMap((p, i) => (i ? [{ text: " · " }, ...p] : p));
 }
@@ -371,6 +394,38 @@ export function cardRows(d: MarketSummaryData, view: Date): CardRow[] {
   return rows;
 }
 
+// ── 상세 표 배치 ──────────────────────────────────────────────
+
+/** 표 한 줄의 좌우 안쪽 여백 합(space.lg ×2)과 칸 사이 간격(space.sm) — MarketSummaryBody 의 tr 스타일과 같다 */
+const ROW_PAD = space.lg * 2;
+const COL_GAP = space.sm;
+
+/**
+ * '내 보유 종목과 지수' 표 배치. width = 표(카드) 폭 dp, scale = 글자 배율(fontCap.row 까지, 숫자 칸 폭도 이만큼 늘린다).
+ *  - full: 종목 | 등락률 | 비교 지수 | 차이 (목업)
+ *  - compact: 종목(아래 줄에 비교 지수) | 등락률 | 차이 — 이름 칸이 nameMinW 보다 좁아질 때 (펼친 세로 두 칸·울트라 바깥 화면·큰 글씨)
+ */
+export function holdingsTableMode(width: number, scale: number): "full" | "compact" {
+  const need = ROW_PAD + COL_GAP * 3 + (MSK.colRate + MSK.colBench + MSK.colDiff + MSK.nameMinW) * scale;
+  return width >= need ? "full" : "compact";
+}
+
+/** '주요 지수' 표 배치: full = 지수 | 종가 | 전일 대비 | 등락률, compact = 지수 | 종가(아래 줄에 전일 대비) | 등락률 */
+export function indicesTableMode(width: number, scale: number): "full" | "compact" {
+  const need = ROW_PAD + COL_GAP * 3 + (MSK.colValue + MSK.colChange + MSK.colRate + MSK.indexNameMinW) * scale;
+  return width >= need ? "full" : "compact";
+}
+
+/**
+ * 상세 본문 한 칸의 폭 어림 (onLayout 으로 실제 폭을 받기 전 첫 그림에 쓴다 — 받으면 그 값으로 바꾼다).
+ * stack = 창 폭, split = 창 폭의 절반(두 칸), pane = 브리핑 탭 2단 오른쪽 칸(창 폭 − 목록 칸 − 구분선)
+ */
+export function bodyWidthGuess(windowW: number, layout: "stack" | "split" | "pane"): number {
+  if (layout === "split") return Math.floor((windowW - LK.divider) / 2);
+  if (layout === "pane") return Math.max(0, windowW - LK.listPaneW - LK.divider);
+  return windowW;
+}
+
 /** 브리핑 탭 맨 위 카드에 보일 요약: 플래그가 켜져 있고 목록을 받았으면 가장 최근 것 */
 export function marketCardItem(on: boolean, list: readonly MarketSummary[] | undefined): MarketSummary | undefined {
   return on && list?.length ? list[0] : undefined;
@@ -389,12 +444,19 @@ export function summaryWhen(s: Pick<MarketSummary, "date" | "session">): string 
 export function speakText(text: string): string {
   return text
     .replace(/±(\d+)%p/g, "플러스마이너스 $1%포인트")
+    // 금리 전일 대비는 지수와의 차이가 아니라 움직임이다: '미 10년물 5.17% -0.01%p' → '… 0.01%포인트 하락' ('낮음'으로 읽지 않게)
+    .replace(/(미 10년물 \d[\d.]*%) ([+-])(\d[\d.]*)%p/g, (_m, head: string, s: string, n: string) => `${head} ${speakPointMove(`${s}${n}%p`)}`)
     .replace(/([+-])(\d[\d,]*\.?\d*)%p/g, (_m, s: string, n: string) => `${n}%포인트 ${s === "+" ? "높음" : "낮음"}`)
     .replace(/([+-])(\d[\d,]*\.?\d*)%/g, (_m, s: string, n: string) => `${n}% ${s === "+" ? "상승" : "하락"}`)
     .replace(/([+-])(\d[\d,]*\.?\d*)원/g, (_m, s: string, n: string) => `${n}원 ${s === "+" ? "상승" : "하락"}`)
     .replace(/ —/g, " 받지 못함")
     .replace(/ · /g, ", ")
     .replace(/ \/ /g, ", ");
+}
+
+/** 금리처럼 %p 로 적은 '움직임'을 말로: '-0.01%p' → '0.01%포인트 하락', '+0.02%p' → '0.02%포인트 상승' */
+export function speakPointMove(text: string): string {
+  return text.replace(/([+-])(\d[\d.]*)%p/g, (_m, s: string, n: string) => `${n}%포인트 ${s === "+" ? "상승" : "하락"}`);
 }
 
 /** 카드·목록 줄을 한 문장으로 */

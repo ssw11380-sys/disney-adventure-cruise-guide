@@ -412,7 +412,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
           calendar: opts.providers.calendar,
           krSectors: async () => {
             const l = await discoverService.themes("KR", "sector", "day");
-            return { themes: l.themes, note: l.note };
+            // asOf: 출처가 값을 비워 저장본을 줄 때 그 저장본이 기준 거래일 값인지 보려고 (krSectorsStale)
+            return { themes: l.themes, note: l.note, asOf: l.asOf };
           },
           news: new GoogleNewsRssProvider(),
         }),

@@ -14,6 +14,8 @@ import type { PersistedClient } from "@tanstack/react-query-persist-client";
 
 export const PERSIST_KEYS: ReadonlySet<string> = new Set(["stocks", "indices", "features"]);
 export const PERSIST_MAX_AGE_MS = 7 * 86_400_000;
+/** 기기 저장 키 (백그라운드 알림이 마지막으로 받은 기능 플래그를 여기서 읽는다 — lib/marketSummaryLoad) */
+export const PERSIST_STORAGE_KEY = "rq.cache";
 /** 캐시 형식이 바뀌면 올린다 (옛 캐시를 버림) */
 export const PERSIST_BUSTER = "v2";
 
@@ -52,7 +54,7 @@ export function cleanForDisk(client: PersistedClient): PersistedClient {
 // 3초 폴링마다 전체 캐시를 적지 않게 10초에 한 번만
 export const queryPersister = createAsyncStoragePersister({
   storage: AsyncStorage,
-  key: "rq.cache",
+  key: PERSIST_STORAGE_KEY,
   throttleTime: 10_000,
   serialize: (c) => JSON.stringify(cleanForDisk(c)),
 });

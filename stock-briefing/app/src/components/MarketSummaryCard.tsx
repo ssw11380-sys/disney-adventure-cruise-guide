@@ -9,6 +9,7 @@ import {
   cardRows,
   cardSpeech,
   closeBadge,
+  closeBadgeWarn,
   holdingsShort,
   holidayText,
   indexValueText,
@@ -23,7 +24,7 @@ import {
 } from "@/lib/marketSummary";
 import { sentence, speakRate } from "@/lib/a11y";
 import { useNow } from "@/lib/useNow";
-import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
+import { changeColor, font, fontCap, space, touch, useFontScale, useTheme } from "@/theme";
 import { foldBriefings as FB, marketSummary as MS, radius } from "@/tokens";
 import { Badge, Card, Muted } from "./ui";
 
@@ -51,17 +52,24 @@ export function SegText({ segs, style, numberOfLines, cap }: { segs: Seg[]; styl
 /** 지수 전일 대비 "+63.01" */
 const signedIndex = (v: number) => `${v > 0 ? "+" : v < 0 ? "-" : ""}${indexValueText(Math.abs(v))}`;
 
-/** 지수 칸: 아침 4칸(등락률 굵게 + 종가), 오후 2칸(등락률 + 종가 · 전일 대비). 휴장이면 이름 옆에 거래일, 받지 못한 칸은 '—' */
+/**
+ * 지수 칸: 아침 4칸(등락률 굵게 + 종가), 오후 2칸(등락률 + 종가 · 전일 대비). 받지 못한 칸은 '—'.
+ * 휴장이면 이름 아래 줄에 그 값의 거래일('11/25') — 이름 옆에 붙이면 좁은 칸(울트라 411·큰 글씨)에서 날짜가 말줄임으로 잘렸다
+ */
 function IndexCell({ i, d, compact = false }: { i: SummaryIndex; d: MarketSummaryData; compact?: boolean }) {
   const t = useTheme();
-  const day = d.holiday && i.date ? ` (${md(i.date)})` : "";
-  const label = sentence([`${i.name}${day}`, i.changeRate === null ? "받지 못함" : speakRate(i.changeRate), i.value !== null && !compact ? indexValueText(i.value) : null]);
+  const day = d.holiday && i.date ? md(i.date) : null;
+  const label = sentence([`${i.name}${day ? ` (${day})` : ""}`, i.changeRate === null ? "받지 못함" : speakRate(i.changeRate), i.value !== null && !compact ? indexValueText(i.value) : null]);
   return (
     <View accessible accessibilityLabel={label} style={[compact ? styles.cellSmall : styles.cell, { backgroundColor: compact ? t.bg : t.surfaceAlt }]}>
       <Text style={{ color: t.muted, fontSize: compact ? font.tiny : font.small }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
         {i.name}
-        {day}
       </Text>
+      {day ? (
+        <Text style={[styles.num, { color: t.muted, fontSize: font.tiny }]} maxFontSizeMultiplier={fontCap.row}>
+          {day}
+        </Text>
+      ) : null}
       {i.changeRate === null ? (
         <Text style={[styles.cellRate, { color: t.muted, fontSize: compact ? font.body : font.h2 }]}>—</Text>
       ) : (
@@ -122,6 +130,8 @@ export const MarketSummaryCard = React.memo(function MarketSummaryCard({ summary
 
 function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
   const t = useTheme();
+  // 이름표 칸 폭은 글자 배율만큼 늘린다 (큰 글씨에서 '환율·금리'가 '환율·금 / 리'로 쪼개지지 않게)
+  const labelW = Math.round(MS.labelW * useFontScale(fontCap.row));
   const banner = holidayText(d, view);
   return (
     <>
@@ -139,7 +149,7 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
       </View>
       {cardRows(d, view).map((r) => (
         <View key={r.kind} style={styles.row}>
-          <Text style={[styles.label, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+          <Text style={[styles.label, { width: labelW, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
             {r.label}
           </Text>
           <View style={styles.rowBody}>
@@ -188,7 +198,7 @@ export function MarketSummaryRow({ summary, selected, onPress, role }: { summary
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
           {d ? titleText(d, view) : "시장 요약"}
         </Text>
-        {d && !failed ? <Badge tone={d.holiday || d.phase === "intraday" ? "warn" : "neutral"}>{closeBadge(d)}</Badge> : null}
+        {d && !failed ? <Badge tone={closeBadgeWarn(d) ? "warn" : "neutral"}>{closeBadge(d)}</Badge> : null}
         <Text style={[styles.rowWhen, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
           {summaryWhen(summary)}
         </Text>
@@ -228,7 +238,7 @@ const styles = StyleSheet.create({
   cellRate: { fontWeight: "700", fontVariant: ["tabular-nums"] },
   num: { fontVariant: ["tabular-nums"] },
   row: { flexDirection: "row", gap: space.sm, alignItems: "flex-start" },
-  label: { width: MS.labelW, fontSize: font.small, lineHeight: font.body * 1.5 },
+  label: { fontSize: font.small, lineHeight: font.body * 1.5 },
   rowBody: { flex: 1, minWidth: 0, gap: space.xxs },
   listRow: { minHeight: MS.rowMinH, justifyContent: "center", gap: space.xs, paddingLeft: space.lg, paddingRight: space.md, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   selBar: { position: "absolute", left: 0, top: 0, bottom: 0, width: FB.selBar },

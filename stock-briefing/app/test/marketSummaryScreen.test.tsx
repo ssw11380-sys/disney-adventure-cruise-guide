@@ -12,6 +12,7 @@ import { cleanupRenders, render, type HostNode } from "./miniRender";
  */
 const h = vi.hoisted(() => ({
   win: { width: 475, height: 679, scale: 2.625, fontScale: 1 },
+  fontScale: 1,
   flags: {} as Record<string, boolean>,
   now: Date.parse("2026-09-28T08:31:00+09:00"),
   params: { id: "7" } as { id?: string },
@@ -48,7 +49,7 @@ vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: h.push, dismissTo: vi.fn(), replace: vi.fn() }, Stack: { Screen: "StackScreen" }, Tabs: { Screen: "TabsScreen" }, useLocalSearchParams: () => h.params }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
-  return { ...tokens, useTheme: () => tokens.dark, useFontScale: () => 1 };
+  return { ...tokens, useTheme: () => tokens.dark, useFontScale: (cap = Infinity) => Math.min(Math.max(h.fontScale, 1), cap) };
 });
 vi.mock("@/lib/useNow", () => ({ useNow: () => h.now }));
 vi.mock("@/components/Screen", () => ({ Screen: "Screen" }));
@@ -97,11 +98,23 @@ const shared = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketSumm
 const item = (id: number, data: MarketSummaryData): MarketSummary => ({ id, date: data.date, session: data.session, market: data.market, status: "ok", summary: "요약", createdAt: data.asOf, data });
 const MORNING = item(7, shared.cases[0]!.data);
 const KR_HOLIDAY = item(8, shared.cases[2]!.data);
+const US_HOLIDAY = item(9, shared.cases[3]!.data);
 
 type R = ReturnType<typeof render>;
 const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(textOf).join(""));
 const texts = (r: R) => r.all().filter((n) => n.type === "Text" || n.type === "Muted").map(textOf);
 const labels = (r: R) => r.all().map((n) => n.props.accessibilityLabel).filter((x): x is string => typeof x === "string");
+/** 한 노드 아래 모든 노드 (자기 포함) */
+const collect = (n: HostNode): HostNode[] => [n, ...n.children.flatMap((c) => (typeof c === "string" ? [] : collect(c)))];
+/** 스타일 배열에서 숫자 폭 */
+const widthOf = (n: HostNode): number | undefined => {
+  const st = n.props.style;
+  const list = (Array.isArray(st) ? st : [st]) as Array<{ width?: unknown } | undefined>;
+  const w = list.find((x) => x && typeof x.width === "number");
+  return w ? (w.width as number) : undefined;
+};
+/** 표 머리 글들 */
+const headsOf = (r: R) => r.all().filter((n) => n.type === "TableHead").map((n) => n.children.filter((c): c is HostNode => typeof c !== "string").map(textOf));
 const cardOf = (r: R) => r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel ?? "").includes("숫자로 만든 요약"));
 const settle = async (r: R) => {
   for (let i = 0; i < 3; i++) await new Promise((res) => setTimeout(res, 0));
@@ -111,6 +124,7 @@ const settle = async (r: R) => {
 beforeEach(() => {
   cleanupRenders();
   h.win = { width: 475, height: 679, scale: 2.625, fontScale: 1 };
+  h.fontScale = 1;
   h.flags = {};
   h.now = Date.parse("2026-09-28T08:31:00+09:00");
   h.params = { id: "7" };
@@ -165,7 +179,10 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     const all = texts(r);
     expect(all).toContain("오늘 한국 시장");
     expect(all).toContain("오늘 한국 휴장(추석) · 아래는 직전 거래일 9/23 기준");
-    expect(all).toContain("코스피 (9/23)");
+    // 칸마다 거래일: 이름 옆이 아니라 이름 아래 줄 (좁은 칸에서 날짜가 말줄임으로 잘리지 않게)
+    expect(all).toContain("코스피");
+    expect(all.filter((x) => x === "9/23")).toHaveLength(2);
+    expect(labels(r)).toContain("코스피 (9/23), 0.90% 상승, 7,080.92");
     expect(r.all().some((n) => n.type === "Badge" && textOf(n) === "휴장")).toBe(true);
     expect(all).not.toContain("뉴스 3건");
     // 토요일에 다시 보면 날짜로
@@ -173,6 +190,31 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     r.rerender();
     expect(texts(r)).toContain("9/25(금) 한국 시장");
     expect(texts(r)).toContain("9/25(금) 한국 휴장(추석) · 아래는 직전 거래일 9/23 기준");
+  });
+
+  it("미국 휴장 다음 날(11/27) 카드: 제목은 숫자의 거래일 '수요일(11/25) 미국 시장', 지수 칸마다 날짜는 이름 아래 한 줄(울트라 411에서도 잘리지 않게)", () => {
+    h.flags = { marketSummary: true };
+    h.list = [US_HOLIDAY];
+    h.now = Date.parse("2026-11-27T08:40:00+09:00");
+    h.win = { width: 411, height: 960, scale: 2.625, fontScale: 1 };
+    const r = render(<BriefingsScreen />);
+    const all = texts(r);
+    expect(all).toContain("수요일(11/25) 미국 시장");
+    expect(all).not.toContain("밤사이 미국 시장");
+    expect(all).toContain("지난밤 미국 휴장(추수감사절) · 아래는 직전 거래일 11/25(수) 기준");
+    // 이름 줄(한 줄 말줄임)에는 날짜가 없고, 날짜는 4칸 모두 따로
+    const nameLines = r.all().filter((n) => n.type === "Text" && n.props.numberOfLines === 1 && /^(나스닥|S&P500|다우|필라반도체)/.test(textOf(n)));
+    expect(nameLines.map(textOf)).toEqual(["나스닥", "S&P500", "다우", "필라반도체"]);
+    expect(all.filter((x) => x === "11/25")).toHaveLength(4);
+    expect(all).toContain("원/달러 1,400.00원 -2.50원 (11/26 고시) · 미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)");
+  });
+
+  it("큰 글씨(130%): 카드 이름표 칸이 글자만큼 넓어진다 ('환율·금리'가 두 줄로 쪼개지지 않게)", () => {
+    h.flags = { marketSummary: true };
+    h.fontScale = 1.3;
+    const r = render(<BriefingsScreen />);
+    const label = r.all().find((n) => n.type === "Text" && textOf(n) === "환율·금리")!;
+    expect(widthOf(label)).toBe(Math.round(MS.labelW * 1.3));
   });
 
   it("예전 서버(404 → 빈 목록)면 카드가 없다", () => {
@@ -205,6 +247,81 @@ describe("상세 화면 /briefings/market/<id>", () => {
     expect(h.openURL).toHaveBeenCalledWith("https://news.google.com/rss/articles/example-1");
     expect(r.all().some((n) => n.type === "StackScreen" && (n.props.options as { title?: string }).title === "시장 요약 · 오전")).toBe(true);
     expect(h.detailEnabled.at(-1)).toBe(true);
+  });
+
+  it("원/달러 '한국 휴장으로 갱신 없음'은 한국 휴장일 때만 — 미국 휴장 다음 날(11/27, 한국은 11/26 정상 고시)에는 붙이지 않는다", () => {
+    h.flags = { marketSummary: true };
+    h.detail = US_HOLIDAY;
+    h.now = Date.parse("2026-11-27T08:40:00+09:00");
+    const us = texts(render(<MarketSummaryScreen />));
+    expect(us.some((t) => t.includes("하나은행 고시 매매기준율 · 11/26 고시값"))).toBe(true);
+    expect(us.some((t) => t.includes("한국 휴장으로 갱신 없음"))).toBe(false);
+    cleanupRenders();
+    h.detail = KR_HOLIDAY;
+    h.now = Date.parse("2026-09-25T16:05:00+09:00");
+    const kr = texts(render(<MarketSummaryScreen />));
+    expect(kr.some((t) => t.includes("9/23 고시값 (한국 휴장으로 갱신 없음)"))).toBe(true);
+  });
+
+  it("금리 화면 읽기: 전일 대비는 '하락/상승' (지수와의 차이처럼 '낮음'으로 읽지 않는다)", () => {
+    h.flags = { marketSummary: true };
+    const r = render(<MarketSummaryScreen />);
+    expect(labels(r)).toContain("미국 10년물 금리, 5.17%, 0.01%포인트 하락, 미 재무부");
+  });
+
+  it("접은 화면(475): 보유 종목·주요 지수 표는 목업처럼 4칸, 업종 막대 길이는 칸 폭을 따르고(퍼센트) 이름은 두 줄까지", () => {
+    h.flags = { marketSummary: true };
+    const r = render(<MarketSummaryScreen />);
+    expect(headsOf(r)).toEqual([
+      ["종목", "등락률", "비교 지수", "차이"],
+      ["지수", "종가", "전일 대비", "등락률"],
+    ]);
+    const widths = r.all().filter((n) => n.type === "View" && typeof (n.props.style as { width?: unknown } | undefined)?.width === "string").map((n) => (n.props.style as { width: string }).width);
+    expect(widths).toHaveLength(11); // 섹터 ETF 11개
+    expect(widths).toContain("100%"); // 가장 큰 등락률(산업재 +0.95%)이 반쪽 칸을 채운다
+    expect(widths.every((w) => /^\d+%$/.test(w))).toBe(true);
+    const sectorNames = r.all().filter((n) => n.type === "Text" && n.props.numberOfLines === 2 && /^(산업재|커뮤니케이션|헬스케어)/.test(textOf(n)));
+    expect(sectorNames.map(textOf)).toEqual(expect.arrayContaining(["산업재 XLI", "헬스케어 XLV", "커뮤니케이션 XLC"]));
+  });
+
+  it("한국 업종: 구성 종목 수는 이름 아래 줄 ('반도체와반도체장비 90 / 종목'처럼 숫자와 '종목'이 갈라지지 않게)", () => {
+    h.flags = { marketSummary: true };
+    h.detail = item(7, shared.cases[1]!.data);
+    h.now = Date.parse("2026-09-23T16:05:00+09:00");
+    const all = texts(render(<MarketSummaryScreen />));
+    expect(all).toContain("반도체와반도체장비");
+    expect(all).toContain("90종목");
+  });
+
+  it("펼친 세로(704, 두 칸): 보유 종목 표는 비교 지수를 이름 아래로, 주요 지수 표는 전일 대비를 종가 아래로 내린 3칸 — 이름이 '마이크/로소…'처럼 쪼개지지 않게", () => {
+    h.flags = { marketSummary: true, foldLayout: true };
+    h.win = { width: 704, height: 933, scale: 2.625, fontScale: 1 };
+    const r = render(<MarketSummaryScreen />);
+    expect(headsOf(r)).toEqual([
+      ["종목 · 비교 지수", "등락률", "차이"],
+      ["지수", "종가 · 전일 대비", "등락률"],
+    ]);
+    const ms = r.all().find((n) => n.type === "View" && String(n.props.accessibilityLabel ?? "").startsWith("마이크로소프트, "))!;
+    const inRow = collect(ms).filter((n) => n.type === "Text").map(textOf);
+    expect(inRow).toEqual(expect.arrayContaining(["마이크로소프트", "나스닥 +0.48%", "+3.66%", "+3.18%p"]));
+    const diff = collect(ms).find((n) => n.type === "Text" && textOf(n) === "+3.18%p")!;
+    expect(widthOf(diff)).toBe(MS.colDiff);
+    const sox = r.all().find((n) => n.type === "View" && String(n.props.accessibilityLabel ?? "").startsWith("필라반도체, "))!;
+    expect(collect(sox).filter((n) => n.type === "Text").map(textOf)).toEqual(expect.arrayContaining(["필라반도체", "12,668.93", "+176.39", "+1.41%"]));
+  });
+
+  it("큰 글씨(130%) 접은 화면: 숫자 칸 폭도 글자만큼 넓어지고('+3.18%p'가 두 줄로 쪼개지지 않게) 보유 종목 표는 3칸", () => {
+    h.flags = { marketSummary: true };
+    h.fontScale = 1.3;
+    const r = render(<MarketSummaryScreen />);
+    const heads = headsOf(r);
+    expect(heads[0]).toEqual(["종목 · 비교 지수", "등락률", "차이"]);
+    expect(heads[1]).toEqual(["지수", "종가", "전일 대비", "등락률"]);
+    const ms = r.all().find((n) => n.type === "View" && String(n.props.accessibilityLabel ?? "").startsWith("마이크로소프트, "))!;
+    const diff = collect(ms).find((n) => n.type === "Text" && textOf(n) === "+3.18%p")!;
+    expect(widthOf(diff)).toBe(Math.round(MS.colDiff * 1.3));
+    const rate = r.all().filter((n) => n.type === "Text" && textOf(n) === "+0.48%" && typeof widthOf(n) === "number");
+    expect(rate.map(widthOf)).toContain(Math.round(MS.colRate * 1.3));
   });
 
   it("플래그가 꺼져 있으면 불러오지 않고 '볼 수 없습니다'", () => {
