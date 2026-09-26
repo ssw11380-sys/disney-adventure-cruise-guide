@@ -16,8 +16,10 @@ import { eventsCoverage, MARKET_EVENTS, nextOpenEvent, upcomingEvents } from "..
 import {
   basisText,
   blockedTitle,
+  blockReason,
   classify,
   compareHoldings,
+  coreTitle,
   diffBp,
   digestLine,
   eventsText,
@@ -33,21 +35,27 @@ import {
   naverYield,
   newsDays,
   newsWindow,
+  ought,
   nextSessionOpenAt,
   parseTreasuryCsv,
+  ppText,
   phaseOf,
   pickFx,
   pickIndices,
   pickNews,
+  quotedSpeech,
   ratesText,
   resolveDates,
   sessionClose,
   summaryLines,
+  timingCall,
   titleDays,
   titleText,
   treasuryYield,
   usSectors,
+  widestOf,
   yieldLine,
+  type CompareRow,
   type MarketSummaryData,
   type SummaryIndex,
   type SummaryLine,
@@ -433,7 +441,57 @@ describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", 
     expect(kr.excluded.overseas).toEqual(["KODEX MSCI선진국"]);
   });
 
-  it("보유 0 이면 null, 모두 비슷하면 '모두 지수와 ±1%p 안', 정렬은 차이 크기 → 이름 순", () => {
+  it("묶음 안 순서는 확정 목업(detail_F8C_morning_full)대로 차이를 부호 그대로 큰 순 — 높음은 가장 높은 것부터, 비슷은 +에서 −로, 낮음은 0에 가까운 것부터. 한 줄 괄호는 묶음에서 차이가 가장 큰 종목", () => {
+    const indices = [idx("NASDAQ", "나스닥", 0.48, "2026-09-25"), idx("SPX", "S&P500", 0.51, "2026-09-25")];
+    const q = (rate: number, exchange: string) => ({ changeRate: rate, tradedAt: "2026-09-25T16:00:00-04:00", exchange });
+    // 목업 값 (종목 등락률 · 거래소) — 입력 순서는 일부러 섞는다
+    const rows: Array<[string, string, number, string]> = [
+      ["META", "메타", -3.33, "NSQ"],
+      ["KO", "코카콜라", -0.33, "NYS"],
+      ["GOOGL", "알파벳A", 0.46, "NSQ"],
+      ["MSFT", "마이크로소프트", 3.66, "NSQ"],
+      ["PLTR", "팔란티어", -1.52, "NSQ"],
+      ["JPM", "JP모건", 1.33, "NYS"],
+      ["AMZN", "아마존", 0.12, "NSQ"],
+      ["TSLA", "테슬라", -1.54, "NSQ"],
+      ["AVGO", "브로드컴", 0.7, "NSQ"],
+      ["O", "리얼티인컴", 0.23, "NYS"],
+      ["NVDA", "엔비디아", 0.22, "NSQ"],
+      ["AAPL", "애플", 1.53, "NSQ"],
+    ];
+    const cmp = compareHoldings({
+      market: "US",
+      basisDate: "2026-09-25",
+      holdings: rows.map(([code, name]) => ({ code, name, market: "US" })),
+      quotes: new Map(rows.map(([code, , rate, ex]) => [code, q(rate, ex)])),
+      indices,
+    })!;
+    const show = (g: CompareRow[]) => g.map((r) => `${r.name} ${ppText(r.diff)}`);
+    expect(show(cmp.high)).toEqual(["마이크로소프트 +3.18%p", "애플 +1.05%p"]);
+    expect(show(cmp.similar)).toEqual(["JP모건 +0.82%p", "브로드컴 +0.22%p", "알파벳A -0.02%p", "엔비디아 -0.26%p", "리얼티인컴 -0.28%p", "아마존 -0.36%p", "코카콜라 -0.84%p"]);
+    expect(show(cmp.low)).toEqual(["팔란티어 -2.00%p", "테슬라 -2.02%p", "메타 -3.81%p"]);
+    // 괄호는 표 첫 줄이 아니라 차이가 가장 큰 종목 (낮음은 메타 -3.81%p)
+    expect(holdingsText({ holdings: cmp, holiday: null, basisDate: "2026-09-25" })).toBe(
+      "내 미국 12종목 · 지수보다 높음 2 (마이크로소프트 +3.66%, 지수와 차이 +3.18%p) · 낮음 3 (메타 -3.33%, 차이 -3.81%p) · 비슷 7",
+    );
+    // 차이가 같으면 이름 순 앞 (표도, 괄호도)
+    const tie = compareHoldings({
+      market: "US",
+      basisDate: "2026-09-25",
+      holdings: [
+        { code: "B", name: "나", market: "US" },
+        { code: "A", name: "가", market: "US" },
+        { code: "C", name: "다", market: "US" },
+      ],
+      quotes: new Map([["A", q(-2.52, "NSQ")], ["B", q(-2.52, "NSQ")], ["C", q(-1.52, "NSQ")]]),
+      indices,
+    })!;
+    expect(tie.low.map((r) => r.name)).toEqual(["다", "가", "나"]);
+    expect(widestOf(tie.low)?.name).toBe("가");
+    expect(widestOf([])).toBeUndefined();
+  });
+
+  it("보유 0 이면 null, 모두 비슷하면 '모두 지수와 ±1%p 안', 정렬은 부호 그대로 큰 순 → 이름 순", () => {
     const base = { market: "US" as const, basisDate: "2026-09-25", indices: [idx("NASDAQ", "나스닥", 0.5, "2026-09-25")] };
     expect(compareHoldings({ ...base, holdings: [], quotes: new Map() })).toBeNull();
     const q = (r: number) => ({ changeRate: r, tradedAt: "2026-09-25T16:00:00-04:00", exchange: "NSQ" });
@@ -446,7 +504,7 @@ describe("내 보유 종목 vs 지수 (±1%p, 상장 시장별 비교 지수)", 
       ],
       quotes: new Map([["A", q(0.8)], ["B", q(0.2)], ["C", q(1.2)]]),
     })!;
-    expect(cmp.similar.map((r) => r.name)).toEqual(["다", "가", "나"]); // |0.7| > |0.3| = |-0.3| → 이름 순
+    expect(cmp.similar.map((r) => r.name)).toEqual(["다", "가", "나"]); // +0.7 > +0.3 > -0.3
     expect(holdingsText({ holdings: cmp, holiday: null, basisDate: "2026-09-25" })).toBe("내 미국 3종목 모두 지수와 ±1%p 안");
     expect(holdingsText({ holdings: cmp, holiday: { date: "2026-09-26", name: null }, basisDate: "2026-09-25" })).toBe("9/25 기준 · 내 미국 3종목 모두 지수와 ±1%p 안");
   });
@@ -740,6 +798,186 @@ describe("뉴스 제목 고르기 (원문 그대로 · 창 · 거르기 · 같�
     );
     expect(got.map((n) => n.title)).toEqual(["코스피 반등 오나?", "나스닥 … 상승 마감"]);
     expect(pickNews(got, mondayWindow()).map((n) => n.title)).toEqual(["나스닥 … 상승 마감"]);
+  });
+
+  it("언론사 이름(<source>)도 제목처럼 엔티티를 푼다 — 'S&amp;P' 가 언론사 칸에 그대로 보이지 않는다", () => {
+    const xml = `<rss><channel><item><title>뉴욕증시 상승 마감 - S&amp;amp;P 뉴스</title><link>https://news.google.com/rss/articles/src</link><pubDate>${new Date("2026-09-25T20:40:00Z").toUTCString()}</pubDate><source url="https://x">S&amp;amp;P 뉴스 &#38; 경제</source></item>
+<item><title>코스피 상승 마감 - 한경</title><link>https://news.google.com/rss/articles/src2</link><pubDate>${new Date("2026-09-25T20:41:00Z").toUTCString()}</pubDate><source url="https://x"><![CDATA[한국&amp;경제]]></source></item></channel></rss>`;
+    const got = parseGoogleRss(xml);
+    expect(got.map((n) => n.source)).toEqual(["한국&경제", "S&P 뉴스 & 경제"]);
+    expect(pickNews(got, mondayWindow()).map((n) => n.outlet)).toEqual(["S&P 뉴스 & 경제", "한국&경제"]); // 이른 시각 순
+  });
+
+  // 5차 검토 must: 낱말 목록만으로는 권유가 계속 새어 나왔다 → 모양(인용·끝 모양)으로 먼저 막고 목록을 넓혔다
+  it("인용 발언(따옴표 속 남의 말)이 든 제목은 모두 뺀다 — 따옴표 안이 숫자·종목 기호뿐이면 둔다", () => {
+    for (const t of [
+      '코스피 급락 마감…"저가 매수 찬스"',
+      '증권가 "반도체 최선호주는 삼성전자"',
+      "월가 “랠리 아직 끝나지 않았다”",
+      "외국인 ‘사자’에 코스피 상승",
+      "코스피 '7천피' 탈환",
+      "「반도체 슈퍼사이클」 논쟁",
+      "『코스닥 살리기』 나선 당국",
+      "`AI낙관론`에 나스닥 최고",
+      '짝이 맞지 않는 "따옴표 제목',
+    ]) {
+      expect(blockedTitle(t), t).toBe(true);
+      expect(blockReason(t), t).toBe("인용");
+    }
+    for (const t of ["코스피 '7000' 탈환", '코스피 "7000선" 지켰다', "환율 '1400원대' 앞", "‘SOXL’ 사고 단기채도 담는 서학개미", "나스닥 'NVDA' 3% 상승", "'S&P500' 사상 최고", "'-3.5%' 급락", "Nvidia's 실적 발표 뒤 나스닥 상승", "'26년 상반기 코스피 상승"]) {
+      expect(quotedSpeech(t), t).toBe(false);
+    }
+  });
+
+  it("검토에서 새어 나온 권유 문구는 모두 막힌다 (그 문구만 있어도, 사실 제목 사이에 있어도)", () => {
+    const leaked = [
+      "저가 매수 찬스",
+      "최선호주는 삼성전자",
+      "매수 권고",
+      "매도 권고",
+      "추가 매수 권장",
+      "매수 유효",
+      "지금 사도 늦지 않다",
+      "지금 들어갈 때",
+      "비중 늘릴 때",
+      "사들여야",
+      "지금 사면 안 된다",
+      "지금 사면 늦었다",
+      "top pick 은 엔비디아",
+      "Top-Pick 엔비디아",
+      "줍줍 타이밍",
+      "분할 매수 전략",
+      "매수 신호 켜졌다",
+      "매도 신호",
+      "사둘 만한 반도체주",
+      "개미들 지금 들어가야",
+      "외국인 매수 나설 때",
+      "지금 살 종목",
+      "반도체 담을 종목",
+      "비중 줄일 때",
+      "지금 팔 때",
+      "배당주로 갈아타야",
+      "지금은 버텨야",
+      "현금 정리해야",
+      "반도체 강추",
+      "투자 권유 쏟아진 반도체",
+      "박스권 전략 유효",
+      "그래도 사라는 증권가",
+      "지금 팔라고 한 증권가",
+      "환율 반등 노려볼 때",
+      "지금은 쉬어갈 때다",
+      "주목할 만한 종목",
+      "빅맥지수로 본 원화 저평가",
+      "매력적인 투자처 된 베트남",
+      "나스닥 선물 매매법",
+    ];
+    for (const w of leaked) {
+      expect(blockedTitle(w), w).toBe(true);
+      expect(blockedTitle(`코스피 0.9% 상승 마감…${w}`), w).toBe(true);
+    }
+  });
+
+  it("당위 끝 '~아야·~어야·~해야'는 목록에 없어도 막는다 — '여야'·'분야'·'시야'·'회사야'·'이제서야'·'들어서야'는 둔다", () => {
+    for (const t of ["외국인 더 사들여야", "금리 인하 서둘러야", "환율 방어 나서야", "반도체 비중 채워야", "변동성 대비해야 할 때", "개선돼야 반등", "지켜봐야"]) expect(ought(t) || blockedTitle(t), t).toBe(true);
+    for (const t of ["여야 합의에 코스피 상승", "반도체 분야 강세", "시야 넓힌 외국인", "회사야 어찌 되든", "4분기 들어서야 반등", "이제서야 반등한 코스닥", "한 달 지나서야 회복"]) expect(ought(t), t).toBe(false);
+  });
+
+  it("때 짚기는 마디 끝 '~ㄹ 때'까지 막는다 — '30살 때부터'·'떨어질 때 산 개미'처럼 마디 안이면 둔다", () => {
+    for (const t of ["환율 반등 노려볼 때", "지금은 쉬어갈 때다", "버틸 때인가", "날아오를 때…반도체 강세"]) expect(timingCall(t), t).toBe(true);
+    for (const t of ["30살 때부터 모은 주식", "떨어질 때 산 개미 웃었다", "금리 올릴 때마다 하락", "코스피 오를 때 코스닥 내려"]) expect(timingCall(t), t).toBe(false);
+  });
+
+  it("전망 낱말: '위클리'·'관전 포인트'·'점쳐'·'임박'·'이어진다'·'주목'·'경고'·'향후'·'변수'·'시험대'·'관건'·'목표치'·'밴드 상단'·'오른다' 등", () => {
+    for (const t of [
+      "[위클리 증시] 반도체 강세",
+      "FOMC 관전 포인트",
+      "시장은 금리 인하 점쳐",
+      "월가, 인하 점친다",
+      "코스피 3000 돌파 임박",
+      "상승세 이어진다",
+      "밴드 상단 3500 제시",
+      "상단 7764·중간선거",
+      "코스피지수 목표치 하향",
+      "코스피 7000선 안착 주목",
+      "월가, 증시 조정 경고",
+      "매파 연준에 뛴 원·달러…향후 흐름",
+      "연휴 앞두고 수급 변수",
+      "美中 정상회담이 변곡점",
+      "월요일 반도체 시험대",
+      "외국인 수급이 관건",
+      "외국인·중동에 반등 달렸다",
+      "다시 1400원대 바라보는 환율",
+      "추가 하락은 제한적",
+      "유럽 증시의 험난한 앞날",
+      "이익 눈높이 상향",
+      "금리 더 오른다",
+      "환율의 방향이 바뀐다",
+      "몸값 2700조원 넘본다",
+      "한은 추가 인상 불가피",
+      "환율, 이 숫자 넘으면 흔들릴 수 있다",
+    ])
+      expect(blockedTitle(t), t).toBe(true);
+    // 사실을 적은 말은 둔다 ('상장 폐지 경고 받아'·'경고 수령')
+    for (const t of ["나스닥서 상장폐지 경고 받아", "상장폐지 경고 수령", "코스피 0.9% 상승 마감", "환율 2.3원 내린 1381.0원 마감"]) expect(blockedTitle(t), t).toBe(false);
+  });
+
+  it("물음 낱말('어떻게'·'어디로'·'언제')과 본문 끝 '~은·~는'(물음을 줄인 말)도 뺀다 — 끝에 붙은 언론사·말머리를 떼고 본다", () => {
+    for (const t of ["대출·투자 어떻게 하나", "추석 뒤 증시 어디로…", "한은 추가 인상 언제", "환율 급등…정부 대책은", "매파 연준…향후 흐름은", "순매수 1위 종목은 [단독]", "외국인 순매수 배경은 [개장시황]"]) expect(blockReason(t), t).toBe("물음");
+    // 꼬리표 뒤에 숨은 물음: ' By EBN'·' [1분 브리프]'·' - 머니투데이'·'｜Global Money Club'
+    for (const t of ["코스피, 반도체로 버티나 By EBN", "환율 또 1400원대 올라서나 [1분 브리프]", "코스피 반등 오나 - 머니투데이", "미 증시에 직격탄 되나｜Global Money Club"]) expect(blockedTitle(t), t).toBe(true);
+    expect(coreTitle("코스피, 반도체로 버티나 By 알파경제 alphabiz")).toBe("코스피, 반도체로 버티나");
+    expect(coreTitle("원·달러 환율 1381.0원 마감 - 머니투데이")).toBe("원·달러 환율 1381.0원 마감");
+    expect(coreTitle("[뉴욕증시] 상승 마감 [상보]")).toBe("[뉴욕증시] 상승 마감");
+    expect(coreTitle("[속보]")).toBe("[속보]");
+    for (const t of ["언제든 거래되는 美증시", "코스피는 올랐다", "뉴욕증시 상승 마감 [종합]"]) expect(blockedTitle(t), t).toBe(false);
+  });
+
+  it("의견 난(사설·칼럼)·말머리(증시전략·투자 노하우)·도박 광고 글도 뺀다", () => {
+    expect(blockReason("[사설] 금리 인상 파장 대비하길")).toBe("의견");
+    expect(blockReason("[칼럼] 코스닥 살려야")).toBe("의견");
+    expect(blockReason("[증시전략] CPU주 관심 집중")).toBe("권유");
+    expect(blockReason("[투자 노하우] 나스닥 사상 최고치 경신")).toBe("권유");
+    expect(blockReason("온라인 카지노 게임 안내")).toBe("광고");
+    expect(blockReason("[뉴욕마감] 나스닥 0.48%↑")).toBeNull();
+  });
+
+  it("사실을 적은 말은 계속 둔다 (순매수·저가 매수세·외국인 사자·30살 때·공매도·순매도·기대에 상승)", () => {
+    for (const t of [
+      "외국인 순매수에 코스피 0.9% 상승 마감",
+      "저가 매수세 유입에 반등",
+      "외국인 사자에 코스피 상승",
+      "30살 때부터 모은 주식",
+      "공매도 잔고 줄어",
+      "외국인 2조원 순매도",
+      "기관 팔자에 하락",
+      "美·이란 협상 기대에 뉴욕증시 상승",
+      "AI 속도조절론에 반도체 급락…나스닥 0.56%↓",
+      "[속보] 코스피 63.01p(0.90%) 오른 7080.92 마감",
+      "원·달러 환율, 22.8원 내린 1358.2원 마감",
+      "[뉴욕증시] 금리인상 시작에 오히려 안도…강세 마감",
+      "코스피, 반도체주 강세에 7000선 회복 상승 마감",
+      "미 국채금리 5% 돌파…반도체주 급락",
+      "[올댓차이나] 대만 증시, 반도체주 강세에 상승 마감…1.92%↑",
+      "[서학개미 안테나] 美·中 증시 엇갈려",
+      "[투데이’s 특징주] 증권주 동반 강세",
+      "코스닥 상장사 ‘25년 실적 분석",
+    ])
+      expect(blockReason(t), t).toBeNull();
+  });
+
+  it("실제 모양의 창 안 기사: 인용·권유·전망 제목은 카드·상세에 오르지 않고, 사실 제목 3건이 뽑힌다", () => {
+    const got = parseGoogleRss(
+      rss([
+        { title: '코스피 급락 마감…"저가 매수 찬스"', outlet: "머니투데이", at: "2026-09-25T20:05:00Z", id: "q1" },
+        { title: '증권가 "반도체 최선호주는 삼성전자"', outlet: "이데일리", at: "2026-09-25T20:06:00Z", id: "q2" },
+        { title: "잘나가던 소비주 울상…그래도 사라는 증권가", outlet: "머니S", at: "2026-09-25T20:07:00Z", id: "q3" },
+        { title: "[마켓 프리뷰] 나스닥 신고가…7000선 안착 주목", outlet: "아시아경제", at: "2026-09-25T20:08:00Z", id: "q4" },
+        { title: "美 긴축에 환율 또 1400원대 올라서나 [1분 브리프]", outlet: "서울경제", at: "2026-09-25T20:09:00Z", id: "q5" },
+      ]),
+    );
+    expect(got).toHaveLength(5);
+    const picked = pickNews([...got, ...parseGoogleRss(fixture("google-news-sample.xml"))], mondayWindow());
+    expect(picked.map((n) => n.outlet)).toEqual(["뉴스1", "KBS", "한국경제"]);
   });
 });
 

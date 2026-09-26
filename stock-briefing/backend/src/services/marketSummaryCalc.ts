@@ -189,6 +189,19 @@ export const NEWS_AFTER_CLOSE_MS = 6 * 3_600_000;
 /** 네이버 미국 지수 최종값 시각 (뉴욕 17:15) — 그 전 실행이면 '최종값 확정 전' */
 const US_FINAL_MIN = 17 * 60 + 15;
 
+/**
+ * ── 뉴스 제목 거르기 ──
+ * 언론사 제목은 원문 그대로만 보이므로(고치지 않는다) 매매 권유·전망·물음으로 읽힐 수 있는 제목은 통째로 뺀다.
+ * 낱말 목록만으로는 새 말이 계속 새어 나와(검토마다 '찬스'·'최선호주'·'들어갈 때'·'사들여야'…), 모양으로 먼저 막는다:
+ *  ① 따옴표 속 남의 말(인용) — 권유·전망이 가장 많이 들어오는 길 (quotedSpeech)
+ *  ② 끝 모양 — 명령형 '~아라·~어라'(commands), 당위 '~아야·~어야·~해야'(ought), 때 짚기 '~ㄹ 때'(timingCall), 물음 '~나·~ㄴ가·~ㄹ까'(asksQuestion), 예측 '~ㄹ 것·~ㄹ 수 있다'(predicts)
+ *  ③ 낱말 목록 — 권유(ADVICE_RE)·전망(OUTLOOK_RE)
+ * 모양 검사는 제목 전체와, 끝에 붙은 언론사·말머리('- 머니투데이'·' By EBN'·'[1분 브리프]')를 뗀 본문(coreTitle) 둘 다에 한다.
+ * 2026-09-16~26 실제 구글 뉴스 RSS 4천여 건(서비스 질의·창 그대로 + 넓은 질의)을 통과 제목 하나하나 읽어 보고 다듬었다.
+ */
+
+/** 낱말 끝 (뒤에 한글·영문·숫자가 오지 않음) — 괄호·말머리·동그라미 숫자('③') 앞도 낱말 끝 */
+const B = "(?![가-힣A-Za-z0-9])";
 /** 물음표 제목은 뺀다 (고치지 않는다) */
 const QUESTION_RE = /[?？]/;
 /**
@@ -196,20 +209,80 @@ const QUESTION_RE = /[?？]/;
  * 앱 test/wording.test.ts 의 금지 문구 목록 전체가 여기서 막힌다 (backend 테스트가 그 목록을 읽어 하나씩 넣어 본다).
  * 이 파일도 금지 문구 검사를 받으므로 금지 문구를 글자 그대로 적지 않고 묶음 꼴로 적는다 ('(?:적극|강력)\s?매[수도]' 등).
  *  - 목표가는 줄임말과 '목표(주)가'·띄어 쓴 꼴까지 (목표\s?주?가)
- *  - 명령·권유형: '매수하라'·'지금 사라'·'비중 늘려라'·'매수 적기'·'톱픽'·'투자의견'·'올라타라'·'지금이 기회' (그 밖의 명령형 끝은 commands)
- *  - 때 짚기: '살 때다'·'지금 살 때인가'·'살 때냐 팔 때냐'·'담을 때'·'지금은 매수할 때'·'매도할 시점'·'매수 시점'·'살 만한'
- *  - 당위·허락 묻기: '사야 한다'·'팔아야'·'늘려야'·'사도 되나'·'지금 매수해도 된다'
+ *  - 명령·권유형: '매수하라'·'지금 사라'·'비중 늘려라'·'매수 적기'·'톱픽'·'top pick'·'최선호주'·'투자의견'·'올라타라'·'지금이 기회'·'찬스'·
+ *    '매수 권고·권유·권장'·'강추'·'줍줍'·'매수 신호'·'매수 전략'·'분할 매수'·'전략 유효'·'매매법'·'그래도 사라는 증권가'(남의 권유를 옮긴 말)
+ *    (그 밖의 명령형 끝은 commands)
+ *  - 때 짚기(사는 쪽·파는 쪽 모두): '살·팔·담을·들어갈·나설·늘릴·줄일 때'·'살 종목'·'지금 살 때인가'·'지금은 매수할 때'·'매도할 시점'·'살 만한'·'사둘 만한'
+ *    (그 밖의 마디 끝 '~ㄹ 때'는 timingCall)
+ *  - 당위·허락 묻기: '사야 한다'·'팔아야'·'늘려야'·'사도 되나'·'지금 매수해도 된다'·'지금 사면 안 된다'·'사면 늦었다'·'사도 늦지 않다'
+ *    (그 밖의 당위 끝 '~아야·~어야·~해야'는 ought)
+ *  - 값 매기기: '저평가'·'고평가'·'과대평가'·'매력적인 투자처'
  *  - 단정·보장: '무조건'·'반드시', 수익(률)·원금을 보장한다는 말, '손절'·'익절'
+ *  - 말머리: 투자 전략·노하우·투자 리포트 난('[증시전략]'·'[투자 노하우]'·'[데일리 투자리포트]')
  *  사실을 적은 말은 둔다: '사라져'·'사라진'('사라'는 뒤에 글자가 없을 때만), '실적기대'('적기'는 낱말 앞에서만), '팔라듐', '기회비용'·'기회발전특구',
- *  '회사야'('사야'는 낱말 앞에서만), '순매수'·'매수세'·'저가 매수세', '30살 때'(나이 — '살'·'팔' 앞에 숫자가 오면 둔다)
+ *  '회사야'('사야'는 낱말 앞에서만), '순매수'·'매수세'·'저가 매수세', '30살 때'(나이 — '살'·'팔' 앞에 숫자가 오면 둔다), '공매도'
  */
-const ADVICE_RE =
-  /(살까|팔까|추천|목표\s?주?가|유망|톱픽|탑픽|투자\s?의견|매[수도]\s?(?:의견|적기|타이밍|시점)|매[수도]할\s?(?:때|시점|타이밍|만)|(?<![가-힣])적기|비중\s?(?:확대|축소)|기회(?!비용|발전)|(?:적극|강력)\s?매[수도]|매[수도](?:하세요|하라|해라|하자|해야|해도)|[사파]세요|(?:담아|늘려|줄여|팔아)(?:라|야)|(?<![가-힣])사야(?:겠|지)?(?![가-힣])|(?<![가-힣])사도\s?(?:되|돼|될|괜찮)|팔아도\s?(?:되|돼|될|괜찮)|(?<![가-힣])[사팔]라(?=$|[\s,.…!·'"”’])|(?<![가-힣\d])(?:살|팔|담을|사들일|갈아탈|모을)\s?(?:때(?!문)|만(?:하|한|해))|사\s?[둬두]라|사들여라|갈아타라|모아라|올라[타탈]|(?:수익률?|원금)\s?보장|무조건|반드시|손절|익절)/;
+const ADVICE_RE = new RegExp(
+  [
+    "살까|팔까|추천|목표\\s?주?가|유망|톱\\s?픽|탑\\s?픽|top[\\s-]?picks?|투자\\s?의견",
+    "매[수도]\\s?(?:의견|적기|타이밍|시점|신호|시그널|전략|유효|권고|권유|기회|찬스)|분할\\s?매[수도]|(?:투자|매매)\\s?전략|전략\\s?유효",
+    "권고|권유|권장|강추|찬스|최선호|줍줍|(?<![가-힣])적기|비중\\s?(?:확대|축소)|기회(?!비용|발전)|(?:적극|강력)\\s?매[수도]",
+    "매[수도](?:하세요|하라|해라|하자|해야|해도)|[사파]세요|(?:담아|늘려|줄여|팔아)(?:라|야)",
+    `(?<![가-힣])사야(?:겠|지)?${B}|(?<![가-힣])사도\\s?(?:되|돼|될|괜찮)|팔아도\\s?(?:되|돼|될|괜찮)|(?<![가-힣])[사팔]라${B}`,
+    `(?<![가-힣])(?:사|팔|담으|버티|매[수도]하|사들이|갈아타)(?:라는|라고|란)${B}`,
+    "(?:(?<![가-힣\\d])[살팔]|담을|들어갈|나설|늘릴|줄일|사들일|갈아탈|모을|올라탈|매[수도]할)\\s?(?:때(?!문)|종목|만(?:하|한|해)|시점|타이밍|적기)",
+    "(?<![가-힣])(?:사\\s?둘|담아\\s?둘|모아\\s?둘|눈여겨\\s?볼|주목할|관심\\s?가질|투자할)\\s?만(?:하|한|해)",
+    "(?<![가-힣])(?:사|팔|담으|들어가|올라타|매[수도]하)면\\s?(?:안\\s?[되돼된]|된다|돼|늦|손해|후회)|늦지\\s?않|(?<![가-힣])나서야",
+    "사\\s?[둬두]라|사들여라|갈아타라|모아라|올라[타탈]|(?:수익률?|원금)\\s?보장|무조건|반드시|손절|익절",
+    "저평가|고평가|과대평가|과소평가|매력적|투자처|매매법|투자법|돈\\s?버는",
+    "\\[[^\\]]*(?:전략|노하우|투자\\s?리포트|투자\\s?포인트)[^\\]]*\\]",
+  ].join("|"),
+  "i",
+);
+/** 의견 난(사설·칼럼 등)은 뺀다 — 그날 장의 사실이 아니라 필자의 주장이다 ('[사설] … 대비하길'·'[여명] … 보내자') */
+const OPINION_RE = /\[[^\]]*(?:사설|칼럼|시론|기고|오피니언|논단|여명)[^\]]*\]/;
+/** 도박·광고 글 (넓은 질의에 섞여 온다 — 카드에 오르면 안 된다) */
+const SPAM_RE = /카지노|바카라|토토|슬롯|룰렛|파워볼|포커|홀덤|도박|먹튀|마작/;
 /**
- * 명령형 낱말 끝 '~아라·~어라·~여라·~해라·~하라'('사둬라'·'사들여라'·'갈아타라'·'모아라'·'버텨라'·'던져라'·'정리하라'·'대비하라').
+ * 당위 끝 '~아야·~어야·~여야·~해야'(낱말 끝): '사들여야'·'갈아타야'·'버텨야'·'정리해야'·'들어가야'·'비중 늘려야'·'지켜봐야'·'대비해야'·'개선돼야'.
+ * 목록에 없는 당위도 막으려고 끝 모양으로 본다 (명령형 commands 와 같은 방식). 사실을 적은 말은 둔다:
+ * 이름씨 '분야'·'시야'·'회사야'·'여야'(여당과 야당), 때를 적은 '이제서야'·'그제야'·'지나서야'·'들어서야'('4분기 들어서야 반등')
+ */
+const OUGHT_RE = new RegExp(`([가-힣]*)([가-힣])야(?:${B}|(?=지|죠|할|한다|하는))`, "g");
+const OUGHT_BEFORE = new Set([..."아어여해돼와워줘둬봐타켜쳐춰꿔겨려혀져텨펴러써가내"]);
+/** 끝 모양은 같지만 당위가 아닌 낱말 ('여야' = 여당과 야당) */
+const NOT_OUGHT = new Set(["여야"]);
+export function ought(title: string): boolean {
+  for (const m of title.matchAll(OUGHT_RE)) if (OUGHT_BEFORE.has(m[2]!) && !NOT_OUGHT.has(m[0])) return true;
+  return false;
+}
+/**
+ * 인용 발언이 든 제목은 뺀다 — 권유·전망이 가장 많이 들어오는 길이 따옴표 속 남의 말('"저가 매수 찬스"'·'증권가 "최선호주는 …"')이라,
+ * 낱말 목록으로 쫓는 대신 모양으로 막는다. 따옴표(곧은·굽은·홑·겹·낫표·`) 안이 숫자·종목 기호뿐이면 둔다('7000'·"7000선"·'3%'·'NVDA'·'S&P500').
+ * 낱말 뒤 아포스트로피(Nvidia's·투데이’s)와 '26년·‘25년 같은 해 줄임은 따옴표가 아니다. 짝이 맞지 않는 따옴표는 인용으로 본다.
+ * (강조 따옴표 '7천피'·'전강후약'도 함께 빠진다 — 말뭉치에서 통과 제목의 약 4분의 1이 줄지만 창마다 11건 넘게 남는다)
+ */
+const QUOTE_RE = /["“”‘’'ʼ「」『』＂＇`]/g;
+const PLAIN_QUOTED_RE = /^\s*(?:[+-]?\d[\d.,]*\s?(?:%p?|bp|원|달러|포인트|선|배|대|만|천|억|조|p)*|[A-Z][A-Z0-9.&-]{0,9})\s*$/;
+export function quotedSpeech(title: string): boolean {
+  const marks = [...title.matchAll(QUOTE_RE)]
+    .map((m) => m.index!)
+    .filter((i) => {
+      const c = title[i]!;
+      if (c !== "'" && c !== "’" && c !== "‘" && c !== "ʼ") return true;
+      if (c !== "‘" && /[가-힣A-Za-z0-9]/.test(title[i - 1] ?? "") && /[A-Za-z]/.test(title[i + 1] ?? "")) return false; // Nvidia's · 투데이’s
+      return !/^\d{2}(?:년|\s|$)/.test(title.slice(i + 1)) || /\d/.test(title[i - 1] ?? ""); // '26년 · ‘25년
+    });
+  if (!marks.length) return false;
+  if (marks.length % 2) return true;
+  for (let k = 0; k < marks.length; k += 2) if (!PLAIN_QUOTED_RE.test(title.slice(marks[k]! + 1, marks[k + 1]!))) return true;
+  return false;
+}
+/**
+ * 명령형 낱말 끝 '~아라·~어라·~여라·~해라·~하라'('사둬라'·'사들여라'·'갈아타라'·'모아라'·'버텨라'·'던져라'·'정리하라'·'대비하라'·'체질을 바꿔라③').
  * 목록에 없는 명령형도 막으려고 끝 모양으로 본다. 이름으로 쓰이는 낱말('사하라'·'티아라')은 둔다
  */
-const IMPERATIVE_RE = /([가-힣]*[아어여해하둬워와봐타켜쳐춰꿔겨려혀져텨])라(?=$|[\s,.…!·'"”’\])~])/g;
+const IMPERATIVE_RE = new RegExp(`([가-힣]*[아어여해하둬워와봐타켜쳐춰꿔겨려혀져텨])라${B}`, "g");
 const NOT_IMPERATIVE = new Set(["사하라", "티아라", "오하라"]);
 export function commands(title: string): boolean {
   for (const m of title.matchAll(IMPERATIVE_RE)) if (!NOT_IMPERATIVE.has(`${m[1]}라`)) return true;
@@ -217,11 +290,21 @@ export function commands(title: string): boolean {
 }
 /**
  * 전망형 제목은 뺀다 (사용자 규칙 '전망 없이' — 월요일·연휴 뒤 창에 섞이는 주간 전망 기사 등): '이번주 증시 전망'·'금주·차주 증시'·'다음주 체크포인트'·'내주 FOMC'·
- * '지속될 듯'·'실적 예상'·'예측'·'~할 것이란 관측'·'2배 간다'·'5000 온다'·'추가 상승 가능성'·'상승 여력·여지'·'바닥은 어디인가 … 찍었는가'
- * ('~ㄹ 것'·'~ㄹ지'는 predicts·asksQuestion). '관측소'·'내주며'·'여지없이'는 사실을 적은 말이라 둔다
+ * '지속될 듯'·'실적 예상'·'예측'·'~할 것이란 관측'·'2배 간다'·'5000 온다'·'추가 상승 가능성'·'상승 여력·여지'·'바닥은 어디인가 … 찍었는가'·
+ * '[위클리 증시]'·'관전 포인트'·'인하 점쳐'·'3000 돌파 임박'·'상승세 이어진다'·'금리 더 오른다'·'방향이 바뀐다'·'몸값 2700조 넘본다'·
+ * '조정 경고'·'수급 주목'·'향후 흐름'·'인상 불가피'·'수급 변수'·'변곡점'·'반도체 시험대'·'수급이 관건'·'반등 달렸다'·'1400원대 바라보는'·'추가 하락은 제한적'·
+ * '험난한 앞날'·'이익 눈높이'·'코스피지수 목표치'·'밴드 상단'·'상단 7764'
+ * ('~ㄹ 것'·'~ㄹ 수 있다'·'~ㄹ지'는 predicts·asksQuestion). '관측소'·'내주며'·'여지없이'·'상장 폐지 경고 받아'는 사실을 적은 말이라 둔다
  */
-const OUTLOOK_RE =
-  /(전망|주간|이번\s?주|다음\s?주|(?<![가-힣])[금차]주(?![가-힣])|내주(?=$|\s)|예상|예측|관측(?!소)|향방|체크\s?포인트|가능성|여력|여지(?!없)|(?:듯|간다|온다|는가)(?=$|[\s.,…·!'"”’\])]))/;
+const OUTLOOK_RE = new RegExp(
+  [
+    "전망|주간|위클리|관전\\s?포인트|(?<![가-힣])점[쳐친치]|임박|이어진다|이번\\s?주|다음\\s?주|(?<![가-힣])[금차]주(?![가-힣])|내주(?=$|\\s)",
+    "예상|예측|관측(?!소)|향방|향후|체크\\s?포인트|가능성|여력|여지(?!없)|불가피|변수|변곡점|시험대|관건|달렸다|바라보|제한적|앞날|눈높이|목표치|밴드\\s?[상하]단|[상하]단\\s?\\d",
+    "경고(?!\\s?(?:를\\s?)?(?:받|통지|통보|조치|수령|문구))|주목",
+    `(?:듯|간다|온다|는가)${B}`,
+    `(?:오른|내린|뛴|튄|빠진|떨어진|꺾인|바뀐|살아난|반등한|상승한|하락한|급등한|급락한|넘본|가른)다${B}`,
+  ].join("|"),
+);
 
 /** 한글 음절의 받침 번호 (0 = 받침 없음, 8 = ㄹ, 18 = ㅄ, 20 = ㅆ). 한글 음절이 아니면 -1 */
 const finalOf = (ch: string) => {
@@ -229,15 +312,22 @@ const finalOf = (ch: string) => {
   return c >= 0 && c < 11_172 ? c % 28 : -1;
 };
 /** 낱말 끝 (뒤에 한글·영문·숫자가 오지 않음) */
-const WORD_END = /^(?:$|[\s.,…·!'"”’\])~])/;
-/** 마디 끝 (제목 끝, 또는 말줄임·쉼표·느낌표·따옴표·닫는 괄호 앞) — 물음 끝 '~나'는 여기서만 본다 ('두 배나 뛰어'의 '배나'는 마디 끝이 아니다) */
-const CLAUSE_END = /^(?:$|\s*(?:…|\.{2,}|[,!'"”’\])·~]))/;
+const WORD_END = new RegExp(`^${B}`);
+/**
+ * 마디 끝 (제목 끝, 또는 말줄임(…·⋯·‥·..)·쉼표·느낌표·따옴표·괄호·말머리·세로줄 앞) — 물음 끝 '~나'는 여기서만 본다
+ * ('두 배나 뛰어'의 '배나'는 마디 끝이 아니다)
+ */
+const CLAUSE_END = /^(?:$|\s*(?:…|⋯|‥|\.{2,}|[,!'"”’\])·~|｜[【<(-]))/;
 /** 마디 끝이 '~나'여도 물음이 아닌 낱말 (수·지나감, 나라·회사·병 이름) */
-const NOT_QUESTION_NA = new Set(["하나", "지나", "차이나", "우크라이나", "아시아나", "코로나", "아르헨티나", "캐롤라이나", "바나나", "애리조나", "마리나", "안나", "한나"]);
+const NOT_QUESTION_NA = new Set(["하나", "지나", "안나", "한나"]);
+/** 끝이 '~나'인 이름 — 앞에 글자가 붙어도 이름이다 ('[올댓차이나]'·'[서학개미 안테나]'·'대한항공·아시아나') */
+const NA_NAMES = ["차이나", "우크라이나", "아시아나", "코로나", "아르헨티나", "캐롤라이나", "바나나", "애리조나", "마리나", "안테나"];
 /** 물음 끝 '~ㄴ가'를 만드는 앞 음절 ('바닥인가'·'괜찮은가'·'충분한가'·'어려운가'·'다른가'·'했던가') */
 const NGA_BEFORE = new Set(["인", "은", "는", "한", "운", "던", "된", "린", "른"]);
 /** '~ㄴ가'로 끝나도 이름씨인 낱말: 허가('예비인가'·'본인가'·'미인가' — 인터넷은행 인가 기사), 가격 제한('상한가'·'하한가') */
 const NGA_NOUN_RE = /(?:(?:예비|본|정식|최종|설립|영업|조건부|무|미|재)인가|[상하]한가)$/;
+/** 물음 낱말 ('대출·투자 어떻게 하나'·'韓증시 어디로'·'한은 추가 인상 언제'). '언제든'·'언제나'는 둔다 */
+const QUESTION_WORD_RE = /어떻게|어디로|어디까지|언제(?!든|나)|얼마나|무엇을/;
 /**
  * 물음표 없이 묻는 제목:
  *  - '~ㄹ까'·'~ㄹ지': '상승 이어갈까'·'지금 사도 될까'·'반등할까…'·'반등 성공할지 주목' ('반도체까지'·'매매일지'는 아니다)
@@ -245,14 +335,16 @@ const NGA_NOUN_RE = /(?:(?:예비|본|정식|최종|설립|영업|조건부|무|
  *  - '~ㄴ가'(앞에 낱말이 붙을 때): '코스피 바닥인가'·'거품인가'·'지금 살 때인가'·'괜찮은가' ('인가 취소'·'예비인가'·'원가'·'단가'는 아니다)
  *  - 낱말 끝 '~나': 과거형(받침 ㅆ·ㅄ) '바닥 찍었나'·'끝났나'·'대안 없나', '되나'·'오나' ('랠리 계속되나'·'반등 오나'·'지금 들어가도 되나'),
  *    '~가나'는 앞에 글자가 붙을 때만 ('이어가나'·'올라가나' — 나라 이름 '가나'는 아니다)
- *  - 마디 끝 '~나'는 모두: '랠리 멈추나'·'코스피 꺾이나'·'반도체 살아나나'·'상승세 이어지나'·'어디까지 오르나'·'코스피 3천 가나'
+ *  - 마디 끝 '~나'는 모두: '랠리 멈추나'·'코스피 꺾이나'·'반도체 살아나나'·'상승세 이어지나'·'어디까지 오르나'·'코스피 3천 가나'·'1400원대 올라서나 [1분 브리프]'
  *    ('하나'·'지나'와 나라·회사 이름은 아니다. '우리나라'·'가나 대통령'은 마디 끝이 아니다)
+ *  - 물음 낱말: '어떻게'·'어디로'·'언제'·'얼마나'
+ *  - 본문 끝 '~은·~는'(물음을 줄인 말): '향후 흐름은'·'정부 대책은'·'순매수 1위 종목은'·'전략은' — 본문(coreTitle) 끝에서만 본다
  */
 export function asksQuestion(title: string): boolean {
   for (const m of title.matchAll(/([가-힣])[까지](?![가-힣])/g)) if (finalOf(m[1]!) === 8 && m[0] !== "일지") return true;
-  if (/[가-힣](?:까|나)요(?=$|[\s.,…·!'"”’\])~])/.test(title)) return true;
-  for (const m of title.matchAll(/([가-힣]*)냐(?=$|[\s.,…·!'"”’\])~])/g)) if (m[1] !== "케") return true;
-  for (const m of title.matchAll(/([가-힣]+)([가-힣])가(?=$|[\s.,…·!'"”’\])~])/g)) if (NGA_BEFORE.has(m[2]!) && !NGA_NOUN_RE.test(m[0])) return true;
+  if (new RegExp(`[가-힣](?:까|나)요${B}`).test(title)) return true;
+  for (const m of title.matchAll(new RegExp(`([가-힣]*)냐${B}`, "g"))) if (m[1] !== "케") return true;
+  for (const m of title.matchAll(new RegExp(`([가-힣]+)([가-힣])가${B}`, "g"))) if (NGA_BEFORE.has(m[2]!) && !NGA_NOUN_RE.test(m[0])) return true;
   for (const m of title.matchAll(/([가-힣])나/g)) {
     const i = m.index!;
     if (!WORD_END.test(title.slice(i + 2))) continue;
@@ -263,16 +355,50 @@ export function asksQuestion(title: string): boolean {
   }
   // 마디 끝 '~나' (앞에 한글이 붙은 낱말만 — 홀로 쓴 '나'는 아니다)
   for (const m of title.matchAll(/([가-힣]*)나/g)) {
-    if (!m[1] || !CLAUSE_END.test(title.slice(m.index! + m[0].length)) || NOT_QUESTION_NA.has(m[0])) continue;
+    if (!m[1] || !CLAUSE_END.test(title.slice(m.index! + m[0].length)) || NOT_QUESTION_NA.has(m[0]) || NA_NAMES.some((n) => m[0].endsWith(n))) continue;
     return true;
+  }
+  return QUESTION_WORD_RE.test(title);
+}
+/** 본문 끝 '~은·~는'(물음을 줄인 말 — '향후 흐름은'·'정부 대책은'·'순매수 1위 종목은'). 본문(coreTitle)에만 쓴다 */
+const TOPIC_END_RE = /[가-힣][은는]$/;
+
+/** 마디 끝 '~ㄹ 때'(때 짚기 — '노려볼 때'·'쉬어갈 때다'·'버틸 때인가'). '30살 때부터'·'떨어질 때 산 개미'처럼 마디 안이면 둔다 */
+export function timingCall(title: string): boolean {
+  for (const m of title.matchAll(/([가-힣])\s?때(?:다|이다|입니다|인가|냐)?/g)) {
+    if (finalOf(m[1]!) !== 8) continue;
+    if (CLAUSE_END.test(title.slice(m.index! + m[0].length))) return true;
   }
   return false;
 }
 
-/** '~ㄹ 것' 예측·당위 ('랠리 계속될 것'·'"코스피 연말 3500 갈 것"'·'4000 시대 열릴 것이란'). '그것'·'이것'은 아니다 */
+/**
+ * 예측: '~ㄹ 것'('랠리 계속될 것'·'"코스피 연말 3500 갈 것"'·'4000 시대 열릴 것이란'), '~ㄹ 수 있다·~ㄹ 수도'('한국경제 흔들릴 수 있다').
+ * '그것'·'이것'은 아니다
+ */
 export function predicts(title: string): boolean {
-  for (const m of title.matchAll(/([가-힣])\s?것/g)) if (finalOf(m[1]!) === 8) return true;
+  for (const m of title.matchAll(/([가-힣])\s?(?:것|수\s?(?:있|도|밖에))/g)) if (finalOf(m[1]!) === 8) return true;
   return false;
+}
+
+/**
+ * 제목 본문: 끝에 붙은 언론사·출처·말머리를 뗀다 (' - 머니투데이'·' | 네이버 블로그'·' : 금융'·' By 알파경제 alphabiz'·' [1분 브리프]'·'(종합)').
+ * 마디 끝 모양('~나'·'~은') 검사가 꼬리표에 가려지지 않게 한다. 다 떼면 원래 제목
+ */
+export function coreTitle(title: string): string {
+  let t = title.trim();
+  for (let i = 0; i < 5; i++) {
+    const before = t;
+    t = t
+      .replace(/\s+By\s+.+$/, "")
+      .replace(/\s*[|｜]\s*[^|｜]*$/, "")
+      .replace(/\s+:\s+[^:]*$/, "")
+      .replace(/\s+-\s+[^-]+$/, "")
+      .replace(/\s*(?:\[[^\]]*\]|\([^)]*\)|<[^>]*>|【[^】]*】)\s*$/, "")
+      .trim();
+    if (t === before) break;
+  }
+  return t || title.trim();
 }
 /** 통신사 기사를 먼저 */
 const WIRE_OUTLETS = new Set(["연합뉴스", "연합인포맥스", "뉴스1", "뉴시스"]);
@@ -652,7 +778,8 @@ export function benchmarkOf(market: SummaryMarket, h: HoldingInput, q: QuoteInpu
  *  - 시세가 없거나 시세 날짜가 기준 거래일과 다르면(거래정지·지연·모르는 코드·시세 조회 실패) 빼고 '시세 없음'으로 센다
  *    (미국 비교 지수는 시세의 거래소로 정하므로, 시세가 없는 종목을 '비교 지수 없음'으로 세지 않게 시세부터 본다)
  *  - 레버리지·인버스, 채권·금리형 ETF, 한국 상장 해외 지수·원자재 ETF(코스닥 추종 ETF 는 코스닥과 비교), 비교 지수를 정하지 못한 종목은 빼고 개수만
- *  - 정렬: 차이 크기 순, 같으면 이름 순. 보유가 0 이면 null
+ *  - 정렬(확정 목업): 묶음마다 차이를 부호 그대로 큰 순 — 높음은 가장 높은 것부터, 비슷은 +에서 −로(+0.82 … −0.84), 낮음은 0에 가까운 것부터(−2.00 … −3.81).
+ *    같으면 이름 순. 한 줄 문구 괄호에는 묶음에서 차이가 가장 큰 종목을 따로 고른다(widestOf). 보유가 0 이면 null
  */
 export function compareHoldings(input: {
   market: SummaryMarket;
@@ -692,7 +819,7 @@ export function compareHoldings(input: {
     const bp = diffBp(q.changeRate, idx.changeRate);
     rows.push({ code: h.code, name: h.name, changeRate: q.changeRate, benchmark: bench, diff: bp / 100, group: classify(bp) });
   }
-  const order = (a: CompareRow, b: CompareRow) => Math.abs(Math.round(b.diff * 100)) - Math.abs(Math.round(a.diff * 100)) || a.name.localeCompare(b.name, "ko");
+  const order = (a: CompareRow, b: CompareRow) => Math.round(b.diff * 100) - Math.round(a.diff * 100) || a.name.localeCompare(b.name, "ko");
   const codes = input.market === "US" ? US_INDEX_CODES : KR_INDEX_CODES;
   return {
     market: input.market,
@@ -729,9 +856,31 @@ export function titleDays(title: string): number[] {
   return out;
 }
 
-/** 걸러야 할 제목인지 (물음표·물음표 없는 물음·권유 낱말·명령형 끝·전망형 낱말·'~ㄹ 것' 예측) */
+export type BlockReason = "물음표" | "의견" | "광고" | "인용" | "물음" | "권유" | "당위" | "명령" | "전망" | "예측";
+
+/**
+ * 제목을 거르는 까닭 (없으면 null): 물음표 · 의견 난 · 광고 · 인용(따옴표 속 남의 말) · 물음(물음표 없는 물음) · 권유(낱말·때 짚기) · 당위 끝 · 명령형 끝 · 전망 낱말 · 예측.
+ * 고치지 않고 통째로 뺀다 — 언론사 제목 원문만 보이므로 걸러낼 수 없는 제목은 싣지 않는다. 끝 모양 검사는 제목 전체와 본문(coreTitle) 둘 다 본다
+ */
+export function blockReason(title: string): BlockReason | null {
+  const core = coreTitle(title);
+  const either = (f: (t: string) => boolean) => f(title) || (core !== title && f(core));
+  if (QUESTION_RE.test(title)) return "물음표";
+  if (OPINION_RE.test(title)) return "의견";
+  if (SPAM_RE.test(title)) return "광고";
+  if (quotedSpeech(title)) return "인용";
+  if (either(asksQuestion) || TOPIC_END_RE.test(core)) return "물음";
+  if (ADVICE_RE.test(title) || either(timingCall)) return "권유";
+  if (either(ought)) return "당위";
+  if (either(commands)) return "명령";
+  if (OUTLOOK_RE.test(title)) return "전망";
+  if (predicts(title)) return "예측";
+  return null;
+}
+
+/** 걸러야 할 제목인지 (blockReason 이 있으면) */
 export function blockedTitle(title: string): boolean {
-  return QUESTION_RE.test(title) || asksQuestion(title) || ADVICE_RE.test(title) || commands(title) || OUTLOOK_RE.test(title) || predicts(title);
+  return blockReason(title) !== null;
 }
 
 /** 원문 링크로 쓸 수 있는 주소인지 (http·https 만 — 다른 꼴(javascript:·intent: 등)은 저장하지도 열지도 않는다) */
@@ -903,6 +1052,16 @@ export function sectorText(d: Pick<MarketSummaryData, "sectors" | "holiday" | "b
   return `${basisPrefix(d)}강한 업종 ${s.strong.map(sectorItem).join(" · ")} / 약한 업종 ${s.weak.map(sectorItem).join(" · ")}${s.basis === "etf" ? " (섹터 ETF 기준)" : ""}`;
 }
 
+/** 묶음에서 지수와 차이가 가장 큰 종목 (한 줄 문구 괄호): 높음은 가장 큰 +, 낮음은 가장 큰 − — 표 순서와 따로 고른다. 같으면 이름 순 앞 */
+export function widestOf(rows: readonly CompareRow[]): CompareRow | undefined {
+  let best: CompareRow | undefined;
+  for (const r of rows) {
+    const d = best ? Math.abs(Math.round(r.diff * 100)) - Math.abs(Math.round(best.diff * 100)) : 1;
+    if (d > 0 || (d === 0 && r.name.localeCompare(best!.name, "ko") < 0)) best = r;
+  }
+  return best;
+}
+
 /**
  * 내 종목 줄: '내 미국 12종목 · 지수보다 높음 2 (마이크로소프트 +3.66%, 지수와 차이 +3.18%p) · 낮음 3 (메타 -3.33%, 차이 -3.81%p) · 비슷 7'.
  * 모두 비슷하면 '내 미국 12종목 모두 지수와 ±1%p 안'. 비교한 종목이 없으면 null
@@ -919,8 +1078,8 @@ export function holdingsText(d: Pick<MarketSummaryData, "holdings" | "holiday" |
     first = false;
     return s;
   };
-  const high = `지수보다 높음 ${h.high.length}${paren(h.high[0])}`;
-  const low = `낮음 ${h.low.length}${paren(h.low[0])}`;
+  const high = `지수보다 높음 ${h.high.length}${paren(widestOf(h.high))}`;
+  const low = `낮음 ${h.low.length}${paren(widestOf(h.low))}`;
   return `${basisPrefix(d)}${head} · ${high} · ${low} · 비슷 ${h.similar.length}`;
 }
 

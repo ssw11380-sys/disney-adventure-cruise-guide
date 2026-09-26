@@ -359,7 +359,7 @@ describe("상세 화면 /briefings/market/<id>", () => {
     expect(kr.some((t) => t.includes("9/23 고시값 (한국 휴장으로 갱신 없음)"))).toBe(true);
   });
 
-  it("주요 지수 표에 출처 시각: 지수 이름 아래 '뉴욕 17:15'(나스닥)·'뉴욕 16:39'(S&P500), 한국은 '서울 20:15' — 화면 읽기에도", () => {
+  it("주요 지수 표 지수 이름 아래: 미국은 출처 시각 '뉴욕 17:15'(나스닥)·'뉴욕 16:39'(S&P500), 한국은 출처 시각(20:15) 대신 '15:30 마감' — 화면 읽기에도", () => {
     h.flags = { marketSummary: true };
     const r = render(<MarketSummaryScreen />);
     const nas = r.all().find((n) => n.type === "View" && String(n.props.accessibilityLabel ?? "").startsWith("나스닥, "))!;
@@ -370,7 +370,18 @@ describe("상세 화면 /briefings/market/<id>", () => {
     cleanupRenders();
     h.detail = item(7, shared.cases[1]!.data);
     h.now = Date.parse("2026-09-23T16:05:00+09:00");
-    expect(texts(render(<MarketSummaryScreen />))).toContain("서울 20:15");
+    const kr = render(<MarketSummaryScreen />);
+    expect(texts(kr)).toContain("15:30 마감");
+    expect(texts(kr).some((t) => t.includes("20:15"))).toBe(false); // 애프터마켓 값으로 오해하지 않게 출처 갱신 시각은 보이지 않는다
+    expect(texts(kr).some((t) => t.includes("15:30 장 마감 확정값 · 지수 이름 아래는 그 값의 마감 시각"))).toBe(true);
+    const kospi = kr.all().find((n) => n.type === "View" && String(n.props.accessibilityLabel ?? "").startsWith("코스피, "))!;
+    expect(kospi.props.accessibilityLabel).toMatch(/, 15:30 마감 값$/);
+    // 장중 요약(수능일 16:00 등)은 값이 장중 값이라 출처 시각 그대로
+    cleanupRenders();
+    h.detail = item(7, { ...shared.cases[1]!.data, phase: "intraday", closeTime: "16:30" });
+    const live = texts(render(<MarketSummaryScreen />));
+    expect(live).toContain("서울 20:15");
+    expect(live).not.toContain("16:30 마감");
   });
 
   it("보유 종목 표 아래 안내: 시세 없음은 까닭을 단정하지 않고('조회 실패 등'), 금현물 같은 원자재 ETF 는 '해외 지수·원자재 ETF'", () => {
@@ -468,6 +479,18 @@ describe("상세 화면 — 3차 검토 보정 (낱말 줄바꿈·화면 읽기�
     // 묶음 머리는 따로 적은 문장으로 ('+1.00%p' 를 '높음'으로 두 번 읽지 않게)
     expect(labels(r)).toContain("지수보다 높음, 차이 1%포인트 이상, 2종목");
     expect(labels(r)).toContain("비슷, 차이 플러스마이너스 1%포인트 안, 7종목");
+  });
+
+  it("보유 종목 표의 줄 순서는 확정 목업대로 묶음마다 차이를 부호 그대로 큰 순 (높음 +3.18 → +1.05, 비슷 +0.82 … -0.84, 낮음 -2.00 … -3.81)", () => {
+    h.flags = { marketSummary: true };
+    const r = render(<MarketSummaryScreen />);
+    const rows = r
+      .all()
+      .filter((n) => n.type === "View" && n.props.accessible === true && / 비교 지수 /.test(String(n.props.accessibilityLabel ?? "")))
+      .map((n) => String(n.props.accessibilityLabel).split(",")[0]);
+    expect(rows).toEqual(["마이크로소프트", "애플", "JP모건", "브로드컴", "알파벳A", "엔비디아", "리얼티인컴", "아마존", "코카콜라", "팔란티어", "테슬라", "메타"]);
+    // 한 줄 괄호는 표 첫 줄이 아니라 묶음에서 차이가 가장 큰 종목 (낮음 = 메타)
+    expect(texts(r).join(" ")).toContain("낮음 3 (메타 -3.33%, 차이 -3.81%p)");
   });
 
   it("상세의 안내 문단은 낱말 단위로 줄바꿈하고 한 문장으로 읽힌다 (덩어리마다 따로 읽히지 않게)", () => {

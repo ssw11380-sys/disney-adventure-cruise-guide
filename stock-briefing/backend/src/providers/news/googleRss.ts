@@ -34,7 +34,8 @@ export function parseGoogleRss(xml: string): NewsItem[] {
     const rawTitle = stripHtml(unwrapCdata(tag(body, "title")));
     const link = unwrapCdata(tag(body, "link")).trim();
     const pub = unwrapCdata(tag(body, "pubDate")).trim();
-    const sourceTag = unwrapCdata(tag(body, "source")).trim();
+    // 언론사 이름도 제목처럼 엔티티를 푼다 ('S&amp;P Global'·'매일경제 &amp; MK' 같은 글이 언론사 칸에 그대로 보이지 않게)
+    const sourceTag = stripHtml(unwrapCdata(tag(body, "source")));
     let title = rawTitle;
     let source: string | null = sourceTag || null;
     const dash = rawTitle.lastIndexOf(" - ");

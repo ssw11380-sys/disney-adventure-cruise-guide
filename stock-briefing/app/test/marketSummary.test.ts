@@ -36,6 +36,7 @@ import {
   summaryLines,
   textEm,
   titleText,
+  widestOf,
   type SummaryLine,
 } from "@/lib/marketSummary";
 import { KR_HOLIDAYS } from "@/lib/marketTime";
@@ -256,11 +257,23 @@ describe("카드 지수 칸 배치·줄바꿈 묶음·출처 시각 (요구 검�
     for (const u of ["javascript:alert(1)", "intent://x#Intent;end", "file:///etc/passwd", "", "https://a b", null, undefined]) expect(newsLink(u), String(u)).toBeNull();
   });
 
-  it("지수 출처 시각: 저장한 현지 시각 그대로 '뉴욕 17:15'·'서울 20:15', 모르면 없음", () => {
-    expect(indexSourceTime(MORNING.indices[0]!, "US")).toBe("뉴욕 17:15");
-    expect(indexSourceTime(MORNING.indices[1]!, "US")).toBe("뉴욕 16:39");
-    expect(indexSourceTime(AFTERNOON.indices[0]!, "KR")).toBe("서울 20:15");
-    expect(indexSourceTime({ asOf: null }, "US")).toBeNull();
+  it("한 줄 괄호 종목(widestOf)은 묶음에서 차이가 가장 큰 것 — 서버가 묶음 안을 부호 그대로 큰 순(낮음은 0에 가까운 것부터)으로 줘도, 같으면 이름 순 앞", () => {
+    expect(MORNING.holdings!.low.map((r) => r.name)).toEqual(["팔란티어", "테슬라", "메타"]);
+    expect(widestOf(MORNING.holdings!.low)?.name).toBe("메타");
+    expect(widestOf(MORNING.holdings!.high)?.name).toBe("마이크로소프트");
+    const row = (name: string, diff: number) => ({ ...MORNING.holdings!.low[0]!, name, diff });
+    expect(widestOf([row("나", -2.5), row("가", -2.5), row("다", -1.5)])?.name).toBe("가");
+    expect(widestOf([])).toBeUndefined();
+  });
+
+  it("지수 이름 아래 시각: 미국은 저장한 현지 출처 시각 그대로 '뉴욕 17:15', 한국은 마감 '15:30 마감'(장중 요약이면 출처 시각), 모르면 없음", () => {
+    expect(indexSourceTime(MORNING.indices[0]!, MORNING)).toBe("뉴욕 17:15");
+    expect(indexSourceTime(MORNING.indices[1]!, MORNING)).toBe("뉴욕 16:39");
+    expect(AFTERNOON.indices[0]!.asOf).toMatch(/T20:15/); // 네이버가 값을 다시 적는 시각 — 보이지 않는다
+    expect(indexSourceTime(AFTERNOON.indices[0]!, AFTERNOON)).toBe("15:30 마감");
+    expect(indexSourceTime(AFTERNOON.indices[0]!, { ...AFTERNOON, closeTime: "16:30" })).toBe("16:30 마감"); // 수능일 (마감 뒤 요약)
+    expect(indexSourceTime({ asOf: "2026-11-19T16:00:05+09:00" }, { market: "KR", phase: "intraday", closeTime: "16:30" })).toBe("서울 16:00");
+    expect(indexSourceTime({ asOf: null }, MORNING)).toBeNull();
     expect(indexValueLine(AFTERNOON.indices[0]!, "KR")).toMatch(/^7,080\.92 · [+-]/);
     expect(indexValueLine(MORNING.indices[0]!, "US")).toBe("27,068.72");
   });

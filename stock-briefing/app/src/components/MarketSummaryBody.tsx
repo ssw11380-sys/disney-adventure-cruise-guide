@@ -329,7 +329,8 @@ function CompareLine({ r, mode, scale }: { r: CompareRow; mode: "full" | "compac
 const signed = (v: number) => `${v > 0 ? "+" : v < 0 ? "-" : ""}${indexValueText(Math.abs(v))}`;
 
 /**
- * 주요 지수: 종가 · 전일 대비 · 등락률 · 출처 시각 (지수 이름 아래 줄 '뉴욕 17:15' — 출처가 값을 마지막으로 고친 현지 시각이라 최종값인지 볼 수 있게).
+ * 주요 지수: 종가 · 전일 대비 · 등락률 · 시각 (지수 이름 아래 줄 — 미국은 출처 시각 '뉴욕 17:15'(출처가 값을 마지막으로 고친 현지 시각이라 최종값인지 볼 수 있게),
+ * 한국은 '15:30 마감'(네이버가 값을 다시 적는 20:15 무렵을 보이면 애프터마켓 값으로 오해할 수 있어서), 장중 요약이면 '서울 16:00').
  * 칸이 좁거나 글자가 크면(지수 이름 칸이 indexNameMinW 보다 좁아짐) 전일 대비를 종가 아래 줄로 내린 3칸 표 (indicesTableMode)
  */
 function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
@@ -343,7 +344,7 @@ function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
       : us
         ? `네이버 증권 · 뉴욕 장 마감 뒤 최종값${d.phase === "prelim" ? "이 오기 전 값" : ""}`
         : `네이버 증권 · ${d.closeTime} 장 마감 확정값`
-  } · 지수 이름 아래는 출처 시각(현지)${us ? " — 네이버 최종값은 뉴욕 17:15 무렵" : ""}`;
+  } · 지수 이름 아래는 ${us ? "출처 시각(현지) — 네이버 최종값은 뉴욕 17:15 무렵" : d.phase === "intraday" ? "출처 시각(현지)" : "그 값의 마감 시각"}`;
   const wValue = colW(MS.colValue, fit.scale);
   const wChange = colW(MS.colChange, fit.scale);
   const wRate = colW(MS.colRate, fit.scale);
@@ -372,9 +373,9 @@ function IndicesCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
             ) : (
               <Text style={{ color: t.muted }}>—</Text>
             );
-          const src = i.changeRate !== null ? indexSourceTime(i, d.market) : null;
+          const src = i.changeRate !== null ? indexSourceTime(i, d) : null;
           return (
-            <View key={i.code} accessible accessibilityLabel={sentence([i.name, i.value !== null ? indexValueText(i.value) : "받지 못함", speakRate(i.changeRate), src ? `출처 시각 ${src}` : null])} style={[styles.tr, { borderBottomColor: t.line }]}>
+            <View key={i.code} accessible accessibilityLabel={sentence([i.name, i.value !== null ? indexValueText(i.value) : "받지 못함", speakRate(i.changeRate), src ? (src.endsWith("마감") ? `${src} 값` : `출처 시각 ${src}`) : null])} style={[styles.tr, { borderBottomColor: t.line }]}>
               <View style={styles.colName}>
                 <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "600" }} maxFontSizeMultiplier={fontCap.row}>
                   {i.name}

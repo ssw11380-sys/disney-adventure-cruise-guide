@@ -262,7 +262,20 @@ export function holdingsSegs(d: Pick<MarketSummaryData, "holdings" | "holiday" |
     first = false;
     return [{ text: ` (${r.name} ` }, { text: rateText(r.changeRate), tone: r.changeRate }, { text: `, ${label} ${ppText(r.diff)})` }];
   };
-  return [...basisPrefix(d), { text: `${head} · 지수보다 높음 ${h.high.length}` }, ...paren(h.high[0]), { text: ` · 낮음 ${h.low.length}` }, ...paren(h.low[0]), { text: ` · 비슷 ${h.similar.length}` }];
+  return [...basisPrefix(d), { text: `${head} · 지수보다 높음 ${h.high.length}` }, ...paren(widestOf(h.high)), { text: ` · 낮음 ${h.low.length}` }, ...paren(widestOf(h.low)), { text: ` · 비슷 ${h.similar.length}` }];
+}
+
+/**
+ * 묶음에서 지수와 차이가 가장 큰 종목 (한 줄 문구 괄호, 서버 widestOf 와 같은 규칙): 높음은 가장 큰 +, 낮음은 가장 큰 −, 같으면 이름 순 앞.
+ * 서버는 묶음 안을 부호 그대로 큰 순(낮음은 0에 가까운 것부터)으로 주므로 첫 줄이 아니라 따로 고른다
+ */
+export function widestOf(rows: readonly CompareRow[]): CompareRow | undefined {
+  let best: CompareRow | undefined;
+  for (const r of rows) {
+    const d = best ? Math.abs(Math.round(r.diff * 100)) - Math.abs(Math.round(best.diff * 100)) : 1;
+    if (d > 0 || (d === 0 && r.name.localeCompare(best!.name, "ko") < 0)) best = r;
+  }
+  return best;
 }
 
 /** 넓은 창 목록 줄의 한 줄: '내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7' (괄호 없이) */
@@ -548,10 +561,16 @@ export function indexCellCols(d: Pick<MarketSummaryData, "indices" | "market">, 
   return 1;
 }
 
-/** 지수 출처 시각 '뉴욕 17:15' · '서울 20:15' (출처가 값을 마지막으로 고친 현지 시각 — 저장한 시각 문자열 그대로). 모르면 null */
-export function indexSourceTime(i: Pick<SummaryIndex, "asOf">, market: SummaryMarket): string | null {
+/**
+ * 지수 이름 아래 시각: 미국은 출처 시각 '뉴욕 17:15'·'뉴욕 16:39'(출처가 값을 마지막으로 고친 현지 시각 — 저장한 시각 문자열 그대로, 최종값인지 볼 수 있게),
+ * 한국은 그 값의 마감 '15:30 마감'(수능일 '16:30 마감'), 장중 요약이면 출처 시각 '서울 16:00'. 모르면 null
+ */
+export function indexSourceTime(i: Pick<SummaryIndex, "asOf">, d: Pick<MarketSummaryData, "market" | "phase" | "closeTime">): string | null {
+  // 한국 지수는 15:30(수능일 16:30) 마감에 확정된 값인데 네이버가 값을 다시 적는 시각은 20:15 무렵이라, 출처 시각을 보이면
+  // 애프터마켓 값으로 오해할 수 있다 — 장중 요약이 아니면 그 값의 마감 시각을 보인다 (미국은 최종값 시각이 뜻이 있어 그대로)
+  if (d.market === "KR" && d.phase !== "intraday") return `${d.closeTime} 마감`;
   const m = /T(\d{2}):(\d{2})/.exec(i.asOf ?? "");
-  return m ? `${market === "US" ? "뉴욕" : "서울"} ${m[1]}:${m[2]}` : null;
+  return m ? `${d.market === "US" ? "뉴욕" : "서울"} ${m[1]}:${m[2]}` : null;
 }
 
 // ── 상세 표 배치 ──────────────────────────────────────────────

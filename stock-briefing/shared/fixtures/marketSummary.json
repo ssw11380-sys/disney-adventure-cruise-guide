@@ -194,18 +194,6 @@
      ],
      "similar": [
       {
-       "code": "KO",
-       "name": "코카콜라",
-       "changeRate": -0.33,
-       "benchmark": {
-        "code": "SPX",
-        "name": "S&P500",
-        "changeRate": 0.51
-       },
-       "diff": -0.84,
-       "group": "similar"
-      },
-      {
        "code": "JPM",
        "name": "JP모건",
        "changeRate": 1.33,
@@ -215,42 +203,6 @@
         "changeRate": 0.51
        },
        "diff": 0.82,
-       "group": "similar"
-      },
-      {
-       "code": "AMZN",
-       "name": "아마존",
-       "changeRate": 0.12,
-       "benchmark": {
-        "code": "NASDAQ",
-        "name": "나스닥",
-        "changeRate": 0.48
-       },
-       "diff": -0.36,
-       "group": "similar"
-      },
-      {
-       "code": "O",
-       "name": "리얼티인컴",
-       "changeRate": 0.23,
-       "benchmark": {
-        "code": "SPX",
-        "name": "S&P500",
-        "changeRate": 0.51
-       },
-       "diff": -0.28,
-       "group": "similar"
-      },
-      {
-       "code": "NVDA",
-       "name": "엔비디아",
-       "changeRate": 0.22,
-       "benchmark": {
-        "code": "NASDAQ",
-        "name": "나스닥",
-        "changeRate": 0.48
-       },
-       "diff": -0.26,
        "group": "similar"
       },
       {
@@ -276,19 +228,67 @@
        },
        "diff": -0.02,
        "group": "similar"
-      }
-     ],
-     "low": [
+      },
       {
-       "code": "META",
-       "name": "메타",
-       "changeRate": -3.33,
+       "code": "NVDA",
+       "name": "엔비디아",
+       "changeRate": 0.22,
        "benchmark": {
         "code": "NASDAQ",
         "name": "나스닥",
         "changeRate": 0.48
        },
-       "diff": -3.81,
+       "diff": -0.26,
+       "group": "similar"
+      },
+      {
+       "code": "O",
+       "name": "리얼티인컴",
+       "changeRate": 0.23,
+       "benchmark": {
+        "code": "SPX",
+        "name": "S&P500",
+        "changeRate": 0.51
+       },
+       "diff": -0.28,
+       "group": "similar"
+      },
+      {
+       "code": "AMZN",
+       "name": "아마존",
+       "changeRate": 0.12,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": -0.36,
+       "group": "similar"
+      },
+      {
+       "code": "KO",
+       "name": "코카콜라",
+       "changeRate": -0.33,
+       "benchmark": {
+        "code": "SPX",
+        "name": "S&P500",
+        "changeRate": 0.51
+       },
+       "diff": -0.84,
+       "group": "similar"
+      }
+     ],
+     "low": [
+      {
+       "code": "PLTR",
+       "name": "팔란티어",
+       "changeRate": -1.52,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": -2,
        "group": "low"
       },
       {
@@ -304,15 +304,15 @@
        "group": "low"
       },
       {
-       "code": "PLTR",
-       "name": "팔란티어",
-       "changeRate": -1.52,
+       "code": "META",
+       "name": "메타",
+       "changeRate": -3.33,
        "benchmark": {
         "code": "NASDAQ",
         "name": "나스닥",
         "changeRate": 0.48
        },
-       "diff": -2,
+       "diff": -3.81,
        "group": "low"
       }
      ],
@@ -565,18 +565,6 @@
      ],
      "low": [
       {
-       "code": "035420",
-       "name": "NAVER",
-       "changeRate": -2.49,
-       "benchmark": {
-        "code": "KOSPI",
-        "name": "코스피",
-        "changeRate": 0.9
-       },
-       "diff": -3.39,
-       "group": "low"
-      },
-      {
        "code": "035720",
        "name": "카카오",
        "changeRate": -1.02,
@@ -586,6 +574,18 @@
         "changeRate": 0.9
        },
        "diff": -1.92,
+       "group": "low"
+      },
+      {
+       "code": "035420",
+       "name": "NAVER",
+       "changeRate": -2.49,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": -3.39,
        "group": "low"
       }
      ],
@@ -865,18 +865,6 @@
      ],
      "low": [
       {
-       "code": "035420",
-       "name": "NAVER",
-       "changeRate": -2.49,
-       "benchmark": {
-        "code": "KOSPI",
-        "name": "코스피",
-        "changeRate": 0.9
-       },
-       "diff": -3.39,
-       "group": "low"
-      },
-      {
        "code": "035720",
        "name": "카카오",
        "changeRate": -1.02,
@@ -886,6 +874,18 @@
         "changeRate": 0.9
        },
        "diff": -1.92,
+       "group": "low"
+      },
+      {
+       "code": "035420",
+       "name": "NAVER",
+       "changeRate": -2.49,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": -3.39,
        "group": "low"
       }
      ],
