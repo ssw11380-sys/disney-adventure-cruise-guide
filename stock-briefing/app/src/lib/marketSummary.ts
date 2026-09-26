@@ -298,9 +298,17 @@ export function widestOf(rows: readonly CompareRow[]): CompareRow | undefined {
 /** 넓은 창 목록 줄의 한 줄: '내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7' (괄호 없이) */
 export function holdingsShort(h: HoldingsCompare | null): string | null {
   if (!h || h.compared === 0) return null;
-  const head = `내 ${marketWord(h.market)} ${h.compared}종목`;
-  if (!h.high.length && !h.low.length) return `${head} 모두 지수와 ±${(SIMILAR_BAND_BP / 100).toFixed(0)}%p 안`;
-  return `${head} · 지수보다 높음 ${h.high.length} · 낮음 ${h.low.length} · 비슷 ${h.similar.length}`;
+  return holdingsCountText(h.market, { compared: h.compared, high: h.high.length, low: h.low.length, similar: h.similar.length });
+}
+
+/**
+ * 개수만으로 만든 내 종목 한 줄 (넓은 창 목록 줄·브리핑 위젯 둘째 줄이 같은 글): '내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7',
+ * 모두 비슷하면 '내 미국 12종목 모두 지수와 ±1%p 안'. 개수는 서버가 ±1.00%p 로 나눈 것 그대로
+ */
+export function holdingsCountText(market: SummaryMarket, h: { compared: number; high: number; low: number; similar: number }): string {
+  const head = `내 ${marketWord(market)} ${h.compared}종목`;
+  if (!h.high && !h.low) return `${head} 모두 지수와 ±${(SIMILAR_BAND_BP / 100).toFixed(0)}%p 안`;
+  return `${head} · 지수보다 높음 ${h.high} · 낮음 ${h.low} · 비슷 ${h.similar}`;
 }
 
 /** 상세 보조 줄: '내 미국 12종목: 상승 8 · 하락 4 / 나스닥 +0.48% · S&P500 +0.51%' */

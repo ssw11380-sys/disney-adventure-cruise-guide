@@ -49,6 +49,32 @@ export interface WidgetBriefing {
   createdAt: string;
 }
 
+/**
+ * 브리핑 위젯 첫 줄 — 가장 최근 시장 요약의 숫자 (서버 widgetPayload.ts 의 WidgetSummary 와 같은 모양, 플래그 marketSummary).
+ * 새 앱이 &ms=1 로 물을 때만, 서버 플래그가 켜져 있고 성공한 요약이 있을 때만 온다. 문구('밤사이 미국'·'오늘 한국'·'9/25 미국')는 그릴 때 보는 날짜로 만든다
+ * (widgets/summary.ts — 저장한 문구가 아니다). 예전 서버·끔·요약 없음이면 없음 → 브리핑 위젯은 지금 그림 그대로
+ */
+export interface WidgetSummary {
+  /** 요약 id (첫 줄을 누르면 상세 /briefings/market/<id>) */
+  id: number;
+  /** 요약 날짜 (한국) */
+  date: string;
+  session: "morning" | "afternoon";
+  market: "US" | "KR";
+  /** 이 세션이 다루는 거래일 (휴장이면 그 휴장일) */
+  marketDate: string;
+  /** 숫자가 속한 거래일 (휴장이면 직전 거래일) */
+  basisDate: string;
+  holiday: { date: string; name: string | null } | null;
+  phase: "final" | "intraday" | "prelim";
+  /** 만든 시각 (서울 ISO) */
+  asOf: string;
+  /** 요약의 지수 (순서 그대로). 받지 못한 지수는 changeRate null */
+  indices: { code: string; name: string; changeRate: number | null; date: string | null }[];
+  /** 내 보유 종목과 지수 — 개수만. 비교한 종목이 없으면 null */
+  holdings: { compared: number; high: number; low: number; similar: number } | null;
+}
+
 /** 잔고 위젯 지수 줄 한 항목 (서버 지수 띠와 같은 값·같은 stale 규칙). 예전 서버에는 없음 */
 export interface WidgetIndex {
   code: string;
@@ -79,9 +105,11 @@ export interface WidgetPayload {
   accountIds?: number[];
   /** 브리핑 시간·최신 브리핑 실패 수 (BH-68, &ui=2 로 물은 새 앱에만) */
   brief?: WidgetBrief;
+  /** 브리핑 위젯 첫 줄 — 가장 최근 시장 요약 (&ms=1 로 물은 새 앱에만, 서버 플래그 marketSummary 가 켜져 있을 때만) */
+  ms?: WidgetSummary;
 }
 
-/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit) */
+/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit·marketSummary) */
 export interface WidgetFeatures {
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
@@ -102,6 +130,11 @@ export interface WidgetFeatures {
    * 위젯 크기 진단 기록(sizeLog.ts)도 켜져 있을 때만 적는다. 켜져 있을 때만 true 칸이 있다 (fallback false — 꺼짐·모름은 예전 그림 그대로)
    */
   foldFit?: boolean;
+  /**
+   * 브리핑 위젯 첫 줄 — 시장 전체 요약 (marketSummary). 켜져 있을 때만 true 칸이 있다 (fallback false — 꺼짐·모름·예전 서버는 칸이 없어
+   * 예전에 적어 둔 값·예전 모양과 같고, 브리핑 위젯은 지금 그림 그대로). 서버는 &ms=1 로 물은 새 앱의 features 에만 이 키를 넣는다
+   */
+  marketSummary?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -116,6 +149,7 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     polish: featureOn(flags, "widgetPolish", false),
     ...(featureOn(flags, "widgetExtended", false) ? { extended: true } : {}),
     ...(featureOn(flags, "widgetFoldFit", false) ? { foldFit: true } : {}),
+    ...(featureOn(flags, "marketSummary", false) ? { marketSummary: true } : {}),
   };
 }
 
@@ -183,6 +217,39 @@ export function cleanBrief(b: unknown): WidgetBrief | null {
   return { morning: time(v.morning), afternoon: time(v.afternoon), weekdaysOnly: v.weekdaysOnly, failed: v.failed as number };
 }
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const isDate = (v: unknown): v is string => typeof v === "string" && DATE.test(v);
+
+/**
+ * 모양이 맞는 브리핑 위젯 첫 줄만 (예전·다른 서버의 이상한 값은 버린다 → 첫 줄 없음). 지수는 이름과 유한한 등락률(또는 null)이 있는 것만 남기고,
+ * 등락률이 있는 지수가 하나도 없으면 null. 내 종목 개수가 이상하면 그 둘째 줄만 뺀다
+ */
+export function cleanSummary(v: unknown): WidgetSummary | null {
+  if (!v || typeof v !== "object") return null;
+  const s = v as Partial<WidgetSummary>;
+  if (!Number.isInteger(s.id) || (s.id as number) <= 0 || !isDate(s.date) || !isDate(s.marketDate) || !isDate(s.basisDate) || typeof s.asOf !== "string") return null;
+  if (s.session !== "morning" && s.session !== "afternoon") return null;
+  if (s.market !== "US" && s.market !== "KR") return null;
+  if (s.phase !== "final" && s.phase !== "intraday" && s.phase !== "prelim") return null;
+  const h = s.holiday;
+  const holiday = h && typeof h === "object" && isDate(h.date) ? { date: h.date, name: typeof h.name === "string" && h.name.trim() ? h.name : null } : null;
+  if (h && !holiday) return null;
+  const indices = (Array.isArray(s.indices) ? s.indices : []).flatMap((i): WidgetSummary["indices"] => {
+    if (!i || typeof i !== "object" || typeof i.code !== "string" || typeof i.name !== "string" || !i.name) return [];
+    const rate = typeof i.changeRate === "number" && Number.isFinite(i.changeRate) ? i.changeRate : null;
+    return [{ code: i.code, name: i.name, changeRate: rate, date: isDate(i.date) ? i.date : null }];
+  });
+  if (!indices.some((i) => i.changeRate !== null)) return null;
+  const n = (x: unknown) => (Number.isInteger(x) && (x as number) >= 0 ? (x as number) : null);
+  const hd = s.holdings;
+  const counts = hd && typeof hd === "object" ? { compared: n(hd.compared), high: n(hd.high), low: n(hd.low), similar: n(hd.similar) } : null;
+  const holdings =
+    counts && counts.compared !== null && counts.compared > 0 && counts.high !== null && counts.low !== null && counts.similar !== null && counts.high + counts.low + counts.similar === counts.compared
+      ? { compared: counts.compared, high: counts.high, low: counts.low, similar: counts.similar }
+      : null;
+  return { id: s.id as number, date: s.date, session: s.session, market: s.market, marketDate: s.marketDate, basisDate: s.basisDate, holiday, phase: s.phase, asOf: s.asOf, indices, holdings };
+}
+
 const rate = (profit: number, cost: number) => (cost > 0 ? Math.round((profit / cost) * 10000) / 100 : 0);
 
 export function fromPayload(p: WidgetPayload): {
@@ -193,6 +260,8 @@ export function fromPayload(p: WidgetPayload): {
   board: WidgetIndex[] | null;
   features: WidgetFeatures;
   brief: WidgetBrief | null;
+  /** 브리핑 위젯 첫 줄 (시장 요약). 없거나 모양이 다르면 칸이 없다 */
+  summary?: WidgetSummary;
 } {
   const stocks = p.stocks.map((s): RegisteredWithQuote => {
     const quote: Quote | null = s.q
@@ -219,7 +288,8 @@ export function fromPayload(p: WidgetPayload): {
     latest: { id: b.id, code: b.code, name: b.name, session: b.session as "morning" | "afternoon", date: b.date, status: "ok", summary: b.summary, detail: "", missing: [], model: "", error: null, createdAt: b.createdAt },
   }));
   const features = widgetFeatures(p.features);
-  return { stocks, briefings, market: gateExtended(p.market, features), indices: cleanIndices(p.indices), board: cleanIndices(p.board), features, brief: cleanBrief(p.brief) };
+  const summary = cleanSummary(p.ms);
+  return { stocks, briefings, market: gateExtended(p.market, features), indices: cleanIndices(p.indices), board: cleanIndices(p.board), features, brief: cleanBrief(p.brief), ...(summary ? { summary } : {}) };
 }
 
 /**

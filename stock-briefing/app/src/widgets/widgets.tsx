@@ -33,7 +33,7 @@ import {
   type PnlLine,
   type PnlMode,
 } from "./model";
-import { currentMarket, isDelayed, openMarketAsOf, type WidgetBrief, type WidgetIndex, type WidgetMarket } from "./payload";
+import { currentMarket, isDelayed, openMarketAsOf, type WidgetBrief, type WidgetIndex, type WidgetMarket, type WidgetSummary } from "./payload";
 import { marketUri } from "./board";
 import {
   CHIP_PAD_Y,
@@ -51,6 +51,9 @@ import {
   POLISH_ROW_PAD,
   POLISH_SEP_GAP,
   POLISH_TOP,
+  SUMMARY_CHIP_GAP,
+  SUMMARY_GAP,
+  SUMMARY_ITEM_GAP,
   textWidth,
   VALUE_LABEL,
   type HeaderPlan,
@@ -58,9 +61,11 @@ import {
   type IndexPlan,
   type RowInput,
   type RowsPlan,
+  type SummaryPlan,
   type TitlePlan,
   type TotalPlan,
 } from "./layout";
+import { summaryInput, summarySpeech, summaryUri, type SummaryItem } from "./summary";
 import { space } from "@/tokens";
 import { CHIP_RADIUS, WIDGET_COLORS, WIDGET_FONT as F, WIDGET_RADIUS, WIDGET_TOUCH as TOUCH, type WidgetPalette } from "./palette";
 
@@ -748,6 +753,36 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   );
 }
 
+/**
+ * 브리핑 위젯 첫 줄 — 시장 전체 요약 (플래그 marketSummary, layout.ts planBriefing 의 summary). 한 칸 전체가 누르는 칸이고 그 요약의 상세를 연다.
+ * [칩] 지수 이름 · 등락률(등락색, "0.00%" 는 기본 글자색) · (한국 휴장이면 흐린 직전 거래일) / (높이가 남으면) 내 종목 한 줄 / 아래 구분선
+ */
+function SummaryBlock({ plan, id, c }: { plan: SummaryPlan<SummaryItem>; id: number; c: WidgetPalette }) {
+  const f = plan.font;
+  const parts = plan.items.flatMap((it, k) => [
+    ...(k ? [<TextWidget key={`${it.code}-sep`} text="·" style={{ color: c.muted, fontSize: f }} />] : []),
+    <TextWidget key={`${it.code}-label`} text={it.label} maxLines={1} style={{ color: c.sub, fontSize: f }} />,
+    <TextWidget key={`${it.code}-rate`} text={it.rate ?? ""} maxLines={1} style={{ color: tone(it.sign, c), fontSize: f, fontWeight: "700" }} />,
+    ...(it.tag ? [<TextWidget key={`${it.code}-tag`} text={it.tag} maxLines={1} style={{ color: c.muted, fontSize: f }} />] : []),
+  ]);
+  return (
+    <FlexWidget
+      clickAction="OPEN_URI"
+      clickActionData={{ uri: summaryUri(id) }}
+      accessibilityLabel={summarySpeech(plan.chip, plan.items, plan.second?.text ?? null)}
+      style={{ width: "match_parent", flexDirection: "column", marginRight: PAD, paddingBottom: SUMMARY_GAP, marginBottom: SUMMARY_GAP, borderBottomWidth: 1, borderBottomColor: c.line }}
+    >
+      <FlexWidget style={{ height: plan.lineH, flexDirection: "row", alignItems: "center", flexGap: SUMMARY_CHIP_GAP }}>
+        <FlexWidget style={{ borderRadius: CHIP_RADIUS, paddingHorizontal: space.xs, paddingVertical: CHIP_PAD_Y, borderWidth: 1, borderColor: c.line }}>
+          <TextWidget text={plan.chip} maxLines={1} style={{ color: c.sub, fontSize: F.xs, fontWeight: "700" }} />
+        </FlexWidget>
+        <FlexWidget style={{ flexDirection: "row", alignItems: "center", flexGap: SUMMARY_ITEM_GAP }}>{parts}</FlexWidget>
+      </FlexWidget>
+      {plan.second ? <TextWidget text={plan.second.text} maxLines={1} style={{ color: c.sub, fontSize: plan.second.font }} /> : null}
+    </FlexWidget>
+  );
+}
+
 /** "2026-09-24" + 오후 → 읽기용 "9월 24일 오후" */
 function speakDate(date: string, session: string): string {
   const [, m, d] = date.split("-");
@@ -759,10 +794,22 @@ function speakDate(date: string, session: string): string {
  * 보여 줄 브리핑이 없으면 안내 문구 — 서버가 준 브리핑 시간·최신 브리핑 실패 수(brief)로 (BH-68).
  * 다듬은 모습(polish = widgetPolish, 위젯 검토 7번): 제목(48dp 머리 줄)과 안내 문구("브리핑 생성 실패 …"·"아직 브리핑이 없습니다 …")를 누르면
  * 브리핑 탭 (예전: 제목은 잔고 탭, 안내는 누르는 칸이 아님). 안내 문구 칸은 머리 줄 아래 남는 곳 전체(고지 줄·빈 곳 포함)다.
- * 조회 실패 안내("… ↻ 로 다시 시도")는 ↻ 를 누르라는 말이라 그대로 둔다
+ * 조회 실패 안내("… ↻ 로 다시 시도")는 ↻ 를 누르라는 말이라 그대로 둔다.
+ * summary(시장 전체 요약, 플래그 marketSummary — render.tsx 가 켜져 있을 때만 넘긴다): 머리 줄 아래 첫 줄에 '밤사이 미국' 칩과 지수 등락률,
+ * 높이가 남으면 둘째 줄에 내 종목 한 줄(SummaryBlock — 누르면 그 요약의 상세). 그 아래 종목 브리핑 줄은 그대로이고, 주지 않으면 지금 그림과 한 글자도 같다
  */
 export function BriefingWidget(
-  props: { briefings: LatestBriefing[]; fetchedAt: number; error: string | null; now: number; market?: WidgetMarket | null; refreshing?: boolean; brief?: WidgetBrief | null; polish?: boolean } & WidgetFrame,
+  props: {
+    briefings: LatestBriefing[];
+    fetchedAt: number;
+    error: string | null;
+    now: number;
+    market?: WidgetMarket | null;
+    refreshing?: boolean;
+    brief?: WidgetBrief | null;
+    polish?: boolean;
+    summary?: WidgetSummary | null;
+  } & WidgetFrame,
 ) {
   const { briefings, fetchedAt, error, now } = props;
   const polish = props.polish === true;
@@ -776,7 +823,9 @@ export function BriefingWidget(
   const market = currentMarket(props.market, now);
   const delayed = isDelayed({ openAsOf: null, fetchedAt, error, now });
   const sub = refreshing ? ["갱신 중"] : asOfVariants(fetchedAt, now);
-  const plan = planBriefing({ width, height, scale, header: { title: "브리핑", chip: market?.label ?? null, sub, delayed }, count: items.length });
+  // 첫 줄(시장 요약)은 받았을 때만 배치에 넣는다 — 없으면 예전과 같은 입력
+  const summary = props.summary ? summaryInput(props.summary, now) : null;
+  const plan = planBriefing<SummaryItem>({ width, height, scale, header: { title: "브리핑", chip: market?.label ?? null, sub, delayed }, count: items.length, ...(summary ? { summary } : {}) });
   const content = width - PAD * 2;
   const headerLabel = sentence(["브리핑", market?.label, refreshing ? "갱신 중" : sub[0], delayed ? "시세 지연" : null]);
   const message = briefingEmptyText(error, props.brief);
@@ -785,6 +834,7 @@ export function BriefingWidget(
   return (
     <FlexWidget style={listRootStyle(c)}>
       <Header title="브리핑" plan={plan.header} market={market} refreshing={refreshing} label={headerLabel} uri={polish ? BRIEFINGS_URI : HOME_URI} c={c} />
+      {plan.summary && props.summary ? <SummaryBlock plan={plan.summary} id={props.summary.id} c={c} /> : null}
       {items.length ? (
         plan.items ? (
           <FlexWidget style={{ width: "match_parent", flexDirection: "column", paddingRight: PAD, flexGap: space.xxs }}>

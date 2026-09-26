@@ -5,6 +5,7 @@ import { fillFromLast, type PnlMode } from "./model";
 import {
   canReuse,
   cleanBrief,
+  cleanSummary,
   fromPayload,
   gateExtended,
   NO_FEATURES,
@@ -17,6 +18,7 @@ import {
   type WidgetIndex,
   type WidgetMarket,
   type WidgetPayload,
+  type WidgetSummary,
 } from "./payload";
 import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
@@ -35,6 +37,11 @@ export interface WidgetData {
   rowKrw?: boolean;
   /** 브리핑 위젯 안내: 브리핑 시간·최신 브리핑 실패 수 (BH-68, 새 서버). 예전 서버면 null·없음 */
   brief?: WidgetBrief | null;
+  /**
+   * 브리핑 위젯 첫 줄 — 가장 최근 시장 요약의 숫자 (플래그 marketSummary, 위젯이 받은 /api/widget …&ms=1 의 ms). 받은 것이 있을 때만 칸이 있다
+   * (예전 서버·끔·요약 없음이면 없음). 앱은 따로 넘기지 않는다 — 늘 위젯이 마지막으로 받은 응답의 것이다. 그릴 때는 위젯이 쓰는 플래그로 한 번 더 거른다 (render.tsx)
+   */
+  summary?: WidgetSummary;
   fetchedAt: number;
   /** 이번 조회 실패 사유 (실패해도 stocks 에는 마지막으로 받은 값이 들어 있을 수 있다) */
   error: string | null;
@@ -272,10 +279,17 @@ async function readWidgetView(apiUrl: string): Promise<StoredView | null> {
       features: { ...NO_FEATURES, ...(d.features ?? {}) },
       ...(typeof d.featuresAt === "number" ? { featuresAt: d.featuresAt } : {}),
       brief: cleanBrief(d.brief),
+      ...summaryOf(d.summary),
     };
   } catch {
     return null;
   }
+}
+
+/** 적어 둔 첫 줄 (모양이 맞을 때만 칸을 둔다 — 없으면 칸도 없어 예전 기록과 같은 모양) */
+function summaryOf(v: unknown): { summary?: WidgetSummary } {
+  const summary = cleanSummary(v);
+  return summary ? { summary } : {};
 }
 
 /** 손익 칸이 보여 주는 것: 누적(기본) 또는 당일 */
@@ -315,6 +329,7 @@ export async function loadCachedWidgetData(): Promise<WidgetData> {
     afterCost,
     rowKrw,
     brief: p?.brief ?? null,
+    ...(p?.summary ? { summary: p.summary } : {}),
     fetchedAt: last?.at ?? cached?.at ?? Date.now(),
     error: null,
     filled: [],
@@ -394,6 +409,8 @@ export async function pushWidgetData(o: {
     // 브리핑 안내(BH-68)는 위젯이 마지막으로 받은 응답의 것 — 앱은 따로 받지 않는다. 백그라운드 작업은 방금 받은 응답을 적어 두고 부르므로 그 값이다.
     // 마지막으로 그린 데이터(앱이 넘긴 것은 그보다 앞선 응답의 값을 옮겨 적은 것)보다 받아 둔 응답을 먼저 본다
     brief: p ? p.brief : (prev?.brief ?? null),
+    // 브리핑 위젯 첫 줄(시장 요약)도 같은 규칙 — 앱은 따로 받지 않는다. 받아 둔 응답에 없으면(끔·요약 없음) 없다
+    ...(p ? (p.summary ? { summary: p.summary } : {}) : prev?.summary ? { summary: prev.summary } : {}),
     fetchedAt: o.fetchedAt,
     error: null,
     filled: o.filled,
@@ -526,9 +543,11 @@ async function legacyUntil(apiUrl: string): Promise<number> {
  * 서버는 이 표시가 있을 때만 칩에 보유 종목 세션 이름(미국 주간거래 등)을 쓴다. 예전 앱(표시 없음)은 달력만 본 칩을 그리므로 서버도 그렇게 준다
  * (둘이 다르면 앱을 열고 닫을 때와 위젯이 갱신할 때 칩이 번갈아 바뀐다).
  * ui=2 는 "다듬은 잔고 위젯(widgetPolish)과 브리핑 안내(BH-68)를 그릴 수 있는 앱"이라는 표시다 — 서버는 이때만 brief(브리핑 시간·실패 수)와,
- * 플래그가 켜져 있으면 칩의 시장별 문구·지수 줄 다섯 개를 넣는다 (예전 앱의 응답은 그대로). 주소가 바뀌어 OTA 뒤 첫 갱신은 받아 둔 응답을 다시 쓰지 않고 한 번 묻는다
+ * 플래그가 켜져 있으면 칩의 시장별 문구·지수 줄 다섯 개를 넣는다 (예전 앱의 응답은 그대로). 주소가 바뀌어 OTA 뒤 첫 갱신은 받아 둔 응답을 다시 쓰지 않고 한 번 묻는다.
+ * ms=1 은 "브리핑 위젯 첫 줄(시장 전체 요약)을 그릴 수 있는 앱"이라는 표시다 — 서버는 이때만 features.marketSummary 와, 켜져 있으면 가장 최근 요약의 숫자(ms)를 넣는다
+ * (예전 앱의 응답·ETag 는 그대로). 이 표시를 더해 주소가 바뀌었으므로 OTA 뒤 첫 갱신은 한 번 묻는다 (받아 둔 응답은 주소가 같을 때만 다시 쓴다)
  */
-const WIDGET_PATH = "/api/widget?indices=1&sessions=1&ui=2";
+const WIDGET_PATH = "/api/widget?indices=1&sessions=1&ui=2&ms=1";
 /**
  * 지수·환율 위젯이 있을 때만 &board=1 (서버는 widgetMarket 이 켜져 있고 이 표시가 있을 때만 판 9개를 넣는다).
  * 위젯이 없는 사용자의 응답·ETag 는 그대로다. ETag 는 본문으로 만들므로 board 가 있는 응답과 없는 응답의 ETag 가 섞여도 304 가 잘못 나지 않는다
@@ -683,6 +702,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.features = p.features;
       out.featuresAt = out.fetchedAt;
       out.brief = p.brief;
+      if (p.summary) out.summary = p.summary;
       if (payload.latestIds) out.latestIds = payload.latestIds;
       if (Array.isArray(payload.accountIds)) out.accountIds = payload.accountIds.filter((id) => Number.isInteger(id) && id > 0);
       full = true;
@@ -724,6 +744,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.features = p.features;
       out.featuresAt = cached.at;
       out.brief = p.brief;
+      if (p.summary) out.summary = p.summary;
       full = true;
     } else if (prevView) {
       // 받아 둔 응답이 없으면(업데이트 직후 첫 조회 등) 마지막으로 그린 데이터(앱 즉시 갱신이 적은 것)의 지수·플래그를 그대로 —
@@ -735,6 +756,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       out.features = prevView.features;
       if (prevView.featuresAt !== undefined) out.featuresAt = prevView.featuresAt;
       out.brief = prevView.brief ?? null;
+      if (prevView.summary) out.summary = prevView.summary;
     }
     if (last) {
       out.stocks = last.stocks;

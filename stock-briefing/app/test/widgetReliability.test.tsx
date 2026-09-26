@@ -75,7 +75,7 @@ const words = (t: Tree) => nodes(t).filter((n) => n.type === "TextWidget").map((
 const dark = (r: unknown) => words(build((r as { dark: React.JSX.Element }).dark));
 
 const API = "https://server.test";
-const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2`;
+const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2&ms=1`;
 const WIDE = { width: 420, height: 260 };
 /** 2026-09-24(목) KST 시각 */
 const T = (hm: string) => Date.parse(`2026-09-24T${hm}:00+09:00`);
