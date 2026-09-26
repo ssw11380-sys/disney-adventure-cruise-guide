@@ -171,6 +171,48 @@ describe("상세 차트 크기 (candleChartSize)", () => {
   });
 });
 
+describe("휴대폰·접은 화면 차트 폭 = 잰 폭 (fill — 기능 플래그 detailPolish, 2026-09-26 '차트 오른쪽 빈 여백 없애줘')", () => {
+  const inner = (w: number) => w - CHART_PANEL_PAD * 2;
+  const mainW = (w: number) => Math.min(w - space.lg * 4, 720);
+
+  it("475·411·360 창: 폭은 패널 안쪽 폭 전부(오른쪽 28dp 빈 띠 없음), 높이는 예전 그대로 (차트 아래 칩 줄·고지 줄 위치 그대로)", () => {
+    const want = { 360: { width: 332, height: 188 }, 411: { width: 383, height: 220 }, 475: { width: 447, height: 260 } } as const;
+    for (const [w, hh] of [[475, 751], [411, 960], [360, 780]] as const) {
+      const s = candleChartSize({ box: inner(w), window: { width: w, height: hh }, wide: false, fill: true });
+      expect(s, String(w)).toEqual(want[w]);
+      // 예전(main)보다 폭만 28 넓고 높이는 같다
+      const old = candleChartSize({ box: inner(w), window: { width: w, height: hh }, wide: false });
+      expect(s.width - old.width, String(w)).toBe(space.lg * 2);
+      expect(s.height, String(w)).toBe(old.height);
+      expect(old.width).toBe(mainW(w));
+      // 재기 전(첫 그림)도 같은 폭 (창 폭 − 패널 여백 어림)
+      expect(candleChartSize({ box: null, window: { width: w, height: hh }, wide: false, fill: true }), String(w)).toEqual(want[w]);
+    }
+  });
+
+  it("소수점 창 폭은 내림, 잰 폭이 어림보다 넓으면(창이 좁아졌는데 아직 다시 재지 못함) 창 쪽으로, 더 좁은 자리는 잰 폭 그대로", () => {
+    expect(candleChartSize({ box: 383.43, window: { width: 411.43, height: 960 }, wide: false, fill: true })).toEqual({ width: 383, height: Math.round((411.43 - 56) * 0.62) });
+    // 펼쳤다 접은 직후: 잰 폭은 펼쳤을 때 905 — 창(475) 쪽으로 줄여 화면 밖으로 넘치지 않는다
+    expect(candleChartSize({ box: 905, window: { width: 475, height: 751 }, wide: false, fill: true }).width).toBe(447);
+    expect(candleChartSize({ box: 400.6, window: { width: 475, height: 751 }, wide: false, fill: true }).width).toBe(400);
+    // 폭을 모르는 창은 0
+    expect(candleChartSize({ box: null, window: { width: Number.NaN, height: 800 }, wide: false, fill: true }).width).toBe(0);
+    expect(candleChartSize({ box: 0, window: { width: 40, height: 800 }, wide: false, fill: true }).width).toBe(0);
+  });
+
+  it("foldLayout 이 꺼진 넓은 창은 720 상한 그대로(예전과 같다), 넓은 창 배치·전체 화면 차트는 fill 과 상관없다", () => {
+    expect(candleChartSize({ box: 905, window: { width: 933, height: 704 }, wide: false, fill: true })).toEqual({ width: 720, height: 446 });
+    // 펼친 폴드8 세로(foldLayout 꺼짐): 폭만 잰 폭 676, 높이는 예전 648 × 0.62
+    expect(candleChartSize({ box: 676, window: { width: 704, height: 933 }, wide: false, fill: true })).toEqual({ width: 676, height: 402 });
+    for (const fill of [true, false]) {
+      expect(candleChartSize({ box: 905, window: { width: 933, height: 704 }, wide: true, fill })).toEqual({ width: 905, height: 352 });
+      expect(candleChartSize({ box: 300, window: { width: 475, height: 751 }, wide: false, fill, width: 455, height: 300 })).toEqual({ width: 455, height: 300 });
+    }
+    // 부르는 쪽이 높이만 정하면 그 높이
+    expect(candleChartSize({ box: 447, window: { width: 475, height: 751 }, wide: false, fill: true, height: 280 })).toEqual({ width: 447, height: 280 });
+  });
+});
+
 describe("넓은 창 차트 높이의 하한과 폭 600 경계 (chartMinH · chartCapRamp)", () => {
   /** foldLayout 켜짐: 폭 등급 중간(600) 이상이면 넓은 창 배치 (useFoldLayout + isWide 와 같은 기준) */
   const at = (w: number, hh: number, box: number | null = null) => candleChartSize({ box, window: { width: w, height: hh }, wide: w >= layout.mediumMin });

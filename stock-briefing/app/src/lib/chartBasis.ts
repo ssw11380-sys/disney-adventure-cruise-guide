@@ -48,6 +48,42 @@ export function axisWidth(labels: (string | [string, number])[], min = 32, max =
   return Math.min(max, Math.max(min, Math.ceil((longest + 7) / 2) * 2));
 }
 
+/**
+ * 맞춘 가격 축(기능 플래그 detailPolish — PriceChart fitAxis): 축 글자를 그림 오른쪽 끝에서 AXIS_GAP_R 안쪽에 오른쪽 맞춤으로 적고,
+ * 축 칸은 가장 긴 글자 + 왼쪽 AXIS_GAP_L + 오른쪽 AXIS_GAP_R 만큼만 둔다 → 축 글자 오른쪽에 빈 띠가 남지 않는다 (2026-09-26 RGTX 캡처 '오른쪽 빈 여백').
+ * 예전(axisWidth)은 글자를 왼쪽 맞춤(축 칸 왼쪽 + 4)으로 적고 폭을 넉넉히 어림해(숫자 0.6·쉼표 0.3 글자) 오른쪽에 약 8dp 가 비었다.
+ * 오른쪽 맞춤이라 어림이 실제 글꼴보다 조금 작아도 글자가 그림 밖으로 잘리지 않고 그림 쪽으로 1~2dp 들어올 뿐이다
+ */
+export const AXIS_GAP_L = 4;
+export const AXIS_GAP_R = 2;
+
+/** 가격 축 글자 한 자의 폭 (글자 크기 대비). 안드로이드 기본 글꼴 Roboto(숫자 0.56 · 쉼표 0.19 · 마침표 0.25)보다 조금 넓게 */
+function axisEm(ch: string): number {
+  if (/[0-9$]/.test(ch)) return 0.57;
+  if (/[,.:]/.test(ch)) return 0.25;
+  if (ch === "-" || ch === "+") return 0.4;
+  if (ch === " ") return 0.25;
+  if (/[가-힣]/.test(ch)) return 1;
+  if (ch === "%") return 0.86;
+  return 0.62;
+}
+
+/** 굵은 축 글자(현재가 태그·십자선 값)도 들어가게 조금 더 */
+const AXIS_BOLD = 1.03;
+
+/** 가격 축 글자(font.tiny) 폭 어림 (fitAxisWidth) */
+export function axisTextWidth(label: string): number {
+  let em = 0;
+  for (const ch of label) em += axisEm(ch);
+  return em * font.tiny * AXIS_BOLD;
+}
+
+/** 맞춘 가격 축 칸 폭: 가장 긴 글자 + 좌우 틈. 2px 단위로 올림 → 이동·확대 중 자릿수가 바뀌어도 폭이 덜 흔들린다 */
+export function fitAxisWidth(labels: string[], min = 24, max = 80): number {
+  const longest = labels.reduce<number>((m, l) => Math.max(m, axisTextWidth(l)), 0);
+  return Math.min(max, Math.max(min, Math.ceil((AXIS_GAP_L + longest + AXIS_GAP_R) / 2) * 2));
+}
+
 // ── 가격 축 범위 ──
 
 /**
@@ -191,7 +227,7 @@ export function insideLabelWidth(l: Pick<InsideLabel, "text" | "lead">): number 
 
 /**
  * 평단·52주·벗어난 이동평균 글자를 놓을 자리 (순수 함수 → 단위 테스트). 놓지 않으면 null (선만 그린다).
- * 글자 상자는 plotTop(과거 구간 안내 버튼 자리 — 그 위는 비워 둔다) ~ plotH + bottomSlack(가격 칸 아래 틈 — 거래량 칸·날짜 줄 앞) 안에만 놓는다.
+ * 글자 상자는 plotTop(위쪽 한계 — 부르는 쪽이 비워 두려는 자리가 있으면 그 아래) ~ plotH + bottomSlack(가격 칸 아래 틈 — 거래량 칸·날짜 줄 앞) 안에만 놓는다.
  *
  * 글자마다 선 위·선 아래(fixed 면 그 줄) × 그림 왼쪽 끝부터 오른쪽 끝까지 LABEL_STEP 간격의 자리를 모두 보고, 점수(COST)가 가장 낮은 곳을 고른다 —
  * 봉·다른 글자·다른 가로선을 가리지 않고, 최신 봉(오른쪽 끝 LABEL_GUARD_BARS 개)은 특히 덮지 않고, 되도록 예전 자리(평단 왼쪽 위, 52주 오른쪽 위) 가까이.
@@ -208,7 +244,7 @@ export function placeInsideLabels(o: {
   labels: readonly InsideLabel[];
   lines?: readonly number[];
   guard?: number;
-  /** 글자 상자 위 끝의 한계 (기본 0). 과거 구간 안내 버튼이 있으면 그 아래 */
+  /** 글자 상자 위 끝의 한계 (기본 0 — 그림 맨 위). 과거 구간 안내는 이제 차트 위 조작 줄에 있어 PriceChart 는 0 을 쓴다 */
   plotTop?: number;
   /** 가격 칸 아래로 글자 상자가 넘어가도 되는 폭 (기본 0 — 거래량 칸 앞 틈). 오늘 52주 신저가처럼 선이 바닥에 붙어도 선 아래에 적을 수 있게 */
   bottomSlack?: number;
@@ -234,7 +270,7 @@ export function placeInsideLabels(o: {
     const list: Cand[] = [];
     for (const [ty, extra] of baselines) {
       const top = ty - LABEL_ASCENT, bottom = ty + LABEL_DESCENT;
-      // 그림 밖(안내 버튼 자리 · 아래 칸)으로 나가는 줄은 후보가 아니다
+      // 그림 밖(plotTop 위 · 아래 칸)으로 나가는 줄은 후보가 아니다
       if (top < plotTop || bottom > plotBottom) continue;
       for (const left of lefts) {
         const box = { left, right: left + w, top, bottom };
@@ -273,32 +309,6 @@ export function placeInsideLabels(o: {
     }
   }
   return out;
-}
-
-/** 과거 구간 안내 버튼 자리 */
-export type OverlayAlign = "center" | "left" | "right";
-
-/**
- * 그림 위쪽에 덧그리는 상자(과거 구간 안내 버튼)를 가운데·왼쪽·오른쪽 중 어디에 둘지 (순수 함수 → 단위 테스트).
- * 폭 width · 위에서 bottom 까지의 상자가 가리는 봉(하나에 1)과 그림 안 글자(평단·52주·이동평균 표시 — 하나에 weight, 기본 20)가 가장 적은 곳, 같으면 가운데 → 왼쪽 → 오른쪽.
- * 급등한 봉 꼭대기(RGTX 6월)·최신 봉·범위 밖 평단 글자('평단(범위 위) …', 왼쪽 위)를 버튼이 덮지 않게 한다. cost 는 그 자리의 점수 (0 = 아무것도 덮지 않음).
- * PriceChart 는 버튼이 보이는 동안 가격 칸 위쪽을 비워 두므로(봉·글자가 bottom 아래에만 있다) 보통 가운데(점수 0)이고, 가격 칸이 작아 다 비우지 못했을 때만 옆으로 간다
- */
-export function topOverlayAlign(o: { plotW: number; width: number; bottom: number; bars: readonly Box[]; labels?: readonly (Box & { weight?: number })[]; edge?: number }): {
-  align: OverlayAlign;
-  cost: number;
-} {
-  const edge = o.edge ?? LABEL_EDGE;
-  const w = Math.min(o.width, o.plotW - edge * 2);
-  const lefts = { center: (o.plotW - w) / 2, left: edge, right: o.plotW - edge - w } as const;
-  let best: { align: OverlayAlign; cost: number } | null = null;
-  for (const align of ["center", "left", "right"] as const) {
-    const box = { left: lefts[align], right: lefts[align] + w, top: 0, bottom: o.bottom };
-    let cost = o.bars.filter((b) => overlaps(b, box)).length;
-    for (const l of o.labels ?? []) if (overlaps(l, box)) cost += l.weight ?? 20;
-    if (!best || cost < best.cost) best = { align, cost };
-  }
-  return best!;
 }
 
 /**

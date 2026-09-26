@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AVG_BAND, DOMAIN_PAD, LABEL_GUARD_BARS, LINE_OVERSHOOT, placeInsideLabels, priceDomain, textWidth, topOverlayAlign, type Box } from "@/lib/chartBasis";
+import { AVG_BAND, DOMAIN_PAD, LABEL_GUARD_BARS, LINE_OVERSHOOT, placeInsideLabels, priceDomain, textWidth, type Box } from "@/lib/chartBasis";
 import { pastViewLabel } from "@/lib/chartLayout";
 import { bollinger, sma } from "@/lib/indicators";
 
@@ -260,31 +260,6 @@ describe("그림 안쪽 글자 자리 (placeInsideLabels)", () => {
     expect(ma!.side).toBe("left");
     expect(ma!.box.right).toBe(298);
     expect(overlap(avg!.box, ma!.box)).toBe(false);
-  });
-});
-
-describe("과거 구간 안내 버튼 자리 (topOverlayAlign)", () => {
-  // 폭 300 그림, 봉 30개. 버튼 폭 120 · 위에서 36 까지
-  const bars = (f: (i: number) => number): Box[] => Array.from({ length: 30 }, (_, i) => ({ left: i * 10 + 2, right: i * 10 + 8, top: f(i), bottom: 190 }));
-  const align = (b: Box[], labels?: Box[]) => topOverlayAlign({ plotW: 300, width: 120, bottom: 36, bars: b, labels }).align;
-
-  it("위쪽이 비어 있으면 가운데", () => expect(align(bars(() => 100))).toBe("center"));
-  it("가운데에 급등한 봉 꼭대기가 있으면 비어 있는 쪽 (RGTX 6월 급등)", () => {
-    expect(align(bars((i) => (i >= 12 && i <= 17 ? 5 : 100)))).toBe("left");
-  });
-  it("오르는 종목(최신 봉이 오른쪽 위)은 가운데가 비어 있으면 가운데, 가운데도 막히면 왼쪽", () => {
-    expect(align(bars((i) => (i >= 25 ? 5 : 100)))).toBe("center");
-    expect(align(bars((i) => (i >= 12 ? 5 : 100)))).toBe("left");
-  });
-  it("내리는 종목(옛 봉이 왼쪽 위)·가운데 막힘이면 오른쪽", () => {
-    expect(align(bars((i) => (i <= 18 ? 5 : 100)))).toBe("right");
-  });
-  it("그림 안 글자(범위 밖 평단 — 왼쪽 위)를 덮지 않는 쪽으로, 점수 0 이면 아무것도 덮지 않는다", () => {
-    const avgLabel: Box = { left: 2, right: 126, top: 2, bottom: 15 };
-    expect(align(bars(() => 100), [avgLabel])).toBe("right");
-    expect(topOverlayAlign({ plotW: 300, width: 120, bottom: 36, bars: bars(() => 100), labels: [avgLabel] }).cost).toBe(0);
-    // 글자 하나는 봉 몇 개보다 무겁다 (봉 3개를 덮는 쪽이 평단 글자를 덮는 쪽보다 낫다)
-    expect(align(bars((i) => (i >= 27 ? 5 : 100)), [avgLabel])).toBe("right");
   });
 });
 

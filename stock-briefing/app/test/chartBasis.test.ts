@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { axisWidth, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
+import { AXIS_GAP_L, AXIS_GAP_R, axisTextWidth, axisWidth, fitAxisWidth, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
 
 describe("차트 읽기 줄 등락 기준", () => {
   // 삼성전자 9/23: 거래소 기준가(전일 종가) 276,500, 통합(NXT 포함) 직전 봉 종가 277,800, 오늘 종가 286,500
@@ -36,6 +36,37 @@ describe("가격 축 폭", () => {
     expect(axisWidth(["985"])).toBe(32); // 3×6×1.1+7 = 26.8 → 최소 32
     expect(axisWidth(["985", "3,000만"])).toBe(48); // (4×6+3+10)×1.1+7 = 47.7 → 48
     expect(axisWidth(["985", ["3,000만", 0.9]])).toBe(44); // 36.63+7 = 43.63 → 44
+  });
+});
+
+describe("맞춘 가격 축 폭 (fitAxisWidth — 기능 플래그 detailPolish, 2026-09-26 '차트 오른쪽 빈 여백')", () => {
+  it("가장 긴 글자 + 왼쪽 4 + 오른쪽 2 (2px 단위 올림) — 예전 어림(axisWidth)보다 좁다", () => {
+    expect(AXIS_GAP_L).toBe(4);
+    expect(AXIS_GAP_R).toBe(2);
+    // RGTX 캡처 축: 100,000 → 48 (예전 50), 14,430 → 42 (예전 44)
+    expect(fitAxisWidth(["100,000", "80,000", "14,430"])).toBe(48);
+    expect(axisWidth(["100,000", "80,000", "14,430"])).toBe(50);
+    expect(fitAxisWidth(["14,430", "13,500"])).toBe(42);
+    expect(fitAxisWidth(["23.45", "24.00"])).toBe(36);
+    // 거래량 최댓값('1,297만')이 가장 길면 그 글자에 맞춘다
+    expect(fitAxisWidth(["985", "1,297만"])).toBe(46);
+    expect(fitAxisWidth([])).toBe(24);
+    expect(fitAxisWidth(["1,234,567,890.12"])).toBe(80);
+    for (const labels of [["100,000"], ["23.45"], ["1,297만", "12,000"], ["2,650.12"]]) {
+      const w = fitAxisWidth(labels);
+      const longest = Math.max(...labels.map(axisTextWidth));
+      expect(w, labels.join()).toBeGreaterThanOrEqual(AXIS_GAP_L + longest + AXIS_GAP_R);
+      expect(w, labels.join()).toBeLessThan(AXIS_GAP_L + longest + AXIS_GAP_R + 2);
+    }
+  });
+
+  it("글자 폭 어림은 실제 글꼴보다 작지 않다 — 폴드8 캡처(11pt)의 글자 폭(잉크): 100,000 37.7 · 80,000 32.0 · 1,297만 35.4dp", () => {
+    // 잉크 폭 + 글자 앞뒤 여백(약 1dp)
+    expect(axisTextWidth("100,000")).toBeGreaterThanOrEqual(37.7 + 1);
+    expect(axisTextWidth("80,000")).toBeGreaterThanOrEqual(32.0 + 1);
+    expect(axisTextWidth("1,297만")).toBeGreaterThanOrEqual(35.4 + 1);
+    // 그러나 예전 어림(숫자 0.6·쉼표 0.3 글자)보다는 좁다
+    expect(axisTextWidth("100,000")).toBeLessThan(textWidth("100,000"));
   });
 });
 

@@ -3,13 +3,13 @@ import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useFeature } from "@/api/hooks";
 import type { Candle, CandlePeriod, ChartUnit, Currency, Quote } from "@/api/types";
-import { candleChartSize, pastViewLabel } from "@/lib/chartLayout";
+import { candleChartSize, estimateTextWidth, pastViewLabel } from "@/lib/chartLayout";
 import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide } from "@/lib/windowClass";
-import { font, radius, slopFor, space, touch, useTheme } from "@/theme";
+import { font, radius, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { CHIP_H, CHIP_SLOP, ChipStrip } from "./chart/ChipStrip";
 import { clampView, maColor, PriceChart, type ChartView, type IndicatorKind } from "./chart/PriceChart";
 
@@ -24,6 +24,13 @@ const ICON = CHIP_H;
 const SLOP = slopFor(ICON, space.s / 2);
 /** 기간 칩을 화면 읽기로 읽을 때 */
 const PERIOD_SPEECH: Record<CandlePeriod, string> = { "1m": "1분봉", "5m": "5분봉", "30m": "30분봉", D: "일봉", W: "주봉", M: "월봉" };
+/**
+ * 과거 구간 버튼(기능 플래그 detailPolish)을 조작 줄에 넣을 때 칩 띠에 남기는 폭: 일·주·월 칩 세 개가 보이는 만큼.
+ * 긴 글('2일 전까지 보는 중 · 최신으로')을 넣으면 이보다 좁아지는 창에서는 짧은 글('2일 전 · 최신으로')
+ */
+const PAST_STRIP_MIN = 120;
+/** 과거 구간 버튼의 누르는 틀(44)을 조작 줄(32) 위아래로 넓히는 음수 여백 — 줄 높이·차트 위치는 그대로 */
+const PAST_OUT = (touch.min - CHIP_H) / 2;
 /** 조작 줄 순서: 자주 쓰는 일·주·월 먼저, 분봉은 뒤 (가로로 넘겨서) */
 const TOOL_ORDER = (["D", "W", "M", "1m", "5m", "30m"] as CandlePeriod[]).map((v) => PERIOD_OPTIONS.find((o) => o.value === v)!);
 
@@ -77,7 +84,10 @@ export function CandleChart({
   // 높이는 창 높이 × 0.5 까지, 하한 chartMinH, 폭 600 경계에서는 서서히. 휴대폰 화면은 잰 폭을 쓰지 않고 예전 식(창 폭 − 56, 720 상한) 그대로
   // (lib/chartLayout candleChartSize). 부르는 쪽이 폭을 정하면(전체 화면) 재지 않는다
   const [box, setBox] = useState<number | null>(null);
-  const size = candleChartSize({ box, window: { width: winW, height: winH }, wide, width: widthProp, height });
+  // 종목 상세 다듬기 (기능 플래그 detailPolish — 앱 fallback 꺼짐): 휴대폰·접은 화면도 차트 폭은 잰 폭(오른쪽 28dp 빈 띠 없음, 높이는 그대로)·
+  // 맞춘 가격 축(축 글자 오른쪽 빈 띠 없음), 과거로 옮기면 조작 줄에 '2일 전 · 최신으로' 버튼
+  const polish = useFeature("detailPolish", false);
+  const size = candleChartSize({ box, window: { width: winW, height: winH }, wide, width: widthProp, height, fill: polish });
   const width = size.width;
   const chartH = size.height;
   const fadeBg = backdrop ?? t.surface;
@@ -110,11 +120,19 @@ export function CandleChart({
 
   const clamped = clampView(view, all.length);
   const maxOffset = Math.max(all.length - clamped.count, 0);
-  // 과거로 옮겼으면 차트 위에 '2일 전까지 보는 중 · 최신으로' (기능 플래그 detailPolish — 앱 fallback 꺼짐). 좁은 자리에서는 짧은 글 '2일 전 · 최신으로'.
+  // 과거로 옮겼으면 조작 줄의 ‹ 앞에 '2일 전까지 보는 중 · 최신으로' 버튼 (기능 플래그 detailPolish). 칩 띠에 일·주·월 칩이 보일 만큼 남지 않으면
+  // 짧은 글 '2일 전 · 최신으로'. 차트 그림 위에 덮지 않는다 — 그림(제스처 영역)과 겹치지 않고, 버튼이 생겨도 가격 칸이 줄지 않는다(축이 튀지 않게, 2026-09-26).
   // 보이는 구간은 이 화면의 상태라 화면을 다시 열거나 기간을 바꾸면(돌아와도) 최신 구간에서 시작한다 (위 vs)
-  const polish = useFeature("detailPolish", false);
   const past = polish ? pastViewLabel(clamped.offset, period, { last: all[all.length - 1 - clamped.offset], latest: all[all.length - 1] }) : null;
   const toLatest = () => setView((v) => ({ count: v.count, offset: 0 }));
+  const fontScale = useFontScale();
+  const pastText = (() => {
+    if (!past) return null;
+    // 조작 줄에서 과거로·최신으로·크게 보기 버튼과 사이 간격을 뺀 폭 → 버튼을 넣고 칩 띠에 PAST_STRIP_MIN 이 남으면 긴 글
+    const icons = (onFullscreen ? 3 : 2) * ((wide ? touch.min : ICON) + space.s);
+    const long = `${past.text} · 최신으로`;
+    return width - icons - pastButtonWidth(long, fontScale) - space.s >= PAST_STRIP_MIN ? long : `${past.short} · 최신으로`;
+  })();
   const shift = (dir: -1 | 1) => setView((v) => clampView({ count: v.count, offset: v.offset + dir * Math.round(v.count / 2) }, all.length));
   const pickWindow = (i: number) => {
     setVs((prev) => {
@@ -188,17 +206,19 @@ export function CandleChart({
             accessibilityLabel={`보이는 봉 ${Math.min(clamped.count, all.length)}개${clamped.offset > 0 ? `, 최신보다 ${clamped.offset}${UNIT[period]} 전` : ""}. 눌러서 바꾸기`}
             style={[chipStyle(true), { borderStyle: "dashed" }]}
           >
-            {/* 실제로 보이는 봉 수 (확대·축소하거나 봉이 적으면 칩 값과 다르다), 과거로 옮겼으면 몇 봉 전인지 */}
+            {/* 실제로 보이는 봉 수 (확대·축소하거나 봉이 적으면 칩 값과 다르다), 과거로 옮겼으면 몇 봉 전인지
+                (detailPolish 가 켜져 있으면 몇 봉 전인지는 옆의 과거 구간 버튼이 보여 주므로 칩에는 봉 수만 — 칩 띠 폭을 아낀다) */}
             <Text style={chipText(true)}>
               {Math.min(clamped.count, all.length) || WINDOWS[period][windowIdx]}
               {UNIT[period]}
-              {clamped.offset > 0 ? ` · ${clamped.offset}${UNIT[period]} 전` : ""}
+              {clamped.offset > 0 && !pastText ? ` · ${clamped.offset}${UNIT[period]} 전` : ""}
             </Text>
             <Ionicons name="swap-horizontal" size={font.tiny} color={t.muted} />
           </Pressable>
           {TOOL_ORDER.slice(3).map((o) => periodChip(o))}
           {compact ? overlayChips : null}
         </ChipStrip>
+        {past && pastText ? <PastButton text={pastText} speech={past.text} onPress={toLatest} /> : null}
         <Pressable onPress={() => shift(1)} disabled={clamped.offset >= maxOffset} accessibilityRole="button" accessibilityState={{ disabled: clamped.offset >= maxOffset }} accessibilityLabel="과거로" hitSlop={SLOP} style={[styles.icon, iconRoomy, { borderColor: t.line, opacity: clamped.offset >= maxOffset ? 0.4 : 1 }]}>
           <Ionicons name="chevron-back" size={font.small} color={t.ink} />
         </Pressable>
@@ -241,7 +261,7 @@ export function CandleChart({
           showMaValues={!compact}
           maItems={wide}
           labelBg={fadeBg}
-          pastView={past ? { text: past.text, short: past.short, onLatest: toLatest } : null}
+          fitAxis={polish}
         />
       )}
 
@@ -256,6 +276,42 @@ export function CandleChart({
   );
 }
 
+/** 과거 구간 버튼의 폭 어림 (글자 + 아이콘 + 사이 간격 + 좌우 안쪽 여백 + 테두리). 긴 글/짧은 글 고르기에만 쓴다 */
+function pastButtonWidth(text: string, scale: number): number {
+  return estimateTextWidth(text, font.tiny * scale) + font.tiny * scale + space.xs + space.sm * 2 + 2;
+}
+
+/**
+ * 과거 구간 버튼 (기능 플래그 detailPolish): 차트를 과거로 옮겼으면 조작 줄 ‹ 앞에 '2일 전까지 보는 중 · 최신으로' (좁으면 '2일 전 · 최신으로').
+ * 누르면 최신 구간으로. 차트 그림 위에 덮지 않는다 (예전에는 그림 맨 위에 떠 있어 그림 쪽 드래그·십자선과 겹쳤고, 버튼 자리만큼 가격 칸을 줄여 축이 튀었다).
+ * 누르는 틀 자체가 높이 44(touch.min) — 보이는 버튼(칩과 같은 32)은 그 가운데, 틀은 위아래 음수 여백으로 조작 줄 높이(32)를 바꾸지 않는다
+ * (칩 띠 ChipStrip 과 같은 방식 — 틀 밖 hitSlop 에 기대지 않는다). 화면 읽기는 늘 긴 글(speech)
+ */
+function PastButton({ text, speech, onPress }: { text: string; speech: string; onPress: () => void }) {
+  const t = useTheme();
+  // 눌린 모양은 안쪽 보이는 버튼에 (누르는 틀 44 는 투명)
+  const [pressed, setPressed] = useState(false);
+  const [head, tail] = text.endsWith(" · 최신으로") ? [text.slice(0, -" · 최신으로".length), " · 최신으로"] : [text, ""];
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+      accessibilityRole="button"
+      accessibilityLabel={`${speech}. 누르면 최신 차트로 돌아갑니다`}
+      style={styles.pastHit}
+    >
+      <View style={[styles.past, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.accent }]}>
+        <Text style={[styles.pastText, { color: t.ink }]} numberOfLines={1}>
+          {head}
+          {tail ? <Text style={{ color: t.accent }}>{tail}</Text> : null}
+        </Text>
+        <Ionicons name="play-forward" size={font.tiny} color={t.accent} />
+      </View>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   placeholder: { alignItems: "center", justifyContent: "center", borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth },
   toolRow: { flexDirection: "row", alignItems: "center", gap: space.s },
@@ -267,4 +323,17 @@ const styles = StyleSheet.create({
   chipWide: { minWidth: touch.min, justifyContent: "center" },
   iconWide: { width: touch.min },
   swatch: { width: 8, height: 2 },
+  // 과거 구간 버튼: 누르는 틀 44, 위아래 음수 여백으로 조작 줄(32) 높이는 그대로. 줄이 좁으면 글자가 줄어든다(칩 띠가 먼저 줄어든다)
+  pastHit: { minHeight: touch.min, marginVertical: -PAST_OUT, justifyContent: "center", flexShrink: 1, minWidth: touch.min },
+  past: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: space.xs,
+    minHeight: CHIP_H,
+    paddingHorizontal: space.sm,
+    borderRadius: 3,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  pastText: { fontSize: font.tiny, fontWeight: "700", flexShrink: 1 },
 });

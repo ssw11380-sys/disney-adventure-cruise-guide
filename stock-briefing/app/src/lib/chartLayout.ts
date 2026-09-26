@@ -6,7 +6,7 @@ import { font, fontCap, layout, space, touch } from "@/tokens";
 
 /**
  * 차트 화면 배치 계산 (3-42 접는 폰 · 폴드 진단 8·22·24·25·6·7번). React Native 를 불러오지 않는 순수 모듈 (테스트용).
- *  - candleChartSize: 종목·지수 상세 차트 그림의 폭·높이 (휴대폰 화면은 3-42 이전 식 그대로 — phoneChartWidth)
+ *  - candleChartSize: 종목·지수 상세 차트 그림의 폭·높이 (휴대폰 화면은 3-42 이전 식 그대로 — phoneChartWidth. 기능 플래그 detailPolish 면 폭만 잰 폭)
  *  - headerNeedsTwoLines · chartHeaderLayout: 전체 화면 차트 머리 (한 줄로 그려 재 보고 넘칠 때만 가격·등락을 둘째 줄로, 머리 높이)
  *  - maLegendItems: 차트 아래 이동평균 값 줄의 항목 (한 항목이 두 줄로 나뉘지 않게 — 넓은 창만)
  *  - fadeEdges: 옆으로 넘기는 칩 띠에서 흐리게 칠할 가장자리 (모든 창 — 2026-09-26 버그 수정)
@@ -30,6 +30,11 @@ export interface ChartSizeInput {
   window: { width: number; height: number };
   /** 넓은 창 배치: foldLayout 이 켜져 있고 폭 등급이 중간 이상 (좁은 창·플래그 꺼짐이면 false) */
   wide: boolean;
+  /**
+   * 휴대폰 화면(wide=false)도 폭은 잰 폭(패널 안쪽)을 다 쓴다 — 기능 플래그 detailPolish (2026-09-26 RGTX 캡처 '차트 오른쪽 빈 여백 없애줘').
+   * 높이는 예전 식 그대로(예전 폭 × 0.62) → 차트 아래 칩 줄·고지 줄 위치가 바뀌지 않는다. 꺼져 있으면 예전 폭(창 폭 − 56) 그대로
+   */
+  fill?: boolean;
   /** 부르는 쪽이 정한 폭·높이 (전체 화면 차트). 있으면 그대로 쓴다 */
   width?: number;
   height?: number;
@@ -38,7 +43,8 @@ export interface ChartSizeInput {
 /**
  * 휴대폰 화면(좁은 창 · foldLayout 꺼짐)의 상세 차트 폭: 3-42 이전 식 그대로 min(창 폭 − 패널 여백 × 4, 720).
  * 패널 여백을 두 번 빼서 오른쪽에 28dp 빈 띠가 남지만(진단 22번), 사용자 결정 '접은 화면은 지금 그대로'(2026-09-26)에 따라
- * 휴대폰 화면에서는 고치지 않는다 — 고치면 차트가 커져 첫 화면 핵심 숫자가 줄었다(폴드8 접힘 419×260 → 447×277, 5개 → 3개).
+ * 휴대폰 화면에서는 고치지 않았다 — 폭과 함께 높이도 키우면 차트가 커져 첫 화면 핵심 숫자가 줄었다(폴드8 접힘 419×260 → 447×277, 5개 → 3개).
+ * 이후 사용자가 이 빈 띠를 없애 달라고 해서(2026-09-26) 기능 플래그 detailPolish 가 켜져 있으면 폭만 잰 폭으로 쓰고 높이는 이 폭 × 0.62 그대로 둔다 (candleChartSize fill).
  * 소수점 창 폭도 예전처럼 그대로 쓴다 (내리지 않는다). 창 폭을 모르면(0·NaN) 0
  */
 export function phoneChartWidth(windowWidth: number): number {
@@ -47,9 +53,23 @@ export function phoneChartWidth(windowWidth: number): number {
 }
 
 /**
+ * 차트 묶음이 실제로 받은 폭(잰 폭). 재기 전이면 창 폭 − 패널 좌우 여백으로 어림하고, 잰 폭이 그보다 넓으면
+ * (창이 좁아졌는데 아직 다시 재지 못함) 창 쪽으로 줄인다. 소수점 폭은 내림 (그림이 패널 밖으로 1px 넘치지 않게)
+ */
+function measuredWidth(o: Pick<ChartSizeInput, "box" | "window">): number {
+  const guess = o.window.width - CHART_PANEL_PAD * 2;
+  const guessOk = Number.isFinite(guess) && guess > 0;
+  const boxOk = o.box !== null && Number.isFinite(o.box) && o.box > 0;
+  const measured = boxOk ? (guessOk ? Math.min(o.box!, guess) : o.box!) : guess;
+  return Math.max(0, Math.floor(Number.isFinite(measured) ? measured : 0));
+}
+
+/**
  * 상세 차트 그림 크기.
  *  - 좁은 창(휴대폰·접힌 화면)이거나 foldLayout 이 꺼져 있으면(wide=false) 3-42 이전과 똑같다: 폭 = phoneChartWidth(창 폭),
  *    높이 = 폭 × chartAspect(0.62). 잰 폭(box)은 쓰지 않는다 → 접은 화면 첫 화면이 main 과 같다 (사용자 결정 '접은 화면은 지금 그대로')
+ *    단 fill(기능 플래그 detailPolish)이면 폭만 잰 폭(720 상한) — 오른쪽 28dp 빈 띠가 없다 (2026-09-26 사용자 요청 '차트 오른쪽 빈 여백 없애줘').
+ *    높이는 예전 폭 × 0.62 그대로라 첫 화면의 세로 배치(차트 아래 칩 줄·고지 줄)는 바뀌지 않는다 (예: 475 창 419×260 → 447×260)
  *  - 넓은 창(wide = 플래그 켜짐 + 폭 등급 중간 이상)만 새 규칙:
  *    · 폭은 창 폭이 아니라 차트 묶음이 실제로 받은 폭(패널 안쪽) — 28dp 빈 띠가 없다 (진단 22번)
  *    · 잰 폭은 창 폭 − 패널 여백을 넘지 않게 줄인다. 창이 바뀌었는데 onLayout 이 한 박자 늦을 때(펼친 가로 → 세로 등)
@@ -63,16 +83,13 @@ export function phoneChartWidth(windowWidth: number): number {
 export function candleChartSize(o: ChartSizeInput): { width: number; height: number } {
   if (o.width !== undefined) return { width: o.width, height: o.height ?? Math.round(o.width * layout.chartAspect) };
   if (!o.wide) {
-    const width = phoneChartWidth(o.window.width);
-    return { width, height: o.height ?? Math.round(width * layout.chartAspect) };
+    const phone = phoneChartWidth(o.window.width);
+    const height = o.height ?? Math.round(phone * layout.chartAspect);
+    // detailPolish: 폭만 잰 폭 (720 상한은 그대로 — foldLayout 이 꺼진 넓은 창은 예전과 같다). 창 폭을 모르면(예전 폭 0) 0
+    if (o.fill) return { width: phone > 0 ? Math.min(measuredWidth(o), layout.chartMaxW) : 0, height };
+    return { width: phone, height };
   }
-  const guess = o.window.width - CHART_PANEL_PAD * 2;
-  const guessOk = Number.isFinite(guess) && guess > 0;
-  const boxOk = o.box !== null && Number.isFinite(o.box) && o.box > 0;
-  // 잰 폭 우선, 단 창 폭 − 패널 여백보다 넓으면 창 쪽으로 (창이 좁아졌는데 아직 다시 재지 못함)
-  const measured = boxOk ? (guessOk ? Math.min(o.box!, guess) : o.box!) : guess;
-  // 소수점 폭은 내림 (그림이 패널 밖으로 1px 넘치지 않게)
-  const width = Math.max(0, Math.floor(Number.isFinite(measured) ? measured : 0));
+  const width = measuredWidth(o);
   const natural = Math.round(width * layout.chartAspect);
   if (o.height !== undefined) return { width, height: o.height };
   if (!(o.window.height > 0)) return { width, height: natural };
