@@ -188,6 +188,26 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
         alter column avg_price type double precision using avg_price::text::double precision`.execute(db);
     },
   },
+  {
+    version: 7,
+    up: async (db, dialect) => {
+      // 시장 전체 요약 (플래그 marketSummary). 새 표만 추가하고 기존 표는 건드리지 않는다. 날짜·세션마다 1건 (다시 만들면 덮어쓴다).
+      // 예전 서버로 되돌려도 이 표를 모르고 지나갈 뿐이다
+      await db.schema
+        .createTable("market_summaries")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("summary_date", "text", (c) => c.notNull())
+        .addColumn("session", "text", (c) => c.notNull())
+        .addColumn("market", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("summary", "text", (c) => c.notNull())
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_market_summaries_date_session on market_summaries (summary_date, session)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

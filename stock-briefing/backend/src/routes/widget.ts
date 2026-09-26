@@ -6,7 +6,8 @@ import type { MarketIndices } from "../providers/market/indices.js";
 import type { BriefingService } from "../services/briefingService.js";
 import type { FeatureService } from "../services/featureService.js";
 import type { StockService } from "../services/stockService.js";
-import { buildWidgetPayload, widgetBrief, type BriefSchedule, type WidgetFeatures } from "../services/widgetPayload.js";
+import type { MarketSummary } from "../services/marketSummaryService.js";
+import { buildWidgetPayload, widgetBrief, widgetSummary, type BriefSchedule, type WidgetFeatures } from "../services/widgetPayload.js";
 
 /**
  * GET /api/widget — 홈 화면 위젯(잔고·브리핑·자산, 1.4.0 부터 지수·환율까지)이 같이 쓰는 한 번의 응답 (3-16).
@@ -27,6 +28,9 @@ import { buildWidgetPayload, widgetBrief, type BriefSchedule, type WidgetFeature
  *  - widgetExtended 가 켜져 있고 &sessions=1 이면 칩에 시장별 연장 세션 열림(market.ext — 미국 프리·애프터·주간거래 등). 새 앱은 이때도 장중처럼
  *    15분마다 갱신하고 '지연'을 따진다. 새 요청 표시를 더하지 않는 것은 1.4.0 지금 JS 도 &sessions=1 로 묻고 모르는 칸을 무시하기 때문이다
  *    (주소를 바꾸면 받아 둔 응답을 한 번 버린다). 칩의 다른 칸은 그대로라 예전 앱의 모습·갱신 주기는 바뀌지 않는다
+ *  - ms=1: 브리핑 위젯 첫 줄(시장 전체 요약)을 그릴 수 있는 새 앱. features 에 marketSummary 를 넣고, 켜져 있으면 가장 최근 시장 요약의 숫자(ms)를 넣는다.
+ *    끄면 요약을 조회하지도 않는다(DB 조회 0). 예전 앱(표시 없음)에는 둘 다 넣지 않아 응답·ETag 가 바이트까지 그대로다 — 요약이 새로 생겨도
+ *    예전 앱은 304 를 그대로 받는다. 새 앱의 ETag 는 새 요약이 저장될 때(하루 두 번) 바뀐다
  */
 export const widgetRoutes: FastifyPluginAsync<{
   stocks: StockService;
@@ -37,6 +41,8 @@ export const widgetRoutes: FastifyPluginAsync<{
   accounts?: { recentOkIds(limit?: number): Promise<number[]> };
   /** 알림 설정의 브리핑 시간 (브리핑 위젯 안내 BH-68). 없거나 못 읽으면 안내에 시간을 넣지 않는다 */
   schedule?: () => Promise<BriefSchedule>;
+  /** 시장 전체 요약 (브리핑 위젯 첫 줄, MarketSummaryService). 없으면(테스트 기본 출처) 첫 줄 없음 */
+  summaries?: { list(limit?: number): Promise<MarketSummary[]> };
 }> = async (app, deps) => {
   const flags = async (): Promise<WidgetFeatures | undefined> => {
     if (!deps.features) return undefined;
@@ -52,11 +58,12 @@ export const widgetRoutes: FastifyPluginAsync<{
   };
   app.get("/", async (req, reply) => {
     const features = flags();
-    const q = req.query as { indices?: unknown; board?: unknown; sessions?: unknown; ui?: unknown } | undefined;
+    const q = req.query as { indices?: unknown; board?: unknown; sessions?: unknown; ui?: unknown; ms?: unknown } | undefined;
     const wantsIndices = q?.indices === "1";
     const wantsBoard = q?.board === "1";
     const wantsSessions = q?.sessions === "1";
     const newUi = q?.ui === "2";
+    const wantsSummary = q?.ms === "1";
     const schedule = newUi && deps.schedule ? deps.schedule().catch(() => null) : null;
     const indices = features.then((f) =>
       deps.indices && ((wantsIndices && f?.widgetIndexLine) || (wantsBoard && f?.widgetMarket)) ? deps.indices.list({ stale: true }).catch(() => null) : null,
@@ -68,10 +75,29 @@ export const widgetRoutes: FastifyPluginAsync<{
             .then((on) => (on ? deps.accounts!.recentOkIds(4) : null))
             .catch(() => null)
         : null;
-    const [list, latest, status, f, idx, accountIds, sched] = await Promise.all([deps.stocks.listWithQuotes(), deps.briefings.latestPerStock(), deps.calendar.status().catch(() => null), features, indices, accounts, schedule]);
+    // 브리핑 위젯 첫 줄: 새 앱이 물을 때만 플래그를 보고, 켜져 있을 때만 가장 최근 요약을 읽는다.
+    // 요약 때문에 위젯 응답이 실패하는 일은 없다 — 못 읽거나 저장된 모양이 달라 어디서 던져도 첫 줄만 빠진다 (WV2)
+    const summaryOn = wantsSummary && deps.features ? deps.features.enabled("marketSummary").catch(() => false) : null;
+    const summary = summaryOn
+      ? summaryOn
+          .then(async (on) => (on && deps.summaries ? widgetSummary((await deps.summaries.list(1))?.[0]) : null))
+          .catch(() => null)
+      : null;
+    const [list, latest, status, f, idx, accountIds, sched, msOn, ms] = await Promise.all([
+      deps.stocks.listWithQuotes(),
+      deps.briefings.latestPerStock(),
+      deps.calendar.status().catch(() => null),
+      features,
+      indices,
+      accounts,
+      schedule,
+      summaryOn,
+      summary,
+    ]);
     const body = JSON.stringify(
       buildWidgetPayload(list, latest, status, {
-        features: f,
+        // marketSummary 는 새 앱(&ms=1)에만 — 예전 앱의 features 칸은 그대로
+        features: f && msOn !== null ? { ...f, marketSummary: msOn } : f,
         indices: wantsIndices ? idx : null,
         board: wantsBoard ? idx : null,
         accountIds,
@@ -79,6 +105,7 @@ export const widgetRoutes: FastifyPluginAsync<{
         polish: newUi && f?.widgetPolish === true,
         brief: newUi ? widgetBrief(latest, sched) : null,
         extended: wantsSessions && f?.widgetExtended === true,
+        summary: ms,
       }),
     );
     const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 16)}"`;

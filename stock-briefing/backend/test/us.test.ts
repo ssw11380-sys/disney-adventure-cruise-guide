@@ -69,6 +69,9 @@ describe("Yahoo US search and quotes", () => {
   });
 });
 
+/** 평일(2026-09-22 화 09:00 KST) — 아침 세션의 미국 장(9/21 월)이 거래일 */
+const US_TEST_NOW = () => new Date("2026-09-22T09:00:00+09:00");
+
 describe("US stock end to end", () => {
   let app: FastifyInstance;
   let db: Db;
@@ -92,6 +95,8 @@ describe("US stock end to end", () => {
       }),
       logger: false,
       enableScheduler: false,
+      // 평일 고정 시계 (실제 시계를 쓰면 주말·휴장일에 브리핑이 '휴장일'로 건너뛰어 (3-11) 테스트가 실패했다)
+      now: US_TEST_NOW,
     });
     await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
   });

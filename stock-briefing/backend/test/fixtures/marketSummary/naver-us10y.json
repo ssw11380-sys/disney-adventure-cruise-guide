@@ -1,0 +1,10 @@
+{
+ "categoryType": "bond",
+ "reutersCode": "US10YT=RR",
+ "name": "미국 국채 10년",
+ "localTradedAt": "2026-09-25T17:03:02-04:00",
+ "closePrice": "5.1650",
+ "fluctuations": "0.0026",
+ "fluctuationsRatio": "0.05",
+ "marketStatus": "OPEN"
+}

@@ -326,6 +326,142 @@ export interface LatestBriefing {
   latest: Briefing | null;
 }
 
+// ── 시장 전체 요약 (플래그 marketSummary, 서버 marketSummaryCalc 의 MarketSummaryData 와 같은 모양) ──
+
+export type SummaryMarket = "US" | "KR";
+
+export interface SummaryIndex {
+  code: string;
+  name: string;
+  value: number | null;
+  change: number | null;
+  changeRate: number | null;
+  /** 값의 거래일 (현지) */
+  date: string | null;
+  asOf: string | null;
+  /** 받지 못한 까닭 (있으면 칸은 '—') */
+  missing?: string;
+}
+
+export interface SummaryFx {
+  value: number;
+  change: number;
+  changeRate: number;
+  /** 하나은행 고시 일별 시리즈의 마지막 날짜 */
+  date: string | null;
+  stale: boolean;
+}
+
+export interface SummaryYield {
+  value: number;
+  change: number | null;
+  date: string;
+  prevValue: number | null;
+  prevDate: string | null;
+  /** treasury = 미 재무부, naver = 네이버(로이터 시장 수익률) — 산출 방식이 달라 출처를 적는다 */
+  source: "treasury" | "naver";
+  dp: { value: number; change: number };
+}
+
+export interface SectorRow {
+  name: string;
+  code: string;
+  changeRate: number;
+  count?: number;
+}
+
+export interface SummarySectors {
+  basis: "etf" | "naver";
+  date: string;
+  strong: SectorRow[];
+  weak: SectorRow[];
+  all: SectorRow[];
+  excluded: { name: string; changeRate: number; reason: string }[];
+  total: number;
+}
+
+export type CompareGroup = "high" | "similar" | "low";
+
+export interface CompareRow {
+  code: string;
+  name: string;
+  changeRate: number;
+  benchmark: { code: string; name: string; changeRate: number };
+  /** 종목 등락률 − 기준 지수 등락률 (%p) */
+  diff: number;
+  group: CompareGroup;
+}
+
+export interface HoldingsCompare {
+  market: SummaryMarket;
+  compared: number;
+  up: number;
+  down: number;
+  flat: number;
+  high: CompareRow[];
+  similar: CompareRow[];
+  low: CompareRow[];
+  /** 뺀 종목 이름. bond(채권·금리형 ETF)는 나중에 더한 칸이라 예전에 저장한 요약에는 없다 */
+  excluded: { leverage: string[]; overseas: string[]; bond?: string[]; noQuote: string[]; noBenchmark: string[] };
+  benchmarks: { code: string; name: string; changeRate: number }[];
+}
+
+export interface SummaryEvent {
+  kind: "fomc" | "cpi" | "jobs" | "bok" | "kr-holiday" | "kr-open" | "us-holiday" | "us-early" | "kr-special";
+  /** 한국 날짜 */
+  date: string;
+  endDate?: string;
+  /** 한국 시각 HH:MM, '오전', 없으면 null */
+  time: string | null;
+  text: string;
+  at: string;
+  tentative?: boolean;
+  source?: string;
+}
+
+export interface SummaryNews {
+  /** 언론사 제목 원문 그대로 */
+  title: string;
+  outlet: string;
+  publishedAt: string;
+  url: string;
+}
+
+export interface MarketSummaryData {
+  version: 1;
+  session: BriefingSession;
+  market: SummaryMarket;
+  date: string;
+  marketDate: string;
+  basisDate: string;
+  asOf: string;
+  holiday: { date: string; name: string | null } | null;
+  weekendGap: boolean;
+  earlyClose: boolean;
+  closeTime: string;
+  phase: "final" | "intraday" | "prelim";
+  indices: SummaryIndex[];
+  fx: SummaryFx | null;
+  yield10y: SummaryYield | null;
+  sectors: SummarySectors | null;
+  holdings: HoldingsCompare | null;
+  events: { within: SummaryEvent[]; next: SummaryEvent | null; unknown: string[] };
+  news: { query: string; from: string; to: string; items: SummaryNews[]; fresh: boolean };
+  notes: string[];
+}
+
+/** GET /api/market-summaries — 목록과 한 건이 같은 모양 (data 포함) */
+export interface MarketSummary {
+  id: number;
+  date: string;
+  session: BriefingSession;
+  market: SummaryMarket;
+  status: "ok" | "failed";
+  summary: string;
+  createdAt: string;
+  data: MarketSummaryData | null;
+}
+
 export interface RunResult {
   session: BriefingSession;
   date: string;

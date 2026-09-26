@@ -22,7 +22,7 @@ import type { AppErrorSummary, Evaluation,
   SendSummary,
   LatestBriefing,
   ListedStock,
-  MarketIndex, MarketStatus,
+  MarketIndex, MarketStatus, MarketSummary,
   Quote,
   RegisteredStock,
   RegisteredWithQuote,
@@ -140,6 +140,9 @@ export function createApi(baseUrl: string, token = "") {
     /** 계좌 한 장 브리핑 (3-31). 예전 서버는 404 → 부르는 쪽이 "없음"으로 본다 */
     accountBriefings: (limit = 5) => get<AccountBriefing[]>(`/api/account-briefings?limit=${limit}`, 15_000),
     getAccountBriefing: (id: number) => get<AccountBriefingWithData>(`/api/account-briefings/${id}`, 15_000),
+    /** 시장 전체 요약 (플래그 marketSummary). 예전 서버는 404 → 부르는 쪽이 "없음"으로 본다 (카드 없음) */
+    marketSummaries: (limit = 4) => get<MarketSummary[]>(`/api/market-summaries?limit=${limit}`, 15_000),
+    getMarketSummary: (id: number) => get<MarketSummary>(`/api/market-summaries/${id}`, 15_000),
 
     registerDevice: (body: { token: string; platform: "android" | "ios" | "unknown"; deviceName?: string | null }) => send<Device>("POST", "/api/devices", body),
     unregisterDevice: (token: string) => send<void>("DELETE", `/api/devices/${encodeURIComponent(token)}`),

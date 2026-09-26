@@ -107,6 +107,18 @@ export interface AccountBriefingTable {
   created_at: string;
 }
 
+/** 시장 전체 요약 (플래그 marketSummary): 세션(날짜·오전/오후)마다 1건. 숫자·뉴스 제목은 data(JSON), summary 는 만든 때의 요약 줄 (모델 문장 없음) */
+export interface MarketSummaryTable {
+  id: Generated<number>;
+  summary_date: string; // YYYY-MM-DD (KST, 브리핑 세션 날짜)
+  session: string; // 'morning' | 'afternoon'
+  market: string; // 'US' (아침) | 'KR' (오후)
+  status: string; // 'ok' | 'failed'
+  summary: string; // 만든 때의 요약 줄 (코드로 만든 문장)
+  data: string; // JSON(MarketSummaryData)
+  created_at: string;
+}
+
 export interface Database {
   listed_stocks: ListedStockTable;
   registered_stocks: RegisteredStockTable;
@@ -118,4 +130,5 @@ export interface Database {
   devices: DeviceTable;
   app_errors: AppErrorTable;
   account_briefings: AccountBriefingTable;
+  market_summaries: MarketSummaryTable;
 }

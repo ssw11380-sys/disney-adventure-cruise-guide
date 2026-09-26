@@ -13,7 +13,9 @@ import type { Briefing } from "@/api/types";
 export type BriefingPick =
   /** code: 종목 코드 (알 때만). 고른 브리핑이 목록에 없을 때(지난 브리핑) 같은 종목 줄을 강조하는 데 쓴다 */
   | { kind: "stock"; id: number; code?: string }
-  | { kind: "account"; id: number };
+  | { kind: "account"; id: number }
+  /** 시장 전체 요약 (플래그 marketSummary). 목록 맨 위 줄을 누르면 오른쪽 칸에 요약 상세 — 처음 골라지는 브리핑 규칙은 바꾸지 않는다 */
+  | { kind: "market"; id: number };
 
 export interface PickState {
   pick: BriefingPick | null;

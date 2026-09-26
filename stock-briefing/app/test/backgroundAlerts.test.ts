@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RunResult } from "@/api/types";
+import type { MarketSummaryData, RunResult } from "@/api/types";
 
 // 백그라운드 알림 경로를 가짜 모듈로 (알림 예약 횟수만 본다)
 const scheduled: unknown[] = [];
@@ -407,6 +408,59 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     });
   });
 
+  describe("시장 전체 요약 첫 줄 (플래그 marketSummary — 꺼져 있거나 모르면 요청 0)", () => {
+    // 공용 픽스처의 오후 요약을 이 테스트의 세션(9/24 오후)으로 옮긴 것
+    const base = (JSON.parse(readFileSync(new URL("../../shared/fixtures/marketSummary.json", import.meta.url), "utf8")) as { cases: Array<{ data: MarketSummaryData }> }).cases[1]!.data;
+    const data: MarketSummaryData = { ...base, date: "2026-09-24", marketDate: "2026-09-24", basisDate: "2026-09-24" };
+    const summary = { id: 41, date: "2026-09-24", session: "afternoon", market: "KR", status: "ok", summary: "", createdAt: "2026-09-24T16:01:00+09:00", data };
+    /** 앱이 저장한 react-query 캐시 (기능 플래그 한 벌) */
+    const persisted = (flags: Record<string, boolean>, apiUrl = "https://server.test") =>
+      JSON.stringify({ buster: "v2", timestamp: NOW, clientState: { mutations: [], queries: [{ queryKey: [apiUrl, "features"], queryHash: "x", state: { data: { features: flags, updatedAt: null }, dataUpdatedAt: NOW } }] } });
+    const serveMs = (list: typeof latest) => {
+      const urls: string[] = [];
+      vi.stubGlobal("fetch", async (url: string) => {
+        urls.push(url);
+        if (url.includes("/api/widget")) return new Response(JSON.stringify({ ...payload, latestIds: list.map((b) => b.latest.id) }), { status: 200 });
+        if (url.endsWith("/api/notifications/settings")) return new Response(JSON.stringify(prefs), { status: 200 });
+        if (url.includes("/api/market-summaries")) return new Response(JSON.stringify([summary]), { status: 200 });
+        return new Response(JSON.stringify(list), { status: 200 });
+      });
+      return urls;
+    };
+    const body = (i: number) => (scheduled[i] as { content: { body: string } }).content.body;
+
+    it("앱이 받은 플래그 저장본이 없으면(예전 서버·아직 앱을 열지 않음) 요약을 묻지 않고 알림은 지금 그대로", async () => {
+      await enableLocalBriefingAlerts();
+      const urls = serveMs([...latest, ...newOnes(3)]);
+      await runBriefingCheck();
+      expect(urls.filter((u) => u.includes("/api/market-summaries"))).toHaveLength(0);
+      expect(scheduled).toHaveLength(1);
+      expect(body(0)).not.toContain("코스피");
+    });
+
+    it("저장본에서 꺼져 있으면(서버가 끔) 묻지 않는다, 다른 서버 주소의 저장본은 쓰지 않는다", async () => {
+      await enableLocalBriefingAlerts();
+      store.set("rq.cache", persisted({ marketSummary: false }));
+      const urls = serveMs([...latest, ...newOnes(3)]);
+      await runBriefingCheck();
+      expect(urls.filter((u) => u.includes("/api/market-summaries"))).toHaveLength(0);
+      store.set("rq.cache", persisted({ marketSummary: true }, "https://other.test"));
+      const urls2 = serveMs([...latest, ...newOnes(3).map((b) => ({ ...b, latest: { ...b.latest, id: b.latest.id + 50 } }))]);
+      await runBriefingCheck();
+      expect(urls2.filter((u) => u.includes("/api/market-summaries"))).toHaveLength(0);
+    });
+
+    it("저장본에서 켜져 있으면 한 번 묻고, 같은 날짜·세션 요약이 본문 첫 줄 (세션당 1건 그대로)", async () => {
+      await enableLocalBriefingAlerts();
+      store.set("rq.cache", persisted({ marketSummary: true }));
+      const urls = serveMs([...latest, ...newOnes(3)]);
+      await runBriefingCheck();
+      expect(urls.filter((u) => u.includes("/api/market-summaries"))).toEqual(["https://server.test/api/market-summaries?limit=4"]);
+      expect(scheduled).toHaveLength(1);
+      expect(body(0).split("\n")[0]).toBe("오늘 한국 코스피 +0.90% · 코스닥 +1.21% · 내 국내 5종목 중 지수보다 높음 1 · 낮음 2");
+    });
+  });
+
   describe("지수·환율 위젯 (APK 1.4.0): 백그라운드 작업이 다른 위젯처럼 갱신한다", () => {
     const board = [
       { code: "KOSPI", name: "코스피", value: 7080.92, change: 63.01, changeRate: 0.9, open: true },
@@ -426,7 +480,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
       placed.market = true;
       const urls = serveBoard();
       await runBriefingCheck();
-      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2&board=1"]);
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2&ms=1&board=1"]);
       const r = refreshed[0] as { board: { at: number; list: { code: string }[] } | null; features: { flags: { market: boolean } } | null };
       expect(r.board!.list.map((i) => i.code)).toEqual(["KOSPI", "USDKRW"]);
       expect(r.board!.at).toBe(NOW);
@@ -436,7 +490,7 @@ describe("백그라운드 브리핑 알림 (3-16 리뷰 M1)", () => {
     it("위젯이 없으면 판을 묻지 않는다 (응답·ETag 가 예전과 같다)", async () => {
       const urls = serveBoard();
       await runBriefingCheck();
-      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2"]);
+      expect(urls.filter((u) => u.includes("/api/widget"))).toEqual(["https://server.test/api/widget?indices=1&sessions=1&ui=2&ms=1"]);
       expect((refreshed[0] as { board: unknown }).board).toBeNull();
     });
   });

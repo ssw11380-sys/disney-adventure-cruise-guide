@@ -1,0 +1,1455 @@
+{
+ "note": "시장 전체 요약 공용 픽스처. backend/test/marketSummary.test.ts 가 서버 문장 함수(marketSummaryCalc)와, app/test/marketSummary.test.ts 가 앱 문장 함수(lib/marketSummary)와 같은 글을 내는지 본다. 숫자는 사양의 미국 9/25·한국 9/23 실제 값, 보유 종목 구성은 예시, 뉴스 제목은 저작권 때문에 '[예시]' 자리표시. 기대 문장은 사양의 확정 예시(요구 검사 보정 반영)를 사람이 옮긴 것",
+ "cases": [
+  {
+   "name": "월요일 아침 9/28 08:30 (금요일 미국 장, 추석 뒤 원/달러는 9/23 고시)",
+   "data": {
+    "version": 1,
+    "session": "morning",
+    "market": "US",
+    "date": "2026-09-28",
+    "marketDate": "2026-09-25",
+    "basisDate": "2026-09-25",
+    "asOf": "2026-09-28T08:30:05+09:00",
+    "holiday": null,
+    "weekendGap": true,
+    "earlyClose": false,
+    "closeTime": "16:00",
+    "phase": "final",
+    "indices": [
+     {
+      "code": "NASDAQ",
+      "name": "나스닥",
+      "value": 27068.72,
+      "change": 129.34,
+      "changeRate": 0.48,
+      "date": "2026-09-25",
+      "asOf": "2026-09-25T17:15:00-04:00"
+     },
+     {
+      "code": "SPX",
+      "name": "S&P500",
+      "value": 7743.41,
+      "change": 39.28,
+      "changeRate": 0.51,
+      "date": "2026-09-25",
+      "asOf": "2026-09-25T16:39:00-04:00"
+     },
+     {
+      "code": "DJI",
+      "name": "다우",
+      "value": 51828.62,
+      "change": 478.64,
+      "changeRate": 0.93,
+      "date": "2026-09-25",
+      "asOf": "2026-09-25T17:05:00-04:00"
+     },
+     {
+      "code": "SOX",
+      "name": "필라반도체",
+      "value": 12668.93,
+      "change": 176.39,
+      "changeRate": 1.41,
+      "date": "2026-09-25",
+      "asOf": "2026-09-25T17:15:00-04:00"
+     }
+    ],
+    "fx": {
+     "value": 1359,
+     "change": 3.5,
+     "changeRate": 0.26,
+     "date": "2026-09-23",
+     "stale": false
+    },
+    "yield10y": {
+     "value": 5.17,
+     "change": -0.01,
+     "date": "2026-09-25",
+     "prevValue": 5.18,
+     "prevDate": "2026-09-24",
+     "source": "treasury",
+     "dp": {
+      "value": 2,
+      "change": 2
+     }
+    },
+    "sectors": {
+     "basis": "etf",
+     "date": "2026-09-25",
+     "strong": [
+      {
+       "name": "산업재",
+       "code": "XLI",
+       "changeRate": 0.95
+      },
+      {
+       "name": "기술",
+       "code": "XLK",
+       "changeRate": 0.8
+      }
+     ],
+     "weak": [
+      {
+       "name": "커뮤니케이션",
+       "code": "XLC",
+       "changeRate": -0.9
+      },
+      {
+       "name": "에너지",
+       "code": "XLE",
+       "changeRate": -0.89
+      }
+     ],
+     "all": [
+      {
+       "name": "산업재",
+       "code": "XLI",
+       "changeRate": 0.95
+      },
+      {
+       "name": "기술",
+       "code": "XLK",
+       "changeRate": 0.8
+      },
+      {
+       "name": "금융",
+       "code": "XLF",
+       "changeRate": 0.57
+      },
+      {
+       "name": "헬스케어",
+       "code": "XLV",
+       "changeRate": 0.49
+      },
+      {
+       "name": "필수소비재",
+       "code": "XLP",
+       "changeRate": 0.44
+      },
+      {
+       "name": "유틸리티",
+       "code": "XLU",
+       "changeRate": 0.38
+      },
+      {
+       "name": "소재",
+       "code": "XLB",
+       "changeRate": 0.24
+      },
+      {
+       "name": "경기소비재",
+       "code": "XLY",
+       "changeRate": 0.22
+      },
+      {
+       "name": "부동산",
+       "code": "XLRE",
+       "changeRate": -0.22
+      },
+      {
+       "name": "에너지",
+       "code": "XLE",
+       "changeRate": -0.89
+      },
+      {
+       "name": "커뮤니케이션",
+       "code": "XLC",
+       "changeRate": -0.9
+      }
+     ],
+     "excluded": [],
+     "total": 11
+    },
+    "holdings": {
+     "market": "US",
+     "compared": 12,
+     "up": 8,
+     "down": 4,
+     "flat": 0,
+     "high": [
+      {
+       "code": "MSFT",
+       "name": "마이크로소프트",
+       "changeRate": 3.66,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": 3.18,
+       "group": "high"
+      },
+      {
+       "code": "AAPL",
+       "name": "애플",
+       "changeRate": 1.53,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": 1.05,
+       "group": "high"
+      }
+     ],
+     "similar": [
+      {
+       "code": "JPM",
+       "name": "JP모건",
+       "changeRate": 1.33,
+       "benchmark": {
+        "code": "SPX",
+        "name": "S&P500",
+        "changeRate": 0.51
+       },
+       "diff": 0.82,
+       "group": "similar"
+      },
+      {
+       "code": "AVGO",
+       "name": "브로드컴",
+       "changeRate": 0.7,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": 0.22,
+       "group": "similar"
+      },
+      {
+       "code": "GOOGL",
+       "name": "알파벳A",
+       "changeRate": 0.46,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": -0.02,
+       "group": "similar"
+      },
+      {
+       "code": "NVDA",
+       "name": "엔비디아",
+       "changeRate": 0.22,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": -0.26,
+       "group": "similar"
+      },
+      {
+       "code": "O",
+       "name": "리얼티인컴",
+       "changeRate": 0.23,
+       "benchmark": {
+        "code": "SPX",
+        "name": "S&P500",
+        "changeRate": 0.51
+       },
+       "diff": -0.28,
+       "group": "similar"
+      },
+      {
+       "code": "AMZN",
+       "name": "아마존",
+       "changeRate": 0.12,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": -0.36,
+       "group": "similar"
+      },
+      {
+       "code": "KO",
+       "name": "코카콜라",
+       "changeRate": -0.33,
+       "benchmark": {
+        "code": "SPX",
+        "name": "S&P500",
+        "changeRate": 0.51
+       },
+       "diff": -0.84,
+       "group": "similar"
+      }
+     ],
+     "low": [
+      {
+       "code": "PLTR",
+       "name": "팔란티어",
+       "changeRate": -1.52,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": -2,
+       "group": "low"
+      },
+      {
+       "code": "TSLA",
+       "name": "테슬라",
+       "changeRate": -1.54,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": -2.02,
+       "group": "low"
+      },
+      {
+       "code": "META",
+       "name": "메타",
+       "changeRate": -3.33,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": 0.48
+       },
+       "diff": -3.81,
+       "group": "low"
+      }
+     ],
+     "excluded": {
+      "leverage": [],
+      "overseas": [],
+      "noQuote": [],
+      "noBenchmark": []
+     },
+     "benchmarks": [
+      {
+       "code": "NASDAQ",
+       "name": "나스닥",
+       "changeRate": 0.48
+      },
+      {
+       "code": "SPX",
+       "name": "S&P500",
+       "changeRate": 0.51
+      }
+     ]
+    },
+    "events": {
+     "within": [],
+     "next": {
+      "kind": "jobs",
+      "date": "2026-10-02",
+      "time": "21:30",
+      "text": "미국 9월 고용보고서 발표",
+      "at": "2026-10-02T12:30:00.000Z",
+      "tentative": true,
+      "source": "https://www.bls.gov/schedule/news_release/empsit.htm"
+     },
+     "unknown": []
+    },
+    "news": {
+     "query": "뉴욕증시",
+     "from": "2026-09-25T19:50:00.000Z",
+     "to": "2026-09-26T02:00:00.000Z",
+     "items": [
+      {
+       "title": "[예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑",
+       "outlet": "뉴스1",
+       "publishedAt": "2026-09-25T20:32:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-1"
+      },
+      {
+       "title": "[예시] 뉴욕증시, 기술주 강세 속 상승 마감",
+       "outlet": "KBS",
+       "publishedAt": "2026-09-25T20:22:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-2"
+      },
+      {
+       "title": "[예시] 뉴욕증시 마감 시황",
+       "outlet": "한국경제",
+       "publishedAt": "2026-09-25T20:38:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-3"
+      }
+     ],
+     "fresh": true
+    },
+    "notes": []
+   },
+   "views": [
+    {
+     "at": "2026-09-28T08:31:00+09:00",
+     "title": "금요일(9/25) 미국 시장",
+     "basis": "9/25(금) 뉴욕 장 마감 기준 · 주말 이틀 휴장",
+     "holiday": null,
+     "lines": [
+      "나스닥 +0.48% · S&P500 +0.51% · 다우 +0.93% · 필라반도체 +1.41%",
+      "원/달러 1,359.00원 +3.50원 (9/23 고시) · 미 10년물 5.17% -0.01%p (미 재무부)",
+      "강한 업종 산업재 +0.95% · 기술 +0.80% / 약한 업종 커뮤니케이션 -0.90% · 에너지 -0.89% (섹터 ETF 기준)",
+      "내 미국 12종목 · 지수보다 높음 2 (마이크로소프트 +3.66%, 지수와 차이 +3.18%p) · 낮음 3 (메타 -3.33%, 차이 -3.81%p) · 비슷 7",
+      "뉴스 3건 · 뉴스1 9/26 05:32 · KBS 9/26 05:22 · 한국경제 9/26 05:38"
+     ]
+    }
+   ],
+   "digest": {
+    "at": "2026-09-28T08:31:00+09:00",
+    "line": "금요일(9/25) 미국 나스닥 +0.48% · S&P500 +0.51% · 내 미국 12종목 중 지수보다 높음 2 · 낮음 3"
+   },
+   "aux": "내 미국 12종목: 상승 8 · 하락 4 / 나스닥 +0.48% · S&P500 +0.51%"
+  },
+  {
+   "name": "오후 9/23(수) 16:00 (오늘 한국 장)",
+   "data": {
+    "version": 1,
+    "session": "afternoon",
+    "market": "KR",
+    "date": "2026-09-23",
+    "marketDate": "2026-09-23",
+    "basisDate": "2026-09-23",
+    "asOf": "2026-09-23T16:00:10+09:00",
+    "holiday": null,
+    "weekendGap": false,
+    "earlyClose": false,
+    "closeTime": "15:30",
+    "phase": "final",
+    "indices": [
+     {
+      "code": "KOSPI",
+      "name": "코스피",
+      "value": 7080.92,
+      "change": 63.01,
+      "changeRate": 0.9,
+      "date": "2026-09-23",
+      "asOf": "2026-09-23T20:15:00+09:00"
+     },
+     {
+      "code": "KOSDAQ",
+      "name": "코스닥",
+      "value": 844.48,
+      "change": 10.1,
+      "changeRate": 1.21,
+      "date": "2026-09-23",
+      "asOf": "2026-09-23T20:15:00+09:00"
+     }
+    ],
+    "fx": {
+     "value": 1359,
+     "change": 3.5,
+     "changeRate": 0.26,
+     "date": "2026-09-23",
+     "stale": false
+    },
+    "yield10y": null,
+    "sectors": {
+     "basis": "naver",
+     "date": "2026-09-23",
+     "strong": [
+      {
+       "name": "석유와가스",
+       "code": "1",
+       "changeRate": 3.13,
+       "count": 18
+      },
+      {
+       "name": "반도체와반도체장비",
+       "code": "2",
+       "changeRate": 2.8,
+       "count": 90
+      }
+     ],
+     "weak": [
+      {
+       "name": "건설",
+       "code": "5",
+       "changeRate": -4.19,
+       "count": 72
+      },
+      {
+       "name": "철강",
+       "code": "4",
+       "changeRate": -2.92,
+       "count": 54
+      }
+     ],
+     "all": [
+      {
+       "name": "석유와가스",
+       "code": "1",
+       "changeRate": 3.13,
+       "count": 18
+      },
+      {
+       "name": "반도체와반도체장비",
+       "code": "2",
+       "changeRate": 2.8,
+       "count": 90
+      },
+      {
+       "name": "은행",
+       "code": "3",
+       "changeRate": 0.5,
+       "count": 10
+      },
+      {
+       "name": "철강",
+       "code": "4",
+       "changeRate": -2.92,
+       "count": 54
+      },
+      {
+       "name": "건설",
+       "code": "5",
+       "changeRate": -4.19,
+       "count": 72
+      }
+     ],
+     "excluded": [
+      {
+       "name": "가정용품",
+       "changeRate": 163.21,
+       "reason": "등락 +163.21%"
+      },
+      {
+       "name": "소형 업종",
+       "changeRate": 5.5,
+       "reason": "구성 3종목"
+      }
+     ],
+     "total": 7
+    },
+    "holdings": {
+     "market": "KR",
+     "compared": 5,
+     "up": 3,
+     "down": 2,
+     "flat": 0,
+     "high": [
+      {
+       "code": "005930",
+       "name": "삼성전자",
+       "changeRate": 3.62,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": 2.72,
+       "group": "high"
+      }
+     ],
+     "similar": [
+      {
+       "code": "000660",
+       "name": "SK하이닉스",
+       "changeRate": 1.25,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": 0.35,
+       "group": "similar"
+      },
+      {
+       "code": "247540",
+       "name": "에코프로비엠",
+       "changeRate": 1.15,
+       "benchmark": {
+        "code": "KOSDAQ",
+        "name": "코스닥",
+        "changeRate": 1.21
+       },
+       "diff": -0.06,
+       "group": "similar"
+      }
+     ],
+     "low": [
+      {
+       "code": "035720",
+       "name": "카카오",
+       "changeRate": -1.02,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": -1.92,
+       "group": "low"
+      },
+      {
+       "code": "035420",
+       "name": "NAVER",
+       "changeRate": -2.49,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": -3.39,
+       "group": "low"
+      }
+     ],
+     "excluded": {
+      "leverage": [],
+      "overseas": [],
+      "noQuote": [],
+      "noBenchmark": []
+     },
+     "benchmarks": [
+      {
+       "code": "KOSPI",
+       "name": "코스피",
+       "changeRate": 0.9
+      },
+      {
+       "code": "KOSDAQ",
+       "name": "코스닥",
+       "changeRate": 1.21
+      }
+     ]
+    },
+    "events": {
+     "within": [
+      {
+       "kind": "kr-holiday",
+       "date": "2026-09-24",
+       "endDate": "2026-09-25",
+       "time": null,
+       "text": "추석 연휴 한국 휴장",
+       "at": "2026-09-24T00:00:00.000Z"
+      },
+      {
+       "kind": "kr-open",
+       "date": "2026-09-28",
+       "time": null,
+       "text": "다음 개장",
+       "at": "2026-09-24T00:00:00.001Z"
+      }
+     ],
+     "next": {
+      "kind": "jobs",
+      "date": "2026-10-02",
+      "time": "21:30",
+      "text": "미국 9월 고용보고서 발표",
+      "at": "2026-10-02T12:30:00.000Z",
+      "tentative": true,
+      "source": "https://www.bls.gov/schedule/news_release/empsit.htm"
+     },
+     "unknown": []
+    },
+    "news": {
+     "query": "코스피 마감",
+     "from": "2026-09-23T06:20:00.000Z",
+     "to": "2026-09-23T07:00:10.000Z",
+     "items": [
+      {
+       "title": "[예시] 코스피 상승 마감",
+       "outlet": "연합뉴스",
+       "publishedAt": "2026-09-23T06:39:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-4"
+      },
+      {
+       "title": "[예시] 코스피 마감 시황",
+       "outlet": "연합인포맥스",
+       "publishedAt": "2026-09-23T06:43:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-5"
+      },
+      {
+       "title": "[예시] 코스피 강세로 마감",
+       "outlet": "한국경제",
+       "publishedAt": "2026-09-23T06:43:30.000Z",
+       "url": "https://news.google.com/rss/articles/example-6"
+      }
+     ],
+     "fresh": true
+    },
+    "notes": []
+   },
+   "views": [
+    {
+     "at": "2026-09-23T16:01:00+09:00",
+     "title": "오늘 한국 시장",
+     "basis": "9/23(수) 15:30 장 마감 기준",
+     "holiday": null,
+     "lines": [
+      "코스피 7,080.92 +0.90% · 코스닥 844.48 +1.21%",
+      "원/달러 1,359.00원 +3.50원",
+      "강한 업종 석유와가스 +3.13% · 반도체와반도체장비 +2.80% / 약한 업종 건설 -4.19% · 철강 -2.92%",
+      "내 국내 5종목 · 지수보다 높음 1 (삼성전자 +3.62%, 지수와 차이 +2.72%p) · 낮음 2 (NAVER -2.49%, 차이 -3.39%p) · 비슷 2",
+      "일정 · 9/24~9/25 추석 연휴 한국 휴장 · 다음 개장 9/28(월)",
+      "뉴스 3건 · 연합뉴스 15:39 · 연합인포맥스 15:43 · 한국경제 15:43"
+     ]
+    },
+    {
+     "at": "2026-09-24T09:00:00+09:00",
+     "title": "9/23(수) 한국 시장",
+     "basis": "9/23(수) 15:30 장 마감 기준",
+     "holiday": null,
+     "lines": null
+    }
+   ],
+   "digest": {
+    "at": "2026-09-23T16:01:00+09:00",
+    "line": "오늘 한국 코스피 +0.90% · 코스닥 +1.21% · 내 국내 5종목 중 지수보다 높음 1 · 낮음 2"
+   },
+   "aux": "내 국내 5종목: 상승 3 · 하락 2 / 코스피 +0.90% · 코스닥 +1.21%"
+  },
+  {
+   "name": "한국 휴장 오후 9/25(금) 16:00 (추석, 직전 거래일 9/23 값)",
+   "data": {
+    "version": 1,
+    "session": "afternoon",
+    "market": "KR",
+    "date": "2026-09-25",
+    "marketDate": "2026-09-25",
+    "basisDate": "2026-09-23",
+    "asOf": "2026-09-25T16:00:10+09:00",
+    "holiday": {
+     "date": "2026-09-25",
+     "name": "추석"
+    },
+    "weekendGap": false,
+    "earlyClose": false,
+    "closeTime": "15:30",
+    "phase": "final",
+    "indices": [
+     {
+      "code": "KOSPI",
+      "name": "코스피",
+      "value": 7080.92,
+      "change": 63.01,
+      "changeRate": 0.9,
+      "date": "2026-09-23",
+      "asOf": "2026-09-23T20:15:00+09:00"
+     },
+     {
+      "code": "KOSDAQ",
+      "name": "코스닥",
+      "value": 844.48,
+      "change": 10.1,
+      "changeRate": 1.21,
+      "date": "2026-09-23",
+      "asOf": "2026-09-23T20:15:00+09:00"
+     }
+    ],
+    "fx": {
+     "value": 1359,
+     "change": 3.5,
+     "changeRate": 0.26,
+     "date": "2026-09-23",
+     "stale": false
+    },
+    "yield10y": null,
+    "sectors": {
+     "basis": "naver",
+     "date": "2026-09-23",
+     "strong": [
+      {
+       "name": "석유와가스",
+       "code": "1",
+       "changeRate": 3.13,
+       "count": 18
+      },
+      {
+       "name": "반도체와반도체장비",
+       "code": "2",
+       "changeRate": 2.8,
+       "count": 90
+      }
+     ],
+     "weak": [
+      {
+       "name": "건설",
+       "code": "5",
+       "changeRate": -4.19,
+       "count": 72
+      },
+      {
+       "name": "철강",
+       "code": "4",
+       "changeRate": -2.92,
+       "count": 54
+      }
+     ],
+     "all": [
+      {
+       "name": "석유와가스",
+       "code": "1",
+       "changeRate": 3.13,
+       "count": 18
+      },
+      {
+       "name": "반도체와반도체장비",
+       "code": "2",
+       "changeRate": 2.8,
+       "count": 90
+      },
+      {
+       "name": "은행",
+       "code": "3",
+       "changeRate": 0.5,
+       "count": 10
+      },
+      {
+       "name": "철강",
+       "code": "4",
+       "changeRate": -2.92,
+       "count": 54
+      },
+      {
+       "name": "건설",
+       "code": "5",
+       "changeRate": -4.19,
+       "count": 72
+      }
+     ],
+     "excluded": [
+      {
+       "name": "가정용품",
+       "changeRate": 163.21,
+       "reason": "등락 +163.21%"
+      },
+      {
+       "name": "소형 업종",
+       "changeRate": 5.5,
+       "reason": "구성 3종목"
+      }
+     ],
+     "total": 7
+    },
+    "holdings": {
+     "market": "KR",
+     "compared": 5,
+     "up": 3,
+     "down": 2,
+     "flat": 0,
+     "high": [
+      {
+       "code": "005930",
+       "name": "삼성전자",
+       "changeRate": 3.62,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": 2.72,
+       "group": "high"
+      }
+     ],
+     "similar": [
+      {
+       "code": "000660",
+       "name": "SK하이닉스",
+       "changeRate": 1.25,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": 0.35,
+       "group": "similar"
+      },
+      {
+       "code": "247540",
+       "name": "에코프로비엠",
+       "changeRate": 1.15,
+       "benchmark": {
+        "code": "KOSDAQ",
+        "name": "코스닥",
+        "changeRate": 1.21
+       },
+       "diff": -0.06,
+       "group": "similar"
+      }
+     ],
+     "low": [
+      {
+       "code": "035720",
+       "name": "카카오",
+       "changeRate": -1.02,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": -1.92,
+       "group": "low"
+      },
+      {
+       "code": "035420",
+       "name": "NAVER",
+       "changeRate": -2.49,
+       "benchmark": {
+        "code": "KOSPI",
+        "name": "코스피",
+        "changeRate": 0.9
+       },
+       "diff": -3.39,
+       "group": "low"
+      }
+     ],
+     "excluded": {
+      "leverage": [],
+      "overseas": [],
+      "noQuote": [],
+      "noBenchmark": []
+     },
+     "benchmarks": [
+      {
+       "code": "KOSPI",
+       "name": "코스피",
+       "changeRate": 0.9
+      },
+      {
+       "code": "KOSDAQ",
+       "name": "코스닥",
+       "changeRate": 1.21
+      }
+     ]
+    },
+    "events": {
+     "within": [
+      {
+       "kind": "kr-open",
+       "date": "2026-09-28",
+       "time": "09:00",
+       "text": "다음 개장",
+       "at": "2026-09-28T00:00:00.000Z"
+      }
+     ],
+     "next": {
+      "kind": "jobs",
+      "date": "2026-10-02",
+      "time": "21:30",
+      "text": "미국 9월 고용보고서 발표",
+      "at": "2026-10-02T12:30:00.000Z",
+      "tentative": true,
+      "source": "https://www.bls.gov/schedule/news_release/empsit.htm"
+     },
+     "unknown": []
+    },
+    "news": {
+     "query": "코스피 마감",
+     "from": "2026-09-23T06:20:00.000Z",
+     "to": "2026-09-23T07:00:10.000Z",
+     "items": [
+      {
+       "title": "[예시] 코스피 상승 마감",
+       "outlet": "연합뉴스",
+       "publishedAt": "2026-09-23T06:39:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-4"
+      },
+      {
+       "title": "[예시] 코스피 마감 시황",
+       "outlet": "연합인포맥스",
+       "publishedAt": "2026-09-23T06:43:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-5"
+      },
+      {
+       "title": "[예시] 코스피 강세로 마감",
+       "outlet": "한국경제",
+       "publishedAt": "2026-09-23T06:43:30.000Z",
+       "url": "https://news.google.com/rss/articles/example-6"
+      }
+     ],
+     "fresh": false
+    },
+    "notes": []
+   },
+   "views": [
+    {
+     "at": "2026-09-25T16:01:00+09:00",
+     "title": "오늘 한국 시장",
+     "basis": "직전 거래일 9/23(수) 15:30 장 마감 기준",
+     "holiday": "오늘 한국 휴장(추석) · 아래는 직전 거래일 9/23 기준",
+     "lines": [
+      "오늘 한국 휴장(추석) · 아래는 직전 거래일 9/23 기준",
+      "코스피 (9/23) +0.90% · 코스닥 (9/23) +1.21%",
+      "원/달러 1,359.00원 +3.50원 (9/23 고시)",
+      "9/23 기준 · 강한 업종 석유와가스 +3.13% · 반도체와반도체장비 +2.80% / 약한 업종 건설 -4.19% · 철강 -2.92%",
+      "9/23 기준 · 내 국내 5종목 · 지수보다 높음 1 (삼성전자 +3.62%, 지수와 차이 +2.72%p) · 낮음 2 (NAVER -2.49%, 차이 -3.39%p) · 비슷 2",
+      "일정 · 다음 개장 9/28(월) 09:00"
+     ]
+    },
+    {
+     "at": "2026-09-26T10:00:00+09:00",
+     "title": "9/25(금) 한국 시장",
+     "basis": "직전 거래일 9/23(수) 15:30 장 마감 기준",
+     "holiday": "9/25(금) 한국 휴장(추석) · 아래는 직전 거래일 9/23 기준",
+     "lines": null
+    }
+   ],
+   "digest": {
+    "at": "2026-09-25T16:01:00+09:00",
+    "line": "오늘 한국 휴장(추석) · 코스피 +0.90% · 코스닥 +1.21% (9/23 기준)"
+   },
+   "aux": "내 국내 5종목: 상승 3 · 하락 2 / 코스피 +0.90% · 코스닥 +1.21%"
+  },
+  {
+   "name": "미국 휴장 다음 날 아침 11/27(금) 08:30 (추수감사절 11/26, 직전 거래일 11/25 값)",
+   "data": {
+    "version": 1,
+    "session": "morning",
+    "market": "US",
+    "date": "2026-11-27",
+    "marketDate": "2026-11-26",
+    "basisDate": "2026-11-25",
+    "asOf": "2026-11-27T08:30:05+09:00",
+    "holiday": {
+     "date": "2026-11-26",
+     "name": "추수감사절"
+    },
+    "weekendGap": false,
+    "earlyClose": false,
+    "closeTime": "16:00",
+    "phase": "final",
+    "indices": [
+     {
+      "code": "NASDAQ",
+      "name": "나스닥",
+      "value": 27500.1,
+      "change": -55.2,
+      "changeRate": -0.2,
+      "date": "2026-11-25",
+      "asOf": "2026-11-25T17:15:00-05:00"
+     },
+     {
+      "code": "SPX",
+      "name": "S&P500",
+      "value": 7800.5,
+      "change": 23.4,
+      "changeRate": 0.3,
+      "date": "2026-11-25",
+      "asOf": "2026-11-25T16:39:00-05:00"
+     },
+     {
+      "code": "DJI",
+      "name": "다우",
+      "value": 52000,
+      "change": 104,
+      "changeRate": 0.2,
+      "date": "2026-11-25",
+      "asOf": "2026-11-25T17:05:00-05:00"
+     },
+     {
+      "code": "SOX",
+      "name": "필라반도체",
+      "value": 12800,
+      "change": -128,
+      "changeRate": -1,
+      "date": "2026-11-25",
+      "asOf": "2026-11-25T17:15:00-05:00"
+     }
+    ],
+    "fx": {
+     "value": 1400,
+     "change": -2.5,
+     "changeRate": -0.18,
+     "date": "2026-11-26",
+     "stale": false
+    },
+    "yield10y": {
+     "value": 4.9,
+     "change": 0.02,
+     "date": "2026-11-25",
+     "prevValue": 4.88,
+     "prevDate": "2026-11-24",
+     "source": "treasury",
+     "dp": {
+      "value": 2,
+      "change": 2
+     }
+    },
+    "sectors": {
+     "basis": "etf",
+     "date": "2026-09-25",
+     "strong": [
+      {
+       "name": "산업재",
+       "code": "XLI",
+       "changeRate": 0.95
+      },
+      {
+       "name": "기술",
+       "code": "XLK",
+       "changeRate": 0.8
+      }
+     ],
+     "weak": [
+      {
+       "name": "커뮤니케이션",
+       "code": "XLC",
+       "changeRate": -0.9
+      },
+      {
+       "name": "에너지",
+       "code": "XLE",
+       "changeRate": -0.89
+      }
+     ],
+     "all": [
+      {
+       "name": "산업재",
+       "code": "XLI",
+       "changeRate": 0.95
+      },
+      {
+       "name": "기술",
+       "code": "XLK",
+       "changeRate": 0.8
+      },
+      {
+       "name": "금융",
+       "code": "XLF",
+       "changeRate": 0.57
+      },
+      {
+       "name": "헬스케어",
+       "code": "XLV",
+       "changeRate": 0.49
+      },
+      {
+       "name": "필수소비재",
+       "code": "XLP",
+       "changeRate": 0.44
+      },
+      {
+       "name": "유틸리티",
+       "code": "XLU",
+       "changeRate": 0.38
+      },
+      {
+       "name": "소재",
+       "code": "XLB",
+       "changeRate": 0.24
+      },
+      {
+       "name": "경기소비재",
+       "code": "XLY",
+       "changeRate": 0.22
+      },
+      {
+       "name": "부동산",
+       "code": "XLRE",
+       "changeRate": -0.22
+      },
+      {
+       "name": "에너지",
+       "code": "XLE",
+       "changeRate": -0.89
+      },
+      {
+       "name": "커뮤니케이션",
+       "code": "XLC",
+       "changeRate": -0.9
+      }
+     ],
+     "excluded": [],
+     "total": 11
+    },
+    "holdings": {
+     "market": "US",
+     "compared": 2,
+     "up": 2,
+     "down": 0,
+     "flat": 0,
+     "high": [],
+     "similar": [
+      {
+       "code": "MSFT",
+       "name": "마이크로소프트",
+       "changeRate": 0.5,
+       "benchmark": {
+        "code": "NASDAQ",
+        "name": "나스닥",
+        "changeRate": -0.2
+       },
+       "diff": 0.7,
+       "group": "similar"
+      },
+      {
+       "code": "KO",
+       "name": "코카콜라",
+       "changeRate": 0.1,
+       "benchmark": {
+        "code": "SPX",
+        "name": "S&P500",
+        "changeRate": 0.3
+       },
+       "diff": -0.2,
+       "group": "similar"
+      }
+     ],
+     "low": [],
+     "excluded": {
+      "leverage": [],
+      "overseas": [],
+      "noQuote": [],
+      "noBenchmark": []
+     },
+     "benchmarks": [
+      {
+       "code": "NASDAQ",
+       "name": "나스닥",
+       "changeRate": -0.2
+      },
+      {
+       "code": "SPX",
+       "name": "S&P500",
+       "changeRate": 0.3
+      }
+     ]
+    },
+    "events": {
+     "within": [
+      {
+       "kind": "us-early",
+       "date": "2026-11-28",
+       "time": "03:00",
+       "text": "미국 조기 폐장(뉴욕 13:00)",
+       "at": "2026-11-27T18:00:00.000Z"
+      }
+     ],
+     "next": {
+      "kind": "jobs",
+      "date": "2026-12-04",
+      "time": "22:30",
+      "text": "미국 11월 고용보고서 발표",
+      "at": "2026-12-04T13:30:00.000Z",
+      "tentative": true,
+      "source": "https://www.bls.gov/schedule/news_release/empsit.htm"
+     },
+     "unknown": [
+      "bok"
+     ]
+    },
+    "news": {
+     "query": "뉴욕증시",
+     "from": "2026-09-25T19:50:00.000Z",
+     "to": "2026-09-26T02:00:00.000Z",
+     "items": [
+      {
+       "title": "[예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑",
+       "outlet": "뉴스1",
+       "publishedAt": "2026-09-25T20:32:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-1"
+      },
+      {
+       "title": "[예시] 뉴욕증시, 기술주 강세 속 상승 마감",
+       "outlet": "KBS",
+       "publishedAt": "2026-09-25T20:22:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-2"
+      },
+      {
+       "title": "[예시] 뉴욕증시 마감 시황",
+       "outlet": "한국경제",
+       "publishedAt": "2026-09-25T20:38:00.000Z",
+       "url": "https://news.google.com/rss/articles/example-3"
+      }
+     ],
+     "fresh": false
+    },
+    "notes": []
+   },
+   "views": [
+    {
+     "at": "2026-11-27T08:31:00+09:00",
+     "title": "수요일(11/25) 미국 시장",
+     "basis": "직전 거래일 11/25(수) 뉴욕 장 마감 기준",
+     "holiday": "지난밤 미국 휴장(추수감사절) · 아래는 직전 거래일 11/25(수) 기준",
+     "lines": [
+      "지난밤 미국 휴장(추수감사절) · 아래는 직전 거래일 11/25(수) 기준",
+      "나스닥 (11/25) -0.20% · S&P500 (11/25) +0.30% · 다우 (11/25) +0.20% · 필라반도체 (11/25) -1.00%",
+      "원/달러 1,400.00원 -2.50원 (11/26 고시) · 미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)",
+      "11/25 기준 · 강한 업종 산업재 +0.95% · 기술 +0.80% / 약한 업종 커뮤니케이션 -0.90% · 에너지 -0.89% (섹터 ETF 기준)",
+      "11/25 기준 · 내 미국 2종목 모두 지수와 ±1%p 안",
+      "일정 · 11/28(토) 03:00 미국 조기 폐장(뉴욕 13:00)"
+     ]
+    }
+   ],
+   "digest": {
+    "at": "2026-11-27T08:31:00+09:00",
+    "line": "지난밤 미국 휴장(추수감사절) · 나스닥 -0.20% · S&P500 +0.30% (11/25 기준)"
+   },
+   "aux": "내 미국 2종목: 상승 2 · 하락 0 / 나스닥 -0.20% · S&P500 +0.30%"
+  },
+  {
+   "name": "수능일 11/19(목) 16:00 — 한국 장이 아직 열려 있음 (16:30 마감)",
+   "data": {
+    "version": 1,
+    "session": "afternoon",
+    "market": "KR",
+    "date": "2026-11-19",
+    "marketDate": "2026-11-19",
+    "basisDate": "2026-11-19",
+    "asOf": "2026-11-19T16:00:10+09:00",
+    "holiday": null,
+    "weekendGap": false,
+    "earlyClose": false,
+    "closeTime": "16:30",
+    "phase": "intraday",
+    "indices": [
+     {
+      "code": "KOSPI",
+      "name": "코스피",
+      "value": 7080.92,
+      "change": 63.01,
+      "changeRate": 0.9,
+      "date": "2026-11-19",
+      "asOf": "2026-11-19T16:00:00+09:00"
+     },
+     {
+      "code": "KOSDAQ",
+      "name": "코스닥",
+      "value": 844.48,
+      "change": 10.1,
+      "changeRate": 1.21,
+      "date": "2026-11-19",
+      "asOf": "2026-11-19T16:00:00+09:00"
+     }
+    ],
+    "fx": {
+     "value": 1380,
+     "change": 1.2,
+     "changeRate": 0.09,
+     "date": "2026-11-19",
+     "stale": false
+    },
+    "yield10y": null,
+    "sectors": {
+     "basis": "naver",
+     "date": "2026-09-23",
+     "strong": [
+      {
+       "name": "석유와가스",
+       "code": "1",
+       "changeRate": 3.13,
+       "count": 18
+      },
+      {
+       "name": "반도체와반도체장비",
+       "code": "2",
+       "changeRate": 2.8,
+       "count": 90
+      }
+     ],
+     "weak": [
+      {
+       "name": "건설",
+       "code": "5",
+       "changeRate": -4.19,
+       "count": 72
+      },
+      {
+       "name": "철강",
+       "code": "4",
+       "changeRate": -2.92,
+       "count": 54
+      }
+     ],
+     "all": [
+      {
+       "name": "석유와가스",
+       "code": "1",
+       "changeRate": 3.13,
+       "count": 18
+      },
+      {
+       "name": "반도체와반도체장비",
+       "code": "2",
+       "changeRate": 2.8,
+       "count": 90
+      },
+      {
+       "name": "은행",
+       "code": "3",
+       "changeRate": 0.5,
+       "count": 10
+      },
+      {
+       "name": "철강",
+       "code": "4",
+       "changeRate": -2.92,
+       "count": 54
+      },
+      {
+       "name": "건설",
+       "code": "5",
+       "changeRate": -4.19,
+       "count": 72
+      }
+     ],
+     "excluded": [
+      {
+       "name": "가정용품",
+       "changeRate": 163.21,
+       "reason": "등락 +163.21%"
+      },
+      {
+       "name": "소형 업종",
+       "changeRate": 5.5,
+       "reason": "구성 3종목"
+      }
+     ],
+     "total": 7
+    },
+    "holdings": null,
+    "events": {
+     "within": [],
+     "next": null,
+     "unknown": []
+    },
+    "news": {
+     "query": "코스피 마감",
+     "from": "2026-09-23T06:20:00.000Z",
+     "to": "2026-09-23T07:00:10.000Z",
+     "items": [],
+     "fresh": true
+    },
+    "notes": []
+   },
+   "views": [
+    {
+     "at": "2026-11-19T16:01:00+09:00",
+     "title": "오늘 한국 시장",
+     "basis": "장중 값(16:00 기준) · 오늘 16:30 마감",
+     "holiday": null,
+     "lines": [
+      "코스피 7,080.92 +0.90% · 코스닥 844.48 +1.21%",
+      "원/달러 1,380.00원 +1.20원",
+      "강한 업종 석유와가스 +3.13% · 반도체와반도체장비 +2.80% / 약한 업종 건설 -4.19% · 철강 -2.92%"
+     ]
+    }
+   ],
+   "digest": {
+    "at": "2026-11-19T16:01:00+09:00",
+    "line": "오늘 한국 장중(16:00 기준) 코스피 +0.90% · 코스닥 +1.21%"
+   },
+   "aux": null
+  }
+ ],
+ "variants": [
+  {
+   "name": "미국 마감 직후 최종값 전(겨울 07:00 실행) — 알림 첫 줄에 '(최종값 전)'",
+   "base": 0,
+   "patch": {
+    "phase": "prelim"
+   },
+   "at": "2026-09-28T08:31:00+09:00",
+   "digest": "금요일(9/25) 미국(최종값 전) 나스닥 +0.48% · S&P500 +0.51% · 내 미국 12종목 중 지수보다 높음 2 · 낮음 3",
+   "basis": "9/25(금) 뉴욕 장 마감 직후 값 · 최종값 확정 전"
+  },
+  {
+   "name": "화~금 아침 보기 — '밤사이 미국'",
+   "base": 0,
+   "patch": {
+    "date": "2026-09-26",
+    "weekendGap": false
+   },
+   "at": "2026-09-26T08:31:00+09:00",
+   "digest": "밤사이 미국 나스닥 +0.48% · S&P500 +0.51% · 내 미국 12종목 중 지수보다 높음 2 · 낮음 3",
+   "basis": "9/25(금) 뉴욕 장 마감 기준"
+  }
+ ]
+}

@@ -910,9 +910,13 @@ export function planHoldingsPolished<T extends IndexInput>(i: PolishedInput<T>):
 
 // ── 브리핑 위젯 ───────────────────────────────────────────────────────
 
-export interface BriefingPlan {
+export interface BriefingPlan<T extends IndexInput = IndexInput> {
   size: SizeClass;
   header: HeaderPlan;
+  /**
+   * 첫 줄 — 시장 전체 요약 (플래그 marketSummary, 요약을 받았고 들어갈 때만). 없으면 지금 그림 그대로 (칸도 없다)
+   */
+  summary?: SummaryPlan<T>;
   /** 보여 줄 종목 수 (0~3) */
   items: number;
   /**
@@ -944,27 +948,165 @@ export function briefingRoom(height: number, scale: number): number {
   return height - TOUCH - PAD - disclaimerHeight(scale) - space.xs;
 }
 
+/** 안내 문구: 위 여백(space.s)과 함께 들어가는 줄 수. 한 줄도 여백과 함께 안 들어가면 여백 없이 한 줄 */
+function briefingMessage(room: number, s: number): { messageLines: number; messageGap: number } {
+  const mLine = lineHeight(F.md, s);
+  const withGap = Math.floor((room - space.s) / mLine);
+  return { messageLines: Math.max(1, Math.min(3, withGap)), messageGap: withGap >= 1 ? space.s : 0 };
+}
+
 /**
  * 브리핑 위젯: 고지 한 줄은 늘 들어가게 종목 칸 수·모양을 고른다.
- * large 에서 칸이 남으면 요약 두 줄, 한 종목(이름 줄 + 요약)도 안 들어가면 이름·요약 한 줄 모양, 그것도 안 되면 0개
+ * large 에서 칸이 남으면 요약 두 줄, 한 종목(이름 줄 + 요약)도 안 들어가면 이름·요약 한 줄 모양, 그것도 안 되면 0개.
+ * summary(시장 전체 요약 첫 줄, 플래그 marketSummary)를 주면 머리 줄 아래에 먼저 넣어 본다 (planWithSummary). 주지 않으면 예전과 한 글자도 같다
  */
-export function planBriefing(i: { width: number; height: number; scale: number; header: HeaderInput; count: number }): BriefingPlan {
+export function planBriefing<T extends IndexInput = IndexInput>(i: { width: number; height: number; scale: number; header: HeaderInput; count: number; summary?: SummaryInput<T> | null }): BriefingPlan<T> {
   const s = i.scale;
   const size = listSize(i.height);
   const header = planHeader(i.header, i.width, s);
   const room = briefingRoom(i.height, s);
   const want = Math.min(3, Math.max(0, i.count));
+  const withSummary = i.summary ? planWithSummary(i.summary, i.width, room, want, size, s) : null;
+  if (withSummary) return { size, header, ...withSummary };
   let item: "full" | "line" = "full";
   let summaryLines: 1 | 2 = 1;
   if (size === "large" && want && want * briefingItemHeight("full", 2, s) <= room) summaryLines = 2;
   else if (briefingItemHeight("full", 1, s) > room) item = "line";
   const items = Math.max(0, Math.min(want, Math.floor(room / briefingItemHeight(item, summaryLines, s))));
-  // 안내 문구: 위 여백(space.s)과 함께 들어가는 줄 수. 한 줄도 여백과 함께 안 들어가면 여백 없이 한 줄
-  const mLine = lineHeight(F.md, s);
-  const withGap = Math.floor((room - space.s) / mLine);
-  const messageLines = Math.max(1, Math.min(3, withGap));
-  const messageGap = withGap >= 1 ? space.s : 0;
-  return { size, header, items, item, summaryLines, messageLines, messageGap };
+  return { size, header, items, item, summaryLines, ...briefingMessage(room, s) };
+}
+
+// ── 브리핑 위젯 첫 줄: 시장 전체 요약 (플래그 marketSummary) ─────────────────────
+//
+// 머리 줄 아래 한 칸: [칩 '밤사이 미국'] 나스닥 +0.48% · S&P500 +0.51% · 다우 +0.93% · 필라반도체 +1.41%
+//                    (둘째 줄, 높이가 남을 때만) 내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7
+//                    ───────── (구분선) 그 아래 종목 브리핑 줄은 그대로
+// 숫자는 자르지 않는다: 좁으면 뒤 지수부터 뺀다(필라반도체 → 다우), 글자는 md → sm. 칩(어느 시장·언제인지)은 늘 남긴다.
+// 넓은 모습이 없다 — 폭(지수 개수)과 높이(둘째 줄·종목 칸)로만 정하므로 폴드 위젯 폭 규칙(WIDE_EXTRAS_MIN_DP, 위젯 2차)과 부딪히지 않는다:
+// 화면 크기·방향·접힘을 보지 않아 같은 크기면 언제 어디서 그려도 같은 그림이다.
+
+/** 첫 줄 지수 글자 크기 (큰 것부터). 지수를 하나 더 넣는 쪽을 글자 크기보다 먼저 본다 */
+export const SUMMARY_FONTS = [F.md, F.sm] as const;
+/** 둘째 줄(내 종목) 글자 크기 (큰 것부터) */
+export const SUMMARY_SECOND_FONTS = [F.sm, F.xs] as const;
+/** 첫 줄 칸 아래 여백 (구분선 위·아래 각각) */
+export const SUMMARY_GAP = space.xs;
+/** 칩과 지수 사이 */
+export const SUMMARY_CHIP_GAP = HEADER_GAP;
+/** 지수 조각(이름·등락률·날짜·'·') 사이 */
+export const SUMMARY_ITEM_GAP = ITEM_GAP;
+
+/** 첫 줄에 넣을 것 (widgets/summary.ts summaryInput) */
+export interface SummaryInput<T extends IndexInput = IndexInput> {
+  /** 칩 글자 후보 (긴 것부터: '오늘 한국 휴장(추석)' → '오늘 한국 휴장') */
+  chips: string[];
+  /** 지수 (보이는 순서. 좁으면 뒤에서부터 뺀다) — label·rate·tag 만 잰다 */
+  items: T[];
+  /** 둘째 줄 글 (내 종목). 없으면 null */
+  second: string | null;
+}
+
+export interface SummaryPlan<T extends IndexInput = IndexInput> {
+  chip: string;
+  /** 지수 글자 크기 */
+  font: number;
+  items: T[];
+  /** 첫 줄 높이 (칩과 글자 중 높은 쪽) */
+  lineH: number;
+  /** 둘째 줄 (높이가 남을 때만) */
+  second: { text: string; font: number } | null;
+  /** 칸 전체 높이 (첫 줄 + 둘째 줄 + 아래 여백 · 구분선 · 여백) */
+  height: number;
+}
+
+/** 첫 줄 칩 폭 (머리 줄 칩과 같은 모양: xs 굵은 글자 + 좌우 여백·테두리) */
+export function summaryChipWidth(chip: string, scale: number): number {
+  return textWidth(chip, F.xs, scale, true) + CHIP_EXTRA;
+}
+
+/** 첫 줄 폭: 칩 + 지수 조각(이름, 굵은 등락률, 흐린 날짜, 사이 '·') */
+export function summaryRowWidth(chip: string, items: readonly IndexInput[], font: number, scale: number): number {
+  const parts: number[] = [];
+  items.forEach((it, k) => {
+    if (k) parts.push(textWidth("·", font, scale));
+    parts.push(textWidth(it.label, font, scale));
+    if (it.rate) parts.push(textWidth(it.rate, font, scale, true));
+    const tag = indexTag(it);
+    if (tag) parts.push(textWidth(tag, font, scale));
+  });
+  const itemsW = parts.reduce((a, b) => a + b, 0) + SUMMARY_ITEM_GAP * Math.max(0, parts.length - 1);
+  return summaryChipWidth(chip, scale) + (parts.length ? SUMMARY_CHIP_GAP + itemsW : 0);
+}
+
+/** 첫 줄 높이: 칩과 지수 글자 중 높은 쪽 */
+export function summaryLineHeight(font: number, scale: number): number {
+  return Math.max(chipHeight(scale), lineHeight(font, scale));
+}
+
+/** 첫 줄 칸 전체 높이 (둘째 줄 포함, 아래 여백 · 구분선 1dp · 여백) */
+export function summaryBlockHeight(lineH: number, second: { font: number } | null, scale: number): number {
+  return lineH + (second ? lineHeight(second.font, scale) : 0) + SUMMARY_GAP * 2 + 1;
+}
+
+/**
+ * 첫 줄: 지수를 모두 → 뒤에서부터 하나씩 빼며, 칩은 긴 것부터, 글자는 md → sm 으로 content 폭에 들어가는 첫 배치.
+ * 칩과 지수 하나도 안 들어가면 null (첫 줄 없이 지금 그림)
+ */
+export function planSummaryLine<T extends IndexInput>(i: SummaryInput<T>, content: number, scale: number): { chip: string; font: number; items: T[]; lineH: number } | null {
+  for (let n = i.items.length; n > 0; n--) {
+    const items = i.items.slice(0, n);
+    for (const chip of i.chips) for (const font of SUMMARY_FONTS) if (summaryRowWidth(chip, items, font, scale) <= content) return { chip, font, items, lineH: summaryLineHeight(font, scale) };
+  }
+  return null;
+}
+
+/** 둘째 줄: sm → xs 로 한 줄에 온전히 들어가는 글자 (숫자를 자르지 않는다). 안 들어가면 null */
+export function planSummarySecond(text: string, content: number, scale: number): { text: string; font: number } | null {
+  for (const font of SUMMARY_SECOND_FONTS) if (textWidth(text, font, scale) <= content) return { text, font };
+  return null;
+}
+
+/**
+ * 첫 줄이 있을 때 종목 칸: 요약 두 줄(large, 모두 들어갈 때) → 이름 줄 + 요약 한 줄 / 이름·요약 한 줄 중 더 많이 보이는 쪽(같으면 이름 줄 모양).
+ * 첫 줄이 높이를 쓰므로 작은 4x2 는 한 줄 모양으로 더 많이 (사양: '작은 4x2는 한 줄 모드')
+ */
+function summaryItems(room: number, want: number, size: SizeClass, s: number): { items: number; item: "full" | "line"; summaryLines: 1 | 2 } {
+  if (size === "large" && want && want * briefingItemHeight("full", 2, s) <= room) return { items: want, item: "full", summaryLines: 2 };
+  const fit = (item: "full" | "line") => Math.max(0, Math.min(want, Math.floor(room / briefingItemHeight(item, 1, s))));
+  const full = fit("full");
+  const line = fit("line");
+  return full >= line ? { items: full, item: "full", summaryLines: 1 } : { items: line, item: "line", summaryLines: 1 };
+}
+
+/**
+ * 첫 줄(시장 요약)을 넣은 배치. 넣을 수 없으면 null — 부르는 쪽은 첫 줄 없이 지금 배치를 쓴다:
+ *  - 칩과 지수 하나가 폭에 안 들어감, 또는 첫 줄 칸이 머리 줄·고지 사이 높이에 안 들어감
+ *  - 첫 줄 때문에 종목 브리핑 줄이 하나도 안 남음 (보여 줄 브리핑이 있을 때 — 그 아래 종목 브리핑 줄은 그대로라는 사양), 브리핑이 없으면 안내 한 줄이 안 남음
+ * 둘째 줄(내 종목)은 넣어도 종목 칸 수·모양(브리핑이 없으면 안내 줄 수)이 그대로일 때만 — 큰 4x2(460×290)·안쪽 화면처럼 높이가 남는 위젯
+ */
+function planWithSummary<T extends IndexInput>(input: SummaryInput<T>, width: number, room: number, want: number, size: SizeClass, s: number): Omit<BriefingPlan<T>, "size" | "header"> | null {
+  const content = width - PAD * 2;
+  const line = planSummaryLine(input, content, s);
+  if (!line) return null;
+  const r1 = room - summaryBlockHeight(line.lineH, null, s);
+  if (r1 < 0) return null;
+  const p1 = summaryItems(r1, want, size, s);
+  if (want > 0 ? p1.items === 0 : r1 < lineHeight(F.md, s)) return null;
+  let second: SummaryPlan<T>["second"] = null;
+  let rest = r1;
+  let pick = p1;
+  const sec = input.second ? planSummarySecond(input.second, content, s) : null;
+  if (sec) {
+    const r2 = r1 - lineHeight(sec.font, s);
+    const p2 = summaryItems(r2, want, size, s);
+    const same = want > 0 ? p2.items === p1.items && p2.item === p1.item && p2.summaryLines === p1.summaryLines : r2 >= lineHeight(F.md, s) && briefingMessage(r2, s).messageLines === briefingMessage(r1, s).messageLines;
+    if (r2 >= 0 && same) {
+      second = sec;
+      rest = r2;
+      pick = p2;
+    }
+  }
+  return { ...pick, ...briefingMessage(rest, s), summary: { chip: line.chip, font: line.font, items: line.items, lineH: line.lineH, second, height: summaryBlockHeight(line.lineH, second, s) } };
 }
 
 // ── 자산 위젯 (2×1) ───────────────────────────────────────────────────

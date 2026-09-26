@@ -3,8 +3,9 @@ import * as BackgroundTask from "expo-background-task";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
 import { Platform } from "react-native";
-import type { AccountBriefing, LatestBriefing } from "@/api/types";
+import type { AccountBriefing, LatestBriefing, MarketSummary } from "@/api/types";
 import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefingDigest";
+import { loadMarketSummaries } from "@/lib/marketSummaryLoad";
 import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
@@ -85,6 +86,8 @@ interface NotifyOpts {
   accountIds?: readonly number[];
   /** 등록한 모든 종목 코드. 모두 알림을 꺼 두었으면 계좌 요약도 보내지 않는다 (서버와 같은 규칙) */
   codes?: readonly string[];
+  /** 최근 시장 전체 요약 (서버 플래그 marketSummary). 같은 날짜·세션 알림의 본문 첫 줄 — 없으면 첫 줄 없이 지금과 같다 */
+  markets?: readonly MarketSummary[];
 }
 
 /**
@@ -126,7 +129,7 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
   // 같은 세션의 계좌 브리핑이 있으면 그 세션 알림 앞머리를 계좌 요약으로, 새 계좌 브리핑만 있는 세션도 1건 (여전히 세션당 1건)
   const messages =
     fresh.length || newAccountIds.length
-      ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now, opts.accounts ?? [], { newAccountIds, ...(opts.codes?.length ? { codes: opts.codes } : {}) })
+      ? planNotifications(fresh, opts.prefs ?? DEFAULT_PREFS, now, opts.accounts ?? [], { newAccountIds, ...(opts.codes?.length ? { codes: opts.codes } : {}), ...(opts.markets?.length ? { markets: opts.markets } : {}) })
       : [];
   for (const m of messages) {
     await Notifications.scheduleNotificationAsync({ content: { title: m.title, body: m.body, data: m.data, sound: "default" }, trigger: briefingTrigger() });
@@ -195,7 +198,10 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
               : !prefs.digest && prefs.accountBriefing === true && data.accountIds
                 ? { accountIds: data.accountIds }
                 : {};
-            await notifyNewBriefings(latest, { prefs, rates, codes: data.stocks.map((s) => s.code), ...accountOpts });
+            // 시장 전체 요약 첫 줄: 묶음 알림이고 앱이 마지막으로 받은 플래그(marketSummary)가 켜져 있을 때만 한 번 묻는다 (꺼져 있거나 모르면 요청 0 — loadMarketSummaries).
+            // 못 받거나(끊김·예전 서버) 서버가 꺼 두었으면 첫 줄 없이 지금과 같다
+            const markets = prefs.digest ? await loadMarketSummaries() : null;
+            await notifyNewBriefings(latest, { prefs, rates, codes: data.stocks.map((s) => s.code), ...accountOpts, ...(markets?.length ? { markets } : {}) });
           }
         }
       }

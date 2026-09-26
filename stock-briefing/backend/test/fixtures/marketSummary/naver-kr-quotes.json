@@ -1,0 +1,193 @@
+{
+ "note": "2026-09-26 08:45 KST 실측 (polling.finance.naver.com domestic). 값은 9/23(수) KRX 정규장 종가. 필요한 칸만 남김",
+ "datas": [
+  {
+   "itemCode": "005930",
+   "stockName": "삼성전자",
+   "stockExchangeType": {
+    "code": "KS",
+    "nameKor": "코스피",
+    "nameEng": "KOSPI",
+    "name": "KOSPI"
+   },
+   "closePrice": "286,500",
+   "compareToPreviousClosePrice": "10,000",
+   "fluctuationsRatio": "3.62",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "marketStatus": "CLOSE",
+   "localTradedAt": "2026-09-23T20:00:00+09:00",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "286,500",
+    "fluctuationsRatio": "3.62",
+    "localTradedAt": "2026-09-23T20:00:00.000000+09:00"
+   },
+   "closePriceRaw": "286500",
+   "compareToPreviousClosePriceRaw": "10000",
+   "fluctuationsRatioRaw": "3.62"
+  },
+  {
+   "itemCode": "035420",
+   "stockName": "NAVER",
+   "stockExchangeType": {
+    "code": "KS",
+    "nameKor": "코스피",
+    "nameEng": "KOSPI",
+    "name": "KOSPI"
+   },
+   "closePrice": "196,000",
+   "compareToPreviousClosePrice": "-5,000",
+   "fluctuationsRatio": "-2.49",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "marketStatus": "CLOSE",
+   "localTradedAt": "2026-09-23T20:00:00+09:00",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "196,000",
+    "fluctuationsRatio": "-2.49",
+    "localTradedAt": "2026-09-23T20:00:00.000000+09:00"
+   },
+   "closePriceRaw": "196000",
+   "compareToPreviousClosePriceRaw": "-5000",
+   "fluctuationsRatioRaw": "-2.49"
+  },
+  {
+   "itemCode": "247540",
+   "stockName": "에코프로비엠",
+   "stockExchangeType": {
+    "code": "KQ",
+    "nameKor": "코스닥",
+    "nameEng": "KOSDAQ",
+    "name": "KOSDAQ"
+   },
+   "closePrice": "105,500",
+   "compareToPreviousClosePrice": "1,200",
+   "fluctuationsRatio": "1.15",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "marketStatus": "CLOSE",
+   "localTradedAt": "2026-09-23T20:00:00+09:00",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "105,500",
+    "fluctuationsRatio": "1.15",
+    "localTradedAt": "2026-09-23T20:00:00.000000+09:00"
+   },
+   "closePriceRaw": "105500",
+   "compareToPreviousClosePriceRaw": "1200",
+   "fluctuationsRatioRaw": "1.15"
+  },
+  {
+   "itemCode": "000660",
+   "stockName": "SK하이닉스",
+   "stockExchangeType": {
+    "code": "KS",
+    "nameKor": "코스피",
+    "nameEng": "KOSPI",
+    "name": "KOSPI"
+   },
+   "closePrice": "1,863,000",
+   "compareToPreviousClosePrice": "23,000",
+   "fluctuationsRatio": "1.25",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "marketStatus": "CLOSE",
+   "localTradedAt": "2026-09-23T20:00:00+09:00",
+   "overMarketPriceInfo": {
+    "tradingSessionType": "AFTER_MARKET",
+    "overPrice": "1,864,000",
+    "fluctuationsRatio": "1.30",
+    "localTradedAt": "2026-09-23T20:00:00.000000+09:00"
+   },
+   "closePriceRaw": "1863000",
+   "compareToPreviousClosePriceRaw": "23000",
+   "fluctuationsRatioRaw": "1.25"
+  },
+  {
+   "itemCode": "069500",
+   "stockName": "KODEX 200",
+   "stockExchangeType": {
+    "code": "KS",
+    "nameKor": "코스피",
+    "nameEng": "KOSPI",
+    "name": "KOSPI"
+   },
+   "closePrice": "113,145",
+   "compareToPreviousClosePrice": "1,265",
+   "fluctuationsRatio": "1.13",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "marketStatus": "CLOSE",
+   "localTradedAt": "2026-09-23T15:30:00+09:00",
+   "overMarketPriceInfo": null,
+   "closePriceRaw": "113145",
+   "compareToPreviousClosePriceRaw": "1265",
+   "fluctuationsRatioRaw": "1.13"
+  },
+  {
+   "itemCode": "133690",
+   "stockName": "TIGER 미국나스닥100",
+   "stockExchangeType": {
+    "code": "KS",
+    "nameKor": "코스피",
+    "nameEng": "KOSPI",
+    "name": "KOSPI"
+   },
+   "closePrice": "184,985",
+   "compareToPreviousClosePrice": "1,645",
+   "fluctuationsRatio": "0.90",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "marketStatus": "CLOSE",
+   "localTradedAt": "2026-09-23T15:30:00+09:00",
+   "overMarketPriceInfo": null,
+   "closePriceRaw": "184985",
+   "compareToPreviousClosePriceRaw": "1645",
+   "fluctuationsRatioRaw": "0.90"
+  },
+  {
+   "itemCode": "122630",
+   "stockName": "KODEX 레버리지",
+   "stockExchangeType": {
+    "code": "KS",
+    "nameKor": "코스피",
+    "nameEng": "KOSPI",
+    "name": "KOSPI"
+   },
+   "closePrice": "116,975",
+   "compareToPreviousClosePrice": "2,575",
+   "fluctuationsRatio": "2.25",
+   "tradeStopType": {
+    "code": "1",
+    "text": "운영.Trading",
+    "name": "TRADING"
+   },
+   "marketStatus": "CLOSE",
+   "localTradedAt": "2026-09-23T15:30:00+09:00",
+   "overMarketPriceInfo": null,
+   "closePriceRaw": "116975",
+   "compareToPreviousClosePriceRaw": "2575",
+   "fluctuationsRatioRaw": "2.25"
+  }
+ ]
+}

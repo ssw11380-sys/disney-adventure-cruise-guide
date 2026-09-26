@@ -2,6 +2,7 @@ import type { Quote, QuoteSession } from "../domain/types.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { MarketIndex } from "../providers/market/indices.js";
 import type { Briefing } from "./briefingService.js";
+import type { MarketSummary } from "./marketSummaryService.js";
 import type { RegisteredWithQuote } from "./stockService.js";
 
 /**
@@ -19,6 +20,8 @@ import type { RegisteredWithQuote } from "./stockService.js";
  *  - 새 앱(&ui=2 — 다듬은 잔고 위젯·브리핑 안내를 그릴 수 있는 앱)에만: brief(브리핑 시간·최신 브리핑 실패 수, BH-68).
  *    widgetPolish 가 켜져 있으면 칩의 시장별 문구(market.markets)와 지수 줄 다섯 개(코스피·코스닥·나스닥·S&P500·원/달러)도. 예전 앱의 응답은 그대로다
  *  - 세션 칩을 묻는 앱(&sessions=1)이고 widgetExtended 가 켜져 있으면 칩에 시장별 연장 세션 열림(market.ext, extendedOpen) — 칩의 다른 칸은 그대로
+ *  - 브리핑 위젯 첫 줄을 그리는 새 앱(&ms=1)에만: features.marketSummary 와, 플래그가 켜져 있으면 가장 최근 시장 요약의 숫자(ms — widgetSummary).
+ *    예전 앱(표시 없음)의 응답·ETag 는 플래그·요약과 상관없이 바이트까지 그대로다
  */
 
 /** 칩에 넣는 시장 하나 (다듬은 잔고 위젯): 달력으로 열려 있으면 "한국 장중"·"미국 장중", 아니면 그 시장 보유 종목의 지금 세션 이름 */
@@ -107,6 +110,85 @@ export interface WidgetFeatures {
   widgetExtended?: boolean;
   /** 폴드 위젯 크기 맞추기 — 넓은 모습은 위젯 폭 560dp 이상만 (위젯 2차, 앱만 — 서버는 전하기만 한다. 없으면 새 앱은 꺼짐 — 예전 그림 그대로) */
   widgetFoldFit?: boolean;
+  /**
+   * 시장 전체 요약 — 브리핑 위젯 첫 줄 (위젯을 그리는 새 앱이 &ms=1 로 물을 때만 넣는다: 예전 앱의 응답은 그대로).
+   * 없으면(예전 서버) 새 앱은 꺼짐 — 브리핑 위젯은 지금 그림 그대로
+   */
+  marketSummary?: boolean;
+}
+
+/**
+ * 브리핑 위젯 첫 줄 (시장 전체 요약, 플래그 marketSummary): 가장 최근 시장 요약에서 위젯이 그리는 숫자만 (AI 문장 없음 — 요약이 코드로 저장한 값 그대로).
+ * 문구('밤사이 미국'·'오늘 한국'·'9/25 미국')는 앱이 그릴 때 보는 날짜로 만든다 — 저장한 문구가 아니다 (자정 뒤·주말에 '오늘'이 어긋나지 않게).
+ * 새 앱이 &ms=1 로 물을 때만, 플래그가 켜져 있고 가장 최근 요약이 성공했고 지수가 하나라도 있을 때만 넣는다 (widgetSummary)
+ */
+export interface WidgetSummary {
+  /** 요약 id (위젯 첫 줄을 누르면 상세 /briefings/market/<id>) */
+  id: number;
+  /** 요약 날짜 (한국, 브리핑 세션 날짜) */
+  date: string;
+  session: "morning" | "afternoon";
+  market: "US" | "KR";
+  /** 이 세션이 다루는 거래일 (휴장이면 그 휴장일) */
+  marketDate: string;
+  /** 숫자가 속한 거래일 (휴장이면 직전 거래일) */
+  basisDate: string;
+  holiday: { date: string; name: string | null } | null;
+  /** final = 확정, intraday = 장중 값, prelim = 미국 마감 직후 최종값 전 */
+  phase: "final" | "intraday" | "prelim";
+  /** 만든 시각 (서울 ISO) — 장중 값의 기준 시각 */
+  asOf: string;
+  /** 요약의 지수 (순서 그대로: 아침 나스닥·S&P500·다우·필라반도체, 오후 코스피·코스닥). 받지 못한 지수는 changeRate null */
+  indices: Array<{ code: string; name: string; changeRate: number | null; date: string | null }>;
+  /** 내 보유 종목과 지수 — 개수만 (지수보다 높음·낮음·비슷, ±1.00%p). 비교한 종목이 없으면 null */
+  holdings: { compared: number; high: number; low: number; similar: number } | null;
+}
+
+/**
+ * 가장 최근 시장 요약 → 위젯 첫 줄 숫자. 실패한 요약·데이터가 없는 요약·지수를 하나도 못 받은 요약은 null (카드는 '생성 실패', 위젯·알림 첫 줄은 없음).
+ * 절대 던지지 않는다: 저장된 JSON 모양이 다르면(예전 모양·칸 빠짐·깨진 값) null — 첫 줄만 빠지고 위젯 응답의 나머지는 그대로 나간다
+ */
+export function widgetSummary(s: MarketSummary | null | undefined): WidgetSummary | null {
+  try {
+    return toWidgetSummary(s);
+  } catch {
+    return null;
+  }
+}
+
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isDay = (v: unknown): v is string => isStr(v) && /^\d{4}-\d{2}-\d{2}$/.test(v);
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const finiteRate = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? r2(v) : null);
+const countOf = (v: unknown): number | null => (Array.isArray(v) ? v.length : null);
+
+function toWidgetSummary(s: MarketSummary | null | undefined): WidgetSummary | null {
+  const d: unknown = s?.status === "ok" ? s.data : null;
+  if (!s || !Number.isInteger(s.id) || !isObj(d)) return null;
+  const { date, session, market, marketDate, basisDate, asOf, phase, indices: rawIndices, holiday: rawHoliday, holdings: h } = d;
+  if (!isDay(date) || !isDay(marketDate) || !isDay(basisDate) || !isStr(asOf)) return null;
+  if (session !== "morning" && session !== "afternoon") return null;
+  if (market !== "US" && market !== "KR") return null;
+  if (phase !== "final" && phase !== "intraday" && phase !== "prelim") return null;
+  if (!Array.isArray(rawIndices)) return null;
+  const indices: WidgetSummary["indices"] = [];
+  for (const i of rawIndices) {
+    if (!isObj(i) || !isStr(i.code) || !isStr(i.name)) return null;
+    indices.push({ code: i.code, name: i.name, changeRate: finiteRate(i.changeRate), date: isDay(i.date) ? i.date : null });
+  }
+  if (!indices.some((i) => i.changeRate !== null)) return null;
+  let holiday: WidgetSummary["holiday"] = null;
+  if (rawHoliday !== null && rawHoliday !== undefined) {
+    if (!isObj(rawHoliday) || !isDay(rawHoliday.date)) return null;
+    holiday = { date: rawHoliday.date, name: isStr(rawHoliday.name) ? rawHoliday.name : null };
+  }
+  // 내 종목 개수: 모양이 다르면 둘째 줄만 뺀다 (지수 첫 줄은 그대로)
+  let holdings: WidgetSummary["holdings"] = null;
+  if (isObj(h) && typeof h.compared === "number" && Number.isInteger(h.compared) && h.compared > 0) {
+    const [high, low, similar] = [countOf(h.high), countOf(h.low), countOf(h.similar)];
+    if (high !== null && low !== null && similar !== null) holdings = { compared: h.compared, high, low, similar };
+  }
+  return { id: s.id, date, session, market, marketDate, basisDate, holiday, phase, asOf, indices, holdings };
 }
 
 export interface WidgetPayload {
@@ -129,6 +211,8 @@ export interface WidgetPayload {
   accountIds?: number[];
   /** 브리핑 시간·최신 브리핑 실패 수 (새 앱 &ui=2 만, BH-68) */
   brief?: WidgetBrief;
+  /** 브리핑 위젯 첫 줄 — 가장 최근 시장 요약의 숫자 (새 앱 &ms=1 만, 플래그 marketSummary 가 켜져 있고 성공한 요약이 있을 때만) */
+  ms?: WidgetSummary;
 }
 
 /** 지수 띠 목록(stale 을 아는 앱용)에서 위젯 줄(또는 판)에 넣을 것만, 정해진 순서로. 값은 그대로 (앱 지수 띠와 같은 숫자가 되게) */
@@ -308,6 +392,8 @@ export function buildWidgetPayload(
     brief?: WidgetBrief | null | undefined;
     /** 세션 칩을 묻는 앱(&sessions=1)이고 widgetExtended 가 켜져 있음: 칩에 시장별 연장 세션 열림(ext) */
     extended?: boolean | undefined;
+    /** 브리핑 위젯 첫 줄 (새 앱 &ms=1 이고 marketSummary 가 켜져 있을 때 부르는 쪽이 넘긴다) */
+    summary?: WidgetSummary | null | undefined;
   } = {},
 ): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
@@ -343,5 +429,6 @@ export function buildWidgetPayload(
   if (board.length) payload.board = board;
   if (extra.accountIds?.length) payload.accountIds = [...extra.accountIds];
   if (extra.brief) payload.brief = extra.brief;
+  if (extra.summary) payload.ms = extra.summary;
   return payload;
 }

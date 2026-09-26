@@ -471,6 +471,34 @@ export function useAccountBriefing(id: number, enabled: boolean) {
   return useQuery({ queryKey: useKey("briefings", "account", id), queryFn: () => api.getAccountBriefing(id), enabled: enabled && Number.isFinite(id) && id > 0 });
 }
 
+/**
+ * 시장 전체 요약 목록 (플래그 marketSummary — 서버가 켤 때만 부른다). 예전 서버(404)는 빈 목록 → 카드가 숨는다.
+ * 쿼리 키가 "briefings" 아래라 수동 생성이 끝나면·브리핑 알림을 받거나 누르면 함께 다시 받는다 (계좌 브리핑 목록과 같은 규칙)
+ */
+export function marketSummariesQuery(api: Pick<Api, "marketSummaries">, apiUrl: string, focused: boolean, enabled: boolean) {
+  return queryOptions({
+    subscribed: focused,
+    gcTime: KEEP_WHILE_AWAY,
+    queryKey: [apiUrl, "briefings", "market", "list"],
+    queryFn: () => orEmptyOn404(api.marketSummaries(4)),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    retry: 0,
+    enabled,
+  });
+}
+
+export function useMarketSummaries(enabled: boolean) {
+  const api = useApi();
+  const { apiUrl } = useSettings();
+  return useQuery(marketSummariesQuery(api, apiUrl, useScreenFocused(), enabled));
+}
+
+export function useMarketSummary(id: number, enabled: boolean) {
+  const api = useApi();
+  return useQuery({ queryKey: useKey("briefings", "market", id), queryFn: () => api.getMarketSummary(id), enabled: enabled && Number.isFinite(id) && id > 0 });
+}
+
 /** 예전 서버에 없는 경로(404)는 빈 목록으로 */
 export async function orEmptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
   try {

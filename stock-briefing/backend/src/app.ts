@@ -43,6 +43,10 @@ import { reconcileAfterSync } from "./services/reconcileAfterSync.js";
 import { FeatureService } from "./services/featureService.js";
 import { featureAdminRoutes, featureRoutes } from "./routes/features.js";
 import { widgetRoutes } from "./routes/widget.js";
+import { marketSummaryRoutes } from "./routes/marketSummaries.js";
+import { defaultSummarySources, MarketSummaryService } from "./services/marketSummaryService.js";
+import { SUMMARY_WAIT_MS } from "./services/marketSummaryCalc.js";
+import { GoogleNewsRssProvider } from "./providers/news/googleRss.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -235,10 +239,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   briefingService.onBriefing(notificationService.onBriefing);
   briefingService.onSessionStart(notificationService.onSessionStart);
-  // 실행이 끝나면 계좌 브리핑을 먼저 만들고, 세션 알림 1건(3-19)의 앞머리에 쓴다. 새 종목 브리핑도 새 계좌 브리핑도 없으면 알림 없음(예전과 같음)
+  // 시장 전체 요약 (플래그 marketSummary): 아래 발견 탭 서비스(한국 업종)를 만든 뒤 채운다
+  let marketSummaries: MarketSummaryService | null = null;
+  // 실행이 끝나면 계좌 브리핑을 먼저 만들고, 세션 알림 1건(3-19)의 앞머리에 쓴다. 새 종목 브리핑도 새 계좌 브리핑도 없으면 알림 없음(예전과 같음).
+  // 시장 요약은 계좌 브리핑과 함께 만들고 알림 본문 첫 줄에 쓴다 — 20초 안에 못 만들면 첫 줄 없이 보낸다(요약은 이어서 만들어 카드에 보인다).
+  // 시장 요약만으로는 알림을 만들지 않는다 (두 시장이 모두 쉰 날은 예전처럼 0건)
   briefingService.onRunDone(async (done) => {
+    const market = marketSummaries ? marketSummaries.afterRun(done, { waitMs: SUMMARY_WAIT_MS }) : Promise.resolve(null);
     const account = await accountBriefings.afterRun(done);
-    if (done.created.length > 0 || account) await notificationService.onSession({ ...done, account });
+    const summary = await market;
+    if (done.created.length > 0 || account) await notificationService.onSession({ ...done, account, market: summary });
   });
   app.addHook("onClose", async () => notificationService.stop());
 
@@ -338,6 +348,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     // 대조를 끄면(3-15) 옛 기록의 경고도 내보내지 않는다 (예전 앱 빌드에서도 줄이 사라지게)
     tossOpenApi: { ...tossStatus(tossDeps, await outboundIp()), reconcile: tossDeps && (await features.enabled("tossReconcile")) ? await tossDeps.reconcile.status().catch(() => null) : null },
     lastBriefing: briefingService.lastRun,
+    // 시장 요약 일정 목록의 종류별 마지막 날짜 (지나면 그 일정은 빼고 요약한다 — 해마다 새로 넣기)
+    marketSummary: marketSummaries ? { enabled: await features.enabled("marketSummary"), eventsCoverage: marketSummaries.eventsCoverage() } : null,
     stream: priceStream.status(),
     llmConfigured: opts.providers.generator.model !== "disabled",
     appErrors: await appErrors.counts(7).catch(() => null),
@@ -383,6 +395,38 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   }
   await app.register(discoverRoutes, { prefix: "/api/discover", service: discoverService });
 
+  // 시장 전체 요약: 지수·환율은 지수 띠와 같은 인스턴스, 한국 업종은 발견 탭과 같은 계산, 뉴스는 구글 뉴스 RSS(키 없음).
+  // 테스트 기본 출처 묶음(fakeProviders)은 null → 서비스를 두지 않는다 (네트워크 없음)
+  if (opts.providers.marketSummary !== null) {
+    marketSummaries = new MarketSummaryService({
+      db: opts.db,
+      features,
+      now,
+      log,
+      sources:
+        opts.providers.marketSummary ??
+        defaultSummarySources({
+          db: opts.db,
+          indices: marketIndices,
+          naver: discoverNaver,
+          calendar: opts.providers.calendar,
+          krSectors: async () => {
+            const l = await discoverService.themes("KR", "sector", "day");
+            // asOf: 출처가 값을 비워 저장본을 줄 때 그 저장본이 기준 거래일 값인지 보려고 (krSectorsStale)
+            return { themes: l.themes, note: l.note, asOf: l.asOf };
+          },
+          news: new GoogleNewsRssProvider(),
+        }),
+    });
+  }
+  const summaries = marketSummaries;
+  // 장중·최종값 전 요약의 '확정 뒤 다시 만들기' 예약을 닫을 때 취소
+  if (summaries) app.addHook("onClose", async () => summaries.stop());
+  // 다시 켤 때(자동 배포 등) 사라진 '확정 뒤 다시 만들기' 예약을 되살린다 — 카드에 '장중 값'·'최종값 확정 전'이 다음 세션까지 남지 않게
+  if (summaries && opts.enableScheduler !== false) void summaries.resumeRefinal().catch((e: unknown) => app.log.warn({ err: String(e) }, "시장 요약 다시 만들기 예약 복구 실패"));
+  app.decorate("marketSummaries", summaries);
+  if (summaries) await app.register(marketSummaryRoutes, { prefix: "/api/market-summaries", service: summaries });
+
   /** GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token= */
   app.get("/api/stream", { websocket: true }, (socket) => {
     priceStream.attach(socket);
@@ -412,13 +456,14 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(featureRoutes, { prefix: "/api/features", features });
   // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
   // schedule: 브리핑 위젯 안내에 설정한 브리핑 시간을 쓴다 (BH-68 — 예전에는 늘 '평일 08:30·16:00')
-  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get() });
+  // 브리핑 위젯 첫 줄(시장 전체 요약): 새 앱이 &ms=1 로 물을 때만, 플래그가 켜져 있을 때만 가장 최근 요약을 읽는다
+  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}) });
   await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
-  // running: 종목 브리핑과 이어지는 계좌 브리핑을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
-  const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler, features, isRunning: () => briefingService.isRunning || accountBriefings.isRunning };
+  // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
+  const notifDeps = { devices: deviceService, notifications: notificationService, settings: settingsStore, scheduler, features, isRunning: () => briefingService.isRunning || accountBriefings.isRunning || (marketSummaries?.isRunning ?? false) };
   await app.register(deviceRoutes, { prefix: "/api/devices", ...notifDeps });
   await app.register(notificationRoutes, { prefix: "/api/notifications", ...notifDeps });
 
@@ -430,6 +475,8 @@ declare module "fastify" {
     stockService: StockService;
     briefingService: BriefingService;
     accountBriefings: AccountBriefingService;
+    /** 시장 전체 요약 (출처 묶음이 null 인 테스트에서는 null) */
+    marketSummaries: MarketSummaryService | null;
     analysisService: AnalysisService;
     scheduler: BriefingScheduler | null;
     deviceService: DeviceService;

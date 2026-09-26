@@ -66,7 +66,29 @@ export interface ExchangeSession {
   /** 이 세션 값의 거래일 (YYYY-MM-DD) */
   tradeBaseAt: string | null;
 }
-export type ExchangeStatus = { latest: ExchangeSession; next: ExchangeSession | null; isTradingDay: boolean | null };
+/**
+ * 네이버 거래소 장 상태. today 는 오늘(그 거래소 현지 날짜)이 거래일인지·평일 휴장일인지와 휴장 이름 (2026-09-26 실측 칸:
+ * today.date · isTradingDay · isWeekdayHoliday · holidayDescription). 시장 요약이 '오늘 한국 휴장(추석)' 줄과 직전 거래일(latest.tradeBaseAt)을 여기서 가져온다
+ */
+export type ExchangeStatus = {
+  latest: ExchangeSession;
+  next: ExchangeSession | null;
+  isTradingDay: boolean | null;
+  today?: { date: string | null; isWeekdayHoliday: boolean | null; holidayDescription: string | null };
+};
+
+/** 한국 종목 정규장 종가 (polling.finance.naver.com domestic). 가격·등락률은 KRX 정규장 값이고 NXT·애프터는 overMarketPriceInfo 로 따로 온다 — 쓰지 않는다 */
+export interface KrQuote {
+  code: string;
+  name: string;
+  /** KS = 코스피, KQ = 코스닥 (그 밖은 그대로) */
+  exchange: string;
+  price: number;
+  changeRate: number;
+  /** 시세 시각 (현지, 날짜 부분이 거래일) */
+  tradedAt: string | null;
+  status: string;
+}
 
 export function exchangeSession(j: Json | undefined): ExchangeSession | null {
   const ss = j?.["session"] as Json | undefined;
@@ -358,7 +380,48 @@ export class NaverDiscover {
       const latest = exchangeSession(row?.["latest"] as Json | undefined);
       if (!row || !latest) continue;
       const today = row["today"] as Json | undefined;
-      out[ex["exchange"] === "krx" ? "KR" : "US"] = { latest, next: exchangeSession(row["next"] as Json | undefined), isTradingDay: typeof today?.["isTradingDay"] === "boolean" ? (today["isTradingDay"] as boolean) : null };
+      const desc = today?.["holidayDescription"];
+      out[ex["exchange"] === "krx" ? "KR" : "US"] = {
+        latest,
+        next: exchangeSession(row["next"] as Json | undefined),
+        isTradingDay: typeof today?.["isTradingDay"] === "boolean" ? (today["isTradingDay"] as boolean) : null,
+        today: {
+          date: typeof today?.["date"] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(today["date"] as string) ? (today["date"] as string) : null,
+          isWeekdayHoliday: typeof today?.["isWeekdayHoliday"] === "boolean" ? (today["isWeekdayHoliday"] as boolean) : null,
+          holidayDescription: typeof desc === "string" && desc.trim() ? desc.trim() : null,
+        },
+      };
+    }
+    return out;
+  }
+
+  /**
+   * 한국 종목 여러 개의 정규장 종가 (polling.finance.naver.com/api/realtime/domestic/stock/{코드,…}, 로그인 불필요).
+   * closePrice·fluctuationsRatio 는 KRX 정규장 값(2026-09-23 실측), NXT·KRX 애프터 가격(overMarketPriceInfo)은 쓰지 않는다. 모르는 코드는 응답에서 빠진다
+   */
+  async krQuotes(codes: string[]): Promise<Map<string, KrQuote>> {
+    const out = new Map<string, KrQuote>();
+    const list = [...new Set(codes)].filter((c) => /^[0-9A-Z]{6}$/.test(c));
+    for (let i = 0; i < list.length; i += POLL_BATCH) {
+      const r = await this.json(`${POLL_BASE}/api/realtime/domestic/stock/${list.slice(i, i + POLL_BATCH).join(",")}`);
+      for (const it of (r["datas"] as Json[] | undefined) ?? []) {
+        const code = String(it["itemCode"] ?? "").toUpperCase();
+        const price = num(it["closePriceRaw"] ?? it["closePrice"]);
+        const rate = num(it["fluctuationsRatioRaw"] ?? it["fluctuationsRatio"]);
+        if (!code || price === null || rate === null) continue;
+        // 등락률 부호가 빠지는 경우에 대비해 전일 대비 부호에 맞춘다 (지수 목록과 같은 규칙)
+        const change = num(it["compareToPreviousClosePriceRaw"] ?? it["compareToPreviousClosePrice"]);
+        const ex = it["stockExchangeType"] as Json | undefined;
+        out.set(code, {
+          code,
+          name: String(it["stockName"] ?? code),
+          exchange: String(ex?.["code"] ?? ""),
+          price,
+          changeRate: change !== null && change < 0 && rate > 0 ? -rate : rate,
+          tradedAt: typeof it["localTradedAt"] === "string" ? it["localTradedAt"] : null,
+          status: String(it["marketStatus"] ?? ""),
+        });
+      }
     }
     return out;
   }

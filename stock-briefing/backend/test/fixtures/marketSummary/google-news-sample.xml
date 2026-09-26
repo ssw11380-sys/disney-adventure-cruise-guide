@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- 구글 뉴스 RSS 모양을 흉내 낸 합성 표본 (제목은 저작권 때문에 지어낸 예시). 2026-09-26 05:01~05:38 '뉴욕증시' 실측 응답에서 본 경우를 옮겼다:
+     속보·1보, 통신사, 같은 기사 다른 언론사, 같은 언론사 두 건, 다른 날짜가 박힌 제목, 물음표·권유·전망 낱말, 창 밖 기사, 도메인 이름 언론사, HTML 엔티티 -->
+<rss version="2.0"><channel><title>"뉴욕증시" - Google 뉴스</title>
+<item><title>[속보] 뉴욕증시 상승 마감…다우 0.9%↑ - 뉴시스</title><link>https://news.google.com/rss/articles/s1</link><pubDate>Fri, 25 Sep 2026 20:01:37 GMT</pubDate><source url="https://www.newsis.com">뉴시스</source></item>
+<item><title>[뉴욕마감] 3대 지수 동반 상승…나스닥 0.48%↑ - 뉴스1</title><link>https://news.google.com/rss/articles/s2</link><pubDate>Fri, 25 Sep 2026 20:32:00 GMT</pubDate><source url="https://www.news1.kr">뉴스1</source></item>
+<item><title>뉴욕증시, 기술주 강세 속 상승 마감 - KBS</title><link>https://news.google.com/rss/articles/s3</link><pubDate>Fri, 25 Sep 2026 20:22:00 GMT</pubDate><source url="https://news.kbs.co.kr">KBS</source></item>
+<item><title>뉴욕증시, 기술주 강세 속 상승 마감 - 서울경제</title><link>https://news.google.com/rss/articles/s4</link><pubDate>Fri, 25 Sep 2026 20:25:00 GMT</pubDate><source url="https://www.sedaily.com">서울경제</source></item>
+<item><title>뉴욕증시 마감 시황 &amp; 금리 동향 - 한국경제</title><link>https://news.google.com/rss/articles/s5</link><pubDate>Fri, 25 Sep 2026 20:38:00 GMT</pubDate><source url="https://www.hankyung.com">한국경제</source></item>
+<item><title>뉴욕증시 반도체주 정리 - 한국경제</title><link>https://news.google.com/rss/articles/s6</link><pubDate>Fri, 25 Sep 2026 20:45:00 GMT</pubDate><source url="https://www.hankyung.com">한국경제</source></item>
+<item><title>[뉴욕증시 23일] 금리 부담에 하락 - 매일경제</title><link>https://news.google.com/rss/articles/s7</link><pubDate>Fri, 25 Sep 2026 20:50:00 GMT</pubDate><source url="https://www.mk.co.kr">매일경제</source></item>
+<item><title>뉴욕증시 올랐는데 지금 살까? - 머니투데이</title><link>https://news.google.com/rss/articles/s8</link><pubDate>Fri, 25 Sep 2026 20:55:00 GMT</pubDate><source url="https://www.mt.co.kr">머니투데이</source></item>
+<item><title>이번주 뉴욕증시 전망…금리 변수 - 이데일리</title><link>https://news.google.com/rss/articles/s9</link><pubDate>Fri, 25 Sep 2026 21:00:00 GMT</pubDate><source url="https://www.edaily.co.kr">이데일리</source></item>
+<item><title>반도체주 목표가 줄상향 - 아시아경제</title><link>https://news.google.com/rss/articles/s10</link><pubDate>Fri, 25 Sep 2026 21:05:00 GMT</pubDate><source url="https://www.asiae.co.kr">아시아경제</source></item>
+<item><title>뉴욕증시 혼조 마감 - 연합뉴스</title><link>https://news.google.com/rss/articles/s11</link><pubDate>Thu, 24 Sep 2026 20:41:00 GMT</pubDate><source url="https://www.yna.co.kr">연합뉴스</source></item>
+<item><title>뉴욕증시 주간 결산 - 조선비즈</title><link>https://news.google.com/rss/articles/s12</link><pubDate>Sat, 26 Sep 2026 03:10:00 GMT</pubDate><source url="https://biz.chosun.com">조선비즈</source></item>
+<item><title>뉴욕증시 3대 지수 올라 - v.daum.net</title><link>https://news.google.com/rss/articles/s13</link><pubDate>Fri, 25 Sep 2026 20:10:00 GMT</pubDate><source url="https://v.daum.net">v.daum.net</source></item>
+<item><title>25일(현지시간) 뉴욕증시 상승 - 파이낸셜뉴스</title><link>https://news.google.com/rss/articles/s14</link><pubDate>Fri, 25 Sep 2026 20:58:00 GMT</pubDate><source url="https://www.fnnews.com">파이낸셜뉴스</source></item>
+</channel></rss>

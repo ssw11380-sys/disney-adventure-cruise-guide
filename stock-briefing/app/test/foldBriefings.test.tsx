@@ -88,6 +88,9 @@ vi.mock("@/api/hooks", () => {
     useHealth: () => q({ llmConfigured: true, lastBriefing: null }),
     useMarketStatus: () => q(h.market),
     useStockMutations: () => ({ run: { mutate: vi.fn(), isPending: false, variables: undefined } }),
+    // 시장 전체 요약(플래그 marketSummary)은 이 테스트에서 꺼져 있다 — 켜진 모습은 test/marketSummaryScreen.test.tsx
+    useMarketSummaries: () => q(undefined),
+    useMarketSummary: () => q(undefined),
     useAccountBriefings: (enabled: boolean) => q(enabled ? h.accounts : undefined),
     useAccountBriefing: (_id: number, enabled: boolean) => q(enabled ? h.accountDetail : undefined),
     useBriefing: (id: number) => {

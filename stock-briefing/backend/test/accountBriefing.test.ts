@@ -65,6 +65,13 @@ function holding(code: string, name: string, change: number, opts: { qty?: numbe
   };
 }
 
+/** 한국·미국 모두 거래일이라고 준 토스 달력 (9/25 는 실제로 추석이라 달력 없이 짐작하면 이제 휴장으로 본다 — 계산 시험은 보통 날로) */
+const KR_TRADING = {
+  now: "",
+  KR: { market: "KR", isTradingDay: true, isOpen: true, opensAt: null, closesAt: null, source: "toss" },
+  US: { market: "US", isTradingDay: true, isOpen: false, opensAt: null, closesAt: null, source: "toss" },
+} as MarketStatus;
+
 function dataFrom(list: AccountHolding[], over: Partial<AccountData> = {}): AccountData {
   const idx = [
     { code: "KOSPI", name: "코스피", kind: "index", value: 3412.35, change: -27.5, changeRate: -0.8, open: false, asOf: null },
@@ -81,7 +88,7 @@ function dataFrom(list: AccountHolding[], over: Partial<AccountData> = {}): Acco
     ...computeAccount(list, { usdKrw: fixture.usdKrw }),
     indices: rows,
     missingIndices: missing,
-    schedule: buildSchedule(null, new Date("2026-09-25T16:05:00+09:00"), []),
+    schedule: buildSchedule(KR_TRADING, new Date("2026-09-25T16:05:00+09:00"), []),
     narrative: { source: "template", reason: null },
     ...over,
   };
@@ -361,7 +368,7 @@ describe("계좌 숫자 (순수 계산)", () => {
       "- S&P500 지수는 받지 못했습니다.",
     ]) expect(checkNarrative(text, facts), text).toEqual({ ok: true });
     // 공시가 있으면 건수가 사실에 들어가 기본 문장의 '최근 공시 N건'이 통과하고, 다른 건수는 거절
-    const withDisc = dataFrom(fixture.holdings, { schedule: buildSchedule(null, new Date("2026-09-25T16:05:00+09:00"), [{ code: "005930", name: "삼성전자", title: "분기보고서", filedAt: "2026-09-24", url: null }]) });
+    const withDisc = dataFrom(fixture.holdings, { schedule: buildSchedule(KR_TRADING, new Date("2026-09-25T16:05:00+09:00"), [{ code: "005930", name: "삼성전자", title: "분기보고서", filedAt: "2026-09-24", url: null }]) });
     expect(factsText(withDisc)).toContain("최근 공시 1건: ");
     expect(templateNarrative(withDisc)).toContain("최근 공시 1건.");
     expect(checkNarrative(templateNarrative(withDisc), factsText(withDisc))).toEqual({ ok: true });
@@ -651,7 +658,7 @@ describe("계좌 숫자 (순수 계산)", () => {
 
   it("모델 설명 검사 (4차 검증): 매입·매각·사고팔기·시점·진입·관망·유지 권고, 낫습니다·좋습니다·필요합니다, 미래·추측형(~ㄹ 것입니다·듯·것 같·곧·계속·우려)은 거절", () => {
     const facts = factsText(dataFrom(fixture.holdings, {
-      schedule: buildSchedule(null, new Date("2026-09-25T16:05:00+09:00"), [{ code: "000660", name: "SK하이닉스", title: "공개매수신고서", filedAt: "2026-09-25", url: null }]),
+      schedule: buildSchedule(KR_TRADING, new Date("2026-09-25T16:05:00+09:00"), [{ code: "000660", name: "SK하이닉스", title: "공개매수신고서", filedAt: "2026-09-25", url: null }]),
     }));
     for (const [text, word] of [
       ["- 리게티 컴퓨팅을 팔고 삼성전자를 사는 것이 낫습니다.", "팔고"],
@@ -718,7 +725,7 @@ describe("계좌 숫자 (순수 계산)", () => {
   it("모델 설명 검사: 권유·전망 표현은 거절, 사실에 있는 공시 제목·'예상액'은 통과", () => {
     const facts = factsText(dataFrom(fixture.holdings, {
       basis: "총 평가금액은 수수료·세금 예상액을 뺀 값",
-      schedule: buildSchedule(null, new Date("2026-09-25T16:05:00+09:00"), [
+      schedule: buildSchedule(KR_TRADING, new Date("2026-09-25T16:05:00+09:00"), [
         { code: "005930", name: "삼성전자", title: "주식매수선택권부여에관한신고", filedAt: "2026-09-24", url: null },
         { code: "000660", name: "SK하이닉스", title: "공개매수신고서", filedAt: "2026-09-25", url: null },
         { code: "035420", name: "NAVER", title: "영업실적등에대한전망(공정공시)", filedAt: "2026-09-25", url: null },
@@ -1021,6 +1028,17 @@ const krHolidayCalendar = {
   isTradingDate: async (market: "KR" | "US") => market === "US",
 };
 
+/**
+ * 두 시장 모두 거래일이라고 토스 달력이 준 날 (계좌 브리핑의 보통 날 시험용). 9/25 는 실제로는 추석이라 달력 없이 요일로 짐작하면
+ * 이제 한국 휴장일 목록(KR_HOLIDAYS)이 휴장으로 본다 — 그 경우는 marketContext·시장 요약 테스트가 따로 본다
+ */
+const openKr = { market: "KR" as const, isTradingDay: true, isOpen: true, opensAt: null, closesAt: "2026-09-25T11:00:00.000Z", source: "toss" as const };
+const tradingCalendar = {
+  status: async (): Promise<MarketStatus> => ({ now: "", KR: openKr, US: openUs }),
+  isTradingDay: async () => true,
+  isTradingDate: async () => true,
+};
+
 const AAPL: ListedStock = { code: "AAPL", name: "애플", market: "NASDAQ", isinCode: null, groupCode: null };
 const TOKEN = "ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]";
 
@@ -1039,8 +1057,8 @@ describe("계좌 브리핑 (서버)", () => {
     if (o.disabledModel) gen.model = "disabled";
     const quotes = new MixedQuotes();
     const indices = fakeIndices(fakeIndexSource({ fx: { close: "1,391.00", change: "5.20", rate: "0.38" } }), () => new Date(o.at ?? "2026-09-25T16:05:00+09:00"));
-    // 휴장 달력을 주지 않으면: 토스 달력 조회는 실패하고, 요일 추정(fallback)은 테스트 시각으로 한다 (실제 오늘이 주말이어도 결과가 같게)
-    const calendar = o.holiday ? (o.holiday === "kr" ? krHolidayCalendar : holidayCalendar) : new MarketCalendar(async () => new Response("{}", { status: 500 }), () => new Date(o.at ?? "2026-09-25T16:05:00+09:00"));
+    // 휴장 달력을 주지 않으면 두 시장 모두 거래일이라는 토스 달력 (실제 오늘이 주말이어도 결과가 같게)
+    const calendar = o.holiday ? (o.holiday === "kr" ? krHolidayCalendar : holidayCalendar) : tradingCalendar;
     app = await buildApp({
       config: loadConfig({ DATABASE_URL: ":memory:" }),
       db,
