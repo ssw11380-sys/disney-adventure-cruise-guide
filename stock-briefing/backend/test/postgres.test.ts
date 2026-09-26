@@ -51,7 +51,10 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    // 7 = 시장 전체 요약 표 (날짜·세션 하나에 한 건)
+    const idx = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename = 'market_summaries'`.execute(db);
+    expect(idx.rows.map((r) => r.indexname)).toContain("uq_market_summaries_date_session");
   });
 
   it("수량·평단은 8바이트(double precision)라 토스 소수 값이 끝자리까지 그대로 돌아온다 (BH-48)", async () => {
@@ -77,7 +80,7 @@ describe.skipIf(!url)("postgres dialect", () => {
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {
