@@ -251,6 +251,21 @@ const ADVICE_RE = new RegExp(
     "사\\s?[둬두]라|사들여라|갈아타라|모아라|올라[타탈]|(?:수익률?|원금)\\s?보장|무조건|반드시|손절|익절",
     "저평가|고평가|과대평가|과소평가|매력적|투자처|매매법|투자법|돈\\s?버는|(?:은퇴|노후)\\s?(?:준비|대비)|(?:보유|투자|매수|편입|주목)(?:하는|할|해야\\s?할)\\s?이유|담는\\s?이유",
     "\\[[^\\]]*(?:전략|노하우|투자\\s?리포트|투자\\s?포인트)[^\\]]*\\]",
+    // (7차 검토) 종목 하나를 띄우는 소개 글: '커스텀 AI 반도체 … 연결의 강자 - 마벨 테크놀로지(MRVL)'·'AI 반도체의 숨은 강자 - 브로드컴(AVGO)',
+    // 끝이 '- 회사(종목 기호)'인 꼴 ('반도체 강자 삼성전자 3% 상승'처럼 강자 뒤에 줄표가 없으면 둔다)
+    "강자\\s?[-–—:|]|(?:숨은|숨겨진|진정한|차세대|떠오르는|새로운)\\s?(?:강자|보석|대장주|주도주)|\\s[-–—:]\\s?[^-–—:]{1,30}\\([A-Z]{1,5}(?:\\.[A-Z])?\\)\\s*$",
+    // (7차 검토) '삼성전자 담아볼 만'·'사볼 만한 반도체주'·'존버가 답'·'이 종목 사면 대박'·'지금 반도체 사면 수익'
+    "볼\\s?만(?:하|한|해|(?=$|\\s|…|⋯|‥|,|!|\\.{2,}))|존버|(?<=[가-힣])(?:이|가)\\s?답(?=$|\\s*(?:…|⋯|‥|\\.{2,}|,|!))",
+    "(?<![가-힣])(?:사|팔|담으|들어가|올라타|매[수도]하|투자하)면\\s?(?:수익|대박|이득|이익|돈|번다|벌|오른다|[2-9]배|두\\s?배)",
+    // (7차 검토) 업종·종목을 좋다·나쁘다로 가르거나 추려 내미는 목록: '항공株엔 호재, 해운株엔 악재'·'외국인 순매수 중인 순위 Top5'·'[투자자 순매수 TOP5]'
+    // ('중동 악재에 하락'·'반도체 호재에 상승'처럼 그날 움직임의 까닭은 둔다, '시총 톱10 중 절반'도 둔다)
+    "(?:株|주|업종|종목|기업|증시)(?:엔|에는|에겐|에게는?)\\s?(?:호재|악재)|호재[,·]\\s?[^…⋯]{0,15}악재|악재[,·]\\s?[^…⋯]{0,15}호재|(?:(?<![A-Za-z])top|톱|탑)\\s?\\d{1,2}(?![\\d가-힣]|\\s?중)|상위\\s?\\d+\\s?개\\s?종목",
+    // (7차 말뭉치 검토) 환율·유가의 업종 득실 가르기: '항공주 웃고 해운·수출주는 실적 부담'·'항공주는 웃고 해운주 울고…식음료는 딜레마'·'해운·식품주는 셈법 복잡'·
+    // '환율 하락에 항공주 수혜' ('반도체주 웃고 은행주 울었다'처럼 그날 주가 움직임만 적은 것은 둔다), 증권사 보고서 해설·투자 입문·'배당주 시즌'
+    "(?:株|주)(?:는|은)?\\s?(?:웃고|울고)[^…⋯]{0,25}(?:부담|딜레마|셈법)|(?:株|주)(?:는|은)?\\s?셈법\\s?복잡|(?:株|주)\\s?수혜|웃고\\s?[^…⋯]{0,15}울고|울고\\s?[^…⋯]{0,15}웃고",
+    "리서치\\s?리포트|리포트\\s?해설|(?:시작하는|쉽게\\s?배우는|따라\\s?하는)\\s?[^…⋯]{0,10}투자|배당주\\s?시즌",
+    // (7차 검토) 지수 목표 값: '증권가, 코스피 연말 목표 8000 제시'·'목표 7500 상향'
+    "(?:코스피|코스닥|나스닥|지수|주가|S&P\\s?500|다우)\\s?(?:연말\\s?|연내\\s?|내년\\s?)?목표\\s?\\d|목표\\s?\\d[\\d,.]*\\s?(?:선|포인트|p|pt)?\\s?(?:제시|상향|하향)",
   ].join("|"),
   "i",
 );
@@ -271,7 +286,7 @@ const VALUE_RE = new RegExp(
  * 'sell-off'(급락)·'buyback'(자사주 매입)은 사실이라 둔다
  */
 const ENGLISH_RE =
-  /\b(?:forecasts?|could|would|should|will|might|outlook|predicts?|predictions?|expects?|expected|expectations?|targets?|upside|downside|poised|sees|buy|sell(?![\s-]?offs?\b)|top\s+picks?|upgrades?|upgraded|downgrades?|downgraded|overweight|underweight|outperform|underperform|bullish|bearish|undervalued|overvalued|cheap|bargain|stocks?\s+to\s+watch)\b/i;
+  /\b(?:forecasts?|could|would|should|will|might|outlook|predicts?|predictions?|expects?|expected|expectations?|targets?|upside|downside|poised|sees|buy|sell(?![\s-]?offs?\b)|top\s+picks?|upgrades?|upgraded|downgrades?|downgraded|overweight|underweight|outperform|underperform|bullish|bearish|undervalued|overvalued|cheap|bargain|stocks?\s+to\s+watch|set\s+to|heads?\s+(?:toward|for)|(?:shares|stocks?|index|nasdaq|kospi)\s+to\s+(?:rally|surge|soar|climb|jump|rise|gain|fall|drop|plunge|slump|tumble|rebound|recover|double|triple|hit|reach|top))\b/i;
 /**
  * 의견 난(사설·칼럼 등)은 뺀다 — 그날 장의 사실이 아니라 필자의 주장이다 ('[사설] … 대비하길'·'[여명] … 보내자').
  * 기자 이름을 단 난('[김남현의 채권썰]'·'[신윤우의 외환분석]'·'[김혜란의 FX]' — 세 글자 이름 + '의')과 '[기자수첩]'·'[우보세]'·'[이슈프리즘]'·'[애널리스트의 시각]'도.
@@ -285,10 +300,13 @@ const OPINION_RE = /\[[^\]]*(?:사설|칼럼|시론|기고|오피니언|논단|�
  */
 const SPAM_RE = new RegExp(
   [
-    "카지노|바카라|토토|슬롯|룰렛|파워\\s?볼|포커|홀덤|도박|먹튀|마작|크레이지\\s?타임|배팅|(?<!신)경마|블랙잭|섯다|텔레그램|게임방|꽁머니",
+    // '포커'는 '[경제 포커스]'·'[아주증시포커스]' 같은 난 이름을 빼고 (7차 말뭉치 검토)
+    "카지노|바카라|토토|슬롯|룰렛|파워\\s?볼|포커(?!스)|홀덤|도박|먹튀|마작|크레이지\\s?타임|배팅|(?<!신)경마|블랙잭|섯다|텔레그램|게임방|꽁머니",
     "스포츠\\s?베팅|베팅\\s?(?:사이트|안내|방법|법|api)|머니\\s?시세|w88|프리서버|무료\\s?(?:시청|스핀)|하이\\s?로우|보드\\s?게임|빙고|슬링고|고스톱|바둑이|리겜",
     "밸런스\\s?게임|변환기\\s?및\\s?환율|코인마켓캡|의\\s?모든\\s?측면|장점,\\s?단점|디자인\\s?패턴|배당주\\s?순위|게임\\s?(?:규칙|설명|화면|데이터|시작|진행|유형|정보|핵|사이트)",
     "규칙\\s?(?:문서|페이지)|사이트\\s?(?:순위|규칙)|맞고\\s?(?:버그|환전)|뉴\\s?맞고|뽑기|내기\\s?승리|설정\\s?메뉴|메뉴\\s?(?:지도|구별)",
+    // 앱 안내 꼴 광고 글 ('… 주가 정보 버튼과 설정 버튼의 차이'·'… 이용 시간 알림 기능 확인'·'… 앱 시각적 구성')
+    "버튼(?:과|의)\\s|기능\\s?확인|시각적\\s?구성",
   ].join("|"),
   "i",
 );
@@ -378,7 +396,8 @@ export function politeTalk(title: string): boolean {
  * '험난한 앞날'·'이익 눈높이'·'코스피지수 목표치'·'밴드 상단'·'상단 7764'·'1,380원 상단 시험'·
  * (6차 검토) '2배 상승도 가능'·'주가 상승 유효'·'꺾이는 신호'·'강세장 신호'·'추가 상승 vs 다시 하락'·'매매시나리오'·'줄초상 예고'·'커브 플랫에 무게'·
  * '인상론에 힘 실려'·'반등 열쇠는'·'실적이 분수령'·'증시에 중요한 이유'·'적정 수준으로 보인다'(짐작)
- * ('~ㄹ 것'·'~ㄹ 수 있다'·'~ㄹ지'·'~면 …'·끝 '~기대'는 predicts·asksQuestion). '관측소'·'내주며'·'여지없이'·'상장 폐지 경고 받아'·'부회장, 하이닉스로 보임'(자리 옮김)·
+ * (7차 검토) '8000선 위태'·'7000선 위협'·'8000도 가능'·'15만원 가능'·'연말 7500'·'연내'·'연말까지'·'당분간'·'돌파 무난'·'오를 일만 남았다'·'성장 예고'
+ * ('~ㄹ 것'·'~ㄹ 수 있다'·'~ㄹ지'·'~면 …'·끝 '~기대'·'~우려'는 predicts·asksQuestion, 먼 앞날 해의 규모 단정은 futureYearOutlook). '관측소'·'내주며'·'여지없이'·'상장 폐지 경고 받아'·'부회장, 하이닉스로 보임'(자리 옮김)·
  * '반도체에 힘 싣는다'(회사 결정)·'통행료 예고에 하락'(발표)·'매도 우세'는 사실을 적은 말이라 둔다
  */
 const OUTLOOK_RE = new RegExp(
@@ -392,6 +411,15 @@ const OUTLOOK_RE = new RegExp(
     "(?:꺾이는|하락|상승|반등|위험|과열|바닥|천장|고점|저점|반전|전환|강세장|약세장|침체|둔화|경고)\\s?신호|(?:상승|하락|반등|강세|약세|인상|인하)\\s?vs|vs\\.?\\s?(?:상승|하락|반등|강세|약세)",
     "시나리오|에\\s?무게|(?:론|설|전망|관측|기대|가능성)에\\s?힘\\s?(?:실려|실린|싣)|열쇠|분수령|중요한\\s?이유",
     `(?:로|게|해|워|와|아|어|져)\\s?보(?:인다|이는|여${B})`,
+    // (7차 검토) 지수 선이 무너질 수 있다는 말: '코스닥 제약지수 8000선 위태'·'코스피 7000선 위협'·'7천 위협' ('AI 위협에 하락'처럼 숫자 뒤가 아니면 둔다)
+    "위태|\\d[\\d,.]*\\s?(?:만|천)?\\s?(?:선|포인트|p|원|달러|원대|선대)?\\s?위협",
+    // (7차 검토) 숫자 뒤 '가능'('코스피 8000도 가능'·'삼성전자 15만원 가능'·'연말 7500 가능' — '2배 상승도 가능'만 막히던 빈 곳), 앞날의 값·기간:
+    // '연말 8000'·'연내'·'연말까지'·'당분간'·'돌파 무난'·'오를 일만 남았다'·'성장 예고'
+    "\\d[\\d,.]*\\s?(?:만\\s?|천\\s?)?(?:원|달러|선|포인트|p|배|%)?(?:도|까지|이|은)?\\s?가능(?!성)",
+    "연말\\s?(?:까지|\\d)|연내|내년\\s?\\d|당분간|(?:돌파|달성|도달|회복|상승|반등)\\s?무난|일만\\s?남(?:았|은|아)",
+    "(?:성장|상승|반등|강세|호황|랠리|흑자|하락|조정|급락|폭락|약세|줄초상|줄상폐)\\s?예고",
+    // (7차 말뭉치 검토) '연휴 직후 국내 증시, … 지표가 방향성 결정'·'낙관은 어려워'·'커지는 상승 걸림돌'·'한국 주식 5차 파동'
+    "방향성?\\s?(?:결정|좌우|가를|가늠)|낙관(?:은|하기)?\\s?(?:어려|이르|금물)|(?:상승|반등|랠리|회복)\\s?걸림돌|\\d차\\s?파동",
   ].join("|"),
   "i",
 );
@@ -487,6 +515,7 @@ export function timingCall(title: string): boolean {
 
 /**
  * 예측: '~ㄹ 것'('랠리 계속될 것'·'"코스피 연말 3500 갈 것"'·'4000 시대 열릴 것이란'), '~ㄹ 수 있다·~ㄹ 수도'('한국경제 흔들릴 수 있다'),
+ * (7차 검토) 마디 끝 '(하락·조정·수급 공백 …) 우려'(WORRY_END_RE)·'~가 우려된다', '(수주 …) 기대감 고조',
  * '~ㄹ 모멘텀·동력'('외인 투심 돌아올 모멘텀'). '그것'·'이것'은 아니다.
  * (6차 검토 must) '~ㄹ지도 모른다'('AI가 끝낼지도 모른다'), '~겠다'(짐작·다짐), '~가 기대된다', 마디 끝 '(상승·재평가·유입·확대·수급 …) 기대'
  * ('코스피 상승 기대'·'주가 재평가 기대'·'배당 확대 기대'·'5조원 유입 기대' — 까닭으로 쓴 '협상 기대에 상승'·'기대감에'와 시장 분위기를 적은
@@ -494,25 +523,52 @@ export function timingCall(title: string): boolean {
  * '미국이 올렸다면 한국도') — 이름씨 '측면·국면·반면·화면·라면·가면·사면' 등과 출처를 밝히는 '~에 따르면'은 둔다
  */
 const HOPE_END_RE =
-  /(?:상승|반등|재평가|유입|확대|개선|수혜|효과|강세|회복|랠리|호조|성장|증가|수급|급등|돌파|상향|특수|턴어라운드|흑자\s?전환|실적|주가)\s?기대(?:감)?(?=\s*(?:$|…|⋯|‥|\.{2,}|[·,]))/;
+  /(?:상승|반등|재평가|유입|확대|개선|수혜|효과|강세장?|회복|랠리|호조|성장|증가|수급|급등|돌파|상향|특수|턴어라운드|흑자\s?전환|실적|주가|수주)\s?기대(?:감)?(?:\s?(?:고조|확산|커져|커진|↑))?(?=\s*(?:$|…|⋯|‥|\.{2,}|[·,]))/;
+/**
+ * (7차 검토 must) 끝이 '~우려'인 앞날 걱정도 '~기대'와 같은 꼴로 막는다 — 오를 거라는 전망만 막고 내릴 거라는 걱정은 두던 빈 곳:
+ * '삼전·하닉 34조 자사주 막바지…코스피 수급 공백 우려'·'…10월 수급 공백 우려'·'코스피 추가 하락 우려'·'반도체주 조정 우려'·'추가 상폐 우려도'.
+ * 그날 움직임의 까닭으로 쓴 '금리 인상 우려에 하락'·'중동 확전 우려 속'과, 가격이 아닌 걱정('인플레 우려'·'금리인상 우려·국채금리 급등에 하락'·
+ * '지분희석 우려…주가 3%↓')은 둔다 — 시장 값·수급이 앞으로 나빠진다는 낱말 뒤만 본다
+ */
+const WORRY_END_RE =
+  /(?:하락|조정|급락|폭락|약세장?|하방|반락|되돌림|공백|매물\s?부담|이탈|유출|쇼크|오버행|상폐|상장\s?폐지|거품\s?붕괴|손실)\s?(?:우려|경계)(?:감)?(?:도)?(?:\s?(?:고조|확산|커져|커진|↑))?(?=\s*(?:$|…|⋯|‥|\.{2,}|[·,]))/;
 const COND_RE = /([가-힣]+)면(?=\s|,|…|⋯|\.{2,}|$)/g;
 /**
  * 끝이 '~면'이지만 조건이 아닌 낱말: 이름씨(받침 없는 앞 음절 + 면 — 낱말 전체가 같을 때만. '이어지면'·'올라가면'·'넘어서면'은 조건이다),
- * 출처를 밝히는 말('블룸버그에 따르면')
+ * 출처를 밝히는 말('블룸버그에 따르면').
+ * (7차 검토) '사면'은 목록에서 뺐다 — '지금 반도체 사면 수익'·'이 종목 사면 대박'처럼 '사면'(사다 + 면)이 더 흔하다.
+ * 이름씨 '사면'(특별사면·사면 복권)은 뒤에 오는 말로 알아본다 (NOUN_SAMYEON_AFTER)
  */
-const NOT_COND_WORDS = new Set(["이면", "지면", "라면", "컵라면", "대면", "비대면", "서면", "수면", "해수면", "화면", "체면", "가면", "사면", "특별사면", "내면", "외면", "표면", "우면", "냉면", "쫄면", "따르면", "의하면"]);
+const NOT_COND_WORDS = new Set(["이면", "지면", "라면", "컵라면", "대면", "비대면", "서면", "수면", "해수면", "화면", "체면", "가면", "특별사면", "내면", "외면", "표면", "우면", "냉면", "쫄면", "따르면", "의하면"]);
+const NOUN_SAMYEON_AFTER = /^\s?(?:복권|대상|심사|단행|명단|논란|조치|절차|검토|결정|위원회|권|·|,)/;
 export function predicts(title: string): boolean {
   for (const m of title.matchAll(/([가-힣])\s?(?:것|수\s?(?:있|도|밖에)|모멘텀|동력)/g)) if (finalOf(m[1]!) === 8) return true;
   if (/지도\s?(?:모른|몰라|모를)|겠(?:다|네|지|어|습|고)/.test(title)) return true;
-  if (/기대(?:된다|돼|되는|된다며)/.test(title) || HOPE_END_RE.test(title) || HOPE_END_RE.test(coreTitle(title))) return true;
+  if (/(?:기대|우려)(?:된다|돼|되는|된다며)/.test(title)) return true;
+  const core = coreTitle(title);
+  if (HOPE_END_RE.test(title) || HOPE_END_RE.test(core) || WORRY_END_RE.test(title) || WORRY_END_RE.test(core)) return true;
   for (const m of title.matchAll(COND_RE)) {
     const word = `${m[1]}면`;
     const prev = m[1]!.slice(-1);
     const f = finalOf(prev);
     // 받침 없는 앞 음절('오르면'·'이어지면'·'되면'·'하면'), 받침 ㄹ('팔면'·'늘면'), '~으면'·'~다면'·'~라면'
     if (!(f === 0 || f === 8 || prev === "으") || NOT_COND_WORDS.has(word)) continue;
+    if (word === "사면" && NOUN_SAMYEON_AFTER.test(title.slice(m.index! + m[0].length))) continue;
     return true;
   }
+  return false;
+}
+
+/**
+ * (7차 검토) 먼 앞날의 산업·회사 규모를 단정하는 제목 — 주가 예측은 아니지만 '전망 없이' 규칙에 맞게 뺀다:
+ * '2035년 반도체 레이저 시장: … 성장 견인'·'… 시장, 2035년까지 … 성장 가속'·'글로벌 반도체 칩 생태계, 2035년 2539조 원 규모로 확장'.
+ * 기사가 나온 해(year)보다 뒤의 해가 제목에 있고 규모·성장 낱말이 함께 있을 때만 (지난해·올해 실적은 둔다). year 를 모르면 보지 않는다
+ */
+const YEAR_RE = /(?<!\d)(20\d{2})년/g;
+const GROWTH_RE = /시장|규모|성장|확장|확대|증가|달할|도달|돌파|매출|이익|목표|전망/;
+export function futureYearOutlook(title: string, year: number | undefined): boolean {
+  if (!year) return false;
+  for (const m of title.matchAll(YEAR_RE)) if (Number(m[1]) > year && GROWTH_RE.test(title)) return true;
   return false;
 }
 
@@ -996,9 +1052,10 @@ export type BlockReason = "물음표" | "의견" | "광고" | "인용" | "물음
 /**
  * 제목을 거르는 까닭 (없으면 null): 물음표 · 의견 난 · 광고 · 인용(따옴표 속 남의 말) · 물음(물음표 없는 물음) · 권유(낱말·때 짚기·청유) · 평가(싸다·비싸다) ·
  * 당위 끝 · 명령형 끝(반말·존댓말) · 전망 낱말 · 영문 전망·권유 · 예측 · 말투(해설·광고 글).
- * 고치지 않고 통째로 뺀다 — 언론사 제목 원문만 보이므로 걸러낼 수 없는 제목은 싣지 않는다. 끝 모양 검사는 제목 전체와 본문(coreTitle) 둘 다 본다
+ * 고치지 않고 통째로 뺀다 — 언론사 제목 원문만 보이므로 걸러낼 수 없는 제목은 싣지 않는다. 끝 모양 검사는 제목 전체와 본문(coreTitle) 둘 다 본다.
+ * year = 기사가 나온 해 (주면 그보다 뒤 해의 규모·성장 단정도 '전망'으로 — futureYearOutlook)
  */
-export function blockReason(title: string): BlockReason | null {
+export function blockReason(title: string, opts: { year?: number } = {}): BlockReason | null {
   const core = coreTitle(title);
   const either = (f: (t: string) => boolean) => f(title) || (core !== title && f(core));
   if (QUESTION_RE.test(title)) return "물음표";
@@ -1010,7 +1067,7 @@ export function blockReason(title: string): BlockReason | null {
   if (VALUE_RE.test(title)) return "평가";
   if (either(ought)) return "당위";
   if (either(commands)) return "명령";
-  if (OUTLOOK_RE.test(title) || either(forecastsTense)) return "전망";
+  if (OUTLOOK_RE.test(title) || either(forecastsTense) || futureYearOutlook(title, opts.year)) return "전망";
   if (ENGLISH_RE.test(title)) return "영문";
   if (predicts(title)) return "예측";
   if (either(politeTalk)) return "말투";
@@ -1018,8 +1075,68 @@ export function blockReason(title: string): BlockReason | null {
 }
 
 /** 걸러야 할 제목인지 (blockReason 이 있으면) */
-export function blockedTitle(title: string): boolean {
-  return blockReason(title) !== null;
+export function blockedTitle(title: string, opts: { year?: number } = {}): boolean {
+  return blockReason(title, opts) !== null;
+}
+
+/**
+ * 구글 뉴스가 시각 없이 날짜만 준 기사인지 (7차 검토): 이런 기사는 발행 시각이 그날 태평양 시간 자정(여름 07:00:00 GMT = 한국 16:00,
+ * 겨울 08:00:00 GMT = 한국 17:00)으로 찍혀 온다. 말뭉치 1만여 건 가운데 약 4분의 1이 이 시각이었고, 오후 창 끝(16:00)에 걸려
+ * 아침 개장 기사('코스피, 0.91% 상승 출발')가 마감 기사처럼 뽑혔다. 실제 시각을 모르므로 창에 넣지 않는다
+ */
+const LA_CLOCK = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+export function dateOnlyStamp(iso: string): boolean {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t) || t % 60_000 !== 0) return false;
+  return LA_CLOCK.format(new Date(t)) === "00:00:00";
+}
+
+/**
+ * 언론사 칸에 보일 이름 (7차 검토): 구글이 이름 대신 도메인을 주면('v.daum.net'·'edaily.co.kr') 아는 언론사는 이름으로 바꾸고,
+ * 포털 중계(v.daum.net 등 — 원래 언론사를 알 수 없다)와 모르는 도메인은 null (뽑지 않는다 — 카드에 도메인이 보이지 않게).
+ * 블로그·유료 투자 글(네이버 프리미엄콘텐츠·브런치 등)은 언론사가 아니라 null
+ */
+const DOMAIN_RE = /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i;
+const OUTLET_BY_DOMAIN: Readonly<Record<string, string>> = {
+  "edaily.co.kr": "이데일리",
+  "mt.co.kr": "머니투데이",
+  "fnnews.com": "파이낸셜뉴스",
+  "ebn.co.kr": "EBN",
+  "sbs.co.kr": "SBS",
+  "chosun.com": "조선일보",
+  "biz.chosun.com": "조선비즈",
+  "dt.co.kr": "디지털타임스",
+  "imaeil.com": "매일신문",
+  "gukjenews.com": "국제뉴스",
+  "sisajournal.com": "시사저널",
+  "hankyung.com": "한국경제",
+  "mk.co.kr": "매일경제",
+  "yna.co.kr": "연합뉴스",
+  "news1.kr": "뉴스1",
+  "newsis.com": "뉴시스",
+  "einfomax.co.kr": "연합인포맥스",
+  "asiae.co.kr": "아시아경제",
+  "sedaily.com": "서울경제",
+  "heraldcorp.com": "헤럴드경제",
+  "etnews.com": "전자신문",
+  "newspim.com": "뉴스핌",
+  "joongang.co.kr": "중앙일보",
+  "donga.com": "동아일보",
+  "khan.co.kr": "경향신문",
+  "hani.co.kr": "한겨레",
+  "kbs.co.kr": "KBS",
+  "imbc.com": "MBC",
+  "ytn.co.kr": "YTN",
+};
+const PORTAL_DOMAIN_RE = /(?:^|\.)(?:daum\.net|naver\.com|nate\.com|zum\.com|msn\.com|yahoo\.com|google\.com)$/i;
+const NON_PRESS = new Set(["네이버 프리미엄콘텐츠", "Naver Blog", "네이버 블로그", "브런치", "브런치스토리", "티스토리", "Tistory", "포스타입"]);
+export function outletName(source: string | null | undefined): string | null {
+  const s = (source ?? "").trim();
+  if (!s || NON_PRESS.has(s)) return null;
+  if (!DOMAIN_RE.test(s)) return s;
+  if (PORTAL_DOMAIN_RE.test(s)) return null;
+  const host = s.toLowerCase().replace(/^(?:www|m|news|tvm)\./, "");
+  return OUTLET_BY_DOMAIN[host] ?? OUTLET_BY_DOMAIN[host.split(".").slice(-3).join(".")] ?? OUTLET_BY_DOMAIN[host.split(".").slice(-2).join(".")] ?? null;
 }
 
 /** 원문 링크로 쓸 수 있는 주소인지 (http·https 만 — 다른 꼴(javascript:·intent: 등)은 저장하지도 열지도 않는다) */
@@ -1042,16 +1159,18 @@ const INDEX_LEVEL_RE = /(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d{3,6})\.(\d{2})(?![\d])
  * 다른 날 장 기사인지 (6차 검토): 제목에 그 지수 이름과 지수 수준 숫자가 있는데 기준일 종가와 다르면 다른 날 값이다.
  * 예: 9/16 오후(코스피 종가 6717.97) 창에 15:33 발행으로 들어온 '코스피 6627.26 마감…'(9/15 종가) — 날짜('○일')가 없어 titleDays 로는 못 거른다.
  * 제목에 적힌 지수의 종가 ±15% 안 숫자만 그 지수 값으로 본다 (등락폭·다른 지수 값과 섞이지 않게). 둘째 자리까지 같으면 같은 값.
- * 종가가 제목에 한 번이라도 있으면 같은 날 기사다 — '7017.91로 강보합 마감…장중 7171.44까지'처럼 장중 값을 함께 적은 기사는 둔다
+ * 제목에 적힌 지수 가운데 하나라도 종가가 제목에 있으면 같은 날 기사다 (7차 검토: 지수마다 따로 보면 '코스피 7080.92 마감…코스닥 장중 850.12'처럼
+ * 다른 지수의 장중 값을 함께 적은 같은 날 기사가 빠졌다) — '7017.91로 강보합 마감…장중 7171.44까지'처럼 장중 값을 함께 적은 기사도 둔다
  */
 export function otherDayIndexValue(title: string, closes: ReadonlyArray<{ code: string; value: number | null }>): boolean {
   const named = closes.filter((c): c is { code: string; value: number } => c.value !== null && c.value > 0 && !!INDEX_TITLE_RE[c.code]?.test(title));
   if (!named.length) return false;
   const levels = [...title.matchAll(INDEX_LEVEL_RE)].map((m) => Math.round(Number(`${m[1]!.replace(/,/g, "")}.${m[2]}`) * 100));
+  const closeOf = (c: { value: number }) => Math.round(c.value * 100);
+  if (named.some((c) => levels.includes(closeOf(c)))) return false;
   for (const c of named) {
-    const close = Math.round(c.value * 100);
-    const near = levels.filter((n) => Math.abs(n - close) / close <= 0.15);
-    if (near.length && !near.includes(close)) return true;
+    const close = closeOf(c);
+    if (levels.some((n) => Math.abs(n - close) / close <= 0.15)) return true;
   }
   return false;
 }
@@ -1059,18 +1178,20 @@ export function otherDayIndexValue(title: string, closes: ReadonlyArray<{ code: 
 /**
  * 뉴스 제목 고르기 (원문 그대로 — 고치지 않는다): 시간 창 안, 물음표·권유·전망 낱말 없음, 다른 날짜가 박힌 제목 없음, 링크는 http(s) 주소만,
  * 기준일 지수 종가를 알면 제목 속 지수 값이 그와 다른 제목(다른 날 장 기사)도 뺀다.
+ * 시각 없이 날짜만 온 기사(dateOnlyStamp)와 언론사 이름을 알 수 없는 기사(포털 중계·모르는 도메인·블로그 — outletName)도 뺀다.
  * 같은 기사(정규화 제목)·같은 언론사는 1건. 속보보다 본기사, 통신사 먼저, 그다음 이른 시각 순. 최대 NEWS_MAX
  */
 export function pickNews(items: readonly NewsItem[], opts: { from: string; to: string; days: number[]; closes?: ReadonlyArray<{ code: string; value: number | null }> }): SummaryNews[] {
   const from = Date.parse(opts.from);
   const to = Date.parse(opts.to);
   const allowed = new Set(opts.days);
-  const cands = items.filter((it) => {
-    const t = Date.parse(it.publishedAt);
-    if (!it.title || !it.source || !isWebUrl(it.url) || Number.isNaN(t) || t < from || t > to) return false;
-    if (blockedTitle(it.title)) return false;
-    if (opts.closes && otherDayIndexValue(it.title, opts.closes)) return false;
-    return titleDays(it.title).every((d) => allowed.has(d));
+  const cands = items.flatMap((raw) => {
+    const t = Date.parse(raw.publishedAt);
+    const outlet = outletName(raw.source);
+    if (!raw.title || !outlet || !isWebUrl(raw.url) || Number.isNaN(t) || t < from || t > to || dateOnlyStamp(raw.publishedAt)) return [];
+    if (blockedTitle(raw.title, { year: Number(kstDateOf(t).slice(0, 4)) })) return [];
+    if (opts.closes && otherDayIndexValue(raw.title, opts.closes)) return [];
+    return titleDays(raw.title).every((d) => allowed.has(d)) ? [{ ...raw, source: outlet }] : [];
   });
   const rank = (it: NewsItem) => [FLASH_RE.test(it.title) ? 1 : 0, WIRE_OUTLETS.has(it.source!) ? 0 : /\./.test(it.source!) ? 2 : 1, Date.parse(it.publishedAt)];
   const sorted = [...cands].sort((a, b) => {
