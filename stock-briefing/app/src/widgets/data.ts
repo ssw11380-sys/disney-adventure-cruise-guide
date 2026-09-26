@@ -106,10 +106,11 @@ export async function withLastGood(stocks: RegisteredWithQuote[], at: number): P
   return f;
 }
 
-/** 받은 시세 중 가장 늦은 시세 시각 (ms). 시세가 하나도 없으면 0 */
-function latestQuoteAt(stocks: readonly RegisteredWithQuote[]): number {
+/** 받은 시세 중 가장 늦은 시세 시각 (ms). codes 에 있는 종목만 본다. 시세가 하나도 없으면 0 */
+function latestQuoteAt(stocks: readonly RegisteredWithQuote[], codes: ReadonlySet<string>): number {
   let best = 0;
   for (const s of stocks) {
+    if (!codes.has(s.code)) continue;
     const t = s.quote ? Date.parse(s.quote.asOf) : NaN;
     if (Number.isFinite(t) && t > best) best = t;
   }
@@ -120,10 +121,16 @@ function latestQuoteAt(stocks: readonly RegisteredWithQuote[]): number {
  * a 의 잔고가 b 보다 새 데이터인지 (위젯 리뷰 5 통합 검증 지적). fetchedAt 은 그 잔고를 받은 시각이다 — 서버 응답은 조회 시각,
  * 앱 즉시 갱신은 앱이 잔고를 받은 시각(react-query dataUpdatedAt, refresh.tsx). 위젯에 넘긴 시각으로 견주면 앱이 떠날 때 넘긴 09:48 잔고가
  * 10:00 서버 응답을 이겼다. 시세 시각(가장 늦은 asOf)도 뒤지지 않아야 한다 — 받은 시각을 모르는 기록(업데이트 전에 넘긴 시각으로 적은 것)도 막는다.
+ * 시세 시각은 두 기록에 모두 있는 종목끼리만 견준다 (2차 검증 지적): 목록 전체로 견주면 앱에서 지운 종목의 시세가 가장 늦을 때
+ * (미국 장 시간·주말에 하나뿐인 미국 종목을 지움) 목록이 달라진 더 새 앱 기록이 더 옛 서버 응답에 져서, 지운 종목이 위젯에 다시 보였다
+ * (받아 둔 응답을 다시 쓰는 동안 — 장중 15분·휴장 최대 2시간). 겹치는 종목이 없으면(목록을 통째로 바꿈) 받은 시각만 본다.
  * 잔고가 빈 기록은 새것으로 보지 않는다
  */
 function fresherStocks(a: Pick<WidgetData, "stocks" | "fetchedAt">, b: Pick<WidgetData, "stocks" | "fetchedAt">): boolean {
-  return a.stocks.length > 0 && a.fetchedAt > b.fetchedAt && latestQuoteAt(a.stocks) >= latestQuoteAt(b.stocks);
+  if (a.stocks.length === 0 || a.fetchedAt <= b.fetchedAt) return false;
+  const inA = new Set(a.stocks.map((s) => s.code));
+  const both = new Set(b.stocks.filter((s) => inA.has(s.code)).map((s) => s.code));
+  return latestQuoteAt(a.stocks, both) >= latestQuoteAt(b.stocks, both);
 }
 
 /**
@@ -689,7 +696,8 @@ function keepBoard(out: WidgetData, prev: Pick<WidgetData, "board" | "boardAt" |
  * 잔고·칩·기준 시각(fetchedAt)도 같은 규칙 (위젯 리뷰 5): 10:08 앱이 그린 뒤 10:10 크기 변경(폴드 펼침)·주기 갱신이 백그라운드가
  * 10:00 에 받아 둔 응답을 다시 쓰면서 숫자·칩·'10:00 기준'으로 되돌아가 "방금 앱에서 본 금액과 다르다"가 되지 않게.
  * 견주는 것은 데이터가 새것인지다 (통합 검증 지적 — takeFresherStocks): 앱 즉시 갱신 기록의 fetchedAt 은 앱이 잔고를 받은 시각이고(넘긴 시각이 아님),
- * 시세 시각도 뒤지지 않아야 한다. 앱이 10:08 에 넘긴 09:48 잔고는 10:00 응답을 이기지 못한다. 그 기록에 칩이 없으면 응답의 칩을 둔다.
+ * 시세 시각도 뒤지지 않아야 한다(두 기록에 모두 있는 종목끼리 — 앱에서 지운 종목이 되살아나지 않게). 앱이 10:08 에 넘긴 09:48 잔고는 10:00 응답을 이기지 못한다.
+ * 그 기록에 칩이 없으면 응답의 칩을 둔다.
  * 조회 실패로 그린 기록의 fetchedAt 은 마지막으로 받은 잔고의 시각이라 그대로 견줄 수 있다 (잔고가 비어 있는 기록은 쓰지 않는다)
  */
 async function keepNewer(out: WidgetData, apiUrl: string): Promise<void> {

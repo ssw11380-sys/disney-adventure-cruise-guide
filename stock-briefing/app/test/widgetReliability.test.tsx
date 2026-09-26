@@ -244,6 +244,95 @@ describe("리뷰 5: 앱에서 방금 본 숫자가 위젯에서 되돌아가지 
     expect(d.stocks[0]!.quote!.price).toBe(71_000); // 잔고는 더 새 앱 값
     expect(d.market).toEqual(KR_OPEN); // 칩은 응답의 것 (예전: null — 최대 15분 칩·'지연' 판단이 사라졌다)
   });
+
+  // ── 2차 검증 지적: 앱에서 지운 종목이 위젯에 다시 나타났다 (시세 시각을 목록 전체의 가장 늦은 값으로 견줌) ──
+  /** 애플 10주 (평단 200달러). 시세 시각은 넘긴 값 */
+  const AAPL = (asOf: string) => ({ c: "AAPL", n: "애플", qty: 10, avg: 200, q: [250, 1, 0.4, "USD", asOf, 1_390, 0] as Q, e: [2_500, 2_000, null, 2_780_000, "exact"] as E });
+  /** 서버 응답의 삼성전자 (시세 시각은 넘긴 값) */
+  const SAMSUNG = (asOf: string) => ({ ...payload().stocks[0]!, q: [70_000, 100, 0.14, "KRW", asOf, null, 0] as Q });
+  /** 앱이 애플을 지운 뒤 다시 받은 잔고: 삼성전자만 (시세는 서버 응답과 같은 것) */
+  const samsungOnly = (asOf: string) => [holding("005930", quote("005930", 70_000, { change: 100, changeRate: 0.14, asOf }), 10, 80_000, undefined, "삼성전자")];
+  const codes = (d: { stocks: { code: string }[] }) => d.stocks.map((s) => s.code).join(",");
+
+  it("재현: 토 10:00 앱에서 애플을 지우면, 10:30 크기 변경이 09:30 응답(애플 시세가 가장 늦음)을 다시 써도 애플이 돌아오지 않는다", async () => {
+    /** 2026-09-26(토) KST 시각 */
+    const S = (hm: string) => Date.parse(`2026-09-26T${hm}:00+09:00`);
+    // 두 시장 모두 휴장 (다음 개장 월 08:00) → 받아 둔 응답을 2시간까지 다시 쓴다
+    const WEEKEND = { label: "주말 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-27T23:00:00.000Z" };
+    vi.setSystemTime(S("09:30"));
+    serve(payload({ market: WEEKEND, stocks: [SAMSUNG("2026-09-25T20:00:00+09:00"), AAPL("2026-09-26T08:59:00+09:00")] }));
+    await loadWidgetData({ stocks: true, briefings: true }); // 백그라운드 작업이 받은 응답
+    vi.setSystemTime(S("10:00"));
+    shared.widgets = { [WIDGET_NAMES.holdings]: [WIDE] };
+    await refreshWidgets({ stocks: samsungOnly("2026-09-25T20:00:00+09:00"), dataAt: S("10:00"), showKrw: false, afterCost: false, rowKrw: true, market: WEEKEND });
+    expect(dark(shared.updates.at(-1)!.rendered)).not.toContain("애플");
+    vi.setSystemTime(S("10:30"));
+    const calls = offline();
+    const r = await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_RESIZED" });
+    expect(calls).toEqual([]); // 받아 둔 응답을 다시 쓴다 (휴장이라 서버를 부르지 않음)
+    const w = dark(r[0]);
+    expect(w).not.toContain("애플"); // 예전: 애플이 다시 보였다
+    expect(w).toContain("잔고 1"); // 예전: '잔고 2'
+    // 기준 시각은 시세 시각 (model.quoteTime) — 남은 삼성전자의 금 20:00. 예전: 지운 애플의 '08:59 기준'
+    expect(w).toContain("9/25 20:00 기준");
+    expect(w).not.toContain("08:59 기준");
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(codes(d)).toBe("005930"); // 예전: 005930,AAPL
+    expect(d.fetchedAt).toBe(S("10:00")); // 예전: 09:30 (받아 둔 응답의 받은 시각)
+    // 그 뒤 ↻ 가 실패해도(마지막 잔고로 그림) 애플은 없다
+    vi.setSystemTime(S("10:31"));
+    const failed = dark((await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" })).at(-1));
+    expect(failed).toContain("갱신 실패 · 연결 안 됨");
+    expect(failed).not.toContain("애플");
+  });
+
+  it("장중(15분 재사용)도 같다: 목 23:05 미국 장중에 하나뿐인 미국 종목을 지우면 23:10 크기 변경에도 돌아오지 않는다", async () => {
+    const US_OPEN = { label: "미국 장중", open: true, kr: false, us: true, nextChangeAt: "2026-09-24T20:00:00.000Z" };
+    vi.setSystemTime(T("23:00"));
+    serve(payload({ market: US_OPEN, stocks: [SAMSUNG("2026-09-24T20:00:00+09:00"), AAPL("2026-09-24T22:59:00+09:00")] }));
+    await loadWidgetData({ stocks: true, briefings: true });
+    vi.setSystemTime(T("23:05"));
+    await refreshWidgets({ stocks: samsungOnly("2026-09-24T20:00:00+09:00"), dataAt: T("23:05"), showKrw: false, afterCost: false, rowKrw: true, market: US_OPEN });
+    vi.setSystemTime(T("23:10"));
+    const calls = offline();
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(calls).toEqual([]);
+    expect(codes(d)).toBe("005930");
+    expect(d.fetchedAt).toBe(T("23:05"));
+  });
+
+  it("목록이 달라도 옛 기록 막기는 그대로: 받은 시각을 모르는 기록은 두 기록에 모두 있는 종목의 시세가 더 옛것이면 이기지 못한다", async () => {
+    // 10:00 응답: 삼성전자(10:00) + 애플(09:59)
+    serve(payload({ stocks: [SAMSUNG("2026-09-24T10:00:00+09:00"), AAPL("2026-09-24T09:59:00+09:00")] }));
+    await loadWidgetData({ stocks: true, briefings: true });
+    // 10:08 업데이트 전 앱처럼 받은 시각 없이 넘김: 애플이 없고 삼성전자 시세는 09:48 (넘긴 시각 10:08 로 적힌다)
+    vi.setSystemTime(T("10:08"));
+    await refreshWidgets({ stocks: stocks0948(), showKrw: false, afterCost: false, rowKrw: true, market: APP_CHIP });
+    vi.setSystemTime(T("10:10"));
+    offline();
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(codes(d)).toBe("005930,AAPL");
+    expect(d.stocks[0]!.quote!.price).toBe(70_000); // 09:48 의 70,500원으로 되돌아가지 않는다
+    expect(d.fetchedAt).toBe(T("10:00"));
+  });
+
+  it("종목을 더해도 앱 값: 두 기록에 모두 있는 종목의 시세가 뒤지지 않으면 더 늦게 받은 앱 기록 (더한 종목의 시세가 옛것이어도)", async () => {
+    // 10:00 응답: 삼성전자(10:00)만
+    serve(payload({ stocks: [SAMSUNG("2026-09-24T10:00:00+09:00")] }));
+    await loadWidgetData({ stocks: true, briefings: true });
+    // 10:05 앱에서 애플을 더함: 삼성전자는 10:05 시세, 애플은 지난 거래일 종가 (시세 시각 05:00)
+    vi.setSystemTime(T("10:05"));
+    const added = [
+      holding("005930", quote("005930", 70_100, { asOf: "2026-09-24T10:05:00+09:00" }), 10, 80_000, undefined, "삼성전자"),
+      holding("AAPL", quote("AAPL", 250, { currency: "USD", asOf: "2026-09-24T05:00:00+09:00" }), 10, 200, undefined, "애플"),
+    ];
+    await refreshWidgets({ stocks: added, dataAt: T("10:05"), showKrw: false, afterCost: false, rowKrw: true, market: APP_CHIP });
+    vi.setSystemTime(T("10:10"));
+    offline();
+    const d = await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(codes(d)).toBe("005930,AAPL");
+    expect(d.fetchedAt).toBe(T("10:05"));
+  });
 });
 
 describe("리뷰 6: 실패가 위젯에 바로 보인다", () => {
