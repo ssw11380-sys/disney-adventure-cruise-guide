@@ -337,7 +337,8 @@ export function digestLine(d: MarketSummaryData, at: Date): string | null {
   if (!pair.length) return null;
   const idx = pair.map((i) => `${i.name} ${rateText(i.changeRate!)}`).join(" · ");
   if (d.holiday) return `${holidayText(d, at, false)} · ${idx} (${md(d.basisDate)} 기준)`;
-  const live = d.phase === "intraday" ? ` 장중(${kstHmOf(Date.parse(d.asOf))} 기준)` : "";
+  // 장중이면 그 시각, 미국 마감 직후 최종값 전이면 그 표시 (카드 기준 줄과 같은 사실)
+  const live = d.phase === "intraday" ? ` 장중(${kstHmOf(Date.parse(d.asOf))} 기준)` : d.phase === "prelim" ? "(최종값 전)" : "";
   const h = d.holdings;
   let mine = "";
   if (h && h.compared > 0) {

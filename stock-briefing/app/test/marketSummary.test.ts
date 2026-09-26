@@ -29,6 +29,7 @@ import { KR_HOLIDAYS } from "@/lib/marketTime";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const shared = JSON.parse(readFileSync(join(root, "shared/fixtures/marketSummary.json"), "utf8")) as {
   cases: Array<{ name: string; data: MarketSummaryData; views: Array<{ at: string; title: string; basis: string; holiday: string | null; lines: string[] | null }>; digest: { at: string; line: string }; aux: string | null }>;
+  variants: Array<{ name: string; base: number; patch: Partial<MarketSummaryData>; at: string; digest: string; basis: string }>;
 };
 const at = (iso: string) => new Date(iso);
 const item = (id: number, data: MarketSummaryData, status: "ok" | "failed" = "ok"): MarketSummary => ({ id, date: data.date, session: data.session, market: data.market, status, summary: "s", createdAt: data.asOf, data });
@@ -48,6 +49,13 @@ describe("공용 픽스처 — 앱 문장이 서버와 같다", () => {
       }
       expect(digestLine(c.data, at(c.digest.at))).toBe(c.digest.line);
       if (c.aux) expect(holdingsAux(c.data.holdings!)).toBe(c.aux);
+    });
+  }
+  for (const v of shared.variants) {
+    it(`변형: ${v.name}`, () => {
+      const d = { ...shared.cases[v.base]!.data, ...v.patch } as MarketSummaryData;
+      expect(digestLine(d, at(v.at))).toBe(v.digest);
+      expect(basisText(d, at(v.at))).toBe(v.basis);
     });
   }
 });

@@ -185,7 +185,7 @@ export class MarketSummaryService {
     const p = (async () => {
       if (!opts.force) {
         const existing = await this.find(opts.date, session);
-        if (existing?.status === "ok") return existing;
+        if (existing?.status === "ok" && !this.outdated(existing)) return existing;
       }
       this.running++;
       try {
@@ -200,6 +200,15 @@ export class MarketSummaryService {
     } finally {
       this.inflight.delete(key);
     }
+  }
+
+  /**
+   * 장중·최종값 전에 만든 요약인데 지금은 확정된 뒤인지 (수동 실행을 브리핑 시각보다 먼저 돌린 경우 등) —
+   * 그러면 예약 실행이 '이미 있음'으로 건너뛰지 않고 확정 값으로 다시 만든다
+   */
+  private outdated(s: MarketSummary): boolean {
+    const d = s.data;
+    return !!d && d.phase !== "final" && phaseOf(d.market, d.basisDate, this.now()) === "final";
   }
 
   private src<T>(p: () => Promise<T>, label: string): Promise<Settled<T>> {

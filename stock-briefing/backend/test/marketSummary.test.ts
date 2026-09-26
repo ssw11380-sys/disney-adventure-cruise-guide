@@ -61,6 +61,7 @@ const shared = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketSumm
     digest: { at: string; line: string };
     aux: string | null;
   }>;
+  variants: Array<{ name: string; base: number; patch: Partial<MarketSummaryData>; at: string; digest: string; basis: string }>;
 };
 const at = (iso: string) => new Date(iso);
 const idx = (code: string, name: string, rate: number, date: string): SummaryIndex => ({ code, name, value: 100, change: 1, changeRate: rate, date, asOf: `${date}T16:00:00-04:00` });
@@ -86,6 +87,14 @@ describe("공용 픽스처 — 서버 문장 (앱 lib/marketSummary 와 같은 �
       }
       expect(digestLine(c.data, at(c.digest.at))).toBe(c.digest.line);
       if (c.aux) expect(holdingsAux(c.data.holdings!)).toBe(c.aux);
+    });
+  }
+
+  for (const v of shared.variants) {
+    it(`변형: ${v.name}`, () => {
+      const d = { ...shared.cases[v.base]!.data, ...v.patch } as MarketSummaryData;
+      expect(digestLine(d, at(v.at))).toBe(v.digest);
+      expect(basisText(d, at(v.at))).toBe(v.basis);
     });
   }
 
@@ -673,6 +682,27 @@ describe("시장 요약 서비스·경로 (가짜 출처, 고정 시계)", () =>
       const r = await svc2.generate("morning", { date: "2026-09-29" });
       expect(r?.data?.news.items).toEqual([]);
       expect(r?.data?.notes.some((n) => n.includes("뉴스(뉴욕증시)를 받지 못함"))).toBe(true);
+    } finally {
+      await dbx.destroy();
+    }
+  });
+
+  it("장중에 만든 요약(수능일 15:00 수동 실행 등)은 마감 뒤 예약 실행이 확정 값으로 다시 만들고, 확정 뒤에는 다시 부르지 않는다", async () => {
+    const dbx = await createMigratedDb(":memory:");
+    try {
+      const { src, calls } = fakeSources({ session: "afternoon", krToday: { date: "2026-11-19", trading: true, desc: null, latest: "2026-11-19" } });
+      const t = { now: at("2026-11-19T15:00:00+09:00") };
+      const kr = (code: string, name: string, rate: number): MarketIndex => ({ code, name, kind: "index", value: 100, change: 1, changeRate: rate, open: true, asOf: "2026-11-19T15:00:00+09:00", stale: false });
+      const svc = new MarketSummaryService({ db: dbx, sources: { ...src, indices: async () => (calls["indices"] = (calls["indices"] ?? 0) + 1, [kr("KOSPI", "코스피", 0.5), kr("KOSDAQ", "코스닥", -0.2)]) }, features: { enabled: async () => true }, now: () => t.now });
+      const early = await svc.generate("afternoon", { date: "2026-11-19" });
+      expect(early?.data).toMatchObject({ phase: "intraday", closeTime: "16:30" });
+      expect(basisText(early!.data!, t.now)).toBe("장중 값(15:00 기준) · 오늘 16:30 마감");
+      t.now = at("2026-11-19T16:40:00+09:00");
+      const late = await svc.afterRun({ session: "afternoon", date: "2026-11-19", partial: false });
+      expect(late?.data?.phase).toBe("final");
+      expect(calls["indices"]).toBe(2);
+      await svc.afterRun({ session: "afternoon", date: "2026-11-19", partial: false });
+      expect(calls["indices"]).toBe(2);
     } finally {
       await dbx.destroy();
     }
