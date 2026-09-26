@@ -244,24 +244,40 @@ export class MarketSummaryService {
   /**
    * 장중·최종값 전 요약을 확정 시각 + REFINAL_DELAY_MS 에 한 번 다시 만든다 (예약 실행은 하루 한 번이라 그대로 두면 카드에 '장중 값'이 계속 남는다).
    * 다시 만들 때는 generate(강제 아님, refinal) → outdated() 로 확정 값을 받아 덮고 origin 'refinal' 로 적는다 — 그날 세션 실행이 뒤에 오면 그 실행이 한 번 더 만든다.
-   * 알림은 새로 보내지 않는다. 서버를 닫으면(stop) 취소
+   * 그 시각이 이미 지났으면(서버를 다시 켠 경우 — resumeRefinal) 곧바로. 다음 장이 열린 뒤면 예약하지 않는다(지수가 새 거래일 값이라 다시 만들 수 없다).
+   * 알림은 새로 보내지 않는다. 서버를 닫으면(stop) 취소. 예약했으면 true
    */
-  private scheduleRefinal(s: MarketSummary): void {
+  private scheduleRefinal(s: MarketSummary): boolean {
     const d = s.data;
-    if (this.stopped || s.status !== "ok" || !d || d.phase === "final") return;
+    if (this.stopped || s.status !== "ok" || !d || d.phase === "final") return false;
     const key = `${d.date}|${d.session}`;
-    if (this.refinal.has(key)) return;
-    const ms = finalAt(d.market, d.basisDate) + REFINAL_DELAY_MS - this.now().getTime();
-    if (ms <= 0 || ms > REFINAL_MAX_MS) return;
+    if (this.refinal.has(key)) return false;
+    const now = this.now().getTime();
+    const ms = finalAt(d.market, d.basisDate) + REFINAL_DELAY_MS - now;
+    if (ms > REFINAL_MAX_MS || now >= nextSessionOpenAt(d.market, d.basisDate)) return false;
+    const delay = Math.max(ms, 0);
     const cancel = (this.deps.timer ?? defaultTimer)(() => {
       this.refinal.delete(key);
       if (this.stopped) return;
       this.generate(d.session, { date: d.date, refinal: true }).catch((e: unknown) => {
         this.deps.log?.warn({ date: d.date, session: d.session, err: (e as Error).message }, "확정 뒤 시장 요약 다시 만들기 오류");
       });
-    }, ms);
+    }, delay);
     this.refinal.set(key, cancel);
-    this.deps.log?.info({ date: d.date, session: d.session, phase: d.phase, inMinutes: Math.round(ms / 60_000) }, "장중·최종값 전 시장 요약 — 확정 뒤 다시 만들기 예약");
+    this.deps.log?.info({ date: d.date, session: d.session, phase: d.phase, inMinutes: Math.round(delay / 60_000) }, "장중·최종값 전 시장 요약 — 확정 뒤 다시 만들기 예약");
+    return true;
+  }
+
+  /**
+   * 서버를 켤 때 (Railway 자동 배포 등으로 다시 시작하면 메모리 예약이 사라진다): 최근 요약 가운데 장중·최종값 전인 것을 다시 예약한다.
+   * 예: 수능일 16:00 장중 요약을 만든 뒤 16:35 전에 배포 → 다시 켤 때 16:35 예약을 되살리고, 이미 지났으면 곧바로 다시 만든다.
+   * 플래그가 꺼져 있으면 아무것도 하지 않는다. 예약한 개수를 돌려준다
+   */
+  async resumeRefinal(): Promise<number> {
+    if (!(await this.enabled())) return 0;
+    let n = 0;
+    for (const s of await this.list(4)) if (this.scheduleRefinal(s)) n++;
+    return n;
   }
 
   /** 서버를 닫을 때: 예약한 다시 만들기를 모두 취소 */
@@ -298,7 +314,8 @@ export class MarketSummaryService {
     for (const c of dates.conflicts) this.deps.log?.warn({ session, date }, `휴장 판단이 출처마다 다름: ${c}`);
     const { basisDate } = dates;
     const close = sessionClose(market, basisDate);
-    const indices = pickIndices(idx.ok ? idx.value : [], market, basisDate);
+    // 출처 조회가 실패해 이어 준 값(stale)은 마감 뒤 시세일 때만 (마감 전 장중 값이 '장 마감 기준'으로 쓰이지 않게)
+    const indices = pickIndices(idx.ok ? idx.value : [], market, basisDate, close.at);
     if (!idx.ok) notes.push(`지수를 받지 못함 (${idx.error})`);
     for (const i of indices) if (i.missing) notes.push(`${i.name}: ${i.missing}`);
     const holdings = (held.ok ? held.value : []).filter((h) => (h.quantity ?? 0) > 0 && (market === "KR" ? isKrCode(h.code) : !isKrCode(h.code)));
@@ -323,7 +340,7 @@ export class MarketSummaryService {
     const krOpenToday = isKrTradingDate(date) && !(kr?.today?.date === date && kr.isTradingDay === false) && !(market === "KR" && dates.holiday);
     const fx = pickFx(fxRow, fxDaily.ok ? fxDaily.value : null, date, { now, krOpenToday, session });
     if (!fx) notes.push("원/달러를 받지 못함");
-    else if (!fx.date) notes.push("원/달러 고시 날짜를 확인하지 못함");
+    else if (!fx.date) notes.push(fx.stale ? "원/달러: 출처 조회가 실패해 마지막으로 받은 값이라 고시 날짜를 확인하지 못함" : "원/달러 고시 날짜를 확인하지 못함");
     const yield10y: SummaryYield | null = yieldR.ok ? yieldR.value : null;
     if (market === "US" && !yield10y) notes.push(`미 10년물을 받지 못함${yieldR.ok ? "" : ` (${yieldR.error})`}`);
 
@@ -361,12 +378,12 @@ export class MarketSummaryService {
     const krNext: KrNextOpen | null = kr?.today?.date === date && kr.next?.tradeBaseAt ? { today: date, next: kr.next.tradeBaseAt } : null;
     const ev = upcomingEvents(now, { krNext });
     let within = [...ev.within];
-    // 오늘 한국 휴장(오후 요약)이면 다음 개장을 맨 앞에 (시각까지)
+    // 오늘 한국 휴장(오후 요약)이면 다음 개장을 맨 앞에 (시각까지). 연휴 안의 남은 휴장일('9/25(금) 한국 휴장')은 다음 개장 날짜가 이미 말해 주므로 뺀다
     if (market === "KR" && dates.holiday) {
       const open = nextOpenEvent(date, krNext);
       const listed = nextKrTradingDate(date);
       if (open.date !== listed) this.deps.log?.warn({ session, date, naver: open.date, list: listed }, "한국 다음 개장이 출처마다 다름: 네이버 다음 거래일을 씀 (휴장일 목록 확인 필요)");
-      within = [open, ...within.filter((e) => e.kind !== "kr-open")];
+      within = [open, ...within.filter((e) => e.kind !== "kr-open" && !(e.kind === "kr-holiday" && e.date < open.date))];
     }
     this.warnUnknownEvents(ev.unknown, date);
 

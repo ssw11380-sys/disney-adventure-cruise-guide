@@ -422,6 +422,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   const summaries = marketSummaries;
   // 장중·최종값 전 요약의 '확정 뒤 다시 만들기' 예약을 닫을 때 취소
   if (summaries) app.addHook("onClose", async () => summaries.stop());
+  // 다시 켤 때(자동 배포 등) 사라진 '확정 뒤 다시 만들기' 예약을 되살린다 — 카드에 '장중 값'·'최종값 확정 전'이 다음 세션까지 남지 않게
+  if (summaries && opts.enableScheduler !== false) void summaries.resumeRefinal().catch((e: unknown) => app.log.warn({ err: String(e) }, "시장 요약 다시 만들기 예약 복구 실패"));
   app.decorate("marketSummaries", summaries);
   if (summaries) await app.register(marketSummaryRoutes, { prefix: "/api/market-summaries", service: summaries });
 

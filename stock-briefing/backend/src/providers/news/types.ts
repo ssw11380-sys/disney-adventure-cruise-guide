@@ -16,16 +16,40 @@ export interface NewsProvider {
   readonly advancedQuery?: boolean;
 }
 
-/** HTML 태그 제거 + 흔한 엔티티 복원 */
-export function stripHtml(s: string): string {
+/** 흔한 이름 엔티티 (&amp; 는 맨 뒤에 따로 푼다) */
+const NAMED_ENTITIES: Record<string, string> = {
+  quot: '"',
+  apos: "'",
+  lt: "<",
+  gt: ">",
+  nbsp: " ",
+  hellip: "…",
+  middot: "·",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  ndash: "–",
+  mdash: "—",
+};
+
+/** 엔티티 한 겹 풀기: 숫자(&#8230;·&#x2026;)·이름 엔티티, 마지막에 &amp; */
+function decodeEntities(s: string): string {
   return s
-    .replace(/<[^>]+>/g, "")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
+    .replace(/&#(\d{1,7});|&#[xX]([0-9a-fA-F]{1,6});/g, (m, dec: string | undefined, hex: string | undefined) => {
+      const cp = dec !== undefined ? Number(dec) : parseInt(hex!, 16);
+      return cp > 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? String.fromCodePoint(cp) : m;
+    })
+    .replace(/&(quot|apos|lt|gt|nbsp|hellip|middot|lsquo|rsquo|ldquo|rdquo|ndash|mdash);/g, (_m, name: string) => NAMED_ENTITIES[name]!)
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * HTML 태그 제거 + 엔티티 복원 (숫자·16진 엔티티 포함). RSS 제목은 엔티티가 두 번 감싸여 오기도 해서('&amp;#8230;' → '…', '&amp;#63;' → '?')
+ * 두 겹까지 푼다 — 풀지 않으면 '나스닥 &#8230; 상승'처럼 보이고, 감싼 물음표(&#63;)가 물음 제목 거르기를 빠져나간다
+ */
+export function stripHtml(s: string): string {
+  return decodeEntities(decodeEntities(s.replace(/<[^>]+>/g, "")))
     .replace(/\s+/g, " ")
     .trim();
 }

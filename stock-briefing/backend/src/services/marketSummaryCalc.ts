@@ -192,24 +192,36 @@ const US_FINAL_MIN = 17 * 60 + 15;
 /** 물음표 제목은 뺀다 (고치지 않는다) */
 const QUESTION_RE = /[?？]/;
 /**
- * 매매 권유형 제목은 뺀다 — 사는 쪽·파는 쪽을 같은 꼴로 막는다 (명령·권유·허락 묻기·당위).
+ * 매매 권유형 제목은 뺀다 — 사는 쪽·파는 쪽을 같은 꼴로 막는다 (명령·권유·허락 묻기·당위·때 짚기).
  * 앱 test/wording.test.ts 의 금지 문구 목록 전체가 여기서 막힌다 (backend 테스트가 그 목록을 읽어 하나씩 넣어 본다).
  * 이 파일도 금지 문구 검사를 받으므로 금지 문구를 글자 그대로 적지 않고 묶음 꼴로 적는다 ('(?:적극|강력)\s?매[수도]' 등).
  *  - 목표가는 줄임말과 '목표(주)가'·띄어 쓴 꼴까지 (목표\s?주?가)
- *  - 명령·권유형: '매수하라'·'지금 사라'·'비중 늘려라'·'살 때다'·'담을 때'·'매수 적기'·'톱픽'·'투자의견'·'올라타라'·'지금이 기회'
+ *  - 명령·권유형: '매수하라'·'지금 사라'·'비중 늘려라'·'매수 적기'·'톱픽'·'투자의견'·'올라타라'·'지금이 기회' (그 밖의 명령형 끝은 commands)
+ *  - 때 짚기: '살 때다'·'지금 살 때인가'·'살 때냐 팔 때냐'·'담을 때'·'지금은 매수할 때'·'매도할 시점'·'매수 시점'·'살 만한'
  *  - 당위·허락 묻기: '사야 한다'·'팔아야'·'늘려야'·'사도 되나'·'지금 매수해도 된다'
  *  - 단정·보장: '무조건'·'반드시', 수익(률)·원금을 보장한다는 말, '손절'·'익절'
  *  사실을 적은 말은 둔다: '사라져'·'사라진'('사라'는 뒤에 글자가 없을 때만), '실적기대'('적기'는 낱말 앞에서만), '팔라듐', '기회비용'·'기회발전특구',
- *  '회사야'('사야'는 낱말 앞에서만), '순매수'·'매수세'
+ *  '회사야'('사야'는 낱말 앞에서만), '순매수'·'매수세'·'저가 매수세', '30살 때'(나이 — '살'·'팔' 앞에 숫자가 오면 둔다)
  */
 const ADVICE_RE =
-  /(살까|팔까|추천|목표\s?주?가|유망|톱픽|탑픽|투자\s?의견|매[수도]\s?(?:의견|적기|타이밍)|(?<![가-힣])적기|비중\s?(?:확대|축소)|기회(?!비용|발전)|(?:적극|강력)\s?매[수도]|매[수도](?:하세요|하라|해라|하자|해야|해도)|[사파]세요|(?:담아|늘려|줄여|팔아)(?:라|야)|(?<![가-힣])사야(?:겠|지)?(?![가-힣])|(?<![가-힣])사도\s?(?:되|돼|될|괜찮)|팔아도\s?(?:되|돼|될|괜찮)|(?<![가-힣])[사팔]라(?=$|[\s,.…!·'"”’])|(?<![가-힣])(?:살|팔|담을)\s?때(?:다)?(?![가-힣])|올라[타탈]|(?:수익률?|원금)\s?보장|무조건|반드시|손절|익절)/;
+  /(살까|팔까|추천|목표\s?주?가|유망|톱픽|탑픽|투자\s?의견|매[수도]\s?(?:의견|적기|타이밍|시점)|매[수도]할\s?(?:때|시점|타이밍|만)|(?<![가-힣])적기|비중\s?(?:확대|축소)|기회(?!비용|발전)|(?:적극|강력)\s?매[수도]|매[수도](?:하세요|하라|해라|하자|해야|해도)|[사파]세요|(?:담아|늘려|줄여|팔아)(?:라|야)|(?<![가-힣])사야(?:겠|지)?(?![가-힣])|(?<![가-힣])사도\s?(?:되|돼|될|괜찮)|팔아도\s?(?:되|돼|될|괜찮)|(?<![가-힣])[사팔]라(?=$|[\s,.…!·'"”’])|(?<![가-힣\d])(?:살|팔|담을|사들일|갈아탈|모을)\s?(?:때(?!문)|만(?:하|한|해))|사\s?[둬두]라|사들여라|갈아타라|모아라|올라[타탈]|(?:수익률?|원금)\s?보장|무조건|반드시|손절|익절)/;
 /**
- * 전망형 제목은 뺀다 (사용자 규칙 '전망 없이' — 월요일·연휴 뒤 창에 섞이는 주간 전망 기사 등): '이번주 증시 전망'·'다음주 체크포인트'·'내주 FOMC'·'지속될 듯'·
- * '실적 예상'·'예측'·'~할 것이란 관측'·'2배 간다'·'바닥은 어디인가 … 찍었는가'. '관측소'·'내주며'는 사실을 적은 말이라 둔다
+ * 명령형 낱말 끝 '~아라·~어라·~여라·~해라·~하라'('사둬라'·'사들여라'·'갈아타라'·'모아라'·'버텨라'·'던져라'·'정리하라'·'대비하라').
+ * 목록에 없는 명령형도 막으려고 끝 모양으로 본다. 이름으로 쓰이는 낱말('사하라'·'티아라')은 둔다
+ */
+const IMPERATIVE_RE = /([가-힣]*[아어여해하둬워와봐타켜쳐춰꿔겨려혀져텨])라(?=$|[\s,.…!·'"”’\])~])/g;
+const NOT_IMPERATIVE = new Set(["사하라", "티아라", "오하라"]);
+export function commands(title: string): boolean {
+  for (const m of title.matchAll(IMPERATIVE_RE)) if (!NOT_IMPERATIVE.has(`${m[1]}라`)) return true;
+  return false;
+}
+/**
+ * 전망형 제목은 뺀다 (사용자 규칙 '전망 없이' — 월요일·연휴 뒤 창에 섞이는 주간 전망 기사 등): '이번주 증시 전망'·'금주·차주 증시'·'다음주 체크포인트'·'내주 FOMC'·
+ * '지속될 듯'·'실적 예상'·'예측'·'~할 것이란 관측'·'2배 간다'·'5000 온다'·'추가 상승 가능성'·'상승 여력·여지'·'바닥은 어디인가 … 찍었는가'
+ * ('~ㄹ 것'·'~ㄹ지'는 predicts·asksQuestion). '관측소'·'내주며'·'여지없이'는 사실을 적은 말이라 둔다
  */
 const OUTLOOK_RE =
-  /(전망|주간|이번\s?주|다음\s?주|내주(?=$|\s)|예상|예측|관측(?!소)|향방|체크\s?포인트|(?:듯|간다|는가)(?=$|[\s.,…·!'"”’\])]))/;
+  /(전망|주간|이번\s?주|다음\s?주|(?<![가-힣])[금차]주(?![가-힣])|내주(?=$|\s)|예상|예측|관측(?!소)|향방|체크\s?포인트|가능성|여력|여지(?!없)|(?:듯|간다|온다|는가)(?=$|[\s.,…·!'"”’\])]))/;
 
 /** 한글 음절의 받침 번호 (0 = 받침 없음, 8 = ㄹ, 18 = ㅄ, 20 = ㅆ). 한글 음절이 아니면 -1 */
 const finalOf = (ch: string) => {
@@ -218,14 +230,29 @@ const finalOf = (ch: string) => {
 };
 /** 낱말 끝 (뒤에 한글·영문·숫자가 오지 않음) */
 const WORD_END = /^(?:$|[\s.,…·!'"”’\])~])/;
+/** 마디 끝 (제목 끝, 또는 말줄임·쉼표·느낌표·따옴표·닫는 괄호 앞) — 물음 끝 '~나'는 여기서만 본다 ('두 배나 뛰어'의 '배나'는 마디 끝이 아니다) */
+const CLAUSE_END = /^(?:$|\s*(?:…|\.{2,}|[,!'"”’\])·~]))/;
+/** 마디 끝이 '~나'여도 물음이 아닌 낱말 (수·지나감, 나라·회사·병 이름) */
+const NOT_QUESTION_NA = new Set(["하나", "지나", "차이나", "우크라이나", "아시아나", "코로나", "아르헨티나", "캐롤라이나", "바나나", "애리조나", "마리나", "안나", "한나"]);
+/** 물음 끝 '~ㄴ가'를 만드는 앞 음절 ('바닥인가'·'괜찮은가'·'충분한가'·'어려운가'·'다른가'·'했던가') */
+const NGA_BEFORE = new Set(["인", "은", "는", "한", "운", "던", "된", "린", "른"]);
+/** '~ㄴ가'로 끝나도 이름씨인 낱말: 허가('예비인가'·'본인가'·'미인가' — 인터넷은행 인가 기사), 가격 제한('상한가'·'하한가') */
+const NGA_NOUN_RE = /(?:(?:예비|본|정식|최종|설립|영업|조건부|무|미|재)인가|[상하]한가)$/;
 /**
  * 물음표 없이 묻는 제목:
- *  - '~ㄹ까': '상승 이어갈까'·'지금 사도 될까'·'반등할까…' ('반도체까지'는 아니다)
+ *  - '~ㄹ까'·'~ㄹ지': '상승 이어갈까'·'지금 사도 될까'·'반등할까…'·'반등 성공할지 주목' ('반도체까지'·'매매일지'는 아니다)
+ *  - '~까요'·'~나요'·'~냐': '지금 사도 될까요'·'오르나요'·'살 때냐 팔 때냐' ('케냐'는 아니다)
+ *  - '~ㄴ가'(앞에 낱말이 붙을 때): '코스피 바닥인가'·'거품인가'·'지금 살 때인가'·'괜찮은가' ('인가 취소'·'예비인가'·'원가'·'단가'는 아니다)
  *  - 낱말 끝 '~나': 과거형(받침 ㅆ·ㅄ) '바닥 찍었나'·'끝났나'·'대안 없나', '되나'·'오나' ('랠리 계속되나'·'반등 오나'·'지금 들어가도 되나'),
- *    '~가나'는 앞에 글자가 붙을 때만 ('이어가나'·'올라가나' — 나라 이름 '가나'는 아니다). '하나'·'지나'·'우리나라'는 아니다
+ *    '~가나'는 앞에 글자가 붙을 때만 ('이어가나'·'올라가나' — 나라 이름 '가나'는 아니다)
+ *  - 마디 끝 '~나'는 모두: '랠리 멈추나'·'코스피 꺾이나'·'반도체 살아나나'·'상승세 이어지나'·'어디까지 오르나'·'코스피 3천 가나'
+ *    ('하나'·'지나'와 나라·회사 이름은 아니다. '우리나라'·'가나 대통령'은 마디 끝이 아니다)
  */
 export function asksQuestion(title: string): boolean {
-  for (const m of title.matchAll(/([가-힣])까(?![가-힣])/g)) if (finalOf(m[1]!) === 8) return true;
+  for (const m of title.matchAll(/([가-힣])[까지](?![가-힣])/g)) if (finalOf(m[1]!) === 8 && m[0] !== "일지") return true;
+  if (/[가-힣](?:까|나)요(?=$|[\s.,…·!'"”’\])~])/.test(title)) return true;
+  for (const m of title.matchAll(/([가-힣]*)냐(?=$|[\s.,…·!'"”’\])~])/g)) if (m[1] !== "케") return true;
+  for (const m of title.matchAll(/([가-힣]+)([가-힣])가(?=$|[\s.,…·!'"”’\])~])/g)) if (NGA_BEFORE.has(m[2]!) && !NGA_NOUN_RE.test(m[0])) return true;
   for (const m of title.matchAll(/([가-힣])나/g)) {
     const i = m.index!;
     if (!WORD_END.test(title.slice(i + 2))) continue;
@@ -234,6 +261,17 @@ export function asksQuestion(title: string): boolean {
     if (f === 20 || f === 18 || prev === "되" || prev === "오") return true;
     if (prev === "가" && i > 0 && finalOf(title[i - 1]!) >= 0) return true;
   }
+  // 마디 끝 '~나' (앞에 한글이 붙은 낱말만 — 홀로 쓴 '나'는 아니다)
+  for (const m of title.matchAll(/([가-힣]*)나/g)) {
+    if (!m[1] || !CLAUSE_END.test(title.slice(m.index! + m[0].length)) || NOT_QUESTION_NA.has(m[0])) continue;
+    return true;
+  }
+  return false;
+}
+
+/** '~ㄹ 것' 예측·당위 ('랠리 계속될 것'·'"코스피 연말 3500 갈 것"'·'4000 시대 열릴 것이란'). '그것'·'이것'은 아니다 */
+export function predicts(title: string): boolean {
+  for (const m of title.matchAll(/([가-힣])\s?것/g)) if (finalOf(m[1]!) === 8) return true;
   return false;
 }
 /** 통신사 기사를 먼저 */
@@ -242,9 +280,10 @@ const FLASH_RE = /\[(속보|1보|2보)\]|-\s?[12]보\]|\((속보|1보)\)/;
 
 /**
  * 레버리지·인버스 ETF (지수와 차이가 구조적으로 커 비교에서 빼고 개수만 적는다). 알아보지 못한 것은 포함된다고 상세에 밝힌다.
- * 'Ultra' 는 뒤에 Short 가 오면 뺀다 — 'Ultra-Short Income'·'Ultra Short-Term Bond' 는 초단기 채권 ETF 이지 레버리지가 아니다 (채권형으로 따로 센다)
+ * 'Ultra'(2배)는 ProShares 상품 이름에 붙을 때만 본다 — 'Ultra Clean Holdings'·'Ultragenyx'·'울트라 클린 홀딩스' 같은 회사 이름을 레버리지로 빼지 않게.
+ * 'UltraPro'(3배)는 그 낱말만으로. 'Ultra' 뒤에 Short 가 오면 뺀다 — 'Ultra-Short Income'·'Ultra Short-Term Bond' 는 초단기 채권 ETF 이지 레버리지가 아니다 (채권형으로 따로 센다)
  */
-export const LEVERAGE_RE = /(\b[23]x\b|ultra(?![\s-]*short)|\bbull\b|\bbear\b|인버스|레버리지|곱버스)/i;
+export const LEVERAGE_RE = /(\b[23]x\b|\bultrapro\b|울트라\s?프로|(?:proshares|프로셰어즈)\s*(?:ultra|울트라)(?![\s-]*short|\s?숏)|\bbull\b|\bbear\b|인버스|레버리지|곱버스)/i;
 /** ProShares 'UltraShort'(−2배 인버스, 한 낱말)·'울트라숏'. 채권 낱말이 같이 있어도 인버스다 ('UltraShort 20+ Year Treasury' = TBT) */
 const ULTRASHORT_RE = /(ultrashort|울트라\s?숏)/i;
 /** −1배 인버스 'ProShares Short QQQ·Short S&P500'·'숏' (아래 채권 낱말이 같이 있으면 만기가 짧은 채권 ETF 라 인버스가 아니다) */
@@ -270,10 +309,11 @@ export const BOND_ETF_RE = /(채권|국고채|국채|통안채|회사채|전단�
  */
 const KR_ETF_BRAND_RE = /^(?:(?:KODEX|TIGER|ACE|KBSTAR|RISE|SOL|HANARO|ARIRANG|KOSEF|PLUS|TIMEFOLIO|KIWOOM|WON|1Q|BNK|FOCUS|TRUSTON|UNICORN|VITA|ITF|TREX|KCGI|DAISHIN343)\b|(?:마이다스|에셋플러스|파워|마이티|히어로즈)(?=$|[\s(]))/i;
 /**
- * 한국 상장 해외 지수·원자재·통화 ETF (코스피와 비교하면 높음·낮음이 구조적으로 틀린다). 금현물·원자재처럼 국내에서 거래해도 주식 지수를 따르지 않는 것도 여기로
+ * 한국 상장 해외 지수·원자재·통화 ETF (코스피와 비교하면 높음·낮음이 구조적으로 틀린다). 금현물·원자재처럼 국내에서 거래해도 주식 지수를 따르지 않는 것도 여기로.
+ * 'MSCI Korea'(한국 주식 지수 — 'KODEX MSCI Korea TR')는 해외가 아니라 그대로 코스피와 비교한다
  */
 const KR_OVERSEAS_RE =
-  /(미국|나스닥|S&P|필라델피아|다우존스|차이나|중국|항셍|홍콩|일본|니케이|닛케이|인도|베트남|유로|독일|글로벌|선진국|신흥국|MSCI|대만|브라질|원유|WTI|골드|금선물|금현물|KRX\s?금|은선물|은현물|구리|원자재|농산물|천연가스|팔라듐|백금|귀금속|비철금속|탄소배출권|달러|엔화|해외|월드|아시아|멕시코|캐나다|호주|영국|사우디|인도네시아)/i;
+  /(미국|나스닥|S&P|필라델피아|다우존스|차이나|중국|항셍|홍콩|일본|니케이|닛케이|인도|베트남|유로|독일|글로벌|선진국|신흥국|MSCI(?!\s?(?:korea|코리아|한국))|대만|브라질|원유|WTI|골드|금선물|금현물|KRX\s?금|은선물|은현물|구리|원자재|농산물|천연가스|팔라듐|백금|귀금속|비철금속|탄소배출권|달러|엔화|해외|월드|아시아|멕시코|캐나다|호주|영국|사우디|인도네시아)/i;
 /** 한국 상장 코스닥 추종 ETF ('KODEX 코스닥150') — 상장은 코스피 시장이지만 코스닥과 비교한다 */
 const KR_KOSDAQ_ETF_RE = /코스닥/;
 /** 미국 상장 거래소 → 비교 지수 (나스닥 상장 → 나스닥 종합, 뉴욕·아멕스 상장 → S&P500). 그 밖(모르는 거래소)은 비교에서 뺀다 */
@@ -413,11 +453,16 @@ export function newsWindow(market: SummaryMarket, basisDate: string, now: Date):
 
 // ── 지수·환율·금리 ─────────────────────────────────────────
 
-/** 지수 목록에서 요약에 쓸 지수 (날짜가 기준 거래일이 아니면 받지 못한 것으로) */
+/**
+ * 지수 목록에서 요약에 쓸 지수 (날짜가 기준 거래일이 아니면 받지 못한 것으로).
+ * closeAt(그 거래일 정규장 마감 순간)을 주면: 출처 조회가 실패해 이어 준 마지막 값(stale)은 마감 뒤 시세일 때만 쓴다 —
+ * 16:00 에 코스피 조회가 한 번 실패해 15:25 장중 값이 남아 있으면, 그 값이 '15:30 장 마감 기준'으로 카드·알림·보유 종목 비교에 쓰이지 않게 뺀다
+ */
 export function pickIndices(
   list: ReadonlyArray<{ code: string; name: string; value: number; change: number; changeRate: number; asOf: string | null; stale?: boolean }>,
   market: SummaryMarket,
   basisDate: string,
+  closeAt?: number,
 ): SummaryIndex[] {
   const codes = market === "US" ? US_INDEX_CODES : KR_INDEX_CODES;
   return codes.map((code) => {
@@ -426,21 +471,31 @@ export function pickIndices(
     if (!i) return { code, name, value: null, change: null, changeRate: null, date: null, asOf: null, missing: "받지 못함" };
     const date = i.asOf && /^\d{4}-\d{2}-\d{2}/.test(i.asOf) ? i.asOf.slice(0, 10) : null;
     if (date !== basisDate) return { code, name, value: null, change: null, changeRate: null, date, asOf: i.asOf, missing: date ? `기준 거래일(${md(basisDate)})이 아닌 ${md(date)} 값이라 뺌` : "시세 날짜를 확인하지 못함" };
+    if (i.stale === true && closeAt !== undefined) {
+      const t = i.asOf ? Date.parse(i.asOf) : NaN;
+      if (!(t >= closeAt)) {
+        const hhmm = /T(\d{2}:\d{2})/.exec(i.asOf ?? "")?.[1];
+        return { code, name, value: null, change: null, changeRate: null, date, asOf: i.asOf, missing: `출처 조회가 실패해 남은 마지막 값이 마감 전${hhmm ? `(${hhmm})` : ""} 값이라 뺌` };
+      }
+    }
     return { code, name, value: i.value, change: i.change, changeRate: i.changeRate, date, asOf: i.asOf };
   });
 }
 
 /** 한국 영업일 이 시각(서울, 분) 뒤에는 원/달러 띠 값이 그날 고시값이다 — 하나은행 첫 고시는 09시 무렵이라 넉넉히 10:00 */
 export const FX_TODAY_FROM_MIN = 10 * 60;
+/** 하나은행 그날 첫 고시가 나올 수 있는 시각(서울, 분) — 이 전의 띠 값은 직전 영업일 마지막 고시다 */
+export const FX_FIRST_POSTING_MIN = 9 * 60;
 
 /**
  * 원/달러: 지수 띠와 같은 값(하나은행 고시 매매기준율)과, 일별 시리즈 마지막 날짜 = 그 고시의 날짜.
- * 일별 시리즈에 '오늘' 점이 하루가 끝나야 들어오는 경우(아직 실측 전)에도 오후 요약에 '(전날 고시)'가 틀리게 붙지 않게,
- * 오늘이 한국 영업일(krOpenToday)이고 10:00 뒤에 새로 받은 띠 값(stale 아님)이면 그 값의 날짜를 오늘로 본다.
  * 띠의 시세 시각(localTradedAt)은 고시 시각이 아니라 받은 무렵의 시각일 때가 있어(토요일 05:45 등 — 녹화 값) 날짜로 쓰지 않는다.
- * 이 '10:00 뒤는 오늘 고시값' 규칙은 오후(한국) 요약에만 쓴다. 아침(미국) 요약의 원/달러는 직전 한국 영업일 고시(상세 화면 안내와 같다) —
- * 10:00 뒤에 아침 요약을 다시 만들면(수동 전체 실행) 띠에는 오늘 고시값이 있으므로, 일별 시리즈의 직전 영업일 종가와 그 앞 종가로 값·전일 대비를 채운다
- * (종가를 모르면 오늘 값에 전날 날짜를 붙이지 않고 '고시일 확인 못 함')
+ *  - 오후(한국) 요약: 일별 시리즈에 '오늘' 점이 하루가 끝나야 들어오는 경우(아직 실측 전)에도 '(전날 고시)'가 틀리게 붙지 않게,
+ *    오늘이 한국 영업일(krOpenToday)이고 10:00 뒤에 새로 받은 띠 값이면 그 값의 날짜를 오늘로 본다.
+ *    출처 조회가 실패해 이어 준 값(stale — 받은 지 3시간까지)은 오늘 고시인지 전날 고시인지 알 수 없어 '고시일 확인 못 함'으로 둔다
+ *  - 아침(미국) 요약: 직전 한국 영업일 고시(상세 화면 안내와 같다) — 일별 시리즈의 오늘 앞 마지막 종가와 그 앞 종가로 값·전일 대비를 채운다.
+ *    띠 값은 하나은행 첫 고시(09시 무렵) 뒤면 오늘 값이라, 아침 브리핑을 09:30 으로 옮겨도 오늘 값에 전날 날짜가 붙지 않게 시각과 상관없이 이 규칙.
+ *    종가를 모르면 첫 고시 전(09:00 전)에만 띠 값에 일별 시리즈 날짜를 붙이고, 그 뒤면 '고시일 확인 못 함'
  */
 export function pickFx(
   row: { value: number; change: number; changeRate: number; stale?: boolean } | null | undefined,
@@ -450,20 +505,26 @@ export function pickFx(
 ): SummaryFx | null {
   if (!row || !Number.isFinite(row.value)) return null;
   const past = daily?.filter((c) => c.date <= today) ?? [];
-  let last = past.at(-1)?.date ?? null;
   const now = opts.now?.getTime();
-  const liveToday = opts.krOpenToday === true && now !== undefined && row.stale !== true && kstDateOf(now) === today && kstMinutesOf(now) >= FX_TODAY_FROM_MIN;
+  const stale = row.stale === true;
   if (opts.session === "morning") {
-    if (!liveToday) return { value: row.value, change: row.change, changeRate: row.changeRate, date: last, stale: row.stale === true };
     const closes = past.filter((c) => c.date < today && typeof c.close === "number" && Number.isFinite(c.close) && c.close > 0);
     const cur = closes.at(-1);
     const before = closes.at(-2);
-    if (!cur || !before) return { value: row.value, change: row.change, changeRate: row.changeRate, date: null, stale: row.stale === true };
-    const change = (Math.round(cur.close! * 100) - Math.round(before.close! * 100)) / 100;
-    return { value: cur.close!, change, changeRate: Math.round((change / before.close!) * 10_000) / 100, date: cur.date, stale: false };
+    if (cur && before) {
+      const change = (Math.round(cur.close! * 100) - Math.round(before.close! * 100)) / 100;
+      return { value: cur.close!, change, changeRate: Math.round((change / before.close!) * 10_000) / 100, date: cur.date, stale: false };
+    }
+    // 종가를 모를 때: 오늘 첫 고시가 나올 수 있기 전이면 띠 값 = 직전 영업일 마지막 고시
+    const beforeFirst = now !== undefined && (kstDateOf(now) < today || (kstDateOf(now) === today && (opts.krOpenToday === false || kstMinutesOf(now) < FX_FIRST_POSTING_MIN)));
+    const prev = past.filter((c) => c.date < today).at(-1)?.date ?? null;
+    return { value: row.value, change: row.change, changeRate: row.changeRate, date: beforeFirst && !stale ? prev : null, stale };
   }
+  if (stale) return { value: row.value, change: row.change, changeRate: row.changeRate, date: null, stale };
+  let last = past.at(-1)?.date ?? null;
+  const liveToday = opts.krOpenToday === true && now !== undefined && kstDateOf(now) === today && kstMinutesOf(now) >= FX_TODAY_FROM_MIN;
   if (liveToday && (last === null || last < today)) last = today;
-  return { value: row.value, change: row.change, changeRate: row.changeRate, date: last, stale: row.stale === true };
+  return { value: row.value, change: row.change, changeRate: row.changeRate, date: last, stale };
 }
 
 /** 미 재무부 Daily Treasury Par Yield Curve CSV → 날짜별 10년물 (최신 순) */
@@ -668,9 +729,9 @@ export function titleDays(title: string): number[] {
   return out;
 }
 
-/** 걸러야 할 제목인지 (물음표·물음표 없는 물음·권유 낱말·전망형 낱말) */
+/** 걸러야 할 제목인지 (물음표·물음표 없는 물음·권유 낱말·명령형 끝·전망형 낱말·'~ㄹ 것' 예측) */
 export function blockedTitle(title: string): boolean {
-  return QUESTION_RE.test(title) || asksQuestion(title) || ADVICE_RE.test(title) || OUTLOOK_RE.test(title);
+  return QUESTION_RE.test(title) || asksQuestion(title) || ADVICE_RE.test(title) || commands(title) || OUTLOOK_RE.test(title) || predicts(title);
 }
 
 /** 원문 링크로 쓸 수 있는 주소인지 (http·https 만 — 다른 꼴(javascript:·intent: 등)은 저장하지도 열지도 않는다) */

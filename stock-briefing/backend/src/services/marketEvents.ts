@@ -200,6 +200,8 @@ export function prevKrTradingDate(date: string): string {
 /**
  * 장 운영 일정: 한국 휴장(연속이면 'M/D~M/D 추석 연휴 한국 휴장' 한 건 + 다음 개장), 미국 휴장·조기 폐장, 한국 특수일(수능일 지연 개장).
  * 한국 휴장은 그날 09:00, 미국은 그날 09:30 ET(조기 폐장은 13:00 ET) 를 순간으로 본다.
+ *  - 이어진 휴장은 창 안에 드는 첫 휴장일부터 본다 — 연휴 둘째 날 아침(9/25 08:30, 2027-01-01 08:30)에도 '오늘 한국 휴장(추석)'·'오늘 한국 휴장(신정)'.
+ *    남은 날이 하루면 한 날 휴장 줄, 여러 날이면 범위 줄 + 다음 개장
  *  - 이어진 휴장의 바탕 이름이 다르면 '·'로 잇는다 ('12/31~1/1 연말·신정 연휴 한국 휴장')
  *  - 다음 개장: 네이버 다음 거래일(krNext)이 그 연휴 뒤면 그 날(목록에 없는 임시공휴일이 끼어도 맞게), 아니면 목록으로 센 날.
  *    그날이 특수일(새해 첫 거래일·수능일)이면 개장 시각을 붙인다 ('다음 개장 1/4(월) 10:00')
@@ -212,23 +214,26 @@ function operations(from: number, to: number, krNext?: KrNextOpen | null): Summa
   const kr = Object.keys(KR_HOLIDAYS).filter((d) => d >= startDate && d <= endDate).sort();
   for (let i = 0; i < kr.length; i++) {
     const start = i;
-    const first = kr[i]!;
-    let last = first;
     while (i + 1 < kr.length) {
-      let gap = addDays(last, 1);
+      let gap = addDays(kr[i]!, 1);
       while (isWeekend(gap)) gap = addDays(gap, 1);
       if (gap !== kr[i + 1]) break;
-      last = kr[++i]!;
+      i++;
     }
+    // 창(from~to) 안에 드는 첫 휴장일부터 연휴 끝까지
+    const range = kr.slice(start, i + 1);
+    const k = range.findIndex((d) => kstWall(d, 9, 0) >= from && kstWall(d, 9, 0) < to);
+    if (k < 0) continue;
+    const rest = range.slice(k);
+    const first = rest[0]!;
+    const last = rest[rest.length - 1]!;
     const at = kstWall(first, 9, 0);
-    if (at < from || at >= to) continue;
-    const name = KR_HOLIDAYS[first]!;
-    if (last === first) {
-      out.push({ kind: "kr-holiday", date: first, time: null, text: `한국 휴장(${name})`, at: new Date(at).toISOString() });
+    if (rest.length === 1) {
+      out.push({ kind: "kr-holiday", date: first, time: null, text: `한국 휴장(${KR_HOLIDAYS[first]!})`, at: new Date(at).toISOString() });
     } else {
-      out.push({ kind: "kr-holiday", date: first, endDate: last, time: null, text: `${rangeName(kr.slice(start, i + 1))} 연휴 한국 휴장`, at: new Date(at).toISOString() });
-      // 긴 연휴는 다음 개장을 함께 적는다 (같은 줄 두 번째 칸)
-      const naver = krNext && krNext.today < first ? validNext(krNext, krNext.today) : null;
+      out.push({ kind: "kr-holiday", date: first, endDate: last, time: null, text: `${rangeName(rest)} 연휴 한국 휴장`, at: new Date(at).toISOString() });
+      // 긴 연휴는 다음 개장을 함께 적는다 (같은 줄 두 번째 칸). 네이버 값은 연휴 첫날 전이나 연휴 안(오늘이 휴장일)에 받은 것
+      const naver = krNext && krNext.today <= first ? validNext(krNext, krNext.today) : null;
       const open = naver && naver > last ? naver : nextKrTradingDate(last);
       out.push({ kind: "kr-open", date: open, time: krRegularHours(open).reason ? openHm(open) : null, text: "다음 개장", at: new Date(at + 1).toISOString() });
     }
