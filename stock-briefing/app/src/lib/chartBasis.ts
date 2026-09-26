@@ -159,10 +159,11 @@ export const LABEL_GUARD_BARS = 5;
 /** 가장 나은 자리도 지난 봉을 이만큼 이상 덮으면(봉이 빽빽한 줄) 글자를 빼고 선만 둔다 (평단은 빼지 않는다) */
 export const LABEL_DROP_BARS = 8;
 /**
- * 자리 점수 (낮을수록 좋다): label 다른 글자와 겹침 · guard 최신 봉 하나 · bar 지난 봉 하나 ·
- * line 다른 가로선(현재가·평단·52주)이 글자를 가로지름 · below 선 아래(예전 자리는 선 위) · far 먼저 쪽 끝에서 그림 폭만큼 떨어짐(비례)
+ * 자리 점수 (낮을수록 좋다): label 다른 글자와 겹침 · guard 최신 봉 하나 ·
+ * current 부르는 쪽이 준 선(현재가선)이 글자를 가로지름 — 글자 바탕 상자가 그 선을 끊어 '52주 최저'가 현재가선에 붙은 글자처럼 읽히던 것(RGTX) ·
+ * bar 지난 봉 하나 · line 다른 글자의 선(평단·52주)이 글자를 가로지름 · below 선 아래(예전 자리는 선 위) · far 먼저 쪽 끝에서 그림 폭만큼 떨어짐(비례)
  */
-const COST = { label: 100, guard: 25, bar: 1, line: 3, below: 0.25, far: 2 } as const;
+const COST = { label: 100, current: 40, guard: 25, bar: 1, line: 3, below: 0.25, far: 2 } as const;
 
 const overlaps = (a: Box, b: Box, gap = 0) => a.left < b.right + gap && b.left < a.right + gap && a.top < b.bottom && b.top < a.bottom;
 
@@ -190,11 +191,12 @@ export function insideLabelWidth(l: Pick<InsideLabel, "text" | "lead">): number 
 
 /**
  * 평단·52주·벗어난 이동평균 글자를 놓을 자리 (순수 함수 → 단위 테스트). 놓지 않으면 null (선만 그린다).
+ * 글자 상자는 plotTop(과거 구간 안내 버튼 자리 — 그 위는 비워 둔다) ~ plotH + bottomSlack(가격 칸 아래 틈 — 거래량 칸·날짜 줄 앞) 안에만 놓는다.
  *
  * 글자마다 선 위·선 아래(fixed 면 그 줄) × 그림 왼쪽 끝부터 오른쪽 끝까지 LABEL_STEP 간격의 자리를 모두 보고, 점수(COST)가 가장 낮은 곳을 고른다 —
  * 봉·다른 글자·다른 가로선을 가리지 않고, 최신 봉(오른쪽 끝 LABEL_GUARD_BARS 개)은 특히 덮지 않고, 되도록 예전 자리(평단 왼쪽 위, 52주 오른쪽 위) 가까이.
  * 차례로(평단 → 52주 → 이동평균) 놓은 뒤 두 번 더 돌며 서로를 보고 다시 고른다 (먼저 놓은 평단이 자리를 막아 52주가 최신 봉을 덮던 것 — RGTX).
- * 가장 나은 자리도 최신 봉을 덮거나, 다른 글자와 겹치거나, 지난 봉을 LABEL_DROP_BARS 개 이상 덮으면 글자를 뺀다 (keep 인 평단은 빼지 않는다).
+ * 가장 나은 자리도 최신 봉을 덮거나, 다른 글자와 겹치거나, 현재가선(lines)이 가로지르거나, 지난 봉을 LABEL_DROP_BARS 개 이상 덮으면 글자를 뺀다 (keep 인 평단은 빼지 않는다).
  * 예전에는 네 자리(양쪽 × 선 위·아래)만 보고 차례로 정해, 오늘 52주 신저가인 RGTX 에서 '52주 최저'가 최신 봉 16개를 덮었다.
  *
  * bars 는 왼쪽부터 차례로 (보이는 봉의 몸통·꼬리 상자), lines 는 글자가 가로지르지 않았으면 하는 다른 가로선 y (현재가선)
@@ -206,11 +208,18 @@ export function placeInsideLabels(o: {
   labels: readonly InsideLabel[];
   lines?: readonly number[];
   guard?: number;
+  /** 글자 상자 위 끝의 한계 (기본 0). 과거 구간 안내 버튼이 있으면 그 아래 */
+  plotTop?: number;
+  /** 가격 칸 아래로 글자 상자가 넘어가도 되는 폭 (기본 0 — 거래량 칸 앞 틈). 오늘 52주 신저가처럼 선이 바닥에 붙어도 선 아래에 적을 수 있게 */
+  bottomSlack?: number;
 }): (LabelSpot | null)[] {
   const guardFrom = o.bars.length - (o.guard ?? LABEL_GUARD_BARS);
-  // 모든 글자의 선 (fixed 가 아닌 것) + 부르는 쪽이 준 선: 글자가 자기 선이 아닌 선을 가로지르면 감점
+  const plotTop = o.plotTop ?? 0;
+  const plotBottom = o.plotH + (o.bottomSlack ?? 0);
+  // 다른 글자의 선 (fixed 가 아닌 것): 글자가 자기 선이 아닌 선을 가로지르면 조금 감점. 부르는 쪽이 준 선(현재가선)은 크게 감점하고, 그래도 가로지르면 뺀다
   const lineYs = o.labels.map((l) => (l.fixed ? null : l.y));
-  type Cand = { spot: LabelSpot; base: number; old: number; latest: number };
+  const strong = o.lines ?? [];
+  type Cand = { spot: LabelSpot; base: number; old: number; latest: number; cross: number };
   const cands = o.labels.map((l, idx): Cand[] => {
     const w = insideLabelWidth(l);
     const maxLeft = o.plotW - LABEL_EDGE - w;
@@ -220,20 +229,22 @@ export function placeInsideLabels(o: {
       lefts.push(maxLeft);
     } else if (l.keep) lefts.push(LABEL_EDGE); // 폭이 모자라도 평단은 왼쪽 끝에 (글자가 조금 넘친다)
     const prefLeft = l.prefer === "left" ? LABEL_EDGE : Math.max(LABEL_EDGE, maxLeft);
-    const lines = [...(o.lines ?? []), ...lineYs.filter((_, j) => j !== idx)];
+    const weak = lineYs.filter((_, j) => j !== idx);
     const baselines: [number, number][] = l.fixed ? [[l.y, 0]] : [[l.y - LABEL_ABOVE, 0], [l.y + LABEL_BELOW, COST.below]];
     const list: Cand[] = [];
     for (const [ty, extra] of baselines) {
       const top = ty - LABEL_ASCENT, bottom = ty + LABEL_DESCENT;
-      // 그림 밖으로 나가는 줄은 후보가 아니다
-      if (top < 0 || bottom > o.plotH) continue;
+      // 그림 밖(안내 버튼 자리 · 아래 칸)으로 나가는 줄은 후보가 아니다
+      if (top < plotTop || bottom > plotBottom) continue;
       for (const left of lefts) {
         const box = { left, right: left + w, top, bottom };
         const hit = barHits(o.bars, box, guardFrom);
         let base = extra + (Math.abs(left - prefLeft) / Math.max(o.plotW, 1)) * COST.far + hit.old * COST.bar + hit.latest * COST.guard;
-        for (const y of lines) if (y !== null && y > top && y < bottom) base += COST.line;
+        for (const y of weak) if (y !== null && y > top && y < bottom) base += COST.line;
+        const cross = strong.filter((y) => y > top && y < bottom).length;
+        base += cross * COST.current;
         const side: "left" | "right" = l.lead || left + w / 2 < o.plotW / 2 ? "left" : "right";
-        list.push({ base, old: hit.old, latest: hit.latest, spot: { side, ty, x: side === "left" ? left + LABEL_PAD : box.right - LABEL_PAD, box } });
+        list.push({ base, old: hit.old, latest: hit.latest, cross, spot: { side, ty, x: side === "left" ? left + LABEL_PAD : box.right - LABEL_PAD, box } });
       }
     }
     return list;
@@ -251,12 +262,12 @@ export function placeInsideLabels(o: {
       }
       placed[i] = best?.c ?? null;
     }
-  // 빼는 글자: 최신 봉을 덮거나, 지난 봉을 너무 많이 덮거나, 다른 글자와 겹친다 (평단은 남긴다). 뺀 글자는 다른 글자의 겹침으로 세지 않도록 차례로
+  // 빼는 글자: 최신 봉을 덮거나, 지난 봉을 너무 많이 덮거나, 현재가선이 가로지르거나, 다른 글자와 겹친다 (평단은 남긴다). 뺀 글자는 다른 글자의 겹침으로 세지 않도록 차례로
   const out: (LabelSpot | null)[] = placed.map((p) => p?.spot ?? null);
   for (let i = 0; i < o.labels.length; i++) {
     const p = placed[i];
     if (!p || o.labels[i]!.keep) continue;
-    if (p.latest > 0 || p.old >= LABEL_DROP_BARS || clash(i, p.spot.box)) {
+    if (p.latest > 0 || p.old >= LABEL_DROP_BARS || p.cross > 0 || clash(i, p.spot.box)) {
       out[i] = null;
       placed[i] = null;
     }
@@ -270,7 +281,8 @@ export type OverlayAlign = "center" | "left" | "right";
 /**
  * 그림 위쪽에 덧그리는 상자(과거 구간 안내 버튼)를 가운데·왼쪽·오른쪽 중 어디에 둘지 (순수 함수 → 단위 테스트).
  * 폭 width · 위에서 bottom 까지의 상자가 가리는 봉(하나에 1)과 그림 안 글자(평단·52주·이동평균 표시 — 하나에 weight, 기본 20)가 가장 적은 곳, 같으면 가운데 → 왼쪽 → 오른쪽.
- * 급등한 봉 꼭대기(RGTX 6월)·최신 봉·범위 밖 평단 글자('평단(범위 위) …', 왼쪽 위)를 버튼이 덮지 않게 한다. cost 는 그 자리의 점수 (0 = 아무것도 덮지 않음)
+ * 급등한 봉 꼭대기(RGTX 6월)·최신 봉·범위 밖 평단 글자('평단(범위 위) …', 왼쪽 위)를 버튼이 덮지 않게 한다. cost 는 그 자리의 점수 (0 = 아무것도 덮지 않음).
+ * PriceChart 는 버튼이 보이는 동안 가격 칸 위쪽을 비워 두므로(봉·글자가 bottom 아래에만 있다) 보통 가운데(점수 0)이고, 가격 칸이 작아 다 비우지 못했을 때만 옆으로 간다
  */
 export function topOverlayAlign(o: { plotW: number; width: number; bottom: number; bars: readonly Box[]; labels?: readonly (Box & { weight?: number })[]; edge?: number }): {
   align: OverlayAlign;

@@ -630,6 +630,22 @@ describe("휴대폰·접은 화면 보유 한 줄 (기능 플래그 detailPolish
     expect(textOf(line(open(cost, { polish: true }))!)).toBe("보유 120주 · 평가손익 +1,480,000원 (+17.37%)");
   });
 
+  it("달러 종목: 보유 한 줄이 있으면 환산·환율 줄과 시세 기준·시각 줄을 한 줄로 합쳐 시세 머리 줄 수가 그대로 (475×663·글자 115% 에서 차트 아래 칩 줄이 첫 화면 밖으로 밀리던 것), 없으면 예전 두 줄", () => {
+    const lines = (r: ReturnType<typeof render>) => head(r).children.filter((c): c is HostNode => typeof c !== "string");
+    const on = open(apple(), { polish: true, params: { code: "AAPL" } });
+    const merged = lines(on).filter((n) => n.type === "Text" && /환율/.test(textOf(n)));
+    expect(merged.map(textOf)).toEqual([expect.stringMatching(/^[\d,]+원 · 환율 1,391\.50 · TEST · 9월 23일 \(수\) 10:00$/)]);
+    expect(lines(on).some((n) => /^TEST · /.test(textOf(n)))).toBe(false);
+    const off = open(apple(), { polish: false, params: { code: "AAPL" } });
+    expect(lines(off).filter((n) => n.type === "Text" && /환율/.test(textOf(n))).map(textOf)).toEqual([expect.stringMatching(/^[\d,]+원 · 환율 1,391\.50$/)]);
+    expect(lines(off).some((n) => /^TEST · 9월 23일/.test(textOf(n)))).toBe(true);
+    // 보유 한 줄이 생겨도 시세 머리 줄 수는 그대로
+    expect(lines(on)).toHaveLength(lines(off).length);
+    expect(line(on)).toBeDefined();
+    // 원화 종목은 합칠 줄이 없어 시세 기준 줄 그대로
+    expect(lines(open(samsung(), { polish: true })).some((n) => /^KRX\+NXT 통합 · /.test(textOf(n)))).toBe(true);
+  });
+
   it("손실은 하락색, 큰 글씨는 두 줄까지", () => {
     const loss = { ...holding("005930", quote("005930", 60_000, { change: -100, changeRate: -0.17 }), 10, 70_000, {}, "삼성전자"), registered: true };
     h.win = { ...h.win, fontScale: 1.3 };

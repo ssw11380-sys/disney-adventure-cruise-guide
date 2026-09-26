@@ -426,6 +426,23 @@ describe("칩 띠 끝 흐림 (진단 25번 — 모든 창)", () => {
       }
     }
   });
+
+  it("흐림에는 꺾쇠(›·‹)를 두지 않는다 — 잘린 칩 글자에 겹쳐 'RSI/M›'로 뭉개지고, 누르면 밑의 칩(RSI 켜기·1분봉)이 눌렸다 (2026-09-26 검증)", () => {
+    for (const [w, hh] of [[360, 780], [475, 751], [933, 704]] as const) {
+      size(w, hh);
+      h.flag = true;
+      forgetWindowClass();
+      const r = open();
+      scroll(r, 0, { view: 300, content: 500, x: 50 });
+      expect(fades(r), String(w)).toHaveLength(2);
+      for (const f of fades(r)) {
+        expect(f.children, String(w)).toHaveLength(0);
+        // 누르기는 그대로 밑의 칩으로 (흐림이 가로채지 않는다)
+        expect(flat(f).pointerEvents).toBe("none");
+      }
+      expect(r.all().filter((n) => n.type === "Ionicons" && /chevron/.test(String(n.props.name))).map((n) => n.props.name), String(w)).toEqual(["chevron-back", "chevron-forward"]);
+    }
+  });
 });
 
 describe("이동평균 값 줄: 넓은 창만 항목 단위 줄바꿈 (진단 24번)", () => {
@@ -541,6 +558,17 @@ describe("과거 구간 안내 (기능 플래그 detailPolish — 2026-09-26 RGT
     // 100봉 앞 = 9/23 의 56번째 봉 (14:05) — 예전에는 '500분 전' (장 이틀에 걸친 시간을 분으로 적어 8시간 전처럼 읽혔다)
     drag(m, 100);
     expect(past(m)).toMatchObject({ text: "9월 23일 14:05까지 보는 중", short: "9/23 14:05까지" });
+  });
+
+  it("월봉 단위는 칩·버튼 이름·안내 모두 '개월' — 예전 칩은 '120월 · 30월 전', 안내는 '30개월 전'으로 한 화면에서 달랐다", () => {
+    h.polish = true;
+    const r = openMany({ period: "M" });
+    drag(r, 30);
+    expect(r.text()).toContain("120개월 · 30개월 전");
+    expect(r.text()).not.toMatch(/d월 · /);
+    expect(past(r)?.text).toBe("30개월 전까지 보는 중");
+    expect(r.has("보이는 봉 120개, 최신보다 30개월 전. 눌러서 바꾸기")).toBe(true);
+    expect(r.has("최신으로 (지금 30개월 전)")).toBe(true);
   });
 
   it("꺼짐·못 받음: 과거로 옮겨도 안내가 없다 (예전 그대로 — 칩의 '· 2일 전' 만)", () => {

@@ -4,7 +4,7 @@ import React from "react";
  * 렌더러 패키지(react-dom·react-test-renderer) 없이 화면 함수 컴포넌트를 "훅 상태·key 를 지키며" 다시 그려 보는 최소 렌더러.
  * 입력 칸의 초안이 다시 그릴 때 남는지·지워지는지 같은 회귀(PF-06·07)를 노드 환경에서 본다.
  *  - 같은 자리·같은 타입·같은 key 면 상태 유지, key 나 타입이 바뀌면 새로 만든다 (React 재조정 규칙)
- *  - 훅: useState·useReducer·useEffect·useLayoutEffect·useMemo·useCallback·useRef·useContext(가까운 Provider 값, 없으면 기본값)
+ *  - 훅: useState·useReducer·useEffect·useLayoutEffect·useMemo·useCallback·useRef·useId(인스턴스마다 고정된 id)·useContext(가까운 Provider 값, 없으면 기본값)
  *    · useSyncExternalStore(react-query 의 useQuery 가 쓴다): 그린 뒤 구독하고, 저장소가 알려 오면 값이 바뀐 경우에만 바로 다시 그린다
  *      → 체결이 와도 다시 그리지 않는지(렌더 횟수)를 실제 QueryClient 로 볼 수 있다. 바뀐 컴포넌트는 memo 건너뛰기에서도 다시 그린다
  *  - 그리는 중 자기 상태를 바꾸면(이전 렌더 값 저장 패턴) 그 컴포넌트를 바로 다시 그린다
@@ -133,6 +133,13 @@ export function render(element: React.ReactElement, opts: { memo?: boolean } = {
     );
     return value;
   }
+  let nextId = 0;
+  // React 19.2 와 같은 모양의 id ('_r_1_'), 인스턴스가 살아 있는 동안 그대로
+  function idHook() {
+    const { inst, i } = hookOf();
+    if (!(i in inst.hooks)) inst.hooks[i] = `_r_${(++nextId).toString(32)}_`;
+    return inst.hooks[i] as string;
+  }
   function refHook(init: unknown) {
     const { inst, i } = hookOf();
     if (!(i in inst.hooks)) inst.hooks[i] = { current: init };
@@ -148,6 +155,7 @@ export function render(element: React.ReactElement, opts: { memo?: boolean } = {
     useMemo: memoHook,
     useCallback: (fn: unknown, deps: Deps) => memoHook(() => fn, deps),
     useRef: refHook,
+    useId: idHook,
     useContext: (ctx: { _currentValue: unknown }) => ctx._currentValue,
     useSyncExternalStore: storeHook,
     useDebugValue() {},

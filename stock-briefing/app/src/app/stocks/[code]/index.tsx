@@ -196,6 +196,12 @@ export default function StockDetailScreen() {
   // 시세 머리 아래 보유 한 줄 (휴대폰·접은 화면만 — 넓은 창은 옆 칸·첫 칸에 '내 보유'가 이미 보인다).
   // 잔고 화면 줄과 같은 평가: 매도 비용 차감(afterCost)·원화로 보기(showKrw) 설정을 따른다
   const hold = polish && mode === "phone" ? holdingLine(s.quantity, evalView(baseEval, { afterCost, toKrw: showKrw, currency: cur, fx })) : null;
+  // 보유 한 줄이 있으면 휴대폰 시세 머리의 달러 종목 환산·환율 줄과 시세 기준·시각 줄을 한 줄로 합친다 — 보유 한 줄이 차트 아래
+  // 이동평균 칩 줄을 첫 화면 밖으로 밀어내지 않게 (폴드8 접은 화면 앱 영역 475×663 · 글자 115%: 칩 줄 21/32 → 7/32 보이던 것). 없으면 예전 두 줄 그대로
+  const mergedLine =
+    hold && q && cur === "USD"
+      ? `${showKrw ? `$${formatQuote(q.price, "USD")}` : `${formatQuote(q.priceKrw ?? (fx ? q.price * fx : null), "KRW")}원`} · 환율 ${fx ? formatNumber(fx, 2) : "-"} · ${q.priceBasis ?? q.source.toUpperCase()} · ${formatDateKo(q.asOf, true)}${q.stale ? " · 시세 지연" : ""}`
+      : null;
   const quote = (n: number | null | undefined) => formatQuoteDisplay(n, cur, fx, showKrw);
   const arrow = (n: number | null | undefined) => formatArrowDisplay(n, cur, fx, showKrw);
   const range52 = q && q.high52w && q.low52w && q.high52w > q.low52w ? Math.min(1, Math.max(0, (q.price - q.low52w) / (q.high52w - q.low52w))) : null;
@@ -320,7 +326,9 @@ export default function StockDetailScreen() {
                   ) : null}
                 </View>
               </View>
-              {cur === "USD" ? (
+              {mergedLine ? (
+                <Text style={styles.sub(t.muted)}>{mergedLine}</Text>
+              ) : cur === "USD" ? (
                 <Text style={styles.sub(t.muted)}>
                   {showKrw ? `$${formatQuote(q.price, "USD")}` : `${formatQuote(q.priceKrw ?? (fx ? q.price * fx : null), "KRW")}원`} · 환율 {fx ? formatNumber(fx, 2) : "-"}
                 </Text>
@@ -330,10 +338,12 @@ export default function StockDetailScreen() {
                   {afterMarketLabel(nxt)} {quote(nxt.price)} {arrow(nxt.change)} {formatPct(nxt.changeRate)}
                 </Text>
               ) : null}
-              <Text style={styles.sub(t.muted)}>
-                {q.priceBasis ?? q.source.toUpperCase()} · {formatDateKo(q.asOf, true)}
-                {q.stale ? " · 시세 지연" : ""}
-              </Text>
+              {mergedLine ? null : (
+                <Text style={styles.sub(t.muted)}>
+                  {q.priceBasis ?? q.source.toUpperCase()} · {formatDateKo(q.asOf, true)}
+                  {q.stale ? " · 시세 지연" : ""}
+                </Text>
+              )}
             </>
           ) : (
             <Text style={{ color: t.danger, marginTop: space.xs }}>{s.quoteError ?? "시세 없음"}</Text>

@@ -72,7 +72,11 @@ export const WINDOWS: Record<CandlePeriod, number[]> = {
   M: [36, 60, 120],
 };
 
-export const UNIT: Record<CandlePeriod, string> = { "1m": "봉", "5m": "봉", "30m": "봉", D: "일", W: "주", M: "월" };
+/**
+ * 봉 수 칩의 단위 ('120일 · 2일 전'). 월봉은 '개월' — '60월 · 30월 전'은 달 이름처럼 읽히고,
+ * 과거 구간 안내('30개월 전까지 보는 중', lib/chartLayout pastViewLabel)와 한 화면에서 단위가 달랐다 (2026-09-26)
+ */
+export const UNIT: Record<CandlePeriod, string> = { "1m": "봉", "5m": "봉", "30m": "봉", D: "일", W: "주", M: "개월" };
 
 export function isIntraday(period: CandlePeriod): boolean {
   return period === "1m" || period === "5m" || period === "30m";

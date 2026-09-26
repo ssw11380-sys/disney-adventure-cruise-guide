@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMigratedDb } from "../src/db/index.js";
-import { applyFundamentals, NaverFundamentals, reutersCandidates } from "../src/providers/market/fundamentals.js";
+import { applyFundamentals, NaverFundamentals, realText, reutersCandidates } from "../src/providers/market/fundamentals.js";
 import { StockService } from "../src/services/stockService.js";
 import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider, makeQuote } from "./helpers.js";
 
@@ -152,7 +152,7 @@ describe("NaverFundamentals", () => {
     expect(calls.filter((c) => c.includes("FX_USDKRW"))).toHaveLength(1);
   });
 
-  it("미국 ETF(RGTX): 업종 '-' 는 비우고, 사람이 읽는 이름(stockName)을 함께 준다 (2026-09-26 네이버 실제 응답 모양)", async () => {
+  it("미국 ETF(RGTX): 사람이 읽는 이름(stockName)을 새 칸으로 함께 주고, 업종 '-' 는 예전 그대로 둔다 (2026-09-26 네이버 실제 응답 모양)", async () => {
     // 네이버 basic 응답 그대로 (필요한 칸만): ETF 는 한글 이름이 없어 stockName 이 영문, 업종은 "-"
     const RGTX = {
       stockEndType: "etf",
@@ -180,10 +180,11 @@ describe("NaverFundamentals", () => {
     }) as typeof fetch;
     const f = new NaverFundamentals(fetchFn, NOW);
     const r = await f.get("RGTX", "NASDAQ");
-    expect(r).toMatchObject({ industry: null, name: "Defiance Daily Target 2X Long RGTI ETF", per: null });
+    // 업종 값은 바꾸지 않는다 (서버 변경은 칸 추가만 — 자리표시는 앱이 거른다)
+    expect(r).toMatchObject({ industry: "-", name: "Defiance Daily Target 2X Long RGTI ETF", per: null });
     const q = { ...makeQuote("RGTX", "toss"), currency: "USD" as const };
     const out = applyFundamentals(q, r);
-    expect(out.industry).toBeNull();
+    expect(out.industry).toBe("-");
     expect(out.fullName).toBe("Defiance Daily Target 2X Long RGTI ETF");
     // 한글 이름이 있는 종목은 한글(stockName) — 영문만 있으면 영문
     const tsla = await f.get("TSLA", "NASDAQ");
@@ -192,13 +193,16 @@ describe("NaverFundamentals", () => {
     expect(applyFundamentals(makeQuote("AAPL", "toss"), { ...tsla!, name: "애플" }).fullName).toBe("애플");
   });
 
-  it("업종이 비었거나 자리표시('-', '—', 'N/A', 공백)면 null — 시세가 준 자리표시도 보강 값으로 바꾼다", () => {
+  it("업종은 예전 규칙 그대로: 시세가 준 값(자리표시 '-' 포함)을 유지하고, 없을 때만 보강 값 — 서버 변경은 fullName 칸 추가만", () => {
     const f = { per: null, pbr: null, eps: null, bps: null, dividendPerShare: null, dividendYieldPct: null, high52w: null, low52w: null, marketCap: null, industry: "반도체", source: "s" };
-    for (const bad of ["-", "—", "N/A", "  ", ""]) {
-      expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: bad }, f).industry, bad).toBe("반도체");
-      expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: bad }, { ...f, industry: null }).industry, bad).toBeNull();
-    }
-    expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: "메모리" }, f).industry).toBe("메모리");
+    for (const kept of ["-", "—", "N/A", "메모리"]) expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: kept }, f).industry, kept).toBe(kept);
+    expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: null }, f).industry).toBe("반도체");
+    expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: null }, { ...f, industry: "-" }).industry).toBe("-");
+  });
+
+  it("realText: 자리표시('-', '—', 'N/A', 공백)는 null (이름 칸에만 쓴다)", () => {
+    for (const bad of ["-", "—", "–", "N/A", "n/a", "  ", "", null, undefined, 3]) expect(realText(bad), String(bad)).toBeNull();
+    expect(realText("  Defiance ETF ")).toBe("Defiance ETF");
   });
 
   it("applyFundamentals 는 비어 있는 칸만 채운다", () => {

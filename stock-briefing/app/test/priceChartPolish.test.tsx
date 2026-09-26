@@ -101,6 +101,24 @@ describe("가격 축은 봉 기준 (버그 수정)", () => {
     const paths = group.children.filter((c): c is HostNode => typeof c !== "string" && c.type === "Path");
     expect(paths.length).toBe(4 + 4 + 3);
   });
+
+  it("자르기 틀 id 는 차트마다 따로 (웹은 id 가 문서 전체에서 하나 — 상세 위에 전체 화면 차트가 올라와도 제 틀로 자른다), url(#…) 에 쓸 수 있는 글자만", () => {
+    const base = { candles: RGTX, period: "D" as const, currency: "KRW" as const, view: { count: 120, offset: 0 }, onViewChange: () => undefined, maPeriods: [20], showBollinger: false, showVolume: true, indicator: "none" as const };
+    const r = render(
+      <>
+        <PriceChart {...base} width={419} height={260} />
+        <PriceChart {...base} width={751} height={300} />
+      </>,
+    );
+    const clips = r.all().filter((n) => n.type === "ClipPath");
+    const ids = clips.map((c) => String(c.props.id));
+    expect(new Set(ids).size).toBe(2);
+    for (const id of ids) expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+    // 각 그림은 제 틀을 쓴다 (폭이 다른 두 틀)
+    const groups = r.all().filter((n) => n.type === "G");
+    expect(groups.map((g) => g.props.clipPath)).toEqual(ids.map((id) => `url(#${id})`));
+    expect(clips.map((c) => (c.children[0] as HostNode).props.width)).not.toEqual([(clips[0]!.children[0] as HostNode).props.width, (clips[0]!.children[0] as HostNode).props.width]);
+  });
 });
 
 describe("평단·52주 글자 (버그 수정)", () => {
@@ -149,38 +167,40 @@ describe("과거 구간 안내 버튼 (기능 플래그 detailPolish — pastVie
     expect(onLatest).toHaveBeenCalledTimes(1);
   });
 
-  it("누르는 영역 44 (보이는 높이 32 + 위아래 hitSlop), 둘레 틀은 누르기를 통과시켜 버튼 밖은 그대로 드래그·십자선", () => {
+  /** 누르는 틀 안의 보이는 버튼 (바탕·테두리가 있는 View) */
+  const pill = (r: ReturnType<typeof draw>) => button(r)!.children.find((c): c is HostNode => typeof c !== "string" && c.type === "View")!;
+
+  it("누르는 영역 44: 누르는 틀 자체가 높이 44 이고 둘레 틀 안에 온전히 들어간다 (hitSlop 은 부모 틀 밖으로 넓어지지 않아 예전 '32 + hitSlop 6' 은 32 만 눌렸다)", () => {
     const r = draw({ view: { count: 120, offset: 2 }, pastView: { text: "2일 전까지 보는 중", onLatest: () => undefined } });
     const b = button(r)!;
-    const style = Object.assign({}, ...[(b.props.style as (s: { pressed: boolean }) => unknown)({ pressed: false })].flat(Infinity).filter(Boolean)) as Record<string, number>;
-    const slop = b.props.hitSlop as { top: number; bottom: number };
-    expect(style.minHeight! + slop.top + slop.bottom).toBeGreaterThanOrEqual(touch.min);
+    expect(flat(b).minHeight).toBeGreaterThanOrEqual(touch.min);
+    // 틀 밖으로 넓히는 hitSlop 에 기대지 않는다
+    expect(b.props.hitSlop).toBeUndefined();
+    // 보이는 버튼은 칩과 같은 32, 누르는 틀 가운데
+    expect(flat(pill(r))).toMatchObject({ minHeight: 32 });
+    expect(flat(b).justifyContent).toBe("center");
+    // 둘레 틀: 그림 맨 위(top 0)에서 높이를 정하지 않아 누르는 틀(44)을 그대로 품는다. 누르기는 통과시켜 버튼 밖은 그대로 드래그·십자선
     const wrap = r.all().find((n) => n.children.includes(b))!;
-    expect(flat(wrap)).toMatchObject({ position: "absolute", pointerEvents: "box-none" });
+    expect(flat(wrap)).toMatchObject({ position: "absolute", top: 0, pointerEvents: "box-none" });
+    expect(flat(wrap).height).toBeUndefined();
+    expect(flat(wrap).maxHeight).toBeUndefined();
+    expect(flat(wrap).paddingTop ?? flat(wrap).paddingVertical ?? 0).toBe(0);
     // 그림 칸 폭(가격 축 제외) 안
     expect(["center", "flex-start", "flex-end"]).toContain(flat(wrap).alignItems);
     expect(flat(wrap).width).toBeLessThan(419);
   });
 
-  it("가운데에 급등한 봉 꼭대기가 있으면 그 봉을 덮지 않게 옆으로 (RGTX 6월 급등 모양), 위가 비어 있으면 가운데", () => {
-    // 보이는 120봉(128~247) 중 앞쪽 25~35번째에 급등 (캡처처럼 왼쪽 가운데) → 버튼은 오른쪽
-    const spike = RGTX.map((c, i) => (i >= 128 + 25 && i <= 128 + 35 ? { ...c, high: 60_000, close: 50_000, open: 45_000 } : c));
-    const past = { text: "2일 전까지 보는 중", onLatest: () => undefined };
-    const wrapOf = (r: ReturnType<typeof draw>) => r.all().find((n) => n.children.includes(button(r)!))!;
-    expect(flat(wrapOf(draw({ candles: spike, view: { count: 120, offset: 2 }, pastView: past }))).alignItems).toBe("flex-end");
-    // 봉이 모두 아래쪽에 있는 그림(평단이 위 끝을 넓힘)은 가운데
-    expect(flat(wrapOf(draw({ view: { count: 120, offset: 2 }, avgPrice: 19_000, pastView: past }))).alignItems).toBe("center");
-  });
-
-  it("라이트·다크 모두 바탕·글자는 테마 토큰", () => {
+  it("라이트·다크 모두 바탕·글자는 테마 토큰, 누르는 동안 보이는 버튼 바탕이 surfaceAlt (누르는 틀은 투명)", () => {
     for (const isDark of [false, true]) {
       h.dark = isDark;
       const t = isDark ? dark : light;
       const r = draw({ view: { count: 120, offset: 2 }, pastView: { text: "2일 전까지 보는 중", onLatest: () => undefined } });
-      const b = button(r)!;
-      const style = (pressed: boolean) => Object.assign({}, ...[(b.props.style as (s: { pressed: boolean }) => unknown)({ pressed })].flat(Infinity).filter(Boolean)) as Record<string, unknown>;
-      expect(style(false)).toMatchObject({ backgroundColor: t.surface, borderColor: t.accent });
-      expect(style(true).backgroundColor).toBe(t.surfaceAlt);
+      expect(flat(pill(r))).toMatchObject({ backgroundColor: t.surface, borderColor: t.accent });
+      expect(flat(button(r)!).backgroundColor).toBeUndefined();
+      r.act(() => (button(r)!.props.onPressIn as () => void)());
+      expect(flat(pill(r)).backgroundColor).toBe(t.surfaceAlt);
+      r.act(() => (button(r)!.props.onPressOut as () => void)());
+      expect(flat(pill(r)).backgroundColor).toBe(t.surface);
     }
   });
 
@@ -231,9 +251,14 @@ describe("RGTX 캡처 모양 (오늘 52주 신저가 · 6월 급등) — 접은 
         expect(labels.some((s) => s.startsWith("평단")), `${w} ${count}`).toBe(true);
         const boxes = labelBoxes(r);
         expect(boxes.length, `${w} ${count}`).toBeGreaterThanOrEqual(2);
+        // 현재가 점선 (빨강·파랑 — 평단 금색이 아닌 5 3 점선)
+        const current = r.all().find((n) => n.type === "Line" && n.props.strokeDasharray === "5 3" && n.props.stroke !== light.gold)!;
+        const cy = current.props.y1 as number;
         for (const box of boxes) {
           expect(latest.filter((b) => hit(box, b)).length, `${w} ${count} 최신 봉`).toBe(0);
           expect(bars.filter((b) => hit(box, b)).length, `${w} ${count} 봉`).toBe(0);
+          // 글자 바탕 상자가 현재가선을 끊지 않는다 — 예전에는 '52주 최저' 상자가 현재가선 위에 놓여 현재가선에 붙은 글자처럼 읽혔다
+          expect(box.t < cy && cy < box.b, `${w} ${count} 현재가선 (${cy.toFixed(1)} in ${box.t.toFixed(1)}~${box.b.toFixed(1)})`).toBe(false);
         }
         for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) expect(hit(boxes[i]!, boxes[j]!), `${w} ${count} 글자끼리`).toBe(false);
       }
@@ -267,6 +292,71 @@ describe("RGTX 캡처 모양 (오늘 52주 신저가 · 6월 급등) — 접은 
     // 주봉은 '주선'
     const w = draw({ candles: K, period: "W", view: { count: 20, offset: 0 }, currentPrice: Q.price });
     expect(svgTexts(w)).toContain("120주선(범위 위)");
+  });
+});
+
+describe("과거 구간 안내가 봉을 가리지 않는다: 안내가 보이는 동안 가격 칸 위쪽(버튼 자리)을 비운다 (2026-09-26 검증 36건 중 7건 가림)", () => {
+  /** 보이는 버튼은 그림 위에서 6 ~ 38 (누르는 틀 44 가운데의 32) */
+  const PILL_BOTTOM = (touch.min - 32) / 2 + 32;
+  const button = (r: ReturnType<typeof draw>) => r.all().find((n) => n.type === "Pressable")!;
+  const wrapOf = (r: ReturnType<typeof draw>) => r.all().find((n) => n.children.includes(button(r)))!;
+  const clipRect = (r: ReturnType<typeof draw>) => r.all().find((n) => n.type === "ClipPath")!.children.find((c): c is HostNode => typeof c !== "string" && c.type === "Rect")!.props;
+  /** 가격 칸 틀 안 캔들 path 4개(상승·하락 꼬리·몸통)의 꼭대기 y */
+  const candleTops = (r: ReturnType<typeof draw>) => {
+    const g = r.all().find((n) => n.type === "G")!;
+    const paths = g.children.filter((c): c is HostNode => typeof c !== "string" && c.type === "Path").slice(0, 4);
+    const tops: number[] = [];
+    for (const p of paths) {
+      const d = String(p.props.d);
+      for (const m of d.matchAll(/M[\d.-]+ ([\d.-]+)h[\d.-]+v[\d.-]+h[\d.-]+z/g)) tops.push(+m[1]!);
+      for (const m of d.matchAll(/M[\d.-]+ ([\d.-]+)V([\d.-]+)/g)) tops.push(Math.min(+m[1]!, +m[2]!));
+    }
+    return tops;
+  };
+  // 가운데 급등(RGTX 6월) · 오르는 종목(최신 봉이 오른쪽 위 — 예전 '오른쪽'에 놓여 최근 봉을 덮던 것) · RGTX 실제 모양 확대(범위 밖 평단 글자가 왼쪽 위)
+  const spike = RGTX.map((c, i) => (i >= 128 + 25 && i <= 128 + 35 ? { ...c, high: 60_000, close: 50_000, open: 45_000 } : c));
+  const rising = Array.from({ length: 250 }, (_, i) => {
+    const c = 10_000 + i * 60;
+    return { date: day(i), open: c - 30, high: c + 200, low: c - 200, close: c + 30, volume: 1_000 };
+  });
+  const K = rgtxDaily(800, RGTX_FX);
+  const cases = [
+    { name: "급등", candles: spike, view: { count: 120, offset: 2 } },
+    { name: "오르는 종목", candles: rising, view: { count: 120, offset: 2 } },
+    { name: "RGTX 확대 · 범위 밖 평단", candles: K, view: { count: 20, offset: 3 }, avgPrice: RGTX_QUOTE.avg * RGTX_FX, labelBg: light.surface },
+    { name: "RGTX 120봉 · 평단 선", candles: K, view: { count: 120, offset: 60 }, avgPrice: RGTX_QUOTE.avg * RGTX_FX, low52w: RGTX_QUOTE.low52w * RGTX_FX, labelBg: light.surface },
+  ];
+  const sizes = [[419, 260], [355, 220], [304, 188], [560, 347]] as const;
+
+  it("봉 꼭대기·자르기 틀(선)·그림 안 글자가 모두 버튼 아래 끝(38)보다 아래 → 버튼은 가운데 (창 크기·자료 모양과 상관없이)", () => {
+    for (const c of cases)
+      for (const [w, hh] of sizes)
+        for (const scale of [1, 1.3]) {
+          h.scale = scale;
+          const tag = `${c.name} ${w} ${scale}`;
+          const r = draw({ ...c, width: w, height: hh, pastView: { text: `${c.view.offset}일 전까지 보는 중`, short: `${c.view.offset}일 전`, onLatest: () => undefined } });
+          expect(clipRect(r).y, tag).toBeGreaterThanOrEqual(PILL_BOTTOM);
+          expect(Math.min(...candleTops(r)), tag).toBeGreaterThanOrEqual(PILL_BOTTOM);
+          const labelBoxes = r.all().filter((n) => n.type === "Rect" && n.props.fillOpacity === 0.85);
+          for (const b of labelBoxes) expect(b.props.y as number, tag).toBeGreaterThanOrEqual(PILL_BOTTOM);
+          expect(flat(wrapOf(r)).alignItems, tag).toBe("center");
+        }
+  });
+
+  it("안내가 없으면(최신 구간·플래그 꺼짐) 위쪽을 비우지 않는다 — 예전 축 그대로", () => {
+    const r = draw({ candles: spike, view: { count: 120, offset: 2 } });
+    expect(clipRect(r).y).toBe(0);
+    // 급등 봉 꼭대기가 버튼 자리 높이까지 올라온다 (비우지 않았다)
+    expect(Math.min(...candleTops(r))).toBeLessThan(PILL_BOTTOM);
+  });
+
+  it("가격 칸이 작으면(360 창 + RSI 칸) 칸 높이의 30% 까지만 비우고, 남는 겹침은 봉을 덜 가리는 쪽·짧은 글로", () => {
+    const r = draw({ candles: spike, width: 304, height: 188, indicator: "rsi", view: { count: 120, offset: 2 }, pastView: { text: "2일 전까지 보는 중", short: "2일 전", onLatest: () => undefined } });
+    // 가격 칸 = 188 − 날짜 18 − 거래량 30 − RSI 38 − 칸 사이 6×2 = 90 → 비우는 높이 27
+    expect(clipRect(r)).toMatchObject({ y: 27, height: 90 - 27 });
+    // 왼쪽 가운데의 급등 봉 꼭대기를 피해 오른쪽
+    expect(flat(wrapOf(r)).alignItems).toBe("flex-end");
+    expect(textOf(button(r))).toBe("2일 전 · 최신으로");
   });
 });
 

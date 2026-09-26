@@ -176,8 +176,8 @@ function fromInfos(infos: Json[], source: string): Fundamentals {
     high52w: n("highPriceOf52Weeks"),
     low52w: n("lowPriceOf52Weeks"),
     marketCap: null,
-    // 업종이 없는 종목(ETF 등)은 "-" 로 온다 → 비운다 (앱에 "RGTX · NASDAQ · -" 로 보이던 것)
-    industry: realText(m.get("industryGroupKor")),
+    // 업종이 없는 종목(ETF 등)은 "-" 로 온다. 응답 값은 예전 그대로 두고(서버 변경은 칸 추가만) 앱이 자리표시를 거른다 (app lib/detailText realText)
+    industry: m.get("industryGroupKor") ?? null,
     source,
   };
 }
@@ -190,7 +190,7 @@ export function realText(v: unknown): string | null {
 }
 
 /**
- * 시세에 비어 있는 밸류에이션 칸만 채운다 (소스가 준 값은 유지). 업종이 자리표시("-")면 비어 있는 것으로 본다.
+ * 시세에 비어 있는 밸류에이션 칸만 채운다 (소스가 준 값은 유지 — 업종도 예전 그대로).
  * 사람이 읽는 이름(fullName)은 보강 값에 있을 때만 넣는다 (예전 응답 모양에 칸을 새로 만들지 않게)
  */
 export function applyFundamentals(q: Quote, f: Fundamentals | null): Quote {
@@ -207,7 +207,7 @@ export function applyFundamentals(q: Quote, f: Fundamentals | null): Quote {
     marketCap: q.marketCap ?? f.marketCap,
     dividendPerShare: q.dividendPerShare ?? f.dividendPerShare,
     dividendYieldPct: q.dividendYieldPct ?? f.dividendYieldPct,
-    industry: realText(q.industry) ?? realText(f.industry),
+    industry: q.industry ?? f.industry,
     ...(fullName ? { fullName } : {}),
   };
 }

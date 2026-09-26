@@ -181,10 +181,14 @@ describe("그림 안쪽 글자 자리 (placeInsideLabels)", () => {
       { y: 172.7, text: "평단 19,064", prefer: "left" as const, keep: true },
       { y: 184, text: "52주 최저", prefer: "right" as const },
     ];
-    const [avg, low] = placeInsideLabels({ plotW: 373, plotH: 194, bars: b, labels, lines: [179] });
+    // 가격 칸 아래 틈(거래량 칸 앞)까지 글자 상자를 놓을 수 있다 (PriceChart 는 거래량 칸이 있으면 8)
+    const [avg, low] = placeInsideLabels({ plotW: 373, plotH: 194, bars: b, labels, lines: [179], bottomSlack: 8 });
     expect(avg).not.toBeNull();
     expect(low).not.toBeNull();
     expect(overlap(avg!.box, low!.box)).toBe(false);
+    // 선 위 자리(171~187)는 현재가선(179)을 끊는다 → 선 아래
+    expect(low!.box.top).toBeGreaterThan(184);
+    expect(low!.box.bottom).toBeLessThanOrEqual(194 + 8);
     // 최신 봉(오른쪽 끝 LABEL_GUARD_BARS 개)은 물론 어떤 봉도 덮지 않는다
     expect(hitsBars(low!.box, b.slice(-LABEL_GUARD_BARS))).toBe(0);
     expect(hitsBars(low!.box, b)).toBe(0);
@@ -221,6 +225,30 @@ describe("그림 안쪽 글자 자리 (placeInsideLabels)", () => {
     expect(s!.box.top).toBeGreaterThan(100);
     const [t2] = place(bars(() => [150, 190]), [{ y: 100, text: "평단 18,599", prefer: "left", keep: true }]);
     expect(t2!.box.bottom).toBeLessThan(100);
+  });
+
+  it("현재가선이 가로지르는 자리는 봉 몇 개를 덮는 자리보다 나쁘고, 그런 자리밖에 없으면 52주 글자는 뺀다 (평단은 남긴다)", () => {
+    // 52주 최저선 y 184 · 현재가선 179 · 그림 높이 194: 선 위 자리(171~187)는 현재가선을 끊고, 선 아래(186~199)는 그림 밖
+    const low = { y: 184, text: "52주 최저", prefer: "right" as const };
+    expect(place([], [low], { plotH: 194, lines: [179] })[0]).toBeNull();
+    // 가격 칸 아래 틈을 주면 선 아래
+    expect(place([], [low], { plotH: 194, lines: [179], bottomSlack: 8 })[0]!.box.top).toBeGreaterThan(184);
+    // 평단은 빼지 않는다 (현재가선을 끊더라도)
+    expect(place([], [{ ...low, text: "평단 13,000", keep: true }], { plotH: 194, lines: [179] })[0]).not.toBeNull();
+    // 선 위는 어디든 현재가선(95)을 끊고, 선 아래는 어디든 지난 봉 몇 개(8개 미만)를 덮는다 → 선 아래 (예전 점수로는 현재가선 3점 < 봉 6개라 선 위)
+    const b = bars(() => [105, 120]);
+    const [s] = place(b, [{ y: 100, text: "52주 최고", prefer: "right" }], { lines: [95] });
+    expect(s).not.toBeNull();
+    expect(s!.box.top).toBeGreaterThan(95);
+  });
+
+  it("plotTop(과거 구간 안내 버튼 자리) 위로는 글자 상자를 놓지 않는다", () => {
+    // 선 y 45: 선 위 자리(31~44)는 버튼 자리(0~40)에 걸린다 → 선 아래
+    const [s] = place(base, [{ y: 45, text: "52주 최고", prefer: "right" }], { plotTop: 40 });
+    expect(s!.box.top).toBeGreaterThanOrEqual(40);
+    expect(s!.ty).toBe(57);
+    // 버튼 자리가 없으면 예전처럼 선 위
+    expect(place(base, [{ y: 45, text: "52주 최고", prefer: "right" }])[0]!.ty).toBe(41);
   });
 
   it("벗어난 이동평균 표시(글자 앞 색 네모 lead)는 상자가 그만큼 넓고 늘 왼쪽 맞춤, 평단 글자와 나란히 겹치지 않게", () => {
