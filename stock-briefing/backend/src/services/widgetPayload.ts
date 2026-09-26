@@ -105,6 +105,8 @@ export interface WidgetFeatures {
   widgetPolish?: boolean;
   /** 연장 세션(프리·애프터·주간거래)도 장중처럼 갱신·'지연' 판단 (없으면 새 앱은 꺼짐 — 예전처럼 휴장 규칙) */
   widgetExtended?: boolean;
+  /** 폴드 위젯 크기 맞추기 — 넓은 모습은 위젯 폭 560dp 이상만 (위젯 2차, 앱만 — 서버는 전하기만 한다. 없으면 새 앱은 꺼짐 — 예전 그림 그대로) */
+  widgetFoldFit?: boolean;
 }
 
 export interface WidgetPayload {

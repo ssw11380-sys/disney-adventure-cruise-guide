@@ -64,7 +64,8 @@ export function WidgetBridge() {
   const restoring = useIsRestoring();
   const fetchedThisSession = !restoring && dataAt > mountedAt;
   // 플래그가 바뀌어도 바로 (손익 전환·지수 줄이 켜지고 꺼지는 것을 1분 기다리지 않게)
-  const flagKey = features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}|${features.flags.polish}` : "";
+  // 폴드 위젯 2차(widgetFoldFit — 넓은 모습 폭 규칙)도 넣는다 — 켜고 끄면 위젯을 바로 그 규칙으로 다시 그리게
+  const flagKey = features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}|${features.flags.polish}|${features.flags.foldFit === true}` : "";
   // 브리핑 목록이 바뀌면 바로 (다시 만들기·새 브리핑). 다듬은 모습이 꺼져 있으면 넣지 않는다 — 지금처럼 브리핑 때문에 넘기지 않게.
   // 목록(성공한 최신 브리핑의 id·만든 시각)만 보고 시세는 보지 않는다: 3종목을 고르는 순서(원화 평가금액)를 넣으면 금액이 비슷한 두 종목이
   // 체결마다 뒤집힐 때마다 1분 규칙을 건너뛰고 넘긴다 (검증 지적). 시세 때문에 바뀐 순서·구성은 다음 1분 넘김(그때 시세로 고름)에 따라간다

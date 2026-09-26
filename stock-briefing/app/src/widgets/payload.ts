@@ -81,7 +81,7 @@ export interface WidgetPayload {
   brief?: WidgetBrief;
 }
 
-/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended) */
+/** 위젯 기능 플래그 (서버 featureService 의 widgetPnlToggle·widgetIndexLine·widgetMarket·widgetPolish·widgetExtended·widgetFoldFit) */
 export interface WidgetFeatures {
   /** 합계 옆 손익을 눌러 누적·당일 전환 */
   pnlToggle: boolean;
@@ -96,6 +96,12 @@ export interface WidgetFeatures {
    * 꺼짐·모름은 칸이 없어 예전에 적어 둔 값·예전 모양과 같다 (fallback false)
    */
   extended?: boolean;
+  /**
+   * 폴드 위젯 크기 맞추기 (widgetFoldFit, 위젯 2차): 넓은 모습(잔고 평가금액 칸·두 열, 지수·환율 옆 칸)은 위젯 폭이
+   * WIDE_EXTRAS_MIN_DP(560dp — 폴드8 바깥 화면 4x2 약 507~516dp 보다 넓게) 이상일 때만 (layout.ts wideExtrasOk — 폭 하나로만).
+   * 위젯 크기 진단 기록(sizeLog.ts)도 켜져 있을 때만 적는다. 켜져 있을 때만 true 칸이 있다 (fallback false — 꺼짐·모름은 예전 그림 그대로)
+   */
+  foldFit?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -109,6 +115,7 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     market: featureOn(flags, "widgetMarket", false),
     polish: featureOn(flags, "widgetPolish", false),
     ...(featureOn(flags, "widgetExtended", false) ? { extended: true } : {}),
+    ...(featureOn(flags, "widgetFoldFit", false) ? { foldFit: true } : {}),
   };
 }
 

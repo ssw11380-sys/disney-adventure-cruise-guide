@@ -1,0 +1,557 @@
+import React from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { holding, quote } from "./helpers";
+
+/**
+ * 위젯 2차 (A): 갱신이 한 번 실패하면 휴장·주말에도 다음 자동 갱신(백그라운드 작업 약 15분)이 다시 묻는다.
+ * 예전: 휴장 중에는 받아 둔 응답을 2시간까지 다시 써서(백그라운드 작업은 건너뛰고, 위젯 주기·크기 변경 갱신은 재사용)
+ * 잠깐의 실패('갱신 실패 · 연결 안 됨')가 한 위젯에 최대 2시간 남았다 (2026-09-26 토 10:32 폴드8 캡처 — 지수·환율 위젯만 실패, 잔고 위젯은 멀쩡).
+ * 성공하면 위젯 4종의 '갱신 실패'를 모두 지우고, 그 뒤로는 휴장 2시간 재사용 그대로 (서버 호출이 늘지 않는다).
+ * 위젯이 스스로 하는 갱신(주기·크기 변경·추가)은 실패 뒤에도 예전처럼 받아 둔 응답을 다시 쓸 수 있으면 쓴다 — 접고 펼 때 위젯 4종이
+ * 한꺼번에 서버에 묻거나, 연결이 나쁠 때 멀쩡한 위젯까지 '갱신 실패'로 바뀌지 않게 (검증 지적). 시각은 모두 고정 시계
+ */
+
+const lib = (p: string) => import(/* @vite-ignore */ p);
+const shared = vi.hoisted(() => ({
+  widgets: {} as Record<string, { width: number; height: number }[]>,
+  updates: [] as { widgetName: string; rendered: unknown }[],
+}));
+
+vi.mock("react-native-android-widget", async () => {
+  const load = (p: string) => import(/* @vite-ignore */ p);
+  const base = "react-native-android-widget/lib/commonjs/widgets/";
+  const [flex, text, list] = await Promise.all([load(`${base}FlexWidget.js`), load(`${base}TextWidget.js`), load(`${base}ListWidget.js`)]);
+  return {
+    FlexWidget: flex.FlexWidget,
+    TextWidget: text.TextWidget,
+    ListWidget: list.ListWidget,
+    getWidgetInfo: async (name: string) => (shared.widgets[name] ?? []).map((b) => ({ widgetName: name, widgetId: 1, ...b })),
+    requestWidgetUpdate: async ({ widgetName, renderWidget }: { widgetName: string; renderWidget: (i: unknown) => unknown }) => {
+      for (const box of shared.widgets[widgetName] ?? []) {
+        shared.updates.push({ widgetName, rendered: await renderWidget({ widgetName, widgetId: 1, ...box, screenInfo: {} }) });
+      }
+    },
+  };
+});
+vi.mock("react-native", () => ({ Platform: { OS: "android" }, PixelRatio: { getFontScale: () => 1 } }));
+vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: { apiUrl: "https://server.test" } } } }));
+vi.mock("expo-notifications", () => ({ getPermissionsAsync: async () => ({ status: "granted" }), requestPermissionsAsync: async () => ({ status: "granted" }), scheduleNotificationAsync: async () => undefined }));
+vi.mock("expo-background-task", () => ({
+  getStatusAsync: async () => 1,
+  registerTaskAsync: async () => undefined,
+  unregisterTaskAsync: async () => undefined,
+  BackgroundTaskStatus: { Restricted: 0, Available: 1 },
+  BackgroundTaskResult: { Success: 1, Failed: 2 },
+}));
+vi.mock("expo-task-manager", () => ({ isTaskDefined: () => true, defineTask: () => undefined, isTaskRegisteredAsync: async () => false }));
+vi.mock("@/lib/notifications", () => ({ ANDROID_CHANNEL: "briefings", ensureAndroidChannel: async () => undefined }));
+const store = new Map<string, string>();
+/** 실패 표시(widget.retry) 읽기를 붙잡아 두는 곳 — 읽은 값은 붙잡기 전에 정해진다 (지우는 쪽이 읽은 뒤 지우기 전에 다른 조회가 적는 경합 재현) */
+const hold = vi.hoisted(() => ({ key: null as string | null, gate: null as Promise<void> | null, held: 0 }));
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: async (k: string) => {
+      const v = store.get(k) ?? null;
+      if (hold.key === k && hold.gate) {
+        hold.held++;
+        const gate = hold.gate;
+        hold.key = null;
+        await gate;
+      }
+      return v;
+    },
+    setItem: async (k: string, v: string) => void store.set(k, v),
+    removeItem: async (k: string) => void store.delete(k),
+    multiGet: async (keys: string[]) => keys.map((k) => [k, store.get(k) ?? null]),
+  },
+}));
+
+const { buildWidgetTree } = await lib("react-native-android-widget/lib/commonjs/api/build-widget-tree.js");
+const { WIDGET_NAMES } = await import("@/widgets/widgets");
+const { widgetTaskHandler } = await import("@/widgets/widgetTaskHandler");
+const { loadWidgetData, pendingRetry, RETRY_SKEW_MS } = await import("@/widgets/data");
+const { runBriefingCheck } = await import("@/lib/backgroundBriefings");
+const { readWidgetRefreshLog } = await import("@/lib/widgetRefreshLog");
+
+interface Tree {
+  type: string;
+  props: Record<string, unknown> & { text?: string };
+  children?: Tree[];
+}
+const nodes = (t: Tree): Tree[] => [t, ...(t.children ?? []).flatMap(nodes)];
+const words = (r: unknown) =>
+  nodes(buildWidgetTree((r as { dark: React.JSX.Element }).dark) as Tree)
+    .filter((n) => n.type === "TextWidget")
+    .map((n) => String(n.props.text));
+const FAIL = "갱신 실패 · 연결 안 됨";
+
+const API = "https://server.test";
+const WIDGET_URL = `${API}/api/widget?indices=1&sessions=1&ui=2`;
+const BOARD_URL = `${WIDGET_URL}&board=1`;
+const BOX = { width: 420, height: 260 };
+/** 2026-09-26(토) KST 시각 — 두 시장 모두 휴장 (다음 개장 월 08:00) */
+const S = (hm: string) => Date.parse(`2026-09-26T${hm}:00+09:00`);
+const WEEKEND = { label: "주말 휴장", open: false, kr: false, us: false, nextChangeAt: "2026-09-27T23:00:00.000Z" };
+const BOARD = [
+  { code: "KOSPI", name: "코스피", value: 7080.92, change: 63.01, changeRate: 0.9, open: false },
+  { code: "NASDAQ", name: "나스닥", value: 27068.72, change: 129.34, changeRate: 0.48, open: false },
+  { code: "USDKRW", name: "원/달러", value: 1359, change: 3.5, changeRate: 0.26, open: false },
+];
+type Q = [number, number, number, "KRW" | "USD", string, number | null, 0 | 1];
+type E = [number, number, number | null, number | null, "exact" | "estimated" | null];
+/** 서버 /api/widget 응답 (주말): 삼성전자 10주. 판은 &board=1 로 물은 요청에만 */
+const body = (board: boolean) => ({
+  v: 1 as const,
+  market: WEEKEND,
+  stocks: [{ c: "005930", n: "삼성전자", qty: 10, avg: 80_000, q: [70_000, 100, 0.14, "KRW", "2026-09-25T15:30:00+09:00", null, 0] as Q, e: [700_000, 800_000, null, null, null] as E }],
+  briefings: [{ id: 3, code: "005930", name: "삼성전자", session: "afternoon", date: "2026-09-25", summary: "첫 줄", createdAt: "2026-09-25T16:05:00+09:00" }],
+  latestIds: [3],
+  features: { widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetExtended: true },
+  ...(board ? { board: BOARD } : {}),
+});
+const serve = (urls: string[] = []) => {
+  vi.stubGlobal("fetch", async (url: string) => {
+    urls.push(url);
+    return new Response(JSON.stringify(body(url.includes("board=1"))), { status: 200, headers: { etag: `"${urls.length}"`, "content-type": "application/json" } });
+  });
+  return urls;
+};
+const offline = (urls: string[] = []) => {
+  vi.stubGlobal("fetch", async (url: string) => {
+    urls.push(url);
+    throw new TypeError("Network request failed");
+  });
+  return urls;
+};
+const info = (name: string) => ({ widgetName: name, widgetId: 7, ...BOX, screenInfo: { screenHeightDp: 800, screenWidthDp: 400, density: 3, densityDpi: 480 } });
+const run = async (props: Record<string, unknown>) => {
+  const rendered: unknown[] = [];
+  await widgetTaskHandler({ renderWidget: (r: unknown) => void rendered.push(r), ...props } as never);
+  return rendered;
+};
+const ALL = [WIDGET_NAMES.holdings, WIDGET_NAMES.asset, WIDGET_NAMES.briefing, WIDGET_NAMES.market];
+const placeAll = () => (shared.widgets = Object.fromEntries(ALL.map((n) => [n, [BOX]])));
+/** 마지막으로 그린 위젯마다 '갱신 실패'가 보이는지 */
+const failing = () => Object.fromEntries(ALL.map((n) => [n, shared.updates.filter((u) => u.widgetName === n).length ? words(shared.updates.filter((u) => u.widgetName === n).at(-1)!.rendered).some((w) => w.includes("갱신 실패")) : null]));
+
+beforeEach(() => {
+  store.clear();
+  hold.key = null;
+  hold.gate = null;
+  hold.held = 0;
+  shared.widgets = {};
+  shared.updates = [];
+  vi.useFakeTimers();
+  vi.setSystemTime(S("09:50"));
+});
+
+describe("위젯 2차 (A): 실패하면 휴장에도 약 15분 뒤 다시 묻는다", () => {
+  it("재현: 토 10:00 지수·환율 ↻ 실패 → 10:15 백그라운드 작업이 다시 묻고, 성공하면 위젯 4종 모두 '갱신 실패'가 없다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck(); // 09:50 성공 (받아 둔 응답 — 주말이라 2시간까지 다시 쓴다)
+    vi.setSystemTime(S("10:00"));
+    offline();
+    const r = await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(words(r.at(-1))).toContain(FAIL);
+    // 10:15 백그라운드 작업: 예전에는 09:50 응답이 2시간 안이라 건너뛰어 12:00 까지 '갱신 실패'가 남았다
+    vi.setSystemTime(S("10:15"));
+    shared.updates = [];
+    const urls = serve();
+    await runBriefingCheck();
+    expect(urls).toEqual([BOARD_URL]);
+    expect(failing()).toEqual({ [WIDGET_NAMES.holdings]: false, [WIDGET_NAMES.asset]: false, [WIDGET_NAMES.briefing]: false, [WIDGET_NAMES.market]: false });
+    expect(await pendingRetry()).toBeNull();
+    expect((await readWidgetRefreshLog()).at(-1)).toMatchObject({ s: "background", r: "ok", t: S("10:15") });
+  });
+
+  it("성공한 뒤에는 휴장 2시간 재사용 그대로: 10:30 백그라운드 작업은 건너뛰고, 10:45 위젯 주기·크기 변경 갱신은 받아 둔 응답을 다시 쓴다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    vi.setSystemTime(S("10:15"));
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:30"));
+    const later = serve();
+    await runBriefingCheck();
+    expect(later).toEqual([]);
+    expect((await readWidgetRefreshLog()).at(-1)).toMatchObject({ s: "background", r: "skipped" });
+    vi.setSystemTime(S("10:45"));
+    await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_UPDATE" });
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_RESIZED" });
+    expect(later).toEqual([]);
+  });
+
+  it("실패가 없으면 예전과 같다: 토 10:15 백그라운드 작업은 09:50 응답을 두고 건너뛴다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:15"));
+    const urls = serve();
+    await runBriefingCheck();
+    expect(urls).toEqual([]);
+  });
+
+  it("재현: 판 없이 받아 둔 응답에 10:00 지수·환율 위젯을 놓다 실패(추가) → 10:15 백그라운드 작업이 판과 함께 다시 묻는다", async () => {
+    // 09:50 에는 지수·환율 위젯이 없어 판 없이 받았다
+    shared.widgets = { [WIDGET_NAMES.holdings]: [BOX] };
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    shared.widgets = { [WIDGET_NAMES.holdings]: [BOX], [WIDGET_NAMES.market]: [BOX] };
+    const calls = offline();
+    const r = await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_ADDED" });
+    expect(calls).toEqual([BOARD_URL]);
+    expect(words(r.at(-1))).toContain(FAIL);
+    vi.setSystemTime(S("10:15"));
+    shared.updates = [];
+    const urls = serve();
+    await runBriefingCheck();
+    expect(urls).toEqual([BOARD_URL]);
+    const market = words(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.market)!.rendered);
+    expect(market.join(" ")).not.toContain("갱신 실패");
+    expect(market).toContain("7,080.92");
+  });
+
+  it("실패 뒤 위젯이 스스로 서버에서 받아도(10:06 잔고 ↻) 성공하면 다른 위젯의 '갱신 실패'까지 지운다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    vi.setSystemTime(S("10:06"));
+    shared.updates = [];
+    const urls = serve();
+    const r = await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(urls).toEqual([WIDGET_URL]);
+    expect(words(r.at(-1)).join(" ")).not.toContain("갱신 실패");
+    expect(shared.updates.map((u) => u.widgetName).sort()).toEqual([...ALL].sort());
+    expect(failing()[WIDGET_NAMES.market]).toBe(false);
+    expect(await pendingRetry()).toBeNull();
+    // 다음 크기 변경은 다시 받아 둔 응답 (한 번만 물었다)
+    await run({ widgetInfo: info(WIDGET_NAMES.asset), widgetAction: "WIDGET_RESIZED" });
+    expect(urls).toEqual([WIDGET_URL]);
+  });
+
+  it("검증 지적: 실패 뒤 접고 펴도(크기 변경 알림 4개) 받아 둔 응답을 다시 쓸 수 있으면 서버에 한꺼번에 묻지 않고, 연결이 나빠도 멀쩡한 위젯에 '갱신 실패'가 번지지 않는다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck(); // 09:50 판과 함께 받아 둠
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    vi.setSystemTime(S("10:05"));
+    const urls = offline();
+    const rendered = await Promise.all(ALL.map((n) => run({ widgetInfo: info(n), widgetAction: "WIDGET_RESIZED" })));
+    expect(urls).toEqual([]);
+    for (const r of rendered) expect(words(r.at(-1)).join(" ")).not.toContain("갱신 실패");
+    expect(words(rendered[0]!.at(-1))).toContain("700,000원");
+    // 실패 표시는 그대로 — 10:15 백그라운드 작업이 다시 묻는다
+    expect(await pendingRetry()).toBe(S("10:00"));
+    vi.setSystemTime(S("10:15"));
+    await runBriefingCheck();
+    expect(urls).toEqual([BOARD_URL]);
+  });
+
+  it("아직 연결이 안 되면 백그라운드 작업마다 다시 묻고 실패 표시를 새 시각으로 둔다 (마지막 숫자는 지우지 않는다)", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    const first = await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(words(first.at(-1)).join(" ")).toContain("갱신 실패");
+    expect(words(first.at(-1))).toContain("700,000원");
+    expect(await pendingRetry()).toBe(S("10:00"));
+    vi.setSystemTime(S("10:15"));
+    const urls = offline();
+    await runBriefingCheck();
+    expect(urls).toEqual([BOARD_URL]);
+    expect(await pendingRetry()).toBe(S("10:15"));
+    expect((await readWidgetRefreshLog()).at(-1)).toMatchObject({ s: "background", r: "failed" });
+    vi.setSystemTime(S("10:30"));
+    await runBriefingCheck();
+    expect(urls).toEqual([BOARD_URL, BOARD_URL]);
+  });
+
+  it("검증 지적: 여러 위젯이 한꺼번에 받는 데 성공해도 '갱신 실패'를 지우는 다시 그리기는 한 번", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    vi.setSystemTime(S("10:05"));
+    shared.updates = [];
+    const urls = serve();
+    await Promise.all([WIDGET_NAMES.holdings, WIDGET_NAMES.asset, WIDGET_NAMES.market].map((n) => run({ widgetInfo: info(n), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" })));
+    expect(urls).toHaveLength(3);
+    // 다시 그리기(requestWidgetUpdate)는 위젯 4종 한 번씩만 (예전: 성공마다 4종 — 최대 4×4)
+    expect(shared.updates.map((u) => u.widgetName).sort()).toEqual([...ALL].sort());
+    expect(failing()[WIDGET_NAMES.market]).toBe(false);
+    expect(await pendingRetry()).toBeNull();
+  });
+
+  it("검증 지적: 성공한 조회가 시작된 뒤에 다른 위젯이 실패하면 실패 표시를 남겨 다음 백그라운드 작업이 다시 묻는다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    // 10:05:00 잔고 ↻ 가 서버에 묻는 동안(응답을 붙잡아 둠) 10:05:30 지수·환율 ↻ 가 실패
+    vi.setSystemTime(S("10:05"));
+    shared.updates = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      if (url.includes("board=1")) throw new TypeError("Network request failed");
+      await gate;
+      return new Response(JSON.stringify(body(false)), { status: 200, headers: { etag: '"9"', "content-type": "application/json" } });
+    });
+    const slow = run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    for (let k = 0; k < 500 && !urls.includes(WIDGET_URL); k++) await Promise.resolve();
+    expect(urls).toEqual([WIDGET_URL]);
+    vi.setSystemTime(S("10:05") + 30_000);
+    const failed = await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(words(failed.at(-1))).toContain(FAIL);
+    release();
+    const ok = await slow;
+    expect(words(ok.at(-1)).join(" ")).not.toContain("갱신 실패");
+    // 표시가 남음 (10:05:30 > 10:05:00) — 지수·환율 위젯의 '갱신 실패'를 다른 위젯 성공이 모르고 지우지 않았다
+    expect(await pendingRetry()).toBe(S("10:05") + 30_000);
+    expect(shared.updates).toHaveLength(0);
+    vi.setSystemTime(S("10:20"));
+    const later = serve();
+    await runBriefingCheck();
+    expect(later).toEqual([BOARD_URL]);
+    expect(await pendingRetry()).toBeNull();
+    expect(failing()[WIDGET_NAMES.market]).toBe(false);
+  });
+
+  it("검증 지적 재현: 성공한 조회가 실패 표시를 읽은 뒤 지우기 전에 다른 위젯이 실패해 새 표시를 적어도, 새 표시는 지워지지 않는다 (읽고 지우기를 한 줄로)", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(await pendingRetry()).toBe(S("10:00"));
+    // 10:05 잔고 ↻ 는 성공하고, 실패 표시(10:00 — 시작 전에 적힌 것)를 읽는 순간 붙잡아 둔다
+    vi.setSystemTime(S("10:05"));
+    shared.updates = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.includes("board=1")) throw new TypeError("Network request failed");
+      return new Response(JSON.stringify(body(false)), { status: 200, headers: { etag: '"9"', "content-type": "application/json" } });
+    });
+    let release!: () => void;
+    hold.gate = new Promise<void>((resolve) => (release = resolve));
+    hold.key = "widget.retry";
+    const ok = run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    for (let k = 0; k < 2000 && hold.held === 0; k++) await Promise.resolve();
+    expect(hold.held).toBe(1);
+    // 그 사이 10:05:30 지수·환율 ↻ 가 실패해 새 표시를 적으려 한다 (예전: 곧바로 적고, 붙잡힌 쪽이 옛 값을 보고 새 표시까지 지웠다)
+    vi.setSystemTime(S("10:05") + 30_000);
+    const failed = run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    for (let k = 0; k < 2000; k++) await Promise.resolve();
+    release();
+    const [okR, failedR] = await Promise.all([ok, failed]);
+    expect(words(okR.at(-1)).join(" ")).not.toContain("갱신 실패");
+    expect(words(failedR.at(-1))).toContain(FAIL);
+    // 새 표시가 남아 다음 백그라운드 작업(휴장이라도)이 다시 묻고, 성공하면 지운다
+    expect(await pendingRetry()).toBe(S("10:05") + 30_000);
+    vi.setSystemTime(S("10:20"));
+    const later = serve();
+    await runBriefingCheck();
+    expect(later).toEqual([BOARD_URL]);
+    expect(await pendingRetry()).toBeNull();
+  });
+
+  it("검증 지적: 성공한 조회가 시작된 바로 그 밀리초에 다른 위젯이 실패해도 그 실패 표시는 남긴다 (시작 시각과 같아도 지우지 않음)", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    // 10:05:00.000 잔고 ↻ 가 서버에 묻는 동안(응답을 붙잡아 둠) 같은 밀리초에 지수·환율 ↻ 가 실패
+    vi.setSystemTime(S("10:05"));
+    shared.updates = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      if (url.includes("board=1")) throw new TypeError("Network request failed");
+      await gate;
+      return new Response(JSON.stringify(body(false)), { status: 200, headers: { etag: '"9"', "content-type": "application/json" } });
+    });
+    const slow = run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    for (let k = 0; k < 500 && !urls.includes(WIDGET_URL); k++) await Promise.resolve();
+    expect(urls).toEqual([WIDGET_URL]);
+    const failed = await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(words(failed.at(-1))).toContain(FAIL);
+    expect(await pendingRetry()).toBe(S("10:05"));
+    release();
+    const ok = await slow;
+    expect(words(ok.at(-1)).join(" ")).not.toContain("갱신 실패");
+    // 예전(시작 시각보다 늦을 때만 남김): 같은 밀리초의 실패 표시를 지워, 휴장이면 지수·환율 위젯의 '갱신 실패'가 최대 2시간 남았다
+    expect(await pendingRetry()).toBe(S("10:05"));
+    expect(shared.updates).toHaveLength(0);
+  });
+
+  it("검증 지적: 기기 시계가 앞서 있을 때 적힌 실패 표시(지금보다 5분 넘게 뒤)는 깨진 표시로 보고 다음 성공이 지운다 — 위젯 4종을 다시 그리고 휴장 재사용으로 돌아간다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck(); // 09:50
+    // 10:00 지수·환율 ↻ 실패 — 그때 기기 시계가 하루 앞서 있었다 (표시 시각 = 내일 10:00). 그 뒤 시계가 바로잡힘
+    vi.setSystemTime(S("10:00") + 86_400_000);
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(await pendingRetry()).toBe(S("10:00") + 86_400_000);
+    vi.setSystemTime(S("10:15"));
+    shared.updates = [];
+    const urls = serve();
+    await runBriefingCheck();
+    expect(urls).toEqual([BOARD_URL]);
+    // 예전: 표시 시각(내일)이 이 조회 시작보다 늦어 어떤 성공도 지우지 못했다 — 내일 10:00 까지 휴장에도 15분마다 묻기
+    expect(await pendingRetry()).toBeNull();
+    expect(failing()).toEqual({ [WIDGET_NAMES.holdings]: false, [WIDGET_NAMES.asset]: false, [WIDGET_NAMES.briefing]: false, [WIDGET_NAMES.market]: false });
+    vi.setSystemTime(S("10:30"));
+    const later = serve();
+    await runBriefingCheck();
+    expect(later).toEqual([]);
+    // 위젯 ↻ 가 지워도 '갱신 실패'를 지우는 다시 그리기를 한다
+    store.set("widget.retry", JSON.stringify({ at: S("10:30") + 86_400_000, apiUrl: API }));
+    shared.updates = [];
+    await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(await pendingRetry()).toBeNull();
+    expect(shared.updates.map((u) => u.widgetName).sort()).toEqual([...ALL].sort());
+  });
+
+  it("시계 어긋남 한도: 지금보다 5분 뒤까지의 표시는 진짜 실패로 보고(이 조회 뒤에 적힌 것) 남기고, 그보다 뒤면 지운다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:05"));
+    expect(RETRY_SKEW_MS).toBe(5 * 60_000);
+    for (const [ahead, kept] of [
+      [60_000, true],
+      [RETRY_SKEW_MS, true],
+      [RETRY_SKEW_MS + 1, false],
+    ] as const) {
+      store.set("widget.retry", JSON.stringify({ at: S("10:05") + ahead, apiUrl: API }));
+      await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+      expect(await pendingRetry(), `${ahead}ms 뒤`).toBe(kept ? S("10:05") + ahead : null);
+    }
+  });
+
+  it("검증 지적 재현: 실패 뒤 첫 성공의 '위젯 4종 다시 그리기'는 이 조회가 받은 값으로 — 함께 돌던 조회가 그사이 저장한 '갱신 실패' 화면이 모든 위젯에 번지지 않는다", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(await pendingRetry()).toBe(S("10:00"));
+    // 10:04:50 지수·환율 ↻(E)가 서버에 묻는 동안 붙잡아 둔다 (끝내 실패)
+    vi.setSystemTime(S("10:04") + 50_000);
+    shared.updates = [];
+    let failE!: () => void;
+    const gateE = new Promise<void>((resolve) => (failE = resolve));
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      if (url.includes("board=1")) {
+        await gateE;
+        throw new TypeError("Network request failed");
+      }
+      return new Response(JSON.stringify(body(false)), { status: 200, headers: { etag: '"9"', "content-type": "application/json" } });
+    });
+    const e = run({ widgetInfo: info(WIDGET_NAMES.market), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    for (let k = 0; k < 2000 && !urls.includes(BOARD_URL); k++) await Promise.resolve();
+    expect(urls).toEqual([BOARD_URL]);
+    // 10:05 잔고 ↻(A)는 성공: 받은 값을 저장한 뒤 실패 표시(10:00 — 시작 전에 적힌 것)를 읽는 순간 붙잡아 둔다
+    vi.setSystemTime(S("10:05"));
+    let releaseA!: () => void;
+    hold.gate = new Promise<void>((resolve) => (releaseA = resolve));
+    hold.key = "widget.retry";
+    const a = run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    for (let k = 0; k < 2000 && hold.held === 0; k++) await Promise.resolve();
+    expect(hold.held).toBe(1);
+    // 그 사이 E 가 실패해 '갱신 실패' 화면을 저장한다 (E 의 실패 표시는 A 가 지운 뒤에 적힌다 — 한 줄로)
+    failE();
+    for (let k = 0; k < 2000; k++) await Promise.resolve();
+    releaseA();
+    const [aR, eR] = await Promise.all([a, e]);
+    expect(words(eR.at(-1))).toContain(FAIL);
+    expect(words(aR.at(-1)).join(" ")).not.toContain("갱신 실패");
+    // A 가 위젯 4종을 한 번씩 다시 그렸고, 어느 것에도 '갱신 실패'가 없다 (예전: 저장해 둔 값 = E 의 실패 화면으로 그려 4종 모두 '갱신 실패')
+    expect(shared.updates.map((u) => u.widgetName).sort()).toEqual([...ALL].sort());
+    expect(failing()).toEqual({ [WIDGET_NAMES.holdings]: false, [WIDGET_NAMES.asset]: false, [WIDGET_NAMES.briefing]: false, [WIDGET_NAMES.market]: false });
+    expect(words(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.holdings)!.rendered)).toContain("700,000원");
+    // E 의 실패 표시는 남아 다음 백그라운드 작업이 다시 묻는다
+    expect(await pendingRetry()).toBe(S("10:05"));
+    vi.setSystemTime(S("10:20"));
+    const later = serve();
+    await runBriefingCheck();
+    expect(later).toEqual([BOARD_URL]);
+    expect(await pendingRetry()).toBeNull();
+  });
+
+  it("예전 서버(예전 API)에서 실패 뒤 첫 성공: 이 조회가 묻지 않은 반쪽(브리핑)은 마지막으로 그린 것으로 채워 다시 그린다 — 브리핑 위젯이 빈 목록으로 바뀌지 않는다", async () => {
+    placeAll();
+    const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+    const legacy = () =>
+      vi.stubGlobal("fetch", async (url: string) => {
+        if (url.includes("/api/widget")) return json({ error: "NOT_FOUND" }, 404);
+        if (url.includes("/api/stocks")) return json([holding("005930", quote("005930", 70_000, { change: 100, changeRate: 0.14, asOf: "2026-09-25T15:30:00+09:00" }), 10, 80_000, undefined, "삼성전자")]);
+        if (url.includes("/api/briefings/latest"))
+          return json([
+            {
+              code: "005930",
+              name: "삼성전자",
+              latest: { id: 3, code: "005930", name: "삼성전자", session: "afternoon", date: "2026-09-25", status: "ok", summary: "예전 서버 첫 줄", detail: "", missing: [], model: "m", error: null, createdAt: "2026-09-25T16:05:00+09:00" },
+            },
+          ]);
+        throw new Error(`모르는 요청 ${url}`);
+      });
+    legacy();
+    await runBriefingCheck(); // 09:50 예전 API 로 잔고·브리핑
+    const briefingWords = () => words(shared.updates.filter((u) => u.widgetName === WIDGET_NAMES.briefing).at(-1)!.rendered).join(" ");
+    expect(briefingWords()).toContain("예전 서버 첫 줄");
+    vi.setSystemTime(S("10:00"));
+    offline();
+    await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(await pendingRetry()).toBe(S("10:00"));
+    // 10:05 잔고 ↻ 성공 (예전 API 로 잔고만 묻는다)
+    vi.setSystemTime(S("10:05"));
+    shared.updates = [];
+    legacy();
+    await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" });
+    expect(await pendingRetry()).toBeNull();
+    expect(shared.updates.map((u) => u.widgetName).sort()).toEqual([...ALL].sort());
+    expect(failing()).toEqual({ [WIDGET_NAMES.holdings]: false, [WIDGET_NAMES.asset]: false, [WIDGET_NAMES.briefing]: false, [WIDGET_NAMES.market]: false });
+    expect(briefingWords()).toContain("예전 서버 첫 줄");
+  });
+
+  it("다른 서버 주소에서 난 실패 표시는 쓰지 않는다 (주소를 바꾸면 예전 규칙)", async () => {
+    placeAll();
+    serve();
+    await runBriefingCheck();
+    store.set("widget.retry", JSON.stringify({ at: S("10:00"), apiUrl: "https://old.test" }));
+    expect(await pendingRetry()).toBeNull();
+    vi.setSystemTime(S("10:15"));
+    const urls = serve();
+    await runBriefingCheck();
+    await loadWidgetData({ stocks: true, briefings: false, reuse: true });
+    expect(urls).toEqual([]);
+  });
+});

@@ -6,7 +6,7 @@ import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { carryBriefingsIntoPayload, loadCachedWidgetData, pushWidgetData, readCachedPayload, readPnlMode, saveWidgetView, withLastGood } from "./data";
 import { fontScaleNow } from "./fontScale";
 import type { WidgetFeatures, WidgetIndex, WidgetMarket } from "./payload";
-import { renderBoth } from "./render";
+import { renderFor } from "./render";
 import { WIDGET_NAMES } from "./widgets";
 
 /** 환율을 모르는 달러 시세의 원화 환산 (서버 widgetPayload krwValue 와 같은 값) */
@@ -92,7 +92,7 @@ export async function refreshBriefingWidget(app: { at: number; list: readonly La
     const fontScale = fontScaleNow();
     await requestWidgetUpdate({
       widgetName: WIDGET_NAMES.briefing,
-      renderWidget: (info: WidgetInfo) => renderBoth(WIDGET_NAMES.briefing, data, { width: info.width, height: info.height, fontScale, now: Date.now(), pnlMode }),
+      renderWidget: (info: WidgetInfo) => renderFor(WIDGET_NAMES.briefing, data, info, { fontScale, now: Date.now(), pnlMode }),
     });
   } catch {
     /* 위젯 모듈이 없는 빌드(개발 클라이언트 등)에서는 무시 */
@@ -182,7 +182,7 @@ export async function refreshWidgets({
     const pnlMode = await readPnlMode();
     const fontScale = fontScaleNow();
     // 그리는 시각은 지금 ('지연'·칩 만료·오늘 날짜 판단) — 잔고를 받은 시각이 아니다
-    const draw = (name: string) => (info: WidgetInfo) => renderBoth(name, data, { width: info.width, height: info.height, fontScale, now, pnlMode });
+    const draw = (name: string) => (info: WidgetInfo) => renderFor(name, data, info, { fontScale, now, pnlMode });
     await requestWidgetUpdate({ widgetName: WIDGET_NAMES.holdings, renderWidget: draw(WIDGET_NAMES.holdings) });
     await requestWidgetUpdate({ widgetName: WIDGET_NAMES.asset, renderWidget: draw(WIDGET_NAMES.asset) });
     if (briefings || fromApp) await requestWidgetUpdate({ widgetName: WIDGET_NAMES.briefing, renderWidget: draw(WIDGET_NAMES.briefing) });

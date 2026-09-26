@@ -3,6 +3,7 @@ import * as Device from "expo-device";
 import React, { useEffect, useState } from "react";
 import { Alert, Dimensions, PixelRatio, Pressable, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFeature } from "@/api/hooks";
 import { currentVersion, describeRunningUpdate } from "@/lib/appUpdate";
 import { screenInfoRows, screenInfoText, type ScreenInfoInput } from "@/lib/screenInfo";
 import { font, space, touch, useTheme } from "@/theme";
@@ -10,7 +11,8 @@ import { Button, Card, Muted, Row, SectionTitle } from "./ui";
 
 /**
  * 설정 > 화면 정보 (접는 폰 측정, 접힘). 펴면 모델·창 크기·밀도·글자 배율 등을 보여 주고 '공유'로 글을 넘긴다.
- * 접거나 펴거나 돌리면 창 크기 변경을 받아 숫자가 바로 바뀐다. 줄 만들기는 lib/screenInfo.ts
+ * 접거나 펴거나 돌리면 창 크기 변경을 받아 숫자가 바로 바뀐다. 줄 만들기는 lib/screenInfo.ts.
+ * 공유 글 끝에는 홈 화면 위젯 진단(위젯 2차 — widgets/diagnose.ts)을 붙인다. 플래그 widgetFoldFit 이 켜져 있을 때만 (새 기능, fallback 꺼짐 — 끄면 공유 글이 예전과 같다)
  */
 export function ScreenInfoCard() {
   const t = useTheme();
@@ -67,8 +69,12 @@ function useScreenInfo(): ScreenInfoInput {
 function ScreenInfoBody() {
   const t = useTheme();
   const info = useScreenInfo();
+  const widgetDiag = useFeature("widgetFoldFit", false);
   const share = async () => {
-    const message = screenInfoText(info);
+    // 홈 화면 위젯 진단(위젯 번호·지금 크기·최근 받은 크기 — widgets/diagnose.ts, 그림에는 쓰지 않는 기록)을 끝에 붙인다: 폴드에서 두 화면이 같은 위젯을 쓰는지 폰에서 확인하려고.
+    // 플래그 widgetFoldFit 이 켜져 있을 때만 (꺼져 있으면 읽지도 않는다). 부를 때 읽고, 못 읽으면(위젯 모듈 없음 등) 화면 값만
+    const widgets = widgetDiag ? await import("@/widgets/diagnose").then((m) => m.widgetReport()).catch(() => [] as string[]) : [];
+    const message = [screenInfoText(info), ...widgets].join("\n");
     try {
       await Share.share({ message, title: "화면 정보" });
     } catch {

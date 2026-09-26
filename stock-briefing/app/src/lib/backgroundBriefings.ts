@@ -8,7 +8,7 @@ import { DEFAULT_PREFS, planNotifications, type NotifyPrefs } from "@/lib/briefi
 import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
-import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, readCachedPayload, type WidgetData } from "@/widgets/data";
+import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
 import { failureText } from "@/widgets/model";
 import { payloadMarket, shouldSkipFetch } from "@/widgets/payload";
 import { redrawAllWidgets } from "@/widgets/redraw";
@@ -146,9 +146,10 @@ async function notifyUnseen(latest: LatestBriefing[], opts: NotifyOpts): Promise
 export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskResult> {
   try {
     // 두 시장이 모두 닫혀 있으면 2시간에 한 번만 서버에 묻는다 (휴장 중 위젯 트래픽을 줄이려고, 3-16).
-    // 보유 종목의 연장 세션(미국 프리·애프터·주간거래 등, 칩의 ext — widgetExtended)이 열려 있으면 장중처럼 묻는다 (위젯 리뷰 1)
+    // 보유 종목의 연장 세션(미국 프리·애프터·주간거래 등, 칩의 ext — widgetExtended)이 열려 있으면 장중처럼 묻는다 (위젯 리뷰 1).
+    // 앞선 위젯 갱신(이 작업·위젯 주기·크기 변경·↻)이 실패한 채면 장 상태와 상관없이 묻는다 — '갱신 실패'가 휴장 2시간 동안 남지 않게 (위젯 2차)
     const cached = await readCachedPayload();
-    if (shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, Date.now())) {
+    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, Date.now())) {
       await logWidgetRefresh("background", "skipped");
       return BackgroundTask.BackgroundTaskResult.Success;
     }

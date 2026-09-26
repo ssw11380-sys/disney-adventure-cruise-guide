@@ -3,7 +3,9 @@ import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 import { loadCachedWidgetData, loadWidgetData, readPnlMode, setPnlMode, togglePnlMode, type WidgetData } from "./data";
 import { fontScaleNow } from "./fontScale";
 import { failureText, type PnlMode } from "./model";
-import { errorView, renderBoth } from "./render";
+import { redrawAllWidgets } from "./redraw";
+import { errorView, renderFor } from "./render";
+import { forgetWidgetSize, type SizeSource } from "./sizeLog";
 import { WIDGET_CLICK, WIDGET_NAMES } from "./widgets";
 
 /**
@@ -13,27 +15,35 @@ import { WIDGET_CLICK, WIDGET_NAMES } from "./widgets";
  *  - REFRESH(↻): 저장해 둔 값으로 "갱신 중"을 바로 그리고(1초 안), 서버에서 받은 결과로 다시 그린다 (실패하면 "갱신 실패 …")
  *  - PNL_TOGGLE(손익): 누른 위젯이 보여 주던 쪽의 반대로 바꿔 저장하고, 서버를 부르지 않고 저장해 둔 값으로 바로 다시 그린다.
  *    손익 칸 설정은 잔고 위젯 모두가 같이 쓰므로 다른 잔고 위젯도 같은 쪽으로 다시 그린다
+ *  - 앞선 갱신이 실패한 뒤 이번에 서버에서 받았으면(위젯 2차 — data.recovered) 다른 위젯도 같은 값으로 다시 그려 '갱신 실패'를 모두 지운다
+ *  - 크기는 widgetInfo 그대로 (renderFor). 폴드 위젯 2차(widgetFoldFit)는 넓은 모습을 위젯 폭 하나로만 정하고(render.tsx), 크기는 진단 기록에만 적는다
+ *    (sizeLog.ts — 설정 '화면 정보' 공유 글). 위젯을 지우면 그 기록도 지운다
  */
 export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<void> {
   const { widgetInfo, widgetAction, renderWidget } = props;
-  if (widgetAction === "WIDGET_DELETED") return;
+  if (widgetAction === "WIDGET_DELETED") {
+    await forgetWidgetSize(widgetInfo.widgetId);
+    return;
+  }
   const click = widgetAction === "WIDGET_CLICK" ? props.clickAction : null;
   if (widgetAction === "WIDGET_CLICK" && click !== WIDGET_CLICK.refresh && click !== WIDGET_CLICK.pnlToggle) return;
   const name = widgetInfo.widgetName;
-  const frame = { width: widgetInfo.width, height: widgetInfo.height, fontScale: fontScaleNow() };
+  const fontScale = fontScaleNow();
+  /** 진단 기록에 적는 '크기를 알게 된 길' (sizeLog.ts — 배치에는 쓰지 않음) */
+  const by: SizeSource = widgetAction === "WIDGET_ADDED" ? "add" : widgetAction === "WIDGET_RESIZED" ? "resize" : widgetAction === "WIDGET_CLICK" ? "click" : "update";
   try {
     if (click === WIDGET_CLICK.pnlToggle) {
       const cached = await loadCachedWidgetData();
       // 플래그가 그사이 꺼졌으면(옛 그림을 누름) 바꾸지 않고 누적으로 다시 그린다
       const pnlMode = cached.features.pnlToggle ? await switchPnl(props.clickActionData) : await readPnlMode();
-      renderWidget(renderBoth(name, cached, { ...frame, now: Date.now(), pnlMode }));
+      renderWidget(await renderFor(name, cached, widgetInfo, { fontScale, now: Date.now(), pnlMode, by }));
       if (cached.features.pnlToggle) await redrawHoldings(cached, pnlMode);
       return;
     }
     if (click === WIDGET_CLICK.refresh) {
       try {
         const cached = await loadCachedWidgetData();
-        renderWidget(renderBoth(name, cached, { ...frame, now: Date.now(), pnlMode: await readPnlMode(), refreshing: true }));
+        renderWidget(await renderFor(name, cached, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), refreshing: true, by }));
       } catch {
         /* 저장해 둔 값으로 못 그려도 서버에서 받아 그리는 것은 계속한다 */
       }
@@ -48,7 +58,12 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
       reuse: widgetAction !== "WIDGET_CLICK",
     });
     // 손익 칸 설정은 받은 뒤에 읽는다: 받는 동안(최대 12초, "갱신 중") 손익을 눌러 바꾼 것을 옛 값으로 되돌려 그리지 않게
-    renderWidget(renderBoth(name, data, { ...frame, now: Date.now(), pnlMode: await readPnlMode() }));
+    renderWidget(await renderFor(name, data, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), by }));
+    // 실패 뒤 첫 성공 (위젯 2차): 다른 위젯에 남은 '갱신 실패 · …'도 방금 받은 값으로 지운다 (서버를 다시 부르지 않음).
+    // 저장해 둔 값(loadCachedWidgetData)이 아니라 이 조회의 값으로, 오류 없이 — 함께 돌던 조회가 그사이 실패해 적은 '갱신 실패' 화면이
+    // 모든 위젯에 번지지 않게 (그 조회의 실패 표시는 남아 다음 백그라운드 작업이 다시 묻는다). 실패 표시를 이 조회가 지웠을 때만 true 라,
+    // 여러 위젯이 한꺼번에 받아도 다시 그리기는 한 번이다 (data.ts)
+    if (data.recovered) await redrawAllWidgets({ ...data, error: null });
     // 자동 갱신 기록 (위젯 리뷰 2, 설정 화면 '마지막 자동 갱신'): 주기 갱신은 periodic, ↻ 는 button. 추가·크기 변경은 적지 않는다(폴드를 접고 펼 때마다 오므로 간격이 흐려진다).
     // 받아 둔 응답을 다시 써 서버를 부르지 않았으면 skipped — 평균 간격을 서버에 실제로 물은 갱신으로만 내게 (통합 검증 지적)
     const source = widgetAction === "WIDGET_UPDATE" ? "periodic" : click === WIDGET_CLICK.refresh ? "button" : null;
@@ -80,7 +95,7 @@ async function redrawHoldings(data: WidgetData, pnlMode: PnlMode): Promise<void>
     const fontScale = fontScaleNow();
     await requestWidgetUpdate({
       widgetName: WIDGET_NAMES.holdings,
-      renderWidget: (info) => renderBoth(WIDGET_NAMES.holdings, data, { width: info.width, height: info.height, fontScale, now: Date.now(), pnlMode }),
+      renderWidget: (info) => renderFor(WIDGET_NAMES.holdings, data, info, { fontScale, now: Date.now(), pnlMode }),
     });
   } catch {
     /* 다른 위젯은 다음 갱신 때 같은 값으로 그려진다 */

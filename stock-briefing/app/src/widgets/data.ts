@@ -66,6 +66,12 @@ export interface WidgetData {
    * 평균 간격에 세도록 (lib/widgetRefreshLog, 통합 검증 지적). 저장하지 않는다
    */
   asked?: boolean;
+  /**
+   * 앞선 갱신이 실패한 뒤 이번에 서버에서 받는 데 성공해 실패 표시를 이 조회가 지웠는지 (위젯 2차, loadWidgetData 만 채운다). 그러면 부른 쪽이 이 값으로
+   * 다른 위젯의 '갱신 실패'도 지운다 (widgetTaskHandler — 저장해 둔 값이 아니라 이 값으로: 함께 돌던 조회의 실패 화면이 번지지 않게. 백그라운드 작업은 원래
+   * 위젯 4종을 모두 그린다). 여러 조회가 한꺼번에 성공해도 하나만 true. 저장하지 않는다
+   */
+  recovered?: boolean;
 }
 
 const LAST_KEY = "widget.lastStocks";
@@ -162,6 +168,66 @@ async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showK
 const PAYLOAD_KEY = "widget.payload";
 const VIEW_KEY = "widget.view";
 const PNL_KEY = "widget.pnlMode";
+/**
+ * 위젯 갱신이 실패한 뒤 아직 성공하지 못했다는 표시 (위젯 2차): 마지막 실패 시각과 서버 주소. 어느 갱신이든(백그라운드 작업·위젯 주기·크기 변경·추가·↻)
+ * 서버 조회에 실패하면 그 조회를 다 마친 뒤(위젯에 그릴 값을 적은 뒤) 적고, 서버에서 받는 데 성공하면 지운다.
+ * 이 표시가 있으면 다음 백그라운드 작업(약 15분 간격)은 장 상태와 상관없이 서버에 다시 묻는다 (lib/backgroundBriefings runBriefingCheck) —
+ * 휴장·주말에 받아 둔 응답을 2시간까지 다시 쓰는 규칙 때문에 잠깐의 실패('갱신 실패 · 연결 안 됨')가 최대 2시간 남던 것을 막는다.
+ * 위젯이 스스로 하는 갱신(주기·크기 변경·추가)은 예전처럼 받아 둔 응답을 다시 쓸 수 있으면 쓴다 — 접고 펼 때 위젯 4종이 한꺼번에 서버에 묻거나,
+ * 연결이 나쁠 때 멀쩡히 다시 쓸 수 있던 위젯까지 '갱신 실패'로 바뀌지 않게 (검증 지적)
+ */
+const RETRY_KEY = "widget.retry";
+
+/** 실패 뒤 다시 묻기를 기다리는지: 마지막 실패 시각 (이 서버 주소의 것만). 없으면 null */
+export async function pendingRetry(apiUrl?: string): Promise<number | null> {
+  try {
+    const url = apiUrl ?? (await readSettings()).apiUrl;
+    const v = JSON.parse((await AsyncStorage.getItem(RETRY_KEY)) ?? "null") as { at?: unknown; apiUrl?: unknown } | null;
+    return v && v.apiUrl === url && typeof v.at === "number" && Number.isFinite(v.at) ? v.at : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 실패 표시 적기·지우기를 한 줄로 세운다 (검증 지적): 지우는 쪽이 표시를 읽은 뒤 지우기 전에 함께 돌던 조회가 새 실패 표시를 적으면,
+ * 예전에는 옛 표시를 보고 새 표시까지 지워 그 위젯의 '갱신 실패'가 다시 묻기 없이(휴장이면 최대 2시간) 남았다.
+ * 이제 읽고 지우는 동안 다른 적기는 기다렸다가 그 뒤에 적는다 (앱·위젯 태스크·백그라운드 작업은 한 JS 안에서 돈다)
+ */
+let retryChain: Promise<unknown> = Promise.resolve();
+function retrySerial<T>(fn: () => Promise<T>): Promise<T> {
+  const run = retryChain.then(fn, fn);
+  retryChain = run.catch(() => undefined);
+  return run;
+}
+
+/** 실패 표시를 적는다 (실패 시각 at — 부른 순간). 지우기와 한 줄로 */
+async function markRetry(apiUrl: string, at: number): Promise<void> {
+  await retrySerial(() => AsyncStorage.setItem(RETRY_KEY, JSON.stringify({ at, apiUrl }))).catch(() => undefined);
+}
+
+/** 실패 표시 시각이 지금보다 이만큼 넘게 뒤면 기기 시계가 앞서 있을 때 적힌 깨진 표시로 본다 (clearRetry) */
+export const RETRY_SKEW_MS = 5 * 60_000;
+
+/**
+ * 성공한 조회가 실패 표시를 지운다: 표시가 이 조회를 시작한 시각(started)보다 먼저 적힌 것일 때만 (함께 돌던 다른 조회가 이 조회를 시작한 뒤에 —
+ * 같은 밀리초 포함 — 실패했으면 그 위젯은 '갱신 실패'를 그렸으므로 표시를 남겨 다음 백그라운드 작업이 다시 묻게 한다). 이 서버 주소의 표시를 지웠으면 true.
+ * 표시 시각이 지금보다 RETRY_SKEW_MS 넘게 뒤면(실패할 때 기기 시계가 앞서 있다가 바로잡힘) 깨진 표시로 보고 지운다 — 남겨 두면 벽시계가 그 시각을
+ * 지날 때까지 어떤 성공도 지우지 못해 휴장에도 약 15분마다 묻고 다른 위젯의 '갱신 실패'도 남는다. 실패는 실제로 있었으므로 true (다른 위젯도 다시 그림).
+ * 읽기와 지우기 사이에 다른 적기가 끼어들지 않게 한 줄로 (retrySerial)
+ */
+function clearRetry(apiUrl: string, started: number): Promise<boolean> {
+  return retrySerial(async () => {
+    const v = JSON.parse((await AsyncStorage.getItem(RETRY_KEY)) ?? "null") as { at?: unknown; apiUrl?: unknown } | null;
+    if (!v) return false;
+    const at = typeof v.at === "number" && Number.isFinite(v.at) ? v.at : null;
+    const skewed = at !== null && at > Date.now() + RETRY_SKEW_MS;
+    // 다른 서버 주소의 표시(주소를 바꿈)·깨진 표시는 쓰지 않으므로 함께 지운다
+    if (v.apiUrl === apiUrl && at !== null && at >= started && !skewed) return false;
+    await AsyncStorage.removeItem(RETRY_KEY);
+    return v.apiUrl === apiUrl && at !== null;
+  }).catch(() => false);
+}
 
 /** 마지막으로 그린 데이터 (표시 설정 제외). 손익 전환·↻ 직후에 서버를 부르지 않고 바로 다시 그릴 때 쓴다 */
 type StoredView = Omit<WidgetData, "showKrw" | "afterCost" | "rowKrw">;
@@ -175,7 +241,7 @@ function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
 }
 
 export async function saveWidgetView(data: WidgetData, apiUrl: string): Promise<void> {
-  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, ...rest } = data;
+  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, ...rest } = data;
   const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
   try {
     await AsyncStorage.setItem(VIEW_KEY, JSON.stringify({ apiUrl, view }));
@@ -587,9 +653,13 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   const last = await readLastStocks(apiUrl);
   // 판은 이번에 못 받아도 마지막 것을 둔다 (조회 전에 읽어 둔다 — 아래에서 이번 결과를 적으므로)
   const prevView = await readWidgetView(apiUrl);
+  /** 이 조회를 시작한 시각 — 성공했을 때 이보다 늦게 적힌 실패 표시는 지우지 않는다 (clearRetry) */
+  const started = out.fetchedAt;
   let full = false;
   /** 방금 서버에서 받은 응답인지 (304 도 서버가 지금 값이라고 답한 것) */
   let fresh = false;
+  /** 조회가 끝까지 성공했는지 (예전 API 포함) */
+  let ok = false;
   try {
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
@@ -637,6 +707,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     // 채운 결과를 적는다: 채운 종목은 옛 시세 시각을 그대로 갖고 있어 7일이 지나면 더는 쓰이지 않는다.
     // 마지막 잔고가 이 응답보다 늦게 받은 것이면(앱 즉시 갱신 뒤 받아 둔 옛 응답을 다시 씀) 덮지 않는다 — 다음 조회가 실패했을 때 옛 숫자로 되돌아가지 않게 (위젯 리뷰 5)
     if ((stocks.length || payload) && !(last && last.at > out.fetchedAt)) await saveLastStocks(f.stocks, out.fetchedAt, apiUrl);
+    ok = true;
   } catch (e) {
     out.error = e instanceof Error ? e.message : String(e);
     const cached = await readCachedPayload(apiUrl);
@@ -673,7 +744,22 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   // 방금 서버에서 받은 것이 아니면(재사용·조회 실패) 앱이 더 늦게 받아 그린 잔고·칩·기준 시각·지수·플래그를 옛 응답으로 덮지 않는다
   if (full && !fresh) await keepNewer(out, apiUrl);
   keepBoard(out, prevView);
-  await saveWidgetView(full ? out : await mergeLegacy(out, apiUrl, opts), apiUrl);
+  const view = full ? out : await mergeLegacy(out, apiUrl, opts);
+  await saveWidgetView(view, apiUrl);
+  if (!ok) {
+    // 실패 표시: 다음 백그라운드 작업이 장 상태와 상관없이 다시 묻게. 그릴 값(오류 포함)을 적은 뒤에 적는다 — 함께 돌던 조회가 성공해
+    // 표시를 지운 뒤에 이 조회의 '갱신 실패'가 그려져도, 표시가 남아 다음 작업이 다시 묻고 지운다
+    await markRetry(apiUrl, Date.now());
+  } else if (out.asked && (await clearRetry(apiUrl, started))) {
+    // 실패 뒤 서버에서 받는 데 성공: 부른 쪽이 이 값으로 다른 위젯의 '갱신 실패'도 지우게 알린다 (표시를 지운 조회 하나만).
+    // 예전 API 로 받았으면 묻지 않은 반쪽(잔고 또는 브리핑)은 이 조회가 적은 값(mergeLegacy — 마지막으로 그린 것)으로 채운다: 다른 위젯이 빈 목록으로 그려지지 않게
+    out.recovered = true;
+    if (view !== out) {
+      out.stocks = view.stocks;
+      out.filled = view.filled;
+      out.briefings = view.briefings;
+    }
+  }
   return out;
 }
 

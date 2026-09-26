@@ -165,7 +165,8 @@ export function MarketWidget(props: MarketWidgetProps) {
   // 제목 옆: 갱신 중 → 갱신 실패(마지막 값을 두고) → 기준 시각 (판을 받은 시각)
   const sub = refreshing ? ["갱신 중"] : fail ? [fail, "갱신 실패"] : hasData && props.boardAt ? asOfVariants(props.boardAt, props.now) : [];
   const byCode = new Map(tiles.map((t) => [t.code, t]));
-  const plan = planMarket({ width, height, scale, title: BOARD_TITLE, sub, columns: hasData ? boardColumns(tiles) : [], wide: props.polish === true });
+  // 넓은 위젯 모양(구역 안 옆 칸)은 다듬은 모습일 때만, 폴드 위젯 2차 폭 규칙(wideExtras — widgetFoldFit 이 켜져 있으면 폭 560dp 이상)이 막지 않을 때만
+  const plan = planMarket({ width, height, scale, title: BOARD_TITLE, sub, columns: hasData ? boardColumns(tiles) : [], wide: props.polish === true && props.wideExtras !== false });
   const headerLabel = sentence([BOARD_TITLE, refreshing ? "갱신 중" : sub[0]]);
   // 판이 없을 때: 플래그 꺼짐·모름 → 짧은 안내, 켜져 있는데 못 받음 → 다시 시도 안내 (갱신 중에는 비움)
   const message = !props.enabled ? MARKET_OFF_TEXT : hasData || refreshing ? null : MARKET_EMPTY_TEXT;

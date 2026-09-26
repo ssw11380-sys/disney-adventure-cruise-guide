@@ -101,6 +101,11 @@ export interface WidgetFrame {
   height?: number;
   fontScale?: number;
   palette?: WidgetPalette;
+  /**
+   * false 면 넓은 모습(잔고 평가금액 칸·두 열, 지수·환율 옆 칸)을 쓰지 않는다 — 폴드 위젯 2차 폭 규칙(layout.ts wideExtrasOk:
+   * widgetFoldFit 이 켜져 있고 위젯 폭이 WIDE_EXTRAS_MIN_DP 미만). 없으면 폭 기준 그대로 (render.tsx 가 정한다)
+   */
+  wideExtras?: boolean;
 }
 
 function money(n: number | null | undefined, currency: Currency | undefined, fx: number | null, showKrw: boolean, sign = false): string {
@@ -614,6 +619,8 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
     alert,
     // 넓은 위젯(3-42)의 평가금액 칸 — 좁은 위젯에서는 쓰지 않는다 (layout.ts planRowsWide)
     values: rows.map((r) => r.value),
+    // 폴드 위젯 2차: 폭 규칙이 막으면 두 열·평가금액 칸 없음
+    ...(props.wideExtras === false ? { wideExtras: false } : {}),
   });
   const pnl = plan.total?.toggle ? chosen : cum;
   const headerLabel = sentence([head.speech, chips[0]?.text, alert && plan.title.sub === alert ? alert : null, refreshing ? "갱신 중" : sub[0], delayed ? "시세 지연" : null]);
