@@ -25,7 +25,6 @@ import {
   wordGap,
   type Seg,
 } from "@/lib/marketSummary";
-import { sentence, speakRate } from "@/lib/a11y";
 import { useNow } from "@/lib/useNow";
 import { listPaneWidth } from "@/lib/windowClass";
 import { changeColor, font, fontCap, space, touch, useFontScale, useTheme } from "@/theme";
@@ -115,14 +114,15 @@ function IndexCells({ d, compact = false, guess }: { d: MarketSummaryData; compa
 
 /**
  * 지수 칸: 아침 4칸(등락률 굵게 + 종가), 오후 2칸(등락률 + 종가 · 전일 대비). 받지 못한 칸은 '—'.
- * 휴장이면 이름 아래 줄에 그 값의 거래일('11/25') — 이름 옆에 붙이면 좁은 칸(울트라 411·큰 글씨)에서 날짜가 말줄임으로 잘렸다
+ * 휴장이면 이름 아래 줄에 그 값의 거래일('11/25') — 이름 옆에 붙이면 좁은 칸(울트라 411·큰 글씨)에서 날짜가 말줄임으로 잘렸다.
+ * 화면 읽기: 칸은 카드·목록 줄(누르는 칸 하나) 안에만 있고 그 칸의 문장(cardSpeech)이 지수를 이미 읽으므로 칸마다 따로 멈추지 않게
+ * accessible·이름을 두지 않는다 (안드로이드는 accessible 을 focusable 로 바꿔 TalkBack 이 같은 지수를 한 번 더 읽었다)
  */
 function IndexCell({ i, d, compact = false }: { i: SummaryIndex; d: MarketSummaryData; compact?: boolean }) {
   const t = useTheme();
   const day = d.holiday && i.date ? md(i.date) : null;
-  const label = sentence([`${i.name}${day ? ` (${day})` : ""}`, i.changeRate === null ? "받지 못함" : speakRate(i.changeRate), i.value !== null && !compact ? indexValueText(i.value) : null]);
   return (
-    <View accessible accessibilityLabel={label} style={[compact ? styles.cellSmall : styles.cell, { backgroundColor: compact ? t.bg : t.surfaceAlt }]}>
+    <View testID="index-cell" style={[compact ? styles.cellSmall : styles.cell, { backgroundColor: compact ? t.bg : t.surfaceAlt }]}>
       <Text style={{ color: t.muted, fontSize: compact ? font.tiny : font.small }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
         {i.name}
       </Text>

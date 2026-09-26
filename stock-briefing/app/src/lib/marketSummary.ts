@@ -417,6 +417,8 @@ export type Chunk = Seg[];
 const SEPARATORS = new Set(["·", "/"]);
 /** 숫자로 시작하는 낱말 ('7'·'+3.18%p)'·'12종목'·'10년물') 또는 괄호 속 날짜만 ('(9/23)') */
 const NUMERIC_START = /^(?:[+\-−]?\d|\(\d{1,2}\/\d{1,2}\)$)/;
+/** 시각 뒤에 붙여 한 덩어리로 두는 말 ('08:30 생성'·'16:30 마감'·'(16:00 기준)'·'10:00 개장,' — '생성'만 다음 줄로 넘어가지 않게) */
+const AFTER_TIME = /^(?:생성|마감|기준|개장|발표)[)·,]?$/;
 
 type Piece = { kind: "text"; text: string; seg: Seg } | { kind: "space" };
 
@@ -427,6 +429,7 @@ type Piece = { kind: "text"; text: string; seg: Seg } | { kind: "space" };
  *  - 등락 숫자(색 조각) 앞: '나스닥 +0.48%'·'5.17% -0.01%p'·'1,359.00원 +3.50원'·'(마이크로소프트 +3.66%,'
  *  - 흐린 조각(출처·기준 괄호) 안: '(미 재무부)'·'(섹터 ETF 기준)'·'(9/23 고시)'·'9/25 기준 ·' (앞뒤 공백은 줄바꿈 자리)
  *  - 한 글자 낱말 뒤: '내 미국'·'미 10년물'·'강 산업재'·'약 커뮤니케이션'·'장 마감', 줄 끝 한 글자 낱말·개수 앞: '±1%p 안'·'(+1.00%p 이상) 2'
+ *  - 시각 뒤 '생성·마감·기준·개장·발표': '08:30 생성'·'16:30 마감'·'(16:00 기준)'
  *  - 구분자 '·'·'/'와 받지 못한 칸 '—' 앞: 앞 덩어리 끝에 붙인다
  */
 export function chunkSegs(segs: readonly Seg[]): Chunk[] {
@@ -469,6 +472,7 @@ export function chunkSegs(segs: readonly Seg[]): Chunk[] {
     if (SEPARATORS.has(after.w) || after.w === "—") return true;
     if (SEPARATORS.has(before)) return false;
     if (next.seg.tone !== undefined) return true;
+    if (/\d{1,2}:\d{2}$/.test(before) && AFTER_TIME.test(after.w)) return true;
     if (/[가-힣]$/.test(before) && NUMERIC_START.test(after.w)) return true;
     if (/^[가-힣]$/.test(before)) return true;
     return after.last && /^(?:[가-힣]|\d+)$/.test(after.w);

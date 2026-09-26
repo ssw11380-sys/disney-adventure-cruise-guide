@@ -123,12 +123,16 @@ const widthOf = (n: HostNode): number | undefined => {
 /** 표 머리 글들 */
 const headsOf = (r: R) => r.all().filter((n) => n.type === "TableHead").map((n) => n.children.filter((c): c is HostNode => typeof c !== "string").map(textOf));
 const cardOf = (r: R) => r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel ?? "").includes("숫자로 만든 요약"));
+/** 지수 칸 (testID "index-cell") 의 이름 — 칸의 첫 글 */
+const cellName = (c: HostNode) => textOf(c.children.find((x): x is HostNode => typeof x !== "string" && x.type === "Text")!);
 /** 지수 칸 줄들: 줄마다 칸 이름 (한 줄 4칸이면 [[4개]], 2×2 면 [[2개],[2개]]) */
 const cellRowsOf = (r: R) =>
   r
     .all()
-    .filter((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && /^(나스닥|S&P500|다우|필라반도체|코스피|코스닥)[ ,(]/.test(String(c.props.accessibilityLabel ?? ""))))
-    .map((row) => row.children.filter((c): c is HostNode => typeof c !== "string").map((c) => String(c.props.accessibilityLabel).split(/[,(]/)[0]!.trim()));
+    .filter((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.props.testID === "index-cell"))
+    .map((row) => row.children.filter((c): c is HostNode => typeof c !== "string").map(cellName));
+/** 누르는 칸(카드·목록 줄) 안에서 따로 화면 읽기에 잡히는 칸 (accessible 이거나 이름이 붙은 것) — 누르는 칸 하나가 한 문장으로 읽혀야 하므로 없어야 한다 */
+const innerA11y = (press: HostNode) => collect(press).filter((n) => n !== press && (n.props.accessible === true || typeof n.props.accessibilityLabel === "string"));
 const settle = async (r: R) => {
   for (let i = 0; i < 3; i++) await new Promise((res) => setTimeout(res, 0));
   r.rerender();
@@ -175,8 +179,10 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     expect(all.some((t) => t.startsWith("KBS 9/26 05:22"))).toBe(true);
     expect(all.some((t) => t.startsWith("한국경제"))).toBe(false); // 세 번째 제목은 상세에만
     expect(all).toContain("숫자로 만든 요약 · 뉴스 제목은 언론사 원문 · 매매 권유가 아닙니다");
-    // 지수 칸마다 화면 읽기 문장
-    expect(labels(r)).toContain("나스닥, 0.48% 상승, 27,068.72");
+    // 지수는 카드 한 문장이 읽는다 — 카드 안 지수 칸은 따로 읽히지 않는다 (TalkBack 이 같은 지수에서 한 번 더 멈추지 않게, 4차 검토)
+    expect(String(card.props.accessibilityLabel)).toContain("나스닥 0.48% 상승, S&P500 0.51% 상승, 다우 0.93% 상승, 필라반도체 1.41% 상승");
+    expect(r.all().filter((n) => n.props.testID === "index-cell")).toHaveLength(4);
+    expect(innerA11y(card)).toEqual([]);
     // 계좌·종목 브리핑보다 위 (첫 누르는 칸)
     const firstPress = r.all().find((n) => n.type === "Pressable");
     expect(firstPress).toBe(card);
@@ -195,7 +201,8 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     // 칸마다 거래일: 이름 옆이 아니라 이름 아래 줄 (좁은 칸에서 날짜가 말줄임으로 잘리지 않게)
     expect(all).toContain("코스피");
     expect(all.filter((x) => x === "9/23")).toHaveLength(2);
-    expect(labels(r)).toContain("코스피 (9/23), 0.90% 상승, 7,080.92");
+    expect(String(cardOf(r)!.props.accessibilityLabel)).toContain("코스피 (9/23) 0.90% 상승, 코스닥 (9/23) 1.21% 상승");
+    expect(innerA11y(cardOf(r)!)).toEqual([]);
     expect(r.all().some((n) => n.type === "Badge" && textOf(n) === "휴장")).toBe(true);
     expect(all).not.toContain("뉴스 3건");
     // 토요일에 다시 보면 날짜로
@@ -498,6 +505,28 @@ describe("상세 화면 — 3차 검토 보정 (낱말 줄바꿈·화면 읽기�
     expect(kr).not.toContain("코스피 상장 종목은 코스피, 코스닥 상장 종목은 코스닥과 비교");
   });
 
+  it("제목 아래 기준 줄: 만든 시각과 '생성'이 한 덩어리 ('… 08:30 / 생성'처럼 '생성'만 다음 줄로 넘어가지 않게, 933·704·475, 100%·130% — 4차 검토)", () => {
+    for (const [width, height, scale, fold] of [
+      [933, 704, 1, true],
+      [933, 704, 1.3, true],
+      [704, 933, 1.3, true],
+      [475, 900, 1, false],
+    ] as const) {
+      cleanupRenders();
+      h.flags = { marketSummary: true, ...(fold ? { foldLayout: true } : {}) };
+      h.win = { width, height, scale: 2.625, fontScale: scale };
+      h.fontScale = scale;
+      const rows = wordRows(render(<MarketSummaryScreen />));
+      const basis = rows.find((row) => chunksOf(row).join(" ").startsWith("9/25(금) 뉴욕 장 마감 기준"))!;
+      expect(basis, `${width}·${scale}`).toBeDefined();
+      const chunks = chunksOf(basis);
+      expect(chunks.at(-1), `${width}·${scale}`).toMatch(/^\d{2}:\d{2} 생성$/);
+      expect(chunks).not.toContain("생성");
+      // 읽는 문장은 글자 그대로 한 줄 (덩어리로 나뉘어도)
+      expect(String(basis.props.accessibilityLabel)).toMatch(/\d{2}:\d{2} 생성$/);
+    }
+  });
+
   it("뉴스 '원문'은 http(s) 주소만 연다 — javascript: 같은 주소의 기사는 제목만 보이고 원문 칸이 없다", () => {
     h.flags = { marketSummary: true };
     const d = shared.cases[0]!.data;
@@ -522,6 +551,10 @@ describe("넓은 창 (펼친 폴드8 가로 2단, 플래그 foldLayout)", () => 
     const row = r.all().find((n) => n.type === "Pressable" && n.props.accessibilityRole === "button" && String(n.props.accessibilityLabel ?? "").startsWith("금요일(9/25) 미국 시장"))!;
     expect(row).toBeDefined();
     expect(texts(r)).toContain("내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7");
+    // 줄 안 작은 지수 칸 4개는 따로 읽히지 않는다 (줄 한 문장이 지수를 읽는다 — 4차 검토)
+    expect(collect(row).filter((n) => n.props.testID === "index-cell")).toHaveLength(4);
+    expect(innerA11y(row)).toEqual([]);
+    expect(String(row.props.accessibilityLabel)).toContain("나스닥 0.48% 상승");
     expect(r.all().some((n) => n.type === "Badge" && textOf(n) === "9/25(금) 마감")).toBe(true);
     r.act(() => (row.props.onPress as () => void)());
     await settle(r);
