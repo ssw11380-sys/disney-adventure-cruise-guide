@@ -526,9 +526,21 @@ describe("과거 구간 안내 (기능 플래그 detailPolish — 2026-09-26 RGT
     const w = openMany({ period: "W" });
     drag(w, 3);
     expect(past(w)?.text).toBe("3주 전까지 보는 중");
-    const m = openMany({ period: "5m" });
+    // 5분봉 나흘치 (하루 78봉): 같은 날 안이면 분·시간, 전날까지 가면 보이는 마지막 봉의 날짜·시각
+    const bar = (date: string, k: number) => {
+      const min = 9 * 60 + 30 + k * 5;
+      const hm = `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+      return { date, time: `${date}T${hm}:00-04:00`, open: 100, high: 110, low: 90, close: 105, volume: 10 };
+    };
+    const FIVE = ["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24"].flatMap((d) => Array.from({ length: 78 }, (_, k) => bar(d, k)));
+    const m = render(<CandleChart candles={FIVE} period="5m" onPeriodChange={() => undefined} />);
     drag(m, 4);
-    expect(past(m)?.text).toBe("20분 전까지 보는 중");
+    expect(past(m)).toMatchObject({ text: "20분 전까지 보는 중", short: "20분 전" });
+    drag(m, 13);
+    expect(past(m)?.text).toBe("1시간 5분 전까지 보는 중");
+    // 100봉 앞 = 9/23 의 56번째 봉 (14:05) — 예전에는 '500분 전' (장 이틀에 걸친 시간을 분으로 적어 8시간 전처럼 읽혔다)
+    drag(m, 100);
+    expect(past(m)).toMatchObject({ text: "9월 23일 14:05까지 보는 중", short: "9/23 14:05까지" });
   });
 
   it("꺼짐·못 받음: 과거로 옮겨도 안내가 없다 (예전 그대로 — 칩의 '· 2일 전' 만)", () => {
@@ -541,7 +553,7 @@ describe("과거 구간 안내 (기능 플래그 detailPolish — 2026-09-26 RGT
     }
   });
 
-  it("기간을 바꾸면 최신 구간에서 시작하고, 화면을 다시 열어도 최신 구간 (보이는 구간은 화면 상태)", () => {
+  it("기간을 바꾸면 최신 구간에서 시작하고, 원래 기간으로 돌아와도 최신 구간, 화면을 다시 열어도 최신 구간 (보이는 구간은 화면 상태)", () => {
     h.polish = true;
     let period: "D" | "W" = "D";
     const r = render(<CandleChart candles={MANY} period={period} onPeriodChange={() => undefined} />);
@@ -551,6 +563,20 @@ describe("과거 구간 안내 (기능 플래그 detailPolish — 2026-09-26 RGT
     r.rerender(<CandleChart candles={MANY} period={period} onPeriodChange={() => undefined} />);
     expect(pc(r).props.view).toMatchObject({ offset: 0 });
     expect(past(r)).toBeNull();
+    // 일 → 주 → 일로 돌아와도 일봉의 옛 위치('5일 전')가 되살아나지 않는다 (예전에는 되살아났다)
+    period = "D";
+    r.rerender(<CandleChart candles={MANY} period={period} onPeriodChange={() => undefined} />);
+    expect(pc(r).props.view).toEqual({ count: 120, offset: 0 });
+    expect(past(r)).toBeNull();
+    expect(r.text()).not.toContain("5일 전");
+    // 봉 수 칩을 바꾼 뒤 기간을 오가도 새 기간의 기본 칩
+    r.act(() => (r.all().find((n) => n.type === "Pressable" && /^보이는 봉/.test(String(n.props.accessibilityLabel)))!.props.onPress as () => void)());
+    expect((pc(r).props.view as { count: number }).count).not.toBe(120);
+    period = "W";
+    r.rerender(<CandleChart candles={MANY} period={period} onPeriodChange={() => undefined} />);
+    period = "D";
+    r.rerender(<CandleChart candles={MANY} period={period} onPeriodChange={() => undefined} />);
+    expect(pc(r).props.view).toEqual({ count: 120, offset: 0 });
     // 새로 연 화면
     expect(pc(openMany()).props.view).toMatchObject({ offset: 0 });
   });

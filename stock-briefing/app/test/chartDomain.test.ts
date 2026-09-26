@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AVG_BAND, DOMAIN_PAD, LINE_OVERSHOOT, placeInsideLabels, priceDomain, textWidth, topOverlayAlign, type Box } from "@/lib/chartBasis";
-import { pastViewText } from "@/lib/chartLayout";
+import { AVG_BAND, DOMAIN_PAD, LABEL_GUARD_BARS, LINE_OVERSHOOT, placeInsideLabels, priceDomain, textWidth, topOverlayAlign, type Box } from "@/lib/chartBasis";
+import { pastViewLabel } from "@/lib/chartLayout";
 import { bollinger, sma } from "@/lib/indicators";
 
 /**
@@ -109,8 +109,10 @@ describe("그림 안쪽 글자 자리 (placeInsideLabels)", () => {
   // 폭 300 · 높이 200 그림, 봉 30개(10px 간격). 기본 봉은 y 100~140
   const bars = (f: (i: number) => [number, number]): Box[] => Array.from({ length: 30 }, (_, i) => ({ left: i * 10 + 2, right: i * 10 + 8, top: f(i)[0], bottom: f(i)[1] }));
   const base = bars(() => [100, 140]);
-  const place = (b: Box[], labels: Parameters<typeof placeInsideLabels>[0]["labels"]) => placeInsideLabels({ plotW: 300, plotH: 200, bars: b, labels });
-  const hitsBars = (box: Box, b: Box[]) => b.some((x) => x.left < box.right && box.left < x.right && x.top < box.bottom && box.top < x.bottom);
+  const place = (b: Box[], labels: Parameters<typeof placeInsideLabels>[0]["labels"], extra: Partial<Parameters<typeof placeInsideLabels>[0]> = {}) =>
+    placeInsideLabels({ plotW: 300, plotH: 200, bars: b, labels, ...extra });
+  const hitsBars = (box: Box, b: Box[]) => b.filter((x) => x.left < box.right && box.left < x.right && x.top < box.bottom && box.top < x.bottom).length;
+  const overlap = (a: Box, c: Box) => a.left < c.right && c.left < a.right && a.top < c.bottom && c.top < a.bottom;
 
   it("가리는 것이 없으면 예전 자리: 평단은 선 위 왼쪽, 52주는 선 위 오른쪽 (글자 상자 = 글자 폭 + 6)", () => {
     const [avg, h52] = place(base, [
@@ -128,46 +130,115 @@ describe("그림 안쪽 글자 자리 (placeInsideLabels)", () => {
     expect(s).toMatchObject({ side: "right", ty: 17 });
   });
 
-  it("오늘 52주 신저가: 오른쪽 끝 봉이 글자 자리를 덮으면 선 아래 → 그래도 가리면 왼쪽으로", () => {
+  it("오늘 52주 신저가: 오른쪽 끝 봉이 글자 자리를 덮으면 선 아래, 그것도 막히면 봉이 없는 곳으로 가로로 옮긴다 (최신 봉은 덮지 않는다)", () => {
     // 마지막 봉들이 선(y 150) 위아래를 모두 덮는다
     const b = bars((i) => (i >= 24 ? [120, 175] : [40, 80]));
     const [s] = place(b, [{ y: 150, text: "52주 최저", prefer: "right" }]);
-    expect(s!.side).toBe("left");
-    expect(hitsBars(s!.box, b)).toBe(false);
-    // 선 아래가 비어 있으면 쪽은 그대로 두고 아래로
+    expect(hitsBars(s!.box, b)).toBe(0);
+    // 되도록 예전 자리(오른쪽) 가까이: 막힌 봉 바로 왼쪽
+    expect(s!.box.right).toBeLessThanOrEqual(242);
+    expect(s!.box.right).toBeGreaterThan(230);
+    // 선 아래가 비어 있으면 자리는 그대로 두고 아래로
     const b2 = bars((i) => (i >= 24 ? [120, 149] : [40, 80]));
     const [s2] = place(b2, [{ y: 150, text: "52주 최저", prefer: "right" }]);
     expect(s2).toMatchObject({ side: "right", ty: 162 });
   });
 
-  it("평단 글자가 앞쪽 봉을 가리면 가리지 않는 곳으로 (RGTX: 왼쪽 위 → 아래 또는 오른쪽)", () => {
+  it("평단 글자가 앞쪽 봉을 가리면 가리지 않는 곳으로 (RGTX: 왼쪽 위 → 아래 또는 옆)", () => {
     const b = bars((i) => (i <= 8 ? [40, 100] : [150, 190]));
     const [s] = place(b, [{ y: 90, text: "평단 18,599", prefer: "left" }]);
-    expect(hitsBars(s!.box, b)).toBe(false);
+    expect(hitsBars(s!.box, b)).toBe(0);
   });
 
-  it("가까운 두 글자(평단 · 52주 최저)는 서로 겹치지 않는다", () => {
+  it("가까운 두 글자(평단 · 52주 최저)는 서로 겹치지 않고, 나란히 놓여도 조금 띄운다", () => {
     for (const gap of [0, 4, 8, 13]) {
       const spots = place(base, [
         { y: 60, text: "평단 18,599", prefer: "left" },
         { y: 60 + gap, text: "52주 최저", prefer: "left" },
       ]);
-      const [a, c] = spots.map((s) => s.box);
-      expect(a!.left < c!.right && c!.left < a!.right && a!.top < c!.bottom && c!.top < a!.bottom, `${gap}`).toBe(false);
+      const [a, c] = spots.map((s) => s!.box);
+      expect(overlap(a!, c!), `${gap}`).toBe(false);
+      if (a!.top < c!.bottom && c!.top < a!.bottom) expect(Math.max(c!.left - a!.right, a!.left - c!.right), `${gap}`).toBeGreaterThanOrEqual(4);
     }
   });
 
-  it("고정 글자(범위 밖 평단)는 위아래로 옮기지 않고 쪽만 바꾼다", () => {
+  it("고정 글자(범위 밖 평단)는 위아래로 옮기지 않고 봉이 없는 곳으로 가로로만 옮긴다", () => {
     const b = bars((i) => (i <= 10 ? [0, 30] : [100, 140]));
     const [s] = place(b, [{ y: 12, text: "평단(범위 위) 18,599", prefer: "left", fixed: true }]);
-    expect(s).toMatchObject({ side: "right", ty: 12 });
+    expect(s!.ty).toBe(12);
+    expect(hitsBars(s!.box, b)).toBe(0);
+  });
+
+  it("RGTX(오늘 52주 신저가): 먼저 놓은 평단 글자가 왼쪽을 막아도 '52주 최저'가 최신 봉을 덮지 않는다 — 예전에는 최신 봉 16개를 덮었다", () => {
+    // 접은 화면 475 의 가격 칸(폭 373 · 높이 194), 봉 120개. 52주 최저선 y 184 (선 아래는 그림 밖), 평단선은 11.3 위 →
+    // 왼쪽 선 위 자리는 평단 글자와 1.7px 겹친다. 최근 40봉은 52주 최저선 바로 위(168~183), 그 앞 봉은 위쪽(60~150)
+    const step = 373 / 120;
+    const b: Box[] = Array.from({ length: 120 }, (_, i) => {
+      const x = i * step + step / 2;
+      return { left: x - 1.1, right: x + 1.1, top: i >= 80 ? 168 : 60 + (i % 7) * 10, bottom: i >= 80 ? 183 : 90 + (i % 7) * 8 };
+    });
+    const labels = [
+      { y: 172.7, text: "평단 19,064", prefer: "left" as const, keep: true },
+      { y: 184, text: "52주 최저", prefer: "right" as const },
+    ];
+    const [avg, low] = placeInsideLabels({ plotW: 373, plotH: 194, bars: b, labels, lines: [179] });
+    expect(avg).not.toBeNull();
+    expect(low).not.toBeNull();
+    expect(overlap(avg!.box, low!.box)).toBe(false);
+    // 최신 봉(오른쪽 끝 LABEL_GUARD_BARS 개)은 물론 어떤 봉도 덮지 않는다
+    expect(hitsBars(low!.box, b.slice(-LABEL_GUARD_BARS))).toBe(0);
+    expect(hitsBars(low!.box, b)).toBe(0);
+    expect(hitsBars(avg!.box, b)).toBe(0);
+  });
+
+  it("어디에 놓아도 최신 봉을 덮거나 봉을 많이 덮거나 다른 글자와 겹치면 글자를 빼고 선만 (평단은 빼지 않는다)", () => {
+    // 봉 60개(5px 간격)가 선(y 150) 위아래를 그림 전체에 걸쳐 덮는다 → 어디에 놓아도 지난 봉 LABEL_DROP_BARS 개 이상
+    const full: Box[] = Array.from({ length: 60 }, (_, i) => ({ left: i * 5 + 1, right: i * 5 + 4, top: 120, bottom: 190 }));
+    const [avg, low] = place(full, [
+      { y: 150, text: "평단 18,599", prefer: "left", keep: true },
+      { y: 150, text: "52주 최저", prefer: "right" },
+    ]);
+    expect(avg).not.toBeNull();
+    expect(low).toBeNull();
+    // 덮는 봉이 적으면(봉 사이가 넓은 확대 화면) 남긴다
+    const [, sparse] = place(bars(() => [120, 190]), [
+      { y: 150, text: "평단 18,599", prefer: "left", keep: true },
+      { y: 150, text: "52주 최저", prefer: "right" },
+    ]);
+    expect(sparse).not.toBeNull();
+    // 최신 봉(오른쪽 끝)만 선을 덮고 나머지는 비었으면 최신 봉을 피해 남긴다
+    const [s3] = place(bars((i) => (i >= 25 ? [120, 190] : [20, 60])), [{ y: 150, text: "52주 최저", prefer: "right" }]);
+    expect(s3).not.toBeNull();
+    expect(s3!.box.right).toBeLessThanOrEqual(252);
+    // 폭이 모자라 글자가 들어가지 않으면 평단이 아닌 글자는 빠진다
+    const narrow = placeInsideLabels({ plotW: 40, plotH: 200, bars: [], labels: [{ y: 100, text: "52주 최고", prefer: "right" }] });
+    expect(narrow[0]).toBeNull();
+  });
+
+  it("다른 가로선(현재가선)이 글자를 가로지르지 않는 자리가 있으면 그곳", () => {
+    // 평단선 y 100, 현재가선 y 94 → 선 위 글자(86~99)는 현재가선이 가로지른다 → 선 아래(102~115)
+    const [s] = place(bars(() => [150, 190]), [{ y: 100, text: "평단 18,599", prefer: "left", keep: true }], { lines: [94] });
+    expect(s!.box.top).toBeGreaterThan(100);
+    const [t2] = place(bars(() => [150, 190]), [{ y: 100, text: "평단 18,599", prefer: "left", keep: true }]);
+    expect(t2!.box.bottom).toBeLessThan(100);
+  });
+
+  it("벗어난 이동평균 표시(글자 앞 색 네모 lead)는 상자가 그만큼 넓고 늘 왼쪽 맞춤, 평단 글자와 나란히 겹치지 않게", () => {
+    const [avg, ma] = place(base, [
+      { y: 12, text: "평단(범위 위) 19,064", prefer: "left", fixed: true, keep: true },
+      { y: 12, text: "120일선(범위 위)", prefer: "right", fixed: true, lead: 11 },
+    ]);
+    expect(ma!.box.right - ma!.box.left).toBeCloseTo(textWidth("120일선(범위 위)") + 11 + 6, 5);
+    expect(ma!.side).toBe("left");
+    expect(ma!.box.right).toBe(298);
+    expect(overlap(avg!.box, ma!.box)).toBe(false);
   });
 });
 
 describe("과거 구간 안내 버튼 자리 (topOverlayAlign)", () => {
   // 폭 300 그림, 봉 30개. 버튼 폭 120 · 위에서 36 까지
   const bars = (f: (i: number) => number): Box[] => Array.from({ length: 30 }, (_, i) => ({ left: i * 10 + 2, right: i * 10 + 8, top: f(i), bottom: 190 }));
-  const align = (b: Box[]) => topOverlayAlign({ plotW: 300, width: 120, bottom: 36, bars: b });
+  const align = (b: Box[], labels?: Box[]) => topOverlayAlign({ plotW: 300, width: 120, bottom: 36, bars: b, labels }).align;
 
   it("위쪽이 비어 있으면 가운데", () => expect(align(bars(() => 100))).toBe("center"));
   it("가운데에 급등한 봉 꼭대기가 있으면 비어 있는 쪽 (RGTX 6월 급등)", () => {
@@ -180,22 +251,41 @@ describe("과거 구간 안내 버튼 자리 (topOverlayAlign)", () => {
   it("내리는 종목(옛 봉이 왼쪽 위)·가운데 막힘이면 오른쪽", () => {
     expect(align(bars((i) => (i <= 18 ? 5 : 100)))).toBe("right");
   });
+  it("그림 안 글자(범위 밖 평단 — 왼쪽 위)를 덮지 않는 쪽으로, 점수 0 이면 아무것도 덮지 않는다", () => {
+    const avgLabel: Box = { left: 2, right: 126, top: 2, bottom: 15 };
+    expect(align(bars(() => 100), [avgLabel])).toBe("right");
+    expect(topOverlayAlign({ plotW: 300, width: 120, bottom: 36, bars: bars(() => 100), labels: [avgLabel] }).cost).toBe(0);
+    // 글자 하나는 봉 몇 개보다 무겁다 (봉 3개를 덮는 쪽이 평단 글자를 덮는 쪽보다 낫다)
+    expect(align(bars((i) => (i >= 27 ? 5 : 100)), [avgLabel])).toBe("right");
+  });
 });
 
-describe("과거 구간 안내 글 (pastViewText)", () => {
-  it("일·주·월·분 단위", () => {
-    expect(pastViewText(2, "D")).toBe("2일 전까지 보는 중");
-    expect(pastViewText(3, "W")).toBe("3주 전까지 보는 중");
-    expect(pastViewText(4, "M")).toBe("4개월 전까지 보는 중");
-    expect(pastViewText(7, "1m")).toBe("7분 전까지 보는 중");
-    expect(pastViewText(3, "5m")).toBe("15분 전까지 보는 중");
-    expect(pastViewText(65, "30m")).toBe("1,950분 전까지 보는 중");
-    expect(pastViewText(1_200, "D")).toBe("1,200일 전까지 보는 중");
+describe("과거 구간 안내 글 (pastViewLabel)", () => {
+  it("일·주·월: 긴 글과 짧은 글", () => {
+    expect(pastViewLabel(2, "D")).toEqual({ text: "2일 전까지 보는 중", short: "2일 전" });
+    expect(pastViewLabel(3, "W")).toEqual({ text: "3주 전까지 보는 중", short: "3주 전" });
+    expect(pastViewLabel(4, "M")).toEqual({ text: "4개월 전까지 보는 중", short: "4개월 전" });
+    expect(pastViewLabel(1_200, "D")?.text).toBe("1,200일 전까지 보는 중");
+  });
+
+  it("분봉: 같은 날이면 분·시간, 다른 날까지 갔으면 보이는 마지막 봉의 날짜·시각 (예전 '1,950분 전'은 30분봉 5일치였다)", () => {
+    const today = { date: "2026-09-24" };
+    const same = (time: string) => ({ last: { date: "2026-09-24", time }, latest: today });
+    expect(pastViewLabel(7, "1m", same("2026-09-24T15:13:00-04:00"))).toEqual({ text: "7분 전까지 보는 중", short: "7분 전" });
+    expect(pastViewLabel(3, "5m", same("2026-09-24T15:40:00-04:00"))?.text).toBe("15분 전까지 보는 중");
+    expect(pastViewLabel(13, "5m", same("2026-09-24T14:55:00-04:00"))).toEqual({ text: "1시간 5분 전까지 보는 중", short: "1시간 5분 전" });
+    expect(pastViewLabel(4, "30m", same("2026-09-24T13:30:00-04:00"))?.text).toBe("2시간 전까지 보는 중");
+    expect(pastViewLabel(65, "30m", { last: { date: "2026-09-17", time: "2026-09-17T14:30:00-04:00" }, latest: today })).toEqual({
+      text: "9월 17일 14:30까지 보는 중",
+      short: "9/17 14:30까지",
+    });
+    // 날짜를 모르면(봉을 넘기지 않으면) 분·시간
+    expect(pastViewLabel(3, "5m")?.text).toBe("15분 전까지 보는 중");
   });
 
   it("최신 구간이면 없음", () => {
-    expect(pastViewText(0, "D")).toBeNull();
-    expect(pastViewText(-1, "D")).toBeNull();
-    expect(pastViewText(Number.NaN, "D")).toBeNull();
+    expect(pastViewLabel(0, "D")).toBeNull();
+    expect(pastViewLabel(-1, "D")).toBeNull();
+    expect(pastViewLabel(Number.NaN, "D")).toBeNull();
   });
 });

@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { ClipPath, Defs, G, Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
-import { axisWidth, placeInsideLabels, priceDomain, readoutBasis, topOverlayAlign, volumeBars, type InsideLabel, type LabelSpot } from "@/lib/chartBasis";
+import { axisWidth, LABEL_PAD, placeInsideLabels, priceDomain, readoutBasis, topOverlayAlign, volumeBars, type InsideLabel, type LabelSpot, type OverlayAlign } from "@/lib/chartBasis";
 import { estimateTextWidth, formatChartValue, maLegendItems } from "@/lib/chartLayout";
 import { formatPct, formatVolume, shownSign } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
@@ -67,9 +67,10 @@ export interface PriceChartProps {
   labelBg?: string;
   /**
    * 과거로 옮겼을 때 차트 위에 띄우는 안내 버튼 ('2일 전까지 보는 중 · 최신으로', 기능 플래그 detailPolish — CandleChart 가 정한다).
+   * short 는 좁은 자리에서 쓰는 짧은 글('2일 전 · 최신으로' — 긴 글이 그림 칸에 다 들어가지 않거나 봉·글자를 더 가릴 때). 화면 읽기는 늘 긴 글.
    * 누르면 onLatest (최신 구간으로). null 이면 없음
    */
-  pastView?: { text: string; onLatest: () => void } | null;
+  pastView?: { text: string; short?: string; onLatest: () => void } | null;
 }
 
 const X_AXIS_H = 18;
@@ -80,6 +81,13 @@ const PRICE_CLIP = "priceClip";
 const LABEL_BG_OPACITY = 0.85;
 /** 과거 구간 안내 버튼의 보이는 높이 (칩과 같음). 누르는 영역은 위아래로 넓혀 44 */
 const BANNER_H = 32;
+/** 가장자리 고정 글자(범위 밖 평단 · 벗어난 이동평균)의 기준선: 맨 위는 위에서 12, 맨 아래는 아래에서 4 */
+const EDGE_TOP_Y = 12;
+const EDGE_BOTTOM_Y = 4;
+/** 벗어난 이동평균 표시 앞의 색 네모 (칩의 색 줄과 같은 모양): 폭 8 · 높이 3, 글자와 3 띄움 */
+const MA_SWATCH_W = 8;
+const MA_SWATCH_H = 3;
+const MA_SWATCH_GAP = 3;
 
 export function clampView(v: ChartView, total: number, minCount = 15, maxCount = 500): ChartView {
   const count = Math.max(minCount, Math.min(maxCount, Math.min(v.count, Math.max(total, minCount))));
@@ -323,24 +331,73 @@ export function PriceChart(p: PriceChartProps) {
   const isLatest = cross ? start + cross.i === total - 1 : view.offset === 0;
   const high52In = !!p.high52w && p.high52w > domain[0] && p.high52w < domain[1];
   const low52In = !!p.low52w && p.low52w > domain[0] && p.low52w < domain[1];
-  // 그림 안 글자(평단 → 52주 최고 → 52주 최저) 자리: 봉과 서로를 가리지 않는 곳 — 선 위·아래, 안 되면 반대쪽 (lib/chartBasis placeInsideLabels).
-  // 범위 밖 평단은 선 없이 맨 위·맨 아래 가장자리 글자 (좌우만 바꾼다)
-  const spots = (() => {
-    const want: (InsideLabel & { key: "avg" | "h52" | "l52" })[] = [];
-    if (avgIn) want.push({ key: "avg", y: yOf(p.avgPrice!), text: `평단 ${axisPrice(p.avgPrice!, currency)}`, prefer: "left" });
+  const currentY = showCurrent ? yOf(p.currentPrice!) : null;
+  // 보이는 구간 내내 가격 칸 위(또는 아래)로 벗어난 이동평균: 선이 칸 가장자리에서 잘려 하나도 안 보인다 → 가장자리에 '120일선(범위 위)' 표시.
+  // 칩은 켜져 있고 차트 아래 값 줄에도 값이 있는데 선만 없어 고장처럼 보이지 않게 (크게 떨어진 종목을 확대했을 때 — RGTX)
+  const maWord = p.period === "W" ? "주" : p.period === "M" ? "월" : p.period === "D" ? "일" : "봉";
+  const maOff = useMemo(() => {
+    const out: { period: number; side: "above" | "below" }[] = [];
+    for (const m of mas) {
+      let count = 0, above = 0, below = 0;
+      for (let i = start; i < end; i++) {
+        const v = m.values[i];
+        if (v === null || v === undefined) continue;
+        count++;
+        if (v >= domain[1]) above++;
+        else if (v <= domain[0]) below++;
+      }
+      if (count && above === count) out.push({ period: m.period, side: "above" });
+      else if (count && below === count) out.push({ period: m.period, side: "below" });
+    }
+    return out;
+  }, [mas, start, end, domain]);
+  // 그림 안 글자(평단 → 52주 최고 → 52주 최저 → 벗어난 이동평균) 자리 (lib/chartBasis placeInsideLabels): 선 위·아래를 가로로 훑어
+  // 봉·다른 글자·현재가선을 가리지 않는 곳, 최신 봉은 특히 덮지 않는다. 마땅한 자리가 없으면 글자를 빼고 선만 (평단은 늘 적는다).
+  // 범위 밖 평단·벗어난 이동평균은 선 없이 맨 위·맨 아래 가장자리 글자 (가로로만 옮긴다)
+  const inside = useMemo(() => {
+    const want: (InsideLabel & { key: string; ma?: number })[] = [];
+    if (avgIn) want.push({ key: "avg", y: yOf(p.avgPrice!), text: `평단 ${axisPrice(p.avgPrice!, currency)}`, prefer: "left", keep: true });
     else if (avgOut)
-      want.push({ key: "avg", y: avgOut === "above" ? 12 : priceH - 4, text: `${avgOut === "above" ? "평단(범위 위)" : "평단(범위 아래)"} ${axisPrice(p.avgPrice!, currency)}`, prefer: "left", fixed: true });
+      want.push({
+        key: "avg",
+        y: avgOut === "above" ? EDGE_TOP_Y : priceH - EDGE_BOTTOM_Y,
+        text: `${avgOut === "above" ? "평단(범위 위)" : "평단(범위 아래)"} ${axisPrice(p.avgPrice!, currency)}`,
+        prefer: "left",
+        fixed: true,
+        keep: true,
+      });
     if (high52In) want.push({ key: "h52", y: yOf(p.high52w!), text: "52주 최고", prefer: "right" });
     if (low52In) want.push({ key: "l52", y: yOf(p.low52w!), text: "52주 최저", prefer: "right" });
-    if (!want.length) return {} as Partial<Record<"avg" | "h52" | "l52", LabelSpot & { text: string }>>;
-    const placed = placeInsideLabels({ plotW, plotH: priceH, bars: barBoxes, labels: want });
-    return Object.fromEntries(want.map((w, i) => [w.key, { ...placed[i]!, text: w.text }])) as Partial<Record<"avg" | "h52" | "l52", LabelSpot & { text: string }>>;
-  })();
+    for (const m of maOff)
+      want.push({
+        key: `ma${m.period}`,
+        ma: m.period,
+        y: m.side === "above" ? EDGE_TOP_Y : priceH - EDGE_BOTTOM_Y,
+        text: `${m.period}${maWord}선(범위 ${m.side === "above" ? "위" : "아래"})`,
+        prefer: "right",
+        fixed: true,
+        lead: MA_SWATCH_W + MA_SWATCH_GAP,
+      });
+    if (!want.length) return [];
+    const placed = placeInsideLabels({ plotW, plotH: priceH, bars: barBoxes, labels: want, lines: currentY === null ? [] : [currentY] });
+    return want.flatMap((w, i) => (placed[i] ? [{ key: w.key, ma: w.ma, text: w.text, spot: placed[i]! }] : []));
+  }, [avgIn, avgOut, high52In, low52In, p.avgPrice, p.high52w, p.low52w, maOff, maWord, yOf, priceH, plotW, barBoxes, currentY, currency]);
   const labelBg = p.labelBg ?? t.surface;
-  // 과거 구간 안내 버튼 자리: 그림 위쪽 가운데·왼쪽·오른쪽 중 봉을 가장 적게 가리는 곳 (급등한 봉 꼭대기·최신 봉을 덮지 않게)
-  const pastAlign = p.pastView
-    ? topOverlayAlign({ plotW, width: pastViewWidth(p.pastView.text, chromeScale), bottom: space.xs + BANNER_H, bars: barBoxes, edge: space.xs })
-    : "center";
+  // 과거 구간 안내 버튼: 그림 위쪽 가운데·왼쪽·오른쪽 중 봉과 그림 안 글자(평단·52주)를 가장 적게 가리는 곳 (급등한 봉 꼭대기·최신 봉·
+  // 범위 밖 평단 글자를 덮지 않게). 긴 글이 칸에 다 들어가지 않거나 짧은 글이 덜 가리면 짧은 글('2일 전 · 최신으로' — 접은 화면 360·큰 글씨)
+  const pastText = p.pastView?.text ?? null;
+  const pastShort = p.pastView?.short ?? null;
+  const past = useMemo(() => {
+    if (!pastText) return null;
+    const edge = space.xs;
+    // 글자 무게: 평단(범위 밖이면 유일한 평단 표시)은 봉 30개만큼, 52주·이동평균 표시는 10개만큼
+    const labels = inside.map((l) => ({ ...l.spot.box, weight: l.key === "avg" ? 30 : 10 }));
+    const place = (text: string) => ({ text, ...topOverlayAlign({ plotW, width: pastViewWidth(text, chromeScale), bottom: space.xs + BANNER_H, bars: barBoxes, labels, edge }) });
+    const long = pastViewWidth(pastText, chromeScale) <= plotW - edge * 2 ? place(pastText) : null;
+    const short = pastShort ? place(pastShort) : null;
+    if (long && (!short || long.cost <= short.cost)) return long;
+    return short ?? { text: pastText, align: "center" as OverlayAlign, cost: 0 };
+  }, [pastText, pastShort, plotW, chromeScale, barBoxes, inside]);
 
   return (
     <View style={{ width, gap: space.xs }}>
@@ -399,19 +456,24 @@ export function PriceChart(p: PriceChartProps) {
                 <Path key={m.period} d={linePath(m.values, yOf)} stroke={maColor(t, m.period)} strokeWidth={1.2} fill="none" />
               ))}
             </G>
-            {/* 52주 고/저 · 평단선: 글자는 봉·서로를 가리지 않는 자리에 옅은 바탕 상자와 함께 (spots) */}
-            {high52In && spots.h52 ? <Tag y={yOf(p.high52w!)} plotW={plotW} axisW={axisW} label={spots.h52.text} color={t.muted} dotted spot={spots.h52} bg={labelBg} /> : null}
-            {low52In && spots.l52 ? <Tag y={yOf(p.low52w!)} plotW={plotW} axisW={axisW} label={spots.l52.text} color={t.muted} dotted spot={spots.l52} bg={labelBg} /> : null}
-            {avgIn && spots.avg ? (
-              // 평단 글자는 오른쪽 축이 아니라 그림 안 선 곁에 적는다 → 축 폭에 잘리거나 현재가 태그와 겹치지 않는다
-              <Tag y={yOf(p.avgPrice!)} plotW={plotW} axisW={axisW} label={spots.avg.text} color={t.gold} dashed spot={spots.avg} bg={labelBg} />
-            ) : null}
-            {avgOut && spots.avg ? (
-              // 범위 밖 평단은 선 없이 맨 위·맨 아래 가장자리 글자 (왼쪽, 봉을 가리면 오른쪽)
-              <LabelText spot={spots.avg} label={spots.avg.text} color={t.gold} bg={labelBg} bold={false} />
-            ) : null}
-            {/* 현재가선 */}
+            {/* 52주 고/저 · 평단 · 현재가 선 (글자는 선을 모두 그린 뒤에 — 다른 선이 글자를 가로지르지 않게) */}
+            {high52In ? <Tag y={yOf(p.high52w!)} plotW={plotW} axisW={axisW} color={t.muted} dotted /> : null}
+            {low52In ? <Tag y={yOf(p.low52w!)} plotW={plotW} axisW={axisW} color={t.muted} dotted /> : null}
+            {avgIn ? <Tag y={yOf(p.avgPrice!)} plotW={plotW} axisW={axisW} color={t.gold} dashed /> : null}
             {showCurrent ? <Tag y={yOf(p.currentPrice!)} plotW={plotW} axisW={axisW} label={axisPrice(p.currentPrice!, currency)} color={curColor} dashed filled /> : null}
+            {/* 그림 안 글자 (평단 · 52주 · 벗어난 이동평균): 봉·서로·현재가선을 가리지 않는 자리에 옅은 바탕 상자와 함께 (inside).
+                평단 글자는 오른쪽 축이 아니라 그림 안 선 곁에 적는다 → 축 폭에 잘리거나 현재가 태그와 겹치지 않는다 */}
+            {inside.map((l) => (
+              <LabelText
+                key={l.key}
+                spot={l.spot}
+                label={l.text}
+                color={l.key === "avg" ? t.gold : t.muted}
+                bg={labelBg}
+                bold={l.key === "avg" && avgIn}
+                swatch={l.ma !== undefined ? maColor(t, l.ma) : undefined}
+              />
+            ))}
             {/* 거래량 */}
             {volPaths ? (
               <>
@@ -495,7 +557,7 @@ export function PriceChart(p: PriceChartProps) {
           </Svg>
         </View>
       </GestureDetector>
-      {p.pastView ? <PastViewButton text={p.pastView.text} onPress={p.pastView.onLatest} plotW={plotW} align={pastAlign} /> : null}
+      {p.pastView && past ? <PastViewButton text={past.text} speech={p.pastView.text} onPress={p.pastView.onLatest} plotW={plotW} align={past.align} /> : null}
       </View>
       {/* 이동평균 값은 차트 아래 (위쪽 조작·읽기 줄을 한 줄로 유지, 3-21) */}
       {p.showMaValues !== false ? (
@@ -537,8 +599,8 @@ function fmtNum(v: number | null | undefined, digits: number): string {
 }
 
 /**
- * 가로 기준선 + 글자. spot 이 있으면 글자를 그림 안(placeInsideLabels 가 고른 자리)에 옅은 바탕 상자와 함께,
- * 없으면 오른쪽 축 태그(현재가)
+ * 가로 기준선. label 이 있으면 오른쪽 축 태그(현재가 — filled 면 색 상자 위 글자).
+ * 그림 안 글자(평단·52주)는 선을 모두 그린 뒤 LabelText 로 따로 그린다 (다른 선이 글자를 가로지르지 않게)
  */
 function Tag({
   y,
@@ -549,71 +611,74 @@ function Tag({
   dashed,
   dotted,
   filled,
-  spot,
-  bg,
 }: {
   y: number;
   plotW: number;
   axisW: number;
-  label: string;
+  label?: string;
   color: string;
   dashed?: boolean;
   dotted?: boolean;
   filled?: boolean;
-  /** 그림 안 글자 자리 (평단·52주) */
-  spot?: LabelSpot;
-  /** 그림 안 글자 바탕색 */
-  bg?: string;
 }) {
   const t = useTheme();
   return (
     <>
       <Line x1={0} x2={plotW} y1={y} y2={y} stroke={color} strokeWidth={dotted ? 0.8 : 1} strokeDasharray={dashed ? "5 3" : dotted ? "1.5 3" : undefined} strokeOpacity={dotted ? 0.7 : 0.9} />
-      {spot ? (
-        <LabelText spot={spot} label={label} color={color} bg={bg ?? t.surface} bold={!dotted} />
-      ) : (
+      {label ? (
         <>
           {filled ? <Rect x={plotW} y={y - 8} width={axisW} height={16} fill={color} rx={3} /> : null}
           <SvgText x={plotW + 4} y={y + 3.5} fill={filled ? t.bg : color} fontSize={font.tiny} fontWeight="700">
             {label}
           </SvgText>
         </>
-      )}
+      ) : null}
     </>
   );
 }
 
-/** 그림 안 글자 한 개: 바탕색 토큰으로 옅게 깐 상자 + 글자 (뒤의 봉·선을 가려 글자가 읽히게) */
-function LabelText({ spot, label, color, bg, bold }: { spot: LabelSpot; label: string; color: string; bg: string; bold: boolean }) {
+/**
+ * 그림 안 글자 한 개: 바탕색 토큰으로 옅게 깐 상자 + 글자 (뒤의 봉·선을 가려 글자가 읽히게).
+ * swatch 가 있으면 글자 앞에 그 색 네모 (벗어난 이동평균 — 칩의 색 줄과 같은 모양, 글자는 대비가 보장되는 muted)
+ */
+function LabelText({ spot, label, color, bg, bold, swatch }: { spot: LabelSpot; label: string; color: string; bg: string; bold: boolean; swatch?: string }) {
   const b = spot.box;
   return (
     <>
       <Rect x={b.left} y={b.top} width={b.right - b.left} height={b.bottom - b.top} fill={bg} fillOpacity={LABEL_BG_OPACITY} rx={radius.sm / 2} />
-      <SvgText x={spot.x} y={spot.ty} textAnchor={spot.side === "right" ? "end" : "start"} fill={color} fontSize={font.tiny} fontWeight={bold ? "700" : "400"}>
+      {swatch ? <Rect x={b.left + LABEL_PAD} y={spot.ty - 4 - MA_SWATCH_H / 2} width={MA_SWATCH_W} height={MA_SWATCH_H} fill={swatch} /> : null}
+      <SvgText
+        x={swatch ? b.left + LABEL_PAD + MA_SWATCH_W + MA_SWATCH_GAP : spot.x}
+        y={spot.ty}
+        textAnchor={!swatch && spot.side === "right" ? "end" : "start"}
+        fill={color}
+        fontSize={font.tiny}
+        fontWeight={bold ? "700" : "400"}
+      >
         {label}
       </SvgText>
     </>
   );
 }
 
-/** 과거 구간 안내 버튼의 폭 어림 (글자 폭 + 아이콘 둘 + 사이 간격 + 좌우 안쪽 여백). 자리 고르기에만 쓴다 */
+/** 과거 구간 안내 버튼의 폭 어림 (글자 폭 + 아이콘 둘 + 사이 간격 + 좌우 안쪽 여백). 자리·긴 글/짧은 글 고르기에 쓴다 */
 function pastViewWidth(text: string, scale: number): number {
   return estimateTextWidth(`${text} · 최신으로`, font.small * scale) + font.small * 2 + space.xs * 2 + space.sm * 2;
 }
 
 /**
- * 과거 구간 안내 (기능 플래그 detailPolish): 차트를 과거로 옮겼으면 그림 위쪽에 '2일 전까지 보는 중 · 최신으로'.
- * 누르면 최신 구간으로. 보이는 높이 32 + 위아래 hitSlop = 누르는 영역 44. 그림 칸(가격 축 제외)의 가운데·왼쪽·오른쪽 중 봉을 가장 덜 가리는 곳(topOverlayAlign)에 놓고 칸을 넘지 않게 한 줄로 줄인다.
- * 둘레 틀은 누르기를 통과시켜(box-none) 버튼 밖 그림은 그대로 드래그·십자선이 된다
+ * 과거 구간 안내 (기능 플래그 detailPolish): 차트를 과거로 옮겼으면 그림 위쪽에 '2일 전까지 보는 중 · 최신으로' (좁으면 '2일 전 · 최신으로').
+ * 누르면 최신 구간으로. 보이는 높이 32 + 위아래 hitSlop = 누르는 영역 44. 그림 칸(가격 축 제외)의 가운데·왼쪽·오른쪽 중 봉·글자를 가장 덜 가리는 곳(topOverlayAlign)에 놓고 칸을 넘지 않게 한 줄로 줄인다.
+ * 화면 읽기는 늘 긴 글(speech). 둘레 틀은 누르기를 통과시켜(box-none) 버튼 밖 그림은 그대로 드래그·십자선이 된다
  */
-function PastViewButton({ text, onPress, plotW, align }: { text: string; onPress: () => void; plotW: number; align: "center" | "left" | "right" }) {
+function PastViewButton({ text, speech, onPress, plotW, align }: { text: string; speech: string; onPress: () => void; plotW: number; align: OverlayAlign }) {
   const t = useTheme();
   return (
     <View style={[styles.pastWrap, { width: plotW, alignItems: align === "left" ? "flex-start" : align === "right" ? "flex-end" : "center" }]}>
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
-        accessibilityLabel={`${text}. 누르면 최신 차트로 돌아갑니다`}
+        accessibilityLabel={`${speech}. 누르면 최신 차트로 돌아갑니다`}
         hitSlop={slopFor(BANNER_H)}
         style={({ pressed }) => [styles.past, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.accent }]}
       >

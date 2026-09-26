@@ -3,7 +3,7 @@ import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useFeature } from "@/api/hooks";
 import type { Candle, CandlePeriod, ChartUnit, Currency, Quote } from "@/api/types";
-import { candleChartSize, pastViewText } from "@/lib/chartLayout";
+import { candleChartSize, pastViewLabel } from "@/lib/chartLayout";
 import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
@@ -89,9 +89,12 @@ export function CandleChart({
   const k = toKrw ? fx! : 1;
   const conv = (v: number | null | undefined) => (v === null || v === undefined ? null : v * k);
   const chartCurrency: ChartUnit = toKrw ? ("KRW" as Currency) : currency;
-  // 보이는 구간은 기간별로 따로 기억한다. 기간이 바뀌면 그 기간의 기본 칩(최신 구간)에서 시작
+  // 보이는 구간(봉 수 칩·과거로 옮긴 위치)은 지금 기간 것 하나만 든다. 기간이 바뀌면 그 기간의 기본 칩(최신 구간)에서 시작
   const defaultView = (per: CandlePeriod): ChartView => ({ count: WINDOWS[per][1] ?? 120, offset: 0 });
   const [vs, setVs] = useState<{ period: CandlePeriod; windowIdx: number; view: ChartView }>(() => ({ period, windowIdx: 1, view: defaultView(period) }));
+  // 기간이 바뀌면(칩·주소·다른 화면 어디서 바꾸든) 새 기간의 기본 구간으로 바로 적는다. 예전에는 새 기간에서 아무것도 만지지 않으면
+  // 옛 기간 값이 남아, 일 → 주 → 일로 돌아왔을 때 일봉의 옛 위치('60일 전')와 과거 구간 안내가 되살아났다 (렌더 중 이전 값과 비교하는 React 권장 방식)
+  if (vs.period !== period) setVs({ period, windowIdx: 1, view: defaultView(period) });
   const cur = vs.period === period ? vs : { period, windowIdx: 1, view: defaultView(period) };
   const windowIdx = cur.windowIdx;
   const view = cur.view;
@@ -107,10 +110,10 @@ export function CandleChart({
 
   const clamped = clampView(view, all.length);
   const maxOffset = Math.max(all.length - clamped.count, 0);
-  // 과거로 옮겼으면 차트 위에 '2일 전까지 보는 중 · 최신으로' (기능 플래그 detailPolish — 앱 fallback 꺼짐).
-  // 보이는 구간은 이 화면의 상태라 화면을 다시 열거나 기간을 바꾸면 최신 구간에서 시작한다 (아래 vs)
+  // 과거로 옮겼으면 차트 위에 '2일 전까지 보는 중 · 최신으로' (기능 플래그 detailPolish — 앱 fallback 꺼짐). 좁은 자리에서는 짧은 글 '2일 전 · 최신으로'.
+  // 보이는 구간은 이 화면의 상태라 화면을 다시 열거나 기간을 바꾸면(돌아와도) 최신 구간에서 시작한다 (위 vs)
   const polish = useFeature("detailPolish", false);
-  const pastText = polish ? pastViewText(clamped.offset, period) : null;
+  const past = polish ? pastViewLabel(clamped.offset, period, { last: all[all.length - 1 - clamped.offset], latest: all[all.length - 1] }) : null;
   const toLatest = () => setView((v) => ({ count: v.count, offset: 0 }));
   const shift = (dir: -1 | 1) => setView((v) => clampView({ count: v.count, offset: v.offset + dir * Math.round(v.count / 2) }, all.length));
   const pickWindow = (i: number) => {
@@ -238,7 +241,7 @@ export function CandleChart({
           showMaValues={!compact}
           maItems={wide}
           labelBg={fadeBg}
-          pastView={pastText ? { text: pastText, onLatest: toLatest } : null}
+          pastView={past ? { text: past.text, short: past.short, onLatest: toLatest } : null}
         />
       )}
 

@@ -10,7 +10,6 @@ import { ChartNotice } from "@/components/Freshness";
 import { ChangeText, ErrorView } from "@/components/ui";
 import { CHART_ICON_BTN, chartHeaderLayout, headerNeedsTwoLines } from "@/lib/chartLayout";
 import { CANDLE_COUNT, parseCandlePeriod } from "@/lib/chartPrefs";
-import { displayName } from "@/lib/detailText";
 import { currencyOfMarket, formatPct, formatPrice } from "@/lib/format";
 import { parseStockCode } from "@/lib/freshness";
 import { useFoldLayout } from "@/lib/useFoldLayout";
@@ -62,8 +61,7 @@ export default function FullscreenChartScreen() {
   const s = stock.data;
   const q = s?.quote ?? null;
   const cur = q?.currency ?? currencyOfMarket(s?.market);
-  // 이름이 티커뿐이면 시세가 준 사람이 읽는 이름으로 (상세 화면 제목과 같게 — lib/detailText)
-  const name = s ? displayName(s.name, s.code, q?.fullName) : c;
+  const name = s?.name ?? c;
   const priceText = q ? formatPrice(q.price, cur) : null;
   const changeText = q ? `${formatPrice(q.change, cur, { sign: true })} (${formatPct(q.changeRate)})` : null;
 

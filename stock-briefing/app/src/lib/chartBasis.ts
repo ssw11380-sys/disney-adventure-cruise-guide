@@ -106,7 +106,7 @@ export function priceDomain(o: {
   return [lo - pad, hi + pad];
 }
 
-// ── 그림 안쪽 글자(평단 · 52주 최고·최저) 자리 ──
+// ── 그림 안쪽 글자(평단 · 52주 최고·최저 · 벗어난 이동평균) 자리 ──
 
 export interface Box {
   left: number;
@@ -121,8 +121,12 @@ export interface InsideLabel {
   text: string;
   /** 먼저 놓아 볼 쪽 (평단은 왼쪽, 52주는 오른쪽 — 예전 자리) */
   prefer: "left" | "right";
-  /** 선 없이 가장자리에 고정한 글자 (범위 밖 평단): 위아래로 옮기지 않고 좌우만 바꾼다 */
+  /** 선 없이 가장자리에 고정한 글자 (범위 밖 평단 · 벗어난 이동평균 표시): 위아래로 옮기지 않고 가로로만 옮긴다 */
   fixed?: boolean;
+  /** 자리가 마땅치 않아도 빼지 않는다 (평단 — 보유자에게 가장 중요한 표시). 나머지는 최신 봉을 덮거나 다른 글자와 겹칠 수밖에 없으면 글자를 빼고 선만 둔다 */
+  keep?: boolean;
+  /** 글자 앞 표시(색 네모)의 폭 — 있으면 글자는 늘 왼쪽 맞춤 (표시 → 글자 차례) */
+  lead?: number;
 }
 
 export interface LabelSpot {
@@ -136,60 +140,153 @@ export interface LabelSpot {
 }
 
 /** 글자 바탕 상자의 좌우 안쪽 여백 · 그림 가장자리에서 띄우는 거리 (예전 Tag 와 같은 값) */
-const LABEL_PAD = 3;
+export const LABEL_PAD = 3;
 const LABEL_EDGE = 2;
 /** 글자(font.tiny) 상자: 기준선 위 10 · 아래 3. 선 위에 적을 때 기준선은 선 4 위, 선 아래에 적을 때는 선 12 아래 */
 const LABEL_ASCENT = 10;
 const LABEL_DESCENT = 3;
 const LABEL_ABOVE = 4;
 const LABEL_BELOW = 12;
-
-const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-
+/** 가로로 자리를 찾을 때 한 번에 옮기는 거리 (px) */
+const LABEL_STEP = 4;
+/** 글자 상자끼리 가로로 띄우는 거리 (나란히 놓인 두 글자가 한 글자처럼 붙어 보이지 않게) */
+const LABEL_GAP = 4;
 /**
- * 평단·52주 글자를 놓을 자리 (순수 함수 → 단위 테스트). 글자를 차례로(평단 → 52주 최고 → 52주 최저) 놓으며
- * 후보 네 곳 [먼저 쪽 선 위, 먼저 쪽 선 아래, 반대쪽 선 위, 반대쪽 선 아래] 중
- *   그림 밖으로 나가지 않고(1000) · 먼저 놓은 글자와 겹치지 않고(100) · 가리는 봉이 가장 적은(봉 하나에 1) 곳을 고른다.
- * 점수가 같으면 앞 후보 (보통은 예전 자리 그대로 — 선 위 왼쪽 평단, 선 위 오른쪽 52주).
- * 예전에는 평단 글자가 늘 왼쪽 위라 앞쪽 봉을 가리고, 52주 최저는 평단과 가까우면 최신 봉 위에 겹쳐 적었다 (RGTX 화면)
+ * 글자가 덮지 않게 지키는 최신 봉 수 (그림 오른쪽 끝부터). 사용자가 가장 먼저 보는 봉이라, 이 봉을 덮는 자리밖에 없으면
+ * 글자를 빼고 선만 둔다 (평단은 빼지 않는다)
  */
-export function placeInsideLabels(o: { plotW: number; plotH: number; bars: readonly Box[]; labels: readonly InsideLabel[] }): LabelSpot[] {
-  const placed: LabelSpot[] = [];
-  for (const l of o.labels) {
-    const w = textWidth(l.text) + LABEL_PAD * 2;
-    const sides: ("left" | "right")[] = l.prefer === "left" ? ["left", "right"] : ["right", "left"];
-    const baselines = l.fixed ? [l.y] : [l.y - LABEL_ABOVE, l.y + LABEL_BELOW];
-    let best: { spot: LabelSpot; cost: number } | null = null;
-    for (const side of sides)
-      for (const ty of baselines) {
-        const left = side === "left" ? LABEL_EDGE : o.plotW - LABEL_EDGE - w;
-        const box = { left, right: left + w, top: ty - LABEL_ASCENT, bottom: ty + LABEL_DESCENT };
-        let cost = box.top < 0 || box.bottom > o.plotH ? 1000 : 0;
-        for (const p of placed) if (overlaps(p.box, box)) cost += 100;
-        for (const b of o.bars) if (overlaps(b, box)) cost += 1;
-        if (!best || cost < best.cost) best = { cost, spot: { side, ty, x: side === "left" ? left + LABEL_PAD : box.right - LABEL_PAD, box } };
-      }
-    placed.push(best!.spot);
+export const LABEL_GUARD_BARS = 5;
+/** 가장 나은 자리도 지난 봉을 이만큼 이상 덮으면(봉이 빽빽한 줄) 글자를 빼고 선만 둔다 (평단은 빼지 않는다) */
+export const LABEL_DROP_BARS = 8;
+/**
+ * 자리 점수 (낮을수록 좋다): label 다른 글자와 겹침 · guard 최신 봉 하나 · bar 지난 봉 하나 ·
+ * line 다른 가로선(현재가·평단·52주)이 글자를 가로지름 · below 선 아래(예전 자리는 선 위) · far 먼저 쪽 끝에서 그림 폭만큼 떨어짐(비례)
+ */
+const COST = { label: 100, guard: 25, bar: 1, line: 3, below: 0.25, far: 2 } as const;
+
+const overlaps = (a: Box, b: Box, gap = 0) => a.left < b.right + gap && b.left < a.right + gap && a.top < b.bottom && b.top < a.bottom;
+
+/** 상자가 덮는 봉 수 (지난 봉 · 최신 봉). bars 는 왼쪽부터 차례로 (보이는 봉) — 상자 폭 안의 봉만 본다. guardFrom 부터는 최신 봉 */
+function barHits(bars: readonly Box[], box: Box, guardFrom: number): { old: number; latest: number } {
+  let lo = 0, hi = bars.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars[mid]!.right <= box.left) lo = mid + 1;
+    else hi = mid;
   }
-  return placed;
+  let old = 0, latest = 0;
+  for (let i = lo; i < bars.length && bars[i]!.left < box.right; i++)
+    if (overlaps(bars[i]!, box)) {
+      if (i >= guardFrom) latest++;
+      else old++;
+    }
+  return { old, latest };
+}
+
+/** 그림 안 글자 상자 폭 (글자 + 앞 표시 + 좌우 여백) */
+export function insideLabelWidth(l: Pick<InsideLabel, "text" | "lead">): number {
+  return textWidth(l.text) + (l.lead ?? 0) + LABEL_PAD * 2;
 }
 
 /**
- * 그림 위쪽에 덧그리는 상자(과거 구간 안내 버튼)를 가운데·왼쪽·오른쪽 중 어디에 둘지 (순수 함수 → 단위 테스트).
- * 폭 width · 위에서 bottom 까지의 상자가 가리는 봉이 가장 적은 곳, 같으면 가운데 → 왼쪽 → 오른쪽.
- * 급등한 봉 꼭대기(RGTX 6월)나 최신 봉을 버튼이 덮지 않게 한다
+ * 평단·52주·벗어난 이동평균 글자를 놓을 자리 (순수 함수 → 단위 테스트). 놓지 않으면 null (선만 그린다).
+ *
+ * 글자마다 선 위·선 아래(fixed 면 그 줄) × 그림 왼쪽 끝부터 오른쪽 끝까지 LABEL_STEP 간격의 자리를 모두 보고, 점수(COST)가 가장 낮은 곳을 고른다 —
+ * 봉·다른 글자·다른 가로선을 가리지 않고, 최신 봉(오른쪽 끝 LABEL_GUARD_BARS 개)은 특히 덮지 않고, 되도록 예전 자리(평단 왼쪽 위, 52주 오른쪽 위) 가까이.
+ * 차례로(평단 → 52주 → 이동평균) 놓은 뒤 두 번 더 돌며 서로를 보고 다시 고른다 (먼저 놓은 평단이 자리를 막아 52주가 최신 봉을 덮던 것 — RGTX).
+ * 가장 나은 자리도 최신 봉을 덮거나, 다른 글자와 겹치거나, 지난 봉을 LABEL_DROP_BARS 개 이상 덮으면 글자를 뺀다 (keep 인 평단은 빼지 않는다).
+ * 예전에는 네 자리(양쪽 × 선 위·아래)만 보고 차례로 정해, 오늘 52주 신저가인 RGTX 에서 '52주 최저'가 최신 봉 16개를 덮었다.
+ *
+ * bars 는 왼쪽부터 차례로 (보이는 봉의 몸통·꼬리 상자), lines 는 글자가 가로지르지 않았으면 하는 다른 가로선 y (현재가선)
  */
-export function topOverlayAlign(o: { plotW: number; width: number; bottom: number; bars: readonly Box[]; edge?: number }): "center" | "left" | "right" {
+export function placeInsideLabels(o: {
+  plotW: number;
+  plotH: number;
+  bars: readonly Box[];
+  labels: readonly InsideLabel[];
+  lines?: readonly number[];
+  guard?: number;
+}): (LabelSpot | null)[] {
+  const guardFrom = o.bars.length - (o.guard ?? LABEL_GUARD_BARS);
+  // 모든 글자의 선 (fixed 가 아닌 것) + 부르는 쪽이 준 선: 글자가 자기 선이 아닌 선을 가로지르면 감점
+  const lineYs = o.labels.map((l) => (l.fixed ? null : l.y));
+  type Cand = { spot: LabelSpot; base: number; old: number; latest: number };
+  const cands = o.labels.map((l, idx): Cand[] => {
+    const w = insideLabelWidth(l);
+    const maxLeft = o.plotW - LABEL_EDGE - w;
+    const lefts: number[] = [];
+    if (maxLeft >= LABEL_EDGE) {
+      for (let x = LABEL_EDGE; x < maxLeft; x += LABEL_STEP) lefts.push(x);
+      lefts.push(maxLeft);
+    } else if (l.keep) lefts.push(LABEL_EDGE); // 폭이 모자라도 평단은 왼쪽 끝에 (글자가 조금 넘친다)
+    const prefLeft = l.prefer === "left" ? LABEL_EDGE : Math.max(LABEL_EDGE, maxLeft);
+    const lines = [...(o.lines ?? []), ...lineYs.filter((_, j) => j !== idx)];
+    const baselines: [number, number][] = l.fixed ? [[l.y, 0]] : [[l.y - LABEL_ABOVE, 0], [l.y + LABEL_BELOW, COST.below]];
+    const list: Cand[] = [];
+    for (const [ty, extra] of baselines) {
+      const top = ty - LABEL_ASCENT, bottom = ty + LABEL_DESCENT;
+      // 그림 밖으로 나가는 줄은 후보가 아니다
+      if (top < 0 || bottom > o.plotH) continue;
+      for (const left of lefts) {
+        const box = { left, right: left + w, top, bottom };
+        const hit = barHits(o.bars, box, guardFrom);
+        let base = extra + (Math.abs(left - prefLeft) / Math.max(o.plotW, 1)) * COST.far + hit.old * COST.bar + hit.latest * COST.guard;
+        for (const y of lines) if (y !== null && y > top && y < bottom) base += COST.line;
+        const side: "left" | "right" = l.lead || left + w / 2 < o.plotW / 2 ? "left" : "right";
+        list.push({ base, old: hit.old, latest: hit.latest, spot: { side, ty, x: side === "left" ? left + LABEL_PAD : box.right - LABEL_PAD, box } });
+      }
+    }
+    return list;
+  });
+  const placed: (Cand | null)[] = o.labels.map(() => null);
+  const clash = (i: number, box: Box) => placed.some((p, j) => j !== i && p !== null && overlaps(p.spot.box, box, LABEL_GAP));
+  // 차례로 놓고(0), 서로를 보며 두 번 더 고른다(1·2). 같은 점수면 먼저 본 자리
+  for (let round = 0; round < 3; round++)
+    for (let i = 0; i < o.labels.length; i++) {
+      let best: { c: Cand; cost: number } | null = null;
+      for (const c of cands[i]!) {
+        let total = c.base;
+        for (let j = 0; j < placed.length; j++) if (j !== i && placed[j] && overlaps(placed[j]!.spot.box, c.spot.box, LABEL_GAP)) total += COST.label;
+        if (!best || total < best.cost - 1e-9) best = { c, cost: total };
+      }
+      placed[i] = best?.c ?? null;
+    }
+  // 빼는 글자: 최신 봉을 덮거나, 지난 봉을 너무 많이 덮거나, 다른 글자와 겹친다 (평단은 남긴다). 뺀 글자는 다른 글자의 겹침으로 세지 않도록 차례로
+  const out: (LabelSpot | null)[] = placed.map((p) => p?.spot ?? null);
+  for (let i = 0; i < o.labels.length; i++) {
+    const p = placed[i];
+    if (!p || o.labels[i]!.keep) continue;
+    if (p.latest > 0 || p.old >= LABEL_DROP_BARS || clash(i, p.spot.box)) {
+      out[i] = null;
+      placed[i] = null;
+    }
+  }
+  return out;
+}
+
+/** 과거 구간 안내 버튼 자리 */
+export type OverlayAlign = "center" | "left" | "right";
+
+/**
+ * 그림 위쪽에 덧그리는 상자(과거 구간 안내 버튼)를 가운데·왼쪽·오른쪽 중 어디에 둘지 (순수 함수 → 단위 테스트).
+ * 폭 width · 위에서 bottom 까지의 상자가 가리는 봉(하나에 1)과 그림 안 글자(평단·52주·이동평균 표시 — 하나에 weight, 기본 20)가 가장 적은 곳, 같으면 가운데 → 왼쪽 → 오른쪽.
+ * 급등한 봉 꼭대기(RGTX 6월)·최신 봉·범위 밖 평단 글자('평단(범위 위) …', 왼쪽 위)를 버튼이 덮지 않게 한다. cost 는 그 자리의 점수 (0 = 아무것도 덮지 않음)
+ */
+export function topOverlayAlign(o: { plotW: number; width: number; bottom: number; bars: readonly Box[]; labels?: readonly (Box & { weight?: number })[]; edge?: number }): {
+  align: OverlayAlign;
+  cost: number;
+} {
   const edge = o.edge ?? LABEL_EDGE;
   const w = Math.min(o.width, o.plotW - edge * 2);
   const lefts = { center: (o.plotW - w) / 2, left: edge, right: o.plotW - edge - w } as const;
-  let best: { align: "center" | "left" | "right"; hits: number } | null = null;
+  let best: { align: OverlayAlign; cost: number } | null = null;
   for (const align of ["center", "left", "right"] as const) {
     const box = { left: lefts[align], right: lefts[align] + w, top: 0, bottom: o.bottom };
-    const hits = o.bars.filter((b) => overlaps(b, box)).length;
-    if (!best || hits < best.hits) best = { align, hits };
+    let cost = o.bars.filter((b) => overlaps(b, box)).length;
+    for (const l of o.labels ?? []) if (overlaps(l, box)) cost += l.weight ?? 20;
+    if (!best || cost < best.cost) best = { align, cost };
   }
-  return best!.align;
+  return best!;
 }
 
 /**

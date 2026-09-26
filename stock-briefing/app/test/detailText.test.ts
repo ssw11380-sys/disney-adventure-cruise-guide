@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { displayName, holdingLine, realText } from "@/lib/detailText";
+import { detailNames, detailSubtitle, holdingLine, realText } from "@/lib/detailText";
 import type { EvalView } from "@/lib/liveTick";
 
 /**
  * 종목 상세 머리 글자 (2026-09-26 RGTX 접은 화면 캡처).
  *  - 업종 자리표시('-')를 그대로 적어 'RGTX · NASDAQ · -' 로 보였다 → 뺀다 (버그 수정)
- *  - 이름이 티커뿐('RGTX')이면 시세가 준 사람이 읽는 이름으로 (버그 수정, 새 서버만 — 없으면 지어내지 않고 티커 그대로)
+ *  - 이름이 티커뿐('RGTX')이면 시세가 준 사람이 읽는 이름을 부제목 끝에 (버그 수정, 새 서버만 — 없으면 지어내지 않는다). 제목은 티커 그대로
  *  - 보유 한 줄 '보유 160주 · 평가손익 -2,342,254원 (-26.25%)' (기능 플래그 detailPolish)
  */
 const ev = (o: Partial<EvalView>): EvalView => ({ marketValue: 0, costBasis: 0, profit: 0, profitRate: 0, currency: "KRW", estimated: false, krwBasis: null, ...o });
@@ -18,27 +18,31 @@ describe("자리표시 글자", () => {
   });
 });
 
-describe("화면에 쓸 이름", () => {
+describe("제목·부제목 이름", () => {
   const FULL = "Defiance Daily Target 2X Long RGTI ETF";
-  it("등록 이름이 티커뿐이면 시세의 이름(fullName)", () => {
-    expect(displayName("RGTX", "RGTX", FULL)).toBe(FULL);
-    expect(displayName("rgtx", "RGTX", FULL)).toBe(FULL);
-    expect(displayName("BRK.B", "BRK-B", "버크셔 해서웨이 B")).toBe("버크셔 해서웨이 B");
-    expect(displayName("", "RGTX", FULL)).toBe(FULL);
-    expect(displayName(null, "RGTX", FULL)).toBe(FULL);
+  it("제목은 등록 이름(티커뿐이어도) 그대로, 티커뿐이면 시세의 이름(fullName)을 부제목 끝에 덧붙인다", () => {
+    expect(detailNames("RGTX", "RGTX", FULL)).toEqual({ title: "RGTX", alias: FULL });
+    expect(detailNames("rgtx", "RGTX", FULL)).toEqual({ title: "rgtx", alias: FULL });
+    expect(detailNames("BRK.B", "BRK-B", "버크셔 해서웨이 B")).toEqual({ title: "BRK.B", alias: "버크셔 해서웨이 B" });
+    expect(detailNames("", "RGTX", FULL)).toEqual({ title: "RGTX", alias: FULL });
+    expect(detailNames(null, "RGTX", FULL)).toEqual({ title: "RGTX", alias: FULL });
   });
 
-  it("사람이 읽는 이름이 이미 있으면 그대로", () => {
-    expect(displayName("삼성전자", "005930", "Samsung Electronics")).toBe("삼성전자");
-    expect(displayName("애플", "AAPL", "Apple Inc.")).toBe("애플");
+  it("사람이 읽는 이름이 이미 있으면 덧붙이지 않는다", () => {
+    expect(detailNames("삼성전자", "005930", "Samsung Electronics")).toEqual({ title: "삼성전자", alias: null });
+    expect(detailNames("애플", "AAPL", "Apple Inc.")).toEqual({ title: "애플", alias: null });
   });
 
-  it("시세 이름이 없거나 자리표시이거나 그것도 티커면 지어내지 않고 등록 이름(없으면 코드)", () => {
-    expect(displayName("RGTX", "RGTX", null)).toBe("RGTX");
-    expect(displayName("RGTX", "RGTX", undefined)).toBe("RGTX");
-    expect(displayName("RGTX", "RGTX", "-")).toBe("RGTX");
-    expect(displayName("RGTX", "RGTX", "RGTX")).toBe("RGTX");
-    expect(displayName(null, "RGTX", null)).toBe("RGTX");
+  it("시세 이름이 없거나 자리표시이거나 그것도 티커면 지어내지 않는다", () => {
+    for (const full of [null, undefined, "-", "RGTX", " rgtx "]) expect(detailNames("RGTX", "RGTX", full), String(full)).toEqual({ title: "RGTX", alias: null });
+    expect(detailNames(null, "RGTX", null)).toEqual({ title: "RGTX", alias: null });
+  });
+
+  it("부제목: 코드 · 시장 · 업종 · 상태 · 이름 (업종 자리표시는 빼고, 긴 이름은 맨 끝 — 잘려도 앞은 보인다)", () => {
+    expect(detailSubtitle({ code: "005930", market: "KOSPI", industry: "반도체" })).toBe("005930 · KOSPI · 반도체");
+    expect(detailSubtitle({ code: "RGTX", market: "NASDAQ", industry: "-", alias: FULL })).toBe(`RGTX · NASDAQ · ${FULL}`);
+    expect(detailSubtitle({ code: "RGTX", market: "NASDAQ", industry: "N/A", status: "관심", alias: FULL })).toBe(`RGTX · NASDAQ · 관심 · ${FULL}`);
+    expect(detailSubtitle({ code: "AAPL", market: "NASDAQ", industry: null, status: "미등록", alias: " " })).toBe("AAPL · NASDAQ · 미등록");
   });
 });
 

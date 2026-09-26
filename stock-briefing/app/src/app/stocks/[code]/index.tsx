@@ -15,7 +15,7 @@ import { Screen } from "@/components/Screen";
 import { SplitScreen } from "@/components/SplitScreen";
 import { AnalysisPreview, AnalysisTab, BriefingList, DetailHeader, FillChart, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
 import { ErrorView, LiveDot, Segmented, Stat, StatGrid } from "@/components/ui";
-import { displayName, holdingLine, realText } from "@/lib/detailText";
+import { detailNames, detailSubtitle, holdingLine, realText } from "@/lib/detailText";
 import { detailMode, parseDetailTab, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, shownSign, toDisplay } from "@/lib/format";
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
@@ -160,11 +160,13 @@ export default function StockDetailScreen() {
   // 목록 캐시 줄은 상세 응답과 같은 모양 (registered 가 없으면 등록 종목 — 잔고 목록에 있으니 맞다)
   const s: NonNullable<typeof stock.data> = stock.data ?? seed!;
   const q = s.quote;
-  // 이름이 티커뿐이면(토스 동기화로 들어온 RGTX 등) 시세가 준 사람이 읽는 이름으로, 업종 자리표시('-')는 뺀다 (2026-09-26 버그 수정)
-  const name = displayName(s.name, s.code, q?.fullName);
+  // 제목은 등록 이름 그대로(잔고 목록·위젯과 같게). 이름이 티커뿐이면(토스 동기화로 들어온 RGTX 등) 시세가 준 사람이 읽는 이름을 부제목 끝에,
+  // 업종 자리표시('-')는 뺀다 (2026-09-26 버그 수정 — lib/detailText)
+  const { title: name, alias } = detailNames(s.name, s.code, q?.fullName);
   const industry = realText(q?.industry);
   // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가
   const unregistered = s.registered === false;
+  const subtitle = detailSubtitle({ code: s.code, market: s.market, industry, status: unregistered ? "미등록" : s.quantity ? null : "관심", alias });
   const addWatch = () => {
     if (adding) return;
     setAdding(true);
@@ -286,11 +288,14 @@ export default function StockDetailScreen() {
         />
 
         {/* 시세 머리 */}
-        <View style={[styles.quoteHead, { backgroundColor: t.surface, borderBottomColor: t.line }]}>
+        {/* 보유 한 줄이 있으면 위아래 여백을 12 → 8 로 줄여 그 줄이 차트 아래 칩 줄을 밀어내는 만큼을 조금 되찾는다 (475×663 · 글자 115%) */}
+        <View style={[styles.quoteHead, ...(hold ? [styles.quoteHeadTight] : []), { backgroundColor: t.surface, borderBottomColor: t.line }]}>
+          {/* 부제목 (넓은 창 머리의 subtitle 과 같은 글 — 이름이 있으면 끝에, 끝이 잘려도 코드·시장·상태는 보인다) */}
           <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={1}>
             {s.code} · {s.market}
             {industry ? ` · ${industry}` : ""}
             {unregistered ? " · 미등록" : s.quantity ? "" : " · 관심"}
+            {alias ? ` · ${alias}` : null}
           </Text>
           {q ? (
             <>
@@ -430,7 +435,7 @@ export default function StockDetailScreen() {
   const header = (
     <DetailHeader
       name={name}
-      sub={`${s.code} · ${s.market}${industry ? ` · ${industry}` : ""}${unregistered ? " · 미등록" : s.quantity ? "" : " · 관심"}`}
+      sub={subtitle}
       quote={
         q
           ? {
@@ -682,6 +687,7 @@ export default function StockDetailScreen() {
 const styles = {
   ...StyleSheet.create({
     quoteHead: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.xxs },
+    quoteHeadTight: { paddingTop: space.sm, paddingBottom: space.sm },
     priceRow: { flexDirection: "row", alignItems: "baseline", gap: space.s, marginTop: space.xxs },
     bigPrice: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
     change: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },

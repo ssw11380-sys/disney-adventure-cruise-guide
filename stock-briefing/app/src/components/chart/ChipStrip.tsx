@@ -1,8 +1,9 @@
+import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useRef, useState } from "react";
 import { ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import { fadeEdges, NO_FADE, sameEdges, type FadeEdges } from "@/lib/chartLayout";
-import { clearOf, slopFor, space } from "@/theme";
+import { clearOf, font, slopFor, space, useTheme } from "@/theme";
 
 /** 칩의 보이는 높이 (3-22: 24 → 32). 누르는 영역은 위아래로 넓혀 44, 좌우는 칩 간격(6)의 절반만 — 이웃 칩과 겹치지 않게 */
 export const CHIP_H = 32;
@@ -17,7 +18,7 @@ const FADE_W = space.xl;
  * 칩 hitSlop(44)이 들어가게 하고, 같은 만큼 음수 여백을 줘서 보이는 배치(칩 줄 32)는 그대로 둔다 (3-22 리뷰).
  *
  * 끝 흐림(fade, 폴드 진단 25번): 넘길 내용이 더 있는 쪽 끝을 바탕색으로 흐리게 칠해, 반쯤 잘린 마지막 칩('30분'·'RSI')이
- * 깨진 글자가 아니라 넘길 수 있다는 표시로 보이게 한다. 넘길 수 없으면(칩이 다 보이면) 칠하지 않는다.
+ * 깨진 글자가 아니라 넘길 수 있다는 표시로 보이게 한다. 흐린 끝에는 작은 꺾쇠(›·‹)를 둔다. 넘길 수 없으면(칩이 다 보이면) 칠하지 않는다.
  * backdrop 은 띠 뒤 바탕색(패널 t.surface, 전체 화면 t.bg). 스크롤 영역은 흐림을 얹는 틀을 위아래로 꽉 채운다.
  * 모든 창에서 쓴다 — 처음에는 넓은 창만이었으나 접은 화면에서도 잘린 칩이 깨져 보여(2026-09-26 RGTX 캡처) 버그 수정으로 넓혔다.
  */
@@ -50,8 +51,12 @@ export function ChipStrip({ children, backdrop, style }: { children: React.React
   );
 }
 
-/** 가장자리 흐림: 안쪽은 투명, 바깥 끝은 바탕색. 누르기·화면 읽기는 그대로 통과시킨다 */
+/**
+ * 가장자리 흐림: 안쪽은 투명, 바깥 끝은 바탕색 + 바깥 끝에 작은 꺾쇠(›·‹, muted). 누르기·화면 읽기는 그대로 통과시킨다.
+ * 꺾쇠는 좁은 창(접은 화면 360)에서 다음 칩이 몇 px 만 보여 흐림에 묻히면 넘길 칩이 있다는 것을 알 수 없던 것을 보탠다
+ */
 function Fade({ side, color }: { side: "left" | "right"; color: string }) {
+  const t = useTheme();
   const clear = clearOf(color);
   const colors: readonly [string, string] = side === "right" ? [clear, color] : [color, clear];
   return (
@@ -62,7 +67,9 @@ function Fade({ side, color }: { side: "left" | "right"; color: string }) {
       importantForAccessibility="no-hide-descendants"
       accessibilityElementsHidden
       style={[styles.fade, side === "right" ? styles.fadeRight : styles.fadeLeft]}
-    />
+    >
+      <Ionicons name={side === "right" ? "chevron-forward" : "chevron-back"} size={font.small} color={t.muted} />
+    </LinearGradient>
   );
 }
 
@@ -70,7 +77,7 @@ const styles = StyleSheet.create({
   chipScroll: { marginVertical: -CHIP_SLOP.top },
   chips: { flexDirection: "row", gap: space.s, alignItems: "center", paddingVertical: CHIP_SLOP.top },
   // 칩 줄(32) 높이에만 칠한다 (위아래로 넓힌 누르는 영역은 바탕 그대로)
-  fade: { position: "absolute", top: CHIP_SLOP.top, bottom: CHIP_SLOP.top, width: FADE_W, pointerEvents: "none" },
-  fadeLeft: { left: 0 },
-  fadeRight: { right: 0 },
+  fade: { position: "absolute", top: CHIP_SLOP.top, bottom: CHIP_SLOP.top, width: FADE_W, pointerEvents: "none", justifyContent: "center" },
+  fadeLeft: { left: 0, alignItems: "flex-start" },
+  fadeRight: { right: 0, alignItems: "flex-end" },
 });

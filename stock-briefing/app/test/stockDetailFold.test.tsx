@@ -594,7 +594,7 @@ describe("불러오는 중·오류: 넓은 창은 처음부터 합친 머리 (St
 
 describe("휴대폰·접은 화면 보유 한 줄 (기능 플래그 detailPolish — 2026-09-26 RGTX 캡처)", () => {
   /** 시세 머리 (Stack 머리 아래 첫 패널) */
-  const head = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "View" && flat(n).borderBottomWidth === 1 && flat(n).paddingTop === space.md)!;
+  const head = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "View" && flat(n).borderBottomWidth === 1 && flat(n).gap === space.xxs && flat(n).paddingHorizontal === space.lg)!;
   const line = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "Text" && /^보유 .*주, 평가손익/.test(String(n.props.accessibilityLabel ?? "")));
   const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(textOf).join(""));
 
@@ -606,6 +606,9 @@ describe("휴대폰·접은 화면 보유 한 줄 (기능 플래그 detailPolish
     expect(l.props.numberOfLines).toBe(1);
     // 시세 머리의 마지막 줄 → 차트 패널이 바로 뒤 (첫 화면에서 차트를 밀어내는 것은 이 한 줄뿐)
     expect(head(r).children.at(-1)).toBe(l);
+    // 그 한 줄만큼을 조금 되찾게 시세 머리 위아래 여백 12 → 8 (한 줄이 없으면 예전 그대로 12)
+    expect(flat(head(r))).toMatchObject({ paddingTop: space.sm, paddingBottom: space.sm });
+    expect(flat(head(open(samsung(), { polish: false })))).toMatchObject({ paddingTop: space.md, paddingBottom: space.md });
     // 색은 보이는 값의 부호 (이익 = 상승색), '보유 120주' 는 평단선과 같은 금색
     const parts = l.children.filter((c): c is HostNode => typeof c !== "string");
     expect(parts.map((p) => p.props.style)).toEqual([
@@ -654,17 +657,24 @@ describe("휴대폰·접은 화면 보유 한 줄 (기능 플래그 detailPolish
 
 describe("이름·업종 (2026-09-26 버그 수정 — 플래그 없음)", () => {
   const FULL = "Defiance Daily Target 2X Long RGTI ETF";
+  const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(textOf).join(""));
   const rgtx = (extra: Record<string, unknown> = {}) => ({
     ...holding("RGTX", quote("RGTX", 10.61, { currency: "USD", change: 0.22, changeRate: 2.12, fxRate: 1360, prevClose: 10.39, industry: "-", ...extra }), 160, 13.68, {}, "RGTX"),
     market: "NASDAQ" as const,
     registered: true,
   });
 
-  it("휴대폰: 업종이 '-' 면 'RGTX · NASDAQ' 까지만, 이름이 티커뿐이면 시세의 이름을 제목으로", () => {
+  it("휴대폰: 업종이 '-' 면 적지 않고, 이름이 티커뿐이면 제목은 티커 그대로 · 시세의 이름은 부제목 끝에", () => {
     const r = open(rgtx({ fullName: FULL }), { params: { code: "RGTX" } });
-    expect(stack(r).title).toBe(FULL);
-    expect(r.text()).toContain("RGTX · NASDAQ");
+    // 긴 영문 ETF 이름을 제목에 쓰면 접은 화면 360·큰 글씨에서 'Defiance Daily Target 2X Long …'로 잘리고 잔고 목록의 티커가 사라졌다
+    expect(stack(r).title).toBe("RGTX");
+    const sub = r.all().find((n) => n.type === "Text" && n.props.numberOfLines === 1 && /^RGTX · NASDAQ/.test(textOf(n)))!;
+    expect(textOf(sub)).toBe(`RGTX · NASDAQ · ${FULL}`);
     expect(r.text()).not.toContain("NASDAQ · -");
+    // 관심 종목이면 상태가 이름보다 앞 (긴 이름이 잘려도 '관심'은 보인다)
+    const watch = { ...rgtx({ fullName: FULL }), quantity: null, avgPrice: null, evaluation: null };
+    const w = open(watch as never, { params: { code: "RGTX" } });
+    expect(w.all().some((n) => n.type === "Text" && textOf(n) === `RGTX · NASDAQ · 관심 · ${FULL}`)).toBe(true);
   });
 
   it("시세에 이름이 없으면(예전 서버) 지어내지 않고 티커 그대로, 업종이 있으면 그대로 적는다", () => {
@@ -678,7 +688,7 @@ describe("이름·업종 (2026-09-26 버그 수정 — 플래그 없음)", () =>
   it("넓은 창 합친 머리도 같은 이름·부제", () => {
     size("F8L");
     const r = open(rgtx({ fullName: FULL }), { flag: true, params: { code: "RGTX" } });
-    expect(r.text()).toContain(FULL);
+    expect(r.all().some((n) => n.type === "Text" && textOf(n) === `RGTX · NASDAQ · ${FULL}`)).toBe(true);
     expect(r.text()).not.toContain("NASDAQ · -");
   });
 });

@@ -9,7 +9,8 @@ import { font, fontCap, layout, space, touch } from "@/tokens";
  *  - candleChartSize: 종목·지수 상세 차트 그림의 폭·높이 (휴대폰 화면은 3-42 이전 식 그대로 — phoneChartWidth)
  *  - headerNeedsTwoLines · chartHeaderLayout: 전체 화면 차트 머리 (한 줄로 그려 재 보고 넘칠 때만 가격·등락을 둘째 줄로, 머리 높이)
  *  - maLegendItems: 차트 아래 이동평균 값 줄의 항목 (한 항목이 두 줄로 나뉘지 않게 — 넓은 창만)
- *  - fadeEdges: 옆으로 넘기는 칩 띠에서 흐리게 칠할 가장자리 (넓은 창만)
+ *  - fadeEdges: 옆으로 넘기는 칩 띠에서 흐리게 칠할 가장자리 (모든 창 — 2026-09-26 버그 수정)
+ *  - pastViewLabel: 차트를 과거로 옮겼을 때 차트 위 안내 글 (기능 플래그 detailPolish)
  * 기준 숫자는 tokens.ts 의 layout·space·font (폰 실측 전 추정값은 토큰만 바꾼다)
  */
 
@@ -235,17 +236,42 @@ export function maLegendItems(mas: { period: number; values: Series }[], index: 
 /** 분봉 한 개의 분 */
 const BAR_MINUTES: Partial<Record<CandlePeriod, number>> = { "1m": 1, "5m": 5, "30m": 30 };
 
+export interface PastViewLabel {
+  /** 버튼 글 (넓은 자리): '2일 전까지 보는 중' — 화면 읽기도 이 글 */
+  text: string;
+  /** 좁은 자리(접은 화면 360 · 큰 글씨)에서 버튼에 쓰는 짧은 글: '2일 전' */
+  short: string;
+}
+
 /**
- * 차트를 과거로 옮겼을 때 차트 위에 띄우는 안내 (기능 플래그 detailPolish): '2일 전까지 보는 중'.
- * offset 은 최신 봉에서 몇 봉 앞으로 갔는지. 일·주봉은 '일'·'주', 월봉은 '개월'('3월'은 달 이름으로 읽힌다),
- * 분봉은 봉 수 × 봉 길이의 '분'(장중 거래 시간 기준 — 5분봉 3개 앞이면 15분). 최신 구간(0 이하)이면 null
+ * 차트를 과거로 옮겼을 때 차트 위에 띄우는 안내 (기능 플래그 detailPolish): '2일 전까지 보는 중' (짧은 글 '2일 전').
+ * offset 은 최신 봉에서 몇 봉 앞으로 갔는지. 일·주봉은 '일'·'주', 월봉은 '개월'('3월'은 달 이름으로 읽힌다).
+ * 분봉은 같은 날(장) 안이면 봉 수 × 봉 길이('15분 전', 60분부터 '1시간 5분 전'),
+ * 다른 날까지 갔으면 분 수 대신 보이는 마지막 봉의 날짜·시각('9월 18일 14:30까지 보는 중') — 예전 '1,950분 전'은
+ * 30분봉 65개(장 5일)인데 32시간 전으로 읽혔다. 최신 구간(0 이하)이면 null.
+ * last 는 보이는 마지막 봉, latest 는 전체의 마지막(최신) 봉 (분봉만 쓴다)
  */
-export function pastViewText(offset: number, period: CandlePeriod): string | null {
+export function pastViewLabel(
+  offset: number,
+  period: CandlePeriod,
+  bars?: { last?: { date: string; time?: string } | null; latest?: { date: string } | null },
+): PastViewLabel | null {
   if (!(offset > 0) || !Number.isFinite(offset)) return null;
   const n = Math.round(offset);
   const mins = BAR_MINUTES[period];
-  const amount = mins ? `${(n * mins).toLocaleString("ko-KR")}분` : `${n.toLocaleString("ko-KR")}${period === "W" ? "주" : period === "M" ? "개월" : "일"}`;
-  return `${amount} 전까지 보는 중`;
+  if (mins) {
+    const last = bars?.last, latest = bars?.latest;
+    if (last && latest && last.date !== latest.date) {
+      const [, m, d] = last.date.split("-").map(Number);
+      const hm = last.time && last.time.length >= 16 ? last.time.slice(11, 16) : "";
+      return { text: `${m}월 ${d}일${hm ? ` ${hm}` : ""}까지 보는 중`, short: `${m}/${d}${hm ? ` ${hm}` : ""}까지` };
+    }
+    const total = n * mins;
+    const amount = total >= 60 ? `${Math.floor(total / 60).toLocaleString("ko-KR")}시간${total % 60 ? ` ${total % 60}분` : ""}` : `${total}분`;
+    return { text: `${amount} 전까지 보는 중`, short: `${amount} 전` };
+  }
+  const amount = `${n.toLocaleString("ko-KR")}${period === "W" ? "주" : period === "M" ? "개월" : "일"}`;
+  return { text: `${amount} 전까지 보는 중`, short: `${amount} 전` };
 }
 
 // ── 칩 띠 가장자리 ──
