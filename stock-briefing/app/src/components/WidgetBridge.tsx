@@ -1,14 +1,13 @@
 import { useIsRestoring, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Dimensions, Platform } from "react-native";
+import { AppState } from "react-native";
 import { useApi, useMarketStatus } from "@/api/hooks";
 import type { FeatureFlags, LatestBriefing, MarketIndex, RegisteredWithQuote } from "@/api/types";
 import { widgetChip } from "@/lib/liveDot";
 import { useSettings } from "@/lib/settings";
 import { pickBoard, pickWidgetIndices, widgetFeatures } from "@/widgets/payload";
 import { widgetPushDue } from "@/widgets/pushPolicy";
-import { FOLD_REDRAW_DELAY_MS, screenChanged } from "@/widgets/frame";
-import { redrawForScreen, refreshBriefingWidget, refreshWidgets, widgetBriefingsKey } from "@/widgets/refresh";
+import { refreshBriefingWidget, refreshWidgets, widgetBriefingsKey } from "@/widgets/refresh";
 
 /**
  * 앱 → 홈 화면 위젯 즉시 갱신 (3-16 규칙: 시세만 바뀌면 1분에 한 번, 표시 설정·장 상태가 바뀌거나 앱을 떠날 때는 바로).
@@ -65,7 +64,8 @@ export function WidgetBridge() {
   const restoring = useIsRestoring();
   const fetchedThisSession = !restoring && dataAt > mountedAt;
   // 플래그가 바뀌어도 바로 (손익 전환·지수 줄이 켜지고 꺼지는 것을 1분 기다리지 않게)
-  const flagKey = features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}|${features.flags.polish}|${features.flags.foldFit === true}` : "";
+  // 폴드 위젯 2차(widgetFoldFit·widgetFoldBoth)도 넣는다 — 켜고 끄면 위젯을 바로 그 규칙으로 다시 그리게
+  const flagKey = features ? `${features.flags.pnlToggle}|${features.flags.indexLine}|${features.flags.market}|${features.flags.polish}|${features.flags.foldFit === true}|${features.flags.foldBoth === true}` : "";
   // 브리핑 목록이 바뀌면 바로 (다시 만들기·새 브리핑). 다듬은 모습이 꺼져 있으면 넣지 않는다 — 지금처럼 브리핑 때문에 넘기지 않게.
   // 목록(성공한 최신 브리핑의 id·만든 시각)만 보고 시세는 보지 않는다: 3종목을 고르는 순서(원화 평가금액)를 넣으면 금액이 비슷한 두 종목이
   // 체결마다 뒤집힐 때마다 1분 규칙을 건너뛰고 넘긴다 (검증 지적). 시세 때문에 바뀐 순서·구성은 다음 1분 넘김(그때 시세로 고름)에 따라간다
@@ -109,27 +109,5 @@ export function WidgetBridge() {
     });
     return () => sub.remove();
   }, []);
-  // 폴드 위젯 2차 (widgetFoldFit): 앱이 떠 있을 때 접거나 펴면(기기 화면 크기가 바뀜) 위젯을 지금 화면 크기로 다시 그린다 —
-  // 서버를 부르지 않고 마지막으로 그린 값으로 (refresh.tsx redrawForScreen). 접는 동안 여러 번 오는 변경은 FOLD_REDRAW_DELAY_MS 뒤 한 번으로.
-  // 꺼져 있으면 듣지도 않는다
-  const foldFit = features?.flags.foldFit === true;
-  useEffect(() => {
-    if (!foldFit || Platform.OS !== "android") return;
-    let last = Dimensions.get("screen");
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const sub = Dimensions.addEventListener("change", ({ screen }) => {
-      if (!screenChanged(last, screen)) return;
-      last = screen;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        void redrawForScreen();
-      }, FOLD_REDRAW_DELAY_MS);
-    });
-    return () => {
-      sub.remove();
-      if (timer) clearTimeout(timer);
-    };
-  }, [foldFit]);
   return null;
 }

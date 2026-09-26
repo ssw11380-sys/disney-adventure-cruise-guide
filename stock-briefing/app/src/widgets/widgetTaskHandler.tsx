@@ -16,7 +16,7 @@ import { WIDGET_CLICK, WIDGET_NAMES } from "./widgets";
  *  - PNL_TOGGLE(손익): 누른 위젯이 보여 주던 쪽의 반대로 바꿔 저장하고, 서버를 부르지 않고 저장해 둔 값으로 바로 다시 그린다.
  *    손익 칸 설정은 잔고 위젯 모두가 같이 쓰므로 다른 잔고 위젯도 같은 쪽으로 다시 그린다
  *  - 앞선 갱신이 실패한 뒤 이번에 서버에서 받았으면(위젯 2차 — data.recovered) 다른 위젯도 같은 값으로 다시 그려 '갱신 실패'를 모두 지운다
- *  - 크기는 widgetInfo 를 renderFor 에 넘겨 고른다 (폴드 위젯 2차 widgetFoldFit — 두 화면에서 본 크기, widgets/frame.ts). 위젯을 지우면 그 기억도 지운다
+ *  - 크기는 widgetInfo 를 renderFor 에 넘겨 고른다 (폴드 위젯 2차 widgetFoldFit — 접는 폰의 바깥 화면·두 화면에서 본 크기, widgets/frame.ts). 위젯을 지우면 그 기억도 지운다
  */
 export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<void> {
   const { widgetInfo, widgetAction, renderWidget } = props;
@@ -55,8 +55,10 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
       reuse: widgetAction !== "WIDGET_CLICK",
     });
     // 손익 칸 설정은 받은 뒤에 읽는다: 받는 동안(최대 12초, "갱신 중") 손익을 눌러 바꾼 것을 옛 값으로 되돌려 그리지 않게.
-    // 크기 변경 알림이면 알려 준다 — 크기가 기억과 같으면 접고 펼 때 온 알림 (런처가 화면마다 크기를 따로 알려 줌, frame.ts)
-    renderWidget(await renderFor(name, data, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), resized: widgetAction === "WIDGET_RESIZED" }));
+    // 크기 변경 알림·위젯 추가면 알려 준다 — 런처가 방금 알려 준 크기라 기억한 크기를 바꿀 수 있고, 크기가 기억과 같은 알림은
+    // 접고 펼 때 런처가 그 화면 크기를 다시 보낸 것 ('화면마다' 증거). 그 밖의 그리기는 옛 화면 옵션일 수 있어 기억을 바꾸지 않는다 (frame.ts)
+    const seenBy = widgetAction === "WIDGET_RESIZED" ? "resize" : widgetAction === "WIDGET_ADDED" ? "add" : "draw";
+    renderWidget(await renderFor(name, data, widgetInfo, { fontScale, now: Date.now(), pnlMode: await readPnlMode(), seenBy }));
     // 실패 뒤 첫 성공 (위젯 2차): 다른 위젯에 남은 '갱신 실패 · …'도 방금 적은 값으로 지운다 (서버를 다시 부르지 않음).
     // 실패 표시를 이 조회가 지웠을 때만 true 라, 여러 위젯이 한꺼번에 받아도 다시 그리기는 한 번이다 (data.ts)
     if (data.recovered) await redrawAllWidgets(await loadCachedWidgetData());

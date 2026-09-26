@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   removed: 0,
   share: vi.fn(async (_c: { message: string; title?: string }) => ({ action: "sharedAction" })),
   alert: vi.fn(),
+  /** 홈 화면 위젯 진단 줄 (widgets/diagnose.ts — 위젯 2차). null 이면 읽다 실패 */
+  widgetLines: [] as string[] | null,
 }));
 
 vi.mock("react-native", () => ({
@@ -42,6 +44,12 @@ vi.mock("@/theme", async () => {
   return { ...tokens, useTheme: () => tokens.light };
 });
 vi.mock("@/components/ui", () => ({ Button: "Button", Card: "Card", Muted: "Muted", Row: "Row", SectionTitle: "SectionTitle" }));
+vi.mock("@/widgets/diagnose", () => ({
+  widgetReport: async () => {
+    if (h.widgetLines === null) throw new Error("위젯 모듈 없음");
+    return h.widgetLines;
+  },
+}));
 
 const { ScreenInfoCard } = await import("@/components/ScreenInfoCard");
 
@@ -68,6 +76,7 @@ beforeEach(() => {
   h.removed = 0;
   h.share.mockClear();
   h.alert.mockClear();
+  h.widgetLines = [];
 });
 
 describe("화면 정보 카드", () => {
@@ -128,6 +137,20 @@ describe("화면 정보 카드", () => {
     expect(message).toContain("\n모델명: samsung SM-F966N\n");
     expect(message).toContain("\n앱 창 크기: 411×914 dp\n");
     expect(message).toContain("\n안드로이드 버전: 16 (API 36)\n");
+  });
+
+  it("공유: 글 끝에 홈 화면 위젯 진단(위젯 번호·크기·크기 기억)을 붙이고, 못 읽으면 화면 값만 (위젯 2차)", async () => {
+    h.widgetLines = ["[위젯] 잔고 1개 · 자산 0개 · 브리핑 0개 · 지수·환율 1개", "[위젯] 잔고 #12: 지금 476×611dp"];
+    const r = open();
+    r.act(() => (r.all().find((n) => n.type === "Button")!.props.onPress as () => void)());
+    await vi.waitFor(() => expect(h.share).toHaveBeenCalledTimes(1));
+    const message = h.share.mock.calls[0][0].message;
+    expect(message.endsWith("짐작한 값입니다.\n[위젯] 잔고 1개 · 자산 0개 · 브리핑 0개 · 지수·환율 1개\n[위젯] 잔고 #12: 지금 476×611dp")).toBe(true);
+    h.widgetLines = null;
+    h.share.mockClear();
+    r.act(() => (r.all().find((n) => n.type === "Button")!.props.onPress as () => void)());
+    await vi.waitFor(() => expect(h.share).toHaveBeenCalledTimes(1));
+    expect(h.share.mock.calls[0][0].message).toMatch(/짐작한 값입니다\.$/);
   });
 
   it("공유 창을 못 열면 글을 알림으로 보여 준다", async () => {

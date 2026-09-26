@@ -768,8 +768,8 @@ export interface PolishedInput<T extends IndexInput = IndexInput> {
   /** 줄마다 평가금액 글자 (rows 와 같은 순서, 없으면 null) — 넓은 위젯의 평가금액 칸 (planRowsWide). 주지 않으면 칸 없음 */
   values?: (string | null)[];
   /**
-   * 넓은 모습(두 열·평가금액 칸)을 고를 때 쓰는 가장 넓은 위젯 폭 (폴드 위젯 2차 — 같은 위젯이 더 좁은 바깥 화면에도 보이면 그 폭, widgets/frame.ts).
-   * 주지 않으면 width. 배치 자체(칸 폭·줄 수)는 width 로 고른다
+   * 넓은 모습(두 열·평가금액 칸)을 고를 때 쓰는 가장 넓은 위젯 폭 (폴드 위젯 2차 — 두 화면에서 본 가장 좁은 폭, 접는 폰의 바깥 화면에 보일 수 있으면 0 = 넓은 모습 없음,
+   * widgets/frame.ts). 주지 않으면 width. 배치 자체(칸 폭·줄 수)는 width 로 고른다
    */
   wideMax?: number;
 }
@@ -829,7 +829,7 @@ export function planHoldingsPolished<T extends IndexInput>(i: PolishedInput<T>):
   const size = listSize(i.height);
   const content = i.width - PAD * 2;
   // 넓은 위젯(3-42): 한 열이 WIDE.columnMin 이상이면 종목을 두 열로, 열이 WIDE.valueMin 이상이면 평가금액 칸도 (좁으면 지금 그대로).
-  // 폴드 위젯 2차: 고르는 기준 폭은 wideMax 까지 (더 좁은 화면에도 보이는 위젯이면 그 화면 폭으로 골라, 그 화면에서 넓은 모습이 나오지 않게)
+  // 폴드 위젯 2차: 고르는 기준 폭은 wideMax 까지 (바깥 화면에 보일 수 있는 그림이면 0 — 바깥 화면에서 넓은 모습이 나오지 않게)
   const wideContent = Math.min(i.width, i.wideMax ?? i.width) - PAD * 2;
   const wide: WideColumns | null = wideContent >= WIDE.columnMin * 2 + WIDE.columnGap ? { columnW: Math.floor((content - WIDE.columnGap) / 2), gap: WIDE.columnGap } : null;
   const valueRoom = wide ? Math.floor((wideContent - WIDE.columnGap) / 2) : wideContent;

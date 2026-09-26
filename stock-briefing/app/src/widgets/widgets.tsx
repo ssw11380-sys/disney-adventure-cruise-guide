@@ -103,7 +103,7 @@ export interface WidgetFrame {
   palette?: WidgetPalette;
   /**
    * 넓은 모습(잔고 평가금액 칸·두 열, 지수·환율 옆 칸)을 고를 때 쓰는 가장 넓은 폭 (폴드 위젯 2차 — frame.ts "wide":
-   * 같은 위젯이 더 좁은 바깥 화면에도 보이면 그 폭). 없으면 width
+   * 두 화면에서 본 가장 좁은 폭, 접는 폰의 바깥 화면에 보일 수 있으면 0 = 넓은 모습 없음). 없으면 width
    */
   wideWidth?: number;
 }
@@ -619,7 +619,7 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
     alert,
     // 넓은 위젯(3-42)의 평가금액 칸 — 좁은 위젯에서는 쓰지 않는다 (layout.ts planRowsWide)
     values: rows.map((r) => r.value),
-    // 폴드 위젯 2차: 더 좁은 화면에도 보이는 위젯이면 넓은 모습은 그 폭까지 (frame.ts)
+    // 폴드 위젯 2차: 넓은 모습은 이 폭까지 (접는 폰의 바깥 화면에 보일 수 있으면 0 — frame.ts)
     ...(props.wideWidth !== undefined ? { wideMax: props.wideWidth } : {}),
   });
   const pnl = plan.total?.toggle ? chosen : cum;

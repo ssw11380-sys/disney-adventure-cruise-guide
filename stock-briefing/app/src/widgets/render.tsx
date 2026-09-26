@@ -2,7 +2,7 @@ import React from "react";
 import { FlexWidget, TextWidget } from "react-native-android-widget";
 import { space } from "@/tokens";
 import type { WidgetData } from "./data";
-import { frameFor, type BoxInfo } from "./frame";
+import { frameFor, type BoxInfo, type SeenBy } from "./frame";
 import type { PnlMode } from "./model";
 import { WIDGET_FONT, WIDGET_PALETTES, WIDGET_RADIUS, type WidgetPalette } from "./palette";
 import { MarketWidget } from "./marketWidget";
@@ -15,13 +15,13 @@ import { AssetWidget, BriefingWidget, HoldingsWidget, WIDGET_NAMES } from "./wid
  */
 
 export interface RenderOpts {
-  /** 배치를 고를 폭·높이 (dp) — 보통 widgetInfo 의 크기. 폴드 미러링이면 두 화면에 모두 들어가는 크기 (frame.ts) */
+  /** 배치를 고를 폭·높이 (dp) — 보통 widgetInfo 의 크기. widgetFoldBoth 로 두 화면에 맞추면 두 화면에 모두 들어가는 크기 (frame.ts) */
   width: number;
   height: number;
-  /** 넓은 모습(평가금액 칸·두 열·지수 옆 칸)을 고를 때 쓰는 가장 넓은 폭 (frame.ts "wide"). 없으면 width */
+  /** 넓은 모습(평가금액 칸·두 열·지수 옆 칸)을 고를 때 쓰는 가장 넓은 폭 (frame.ts "wide" — 0 이면 넓은 모습 없음). 없으면 width */
   wideWidth?: number;
   /**
-   * 실제 그림 크기 (widgetInfo, dp). width·height 보다 크면 카드는 width × height 로 왼쪽 위에 두고 남는 곳은 투명 (frame.ts "both" —
+   * 실제 그림 크기 (widgetInfo, dp). width·height 보다 크면 카드는 width × height 로 왼쪽 위에 두고 남는 곳은 투명 (frame.ts "both", widgetFoldBoth —
    * 한 그림이 폴드 바깥·안쪽 두 화면에 번갈아 보여도 같은 카드). 없으면 width·height 와 같다
    */
   outerWidth?: number;
@@ -124,17 +124,18 @@ export function renderBoth(name: string, data: WidgetData, o: RenderOpts): Rende
 
 /**
  * 위젯 하나를 그 위젯의 지금 크기(box — widgetInfo: 번호·크기·화면)로 그린다. 폴드 위젯 2차(widgetFoldFit)가 켜져 있으면
- * 이 위젯을 두 화면에서 본 크기를 기억해 두 화면에 맞는 배치를 고른다 (frame.ts). 태스크 핸들러·앱 즉시 갱신·다시 그리기가 모두 이것을 쓴다.
- * 크기 기억의 시각은 o.now (그리는 시각). resized: 크기 변경 알림(WIDGET_RESIZED) 때문에 그리는지 — 접고 펼 때 온 알림을 알아보는 데 쓴다 (frame.ts)
+ * 접는 폰의 바깥 화면에 넓은 모습이 나오지 않게 고르고(widgets/frame.ts), widgetFoldBoth 도 켜져 있으면 두 화면에 들어가는 카드로 그린다.
+ * 태스크 핸들러·앱 즉시 갱신·다시 그리기가 모두 이것을 쓴다. 크기 기억의 시각은 o.now (그리는 시각).
+ * seenBy: 크기를 알게 된 길 — 크기 변경 알림(resize)·위젯 추가(add)만 기억한 크기를 바꿀 수 있다 (frame.ts remember). 없으면 draw
  */
 export async function renderFor(
   name: string,
   data: WidgetData,
   box: BoxInfo,
-  opts: Omit<RenderOpts, "width" | "height" | "wideWidth" | "outerWidth" | "outerHeight"> & { resized?: boolean },
+  opts: Omit<RenderOpts, "width" | "height" | "wideWidth" | "outerWidth" | "outerHeight"> & { seenBy?: SeenBy },
 ): Promise<Rendered> {
-  const { resized, ...o } = opts;
-  const f = await frameFor(box, data.features.foldFit === true, o.now, resized === true);
+  const { seenBy, ...o } = opts;
+  const f = await frameFor(box, { fit: data.features.foldFit === true, both: data.features.foldBoth === true }, o.now, seenBy ?? "draw");
   return renderBoth(name, data, {
     ...o,
     width: f.width,

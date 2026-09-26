@@ -5,7 +5,6 @@ import type { LatestBriefing, RegisteredWithQuote } from "@/api/types";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 import { carryBriefingsIntoPayload, loadCachedWidgetData, pushWidgetData, readCachedPayload, readPnlMode, saveWidgetView, withLastGood } from "./data";
 import { fontScaleNow } from "./fontScale";
-import { redrawAllWidgets } from "./redraw";
 import type { WidgetFeatures, WidgetIndex, WidgetMarket } from "./payload";
 import { renderFor } from "./render";
 import { WIDGET_NAMES } from "./widgets";
@@ -189,23 +188,6 @@ export async function refreshWidgets({
     if (briefings || fromApp) await requestWidgetUpdate({ widgetName: WIDGET_NAMES.briefing, renderWidget: draw(WIDGET_NAMES.briefing) });
     // 지수·환율 위젯: 판·플래그는 앱이 받은 것과 위젯이 받아 둔 것 중 늦게 받은 쪽 (위젯이 없으면 아무 일도 없다)
     await requestWidgetUpdate({ widgetName: WIDGET_NAMES.market, renderWidget: draw(WIDGET_NAMES.market) });
-  } catch {
-    /* 위젯 모듈이 없는 빌드(개발 클라이언트 등)에서는 무시 */
-  }
-}
-
-/**
- * 앱이 떠 있을 때 접거나 폈을 때 (폴드 위젯 2차, widgetFoldFit — WidgetBridge 가 화면 크기 변경 뒤 부른다):
- * 위젯 4종을 서버를 부르지 않고 마지막으로 그린 값으로 지금 화면 크기에 맞춰 다시 그린다. 라이브러리는 접고 펴기만으로는
- * 다시 그리지 않을 수 있어(런처가 크기 범위를 바꾸지 않으면), 다른 화면에서 그린 그림이 다음 갱신까지 남는 것을 줄인다.
- * 위젯이 쓰는 플래그(마지막으로 그린 값)가 꺼져 있으면 아무 일도 하지 않는다. Android 전용
- */
-export async function redrawForScreen(): Promise<void> {
-  if (Platform.OS !== "android") return;
-  try {
-    const data = await loadCachedWidgetData();
-    if (!data.features.foldFit) return;
-    await redrawAllWidgets(data);
   } catch {
     /* 위젯 모듈이 없는 빌드(개발 클라이언트 등)에서는 무시 */
   }

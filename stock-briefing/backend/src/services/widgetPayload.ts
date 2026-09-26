@@ -107,6 +107,8 @@ export interface WidgetFeatures {
   widgetExtended?: boolean;
   /** 폴드 위젯 크기 맞추기 (위젯 2차, 앱만 — 서버는 전하기만 한다. 없으면 새 앱은 꺼짐 — 지금 그림 그대로) */
   widgetFoldFit?: boolean;
+  /** 한 그림을 두 화면이 같이 쓰는 폴드 홈 화면이면 두 화면에 들어가는 카드로 (위젯 2차, 앱만 — 없으면 새 앱은 꺼짐) */
+  widgetFoldBoth?: boolean;
 }
 
 export interface WidgetPayload {
