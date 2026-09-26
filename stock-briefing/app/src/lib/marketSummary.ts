@@ -549,55 +549,65 @@ export function textEm(s: string): number {
 // ── 카드 뉴스 한 줄 자르기 ─────────────────────────────────────
 
 /**
- * 뉴스 제목 한 줄의 글자 폭 어림 (글자 크기 1 에 대한 배수, 넉넉히 — 실제보다 좁게 재면 한 줄 말줄임이 다시 글자 단위로 자른다):
- * 한글·한자·전각·말줄임표·화살표 1.0, 숫자 0.6, 영문 대문자 0.75·소문자 0.6, 공백 0.3, 문장 부호 0.35, 괄호 0.4, % 0.9, 그 밖 1.0
+ * 글자 폭 어림 표 (글자 크기 1 에 대한 배수). 2026-09 실측 — 안드로이드가 라틴 글자·숫자·문장 부호를 그리는 Roboto, 한글을 그리는 Noto Sans CJK KR(= Noto Sans KR),
+ * 웹 미리보기의 Segoe UI 세 글꼴에서 잰 폭 가운데 가장 넓은 값을 둘째 자리에서 올렸다 (8차 검토: 한글을 1.0·문장 부호를 1.0 으로 넉넉히 잡아
+ * 줄 끝에 4~5자만큼 빈 곳이 남던 것을 줄임). 한글 0.92, 숫자 0.57, 공백 0.28, '…' 0.74(Roboto 0.67·Segoe 0.73), '·' 0.28, '%' 0.93.
+ * 표에 없는 글자(한자·전각 괄호·'‥'·'⋯'·화살표 — 안드로이드에서 Roboto 에 없어 CJK 글꼴로 그린다)는 1.0
  */
+const ASCII_EM: Readonly<Record<string, number>> = (() => {
+  const t: Record<string, number> = { " ": 0.28, "!": 0.33, '"': 0.48, "#": 0.62, $: 0.57, "%": 0.93, "&": 0.8, "'": 0.28, "(": 0.35, ")": 0.35, "*": 0.47, "+": 0.69, ",": 0.28, "-": 0.4, ".": 0.28, "/": 0.42 };
+  Object.assign(t, { ":": 0.28, ";": 0.28, "<": 0.69, "=": 0.69, ">": 0.69, "?": 0.48, "@": 0.96, "[": 0.34, "\\": 0.41, "]": 0.34, "^": 0.69, _: 0.56, "`": 0.61, "{": 0.34, "|": 0.27, "}": 0.34, "~": 0.69 });
+  for (const d of "0123456789") t[d] = 0.57;
+  const upper = [0.66, 0.66, 0.66, 0.71, 0.59, 0.56, 0.69, 0.73, 0.3, 0.56, 0.65, 0.55, 0.9, 0.75, 0.76, 0.64, 0.76, 0.64, 0.6, 0.6, 0.73, 0.64, 0.94, 0.63, 0.61, 0.61];
+  const lower = [0.57, 0.62, 0.53, 0.62, 0.56, 0.35, 0.59, 0.61, 0.28, 0.28, 0.56, 0.29, 0.93, 0.61, 0.61, 0.62, 0.62, 0.39, 0.52, 0.38, 0.61, 0.53, 0.81, 0.5, 0.53, 0.5];
+  upper.forEach((v, i) => (t[String.fromCharCode(65 + i)] = v));
+  lower.forEach((v, i) => (t[String.fromCharCode(97 + i)] = v));
+  return t;
+})();
+const OTHER_EM: Readonly<Record<string, number>> = { "’": 0.28, "‘": 0.28, "“": 0.48, "”": 0.48, "…": 0.74, "·": 0.28, "–": 0.66, "•": 0.41, "×": 0.7, "÷": 0.7, "±": 0.7, "°": 0.39, "€": 0.58, "£": 0.59, "¥": 0.56, "″": 0.48, "′": 0.28 };
+const HANGUL_EM = 0.92;
+/** 글자 하나의 폭 어림 */
+export function charEm(ch: string): number {
+  const c = ch.codePointAt(0) ?? 0;
+  if ((c >= 0xac00 && c <= 0xd7a3) || (c >= 0x3131 && c <= 0x318e)) return HANGUL_EM;
+  return ASCII_EM[ch] ?? OTHER_EM[ch] ?? 1;
+}
+/** 뉴스 제목 한 줄의 글자 폭 어림 (글자 크기 1 에 대한 배수) */
 export function lineEm(s: string): number {
   let em = 0;
-  for (const ch of s)
-    em += /[0-9]/.test(ch)
-      ? 0.6
-      : /[A-Z]/.test(ch)
-        ? 0.75
-        : /[a-z]/.test(ch)
-          ? 0.6
-          : ch === " "
-            ? 0.3
-            : /[.,:;'"`!|’‘“”]/.test(ch)
-              ? 0.35
-              : /[()[\]{}]/.test(ch)
-                ? 0.4
-                : ch === "%"
-                  ? 0.9
-                  : 1;
+  for (const ch of s) em += charEm(ch);
   return em;
 }
 
-/** 제목 속 숫자 덩어리 (부호·▲▼ + 숫자·쉼표·소수점 + 붙은 단위·화살표): '0.48%↑'·'7,080선'·'▲90.71p'·'1.21%↓'·'2.4조'·'15:30' */
-const TITLE_NUMBER_RE = /[+\-−▲▼]?\d[\d,.:]*(?:%p|%|bp|p|P|포인트|선|원|달러|배|만|천|억|조|년|월|일|시|분|위|대)*[↑↓]?/g;
-/** 끊은 자리 끝에 남기지 않을 글자 (띄어쓰기·구분자·여는 괄호) */
-const TRAILING_CUT_RE = /[\s·,…⋯‥\-–—([{【<|/]+$/;
+/** 어림과 실제 폭의 차이·반올림에 남기는 여유 (글자 크기 배수 — 14dp 에서 약 5.6dp) */
+export const NEWS_FIT_MARGIN_EM = 0.4;
+/** 아주 좁은 칸에서도 제목 앞부분을 이만큼(글자 수)은 보인다 — 한 줄에 이보다 적게 들어가면 두 줄로 */
+export const NEWS_MIN_HEAD = 8;
+/** 두 줄로 놓을 때 첫 줄 끝에서 낱말째 넘어가며 비는 폭 어림 */
+const WRAP_SLACK_EM = 3;
 
 /**
- * 카드 뉴스 한 줄 (7차 검토 must): '언론사 시각 ' + 제목이 줄 폭(width dp)에 들어가지 않으면, 말줄임을 안드로이드 한 줄 말줄임(글자 단위)에
- * 맡기지 않고 여기서 자른다 — 잘릴 자리가 숫자(와 붙은 %·선·p·원·↑ 등) 안이거나 숫자 바로 뒤면 그 숫자 앞에서 끊고 '…'를 붙인다
- * ('[뉴욕마감]…나스닥 0.4…'·'7,08…'·'다우 1.…'가 옆 지수 칸 값과 다르게 읽히지 않게).
- * 폭은 lineEm(넉넉한 어림)으로 재고 말줄임표 한 자와 여유 반 자를 남긴다. 다 들어가면 제목 그대로. size = 글자 크기, scale = 글자 배율
+ * 제목 속 숫자 덩어리 (부호·▲▼ + 숫자·쉼표·소수점 + 붙은 단위·화살표): '0.48%↑'·'7,080선'·'▲90.71p'·'1.21%↓'·'2.4조'·'15:30'.
+ * (8차 검토 must) 만·천·억·조·년·월·시 뒤에 숫자가 이어지면(띄어 써도) 한 덩어리: '2만7000선'·'2조4907억원'·'27만3000원'·'7만 8581달러'·
+ * '1조 5000억'·'3시30분'·'9월 26일' — '나스닥 2만…'·'외국인 2조…'처럼 틀린 값으로 읽히는 자리에서 끊지 않게
  */
-export function fitNewsTitle(prefix: string, title: string, width: number, size: number, scale: number): string {
-  const room = width / (size * scale);
-  const used = lineEm(prefix);
-  if (!(room > 0) || used + lineEm(title) <= room - 0.5) return title;
-  const avail = room - used - 1.5;
-  // 들어가는 가장 긴 앞부분 (글자 단위 — 서로게이트 쌍을 가르지 않게 Array.from)
+const TITLE_NUMBER_RE =
+  /[+\-−▲▼△▽]?\d[\d,.:]*(?:%p|%|bp|pt|p|P|포인트|선|원|달러|엔|위안|유로|루피아|배|만|천|억|조|년|월|일|시|분|초|위|대|개|명|주|건|곳|종)*(?:(?<=[만천억조년월시])\s?\d[\d,.:]*(?:%p|%|bp|pt|p|P|포인트|선|원|달러|엔|위안|유로|루피아|배|만|천|억|조|년|월|일|시|분|초|위|대|개|명|주|건|곳|종)*)*[↑↓]?/g;
+/** 제목 속 숫자 덩어리 자리 (끝이 숫자인지 함께) — 테스트도 쓴다 */
+export function titleNumbers(title: string): { start: number; end: number; digitEnd: boolean }[] {
+  return [...title.matchAll(TITLE_NUMBER_RE)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, digitEnd: /\d$/.test(m[0]) }));
+}
+/** 끊은 자리 끝에 남기지 않을 글자 (띄어쓰기·구분자·여는 괄호·점 말줄임 '...') */
+const TRAILING_CUT_RE = /(?:[\s·,…⋯‥\-–—([{【<|/]|\.{2,})+$/;
+
+/** avail(글자 크기 배수) 안에 드는 가장 긴 앞부분 — 숫자 덩어리 안이거나 숫자로 끝나는 덩어리 바로 뒤면 그 덩어리 앞에서 */
+function cutTitle(title: string, avail: number): string {
   const chars = Array.from(title);
   let k = 0;
   let em = 0;
-  while (k < chars.length && em + lineEm(chars[k]!) <= avail) em += lineEm(chars[k++]!);
-  let head = title.slice(0, chars.slice(0, k).join("").length);
-  // 숫자 덩어리 안이면 그 덩어리 앞에서. 숫자로 끝나는 덩어리 바로 뒤도 ('6715.41…'은 값이 잘린 것처럼 읽힌다) —
-  // 끝의 띄어쓰기·구분자를 뗀 뒤에 다시 본다 ('6715.41 마감'을 '6715.41 '에서 끊어도 '6715.41…'이 되지 않게)
-  const numbers = [...title.matchAll(TITLE_NUMBER_RE)].map((m) => ({ start: m.index!, end: m.index! + m[0].length, digitEnd: /\d$/.test(m[0]) }));
+  while (k < chars.length && em + charEm(chars[k]!) <= avail) em += charEm(chars[k++]!);
+  let head = chars.slice(0, k).join("");
+  const numbers = titleNumbers(title);
   for (;;) {
     head = head.replace(TRAILING_CUT_RE, "");
     const cut = head.length;
@@ -605,7 +615,38 @@ export function fitNewsTitle(prefix: string, title: string, width: number, size:
     if (!hit) break;
     head = title.slice(0, hit.start);
   }
-  return `${head}…`;
+  return head;
+}
+
+/** 카드 뉴스 제목 줄: 보일 글과 줄 수 (보통 1, 아주 좁은 칸에서만 2) */
+export interface NewsFit {
+  text: string;
+  lines: 1 | 2;
+}
+
+/**
+ * 카드 뉴스 제목 한 줄 (7차·8차 검토): 제목만 한 줄에 둔다 (언론사·시각은 상세에 — 화면 읽기는 카드 문장이 함께 읽는다).
+ * 줄 폭(width dp)에 들어가지 않으면 말줄임을 안드로이드 한 줄 말줄임(글자 단위)에 맡기지 않고 여기서 자른다 — 잘릴 자리가 숫자(와 붙은 %·선·p·원·↑ 등,
+ * '2만7000선' 같은 복합 수 전체) 안이거나 숫자 바로 뒤면 그 숫자 앞에서 끊고 '…'. 폭은 lineEm(실측 어림) + 여유 NEWS_FIT_MARGIN_EM 로 잰다.
+ * 한 줄에 제목 앞부분이 NEWS_MIN_HEAD 자보다 적게 남는 아주 좁은 칸(큰 글씨 + 좁은 창)에서만 두 줄로 놓는다 ('…'만 남지 않게).
+ * size = 글자 크기, scale = 글자 배율
+ */
+export function fitNewsTitle(title: string, width: number, size: number, scale: number): NewsFit {
+  const room = width / (size * scale);
+  if (!(room > 0) || lineEm(title) <= room - NEWS_FIT_MARGIN_EM) return { text: title, lines: 1 };
+  const ell = charEm("…");
+  const one = cutTitle(title, room - ell - NEWS_FIT_MARGIN_EM);
+  if (Array.from(one).length >= NEWS_MIN_HEAD) return { text: `${one}…`, lines: 1 };
+  const room2 = 2 * room - 2 * NEWS_FIT_MARGIN_EM - WRAP_SLACK_EM;
+  if (lineEm(title) <= room2) return { text: title, lines: 2 };
+  let two = cutTitle(title, room2 - ell);
+  if (Array.from(two).length < NEWS_MIN_HEAD) {
+    // 그래도 모자라면 앞 NEWS_MIN_HEAD 자 — 그 자리가 숫자 덩어리 안이면 덩어리 끝까지 (숫자를 가르지 않게)
+    const k = Array.from(title).slice(0, NEWS_MIN_HEAD).join("").length;
+    const hit = titleNumbers(title).find((n) => n.start < k && k < n.end);
+    two = title.slice(0, hit ? hit.end : k).replace(TRAILING_CUT_RE, "");
+  }
+  return { text: two.length < title.length ? `${two}…` : title, lines: 2 };
 }
 
 /** 지수 칸 종가 줄: 아침 '27,068.72', 오후 '7,080.92 · +63.01' */

@@ -17,7 +17,6 @@ import {
   indexCellCols,
   indexValueText,
   md,
-  newsTime,
   rateText,
   speakText,
   SUMMARY_NOTE,
@@ -220,7 +219,7 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
           </Text>
           <View style={styles.rowBody}>
             {r.kind === "news" ? (
-              <NewsLines items={r.items} more={r.more} date={d.date} guess={newsGuess} />
+              <NewsLines items={r.items} more={r.more} guess={newsGuess} />
             ) : (
               r.lines.map((segs, i) => <SegText key={i} segs={segs} style={{ color: t.ink, fontSize: font.body, lineHeight: font.body * 1.5 }} />)
             )}
@@ -232,11 +231,13 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
 }
 
 /**
- * 카드 뉴스 칸: 제목마다 한 줄 ('언론사 시각 제목'). 줄 폭을 재서(onLayout, 재기 전은 guess) 들어가지 않는 제목은 fitNewsTitle 로 잘라 보낸다 —
- * 한 줄 말줄임(numberOfLines)에 맡기면 글자 단위로 잘려 '나스닥 0.4…'·'7,08…'처럼 숫자 가운데서 끊겼다 (7차 검토 must).
- * numberOfLines 는 어림이 빗나갈 때의 마지막 안전판으로 둔다. 화면 읽기는 카드 문장(cardSpeech)이 원문 제목 전체를 읽는다
+ * 카드 뉴스 칸 (8차 검토): 제목마다 한 줄, 제목만 (언론사·시각은 상세 뉴스 칸에 — 화면 읽기는 카드 문장(cardSpeech)이 언론사·시각·원문 제목 전체를 읽는다).
+ * 줄 폭을 재서(onLayout, 재기 전은 guess) 들어가지 않는 제목은 fitNewsTitle 로 잘라 보낸다 — 한 줄 말줄임(numberOfLines)에 맡기면 글자 단위로 잘려
+ * '나스닥 0.4…'·'2만…'처럼 숫자 가운데서 끊겼다. numberOfLines 는 어림이 빗나갈 때의 안전판이고, 안드로이드에서는 그때 글자를 조금 줄여 넣는다
+ * (adjustsFontSizeToFit — 기기 글꼴이 어림보다 넓어도 숫자 가운데서 잘리지 않게). 아주 좁은 칸(큰 글씨 + 좁은 창)에서 제목이 한 줄에
+ * 8자도 안 들어가면 그 제목만 두 줄로 두고 둘째 제목은 뺀다 ('외 N건'으로 — 카드 줄 수를 늘리지 않게)
  */
-function NewsLines({ items, more, date, guess }: { items: SummaryNews[]; more: number; date: string; guess: number }) {
+function NewsLines({ items, more, guess }: { items: SummaryNews[]; more: number; guess: number }) {
   const t = useTheme();
   const scale = useFontScale();
   const [w, setW] = useState<number | null>(null);
@@ -244,18 +245,18 @@ function NewsLines({ items, more, date, guess }: { items: SummaryNews[]; more: n
     const x = Math.floor(e.nativeEvent.layout.width);
     if (x > 0) setW((p) => (p === x ? p : x));
   }, []);
+  const fits = items.map((n) => fitNewsTitle(n.title, w ?? guess, font.body, scale));
+  const narrow = fits.some((f) => f.lines === 2);
+  const shown = narrow ? items.slice(0, 1) : items;
+  const rest = more + items.length - shown.length;
   return (
     <View style={styles.newsLines} onLayout={onLayout}>
-      {items.map((n) => {
-        const head = `${n.outlet} ${newsTime(n, date)} `;
-        return (
-          <Text key={n.url} testID="news-line" style={{ color: t.ink, fontSize: font.body }} numberOfLines={1}>
-            <Text style={{ color: t.sub }}>{head}</Text>
-            {fitNewsTitle(head, n.title, w ?? guess, font.body, scale)}
-          </Text>
-        );
-      })}
-      {more ? <Words text={`외 ${more}건 (상세에서 원문 제목·링크)`} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} /> : null}
+      {shown.map((n, i) => (
+        <Text key={n.url} testID="news-line" style={{ color: t.ink, fontSize: font.body }} numberOfLines={fits[i]!.lines} adjustsFontSizeToFit minimumFontScale={0.85}>
+          {fits[i]!.text}
+        </Text>
+      ))}
+      <Words text={`${rest ? `외 ${rest}건 · ` : ""}언론사·시각·원문은 상세에서`} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} />
     </View>
   );
 }

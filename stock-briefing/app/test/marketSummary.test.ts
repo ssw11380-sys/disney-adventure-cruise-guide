@@ -19,6 +19,8 @@ import {
   fitLines,
   fitNewsTitle,
   lineEm,
+  NEWS_FIT_MARGIN_EM,
+  NEWS_MIN_HEAD,
   chunkSegs,
   chunkText,
   holdingsSegs,
@@ -377,52 +379,161 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     ["연합뉴스", "[오늘의 증시] 코스피 7080선 상승 마감…반도체 강세에도 상승폭은 반납"],
     ["뉴스1", "[코스피] 10.19p(0.15%) 오른 7017.91 마감"],
   ];
-  const NUMBER = /[+\-−▲▼]?\d[\d,.:]*(?:%p|%|bp|p|P|포인트|선|원|달러|배|만|천|억|조|년|월|일|시|분|위|대)*[↑↓]?/g;
-  /** 잘린 글(끝 '…' 뺀)이 숫자 덩어리 안에서 끝나는지 */
+  /**
+   * 테스트가 따로 보는 '숫자 가운데·숫자 바로 뒤' (앱의 숫자 정규식을 쓰지 않는다 — 같은 정규식이면 같은 빈 곳을 못 잡는다):
+   * 끊은 자리 앞 글자가 숫자, 또는 앞이 쉼표·소수점·쌍점이고 뒤가 숫자, 또는 앞이 숫자에 붙은 만·천·억·조·시·월이고 뒤가 (띄어도) 숫자
+   */
   const cutsNumber = (title: string, shown: string) => {
-    const kept = shown.slice(0, -1).length;
-    return [...title.matchAll(NUMBER)].some((m) => m.index! < kept && kept < m.index! + m[0].length);
+    if (shown === title) return false;
+    const k = shown.slice(0, -1).length;
+    const prev = title[k - 1] ?? "";
+    const rest = title.slice(k);
+    if (/\d/.test(prev)) return true;
+    if (/[,.:]/.test(prev) && /\d/.test(title[k - 2] ?? "") && /^\d/.test(rest)) return true;
+    if (/[만천억조시월]/.test(prev) && /\d/.test(title[k - 2] ?? "") && /^\s?\d/.test(rest)) return true;
+    return /^[\d,.%]/.test(rest) && /[\d]/.test(prev);
   };
+  /** 카드 뉴스 줄 폭 = 창 − 카드 안쪽 여백(좌우 space.lg) − 이름표 칸(글자 배율만큼) − 칸 사이 간격 */
+  const rowWidth = (win: number, scale: number) => win - 2 * space.lg - Math.round(56 * scale) - space.sm;
 
   it("다 들어가면 제목 그대로, 아니면 숫자 덩어리 앞에서 끊고 '…' — '나스닥 0.4…'가 아니라 '나스닥…'", () => {
     const t = "[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥 0.48%↑";
-    expect(fitNewsTitle("뉴스1 05:32 ", t, 500, font.body, 1)).toBe(t);
-    // 폭을 1dp 씩 줄여 가며: 늘 원문의 앞부분 + '…', 숫자 가운데서 끝나지 않고, 어림 폭이 줄 폭을 넘지 않는다
+    expect(fitNewsTitle(t, 500, font.body, 1)).toEqual({ text: t, lines: 1 });
+    // 폭을 1dp 씩 줄여 가며: 늘 원문의 앞부분 + '…', 숫자 가운데서 끝나지 않고, 어림 폭 + 여유가 줄 폭을 넘지 않는다
     const seen = new Set<string>();
     for (let w = 520; w >= 120; w--) {
-      const s = fitNewsTitle("뉴스1 05:32 ", t, w, font.body, 1);
-      seen.add(s);
-      if (s === t) continue;
-      expect(s.endsWith("…"), `${w}: ${s}`).toBe(true);
-      expect(t.startsWith(s.slice(0, -1)), `${w}: ${s}`).toBe(true);
-      expect(cutsNumber(t, s), `${w}: ${s}`).toBe(false);
-      expect(lineEm(`뉴스1 05:32 ${s}`) * font.body, `${w}: ${s}`).toBeLessThanOrEqual(w);
+      const f = fitNewsTitle(t, w, font.body, 1);
+      seen.add(f.text);
+      if (f.text === t) continue;
+      expect(f.lines, `${w}`).toBe(1);
+      expect(f.text.endsWith("…"), `${w}: ${f.text}`).toBe(true);
+      expect(t.startsWith(f.text.slice(0, -1)), `${w}: ${f.text}`).toBe(true);
+      expect(cutsNumber(t, f.text), `${w}: ${f.text}`).toBe(false);
+      expect((lineEm(f.text) + NEWS_FIT_MARGIN_EM) * font.body, `${w}: ${f.text}`).toBeLessThanOrEqual(w);
     }
     // '0.48%↑' 가 들어가지 않는 폭에서는 숫자 앞 '나스닥' 뒤에서 끊는다
     expect(seen).toContain("[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥…");
     expect([...seen].some((s) => /\d…$|[.,]…$/.test(s))).toBe(false);
     // 숫자 뒤 단위('선')까지 한 덩어리 — '7,08…'·'7,080…'이 아니라 숫자 앞에서
     const k = "코스피 7,080선 상승 마감…반도체 강세";
-    for (let w = 300; w >= 60; w--) expect(cutsNumber(k, fitNewsTitle("", k, w, font.body, 1)), String(w)).toBe(false);
+    for (let w = 300; w >= 60; w--) expect(cutsNumber(k, fitNewsTitle(k, w, font.body, 1).text), String(w)).toBe(false);
   });
 
-  it("서비스 창에 실제로 뽑힌 제목(숫자가 든 14건): 폰 폭 475·411·360, 글자 100%·130% 에서 숫자 가운데서 끊기지 않는다", () => {
+  it("8차 검토 must: 복합 수('2만7000선'·'2조4907억원'·'27만3000원'·'7만 8581달러'·'3시30분')는 한 덩어리 — '나스닥 2만…'·'외국인 2조…'처럼 끊지 않는다", () => {
+    for (const t of ["[속보] 뉴욕증시, 나스닥 2만7000선 돌파… 국제유가 급락 여파", "코스피, 외국인 2조4907억원 던졌으나 7000선 방어 마감", "삼성전자 27만3000원 4.6% 급등…AI 반도체주 강세에 매수세 집중", "[코인뉴스] 비트코인 7만 8581달러…나스닥 하락에도 2.32%↑", "원·달러 환율 13.6원 오른 1382.2원(오후 3시30분)"])
+      for (let w = 420; w >= 100; w--) {
+        const f = fitNewsTitle(t, w, font.body, 1);
+        expect(cutsNumber(t, f.text), `${w}: ${f.text}`).toBe(false);
+        expect(/(?:2만|2조|27만|7만 ?|3시)…$/.test(f.text), `${w}: ${f.text}`).toBe(false);
+      }
+  });
+
+  /** 말뭉치(2026-09-08~26 구글 뉴스 RSS)에서 복합 수·시각이 든 제목 전부 (통과 제목 + 서비스 창에서 뽑힌 제목) */
+  const COMPOUND: string[] = [
+    "코스피, 외국인 2조4907억원 던졌으나 7000선 방어 마감",
+    "증시 활황에…국내 자산운용사 2분기 순이익 2조7000억원 육박",
+    "[코인뉴스] 비트코인 7만 8581달러…나스닥 하락에도 2.32%↑",
+    "뉴암스테르담 파마 주가, CEO 22만 6,500달러 주식 매입 후 상승",
+    "전력 반도체로 말 갈아탄 인피니언…특수 메모리 판 1조 5000억에 넘겼다",
+    "원·달러 환율 13.6원 오른 1382.2원(오후 3시30분)",
+    "[26.9.17 증시 인싸잇] 코스피, 외국인 2조 2772억 매도에 약보합… 6715선 마감",
+    "NH투자증권 주가 급락에…농협금융, 1천500억 장내매수",
+    "외국인, 8개월 만에 주식 순매수…채권은 4조7천억원 회수",
+    "비트코인 변동성 둔화…美 증시 반등 속 7만6500달러선 횡보",
+    "Leader’s Advantage Acquisition, 나스닥에서 1억 5천만 달러 IPO 가격 확정",
+    "8월 외국인 주식 3440억 순매수·채권 4조7360억 순회수…4조3900억 유출",
+    "[일본 증시] 닛케이, 반도체株·엔화 약세에 상승...6만5000선 재진입",
+    "닛케이, 금리 인상 소화하며 6만5000선 회복… 반도체 독식 장세",
+    "오리온180 보험, 상장 첫날 주가 하락 속 기업가치 11억 4천만 달러 평가",
+    "비트코인, 2주만에 8만1000달러 회복…솔라나 11% 급등",
+    "서학개미, 14~17일 나흘간 미 증시 13억1,400만 달러(약 1조8,200억원) 순매수하며 월간 순매수 전환",
+    "비트코인 8만1000달러 회복에 국내 가상화폐 관련주 강세",
+    "삼성전자 27만3000원 4.6% 급등…AI 반도체주 강세에 매수세 집중",
+    "김천에 반도체 생태계 조성…3천470억 원 규모 TGV 유리기판 공장 유치",
+    "원·달러 환율 2.3원 내린 1381.0원(오후 3시30분)",
+    "[속보] 뉴욕증시, 나스닥 2만7000선 돌파… 국제유가 급락 여파",
+    "[오늘의증시] 코스피, 삼성전자 5% 급등에 7000선 탈환…기관 1조5천억원 순매수",
+    "미 증시 시총 하루 1조2000억달러 늘었다는 주장",
+    "원·달러 환율 22.8원 내린 1358.2원(오후 3시30분)",
+    "[표] 개인, 코스피서 1조4543억원 순매도…삼성전자 집중 매도",
+    "외국인 유출액 4,682억 6천만 루피아, BBRI는 여전히 최대 매도 종목",
+    "비트코인, 금리 인상 우려에 8만4천달러선으로 하락…미 증시도 동반 약세 (BTC, 금리인상, 미국 증시, 나스닥)",
+    "삼성전자 반도체(DS) 부문, 세계 최고가 사무용 의자 7만5000명에게 순차 지급",
+    "외국인 투자자금 1조 4,200억 루피아 순유출, 국영기업 주식이 매도 상위 차지",
+    "Live Oak Acquisition Corp. VI, 나스닥 IPO로 2억 3천만 달러 조달",
+    "Bluerock Acquisition Corp. II, 나스닥에서 1억 5천만 달러 IPO 가격 책정",
+    "Leader’s Advantage, 나스닥에서 1억 5천만 달러 규모 스팩 IPO 완료",
+    "Leader’s Advantage Acquisition Corp., 나스닥에서 1억 5천만 달러 IPO 완료",
+    "9월 4주차 우리기술 주가 하락폭 확대 1만2980원 기록",
+    "[뉴욕증시 28일] 나스닥지수 1만7000 돌파 마감",
+  ];
+
+  it("말뭉치의 복합 수 제목 전부: 폭 475·411 × 글자 100%·130% 에서 숫자 가운데·숫자 바로 뒤에서 끊기지 않고, 어림 폭이 줄 폭을 넘지 않는다", () => {
+    expect(COMPOUND.length).toBeGreaterThanOrEqual(34);
     let cut = 0;
-    for (const [outlet, title] of REAL)
+    for (const title of COMPOUND)
+      for (const win of [475, 411])
+        for (const scale of [1, 1.3]) {
+          const width = rowWidth(win, scale);
+          const f = fitNewsTitle(title, width, font.body, scale);
+          expect(f.lines, `${win}·${scale}: ${f.text}`).toBe(1);
+          if (f.text === title) continue;
+          cut++;
+          expect(cutsNumber(title, f.text), `${win}·${scale}: ${f.text}`).toBe(false);
+          expect((lineEm(f.text) + NEWS_FIT_MARGIN_EM) * font.body * scale, `${win}·${scale}: ${f.text}`).toBeLessThanOrEqual(width);
+        }
+    expect(cut).toBeGreaterThan(40);
+  });
+
+  it("서비스 창에 실제로 뽑힌 제목(숫자가 든 14건): 폰 폭 475·411·360, 글자 100%·130% 에서 숫자 가운데서 끊기지 않고, 제목이 '…'만 남지 않는다 (8자 이상)", () => {
+    let cut = 0;
+    for (const [, title] of REAL)
       for (const win of [475, 411, 360])
         for (const scale of [1, 1.3]) {
-          // 카드 뉴스 줄 폭 = 창 − 카드 안쪽 여백(좌우 space.lg) − 이름표 칸(글자 배율만큼) − 칸 사이 간격
-          const width = win - 2 * space.lg - Math.round(56 * scale) - space.sm;
-          const head = `${outlet} 05:32 `;
-          const s = fitNewsTitle(head, title, width, font.body, scale);
-          if (s === title) continue;
+          const width = rowWidth(win, scale);
+          const f = fitNewsTitle(title, width, font.body, scale);
+          expect(f.lines, `${win}·${scale}`).toBe(1);
+          if (f.text === title) continue;
           cut++;
-          expect(cutsNumber(title, s), `${win}·${scale}: ${s}`).toBe(false);
-          expect(/\d…$|[.,]…$/.test(s), `${win}·${scale}: ${s}`).toBe(false);
-          // 언론사·시각만으로 줄이 차는 경우(아주 긴 언론사 이름 + 좁은 폭 + 큰 글씨)는 제목 없이 '…'만 — 폭은 한 줄 말줄임이 맡는다
-          if (s === "…") continue;
-          expect(lineEm(head + s) * font.body * scale, `${win}·${scale}: ${s}`).toBeLessThanOrEqual(width);
+          expect(cutsNumber(title, f.text), `${win}·${scale}: ${f.text}`).toBe(false);
+          expect(/\d…$|[.,]…$/.test(f.text), `${win}·${scale}: ${f.text}`).toBe(false);
+          expect(Array.from(f.text).length, `${win}·${scale}: ${f.text}`).toBeGreaterThan(NEWS_MIN_HEAD);
+          expect((lineEm(f.text) + NEWS_FIT_MARGIN_EM) * font.body * scale, `${win}·${scale}: ${f.text}`).toBeLessThanOrEqual(width);
         }
     expect(cut).toBeGreaterThan(20); // 좁은 폭에서는 대부분 잘린다 (자르는 길이 실제로 쓰였다)
+  });
+
+  it("줄 끝 빈 곳이 작다: 실측 어림(한글 0.92)으로 잘라 411·130% 에서 잘린 줄의 남는 폭 가운데 값이 한글 1.5자 이하", () => {
+    const tails: number[] = [];
+    for (const title of [...REAL.map((r) => r[1]), ...COMPOUND])
+      for (const win of [475, 411])
+        for (const scale of [1, 1.3]) {
+          const width = rowWidth(win, scale);
+          const f = fitNewsTitle(title, width, font.body, scale);
+          if (f.text === title) continue;
+          tails.push(width / (font.body * scale) - lineEm(f.text));
+        }
+    tails.sort((a, b) => a - b);
+    const median = tails[Math.floor(tails.length / 2)]!;
+    expect(median).toBeLessThanOrEqual(1.5 * 0.92);
+    expect(tails[0]!).toBeGreaterThanOrEqual(NEWS_FIT_MARGIN_EM - 1e-9);
+    // 글자 폭 어림: 한글 0.92, 숫자·영문·문장 부호는 실측 표, 모르는 글자(한자·전각)는 1
+    expect(lineEm("가나다")).toBeCloseTo(2.76);
+    expect(lineEm("0123456789")).toBeCloseTo(5.7);
+    expect(lineEm("…·")).toBeCloseTo(1.02);
+    expect(lineEm("美【")).toBe(2);
+  });
+
+  it("아주 좁은 칸(큰 글씨 + 좁은 창)에서는 '…'만 남기지 않고 두 줄에 앞부분 8자 이상", () => {
+    const t = "[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥 0.48%↑";
+    for (let w = 160; w >= 60; w -= 4) {
+      const f = fitNewsTitle(t, w, font.body, 2);
+      expect(f.text, String(w)).not.toBe("…");
+      expect(Array.from(f.text.replace(/…$/, "")).length, `${w}: ${f.text}`).toBeGreaterThanOrEqual(NEWS_MIN_HEAD);
+      if (f.lines === 1) expect(Array.from(f.text).length, `${w}: ${f.text}`).toBeGreaterThan(NEWS_MIN_HEAD);
+      expect(cutsNumber(t, f.text), `${w}: ${f.text}`).toBe(false);
+    }
+    expect(fitNewsTitle(t, 120, font.body, 2).lines).toBe(2);
+    expect(fitNewsTitle(t, rowWidth(411, 1.3), font.body, 1.3).lines).toBe(1);
   });
 });

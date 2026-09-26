@@ -175,9 +175,14 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     for (const l of ["환율·금리", "업종", "내 종목", "뉴스 3건"]) expect(all).toContain(l);
     expect(all).toContain("원/달러 1,359.00원 +3.50원 (9/23 고시) · 미 10년물 5.17% -0.01%p (미 재무부)");
     expect(all).toContain("약 커뮤니케이션 -0.90% · 에너지 -0.89% (섹터 ETF 기준)");
-    expect(all.some((t) => t.startsWith("뉴스1 9/26 05:32 [예시]"))).toBe(true);
-    expect(all.some((t) => t.startsWith("KBS 9/26 05:22"))).toBe(true);
-    expect(all.some((t) => t.startsWith("한국경제"))).toBe(false); // 세 번째 제목은 상세에만
+    // 뉴스 줄은 제목만 한 줄씩 (언론사·시각은 상세에 — 8차 검토), 셋째 제목은 '외 1건'
+    const news = r.all().filter((n) => n.props.testID === "news-line").map(textOf);
+    expect(news).toEqual(["[예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑", "[예시] 뉴욕증시, 기술주 강세 속 상승 마감"]);
+    expect(all.some((t) => /^(뉴스1|KBS) 9\/26/.test(t))).toBe(false);
+    expect(all).toContain("외 1건 · 언론사·시각·원문은 상세에서");
+    expect(all.some((t) => t.includes("[예시] 뉴욕증시 마감 시황"))).toBe(false); // 세 번째 제목은 상세에만
+    // 화면 읽기는 언론사·시각도 읽는다
+    expect(String(card.props.accessibilityLabel)).toContain("뉴스1 9/26 05:32, [예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑");
     expect(all).toContain("숫자로 만든 요약 · 뉴스 제목은 언론사 원문 · 매매 권유가 아닙니다");
     // 지수는 카드 한 문장이 읽는다 — 카드 안 지수 칸은 따로 읽히지 않는다 (TalkBack 이 같은 지수에서 한 번 더 멈추지 않게, 4차 검토)
     expect(String(card.props.accessibilityLabel)).toContain("나스닥 0.48% 상승, S&P500 0.51% 상승, 다우 0.93% 상승, 필라반도체 1.41% 상승");
@@ -229,7 +234,7 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     expect(all).toContain("원/달러 1,400.00원 -2.50원 (11/26 고시) · 미 10년물 4.90% +0.02%p (11/25 기준 · 미 재무부)");
   });
 
-  it("뉴스 제목 한 줄은 숫자 가운데서 말줄임하지 않는다 — 줄 폭을 재서 숫자 앞에서 끊고 '…', 화면 읽기는 원문 제목 전체 (7차 검토 must)", () => {
+  it("뉴스 제목 한 줄(제목만)은 숫자 가운데서 말줄임하지 않는다 — 줄 폭을 재서 숫자 앞에서 끊고 '…', 화면 읽기는 원문 제목 전체 (7차·8차 검토)", () => {
     h.flags = { marketSummary: true };
     h.win = { width: 411, height: 960, scale: 2.625, fontScale: 1 };
     const d = MORNING.data!;
@@ -237,7 +242,7 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     h.list = [item(7, { ...d, news: { ...d.news, items: d.news.items.map((n, i) => ({ ...n, title: titles[i] ?? n.title })) } })];
     const r = render(<BriefingsScreen />);
     const lines = () => r.all().filter((n) => n.props.testID === "news-line");
-    /** 줄의 제목 부분 (앞 '언론사 시각 ' 조각 뒤) */
+    /** 줄의 글 (제목만 — 8차 검토부터 언론사·시각 조각이 없다) */
     const shownOf = (n: HostNode) => n.children.filter((c) => typeof c === "string").join("");
     const check = (label: string) => {
       const got = lines().map(shownOf);
@@ -265,6 +270,26 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     expect(check("잰 폭 900")).toEqual(titles);
     // 화면 읽기(카드 한 문장)는 자르지 않은 원문 제목
     for (const t of titles) expect(String(cardOf(r)!.props.accessibilityLabel)).toContain(t);
+  });
+
+  it("아주 좁은 칸(큰 글씨 200% + 좁은 폭)에서는 제목이 '…'만 남지 않게 첫 제목만 두 줄로, 둘째 제목은 '외 N건'으로 (8차 검토)", () => {
+    h.flags = { marketSummary: true };
+    h.win = { width: 360, height: 800, scale: 2.625, fontScale: 2 };
+    h.fontScale = 2;
+    const r = render(<BriefingsScreen />);
+    const lines = () => r.all().filter((n) => n.props.testID === "news-line");
+    const box = r.all().find((n) => n.type === "View" && typeof n.props.onLayout === "function" && n.children.some((c) => typeof c !== "string" && c.props.testID === "news-line"))!;
+    r.act(() => (box.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 110, height: 40, x: 0, y: 0 } } }));
+    expect(lines()).toHaveLength(1);
+    expect(lines()[0]!.props.numberOfLines).toBe(2);
+    const shown = textOf(lines()[0]!);
+    expect(shown).not.toBe("…");
+    expect(Array.from(shown.replace(/…$/, "")).length).toBeGreaterThanOrEqual(8);
+    expect(texts(r)).toContain("외 2건 · 언론사·시각·원문은 상세에서");
+    // 폭이 넉넉해지면 다시 제목 두 개를 한 줄씩
+    r.act(() => (box.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 400, height: 40, x: 0, y: 0 } } }));
+    expect(lines()).toHaveLength(2);
+    expect(lines().every((n) => n.props.numberOfLines === 1)).toBe(true);
   });
 
   it("큰 글씨(130%): 카드 이름표 칸이 글자만큼 넓어진다 ('환율·금리'가 두 줄로 쪼개지지 않게)", () => {
