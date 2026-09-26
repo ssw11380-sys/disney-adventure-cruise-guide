@@ -762,7 +762,7 @@ function SummaryBlock({ plan, id, c }: { plan: SummaryPlan<SummaryItem>; id: num
   const parts = plan.items.flatMap((it, k) => [
     ...(k ? [<TextWidget key={`${it.code}-sep`} text="·" style={{ color: c.muted, fontSize: f }} />] : []),
     <TextWidget key={`${it.code}-label`} text={it.label} maxLines={1} style={{ color: c.sub, fontSize: f }} />,
-    <TextWidget key={`${it.code}-rate`} text={it.rate ?? ""} maxLines={1} style={{ color: tone(it.sign, c), fontSize: f, fontWeight: "700" }} />,
+    <TextWidget key={`${it.code}-rate`} text={it.rate ?? ""} maxLines={1} style={{ color: it.changeRate === null ? c.muted : tone(it.sign, c), fontSize: f, fontWeight: "700" }} />,
     ...(it.tag ? [<TextWidget key={`${it.code}-tag`} text={it.tag} maxLines={1} style={{ color: c.muted, fontSize: f }} />] : []),
   ]);
   return (

@@ -10,7 +10,7 @@ import type { WidgetSummary } from "./payload";
  * 숫자는 서버가 요약에 저장한 값 그대로(코드로 만든 값, AI 문장 없음)이고, 글은 틀에 채운다. 평가·권유·원인 말은 쓰지 않는다.
  *  - 칩: '밤사이 미국'(숫자의 거래일이 보는 날의 전날일 때만) · '9/25 미국'(월요일·휴장 다음 날·다음 날에 볼 때) · '오늘 한국' · '9/23 한국'(자정 뒤·주말에 볼 때) ·
  *    '오늘 한국 휴장(추석)'(좁으면 이름 없이). 장중 값이면 ' 장중(16:00)', 미국 최종값 전이면 '(최종값 전)' — 보는 날짜로 정한다 (저장한 문구가 아님)
- *  - 지수: 이름과 등락률(색). 한국 휴장이면 직전 거래일 날짜를 흐리게 ('코스피 +0.90% 9/23'). 받지 못한 지수는 뺀다 (상세에 '—'와 까닭)
+ *  - 지수: 이름과 등락률(색). 한국 휴장이면 직전 거래일 날짜를 흐리게 ('코스피 +0.90% 9/23'). 받지 못한 지수는 '나스닥 —'(흐림, 상세에 까닭)
  *  - 둘째 줄(높이가 남을 때만 — layout.ts planBriefing): '내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7' (휴장이면 앞에 '9/23 기준 · ')
  *  - 누르면 그 요약의 상세 (/briefings/market/<id>)
  */
@@ -18,7 +18,8 @@ import type { WidgetSummary } from "./payload";
 /** 첫 줄 지수 한 칸 (layout.ts 가 폭을 재는 모양 + 색·화면 읽기) */
 export interface SummaryItem extends IndexInput {
   code: string;
-  changeRate: number;
+  /** 받지 못한 지수는 null (등락률 자리에 '—') */
+  changeRate: number | null;
   /** 등락률 글자의 부호 — "0.00%" 로 보이면 0 (기본 글자색, BH-38) */
   sign: number;
 }
@@ -52,14 +53,30 @@ export function summaryChips(s: Pick<WidgetSummary, "market" | "basisDate" | "ho
   return [`${word}${phase}`];
 }
 
-/** 첫 줄 지수 (요약 순서 그대로 — 좁으면 layout 이 뒤에서부터 뺀다: 필라반도체 → 다우). 받지 못한 지수는 뺀다 */
+/** 받지 못한 지수 칸의 등락률 자리 (카드·상세와 같은 '—') */
+export const SUMMARY_MISSING = "—";
+
+/**
+ * 첫 줄 지수 (요약 순서 그대로 — 좁으면 layout 이 뒤에서부터 뺀다: 필라반도체 → 다우).
+ * 받지 못한 지수는 빼지 않고 '나스닥 —'로 둔다 (WV1 — 사양 '일부 실패면 그 칸 —'. 조용히 빼면 그 지수가 없는 요약처럼 보인다)
+ */
 export function summaryItems(s: Pick<WidgetSummary, "market" | "basisDate" | "holiday" | "indices">): SummaryItem[] {
   // 한국 휴장: 숫자가 직전 거래일 값이라 칸마다 그 날짜 (칩은 '오늘 한국 휴장'). 미국 휴장 다음 날은 칩이 이미 그 날짜('11/25 미국')
   const dated = s.market === "KR" && !!s.holiday;
-  return s.indices.flatMap((i): SummaryItem[] => {
-    if (i.changeRate === null || !Number.isFinite(i.changeRate)) return [];
-    const rate = rateText(i.changeRate);
-    return [{ code: i.code, label: i.name, value: "", rate, stale: false, tag: dated ? md(i.date ?? s.basisDate) : null, short: true, changeRate: i.changeRate, sign: shownSign(i.changeRate, rate) }];
+  return s.indices.map((i): SummaryItem => {
+    const got = i.changeRate !== null && Number.isFinite(i.changeRate);
+    const rate = got ? rateText(i.changeRate!) : SUMMARY_MISSING;
+    return {
+      code: i.code,
+      label: i.name,
+      value: "",
+      rate,
+      stale: false,
+      tag: dated && got ? md(i.date ?? s.basisDate) : null,
+      short: true,
+      changeRate: got ? i.changeRate : null,
+      sign: got ? shownSign(i.changeRate!, rate) : 0,
+    };
   });
 }
 
@@ -70,10 +87,10 @@ export function summarySecond(s: Pick<WidgetSummary, "market" | "basisDate" | "h
   return `${s.holiday ? `${md(s.basisDate)} 기준 · ` : ""}${holdingsCountText(s.market, h)}`;
 }
 
-/** layout.ts planBriefing 에 넘기는 첫 줄 (지수가 하나도 없으면 null — 첫 줄 없이 지금 그림) */
+/** layout.ts planBriefing 에 넘기는 첫 줄 (받은 지수가 하나도 없으면 null — 첫 줄 없이 지금 그림) */
 export function summaryInput(s: WidgetSummary, now: number): SummaryInput<SummaryItem> | null {
   const items = summaryItems(s);
-  if (!items.length) return null;
+  if (!items.some((i) => i.changeRate !== null)) return null;
   return { chips: summaryChips(s, now), items, second: summarySecond(s) };
 }
 
@@ -88,7 +105,7 @@ export function summarySpeech(chip: string, items: readonly SummaryItem[], secon
   return sentence([
     "시장 요약",
     speakDates(chip),
-    ...items.map((i) => [i.label, speakRate(i.changeRate), i.tag ? `${speakDates(i.tag)} 값` : null].filter(Boolean).join(" ")),
+    ...items.map((i) => [i.label, i.changeRate === null ? "받지 못함" : speakRate(i.changeRate), i.tag ? `${speakDates(i.tag)} 값` : null].filter(Boolean).join(" ")),
     second ? speakDates(speakText(second)) : null,
     "자세히 보기",
   ]);

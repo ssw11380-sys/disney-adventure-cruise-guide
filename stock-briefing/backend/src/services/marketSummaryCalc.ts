@@ -1,5 +1,5 @@
 import { formatRate } from "../notifications/digest.js";
-import type { NewsItem } from "../providers/news/types.js";
+import { INVISIBLE_RE, type NewsItem } from "../providers/news/types.js";
 import { nyWall } from "./accountNumbers.js";
 import { briefingMarketDate } from "./briefingService.js";
 import { isKrTradingDate, isUsTradingDate, KR_HOLIDAYS, krRegularHours, US_EARLY_CLOSES, US_HOLIDAY_NAMES } from "./marketContext.js";
@@ -1097,10 +1097,23 @@ export function titleDays(title: string): number[] {
   return out;
 }
 
-export type BlockReason = "물음표" | "의견" | "광고" | "인용" | "물음" | "권유" | "평가" | "당위" | "명령" | "전망" | "영문" | "예측" | "말투";
+export type BlockReason = "물음표" | "의견" | "광고" | "시세" | "인용" | "물음" | "권유" | "평가" | "당위" | "명령" | "전망" | "영문" | "예측" | "말투";
 
 /**
- * 제목을 거르는 까닭 (없으면 null): 물음표 · 의견 난 · 광고 · 인용(따옴표 속 남의 말) · 물음(물음표 없는 물음) · 권유(낱말·때 짚기·청유) · 평가(싸다·비싸다) ·
+ * 기사가 아니라 시세·종목 쪽 제목인지 (SS4): 종목·상품 코드로 끝나는 제목('SK하이닉스(000660)'·'N2 월간 레버리지 코스피 200 선물 ETN(Q550089 )'),
+ * 띄어쓰기 없는 이름만 있는 제목('삼성전자'·'매일경제TV'), 언론사 이름뿐인 제목('쿠키뉴스'), 시세표('[표] 코스피 지수선물·옵션 시세표(9일)-2'·'[표] 외국환율고시표').
+ * '[특징주] 삼성전자(005930), 5% 급등'처럼 코드가 가운데 있거나 '[표] 개인, 코스피서 … 순매도'처럼 문장이 있는 제목은 둔다
+ */
+const QUOTE_CODE_END_RE = /\(\s*[A-Z]{0,2}\d{5,6}[A-Z]?\s*\)\s*$/;
+const BARE_NAME_RE = /^[가-힣A-Za-z0-9&.]{1,20}$/;
+const QUOTE_TABLE_RE = /\[표\][^…,]*(?:시세표|고시표)/;
+export function quotePage(title: string): boolean {
+  const t = title.trim();
+  return QUOTE_CODE_END_RE.test(t) || BARE_NAME_RE.test(t) || QUOTE_TABLE_RE.test(t) || outletName(t) !== null;
+}
+
+/**
+ * 제목을 거르는 까닭 (없으면 null): 물음표 · 의견 난 · 광고 · 시세(종목 코드·이름만 — quotePage) · 인용(따옴표 속 남의 말) · 물음(물음표 없는 물음) · 권유(낱말·때 짚기·청유) · 평가(싸다·비싸다) ·
  * 당위 끝 · 명령형 끝(반말·존댓말) · 전망 낱말 · 영문 전망·권유 · 예측 · 말투(해설·광고 글).
  * 고치지 않고 통째로 뺀다 — 언론사 제목 원문만 보이므로 걸러낼 수 없는 제목은 싣지 않는다. 끝 모양 검사는 제목 전체와 본문(coreTitle) 둘 다 본다.
  * year = 기사가 나온 해 (주면 그보다 뒤 해의 규모·성장 단정도 '전망'으로 — futureYearOutlook)
@@ -1111,6 +1124,7 @@ export function blockReason(title: string, opts: { year?: number } = {}): BlockR
   if (QUESTION_RE.test(title)) return "물음표";
   if (OPINION_RE.test(title)) return "의견";
   if (SPAM_RE.test(title)) return "광고";
+  if (quotePage(title)) return "시세";
   if (quotedSpeech(title)) return "인용";
   if (either(asksQuestion) || TOPIC_END_RE.test(core)) return "물음";
   if (ADVICE_RE.test(title) || tickerIntro(title) || either(timingCall) || either(proposes)) return "권유";
@@ -1143,8 +1157,8 @@ export function dateOnlyStamp(iso: string): boolean {
 
 /**
  * 언론사 칸에 보일 이름 (7차·8차 검토): 이름을 아는 언론사만 뽑는다 — 이름 목록(OUTLET_NAMES)이나 도메인 목록(OUTLET_BY_DOMAIN)에 있는 곳.
- * 구글이 이름 대신 도메인을 주면('edaily.co.kr') 아는 언론사는 이름으로 바꾸고, 같은 언론사의 다른 표기('KBS 뉴스'·'Chosunbiz'·'매일경제 마켓')는
- * 한 이름으로 모은다(같은 언론사 1건 규칙이 맞게). 목록에 없는 곳은 null (뽑지 않는다): 포털 중계(v.daum.net·네이트), 영상(YouTube)·블로그·
+ * 구글이 이름 대신 도메인을 주면('edaily.co.kr') 아는 언론사는 이름으로 바꾸고, 같은 언론사의 다른 표기('KBS 뉴스'·'Chosunbiz')는
+ * 한 이름으로 모은다(같은 언론사 1건 규칙이 맞게). '매일경제 마켓'(시세 쪽 제목이 섞임)은 뽑지 않는다. 목록에 없는 곳은 null (뽑지 않는다): 포털 중계(v.daum.net·네이트), 영상(YouTube)·블로그·
  * 유료 투자 글(네이버 프리미엄콘텐츠), 코인·자동 생성 종목 글(토큰포스트·ThinkPool 등), 증권사·기업 글(KB Think 등), 모르는 도메인과
  * 금융 기사 사이에 섞여 오는 스팸 사이트 이름('Histoire pour tous'·'Calgary Roughnecks')과 해외 중개 사이트('Traders Union'·'TradingKey').
  * 목록은 2026-09 구글 뉴스 말뭉치(언론사 621곳)를 하나하나 보고 통신사·전국/경제 일간지·방송사·주요 경제·IT 인터넷 신문·지역 일간지를 넣었다
@@ -1194,7 +1208,8 @@ const OUTLET_ALIAS: Readonly<Record<string, string>> = {
   "KBS 뉴스": "KBS",
   "MBC 뉴스": "MBC",
   "SBS 뉴스": "SBS",
-  "매일경제 마켓": "매일경제",
+  // '매일경제 마켓'은 모으지 않는다(뽑지 않음, SS4): 기사 말고 시세 쪽 제목('SK하이닉스(000660)'·'… ETN(Q550089 )'·'삼성전자')도 올리고
+  // 발행 시각이 00~09시 사이로 제각각이다. 같은 기사는 '매일경제' 이름으로도 온다
   모바일한경: "한국경제",
   "연합뉴스 한민족센터": "연합뉴스",
   "전북일보 인터넷신문": "전북일보",
@@ -1288,9 +1303,10 @@ export function pickNews(items: readonly NewsItem[], opts: { from: string; to: s
   const from = Date.parse(opts.from);
   const to = Date.parse(opts.to);
   const allowed = new Set(opts.days);
-  const cands = items.flatMap((raw) => {
+  const cands = items.flatMap((item) => {
+    const raw = { ...item, title: newsTitle(item.title ?? "") };
     const t = Date.parse(raw.publishedAt);
-    const outlet = outletName(raw.source);
+    const outlet = outletName(raw.source?.replace(INVISIBLE_RE, ""));
     if (!raw.title || !outlet || !isWebUrl(raw.url) || Number.isNaN(t) || t < from || t > to || dateOnlyStamp(raw.publishedAt)) return [];
     if (blockedTitle(raw.title, { year: Number(kstDateOf(t).slice(0, 4)) })) return [];
     if (opts.closes && otherDayIndexValue(raw.title, opts.closes)) return [];
@@ -1314,6 +1330,24 @@ export function pickNews(items: readonly NewsItem[], opts: { from: string; to: s
     if (out.length >= NEWS_MAX) break;
   }
   return out;
+}
+
+/**
+ * 뽑기 전 제목 다듬기 (SS2·SS3 — 원문 글은 고치지 않고 붙은 꼬리·보이지 않는 글자만 뗀다):
+ *  - 폭 없는 글자(U+200B~U+200F·U+2060·U+FEFF)를 지운다 (출처 파서도 지우지만 다른 출처·예전 저장본에 대비)
+ *  - 끝에 남은 ' - {아는 언론사}' 꼬리를 되풀이해서 뗀다: 구글이 '… 마감 - 조선비즈 - Chosunbiz'·'… - 머니투데이 - mt.co.kr'처럼
+ *    언론사를 두 표기로 붙여 보내면 파서가 마지막 하나만 떼어 카드에 '… 마감 - 머…'가 보였다. 모르는 이름('- 한국투자증권')은 둔다
+ */
+export function newsTitle(title: string): string {
+  let t = title.replace(INVISIBLE_RE, "").replace(/\s+/g, " ").trim();
+  for (;;) {
+    const dash = t.lastIndexOf(" - ");
+    if (dash <= 0 || !outletName(t.slice(dash + 3).trim())) return t;
+    t = t
+      .slice(0, dash)
+      .replace(/(?:\s*[|｜])+\s*$/, "")
+      .trim();
+  }
 }
 
 /** 뉴스 제목에 허용하는 날짜(일): 미국은 뉴욕 거래일과 그다음 날(한국 날짜로 쓴 기사), 한국은 거래일 */

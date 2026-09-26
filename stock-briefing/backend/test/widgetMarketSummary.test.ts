@@ -159,6 +159,57 @@ describe("GET /api/widget: 브리핑 위젯 첫 줄 (시장 요약, &ms=1 만)",
     expect(JSON.parse(r.body)).not.toHaveProperty("ms");
   });
 
+  it("WV2: 저장된 'ok' 요약의 모양이 달라도(지수 칸 없음·깨진 JSON·지수 항목 null 등) 위젯 응답은 200 — 첫 줄만 빠지고 나머지는 예전과 같다", async () => {
+    await start();
+    const old = await get("/api/widget?indices=1&sessions=1&ui=2");
+    const insertRaw = async (data: string, date: string) =>
+      db!
+        .insertInto("market_summaries")
+        .values({ summary_date: date, session: "morning", market: "US", status: "ok", summary: "요약", data, created_at: `${date}T08:30:05+09:00` })
+        .execute();
+    const { indices: _i, ...noIndices } = MONDAY;
+    const bad = [
+      JSON.stringify(noIndices), // 지수 칸이 없는 예전 모양
+      JSON.stringify({ ...MONDAY, indices: null }),
+      JSON.stringify({ ...MONDAY, indices: [null, 3] }),
+      JSON.stringify({ ...MONDAY, indices: "나스닥" }),
+      JSON.stringify({ ...MONDAY, holiday: "추석" }),
+      JSON.stringify({ ...MONDAY, date: 20260928 }),
+      JSON.stringify("문자열"),
+      "null",
+      "{깨진 JSON",
+    ];
+    let day = 1;
+    for (const data of bad) {
+      await insertRaw(data, `2026-10-${String(day++).padStart(2, "0")}`); // 늘 가장 최근 요약이 되게 날짜를 올린다
+      const r = await raw(NEW_URL);
+      expect(r.status, data).toBe(200);
+      const body = JSON.parse(r.body) as Record<string, unknown> & { features: Record<string, boolean> };
+      expect(body, data).not.toHaveProperty("ms");
+      expect(body.features.marketSummary).toBe(true);
+      const { features, ...rest } = body;
+      const { features: oldFeatures, ...oldRest } = old as unknown as Record<string, unknown> & { features: Record<string, boolean> };
+      expect(rest, data).toEqual(oldRest);
+      expect({ ...features, marketSummary: undefined }).toEqual({ ...oldFeatures, marketSummary: undefined });
+    }
+  });
+
+  it("WV2: 요약 목록이 이상한 값(undefined)을 주거나 동기로 던져도 위젯 응답은 200, 첫 줄 없음", async () => {
+    await start();
+    await insert(MONDAY);
+    const list = vi.spyOn(app!.marketSummaries!, "list");
+    list.mockResolvedValue(undefined as unknown as MarketSummary[]);
+    let r = await raw(NEW_URL);
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.body)).not.toHaveProperty("ms");
+    list.mockImplementation(() => {
+      throw new Error("동기 오류");
+    });
+    r = await raw(NEW_URL);
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.body)).not.toHaveProperty("ms");
+  });
+
   it("ETag: 새 요약이 저장되면 새 앱(&ms=1)의 ETag 는 바뀌고(새 첫 줄을 받게), 예전 앱의 ETag 는 그대로", async () => {
     await start();
     await insert(KR_DAY);
@@ -192,6 +243,40 @@ describe("widgetSummary (순수 함수)", () => {
     const w = widgetSummary(row(d))!;
     expect(w.indices.map((i) => i.changeRate)).toEqual([0.48, null, 0.93, 1.41]);
     expect(w.holdings).toBeNull();
+  });
+
+  it("WV2: 모양이 다른 저장본은 던지지 않고 null (예전 모양·칸 빠짐·깨진 값). 내 종목 칸만 깨졌으면 지수 첫 줄은 두고 holdings 만 null", () => {
+    const raw = (data: unknown) => row(data as MarketSummaryData);
+    const { indices: _i, ...noIndices } = MONDAY;
+    for (const d of [
+      noIndices,
+      { ...MONDAY, indices: null },
+      { ...MONDAY, indices: {} },
+      { ...MONDAY, indices: [null] },
+      { ...MONDAY, indices: [{ code: 1, name: "나스닥", changeRate: 0.4 }] },
+      { ...MONDAY, session: "evening" },
+      { ...MONDAY, market: "JP" },
+      { ...MONDAY, phase: undefined },
+      { ...MONDAY, basisDate: null },
+      { ...MONDAY, holiday: { name: "추석" } },
+      "문자열",
+      42,
+      [],
+    ]) {
+      expect(() => widgetSummary(raw(d)), JSON.stringify(d).slice(0, 60)).not.toThrow();
+      expect(widgetSummary(raw(d)), JSON.stringify(d).slice(0, 60)).toBeNull();
+    }
+    // 등락률이 문자열·NaN 이면 그 지수만 받지 못한 것으로
+    const w = widgetSummary(raw({ ...MONDAY, indices: MONDAY.indices.map((i, k) => (k === 2 ? { ...i, changeRate: "0.93" } : k === 3 ? { ...i, changeRate: Number.NaN } : i)) }))!;
+    expect(w.indices.map((i) => i.changeRate)).toEqual([0.48, 0.51, null, null]);
+    // 내 종목 칸이 깨졌으면 둘째 줄만 빠진다
+    expect(widgetSummary(raw({ ...MONDAY, holdings: { compared: 12, high: 2, low: 3, similar: 7 } }))!.holdings).toBeNull();
+    expect(widgetSummary(raw({ ...MONDAY, holdings: "12종목" }))!.holdings).toBeNull();
+    expect(widgetSummary(raw({ ...MONDAY, holdings: { ...MONDAY.holdings, compared: "12" } }))!.holdings).toBeNull();
+    // 게터가 던지는 이상한 객체도 null
+    const trap = { ...MONDAY };
+    Object.defineProperty(trap, "indices", { get: () => { throw new Error("깨진 값"); }, enumerable: true });
+    expect(widgetSummary(raw(trap))).toBeNull();
   });
 
   it("buildWidgetPayload: 넘긴 첫 줄만 ms 로 (없으면 칸도 없음)", () => {

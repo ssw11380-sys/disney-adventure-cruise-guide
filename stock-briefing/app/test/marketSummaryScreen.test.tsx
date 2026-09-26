@@ -92,7 +92,7 @@ const { default: BriefingsScreen } = await import("@/app/(tabs)/briefings");
 const { default: MarketSummaryScreen } = await import("@/app/briefings/market/[id]");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const pick = await import("@/lib/briefingPick");
-const { marketSummary: MS, touch } = await import("@/tokens");
+const { marketSummary: MS, touch, dark: theme } = await import("@/tokens");
 
 const shared = JSON.parse(readFileSync(new URL("../../shared/fixtures/marketSummary.json", import.meta.url), "utf8")) as { cases: Array<{ data: MarketSummaryData }> };
 const item = (id: number, data: MarketSummaryData): MarketSummary => ({ id, date: data.date, session: data.session, market: data.market, status: "ok", summary: "요약", createdAt: data.asOf, data });
@@ -175,11 +175,14 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     for (const l of ["환율·금리", "업종", "내 종목", "뉴스 3건"]) expect(all).toContain(l);
     expect(all).toContain("원/달러 1,359.00원 +3.50원 (9/23 고시) · 미 10년물 5.17% -0.01%p (미 재무부)");
     expect(all).toContain("약 커뮤니케이션 -0.90% · 에너지 -0.89% (섹터 ETF 기준)");
-    // 뉴스 줄은 제목만 한 줄씩 (언론사·시각은 상세에 — 8차 검토), 셋째 제목은 '외 1건'
+    // 뉴스 줄은 한 줄씩: 흐린 언론사 머리 + 원문 제목 (SS5·SS11 — 시각은 상세에만), 셋째 제목은 '외 1건'
     const news = r.all().filter((n) => n.props.testID === "news-line").map(textOf);
-    expect(news).toEqual(["[예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑", "[예시] 뉴욕증시, 기술주 강세 속 상승 마감"]);
-    expect(all.some((t) => /^(뉴스1|KBS) 9\/26/.test(t))).toBe(false);
-    expect(all).toContain("외 1건 · 언론사·시각·원문은 상세에서");
+    expect(news).toEqual(["뉴스1 · [예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑", "KBS · [예시] 뉴욕증시, 기술주 강세 속 상승 마감"]);
+    const heads = r.all().filter((n) => n.props.testID === "news-outlet");
+    expect(heads.map(textOf)).toEqual(["뉴스1 · ", "KBS · "]);
+    expect(heads.every((n) => (n.props.style as { color?: string }).color === theme.muted)).toBe(true);
+    expect(all.some((t) => /^(뉴스1|KBS) 9\/26/.test(t))).toBe(false); // 시각은 카드에 없다
+    expect(all).toContain("외 1건 · 시각·원문은 상세에서");
     expect(all.some((t) => t.includes("[예시] 뉴욕증시 마감 시황"))).toBe(false); // 세 번째 제목은 상세에만
     // 화면 읽기는 언론사·시각도 읽는다
     expect(String(card.props.accessibilityLabel)).toContain("뉴스1 9/26 05:32, [예시] 뉴욕증시 3대 지수 상승 마감…나스닥 0.48%↑");
@@ -270,6 +273,52 @@ describe("브리핑 탭 맨 위 카드 (접은 화면)", () => {
     expect(check("잰 폭 900")).toEqual(titles);
     // 화면 읽기(카드 한 문장)는 자르지 않은 원문 제목
     for (const t of titles) expect(String(cardOf(r)!.props.accessibilityLabel)).toContain(t);
+  });
+
+  it("SS5·SS11: 언론사 머리는 제목이 12자 이상 남을 때만 — 좁으면 제목만(지금처럼), 넓으면 '연합뉴스 · 제목'. 화면 읽기는 언론사·시각·제목 그대로, 카드 줄 수는 그대로", () => {
+    h.flags = { marketSummary: true };
+    const d = MORNING.data!;
+    const titles = ["[뉴욕마감]국채금리 급등에도 AI주 랠리…나스닥 0.48%↑", "뉴욕증시, 3대 지수 일제히 상승 마감…다우 0.9%↑"];
+    const outlets = ["연합뉴스", "MTN 머니투데이방송"];
+    h.list = [item(7, { ...d, news: { ...d.news, items: d.news.items.map((n, i) => ({ ...n, title: titles[i] ?? n.title, outlet: outlets[i] ?? n.outlet })) } })];
+    const r = render(<BriefingsScreen />);
+    const lines = () => r.all().filter((n) => n.props.testID === "news-line");
+    const heads = () => r.all().filter((n) => n.props.testID === "news-outlet").map(textOf);
+    const titleOf = (n: HostNode) => n.children.filter((c) => typeof c === "string").join("");
+    const box = r.all().find((n) => n.type === "View" && typeof n.props.onLayout === "function" && n.children.some((c) => typeof c !== "string" && c.props.testID === "news-line"))!;
+    const layout = (width: number) => r.act(() => (box.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width, height: 40, x: 0, y: 0 } } }));
+    const rowsBefore = r.all().filter((n) => n.type === "View" && n.props.style && (n.props.style as { flexDirection?: string }).flexDirection === "row").length;
+    // 넓으면 둘 다 머리 + 제목 전체
+    layout(700);
+    expect(heads()).toEqual(["연합뉴스 · ", "MTN 머니투데이방송 · "]);
+    expect(lines().map(titleOf)).toEqual(titles);
+    expect(texts(r)).toContain("외 1건 · 시각·원문은 상세에서");
+    // 폰 폭(355dp — 475 접은 화면 카드의 뉴스 칸): 머리를 붙이고도 12자 이상 남으면 머리 + 잘린 제목
+    layout(355);
+    let withHead = 0;
+    for (const [i, n] of lines().entries()) {
+      const shown = titleOf(n);
+      const own = n.children.some((c) => typeof c !== "string" && c.props.testID === "news-outlet");
+      expect(shown === titles[i] || titles[i]!.startsWith(shown.replace(/…$/, "")), shown).toBe(true);
+      if (own) {
+        withHead++;
+        if (shown !== titles[i]) expect(Array.from(shown.replace(/…$/, "")).length, shown).toBeGreaterThanOrEqual(12);
+      }
+    }
+    expect(withHead).toBeGreaterThan(0);
+    // 긴 언론사 이름은 좁으면 먼저 빠진다 (제목 12자를 지킬 수 없으면 제목만)
+    layout(200);
+    expect(heads()).not.toContain("MTN 머니투데이방송 · ");
+    for (const n of lines()) expect(Array.from(titleOf(n).replace(/…$/, "")).length).toBeGreaterThanOrEqual(8);
+    layout(150);
+    expect(heads()).toEqual([]);
+    expect(texts(r)).toContain("외 1건 · 언론사·시각·원문은 상세에서");
+    // 줄 수·화면 읽기는 그대로 (머리는 같은 줄 안의 흐린 글)
+    expect(lines().every((n) => n.props.numberOfLines === 1)).toBe(true);
+    expect(r.all().filter((n) => n.type === "View" && n.props.style && (n.props.style as { flexDirection?: string }).flexDirection === "row").length).toBe(rowsBefore);
+    const speech = String(cardOf(r)!.props.accessibilityLabel);
+    for (const t of titles) expect(speech).toContain(t);
+    expect(speech).toContain("연합뉴스 9/26 05:32");
   });
 
   it("아주 좁은 칸(큰 글씨 200% + 좁은 폭)에서는 제목이 '…'만 남지 않게 첫 제목만 두 줄로, 둘째 제목은 '외 N건'으로 (8차 검토)", () => {

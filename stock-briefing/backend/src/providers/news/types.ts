@@ -45,11 +45,20 @@ function decodeEntities(s: string): string {
 }
 
 /**
+ * 폭 없는 글자·방향 표시 (U+200B~U+200F 폭 없는 공백·연결자·방향 표시, U+2060 단어 연결자, U+FEFF BOM).
+ * 제목·언론사 이름에서 지운다 — 실제 아주경제 제목 '[속보] (U+200B 7개)코스피, 63.01p(0.90%) 오른 7080.92 마감'처럼 보이지 않는 글자가 박혀 와서,
+ * 앱이 글자 폭을 어림할 때 보이지 않는 글자까지 세어 카드에서 제목이 거의 다 잘렸다 (SS3/SS7)
+ */
+export const INVISIBLE_RE = /[\u200B-\u200F\u2060\uFEFF]/g;
+
+/**
  * HTML 태그 제거 + 엔티티 복원 (숫자·16진 엔티티 포함). RSS 제목은 엔티티가 두 번 감싸여 오기도 해서('&amp;#8230;' → '…', '&amp;#63;' → '?')
- * 두 겹까지 푼다 — 풀지 않으면 '나스닥 &#8230; 상승'처럼 보이고, 감싼 물음표(&#63;)가 물음 제목 거르기를 빠져나간다
+ * 두 겹까지 푼다 — 풀지 않으면 '나스닥 &#8230; 상승'처럼 보이고, 감싼 물음표(&#63;)가 물음 제목 거르기를 빠져나간다.
+ * 폭 없는 글자(INVISIBLE_RE — '&#8203;' 엔티티로 와도)는 지운다
  */
 export function stripHtml(s: string): string {
   return decodeEntities(decodeEntities(s.replace(/<[^>]+>/g, "")))
+    .replace(INVISIBLE_RE, "")
     .replace(/\s+/g, " ")
     .trim();
 }

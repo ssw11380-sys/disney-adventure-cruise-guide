@@ -75,9 +75,14 @@ export const widgetRoutes: FastifyPluginAsync<{
             .then((on) => (on ? deps.accounts!.recentOkIds(4) : null))
             .catch(() => null)
         : null;
-    // 브리핑 위젯 첫 줄: 새 앱이 물을 때만 플래그를 보고, 켜져 있을 때만 가장 최근 요약을 읽는다 (못 읽으면 첫 줄 없이)
+    // 브리핑 위젯 첫 줄: 새 앱이 물을 때만 플래그를 보고, 켜져 있을 때만 가장 최근 요약을 읽는다.
+    // 요약 때문에 위젯 응답이 실패하는 일은 없다 — 못 읽거나 저장된 모양이 달라 어디서 던져도 첫 줄만 빠진다 (WV2)
     const summaryOn = wantsSummary && deps.features ? deps.features.enabled("marketSummary").catch(() => false) : null;
-    const summary = summaryOn ? summaryOn.then((on) => (on && deps.summaries ? deps.summaries.list(1).then((l) => widgetSummary(l[0]), () => null) : null)) : null;
+    const summary = summaryOn
+      ? summaryOn
+          .then(async (on) => (on && deps.summaries ? widgetSummary((await deps.summaries.list(1))?.[0]) : null))
+          .catch(() => null)
+      : null;
     const [list, latest, status, f, idx, accountIds, sched, msOn, ms] = await Promise.all([
       deps.stocks.listWithQuotes(),
       deps.briefings.latestPerStock(),

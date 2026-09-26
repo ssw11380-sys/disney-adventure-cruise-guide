@@ -161,16 +161,41 @@ describe("칩: 보는 날짜로 ('밤사이'는 숫자의 거래일이 보는 �
 });
 
 describe("지수·둘째 줄 글 (숫자는 서버 요약 그대로, 권유·평가 말 없음)", () => {
-  it("아침 네 지수 이름·등락률, 한국 휴장이면 칸마다 직전 거래일(흐림), 받지 못한 지수는 뺀다, '0.00%' 는 부호 없음(기본 글자색)", () => {
+  it("아침 네 지수 이름·등락률, 한국 휴장이면 칸마다 직전 거래일(흐림), 받지 못한 지수는 '—'(WV1 — 빼지 않는다), '0.00%' 는 부호 없음(기본 글자색)", () => {
     expect(summaryItems(MONDAY).map((i) => `${i.label} ${i.rate}${i.tag ? ` ${i.tag}` : ""}`)).toEqual(["나스닥 +0.48%", "S&P500 +0.51%", "다우 +0.93%", "필라반도체 +1.41%"]);
     expect(summaryItems(KR_HOLIDAY).map((i) => `${i.label} ${i.rate} ${i.tag}`)).toEqual(["코스피 +0.90% 9/23", "코스닥 +1.21% 9/23"]);
     const miss = { ...MONDAY, indices: MONDAY.indices.map((i, k) => (k === 1 ? { ...i, changeRate: null } : k === 2 ? { ...i, changeRate: 0 } : i)) };
-    expect(summaryItems(miss).map((i) => [i.label, i.rate, i.sign])).toEqual([
-      ["나스닥", "+0.48%", 1],
-      ["다우", "0.00%", 0],
-      ["필라반도체", "+1.41%", 1],
+    expect(summaryItems(miss).map((i) => [i.label, i.rate, i.sign, i.changeRate])).toEqual([
+      ["나스닥", "+0.48%", 1, 0.48],
+      ["S&P500", "—", 0, null],
+      ["다우", "0.00%", 0, 0],
+      ["필라반도체", "+1.41%", 1, 1.41],
     ]);
+    // 휴장 날짜는 받은 칸에만 ('코스닥 —'에는 날짜를 붙이지 않는다)
+    const krMiss = { ...KR_HOLIDAY, indices: KR_HOLIDAY.indices.map((i, k) => (k === 1 ? { ...i, changeRate: null } : i)) };
+    expect(summaryItems(krMiss).map((i) => `${i.label} ${i.rate}${i.tag ? ` ${i.tag}` : ""}`)).toEqual(["코스피 +0.90% 9/23", "코스닥 —"]);
+    // 받은 지수가 하나도 없으면 첫 줄 없음 (서버도 이런 요약은 보내지 않는다)
     expect(summaryInput({ ...MONDAY, indices: MONDAY.indices.map((i) => ({ ...i, changeRate: null })) }, NOW)).toBeNull();
+    expect(summaryInput(miss, NOW)!.items.map((i) => i.rate)).toEqual(["+0.48%", "—", "0.00%", "+1.41%"]);
+  });
+
+  it("WV1: 받지 못한 지수는 위젯 첫 줄에 '나스닥 —'(흐린 글자)로 보이고 화면 읽기는 '받지 못함' — 폭이 모자라 뒤 지수를 빼는 규칙은 그대로", () => {
+    const miss = { ...MONDAY, indices: MONDAY.indices.map((i, k) => (k === 0 ? { ...i, changeRate: null } : i)) };
+    const t = widget(miss, BIG);
+    const b = block(t)!;
+    const all = texts(b);
+    expect(all).toContain("나스닥");
+    expect(all).toContain("—");
+    expect(all.indexOf("—")).toBe(all.indexOf("나스닥") + 1);
+    const dash = nodes(b).find((n) => n.type === "TextWidget" && n.props.text === "—")!;
+    expect(dash.props.color).toBe(WIDGET_PALETTES.dark.muted);
+    const speech = String(b.props.accessibilityLabel);
+    expect(speech).toContain("나스닥 받지 못함");
+    expect(speech).toContain("S&P500 0.51% 상승");
+    // 좁은 폭(360×180)에서는 뒤 지수부터 빠지고 '나스닥 —'(맨 앞)은 남는다
+    const small = widget(miss, PHONE);
+    expect(texts(block(small)!).slice(0, 4)).toContain("—");
+    expect(texts(block(small)!)).not.toContain("필라반도체");
   });
 
   it("둘째 줄: 개수만 ('내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7'), 모두 비슷·휴장·보유 없음", () => {

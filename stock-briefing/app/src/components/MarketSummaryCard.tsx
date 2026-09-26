@@ -11,12 +11,13 @@ import {
   chunkSegs,
   closeBadge,
   closeBadgeWarn,
-  fitNewsTitle,
+  fitNewsLine,
   holdingsShort,
   holidayText,
   indexCellCols,
   indexValueText,
   md,
+  NEWS_OUTLET_SEP,
   rateText,
   speakText,
   SUMMARY_NOTE,
@@ -231,11 +232,13 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
 }
 
 /**
- * 카드 뉴스 칸 (8차 검토): 제목마다 한 줄, 제목만 (언론사·시각은 상세 뉴스 칸에 — 화면 읽기는 카드 문장(cardSpeech)이 언론사·시각·원문 제목 전체를 읽는다).
- * 줄 폭을 재서(onLayout, 재기 전은 guess) 들어가지 않는 제목은 fitNewsTitle 로 잘라 보낸다 — 한 줄 말줄임(numberOfLines)에 맡기면 글자 단위로 잘려
+ * 카드 뉴스 칸 (8차 검토 · SS5/SS11): 제목마다 한 줄. 줄 앞에 흐린 언론사 머리('연합뉴스 · ')를 붙여 누가 쓴 제목인지 카드에서도 보이게 한다 —
+ * 머리를 붙이고도 제목이 다 들어가거나 12자 이상 남을 때만, 아니면 제목만 (fitNewsLine). 시각은 상세 뉴스 칸에 — 화면 읽기는 카드 문장(cardSpeech)이
+ * 언론사·시각·원문 제목 전체를 읽는다 (그대로).
+ * 줄 폭을 재서(onLayout, 재기 전은 guess) 들어가지 않는 제목은 잘라 보낸다 — 한 줄 말줄임(numberOfLines)에 맡기면 글자 단위로 잘려
  * '나스닥 0.4…'·'2만…'처럼 숫자 가운데서 끊겼다. numberOfLines 는 어림이 빗나갈 때의 안전판이고, 안드로이드에서는 그때 글자를 조금 줄여 넣는다
  * (adjustsFontSizeToFit — 기기 글꼴이 어림보다 넓어도 숫자 가운데서 잘리지 않게). 아주 좁은 칸(큰 글씨 + 좁은 창)에서 제목이 한 줄에
- * 8자도 안 들어가면 그 제목만 두 줄로 두고 둘째 제목은 뺀다 ('외 N건'으로 — 카드 줄 수를 늘리지 않게)
+ * 8자도 안 들어가면 그 제목만 두 줄로 두고(머리 없이) 둘째 제목은 뺀다 ('외 N건'으로 — 카드 줄 수를 늘리지 않게)
  */
 function NewsLines({ items, more, guess }: { items: SummaryNews[]; more: number; guess: number }) {
   const t = useTheme();
@@ -245,18 +248,25 @@ function NewsLines({ items, more, guess }: { items: SummaryNews[]; more: number;
     const x = Math.floor(e.nativeEvent.layout.width);
     if (x > 0) setW((p) => (p === x ? p : x));
   }, []);
-  const fits = items.map((n) => fitNewsTitle(n.title, w ?? guess, font.body, scale));
+  const fits = items.map((n) => fitNewsLine(n, w ?? guess, font.body, scale));
   const narrow = fits.some((f) => f.lines === 2);
   const shown = narrow ? items.slice(0, 1) : items;
   const rest = more + items.length - shown.length;
+  // 보이는 줄마다 언론사가 있으면 아래 안내에서 '언론사'를 뺀다
+  const allOutlets = shown.every((_, i) => fits[i]!.outlet !== null);
   return (
     <View style={styles.newsLines} onLayout={onLayout}>
       {shown.map((n, i) => (
         <Text key={n.url} testID="news-line" style={{ color: t.ink, fontSize: font.body }} numberOfLines={fits[i]!.lines} adjustsFontSizeToFit minimumFontScale={0.85}>
+          {fits[i]!.outlet ? (
+            <Text testID="news-outlet" style={{ color: t.muted }}>
+              {`${fits[i]!.outlet}${NEWS_OUTLET_SEP}`}
+            </Text>
+          ) : null}
           {fits[i]!.text}
         </Text>
       ))}
-      <Words text={`${rest ? `외 ${rest}건 · ` : ""}언론사·시각·원문은 상세에서`} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} />
+      <Words text={`${rest ? `외 ${rest}건 · ` : ""}${allOutlets ? "시각·원문은 상세에서" : "언론사·시각·원문은 상세에서"}`} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} />
     </View>
   );
 }

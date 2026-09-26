@@ -144,24 +144,51 @@ export interface WidgetSummary {
   holdings: { compared: number; high: number; low: number; similar: number } | null;
 }
 
-/** 가장 최근 시장 요약 → 위젯 첫 줄 숫자. 실패한 요약·데이터가 없는 요약·지수를 하나도 못 받은 요약은 null (카드는 '생성 실패', 위젯·알림 첫 줄은 없음) */
+/**
+ * 가장 최근 시장 요약 → 위젯 첫 줄 숫자. 실패한 요약·데이터가 없는 요약·지수를 하나도 못 받은 요약은 null (카드는 '생성 실패', 위젯·알림 첫 줄은 없음).
+ * 절대 던지지 않는다: 저장된 JSON 모양이 다르면(예전 모양·칸 빠짐·깨진 값) null — 첫 줄만 빠지고 위젯 응답의 나머지는 그대로 나간다
+ */
 export function widgetSummary(s: MarketSummary | null | undefined): WidgetSummary | null {
-  const d = s?.status === "ok" ? s.data : null;
-  if (!s || !d || !d.indices.some((i) => i.changeRate !== null && Number.isFinite(i.changeRate))) return null;
-  const h = d.holdings;
-  return {
-    id: s.id,
-    date: d.date,
-    session: d.session,
-    market: d.market,
-    marketDate: d.marketDate,
-    basisDate: d.basisDate,
-    holiday: d.holiday ? { date: d.holiday.date, name: d.holiday.name } : null,
-    phase: d.phase,
-    asOf: d.asOf,
-    indices: d.indices.map((i) => ({ code: i.code, name: i.name, changeRate: i.changeRate !== null && Number.isFinite(i.changeRate) ? r2(i.changeRate) : null, date: i.date })),
-    holdings: h && h.compared > 0 ? { compared: h.compared, high: h.high.length, low: h.low.length, similar: h.similar.length } : null,
-  };
+  try {
+    return toWidgetSummary(s);
+  } catch {
+    return null;
+  }
+}
+
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isDay = (v: unknown): v is string => isStr(v) && /^\d{4}-\d{2}-\d{2}$/.test(v);
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const finiteRate = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? r2(v) : null);
+const countOf = (v: unknown): number | null => (Array.isArray(v) ? v.length : null);
+
+function toWidgetSummary(s: MarketSummary | null | undefined): WidgetSummary | null {
+  const d: unknown = s?.status === "ok" ? s.data : null;
+  if (!s || !Number.isInteger(s.id) || !isObj(d)) return null;
+  const { date, session, market, marketDate, basisDate, asOf, phase, indices: rawIndices, holiday: rawHoliday, holdings: h } = d;
+  if (!isDay(date) || !isDay(marketDate) || !isDay(basisDate) || !isStr(asOf)) return null;
+  if (session !== "morning" && session !== "afternoon") return null;
+  if (market !== "US" && market !== "KR") return null;
+  if (phase !== "final" && phase !== "intraday" && phase !== "prelim") return null;
+  if (!Array.isArray(rawIndices)) return null;
+  const indices: WidgetSummary["indices"] = [];
+  for (const i of rawIndices) {
+    if (!isObj(i) || !isStr(i.code) || !isStr(i.name)) return null;
+    indices.push({ code: i.code, name: i.name, changeRate: finiteRate(i.changeRate), date: isDay(i.date) ? i.date : null });
+  }
+  if (!indices.some((i) => i.changeRate !== null)) return null;
+  let holiday: WidgetSummary["holiday"] = null;
+  if (rawHoliday !== null && rawHoliday !== undefined) {
+    if (!isObj(rawHoliday) || !isDay(rawHoliday.date)) return null;
+    holiday = { date: rawHoliday.date, name: isStr(rawHoliday.name) ? rawHoliday.name : null };
+  }
+  // 내 종목 개수: 모양이 다르면 둘째 줄만 뺀다 (지수 첫 줄은 그대로)
+  let holdings: WidgetSummary["holdings"] = null;
+  if (isObj(h) && typeof h.compared === "number" && Number.isInteger(h.compared) && h.compared > 0) {
+    const [high, low, similar] = [countOf(h.high), countOf(h.low), countOf(h.similar)];
+    if (high !== null && low !== null && similar !== null) holdings = { compared: h.compared, high, low, similar };
+  }
+  return { id: s.id, date, session, market, marketDate, basisDate, holiday, phase, asOf, indices, holdings };
 }
 
 export interface WidgetPayload {

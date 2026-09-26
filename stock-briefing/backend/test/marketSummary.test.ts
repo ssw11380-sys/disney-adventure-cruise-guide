@@ -54,6 +54,8 @@ import {
   pickFx,
   pickIndices,
   pickNews,
+  newsTitle,
+  quotePage,
   quotedSpeech,
   ratesText,
   resolveDates,
@@ -1451,7 +1453,8 @@ describe("뉴스 제목 고르기 (원문 그대로 · 창 · 거르기 · 같�
       expect(outletName(s), s).toBe(s);
     expect(outletName("KBS 뉴스")).toBe("KBS");
     expect(outletName("Chosunbiz")).toBe("조선비즈");
-    expect(outletName("매일경제 마켓")).toBe("매일경제");
+    // '매일경제 마켓'은 시세 쪽 제목이 섞여 뽑지 않는다 (SS4 — 같은 기사는 '매일경제'로도 온다)
+    expect(outletName("매일경제 마켓")).toBeNull();
     // 실제 파서로 읽은 창: 영상 제목(YouTube)은 창 안이어도 뽑지 않고, 같은 언론사의 두 표기(KBS 뉴스·kbs.co.kr)는 1건만
     const got = parseGoogleRss(
       rss([
@@ -1472,6 +1475,99 @@ describe("뉴스 제목 고르기 (원문 그대로 · 창 · 거르기 · 같�
       ]),
     );
     expect(got.map((n) => n.title).sort()).toEqual(["[뉴욕증시] 호르무즈 재개방 협상, 기대는 하지만…혼조 마감", "달러-원, 뉴욕장서 1,350원 중반대 거래"]);
+  });
+
+  it("SS3/SS7: 폭 없는 글자(U+200B~U+200F·U+2060·U+FEFF)는 제목·언론사 이름에서 지운다 — 실제 아주경제 '[속보] +U+200B×7 코스피, 63.01p(0.90%) 오른 7080.92 마감'", () => {
+    const ZW = "​".repeat(7);
+    const clean = "[속보] 코스피, 63.01p(0.90%) 오른 7080.92 마감";
+    // 실제 모양 그대로 (말머리 뒤 띄어쓰기 + U+200B 7개 + 코스피), 띄어쓰기가 앞뒤로 있어도 한 칸으로
+    expect(stripHtml(`[속보] ${ZW}코스피, 63.01p(0.90%) 오른 7080.92 마감`)).toBe(clean);
+    expect(stripHtml(`[속보] ${ZW} 코스피, 63.01p(0.90%) 오른 7080.92 마감`)).toBe(clean);
+    expect(stripHtml("[속보] &#8203;&#8203;코스피⁠, 63.01p﻿(0.90%) 오른‎ 7080.92 마감‏")).toBe(clean);
+    expect(stripHtml("아주경제​‌‍")).toBe("아주경제");
+    const got = parseGoogleRss(rss([{ title: `[속보] ${ZW}코스피, 63.01p(0.90%) 오른 7080.92 마감`, outlet: "아주경제​", at: "2026-09-23T06:36:00Z", id: "aj1" }]));
+    expect(got).toHaveLength(1);
+    expect(got[0]!.title).toBe(clean);
+    expect(got[0]!.source).toBe("아주경제");
+    // 뽑기도 (다른 출처·예전 값에 남아 있어도) 지운 제목으로
+    const picked = pickNews(
+      [{ title: `[속보] ${ZW}코스피, 63.01p(0.90%) 오른 7080.92 마감`, url: "https://news.google.com/rss/articles/aj2", source: "아주경제﻿", publishedAt: "2026-09-23T06:36:00.000Z", summary: null }],
+      { ...newsWindow("KR", "2026-09-23", at("2026-09-23T16:00:00+09:00")), days: newsDays("KR", "2026-09-23") },
+    );
+    expect(picked.map((n) => [n.outlet, n.title])).toEqual([["아주경제", clean]]);
+    expect(newsTitle(`a​b${ZW}`)).toBe("ab");
+  });
+
+  it("SS2: 제목 끝 언론사 꼬리가 되풀이되면 모두 뗀다 ('… 마감 - 머니투데이 - 머니투데이' → '… 마감'), 파서 뒤에 남은 ' - {아는 언론사}'도", () => {
+    const got = parseGoogleRss(
+      rss([
+        // 구글 원문 '… 마감 - 머니투데이 - 머니투데이' (실제 9/17 16:00 창 둘째)
+        { title: "[스팟] 코스피 2.56포인트(0.04%) 내린 6715.41 마감 - 머니투데이", outlet: "머니투데이", at: "2026-09-17T06:33:00Z", id: "mt1" },
+        // 세 번·세로줄 섞임
+        { title: "코스피 상승 마감 | - 머니투데이 - 머니 투데이", outlet: "머니투데이", at: "2026-09-17T06:34:00Z", id: "mt2" },
+        // 다른 표기 두 개('- 조선비즈 - Chosunbiz'): 파서는 source 와 같은 꼬리만 떼고, 아는 언론사 꼬리는 뽑을 때 뗀다
+        { title: "[마켓뷰] 연준 금리 인상에도 선방한 코스피…6715.41 마감 - 조선비즈", outlet: "Chosunbiz", at: "2026-09-17T06:40:00Z", id: "cb1" },
+        { title: "[스팟]코스피 40.87포인트(0.58%) 내린 6954.52 마감 - 머니투데이", outlet: "mt.co.kr", at: "2026-09-17T06:41:00Z", id: "mt3" },
+        // 모르는 이름 꼬리는 둔다
+        { title: "코스피 7000선 회복 마감 - 한국투자증권", outlet: "연합뉴스", at: "2026-09-17T06:42:00Z", id: "yn1" },
+      ]),
+    );
+    const byId = (id: string) => got.find((g) => g.url.endsWith(id))!.title;
+    expect(byId("mt1")).toBe("[스팟] 코스피 2.56포인트(0.04%) 내린 6715.41 마감");
+    expect(byId("mt2")).toBe("코스피 상승 마감");
+    expect(byId("cb1")).toBe("[마켓뷰] 연준 금리 인상에도 선방한 코스피…6715.41 마감 - 조선비즈");
+    expect(newsTitle(byId("cb1"))).toBe("[마켓뷰] 연준 금리 인상에도 선방한 코스피…6715.41 마감");
+    expect(newsTitle(byId("mt3"))).toBe("[스팟]코스피 40.87포인트(0.58%) 내린 6954.52 마감");
+    expect(newsTitle(byId("yn1"))).toBe("코스피 7000선 회복 마감 - 한국투자증권");
+    expect(newsTitle("코스피 마감 - 조선비즈 - 머니투데이 | - KBS 뉴스")).toBe("코스피 마감");
+    // 뽑힌 제목에는 꼬리가 없다 (카드 '… 마감 - 머…' 막기)
+    const picked = pickNews(got, { ...newsWindow("KR", "2026-09-17", at("2026-09-17T16:00:00+09:00")), days: newsDays("KR", "2026-09-17") });
+    expect(picked.length).toBeGreaterThan(0);
+    for (const n of picked) expect(n.title, n.title).not.toMatch(/ - (?:머니투데이|조선비즈|Chosunbiz|mt\.co\.kr)$/);
+    expect(picked.find((n) => n.outlet === "조선비즈")?.title).toBe("[마켓뷰] 연준 금리 인상에도 선방한 코스피…6715.41 마감");
+  });
+
+  it("SS4: '매일경제 마켓'(시세 쪽 제목이 섞임)은 뽑지 않고, 종목·상품 코드·이름·언론사 이름뿐인 제목과 시세표는 '시세'로 막는다", () => {
+    for (const t of [
+      "N2 월간 레버리지 코스피 200 선물 ETN(Q550089 )",
+      "미래에셋 코스피200 선물 ETN B(Q520103 )",
+      "메리츠 인버스 미국채30년 ETN(H)(Q610039 )",
+      "SK하이닉스(000660)",
+      "알테오젠(196170)",
+      "POSCO홀딩스(005490)",
+      "삼성전자",
+      "매일경제",
+      "매일경제TV",
+      "쿠키뉴스",
+      "MTN 머니투데이방송",
+      "News",
+      "[표] 코스피 지수선물·옵션 시세표(9일)-2",
+      "[표] 외국환율고시표",
+    ]) {
+      expect(quotePage(t), t).toBe(true);
+      expect(blockReason(t, { year: 2026 }), t).toBe("시세");
+    }
+    for (const t of [
+      "[특징주] 삼성전자(005930), 5% 급등",
+      "[표] 개인, 코스피서 1조4543억원 순매도…삼성전자 집중 매도",
+      "코스피, 6,600대 마감",
+      "코스피 상승 마감",
+      "뉴욕증시, 기술주 강세에 상승 마감",
+      "코스피 0.9% 상승 마감 - KBS(KBS)",
+      "[뉴욕증시 28일] 나스닥지수 1만7000 돌파 마감",
+    ])
+      expect(quotePage(t), t).toBe(false);
+    // 창 안에 있어도 '매일경제 마켓' 기사와 시세 제목은 뽑지 않는다 (같은 기사는 '매일경제' 이름으로 뽑힌다)
+    const got = parseGoogleRss(
+      rss([
+        { title: "뉴욕증시, 유가 고공행진·美 국채금리 급등에 나흘째 하락", outlet: "매일경제 마켓", at: "2026-09-24T20:24:00Z", id: "mkm1" },
+        { title: "SK하이닉스(000660)", outlet: "매일경제", at: "2026-09-24T20:30:00Z", id: "mk1" },
+        { title: "N2 월간 레버리지 코스피 200 선물 ETN(Q550089 )", outlet: "매일경제", at: "2026-09-24T20:31:00Z", id: "mk2" },
+        { title: "뉴욕증시, 기술주 강세에 상승 마감", outlet: "매일경제", at: "2026-09-24T20:40:00Z", id: "mk3" },
+      ]),
+    );
+    const picked = pickNews(got, { ...newsWindow("US", "2026-09-24", at("2026-09-25T08:30:00+09:00")), days: newsDays("US", "2026-09-24") });
+    expect(picked.map((n) => [n.outlet, n.title])).toEqual([["매일경제", "뉴욕증시, 기술주 강세에 상승 마감"]]);
   });
 });
 
