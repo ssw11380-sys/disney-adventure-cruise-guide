@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { axisWidth, labelSide, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
+import { AXIS_GAP_L, AXIS_GAP_R, axisTextWidth, axisWidth, fitAxisWidth, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
 
 describe("차트 읽기 줄 등락 기준", () => {
   // 삼성전자 9/23: 거래소 기준가(전일 종가) 276,500, 통합(NXT 포함) 직전 봉 종가 277,800, 오늘 종가 286,500
@@ -39,6 +39,37 @@ describe("가격 축 폭", () => {
   });
 });
 
+describe("맞춘 가격 축 폭 (fitAxisWidth — 기능 플래그 detailPolish, 2026-09-26 '차트 오른쪽 빈 여백')", () => {
+  it("가장 긴 글자 + 왼쪽 4 + 오른쪽 2 (2px 단위 올림) — 예전 어림(axisWidth)보다 좁다", () => {
+    expect(AXIS_GAP_L).toBe(4);
+    expect(AXIS_GAP_R).toBe(2);
+    // RGTX 캡처 축: 100,000 → 48 (예전 50), 14,430 → 42 (예전 44)
+    expect(fitAxisWidth(["100,000", "80,000", "14,430"])).toBe(48);
+    expect(axisWidth(["100,000", "80,000", "14,430"])).toBe(50);
+    expect(fitAxisWidth(["14,430", "13,500"])).toBe(42);
+    expect(fitAxisWidth(["23.45", "24.00"])).toBe(36);
+    // 거래량 최댓값('1,297만')이 가장 길면 그 글자에 맞춘다
+    expect(fitAxisWidth(["985", "1,297만"])).toBe(46);
+    expect(fitAxisWidth([])).toBe(24);
+    expect(fitAxisWidth(["1,234,567,890.12"])).toBe(80);
+    for (const labels of [["100,000"], ["23.45"], ["1,297만", "12,000"], ["2,650.12"]]) {
+      const w = fitAxisWidth(labels);
+      const longest = Math.max(...labels.map(axisTextWidth));
+      expect(w, labels.join()).toBeGreaterThanOrEqual(AXIS_GAP_L + longest + AXIS_GAP_R);
+      expect(w, labels.join()).toBeLessThan(AXIS_GAP_L + longest + AXIS_GAP_R + 2);
+    }
+  });
+
+  it("글자 폭 어림은 실제 글꼴보다 작지 않다 — 폴드8 캡처(11pt)의 글자 폭(잉크): 100,000 37.7 · 80,000 32.0 · 1,297만 35.4dp", () => {
+    // 잉크 폭 + 글자 앞뒤 여백(약 1dp)
+    expect(axisTextWidth("100,000")).toBeGreaterThanOrEqual(37.7 + 1);
+    expect(axisTextWidth("80,000")).toBeGreaterThanOrEqual(32.0 + 1);
+    expect(axisTextWidth("1,297만")).toBeGreaterThanOrEqual(35.4 + 1);
+    // 그러나 예전 어림(숫자 0.6·쉼표 0.3 글자)보다는 좁다
+    expect(axisTextWidth("100,000")).toBeLessThan(textWidth("100,000"));
+  });
+});
+
 describe("글자 폭 어림", () => {
   it("한글은 넓게, 쉼표는 좁게", () => {
     expect(textWidth("평단")).toBeCloseTo(22, 5);
@@ -46,20 +77,7 @@ describe("글자 폭 어림", () => {
   });
 });
 
-describe("52주 글자 자리", () => {
-  // 폭 300 그림, 봉 30개(10px 간격). 기본 봉은 y 100~140
-  const bars = (f: (i: number) => [number, number]) => Array.from({ length: 30 }, (_, i) => ({ left: i * 10 + 2, right: i * 10 + 8, top: f(i)[0], bottom: f(i)[1] }));
-  it("봉을 가리지 않으면 오른쪽", () => expect(labelSide({ y: 20, plotW: 300, bars: bars(() => [100, 140]) })).toBe("right"));
-  it("오늘 52주 신고가: 오른쪽 끝 봉이 글자에 닿으면 왼쪽으로", () => {
-    expect(labelSide({ y: 20, plotW: 300, bars: bars((i) => (i >= 27 ? [18, 60] : [100, 140])) })).toBe("left");
-  });
-  it("왼쪽도 가리면 오른쪽 그대로", () => {
-    expect(labelSide({ y: 20, plotW: 300, bars: bars((i) => (i >= 27 || i <= 2 ? [5, 60] : [100, 140])) })).toBe("right");
-  });
-  it("왼쪽 평단 글자와 가까우면 오른쪽 그대로", () => {
-    expect(labelSide({ y: 20, plotW: 300, bars: bars((i) => (i >= 27 ? [18, 60] : [100, 140])), avoidY: 28 })).toBe("right");
-  });
-});
+// 52주·평단 글자 자리는 test/chartDomain.test.ts (placeInsideLabels — 예전 labelSide 를 대신한다)
 
 describe("거래량 막대 (PF-04)", () => {
   it("거래량을 모르는 임시 봉은 0 처럼 비워 두지 않고 pane 높이의 점선 빈 막대로 따로 준다", () => {

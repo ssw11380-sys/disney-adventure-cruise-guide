@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMigratedDb } from "../src/db/index.js";
-import { applyFundamentals, NaverFundamentals, reutersCandidates } from "../src/providers/market/fundamentals.js";
+import { applyFundamentals, NaverFundamentals, realText, reutersCandidates } from "../src/providers/market/fundamentals.js";
 import { StockService } from "../src/services/stockService.js";
 import { FakeMasterProvider, FakeQuoteProvider, FakeSearchProvider, makeQuote } from "./helpers.js";
 
@@ -150,6 +150,59 @@ describe("NaverFundamentals", () => {
     expect(await f.usdKrw()).toBe(1358.3);
     expect(await f.usdKrw()).toBe(1358.3);
     expect(calls.filter((c) => c.includes("FX_USDKRW"))).toHaveLength(1);
+  });
+
+  it("미국 ETF(RGTX): 사람이 읽는 이름(stockName)을 새 칸으로 함께 주고, 업종 '-' 는 예전 그대로 둔다 (2026-09-26 네이버 실제 응답 모양)", async () => {
+    // 네이버 basic 응답 그대로 (필요한 칸만): ETF 는 한글 이름이 없어 stockName 이 영문, 업종은 "-"
+    const RGTX = {
+      stockEndType: "etf",
+      reutersCode: "RGTX.O",
+      stockName: "Defiance Daily Target 2X Long RGTI ETF",
+      stockNameEng: "Defiance Daily Target 2X Long RGTI ETF",
+      symbolCode: "RGTX",
+      closePrice: "10.59",
+      countOfListedStock: 4_900_000,
+      stockItemTotalInfos: [
+        { code: "industryGroupKor", key: "업종", value: "-" },
+        { code: "highPriceOf52Weeks", key: "52주 최고", value: "501.80" },
+        { code: "lowPriceOf52Weeks", key: "52주 최저", value: "7.69" },
+        { code: "per", key: "PER", value: "N/A" },
+      ],
+    };
+    const fetchFn = (async (input: string | URL | Request) => {
+      const url = String(input);
+      const ok = (b: unknown) => new Response(JSON.stringify(b), { status: 200 });
+      if (url.includes("ac.stock.naver.com/ac?q=RGTX")) return ok({ items: [{ code: "RGTX", name: RGTX.stockName, reutersCode: "RGTX.O", nationCode: "USA" }] });
+      if (url.includes("/stock/RGTX.O/basic")) return ok(RGTX);
+      if (url.includes("/stock/TSLA.O/basic")) return ok(US_BASIC);
+      if (url.includes("ac.stock.naver.com/ac")) return ok({ items: [] });
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    const f = new NaverFundamentals(fetchFn, NOW);
+    const r = await f.get("RGTX", "NASDAQ");
+    // 업종 값은 바꾸지 않는다 (서버 변경은 칸 추가만 — 자리표시는 앱이 거른다)
+    expect(r).toMatchObject({ industry: "-", name: "Defiance Daily Target 2X Long RGTI ETF", per: null });
+    const q = { ...makeQuote("RGTX", "toss"), currency: "USD" as const };
+    const out = applyFundamentals(q, r);
+    expect(out.industry).toBe("-");
+    expect(out.fullName).toBe("Defiance Daily Target 2X Long RGTI ETF");
+    // 한글 이름이 있는 종목은 한글(stockName) — 영문만 있으면 영문
+    const tsla = await f.get("TSLA", "NASDAQ");
+    expect(tsla?.name ?? null).toBeNull(); // 가짜 TSLA 응답에는 이름이 없다 → 칸을 만들지 않는다
+    expect("fullName" in applyFundamentals(makeQuote("TSLA", "toss"), tsla)).toBe(false);
+    expect(applyFundamentals(makeQuote("AAPL", "toss"), { ...tsla!, name: "애플" }).fullName).toBe("애플");
+  });
+
+  it("업종은 예전 규칙 그대로: 시세가 준 값(자리표시 '-' 포함)을 유지하고, 없을 때만 보강 값 — 서버 변경은 fullName 칸 추가만", () => {
+    const f = { per: null, pbr: null, eps: null, bps: null, dividendPerShare: null, dividendYieldPct: null, high52w: null, low52w: null, marketCap: null, industry: "반도체", source: "s" };
+    for (const kept of ["-", "—", "N/A", "메모리"]) expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: kept }, f).industry, kept).toBe(kept);
+    expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: null }, f).industry).toBe("반도체");
+    expect(applyFundamentals({ ...makeQuote("000660", "toss"), industry: null }, { ...f, industry: "-" }).industry).toBe("-");
+  });
+
+  it("realText: 자리표시('-', '—', 'N/A', 공백)는 null (이름 칸에만 쓴다)", () => {
+    for (const bad of ["-", "—", "–", "N/A", "n/a", "  ", "", null, undefined, 3]) expect(realText(bad), String(bad)).toBeNull();
+    expect(realText("  Defiance ETF ")).toBe("Defiance ETF");
   });
 
   it("applyFundamentals 는 비어 있는 칸만 채운다", () => {

@@ -27,6 +27,11 @@ export interface Fundamentals {
   low52w: number | null;
   marketCap: number | null; // 원화 또는 달러 (종목 통화)
   industry: string | null;
+  /**
+   * 사람이 읽는 종목 이름 (미국만 — 네이버 basic 의 stockName, 없으면 stockNameEng). 한글 이름이 있으면 한글(애플),
+   * 없으면 영문(ETF: "Defiance Daily Target 2X Long RGTI ETF"). 모르면 null
+   */
+  name?: string | null;
   source: string;
 }
 
@@ -126,6 +131,7 @@ export class NaverFundamentals {
       const infos = j?.["stockItemTotalInfos"] as Json[] | undefined;
       if (!j || !infos) continue;
       const f = fromInfos(infos, "naver-world");
+      f.name = realText(j["stockName"]) ?? realText(j["stockNameEng"]);
       // 미국 시총은 "1조 4,944억 USD" 같은 한글 표기라 발행주식수 × 현재가로 대신 계산할 수 있게 원화 시총도 같이 둔다
       const shares = parseNum(j["countOfListedStock"]);
       const price = parseNum(j["closePriceRaw"] ?? j["closePrice"]);
@@ -170,14 +176,26 @@ function fromInfos(infos: Json[], source: string): Fundamentals {
     high52w: n("highPriceOf52Weeks"),
     low52w: n("lowPriceOf52Weeks"),
     marketCap: null,
+    // 업종이 없는 종목(ETF 등)은 "-" 로 온다. 응답 값은 예전 그대로 두고(서버 변경은 칸 추가만) 앱이 자리표시를 거른다 (app lib/detailText realText)
     industry: m.get("industryGroupKor") ?? null,
     source,
   };
 }
 
-/** 시세에 비어 있는 밸류에이션 칸만 채운다 (소스가 준 값은 유지) */
+/** 자리표시가 아닌 글자 ("-" · "—" · "N/A" · 공백이면 null) */
+export function realText(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return s === "" || /^(-|—|–|n\/a|null|undefined)$/i.test(s) ? null : s;
+}
+
+/**
+ * 시세에 비어 있는 밸류에이션 칸만 채운다 (소스가 준 값은 유지 — 업종도 예전 그대로).
+ * 사람이 읽는 이름(fullName)은 보강 값에 있을 때만 넣는다 (예전 응답 모양에 칸을 새로 만들지 않게)
+ */
 export function applyFundamentals(q: Quote, f: Fundamentals | null): Quote {
   if (!f) return q;
+  const fullName = q.fullName ?? f.name ?? null;
   return {
     ...q,
     per: q.per ?? f.per,
@@ -190,6 +208,7 @@ export function applyFundamentals(q: Quote, f: Fundamentals | null): Quote {
     dividendPerShare: q.dividendPerShare ?? f.dividendPerShare,
     dividendYieldPct: q.dividendYieldPct ?? f.dividendYieldPct,
     industry: q.industry ?? f.industry,
+    ...(fullName ? { fullName } : {}),
   };
 }
 

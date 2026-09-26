@@ -52,6 +52,11 @@ export const FEATURES = {
     description:
       "접는 폰·넓은 창 화면 (3-42, 앱만, 서버 작업 없음): 창 폭 등급(좁음·중간·넓음)과 높이가 짧은 창에 맞춘 배치 — 넓고 낮은 창(펼친 폴드8 가로)은 탭을 왼쪽 세로 막대로, 넓은 창에서는 탭 머리 대신 맨 위 띠 · 잔고 44dp 넓은 표 · 종목 상세 좌우 배치 · 브리핑 목록+본문 2단 · 발견 한 줄 표 · 설정 카드 두 칸 · 비중 2×2 (가운데로 모으는 읽기 폭은 쓰지 않음). 끄면 창 크기와 상관없이 휴대폰 화면 그대로(탭은 아래)",
   },
+  detailPolish: {
+    default: true,
+    description:
+      "종목 상세 다듬기 (앱만, 서버 작업 없음): 휴대폰·접은 화면 시세 머리 아래 '보유 160주 · 평가손익 …(…%)' 한 줄, 차트를 과거로 옮겼을 때 차트 위 조작 줄의 '2일 전까지 보는 중 · 최신으로' 버튼, 휴대폰·접은 화면 차트 폭을 패널 폭 전부로(오른쪽 빈 띠 없음)·가격 축 글자를 오른쪽 끝에 맞춤. 끄면 모두 사라지고 예전 화면 그대로",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

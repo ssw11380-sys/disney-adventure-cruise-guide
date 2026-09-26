@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   win: { width: 475, height: 751, scale: 2.625, fontScale: 1 },
   insets: { top: 32, bottom: 48, left: 0, right: 0 },
   flag: undefined as boolean | undefined,
+  /** 서버가 준 detailPolish 값 (undefined = 못 받음 → fallback 꺼짐) */
+  polish: undefined as boolean | undefined,
   params: { code: "005930" } as Record<string, string | undefined>,
   stock: undefined as unknown,
   stockError: false,
@@ -65,7 +67,7 @@ vi.mock("@/api/hooks", () => ({
   useStockNews: () => ({ ...idle, data: h.news }),
   useAnyMarketOpen: () => ({ open: false, fresh: false }),
   useStockMutations: () => ({ register: { mutate: vi.fn() }, refreshAnalysis: { mutate: vi.fn(), isPending: false, isError: false, error: null } }),
-  useFeature: (key: string, fallback = false) => (key === "foldLayout" ? (h.flag ?? fallback) : fallback),
+  useFeature: (key: string, fallback = false) => (key === "foldLayout" ? (h.flag ?? fallback) : key === "detailPolish" ? (h.polish ?? fallback) : fallback),
   useApi: () => ({ listStocks: async () => [] }),
 }));
 vi.mock("@/lib/settings", () => ({ useSettings: () => h.settings }));
@@ -105,7 +107,7 @@ vi.mock("@/components/ui", () => ({
 const { default: StockDetailScreen } = await import("@/app/stocks/[code]/index");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const { navAt } = await import("@/lib/holdingsNav");
-const { foldDetail, layout, space } = await import("@/tokens");
+const { foldDetail, layout, light, space } = await import("@/tokens");
 const { sideWidth, statColumns, wideChartHeight } = await import("@/lib/detailLayout");
 
 /** 결과 트리를 비교할 수 있는 값으로: 함수는 '[fn]', 속성으로 넘긴 요소(top·refreshControl 등)는 이름과 속성만 */
@@ -163,6 +165,7 @@ beforeEach(() => {
   h.win = { width: 475, height: 751, scale: 2.625, fontScale: 1 };
   h.insets = { top: 32, bottom: 48, left: 0, right: 0 };
   h.flag = undefined;
+  h.polish = undefined;
   h.params = { code: "005930" };
   h.briefings = [brief(2, "afternoon"), brief(1, "morning")];
   h.news = { code: "005930", name: "삼성전자", news: [], newsError: null, disclosures: [], disclosuresError: null };
@@ -586,5 +589,122 @@ describe("불러오는 중·오류: 넓은 창은 처음부터 합친 머리 (St
     size("F8C");
     r.rerender();
     expect(stack(r)).toEqual({ headerShown: true });
+  });
+});
+
+describe("휴대폰·접은 화면 보유 한 줄 (기능 플래그 detailPolish — 2026-09-26 RGTX 캡처)", () => {
+  /** 시세 머리 (Stack 머리 아래 첫 패널) */
+  const head = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "View" && flat(n).borderBottomWidth === 1 && flat(n).gap === space.xxs && flat(n).paddingHorizontal === space.lg)!;
+  const line = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "Text" && /^보유 .*주, 평가손익/.test(String(n.props.accessibilityLabel ?? "")));
+  const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(textOf).join(""));
+
+  it("켜짐: 시세 머리 맨 아래에 '보유 120주 · 평가손익 +1,596,000원 (+18.73%)', 한 문장으로 읽힌다", () => {
+    const r = open(samsung(), { polish: true });
+    const l = line(r)!;
+    expect(textOf(l)).toBe("보유 120주 · 평가손익 +1,596,000원 (+18.73%)");
+    expect(l.props.accessibilityLabel).toBe("보유 120주, 평가손익 1,596,000원 이익, 수익률 18.73% 상승");
+    expect(l.props.numberOfLines).toBe(1);
+    // 시세 머리의 마지막 줄 → 차트 패널이 바로 뒤 (첫 화면에서 차트를 밀어내는 것은 이 한 줄뿐)
+    expect(head(r).children.at(-1)).toBe(l);
+    // 그 한 줄만큼을 조금 되찾게 시세 머리 위아래 여백 12 → 8 (한 줄이 없으면 예전 그대로 12)
+    expect(flat(head(r))).toMatchObject({ paddingTop: space.sm, paddingBottom: space.sm });
+    expect(flat(head(open(samsung(), { polish: false })))).toMatchObject({ paddingTop: space.md, paddingBottom: space.md });
+    // 색은 보이는 값의 부호 (이익 = 상승색), '보유 120주' 는 평단선과 같은 금색
+    const parts = l.children.filter((c): c is HostNode => typeof c !== "string");
+    expect(parts.map((p) => p.props.style)).toEqual([
+      { color: light.gold, fontWeight: "700" },
+      { color: light.up, fontWeight: "700" },
+      { color: light.up },
+    ]);
+  });
+
+  it("잔고 화면 줄과 같은 평가: 원화로 보기면 미국 종목도 원화, 매도 비용 차감 설정이면 차감 뒤 값", () => {
+    h.settings = { ...h.settings, showKrw: true };
+    const us = open(apple(), { polish: true, params: { code: "AAPL" } });
+    // (254.4 × 30 × 1391.5) − 원화 매입금액 7,302,600
+    const krw = Math.round(254.4 * 30 * 1391.5 - 7_302_600);
+    expect(textOf(line(us)!)).toBe(`보유 30주 · 평가손익 +${krw.toLocaleString("ko-KR")}원 (+${((krw / 7_302_600) * 100).toFixed(2)}%)`);
+    h.settings = { ...h.settings, showKrw: false, afterCost: true };
+    const s = samsung();
+    const cost = { ...s, evaluation: { ...s.evaluation!, afterCost: { marketValue: 10_000_000, profit: 1_480_000, profitRate: 17.37 } } };
+    expect(textOf(line(open(cost, { polish: true }))!)).toBe("보유 120주 · 평가손익 +1,480,000원 (+17.37%)");
+  });
+
+  it("달러 종목: 보유 한 줄이 있으면 환산·환율 줄과 시세 기준·시각 줄을 한 줄로 합쳐 시세 머리 줄 수가 그대로 (475×663·글자 115% 에서 차트 아래 칩 줄이 첫 화면 밖으로 밀리던 것), 없으면 예전 두 줄", () => {
+    const lines = (r: ReturnType<typeof render>) => head(r).children.filter((c): c is HostNode => typeof c !== "string");
+    const on = open(apple(), { polish: true, params: { code: "AAPL" } });
+    const merged = lines(on).filter((n) => n.type === "Text" && /환율/.test(textOf(n)));
+    expect(merged.map(textOf)).toEqual([expect.stringMatching(/^[\d,]+원 · 환율 1,391\.50 · TEST · 9월 23일 \(수\) 10:00$/)]);
+    expect(lines(on).some((n) => /^TEST · /.test(textOf(n)))).toBe(false);
+    const off = open(apple(), { polish: false, params: { code: "AAPL" } });
+    expect(lines(off).filter((n) => n.type === "Text" && /환율/.test(textOf(n))).map(textOf)).toEqual([expect.stringMatching(/^[\d,]+원 · 환율 1,391\.50$/)]);
+    expect(lines(off).some((n) => /^TEST · 9월 23일/.test(textOf(n)))).toBe(true);
+    // 보유 한 줄이 생겨도 시세 머리 줄 수는 그대로
+    expect(lines(on)).toHaveLength(lines(off).length);
+    expect(line(on)).toBeDefined();
+    // 원화 종목은 합칠 줄이 없어 시세 기준 줄 그대로
+    expect(lines(open(samsung(), { polish: true })).some((n) => /^KRX\+NXT 통합 · /.test(textOf(n)))).toBe(true);
+  });
+
+  it("손실은 하락색, 큰 글씨는 두 줄까지", () => {
+    const loss = { ...holding("005930", quote("005930", 60_000, { change: -100, changeRate: -0.17 }), 10, 70_000, {}, "삼성전자"), registered: true };
+    h.win = { ...h.win, fontScale: 1.3 };
+    const l = line(open(loss, { polish: true }))!;
+    expect(textOf(l)).toBe("보유 10주 · 평가손익 -100,000원 (-14.29%)");
+    expect(l.props.numberOfLines).toBe(2);
+    const parts = l.children.filter((c): c is HostNode => typeof c !== "string");
+    expect(parts[1]!.props.style).toMatchObject({ color: light.down });
+  });
+
+  it("꺼짐·못 받음, 관심·미등록 종목, 넓은 창(내 보유 칸이 이미 보임)에는 없다", () => {
+    for (const polish of [undefined, false]) expect(line(open(samsung(), { polish })), String(polish)).toBeUndefined();
+    expect(line(open(unregistered(), { polish: true }))).toBeUndefined();
+    const watch = { ...holding("005930", quote("005930", 84_300), null, null, {}, "삼성전자"), registered: true };
+    expect(line(open(watch, { polish: true }))).toBeUndefined();
+    for (const k of ["F8L", "F8P", "UP"] as const) {
+      forgetWindowClass();
+      size(k);
+      const r = open(samsung(), { flag: true, polish: true });
+      expect(line(r), k).toBeUndefined();
+      expect(r.all().filter((n) => n.type === "Stat").map((n) => n.props.label), k).toContain("평가손익");
+    }
+  });
+});
+
+describe("이름·업종 (2026-09-26 버그 수정 — 플래그 없음)", () => {
+  const FULL = "Defiance Daily Target 2X Long RGTI ETF";
+  const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(textOf).join(""));
+  const rgtx = (extra: Record<string, unknown> = {}) => ({
+    ...holding("RGTX", quote("RGTX", 10.61, { currency: "USD", change: 0.22, changeRate: 2.12, fxRate: 1360, prevClose: 10.39, industry: "-", ...extra }), 160, 13.68, {}, "RGTX"),
+    market: "NASDAQ" as const,
+    registered: true,
+  });
+
+  it("휴대폰: 업종이 '-' 면 적지 않고, 이름이 티커뿐이면 제목은 티커 그대로 · 시세의 이름은 부제목 끝에", () => {
+    const r = open(rgtx({ fullName: FULL }), { params: { code: "RGTX" } });
+    // 긴 영문 ETF 이름을 제목에 쓰면 접은 화면 360·큰 글씨에서 'Defiance Daily Target 2X Long …'로 잘리고 잔고 목록의 티커가 사라졌다
+    expect(stack(r).title).toBe("RGTX");
+    const sub = r.all().find((n) => n.type === "Text" && n.props.numberOfLines === 1 && /^RGTX · NASDAQ/.test(textOf(n)))!;
+    expect(textOf(sub)).toBe(`RGTX · NASDAQ · ${FULL}`);
+    expect(r.text()).not.toContain("NASDAQ · -");
+    // 관심 종목이면 상태가 이름보다 앞 (긴 이름이 잘려도 '관심'은 보인다)
+    const watch = { ...rgtx({ fullName: FULL }), quantity: null, avgPrice: null, evaluation: null };
+    const w = open(watch as never, { params: { code: "RGTX" } });
+    expect(w.all().some((n) => n.type === "Text" && textOf(n) === `RGTX · NASDAQ · 관심 · ${FULL}`)).toBe(true);
+  });
+
+  it("시세에 이름이 없으면(예전 서버) 지어내지 않고 티커 그대로, 업종이 있으면 그대로 적는다", () => {
+    const r = open(rgtx({ industry: "반도체" }), { params: { code: "RGTX" } });
+    expect(stack(r).title).toBe("RGTX");
+    expect(r.text()).toContain("RGTX · NASDAQ · 반도체");
+    // 사람이 읽는 이름이 이미 있으면 그대로
+    expect(stack(open(samsung())).title).toBe("삼성전자");
+  });
+
+  it("넓은 창 합친 머리도 같은 이름·부제", () => {
+    size("F8L");
+    const r = open(rgtx({ fullName: FULL }), { flag: true, params: { code: "RGTX" } });
+    expect(r.all().some((n) => n.type === "Text" && textOf(n) === `RGTX · NASDAQ · ${FULL}`)).toBe(true);
+    expect(r.text()).not.toContain("NASDAQ · -");
   });
 });

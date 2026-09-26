@@ -1,5 +1,6 @@
 import type { Currency, RegisteredWithQuote } from "@/api/types";
 import { sentence, speakAmount } from "@/lib/a11y";
+import { realText } from "@/lib/detailText";
 import { formatWon, isUsMarket } from "@/lib/format";
 import { evalView } from "@/lib/liveTick";
 import { fxOf, isHolding, sharedFx } from "@/lib/portfolio";
@@ -182,7 +183,8 @@ export function allocation(list: RegisteredWithQuote[], afterCost: boolean): All
     }
     const v = evalView(s.evaluation, { afterCost, toKrw: true, currency: cur, fx: fxFor(s) });
     if (!v) continue;
-    const industry = s.quote!.industry?.trim() || null;
+    // 업종이 없는 종목(ETF 등)은 예전 서버에서 '-' 로 온다 → '업종 정보 없음' 묶음으로 (따로 '-' 조각이 생기지 않게)
+    const industry = realText(s.quote!.industry);
     items.push({ code: s.code, name: s.name, us: isUsMarket(s.market), currency: cur, industry, value: Math.max(0, v.marketValue) });
   }
   const total = Math.round(items.reduce((a, x) => a + x.value, 0));

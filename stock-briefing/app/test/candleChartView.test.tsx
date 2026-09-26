@@ -9,14 +9,20 @@ import { render, type HostNode } from "./miniRender";
  *  - 휴대폰 화면(좁은 창 · foldLayout 꺼짐)은 3-42 이전 크기 그대로: 폭 min(창 폭 − 56, 720), 높이 폭 × 0.62 (사용자 결정 '접은 화면은 지금 그대로')
  *  - foldLayout 이 켜져 있고 폭 등급이 중간 이상이면: 폭은 차트 묶음이 실제로 받은 폭(onLayout — 28dp 빈 띠 없음), 720 상한을 풀고
  *    높이를 창 높이 × 0.5 로 제한, 칩·버튼 누르는 영역 44×44
- *  - 넓은 창만: 옆으로 넘기는 칩 띠는 넘길 내용이 있는 쪽 끝만 바탕색으로 흐리게, 이동평균 값 줄은 항목 단위 줄바꿈.
- *    휴대폰 화면은 3-42 이전과 똑같은 스크롤 띠·한 줄 글자
+ *  - 넓은 창만: 이동평균 값 줄은 항목 단위 줄바꿈 (휴대폰 화면은 3-42 이전 한 줄 글자)
+ *  - 모든 창: 옆으로 넘기는 칩 띠는 넘길 내용이 있는 쪽 끝만 바탕색으로 흐리게 (2026-09-26 버그 수정 — 처음엔 넓은 창만)
+ *  - 기능 플래그 detailPolish: 과거로 옮기면 조작 줄 ‹ 앞에 '2일 전까지 보는 중 · 최신으로' 버튼(그림 위에 덮지 않는다),
+ *    휴대폰·접은 화면도 차트 폭은 잰 폭(오른쪽 28dp 빈 띠 없음 — 높이는 그대로), 맞춘 가격 축(fitAxis)
  */
 const h = vi.hoisted(() => ({
   win: { width: 475, height: 751, fontScale: 1 },
   /** 서버가 준 foldLayout 값 (undefined = 아직 못 받음 → fallback 꺼짐) */
   flag: undefined as boolean | undefined,
+  /** 서버가 준 detailPolish 값 (undefined = 못 받음 → fallback 꺼짐) */
+  polish: undefined as boolean | undefined,
   dark: false,
+  /** 글자 배율 (useFontScale) */
+  scale: 1,
 }));
 
 vi.mock("react-native", () => ({
@@ -32,11 +38,11 @@ vi.mock("expo-linear-gradient", () => ({ LinearGradient: "LinearGradient" }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
 vi.mock("@/lib/settings", () => ({ useSettings: () => ({ showKrw: false }) }));
 vi.mock("@/api/hooks", () => ({
-  useFeature: (key: string, fallback = false) => (key === "foldLayout" ? (h.flag ?? fallback) : fallback),
+  useFeature: (key: string, fallback = false) => (key === "foldLayout" ? (h.flag ?? fallback) : key === "detailPolish" ? (h.polish ?? fallback) : fallback),
 }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
-  return { ...tokens, useTheme: () => (h.dark ? tokens.dark : tokens.light), useFontScale: () => 1 };
+  return { ...tokens, useTheme: () => (h.dark ? tokens.dark : tokens.light), useFontScale: (cap = Infinity) => Math.min(h.scale, cap) };
 });
 // 그림(svg·제스처)은 따로 테스트한다 — 여기서는 받은 폭·높이만 본다
 vi.mock("@/components/chart/PriceChart", () => ({
@@ -87,7 +93,9 @@ const size = (w: number, hh: number) => {
 beforeEach(() => {
   size(475, 751);
   h.flag = undefined;
+  h.polish = undefined;
   h.dark = false;
+  h.scale = 1;
   forgetWindowClass();
 });
 
@@ -306,7 +314,7 @@ describe("넓은 창의 차트 칩·버튼은 누르는 영역 44×44 (3-42, 플
   });
 });
 
-describe("칩 띠 끝 흐림 (진단 25번 — 넓은 창만)", () => {
+describe("칩 띠 끝 흐림 (진단 25번 — 모든 창)", () => {
   const strips = (r: R) => r.all().filter((n) => n.type === "ScrollView");
   const fades = (r: R) => r.all().filter((n) => n.type === "LinearGradient");
   const scroll = (r: R, i: number, m: { view?: number; content?: number; x?: number }) =>
@@ -388,7 +396,7 @@ describe("칩 띠 끝 흐림 (진단 25번 — 넓은 창만)", () => {
     expect(CHIP_SLOP.top * 2 + 32).toBeGreaterThanOrEqual(44);
   });
 
-  it("휴대폰 화면(360·411·475 창 × 플래그 못 받음·꺼짐·켜짐, 넓은 창 + 플래그 꺼짐)은 3-42 이전과 똑같은 스크롤 띠: 틀·흐림·스크롤 추적 없음", async () => {
+  it("휴대폰·접은 화면(360·411·475 창 × 플래그 못 받음·꺼짐·켜짐, 넓은 창 + 플래그 꺼짐)도 넘길 칩이 있는 쪽만 흐린다 (2026-09-26 버그 수정 — 잘린 '30분'·'RSI' 칩이 깨져 보이던 것)", async () => {
     const { CHIP_SLOP } = await import("@/components/chart/ChipStrip");
     const cases: [number, number, boolean | undefined][] = [];
     for (const [w, hh] of [[360, 780], [411, 960], [475, 751]] as const) for (const flag of [undefined, false, true]) cases.push([w, hh, flag]);
@@ -403,18 +411,40 @@ describe("칩 띠 끝 흐림 (진단 25번 — 넓은 창만)", () => {
         const list = strips(r);
         expect(list, `${w} ${flag}`).toHaveLength("compact" in props ? 1 : 2);
         list.forEach((s, i) => {
-          // 3-42 이전: ScrollView 스스로 음수 여백(누르는 영역 44), 조작 줄 띠만 flex 1
-          expect(flat(s), `${w} ${flag} ${i}`).toEqual(i === 0 ? { marginVertical: -CHIP_SLOP.top, flex: 1 } : { marginVertical: -CHIP_SLOP.top });
+          // 누르는 영역 44 는 그대로: 띠 틀이 위아래 음수 여백, 조작 줄 띠만 flex 1
+          const frame = r.all().find((n) => n.children.includes(s))!;
+          expect(flat(frame), `${w} ${flag} ${i}`).toEqual(i === 0 ? { marginVertical: -CHIP_SLOP.top, flex: 1 } : { marginVertical: -CHIP_SLOP.top });
           expect(s.props.horizontal).toBe(true);
           expect(s.props.showsHorizontalScrollIndicator).toBe(false);
           expect(s.props.contentContainerStyle).toEqual({ flexDirection: "row", gap: space.s, alignItems: "center", paddingVertical: CHIP_SLOP.top });
-          for (const k of ["onScroll", "onLayout", "onContentSizeChange", "scrollEventThrottle"]) expect(s.props[k], `${w} ${flag} ${k}`).toBeUndefined();
-          // 둘레 틀이 없다: ScrollView 의 부모는 조작 줄(가로 줄) 또는 차트 묶음
-          const parent = r.all().find((n) => n.children.includes(s))!;
-          expect(flat(parent).marginVertical, `${w} ${flag} ${i}`).toBeUndefined();
         });
+        // 재기 전·칩이 다 보이면 칠하지 않는다
         expect(fades(r), `${w} ${flag}`).toHaveLength(0);
+        scroll(r, 0, { view: 300, content: 300 });
+        expect(fades(r), `${w} ${flag}`).toHaveLength(0);
+        // 넘길 칩이 오른쪽에 있으면 오른쪽 끝만 (바탕색 토큰 → 투명)
+        scroll(r, 0, { content: 420 });
+        expect(fades(r).map(side), `${w} ${flag}`).toEqual(["right"]);
+        const bg = "compact" in props ? light.bg : light.surface;
+        expect(fades(r)[0]!.props.colors).toEqual([clearOf(bg), bg]);
       }
+    }
+  });
+
+  it("흐림에는 꺾쇠(›·‹)를 두지 않는다 — 잘린 칩 글자에 겹쳐 'RSI/M›'로 뭉개지고, 누르면 밑의 칩(RSI 켜기·1분봉)이 눌렸다 (2026-09-26 검증)", () => {
+    for (const [w, hh] of [[360, 780], [475, 751], [933, 704]] as const) {
+      size(w, hh);
+      h.flag = true;
+      forgetWindowClass();
+      const r = open();
+      scroll(r, 0, { view: 300, content: 500, x: 50 });
+      expect(fades(r), String(w)).toHaveLength(2);
+      for (const f of fades(r)) {
+        expect(f.children, String(w)).toHaveLength(0);
+        // 누르기는 그대로 밑의 칩으로 (흐림이 가로채지 않는다)
+        expect(flat(f).pointerEvents).toBe("none");
+      }
+      expect(r.all().filter((n) => n.type === "Ionicons" && /chevron/.test(String(n.props.name))).map((n) => n.props.name), String(w)).toEqual(["chevron-back", "chevron-forward"]);
     }
   });
 });
@@ -484,5 +514,224 @@ describe("CandleChart 를 쓰는 화면 모두 확인", () => {
     for (const rel of ["app/stocks/[code]/index.tsx", "app/market/[code].tsx"]) {
       expect(readFileSync(`${SRC}/${rel}`, "utf8"), rel).toMatch(/panel: \{ paddingHorizontal: space\.lg,/);
     }
+  });
+});
+
+describe("과거 구간 버튼 (기능 플래그 detailPolish — 2026-09-26 RGTX 캡처 '120일 · 2일 전'): 조작 줄 ‹ 앞, 그림 위에 덮지 않는다", () => {
+  const DAY = 86_400_000;
+  const MANY = Array.from({ length: 300 }, (_, i) => ({ date: new Date(Date.UTC(2025, 0, 1) + i * DAY).toISOString().slice(0, 10), open: 100, high: 110, low: 90, close: 105, volume: 10 }));
+  const openMany = (props: Partial<React.ComponentProps<typeof CandleChart>> = {}) =>
+    render(<CandleChart candles={MANY} period="D" onPeriodChange={() => undefined} onFullscreen={() => undefined} {...props} />);
+  const pc = (r: R) => r.all().find((n) => n.type === "PriceChart")!;
+  const drag = (r: R, offset: number) => r.act(() => (pc(r).props.onViewChange as (v: { count: number; offset: number }) => void)({ count: 120, offset }));
+  const pastBtn = (r: R) => r.all().find((n) => n.type === "Pressable" && /누르면 최신 차트로 돌아갑니다$/.test(String(n.props.accessibilityLabel)));
+  const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(textOf).join(""));
+  const rangeChip = (r: R) => r.all().find((n) => n.type === "Pressable" && /^보이는 봉/.test(String(n.props.accessibilityLabel)))!;
+
+  it("켜짐: 드래그로 2봉 과거로 가면 조작 줄에 '2일 전까지 보는 중 · 최신으로' 버튼, 누르면 최신 구간으로 돌아가고 버튼이 사라진다", () => {
+    h.polish = true;
+    const r = openMany();
+    expect(pastBtn(r)).toBeUndefined();
+    drag(r, 2);
+    const b = pastBtn(r)!;
+    expect(b.props.accessibilityRole).toBe("button");
+    expect(b.props.accessibilityLabel).toBe("2일 전까지 보는 중. 누르면 최신 차트로 돌아갑니다");
+    // 475 창(차트 묶음 447): 긴 글을 넣어도 칩 띠에 일·주·월이 보일 만큼 남는다
+    expect(textOf(b)).toBe("2일 전까지 보는 중 · 최신으로");
+    // 몇 일 전인지는 버튼이 보여 주므로 봉 수 칩에는 봉 수만 (화면 읽기 이름표는 그대로)
+    expect(textOf(rangeChip(r))).toBe("120일");
+    expect(rangeChip(r).props.accessibilityLabel).toBe("보이는 봉 120개, 최신보다 2일 전. 눌러서 바꾸기");
+    r.act(() => (b.props.onPress as () => void)());
+    expect(pc(r).props.view).toEqual({ count: 120, offset: 0 });
+    expect(pastBtn(r)).toBeUndefined();
+  });
+
+  it("버튼 자리: 조작 줄 안, 칩 띠 다음·‹(과거로) 바로 앞 — 차트 그림(PriceChart) 밖, 그림에는 안내를 넘기지 않는다", () => {
+    h.polish = true;
+    const r = openMany();
+    drag(r, 2);
+    const b = pastBtn(r)!;
+    const row = r.all().find((n) => n.children.includes(b))!;
+    expect(flat(row)).toMatchObject({ flexDirection: "row" });
+    const kids = row.children.filter((c): c is HostNode => typeof c !== "string");
+    const at = kids.indexOf(b);
+    expect(kids[at + 1]!.props.accessibilityLabel).toBe("과거로");
+    // 바로 앞은 칩 띠(가로 스크롤을 품은 틀)
+    expect(kids[at - 1]!.children.some((c) => typeof c !== "string" && c.type === "ScrollView")).toBe(true);
+    // 그림에는 안내 버튼·안내 글을 넘기지 않는다 (예전 pastView)
+    expect(pc(r).props.pastView).toBeUndefined();
+  });
+
+  it("누르는 영역 44: 누르는 틀 자체가 높이 44, 위아래 음수 여백 6 으로 조작 줄(32) 높이는 그대로 — 틀 밖 hitSlop 에 기대지 않는다. 보이는 버튼은 칩과 같은 32", () => {
+    h.polish = true;
+    const r = openMany();
+    drag(r, 2);
+    const b = pastBtn(r)!;
+    expect(flat(b)).toMatchObject({ minHeight: touch.min, marginVertical: -(touch.min - 32) / 2, justifyContent: "center" });
+    expect(Number(flat(b).minWidth)).toBeGreaterThanOrEqual(touch.min);
+    expect(b.props.hitSlop).toBeUndefined();
+    const pill = b.children.find((c): c is HostNode => typeof c !== "string" && c.type === "View")!;
+    expect(flat(pill)).toMatchObject({ minHeight: 32 });
+  });
+
+  it("라이트·다크 모두 바탕·테두리·글자는 테마 토큰, 누르는 동안 보이는 버튼 바탕이 surfaceAlt", () => {
+    for (const isDark of [false, true]) {
+      h.dark = isDark;
+      h.polish = true;
+      const t = isDark ? dark : light;
+      const r = openMany();
+      drag(r, 2);
+      const pill = () => pastBtn(r)!.children.find((c): c is HostNode => typeof c !== "string" && c.type === "View")!;
+      expect(flat(pill())).toMatchObject({ backgroundColor: t.surface, borderColor: t.accent });
+      expect(flat(pastBtn(r)!).backgroundColor).toBeUndefined();
+      r.act(() => (pastBtn(r)!.props.onPressIn as () => void)());
+      expect(flat(pill()).backgroundColor).toBe(t.surfaceAlt);
+      r.act(() => (pastBtn(r)!.props.onPressOut as () => void)());
+      expect(flat(pill()).backgroundColor).toBe(t.surface);
+    }
+  });
+
+  it("좁은 창(411·360)·큰 글씨는 짧은 글 '2일 전 · 최신으로' (칩 띠에 일·주·월이 보일 만큼 남기게), 넓은 창은 긴 글 — 화면 읽기는 늘 긴 글", () => {
+    const cases: [number, number, boolean | undefined, number, string][] = [
+      [475, 751, undefined, 1, "2일 전까지 보는 중 · 최신으로"],
+      [475, 751, undefined, 1.15, "2일 전 · 최신으로"],
+      [411, 960, undefined, 1, "2일 전 · 최신으로"],
+      [360, 780, undefined, 1, "2일 전 · 최신으로"],
+      [933, 704, true, 1, "2일 전까지 보는 중 · 최신으로"],
+    ];
+    for (const [w, hh, fold, scale, want] of cases) {
+      h.win = { width: w, height: hh, fontScale: scale };
+      h.flag = fold;
+      h.polish = true;
+      h.scale = scale;
+      forgetWindowClass();
+      const r = openMany();
+      drag(r, 2);
+      expect(textOf(pastBtn(r)!), `${w} ${scale}`).toBe(want);
+      expect(pastBtn(r)!.props.accessibilityLabel, `${w} ${scale}`).toBe("2일 전까지 보는 중. 누르면 최신 차트로 돌아갑니다");
+    }
+  });
+
+  it("켜짐: 과거로 버튼(반 화면씩)도 같은 버튼, 주·월·분봉 단위", () => {
+    h.polish = true;
+    const r = openMany();
+    r.act(() => (r.byLabel("과거로").props.onPress as () => void)());
+    expect(pastBtn(r)!.props.accessibilityLabel).toBe("60일 전까지 보는 중. 누르면 최신 차트로 돌아갑니다");
+    const w = openMany({ period: "W" });
+    drag(w, 3);
+    expect(textOf(pastBtn(w)!)).toBe("3주 전까지 보는 중 · 최신으로");
+    // 5분봉 나흘치 (하루 78봉): 같은 날 안이면 분·시간, 전날까지 가면 보이는 마지막 봉의 날짜·시각
+    const bar = (date: string, k: number) => {
+      const min = 9 * 60 + 30 + k * 5;
+      const hm = `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+      return { date, time: `${date}T${hm}:00-04:00`, open: 100, high: 110, low: 90, close: 105, volume: 10 };
+    };
+    const FIVE = ["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24"].flatMap((d) => Array.from({ length: 78 }, (_, k) => bar(d, k)));
+    const m = render(<CandleChart candles={FIVE} period="5m" onPeriodChange={() => undefined} onFullscreen={() => undefined} />);
+    drag(m, 4);
+    expect(pastBtn(m)!.props.accessibilityLabel).toBe("20분 전까지 보는 중. 누르면 최신 차트로 돌아갑니다");
+    drag(m, 13);
+    expect(pastBtn(m)!.props.accessibilityLabel).toBe("1시간 5분 전까지 보는 중. 누르면 최신 차트로 돌아갑니다");
+    // 100봉 앞 = 9/23 의 56번째 봉 (14:05) — 예전에는 '500분 전' (장 이틀에 걸친 시간을 분으로 적어 8시간 전처럼 읽혔다)
+    drag(m, 100);
+    expect(pastBtn(m)!.props.accessibilityLabel).toBe("9월 23일 14:05까지 보는 중. 누르면 최신 차트로 돌아갑니다");
+    // 360 창에서는 짧은 글
+    size(360, 780);
+    forgetWindowClass();
+    const m2 = render(<CandleChart candles={FIVE} period="5m" onPeriodChange={() => undefined} onFullscreen={() => undefined} />);
+    drag(m2, 100);
+    expect(textOf(pastBtn(m2)!)).toBe("9/23 14:05까지 · 최신으로");
+  });
+
+  it("월봉 단위는 칩·버튼 이름·안내 모두 '개월' — 예전 칩은 '120월 · 30월 전', 안내는 '30개월 전'으로 한 화면에서 달랐다", () => {
+    h.polish = true;
+    const r = openMany({ period: "M" });
+    drag(r, 30);
+    expect(textOf(rangeChip(r))).toBe("120개월");
+    // 475 창: 긴 글(30개월 전까지 보는 중)은 칩 띠를 너무 줄여 짧은 글 — 화면 읽기는 긴 글
+    expect(textOf(pastBtn(r)!)).toBe("30개월 전 · 최신으로");
+    expect(pastBtn(r)!.props.accessibilityLabel).toBe("30개월 전까지 보는 중. 누르면 최신 차트로 돌아갑니다");
+    expect(r.text()).not.toMatch(/\d월 · /);
+    expect(r.has("보이는 봉 120개, 최신보다 30개월 전. 눌러서 바꾸기")).toBe(true);
+    expect(r.has("최신으로 (지금 30개월 전)")).toBe(true);
+  });
+
+  it("꺼짐·못 받음: 과거로 옮겨도 버튼이 없다 (예전 그대로 — 칩의 '120일 · 2일 전' 만), 가격 축도 예전 그대로", () => {
+    for (const polish of [undefined, false]) {
+      h.polish = polish;
+      const r = openMany();
+      drag(r, 2);
+      expect(pastBtn(r), String(polish)).toBeUndefined();
+      expect(textOf(rangeChip(r))).toBe("120일 · 2일 전");
+      expect(pc(r).props.fitAxis, String(polish)).toBe(false);
+    }
+    h.polish = true;
+    expect(pc(openMany()).props.fitAxis).toBe(true);
+  });
+
+  it("기간을 바꾸면 최신 구간에서 시작하고, 원래 기간으로 돌아와도 최신 구간, 화면을 다시 열어도 최신 구간 (보이는 구간은 화면 상태)", () => {
+    h.polish = true;
+    let period: "D" | "W" = "D";
+    const el = () => <CandleChart candles={MANY} period={period} onPeriodChange={() => undefined} />;
+    const r = render(el());
+    drag(r, 5);
+    expect(pastBtn(r)!.props.accessibilityLabel).toBe("5일 전까지 보는 중. 누르면 최신 차트로 돌아갑니다");
+    period = "W";
+    r.rerender(el());
+    expect(pc(r).props.view).toMatchObject({ offset: 0 });
+    expect(pastBtn(r)).toBeUndefined();
+    // 일 → 주 → 일로 돌아와도 일봉의 옛 위치('5일 전')가 되살아나지 않는다 (예전에는 되살아났다)
+    period = "D";
+    r.rerender(el());
+    expect(pc(r).props.view).toEqual({ count: 120, offset: 0 });
+    expect(pastBtn(r)).toBeUndefined();
+    expect(r.text()).not.toContain("5일 전");
+    // 봉 수 칩을 바꾼 뒤 기간을 오가도 새 기간의 기본 칩
+    r.act(() => (rangeChip(r).props.onPress as () => void)());
+    expect((pc(r).props.view as { count: number }).count).not.toBe(120);
+    period = "W";
+    r.rerender(el());
+    period = "D";
+    r.rerender(el());
+    expect(pc(r).props.view).toEqual({ count: 120, offset: 0 });
+    // 새로 연 화면
+    expect(pc(openMany()).props.view).toMatchObject({ offset: 0 });
+  });
+
+  it("그림 안 글자 바탕은 차트 뒤 바탕색 (패널 t.surface, 전체 화면 t.bg)", () => {
+    expect(pc(openMany()).props.labelBg).toBe(light.surface);
+    expect(pc(openMany({ compact: true, width: 400, height: 300, backdrop: light.bg })).props.labelBg).toBe(light.bg);
+  });
+});
+
+describe("차트 폭 = 잰 폭 (기능 플래그 detailPolish — 2026-09-26 '차트 오른쪽 빈 여백 없애줘')", () => {
+  it("켜짐: 휴대폰·접은 화면(360·411·475 × foldLayout 못 받음·꺼짐·켜짐)도 패널 안쪽 폭 전부, 높이는 예전 그대로", () => {
+    const want = { 360: { width: 332, height: 188 }, 411: { width: 383, height: 220 }, 475: { width: 447, height: 260 } } as const;
+    for (const [w, hh] of [[360, 780], [411, 960], [475, 751]] as const)
+      for (const flag of [undefined, false, true]) {
+        size(w, hh);
+        h.flag = flag;
+        h.polish = true;
+        forgetWindowClass();
+        const r = open();
+        // 재기 전 첫 그림부터 (창 폭 − 패널 여백 어림 = 잰 폭)
+        expect(chart(r), `${w} ${flag}`).toEqual(want[w]);
+        layoutAs(r, inner(w));
+        expect(chart(r), `${w} ${flag}`).toEqual(want[w]);
+        expect(chart(r).height, `${w} ${flag}`).toBe(mainSize(w).height);
+        expect(chart(r).width - mainSize(w).width, `${w} ${flag}`).toBe(28);
+      }
+  });
+
+  it("켜짐: 넓은 창·전체 화면 차트는 그대로", () => {
+    h.polish = true;
+    h.flag = true;
+    size(933, 704);
+    forgetWindowClass();
+    const r = open();
+    layoutAs(r, inner(933));
+    expect(chart(r)).toEqual({ width: 905, height: 352 });
+    const full = open({ width: 909, height: 480, compact: true });
+    expect(chart(full)).toEqual({ width: 909, height: 480 });
   });
 });

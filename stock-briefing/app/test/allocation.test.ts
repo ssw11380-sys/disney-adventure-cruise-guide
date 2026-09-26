@@ -147,6 +147,11 @@ describe("비중 보기: 잔고 탭과 같은 기준", () => {
     // 빈 글자도 없는 것으로
     const blank = holding("X", quote("X", 1000, { industry: "  " }), 1, 1000, undefined, "엑스");
     expect(chart(allocation([blank], true), "industry").slices[0]!.label).toBe(UNKNOWN_INDUSTRY);
+    // 예전 서버가 ETF 업종으로 주던 자리표시 '-' · 'N/A' 도 같은 묶음 (2026-09-26 RGTX)
+    for (const bad of ["-", "N/A"]) {
+      const etf = holding("RGTX", quote("RGTX", 1000, { industry: bad }), 1, 1000, undefined, "RGTX");
+      expect(chart(allocation([etf], true), "industry").slices[0]!.label, bad).toBe(UNKNOWN_INDUSTRY);
+    }
   });
 
   it("같은 업종은 합친다 (반도체 2종목)", () => {
