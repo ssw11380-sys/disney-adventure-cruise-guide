@@ -8,7 +8,8 @@ import { isKrTradingDate, isUsTradingDate, krRegularHours, tradingDate, usRegula
  *    주말·휴장일(KR_HOLIDAYS·US_HOLIDAYS)은 직전 거래일)
  *  - 예약 시각 = 한국 정규장 마감 35분 뒤(보통 16:05, 수능일 17:05), 미국 정규장 마감 5분 뒤(16:05 ET, 조기 폐장 13:05 ET — 서머타임은 뉴욕 시각으로 계산)
  *  - 방법: 예약 시각부터 30분 안이면 'close', 그 뒤 같은 거래일 안이면(서버가 늦게 켜졌거나 토스 오류 뒤 다시) 'intraday-fallback'.
- *    둘 다 그때 토스 보유 조회의 수량·평단·현재가 그대로다 — 한국은 NXT 애프터마켓, 미국은 애프터마켓 체결이 섞일 수 있어 '정규장 종가'와 조금 다를 수 있다
+ *    둘 다 그때 토스 보유 조회의 수량·평단·현재가 그대로다 — 한국은 NXT 애프터마켓, 미국은 애프터마켓 체결이 섞일 수 있어 '정규장 종가'와 조금 다를 수 있다.
+ *    그래서 그 거래일 일봉의 정규장 종가를 regularClose 로 따로 함께 적는다(받지 못하면 null)
  *  - 거래일이 지나도록 못 찍은 날은 값을 지어내지 않고 빈칸(gap)으로 남긴다
  *  - 한국 16:05 뒤에도 NXT 애프터마켓(~20:00)에서 체결될 수 있어, 거래일 D 에 체결(executed_date = D)됐어도 보유 변화는 D+1 스냅샷에 들어갈 수 있다.
  *    그래서 체결과 스냅샷을 짝지을 때는 executed_date 가 아니라 스냅샷 asOf 와 체결 시각(executed_at)을 비교한다 (unexplainedChanges 가 그렇게 한다)
@@ -132,8 +133,15 @@ export interface SnapshotHolding {
   currency: "KRW" | "USD";
   quantity: number;
   avgPrice: number | null;
-  /** 찍은 때 토스 보유 조회의 현재가 (한국 KRX+NXT 통합, 미국 최근 체결(시간외 포함)) */
+  /** 찍은 때 토스 보유 조회의 현재가 (한국 KRX+NXT 통합, 미국 최근 체결(시간외 포함)) — 평가금액·원화 합계는 이 값 기준 */
   price: number | null;
+  /**
+   * 그 거래일 정규장 종가 (그날 일봉 종가 — 한국 네이버 KRX 일봉, 미국 토스 웹 일봉(애프터마켓 제외)·Yahoo). 받지 못했으면 null (지어내지 않음).
+   * 3-37 기간 수익률·'어제와 비교'를 증권사 종가 기준으로 맞출 때 쓴다. price 와 따로 둔다
+   */
+  regularClose: number | null;
+  /** regularClose 를 준 출처 (naver · toss · yahoo 등, 없으면 null) */
+  regularCloseSource: string | null;
   purchaseAmount: number | null;
   marketValue: number | null;
   marketValueAfterCost: number | null;
@@ -160,6 +168,8 @@ export interface SnapshotData {
   version: 1;
   /** 가격이 무엇인지 (사람이 읽는 설명) */
   priceBasis: string;
+  /** regularClose(정규장 종가)가 무엇인지 (사람이 읽는 설명) */
+  regularCloseBasis: string;
   /**
    * 미국만: 원화 합계에 쓴 환율과 실제 출처('toss' 토스 표시 환율 · 'naver' 네이버 환율 · 'unknown' 출처를 모름), 그 환율을 받은 시각(asOf —
    * 받기에 실패해 전에 받아 둔 값을 썼으면 그때 시각이라 찍은 시각보다 이르다). 환율이 없으면 usdKrw·source·asOf 모두 null
@@ -181,6 +191,11 @@ export const PRICE_BASIS: Record<RecordMarket, string> = {
   US: "토스 보유 조회의 현재가 (최근 체결 — 정규장 마감 뒤 애프터마켓 체결이 섞일 수 있음)",
 };
 
+export const REGULAR_CLOSE_BASIS: Record<RecordMarket, string> = {
+  KR: "그 거래일 일봉 종가 (KRX 정규장 — 네이버 일봉). 받지 못한 종목은 null",
+  US: "그 거래일 일봉 종가 (정규장 — 토스 웹 일봉(애프터마켓 제외), 없으면 Yahoo). 받지 못한 종목은 null",
+};
+
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
 const sumOrNull = (xs: Array<number | null>, round: (n: number) => number): number | null => (xs.some((x) => x === null) ? null : round(xs.reduce<number>((s, x) => s + (x ?? 0), 0)));
 
@@ -199,6 +214,8 @@ export function buildSnapshotData(
     scheduledAt: string;
     /** (계좌, 종목, 수량) → 원화 장부의 원화 매입금액. 수량이 맞지 않거나 없으면 null */
     krwCost: (account: number, code: string, quantity: number) => { krw: number; source: "book-exact" | "book-estimated" } | null;
+    /** 종목 → 그 거래일 정규장 종가와 출처 (없으면 null) */
+    regularClose?: (code: string) => { close: number; source: string } | null;
   },
 ): SnapshotData {
   const holdings: SnapshotHolding[] = [];
@@ -210,6 +227,7 @@ export function buildSnapshotData(
       const usd = h.currency === "USD";
       const toKrw = (v: number | null) => (v === null ? null : usd ? (ctx.fx !== null ? Math.round(v * ctx.fx) : null) : Math.round(v));
       const book = usd ? ctx.krwCost(a.account, h.code, h.quantity) : null;
+      const rc = ctx.regularClose?.(h.code) ?? null;
       holdings.push({
         account: a.account,
         code: h.code,
@@ -218,6 +236,8 @@ export function buildSnapshotData(
         quantity: h.quantity,
         avgPrice: h.avgPrice,
         price: h.lastPrice,
+        regularClose: rc && Number.isFinite(rc.close) && rc.close > 0 ? rc.close : null,
+        regularCloseSource: rc && Number.isFinite(rc.close) && rc.close > 0 ? rc.source : null,
         purchaseAmount: h.purchaseAmount ?? null,
         marketValue: mv,
         marketValueAfterCost: after,
@@ -233,6 +253,7 @@ export function buildSnapshotData(
   return {
     version: 1,
     priceBasis: PRICE_BASIS[market],
+    regularCloseBasis: REGULAR_CLOSE_BASIS[market],
     fx: us ? { usdKrw: ctx.fx, source: ctx.fx !== null ? ctx.fxSource : null, asOf: ctx.fx !== null ? ctx.fxAsOf ?? null : null } : null,
     holdings,
     totals: {
@@ -256,11 +277,13 @@ export function buildSnapshotData(
 
 /**
  * - empty: 그 계좌의 그 시장 보유 목록이 비었는데 계좌 요약의 그 통화 매입금액이 0 이 아님 (목록만 비어 온 일시 오류)
- * - unsure: 그 계좌 보유 목록이 통째로 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음
- * - sum: 그 계좌 종목 매입금액 합계가 요약 매입금액과 맞지 않음 (목록 일부만 온 일시 오류)
- * - missing-account: 직전 스냅샷에 있던 계좌가 계좌 목록에서 빠짐
+ * - unsure: 그 계좌 보유 목록이 통째로 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 — 직전 스냅샷의 그 계좌 종목이
+ *   그 사이 저장한 매도 체결로 모두 설명되면(전부 팖) 의심하지 않는다
+ * - sum: 그 계좌 종목 매입금액 합계가 요약 매입금액과 반올림 차이(종목 수 × 1원·1센트)보다 크게 다름 (목록 일부만 온 일시 오류)
+ * - vanished: 직전 스냅샷에 있던 종목이 목록에서 사라졌는데 그 사이 저장한 체결(매도)로 설명되지 않음 (목록 일부만 온 일시 오류)
+ * - missing-account: 전에 그 시장 종목이 있던 계좌가 계좌 목록에서 빠짐
  */
-export type DoubtKind = "empty" | "unsure" | "sum" | "missing-account";
+export type DoubtKind = "empty" | "unsure" | "sum" | "vanished" | "missing-account";
 
 export interface SnapshotDoubt {
   kind: DoubtKind;
@@ -276,12 +299,20 @@ export interface SnapshotDoubt {
 export const DOUBT_ACCEPT_MS: Record<DoubtKind, number> = {
   unsure: 30 * 60_000,
   sum: 30 * 60_000,
+  vanished: 30 * 60_000,
   empty: 24 * 3_600_000,
   "missing-account": 24 * 3_600_000,
 };
 
-/** 종목 매입금액 합계와 요약 매입금액의 허용 차이: 요약의 1% 와 (원화 10원 · 달러 0.1달러) 가운데 큰 값 — 반올림·표시 차이는 넘기고 종목이 빠진 것만 잡는다 */
-export const SUM_TOLERANCE = { rel: 0.01, KRW: 10, USD: 0.1 } as const;
+/**
+ * 종목 매입금액 합계와 요약 매입금액의 허용 차이 = 종목 수 × 반올림 단위(원화 1원 · 달러 0.01달러) + 요약의 아주 작은 비율(부동소수 오차).
+ * 반올림 차이만 넘기고, 작은 종목 하나라도 빠지면 잡는다 (예전 1% 는 요약의 1% 보다 작은 종목이 빠진 응답을 'ok' 로 남겼다)
+ */
+export const SUM_TOLERANCE = { KRW: 1, USD: 0.01, rel: 1e-9 } as const;
+
+export function sumTolerance(cur: "KRW" | "USD", holdings: number, summary: number): number {
+  return Math.max(1, holdings) * SUM_TOLERANCE[cur] + Math.abs(summary) * SUM_TOLERANCE.rel;
+}
 
 const money = (n: number, cur: "KRW" | "USD") => (cur === "KRW" ? `${Math.round(n).toLocaleString("en-US")}원` : `$${round4(n)}`);
 
@@ -290,27 +321,32 @@ export const DOUBT_CARRY_MAX_MS = 7 * 86_400_000;
 
 /**
  * 받아들이는 데 하루 넘게 걸리는 의심(empty·missing-account)은 그 거래일 안에 찰 수 없어 다음 거래일로 이어 센다 — 내용(text)이 똑같을 때만.
- * 30분짜리(unsure·sum)는 5분 간격 다시 묻기로 이어 본 것만 센다 (밤사이 한 번 본 것으로 다음 날 곧바로 받아들이지 않게)
+ * 30분짜리(unsure·sum·vanished)는 5분 간격 다시 묻기로 이어 본 것만 센다 (밤사이 한 번 본 것으로 다음 날 곧바로 받아들이지 않게)
  */
 export function doubtCarriesOver(kind: DoubtKind): boolean {
   return DOUBT_ACCEPT_MS[kind] >= 86_400_000;
 }
 
-/** 직전 ok 스냅샷(같은 시장)에서 본 계좌 */
+/** 직전 ok 스냅샷(같은 시장)과 그 뒤 저장한 체결 */
 export interface PrevSnapshotInfo {
-  /** 직전 스냅샷의 계좌 순번 (계좌가 목록에서 빠졌는지 보려고) */
-  accounts?: readonly number[];
   /**
    * 그 시장 종목을 갖고 있던 계좌 — 직전 스냅샷에 그 계좌 종목이 있었거나, 직전 스냅샷에 없는 계좌(첫 스냅샷·새 계좌)면
-   * 토스 동기화가 마지막으로 믿은 보유에 그 시장 종목이 있던 계좌. 'unsure' 는 이 계좌만 본다
+   * 토스 동기화가 마지막으로 믿은 보유에 그 시장 종목이 있던 계좌. 'unsure'·'missing-account' 는 이 계좌만 본다
+   * (늘 비어 있는 계좌가 목록에서 잠깐 빠지거나 달러 요약 없이 와도 의심하지 않게 — 토스 동기화의 kept.length > 0 과 같은 기준)
    */
   held?: readonly number[];
+  /** 직전 스냅샷의 그 시장 보유 (계좌, 종목, 수량) — 목록에서 사라진 종목을 찾으려고 */
+  holdings?: ReadonlyArray<{ account: number; code: string; quantity: number }>;
+  /** 직전 스냅샷 뒤 저장한 체결의 순수량 (매수 +, 매도 −), '계좌:종목' → 수량 (없으면 0) */
+  traded?: Readonly<Record<string, number>>;
 }
+
+const qtyText = (n: number) => `${round4(n)}주`;
 
 /**
  * 그 시장 스냅샷을 찍기 전에 계좌마다 토스 응답을 확인한다. 빈 배열이면 믿을 수 있다.
  * 매입금액 요약은 계좌마다 통화별(원화 = 한국 종목, 달러 = 미국 종목 — 원화 장부 보정과 같은 뜻)이라 그 시장 통화 칸과 맞춰 본다.
- * @param prev 직전 ok 스냅샷에서 본 계좌 (첫 스냅샷이면 빈 값)
+ * @param prev 직전 ok 스냅샷에서 본 계좌·보유와 그 뒤 저장한 체결 (첫 스냅샷이면 빈 값)
  */
 export function snapshotDoubts(market: RecordMarket, accounts: AccountHoldings[], prev: PrevSnapshotInfo = {}): SnapshotDoubt[] {
   const out: SnapshotDoubt[] = [];
@@ -318,29 +354,48 @@ export function snapshotDoubts(market: RecordMarket, accounts: AccountHoldings[]
   const cur = market === "KR" ? "KRW" : "USD";
   const listed = new Set(accounts.map((a) => a.account));
   const heldBefore = new Set(prev.held ?? []);
-  for (const acct of [...new Set(prev.accounts ?? [])].sort((x, y) => x - y)) {
-    if (!listed.has(acct)) out.push({ kind: "missing-account", account: acct, text: `계좌 ${acct}: 직전 스냅샷에 있던 계좌가 토스 계좌 목록에서 빠짐` });
+  for (const acct of [...heldBefore].sort((x, y) => x - y)) {
+    if (!listed.has(acct)) out.push({ kind: "missing-account", account: acct, text: `계좌 ${acct}: 전에 ${name} 종목이 있던 계좌가 토스 계좌 목록에서 빠짐` });
   }
   for (const a of accounts) {
     const held = a.items.filter((h) => h.quantity > 0);
     const mine = held.filter((h) => marketOf(h.code) === market);
     const summary = market === "KR" ? a.overview.purchaseKrw : a.overview.purchaseUsd;
+    // 직전 스냅샷에 있던 그 계좌 종목 가운데 지금 목록에 없는 것 — 그 사이 저장한 체결의 순매도가 그 수량을 덮으면 판 것으로 본다
+    const before = (prev.holdings ?? []).filter((h) => h.account === a.account && marketOf(h.code) === market && h.quantity > 0);
+    const now = new Set(mine.map((h) => h.code));
+    const gone = before
+      .filter((h) => !now.has(h.code) && h.quantity + (prev.traded?.[`${a.account}:${h.code}`] ?? 0) > 1e-6)
+      .sort((x, y) => (x.code < y.code ? -1 : x.code > y.code ? 1 : 0));
     if (mine.length === 0) {
       if (summary !== null && summary !== 0) {
         out.push({ kind: "empty", account: a.account, text: `계좌 ${a.account}: ${name} 보유 목록이 비었는데 계좌 요약 매입금액은 ${money(summary, cur)}` });
-      } else if (held.length === 0 && a.overview.purchaseUsd === null && heldBefore.has(a.account)) {
+        continue;
+      }
+      if (held.length === 0 && a.overview.purchaseUsd === null && heldBefore.has(a.account)) {
         // 목록이 통째로 비었고 달러 요약도 없다: 요약이 빠진 일시 오류와 전부 판 빈 계좌를 가릴 수 없다 (원화 요약은 없으면 0 으로 읽힌다).
         // 그래서 전에 그 시장 종목이 있던 계좌만 의심한다 — 늘 비어 있는 계좌(달러 요약 없이 옴)는 날마다 의심하지 않는다 (토스 동기화와 같은 기준).
-        // 목록에 다른 시장 종목이 있는 계좌의 달러 요약 빈칸은 '달러 종목 없음'으로 본다
-        out.push({ kind: "unsure", account: a.account, text: `계좌 ${a.account}: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 (전에는 ${name} 종목이 있었음)` });
+        // 직전 스냅샷의 그 계좌 종목이 그 사이 저장한 매도로 모두 설명되면 정말 전부 판 것이라 곧바로 받아들인다
+        // (직전 스냅샷 없이 토스 동기화 기록으로만 아는 계좌는 수량을 몰라 맞춰 볼 수 없다)
+        if (before.length === 0 || gone.length > 0) {
+          out.push({ kind: "unsure", account: a.account, text: `계좌 ${a.account}: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 (전에는 ${name} 종목이 있었음)` });
+        }
+        continue;
       }
-      continue;
+      // 목록에 다른 시장 종목이 있는 계좌의 달러 요약 빈칸은 '달러 종목 없음'으로 본다 — 사라진 종목만 아래에서 본다
     }
-    if (summary === null) continue;
+    if (gone.length) {
+      out.push({
+        kind: "vanished",
+        account: a.account,
+        text: `계좌 ${a.account}: 직전 스냅샷의 ${gone.map((h) => `${h.code} ${qtyText(h.quantity)}`).join("·")}이(가) 목록에서 빠졌는데 그 사이 저장한 매도 체결로 설명되지 않음`,
+      });
+    }
+    if (mine.length === 0 || summary === null) continue;
     const sameCur = held.filter((h) => h.currency === cur);
     if (sameCur.some((h) => h.purchaseAmount === null || h.purchaseAmount === undefined)) continue; // 종목 매입금액을 모르면 맞춰 볼 수 없다
     const sum = sameCur.reduce((s, h) => s + (h.purchaseAmount ?? 0), 0);
-    if (Math.abs(sum - summary) > Math.max(SUM_TOLERANCE[cur], Math.abs(summary) * SUM_TOLERANCE.rel)) {
+    if (Math.abs(sum - summary) > sumTolerance(cur, sameCur.length, summary)) {
       out.push({ kind: "sum", account: a.account, text: `계좌 ${a.account}: ${name} 종목 매입금액 합계 ${money(sum, cur)} ≠ 계좌 요약 ${money(summary, cur)}` });
     }
   }
@@ -398,6 +453,18 @@ function filledBetween(t: TradeLite, t1: number, t2: number): number {
   };
   if (t.fills && t.fills.length) return t.fills.reduce((s, f) => s + (within(f.at) ? f.quantity : 0), 0);
   return within(t.executedAt) ? t.quantity : 0;
+}
+
+/** (t1, t2] 에 든 체결의 순수량 (매수 +, 매도 −), '계좌:종목' 마다 — 스냅샷을 찍기 전 사라진 종목이 매도로 설명되는지 볼 때 (snapshotDoubts 의 traded) */
+export function netTradedBetween(trades: TradeLite[], t1: number, t2: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const t of trades) {
+    const q = filledBetween(t, t1, t2);
+    if (q === 0) continue;
+    const key = `${t.account}:${t.code}`;
+    out[key] = round4((out[key] ?? 0) + (t.side === "BUY" ? q : -q));
+  }
+  return out;
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   DOUBT_ACCEPT_MS,
   doubtCarriesOver,
   missingDates,
+  netTradedBetween,
   recentExpectedDates,
   sessionDate,
   snapshotDoubts,
@@ -113,6 +114,24 @@ describe("매매 기록 — 스냅샷 내용 (3-36)", () => {
     expect(d.totals).toEqual({ holdings: 1, valueKrw: 712000, valueAfterCostKrw: 710519, costKrw: 700000, valueUsd: null, costUsd: null });
     expect(d.fx).toBeNull();
     expect(d.accounts).toHaveLength(2);
+    // 정규장 종가는 받지 못하면 null (현재가를 대신 넣지 않음)
+    expect(d.holdings[0]).toMatchObject({ regularClose: null, regularCloseSource: null });
+    expect(d.regularCloseBasis).toContain("KRX 정규장");
+  });
+
+  it("정규장 종가(regularClose)는 현재가(price)와 따로 — 평가금액·원화 합계는 그대로 현재가 기준", () => {
+    const d = buildSnapshotData("KR", accounts, {
+      fx: null,
+      fxSource: null,
+      scheduledAt: "2026-09-28T16:05:00+09:00",
+      krwCost: () => null,
+      regularClose: (code) => (code === "005930" ? { close: 71000, source: "naver" } : null),
+    });
+    expect(d.holdings[0]).toMatchObject({ code: "005930", price: 71200, regularClose: 71000, regularCloseSource: "naver", valueKrw: 712000 });
+    expect(d.priceBasis).toContain("KRX+NXT 통합");
+    // 0·NaN 같은 값은 쓰지 않는다
+    const bad = buildSnapshotData("KR", accounts, { fx: null, fxSource: null, scheduledAt: "x", krwCost: () => null, regularClose: () => ({ close: 0, source: "naver" }) });
+    expect(bad.holdings[0]).toMatchObject({ regularClose: null, regularCloseSource: null });
   });
 
   it("미국 스냅샷은 계좌·종목별 줄, 원화는 기록한 환율로, 원화 매입금액은 원화 장부(없으면 null — 지어내지 않음)", () => {
@@ -150,10 +169,10 @@ describe("매매 기록 — 스냅샷 내용 (3-36)", () => {
     const tsla = { code: "TSLA", name: "TSLA", currency: "USD" as const, quantity: 2, avgPrice: 300, lastPrice: 377.5, purchaseAmount: 600, marketValue: 755, marketValueAfterCost: 754 };
     const soxl = accounts[0]!.items[1]!;
     const ok = [acct(3, [soxl], { purchaseUsd: 825.4 }), acct(7, [tsla], { purchaseUsd: 600 })];
-    expect(snapshotDoubts("US", ok, { accounts: [3, 7], held: [3, 7] })).toEqual([]);
+    expect(snapshotDoubts("US", ok, { held: [3, 7] })).toEqual([]);
     // 예전 검사(시장 전체)는 계좌 3 에 미국 종목이 있어 그냥 넘겼다 → 계좌 7 몫이 빠진 합계가 'ok' 로 영구히 남았다
     const broken = [acct(3, [soxl], { purchaseUsd: 825.4 }), acct(7, [], { purchaseUsd: 600 })];
-    expect(snapshotDoubts("US", broken, { accounts: [3, 7], held: [3, 7] })).toEqual([{ kind: "empty", account: 7, text: "계좌 7: 미국 보유 목록이 비었는데 계좌 요약 매입금액은 $600" }]);
+    expect(snapshotDoubts("US", broken, { held: [3, 7] })).toEqual([{ kind: "empty", account: 7, text: "계좌 7: 미국 보유 목록이 비었는데 계좌 요약 매입금액은 $600" }]);
     // 한국: 원화 요약이 있는데 한국 종목이 없으면 의심, 원화 요약이 0 이면(미국 종목만 있는 계좌) 괜찮다
     expect(snapshotDoubts("KR", [acct(3, [soxl], { purchaseKrw: 700000, purchaseUsd: 825.4 })])).toEqual([
       { kind: "empty", account: 3, text: "계좌 3: 한국 보유 목록이 비었는데 계좌 요약 매입금액은 700,000원" },
@@ -162,23 +181,55 @@ describe("매매 기록 — 스냅샷 내용 (3-36)", () => {
     expect(snapshotDoubts("KR", [acct(3, [], { purchaseUsd: 0 })])).toEqual([]); // 정말 빈 계좌 → 0종목 스냅샷도 사실
   });
 
-  it("직전 스냅샷에 있던 계좌가 계좌 목록에서 빠지면 의심", () => {
+  it("전에 그 시장 종목이 있던 계좌가 계좌 목록에서 빠지면 의심 — 늘 비어 있던 계좌·다른 시장 종목만 있던 계좌가 빠진 것은 의심하지 않는다", () => {
     const one = [acct(3, [accounts[0]!.items[1]!], { purchaseUsd: 825.4 })];
-    expect(snapshotDoubts("US", one, { accounts: [3, 7, 7] })).toEqual([{ kind: "missing-account", account: 7, text: "계좌 7: 직전 스냅샷에 있던 계좌가 토스 계좌 목록에서 빠짐" }]);
+    expect(snapshotDoubts("US", one, { held: [3, 7, 7] })).toEqual([{ kind: "missing-account", account: 7, text: "계좌 7: 전에 미국 종목이 있던 계좌가 토스 계좌 목록에서 빠짐" }]);
+    // 계좌 7 이 직전 스냅샷에 있었어도 그 시장 종목이 없었으면(held 에 없음) 빠져도 괜찮다 — 예전에는 직전 스냅샷의 모든 계좌를 봐서 24시간 빈칸이 생겼다
+    expect(snapshotDoubts("US", one, { held: [3] })).toEqual([]);
     expect(snapshotDoubts("US", one, {})).toEqual([]); // 첫 스냅샷은 비교할 것이 없다
   });
 
   it("목록이 통째로 비었고 달러 요약이 없으면 — 전에 그 시장 종목이 있던 계좌만 'unsure', 늘 비어 있는 계좌는 의심하지 않는다", () => {
-    expect(snapshotDoubts("US", [acct(3, [], { purchaseUsd: null })], { accounts: [3], held: [3] })).toEqual([
+    expect(snapshotDoubts("US", [acct(3, [], { purchaseUsd: null })], { held: [3] })).toEqual([
       { kind: "unsure", account: 3, text: "계좌 3: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 (전에는 미국 종목이 있었음)" },
     ]);
     expect(snapshotDoubts("KR", [acct(3, [], { purchaseUsd: null })], { held: [3] }).map((d) => d.kind)).toEqual(["unsure"]);
     // 늘 비어 있는 두 번째 계좌: 직전 스냅샷에 있었지만 종목이 없었거나, 비교할 스냅샷·동기화 기록이 없으면 의심하지 않는다 (예전에는 날마다 '의심을 안고 저장')
     const soxl = accounts[0]!.items[1]!;
-    expect(snapshotDoubts("US", [acct(3, [soxl], { purchaseUsd: 825.4 }), acct(7, [], { purchaseUsd: null })], { accounts: [3, 7], held: [3] })).toEqual([]);
+    expect(snapshotDoubts("US", [acct(3, [soxl], { purchaseUsd: 825.4 }), acct(7, [], { purchaseUsd: null })], { held: [3] })).toEqual([]);
     expect(snapshotDoubts("US", [acct(7, [], { purchaseUsd: null })])).toEqual([]);
     // 목록에 다른 시장 종목이 있는 계좌의 달러 요약 빈칸은 '달러 종목 없음'
-    expect(snapshotDoubts("US", [acct(3, [accounts[0]!.items[0]!], { purchaseKrw: 700000, purchaseUsd: null })], { accounts: [3], held: [3] })).toEqual([]);
+    expect(snapshotDoubts("US", [acct(3, [accounts[0]!.items[0]!], { purchaseKrw: 700000, purchaseUsd: null })], { held: [3] })).toEqual([]);
+  });
+
+  it("목록이 통째로 비고 달러 요약이 없어도 직전 스냅샷의 그 계좌 종목이 그 사이 저장한 매도로 모두 설명되면 전부 판 것 — 의심하지 않는다", () => {
+    const before = [{ account: 3, code: "TSLA", quantity: 2 }];
+    const empty = [acct(3, [], { purchaseUsd: null })];
+    expect(snapshotDoubts("US", empty, { held: [3], holdings: before, traded: { "3:TSLA": -2 } })).toEqual([]);
+    // 매도가 모자라거나(1주만 저장) 다른 계좌의 매도면 예전처럼 'unsure'
+    expect(snapshotDoubts("US", empty, { held: [3], holdings: before, traded: { "3:TSLA": -1 } }).map((d) => d.kind)).toEqual(["unsure"]);
+    expect(snapshotDoubts("US", empty, { held: [3], holdings: before, traded: { "7:TSLA": -2 } }).map((d) => d.kind)).toEqual(["unsure"]);
+    // 직전 스냅샷 없이 토스 동기화 기록으로만 아는 계좌는 수량을 몰라 맞춰 볼 수 없다
+    expect(snapshotDoubts("US", empty, { held: [3], traded: { "3:TSLA": -2 } }).map((d) => d.kind)).toEqual(["unsure"]);
+  });
+
+  it("직전 스냅샷에 있던 종목이 목록에서 사라졌는데 그 사이 저장한 매도로 설명되지 않으면 'vanished' (합계가 맞아도)", () => {
+    const soxl = { code: "SOXL", name: "SOXL", currency: "USD" as const, quantity: 100, avgPrice: 33, lastPrice: 38, purchaseAmount: 3300, marketValue: 3800, marketValueAfterCost: 3790 };
+    const before = [
+      { account: 3, code: "SOXL", quantity: 100 },
+      { account: 3, code: "AAPL", quantity: 0.1 },
+      { account: 3, code: "005930", quantity: 10 }, // 다른 시장 종목은 이 시장 스냅샷에서 보지 않는다
+    ];
+    const now = [acct(3, [soxl], { purchaseUsd: 3300 })]; // 요약까지 AAPL 을 뺀 모양 (합계는 맞음)
+    expect(snapshotDoubts("US", now, { held: [3], holdings: before })).toEqual([
+      { kind: "vanished", account: 3, text: "계좌 3: 직전 스냅샷의 AAPL 0.1주이(가) 목록에서 빠졌는데 그 사이 저장한 매도 체결로 설명되지 않음" },
+    ]);
+    expect(snapshotDoubts("US", now, { held: [3], holdings: before, traded: { "3:AAPL": -0.1 } })).toEqual([]); // 정말 판 것
+    expect(snapshotDoubts("US", now, { held: [3], holdings: before, traded: { "3:AAPL": -0.05 } }).map((d) => d.kind)).toEqual(["vanished"]);
+    // 요약의 1% 보다 작은 종목이 빠지고 요약은 그대로 온 응답: 합계도 걸린다 (예전 1% 허용치에서는 'ok' 로 영구 저장)
+    expect(snapshotDoubts("US", [acct(3, [soxl], { purchaseUsd: 3320 })], { held: [3], holdings: before }).map((d) => d.kind)).toEqual(["vanished", "sum"]);
+    // 전부 판 빈 계좌(요약도 0)여도 매도가 없으면 의심
+    expect(snapshotDoubts("US", [acct(3, [], { purchaseUsd: 0 })], { held: [3], holdings: before.slice(0, 1) }).map((d) => d.kind)).toEqual(["vanished"]);
   });
 
   it("하루 넘게 걸리는 의심(empty·missing-account)만 다음 거래일로 이어 센다", () => {
@@ -186,16 +237,23 @@ describe("매매 기록 — 스냅샷 내용 (3-36)", () => {
     expect(doubtCarriesOver("missing-account")).toBe(true);
     expect(doubtCarriesOver("sum")).toBe(false);
     expect(doubtCarriesOver("unsure")).toBe(false);
+    expect(doubtCarriesOver("vanished")).toBe(false);
   });
 
-  it("종목 매입금액 합계가 계좌 요약과 1% 넘게 다르면(목록 일부만 옴) 'sum' — 반올림 차이는 넘긴다", () => {
+  it("종목 매입금액 합계가 계좌 요약과 반올림 차이(종목 수 × 1원·1센트)보다 크게 다르면 'sum' — 요약의 1% 보다 작은 종목이 빠져도 잡는다", () => {
     const items = accounts[0]!.items; // 삼성전자 700,000원 + SOXL $825.4
     expect(snapshotDoubts("US", [acct(3, items, { purchaseKrw: 700000, purchaseUsd: 825.4 + 750 })])).toEqual([
       { kind: "sum", account: 3, text: "계좌 3: 미국 종목 매입금액 합계 $825.4 ≠ 계좌 요약 $1575.4" },
     ]);
-    expect(snapshotDoubts("US", [acct(3, items, { purchaseKrw: 700000, purchaseUsd: 825.45 })])).toEqual([]);
+    expect(snapshotDoubts("US", [acct(3, items, { purchaseKrw: 700000, purchaseUsd: 825.41 })])).toEqual([]); // 1종목 × 1센트
+    expect(snapshotDoubts("US", [acct(3, items, { purchaseKrw: 700000, purchaseUsd: 825.45 })]).map((d) => d.kind)).toEqual(["sum"]); // 예전 1% 에서는 넘어갔다
     expect(snapshotDoubts("KR", [acct(3, items, { purchaseKrw: 2_792_995, purchaseUsd: 825.4 })]).map((d) => d.kind)).toEqual(["sum"]);
-    expect(snapshotDoubts("KR", [acct(3, items, { purchaseKrw: 700_004, purchaseUsd: 825.4 })])).toEqual([]);
+    expect(snapshotDoubts("KR", [acct(3, items, { purchaseKrw: 700_001, purchaseUsd: 825.4 })])).toEqual([]); // 1종목 × 1원
+    expect(snapshotDoubts("KR", [acct(3, items, { purchaseKrw: 700_004, purchaseUsd: 825.4 })]).map((d) => d.kind)).toEqual(["sum"]);
+    // 종목이 많으면 그만큼 (3종목 × 1센트)
+    const three = [0.1, 0.2, 0.3].map((q, i) => ({ ...items[1]!, code: ["SOXL", "TSLA", "AAPL"][i]!, purchaseAmount: 100 + q }));
+    expect(snapshotDoubts("US", [acct(3, three, { purchaseUsd: 300.6 + 0.03 })])).toEqual([]);
+    expect(snapshotDoubts("US", [acct(3, three, { purchaseUsd: 300.6 + 0.05 })]).map((d) => d.kind)).toEqual(["sum"]);
     // 종목 매입금액을 모르면 맞춰 볼 수 없어 넘긴다
     expect(snapshotDoubts("US", [acct(3, [{ ...items[1]!, purchaseAmount: null }], { purchaseUsd: 9999 })])).toEqual([]);
   });
@@ -205,6 +263,7 @@ describe("매매 기록 — 스냅샷 내용 (3-36)", () => {
     expect(DOUBT_ACCEPT_MS.empty).toBe(DOUBT_MS);
     expect(DOUBT_ACCEPT_MS["missing-account"]).toBe(DOUBT_MS);
     expect(DOUBT_ACCEPT_MS.sum).toBe(30 * 60_000);
+    expect(DOUBT_ACCEPT_MS.vanished).toBe(30 * 60_000);
   });
 });
 
@@ -297,5 +356,15 @@ describe("매매 기록 — 주문 내역으로 설명되지 않는 수량 변�
       ],
     };
     expect(unexplainedChanges(snaps, [split])).toEqual([]);
+  });
+
+  it("스냅샷 뒤 저장한 체결의 순수량 (계좌·종목마다) — 구간 밖 몫은 세지 않는다", () => {
+    const t1 = Date.parse("2026-09-29T05:05:00+09:00"), t2 = Date.parse("2026-09-30T05:05:00+09:00");
+    const trades = [
+      { account: 3, code: "TSLA", side: "SELL" as const, quantity: 2, executedAt: "2026-09-29T23:00:00+09:00" },
+      { account: 3, code: "TSLA", side: "BUY" as const, quantity: 1, executedAt: "2026-09-28T23:00:00+09:00" }, // 스냅샷 전
+      { account: 7, code: "TSLA", side: "BUY" as const, quantity: 3, executedAt: "2026-09-29T23:30:00+09:00", fills: [{ quantity: 1, at: "2026-09-28T23:30:00+09:00" }, { quantity: 2, at: "2026-09-29T23:30:00+09:00" }] },
+    ];
+    expect(netTradedBetween(trades, t1, t2)).toEqual({ "3:TSLA": -2, "7:TSLA": 2 });
   });
 });
