@@ -34,7 +34,7 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => h.win,
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => h.insets }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", async () => {
   const R = await import("react");
   // 탭 내비게이터 대신 받은 속성(screenOptions)을 그대로 남기는 가짜

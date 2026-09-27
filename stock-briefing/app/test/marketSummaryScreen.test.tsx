@@ -45,7 +45,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
     removeItem: async (k: string) => void h.store.delete(k),
   },
 }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: h.push, dismissTo: vi.fn(), replace: vi.fn() }, Stack: { Screen: "StackScreen" }, Tabs: { Screen: "TabsScreen" }, useLocalSearchParams: () => h.params }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");

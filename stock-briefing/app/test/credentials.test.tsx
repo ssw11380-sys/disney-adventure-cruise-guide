@@ -70,7 +70,7 @@ vi.mock("react-native", () => ({
 // 넓은 창에서 설정 탭이 받은 폭을 어림할 때 화면 여백을 읽는다 (lib/useBoxWidth)
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { version: "1.4.0", extra: { apiUrl: "https://prod.test" } } } }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
   return { ...tokens, useTheme: () => tokens.light };

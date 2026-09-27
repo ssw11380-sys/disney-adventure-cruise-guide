@@ -27,7 +27,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => h.insets }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({ Stack: { Screen: "StackScreen" }, router: { back: vi.fn(), dismissTo: vi.fn(), push: vi.fn() }, useLocalSearchParams: () => ({ code: "005930", period: "D" }) }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
