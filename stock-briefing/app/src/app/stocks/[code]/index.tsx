@@ -7,6 +7,7 @@ import { useAnyMarketOpen, useBriefings, useCandles, useFeature, useStock, useSt
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { CandleChart } from "@/components/CandleChart";
+import { createChartViewMemo } from "@/lib/chartLayout";
 import { CANDLE_COUNT, parseCandlePeriod } from "@/lib/chartPrefs";
 import { FlashPrice } from "@/components/FlashPrice";
 import { ChartNotice, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
@@ -75,6 +76,9 @@ export default function StockDetailScreen() {
   const fold = useFoldLayout();
   // 휴대폰·접은 화면 시세 머리 아래 보유 한 줄 (기능 플래그 detailPolish — 앱 fallback 꺼짐)
   const polish = useFeature("detailPolish", false);
+  // 차트의 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
+  const [chartView] = useState(createChartViewMemo);
+  const chartMemo = polish ? { viewMemo: chartView } : {};
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const mode = detailMode(fold, win);
@@ -369,6 +373,7 @@ export default function StockDetailScreen() {
             avgPrice={s.avgPrice}
             quote={q}
             onFullscreen={() => router.push(`/stocks/${c}/chart?period=${period}` as never)}
+            {...chartMemo}
           />
           <ChartNotice query={candles} />
         </View>
@@ -482,6 +487,7 @@ export default function StockDetailScreen() {
       quote={q}
       height={height}
       onFullscreen={() => router.push(`/stocks/${c}/chart?period=${period}` as never)}
+      {...chartMemo}
     />
   );
   const holdNote = afterCost && baseEval?.afterCost ? "매도 비용 차감 · 토스 기준" : null;

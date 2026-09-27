@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   insets: { top: 0, bottom: 0, left: 0, right: 0 },
   /** 서버가 준 foldLayout 값 (undefined = 아직 못 받음 → fallback 꺼짐) */
   flag: undefined as boolean | undefined,
+  /** 서버가 준 detailPolish 값 (undefined = 못 받음 → fallback 꺼짐) */
+  polish: undefined as boolean | undefined,
   /** 종목 정보 (없으면 이름 대신 코드, 시세 없음) */
   stock: undefined as unknown,
 }));
@@ -34,7 +36,7 @@ vi.mock("@/theme", async () => {
 vi.mock("@/api/hooks", () => ({
   useStock: () => ({ data: h.stock, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
   useCandles: () => ({ data: undefined, isLoading: false, isError: false, error: null, refetch: vi.fn() }),
-  useFeature: (key: string, fallback = false) => (key === "foldLayout" ? (h.flag ?? fallback) : fallback),
+  useFeature: (key: string, fallback = false) => (key === "foldLayout" ? (h.flag ?? fallback) : key === "detailPolish" ? (h.polish ?? fallback) : fallback),
 }));
 vi.mock("@/components/CandleChart", () => ({ CandleChart: "CandleChart" }));
 vi.mock("@/components/Freshness", () => ({ ChartNotice: "ChartNotice" }));
@@ -66,6 +68,7 @@ beforeEach(() => {
   h.win = { width: 400, height: 800 };
   h.insets = { top: 0, bottom: 0, left: 0, right: 0 };
   h.flag = undefined;
+  h.polish = undefined;
   h.stock = undefined;
   forgetWindowClass();
 });
@@ -468,5 +471,32 @@ describe("전체 화면 차트 머리 (폴드 진단 8번, 깨질 때만 고친�
   it("차트 칩 띠 끝은 전체 화면 바탕색(t.bg)으로 흐린다 (넓은 창만 — CandleChart 가 정한다)", () => {
     const r = render(<ChartScreen />);
     expect(r.all().find((n) => n.type === "CandleChart")!.props.backdrop).toBe(light.bg);
+  });
+});
+
+describe("차트 보이는 구간을 화면이 맡는다 (기능 플래그 detailPolish — 2026-09-27 좁은 창 일봉 60일)", () => {
+  const cc = (r: R) => r.all().find((n) => n.type === "CandleChart")!;
+
+  it("켜짐: 가로로 돌려(다른 자리의 새 차트) 그려도, 창이 바뀌어도 같은 viewMemo — 보던 봉 수·위치가 이어진다", () => {
+    h.polish = true;
+    const r = render(<ChartScreen />);
+    const memo = cc(r).props.viewMemo as { read: () => unknown };
+    expect(memo.read()).toBeNull();
+    press(r);
+    expect(rotated(r)).toHaveLength(1);
+    expect(cc(r).props.viewMemo).toBe(memo);
+    h.win = { width: 832, height: 750 };
+    r.rerender();
+    expect(cc(r).props.viewMemo).toBe(memo);
+  });
+
+  it("꺼짐·못 받음: viewMemo 를 넘기지 않는다 (예전 그대로)", () => {
+    for (const polish of [undefined, false]) {
+      h.polish = polish;
+      const r = render(<ChartScreen />);
+      expect("viewMemo" in cc(r).props, String(polish)).toBe(false);
+      press(r);
+      expect("viewMemo" in cc(r).props, String(polish)).toBe(false);
+    }
   });
 });
