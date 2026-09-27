@@ -189,6 +189,21 @@ export function useTossStatus() {
   return useQuery({ queryKey: useKey("tossStatus"), queryFn: api.tossStatus, staleTime: 30_000, retry: 0 });
 }
 
+/** 토스 계좌 보유 종목 가져오기 (설정 > 토스증권 연동의 '지금 계좌 동기화'와 같은 요청). 끝나면 잔고·브리핑·토스 상태를 다시 받는다 */
+export function useTossImport() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl } = useSettings();
+  return useMutation({
+    mutationFn: api.importTossHoldings,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [apiUrl, "stocks"] });
+      void qc.invalidateQueries({ queryKey: [apiUrl, "briefings"] });
+      void qc.invalidateQueries({ queryKey: [apiUrl, "tossStatus"] });
+    },
+  });
+}
+
 /**
  * 종목 검색 (3-18): 종목 마스터 결과를 먼저(바로) 보여 주고, 외부(토스) 검색까지 합친 결과가 오면 바꾼다.
  * 입력이 바뀌는 동안에는 이전 결과를 그대로 두어 목록이 깜빡이거나 스피너가 뜨지 않게 한다

@@ -1,17 +1,20 @@
 import { focusManager, QueryClient, useIsRestoring, useQueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { Stack, usePathname } from "expo-router";
+import * as Haptics from "expo-haptics";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import * as SystemUI from "expo-system-ui";
 import React, { useEffect, useRef } from "react";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
+import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
 import { WidgetBridge } from "@/components/WidgetBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
+import { installHaptics, type HapticEngine } from "@/lib/haptics";
 import { LiveStreamProvider } from "@/lib/liveStream";
 import { PERSIST_BUSTER, PERSIST_MAX_AGE_MS, queryPersister, shouldPersist } from "@/lib/queryPersist";
 import { SettingsProvider, useSettings } from "@/lib/settings";
@@ -19,6 +22,8 @@ import { font, useTheme } from "@/theme";
 
 // 가장 먼저: 이후 어디서 난 JS 오류든 서버로 보고한다 (토큰·금액은 지운 뒤)
 installErrorHandlers();
+// 햅틱 엔진 (3-24): expo-haptics 는 APK 에 이미 있다(차트 십자선이 써 왔음). 울릴지는 lib/haptics 가 플래그·설정으로 정한다
+installHaptics(Haptics as unknown as HapticEngine, Platform.OS);
 
 // 저장된 설정(라이트/다크)과 마지막 잔고를 읽을 때까지 스플래시를 둔다 → 라이트 모드에서 어두운 첫 화면이 번쩍이지 않게.
 // 읽기가 늦어도 1.5초 뒤에는 연다
@@ -115,6 +120,8 @@ function Navigator() {
       <Stack.Screen name="market/[code]" options={{ title: "지수" }} />
       <Stack.Screen name="discover/theme/[id]" options={{ title: "테마" }} />
       <Stack.Screen name="portfolio/allocation" options={{ title: "비중" }} />
+      {/* 첫 실행 안내 (3-24, 플래그 firstRun): 머리 없이 한 화면, 뒤로 가기·'시작하기'로 닫힌다 */}
+      <Stack.Screen name="welcome" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
     </Stack>
   );
 }
@@ -142,11 +149,19 @@ export default function RootLayout() {
             <SplashGate />
             <CredentialWatcher />
             <LiveStreamProvider>
-              <ThemedStatusBar />
-              <NotificationBridge />
-              <WidgetBridge />
-              <ScreenTracker />
-              <Navigator />
+              {/* 3-24 플래그(oneHand·firstRun·emptyGuide)를 한 번 받아 아래 화면에 내려 준다 */}
+              <UxFlagsProvider>
+                <GuideMarksProvider>
+                  <ThemedStatusBar />
+                  <NotificationBridge />
+                  <WidgetBridge />
+                  <ScreenTracker />
+                  <HapticsBridge />
+                  <ConnectionWordingBridge />
+                  <Navigator />
+                  <FirstRunGate />
+                </GuideMarksProvider>
+              </UxFlagsProvider>
             </LiveStreamProvider>
           </PersistQueryClientProvider>
         </SettingsProvider>

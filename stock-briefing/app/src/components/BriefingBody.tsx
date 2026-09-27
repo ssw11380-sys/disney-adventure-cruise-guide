@@ -7,6 +7,7 @@ import type { BriefingWithData } from "@/api/types";
 import { Pills } from "@/components/BriefingList";
 import { BriefingSources } from "@/components/BriefingSources";
 import { StaleBanner } from "@/components/Freshness";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
 import { CardsSkeleton } from "@/components/Skeleton";
@@ -47,6 +48,8 @@ export function BriefingBody({
 }) {
   const t = useTheme();
   const b = useBriefing(id);
+  // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
+  const guide = useSettingsGuide();
   const [mode, setMode] = useState<"summary" | "detail">("detail");
   const history = useBriefings({ code: b.data?.code, limit: 30 }, !!b.data?.code);
   const sourcesOn = useFeature("briefingSources", true); // 이미 나간 기능(3-12)
@@ -60,7 +63,7 @@ export function BriefingBody({
   // 2단 오른쪽 칸은 고지가 이 칸에만 있으므로 불러오는 중·오류에도 붙인다 (고지 줄이 사라졌다 나타나며 들썩이지 않게). 전체 화면은 지금 그대로
   const paneNote = layout === "pane";
   if (view === "loading") return <Screen disclaimer={paneNote}><CardsSkeleton count={2} /></Screen>;
-  if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={b.error} onRetry={() => void b.refetch()} /></Screen>;
+  if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={b.error} onRetry={() => void b.refetch()} {...guide} /></Screen>;
   const d = b.data!;
   const q = d.data?.quote ?? null;
   const failed = d.status === "failed";
@@ -149,7 +152,7 @@ export function BriefingBody({
   if (layout === "stack") {
     // 지금 폰 화면 그대로 (접은 화면·플래그 꺼짐) — 순서·모양을 바꾸지 않는다
     return (
-      <Screen disclaimer top={<StaleBanner query={b} />}>
+      <Screen disclaimer top={<StaleBanner query={b} {...guide} />}>
         {title?.(d)}
         <View style={{ gap: space.xxs, paddingHorizontal: space.lg, paddingTop: space.md }}>
           <Pressable onPress={() => router.push(`/stocks/${d.code}`)} accessibilityRole="link" accessibilityLabel={`${d.name ?? d.code} 종목 화면으로`} hitSlop={slopFor(font.title * 1.35)}>
@@ -229,7 +232,7 @@ export function BriefingBody({
   if (layout === "split") {
     // 넓은 창 전체 화면 (알림·위젯·종목 상세에서 연 브리핑): 왼쪽 가격·근거·지난 브리핑 | 오른쪽 본문
     return (
-      <Screen scroll={false} disclaimer top={<StaleBanner query={b} />}>
+      <Screen scroll={false} disclaimer top={<StaleBanner query={b} {...guide} />}>
         {title?.(d)}
         <BriefingSplit
           side={side}

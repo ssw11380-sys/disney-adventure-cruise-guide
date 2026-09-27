@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import React, { useMemo, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnyMarketOpen, useBriefings, useCandles, useFeature, useStock, useStockMutations } from "@/api/hooks";
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
@@ -14,10 +14,10 @@ import { ChartNotice, StaleBanner, useFeedState, usePull } from "@/components/Fr
 import { DetailSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { SplitScreen } from "@/components/SplitScreen";
-import { AnalysisPreview, AnalysisTab, BriefingList, DetailHeader, FillChart, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
+import { AnalysisPreview, AnalysisTab, BriefingList, DetailBottomBar, DetailHeader, FillChart, HeadTitle, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type BarStar, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
 import { ErrorView, LiveDot, Segmented, Stat, StatGrid } from "@/components/ui";
 import { detailNames, detailSubtitle, holdingLine, realText } from "@/lib/detailText";
-import { detailMode, parseDetailTab, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
+import { detailMode, parseDetailTab, priceRowPassed, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, shownSign, toDisplay } from "@/lib/format";
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { rememberNav, useCachedRow, useHoldingsNav, type NavItem } from "@/lib/holdingsNav";
@@ -27,8 +27,12 @@ import { useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isBigText } from "@/lib/textScale";
 import { changeColor, font, layout, slopFor, space, useTheme } from "@/theme";
-import { foldDetail } from "@/tokens";
+import { foldDetail, oneHand } from "@/tokens";
 import { sentence, speakMove, speakRate } from "@/lib/a11y";
+import { haptic } from "@/lib/haptics";
+import { removeConfirm } from "@/lib/rowActions";
+import { useSettingsGuide } from "@/lib/settingsLink";
+import { useUx } from "@/lib/uxFlags";
 
 type Tab = AnalysisKind | "news";
 const TABS: { value: Tab; label: string }[] = [
@@ -70,8 +74,52 @@ export default function StockDetailScreen() {
   const c = parseStockCode(code) ?? "";
   const stock = useStock(c);
   const live = useAnyMarketOpen();
-  const { register } = useStockMutations();
+  const { register, remove } = useStockMutations();
   const { showKrw, afterCost } = useSettings();
+  // 3-24 플래그: oneHand(아래 막대·머리 현재가·햅틱), emptyGuide(연결 오류의 '설정 열기') — 꺼져 있으면 지금 화면 그대로
+  const ux = useUx();
+  // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏). 이 화면은 루트 스택 위라 설정 탭까지 닫고 간다 (lib/settingsLink)
+  const guideProps = useSettingsGuide();
+  // 스크롤하면 머리에 현재가 (휴대폰·접은 화면, oneHand): 시세 머리의 가격 줄 아래 끝(스크롤 안 위치)을 재어 두고,
+  // 스크롤이 그 줄을 지나갈 때만 한 번 바꾼다 — 스크롤마다 화면을 다시 그리지 않아 부드럽다
+  const [headPrice, setHeadPrice] = useState(false);
+  // 머리 오른쪽 버튼의 실제 폭 (미등록 종목의 '☆ 관심 추가' 글자 버튼은 아이콘 하나보다 넓다 — 머리 제목 최대 폭에서 뺀다)
+  const [headRightW, setHeadRightW] = useState<number | null>(null);
+  const onHeadRightLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = Math.round(e.nativeEvent.layout.width);
+    setHeadRightW((cur) => (cur === w ? cur : w));
+  }, []);
+  // y: 마지막 스크롤 위치 — 가격 줄이 다시 재어질 때(글자 크기·시세 머리 줄 수가 바뀜) 스크롤 없이도 지금 위치로 다시 판정한다
+  const priceEdge = useRef({ head: 0, row: 0, rowH: 0, y: 0, shown: false });
+  const recheckHeadPrice = useCallback(() => {
+    const p = priceEdge.current;
+    const next = priceRowPassed(p, p.y);
+    if (next === p.shown) return;
+    p.shown = next;
+    setHeadPrice(next);
+  }, []);
+  const onHeadLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      priceEdge.current.head = e.nativeEvent.layout.y;
+      recheckHeadPrice();
+    },
+    [recheckHeadPrice],
+  );
+  const onPriceLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      priceEdge.current.row = e.nativeEvent.layout.y;
+      priceEdge.current.rowH = e.nativeEvent.layout.height;
+      recheckHeadPrice();
+    },
+    [recheckHeadPrice],
+  );
+  const onScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      priceEdge.current.y = e.nativeEvent.contentOffset.y;
+      recheckHeadPrice();
+    },
+    [recheckHeadPrice],
+  );
   // 넓은 창 배치 (플래그가 꺼져 있으면 창 크기와 상관없이 phone)
   const fold = useFoldLayout();
   // 휴대폰·접은 화면 시세 머리 아래 보유 한 줄 (기능 플래그 detailPolish — 앱 fallback 꺼짐)
@@ -82,6 +130,17 @@ export default function StockDetailScreen() {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const mode = detailMode(fold, win);
+  // 접기·펴기로 배치가 바뀌면(phone↔넓은 창) 휴대폰 화면의 스크롤 칸이 새로 생겨 맨 위에서 시작한다 → 머리 현재가도 처음 상태로
+  // (그대로 두면 다음 스크롤 전까지 가격 줄이 보이는데도 머리에 현재가가 남았다 — 3-24 리뷰 수정 3). 렌더 중 이전 값 저장 패턴
+  const [edgeMode, setEdgeMode] = useState(mode);
+  if (edgeMode !== mode) {
+    setEdgeMode(mode);
+    setHeadPrice(false);
+  }
+  useEffect(() => {
+    // 재어 둔 자리·스크롤 위치도 버린다 (새 스크롤 칸이 다시 잰다)
+    priceEdge.current = { head: 0, row: 0, rowH: 0, y: 0, shown: false };
+  }, [mode]);
   // 차트 기간·탭: 주소 검색어에 있으면 그 값으로 연다 (없으면 지금처럼 일봉 · 기업개요, 넓은 창은 최근 브리핑)
   const [period, setPeriodState] = useState<CandlePeriod>(() => parseCandlePeriod(params.period));
   const [tabPick, setTabPick] = useState<DetailTab | null>(() => parseDetailTab(params.tab));
@@ -98,6 +157,9 @@ export default function StockDetailScreen() {
   // 넓은 창에서 Stack 머리를 숨긴 적이 있으면, 다시 좁아질 때 머리를 되살린다 (화면 옵션은 합쳐지므로 숨김이 남는다)
   const [hidHeader, setHidHeader] = useState(false);
   if (mode !== "phone" && !hidHeader) setHidHeader(true);
+  // 머리 제목(현재가)을 쓴 적이 있는지 (3-24 oneHand) — 서버가 플래그를 끄면 기본 제목으로 되돌리려고 (화면 옵션은 합쳐진다)
+  const [usedHeadTitle, setUsedHeadTitle] = useState(false);
+  if (ux.oneHand && mode === "phone" && !usedHeadTitle) setUsedHeadTitle(true);
   // ‹ n/17 ›: 잔고 화면과 같은 순서의 이전·다음 종목 (넓은 창에서만 계산한다)
   const nav = useHoldingsNav(c, params.nav === "1", mode !== "phone");
   // 미등록 종목에서 "AI 분석 만들기"를 누른 탭 (탭을 오가도 다시 묻지 않게 화면에 둔다)
@@ -129,7 +191,7 @@ export default function StockDetailScreen() {
   const view = viewState(stock);
   const seed = view === "loading" ? cachedRow : null;
   if (view !== "ready" && !seed) {
-    const body = view === "loading" ? <DetailSkeleton /> : <ErrorView error={stock.error} onRetry={() => void stock.refetch()} />;
+    const body = view === "loading" ? <DetailSkeleton /> : <ErrorView error={stock.error} onRetry={() => void stock.refetch()} {...guideProps} />;
     // 휴대폰 화면: 지금 그대로 (넓은 창에서 숨겼던 머리만 되살린다)
     if (mode === "phone")
       return (
@@ -178,15 +240,42 @@ export default function StockDetailScreen() {
     register.mutate(
       { code: s.code },
       {
-        onSuccess: done,
+        onSuccess: () => {
+          // 3-24: 관심 추가가 끝나면 짧은 진동 (플래그 oneHand·설정이 켜져 있을 때만)
+          haptic("success");
+          done();
+        },
         onError: (e) => {
           // 두 번 눌러 이미 등록된 경우(409)는 성공으로 본다
           if (e instanceof Error && /이미 등록/.test(e.message)) return done();
           setAdding(false);
+          haptic("error");
           Alert.alert("관심 추가 실패", e instanceof Error ? e.message : String(e));
         },
       },
     );
+  };
+  // 아래 막대의 '관심 해제' (3-24 oneHand, 수량 없는 관심 종목만): 확인 창을 거쳐 뺀 뒤 이 화면은 미등록 종목으로 다시 받는다
+  const unwatch = () => {
+    const copy = removeConfirm(s);
+    Alert.alert(copy.title, copy.message, [
+      { text: "취소", style: "cancel" },
+      {
+        text: copy.confirm,
+        style: "destructive",
+        onPress: () =>
+          remove.mutate(s.code, {
+            onSuccess: () => {
+              haptic("success");
+              void stock.refetch();
+            },
+            onError: (e) => {
+              haptic("error");
+              Alert.alert(`${copy.confirm} 실패`, e instanceof Error ? e.message : String(e));
+            },
+          }),
+      },
+    ]);
   };
   const cur = q?.currency ?? currencyOfMarket(s.market);
   const fx = q?.fxRate ?? (q?.priceKrw && q.price ? q.priceKrw / q.price : null);
@@ -270,21 +359,42 @@ export default function StockDetailScreen() {
       ])
     : "";
 
+  const openChart = () => router.push(`/stocks/${c}/chart?period=${period}` as never);
+  // 3-24 아래 막대 왼쪽 버튼: 미등록 → 관심 추가, 관심(수량 없음) → 관심 해제(토스 종목은 동기화 제외), 보유 → 보유 수정
+  const barStar: BarStar = unregistered ? { kind: "watch", busy: adding } : s.quantity ? { kind: "edit" } : { kind: "unwatch", label: removeConfirm(s).confirm };
+  const onBarStar = () => (barStar.kind === "watch" ? addWatch() : barStar.kind === "unwatch" ? unwatch() : router.push(`/stocks/${c}/edit`));
+  // 머리 제목: 시세 머리와 같은 글 (현재가 = 머리 값)
+  const headTitlePrice =
+    ux.oneHand && headPrice && q
+      ? {
+          text: quote(q.price),
+          // 시세 머리 가격 옆 단위와 같은 글 (달러 종목은 'USD')
+          unit: displayCur === "KRW" ? "원" : "USD",
+          rate: formatPct(q.changeRate),
+          color: up,
+          rateColor: shownColor(q.changeRate, formatPct(q.changeRate)),
+          a11y: priceSpeech,
+        }
+      : null;
+
   if (mode === "phone")
     return (
       <Screen
         disclaimer
         refreshing={pulling}
         onRefresh={onPull}
-        top={<StaleBanner query={stock} open={open} maxAgeMs={openMaxAge} />}
+        top={<StaleBanner query={stock} open={open} maxAgeMs={openMaxAge} {...guideProps} />}
+        {...(ux.oneHand ? { onScroll, scrollEventThrottle: oneHand.scrollThrottle, bottom: <DetailBottomBar star={barStar} onStar={onBarStar} onChart={openChart} /> } : null)}
       >
         <Stack.Screen
           options={{
             // 넓은 창에서 숨겼던 머리를 되살린다 (처음부터 좁은 창이면 지금 옵션 그대로)
             ...(hidHeader ? { headerShown: true } : {}),
             title: name,
-            headerRight: () =>
-              unregistered ? (
+            // 3-24 (oneHand): 이름 + 스크롤로 가격 줄이 가려지면 현재가·등락률. 한 번 쓴 뒤 플래그가 꺼지면 기본 제목으로 되돌린다 (화면 옵션은 합쳐진다)
+            ...(ux.oneHand ? { headerTitle: () => <HeadTitle name={name} price={headTitlePrice} rightW={headRightW} /> } : usedHeadTitle ? { headerTitle: undefined } : {}),
+            headerRight: () => {
+              const right = unregistered ? (
                 <Pressable onPress={addWatch} disabled={adding} accessibilityRole="button" accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={slopFor(font.small * 1.35, space.xs)} style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginRight: space.sm, paddingHorizontal: space.xs }}>
                   <Ionicons name="star-outline" size={20} color={t.gold} />
                   <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{adding ? "추가 중" : "관심 추가"}</Text>
@@ -293,13 +403,22 @@ export default function StockDetailScreen() {
                 <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityRole="button" accessibilityLabel="보유 정보 수정" hitSlop={slopFor(foldDetail.headIcon, space.sm)}>
                   <Ionicons name="create-outline" size={foldDetail.headIcon} color={t.ink} />
                 </Pressable>
-              ),
+              );
+              // 머리 현재가(oneHand)일 때만 폭을 잰다 — 꺼져 있으면 지금 그대로
+              return ux.oneHand ? <View onLayout={onHeadRightLayout}>{right}</View> : right;
+            },
           }}
         />
 
         {/* 시세 머리 */}
         {/* 보유 한 줄이 있으면 위아래 여백을 12 → 8 로 줄여 그 줄이 차트 아래 칩 줄을 밀어내는 만큼을 조금 되찾는다 (475×663 · 글자 115%) */}
-        <View style={[styles.quoteHead, ...(hold ? [styles.quoteHeadTight] : []), { backgroundColor: t.surface, borderBottomColor: t.line }]}>
+        {/* 머리 현재가(oneHand)용 자리 재기: 이미 그려진 칸에 onLayout 을 나중에 붙이면 자리가 바뀌기 전까지 알려 오지 않으므로
+            플래그를 처음 받는 순간 시세 머리를 한 번 새로 그린다 (key). 꺼져 있으면 key·onLayout 없이 지금 그대로 */}
+        <View
+          key={ux.oneHand ? "head-oh" : undefined}
+          style={[styles.quoteHead, ...(hold ? [styles.quoteHeadTight] : []), { backgroundColor: t.surface, borderBottomColor: t.line }]}
+          {...(ux.oneHand ? { onLayout: onHeadLayout } : null)}
+        >
           {/* 부제목 (넓은 창 머리의 subtitle 과 같은 글 — 이름이 있으면 끝에, 끝이 잘려도 코드·시장·상태는 보인다) */}
           <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={1}>
             {s.code} · {s.market}
@@ -310,7 +429,7 @@ export default function StockDetailScreen() {
           {q ? (
             <>
               {/* 화면 읽기: 가격·등락을 한 문장으로 (3-22) */}
-              <View accessible accessibilityLabel={priceSpeech} style={{ gap: space.xxs }}>
+              <View accessible accessibilityLabel={priceSpeech} style={{ gap: space.xxs }} {...(ux.oneHand ? { onLayout: onPriceLayout } : null)}>
                 <View style={styles.priceRow}>
                   <FlashPrice value={q.price} text={quote(q.price)} style={[styles.bigPrice, { color: up }]} />
                   <Text style={{ color: t.muted, fontSize: font.body }}>{displayCur === "KRW" ? "원" : "USD"}</Text>
@@ -372,7 +491,7 @@ export default function StockDetailScreen() {
             currency={cur}
             avgPrice={s.avgPrice}
             quote={q}
-            onFullscreen={() => router.push(`/stocks/${c}/chart?period=${period}` as never)}
+            onFullscreen={openChart}
             {...chartMemo}
           />
           <ChartNotice query={candles} />
@@ -475,7 +594,7 @@ export default function StockDetailScreen() {
       action={action}
     />
   );
-  const banner = <StaleBanner query={stock} open={open} maxAgeMs={openMaxAge} />;
+  const banner = <StaleBanner query={stock} open={open} maxAgeMs={openMaxAge} {...guideProps} />;
   const chart = (height?: number) => (
     <CandleChart
       candles={candles.data?.candles}

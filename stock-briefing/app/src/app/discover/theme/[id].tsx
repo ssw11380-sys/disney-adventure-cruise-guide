@@ -10,6 +10,7 @@ import { openStock, StatusLine, useAddWatch, useBoxWidth, useMarks, usePull } fr
 import { SkeletonRows } from "@/components/discover/Skeleton";
 import { DISCLAIMER } from "@/components/Screen";
 import { Empty, ErrorView } from "@/components/ui";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { pickDiscoverCols } from "@/lib/discoverColumns";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
@@ -26,6 +27,8 @@ import { layout } from "@/tokens";
 export default function ThemeDetailScreen() {
   const t = useTheme();
   const phoneRowH = useDiscoverRowH();
+  // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
+  const guide = useSettingsGuide();
   const fold = useFoldLayout();
   const wide = fold.on && isWide(fold);
   const [boxW, onLayout] = useBoxWidth();
@@ -124,7 +127,7 @@ export default function ThemeDetailScreen() {
           <SkeletonRows height={rowH} />
         </View>
       ) : q.isError && !q.data ? (
-        <ErrorView error={q.error} onRetry={() => void q.refetch()} />
+        <ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} />
       ) : (
         <FlatList
           data={items}

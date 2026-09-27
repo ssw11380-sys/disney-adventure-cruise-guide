@@ -1,6 +1,6 @@
 import { usePathname } from "expo-router";
 import React from "react";
-import { RefreshControl, ScrollView, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import { RefreshControl, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide, type FoldLayout } from "@/lib/windowClass";
@@ -44,6 +44,16 @@ interface ScreenProps {
   readable?: boolean;
   /** 스크롤을 부르는 쪽이 옮길 때 (3-42 접고 펴기 이어 보기: 넓은 창에서 보던 브리핑 줄로). scroll=false 면 쓰지 않는다 */
   scrollRef?: React.Ref<ScrollView>;
+  /**
+   * 스크롤과 무관하게 아래에 고정할 것 (3-24 종목 상세 아래 막대, 첫 실행 안내 '시작하기'). 고지가 있으면 고지 바로 위.
+   * 주지 않으면 지금과 같다
+   */
+  bottom?: React.ReactNode;
+  /** 스크롤 위치를 받을 때 (3-24 종목 상세: 스크롤하면 머리에 현재가). 주지 않으면 지금과 같다 */
+  onScroll?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  scrollEventThrottle?: number;
+  /** 사용자가 목록을 끌기 시작할 때 (3-24 설정 '서버 연결' 칸 맞추기를 멈춘다). 주지 않으면 지금과 같다 */
+  onScrollBeginDrag?: () => void;
 }
 
 /**
@@ -66,7 +76,7 @@ function ReadableScreen(props: ScreenProps) {
   return <ScreenBody {...props} frame={frame} />;
 }
 
-function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentStyle, disclaimer = false, top, frame, scrollRef }: ScreenProps & { frame?: ViewStyle }) {
+function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentStyle, disclaimer = false, top, frame, scrollRef, bottom, onScroll, scrollEventThrottle, onScrollBeginDrag }: ScreenProps & { frame?: ViewStyle }) {
   const t = useTheme();
   const inTabs = /^\/(\(tabs\))?\/?(briefings|settings)?$/.test(usePathname());
   return (
@@ -79,12 +89,15 @@ function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentSty
           contentContainerStyle={[styles.content, contentStyle, frame]}
           keyboardShouldPersistTaps="handled"
           refreshControl={onRefresh ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} /> : undefined}
+          {...(onScroll ? { onScroll, scrollEventThrottle } : null)}
+          {...(onScrollBeginDrag ? { onScrollBeginDrag } : null)}
         >
           {children}
         </ScrollView>
       ) : (
         <View style={[styles.root, contentStyle, frame]}>{children}</View>
       )}
+      {bottom ?? null}
       {disclaimer ? <Disclaimer inTabs={inTabs} /> : null}
     </View>
   );

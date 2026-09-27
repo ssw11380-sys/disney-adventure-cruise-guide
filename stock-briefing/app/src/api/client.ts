@@ -32,6 +32,7 @@ import type { AppErrorSummary, Evaluation,
   TossOpenApiStatus,
   FeatureFlags,
 } from "./types";
+import { authMessage, NOT_JSON } from "@/lib/connectionError";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -40,6 +41,10 @@ export class ApiRequestError extends Error {
     public readonly status: number,
     public readonly code: string,
     message: string,
+    /** 물은 API 경로 (쿼리 포함, 서버 주소 제외) — 늘 있는 목록 경로의 404 를 '틀린 서버 주소'로 알아보는 데 쓴다 (lib/connectionError) */
+    public readonly path?: string,
+    /** 물은 서버 주소 (설정의 '서버 주소' 값) — 연결 오류 안내가 '지금 서버 주소'를 한 줄 보여 주는 데 쓴다 (lib/connectionError addressLine) */
+    public readonly base?: string,
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -66,7 +71,7 @@ async function exchange(baseUrl: string, token: string, path: string, init: Requ
     return { res, text };
   } catch (e) {
     const aborted = ctrl.signal.aborted || (e as Error).name === "AbortError";
-    throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`);
+    throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`, path, baseUrl);
   } finally {
     clearTimeout(timer);
   }
@@ -74,7 +79,7 @@ async function exchange(baseUrl: string, token: string, path: string, init: Requ
 
 async function request<T>(baseUrl: string, token: string, path: string, init: RequestInit = {}, timeoutMs = 60_000): Promise<T> {
   const { res, text } = await exchange(baseUrl, token, path, init, timeoutMs);
-  return result<T>(res, text);
+  return result<T>(res, text, path, baseUrl);
 }
 
 /**
@@ -102,7 +107,7 @@ async function requestCond<T>(baseUrl: string, token: string, path: string, time
       if (etag && json !== null) condPut(key, etag, text);
       else condDrop(key);
       condNote("full");
-      return result<T>(res, text);
+      return result<T>(res, text, path, baseUrl);
     }
     const out = rebuild(held, json);
     if (out !== null) {
@@ -119,9 +124,9 @@ async function requestCond<T>(baseUrl: string, token: string, path: string, time
     const etag = again.res.headers.get("etag");
     if (again.res.ok && etag && again.text && !isDelta(safeParse(again.text))) condPut(key, etag, again.text);
     condNote("full");
-    return result<T>(again.res, again.text);
+    return result<T>(again.res, again.text, path, baseUrl);
   }
-  return result<T>(res, text);
+  return result<T>(res, text, path, baseUrl);
 }
 
 function safeParse(text: string): unknown {
@@ -132,23 +137,23 @@ function safeParse(text: string): unknown {
   }
 }
 
-/** 응답 → 값 (204 면 없음, 실패면 ApiRequestError) */
-function result<T>(res: Response, text: string): T {
+/** 응답 → 값 (204 면 없음, 실패면 ApiRequestError — 오류에는 요청 경로·서버 주소를 붙인다: 3-24 연결 오류 안내가 '지금 서버 주소'를 보여 준다) */
+function result<T>(res: Response, text: string, path: string, baseUrl: string): T {
   if (res.status === 204) return undefined as T;
   let json: unknown = null;
+  let parsed = true;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
     /* 아래에서 처리 */
+    parsed = false;
   }
   if (!res.ok) {
     const err = (json ?? {}) as { error?: string; message?: string };
-    throw new ApiRequestError(
-      res.status,
-      err.error ?? `HTTP_${res.status}`,
-      res.status === 401 ? "API 토큰이 틀리거나 비어 있습니다. 설정 > 서버 주소 아래에 토큰을 입력하세요." : (err.message ?? `서버 오류 (${res.status})`),
-    );
+    throw new ApiRequestError(res.status, err.error ?? `HTTP_${res.status}`, res.status === 401 ? authMessage() : (err.message ?? `서버 오류 (${res.status})`), path, baseUrl);
   }
+  // 성공 응답인데 JSON 이 아니면(웹 페이지 등) 이 앱의 서버가 아니다 — 예전에는 빈 값(null)으로 넘겨 빈 잔고처럼 보였다 (버그 수정)
+  if (!parsed) throw new ApiRequestError(res.status, NOT_JSON, "서버 응답을 읽을 수 없습니다. 이 주소가 앱의 서버가 아닐 수 있습니다.", path, baseUrl);
   return json as T;
 }
 

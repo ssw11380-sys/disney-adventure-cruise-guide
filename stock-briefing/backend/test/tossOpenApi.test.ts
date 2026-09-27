@@ -4,6 +4,8 @@ import { createMigratedDb } from "../src/db/index.js";
 import { ProviderError } from "../src/lib/errors.js";
 import { aggregateCandles, TossOpenApiClient, TossOpenApiProvider, toCandle } from "../src/providers/market/tossOpenApi.js";
 import { TossRealtime, type SocketLike } from "../src/providers/market/tossRealtime.js";
+import Fastify from "fastify";
+import { stockRoutes } from "../src/routes/stocks.js";
 import { StockService } from "../src/services/stockService.js";
 import { TossSyncService } from "../src/services/tossSyncService.js";
 import type { Quote } from "../src/domain/types.js";
@@ -195,6 +197,23 @@ describe("토스 연동 종목 잠금 (3-10)", () => {
     const list = await service.listWithQuotes();
     expect(Object.fromEntries(list.map((s) => [s.code, s.tossSynced]))).toEqual({ "005930": false, "035420": true, TSLA: true });
     await db.destroy();
+  });
+
+  it("종목 상세 응답(GET /api/stocks/:code)에도 tossSynced·inTossSnapshot (3-24 앱의 아래 막대 '동기화 제외' 문구). 미등록 종목은 둘 다 거짓", async () => {
+    const { db, service } = await setup();
+    const app = Fastify();
+    await app.register(stockRoutes, { prefix: "/api/stocks", service });
+    try {
+      const get = async (code: string) => (await app.inject({ method: "GET", url: `/api/stocks/${code}` })).json() as { tossSynced: boolean; inTossSnapshot: boolean; registered: boolean };
+      expect(await get("035420")).toMatchObject({ registered: true, tossSynced: true, inTossSnapshot: true });
+      expect(await get("005930")).toMatchObject({ registered: true, tossSynced: false, inTossSnapshot: false });
+      // 목록도 같은 값
+      const list = await service.listWithQuotes();
+      expect(Object.fromEntries(list.map((s) => [s.code, s.inTossSnapshot]))).toEqual({ "005930": false, "035420": true, TSLA: true });
+    } finally {
+      await app.close();
+      await db.destroy();
+    }
   });
 
   it("토스 종목을 지우면 동기화에서 빠져 동기화를 여러 번 해도 다시 나타나지 않고, 다시 등록하면 다시 맞춘다", async () => {

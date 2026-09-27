@@ -28,6 +28,12 @@ export interface RegisteredStock {
   updatedAt: string; // ISO
   /** 토스 계좌에서 맞추는 종목 (수량·평단은 동기화가 정한다 → 앱에서 잠금). 목록·상세 응답에만 붙는다 */
   tossSynced?: boolean;
+  /**
+   * 마지막 토스 스냅샷에 있던 종목(사용자가 뺀 종목 제외) — 삭제하면 토스 동기화에서도 빠진다(remove 의 tossExcluded).
+   * tossSynced 와 달리 동기화가 오래 멈췄거나 자동 동기화가 꺼져(0분) 잠금이 풀린 때도 참이다 → 앱이 지우기 버튼·확인 창에 '동기화 제외'를 알린다 (3-24).
+   * 목록·상세 응답에만 붙는다 (예전 서버에는 없음 — 앱은 tossSynced 로 대신한다)
+   */
+  inTossSnapshot?: boolean;
 }
 
 /** 현재가 스냅샷 */

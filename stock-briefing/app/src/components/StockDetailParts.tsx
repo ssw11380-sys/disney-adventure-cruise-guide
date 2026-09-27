@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import React, { useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
+import React, { useEffect, useState } from "react";
+import { Animated, Linking, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnalysis, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, Briefing, Disclosure, NewsItem } from "@/api/types";
@@ -8,12 +8,12 @@ import { BriefingCard } from "@/components/BriefingCard";
 import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
-import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, markdownPreview, shortStamp } from "@/lib/detailLayout";
+import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
 import { analysisView } from "@/lib/freshness";
 import { navLabel, navSpeech, type HoldingsNav } from "@/lib/holdingsNav";
 import { font, fontCap, radius, slopFor, space, touch, useTheme } from "@/theme";
-import { foldDetail } from "@/tokens";
+import { foldDetail, oneHand } from "@/tokens";
 
 /**
  * 종목 상세 조각 (stocks/[code]/index 가 쓴다). 휴대폰 화면 조각(52주 막대·AI 분석 탭·뉴스·공시 탭)은 예전 화면에서 옮겨 온 그대로이고,
@@ -557,6 +557,114 @@ export function DetailHeader({
   );
 }
 
+// ── 3-24 한 손 조작 (기능 플래그 oneHand, 휴대폰·접은 화면만) ──
+
+/** 아래 막대 왼쪽 버튼: 미등록 종목은 관심 추가, 관심 종목은 관심 해제, 보유 종목은 보유 정보 수정 */
+export type BarStar = { kind: "watch"; busy: boolean } | { kind: "unwatch"; label: string } | { kind: "edit" };
+
+/**
+ * 종목 상세 아래 고정 막대 (엄지가 닿는 곳): [관심 추가 / 관심 해제 / 보유 수정] [차트 크게].
+ * 머리 오른쪽 버튼(관심 추가·수정)과 차트의 전체 화면 버튼을 아래로 한 번 더 둔다 — 넓은 창은 합친 머리·차트가 늘 보이므로 두지 않는다.
+ * 버튼 높이 44 (oneHand.barButtonH), 고지 바로 위
+ */
+export function DetailBottomBar({ star, onStar, onChart }: { star: BarStar; onStar: () => void; onChart: () => void }) {
+  const t = useTheme();
+  const starText = star.kind === "watch" ? (star.busy ? "추가 중" : "관심 추가") : star.kind === "unwatch" ? star.label : "보유 수정";
+  const starA11y = star.kind === "watch" ? "관심 종목에 추가" : star.kind === "unwatch" ? `관심 종목에서 빼기, ${star.label}` : "보유 정보 수정";
+  const starIcon: keyof typeof Ionicons.glyphMap = star.kind === "watch" ? "star-outline" : star.kind === "unwatch" ? "star" : "create-outline";
+  const starColor = star.kind === "edit" ? t.ink : t.gold;
+  const busy = star.kind === "watch" && star.busy;
+  return (
+    <View style={[styles.bar, { backgroundColor: t.surface, borderTopColor: t.line }]}>
+      <Pressable
+        onPress={onStar}
+        disabled={busy}
+        // 동작을 말하는 버튼이다 (이름이 '관심 종목에 추가'·'관심 종목에서 빼기') — 체크 상태(checked)는 주지 않는다:
+        // TalkBack 이 '선택됨/선택 안 됨'을 함께 읽어 누르면 무엇이 되는지 헷갈리지 않게 (3-24 리뷰 수정 3)
+        accessibilityRole="button"
+        accessibilityLabel={starA11y}
+        accessibilityState={{ busy, disabled: busy }}
+        style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
+      >
+        <Ionicons name={starIcon} size={font.title} color={starColor} />
+        <Text style={{ color: starColor, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
+          {starText}
+        </Text>
+      </Pressable>
+      <Pressable
+        onPress={onChart}
+        accessibilityRole="button"
+        accessibilityLabel="차트 전체 화면"
+        style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
+      >
+        <Ionicons name="expand-outline" size={font.title} color={t.ink} />
+        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
+          차트 크게
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+/**
+ * 휴대폰 종목 상세 Stack 머리 제목 (3-24 oneHand): 이름, 스크롤로 시세 머리의 가격 줄이 가려지면 그 옆에 현재가·단위·등락률
+ * (좁으면 이름 4자를 남기려고 단위 → 등락률 순으로 뺀다 — 현재가는 늘).
+ * 값은 시세 머리와 같은 글(부르는 쪽이 같은 함수로 만든 문자열)을 그대로 받는다 → 머리 현재가 = 시세 머리 값.
+ * 가격이 나타날 때만 짧게 흐려졌다 보인다 (스크롤마다 다시 그리지 않고 기준선을 넘을 때 한 번 바뀐다)
+ */
+export function HeadTitle({
+  name,
+  price,
+  rightW = null,
+}: {
+  name: string;
+  /** unit: 시세 머리 가격 옆 단위와 같은 글 ('원' · 'USD') */
+  price: { text: string; unit: string; rate: string; color: string; rateColor: string; a11y: string } | null;
+  /** 머리 오른쪽 버튼의 실제 폭 (부르는 쪽이 잰 값, 모르면 null — lib/detailLayout headTitleMaxWidth) */
+  rightW?: number | null;
+}) {
+  const t = useTheme();
+  // 머리의 뒤로 버튼·오른쪽 버튼 자리를 뺀 폭까지만 (네이티브 머리가 제목 칸 폭을 정해 주지 않아 긴 이름이 오른쪽 버튼을 덮지 않게)
+  const { width: winW, fontScale } = useWindowDimensions();
+  const maxW = headTitleMaxWidth(winW, rightW);
+  // 좁으면 이름 4자는 남기고 단위 → 등락률 순으로 뺀다 (현재가는 늘 — lib/detailLayout headPriceParts)
+  const parts = price ? headPriceParts(maxW, name, price, fontScale) : null;
+  const [fade] = useState(() => new Animated.Value(price ? 1 : 0));
+  const on = price !== null;
+  useEffect(() => {
+    if (!on) {
+      fade.setValue(0);
+      return;
+    }
+    Animated.timing(fade, { toValue: 1, duration: oneHand.headFadeMs, useNativeDriver: Platform.OS !== "web" }).start();
+  }, [on, fade]);
+  return (
+    <View style={[styles.headTitle, { maxWidth: maxW }]} accessible accessibilityRole="header" accessibilityLabel={price ? `${name}, ${price.a11y}` : name}>
+      <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome}>
+        {name}
+      </Text>
+      {price ? (
+        <Animated.View style={[styles.headPrice, { opacity: fade }]}>
+          <Text style={{ color: price.color, fontSize: font.h2, fontWeight: "800", fontVariant: ["tabular-nums"] }} maxFontSizeMultiplier={fontCap.chrome}>
+            {price.text}
+          </Text>
+          {parts?.unit ? (
+            <Text style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={fontCap.chrome}>
+              {price.unit}
+            </Text>
+          ) : null}
+          {parts?.rate ? (
+            <Text style={{ color: price.rateColor, fontSize: font.small, fontWeight: "700", fontVariant: ["tabular-nums"] }} maxFontSizeMultiplier={fontCap.chrome}>
+              {price.rate}
+            </Text>
+          ) : null}
+        </Animated.View>
+      ) : null}
+    </View>
+  );
+}
+
+
 const sub = (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] });
 
 const styles = StyleSheet.create({
@@ -591,4 +699,9 @@ const styles = StyleSheet.create({
   pagerText: { fontSize: font.small, fontWeight: "600", fontVariant: ["tabular-nums"], textAlign: "center", minWidth: space.xl * 2 },
   watch: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: touch.min, paddingHorizontal: space.xs },
   headRow2: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.md, rowGap: space.xxs, paddingLeft: touch.min + space.sm, paddingBottom: space.s },
+  // 3-24 아래 고정 막대 · 머리 제목
+  bar: { flexDirection: "row", gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.s, borderTopWidth: StyleSheet.hairlineWidth },
+  barBtn: { flex: 1, minHeight: touch.min, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.sm },
+  headTitle: { flexDirection: "row", alignItems: "baseline", gap: space.sm, flexShrink: 1 },
+  headPrice: { flexDirection: "row", alignItems: "baseline", gap: space.xs, flexShrink: 0 },
 });

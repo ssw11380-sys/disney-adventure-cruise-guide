@@ -10,6 +10,7 @@ import { Screen } from "@/components/Screen";
 import { Button, Card, ErrorView, Loading, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { formatPrice, isUsMarket } from "@/lib/format";
 import { parseStockCode } from "@/lib/freshness";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { avgText, draftOf, editDraft, holdingPatch, normNum, normText, parseNum, qtyText, rebaseDraft, tradePatch, type Draft, type HoldingPatch, type Norm } from "@/lib/holdingForm";
 import { font, radius, space, useTheme } from "@/theme";
 
@@ -19,10 +20,12 @@ export default function EditStockScreen() {
   // 잘못된 딥링크(다른 앱·웹 페이지가 연 주소 등)는 서버에 묻지 않고 안내만 한다 — 상세 화면과 같은 규칙 (BH-36)
   const c = parseStockCode(code) ?? "";
   const stock = useStock(c);
+  // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
+  const guide = useSettingsGuide();
   if (!c) return <Screen><ErrorView error={new Error("종목 주소가 올바르지 않습니다")} retryLabel="잔고로" onRetry={() => router.dismissTo("/")} /></Screen>;
   // 입력 중에 재조회가 실패해도 폼을 지우지 않는다(값이 한 번이라도 왔으면 폼 유지)
   if (!stock.data && !stock.isError) return <Screen><Loading /></Screen>;
-  if (!stock.data) return <Screen><ErrorView error={stock.error ?? new Error("종목을 찾을 수 없습니다")} onRetry={() => void stock.refetch()} /></Screen>;
+  if (!stock.data) return <Screen><ErrorView error={stock.error ?? new Error("종목을 찾을 수 없습니다")} onRetry={() => void stock.refetch()} {...guide} /></Screen>;
   // key 로 종목이 바뀌면 폼 상태를 새로 만든다 (effect 로 setState 하지 않기 위함).
   // updatedAt 은 넣지 않는다: 넣으면 토스 체결 동기화로 같은 종목 값만 바뀌어도 쓰던 메모 등 초안이 지워진다 (PF-07). 같은 종목의 새 서버 값은 칸마다 useDraft 가 맞춘다
   return <EditForm key={stock.data.code} stock={stock.data} />;

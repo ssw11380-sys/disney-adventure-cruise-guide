@@ -1,5 +1,4 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -8,6 +7,7 @@ import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
 import { AXIS_GAP_R, axisWidth, fitAxisWidth, LABEL_PAD, placeInsideLabels, priceDomain, readoutBasis, volumeBars, type InsideLabel, type LabelSpot } from "@/lib/chartBasis";
 import { estimateTextWidth, formatChartValue, maLegendItems } from "@/lib/chartLayout";
 import { formatPct, formatVolume, shownSign } from "@/lib/format";
+import { haptic } from "@/lib/haptics";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
 import { changeColor, font, radius, space, useFontScale, useTheme, type Theme } from "@/theme";
 
@@ -343,7 +343,8 @@ export function PriceChart(p: PriceChartProps) {
       .activateAfterLongPress(220)
       .maxPointers(1)
       .onStart((e) => {
-        void Haptics.selectionAsync();
+        // 십자선 시작 진동: 예전과 같은 selectionAsync. 3-24 플래그 oneHand 가 켜져 있으면 설정 '누를 때 진동'을 따른다 (lib/haptics)
+        haptic("chart");
         ctx.current.setCrossAt(e.x, e.y);
       })
       .onUpdate((e) => ctx.current.setCrossAt(e.x, e.y));

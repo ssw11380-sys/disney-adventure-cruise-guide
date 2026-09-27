@@ -1,8 +1,8 @@
 import type { AnalysisKind } from "@/api/types";
-import { estimateTextWidth } from "@/lib/chartLayout";
+import { estimateTextWidth, NAME_MIN_CHARS } from "@/lib/chartLayout";
 import { clampScale } from "@/lib/textScale";
 import type { FoldLayout } from "@/lib/windowClass";
-import { font, fontCap, foldDetail, layout, space, touch } from "@/tokens";
+import { font, fontCap, foldDetail, layout, oneHand, space, touch } from "@/tokens";
 
 /**
  * 종목 상세의 넓은 창 배치 계산 (3-42 웨이브 C, 기능 플래그 foldLayout). React Native 를 불러오지 않는 순수 모듈 (테스트용).
@@ -193,4 +193,43 @@ export function detailHeaderLayout(o: DetailHeaderInput): DetailHeaderLayout {
   if (fixed + (quote ? gaps + quote : 0) + (state ? gaps + state : 0) <= o.width) return { tier: "one" };
   if (fixed + (quote ? gaps + quote : 0) <= o.width) return { tier: "stateBelow" };
   return { tier: "quoteBelow" };
+}
+
+/**
+ * 스크롤이 시세 머리의 가격 줄을 지나갔는지 (3-24 oneHand — 그러면 머리 제목에 현재가). head: 스크롤 안 시세 머리 칸의 y,
+ * row·rowH: 그 칸 안 가격 줄의 y·높이, y: 스크롤 위치. 가격 줄을 아직 재지 않았으면(rowH 0) 지나가지 않은 것으로
+ */
+export function priceRowPassed(edge: { head: number; row: number; rowH: number }, y: number): boolean {
+  return edge.rowH > 0 && y > edge.head + edge.row + edge.rowH;
+}
+
+/**
+ * 휴대폰 종목 상세 Stack 머리 제목 칸의 최대 폭 (3-24 oneHand — 스크롤하면 이름 옆에 현재가). 네이티브 머리는 제목 칸 폭을 정해 주지 않아
+ * 긴 이름 + 현재가가 오른쪽 버튼을 덮지 않게 직접 막는다: 창 폭 − 제목 시작 x(뒤로 버튼) − 오른쪽 버튼의 실제 폭(잰 값 — 미등록 종목의
+ * '☆ 관심 추가' 글자 버튼은 약 90~120dp, 글자 크기를 따라 넓어진다. 재기 전에는 아이콘 하나 44) − 사이·오른쪽 여백
+ */
+export function headTitleMaxWidth(winW: number, rightW: number | null): number {
+  const right = rightW !== null && rightW > 0 ? rightW : oneHand.headRightW;
+  return Math.max(0, Math.floor(winW - oneHand.headStartX - right - oneHand.headEndGap));
+}
+
+/**
+ * 머리 제목에서 현재가 옆에 단위·등락률을 둘지 (3-24 oneHand 리뷰 수정 — 순수 함수). 현재가(= 시세 머리 값)는 늘 두고,
+ * 이름은 앞 NAME_MIN_CHARS(4)자 + '…' 만큼은 남긴다(그보다 짧은 이름은 전부). 모자라면 단위('원'·'USD')를 먼저, 그다음 등락률을 뺀다
+ * — 예전에는 가격 묶음을 먼저 지켜 411dp·글자 130% 의 긴 이름이 '디…' 한 글자까지 줄어 어느 종목인지 알 수 없었다.
+ * 폭은 어림(estimateTextWidth — 실제 글꼴보다 조금 넓게). 글자 배율은 머리 글자 상한(fontCap.chrome)까지. 화면 읽기 글은 늘 전부 읽는다
+ */
+export function headPriceParts(maxW: number, name: string, price: { text: string; unit: string; rate: string }, fontScale: number): { unit: boolean; rate: boolean } {
+  const s = clampScale(fontScale, fontCap.chrome);
+  const chars = [...name];
+  const keep = chars.length <= NAME_MIN_CHARS ? name : `${chars.slice(0, NAME_MIN_CHARS).join("")}…`;
+  const nameW = estimateTextWidth(keep, font.h2 * s);
+  // 가격은 굵게(800) 그려 어림보다 조금 넓다 → 5% 더
+  const priceW = estimateTextWidth(price.text, font.h2 * s) * 1.05;
+  const unitW = space.xs + estimateTextWidth(price.unit, font.small * s);
+  const rateW = space.xs + estimateTextWidth(price.rate, font.small * s);
+  const room = maxW - nameW - space.sm - priceW;
+  if (room >= unitW + rateW) return { unit: true, rate: true };
+  if (room >= rateW) return { unit: false, rate: true };
+  return { unit: false, rate: false };
 }

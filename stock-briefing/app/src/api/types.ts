@@ -138,6 +138,11 @@ export interface RegisteredStock {
   updatedAt: string;
   /** 토스 계좌에서 맞추는 종목 (수량·평단 잠김, 삭제하면 동기화에서 빠짐) */
   tossSynced?: boolean;
+  /**
+   * 지우면 토스 동기화에서도 빠지는 종목 (마지막 토스 스냅샷에 있음 — 서버 삭제와 같은 기준). 동기화가 오래 멈췄거나 자동 동기화가 꺼져
+   * 잠금(tossSynced)이 풀린 때도 참. 예전 서버에는 없다 → tossSynced 로 대신 (3-24 지우기 문구)
+   */
+  inTossSnapshot?: boolean;
 }
 
 export interface Evaluation {

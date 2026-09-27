@@ -22,12 +22,39 @@ export function estimateText(stocks: number): string {
   return sec < 60 ? `약 ${Math.ceil(sec / 10) * 10}초` : `약 ${Math.round(sec / 60)}분`;
 }
 
+/**
+ * 빈 브리핑 탭의 '지금 만들기'가 먼저 고르는 세션 (3-24 emptyGuide — 오전·오후를 묻는 창을 한 번 줄인다): 한국 시각 정오 전이면 오전(장 시작 전 브리핑),
+ * 정오부터는 오후(마감 뒤 브리핑). 확인 창에서 다른 세션으로 바꿀 수 있다 (runChoice)
+ */
+export function sessionNow(now: number): "morning" | "afternoon" {
+  const kstHour = new Date(now + 9 * 3_600_000).getUTCHours();
+  return kstHour < 12 ? "morning" : "afternoon";
+}
+
 /** 수동 생성 확인 창 문구 */
 export function runConfirm(session: "morning" | "afternoon", stocks: number): { title: string; message: string } {
   const label = SESSION_KO[session];
   return {
     title: `${label} 브리핑 ${stocks}종목 새로 만들기`,
     message: `${stocks}종목, ${estimateText(stocks)} 걸리며 오늘 ${label} 브리핑을 덮어씁니다. 그동안 다른 생성은 할 수 없습니다.`,
+  };
+}
+
+/**
+ * 빈 브리핑 탭 '지금 만들기' 확인 창 (3-24 emptyGuide): 시각에 맞춘 세션(sessionNow)을 먼저 보이고, 다른 세션으로 바꾸는 버튼을 함께 둔다.
+ * 빈 상태에서는 '수동 생성' 카드(오전·오후)·넓은 창 '⋯'를 숨기므로 다른 세션을 고를 곳이 이 창뿐이다 → 오전에 마감 뒤(오후) 브리핑도 만들 수 있게.
+ * 바꾸기를 누르면 같은 창이 그 세션으로 다시 열린다 (다시 누르면 원래 세션으로)
+ */
+export function runChoice(session: "morning" | "afternoon", stocks: number): { title: string; message: string; other: "morning" | "afternoon"; switchLabel: string } {
+  const c = runConfirm(session, stocks);
+  const other = session === "morning" ? "afternoon" : "morning";
+  // 받침: 오전 → '오전으로', 오후 → '오후로'
+  const otherTo = other === "morning" ? "오전으로" : "오후로";
+  return {
+    title: c.title,
+    message: `${c.message}\n\n${SESSION_KO[other]} 브리핑을 만들려면 '${otherTo} 바꾸기'를 누르세요.`,
+    other,
+    switchLabel: `${otherTo} 바꾸기`,
   };
 }
 

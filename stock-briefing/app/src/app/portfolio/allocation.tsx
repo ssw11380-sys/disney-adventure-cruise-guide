@@ -1,3 +1,4 @@
+import { router } from "expo-router";
 import React, { useMemo } from "react";
 import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -5,16 +6,19 @@ import { useFeature, useStocks } from "@/api/hooks";
 import { AllocationCard } from "@/components/AllocationCard";
 import { usePull } from "@/components/Freshness";
 import { Screen } from "@/components/Screen";
-import { Empty, ErrorView, Loading } from "@/components/ui";
+import { Button, Empty, ErrorView, Loading } from "@/components/ui";
 import { sentence, speakAmount } from "@/lib/a11y";
 import { allocation, excludedNote } from "@/lib/allocation";
 import { allocationGrid, allocationStep, FOLD_COL_GAP, type AllocationStep } from "@/lib/foldScreens";
 import { formatQuote, formatWon } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { useSettings } from "@/lib/settings";
+import { SERVER_SECTION, TOKEN_FIELD, URL_FIELD } from "@/lib/connectionError";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { clampScale } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useSticky } from "@/lib/useSticky";
+import { useUx } from "@/lib/uxFlags";
 import { isWide } from "@/lib/windowClass";
 import { font, space, useTheme } from "@/theme";
 import { foldScreens } from "@/tokens";
@@ -29,10 +33,21 @@ const NOTE_LINE_H = Math.ceil(font.small * 1.45);
 
 export default function AllocationScreen() {
   const on = useFeature("allocationView", false);
+  // 3-24 (연결 오류 안내): 플래그를 한 번도 받지 못한 채 서버에 닿지 않으면(주소·토큰이 틀림) '쓸 수 없음'이 아니라 무엇을 고칠지 + '설정 열기' 하나
+  const ux = useUx();
+  const guide = useSettingsGuide();
   if (!on)
     return (
       <Screen>
-        <Empty title="지금은 비중 보기를 쓸 수 없습니다" hint="잔고 탭에서 계좌 평가를 확인할 수 있습니다." />
+        {ux.flagsMissing && guide ? (
+          <Empty
+            title="서버에 연결되지 않아 비중을 볼 수 없습니다"
+            hint={`설정 > ${SERVER_SECTION}에서 '${URL_FIELD}'와 '${TOKEN_FIELD}'을 확인하세요.`}
+            action={<Button title="설정 열기" icon="settings-outline" accessibilityLabel={`설정 열기, ${SERVER_SECTION}`} onPress={guide.onOpenSettings} />}
+          />
+        ) : (
+          <Empty title="지금은 비중 보기를 쓸 수 없습니다" hint="잔고 탭에서 계좌 평가를 확인할 수 있습니다." />
+        )}
       </Screen>
     );
   return <AllocationBody />;
@@ -43,6 +58,9 @@ function AllocationBody() {
   const stocks = useStocks();
   const { afterCost } = useSettings();
   const { pulling, onPull } = usePull(stocks.refetch);
+  // 3-24 (플래그 emptyGuide): 보유 종목이 없을 때 안내 + 버튼 하나, 연결 오류의 '설정 열기'
+  const ux = useUx();
+  const guide = useSettingsGuide();
   const a = useMemo(() => allocation(stocks.data ?? [], afterCost), [stocks.data, afterCost]);
   // 넓은 창(3-42, 플래그 foldLayout + 폭 600 이상): 카드 4장을 2×2 격자로, 원 옆에 범례 → 4장이 한 화면에. 좁은 창은 지금 그대로.
   // 범례 이름 칸을 먼저 확보한다: 칸이 넉넉하면 한 줄 범례, 좁으면 평가금액을 이름 아래로 내린 두 줄 범례 (lib/foldScreens allocationStep)
@@ -73,7 +91,7 @@ function AllocationBody() {
   if (view === "error")
     return (
       <Screen>
-        <ErrorView error={stocks.error} onRetry={() => void stocks.refetch()} />
+        <ErrorView error={stocks.error} onRetry={() => void stocks.refetch()} {...guide} />
       </Screen>
     );
 
@@ -81,7 +99,15 @@ function AllocationBody() {
   if (a.count === 0)
     return (
       <Screen refreshing={pulling} onRefresh={onPull}>
-        <Empty title="보유 종목이 없습니다" hint={note ?? "수량과 평균 단가를 입력한 종목이 있으면 비중을 보여 줍니다."} />
+        {ux.emptyGuide ? (
+          <Empty
+            title="보유 종목이 없습니다"
+            hint={note ?? "잔고에서 종목을 길게 눌러 수정 화면에서 수량과 평균 단가를 넣으면 비중을 보여 줍니다."}
+            action={<Button title="잔고로" icon="wallet-outline" variant="secondary" onPress={() => (router.canGoBack() ? router.back() : router.dismissTo("/"))} />}
+          />
+        ) : (
+          <Empty title="보유 종목이 없습니다" hint={note ?? "수량과 평균 단가를 입력한 종목이 있으면 비중을 보여 줍니다."} />
+        )}
       </Screen>
     );
 

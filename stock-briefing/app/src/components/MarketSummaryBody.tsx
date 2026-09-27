@@ -6,6 +6,7 @@ import { useFeature, useFeatures, useMarketSummary } from "@/api/hooks";
 import type { CompareRow, HoldingsCompare, MarketSummary, MarketSummaryData, SummaryEvent } from "@/api/types";
 import { BriefingSplit, type BodyLayout } from "@/components/BriefingBody";
 import { StaleBanner } from "@/components/Freshness";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { Screen } from "@/components/Screen";
 import { CardsSkeleton } from "@/components/Skeleton";
 import { Badge, Button, Card, Empty, ErrorView, Muted, SectionTitle, TableHead } from "@/components/ui";
@@ -58,6 +59,8 @@ export function MarketSummaryBody({ numId, layout, title }: { numId: number | nu
   const on = useFeature("marketSummary", false); // 새 기능: 서버가 켤 때만
   const flags = useFeatures();
   const q = useMarketSummary(numId ?? 0, on && numId !== null);
+  // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
+  const guide = useSettingsGuide();
   const data = gated(on, q.data);
   const paneNote = layout === "pane";
 
@@ -82,9 +85,9 @@ export function MarketSummaryBody({ numId, layout, title }: { numId: number | nu
     );
   }
   const view = viewState(q);
-  if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} /></Screen>;
+  if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} /></Screen>;
   if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
-  return <SummaryView s={data} top={layout === "pane" ? null : <StaleBanner query={q} />} layout={layout} title={title} />;
+  return <SummaryView s={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} />;
 }
 
 /**

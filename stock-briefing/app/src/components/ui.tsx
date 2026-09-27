@@ -1,6 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import React from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
+import { addressLine, connectionKind, connectionText, SERVER_SECTION } from "@/lib/connectionError";
 import { shownSign } from "@/lib/format";
 import { changeColor, font, radius, slopFor, space, touch, useTheme } from "@/theme";
 
@@ -212,13 +213,62 @@ export function Loading({ label }: { label?: string }) {
   );
 }
 
-export function ErrorView({ error, onRetry, retryLabel = "다시 시도" }: { error: unknown; onRetry?: () => void; retryLabel?: string }) {
+/**
+ * 오류 화면. onOpenSettings 를 주면(3-24, 기능 플래그 emptyGuide) 서버 연결 오류(주소·인터넷·시간 초과·토큰)일 때
+ * 설정 칸 이름에 맞춘 문구(lib/connectionError)와 '설정 열기'(설정 > 서버 연결 칸을 펼쳐 보여 줌)를 더한다. 그 밖의 오류·주지 않으면 지금 그대로
+ */
+export function ErrorView({ error, onRetry, retryLabel = "다시 시도", onOpenSettings }: { error: unknown; onRetry?: () => void; retryLabel?: string; onOpenSettings?: () => void }) {
   const t = useTheme();
+  const kind = onOpenSettings ? connectionKind(error) : null;
+  if (kind && onOpenSettings) {
+    const c = connectionText(kind);
+    // 지금 묻는 서버 주소 한 줄 (설정의 '서버 주소'와 견줄 수 있게 — 토큰 오류는 없음)
+    const where = addressLine(error);
+    return (
+      <View style={[styles.center, { gap: space.md }]} accessibilityRole="alert">
+        <View style={{ gap: space.xs, alignItems: "center" }}>
+          <Text style={{ color: t.ink, textAlign: "center", fontSize: font.h2, fontWeight: "700" }}>{c.title}</Text>
+          <Text style={{ color: t.sub, textAlign: "center", fontSize: font.small }}>{c.hint}</Text>
+          {where ? (
+            <Text style={{ color: t.muted, textAlign: "center", fontSize: font.tiny }} numberOfLines={2}>
+              {where}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.errorActions}>
+          {onRetry ? <Button title={retryLabel} variant="secondary" compact onPress={onRetry} /> : null}
+          <Button title="설정 열기" icon="settings-outline" compact accessibilityLabel={`설정 열기, ${SERVER_SECTION}`} onPress={onOpenSettings} />
+        </View>
+      </View>
+    );
+  }
   const message = error instanceof Error ? error.message : String(error);
   return (
     <View style={[styles.center, { gap: space.md }]}>
       <Text style={{ color: t.sub, textAlign: "center", fontSize: font.small }}>{message}</Text>
       {onRetry ? <Button title={retryLabel} variant="secondary" compact onPress={onRetry} /> : null}
+    </View>
+  );
+}
+
+/**
+ * 작은 칸 안의 오류 글 (3-24 emptyGuide 리뷰 수정 — 종목 검색 결과 칸·지수 차트 아래): onOpenSettings 를 주고 서버 연결 오류(주소·인터넷·
+ * 시간 초과·토큰)면 설정 칸 이름에 맞춘 제목·할 일 + '설정 열기'(글자 버튼, 누르는 영역 44). 아니면(주지 않음·다른 오류) fallback(지금 글) 그대로
+ */
+export function ConnectionLine({ error, onOpenSettings, fallback, style }: { error: unknown; onOpenSettings?: () => void; fallback: React.ReactNode; style?: StyleProp<ViewStyle> }) {
+  const t = useTheme();
+  const kind = onOpenSettings ? connectionKind(error) : null;
+  if (!kind || !onOpenSettings) return <>{fallback}</>;
+  const c = connectionText(kind);
+  return (
+    <View style={[{ gap: space.xxs, alignItems: "flex-start" }, style]}>
+      <Text style={{ color: t.danger, fontSize: font.small, fontWeight: "700" }} accessibilityRole="alert">
+        {c.title}
+      </Text>
+      <Text style={{ color: t.sub, fontSize: font.small }}>{c.hint}</Text>
+      <Pressable onPress={onOpenSettings} accessibilityRole="button" accessibilityLabel={`설정 열기, ${SERVER_SECTION}`} hitSlop={slopFor(font.small * 1.35, space.sm)} style={{ paddingVertical: space.xxs }}>
+        <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "700" }}>설정 열기</Text>
+      </Pressable>
     </View>
   );
 }
@@ -325,6 +375,8 @@ const styles = StyleSheet.create({
   badge: { borderWidth: 1, borderRadius: 3, paddingHorizontal: space.xs, paddingVertical: space.xxs },
   rateBox: { minWidth: 64, alignItems: "flex-end", borderRadius: 3, paddingHorizontal: space.s, paddingVertical: space.xxs },
   center: { alignItems: "center", justifyContent: "center", padding: space.xl },
+  // 오류 화면 버튼 두 개 (다시 시도 · 설정 열기) — 큰 글씨로 넘치면 다음 줄로
+  errorActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: space.sm },
   kv: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth },
   // 줄바꿈 이름·값 줄 (RowWrapContext): 한 줄에 안 들어가면 값이 이름 아래 줄 오른쪽으로 (이름은 줄이지 않는다)
   kvWrap: { flexWrap: "wrap", columnGap: space.md, rowGap: space.xxs },

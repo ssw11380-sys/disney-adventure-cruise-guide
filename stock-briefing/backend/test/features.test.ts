@@ -21,7 +21,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
       now: NOW,
     });
     try {
-      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true }, updatedAt: null });
+      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true }, updatedAt: null });
       const history = async () => ((await app.inject({ method: "GET", url: "/api/admin/toss/reconcile" })).json() as { history: unknown[] }).history.length;
       expect((await app.inject({ method: "POST", url: "/api/admin/toss/import-holdings" })).statusCode).toBe(200);
       await vi.waitFor(async () => expect(await history()).toBe(1)); // 대조는 동기화를 기다리지 않고 뒤에서 돈다
@@ -72,7 +72,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect((await new FeatureService(db, NOW).all()).features).toMatchObject({ tossReconcile: false, briefingSources: false });
     await db.updateTable("meta").set({ value: JSON.stringify({ overrides: { briefingSources: false, removedFlag: true }, updatedAt: "x" }) }).where("key", "=", "features").execute();
     const b = new FeatureService(db, NOW);
-    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true });
+    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true });
     await db.destroy();
   });
 
@@ -134,6 +134,29 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect(detail?.description).toMatch(/보유/);
     expect(detail?.description).toMatch(/끄면/);
     expect((await f.set({ detailPolish: null })).features.detailPolish).toBe(true);
+    await db.destroy();
+  });
+
+  it("3-24 한 손 조작·첫 실행 안내·빈 화면 안내(oneHand·firstRun·emptyGuide)는 앱만 쓰는 플래그: 기본 켜짐, 하나씩 끌 수 있음", async () => {
+    const db = await createMigratedDb(":memory:");
+    const f = new FeatureService(db, NOW);
+    const on = (await f.all()).features;
+    expect([on.oneHand, on.firstRun, on.emptyGuide]).toEqual([true, true, true]);
+    await f.set({ oneHand: false });
+    const all = (await f.all()).features;
+    expect([all.oneHand, all.firstRun, all.emptyGuide, all.detailPolish]).toEqual([false, true, true, true]);
+    const detail = await f.detail();
+    expect(detail.find((x) => x.key === "oneHand")).toMatchObject({ enabled: false, default: true, overridden: true });
+    expect(detail.find((x) => x.key === "oneHand")?.description).toMatch(/동기화 제외/);
+    expect(detail.find((x) => x.key === "firstRun")?.description).toMatch(/토큰 입력 없음/);
+    // 관리 API 설명이 지금 판단 방식과 같게: 이번 실행에서 받은 서버 자료(종목 0개 + 토스 연동 없음) — 예전 기기 흔적 방식이 아님 (리뷰 수정 3)
+    expect(detail.find((x) => x.key === "firstRun")?.description).toMatch(/이번 실행에서 서버에서 새로 받은 자료로 등록 종목 0개 \+ 토스 연동 기록 없음/);
+    expect(detail.find((x) => x.key === "firstRun")?.description).not.toMatch(/사용 흔적/);
+    expect(detail.find((x) => x.key === "emptyGuide")?.description).toMatch(/틀린 서버 주소/);
+    expect(detail.find((x) => x.key === "emptyGuide")?.description).toMatch(/마지막으로 받은 값이 켬/);
+    expect(detail.find((x) => x.key === "emptyGuide")?.description).toMatch(/설정 열기/);
+    for (const k of ["oneHand", "firstRun", "emptyGuide"]) expect(detail.find((x) => x.key === k)?.description).toMatch(/끄면/);
+    expect((await f.set({ oneHand: null })).features.oneHand).toBe(true);
     await db.destroy();
   });
 });

@@ -7,10 +7,11 @@ import { useRegisteredCodes, useSearch, useStockMutations } from "@/api/hooks";
 import type { ListedStock } from "@/api/types";
 import { Screen } from "@/components/Screen";
 import { LineHead, LineMark, StockLine } from "@/components/StockLine";
-import { Button, Card, Muted } from "@/components/ui";
+import { Button, Card, ConnectionLine, Muted } from "@/components/ui";
 import { formatPct, formatQuote, isUsMarket } from "@/lib/format";
 import { holdingInput, NO_AVG_NOTE } from "@/lib/holdingForm";
 import { useRecentSearches, type RecentStock } from "@/lib/recentSearch";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { changeColor, font, radius, slopFor, space, useTheme } from "@/theme";
 
 /**
@@ -28,6 +29,8 @@ export default function AddStockScreen() {
   const { codes: registered, refresh: refreshRegistered } = useRegisteredCodes();
   const recent = useRecentSearches();
   const { register } = useStockMutations();
+  // 3-24 (emptyGuide — 빈 잔고의 '종목 검색'이 여는 화면): 검색이 서버 연결 오류로 실패하면 칸 이름 문구 + '설정 열기'. 꺼져 있으면 null → 지금 글 그대로
+  const guideProps = useSettingsGuide();
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(q), 150);
@@ -176,7 +179,12 @@ export default function AddStockScreen() {
           <Muted style={{ paddingHorizontal: space.lg }}>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
         )
       ) : search.isError ? (
-        <Text style={{ color: t.danger, paddingHorizontal: space.lg }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>
+        <ConnectionLine
+          error={search.error}
+          {...guideProps}
+          style={{ paddingHorizontal: space.lg }}
+          fallback={<Text style={{ color: t.danger, paddingHorizontal: space.lg }}>{search.error instanceof Error ? search.error.message : "검색 실패"}</Text>}
+        />
       ) : (
         <FlatList
           data={search.data?.results ?? []}
