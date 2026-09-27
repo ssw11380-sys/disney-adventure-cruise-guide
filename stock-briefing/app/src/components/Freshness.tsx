@@ -2,7 +2,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { Quote } from "@/api/types";
-import { authBanner, connectionKind, SERVER_SECTION } from "@/lib/connectionError";
+import { addressBanner, authBanner, connectionKind, SERVER_SECTION } from "@/lib/connectionError";
 import { chartNotice, clockLabel, connection, liveLabel, OPEN_MAX_AGE_MS, staleBanner, streamFresh, type LiveTone, type QueryLike } from "@/lib/freshness";
 import { haptic } from "@/lib/haptics";
 import { feedHealthy, liveCounts, marketSessions, recheckIn, sessionStatus } from "@/lib/liveDot";
@@ -39,12 +39,16 @@ export function StaleBanner({
   // 토큰이 틀려 실패 중이면 "다시 연결 중" 대신 무엇을 고쳐야 하는지
   const error = (query as { error?: unknown }).error;
   const auth = conn.offline && (error as { status?: number } | null | undefined)?.status === 401;
-  const guide = onOpenSettings && conn.offline && connectionKind(error) !== null ? onOpenSettings : undefined;
+  const kind = onOpenSettings && conn.offline ? connectionKind(error) : null;
+  const guide = kind !== null ? onOpenSettings : undefined;
   const text = auth
     ? guide
       ? authBanner(clockLabel(conn.asOf!, now))
       : `토큰 확인 필요 · ${clockLabel(conn.asOf!, now)} 기준 · 설정에서 토큰 입력`
-    : staleBanner(conn, { open, now });
+    : // 서버에는 닿지만 앱의 서버가 아닌 주소: '다시 연결 중' 대신 무엇을 고칠지 (3-24 — 오른쪽에 '설정 열기')
+      kind === "address"
+      ? addressBanner(clockLabel(conn.asOf!, now))
+      : staleBanner(conn, { open, now });
   if (!text) return null;
   const color = conn.offline ? t.danger : t.warn;
   if (guide)

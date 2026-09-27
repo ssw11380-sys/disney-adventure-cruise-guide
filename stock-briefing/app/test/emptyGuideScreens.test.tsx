@@ -134,7 +134,7 @@ beforeEach(() => {
   forgetWindowClass();
 });
 
-const draw = (el: React.ReactElement, emptyGuide: boolean) => render(<UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide, connectionGuide: emptyGuide }}>{el}</UxFlagsContext.Provider>);
+const draw = (el: React.ReactElement, emptyGuide: boolean) => render(<UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide, connectionGuide: emptyGuide, flagsMissing: false }}>{el}</UxFlagsContext.Provider>);
 const empties = (r: ReturnType<typeof render>) => r.all().filter((n) => n.type === "Empty");
 const buttonsOf = (n: HostNode) => {
   const out: HostNode[] = [];
@@ -188,17 +188,50 @@ describe("브리핑: 종목 없음 · 브리핑 없음", () => {
     expect(buttonsOf(off)).toHaveLength(0);
   });
 
-  it("종목은 있는데 만든 브리핑이 없으면 안내 + '지금 만들기' 하나 (오전·오후를 고르는 창)", () => {
+  it("종목은 있는데 만든 브리핑이 없으면 안내 + '지금 만들기' 하나 → 누른 시각의 세션 확인 창 바로 (오전·오후 고르기 없음), 수동 생성 카드는 숨김", () => {
     h.latest = [{ code: "005930", name: "삼성전자", latest: null }];
     h.stocks = [holding("005930", quote("005930", 84_300), 10, 70_000, undefined, "삼성전자")];
-    const r = draw(<BriefingsScreen />, true);
+    h.flags = { allocationView: true, briefingManualRun: true };
+    const now = vi.spyOn(Date, "now");
+    try {
+      const r = draw(<BriefingsScreen />, true);
+      const e = empties(r)[0]!;
+      expect(e.props.title).toBe("생성된 브리핑이 없습니다");
+      const btns = buttonsOf(e);
+      expect(btns.map((b) => b.props.title)).toEqual(["지금 만들기"]);
+      // 같은 일을 하는 '수동 생성' 카드(오전·오후 브리핑)는 빈 화면에서는 없다 — 한 화면에 같은 버튼이 셋이 되지 않게
+      expect(r.text()).not.toContain("수동 생성");
+      expect(r.all().some((n) => n.type === "Button" && (n.props.title === "오전 브리핑" || n.props.title === "오후 브리핑"))).toBe(false);
+      // 한국 시각 09:10 → 오전
+      now.mockReturnValue(Date.parse("2026-09-28T00:10:00Z"));
+      press(btns[0]!);
+      expect(h.alert.mock.calls[0]![0]).toBe("오전 브리핑 1종목 새로 만들기");
+      // 한국 시각 16:00 → 오후
+      now.mockReturnValue(Date.parse("2026-09-28T07:00:00Z"));
+      press(btns[0]!);
+      expect(h.alert.mock.calls[1]![0]).toBe("오후 브리핑 1종목 새로 만들기");
+    } finally {
+      now.mockRestore();
+    }
+    // 꺼져 있으면 수동 생성 카드 그대로
+    expect(draw(<BriefingsScreen />, false).text()).toContain("수동 생성");
+  });
+});
+
+describe("비중: 플래그를 받지 못한 채 서버에 닿지 않음 (주소·토큰이 틀림)", () => {
+  it("'쓸 수 없음' 대신 무엇을 고칠지 + '설정 열기' 하나 (스택 위 화면 — 설정 탭까지 닫고 간다)", () => {
+    h.flags = {};
+    const missing = { oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true, flagsMissing: true };
+    const r = render(<UxFlagsContext.Provider value={missing}><AllocationScreen /></UxFlagsContext.Provider>);
     const e = empties(r)[0]!;
-    expect(e.props.title).toBe("생성된 브리핑이 없습니다");
+    expect(e.props.title).toBe("서버에 연결되지 않아 비중을 볼 수 없습니다");
+    expect(e.props.hint).toBe("설정 > 서버 연결에서 '서버 주소'와 'API 토큰'을 확인하세요.");
     const btns = buttonsOf(e);
-    expect(btns.map((b) => b.props.title)).toEqual(["지금 만들기"]);
-    press(btns[0]!);
-    expect(h.alert.mock.calls[0]![0]).toBe("수동 생성");
-    expect((h.alert.mock.calls[0]![2] as { text: string }[]).map((b) => b.text)).toEqual(["취소", "오전 브리핑", "오후 브리핑"]);
+    expect(btns.map((b) => b.props.title)).toEqual(["설정 열기"]);
+    // 서버가 비중을 꺼 둔 것(플래그를 받음)이면 예전 안내 그대로
+    const off = empties(draw(<AllocationScreen />, true))[0]!;
+    expect(off.props.title).toBe("지금은 비중 보기를 쓸 수 없습니다");
+    expect(buttonsOf(off)).toHaveLength(0);
   });
 });
 

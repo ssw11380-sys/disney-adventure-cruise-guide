@@ -32,6 +32,7 @@ import type { AppErrorSummary, Evaluation,
   TossOpenApiStatus,
   FeatureFlags,
 } from "./types";
+import { authMessage, NOT_JSON } from "@/lib/connectionError";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -40,6 +41,8 @@ export class ApiRequestError extends Error {
     public readonly status: number,
     public readonly code: string,
     message: string,
+    /** 물은 API 경로 (쿼리 포함, 서버 주소 제외) — 늘 있는 목록 경로의 404 를 '틀린 서버 주소'로 알아보는 데 쓴다 (lib/connectionError) */
+    public readonly path?: string,
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -66,7 +69,7 @@ async function exchange(baseUrl: string, token: string, path: string, init: Requ
     return { res, text };
   } catch (e) {
     const aborted = ctrl.signal.aborted || (e as Error).name === "AbortError";
-    throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`);
+    throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`, path);
   } finally {
     clearTimeout(timer);
   }
@@ -136,19 +139,19 @@ function safeParse(text: string): unknown {
 function result<T>(res: Response, text: string): T {
   if (res.status === 204) return undefined as T;
   let json: unknown = null;
+  let parsed = true;
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
     /* 아래에서 처리 */
+    parsed = false;
   }
   if (!res.ok) {
     const err = (json ?? {}) as { error?: string; message?: string };
-    throw new ApiRequestError(
-      res.status,
-      err.error ?? `HTTP_${res.status}`,
-      res.status === 401 ? "API 토큰이 틀리거나 비어 있습니다. 설정 > 서버 주소 아래에 토큰을 입력하세요." : (err.message ?? `서버 오류 (${res.status})`),
-    );
+    throw new ApiRequestError(res.status, err.error ?? `HTTP_${res.status}`, res.status === 401 ? authMessage() : (err.message ?? `서버 오류 (${res.status})`), path);
   }
+  // 성공 응답인데 JSON 이 아니면(웹 페이지 등) 이 앱의 서버가 아니다 — 예전에는 빈 값(null)으로 넘겨 빈 잔고처럼 보였다 (버그 수정)
+  if (!parsed) throw new ApiRequestError(res.status, NOT_JSON, "서버 응답을 읽을 수 없습니다. 이 주소가 앱의 서버가 아닐 수 있습니다.", path);
   return json as T;
 }
 

@@ -52,6 +52,8 @@ interface ScreenProps {
   /** 스크롤 위치를 받을 때 (3-24 종목 상세: 스크롤하면 머리에 현재가). 주지 않으면 지금과 같다 */
   onScroll?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
   scrollEventThrottle?: number;
+  /** 사용자가 목록을 끌기 시작할 때 (3-24 설정 '서버 연결' 칸 맞추기를 멈춘다). 주지 않으면 지금과 같다 */
+  onScrollBeginDrag?: () => void;
 }
 
 /**
@@ -74,7 +76,7 @@ function ReadableScreen(props: ScreenProps) {
   return <ScreenBody {...props} frame={frame} />;
 }
 
-function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentStyle, disclaimer = false, top, frame, scrollRef, bottom, onScroll, scrollEventThrottle }: ScreenProps & { frame?: ViewStyle }) {
+function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentStyle, disclaimer = false, top, frame, scrollRef, bottom, onScroll, scrollEventThrottle, onScrollBeginDrag }: ScreenProps & { frame?: ViewStyle }) {
   const t = useTheme();
   const inTabs = /^\/(\(tabs\))?\/?(briefings|settings)?$/.test(usePathname());
   return (
@@ -88,6 +90,7 @@ function ScreenBody({ children, scroll = true, refreshing, onRefresh, contentSty
           keyboardShouldPersistTaps="handled"
           refreshControl={onRefresh ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} /> : undefined}
           {...(onScroll ? { onScroll, scrollEventThrottle } : null)}
+          {...(onScrollBeginDrag ? { onScrollBeginDrag } : null)}
         >
           {children}
         </ScrollView>

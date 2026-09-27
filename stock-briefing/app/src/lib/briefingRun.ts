@@ -22,6 +22,15 @@ export function estimateText(stocks: number): string {
   return sec < 60 ? `약 ${Math.ceil(sec / 10) * 10}초` : `약 ${Math.round(sec / 60)}분`;
 }
 
+/**
+ * 빈 브리핑 탭의 '지금 만들기'가 만들 세션 (3-24 emptyGuide — 오전·오후를 묻는 창을 한 번 줄인다): 한국 시각 정오 전이면 오전(장 시작 전 브리핑),
+ * 정오부터는 오후(마감 뒤 브리핑). 확인 창은 그대로 거친다
+ */
+export function sessionNow(now: number): "morning" | "afternoon" {
+  const kstHour = new Date(now + 9 * 3_600_000).getUTCHours();
+  return kstHour < 12 ? "morning" : "afternoon";
+}
+
 /** 수동 생성 확인 창 문구 */
 export function runConfirm(session: "morning" | "afternoon", stocks: number): { title: string; message: string } {
   const label = SESSION_KO[session];

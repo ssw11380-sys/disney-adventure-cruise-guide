@@ -2,7 +2,7 @@ import type { AnalysisKind } from "@/api/types";
 import { estimateTextWidth } from "@/lib/chartLayout";
 import { clampScale } from "@/lib/textScale";
 import type { FoldLayout } from "@/lib/windowClass";
-import { font, fontCap, foldDetail, layout, space, touch } from "@/tokens";
+import { font, fontCap, foldDetail, layout, oneHand, space, touch } from "@/tokens";
 
 /**
  * 종목 상세의 넓은 창 배치 계산 (3-42 웨이브 C, 기능 플래그 foldLayout). React Native 를 불러오지 않는 순수 모듈 (테스트용).
@@ -193,4 +193,14 @@ export function detailHeaderLayout(o: DetailHeaderInput): DetailHeaderLayout {
   if (fixed + (quote ? gaps + quote : 0) + (state ? gaps + state : 0) <= o.width) return { tier: "one" };
   if (fixed + (quote ? gaps + quote : 0) <= o.width) return { tier: "stateBelow" };
   return { tier: "quoteBelow" };
+}
+
+/**
+ * 휴대폰 종목 상세 Stack 머리 제목 칸의 최대 폭 (3-24 oneHand — 스크롤하면 이름 옆에 현재가). 네이티브 머리는 제목 칸 폭을 정해 주지 않아
+ * 긴 이름 + 현재가가 오른쪽 버튼을 덮지 않게 직접 막는다: 창 폭 − 제목 시작 x(뒤로 버튼) − 오른쪽 버튼의 실제 폭(잰 값 — 미등록 종목의
+ * '☆ 관심 추가' 글자 버튼은 약 90~120dp, 글자 크기를 따라 넓어진다. 재기 전에는 아이콘 하나 44) − 사이·오른쪽 여백
+ */
+export function headTitleMaxWidth(winW: number, rightW: number | null): number {
+  const right = rightW !== null && rightW > 0 ? rightW : oneHand.headRightW;
+  return Math.max(0, Math.floor(winW - oneHand.headStartX - right - oneHand.headEndGap));
 }

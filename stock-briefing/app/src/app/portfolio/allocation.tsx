@@ -13,7 +13,8 @@ import { allocationGrid, allocationStep, FOLD_COL_GAP, type AllocationStep } fro
 import { formatQuote, formatWon } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { useSettings } from "@/lib/settings";
-import { openServerSettings } from "@/lib/settingsLink";
+import { SERVER_SECTION, TOKEN_FIELD, URL_FIELD } from "@/lib/connectionError";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { clampScale } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useSticky } from "@/lib/useSticky";
@@ -32,10 +33,21 @@ const NOTE_LINE_H = Math.ceil(font.small * 1.45);
 
 export default function AllocationScreen() {
   const on = useFeature("allocationView", false);
+  // 3-24 (연결 오류 안내): 플래그를 한 번도 받지 못한 채 서버에 닿지 않으면(주소·토큰이 틀림) '쓸 수 없음'이 아니라 무엇을 고칠지 + '설정 열기' 하나
+  const ux = useUx();
+  const guide = useSettingsGuide();
   if (!on)
     return (
       <Screen>
-        <Empty title="지금은 비중 보기를 쓸 수 없습니다" hint="잔고 탭에서 계좌 평가를 확인할 수 있습니다." />
+        {ux.flagsMissing && guide ? (
+          <Empty
+            title="서버에 연결되지 않아 비중을 볼 수 없습니다"
+            hint={`설정 > ${SERVER_SECTION}에서 '${URL_FIELD}'와 '${TOKEN_FIELD}'을 확인하세요.`}
+            action={<Button title="설정 열기" icon="settings-outline" accessibilityLabel={`설정 열기, ${SERVER_SECTION}`} onPress={guide.onOpenSettings} />}
+          />
+        ) : (
+          <Empty title="지금은 비중 보기를 쓸 수 없습니다" hint="잔고 탭에서 계좌 평가를 확인할 수 있습니다." />
+        )}
       </Screen>
     );
   return <AllocationBody />;
@@ -48,6 +60,7 @@ function AllocationBody() {
   const { pulling, onPull } = usePull(stocks.refetch);
   // 3-24 (플래그 emptyGuide): 보유 종목이 없을 때 안내 + 버튼 하나, 연결 오류의 '설정 열기'
   const ux = useUx();
+  const guide = useSettingsGuide();
   const a = useMemo(() => allocation(stocks.data ?? [], afterCost), [stocks.data, afterCost]);
   // 넓은 창(3-42, 플래그 foldLayout + 폭 600 이상): 카드 4장을 2×2 격자로, 원 옆에 범례 → 4장이 한 화면에. 좁은 창은 지금 그대로.
   // 범례 이름 칸을 먼저 확보한다: 칸이 넉넉하면 한 줄 범례, 좁으면 평가금액을 이름 아래로 내린 두 줄 범례 (lib/foldScreens allocationStep)
@@ -78,7 +91,7 @@ function AllocationBody() {
   if (view === "error")
     return (
       <Screen>
-        <ErrorView error={stocks.error} onRetry={() => void stocks.refetch()} {...(ux.connectionGuide ? { onOpenSettings: openServerSettings } : null)} />
+        <ErrorView error={stocks.error} onRetry={() => void stocks.refetch()} {...guide} />
       </Screen>
     );
 

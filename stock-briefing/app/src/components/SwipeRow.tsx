@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { haptic } from "@/lib/haptics";
-import { swipeActionWidth, swipeOffset, swipePanConfig, swipeSettleOpen } from "@/lib/rowSwipe";
+import { swipeActionWidth, swipeActiveRange, swipeOffset, swipePanConfig, swipeSettleOpen } from "@/lib/rowSwipe";
 import { useTheme } from "@/theme";
 import { font, fontCap, oneHand, space, touch } from "@/tokens";
 
@@ -27,9 +27,14 @@ export interface SwipeAction {
 
 /** 지금 열린 줄을 닫는 함수 (한 번에 한 줄만 열려 있다) */
 let closeCurrent: (() => void) | null = null;
-/** 열린 줄이 있으면 닫는다 (목록을 새로 그릴 때 등) */
-export function closeOpenRow(): void {
-  closeCurrent?.();
+/**
+ * 열린 줄이 있으면 닫고 true (없으면 false). 잔고 화면이 부른다: 목록을 끌기 시작할 때 · 정렬을 바꿀 때 · 당겨서 새로고침할 때 ·
+ * 다른 줄을 눌렀을 때(그 누름은 닫기만 하고 상세를 열지 않는다 — 열린 줄을 누른 것과 같은 규칙)
+ */
+export function closeOpenRow(): boolean {
+  if (!closeCurrent) return false;
+  closeCurrent();
+  return true;
 }
 
 const NATIVE = Platform.OS !== "web";
@@ -72,11 +77,12 @@ export function SwipeRow({ actions, children, onLayout }: { actions: SwipeAction
   }, [x]);
 
   /* eslint-disable react-hooks/refs -- 아래 콜백은 터치 때만 돈다 (렌더 중 ref 를 읽지 않는다) */
+  // 닫힌 줄은 왼쪽으로 밀 때만 잡는다 (오른쪽으로 밀면 할 일이 없는데 잡으면 줄 누르기만 취소된다). 열린 줄은 양쪽 (오른쪽 = 닫기)
   const gesture = useMemo(
     () =>
       Gesture.Pan()
         .runOnJS(true)
-        .activeOffsetX([-swipePanConfig.activeX, swipePanConfig.activeX])
+        .activeOffsetX(swipeActiveRange(open))
         .failOffsetY([-swipePanConfig.failY, swipePanConfig.failY])
         .maxPointers(1)
         .onStart((e) => {
@@ -94,7 +100,7 @@ export function SwipeRow({ actions, children, onLayout }: { actions: SwipeAction
           const b = box.current;
           b.settle(swipeSettleOpen(e.translationX - b.tx0, e.velocityX, b.startOpen, b.width));
         }),
-    [x],
+    [x, open],
   );
   /* eslint-enable react-hooks/refs */
 

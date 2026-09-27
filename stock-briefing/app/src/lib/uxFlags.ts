@@ -15,28 +15,59 @@ export interface UxFlags {
   firstRun: boolean;
   emptyGuide: boolean;
   /**
-   * 연결 오류 안내('설정 열기'·칸 이름 문구·설정의 서버 연결 칸 펼치기)를 쓸지 = emptyGuide 켜짐, 또는 플래그를 한 번도 받지 못한 채
-   * 플래그 조회가 실패하는 중(서버 주소가 틀렸거나 토큰이 틀려 서버에 닿지 않음 — 서버가 끌 수도 없는 상황).
-   * 서버가 한 번이라도 끔(false)을 준 적이 있으면(기기에 저장된 값 포함) 끔. 빈 화면 안내는 이 값이 아니라 emptyGuide 만 본다
+   * 연결 오류 안내를 쓸지: 오류 화면·끊김 띠의 '설정 열기', 칸 이름에 맞춘 오류 문구, 설정의 서버 연결 칸 펼치기와
+   * 설정의 빈 칸 안내(서버에 닿지 않아 알림·토스 칸이 빔 → '서버 연결 열기').
+   * = emptyGuide 켜짐, 또는 지금 주소에서 플래그를 받지 못한 채(flagsMissing) 기기가 기억한 마지막 emptyGuide 가 끔이 아닐 때
+   * (서버 주소·토큰이 틀리면 플래그도 받을 수 없어 서버가 끌 수 없다 — 규칙 'fallback 꺼짐'의 의도적 예외).
+   * 마지막으로 받은 값은 서버 주소와 상관없이 기억한다(lastEmptyGuide) → 서버가 끔을 준 뒤 주소를 틀리게 바꿔도 켜지지 않는다.
+   * 주요 화면의 빈 상태 안내(잔고·브리핑·발견·비중)는 이 값이 아니라 emptyGuide 만 본다
    */
   connectionGuide: boolean;
+  /** 지금 서버 주소에서 플래그를 한 번도 받지 못한 채 플래그 조회가 실패하는 중 (서버에 닿지 않음·주소·토큰이 틀림) */
+  flagsMissing: boolean;
 }
 
-export const UX_OFF: UxFlags = Object.freeze({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false });
+export const UX_OFF: UxFlags = Object.freeze({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false, flagsMissing: false });
 
-/** 받은 플래그(없으면 undefined)와 플래그 조회 실패 여부로 (순수 함수 — 테스트용) */
-export function uxFlagsFrom(flags: FeatureFlags | undefined, fetchFailed: boolean): UxFlags {
+/**
+ * 받은 플래그(없으면 undefined)와 플래그 조회 실패 여부, 기기가 기억한 마지막 emptyGuide 로 (순수 함수 — 테스트용).
+ * lastEmptyGuide: true/false = 마지막으로 받은 값, null = 받은 적 없음, undefined = 아직 기억을 읽는 중(예외를 켜지 않는다)
+ */
+export function uxFlagsFrom(flags: FeatureFlags | undefined, fetchFailed: boolean, lastEmptyGuide?: boolean | null): UxFlags {
   const emptyGuide = featureOn(flags, "emptyGuide", false);
+  const flagsMissing = flags === undefined && fetchFailed;
   return {
     oneHand: featureOn(flags, "oneHand", false),
     firstRun: featureOn(flags, "firstRun", false),
     emptyGuide,
-    connectionGuide: emptyGuide || (flags === undefined && fetchFailed),
+    connectionGuide: emptyGuide || (flagsMissing && lastEmptyGuide !== false && lastEmptyGuide !== undefined),
+    flagsMissing,
   };
+}
+
+/** 받은 플래그에서 기억할 emptyGuide (플래그를 받지 못했으면 undefined — 기억을 바꾸지 않는다) */
+export function emptyGuideToRemember(flags: FeatureFlags | undefined): boolean | undefined {
+  return flags === undefined ? undefined : featureOn(flags, "emptyGuide", false);
 }
 
 export const UxFlagsContext = React.createContext<UxFlags>(UX_OFF);
 
 export function useUx(): UxFlags {
   return React.useContext(UxFlagsContext);
+}
+
+/**
+ * 한 번 닫으면 다시 보이지 않는 안내 칸 (3-24 emptyGuide, 기기에 기억 — components/UxBridge 의 GuideMarksProvider).
+ *  - watchHintClosed: 잔고 목록 끝 '관심 종목이 없습니다' 칸 (보유만 있고 관심 종목이 없을 때 늘 붙던 칸 — 닫을 수 있게)
+ * 제공자가 없으면(테스트) 닫지 않은 것으로 본다
+ */
+export interface GuideMarks {
+  watchHintClosed: boolean;
+  closeWatchHint: () => void;
+}
+
+export const GuideMarksContext = React.createContext<GuideMarks>({ watchHintClosed: false, closeWatchHint: () => {} });
+
+export function useGuideMarks(): GuideMarks {
+  return React.useContext(GuideMarksContext);
 }

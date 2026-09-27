@@ -17,7 +17,7 @@ import { pickDiscoverCols, type DiscoverColKey } from "@/lib/discoverColumns";
 import { joinRankPages } from "@/lib/rankPages";
 import { TAB_ICON } from "@/lib/textScale";
 import { useSettings } from "@/lib/settings";
-import { openServerSettings } from "@/lib/settingsLink";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useUx } from "@/lib/uxFlags";
 import { isWide } from "@/lib/windowClass";
@@ -135,6 +135,7 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
   const { pulling, onPull } = usePull(q.refetch);
   // 3-24 (플래그 emptyGuide): 빈 순위의 안내 + 버튼 하나, 연결 오류의 '설정 열기'
   const ux = useUx();
+  const guide = useSettingsGuide();
   const marks = useMarks();
   const addWatch = useAddWatch();
   const pages = q.data?.pages;
@@ -165,7 +166,7 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
   );
 
   if (q.isLoading) return <View>{head}<SkeletonRows height={rowH} /></View>;
-  if (q.isError && !items.length) return <ErrorView error={q.error} onRetry={() => void q.refetch()} {...(ux.connectionGuide ? { onOpenSettings: openServerSettings } : null)} />;
+  if (q.isError && !items.length) return <ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} />;
 
   return (
     <FlatList

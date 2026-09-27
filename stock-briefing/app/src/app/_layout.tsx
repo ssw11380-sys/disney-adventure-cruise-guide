@@ -10,7 +10,7 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
-import { FirstRunGate, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
+import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
 import { WidgetBridge } from "@/components/WidgetBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
@@ -151,13 +151,16 @@ export default function RootLayout() {
             <LiveStreamProvider>
               {/* 3-24 플래그(oneHand·firstRun·emptyGuide)를 한 번 받아 아래 화면에 내려 준다 */}
               <UxFlagsProvider>
-                <ThemedStatusBar />
-                <NotificationBridge />
-                <WidgetBridge />
-                <ScreenTracker />
-                <HapticsBridge />
-                <Navigator />
-                <FirstRunGate />
+                <GuideMarksProvider>
+                  <ThemedStatusBar />
+                  <NotificationBridge />
+                  <WidgetBridge />
+                  <ScreenTracker />
+                  <HapticsBridge />
+                  <ConnectionWordingBridge />
+                  <Navigator />
+                  <FirstRunGate />
+                </GuideMarksProvider>
               </UxFlagsProvider>
             </LiveStreamProvider>
           </PersistQueryClientProvider>

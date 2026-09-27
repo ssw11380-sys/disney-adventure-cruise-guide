@@ -16,14 +16,14 @@ import { CardsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { TwoPane } from "@/components/TwoPane";
 import { Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, Segmented } from "@/components/ui";
-import { orderForTab, runConfirm } from "@/lib/briefingRun";
+import { orderForTab, runConfirm, sessionNow } from "@/lib/briefingRun";
 import { accountCardItem } from "@/lib/accountBriefing";
 import { marketCardItem } from "@/lib/marketSummary";
 import { firstPick, gridColumns, isUnread, latestSession, noteListSession, noteTabHeadHidden, pickAuto, pickBriefing, pickByUser, selectedRowId, tabHeadOptions, usePick, type BriefingPick, type PickState } from "@/lib/briefingPick";
 import { markBriefingRead, useReadBriefings } from "@/lib/briefingRead";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
-import { openServerSettings } from "@/lib/settingsLink";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useUx } from "@/lib/uxFlags";
 import { isWide } from "@/lib/windowClass";
@@ -71,9 +71,8 @@ export default function BriefingsScreen() {
   const [order, setOrder] = useState<Order>("movers");
   // 3-24 (플래그 emptyGuide): 빈 목록의 안내 + 버튼 하나, 연결 오류의 '설정 열기'. 꺼져 있으면 지금 그대로
   const ux = useUx();
-  const openSettings = ux.connectionGuide ? openServerSettings : undefined;
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
-  const guideProps = openSettings ? { onOpenSettings: openSettings } : null;
+  const guideProps = useSettingsGuide();
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);
   // 3-42 넓은 창: 플래그가 꺼져 있으면 on=false → 아래는 모두 지금 그대로
   const fold = useFoldLayout();
@@ -158,8 +157,10 @@ export default function BriefingsScreen() {
       </Card>
     ) : null;
   const ratesFailText = moversOn && order === "movers" && stocks.isError ? "등락률을 불러오지 못해 등록순으로 보여 줍니다 · 당겨서 다시 시도" : null;
+  // 3-24 (emptyGuide): 브리핑이 하나도 없으면 빈 화면 안의 버튼 하나가 수동 생성을 맡는다 → 아래 '수동 생성' 카드는 숨긴다 (같은 일 버튼이 셋이 되지 않게)
+  const guideNoBriefing = ux.emptyGuide && items.length > 0 && withBriefing.length === 0;
   const manual =
-    items.length > 0 ? (
+    items.length > 0 && !guideNoBriefing ? (
       <Card>
         <SectionTitle>수동 생성</SectionTitle>
         <View style={{ flexDirection: "row", gap: space.sm }}>
@@ -181,7 +182,8 @@ export default function BriefingsScreen() {
           <Empty
             title="생성된 브리핑이 없습니다"
             hint="평일 장 시작 전·마감 뒤에 자동으로 만들어집니다. 기다리지 않고 지금 만들 수도 있습니다."
-            action={<Button title="지금 만들기" icon="sparkles-outline" variant="secondary" loading={run.isPending} onPress={openMore} />}
+            // 누른 시각에 맞는 세션 하나로 바로 확인 창 (오전·오후를 고르는 창을 거치지 않는다 — 확인 창 제목이 '오전 브리핑 N종목 새로 만들기')
+            action={<Button title="지금 만들기" icon="sparkles-outline" variant="secondary" loading={run.isPending} onPress={() => confirmRun(sessionNow(Date.now()))} />}
           />
         ),
       }

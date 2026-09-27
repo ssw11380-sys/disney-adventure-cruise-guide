@@ -22,6 +22,10 @@ const h = vi.hoisted(() => ({
   navigate: vi.fn(),
   alert: vi.fn(),
   remove: vi.fn(),
+  dismissTo: vi.fn(),
+  canDismiss: false,
+  // 열린 스와이프 줄이 있는지 (components/SwipeRow closeOpenRow 가짜 — 닫았으면 true)
+  closeOpen: vi.fn(() => false),
 }));
 
 vi.mock("react-native", () => ({
@@ -38,7 +42,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 48, left: 0, right: 0 }) }));
 vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
-vi.mock("expo-router", () => ({ router: { push: h.push, navigate: h.navigate }, usePathname: () => "/" }));
+vi.mock("expo-router", () => ({ router: { push: h.push, navigate: h.navigate, dismissTo: h.dismissTo, canDismiss: () => h.canDismiss }, usePathname: () => "/" }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
   return { ...tokens, useTheme: () => tokens.dark, useFontScale: (cap = Infinity) => Math.min(Math.max(h.win.fontScale || 1, 1), cap) };
@@ -68,7 +72,8 @@ vi.mock("@/components/Freshness", () => ({ LiveStatus: "LiveStatus", StaleBanner
 vi.mock("@/components/MarketStrip", () => ({ MarketStrip: "MarketStrip" }));
 vi.mock("@/components/Skeleton", () => ({ HoldingsSkeleton: "HoldingsSkeleton" }));
 vi.mock("@/components/StockRow", () => ({ StockRow: "StockRow" }));
-vi.mock("@/components/SwipeRow", () => ({ SwipeRow: "SwipeRow" }));
+vi.mock("@/components/SwipeRow", () => ({ SwipeRow: "SwipeRow", closeOpenRow: () => h.closeOpen() }));
+vi.mock("@/components/TossImportButton", () => ({ TossImportButton: "TossImportButton" }));
 vi.mock("@/components/StockLine", () => ({ PRICE_HEAD: "현재가·등락률", useLineCols: () => ({ rank: 30, price: 100, right: 108 }) }));
 vi.mock("@/components/HoldingsTableHead", () => ({ TableHeadRow: "TableHeadRow" }));
 vi.mock("@/components/AccountBand", async (orig) => ({ ...(await orig<typeof import("@/components/AccountBand")>()), AccountBand: "AccountBand" }));
@@ -76,7 +81,7 @@ vi.mock("@/components/AccountBand", async (orig) => ({ ...(await orig<typeof imp
 const { default: StocksScreen } = await import("@/app/(tabs)/index");
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const { forgetHoldingsAnchor } = await import("@/lib/holdingsAnchor");
-const { UxFlagsContext } = await import("@/lib/uxFlags");
+const { GuideMarksContext, UxFlagsContext } = await import("@/lib/uxFlags");
 const { installHaptics, setHapticPolicy } = await import("@/lib/haptics");
 const { ApiRequestError } = await import("@/api/client");
 
@@ -101,7 +106,10 @@ beforeEach(() => {
   h.stocks = STOCKS;
   h.stocksError = null;
   h.health = undefined;
-  for (const f of [h.setSort, h.push, h.navigate, h.alert, h.remove]) f.mockReset();
+  for (const f of [h.setSort, h.push, h.navigate, h.alert, h.remove, h.dismissTo]) f.mockReset();
+  h.canDismiss = false;
+  h.closeOpen.mockReset();
+  h.closeOpen.mockReturnValue(false);
   haptics.length = 0;
   installHaptics(engine, "android");
   setHapticPolicy({ oneHand: true, user: true });
@@ -109,7 +117,7 @@ beforeEach(() => {
   forgetHoldingsAnchor();
 });
 
-const ux = (o: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean }>) => ({ oneHand: false, firstRun: false, emptyGuide: false, ...o, connectionGuide: !!o.emptyGuide });
+const ux = (o: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean }>) => ({ oneHand: false, firstRun: false, emptyGuide: false, ...o, connectionGuide: !!o.emptyGuide, flagsMissing: false });
 const draw = (flags: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean }> = {}) =>
   render(
     <UxFlagsContext.Provider value={ux(flags)}>
@@ -256,17 +264,26 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
 
   it("등록 종목 0: 안내 문구 + '종목 검색' 하나 (예전: 토스 연동이면 버튼 둘)", () => {
     h.stocks = [];
-    h.health = { tossOpenApi: { configured: true } };
-    const before = render(<StocksScreen />);
-    expect(buttonsIn(before)).toHaveLength(2);
     const r = draw({ emptyGuide: true });
     const buttons = buttonsIn(r);
     expect(buttons).toHaveLength(1);
     expect(buttons[0]!.props.title).toBe("종목 검색");
+    expect(byType(r, "TossImportButton")).toHaveLength(0);
     expect(r.text()).toContain("등록된 종목이 없습니다");
-    expect(r.text()).toContain("설정 > 토스증권 연동");
     (buttons[0]!.props.onPress as () => void)();
     expect(h.push).toHaveBeenCalledWith("/stocks/add");
+  });
+
+  it("토스가 연결된 서버: 하나뿐인 버튼은 '토스 계좌 불러오기'(가장 필요한 일 — 설정으로 보내지 않고 바로), 검색은 글로 안내", () => {
+    h.stocks = [];
+    h.health = { tossOpenApi: { configured: true } };
+    const before = render(<StocksScreen />);
+    expect(buttonsIn(before)).toHaveLength(2);
+    const r = draw({ emptyGuide: true });
+    expect(buttonsIn(r)).toHaveLength(0);
+    expect(byType(r, "TossImportButton")).toHaveLength(1);
+    expect(r.text()).toContain("토스증권 계좌의 보유 종목을 바로 불러올 수 있습니다");
+    expect(r.text()).toContain("검색(돋보기)");
   });
 
   it("보유만 있고 관심이 없으면 목록 끝에 관심 빈 칸 (버튼 하나), 관심이 있으면 없음", () => {
@@ -277,6 +294,8 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
     expect(r.text()).toContain("관심 종목이 없습니다");
     const buttons = buttonsIn(r);
     expect(buttons.map((b) => b.props.title)).toEqual(["관심 종목 찾기"]);
+    // 닫기(누르는 영역 44 — hitSlop)
+    expect(r.all().some((n) => n.props.accessibilityLabel === "관심 종목 안내 닫기")).toBe(true);
     h.stocks = STOCKS;
     expect(draw({ emptyGuide: true }).text()).not.toContain("관심 종목이 없습니다");
     h.stocks = [samsung, naver];
@@ -290,7 +309,9 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
     const err = byType(r, "ErrorView")[0]!;
     expect(typeof err.props.onOpenSettings).toBe("function");
     (err.props.onOpenSettings as () => void)();
+    // 잔고는 탭 안이라 탭만 바꾼다 (navigate — 스택 위 화면은 dismissTo, lib/settingsLink)
     expect(h.navigate).toHaveBeenCalledTimes(1);
+    expect(h.dismissTo).not.toHaveBeenCalled();
     expect(h.navigate.mock.calls[0]![0]).toMatchObject({ pathname: "/settings", params: { open: "server" } });
     // 꺼져 있으면 속성을 넘기지 않는다
     expect(byType(render(<StocksScreen />), "ErrorView")[0]!.props).not.toHaveProperty("onOpenSettings");
@@ -301,7 +322,7 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
   it("플래그를 한 번도 못 받은 채 서버에 닿지 않으면(connectionGuide 만): '설정 열기'는 있고 빈 화면 안내는 예전 그대로", () => {
     h.stocks = undefined;
     h.stocksError = new ApiRequestError(0, "NETWORK", "서버에 연결할 수 없습니다: http://wrong");
-    const only = { oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true };
+    const only = { oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true, flagsMissing: true };
     const r = render(
       <UxFlagsContext.Provider value={only}>
         <StocksScreen />
@@ -317,5 +338,59 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
       </UxFlagsContext.Provider>,
     );
     expect(buttonsIn(e)).toHaveLength(2);
+  });
+});
+
+describe("oneHand: 열린 줄은 목록을 끌거나 다른 줄을 누르면 닫힌다 (closeOpenRow)", () => {
+  it("열린 줄이 있을 때 다른 줄을 누르면 닫기만 하고 상세를 열지 않는다, 없으면 상세", () => {
+    const r = draw({ oneHand: true });
+    const open = byType(r, "StockRow")[1]!.props.onPress as (s: RegisteredWithQuote) => void;
+    h.closeOpen.mockReturnValueOnce(true);
+    open(naver);
+    expect(h.push).not.toHaveBeenCalled();
+    open(naver);
+    expect(h.push).toHaveBeenCalledWith("/stocks/035420");
+  });
+
+  it("목록 끌기 시작 · 당겨서 새로고침 · 정렬 바꾸기에서 닫는다", () => {
+    const r = draw({ oneHand: true });
+    const list = byType(r, "ScrollView")[0]!;
+    (list.props.onScrollBeginDrag as () => void)();
+    expect(h.closeOpen).toHaveBeenCalledTimes(1);
+    const pull = list.props.refreshControl as React.ReactElement<{ onRefresh: () => void }>;
+    pull.props.onRefresh();
+    expect(h.closeOpen).toHaveBeenCalledTimes(2);
+    (r.all().find((n) => n.props.accessibilityLabel === "이름순 정렬")!.props.onPress as () => void)();
+    expect(h.closeOpen).toHaveBeenCalledTimes(3);
+  });
+
+  it("플래그가 꺼져 있으면 목록에 끌기 처리를 붙이지 않는다 (지금 그대로)", () => {
+    expect(byType(render(<StocksScreen />), "ScrollView")[0]!.props).not.toHaveProperty("onScrollBeginDrag");
+    // 넓은 표(스와이프 없음)는 이어 보기의 끌기 처리 그대로 (닫을 줄이 없다)
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    h.flags = { allocationView: true, foldLayout: true };
+    const wide = byType(draw({ oneHand: true }), "ScrollView")[0]!.props.onScrollBeginDrag as () => void;
+    wide();
+    expect(h.closeOpen).not.toHaveBeenCalled();
+  });
+});
+
+describe("emptyGuide: '관심 종목이 없습니다' 칸은 한 번 닫으면 다시 보이지 않는다 (늘 붙는 칸이 되지 않게)", () => {
+  it("닫기 → 기록 (GuideMarks) → 칸 없음", () => {
+    h.stocks = [samsung, naver];
+    h.flags = {};
+    const close = vi.fn();
+    const withMarks = (closed: boolean) =>
+      render(
+        <UxFlagsContext.Provider value={ux({ emptyGuide: true })}>
+          <GuideMarksContext.Provider value={{ watchHintClosed: closed, closeWatchHint: close }}>
+            <StocksScreen />
+          </GuideMarksContext.Provider>
+        </UxFlagsContext.Provider>,
+      );
+    const r = withMarks(false);
+    (r.all().find((n) => n.props.accessibilityLabel === "관심 종목 안내 닫기")!.props.onPress as () => void)();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(withMarks(true).text()).not.toContain("관심 종목이 없습니다");
   });
 });

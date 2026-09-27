@@ -28,6 +28,7 @@ import { useBoxWidth } from "@/lib/useBoxWidth";
 import { useUx } from "@/lib/uxFlags";
 import { isWide } from "@/lib/windowClass";
 import { font, radius, space, touch, useTheme } from "@/theme";
+import { settingsReveal } from "@/tokens";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
 
 /**
@@ -59,18 +60,24 @@ export default function SettingsScreen() {
   const params = useLocalSearchParams<{ open?: string; at?: string }>();
   const openReq = ux.connectionGuide ? serverOpenRequest(params) : null;
   const scrollRef = useRef<ScrollView | null>(null);
-  // '서버 연결' 칸 자리: 칸이 든 기둥의 y(넓은 창 오른쪽 기둥, 휴대폰은 0) + 기둥 안 칸의 y. pending = 펼친 뒤 한 번 더 스크롤
-  const connectPos = useRef({ col: 0, card: 0, known: false, pending: false, expanded: false });
+  // '서버 연결' 칸 자리: 칸이 든 기둥의 y(넓은 창 오른쪽 기둥, 휴대폰은 0) + 기둥 안 칸의 y. pending = 펼친 뒤 한 번 더 스크롤.
+  // until = 이 시각까지는 칸 자리가 바뀔 때마다(위쪽 알림·토스·빈 칸 안내 카드가 늦게 그려져 높이가 바뀜) 다시 맞춘다 — 사용자가 끌면 0 으로 멈춘다
+  const connectPos = useRef({ col: 0, card: 0, known: false, pending: false, expanded: false, until: 0 });
   const scrollToConnect = () => {
     const p = connectPos.current;
     if (!p.known) return;
-    scrollRef.current?.scrollTo({ y: Math.max(0, p.col + p.card - space.sm), animated: true });
+    scrollRef.current?.scrollTo({ y: Math.max(0, p.col + p.card - settingsReveal.topGap), animated: true });
+  };
+  const settling = () => Date.now() < connectPos.current.until;
+  const stopSettling = () => {
+    connectPos.current.until = 0;
   };
   const revealConnect = () => {
     const p = connectPos.current;
     // 이미 펼쳐져 있고 자리를 알면 바로 스크롤. 아니면 펼친 뒤 칸이 자리를 알려 올 때(처음 그릴 때·펼쳐 높이가 바뀔 때) 스크롤 —
     // 펼치기 전 자리로 한 번 스크롤해도 펼친 모습을 알려 올 때까지 기다린다 (펼치기 전에는 목록이 짧아 끝까지 못 내려갈 수 있다)
     p.pending = true;
+    p.until = Date.now() + settingsReveal.settleMs;
     setAdvanced(true);
     if (p.known && p.expanded) {
       p.pending = false;
@@ -91,13 +98,14 @@ export default function SettingsScreen() {
     const p = connectPos.current;
     p.card = e.nativeEvent.layout.y;
     p.known = true;
-    if (p.pending) {
+    if (p.pending || settling()) {
       if (p.expanded) p.pending = false;
       scrollToConnect();
     }
   };
   const onColumnLayout = (e: LayoutChangeEvent) => {
     connectPos.current.col = e.nativeEvent.layout.y;
+    if (settling()) scrollToConnect();
   };
   // 당겨서 새로고침: 서버 상태와, 알림 카드가 보이면 알림 설정('다음 실행' 시각)도 함께 (BH-16)
   const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full ? notifySettings.refetch() : undefined]));
@@ -318,7 +326,7 @@ export default function SettingsScreen() {
     return (
       // 넓은 창은 탭 화면 머리를 숨기므로(공통 틀) 상태 표시줄·좌우 화면 여백을 여기서 둔다 (왼쪽은 세로 탭 막대가 있으면 막대가 맡는다)
       <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingLeft: fold.rail ? 0 : insets.left, paddingRight: insets.right }}>
-      <Screen refreshing={pulling} onRefresh={onPull} {...(ux.connectionGuide ? { scrollRef } : null)}>
+      <Screen refreshing={pulling} onRefresh={onPull} {...(ux.connectionGuide ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
         {/* 넓은 창: 칸이 좁으면 이름·값 줄의 값이 이름 아래 줄로 (큰 글씨에서도 두 칸을 지킨다) */}
         <RowWrapContext.Provider value={true}>
         {/* 두 칸: 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보. 화면 읽기는 왼쪽 칸을 끝까지 읽고 오른쪽 칸으로.
@@ -347,7 +355,7 @@ export default function SettingsScreen() {
       </View>
     );
   return (
-    <Screen refreshing={pulling} onRefresh={onPull} {...(ux.connectionGuide ? { scrollRef } : null)}>
+    <Screen refreshing={pulling} onRefresh={onPull} {...(ux.connectionGuide ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
       {display}
       {notify}
       {toss}

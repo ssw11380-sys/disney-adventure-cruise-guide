@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * 3-24 한 손 조작·빈 화면·첫 실행 안내의 순수 함수: 스와이프 계산 · 햅틱 규칙 · 연결 오류 문구 · 첫 실행 판단 · 지우기 문구 · 설정 열기 주소
  */
-const h = vi.hoisted(() => ({ store: new Map<string, string>(), navigate: vi.fn(), failRead: false }));
+const h = vi.hoisted(() => ({ store: new Map<string, string>(), navigate: vi.fn(), dismissTo: vi.fn(), canDismiss: false, failRead: false }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
     getItem: async (k: string) => {
@@ -11,18 +11,24 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
       return h.store.get(k) ?? null;
     },
     setItem: async (k: string, v: string) => void h.store.set(k, v),
+    multiGet: async (keys: string[]) => {
+      if (h.failRead) throw new Error("읽기 실패");
+      return keys.map((k) => [k, h.store.get(k) ?? null]);
+    },
   },
 }));
-vi.mock("expo-router", () => ({ router: { navigate: h.navigate } }));
+vi.mock("expo-router", () => ({ router: { navigate: h.navigate, dismissTo: h.dismissTo, canDismiss: () => h.canDismiss } }));
 
-const { swipeActionWidth, swipeOffset, swipeOpenWidth, swipeSettleOpen, swipePanConfig } = await import("@/lib/rowSwipe");
+const { swipeActionWidth, swipeActiveRange, swipeOffset, swipeOpenWidth, swipeSettleOpen, swipePanConfig } = await import("@/lib/rowSwipe");
 const { haptic, hapticAllowed, hapticCall, installHaptics, setHapticPolicy } = await import("@/lib/haptics");
-const { authBanner, connectionKind, connectionText } = await import("@/lib/connectionError");
-const { claimFirstRun, FIRST_RUN_KEY, firstRunDecision, forgetFirstRunClaim, markFirstRun, readFirstRun } = await import("@/lib/firstRun");
+const { addressBanner, authBanner, connectionKind, connectionText } = await import("@/lib/connectionError");
+const { cacheFromEarlierRun, claimFirstRun, FIRST_RUN_KEY, firstRunDecision, forgetFirstRunClaim, hasPriorUse, markFirstRun, priorUseFrom, readFirstRun } = await import("@/lib/firstRun");
 const { removeConfirm, removeKind, removeLabel, rowA11yActions } = await import("@/lib/rowActions");
 const { openServerSettings, serverOpenRequest, serverSettingsParams } = await import("@/lib/settingsLink");
 const { ApiRequestError } = await import("@/api/client");
-const { UX_OFF, uxFlagsFrom } = await import("@/lib/uxFlags");
+const { emptyGuideToRemember, UX_OFF, uxFlagsFrom } = await import("@/lib/uxFlags");
+const { headTitleMaxWidth } = await import("@/lib/detailLayout");
+const { sessionNow } = await import("@/lib/briefingRun");
 const { oneHand } = await import("@/tokens");
 /** 차트 드래그 기준 (components/chart/PriceChart chartPanConfig — test/chartGesture 가 지킨다) */
 const chartPanConfig = { activeX: 14, failY: 10 };
@@ -30,6 +36,8 @@ const chartPanConfig = { activeX: 14, failY: 10 };
 beforeEach(() => {
   h.store.clear();
   h.navigate.mockReset();
+  h.dismissTo.mockReset();
+  h.canDismiss = false;
   h.failRead = false;
   forgetFirstRunClaim();
   installHaptics(null, "android");
@@ -130,7 +138,18 @@ describe("연결 오류 문구는 설정 칸 이름('서버 연결' · '서버 �
     expect(connectionKind(new ApiRequestError(0, "TIMEOUT", "서버 응답이 없습니다 (시간 초과)"))).toBe("timeout");
     expect(connectionKind(new ApiRequestError(401, "UNAUTHORIZED", "API 토큰이 틀리거나 비어 있습니다."))).toBe("auth");
     expect(connectionKind(new ApiRequestError(404, "NOT_FOUND", "없음"))).toBeNull();
+    expect(connectionKind(new ApiRequestError(404, "NOT_FOUND", "종목을 찾을 수 없습니다: X", "/api/stocks/X"))).toBeNull();
     expect(connectionKind(new ApiRequestError(500, "HTTP_500", "서버 오류 (500)"))).toBeNull();
+    // 서버에 닿지만 앱의 서버가 아닌 주소: Railway 하위 주소 오타 'Application not found'·다른 사이트 404 웹 페이지(서버 오류 코드 없음)
+    expect(connectionKind(new ApiRequestError(404, "HTTP_404", "Application not found", "/api/stocks?quotes=1"))).toBe("address");
+    expect(connectionKind(new ApiRequestError(404, "HTTP_404", "서버 오류 (404)"))).toBe("address");
+    // 성공 응답인데 JSON 이 아님 (웹 페이지)
+    expect(connectionKind(new ApiRequestError(200, "NOT_JSON", "x", "/api/features"))).toBe("address");
+    // 우리 서버의 없는 주소(NOT_FOUND)라도 늘 있는 목록 경로면 주소(경로)가 틀린 것 — 예: 주소 끝에 '/api' 를 더 붙임
+    expect(connectionKind(new ApiRequestError(404, "NOT_FOUND", "없는 주소입니다: GET /api/api/stocks", "/api/stocks?quotes=1"))).toBe("address");
+    expect(connectionKind(new ApiRequestError(404, "NOT_FOUND", "x", "/health"))).toBe("address");
+    // 5xx 웹 페이지(배포 중 등)는 주소 문제가 아니다
+    expect(connectionKind(new ApiRequestError(502, "HTTP_502", "서버 오류 (502)", "/api/stocks?quotes=1"))).toBeNull();
     expect(connectionKind(new Error("x"))).toBeNull();
     expect(connectionKind(null)).toBeNull();
   });
@@ -139,16 +158,43 @@ describe("연결 오류 문구는 설정 칸 이름('서버 연결' · '서버 �
     expect(connectionText("network")).toEqual({ title: "서버에 연결할 수 없습니다", hint: "인터넷 연결을 확인하세요. 계속되면 설정 > 서버 연결에서 '서버 주소'를 확인하세요." });
     expect(connectionText("timeout").hint).toContain("설정 > 서버 연결에서 '서버 주소'");
     expect(connectionText("auth")).toEqual({ title: "API 토큰이 맞지 않습니다", hint: "설정 > 서버 연결에서 'API 토큰'을 확인하세요." });
+    expect(connectionText("address")).toEqual({ title: "서버 주소가 맞지 않습니다", hint: "이 주소에서 앱의 서버를 찾지 못했습니다. 설정 > 서버 연결에서 '서버 주소'를 확인하세요." });
     expect(authBanner("14:03:21")).toBe("API 토큰 확인 필요 · 14:03:21 기준");
-    for (const k of ["network", "timeout", "auth"] as const) expect(JSON.stringify(connectionText(k))).not.toMatch(/서버 주소 아래/);
+    expect(addressBanner("14:03:21")).toBe("서버 주소 확인 필요 · 14:03:21 기준");
+    for (const k of ["network", "timeout", "auth", "address"] as const) expect(JSON.stringify(connectionText(k))).not.toMatch(/서버 주소 아래/);
   });
 });
 
-describe("첫 실행 안내: 새 사용자(등록 종목 0)만 한 번, 기존 사용자는 건너뜀", () => {
-  it("판단: 목록을 모르면 기다림, 0개면 보임, 있으면 기존 사용자", () => {
+describe("첫 실행 안내: 이 기기에서 처음 쓰는 사람만 한 번, 사용 흔적이 있으면 건너뜀", () => {
+  it("판단: 흔적을 모르면 기다림, 없으면 보임, 있으면 기존 사용자", () => {
     expect(firstRunDecision(undefined)).toBe("wait");
-    expect(firstRunDecision(0)).toBe("show");
-    expect(firstRunDecision(17)).toBe("existing");
+    expect(firstRunDecision(false)).toBe("show");
+    expect(firstRunDecision(true)).toBe("existing");
+  });
+
+  it("사용 흔적: 바꾼 설정·연 브리핑·검색·차트 설정, 지난 실행의 쿼리 캐시 (이번 실행에 적힌 캐시는 아님)", () => {
+    const boot = 1_000_000;
+    const m = (pairs: [string, string | null][]) => new Map(pairs);
+    expect(priorUseFrom(m([]), boot)).toBe(false);
+    expect(priorUseFrom(m([["settings.sort", "profit"]]), boot)).toBe(true);
+    expect(priorUseFrom(m([["briefings.read", "[1]"]]), boot)).toBe(true);
+    // 저절로 적힐 수 있는 키(토큰 이전 등)는 보지 않는다
+    expect(priorUseFrom(m([["settings.apiToken", "x"]]), boot)).toBe(false);
+    expect(cacheFromEarlierRun(JSON.stringify({ timestamp: boot - 1 }), boot)).toBe(true);
+    expect(cacheFromEarlierRun(JSON.stringify({ timestamp: boot + 10 }), boot)).toBe(false);
+    expect(cacheFromEarlierRun(null, boot)).toBe(false);
+    // 모르는 모양은 흔적으로 (확실하지 않을 때 억지로 띄우지 않는다)
+    expect(cacheFromEarlierRun("{", boot)).toBe(true);
+    expect(cacheFromEarlierRun(JSON.stringify({}), boot)).toBe(true);
+  });
+
+  it("저장소: 흔적 읽기, 못 읽으면 있는 것으로", async () => {
+    expect(await hasPriorUse(1_000)).toBe(false);
+    h.store.set("search.recent", "[]");
+    expect(await hasPriorUse(1_000)).toBe(true);
+    h.store.clear();
+    h.failRead = true;
+    expect(await hasPriorUse(1_000)).toBe(true);
   });
 
   it("저장: 본 것·건너뜀을 적고 읽는다. 못 읽으면 본 것으로 (억지로 띄우지 않는다)", async () => {
@@ -195,32 +241,72 @@ describe("지우기 문구: 토스 종목은 '동기화 제외', 보유는 '삭�
 });
 
 describe("플래그 세 개 (서버 값, fallback 꺼짐) + 연결 오류 안내", () => {
-  it("받은 값대로, 없으면 꺼짐. 연결 오류 안내는 emptyGuide 가 켜졌거나, 플래그를 한 번도 못 받은 채 조회가 실패할 때만", () => {
+  it("받은 값대로, 없으면 꺼짐. 연결 오류 안내는 emptyGuide 가 켜졌거나, 플래그를 못 받은 채 조회가 실패하고 마지막으로 받은 값이 끔이 아닐 때", () => {
     const on = { features: { oneHand: true, firstRun: false, emptyGuide: true } } as never;
-    expect(uxFlagsFrom(on, false)).toEqual({ oneHand: true, firstRun: false, emptyGuide: true, connectionGuide: true });
+    expect(uxFlagsFrom(on, false)).toEqual({ oneHand: true, firstRun: false, emptyGuide: true, connectionGuide: true, flagsMissing: false });
     // 받는 중(아직 실패 아님): 모두 꺼짐
-    expect(uxFlagsFrom(undefined, false)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false });
-    // 서버 주소·토큰이 틀려 플래그 조회가 실패: 빈 화면 안내는 꺼진 채, 연결 오류 안내('설정 열기')만 켠다 — 서버가 끌 수도 없는 상황
-    expect(uxFlagsFrom(undefined, true)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true });
-    // 서버가 끔을 준 적이 있으면(저장된 값) 실패 중이어도 끔
+    expect(uxFlagsFrom(undefined, false)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false, flagsMissing: false });
+    // 서버 주소·토큰이 틀려 플래그 조회가 실패, 받은 적 없음: 빈 화면 안내는 꺼진 채, 연결 오류 안내('설정 열기')만 켠다 — 서버가 끌 수도 없는 상황
+    expect(uxFlagsFrom(undefined, true, null)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true, flagsMissing: true });
+    // 마지막으로 받은 값(서버 주소와 상관없이 기기에 기억)이 끔이면: 주소를 틀리게 바꿔 새 주소의 플래그가 없어도 켜지 않는다
+    expect(uxFlagsFrom(undefined, true, false).connectionGuide).toBe(false);
+    expect(uxFlagsFrom(undefined, true, true).connectionGuide).toBe(true);
+    // 기억을 아직 읽는 중이면 켜지 않는다
+    expect(uxFlagsFrom(undefined, true, undefined).connectionGuide).toBe(false);
+    // 지금 주소에서 끔을 받았으면(저장된 값 포함) 실패 중이어도 끔
     const off = { features: { emptyGuide: false } } as never;
-    expect(uxFlagsFrom(off, true).connectionGuide).toBe(false);
-    expect(UX_OFF).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false });
+    expect(uxFlagsFrom(off, true, null).connectionGuide).toBe(false);
+    expect(UX_OFF).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false, flagsMissing: false });
+  });
+
+  it("기억할 값: 받은 플래그의 emptyGuide (받지 못했으면 기억을 바꾸지 않음)", () => {
+    expect(emptyGuideToRemember(undefined)).toBeUndefined();
+    expect(emptyGuideToRemember({ features: { emptyGuide: true } } as never)).toBe(true);
+    expect(emptyGuideToRemember({ features: {} } as never)).toBe(false);
   });
 });
 
 describe("설정 열기: 설정 탭 '서버 연결' 칸 (누를 때마다 새 요청)", () => {
   it("주소와 요청 읽기", () => {
     expect(serverSettingsParams(123)).toEqual({ open: "server", at: "123" });
+    // 탭 안(잔고·브리핑·발견): 탭만 바꾼다
     openServerSettings();
     expect(h.navigate).toHaveBeenCalledTimes(1);
+    expect(h.dismissTo).not.toHaveBeenCalled();
     const arg = h.navigate.mock.calls[0]![0] as { pathname: string; params: { open: string; at: string } };
     expect(arg.pathname).toBe("/settings");
     expect(arg.params.open).toBe("server");
+    // 루트 스택 위(종목 상세·비중·브리핑 상세): 기존 탭까지 닫고 간다 (탭 묶음을 하나 더 쌓지 않게)
+    h.canDismiss = true;
+    openServerSettings();
+    expect(h.navigate).toHaveBeenCalledTimes(1);
+    expect(h.dismissTo).toHaveBeenCalledTimes(1);
+    expect(h.dismissTo.mock.calls[0]![0]).toMatchObject({ pathname: "/settings", params: { open: "server" } });
     expect(serverOpenRequest({ open: "server", at: "5" })).toBe("5");
     expect(serverOpenRequest({ open: ["server"], at: ["6"] })).toBe("6");
     expect(serverOpenRequest({ open: "server" })).toBe("server");
     expect(serverOpenRequest({})).toBeNull();
     expect(serverOpenRequest({ open: "other", at: "1" })).toBeNull();
+  });
+});
+
+describe("그 밖의 계산 (3-24 리뷰 수정)", () => {
+  it("스와이프 시작 범위: 닫힌 줄은 왼쪽만, 열린 줄은 양쪽", () => {
+    expect(swipeActiveRange(false)).toEqual([-14, 100_000]);
+    expect(swipeActiveRange(true)).toEqual([-14, 14]);
+  });
+
+  it("머리 제목 최대 폭: 창 폭 − 제목 시작 72 − 오른쪽 버튼 실제 폭(모르면 44) − 24", () => {
+    expect(headTitleMaxWidth(475, null)).toBe(335);
+    expect(headTitleMaxWidth(475, 112)).toBe(267);
+    // 글자 130% 의 '☆ 관심 추가' (약 128)
+    expect(headTitleMaxWidth(411, 128)).toBe(187);
+    expect(headTitleMaxWidth(100, 200)).toBe(0);
+  });
+
+  it("빈 브리핑 탭 '지금 만들기' 세션: 한국 시각 정오 전 오전, 정오부터 오후 (고정 시계)", () => {
+    expect(sessionNow(Date.parse("2026-09-28T02:59:00Z"))).toBe("morning"); // 11:59 KST
+    expect(sessionNow(Date.parse("2026-09-28T03:00:00Z"))).toBe("afternoon"); // 12:00 KST
+    expect(sessionNow(Date.parse("2026-09-27T20:00:00Z"))).toBe("morning"); // 05:00 KST
   });
 });

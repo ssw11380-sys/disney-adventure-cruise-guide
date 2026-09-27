@@ -31,7 +31,7 @@ import { foldDetail, oneHand } from "@/tokens";
 import { sentence, speakMove, speakRate } from "@/lib/a11y";
 import { haptic } from "@/lib/haptics";
 import { removeConfirm } from "@/lib/rowActions";
-import { openServerSettings } from "@/lib/settingsLink";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { useUx } from "@/lib/uxFlags";
 
 type Tab = AnalysisKind | "news";
@@ -78,12 +78,17 @@ export default function StockDetailScreen() {
   const { showKrw, afterCost } = useSettings();
   // 3-24 플래그: oneHand(아래 막대·머리 현재가·햅틱), emptyGuide(연결 오류의 '설정 열기') — 꺼져 있으면 지금 화면 그대로
   const ux = useUx();
-  const openSettings = ux.connectionGuide ? openServerSettings : undefined;
-  // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
-  const guideProps = openSettings ? { onOpenSettings: openSettings } : null;
+  // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏). 이 화면은 루트 스택 위라 설정 탭까지 닫고 간다 (lib/settingsLink)
+  const guideProps = useSettingsGuide();
   // 스크롤하면 머리에 현재가 (휴대폰·접은 화면, oneHand): 시세 머리의 가격 줄 아래 끝(스크롤 안 위치)을 재어 두고,
   // 스크롤이 그 줄을 지나갈 때만 한 번 바꾼다 — 스크롤마다 화면을 다시 그리지 않아 부드럽다
   const [headPrice, setHeadPrice] = useState(false);
+  // 머리 오른쪽 버튼의 실제 폭 (미등록 종목의 '☆ 관심 추가' 글자 버튼은 아이콘 하나보다 넓다 — 머리 제목 최대 폭에서 뺀다)
+  const [headRightW, setHeadRightW] = useState<number | null>(null);
+  const onHeadRightLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = Math.round(e.nativeEvent.layout.width);
+    setHeadRightW((cur) => (cur === w ? cur : w));
+  }, []);
   const priceEdge = useRef({ head: 0, row: 0, rowH: 0, shown: false });
   const onHeadLayout = useCallback((e: LayoutChangeEvent) => {
     priceEdge.current.head = e.nativeEvent.layout.y;
@@ -337,6 +342,8 @@ export default function StockDetailScreen() {
     ux.oneHand && headPrice && q
       ? {
           text: quote(q.price),
+          // 시세 머리 가격 옆 단위와 같은 글 (달러 종목은 'USD')
+          unit: displayCur === "KRW" ? "원" : "USD",
           rate: formatPct(q.changeRate),
           color: up,
           rateColor: shownColor(q.changeRate, formatPct(q.changeRate)),
@@ -359,9 +366,9 @@ export default function StockDetailScreen() {
             ...(hidHeader ? { headerShown: true } : {}),
             title: name,
             // 3-24 (oneHand): 이름 + 스크롤로 가격 줄이 가려지면 현재가·등락률. 한 번 쓴 뒤 플래그가 꺼지면 기본 제목으로 되돌린다 (화면 옵션은 합쳐진다)
-            ...(ux.oneHand ? { headerTitle: () => <HeadTitle name={name} price={headTitlePrice} /> } : usedHeadTitle ? { headerTitle: undefined } : {}),
-            headerRight: () =>
-              unregistered ? (
+            ...(ux.oneHand ? { headerTitle: () => <HeadTitle name={name} price={headTitlePrice} rightW={headRightW} /> } : usedHeadTitle ? { headerTitle: undefined } : {}),
+            headerRight: () => {
+              const right = unregistered ? (
                 <Pressable onPress={addWatch} disabled={adding} accessibilityRole="button" accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={slopFor(font.small * 1.35, space.xs)} style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginRight: space.sm, paddingHorizontal: space.xs }}>
                   <Ionicons name="star-outline" size={20} color={t.gold} />
                   <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{adding ? "추가 중" : "관심 추가"}</Text>
@@ -370,7 +377,10 @@ export default function StockDetailScreen() {
                 <Pressable onPress={() => router.push(`/stocks/${c}/edit`)} accessibilityRole="button" accessibilityLabel="보유 정보 수정" hitSlop={slopFor(foldDetail.headIcon, space.sm)}>
                   <Ionicons name="create-outline" size={foldDetail.headIcon} color={t.ink} />
                 </Pressable>
-              ),
+              );
+              // 머리 현재가(oneHand)일 때만 폭을 잰다 — 꺼져 있으면 지금 그대로
+              return ux.oneHand ? <View onLayout={onHeadRightLayout}>{right}</View> : right;
+            },
           }}
         />
 

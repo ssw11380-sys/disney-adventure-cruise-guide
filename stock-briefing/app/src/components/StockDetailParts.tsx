@@ -8,7 +8,7 @@ import { BriefingCard } from "@/components/BriefingCard";
 import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
-import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, markdownPreview, shortStamp } from "@/lib/detailLayout";
+import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
 import { analysisView } from "@/lib/freshness";
 import { navLabel, navSpeech, type HoldingsNav } from "@/lib/holdingsNav";
@@ -609,7 +609,17 @@ export function DetailBottomBar({ star, onStar, onChart }: { star: BarStar; onSt
  * 값은 시세 머리와 같은 글(부르는 쪽이 같은 함수로 만든 문자열)을 그대로 받는다 → 머리 현재가 = 시세 머리 값.
  * 가격이 나타날 때만 짧게 흐려졌다 보인다 (스크롤마다 다시 그리지 않고 기준선을 넘을 때 한 번 바뀐다)
  */
-export function HeadTitle({ name, price }: { name: string; price: { text: string; rate: string; color: string; rateColor: string; a11y: string } | null }) {
+export function HeadTitle({
+  name,
+  price,
+  rightW = null,
+}: {
+  name: string;
+  /** unit: 시세 머리 가격 옆 단위와 같은 글 ('원' · 'USD') */
+  price: { text: string; unit: string; rate: string; color: string; rateColor: string; a11y: string } | null;
+  /** 머리 오른쪽 버튼의 실제 폭 (부르는 쪽이 잰 값, 모르면 null — lib/detailLayout headTitleMaxWidth) */
+  rightW?: number | null;
+}) {
   const t = useTheme();
   // 머리의 뒤로 버튼·오른쪽 버튼 자리를 뺀 폭까지만 (네이티브 머리가 제목 칸 폭을 정해 주지 않아 긴 이름이 오른쪽 버튼을 덮지 않게)
   const { width: winW } = useWindowDimensions();
@@ -623,7 +633,7 @@ export function HeadTitle({ name, price }: { name: string; price: { text: string
     Animated.timing(fade, { toValue: 1, duration: oneHand.headFadeMs, useNativeDriver: Platform.OS !== "web" }).start();
   }, [on, fade]);
   return (
-    <View style={[styles.headTitle, { maxWidth: Math.max(0, winW - HEAD_TITLE_SIDES) }]} accessible accessibilityRole="header" accessibilityLabel={price ? `${name}, ${price.a11y}` : name}>
+    <View style={[styles.headTitle, { maxWidth: headTitleMaxWidth(winW, rightW) }]} accessible accessibilityRole="header" accessibilityLabel={price ? `${name}, ${price.a11y}` : name}>
       <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome}>
         {name}
       </Text>
@@ -631,6 +641,9 @@ export function HeadTitle({ name, price }: { name: string; price: { text: string
         <Animated.View style={[styles.headPrice, { opacity: fade }]}>
           <Text style={{ color: price.color, fontSize: font.h2, fontWeight: "800", fontVariant: ["tabular-nums"] }} maxFontSizeMultiplier={fontCap.chrome}>
             {price.text}
+          </Text>
+          <Text style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={fontCap.chrome}>
+            {price.unit}
           </Text>
           <Text style={{ color: price.rateColor, fontSize: font.small, fontWeight: "700", fontVariant: ["tabular-nums"] }} maxFontSizeMultiplier={fontCap.chrome}>
             {price.rate}
@@ -641,8 +654,6 @@ export function HeadTitle({ name, price }: { name: string; price: { text: string
   );
 }
 
-/** 휴대폰 Stack 머리에서 제목 칸 밖의 폭: 뒤로 버튼(56) + 오른쪽 버튼(44 + 여백) + 좌우 여백 */
-const HEAD_TITLE_SIDES = touch.min * 3 + space.lg * 2;
 
 const sub = (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] });
 

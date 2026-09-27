@@ -14,7 +14,8 @@ import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { StockRow } from "@/components/StockRow";
 import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
-import { SwipeRow, type SwipeAction } from "@/components/SwipeRow";
+import { closeOpenRow, SwipeRow, type SwipeAction } from "@/components/SwipeRow";
+import { TossImportButton } from "@/components/TossImportButton";
 import { Button, ErrorView, TableHead } from "@/components/ui";
 import { gated } from "@/lib/features";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
@@ -26,12 +27,12 @@ import { quoteLive, sessionOpen } from "@/lib/liveDot";
 import { excludedLabel, isHolding, sortHoldings, splitHoldings, summarize } from "@/lib/portfolio";
 import { removeConfirm, removeKind, removeLabel } from "@/lib/rowActions";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
-import { openServerSettings } from "@/lib/settingsLink";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { TAB_ICON } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
-import { useUx } from "@/lib/uxFlags";
+import { useGuideMarks, useUx } from "@/lib/uxFlags";
 import { isWide, railWidth } from "@/lib/windowClass";
-import { changeColor, font, fontCap, layout, space, touch, useFontScale, useTheme } from "@/theme";
+import { changeColor, font, fontCap, layout, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 
 /**
  * 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표.
@@ -153,7 +154,12 @@ export default function StocksScreen() {
     confirmRef.current = ux.oneHand ? rowMenu : confirmRemove;
     actionRef.current = (s, a) => (a === "edit" ? openEdit(s) : askRemove(s));
   });
-  const openStock = useCallback((s: RegisteredWithQuote) => router.push(`/stocks/${s.code}`), []);
+  // 스와이프로 열린 줄이 있으면 다른 줄을 누른 것은 그 줄을 닫기만 한다 (상세를 열지 않음 — 열린 줄을 누른 것과 같은 규칙, 3-24).
+  // 열린 줄은 oneHand 가 켜진 휴대폰·접은 화면에만 생기므로 꺼져 있으면 지금 그대로
+  const openStock = useCallback((s: RegisteredWithQuote) => {
+    if (closeOpenRow()) return;
+    router.push(`/stocks/${s.code}`);
+  }, []);
   const longPress = useCallback((s: RegisteredWithQuote) => confirmRef.current(s), []);
   const rowAction = useCallback((s: RegisteredWithQuote, a: "edit" | "remove") => actionRef.current(s, a), []);
   // 휴대폰·접은 화면 줄 스와이프 틀: 줄(StockRow) 안에서 감싸 체결이 온 줄만 틀까지 다시 그린다 (늘 같은 함수 — 줄의 memo 비교를 깨지 않게).
@@ -172,15 +178,23 @@ export default function StocksScreen() {
     },
     [],
   );
-  // 정렬 바꾸기 (3-24: 바꿀 때 짧은 진동 — 플래그·설정이 켜져 있을 때만)
+  // 정렬 바꾸기 (3-24: 바꿀 때 짧은 진동 — 플래그·설정이 켜져 있을 때만. 열린 줄은 닫는다 — 줄 순서가 바뀌므로)
   const pickSort = (k: SortKey) => {
+    closeOpenRow();
     haptic("select");
     void setSort(k);
   };
+  // 목록을 끌기 시작하거나 당겨서 새로고침하면 열린 줄을 닫는다 (휴대폰·접은 화면 스와이프가 켜졌을 때만 — 꺼져 있으면 지금 그대로)
+  const onPullRows = swipeRows
+    ? () => {
+        closeOpenRow();
+        onPull();
+      }
+    : onPull;
+  const marks = useGuideMarks();
   // 서버 연결 오류의 '설정 열기' (3-24, 플래그 emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도: lib/uxFlags connectionGuide)
-  const openSettings = ux.connectionGuide ? openServerSettings : undefined;
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
-  const guideProps = openSettings ? { onOpenSettings: openSettings } : null;
+  const guideProps = useSettingsGuide();
   // 줄 위치 → 이어 보기 (늘 같은 함수: 줄의 memo 비교를 깨지 않게)
   const rowLayout = useCallback((s: RegisteredWithQuote, y: number, h: number) => anchor.row(s.code, isHolding(s) ? "held" : "watch", y, h), [anchor]);
   const onTableLayout = useCallback(
@@ -306,10 +320,13 @@ export default function StocksScreen() {
         등록된 종목이 없습니다
       </Text>
       <Text style={{ color: t.muted, fontSize: font.small }}>
-        종목명이나 티커로 검색해 보유·관심 종목을 추가하세요.{health.data?.tossOpenApi?.configured ? " 토스증권 계좌 종목은 설정 > 토스증권 연동의 '지금 계좌 동기화'로 불러옵니다." : ""}
+        {health.data?.tossOpenApi?.configured
+          ? "토스증권 계좌의 보유 종목을 바로 불러올 수 있습니다. 다른 종목은 위의 검색(돋보기)으로 추가하세요."
+          : "종목명이나 티커로 검색해 보유·관심 종목을 추가하세요."}
       </Text>
       <View style={{ flexDirection: "row", marginTop: space.sm }}>
-        <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />
+        {/* 버튼은 하나: 토스가 연결된 서버면 계좌 불러오기(가장 필요한 일), 아니면 종목 검색 */}
+        {health.data?.tossOpenApi?.configured ? <TossImportButton /> : <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />}
       </View>
     </View>
   ) : (
@@ -322,13 +339,19 @@ export default function StocksScreen() {
       </View>
     </View>
   );
-  // 3-24 관심 빈 상태 (플래그 emptyGuide): 보유 종목만 있고 관심 종목이 없을 때 목록 끝에 한 칸
+  // 3-24 관심 빈 상태 (플래그 emptyGuide): 보유 종목만 있고 관심 종목이 없을 때 목록 끝에 한 칸. 늘 붙는 칸이 되지 않게 닫을 수 있고,
+  // 한 번 닫으면 이 기기에서 다시 보이지 않는다 (GuideMarks)
   const watchEmpty =
-    ux.emptyGuide && summary.held > 0 && sections.every((x) => x.key !== "watch") ? (
+    ux.emptyGuide && !marks.watchHintClosed && summary.held > 0 && sections.every((x) => x.key !== "watch") ? (
       <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} accessibilityRole="header">
-          관심 종목이 없습니다
-        </Text>
+        <View style={styles.hintHead}>
+          <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flex: 1 }} accessibilityRole="header">
+            관심 종목이 없습니다
+          </Text>
+          <Pressable onPress={marks.closeWatchHint} accessibilityRole="button" accessibilityLabel="관심 종목 안내 닫기" hitSlop={slopFor(font.h2, space.xs)} style={styles.hintClose}>
+            <Ionicons name="close" size={font.h2} color={t.muted} />
+          </Pressable>
+        </View>
         <Text style={{ color: t.muted, fontSize: font.small }}>사지 않고 지켜볼 종목은 검색한 뒤 종목 화면의 &apos;관심 추가&apos;로 여기에 모읍니다.</Text>
         <View style={{ flexDirection: "row", marginTop: space.sm }}>
           <Button title="관심 종목 찾기" icon="search" variant="secondary" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />
@@ -380,9 +403,17 @@ export default function StocksScreen() {
         // 위치 재기(onLayout)를 나중에 붙이면 위치가 바뀌기 전까지 알려 주지 않는다. 꺼져 있으면 늘 같은 목록 (지금과 같다)
         key={fold.on ? "fold" : "phone"}
         stickyHeaderIndices={stickyIndices}
-        refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
+        refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPullRows} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
         contentContainerStyle={{ paddingBottom: space.xl }}
         {...tracking}
+        {...(swipeRows
+          ? {
+              onScrollBeginDrag: () => {
+                closeOpenRow();
+                tracking?.onScrollBeginDrag();
+              },
+            }
+          : null)}
       >
         {header}
         {sections.length === 0
@@ -625,6 +656,9 @@ const styles = StyleSheet.create({
   panelActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: space.xs },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
   empty: { margin: space.lg, padding: space.lg, gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
+  // 3-24 관심 안내 칸 제목 줄 + 닫기(오른쪽, 누르는 영역 44)
+  hintHead: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  hintClose: { alignItems: "center", justifyContent: "center" },
   backdrop: { flex: 1, justifyContent: "flex-end" },
   sheet: { borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: space.xl },
   sheetItem: { minHeight: touch.min, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.lg, borderTopWidth: StyleSheet.hairlineWidth },

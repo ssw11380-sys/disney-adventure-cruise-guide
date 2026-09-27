@@ -9,7 +9,7 @@ import { Screen } from "@/components/Screen";
 import { Button, Card, Muted } from "@/components/ui";
 import { markFirstRun } from "@/lib/firstRun";
 import { notifyLine, tossLine, WIDGET_STEPS, type Tone } from "@/lib/welcome";
-import { font, space, useTheme, type Theme } from "@/theme";
+import { font, layout, space, useTheme, type Theme } from "@/theme";
 
 /**
  * 첫 실행 안내 한 화면 (3-24, 기능 플래그 firstRun — 새 사용자에게 한 번 저절로, 설정 > 정보에서 언제든 다시).
@@ -48,17 +48,23 @@ export default function WelcomeScreen() {
   return (
     <Screen
       disclaimer
+      // 넓은 창(펼친 화면 933dp 등)에서 카드·버튼이 창 폭 전체로 늘어나지 않게 읽기 폭까지만 (휴대폰·접은 화면은 창이 더 좁아 그대로)
+      contentStyle={styles.readingW}
       top={
         <View style={[styles.head, { paddingTop: insets.top + space.md, paddingLeft: insets.left + space.lg, paddingRight: insets.right + space.lg, backgroundColor: t.surface, borderBottomColor: t.line }]}>
-          <Text style={{ color: t.ink, fontSize: font.title, fontWeight: "800" }} accessibilityRole="header">
-            처음 사용 안내
-          </Text>
-          <Muted>세 가지만 확인하면 됩니다. 이 안내는 설정 &gt; 정보에서 다시 볼 수 있습니다.</Muted>
+          <View style={[styles.readingW, { gap: space.xs }]}>
+            <Text style={{ color: t.ink, fontSize: font.title, fontWeight: "800" }} accessibilityRole="header">
+              처음 사용 안내
+            </Text>
+            <Muted>세 가지만 확인하면 됩니다. 이 안내는 설정 &gt; 정보에서 다시 볼 수 있습니다.</Muted>
+          </View>
         </View>
       }
       bottom={
         <View style={[styles.foot, { backgroundColor: t.surface, borderTopColor: t.line, paddingLeft: insets.left + space.lg, paddingRight: insets.right + space.lg }]}>
-          <Button title="시작하기" icon="checkmark" onPress={done} accessibilityLabel="안내 닫고 시작하기" />
+          <View style={styles.readingW}>
+            <Button title="시작하기" icon="checkmark" onPress={done} accessibilityLabel="안내 닫고 시작하기" />
+          </View>
         </View>
       }
     >
@@ -112,6 +118,8 @@ const styles = StyleSheet.create({
   sectionHead: { flexDirection: "row", alignItems: "center", gap: space.sm },
   step: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
   stepNo: { fontSize: font.body, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  // 읽기 폭 (layout.readableMax 720) 가운데 — 창이 더 좁으면 창 폭 그대로
+  readingW: { width: "100%", maxWidth: layout.readableMax, alignSelf: "center" },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)

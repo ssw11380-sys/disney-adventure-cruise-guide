@@ -58,9 +58,9 @@ vi.mock("@/components/WidgetRefreshStatus", () => ({ WidgetRefreshStatus: "Widge
 vi.mock("@/components/Screen", async () => {
   const R = await import("react");
   // 받은 스크롤 ref 에 가짜 scrollTo 를 단다 ('서버 연결' 칸까지 스크롤하는지 본다)
-  const Screen = ({ children, scrollRef }: { children: React.ReactNode; scrollRef?: { current: unknown } }) => {
+  const Screen = ({ children, scrollRef, onScrollBeginDrag }: { children: React.ReactNode; scrollRef?: { current: unknown }; onScrollBeginDrag?: () => void }) => {
     if (scrollRef) scrollRef.current = { scrollTo: h.scrollTo };
-    return R.createElement("Screen", { hasScrollRef: !!scrollRef }, children);
+    return R.createElement("Screen", { hasScrollRef: !!scrollRef, onScrollBeginDrag }, children);
   };
   return { Screen };
 });
@@ -82,7 +82,7 @@ beforeEach(() => {
 
 const draw = (flags: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean; connectionGuide: boolean }> = {}) =>
   render(
-    <UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide: false, ...flags, connectionGuide: flags.connectionGuide ?? !!flags.emptyGuide }}>
+    <UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide: false, ...flags, connectionGuide: flags.connectionGuide ?? !!flags.emptyGuide, flagsMissing: false }}>
       <SettingsScreen />
     </UxFlagsContext.Provider>,
   );
@@ -95,14 +95,14 @@ const connectBox = (r: ReturnType<typeof render>): HostNode => {
 const layout = (n: HostNode, y: number, height = 60) => (n.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y, width: 475, height } } });
 
 describe("'설정 열기'로 오면 '서버 연결' 칸을 펼치고 그 칸까지 스크롤", () => {
-  it("펼침 → 칸 자리를 알려 오면 스크롤 (칸 위 8dp)", () => {
+  it("펼침 → 칸 자리를 알려 오면 스크롤 (칸 제목 위 16dp — 제목 윗부분이 잘리지 않게)", () => {
     h.params = { open: "server", at: "1" };
     const r = draw({ emptyGuide: true });
     expect(r.has("서버 주소")).toBe(true);
     expect(r.has("API 토큰")).toBe(true);
     expect(r.byLabel("서버 연결").props.accessibilityState).toEqual({ expanded: true });
     layout(connectBox(r), 900, 260);
-    expect(h.scrollTo).toHaveBeenCalledWith({ y: 892, animated: true });
+    expect(h.scrollTo).toHaveBeenCalledWith({ y: 884, animated: true });
   });
 
   it("사용자가 접은 뒤 다른 화면에서 또 누르면(새 at) 다시 펼친다. 같은 요청으로 다시 그려지면 그대로", () => {
@@ -118,11 +118,42 @@ describe("'설정 열기'로 오면 '서버 연결' 칸을 펼치고 그 칸까�
     expect(r.has("서버 주소")).toBe(true);
   });
 
+  it("펼친 뒤 1.5초 안에 위쪽 카드가 늦게 그려져 칸 자리가 바뀌면 다시 맞춘다. 사용자가 끌면 멈춘다 (고정 시계)", () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000_000);
+      h.params = { open: "server", at: "1" };
+      const r = draw({ emptyGuide: true });
+      layout(connectBox(r), 900, 260);
+      expect(h.scrollTo).toHaveBeenLastCalledWith({ y: 884, animated: true });
+      // 0.8초 뒤 위쪽 알림 카드가 그려져 칸이 120 내려감 → 다시 맞춘다
+      now.mockReturnValue(1_000_800);
+      layout(connectBox(r), 1020, 260);
+      expect(h.scrollTo).toHaveBeenLastCalledWith({ y: 1004, animated: true });
+      expect(h.scrollTo).toHaveBeenCalledTimes(2);
+      // 1.5초가 지나면 더는 따라가지 않는다
+      now.mockReturnValue(1_001_600);
+      layout(connectBox(r), 1100, 260);
+      expect(h.scrollTo).toHaveBeenCalledTimes(2);
+      // 다시 누른 요청: 사용자가 끌기 시작하면 바로 멈춘다
+      h.params = { open: "server", at: "2" };
+      r.rerender();
+      const calls = h.scrollTo.mock.calls.length;
+      (r.all().find((n) => n.type === "Screen")!.props.onScrollBeginDrag as () => void)();
+      now.mockReturnValue(1_001_700);
+      layout(connectBox(r), 1150, 260);
+      expect(h.scrollTo.mock.calls.length).toBe(calls);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("플래그가 꺼져 있으면 검색어를 보지 않고(접힌 채), 칸을 감싸지 않는다", () => {
     h.params = { open: "server", at: "1" };
     const r = draw({});
     expect(r.has("서버 주소")).toBe(false);
     expect(r.all().find((n) => n.type === "Screen")!.props.hasScrollRef).toBe(false);
+    expect(r.all().find((n) => n.type === "Screen")!.props.onScrollBeginDrag).toBeUndefined();
     expect(() => connectBox(r)).toThrow();
   });
 });
@@ -140,7 +171,7 @@ describe("서버에 연결되지 않으면 알림·토스 빈 칸 안내 + 버�
     r.act(() => (btns[0]!.props.onPress as () => void)());
     expect(r.has("서버 주소")).toBe(true);
     layout(connectBox(r), 700, 300);
-    expect(h.scrollTo).toHaveBeenCalledWith({ y: 692, animated: true });
+    expect(h.scrollTo).toHaveBeenCalledWith({ y: 684, animated: true });
   });
 
   it("칸 자리를 알기 전에 두 번 불려도(개발 모드의 effect 두 번 등) 자리를 알려 오면 스크롤한다", () => {
@@ -151,7 +182,7 @@ describe("서버에 연결되지 않으면 알림·토스 빈 칸 안내 + 버�
     r.act(() => (gap().props.onPress as () => void)());
     expect(h.scrollTo).not.toHaveBeenCalled();
     layout(connectBox(r), 640, 300);
-    expect(h.scrollTo).toHaveBeenCalledWith({ y: 632, animated: true });
+    expect(h.scrollTo).toHaveBeenCalledWith({ y: 624, animated: true });
   });
 
   it("토큰 없음(제한된 응답)도 같은 안내, 연결되면 없음, 꺼져 있으면 예전 글", () => {

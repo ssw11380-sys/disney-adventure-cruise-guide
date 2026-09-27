@@ -8,7 +8,7 @@ import { Button, Empty, ErrorView } from "@/components/ui";
 import { speakRate } from "@/lib/a11y";
 import { heatColumns, themeLeaderLineW, themeListColumns } from "@/lib/discoverColumns";
 import { formatDateKo, formatPct } from "@/lib/format";
-import { openServerSettings } from "@/lib/settingsLink";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { useSticky } from "@/lib/useSticky";
 import { useUx } from "@/lib/uxFlags";
 import { changeColor, font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
@@ -56,6 +56,7 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
   const { pulling, onPull } = usePull(q.refetch);
   // 3-24 (플래그 emptyGuide): 빈 목록의 안내 + 버튼 하나, 연결 오류의 '설정 열기'
   const ux = useUx();
+  const guide = useSettingsGuide();
   // 테마/업종·기간을 바꾸는 동안에는 이전 값을 흐리게 보여 준다
   const data = q.data;
   const switching = q.isPlaceholderData;
@@ -212,7 +213,7 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
     return (
       <View style={{ flex: 1 }}>
         {head}
-        <ErrorView error={q.error} onRetry={() => void q.refetch()} {...(ux.connectionGuide ? { onOpenSettings: openServerSettings } : null)} />
+        <ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} />
       </View>
     );
 

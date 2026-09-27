@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   stockError: null as unknown,
   push: vi.fn(),
   navigate: vi.fn(),
+  dismissTo: vi.fn(),
   alert: vi.fn(),
   register: vi.fn(),
   remove: vi.fn(),
@@ -49,7 +50,8 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ t
 vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
 vi.mock("expo-router", () => ({
   Stack: { Screen: "StackScreen" },
-  router: { back: vi.fn(), dismissTo: vi.fn(), push: h.push, navigate: h.navigate, replace: vi.fn(), setParams: vi.fn(), canGoBack: () => true },
+  // 종목 상세는 루트 스택 위 (잔고 탭 위에 쌓임) → canDismiss 참
+  router: { back: vi.fn(), dismissTo: h.dismissTo, push: h.push, navigate: h.navigate, replace: vi.fn(), setParams: vi.fn(), canGoBack: () => true, canDismiss: () => true },
   useLocalSearchParams: () => ({ code: "005930" }),
   usePathname: () => "/stocks/005930",
 }));
@@ -98,7 +100,7 @@ beforeEach(() => {
   h.win = { width: 475, height: 751, scale: 2.625, fontScale: 1 };
   h.flag = undefined;
   h.stockError = null;
-  for (const f of [h.push, h.navigate, h.alert, h.register, h.remove, h.refetch]) f.mockClear();
+  for (const f of [h.push, h.navigate, h.dismissTo, h.alert, h.register, h.remove, h.refetch]) f.mockClear();
   haptics.length = 0;
   installHaptics({ selectionAsync: async () => undefined, impactAsync: async () => undefined, notificationAsync: async (s: never) => void haptics.push(`notify:${s}`) }, "ios");
   setHapticPolicy({ oneHand: true, user: true });
@@ -108,7 +110,7 @@ beforeEach(() => {
 const open = (stock: RegisteredWithQuote & { registered?: boolean }, oneHand = true, emptyGuide = false) => {
   h.stock = stock;
   return render(
-    <UxFlagsContext.Provider value={{ oneHand, firstRun: false, emptyGuide, connectionGuide: emptyGuide }}>
+    <UxFlagsContext.Provider value={{ oneHand, firstRun: false, emptyGuide, connectionGuide: emptyGuide, flagsMissing: false }}>
       <StockDetailScreen />
     </UxFlagsContext.Provider>,
   );
@@ -203,14 +205,15 @@ describe("스크롤하면 머리에 현재가 (값 = 시세 머리)", () => {
     const shown = title();
     // 시세 머리의 현재가(FlashPrice 글)·등락률과 같은 글
     const headPrice = r.all().find((n) => n.type === "FlashPrice")!.props.text as string;
-    expect(shown.text()).toBe(`삼성전자${headPrice}+1.44%`);
+    // 단위도 시세 머리와 같은 글 ('원' — 달러 종목은 'USD')
+    expect(shown.text()).toBe(`삼성전자${headPrice}원+1.44%`);
     expect(headPrice).toBe("84,300");
     const texts = shown.all().filter((n) => n.type === "Text");
     expect(texts[1]!.props.style).toMatchObject({ color: dark.up });
     expect(shown.all()[0]!.props.accessibilityLabel).toContain("현재가 84,300원");
     // 더 스크롤해도 그대로, 다시 올리면 이름만
     scroll(r, 300);
-    expect(title().text()).toBe(`삼성전자${headPrice}+1.44%`);
+    expect(title().text()).toBe(`삼성전자${headPrice}원+1.44%`);
     scroll(r, 10);
     expect(title().text()).toBe("삼성전자");
   });
@@ -222,9 +225,48 @@ describe("emptyGuide: 연결 오류에 '설정 열기'", () => {
     const r = open(undefined as never, false, true);
     const err = r.all().find((n) => n.type === "ErrorView")!;
     (err.props.onOpenSettings as () => void)();
-    expect(h.navigate).toHaveBeenCalledTimes(1);
+    // 스택 위 화면: 탭 묶음을 하나 더 쌓지 않고 기존 설정 탭까지 닫고 간다 (dismissTo)
+    expect(h.dismissTo).toHaveBeenCalledTimes(1);
+    expect(h.dismissTo.mock.calls[0]![0]).toMatchObject({ pathname: "/settings", params: { open: "server" } });
+    expect(h.navigate).not.toHaveBeenCalled();
     h.stockError = null;
     const ok = open(samsung(), false, true);
     expect(typeof (screen(ok).props.top as React.ReactElement<{ onOpenSettings?: unknown }>).props.onOpenSettings).toBe("function");
+  });
+});
+
+describe("머리 현재가: 오른쪽 버튼 실제 폭을 빼고, 달러 종목은 단위 USD", () => {
+  const maxW = (el: React.ReactElement) => {
+    const t = render(el);
+    const box = t.all()[0]!;
+    return Object.assign({}, ...(box.props.style as object[]).filter(Boolean)).maxWidth as number;
+  };
+
+  it("미등록 종목의 '☆ 관심 추가' 글자 버튼 폭을 재어 제목 최대 폭에서 뺀다 (재기 전은 아이콘 하나 44)", () => {
+    const r = open(preview());
+    const title0 = (stack(r).headerTitle as () => React.ReactElement)();
+    // 475 − 제목 시작 72 − 44 − 24
+    expect(maxW(title0)).toBe(335);
+    const right = render((stack(r).headerRight as () => React.ReactElement)());
+    const box = right.all()[0]!;
+    expect(box.type).toBe("View");
+    r.act(() => (box.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 0, width: 112.4, height: 44 } } }));
+    // 475 − 72 − 112 − 24
+    expect(maxW((stack(r).headerTitle as () => React.ReactElement)())).toBe(267);
+    // 꺼져 있으면 재지 않는다 (오른쪽 버튼을 감싸지 않음 — 지금 그대로)
+    const off = open(preview(), false);
+    expect(render((stack(off).headerRight as () => React.ReactElement)()).all()[0]!.type).toBe("Pressable");
+  });
+
+  it("달러 종목 머리 현재가 옆 단위 USD (시세 머리와 같은 글)", () => {
+    const apple = { ...holding("AAPL", quote("AAPL", 254.4, { currency: "USD", change: -4.1, changeRate: -1.59, fxRate: 1400 }), 30, 180, {}, "애플"), registered: true };
+    const r = open(apple);
+    const views = r.all().filter((n) => n.type === "View" && "onLayout" in n.props);
+    layout(views[0]!, 0, 180);
+    layout(views[1]!, 20, 60);
+    scroll(r, 200);
+    const shown = render((stack(r).headerTitle as () => React.ReactElement)());
+    expect(shown.text()).toContain("USD");
+    expect(shown.text()).toMatch(/^애플254\.40USD-1\.59%$/);
   });
 });

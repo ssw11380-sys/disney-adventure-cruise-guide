@@ -580,4 +580,18 @@ export const oneHand = {
   headFadeMs: 140,
   /** 스크롤 이벤트 간격 (ms): 머리 현재가를 켜고 끄는 판단만 하므로 한 프레임(16ms) */
   scrollThrottle: 16,
+  /** 휴대폰 Stack 머리에서 제목이 시작하는 x (뒤로 버튼 칸 — 머티리얼 머리의 제목 들여쓰기 72) */
+  headStartX: 72,
+  /** 머리 오른쪽 버튼을 재기 전에 쓰는 폭 (아이콘 버튼 하나) */
+  headRightW: 44,
+  /** 머리 제목 끝과 오른쪽 버튼 사이 + 머리 오른쪽 여백 */
+  headEndGap: 24,
+} as const;
+
+/** 3-24 설정 '서버 연결' 칸 열기 (기능 플래그 emptyGuide) */
+export const settingsReveal = {
+  /** 펼친 뒤 이 시간 동안은 위쪽 카드(알림·토스·빈 칸 안내)가 늦게 그려져 칸 자리가 바뀌면 다시 맞춘다 (ms). 사용자가 끌면 멈춘다 */
+  settleMs: 1500,
+  /** 칸 제목 위에 남기는 여백 (제목 윗부분이 화면 위로 잘리지 않게) */
+  topGap: 16,
 } as const;

@@ -52,6 +52,20 @@ describe("오류 화면", () => {
     expect(r.text()).not.toContain("서버 주소 아래");
   });
 
+  it("주소가 틀렸지만 서버에는 닿음(Railway 'Application not found' 404): '서버 주소' 문구 + 설정 열기 — 영어 글·'서버 오류 (404)'만 남지 않게", () => {
+    const railway = new ApiRequestError(404, "HTTP_404", "Application not found", "/api/stocks?quotes=1");
+    const r = render(<ErrorView error={railway} onRetry={() => undefined} onOpenSettings={() => undefined} />);
+    expect(r.text()).toContain("서버 주소가 맞지 않습니다");
+    expect(r.text()).toContain("설정 > 서버 연결에서 '서버 주소'를 확인하세요.");
+    expect(r.text()).not.toContain("Application not found");
+    expect(buttons(r).map((b) => b.props.accessibilityLabel)).toEqual(["다시 시도", "설정 열기, 서버 연결"]);
+    // 플래그가 꺼져 있으면(설정 열기를 주지 않음) 지금 그대로
+    expect(render(<ErrorView error={railway} onRetry={() => undefined} />).text()).toBe("Application not found다시 시도");
+    // 우리 서버의 종목 없음(404 NOT_FOUND)은 그대로
+    const nf = new ApiRequestError(404, "NOT_FOUND", "종목을 찾을 수 없습니다: ZZZ", "/api/stocks/ZZZ");
+    expect(render(<ErrorView error={nf} onRetry={() => undefined} onOpenSettings={() => undefined} />).text()).toBe("종목을 찾을 수 없습니다: ZZZ다시 시도");
+  });
+
   it("서버가 준 다른 오류·설정 열기를 주지 않으면 지금 그대로", () => {
     const a = render(<ErrorView error={server} onRetry={() => undefined} onOpenSettings={() => undefined} />);
     expect(a.text()).toBe("서버 오류 (500)다시 시도");
@@ -78,6 +92,16 @@ describe("끊김 띠 (값은 두고 위에 한 줄)", () => {
     const r = render(<StaleBanner query={q(auth)} onOpenSettings={() => undefined} />);
     expect(r.text()).toContain("API 토큰 확인 필요 · 10:03:21 기준");
     expect(r.text()).not.toContain("설정에서 토큰 입력");
+  });
+
+  it("틀린 서버 주소(서버에는 닿음): '서버 주소 확인 필요' + 설정 열기 ('다시 연결 중' 대신 무엇을 고칠지)", () => {
+    const railway = new ApiRequestError(404, "HTTP_404", "Application not found", "/api/stocks?quotes=1");
+    const r = render(<StaleBanner query={q(railway)} onOpenSettings={() => undefined} />);
+    expect(r.text()).toContain("서버 주소 확인 필요 · 10:03:21 기준");
+    expect(r.text()).not.toContain("다시 연결 중");
+    expect(r.has("설정 열기, 서버 연결")).toBe(true);
+    // 주지 않으면 지금 그대로
+    expect(render(<StaleBanner query={q(railway)} />).text()).toContain("연결 끊김 · 10:03:21 기준");
   });
 
   it("주지 않으면 지금 그대로 (한 덩어리 알림, 버튼 없음)", () => {

@@ -37,3 +37,14 @@ export function swipeSettleOpen(dx: number, vx: number, startOpen: boolean, widt
 
 /** 제스처 설정 값 (테스트가 차트 드래그와 같은 기준인지 본다) */
 export const swipePanConfig = { activeX: oneHand.swipeActiveX, failY: oneHand.swipeFailY } as const;
+
+/** 한쪽을 막을 때 쓰는 먼 거리 (제스처 라이브러리 범위 값 [왼쪽 ≤ 0, 오른쪽 ≥ 0]의 '끝없음') */
+const FAR = 100_000;
+
+/**
+ * 가로로 이만큼 움직이면 스와이프를 시작하는 범위 [왼쪽, 오른쪽]. 닫힌 줄은 왼쪽으로만(오른쪽으로 밀면 잡지 않아 줄 누르기가 그대로),
+ * 열린 줄은 양쪽 (오른쪽으로 밀어 닫는다)
+ */
+export function swipeActiveRange(open: boolean): [number, number] {
+  return [-swipePanConfig.activeX, open ? swipePanConfig.activeX : FAR];
+}

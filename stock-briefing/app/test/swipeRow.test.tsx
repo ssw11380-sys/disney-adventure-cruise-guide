@@ -69,7 +69,7 @@ vi.mock("@/theme", async () => {
   return { ...tokens, useTheme: () => tokens.dark };
 });
 
-const { SwipeRow } = await import("@/components/SwipeRow");
+const { closeOpenRow, SwipeRow } = await import("@/components/SwipeRow");
 const { installHaptics, setHapticPolicy } = await import("@/lib/haptics");
 const { dark } = await import("@/tokens");
 
@@ -100,10 +100,17 @@ const flush = () => new Promise((res) => setTimeout(res, 0));
 
 describe("제스처 설정: 세로 스크롤과 다투지 않는다 (차트 드래그와 같은 기준)", () => {
   it("가로 14dp 에 시작 · 세로 10dp 면 포기 · 한 손가락 · JS 에서", () => {
-    const g = pan(render(row()));
+    const r = render(row());
+    const g = pan(r);
     expect(g.kind).toBe("Pan");
     const of = (name: string) => g.calls.filter(([k]) => k === name).map(([, a]) => a);
-    expect(of("activeOffsetX")).toEqual([[[-14, 14]]]);
+    // 닫힌 줄은 왼쪽으로 밀 때만 잡는다 (오른쪽으로 밀면 할 일이 없어 줄 누르기가 그대로)
+    expect(of("activeOffsetX")).toEqual([[[-14, 100_000]]]);
+    // 열린 줄은 양쪽 (오른쪽으로 밀어 닫는다)
+    r.act(() => handler(g, "onStart")({ translationX: -14 }));
+    r.act(() => handler(g, "onEnd")({ translationX: -120, velocityX: 0 }));
+    const opened = pan(r);
+    expect(opened.calls.filter(([k]) => k === "activeOffsetX").map(([, a]) => a)).toEqual([[[-14, 14]]]);
     expect(of("failOffsetY")).toEqual([[[-10, 10]]]);
     expect(of("maxPointers")).toEqual([[1]]);
     expect(of("runOnJS")).toEqual([[true]]);
@@ -180,5 +187,26 @@ describe("끌고 놓기", () => {
     r.act(() => handler(g, "onEnd")({ translationX: -120, velocityX: 0 }));
     await flush();
     expect(haptics).toEqual([]);
+  });
+});
+
+describe("closeOpenRow: 잔고 화면이 목록 끌기·다른 줄 누르기·정렬·새로고침 때 부른다", () => {
+  it("열린 줄이 없으면 false, 있으면 닫고 true", () => {
+    // 앞 테스트에서 열어 둔 줄을 먼저 닫는다 (한 번에 한 줄 — 모듈이 기억한다)
+    closeOpenRow();
+    const r = render(row());
+    expect(closeOpenRow()).toBe(false);
+    const g = pan(r);
+    r.act(() => handler(g, "onStart")({ translationX: -14 }));
+    r.act(() => handler(g, "onEnd")({ translationX: -120, velocityX: 0 }));
+    expect(r.has("버튼 닫기")).toBe(true);
+    let closed = false;
+    r.act(() => {
+      closed = closeOpenRow();
+    });
+    expect(closed).toBe(true);
+    expect(r.has("버튼 닫기")).toBe(false);
+    expect(h.timings.at(-1)).toMatchObject({ toValue: 0 });
+    expect(closeOpenRow()).toBe(false);
   });
 });

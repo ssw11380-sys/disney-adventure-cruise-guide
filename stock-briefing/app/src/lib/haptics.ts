@@ -42,8 +42,11 @@ export type HapticCall =
   | { fn: "performAndroidHapticsAsync"; arg: "segment-tick" | "long-press" | "confirm" | "reject" };
 
 /**
- * 종류마다 부를 함수 (순수 함수). 안드로이드는 시스템 햅틱(performHapticFeedback — 휴대폰의 '터치 진동' 설정을 따르고 권한이 필요 없다)을 먼저,
- * 그 기종에 없는 종류면 fallback(진동기)으로. 차트 십자선은 예전과 같은 selectionAsync
+ * 종류마다 부를 함수 (순수 함수). 안드로이드는 시스템 햅틱(performHapticFeedback — 휴대폰의 '터치 진동' 설정을 따르고 권한이 필요 없다)을 먼저 쓴다.
+ * fallback(진동기)은 expo-haptics 가 그 효과 상수를 모를 때(예전 안드로이드 — 예: segment-tick 은 안드로이드 14 부터)만 불린다:
+ * 네이티브는 performHapticFeedback 의 결과(false)를 버리므로, 휴대폰 '터치 진동'이 꺼져 있거나 기종이 그 효과를 무시해도
+ * 실패로 오지 않아 진동기로 넘어가지 않는다 → 그때는 울리지 않는다(시스템 설정을 따름). 차트 십자선은 예전과 같은 selectionAsync(진동기)라
+ * '터치 진동'을 꺼 둔 휴대폰에서는 십자선만 울릴 수 있다 (설정 > 표시 '누를 때 진동'을 끄면 십자선도 멈춤)
  */
 export function hapticCall(kind: HapticKind, os: string): { first: HapticCall; fallback: HapticCall | null } {
   if (kind === "chart") return { first: { fn: "selectionAsync" }, fallback: null };
@@ -88,7 +91,7 @@ function run(e: HapticEngine, c: HapticCall): Promise<void> {
   return "arg" in c ? call(c.arg as never) : call();
 }
 
-/** 울린다 (허용되지 않았거나 엔진이 없으면 아무 일도 하지 않는다). 기종이 지원하지 않는 종류는 fallback, 그것도 실패하면 조용히 넘긴다 */
+/** 울린다 (허용되지 않았거나 엔진이 없으면 아무 일도 하지 않는다). 첫 호출이 실패(상수 없음)하면 fallback, 그것도 실패하면 조용히 넘긴다 */
 export function haptic(kind: HapticKind): void {
   const e = engine;
   if (!e || !hapticAllowed(kind, policy)) return;

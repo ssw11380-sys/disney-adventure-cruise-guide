@@ -4,13 +4,14 @@ import { render } from "./miniRender";
 
 /**
  * 첫 실행 안내 (3-24, 기능 플래그 firstRun).
- *  - 새 사용자(등록 종목 0)에게만 한 번 저절로 연다. 이미 종목이 있으면 열지 않고 '건너뜀'으로 적는다 (기존 사용자를 거치게 하지 않음)
- *  - 목록을 모르면(받는 중·서버 연결 실패) 기다린다. 내비게이터가 준비된 뒤에만 연다. 한 번 적으면 다시 묻지 않는다
+ *  - 이 기기에서 처음 쓰는 사람에게만 한 번 저절로 연다. 기기에 사용 흔적(지난 실행의 쿼리 캐시·바꾼 설정·연 브리핑 등)이 있으면
+ *    열지 않고 '건너뜀'으로 적는다 (기존 사용자를 거치게 하지 않음). 서버의 등록 종목 수는 보지 않는다 — 토스 자동 동기화로
+ *    새 사용자·새 휴대폰도 종목이 이미 있다
+ *  - 흔적을 읽는 동안 기다린다. 내비게이터가 준비된 뒤에만 연다. 한 번 적으면 다시 묻지 않는다
  *  - 안내 한 화면: 위젯 추가법 · 알림 권한 · 토스 연동 상태. 서버 주소·토큰 입력 없음. '시작하기' 한 번으로 닫힘, 열리면 '본 것'으로 적음
  */
 const h = vi.hoisted(() => ({
   store: new Map<string, string>(),
-  stocks: undefined as unknown[] | undefined,
   navKey: "root" as string | undefined,
   push: vi.fn(),
   back: vi.fn(),
@@ -22,7 +23,11 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@react-native-async-storage/async-storage", () => ({
-  default: { getItem: async (k: string) => h.store.get(k) ?? null, setItem: async (k: string, v: string) => void h.store.set(k, v) },
+  default: {
+    getItem: async (k: string) => h.store.get(k) ?? null,
+    setItem: async (k: string, v: string) => void h.store.set(k, v),
+    multiGet: async (keys: string[]) => keys.map((k) => [k, h.store.get(k) ?? null]),
+  },
 }));
 vi.mock("react-native", () => ({
   View: "View",
@@ -51,15 +56,19 @@ vi.mock("@/theme", async () => {
   return { ...tokens, useTheme: () => tokens.dark };
 });
 vi.mock("@/api/hooks", () => ({
-  useRegisteredStocks: () => ({ data: h.stocks }),
+  // 첫 실행 판단은 서버 목록을 보지 않는다 (불리면 실패)
+  useRegisteredStocks: () => {
+    throw new Error("첫 실행 판단이 서버 목록을 물음");
+  },
+  useFeatures: () => ({ data: undefined, isError: false }),
   useHealth: () => h.health,
   useFeature: () => false,
 }));
 vi.mock("@/lib/settings", () => ({ useSettings: () => ({ haptics: true }) }));
 vi.mock("@/components/Screen", async () => {
   const R = await import("react");
-  const Screen = ({ children, top, bottom, disclaimer }: { children: React.ReactNode; top?: React.ReactNode; bottom?: React.ReactNode; disclaimer?: boolean }) =>
-    R.createElement("Screen", { disclaimer }, R.createElement("Top", null, top), children, R.createElement("Bottom", null, bottom));
+  const Screen = ({ children, top, bottom, disclaimer, contentStyle }: { children: React.ReactNode; top?: React.ReactNode; bottom?: React.ReactNode; disclaimer?: boolean; contentStyle?: unknown }) =>
+    R.createElement("Screen", { disclaimer, contentStyle }, R.createElement("Top", null, top), children, R.createElement("Bottom", null, bottom));
   return { Screen };
 });
 vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBoundary" }));
@@ -72,7 +81,6 @@ const { WIDGET_STEPS } = await import("@/lib/welcome");
 
 beforeEach(() => {
   h.store.clear();
-  h.stocks = undefined;
   h.navKey = "root";
   h.push.mockReset();
   h.back.mockReset();
@@ -87,7 +95,7 @@ beforeEach(() => {
 const flush = () => new Promise((res) => setTimeout(res, 0));
 const gate = (firstRun = true) => {
   const r = render(
-    <UxFlagsContext.Provider value={{ oneHand: false, firstRun, emptyGuide: false, connectionGuide: false }}>
+    <UxFlagsContext.Provider value={{ oneHand: false, firstRun, emptyGuide: false, connectionGuide: false, flagsMissing: false }}>
       <FirstRunGate />
     </UxFlagsContext.Provider>,
   );
@@ -101,14 +109,10 @@ const settle = async (r: ReturnType<typeof render>) => {
   r.rerender();
 };
 
-describe("저절로 여는 조건", () => {
-  it("새 사용자(등록 종목 0): 한 번 연다, 두 번째 실행 기록 없이도 같은 실행에서는 다시 열지 않는다", async () => {
-    h.stocks = [];
-    const r = await (async () => {
-      const x = gate();
-      await settle(x);
-      return x;
-    })();
+describe("저절로 여는 조건 (이 기기의 사용 흔적)", () => {
+  it("새 기기(흔적 없음): 한 번 연다, 같은 실행에서는 다시 열지 않는다", async () => {
+    const r = gate();
+    await settle(r);
     expect(h.push).toHaveBeenCalledWith("/welcome");
     expect(h.push).toHaveBeenCalledTimes(1);
     r.rerender();
@@ -117,21 +121,33 @@ describe("저절로 여는 조건", () => {
     expect(h.push).toHaveBeenCalledTimes(1);
   });
 
-  it("기존 사용자(종목이 있음): 열지 않고 '건너뜀'으로 적는다", async () => {
-    h.stocks = [{ code: "005930" }];
+  it("기존 사용자(바꾼 설정·연 브리핑·최근 검색 등): 열지 않고 '건너뜀'으로 적는다", async () => {
+    for (const key of ["settings.sort", "settings.apiUrl", "briefings.read", "search.recent", "chartPrefs.v1"]) {
+      h.store.clear();
+      h.store.set(key, "x");
+      forgetFirstRunClaim();
+      await settle(gate());
+      expect(h.push).not.toHaveBeenCalled();
+      expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
+    }
+  });
+
+  it("지난 실행에 적힌 쿼리 캐시(마지막 잔고)는 흔적, 이번 실행에 막 적힌 캐시는 흔적이 아니다", async () => {
+    h.store.set("rq.cache", JSON.stringify({ timestamp: Date.now() - 86_400_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
     await settle(gate());
     expect(h.push).not.toHaveBeenCalled();
     expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
+    h.store.clear();
+    forgetFirstRunClaim();
+    h.store.set("rq.cache", JSON.stringify({ timestamp: Date.now() + 5_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
+    await settle(gate());
+    expect(h.push).toHaveBeenCalledTimes(1);
   });
 
-  it("목록을 모르면(받는 중·서버 연결 실패) 기다린다, 내비게이터가 준비되기 전에는 열지 않는다", async () => {
+  it("내비게이터가 준비되기 전에는 열지 않는다", async () => {
+    h.navKey = undefined;
     const r = gate();
     await settle(r);
-    expect(h.push).not.toHaveBeenCalled();
-    h.stocks = [];
-    h.navKey = undefined;
-    r.rerender();
-    await flush();
     expect(h.push).not.toHaveBeenCalled();
     h.navKey = "root";
     r.rerender();
@@ -140,7 +156,6 @@ describe("저절로 여는 조건", () => {
   });
 
   it("이미 본 사람·건너뛴 사람·플래그 꺼짐: 열지 않는다", async () => {
-    h.stocks = [];
     h.store.set(FIRST_RUN_KEY, "seen");
     await settle(gate());
     h.store.set(FIRST_RUN_KEY, "existing");
@@ -173,6 +188,8 @@ describe("안내 한 화면", () => {
     expect(r.all().some((n) => n.type === "TextInput")).toBe(false);
     expect(text).not.toMatch(/서버 주소|API 토큰|토큰 입력/);
     expect(r.all().find((n) => n.type === "Screen")!.props.disclaimer).toBe(true);
+    // 넓은 창(933dp 등)에서 카드·버튼이 창 폭 전체로 늘어나지 않게 읽기 폭 720 까지 (휴대폰은 창이 더 좁아 그대로)
+    expect(r.all().find((n) => n.type === "Screen")!.props.contentStyle).toMatchObject({ maxWidth: 720, alignSelf: "center" });
     // 열리면 본 것으로
     expect(h.store.get(FIRST_RUN_KEY)).toBe("seen");
   });
@@ -188,6 +205,8 @@ describe("안내 한 화면", () => {
     expect(h.requested).toBe(1);
     expect(r.has("알림 허용")).toBe(false);
     expect(r.text()).toContain("허용됨");
+    // 권한만으로는 브리핑 알림이 오지 않는다는 것을 분명히 (설정 > 알림 '브리핑 알림' 스위치)
+    expect(r.text()).toContain("설정 > 알림에서 '브리핑 알림'을 켜세요");
   });
 
   it("다시 물을 수 없게 꺼져 있으면 버튼 대신 휴대폰 설정 경로", async () => {

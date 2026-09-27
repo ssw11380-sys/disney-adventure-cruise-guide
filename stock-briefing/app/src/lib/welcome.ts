@@ -22,10 +22,11 @@ export type Tone = "good" | "warn" | "muted";
  * 다시 물을 수 없게 거절된 경우(canAskAgain=false)는 버튼 대신 휴대폰 설정 경로를 알려 준다
  */
 export function notifyLine(status: string | null, canAskAgain: boolean): { text: string; tone: Tone; ask: boolean } {
-  if (status === "granted") return { text: "허용됨 · 오전·오후 브리핑 알림은 설정 > 알림에서 켜고 끕니다", tone: "good", ask: false };
+  // 권한만으로는 브리핑 알림이 오지 않는다 (알림 등록은 설정 > 알림 '브리핑 알림' 스위치가 한다) — 켜진 것으로 오해하지 않게 분명히 적는다
+  if (status === "granted") return { text: "권한 허용됨 · 브리핑 알림을 받으려면 설정 > 알림에서 '브리핑 알림'을 켜세요 (이미 켰다면 그대로 옵니다)", tone: "good", ask: false };
   if (status === null) return { text: "알림 권한을 확인하지 못했습니다 · 설정 > 알림에서 확인할 수 있습니다", tone: "muted", ask: false };
   if (status === "denied" && !canAskAgain) return { text: "꺼져 있음 · 휴대폰 설정 > 애플리케이션 > 주식 브리핑 > 알림에서 켤 수 있습니다", tone: "warn", ask: false };
-  return { text: "아직 허용하지 않음 · 허용하면 브리핑 알림을 받을 수 있습니다", tone: "warn", ask: true };
+  return { text: "아직 허용하지 않음 · 허용한 뒤 설정 > 알림에서 '브리핑 알림'을 켜면 받습니다", tone: "warn", ask: true };
 }
 
 /** 토스증권 연동 상태 한 줄 (서버 /health 에서) */
