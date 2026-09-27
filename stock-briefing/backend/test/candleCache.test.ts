@@ -103,4 +103,29 @@ describe("차트 봉 캐시 (3-18)", () => {
     expect((await c.get("A", "5m", 100)).candles).toHaveLength(100);
     await expect(c.get("B", "5m", 100)).rejects.toThrow("down");
   });
+
+  it("maxAgeMs (지표 점수 장 마감 뒤 계산): 같은 장 구간이라도 그보다 오래 받아 둔 봉은 기다려 새로 받고, 실패하면 옛 봉 대신 오류", async () => {
+    let calls = 0;
+    let fail = false;
+    let t = 0;
+    // 미국 16:00~20:00 ET 는 한 장 구간 — 마감 직후(16:01) 받아 둔 봉이 17:30 에도 12시간 한도 안이라 그냥 나오던 것
+    const c = new CandleCache(async (code, p, n) => {
+      calls++;
+      if (fail) throw new Error("down");
+      return series(code, p, n, calls);
+    }, () => t, () => ({ key: "US|extended", regular: false }));
+    await c.get("NVDA", "D", 310);
+    t += 89 * 60_000;
+    expect((await c.get("NVDA", "D", 310)).candles[0]!.close).toBe(1); // 차트: 옛 값 바로 (뒤에서 새로)
+    await new Promise((r) => setTimeout(r, 0));
+    t += 2 * 60_000;
+    const before = calls;
+    expect((await c.get("NVDA", "D", 310, { maxAgeMs: 60_000 })).candles[0]!.close).toBe(before + 1); // 기다려 새 값
+    expect(calls).toBe(before + 1);
+    expect((await c.get("NVDA", "D", 310, { maxAgeMs: 60_000 })).candles[0]!.close).toBe(before + 1); // 1분 안이면 받아 둔 것
+    fail = true;
+    t += 2 * 60_000;
+    await expect(c.get("NVDA", "D", 310, { maxAgeMs: 60_000 })).rejects.toThrow("봉을 새로 받지 못함");
+    expect((await c.get("NVDA", "D", 310)).candles[0]!.close).toBe(before + 1); // 차트는 예전처럼 받아 둔 값
+  });
 });

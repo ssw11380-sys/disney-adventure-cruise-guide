@@ -265,6 +265,33 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create index if not exists idx_trade_executions_date on trade_executions (executed_date)`.execute(db);
     },
   },
+  {
+    version: 9,
+    up: async (db, dialect) => {
+      // 지표 점수 기록 (3-44, 플래그 indicatorScores). 새 표만 추가하고 기존 표는 건드리지 않는다 (예전 서버로 되돌려도 모르고 지나갈 뿐).
+      // 점수는 8바이트 실수 — Postgres 의 real 은 4바이트 (BH-48)
+      const dbl = dialect === "postgres" ? "double precision" : "real";
+      await db.schema
+        .createTable("indicator_scores")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("score_date", "text", (c) => c.notNull())
+        .addColumn("code", "text", (c) => c.notNull())
+        .addColumn("market", "text", (c) => c.notNull())
+        .addColumn("kind", "text", (c) => c.notNull())
+        .addColumn("version", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("score", dbl)
+        .addColumn("score_today", dbl)
+        .addColumn("band", "text")
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      // 종목·기준일·종류마다 한 줄 (같은 날 다시 계산하면 덮어쓴다)
+      await sql`create unique index if not exists uq_indicator_scores_code_date_kind on indicator_scores (code, score_date, kind)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

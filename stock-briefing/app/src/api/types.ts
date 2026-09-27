@@ -763,3 +763,86 @@ export interface FeatureFlags {
   features: Record<string, boolean>;
   updatedAt: string | null;
 }
+
+/**
+ * GET /api/scores/:code — 지표 점수 (3-44 1단계, 플래그 indicatorScores). 서버 services/indicatorScoreService 의 ScoresResponse 와 같은 모양.
+ * 모든 문장은 서버가 만든다(금지어 검사를 서버 한 곳에서) — 앱은 배치만 하고, 앱에 고정된 글은 줄 이름·버튼뿐이다.
+ * 이번 단계는 추세 지표 점수만 계산한다: 가치는 '계산 준비 중'(ETF 는 '대상 아님'), 종합 숫자는 두 점수가 모두 있을 때만(지금은 늘 none — 화면은 '없음 · 이유').
+ * trend.reason.code 'fetchFailed' = 받기 실패(일봉·비교 지수·기초자산 일봉) — 서버가 5분 뒤 다시 계산한다
+ */
+export type TrendBandName = "강함" | "다소 강함" | "중립" | "다소 약함" | "약함";
+/** 글 조각 (sign 이 있으면 등락 색 — 레버리지 상자의 수익률 숫자만) */
+export interface ScoreTextPart {
+  text: string;
+  sign?: number;
+}
+export interface ScoreFamily {
+  key: "T" | "M" | "O" | "R" | "V";
+  name: string;
+  about: string;
+  weight: number;
+  score: number | null;
+  scoreExact: number | null;
+  text: string;
+  facts: { label: string; value: string }[];
+  items: { key: string; name: string; score: number | null }[];
+}
+export interface LeverageFactsView {
+  L: number;
+  asOf: string;
+  from: string;
+  etf63Pct: number;
+  und63Pct: number | null;
+  naiveLx63Pct: number | null;
+  sigEtfAnnPct: number;
+  sigUnderlyingAnnPct: number | null;
+  volDecayPctPerYear: number | null;
+  etfMdd1yPct: number;
+}
+export interface TrendScoreBlock {
+  version: string;
+  cal: string;
+  status: "ok" | "unavailable" | "hold" | "excluded";
+  /** 요약 카드 줄의 글: 띠 이름 · 점수 없음 · 잠시 보류 · 대상 아님 · 이 상품 자체 점수 없음 */
+  label: string;
+  reason: { code: string; text: string } | null;
+  /** 화면 정수 (최근 5거래일 평균의 반올림) */
+  score: number | null;
+  scoreExact: number | null;
+  scoreToday: number | null;
+  band: TrendBandName | null;
+  meaning: string | null;
+  headline: string | null;
+  basisLine: string | null;
+  bandLine: string | null;
+  basis: { kind: "self" | "underlying"; code: string; name: string };
+  benchmark: { code: string; name: string } | null;
+  candleSource: string | null;
+  bars: number | null;
+  daysAveraged: number | null;
+  coverage: number | null;
+  families: ScoreFamily[];
+  notes: string[];
+  change: { from: string; prev: number; now: number; diff: number; family: string; familyName: string; familyDiff: number; text: string } | null;
+  reference: { code: string; name: string; status: "ok" | "unavailable" | "hold"; score: number | null; band: TrendBandName | null; text: string; note: string | null } | null;
+  leveraged: {
+    L: number;
+    underlying: string | null;
+    tracks: string | null;
+    check: { days: number; corr: number | null; beta: number | null } | null;
+    facts: LeverageFactsView | null;
+    box: { title: string; lines: { parts: ScoreTextPart[] }[] };
+  } | null;
+  versionLine: string;
+}
+export interface IndicatorScores {
+  code: string;
+  name: string;
+  market: "KR" | "US";
+  asOf: { priceDate: string | null; scoreDate: string; market: "KR" | "US"; line: string | null };
+  value: { method: string; status: "pending" | "excluded" | "ok"; label: string; score: number | null; band: string | null; about: string; text: string };
+  trend: TrendScoreBlock;
+  composite: { status: "ok" | "none"; score: number | null; reason: string | null; text: string; gap: number | null; gapNote: boolean };
+  text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string };
+  computedAt: string;
+}

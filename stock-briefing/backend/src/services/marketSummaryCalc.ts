@@ -673,7 +673,7 @@ export const BOND_ETF_RE = /(채권|국고채|국채|통안채|회사채|전단�
  * 한국 ETF 상표 (종목 마스터 분류가 없을 때 이름으로). 한글 상표 뒤에는 \b 가 성립하지 않아(한글은 낱말 글자가 아님) 공백·괄호·끝으로 본다 —
  * '파워로직스' 같은 종목 이름은 상표가 아니다
  */
-const KR_ETF_BRAND_RE = /^(?:(?:KODEX|TIGER|ACE|KBSTAR|RISE|SOL|HANARO|ARIRANG|KOSEF|PLUS|TIMEFOLIO|KIWOOM|WON|1Q|BNK|FOCUS|TRUSTON|UNICORN|VITA|ITF|TREX|KCGI|DAISHIN343)\b|(?:마이다스|에셋플러스|파워|마이티|히어로즈)(?=$|[\s(]))/i;
+export const KR_ETF_BRAND_RE = /^(?:(?:KODEX|TIGER|ACE|KBSTAR|RISE|SOL|HANARO|ARIRANG|KOSEF|PLUS|TIMEFOLIO|KIWOOM|WON|1Q|BNK|FOCUS|TRUSTON|UNICORN|VITA|ITF|TREX|KCGI|DAISHIN343)\b|(?:마이다스|에셋플러스|파워|마이티|히어로즈)(?=$|[\s(]))/i;
 /**
  * 한국 상장 해외 지수·원자재·통화 ETF (코스피와 비교하면 높음·낮음이 구조적으로 틀린다). 금현물·원자재처럼 국내에서 거래해도 주식 지수를 따르지 않는 것도 여기로.
  * 'MSCI Korea'(한국 주식 지수 — 'KODEX MSCI Korea TR')는 해외가 아니라 그대로 코스피와 비교한다

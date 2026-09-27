@@ -50,6 +50,8 @@ import { GoogleNewsRssProvider } from "./providers/news/googleRss.js";
 import { registerPollSaver } from "./lib/pollSaver.js";
 import { regularCloseLookup, TradeRecordService } from "./services/tradeRecordService.js";
 import { tradeRecordAdminRoutes, tradeRecordRoutes } from "./routes/tradeRecords.js";
+import { defaultScoreSources, IndicatorScoreService } from "./services/indicatorScoreService.js";
+import { scoreRoutes } from "./routes/scores.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -253,6 +255,19 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   });
   // 지수 띠와 잔고 위젯 지수 줄, 계좌 브리핑(3-31)이 같은 목록(30초 캐시·stale 규칙)을 쓰게 하나만 만든다
   const marketIndices = opts.providers.indices ?? new MarketIndices();
+  // 지표 점수 (3-44, 플래그 indicatorScores): 종목 상세의 추세 지표 점수. 일봉은 차트와 같은 캐시, 비교 지수는 위 지수 목록과 같은 인스턴스.
+  // 장 마감 뒤(한국 20:10 · 뉴욕 17:30, 평일·거래일만) 등록 종목을 미리 계산해 기록한다. 플래그가 꺼져 있으면 예약이 돌아도 아무것도 하지 않는다
+  const indicatorScores = new IndicatorScoreService({
+    db: opts.db,
+    features,
+    sources: opts.providers.scoreSources ?? defaultScoreSources({ db: opts.db, stocks: stockService, indices: marketIndices, product: opts.providers.productInfo ?? null }),
+    now,
+    log,
+  });
+  if (opts.enableScheduler !== false) {
+    indicatorScores.start();
+    app.addHook("onClose", async () => indicatorScores.stop());
+  }
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
@@ -290,6 +305,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("settingsStore", settingsStore);
   app.decorate("priceStream", priceStream);
   app.decorate("tradeRecords", tradeRecords);
+  app.decorate("indicatorScores", indicatorScores);
 
   // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
   app.addHook("onRequest", async (req) => {
@@ -497,6 +513,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
+  await app.register(scoreRoutes, { prefix: "/api/scores", service: indicatorScores });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
@@ -522,6 +539,8 @@ declare module "fastify" {
     priceStream: PriceStream;
     /** 매매 기록 (3-36): 일별 스냅샷·체결 저장. 브리핑 '어제와 비교'는 previousSnapshot 을 쓴다 */
     tradeRecords: TradeRecordService;
+    /** 지표 점수 (3-44): 종목 상세의 추세 지표 점수·장 마감 뒤 기록 */
+    indicatorScores: IndicatorScoreService;
   }
 }
 

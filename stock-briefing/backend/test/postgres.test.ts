@@ -11,6 +11,8 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGenerator, fakeProviders, SAMPLE_MASTER } from "./helpers.js";
+import { IndicatorScoreService } from "../src/services/indicatorScoreService.js";
+import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
 
 /**
  * Postgres 방언 통합 테스트. TEST_PG_URL 이 설정된 경우에만 돈다.
@@ -53,7 +55,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     // 7 = 시장 전체 요약 표 (날짜·세션 하나에 한 건)
     const idx = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename = 'market_summaries'`.execute(db);
     expect(idx.rows.map((r) => r.indexname)).toContain("uq_market_summaries_date_session");
@@ -64,6 +66,37 @@ describe.skipIf(!url)("postgres dialect", () => {
       select column_name, data_type from information_schema.columns
       where table_name = 'trade_executions' and column_name in ('quantity', 'amount', 'price') order by column_name`.execute(db);
     expect(types.rows.map((r) => r.data_type)).toEqual(["double precision", "double precision", "double precision"]);
+    // 9 = 지표 점수 기록 (종목·기준일·종류마다 한 줄). 점수는 8바이트
+    const idx9 = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename = 'indicator_scores'`.execute(db);
+    expect(idx9.rows.map((r) => r.indexname)).toContain("uq_indicator_scores_code_date_kind");
+    const types9 = await sql<{ data_type: string }>`
+      select data_type from information_schema.columns where table_name = 'indicator_scores' and column_name in ('score', 'score_today') order by column_name`.execute(db);
+    expect(types9.rows.map((r) => r.data_type)).toEqual(["double precision", "double precision"]);
+  });
+
+  it("지표 점수 기록 (3-44): 같은 종목·기준일은 덮어쓴다 (Postgres on conflict)", async () => {
+    const svc = new IndicatorScoreService({
+      db,
+      features: { enabled: async () => true },
+      sources: {
+        stock: async (code) => ({ code, name: code, market: "NASDAQ" }),
+        candles: async (code) => ({ code, period: "D", candles: candlesOf("NVDA"), source: "yahoo" }),
+        benchmark: async () => benchOf("NVDA"),
+        product: async () => null,
+        registered: async () => [{ code: "NVDA", name: "엔비디아", market: "NASDAQ" }],
+      },
+      now: () => new Date("2026-09-25T17:31:00-04:00"),
+    });
+    try {
+      expect(await svc.runDaily("US")).toEqual({ computed: 1, failed: 0 });
+      expect(await svc.runDaily("US")).toEqual({ computed: 1, failed: 0 });
+      const rows = await db.selectFrom("indicator_scores").select(["code", "score_date", "status", "score", "band"]).execute();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ code: "NVDA", score_date: "2026-09-25", status: "ok", band: "다소 강함" });
+      expect(rows[0]!.score).toBeCloseTo(68.5827, 3);
+    } finally {
+      await db.deleteFrom("indicator_scores").execute();
+    }
   });
 
   it("매매 기록 (3-36): 스냅샷·빈칸·체결을 Postgres 에 쓰고 다시 돌려도 늘지 않는다", async () => {
@@ -124,7 +157,7 @@ describe.skipIf(!url)("postgres dialect", () => {
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {

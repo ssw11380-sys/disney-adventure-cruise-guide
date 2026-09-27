@@ -33,6 +33,10 @@ import { haptic } from "@/lib/haptics";
 import { removeConfirm } from "@/lib/rowActions";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { useUx } from "@/lib/uxFlags";
+import { AiTitle } from "@/components/scores/AiTitle";
+import { IndicatorSummaryCard } from "@/components/scores/IndicatorSummaryCard";
+import { TrendScoreCard } from "@/components/scores/TrendScoreCard";
+import { SCORE_LABELS } from "@/lib/scoreView";
 
 type Tab = AnalysisKind | "news";
 const TABS: { value: Tab; label: string }[] = [
@@ -124,6 +128,9 @@ export default function StockDetailScreen() {
   const fold = useFoldLayout();
   // 휴대폰·접은 화면 시세 머리 아래 보유 한 줄 (기능 플래그 detailPolish — 앱 fallback 꺼짐)
   const polish = useFeature("detailPolish", false);
+  // 지표 점수 (3-44, 기능 플래그 indicatorScores — 앱 fallback 꺼짐): 기업개요 탭 맨 위 요약 카드 + 'AI 기업개요 [AI가 쓴 글]' 제목,
+  // 기술분석 탭 맨 위 추세 상세 카드. 꺼져 있으면 서버에 묻지도 않고 탭 내용이 지금 그대로다
+  const scoresOn = useFeature("indicatorScores", false);
   // 차트의 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
@@ -360,6 +367,23 @@ export default function StockDetailScreen() {
     : "";
 
   const openChart = () => router.push(`/stocks/${c}/chart?period=${period}` as never);
+  // 지표 점수 (플래그 indicatorScores): 기초자산 화면 열기(레버리지 상품) · 기업개요·기술분석 탭 맨 위 카드와 그 아래 AI 글 제목.
+  // 꺼져 있으면 AI 분석을 그대로 돌려준다 (지금 화면과 한 글자도 같게)
+  const openStock = (to: string) => router.push({ pathname: "/stocks/[code]", params: { code: to } } as never);
+  const withScores = (kind: AnalysisKind, ai: React.ReactNode, opts: { twoCol?: boolean; techLabel?: string } = {}) =>
+    scoresOn && (kind === "company" || kind === "technical") ? (
+      <>
+        {kind === "company" ? (
+          <IndicatorSummaryCard code={c} twoCol={opts.twoCol} onTechnical={() => setTab("technical")} techTabLabel={opts.techLabel} onOpenStock={openStock} />
+        ) : (
+          <TrendScoreCard code={c} onOpenStock={openStock} />
+        )}
+        <AiTitle title={kind === "company" ? SCORE_LABELS.aiCompany : SCORE_LABELS.aiTechnical} />
+        {ai}
+      </>
+    ) : (
+      ai
+    );
   // 3-24 아래 막대 왼쪽 버튼: 미등록 → 관심 추가, 관심(수량 없음) → 관심 해제(토스 종목은 동기화 제외), 보유 → 보유 수정
   const barStar: BarStar = unregistered ? { kind: "watch", busy: adding } : s.quantity ? { kind: "edit" } : { kind: "unwatch", label: removeConfirm(s).confirm };
   const onBarStar = () => (barStar.kind === "watch" ? addWatch() : barStar.kind === "unwatch" ? unwatch() : router.push(`/stocks/${c}/edit`));
@@ -539,7 +563,7 @@ export default function StockDetailScreen() {
           <NewsTab code={c} us={isUsMarket(s.market)} />
         ) : (
           // 관심 종목이 되면(unregistered → false) 바로 자동으로 만든다
-          <AnalysisTab key={`${c}:${tab}`} code={c} kind={tab} requested={!unregistered || !!asked[tab]} onRequest={(k) => setAsked((m) => ({ ...m, [k]: true }))} />
+          withScores(tab, <AnalysisTab key={`${c}:${tab}`} code={c} kind={tab} requested={!unregistered || !!asked[tab]} onRequest={(k) => setAsked((m) => ({ ...m, [k]: true }))} />)
         )}
 
         {briefings.data && briefings.data.length > 0 ? (
@@ -619,7 +643,7 @@ export default function StockDetailScreen() {
     ) : wTab === "news" ? (
       <NewsTab code={c} us={us} />
     ) : (
-      <AnalysisTab key={`${c}:${wTab}`} code={c} kind={wTab} requested={!unregistered || !!asked[wTab]} onRequest={requestAi} />
+      withScores(wTab, <AnalysisTab key={`${c}:${wTab}`} code={c} kind={wTab} requested={!unregistered || !!asked[wTab]} onRequest={requestAi} />, { twoCol: mode === "wide", techLabel: SCORE_LABELS.toTechnicalWide })
     );
   const tabs = <Segmented options={WIDE_TABS} value={wTab} onChange={setTab} />;
 
@@ -728,6 +752,8 @@ export default function StockDetailScreen() {
             {sideStats}
             {/* AI 분석: 설계 목업처럼 탭 없이 기업개요 3줄 · 기술분석 2줄을 함께, 가치분석은 제목 줄만 ('더 보기'로 펼침) */}
             <View style={[styles.side, styles.sideEnd]}>
+              {/* 지표 점수 요약 카드 (플래그 indicatorScores): AI 기업개요 미리보기 바로 위, 접힌 채 */}
+              {scoresOn ? <IndicatorSummaryCard code={c} flat onOpenStock={openStock} /> : null}
               <AnalysisPreview key={`${c}:company`} code={c} kind="company" title="AI 기업개요" lines={foldDetail.previewCompanyLines} requested={!unregistered || !!asked.company} onRequest={requestAi} />
               <AnalysisPreview key={`${c}:technical`} code={c} kind="technical" title="AI 기술분석" lines={foldDetail.previewTechLines} requested={!unregistered || !!asked.technical} onRequest={requestAi} />
               <AnalysisPreview key={`${c}:value`} code={c} kind="value" title="AI 가치분석" lines={0} defaultOpen={tabPick === "value"} requested={!unregistered || !!asked.value} onRequest={requestAi} />

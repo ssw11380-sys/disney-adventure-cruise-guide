@@ -2,6 +2,7 @@ import { isIntraday, type AfterMarketQuote, type Candle, type CandlePeriod, type
 import { CODE_RE, isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { seoulIso } from "../../lib/time.js";
+import type { ProductFacts } from "../../analysis/leveraged.js";
 import type { LiveTick, StockSessionFacts } from "./tossRealtime.js";
 import type { FetchFn, QuoteProvider, StockSearchProvider } from "./types.js";
 
@@ -70,6 +71,25 @@ export function parseSessionInfo(r: Record<string, unknown>, at: number): Sessio
 }
 
 type Json = Record<string, unknown>;
+
+/**
+ * v2/stock-infos 한 건 → 상품 정보 (지표 점수 3-44: ETF·레버리지 배수·단일 종목형 가리기). 칸이 없거나 모양이 다르면 null.
+ * leverageFactor: 일반 0 · SOXL 3 · RGTX 2, singleStockEtp: 단일 종목 레버리지(RGTX true), market.code: NSQ·NYS·AMX·KSP·KSQ
+ */
+export function parseProductFacts(r: Json): ProductFacts {
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const code = (v: unknown) => str((v as Json | null | undefined)?.["code"]);
+  return {
+    name: str(r["name"]),
+    englishName: str(r["englishName"]),
+    detailName: str(r["detailName"]),
+    group: code(r["group"]),
+    exchange: code(r["market"]),
+    leverageFactor: num(r["leverageFactor"]),
+    singleStockEtp: bool(r["singleStockEtp"]),
+    derivativeEtf: bool(r["derivativeEtf"]),
+  };
+}
 
 /** 티커 → 토스 상품 코드 매핑을 재시작 후에도 남기기 위한 저장소 (meta 테이블 등) */
 export interface CodeStore {
@@ -199,6 +219,16 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
       return info;
     } catch {
       return null; // 부가 정보라 실패해도 시세는 낸다
+    }
+  }
+
+  /** 상품 정보 (ETF·레버리지 배수·단일 종목형·거래소, 지표 점수 3-44). 시세와 같은 24시간 캐시를 쓴다. 모르는 티커·실패면 null */
+  async productFacts(code: string): Promise<ProductFacts | null> {
+    try {
+      const info = await this.stockInfo(await this.productCode(normalizeCode(code)));
+      return info ? parseProductFacts(info) : null;
+    } catch {
+      return null;
     }
   }
 

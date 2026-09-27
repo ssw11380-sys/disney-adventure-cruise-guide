@@ -24,8 +24,19 @@ function files(dir: string, exts: string[]): string[] {
 
 const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
 
+/** 금지어 목록 자체를 정의하는 파일 (지표 점수 문구 검사기 3-44 — 금지 지시 자체라 프롬프트처럼 따로 본다) */
+const BANNED_LIST_FILES = ["backend/src/analysis/scoreWording.ts"];
+
 describe("투자 권유 금지 문구", () => {
-  const targets = [...files(join(ROOT, "app/src"), [".ts", ".tsx"]), ...files(join(ROOT, "backend/src"), [".ts"])];
+  const targets = [...files(join(ROOT, "app/src"), [".ts", ".tsx"]), ...files(join(ROOT, "backend/src"), [".ts"])].filter(
+    (f) => !BANNED_LIST_FILES.includes(f.slice(ROOT.length).replace(/\\/g, "/")),
+  );
+
+  it("금지어 목록 파일은 목록만 둔다 (검사기가 지표 점수 문장마다 쓰는 정규식)", () => {
+    const text = read(BANNED_LIST_FILES[0]!);
+    expect(text).toMatch(/export const SCORE_BANNED_RE =/);
+    expect(text).toMatch(/export function scoreWordingProblems/);
+  });
 
   it("검사 대상 파일이 있다", () => expect(targets.length).toBeGreaterThan(50));
 
