@@ -232,6 +232,66 @@ describe("매매 기록 — 스냅샷 내용 (3-36)", () => {
     expect(snapshotDoubts("US", [acct(3, [], { purchaseUsd: 0 })], { held: [3], holdings: before.slice(0, 1) }).map((d) => d.kind)).toEqual(["vanished"]);
   });
 
+  it("소수 여섯째 자리 수량(토스 16.123456 모양)을 전부 판 날은 의심하지 않는다 — 반올림 위·아래 두 방향, 의심 글도 여섯째 자리까지", () => {
+    const t1 = Date.parse("2026-09-29T05:05:00+09:00"), t2 = Date.parse("2026-09-30T05:05:00+09:00");
+    const sell = (account: number, code: string, quantity: number) => ({ account, code, side: "SELL" as const, quantity, executedAt: "2026-09-29T23:10:00+09:00" });
+    for (const q of [0.123444, 0.123456]) {
+      const traded = netTradedBetween([sell(7, "TSLA", q)], t1, t2);
+      expect(traded).toEqual({ "7:TSLA": -q }); // 예전에는 넷째 자리로 잘라 −0.1234 → 0.000044주가 남은 것처럼 보여 'unsure'
+      expect(snapshotDoubts("US", [acct(7, [], { purchaseUsd: null })], { held: [7], holdings: [{ account: 7, code: "TSLA", quantity: q }], traded })).toEqual([]);
+    }
+    // 다른 종목이 남은 계좌에서 AAPL 16.123444주를 전부 판 날 (예전에는 'vanished' — 'AAPL 16.1234주')
+    const soxl = accounts[0]!.items[1]!;
+    const before = [
+      { account: 3, code: "SOXL", quantity: 25 },
+      { account: 3, code: "AAPL", quantity: 16.123444 },
+    ];
+    const now = [acct(3, [soxl], { purchaseUsd: 825.4 })];
+    expect(snapshotDoubts("US", now, { held: [3], holdings: before, traded: netTradedBetween([sell(3, "AAPL", 16.123444)], t1, t2) })).toEqual([]);
+    // 모자라게 판 날은 그대로 의심하고, 글에 여섯째 자리까지 적는다
+    expect(snapshotDoubts("US", now, { held: [3], holdings: before, traded: { "3:AAPL": -16.1234 } })).toEqual([
+      { kind: "vanished", account: 3, text: "계좌 3: 직전 스냅샷의 AAPL 16.123444주이(가) 목록에서 빠졌는데 그 사이 저장한 매도 체결로 설명되지 않음" },
+    ]);
+    // 추정도 여섯째 자리까지 — 0.000044주 차이를 0 으로 버리지 않는다
+    const snaps = [
+      { date: "2026-09-28", market: "US" as const, asOf: "2026-09-29T05:05:00+09:00", holdings: [{ account: 7, code: "TSLA", quantity: 0.123444, avgPrice: 300 }] },
+      { date: "2026-09-29", market: "US" as const, asOf: "2026-09-30T05:05:00+09:00", holdings: [] },
+    ];
+    expect(unexplainedChanges(snaps, [sell(7, "TSLA", 0.123444)])).toEqual([]);
+    expect(unexplainedChanges(snaps, [sell(7, "TSLA", 0.1234)]).map((c) => [c.tradedQty, c.unexplainedQty])).toEqual([[-0.1234, -0.000044]]);
+  });
+
+  it("직전 스냅샷 뒤 그 시장 종목을 산 계좌도 그 시장 종목이 있는 계좌로 본다 — 목록에서 빠지거나(저장한 매수·동기화·체결 알림) 산 종목이 목록에 없으면 의심", () => {
+    const soxl = accounts[0]!.items[1]!;
+    const one = [acct(3, [soxl], { purchaseUsd: 825.4 })];
+    const before = [{ account: 3, code: "SOXL", quantity: 25 }];
+    // 한국 종목만 있던 계좌 7 이 TSLA 를 사고(매수 저장됨) 목록에서 빠짐 — 예전에는 held 에 없어 'ok'
+    expect(snapshotDoubts("US", one, { held: [3], holdings: before, traded: { "7:TSLA": 1 } })).toEqual([
+      { kind: "missing-account", account: 7, text: "계좌 7: 직전 스냅샷 뒤 미국 종목을 산 것으로 보이는 계좌가 토스 계좌 목록에서 빠짐" },
+    ]);
+    // 매수가 저장되지 않았어도 동기화·체결 알림으로 샀을 수 있는 계좌(mayHold)가 빠지면 의심, 목록에 있으면 보지 않는다
+    expect(snapshotDoubts("US", one, { held: [3], mayHold: [7], holdings: before }).map((d) => [d.kind, d.account])).toEqual([["missing-account", 7]]);
+    expect(snapshotDoubts("US", [...one, acct(7, [], { purchaseUsd: null })], { held: [3], mayHold: [7], holdings: before })).toEqual([]);
+    // 다른 시장 매수·사고 판 것(순수량 0)은 보지 않는다
+    expect(snapshotDoubts("US", one, { held: [3], holdings: before, traded: { "7:005930": 1, "8:TSLA": 0 } })).toEqual([]);
+    // 전부 판 날 새로 산 종목(NVDA 1)이 목록에 없음: 목록이 통째로 비고 달러 요약도 없으면 'unsure' (예전에는 TSLA 매도만 맞춰 보고 'ok')
+    const tsla = [{ account: 7, code: "TSLA", quantity: 2 }];
+    expect(snapshotDoubts("US", [acct(7, [], { purchaseUsd: null })], { held: [7], holdings: tsla, traded: { "7:TSLA": -2, "7:NVDA": 1 } })).toEqual([
+      { kind: "unsure", account: 7, text: "계좌 7: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 (전에는 미국 종목이 있었음)" },
+    ]);
+    expect(snapshotDoubts("US", [acct(7, [], { purchaseUsd: null })], { held: [7], holdings: tsla, traded: { "7:TSLA": -2 } })).toEqual([]); // 정말 전부 판 날
+    // 직전 스냅샷에 그 시장 종목이 없던 계좌가 사고 나서 통째로 비어 옴
+    expect(snapshotDoubts("US", [acct(7, [], { purchaseUsd: null })], { held: [], traded: { "7:NVDA": 1 } }).map((d) => d.text)).toEqual([
+      "계좌 7: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 (직전 스냅샷 뒤 미국 종목을 샀음)",
+    ]);
+    // 다른 종목은 목록에 있는데 산 종목만 없음 → 'vanished'
+    const nvda = { ...soxl, code: "NVDA", name: "NVDA", quantity: 1, purchaseAmount: 180 };
+    expect(snapshotDoubts("US", one, { held: [3], holdings: before, traded: { "3:NVDA": 1 } })).toEqual([
+      { kind: "vanished", account: 3, text: "계좌 3: 직전 스냅샷 뒤 저장한 매수 체결의 NVDA 1주이(가) 목록에 없음" },
+    ]);
+    expect(snapshotDoubts("US", [acct(3, [soxl, nvda], { purchaseUsd: 1005.4 })], { held: [3], holdings: before, traded: { "3:NVDA": 1 } })).toEqual([]);
+  });
+
   it("하루 넘게 걸리는 의심(empty·missing-account)만 다음 거래일로 이어 센다", () => {
     expect(doubtCarriesOver("empty")).toBe(true);
     expect(doubtCarriesOver("missing-account")).toBe(true);

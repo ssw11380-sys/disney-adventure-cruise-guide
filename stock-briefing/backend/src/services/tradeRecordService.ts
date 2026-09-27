@@ -51,15 +51,18 @@ import {
  *    그 거래일 줄이 없으면 토스 보유 조회(/api/v1/holdings, 계좌마다)로 한 줄을 쓴다. 이미 있으면(다른 서버·재시작) 토스를 부르지 않는다.
  *    서버를 켜면 곧 한 번 돌아 같은 거래일 안에서 놓친 스냅샷을 따라잡는다('intraday-fallback'). 거래일이 지나도록 못 찍은 날은
  *    값을 지어내지 않고 빈칸(gap) 줄로 남긴다 — 지난 날의 보유·평단을 토스가 주지 않기 때문이다.
- *    스냅샷 한 줄: 보유를 읽고(as_of = 읽기 바로 전 시각) → 그 거래일 체결 받기가 아직이면 그 자리에서 받고(아래 2 — 'seen' 시각은 이 as_of) →
- *    계좌마다 응답을 확인해(snapshotDoubts — 한 계좌 목록만 비어 옴·목록 일부만 옴(합계가 반올림 차이보다 크게 다름·직전 스냅샷 종목이 매도 없이 사라짐)·
- *    전에 종목이 있던 계좌가 목록에서 빠짐) 쓴다. 의심스러우면 찍지 않고 5분 뒤 다시 묻고, 같은 의심(종류·계좌·내용이 모두 같음)이 오래 이어질 때만
+ *    스냅샷 한 줄: 보유를 읽고(as_of = 읽기 바로 전 시각) → 그 거래일 체결 받기가 아직이면 그 자리에서 받고(아래 2 — 'seen' 시각은 이 as_of.
+ *    이미 받았으면(의심·오류 때문에 다시 찍는 중) 그 시장 진행 중 주문의 짝만 다시 받아 그 사이 늘어난 몫을 이 as_of 로) →
+ *    계좌마다 응답을 확인해(snapshotDoubts — 한 계좌 목록만 비어 옴·목록 일부만 옴(합계가 반올림 차이보다 크게 다름·직전 스냅샷 종목이 매도 없이 사라짐·
+ *    그 뒤 저장한 매수의 종목이 없음)·전에 종목이 있던(또는 그 뒤 산) 계좌가 목록에서 빠짐) 쓴다. 의심스러우면 찍지 않고 5분 뒤 다시 묻고, 같은 의심(종류·계좌·내용이 모두 같음)이 오래 이어질 때만
  *    (DOUBT_ACCEPT_MS) 받아들여 그 스냅샷에 의심 내용을 적는다. 세는 기록은 상태(meta)에 두어 서버를 다시 켜도 이어 센다.
  *    받아들인 내용과 똑같은 의심은 다음 거래일에 곧바로 받아들이고, 내용이 다르면 처음부터 센다. 전부 판 계좌(목록이 비고 달러 요약도 없음)는
- *    직전 스냅샷의 그 계좌 종목이 저장한 매도로 모두 설명되면 곧바로 받아들인다. 종목마다 그 거래일 일봉의 정규장 종가(regularClose)도 함께 적는다.
+ *    직전 스냅샷의 그 계좌 종목이 저장한 매도로 모두 설명되고 그 뒤 산 종목도 없으면 곧바로 받아들인다(수량은 소수 여섯째 자리까지). 종목마다 그 거래일 일봉의 정규장 종가(regularClose)도 함께 적는다.
  * 2) 체결: 그 시장의 토스 주문 내역(/api/v1/orders, 종료·진행 중)을 받아 (계좌, 주문번호)로 한 줄씩 저장한다(다시 받아도 늘지 않음).
  *    물은 종목과 다른 종목으로 온 주문은 저장하지 않는다. 부분 체결이 며칠에 걸치면 받을 때마다 늘어난 몫을 그 시각과 함께 fills 에 남긴다.
  *    체결 시각이 없는 몫·처음 본 주문의 시각('seen')은 그 확인의 스냅샷 as_of 로 적는다(이미 그 스냅샷에 든 체결이 다음 구간 '추정'으로 넘어가지 않게).
+ *    처음 보는 진행 중 주문이 체결 시각 없이 오면 첫 몫은 주문 시각으로 적되, 주문 시각이 그 짝을 마지막으로 끝까지 받은 시각이나 마지막 스냅샷 시각보다
+ *    이르면(그때는 체결이 없었다) 'seen' 으로 적는다.
  *    원화 장부처럼 (계좌, 종목) 짝마다 묻는다 — 그 계좌가 그 종목을 가졌거나(최근 두 스냅샷·토스 동기화가 믿은 보유·지금 읽은 보유) 거래한(최근 30일
  *    체결·실시간 체결 알림) 짝만. 등록 종목·계좌를 모르는 알림 종목은 그 시장 종목을 가졌던 계좌에만 묻는다(늘 비어 있는 계좌는 묻지 않음).
  *    (서버는 종목을 지정해 묻는다 — 종목 없이 물을 수 있는지는 확인하지 않았다). 한 번도 묻지 않은 종목(기록 전에 전부 팔고
@@ -184,8 +187,8 @@ export interface TradeFill {
   quantity: number;
   amount: number;
   /**
-   * 그 몫의 체결 시각: 그때 토스가 준 마지막 체결 시각(filled), 없으면 주문 시각(ordered, 처음 몫만)이나 'seen' —
-   * 그 확인의 스냅샷 시각(as_of, 이 몫은 그 스냅샷 전에 체결됐다고 봄), 스냅샷이 없는 확인이면 받은 시각
+   * 그 몫의 체결 시각: 그때 토스가 준 마지막 체결 시각(filled), 없으면 주문 시각(ordered, 처음 몫만 — 주문 시각이 그 짝을 마지막으로 받은 때나
+   * 마지막 스냅샷보다 이르면 쓰지 않음)이나 'seen' — 그 확인의 스냅샷 시각(as_of, 이 몫은 그 스냅샷 전에 체결됐다고 봄), 스냅샷이 없는 확인이면 받은 시각
    */
   at: string;
   /** at 의 그 시장 거래일 YYYY-MM-DD (기간으로 거를 때 — 3-37 의 날짜별 실현손익·현금 흐름) */
@@ -311,6 +314,11 @@ interface State {
   truncated: Record<string, string>;
   /** 스냅샷 의심을 세는 기록 — 서버를 다시 켜도 이어 센다 */
   doubts: Record<string, DoubtEntry>;
+  /**
+   * (계좌, 종목) 짝 '계좌:종목' → 마지막으로 주문 내역을 끝까지 받은 시각 (그 짝의 주문을 모두 저장했을 때만). 그때 오지 않은 주문은 그때까지 체결이
+   * 없었으므로, 뒤에 처음 보는 진행 중 주문의 첫 몫을 이보다 이른 주문 시각으로 적지 않는다. SEEN_DAYS 일이 지나면 잊는다
+   */
+  askedAt: Record<string, string>;
 }
 
 export const STATE_KEY = "trade_records_state";
@@ -647,7 +655,9 @@ export class TradeRecordService {
    * 그 시장 직전 ok 스냅샷과 그 뒤 저장한 체결 (snapshotDoubts 가 전에 종목이 있던 계좌·목록에서 사라진 종목이 매도로 설명되는지 보려고).
    *  - held: 직전 스냅샷에 그 시장 종목이 있던 계좌. 직전 스냅샷에 없는 계좌(첫 스냅샷·새 계좌)는 토스 동기화가 마지막으로 믿은 계좌별 보유
    *    (meta toss_holdings_accounts)에 그 시장 종목이 있었는지로 본다
-   *  - holdings: 직전 스냅샷의 보유 (계좌, 종목, 수량), traded: 그 스냅샷 as_of 뒤 ~ upTo 까지 저장한 체결의 순수량
+   *  - mayHold: 직전 스냅샷에는 있었지만 그 시장 종목이 없던 계좌 가운데 토스 동기화 보유에 그 시장 종목이 있거나, 직전 스냅샷 뒤 그 시장 종목의
+   *    실시간 체결 알림(계좌가 온 것)이 온 계좌 — 목록에서 빠졌을 때만 의심한다 (빠진 계좌는 체결을 묻지 못해 traded 로 알 수 없어서)
+   *  - holdings: 직전 스냅샷의 보유 (계좌, 종목, 수량), traded: 그 스냅샷 as_of 뒤 ~ upTo 까지 저장한 그 시장 체결의 순수량 (새로 산 종목 포함)
    */
   private async previousInfo(market: RecordMarket, upTo: number): Promise<PrevSnapshotInfo> {
     const db = this.deps.db;
@@ -658,29 +668,39 @@ export class TradeRecordService {
     // 그 스냅샷에 그 계좌 종목이 있었던 계좌만 (의심을 안고 '빈 계좌'로 받아들인 계좌는 다음 날 같은 빈 응답을 다시 의심하지 않게 넣지 않는다)
     const held = new Set<number>(holdings.map((h) => h.account));
     const known = new Set(accounts);
+    const mayHold = new Set<number>();
     const sync = await db.selectFrom("meta").select("value").where("key", "=", ACCOUNTS_KEY).executeTakeFirst();
     try {
       const v = sync ? (JSON.parse(sync.value) as { held?: Record<string, unknown> } | null) : null;
       for (const [acct, codes] of Object.entries(v?.held ?? {})) {
         const n = Number(acct);
-        if (!Number.isFinite(n) || known.has(n) || !Array.isArray(codes)) continue;
-        if (codes.some((c) => typeof c === "string" && marketOf(c) === market)) held.add(n);
+        if (!Number.isFinite(n) || !Array.isArray(codes)) continue;
+        if (!codes.some((c) => typeof c === "string" && marketOf(c) === market)) continue;
+        if (known.has(n)) mayHold.add(n);
+        else held.add(n);
       }
     } catch {
       // 깨진 값은 없는 것으로 본다
     }
     let traded: Record<string, number> = {};
     const since = row ? Date.parse(row.as_of) : NaN;
-    if (row && Number.isFinite(since) && holdings.length) {
-      const codes = [...new Set(holdings.map((h) => h.code))];
-      const trades = await this.tradesTouching(addDays(row.snapshot_date, -1), seoulDate(new Date(upTo)), { codes });
+    if (row && Number.isFinite(since)) {
+      // 직전 스냅샷에 없던 종목(그 뒤 산 종목)도 본다 — 그 시장 체결 모두
+      const trades = (await this.tradesTouching(addDays(row.snapshot_date, -1), seoulDate(new Date(upTo)))).filter((t) => t.market === market);
       traded = netTradedBetween(
         trades.map((t) => ({ ...t, fills: t.fills.map((f) => ({ quantity: f.quantity, at: f.at })) })),
         since,
         upTo,
       );
+      await this.seenGate;
+      // 시각은 초까지만 적혀 있어 스냅샷과 같은 초에 온 알림도 넣는다
+      for (const [key, at] of Object.entries(await this.loadSeen())) {
+        const p = parsePair(key);
+        if (p && marketOf(p[1]) === market && Date.parse(at) >= since) mayHold.add(p[0]);
+      }
     }
-    return { held: [...held], holdings, traded };
+    for (const acct of held) mayHold.delete(acct);
+    return { held: [...held], mayHold: [...mayHold], holdings, traded };
   }
 
   /**
@@ -739,6 +759,17 @@ export class TradeRecordService {
     const readAt = this.now().getTime();
     const mineNow = per.flatMap((a) => a.items.filter((h) => h.quantity > 0 && marketOf(h.code) === market).map((h) => [a.account, h.code] as const));
     if (await this.tradeStep(market, plan, at, state, { seenIso: asOf, heldPairs: mineNow.map(([a, c]) => pairKey(a, c)) })) ran.trades = true;
+    else if (state.tradesFor[market] === plan.date) {
+      // 그 거래일 체결 받기는 앞선 시도에서 끝났다(의심·오류 때문에 다시 찍는 중): 그 뒤 늘어난 진행 중 주문의 몫이 다음 날 스냅샷 시각으로 밀려
+      // 가짜 '추정' ±가 생기지 않게, 그 시장 진행 중 주문의 짝만 다시 물어 늘어난 몫을 이 as_of 로 적는다
+      const open = await this.openPairs(market);
+      if (open.length) {
+        ran.trades = true;
+        await this.syncTradesInto(market, state, { pairs: open, refresh: true }, asOf).catch((e: unknown) =>
+          this.deps.log?.warn({ market, err: errText(e) }, "매매 기록: 진행 중 주문 다시 받기 실패"),
+        );
+      }
+    }
     const doubts = snapshotDoubts(market, per, await this.previousInfo(market, readAt));
     const pending = this.pendingDoubts(market, doubts, at, state);
     if (pending.length && !force) throw new SnapshotDoubtError(market, pending);
@@ -865,6 +896,19 @@ export class TradeRecordService {
     return [...out.values()];
   }
 
+  /** 그 시장에서 저장한 진행 중(OPEN) 주문의 (계좌, 종목) 짝 '계좌:종목' — 최근 SEEN_DAYS 일 체결만 (취소돼 닫히지 않은 오래된 줄까지 매번 묻지 않게) */
+  private async openPairs(market: RecordMarket): Promise<string[]> {
+    const rows = await this.deps.db
+      .selectFrom("trade_executions")
+      .select(["account", "code"])
+      .where("market", "=", market)
+      .where("order_status", "=", "OPEN")
+      .where("executed_date", ">=", addDays(seoulDate(this.now()), -SEEN_DAYS))
+      .groupBy(["account", "code"])
+      .execute();
+    return [...new Set(rows.map((r) => pairKey(Number(r.account), r.code)))].sort();
+  }
+
   /**
    * 'seen' 시각: 지금 거래일 스냅샷을 이미 찍었으면 그 as_of (그 스냅샷 전에 체결됐다고 봄 — 실패해 다시 묻는 짝·관리 체결 받기),
    * 아직이면 지금 (그 거래일 스냅샷은 그 뒤에 찍힌다)
@@ -897,10 +941,17 @@ export class TradeRecordService {
 
   /**
    * syncTrades 본체: 결과 시각·오류·종목별 받은 날(coverage)을 state 에 적는다(저장은 부른 쪽 — 확인 한 번에 상태를 한 번에 쓰려고).
-   * only: 이 종목만 목록의 모든 계좌에, pairs: 이 짝만, extraPairs: 자동 짝(pairsFor)에 더할 짝 (모두 그 시장 종목·목록의 계좌만 남긴다)
+   * only: 이 종목만 목록의 모든 계좌에, pairs: 이 짝만, extraPairs: 자동 짝(pairsFor)에 더할 짝 (모두 그 시장 종목·목록의 계좌만 남긴다).
+   * refresh: 의심 때문에 다시 찍으며 진행 중 주문의 짝만 다시 묻는 것 — 종목별 받은 날·쪽 수 한도 표시·전의 오류를 지우거나 고치지 않는다
+   * (그 짝만 물어서 종목 전체를 받았다고 할 수 없으므로)
    * @param seenIso 체결 시각이 없는 몫·처음 본 주문에 적을 시각 (없으면 seenIsoFor)
    */
-  private async syncTradesInto(market: RecordMarket, state: State, pick: { only?: string[]; pairs?: string[]; extraPairs?: string[] } = {}, seenIso?: string): Promise<TradeSyncResult> {
+  private async syncTradesInto(
+    market: RecordMarket,
+    state: State,
+    pick: { only?: string[]; pairs?: string[]; extraPairs?: string[]; refresh?: boolean } = {},
+    seenIso?: string,
+  ): Promise<TradeSyncResult> {
     const toss = this.deps.toss;
     if (!toss) throw new TossMissingError();
     const accounts = (await toss.accounts()).map((a) => a.accountSeq);
@@ -928,6 +979,10 @@ export class TradeRecordService {
     const iso = seoulIso(start);
     const seen = seenIso ?? (await this.seenIsoFor(market, start));
     const today = seoulDate(start);
+    // 그 시장 마지막 스냅샷 시각: 처음 보는 진행 중 주문의 첫 몫을 이보다 이른 주문 시각으로 적지 않는다 (그 전에 체결됐다면 그 스냅샷 보유에 들어
+    // 그 짝을 그때 물었을 것이므로 — 그 스냅샷 뒤 체결된 몫이 앞 구간으로 들어가 가짜 '추정' ±가 생기지 않게)
+    const lastSnap = await this.deps.db.selectFrom("account_snapshots").select("as_of").where("market", "=", market).where("status", "=", "ok").orderBy("snapshot_date", "desc").limit(1).executeTakeFirst();
+    const snapFloor = lastSnap ? Date.parse(lastSnap.as_of) : NaN;
     const failed = new Set<string>();
     const failedPairs = new Set<string>();
     const truncated = new Set<string>();
@@ -941,6 +996,10 @@ export class TradeRecordService {
     for (const [account, code] of pairs) {
       if (!first && pause > 0) await sleep(pause);
       first = false;
+      const key = pairKey(account, code);
+      // 첫 몫의 주문 시각을 믿을 수 있는 가장 이른 때: 이 짝을 마지막으로 끝까지 받은 시각과 마지막 스냅샷 시각 가운데 늦은 쪽
+      const floor = Math.max(Date.parse(state.askedAt[key] ?? "") || -Infinity, Number.isFinite(snapFloor) ? snapFloor : -Infinity);
+      const askedIso = seoulIso(this.now());
       let history: TossOrderHistory;
       try {
         history = await toss.orderHistory(account, code);
@@ -964,34 +1023,42 @@ export class TradeRecordService {
         if (!p || o.quantity > p.quantity || (o.quantity === p.quantity && o.status === "CLOSED")) byId.set(o.orderId, o);
       }
       if (others.size) this.deps.log?.warn({ market, account, code, others: [...others].slice(0, 5) }, "매매 기록: 물은 종목과 다른 종목의 주문이 와서 저장하지 않음");
-      if (byId.size === 0) continue;
-      result.fetched += byId.size;
-      let existing: Map<string, ExecRow>;
-      try {
-        existing = new Map((await this.existingRows(account, [...byId.keys()])).map((r) => [r.order_id, r]));
-      } catch (e) {
-        fail(account, code, errText(e));
-        continue;
-      }
-      for (const o of byId.values()) {
-        // 주문 한 건의 오류(해석할 수 없는 시각 등)는 그 짝 실패로 — 다른 주문·짝은 계속 받는다
+      if (byId.size > 0) {
+        result.fetched += byId.size;
+        let existing: Map<string, ExecRow>;
         try {
-          const r = await this.saveOrder(account, code, o, existing.get(o.orderId), iso, seen);
-          result[r]++;
+          existing = new Map((await this.existingRows(account, [...byId.keys()])).map((r) => [r.order_id, r]));
         } catch (e) {
-          fail(account, code, `주문 ${o.orderId} 저장 실패: ${errText(e)}`);
+          fail(account, code, errText(e));
+          continue;
+        }
+        for (const o of byId.values()) {
+          // 주문 한 건의 오류(해석할 수 없는 시각 등)는 그 짝 실패로 — 다른 주문·짝은 계속 받는다
+          try {
+            const r = await this.saveOrder(account, code, o, existing.get(o.orderId), iso, seen, floor);
+            result[r]++;
+          } catch (e) {
+            fail(account, code, `주문 ${o.orderId} 저장 실패: ${errText(e)}`);
+          }
         }
       }
+      // 주문을 모두 저장했으면 이 시각까지 오지 않은 주문은 체결이 없었다 (한 건이라도 저장하지 못했으면 적지 않는다 — 다음에 처음 보는 그 주문은 체결됐던 것)
+      if (!failedPairs.has(key)) state.askedAt[key] = askedIso;
     }
-    // 물은 계좌 모두에서 받은 종목만 '받음'으로 적는다
-    for (const code of codes) {
-      if (failed.has(code)) continue;
-      state.coverage[code] = { first: state.coverage[code]?.first ?? today, last: today };
-      // 쪽 수 한도: 이번에 걸렸으면 적고, 끝까지 받았으면 지운다
-      if (truncated.has(code)) state.truncated[code] = today;
-      else delete state.truncated[code];
+    if (pick.refresh) {
+      // 진행 중 주문의 짝만 다시 물었다: 쪽 수 한도에 걸린 것만 적고 종목별 받은 날은 그대로
+      for (const code of truncated) state.truncated[code] = today;
+    } else {
+      // 물은 계좌 모두에서 받은 종목만 '받음'으로 적는다
+      for (const code of codes) {
+        if (failed.has(code)) continue;
+        state.coverage[code] = { first: state.coverage[code]?.first ?? today, last: today };
+        // 쪽 수 한도: 이번에 걸렸으면 적고, 끝까지 받았으면 지운다
+        if (truncated.has(code)) state.truncated[code] = today;
+        else delete state.truncated[code];
+      }
+      for (const code of truncated) if (failed.has(code)) state.truncated[code] = today;
     }
-    for (const code of truncated) if (failed.has(code)) state.truncated[code] = today;
     result.failedCodes = [...failed].sort();
     result.failedPairs = [...failedPairs].sort();
     result.truncatedCodes = [...truncated].sort();
@@ -1006,7 +1073,7 @@ export class TradeRecordService {
     }
     state.lastTradeSyncAt = iso;
     if (result.errors.length) state.tradeErrors[market] = `${MARKET_NAME[market]}: ${result.errors.slice(0, 5).join(" · ")}`;
-    else delete state.tradeErrors[market];
+    else if (!pick.refresh) delete state.tradeErrors[market];
     if (result.inserted || result.updated) this.deps.log?.info({ ...result, errors: result.errors.length }, "매매 기록: 체결 저장");
     if (result.errors.length) this.deps.log?.warn({ market, errors: result.errors.slice(0, 5) }, "매매 기록: 일부 (계좌, 종목) 주문 내역을 받지 못함");
     return result;
@@ -1019,19 +1086,25 @@ export class TradeRecordService {
   /**
    * 주문 한 건 저장: 없으면 넣고, 누적 수량·금액·시각·상태가 바뀌었으면 고친다. 누적 수량이 늘었으면 늘어난 몫을 그때 토스가 준 마지막 체결 시각
    * (없으면 seen — 그 확인의 스냅샷 as_of)과 함께 fills 에 덧붙인다 — 며칠에 걸친 부분 체결의 앞선 몫이 날짜·금액을 잃지 않게.
-   * iso 는 실제로 받은 시각(fills 의 seenAt·created_at), seen 은 체결 시각이 없을 때 적는 시각
+   * iso 는 실제로 받은 시각(fills 의 seenAt·created_at), seen 은 체결 시각이 없을 때 적는 시각.
+   * floor(ms): 처음 보는 진행 중 주문이 체결 시각 없이 오면, 주문 시각이 이보다 이르면(그 짝을 마지막으로 받은 시각이나 마지막 스냅샷 시각 — 그때는 체결이
+   * 없었다) 첫 몫을 주문 시각이 아니라 seen 으로 적는다. 그렇게 적은 줄은 뒤에 주문 시각이 와도 되돌리지 않는다(체결 시각이 오면 그걸로)
    */
-  private async saveOrder(account: number, code: string, o: TossOrderRecord, e: ExecRow | undefined, iso: string, seen: string): Promise<"inserted" | "updated" | "unchanged"> {
+  private async saveOrder(account: number, code: string, o: TossOrderRecord, e: ExecRow | undefined, iso: string, seen: string, floor = -Infinity): Promise<"inserted" | "updated" | "unchanged"> {
     const db = this.deps.db;
-    let row = tradeRow(account, code, o, iso, seen);
     if (!e) {
+      const ordered = o.orderedAt ? Date.parse(o.orderedAt) : NaN;
+      const early = o.status === "OPEN" && !o.filledAt && Number.isFinite(ordered) && ordered < floor;
+      const row = tradeRow(account, code, early ? { ...o, orderedAt: null } : o, iso, seen);
       const fills: StoredFill[] = [{ q: row.quantity, a: row.amount, at: row.executed_at, basis: row.time_basis, seenAt: iso }];
       await db.insertInto("trade_executions").values({ ...row, fills: JSON.stringify(fills) }).onConflict((oc) => oc.columns(["account", "order_id"]).doNothing()).execute();
       return "inserted";
     }
+    let row = tradeRow(account, code, o, iso, seen);
     // 체결 시각이 없는 주문('seen' = 받은 시각)이나 더 못한 기준으로 온 주문은 처음 적은 시각을 그대로 둔다
-    // (그러지 않으면 받을 때마다 체결일이 그날로 밀려 기간 필터·추정 계산이 틀어진다)
-    if (row.time_basis === "seen" || basisRank(row.time_basis) < basisRank(e.time_basis)) {
+    // (그러지 않으면 받을 때마다 체결일이 그날로 밀려 기간 필터·추정 계산이 틀어진다). 'seen' 으로 적은 줄은 주문 시각으로도 되돌리지 않는다
+    // (처음 볼 때 주문 시각이 그 짝을 마지막으로 받은 때보다 일러 믿지 않기로 한 것 — 되돌리면 첫 몫이 앞 구간으로 가 가짜 '추정'이 생긴다)
+    if (row.time_basis === "seen" || basisRank(row.time_basis) < basisRank(e.time_basis) || (row.time_basis === "ordered" && e.time_basis === "seen")) {
       row = { ...row, executed_at: e.executed_at, executed_date: e.executed_date, time_basis: asBasis(e.time_basis) };
     }
     const fills = storedFills(e);
@@ -1172,7 +1245,7 @@ export class TradeRecordService {
 
   private async loadState(): Promise<State> {
     const row = await this.deps.db.selectFrom("meta").select("value").where("key", "=", STATE_KEY).executeTakeFirst();
-    const empty = (): State => ({ since: {}, tradesFor: {}, tradeRetry: {}, tradeFail: {}, lastTradeSyncAt: null, tradeErrors: {}, coverage: {}, truncated: {}, doubts: {} });
+    const empty = (): State => ({ since: {}, tradesFor: {}, tradeRetry: {}, tradeFail: {}, lastTradeSyncAt: null, tradeErrors: {}, coverage: {}, truncated: {}, doubts: {}, askedAt: {} });
     if (!row) return empty();
     try {
       const v = JSON.parse(row.value) as Partial<State> | null;
@@ -1191,6 +1264,12 @@ export class TradeRecordService {
         const pairs = r.pairs.filter((k): k is string => typeof k === "string" && parsePair(k) !== null);
         if (pairs.length) tradeRetry[m] = { date: r.date, pairs, tries: Number(r.tries) };
       }
+      // 짝을 마지막으로 받은 시각: '계좌:종목' 모양과 읽을 수 있는 시각만, SEEN_DAYS 일 안의 것만
+      const askedAt: Record<string, string> = {};
+      const cutoff = this.now().getTime() - SEEN_DAYS * 86_400_000;
+      for (const [k, at] of Object.entries(obj<Record<string, unknown>>(v.askedAt))) {
+        if (typeof at === "string" && parsePair(k) && Date.parse(at) >= cutoff) askedAt[k] = at;
+      }
       return {
         since: obj(v.since),
         tradesFor: obj(v.tradesFor),
@@ -1201,6 +1280,7 @@ export class TradeRecordService {
         coverage: obj(v.coverage),
         truncated: obj(v.truncated),
         doubts,
+        askedAt,
       };
     } catch {
       return empty();

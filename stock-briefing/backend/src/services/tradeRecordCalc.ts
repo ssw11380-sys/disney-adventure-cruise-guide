@@ -197,6 +197,8 @@ export const REGULAR_CLOSE_BASIS: Record<RecordMarket, string> = {
 };
 
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
+/** 수량은 소수 여섯째 자리까지 (토스 소수 수량 16.123456 — BH-48). 넷째 자리로 자르면 전량 매도가 0.000044주 남은 것처럼 보여 가짜 의심이 붙음 */
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 const sumOrNull = (xs: Array<number | null>, round: (n: number) => number): number | null => (xs.some((x) => x === null) ? null : round(xs.reduce<number>((s, x) => s + (x ?? 0), 0)));
 
 export function marketOf(code: string): RecordMarket {
@@ -278,10 +280,11 @@ export function buildSnapshotData(
 /**
  * - empty: 그 계좌의 그 시장 보유 목록이 비었는데 계좌 요약의 그 통화 매입금액이 0 이 아님 (목록만 비어 온 일시 오류)
  * - unsure: 그 계좌 보유 목록이 통째로 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 — 직전 스냅샷의 그 계좌 종목이
- *   그 사이 저장한 매도 체결로 모두 설명되면(전부 팖) 의심하지 않는다
+ *   그 사이 저장한 매도 체결로 모두 설명되고 그 뒤 산 종목도 없으면(전부 팖) 의심하지 않는다
  * - sum: 그 계좌 종목 매입금액 합계가 요약 매입금액과 반올림 차이(종목 수 × 1원·1센트)보다 크게 다름 (목록 일부만 온 일시 오류)
- * - vanished: 직전 스냅샷에 있던 종목이 목록에서 사라졌는데 그 사이 저장한 체결(매도)로 설명되지 않음 (목록 일부만 온 일시 오류)
- * - missing-account: 전에 그 시장 종목이 있던 계좌가 계좌 목록에서 빠짐
+ * - vanished: 직전 스냅샷에 있던 종목이 목록에서 사라졌는데 그 사이 저장한 체결(매도)로 설명되지 않거나, 그 뒤 저장한 매수로 있어야 할 종목이
+ *   목록에 없음 (목록 일부만 온 일시 오류)
+ * - missing-account: 전에 그 시장 종목이 있던 계좌(또는 그 뒤 그 시장 종목을 산 것으로 보이는 계좌)가 계좌 목록에서 빠짐
  */
 export type DoubtKind = "empty" | "unsure" | "sum" | "vanished" | "missing-account";
 
@@ -331,17 +334,32 @@ export function doubtCarriesOver(kind: DoubtKind): boolean {
 export interface PrevSnapshotInfo {
   /**
    * 그 시장 종목을 갖고 있던 계좌 — 직전 스냅샷에 그 계좌 종목이 있었거나, 직전 스냅샷에 없는 계좌(첫 스냅샷·새 계좌)면
-   * 토스 동기화가 마지막으로 믿은 보유에 그 시장 종목이 있던 계좌. 'unsure'·'missing-account' 는 이 계좌만 본다
+   * 토스 동기화가 마지막으로 믿은 보유에 그 시장 종목이 있던 계좌. 'unsure'·'missing-account' 는 이 계좌와, 직전 스냅샷 뒤 그 시장 종목을
+   * 산(traded 의 순매수가 저장된) 계좌만 본다
    * (늘 비어 있는 계좌가 목록에서 잠깐 빠지거나 달러 요약 없이 와도 의심하지 않게 — 토스 동기화의 kept.length > 0 과 같은 기준)
    */
   held?: readonly number[];
+  /**
+   * 직전 스냅샷에는 그 시장 종목이 없었지만 그 뒤 그 시장 종목을 샀을 수 있는 계좌 — 토스 동기화가 마지막으로 믿은 보유에 그 시장 종목이 있거나,
+   * 직전 스냅샷 뒤 그 시장 종목의 실시간 체결 알림이 온 계좌. 계좌 목록에서 빠졌을 때만(missing-account) 본다: 목록에 있는 계좌는
+   * 방금 받은 체결(traded)의 순매수로 가린다 (오래된 동기화 기록 때문에 전부 판 빈 계좌를 날마다 의심하지 않게)
+   */
+  mayHold?: readonly number[];
   /** 직전 스냅샷의 그 시장 보유 (계좌, 종목, 수량) — 목록에서 사라진 종목을 찾으려고 */
   holdings?: ReadonlyArray<{ account: number; code: string; quantity: number }>;
-  /** 직전 스냅샷 뒤 저장한 체결의 순수량 (매수 +, 매도 −), '계좌:종목' → 수량 (없으면 0) */
+  /** 직전 스냅샷 뒤 저장한 체결의 순수량 (매수 +, 매도 −), '계좌:종목' → 수량 (없으면 0). 직전 스냅샷에 없던 종목도 (새로 산 종목) */
   traded?: Readonly<Record<string, number>>;
 }
 
-const qtyText = (n: number) => `${round4(n)}주`;
+const qtyText = (n: number) => `${round6(n)}주`;
+
+/** '계좌:종목' → [계좌, 종목] (모양이 틀리면 null) */
+function splitPair(key: string): [number, string] | null {
+  const i = key.indexOf(":");
+  if (i <= 0) return null;
+  const account = Number(key.slice(0, i));
+  return Number.isInteger(account) ? [account, key.slice(i + 1)] : null;
+}
 
 /**
  * 그 시장 스냅샷을 찍기 전에 계좌마다 토스 응답을 확인한다. 빈 배열이면 믿을 수 있다.
@@ -354,18 +372,42 @@ export function snapshotDoubts(market: RecordMarket, accounts: AccountHoldings[]
   const cur = market === "KR" ? "KRW" : "USD";
   const listed = new Set(accounts.map((a) => a.account));
   const heldBefore = new Set(prev.held ?? []);
-  for (const acct of [...heldBefore].sort((x, y) => x - y)) {
-    if (!listed.has(acct)) out.push({ kind: "missing-account", account: acct, text: `계좌 ${acct}: 전에 ${name} 종목이 있던 계좌가 토스 계좌 목록에서 빠짐` });
+  // 직전 스냅샷 뒤 그 시장 종목을 산(순매수가 저장된) 계좌도 그 시장 종목이 있는 계좌로 본다 — 직전 스냅샷에 그 시장 종목이 없던 계좌가
+  // 그 사이 사고 나서 목록에서 빠지거나 목록이 통째로 비어 와도 'ok' 로 남기지 않게
+  const bought = new Set<number>();
+  for (const [key, q] of Object.entries(prev.traded ?? {})) {
+    const p = splitPair(key);
+    if (p && q > 1e-6 && marketOf(p[1]) === market && !heldBefore.has(p[0])) bought.add(p[0]);
+  }
+  for (const acct of bought) heldBefore.add(acct);
+  const mayHold = new Set((prev.mayHold ?? []).filter((acct) => !heldBefore.has(acct)));
+  for (const acct of [...heldBefore, ...mayHold].sort((x, y) => x - y)) {
+    if (listed.has(acct)) continue;
+    const was = (prev.held ?? []).includes(acct);
+    out.push({
+      kind: "missing-account",
+      account: acct,
+      text: was ? `계좌 ${acct}: 전에 ${name} 종목이 있던 계좌가 토스 계좌 목록에서 빠짐` : `계좌 ${acct}: 직전 스냅샷 뒤 ${name} 종목을 산 것으로 보이는 계좌가 토스 계좌 목록에서 빠짐`,
+    });
   }
   for (const a of accounts) {
     const held = a.items.filter((h) => h.quantity > 0);
     const mine = held.filter((h) => marketOf(h.code) === market);
     const summary = market === "KR" ? a.overview.purchaseKrw : a.overview.purchaseUsd;
-    // 직전 스냅샷에 있던 그 계좌 종목 가운데 지금 목록에 없는 것 — 그 사이 저장한 체결의 순매도가 그 수량을 덮으면 판 것으로 본다
+    // 있어야 할 종목 = 직전 스냅샷의 그 계좌 종목 + 그 뒤 저장한 체결의 순수량 (직전 스냅샷에 없던 종목은 새로 산 몫만).
+    // 지금 목록에 없는데 남는 수량이 있으면 사라진 것 — 그 사이 저장한 매도가 덮으면 판 것으로 본다
     const before = (prev.holdings ?? []).filter((h) => h.account === a.account && marketOf(h.code) === market && h.quantity > 0);
+    const expected = new Map<string, { before: number; left: number }>();
+    for (const h of before) expected.set(h.code, { before: (expected.get(h.code)?.before ?? 0) + h.quantity, left: 0 });
+    for (const [key, q] of Object.entries(prev.traded ?? {})) {
+      const p = splitPair(key);
+      if (p && p[0] === a.account && marketOf(p[1]) === market && !expected.has(p[1])) expected.set(p[1], { before: 0, left: 0 });
+    }
+    for (const [code, e] of expected) e.left = e.before + (prev.traded?.[`${a.account}:${code}`] ?? 0);
     const now = new Set(mine.map((h) => h.code));
-    const gone = before
-      .filter((h) => !now.has(h.code) && h.quantity + (prev.traded?.[`${a.account}:${h.code}`] ?? 0) > 1e-6)
+    const gone = [...expected]
+      .filter(([code, e]) => !now.has(code) && e.left > 1e-6)
+      .map(([code, e]) => ({ code, ...e }))
       .sort((x, y) => (x.code < y.code ? -1 : x.code > y.code ? 1 : 0));
     if (mine.length === 0) {
       if (summary !== null && summary !== 0) {
@@ -374,22 +416,24 @@ export function snapshotDoubts(market: RecordMarket, accounts: AccountHoldings[]
       }
       if (held.length === 0 && a.overview.purchaseUsd === null && heldBefore.has(a.account)) {
         // 목록이 통째로 비었고 달러 요약도 없다: 요약이 빠진 일시 오류와 전부 판 빈 계좌를 가릴 수 없다 (원화 요약은 없으면 0 으로 읽힌다).
-        // 그래서 전에 그 시장 종목이 있던 계좌만 의심한다 — 늘 비어 있는 계좌(달러 요약 없이 옴)는 날마다 의심하지 않는다 (토스 동기화와 같은 기준).
-        // 직전 스냅샷의 그 계좌 종목이 그 사이 저장한 매도로 모두 설명되면 정말 전부 판 것이라 곧바로 받아들인다
+        // 그래서 전에 그 시장 종목이 있던(또는 그 뒤 산) 계좌만 의심한다 — 늘 비어 있는 계좌(달러 요약 없이 옴)는 날마다 의심하지 않는다 (토스 동기화와 같은 기준).
+        // 직전 스냅샷의 그 계좌 종목이 그 사이 저장한 매도로 모두 설명되고 그 뒤 산 종목도 없으면 정말 전부 판 것이라 곧바로 받아들인다
         // (직전 스냅샷 없이 토스 동기화 기록으로만 아는 계좌는 수량을 몰라 맞춰 볼 수 없다)
         if (before.length === 0 || gone.length > 0) {
-          out.push({ kind: "unsure", account: a.account, text: `계좌 ${a.account}: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 (전에는 ${name} 종목이 있었음)` });
+          const why = bought.has(a.account) ? `직전 스냅샷 뒤 ${name} 종목을 샀음` : `전에는 ${name} 종목이 있었음`;
+          out.push({ kind: "unsure", account: a.account, text: `계좌 ${a.account}: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 (${why})` });
         }
         continue;
       }
       // 목록에 다른 시장 종목이 있는 계좌의 달러 요약 빈칸은 '달러 종목 없음'으로 본다 — 사라진 종목만 아래에서 본다
     }
     if (gone.length) {
-      out.push({
-        kind: "vanished",
-        account: a.account,
-        text: `계좌 ${a.account}: 직전 스냅샷의 ${gone.map((h) => `${h.code} ${qtyText(h.quantity)}`).join("·")}이(가) 목록에서 빠졌는데 그 사이 저장한 매도 체결로 설명되지 않음`,
-      });
+      const was = gone.filter((g) => g.before > 0);
+      const fresh = gone.filter((g) => g.before <= 0);
+      const parts: string[] = [];
+      if (was.length) parts.push(`직전 스냅샷의 ${was.map((g) => `${g.code} ${qtyText(g.before)}`).join("·")}이(가) 목록에서 빠졌는데 그 사이 저장한 매도 체결로 설명되지 않음`);
+      if (fresh.length) parts.push(`직전 스냅샷 뒤 저장한 매수 체결의 ${fresh.map((g) => `${g.code} ${qtyText(g.left)}`).join("·")}이(가) 목록에 없음`);
+      out.push({ kind: "vanished", account: a.account, text: `계좌 ${a.account}: ${parts.join(" · ")}` });
     }
     if (mine.length === 0 || summary === null) continue;
     const sameCur = held.filter((h) => h.currency === cur);
@@ -462,7 +506,7 @@ export function netTradedBetween(trades: TradeLite[], t1: number, t2: number): R
     const q = filledBetween(t, t1, t2);
     if (q === 0) continue;
     const key = `${t.account}:${t.code}`;
-    out[key] = round4((out[key] ?? 0) + (t.side === "BUY" ? q : -q));
+    out[key] = round6((out[key] ?? 0) + (t.side === "BUY" ? q : -q));
   }
   return out;
 }
@@ -493,7 +537,7 @@ export function unexplainedChanges(snapshots: SnapshotLite[], trades: TradeLite[
           const traded = trades
             .filter((t) => t.account === account && t.code === code)
             .reduce((sum, t) => sum + (t.side === "BUY" ? 1 : -1) * filledBetween(t, t1, t2), 0);
-          const unexplained = round4(toQty - fromQty - traded);
+          const unexplained = round6(toQty - fromQty - traded);
           if (Math.abs(unexplained) < 1e-6) continue;
           out.push({
             market,
@@ -503,7 +547,7 @@ export function unexplainedChanges(snapshots: SnapshotLite[], trades: TradeLite[
             toDate: s2.date,
             fromQty,
             toQty,
-            tradedQty: round4(traded),
+            tradedQty: round6(traded),
             unexplainedQty: unexplained,
             fromAvg: a?.avgPrice ?? null,
             toAvg: b?.avgPrice ?? null,

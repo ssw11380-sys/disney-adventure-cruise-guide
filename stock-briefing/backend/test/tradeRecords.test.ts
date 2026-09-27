@@ -754,6 +754,200 @@ describe("매매 기록 — 검토 반영 3: 체결 시각·짝·기간·정규�
   });
 });
 
+describe("매매 기록 — 검토 반영 4: 소수 수량·첫 몫의 시각·그 뒤 산 계좌", () => {
+  const overview = (purchaseUsd: number | null, purchaseKrw = 0) => ({ purchaseKrw, purchaseUsd, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null });
+
+  it("소수 여섯째 자리 수량을 전부 판 날도 곧바로 'close' — 0.123444·0.123456주, 다른 종목이 남은 계좌의 16.123444주 (예전에는 넷째 자리로 잘라 가짜 의심)", async () => {
+    for (const q of [0.123444, 0.123456]) {
+      const { toss, at, rows, svc } = await setup();
+      toss.accountList = [3, 7];
+      toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+      toss.holdings[7] = [holding("TSLA", q, 300, 377)];
+      await at("2026-09-29T05:05:00"); // 미국 9/28
+      toss.holdings[7] = [];
+      toss.overview[7] = overview(null); // 전부 팔면 토스는 달러 요약 없이 준다
+      toss.orders["7:TSLA"] = [order("t9", "TSLA", "SELL", q, Math.round(q * 377 * 100) / 100, "2026-09-29T23:10:00+09:00")];
+      await at("2026-09-30T05:05:00");
+      expect(await rows("US")).toEqual(["US 2026-09-28 ok close", "US 2026-09-29 ok close"]); // 0.123444 는 예전에 30분 넘게 'unsure' 뒤 의심을 안고 저장
+      expect((await svc.listSnapshots({ from: "2026-09-29", to: "2026-09-29", market: "US" }))[0]!).toMatchObject({ method: "close", reason: null, doubts: [] });
+      expect((await svc.listTrades({ from: "2026-09-28", to: "2026-09-29" })).estimated).toEqual([]);
+    }
+    const { toss, at, rows, svc } = await setup();
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38), holding("AAPL", 16.123444, 200, 230)];
+    await at("2026-09-29T05:05:00");
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    toss.orders["3:AAPL"] = [order("a9", "AAPL", "SELL", 16.123444, 3708.39, "2026-09-29T23:10:00+09:00")];
+    await at("2026-09-30T05:05:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close", "US 2026-09-29 ok close"]); // 예전에는 vanished 'AAPL 16.1234주'
+    const [s] = await svc.listSnapshots({ from: "2026-09-29", to: "2026-09-29", market: "US" });
+    expect(s).toMatchObject({ method: "close", reason: null, doubts: [] });
+    expect(s!.holdings.map((h) => h.code)).toEqual(["SOXL"]);
+  });
+
+  it("체결 시각 없이 처음 보는 진행 중 주문의 첫 몫은, 주문 시각이 그 짝을 마지막으로 받은 때·직전 스냅샷보다 이르면 그 스냅샷 시각('seen')으로 — 1초씩 흐르는 시계에서 가짜 '추정' 없음", async () => {
+    const { toss, at, svc } = await setup({ stepMs: 1000 });
+    toss.holdings[3] = [holding("SOXL", 7, 33, 38)];
+    await at("2026-09-29T05:05:00"); // 미국 9/28 — 9/28 22:30 에 낸 p2 는 아직 체결 0 이라 토스가 주지 않는다
+    // 미국 9/29 에 첫 2주 체결 (진행 중, 체결 시각 없음 — 주문 시각 9/28 22:30 만)
+    const p2 = (q: number) => order("p2", "SOXL", "BUY", q, q * 37, null, "OPEN");
+    toss.holdings[3] = [holding("SOXL", 9, 33, 38)];
+    toss.orders["3:SOXL"] = [p2(2)];
+    await at("2026-09-30T05:05:00");
+    // 미국 9/30: 그대로 진행 중(주문 시각이 또 와도 첫 몫을 주문 시각으로 되돌리지 않음), 10/1: 1주 더
+    await at("2026-10-01T05:05:00");
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    toss.orders["3:SOXL"] = [p2(3)];
+    await at("2026-10-02T05:05:00");
+    const snaps = await svc.listSnapshots({ from: "2026-09-28", to: "2026-10-01", market: "US" });
+    expect(snaps.map((s) => `${s.date} ${s.status}`)).toEqual(["2026-09-28 ok", "2026-09-29 ok", "2026-09-30 ok", "2026-10-01 ok"]);
+    const r = await svc.listTrades({ from: "2026-09-28", to: "2026-10-01" });
+    const got = r.items.find((t) => t.orderId === "p2")!;
+    expect(got).toMatchObject({ executedDate: "2026-09-29", timeBasis: "seen" }); // 예전에는 9/28 (ordered)
+    expect(got.fills.map((f) => [f.quantity, f.date, f.basis])).toEqual([
+      [2, "2026-09-29", "seen"],
+      [1, "2026-10-01", "seen"],
+    ]);
+    expect(Date.parse(got.fills[0]!.at)).toBeLessThanOrEqual(Date.parse(snaps[1]!.asOf));
+    expect(Date.parse(got.fills[0]!.at)).toBeGreaterThan(Date.parse(snaps[0]!.asOf));
+    expect(r.estimated).toEqual([]); // 예전에는 SOXL 9/28→9/29 +2 (첫 몫이 주문 시각 9/28 22:30 으로 앞 구간에 들어감)
+    // 주문 시각이 그 짝을 마지막으로 받은 때보다 뒤면(그 사이 낸 주문) 예전처럼 주문 시각
+    toss.holdings[3] = [holding("SOXL", 11, 33, 38)];
+    toss.orders["3:SOXL"] = [p2(3), { ...order("p5", "SOXL", "BUY", 1, 37, null, "OPEN"), orderedAt: "2026-10-02T22:40:00+09:00" }];
+    await at("2026-10-03T05:05:00");
+    expect((await svc.listTrades({ from: "2026-10-02", to: "2026-10-02" })).items.find((t) => t.orderId === "p5")).toMatchObject({ executedAt: "2026-10-02T22:40:00+09:00", timeBasis: "ordered" });
+  });
+
+  it("처음 묻는 짝도 직전 스냅샷보다 이른 주문 시각은 쓰지 않고(그때 체결됐다면 그 스냅샷 보유에 들었다), 그 짝을 마지막으로 받은 때보다 이른 주문 시각도 쓰지 않는다", async () => {
+    const { toss, at, svc, clock } = await setup();
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    await at("2026-09-29T05:05:00"); // 미국 9/28 — 9/28 22:30 에 낸 NVDA 주문은 아직 체결 0
+    // 미국 9/29 에 NVDA 첫 체결 — 이 계좌에 NVDA 는 처음이라 그 짝을 물은 적이 없다
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38), holding("NVDA", 1, 180, 182)];
+    toss.orders["3:NVDA"] = [order("n1", "NVDA", "BUY", 1, 180, null, "OPEN")]; // 주문 시각 9/28 22:30
+    await at("2026-09-30T05:05:00");
+    // 관리 API 로 SOXL 을 06:00 에 받음 — 05:30 에 낸 s1 은 아직 체결 0 이라 오지 않고, 그 뒤 체결
+    clock.t = kst("2026-09-30T06:00:00");
+    await svc.syncTrades("US", ["SOXL"]);
+    toss.holdings[3] = [holding("SOXL", 11, 33, 38), holding("NVDA", 1, 180, 182)];
+    toss.orders["3:SOXL"] = [{ ...order("s1", "SOXL", "BUY", 1, 38, null, "OPEN"), orderedAt: "2026-09-30T05:30:00+09:00" }];
+    await at("2026-10-01T05:05:00");
+    const r = await svc.listTrades({ from: "2026-09-28", to: "2026-09-30" });
+    expect(Object.fromEntries(r.items.map((t) => [t.orderId, [t.timeBasis, t.executedDate]]))).toEqual({
+      n1: ["seen", "2026-09-29"], // 주문 시각(9/28)으로 적으면 NVDA 9/28→9/29 +1 '추정'
+      s1: ["seen", "2026-09-30"], // 주문 시각(미국 9/29 애프터마켓)은 06:00 에 물었을 때 체결이 없었으니 쓰지 않는다
+    });
+    expect(r.estimated).toEqual([]);
+  });
+
+  it("의심 때문에 다시 찍을 때는 그 시장 진행 중 주문의 짝만 다시 물어, 첫 시도 뒤 늘어난 몫을 그 스냅샷 시각으로 — 다음 날로 밀린 가짜 '추정' ± 없음", async () => {
+    const { toss, at, rows, svc } = await setup({ stepMs: 1000 });
+    toss.holdings[3] = [holding("SOXL", 7, 33, 38)];
+    await at("2026-09-29T05:05:00"); // 미국 9/28
+    // 미국 9/29 22:30 에 낸 p3 가 1주 체결된 채 진행 중 — 첫 시도는 목록 일부만 온 응답(합계 ≠ 요약)이라 보류
+    const p3 = (q: number) => ({ ...order("p3", "SOXL", "BUY", q, q * 37, null, "OPEN"), orderedAt: "2026-09-29T22:30:00+09:00" });
+    toss.holdings[3] = [holding("SOXL", 8, 33, 38)];
+    toss.overview[3] = overview(999);
+    toss.orders["3:SOXL"] = [p3(1)];
+    await at("2026-09-30T05:05:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close"]);
+    // 5분 사이 애프터마켓에서 2주 더 체결(여전히 체결 시각 없음), 이번 응답은 제대로
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    delete toss.overview[3];
+    toss.orders["3:SOXL"] = [p3(3)];
+    toss.asked = [];
+    await at("2026-09-30T05:10:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close", "US 2026-09-29 ok close"]);
+    expect(toss.asked).toEqual(["3:SOXL"]); // 진행 중 주문의 짝만 (예전에는 묻지 않아 +2 가 다음 날 스냅샷 시각으로 밀렸다)
+    await at("2026-10-01T05:05:00");
+    const [s29] = await svc.listSnapshots({ from: "2026-09-29", to: "2026-09-29", market: "US" });
+    const r = await svc.listTrades({ from: "2026-09-28", to: "2026-09-30" });
+    const fills = r.items.find((t) => t.orderId === "p3")!.fills;
+    expect(fills.map((f) => [f.quantity, f.basis])).toEqual([
+      [1, "ordered"],
+      [2, "seen"],
+    ]);
+    expect(Date.parse(fills[1]!.at)).toBeLessThanOrEqual(Date.parse(s29!.asOf));
+    expect(r.estimated).toEqual([]); // 예전에는 9/28→9/29 +2, 9/29→9/30 −2
+    // 다시 물은 것은 종목별 받은 날·오류를 건드리지 않는다
+    expect((await svc.status()).trades).toMatchObject({ lastError: null, failing: {} });
+  });
+
+  it("직전 스냅샷에 그 시장 종목이 없던 계좌가 그 뒤 사고 나서 목록에서 빠지면 찍지 않고 다시 — 저장한 매수·토스 동기화·실시간 체결 알림 어느 것으로 알아도", async () => {
+    type S = Awaited<ReturnType<typeof setup>>;
+    const learn: Record<string, (s: S) => Promise<unknown>> = {
+      // 계좌 7 이 목록에 있을 때 관리 API 로 받은 매수
+      buy: (s) => s.svc.syncTrades("US", ["TSLA"]),
+      // 토스 동기화가 본 보유 (계좌 7 이 빠지자 동기화도 믿지 않고 전 보유를 그대로 둠)
+      sync: (s) =>
+        s.db
+          .insertInto("meta")
+          .values({ key: "toss_holdings_accounts", value: JSON.stringify({ held: { "3": ["SOXL"], "7": ["005930", "TSLA"] }, doubt: { "7": { since: "2026-09-30T05:00:00+09:00", count: 1 } } }) })
+          .execute(),
+      // 계좌가 온 실시간 체결 알림
+      alert: (s) => s.svc.noteOrderEvent({ event: "FILL", accountSeq: 7, order: { symbol: "TSLA" } }),
+    };
+    for (const [how, fn] of Object.entries(learn)) {
+      const s = await setup();
+      s.toss.accountList = [3, 7];
+      s.toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+      s.toss.holdings[7] = [holding("005930", 10, 70000, 71200)];
+      await s.at("2026-09-29T05:05:00"); // 미국 9/28 — 계좌 7 은 한국 종목만
+      s.toss.holdings[7] = [holding("005930", 10, 70000, 71200), holding("TSLA", 1, 300, 377)];
+      s.toss.orders["7:TSLA"] = [order("t1", "TSLA", "BUY", 1, 300, "2026-09-29T23:10:00+09:00")];
+      s.clock.t = kst("2026-09-29T23:30:00");
+      await fn(s);
+      s.toss.accountList = [3]; // 미국 9/29 스냅샷 때 계좌 7 이 잠깐 빠짐
+      await s.at("2026-09-30T05:05:00");
+      expect(await s.rows("US"), how).toEqual(["US 2026-09-28 ok close"]); // 예전에는 계좌 7 없이 'ok close' → 다음 날 가짜 TSLA 추정
+      expect((await s.svc.status()).markets.US.lastError, how).toContain("계좌 7: 직전 스냅샷 뒤 미국 종목을 산 것으로 보이는 계좌가 토스 계좌 목록에서 빠짐");
+      s.toss.accountList = [3, 7];
+      await s.at("2026-09-30T05:10:00");
+      expect(await s.rows("US"), how).toEqual(["US 2026-09-28 ok close", "US 2026-09-29 ok close"]);
+      const [snap] = await s.svc.listSnapshots({ from: "2026-09-29", to: "2026-09-29", market: "US" });
+      expect(snap!.holdings.map((h) => `${h.account}:${h.code}`), how).toEqual(["3:SOXL", "7:TSLA"]);
+      expect(snap, how).toMatchObject({ reason: null, doubts: [] });
+      await s.at("2026-10-01T05:05:00");
+      expect((await s.svc.listTrades({ from: "2026-09-28", to: "2026-09-30" })).estimated, how).toEqual([]);
+    }
+  });
+
+  it("계좌 하나를 전부 판 날 새로 산 종목(NVDA 1 — 매수 저장됨)이 있는데 목록만 통째로 비어 오면 'ok' 로 남기지 않고 다시 — 오래된 동기화 기록만으로는 전부 판 빈 계좌를 의심하지 않는다", async () => {
+    const { toss, at, rows, svc, clock, db } = await setup();
+    toss.accountList = [3, 7];
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    toss.holdings[7] = [holding("TSLA", 2, 300, 377)];
+    await at("2026-09-29T05:05:00"); // 미국 9/28
+    toss.orders["7:TSLA"] = [order("t9", "TSLA", "SELL", 2, 760, "2026-09-29T23:10:00+09:00")];
+    toss.orders["7:NVDA"] = [order("n1", "NVDA", "BUY", 1, 180, "2026-09-29T23:20:00+09:00")];
+    clock.t = kst("2026-09-29T23:20:03");
+    await svc.noteOrderEvent({ event: "FILL", accountSeq: 7, order: { symbol: "NVDA" } });
+    toss.holdings[7] = []; // 일시 오류: 정말은 NVDA 1주
+    toss.overview[7] = overview(null);
+    await at("2026-09-30T05:05:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close"]); // 예전에는 TSLA 매도만 맞춰 보고 NVDA 가 빠진 'ok close' (의심 없음)
+    expect((await svc.status()).markets.US.lastError).toContain("계좌 7: 보유 목록이 비었고");
+    toss.holdings[7] = [holding("NVDA", 1, 180, 182)];
+    delete toss.overview[7];
+    await at("2026-09-30T05:10:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close", "US 2026-09-29 ok close"]);
+    const [s29] = await svc.listSnapshots({ from: "2026-09-29", to: "2026-09-29", market: "US" });
+    expect(s29!.holdings.map((h) => `${h.account}:${h.code}`)).toEqual(["3:SOXL", "7:NVDA"]);
+    expect(s29).toMatchObject({ reason: null, doubts: [] });
+    // 미국 9/30: 계좌 7 이 NVDA 도 전부 팔아 빈 계좌. 토스 동기화 기록은 오래돼 아직 TSLA·NVDA 가 있다고 해도, 목록에 있는 계좌는 저장한 체결로 가린다
+    await db.insertInto("meta").values({ key: "toss_holdings_accounts", value: JSON.stringify({ held: { "3": ["SOXL"], "7": ["TSLA", "NVDA"] }, doubt: {} }) }).execute();
+    toss.holdings[7] = [];
+    toss.overview[7] = overview(null);
+    toss.orders["7:NVDA"] = [order("n1", "NVDA", "BUY", 1, 180, "2026-09-29T23:20:00+09:00"), order("n2", "NVDA", "SELL", 1, 185, "2026-09-30T23:00:00+09:00")];
+    await at("2026-10-01T05:05:00");
+    expect((await rows("US")).at(-1)).toBe("US 2026-09-30 ok close");
+    // 10/1: 계좌 7 은 여전히 빈 계좌 — 직전 스냅샷에 종목이 없고 새로 산 것도 없으니 동기화 기록이 오래돼도 곧바로
+    await at("2026-10-02T05:05:00");
+    expect((await rows("US")).at(-1)).toBe("US 2026-10-01 ok close");
+    expect((await svc.listSnapshots({ from: "2026-10-01", to: "2026-10-01", market: "US" }))[0]!).toMatchObject({ method: "close", reason: null, doubts: [] });
+    expect((await svc.listTrades({ from: "2026-09-28", to: "2026-10-01" })).estimated).toEqual([]);
+  });
+});
+
 describe("매매 기록 — 체결 저장 (토스 주문 내역)", () => {
   it("그 시장 종목의 주문 내역을 받아 주문번호로 한 줄씩 — 다시 받아도 늘지 않고, 부분 체결은 늘어난 만큼 고친다", async () => {
     const { toss, at, svc, db, rows } = await setup();
