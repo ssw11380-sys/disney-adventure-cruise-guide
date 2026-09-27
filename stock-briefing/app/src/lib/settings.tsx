@@ -9,6 +9,7 @@ import { Platform } from "react-native";
  *  - sort: 내 종목 정렬
  *  - showKrw: 미국 종목을 원화로 환산해 표시
  *  - widgetRowCurrency: 잔고 위젯(다듬은 모습) 종목 줄의 손익 금액 통화 — 원화(기본, 합계와 같은 기준) · 종목 통화
+ *  - haptics: 누를 때 짧은 진동 (3-24, 기능 플래그 oneHand 가 켜져 있을 때만 설정 화면에 보인다. 기본 켬 — lib/haptics)
  * 위젯(백그라운드)도 같은 키를 읽으므로 키 이름을 바꾸면 widgets/ 쪽도 같이 바꿔야 한다.
  */
 
@@ -20,6 +21,7 @@ export const STORAGE_KEYS = {
   themeMode: "settings.themeMode",
   afterCost: "settings.afterCost",
   widgetRowCurrency: "settings.widgetRowCurrency",
+  haptics: "settings.haptics",
 } as const;
 
 /** 잔고 위젯 종목 줄 손익 금액: 원화(기본) · 종목 통화 */
@@ -72,6 +74,8 @@ interface Settings {
   afterCost: boolean;
   /** 잔고 위젯 종목 줄 손익 금액 통화 (기본 원화) */
   widgetRowCurrency: WidgetRowCurrency;
+  /** 누를 때 짧은 진동 (기본 켬, 3-24) */
+  haptics: boolean;
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
   setApiToken: (token: string) => Promise<void>;
@@ -82,6 +86,7 @@ interface Settings {
   setThemeMode: (m: ThemeMode) => Promise<void>;
   setAfterCost: (on: boolean) => Promise<void>;
   setWidgetRowCurrency: (v: WidgetRowCurrency) => Promise<void>;
+  setHaptics: (on: boolean) => Promise<void>;
 }
 
 /**
@@ -117,6 +122,7 @@ const Ctx = createContext<Settings>({
   themeMode: "dark",
   afterCost: true,
   widgetRowCurrency: "krw",
+  haptics: true,
   ready: false,
   setApiUrl: noop,
   setApiToken: noop,
@@ -126,6 +132,7 @@ const Ctx = createContext<Settings>({
   setThemeMode: noop,
   setAfterCost: noop,
   setWidgetRowCurrency: noop,
+  setHaptics: noop,
 });
 
 async function persist(key: string, value: string | null): Promise<void> {
@@ -181,10 +188,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => initialThemeMode());
   const [afterCost, setAfterCostState] = useState(true);
   const [widgetRowCurrency, setWidgetRowCurrencyState] = useState<WidgetRowCurrency>("krw");
+  const [haptics, setHapticsState] = useState(true);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency])
+    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency, STORAGE_KEYS.haptics])
       .then((pairs) => {
         const m = new Map(pairs);
         const u = m.get(STORAGE_KEYS.apiUrl);
@@ -203,6 +211,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         const ac = m.get(STORAGE_KEYS.afterCost);
         if (ac) setAfterCostState(ac === "1");
         setWidgetRowCurrencyState(widgetRowCurrencyOf(m.get(STORAGE_KEYS.widgetRowCurrency)));
+        // 저장한 적 없으면 켬
+        const hp = m.get(STORAGE_KEYS.haptics);
+        if (hp) setHapticsState(hp !== "0");
       })
       .catch(() => {})
       .finally(() => {
@@ -258,9 +269,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     await persist(STORAGE_KEYS.widgetRowCurrency, v);
   }, []);
 
+  const setHaptics = useCallback(async (on: boolean) => {
+    setHapticsState(on);
+    await persist(STORAGE_KEYS.haptics, on ? "1" : "0");
+  }, []);
+
   const value = useMemo(
-    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency }),
-    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency],
+    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics }),
+    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

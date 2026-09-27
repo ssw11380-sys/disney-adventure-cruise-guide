@@ -82,6 +82,7 @@ vi.mock("@/components/Freshness", () => ({ LiveStatus: "LiveStatus", StaleBanner
 vi.mock("@/components/MarketStrip", () => ({ MarketStrip: "MarketStrip" }));
 vi.mock("@/components/Skeleton", () => ({ HoldingsSkeleton: "HoldingsSkeleton" }));
 vi.mock("@/components/StockRow", () => ({ StockRow: "StockRow" }));
+vi.mock("@/components/SwipeRow", () => ({ SwipeRow: "SwipeRow" }));
 vi.mock("@/components/StockLine", () => ({ PRICE_HEAD: "현재가·등락률", useLineCols: () => ({ rank: 30, price: 100, right: 108 }) }));
 vi.mock("@/components/HoldingsTableHead", () => ({ TableHeadRow: "TableHeadRow" }));
 vi.mock("@/components/AccountBand", async (orig) => ({ ...(await orig<typeof import("@/components/AccountBand")>()), AccountBand: "AccountBand" }));

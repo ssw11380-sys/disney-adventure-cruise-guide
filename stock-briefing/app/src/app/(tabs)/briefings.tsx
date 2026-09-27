@@ -23,7 +23,9 @@ import { firstPick, gridColumns, isUnread, latestSession, noteListSession, noteT
 import { markBriefingRead, useReadBriefings } from "@/lib/briefingRead";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
+import { openServerSettings } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
+import { useUx } from "@/lib/uxFlags";
 import { isWide } from "@/lib/windowClass";
 import { font, fontCap, slopFor, space, useTheme } from "@/theme";
 import { foldBriefings as FB, layout as L } from "@/tokens";
@@ -67,6 +69,11 @@ export default function BriefingsScreen() {
   // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약이 켜져 있으면 그것도)을 함께
   const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : []), ...(summaryOn ? [summaries.refetch()] : [])]));
   const [order, setOrder] = useState<Order>("movers");
+  // 3-24 (플래그 emptyGuide): 빈 목록의 안내 + 버튼 하나, 연결 오류의 '설정 열기'. 꺼져 있으면 지금 그대로
+  const ux = useUx();
+  const openSettings = ux.emptyGuide ? openServerSettings : undefined;
+  // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
+  const guideProps = openSettings ? { onOpenSettings: openSettings } : null;
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);
   // 3-42 넓은 창: 플래그가 꺼져 있으면 on=false → 아래는 모두 지금 그대로
   const fold = useFoldLayout();
@@ -130,7 +137,7 @@ export default function BriefingsScreen() {
   // 넓은 창은 탭 머리를 숨기므로 불러오는 중·오류 화면도 위 화면 여백(상태 표시줄) 아래에서 시작한다
   const frame = (el: React.ReactElement) => (wide ? <WideFrame rail={fold.rail}>{el}</WideFrame> : el);
   if (view === "loading") return frame(<Screen>{head}<CardsSkeleton count={4} /></Screen>);
-  if (view === "error") return frame(<Screen>{head}<ErrorView error={error} onRetry={() => void refetch()} /></Screen>);
+  if (view === "error") return frame(<Screen>{head}<ErrorView error={error} onRetry={() => void refetch()} {...guideProps} /></Screen>);
 
   const items = data ?? [];
   // 등락률을 받기 전엔 정렬을 미룬다(두 번 재정렬되지 않게). 못 받으면 등록순 + 안내
@@ -166,6 +173,20 @@ export default function BriefingsScreen() {
       <Muted style={{ paddingHorizontal: space.lg }}>브리핑 없음: {items.filter((i) => !i.latest).map((i) => i.name).join(", ")}</Muted>
     ) : null;
 
+  // 3-24 빈 목록 (플래그 emptyGuide): 무엇을 하면 되는지 한 문장 + 버튼 하나. 꺼져 있으면 아래 예전 안내 그대로
+  const guideEmpty = ux.emptyGuide
+    ? {
+        none: <Empty title="등록된 종목이 없습니다" hint="종목을 추가하면 평일 장 시작 전·마감 뒤에 종목마다 브리핑이 만들어집니다." action={<Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} />} />,
+        noBriefing: (
+          <Empty
+            title="생성된 브리핑이 없습니다"
+            hint="평일 장 시작 전·마감 뒤에 자동으로 만들어집니다. 기다리지 않고 지금 만들 수도 있습니다."
+            action={<Button title="지금 만들기" icon="sparkles-outline" variant="secondary" loading={run.isPending} onPress={openMore} />}
+          />
+        ),
+      }
+    : null;
+
   if (wide) {
     // 넓은 창 목록 위 안내는 짧게 (목업): 휴장이어도 국내 종목의 지난 브리핑·등락률은 목록에 있으므로 '브리핑 없음' 대신 등락 기준을 밝힌다
     const wideHoliday = krHoliday ? `한국 휴장일 · 국내 종목은 직전 거래일 등락${market.data?.KR.opensAt ? ` · 다음 개장 ${formatDateKo(market.data.KR.opensAt)}` : ""}` : null;
@@ -197,7 +218,8 @@ export default function BriefingsScreen() {
         more={items.length > 0 ? { onPress: openMore, busy: run.isPending } : null}
         missingNote={missingNote}
         empty={items.length === 0 ? "none" : withBriefing.length === 0 ? "noBriefing" : null}
-        stale={<StaleBanner query={latest} />}
+        guideEmpty={guideEmpty}
+        stale={<StaleBanner query={latest} {...guideProps} />}
         pulling={pulling}
         onPull={onPull}
         picked={picked}
@@ -215,7 +237,7 @@ export default function BriefingsScreen() {
     scrollRef.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - space.xl), animated: false });
   };
   return (
-    <Screen disclaimer refreshing={pulling} onRefresh={onPull} top={<StaleBanner query={latest} />} {...(hlId !== null ? { scrollRef } : {})}>
+    <Screen disclaimer refreshing={pulling} onRefresh={onPull} top={<StaleBanner query={latest} {...guideProps} />} {...(hlId !== null ? { scrollRef } : {})}>
       {head}
       {summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} /> : null}
       {account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} /> : null}
@@ -263,9 +285,9 @@ export default function BriefingsScreen() {
         onChange={setMode}
       />
       {items.length === 0 ? (
-        <Empty title="등록된 종목이 없습니다" hint="잔고 탭에서 종목을 추가하세요." />
+        (guideEmpty?.none ?? <Empty title="등록된 종목이 없습니다" hint="잔고 탭에서 종목을 추가하세요." />)
       ) : withBriefing.length === 0 ? (
-        <Empty title="생성된 브리핑이 없습니다" hint="평일 장 시작 전·마감 후 자동 생성" />
+        (guideEmpty?.noBriefing ?? <Empty title="생성된 브리핑이 없습니다" hint="평일 장 시작 전·마감 후 자동 생성" />)
       ) : (
         withBriefing.map((i) => {
           const selected = hlId !== null && i.latest!.id === hlId;
@@ -317,6 +339,8 @@ interface WideProps {
   more: { onPress: () => void; busy: boolean } | null;
   missingNote: React.ReactNode;
   empty: "none" | "noBriefing" | null;
+  /** 3-24 빈 목록 안내 (플래그 emptyGuide — 꺼져 있으면 null, 예전 안내) */
+  guideEmpty: { none: React.ReactNode; noBriefing: React.ReactNode } | null;
   stale: React.ReactNode;
   pulling: boolean;
   onPull: () => void;
@@ -439,7 +463,11 @@ function WideBriefings(p: WideProps) {
   const rateOf = (i: LatestBriefing) => (p.ratesKnown ? (p.rates.get(i.code) ?? null) : undefined);
   const unreadOf = (i: LatestBriefing) => ready && isUnread(i.latest!, read, latestKey);
   const emptyView =
-    p.empty === "none" ? <Empty title="등록된 종목이 없습니다" hint="잔고 탭에서 종목을 추가하세요." /> : p.empty === "noBriefing" ? <Empty title="생성된 브리핑이 없습니다" hint="평일 장 시작 전·마감 후 자동 생성" /> : null;
+    p.empty === "none"
+      ? (p.guideEmpty?.none ?? <Empty title="등록된 종목이 없습니다" hint="잔고 탭에서 종목을 추가하세요." />)
+      : p.empty === "noBriefing"
+        ? (p.guideEmpty?.noBriefing ?? <Empty title="생성된 브리핑이 없습니다" hint="평일 장 시작 전·마감 후 자동 생성" />)
+        : null;
   // 목록 위 안내는 한 줄에 모은다 (휴장 · 정렬 기준 · 등락률 못 받음). 길면 안내 묶음째 다음 줄로.
   // 2단 목록(400)은 목업처럼 휴장 안내만 위에 두고(한 줄 → 첫 화면 9줄), 변동 큰 순 기준·매매 권유 아님은 목록 아래에 둔다.
   // 순위(1~3)의 뜻은 바로 위 정렬 알약(변동 큰 순)과 줄마다 읽는 문장('변동 큰 순 1위')이 알려 준다

@@ -4,11 +4,13 @@ import React, { useCallback, useMemo, useState } from "react";
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useDiscoverThemes } from "@/api/hooks";
 import type { DiscoverMarket, ThemeKind, ThemePeriod, ThemeSummary } from "@/api/types";
-import { Empty, ErrorView } from "@/components/ui";
+import { Button, Empty, ErrorView } from "@/components/ui";
 import { speakRate } from "@/lib/a11y";
 import { heatColumns, themeLeaderLineW, themeListColumns } from "@/lib/discoverColumns";
 import { formatDateKo, formatPct } from "@/lib/format";
+import { openServerSettings } from "@/lib/settingsLink";
 import { useSticky } from "@/lib/useSticky";
+import { useUx } from "@/lib/uxFlags";
 import { changeColor, font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { foldScreens } from "@/tokens";
 import { DISCLAIMER } from "@/components/Screen";
@@ -52,6 +54,8 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
   const [order, setOrder] = useState<"up" | "down">("up");
   const q = useDiscoverThemes(market, kind, period);
   const { pulling, onPull } = usePull(q.refetch);
+  // 3-24 (플래그 emptyGuide): 빈 목록의 안내 + 버튼 하나, 연결 오류의 '설정 열기'
+  const ux = useUx();
   // 테마/업종·기간을 바꾸는 동안에는 이전 값을 흐리게 보여 준다
   const data = q.data;
   const switching = q.isPlaceholderData;
@@ -208,7 +212,7 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
     return (
       <View style={{ flex: 1 }}>
         {head}
-        <ErrorView error={q.error} onRetry={() => void q.refetch()} />
+        <ErrorView error={q.error} onRetry={() => void q.refetch()} {...(ux.emptyGuide ? { onOpenSettings: openServerSettings } : null)} />
       </View>
     );
 
@@ -220,7 +224,11 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
       {`\n${DISCLAIMER}`}
     </Text>
   ) : null;
-  const empty = <Empty title={`${kindWord}를 불러오지 못했습니다`} hint="잠시 뒤 당겨서 새로고침 하세요." />;
+  const empty = ux.emptyGuide ? (
+    <Empty title={`${kindWord}를 불러오지 못했습니다`} hint={`${kindWord} 목록을 아직 받지 못했습니다. 잠시 뒤 다시 받아 보세요.`} action={<Button title="새로고침" icon="refresh" variant="secondary" loading={pulling} onPress={onPull} />} />
+  ) : (
+    <Empty title={`${kindWord}를 불러오지 못했습니다`} hint="잠시 뒤 당겨서 새로고침 하세요." />
+  );
   const refresh = <RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} />;
 
   return view === "heat" ? (

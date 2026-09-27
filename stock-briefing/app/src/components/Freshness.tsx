@@ -1,30 +1,65 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useCallback, useEffect, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { Quote } from "@/api/types";
+import { authBanner, connectionKind, SERVER_SECTION } from "@/lib/connectionError";
 import { chartNotice, clockLabel, connection, liveLabel, OPEN_MAX_AGE_MS, staleBanner, streamFresh, type LiveTone, type QueryLike } from "@/lib/freshness";
+import { haptic } from "@/lib/haptics";
 import { feedHealthy, liveCounts, marketSessions, recheckIn, sessionStatus } from "@/lib/liveDot";
 import { useLiveStream } from "@/lib/liveStream";
 import { resetPollBackoff } from "@/lib/pollSaver";
 import { useNow } from "@/lib/useNow";
-import { font, fontCap, space, useTheme } from "@/theme";
+import { font, fontCap, slopFor, space, useTheme } from "@/theme";
 
 /**
  * 끊김·지연 띠: "연결 끊김 · 14:03:21 기준 · 다시 연결 중". 값은 그대로 두고 위에 한 줄만 얹는다.
  * 시간이 지나 "지연"으로 바뀌는 판단은 이 작은 컴포넌트 안에서만 5초마다 다시 그린다(화면 전체를 다시 그리지 않게).
  * maxAgeMs 를 주지 않으면 끊김만 본다(브리핑처럼 시세가 아닌 화면).
  */
-export function StaleBanner({ query, open = false, maxAgeMs }: { query: QueryLike; open?: boolean; maxAgeMs?: number | ((fresh: boolean) => number) }) {
+export function StaleBanner({
+  query,
+  open = false,
+  maxAgeMs,
+  onOpenSettings,
+}: {
+  query: QueryLike;
+  open?: boolean;
+  maxAgeMs?: number | ((fresh: boolean) => number);
+  /**
+   * 3-24(기능 플래그 emptyGuide): 서버 연결 문제(주소·인터넷·시간 초과·토큰)로 끊겼으면 띠 오른쪽에 '설정 열기'(설정 > 서버 연결 칸).
+   * 토큰 문구도 설정 칸 이름에 맞춘다('API 토큰 확인 필요'). 주지 않으면 지금 그대로
+   */
+  onOpenSettings?: () => void;
+}) {
   const t = useTheme();
   const stream = useLiveStream();
   const now = useNow(maxAgeMs === undefined ? 60_000 : 5_000);
   const limit = typeof maxAgeMs === "function" ? maxAgeMs(streamFresh(stream, now)) : (maxAgeMs ?? Number.POSITIVE_INFINITY);
   const conn = connection(query, now, limit);
   // 토큰이 틀려 실패 중이면 "다시 연결 중" 대신 무엇을 고쳐야 하는지
-  const auth = conn.offline && (query as { error?: { status?: number } | null }).error?.status === 401;
-  const text = auth ? `토큰 확인 필요 · ${clockLabel(conn.asOf!, now)} 기준 · 설정에서 토큰 입력` : staleBanner(conn, { open, now });
+  const error = (query as { error?: unknown }).error;
+  const auth = conn.offline && (error as { status?: number } | null | undefined)?.status === 401;
+  const guide = onOpenSettings && conn.offline && connectionKind(error) !== null ? onOpenSettings : undefined;
+  const text = auth
+    ? guide
+      ? authBanner(clockLabel(conn.asOf!, now))
+      : `토큰 확인 필요 · ${clockLabel(conn.asOf!, now)} 기준 · 설정에서 토큰 입력`
+    : staleBanner(conn, { open, now });
   if (!text) return null;
   const color = conn.offline ? t.danger : t.warn;
+  if (guide)
+    return (
+      // 버튼이 따로 눌려야 하므로 띠를 한 덩어리로 묶지 않는다 (글은 알림으로 읽고, 버튼은 따로 고른다)
+      <View style={[styles.bar, { backgroundColor: t.surfaceAlt, borderBottomColor: t.line }]}>
+        <Ionicons name="cloud-offline-outline" size={14} color={color} />
+        <Text style={{ color, fontSize: font.small, fontWeight: "600", flexShrink: 1 }} numberOfLines={1} accessibilityRole="alert" accessibilityLiveRegion="polite">
+          {text}
+        </Text>
+        <Pressable onPress={guide} accessibilityRole="button" accessibilityLabel={`설정 열기, ${SERVER_SECTION}`} hitSlop={slopFor(font.small * 1.35, space.sm)} style={styles.barAction}>
+          <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "700" }}>설정 열기</Text>
+        </Pressable>
+      </View>
+    );
   return (
     <View style={[styles.bar, { backgroundColor: t.surfaceAlt, borderBottomColor: t.line }]} accessible accessibilityRole="alert" accessibilityLiveRegion="polite" accessibilityLabel={text}>
       <Ionicons name={conn.offline ? "cloud-offline-outline" : "time-outline"} size={14} color={color} />
@@ -155,6 +190,8 @@ export function ChartNotice({ query }: { query: QueryLike & { error?: unknown; e
 export function usePull(refetch: () => Promise<unknown>): { pulling: boolean; onPull: () => void } {
   const [pulling, setPulling] = useState(false);
   const onPull = useCallback(() => {
+    // 당겨서 새로고침을 시작할 때 짧은 진동 (3-24 oneHand + 설정 켬일 때만 — lib/haptics)
+    haptic("select");
     setPulling(true);
     // 사용자가 직접 당기면 늦춘 폴링 주기(pollSaver, 값이 그대로일 때 4초)를 다시 3초로
     resetPollBackoff();
@@ -174,6 +211,8 @@ export function statusLines(text: string, head: string): { top: string; rest: st
 
 const styles = StyleSheet.create({
   bar: { flexDirection: "row", alignItems: "center", gap: space.s, paddingHorizontal: space.lg, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
+  // 끊김 띠의 '설정 열기' (3-24): 오른쪽 끝, 위아래 hitSlop 으로 44
+  barAction: { marginLeft: "auto", paddingLeft: space.sm },
   dot: { width: 5, height: 5, borderRadius: 3 },
   twoLine: { alignItems: "flex-end", flexShrink: 1 },
   lineTop: { flexDirection: "row", alignItems: "center", gap: space.xs, flexShrink: 1 },

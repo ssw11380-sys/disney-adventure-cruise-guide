@@ -12,12 +12,14 @@ import { openStock, StatusLine, useAddWatch, useBoxWidth, useMarks, usePull } fr
 import { SkeletonRows } from "@/components/discover/Skeleton";
 import { DISCLAIMER } from "@/components/Screen";
 import { ThemeBoard } from "@/components/discover/ThemeBoard";
-import { Chip, Empty, ErrorView, Segmented } from "@/components/ui";
+import { Button, Chip, Empty, ErrorView, Segmented } from "@/components/ui";
 import { pickDiscoverCols, type DiscoverColKey } from "@/lib/discoverColumns";
 import { joinRankPages } from "@/lib/rankPages";
 import { TAB_ICON } from "@/lib/textScale";
 import { useSettings } from "@/lib/settings";
+import { openServerSettings } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
+import { useUx } from "@/lib/uxFlags";
 import { isWide } from "@/lib/windowClass";
 import { font, space, touch, useFontScale, useTheme } from "@/theme";
 import { layout } from "@/tokens";
@@ -131,6 +133,8 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
   const { showKrw } = useSettings();
   const q = useDiscoverRank(market, category);
   const { pulling, onPull } = usePull(q.refetch);
+  // 3-24 (플래그 emptyGuide): 빈 순위의 안내 + 버튼 하나, 연결 오류의 '설정 열기'
+  const ux = useUx();
   const marks = useMarks();
   const addWatch = useAddWatch();
   const pages = q.data?.pages;
@@ -161,7 +165,7 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
   );
 
   if (q.isLoading) return <View>{head}<SkeletonRows height={rowH} /></View>;
-  if (q.isError && !items.length) return <ErrorView error={q.error} onRetry={() => void q.refetch()} />;
+  if (q.isError && !items.length) return <ErrorView error={q.error} onRetry={() => void q.refetch()} {...(ux.emptyGuide ? { onOpenSettings: openServerSettings } : null)} />;
 
   return (
     <FlatList
@@ -175,7 +179,13 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
       windowSize={9}
       removeClippedSubviews
       ListHeaderComponent={head}
-      ListEmptyComponent={<Empty title="표시할 종목이 없습니다" hint="장 시작 전이거나 데이터를 받지 못했습니다. 잠시 뒤 당겨서 새로고침 하세요." />}
+      ListEmptyComponent={
+        ux.emptyGuide ? (
+          <Empty title="표시할 종목이 없습니다" hint="장 시작 전이거나 순위를 아직 받지 못했습니다. 잠시 뒤 다시 받아 보세요." action={<Button title="새로고침" icon="refresh" variant="secondary" loading={pulling} onPress={onPull} />} />
+        ) : (
+          <Empty title="표시할 종목이 없습니다" hint="장 시작 전이거나 데이터를 받지 못했습니다. 잠시 뒤 당겨서 새로고침 하세요." />
+        )
+      }
       ListFooterComponent={
         <View>
           {q.isFetchingNextPage ? (

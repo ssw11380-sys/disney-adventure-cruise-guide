@@ -1,7 +1,8 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Constants from "expo-constants";
-import React, { useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import React, { useEffect, useRef, useState } from "react";
+import { Alert, Pressable, StyleSheet, Text, TextInput, View, type LayoutChangeEvent, type ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature, useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
@@ -16,12 +17,15 @@ import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { WidgetRefreshStatus } from "@/components/WidgetRefreshStatus";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, RowWrapContext, SectionTitle, Toggle } from "@/components/ui";
+import { connectionKind, connectionText, SERVER_SECTION, TOKEN_FIELD } from "@/lib/connectionError";
 import { FOLD_COL_GAP, settingsColumnMax, settingsTwoColumns } from "@/lib/foldScreens";
 import { formatDateKo } from "@/lib/format";
 import { SORT_OPTIONS, THEME_OPTIONS, useSettings, WIDGET_ROW_OPTIONS } from "@/lib/settings";
+import { serverOpenRequest } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useSticky } from "@/lib/useSticky";
 import { useBoxWidth } from "@/lib/useBoxWidth";
+import { useUx } from "@/lib/uxFlags";
 import { isWide } from "@/lib/windowClass";
 import { font, radius, space, touch, useTheme } from "@/theme";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
@@ -35,7 +39,9 @@ import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
  */
 export default function SettingsScreen() {
   const t = useTheme();
-  const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency } = useSettings();
+  const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency, haptics, setHaptics } = useSettings();
+  // 3-24 플래그: oneHand('누를 때 진동' 스위치), firstRun('처음 사용 안내 다시 보기'), emptyGuide(서버 연결 칸 열기·빈 칸 안내)
+  const ux = useUx();
   // 다듬은 잔고 위젯(widgetPolish)에서만 쓰는 설정이라 플래그가 켜져 있을 때만 보인다
   const widgetPolishOn = useFeature("widgetPolish", false);
   // 위젯 자동 갱신 기록 요약·배터리 설정 열기 (위젯 리뷰 2). 기록은 늘 적고 보여 주는 것만 플래그 뒤에
@@ -48,6 +54,47 @@ export default function SettingsScreen() {
   // 끊겼을 때 데이터 절약 (3-25): 서버 줄에 폴링 방식과 최근 응답 비율
   const saverOn = useFeature("pollSaver", false);
   const [advanced, setAdvanced] = useState(false);
+  // 3-24 (emptyGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
+  // 누를 때마다 새 요청이라(at) 사용자가 칸을 접은 뒤 다른 화면에서 또 눌러도 다시 펼친다. 플래그가 꺼져 있으면 검색어를 보지 않는다
+  const params = useLocalSearchParams<{ open?: string; at?: string }>();
+  const openReq = ux.emptyGuide ? serverOpenRequest(params) : null;
+  const scrollRef = useRef<ScrollView | null>(null);
+  // '서버 연결' 칸 자리: 칸이 든 기둥의 y(넓은 창 오른쪽 기둥, 휴대폰은 0) + 기둥 안 칸의 y. pending = 펼친 뒤 한 번 더 스크롤
+  const connectPos = useRef({ col: 0, card: 0, known: false, pending: false, expanded: false });
+  const scrollToConnect = () => {
+    const p = connectPos.current;
+    if (!p.known) return;
+    scrollRef.current?.scrollTo({ y: Math.max(0, p.col + p.card - space.sm), animated: true });
+  };
+  const revealConnect = () => {
+    const p = connectPos.current;
+    // 이미 펼쳐져 있으면 바로 스크롤, 접혀 있으면 펼친 뒤(칸 높이가 바뀌어 자리를 다시 알려 올 때) 스크롤
+    p.pending = !p.expanded;
+    setAdvanced(true);
+    scrollToConnect();
+  };
+  useEffect(() => {
+    connectPos.current.expanded = advanced;
+  }, [advanced]);
+  const revealRef = useRef(revealConnect);
+  useEffect(() => {
+    revealRef.current = revealConnect;
+  });
+  useEffect(() => {
+    if (openReq) revealRef.current();
+  }, [openReq]);
+  const onConnectLayout = (e: LayoutChangeEvent) => {
+    const p = connectPos.current;
+    p.card = e.nativeEvent.layout.y;
+    p.known = true;
+    if (p.pending) {
+      p.pending = false;
+      scrollToConnect();
+    }
+  };
+  const onColumnLayout = (e: LayoutChangeEvent) => {
+    connectPos.current.col = e.nativeEvent.layout.y;
+  };
   // 당겨서 새로고침: 서버 상태와, 알림 카드가 보이면 알림 설정('다음 실행' 시각)도 함께 (BH-16)
   const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full ? notifySettings.refetch() : undefined]));
   // 서버 연결 입력 중인 주소·토큰: 한 칸 ↔ 두 칸, 폰 접기 ↔ 펴기로 카드가 새로 그려져도 지워지지 않게 화면이 들고 있는다.
@@ -61,6 +108,10 @@ export default function SettingsScreen() {
   // 좁은 창(접은 화면)·플래그 꺼짐은 지금 그대로
   const fold = useFoldLayout();
   const wide = fold.on && isWide(fold);
+  // 휴대폰 화면은 '서버 연결' 칸이 목록에 바로 놓여 기둥이 없다 (넓은 창 오른쪽 기둥의 y 는 넓은 창에서만 잰다)
+  useEffect(() => {
+    if (!wide) connectPos.current.col = 0;
+  }, [wide]);
   const insets = useSafeAreaInsets();
   // 설정 탭이 실제로 받은 폭 (카드 틀에 onLayout, 재기 전에는 창 폭 − 왼쪽 세로 탭 막대).
   // 두 칸 기준선 근처에서는 바로 전 배치를 지킨다 (히스테리시스 — 창을 끌 때 한 칸·두 칸이 번갈아 바뀌지 않게).
@@ -106,6 +157,16 @@ export default function SettingsScreen() {
         </View>
         <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} accessibilityLabel="수수료·세금 차감 평가" />
       </View>
+      {ux.oneHand ? (
+        // 3-24 햅틱 끄기 (플래그 oneHand): 끄면 차트 십자선 진동까지 모두 멈춘다
+        <View style={styles.line}>
+          <View style={{ flex: 1, paddingRight: space.md }}>
+            <Text style={styles.label(t.ink)}>누를 때 진동</Text>
+            <Muted style={{ fontSize: font.tiny }}>줄 밀기·길게 누르기·정렬·관심 추가·당겨서 새로고침·차트 십자선 (휴대폰의 터치 진동 설정도 따름)</Muted>
+          </View>
+          <Toggle value={haptics} onValueChange={(v) => void setHaptics(v)} accessibilityLabel="누를 때 진동" />
+        </View>
+      ) : null}
       <View style={{ gap: space.s, paddingTop: space.s }}>
         <Text style={styles.label(t.ink)}>잔고 정렬</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
@@ -143,9 +204,11 @@ export default function SettingsScreen() {
         서버
       </SectionTitle>
       {health.isError ? (
-        <Text style={{ color: t.danger, fontSize: font.small }}>{health.error instanceof Error ? health.error.message : String(health.error)}</Text>
+        <Text style={{ color: t.danger, fontSize: font.small }}>{serverErrorText(health.error, ux.emptyGuide)}</Text>
       ) : health.data?.limited ? (
-        <Text style={{ color: t.danger, fontSize: font.small }}>서버에 연결됐지만 토큰이 없거나 맞지 않습니다. 아래 서버 연결에서 토큰을 입력하세요.</Text>
+        <Text style={{ color: t.danger, fontSize: font.small }}>
+          {ux.emptyGuide ? `서버에 연결됐지만 '${TOKEN_FIELD}'이 없거나 맞지 않습니다. 아래 '${SERVER_SECTION}'에서 '${TOKEN_FIELD}'을 확인하세요.` : "서버에 연결됐지만 토큰이 없거나 맞지 않습니다. 아래 서버 연결에서 토큰을 입력하세요."}
+        </Text>
       ) : health.data ? (
         <View>
           <Row label="서버 시각" value={formatDateKo(health.data.time, true)} />
@@ -226,17 +289,32 @@ export default function SettingsScreen() {
       <Row label="앱 버전" value={Constants.expoConfig?.version ?? "-"} />
       <Row label="시세" value="토스증권 · 네이버 증권" />
       <Row label="공시" value="DART · SEC EDGAR" />
+      {ux.firstRun ? (
+        // 3-24 첫 실행 안내 다시 보기 (플래그 firstRun)
+        <Button title="처음 사용 안내 다시 보기" icon="help-circle-outline" variant="secondary" compact style={{ marginTop: space.xs }} onPress={() => router.push("/welcome")} />
+      ) : null}
       <Muted style={{ fontSize: font.tiny, marginTop: space.xs }}>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</Muted>
     </Card>
   );
   const notify = full ? <NotificationSettingsCard /> : null;
   const toss = full ? <TossOpenApiCard /> : null;
+  // 3-24 빈 칸 안내 (플래그 emptyGuide): 서버에 연결되지 않았거나 토큰이 맞지 않아 알림·토스 칸이 비었을 때 까닭과 버튼 하나
+  const serverGap =
+    ux.emptyGuide && !full && (health.isError || health.data?.limited) ? (
+      <Card>
+        <SectionTitle>알림 · 토스증권 연동</SectionTitle>
+        <Muted>서버에 연결되면 여기에 알림 시간과 토스증권 연동 상태가 나옵니다. 아래 &apos;{SERVER_SECTION}&apos;에서 &apos;서버 주소&apos;와 &apos;{TOKEN_FIELD}&apos;을 확인하세요.</Muted>
+        <Button title={`${SERVER_SECTION} 열기`} icon="chevron-down" variant="secondary" onPress={revealConnect} />
+      </Card>
+    ) : null;
+  // '서버 연결' 칸 자리를 잰다 ('설정 열기'로 왔을 때 그 칸까지 스크롤 — 플래그가 꺼져 있으면 감싸지 않는다)
+  const connectBox = ux.emptyGuide ? <View onLayout={onConnectLayout}>{connect}</View> : connect;
 
   if (wide)
     return (
       // 넓은 창은 탭 화면 머리를 숨기므로(공통 틀) 상태 표시줄·좌우 화면 여백을 여기서 둔다 (왼쪽은 세로 탭 막대가 있으면 막대가 맡는다)
       <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingLeft: fold.rail ? 0 : insets.left, paddingRight: insets.right }}>
-      <Screen refreshing={pulling} onRefresh={onPull}>
+      <Screen refreshing={pulling} onRefresh={onPull} {...(ux.emptyGuide ? { scrollRef } : null)}>
         {/* 넓은 창: 칸이 좁으면 이름·값 줄의 값이 이름 아래 줄로 (큰 글씨에서도 두 칸을 지킨다) */}
         <RowWrapContext.Provider value={true}>
         {/* 두 칸: 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보. 화면 읽기는 왼쪽 칸을 끝까지 읽고 오른쪽 칸으로.
@@ -247,13 +325,14 @@ export default function SettingsScreen() {
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
             {display}
             {notify}
+            {serverGap}
             {two ? info : null}
           </View>
-          <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
+          <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart} {...(ux.emptyGuide ? { onLayout: onColumnLayout } : null)}>
             {toss}
             <AppUpdateCard />
             {server}
-            {connect}
+            {connectBox}
             <ScreenInfoCard />
             {two ? null : info}
           </View>
@@ -263,17 +342,28 @@ export default function SettingsScreen() {
       </View>
     );
   return (
-    <Screen refreshing={pulling} onRefresh={onPull}>
+    <Screen refreshing={pulling} onRefresh={onPull} {...(ux.emptyGuide ? { scrollRef } : null)}>
       {display}
       {notify}
       {toss}
+      {serverGap}
       <AppUpdateCard />
       {server}
-      {connect}
+      {connectBox}
       <ScreenInfoCard />
       {info}
     </Screen>
   );
+}
+
+/** 서버 칸의 연결 오류 글: 플래그 emptyGuide 가 켜져 있으면 설정 칸 이름에 맞춘 문구 (lib/connectionError), 아니면 오류 글 그대로 */
+function serverErrorText(error: unknown, guide: boolean): string {
+  const kind = guide ? connectionKind(error) : null;
+  if (kind) {
+    const c = connectionText(kind);
+    return `${c.title}. ${c.hint}`;
+  }
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** 서버 주소·토큰 입력 (입력 중인 값은 설정 화면이 들고 있다 — 카드가 새로 그려져도 남게) */

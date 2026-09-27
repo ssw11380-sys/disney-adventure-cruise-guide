@@ -60,6 +60,7 @@ vi.mock("@/components/Freshness", () => ({ LiveStatus: "LiveStatus", StaleBanner
 vi.mock("@/components/MarketStrip", () => ({ MarketStrip: "MarketStrip" }));
 vi.mock("@/components/Skeleton", () => ({ HoldingsSkeleton: "HoldingsSkeleton" }));
 vi.mock("@/components/StockRow", () => ({ StockRow: "StockRow" }));
+vi.mock("@/components/SwipeRow", () => ({ SwipeRow: "SwipeRow" }));
 vi.mock("@/components/StockLine", () => ({ PRICE_HEAD: "현재가", useLineCols: () => ({ rank: 30, price: 100, right: 108 }) }));
 
 const { default: StocksScreen } = await import("@/app/(tabs)/index");

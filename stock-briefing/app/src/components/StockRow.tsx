@@ -6,6 +6,7 @@ import { formatArrowDisplay, formatMoney, formatPct, formatPrice, formatQuoteDis
 import type { ColKey, ColumnPlan } from "@/lib/holdingsColumns";
 import { evalView } from "@/lib/liveTick";
 import { isHolding } from "@/lib/portfolio";
+import { rowA11yActions } from "@/lib/rowActions";
 import { changeColor, useTheme } from "@/theme";
 import { TableLine, type TableCell } from "./HoldingsTable";
 import { LINE_COL, LineMark, LineValue, StockLine, type LinePrice } from "./StockLine";
@@ -46,6 +47,11 @@ type StockRowProps = {
   weightMax?: number;
   /** 줄 위치 (접고 펼 때 이어 보기 — lib/holdingsAnchor). 기능이 꺼져 있으면 주지 않는다 */
   onLayoutRow?: (stock: RegisteredWithQuote, y: number, h: number) => void;
+  /**
+   * 줄의 수정·지우기 (3-24, 기능 플래그 oneHand): 화면 읽기 '동작' 메뉴에 수정 · 삭제(토스 종목은 동기화 제외, 관심은 관심 해제) · 메뉴 열기를 둔다
+   * (스와이프 버튼과 같은 일 — lib/rowActions). 주지 않으면 지금처럼 '수정·삭제'(길게 누르기) 하나
+   */
+  onRowAction?: (stock: RegisteredWithQuote, action: "edit" | "remove") => void;
 };
 
 /**
@@ -64,7 +70,8 @@ export function sameRow(a: StockRowProps, b: StockRowProps): boolean {
     a.zebra === b.zebra &&
     a.weight === b.weight &&
     a.weightMax === b.weightMax &&
-    a.onLayoutRow === b.onLayoutRow
+    a.onLayoutRow === b.onLayoutRow &&
+    a.onRowAction === b.onRowAction
   );
 }
 
@@ -74,7 +81,7 @@ export const StockRow = React.memo(StockRowView, sameRow);
 /** 한 줄 표의 금액: 원화는 단위 없이("1,576,274"), 달러는 "$" 를 붙인다 (국내·미국 줄이 한 열에 섞이므로) */
 const cellMoney = (text: string) => text.replace("원", "");
 
-function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp, columns, zebra = false, weight = null, weightMax = 0, onLayoutRow }: StockRowProps) {
+function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp, columns, zebra = false, weight = null, weightMax = 0, onLayoutRow, onRowAction }: StockRowProps) {
   const t = useTheme();
   const q = stock.quote;
   const live = liveProp ?? q?.live === true;
@@ -124,8 +131,16 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
   });
   const badge = <LineMark label={us ? "US" : "KR"} color={us ? t.accent : t.gold} />;
   const layoutProp = onLayoutRow ? (e: LayoutChangeEvent) => onLayoutRow(stock, e.nativeEvent.layout.y, e.nativeEvent.layout.height) : undefined;
-  const a11yActions = onLongPress ? LONG_PRESS_ACTION : undefined;
-  const a11yAction = onLongPress ? (name: string) => name === "longpress" && onLongPress(stock) : undefined;
+  // 3-24: 수정 · 지우기 · 메뉴 열기를 화면 읽기 동작으로 (스와이프를 못 쓰는 TalkBack 사용자도 같은 일을)
+  const a11yActions = onRowAction ? rowA11yActions(stock) : onLongPress ? LONG_PRESS_ACTION : undefined;
+  const a11yAction = onRowAction
+    ? (name: string) => {
+        if (name === "edit" || name === "remove") onRowAction(stock, name);
+        else if (name === "longpress") onLongPress?.(stock);
+      }
+    : onLongPress
+      ? (name: string) => name === "longpress" && onLongPress(stock)
+      : undefined;
 
   if (columns) {
     const rateColor = changeColor(t, shownSign(q?.changeRate, rateText));
