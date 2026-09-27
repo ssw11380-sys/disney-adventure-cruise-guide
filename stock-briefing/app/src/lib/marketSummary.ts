@@ -365,6 +365,11 @@ export function eventsBody(d: Pick<MarketSummaryData, "events">, view: Date): st
   return list.length ? list.map((e) => eventText(e, view)).join(" · ") : null;
 }
 
+/** 다음 한국 개장 일정 (브리핑 2차 2 — 접은 화면 시장 줄의 휴장 줄 아래 흐린 줄): 가까운 일정(within) 다음 일정(next) 가운데 kind 'kr-open' 첫 것, 없으면 null */
+export function krOpenEvent(d: Pick<MarketSummaryData, "events">): SummaryEvent | null {
+  return [...d.events.within, ...(d.events.next ? [d.events.next] : [])].find((e) => e.kind === "kr-open") ?? null;
+}
+
 /**
  * 뉴스 '원문' 링크로 열 주소: http·https 주소만 (서버도 이런 주소만 저장하지만, 예전에 저장한 요약·다른 출처 값도 한 번 더 본다 —
  * javascript:·intent: 같은 주소는 열지 않고 '원문' 칸을 두지 않는다). 아니면 null

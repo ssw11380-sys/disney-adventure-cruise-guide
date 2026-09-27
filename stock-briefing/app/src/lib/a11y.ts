@@ -44,6 +44,18 @@ export function speakProfit(amount: string, sign: number | null | undefined): st
   return `${speakAmount(amount)} ${sign > 0 ? "이익" : "손실"}`;
 }
 
+/**
+ * 시각 "HH:MM" 을 읽는 말로 (브리핑 2차 3): "08:38" → "8시 38분", "09:00" → "9시". 모양이 다르면 받은 글 그대로
+ */
+export function speakClock(hhmm: string): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return hhmm;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour > 23 || minute > 59) return hhmm;
+  return minute ? `${hour}시 ${minute}분` : `${hour}시`;
+}
+
 /** 전일 대비 금액: "2,500원 상승" (amount 는 화면 표기, 화살표·부호 포함 가능) */
 export function speakMove(amount: string, sign: number | null | undefined): string | null {
   if (sign === null || sign === undefined || !Number.isFinite(sign) || amount.trim() === "-") return null;

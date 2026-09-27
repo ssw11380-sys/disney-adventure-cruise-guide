@@ -108,6 +108,14 @@ export const FEATURES = {
     description:
       "종목 브리핑 AI 글 안전하게 (브리핑 2차 6): 새 프롬프트(평가 꼬리표·지지/저항·체크포인트·보유자 해석 없음), 지지·저항 후보를 모델에 넘기지 않음, 요약 첫 줄은 시세로 만든 가격 줄, 금지어 검사, 앱 카드·상세에 'AI가 쓴 글' 표시. 끄면 예전 프롬프트·요약·화면 그대로",
   },
+  briefingCompactTop: {
+    default: true,
+    description: "브리핑 탭 맨 위 두 줄 (브리핑 2차 2, 앱만): 접은 화면의 시장 요약·계좌 카드를 넓은 창 줄 모양 두 줄(계좌 먼저)과 안내 한 줄로, 넓은 창도 계좌 줄을 위로. 끄면 예전 카드 그대로",
+  },
+  moversMerge: {
+    default: true,
+    description: "변동 카드 합치기 (브리핑 2차 3, 앱만): '변동 큰 종목' 카드를 없애고 목록 1~3위에 순위, 계좌 카드·줄에 당일 손익 기여 상위 3종목(원화 금액만). 계좌 브리핑이 없거나 실패하면 예전 카드. 끄면 예전 그대로",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

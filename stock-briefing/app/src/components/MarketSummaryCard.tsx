@@ -11,11 +11,13 @@ import {
   chunkSegs,
   closeBadge,
   closeBadgeWarn,
+  eventText,
   fitNewsLine,
   holdingsShort,
   holidayText,
   indexCellCols,
   indexValueText,
+  krOpenEvent,
   md,
   NEWS_OUTLET_SEP,
   rateText,
@@ -284,6 +286,9 @@ function NewsLines({ items, more, guess }: { items: SummaryNews[]; more: number;
 
 /**
  * 넓은 창 목록 맨 위 줄 (계좌 줄 위): 1줄 제목 · 마감일 배지 · 시각 › / 2줄 지수 작은 칸 4개 또는 2개 / 3줄 '내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7'
+ * 브리핑 2차 2 (플래그 briefingCompactTop — 탭이 읽어 넘김, 모두 기본값이면 지금 그대로):
+ *  - holidayLine: 휴장이면 머리 아래·지수 칸 위에 달력 + '오늘 한국 휴장(추석) · 아래는 직전 거래일 9/23 기준', 흐린 둘째 줄 '다음 개장 9/28(월) 09:00'(일정에 있을 때)
+ *  - holdBig: '내 종목' 줄을 본문 크기(접은 화면)
  */
 export function MarketSummaryRow({
   summary,
@@ -291,6 +296,8 @@ export function MarketSummaryRow({
   onPress,
   role,
   trim = false,
+  holidayLine = false,
+  holdBig = false,
 }: {
   summary: MarketSummary;
   selected: boolean;
@@ -298,12 +305,18 @@ export function MarketSummaryRow({
   role: "button" | "link";
   /** 브리핑 2차 4 (플래그 briefingTrim): 화면 읽기 문장의 업종 말을 부호로 (상세·카드와 같게). 기본 false = 지금 문장 */
   trim?: boolean;
+  /** 브리핑 2차 2 (플래그 briefingCompactTop): 줄 안 휴장 줄·다음 개장. 기본 false = 지금 그대로 */
+  holidayLine?: boolean;
+  /** 브리핑 2차 2 (플래그 briefingCompactTop, 접은 화면만): 내 종목 줄 본문 크기. 기본 false = 지금 그대로(작은 글) */
+  holdBig?: boolean;
 }) {
   const t = useTheme();
   const view = new Date(useNow(60_000));
   const d = summary.data;
   const failed = summary.status === "failed" || !d;
   const hold = d ? holdingsShort(d.holdings) : null;
+  const banner = holidayLine && d && !failed ? holidayText(d, view) : null;
+  const open = banner && d ? krOpenEvent(d) : null;
   // 지수 작은 칸 배치의 첫 어림: 2단 왼쪽 목록(button)은 목록 폭, 카드 격자(link)는 창 폭 — 줄의 좌우 안쪽 여백을 뺀다
   const win = useWindowDimensions();
   const cellsGuess = (role === "button" ? listPaneWidth(win.fontScale || 1) : win.width) - space.lg - space.md;
@@ -331,9 +344,18 @@ export function MarketSummaryRow({
         <Words text={`생성 실패 · ${summary.summary}`} style={{ color: t.danger, fontSize: font.small }} cap={fontCap.row} />
       ) : (
         <>
+          {banner ? (
+            <View style={styles.rowBanner}>
+              <Ionicons name="calendar-outline" size={16} color={t.gold} />
+              <View style={styles.grow}>
+                <Words text={banner} style={{ color: t.ink, fontSize: font.body }} cap={fontCap.row} />
+                {open ? <Words text={eventText(open, view)} style={{ color: t.muted, fontSize: font.small, lineHeight: MUTED_LH }} cap={fontCap.row} /> : null}
+              </View>
+            </View>
+          ) : null}
           <IndexCells d={d} compact guess={cellsGuess} />
           {/* 줄 전체의 화면 읽기 문장은 누르는 칸(cardSpeech)이 읽는다 */}
-          {hold ? <Words text={hold} style={{ color: t.sub, fontSize: font.small }} cap={fontCap.row} /> : null}
+          {hold ? <Words text={hold} style={holdBig ? { color: t.ink, fontSize: font.body } : { color: t.sub, fontSize: font.small }} cap={fontCap.row} /> : null}
         </>
       )}
     </Pressable>
@@ -367,4 +389,6 @@ const styles = StyleSheet.create({
   selBar: { position: "absolute", left: 0, top: 0, bottom: 0, width: FB.selBar },
   rowHead: { flexDirection: "row", alignItems: "center", gap: space.s },
   rowWhen: { marginLeft: "auto", fontSize: font.small, flexShrink: 0 },
+  // 줄 안 휴장 줄 (브리핑 2차 2): 달력 아이콘 + 휴장 글 · 다음 개장 (카드의 휴장 띠보다 낮게 — 배경 없이)
+  rowBanner: { flexDirection: "row", alignItems: "flex-start", gap: space.s },
 });

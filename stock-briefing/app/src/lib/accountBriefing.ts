@@ -1,8 +1,9 @@
 import type { AccountBriefing, AccountData } from "@/api/types";
-import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
-import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usHolidayWhen } from "@/lib/briefingDigest";
+import { sentence, speakAmount, speakClock, speakProfit, speakRate } from "@/lib/a11y";
+import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usHolidayWhen, usPreviousDayLine } from "@/lib/briefingDigest";
 import { gated } from "@/lib/features";
-import { formatDateKo, formatWon, SESSION_LABEL } from "@/lib/format";
+import { formatDateKo, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
+import { mdw } from "@/lib/marketSummary";
 
 /**
  * 계좌 한 장 브리핑(3-31) 화면용 순수 함수 (React Native 를 불러오지 않음 → 테스트).
@@ -56,10 +57,84 @@ function krPreviousDaySpeech(date: string, trim: boolean): string {
   return `${trim ? formatDateKo(date) : "오늘"} 한국 휴장, 국내 종목은 직전 거래일 등락`;
 }
 
-/** 화면 읽기: 브리핑 탭 '내 계좌 브리핑' 카드 한 문장. opts.trim = 플래그 briefingTrim (없으면 예전 문장) */
-export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean } = {}): string {
+/** 달력 전날 YYYY-MM-DD */
+function dayBefore(date: string): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 계좌 줄의 휴장 한 줄 (보이는 글 · 화면 읽기 조각) */
+export interface AccountHolidayLine {
+  text: string;
+  speech: string;
+}
+
+/**
+ * 접은 화면 계좌 줄의 휴장 줄 (브리핑 2차 2, 플래그 briefingCompactTop — 한국 → 미국 순서). today = 보는 날(서울 'YYYY-MM-DD').
+ *  - 한국: trim(플래그 briefingTrim)이면 브리핑 날짜 줄 '9/25(금) 한국 휴장 · …'. 아니면 예전 글 '오늘 한국 휴장 · …'을 브리핑 날짜가 오늘일 때만
+ *    (월요일에 금요일 줄이 '오늘'로 뜨지 않게), 아니면 없음
+ *  - 미국: 브리핑 날짜가 오늘이면 '지난밤 미국 휴장 · …'(또는 휴장일이 전날이 아니면 '12/25(금) 미국 휴장 · …').
+ *    오늘이 아니면 '지난밤'이 틀린 말이 되므로 늘 날짜 모양 — 휴장일을 모르면(예전 기록) 브리핑 날짜의 달력 전날
+ */
+export function accountHolidayLines(b: Pick<AccountBriefing, "date" | "headline">, opts: { trim: boolean; today: string }): AccountHolidayLine[] {
   const h = b.headline;
-  const top = h?.top[0];
+  if (!h) return [];
+  const out: AccountHolidayLine[] = [];
+  if (h.krPreviousDay) {
+    if (opts.trim) out.push({ text: krPreviousDayLine(b.date), speech: krPreviousDaySpeech(b.date, true) });
+    else if (b.date === opts.today) out.push({ text: KR_PREVIOUS_DAY_LINE, speech: krPreviousDaySpeech(b.date, false) });
+  }
+  if (h.usPreviousDay) {
+    if (b.date === opts.today) {
+      out.push({ text: usPreviousDayLine(b.date, h.usHolidayDate), speech: usPreviousDaySpeech(b.date, h.usHolidayDate) });
+    } else {
+      const day = h.usHolidayDate ?? dayBefore(b.date);
+      out.push({ text: `${mdw(day)} 미국 휴장 · 미국 종목은 직전 거래일 등락`, speech: `${formatDateKo(day)} 미국 휴장, 미국 종목은 직전 거래일 등락` });
+    }
+  }
+  return out;
+}
+
+/** 당일 손익의 보이는 부호 (0원으로 보이면 0) */
+const dayPnlSign = (dayPnl: number) => shownSign(dayPnl, formatWon(dayPnl, { sign: true }));
+
+/**
+ * 기여 상위 묶음 머리 (브리핑 2차 3, 플래그 moversMerge): '당일 손익 기여 상위 (오른 종목)' · 당일 손익이 음수면 '(내린 종목)' ·
+ * 0 이면 괄호 없이 '당일 손익 기여 상위'. 종목은 서버가 당일 손익과 같은 방향에서만 고른다 — 그래서 '가장 많이 움직인'이라고 하지 않는다
+ */
+export function contributorsHead(dayPnl: number): string {
+  const s = dayPnlSign(dayPnl);
+  return s > 0 ? "당일 손익 기여 상위 (오른 종목)" : s < 0 ? "당일 손익 기여 상위 (내린 종목)" : "당일 손익 기여 상위";
+}
+
+/** 화면 읽기: 기여 상위 묶음 조각들 ('당일 손익 기여 상위 오른 종목', '삼성전자 348,000원 이익', …, '8시 38분 기준'). 종목이 없으면 빈 목록 */
+function contributorsSpeech(b: AccountBriefing): string[] {
+  const h = b.headline;
+  if (!h || h.top.length === 0) return [];
+  const s = dayPnlSign(h.dayPnl);
+  const time = briefingTime(b.createdAt);
+  return [
+    s > 0 ? "당일 손익 기여 상위 오른 종목" : s < 0 ? "당일 손익 기여 상위 내린 종목" : "당일 손익 기여 상위",
+    ...h.top.map((c) => `${c.name} ${speakProfit(formatWon(c.amount, { sign: true }), Math.sign(c.amount)) ?? ""}`.trim()),
+    time ? `${speakClock(time)} 기준` : "",
+  ];
+}
+
+/**
+ * 화면 읽기: 브리핑 탭 '내 계좌 브리핑' 카드 한 문장. 옵션이 없으면 예전 문장 그대로 (넓은 창 줄·큰 카드의 끈 상태).
+ *  - trim = 플래그 briefingTrim (한국 휴장 날짜)
+ *  - contributors = 플래그 moversMerge 로 기여 상위 묶음을 보일 때: '기여 1위 …' 조각 대신 묶음 전체와 'HH시 MM분 기준'
+ *  - today = 접은 화면 계좌 줄의 휴장 줄(플래그 briefingCompactTop)을 보일 때 보는 날 — 휴장 조각을 보이는 줄과 같은 판단으로 (accountHolidayLines)
+ */
+export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string } = {}): string {
+  const h = b.headline;
+  const list = opts.contributors ? contributorsSpeech(b) : [];
+  const top = list.length ? undefined : h?.top[0];
+  const holidays =
+    opts.today !== undefined
+      ? accountHolidayLines(b, { trim: !!opts.trim, today: opts.today }).map((l) => l.speech)
+      : [h?.krPreviousDay ? krPreviousDaySpeech(b.date, !!opts.trim) : null, h?.usPreviousDay ? usPreviousDaySpeech(b.date, h.usHolidayDate) : null];
   return sentence([
     "내 계좌 브리핑",
     `${formatDateKo(b.date)} ${SESSION_LABEL[b.session]}`,
@@ -68,8 +143,8 @@ export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean } =
     h ? speakRate(h.dayRate) : null,
     h ? `총 평가금액 ${speakAmount(formatWon(h.totalValue))}` : null,
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
-    h?.krPreviousDay ? krPreviousDaySpeech(b.date, !!opts.trim) : null,
-    h?.usPreviousDay ? usPreviousDaySpeech(b.date, h.usHolidayDate) : null,
+    ...list,
+    ...holidays,
     "자세히 보기",
   ]);
 }

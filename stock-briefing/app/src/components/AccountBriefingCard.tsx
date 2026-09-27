@@ -3,10 +3,12 @@ import { router } from "expo-router";
 import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { AccountBriefing } from "@/api/types";
-import { accountCardSpeech } from "@/lib/accountBriefing";
+import { accountCardSpeech, accountHolidayLines, briefingTime, contributorsHead } from "@/lib/accountBriefing";
 import { briefingWhen } from "@/lib/briefingPick";
 import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usPreviousDayLine } from "@/lib/briefingDigest";
 import { formatDateKo, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
+import { viewDateOf } from "@/lib/marketSummary";
+import { useNow } from "@/lib/useNow";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
 import { Badge, Card, Muted } from "./ui";
@@ -15,25 +17,36 @@ import { Badge, Card, Muted } from "./ui";
  * 브리핑 탭 맨 위 '내 계좌 브리핑' 카드 (3-31): 가장 최근 계좌 브리핑의 당일 손익·총 평가금액·기여 1위.
  * 누르면 계좌 브리핑 화면. 숫자는 서버가 계산한 값 그대로 (앱 잔고 화면과 같은 기준).
  * trim(브리핑 2차 4, 플래그 briefingTrim — 탭에서 읽어 넘김): 한국 휴장 줄에 브리핑 날짜('9/25(금) 한국 휴장 · …'), 끝줄 '숫자로 만든 요약 · …'
+ * contributors(브리핑 2차 3, 플래그 moversMerge — 탭이 '합치기 가능'일 때만 넘김): '기여 1위 …' 줄 대신 기여 상위 묶음(ContributorsBlock)
  */
 export function AccountBriefingCard({
   briefing,
   selected = false,
   trim = false,
+  contributors = false,
 }: {
   briefing: AccountBriefing;
   /** 넓은 창에서 보던 계좌 브리핑 (3-42 접고 펴기 이어 보기). 기본 false = 지금 모양 그대로 */
   selected?: boolean;
   /** 브리핑 2차 4 (플래그 briefingTrim). 기본 false = 지금 글 그대로 */
   trim?: boolean;
+  /** 브리핑 2차 3 (플래그 moversMerge): 기여 상위 묶음. 기본 false = 지금 '기여 1위' 줄 그대로 */
+  contributors?: boolean;
 }) {
   const t = useTheme();
   const h = briefing.headline;
-  const top = h?.top[0] ?? null;
+  const block = contributors && !!h && h.top.length > 0;
+  const top = block ? null : (h?.top[0] ?? null);
   const failed = briefing.status === "failed" || !h;
   return (
     <Card style={selected ? { borderLeftWidth: FB.selBar, borderLeftColor: t.accent, paddingLeft: space.lg - FB.selBar } : undefined}>
-      <Pressable onPress={() => router.push(`/briefings/account/${briefing.id}`)} {...(selected ? { accessibilityState: { selected: true } } : {})} accessibilityRole="link" accessibilityLabel={accountCardSpeech(briefing, { trim })} style={styles.press}>
+      <Pressable
+        onPress={() => router.push(`/briefings/account/${briefing.id}`)}
+        {...(selected ? { accessibilityState: { selected: true } } : {})}
+        accessibilityRole="link"
+        accessibilityLabel={accountCardSpeech(briefing, block ? { trim, contributors: true } : { trim })}
+        style={styles.press}
+      >
         <View style={styles.head}>
           <Ionicons name="wallet-outline" size={18} color={t.accent} />
           <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700", flexShrink: 1 }}>내 계좌 브리핑</Text>
@@ -72,6 +85,7 @@ export function AccountBriefingCard({
                 {top.changeRate !== null ? <Text style={[styles.num, { color: changeColor(t, top.changeRate) }]}> ({formatPct(top.changeRate)})</Text> : null}
               </Text>
             ) : null}
+            {block ? <ContributorsBlock briefing={briefing} /> : null}
             {h.krPreviousDay ? <Muted>{trim ? krPreviousDayLine(briefing.date) : KR_PREVIOUS_DAY_LINE}</Muted> : null}
             {h.usPreviousDay ? <Muted>{usPreviousDayLine(briefing.date, h.usHolidayDate)}</Muted> : null}
             {trim ? (
@@ -93,6 +107,9 @@ export function AccountBriefingCard({
  * 1줄: 지갑 · 내 계좌 브리핑 · (기본 설명) · 날짜 ›  /  2줄: 당일 손익·등락률 · 기여 1위 이름·금액 (숫자는 줄이지 않고 길면 다음 줄로)
  * 2단에서는 누르면 오른쪽 칸에 계좌 브리핑(role button), 카드 격자에서는 전체 화면(role link).
  * trim(브리핑 2차 4, 플래그 briefingTrim): 배지 '기본 설명' → '숫자 요약', 화면 읽기의 한국 휴장 날짜
+ * 브리핑 2차 2·3 (접은 화면 맨 위 묶음 — 플래그 briefingCompactTop·moversMerge, 탭이 읽어 넘김. 모두 기본값이면 지금 넓은 창 모양·문장 그대로):
+ *  - holidayLines: 숫자 줄 아래(기여 상위 묶음이 있으면 그 아래) 휴장 줄 한국 → 미국 (accountHolidayLines — 브리핑 날짜가 오늘이 아니면 날짜 모양)
+ *  - contributors: 둘째 줄의 '· 기여 1위 …' 묶음 대신 기여 상위 묶음(ContributorsBlock)
  */
 export function AccountBriefingRow({
   briefing,
@@ -100,6 +117,8 @@ export function AccountBriefingRow({
   onPress,
   role,
   trim = false,
+  holidayLines = false,
+  contributors = false,
 }: {
   briefing: AccountBriefing;
   selected: boolean;
@@ -107,16 +126,25 @@ export function AccountBriefingRow({
   role: "button" | "link";
   /** 브리핑 2차 4 (플래그 briefingTrim). 기본 false = 지금 글 그대로 */
   trim?: boolean;
+  /** 브리핑 2차 2 (플래그 briefingCompactTop): 휴장 줄. 기본 false = 지금 그대로(줄 없음) */
+  holidayLines?: boolean;
+  /** 브리핑 2차 3 (플래그 moversMerge, 접은 화면만): 기여 상위 묶음. 기본 false = 지금 '기여 1위' 묶음 그대로 */
+  contributors?: boolean;
 }) {
   const t = useTheme();
+  const today = viewDateOf(new Date(useNow(60_000)));
   const h = briefing.headline;
-  const top = h?.top[0] ?? null;
+  const block = contributors && !!h && h.top.length > 0;
+  const top = block ? null : (h?.top[0] ?? null);
   const failed = briefing.status === "failed" || !h;
+  const holidays = holidayLines && !failed ? accountHolidayLines(briefing, { trim, today }) : [];
+  // 옵션을 쓰지 않으면 예전 문장 그대로 (옵션 칸 자체를 넘기지 않는다)
+  const speechOpts = { trim, ...(block ? { contributors: true } : {}), ...(holidayLines ? { today } : {}) };
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole={role}
-      accessibilityLabel={accountCardSpeech(briefing, { trim })}
+      accessibilityLabel={accountCardSpeech(briefing, speechOpts)}
       // 카드 격자(link)에서도 고른 줄이면 '선택됨'을 알린다 (같은 격자의 카드·폰 카드와 같게)
       accessibilityState={role === "button" ? { selected } : selected ? { selected: true } : undefined}
       style={({ pressed }) => [styles.row, { borderBottomColor: t.line, backgroundColor: selected || pressed ? t.surfaceAlt : t.surface }]}
@@ -156,7 +184,53 @@ export function AccountBriefingRow({
           ) : null}
         </View>
       )}
+      {block && !failed ? <ContributorsBlock briefing={briefing} /> : null}
+      {holidays.map((l) => (
+        <Text key={l.text} style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
+          {l.text}
+        </Text>
+      ))}
     </Pressable>
+  );
+}
+
+/**
+ * 기여 상위 묶음 (브리핑 2차 3, 플래그 moversMerge — 접은 화면 큰 계좌 카드와 계좌 줄이 같이 씀).
+ * 머리 '당일 손익 기여 상위 (오른 종목)' | 'HH:MM 기준', 그 아래 서버가 보낸 기여 상위(같은 방향 최대 3개) 한 줄씩: 이름 | 원화 금액.
+ * 등락률·순위 번호는 넣지 않는다(목록의 '지금' 등락률·변동 큰 순 순위와 헷갈리지 않게). 금액은 줄이지 않고(adjustsFontSizeToFit 없음)
+ * 폭이 모자라면 이름만 말줄임. 누르는 곳이 따로 없다 (줄·카드 전체가 링크 하나). 종목이 없으면 그리지 않는다
+ */
+export function ContributorsBlock({ briefing }: { briefing: AccountBriefing }) {
+  const t = useTheme();
+  const h = briefing.headline;
+  if (!h || h.top.length === 0) return null;
+  const time = briefingTime(briefing.createdAt);
+  return (
+    <View style={styles.contrib}>
+      <View style={styles.contribHead}>
+        <Text style={{ color: t.muted, fontSize: font.small, flexShrink: 1 }} maxFontSizeMultiplier={fontCap.row}>
+          {contributorsHead(h.dayPnl)}
+        </Text>
+        {time ? (
+          <Text style={[styles.contribTime, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+            {`${time} 기준`}
+          </Text>
+        ) : null}
+      </View>
+      {h.top.map((c) => {
+        const amount = formatWon(c.amount, { sign: true });
+        return (
+          <View key={c.code} style={styles.contribRow}>
+            <Text style={[styles.contribName, { color: t.ink }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+              {c.name}
+            </Text>
+            <Text style={[styles.contribAmount, { color: changeColor(t, shownSign(c.amount, amount)) }]} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+              {amount}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
   );
 }
 
@@ -177,4 +251,11 @@ const styles = StyleSheet.create({
   big: { fontSize: font.title, fontWeight: "700", fontVariant: ["tabular-nums"] },
   num: { fontVariant: ["tabular-nums"] },
   failed: { flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap" },
+  // 기여 상위 묶음 (브리핑 2차 3): 줄 사이는 좁게, 머리는 좁으면 '기준' 시각을 다음 줄 오른쪽으로
+  contrib: { gap: space.xxs },
+  contribHead: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", columnGap: space.sm },
+  contribTime: { marginLeft: "auto", fontSize: font.small, flexShrink: 0 },
+  contribRow: { flexDirection: "row", alignItems: "baseline", gap: space.sm },
+  contribName: { flex: 1, fontSize: font.small, fontWeight: "600" },
+  contribAmount: { flexShrink: 0, fontSize: font.small, fontVariant: ["tabular-nums"] },
 });

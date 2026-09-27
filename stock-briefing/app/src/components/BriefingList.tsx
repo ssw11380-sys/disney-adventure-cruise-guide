@@ -103,8 +103,8 @@ function Rate({ value, size }: { value: number | null | undefined; size: number 
   );
 }
 
-/** 변동 큰 순 1~3위 표시 ('변동 큰 종목' 카드 대신 — 넓은 창) */
-function RankMark({ n }: { n: number }) {
+/** 변동 큰 순 1~3위 표시 ('변동 큰 종목' 카드 대신 — 넓은 창, 브리핑 2차 3 moversMerge 면 접은 화면 카드도 같이 씀) */
+export function RankMark({ n }: { n: number }) {
   const t = useTheme();
   return (
     <View style={[styles.rank, { borderColor: t.lineStrong }]}>

@@ -8,6 +8,7 @@ import { font, slopFor, space, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
 import { sentence, speakRate } from "@/lib/a11y";
 import { AI_TAG } from "@/lib/disclaimer";
+import { RankMark } from "./BriefingList";
 import { MarkdownView } from "./MarkdownView";
 import { Badge, Card, ChangeText, Muted } from "./ui";
 
@@ -22,6 +23,7 @@ export function BriefingCard({
   rate,
   selected = false,
   aiTag = false,
+  rank,
 }: {
   briefing: Briefing;
   mode: "line" | "summary" | "detail";
@@ -32,6 +34,8 @@ export function BriefingCard({
   selected?: boolean;
   /** 날짜 줄 끝에 '· AI가 쓴 글' 조각 (브리핑 2차 6, 플래그 briefingSafeWording — 부르는 곳이 플래그를 읽어 넘긴다). 실패 브리핑에는 붙이지 않는다. 기본 false = 지금 그대로 */
   aiTag?: boolean;
+  /** 변동 큰 순 1~3위 (브리핑 2차 3, 플래그 moversMerge — 탭이 '변동 큰 종목' 카드를 없앨 때만 넘긴다). 이름 앞 순위 네모(넓은 창 RankMark), 화면 읽기 '변동 큰 순 1위'. 없으면 지금 그대로 */
+  rank?: number;
 }) {
   const t = useTheme();
   const failed = briefing.status === "failed";
@@ -44,6 +48,8 @@ export function BriefingCard({
         {...(selected ? { accessibilityState: { selected: true } } : {})}
         accessibilityRole="link"
         accessibilityLabel={sentence([
+          // 넓은 창 목록 줄(briefingItemSpeech)과 같은 말
+          rank ? `변동 큰 순 ${rank}위` : null,
           showName ? (briefing.name ?? briefing.code) : null,
           `${formatDateKo(briefing.date)} ${SESSION_LABEL[briefing.session]} 브리핑`,
           ai ? AI_TAG : null,
@@ -55,7 +61,13 @@ export function BriefingCard({
         style={styles.header}
       >
         <View style={{ flex: 1, gap: space.xxs }}>
-          {showName ? (
+          {showName && rank ? (
+            // 순위 네모 + 이름 (브리핑 2차 3)
+            <View style={styles.nameRow}>
+              <RankMark n={rank} />
+              <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700", flexShrink: 1 }}>{briefing.name ?? briefing.code}</Text>
+            </View>
+          ) : showName ? (
             <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>
               {briefing.name ?? briefing.code}
             </Text>
@@ -110,4 +122,5 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: space.sm },
   // 조각 사이 간격은 글자 한 칸쯤 ('브리핑 · AI가 쓴 글')
   dateRow: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs },
+  nameRow: { flexDirection: "row", alignItems: "center", gap: space.s },
 });
