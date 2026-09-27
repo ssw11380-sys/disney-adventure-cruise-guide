@@ -56,7 +56,7 @@ vi.mock("react-native", async () => {
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 48, left: 0, right: 0 }) }));
 vi.mock("react-native-svg", () => ({ Svg: "Svg", Path: "Path" }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({
   router: { push: h.push, back: h.back, dismissTo: h.dismissTo, navigate: vi.fn(), canGoBack: () => true },
   Tabs: { Screen: "TabsScreen" },

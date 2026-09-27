@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import React, { useEffect, useState } from "react";

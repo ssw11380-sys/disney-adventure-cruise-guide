@@ -79,7 +79,7 @@ async function exchange(baseUrl: string, token: string, path: string, init: Requ
 
 async function request<T>(baseUrl: string, token: string, path: string, init: RequestInit = {}, timeoutMs = 60_000): Promise<T> {
   const { res, text } = await exchange(baseUrl, token, path, init, timeoutMs);
-  return result<T>(res, text);
+  return result<T>(res, text, path, baseUrl);
 }
 
 /**
@@ -107,7 +107,7 @@ async function requestCond<T>(baseUrl: string, token: string, path: string, time
       if (etag && json !== null) condPut(key, etag, text);
       else condDrop(key);
       condNote("full");
-      return result<T>(res, text);
+      return result<T>(res, text, path, baseUrl);
     }
     const out = rebuild(held, json);
     if (out !== null) {
@@ -124,9 +124,9 @@ async function requestCond<T>(baseUrl: string, token: string, path: string, time
     const etag = again.res.headers.get("etag");
     if (again.res.ok && etag && again.text && !isDelta(safeParse(again.text))) condPut(key, etag, again.text);
     condNote("full");
-    return result<T>(again.res, again.text);
+    return result<T>(again.res, again.text, path, baseUrl);
   }
-  return result<T>(res, text);
+  return result<T>(res, text, path, baseUrl);
 }
 
 function safeParse(text: string): unknown {
@@ -137,8 +137,8 @@ function safeParse(text: string): unknown {
   }
 }
 
-/** 응답 → 값 (204 면 없음, 실패면 ApiRequestError) */
-function result<T>(res: Response, text: string): T {
+/** 응답 → 값 (204 면 없음, 실패면 ApiRequestError — 오류에는 요청 경로·서버 주소를 붙인다: 3-24 연결 오류 안내가 '지금 서버 주소'를 보여 준다) */
+function result<T>(res: Response, text: string, path: string, baseUrl: string): T {
   if (res.status === 204) return undefined as T;
   let json: unknown = null;
   let parsed = true;

@@ -47,7 +47,7 @@ vi.mock("react-native", () => ({
   },
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 32, bottom: 48, left: 0, right: 0 }) }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({
   Stack: { Screen: "StackScreen" },
   // 종목 상세는 루트 스택 위 (잔고 탭 위에 쌓임) → canDismiss 참

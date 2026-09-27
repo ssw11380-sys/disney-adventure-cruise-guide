@@ -45,7 +45,7 @@ vi.mock("react-native", () => ({
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 48, left: 0, right: 0 }) }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({
   router: { push: h.push, back: h.back, replace: h.replace, canGoBack: () => h.canGoBack },
   useRootNavigationState: () => (h.navKey ? { key: h.navKey } : undefined),
