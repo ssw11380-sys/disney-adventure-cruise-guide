@@ -34,8 +34,18 @@ export function barFraction(score: number | null | undefined): number | null {
 /** 추세 줄이 숫자·막대로 보이는지 (본인 점수가 있을 때만) */
 export const trendHasScore = (t: TrendScoreBlock): boolean => t.status === "ok" && t.score !== null && t.band !== null;
 
-/** 종합 줄: 두 점수가 모두 있을 때만 (이번 단계에서는 늘 숨김) */
+/** 종합 숫자: 두 점수가 모두 있을 때만 (이번 단계에서는 늘 '없음') */
 export const showComposite = (s: IndicatorScores): boolean => s.composite.status === "ok" && s.composite.score !== null;
+
+/**
+ * 종합 줄 (늘 둔다 — 설계 5.4 '없으면 없다고', 목업 1·2): 두 점수가 있으면 평균 숫자 + '두 점수의 평균',
+ * 없으면 서버 글 '없음 · 가치 지표 점수가 없어 합치지 않습니다'를 상태('없음')와 이유로 나눈다
+ */
+export function compositeLine(s: IndicatorScores): { score: number | null; label: string; reason: string | null } {
+  if (showComposite(s)) return { score: s.composite.score, label: String(s.composite.score), reason: SCORE_LABELS.compositeNote };
+  const [head, ...rest] = s.composite.text.split(" · ");
+  return { score: null, label: head || "없음", reason: rest.length ? rest.join(" · ") : null };
+}
 
 /** 화면 읽기: '추세 지표 69점, 다소 강함' / '추세 지표, 이 상품 자체 점수 없음' */
 export function trendSpeech(t: TrendScoreBlock): string {
@@ -47,8 +57,15 @@ export function trendSpeech(t: TrendScoreBlock): string {
 export function summarySpeech(s: IndicatorScores): string {
   const parts = [SCORE_LABELS.title, `${SCORE_LABELS.value}, ${s.value.label}`, trendSpeech(s.trend)];
   if (s.trend.reference?.status === "ok") parts.push(s.trend.reference.text);
-  if (showComposite(s)) parts.push(`${SCORE_LABELS.composite} ${s.composite.score}점, ${SCORE_LABELS.compositeNote}`);
+  const c = compositeLine(s);
+  parts.push(c.score !== null ? `${SCORE_LABELS.composite} ${c.score}점, ${SCORE_LABELS.compositeNote}` : `${SCORE_LABELS.composite} ${c.label}${c.reason ? `, ${c.reason}` : ""}`);
   return `${parts.join(". ")}.`;
+}
+
+/** 레버리지 주의 상자 화면 읽기: 줄 앞 '·'와 줄 끝 마침표를 떼고 '. '로 잇는다 ('상품입니다..' 처럼 마침표가 겹치지 않게) */
+export function leverageSpeech(box: { title: string; lines: { parts: { text: string }[] }[] }): string {
+  const clean = (s: string) => s.replace(/^\s*·\s*/, "").replace(/[.\s]+$/, "");
+  return `${[box.title, ...box.lines.map((l) => l.parts.map((p) => p.text).join(""))].map(clean).filter(Boolean).join(". ")}.`;
 }
 
 /** 묶음 한 줄 화면 읽기: '추세 69점, 비중 35' */
@@ -61,7 +78,7 @@ export function itemLine(f: ScoreFamily): string {
   return f.items.map((i) => `${i.name} ${i.score ?? "없음"}`).join(" · ");
 }
 
-/** 큰 글씨(130% 이상)면 줄 이름·숫자 / 막대·띠 두 줄로 (설계 4.3) */
+/** 큰 글씨(130% 이상)면 줄 이름·숫자 / 막대·띠 두 줄로 (설계 4.3), 점수 없는 줄은 이름 / 상태 글 두 줄로 */
 export const STACK_SCALE = 1.3;
 export const stackRows = (fontScale: number): boolean => fontScale >= STACK_SCALE;
 /**

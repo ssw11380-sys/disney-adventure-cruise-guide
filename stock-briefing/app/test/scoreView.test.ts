@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { IndicatorScores } from "@/api/types";
-import { barFraction, familySpeech, itemLine, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
+import { barFraction, compositeLine, familySpeech, itemLine, leverageSpeech, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
 
 /**
  * 지표 점수 화면 모양 (3-44 1단계). 서버 응답은 공용 픽스처(shared/fixtures/indicatorScores.json — 서버 테스트가 지금 서버 코드의 응답과 같은지 본다).
@@ -26,13 +26,21 @@ const texts = (v: unknown): string[] => (typeof v === "string" ? [v] : Array.isA
 describe("화면 읽기 문장", () => {
   it("NVDA: '추세 지표 69점, 다소 강함' (가치는 계산 준비 중, 종합은 없음)", () => {
     expect(trendSpeech(S["NVDA"]!.trend)).toBe("추세 지표 69점, 다소 강함");
-    expect(summarySpeech(S["NVDA"]!)).toBe("지표 점수. 가치 지표, 계산 준비 중. 추세 지표 69점, 다소 강함.");
+    expect(summarySpeech(S["NVDA"]!)).toBe("지표 점수. 가치 지표, 계산 준비 중. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
   });
   it("삼성전자: 68 다소 강함", () => expect(trendSpeech(S["005930"]!.trend)).toBe("추세 지표 68점, 다소 강함"));
   it("SOXL: 이 상품 자체 점수 없음 + 기초자산 참고", () => {
-    expect(summarySpeech(S["SOXL"]!)).toBe("지표 점수. 가치 지표, 대상 아님. 추세 지표, 이 상품 자체 점수 없음. 참고: 기초자산 SOXX 추세 지표 73 · 강함.");
+    expect(summarySpeech(S["SOXL"]!)).toBe("지표 점수. 가치 지표, 대상 아님. 추세 지표, 이 상품 자체 점수 없음. 참고: 기초자산 SOXX 추세 지표 73 · 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
   });
-  it("점수 없음·대상 아님", () => {
+  it("레버리지 주의 상자: 줄 앞 '·'·줄 끝 마침표를 떼고 이어 읽는다 (마침표 겹침 없음)", () => {
+    const sp = leverageSpeech(S["SOXL"]!.trend.leveraged!.box);
+    expect(sp).not.toMatch(/\.\./);
+    expect(sp).not.toContain("·  ");
+    expect(sp.startsWith("레버리지 상품 주의 · 계산한 사실. 이 상품은 NYSE 반도체 지수 하루 움직임의 3배를 따라가도록 만든 상품입니다. 최근 63거래일: 이 상품 −29.8%")).toBe(true);
+    expect(sp.endsWith("차이가 커질 수 있습니다.")).toBe(true);
+  });
+  it("점수 없음·대상 아님·받기 실패", () => {
+    expect(trendSpeech(S["NVDA_fetchFailed"]!.trend)).toBe("추세 지표, 점수 없음");
     expect(trendSpeech(S["SHRT"]!.trend)).toBe("추세 지표, 점수 없음");
     expect(trendSpeech(S["SQQQ"]!.trend)).toBe("추세 지표, 대상 아님");
   });
@@ -48,10 +56,16 @@ describe("보이는 모양", () => {
     expect([barFraction(69), barFraction(0), barFraction(100), barFraction(130), barFraction(-5), barFraction(null)]).toEqual([0.69, 0, 1, 1, 0, null]);
   });
   it("점수 줄은 본인 점수가 있을 때만 (레버리지·인버스·짧은 기록은 상태 글)", () => {
-    expect(Object.fromEntries(Object.entries(S).map(([k, v]) => [k, trendHasScore(v.trend)]))).toEqual({ NVDA: true, "005930": true, QQQ: true, SOXL: false, RGTX: false, SQQQ: false, SHRT: false, ZJMP: true });
+    expect(Object.fromEntries(Object.entries(S).map(([k, v]) => [k, trendHasScore(v.trend)]))).toEqual({ NVDA: true, "005930": true, QQQ: true, SOXL: false, RGTX: false, SQQQ: false, SHRT: false, ZJMP: true, NVDA_fetchFailed: false, SOXL_fetchFailed: false });
   });
-  it("종합은 두 점수가 모두 있을 때만 — 1단계에서는 늘 숨김", () => {
+  it("종합 숫자는 두 점수가 모두 있을 때만, 없으면 '없음'과 이유 (설계 5.4 '없으면 없다고')", () => {
     for (const s of Object.values(S)) expect(showComposite(s)).toBe(false);
+    expect(compositeLine(S["NVDA"]!)).toEqual({ score: null, label: "없음", reason: "가치 지표 점수가 없어 합치지 않습니다" });
+    expect(compositeLine(S["SOXL"]!)).toEqual({ score: null, label: "없음", reason: "가치 지표 점수가 없어 합치지 않습니다" });
+    expect(compositeLine(S["SQQQ"]!)).toEqual({ score: null, label: "없음", reason: "두 점수가 모두 없습니다" });
+    const both = { ...S["NVDA"]!, composite: { status: "ok", score: 63, reason: null, text: "63 · 두 점수의 평균", gap: 12, gapNote: false } } as const;
+    expect(compositeLine(both)).toEqual({ score: 63, label: "63", reason: "두 점수의 평균" });
+    expect(summarySpeech(both).endsWith("종합 지표 63점, 두 점수의 평균.")).toBe(true);
   });
   it("글자 130% 부터 두 줄", () => {
     expect([stackRows(1), stackRows(1.15), stackRows(1.3), stackRows(2)]).toEqual([false, false, true, true]);

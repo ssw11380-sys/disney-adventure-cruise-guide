@@ -140,7 +140,10 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     const text = r.text();
     for (const need of ["지표 점수", "계산식 결과 · AI 글 아님", "가치 지표", "계산 준비 중", "추세 지표", "69", "다소 강함", s.trend.meaning!, "가격 9월 25일(금) 미국 종가", "점수는 과거·현재 숫자의 요약이며, 앞으로의 가격을 알려 주지 않습니다.", "구성·계산 방법 보기", "참고 정보이며 투자 권유가 아닙니다", "AI 기업개요", "AI가 쓴 글"])
       expect(text, need).toContain(need);
-    expect(text).not.toContain("종합 지표"); // 두 점수가 모두 있을 때만
+    // 종합: 없으면 없다고 (두 점수 아래 작게, 설계 5.4 · 목업 1)
+    expect(text).toContain("종합 지표");
+    expect(text).toContain("가치 지표 점수가 없어 합치지 않습니다");
+    expect(order(r, "추세 지표", "종합 지표", "가격 9월 25일")).toEqual([...order(r, "추세 지표", "종합 지표", "가격 9월 25일")].sort((a, b) => a - b));
     const pos = order(r, "지표 점수", "추세 지표", "가격 9월 25일", "구성·계산 방법 보기", "참고 정보이며", "AI 기업개요");
     expect([...pos].sort((a, b) => a - b)).toEqual(pos);
     expect(pos.every((p) => p >= 0)).toBe(true);
@@ -148,7 +151,7 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     const all = r.all();
     expect(all.findIndex((n) => n.type === "Card")).toBeLessThan(all.findIndex((n) => n.type === "Loading"));
     // 화면 읽기: 요약 한 문장, 추세 숫자는 '추세 지표 69점, 다소 강함'
-    expect(r.has("지표 점수. 가치 지표, 계산 준비 중. 추세 지표 69점, 다소 강함.")).toBe(true);
+    expect(r.has("지표 점수. 가치 지표, 계산 준비 중. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.")).toBe(true);
     expect(r.has("추세 지표 69점, 다소 강함")).toBe(true);
     expect(r.has("AI 기업개요, AI가 쓴 글")).toBe(true);
   });
@@ -177,13 +180,15 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     expect(segmented(r)[0]!.props.value).toBe("technical");
     const t2 = r.text();
     expect(t2).toContain("추세 지표 점수 69/100 · 다소 강함");
+    // 상세 카드 머리: 화면 읽기는 '69/100' 대신 '추세 지표 69점, 다소 강함'
+    expect(r.all().some((n) => n.props.accessibilityRole === "header" && n.props.accessibilityLabel === "추세 지표 69점, 다소 강함" && textOf(n) === "추세 지표 점수 69/100 · 다소 강함")).toBe(true);
     expect(t2).toContain("주가가 200일 이동평균선보다 12.8% 위, 50일선보다 4.2% 위에 있습니다.");
     expect(t2).toContain(DISCLAIMER);
     expect(t2).toContain("과거 가격·거래량으로 계산한 지표이며 앞으로의 가격이나 수익을 뜻하지 않습니다.");
     expect(r.has("AI 기술분석, AI가 쓴 글")).toBe(true);
   });
 
-  it("글자 130%: 이름·숫자 / 막대 두 줄 (한 줄에 이름·막대·숫자·띠를 우겨 넣지 않는다)", () => {
+  it("글자 130%: 이름·숫자 / 막대·띠 두 줄 (설계 4.3), 점수 없는 줄은 이름 / 상태 글 두 줄", () => {
     const rowWith = (r: ReturnType<typeof render>, label: string) => r.all().find((n) => flat(n).flexDirection === "row" && n.children.some((c) => typeof c !== "string" && textOf(c) === label))!;
     const hasBar = (n: HostNode) => n.children.some((c) => typeof c !== "string" && c.props.importantForAccessibility === "no-hide-descendants");
     expect(hasBar(rowWith(open(nvdaStock(), "NVDA"), "추세 지표"))).toBe(true);
@@ -191,7 +196,19 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     const row = rowWith(big, "추세 지표");
     expect(hasBar(row)).toBe(false);
     expect(textOf(row)).toContain("69");
-    expect(big.all().some((n) => n.props.importantForAccessibility === "no-hide-descendants")).toBe(true);
+    expect(textOf(row)).not.toContain("다소 강함");
+    // 둘째 줄: 막대 + 띠
+    const barRow = big.all().find((n) => flat(n).flexDirection === "row" && hasBar(n))!;
+    expect(textOf(barRow)).toBe("다소 강함");
+    // 가치 지표 줄: '가치 지표' 와 '계산 준비 중' 이 한 줄(row)에 붙지 않는다
+    const nameNode = big.all().find((n) => n.type === "Text" && textOf(n) === "가치 지표")!;
+    const parent = big.all().find((n) => n.children.includes(nameNode))!;
+    expect(flat(parent).flexDirection).not.toBe("row");
+    expect(parent.children.map((c) => (typeof c === "string" ? c : textOf(c)))).toEqual(["가치 지표", "계산 준비 중"]);
+    // 100% 는 이름 칸 옆에 상태 글 (한 줄)
+    const small = open(nvdaStock(), "NVDA");
+    const n1 = small.all().find((n) => n.type === "Text" && textOf(n) === "가치 지표")!;
+    expect(flat(small.all().find((n) => n.children.includes(n1))!).flexDirection).toBe("row");
   });
 
   it("못 받으면 '지표 점수를 불러오지 못했습니다' + 다시 시도, 404(꺼짐·예전 서버)면 카드 없이 AI 글만", () => {
@@ -215,6 +232,10 @@ describe("레버리지 ETF (SOXL)", () => {
     for (const need of ["대상 아님", "ETF는 여러 종목을 묶은 상품이라", "이 상품 자체 점수 없음", "참고: 기초자산 SOXX 추세 지표 73 · 강함", "기초자산 기준", "매일 3배를 다시 맞추는 상품이라", "SOXX는 같은 NYSE 반도체 지수를 1배로 따르는 ETF입니다.", "레버리지 상품 주의 · 계산한 사실", "−29.8%", "−2.9%", "−8.8%", "69.4%", "53.8%"])
       expect(text, need).toContain(need);
     expect(r.all().some((n) => n.type === "Badge" && textOf(n) === "기초자산 기준")).toBe(true);
+    expect(text).toContain("가치 지표 점수가 없어 합치지 않습니다"); // 종합 없음 (목업 2)
+    // 사실 상자 화면 읽기: 마침표가 겹치지 않는다
+    const box = r.all().find((n) => typeof n.props.accessibilityLabel === "string" && (n.props.accessibilityLabel as string).startsWith("레버리지 상품 주의"))!;
+    expect(box.props.accessibilityLabel as string).not.toMatch(/\.\./);
     // 수익률 세 숫자만 하락 파랑, 나머지 글은 기본 글자색
     const colored = r.all().filter((n) => n.type === "Text" && flat(n).color === light.down).map(textOf);
     expect(colored).toEqual(["−29.8%", "−2.9%", "−8.8%"]);
@@ -222,6 +243,18 @@ describe("레버리지 ETF (SOXL)", () => {
     expect(r.all().some((n) => n.props.importantForAccessibility === "no-hide-descendants")).toBe(false);
     r.act(() => (r.byLabel("기초자산 SOXX 화면 보기").props.onPress as () => void)());
     expect(h.push).toHaveBeenCalledWith({ pathname: "/stocks/[code]", params: { code: "SOXX" } });
+  });
+
+  it("기초자산 일봉을 받지 못했을 때(받기 실패): '기초자산을 확인하지 못함'이 아니라 '… 받지 못했습니다. 잠시 뒤 다시 계산합니다', 참고 줄·화면 보기 없이 상품 자체 사실만", () => {
+    const r = open(soxlStock(), "SOXL_fetchFailed");
+    const text = r.text();
+    expect(text).toContain("이 상품 자체 점수 없음");
+    expect(text).toContain("기초자산 SOXX 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다");
+    expect(text).not.toContain("기초자산을 확인하지 못해");
+    expect(text).not.toContain("기초자산 기준");
+    expect(r.all().some((n) => n.props.accessibilityLabel === "기초자산 SOXX 화면 보기")).toBe(false);
+    expect(text).toContain("이 상품은 NYSE 반도체 지수 하루 움직임의 3배를 따라가도록 만든 상품입니다.");
+    expect(text).toContain("−29.8%");
   });
 
   it("기술분석 탭: 묶음 없이 상태·참고 줄·사실 상자·고지", () => {
@@ -233,6 +266,17 @@ describe("레버리지 ETF (SOXL)", () => {
     expect(text).toContain("레버리지 상품 주의 · 계산한 사실");
     expect(text).not.toContain("주가가 200일");
     expect(text).toContain(DISCLAIMER);
+  });
+});
+
+describe("받기 실패 (보통 종목)", () => {
+  it("NVDA 비교 지수를 받지 못했을 때: 점수·막대 없이 '점수 없음' + 이유 (지수 대비 항목을 뺀 다른 점수를 보이지 않음)", () => {
+    const r = open(nvdaStock(), "NVDA_fetchFailed");
+    const text = r.text();
+    expect(text).toContain("점수 없음");
+    expect(text).toContain("비교 지수(나스닥) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다");
+    expect(r.all().some((n) => n.props.importantForAccessibility === "no-hide-descendants")).toBe(false);
+    expect(text).toContain("두 점수가 모두 없습니다");
   });
 });
 

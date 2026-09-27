@@ -767,7 +767,8 @@ export interface FeatureFlags {
 /**
  * GET /api/scores/:code — 지표 점수 (3-44 1단계, 플래그 indicatorScores). 서버 services/indicatorScoreService 의 ScoresResponse 와 같은 모양.
  * 모든 문장은 서버가 만든다(금지어 검사를 서버 한 곳에서) — 앱은 배치만 하고, 앱에 고정된 글은 줄 이름·버튼뿐이다.
- * 이번 단계는 추세 지표 점수만 계산한다: 가치는 '계산 준비 중'(ETF 는 '대상 아님'), 종합은 두 점수가 모두 있을 때만(지금은 늘 none)
+ * 이번 단계는 추세 지표 점수만 계산한다: 가치는 '계산 준비 중'(ETF 는 '대상 아님'), 종합 숫자는 두 점수가 모두 있을 때만(지금은 늘 none — 화면은 '없음 · 이유').
+ * trend.reason.code 'fetchFailed' = 받기 실패(일봉·비교 지수·기초자산 일봉) — 서버가 5분 뒤 다시 계산한다
  */
 export type TrendBandName = "강함" | "다소 강함" | "중립" | "다소 약함" | "약함";
 /** 글 조각 (sign 이 있으면 등락 색 — 레버리지 상자의 수익률 숫자만) */

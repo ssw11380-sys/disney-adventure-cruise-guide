@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useIndicatorScores } from "@/api/hooks";
 import type { IndicatorScores, ScoreFamily, TrendScoreBlock } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
-import { familySpeech, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
+import { compositeLine, familySpeech, nameWidth, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { LeverageNotice } from "./LeverageNotice";
@@ -12,8 +12,8 @@ import { ScoreBar } from "./ScoreBar";
 
 /**
  * 종목 상세 기업개요 탭 맨 위 '지표 점수' 요약 카드 (3-44 1단계, 플래그 indicatorScores — 켜져 있을 때만 화면이 이 카드를 둔다).
- * 두 점수(가치 · 추세) → 종합(두 점수가 모두 있을 때만, 작게) → 레버리지 주의 상자 → 날짜 한 줄 → 예측 아님 줄 → '구성·계산 방법 보기' → 짧은 고지.
- * 이번 단계: 가치 지표는 '계산 준비 중'(ETF 는 '대상 아님'), 종합은 숨김. 레버리지 ETF 는 이 상품 자체 점수 없이 기초자산 참고 줄과 사실 상자.
+ * 두 점수(가치 · 추세) → 종합(작게 — 두 점수가 모두 있으면 평균, 없으면 '없음 · 이유') → 레버리지 주의 상자 → 날짜 한 줄 → 예측 아님 줄 → '구성·계산 방법 보기' → 짧은 고지.
+ * 이번 단계: 가치 지표는 '계산 준비 중'(ETF 는 '대상 아님'), 종합은 '없음'. 레버리지 ETF 는 이 상품 자체 점수 없이 기초자산 참고 줄과 사실 상자.
  * 카드는 늘 접힌 채 시작하고 펼침은 화면 상태로만 기억한다. 막대는 회색 한 가지. 404(꺼짐·예전 서버)면 아무것도 그리지 않는다
  */
 export function IndicatorSummaryCard({
@@ -57,6 +57,7 @@ export function IndicatorSummaryCard({
   const s = q.data;
   const trend = s.trend;
   const ref = trend.reference;
+  const comp = compositeLine(s);
   return (
     <Frame flat={flat}>
       <View accessible accessibilityLabel={summarySpeech(s)} style={styles.gapSm}>
@@ -69,13 +70,16 @@ export function IndicatorSummaryCard({
             <TrendRow trend={trend} />
           </View>
         </View>
-        {showComposite(s) ? (
-          <View style={[styles.composite, { borderTopColor: t.line }]}>
-            <Text style={[styles.name, { color: t.sub }]}>{SCORE_LABELS.composite}</Text>
-            <Text style={[styles.num, { color: t.ink }]}>{s.composite.score}</Text>
-            <Muted>{SCORE_LABELS.compositeNote}</Muted>
-          </View>
-        ) : null}
+        {/* 종합: 두 점수 아래 작게, 없으면 없다고 (설계 5.4 · 목업 1·2) */}
+        <View style={[styles.composite, { borderTopColor: t.line }]}>
+          <Text style={[styles.name, { color: t.sub }]}>{SCORE_LABELS.composite}</Text>
+          {comp.score !== null ? (
+            <Text style={[styles.num, { color: t.ink }]}>{comp.score}</Text>
+          ) : (
+            <Text style={{ color: t.sub, fontSize: font.body, fontWeight: "700" }}>{comp.label}</Text>
+          )}
+          {comp.reason ? <Muted style={styles.shrink}>{comp.reason}</Muted> : null}
+        </View>
       </View>
       {trend.leveraged ? <LeverageNotice box={trend.leveraged.box} /> : null}
       {s.asOf.line ? <Muted>{s.asOf.line}</Muted> : null}
@@ -119,7 +123,10 @@ function Head({ note }: { note: string | null }) {
   );
 }
 
-/** 점수 없는 줄: 이름 · 상태 글(굵게) / 이유 한 줄 */
+/**
+ * 점수 없는 줄: 이름 · 상태 글(굵게) / 이유 한 줄. 큰 글씨(130% 이상)에서는 이름과 상태 글을 두 줄로 나눈다 —
+ * 한 줄에 같은 굵기로 이어 쓰면 '가치 지표 계산 준비 중'이 한 덩어리로 읽히므로
+ */
 function StatusRow({ name, label, text, children }: { name: string; label: string; text: string | null; children?: React.ReactNode }) {
   const t = useTheme();
   const fs = useFontScale();
@@ -127,7 +134,7 @@ function StatusRow({ name, label, text, children }: { name: string; label: strin
   const nw = nameWidth(scores.nameW, fs);
   return (
     <View style={styles.gapXs}>
-      <View style={[styles.row, stack ? styles.rowWrap : null]}>
+      <View style={stack ? styles.gapXxs : styles.row}>
         <Text style={[styles.name, { color: t.ink }, stack ? null : { width: nw }]}>{name}</Text>
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flexShrink: 1 }}>{label}</Text>
       </View>
@@ -171,13 +178,16 @@ function TrendRow({ trend }: { trend: TrendScoreBlock }) {
   return (
     <View style={styles.gapXs}>
       {stack ? (
+        // 설계 4.3: 글자 130% 이상은 이름·숫자 / 막대·띠 두 줄
         <>
           <View style={styles.row}>
             <Text style={[styles.name, { color: t.ink, flexGrow: 1 }]}>{SCORE_LABELS.trend}</Text>
             {num}
+          </View>
+          <View style={styles.row}>
+            <ScoreBar score={trend.score} />
             {band}
           </View>
-          <ScoreBar score={trend.score} />
         </>
       ) : (
         <View style={styles.row}>
@@ -252,18 +262,19 @@ function LinkRow({ label, onPress }: { label: string; onPress: () => void }) {
 const styles = StyleSheet.create({
   card: { gap: space.sm },
   head: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: space.sm },
+  gapXxs: { gap: space.xxs },
   gapXs: { gap: space.xs },
   gapSm: { gap: space.sm },
+  shrink: { flexShrink: 1 },
   gapMd: { gap: space.md },
   twoCol: { flexDirection: "row", gap: space.xl },
   col: { flex: 1, minWidth: 0 },
   row: { flexDirection: "row", alignItems: "center", gap: space.sm },
-  rowWrap: { flexWrap: "wrap" },
   name: { minWidth: scores.nameW, fontSize: font.body, fontWeight: "700" },
   num: { minWidth: scores.numW, textAlign: "right", fontSize: font.title, fontWeight: "800", fontVariant: ["tabular-nums"] },
   band: { minWidth: scores.bandW, fontSize: font.body },
   refRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.s },
-  composite: { flexDirection: "row", alignItems: "baseline", gap: space.sm, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.sm },
+  composite: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", columnGap: space.sm, rowGap: space.xxs, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.sm },
   toggle: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: touch.min, alignSelf: "flex-start" },
   how: { gap: space.md, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.md },
   mini: { minHeight: touch.min - space.md },

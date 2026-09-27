@@ -1,6 +1,7 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { TrendScoreBlock } from "@/api/types";
+import { leverageSpeech } from "@/lib/scoreView";
 import { changeColor, font, radius, space, useTheme } from "@/theme";
 
 /**
@@ -9,7 +10,7 @@ import { changeColor, font, radius, space, useTheme } from "@/theme";
  */
 export function LeverageNotice({ box }: { box: NonNullable<TrendScoreBlock["leveraged"]>["box"] }) {
   const t = useTheme();
-  const speech = [box.title, ...box.lines.map((l) => l.parts.map((p) => p.text).join(""))].join(". ");
+  const speech = leverageSpeech(box);
   return (
     <View style={[styles.box, { borderColor: t.lineStrong, backgroundColor: t.bg }]} accessible accessibilityLabel={speech}>
       <Text style={{ color: t.warn, fontSize: font.body, fontWeight: "700" }} accessibilityRole="header">
