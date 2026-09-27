@@ -1,3 +1,4 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { leverageFacts } from "../src/analysis/leveraged.js";
@@ -450,6 +451,27 @@ describe("문구 (금지어 · 미래형)", () => {
     expect(all.length).toBeGreaterThan(300);
     const bad = all.map((s) => [s, scoreWordingProblems(s)] as const).filter(([, p]) => p.length);
     expect(bad).toEqual([]);
+  });
+});
+
+describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서버 응답)", () => {
+  /** shared/fixtures/indicatorScores.json — 지금 서버 코드가 기록한 일봉으로 낸 응답과 같아야 한다. 바꿀 때: UPDATE_SCORE_FIXTURE=1 npx vitest run test/indicatorScores.test.ts */
+  it("NVDA · 삼성전자 · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 지난주 대비 바뀐 종목", async () => {
+    const { stock } = jumpCandles();
+    const { src } = fixtureSources({
+      candles: { ZJMP: stock, SHRT: candlesOf("NVDA").slice(-120), SQQQ: new Error("기록 없음") },
+      stocks: { ZJMP: { code: "ZJMP", name: "합성 종목", market: "NASDAQ" }, SHRT: { code: "SHRT", name: "짧은 기록", market: "NASDAQ" } },
+    });
+    await start(src);
+    const cases: Record<string, unknown> = {};
+    for (const c of ["NVDA", "005930", "QQQ", "SOXL", "RGTX", "SQQQ", "SHRT", "ZJMP"]) {
+      const { computedAt: _t, ...body } = (await get(c)).body;
+      cases[c] = body;
+    }
+    const file = new URL("../../shared/fixtures/indicatorScores.json", import.meta.url);
+    const fixture = { note: "지표 점수 1단계 서버 응답 (GET /api/scores/:code, computedAt 제외) — 기록한 야후 공개 일봉(backend/test/fixtures/indicatorScores)으로 서버 코드가 낸 값. 2026-09-28 10:00 KST 기준", cases };
+    if (process.env["UPDATE_SCORE_FIXTURE"] === "1") writeFileSync(file, `${JSON.stringify(fixture, null, 1)}\n`);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(fixture);
   });
 });
 

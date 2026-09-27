@@ -426,6 +426,28 @@ export function useAnalysis(code: string, kind: AnalysisKind, enabled = true) {
   });
 }
 
+/**
+ * 지표 점수 (3-44, 플래그 indicatorScores — 부르는 화면이 켜져 있을 때만 enabled). 점수는 장 마감 뒤 하루 한 번 바뀌므로 30분 동안 새로 묻지 않는다.
+ * 404(플래그 꺼짐·예전 서버·모르는 종목)는 오류가 아니라 없음(null) → 카드를 그리지 않는다
+ */
+export function useIndicatorScores(code: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("scores", code),
+    queryFn: async () => {
+      try {
+        return await api.indicatorScores(code);
+      } catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: enabled && !!code,
+    staleTime: 30 * 60_000,
+    retry: 0,
+  });
+}
+
 export function useStockNews(code: string, enabled = true) {
   const api = useApi();
   return useQuery({ queryKey: useKey("news", code), queryFn: () => api.getStockNews(code), enabled, staleTime: 5 * 60_000 });

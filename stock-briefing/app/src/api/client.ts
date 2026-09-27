@@ -31,6 +31,7 @@ import type { AppErrorSummary, Evaluation,
   TossImportResult,
   TossOpenApiStatus,
   FeatureFlags,
+  IndicatorScores,
 } from "./types";
 import { authMessage, NOT_JSON } from "@/lib/connectionError";
 
@@ -204,6 +205,8 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     getAnalysis: (code: string, kind: AnalysisKind, refresh = false) =>
       get<Analysis>(`${stockPath(code)}/analysis/${kind}${refresh ? "?refresh=1" : ""}`, 180_000),
     getStockNews: (code: string) => get<StockNews>(`${stockPath(code)}/news`),
+    /** 지표 점수 (3-44, 플래그 indicatorScores). 플래그가 꺼져 있거나 예전 서버·모르는 종목이면 404 → 부르는 쪽이 "없음"으로 본다 */
+    indicatorScores: (code: string) => get<IndicatorScores>(`/api/scores/${encodeURIComponent(code)}`, 20_000),
 
     latestBriefings: () => get<LatestBriefing[]>("/api/briefings/latest"),
     listBriefings: (filter: { code?: string; date?: string; session?: BriefingSession; limit?: number } = {}) => {
