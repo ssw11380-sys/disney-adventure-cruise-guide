@@ -52,6 +52,11 @@ type StockRowProps = {
    * (스와이프 버튼과 같은 일 — lib/rowActions). 주지 않으면 지금처럼 '수정·삭제'(길게 누르기) 하나
    */
   onRowAction?: (stock: RegisteredWithQuote, action: "edit" | "remove") => void;
+  /**
+   * 휴대폰 줄을 감쌀 틀 (3-24 oneHand: 잔고 줄 스와이프 — 잔고 화면이 components/SwipeRow 로 감싼다). 줄 자리(onLayoutRow)는 틀이 알린다.
+   * 이 줄 안에서 감싸므로 체결이 온 줄만 틀까지 다시 그린다 (목록 전체가 체결마다 틀을 다시 그리지 않게, 3-17). 늘 같은 함수를 넘긴다. 넓은 표에서는 쓰지 않는다
+   */
+  wrapRow?: (stock: RegisteredWithQuote, row: React.ReactElement, onLayout?: (e: LayoutChangeEvent) => void) => React.ReactElement;
 };
 
 /**
@@ -71,7 +76,8 @@ export function sameRow(a: StockRowProps, b: StockRowProps): boolean {
     a.weight === b.weight &&
     a.weightMax === b.weightMax &&
     a.onLayoutRow === b.onLayoutRow &&
-    a.onRowAction === b.onRowAction
+    a.onRowAction === b.onRowAction &&
+    a.wrapRow === b.wrapRow
   );
 }
 
@@ -81,7 +87,7 @@ export const StockRow = React.memo(StockRowView, sameRow);
 /** 한 줄 표의 금액: 원화는 단위 없이("1,576,274"), 달러는 "$" 를 붙인다 (국내·미국 줄이 한 열에 섞이므로) */
 const cellMoney = (text: string) => text.replace("원", "");
 
-function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp, columns, zebra = false, weight = null, weightMax = 0, onLayoutRow, onRowAction }: StockRowProps) {
+function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp, columns, zebra = false, weight = null, weightMax = 0, onLayoutRow, onRowAction, wrapRow }: StockRowProps) {
   const t = useTheme();
   const q = stock.quote;
   const live = liveProp ?? q?.live === true;
@@ -198,7 +204,7 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
   const price: LinePrice | null = q
     ? { value: q.price, text: formatQuoteDisplay(q.price, cur, fx, showKrw), color: c, rate: rateText, rateColor: changeColor(t, shownSign(q.changeRate, rateText)), live }
     : null;
-  return (
+  const line = (
     <StockLine
       name={stock.name}
       nameBadge={badge}
@@ -216,12 +222,14 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
       }
       onPress={() => onPress(stock)}
       onLongPress={onLongPress ? () => onLongPress(stock) : undefined}
-      onLayout={layoutProp}
+      onLayout={wrapRow ? undefined : layoutProp}
       accessibilityLabel={label}
       accessibilityActions={a11yActions}
       onAccessibilityAction={a11yAction}
     />
   );
+  // 감싸는 틀이 있으면 줄 자리는 틀이 알린다 (줄은 틀 안에서 y=0)
+  return wrapRow ? wrapRow(stock, line, layoutProp) : line;
 }
 
 /** 평가가 없는 보유 종목(평단·시세 없음)의 손익 칸: 계좌 합계에서 빠졌음을 알린다 */

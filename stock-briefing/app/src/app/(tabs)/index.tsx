@@ -156,11 +156,22 @@ export default function StocksScreen() {
   const openStock = useCallback((s: RegisteredWithQuote) => router.push(`/stocks/${s.code}`), []);
   const longPress = useCallback((s: RegisteredWithQuote) => confirmRef.current(s), []);
   const rowAction = useCallback((s: RegisteredWithQuote, a: "edit" | "remove") => actionRef.current(s, a), []);
-  // 스와이프 버튼: 수정(청록) · 지우기(경고색)
-  const swipeActions = (s: RegisteredWithQuote): SwipeAction[] => [
-    { key: "edit", label: "수정", icon: "create-outline", onPress: () => actionRef.current(s, "edit") },
-    { key: "remove", label: removeLabel(s), icon: removeKind(s) === "sync" ? "remove-circle-outline" : removeKind(s) === "unwatch" ? "star-outline" : "trash-outline", danger: true, onPress: () => actionRef.current(s, "remove") },
-  ];
+  // 휴대폰·접은 화면 줄 스와이프 틀: 줄(StockRow) 안에서 감싸 체결이 온 줄만 틀까지 다시 그린다 (늘 같은 함수 — 줄의 memo 비교를 깨지 않게).
+  // 버튼: 수정(청록) · 지우기(경고색 — 토스 종목은 동기화 제외, 관심은 관심 해제)
+  const swipeWrap = useCallback(
+    (s: RegisteredWithQuote, row: React.ReactElement, onLayout?: (e: LayoutChangeEvent) => void) => {
+      const actions: SwipeAction[] = [
+        { key: "edit", label: "수정", icon: "create-outline", onPress: () => actionRef.current(s, "edit") },
+        { key: "remove", label: removeLabel(s), icon: removeKind(s) === "sync" ? "remove-circle-outline" : removeKind(s) === "unwatch" ? "star-outline" : "trash-outline", danger: true, onPress: () => actionRef.current(s, "remove") },
+      ];
+      return (
+        <SwipeRow actions={actions} onLayout={onLayout}>
+          {row}
+        </SwipeRow>
+      );
+    },
+    [],
+  );
   // 정렬 바꾸기 (3-24: 바꿀 때 짧은 진동 — 플래그·설정이 켜져 있을 때만)
   const pickSort = (k: SortKey) => {
     haptic("select");
@@ -393,9 +404,10 @@ export default function StocksScreen() {
                     live={quoteLive(item.quote, now, feedOk)}
                     onPress={openStock}
                     onLongPress={longPress}
-                    // 스와이프 줄은 줄 자리를 감싼 틀(SwipeRow)이 알린다 — 줄은 틀 안에서 y=0 이다
-                    {...(fold.on && !marked && !swipeRows ? { onLayoutRow: rowLayout } : null)}
+                    {...(fold.on && !marked ? { onLayoutRow: rowLayout } : null)}
                     {...(ux.oneHand ? { onRowAction: rowAction } : null)}
+                    // 3-24 휴대폰·접은 화면: 줄을 왼쪽으로 밀면 수정 · 지우기 버튼 (넓은 표는 길게 누르기 메뉴)
+                    {...(swipeRows ? { wrapRow: swipeWrap } : null)}
                     {...(plans
                       ? section.key === "held"
                         ? { columns: plans.held, zebra: i % 2 === 1, weight: weights!.byCode.get(item.code) ?? null, weightMax: weights!.max }
@@ -404,15 +416,7 @@ export default function StocksScreen() {
                       : null)}
                   />
                 );
-                // 3-24 휴대폰·접은 화면: 줄을 왼쪽으로 밀면 수정 · 지우기 버튼 (넓은 표는 길게 누르기 메뉴)
-                const body = swipeRows ? (
-                  <SwipeRow key={item.code} actions={swipeActions(item)} onLayout={fold.on && !marked ? (e) => rowLayout(item, e.nativeEvent.layout.y, e.nativeEvent.layout.height) : undefined}>
-                    {row}
-                  </SwipeRow>
-                ) : (
-                  row
-                );
-                return mark.wrap(item.code, body, fold.on ? (e) => rowLayout(item, e.nativeEvent.layout.y, e.nativeEvent.layout.height) : undefined);
+                return mark.wrap(item.code, row, fold.on ? (e) => rowLayout(item, e.nativeEvent.layout.y, e.nativeEvent.layout.height) : undefined);
               }),
             ])}
         {watchEmpty}

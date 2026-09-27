@@ -118,13 +118,24 @@ const draw = (flags: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: 
   );
 const byType = (r: ReturnType<typeof render>, type: string): HostNode[] => r.all().filter((n) => n.type === type);
 const flush = () => new Promise((res) => setTimeout(res, 0));
+/**
+ * 줄마다 스와이프 틀 (StockRow 가 받은 wrapRow 로 만든 틀 — 줄 안에서 감싸 체결이 온 줄만 다시 그린다). 틀이 없는 줄은 건너뛴다
+ */
+const swipes = (r: ReturnType<typeof render>) =>
+  byType(r, "StockRow")
+    .filter((n) => typeof n.props.wrapRow === "function")
+    .map((n) => {
+      const el = (n.props.wrapRow as (s: unknown, row: React.ReactElement, l?: unknown) => React.ReactElement)(n.props.stock, <View />, undefined);
+      return el as React.ReactElement<{ actions: { label: string; danger?: boolean; onPress: () => void }[]; children: React.ReactNode }>;
+    });
+const View = "View" as unknown as React.ComponentType;
 /** 마지막 Alert.alert 의 버튼 */
 const lastButtons = () => h.alert.mock.calls.at(-1)![2] as { text: string; style?: string; onPress?: () => void }[];
 
 describe("플래그가 꺼져 있으면(제공자 없음·꺼짐) 지금 잔고 화면 그대로", () => {
   it.each([["제공자 없음", null], ["모두 꺼짐", {}]] as const)("%s", (_n, flags) => {
     const r = flags === null ? render(<StocksScreen />) : draw(flags);
-    expect(byType(r, "SwipeRow")).toHaveLength(0);
+    expect(swipes(r)).toHaveLength(0);
     const rows = byType(r, "StockRow");
     expect(rows).toHaveLength(4);
     for (const row of rows) expect(Object.keys(row.props).sort()).toEqual(["afterCost", "live", "onLongPress", "onPress", "showKrw", "stock"]);
@@ -141,9 +152,12 @@ describe("플래그가 꺼져 있으면(제공자 없음·꺼짐) 지금 잔고 
 describe("oneHand: 휴대폰·접은 화면은 줄 스와이프", () => {
   it("줄마다 스와이프 틀: 수정 · 지우기(토스 종목은 동기화 제외, 보유는 삭제, 관심은 관심 해제)", () => {
     const r = draw({ oneHand: true });
-    const swipes = byType(r, "SwipeRow");
-    expect(swipes).toHaveLength(4);
-    const labels = swipes.map((s) => (s.props.actions as { label: string }[]).map((a) => a.label));
+    const all = swipes(r);
+    expect(all).toHaveLength(4);
+    // 틀은 components/SwipeRow, 안에 받은 줄 그대로
+    expect(all[0]!.type).toBe("SwipeRow");
+    expect((all[0]!.props.children as React.ReactElement).type).toBe("View");
+    const labels = all.map((x) => x.props.actions.map((a) => a.label));
     expect(labels).toEqual([
       ["수정", "동기화 제외"],
       ["수정", "삭제"],
@@ -151,7 +165,7 @@ describe("oneHand: 휴대폰·접은 화면은 줄 스와이프", () => {
       ["수정", "관심 해제"],
     ]);
     // 지우기 버튼만 경고색
-    expect((swipes[0]!.props.actions as { danger?: boolean }[]).map((a) => !!a.danger)).toEqual([false, true]);
+    expect(all[0]!.props.actions.map((a) => !!a.danger)).toEqual([false, true]);
     // 줄은 스와이프 틀 안에 (줄 자체 속성: 화면 읽기 동작 onRowAction 이 더해진다)
     const rows = byType(r, "StockRow");
     expect(rows).toHaveLength(4);
@@ -160,7 +174,7 @@ describe("oneHand: 휴대폰·접은 화면은 줄 스와이프", () => {
 
   it("스와이프 '수정'은 수정 화면, '동기화 제외'는 확인 창을 거쳐 지운다 (성공하면 햅틱)", async () => {
     const r = draw({ oneHand: true });
-    const [edit, del] = byType(r, "SwipeRow")[0]!.props.actions as { onPress: () => void }[];
+    const [edit, del] = swipes(r)[0]!.props.actions;
     edit!.onPress();
     expect(h.push).toHaveBeenCalledWith("/stocks/005930/edit");
     del!.onPress();
@@ -180,7 +194,7 @@ describe("oneHand: 휴대폰·접은 화면은 줄 스와이프", () => {
 
   it("지우기 실패: 오류 햅틱 + 실패 안내", async () => {
     const r = draw({ oneHand: true });
-    (byType(r, "SwipeRow")[1]!.props.actions as { onPress: () => void }[])[1]!.onPress();
+    swipes(r)[1]!.props.actions[1]!.onPress();
     lastButtons()[1]!.onPress!();
     (h.remove.mock.calls[0]![1] as { onError: (e: Error) => void }).onError(new Error("서버 오류"));
     await flush();
@@ -225,7 +239,7 @@ describe("oneHand: 넓은 표는 스와이프 없이 길게 누르기 메뉴 + �
     h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
     h.flags = { allocationView: true, foldLayout: true };
     const r = draw({ oneHand: true });
-    expect(byType(r, "SwipeRow")).toHaveLength(0);
+    expect(swipes(r)).toHaveLength(0);
     const rows = byType(r, "StockRow");
     expect(rows).toHaveLength(4);
     for (const row of rows) {
