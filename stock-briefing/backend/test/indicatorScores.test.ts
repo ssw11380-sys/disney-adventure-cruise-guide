@@ -103,7 +103,7 @@ afterEach(async () => {
   app = null;
 });
 
-/** 서버 기본은 꺼짐(설계 5.9 추천) — 기본값 그대로 보려면 on: false */
+/** 서버 기본은 켜짐 — on: false 면 PUT 없이 기본값 그대로 */
 async function start(sources: ScoreSources, at = kst("2026-09-28T10:00:00"), on = true) {
   clock = at;
   db = await createMigratedDb(":memory:");
@@ -126,18 +126,15 @@ function texts(v: unknown): string[] {
 }
 
 describe("플래그", () => {
-  it("서버 기본 꺼짐 (설계 5.9 추천 '처음엔 꺼짐' 그대로), 설명에 '끄면 … 0건'", () => {
-    expect(FEATURES.indicatorScores.default).toBe(false);
+  it("서버 기본 켜짐 (나눠 켜기 1단계 추세부터 — 앱에 켜고 끄는 화면이 없어서), 설명에 '끄면 … 0건'", () => {
+    expect(FEATURES.indicatorScores.default).toBe(true);
     expect(FEATURES.indicatorScores.description).toMatch(/끄면 .*0건/);
   });
 
-  it("기본값 그대로인 새 서버: /api/scores 404, 장 마감 뒤 예약·따라잡기도 요청 0건", async () => {
-    const { src, calls } = fixtureSources({ registered: ["NVDA"] });
+  it("기본값 그대로인 새 서버: 따로 켜지 않아도 /api/scores 200", async () => {
+    const { src } = fixtureSources({ registered: ["NVDA"] });
     await start(src, ny("2026-09-25T17:31:00"), false);
-    expect((await get("NVDA")).status).toBe(404);
-    expect(await app!.indicatorScores.runDaily("US")).toMatchObject({ skipped: "off" });
-    expect(await app!.indicatorScores.catchUp()).toEqual([]);
-    expect(calls).toMatchObject({ stock: 0, candles: [], benchmark: [], product: 0, registered: 0 });
+    expect((await get("NVDA")).status).toBe(200);
   });
 
   it("끄면 /api/scores 는 404 이고 계산·일봉·지수·상품 정보 요청이 0건, 장 마감 뒤 예약도 아무것도 하지 않는다", async () => {
