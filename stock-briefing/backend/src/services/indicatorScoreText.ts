@@ -193,6 +193,8 @@ export function trendNoteText(n: TrendNote, benchMissing: "overseas" | "none" | 
 
 export const STATUS_TEXT = {
   fetchFailed: "일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다",
+  productFetchFailed: "이 상품 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다",
+  underlyingFetchFailed: "기초자산 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다",
   underlyingUnknown: "레버리지 상품의 기초자산을 확인하지 못해 계산하지 않았습니다",
   inverse: "인버스 상품은 점수를 내지 않습니다 (기초자산과 반대로 움직이도록 만든 상품).",
   bond: "채권·금리형 상품은 추세 지표 점수를 계산하지 않습니다.",
@@ -203,12 +205,26 @@ export const STATUS_TEXT = {
   compositeBothMissing: "두 점수가 모두 없습니다",
 } as const;
 
+/**
+ * 받기 실패 문장 (설계 5.4: 받기 실패 · 원래 없음 · 계산 불가를 구분). 받기 실패는 점수를 다르게 내지 않고 '점수 없음'으로 두며,
+ * 5분 뒤 다시 계산하고 하루 기록에 남기지 않는다. 비교 지수가 원래 없는 상품(해외지수 ETF 등)은 trendNoteText 의 noBench
+ */
+export const benchFetchFailed = (benchName: string, underlying?: string | null) =>
+  `${underlying ? `기초자산 ${underlying}의 ` : ""}비교 지수(${benchName}) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다`;
+export const underlyingFetchFailed = (code: string) => `기초자산 ${code} 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다`;
+/** 분배금이 큰 상품 안내 (추세 계산 9.6) */
+export const DISTRIBUTION_NOTE = "분배금이 큰 상품이라 가격만으로 계산한 추세가 실제 수익보다 낮게 나올 수 있습니다.";
+
 /** 요약 카드 추세 줄 설명 (띠 뜻을 한 줄로) */
 export const trendMeaning = (band: TrendBand) => `${TREND_ABOUT}: ${BAND_LINE[band]}`;
 
-/** 지난주 대비 바뀐 이유 (상세 카드만, 화면 정수 차이가 5점 넘을 때) */
+/**
+ * 지난주 대비 바뀐 이유 (상세 카드만, 화면 정수 차이가 5점 넘을 때). 묶음은 점수와 같은 쪽으로 움직인 묶음 가운데 비중 × 변화가 가장 큰 것.
+ * 괄호를 겹치지 않게 날짜는 괄호 밖에: '지난주 9월 18일(금)보다 점수가 6점 높아졌습니다. 가장 크게 바뀐 묶음은 추세(+12점)입니다.'
+ */
 export function changeText(c: { from: string; diff: number; family: FamilyKey; familyDiff: number }): string {
-  return `지난주(${dateKo(c.from)})보다 점수가 ${Math.abs(c.diff)}점 ${c.diff > 0 ? "높아졌습니다" : "낮아졌습니다"}. 가장 크게 바뀐 묶음은 ${FAMILY_NAME[c.family]}(${c.familyDiff > 0 ? "+" : "−"}${Math.abs(c.familyDiff)}점)입니다.`;
+  const fd = c.familyDiff === 0 ? "0" : `${c.familyDiff > 0 ? "+" : "−"}${Math.abs(c.familyDiff)}`;
+  return `지난주 ${dateKo(c.from)}보다 점수가 ${Math.abs(c.diff)}점 ${c.diff > 0 ? "높아졌습니다" : "낮아졌습니다"}. 가장 크게 바뀐 묶음은 ${FAMILY_NAME[c.family]}(${fd}점)입니다.`;
 }
 
 /** 레버리지 참고 줄 */

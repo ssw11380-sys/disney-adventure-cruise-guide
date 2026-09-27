@@ -8,6 +8,8 @@ import { INTRADAY_PERIODS, type CandlePeriod, type CandleSeries } from "../domai
  *  - 같은 종목·주기는 더 많이 받아 둔 것이 있으면 잘라서 준다 (800개를 받아 두면 90개 요청도 바로)
  *  - 마지막 봉은 앱이 실시간 체결로 고친다 (applyTickToCandles) → 캐시가 조금 늦어도 화면은 체결을 따라간다
  *  - 같은 요청이 겹치면 한 번만 받는다(받는 중인 개수가 모자라면 이어서 한 번 더). 새로 받기가 실패하면 받아 둔 값을 그대로 쓴다
+ *  - maxAgeMs 를 주면 그보다 오래 받아 둔 봉은 바로 주지 않고 기다려 새로 받는다 (지표 점수의 장 마감 뒤 계산 — 마감 직후 받아 둔 봉을 쓰지 않게).
+ *    이때 새로 받기가 실패하면 받아 둔 봉 대신 오류를 낸다
  */
 
 const MAX_ENTRIES = 300;
@@ -42,10 +44,11 @@ export class CandleCache {
     return regular ? 10 * 60_000 : 12 * 3_600_000;
   }
 
-  async get(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
+  async get(code: string, period: CandlePeriod, count: number, opts: { maxAgeMs?: number } = {}): Promise<CandleSeries> {
     const key = `${code}|${period}`;
-    const e = this.entries.get(key);
     const t = this.now();
+    const cached = this.entries.get(key);
+    const e = cached && (opts.maxAgeMs === undefined || t - cached.at <= opts.maxAgeMs) ? cached : undefined;
     const session = this.sessionOf(code, t);
     const age = e ? t - e.at : Infinity;
     const fresh = age < this.freshMs(period);
@@ -62,12 +65,16 @@ export class CandleCache {
       return slice(e.series, count);
     }
     this.stats.misses++;
-    return slice(await this.refresh(key, code, period, Math.max(count, e?.count ?? 0)), count);
+    const got = await this.refresh(key, code, period, Math.max(count, e?.count ?? 0), opts.maxAgeMs !== undefined);
+    // maxAgeMs: 새로 받기가 실패해 예전 봉으로 돌아왔으면 실패로 (부르는 쪽이 잠시 뒤 다시 — 묵은 봉을 새 봉처럼 쓰지 않게)
+    if (opts.maxAgeMs !== undefined && cached && got === cached.series) throw new Error(`봉을 새로 받지 못함 (${code})`);
+    return slice(got, count);
   }
 
-  private refresh(key: string, code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
+  private refresh(key: string, code: string, period: CandlePeriod, count: number, fresh = false): Promise<CandleSeries> {
     const running = this.inflight.get(key);
-    if (running && running.count >= count) return running.p;
+    // fresh: 받는 중인 요청이 있어도 그게 끝난 뒤 새로 한 번 (그 요청이 오래전에 시작했을 수 있으므로)
+    if (running && running.count >= count && !fresh) return running.p;
     // 받는 중인 것이 모자라면 그게 끝난 뒤 더 많이 한 번 더 (겹쳐서 두 번 받지 않게)
     const before = running ? running.p.catch(() => undefined) : Promise.resolve();
     // 장 구간은 받기 시작한 때로 적는다 (개장 직전에 시작해 개장 뒤 끝난 응답을 정규장 것으로 보지 않게)

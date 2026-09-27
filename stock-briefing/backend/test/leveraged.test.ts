@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyProduct, LEVERAGED_TABLE, leverageFacts, verifyUnderlying } from "../src/analysis/leveraged.js";
+import { classifyProduct, isHighDistribution, LEVERAGED_TABLE, leverageFacts, verifyUnderlying } from "../src/analysis/leveraged.js";
 import { parseProductFacts } from "../src/providers/market/toss.js";
 import { candlesOf, expected, tossInfo } from "./fixtures/indicatorScores/load.js";
 
@@ -64,6 +64,25 @@ describe("상품 가리기", () => {
     // 회사 이름의 'Bull'·'Ultra' 는 레버리지가 아니다
     expect(classifyProduct("BULL", "Webull Corp", { group: "ST", leverageFactor: 0 })).toMatchObject({ kind: "normal" });
     expect(classifyProduct("UCTT", "Ultra Clean Holdings", null)).toMatchObject({ kind: "normal" });
+    // 보통 주식(ST)·배수 0 이면 이름의 Bear·Short·Bull·2X·채권 낱말로 상품을 짐작하지 않는다 (Build-A-Bear 가 인버스로 잡히던 것)
+    expect(classifyProduct("BBW", "Build-A-Bear Workshop", { group: "ST", leverageFactor: 0 })).toEqual({ kind: "normal", etf: false });
+    expect(classifyProduct("BBW", "Build-A-Bear Workshop", { group: "ST" })).toEqual({ kind: "normal", etf: false }); // 종목 마스터 분류만 있을 때
+    expect(classifyProduct("SHRT", "Short Hills Bancorp", { group: "ST", leverageFactor: 0 })).toEqual({ kind: "normal", etf: false });
+    expect(classifyProduct("BNDX", "Bond Street Holdings 2X", { group: "ST" })).toEqual({ kind: "normal", etf: false });
+    // 분류가 없으면 예전처럼 이름 규칙 (상품일 수 있으므로)
+    expect(classifyProduct("BBW", "Build-A-Bear Workshop", null)).toMatchObject({ kind: "inverse" });
+    // ST 여도 토스가 배수를 주면 그대로 (레버리지·인버스)
+    expect(classifyProduct("XXXS", "Something Short", { group: "ST", leverageFactor: -1 })).toMatchObject({ kind: "inverse" });
+  });
+  it("분배금이 큰 상품 (추세 계산 9.6): ETF·ETN 이름의 커버드콜·프리미엄 인컴만", () => {
+    expect(isHighDistribution("Global X NASDAQ 100 Covered Call ETF", null, true)).toBe(true);
+    expect(isHighDistribution("JEPQ", { englishName: "JPMorgan Nasdaq Equity Premium Income ETF" }, true)).toBe(true);
+    expect(isHighDistribution("YieldMax NVDA Option Income Strategy ETF", null, true)).toBe(true);
+    expect(isHighDistribution("TIGER 미국배당+7%프리미엄다우존스", null, true)).toBe(true);
+    expect(isHighDistribution("KODEX 미국AI테크TOP10타겟커버드콜", null, true)).toBe(true);
+    expect(isHighDistribution("RISE 200위클리커버드 콜", null, true)).toBe(true);
+    expect(isHighDistribution("Invesco QQQ Trust", null, true)).toBe(false);
+    expect(isHighDistribution("프리미엄 식품", null, false)).toBe(false); // 회사 이름은 보지 않는다
   });
   it("정적 표: 배수 1 초과, 기초 코드 형식", () => {
     for (const [code, v] of Object.entries(LEVERAGED_TABLE)) {

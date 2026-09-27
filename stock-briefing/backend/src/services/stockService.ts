@@ -1112,9 +1112,9 @@ export class StockService {
     };
   }
 
-  /** 차트 봉 (캐시: 같은 종목·주기를 다시 열면 바로, 3-18) */
-  getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
-    return this.candleCache.get(normalizeCode(code), period, count);
+  /** 차트 봉 (캐시: 같은 종목·주기를 다시 열면 바로, 3-18). maxAgeMs = 그보다 오래 받아 둔 봉은 새로 받기 (지표 점수 장 마감 뒤 계산) */
+  getCandles(code: string, period: CandlePeriod, count: number, opts?: { maxAgeMs?: number }): Promise<CandleSeries> {
+    return this.candleCache.get(normalizeCode(code), period, count, opts);
   }
 
   /** 기동 뒤: 등록 종목의 기본 차트(일봉 800개)를 한 종목씩 미리 받아 둔다 (처음 여는 차트도 기다리지 않게). 실패는 무시, 종목 사이 gapMs 쉼 */

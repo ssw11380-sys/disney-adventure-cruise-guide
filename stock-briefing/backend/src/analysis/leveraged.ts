@@ -73,12 +73,17 @@ function isInverseName(names: string): boolean {
   return SHORT_RE.test(names) && !SHORT_BOND_RE.test(names);
 }
 
-/** 상품 가리기. names = 등록 이름(한글·영문 무엇이든), facts = 토스 웹 상품 정보(없으면 null) */
+/**
+ * 상품 가리기. names = 등록 이름(한글·영문 무엇이든), facts = 토스 웹 상품 정보(없으면 null — 종목 마스터 분류만 group 으로 넣어도 된다).
+ * 토스·종목 마스터가 보통 주식(group ST)이라고 하고 배수도 없으면 이름 규칙(Bear·Bull·Short·2X·채권…)을 쓰지 않는다 —
+ * 'Build-A-Bear Workshop' 같은 회사 이름이 인버스·레버리지 상품으로 잡히지 않게
+ */
 export function classifyProduct(code: string, name: string, facts: ProductFacts | null | undefined): ProductKind {
   const names = [name, facts?.name, facts?.englishName, facts?.detailName].filter((x): x is string => typeof x === "string" && x.length > 0).join(" ");
   const kr = isKrCode(code);
   const lf = typeof facts?.leverageFactor === "number" && Number.isFinite(facts.leverageFactor) ? facts.leverageFactor : null;
   const table = LEVERAGED_TABLE[code];
+  if (facts?.group === "ST" && (lf === null || lf === 0) && !table && facts.derivativeEtf !== true) return { kind: "normal", etf: false };
   const etf = facts?.group === "EF" || facts?.group === "EN" || (kr && KR_ETF_BRAND_RE.test(name)) || !!table || (lf !== null && lf !== 0) || facts?.derivativeEtf === true;
   if ((lf !== null && lf < 0) || isInverseName(names)) return { kind: "inverse", etf: true };
   const leveraged = (lf !== null && lf > 1) || !!table || LEVERAGE_RE.test(names);
@@ -102,6 +107,16 @@ export function classifyProduct(code: string, name: string, facts: ProductFacts 
   }
   if (etf && BOND_ETF_RE.test(names)) return { kind: "bond", etf: true };
   return { kind: "normal", etf };
+}
+
+/**
+ * 분배금이 큰 상품 (추세 계산 9.6): 커버드콜·옵션 프리미엄 상품. 일봉에 분배금이 들어 있지 않아 가격만으로 계산한 추세가 실제 수익보다 낮게 나온다 →
+ * 점수는 내되 안내 한 줄을 붙인다. ETF·ETN 일 때만 본다(회사 이름의 '프리미엄'은 상관없음)
+ */
+export const HIGH_DISTRIBUTION_RE = /(covered\s*call|커버드\s*콜|option\s+income|premium\s+income|yieldmax|buy[-\s]?write|프리미엄)/i;
+export function isHighDistribution(name: string, facts: ProductFacts | null | undefined, etf: boolean): boolean {
+  if (!etf) return false;
+  return [name, facts?.name, facts?.englishName, facts?.detailName].some((x) => typeof x === "string" && HIGH_DISTRIBUTION_RE.test(x));
 }
 
 export interface DayCandle {

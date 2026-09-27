@@ -1011,8 +1011,8 @@
    "composite": {
     "status": "none",
     "score": null,
-    "reason": "bothMissing",
-    "text": "없음 · 두 점수가 모두 없습니다",
+    "reason": "valueMissing",
+    "text": "없음 · 가치 지표 점수가 없어 합치지 않습니다",
     "gap": null,
     "gapNote": false
    },
@@ -1179,8 +1179,8 @@
    "composite": {
     "status": "none",
     "score": null,
-    "reason": "bothMissing",
-    "text": "없음 · 두 점수가 모두 없습니다",
+    "reason": "valueMissing",
+    "text": "없음 · 가치 지표 점수가 없어 합치지 않습니다",
     "gap": null,
     "gapNote": false
    },
@@ -1623,7 +1623,7 @@
      "family": "T",
      "familyName": "추세",
      "familyDiff": -25,
-     "text": "지난주(9월 18일(금))보다 점수가 23점 낮아졌습니다. 가장 크게 바뀐 묶음은 추세(−25점)입니다."
+     "text": "지난주 9월 18일(금)보다 점수가 23점 낮아졌습니다. 가장 크게 바뀐 묶음은 추세(−25점)입니다."
     },
     "reference": null,
     "leveraged": null,
@@ -1637,6 +1637,216 @@
     "score": null,
     "reason": "valueMissing",
     "text": "없음 · 가치 지표 점수가 없어 합치지 않습니다",
+    "gap": null,
+    "gapNote": false
+   },
+   "text": {
+    "titleNote": "계산식 결과 · AI 글 아님",
+    "notForecast": "점수는 과거·현재 숫자의 요약이며, 앞으로의 가격을 알려 주지 않습니다.",
+    "how": [
+     "추세: 최근 약 1년 일봉으로 16개 항목을 고정된 기준에 따라 계산했습니다. 50은 '뚜렷한 추세 없음'이고, 최근 5거래일 점수의 평균을 보여 줍니다.",
+     "추세와 모멘텀 묶음(합쳐 70%)은 서로 겹치는 흐름을 봅니다. 여러 지표를 섞었지만 몇 가지 흐름이 겹칩니다.",
+     "가치 지표 점수와 종합 지표 점수(두 점수의 평균)는 다음 단계에서 계산합니다.",
+     "비중은 설명하기 쉽도록 정한 설계값이며, 과거 수익률에 맞춰 고르지 않았습니다. 몇 점 차이는 큰 뜻이 없습니다.",
+     "지난 약 11년 미국·한국 대형주 자료로 맞춰 보니, 점수가 높았던 종목이 그 뒤 더 오른 관계는 우연과 구별하기 어려울 만큼 약했습니다.",
+     "증권사가 낸 앞날 추정 숫자와 의견은 쓰지 않았습니다. 이미 거래된 가격·거래량만 썼습니다.",
+     "장 마감 뒤 하루 한 번 바뀝니다(한국 20:10, 미국은 한국 시간 아침). 장중에는 그대로입니다."
+    ],
+    "disclaimerShort": "참고 정보이며 투자 권유가 아닙니다",
+    "detailNote": "과거 가격·거래량으로 계산한 지표이며 앞으로의 가격이나 수익을 뜻하지 않습니다.",
+    "trendAbout": "최근 1년 가격·거래량 흐름의 방향과 세기"
+   }
+  },
+  "NVDA_fetchFailed": {
+   "code": "NVDA",
+   "name": "엔비디아",
+   "market": "US",
+   "asOf": {
+    "priceDate": "2026-09-25",
+    "scoreDate": "2026-09-25",
+    "market": "US",
+    "line": "가격 9월 25일(금) 미국 종가"
+   },
+   "value": {
+    "method": "value-v1",
+    "status": "pending",
+    "label": "계산 준비 중",
+    "score": null,
+    "band": null,
+    "about": "재무 숫자가 같은 업종·시장 회사들 사이 어디쯤인지",
+    "text": "가치 지표 점수는 다음 단계에서 계산합니다."
+   },
+   "trend": {
+    "version": "TREND-1",
+    "cal": "TREND-CAL-1",
+    "score": null,
+    "scoreExact": null,
+    "scoreToday": null,
+    "band": null,
+    "meaning": null,
+    "headline": null,
+    "basisLine": null,
+    "bandLine": null,
+    "basis": {
+     "kind": "self",
+     "code": "NVDA",
+     "name": "엔비디아"
+    },
+    "benchmark": null,
+    "candleSource": "yahoo",
+    "bars": null,
+    "daysAveraged": null,
+    "coverage": null,
+    "families": [],
+    "notes": [],
+    "change": null,
+    "reference": null,
+    "leveraged": null,
+    "versionLine": "계산 방식 TREND-1 (보정 TREND-CAL-1) · 일봉 야후",
+    "status": "unavailable",
+    "label": "점수 없음",
+    "reason": {
+     "code": "fetchFailed",
+     "text": "비교 지수(나스닥) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다"
+    }
+   },
+   "composite": {
+    "status": "none",
+    "score": null,
+    "reason": "bothMissing",
+    "text": "없음 · 두 점수가 모두 없습니다",
+    "gap": null,
+    "gapNote": false
+   },
+   "text": {
+    "titleNote": "계산식 결과 · AI 글 아님",
+    "notForecast": "점수는 과거·현재 숫자의 요약이며, 앞으로의 가격을 알려 주지 않습니다.",
+    "how": [
+     "추세: 최근 약 1년 일봉으로 16개 항목을 고정된 기준에 따라 계산했습니다. 50은 '뚜렷한 추세 없음'이고, 최근 5거래일 점수의 평균을 보여 줍니다.",
+     "추세와 모멘텀 묶음(합쳐 70%)은 서로 겹치는 흐름을 봅니다. 여러 지표를 섞었지만 몇 가지 흐름이 겹칩니다.",
+     "가치 지표 점수와 종합 지표 점수(두 점수의 평균)는 다음 단계에서 계산합니다.",
+     "비중은 설명하기 쉽도록 정한 설계값이며, 과거 수익률에 맞춰 고르지 않았습니다. 몇 점 차이는 큰 뜻이 없습니다.",
+     "지난 약 11년 미국·한국 대형주 자료로 맞춰 보니, 점수가 높았던 종목이 그 뒤 더 오른 관계는 우연과 구별하기 어려울 만큼 약했습니다.",
+     "증권사가 낸 앞날 추정 숫자와 의견은 쓰지 않았습니다. 이미 거래된 가격·거래량만 썼습니다.",
+     "장 마감 뒤 하루 한 번 바뀝니다(한국 20:10, 미국은 한국 시간 아침). 장중에는 그대로입니다."
+    ],
+    "disclaimerShort": "참고 정보이며 투자 권유가 아닙니다",
+    "detailNote": "과거 가격·거래량으로 계산한 지표이며 앞으로의 가격이나 수익을 뜻하지 않습니다.",
+    "trendAbout": "최근 1년 가격·거래량 흐름의 방향과 세기"
+   }
+  },
+  "SOXL_fetchFailed": {
+   "code": "SOXL",
+   "name": "SOXL",
+   "market": "US",
+   "asOf": {
+    "priceDate": "2026-09-25",
+    "scoreDate": "2026-09-25",
+    "market": "US",
+    "line": "가격 9월 25일(금) 미국 종가"
+   },
+   "value": {
+    "method": "value-v1",
+    "status": "excluded",
+    "label": "대상 아님",
+    "score": null,
+    "band": null,
+    "about": "재무 숫자가 같은 업종·시장 회사들 사이 어디쯤인지",
+    "text": "ETF는 여러 종목을 묶은 상품이라, 한 회사의 재무로 계산하는 이 점수를 내지 않습니다."
+   },
+   "trend": {
+    "version": "TREND-1",
+    "cal": "TREND-CAL-1",
+    "score": null,
+    "scoreExact": null,
+    "scoreToday": null,
+    "band": null,
+    "meaning": null,
+    "headline": null,
+    "basisLine": null,
+    "bandLine": null,
+    "basis": {
+     "kind": "self",
+     "code": "SOXL",
+     "name": "SOXL"
+    },
+    "benchmark": null,
+    "candleSource": "yahoo",
+    "bars": null,
+    "daysAveraged": null,
+    "coverage": null,
+    "families": [],
+    "notes": [],
+    "change": null,
+    "reference": null,
+    "leveraged": {
+     "L": 3,
+     "underlying": null,
+     "tracks": "NYSE 반도체 지수",
+     "check": null,
+     "facts": {
+      "L": 3,
+      "asOf": "2026-09-25",
+      "from": "2026-06-26",
+      "etf63Pct": -29.75417439703154,
+      "und63Pct": null,
+      "naiveLx63Pct": null,
+      "sigEtfAnnPct": 149.95706244339965,
+      "sigUnderlyingAnnPct": null,
+      "volDecayPctPerYear": null,
+      "etfMdd1yPct": 69.41516773614389
+     },
+     "box": {
+      "title": "레버리지 상품 주의 · 계산한 사실",
+      "lines": [
+       {
+        "parts": [
+         {
+          "text": "이 상품은 NYSE 반도체 지수 하루 움직임의 3배를 따라가도록 만든 상품입니다."
+         }
+        ]
+       },
+       {
+        "parts": [
+         {
+          "text": "· 최근 63거래일: 이 상품 "
+         },
+         {
+          "text": "−29.8%",
+          "sign": -298
+         }
+        ]
+       },
+       {
+        "parts": [
+         {
+          "text": "· 이 상품의 최근 3개월 변동성 연 150%, 최근 1년 가장 크게 떨어진 폭 69.4%"
+         }
+        ]
+       },
+       {
+        "parts": [
+         {
+          "text": "· 하루 단위로 설계된 상품이라 기간이 길수록 '기초자산 수익률 × 3'과 차이가 커질 수 있습니다."
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "versionLine": "계산 방식 TREND-1 (보정 TREND-CAL-1) · 일봉 야후",
+    "status": "excluded",
+    "label": "이 상품 자체 점수 없음",
+    "reason": {
+     "code": "fetchFailed",
+     "text": "기초자산 SOXX 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다"
+    }
+   },
+   "composite": {
+    "status": "none",
+    "score": null,
+    "reason": "bothMissing",
+    "text": "없음 · 두 점수가 모두 없습니다",
     "gap": null,
     "gapNote": false
    },

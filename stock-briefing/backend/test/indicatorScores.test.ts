@@ -10,8 +10,9 @@ import type { Candle } from "../src/domain/types.js";
 import { parseProductFacts } from "../src/providers/market/toss.js";
 import { BACKUP_TABLES, restoreBackup } from "../src/services/backupService.js";
 import { FEATURES } from "../src/services/featureService.js";
-import { dailyRunDue, latestScoreDate, type ScoreSources, type ScoresResponse, type ScoreStock } from "../src/services/indicatorScoreService.js";
-import { howLines, leverageBox, STATUS_TEXT, trendNoteText, trendReasonText } from "../src/services/indicatorScoreText.js";
+import type { TrendShown } from "../src/analysis/trendScore.js";
+import { dailyRunDue, latestScoreDate, weeklyChange, type ScoreSources, type ScoresResponse, type ScoreStock } from "../src/services/indicatorScoreService.js";
+import { benchFetchFailed, changeText, DISTRIBUTION_NOTE, howLines, leverageBox, STATUS_TEXT, trendNoteText, trendReasonText, underlyingFetchFailed } from "../src/services/indicatorScoreText.js";
 import { benchOf, candlesOf, expected, tossInfo } from "./fixtures/indicatorScores/load.js";
 import { fakeProviders } from "./helpers.js";
 
@@ -45,23 +46,39 @@ const STOCKS: Record<string, ScoreStock> = {
 const FIX_SYM = (code: string) => (/^\d{6}$/.test(code) ? `${code}.KS` : code);
 
 /** 기록한 일봉으로 만든 자료 묶음. 받은 횟수를 센다 */
-function fixtureSources(over: { candles?: Record<string, Candle[] | Error>; product?: Record<string, ReturnType<typeof parseProductFacts> | null>; registered?: string[]; stocks?: Record<string, ScoreStock> } = {}) {
-  const calls = { stock: 0, candles: [] as string[], benchmark: [] as string[], product: 0, registered: 0 };
+function fixtureSources(
+  over: {
+    candles?: Record<string, Candle[] | Error | (() => Candle[] | Error)>;
+    bench?: Record<string, Candle[] | Error | null | (() => Candle[] | Error | null)>;
+    product?: Record<string, ReturnType<typeof parseProductFacts> | null>;
+    registered?: string[];
+    stocks?: Record<string, ScoreStock>;
+  } = {},
+) {
+  const calls = { stock: 0, candles: [] as string[], benchmark: [] as string[], product: 0, registered: 0, fresh: [] as string[] };
   const stocks = { ...STOCKS, ...over.stocks };
   const src: ScoreSources = {
     stock: async (code) => {
       calls.stock++;
       return stocks[code] ?? null;
     },
-    candles: async (code, count) => {
+    candles: async (code, count, opts) => {
       calls.candles.push(code);
-      const o = over.candles?.[code];
+      if (opts?.fresh) calls.fresh.push(code);
+      const raw = over.candles?.[code];
+      const o = typeof raw === "function" ? raw() : raw;
       if (o instanceof Error) throw o;
       const cs = o ?? candlesOf(FIX_SYM(code));
       return { code, period: "D", candles: cs.slice(-count), source: "yahoo" };
     },
     benchmark: async (code) => {
       calls.benchmark.push(code);
+      if (over.bench && code in over.bench) {
+        const raw = over.bench[code];
+        const o = typeof raw === "function" ? raw() : raw;
+        if (o instanceof Error) throw o;
+        return o ?? null;
+      }
       return code === "NASDAQ" ? benchOf("NVDA") : code === "KOSPI" ? benchOf("005930.KS") : null;
     },
     product: async (code) => {
@@ -86,12 +103,15 @@ afterEach(async () => {
   app = null;
 });
 
-async function start(sources: ScoreSources, at = kst("2026-09-28T10:00:00")) {
+/** 서버 기본은 꺼짐(설계 5.9 추천) — 기본값 그대로 보려면 on: false */
+async function start(sources: ScoreSources, at = kst("2026-09-28T10:00:00"), on = true) {
   clock = at;
   db = await createMigratedDb(":memory:");
   app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ scoreSources: sources }), logger: false, enableScheduler: false, now: () => clock });
+  if (on) await app.inject({ method: "PUT", url: "/api/admin/features", payload: { indicatorScores: true } });
   return app;
 }
+const rowsOf = async () => db.selectFrom("indicator_scores").select(["code", "score_date", "status", "score", "data"]).orderBy("code").orderBy("score_date").execute();
 const get = async (code: string) => {
   const r = await app!.inject({ method: "GET", url: `/api/scores/${code}` });
   return { status: r.statusCode, body: r.json() as ScoresResponse & { error?: string; message?: string } };
@@ -106,9 +126,18 @@ function texts(v: unknown): string[] {
 }
 
 describe("플래그", () => {
-  it("서버 기본 켜짐 (사용자 승인), 설명에 '끄면 … 0건'", () => {
-    expect(FEATURES.indicatorScores.default).toBe(true);
+  it("서버 기본 꺼짐 (설계 5.9 추천 '처음엔 꺼짐' 그대로), 설명에 '끄면 … 0건'", () => {
+    expect(FEATURES.indicatorScores.default).toBe(false);
     expect(FEATURES.indicatorScores.description).toMatch(/끄면 .*0건/);
+  });
+
+  it("기본값 그대로인 새 서버: /api/scores 404, 장 마감 뒤 예약·따라잡기도 요청 0건", async () => {
+    const { src, calls } = fixtureSources({ registered: ["NVDA"] });
+    await start(src, ny("2026-09-25T17:31:00"), false);
+    expect((await get("NVDA")).status).toBe(404);
+    expect(await app!.indicatorScores.runDaily("US")).toMatchObject({ skipped: "off" });
+    expect(await app!.indicatorScores.catchUp()).toEqual([]);
+    expect(calls).toMatchObject({ stock: 0, candles: [], benchmark: [], product: 0, registered: 0 });
   });
 
   it("끄면 /api/scores 는 404 이고 계산·일봉·지수·상품 정보 요청이 0건, 장 마감 뒤 예약도 아무것도 하지 않는다", async () => {
@@ -120,7 +149,7 @@ describe("플래그", () => {
     expect(r.body.message).toBe("지표 점수 기능이 꺼져 있습니다");
     expect((await app!.inject({ method: "GET", url: "/api/scores/NVDA/history" })).statusCode).toBe(404);
     expect(await app!.indicatorScores.runDaily("US")).toEqual({ computed: 0, failed: 0, skipped: "off" });
-    expect(calls).toEqual({ stock: 0, candles: [], benchmark: [], product: 0, registered: 0 });
+    expect(calls).toEqual({ stock: 0, candles: [], benchmark: [], product: 0, registered: 0, fresh: [] });
     expect(await db.selectFrom("indicator_scores").selectAll().execute()).toEqual([]);
     // 다시 켜면 바로
     await app!.inject({ method: "PUT", url: "/api/admin/features", payload: { indicatorScores: true } });
@@ -364,7 +393,8 @@ describe("레버리지·인버스", () => {
     // 수익률 숫자만 등락 색 (부호)
     expect(t.leveraged!.box.lines[1]!.parts.filter((p) => p.sign !== undefined).map((p) => Math.sign(p.sign!))).toEqual([-1, -1, -1]);
     expect(b.value).toMatchObject({ status: "excluded", label: "대상 아님" });
-    expect(b.composite).toMatchObject({ status: "none", reason: "bothMissing" });
+    // 설계 5.4 조합표: 레버리지(기초자산 참고만)는 '가치 지표 점수가 없어 합치지 않습니다'
+    expect(b.composite).toMatchObject({ status: "none", reason: "valueMissing", text: "없음 · 가치 지표 점수가 없어 합치지 않습니다" });
     expect(b.asOf.priceDate).toBe("2026-09-25");
   });
 
@@ -389,10 +419,13 @@ describe("레버리지·인버스", () => {
     expect(lines).toContain("· 이 상품의 최근 3개월 변동성 연 150%, 최근 1년 가장 크게 떨어진 폭 69.4%");
   });
 
-  it("상품 일봉을 받지 못하면: 정적 표의 기초(SOXL→SOXX)는 참고 줄을 두고, 이름으로 짐작한 기초는 확인할 수 없어 두지 않는다", async () => {
+  it("상품 일봉을 받지 못하면 받기 실패(fetchFailed): 정적 표의 기초(SOXL→SOXX)는 참고 줄을 두고, 이름으로 짐작한 기초는 확인할 수 없어 두지 않는다", async () => {
     const table = fixtureSources({ candles: { SOXL: new Error("상품 일봉 실패") } });
     await start(table.src);
-    expect((await get("SOXL")).body.trend.reference).toMatchObject({ code: "SOXX", score: 73 });
+    const soxl = (await get("SOXL")).body.trend;
+    expect(soxl.reason).toEqual({ code: "fetchFailed", text: "이 상품 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다" });
+    expect(soxl.reference).toMatchObject({ code: "SOXX", score: 73 });
+    expect(soxl.leveraged).toMatchObject({ facts: null, tracks: "NYSE 반도체 지수" });
     await app!.close();
     app = null;
     const guessed = fixtureSources({
@@ -402,7 +435,8 @@ describe("레버리지·인버스", () => {
     });
     await start(guessed.src);
     const t = (await get("IONX")).body.trend;
-    expect(t).toMatchObject({ status: "excluded", reference: null, reason: { code: "underlyingUnknown" } });
+    expect(t).toMatchObject({ status: "excluded", reference: null, reason: { code: "fetchFailed", text: "이 상품 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다" } });
+    expect(t.leveraged).toMatchObject({ underlying: null, tracks: null });
   });
 
   it("인버스(SQQQ)는 대상 아님", async () => {
@@ -445,13 +479,180 @@ describe("지난주 대비 바뀐 이유 (상세 카드만)", () => {
     expect(c.familyDiff).toBeLessThan(0);
     expect(c.diff).toBe(c.now - c.prev);
     expect(c.from).toBe(stock.at(-6)!.date);
-    expect(c.text).toMatch(/^지난주\(\d+월 \d+일\(.\)\)보다 점수가 \d+점 낮아졌습니다\. 가장 크게 바뀐 묶음은 (추세|모멘텀|단기 균형|가격 안정성|거래량 뒷받침)\([+−]\d+점\)입니다\.$/);
+    // 괄호를 겹치지 않게 ('지난주(9월 18일(금))' → '지난주 9월 18일(금)')
+    expect(c.text).toMatch(/^지난주 \d+월 \d+일\(.\)보다 점수가 \d+점 낮아졌습니다\. 가장 크게 바뀐 묶음은 (추세|모멘텀|단기 균형|가격 안정성|거래량 뒷받침)\([+−]\d+점\)입니다\.$/);
   });
 
   it("5점 이하면 없음 (NVDA 는 5거래일 전과 비슷)", async () => {
     const { src } = fixtureSources();
     await start(src);
     expect((await get("NVDA")).body.trend.change).toBeNull();
+  });
+
+  it("점수와 반대로 움직인 묶음은 '가장 크게 바뀐 묶음'으로 들지 않는다 (같은 쪽 묶음 가운데 비중 × 변화가 가장 큰 것)", () => {
+    const shown = (asOf: string, score: number, fam: Record<"T" | "M" | "O" | "R" | "V", number>) =>
+      ({ status: "ok", asOf, score, scoreToday: score, families: Object.fromEntries(Object.entries(fam).map(([k, v]) => [k, { score: v }])) }) as unknown as TrendShown;
+    // 추세·모멘텀이 +25 (비중 35 → 875씩), 단기 균형이 −95 (비중 10 → 950): 절댓값은 단기 균형이 가장 크지만 점수는 8점 올랐다
+    const prev = shown("2026-09-18", 54.7, { T: 50, M: 50, O: 97, R: 50, V: 50 });
+    const now = shown("2026-09-25", 62.7, { T: 75, M: 75, O: 2, R: 50, V: 50 });
+    const c = weeklyChange(now, prev)!;
+    expect(c).toMatchObject({ prev: 55, now: 63, diff: 8, family: "T", familyName: "추세", familyDiff: 25 });
+    expect(c.text).toBe("지난주 9월 18일(금)보다 점수가 8점 높아졌습니다. 가장 크게 바뀐 묶음은 추세(+25점)입니다.");
+    // 내려간 때도 같은 규칙
+    const down = weeklyChange(prev, { ...now, asOf: "2026-09-11" } as TrendShown)!;
+    expect(down).toMatchObject({ diff: -8, family: "T", familyDiff: -25 });
+    expect(weeklyChange(now, { ...now, score: 60 } as TrendShown)).toBeNull(); // 5점 이하
+  });
+});
+
+describe("받기 실패 (설계 5.4 — 받기 실패 · 원래 없음 · 계산 불가를 구분)", () => {
+  it("비교 지수(네이버)를 받지 못하면 지수 대비 항목을 뺀 다른 점수를 내지 않고 '점수 없음 — 비교 지수(나스닥) 일봉을 받지 못했습니다', 5분 뒤 다시, 기록 안 함", async () => {
+    let down = true;
+    const { src, calls } = fixtureSources({ registered: ["NVDA"], bench: { NASDAQ: () => (down ? new Error("네이버 지수 실패") : benchOf("NVDA")) } });
+    await start(src, ny("2026-09-25T17:31:00"));
+    const b = (await get("NVDA")).body;
+    expect(b.trend).toMatchObject({ status: "unavailable", label: "점수 없음", score: null, band: null, reason: { code: "fetchFailed", text: "비교 지수(나스닥) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다" } });
+    expect(b.trend.notes).toEqual([]); // '비교 지수가 없어 … 뺐습니다'(원래 없음)가 아니다
+    expect(b.composite).toMatchObject({ reason: "bothMissing" });
+    expect(await rowsOf()).toEqual([]);
+    // 장 마감 뒤 미리 계산도 실패로 세고 기록하지 않는다
+    expect(await app!.indicatorScores.runDaily("US")).toEqual({ computed: 0, failed: 1 });
+    expect(await rowsOf()).toEqual([]);
+    await get("NVDA");
+    const n = calls.benchmark.length;
+    await get("NVDA");
+    expect(calls.benchmark.length).toBe(n); // 5분 안에는 기억한 값
+    down = false;
+    clock = new Date(clock.getTime() + 6 * 60_000);
+    const ok = (await get("NVDA")).body.trend;
+    expect(ok).toMatchObject({ status: "ok", score: 69, band: "다소 강함", benchmark: { code: "NASDAQ" } });
+    expect(ok.scoreExact!).toBeCloseTo(expected.trend["NVDA"]!.score, 9);
+    expect((await rowsOf()).map((r) => [r.code, r.score_date, r.status])).toEqual([["NVDA", "2026-09-25", "ok"]]);
+  });
+
+  it("지수 일봉이 종목 마지막 봉보다 늦거나(아직 오늘 값 없음) 비어 있어도 받기 실패", async () => {
+    const lag = fixtureSources({ bench: { NASDAQ: benchOf("NVDA").filter((c) => c.date <= "2026-09-24") } });
+    await start(lag.src);
+    expect((await get("NVDA")).body.trend.reason).toEqual({ code: "fetchFailed", text: "비교 지수(나스닥) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다" });
+    await app!.close();
+    const empty = fixtureSources({ bench: { KOSPI: [] } });
+    await start(empty.src);
+    expect((await get("005930")).body.trend.reason).toEqual({ code: "fetchFailed", text: "비교 지수(코스피) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다" });
+  });
+
+  it("지수와 상관없는 이유(기록 부족)면 그 이유 그대로, 비교 지수가 원래 없는 상품은 지수 대비 항목만 빼고 계산 (받기 실패 아님)", async () => {
+    const { src } = fixtureSources({ candles: { NVDA: candlesOf("NVDA").slice(-150) }, bench: { NASDAQ: new Error("네이버 지수 실패") } });
+    await start(src);
+    expect((await get("NVDA")).body.trend.reason).toMatchObject({ code: "short" });
+  });
+
+  it("기초자산(SOXX) 일봉을 한 번 받지 못하면: '기초자산을 확인하지 못함'이 아니라 받기 실패, 5분 뒤 다시 계산해 참고 줄이 돌아오고 그때 기록", async () => {
+    let fails = 1;
+    const { src } = fixtureSources({ registered: ["SOXL"], candles: { SOXX: () => (fails-- > 0 ? new Error("야후 실패") : candlesOf("SOXX")) } });
+    await start(src, ny("2026-09-25T17:31:00"));
+    expect(await app!.indicatorScores.runDaily("US")).toEqual({ computed: 0, failed: 1 });
+    const t = (await get("SOXL")).body.trend;
+    expect(t).toMatchObject({ status: "excluded", label: "이 상품 자체 점수 없음", reference: null, reason: { code: "fetchFailed", text: "기초자산 SOXX 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다" } });
+    // 사실 상자: 따르는 지수(정적 표)와 상품 자체 숫자는 그대로, 기초자산 비교만 빠짐
+    expect(t.leveraged).toMatchObject({ L: 3, underlying: null, tracks: "NYSE 반도체 지수" });
+    expect(t.leveraged!.facts).toMatchObject({ und63Pct: null, naiveLx63Pct: null });
+    const lines = t.leveraged!.box.lines.map((l) => l.parts.map((p) => p.text).join(""));
+    expect(lines[0]).toBe("이 상품은 NYSE 반도체 지수 하루 움직임의 3배를 따라가도록 만든 상품입니다.");
+    expect(lines).toContain("· 최근 63거래일: 이 상품 −29.8%");
+    expect(await rowsOf()).toEqual([]);
+    clock = new Date(clock.getTime() + 6 * 60_000);
+    const again = (await get("SOXL")).body.trend;
+    expect(again).toMatchObject({ reason: { code: "leveraged" }, reference: { code: "SOXX", status: "ok", score: 73, band: "강함" } });
+    expect((await rowsOf()).map((r) => [r.code, r.score_date, r.status])).toEqual([["SOXL", "2026-09-25", "excluded"]]);
+  });
+
+  it("기초자산의 비교 지수를 받지 못해도 받기 실패 (참고 줄을 다른 점수로 두지 않음)", async () => {
+    const { src } = fixtureSources({ bench: { NASDAQ: new Error("네이버 지수 실패") } });
+    await start(src);
+    const t = (await get("SOXL")).body.trend;
+    expect(t).toMatchObject({ reference: null, reason: { code: "fetchFailed", text: "기초자산 SOXX의 비교 지수(나스닥) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다" } });
+    expect(t.leveraged!.facts!.und63Pct).toBeCloseTo(expected.leveraged["SOXL"]!.und63Pct, 9); // 사실 상자는 지수와 상관없이 그대로
+  });
+
+  it("장 마감 뒤 40분 다시 계산(따라잡기): 받기 실패로 기록이 빠진 종목만 다시", async () => {
+    let down = true;
+    const { src, calls } = fixtureSources({ registered: ["NVDA", "AAPL"], candles: { AAPL: () => (down ? new Error("출처 실패") : candlesOf("AAPL")) } });
+    await start(src, ny("2026-09-25T17:31:00"));
+    const svc = app!.indicatorScores;
+    expect(await svc.runDaily("US")).toEqual({ computed: 1, failed: 1 });
+    expect(calls.fresh).toEqual(["NVDA", "AAPL"]); // 미리 계산은 차트 캐시의 묵은 봉을 쓰지 않는다
+    down = false;
+    clock = ny("2026-09-25T18:10:00");
+    calls.candles.length = 0;
+    expect(await svc.catchUp(["US"])).toEqual(["US"]);
+    expect(calls.candles).toEqual(["AAPL"]); // NVDA 는 이미 기록이 있어 다시 받지 않는다
+    expect((await rowsOf()).map((r) => [r.code, r.status])).toEqual([
+      ["AAPL", "ok"],
+      ["NVDA", "ok"],
+    ]);
+    expect(await svc.catchUp(["US"])).toEqual([]);
+  });
+});
+
+describe("하루 기록", () => {
+  it("기준 거래일(scoreDate)로 적는다: 거래정지 종목을 나중에 다시 계산해도 예전 날의 정상 기록을 덮지 않고, 따라잡기가 되풀이되지 않는다", async () => {
+    const halted = candlesOf("NVDA").filter((c) => c.date <= "2026-09-10");
+    const { src, calls } = fixtureSources({ registered: ["NVDA"], candles: { NVDA: halted } });
+    await start(src, ny("2026-09-10T17:31:00"));
+    const svc = app!.indicatorScores;
+    expect(await svc.runDaily("US")).toEqual({ computed: 1, failed: 0 });
+    clock = ny("2026-09-25T17:31:00");
+    expect(await svc.runDaily("US")).toEqual({ computed: 1, failed: 0 });
+    const rows = await rowsOf();
+    expect(rows.map((r) => [r.score_date, r.status, JSON.parse(r.data).priceDate])).toEqual([
+      ["2026-09-10", "ok", "2026-09-10"],
+      ["2026-09-25", "unavailable", "2026-09-10"],
+    ]);
+    expect(rows[0]!.score).not.toBeNull();
+    expect(JSON.parse(rows[1]!.data)).toMatchObject({ reason: "stale" });
+    clock = ny("2026-09-25T18:10:00");
+    const before = calls.candles.length;
+    expect(await svc.catchUp()).toEqual([]); // 오늘 줄이 있다
+    expect(calls.candles.length).toBe(before);
+  });
+
+  it("마지막 봉이 기준 거래일보다 앞이면(거래정지·출처 늦음) 30분만 기억한다", async () => {
+    const { src, calls } = fixtureSources({ candles: { NVDA: candlesOf("NVDA").filter((c) => c.date <= "2026-09-24") } });
+    await start(src);
+    expect((await get("NVDA")).body.asOf).toMatchObject({ priceDate: "2026-09-24", scoreDate: "2026-09-25" });
+    clock = new Date(clock.getTime() + 20 * 60_000);
+    await get("NVDA");
+    expect(calls.candles).toEqual(["NVDA"]);
+    clock = new Date(clock.getTime() + 11 * 60_000);
+    await get("NVDA");
+    expect(calls.candles).toEqual(["NVDA", "NVDA"]);
+  });
+});
+
+describe("그 밖의 상품 규칙", () => {
+  it("분배금이 큰 상품(커버드콜·프리미엄 인컴 ETF)은 점수는 내되 안내 한 줄 (추세 계산 9.6), 보통 종목에는 없음", async () => {
+    const { src } = fixtureSources({
+      candles: { QYLD: candlesOf("QQQ"), JEPQ: candlesOf("QQQ") },
+      stocks: { QYLD: { code: "QYLD", name: "Global X NASDAQ 100 Covered Call ETF", market: "NASDAQ", groupCode: "EF" }, JEPQ: { code: "JEPQ", name: "JPMorgan Nasdaq Equity Premium Income ETF", market: "NASDAQ", groupCode: "EF" } },
+    });
+    await start(src);
+    for (const c of ["QYLD", "JEPQ"]) {
+      const t = (await get(c)).body.trend;
+      expect(t.status).toBe("ok");
+      expect(t.notes).toContain("분배금이 큰 상품이라 가격만으로 계산한 추세가 실제 수익보다 낮게 나올 수 있습니다.");
+    }
+    expect((await get("QQQ")).body.trend.notes).toEqual([]);
+  });
+
+  it("종목 마스터가 보통 주식(ST)이라고 하면 이름의 'Bear'·'Short' 로 인버스를 짐작하지 않는다 (토스 상품 정보가 없어도)", async () => {
+    const { src } = fixtureSources({
+      candles: { BBW: candlesOf("AAPL") },
+      stocks: { BBW: { code: "BBW", name: "Build-A-Bear Workshop", market: "NYSE", groupCode: "ST" } },
+    });
+    await start(src);
+    const b = (await get("BBW")).body;
+    expect(b.trend.status).toBe("ok");
+    expect(b.value).toMatchObject({ status: "pending" });
   });
 });
 
@@ -484,7 +685,8 @@ describe("문구 (금지어 · 미래형)", () => {
     ] as const)
       all.push(trendReasonText(r));
     for (const n of [{ code: "noBench" }, { code: "noVolume" }, { code: "shortYear", bars: 220 }] as const) for (const m of ["overseas", "none", null] as const) all.push(trendNoteText(n, m));
-    all.push(...Object.values(STATUS_TEXT), ...howLines());
+    all.push(...Object.values(STATUS_TEXT), ...howLines(), benchFetchFailed("나스닥"), benchFetchFailed("코스피", "069500"), underlyingFetchFailed("SOXX"), DISTRIBUTION_NOTE);
+    for (const diff of [-12, 7]) for (const familyDiff of [-9, 0, 14]) all.push(changeText({ from: "2026-09-18", diff, family: "O", familyDiff }));
     const f = leverageFacts(candlesOf("SOXL"), candlesOf("SOXX"), 3);
     for (const box of [leverageBox(f, 3, "NYSE 반도체 지수"), leverageBox(null, 2, null), leverageBox(leverageFacts(candlesOf("SOXL"), null, 3), 3, null)]) all.push(box.title, ...box.lines.flatMap((l) => l.parts.map((p) => p.text)));
     expect(all.length).toBeGreaterThan(300);
@@ -495,7 +697,7 @@ describe("문구 (금지어 · 미래형)", () => {
 
 describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서버 응답)", () => {
   /** shared/fixtures/indicatorScores.json — 지금 서버 코드가 기록한 일봉으로 낸 응답과 같아야 한다. 바꿀 때: UPDATE_SCORE_FIXTURE=1 npx vitest run test/indicatorScores.test.ts */
-  it("NVDA · 삼성전자 · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 지난주 대비 바뀐 종목", async () => {
+  it("NVDA · 삼성전자 · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 지난주 대비 바뀐 종목 · 받기 실패(NVDA 지수·SOXL 기초자산)", async () => {
     const { stock } = jumpCandles();
     const { src } = fixtureSources({
       candles: { ZJMP: stock, SHRT: candlesOf("NVDA").slice(-120), SQQQ: new Error("기록 없음") },
@@ -506,6 +708,14 @@ describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서
     for (const c of ["NVDA", "005930", "QQQ", "SOXL", "RGTX", "SQQQ", "SHRT", "ZJMP"]) {
       const { computedAt: _t, ...body } = (await get(c)).body;
       cases[c] = body;
+    }
+    // 받기 실패 모습 (앱 화면 테스트용): 네이버 지수·기초자산 일봉을 받지 못한 서버
+    await app!.close();
+    const down = fixtureSources({ candles: { SOXX: new Error("야후 실패") }, bench: { NASDAQ: new Error("네이버 지수 실패") } });
+    await start(down.src);
+    for (const c of ["NVDA", "SOXL"]) {
+      const { computedAt: _t, ...body } = (await get(c)).body;
+      cases[`${c}_fetchFailed`] = body;
     }
     const file = new URL("../../shared/fixtures/indicatorScores.json", import.meta.url);
     const fixture = { note: "지표 점수 1단계 서버 응답 (GET /api/scores/:code, computedAt 제외) — 기록한 야후 공개 일봉(backend/test/fixtures/indicatorScores)으로 서버 코드가 낸 값. 2026-09-28 10:00 KST 기준", cases };
