@@ -11,10 +11,6 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
       return h.store.get(k) ?? null;
     },
     setItem: async (k: string, v: string) => void h.store.set(k, v),
-    multiGet: async (keys: string[]) => {
-      if (h.failRead) throw new Error("읽기 실패");
-      return keys.map((k) => [k, h.store.get(k) ?? null]);
-    },
   },
 }));
 vi.mock("expo-router", () => ({ router: { navigate: h.navigate, dismissTo: h.dismissTo, canDismiss: () => h.canDismiss } }));
@@ -22,7 +18,7 @@ vi.mock("expo-router", () => ({ router: { navigate: h.navigate, dismissTo: h.dis
 const { swipeActionWidth, swipeActiveRange, swipeOffset, swipeOpenWidth, swipeSettleOpen, swipePanConfig } = await import("@/lib/rowSwipe");
 const { haptic, hapticAllowed, hapticCall, installHaptics, setHapticPolicy } = await import("@/lib/haptics");
 const { addressBanner, authBanner, connectionKind, connectionText } = await import("@/lib/connectionError");
-const { cacheFromEarlierRun, claimFirstRun, FIRST_RUN_KEY, firstRunDecision, forgetFirstRunClaim, hasPriorUse, markFirstRun, priorUseFrom, readFirstRun, rereadBootTraces } = await import("@/lib/firstRun");
+const { claimFirstRun, FIRST_RUN_KEY, firstRunDecision, forgetFirstRunClaim, markFirstRun, readFirstRun, tossLinked } = await import("@/lib/firstRun");
 const { removeConfirm, removeKind, removeLabel, rowA11yActions } = await import("@/lib/rowActions");
 const { openServerSettings, serverOpenRequest, serverSettingsParams } = await import("@/lib/settingsLink");
 const { ApiRequestError } = await import("@/api/client");
@@ -165,41 +161,42 @@ describe("연결 오류 문구는 설정 칸 이름('서버 연결' · '서버 �
   });
 });
 
-describe("첫 실행 안내: 이 기기에서 처음 쓰는 사람만 한 번, 사용 흔적이 있으면 건너뜀", () => {
-  it("판단: 흔적을 모르면 기다림, 없으면 보임, 있으면 기존 사용자", () => {
-    expect(firstRunDecision(undefined)).toBe("wait");
-    expect(firstRunDecision(false)).toBe("show");
-    expect(firstRunDecision(true)).toBe("existing");
+describe("첫 실행 안내: 서버 자료로 새 사용자(종목 0개 + 토스 연동 없음)만 한 번, 기존 사용자는 건너뜀", () => {
+  // 고정 시계: 이 JS 가 뜬 시각 2026-09-27 09:00 (한국 시각)
+  const boot = Date.parse("2026-09-27T09:00:00+09:00");
+  const got = <T,>(data: T, at = boot + 1_000) => ({ data, updatedAt: at });
+  const none = { data: undefined, updatedAt: 0 };
+  const unlinked = { ok: true, tossOpenApi: { configured: false, outboundIp: null, client: null, realtime: null, sync: null } };
+
+  it("판단: 둘 다 이번 실행에 받았고 종목 0개·연동 없음이면 보임", () => {
+    expect(firstRunDecision(got([]), got(unlinked), boot)).toBe("show");
+    // 연동 상태를 알려 주지 않는 예전 서버 = 연동 없음
+    expect(firstRunDecision(got([]), got({ limited: false }), boot)).toBe("show");
   });
 
-  it("사용 흔적: 바꾼 설정·연 브리핑·검색·차트 설정, 지난 실행의 쿼리 캐시 (이번 실행에 적힌 캐시는 아님)", () => {
-    const boot = 1_000_000;
-    const m = (pairs: [string, string | null][]) => new Map(pairs);
-    expect(priorUseFrom(m([]), boot)).toBe(false);
-    expect(priorUseFrom(m([["settings.sort", "profit"]]), boot)).toBe(true);
-    expect(priorUseFrom(m([["briefings.read", "[1]"]]), boot)).toBe(true);
-    // 저절로 적힐 수 있는 키(토큰 이전 등)는 보지 않는다
-    expect(priorUseFrom(m([["settings.apiToken", "x"]]), boot)).toBe(false);
-    expect(cacheFromEarlierRun(JSON.stringify({ timestamp: boot - 1 }), boot)).toBe(true);
-    expect(cacheFromEarlierRun(JSON.stringify({ timestamp: boot + 10 }), boot)).toBe(false);
-    expect(cacheFromEarlierRun(null, boot)).toBe(false);
-    // 모르는 모양은 흔적으로 (확실하지 않을 때 억지로 띄우지 않는다)
-    expect(cacheFromEarlierRun("{", boot)).toBe(true);
-    expect(cacheFromEarlierRun(JSON.stringify({}), boot)).toBe(true);
+  it("판단: 종목이 있거나 토스 연동 기록이 있으면 기존 사용자 (다른 쪽을 몰라도)", () => {
+    expect(firstRunDecision(got([{ code: "005930" }]), none, boot)).toBe("existing");
+    expect(firstRunDecision(none, got({ tossOpenApi: { ...unlinked.tossOpenApi, configured: true } }), boot)).toBe("existing");
+    expect(firstRunDecision(got([]), got({ tossOpenApi: { ...unlinked.tossOpenApi, sync: { lastRunAt: "2026-09-26T06:00:00Z" } } } as never), boot)).toBe("existing");
   });
 
-  it("저장소: 앱을 켤 때 읽어 둔 흔적, 못 읽으면 있는 것으로", async () => {
-    await rereadBootTraces();
-    expect(await hasPriorUse(1_000)).toBe(false);
-    h.store.set("search.recent", "[]");
-    // 켤 때 읽어 둔 값을 쓴다 (켠 뒤에 적힌 것은 이번 실행의 것)
-    expect(await hasPriorUse(1_000)).toBe(false);
-    await rereadBootTraces();
-    expect(await hasPriorUse(1_000)).toBe(true);
-    h.store.clear();
-    h.failRead = true;
-    await rereadBootTraces();
-    expect(await hasPriorUse(1_000)).toBe(true);
+  it("판단: 못 받음·지난 실행의 캐시·토큰이 틀린 /health(limited)·한쪽만 받음은 기다림 (아무것도 적지 않는다)", () => {
+    expect(firstRunDecision(none, none, boot)).toBe("wait");
+    expect(firstRunDecision(got([], boot - 1), got(unlinked), boot)).toBe("wait");
+    expect(firstRunDecision(got([]), got(unlinked, boot - 1), boot)).toBe("wait");
+    // 지난 실행의 캐시에 종목이 있어도 새로 받기 전에는 정하지 않는다
+    expect(firstRunDecision(got([{ code: "005930" }], boot - 1), none, boot)).toBe("wait");
+    expect(firstRunDecision(got([]), got({ ok: true, limited: true }), boot)).toBe("wait");
+    expect(firstRunDecision(got([]), none, boot)).toBe("wait");
+    expect(firstRunDecision(none, got(unlinked), boot)).toBe("wait");
+    // 받은 시각이 켠 시각과 같으면 이번 실행
+    expect(firstRunDecision(got([], boot), got(unlinked, boot), boot)).toBe("show");
+  });
+
+  it("토스 연동 기록: 키 설정 또는 동기화한 적 있음", () => {
+    expect(tossLinked({})).toBe(false);
+    expect(tossLinked(unlinked)).toBe(false);
+    expect(tossLinked({ tossOpenApi: { ...unlinked.tossOpenApi, configured: true } })).toBe(true);
   });
 
   it("저장: 본 것·건너뜀을 적고 읽는다. 못 읽으면 본 것으로 (억지로 띄우지 않는다)", async () => {

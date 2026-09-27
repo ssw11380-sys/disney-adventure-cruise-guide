@@ -4,10 +4,10 @@ import { render } from "./miniRender";
 
 /**
  * 첫 실행 안내 (3-24, 기능 플래그 firstRun).
- *  - 이 기기에서 처음 쓰는 사람에게만 한 번 저절로 연다. 기기에 사용 흔적(지난 실행의 쿼리 캐시·바꾼 설정·연 브리핑 등)이 있으면
- *    열지 않고 '건너뜀'으로 적는다 (기존 사용자를 거치게 하지 않음). 서버의 등록 종목 수는 보지 않는다 — 토스 자동 동기화로
- *    새 사용자·새 휴대폰도 종목이 이미 있다
- *  - 흔적을 읽는 동안 기다린다. 내비게이터가 준비된 뒤에만 연다. 한 번 적으면 다시 묻지 않는다
+ *  - 새 사용자에게만 한 번 저절로 연다: 이번 실행에서 서버에서 새로 받은 자료로 등록 종목 0개 + 토스 연동 없음.
+ *    종목이 있거나 토스가 연결되어 있으면 열지 않고 '건너뜀'으로 적는다 (기존 사용자를 거치게 하지 않음)
+ *  - 지난 실행의 캐시(받은 시각 < 이 JS 가 뜬 시각)·오프라인·토큰이 틀린 /health 로는 정하지 않고 아무것도 적지 않는다
+ *  - 내비게이터가 준비된 뒤, 탭 첫 화면에 있을 때만 연다. 띄우기 직전에 기록을 다시 읽는다(설정 '다시 보기'와 겹치지 않게). 한 번 적으면 다시 묻지 않는다
  *  - 안내 한 화면: 위젯 추가법 · 알림 권한 · 토스 연동 상태. 서버 주소·토큰 입력 없음. '시작하기' 한 번으로 닫힘, 열리면 '본 것'으로 적음
  */
 const h = vi.hoisted(() => {
@@ -23,7 +23,8 @@ const h = vi.hoisted(() => {
     back: vi.fn(),
     replace: vi.fn(),
     canGoBack: true,
-    health: { data: undefined as unknown, isError: false },
+    health: { data: undefined as unknown, isError: false, dataUpdatedAt: 0 },
+    stocks: { data: undefined as unknown[] | undefined, isError: false, dataUpdatedAt: 0 },
     perm: { status: "undetermined", canAskAgain: true },
     requested: 0,
   };
@@ -33,7 +34,6 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
     getItem: async (k: string) => h.store.get(k) ?? null,
     setItem: async (k: string, v: string) => void h.store.set(k, v),
-    multiGet: async (keys: string[]) => keys.map((k) => [k, h.store.get(k) ?? null]),
   },
 }));
 vi.mock("react-native", () => ({
@@ -64,10 +64,8 @@ vi.mock("@/theme", async () => {
   return { ...tokens, useTheme: () => tokens.dark };
 });
 vi.mock("@/api/hooks", () => ({
-  // 첫 실행 판단은 서버 목록을 보지 않는다 (불리면 실패)
-  useRegisteredStocks: () => {
-    throw new Error("첫 실행 판단이 서버 목록을 물음");
-  },
+  // 첫 실행 판단: 등록 종목 목록 + /health 의 토스 연동 (받은 시각 dataUpdatedAt 으로 이번 실행에 받은 것인지 본다)
+  useRegisteredStocks: () => h.stocks,
   useFeatures: () => ({ data: undefined, isError: false }),
   useHealth: () => h.health,
   useFeature: () => false,
@@ -84,7 +82,7 @@ vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBound
 const { FirstRunGate } = await import("@/components/UxBridge");
 const { default: WelcomeScreen } = await import("@/app/welcome");
 const { UxFlagsContext } = await import("@/lib/uxFlags");
-const { autoOpenPath, FIRST_RUN_KEY, forgetFirstRunClaim, rereadBootTraces } = await import("@/lib/firstRun");
+const { autoOpenPath, BOOT_AT, FIRST_RUN_KEY, forgetFirstRunClaim } = await import("@/lib/firstRun");
 const { WIDGET_STEPS } = await import("@/lib/welcome");
 
 afterAll(() => {
@@ -99,125 +97,178 @@ beforeEach(() => {
   h.back.mockReset();
   h.replace.mockReset();
   h.canGoBack = true;
-  h.health = { data: undefined, isError: false };
+  h.health = { data: undefined, isError: false, dataUpdatedAt: 0 };
+  h.stocks = { data: undefined, isError: false, dataUpdatedAt: 0 };
   h.perm = { status: "undetermined", canAskAgain: true };
   h.requested = 0;
   forgetFirstRunClaim();
 });
 
 const flush = () => new Promise((res) => setTimeout(res, 0));
-/** 지금 저장소로 앱을 켠 것처럼: 흔적을 다시 읽고(앱을 켤 때 한 번 읽는 값) 게이트를 붙인다 */
-const gate = async (firstRun = true) => {
-  await rereadBootTraces();
-  const r = render(
+/** 이번 실행에서 서버에서 받은 자료 (켠 지 2초 뒤에 받음) */
+const AT = () => h.BOOT + 2_000;
+const serverSays = (stocks: unknown[], toss: unknown = { configured: false, sync: null }) => {
+  h.stocks = { data: stocks, isError: false, dataUpdatedAt: AT() };
+  h.health = { data: { ok: true, tossOpenApi: toss }, isError: false, dataUpdatedAt: AT() };
+};
+const gate = (firstRun = true) =>
+  render(
     <UxFlagsContext.Provider value={{ oneHand: false, firstRun, emptyGuide: false, connectionGuide: false, flagsMissing: false }}>
       <FirstRunGate />
     </UxFlagsContext.Provider>,
   );
-  return r;
-};
-/** 저장소 읽기(비동기)를 기다린 뒤 다시 그린다 */
+/** 저장소 읽기(비동기)를 기다리며 다시 그린다 */
 const settle = async (r: ReturnType<typeof render>) => {
-  await flush();
-  r.rerender();
-  await flush();
-  r.rerender();
+  for (let i = 0; i < 4; i++) {
+    await flush();
+    r.rerender();
+  }
 };
 
-describe("저절로 여는 조건 (이 기기의 사용 흔적)", () => {
-  it("새 기기(흔적 없음): 한 번 연다, 같은 실행에서는 다시 열지 않는다", async () => {
-    const r = await gate();
+describe("저절로 여는 조건 (이번 실행에서 받은 서버 자료)", () => {
+  it("고정 시계: 이 JS 가 뜬 시각", () => {
+    expect(BOOT_AT).toBe(h.BOOT);
+  });
+
+  it("새 사용자(종목 0개 + 토스 연동 없음): 한 번 연다, 같은 실행에서는 다시 열지 않는다", async () => {
+    serverSays([]);
+    const r = gate();
     await settle(r);
     expect(h.push).toHaveBeenCalledWith("/welcome");
     expect(h.push).toHaveBeenCalledTimes(1);
-    r.rerender();
-    const again = await gate();
+    const again = gate();
     await settle(again);
     expect(h.push).toHaveBeenCalledTimes(1);
   });
 
-  it("기존 사용자(바꾼 설정·연 브리핑·최근 검색 등): 열지 않고 '건너뜀'으로 적는다", async () => {
-    for (const key of ["settings.sort", "settings.apiUrl", "briefings.read", "search.recent", "chartPrefs.v1"]) {
+  it("보유·관심 종목이 있는 기존 사용자: 열지 않고 '건너뜀'으로 적는다 (토스 상태를 몰라도)", async () => {
+    for (const stocks of [[{ code: "005930", quantity: 10 }], [{ code: "AAPL", quantity: null }]]) {
       h.store.clear();
-      h.store.set(key, "x");
       forgetFirstRunClaim();
-      await settle(await gate());
+      serverSays(stocks);
+      h.health = { data: undefined, isError: true, dataUpdatedAt: 0 };
+      await settle(gate());
       expect(h.push).not.toHaveBeenCalled();
       expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
     }
   });
 
-  it("지난 실행에 적힌 쿼리 캐시(마지막 잔고)는 흔적, 이번 실행에 막 적힌 캐시는 흔적이 아니다", async () => {
-    h.store.set("rq.cache", JSON.stringify({ timestamp: h.BOOT - 86_400_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
-    await settle(await gate());
+  it("토스 연동 기록이 있으면(키 설정 · 동기화한 적 있음) 종목이 아직 0개여도 기존 사용자", async () => {
+    for (const toss of [{ configured: true, sync: null }, { configured: false, sync: { lastRunAt: "2026-09-26T06:00:00Z" } }]) {
+      h.store.clear();
+      forgetFirstRunClaim();
+      serverSays([], toss);
+      await settle(gate());
+      expect(h.push).not.toHaveBeenCalled();
+      expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
+    }
+  });
+
+  it("지난 실행의 캐시(받은 시각이 켜기 전)만 있으면 정하지 않는다: 새로 받으면 그때 연다", async () => {
+    // APK 에 든 번들로 처음 켰을 때 적힌 캐시: 빈 목록
+    h.stocks = { data: [], isError: false, dataUpdatedAt: h.BOOT - 600_000 };
+    h.health = { data: { ok: true, tossOpenApi: { configured: false, sync: null } }, isError: false, dataUpdatedAt: h.BOOT - 600_000 };
+    const r = gate();
+    await settle(r);
     expect(h.push).not.toHaveBeenCalled();
-    expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
-    h.store.clear();
-    forgetFirstRunClaim();
-    h.store.set("rq.cache", JSON.stringify({ timestamp: h.BOOT + 5_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
-    await settle(await gate());
+    expect(h.store.get(FIRST_RUN_KEY)).toBeUndefined();
+    serverSays([]);
+    await settle(r);
     expect(h.push).toHaveBeenCalledTimes(1);
   });
 
-  it("앱을 켤 때 읽어 둔 흔적을 쓴다: 그 뒤 캐시가 이번 실행 것으로 덮여도(쿼리 캐시 저장기) 기존 사용자로 본다", async () => {
-    h.store.set("rq.cache", JSON.stringify({ timestamp: h.BOOT - 3_600_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
-    await rereadBootTraces();
-    // 켠 뒤 저장기가 바로 다시 적음 (플래그는 그 뒤 네트워크로 도착)
-    h.store.set("rq.cache", JSON.stringify({ timestamp: h.BOOT + 1_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
-    const r = render(
-      <UxFlagsContext.Provider value={{ oneHand: false, firstRun: true, emptyGuide: false, connectionGuide: false, flagsMissing: false }}>
-        <FirstRunGate />
-      </UxFlagsContext.Provider>,
-    );
+  it("오프라인·토큰이 틀림(/health limited)·한쪽만 받음: 아무것도 적지 않고 기다린다", async () => {
+    h.stocks = { data: undefined, isError: true, dataUpdatedAt: 0 };
+    h.health = { data: undefined, isError: true, dataUpdatedAt: 0 };
+    const r = gate();
+    await settle(r);
+    h.health = { data: { ok: true, limited: true }, isError: false, dataUpdatedAt: AT() };
+    await settle(r);
+    h.stocks = { data: [], isError: false, dataUpdatedAt: AT() };
     await settle(r);
     expect(h.push).not.toHaveBeenCalled();
-    expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
+    expect(h.store.get(FIRST_RUN_KEY)).toBeUndefined();
+    // 연결이 돌아와 /health 상세를 받으면 연다
+    serverSays([]);
+    await settle(r);
+    expect(h.push).toHaveBeenCalledTimes(1);
   });
 
   it("탭 첫 화면에 있을 때만 저절로 연다: 검색·종목 상세(알림으로 연 화면 등)에 있으면 기다렸다가 탭으로 돌아오면 연다", async () => {
+    serverSays([]);
     h.path = "/stocks/005930";
-    const r = await gate();
+    const r = gate();
     await settle(r);
     expect(h.push).not.toHaveBeenCalled();
     h.path = "/stocks/add";
-    r.rerender();
-    await flush();
+    await settle(r);
     expect(h.push).not.toHaveBeenCalled();
+    // 검색에서 종목을 추가해도(목록이 비지 않음) 한 번 '보임'으로 정한 것은 그대로 — 탭으로 돌아오면 연다
+    h.stocks = { data: [{ code: "005930" }], isError: false, dataUpdatedAt: AT() + 5_000 };
     h.path = "/briefings";
-    r.rerender();
-    await flush();
+    await settle(r);
     expect(h.push).toHaveBeenCalledTimes(1);
     for (const p of ["/", "/(tabs)", "/briefings", "/discover", "/settings"]) expect(autoOpenPath(p), p).toBe(true);
     for (const p of ["/welcome", "/stocks/005930", "/briefings/12", "/market/KOSPI", "/portfolio/allocation", "", null, undefined]) expect(autoOpenPath(p), String(p)).toBe(false);
   });
 
   it("내비게이터가 준비되기 전에는 열지 않는다", async () => {
+    serverSays([]);
     h.navKey = undefined;
-    const r = await gate();
+    const r = gate();
     await settle(r);
     expect(h.push).not.toHaveBeenCalled();
     h.navKey = "root";
-    r.rerender();
-    await flush();
+    await settle(r);
     expect(h.push).toHaveBeenCalledTimes(1);
   });
 
   it("이미 본 사람·건너뛴 사람·플래그 꺼짐: 열지 않는다", async () => {
+    serverSays([]);
     h.store.set(FIRST_RUN_KEY, "seen");
-    await settle(await gate());
+    await settle(gate());
     h.store.set(FIRST_RUN_KEY, "existing");
     forgetFirstRunClaim();
-    await settle(await gate());
+    await settle(gate());
     h.store.clear();
     forgetFirstRunClaim();
-    await settle(await gate(false));
+    await settle(gate(false));
+    expect(h.push).not.toHaveBeenCalled();
+  });
+
+  it("설정 '다시 보기'와 겹침: 게이트가 기록 없음을 읽은 뒤 사용자가 설정에서 안내를 먼저 열면, 저절로 다시 띄우지 않는다", async () => {
+    // 게이트: 기록 없음을 읽음. 서버 자료는 아직 (정하기 전)
+    const r = gate();
+    await settle(r);
+    // 설정 > 정보 '처음 사용 안내 다시 보기' → 안내 화면이 열린다 ('본 것' 적기 + 이번 실행 몫 가져가기)
+    const w = render(<WelcomeScreen />);
+    await flush();
+    w.rerender();
+    expect(h.store.get(FIRST_RUN_KEY)).toBe("seen");
+    // (이번 실행 몫과 상관없이 '다시 읽기'만으로 그만두는지 보려고 몫을 되돌린다)
+    forgetFirstRunClaim();
+    // 이제 서버 자료가 도착해 '보임'으로 정해져도 띄우기 직전에 기록을 다시 읽어 그만둔다
+    serverSays([]);
+    await settle(r);
+    expect(h.push).not.toHaveBeenCalled();
+  });
+
+  it("설정에서 연 안내가 기록을 못 적었어도(저장소 실패) 이번 실행 몫을 가져가 두 번째로 띄우지 않는다", async () => {
+    const r = gate();
+    await settle(r);
+    render(<WelcomeScreen />);
+    // 기록이 지워진 것처럼 (적기 실패)
+    await flush();
+    h.store.delete(FIRST_RUN_KEY);
+    serverSays([]);
+    await settle(r);
     expect(h.push).not.toHaveBeenCalled();
   });
 });
 
 describe("안내 한 화면", () => {
   it("위젯 추가법 · 알림 · 토스 연동 세 칸, 서버 주소·토큰 입력 없음, 고지", async () => {
-    h.health = { data: { ok: true, tossOpenApi: { configured: true, sync: { lastRunAt: "2026-09-27T01:12:00Z", lastChanges: { added: 0, updated: 0, removed: 0, holdings: 17 } } } }, isError: false };
+    h.health = { data: { ok: true, tossOpenApi: { configured: true, sync: { lastRunAt: "2026-09-27T01:12:00Z", lastChanges: { added: 0, updated: 0, removed: 0, holdings: 17 } } } }, isError: false, dataUpdatedAt: 0 };
     const r = render(<WelcomeScreen />);
     await flush();
     r.rerender();
@@ -276,11 +327,11 @@ describe("안내 한 화면", () => {
   });
 
   it("토스 상태: 연결 안 됨 · 서버 연결 실패 · 확인 중", async () => {
-    h.health = { data: { ok: true, tossOpenApi: { configured: false } }, isError: false };
+    h.health = { data: { ok: true, tossOpenApi: { configured: false } }, isError: false, dataUpdatedAt: 0 };
     expect(render(<WelcomeScreen />).text()).toContain("연결되지 않음 · 종목은 검색해서 직접 추가할 수 있습니다");
-    h.health = { data: undefined, isError: true };
+    h.health = { data: undefined, isError: true, dataUpdatedAt: 0 };
     expect(render(<WelcomeScreen />).text()).toContain("서버에 연결되지 않아 확인하지 못했습니다");
-    h.health = { data: undefined, isError: false };
+    h.health = { data: undefined, isError: false, dataUpdatedAt: 0 };
     expect(render(<WelcomeScreen />).text()).toContain("확인 중…");
     await flush();
   });

@@ -1,9 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, usePathname, useRootNavigationState } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useFeatures } from "@/api/hooks";
+import { useFeatures, useHealth, useRegisteredStocks } from "@/api/hooks";
 import { setConnectionWording } from "@/lib/connectionError";
-import { autoOpenPath, claimFirstRun, firstRunDecision, hasPriorUse, markFirstRun, readFirstRun, type FirstRunMark } from "@/lib/firstRun";
+import { autoOpenPath, BOOT_AT, claimFirstRun, firstRunDecision, markFirstRun, readFirstRun, type FirstRunMark } from "@/lib/firstRun";
 import { setHapticPolicy } from "@/lib/haptics";
 import { useSettings } from "@/lib/settings";
 import { emptyGuideToRemember, GuideMarksContext, UxFlagsContext, useUx, uxFlagsFrom, type UxFlags } from "@/lib/uxFlags";
@@ -15,9 +15,9 @@ import { emptyGuideToRemember, GuideMarksContext, UxFlagsContext, useUx, uxFlags
  *  - HapticsBridge: 햅틱 규칙(플래그 · 설정 '누를 때 진동')을 lib/haptics 에 알려 준다
  *  - ConnectionWordingBridge: 연결 오류 안내가 켜졌는지를 api/client 의 401 문구에 알려 준다 (알림 창·오류 화면 모두 칸 이름 문구)
  *  - GuideMarksProvider: 한 번 닫으면 다시 보이지 않는 안내 칸 기록 (잔고 끝 '관심 종목이 없습니다')
- *  - FirstRunGate: 이 기기에서 처음 쓰는 사람에게 첫 실행 안내(/welcome)를 한 번 띄운다. 기기에 사용 흔적이 있으면 띄우지 않고 '건너뜀'으로 적는다.
- *    흔적은 앱을 켤 때(이 파일이 불러오는 lib/firstRun 을 불러오는 순간 — 쿼리 캐시 복원·다시 쓰기 전) 한 번 읽어 둔 값을 쓴다 (lib/firstRun bootTraces).
- *    저절로 여는 것은 탭 첫 화면에 있을 때만 (검색·종목 상세·알림으로 연 화면을 덮지 않는다)
+ *  - FirstRunGate: 새 사용자에게 첫 실행 안내(/welcome)를 한 번 띄운다. 새 사용자 = 이번 실행에서 서버에서 새로 받은 자료로 등록 종목 0개 +
+ *    토스 연동 기록 없음 (lib/firstRun firstRunDecision). 종목이 있거나 토스가 연결되어 있으면 띄우지 않고 '건너뜀'으로 적는다.
+ *    서버에 닿지 않는 동안은 아무것도 적지 않고 기다린다. 저절로 여는 것은 탭 첫 화면에 있을 때만 (검색·종목 상세·알림으로 연 화면을 덮지 않는다)
  */
 const LAST_EMPTY_GUIDE_KEY = "ux.lastEmptyGuide";
 const WATCH_HINT_KEY = "guide.watchHintClosed";
@@ -103,38 +103,54 @@ export function FirstRunGate() {
   const { firstRun } = useUx();
   // undefined = 아직 읽는 중, null = 기록 없음(판단 필요)
   const [mark, setMark] = useState<FirstRunMark | null | undefined>(undefined);
-  // 이 기기의 사용 흔적 (undefined = 읽는 중)
-  const [prior, setPrior] = useState<boolean | undefined>(undefined);
   useEffect(() => {
     if (!firstRun || mark !== undefined) return;
     let alive = true;
-    void Promise.all([readFirstRun(), hasPriorUse()]).then(([m, p]) => {
-      if (!alive) return;
-      setPrior(p);
-      setMark(m);
-    });
+    void readFirstRun().then((m) => alive && setMark(m));
     return () => {
       alive = false;
     };
   }, [firstRun, mark]);
   if (!firstRun || mark !== null) return null;
-  return <FirstRunProbe prior={prior} onDone={setMark} />;
+  return <FirstRunProbe onDone={setMark} />;
 }
 
-/** 기록이 없을 때만 붙는다: 사용 흔적으로 한 번 정한다 (정하면 부모가 이 부품을 내려 내비게이션 상태 구독도 끝난다) */
-function FirstRunProbe({ prior, onDone }: { prior: boolean | undefined; onDone: (m: FirstRunMark) => void }) {
+/**
+ * 기록이 없을 때만 붙는다: 서버 자료(등록 종목·/health 의 토스 연동)로 한 번 정한다. 정하면 부모가 이 부품을 내려 조회 구독·내비게이션 상태 구독도 끝난다.
+ * 등록 종목 조회는 잔고 탭과 같은 쿼리(키 stocks)라 보통 요청이 늘지 않는다
+ */
+function FirstRunProbe({ onDone }: { onDone: (m: FirstRunMark) => void }) {
+  const stocks = useRegisteredStocks();
+  const health = useHealth();
   // 루트 내비게이터가 준비된 뒤에만, 탭 첫 화면에 있을 때만 화면을 연다 (다른 화면이면 탭으로 돌아올 때까지 기다린다)
   const ready = !!useRootNavigationState()?.key;
   const onTab = autoOpenPath(usePathname());
+  const now = firstRunDecision({ data: stocks.data, updatedAt: stocks.dataUpdatedAt }, { data: health.data, updatedAt: health.dataUpdatedAt }, BOOT_AT);
+  // 한 번 '보임'으로 정하면 이번 실행 동안 그대로 둔다 (탭으로 돌아오기 전에 검색에서 종목을 추가해도 안내는 한 번 보인다 — 렌더 중 이전 값 저장 패턴)
+  const [shown, setShown] = useState(false);
+  if (now === "show" && !shown) setShown(true);
+  const decision = shown ? "show" : now;
   useEffect(() => {
-    const d = firstRunDecision(prior);
-    if (d === "existing") {
+    if (decision === "existing") {
       void markFirstRun("existing");
       onDone("existing");
-    } else if (d === "show" && ready && onTab) {
+      return;
+    }
+    if (decision !== "show" || !ready || !onTab) return;
+    let alive = true;
+    // 띄우기 직전에 기록을 다시 읽는다: 그 사이 설정 > 정보 '다시 보기'로 안내를 열었으면 '본 것'이 적혀 있다 (안내 화면도 claimFirstRun 을 가져간다)
+    void readFirstRun().then((m) => {
+      if (!alive) return;
+      if (m !== null) {
+        onDone(m);
+        return;
+      }
       onDone("seen");
       if (claimFirstRun()) router.push("/welcome");
-    }
-  }, [prior, ready, onTab, onDone]);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [decision, ready, onTab, onDone]);
   return null;
 }

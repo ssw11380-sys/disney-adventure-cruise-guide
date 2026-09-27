@@ -7,14 +7,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useHealth } from "@/api/hooks";
 import { Screen } from "@/components/Screen";
 import { Button, Card, Muted } from "@/components/ui";
-import { markFirstRun } from "@/lib/firstRun";
+import { claimFirstRun, markFirstRun } from "@/lib/firstRun";
 import { notifyLine, tossLine, WIDGET_STEPS, type Tone } from "@/lib/welcome";
 import { font, layout, space, useTheme, type Theme } from "@/theme";
 
 /**
  * 첫 실행 안내 한 화면 (3-24, 기능 플래그 firstRun — 새 사용자에게 한 번 저절로, 설정 > 정보에서 언제든 다시).
  * 세 가지만: 홈 화면 위젯 추가법 · 알림 권한 · 토스증권 연동 상태. 서버 주소·토큰 입력 단계는 없다 (토큰은 APK 에 있다).
- * '시작하기' 한 번(또는 뒤로 가기)으로 닫힌다. 열리는 순간 '본 것'으로 적어 다시 저절로 뜨지 않는다 (lib/firstRun)
+ * '시작하기' 한 번(또는 뒤로 가기)으로 닫힌다. 열리는 순간 '본 것'으로 적고 이번 실행의 저절로 열기 몫도 가져가 다시 저절로 뜨지 않는다
+ * (설정에서 먼저 열어도 — lib/firstRun claimFirstRun)
  */
 export default function WelcomeScreen() {
   const t = useTheme();
@@ -23,6 +24,7 @@ export default function WelcomeScreen() {
   const [perm, setPerm] = useState<{ status: string | null; canAskAgain: boolean } | null>(null);
 
   useEffect(() => {
+    claimFirstRun();
     void markFirstRun("seen");
     let alive = true;
     Notifications.getPermissionsAsync()
