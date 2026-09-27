@@ -143,6 +143,17 @@ describe("서버에 연결되지 않으면 알림·토스 빈 칸 안내 + 버�
     expect(h.scrollTo).toHaveBeenCalledWith({ y: 692, animated: true });
   });
 
+  it("칸 자리를 알기 전에 두 번 불려도(개발 모드의 effect 두 번 등) 자리를 알려 오면 스크롤한다", () => {
+    h.health = { data: undefined, isError: true, error: new ApiRequestError(0, "NETWORK", "x") };
+    const r = draw({ emptyGuide: true });
+    const gap = () => r.all().find((n) => n.type === "Button" && n.props.title === "서버 연결 열기")!;
+    r.act(() => (gap().props.onPress as () => void)());
+    r.act(() => (gap().props.onPress as () => void)());
+    expect(h.scrollTo).not.toHaveBeenCalled();
+    layout(connectBox(r), 640, 300);
+    expect(h.scrollTo).toHaveBeenCalledWith({ y: 632, animated: true });
+  });
+
   it("토큰 없음(제한된 응답)도 같은 안내, 연결되면 없음, 꺼져 있으면 예전 글", () => {
     h.health = { data: { ok: true, limited: true }, isError: false, error: null };
     const r = draw({ emptyGuide: true });

@@ -68,10 +68,14 @@ export default function SettingsScreen() {
   };
   const revealConnect = () => {
     const p = connectPos.current;
-    // 이미 펼쳐져 있으면 바로 스크롤, 접혀 있으면 펼친 뒤(칸 높이가 바뀌어 자리를 다시 알려 올 때) 스크롤
-    p.pending = !p.expanded;
+    // 이미 펼쳐져 있고 자리를 알면 바로 스크롤. 아니면 펼친 뒤 칸이 자리를 알려 올 때(처음 그릴 때·펼쳐 높이가 바뀔 때) 스크롤 —
+    // 펼치기 전 자리로 한 번 스크롤해도 펼친 모습을 알려 올 때까지 기다린다 (펼치기 전에는 목록이 짧아 끝까지 못 내려갈 수 있다)
+    p.pending = true;
     setAdvanced(true);
-    scrollToConnect();
+    if (p.known && p.expanded) {
+      p.pending = false;
+      scrollToConnect();
+    }
   };
   useEffect(() => {
     connectPos.current.expanded = advanced;
@@ -88,7 +92,7 @@ export default function SettingsScreen() {
     p.card = e.nativeEvent.layout.y;
     p.known = true;
     if (p.pending) {
-      p.pending = false;
+      if (p.expanded) p.pending = false;
       scrollToConnect();
     }
   };
@@ -321,7 +325,8 @@ export default function SettingsScreen() {
             칸은 최대 폭(colMax)까지만 넓어지고, 남는 폭은 두 칸 사이로만 (칸은 화면 양 끝에 붙는다 — 가운데로 모으지 않는다).
             두 칸이 안 들어가는 넓은 창(폭 600~687 — 한 칸 최소 폭은 글자 크기와 상관없다)은 같은 틀을 세로로 쌓아 한 칸: 카드 차례는 휴대폰과 같고(정보는 맨 끝),
             한 칸 ↔ 두 칸이 바뀌어도 카드가 같은 자리에 남아 펼침 상태·입력 중인 값이 그대로다 (정보 카드만 옮겨진다 — 상태 없음) */}
-        <View style={two ? styles.columns : styles.stacked} onLayout={onLayout}>
+        {/* 오른쪽 기둥 자리 재기('설정 열기'로 왔을 때 스크롤): 나중에 붙인 onLayout 은 자리가 바뀌기 전까지 알려 오지 않아 플래그를 받는 순간 한 번 새로 그린다 */}
+        <View key={ux.connectionGuide ? "cols-cg" : undefined} style={two ? styles.columns : styles.stacked} onLayout={onLayout}>
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
             {display}
             {notify}

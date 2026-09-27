@@ -376,7 +376,13 @@ export default function StockDetailScreen() {
 
         {/* 시세 머리 */}
         {/* 보유 한 줄이 있으면 위아래 여백을 12 → 8 로 줄여 그 줄이 차트 아래 칩 줄을 밀어내는 만큼을 조금 되찾는다 (475×663 · 글자 115%) */}
-        <View style={[styles.quoteHead, ...(hold ? [styles.quoteHeadTight] : []), { backgroundColor: t.surface, borderBottomColor: t.line }]} {...(ux.oneHand ? { onLayout: onHeadLayout } : null)}>
+        {/* 머리 현재가(oneHand)용 자리 재기: 이미 그려진 칸에 onLayout 을 나중에 붙이면 자리가 바뀌기 전까지 알려 오지 않으므로
+            플래그를 처음 받는 순간 시세 머리를 한 번 새로 그린다 (key). 꺼져 있으면 key·onLayout 없이 지금 그대로 */}
+        <View
+          key={ux.oneHand ? "head-oh" : undefined}
+          style={[styles.quoteHead, ...(hold ? [styles.quoteHeadTight] : []), { backgroundColor: t.surface, borderBottomColor: t.line }]}
+          {...(ux.oneHand ? { onLayout: onHeadLayout } : null)}
+        >
           {/* 부제목 (넓은 창 머리의 subtitle 과 같은 글 — 이름이 있으면 끝에, 끝이 잘려도 코드·시장·상태는 보인다) */}
           <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={1}>
             {s.code} · {s.market}
