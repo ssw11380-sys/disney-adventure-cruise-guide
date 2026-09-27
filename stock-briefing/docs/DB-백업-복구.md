@@ -6,7 +6,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 넣는 것 | 운영(SQLite): 한 시점의 DB 파일 전체(`VACUUM INTO`, 쓰는 중이어도 일관됨). Postgres 로 옮긴 경우: 등록 종목·meta·브리핑·분석·기기·앱 오류를 한 트랜잭션에서 JSON 으로 |
+| 넣는 것 | 운영(SQLite): 한 시점의 DB 파일 전체(`VACUUM INTO`, 쓰는 중이어도 일관됨). Postgres 로 옮긴 경우: 등록 종목·meta·브리핑·분석·기기·앱 오류·계좌 브리핑·시장 요약·매매 기록(일별 계좌 스냅샷 `account_snapshots`·체결 `trade_executions`, 3-36)을 한 트랜잭션에서 JSON 으로 |
 | 주기 | 하루 1번, 한국 07시대 (미국 장 마감 뒤·NXT 개장 전). 26시간 넘게 못 했으면 바로. 실패하면 3시간 뒤 다시 |
 | 보관 | 볼륨 안 `/app/data/backups/backup-YYYYMMDD-HHMMSS.sbk`, 날짜별 1개씩 최근 7일 (같은 날 수동 백업은 가장 새것만) |
 | 암호화 | gzip → AES-256-GCM, 키는 Railway 변수 `BACKUP_KEY` 를 scrypt(파일마다 salt)로 늘려 씀. 저장소에는 키·백업 없음 |

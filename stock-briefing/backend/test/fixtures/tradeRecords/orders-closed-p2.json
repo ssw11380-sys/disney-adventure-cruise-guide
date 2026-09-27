@@ -1,0 +1,10 @@
+{
+  "result": {
+    "orders": [
+      { "orderId": "ord-soxl-0", "symbol": "SOXL", "side": "BUY", "orderedAt": "2026-09-01T23:00:00+09:00", "execution": { "filledQuantity": "10", "filledAmount": "320.4", "filledAt": "2026-09-01T23:00:01+09:00" } },
+      { "orderId": "ord-soxl-1", "symbol": "SOXL", "side": "BUY", "orderedAt": "2026-09-23T22:40:00+09:00", "execution": { "filledQuantity": "20", "filledAmount": "700", "filledAt": "2026-09-23T22:40:02+09:00" } }
+    ],
+    "nextCursor": null,
+    "hasNext": false
+  }
+}

@@ -573,7 +573,23 @@ export interface Health {
   llmConfigured?: boolean;
   /** 최근 7일 앱 오류 수 (시험 보고 제외) */
   appErrors?: { days: number; total: number; fatal: number } | null;
+  /** 매매 기록 상태 (3-36 서버부터, 서버 플래그 tradeRecords 가 켜져 있을 때만). 예전 서버·꺼짐이면 없음 */
+  tradeRecords?: TradeRecordsHealth | null;
   disclaimer: string;
+}
+
+/** 매매 기록(3-36) 상태 가운데 앱이 쓰는 칸 — 서버가 일별 계좌 스냅샷·체결을 쌓고 있는지 (읽기만) */
+export interface TradeRecordsHealth {
+  /** 서버에 토스 키가 있는지 (없으면 기록을 찍지 않음) */
+  toss: boolean;
+  /** 기록 시작일 YYYY-MM-DD (아직 없으면 null) */
+  since: string | null;
+  /** 스냅샷을 저장한 날 수 (한국·미국 합쳐 날짜 기준) */
+  days: number;
+  /** 최근 5거래일 가운데 스냅샷이 없는 날 */
+  missing5?: { market: "KR" | "US"; date: string }[];
+  warning?: string | null;
+  trades?: { count: number };
 }
 
 export interface AppErrorSummary {

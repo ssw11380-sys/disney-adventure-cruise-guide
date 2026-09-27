@@ -48,6 +48,8 @@ import { defaultSummarySources, MarketSummaryService } from "./services/marketSu
 import { SUMMARY_WAIT_MS } from "./services/marketSummaryCalc.js";
 import { GoogleNewsRssProvider } from "./providers/news/googleRss.js";
 import { registerPollSaver } from "./lib/pollSaver.js";
+import { TradeRecordService } from "./services/tradeRecordService.js";
+import { tradeRecordAdminRoutes, tradeRecordRoutes } from "./routes/tradeRecords.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -159,6 +161,28 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     }
     tossDeps = { provider: opts.providers.tossOpenApi, sync, autoSync, live, outboundIp, reconcile };
   }
+  // 매매 기록 기반 (3-36, 플래그 tradeRecords): 시장마다 장 마감 뒤 계좌 스냅샷 1줄 + 토스 주문 내역의 체결 저장. 토스 키가 있을 때만 예약이 돌고
+  // (1분마다 확인, 서버를 켜면 1분 뒤 놓친 스냅샷 따라잡기), 키가 없으면 읽기만. 미국 원화 합계는 원화 장부와 같은 표시 환율
+  const tradeRecords = new TradeRecordService({
+    db: opts.db,
+    toss: opts.providers.tossOpenApi,
+    features,
+    displayFx: opts.providers.fundamentals ? () => opts.providers.fundamentals!.usdKrw() : null,
+    isTradingDate: (market, date) => opts.providers.calendar.isTradingDate(market, date),
+    now,
+    log,
+  });
+  if (opts.providers.tossOpenApi && opts.enableScheduler !== false) {
+    tradeRecords.start();
+    app.addHook("onClose", async () => tradeRecords.stop());
+    // 토스 실시간 체결 알림으로 본 종목을 기억해, 하루 안에 사고팔아 보유에 남지 않은 종목의 주문 내역도 받는다 (자동 동기화가 켜져 있을 때만 알림이 옴)
+    opts.providers.live?.on("order", (data: unknown) => {
+      if ((data as { event?: string } | null)?.event === "FILL" || (data as { event?: string } | null)?.event === "PARTIAL_FILL") {
+        void tradeRecords.noteOrderEvent(data).catch((e: unknown) => log.warn({ err: e instanceof Error ? e.message : String(e) }, "매매 기록: 체결 알림 기록 실패"));
+      }
+    });
+  }
+
   // 서버 → 앱 실시간 가격 스트림 (/api/stream). 토스 웹소켓 체결을 250ms 씩 모아 중계하고, 웹소켓이 없는 종목만 앱이 붙어 있는 동안 3초 폴링
   const priceStream = new PriceStream({
     live: opts.providers.live,
@@ -262,6 +286,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("notificationService", notificationService);
   app.decorate("settingsStore", settingsStore);
   app.decorate("priceStream", priceStream);
+  app.decorate("tradeRecords", tradeRecords);
 
   // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
   app.addHook("onRequest", async (req) => {
@@ -361,6 +386,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     quotes: stockService.quoteStatus(),
     candles: stockService.candleStatus(),
     backup: await backups.status().catch(() => null),
+    // 매매 기록(3-36): 켜져 있을 때만 (끄면 응답이 예전과 같게). 최근 5·30거래일 스냅샷이 빠진 날이 있으면 warning — ok 는 그대로 true
+    ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
     disclaimer: DISCLAIMER,
   });
 
@@ -465,6 +492,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}) });
   await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
+  await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
+  await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
@@ -488,6 +517,8 @@ declare module "fastify" {
     notificationService: NotificationService;
     settingsStore: NotificationSettingsStore;
     priceStream: PriceStream;
+    /** 매매 기록 (3-36): 일별 스냅샷·체결 저장. 브리핑 '어제와 비교'는 previousSnapshot 을 쓴다 */
+    tradeRecords: TradeRecordService;
   }
 }
 
