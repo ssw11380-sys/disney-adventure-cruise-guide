@@ -68,6 +68,8 @@ export default function BriefingsScreen() {
   const summary = marketCardItem(summaryOn, summaries.data);
   // 브리핑 2차 4 (플래그 briefingTrim, 앱 fallback 꺼짐): 틀린 문장·되풀이 정리. 여기서 한 번 읽어 카드·줄에 trim 으로 넘긴다. 꺼지면 지금 그대로
   const trim = useFeature("briefingTrim", false);
+  // 브리핑 2차 6 (플래그 briefingSafeWording, 앱 fallback 꺼짐): 접은 화면 종목 카드 날짜 줄 끝 ' · AI가 쓴 글'. 여기서 한 번 읽어 카드에 넘긴다. 꺼지면 지금 그대로
+  const aiTag = useFeature("briefingSafeWording", false);
   // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약이 켜져 있으면 그것도)을 함께
   const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : []), ...(summaryOn ? [summaries.refetch()] : [])]));
   const [order, setOrder] = useState<Order>("movers");
@@ -321,7 +323,7 @@ export default function BriefingsScreen() {
       ) : (
         withBriefing.map((i) => {
           const selected = hlId !== null && i.latest!.id === hlId;
-          const card = <BriefingCard key={i.code} briefing={i.latest!} mode={mode} rate={movers ? (rates.get(i.code) ?? null) : undefined} selected={selected} />;
+          const card = <BriefingCard key={i.code} briefing={i.latest!} mode={mode} rate={movers ? (rates.get(i.code) ?? null) : undefined} selected={selected} aiTag={aiTag} />;
           return selected ? (
             <View key={i.code} onLayout={onHighlightLayout}>
               {card}

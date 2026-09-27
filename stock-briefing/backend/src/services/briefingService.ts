@@ -5,7 +5,12 @@ import { NotFoundError } from "../lib/errors.js";
 import { seoulDate, seoulIso } from "../lib/time.js";
 import { GenerationError, type TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptStore } from "../llm/prompts.js";
+import type { TechnicalSummary } from "../analysis/indicators.js";
+import { cleanDetail, cleanPrevious, codeSummaryLine, normalizeSummary, secondLine, sourceText, unknownNumbers } from "./briefingWording.js";
 import type { BriefingSnapshot, DataCollector } from "./collector.js";
+
+// 요약 정리(normalizeSummary)는 검사기(briefingWording.ts)와 함께 쓰므로 그쪽에 두고, 예전 이름 그대로 여기서도 내보낸다
+export { normalizeSummary };
 
 export type BriefingSession = "morning" | "afternoon";
 export const SESSION_LABEL: Record<BriefingSession, string> = { morning: "오전 (장 시작 전)", afternoon: "오후 (장 마감 후)" };
@@ -59,6 +64,11 @@ export interface BriefingServiceDeps {
   calendar?: { isTradingDate(market: "KR" | "US", date: string): Promise<boolean> } | null;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
+  /**
+   * 종목 브리핑 AI 글 안전하게 (브리핑 2차 6, 플래그 briefingSafeWording): 새 프롬프트·지지/저항 후보 빼기·가격 줄 요약·금지어 검사.
+   * 브리핑 한 건을 만들 때 한 번 읽는다. 없거나 읽기가 실패하면 끔 (예전 프롬프트·요약 그대로)
+   */
+  safeWording?: () => Promise<boolean>;
 }
 
 export interface BriefingListener {
@@ -247,6 +257,17 @@ export class BriefingService {
     return prev ? `${prev.briefing_date} ${prev.session === "morning" ? "오전" : "오후"}: ${prev.summary}` : null;
   }
 
+  /** 플래그 briefingSafeWording (브리핑 2차 6). 의존성이 없거나 읽기가 실패하면 끔 */
+  private async safeWordingOn(): Promise<boolean> {
+    const read = this.deps.safeWording;
+    if (!read) return false;
+    try {
+      return (await read()) === true;
+    } catch {
+      return false;
+    }
+  }
+
   async generateOne(stock: RegisteredStock, session: BriefingSession, date = seoulDate(this.now())): Promise<Briefing> {
     return (await this.generate(stock, session, date)).briefing;
   }
@@ -261,9 +282,12 @@ export class BriefingService {
     date: string,
   ): Promise<{ briefing: Briefing; changeRate: number | null; error: string | null }> {
     const log = this.deps.log;
+    // 브리핑 2차 6: 한 건을 만드는 동안 같은 값을 쓴다 (꺼져 있으면 프롬프트·데이터·요약·상세가 예전과 한 글자도 같다)
+    const safe = await this.safeWordingOn();
     const [snapshot, previous] = await Promise.all([this.deps.collector.collectBriefing(stock), this.previousSummary(stock.code, date, session)]);
     // 평균 단가는 종목 통화로 저장된다 (미국은 달러). JSON 의 quote.currency 와 맞추고, 시세를 못 받았으면 코드 규칙으로
     const currency: Currency = snapshot.quote?.currency ?? (isKrCode(stock.code) ? "KRW" : "USD");
+    const source = safe ? sourceText(snapshot) : "";
     const vars = {
       stock_name: stock.name,
       stock_code: stock.code,
@@ -274,8 +298,9 @@ export class BriefingService {
       missing_list: snapshot.missing.length ? snapshot.missing.join(", ") : "없음",
       notes_list: snapshot.notes?.length ? snapshot.notes.join(" / ") : "없음",
       market_state: snapshot.marketState?.label ?? "확인 안 됨",
-      previous_summary: previous ?? "없음 (첫 브리핑)",
-      data_json: JSON.stringify(snapshotForPrompt(snapshot), null, 1),
+      // 켜져 있으면 예전 형식 요약의 '체크포인트·저항' 줄을 빼고 넘긴다
+      previous_summary: previous === null ? "없음 (첫 브리핑)" : safe ? cleanPrevious(previous, source) : previous,
+      data_json: JSON.stringify(snapshotForPrompt(snapshot, { safe }), null, 1),
     };
 
     let detail = "";
@@ -283,7 +308,8 @@ export class BriefingService {
     let model = this.deps.generator.model;
     let error: string | null = null;
     try {
-      const detailPrompt = await this.deps.prompts.load("briefing_detail");
+      // 모델 호출 label 은 켜도 꺼도 같다 (briefing_detail:코드 · briefing_summary:코드)
+      const detailPrompt = await this.deps.prompts.load(safe ? "briefing_detail_safe" : "briefing_detail");
       const d = await this.deps.generator.generate({
         system: detailPrompt.system,
         user: renderTemplate(detailPrompt.userTemplate, vars),
@@ -294,8 +320,11 @@ export class BriefingService {
       detail = d.text;
       model = d.model;
       log?.info({ code: stock.code, usage: d.usage }, "상세 브리핑 생성");
+      // 켜져 있으면 걸린 줄을 뺀 상세를 저장하고 요약 모델에도 그것을 넘긴다
+      const cleaned = safe ? cleanDetail(d.text, source) : null;
+      if (cleaned) detail = cleaned.text;
 
-      const summaryPrompt = await this.deps.prompts.load("briefing_summary");
+      const summaryPrompt = await this.deps.prompts.load(safe ? "briefing_summary_safe" : "briefing_summary");
       const s = await this.deps.generator.generate({
         system: summaryPrompt.system,
         user: renderTemplate(summaryPrompt.userTemplate, { ...vars, detail }),
@@ -303,7 +332,16 @@ export class BriefingService {
         effort: "low",
         label: `briefing_summary:${stock.code}`,
       });
-      summary = normalizeSummary(s.text);
+      if (cleaned) {
+        // 첫 줄은 시세로 만든 가격 줄, 둘째 줄은 검사를 통과한 모델 한 줄 또는 개수 줄
+        const second = secondLine(snapshot, s.text);
+        summary = `${codeSummaryLine(snapshot.quote)}\n${second.line}`;
+        // 숫자 대조는 로그만 (거절하지 않는다). 브리핑 1건에 1줄
+        const known = [vars.data_json, vars.avg_price, vars.quantity, vars.date].join("\n");
+        log?.info({ code: stock.code, dropped: cleaned.dropped, secondLine: second.from, unknownNumbers: unknownNumbers(detail, known) }, "종목 브리핑 문장 검사");
+      } else {
+        summary = normalizeSummary(s.text);
+      }
     } catch (e) {
       error = e instanceof GenerationError ? `${e.kind}: ${e.message}` : (e as Error).message;
       log?.warn({ code: stock.code, err: error }, "브리핑 생성 실패");
@@ -464,17 +502,6 @@ export function briefingMarketDate(market: "KR" | "US", session: BriefingSession
   return d.toISOString().slice(0, 10);
 }
 
-/** 요약은 알림 본문이므로 마크다운 기호를 걷어내고 3줄로 제한 */
-export function normalizeSummary(text: string): string {
-  return text
-    .split(/\r?\n/)
-    // 앞의 글머리 기호(-, *, •)나 번호(1. / 2) / 3:)만 걷어낸다. "189만원…" 처럼 숫자로 시작하는 본문은 남겨야 한다.
-    .map((l) => l.replace(/^\s*(?:[-*•]\s+|\d{1,2}\s*[.):]\s+)?/, "").replace(/[*_`#]/g, "").trim())
-    .filter((l) => l.length > 0)
-    .slice(0, 3)
-    .join("\n");
-}
-
 /** 프롬프트에 넣는 가격 표기. 시스템 프롬프트의 통화 규칙과 같게 KRW "184,000원", USD "$340.22" */
 function promptPrice(n: number, currency: Currency): string {
   return currency === "USD" ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}` : `${n.toLocaleString("ko-KR")}원`;
@@ -485,18 +512,32 @@ function kstMinute(iso: string): string {
   return Number.isNaN(t) ? iso.slice(0, 16) : new Date(t + 9 * 3_600_000).toISOString().slice(0, 16);
 }
 
-/** 프롬프트에 넣을 때 토큰을 아끼기 위해 불필요한 필드를 줄인다 */
-export function snapshotForPrompt(s: BriefingSnapshot): Record<string, unknown> {
+/**
+ * 프롬프트에 넣을 때 토큰을 아끼기 위해 불필요한 필드를 줄인다.
+ * safe(브리핑 2차 6): 기술 지표에서 지지·저항 후보(supportResistance)·RSI 구간 이름(rsiZone)·MACD 교차 이름(macdCross)을 뺀다 —
+ * 모델이 가격 신호로 옮겨 쓰지 않게 (나머지 수치와 maAlignment 는 그대로). 옵션이 없으면 예전과 같은 객체
+ */
+export function snapshotForPrompt(s: BriefingSnapshot, opts: { safe?: boolean } = {}): Record<string, unknown> {
   return {
     stock: s.stock,
     marketState: s.marketState ? { phase: s.marketState.phase, label: s.marketState.label, lastRegularDate: s.marketState.lastRegularDate } : null,
     quote: s.quote,
     holding: s.holding,
-    technical: s.technical,
+    technical: opts.safe ? withoutSignals(s.technical) : s.technical,
     recentCandles: s.recentCandles,
     // 뉴스 시각은 한국 시간으로 맞춰 넣는다 (네이버는 +09:00, 구글은 Z 로 와서 섞이면 모델이 헷갈린다)
     news: s.news?.map((n) => ({ title: n.title, source: n.source, publishedAt: kstMinute(n.publishedAt), summary: n.summary })),
     disclosures: s.disclosures?.map((d) => ({ title: d.title, filedAt: d.filedAt, filer: d.filer })),
     investorFlow: s.investorFlow,
   };
+}
+
+/** 기술 지표에서 신호 이름·후보 가격(지지·저항 후보, RSI 구간, MACD 교차)을 뺀 사본 */
+function withoutSignals(t: TechnicalSummary | null): Omit<TechnicalSummary, "supportResistance" | "rsiZone" | "macdCross"> | null {
+  if (!t) return null;
+  const out: Partial<TechnicalSummary> = { ...t };
+  delete out.supportResistance;
+  delete out.rsiZone;
+  delete out.macdCross;
+  return out as Omit<TechnicalSummary, "supportResistance" | "rsiZone" | "macdCross">;
 }

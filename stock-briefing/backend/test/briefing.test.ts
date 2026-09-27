@@ -40,6 +40,8 @@ describe("briefing pipeline", () => {
     await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
     await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "000660", quantity: 10, avgPrice: 150_000 } });
     await app.inject({ method: "POST", url: "/api/stocks", payload: { code: "005930" } });
+    // 브리핑 2차 6: 이 describe 는 예전 프롬프트·3줄 요약(플래그 briefingSafeWording 끔)의 증거다 — 켠 동작은 briefingSafe.test.ts
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingSafeWording: false } });
   });
 
   afterEach(async () => {
@@ -242,6 +244,8 @@ describe("브리핑 입력의 평균 단가 통화 (B1)", () => {
     ]) {
       expect((await app.inject({ method: "POST", url: "/api/stocks", payload })).statusCode, payload.code).toBe(201);
     }
+    // 브리핑 2차 6: 끈 상태의 입력 (켠 상태는 briefingSafe.test.ts)
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingSafeWording: false } });
   });
 
   afterEach(async () => {

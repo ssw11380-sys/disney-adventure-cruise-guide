@@ -7,6 +7,7 @@ import { formatDateKo, formatPct, SESSION_LABEL } from "@/lib/format";
 import { font, slopFor, space, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
 import { sentence, speakRate } from "@/lib/a11y";
+import { AI_TAG } from "@/lib/disclaimer";
 import { MarkdownView } from "./MarkdownView";
 import { Badge, Card, ChangeText, Muted } from "./ui";
 
@@ -20,6 +21,7 @@ export function BriefingCard({
   showName = true,
   rate,
   selected = false,
+  aiTag = false,
 }: {
   briefing: Briefing;
   mode: "line" | "summary" | "detail";
@@ -28,9 +30,12 @@ export function BriefingCard({
   rate?: number | null;
   /** 넓은 창에서 보던 브리핑 (3-42 접고 펴기 이어 보기 — 접은 화면에서 이 카드를 강조). 기본 false = 지금 모양 그대로 */
   selected?: boolean;
+  /** 날짜 줄 끝에 ' · AI가 쓴 글' (브리핑 2차 6, 플래그 briefingSafeWording — 부르는 곳이 플래그를 읽어 넘긴다). 실패 브리핑에는 붙이지 않는다. 기본 false = 지금 그대로 */
+  aiTag?: boolean;
 }) {
   const t = useTheme();
   const failed = briefing.status === "failed";
+  const ai = aiTag && !failed;
   const lines = briefing.summary.split("\n").filter(Boolean);
   return (
     <Card style={selected ? { borderLeftWidth: FB.selBar, borderLeftColor: t.accent, paddingLeft: space.lg - FB.selBar } : undefined}>
@@ -41,6 +46,7 @@ export function BriefingCard({
         accessibilityLabel={sentence([
           showName ? (briefing.name ?? briefing.code) : null,
           `${formatDateKo(briefing.date)} ${SESSION_LABEL[briefing.session]} 브리핑`,
+          ai ? AI_TAG : null,
           rate !== undefined ? speakRate(rate) : null,
           failed ? "생성 실패" : briefing.missing.length ? "일부 데이터 없음" : null,
         ])}
@@ -55,7 +61,7 @@ export function BriefingCard({
             </Text>
           ) : null}
           <Muted>
-            {formatDateKo(briefing.date)} {SESSION_LABEL[briefing.session]} 브리핑
+            {formatDateKo(briefing.date)} {SESSION_LABEL[briefing.session]} 브리핑{ai ? ` · ${AI_TAG}` : null}
           </Muted>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>

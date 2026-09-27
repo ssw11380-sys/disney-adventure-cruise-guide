@@ -217,7 +217,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     log,
   });
   const prompts = opts.promptStore ?? new PromptStore();
-  const briefingService = new BriefingService({ db: opts.db, collector, generator: opts.providers.generator, prompts, calendar: opts.providers.calendar, log, now });
+  const briefingService = new BriefingService({
+    db: opts.db, collector, generator: opts.providers.generator, prompts, calendar: opts.providers.calendar, log, now,
+    // 브리핑 2차 6: 종목 브리핑 AI 글 안전하게 (새 프롬프트·가격 줄 요약·금지어 검사)
+    safeWording: () => features.enabled("briefingSafeWording"),
+  });
   const analysisService = new AnalysisService({ db: opts.db, collector, generator: opts.providers.generator, prompts, lookup: (code) => stockService.preview(code), now });
 
   // 알림/시간 설정: DB 에 저장된 값이 .env 기본값을 덮어쓴다

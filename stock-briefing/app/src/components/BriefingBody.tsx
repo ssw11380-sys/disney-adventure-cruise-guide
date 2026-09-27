@@ -14,6 +14,7 @@ import { CardsSkeleton } from "@/components/Skeleton";
 import { Badge, Button, Card, ChangeText, ErrorView, Muted, Row, SectionTitle, Segmented } from "@/components/ui";
 import { sentence, speakAmount, speakMove, speakProfit, speakRate } from "@/lib/a11y";
 import { createdTimeSameDay } from "@/lib/briefingPick";
+import { AI_NOTE } from "@/lib/disclaimer";
 import { estimateText } from "@/lib/briefingRun";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
@@ -55,6 +56,8 @@ export function BriefingBody({
   const sourcesOn = useFeature("briefingSources", true); // 이미 나간 기능(3-12)
   const { run } = useStockMutations();
   const regenOn = useFeature("briefingManualRun", false); // 새 기능(3-19): 서버가 켤 때만
+  // 브리핑 2차 6 (플래그 briefingSafeWording, 앱 fallback 꺼짐): 머리에 'AI가 쓴 글 · 틀릴 수 있음' 한 줄 (실패 브리핑에는 없음). 꺼지면 지금 그대로
+  const aiOn = useFeature("briefingSafeWording", false);
   // 2단 오른쪽 칸: 도구 줄의 '근거 뉴스 N · 공시 N' 을 누르면 아래 근거 자료로 스크롤한다
   const scrollRef = useRef<ScrollView | null>(null);
   const sourcesY = useRef<number | null>(null);
@@ -67,6 +70,7 @@ export function BriefingBody({
   const d = b.data!;
   const q = d.data?.quote ?? null;
   const failed = d.status === "failed";
+  const ai = aiOn && !failed;
   const open = (next: number) => (onPick ? onPick(next, d.code) : router.replace(`/briefings/${next}`));
 
   const regen = regenOn ? (
@@ -161,6 +165,7 @@ export function BriefingBody({
           <Muted>
             {formatDateKo(d.date)} {SESSION_LABEL[d.session]} 브리핑 · {formatDateKo(d.createdAt, true)} 생성
           </Muted>
+          {ai ? <Muted>{AI_NOTE}</Muted> : null}
           <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.xs }}>
             {failed ? <Badge tone="bad">생성 실패</Badge> : null}
             {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
@@ -238,7 +243,7 @@ export function BriefingBody({
           side={side}
           left={
             <>
-              <Head d={d} />
+              <Head d={d} ai={ai} />
               {sources}
               {regen}
               {past}
@@ -260,7 +265,7 @@ export function BriefingBody({
   return (
     <Screen disclaimer scrollRef={scrollRef}>
       <View>
-        <Head d={d} />
+        <Head d={d} ai={ai} />
         {toolbar}
         {bodyText}
       </View>
@@ -308,9 +313,10 @@ const SOURCE_SLOP = slopFor(Math.round(font.small * 1.45));
  * 넓은 창 본문 머리 (목업): 이름 · 날짜·세션·만든 시각 · (배지) | [종목 보기] / 숫자 칸(라벨 위, 숫자 아래).
  * [종목 보기]는 늘 첫 줄 오른쪽 끝(위쪽에 붙임 — 글이 두 줄이어도 두 줄 사이에 뜨지 않게)에 두고, 왼쪽 글 묶음만 줄바꿈한다 —
  * 폭이 모자라면 '날짜 세션 브리핑 ·' 과 '만든 시각 생성' 이 묶음째 다음 줄로 간다 ('… 08:02 생' / '성' 처럼 글자 가운데서 꺾이지 않고,
- * 버튼이 혼자 둘째 줄로 떨어지지 않게). 이름만 말줄임할 수 있다
+ * 버튼이 혼자 둘째 줄로 떨어지지 않게). 이름만 말줄임할 수 있다.
+ * ai(브리핑 2차 6): 시각 조각 끝에 ' ·' 를 붙이고 'AI가 쓴 글 · 틀릴 수 있음' 조각을 하나 더 (같은 규칙으로 묶음째 줄바꿈)
  */
-function Head({ d }: { d: BriefingWithData }) {
+function Head({ d, ai = false }: { d: BriefingWithData; ai?: boolean }) {
   const t = useTheme();
   const failed = d.status === "failed";
   const name = d.name ?? d.code;
@@ -323,7 +329,8 @@ function Head({ d }: { d: BriefingWithData }) {
             {name}
           </Text>
           <Muted style={styles.headWhen}>{`${formatDateKo(d.date)} ${SESSION_LABEL[d.session]} 브리핑 ·`}</Muted>
-          <Muted style={styles.headWhen}>{`${time ?? formatDateKo(d.createdAt, true)} 생성`}</Muted>
+          <Muted style={styles.headWhen}>{`${time ?? formatDateKo(d.createdAt, true)} 생성${ai ? " ·" : ""}`}</Muted>
+          {ai ? <Muted style={styles.headWhen}>{AI_NOTE}</Muted> : null}
           {failed ? <Badge tone="bad">생성 실패</Badge> : null}
           {d.missing.length ? <Badge tone="warn">미확인 {d.missing.length}건</Badge> : null}
         </View>

@@ -954,7 +954,7 @@ function withFinal(f: number): string {
   return Array.from({ length: 19 * 21 }, (_, k) => String.fromCharCode(0xac00 + k * 28 + f)).join("");
 }
 /** 받침이 ㄹ 인 글자 ('할·될·오를·흔들릴·달라질') */
-const RIEUL_FINAL = withFinal(8);
+export const RIEUL_FINAL = withFinal(8);
 /** 받침이 ㅂ 인 글자 ('합시다·늘립시다'의 '합·립') */
 const BIEUP_FINAL = withFinal(17);
 /** 받침이 ㅆ 인 글자 ('었·았·였·했·됐·났·컸·있…' — 과거형과 '있다'). '겠'(추측)은 뺀다 */
@@ -1067,7 +1067,7 @@ const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
  * 금지어가 사실 목록에 그대로 있는 더 긴 말(공시 제목 '주식매수선택권부여에관한신고'·'공개매수신고서'·종목 이름)의 일부면 넘어간다.
  * 금지어 앞뒤로 빈칸 없이 붙은 글자를 한 자씩 늘려 가며 사실에 있는지 보고, 2자 이상 늘어나면 옮겨 쓴 것으로 본다
  */
-function forbiddenIn(text: string, facts: string, re: RegExp = FORBIDDEN): string | null {
+export function forbiddenIn(text: string, facts: string, re: RegExp = FORBIDDEN): string | null {
   for (const m of text.matchAll(re)) {
     let s = m.index!;
     let e = s + m[0].length;

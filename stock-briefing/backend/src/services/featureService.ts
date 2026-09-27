@@ -103,6 +103,11 @@ export const FEATURES = {
     description:
       "브리핑 탭 틀린 문장·되풀이 정리 (브리핑 2차 4, 앱만): 탭 휴장 줄('국내 종목 브리핑 없음' → 맞는 말, 한국 요약이 휴장을 말하면 숨김), 계좌 카드·상세 휴장 줄에 브리핑 날짜, 업종 말을 부호에 맞춤, 계좌 상세 기본 설명 카드 빼기·제목 '보유분·지수·환율', 시장 요약 상세 되풀이 문장 빼기, 설정 알림 설명. 끄면 예전 글 그대로",
   },
+  briefingSafeWording: {
+    default: true,
+    description:
+      "종목 브리핑 AI 글 안전하게 (브리핑 2차 6): 새 프롬프트(평가 꼬리표·지지/저항·체크포인트·보유자 해석 없음), 지지·저항 후보를 모델에 넘기지 않음, 요약 첫 줄은 시세로 만든 가격 줄, 금지어 검사, 앱 카드·상세에 'AI가 쓴 글' 표시. 끄면 예전 프롬프트·요약·화면 그대로",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

@@ -96,6 +96,8 @@ describe("devices, settings and push", () => {
   it("브리핑이 생성되면 등록된 기기 전체에 요약이 푸시된다 (실패 건은 제외)", async () => {
     // 종목 브리핑 알림 문구를 본다 — 계좌 브리핑 앞머리(3-31)는 accountBriefing.test.ts 에서
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accountBriefing: false } });
+    // 브리핑 2차 6: 종목 1개 알림 본문 = 예전 3줄 요약 (플래그 briefingSafeWording 끔의 증거)
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingSafeWording: false } });
     await app.inject({ method: "POST", url: "/api/devices", payload: { token: TOKEN_A, platform: "android" } });
     await app.inject({ method: "POST", url: "/api/devices", payload: { token: TOKEN_B, platform: "android" } });
     await app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning" } });
