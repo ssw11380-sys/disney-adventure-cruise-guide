@@ -78,7 +78,7 @@ function AllocationBody() {
   if (view === "error")
     return (
       <Screen>
-        <ErrorView error={stocks.error} onRetry={() => void stocks.refetch()} {...(ux.emptyGuide ? { onOpenSettings: openServerSettings } : null)} />
+        <ErrorView error={stocks.error} onRetry={() => void stocks.refetch()} {...(ux.connectionGuide ? { onOpenSettings: openServerSettings } : null)} />
       </Screen>
     );
 

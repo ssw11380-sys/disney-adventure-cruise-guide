@@ -54,10 +54,10 @@ export default function SettingsScreen() {
   // 끊겼을 때 데이터 절약 (3-25): 서버 줄에 폴링 방식과 최근 응답 비율
   const saverOn = useFeature("pollSaver", false);
   const [advanced, setAdvanced] = useState(false);
-  // 3-24 (emptyGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
+  // 3-24 (emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도, lib/uxFlags connectionGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
   // 누를 때마다 새 요청이라(at) 사용자가 칸을 접은 뒤 다른 화면에서 또 눌러도 다시 펼친다. 플래그가 꺼져 있으면 검색어를 보지 않는다
   const params = useLocalSearchParams<{ open?: string; at?: string }>();
-  const openReq = ux.emptyGuide ? serverOpenRequest(params) : null;
+  const openReq = ux.connectionGuide ? serverOpenRequest(params) : null;
   const scrollRef = useRef<ScrollView | null>(null);
   // '서버 연결' 칸 자리: 칸이 든 기둥의 y(넓은 창 오른쪽 기둥, 휴대폰은 0) + 기둥 안 칸의 y. pending = 펼친 뒤 한 번 더 스크롤
   const connectPos = useRef({ col: 0, card: 0, known: false, pending: false, expanded: false });
@@ -204,10 +204,10 @@ export default function SettingsScreen() {
         서버
       </SectionTitle>
       {health.isError ? (
-        <Text style={{ color: t.danger, fontSize: font.small }}>{serverErrorText(health.error, ux.emptyGuide)}</Text>
+        <Text style={{ color: t.danger, fontSize: font.small }}>{serverErrorText(health.error, ux.connectionGuide)}</Text>
       ) : health.data?.limited ? (
         <Text style={{ color: t.danger, fontSize: font.small }}>
-          {ux.emptyGuide ? `서버에 연결됐지만 '${TOKEN_FIELD}'이 없거나 맞지 않습니다. 아래 '${SERVER_SECTION}'에서 '${TOKEN_FIELD}'을 확인하세요.` : "서버에 연결됐지만 토큰이 없거나 맞지 않습니다. 아래 서버 연결에서 토큰을 입력하세요."}
+          {ux.connectionGuide ? `서버에 연결됐지만 '${TOKEN_FIELD}'이 없거나 맞지 않습니다. 아래 '${SERVER_SECTION}'에서 '${TOKEN_FIELD}'을 확인하세요.` : "서버에 연결됐지만 토큰이 없거나 맞지 않습니다. 아래 서버 연결에서 토큰을 입력하세요."}
         </Text>
       ) : health.data ? (
         <View>
@@ -300,7 +300,7 @@ export default function SettingsScreen() {
   const toss = full ? <TossOpenApiCard /> : null;
   // 3-24 빈 칸 안내 (플래그 emptyGuide): 서버에 연결되지 않았거나 토큰이 맞지 않아 알림·토스 칸이 비었을 때 까닭과 버튼 하나
   const serverGap =
-    ux.emptyGuide && !full && (health.isError || health.data?.limited) ? (
+    ux.connectionGuide && !full && (health.isError || health.data?.limited) ? (
       <Card>
         <SectionTitle>알림 · 토스증권 연동</SectionTitle>
         <Muted>서버에 연결되면 여기에 알림 시간과 토스증권 연동 상태가 나옵니다. 아래 &apos;{SERVER_SECTION}&apos;에서 &apos;서버 주소&apos;와 &apos;{TOKEN_FIELD}&apos;을 확인하세요.</Muted>
@@ -308,13 +308,13 @@ export default function SettingsScreen() {
       </Card>
     ) : null;
   // '서버 연결' 칸 자리를 잰다 ('설정 열기'로 왔을 때 그 칸까지 스크롤 — 플래그가 꺼져 있으면 감싸지 않는다)
-  const connectBox = ux.emptyGuide ? <View onLayout={onConnectLayout}>{connect}</View> : connect;
+  const connectBox = ux.connectionGuide ? <View onLayout={onConnectLayout}>{connect}</View> : connect;
 
   if (wide)
     return (
       // 넓은 창은 탭 화면 머리를 숨기므로(공통 틀) 상태 표시줄·좌우 화면 여백을 여기서 둔다 (왼쪽은 세로 탭 막대가 있으면 막대가 맡는다)
       <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingLeft: fold.rail ? 0 : insets.left, paddingRight: insets.right }}>
-      <Screen refreshing={pulling} onRefresh={onPull} {...(ux.emptyGuide ? { scrollRef } : null)}>
+      <Screen refreshing={pulling} onRefresh={onPull} {...(ux.connectionGuide ? { scrollRef } : null)}>
         {/* 넓은 창: 칸이 좁으면 이름·값 줄의 값이 이름 아래 줄로 (큰 글씨에서도 두 칸을 지킨다) */}
         <RowWrapContext.Provider value={true}>
         {/* 두 칸: 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보. 화면 읽기는 왼쪽 칸을 끝까지 읽고 오른쪽 칸으로.
@@ -328,7 +328,7 @@ export default function SettingsScreen() {
             {serverGap}
             {two ? info : null}
           </View>
-          <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart} {...(ux.emptyGuide ? { onLayout: onColumnLayout } : null)}>
+          <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart} {...(ux.connectionGuide ? { onLayout: onColumnLayout } : null)}>
             {toss}
             <AppUpdateCard />
             {server}
@@ -342,7 +342,7 @@ export default function SettingsScreen() {
       </View>
     );
   return (
-    <Screen refreshing={pulling} onRefresh={onPull} {...(ux.emptyGuide ? { scrollRef } : null)}>
+    <Screen refreshing={pulling} onRefresh={onPull} {...(ux.connectionGuide ? { scrollRef } : null)}>
       {display}
       {notify}
       {toss}

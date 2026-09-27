@@ -1,10 +1,10 @@
 import { router, useRootNavigationState } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { useFeature, useRegisteredStocks } from "@/api/hooks";
+import { useFeatures, useRegisteredStocks } from "@/api/hooks";
 import { claimFirstRun, firstRunDecision, markFirstRun, readFirstRun, type FirstRunMark } from "@/lib/firstRun";
 import { setHapticPolicy } from "@/lib/haptics";
 import { useSettings } from "@/lib/settings";
-import { UxFlagsContext, useUx } from "@/lib/uxFlags";
+import { UxFlagsContext, useUx, uxFlagsFrom } from "@/lib/uxFlags";
 
 /**
  * 3-24 '한 손 조작·빈 화면·첫 실행 안내'의 루트 연결 (app/_layout 이 providers 안에 둔다).
@@ -13,10 +13,11 @@ import { UxFlagsContext, useUx } from "@/lib/uxFlags";
  *  - FirstRunGate: 새 사용자(등록 종목 0)에게 첫 실행 안내(/welcome)를 한 번 띄운다. 이미 종목이 있으면 띄우지 않고 '건너뜀'으로 적는다
  */
 export function UxFlagsProvider({ children }: { children: React.ReactNode }) {
-  const oneHand = useFeature("oneHand", false);
-  const firstRun = useFeature("firstRun", false);
-  const emptyGuide = useFeature("emptyGuide", false);
-  const value = useMemo(() => ({ oneHand, firstRun, emptyGuide }), [oneHand, firstRun, emptyGuide]);
+  // useFeature(키, false) 와 같은 규칙 (lib/features featureOn). 연결 오류 안내만: 플래그를 한 번도 못 받은 채 조회가 실패하면 켠다 (lib/uxFlags)
+  const features = useFeatures();
+  const next = uxFlagsFrom(features.data, features.data === undefined && features.isError);
+  const { oneHand, firstRun, emptyGuide, connectionGuide } = next;
+  const value = useMemo(() => ({ oneHand, firstRun, emptyGuide, connectionGuide }), [oneHand, firstRun, emptyGuide, connectionGuide]);
   return <UxFlagsContext.Provider value={value}>{children}</UxFlagsContext.Provider>;
 }
 

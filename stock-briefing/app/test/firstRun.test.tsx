@@ -87,7 +87,7 @@ beforeEach(() => {
 const flush = () => new Promise((res) => setTimeout(res, 0));
 const gate = (firstRun = true) => {
   const r = render(
-    <UxFlagsContext.Provider value={{ oneHand: false, firstRun, emptyGuide: false }}>
+    <UxFlagsContext.Provider value={{ oneHand: false, firstRun, emptyGuide: false, connectionGuide: false }}>
       <FirstRunGate />
     </UxFlagsContext.Provider>,
   );

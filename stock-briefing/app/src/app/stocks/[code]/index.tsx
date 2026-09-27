@@ -78,7 +78,7 @@ export default function StockDetailScreen() {
   const { showKrw, afterCost } = useSettings();
   // 3-24 플래그: oneHand(아래 막대·머리 현재가·햅틱), emptyGuide(연결 오류의 '설정 열기') — 꺼져 있으면 지금 화면 그대로
   const ux = useUx();
-  const openSettings = ux.emptyGuide ? openServerSettings : undefined;
+  const openSettings = ux.connectionGuide ? openServerSettings : undefined;
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
   const guideProps = openSettings ? { onOpenSettings: openSettings } : null;
   // 스크롤하면 머리에 현재가 (휴대폰·접은 화면, oneHand): 시세 머리의 가격 줄 아래 끝(스크롤 안 위치)을 재어 두고,

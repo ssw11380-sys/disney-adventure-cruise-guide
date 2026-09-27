@@ -166,8 +166,8 @@ export default function StocksScreen() {
     haptic("select");
     void setSort(k);
   };
-  // 서버 연결 오류의 '설정 열기' (3-24, 플래그 emptyGuide)
-  const openSettings = ux.emptyGuide ? openServerSettings : undefined;
+  // 서버 연결 오류의 '설정 열기' (3-24, 플래그 emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도: lib/uxFlags connectionGuide)
+  const openSettings = ux.connectionGuide ? openServerSettings : undefined;
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
   const guideProps = openSettings ? { onOpenSettings: openSettings } : null;
   // 줄 위치 → 이어 보기 (늘 같은 함수: 줄의 memo 비교를 깨지 않게)

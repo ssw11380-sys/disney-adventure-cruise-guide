@@ -71,7 +71,7 @@ export default function BriefingsScreen() {
   const [order, setOrder] = useState<Order>("movers");
   // 3-24 (플래그 emptyGuide): 빈 목록의 안내 + 버튼 하나, 연결 오류의 '설정 열기'. 꺼져 있으면 지금 그대로
   const ux = useUx();
-  const openSettings = ux.emptyGuide ? openServerSettings : undefined;
+  const openSettings = ux.connectionGuide ? openServerSettings : undefined;
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
   const guideProps = openSettings ? { onOpenSettings: openSettings } : null;
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);

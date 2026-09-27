@@ -1,4 +1,6 @@
 import React from "react";
+import type { FeatureFlags } from "@/api/types";
+import { featureOn } from "@/lib/features";
 
 /**
  * 3-24 '한 손 조작·빈 화면·첫 실행 안내' 기능 플래그 세 개. 서버 /api/features 에서 받고(앱 fallback 꺼짐),
@@ -12,9 +14,26 @@ export interface UxFlags {
   oneHand: boolean;
   firstRun: boolean;
   emptyGuide: boolean;
+  /**
+   * 연결 오류 안내('설정 열기'·칸 이름 문구·설정의 서버 연결 칸 펼치기)를 쓸지 = emptyGuide 켜짐, 또는 플래그를 한 번도 받지 못한 채
+   * 플래그 조회가 실패하는 중(서버 주소가 틀렸거나 토큰이 틀려 서버에 닿지 않음 — 서버가 끌 수도 없는 상황).
+   * 서버가 한 번이라도 끔(false)을 준 적이 있으면(기기에 저장된 값 포함) 끔. 빈 화면 안내는 이 값이 아니라 emptyGuide 만 본다
+   */
+  connectionGuide: boolean;
 }
 
-export const UX_OFF: UxFlags = Object.freeze({ oneHand: false, firstRun: false, emptyGuide: false });
+export const UX_OFF: UxFlags = Object.freeze({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false });
+
+/** 받은 플래그(없으면 undefined)와 플래그 조회 실패 여부로 (순수 함수 — 테스트용) */
+export function uxFlagsFrom(flags: FeatureFlags | undefined, fetchFailed: boolean): UxFlags {
+  const emptyGuide = featureOn(flags, "emptyGuide", false);
+  return {
+    oneHand: featureOn(flags, "oneHand", false),
+    firstRun: featureOn(flags, "firstRun", false),
+    emptyGuide,
+    connectionGuide: emptyGuide || (flags === undefined && fetchFailed),
+  };
+}
 
 export const UxFlagsContext = React.createContext<UxFlags>(UX_OFF);
 

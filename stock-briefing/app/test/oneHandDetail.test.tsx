@@ -108,7 +108,7 @@ beforeEach(() => {
 const open = (stock: RegisteredWithQuote & { registered?: boolean }, oneHand = true, emptyGuide = false) => {
   h.stock = stock;
   return render(
-    <UxFlagsContext.Provider value={{ oneHand, firstRun: false, emptyGuide }}>
+    <UxFlagsContext.Provider value={{ oneHand, firstRun: false, emptyGuide, connectionGuide: emptyGuide }}>
       <StockDetailScreen />
     </UxFlagsContext.Provider>,
   );

@@ -109,7 +109,7 @@ beforeEach(() => {
   forgetHoldingsAnchor();
 });
 
-const ux = (o: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean }>) => ({ oneHand: false, firstRun: false, emptyGuide: false, ...o });
+const ux = (o: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean }>) => ({ oneHand: false, firstRun: false, emptyGuide: false, ...o, connectionGuide: !!o.emptyGuide });
 const draw = (flags: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean }> = {}) =>
   render(
     <UxFlagsContext.Provider value={ux(flags)}>
@@ -282,5 +282,26 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
     expect(byType(render(<StocksScreen />), "ErrorView")[0]!.props).not.toHaveProperty("onOpenSettings");
     h.stocks = STOCKS;
     expect(typeof byType(draw({ emptyGuide: true }), "StaleBanner")[0]!.props.onOpenSettings).toBe("function");
+  });
+
+  it("플래그를 한 번도 못 받은 채 서버에 닿지 않으면(connectionGuide 만): '설정 열기'는 있고 빈 화면 안내는 예전 그대로", () => {
+    h.stocks = undefined;
+    h.stocksError = new ApiRequestError(0, "NETWORK", "서버에 연결할 수 없습니다: http://wrong");
+    const only = { oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true };
+    const r = render(
+      <UxFlagsContext.Provider value={only}>
+        <StocksScreen />
+      </UxFlagsContext.Provider>,
+    );
+    expect(typeof byType(r, "ErrorView")[0]!.props.onOpenSettings).toBe("function");
+    h.stocks = [];
+    h.stocksError = null;
+    h.health = { tossOpenApi: { configured: true } };
+    const e = render(
+      <UxFlagsContext.Provider value={only}>
+        <StocksScreen />
+      </UxFlagsContext.Provider>,
+    );
+    expect(buttonsIn(e)).toHaveLength(2);
   });
 });

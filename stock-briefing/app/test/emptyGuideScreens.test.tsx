@@ -134,7 +134,7 @@ beforeEach(() => {
   forgetWindowClass();
 });
 
-const draw = (el: React.ReactElement, emptyGuide: boolean) => render(<UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide }}>{el}</UxFlagsContext.Provider>);
+const draw = (el: React.ReactElement, emptyGuide: boolean) => render(<UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide, connectionGuide: emptyGuide }}>{el}</UxFlagsContext.Provider>);
 const empties = (r: ReturnType<typeof render>) => r.all().filter((n) => n.type === "Empty");
 const buttonsOf = (n: HostNode) => {
   const out: HostNode[] = [];

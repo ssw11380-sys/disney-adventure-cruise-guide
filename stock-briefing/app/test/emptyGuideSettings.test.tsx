@@ -80,9 +80,9 @@ beforeEach(() => {
   h.haptics = true;
 });
 
-const draw = (flags: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean }> = {}) =>
+const draw = (flags: Partial<{ oneHand: boolean; firstRun: boolean; emptyGuide: boolean; connectionGuide: boolean }> = {}) =>
   render(
-    <UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide: false, ...flags }}>
+    <UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide: false, ...flags, connectionGuide: flags.connectionGuide ?? !!flags.emptyGuide }}>
       <SettingsScreen />
     </UxFlagsContext.Provider>,
   );

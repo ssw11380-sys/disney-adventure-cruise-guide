@@ -165,7 +165,7 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
   );
 
   if (q.isLoading) return <View>{head}<SkeletonRows height={rowH} /></View>;
-  if (q.isError && !items.length) return <ErrorView error={q.error} onRetry={() => void q.refetch()} {...(ux.emptyGuide ? { onOpenSettings: openServerSettings } : null)} />;
+  if (q.isError && !items.length) return <ErrorView error={q.error} onRetry={() => void q.refetch()} {...(ux.connectionGuide ? { onOpenSettings: openServerSettings } : null)} />;
 
   return (
     <FlatList

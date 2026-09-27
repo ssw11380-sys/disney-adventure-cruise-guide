@@ -212,7 +212,7 @@ export function ThemeBoard({ market, wideW }: { market: DiscoverMarket; wideW?: 
     return (
       <View style={{ flex: 1 }}>
         {head}
-        <ErrorView error={q.error} onRetry={() => void q.refetch()} {...(ux.emptyGuide ? { onOpenSettings: openServerSettings } : null)} />
+        <ErrorView error={q.error} onRetry={() => void q.refetch()} {...(ux.connectionGuide ? { onOpenSettings: openServerSettings } : null)} />
       </View>
     );
 

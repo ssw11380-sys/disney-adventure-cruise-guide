@@ -22,6 +22,7 @@ const { claimFirstRun, FIRST_RUN_KEY, firstRunDecision, forgetFirstRunClaim, mar
 const { removeConfirm, removeKind, removeLabel, rowA11yActions } = await import("@/lib/rowActions");
 const { openServerSettings, serverOpenRequest, serverSettingsParams } = await import("@/lib/settingsLink");
 const { ApiRequestError } = await import("@/api/client");
+const { UX_OFF, uxFlagsFrom } = await import("@/lib/uxFlags");
 const { oneHand } = await import("@/tokens");
 /** 차트 드래그 기준 (components/chart/PriceChart chartPanConfig — test/chartGesture 가 지킨다) */
 const chartPanConfig = { activeX: 14, failY: 10 };
@@ -190,6 +191,21 @@ describe("지우기 문구: 토스 종목은 '동기화 제외', 보유는 '삭�
       { name: "remove", label: "동기화 제외" },
       { name: "longpress", label: "메뉴 열기" },
     ]);
+  });
+});
+
+describe("플래그 세 개 (서버 값, fallback 꺼짐) + 연결 오류 안내", () => {
+  it("받은 값대로, 없으면 꺼짐. 연결 오류 안내는 emptyGuide 가 켜졌거나, 플래그를 한 번도 못 받은 채 조회가 실패할 때만", () => {
+    const on = { features: { oneHand: true, firstRun: false, emptyGuide: true } } as never;
+    expect(uxFlagsFrom(on, false)).toEqual({ oneHand: true, firstRun: false, emptyGuide: true, connectionGuide: true });
+    // 받는 중(아직 실패 아님): 모두 꺼짐
+    expect(uxFlagsFrom(undefined, false)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false });
+    // 서버 주소·토큰이 틀려 플래그 조회가 실패: 빈 화면 안내는 꺼진 채, 연결 오류 안내('설정 열기')만 켠다 — 서버가 끌 수도 없는 상황
+    expect(uxFlagsFrom(undefined, true)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true });
+    // 서버가 끔을 준 적이 있으면(저장된 값) 실패 중이어도 끔
+    const off = { features: { emptyGuide: false } } as never;
+    expect(uxFlagsFrom(off, true).connectionGuide).toBe(false);
+    expect(UX_OFF).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false });
   });
 });
 
