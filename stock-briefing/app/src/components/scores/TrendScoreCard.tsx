@@ -5,7 +5,7 @@ import { useIndicatorScores } from "@/api/hooks";
 import type { ScoreFamily } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
 import { DISCLAIMER } from "@/lib/disclaimer";
-import { familySpeech, itemLine, SCORE_LABELS, stackRows, trendHasScore } from "@/lib/scoreView";
+import { familySpeech, itemLine, nameWidth, SCORE_LABELS, stackRows, trendHasScore } from "@/lib/scoreView";
 import { font, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { LeverageNotice } from "./LeverageNotice";
@@ -100,9 +100,10 @@ export function TrendScoreCard({ code, onOpenStock }: { code: string; onOpenStoc
 /** 묶음 하나: 이름 · 비중 | 막대 | 점수 / 설명 / 사실 문장 / 항목 점수 */
 function FamilyBlock({ f }: { f: ScoreFamily }) {
   const t = useTheme();
-  const stack = stackRows(useFontScale());
+  const fs = useFontScale();
+  const stack = stackRows(fs);
   const name = (
-    <Text style={[styles.famName, { color: t.ink }, stack ? { flexGrow: 1 } : { width: scores.familyNameW }]} numberOfLines={2}>
+    <Text style={[styles.famName, { color: t.ink }, stack ? { flexGrow: 1 } : { width: nameWidth(scores.familyNameW, fs) }]} numberOfLines={2}>
       {f.name} <Text style={{ color: t.muted, fontWeight: "400" }}>· {f.weight}</Text>
     </Text>
   );

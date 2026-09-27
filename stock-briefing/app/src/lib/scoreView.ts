@@ -64,3 +64,8 @@ export function itemLine(f: ScoreFamily): string {
 /** 큰 글씨(130% 이상)면 줄 이름·숫자 / 막대·띠 두 줄로 (설계 4.3) */
 export const STACK_SCALE = 1.3;
 export const stackRows = (fontScale: number): boolean => fontScale >= STACK_SCALE;
+/**
+ * 이름 칸 폭: 글자 100% 기준 폭을 글자 배율만큼(두 줄로 바꾸는 130% 까지) 넓힌다 — 폴드8 기본 글자(약 115%)에서 '가치 지표'가
+ * '가치 지 / 표'로 접히지 않게. 설명 줄 들여쓰기도 같은 폭을 쓴다
+ */
+export const nameWidth = (base: number, fontScale: number): number => Math.ceil(base * Math.min(Math.max(fontScale || 1, 1), STACK_SCALE));

@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useIndicatorScores } from "@/api/hooks";
 import type { IndicatorScores, ScoreFamily, TrendScoreBlock } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
-import { familySpeech, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
+import { familySpeech, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { LeverageNotice } from "./LeverageNotice";
@@ -122,14 +122,16 @@ function Head({ note }: { note: string | null }) {
 /** 점수 없는 줄: 이름 · 상태 글(굵게) / 이유 한 줄 */
 function StatusRow({ name, label, text, children }: { name: string; label: string; text: string | null; children?: React.ReactNode }) {
   const t = useTheme();
-  const stack = stackRows(useFontScale());
+  const fs = useFontScale();
+  const stack = stackRows(fs);
+  const nw = nameWidth(scores.nameW, fs);
   return (
     <View style={styles.gapXs}>
       <View style={[styles.row, stack ? styles.rowWrap : null]}>
-        <Text style={[styles.name, { color: t.ink }]}>{name}</Text>
+        <Text style={[styles.name, { color: t.ink }, stack ? null : { width: nw }]}>{name}</Text>
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flexShrink: 1 }}>{label}</Text>
       </View>
-      <View style={stack ? null : styles.indent}>
+      <View style={stack ? null : { marginLeft: nw + space.sm }}>
         {children}
         {text ? <Muted>{text}</Muted> : null}
       </View>
@@ -140,7 +142,9 @@ function StatusRow({ name, label, text, children }: { name: string; label: strin
 /** 추세 줄: 점수가 있으면 이름 · 막대 · 숫자 · 띠 / 뜻 한 줄, 없으면 상태 글과 이유 (레버리지는 참고 줄) */
 function TrendRow({ trend }: { trend: TrendScoreBlock }) {
   const t = useTheme();
-  const stack = stackRows(useFontScale());
+  const fs = useFontScale();
+  const stack = stackRows(fs);
+  const nw = nameWidth(scores.nameW, fs);
   if (!trendHasScore(trend)) {
     const ref = trend.reference;
     return (
@@ -177,13 +181,13 @@ function TrendRow({ trend }: { trend: TrendScoreBlock }) {
         </>
       ) : (
         <View style={styles.row}>
-          <Text style={[styles.name, { color: t.ink }]}>{SCORE_LABELS.trend}</Text>
+          <Text style={[styles.name, { color: t.ink, width: nw }]}>{SCORE_LABELS.trend}</Text>
           <ScoreBar score={trend.score} />
           {num}
           {band}
         </View>
       )}
-      {trend.meaning ? <Muted style={stack ? null : styles.indent}>{trend.meaning}</Muted> : null}
+      {trend.meaning ? <Muted style={stack ? null : { marginLeft: nw + space.sm }}>{trend.meaning}</Muted> : null}
     </View>
   );
 }
@@ -223,9 +227,10 @@ function HowSection({ s, onTechnical, techTabLabel }: { s: IndicatorScores; onTe
 
 function FamilyMini({ f }: { f: ScoreFamily }) {
   const t = useTheme();
+  const fs = useFontScale();
   return (
     <View style={[styles.row, styles.mini]} accessible accessibilityLabel={familySpeech(f)}>
-      <Text style={{ color: t.sub, fontSize: font.small, width: scores.familyNameW }} numberOfLines={2}>
+      <Text style={{ color: t.sub, fontSize: font.small, width: nameWidth(scores.familyNameW, fs) }} numberOfLines={2}>
         {f.name} · {f.weight}
       </Text>
       <ScoreBar score={f.score} />
@@ -254,10 +259,9 @@ const styles = StyleSheet.create({
   col: { flex: 1, minWidth: 0 },
   row: { flexDirection: "row", alignItems: "center", gap: space.sm },
   rowWrap: { flexWrap: "wrap" },
-  name: { width: scores.nameW, fontSize: font.body, fontWeight: "700" },
+  name: { minWidth: scores.nameW, fontSize: font.body, fontWeight: "700" },
   num: { minWidth: scores.numW, textAlign: "right", fontSize: font.title, fontWeight: "800", fontVariant: ["tabular-nums"] },
   band: { minWidth: scores.bandW, fontSize: font.body },
-  indent: { marginLeft: scores.nameW + space.sm },
   refRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.s },
   composite: { flexDirection: "row", alignItems: "baseline", gap: space.sm, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.sm },
   toggle: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: touch.min, alignSelf: "flex-start" },

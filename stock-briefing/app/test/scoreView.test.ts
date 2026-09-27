@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { IndicatorScores } from "@/api/types";
-import { barFraction, familySpeech, itemLine, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
+import { barFraction, familySpeech, itemLine, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
 
 /**
  * 지표 점수 화면 모양 (3-44 1단계). 서버 응답은 공용 픽스처(shared/fixtures/indicatorScores.json — 서버 테스트가 지금 서버 코드의 응답과 같은지 본다).
@@ -55,6 +55,9 @@ describe("보이는 모양", () => {
   });
   it("글자 130% 부터 두 줄", () => {
     expect([stackRows(1), stackRows(1.15), stackRows(1.3), stackRows(2)]).toEqual([false, false, true, true]);
+  });
+  it("이름 칸 폭은 글자 배율만큼 (폴드8 기본 115% 에서 '가치 지표'가 접히지 않게, 130% 까지)", () => {
+    expect([nameWidth(64, 1), nameWidth(64, 1.15), nameWidth(64, 1.3), nameWidth(64, 2), nameWidth(64, 0.85)]).toEqual([64, 74, 84, 84, 64]);
   });
 });
 
