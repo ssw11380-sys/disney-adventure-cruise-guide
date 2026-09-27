@@ -308,20 +308,29 @@ describe("한국 평일 휴장일 목록(KR_HOLIDAYS)을 거래일 판단에 쓴
     expect(tradingNow("AAPL", undefined, at("2026-09-24T10:30:00+09:00"))).toBe(true);
   });
 
-  it("서버 marketContext.tradingDate 와 2026~2027 매시 정각·30분마다 같다 (한국·미국 종목)", async () => {
+  // 거래일이 바뀌는 순간은 모두 정각이다 — 서울 08:00(= 23:00Z), 뉴욕 20:00(= 00:00Z 서머타임 · 01:00Z), 서머타임 전환(06:00Z·07:00Z), 자정.
+  // 그래서 매시 정각만 견줘도 경계 앞뒤를 모두 본다(예전 30분 간격 7만 번은 서버 쪽이 매번 Intl 을 새로 만들어 따로 돌려도 약 3초 —
+  // 앱 전체 검사에서 기본 제한 5초를 넘겼다). 휴장일·주말이 몰린 달(설·추석·연말)은 경계 1분 전·1분 뒤까지 더 본다
+  it("서버 marketContext.tradingDate 와 2026~2027 매시 정각마다 같다 (한국·미국 종목, 휴장일 달은 경계 ±1분까지)", { timeout: 30_000 }, async () => {
     const { tradingDate } = await import("@/lib/marketTime");
     const path = fileURLToPath(new URL("../../backend/src/services/marketContext.ts", import.meta.url));
     const server = (await import(/* @vite-ignore */ path)) as { tradingDate: (iso: string, kr: boolean) => string };
     let checked = 0;
-    for (let t = Date.parse("2026-01-01T00:00:00Z"); t < Date.parse("2028-01-01T00:00:00Z"); t += 30 * 60_000) {
+    const same = (t: number) => {
       const iso = new Date(t).toISOString();
       for (const [code, kr] of [[KR, true], ["AAPL", false]] as const) {
         const app = tradingDate(iso, code);
         if (app !== server.tradingDate(iso, kr)) throw new Error(`불일치 ${iso} ${code}: 앱 ${app} · 서버 ${server.tradingDate(iso, kr)}`);
         checked++;
       }
-    }
-    expect(checked).toBeGreaterThan(70_000);
+    };
+    for (let t = Date.parse("2026-01-01T00:00:00Z"); t < Date.parse("2028-01-01T00:00:00Z"); t += 3_600_000) same(t);
+    // 설(2026-02 · 2027-02) · 추석(2026-09~10 · 2027-09~10) · 연말연시(2026-12~2027-01 · 2027-12): 경계 시각(23:00Z · 00:00Z · 01:00Z)의 1분 전·뒤
+    const busy = [["2026-02-01", "2026-03-04"], ["2026-09-20", "2026-10-12"], ["2026-12-20", "2027-01-05"], ["2027-02-01", "2027-03-03"], ["2027-09-10", "2027-10-13"], ["2027-12-20", "2028-01-01"]];
+    for (const [from, to] of busy)
+      for (let d = Date.parse(`${from}T00:00:00Z`); d < Date.parse(`${to}T00:00:00Z`); d += 86_400_000)
+        for (const hour of [-1, 0, 1]) for (const dm of [-1, 1]) same(d + hour * 3_600_000 + dm * 60_000);
+    expect(checked).toBeGreaterThan(35_000);
   });
 
   it("체결: 휴장일에 온 값 그대로의 체결은 9/23 시세와 같은 거래일(등락 유지), 휴장 뒤 첫 거래일 체결은 새 거래일로 보류", () => {
