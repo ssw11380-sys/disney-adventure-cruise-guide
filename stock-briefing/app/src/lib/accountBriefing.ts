@@ -1,5 +1,6 @@
 import type { AccountBriefing, AccountData } from "@/api/types";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
+import { usHolidayWhen } from "@/lib/briefingDigest";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatWon, SESSION_LABEL } from "@/lib/format";
 
@@ -38,6 +39,15 @@ export function contributionSpeech(l: ContributionLine): string {
   return sentence([l.name, `기여 ${speakProfit(formatWon(l.amount, { sign: true }), Math.sign(l.amount)) ?? "없음"}`, l.others ? null : speakRate(l.changeRate)]);
 }
 
+/**
+ * 화면 읽기: 미국 휴장 한 마디. 휴장일이 브리핑 날짜의 전날(또는 모름)이면 '지난밤 미국 휴장, …',
+ * 아니면(금요일 휴장 다음 월요일) '12월 25일 (금) 미국 휴장, …' (화면의 '12/25(금) 미국 휴장 · …' 줄과 같은 날짜를 말로)
+ */
+export function usPreviousDaySpeech(briefingDate: string, holidayDate?: string | null): string {
+  const when = usHolidayWhen(briefingDate, holidayDate);
+  return `${when === "지난밤" || !holidayDate ? "지난밤" : formatDateKo(holidayDate)} 미국 휴장, 미국 종목은 직전 거래일 등락`;
+}
+
 /** 화면 읽기: 브리핑 탭 '내 계좌 브리핑' 카드 한 문장 */
 export function accountCardSpeech(b: AccountBriefing): string {
   const h = b.headline;
@@ -51,7 +61,7 @@ export function accountCardSpeech(b: AccountBriefing): string {
     h ? `총 평가금액 ${speakAmount(formatWon(h.totalValue))}` : null,
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
     h?.krPreviousDay ? "오늘 한국 휴장, 국내 종목은 직전 거래일 등락" : null,
-    h?.usPreviousDay ? "지난밤 미국 휴장, 미국 종목은 직전 거래일 등락" : null,
+    h?.usPreviousDay ? usPreviousDaySpeech(b.date, h.usHolidayDate) : null,
     "자세히 보기",
   ]);
 }
@@ -72,7 +82,7 @@ export function summarySpeech(d: AccountData): string {
     `총 평가금액 ${speakAmount(formatWon(d.totalValue))}`,
     d.fx.status === "computed" && d.fx.fxEffect !== null ? profitText("환율 효과", d.fx.fxEffect) : null,
     d.krPreviousDay ? "오늘 한국 휴장, 국내 종목은 직전 거래일 등락" : null,
-    d.usPreviousDay ? "지난밤 미국 휴장, 미국 종목은 직전 거래일 등락" : null,
+    d.usPreviousDay ? usPreviousDaySpeech(d.date, d.usHolidayDate) : null,
   ]);
 }
 

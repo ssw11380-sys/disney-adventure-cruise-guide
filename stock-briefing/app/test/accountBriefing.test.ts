@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountBriefing, RegisteredWithQuote } from "@/api/types";
 import { accountCardItem, accountCardSpeech, contributionSpeech, contributionTable } from "@/lib/accountBriefing";
-import { buildDigest, DEFAULT_PREFS, digestAccountOf, KR_PREVIOUS_DAY_LINE, planNotifications, US_PREVIOUS_DAY_LINE } from "@/lib/briefingDigest";
+import { buildDigest, DEFAULT_PREFS, digestAccountOf, KR_PREVIOUS_DAY_LINE, planNotifications, US_PREVIOUS_DAY_LINE, usHolidayWhen, usPreviousDayLine } from "@/lib/briefingDigest";
 import { summarize } from "@/lib/portfolio";
 
 // 알림을 눌렀을 때의 경로(lib/notifications)만 네이티브 모듈을 가짜로
@@ -184,6 +184,38 @@ describe("알림: 서버와 같은 문구, 세션당 1건 (3-31)", () => {
     expect(US_PREVIOUS_DAY_LINE).toBe("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
     expect(accountCardSpeech(b)).toContain("지난밤 미국 휴장, 미국 종목은 직전 거래일 등락");
     expect(digestAccountOf(briefing())).not.toHaveProperty("usPreviousDay");
+  });
+
+  it("(브리핑 2차 #7) 금요일(성탄절) 미국 휴장 다음 월요일: 알림 본문·카드 화면 읽기에 휴장 날짜 (서버와 같은 기대 문자열)", () => {
+    const b = briefing({ date: "2026-12-28", headline: { ...briefing().headline!, usPreviousDay: true, usHolidayDate: "2026-12-25" } });
+    expect(digestAccountOf(b)).toMatchObject({ usPreviousDay: true, usHolidayDate: "2026-12-25" });
+    const monday = fresh.slice(0, 1).map((f) => ({ ...f, date: "2026-12-28" }));
+    const m = planNotifications(monday, on, new Date("2026-12-28T08:45:00+09:00"), [b]);
+    expect(m).toHaveLength(1);
+    expect(m[0]!.body).toBe("기여 1위 RGTX -1,234,567원 · 2위 삼성전자 -456,789원\n12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락\n종목 브리핑 1종목 · 변동 상위 리게티 컴퓨팅 -8.10%");
+    // 서버 backend/test/accountBriefing.test.ts 와 같은 입력·기대값
+    const only = buildDigest("morning", "2026-12-28", [], { id: 1, dayPnl: -1000, dayRate: null, top: [{ name: "애플", amount: -1000 }], usPreviousDay: true, usHolidayDate: "2026-12-25" })!;
+    expect(only.body).toBe("기여 1위 애플 -1,000원\n12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    const speech = accountCardSpeech(b);
+    expect(speech).toContain("12월 25일 (금) 미국 휴장, 미국 종목은 직전 거래일 등락");
+    expect(speech).not.toContain("지난밤");
+    // 휴장일이 전날(추수감사절 다음 날)이면 지금 문구 그대로
+    const fri = briefing({ date: "2026-11-27", headline: { ...briefing().headline!, usPreviousDay: true, usHolidayDate: "2026-11-26" } });
+    expect(planNotifications(fresh.slice(0, 1).map((f) => ({ ...f, date: "2026-11-27" })), on, new Date("2026-11-27T08:45:00+09:00"), [fri])[0]!.body).toContain(`\n${US_PREVIOUS_DAY_LINE}\n`);
+    expect(accountCardSpeech(fri)).toContain("지난밤 미국 휴장, 미국 종목은 직전 거래일 등락");
+    // 날짜를 모르는 예전 서버의 헤드라인도 그대로
+    expect(buildDigest("morning", "2026-12-28", [], { id: 1, dayPnl: -1000, dayRate: null, top: [], usPreviousDay: true })!.body).toBe(US_PREVIOUS_DAY_LINE);
+  });
+
+  it("(브리핑 2차 #7) 미국 휴장 앞말·한 줄: 서버 digest.ts 와 같은 네 경우", () => {
+    expect(usHolidayWhen("2026-12-28", "2026-12-25")).toBe("12/25(금)");
+    expect(usPreviousDayLine("2026-12-28", "2026-12-25")).toBe("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(usHolidayWhen("2026-11-27", "2026-11-26")).toBe("지난밤");
+    expect(usPreviousDayLine("2026-11-27", "2026-11-26")).toBe(US_PREVIOUS_DAY_LINE);
+    expect(usHolidayWhen("2026-11-27", undefined)).toBe("지난밤");
+    expect(usPreviousDayLine("2026-11-27", undefined)).toBe(US_PREVIOUS_DAY_LINE);
+    expect(usHolidayWhen("2026-09-08", "2026-09-07")).toBe("지난밤");
+    expect(usPreviousDayLine("2026-09-08", "2026-09-07")).toBe("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
   });
 });
 

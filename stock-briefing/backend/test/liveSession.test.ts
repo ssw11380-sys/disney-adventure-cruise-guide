@@ -150,6 +150,70 @@ describe("한국 세션 (서울 시각, 거래일은 토스 달력)", () => {
   });
 });
 
+describe("(브리핑 2차 #7) 한국 정규장 시각이 다른 날 — 수능일·새해 첫 거래일 (marketContext KR_SPECIAL_HOURS)", () => {
+  /** 그날 08:00~20:00 이 열린 토스 달력 (그날 08:00~20:00 사이 시각에만 씀 — 위 krCal 의 '장중' 값과 같은 모양) */
+  const krOn = (day: string) => (iso: string, stock: StockSessionFacts | null = NXT) =>
+    sessionAt("035420", at(iso), { calendar: calendar(at(iso), [`${day}T11:00:00Z`, `${day}T23:00:00Z`], null), stock });
+
+  it.each([
+    // 2026-11-19 수능일: 정규장 10:00~16:30 → 아침 경계 +60분, 오후 경계 +60분. NXT·애프터마켓 시간은 확인하지 못해 대상 모름(null)
+    ["2026-11-19T09:30:00+09:00", "nxt_pre", true, null, "2026-11-19T09:50:00+09:00"],
+    ["2026-11-19T09:55:00+09:00", "auction", false, null, "2026-11-19T10:00:00+09:00"],
+    ["2026-11-19T10:30:00+09:00", "regular", true, true, "2026-11-19T16:20:00+09:00"],
+    ["2026-11-19T16:10:00+09:00", "regular", true, true, "2026-11-19T16:20:00+09:00"], // 평소라면 NXT 애프터
+    ["2026-11-19T16:25:00+09:00", "auction", false, null, "2026-11-19T16:30:00+09:00"],
+    ["2026-11-19T16:35:00+09:00", "closed", false, null, "2026-11-19T16:40:00+09:00"],
+    ["2026-11-19T16:45:00+09:00", "nxt_after", true, null, "2026-11-19T17:00:00+09:00"],
+    ["2026-11-19T17:05:00+09:00", "after", true, null, "2026-11-19T20:00:00+09:00"],
+  ])("수능일 %s → %s", (iso, phase, open, eligible, until) => {
+    const s = krOn("2026-11-19")(iso);
+    expect(s).toMatchObject({ market: "KR", phase, open, eligible });
+    expect(Date.parse(s.until!)).toBe(Date.parse(until));
+  });
+
+  it.each([
+    // 2027-01-04 새해 첫 거래일: 10:00 개장, 15:30 마감 → 아침 경계만 +60분, 오후 경계는 평소와 같다(대상은 그래도 모름)
+    ["2027-01-04T09:30:00+09:00", "nxt_pre", true, null, "2027-01-04T09:50:00+09:00"],
+    ["2027-01-04T09:55:00+09:00", "auction", false, null, "2027-01-04T10:00:00+09:00"],
+    ["2027-01-04T10:05:00+09:00", "regular", true, true, "2027-01-04T15:20:00+09:00"],
+    ["2027-01-04T15:25:00+09:00", "auction", false, null, "2027-01-04T15:30:00+09:00"],
+    ["2027-01-04T15:35:00+09:00", "closed", false, null, "2027-01-04T15:40:00+09:00"],
+    ["2027-01-04T15:45:00+09:00", "nxt_after", true, null, "2027-01-04T16:00:00+09:00"],
+    ["2027-01-04T16:30:00+09:00", "after", true, null, "2027-01-04T20:00:00+09:00"],
+  ])("새해 첫 거래일 %s → %s", (iso, phase, open, eligible, until) => {
+    const s = krOn("2027-01-04")(iso);
+    expect(s).toMatchObject({ market: "KR", phase, open, eligible });
+    expect(Date.parse(s.until!)).toBe(Date.parse(until));
+  });
+
+  it("세션 시작 시각도 옮긴다 (이번 세션 체결인지 재는 기준)", () => {
+    expect(Date.parse(krOn("2026-11-19")("2026-11-19T10:30:00+09:00").start!)).toBe(Date.parse("2026-11-19T10:00:00+09:00"));
+    expect(Date.parse(krOn("2026-11-19")("2026-11-19T16:45:00+09:00").start!)).toBe(Date.parse("2026-11-19T16:40:00+09:00"));
+    expect(Date.parse(krOn("2026-11-19")("2026-11-19T17:05:00+09:00").start!)).toBe(Date.parse("2026-11-19T17:00:00+09:00"));
+    expect(Date.parse(krOn("2027-01-04")("2027-01-04T09:30:00+09:00").start!)).toBe(Date.parse("2027-01-04T08:00:00+09:00"));
+  });
+
+  it("대상이 아닌 종목은 그대로 아님 (KRX 전용은 NXT 시간에 false, ETF 는 애프터마켓 false, 거래정지는 정규장도 false)", () => {
+    const d = krOn("2026-11-19");
+    expect(d("2026-11-19T09:30:00+09:00", KRX_ONLY)).toMatchObject({ phase: "nxt_pre", open: true, eligible: false });
+    expect(d("2026-11-19T16:45:00+09:00", KRX_ONLY)).toMatchObject({ phase: "nxt_after", open: true, eligible: false });
+    expect(d("2026-11-19T17:05:00+09:00", KR_ETF)).toMatchObject({ phase: "after", eligible: false });
+    expect(d("2026-11-19T17:05:00+09:00", KRX_ONLY)).toMatchObject({ phase: "after", eligible: null });
+    expect(d("2026-11-19T10:30:00+09:00", KRX_ONLY)).toMatchObject({ phase: "regular", eligible: true });
+    expect(d("2026-11-19T10:30:00+09:00", { ...NXT, halted: true })).toMatchObject({ phase: "regular", eligible: false, halted: true });
+    expect(krOn("2027-01-04")("2027-01-04T15:45:00+09:00", KRX_ONLY)).toMatchObject({ phase: "nxt_after", eligible: false });
+  });
+
+  it("평소 날(수능 전날 11/18)은 그대로 — 16:10 은 한국거래소·NXT 애프터마켓, 대상", () => {
+    const d = krOn("2026-11-18");
+    expect(d("2026-11-18T16:10:00+09:00")).toMatchObject({ phase: "after", eligible: true });
+    expect(d("2026-11-18T08:30:00+09:00")).toMatchObject({ phase: "nxt_pre", eligible: true });
+    expect(d("2026-11-18T09:30:00+09:00")).toMatchObject({ phase: "regular", eligible: true });
+    expect(d("2026-11-18T15:45:00+09:00")).toMatchObject({ phase: "nxt_after", eligible: true });
+    expect(Date.parse(d("2026-11-18T09:30:00+09:00").until!)).toBe(Date.parse("2026-11-18T15:20:00+09:00"));
+  });
+});
+
 describe("미국 세션 (뉴욕 시각·서머타임, 휴장일)", () => {
   const us = (iso: string, stock: StockSessionFacts | null = US_DAY, cal: MarketStatus | null = null) => sessionAt("AAPL", at(iso), { calendar: cal, stock });
 

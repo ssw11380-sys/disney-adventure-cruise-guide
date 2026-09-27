@@ -13,6 +13,7 @@ import { CardsSkeleton } from "@/components/Skeleton";
 import { Badge, Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, TableHead } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, localDay, summarySpeech, templateNote } from "@/lib/accountBriefing";
+import { usHolidayWhen } from "@/lib/briefingDigest";
 import { accountColumns } from "@/lib/briefingPick";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
@@ -368,7 +369,7 @@ function ContributionCard({ d, wide = false }: { d: AccountData; wide?: boolean 
         {table.matches ? "줄의 합이 당일 손익과 같습니다(원 단위로 나눔)." : "줄의 합이 당일 손익과 다릅니다. 다시 만들면 바로잡힙니다."}
         {d.fx.appliedRate ? ` 미국 종목은 적용 환율 ${formatIndexValue(d.fx.appliedRate)}원으로 원화 환산.` : ""}
         {d.krPreviousDay ? " 오늘 한국은 휴장이라 국내 종목은 직전 거래일 등락입니다(앱 잔고 화면과 같은 기준)." : ""}
-        {d.usPreviousDay ? " 지난밤 미국은 휴장이라 미국 종목은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임)." : ""}
+        {d.usPreviousDay ? ` ${usHolidayWhen(d.date, d.usHolidayDate)} 미국은 휴장이라 미국 종목은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).` : ""}
       </Muted>
     </Card>
   );

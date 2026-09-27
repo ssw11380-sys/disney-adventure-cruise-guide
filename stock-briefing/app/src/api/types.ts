@@ -292,6 +292,8 @@ export interface AccountData {
   krPreviousDay?: boolean;
   /** 지난밤 미국 평일 휴장이라 미국 종목의 등락·당일 손익이 직전 거래일 것 (앞 브리핑에 담긴 움직임. 예전 기록·서버에는 없음) */
   usPreviousDay?: boolean;
+  /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) '12/25(금) 미국 휴장'. 예전 서버에는 없음 → '지난밤' */
+  usHolidayDate?: string;
 }
 
 export interface AccountHeadline {
@@ -305,6 +307,8 @@ export interface AccountHeadline {
   krPreviousDay?: boolean;
   /** 지난밤 미국 평일 휴장이라 미국 종목의 등락이 직전 거래일 것 (그럴 때만 옴) */
   usPreviousDay?: boolean;
+  /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만 옴) */
+  usHolidayDate?: string;
 }
 
 export interface AccountBriefing {

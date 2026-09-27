@@ -7,7 +7,7 @@ import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { CandlePeriod, CandleSeries, ListedStock, Quote } from "../src/domain/types.js";
 import { GenerationError, type GenerateRequest, type GenerateResult, type TextGenerator } from "../src/llm/generator.js";
 import { PromptStore } from "../src/llm/prompts.js";
-import { buildDigest } from "../src/notifications/digest.js";
+import { buildDigest, usHolidayWhen, usPreviousDayLine } from "../src/notifications/digest.js";
 import type { PushMessage, PushSender, PushSendResult } from "../src/notifications/push.js";
 import { MarketCalendar, type MarketStatus } from "../src/providers/market/calendar.js";
 import type { MarketIndex } from "../src/providers/market/indices.js";
@@ -19,6 +19,7 @@ import {
   checkNarrative,
   computeAccount,
   factsText,
+  KR_HOURS,
   KR_PREVIOUS_DAY_NOTE,
   leaders,
   numberTokens,
@@ -30,6 +31,7 @@ import {
   usPreviousDay,
   usRegularKst,
   usSessionDate,
+  usSkippedSession,
   type AccountData,
   type AccountHolding,
 } from "../src/services/accountNumbers.js";
@@ -258,7 +260,7 @@ describe("계좌 숫자 (순수 계산)", () => {
     expect(summaryText(dataFrom(fixture.holdings)).split("\n")).toHaveLength(2);
   });
 
-  it("지난밤 미국 평일 휴장: 오전·오후 모두 표시하고, 주말 뒤(월요일)·평소·미국 종목이 없으면 표시하지 않는다", () => {
+  it("지난밤 미국 평일 휴장: 오전·오후 모두 표시하고, 월요일(금요일 휴장 다음)도 표시, 평소·미국 종목이 없으면 표시하지 않는다", () => {
     const a = computeAccount(fixture.holdings, { usdKrw: fixture.usdKrw });
     const krOnly = computeAccount([holding("005930", "삼성전자", 100)]);
     // 추수감사절(11/26, 목) 다음 날 오전·오후: 지난밤 정규장이 휴장 → 미국 등락은 11/25 것 (전날 오전 브리핑에 이미 담김)
@@ -270,9 +272,9 @@ describe("계좌 숫자 (순수 계산)", () => {
     // 추수감사절 당일 오전(지난밤 11/25 정규장은 열림)·평소
     expect(usPreviousDay(new Date("2026-11-26T08:30:00+09:00"), a)).toBe(false);
     expect(usPreviousDay(new Date("2026-09-25T08:30:00+09:00"), a)).toBe(false);
-    // 독립기념일 대체 휴장(7/3, 금) 다음 날 오전은 표시, 주말 뒤 월요일 오전(지난밤 일요일)은 표시하지 않는다
+    // 독립기념일 대체 휴장(7/3, 금) 다음 날 오전도, 주말 뒤 월요일 오전도 표시 — 월요일의 미국 몫은 목요일 움직임(금요일 아침 브리핑에 이미 담김)
     expect(usPreviousDay(new Date("2026-07-04T08:30:00+09:00"), a)).toBe(true);
-    expect(usPreviousDay(new Date("2026-07-06T08:30:00+09:00"), a)).toBe(false);
+    expect(usPreviousDay(new Date("2026-07-06T08:30:00+09:00"), a)).toBe(true);
     // 요약·사실·기본 문장
     const d = dataFrom(fixture.holdings, { usPreviousDay: true });
     expect(summaryText(d).split("\n")).toEqual([expect.stringMatching(/^당일 /), expect.stringMatching(/^총 평가금액 /), US_PREVIOUS_DAY_NOTE]);
@@ -283,6 +285,75 @@ describe("계좌 숫자 (순수 계산)", () => {
     // 알림 본문에도 한 줄
     const m = buildDigest("morning", "2026-11-27", [], { id: 1, dayPnl: -1000, dayRate: null, top: [{ name: "애플", amount: -1000 }], usPreviousDay: true })!;
     expect(m.body).toBe(`기여 1위 애플 -1,000원\n${US_PREVIOUS_DAY_NOTE}`);
+  });
+
+  it("(브리핑 2차 #7) 쉰 미국 정규장 날짜: 토·일이면 금요일까지 거슬러 올라가 휴장일이면 그 날짜, 평일 휴장은 그 날짜, 아니면 null", () => {
+    const cases: Array<[string, string | null]> = [
+      ["2026-12-28T08:30:00+09:00", "2026-12-25"], // 월 오전: 성탄절(금) 휴장 다음
+      ["2026-12-28T16:05:00+09:00", "2026-12-25"], // 월 오후도 같은 정규장
+      ["2026-07-06T08:30:00+09:00", "2026-07-03"],
+      ["2027-03-29T08:30:00+09:00", "2027-03-26"],
+      ["2027-06-21T08:30:00+09:00", "2027-06-18"],
+      ["2026-11-27T08:30:00+09:00", "2026-11-26"], // 추수감사절(목) 다음 날
+      ["2026-09-08T08:30:00+09:00", "2026-09-07"], // 노동절(월) 다음 날
+      ["2026-09-28T08:30:00+09:00", null], // 평소 월요일
+      ["2026-11-30T08:30:00+09:00", null], // 목요일 휴장 뒤 금요일은 거래일 → 월요일은 아님
+      ["2026-11-26T08:30:00+09:00", null], // 추수감사절 당일 오전 (지난밤 11/25 는 열림)
+    ];
+    for (const [at, want] of cases) expect(usSkippedSession(new Date(at)), at).toBe(want);
+    // 월요일 오후도 표시 (미국 종목이 있을 때만)
+    const a = computeAccount(fixture.holdings, { usdKrw: fixture.usdKrw });
+    expect(usPreviousDay(new Date("2026-12-28T08:30:00+09:00"), a)).toBe(true);
+    expect(usPreviousDay(new Date("2026-12-28T16:05:00+09:00"), a)).toBe(true);
+    expect(usPreviousDay(new Date("2026-12-28T08:30:00+09:00"), computeAccount([holding("005930", "삼성전자", 100)]))).toBe(false);
+  });
+
+  it("(브리핑 2차 #7) 미국 휴장 앞말: 브리핑 날짜의 전날이면 '지난밤', 아니면 '12/25(금)' (앱 briefingDigest 와 같은 기대값)", () => {
+    expect(usHolidayWhen("2026-12-28", "2026-12-25")).toBe("12/25(금)");
+    expect(usPreviousDayLine("2026-12-28", "2026-12-25")).toBe("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(usHolidayWhen("2026-11-27", "2026-11-26")).toBe("지난밤");
+    expect(usPreviousDayLine("2026-11-27", "2026-11-26")).toBe(US_PREVIOUS_DAY_NOTE);
+    expect(usHolidayWhen("2026-11-27", undefined)).toBe("지난밤");
+    expect(usPreviousDayLine("2026-11-27", undefined)).toBe(US_PREVIOUS_DAY_NOTE);
+    expect(usHolidayWhen("2026-09-08", "2026-09-07")).toBe("지난밤");
+    expect(usPreviousDayLine("2026-09-08", "2026-09-07")).toBe("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(usHolidayWhen("2026-12-28", null)).toBe("지난밤");
+  });
+
+  it("(브리핑 2차 #7) 월요일(금요일 휴장 다음): 요약 셋째 줄·사실·기본 문장에 휴장 날짜를 적고, 기본 문장은 검사를 통과한다", () => {
+    const d = dataFrom(fixture.holdings, { date: "2026-12-28", session: "morning", usPreviousDay: true, usHolidayDate: "2026-12-25" });
+    expect(summaryText(d).split("\n")).toEqual([expect.stringMatching(/^당일 /), expect.stringMatching(/^총 평가금액 /), "12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락"]);
+    expect(factsText(d)).toContain("- 참고: 12/25(금) 미국은 휴장이라 미국 종목의 등락률과 당일 손익은 직전 거래일 것입니다(앞 브리핑에 이미 담긴 움직임, 앱 잔고 화면과 같은 기준)");
+    expect(templateNarrative(d)).toContain("- 12/25(금) 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).");
+    expect(checkNarrative(templateNarrative(d), factsText(d))).toEqual({ ok: true });
+    // 휴장일이 전날이면(추수감사절 다음 날) 지금 문구 그대로, 날짜를 모르는 예전 기록도 그대로
+    const fri = dataFrom(fixture.holdings, { date: "2026-11-27", usPreviousDay: true, usHolidayDate: "2026-11-26" });
+    expect(summaryText(fri).split("\n")[2]).toBe(US_PREVIOUS_DAY_NOTE);
+    expect(factsText(fri)).toContain("- 참고: 지난밤 미국은 휴장이라");
+    expect(templateNarrative(fri)).toContain("- 지난밤 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).");
+    expect(summaryText({ ...d, usHolidayDate: undefined }).split("\n")[2]).toBe(US_PREVIOUS_DAY_NOTE);
+    // 날짜 없이 합계만 넘기면 예전 문구
+    expect(summaryText({ ...computeAccount(fixture.holdings, { usdKrw: fixture.usdKrw }), usPreviousDay: true, usHolidayDate: "2026-12-25" }).split("\n")[2]).toBe(US_PREVIOUS_DAY_NOTE);
+    // 알림 본문 (서버 digest)
+    const m = buildDigest("morning", "2026-12-28", [], { id: 1, dayPnl: -1000, dayRate: null, top: [{ name: "애플", amount: -1000 }], usPreviousDay: true, usHolidayDate: "2026-12-25" })!;
+    expect(m.body).toBe("기여 1위 애플 -1,000원\n12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+  });
+
+  it("(브리핑 2차 #7) 오늘 일정: 조기 폐장일은 미국 03:00 · 조기 폐장, 수능일·새해 첫 거래일은 한국 정규장 시각, 평소는 그대로", () => {
+    expect(buildSchedule(null, new Date("2026-11-27T08:30:00+09:00"), []).us).toMatchObject({ date: "2026-11-27", tradingDay: true, hours: "정규장 11/27 23:30~11/28 03:00 (한국 시간) · 조기 폐장" });
+    expect(buildSchedule(null, new Date("2026-12-24T08:30:00+09:00"), []).us).toMatchObject({ date: "2026-12-24", tradingDay: true, hours: "정규장 12/24 23:30~12/25 03:00 (한국 시간) · 조기 폐장" });
+    expect(usRegularKst("2026-11-27", 13 * 60)).toBe("정규장 11/27 23:30~11/28 03:00 (한국 시간) · 조기 폐장");
+    expect(buildSchedule(null, new Date("2026-11-19T08:30:00+09:00"), []).kr).toMatchObject({ date: "2026-11-19", tradingDay: true, hours: "정규장 10:00~16:30 (수능일)" });
+    expect(buildSchedule(null, new Date("2027-01-04T08:30:00+09:00"), []).kr).toMatchObject({ date: "2027-01-04", tradingDay: true, hours: "정규장 10:00~15:30 (새해 첫 거래일)" });
+    // 평소 (월요일 9/28): 한국은 지금 상수 그대로, 미국은 16:00 마감 그대로
+    const usual = buildSchedule(null, new Date("2026-09-28T08:30:00+09:00"), []);
+    expect(usual.kr.hours).toBe(KR_HOURS);
+    expect(KR_HOURS).toBe("정규장 09:00~15:30 · 넥스트레이드 08:00~20:00");
+    expect(usual.us.hours).toBe("정규장 9/28 22:30~9/29 05:00 (한국 시간)");
+    // 조기 폐장 시각은 사실·기본 문장에도 같게 (검사 통과)
+    const d = dataFrom(fixture.holdings, { date: "2026-11-27", session: "morning", schedule: buildSchedule(null, new Date("2026-11-27T08:30:00+09:00"), []) });
+    expect(factsText(d)).toContain("11/28 03:00 (한국 시간) · 조기 폐장");
+    expect(checkNarrative(templateNarrative(d), factsText(d))).toEqual({ ok: true });
   });
 
   it("모델 설명 검사: 사실에 없는 숫자·매매·전망 표현은 거절, 순서 같은 작은 정수와 표기 그대로 옮긴 숫자는 통과", () => {
@@ -1408,12 +1479,46 @@ describe("계좌 브리핑 (서버)", () => {
     expect(b.headline).not.toHaveProperty("krPreviousDay");
     expect(b.summary.split("\n")[2]).toBe(US_PREVIOUS_DAY_NOTE);
     expect(US_PREVIOUS_DAY_NOTE).toBe("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    // 새 문구 함수도 앱(app/test/accountBriefing.test.ts)과 같은 기대 문자열
+    expect(usPreviousDayLine("2026-12-28", "2026-12-25")).toBe("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(usPreviousDayLine("2026-11-27", "2026-11-26")).toBe("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(b.headline).toMatchObject({ usHolidayDate: "2026-11-26" });
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]!.body.split("\n")).toContain(US_PREVIOUS_DAY_NOTE);
     const d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json() as { detail: string; data: AccountData };
     expect(d.data.usPreviousDay).toBe(true);
     expect(d.detail).toContain("지난밤 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다");
     expect(factsText(d.data)).toContain("참고: 지난밤 미국은 휴장이라");
+  });
+
+  it("(브리핑 2차 #7) 금요일(성탄절) 미국 휴장 다음 월요일 오전: 헤드라인에 휴장 날짜, 요약·알림(1건)·사실·기본 문장에 '12/25(금) 미국 휴장' 줄", async () => {
+    const gen = new AccountGen();
+    gen.mode = "fail"; // 기본 문장도 확인
+    const { push } = await setup({ gen, at: "2026-12-28T08:30:00+09:00" });
+    await app.briefingService.runSession("morning", { trigger: "schedule" });
+    const b = (await list())[0]!;
+    expect(b).toMatchObject({ date: "2026-12-28", session: "morning" });
+    expect(b.headline).toMatchObject({ usPreviousDay: true, usHolidayDate: "2026-12-25" });
+    expect(b.headline).not.toHaveProperty("krPreviousDay");
+    expect(b.summary.split("\n")[2]).toBe("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]!.body.split("\n")).toContain("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(push.sent[0]!.body).not.toContain("지난밤");
+    const d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json() as { detail: string; data: AccountData };
+    expect(d.data).toMatchObject({ usPreviousDay: true, usHolidayDate: "2026-12-25" });
+    expect(d.detail).toContain("12/25(금) 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다");
+    expect(factsText(d.data)).toContain("참고: 12/25(금) 미국은 휴장이라");
+  });
+
+  it("(브리핑 2차 #7) 같은 월요일 오후(16:05)도 미국 휴장 줄", async () => {
+    const { push } = await setup({ at: "2026-12-28T16:05:00+09:00" });
+    await app.briefingService.runSession("afternoon", { trigger: "schedule" });
+    const b = (await list())[0]!;
+    expect(b).toMatchObject({ date: "2026-12-28", session: "afternoon" });
+    expect(b.headline).toMatchObject({ usPreviousDay: true, usHolidayDate: "2026-12-25" });
+    expect(b.summary.split("\n")[2]).toBe("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]!.body.split("\n")).toContain("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
   });
 
   it("한국만 휴장인 날: 국내 등락이 직전 거래일 것임을 요약·알림·사실에 밝힌다 (당일 손익은 앱 잔고 화면과 같은 기준 그대로)", async () => {

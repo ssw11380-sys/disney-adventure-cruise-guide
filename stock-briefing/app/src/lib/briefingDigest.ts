@@ -1,5 +1,5 @@
 import type { MarketSummary } from "@/api/types";
-import { digestLine } from "./marketSummary";
+import { digestLine, mdw } from "./marketSummary";
 
 /**
  * 브리핑 알림 묶음 (3-19). 서버 backend/src/notifications/digest.ts 와 같은 규칙·문구 —
@@ -70,6 +70,8 @@ export interface DigestAccount {
   krPreviousDay?: boolean;
   /** 지난밤 미국 평일 휴장이라 미국 종목의 등락이 직전 거래일 것 → 본문에 한 줄 */
   usPreviousDay?: boolean;
+  /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면 줄에 날짜를 적는다 */
+  usHolidayDate?: string;
 }
 
 /**
@@ -98,10 +100,29 @@ export const KR_PREVIOUS_DAY_LINE = "오늘 한국 휴장 · 국내 종목은 �
 /** 지난밤 미국 평일 휴장일 때 붙이는 한 줄 (서버 digest.ts US_PREVIOUS_DAY_LINE 과 같다) */
 export const US_PREVIOUS_DAY_LINE = "지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락";
 
+/** 달력 전날 YYYY-MM-DD */
+function dayBefore(date: string): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 미국 휴장 앞말 (서버 digest.ts usHolidayWhen 과 같다): 휴장일이 없거나 브리핑 날짜(서울)의 달력 전날이면 '지난밤', 아니면 '12/25(금)' */
+export function usHolidayWhen(briefingDate: string, holidayDate?: string | null): string {
+  if (!holidayDate || holidayDate === dayBefore(briefingDate)) return "지난밤";
+  return mdw(holidayDate);
+}
+
+/** '지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락'(= US_PREVIOUS_DAY_LINE) 또는 '12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락' (서버와 같다) */
+export function usPreviousDayLine(briefingDate: string, holidayDate?: string | null): string {
+  const when = usHolidayWhen(briefingDate, holidayDate);
+  return when === "지난밤" ? US_PREVIOUS_DAY_LINE : `${when} 미국 휴장 · 미국 종목은 직전 거래일 등락`;
+}
+
 /** 계좌 브리핑 목록 항목(/api/account-briefings) → 알림 앞머리 (성공한 것만) */
 export function digestAccountOf(
   b:
-    | { id: number; status: "ok" | "failed"; headline: { dayPnl: number; dayRate: number | null; top: { name: string; amount: number }[]; krPreviousDay?: boolean; usPreviousDay?: boolean } | null }
+    | { id: number; status: "ok" | "failed"; headline: { dayPnl: number; dayRate: number | null; top: { name: string; amount: number }[]; krPreviousDay?: boolean; usPreviousDay?: boolean; usHolidayDate?: string } | null }
     | null
     | undefined,
 ): DigestAccount | null {
@@ -113,6 +134,7 @@ export function digestAccountOf(
     top: b.headline.top.map((t) => ({ name: t.name, amount: t.amount })),
     ...(b.headline.krPreviousDay ? { krPreviousDay: true } : {}),
     ...(b.headline.usPreviousDay ? { usPreviousDay: true } : {}),
+    ...(b.headline.usHolidayDate ? { usHolidayDate: b.headline.usHolidayDate } : {}),
   };
 }
 
@@ -157,7 +179,7 @@ function accountDigest(session: "morning" | "afternoon", date: string, items: Di
   if (top.length) lines.push(top.map((t, i) => `${i === 0 ? "기여 1위" : "2위"} ${t.name} ${formatWonSigned(t.amount)}`).join(" · "));
   // 첫 줄이 같은 시장의 휴장을 이미 말하면 그 시장의 예전 휴장 줄만 뺀다 (서버와 같게)
   if (a.krPreviousDay && !(market?.market === "KR" && market.holiday)) lines.push(KR_PREVIOUS_DAY_LINE);
-  if (a.usPreviousDay && !(market?.market === "US" && market.holiday)) lines.push(US_PREVIOUS_DAY_LINE);
+  if (a.usPreviousDay && !(market?.market === "US" && market.holiday)) lines.push(usPreviousDayLine(date, a.usHolidayDate));
   const ranked = byMove(items, (i) => i.changeRate);
   if (items.length) {
     const movers = ranked.filter((i) => i.changeRate !== null).slice(0, 2);

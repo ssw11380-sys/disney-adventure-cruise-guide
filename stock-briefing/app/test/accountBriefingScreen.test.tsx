@@ -324,6 +324,27 @@ describe("계좌 브리핑 상세 화면", () => {
     expect(labels(card).find((l) => l.startsWith("내 계좌 브리핑"))).toContain("지난밤 미국 휴장, 미국 종목은 직전 거래일 등락");
   });
 
+  it("(브리핑 2차 #7) 금요일(성탄절) 미국 휴장 다음 월요일: 카드의 미국 줄·상세 기여 표 설명·화면 읽기에 휴장 날짜", () => {
+    h.flags = { accountBriefing: true };
+    const mondayData: AccountData = { ...DATA, date: "2026-12-28", usPreviousDay: true, usHolidayDate: "2026-12-25" };
+    h.detail = { ...DETAIL, date: "2026-12-28", summary: `${ITEM.summary}\n12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락`, data: mondayData };
+    const detail = render(<AccountBriefingScreen />);
+    const text = detail.text();
+    expect(text).toContain(" 12/25(금) 미국은 휴장이라 미국 종목은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).");
+    expect(text).toContain("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락"); // 요약 셋째 줄 (서버 문구 그대로)
+    expect(text).not.toContain("지난밤");
+    expect(labels(detail).find((l) => l.startsWith("요약,"))).toMatch(/12월 25일 \(금\) 미국 휴장, 미국 종목은 직전 거래일 등락$/);
+    const card = render(<AccountBriefingCard briefing={{ ...ITEM, date: "2026-12-28", headline: { ...ITEM.headline!, usPreviousDay: true, usHolidayDate: "2026-12-25" } }} />);
+    expect(card.text()).toContain("12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락");
+    expect(card.text()).not.toContain("지난밤");
+    expect(labels(card).find((l) => l.startsWith("내 계좌 브리핑"))).toContain("12월 25일 (금) 미국 휴장, 미국 종목은 직전 거래일 등락");
+    // 휴장일이 전날(추수감사절 다음 날)이면 지금 문구 그대로
+    h.detail = { ...DETAIL, date: "2026-11-27", data: { ...DATA, date: "2026-11-27", usPreviousDay: true, usHolidayDate: "2026-11-26" } };
+    expect(render(<AccountBriefingScreen />).text()).toContain(" 지난밤 미국은 휴장이라 미국 종목은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).");
+    const fri = render(<AccountBriefingCard briefing={{ ...ITEM, date: "2026-11-27", headline: { ...ITEM.headline!, usPreviousDay: true, usHolidayDate: "2026-11-26" } }} />);
+    expect(fri.text()).toContain("지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락");
+  });
+
   it("잘못된 주소는 요청하지 않고 안내", () => {
     h.flags = { accountBriefing: true };
     h.params = { id: "abc" };
