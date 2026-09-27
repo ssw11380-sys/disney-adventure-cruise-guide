@@ -163,7 +163,9 @@ describe("휴대폰·접은 화면 아래 고정 막대 (관심 · 차트)", () 
     const r = open(watch());
     const b = bar(r);
     const btn = b.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel).startsWith("관심 종목에서 빼기"))!;
-    expect(btn.props.accessibilityState).toMatchObject({ checked: true });
+    // 동작 버튼: 역할 button, 체크 상태 없음 (TalkBack 이 '선택됨'을 함께 읽지 않게)
+    expect(btn.props.accessibilityRole).toBe("button");
+    expect(btn.props.accessibilityState).not.toHaveProperty("checked");
     b.act(() => (btn.props.onPress as () => void)());
     expect(h.remove).not.toHaveBeenCalled();
     const [title, , buttons] = h.alert.mock.calls[0]! as [string, string, { text: string; onPress?: () => void }[]];
@@ -216,6 +218,54 @@ describe("스크롤하면 머리에 현재가 (값 = 시세 머리)", () => {
     expect(title().text()).toBe(`삼성전자${headPrice}원+1.44%`);
     scroll(r, 10);
     expect(title().text()).toBe("삼성전자");
+  });
+
+  it("가격 줄이 다시 재어지면(글자 크기·줄 수가 바뀜) 스크롤 없이 지금 위치로 다시 판정한다", () => {
+    const r = open(samsung());
+    const title = () => render((stack(r).headerTitle as () => React.ReactElement)()).text();
+    const [head, price] = r.all().filter((n) => n.type === "View" && "onLayout" in n.props) as [HostNode, HostNode];
+    r.act(() => layout(head, 0, 180));
+    r.act(() => layout(price, 20, 60));
+    scroll(r, 100);
+    expect(title()).toBe("삼성전자84,300원+1.44%");
+    // 가격 줄이 두 줄로 늘어 아래 끝이 20+120=140 → 스크롤 100 에서는 아직 보인다 → 머리는 이름만
+    r.act(() => layout(price, 20, 120));
+    expect(title()).toBe("삼성전자");
+    // 다시 줄어들면(60) 가려진 것 → 현재가
+    r.act(() => layout(price, 20, 60));
+    expect(title()).toBe("삼성전자84,300원+1.44%");
+    // 시세 머리 칸이 아래로 밀려도(위에 띠가 생김) 다시 판정
+    r.act(() => layout(head, 40, 180));
+    expect(title()).toBe("삼성전자");
+  });
+
+  it("접기·펴기로 휴대폰↔넓은 창이 바뀌면 머리 현재가를 처음 상태로 (새 스크롤 칸은 맨 위에서 시작)", () => {
+    h.flag = true;
+    const r = open(samsung());
+    const title = () => render((stack(r).headerTitle as () => React.ReactElement)()).text();
+    const [head, price] = r.all().filter((n) => n.type === "View" && "onLayout" in n.props) as [HostNode, HostNode];
+    r.act(() => layout(head, 0, 180));
+    r.act(() => layout(price, 20, 60));
+    scroll(r, 300);
+    expect(title()).toBe("삼성전자84,300원+1.44%");
+    // 펼침 (933dp) → 넓은 창 배치
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    r.rerender();
+    r.rerender();
+    expect(r.all().filter((n) => n.type === "Screen").every((n) => !("onScroll" in n.props))).toBe(true);
+    // 다시 접음 (475dp) → 휴대폰 화면: 가격 줄이 보이는 맨 위 → 이름만
+    h.win = { width: 475, height: 751, scale: 2.625, fontScale: 1 };
+    r.rerender();
+    r.rerender();
+    expect(screen(r).props.onScroll).toBeTypeOf("function");
+    expect(title()).toBe("삼성전자");
+    // 새 스크롤 칸이 가격 줄을 다시 재기 전에는 스크롤해도 바뀌지 않고, 잰 뒤 지나가면 현재가
+    scroll(r, 300);
+    expect(title()).toBe("삼성전자");
+    const [head2, price2] = r.all().filter((n) => n.type === "View" && "onLayout" in n.props) as [HostNode, HostNode];
+    r.act(() => layout(head2, 0, 180));
+    r.act(() => layout(price2, 20, 60));
+    expect(title()).toBe("삼성전자84,300원+1.44%");
   });
 });
 

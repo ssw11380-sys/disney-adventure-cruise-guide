@@ -201,6 +201,18 @@ describe("oneHand: 휴대폰·접은 화면은 줄 스와이프", () => {
     expect(haptics).toEqual(["android:confirm"]);
   });
 
+  it("동기화가 오래 멈춰 잠금이 풀린 토스 종목(서버 inTossSnapshot): 버튼·확인 창이 '동기화 제외'를 알린다 — 서버 삭제가 동기화에서도 빼므로", () => {
+    h.stocks = [{ ...naver, tossSynced: false, inTossSnapshot: true }, { ...apple, tossSynced: false, inTossSnapshot: false }];
+    const r = draw({ oneHand: true });
+    expect(swipes(r).map((x) => x.props.actions.map((a) => a.label))).toEqual([
+      ["수정", "동기화 제외"],
+      ["수정", "삭제"],
+    ]);
+    swipes(r)[0]!.props.actions[1]!.onPress();
+    expect(h.alert.mock.calls[0]![0]).toBe("동기화 제외하고 삭제");
+    expect(h.alert.mock.calls[0]![1]).toContain("다음 동기화 때도 다시 나타나지 않습니다");
+  });
+
   it("지우기 실패: 오류 햅틱 + 실패 안내", async () => {
     const r = draw({ oneHand: true });
     swipes(r)[1]!.props.actions[1]!.onPress();
@@ -285,9 +297,9 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
     expect(byType(r, "TossImportButton")).toHaveLength(1);
     expect(r.text()).toContain("토스증권 계좌의 보유 종목을 바로 불러올 수 있습니다");
     expect(r.text()).toContain("검색(돋보기)");
-    // 버튼 줄은 읽기 폭(720)까지 — 넓은 창에서 창 폭 전체로 늘지 않게
+    // 버튼 줄은 읽기 폭(720)까지, 카드 가운데 — 넓은 창에서 창 폭 전체로 늘거나 왼쪽에 붙지 않게
     const row = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.type === "TossImportButton"))!;
-    expect(row.props.style).toMatchObject({ maxWidth: layout.readableMax });
+    expect(row.props.style).toMatchObject({ width: "100%", maxWidth: layout.readableMax, alignSelf: "center" });
   });
 
   it("보유만 있고 관심이 없으면 목록 끝에 관심 빈 칸 (버튼 하나), 관심이 있으면 없음", () => {

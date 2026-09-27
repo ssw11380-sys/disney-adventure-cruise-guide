@@ -343,6 +343,30 @@ describe("BH-46 동기화가 3시간 넘게 멈춘 사이 지운 토스 종목",
     await db.destroy();
   });
 
+  it("목록의 inTossSnapshot: 잠금(tossSynced)이 풀려도 지우면 동기화에서 빠지는 종목을 알린다 — 앱 지우기 버튼·확인 창 문구 (3-24, 삭제와 같은 기준)", async () => {
+    const { db, toss, stocks, sync, advance } = await setup();
+    toss.holdings[1] = [kr("035420", 9, 232555), us("TSLA", 4, 320)];
+    await sync.importHoldings();
+    await stocks.register({ code: "005930" }); // 직접 추가한 관심 종목
+    const flags = async () => Object.fromEntries((await stocks.listWithQuotes()).map((s) => [s.code, [s.tossSynced, s.inTossSnapshot]]));
+    expect(await flags()).toEqual({ "035420": [true, true], TSLA: [true, true], "005930": [false, false] });
+    advance(4 * 3_600_000); // 동기화가 4시간 멈춤 → 잠금은 풀리지만 지우면 여전히 동기화에서 빠진다
+    expect(await flags()).toEqual({ "035420": [false, true], TSLA: [false, true], "005930": [false, false] });
+    expect((await stocks.holdingMeta()).inSnapshot.has("TSLA")).toBe(true);
+    expect(await stocks.remove("TSLA")).toEqual({ tossExcluded: true });
+    // 직접 추가한 종목은 지워도 동기화와 상관없다
+    expect(await stocks.remove("005930")).toEqual({ tossExcluded: false });
+    await db.destroy();
+  });
+
+  it("inTossSnapshot: 자동 동기화가 꺼져 있어도(0분) 토스에서 가져온 종목이면 참 (잠금은 거짓)", async () => {
+    const { db, toss, stocks, sync } = await setup({ syncMinutes: 0 });
+    toss.holdings[1] = [kr("005930", 3, 70000)];
+    await sync.importHoldings();
+    expect((await stocks.listWithQuotes()).map((s) => [s.code, s.tossSynced, s.inTossSnapshot])).toEqual([["005930", false, true]]);
+    await db.destroy();
+  });
+
   it("자동 동기화가 꺼져 있어도(0분) 토스에서 가져온 종목을 지우면 수동 동기화가 다시 넣지 않는다 (다시 등록하면 다시 맞춤)", async () => {
     const { db, toss, stocks, sync, excluded, codes } = await setup({ syncMinutes: 0 });
     toss.holdings[1] = [kr("005930", 3, 70000), us("TSLA", 4, 320)];

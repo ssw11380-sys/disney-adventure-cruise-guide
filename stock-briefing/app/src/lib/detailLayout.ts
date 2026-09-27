@@ -196,6 +196,14 @@ export function detailHeaderLayout(o: DetailHeaderInput): DetailHeaderLayout {
 }
 
 /**
+ * 스크롤이 시세 머리의 가격 줄을 지나갔는지 (3-24 oneHand — 그러면 머리 제목에 현재가). head: 스크롤 안 시세 머리 칸의 y,
+ * row·rowH: 그 칸 안 가격 줄의 y·높이, y: 스크롤 위치. 가격 줄을 아직 재지 않았으면(rowH 0) 지나가지 않은 것으로
+ */
+export function priceRowPassed(edge: { head: number; row: number; rowH: number }, y: number): boolean {
+  return edge.rowH > 0 && y > edge.head + edge.row + edge.rowH;
+}
+
+/**
  * 휴대폰 종목 상세 Stack 머리 제목 칸의 최대 폭 (3-24 oneHand — 스크롤하면 이름 옆에 현재가). 네이티브 머리는 제목 칸 폭을 정해 주지 않아
  * 긴 이름 + 현재가가 오른쪽 버튼을 덮지 않게 직접 막는다: 창 폭 − 제목 시작 x(뒤로 버튼) − 오른쪽 버튼의 실제 폭(잰 값 — 미등록 종목의
  * '☆ 관심 추가' 글자 버튼은 약 90~120dp, 글자 크기를 따라 넓어진다. 재기 전에는 아이콘 하나 44) − 사이·오른쪽 여백

@@ -579,9 +579,11 @@ export function DetailBottomBar({ star, onStar, onChart }: { star: BarStar; onSt
       <Pressable
         onPress={onStar}
         disabled={busy}
+        // 동작을 말하는 버튼이다 (이름이 '관심 종목에 추가'·'관심 종목에서 빼기') — 체크 상태(checked)는 주지 않는다:
+        // TalkBack 이 '선택됨/선택 안 됨'을 함께 읽어 누르면 무엇이 되는지 헷갈리지 않게 (3-24 리뷰 수정 3)
         accessibilityRole="button"
         accessibilityLabel={starA11y}
-        accessibilityState={{ busy, disabled: busy, ...(star.kind === "edit" ? {} : { checked: star.kind === "unwatch" }) }}
+        accessibilityState={{ busy, disabled: busy }}
         style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
       >
         <Ionicons name={starIcon} size={font.title} color={starColor} />

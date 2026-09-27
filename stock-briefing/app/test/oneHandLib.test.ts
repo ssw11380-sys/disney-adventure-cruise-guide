@@ -23,8 +23,8 @@ const { removeConfirm, removeKind, removeLabel, rowA11yActions } = await import(
 const { openServerSettings, serverOpenRequest, serverSettingsParams } = await import("@/lib/settingsLink");
 const { ApiRequestError } = await import("@/api/client");
 const { emptyGuideToRemember, UX_OFF, uxFlagsFrom } = await import("@/lib/uxFlags");
-const { headPriceParts, headTitleMaxWidth } = await import("@/lib/detailLayout");
-const { sessionNow } = await import("@/lib/briefingRun");
+const { headPriceParts, headTitleMaxWidth, priceRowPassed } = await import("@/lib/detailLayout");
+const { runChoice, sessionNow } = await import("@/lib/briefingRun");
 const { oneHand } = await import("@/tokens");
 /** 차트 드래그 기준 (components/chart/PriceChart chartPanConfig — test/chartGesture 가 지킨다) */
 const chartPanConfig = { activeX: 14, failY: 10 };
@@ -218,6 +218,15 @@ describe("첫 실행 안내: 서버 자료로 새 사용자(종목 0개 + 토스
   });
 });
 
+describe("머리 현재가: 스크롤이 시세 머리의 가격 줄을 지났는지", () => {
+  it("머리 칸 y + 가격 줄 y + 높이를 넘으면 지남, 재기 전(높이 0)에는 지나지 않음", () => {
+    expect(priceRowPassed({ head: 0, row: 20, rowH: 60 }, 80)).toBe(false);
+    expect(priceRowPassed({ head: 0, row: 20, rowH: 60 }, 81)).toBe(true);
+    expect(priceRowPassed({ head: 40, row: 20, rowH: 60 }, 100)).toBe(false);
+    expect(priceRowPassed({ head: 0, row: 0, rowH: 0 }, 500)).toBe(false);
+  });
+});
+
 describe("지우기 문구: 토스 종목은 '동기화 제외', 보유는 '삭제', 관심은 '관심 해제' — 늘 확인 창", () => {
   it("이름과 확인 창", () => {
     const toss = { name: "삼성전자", quantity: 120, tossSynced: true };
@@ -231,6 +240,20 @@ describe("지우기 문구: 토스 종목은 '동기화 제외', 보유는 '삭�
     expect(removeConfirm(held)).toMatchObject({ title: "종목 삭제", confirm: "삭제" });
     expect(removeConfirm(watch)).toMatchObject({ title: "관심 해제", confirm: "관심 해제" });
     for (const s of [toss, held, watch]) expect(removeConfirm(s).message).toContain("지난 브리핑은 남습니다");
+  });
+
+  it("서버의 inTossSnapshot 을 따른다: 동기화가 오래 멈춰 잠금이 풀려도(tossSynced 거짓) 지우면 동기화에서 빠지면 '동기화 제외'로 알린다", () => {
+    // 동기화가 3시간 넘게 멈춤·자동 동기화 0분 → 잠금은 풀렸지만 서버 삭제는 동기화에서도 뺀다
+    const stale = { name: "삼성전자", quantity: 120, tossSynced: false, inTossSnapshot: true };
+    expect(removeKind(stale)).toBe("sync");
+    expect(removeLabel(stale)).toBe("동기화 제외");
+    expect(removeConfirm(stale).message).toContain("다음 동기화 때도 다시 나타나지 않습니다");
+    // 스냅샷에 없는 직접 추가 종목은 삭제 · 관심 해제
+    expect(removeKind({ name: "NAVER", quantity: 15, tossSynced: false, inTossSnapshot: false })).toBe("delete");
+    expect(removeKind({ name: "브로드컴", quantity: null, inTossSnapshot: false })).toBe("unwatch");
+    // 예전 서버(값 없음)는 tossSynced 로 대신
+    expect(removeKind({ name: "삼성전자", quantity: 120, tossSynced: true })).toBe("sync");
+    expect(removeKind({ name: "삼성전자", quantity: 120, tossSynced: false })).toBe("delete");
   });
 
   it("화면 읽기 동작: 수정 · 지우기 · 메뉴 열기", () => {
@@ -327,5 +350,15 @@ describe("그 밖의 계산 (3-24 리뷰 수정)", () => {
     expect(sessionNow(Date.parse("2026-09-28T02:59:00Z"))).toBe("morning"); // 11:59 KST
     expect(sessionNow(Date.parse("2026-09-28T03:00:00Z"))).toBe("afternoon"); // 12:00 KST
     expect(sessionNow(Date.parse("2026-09-27T20:00:00Z"))).toBe("morning"); // 05:00 KST
+  });
+
+  it("'지금 만들기' 확인 창: 고른 세션 + 다른 세션으로 바꾸기 (받침: 오전으로 · 오후로)", () => {
+    const am = runChoice("morning", 17);
+    expect(am.title).toBe("오전 브리핑 17종목 새로 만들기");
+    expect(am.message).toBe("17종목, 약 7분 걸리며 오늘 오전 브리핑을 덮어씁니다. 그동안 다른 생성은 할 수 없습니다.\n\n오후 브리핑을 만들려면 '오후로 바꾸기'를 누르세요.");
+    expect([am.other, am.switchLabel]).toEqual(["afternoon", "오후로 바꾸기"]);
+    const pm = runChoice("afternoon", 1);
+    expect(pm.title).toBe("오후 브리핑 1종목 새로 만들기");
+    expect([pm.other, pm.switchLabel]).toEqual(["morning", "오전으로 바꾸기"]);
   });
 });

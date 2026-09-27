@@ -324,8 +324,9 @@ export default function StocksScreen() {
           ? "토스증권 계좌의 보유 종목을 바로 불러올 수 있습니다. 다른 종목은 위의 검색(돋보기)으로 추가하세요."
           : "종목명이나 티커로 검색해 보유·관심 종목을 추가하세요."}
       </Text>
-      {/* 넓은 창(933dp 등)에서 버튼이 창 폭 전체(약 875dp)로 늘지 않게 읽기 폭(720)까지 — 첫 실행 안내와 같다. 휴대폰·접은 화면은 더 좁아 그대로 */}
-      <View style={{ flexDirection: "row", marginTop: space.sm, maxWidth: layout.readableMax }}>
+      {/* 넓은 창(933dp 등)에서 버튼이 창 폭 전체(약 875dp)로 늘지 않게 읽기 폭(720)까지, 카드 가운데에 — 첫 실행 안내와 같다
+          (왼쪽에 붙이면 카드 오른쪽 약 180dp 가 비어 기울어 보였다 — 3-24 리뷰 수정 3). 휴대폰·접은 화면은 카드가 더 좁아 그대로 */}
+      <View style={{ flexDirection: "row", marginTop: space.sm, width: "100%", maxWidth: layout.readableMax, alignSelf: "center" }}>
         {/* 버튼은 하나: 토스가 연결된 서버면 계좌 불러오기(가장 필요한 일), 아니면 종목 검색 */}
         {health.data?.tossOpenApi?.configured ? <TossImportButton /> : <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />}
       </View>

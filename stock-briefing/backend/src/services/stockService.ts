@@ -533,11 +533,19 @@ export class StockService {
     return parseTossDetail(row?.value ?? null);
   }
 
-  /** 평가에 쓰는 두 가지(토스 평가 기준·원화 장부)를 쿼리 1번으로 */
-  async holdingMeta(): Promise<{ detail: Map<string, TossHoldingDetail>; krw: Map<string, KrwCost>; synced: Set<string> }> {
+  /**
+   * 평가에 쓰는 두 가지(토스 평가 기준·원화 장부)와 토스 동기화 표시를 쿼리 1번으로.
+   * synced: 잠금(수량·평단을 동기화가 정함), inSnapshot: 지우면 동기화에서도 빠지는 종목(removeNow 와 같은 기준 — 잠금이 풀려도 참)
+   */
+  async holdingMeta(): Promise<{ detail: Map<string, TossHoldingDetail>; krw: Map<string, KrwCost>; synced: Set<string>; inSnapshot: Set<string> }> {
     const rows = await this.deps.db.selectFrom("meta").select(["key", "value"]).where("key", "in", [TOSS_DETAIL_KEY, KrwCostBook.KEY, SNAPSHOT_KEY, EXCLUDED_KEY]).execute();
     const v = (k: string) => rows.find((r) => r.key === k)?.value ?? null;
-    return { detail: parseTossDetail(v(TOSS_DETAIL_KEY)), krw: KrwCostBook.summarize(KrwCostBook.parse(v(KrwCostBook.KEY))), synced: this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY)) };
+    return {
+      detail: parseTossDetail(v(TOSS_DETAIL_KEY)),
+      krw: KrwCostBook.summarize(KrwCostBook.parse(v(KrwCostBook.KEY))),
+      synced: this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY)),
+      inSnapshot: this.syncedFrom(v(SNAPSHOT_KEY), v(EXCLUDED_KEY), v(TOSS_DETAIL_KEY), true),
+    };
   }
 
   /**
@@ -597,7 +605,7 @@ export class StockService {
     return stocks.map((s) => {
       const quote = this.current(s.code, quick, ctx);
       const quoteError = quote ? null : (this.quoteErrors.get(s.code) ?? "시세를 불러오는 중입니다");
-      return { ...s, tossSynced: meta.synced.has(s.code), quote, quoteError, evaluation: evaluate(s, quote, meta.detail.get(s.code), meta.krw.get(s.code)) };
+      return { ...s, tossSynced: meta.synced.has(s.code), inTossSnapshot: meta.inSnapshot.has(s.code), quote, quoteError, evaluation: evaluate(s, quote, meta.detail.get(s.code), meta.krw.get(s.code)) };
     });
   }
 

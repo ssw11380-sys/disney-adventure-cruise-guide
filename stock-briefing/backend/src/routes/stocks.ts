@@ -52,8 +52,17 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
     } catch (e) {
       quoteError = e instanceof Error ? e.message : String(e);
     }
-    const { detail, krw, synced } = await service.holdingMeta();
-    return { ...stock, registered: !!registered, tossSynced: !!registered && synced.has(code), quote, quoteError, evaluation: evaluate(stock, quote, detail.get(code), krw.get(code)) };
+    const { detail, krw, synced, inSnapshot } = await service.holdingMeta();
+    return {
+      ...stock,
+      registered: !!registered,
+      tossSynced: !!registered && synced.has(code),
+      // 지우면 토스 동기화에서도 빠지는지 (잠금이 풀려도 — 앱의 지우기 버튼·확인 창 문구, 3-24)
+      inTossSnapshot: !!registered && inSnapshot.has(code),
+      quote,
+      quoteError,
+      evaluation: evaluate(stock, quote, detail.get(code), krw.get(code)),
+    };
   });
 
   app.patch("/:code", async (req) => {

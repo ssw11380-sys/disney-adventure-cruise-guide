@@ -1,7 +1,9 @@
 /**
  * 잔고 줄의 수정·지우기 (3-24, 기능 플래그 oneHand): 스와이프 버튼 · 길게 누르기 메뉴 · 화면 읽기 동작 · 종목 상세 아래 막대가 같은 말을 쓴다.
  * 지우기는 늘 확인 창을 한 번 거친다 (되돌릴 수 없는 일).
- *  - 토스 연동 종목: '동기화 제외' — 지우면 토스 동기화에서도 빠져 다시 나타나지 않는다 (수정 화면의 '동기화 제외하고 삭제'와 같은 뜻)
+ *  - 토스 연동 종목: '동기화 제외' — 지우면 토스 동기화에서도 빠져 다시 나타나지 않는다 (수정 화면의 '동기화 제외하고 삭제'와 같은 뜻).
+ *    서버의 inTossSnapshot(지우면 동기화에서 빠지는 종목 — 동기화가 3시간 넘게 멈췄거나 자동 동기화 0분이라 잠금이 풀린 때도 참)을 따른다.
+ *    예전 서버(값 없음)는 tossSynced 로 대신한다
  *  - 보유 종목(수량 있음): '삭제'
  *  - 관심 종목(수량 없음): '관심 해제'
  */
@@ -9,12 +11,13 @@ export interface RemovableStock {
   name: string;
   quantity: number | null;
   tossSynced?: boolean;
+  inTossSnapshot?: boolean;
 }
 
 export type RemoveKind = "sync" | "delete" | "unwatch";
 
 export function removeKind(s: RemovableStock): RemoveKind {
-  if (s.tossSynced) return "sync";
+  if (s.inTossSnapshot ?? s.tossSynced) return "sync";
   return s.quantity ? "delete" : "unwatch";
 }
 

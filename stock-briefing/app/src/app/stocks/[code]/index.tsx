@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnyMarketOpen, useBriefings, useCandles, useFeature, useStock, useStockMutations } from "@/api/hooks";
@@ -17,7 +17,7 @@ import { SplitScreen } from "@/components/SplitScreen";
 import { AnalysisPreview, AnalysisTab, BriefingList, DetailBottomBar, DetailHeader, FillChart, HeadTitle, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type BarStar, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
 import { ErrorView, LiveDot, Segmented, Stat, StatGrid } from "@/components/ui";
 import { detailNames, detailSubtitle, holdingLine, realText } from "@/lib/detailText";
-import { detailMode, parseDetailTab, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
+import { detailMode, parseDetailTab, priceRowPassed, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, shownSign, toDisplay } from "@/lib/format";
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { rememberNav, useCachedRow, useHoldingsNav, type NavItem } from "@/lib/holdingsNav";
@@ -89,22 +89,37 @@ export default function StockDetailScreen() {
     const w = Math.round(e.nativeEvent.layout.width);
     setHeadRightW((cur) => (cur === w ? cur : w));
   }, []);
-  const priceEdge = useRef({ head: 0, row: 0, rowH: 0, shown: false });
-  const onHeadLayout = useCallback((e: LayoutChangeEvent) => {
-    priceEdge.current.head = e.nativeEvent.layout.y;
-  }, []);
-  const onPriceLayout = useCallback((e: LayoutChangeEvent) => {
-    priceEdge.current.row = e.nativeEvent.layout.y;
-    priceEdge.current.rowH = e.nativeEvent.layout.height;
-  }, []);
-  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+  // y: 마지막 스크롤 위치 — 가격 줄이 다시 재어질 때(글자 크기·시세 머리 줄 수가 바뀜) 스크롤 없이도 지금 위치로 다시 판정한다
+  const priceEdge = useRef({ head: 0, row: 0, rowH: 0, y: 0, shown: false });
+  const recheckHeadPrice = useCallback(() => {
     const p = priceEdge.current;
-    const edge = p.head + p.row + p.rowH;
-    const next = p.rowH > 0 && e.nativeEvent.contentOffset.y > edge;
+    const next = priceRowPassed(p, p.y);
     if (next === p.shown) return;
     p.shown = next;
     setHeadPrice(next);
   }, []);
+  const onHeadLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      priceEdge.current.head = e.nativeEvent.layout.y;
+      recheckHeadPrice();
+    },
+    [recheckHeadPrice],
+  );
+  const onPriceLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      priceEdge.current.row = e.nativeEvent.layout.y;
+      priceEdge.current.rowH = e.nativeEvent.layout.height;
+      recheckHeadPrice();
+    },
+    [recheckHeadPrice],
+  );
+  const onScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      priceEdge.current.y = e.nativeEvent.contentOffset.y;
+      recheckHeadPrice();
+    },
+    [recheckHeadPrice],
+  );
   // 넓은 창 배치 (플래그가 꺼져 있으면 창 크기와 상관없이 phone)
   const fold = useFoldLayout();
   // 휴대폰·접은 화면 시세 머리 아래 보유 한 줄 (기능 플래그 detailPolish — 앱 fallback 꺼짐)
@@ -115,6 +130,17 @@ export default function StockDetailScreen() {
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const mode = detailMode(fold, win);
+  // 접기·펴기로 배치가 바뀌면(phone↔넓은 창) 휴대폰 화면의 스크롤 칸이 새로 생겨 맨 위에서 시작한다 → 머리 현재가도 처음 상태로
+  // (그대로 두면 다음 스크롤 전까지 가격 줄이 보이는데도 머리에 현재가가 남았다 — 3-24 리뷰 수정 3). 렌더 중 이전 값 저장 패턴
+  const [edgeMode, setEdgeMode] = useState(mode);
+  if (edgeMode !== mode) {
+    setEdgeMode(mode);
+    setHeadPrice(false);
+  }
+  useEffect(() => {
+    // 재어 둔 자리·스크롤 위치도 버린다 (새 스크롤 칸이 다시 잰다)
+    priceEdge.current = { head: 0, row: 0, rowH: 0, y: 0, shown: false };
+  }, [mode]);
   // 차트 기간·탭: 주소 검색어에 있으면 그 값으로 연다 (없으면 지금처럼 일봉 · 기업개요, 넓은 창은 최근 브리핑)
   const [period, setPeriodState] = useState<CandlePeriod>(() => parseCandlePeriod(params.period));
   const [tabPick, setTabPick] = useState<DetailTab | null>(() => parseDetailTab(params.tab));

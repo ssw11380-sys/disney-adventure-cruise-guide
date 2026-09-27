@@ -191,7 +191,7 @@ describe("브리핑: 종목 없음 · 브리핑 없음", () => {
     expect(buttonsOf(off)).toHaveLength(0);
   });
 
-  it("종목은 있는데 만든 브리핑이 없으면 안내 + '지금 만들기' 하나 → 누른 시각의 세션 확인 창 바로 (오전·오후 고르기 없음), 수동 생성 카드는 숨김", () => {
+  it("종목은 있는데 만든 브리핑이 없으면 안내 + '지금 만들기' 하나 → 누른 시각의 세션으로 확인 창 (창 안에서 다른 세션으로 바꿈), 수동 생성 카드는 숨김", () => {
     h.latest = [{ code: "005930", name: "삼성전자", latest: null }];
     h.stocks = [holding("005930", quote("005930", 84_300), 10, 70_000, undefined, "삼성전자")];
     h.flags = { allocationView: true, briefingManualRun: true };
@@ -218,6 +218,35 @@ describe("브리핑: 종목 없음 · 브리핑 없음", () => {
     }
     // 꺼져 있으면 수동 생성 카드 그대로
     expect(draw(<BriefingsScreen />, false).text()).toContain("수동 생성");
+  });
+
+  it("'지금 만들기' 확인 창에서 다른 세션으로 바꿀 수 있다: 오전(09:10)에 '오후로 바꾸기' → 오후 확인 창 → 만들기 = 오후 브리핑", () => {
+    h.latest = [{ code: "005930", name: "삼성전자", latest: null }];
+    h.stocks = [holding("005930", quote("005930", 84_300), 10, 70_000, undefined, "삼성전자")];
+    h.flags = { allocationView: true, briefingManualRun: true };
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-28T00:10:00Z"));
+    try {
+      const r = draw(<BriefingsScreen />, true);
+      press(buttonsOf(empties(r)[0]!)[0]!);
+      type Btn = { text: string; style?: string; onPress?: () => void };
+      const [title, message, buttons] = h.alert.mock.calls[0]! as [string, string, Btn[]];
+      expect(title).toBe("오전 브리핑 1종목 새로 만들기");
+      expect(message).toContain("오후 브리핑을 만들려면 '오후로 바꾸기'를 누르세요.");
+      // 버튼 셋: 바꾸기 · 취소 · 만들기 (안드로이드 알림 창 한 줄에 셋까지)
+      expect(buttons.map((b) => b.text)).toEqual(["오후로 바꾸기", "취소", "만들기"]);
+      expect(buttons[1]!.style).toBe("cancel");
+      buttons[0]!.onPress!();
+      const [title2, message2, buttons2] = h.alert.mock.calls[1]! as [string, string, Btn[]];
+      expect(title2).toBe("오후 브리핑 1종목 새로 만들기");
+      expect(message2).toContain("'오전으로 바꾸기'");
+      expect(buttons2.map((b) => b.text)).toEqual(["오전으로 바꾸기", "취소", "만들기"]);
+      expect(h.mutate).not.toHaveBeenCalled();
+      buttons2[2]!.onPress!();
+      expect(h.mutate).toHaveBeenCalledTimes(1);
+      expect(h.mutate.mock.calls[0]![0]).toMatchObject({ session: "afternoon", force: true });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("'지금 만들기'는 수동 생성 확인(briefingManualRun)이 꺼져 있어도 늘 확인 창을 거친다 — 한 번 눌러 전 종목 생성이 시작되지 않게", () => {
