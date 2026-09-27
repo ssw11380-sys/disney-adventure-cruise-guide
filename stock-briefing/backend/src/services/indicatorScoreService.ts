@@ -102,6 +102,8 @@ export interface ScoreStock {
   market: string;
   /** 종목 마스터 분류 (EF = ETF, EN = ETN) */
   groupCode?: string | null;
+  /** 등록 종목인지 (false = 발견 탭 등에서 연 미등록 종목 — 계산은 하되 하루 기록은 남기지 않음). 모르면 등록 종목으로 본다 */
+  registered?: boolean;
 }
 
 /** 점수에 필요한 자료 (app.ts 가 실제 출처로 채운다, 테스트는 기록한 일봉으로) */
@@ -197,6 +199,7 @@ export class IndicatorScoreService {
   private readonly cache = new Map<string, { at: number; ttl: number; resp: ScoresResponse }>();
   private readonly inflight = new Map<string, Promise<ScoresResponse | null>>();
   private tasks: ScheduledTask[] = [];
+  private catchUpTimer: NodeJS.Timeout | null = null;
   private running: Promise<unknown> | null = null;
   /** 마지막 미리 계산 결과 (관리·로그용) */
   lastRun: { market: ScoreMarket; at: string; computed: number; failed: number; skipped?: string } | null = null;
@@ -280,11 +283,36 @@ export class IndicatorScoreService {
       const r = SCORE_READY[m];
       this.tasks.push(cron.schedule(r.cron, () => void this.runDaily(m).catch(() => undefined), { timezone: r.tz, name: `indicator-scores-${m.toLowerCase()}` }));
     }
+    // 준비 시각 뒤에 서버가 다시 켜졌으면(배포 등) 1분 뒤 그날 몫을 따라잡는다 — 예약은 다음 날까지 오지 않으므로
+    this.catchUpTimer = setTimeout(() => void this.catchUp().catch(() => undefined), 60_000);
+    this.catchUpTimer.unref?.();
   }
 
   stop(): void {
     for (const t of this.tasks) void t.destroy();
     this.tasks = [];
+    if (this.catchUpTimer) clearTimeout(this.catchUpTimer);
+    this.catchUpTimer = null;
+  }
+
+  /**
+   * 따라잡기: 지금이 그 시장 준비 시각 뒤(같은 현지 거래일 안)인데 등록 종목 가운데 오늘 기록이 없는 종목이 있으면 그 시장을 미리 계산한다.
+   * 플래그가 꺼져 있으면 아무것도 하지 않는다. 돌린 시장 목록
+   */
+  async catchUp(): Promise<ScoreMarket[]> {
+    if (!(await this.enabled())) return [];
+    const ran: ScoreMarket[] = [];
+    for (const m of ["KR", "US"] as const) {
+      if (!dailyRunDue(m, this.now())) continue;
+      const date = latestScoreDate(m, this.now());
+      const codes = (await this.deps.sources.registered()).filter((s) => marketOf(s.code) === m).map((s) => s.code);
+      if (!codes.length) continue;
+      const have = await this.deps.db.selectFrom("indicator_scores").select("code").where("score_date", "=", date).where("kind", "=", "trend").where("code", "in", codes).execute();
+      if (have.length >= codes.length) continue;
+      await this.runDaily(m);
+      ran.push(m);
+    }
+    return ran;
   }
 
   // ── 계산 ───────────────────────────────────────────────
@@ -319,7 +347,7 @@ export class IndicatorScoreService {
       text: { titleNote: CARD_TITLE_NOTE, notForecast: NOT_FORECAST, how: howLines(), disclaimerShort: DISCLAIMER_SHORT, detailNote: DETAIL_NOTE, trendAbout: TREND_ABOUT },
       computedAt: seoulIso(this.now()),
     };
-    if (store && priceDate && trend.block.reason?.code !== "fetchFailed") await this.save(resp, trend.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 기록 저장 실패"));
+    if (store && stock.registered !== false && priceDate && trend.block.reason?.code !== "fetchFailed") await this.save(resp, trend.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 기록 저장 실패"));
     return resp;
   }
 
@@ -467,11 +495,12 @@ export class IndicatorScoreService {
     let check: { days: number; corr: number | null; beta: number | null; ok: boolean | null } | null = null;
     if (underlying) {
       und = await this.fetchCut(underlying, scoreDate);
-      if (und && own) {
+      if (!und) underlying = null;
+      else if (own) {
         check = verifyUnderlying(own.candles, und.candles, L);
         // 하루 수익이 L배를 따라가지 않으면 기초자산을 모르는 것으로 (이름으로 짐작한 기초는 확인되어야만 쓴다)
         if (check.ok === false || (check.ok === null && kind.source !== "table")) underlying = null;
-      } else if (!und) underlying = null;
+      } else if (kind.source !== "table") underlying = null; // 상품 일봉이 없어 확인할 수 없음 — 정적 표만 믿는다
     }
     const facts = own ? leverageFacts(own.candles, underlying && und ? und.candles : null, L) : null;
     const box = leverageBox(facts, L, underlying ? kind.tracks : null);
@@ -558,8 +587,9 @@ export function defaultScoreSources(deps: {
   const group = async (code: string) => (await deps.db.selectFrom("listed_stocks").select("group_code").where("code", "=", code).executeTakeFirst())?.group_code ?? null;
   return {
     stock: async (code) => {
-      const s = (await deps.stocks.get(code)) ?? (await deps.stocks.preview(code));
-      return s ? { code: s.code, name: s.name, market: s.market, groupCode: await group(s.code).catch(() => null) } : null;
+      const reg = await deps.stocks.get(code);
+      const s = reg ?? (await deps.stocks.preview(code));
+      return s ? { code: s.code, name: s.name, market: s.market, groupCode: await group(s.code).catch(() => null), registered: !!reg } : null;
     },
     candles: (code, count) => deps.stocks.getCandles(code, "D", count),
     benchmark: async (code, count) => (await deps.indices.candles(code, "D", count))?.candles ?? null,

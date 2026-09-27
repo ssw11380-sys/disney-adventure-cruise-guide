@@ -301,6 +301,29 @@ describe("장 마감 뒤 하루 한 번 (한국 20:10 · 뉴욕 17:30), 휴장�
     expect((await app!.inject({ method: "GET", url: "/api/scores/005930/history" })).json()).toEqual({ code: "005930", items: [{ date: "2026-09-23", status: "ok", score: expect.closeTo(expected.trend["005930.KS"]!.score, 9), band: "다소 강함" }] });
   });
 
+  it("따라잡기: 준비 시각 뒤 서버가 다시 켜졌고 오늘 기록이 빠진 등록 종목이 있으면 그 시장만 계산, 다 있으면·준비 전·꺼짐이면 안 함", async () => {
+    const { src, calls } = fixtureSources({ registered: ["NVDA", "005930"] });
+    await start(src, ny("2026-09-25T17:10:00"));
+    const svc = app!.indicatorScores;
+    expect(await svc.catchUp()).toEqual([]); // 미국 준비 전, 한국 9/26 06:10 은 전날 거래일 밤이 지남
+    clock = ny("2026-09-25T18:00:00");
+    expect(await svc.catchUp()).toEqual(["US"]);
+    expect((await db.selectFrom("indicator_scores").select("code").execute()).map((r) => r.code)).toEqual(["NVDA"]);
+    const before = calls.candles.length;
+    expect(await svc.catchUp()).toEqual([]); // 이미 있음
+    expect(calls.candles.length).toBe(before);
+    await app!.inject({ method: "PUT", url: "/api/admin/features", payload: { indicatorScores: false } });
+    clock = kst("2026-09-23T21:00:00");
+    expect(await svc.catchUp()).toEqual([]);
+  });
+
+  it("미등록 종목(발견 탭에서 연 종목)은 계산해 보여 주되 하루 기록은 남기지 않는다", async () => {
+    const { src } = fixtureSources({ stocks: { NVDA: { code: "NVDA", name: "엔비디아", market: "NASDAQ", registered: false } } });
+    await start(src);
+    expect((await get("NVDA")).body.trend.score).toBe(69);
+    expect(await db.selectFrom("indicator_scores").selectAll().execute()).toEqual([]);
+  });
+
   it("같은 기준 거래일이면 다시 계산하지 않는다 (일봉 요청 1번)", async () => {
     const { src, calls } = fixtureSources();
     await start(src);
@@ -364,6 +387,22 @@ describe("레버리지·인버스", () => {
     expect(lines[0]).toBe("이 상품은 기초자산 하루 움직임의 3배를 따라가도록 만든 상품입니다.");
     expect(lines.some((l) => l.includes("기초자산 −"))).toBe(false);
     expect(lines).toContain("· 이 상품의 최근 3개월 변동성 연 150%, 최근 1년 가장 크게 떨어진 폭 69.4%");
+  });
+
+  it("상품 일봉을 받지 못하면: 정적 표의 기초(SOXL→SOXX)는 참고 줄을 두고, 이름으로 짐작한 기초는 확인할 수 없어 두지 않는다", async () => {
+    const table = fixtureSources({ candles: { SOXL: new Error("상품 일봉 실패") } });
+    await start(table.src);
+    expect((await get("SOXL")).body.trend.reference).toMatchObject({ code: "SOXX", score: 73 });
+    await app!.close();
+    app = null;
+    const guessed = fixtureSources({
+      candles: { IONX: new Error("상품 일봉 실패"), IONQ: candlesOf("RGTI") },
+      stocks: { IONX: { code: "IONX", name: "IONX", market: "NASDAQ", groupCode: "EF" }, IONQ: { code: "IONQ", name: "아이온큐", market: "NASDAQ" } },
+      product: { IONX: { name: "IONX", englishName: "DEFIANCE DAILY TARGET 2X LONG IONQ ETF", detailName: null, group: "EF", exchange: "NSQ", leverageFactor: 2, singleStockEtp: true, derivativeEtf: true } },
+    });
+    await start(guessed.src);
+    const t = (await get("IONX")).body.trend;
+    expect(t).toMatchObject({ status: "excluded", reference: null, reason: { code: "underlyingUnknown" } });
   });
 
   it("인버스(SQQQ)는 대상 아님", async () => {
