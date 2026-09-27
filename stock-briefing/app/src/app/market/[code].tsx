@@ -2,9 +2,10 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useMarketCandles, useMarketIndices } from "@/api/hooks";
+import { useFeature, useMarketCandles, useMarketIndices } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
 import { CandleChart } from "@/components/CandleChart";
+import { createChartViewMemo } from "@/lib/chartLayout";
 import { usePull } from "@/components/Freshness";
 import { formatIndexValue, MarketStrip } from "@/components/MarketStrip";
 import { Screen } from "@/components/Screen";
@@ -36,6 +37,10 @@ export default function MarketIndexScreen() {
   const indices = useMarketIndices();
   const candles = useMarketCandles(code, period, CANDLE_COUNT[period]);
   const fold = useFoldLayout();
+  // 차트의 보이는 구간 (기능 플래그 detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
+  const polish = useFeature("detailPolish", false);
+  const [chartView] = useState(createChartViewMemo);
+  const chartMemo = polish ? { viewMemo: chartView } : {};
   const win = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const mode = detailMode(fold, win);
@@ -111,6 +116,7 @@ export default function MarketIndexScreen() {
             currency="PT"
             quote={quote}
             hasVolume={hasVolume}
+            {...chartMemo}
           />
           {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text> : null}
           {note ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{note}</Text> : null}
@@ -164,6 +170,7 @@ export default function MarketIndexScreen() {
         quote={quote}
         hasVolume={hasVolume}
         height={height}
+        {...chartMemo}
       />
       {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text> : null}
       {note ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{note}</Text> : null}

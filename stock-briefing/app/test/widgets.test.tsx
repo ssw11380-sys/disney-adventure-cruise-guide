@@ -140,15 +140,62 @@ describe("위젯-3: 시세 없는 보유 종목", () => {
   });
 
   it("어제 값으로 채우면 등락은 0 (지난 거래일 등락이 오늘 손익에 들어가지 않게)", () => {
-    const yesterday = [holding("005930", quote("005930", 70_000, { change: 5_000, changeRate: 7.7, asOf: "2026-09-23T15:30:00+09:00" }), 10, 60_000)];
+    // 평범한 거래일(9/23 수 15:40)에 9/22(화) 값으로 채움
+    const wed = Date.parse("2026-09-23T15:40:00+09:00");
+    const yesterday = [holding("005930", quote("005930", 70_000, { change: 5_000, changeRate: 7.7, asOf: "2026-09-22T15:30:00+09:00" }), 10, 60_000)];
     const now = [{ ...yesterday[0]!, quote: null, evaluation: null }];
-    const f = fillFromLast(now, yesterday, NOW);
+    const f = fillFromLast(now, yesterday, wed);
     expect(f.filled).toEqual(["005930"]);
     expect(f.stocks[0]!.quote!.change).toBe(0);
     expect(f.stocks[0]!.quote!.price).toBe(70_000);
     // 오늘 값이면 등락 유지
-    const today = [holding("005930", quote("005930", 70_000, { change: 5_000, asOf: AT_CLOSE }), 10, 60_000)];
-    expect(fillFromLast(now, today, NOW).stocks[0]!.quote!.change).toBe(5_000);
+    const today = [holding("005930", quote("005930", 70_000, { change: 5_000, asOf: "2026-09-23T15:30:00+09:00" }), 10, 60_000)];
+    expect(fillFromLast(now, today, wed).stocks[0]!.quote!.change).toBe(5_000);
+  });
+
+  it("한국 평일 휴장일(추석 9/24·9/25)에는 주말처럼 직전 거래일(9/23) 등락을 그대로 둔다 — 휴장일을 새 거래일로 보지 않는다", () => {
+    const wedClose = [holding("005930", quote("005930", 70_000, { change: 5_000, changeRate: 7.7, asOf: "2026-09-23T15:30:00+09:00" }), 10, 60_000)];
+    const gone = [{ ...wedClose[0]!, quote: null, evaluation: null }];
+    for (const t of ["2026-09-24T15:40:00+09:00", "2026-09-25T10:00:00+09:00", "2026-09-26T12:00:00+09:00", "2026-09-28T07:30:00+09:00"]) {
+      expect(fillFromLast(gone, wedClose, Date.parse(t)).stocks[0]!.quote!.change, t).toBe(5_000);
+    }
+    // 휴장 뒤 첫 거래일(9/28 월 08:00~)에는 지난 거래일 값이라 0
+    expect(fillFromLast(gone, wedClose, Date.parse("2026-09-28T09:10:00+09:00")).stocks[0]!.quote!.change).toBe(0);
+  });
+
+  it("다듬은 지수 줄: 추석 휴장 중·바로 이은 주말·다음 거래일 장 전까지 9/23 코스피는 흐리게 + '9/23' (예전과 같게 — 날에 따라 달라지지 않게)", async () => {
+    const { lastOpenedSession, polishedIndexItems } = await import("@/widgets/model");
+    const kospi = [{ code: "KOSPI", name: "코스피", value: 7080.92, change: 63.01, changeRate: 0.9, asOf: "2026-09-23T15:30:00+09:00" }];
+    const item = (iso: string) => polishedIndexItems(kospi, Date.parse(iso), false)[0]!;
+    const tagAt = (iso: string) => item(iso).tag;
+    expect(lastOpenedSession(Date.parse("2026-09-24T10:00:00+09:00"), "005930")).toBe("2026-09-24");
+    expect(tagAt("2026-09-24T10:00:00+09:00")).toBe("9/23");
+    expect(tagAt("2026-09-25T08:30:00+09:00")).toBe("9/23"); // 9/25 장 전 = 9/24(휴장) 세션
+    expect(tagAt("2026-10-05T10:00:00+09:00")).toBe("9/23"); // 개천절 대체공휴일(값이 더 옛날이면 그 날짜)
+    expect(tagAt("2026-09-24T08:30:00+09:00")).toBeNull(); // 휴장일 09:00 전 = 9/23 세션
+    // 휴장 뒤 주말(9/26 토·9/27 일)·월요일 장 전(9/28 08:59): 가장 최근 평일은 9/25(휴장) → 9/23 값은 사흘 전 값이라 흐리게 + 날짜
+    for (const iso of ["2026-09-26T12:00:00+09:00", "2026-09-27T12:00:00+09:00", "2026-09-28T08:59:00+09:00"]) {
+      expect(tagAt(iso), iso).toBe("9/23");
+      expect(item(iso).stale, iso).toBe(true);
+      expect(item(iso).tagSpeech, iso).toBe("9월 23일 값");
+    }
+    expect(lastOpenedSession(Date.parse("2026-09-27T12:00:00+09:00"), "005930")).toBe("2026-09-25");
+    expect(lastOpenedSession(Date.parse("2026-09-28T08:59:00+09:00"), "005930")).toBe("2026-09-25");
+    expect(tagAt("2026-09-28T10:00:00+09:00")).toBe("9/23"); // 휴장 뒤 첫 거래일 장중에 옛 값
+    // 평범한 주말: 금요일(9/18) 값은 토·일·월 장 전에 흐리지 않는다 (예전 그대로)
+    const friday = [{ ...kospi[0]!, asOf: "2026-09-18T15:30:00+09:00" }];
+    for (const iso of ["2026-09-19T12:00:00+09:00", "2026-09-20T23:00:00+09:00", "2026-09-21T08:59:00+09:00"]) {
+      const it0 = polishedIndexItems(friday, Date.parse(iso), false)[0]!;
+      expect(it0.tag, iso).toBeNull();
+      expect(it0.stale, iso).toBe(false);
+    }
+    // 연말 휴장(12/31 목) 뒤 신정(1/1 금)·주말: 12/30 값은 흐리게 + '12/30'
+    const dec30 = [{ ...kospi[0]!, asOf: "2026-12-30T15:30:00+09:00" }];
+    for (const iso of ["2026-12-31T10:00:00+09:00", "2027-01-02T12:00:00+09:00", "2027-01-04T08:30:00+09:00"])
+      expect(polishedIndexItems(dec30, Date.parse(iso), false)[0]!.tag, iso).toBe("12/30");
+    // 미국 지수는 미국 휴장일을 건너뛴다 (예전 그대로): 추수감사절(11/26 목) 다음 날 낮(한국 11/27 금 12:00 = 뉴욕 11/26 22:00) — 11/25 값이 지금 값
+    const nasdaq = [{ code: "NASDAQ", name: "나스닥", value: 23000, change: 10, changeRate: 0.04, asOf: "2026-11-25T16:00:00-05:00" }];
+    expect(polishedIndexItems(nasdaq, Date.parse("2026-11-27T12:00:00+09:00"), false)[0]!.tag).toBeNull();
   });
 
   it("BH-40: 미국 종목은 뉴욕 거래일로 본다 — 한국 자정이 지나도 같은 뉴욕 세션이면 등락 유지, 한국 날짜가 같아도 다른 뉴욕 세션이면 0", () => {

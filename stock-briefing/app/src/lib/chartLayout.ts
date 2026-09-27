@@ -291,6 +291,71 @@ export function pastViewLabel(
   return { text: `${amount} 전까지 보는 중`, short: `${amount} 전` };
 }
 
+// ── 처음 보이는 봉 수 ──
+
+/**
+ * 차트를 처음 열 때(또는 기간을 바꿨을 때) 고르는 봉 수 칩: lib/chartPrefs WINDOWS[period] 의 몇 번째인지.
+ * 기본은 둘째(일 120 · 주 104 · 월 60 · 분봉 둘째)로 예전 그대로.
+ * 좁은 창(휴대폰·접은 화면 — lib/windowClass 폭 등급 'compact')의 일봉만 첫째(60일) — 기능 플래그 detailPolish (꺼지면 어디서나 120일).
+ * 접은 화면 차트 폭 약 400dp 에 120봉이면 봉 하나가 약 3dp 라, 6월 급등 같은 큰 봉이 있으면 최근 봉이 납작하게 눌렸다
+ * (RGTX 접은 화면 캡처, 2026-09-27 결정). 펼친 화면(중간·넓음)은 120 그대로. 핀치·옮기기로는 예전처럼 전체 기간까지 본다
+ */
+export function initialWindowIdx(period: CandlePeriod, o: { compact: boolean; polish: boolean }): number {
+  return o.polish && o.compact && period === "D" ? 0 : 1;
+}
+
+/**
+ * initialWindowIdx 의 '좁은 창'인지: 창 폭 등급이 'compact'(폭 600dp 미만)여야 하고,
+ * 부르는 쪽이 차트 폭을 정하면(전체 화면 차트) 그 폭도 창 600dp 의 상세 차트 폭(600 − 패널 여백 14 × 2 = 572)보다 좁아야 한다.
+ *  - 접은 화면에서 '가로로 보기'로 돌려 그린 차트(폭 약 647dp)는 창이 좁아도 넓은 차트 — 돌린 채로 새로 시작할 때(기간을 바꿨다 돌아옴)만 120일이고,
+ *    세로에서 보던 차트를 돌리면 보던 봉 수(60일 등)를 그대로 잇는다 (CandleChart 의 보이는 구간은 새로 시작할 때만 기본을 고른다)
+ *  - 창이 중간(600dp 이상)이면 전체 화면 차트 폭이 572 보다 조금 좁아도(창 600~603 → 차트 568~571) 좁은 창이 아니다 — '펼친 화면은 120' 그대로
+ */
+export function isNarrowChart(o: { windowCompact: boolean; width?: number }): boolean {
+  return o.windowCompact && (o.width === undefined || o.width < layout.mediumMin - CHART_PANEL_PAD * 2);
+}
+
+/** 차트의 보이는 구간: 기간 · 고른 봉 수 칩(WINDOWS 의 몇 번째) · 보이는 봉 수와 위치 (components/CandleChart) */
+export interface ChartViewState {
+  period: CandlePeriod;
+  windowIdx: number;
+  view: { count: number; offset: number };
+  /**
+   * 사용자가 아직 손대지 않은 기본 구간이면, 그 기본을 고를 때 본 detailPolish 값. 칩·핀치·드래그·‹ › 버튼으로 손대면 없앤다.
+   * 기능 플래그는 저장된 값이 복원되거나 서버에서 받아 오기 전에는 fallback(꺼짐)이라, 차트가 그보다 먼저 그려지면(위젯 지수 줄을 눌러
+   * 앱이 새로 열릴 때의 지수 상세·주소로 연 전체 화면) 120일로 시작한다. 이 값이 지금 플래그와 다르면 기본을 다시 고른다 (needsFreshView)
+   */
+  autoPolish?: boolean;
+}
+
+/**
+ * 보이는 구간을 기본으로 다시 골라야 하는지: 기간이 바뀌었거나, 손대지 않은 기본인데 고를 때와 detailPolish 값이 달라졌을 때(플래그가 늦게 도착·서버가 끔).
+ * 창 크기(접고 펴기)가 바뀐 것만으로는 다시 고르지 않는다 — 보던 봉 수를 그대로 둔다 (2026-09-27 결정)
+ */
+export function needsFreshView(vs: ChartViewState, period: CandlePeriod, polish: boolean): boolean {
+  return vs.period !== period || (vs.autoPolish !== undefined && vs.autoPolish !== polish);
+}
+
+/**
+ * 화면(부모)이 들고 있는 보이는 구간 — createChartViewMemo 로 한 번 만들어 CandleChart 의 viewMemo 로 넘긴다 (기능 플래그 detailPolish 켜짐일 때만).
+ * 접고 펼 때 배치가 바뀌면 차트가 다른 자리에서 새로 만들어지는데, 그때도 보던 봉 수·위치를 잇는다. 화면을 닫으면 함께 사라진다.
+ * 옮길 때마다 화면 전체를 다시 그리지 않게 상태가 아니라 읽기·적기만 하는 작은 보관함이다
+ */
+export interface ChartViewMemo {
+  read(): ChartViewState | null;
+  save(v: ChartViewState): void;
+}
+
+export function createChartViewMemo(): ChartViewMemo {
+  let saved: ChartViewState | null = null;
+  return {
+    read: () => saved,
+    save: (v) => {
+      saved = v;
+    },
+  };
+}
+
 // ── 칩 띠 가장자리 ──
 
 export interface FadeEdges {

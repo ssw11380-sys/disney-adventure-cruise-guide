@@ -6,7 +6,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { ClipPath, Defs, G, Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
 import { AXIS_GAP_R, axisWidth, fitAxisWidth, LABEL_PAD, placeInsideLabels, priceDomain, readoutBasis, volumeBars, type InsideLabel, type LabelSpot } from "@/lib/chartBasis";
-import { formatChartValue, maLegendItems } from "@/lib/chartLayout";
+import { estimateTextWidth, formatChartValue, maLegendItems } from "@/lib/chartLayout";
 import { formatPct, formatVolume, shownSign } from "@/lib/format";
 import { bollinger, macd, niceTicks, rsi, sma, type Series } from "@/lib/indicators";
 import { changeColor, font, radius, space, useFontScale, useTheme, type Theme } from "@/theme";
@@ -72,12 +72,19 @@ export interface PriceChartProps {
    * 끄면 예전 그대로 (축 칸 왼쪽 + 4 에 왼쪽 맞춤, 넉넉한 어림 — 오른쪽에 약 8dp 빈칸)
    */
   fitAxis?: boolean;
+  /**
+   * 거래량 칸 이름 '거래량' 뒤에 옅은 바탕 상자 (기능 플래그 detailPolish — CandleChart 가 정한다). 60일처럼 봉이 넓고 높으면 칸 왼쪽 위 글자가
+   * 거의 늘 막대 위에 겹쳐 읽기 어려웠다(2026-09-27 검증). 상자는 그림 안 평단·52주 글자와 같은 바탕색·불투명도. 끄면 예전 그대로(바탕 없음)
+   */
+  paneLabelBox?: boolean;
 }
 
 const X_AXIS_H = 18;
 const PANE_GAP = 6;
 /** 그림 안 글자 바탕 상자의 불투명도 (바탕색 토큰 위에 옅게 — 뒤의 봉·선이 살짝 비친다) */
 const LABEL_BG_OPACITY = 0.85;
+/** 거래량 칸 이름 (칸 왼쪽 위) */
+const VOLUME_LABEL = "거래량";
 /** 예전 가격 축 글자 x (축 칸 왼쪽에서 띄우는 거리, 왼쪽 맞춤) */
 const AXIS_TEXT_X = 4;
 /**
@@ -499,8 +506,10 @@ export function PriceChart(p: PriceChartProps) {
                 <SvgText {...axisText} y={volTop + 9} fill={t.muted} fontSize={font.tiny}>
                   {formatVolume(maxVol)}
                 </SvgText>
+                {/* 칸 이름 바탕 상자 (paneLabelBox): 글자 상자는 기준선(volTop + 9) 위 10 · 아래 3, 좌우는 글자 앞 2 · 뒤 LABEL_PAD */}
+                {p.paneLabelBox ? <Rect x={0} y={volTop - 1} width={2 + estimateTextWidth(VOLUME_LABEL, font.tiny) + LABEL_PAD} height={13} fill={labelBg} fillOpacity={LABEL_BG_OPACITY} rx={radius.sm / 2} /> : null}
                 <SvgText x={2} y={volTop + 9} fill={t.muted} fontSize={font.tiny}>
-                  거래량
+                  {VOLUME_LABEL}
                 </SvgText>
               </>
             ) : null}

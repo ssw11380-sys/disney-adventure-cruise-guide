@@ -671,6 +671,34 @@ describe("휴대폰·접은 화면 보유 한 줄 (기능 플래그 detailPolish
   });
 });
 
+describe("차트 보이는 구간을 화면이 맡는다 (기능 플래그 detailPolish — 2026-09-27 좁은 창 일봉 60일)", () => {
+  it("켜짐: 접은 화면 차트와 펼친 화면(다른 자리의 새 차트)이 같은 viewMemo 를 받는다 → 접고 펴도 보던 봉 수·위치가 이어진다", () => {
+    const r = open(samsung(), { polish: true, flag: true });
+    const memo = chart(r).props.viewMemo as { read: () => unknown };
+    expect(memo.read()).toBeNull();
+    for (const k of ["F8L", "F8P", "UP", "F8C"] as const) {
+      forgetWindowClass();
+      size(k);
+      r.rerender();
+      expect(chart(r).props.viewMemo, k).toBe(memo);
+    }
+    // 화면을 새로 열면 새 기억 (보이는 구간은 화면 상태 — 다시 열면 기본에서 시작)
+    expect(chart(open(samsung(), { polish: true, flag: true })).props.viewMemo).not.toBe(memo);
+  });
+
+  it("꺼짐·못 받음: CandleChart 에 viewMemo 를 넘기지 않는다 (속성까지 예전 그대로)", () => {
+    for (const polish of [undefined, false]) {
+      const r = open(samsung(), { polish, flag: true });
+      expect("viewMemo" in chart(r).props, String(polish)).toBe(false);
+      forgetWindowClass();
+      size("F8L");
+      r.rerender();
+      expect("viewMemo" in chart(r).props, String(polish)).toBe(false);
+      size("F8C");
+    }
+  });
+});
+
 describe("이름·업종 (2026-09-26 버그 수정 — 플래그 없음)", () => {
   const FULL = "Defiance Daily Target 2X Long RGTI ETF";
   const textOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(textOf).join(""));

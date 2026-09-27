@@ -3,12 +3,12 @@ import { Stack, router, useLocalSearchParams } from "expo-router";
 import React, { useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useCandles, useStock } from "@/api/hooks";
+import { useCandles, useFeature, useStock } from "@/api/hooks";
 import type { CandlePeriod } from "@/api/types";
 import { CandleChart } from "@/components/CandleChart";
 import { ChartNotice } from "@/components/Freshness";
 import { ChangeText, ErrorView } from "@/components/ui";
-import { CHART_ICON_BTN, chartHeaderLayout, headerNeedsTwoLines } from "@/lib/chartLayout";
+import { CHART_ICON_BTN, chartHeaderLayout, createChartViewMemo, headerNeedsTwoLines } from "@/lib/chartLayout";
 import { CANDLE_COUNT, parseCandlePeriod } from "@/lib/chartPrefs";
 import { currencyOfMarket, formatPct, formatPrice } from "@/lib/format";
 import { parseStockCode } from "@/lib/freshness";
@@ -48,6 +48,10 @@ export default function FullscreenChartScreen() {
   const [rotation, setRotation] = useState({ on: false, win: winKey });
   if (rotation.win !== winKey) setRotation({ on: false, win: winKey });
   const landscape = !winLandscape && rotation.on && rotation.win === winKey;
+  // 차트의 보이는 구간 (기능 플래그 detailPolish 켜짐만): 가로로 돌리거나 접고 펼 때 차트가 새로 그려져도 보던 봉 수·위치를 잇는다
+  const polish = useFeature("detailPolish", false);
+  const [chartView] = useState(createChartViewMemo);
+  const chartMemo = polish ? { viewMemo: chartView } : {};
   // 차트 아래·위 도구 모음(기간·봉 수·읽기 줄·오버레이 줄)의 실제 높이. 글자 크기·화면 폭에 따라 달라지므로 그려 본 뒤 잰다.
   // 늘어날 때만 반영한다(방향·폭이 바뀌면 새로) → 십자선을 움직일 때 읽기 줄이 한 줄 늘었다 줄었다 해도 차트 높이가 흔들리지 않는다
   const [chrome, setChrome] = useState<{ key: string; h: number }>({ key: "", h: 170 });
@@ -190,6 +194,7 @@ export default function FullscreenChartScreen() {
         height={chartH}
         compact
         backdrop={t.bg}
+        {...chartMemo}
       />
       </View>
       <ChartNotice query={candles} />

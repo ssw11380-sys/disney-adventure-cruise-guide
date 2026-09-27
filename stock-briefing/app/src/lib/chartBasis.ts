@@ -1,5 +1,18 @@
 import type { Candle, CandlePeriod } from "@/api/types";
 import { font } from "@/tokens";
+import { tradingDate } from "./marketTime";
+
+/** lib/marketTime 은 종목 코드로 시장을 가린다 — 원화 시세는 한국 규칙으로 보려고 쓰는 대표 코드 */
+const KR_REF = "005930";
+
+/**
+ * 원화(국내) 시세가 속한 한국 거래일 YYYY-MM-DD — 차트 마지막 일봉 날짜와 견준다 (readoutBasis 의 latestDate).
+ * 토스 웹·네이버 시세는 받은 시각이 asOf 라, 08:00 전·주말·한국 평일 휴장일(추석 등)에 받은 시세는 직전 거래일 값이다 (lib/marketTime tradingDate).
+ * 예전에는 한국 달력 날짜로 봐서 이때 마지막 일봉의 읽기 줄이 머리(거래소 기준가)와 다른 기준(통합 직전 봉 종가)이 됐다. 시각을 못 읽으면 null
+ */
+export function krQuoteDate(asOf: string | null | undefined): string | null {
+  return asOf ? tradingDate(asOf, KR_REF) : null;
+}
 
 /**
  * 차트 읽기 줄의 등락 기준 (순수 함수 → 단위 테스트).

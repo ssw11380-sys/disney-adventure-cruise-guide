@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AXIS_GAP_L, AXIS_GAP_R, axisTextWidth, axisWidth, fitAxisWidth, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
+import { AXIS_GAP_L, AXIS_GAP_R, axisTextWidth, axisWidth, fitAxisWidth, krQuoteDate, readoutBasis, textWidth, volumeBars } from "@/lib/chartBasis";
 
 describe("차트 읽기 줄 등락 기준", () => {
   // 삼성전자 9/23: 거래소 기준가(전일 종가) 276,500, 통합(NXT 포함) 직전 봉 종가 277,800, 오늘 종가 286,500
@@ -23,6 +23,21 @@ describe("차트 읽기 줄 등락 기준", () => {
     expect(readoutBasis({ period: "D", isLatest: true, ...base, candleDate: "2026-09-23", latestDate: null }).base).toBe(276_500);
   });
   it("전일 종가를 모르면 직전 봉 종가", () => expect(readoutBasis({ period: "D", isLatest: true, latestBase: null, prevClose: 100, open: 90 }).base).toBe(100));
+
+  it("국내 시세의 거래일(krQuoteDate): 08:00 전·주말·한국 평일 휴장일에 받은 시세는 직전 거래일 → 마지막 일봉과 같아 머리와 같은 전일 종가 기준", () => {
+    expect(krQuoteDate("2026-09-23T15:30:00+09:00")).toBe("2026-09-23"); // 평범한 평일
+    expect(krQuoteDate("2026-09-24T10:00:00+09:00")).toBe("2026-09-23"); // 추석 연휴
+    expect(krQuoteDate("2026-09-25T01:00:00Z")).toBe("2026-09-23"); // 추석(10:00 KST, Z 표기)
+    expect(krQuoteDate("2026-09-26T12:00:00+09:00")).toBe("2026-09-23"); // 추석 뒤 토요일
+    expect(krQuoteDate("2026-10-05T10:00:00+09:00")).toBe("2026-10-02"); // 개천절 대체공휴일
+    expect(krQuoteDate("2026-12-31T10:00:00+09:00")).toBe("2026-12-30"); // 연말 휴장
+    expect(krQuoteDate("2026-09-28T07:30:00+09:00")).toBe("2026-09-23"); // 휴장 뒤 첫 거래일 장 전
+    expect(krQuoteDate("2026-09-28T08:00:00+09:00")).toBe("2026-09-28");
+    expect(krQuoteDate(null)).toBeNull();
+    expect(krQuoteDate("bad")).toBeNull();
+    // 추석에 받은 시세 + 9/23 마지막 봉 → 전일 종가(거래소 기준가) 기준 (예전에는 한국 달력 날짜 9/24 라 통합 직전 봉 종가였다)
+    expect(readoutBasis({ period: "D", isLatest: true, ...base, candleDate: "2026-09-23", latestDate: krQuoteDate("2026-09-24T10:00:00+09:00") }).base).toBe(276_500);
+  });
 });
 
 describe("가격 축 폭", () => {

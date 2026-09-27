@@ -343,3 +343,50 @@ describe("RGTX 캡처 모양 (오늘 52주 신저가 · 6월 급등) — 접은 
     expect(svgTexts(w)).toContain("120주선(범위 위)");
   });
 });
+
+describe("거래량 칸 이름 바탕 상자 (paneLabelBox — 기능 플래그 detailPolish, 2026-09-27 검증: 60봉이면 '거래량' 글자가 거의 늘 막대 위에 겹침)", () => {
+  /** 거래량 막대가 칸 꼭대기까지 차는 모양 (마지막 봉 거래량이 가장 큼 — 왼쪽 위 막대도 높다) */
+  const TALL = RGTX.map((c, i) => ({ ...c, volume: 900 + (i % 3) * 50 }));
+  const label = (r: ReturnType<typeof draw>) => r.all().find((n) => n.type === "SvgText" && textOf(n) === "거래량")!;
+  const boxBefore = (r: ReturnType<typeof draw>) => {
+    const svg = r.all().find((n) => n.type === "Svg")!;
+    const order = svg.children.filter((c): c is HostNode => typeof c !== "string");
+    const at = order.indexOf(label(r));
+    return { prev: order[at - 1], order, at };
+  };
+
+  it("켜짐: '거래량' 글자 바로 앞(막대 위)에 바탕색 상자 — 글자 상자(기준선 위 10 · 아래 3)를 덮고, 막대보다 뒤에 그린다", () => {
+    for (const isDark of [false, true]) {
+      h.dark = isDark;
+      const t = isDark ? dark : light;
+      const r = draw({ candles: TALL, view: { count: 60, offset: 0 }, paneLabelBox: true, labelBg: t.surface });
+      const { prev, order, at } = boxBefore(r);
+      expect(prev?.type).toBe("Rect");
+      expect(prev!.props.fill).toBe(t.surface);
+      expect(prev!.props.fillOpacity).toBe(0.85);
+      const y = Number(label(r).props.y);
+      expect(prev!.props.y).toBe(y - 10);
+      expect(Number(prev!.props.y) + Number(prev!.props.height)).toBe(y + 3);
+      expect(prev!.props.x).toBe(0);
+      // 글자 폭(약 3글자 × 11) + 앞 2 + 뒤 3 을 덮는다
+      expect(Number(prev!.props.width)).toBeGreaterThan(33 + 2);
+      expect(Number(prev!.props.width)).toBeLessThan(50);
+      // 거래량 막대(fillOpacity 0.55 경로)는 상자보다 먼저 그린다
+      const bars = order.findIndex((n) => n.type === "Path" && n.props.fillOpacity === 0.55);
+      expect(bars).toBeGreaterThan(-1);
+      expect(bars).toBeLessThan(at - 1);
+    }
+  });
+
+  it("꺼짐(기본): 예전 그대로 바탕 상자 없음", () => {
+    const r = draw({ candles: TALL, view: { count: 60, offset: 0 }, labelBg: light.surface });
+    expect(boxBefore(r).prev?.type).not.toBe("Rect");
+    expect(label(r)).toBeDefined();
+  });
+
+  it("거래량 칸이 없으면(끔·환율) 상자도 없다", () => {
+    const r = draw({ candles: TALL, showVolume: false, paneLabelBox: true, labelBg: light.surface });
+    expect(r.all().some((n) => n.type === "SvgText" && textOf(n) === "거래량")).toBe(false);
+    expect(r.all().some((n) => n.type === "Rect" && n.props.x === 0 && n.props.height === 13)).toBe(false);
+  });
+});

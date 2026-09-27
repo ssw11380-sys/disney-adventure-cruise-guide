@@ -87,8 +87,9 @@ export function forgetTicks(): void {
 
 /**
  * 서버에서 받은 봉에 연결 중 받은 마지막 체결을 다시 얹는다. 서버의 마지막 봉과 같은 구간일 때만 고·저·종을 고치고, 뒤 구간·지난 구간이면 그대로.
- * 서버에 없는 뒤 구간 봉은 붙이지 않는다 — 서버 봉을 다시 받는 것이 앱이 만든 봉을 지우는 길이라서. 붙이면 한국 평일 휴장일(추석·한글날 등,
- * tradingDate 가 모름)에 접속 직후 스냅샷 체결(서버가 값이 그대로여도 마지막 폴링 시각을 붙여 보냄)로 생긴 그날의 빈 봉이 다시 받을 때마다 되살아난다.
+ * 서버에 없는 뒤 구간 봉은 붙이지 않는다 — 서버 봉을 다시 받는 것이 앱이 만든 봉을 지우는 길이라서. 붙이면 휴장일 목록(KR_HOLIDAYS)에 없는 임시 휴장일
+ * (tradingDate 가 모름)에 접속 직후 스냅샷 체결(서버가 값이 그대로여도 마지막 폴링 시각을 붙여 보냄)로 생긴 그날의 빈 봉이 다시 받을 때마다 되살아난다.
+ * (목록에 있는 추석·한글날 등은 tradingDate 가 직전 거래일로 보므로 애초에 봉이 생기지 않는다)
  * 방금 열린 봉이 서버 봉 캐시에 아직 없으면 다음 체결이 다시 열거나 다음 주기 갱신이 서버 봉으로 채운다 (PF-04).
  * now(방금 받은 때)보다 2분 넘게 오래된 체결은 받은 봉에 이미 들어 있으니 얹지 않는다 (SERVER_CANDLE_LAG_MS)
  */
@@ -106,7 +107,7 @@ export function withLastTick(apiUrl: string, code: string, series: CandleSeries,
  *  - 차트 봉은 체결로 고쳐도 서버에서 새로 받은 값이 아니므로 받은 시각·무효 표시를 그대로 둔다 → 다시 볼 때·주기 갱신 때 서버 봉(거래량 포함)으로 바로잡힌다 (PF-04).
  *    이 캐시 쓰기마다 react-query 가 주기 갱신 타이머를 다시 걸므로, 주기는 그대로 둔 받은 시각에서 잰다 (hooks 의 candlesQuery · lib/freshness 의 refetchDue)
  *  - snapshot(접속 직후 스냅샷)이면 차트에 새 봉을 열지 않고 마지막 봉만 고친다. 스냅샷 시각은 체결 시각이 아니라 서버가 값이 그대로여도
- *    마지막으로 폴링한 시각이라, 한국 평일 휴장일(tradingDate 가 모름)에 그날 봉을 만들어 버린다. 새 봉은 실제로 가격이 바뀐 체결(ticks)이 연다.
+ *    마지막으로 폴링한 시각이라, 목록에 없는 임시 휴장일(tradingDate 가 모름)에 그날 봉을 만들어 버린다. 새 봉은 실제로 가격이 바뀐 체결(ticks)이 연다.
  *    차트 봉을 받은 때보다 2분 넘게 앞선 스냅샷 체결(서버가 잊지 않은 삭제 종목의 체결 등)은 받은 봉에 이미 들어 있으니 봉을 고치지 않는다
  */
 export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<string, StreamTick>, held: Set<string>, now = Date.now(), { snapshot = false } = {}): boolean {
@@ -137,7 +138,7 @@ export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<st
       const { dataUpdatedAt, isInvalidated } = q.state;
       qc.setQueryData<CandleSeries>(q.queryKey, { ...series, candles: next }, { updatedAt: dataUpdatedAt });
       // 새 봉이 열렸으면 서버 봉을 다시 받는다 (보고 있지 않은 차트는 표시만 해 두고 다시 볼 때, 방금 받은 서버 봉이면 표시만).
-      // 분봉은 장중 주기 갱신(30초)이 있어 그보다 오래된 봉일 때만 — 주기 갱신이 없는 한국 평일 휴장일에 서버 재시작 직후 첫 체결이 연
+      // 분봉은 장중 주기 갱신(30초)이 있어 그보다 오래된 봉일 때만 — 주기 갱신이 없는 (목록에 없는) 임시 휴장일에 서버 재시작 직후 첫 체결이 연
       // 가짜 분봉을 바로 지운다 (PF-04 검증 지적)
       const opened = next.length > series.candles.length;
       const refetchAfter = isIntraday(series.period) ? INTRADAY_NEW_BAR_REFETCH_MS : NEW_BAR_REFETCH_MS;

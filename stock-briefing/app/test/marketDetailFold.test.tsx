@@ -9,6 +9,8 @@ import { render, type HostNode } from "./miniRender";
 const h = vi.hoisted(() => ({
   win: { width: 475, height: 751, scale: 2.625, fontScale: 1 },
   flag: undefined as boolean | undefined,
+  /** 서버가 준 detailPolish 값 (undefined = 못 받음 → fallback 꺼짐) */
+  polish: undefined as boolean | undefined,
   params: { code: "KOSPI" } as Record<string, string>,
   insets: { top: 0, bottom: 0, left: 0, right: 0 },
 }));
@@ -33,7 +35,7 @@ const INDEX = { code: "KOSPI", name: "코스피", value: 3478.12, change: 29.35,
 vi.mock("@/api/hooks", () => ({
   useMarketIndices: () => ({ data: { indices: [INDEX] }, isLoading: false, refetch: async () => undefined }),
   useMarketCandles: () => ({ data: undefined, isLoading: false, isError: false, error: null, refetch: async () => undefined }),
-  useFeature: (key: string, fallback = false) => (key === "foldLayout" ? (h.flag ?? fallback) : fallback),
+  useFeature: (key: string, fallback = false) => (key === "foldLayout" ? (h.flag ?? fallback) : key === "detailPolish" ? (h.polish ?? fallback) : fallback),
 }));
 vi.mock("@/lib/chartPrefs", () => ({ CANDLE_COUNT: { D: 800, W: 520, M: 240 } }));
 vi.mock("@/components/CandleChart", () => ({ CandleChart: "CandleChart" }));
@@ -74,8 +76,35 @@ const size = (width: number, height: number, fontScale = 1) => {
 beforeEach(() => {
   size(475, 751);
   h.flag = undefined;
+  h.polish = undefined;
   h.insets = { top: 0, bottom: 0, left: 0, right: 0 };
   forgetWindowClass();
+});
+
+describe("차트 보이는 구간을 화면이 맡는다 (기능 플래그 detailPolish — 2026-09-27 좁은 창 일봉 60일)", () => {
+  const chart = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "CandleChart")!;
+
+  it("켜짐: 접은 화면 차트와 펼친 화면(다른 자리의 새 차트)이 같은 viewMemo 를 받는다", () => {
+    h.flag = true;
+    h.polish = true;
+    const r = render(<MarketIndexScreen />);
+    const memo = chart(r).props.viewMemo as { read: () => unknown };
+    expect(memo.read()).toBeNull();
+    for (const [w, hh] of [[933, 632], [704, 861], [475, 679]] as const) {
+      forgetWindowClass();
+      size(w, hh);
+      r.rerender();
+      expect(chart(r).props.viewMemo, `${w}x${hh}`).toBe(memo);
+    }
+  });
+
+  it("꺼짐·못 받음: viewMemo 를 넘기지 않는다 (스냅숏 그대로)", () => {
+    h.flag = true;
+    for (const polish of [undefined, false]) {
+      h.polish = polish;
+      expect("viewMemo" in chart(render(<MarketIndexScreen />)).props, String(polish)).toBe(false);
+    }
+  });
 });
 
 describe("지수 상세: 플래그 꺼짐·좁은 창은 지금 화면 그대로 (바꾸기 전 스냅숏)", () => {
