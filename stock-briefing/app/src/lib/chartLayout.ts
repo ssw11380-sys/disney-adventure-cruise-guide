@@ -305,12 +305,14 @@ export function initialWindowIdx(period: CandlePeriod, o: { compact: boolean; po
 }
 
 /**
- * initialWindowIdx 의 '좁은 창'인지. 보통은 창 폭 등급 'compact'(폭 600dp 미만)를 따르고,
- * 부르는 쪽이 차트 폭을 정하면(전체 화면 차트) 그 폭이 창 600dp 의 상세 차트 폭(600 − 패널 여백 14 × 2 = 572)보다 좁은지로 본다 —
- * 접은 화면에서 '가로로 보기'로 돌려 그린 차트(폭 약 650dp)는 창이 좁아도 넓은 차트라 120일
+ * initialWindowIdx 의 '좁은 창'인지: 창 폭 등급이 'compact'(폭 600dp 미만)여야 하고,
+ * 부르는 쪽이 차트 폭을 정하면(전체 화면 차트) 그 폭도 창 600dp 의 상세 차트 폭(600 − 패널 여백 14 × 2 = 572)보다 좁아야 한다.
+ *  - 접은 화면에서 '가로로 보기'로 돌려 그린 차트(폭 약 647dp)는 창이 좁아도 넓은 차트 — 돌린 채로 새로 시작할 때(기간을 바꿨다 돌아옴)만 120일이고,
+ *    세로에서 보던 차트를 돌리면 보던 봉 수(60일 등)를 그대로 잇는다 (CandleChart 의 보이는 구간은 새로 시작할 때만 기본을 고른다)
+ *  - 창이 중간(600dp 이상)이면 전체 화면 차트 폭이 572 보다 조금 좁아도(창 600~603 → 차트 568~571) 좁은 창이 아니다 — '펼친 화면은 120' 그대로
  */
 export function isNarrowChart(o: { windowCompact: boolean; width?: number }): boolean {
-  return o.width !== undefined ? o.width < layout.mediumMin - CHART_PANEL_PAD * 2 : o.windowCompact;
+  return o.windowCompact && (o.width === undefined || o.width < layout.mediumMin - CHART_PANEL_PAD * 2);
 }
 
 /** 차트의 보이는 구간: 기간 · 고른 봉 수 칩(WINDOWS 의 몇 번째) · 보이는 봉 수와 위치 (components/CandleChart) */
@@ -318,6 +320,20 @@ export interface ChartViewState {
   period: CandlePeriod;
   windowIdx: number;
   view: { count: number; offset: number };
+  /**
+   * 사용자가 아직 손대지 않은 기본 구간이면, 그 기본을 고를 때 본 detailPolish 값. 칩·핀치·드래그·‹ › 버튼으로 손대면 없앤다.
+   * 기능 플래그는 저장된 값이 복원되거나 서버에서 받아 오기 전에는 fallback(꺼짐)이라, 차트가 그보다 먼저 그려지면(위젯 지수 줄을 눌러
+   * 앱이 새로 열릴 때의 지수 상세·주소로 연 전체 화면) 120일로 시작한다. 이 값이 지금 플래그와 다르면 기본을 다시 고른다 (needsFreshView)
+   */
+  autoPolish?: boolean;
+}
+
+/**
+ * 보이는 구간을 기본으로 다시 골라야 하는지: 기간이 바뀌었거나, 손대지 않은 기본인데 고를 때와 detailPolish 값이 달라졌을 때(플래그가 늦게 도착·서버가 끔).
+ * 창 크기(접고 펴기)가 바뀐 것만으로는 다시 고르지 않는다 — 보던 봉 수를 그대로 둔다 (2026-09-27 결정)
+ */
+export function needsFreshView(vs: ChartViewState, period: CandlePeriod, polish: boolean): boolean {
+  return vs.period !== period || (vs.autoPolish !== undefined && vs.autoPolish !== polish);
 }
 
 /**

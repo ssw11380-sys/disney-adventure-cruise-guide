@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-na
 import { useFeature } from "@/api/hooks";
 import type { Candle, CandlePeriod, ChartUnit, Currency, Quote } from "@/api/types";
 import { krQuoteDate } from "@/lib/chartBasis";
-import { candleChartSize, estimateTextWidth, initialWindowIdx, isNarrowChart, pastViewLabel, type ChartViewMemo, type ChartViewState } from "@/lib/chartLayout";
+import { candleChartSize, estimateTextWidth, initialWindowIdx, isNarrowChart, needsFreshView, pastViewLabel, type ChartViewMemo, type ChartViewState } from "@/lib/chartLayout";
 import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
 import { useSettings } from "@/lib/settings";
@@ -99,12 +99,13 @@ export function CandleChart({
   const chartCurrency: ChartUnit = toKrw ? ("KRW" as Currency) : currency;
   // 보이는 구간(봉 수 칩·과거로 옮긴 위치)은 지금 기간 것 하나만 든다. 기간이 바뀌면 그 기간의 기본 칩(최신 구간)에서 시작.
   // 기본 칩: 둘째(일 120). detailPolish 가 켜져 있으면 좁은 창(휴대폰·접은 화면 — 창 폭 등급 'compact', foldLayout 과 상관없이)의 일봉만 60일
-  // (lib/chartLayout initialWindowIdx · isNarrowChart — 전체 화면은 받은 차트 폭으로: 돌려 그린 가로 차트는 120일).
-  // 기본은 새로 시작할 때(처음·기간을 바꿀 때)만 고른다 — 화면에 있는 동안 접고 펴도 보던 봉 수를 바꾸지 않는다
+  // (lib/chartLayout initialWindowIdx · isNarrowChart — 전체 화면은 창이 좁고 받은 차트 폭도 572dp 미만일 때).
+  // 기본은 새로 시작할 때(처음·기간을 바꿀 때)만 고른다 — 화면에 있는 동안 접고 펴도, 전체 화면을 '가로로 보기'로 돌려도 보던 봉 수를 바꾸지 않는다.
+  // 단 사용자가 손대지 않은 기본이면 detailPolish 값이 바뀔 때(저장된 플래그 복원·서버 응답이 차트보다 늦게 옴) 다시 고른다 (needsFreshView)
   const compactWin = isNarrowChart({ windowCompact: useWindowClass().width === "compact", width: widthProp });
   const fresh = (per: CandlePeriod): ChartViewState => {
     const windowIdx = initialWindowIdx(per, { compact: compactWin, polish });
-    return { period: per, windowIdx, view: { count: WINDOWS[per][windowIdx] ?? 120, offset: 0 } };
+    return { period: per, windowIdx, view: { count: WINDOWS[per][windowIdx] ?? 120, offset: 0 }, autoPolish: polish };
   };
   // 화면이 맡긴 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 이 차트가 새로 만들어져도 보던 봉 수·위치를 잇는다
   const memo = polish ? viewMemo : undefined;
@@ -113,18 +114,23 @@ export function CandleChart({
     return saved?.period === period ? saved : fresh(period);
   });
   // 기간이 바뀌면(칩·주소·다른 화면 어디서 바꾸든) 새 기간의 기본 구간으로 바로 적는다. 예전에는 새 기간에서 아무것도 만지지 않으면
-  // 옛 기간 값이 남아, 일 → 주 → 일로 돌아왔을 때 일봉의 옛 위치('60일 전')와 과거 구간 안내가 되살아났다 (렌더 중 이전 값과 비교하는 React 권장 방식)
-  if (vs.period !== period) setVs(fresh(period));
-  const cur = vs.period === period ? vs : fresh(period);
+  // 옛 기간 값이 남아, 일 → 주 → 일로 돌아왔을 때 일봉의 옛 위치('60일 전')와 과거 구간 안내가 되살아났다 (렌더 중 이전 값과 비교하는 React 권장 방식).
+  // 손대지 않은 기본인데 detailPolish 가 늦게 도착해도 같은 방식으로 다시 고른다
+  const stale = needsFreshView(vs, period, polish);
+  if (stale) setVs(fresh(period));
+  const cur = stale ? fresh(period) : vs;
   useEffect(() => {
     memo?.save(vs);
   }, [memo, vs]);
   const windowIdx = cur.windowIdx;
   const view = cur.view;
+  // 사용자가 손댄 구간 (칩·핀치·드래그·‹ › 버튼): 손대지 않은 기본 표시(autoPolish)를 빼고 적어, 플래그가 바뀌어도 덮지 않는다
+  const touched = (windowIdx: number, next: ChartView): ChartViewState => ({ period, windowIdx, view: next });
+  const baseOf = (prev: ChartViewState) => (needsFreshView(prev, period, polish) ? fresh(period) : prev);
   const setView = (next: ChartView | ((v: ChartView) => ChartView)) =>
     setVs((prev) => {
-      const base = prev.period === period ? prev : fresh(period);
-      return { ...base, view: typeof next === "function" ? next(base.view) : next };
+      const base = baseOf(prev);
+      return touched(base.windowIdx, typeof next === "function" ? next(base.view) : next);
     });
   const all = useMemo(
     () => (candles ?? []).map((c) => (k === 1 ? c : { ...c, open: c.open * k, high: c.high * k, low: c.low * k, close: c.close * k })),
@@ -149,8 +155,8 @@ export function CandleChart({
   const shift = (dir: -1 | 1) => setView((v) => clampView({ count: v.count, offset: v.offset + dir * Math.round(v.count / 2) }, all.length));
   const pickWindow = (i: number) => {
     setVs((prev) => {
-      const base = prev.period === period ? prev : fresh(period);
-      return { ...base, windowIdx: i, view: clampView({ count: WINDOWS[period][i] ?? base.view.count, offset: base.view.offset }, all.length) };
+      const base = baseOf(prev);
+      return touched(i, clampView({ count: WINDOWS[period][i] ?? base.view.count, offset: base.view.offset }, all.length));
     });
   };
   const toggleMa = (per: number) => {
@@ -275,6 +281,7 @@ export function CandleChart({
           maItems={wide}
           labelBg={fadeBg}
           fitAxis={polish}
+          paneLabelBox={polish}
         />
       )}
 

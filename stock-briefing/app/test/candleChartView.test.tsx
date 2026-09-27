@@ -793,7 +793,7 @@ describe("좁은 창의 일봉은 60일로 연다 (기능 플래그 detailPolish
       }
   });
 
-  it("전체 화면 차트는 받은 차트 폭으로: 접은 화면 세로(451dp)는 60일, '가로로 보기'로 돌려 그린 차트(647dp)·펼친 화면(909dp)은 120일", () => {
+  it("전체 화면 차트를 새로 열 때는 받은 차트 폭으로: 접은 화면 세로(451dp)는 60일, 처음부터 넓은 차트(647dp — 돌린 채로 새로 시작)·펼친 화면(909dp)은 120일", () => {
     at(475, 751, { polish: true });
     const full = (width: number) => render(<CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} width={width} height={300} compact />);
     expect(pc(full(451)).props.view).toEqual({ count: 60, offset: 0 });
@@ -858,6 +858,122 @@ describe("좁은 창의 일봉은 60일로 연다 (기능 플래그 detailPolish
     at(475, 751, { polish: true, fold: true });
     wide.rerender(el());
     expect(pc(wide).props.view).toEqual({ count: 120, offset: 0 });
+  });
+
+  it("플래그가 차트보다 늦게 와도(저장된 플래그 복원·서버 응답 전 첫 그림) 손대지 않은 기본이면 60일로 — 위젯 지수 줄로 새로 연 지수 상세·주소로 연 전체 화면 (2026-09-27 검증)", () => {
+    // 종목·지수 상세: 플래그 못 받음(fallback 꺼짐) → 120 으로 먼저 그림 → 켜짐 도착 → 60
+    at(475, 751, { polish: undefined, fold: true });
+    const memo = createChartViewMemo();
+    // 화면은 detailPolish 가 켜져 있을 때만 viewMemo 를 넘긴다 (stocks/[code] · market/[code] · chart.tsx 의 chartMemo)
+    const el = () => <CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} {...(h.polish ? { viewMemo: memo } : {})} />;
+    const r = render(el());
+    expect(pc(r).props.view).toEqual({ count: 120, offset: 0 });
+    expect(textOf(rangeChip(r))).toBe("120일");
+    h.polish = true;
+    r.rerender(el());
+    expect(pc(r).props.view).toEqual({ count: 60, offset: 0 });
+    expect(textOf(rangeChip(r))).toBe("60일");
+    expect(rangeChip(r).props.accessibilityLabel).toBe("보이는 봉 60개. 눌러서 바꾸기");
+    // 보관함에도 60 이 적혀, 접고 펴서 새로 만들어진 차트도 60 을 잇는다
+    expect(memo.read()?.view).toEqual({ count: 60, offset: 0 });
+    at(933, 704, { polish: true, fold: true });
+    const unfolded = render(el());
+    expect(pc(unfolded).props.view).toEqual({ count: 60, offset: 0 });
+    // 칩 순서도 60 에서 이어진다 (다음은 120)
+    tapChip(unfolded);
+    expect((pc(unfolded).props.view as { count: number }).count).toBe(120);
+
+    // 주소로 연 전체 화면(접은 화면 세로 451dp)도 같다
+    at(475, 751, { polish: undefined });
+    const full = () => <CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} width={451} height={300} compact />;
+    const f = render(full());
+    expect(pc(f).props.view).toEqual({ count: 120, offset: 0 });
+    h.polish = true;
+    f.rerender(full());
+    expect(pc(f).props.view).toEqual({ count: 60, offset: 0 });
+
+    // 펼친 창은 늦게 와도 120 그대로
+    at(933, 704, { polish: undefined, fold: true });
+    const w = render(<CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} />);
+    h.polish = true;
+    w.rerender(<CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} />);
+    expect(pc(w).props.view).toEqual({ count: 120, offset: 0 });
+  });
+
+  it("플래그가 오기 전에 사용자가 손댄 구간(칩·핀치·드래그·‹ 버튼)은 플래그가 와도 덮지 않는다", () => {
+    const el = () => <CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} />;
+    // 칩: 120 → 250
+    at(475, 751, { polish: undefined });
+    const chip = render(el());
+    tapChip(chip);
+    expect((pc(chip).props.view as { count: number }).count).toBe(250);
+    h.polish = true;
+    chip.rerender(el());
+    expect(pc(chip).props.view).toEqual({ count: 250, offset: 0 });
+    // 핀치
+    at(475, 751, { polish: undefined });
+    const pinch = render(el());
+    r2Drag(pinch, { count: 90, offset: 0 });
+    h.polish = true;
+    pinch.rerender(el());
+    expect(pc(pinch).props.view).toEqual({ count: 90, offset: 0 });
+    // ‹ 과거로
+    at(475, 751, { polish: undefined });
+    const back = render(el());
+    back.act(() => (back.byLabel("과거로").props.onPress as () => void)());
+    h.polish = true;
+    back.rerender(el());
+    expect(pc(back).props.view).toEqual({ count: 120, offset: 60 });
+  });
+
+  it("켜짐으로 연 60일을 서버가 끄면 손대지 않은 기본은 예전 120 으로 (손댄 구간은 그대로)", () => {
+    const el = () => <CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} />;
+    at(475, 751, { polish: true });
+    const r = render(el());
+    expect(pc(r).props.view).toEqual({ count: 60, offset: 0 });
+    h.polish = false;
+    r.rerender(el());
+    expect(pc(r).props.view).toEqual({ count: 120, offset: 0 });
+    at(475, 751, { polish: true });
+    const mine = render(el());
+    r2Drag(mine, { count: 70, offset: 5 });
+    h.polish = false;
+    mine.rerender(el());
+    expect(pc(mine).props.view).toEqual({ count: 70, offset: 5 });
+  });
+
+  it("전체 화면 '가로로 보기': 세로(451dp)에서 보던 60일을 돌린 차트(647dp)도 그대로 잇고, 돌린 채로 기간을 바꿨다 돌아오면 그때 120일", () => {
+    at(475, 751, { polish: true });
+    let width = 451;
+    let period: "D" | "W" = "D";
+    const memo = createChartViewMemo();
+    const el = () => <CandleChart candles={LONG} period={period} onPeriodChange={() => undefined} width={width} height={300} compact viewMemo={memo} />;
+    const r = render(el());
+    expect(pc(r).props.view).toEqual({ count: 60, offset: 0 });
+    // 같은 차트가 돌아감
+    width = 647;
+    r.rerender(el());
+    expect(pc(r).props.view).toEqual({ count: 60, offset: 0 });
+    // 돌린 자리에 새로 만들어진 차트도 보관함으로 60
+    const rotated = render(el());
+    expect(pc(rotated).props.view).toEqual({ count: 60, offset: 0 });
+    // 돌린 채로 주 → 일: 새로 시작하므로 넓은 차트 기본 120
+    period = "W";
+    rotated.rerender(el());
+    period = "D";
+    rotated.rerender(el());
+    expect(pc(rotated).props.view).toEqual({ count: 120, offset: 0 });
+  });
+
+  it("창 600dp(중간)의 전체 화면 차트(568dp)는 120일 — 차트 폭이 572 보다 조금 좁아도 좁은 창이 아니다", () => {
+    for (const w of [600, 603]) {
+      at(w, 900, { polish: true, fold: true });
+      const r = render(<CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} width={w - 32} height={300} compact />);
+      expect(pc(r).props.view, `${w}`).toEqual({ count: 120, offset: 0 });
+    }
+    // 599(좁음)는 60
+    at(599, 900, { polish: true, fold: true });
+    expect(pc(render(<CandleChart candles={LONG} period="D" onPeriodChange={() => undefined} width={567} height={300} compact />)).props.view).toEqual({ count: 60, offset: 0 });
   });
 
   it("배치가 바뀌어 차트가 새로 만들어져도(화면이 맡긴 viewMemo) 보던 봉 수·위치를 잇는다 — 플래그가 꺼져 있으면 예전처럼 새 차트는 처음부터", () => {

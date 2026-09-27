@@ -3,7 +3,7 @@ import type { CandlePeriod } from "@/api/types";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
 
-const { createChartViewMemo, initialWindowIdx, isNarrowChart } = await import("@/lib/chartLayout");
+const { createChartViewMemo, initialWindowIdx, isNarrowChart, needsFreshView } = await import("@/lib/chartLayout");
 const { WINDOWS } = await import("@/lib/chartPrefs");
 const { classifyWindow } = await import("@/lib/windowClass");
 
@@ -41,14 +41,34 @@ describe("처음 보이는 봉 수 칩 (initialWindowIdx)", () => {
     for (const [w, h] of [[704, 933], [933, 704], [859, 954], [954, 859], [600, 900]]) expect(cls(w, h), `${w}`).not.toBe("compact");
   });
 
-  it("전체 화면처럼 차트 폭을 정해 주면 그 폭으로: 572dp(창 600 의 상세 차트 폭) 미만이면 좁음", () => {
+  it("전체 화면처럼 차트 폭을 정해 주면: 창이 좁고(600 미만) 그 폭도 572dp(창 600 의 상세 차트 폭) 미만일 때만 좁음", () => {
     expect(isNarrowChart({ windowCompact: true })).toBe(true);
     expect(isNarrowChart({ windowCompact: false })).toBe(false);
     expect(isNarrowChart({ windowCompact: true, width: 451 })).toBe(true); // 폴드8 접힘 세로 전체 화면
     expect(isNarrowChart({ windowCompact: true, width: 571 })).toBe(true);
     expect(isNarrowChart({ windowCompact: true, width: 572 })).toBe(false);
-    expect(isNarrowChart({ windowCompact: true, width: 647 })).toBe(false); // 접은 화면에서 '가로로 보기'로 돌려 그림
+    expect(isNarrowChart({ windowCompact: true, width: 647 })).toBe(false); // 접은 화면에서 '가로로 보기'로 돌려 그림 (새로 시작할 때만 120)
     expect(isNarrowChart({ windowCompact: false, width: 909 })).toBe(false); // 펼친 화면
+    // 창 600~603dp(중간)의 전체 화면 차트 폭 568~571 은 572 보다 좁아도 좁은 창이 아니다 — '중간·넓음은 120' 가장자리 (2026-09-27 검증)
+    for (const w of [600, 601, 603]) expect(isNarrowChart({ windowCompact: false, width: w - 32 }), `${w}`).toBe(false);
+  });
+
+  it("기본을 다시 고를 때 (needsFreshView): 기간이 바뀜, 또는 손대지 않은 기본인데 detailPolish 값이 달라짐(플래그가 늦게 도착·서버가 끔)", () => {
+    const auto = (polish: boolean) => ({ period: "D" as const, windowIdx: polish ? 0 : 1, view: { count: polish ? 60 : 120, offset: 0 }, autoPolish: polish });
+    // 플래그를 받기 전(꺼짐으로 고른 120) → 켜짐 도착: 다시 고른다
+    expect(needsFreshView(auto(false), "D", true)).toBe(true);
+    // 켜짐으로 고른 60 → 서버가 끔: 다시 고른다 (예전 화면 120)
+    expect(needsFreshView(auto(true), "D", false)).toBe(true);
+    // 같은 값이면 그대로
+    expect(needsFreshView(auto(true), "D", true)).toBe(false);
+    expect(needsFreshView(auto(false), "D", false)).toBe(false);
+    // 사용자가 손댄 구간(autoPolish 없음)은 플래그가 바뀌어도 그대로
+    const mine = { period: "D" as const, windowIdx: 2, view: { count: 250, offset: 7 } };
+    expect(needsFreshView(mine, "D", true)).toBe(false);
+    expect(needsFreshView(mine, "D", false)).toBe(false);
+    // 기간이 바뀌면 언제나
+    expect(needsFreshView(mine, "W", true)).toBe(true);
+    expect(needsFreshView(auto(true), "W", true)).toBe(true);
   });
 
   it("보관함(createChartViewMemo): 처음엔 비어 있고, 적은 값을 그대로 읽는다 (화면마다 따로)", () => {
