@@ -156,6 +156,29 @@ describe("'설정 열기'로 오면 '서버 연결' 칸을 펼치고 그 칸까�
     expect(r.all().find((n) => n.type === "Screen")!.props.onScrollBeginDrag).toBeUndefined();
     expect(() => connectBox(r)).toThrow();
   });
+
+  it("연결 오류 안내가 잠깐 꺼졌다 켜져도(새 서버 주소의 플래그를 받는 중 등) 칸 틀을 다시 만들지 않고 스크롤도 한 번만", () => {
+    h.params = { open: "server", at: "1" };
+    let guide = true;
+    const Flip = () => (
+      <UxFlagsContext.Provider value={{ oneHand: false, firstRun: false, emptyGuide: guide, connectionGuide: guide, flagsMissing: false }}>
+        <SettingsScreen />
+      </UxFlagsContext.Provider>
+    );
+    const r = render(<Flip />);
+    layout(connectBox(r), 900, 260);
+    expect(h.scrollTo).toHaveBeenCalledTimes(1);
+    guide = false;
+    r.rerender();
+    // 꺼진 동안에도 자리 재기 틀·스크롤 ref 는 그대로 (틀이 바뀌면 칸이 새로 그려져 입력 포커스·상태가 사라진다)
+    expect(connectBox(r).props.onLayout).toBeTypeOf("function");
+    expect(r.all().find((n) => n.type === "Screen")!.props.hasScrollRef).toBe(true);
+    guide = true;
+    r.rerender();
+    expect(r.has("서버 주소")).toBe(true);
+    // 같은 열기 요청이 다시 돌지 않는다
+    expect(h.scrollTo).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("서버에 연결되지 않으면 알림·토스 빈 칸 안내 + 버튼 하나", () => {
@@ -203,6 +226,9 @@ describe("oneHand · firstRun 설정 항목", () => {
     const r = draw({ oneHand: true });
     const sw = r.byLabel("누를 때 진동");
     expect(sw.props.value).toBe(true);
+    // 설명: 차트 십자선(진동기)은 휴대폰 '터치 진동'을 따르지 않으므로 '모두 따름'이라고 쓰지 않는다
+    expect(r.text()).toContain("차트 십자선 말고는 휴대폰의 '터치 진동'이 켜져 있어야 울립니다");
+    expect(r.text()).not.toContain("터치 진동 설정도 따름");
     (sw.props.onValueChange as (v: boolean) => void)(false);
     expect(h.setHaptics).toHaveBeenCalledWith(false);
   });

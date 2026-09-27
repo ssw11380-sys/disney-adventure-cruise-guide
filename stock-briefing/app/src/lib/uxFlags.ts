@@ -17,9 +17,11 @@ export interface UxFlags {
   /**
    * 연결 오류 안내를 쓸지: 오류 화면·끊김 띠의 '설정 열기', 칸 이름에 맞춘 오류 문구, 설정의 서버 연결 칸 펼치기와
    * 설정의 빈 칸 안내(서버에 닿지 않아 알림·토스 칸이 빔 → '서버 연결 열기').
-   * = emptyGuide 켜짐, 또는 지금 주소에서 플래그를 받지 못한 채(flagsMissing) 기기가 기억한 마지막 emptyGuide 가 끔이 아닐 때
-   * (서버 주소·토큰이 틀리면 플래그도 받을 수 없어 서버가 끌 수 없다 — 규칙 'fallback 꺼짐'의 의도적 예외).
+   * = emptyGuide 켜짐, 또는 지금 주소에서 플래그를 받지 못한 채(flagsMissing) 이 기기가 **마지막으로 받은 emptyGuide 가 켬**일 때
+   * (서버 주소·토큰이 틀리면 플래그도 받을 수 없다 — 그때는 이 기기에서 서버가 마지막으로 준 값을 따른다).
    * 마지막으로 받은 값은 서버 주소와 상관없이 기억한다(lastEmptyGuide) → 서버가 끔을 준 뒤 주소를 틀리게 바꿔도 켜지지 않는다.
+   * 한 번도 받은 적이 없으면(새 기기를 인터넷 없이 켬 등) 켜지 않는다 — 규칙 '새 기능은 앱 fallback 꺼짐' 그대로
+   * (백그라운드 알림의 '기기에 저장한 마지막 플래그가 켜져 있을 때만'과 같은 규칙).
    * 주요 화면의 빈 상태 안내(잔고·브리핑·발견·비중)는 이 값이 아니라 emptyGuide 만 본다
    */
   connectionGuide: boolean;
@@ -31,7 +33,7 @@ export const UX_OFF: UxFlags = Object.freeze({ oneHand: false, firstRun: false, 
 
 /**
  * 받은 플래그(없으면 undefined)와 플래그 조회 실패 여부, 기기가 기억한 마지막 emptyGuide 로 (순수 함수 — 테스트용).
- * lastEmptyGuide: true/false = 마지막으로 받은 값, null = 받은 적 없음, undefined = 아직 기억을 읽는 중(예외를 켜지 않는다)
+ * lastEmptyGuide: true/false = 마지막으로 받은 값, null = 받은 적 없음, undefined = 아직 기억을 읽는 중 (예외는 true 일 때만 켠다)
  */
 export function uxFlagsFrom(flags: FeatureFlags | undefined, fetchFailed: boolean, lastEmptyGuide?: boolean | null): UxFlags {
   const emptyGuide = featureOn(flags, "emptyGuide", false);
@@ -40,7 +42,7 @@ export function uxFlagsFrom(flags: FeatureFlags | undefined, fetchFailed: boolea
     oneHand: featureOn(flags, "oneHand", false),
     firstRun: featureOn(flags, "firstRun", false),
     emptyGuide,
-    connectionGuide: emptyGuide || (flagsMissing && lastEmptyGuide !== false && lastEmptyGuide !== undefined),
+    connectionGuide: emptyGuide || (flagsMissing && lastEmptyGuide === true),
     flagsMissing,
   };
 }

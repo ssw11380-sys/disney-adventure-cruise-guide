@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   dismissTo: vi.fn(),
   alert: vi.fn(),
   refetch: vi.fn(async () => undefined),
+  mutate: vi.fn(),
+  win: { width: 475, height: 751 },
 }));
 
 vi.mock("react-native", async () => {
@@ -48,7 +50,7 @@ vi.mock("react-native", async () => {
     Alert: { alert: h.alert },
     Linking: { openURL: vi.fn() },
     Platform: { OS: "android" },
-    useWindowDimensions: () => ({ width: 475, height: 751, scale: 2.625, fontScale: 1 }),
+    useWindowDimensions: () => ({ ...h.win, scale: 2.625, fontScale: 1 }),
   };
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 48, left: 0, right: 0 }) }));
@@ -102,7 +104,7 @@ vi.mock("@/api/hooks", () => ({
   useFeatures: () => ({ data: { features: h.flags }, isFetching: false, refetch: vi.fn() }),
   useStocks: () => ok(h.stocks),
   useRegisteredStocks: () => ok(h.stocks),
-  useStockMutations: () => ({ register: { mutate: vi.fn() }, run: { mutate: vi.fn(), isPending: false, variables: undefined } }),
+  useStockMutations: () => ({ register: { mutate: vi.fn() }, run: { mutate: h.mutate, isPending: false, variables: undefined } }),
   useDiscoverRank: (market: "KR" | "US", category: DiscoverRank["category"]) => ({
     ...ok({ pages: [{ market, category, items: h.rank, page: 1, hasMore: false, marketOpen: false, session: "closed", ver: 1, asOf: "2026-09-23T15:30:00+09:00", fxRate: null, source: "toss", note: null }], pageParams: [{ page: 1 }] }),
     hasNextPage: false,
@@ -130,7 +132,8 @@ beforeEach(() => {
   h.themes = [];
   h.latest = [];
   h.stocks = [];
-  for (const f of [h.push, h.back, h.dismissTo, h.alert, h.refetch]) f.mockClear();
+  for (const f of [h.push, h.back, h.dismissTo, h.alert, h.refetch, h.mutate]) f.mockClear();
+  h.win = { width: 475, height: 751 };
   forgetWindowClass();
 });
 
@@ -215,6 +218,33 @@ describe("브리핑: 종목 없음 · 브리핑 없음", () => {
     }
     // 꺼져 있으면 수동 생성 카드 그대로
     expect(draw(<BriefingsScreen />, false).text()).toContain("수동 생성");
+  });
+
+  it("'지금 만들기'는 수동 생성 확인(briefingManualRun)이 꺼져 있어도 늘 확인 창을 거친다 — 한 번 눌러 전 종목 생성이 시작되지 않게", () => {
+    h.latest = [{ code: "005930", name: "삼성전자", latest: null }];
+    h.stocks = [holding("005930", quote("005930", 84_300), 10, 70_000, undefined, "삼성전자")];
+    h.flags = { allocationView: true, briefingManualRun: false };
+    const r = draw(<BriefingsScreen />, true);
+    press(buttonsOf(empties(r)[0]!)[0]!);
+    expect(h.alert).toHaveBeenCalledTimes(1);
+    expect(h.mutate).not.toHaveBeenCalled();
+    // 확인 창의 '만들기'를 눌러야 시작
+    const buttons = h.alert.mock.calls[0]![2] as { text: string; onPress?: () => void }[];
+    buttons.find((b) => b.text === "만들기")!.onPress!();
+    expect(h.mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("넓은 창(933×704): 브리핑이 없으면 빈 칸의 '지금 만들기' 하나 — 머리의 '⋯'(수동 생성)도 숨긴다. 꺼져 있으면 '⋯' 그대로", () => {
+    h.win = { width: 933, height: 704 };
+    h.latest = [{ code: "005930", name: "삼성전자", latest: null }];
+    h.stocks = [holding("005930", quote("005930", 84_300), 10, 70_000, undefined, "삼성전자")];
+    h.flags = { allocationView: true, briefingManualRun: true, foldLayout: true };
+    const more = (r: ReturnType<typeof render>) => r.all().filter((n) => n.props.accessibilityLabel === "수동 생성");
+    const on = draw(<BriefingsScreen />, true);
+    expect(buttonsOf(empties(on)[0]!).map((b) => b.props.title)).toEqual(["지금 만들기"]);
+    expect(more(on)).toHaveLength(0);
+    forgetWindowClass();
+    expect(more(draw(<BriefingsScreen />, false)).length).toBeGreaterThan(0);
   });
 });
 

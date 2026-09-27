@@ -22,12 +22,12 @@ vi.mock("expo-router", () => ({ router: { navigate: h.navigate, dismissTo: h.dis
 const { swipeActionWidth, swipeActiveRange, swipeOffset, swipeOpenWidth, swipeSettleOpen, swipePanConfig } = await import("@/lib/rowSwipe");
 const { haptic, hapticAllowed, hapticCall, installHaptics, setHapticPolicy } = await import("@/lib/haptics");
 const { addressBanner, authBanner, connectionKind, connectionText } = await import("@/lib/connectionError");
-const { cacheFromEarlierRun, claimFirstRun, FIRST_RUN_KEY, firstRunDecision, forgetFirstRunClaim, hasPriorUse, markFirstRun, priorUseFrom, readFirstRun } = await import("@/lib/firstRun");
+const { cacheFromEarlierRun, claimFirstRun, FIRST_RUN_KEY, firstRunDecision, forgetFirstRunClaim, hasPriorUse, markFirstRun, priorUseFrom, readFirstRun, rereadBootTraces } = await import("@/lib/firstRun");
 const { removeConfirm, removeKind, removeLabel, rowA11yActions } = await import("@/lib/rowActions");
 const { openServerSettings, serverOpenRequest, serverSettingsParams } = await import("@/lib/settingsLink");
 const { ApiRequestError } = await import("@/api/client");
 const { emptyGuideToRemember, UX_OFF, uxFlagsFrom } = await import("@/lib/uxFlags");
-const { headTitleMaxWidth } = await import("@/lib/detailLayout");
+const { headPriceParts, headTitleMaxWidth } = await import("@/lib/detailLayout");
 const { sessionNow } = await import("@/lib/briefingRun");
 const { oneHand } = await import("@/tokens");
 /** 차트 드래그 기준 (components/chart/PriceChart chartPanConfig — test/chartGesture 가 지킨다) */
@@ -188,12 +188,17 @@ describe("첫 실행 안내: 이 기기에서 처음 쓰는 사람만 한 번, �
     expect(cacheFromEarlierRun(JSON.stringify({}), boot)).toBe(true);
   });
 
-  it("저장소: 흔적 읽기, 못 읽으면 있는 것으로", async () => {
+  it("저장소: 앱을 켤 때 읽어 둔 흔적, 못 읽으면 있는 것으로", async () => {
+    await rereadBootTraces();
     expect(await hasPriorUse(1_000)).toBe(false);
     h.store.set("search.recent", "[]");
+    // 켤 때 읽어 둔 값을 쓴다 (켠 뒤에 적힌 것은 이번 실행의 것)
+    expect(await hasPriorUse(1_000)).toBe(false);
+    await rereadBootTraces();
     expect(await hasPriorUse(1_000)).toBe(true);
     h.store.clear();
     h.failRead = true;
+    await rereadBootTraces();
     expect(await hasPriorUse(1_000)).toBe(true);
   });
 
@@ -241,16 +246,17 @@ describe("지우기 문구: 토스 종목은 '동기화 제외', 보유는 '삭�
 });
 
 describe("플래그 세 개 (서버 값, fallback 꺼짐) + 연결 오류 안내", () => {
-  it("받은 값대로, 없으면 꺼짐. 연결 오류 안내는 emptyGuide 가 켜졌거나, 플래그를 못 받은 채 조회가 실패하고 마지막으로 받은 값이 끔이 아닐 때", () => {
+  it("받은 값대로, 없으면 꺼짐. 연결 오류 안내는 emptyGuide 가 켜졌거나, 플래그를 못 받은 채 조회가 실패하고 이 기기가 마지막으로 받은 값이 켬일 때", () => {
     const on = { features: { oneHand: true, firstRun: false, emptyGuide: true } } as never;
     expect(uxFlagsFrom(on, false)).toEqual({ oneHand: true, firstRun: false, emptyGuide: true, connectionGuide: true, flagsMissing: false });
     // 받는 중(아직 실패 아님): 모두 꺼짐
     expect(uxFlagsFrom(undefined, false)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false, flagsMissing: false });
-    // 서버 주소·토큰이 틀려 플래그 조회가 실패, 받은 적 없음: 빈 화면 안내는 꺼진 채, 연결 오류 안내('설정 열기')만 켠다 — 서버가 끌 수도 없는 상황
-    expect(uxFlagsFrom(undefined, true, null)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true, flagsMissing: true });
+    // 플래그 조회 실패, 이 기기에서 받은 적 없음(새 기기를 인터넷 없이 켬 등): 켜지 않는다 — '새 기능은 앱 fallback 꺼짐' 그대로 (리뷰 수정)
+    expect(uxFlagsFrom(undefined, true, null)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: false, flagsMissing: true });
     // 마지막으로 받은 값(서버 주소와 상관없이 기기에 기억)이 끔이면: 주소를 틀리게 바꿔 새 주소의 플래그가 없어도 켜지 않는다
     expect(uxFlagsFrom(undefined, true, false).connectionGuide).toBe(false);
-    expect(uxFlagsFrom(undefined, true, true).connectionGuide).toBe(true);
+    // 서버가 켬을 준 적이 있는 기기가 주소를 틀리게 바꿈 → 빈 화면 안내는 꺼진 채, 연결 오류 안내('설정 열기')만 켠다
+    expect(uxFlagsFrom(undefined, true, true)).toEqual({ oneHand: false, firstRun: false, emptyGuide: false, connectionGuide: true, flagsMissing: true });
     // 기억을 아직 읽는 중이면 켜지 않는다
     expect(uxFlagsFrom(undefined, true, undefined).connectionGuide).toBe(false);
     // 지금 주소에서 끔을 받았으면(저장된 값 포함) 실패 중이어도 끔
@@ -302,6 +308,22 @@ describe("그 밖의 계산 (3-24 리뷰 수정)", () => {
     // 글자 130% 의 '☆ 관심 추가' (약 128)
     expect(headTitleMaxWidth(411, 128)).toBe(187);
     expect(headTitleMaxWidth(100, 200)).toBe(0);
+  });
+
+  it("머리 현재가 옆 단위·등락률: 이름 4자(+…)를 남기고 모자라면 단위 → 등락률 순으로 뺀다 (현재가는 늘)", () => {
+    const p = { text: "12,340", unit: "원", rate: "+1.23%" };
+    const long = "디엔에이링크우선주";
+    // 폴드8 접힘 475·100%·오른쪽 아이콘 버튼: 전부
+    expect(headPriceParts(headTitleMaxWidth(475, null), "삼성전자", p, 1)).toEqual({ unit: true, rate: true });
+    expect(headPriceParts(headTitleMaxWidth(475, 112), long, p, 1)).toEqual({ unit: true, rate: true });
+    // 글자 130%: 단위를 먼저 뺀다
+    expect(headPriceParts(headTitleMaxWidth(475, 112), long, p, 1.3)).toEqual({ unit: false, rate: true });
+    // 울트라 접힘 411·130%·'☆ 관심 추가'(약 128): 현재가만 (예전에는 이름이 '디…' 한 글자)
+    expect(headPriceParts(headTitleMaxWidth(411, 128), long, p, 1.3)).toEqual({ unit: false, rate: false });
+    // 짧은 이름은 이름 전체만 남기면 된다
+    expect(headPriceParts(headTitleMaxWidth(411, 128), "LG", p, 1)).toEqual({ unit: true, rate: true });
+    // 글자 배율은 머리 상한(150%)까지만
+    expect(headPriceParts(300, long, p, 2)).toEqual(headPriceParts(300, long, p, 1.5));
   });
 
   it("빈 브리핑 탭 '지금 만들기' 세션: 한국 시각 정오 전 오전, 정오부터 오후 (고정 시계)", () => {

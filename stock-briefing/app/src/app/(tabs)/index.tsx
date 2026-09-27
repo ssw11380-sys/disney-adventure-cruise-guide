@@ -324,7 +324,8 @@ export default function StocksScreen() {
           ? "토스증권 계좌의 보유 종목을 바로 불러올 수 있습니다. 다른 종목은 위의 검색(돋보기)으로 추가하세요."
           : "종목명이나 티커로 검색해 보유·관심 종목을 추가하세요."}
       </Text>
-      <View style={{ flexDirection: "row", marginTop: space.sm }}>
+      {/* 넓은 창(933dp 등)에서 버튼이 창 폭 전체(약 875dp)로 늘지 않게 읽기 폭(720)까지 — 첫 실행 안내와 같다. 휴대폰·접은 화면은 더 좁아 그대로 */}
+      <View style={{ flexDirection: "row", marginTop: space.sm, maxWidth: layout.readableMax }}>
         {/* 버튼은 하나: 토스가 연결된 서버면 계좌 불러오기(가장 필요한 일), 아니면 종목 검색 */}
         {health.data?.tossOpenApi?.configured ? <TossImportButton /> : <Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} style={{ flex: 1 }} />}
       </View>
@@ -348,7 +349,7 @@ export default function StocksScreen() {
           <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flex: 1 }} accessibilityRole="header">
             관심 종목이 없습니다
           </Text>
-          <Pressable onPress={marks.closeWatchHint} accessibilityRole="button" accessibilityLabel="관심 종목 안내 닫기" hitSlop={slopFor(font.h2, space.xs)} style={styles.hintClose}>
+          <Pressable onPress={marks.closeWatchHint} accessibilityRole="button" accessibilityLabel="관심 종목 안내 닫기" hitSlop={CLOSE_SLOP} style={styles.hintClose}>
             <Ionicons name="close" size={font.h2} color={t.muted} />
           </Pressable>
         </View>
@@ -638,6 +639,9 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
   );
 }
 
+/** 관심 안내 칸 닫기(✕ 아이콘 font.h2)의 누르는 영역: 위아래·좌우 모두 44 (3-24 리뷰 수정 — 예전에는 좌우가 아이콘 + 4 로 폭 24) */
+const CLOSE_SLOP = slopFor(font.h2, Math.ceil((touch.min - font.h2) / 2));
+
 const styles = StyleSheet.create({
   panel: { borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, gap: space.xs },
   // 상태 줄이 길면(시세 지연 N 등) 제목을 줄이지 않고 다음 줄로 내린다
@@ -656,7 +660,7 @@ const styles = StyleSheet.create({
   panelActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: space.xs },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
   empty: { margin: space.lg, padding: space.lg, gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
-  // 3-24 관심 안내 칸 제목 줄 + 닫기(오른쪽, 누르는 영역 44)
+  // 3-24 관심 안내 칸 제목 줄 + 닫기(오른쪽, 누르는 영역 44×44 — CLOSE_SLOP)
   hintHead: { flexDirection: "row", alignItems: "center", gap: space.sm },
   hintClose: { alignItems: "center", justifyContent: "center" },
   backdrop: { flex: 1, justifyContent: "flex-end" },

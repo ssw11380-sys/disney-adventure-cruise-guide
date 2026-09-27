@@ -269,4 +269,31 @@ describe("머리 현재가: 오른쪽 버튼 실제 폭을 빼고, 달러 종목
     expect(shown.text()).toContain("USD");
     expect(shown.text()).toMatch(/^애플254\.40USD-1\.59%$/);
   });
+
+  it("411dp·글자 130% 의 긴 미등록 이름: 이름이 한 글자로 줄지 않게 단위·등락률을 빼고 현재가만 (화면 읽기는 전부)", () => {
+    h.win = { width: 411, height: 960, scale: 2.625, fontScale: 1.3 };
+    const long = { ...holding("950220", quote("950220", 12_340, { change: 150, changeRate: 1.23 }), null, null, {}, "디엔에이링크우선주"), registered: false };
+    const r = open(long);
+    // 글자 130% 의 '☆ 관심 추가' 글자 버튼 (약 128)
+    const right = render((stack(r).headerRight as () => React.ReactElement)());
+    r.act(() => (right.all()[0]!.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 0, width: 128, height: 44 } } }));
+    const views = r.all().filter((n) => n.type === "View" && "onLayout" in n.props);
+    layout(views[0]!, 0, 180);
+    layout(views[1]!, 20, 60);
+    scroll(r, 200);
+    const shown = render((stack(r).headerTitle as () => React.ReactElement)());
+    const headPrice = r.all().find((n) => n.type === "FlashPrice")!.props.text as string;
+    // 현재가는 시세 머리 값 그대로, 단위·등락률은 뺌 → 이름 칸이 약 4자 폭을 가진다
+    expect(shown.text()).toBe(`디엔에이링크우선주${headPrice}`);
+    expect(shown.all()[0]!.props.accessibilityLabel).toContain("현재가 12,340원");
+    // 같은 이름도 475dp·글자 100% 면 전부 (예전과 같음)
+    h.win = { width: 475, height: 751, scale: 2.625, fontScale: 1 };
+    forgetWindowClass();
+    const wide = open(long);
+    const v2 = wide.all().filter((n) => n.type === "View" && "onLayout" in n.props);
+    layout(v2[0]!, 0, 180);
+    layout(v2[1]!, 20, 60);
+    scroll(wide, 200);
+    expect(render((stack(wide).headerTitle as () => React.ReactElement)()).text()).toBe(`디엔에이링크우선주${headPrice}원+1.23%`);
+  });
 });

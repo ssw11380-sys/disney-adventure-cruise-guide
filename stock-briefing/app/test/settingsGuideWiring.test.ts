@@ -34,6 +34,14 @@ describe("서버 조회 오류 화면·끊김 띠는 모두 '설정 열기' 속�
     for (const t of tags(src, "StaleBanner")) expect(t).toMatch(/\{\.\.\.(guide|guideProps)\}/);
   });
 
+  it.each(["src/app/stocks/add.tsx", "src/app/market/[code].tsx"])("작은 칸 오류 글(종목 검색 결과 · 지수 차트)도 받는다: %s", (f) => {
+    const src = read(f);
+    expect(src).toContain("useSettingsGuide()");
+    const lines = tags(src, "ConnectionLine");
+    expect(lines.length).toBeGreaterThan(0);
+    for (const t of lines) expect(t).toMatch(/\{\.\.\.(guide|guideProps)\}/);
+  });
+
   it("'설정 열기'를 onPress 에 바로 넘기지 않는다 (누름 이벤트가 라우터 인자로 들어가지 않게 — useSettingsGuide 를 쓴다)", () => {
     for (const f of FILES) expect(read(f)).not.toMatch(/onOpenSettings:\s*openServerSettings\b/);
   });

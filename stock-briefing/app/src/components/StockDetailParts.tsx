@@ -8,7 +8,7 @@ import { BriefingCard } from "@/components/BriefingCard";
 import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
-import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
+import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
 import { analysisView } from "@/lib/freshness";
 import { navLabel, navSpeech, type HoldingsNav } from "@/lib/holdingsNav";
@@ -605,7 +605,8 @@ export function DetailBottomBar({ star, onStar, onChart }: { star: BarStar; onSt
 }
 
 /**
- * 휴대폰 종목 상세 Stack 머리 제목 (3-24 oneHand): 이름, 스크롤로 시세 머리의 가격 줄이 가려지면 그 옆에 현재가·등락률.
+ * 휴대폰 종목 상세 Stack 머리 제목 (3-24 oneHand): 이름, 스크롤로 시세 머리의 가격 줄이 가려지면 그 옆에 현재가·단위·등락률
+ * (좁으면 이름 4자를 남기려고 단위 → 등락률 순으로 뺀다 — 현재가는 늘).
  * 값은 시세 머리와 같은 글(부르는 쪽이 같은 함수로 만든 문자열)을 그대로 받는다 → 머리 현재가 = 시세 머리 값.
  * 가격이 나타날 때만 짧게 흐려졌다 보인다 (스크롤마다 다시 그리지 않고 기준선을 넘을 때 한 번 바뀐다)
  */
@@ -622,7 +623,10 @@ export function HeadTitle({
 }) {
   const t = useTheme();
   // 머리의 뒤로 버튼·오른쪽 버튼 자리를 뺀 폭까지만 (네이티브 머리가 제목 칸 폭을 정해 주지 않아 긴 이름이 오른쪽 버튼을 덮지 않게)
-  const { width: winW } = useWindowDimensions();
+  const { width: winW, fontScale } = useWindowDimensions();
+  const maxW = headTitleMaxWidth(winW, rightW);
+  // 좁으면 이름 4자는 남기고 단위 → 등락률 순으로 뺀다 (현재가는 늘 — lib/detailLayout headPriceParts)
+  const parts = price ? headPriceParts(maxW, name, price, fontScale) : null;
   const [fade] = useState(() => new Animated.Value(price ? 1 : 0));
   const on = price !== null;
   useEffect(() => {
@@ -633,7 +637,7 @@ export function HeadTitle({
     Animated.timing(fade, { toValue: 1, duration: oneHand.headFadeMs, useNativeDriver: Platform.OS !== "web" }).start();
   }, [on, fade]);
   return (
-    <View style={[styles.headTitle, { maxWidth: headTitleMaxWidth(winW, rightW) }]} accessible accessibilityRole="header" accessibilityLabel={price ? `${name}, ${price.a11y}` : name}>
+    <View style={[styles.headTitle, { maxWidth: maxW }]} accessible accessibilityRole="header" accessibilityLabel={price ? `${name}, ${price.a11y}` : name}>
       <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.chrome}>
         {name}
       </Text>
@@ -642,12 +646,16 @@ export function HeadTitle({
           <Text style={{ color: price.color, fontSize: font.h2, fontWeight: "800", fontVariant: ["tabular-nums"] }} maxFontSizeMultiplier={fontCap.chrome}>
             {price.text}
           </Text>
-          <Text style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={fontCap.chrome}>
-            {price.unit}
-          </Text>
-          <Text style={{ color: price.rateColor, fontSize: font.small, fontWeight: "700", fontVariant: ["tabular-nums"] }} maxFontSizeMultiplier={fontCap.chrome}>
-            {price.rate}
-          </Text>
+          {parts?.unit ? (
+            <Text style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={fontCap.chrome}>
+              {price.unit}
+            </Text>
+          ) : null}
+          {parts?.rate ? (
+            <Text style={{ color: price.rateColor, fontSize: font.small, fontWeight: "700", fontVariant: ["tabular-nums"] }} maxFontSizeMultiplier={fontCap.chrome}>
+              {price.rate}
+            </Text>
+          ) : null}
         </Animated.View>
       ) : null}
     </View>

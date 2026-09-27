@@ -58,7 +58,11 @@ export default function SettingsScreen() {
   // 3-24 (emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도, lib/uxFlags connectionGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
   // 누를 때마다 새 요청이라(at) 사용자가 칸을 접은 뒤 다른 화면에서 또 눌러도 다시 펼친다. 플래그가 꺼져 있으면 검색어를 보지 않는다
   const params = useLocalSearchParams<{ open?: string; at?: string }>();
-  const openReq = ux.connectionGuide ? serverOpenRequest(params) : null;
+  // 칸 자리 재기(감싸개·onLayout·넓은 창 key)와 열기 요청은 연결 오류 안내가 한 번 켜지면 이 화면이 떠 있는 동안 유지한다 —
+  // 값이 잠깐 꺼졌다 켜져도 '서버 연결' 칸·두 기둥을 다시 만들지 않고(입력 포커스·칸 상태 유지) 스크롤을 한 번 더 하지 않게. 플래그가 꺼져 있으면 늘 false = 지금 그대로
+  const [measure, setMeasure] = useState(false);
+  if (ux.connectionGuide && !measure) setMeasure(true);
+  const openReq = measure ? serverOpenRequest(params) : null;
   const scrollRef = useRef<ScrollView | null>(null);
   // '서버 연결' 칸 자리: 칸이 든 기둥의 y(넓은 창 오른쪽 기둥, 휴대폰은 0) + 기둥 안 칸의 y. pending = 펼친 뒤 한 번 더 스크롤.
   // until = 이 시각까지는 칸 자리가 바뀔 때마다(위쪽 알림·토스·빈 칸 안내 카드가 늦게 그려져 높이가 바뀜) 다시 맞춘다 — 사용자가 끌면 0 으로 멈춘다
@@ -174,7 +178,7 @@ export default function SettingsScreen() {
         <View style={styles.line}>
           <View style={{ flex: 1, paddingRight: space.md }}>
             <Text style={styles.label(t.ink)}>누를 때 진동</Text>
-            <Muted style={{ fontSize: font.tiny }}>줄 밀기·길게 누르기·정렬·관심 추가·당겨서 새로고침·차트 십자선 (휴대폰의 터치 진동 설정도 따름)</Muted>
+            <Muted style={{ fontSize: font.tiny }}>줄 밀기·길게 누르기·정렬·관심 추가·당겨서 새로고침·차트 십자선. 차트 십자선 말고는 휴대폰의 &apos;터치 진동&apos;이 켜져 있어야 울립니다</Muted>
           </View>
           <Toggle value={haptics} onValueChange={(v) => void setHaptics(v)} accessibilityLabel="누를 때 진동" />
         </View>
@@ -320,13 +324,13 @@ export default function SettingsScreen() {
       </Card>
     ) : null;
   // '서버 연결' 칸 자리를 잰다 ('설정 열기'로 왔을 때 그 칸까지 스크롤 — 플래그가 꺼져 있으면 감싸지 않는다)
-  const connectBox = ux.connectionGuide ? <View onLayout={onConnectLayout}>{connect}</View> : connect;
+  const connectBox = measure ? <View onLayout={onConnectLayout}>{connect}</View> : connect;
 
   if (wide)
     return (
       // 넓은 창은 탭 화면 머리를 숨기므로(공통 틀) 상태 표시줄·좌우 화면 여백을 여기서 둔다 (왼쪽은 세로 탭 막대가 있으면 막대가 맡는다)
       <View style={{ flex: 1, backgroundColor: t.bg, paddingTop: insets.top, paddingLeft: fold.rail ? 0 : insets.left, paddingRight: insets.right }}>
-      <Screen refreshing={pulling} onRefresh={onPull} {...(ux.connectionGuide ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
+      <Screen refreshing={pulling} onRefresh={onPull} {...(measure ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
         {/* 넓은 창: 칸이 좁으면 이름·값 줄의 값이 이름 아래 줄로 (큰 글씨에서도 두 칸을 지킨다) */}
         <RowWrapContext.Provider value={true}>
         {/* 두 칸: 왼쪽 표시·알림·정보 | 오른쪽 토스·업데이트·서버·서버 연결·화면 정보. 화면 읽기는 왼쪽 칸을 끝까지 읽고 오른쪽 칸으로.
@@ -334,14 +338,14 @@ export default function SettingsScreen() {
             두 칸이 안 들어가는 넓은 창(폭 600~687 — 한 칸 최소 폭은 글자 크기와 상관없다)은 같은 틀을 세로로 쌓아 한 칸: 카드 차례는 휴대폰과 같고(정보는 맨 끝),
             한 칸 ↔ 두 칸이 바뀌어도 카드가 같은 자리에 남아 펼침 상태·입력 중인 값이 그대로다 (정보 카드만 옮겨진다 — 상태 없음) */}
         {/* 오른쪽 기둥 자리 재기('설정 열기'로 왔을 때 스크롤): 나중에 붙인 onLayout 은 자리가 바뀌기 전까지 알려 오지 않아 플래그를 받는 순간 한 번 새로 그린다 */}
-        <View key={ux.connectionGuide ? "cols-cg" : undefined} style={two ? styles.columns : styles.stacked} onLayout={onLayout}>
+        <View key={measure ? "cols-cg" : undefined} style={two ? styles.columns : styles.stacked} onLayout={onLayout}>
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
             {display}
             {notify}
             {serverGap}
             {two ? info : null}
           </View>
-          <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart} {...(ux.connectionGuide ? { onLayout: onColumnLayout } : null)}>
+          <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart} {...(measure ? { onLayout: onColumnLayout } : null)}>
             {toss}
             <AppUpdateCard />
             {server}
@@ -355,7 +359,7 @@ export default function SettingsScreen() {
       </View>
     );
   return (
-    <Screen refreshing={pulling} onRefresh={onPull} {...(ux.connectionGuide ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
+    <Screen refreshing={pulling} onRefresh={onPull} {...(measure ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
       {display}
       {notify}
       {toss}

@@ -92,9 +92,10 @@ export default function BriefingsScreen() {
     if (wide) scrolledTo.current = null;
   }, [wide]);
 
-  // 17종목 × 약 25초: 누르기 전에 한 번 묻는다 (3-19, 플래그를 끄면 예전처럼 바로)
-  const confirmRun = (session: BriefingSession) => {
-    if (!confirmOn) return runNow(session);
+  // 17종목 × 약 25초: 누르기 전에 한 번 묻는다 (3-19, 플래그를 끄면 예전처럼 바로).
+  // always: 빈 브리핑 탭의 '지금 만들기'(3-24 emptyGuide)는 briefingManualRun 과 상관없이 늘 묻는다 — 한 번 눌러 전 종목 생성(LLM 비용)이 시작되지 않게
+  const confirmRun = (session: BriefingSession, always = false) => {
+    if (!confirmOn && !always) return runNow(session);
     const c = runConfirm(session, (data ?? []).length);
     Alert.alert(c.title, c.message, [
       { text: "취소", style: "cancel" },
@@ -183,7 +184,7 @@ export default function BriefingsScreen() {
             title="생성된 브리핑이 없습니다"
             hint="평일 장 시작 전·마감 뒤에 자동으로 만들어집니다. 기다리지 않고 지금 만들 수도 있습니다."
             // 누른 시각에 맞는 세션 하나로 바로 확인 창 (오전·오후를 고르는 창을 거치지 않는다 — 확인 창 제목이 '오전 브리핑 N종목 새로 만들기')
-            action={<Button title="지금 만들기" icon="sparkles-outline" variant="secondary" loading={run.isPending} onPress={() => confirmRun(sessionNow(Date.now()))} />}
+            action={<Button title="지금 만들기" icon="sparkles-outline" variant="secondary" loading={run.isPending} onPress={() => confirmRun(sessionNow(Date.now()), true)} />}
           />
         ),
       }
@@ -217,7 +218,8 @@ export default function BriefingsScreen() {
         ratesFail={ratesFailText}
         banner={banner}
         manual={manual}
-        more={items.length > 0 ? { onPress: openMore, busy: run.isPending } : null}
+        // 3-24 (emptyGuide): 브리핑이 하나도 없으면 빈 칸 안의 '지금 만들기' 하나가 수동 생성을 맡는다 → 머리의 '⋯'도 숨긴다 (버튼 하나)
+        more={items.length > 0 && !guideNoBriefing ? { onPress: openMore, busy: run.isPending } : null}
         missingNote={missingNote}
         empty={items.length === 0 ? "none" : withBriefing.length === 0 ? "noBriefing" : null}
         guideEmpty={guideEmpty}

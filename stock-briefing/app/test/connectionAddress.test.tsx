@@ -198,9 +198,27 @@ describe("연결 오류 안내 예외는 서버가 준 끔을 기억한다 (서�
     return r;
   };
 
-  it("받은 적 없음 + 플래그 조회 실패 → 켬 (서버가 끌 수 없는 상황)", async () => {
+  it("받은 적 없음 + 플래그 조회 실패 → 끔 (새 기능은 앱 fallback 꺼짐 — 이 기기가 켬을 받은 적이 있을 때만 예외)", async () => {
     h.features = { data: undefined, isError: true };
-    expect((await mount()).text()).toBe("true:true");
+    expect((await mount()).text()).toBe("false:true");
+  });
+
+  it("서버 주소를 바꿔 새 주소의 플래그를 받는 중에는 직전 값을 그대로 둔다 (켬→끔→켬으로 설정 칸이 다시 그려지지 않게)", async () => {
+    h.features = { data: { features: { emptyGuide: true } }, isError: false };
+    const r = await mount();
+    expect(r.text()).toBe("true:false");
+    // 새 주소: 아직 받는 중 (값 없음·실패 아님)
+    h.features = { data: undefined, isError: false };
+    r.rerender();
+    expect(r.text()).toBe("true:false");
+    // 새 주소에서 받음 (끔) → 그 값
+    h.features = { data: { features: { emptyGuide: false } }, isError: false };
+    r.rerender();
+    expect(r.text()).toBe("false:false");
+    // 앱을 막 켜서 한 번도 받지 못한 채 받는 중이면 모두 꺼짐 (직전 값이 없다)
+    h.store.clear();
+    h.features = { data: undefined, isError: false };
+    expect((await mount()).text()).toBe("false:false");
   });
 
   it("서버가 끔을 준 뒤 주소를 틀리게 바꿈(새 주소의 플래그 없음·실패) → 끔. 다음 실행(기기 기억)도 끔", async () => {

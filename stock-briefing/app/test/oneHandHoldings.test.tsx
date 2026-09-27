@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RegisteredWithQuote } from "@/api/types";
 import { holding, quote } from "./helpers";
 import { render, type HostNode } from "./miniRender";
+import { font, layout, touch } from "@/tokens";
 
 /**
  * 잔고 탭 3-24 (기능 플래그 oneHand·emptyGuide — 루트가 UxFlagsContext 로 내려 준다).
@@ -284,6 +285,9 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
     expect(byType(r, "TossImportButton")).toHaveLength(1);
     expect(r.text()).toContain("토스증권 계좌의 보유 종목을 바로 불러올 수 있습니다");
     expect(r.text()).toContain("검색(돋보기)");
+    // 버튼 줄은 읽기 폭(720)까지 — 넓은 창에서 창 폭 전체로 늘지 않게
+    const row = r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.type === "TossImportButton"))!;
+    expect(row.props.style).toMatchObject({ maxWidth: layout.readableMax });
   });
 
   it("보유만 있고 관심이 없으면 목록 끝에 관심 빈 칸 (버튼 하나), 관심이 있으면 없음", () => {
@@ -294,8 +298,11 @@ describe("emptyGuide: 빈 잔고·빈 관심은 안내 + 버튼 하나, 연결 �
     expect(r.text()).toContain("관심 종목이 없습니다");
     const buttons = buttonsIn(r);
     expect(buttons.map((b) => b.props.title)).toEqual(["관심 종목 찾기"]);
-    // 닫기(누르는 영역 44 — hitSlop)
-    expect(r.all().some((n) => n.props.accessibilityLabel === "관심 종목 안내 닫기")).toBe(true);
+    // 닫기: 누르는 영역 44×44 (아이콘 16 + hitSlop 위아래·좌우 14)
+    const close = r.all().find((n) => n.props.accessibilityLabel === "관심 종목 안내 닫기")!;
+    const slop = close.props.hitSlop as { top: number; bottom: number; left: number; right: number };
+    expect(font.h2 + slop.top + slop.bottom).toBeGreaterThanOrEqual(touch.min);
+    expect(font.h2 + slop.left + slop.right).toBeGreaterThanOrEqual(touch.min);
     h.stocks = STOCKS;
     expect(draw({ emptyGuide: true }).text()).not.toContain("관심 종목이 없습니다");
     h.stocks = [samsung, naver];

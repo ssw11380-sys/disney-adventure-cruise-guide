@@ -149,6 +149,11 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect(detail.find((x) => x.key === "oneHand")).toMatchObject({ enabled: false, default: true, overridden: true });
     expect(detail.find((x) => x.key === "oneHand")?.description).toMatch(/동기화 제외/);
     expect(detail.find((x) => x.key === "firstRun")?.description).toMatch(/토큰 입력 없음/);
+    // 관리 API 설명이 지금 판단 방식과 같게: 서버의 종목 수가 아니라 기기의 사용 흔적 (리뷰 수정)
+    expect(detail.find((x) => x.key === "firstRun")?.description).toMatch(/기기의 사용 흔적/);
+    expect(detail.find((x) => x.key === "firstRun")?.description).not.toMatch(/등록 종목이 0개/);
+    expect(detail.find((x) => x.key === "emptyGuide")?.description).toMatch(/틀린 서버 주소/);
+    expect(detail.find((x) => x.key === "emptyGuide")?.description).toMatch(/마지막으로 받은 값이 켬/);
     expect(detail.find((x) => x.key === "emptyGuide")?.description).toMatch(/설정 열기/);
     for (const k of ["oneHand", "firstRun", "emptyGuide"]) expect(detail.find((x) => x.key === k)?.description).toMatch(/끄면/);
     expect((await f.set({ oneHand: null })).features.oneHand).toBe(true);

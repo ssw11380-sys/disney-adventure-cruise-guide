@@ -10,11 +10,13 @@ import { usePull } from "@/components/Freshness";
 import { formatIndexValue, MarketStrip } from "@/components/MarketStrip";
 import { Screen } from "@/components/Screen";
 import { DetailHeader, FillChart, type StateLine } from "@/components/StockDetailParts";
+import { ConnectionLine } from "@/components/ui";
 import { sentence, speakRate } from "@/lib/a11y";
 import { CANDLE_COUNT } from "@/lib/chartPrefs";
 import { detailMode, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { indexSessionLabel } from "@/lib/freshness";
+import { useSettingsGuide } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { changeColor, font, space, useTheme } from "@/theme";
 
@@ -36,6 +38,8 @@ export default function MarketIndexScreen() {
   const [period, setPeriod] = useState<CandlePeriod>("D");
   const indices = useMarketIndices();
   const candles = useMarketCandles(code, period, CANDLE_COUNT[period]);
+  // 3-24 (emptyGuide): 차트가 서버 연결 오류로 실패하면 칸 이름 문구 + '설정 열기'. 꺼져 있으면 null → 지금 글 그대로
+  const guideProps = useSettingsGuide();
   const fold = useFoldLayout();
   // 차트의 보이는 구간 (기능 플래그 detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const polish = useFeature("detailPolish", false);
@@ -118,7 +122,9 @@ export default function MarketIndexScreen() {
             hasVolume={hasVolume}
             {...chartMemo}
           />
-          {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text> : null}
+          {candles.isError ? (
+            <ConnectionLine error={candles.error} {...guideProps} fallback={<Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text>} />
+          ) : null}
           {note ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{note}</Text> : null}
         </View>
         <Text style={{ color: t.muted, fontSize: font.tiny, paddingHorizontal: space.lg, paddingTop: space.sm }}>출처: 네이버 증권</Text>
@@ -172,7 +178,9 @@ export default function MarketIndexScreen() {
         height={height}
         {...chartMemo}
       />
-      {candles.isError ? <Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text> : null}
+      {candles.isError ? (
+        <ConnectionLine error={candles.error} {...guideProps} fallback={<Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text>} />
+      ) : null}
       {note ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{note}</Text> : null}
       <Text style={{ color: t.muted, fontSize: font.tiny }}>출처: 네이버 증권</Text>
     </>

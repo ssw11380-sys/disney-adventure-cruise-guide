@@ -55,6 +55,20 @@ export function connectionText(kind: ConnectionKind): { title: string; hint: str
 }
 
 /**
+ * 오류 화면 아래 '지금 서버 주소: …' 한 줄 (3-24 리뷰 수정): 예전 글('서버에 연결할 수 없습니다: https://…')처럼 지금 어느 주소로 묻는지 보여
+ * 설정의 '서버 주소'와 견줄 수 있게. 주소가 문제일 수 있는 오류(인터넷·시간 초과·틀린 주소)만 — 토큰 오류는 주소가 맞으므로 없음.
+ * 주소 안의 사용자 정보(user:pass@)·검색어(?…)·# 뒤는 지운다 (토큰이 섞여 들어가 화면·스크린샷에 남지 않게). 주소를 모르면 null
+ */
+export function addressLine(error: unknown): string | null {
+  const kind = connectionKind(error);
+  if (kind === null || kind === "auth") return null;
+  const base = (error as { base?: unknown }).base;
+  if (typeof base !== "string" || !base.trim()) return null;
+  const shown = base.trim().replace(/\/\/[^/?#@]*@/, "//").replace(/[?#].*$/, "");
+  return `지금 ${URL_FIELD}: ${shown}`;
+}
+
+/**
  * 끊김 띠(StaleBanner)의 토큰 오류 한 줄 (시각은 부르는 쪽이). 예전: '토큰 확인 필요 · … · 설정에서 토큰 입력' —
  * 띠 오른쪽에 '설정 열기' 버튼이 붙으므로 끝의 안내는 뺀다. 연결 끊김(인터넷·시간 초과)은 예전 문구 그대로
  */

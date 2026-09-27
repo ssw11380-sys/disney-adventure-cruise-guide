@@ -1,5 +1,5 @@
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "./miniRender";
 
 /**
@@ -10,17 +10,24 @@ import { render } from "./miniRender";
  *  - 흔적을 읽는 동안 기다린다. 내비게이터가 준비된 뒤에만 연다. 한 번 적으면 다시 묻지 않는다
  *  - 안내 한 화면: 위젯 추가법 · 알림 권한 · 토스 연동 상태. 서버 주소·토큰 입력 없음. '시작하기' 한 번으로 닫힘, 열리면 '본 것'으로 적음
  */
-const h = vi.hoisted(() => ({
-  store: new Map<string, string>(),
-  navKey: "root" as string | undefined,
-  push: vi.fn(),
-  back: vi.fn(),
-  replace: vi.fn(),
-  canGoBack: true,
-  health: { data: undefined as unknown, isError: false },
-  perm: { status: "undetermined", canAskAgain: true },
-  requested: 0,
-}));
+const h = vi.hoisted(() => {
+  // 고정 시계: 이 JS 가 뜬 시각(lib/firstRun BOOT_AT) = 2026-09-27 09:00 (한국 시각). setTimeout 은 진짜
+  const BOOT = Date.parse("2026-09-27T09:00:00+09:00");
+  vi.useFakeTimers({ toFake: ["Date"], now: BOOT });
+  return {
+    BOOT,
+    path: "/",
+    store: new Map<string, string>(),
+    navKey: "root" as string | undefined,
+    push: vi.fn(),
+    back: vi.fn(),
+    replace: vi.fn(),
+    canGoBack: true,
+    health: { data: undefined as unknown, isError: false },
+    perm: { status: "undetermined", canAskAgain: true },
+    requested: 0,
+  };
+});
 
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
@@ -42,6 +49,7 @@ vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
 vi.mock("expo-router", () => ({
   router: { push: h.push, back: h.back, replace: h.replace, canGoBack: () => h.canGoBack },
   useRootNavigationState: () => (h.navKey ? { key: h.navKey } : undefined),
+  usePathname: () => h.path,
 }));
 vi.mock("expo-notifications", () => ({
   getPermissionsAsync: async () => h.perm,
@@ -76,10 +84,15 @@ vi.mock("@/components/RouteError", () => ({ RouteErrorBoundary: "RouteErrorBound
 const { FirstRunGate } = await import("@/components/UxBridge");
 const { default: WelcomeScreen } = await import("@/app/welcome");
 const { UxFlagsContext } = await import("@/lib/uxFlags");
-const { FIRST_RUN_KEY, forgetFirstRunClaim } = await import("@/lib/firstRun");
+const { autoOpenPath, FIRST_RUN_KEY, forgetFirstRunClaim, rereadBootTraces } = await import("@/lib/firstRun");
 const { WIDGET_STEPS } = await import("@/lib/welcome");
 
+afterAll(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
+  h.path = "/";
   h.store.clear();
   h.navKey = "root";
   h.push.mockReset();
@@ -93,7 +106,9 @@ beforeEach(() => {
 });
 
 const flush = () => new Promise((res) => setTimeout(res, 0));
-const gate = (firstRun = true) => {
+/** 지금 저장소로 앱을 켠 것처럼: 흔적을 다시 읽고(앱을 켤 때 한 번 읽는 값) 게이트를 붙인다 */
+const gate = async (firstRun = true) => {
+  await rereadBootTraces();
   const r = render(
     <UxFlagsContext.Provider value={{ oneHand: false, firstRun, emptyGuide: false, connectionGuide: false, flagsMissing: false }}>
       <FirstRunGate />
@@ -111,12 +126,12 @@ const settle = async (r: ReturnType<typeof render>) => {
 
 describe("저절로 여는 조건 (이 기기의 사용 흔적)", () => {
   it("새 기기(흔적 없음): 한 번 연다, 같은 실행에서는 다시 열지 않는다", async () => {
-    const r = gate();
+    const r = await gate();
     await settle(r);
     expect(h.push).toHaveBeenCalledWith("/welcome");
     expect(h.push).toHaveBeenCalledTimes(1);
     r.rerender();
-    const again = gate();
+    const again = await gate();
     await settle(again);
     expect(h.push).toHaveBeenCalledTimes(1);
   });
@@ -126,27 +141,59 @@ describe("저절로 여는 조건 (이 기기의 사용 흔적)", () => {
       h.store.clear();
       h.store.set(key, "x");
       forgetFirstRunClaim();
-      await settle(gate());
+      await settle(await gate());
       expect(h.push).not.toHaveBeenCalled();
       expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
     }
   });
 
   it("지난 실행에 적힌 쿼리 캐시(마지막 잔고)는 흔적, 이번 실행에 막 적힌 캐시는 흔적이 아니다", async () => {
-    h.store.set("rq.cache", JSON.stringify({ timestamp: Date.now() - 86_400_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
-    await settle(gate());
+    h.store.set("rq.cache", JSON.stringify({ timestamp: h.BOOT - 86_400_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
+    await settle(await gate());
     expect(h.push).not.toHaveBeenCalled();
     expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
     h.store.clear();
     forgetFirstRunClaim();
-    h.store.set("rq.cache", JSON.stringify({ timestamp: Date.now() + 5_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
-    await settle(gate());
+    h.store.set("rq.cache", JSON.stringify({ timestamp: h.BOOT + 5_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
+    await settle(await gate());
     expect(h.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("앱을 켤 때 읽어 둔 흔적을 쓴다: 그 뒤 캐시가 이번 실행 것으로 덮여도(쿼리 캐시 저장기) 기존 사용자로 본다", async () => {
+    h.store.set("rq.cache", JSON.stringify({ timestamp: h.BOOT - 3_600_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
+    await rereadBootTraces();
+    // 켠 뒤 저장기가 바로 다시 적음 (플래그는 그 뒤 네트워크로 도착)
+    h.store.set("rq.cache", JSON.stringify({ timestamp: h.BOOT + 1_000, buster: "v2", clientState: { queries: [], mutations: [] } }));
+    const r = render(
+      <UxFlagsContext.Provider value={{ oneHand: false, firstRun: true, emptyGuide: false, connectionGuide: false, flagsMissing: false }}>
+        <FirstRunGate />
+      </UxFlagsContext.Provider>,
+    );
+    await settle(r);
+    expect(h.push).not.toHaveBeenCalled();
+    expect(h.store.get(FIRST_RUN_KEY)).toBe("existing");
+  });
+
+  it("탭 첫 화면에 있을 때만 저절로 연다: 검색·종목 상세(알림으로 연 화면 등)에 있으면 기다렸다가 탭으로 돌아오면 연다", async () => {
+    h.path = "/stocks/005930";
+    const r = await gate();
+    await settle(r);
+    expect(h.push).not.toHaveBeenCalled();
+    h.path = "/stocks/add";
+    r.rerender();
+    await flush();
+    expect(h.push).not.toHaveBeenCalled();
+    h.path = "/briefings";
+    r.rerender();
+    await flush();
+    expect(h.push).toHaveBeenCalledTimes(1);
+    for (const p of ["/", "/(tabs)", "/briefings", "/discover", "/settings"]) expect(autoOpenPath(p), p).toBe(true);
+    for (const p of ["/welcome", "/stocks/005930", "/briefings/12", "/market/KOSPI", "/portfolio/allocation", "", null, undefined]) expect(autoOpenPath(p), String(p)).toBe(false);
   });
 
   it("내비게이터가 준비되기 전에는 열지 않는다", async () => {
     h.navKey = undefined;
-    const r = gate();
+    const r = await gate();
     await settle(r);
     expect(h.push).not.toHaveBeenCalled();
     h.navKey = "root";
@@ -157,13 +204,13 @@ describe("저절로 여는 조건 (이 기기의 사용 흔적)", () => {
 
   it("이미 본 사람·건너뛴 사람·플래그 꺼짐: 열지 않는다", async () => {
     h.store.set(FIRST_RUN_KEY, "seen");
-    await settle(gate());
+    await settle(await gate());
     h.store.set(FIRST_RUN_KEY, "existing");
     forgetFirstRunClaim();
-    await settle(gate());
+    await settle(await gate());
     h.store.clear();
     forgetFirstRunClaim();
-    await settle(gate(false));
+    await settle(await gate(false));
     expect(h.push).not.toHaveBeenCalled();
   });
 });
