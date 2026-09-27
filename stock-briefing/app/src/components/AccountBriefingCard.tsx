@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { AccountBriefing } from "@/api/types";
 import { accountCardSpeech } from "@/lib/accountBriefing";
 import { briefingWhen } from "@/lib/briefingPick";
-import { KR_PREVIOUS_DAY_LINE, usPreviousDayLine } from "@/lib/briefingDigest";
+import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usPreviousDayLine } from "@/lib/briefingDigest";
 import { formatDateKo, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
@@ -13,16 +13,27 @@ import { Badge, Card, Muted } from "./ui";
 
 /**
  * 브리핑 탭 맨 위 '내 계좌 브리핑' 카드 (3-31): 가장 최근 계좌 브리핑의 당일 손익·총 평가금액·기여 1위.
- * 누르면 계좌 브리핑 화면. 숫자는 서버가 계산한 값 그대로 (앱 잔고 화면과 같은 기준)
+ * 누르면 계좌 브리핑 화면. 숫자는 서버가 계산한 값 그대로 (앱 잔고 화면과 같은 기준).
+ * trim(브리핑 2차 4, 플래그 briefingTrim — 탭에서 읽어 넘김): 한국 휴장 줄에 브리핑 날짜('9/25(금) 한국 휴장 · …'), 끝줄 '숫자로 만든 요약 · …'
  */
-export function AccountBriefingCard({ briefing, selected = false }: { briefing: AccountBriefing; /** 넓은 창에서 보던 계좌 브리핑 (3-42 접고 펴기 이어 보기). 기본 false = 지금 모양 그대로 */ selected?: boolean }) {
+export function AccountBriefingCard({
+  briefing,
+  selected = false,
+  trim = false,
+}: {
+  briefing: AccountBriefing;
+  /** 넓은 창에서 보던 계좌 브리핑 (3-42 접고 펴기 이어 보기). 기본 false = 지금 모양 그대로 */
+  selected?: boolean;
+  /** 브리핑 2차 4 (플래그 briefingTrim). 기본 false = 지금 글 그대로 */
+  trim?: boolean;
+}) {
   const t = useTheme();
   const h = briefing.headline;
   const top = h?.top[0] ?? null;
   const failed = briefing.status === "failed" || !h;
   return (
     <Card style={selected ? { borderLeftWidth: FB.selBar, borderLeftColor: t.accent, paddingLeft: space.lg - FB.selBar } : undefined}>
-      <Pressable onPress={() => router.push(`/briefings/account/${briefing.id}`)} {...(selected ? { accessibilityState: { selected: true } } : {})} accessibilityRole="link" accessibilityLabel={accountCardSpeech(briefing)} style={styles.press}>
+      <Pressable onPress={() => router.push(`/briefings/account/${briefing.id}`)} {...(selected ? { accessibilityState: { selected: true } } : {})} accessibilityRole="link" accessibilityLabel={accountCardSpeech(briefing, { trim })} style={styles.press}>
         <View style={styles.head}>
           <Ionicons name="wallet-outline" size={18} color={t.accent} />
           <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700", flexShrink: 1 }}>내 계좌 브리핑</Text>
@@ -61,9 +72,15 @@ export function AccountBriefingCard({ briefing, selected = false }: { briefing: 
                 {top.changeRate !== null ? <Text style={[styles.num, { color: changeColor(t, top.changeRate) }]}> ({formatPct(top.changeRate)})</Text> : null}
               </Text>
             ) : null}
-            {h.krPreviousDay ? <Muted>{KR_PREVIOUS_DAY_LINE}</Muted> : null}
+            {h.krPreviousDay ? <Muted>{trim ? krPreviousDayLine(briefing.date) : KR_PREVIOUS_DAY_LINE}</Muted> : null}
             {h.usPreviousDay ? <Muted>{usPreviousDayLine(briefing.date, h.usHolidayDate)}</Muted> : null}
-            {briefing.template ? <Muted style={{ fontSize: font.tiny }}>숫자로 만든 기본 설명 · 매매 권유가 아닙니다</Muted> : <Muted style={{ fontSize: font.tiny }}>무엇이 계좌를 움직였는지 · 매매 권유가 아닙니다</Muted>}
+            {trim ? (
+              <Muted style={{ fontSize: font.tiny }}>{briefing.template ? "숫자로 만든 요약 · 매매 권유가 아닙니다" : "숫자로 만든 요약 · 설명은 AI가 쓴 글 · 매매 권유가 아닙니다"}</Muted>
+            ) : briefing.template ? (
+              <Muted style={{ fontSize: font.tiny }}>숫자로 만든 기본 설명 · 매매 권유가 아닙니다</Muted>
+            ) : (
+              <Muted style={{ fontSize: font.tiny }}>무엇이 계좌를 움직였는지 · 매매 권유가 아닙니다</Muted>
+            )}
           </>
         )}
       </Pressable>
@@ -74,9 +91,23 @@ export function AccountBriefingCard({ briefing, selected = false }: { briefing: 
 /**
  * 넓은 창 브리핑 목록 맨 위 '내 계좌 브리핑' 줄 60 (3-42 웨이브 D, 기능 플래그 foldLayout — 접은 화면은 위 카드 그대로).
  * 1줄: 지갑 · 내 계좌 브리핑 · (기본 설명) · 날짜 ›  /  2줄: 당일 손익·등락률 · 기여 1위 이름·금액 (숫자는 줄이지 않고 길면 다음 줄로)
- * 2단에서는 누르면 오른쪽 칸에 계좌 브리핑(role button), 카드 격자에서는 전체 화면(role link)
+ * 2단에서는 누르면 오른쪽 칸에 계좌 브리핑(role button), 카드 격자에서는 전체 화면(role link).
+ * trim(브리핑 2차 4, 플래그 briefingTrim): 배지 '기본 설명' → '숫자 요약', 화면 읽기의 한국 휴장 날짜
  */
-export function AccountBriefingRow({ briefing, selected, onPress, role }: { briefing: AccountBriefing; selected: boolean; onPress: () => void; role: "button" | "link" }) {
+export function AccountBriefingRow({
+  briefing,
+  selected,
+  onPress,
+  role,
+  trim = false,
+}: {
+  briefing: AccountBriefing;
+  selected: boolean;
+  onPress: () => void;
+  role: "button" | "link";
+  /** 브리핑 2차 4 (플래그 briefingTrim). 기본 false = 지금 글 그대로 */
+  trim?: boolean;
+}) {
   const t = useTheme();
   const h = briefing.headline;
   const top = h?.top[0] ?? null;
@@ -85,7 +116,7 @@ export function AccountBriefingRow({ briefing, selected, onPress, role }: { brie
     <Pressable
       onPress={onPress}
       accessibilityRole={role}
-      accessibilityLabel={accountCardSpeech(briefing)}
+      accessibilityLabel={accountCardSpeech(briefing, { trim })}
       // 카드 격자(link)에서도 고른 줄이면 '선택됨'을 알린다 (같은 격자의 카드·폰 카드와 같게)
       accessibilityState={role === "button" ? { selected } : selected ? { selected: true } : undefined}
       style={({ pressed }) => [styles.row, { borderBottomColor: t.line, backgroundColor: selected || pressed ? t.surfaceAlt : t.surface }]}
@@ -96,7 +127,7 @@ export function AccountBriefingRow({ briefing, selected, onPress, role }: { brie
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
           내 계좌 브리핑
         </Text>
-        {!failed && briefing.template ? <Badge>기본 설명</Badge> : null}
+        {!failed && briefing.template ? <Badge>{trim ? "숫자 요약" : "기본 설명"}</Badge> : null}
         <Text style={[styles.rowWhen, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
           {briefingWhen(briefing)}
         </Text>

@@ -66,6 +66,8 @@ export default function BriefingsScreen() {
   const summaryOn = useFeature("marketSummary", false);
   const summaries = useMarketSummaries(summaryOn);
   const summary = marketCardItem(summaryOn, summaries.data);
+  // 브리핑 2차 4 (플래그 briefingTrim, 앱 fallback 꺼짐): 틀린 문장·되풀이 정리. 여기서 한 번 읽어 카드·줄에 trim 으로 넘긴다. 꺼지면 지금 그대로
+  const trim = useFeature("briefingTrim", false);
   // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약이 켜져 있으면 그것도)을 함께
   const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : []), ...(summaryOn ? [summaries.refetch()] : [])]));
   const [order, setOrder] = useState<Order>("movers");
@@ -91,6 +93,8 @@ export default function BriefingsScreen() {
   useEffect(() => {
     if (wide) scrolledTo.current = null;
   }, [wide]);
+  // 브리핑 2차 4 (trim): 보이는 시장 요약이 한국 휴장을 이미 말하는지 (한국 요약 · 성공 · 휴장) — 그러면 접은 화면 탭 휴장 줄을 숨긴다 (같은 말 두 번 방지)
+  const summarySaysKrHoliday = summary?.status === "ok" && summary.data?.market === "KR" && !!summary.data.holiday;
 
   // 17종목 × 약 25초: 누르기 전에 한 번 묻는다 (3-19, 플래그를 끄면 예전처럼 바로)
   const confirmRun = (session: BriefingSession) => {
@@ -227,6 +231,7 @@ export default function BriefingsScreen() {
         accountSettled={!accountOn || accounts.data !== undefined || accounts.isError}
         market={summary}
         marketSettled={!summaryOn || summaries.data !== undefined || summaries.isError}
+        trim={trim}
         holiday={wideHoliday}
         criterion={movers ? "변동 큰 순 = 전일 대비 등락률 크기 순 · 매매 권유가 아닙니다" : null}
         ratesFail={ratesFailText}
@@ -257,10 +262,17 @@ export default function BriefingsScreen() {
   return (
     <Screen disclaimer refreshing={pulling} onRefresh={onPull} top={<StaleBanner query={latest} {...guideProps} />} {...(hlId !== null ? { scrollRef } : {})}>
       {head}
-      {summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} /> : null}
-      {account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} /> : null}
+      {summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} trim={trim} /> : null}
+      {account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} trim={trim} /> : null}
       {banner}
-      {krHoliday ? <Muted style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>한국 휴장일 · 국내 종목 브리핑 없음{market.data?.KR.opensAt ? ` · 다음 개장 ${formatDateKo(market.data.KR.opensAt, true)}` : ""}</Muted> : null}
+      {/* 탭 휴장 줄. trim(브리핑 2차 4)이면 '국내 종목 브리핑 없음'(틀린 말 — 목록에 직전 거래일 국내 브리핑이 있음) 대신 등락 기준을 밝히고(넓은 창 문구와 같게),
+          보이는 시장 요약이 한국 휴장을 이미 말하면 숨긴다. 한국 휴장일 아침('밤사이 미국' 요약)·요약 꺼짐·없음·실패면 남긴다 */}
+      {krHoliday && !(trim && summarySaysKrHoliday) ? (
+        <Muted style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>
+          {trim ? "한국 휴장일 · 국내 종목은 직전 거래일 등락" : "한국 휴장일 · 국내 종목 브리핑 없음"}
+          {market.data?.KR.opensAt ? ` · 다음 개장 ${formatDateKo(market.data.KR.opensAt, true)}` : ""}
+        </Muted>
+      ) : null}
       {movers && top.length > 0 ? (
         <Card>
           <SectionTitle>변동 큰 종목</SectionTitle>
@@ -345,6 +357,8 @@ interface WideProps {
   market: MarketSummary | undefined;
   /** 시장 요약 목록을 알고 있는지 (꺼짐·받음·못 받음) */
   marketSettled: boolean;
+  /** 브리핑 2차 4 (플래그 briefingTrim): 계좌 줄 배지·화면 읽기, 시장 줄 화면 읽기의 업종 말 */
+  trim: boolean;
   /** 목록 위 안내: 휴장 (넓은 창용 짧은 문구) */
   holiday: string | null;
   /** 변동 큰 순의 기준·매매 권유 아님 ('변동 큰 종목' 카드 대신). 2단은 목록 아래, 카드 격자는 목록 위 안내에 */
@@ -509,7 +523,7 @@ function WideBriefings(p: WideProps) {
         </View>
         {notice}
         {p.market ? (
-          <MarketSummaryRow summary={p.market} role="button" selected={sel?.kind === "market" && sel.id === p.market.id} onPress={() => chooseBriefing({ kind: "market", id: p.market!.id })} />
+          <MarketSummaryRow summary={p.market} role="button" selected={sel?.kind === "market" && sel.id === p.market.id} onPress={() => chooseBriefing({ kind: "market", id: p.market!.id })} trim={p.trim} />
         ) : null}
         {p.account ? (
           <AccountBriefingRow
@@ -517,6 +531,7 @@ function WideBriefings(p: WideProps) {
             role="button"
             selected={sel?.kind === "account" && sel.id === p.account.id}
             onPress={() => chooseBriefing({ kind: "account", id: p.account!.id })}
+            trim={p.trim}
           />
         ) : null}
         <ScrollView
@@ -591,10 +606,10 @@ function WideBriefings(p: WideProps) {
           </View>
           {notice}
           {p.market ? (
-            <MarketSummaryRow summary={p.market} role="link" selected={hl?.kind === "market" && hl.id === p.market.id} onPress={() => router.push(`/briefings/market/${p.market!.id}`)} />
+            <MarketSummaryRow summary={p.market} role="link" selected={hl?.kind === "market" && hl.id === p.market.id} onPress={() => router.push(`/briefings/market/${p.market!.id}`)} trim={p.trim} />
           ) : null}
           {p.account ? (
-            <AccountBriefingRow briefing={p.account} role="link" selected={hl?.kind === "account" && hl.id === p.account.id} onPress={() => router.push(`/briefings/account/${p.account!.id}`)} />
+            <AccountBriefingRow briefing={p.account} role="link" selected={hl?.kind === "account" && hl.id === p.account.id} onPress={() => router.push(`/briefings/account/${p.account!.id}`)} trim={p.trim} />
           ) : null}
         </View>
         {p.banner}

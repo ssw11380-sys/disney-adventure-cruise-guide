@@ -97,6 +97,23 @@ export function digestMarketOf(s: Pick<MarketSummary, "id" | "status" | "market"
 
 /** 계좌 브리핑 알림 본문에 붙이는 한 줄 (서버 digest.ts KR_PREVIOUS_DAY_LINE 과 같다) */
 export const KR_PREVIOUS_DAY_LINE = "오늘 한국 휴장 · 국내 종목은 직전 거래일 등락";
+
+/**
+ * 화면(계좌 카드·상세 요약)의 한국 휴장 줄에 브리핑 날짜를 붙인 것 (브리핑 2차 4, 플래그 briefingTrim): '9/25(금) 한국 휴장 · 국내 종목은 직전 거래일 등락'.
+ * 월요일 아침에 금요일 브리핑이 남아 있어도 틀린 말('오늘')이 되지 않게. 알림은 그날 보내므로 KR_PREVIOUS_DAY_LINE('오늘') 그대로
+ */
+export function krPreviousDayLine(date: string): string {
+  return `${mdw(date)} 한국 휴장 · 국내 종목은 직전 거래일 등락`;
+}
+
+/**
+ * 설정 > 알림 카드 아래 설명 (브리핑 2차 4). 지금 알림 모양대로 적는다 — 계좌 브리핑이 켜져 있으면 제목이 계좌 당일 손익이고
+ * 본문 첫 줄이 시장 요약(켜져 있으면)이다 (accountDigest). trim(플래그 briefingTrim)이 꺼져 있거나 계좌 브리핑이 꺼져 있으면 예전 글
+ */
+export function digestSettingNote(o: { trim: boolean; account: boolean; market: boolean }): string {
+  if (!o.trim || !o.account) return "브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (종목 수와 변동 큰 2종목)";
+  return `브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (제목: 계좌 당일 손익 · 본문: ${o.market ? "시장 요약 한 줄, " : ""}기여 1·2위, 변동 큰 2종목)`;
+}
 /** 지난밤 미국 평일 휴장일 때 붙이는 한 줄 (서버 digest.ts US_PREVIOUS_DAY_LINE 과 같다) */
 export const US_PREVIOUS_DAY_LINE = "지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락";
 

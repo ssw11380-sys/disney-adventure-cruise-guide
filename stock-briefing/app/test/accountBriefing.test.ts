@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import type { AccountBriefing, RegisteredWithQuote } from "@/api/types";
-import { accountCardItem, accountCardSpeech, contributionSpeech, contributionTable } from "@/lib/accountBriefing";
+import type { AccountBriefing, AccountData, RegisteredWithQuote } from "@/api/types";
+import { accountCardItem, accountCardSpeech, contributionSpeech, contributionTable, summaryShownLines, summarySpeech } from "@/lib/accountBriefing";
 import { buildDigest, DEFAULT_PREFS, digestAccountOf, KR_PREVIOUS_DAY_LINE, planNotifications, US_PREVIOUS_DAY_LINE, usHolidayWhen, usPreviousDayLine } from "@/lib/briefingDigest";
 import { summarize } from "@/lib/portfolio";
 
@@ -174,6 +174,34 @@ describe("알림: 서버와 같은 문구, 세션당 1건 (3-31)", () => {
     expect(KR_PREVIOUS_DAY_LINE).toBe("오늘 한국 휴장 · 국내 종목은 직전 거래일 등락");
     expect(accountCardSpeech(b)).toContain("오늘 한국 휴장, 국내 종목은 직전 거래일 등락");
     expect(digestAccountOf(briefing())).not.toHaveProperty("krPreviousDay");
+  });
+
+  it("(브리핑 2차 4, 플래그 briefingTrim) 화면 읽기의 한국 휴장은 브리핑 날짜로 — 옵션이 없으면 지금 문장, 알림 문구는 그대로 '오늘'", () => {
+    const b = briefing({ headline: { ...briefing().headline!, krPreviousDay: true } });
+    expect(accountCardSpeech(b, { trim: true })).toContain("9월 25일 (금) 한국 휴장, 국내 종목은 직전 거래일 등락");
+    expect(accountCardSpeech(b, { trim: true })).not.toContain("오늘 한국 휴장");
+    expect(accountCardSpeech(b, { trim: false })).toBe(accountCardSpeech(b));
+    const d: AccountData = {
+      version: 1, session: "afternoon", date: "2026-09-25", asOf: "2026-09-25T16:07:00+09:00", basis: "앱 잔고 화면과 같은 기준", afterCost: true, holdings: 17, stale: 0,
+      totalValue: 93_218_349, totalCost: 72_205_618, totalProfit: 21_012_731, totalProfitRate: 29.1, dayPnl: 795_300, dayRate: 0.86,
+      contributions: [{ code: "005930", name: "삼성전자", currency: "KRW", amount: 348_000, changeRate: 3.56, value: 10_120_000 }],
+      others: null, markets: { kr: null, us: null }, excluded: [],
+      fx: { status: "none", reason: null, usdKrw: null, appliedRate: null, usdHoldingsKrwChange: null, priceEffect: null, fxEffect: null },
+      indices: [], missingIndices: [],
+      schedule: { kr: { date: "2026-09-25", tradingDay: false, now: "한국 휴장일", hours: null, nextOpen: null }, us: { date: "2026-09-25", tradingDay: true, now: "미국 주간거래", hours: null }, disclosures: [] },
+      narrative: { source: "template", reason: null },
+      krPreviousDay: true,
+    };
+    expect(summarySpeech(d, { trim: true })).toContain("9월 25일 (금) 한국 휴장, 국내 종목은 직전 거래일 등락");
+    expect(summarySpeech(d)).toContain("오늘 한국 휴장, 국내 종목은 직전 거래일 등락");
+    expect(summarySpeech(d, { trim: false })).toBe(summarySpeech(d));
+    // 상세 요약 줄: 저장한 '오늘 한국 휴장 · …' 줄만 날짜 줄로 (저장한 글은 그대로)
+    const saved = { date: "2026-09-25", summary: `당일 -1원\n${KR_PREVIOUS_DAY_LINE}` };
+    expect(summaryShownLines(saved, { trim: true })).toEqual(["당일 -1원", "9/25(금) 한국 휴장 · 국내 종목은 직전 거래일 등락"]);
+    expect(summaryShownLines(saved)).toEqual(["당일 -1원", KR_PREVIOUS_DAY_LINE]);
+    expect(saved.summary).toContain(KR_PREVIOUS_DAY_LINE);
+    // 알림(그날 보냄)은 '오늘' 그대로
+    expect(planNotifications(fresh.slice(0, 1), on, now, [b])[0]!.body).toContain(KR_PREVIOUS_DAY_LINE);
   });
 
   it("지난밤 미국 평일 휴장: 알림 본문에 미국 등락이 직전 거래일 것임을 한 줄 (서버와 같은 문구)", () => {

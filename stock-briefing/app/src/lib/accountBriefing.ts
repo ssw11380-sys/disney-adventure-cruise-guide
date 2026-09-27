@@ -1,6 +1,6 @@
 import type { AccountBriefing, AccountData } from "@/api/types";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
-import { usHolidayWhen } from "@/lib/briefingDigest";
+import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usHolidayWhen } from "@/lib/briefingDigest";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatWon, SESSION_LABEL } from "@/lib/format";
 
@@ -48,8 +48,16 @@ export function usPreviousDaySpeech(briefingDate: string, holidayDate?: string |
   return `${when === "지난밤" || !holidayDate ? "지난밤" : formatDateKo(holidayDate)} 미국 휴장, 미국 종목은 직전 거래일 등락`;
 }
 
-/** 화면 읽기: 브리핑 탭 '내 계좌 브리핑' 카드 한 문장 */
-export function accountCardSpeech(b: AccountBriefing): string {
+/**
+ * 화면 읽기: 한국 휴장 한 마디. trim(플래그 briefingTrim)이면 브리핑 날짜를 말로 ('9월 25일 (금) 한국 휴장, …' — 화면의 '9/25(금) 한국 휴장 · …' 줄과 같게),
+ * 아니면 예전 문장 ('오늘 한국 휴장, …')
+ */
+function krPreviousDaySpeech(date: string, trim: boolean): string {
+  return `${trim ? formatDateKo(date) : "오늘"} 한국 휴장, 국내 종목은 직전 거래일 등락`;
+}
+
+/** 화면 읽기: 브리핑 탭 '내 계좌 브리핑' 카드 한 문장. opts.trim = 플래그 briefingTrim (없으면 예전 문장) */
+export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean } = {}): string {
   const h = b.headline;
   const top = h?.top[0];
   return sentence([
@@ -60,7 +68,7 @@ export function accountCardSpeech(b: AccountBriefing): string {
     h ? speakRate(h.dayRate) : null,
     h ? `총 평가금액 ${speakAmount(formatWon(h.totalValue))}` : null,
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
-    h?.krPreviousDay ? "오늘 한국 휴장, 국내 종목은 직전 거래일 등락" : null,
+    h?.krPreviousDay ? krPreviousDaySpeech(b.date, !!opts.trim) : null,
     h?.usPreviousDay ? usPreviousDaySpeech(b.date, h.usHolidayDate) : null,
     "자세히 보기",
   ]);
@@ -70,9 +78,9 @@ const profitText = (label: string, v: number) => `${label} ${speakProfit(formatW
 
 /**
  * 화면 읽기: 상세 화면 맨 위 요약 카드 한 문장. 화면의 요약 줄('당일 -250,267원 (-2.66%) · 기여 1위 …')과 같은 숫자를
- * 기호 없이 말로 ("당일손익 250,267원 손실, 2.66% 하락, 기여 1위 리게티 컴퓨팅 268,838원 손실, …")
+ * 기호 없이 말로 ("당일손익 250,267원 손실, 2.66% 하락, 기여 1위 리게티 컴퓨팅 268,838원 손실, …"). opts.trim = 플래그 briefingTrim (없으면 예전 문장)
  */
-export function summarySpeech(d: AccountData): string {
+export function summarySpeech(d: AccountData, opts: { trim?: boolean } = {}): string {
   const top = d.contributions[0];
   return sentence([
     "요약",
@@ -81,9 +89,18 @@ export function summarySpeech(d: AccountData): string {
     top ? profitText(`기여 1위 ${top.name}`, top.amount) : null,
     `총 평가금액 ${speakAmount(formatWon(d.totalValue))}`,
     d.fx.status === "computed" && d.fx.fxEffect !== null ? profitText("환율 효과", d.fx.fxEffect) : null,
-    d.krPreviousDay ? "오늘 한국 휴장, 국내 종목은 직전 거래일 등락" : null,
+    d.krPreviousDay ? krPreviousDaySpeech(d.date, !!opts.trim) : null,
     d.usPreviousDay ? usPreviousDaySpeech(d.date, d.usHolidayDate) : null,
   ]);
+}
+
+/**
+ * 상세 맨 위 요약 카드에 그릴 줄 (서버가 저장한 summary 를 줄로 나눈 것). opts.trim(플래그 briefingTrim)이면 정확히 '오늘 한국 휴장 · …'인 줄만
+ * 브리핑 날짜 줄('9/25(금) 한국 휴장 · …', krPreviousDayLine)로 바꿔 그린다 — 저장한 글은 그대로. 없으면 저장한 줄 그대로
+ */
+export function summaryShownLines(b: Pick<AccountBriefing, "summary" | "date">, opts: { trim?: boolean } = {}): string[] {
+  const lines = b.summary.split("\n");
+  return opts.trim ? lines.map((l) => (l === KR_PREVIOUS_DAY_LINE ? krPreviousDayLine(b.date) : l)) : lines;
 }
 
 /** 화면 읽기: 환율 효과 등식 줄 한 문장 ("미국 보유분 원화 평가 변화 209,723원 손실, 가격 효과 234,440원 손실, 환율 효과 24,717원 이익, …") */

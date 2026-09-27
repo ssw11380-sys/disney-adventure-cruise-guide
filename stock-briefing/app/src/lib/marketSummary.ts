@@ -246,20 +246,52 @@ export function ratesSegs(d: Pick<MarketSummaryData, "fx" | "date" | "yield10y" 
 const sectorItems = (list: SectorRow[]): Seg[] => list.flatMap((s, i) => [...(i ? [{ text: " · " }] : []), { text: `${s.name} ` }, { text: rateText(s.changeRate), tone: s.changeRate }]);
 const basisPrefix = (d: Pick<MarketSummaryData, "holiday" | "basisDate">): Seg[] => (d.holiday ? [{ text: `${md(d.basisDate)} 기준 · `, muted: true }] : []);
 
-/** 업종 줄: '강한 업종 산업재 +0.95% · 기술 +0.80% / 약한 업종 커뮤니케이션 -0.90% · 에너지 -0.89% (섹터 ETF 기준)' */
-export function sectorSegs(d: Pick<MarketSummaryData, "sectors" | "holiday" | "basisDate">): Seg[] | null {
-  const s = d.sectors;
-  if (!s || !s.strong.length) return null;
-  return [...basisPrefix(d), { text: "강한 업종 " }, ...sectorItems(s.strong), { text: " / 약한 업종 " }, ...sectorItems(s.weak), ...(s.basis === "etf" ? [{ text: " (섹터 ETF 기준)", muted: true }] : [])];
+/**
+ * 업종 말 옵션 (브리핑 2차 4, 플래그 briefingTrim). signWords 면 '강/약' 대신 위 2개·아래 2개의 부호로 고른 말 (sectorWords).
+ * 없거나 false 면 지금 글 그대로 (서버 sectorText·공용 픽스처와 같은 글)
+ */
+export interface SectorOpts {
+  signWords?: boolean;
 }
 
-/** 카드의 업종 두 줄: '강 산업재 +0.95% · 기술 +0.80%' / '약 커뮤니케이션 -0.90% · 에너지 -0.89% (섹터 ETF 기준)' */
-export function sectorCardSegs(d: Pick<MarketSummaryData, "sectors" | "holiday" | "basisDate">): [Seg[], Seg[]] | null {
+/**
+ * 부호로 고른 업종 말 (브리핑 2차 4 · 2.2): 모두 내린 날 '강한 업종 기술 -0.10%'처럼 사실과 다른 평가 말이 되지 않게. 0 은 '섞임'으로 본다.
+ *  - 위 모두 +, 아래 모두 − (보통 날): 카드 '오름'/'내림', 줄 '오른 업종'/'내린 업종'
+ *  - 넷 모두 −: '덜 내림'/'많이 내림', '덜 내린 업종'/'많이 내린 업종'
+ *  - 넷 모두 +: '많이 오름'/'덜 오름', '많이 오른 업종'/'덜 오른 업종'
+ *  - 그 밖(한 묶음에 +·−·0 섞임): '위'/'아래', '등락률 위 업종'/'등락률 아래 업종'
+ */
+export function sectorWords(s: Pick<NonNullable<MarketSummaryData["sectors"]>, "strong" | "weak">): { card: [string, string]; line: [string, string] } {
+  const up = (l: SectorRow[]) => l.every((r) => r.changeRate > 0);
+  const down = (l: SectorRow[]) => l.every((r) => r.changeRate < 0);
+  if (up(s.strong) && down(s.weak)) return { card: ["오름", "내림"], line: ["오른 업종", "내린 업종"] };
+  if (down(s.strong) && down(s.weak)) return { card: ["덜 내림", "많이 내림"], line: ["덜 내린 업종", "많이 내린 업종"] };
+  if (up(s.strong) && up(s.weak)) return { card: ["많이 오름", "덜 오름"], line: ["많이 오른 업종", "덜 오른 업종"] };
+  return { card: ["위", "아래"], line: ["등락률 위 업종", "등락률 아래 업종"] };
+}
+
+/**
+ * 업종 줄: '강한 업종 산업재 +0.95% · 기술 +0.80% / 약한 업종 커뮤니케이션 -0.90% · 에너지 -0.89% (섹터 ETF 기준)'.
+ * opts.signWords 면 부호로 고른 말 ('오른 업종 …' / '내린 업종 …' 등, sectorWords)
+ */
+export function sectorSegs(d: Pick<MarketSummaryData, "sectors" | "holiday" | "basisDate">, opts: SectorOpts = {}): Seg[] | null {
   const s = d.sectors;
   if (!s || !s.strong.length) return null;
+  const [hi, lo] = opts.signWords ? sectorWords(s).line : ["강한 업종", "약한 업종"];
+  return [...basisPrefix(d), { text: `${hi} ` }, ...sectorItems(s.strong), { text: ` / ${lo} ` }, ...sectorItems(s.weak), ...(s.basis === "etf" ? [{ text: " (섹터 ETF 기준)", muted: true }] : [])];
+}
+
+/**
+ * 카드의 업종 두 줄: '강 산업재 +0.95% · 기술 +0.80%' / '약 커뮤니케이션 -0.90% · 에너지 -0.89% (섹터 ETF 기준)'.
+ * opts.signWords 면 부호로 고른 앞말 ('오름 …' / '내림 …' 등, sectorWords)
+ */
+export function sectorCardSegs(d: Pick<MarketSummaryData, "sectors" | "holiday" | "basisDate">, opts: SectorOpts = {}): [Seg[], Seg[]] | null {
+  const s = d.sectors;
+  if (!s || !s.strong.length) return null;
+  const [hi, lo] = opts.signWords ? sectorWords(s).card : ["강", "약"];
   return [
-    [...basisPrefix(d), { text: "강 " }, ...sectorItems(s.strong)],
-    [{ text: "약 " }, ...sectorItems(s.weak), ...(s.basis === "etf" ? [{ text: " (섹터 ETF 기준)", muted: true }] : [])],
+    [...basisPrefix(d), { text: `${hi} ` }, ...sectorItems(s.strong)],
+    [{ text: `${lo} ` }, ...sectorItems(s.weak), ...(s.basis === "etf" ? [{ text: " (섹터 ETF 기준)", muted: true }] : [])],
   ];
 }
 
@@ -365,8 +397,8 @@ export function fitLines<T extends { kind: LineKind }>(lines: T[], max = MAX_LIN
   return out.slice(0, max);
 }
 
-/** 요약 줄 조각 (최대 6줄, 볼 때 날짜로). 지수를 하나도 못 받았으면 빈 목록 */
-export function summarySegLines(d: MarketSummaryData, view: Date): SegLine[] {
+/** 요약 줄 조각 (최대 6줄, 볼 때 날짜로). 지수를 하나도 못 받았으면 빈 목록. opts.signWords = 업종 말을 부호로 (SectorOpts) */
+export function summarySegLines(d: MarketSummaryData, view: Date, opts: SectorOpts = {}): SegLine[] {
   const idx = indexSegs(d);
   if (!idx) return [];
   const ev = eventsBody(d, view);
@@ -375,7 +407,7 @@ export function summarySegLines(d: MarketSummaryData, view: Date): SegLine[] {
     d.holiday ? { kind: "holiday", segs: [{ text: holidayText(d, view)! }] } : null,
     { kind: "indices", segs: idx },
     lineOf("rates", ratesSegs(d)),
-    lineOf("sectors", sectorSegs(d)),
+    lineOf("sectors", sectorSegs(d, opts)),
     lineOf("holdings", holdingsSegs(d)),
     ev ? { kind: "events", segs: [{ text: `일정 · ${ev}` }] } : null,
     news ? { kind: "news", segs: [{ text: news }] } : null,
@@ -387,9 +419,9 @@ function lineOf(kind: LineKind, segs: Seg[] | null): SegLine | null {
   return segs ? { kind, segs } : null;
 }
 
-/** 요약 줄 글 (서버 summaryLines 와 같다) */
-export function summaryLines(d: MarketSummaryData, view: Date): SummaryLine[] {
-  return summarySegLines(d, view).map((l) => ({ kind: l.kind, text: join(l.segs) }));
+/** 요약 줄 글 (서버 summaryLines 와 같다 — opts 없이). opts.signWords = 업종 말을 부호로 */
+export function summaryLines(d: MarketSummaryData, view: Date, opts: SectorOpts = {}): SummaryLine[] {
+  return summarySegLines(d, view, opts).map((l) => ({ kind: l.kind, text: join(l.segs) }));
 }
 
 /** 보조 줄 글 (서버 holdingsAux 와 같다) */
@@ -424,14 +456,14 @@ export type CardRow = { kind: "rates" | "sectors" | "holdings" | "events"; label
 
 /**
  * 카드 이름표 줄 (요약 줄과 같은 최대 6줄 규칙 — 휴장 배너·지수 칸도 한 줄로 센다).
- * 환율·금리 / 업종(강·약 두 줄) / 내 종목 / 일정 / 뉴스 N건(제목 2개 한 줄씩, 나머지는 '외 N건')
+ * 환율·금리 / 업종(강·약 두 줄 — opts.signWords 면 부호로 고른 앞말) / 내 종목 / 일정 / 뉴스 N건(제목 2개 한 줄씩, 나머지는 '외 N건')
  */
-export function cardRows(d: MarketSummaryData, view: Date): CardRow[] {
-  const kinds = new Set(summarySegLines(d, view).map((l) => l.kind));
+export function cardRows(d: MarketSummaryData, view: Date, opts: SectorOpts = {}): CardRow[] {
+  const kinds = new Set(summarySegLines(d, view, opts).map((l) => l.kind));
   const rows: CardRow[] = [];
   const rates = ratesSegs(d);
   if (kinds.has("rates") && rates) rows.push({ kind: "rates", label: d.market === "US" ? "환율·금리" : "환율", lines: [rates] });
-  const sec = sectorCardSegs(d);
+  const sec = sectorCardSegs(d, opts);
   if (kinds.has("sectors") && sec) rows.push({ kind: "sectors", label: "업종", lines: sec });
   const hold = holdingsSegs(d, { mine: false });
   if (kinds.has("holdings") && hold) rows.push({ kind: "holdings", label: "내 종목", lines: [hold] });
@@ -457,6 +489,8 @@ const SEPARATORS = new Set(["·", "/"]);
 const NUMERIC_START = /^(?:[+\-−]?\d|\(\d{1,2}\/\d{1,2}\)$)/;
 /** 시각 뒤에 붙여 한 덩어리로 두는 말 ('08:30 생성'·'16:30 마감'·'(16:00 기준)'·'10:00 개장,' — '생성'만 다음 줄로 넘어가지 않게) */
 const AFTER_TIME = /^(?:생성|마감|기준|개장|발표)[)·,]?$/;
+/** 업종 카드 두 글자 앞말 (sectorWords 의 card — 한 글자 '위'·'덜'은 한 글자 규칙이 맡는다). 다음 낱말과 한 덩어리 */
+const SECTOR_LEAD = new Set(["오름", "내림", "많이", "아래"]);
 
 type Piece = { kind: "text"; text: string; seg: Seg } | { kind: "space" };
 
@@ -467,6 +501,7 @@ type Piece = { kind: "text"; text: string; seg: Seg } | { kind: "space" };
  *  - 등락 숫자(색 조각) 앞: '나스닥 +0.48%'·'5.17% -0.01%p'·'1,359.00원 +3.50원'·'(마이크로소프트 +3.66%,'
  *  - 흐린 조각(출처·기준 괄호) 안: '(미 재무부)'·'(섹터 ETF 기준)'·'(9/23 고시)'·'9/25 기준 ·' (앞뒤 공백은 줄바꿈 자리)
  *  - 한 글자 낱말 뒤: '내 미국'·'미 10년물'·'강 산업재'·'약 커뮤니케이션'·'장 마감', 줄 끝 한 글자 낱말·개수 앞: '±1%p 안'·'(+1.00%p 이상) 2'
+ *  - 업종 카드 앞말 뒤 (브리핑 2차 4, SECTOR_LEAD): '오름 산업재'·'덜 내림 건설'·'많이 오름 …'·'아래 …' — '강 산업재'처럼 앞말만 줄 끝에 남지 않게
  *  - 시각 뒤 '생성·마감·기준·개장·발표': '08:30 생성'·'16:30 마감'·'(16:00 기준)'
  *  - 구분자 '·'·'/'와 받지 못한 칸 '—' 앞: 앞 덩어리 끝에 붙인다
  */
@@ -512,7 +547,7 @@ export function chunkSegs(segs: readonly Seg[]): Chunk[] {
     if (next.seg.tone !== undefined) return true;
     if (/\d{1,2}:\d{2}$/.test(before) && AFTER_TIME.test(after.w)) return true;
     if (/[가-힣]$/.test(before) && NUMERIC_START.test(after.w)) return true;
-    if (/^[가-힣]$/.test(before)) return true;
+    if (/^[가-힣]$/.test(before) || SECTOR_LEAD.has(before)) return true;
     return after.last && /^(?:[가-힣]|\d+)$/.test(after.w);
   };
   const chunks: Chunk[] = [];
@@ -966,14 +1001,16 @@ export function speakPointMove(text: string): string {
 
 /**
  * 카드·목록 줄을 한 문장으로. card = 브리핑 탭 맨 위 카드: 카드에 보이는 뉴스 제목(언론사·시각·원문 제목)도 읽는다 —
- * 카드 전체가 누르는 칸 하나라 화면 읽기 사용자는 이 문장으로만 카드를 듣는다 (제목은 원문 그대로, 기호를 말로 바꾸지 않는다)
+ * 카드 전체가 누르는 칸 하나라 화면 읽기 사용자는 이 문장으로만 카드를 듣는다 (제목은 원문 그대로, 기호를 말로 바꾸지 않는다).
+ * opts.signWords = 업종 말을 부호로 (보이는 글과 같게)
  */
-export function cardSpeech(s: MarketSummary, view: Date, opts: { card?: boolean } = {}): string {
+export function cardSpeech(s: MarketSummary, view: Date, opts: { card?: boolean } & SectorOpts = {}): string {
   const d = s.data;
   const when = `${md(s.date)} ${s.session === "afternoon" ? "오후" : "오전"}`;
   if (s.status === "failed" || !d) return `시장 요약, ${when}, 생성 실패, 자세히 보기`;
-  const news = opts.card ? cardRows(d, view).find((r) => r.kind === "news") : undefined;
-  const lines = summaryLines(d, view).map((l) => (l.kind === "news" && news?.kind === "news" ? newsSpeech(news, d) : speakText(l.text)));
+  const sec: SectorOpts = opts.signWords ? { signWords: true } : {};
+  const news = opts.card ? cardRows(d, view, sec).find((r) => r.kind === "news") : undefined;
+  const lines = summaryLines(d, view, sec).map((l) => (l.kind === "news" && news?.kind === "news" ? newsSpeech(news, d) : speakText(l.text)));
   return [titleText(d, view), when, speakText(basisText(d, view)), ...lines, "숫자로 만든 요약, 매매 권유가 아닙니다", "자세히 보기"].join(", ");
 }
 

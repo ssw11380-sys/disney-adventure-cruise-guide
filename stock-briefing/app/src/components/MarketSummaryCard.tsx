@@ -153,7 +153,17 @@ function IndexCell({ i, d, compact = false }: { i: SummaryIndex; d: MarketSummar
  * 브리핑 탭은 체결(약 0.1초)마다 다시 그려지므로 카드는 속성(요약·강조)이 같으면 다시 그리지 않는다 (React.memo).
  * '오늘/밤사이'는 안에서 1분마다 다시 본다
  */
-export const MarketSummaryCard = React.memo(function MarketSummaryCard({ summary, selected = false }: { summary: MarketSummary; /** 넓은 창에서 보던 요약 (접고 펴기 이어 보기) */ selected?: boolean }) {
+export const MarketSummaryCard = React.memo(function MarketSummaryCard({
+  summary,
+  selected = false,
+  trim = false,
+}: {
+  summary: MarketSummary;
+  /** 넓은 창에서 보던 요약 (접고 펴기 이어 보기) */
+  selected?: boolean;
+  /** 브리핑 2차 4 (플래그 briefingTrim, 탭에서 읽어 넘김): 업종 앞말을 부호로 ('강/약' → '오름/내림' 등). 기본 false = 지금 글 그대로 */
+  trim?: boolean;
+}) {
   const t = useTheme();
   const view = new Date(useNow(60_000));
   const d = summary.data;
@@ -164,7 +174,7 @@ export const MarketSummaryCard = React.memo(function MarketSummaryCard({ summary
       <Pressable
         onPress={() => router.push(`/briefings/market/${summary.id}`)}
         accessibilityRole="link"
-        accessibilityLabel={cardSpeech(summary, view, { card: true })}
+        accessibilityLabel={cardSpeech(summary, view, trim ? { card: true, signWords: true } : { card: true })}
         {...(selected ? { accessibilityState: { selected: true } } : {})}
         style={styles.press}
       >
@@ -184,7 +194,7 @@ export const MarketSummaryCard = React.memo(function MarketSummaryCard({ summary
             </View>
           </View>
         ) : (
-          <CardBody d={d} view={view} />
+          <CardBody d={d} view={view} trim={trim} />
         )}
         <Words text={SUMMARY_NOTE} style={{ color: t.muted, fontSize: font.tiny, lineHeight: MUTED_LH }} />
       </Pressable>
@@ -192,7 +202,7 @@ export const MarketSummaryCard = React.memo(function MarketSummaryCard({ summary
   );
 });
 
-function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
+function CardBody({ d, view, trim }: { d: MarketSummaryData; view: Date; trim: boolean }) {
   const t = useTheme();
   // 이름표 칸 폭은 글자 배율만큼 늘린다 (큰 글씨에서 '환율·금리'가 '환율·금 / 리'로 쪼개지지 않게)
   const labelW = Math.round(MS.labelW * useFontScale(fontCap.row));
@@ -213,7 +223,7 @@ function CardBody({ d, view }: { d: MarketSummaryData; view: Date }) {
         </View>
       ) : null}
       <IndexCells d={d} guess={cellsGuess} />
-      {cardRows(d, view).map((r) => (
+      {cardRows(d, view, trim ? { signWords: true } : {}).map((r) => (
         <View key={r.kind} style={styles.row}>
           <Text style={[styles.label, { width: labelW, color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
             {r.label}
@@ -275,7 +285,20 @@ function NewsLines({ items, more, guess }: { items: SummaryNews[]; more: number;
 /**
  * 넓은 창 목록 맨 위 줄 (계좌 줄 위): 1줄 제목 · 마감일 배지 · 시각 › / 2줄 지수 작은 칸 4개 또는 2개 / 3줄 '내 미국 12종목 · 지수보다 높음 2 · 낮음 3 · 비슷 7'
  */
-export function MarketSummaryRow({ summary, selected, onPress, role }: { summary: MarketSummary; selected: boolean; onPress: () => void; role: "button" | "link" }) {
+export function MarketSummaryRow({
+  summary,
+  selected,
+  onPress,
+  role,
+  trim = false,
+}: {
+  summary: MarketSummary;
+  selected: boolean;
+  onPress: () => void;
+  role: "button" | "link";
+  /** 브리핑 2차 4 (플래그 briefingTrim): 화면 읽기 문장의 업종 말을 부호로 (상세·카드와 같게). 기본 false = 지금 문장 */
+  trim?: boolean;
+}) {
   const t = useTheme();
   const view = new Date(useNow(60_000));
   const d = summary.data;
@@ -288,7 +311,7 @@ export function MarketSummaryRow({ summary, selected, onPress, role }: { summary
     <Pressable
       onPress={onPress}
       accessibilityRole={role}
-      accessibilityLabel={cardSpeech(summary, view)}
+      accessibilityLabel={cardSpeech(summary, view, trim ? { signWords: true } : {})}
       accessibilityState={role === "button" ? { selected } : selected ? { selected: true } : undefined}
       style={({ pressed }) => [styles.listRow, { borderBottomColor: t.line, backgroundColor: selected || pressed ? t.surfaceAlt : t.surface }]}
     >

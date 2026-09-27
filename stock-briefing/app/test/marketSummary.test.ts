@@ -31,6 +31,8 @@ import {
   indexSegs,
   newsLink,
   sectorCardSegs,
+  sectorSegs,
+  rateText,
   summarySegLines,
   wordGap,
   holdingsAux,
@@ -891,5 +893,71 @@ describe("카드 뉴스 한 줄 자르기 (7차 검토 must: 숫자 가운데서
     expect(c.heads).toBeGreaterThan(10_000); // 넓은 폭에서는 머리 + 제목 전체
     // 아주 좁은 칸 예외(낱말 경계로 물리면 8자가 안 됨)는 줄 폭 300dp 아래에서만
     expect(maxFallbackW).toBeLessThan(300);
+  });
+});
+
+describe("브리핑 2차 4 (플래그 briefingTrim): 업종 말을 부호로 (signWords) — 카드·요약 줄·화면 읽기가 같은 말", () => {
+  const text = (segs: { text: string }[]) => segs.map((s) => s.text).join("");
+  const view = at("2026-09-28T08:31:00+09:00");
+  const withSectors = (strong: number[], weak: number[]): MarketSummaryData => {
+    const s = MORNING.sectors!;
+    return { ...MORNING, sectors: { ...s, strong: s.strong.map((r, i) => ({ ...r, changeRate: strong[i]! })), weak: s.weak.map((r, i) => ({ ...r, changeRate: weak[i]! })) } };
+  };
+  const items = (list: { name: string; changeRate: number }[]) => list.map((r) => `${r.name} ${rateText(r.changeRate)}`).join(" · ");
+  const CASES = [
+    { name: "보통 날 (위 모두 +, 아래 모두 −): 오름/내림", strong: [0.95, 0.8], weak: [-0.9, -0.89], card: ["오름", "내림"], line: ["오른 업종", "내린 업종"] },
+    { name: "넷 모두 −: 덜 내림/많이 내림", strong: [-0.1, -0.3], weak: [-2.1, -1.9], card: ["덜 내림", "많이 내림"], line: ["덜 내린 업종", "많이 내린 업종"] },
+    { name: "넷 모두 +: 많이 오름/덜 오름", strong: [2.1, 1.9], weak: [0.3, 0.1], card: ["많이 오름", "덜 오름"], line: ["많이 오른 업종", "덜 오른 업종"] },
+    { name: "한 묶음에 +·− 섞임: 위/아래", strong: [0.5, -0.1], weak: [-0.2, -0.9], card: ["위", "아래"], line: ["등락률 위 업종", "등락률 아래 업종"] },
+    { name: "0 은 섞임으로 본다: 위/아래", strong: [0.5, 0], weak: [-0.2, -0.9], card: ["위", "아래"], line: ["등락률 위 업종", "등락률 아래 업종"] },
+  ];
+  for (const c of CASES) {
+    it(c.name, () => {
+      const d = withSectors(c.strong, c.weak);
+      const sec = d.sectors!;
+      const card = [`${c.card[0]} ${items(sec.strong)}`, `${c.card[1]} ${items(sec.weak)} (섹터 ETF 기준)`];
+      const line = `${c.line[0]} ${items(sec.strong)} / ${c.line[1]} ${items(sec.weak)} (섹터 ETF 기준)`;
+      expect(sectorCardSegs(d, { signWords: true })!.map(text)).toEqual(card);
+      expect(text(sectorSegs(d, { signWords: true })!)).toBe(line);
+      // 카드 이름표 줄·요약 줄(상세)·화면 읽기가 같은 말
+      const row = cardRows(d, view, { signWords: true }).find((r) => r.kind === "sectors")!;
+      if (row.kind === "news") throw new Error("news");
+      expect(row.lines.map(text)).toEqual(card);
+      expect(summaryLines(d, view, { signWords: true }).find((l) => l.kind === "sectors")!.text).toBe(line);
+      const said = cardSpeech(item(1, d), view, { card: true, signWords: true });
+      expect(said).toContain(speakText(line));
+      expect(said).not.toContain("강한 업종");
+      // 옵션이 없으면 지금 글 그대로 ('강/약', '강한/약한')
+      expect(sectorCardSegs(d)!.map(text)).toEqual([`강 ${items(sec.strong)}`, `약 ${items(sec.weak)} (섹터 ETF 기준)`]);
+      expect(text(sectorSegs(d)!)).toBe(`강한 업종 ${items(sec.strong)} / 약한 업종 ${items(sec.weak)} (섹터 ETF 기준)`);
+      expect(cardSpeech(item(1, d), view)).toContain("강한 업종");
+    });
+  }
+
+  it("옵션 없으면(또는 false) 공용 픽스처 글·카드 줄 그대로 (서버 sectorText 는 바꾸지 않음)", () => {
+    for (const c of shared.cases) {
+      for (const v of c.views) {
+        const view = at(v.at);
+        expect(summaryLines(c.data, view, {})).toEqual(summaryLines(c.data, view));
+        expect(summaryLines(c.data, view, { signWords: false })).toEqual(summaryLines(c.data, view));
+        expect(cardRows(c.data, view, { signWords: false })).toEqual(cardRows(c.data, view));
+        if (v.lines) expect(summaryLines(c.data, view).map((l) => l.text)).toEqual(v.lines);
+      }
+    }
+  });
+
+  it("한국 휴장일 카드: 앞의 '9/23 기준 ·' 은 그대로, 줄바꿈 덩어리는 앞말과 첫 업종이 한 덩어리 ('강 석유와가스'처럼 앞말만 줄 끝에 남지 않게)", () => {
+    const [hi, lo] = sectorCardSegs(KR_HOLIDAY, { signWords: true })!;
+    expect(text(hi)).toBe("9/23 기준 · 오름 석유와가스 +3.13% · 반도체와반도체장비 +2.80%");
+    expect(chunkSegs(hi).map(chunkText)).toEqual(["9/23 기준 ·", "오름 석유와가스 +3.13% ·", "반도체와반도체장비 +2.80%"]);
+    expect(chunkSegs(lo).map(chunkText)).toEqual(["내림 건설 -4.19% ·", "철강 -2.92%"]);
+    const down = withSectors([-0.1, -0.3], [-2.1, -1.9]);
+    const [dh, dl] = sectorCardSegs(down, { signWords: true })!;
+    expect(chunkSegs(dh).map(chunkText)[0]).toBe(`덜 내림 ${down.sectors!.strong[0]!.name} -0.10% ·`);
+    expect(chunkSegs(dl).map(chunkText)[0]).toBe(`많이 내림 ${down.sectors!.weak[0]!.name} -2.10% ·`);
+    const up = withSectors([2.1, 1.9], [0.3, 0.1]);
+    expect(chunkSegs(sectorCardSegs(up, { signWords: true })![0]).map(chunkText)[0]).toBe(`많이 오름 ${up.sectors!.strong[0]!.name} +2.10% ·`);
+    const mixed = withSectors([0.5, -0.1], [-0.2, -0.9]);
+    expect(chunkSegs(sectorCardSegs(mixed, { signWords: true })![1]).map(chunkText)[0]).toBe(`아래 ${mixed.sectors!.weak[0]!.name} -0.20% ·`);
   });
 });
