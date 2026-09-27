@@ -92,6 +92,11 @@ export const FEATURES = {
     description:
       "매매 기록 기반 (3-36): 시장(한국·미국) 거래일마다 장 마감 뒤(한국 16:05·미국 정규장 마감 5분 뒤, 서머타임·조기 폐장 반영) 토스 보유 조회로 계좌 스냅샷 1줄(종목별 수량·평단·현재가·통화·환율·원화 합계)을 저장하고, 토스 주문 내역의 체결을 주문번호로 중복 없이 저장. 놓친 거래일은 값을 지어내지 않고 빈칸 표시, 최근 5·30거래일 빈칸은 /health·관리 화면·로그로 경고. 읽기 /api/snapshots·/api/trades·/api/trade-records, 앱은 설정 > 서버 '매매 기록' 한 줄. 끄면 쓰지도 부르지도 않고(토스 호출 0) 새 경로는 빈 값, /health 에 칸 없음, 앱 줄 없음",
   },
+  indicatorScores: {
+    default: true,
+    description:
+      "종목 상세 '지표 점수' (3-44 1단계, 코드 계산 · AI 글 아님): 기업개요 탭 맨 위 요약 카드(가치 지표는 '계산 준비 중', 추세 지표 점수 0~100·띠·한 줄 뜻, 종합은 두 점수가 모두 있을 때만)와 기술분석 탭 맨 위 추세 상세 카드(5묶음·사실 문장·지난주보다 5점 넘게 바뀐 이유), 레버리지 ETF 는 이 상품 자체 점수 없이 기초자산 참고 줄과 레버리지 주의 사실 상자. 장 마감 뒤 하루 한 번(한국 20:10 · 미국 17:30 ET) 등록 종목을 계산해 indicator_scores 에 기록, GET /api/scores/:code. 잔고 목록·알림·위젯·브리핑·AI 글에는 넣지 않음. 끄면 계산·일봉 요청·저장·화면이 모두 0건이고 경로는 404",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

@@ -173,6 +173,26 @@ export interface TradeExecutionTable {
   updated_at: string;
 }
 
+/**
+ * 지표 점수 기록 (3-44, 플래그 indicatorScores): 종목·가격 기준일·종류(지금은 'trend')마다 1줄. 장 마감 뒤 계산한 점수와 입력 요약(원값·묶음·항목 점수·
+ * 비교 지수·일봉 출처)을 남긴다 — 재현·확인용. 일봉 자체는 남기지 않는다(다시 받을 수 있음). 같은 날 다시 계산하면 덮어쓴다
+ */
+export interface IndicatorScoreTable {
+  id: Generated<number>;
+  score_date: string; // YYYY-MM-DD, 마지막 봉 날짜 (그 시장 현지)
+  code: string;
+  market: string; // 'KR' | 'US'
+  kind: string; // 'trend' (2단계부터 'value')
+  version: string; // 'TREND-1/TREND-CAL-1'
+  status: string; // 'ok' | 'unavailable' | 'hold' | 'excluded'
+  score: number | null; // 화면 점수 (5거래일 평균, 반올림 전)
+  score_today: number | null; // 그날 점수
+  band: string | null;
+  data: string; // JSON (입력 요약·묶음·항목 점수·레버리지 사실)
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Database {
   listed_stocks: ListedStockTable;
   registered_stocks: RegisteredStockTable;
@@ -187,4 +207,5 @@ export interface Database {
   market_summaries: MarketSummaryTable;
   account_snapshots: AccountSnapshotTable;
   trade_executions: TradeExecutionTable;
+  indicator_scores: IndicatorScoreTable;
 }

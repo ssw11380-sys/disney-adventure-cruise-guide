@@ -1,0 +1,589 @@
+import cron, { type ScheduledTask } from "node-cron";
+import { classifyProduct, leverageFacts, verifyUnderlying, type LeverageFacts, type ProductFacts, type ProductKind } from "../analysis/leveraged.js";
+import { FAMILY_KEYS, TREND_CAL, TREND_VERSION, TREND_WEIGHTS, shownScore, trendBand, trendDisplayed, type FamilyKey, type TrendBand, type TrendResult, type TrendShown } from "../analysis/trendScore.js";
+import type { Db } from "../db/index.js";
+import type { Candle, CandleSeries } from "../domain/types.js";
+import { isKrCode, normalizeCode } from "../lib/codes.js";
+import { seoulIso } from "../lib/time.js";
+import type { FeatureService } from "./featureService.js";
+import type { StockService } from "./stockService.js";
+import { isKrTradingDate, isUsTradingDate } from "./marketContext.js";
+import { benchmarkOf } from "./marketSummaryCalc.js";
+import {
+  BAND_LINE,
+  basisSentence,
+  CARD_TITLE_NOTE,
+  changeText,
+  DETAIL_NOTE,
+  DISCLAIMER_SHORT,
+  FAMILY_NAME,
+  familyRows,
+  howLines,
+  leverageBox,
+  leverageWhy,
+  NOT_FORECAST,
+  priceDateLine,
+  proxyNote,
+  referenceText,
+  STATUS_TEXT,
+  TREND_ABOUT,
+  trendHeadline,
+  trendMeaning,
+  trendNoteText,
+  trendReasonText,
+  VALUE_ABOUT,
+  versionLine,
+  type RichLine,
+  type ScoreMarket,
+} from "./indicatorScoreText.js";
+
+/**
+ * 지표 점수 (3-44 1단계, 플래그 indicatorScores): 종목 상세의 '지표 점수' — 이번 단계는 추세 지표 점수만 계산한다
+ * (가치 지표 점수는 '계산 준비 중', 종합 지표 점수는 두 점수가 모두 있을 때만 — 지금은 없음).
+ *  - 계산: 끝난 정규장 일봉 310개(토스 웹 → 네이버 → 야후, 차트와 같은 CandleCache) + 비교 지수(네이버) → analysis/trendScore (5거래일 평균)
+ *  - 갱신: 장 마감 뒤 하루 한 번. 한국 20:10(KRX+NXT 통합 봉이 20:00 에 확정된 뒤) · 미국 뉴욕 17:30(정규장 16:00, 네이버 지수 최종값 17:15 뒤).
+ *    그 전에는 지난 거래일 봉까지만 쓴다(latestScoreDate) → 장중에는 바뀌지 않고, 휴장일에는 마지막 거래일 값 그대로
+ *  - 등록 종목은 그 시각에 미리 계산해 하루 한 줄씩 저장(indicator_scores, 재현·기록용). 미등록 종목(발견 탭)은 열 때 계산
+ *  - 레버리지 상품: 이 상품 자체 점수 없음 → 기초자산 점수를 '참고' 한 줄로 + 레버리지 주의 사실 상자. 기초자산은 일봉으로 확인(analysis/leveraged)
+ *  - 인버스·채권형: 대상 아님. 자료가 모자라면 0점·50점으로 채우지 않고 '점수 없음 — 이유'
+ *  - 문장은 모두 indicatorScoreText 의 틀 (금지어 검사 analysis/scoreWording). AI 프롬프트·브리핑·알림·위젯·잔고 목록에는 넣지 않는다
+ *  - 플래그를 끄면 계산·외부 요청·저장·화면이 모두 0건 (경로는 404)
+ */
+
+export type BenchCode = "NASDAQ" | "SPX" | "KOSPI" | "KOSDAQ";
+export const BENCH_NAME: Record<BenchCode, string> = { NASDAQ: "나스닥", SPX: "S&P500", KOSPI: "코스피", KOSDAQ: "코스닥" };
+
+/** 일봉 요청 개수 (300봉 + 5일 평균 4 + 지난주 비교 5 + 휴장·정리 여유) */
+export const SCORE_CANDLES = 310;
+const BENCH_CANDLES = 400;
+
+/** 점수가 새 봉으로 바뀌는 시각 (그 시장 현지, 자정부터 분) */
+export const SCORE_READY: Record<ScoreMarket, { tz: string; minutes: number; cron: string }> = {
+  KR: { tz: "Asia/Seoul", minutes: 20 * 60 + 10, cron: "10 20 * * 1-5" },
+  US: { tz: "America/New_York", minutes: 17 * 60 + 30, cron: "30 17 * * 1-5" },
+};
+
+function localParts(now: Date, tz: string): { date: string; minutes: number } {
+  const f = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const g = (t: string) => f.find((p) => p.type === t)?.value ?? "";
+  return { date: `${g("year")}-${g("month")}-${g("day")}`, minutes: (Number(g("hour")) % 24) * 60 + Number(g("minute")) };
+}
+const isTrading = (m: ScoreMarket, date: string) => (m === "KR" ? isKrTradingDate(date) : isUsTradingDate(date));
+function prevDate(date: string): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * 지금 점수에 쓸 마지막 봉 날짜 = 점수가 확정된 가장 최근 거래일 (그 시장 현지 날짜).
+ * 오늘이 거래일이고 준비 시각(한국 20:10 · 뉴욕 17:30)이 지났으면 오늘, 아니면 그 전 거래일 (주말·휴장일 건너뜀)
+ */
+export function latestScoreDate(market: ScoreMarket, now: Date): string {
+  const r = SCORE_READY[market];
+  const p = localParts(now, r.tz);
+  if (isTrading(market, p.date) && p.minutes >= r.minutes) return p.date;
+  let d = prevDate(p.date);
+  for (let i = 0; i < 15 && !isTrading(market, d); i++) d = prevDate(d);
+  return d;
+}
+
+/** 장 마감 뒤 미리 계산할 때인지: 그 시장 거래일이고 준비 시각이 지났다 (휴장일·주말의 예약은 건너뜀) */
+export function dailyRunDue(market: ScoreMarket, now: Date): boolean {
+  const r = SCORE_READY[market];
+  const p = localParts(now, r.tz);
+  return isTrading(market, p.date) && p.minutes >= r.minutes;
+}
+
+export interface ScoreStock {
+  code: string;
+  name: string;
+  /** registered_stocks.market (KOSPI · KOSDAQ · NASDAQ · NYSE · AMEX · US …) */
+  market: string;
+  /** 종목 마스터 분류 (EF = ETF, EN = ETN) */
+  groupCode?: string | null;
+}
+
+/** 점수에 필요한 자료 (app.ts 가 실제 출처로 채운다, 테스트는 기록한 일봉으로) */
+export interface ScoreSources {
+  /** 등록 종목 또는 종목 마스터·검색의 이름·시장. 모르는 코드면 null */
+  stock(code: string): Promise<ScoreStock | null>;
+  /** 일봉 (오래된 → 최신). 출처 이름은 series.source */
+  candles(code: string, count: number): Promise<CandleSeries>;
+  /** 비교 지수 일봉 (네이버) */
+  benchmark(code: BenchCode, count: number): Promise<Candle[] | null>;
+  /** 토스 웹 상품 정보 (ETF·레버리지 배수). 없으면 null */
+  product(code: string): Promise<ProductFacts | null>;
+  /** 등록 종목 (장 마감 뒤 미리 계산할 목록) */
+  registered(): Promise<ScoreStock[]>;
+}
+
+export interface FamilyRow {
+  key: FamilyKey;
+  name: string;
+  about: string;
+  weight: number;
+  score: number | null;
+  scoreExact: number | null;
+  text: string;
+  facts: Array<{ label: string; value: string }>;
+  items: Array<{ key: string; name: string; score: number | null }>;
+}
+
+export interface TrendBlock {
+  version: string;
+  cal: string;
+  status: "ok" | "unavailable" | "hold" | "excluded";
+  /** 요약 카드 줄의 글: 띠 이름 · 점수 없음 · 잠시 보류 · 대상 아님 · 이 상품 자체 점수 없음 */
+  label: string;
+  reason: { code: string; text: string } | null;
+  /** 화면 정수 (5거래일 평균의 반올림) */
+  score: number | null;
+  scoreExact: number | null;
+  scoreToday: number | null;
+  band: TrendBand | null;
+  /** 요약 카드 설명 줄 */
+  meaning: string | null;
+  /** 상세 카드: 머리 · 기준 문장 · 띠 한 줄 */
+  headline: string | null;
+  basisLine: string | null;
+  bandLine: string | null;
+  basis: { kind: "self" | "underlying"; code: string; name: string };
+  benchmark: { code: BenchCode; name: string } | null;
+  candleSource: string | null;
+  bars: number | null;
+  daysAveraged: number | null;
+  coverage: number | null;
+  families: FamilyRow[];
+  notes: string[];
+  /** 지난주(5거래일 전) 대비 화면 정수가 5점 넘게 바뀌었을 때만 (상세 카드) */
+  change: { from: string; prev: number; now: number; diff: number; family: FamilyKey; familyName: string; familyDiff: number; text: string } | null;
+  /** 레버리지 상품: 기초자산 점수 참고 줄 */
+  reference: { code: string; name: string; status: "ok" | "unavailable" | "hold"; score: number | null; band: TrendBand | null; text: string; note: string | null } | null;
+  leveraged: { L: number; underlying: string | null; tracks: string | null; check: { days: number; corr: number | null; beta: number | null } | null; facts: LeverageFacts | null; box: { title: string; lines: RichLine[] } } | null;
+  versionLine: string;
+}
+
+export interface ScoresResponse {
+  code: string;
+  name: string;
+  market: ScoreMarket;
+  asOf: { priceDate: string | null; scoreDate: string; market: ScoreMarket; line: string | null };
+  value: { method: "value-v1"; status: "pending" | "excluded"; label: string; score: null; band: null; about: string; text: string };
+  trend: TrendBlock;
+  composite: { status: "ok" | "none"; score: number | null; reason: "valueMissing" | "trendMissing" | "bothMissing"; text: string; gap: number | null; gapNote: boolean };
+  text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string };
+  computedAt: string;
+}
+
+export interface IndicatorScoreDeps {
+  db: Db;
+  features: Pick<FeatureService, "enabled">;
+  sources: ScoreSources;
+  now?: () => Date;
+  log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
+}
+
+/** 계산 결과를 이만큼 기억 (같은 기준 거래일이면 다시 계산하지 않는다). 받기 실패는 짧게 */
+const CACHE_OK_MS = 6 * 3_600_000;
+const CACHE_FAIL_MS = 5 * 60_000;
+const CACHE_MAX = 300;
+
+const marketOf = (code: string): ScoreMarket => (isKrCode(code) ? "KR" : "US");
+const cutTo = <T extends { date: string }>(cs: readonly T[], date: string) => cs.filter((c) => c.date <= date);
+
+export class IndicatorScoreService {
+  private readonly now: () => Date;
+  private readonly cache = new Map<string, { at: number; ttl: number; resp: ScoresResponse }>();
+  private readonly inflight = new Map<string, Promise<ScoresResponse | null>>();
+  private tasks: ScheduledTask[] = [];
+  private running: Promise<unknown> | null = null;
+  /** 마지막 미리 계산 결과 (관리·로그용) */
+  lastRun: { market: ScoreMarket; at: string; computed: number; failed: number; skipped?: string } | null = null;
+
+  constructor(private readonly deps: IndicatorScoreDeps) {
+    this.now = deps.now ?? (() => new Date());
+  }
+
+  enabled(): Promise<boolean> {
+    return this.deps.features.enabled("indicatorScores");
+  }
+
+  /** 종목 하나의 지표 점수. 모르는 종목이면 null. 플래그는 부르는 쪽(경로)이 먼저 본다 */
+  async get(code: string, opts: { store?: boolean; fresh?: boolean } = {}): Promise<ScoresResponse | null> {
+    const c = normalizeCode(code);
+    const scoreDate = latestScoreDate(marketOf(c), this.now());
+    const key = `${c}|${scoreDate}`;
+    const t = this.now().getTime();
+    const hit = this.cache.get(key);
+    if (!opts.fresh && hit && t - hit.at < hit.ttl) return hit.resp;
+    const running = this.inflight.get(key);
+    if (running) return running;
+    const p = this.compute(c, scoreDate, opts.store !== false)
+      .then((resp) => {
+        if (resp) {
+          const failed = resp.trend.reason?.code === "fetchFailed" || resp.trend.reference?.status === "unavailable";
+          this.cache.delete(key);
+          this.cache.set(key, { at: t, ttl: failed ? CACHE_FAIL_MS : CACHE_OK_MS, resp });
+          while (this.cache.size > CACHE_MAX) this.cache.delete(this.cache.keys().next().value!);
+        }
+        return resp;
+      })
+      .finally(() => this.inflight.delete(key));
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  /**
+   * 장 마감 뒤 미리 계산 (예약: 한국 20:10 · 뉴욕 17:30, 평일). 플래그가 꺼져 있거나 휴장일이면 아무것도 하지 않는다.
+   * 그 시장의 등록 종목(관심 포함)을 차례로 계산해 저장한다 (한 번에 하나 — 출처에 몰리지 않게)
+   */
+  async runDaily(market: ScoreMarket): Promise<{ computed: number; failed: number; skipped?: string }> {
+    const at = seoulIso(this.now());
+    if (!(await this.enabled())) return this.done({ market, at, computed: 0, failed: 0, skipped: "off" });
+    if (!dailyRunDue(market, this.now())) return this.done({ market, at, computed: 0, failed: 0, skipped: "closed" });
+    if (this.running) await this.running.catch(() => undefined);
+    const work = (async () => {
+      const list = (await this.deps.sources.registered()).filter((s) => marketOf(s.code) === market);
+      let computed = 0;
+      let failed = 0;
+      for (const s of list) {
+        try {
+          const r = await this.get(s.code, { fresh: true, store: true });
+          if (r && r.trend.reason?.code !== "fetchFailed") computed++;
+          else failed++;
+        } catch (e) {
+          failed++;
+          this.deps.log?.warn({ code: s.code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 미리 계산 실패");
+        }
+      }
+      return this.done({ market, at, computed, failed });
+    })();
+    this.running = work;
+    try {
+      return await work;
+    } finally {
+      if (this.running === work) this.running = null;
+    }
+  }
+
+  private done(r: { market: ScoreMarket; at: string; computed: number; failed: number; skipped?: string }) {
+    this.lastRun = r;
+    if (!r.skipped) this.deps.log?.info({ ...r }, "지표 점수: 장 마감 뒤 계산");
+    const { market: _m, at: _a, ...out } = r;
+    return out;
+  }
+
+  start(): void {
+    this.stop();
+    for (const m of ["KR", "US"] as const) {
+      const r = SCORE_READY[m];
+      this.tasks.push(cron.schedule(r.cron, () => void this.runDaily(m).catch(() => undefined), { timezone: r.tz, name: `indicator-scores-${m.toLowerCase()}` }));
+    }
+  }
+
+  stop(): void {
+    for (const t of this.tasks) void t.destroy();
+    this.tasks = [];
+  }
+
+  // ── 계산 ───────────────────────────────────────────────
+
+  private async compute(code: string, scoreDate: string, store: boolean): Promise<ScoresResponse | null> {
+    const { sources } = this.deps;
+    const stock = await sources.stock(code);
+    if (!stock) return null;
+    const market = marketOf(code);
+    const facts = await sources.product(code).catch(() => null);
+    const kind = classifyProduct(code, stock.name, facts);
+    const etf = kind.etf || stock.groupCode === "EF" || stock.groupCode === "EN";
+    const trend = await this.trendBlock(stock, market, scoreDate, kind, facts);
+    const priceDate = trend.priceDate;
+    const resp: ScoresResponse = {
+      code,
+      name: stock.name,
+      market,
+      asOf: { priceDate, scoreDate, market, line: priceDate ? priceDateLine(priceDate, market) : null },
+      value: etf
+        ? { method: "value-v1", status: "excluded", label: "대상 아님", score: null, band: null, about: VALUE_ABOUT, text: STATUS_TEXT.valueEtf }
+        : { method: "value-v1", status: "pending", label: "계산 준비 중", score: null, band: null, about: VALUE_ABOUT, text: STATUS_TEXT.valuePending },
+      trend: trend.block,
+      composite: {
+        status: "none",
+        score: null,
+        reason: trend.block.status === "ok" ? "valueMissing" : "bothMissing",
+        text: `없음 · ${trend.block.status === "ok" ? STATUS_TEXT.compositeValueMissing : STATUS_TEXT.compositeBothMissing}`,
+        gap: null,
+        gapNote: false,
+      },
+      text: { titleNote: CARD_TITLE_NOTE, notForecast: NOT_FORECAST, how: howLines(), disclaimerShort: DISCLAIMER_SHORT, detailNote: DETAIL_NOTE, trendAbout: TREND_ABOUT },
+      computedAt: seoulIso(this.now()),
+    };
+    if (store && priceDate && trend.block.reason?.code !== "fetchFailed") await this.save(resp, trend.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 기록 저장 실패"));
+    return resp;
+  }
+
+  private async fetchCut(code: string, scoreDate: string): Promise<{ candles: Candle[]; source: string } | null> {
+    try {
+      const s = await this.deps.sources.candles(code, SCORE_CANDLES);
+      return { candles: cutTo(s.candles, scoreDate), source: s.source };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 종목 자체 추세 (비교 지수·지난주 대비 포함) */
+  private async selfTrend(stock: ScoreStock, market: ScoreMarket, scoreDate: string, facts: ProductFacts | null, candles: Candle[]) {
+    const b = benchmarkOf(market, { code: stock.code, name: stock.name, market: stock.market, groupCode: stock.groupCode ?? null }, { changeRate: 0, tradedAt: null, ...(facts?.exchange || stock.market ? { exchange: facts?.exchange ?? stock.market } : {}) });
+    const benchCode = "code" in b ? (b.code as BenchCode) : null;
+    let bench: Candle[] | null = null;
+    if (benchCode) bench = await this.deps.sources.benchmark(benchCode, BENCH_CANDLES).then((cs) => (cs ? cutTo(cs, scoreDate) : null), () => null);
+    if (bench && !bench.length) bench = null;
+    const r = trendDisplayed(candles, bench, { expectedLast: scoreDate });
+    const benchName = benchCode && bench ? BENCH_NAME[benchCode] : null;
+    const benchMissing = "exclude" in b && b.exclude === "overseas" ? "overseas" : benchCode ? null : "none";
+    // 지난주 = 5거래일 전 봉까지로 같은 식 (저장한 기록이 없어도 같은 봉이면 같은 값)
+    let prev: TrendResult | null = null;
+    if (r.status === "ok" && candles.length > 5) {
+      const cut = candles.slice(0, -5);
+      const last = cut[cut.length - 1]!.date;
+      prev = trendDisplayed(cut, bench ? bench.filter((x) => x.date <= last) : null, { expectedLast: null });
+    }
+    return { r, prev, bench: benchCode && bench ? { code: benchCode, name: BENCH_NAME[benchCode] } : null, benchName, benchMissing: benchMissing as "overseas" | "none" | null };
+  }
+
+  private async trendBlock(stock: ScoreStock, market: ScoreMarket, scoreDate: string, kind: ProductKind, facts: ProductFacts | null): Promise<{ block: TrendBlock; priceDate: string | null; stored: Record<string, unknown> }> {
+    const base = {
+      version: TREND_VERSION,
+      cal: TREND_CAL.version,
+      score: null,
+      scoreExact: null,
+      scoreToday: null,
+      band: null,
+      meaning: null,
+      headline: null,
+      basisLine: null,
+      bandLine: null,
+      basis: { kind: "self" as const, code: stock.code, name: stock.name },
+      benchmark: null,
+      candleSource: null,
+      bars: null,
+      daysAveraged: null,
+      coverage: null,
+      families: [],
+      notes: [],
+      change: null,
+      reference: null,
+      leveraged: null,
+      versionLine: versionLine(null, null),
+    };
+    if (kind.kind === "inverse" || kind.kind === "bond") {
+      const text = kind.kind === "inverse" ? STATUS_TEXT.inverse : STATUS_TEXT.bond;
+      const got = await this.fetchCut(stock.code, scoreDate);
+      const priceDate = got?.candles.at(-1)?.date ?? null;
+      return { block: { ...base, status: "excluded", label: "대상 아님", reason: { code: kind.kind, text } }, priceDate, stored: { status: "excluded", reason: kind.kind } };
+    }
+    if (kind.kind === "leveraged") return this.leveragedBlock(stock, market, scoreDate, kind, base);
+
+    const got = await this.fetchCut(stock.code, scoreDate);
+    if (!got) return { block: { ...base, status: "unavailable", label: "점수 없음", reason: { code: "fetchFailed", text: STATUS_TEXT.fetchFailed } }, priceDate: null, stored: {} };
+    const t = await this.selfTrend(stock, market, scoreDate, facts, got.candles);
+    const priceDate = got.candles.at(-1)?.date ?? null;
+    const block = this.fromResult(base, t, got.source, market);
+    return { block, priceDate: block.status === "ok" ? (t.r as TrendShown).asOf : priceDate, stored: storedOf(t.r, t.prev, got.source, t.bench) };
+  }
+
+  private fromResult(
+    base: Omit<TrendBlock, "status" | "label" | "reason">,
+    t: { r: TrendResult; prev: TrendResult | null; bench: TrendBlock["benchmark"]; benchName: string | null; benchMissing: "overseas" | "none" | null },
+    source: string,
+    market: ScoreMarket,
+  ): TrendBlock {
+    const r = t.r;
+    const common = { ...base, benchmark: t.bench, candleSource: source, versionLine: versionLine(source, t.benchName) };
+    if (r.status !== "ok") {
+      const hold = r.status === "hold";
+      return { ...common, status: r.status, label: hold ? "잠시 보류" : "점수 없음", reason: { code: r.reason.code, text: hold ? `잠시 보류 — ${trendReasonText(r.reason)}` : trendReasonText(r.reason) } };
+    }
+    const score = shownScore(r.score);
+    const band = trendBand(r.score)!;
+    let change: TrendBlock["change"] = null;
+    if (t.prev?.status === "ok") {
+      const prevShown = shownScore(t.prev.score);
+      const diff = score - prevShown;
+      if (Math.abs(diff) > 5) {
+        const prevR = t.prev;
+        let best: FamilyKey | null = null;
+        let bestV = -1;
+        for (const f of FAMILY_KEYS) {
+          const a = r.families[f].score;
+          const b = prevR.families[f].score;
+          if (a === null || b === null) continue;
+          const contrib = Math.abs(TREND_WEIGHTS[f].w * (a - b));
+          if (contrib > bestV) {
+            bestV = contrib;
+            best = f;
+          }
+        }
+        if (best) {
+          const familyDiff = shownScore(r.families[best].score!) - shownScore(prevR.families[best].score!);
+          change = { from: prevR.asOf, prev: prevShown, now: score, diff, family: best, familyName: FAMILY_NAME[best], familyDiff, text: changeText({ from: prevR.asOf, diff, family: best, familyDiff }) };
+        }
+      }
+    }
+    return {
+      ...common,
+      status: "ok",
+      label: band,
+      reason: null,
+      score,
+      scoreExact: r.score,
+      scoreToday: r.scoreToday,
+      band,
+      meaning: trendMeaning(band),
+      headline: trendHeadline(score, band),
+      basisLine: basisSentence(r.asOf, market),
+      bandLine: BAND_LINE[band],
+      bars: r.bars,
+      daysAveraged: r.daysAveraged,
+      coverage: r.coverage,
+      families: familyRows(r, t.benchName),
+      notes: [...r.notes.map((n) => trendNoteText(n, t.benchMissing)), ...(r.coverage < 1 ? [`계산에 쓴 항목 비중 ${Math.round(r.coverage * 100)}%`] : [])],
+      change,
+    };
+  }
+
+  private async leveragedBlock(
+    stock: ScoreStock,
+    market: ScoreMarket,
+    scoreDate: string,
+    kind: Extract<ProductKind, { kind: "leveraged" }>,
+    base: Omit<TrendBlock, "status" | "label" | "reason">,
+  ): Promise<{ block: TrendBlock; priceDate: string | null; stored: Record<string, unknown> }> {
+    const own = await this.fetchCut(stock.code, scoreDate);
+    const L = kind.L;
+    let underlying = kind.underlying;
+    let und: { candles: Candle[]; source: string } | null = null;
+    let check: { days: number; corr: number | null; beta: number | null; ok: boolean | null } | null = null;
+    if (underlying) {
+      und = await this.fetchCut(underlying, scoreDate);
+      if (und && own) {
+        check = verifyUnderlying(own.candles, und.candles, L);
+        // 하루 수익이 L배를 따라가지 않으면 기초자산을 모르는 것으로 (이름으로 짐작한 기초는 확인되어야만 쓴다)
+        if (check.ok === false || (check.ok === null && kind.source !== "table")) underlying = null;
+      } else if (!und) underlying = null;
+    }
+    const facts = own ? leverageFacts(own.candles, underlying && und ? und.candles : null, L) : null;
+    const box = leverageBox(facts, L, underlying ? kind.tracks : null);
+    let reference: TrendBlock["reference"] = null;
+    let refStored: Record<string, unknown> | null = null;
+    if (underlying && und) {
+      const uStock = (await this.deps.sources.stock(underlying).catch(() => null)) ?? { code: underlying, name: underlying, market: isKrCode(underlying) ? "KOSPI" : "US" };
+      const uFacts = await this.deps.sources.product(underlying).catch(() => null);
+      const t = await this.selfTrend(uStock, marketOf(underlying), scoreDate, uFacts, und.candles);
+      const note = kind.tracks && /지수/.test(kind.tracks) ? proxyNote(underlying, kind.tracks) : null;
+      if (t.r.status === "ok") {
+        const s = shownScore(t.r.score);
+        const b = trendBand(t.r.score)!;
+        reference = { code: underlying, name: uStock.name, status: "ok", score: s, band: b, text: referenceText(underlying, s, b), note };
+      } else reference = { code: underlying, name: uStock.name, status: t.r.status, score: null, band: null, text: `참고: 기초자산 ${underlying} 추세 지표 점수 없음 — ${trendReasonText(t.r.reason)}`, note };
+      refStored = storedOf(t.r, null, und.source, t.bench);
+    }
+    const reason = underlying ? { code: "leveraged", text: leverageWhy(L) } : { code: "underlyingUnknown", text: STATUS_TEXT.underlyingUnknown };
+    const block: TrendBlock = {
+      ...base,
+      status: "excluded",
+      label: "이 상품 자체 점수 없음",
+      reason,
+      basis: underlying ? { kind: "underlying", code: underlying, name: reference?.name ?? underlying } : base.basis,
+      candleSource: own?.source ?? null,
+      reference,
+      leveraged: { L, underlying, tracks: underlying ? kind.tracks : null, check: check ? { days: check.days, corr: check.corr, beta: check.beta } : null, facts, box },
+      versionLine: versionLine(own?.source ?? null, null),
+    };
+    const priceDate = own?.candles.at(-1)?.date ?? null;
+    return { block, priceDate, stored: { status: "excluded", reason: reason.code, leveraged: { L, underlying, check, facts }, reference: refStored } };
+  }
+
+  private async save(resp: ScoresResponse, stored: Record<string, unknown>): Promise<void> {
+    const at = seoulIso(this.now());
+    const t = resp.trend;
+    const row = {
+      score_date: resp.asOf.priceDate!,
+      code: resp.code,
+      market: resp.market,
+      kind: "trend",
+      version: `${TREND_VERSION}/${TREND_CAL.version}`,
+      status: t.status,
+      score: t.scoreExact,
+      score_today: t.scoreToday,
+      band: t.band,
+      data: JSON.stringify({ ...stored, basis: t.basis, benchmark: t.benchmark, reason: t.reason?.code ?? null }),
+      created_at: at,
+      updated_at: at,
+    };
+    await this.deps.db
+      .insertInto("indicator_scores")
+      .values(row)
+      .onConflict((oc) =>
+        oc.columns(["code", "score_date", "kind"]).doUpdateSet({ market: row.market, version: row.version, status: row.status, score: row.score, score_today: row.score_today, band: row.band, data: row.data, updated_at: at }),
+      )
+      .execute();
+  }
+
+  /** 저장한 기록 (관리·확인용, 최근 순) */
+  async history(code: string, limit = 30): Promise<Array<{ date: string; status: string; score: number | null; band: string | null }>> {
+    const rows = await this.deps.db
+      .selectFrom("indicator_scores")
+      .select(["score_date", "status", "score", "band"])
+      .where("code", "=", normalizeCode(code))
+      .where("kind", "=", "trend")
+      .orderBy("score_date", "desc")
+      .limit(limit)
+      .execute();
+    return rows.map((r) => ({ date: r.score_date, status: r.status, score: r.score, band: r.band }));
+  }
+}
+
+/**
+ * 실제 출처로 만든 자료 묶음: 일봉은 차트와 같은 캐시(stockService.getCandles — 토스 웹 → 네이버 → 야후, 한 종목은 한 출처),
+ * 비교 지수는 지수 띠와 같은 네이버 일봉(10분 캐시), 상품 정보는 토스 웹 v2/stock-infos(24시간 캐시), 이름·시장은 등록 종목 → 종목 마스터·검색
+ */
+export function defaultScoreSources(deps: {
+  db: Db;
+  stocks: Pick<StockService, "get" | "preview" | "getCandles" | "list">;
+  indices: { candles(code: string, period: "D", count: number): Promise<CandleSeries | null> };
+  product: { productFacts(code: string): Promise<ProductFacts | null> } | null;
+}): ScoreSources {
+  const group = async (code: string) => (await deps.db.selectFrom("listed_stocks").select("group_code").where("code", "=", code).executeTakeFirst())?.group_code ?? null;
+  return {
+    stock: async (code) => {
+      const s = (await deps.stocks.get(code)) ?? (await deps.stocks.preview(code));
+      return s ? { code: s.code, name: s.name, market: s.market, groupCode: await group(s.code).catch(() => null) } : null;
+    },
+    candles: (code, count) => deps.stocks.getCandles(code, "D", count),
+    benchmark: async (code, count) => (await deps.indices.candles(code, "D", count))?.candles ?? null,
+    product: (code) => (deps.product ? deps.product.productFacts(code) : Promise.resolve(null)),
+    registered: async () => (await deps.stocks.list()).map((s) => ({ code: s.code, name: s.name, market: s.market })),
+  };
+}
+
+/** 하루 기록에 남길 입력·결과 (재현·확인용 — 봉 자체는 남기지 않고 원값·묶음·항목 점수만) */
+function storedOf(r: TrendResult, prev: TrendResult | null, source: string, bench: { code: BenchCode } | null): Record<string, unknown> {
+  if (r.status !== "ok") return { status: r.status, reason: r.reason, source, bench: bench?.code ?? null };
+  return {
+    status: "ok",
+    source,
+    bench: bench?.code ?? null,
+    asOf: r.asOf,
+    bars: r.bars,
+    daysAveraged: r.daysAveraged,
+    coverage: r.coverage,
+    scoreToday: r.scoreToday,
+    families: Object.fromEntries(FAMILY_KEYS.map((f) => [f, r.families[f].score])),
+    subs: r.subs,
+    raw: r.raw,
+    notes: r.notes,
+    prev: prev?.status === "ok" ? { asOf: prev.asOf, score: prev.score } : null,
+  };
+}

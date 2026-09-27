@@ -27,6 +27,8 @@ import { NaverNewsProvider } from "./news/naver.js";
 import { NaverStockNewsProvider } from "./news/naverStock.js";
 import type { NewsProvider } from "./news/types.js";
 import type { MarketSummarySources } from "../services/marketSummaryService.js";
+import type { ProductFacts } from "../analysis/leveraged.js";
+import type { ScoreSources } from "../services/indicatorScoreService.js";
 
 export interface Providers {
   quotes: QuoteProvider;
@@ -63,6 +65,10 @@ export interface Providers {
    * 네트워크 없이 도는 테스트 기본값(fakeProviders)이 쓴다 (플래그 marketSummary 가 켜져 있어도 출처를 부르지 않게)
    */
   marketSummary?: MarketSummarySources | null;
+  /** 토스 웹 상품 정보 (ETF·레버리지 배수·단일 종목형 — 지표 점수 3-44). 없으면 이름 규칙·정적 표로만 가린다 */
+  productInfo?: { productFacts(code: string): Promise<ProductFacts | null> } | null;
+  /** 지표 점수 자료 묶음 (없으면 app.ts 가 차트 일봉·네이버 지수·종목 목록으로 만든다 — 테스트는 기록한 일봉을 넣는다) */
+  scoreSources?: ScoreSources | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   generator: TextGenerator;
   dart: DartProvider | null;
@@ -143,6 +149,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번)
     calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log),
     regularCloseSources: { KR: [naver], US: [toss, yahoo] },
+    productInfo: toss,
     investorFlow: kis ?? tossOpenApi,
     generator,
     dart,
