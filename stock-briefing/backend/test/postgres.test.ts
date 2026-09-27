@@ -5,6 +5,8 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createDb, migrate, type Db } from "../src/db/index.js";
 import { BACKUP_TABLES, BackupService, decodeBackup, restoreBackup } from "../src/services/backupService.js";
+import { FeatureService } from "../src/services/featureService.js";
+import { TradeRecordService } from "../src/services/tradeRecordService.js";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,10 +53,52 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     // 7 = 시장 전체 요약 표 (날짜·세션 하나에 한 건)
     const idx = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename = 'market_summaries'`.execute(db);
     expect(idx.rows.map((r) => r.indexname)).toContain("uq_market_summaries_date_session");
+    // 8 = 매매 기록 (시장·거래일마다 스냅샷 한 줄, 계좌·주문번호마다 체결 한 줄). 수량·금액은 8바이트
+    const idx8 = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename in ('account_snapshots', 'trade_executions')`.execute(db);
+    expect(idx8.rows.map((r) => r.indexname)).toEqual(expect.arrayContaining(["uq_account_snapshots_date_market", "uq_trade_executions_account_order"]));
+    const types = await sql<{ column_name: string; data_type: string }>`
+      select column_name, data_type from information_schema.columns
+      where table_name = 'trade_executions' and column_name in ('quantity', 'amount', 'price') order by column_name`.execute(db);
+    expect(types.rows.map((r) => r.data_type)).toEqual(["double precision", "double precision", "double precision"]);
+  });
+
+  it("매매 기록 (3-36): 스냅샷·빈칸·체결을 Postgres 에 쓰고 다시 돌려도 늘지 않는다", async () => {
+    const clock = { t: new Date("2026-09-28T16:05:00+09:00") };
+    const toss = {
+      accounts: async () => [{ accountSeq: 3 }],
+      holdingsWithOverview: async () => ({
+        items: [{ code: "005930", name: "삼성전자", currency: "KRW" as const, quantity: 10.5, avgPrice: 70000, lastPrice: 71200, purchaseAmount: 735000, marketValue: 747600, marketValueAfterCost: 746000 }],
+        overview: { purchaseKrw: 735000, purchaseUsd: 0, afterCostKrw: 746000, afterCostUsd: 0, rateAfterCost: 0.015 },
+      }),
+      orderHistory: async () => ({
+        orders: [{ orderId: "pg-1", symbol: "005930", side: "BUY" as const, status: "CLOSED" as const, quantity: 10.5, amount: 735000, currency: null, filledAt: "2026-09-28T09:01:00+09:00", orderedAt: null, raw: {} }],
+        truncated: false,
+      }),
+    };
+    const svc = new TradeRecordService({ db, toss, features: new FeatureService(db, () => clock.t), now: () => clock.t, pauseMs: 0 });
+    try {
+      await svc.tick();
+      await svc.tick();
+      clock.t = new Date("2026-09-30T16:05:00+09:00"); // 9/29 은 빈칸
+      await svc.tick();
+      const rows = await db.selectFrom("account_snapshots").select(["snapshot_date", "status", "total_value_krw", "holdings_count"]).where("market", "=", "KR").orderBy("snapshot_date").execute();
+      expect(rows).toEqual([
+        { snapshot_date: "2026-09-28", status: "ok", total_value_krw: 747600, holdings_count: 1 },
+        { snapshot_date: "2026-09-29", status: "gap", total_value_krw: null, holdings_count: 0 },
+        { snapshot_date: "2026-09-30", status: "ok", total_value_krw: 747600, holdings_count: 1 },
+      ]);
+      expect(await db.selectFrom("trade_executions").select(["order_id", "quantity"]).execute()).toEqual([{ order_id: "pg-1", quantity: 10.5 }]);
+      const st = await svc.status();
+      expect(st).toMatchObject({ since: "2026-09-28", days: 2, trades: { count: 1, earliest: "2026-09-28" } });
+    } finally {
+      await db.deleteFrom("account_snapshots").execute();
+      await db.deleteFrom("trade_executions").execute();
+      await db.deleteFrom("meta").where("key", "=", "trade_records_state").execute();
+    }
   });
 
   it("수량·평단은 8바이트(double precision)라 토스 소수 값이 끝자리까지 그대로 돌아온다 (BH-48)", async () => {
@@ -80,7 +124,7 @@ describe.skipIf(!url)("postgres dialect", () => {
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {
@@ -172,6 +216,47 @@ describe.skipIf(!url)("postgres dialect", () => {
   });
 
   it("백업을 비운 표에 되살리고, 일련번호가 이어져 새 행을 넣을 수 있다 (3-7)", async () => {
+    // 매매 기록 두 표에도 행을 둔 채 (앞 테스트가 비워 둠) — 지난 날은 다시 받을 수 없어 JSON 백업·복구(identity overriding·setval)를 꼭 확인한다
+    const ts = "2026-09-28T16:05:00+09:00";
+    const snapRow = (date: string) => ({
+      snapshot_date: date,
+      market: "KR",
+      status: "ok",
+      method: "close",
+      as_of: ts,
+      scheduled_at: ts,
+      source: "toss-openapi",
+      reason: null,
+      holdings_count: 1,
+      total_value_krw: 747600,
+      data: JSON.stringify({ version: 1, holdings: [], accounts: [] }),
+      created_at: ts,
+      updated_at: ts,
+    });
+    const tradeRow = (orderId: string) => ({
+      account: 3,
+      order_id: orderId,
+      code: "005930",
+      market: "KR",
+      side: "BUY",
+      quantity: 10.5,
+      amount: 735000,
+      price: 70000,
+      currency: "KRW",
+      fee: null,
+      tax: null,
+      executed_at: ts,
+      executed_date: "2026-09-28",
+      time_basis: "filled",
+      order_status: "CLOSED",
+      source: "toss-orders",
+      raw: "{}",
+      fills: JSON.stringify([{ q: 10.5, a: 735000, at: ts, basis: "filled", seenAt: ts }]),
+      created_at: ts,
+      updated_at: ts,
+    });
+    await db.insertInto("account_snapshots").values(snapRow("2026-09-28")).execute();
+    await db.insertInto("trade_executions").values(tradeRow("pg-bk-1")).execute();
     const tables: Record<string, Record<string, unknown>[]> = {};
     for (const t of BACKUP_TABLES) tables[t] = (await sql<Record<string, unknown>>`select * from ${sql.table(t)}`.execute(db)).rows;
     const dir = await mkdtemp(join(tmpdir(), "pgbk-"));
@@ -192,5 +277,17 @@ describe.skipIf(!url)("postgres dialect", () => {
     await (db as unknown as { insertInto: (t: string) => { values: (v: unknown) => { execute: () => Promise<unknown> } } }).insertInto("briefings").values(row).execute();
     const n = await sql<{ n: number }>`select count(*) as n from briefings`.execute(db);
     expect(Number(n.rows[0]!.n)).toBe(before["briefings"]! + 1);
+    // 매매 기록 두 표: 되살린 값이 그대로(8바이트 수량·fills)이고, 새 행이 id 충돌 없이 들어간다
+    expect(before["account_snapshots"]).toBe(1);
+    expect(before["trade_executions"]).toBe(1);
+    expect(await db.selectFrom("trade_executions").select(["order_id", "quantity", "fills"]).execute()).toEqual([{ order_id: "pg-bk-1", quantity: 10.5, fills: tradeRow("pg-bk-1").fills }]);
+    await db.insertInto("account_snapshots").values(snapRow("2026-09-29")).execute();
+    await db.insertInto("trade_executions").values(tradeRow("pg-bk-2")).execute();
+    const ids = await db.selectFrom("trade_executions").select("id").orderBy("id").execute();
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids.map((r) => r.id)).size).toBe(2);
+    expect((await db.selectFrom("account_snapshots").select("id").execute()).length).toBe(2);
+    await db.deleteFrom("account_snapshots").execute();
+    await db.deleteFrom("trade_executions").execute();
   });
 });

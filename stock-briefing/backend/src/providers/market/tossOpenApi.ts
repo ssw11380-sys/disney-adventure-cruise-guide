@@ -783,6 +783,55 @@ export class TossOpenApiProvider implements QuoteProvider, InvestorFlowProvider,
   }
 
   /**
+   * 매매 기록(3-36)용 주문 내역: 종료된 주문(CLOSED, 100건씩 cursor 페이지, 최대 maxPages) + 진행 중 주문(OPEN) 가운데 체결 수량이 있는 것.
+   * 원화 장부(ordersForBook)와 같은 경로·칸을 읽고, 저장용으로 주문 상태와 원본(계좌번호 칸은 뺌)을 함께 준다.
+   * 주문 하나 = 한 줄이고 부분 체결은 누적 수량·금액·마지막 체결 시각으로 온다. 페이지 경계에서 같은 주문이 두 번 올 수 있다(호출한 쪽이 주문번호로 합친다).
+   * 토스가 과거를 어디까지 주는지는 API 범위에 달려 있다 — 받은 만큼만 준다. 오류는 그대로 던진다.
+   * 종료된 주문이 maxPages(원화 장부와 같은 50쪽 = 5,000건)를 넘어 다음 쪽이 남았으면 truncated — 오래된 주문이 빠졌다는 표시(호출한 쪽이 경고)
+   */
+  async orderHistory(accountSeq: number, symbol: string, maxPages = 50): Promise<TossOrderHistory> {
+    const out: TossOrderRecord[] = [];
+    const take = (orders: Json[] | undefined, status: "CLOSED" | "OPEN") => {
+      for (const o of orders ?? []) {
+        const ex = (o["execution"] as Json | undefined) ?? {};
+        const quantity = num(ex["filledQuantity"]) ?? 0;
+        const amount = num(ex["filledAmount"]);
+        const side = o["side"] === "SELL" ? "SELL" : o["side"] === "BUY" ? "BUY" : null;
+        const orderId = typeof o["orderId"] === "string" ? o["orderId"] : null;
+        if (!(quantity > 0) || amount === null || !side || !orderId) continue;
+        const cur = o["currency"] ?? ex["currency"];
+        const raw: Json = { ...o };
+        for (const k of Object.keys(raw)) if (/^account(No|Number)$/i.test(k)) delete raw[k];
+        out.push({
+          orderId,
+          symbol: String(o["symbol"] ?? symbol).toUpperCase() || symbol,
+          side,
+          status,
+          quantity,
+          amount,
+          currency: cur === "USD" || cur === "KRW" ? cur : null,
+          filledAt: typeof ex["filledAt"] === "string" ? ex["filledAt"] : null,
+          orderedAt: typeof o["orderedAt"] === "string" ? o["orderedAt"] : null,
+          raw,
+        });
+      }
+    };
+    const headers = { "X-Tossinvest-Account": String(accountSeq) };
+    let cursor: string | undefined;
+    let truncated = false;
+    for (let page = 0; page < maxPages; page++) {
+      const r = await this.client.get<{ orders?: Json[]; nextCursor?: string | null; hasNext?: boolean }>("/api/v1/orders", { status: "CLOSED", symbol, limit: 100, cursor }, headers);
+      take(r?.orders, "CLOSED");
+      if (!r?.hasNext || !r.nextCursor) break;
+      cursor = r.nextCursor;
+      if (page === maxPages - 1) truncated = true; // 다음 쪽이 남았는데 더 받지 않음
+    }
+    const open = await this.client.get<{ orders?: Json[] }>("/api/v1/orders", { status: "OPEN", symbol }, headers);
+    take(open?.orders, "OPEN");
+    return { orders: out, truncated };
+  }
+
+  /**
    * 과거 시점의 토스 매수 환율 (USD→KRW). 오류는 던진다(원화 장부가 실패와 "데이터 없음"을 구분해야 한다).
    * 그 분의 환율이 없으면(404 exchange-rate-not-found) 조금 앞 시각(체결 직전 유효 환율)들로 한 번씩 더 찾는다.
    */
@@ -831,6 +880,30 @@ function parseHoldingItems(items: Json[]): TossHolding[] {
       marketValueAfterCost: num((it["marketValue"] as Json | undefined)?.["amountAfterCost"]),
     }))
     .filter((h) => CODE_RE.test(h.code) && h.quantity > 0);
+}
+
+/** 매매 기록용 주문 내역 (orderHistory). truncated = 쪽 수 한도에 걸려 오래된 종료 주문을 다 받지 못함 */
+export interface TossOrderHistory {
+  orders: TossOrderRecord[];
+  truncated: boolean;
+}
+
+/** 매매 기록용 주문 한 줄 (orderHistory). quantity·amount 는 누적 체결 수량·금액(종목 통화) */
+export interface TossOrderRecord {
+  orderId: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  /** 받은 목록: 종료된 주문(CLOSED) 또는 진행 중 주문(OPEN, 부분 체결) */
+  status: "CLOSED" | "OPEN";
+  quantity: number;
+  amount: number;
+  /** 응답에 통화 칸이 있으면 그 값, 없으면 null (저장할 때 종목 코드로 정함) */
+  currency: "KRW" | "USD" | null;
+  /** 마지막 체결 시각 (없으면 null — 저장할 때 주문 시각으로 대신하고 그렇게 표시) */
+  filledAt: string | null;
+  orderedAt: string | null;
+  /** 원본 주문 (계좌번호 칸은 뺌). 수수료·세금 칸이 있는지는 운영에서 확인한 뒤 3-37 에서 꺼내 쓴다 */
+  raw: Record<string, unknown>;
 }
 
 export interface TossHolding {

@@ -2,6 +2,7 @@ import type { Quote } from "../../domain/types.js";
 import { isKrCode, normalizeCode } from "../../lib/codes.js";
 import { ProviderError } from "../../lib/errors.js";
 import { fetchWithTimeout } from "../../lib/timedFetch.js";
+import { seoulIso } from "../../lib/time.js";
 import type { FetchFn } from "./types.js";
 import { parseNum } from "./naver.js";
 
@@ -54,7 +55,7 @@ const NOT_FOUND_STATUS = new Set([400, 404, 409]);
 export class NaverFundamentals {
   readonly name = "naver-fundamentals";
   private readonly cache = new Map<string, { at: number; ttl: number; value: Fundamentals | null }>();
-  private fx: { at: number; rate: number } | null = null;
+  private fx: { at: number; rate: number; source: "toss" | "naver" } | null = null;
 
   /** 우선 쓸 환율 소스(토스 Open API 등). 토스 앱의 평가금과 같은 숫자를 내기 위해 토스 환율을 먼저 쓴다 */
   fxPrimary: (() => Promise<number | null>) | null = null;
@@ -79,20 +80,31 @@ export class NaverFundamentals {
 
   /** USD→KRW 환율 (1분 캐시). 실패하면 null */
   async usdKrw(): Promise<number | null> {
+    return (await this.usdKrwQuote())?.rate ?? null;
+  }
+
+  /**
+   * USD→KRW 환율과 실제 출처·받은 시각 (매매 기록 스냅샷이 원화 합계를 나중에 다시 계산·검증할 수 있게 함께 적는다).
+   *  - source: 'toss' = 우선 소스(fxPrimary, 토스 표시 환율), 'naver' = 네이버 환율(하나은행 고시)
+   *  - asOf: 그 값을 받은 시각(한국 시간 ISO). 둘 다 실패해 전에 받아 둔 값을 돌려줄 때는 그때 시각이라, 지금보다 오래됐으면 옛 값이다
+   * usdKrw() 와 같은 1분 캐시·같은 순서를 쓴다. 한 번도 못 받았으면 null
+   */
+  async usdKrwQuote(): Promise<{ rate: number; source: "toss" | "naver"; asOf: string } | null> {
     const t = this.now().getTime();
-    if (this.fx && t - this.fx.at < 60_000) return this.fx.rate;
+    const quote = (fx: { at: number; rate: number; source: "toss" | "naver" }) => ({ rate: fx.rate, source: fx.source, asOf: seoulIso(new Date(fx.at)) });
+    if (this.fx && t - this.fx.at < 60_000) return quote(this.fx);
     if (this.fxPrimary) {
       const primary = await this.fxPrimary().catch(() => null);
       if (primary && primary > 0) {
-        this.fx = { at: t, rate: primary };
-        return primary;
+        this.fx = { at: t, rate: primary, source: "toss" };
+        return quote(this.fx);
       }
     }
     const j = await this.getJson("https://api.stock.naver.com/marketindex/exchange/FX_USDKRW");
     const rate = j === FAILED ? null : parseNum((j?.["exchangeInfo"] as Json | undefined)?.["closePrice"]);
-    if (rate === null || rate <= 0) return this.fx?.rate ?? null;
-    this.fx = { at: t, rate };
-    return rate;
+    if (rate === null || rate <= 0) return this.fx ? quote(this.fx) : null;
+    this.fx = { at: t, rate, source: "naver" };
+    return quote(this.fx);
   }
 
   async get(code: string, market?: string | null): Promise<Fundamentals | null> {

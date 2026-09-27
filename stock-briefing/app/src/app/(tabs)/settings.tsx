@@ -7,6 +7,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature, useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
 import { saverLabel } from "@/lib/pollSaver";
+import { gated } from "@/lib/features";
+import { tradeRecordsLabel } from "@/lib/tradeRecords";
 import { condStats } from "@/api/condCache";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
@@ -54,6 +56,9 @@ export default function SettingsScreen() {
   const stream = useLiveStream();
   // 끊겼을 때 데이터 절약 (3-25): 서버 줄에 폴링 방식과 최근 응답 비율
   const saverOn = useFeature("pollSaver", false);
+  // 매매 기록 (3-36): 서버가 쌓는 일별 계좌 스냅샷 상태 한 줄 (읽기만). 꺼져 있거나 예전 서버면 줄 없음
+  const tradeRecordsOn = useFeature("tradeRecords", false);
+  const recordsLabel = tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords));
   const [advanced, setAdvanced] = useState(false);
   // 3-24 (emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도, lib/uxFlags connectionGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
   // 누를 때마다 새 요청이라(at) 사용자가 칸을 접은 뒤 다른 화면에서 또 눌러도 다시 펼친다. 플래그가 꺼져 있으면 검색어를 보지 않는다
@@ -236,6 +241,7 @@ export default function SettingsScreen() {
           <Row label="재무/공시" value={health.data.sources?.financials ?? "-"} />
           <Row label="수급" value={health.data.sources?.investorFlow ?? "-"} />
           <Row label="브리핑 모델" value={health.data.sources?.llm ?? "-"} />
+          {recordsLabel ? <Row label="매매 기록" value={recordsLabel} /> : null}
           {health.data.appErrors ? (
             <Row label="앱 오류 (7일)" value={`${health.data.appErrors.total}건${health.data.appErrors.fatal ? ` · 강제 종료 ${health.data.appErrors.fatal}건` : ""}`} />
           ) : null}

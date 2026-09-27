@@ -208,6 +208,63 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create unique index if not exists uq_market_summaries_date_session on market_summaries (summary_date, session)`.execute(db);
     },
   },
+  {
+    version: 8,
+    up: async (db, dialect) => {
+      // 매매 기록 기반 (3-36, 플래그 tradeRecords). 새 표 두 개만 추가하고 기존 표는 건드리지 않는다 (예전 서버로 되돌려도 모르고 지나갈 뿐).
+      // 수량·금액은 8바이트 실수 — Postgres 의 real 은 4바이트라 소수 수량 끝자리가 달라진다(BH-48, 버전 6)
+      const dbl = dialect === "postgres" ? "double precision" : "real";
+      await db.schema
+        .createTable("account_snapshots")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("snapshot_date", "text", (c) => c.notNull())
+        .addColumn("market", "text", (c) => c.notNull())
+        .addColumn("status", "text", (c) => c.notNull())
+        .addColumn("method", "text")
+        .addColumn("as_of", "text", (c) => c.notNull())
+        .addColumn("scheduled_at", "text", (c) => c.notNull())
+        .addColumn("source", "text")
+        .addColumn("reason", "text")
+        .addColumn("holdings_count", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("total_value_krw", dbl)
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      // 시장·거래일마다 한 줄 (서버가 겹쳐 떠도 두 번 쓰지 않게)
+      await sql`create unique index if not exists uq_account_snapshots_date_market on account_snapshots (snapshot_date, market)`.execute(db);
+      await db.schema
+        .createTable("trade_executions")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("account", "integer", (c) => c.notNull())
+        .addColumn("order_id", "text", (c) => c.notNull())
+        .addColumn("code", "text", (c) => c.notNull())
+        .addColumn("market", "text", (c) => c.notNull())
+        .addColumn("side", "text", (c) => c.notNull())
+        .addColumn("quantity", dbl, (c) => c.notNull())
+        .addColumn("amount", dbl, (c) => c.notNull())
+        .addColumn("price", dbl)
+        .addColumn("currency", "text", (c) => c.notNull())
+        .addColumn("fee", dbl)
+        .addColumn("tax", dbl)
+        .addColumn("executed_at", "text", (c) => c.notNull())
+        .addColumn("executed_date", "text", (c) => c.notNull())
+        .addColumn("time_basis", "text", (c) => c.notNull())
+        .addColumn("order_status", "text", (c) => c.notNull())
+        .addColumn("source", "text", (c) => c.notNull())
+        .addColumn("raw", "text", (c) => c.notNull())
+        // 받을 때마다 늘어난 체결 몫 (JSON, 없으면 null — 며칠에 걸친 부분 체결의 날짜별 몫)
+        .addColumn("fills", "text")
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      // 토스 주문번호로 중복 없음 (계좌마다)
+      await sql`create unique index if not exists uq_trade_executions_account_order on trade_executions (account, order_id)`.execute(db);
+      await sql`create index if not exists idx_trade_executions_date on trade_executions (executed_date)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

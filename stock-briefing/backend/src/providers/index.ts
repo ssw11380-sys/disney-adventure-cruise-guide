@@ -51,6 +51,11 @@ export interface Providers {
   financialsUs: FinancialsProvider | null;
   /** 휴장일·장중 판단 */
   calendar: MarketCalendar;
+  /**
+   * 정규장 종가 일봉 (매매 기록 스냅샷의 regularClose, 3-36) — 시장마다 차례로 묻는다. 한국은 네이버(KRX 정규장 일봉 — 토스 일봉은
+   * NXT 애프터마켓까지 든 통합 종가라 넣지 않음), 미국은 토스 웹(애프터마켓 체결은 봉에 넣지 않음) → Yahoo. 없으면 regularClose 는 null
+   */
+  regularCloseSources?: { KR: QuoteProvider[]; US: QuoteProvider[] } | null;
   /** 지수 띠·잔고 위젯 지수 줄 (없으면 기본 네이버 공개 JSON) */
   indices?: MarketIndices | null;
   /**
@@ -104,7 +109,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   }
   if (tossOpenApi) quoteChain.push(tossOpenApi);
   quoteChain.push(toss); // 한국(KRX+NXT 통합, 토스 앱과 같은 숫자)·미국 모두
-  quoteChain.push(new NaverFinanceProvider()); // 한국 폴백: KRX 정규장 종가 + NXT 야간 가격
+  const naver = new NaverFinanceProvider();
+  quoteChain.push(naver); // 한국 폴백: KRX 정규장 종가 + NXT 야간 가격
   quoteChain.push(yahoo);
 
   const fundamentals = new NaverFundamentals();
@@ -136,6 +142,7 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     financialsUs: new EdgarProvider(),
     // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번)
     calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log),
+    regularCloseSources: { KR: [naver], US: [toss, yahoo] },
     investorFlow: kis ?? tossOpenApi,
     generator,
     dart,

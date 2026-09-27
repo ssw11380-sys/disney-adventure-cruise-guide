@@ -1,0 +1,13 @@
+{
+  "result": {
+    "items": [
+      { "symbol": "005930", "name": "삼성전자", "marketCountry": "KR", "currency": "KRW", "quantity": "10", "lastPrice": "71200", "averagePurchasePrice": "70000", "marketValue": { "purchaseAmount": "700000", "amount": "712000", "amountAfterCost": "710519" } },
+      { "symbol": "035420", "name": "NAVER", "marketCountry": "KR", "currency": "KRW", "quantity": "9", "lastPrice": "201500", "averagePurchasePrice": "232555", "marketValue": { "purchaseAmount": "2092995", "amount": "1813500", "amountAfterCost": "1809728" } },
+      { "symbol": "SOXL", "name": "디렉시온 반도체 3배", "marketCountry": "US", "currency": "USD", "quantity": "25", "lastPrice": "38.02", "averagePurchasePrice": "33.0167", "marketValue": { "purchaseAmount": "825.4", "amount": "950.5", "amountAfterCost": "949.55" } },
+      { "symbol": "TSLA", "name": "테슬라", "marketCountry": "US", "currency": "USD", "quantity": "2.5", "lastPrice": "377.5", "averagePurchasePrice": "300", "marketValue": { "purchaseAmount": "750", "amount": "943.75", "amountAfterCost": "942.8" } }
+    ],
+    "totalPurchaseAmount": { "krw": "2792995", "usd": "1575.4" },
+    "marketValue": { "amount": { "krw": "2525500", "usd": "1894.25" }, "amountAfterCost": { "krw": "2520247", "usd": "1892.35" } },
+    "profitLoss": { "rateAfterCost": "0.0421" }
+  }
+}

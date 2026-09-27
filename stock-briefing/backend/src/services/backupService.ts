@@ -19,8 +19,11 @@ import { seoulIso } from "../lib/time.js";
  *  - 복구: src/scripts/restoreBackup.ts, 절차는 docs/DB-백업-복구.md
  */
 
-/** Postgres JSON 백업에 넣는 표 (다시 받을 수 있는 캐시 — 종목 마스터·현재가·DART 코드 — 는 뺌) */
-export const BACKUP_TABLES = ["registered_stocks", "meta", "briefings", "analyses", "devices", "app_errors", "account_briefings", "market_summaries"] as const;
+/**
+ * Postgres JSON 백업에 넣는 표 (다시 받을 수 있는 캐시 — 종목 마스터·현재가·DART 코드 — 는 뺌).
+ * 매매 기록(3-36)의 일별 스냅샷·체결은 지난 날을 다시 받을 수 없어 꼭 넣는다 (새 표가 없는 예전 백업도 그대로 되살아난다)
+ */
+export const BACKUP_TABLES = ["registered_stocks", "meta", "briefings", "analyses", "devices", "app_errors", "account_briefings", "market_summaries", "account_snapshots", "trade_executions"] as const;
 const MAGIC = Buffer.from("SBBK2\n");
 /** 헤더: MAGIC(6) + 종류(1) + salt(16) + iv(12), 끝에 인증 태그(16) */
 const HEADER = MAGIC.length + 1 + 16 + 12;
