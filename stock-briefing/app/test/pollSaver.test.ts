@@ -251,5 +251,7 @@ describe("웹소켓 다시 붙기 상한·설정 줄", () => {
   it("설정 '시세 받기' 줄", () => {
     expect(saverLabel({ recent: 0, same: 0, delta: 0, full: 0 })).toBe("아직 없음");
     expect(saverLabel({ recent: 200, same: 124, delta: 60, full: 16 })).toBe("변화 없음 62% · 바뀐 것만 30% · 전체 8%");
+    expect(saverLabel({ recent: 200, same: 124, delta: 60, full: 16, totals: { resync: 0 } })).toBe("변화 없음 62% · 바뀐 것만 30% · 전체 8%");
+    expect(saverLabel({ recent: 10, same: 5, delta: 3, full: 2, totals: { resync: 1 } })).toBe("변화 없음 50% · 바뀐 것만 30% · 전체 20% · 다시 받음 1");
   });
 });

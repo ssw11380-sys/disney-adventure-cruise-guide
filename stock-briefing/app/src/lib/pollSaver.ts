@@ -31,11 +31,15 @@ export function saverInterval(o: { open: boolean; streamFresh: boolean; failing:
   return o.unchanged >= SAVER.quietAfter ? SAVER.quietMs : SAVER.baseMs;
 }
 
-/** 설정 > 서버 '시세 받기' 줄: 최근 응답 중 변화 없음(304)·바뀐 것만(226)·전체(200) 비율 */
-export function saverLabel(s: { recent: number; same: number; delta: number; full: number }): string {
+/**
+ * 설정 > 서버 '시세 받기' 줄: 최근 응답 중 변화 없음(304)·바뀐 것만(226)·전체(200) 비율.
+ * 바뀐 것만 받은 값이 서버 값과 달라 전체를 다시 받은 적이 있으면(앱을 켠 뒤 누적) 끝에 '다시 받음 N' — 폰에서 0 인지 확인용
+ */
+export function saverLabel(s: { recent: number; same: number; delta: number; full: number; totals?: { resync: number } }): string {
   if (s.recent === 0) return "아직 없음";
   const pct = (n: number) => `${Math.round((n / s.recent) * 100)}%`;
-  return `변화 없음 ${pct(s.same)} · 바뀐 것만 ${pct(s.delta)} · 전체 ${pct(s.full)}`;
+  const resync = s.totals?.resync ? ` · 다시 받음 ${s.totals.resync}` : "";
+  return `변화 없음 ${pct(s.same)} · 바뀐 것만 ${pct(s.delta)} · 전체 ${pct(s.full)}${resync}`;
 }
 
 /** react-query 쿼리에서 여기서 쓰는 부분 */
