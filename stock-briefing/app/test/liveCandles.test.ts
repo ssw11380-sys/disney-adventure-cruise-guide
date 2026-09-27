@@ -41,8 +41,8 @@ describe("미국 일봉은 뉴욕 거래일로 (PF-02)", () => {
   });
 
   it("국내 08~09시 체결을 UTC 로 적어도 서울 날짜(다음 날) 봉", () => {
-    const next = applyTickToCandles([candle("2026-09-23", 100)], "D", 101, "2026-09-23T23:30:00Z", "005930");
-    expect(dates(next)).toEqual(["2026-09-23", "2026-09-24"]);
+    const next = applyTickToCandles([candle("2026-09-16", 100)], "D", 101, "2026-09-16T23:30:00Z", "005930");
+    expect(dates(next)).toEqual(["2026-09-16", "2026-09-17"]);
     expect(next[0]!.close).toBe(100);
   });
 });
@@ -97,9 +97,9 @@ describe("미국 주간거래(한국 낮) 체결은 다음 거래일 봉 — 토
   });
 
   it("한국 장 시작(08:00) 전 재연결 체결(값 그대로)은 오늘 임시 봉을 만들지 않는다", () => {
-    const days = [candle("2026-09-23", 100)];
-    expect(applyTickToCandles(days, "D", 100, "2026-09-24T07:30:00+09:00", "005930")).toBe(days);
-    expect(dates(applyTickToCandles(days, "D", 101, "2026-09-24T08:00:05+09:00", "005930"))).toEqual(["2026-09-23", "2026-09-24"]);
+    const days = [candle("2026-09-16", 100)];
+    expect(applyTickToCandles(days, "D", 100, "2026-09-17T07:30:00+09:00", "005930")).toBe(days);
+    expect(dates(applyTickToCandles(days, "D", 101, "2026-09-17T08:00:05+09:00", "005930"))).toEqual(["2026-09-16", "2026-09-17"]);
   });
 });
 
@@ -152,11 +152,11 @@ describe("새 주·월 체결은 지난 봉을 바꾸지 않고 새 봉 (PF-03)"
 
 describe("실시간으로 만든 봉의 거래량 (PF-04)", () => {
   it("분 경계 뒤 가격이 여러 번 움직여도 거래량을 확정된 0 으로 두지 않는다", () => {
-    let minutes = [candle("2026-09-24", 100, { time: "2026-09-24T10:00:00+09:00" })];
-    minutes = applyTickToCandles(minutes, "1m", 101, "2026-09-24T10:01:05+09:00", "005930");
-    minutes = applyTickToCandles(minutes, "1m", 103, "2026-09-24T10:01:20+09:00", "005930");
+    let minutes = [candle("2026-09-17", 100, { time: "2026-09-17T10:00:00+09:00" })];
+    minutes = applyTickToCandles(minutes, "1m", 101, "2026-09-17T10:01:05+09:00", "005930");
+    minutes = applyTickToCandles(minutes, "1m", 103, "2026-09-17T10:01:20+09:00", "005930");
     const last = minutes.at(-1)!;
-    expect(last).toMatchObject({ time: "2026-09-24T10:01:00+09:00", open: 101, high: 103, low: 101, close: 103 });
+    expect(last).toMatchObject({ time: "2026-09-17T10:01:00+09:00", open: 101, high: 103, low: 101, close: 103 });
     expect(last.volumeUnknown).toBe(true);
     // 서버에서 받은 봉은 거래량을 그대로 (체결로 고·저·종만 따라간다)
     expect(minutes[0]!.volume).toBe(100);
@@ -164,15 +164,15 @@ describe("실시간으로 만든 봉의 거래량 (PF-04)", () => {
   });
 
   it("새 일·주봉도 거래량 미확인", () => {
-    expect(applyTickToCandles([candle("2026-09-23", 100)], "D", 101, "2026-09-24T09:00:00+09:00", "005930").at(-1)!.volumeUnknown).toBe(true);
-    expect(applyTickToCandles([candle("2026-09-21", 100)], "W", 101, "2026-09-28T09:00:00+09:00", "005930").at(-1)!.volumeUnknown).toBe(true);
+    expect(applyTickToCandles([candle("2026-09-16", 100)], "D", 101, "2026-09-17T09:00:00+09:00", "005930").at(-1)!.volumeUnknown).toBe(true);
+    expect(applyTickToCandles([candle("2026-09-14", 100)], "W", 101, "2026-09-21T09:00:00+09:00", "005930").at(-1)!.volumeUnknown).toBe(true);
   });
 
   it("거래 시간 밖 체결(장 전·주말·미국 휴장일에 서버가 보낸 값 그대로의 체결)로는 새 분봉을 열지 않는다", () => {
-    const kr = [candle("2026-09-23", 100, { time: "2026-09-23T19:59:00+09:00" })];
-    expect(applyTickToCandles(kr, "1m", 100, "2026-09-24T07:30:00+09:00", "005930")).toBe(kr);
-    expect(applyTickToCandles(kr, "1m", 100, "2026-09-23T21:00:00+09:00", "005930")).toBe(kr);
-    expect(applyTickToCandles(kr, "1m", 101, "2026-09-24T08:00:05+09:00", "005930").at(-1)).toMatchObject({ time: "2026-09-24T08:00:00+09:00", volumeUnknown: true });
+    const kr = [candle("2026-09-16", 100, { time: "2026-09-16T19:59:00+09:00" })];
+    expect(applyTickToCandles(kr, "1m", 100, "2026-09-17T07:30:00+09:00", "005930")).toBe(kr);
+    expect(applyTickToCandles(kr, "1m", 100, "2026-09-16T21:00:00+09:00", "005930")).toBe(kr);
+    expect(applyTickToCandles(kr, "1m", 101, "2026-09-17T08:00:05+09:00", "005930").at(-1)).toMatchObject({ time: "2026-09-17T08:00:00+09:00", volumeUnknown: true });
     const us = [candle("2026-09-25", 200, { time: "2026-09-25T19:59:00-04:00" })];
     expect(applyTickToCandles(us, "5m", 200, "2026-09-26T11:00:00+09:00", "AAPL")).toBe(us); // 뉴욕 금 22:00 (주말 앞이라 주간거래 없음)
     const wed = [candle("2026-11-25", 200, { time: "2026-11-25T19:55:00-05:00" })];
@@ -189,7 +189,7 @@ describe("실시간으로 만든 봉의 거래량 (PF-04)", () => {
 
 describe("체결로 고친 차트 캐시는 서버에서 새로 받은 것처럼 보이지 않는다 (PF-04)", () => {
   const API = "https://server.test";
-  const T0 = Date.parse("2026-09-24T10:00:30+09:00");
+  const T0 = Date.parse("2026-09-17T10:00:30+09:00");
   const tick = (code: string, price: number, timestamp: string): StreamTick => ({ code, price, volume: 1, timestamp, source: "toss-openapi" });
   const series = (period: CandleSeries["period"], candles: Candle[]): CandleSeries => ({ code: "005930", period, candles, source: "test" });
 
@@ -197,16 +197,16 @@ describe("체결로 고친 차트 캐시는 서버에서 새로 받은 것처럼
     const { applyTicksToCache } = await import("@/lib/liveStream");
     const qc = new QueryClient();
     const key = [API, "candles", "005930", "1m", 600];
-    qc.setQueryData(key, series("1m", [candle("2026-09-24", 100, { time: "2026-09-24T10:00:00+09:00" })]), { updatedAt: T0 });
-    applyTicksToCache(qc, API, new Map([["005930", tick("005930", 103, "2026-09-24T10:01:20+09:00")]]), new Set());
+    qc.setQueryData(key, series("1m", [candle("2026-09-17", 100, { time: "2026-09-17T10:00:00+09:00" })]), { updatedAt: T0 });
+    applyTicksToCache(qc, API, new Map([["005930", tick("005930", 103, "2026-09-17T10:01:20+09:00")]]), new Set());
     expect(qc.getQueryData<CandleSeries>(key)!.candles).toHaveLength(2);
     expect(qc.getQueryState(key)!.dataUpdatedAt).toBe(T0);
     // 값이 같은 체결은 쿼리를 건드리지 않는다
     qc.invalidateQueries({ queryKey: key, refetchType: "none" });
-    applyTicksToCache(qc, API, new Map([["005930", tick("005930", 103, "2026-09-24T10:01:30+09:00")]]), new Set());
+    applyTicksToCache(qc, API, new Map([["005930", tick("005930", 103, "2026-09-17T10:01:30+09:00")]]), new Set());
     expect(qc.getQueryState(key)).toMatchObject({ dataUpdatedAt: T0, isInvalidated: true });
     // 가격이 바뀌어도 무효 표시는 남는다 (다시 볼 때 서버 봉)
-    applyTicksToCache(qc, API, new Map([["005930", tick("005930", 104, "2026-09-24T10:01:40+09:00")]]), new Set());
+    applyTicksToCache(qc, API, new Map([["005930", tick("005930", 104, "2026-09-17T10:01:40+09:00")]]), new Set());
     expect(qc.getQueryState(key)).toMatchObject({ dataUpdatedAt: T0, isInvalidated: true });
     expect(qc.getQueryData<CandleSeries>(key)!.candles.at(-1)!.close).toBe(104);
   });
@@ -215,8 +215,8 @@ describe("체결로 고친 차트 캐시는 서버에서 새로 받은 것처럼
     const { applyTicksToCache } = await import("@/lib/liveStream");
     const qc = new QueryClient();
     const key = [API, "candles", "005930", "D", 800];
-    qc.setQueryData(key, series("D", [candle("2026-09-23", 100)]), { updatedAt: T0 });
-    applyTicksToCache(qc, API, new Map([["005930", tick("005930", 101, "2026-09-24T09:00:01+09:00")]]), new Set());
+    qc.setQueryData(key, series("D", [candle("2026-09-16", 100)]), { updatedAt: T0 });
+    applyTicksToCache(qc, API, new Map([["005930", tick("005930", 101, "2026-09-17T09:00:01+09:00")]]), new Set());
     expect(qc.getQueryData<CandleSeries>(key)!.candles).toHaveLength(2);
     expect(qc.getQueryState(key)).toMatchObject({ dataUpdatedAt: T0, isInvalidated: true });
   });
@@ -241,7 +241,7 @@ describe("체결로 고친 차트 캐시는 서버에서 새로 받은 것처럼
     const { applyTicksToCache } = await import("@/lib/liveStream");
     const { holding, quote } = await import("./helpers");
     const qc = new QueryClient();
-    const old = quote("005930", 100, { prevClose: 90, change: 10, changeRate: 11.11, asOf: "2026-09-23T15:30:00+09:00" });
+    const old = quote("005930", 100, { prevClose: 90, change: 10, changeRate: 11.11, asOf: "2026-09-16T15:30:00+09:00" });
     // 이번 세션에 받은 목록(전일 시세)과 상세
     const list = [holding("005930", old, 10, 80)];
     const detail = { ...holding("005930", old, 10, 80) };
@@ -249,7 +249,7 @@ describe("체결로 고친 차트 캐시는 서버에서 새로 받은 것처럼
     qc.setQueryData([API, "stock", "005930"], detail);
     const before = { list: qc.getQueryState([API, "stocks"])!, detail: qc.getQueryState([API, "stock", "005930"])! };
     const held = new Set<string>();
-    const touched = applyTicksToCache(qc, API, new Map([["005930", tick("005930", 101, "2026-09-24T09:00:01+09:00")]]), held);
+    const touched = applyTicksToCache(qc, API, new Map([["005930", tick("005930", 101, "2026-09-17T09:00:01+09:00")]]), held);
     expect(touched).toBe(false);
     expect([...held]).toEqual(["005930"]);
     expect(qc.getQueryData([API, "stocks"])).toBe(list);
@@ -263,11 +263,11 @@ describe("체결로 고친 차트 캐시는 서버에서 새로 받은 것처럼
     const { applyTicksToCache } = await import("@/lib/liveStream");
     const { holding, quote } = await import("./helpers");
     const qc = new QueryClient();
-    const today = quote("005930", 100, { prevClose: 100, change: 0, changeRate: 0, asOf: "2026-09-24T09:00:00+09:00" });
+    const today = quote("005930", 100, { prevClose: 100, change: 0, changeRate: 0, asOf: "2026-09-17T09:00:00+09:00" });
     qc.setQueryData([API, "stocks"], [holding("005930", today, 10, 80)]);
     qc.setQueryData([API, "stock", "005930"], { ...holding("005930", today, 10, 80) });
     const held = new Set<string>();
-    expect(applyTicksToCache(qc, API, new Map([["005930", tick("005930", 101, "2026-09-24T09:00:03+09:00")]]), held)).toBe(true);
+    expect(applyTicksToCache(qc, API, new Map([["005930", tick("005930", 101, "2026-09-17T09:00:03+09:00")]]), held)).toBe(true);
     expect(held.size).toBe(0);
     expect(qc.getQueryData<{ quote: { change: number; changeRate: number } }[]>([API, "stocks"])![0]!.quote).toMatchObject({ change: 1, changeRate: 1 });
     expect(qc.getQueryData<{ quote: { price: number } }>([API, "stock", "005930"])!.quote.price).toBe(101);
@@ -312,9 +312,9 @@ describe("차트 봉 주기 갱신 (PF-04)", () => {
     const { candleRefresh } = await import("@/lib/freshness");
     const { tradingNow } = await import("@/lib/marketTime");
     const at = (iso: string) => Date.parse(iso);
-    expect(tradingNow("005930", undefined, at("2026-09-26T11:00:00+09:00"))).toBe(false); // 토
-    expect(tradingNow("005930", undefined, at("2026-09-24T10:00:00+09:00"))).toBe(true);
-    expect(tradingNow("005930", undefined, at("2026-09-24T21:00:00+09:00"))).toBe(false);
+    expect(tradingNow("005930", undefined, at("2026-09-19T11:00:00+09:00"))).toBe(false); // 토
+    expect(tradingNow("005930", undefined, at("2026-09-17T10:00:00+09:00"))).toBe(true);
+    expect(tradingNow("005930", undefined, at("2026-09-17T21:00:00+09:00"))).toBe(false);
     expect(tradingNow("AAPL", undefined, at("2026-09-27T12:00:00+09:00"))).toBe(false); // 뉴욕 토 23:00
     expect(tradingNow("AAPL", undefined, at("2026-09-28T09:30:00+09:00"))).toBe(true); // 뉴욕 일 20:30
     expect(candleRefresh("D", tradingNow("AAPL", undefined, at("2026-09-27T12:00:00+09:00"))).refetchInterval).toBe(false);
@@ -325,21 +325,21 @@ describe("주기 갱신으로 받은 서버 봉에 마지막 체결을 다시 �
   const API = "https://server.test";
   const tick = (code: string, price: number, timestamp: string): StreamTick => ({ code, price, volume: 1, timestamp, source: "toss-openapi" });
   // 서버 봉을 받은 때 (체결 10:01:20 의 10초 뒤)
-  const NOW = Date.parse("2026-09-24T10:01:30+09:00");
+  const NOW = Date.parse("2026-09-17T10:01:30+09:00");
 
   it("일봉·같은 분봉의 종가는 현재가를 따라가고(서버 거래량은 그대로), 서버에 없는 뒤 구간 봉은 붙이지 않는다", async () => {
     const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
     forgetTicks();
-    rememberTicks(API, [tick("005930", 103, "2026-09-24T10:01:20+09:00")]);
+    rememberTicks(API, [tick("005930", 103, "2026-09-17T10:01:20+09:00")]);
     // 서버 봉 캐시가 늦어 10:01 봉이 아직 없으면 그대로 — 앱이 만든 봉은 서버 봉을 다시 받으면 지워져야 한다 (다음 체결·다음 갱신이 채운다)
-    const minutes: CandleSeries = { code: "005930", period: "1m", candles: [candle("2026-09-24", 100, { time: "2026-09-24T10:00:00+09:00" })], source: "test" };
+    const minutes: CandleSeries = { code: "005930", period: "1m", candles: [candle("2026-09-17", 100, { time: "2026-09-17T10:00:00+09:00" })], source: "test" };
     expect(withLastTick(API, "005930", minutes, NOW)).toBe(minutes);
-    const sameMinute: CandleSeries = { ...minutes, candles: [...minutes.candles, candle("2026-09-24", 101, { time: "2026-09-24T10:01:00+09:00", volume: 700 })] };
-    expect(withLastTick(API, "005930", sameMinute, NOW).candles.at(-1)).toEqual({ ...candle("2026-09-24", 101, { time: "2026-09-24T10:01:00+09:00", volume: 700 }), close: 103, high: 103 });
-    const days: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-09-24", 100, { volume: 5000 })], source: "test" };
-    expect(withLastTick(API, "005930", days, NOW).candles).toEqual([{ ...candle("2026-09-24", 100, { volume: 5000 }), close: 103, high: 103 }]);
+    const sameMinute: CandleSeries = { ...minutes, candles: [...minutes.candles, candle("2026-09-17", 101, { time: "2026-09-17T10:01:00+09:00", volume: 700 })] };
+    expect(withLastTick(API, "005930", sameMinute, NOW).candles.at(-1)).toEqual({ ...candle("2026-09-17", 101, { time: "2026-09-17T10:01:00+09:00", volume: 700 }), close: 103, high: 103 });
+    const days: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-09-17", 100, { volume: 5000 })], source: "test" };
+    expect(withLastTick(API, "005930", days, NOW).candles).toEqual([{ ...candle("2026-09-17", 100, { volume: 5000 }), close: 103, high: 103 }]);
     // 서버 봉이 체결보다 새로우면(10:02 봉까지 있음) 그대로
-    const newer: CandleSeries = { ...minutes, candles: [...minutes.candles, candle("2026-09-24", 104, { time: "2026-09-24T10:02:00+09:00" })] };
+    const newer: CandleSeries = { ...minutes, candles: [...minutes.candles, candle("2026-09-17", 104, { time: "2026-09-17T10:02:00+09:00" })] };
     expect(withLastTick(API, "005930", newer, NOW)).toBe(newer);
     // 다른 서버 주소·다른 종목의 체결은 쓰지 않는다
     expect(withLastTick("https://other.test", "005930", days, NOW)).toBe(days);
@@ -349,9 +349,9 @@ describe("주기 갱신으로 받은 서버 봉에 마지막 체결을 다시 �
   it("더 오래된 체결로 덮지 않고, 연결이 끊겨 비우면 서버 봉을 그대로 쓴다", async () => {
     const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
     forgetTicks();
-    rememberTicks(API, [tick("005930", 103, "2026-09-24T10:01:20+09:00")]);
-    rememberTicks(API, [tick("005930", 99, "2026-09-24T10:01:00+09:00")]);
-    const days: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-09-24", 100)], source: "test" };
+    rememberTicks(API, [tick("005930", 103, "2026-09-17T10:01:20+09:00")]);
+    rememberTicks(API, [tick("005930", 99, "2026-09-17T10:01:00+09:00")]);
+    const days: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-09-17", 100)], source: "test" };
     expect(withLastTick(API, "005930", days, NOW).candles.at(-1)!.close).toBe(103);
     forgetTicks();
     expect(withLastTick(API, "005930", days, NOW)).toBe(days);
@@ -362,12 +362,12 @@ describe("오래된 체결은 서버 봉에 다시 얹지 않는다 — 서버�
   const API = "https://server.test";
   const at = (iso: string) => Date.parse(iso);
   // 10:00 에 삭제한 종목 X 의 마지막 체결. 서버 PriceStream 은 이 값을 잊지 않고 접속할 때마다 스냅샷에 실어 보낸다
-  const removed: StreamTick = { code: "123456", price: 50_000, volume: 1, timestamp: "2026-09-24T09:59:57+09:00", source: "toss-web" };
+  const removed: StreamTick = { code: "123456", price: 50_000, volume: 1, timestamp: "2026-09-17T09:59:57+09:00", source: "toss-web" };
   // 14:00 에 발견 탭에서 X 를 열었을 때 서버 일봉 (종가 52,000 · 저가 50,500)
   const daily: CandleSeries = {
     code: "123456",
     period: "D",
-    candles: [candle("2026-09-23", 49_000), candle("2026-09-24", 52_000, { open: 51_000, high: 52_500, low: 50_500, volume: 9_000 })],
+    candles: [candle("2026-09-16", 49_000), candle("2026-09-17", 52_000, { open: 51_000, high: 52_500, low: 50_500, volume: 9_000 })],
     source: "test",
   };
 
@@ -375,24 +375,24 @@ describe("오래된 체결은 서버 봉에 다시 얹지 않는다 — 서버�
     const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
     forgetTicks();
     rememberTicks(API, [removed]);
-    const now = at("2026-09-24T14:00:00+09:00");
+    const now = at("2026-09-17T14:00:00+09:00");
     expect(withLastTick(API, "123456", daily, now)).toBe(daily);
-    const weekly: CandleSeries = { ...daily, period: "W", candles: [candle("2026-09-21", 52_000, { low: 50_500 })] };
+    const weekly: CandleSeries = { ...daily, period: "W", candles: [candle("2026-09-14", 52_000, { low: 50_500 })] };
     expect(withLastTick(API, "123456", weekly, now)).toBe(weekly);
     const monthly: CandleSeries = { ...daily, period: "M", candles: [candle("2026-09-01", 52_000, { low: 48_000 })] };
     expect(withLastTick(API, "123456", monthly, now)).toBe(monthly);
     // 체결 뒤 2분 안에 받은 봉이면 (서버 봉 캐시가 아직 그 체결을 모를 수 있어) 얹는다
-    expect(withLastTick(API, "123456", daily, at("2026-09-24T10:01:30+09:00")).candles.at(-1)).toMatchObject({ close: 50_000, low: 50_000, volume: 9_000 });
+    expect(withLastTick(API, "123456", daily, at("2026-09-17T10:01:30+09:00")).candles.at(-1)).toMatchObject({ close: 50_000, low: 50_000, volume: 9_000 });
     forgetTicks();
   });
 
   it("접속 직후 스냅샷에 없는 종목의 체결은 잊는다 (그 서버 주소만)", async () => {
     const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
     forgetTicks();
-    const now = at("2026-09-24T10:00:30+09:00");
+    const now = at("2026-09-17T10:00:30+09:00");
     rememberTicks(API, [removed, { ...removed, code: "005930", price: 70_000 }]);
     rememberTicks("https://other.test", [removed]);
-    rememberTicks(API, [{ ...removed, code: "005930", price: 70_100, timestamp: "2026-09-24T10:00:20+09:00" }], { snapshot: true });
+    rememberTicks(API, [{ ...removed, code: "005930", price: 70_100, timestamp: "2026-09-17T10:00:20+09:00" }], { snapshot: true });
     expect(withLastTick(API, "123456", daily, now)).toBe(daily);
     expect(withLastTick(API, "005930", { ...daily, code: "005930" }, now).candles.at(-1)!.close).toBe(70_100);
     expect(withLastTick("https://other.test", "123456", daily, now).candles.at(-1)!.close).toBe(50_000);
@@ -404,25 +404,21 @@ describe("오래된 체결은 서버 봉에 다시 얹지 않는다 — 서버�
     const qc = new QueryClient();
     const key = [API, "candles", "123456", "D", 800];
     // 14:00 에 받은 봉을 보던 중 앱을 잠깐 내렸다가 14:02 에 다시 붙었다
-    qc.setQueryData(key, daily, { updatedAt: at("2026-09-24T14:00:00+09:00") });
-    applyTicksToCache(qc, API, new Map([["123456", removed]]), new Set(), at("2026-09-24T14:02:00+09:00"), { snapshot: true });
+    qc.setQueryData(key, daily, { updatedAt: at("2026-09-17T14:00:00+09:00") });
+    applyTicksToCache(qc, API, new Map([["123456", removed]]), new Set(), at("2026-09-17T14:02:00+09:00"), { snapshot: true });
     expect(qc.getQueryData(key)).toBe(daily);
     // 15:00 에 받은 봉 → 16:00 에 다시 붙었을 때 스냅샷의 15:30 체결(내려 둔 사이의 체결)은 봉에 얹는다
-    qc.setQueryData(key, daily, { updatedAt: at("2026-09-24T15:00:00+09:00") });
-    applyTicksToCache(qc, API, new Map([["123456", { ...removed, price: 53_000, timestamp: "2026-09-24T15:30:00+09:00" }]]), new Set(), at("2026-09-24T16:00:00+09:00"), { snapshot: true });
+    qc.setQueryData(key, daily, { updatedAt: at("2026-09-17T15:00:00+09:00") });
+    applyTicksToCache(qc, API, new Map([["123456", { ...removed, price: 53_000, timestamp: "2026-09-17T15:30:00+09:00" }]]), new Set(), at("2026-09-17T16:00:00+09:00"), { snapshot: true });
     expect(qc.getQueryData<CandleSeries>(key)!.candles.at(-1)).toMatchObject({ close: 53_000, high: 53_000, low: 50_500, volume: 9_000 });
     qc.clear();
   });
 });
 
-describe("한국 평일 휴장일(한글날 2026-10-09 금)에 앱이 만든 봉은 서버 봉을 다시 받으면 남지 않는다 (PF-04 검증 지적)", () => {
+describe("한국 평일 휴장일(한글날 2026-10-09 금 — 목록 KR_HOLIDAYS)의 체결로는 봉을 열지 않는다", () => {
   const API = "https://server.test";
-  // 받은 시각은 실제 지금 기준 (미래 시각이면 react-query 가 새 값으로 보고 다시 받지 않는다)
-  const T0 = Date.now() - 60_000;
-  // 서버 스냅샷: 값은 10/08 종가 그대로인데 시각만 서버가 마지막으로 폴링한 휴장일 시각 (tradingDate 는 한국 휴장일을 몰라 10/09 로 본다)
+  // 서버 스냅샷: 값은 10/08 종가 그대로인데 시각만 서버가 마지막으로 폴링한 휴장일 시각 → 거래일은 직전 거래일 10/08
   const holidayTick: StreamTick = { code: "005930", price: 100, volume: null, timestamp: "2026-10-09T10:00:03+09:00", source: "toss-web" };
-  // 서버 봉을 받은 때: 스냅샷 체결 10초 뒤 (오래된 체결이라 얹지 않는 경우와 섞이지 않게 — 오늘 날짜와 무관하게)
-  const holidayNow = Date.parse(holidayTick.timestamp) + 10_000;
   const daily: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-10-07", 99, { volume: 4000 }), candle("2026-10-08", 100, { volume: 5000 })], source: "test" };
   const minutes: CandleSeries = {
     code: "005930",
@@ -431,13 +427,68 @@ describe("한국 평일 휴장일(한글날 2026-10-09 금)에 앱이 만든 봉
     source: "test",
   };
 
-  it("withLastTick: 10/08 에서 끝나는 서버 봉에 10/09 봉을 붙이지 않는다 (일·1분·주봉)", async () => {
+  it("일봉은 10/08 봉 그대로(값이 같으면 같은 배열), 분봉은 거래 시간 밖이라 새 봉 없음, 주봉은 같은 주", () => {
+    expect(applyTickToCandles(daily.candles, "D", 100, holidayTick.timestamp, "005930")).toBe(daily.candles);
+    expect(applyTickToCandles(minutes.candles, "1m", 100, holidayTick.timestamp, "005930")).toBe(minutes.candles);
+    expect(applyTickToCandles(minutes.candles, "1m", 101, holidayTick.timestamp, "005930")).toBe(minutes.candles);
+    const weekly = [candle("2026-10-05", 100)];
+    expect(applyTickToCandles(weekly, "W", 100, holidayTick.timestamp, "005930")).toBe(weekly);
+    // 추석(9/24·9/25)·개천절 대체공휴일(10/5 월)·연말(12/31)·2027 설 대체공휴일(2/9)도 같다 — 직전 거래일 봉에 붙는다
+    for (const [last, at] of [
+      ["2026-09-23", "2026-09-24T10:00:00+09:00"],
+      ["2026-09-23", "2026-09-25T14:00:00+09:00"],
+      ["2026-10-02", "2026-10-05T09:30:00+09:00"],
+      ["2026-12-30", "2026-12-31T10:00:00+09:00"],
+      ["2027-02-05", "2027-02-09T10:00:00+09:00"],
+    ] as const) {
+      const cs = [candle(last, 100)];
+      expect(applyTickToCandles(cs, "D", 100, at, "005930"), at).toBe(cs);
+      expect(dates(applyTickToCandles(cs, "D", 101, at, "005930")), at).toEqual([last]);
+    }
+    // 휴장 다음 거래일(10/12 월)의 첫 체결은 새 봉
+    expect(dates(applyTickToCandles(daily.candles, "D", 101, "2026-10-12T08:00:05+09:00", "005930"))).toEqual(["2026-10-07", "2026-10-08", "2026-10-12"]);
+  });
+
+  it("연결 중 체결(스냅샷이 아닌 ticks)도 일·분봉을 열지 않고 서버 봉을 다시 받게 하지 않는다", async () => {
+    const { applyTicksToCache } = await import("@/lib/liveStream");
+    const qc = new QueryClient();
+    const dKey = [API, "candles", "005930", "D", 800];
+    const mKey = [API, "candles", "005930", "1m", 600];
+    const loadedAt = Date.parse("2026-10-09T09:58:00+09:00");
+    qc.setQueryData(dKey, daily, { updatedAt: loadedAt });
+    qc.setQueryData(mKey, minutes, { updatedAt: loadedAt });
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    applyTicksToCache(qc, API, new Map([["005930", holidayTick]]), new Set(), loadedAt + 90_000);
+    expect(qc.getQueryData(dKey)).toBe(daily);
+    expect(qc.getQueryData(mKey)).toBe(minutes);
+    expect(spy).not.toHaveBeenCalled();
+    qc.clear();
+  });
+});
+
+describe("목록에 없는 임시 휴장일(예: 2026-10-15 목)에 앱이 만든 봉은 서버 봉을 다시 받으면 남지 않는다 (PF-04 검증 지적)", () => {
+  const API = "https://server.test";
+  // 받은 시각은 실제 지금 기준 (미래 시각이면 react-query 가 새 값으로 보고 다시 받지 않는다)
+  const T0 = Date.now() - 60_000;
+  // 서버 스냅샷: 값은 10/14 종가 그대로인데 시각만 서버가 마지막으로 폴링한 휴장일 시각 (목록에 없는 휴장일이라 tradingDate 는 10/15 로 본다)
+  const holidayTick: StreamTick = { code: "005930", price: 100, volume: null, timestamp: "2026-10-15T10:00:03+09:00", source: "toss-web" };
+  // 서버 봉을 받은 때: 스냅샷 체결 10초 뒤 (오래된 체결이라 얹지 않는 경우와 섞이지 않게 — 오늘 날짜와 무관하게)
+  const holidayNow = Date.parse(holidayTick.timestamp) + 10_000;
+  const daily: CandleSeries = { code: "005930", period: "D", candles: [candle("2026-10-13", 99, { volume: 4000 }), candle("2026-10-14", 100, { volume: 5000 })], source: "test" };
+  const minutes: CandleSeries = {
+    code: "005930",
+    period: "1m",
+    candles: [candle("2026-10-14", 99, { time: "2026-10-14T19:58:00+09:00" }), candle("2026-10-14", 100, { time: "2026-10-14T19:59:00+09:00" })],
+    source: "test",
+  };
+
+  it("withLastTick: 10/14 에서 끝나는 서버 봉에 10/15 봉을 붙이지 않는다 (일·1분·주봉)", async () => {
     const { rememberTicks, forgetTicks, withLastTick } = await import("@/lib/liveStream");
     forgetTicks();
     rememberTicks(API, [holidayTick]);
     expect(withLastTick(API, "005930", daily, holidayNow)).toBe(daily);
     expect(withLastTick(API, "005930", minutes, holidayNow)).toBe(minutes);
-    const weekly: CandleSeries = { ...daily, period: "W", candles: [candle("2026-10-05", 100)] };
+    const weekly: CandleSeries = { ...daily, period: "W", candles: [candle("2026-10-12", 100)] };
     expect(withLastTick(API, "005930", weekly, holidayNow)).toBe(weekly); // 같은 주, 값도 같다
     forgetTicks();
   });
@@ -445,7 +496,7 @@ describe("한국 평일 휴장일(한글날 2026-10-09 금)에 앱이 만든 봉
   it.each([
     ["D", daily, 800],
     ["1m", minutes, 600],
-  ] as const)("%s: 체결로 연 10/09 봉(거래량 미확인)은 주기 갱신으로 서버 봉을 다시 받으면 없어진다", async (period, server, count) => {
+  ] as const)("%s: 체결로 연 10/15 봉(거래량 미확인)은 주기 갱신으로 서버 봉을 다시 받으면 없어진다", async (period, server, count) => {
     const { rememberTicks, forgetTicks, withLastTick, applyTicksToCache } = await import("@/lib/liveStream");
     forgetTicks();
     const qc = new QueryClient();
@@ -454,12 +505,12 @@ describe("한국 평일 휴장일(한글날 2026-10-09 금)에 앱이 만든 봉
     rememberTicks(API, [holidayTick]);
     // 연결 중 체결은 새 봉을 연다 (원래 동작 — 다음 갱신이 바로잡는다)
     applyTicksToCache(qc, API, new Map([["005930", holidayTick]]), new Set(), T0 + 1_000);
-    expect(qc.getQueryData<CandleSeries>(key)!.candles.at(-1)).toMatchObject({ date: "2026-10-09", volumeUnknown: true });
+    expect(qc.getQueryData<CandleSeries>(key)!.candles.at(-1)).toMatchObject({ date: "2026-10-15", volumeUnknown: true });
     // 서버 봉을 다시 받는다 (useCandles 의 queryFn 과 같은 경로: 받은 봉 + 마지막 체결)
     for (let i = 0; i < 2; i++) {
       await qc.fetchQuery({ queryKey: key, queryFn: async () => withLastTick(API, "005930", server, holidayNow), staleTime: 0 });
       const after = qc.getQueryData<CandleSeries>(key)!;
-      expect(dates(after.candles)).not.toContain("2026-10-09");
+      expect(dates(after.candles)).not.toContain("2026-10-15");
       expect(after.candles).toEqual(server.candles);
     }
     forgetTicks();
@@ -474,7 +525,7 @@ describe("한국 평일 휴장일(한글날 2026-10-09 금)에 앱이 만든 봉
     // 서버 봉을 받은 지 1분이 넘었다 = 주기 갱신이 돌지 않는 중 → 바로 다시 받는다
     qc.setQueryData(key, minutes, { updatedAt: T0 });
     applyTicksToCache(qc, API, new Map([["005930", holidayTick]]), new Set(), T0 + 90_000);
-    expect(qc.getQueryData<CandleSeries>(key)!.candles.at(-1)).toMatchObject({ date: "2026-10-09", volumeUnknown: true });
+    expect(qc.getQueryData<CandleSeries>(key)!.candles.at(-1)).toMatchObject({ date: "2026-10-15", volumeUnknown: true });
     expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ queryKey: key, refetchType: "active" }), expect.anything());
     // 장중처럼 방금(30초 주기 안) 받은 서버 봉이면 표시만 — 분마다 요청을 더하지 않는다
     qc.setQueryData(key, minutes, { updatedAt: T0 });
@@ -489,16 +540,16 @@ describe("한국 평일 휴장일(한글날 2026-10-09 금)에 앱이 만든 봉
     const dKey = [API, "candles", "005930", "D", 800];
     const mKey = [API, "candles", "005930", "1m", 600];
     // 봉을 받은 때는 스냅샷 체결 시각 근처로 고정 (오늘 날짜와 무관하게 — 스냅샷 체결은 봉을 받은 때와 비교한다)
-    const loadedAt = Date.parse("2026-10-08T19:59:00+09:00");
+    const loadedAt = Date.parse("2026-10-14T19:59:00+09:00");
     qc.setQueryData(dKey, daily, { updatedAt: loadedAt });
     qc.setQueryData(mKey, minutes, { updatedAt: loadedAt });
     applyTicksToCache(qc, API, new Map([["005930", holidayTick]]), new Set(), loadedAt + 30_000, { snapshot: true });
     expect(qc.getQueryData(dKey)).toBe(daily);
     expect(qc.getQueryData(mKey)).toBe(minutes);
     // 평일 장중 스냅샷이 서버 마지막 봉과 같은 구간이면 종가는 따라간다
-    applyTicksToCache(qc, API, new Map([["005930", { ...holidayTick, price: 101, timestamp: "2026-10-08T19:59:30+09:00" }]]), new Set(), loadedAt + 30_000, { snapshot: true });
-    expect(qc.getQueryData<CandleSeries>(dKey)!.candles.at(-1)).toMatchObject({ date: "2026-10-08", close: 101, volume: 5000 });
-    expect(qc.getQueryData<CandleSeries>(mKey)!.candles.at(-1)).toMatchObject({ time: "2026-10-08T19:59:00+09:00", close: 101 });
+    applyTicksToCache(qc, API, new Map([["005930", { ...holidayTick, price: 101, timestamp: "2026-10-14T19:59:30+09:00" }]]), new Set(), loadedAt + 30_000, { snapshot: true });
+    expect(qc.getQueryData<CandleSeries>(dKey)!.candles.at(-1)).toMatchObject({ date: "2026-10-14", close: 101, volume: 5000 });
+    expect(qc.getQueryData<CandleSeries>(mKey)!.candles.at(-1)).toMatchObject({ time: "2026-10-14T19:59:00+09:00", close: 101 });
     qc.clear();
   });
 });

@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useFeature } from "@/api/hooks";
 import type { Candle, CandlePeriod, ChartUnit, Currency, Quote } from "@/api/types";
+import { krQuoteDate } from "@/lib/chartBasis";
 import { candleChartSize, estimateTextWidth, pastViewLabel } from "@/lib/chartLayout";
 import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
@@ -33,12 +34,6 @@ const PAST_STRIP_MIN = 120;
 const PAST_OUT = (touch.min - CHIP_H) / 2;
 /** 조작 줄 순서: 자주 쓰는 일·주·월 먼저, 분봉은 뒤 (가로로 넘겨서) */
 const TOOL_ORDER = (["D", "W", "M", "1m", "5m", "30m"] as CandlePeriod[]).map((v) => PERIOD_OPTIONS.find((o) => o.value === v)!);
-
-/** 국내 종목 시세 시각의 한국 날짜 (일봉 날짜와 비교). 해외는 거래소 날짜가 달라 쓰지 않는다 */
-function kstDate(asOf: string | null | undefined): string | null {
-  const ms = asOf ? Date.parse(asOf) : NaN;
-  return Number.isFinite(ms) ? new Date(ms + 9 * 3_600_000).toISOString().slice(0, 10) : null;
-}
 
 export function CandleChart({
   candles,
@@ -255,7 +250,7 @@ export function CandleChart({
           avgPrice={conv(avgPrice)}
           currentPrice={conv(quote?.price)}
           prevClose={conv(quote?.prevClose)}
-          latestDate={currency === "KRW" ? kstDate(quote?.asOf) : null}
+          latestDate={currency === "KRW" ? krQuoteDate(quote?.asOf) : null /* 국내 종목 시세의 한국 거래일 (해외는 거래소 날짜가 달라 쓰지 않는다) */}
           high52w={conv(quote?.high52w)}
           low52w={conv(quote?.low52w)}
           showMaValues={!compact}

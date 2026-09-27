@@ -140,15 +140,41 @@ describe("위젯-3: 시세 없는 보유 종목", () => {
   });
 
   it("어제 값으로 채우면 등락은 0 (지난 거래일 등락이 오늘 손익에 들어가지 않게)", () => {
-    const yesterday = [holding("005930", quote("005930", 70_000, { change: 5_000, changeRate: 7.7, asOf: "2026-09-23T15:30:00+09:00" }), 10, 60_000)];
+    // 평범한 거래일(9/23 수 15:40)에 9/22(화) 값으로 채움
+    const wed = Date.parse("2026-09-23T15:40:00+09:00");
+    const yesterday = [holding("005930", quote("005930", 70_000, { change: 5_000, changeRate: 7.7, asOf: "2026-09-22T15:30:00+09:00" }), 10, 60_000)];
     const now = [{ ...yesterday[0]!, quote: null, evaluation: null }];
-    const f = fillFromLast(now, yesterday, NOW);
+    const f = fillFromLast(now, yesterday, wed);
     expect(f.filled).toEqual(["005930"]);
     expect(f.stocks[0]!.quote!.change).toBe(0);
     expect(f.stocks[0]!.quote!.price).toBe(70_000);
     // 오늘 값이면 등락 유지
-    const today = [holding("005930", quote("005930", 70_000, { change: 5_000, asOf: AT_CLOSE }), 10, 60_000)];
-    expect(fillFromLast(now, today, NOW).stocks[0]!.quote!.change).toBe(5_000);
+    const today = [holding("005930", quote("005930", 70_000, { change: 5_000, asOf: "2026-09-23T15:30:00+09:00" }), 10, 60_000)];
+    expect(fillFromLast(now, today, wed).stocks[0]!.quote!.change).toBe(5_000);
+  });
+
+  it("한국 평일 휴장일(추석 9/24·9/25)에는 주말처럼 직전 거래일(9/23) 등락을 그대로 둔다 — 휴장일을 새 거래일로 보지 않는다", () => {
+    const wedClose = [holding("005930", quote("005930", 70_000, { change: 5_000, changeRate: 7.7, asOf: "2026-09-23T15:30:00+09:00" }), 10, 60_000)];
+    const gone = [{ ...wedClose[0]!, quote: null, evaluation: null }];
+    for (const t of ["2026-09-24T15:40:00+09:00", "2026-09-25T10:00:00+09:00", "2026-09-26T12:00:00+09:00", "2026-09-28T07:30:00+09:00"]) {
+      expect(fillFromLast(gone, wedClose, Date.parse(t)).stocks[0]!.quote!.change, t).toBe(5_000);
+    }
+    // 휴장 뒤 첫 거래일(9/28 월 08:00~)에는 지난 거래일 값이라 0
+    expect(fillFromLast(gone, wedClose, Date.parse("2026-09-28T09:10:00+09:00")).stocks[0]!.quote!.change).toBe(0);
+  });
+
+  it("다듬은 지수 줄: 한국 평일 휴장일(추석) 09:00 뒤에는 9/23 코스피를 흐리게 + '9/23', 그 주말·평일 장 전은 흐리지 않는다", async () => {
+    const { lastOpenedSession, polishedIndexItems } = await import("@/widgets/model");
+    const kospi = [{ code: "KOSPI", name: "코스피", value: 7080.92, change: 63.01, changeRate: 0.9, asOf: "2026-09-23T15:30:00+09:00" }];
+    const tagAt = (iso: string) => polishedIndexItems(kospi, Date.parse(iso), false)[0]!.tag;
+    expect(lastOpenedSession(Date.parse("2026-09-24T10:00:00+09:00"), "005930")).toBe("2026-09-24");
+    expect(tagAt("2026-09-24T10:00:00+09:00")).toBe("9/23");
+    expect(tagAt("2026-09-25T08:30:00+09:00")).toBe("9/23"); // 9/25 장 전 = 9/24(휴장) 세션
+    expect(tagAt("2026-10-05T10:00:00+09:00")).toBe("9/23"); // 개천절 대체공휴일(값이 더 옛날이면 그 날짜)
+    expect(tagAt("2026-09-24T08:30:00+09:00")).toBeNull(); // 휴장일 09:00 전 = 9/23 세션
+    expect(tagAt("2026-09-26T12:00:00+09:00")).toBeNull(); // 토요일: 직전 거래일 9/23 값이 지금 값
+    expect(lastOpenedSession(Date.parse("2026-09-27T12:00:00+09:00"), "005930")).toBe("2026-09-23");
+    expect(tagAt("2026-09-28T10:00:00+09:00")).toBe("9/23"); // 휴장 뒤 첫 거래일 장중에 옛 값
   });
 
   it("BH-40: 미국 종목은 뉴욕 거래일로 본다 — 한국 자정이 지나도 같은 뉴욕 세션이면 등락 유지, 한국 날짜가 같아도 다른 뉴욕 세션이면 0", () => {

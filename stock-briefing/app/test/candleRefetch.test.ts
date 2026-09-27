@@ -15,7 +15,7 @@ const { applyTicksToCache, forgetTicks, rememberTicks } = await import("@/lib/li
 const API = "https://server.test";
 const CODE = "005930";
 // 한국 장중 (목)
-const START = Date.parse("2026-09-24T10:00:00+09:00");
+const START = Date.parse("2026-09-17T10:00:00+09:00");
 const candle = (date: string, close: number, extra: Partial<Candle> = {}): Candle => ({ date, open: close, high: close, low: close, close, volume: 100, ...extra });
 
 describe("refetchDue: 다음 서버 요청까지 남은 시간 (PF-04 검증 지적)", () => {
@@ -59,13 +59,13 @@ describe("체결이 차트 캐시를 계속 고쳐도 서버 봉 주기 갱신�
     const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
     let calls = 0;
     const count = 800;
-    const time = period === "D" ? undefined : "2026-09-24T10:00:00+09:00";
+    const time = period === "D" ? undefined : "2026-09-17T10:00:00+09:00";
     const api = {
       getCandles: async (): Promise<CandleSeries> => {
         calls++;
         if (o.fail?.(calls)) throw new Error("서버 오류");
         // 서버 봉: 받을 때마다 거래량이 늘어 있다 (체결로는 모르는 값)
-        return { code: CODE, period, candles: [candle("2026-09-23", 100), candle("2026-09-24", 100, { volume: 1_000 * calls, time })], source: "test" };
+        return { code: CODE, period, candles: [candle("2026-09-16", 100), candle("2026-09-17", 100, { volume: 1_000 * calls, time })], source: "test" };
       },
     };
     const options = (appFocused: boolean) => candlesQuery(api, API, CODE, period, count, { trading: o.trading ?? true, appFocused });

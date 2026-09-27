@@ -204,13 +204,12 @@ export function marketContext(code: string, status: MarketStatus | null, now: Da
 }
 
 /**
- * 체결·시세가 속한 거래일 YYYY-MM-DD (앱 lib/marketTime 의 tradingDate 와 같은 규칙 — 한국 평일 휴장일만 아래 주의대로 다르다).
+ * 체결·시세가 속한 거래일 YYYY-MM-DD (앱 lib/marketTime 의 tradingDate 와 같은 규칙).
  *  - 한국은 서울 날짜, 단 08:00(NXT 프리마켓 시작) 전은 전날 — 토스 웹·네이버 시세는 받은 시각이 asOf 라 장 시작 전에 받은 지난 거래일 시세에
  *    08:00 첫 체결을 붙이지 않게 (그 시간엔 한국 체결이 없다)
  *  - 미국은 뉴욕 날짜, 단 뉴욕 20:00 이후(애프터마켓이 끝난 뒤 주간거래)는 다음 날 정규장에 딸린 세션이라 다음 날 (토스도 다음 거래일 봉에 넣는다)
  *  - 거래가 없는 날(토·일, 미국 휴장일 US_HOLIDAYS, 한국 평일 휴장일 KR_HOLIDAYS)은 직전 거래일로 본다.
- *    주의: 앱 lib/marketTime 은 아직 한국 평일 휴장일(KR_HOLIDAYS)을 보지 않는다 (위젯 작업과 겹쳐 미룬 일 — docs/진행상황.md).
- *    그래서 한국 평일 휴장일에 온 체결은 서버는 직전 거래일로, 앱은 그날로 봐서 둘이 다를 수 있다 (토·일·미국 휴장일은 같다)
+ *    앱 lib/marketTime 도 2026-09-27 부터 같은 두 목록을 본다 (예전에는 앱만 한국 평일 휴장일을 그날로 봤다)
  */
 export function tradingDate(iso: string, kr: boolean): string {
   const p = parts(new Date(iso), kr ? "Asia/Seoul" : "America/New_York");

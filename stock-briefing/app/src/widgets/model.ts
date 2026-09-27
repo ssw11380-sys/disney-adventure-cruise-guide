@@ -10,7 +10,7 @@ import type { RegisteredWithQuote } from "@/api/types";
 
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { formatIndexValue, formatPct } from "@/lib/format";
-import { isKrCode, marketClock, marketDate, tradingDate } from "@/lib/marketTime";
+import { isKrCode, krHolidayName, marketClock, marketDate, tradingDate } from "@/lib/marketTime";
 import { WIDGET_COLORS, type WidgetPalette } from "./palette";
 import { WIDGET_INDEX_CODES, type WidgetBrief, type WidgetMarket } from "./payload";
 
@@ -34,7 +34,8 @@ export const FILL_MAX_AGE_MS = 7 * 86_400_000;
  * 이번에 시세를 못 받은 보유 종목을 마지막으로 받은 값으로 채운다.
  *  - 수량·평단이 그대로일 때만 (매매 뒤 옛 평가를 쓰지 않게), 시세 시각이 7일 이내일 때만
  *  - 시세가 지금과 같은 거래일 것이 아니면 등락을 0 으로 둔다 → 지난 거래일 등락이 "오늘 손익"에 들어가지 않게.
- *    거래일은 종목 시장 기준(lib/marketTime tradingDate — 한국은 서울 08:00, 미국은 뉴욕 20:00 에 바뀜).
+ *    거래일은 종목 시장 기준(lib/marketTime tradingDate — 한국은 서울 08:00, 미국은 뉴욕 20:00 에 바뀜, 주말·휴장일은 직전 거래일).
+ *    그래서 추석처럼 한국 평일 휴장일에는 주말처럼 직전 거래일 등락을 그대로 둔다 (예전에는 휴장일을 몰라 0 이 됐다).
  *    예전에는 모든 종목을 한국 날짜로 봐서, 한국 자정이 지나면 같은 뉴욕 정규장인데도 미국 종목 등락이 0 이 됐다 (BH-40)
  */
 export function fillFromLast(stocks: RegisteredWithQuote[], last: RegisteredWithQuote[] | null, now: number): { stocks: RegisteredWithQuote[]; filled: string[] } {
@@ -351,7 +352,12 @@ const US_REF = "AAPL";
 /** 정규장이 열리는 현지 시각(분): 한국 09:00, 미국 09:30 */
 const OPEN_MIN = { kr: 9 * 60, us: 9 * 60 + 30 } as const;
 
-/** 지금까지 열린 가장 최근 정규장의 날짜 (시장 현지). 오늘 장이 아직 안 열렸으면 전 거래일 (주말·미국 휴장일은 건너뛴다) */
+/**
+ * 지금까지 열린 가장 최근 정규장의 날짜 (시장 현지). 오늘 장이 아직 안 열렸으면 전 거래일 (주말·미국 휴장일은 건너뛴다).
+ * 한국 평일 휴장일(KR_HOLIDAYS — 추석 등)은 장이 열리지 않았어도 그날(정규장 시각이 지났으면)을 돌려준다 → 휴장 중 직전 거래일 값(9/23 코스피)은
+ * '지난 값'(흐리게 + 날짜)으로 보인다. 칩 '한국 휴장'·브리핑 위젯 첫 줄('코스피 +0.90% 9/23')과 같은 모습이고, 토·일은 예전처럼 직전 거래일이라 흐리지 않는다.
+ * (lib/marketTime 이 한국 휴장일을 모르던 때의 모습을 일부러 남긴 것 — 평일에 받은 값이 오늘 것처럼 보이지 않게)
+ */
 export function lastOpenedSession(now: number, ref: string): string | null {
   const clock = marketClock(new Date(now).toISOString(), ref);
   if (!clock) return null;
@@ -362,6 +368,7 @@ export function lastOpenedSession(now: number, ref: string): string | null {
     d.setUTCDate(d.getUTCDate() - 1);
     date = d.toISOString().slice(0, 10);
   }
+  if (isKrCode(ref) && krHolidayName(date)) return date;
   // 그 날 낮 12시(한국 08:00 뒤·뉴욕 20:00 전이라 날짜가 그대로)의 거래일 = 주말·휴장일이면 직전 거래일
   return tradingDate(`${date}T12:00:00${clock.offset}`, ref);
 }

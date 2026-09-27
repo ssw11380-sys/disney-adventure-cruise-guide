@@ -89,7 +89,7 @@ const US_OVERNIGHT_FROM_H = 20;
 
 /**
  * 뉴욕증권거래소 평일 휴장일 (현지 날짜). 서버 marketContext.US_HOLIDAYS 와 같은 목록 — 해마다 둘 다 추가한다(app/test 가 두 목록이 같은지, 내년 끝까지 있는지 본다).
- * 없으면 평일로 본다. 한국 평일 휴장일 목록은 아래 KR_HOLIDAYS (장 상태는 서버 달력 값을 쓴다)
+ * 없으면 평일로 본다. 한국 평일 휴장일 목록은 아래 KR_HOLIDAYS (장 상태를 받았으면 서버 달력 값을 쓴다)
  */
 const US_HOLIDAYS = new Set([
   "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
@@ -144,13 +144,15 @@ function addDays(date: string, n: number): string {
 const weekdayOf = (date: string) => new Date(`${date}T00:00:00Z`).getUTCDay();
 
 /**
- * 그 시장이 거래하는 날인지: 토·일이 아니고, 미국은 휴장일도 아님.
- * 한국 평일 휴장일(KR_HOLIDAYS)은 아직 여기서 보지 않는다 — 체결 봉·위젯 시세 날짜가 이 함수를 같이 쓰므로, 위젯 작업이 끝난 뒤
- * 차트·위젯 테스트와 함께 바꾼다 (docs/진행상황.md '알려진 한계'). 서버 요약·브리핑 휴장 판단은 이미 목록을 본다
+ * 그 시장이 거래하는 날인지: 토·일이 아니고, 그 시장의 평일 휴장일(한국 KR_HOLIDAYS · 미국 US_HOLIDAYS)도 아님.
+ * 서버 marketContext.isKrTradingDate · isUsTradingDate 와 같다. 체결 봉 날짜(tradingDate)·거래 시간(inTradingHours)·
+ * 장 상태를 모를 때의 차트 갱신 주기(tradingNow)·위젯 시세 날짜가 모두 이 함수로 거래일을 가린다.
+ * (예전에는 한국 평일 휴장일을 보지 않아 추석·한글날 같은 날을 거래일로 봤다 — 그날 체결로 빈 봉이 생기고 위젯 등락이 0 이 됐다)
  */
 function isSessionDay(date: string, code: string): boolean {
   const wd = weekdayOf(date);
-  return wd >= 1 && wd <= 5 && (isKrCode(code) || !US_HOLIDAYS.has(date));
+  if (wd < 1 || wd > 5) return false;
+  return isKrCode(code) ? !(date in KR_HOLIDAYS) : !US_HOLIDAYS.has(date);
 }
 
 /** 서울 날짜가 한국 평일 휴장일(KR_HOLIDAYS)이면 그 이름, 아니면 null */
@@ -170,8 +172,9 @@ function sessionDate(local: string, code: string): string {
  * 체결·시세가 속한 거래일 YYYY-MM-DD. 시각을 못 읽으면 null.
  *  - 한국은 서울 날짜, 단 08:00 전은 전날 — 장 시작 전에 받은 시세(전일 종가가 지난 거래일 기준)에 08:00 첫 체결을 붙이지 않게 (PF-01)
  *  - 미국은 뉴욕 날짜, 단 뉴욕 20:00 이후(주간거래)는 다음 날 — 한국 낮의 주간거래 체결이 끝난 정규장 봉을 고치지 않고 다음 거래일 봉으로 간다
- *  - 거래가 없는 날(토·일, 미국 휴장일)은 직전 거래일로 본다(서버가 막 켜져 값이 그대로인 체결 등) → 빈 봉을 만들지 않게
- * 한국 평일 휴장일은 아직 보지 않는다(isSessionDay) — 그날 체결은 새 거래일로 보고, 서버 봉·시세를 다시 받으면 바로잡힌다
+ *  - 거래가 없는 날(토·일, 한국 평일 휴장일 KR_HOLIDAYS, 미국 휴장일 US_HOLIDAYS)은 직전 거래일로 본다
+ *    (서버가 막 켜져 값이 그대로인 체결 등) → 빈 봉을 만들지 않게. 서버 marketContext.tradingDate 와 같다
+ * 목록에 없는 임시 휴장일은 여전히 새 거래일로 보지만, 서버 봉·시세를 다시 받으면 바로잡힌다
  * (차트는 접속 직후 스냅샷으로 새 봉을 열지 않고, 다시 받은 서버 봉에 서버에 없는 봉을 붙이지 않는다 — lib/liveStream)
  */
 export function tradingDate(iso: string, code: string): string | null {
@@ -190,10 +193,9 @@ export function sameTradingDay(asOf: string, tickIso: string, code: string): boo
 }
 
 /**
- * 그 시각이 그 시장의 거래 시간인지 (요일·시각·미국 휴장일로). 시각을 못 읽으면 true.
- *  - 한국: 평일 08:00~20:00 (서울, KRX+NXT)
+ * 그 시각이 그 시장의 거래 시간인지 (요일·시각·휴장일 목록으로). 시각을 못 읽으면 true.
+ *  - 한국: 평일 08:00~20:00 (서울, KRX+NXT), 한국 평일 휴장일(KR_HOLIDAYS) 빼고
  *  - 미국: 세션 날짜가 거래일인 동안 — 뉴욕 전날 20:00(주간거래) ~ 당일 20:00(애프터 끝). 일요일 20:00 ~ 금요일 20:00, 휴장일 빼고
- * 한국 평일 휴장일은 아직 보지 않는다 (isSessionDay)
  */
 export function inTradingHours(iso: string, code: string): boolean {
   const clock = marketClock(iso, code);
