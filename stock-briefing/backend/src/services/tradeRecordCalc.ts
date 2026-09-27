@@ -169,8 +169,11 @@ export interface SnapshotData {
   totals: SnapshotTotals;
   /** 찍은 때 토스 계좌 요약 (계좌 순번별 — 계좌번호 없음). 3-37 에서 토스 수익률과 맞춰 보는 데 쓴다 */
   accounts: Array<{ account: number } & AccountOverview>;
-  /** 오래 이어져 받아들인 의심 (snapshotDoubts) — 있으면 이 스냅샷은 계좌 몫이 빠졌을 수 있다. 없으면 칸이 없다 */
-  doubts?: string[];
+  /**
+   * 오래 이어져(또는 관리 API force 로) 받아들인 의심 (snapshotDoubts) — 있으면 이 스냅샷은 적힌 계좌(account)의 몫이 빠졌을 수 있다.
+   * 없으면 칸이 없다. 추정 계산(unexplainedChanges)은 그 계좌를 이 스냅샷으로 비교하지 않고, '어제와 비교'는 previousSnapshot 의 skipDoubted 로 건너뛴다
+   */
+  doubts?: SnapshotDoubt[];
 }
 
 export const PRICE_BASIS: Record<RecordMarket, string> = {
@@ -282,17 +285,40 @@ export const SUM_TOLERANCE = { rel: 0.01, KRW: 10, USD: 0.1 } as const;
 
 const money = (n: number, cur: "KRW" | "USD") => (cur === "KRW" ? `${Math.round(n).toLocaleString("en-US")}원` : `$${round4(n)}`);
 
+/** 같은 의심이 이만큼 넘게 보이지 않았으면 이어 세지 않는다 (추석·긴 연휴는 넘게) */
+export const DOUBT_CARRY_MAX_MS = 7 * 86_400_000;
+
+/**
+ * 받아들이는 데 하루 넘게 걸리는 의심(empty·missing-account)은 그 거래일 안에 찰 수 없어 다음 거래일로 이어 센다 — 내용(text)이 똑같을 때만.
+ * 30분짜리(unsure·sum)는 5분 간격 다시 묻기로 이어 본 것만 센다 (밤사이 한 번 본 것으로 다음 날 곧바로 받아들이지 않게)
+ */
+export function doubtCarriesOver(kind: DoubtKind): boolean {
+  return DOUBT_ACCEPT_MS[kind] >= 86_400_000;
+}
+
+/** 직전 ok 스냅샷(같은 시장)에서 본 계좌 */
+export interface PrevSnapshotInfo {
+  /** 직전 스냅샷의 계좌 순번 (계좌가 목록에서 빠졌는지 보려고) */
+  accounts?: readonly number[];
+  /**
+   * 그 시장 종목을 갖고 있던 계좌 — 직전 스냅샷에 그 계좌 종목이 있었거나, 직전 스냅샷에 없는 계좌(첫 스냅샷·새 계좌)면
+   * 토스 동기화가 마지막으로 믿은 보유에 그 시장 종목이 있던 계좌. 'unsure' 는 이 계좌만 본다
+   */
+  held?: readonly number[];
+}
+
 /**
  * 그 시장 스냅샷을 찍기 전에 계좌마다 토스 응답을 확인한다. 빈 배열이면 믿을 수 있다.
  * 매입금액 요약은 계좌마다 통화별(원화 = 한국 종목, 달러 = 미국 종목 — 원화 장부 보정과 같은 뜻)이라 그 시장 통화 칸과 맞춰 본다.
- * @param prevAccounts 직전 ok 스냅샷의 계좌 순번 (없으면 빈 배열)
+ * @param prev 직전 ok 스냅샷에서 본 계좌 (첫 스냅샷이면 빈 값)
  */
-export function snapshotDoubts(market: RecordMarket, accounts: AccountHoldings[], prevAccounts: readonly number[] = []): SnapshotDoubt[] {
+export function snapshotDoubts(market: RecordMarket, accounts: AccountHoldings[], prev: PrevSnapshotInfo = {}): SnapshotDoubt[] {
   const out: SnapshotDoubt[] = [];
   const name = MARKET_NAME[market];
   const cur = market === "KR" ? "KRW" : "USD";
   const listed = new Set(accounts.map((a) => a.account));
-  for (const acct of [...new Set(prevAccounts)].sort((x, y) => x - y)) {
+  const heldBefore = new Set(prev.held ?? []);
+  for (const acct of [...new Set(prev.accounts ?? [])].sort((x, y) => x - y)) {
     if (!listed.has(acct)) out.push({ kind: "missing-account", account: acct, text: `계좌 ${acct}: 직전 스냅샷에 있던 계좌가 토스 계좌 목록에서 빠짐` });
   }
   for (const a of accounts) {
@@ -302,10 +328,11 @@ export function snapshotDoubts(market: RecordMarket, accounts: AccountHoldings[]
     if (mine.length === 0) {
       if (summary !== null && summary !== 0) {
         out.push({ kind: "empty", account: a.account, text: `계좌 ${a.account}: ${name} 보유 목록이 비었는데 계좌 요약 매입금액은 ${money(summary, cur)}` });
-      } else if (held.length === 0 && a.overview.purchaseUsd === null) {
+      } else if (held.length === 0 && a.overview.purchaseUsd === null && heldBefore.has(a.account)) {
         // 목록이 통째로 비었고 달러 요약도 없다: 요약이 빠진 일시 오류와 전부 판 빈 계좌를 가릴 수 없다 (원화 요약은 없으면 0 으로 읽힌다).
-        // 목록에 다른 시장 종목이 있는 계좌의 달러 요약 빈칸은 '달러 종목 없음'으로 본다 (토스 동기화와 같은 기준)
-        out.push({ kind: "unsure", account: a.account, text: `계좌 ${a.account}: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음` });
+        // 그래서 전에 그 시장 종목이 있던 계좌만 의심한다 — 늘 비어 있는 계좌(달러 요약 없이 옴)는 날마다 의심하지 않는다 (토스 동기화와 같은 기준).
+        // 목록에 다른 시장 종목이 있는 계좌의 달러 요약 빈칸은 '달러 종목 없음'으로 본다
+        out.push({ kind: "unsure", account: a.account, text: `계좌 ${a.account}: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음 (전에는 ${name} 종목이 있었음)` });
       }
       continue;
     }
@@ -327,6 +354,8 @@ export interface SnapshotLite {
   market: RecordMarket;
   asOf: string;
   holdings: Array<{ account: number; code: string; quantity: number; avgPrice: number | null }>;
+  /** 의심을 안고 저장된 스냅샷에서 몫이 빠졌을 수 있는 계좌 (data.doubts 의 account) — 이 계좌는 이 스냅샷으로 비교하지 않는다 */
+  doubtAccounts?: readonly number[];
 }
 
 export interface TradeLite {
@@ -335,6 +364,11 @@ export interface TradeLite {
   side: "BUY" | "SELL";
   quantity: number;
   executedAt: string;
+  /**
+   * 받을 때마다 늘어난 체결 수량과 그 몫의 시각 (trade_executions.fills — 합 = quantity). 있으면 executedAt 대신 이것으로 나눠 센다
+   * (며칠에 걸친 부분 체결이 마지막 체결 시각에 한꺼번에 들어가 경계 앞뒤로 가짜 +·− 가 생기지 않게)
+   */
+  fills?: ReadonlyArray<{ quantity: number; at: string }>;
 }
 
 export interface EstimatedChange {
@@ -356,9 +390,21 @@ export interface EstimatedChange {
   estimated: true;
 }
 
+/** 그 체결 가운데 (t1, t2] 에 든 수량 — 받을 때마다 늘어난 몫(fills)이 있으면 그것으로, 없으면 한 번에 executedAt 에 */
+function filledBetween(t: TradeLite, t1: number, t2: number): number {
+  const within = (iso: string) => {
+    const at = Date.parse(iso);
+    return at > t1 && at <= t2;
+  };
+  if (t.fills && t.fills.length) return t.fills.reduce((s, f) => s + (within(f.at) ? f.quantity : 0), 0);
+  return within(t.executedAt) ? t.quantity : 0;
+}
+
 /**
  * 같은 시장의 이어진 두 ok 스냅샷 사이 (계좌, 종목) 수량 변화에서, 그 사이(앞 스냅샷 시각 초과 ~ 뒤 스냅샷 시각 이하) 체결로 설명되지 않는 몫만 '추정' 한 줄로.
- * 부분 체결은 마지막 체결 시각에 한 번에 들어가므로 경계에서 틀릴 수 있다 — 그래서 추정이다
+ * 계좌마다 비교한다: 그 계좌를 의심한 채 저장된 스냅샷(doubtAccounts)은 그 계좌의 끝점으로 쓰지 않고 앞뒤 믿을 수 있는 스냅샷끼리 비교한다
+ * (계좌 몫이 빠졌을 수 있는 스냅샷 때문에 가짜 −x·+x 두 줄이 생기지 않게).
+ * 부분 체결은 받을 때마다 늘어난 몫(fills)으로 나눠 세지만, 한 번 받는 사이의 여러 체결은 그 사이 마지막 체결 시각에 들어가므로 경계에서 틀릴 수 있다 — 그래서 추정이다
  */
 export function unexplainedChanges(snapshots: SnapshotLite[], trades: TradeLite[]): EstimatedChange[] {
   const out: EstimatedChange[] = [];
@@ -366,42 +412,38 @@ export function unexplainedChanges(snapshots: SnapshotLite[], trades: TradeLite[
   for (const s of snapshots) byMarket.set(s.market, [...(byMarket.get(s.market) ?? []), s]);
   for (const [market, list] of byMarket) {
     const sorted = [...list].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    for (let i = 1; i < sorted.length; i++) {
-      const s1 = sorted[i - 1]!, s2 = sorted[i]!;
-      const t1 = Date.parse(s1.asOf), t2 = Date.parse(s2.asOf);
-      const key = (a: number, c: string) => `${a}|${c}`;
-      const q1 = new Map(s1.holdings.map((h) => [key(h.account, h.code), h]));
-      const q2 = new Map(s2.holdings.map((h) => [key(h.account, h.code), h]));
-      const keys = [...new Set([...q1.keys(), ...q2.keys()])];
-      for (const k of keys) {
-        const [accountStr, code] = k.split("|") as [string, string];
-        const account = Number(accountStr);
-        const a = q1.get(k), b = q2.get(k);
-        const fromQty = a?.quantity ?? 0, toQty = b?.quantity ?? 0;
-        const traded = trades
-          .filter((t) => t.account === account && t.code === code)
-          .filter((t) => {
-            const at = Date.parse(t.executedAt);
-            return at > t1 && at <= t2;
-          })
-          .reduce((sum, t) => sum + (t.side === "BUY" ? t.quantity : -t.quantity), 0);
-        const unexplained = round4(toQty - fromQty - traded);
-        if (Math.abs(unexplained) < 1e-6) continue;
-        out.push({
-          market,
-          account,
-          code,
-          fromDate: s1.date,
-          toDate: s2.date,
-          fromQty,
-          toQty,
-          tradedQty: round4(traded),
-          unexplainedQty: unexplained,
-          fromAvg: a?.avgPrice ?? null,
-          toAvg: b?.avgPrice ?? null,
-          kind: unexplained > 0 ? "increase" : "decrease",
-          estimated: true,
-        });
+    const accounts = [...new Set(sorted.flatMap((s) => [...s.holdings.map((h) => h.account), ...(s.doubtAccounts ?? [])]))];
+    for (const account of accounts) {
+      const usable = sorted.filter((s) => !(s.doubtAccounts ?? []).includes(account));
+      for (let i = 1; i < usable.length; i++) {
+        const s1 = usable[i - 1]!, s2 = usable[i]!;
+        const t1 = Date.parse(s1.asOf), t2 = Date.parse(s2.asOf);
+        const q1 = new Map(s1.holdings.filter((h) => h.account === account).map((h) => [h.code, h]));
+        const q2 = new Map(s2.holdings.filter((h) => h.account === account).map((h) => [h.code, h]));
+        for (const code of new Set([...q1.keys(), ...q2.keys()])) {
+          const a = q1.get(code), b = q2.get(code);
+          const fromQty = a?.quantity ?? 0, toQty = b?.quantity ?? 0;
+          const traded = trades
+            .filter((t) => t.account === account && t.code === code)
+            .reduce((sum, t) => sum + (t.side === "BUY" ? 1 : -1) * filledBetween(t, t1, t2), 0);
+          const unexplained = round4(toQty - fromQty - traded);
+          if (Math.abs(unexplained) < 1e-6) continue;
+          out.push({
+            market,
+            account,
+            code,
+            fromDate: s1.date,
+            toDate: s2.date,
+            fromQty,
+            toQty,
+            tradedQty: round4(traded),
+            unexplainedQty: unexplained,
+            fromAvg: a?.avgPrice ?? null,
+            toAvg: b?.avgPrice ?? null,
+            kind: unexplained > 0 ? "increase" : "decrease",
+            estimated: true,
+          });
+        }
       }
     }
   }

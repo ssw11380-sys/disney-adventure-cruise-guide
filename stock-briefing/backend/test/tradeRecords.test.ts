@@ -49,6 +49,7 @@ class FakeToss implements TradeRecordToss {
   overview: Record<number, Overview> = {};
   orders: Record<string, TossOrderRecord[]> = {};
   asked: string[] = [];
+  truncated = new Set<string>();
   async accounts() {
     this.calls.accounts++;
     if (this.fail) throw new Error(this.fail);
@@ -69,7 +70,7 @@ class FakeToss implements TradeRecordToss {
     this.asked.push(`${seq}:${symbol}`);
     const f = this.ordersFail[`${seq}:${symbol}`];
     if (f) throw new Error(f);
-    return this.orders[`${seq}:${symbol}`] ?? [];
+    return { orders: this.orders[`${seq}:${symbol}`] ?? [], truncated: this.truncated.has(`${seq}:${symbol}`) };
   }
 }
 
@@ -366,20 +367,53 @@ describe("매매 기록 — 토스 응답을 계좌마다 확인 (한 계좌 몫
     expect(await rows("US")).toEqual(["US 2026-09-28 ok close"]);
   });
 
-  it("전부 판 빈 계좌(목록이 비었고 달러 요약도 없음)는 30분 넘게·두 번 이상 이어지면 받아들여 0종목 스냅샷 — 의심을 reason 에 적는다", async () => {
+  it("전부 판 빈 계좌(목록이 비었고 달러 요약도 없음, 전에는 종목이 있었음)는 30분 넘게·두 번 이상 이어지면 받아들여 0종목 스냅샷 — 의심을 reason·doubts 에 적는다", async () => {
     const { toss, at, rows, svc } = await setup();
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    await at("2026-09-29T05:05:00");
     toss.holdings[3] = [];
     toss.overview[3] = overview(null);
-    for (const t of ["05:05", "05:10", "05:15", "05:20", "05:25", "05:30"]) await at(`2026-09-29T${t}:00`);
-    expect(await rows("US")).toEqual([]);
-    await at("2026-09-29T05:35:00");
+    for (const t of ["05:05", "05:10", "05:15", "05:20", "05:25", "05:30"]) await at(`2026-09-30T${t}:00`);
     expect(await rows("US")).toEqual(["US 2026-09-28 ok close"]);
-    const [s] = await svc.listSnapshots({ from: "2026-09-28", to: "2026-09-28", market: "US" });
+    await at("2026-09-30T05:35:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close", "US 2026-09-29 ok close"]);
+    const [s] = await svc.listSnapshots({ from: "2026-09-29", to: "2026-09-29", market: "US" });
     expect(s).toMatchObject({ holdings: [], totals: { holdings: 0 } });
     expect(s!.reason).toMatch(/^의심을 안고 저장.*빈 계좌인지 확인할 수 없음/);
-    // 같은 상태가 이어지면 다음 거래일은 곧바로 (날마다 30분씩 늦지 않게)
+    expect(s!.doubts).toEqual([{ kind: "unsure", account: 3, text: expect.stringContaining("계좌 3: 보유 목록이 비었고") }]);
+    // 같은 상태가 이어지면 다음 거래일은 의심 없이 곧바로 (직전 스냅샷에 그 계좌 종목이 없으니 확인할 것이 없다 — 날마다 30분씩 늦지 않게)
+    await at("2026-10-01T05:05:00");
+    expect((await rows("US")).at(-1)).toBe("US 2026-09-30 ok close");
+    expect((await svc.listSnapshots({ from: "2026-09-30", to: "2026-09-30", market: "US" }))[0]!).toMatchObject({ reason: null, doubts: [] });
+  });
+
+  it("늘 비어 있는 두 번째 계좌(달러 요약 없이 옴)는 의심하지 않는다 — 첫 스냅샷부터 마감 때 곧바로, reason 비어 있음", async () => {
+    const { toss, at, rows, svc } = await setup();
+    toss.accountList = [3, 7];
+    toss.holdings[3] = [holding("005930", 10, 70000, 71200), holding("SOXL", 10, 33, 38)];
+    toss.holdings[7] = [];
+    toss.overview[7] = overview(null);
+    await at("2026-09-28T16:05:00");
+    await at("2026-09-29T05:05:00");
+    await at("2026-09-29T16:05:00");
     await at("2026-09-30T05:05:00");
-    expect(await rows("US")).toEqual(["US 2026-09-28 ok close", "US 2026-09-29 ok close"]);
+    expect(await rows()).toEqual(["KR 2026-09-28 ok close", "KR 2026-09-29 ok close", "US 2026-09-28 ok close", "US 2026-09-29 ok close"]);
+    const snaps = await svc.listSnapshots({ from: "2026-09-28", to: "2026-09-29" });
+    expect(snaps.map((s) => s.reason)).toEqual([null, null, null, null]);
+    expect(snaps.every((s) => s.doubts.length === 0)).toBe(true);
+  });
+
+  it("첫 스냅샷이라도 토스 동기화가 마지막으로 믿은 보유에 종목이 있던 계좌가 통째로 비어 오면(달러 요약도 없음) 믿지 않고 다시", async () => {
+    const { toss, at, rows, db } = await setup();
+    await db.insertInto("meta").values({ key: "toss_holdings_accounts", value: JSON.stringify({ held: { "3": ["005930"] }, doubt: {} }) }).execute();
+    toss.holdings[3] = [];
+    toss.overview[3] = overview(null);
+    await at("2026-09-28T16:05:00");
+    expect(await rows("KR")).toEqual([]);
+    toss.holdings[3] = [holding("005930", 10, 70000, 71200)];
+    delete toss.overview[3];
+    await at("2026-09-28T16:10:00");
+    expect(await rows("KR")).toEqual(["KR 2026-09-28 ok close"]);
   });
 
   it("한 계좌 목록만 계속 비어 오면 그 거래일은 까닭을 적은 빈칸, 24시간 넘게 이어지면 다음 거래일에 의심을 적고 저장", async () => {
@@ -411,6 +445,88 @@ describe("매매 기록 — 토스 응답을 계좌마다 확인 (한 계좌 몫
     const s = await svc.snapshotNow("US", { force: true });
     expect(s).toMatchObject({ status: "ok", date: "2026-09-28" });
     expect(s.reason).toContain("계좌 7");
+    expect(s.doubts).toEqual([{ kind: "empty", account: 7, text: "계좌 7: 미국 보유 목록이 비었는데 계좌 요약 매입금액은 $600" }]);
+  });
+
+  it("한 번 받아들인 의심이 있어도 다음 날 내용이 다른 의심(잠깐 목록 일부만 옴)은 곧바로 받아들이지 않고 다시 묻는다 — 받아들인 것과 똑같은 상태는 곧바로", async () => {
+    const { toss, at, rows, svc } = await setup();
+    const soxl = holding("SOXL", 10, 33, 38);
+    const tsla = holding("TSLA", 2, 300, 377);
+    toss.holdings[3] = [soxl, tsla];
+    toss.overview[3] = overview(960); // 종목 합계 $930 과 늘 $30 차이 나는 계좌 (정말 이어지는 상태)
+    for (let m = 5; m <= 35; m += 5) await at(`2026-09-29T05:${String(m).padStart(2, "0")}:00`);
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close"]);
+    const [d1] = await svc.listSnapshots({ from: "2026-09-28", to: "2026-09-28", market: "US" });
+    expect(d1!.doubts.map((d) => d.text)).toEqual(["계좌 3: 미국 종목 매입금액 합계 $930 ≠ 계좌 요약 $960"]);
+    // 다음 거래일: 첫 응답에 TSLA 가 잠깐 빠짐 → 내용이 다른 의심이라 처음부터 센다 (예전에는 곧바로 valueUsd 380 을 'ok close' 로 저장)
+    toss.holdings[3] = [soxl];
+    await at("2026-09-30T05:05:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close"]);
+    expect((await svc.status()).markets.US.lastError).toContain("$330 ≠ 계좌 요약 $960");
+    // 5분 뒤 제대로 온 응답은 어제 받아들인 것과 똑같은 의심이라 곧바로 저장
+    toss.holdings[3] = [soxl, tsla];
+    await at("2026-09-30T05:10:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 ok close", "US 2026-09-29 ok close"]);
+    const [d2] = await svc.listSnapshots({ from: "2026-09-29", to: "2026-09-29", market: "US" });
+    expect(d2!.totals!.valueUsd).toBe(1134); // TSLA 몫까지 든 값
+    expect(d2!.holdings.map((h) => h.code)).toEqual(["SOXL", "TSLA"]);
+    expect(d2!.method).toBe("close");
+  });
+
+  it("30분짜리 의심은 5분 간격으로 이어 본 것만 센다 — 전날 한 번 본 것으로 다음 날 곧바로 받아들이지 않는다", async () => {
+    const { toss, at, rows } = await setup();
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    toss.overview[3] = overview(930);
+    await at("2026-09-29T05:05:00"); // 한 번 보고
+    toss.fail = "HTTP 503"; // 그 거래일 내내 토스 오류
+    await at("2026-09-29T08:00:00");
+    await at("2026-09-29T10:00:00");
+    expect(await rows("US")).toEqual(["US 2026-09-28 gap"]);
+    toss.fail = null;
+    await at("2026-09-30T05:05:00"); // 예전에는 '처음 본 지 24시간·두 번째'라 곧바로 저장
+    expect(await rows("US")).toEqual(["US 2026-09-28 gap"]);
+    for (let m = 10; m <= 35; m += 5) await at(`2026-09-30T05:${m}:00`);
+    expect(await rows("US")).toEqual(["US 2026-09-28 gap", "US 2026-09-29 ok close"]);
+  });
+
+  it("의심을 센 기록은 상태(meta)에 남아 서버를 다시 켜도 이어 센다 — 24시간짜리 의심이 재배포 때문에 날마다 빈칸이 되지 않는다", async () => {
+    const { toss, clock, make, db } = await setup();
+    toss.accountList = [3, 7];
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    toss.holdings[7] = [];
+    toss.overview[7] = overview(600);
+    const run = async (s: string) => {
+      clock.t = kst(s);
+      const svc = make(); // 매번 새 서버 (Railway 는 병합마다 다시 켠다)
+      await svc.tick();
+      return svc;
+    };
+    await run("2026-09-29T05:05:00");
+    await run("2026-09-29T05:10:00");
+    await run("2026-09-29T10:00:00"); // 9/28 거래일이 지나 빈칸
+    const svc = await run("2026-09-30T05:05:00");
+    const us = (await db.selectFrom("account_snapshots").select(["snapshot_date", "status"]).where("market", "=", "US").orderBy("snapshot_date").execute()).map((r) => `${r.snapshot_date} ${r.status}`);
+    expect(us).toEqual(["2026-09-28 gap", "2026-09-29 ok"]);
+    expect((await svc.listSnapshots({ from: "2026-09-29", to: "2026-09-29", market: "US" }))[0]!.reason).toMatch(/^의심을 안고 저장.*계좌 7/);
+  });
+
+  it("의심을 안고 저장한 스냅샷은 doubts 로 드러나고, '어제와 비교'는 skipDoubted 로 건너뛸 수 있다", async () => {
+    const { toss, at, svc } = await setup();
+    toss.accountList = [3, 7];
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    toss.holdings[7] = [holding("TSLA", 2, 300, 377)];
+    await at("2026-09-29T05:05:00"); // 9/28 믿을 수 있음
+    toss.holdings[7] = [];
+    toss.overview[7] = overview(600);
+    await at("2026-09-30T05:05:00");
+    await at("2026-09-30T10:00:00"); // 9/29 빈칸
+    await at("2026-10-01T05:05:00"); // 9/30 은 24시간이 넘어 의심을 안고 저장
+    const doubted = (await svc.listSnapshots({ from: "2026-09-30", to: "2026-09-30", market: "US" }))[0]!;
+    expect(doubted.doubts.map((d) => [d.kind, d.account])).toEqual([["empty", 7]]);
+    expect((await svc.previousSnapshot("US", "2026-10-01"))?.date).toBe("2026-09-30");
+    expect((await svc.previousSnapshot("US", "2026-10-01", { skipDoubted: true }))?.date).toBe("2026-09-28");
+    // 추정도 계좌 7 은 의심 스냅샷을 건너뛴다 (가짜 TSLA −2 없음)
+    expect((await svc.listTrades({ from: "2026-09-28", to: "2026-10-01" })).estimated).toEqual([]);
   });
 });
 
@@ -585,6 +701,117 @@ describe("매매 기록 — 체결 저장 (토스 주문 내역)", () => {
     expect(r).toMatchObject({ codes: 1, inserted: 1, failedCodes: [] });
     expect((await svc.status()).trades).toMatchObject({ count: 1, earliest: "2026-03-02", coverage: { NVDA: { first: "2026-09-28", last: "2026-09-28" } } });
   });
+
+  it("물은 종목과 다른 종목으로 온 주문은 저장하지 않는다 (토스가 종목 거르기를 무시해도 다른 코드로 적히지 않음) — 한국 'A005930' 모양은 같은 종목", async () => {
+    const { toss, svc, db } = await setup();
+    toss.orders["3:SOXL"] = [order("x1", "TSLA", "SELL", 1, 377, "2026-09-28T23:00:00+09:00"), order("s1", "SOXL", "BUY", 1, 38, "2026-09-28T23:10:00+09:00")];
+    toss.orders["3:TSLA"] = [order("x1", "TSLA", "SELL", 1, 377, "2026-09-28T23:00:00+09:00")];
+    toss.orders["3:005930"] = [order("k1", "A005930", "BUY", 1, 71000, "2026-09-28T10:00:00+09:00")];
+    const r = await svc.syncTrades("US", ["SOXL"]);
+    expect(r).toMatchObject({ inserted: 1, skipped: 1, failedCodes: [] });
+    expect(await db.selectFrom("trade_executions").select(["order_id", "code"]).execute()).toEqual([{ order_id: "s1", code: "SOXL" }]);
+    // 그 종목을 물으면 그 종목으로 저장되고, 뒤에 다른 종목을 물어도 코드가 바뀌지 않는다
+    await svc.syncTrades("US", ["TSLA"]);
+    await svc.syncTrades("US", ["SOXL"]);
+    await svc.syncTrades("KR", ["005930"]);
+    expect(await db.selectFrom("trade_executions").select(["order_id", "code"]).orderBy("order_id").execute()).toEqual([
+      { order_id: "k1", code: "005930" },
+      { order_id: "s1", code: "SOXL" },
+      { order_id: "x1", code: "TSLA" },
+    ]);
+  });
+
+  it("며칠에 걸친 부분 체결은 받을 때마다 늘어난 몫을 그 시각과 함께 남긴다(fills) — 앞선 몫의 날짜·금액을 잃지 않고 가짜 '추정' 도 없다", async () => {
+    const { toss, at, svc } = await setup();
+    toss.holdings[3] = [holding("SOXL", 7, 33, 38)];
+    await at("2026-09-26T05:05:00"); // 미국 9/25 (금)
+    toss.holdings[3] = [holding("SOXL", 10, 34, 38)];
+    toss.orders["3:SOXL"] = [order("p1", "SOXL", "BUY", 3, 111, "2026-09-28T23:00:00+09:00", "OPEN")];
+    await at("2026-09-29T05:05:00"); // 미국 9/28: 5주 주문 중 3주 체결
+    toss.holdings[3] = [holding("SOXL", 12, 34.5, 38)];
+    toss.orders["3:SOXL"] = [order("p1", "SOXL", "BUY", 5, 187, "2026-09-29T23:30:00+09:00")];
+    await at("2026-09-30T05:05:00"); // 미국 9/29: 나머지 2주 체결
+    const r = await svc.listTrades({ from: "2026-09-25", to: "2026-09-30" });
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0]).toMatchObject({ orderId: "p1", quantity: 5, amount: 187, executedAt: "2026-09-29T23:30:00+09:00", status: "CLOSED" });
+    expect(r.items[0]!.fills).toEqual([
+      { quantity: 3, amount: 111, at: "2026-09-28T23:00:00+09:00", basis: "filled", seenAt: "2026-09-29T05:05:00+09:00" },
+      { quantity: 2, amount: 76, at: "2026-09-29T23:30:00+09:00", basis: "filled", seenAt: "2026-09-30T05:05:00+09:00" },
+    ]);
+    expect(r.estimated).toEqual([]); // 예전에는 9/28 +3, 9/29 −3 두 줄
+  });
+
+  it("관리 체결 받기가 도는 동안 예약 확인이 끼어들어도 서로의 상태를 덮어쓰지 않는다 (한 줄로 돌림)", async () => {
+    const { toss, svc, clock, db } = await setup();
+    toss.holdings[3] = [holding("005930", 10, 70000, 71200)];
+    let release!: () => void;
+    const blocked = new Promise<void>((r) => (release = r));
+    let started = false;
+    const orig = toss.orderHistory.bind(toss);
+    toss.orderHistory = async (seq: number, symbol: string) => {
+      if (symbol === "NVDA") {
+        started = true;
+        await blocked;
+      }
+      return orig(seq, symbol);
+    };
+    clock.t = kst("2026-09-28T16:05:00");
+    const admin = svc.syncTrades("US", ["NVDA"]);
+    await vi.waitFor(() => expect(started).toBe(true));
+    const tick = svc.tick(); // 예전에는 관리 쪽이 시작할 때 읽은 상태로 마지막에 저장해 since·tradesFor·coverage(005930)가 사라졌다
+    release();
+    await Promise.all([admin, tick]);
+    const state = JSON.parse((await db.selectFrom("meta").select("value").where("key", "=", "trade_records_state").executeTakeFirstOrThrow()).value);
+    expect(state.since).toEqual({ KR: "2026-09-28" });
+    expect(state.tradesFor).toEqual({ KR: "2026-09-28" });
+    expect(Object.keys(state.coverage).sort()).toEqual(["005930", "NVDA"]);
+  });
+
+  it("주문 한 건을 저장하다 난 오류(해석할 수 없는 체결 시각)는 그 종목 실패로 — 다른 주문·뒤 종목은 받고, 경고에 올린다", async () => {
+    const { toss, at, svc, db } = await setup();
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38), holding("TSLA", 1, 300, 377)];
+    toss.orders["3:SOXL"] = [order("bad", "SOXL", "BUY", 1, 38, "어제 밤"), order("ok1", "SOXL", "BUY", 1, 38, "2026-09-28T23:00:00+09:00")];
+    toss.orders["3:TSLA"] = [order("t1", "TSLA", "BUY", 1, 377, "2026-09-28T23:05:00+09:00")];
+    await at("2026-09-29T05:05:00");
+    expect((await db.selectFrom("trade_executions").select("order_id").orderBy("order_id").execute()).map((r) => r.order_id)).toEqual(["ok1", "t1"]);
+    const st = await svc.status();
+    expect(st.trades.failing).toEqual({ US: ["SOXL"] });
+    expect(st.warning).toContain("체결 받기 실패: 미국 1종목(SOXL)");
+    expect(st.trades.lastError).toContain("주문 bad 저장 실패");
+    expect(st.trades.coverage).toEqual({ TSLA: { first: "2026-09-29", last: "2026-09-29" } });
+  });
+
+  it("전체 실패(계좌 목록을 못 받음)가 이어지면 경고에 올리고, 받으면 풀린다", async () => {
+    const { toss, at, svc } = await setup();
+    toss.holdings[3] = [holding("005930", 10, 70000, 71200)];
+    await at("2026-09-28T16:05:00");
+    toss.fail = "HTTP 500";
+    await at("2026-09-29T16:05:00");
+    await at("2026-09-29T16:10:00");
+    expect((await svc.status()).warning ?? "").not.toContain("전체 실패"); // 한두 번은 일시 오류로 본다
+    await at("2026-09-29T16:15:00");
+    expect((await svc.status()).warning).toBe("체결 받기 전체 실패: 한국 9/29 16:05부터 3번");
+    toss.fail = null;
+    await at("2026-09-29T16:20:00");
+    expect((await svc.status()).warning).toBeNull();
+  });
+
+  it("주문 내역이 쪽 수 한도를 넘어 오래된 주문을 다 받지 못한 종목은 표시하고 경고한다 — 끝까지 받으면 풀린다", async () => {
+    const { toss, at, svc } = await setup();
+    toss.holdings[3] = [holding("SOXL", 10, 33, 38)];
+    toss.orders["3:SOXL"] = [order("s1", "SOXL", "BUY", 10, 330, "2026-09-28T23:00:00+09:00")];
+    toss.truncated.add("3:SOXL");
+    await at("2026-09-29T05:05:00");
+    let st = await svc.status();
+    expect(st.trades.truncated).toEqual(["SOXL"]);
+    expect(st.warning).toBe("주문 내역이 너무 많아 오래된 체결을 다 받지 못함: 1종목(SOXL)");
+    expect(st.trades.count).toBe(1); // 받은 만큼은 저장
+    toss.truncated.clear();
+    await at("2026-09-30T05:05:00");
+    st = await svc.status();
+    expect(st.trades.truncated).toEqual([]);
+    expect(st.warning).toBeNull();
+  });
 });
 
 describe("토스 주문 내역 조회 (녹화한 모양의 픽스처)", () => {
@@ -608,7 +835,8 @@ describe("토스 주문 내역 조회 (녹화한 모양의 픽스처)", () => {
         }) as typeof fetch,
       }),
     );
-    const list = await provider.orderHistory(3, "SOXL");
+    const { orders: list, truncated } = await provider.orderHistory(3, "SOXL");
+    expect(truncated).toBe(false);
     expect(asked).toEqual([
       "/api/v1/orders?status=CLOSED&symbol=SOXL&limit=100 acct=3",
       "/api/v1/orders?status=CLOSED&symbol=SOXL&limit=100&cursor=cursor-p2 acct=3",
@@ -623,6 +851,28 @@ describe("토스 주문 내역 조회 (녹화한 모양의 픽스처)", () => {
     ]);
     expect(list[1]!.raw).not.toHaveProperty("accountNo");
     expect(list[4]!.orderedAt).toBe("2026-09-28T22:35:00+09:00");
+  });
+
+  it("종료된 주문이 쪽 수 한도를 넘어 다음 쪽이 남으면 truncated (조용히 끊지 않음)", async () => {
+    const asked: string[] = [];
+    const provider = new TossOpenApiProvider(
+      new TossOpenApiClient({
+        clientId: "c",
+        clientSecret: "s",
+        maxRetryWaitMs: 0,
+        now: () => kst("2026-09-28T16:05:00"),
+        fetchFn: (async (input: string | URL | Request) => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/oauth2/token")) return new Response(JSON.stringify({ access_token: "tok-1", expires_in: 86400 }), { status: 200 });
+          asked.push(url.searchParams.get("status") ?? "");
+          if (url.searchParams.get("status") === "OPEN") return new Response(JSON.stringify({ result: { orders: [] } }), { status: 200 });
+          return new Response(FIX("orders-closed-p1.json"), { status: 200, headers: { "content-type": "application/json" } }); // 늘 다음 쪽이 있다고 옴
+        }) as typeof fetch,
+      }),
+    );
+    const cut = await provider.orderHistory(3, "SOXL", 2);
+    expect(cut.truncated).toBe(true);
+    expect(asked).toEqual(["CLOSED", "CLOSED", "OPEN"]);
   });
 
   it("보유 조회 픽스처로 찍은 스냅샷: 토스가 준 수량·평단·현재가·평가금액 그대로", async () => {

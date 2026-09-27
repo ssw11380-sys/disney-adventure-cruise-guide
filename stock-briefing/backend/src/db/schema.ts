@@ -164,6 +164,11 @@ export interface TradeExecutionTable {
   order_status: string; // 'CLOSED' | 'OPEN'
   source: string; // 'toss-orders'
   raw: string; // JSON (계좌번호 칸은 뺌)
+  /**
+   * JSON — 받을 때마다 늘어난 누적 체결 수량·금액과 그 몫의 시각 [{ q, a, at, basis, seenAt }] (합 = quantity). 며칠에 걸친 부분 체결의 날짜별 몫을
+   * 잃지 않으려고 둔다 (at = 그때 토스가 준 마지막 체결 시각, 없으면 받은 시각 seenAt). 없으면(null) 한 번에 executed_at 에 체결된 것으로 본다
+   */
+  fills: string | null;
   created_at: string;
   updated_at: string;
 }

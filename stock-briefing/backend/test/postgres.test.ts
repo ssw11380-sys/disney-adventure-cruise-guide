@@ -74,7 +74,10 @@ describe.skipIf(!url)("postgres dialect", () => {
         items: [{ code: "005930", name: "삼성전자", currency: "KRW" as const, quantity: 10.5, avgPrice: 70000, lastPrice: 71200, purchaseAmount: 735000, marketValue: 747600, marketValueAfterCost: 746000 }],
         overview: { purchaseKrw: 735000, purchaseUsd: 0, afterCostKrw: 746000, afterCostUsd: 0, rateAfterCost: 0.015 },
       }),
-      orderHistory: async () => [{ orderId: "pg-1", symbol: "005930", side: "BUY" as const, status: "CLOSED" as const, quantity: 10.5, amount: 735000, currency: null, filledAt: "2026-09-28T09:01:00+09:00", orderedAt: null, raw: {} }],
+      orderHistory: async () => ({
+        orders: [{ orderId: "pg-1", symbol: "005930", side: "BUY" as const, status: "CLOSED" as const, quantity: 10.5, amount: 735000, currency: null, filledAt: "2026-09-28T09:01:00+09:00", orderedAt: null, raw: {} }],
+        truncated: false,
+      }),
     };
     const svc = new TradeRecordService({ db, toss, features: new FeatureService(db, () => clock.t), now: () => clock.t, pauseMs: 0 });
     try {
@@ -213,6 +216,47 @@ describe.skipIf(!url)("postgres dialect", () => {
   });
 
   it("백업을 비운 표에 되살리고, 일련번호가 이어져 새 행을 넣을 수 있다 (3-7)", async () => {
+    // 매매 기록 두 표에도 행을 둔 채 (앞 테스트가 비워 둠) — 지난 날은 다시 받을 수 없어 JSON 백업·복구(identity overriding·setval)를 꼭 확인한다
+    const ts = "2026-09-28T16:05:00+09:00";
+    const snapRow = (date: string) => ({
+      snapshot_date: date,
+      market: "KR",
+      status: "ok",
+      method: "close",
+      as_of: ts,
+      scheduled_at: ts,
+      source: "toss-openapi",
+      reason: null,
+      holdings_count: 1,
+      total_value_krw: 747600,
+      data: JSON.stringify({ version: 1, holdings: [], accounts: [] }),
+      created_at: ts,
+      updated_at: ts,
+    });
+    const tradeRow = (orderId: string) => ({
+      account: 3,
+      order_id: orderId,
+      code: "005930",
+      market: "KR",
+      side: "BUY",
+      quantity: 10.5,
+      amount: 735000,
+      price: 70000,
+      currency: "KRW",
+      fee: null,
+      tax: null,
+      executed_at: ts,
+      executed_date: "2026-09-28",
+      time_basis: "filled",
+      order_status: "CLOSED",
+      source: "toss-orders",
+      raw: "{}",
+      fills: JSON.stringify([{ q: 10.5, a: 735000, at: ts, basis: "filled", seenAt: ts }]),
+      created_at: ts,
+      updated_at: ts,
+    });
+    await db.insertInto("account_snapshots").values(snapRow("2026-09-28")).execute();
+    await db.insertInto("trade_executions").values(tradeRow("pg-bk-1")).execute();
     const tables: Record<string, Record<string, unknown>[]> = {};
     for (const t of BACKUP_TABLES) tables[t] = (await sql<Record<string, unknown>>`select * from ${sql.table(t)}`.execute(db)).rows;
     const dir = await mkdtemp(join(tmpdir(), "pgbk-"));
@@ -233,5 +277,17 @@ describe.skipIf(!url)("postgres dialect", () => {
     await (db as unknown as { insertInto: (t: string) => { values: (v: unknown) => { execute: () => Promise<unknown> } } }).insertInto("briefings").values(row).execute();
     const n = await sql<{ n: number }>`select count(*) as n from briefings`.execute(db);
     expect(Number(n.rows[0]!.n)).toBe(before["briefings"]! + 1);
+    // 매매 기록 두 표: 되살린 값이 그대로(8바이트 수량·fills)이고, 새 행이 id 충돌 없이 들어간다
+    expect(before["account_snapshots"]).toBe(1);
+    expect(before["trade_executions"]).toBe(1);
+    expect(await db.selectFrom("trade_executions").select(["order_id", "quantity", "fills"]).execute()).toEqual([{ order_id: "pg-bk-1", quantity: 10.5, fills: tradeRow("pg-bk-1").fills }]);
+    await db.insertInto("account_snapshots").values(snapRow("2026-09-29")).execute();
+    await db.insertInto("trade_executions").values(tradeRow("pg-bk-2")).execute();
+    const ids = await db.selectFrom("trade_executions").select("id").orderBy("id").execute();
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids.map((r) => r.id)).size).toBe(2);
+    expect((await db.selectFrom("account_snapshots").select("id").execute()).length).toBe(2);
+    await db.deleteFrom("account_snapshots").execute();
+    await db.deleteFrom("trade_executions").execute();
   });
 });

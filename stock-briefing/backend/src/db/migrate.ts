@@ -255,6 +255,8 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
         .addColumn("order_status", "text", (c) => c.notNull())
         .addColumn("source", "text", (c) => c.notNull())
         .addColumn("raw", "text", (c) => c.notNull())
+        // 받을 때마다 늘어난 체결 몫 (JSON, 없으면 null — 며칠에 걸친 부분 체결의 날짜별 몫)
+        .addColumn("fills", "text")
         .addColumn("created_at", "text", (c) => c.notNull())
         .addColumn("updated_at", "text", (c) => c.notNull())
         .execute();
