@@ -5,7 +5,7 @@ import { cleanupRenders, render, type HostNode } from "./miniRender";
 
 /**
  * 브리핑 2차 6 — 종목 브리핑 'AI가 쓴 글' 표시 (플래그 briefingSafeWording, 앱 fallback 꺼짐).
- *  - 켬: 접은 화면 종목 카드 날짜 줄 끝 ' · AI가 쓴 글'(새 줄 없이 같은 Muted 줄)·화면 읽기에 'AI가 쓴 글',
+ *  - 켬: 접은 화면 종목 카드 날짜 줄 끝 '· AI가 쓴 글' 조각(날짜와 한 줄로 감싸는 줄 — 새 줄을 따로 만들지 않고, 좁으면 조각째 다음 줄로)·화면 읽기에 'AI가 쓴 글',
  *        상세 머리(폰 stack·2단 pane·두 칸 split)에 'AI가 쓴 글 · 틀릴 수 있음'
  *  - 끔(앱 기본 = 플래그 없음): 표시 없음, 지금 그대로. 실패 브리핑에는 켜도 없음
  * 시계는 고정 (useNow), RN 부품·공용 UI 는 문자열 요소로, API 훅은 가짜로 바꿔 끼운다. 종목 카드(BriefingCard)는 진짜로 그린다
@@ -158,12 +158,14 @@ describe("켬: 'AI가 쓴 글' 표시", () => {
     h.flags = { briefingSafeWording: true };
   });
 
-  it("접은 화면 카드: 날짜 줄 끝 ' · AI가 쓴 글'(같은 Muted 한 줄), 화면 읽기에 날짜 다음 'AI가 쓴 글'", async () => {
+  it("접은 화면 카드: 날짜 줄 끝 '· AI가 쓴 글' 조각(날짜와 같은 감싸는 줄), 화면 읽기에 날짜 다음 'AI가 쓴 글'", async () => {
     const r = await tab();
-    expect(muted(r)).toContain(`${DATE_LINE} · ${AI_TAG}`);
-    // 날짜만 있는 줄은 실패 브리핑 카드(같은 날짜·회차) 하나뿐
-    expect(muted(r).filter((m) => m === DATE_LINE)).toHaveLength(1);
-    // 새 줄을 만들지 않는다: 'AI가 쓴 글' 이 따로 선 Muted·Text 가 없다
+    // 날짜 조각 + '· AI가 쓴 글' 조각이 한 줄(가로로 늘어놓고 좁으면 조각째 줄바꿈)에 있다
+    const rows = r.all().filter((n) => n.type === "View" && n.props.style !== undefined && JSON.stringify(n.props.style).includes("\"flexWrap\":\"wrap\"") && n.children.length === 2 && n.children.every((c) => typeof c !== "string" && c.type === "Muted"));
+    expect(rows.map((row) => row.children.map(rawOf))).toContainEqual([DATE_LINE, `· ${AI_TAG}`]);
+    // 날짜 줄 그대로(조각 없이)는 실패 브리핑 카드(같은 날짜·회차) 하나뿐
+    expect(muted(r).filter((m) => m === DATE_LINE)).toHaveLength(rows.length + 1);
+    // 새 줄을 따로 만들지 않는다: 'AI가 쓴 글' 만 있는 Muted·Text 가 없다 ('· AI가 쓴 글' 조각은 날짜 줄 안)
     expect(r.all().filter((n) => (n.type === "Muted" || n.type === "Text") && rawOf(n) === AI_TAG)).toHaveLength(0);
     const label = cardLabels(r).find((l) => l.startsWith(OK.name!))!;
     expect(label).toContain(`${DATE_LINE}, ${AI_TAG}`);
@@ -174,7 +176,7 @@ describe("켬: 'AI가 쓴 글' 표시", () => {
     const failedLabel = cardLabels(r).find((l) => l.startsWith(FAILED.name!))!;
     expect(failedLabel).toContain("생성 실패");
     expect(failedLabel).not.toContain(AI_TAG);
-    expect(muted(r).filter((m) => m.endsWith(AI_TAG))).toHaveLength(1);
+    expect(muted(r).filter((m) => m.endsWith(AI_TAG))).toHaveLength(1); // 정상 카드(삼성전자) 하나만
     const card = render(<BriefingCard briefing={FAILED} mode="line" aiTag />);
     expect(card.text()).not.toContain(AI_TAG);
   });

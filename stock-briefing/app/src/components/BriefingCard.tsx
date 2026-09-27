@@ -30,7 +30,7 @@ export function BriefingCard({
   rate?: number | null;
   /** 넓은 창에서 보던 브리핑 (3-42 접고 펴기 이어 보기 — 접은 화면에서 이 카드를 강조). 기본 false = 지금 모양 그대로 */
   selected?: boolean;
-  /** 날짜 줄 끝에 ' · AI가 쓴 글' (브리핑 2차 6, 플래그 briefingSafeWording — 부르는 곳이 플래그를 읽어 넘긴다). 실패 브리핑에는 붙이지 않는다. 기본 false = 지금 그대로 */
+  /** 날짜 줄 끝에 '· AI가 쓴 글' 조각 (브리핑 2차 6, 플래그 briefingSafeWording — 부르는 곳이 플래그를 읽어 넘긴다). 실패 브리핑에는 붙이지 않는다. 기본 false = 지금 그대로 */
   aiTag?: boolean;
 }) {
   const t = useTheme();
@@ -60,9 +60,19 @@ export function BriefingCard({
               {briefing.name ?? briefing.code}
             </Text>
           ) : null}
-          <Muted>
-            {formatDateKo(briefing.date)} {SESSION_LABEL[briefing.session]} 브리핑{ai ? ` · ${AI_TAG}` : null}
-          </Muted>
+          {ai ? (
+            // 날짜 줄 끝 '· AI가 쓴 글': 한 줄에 들어가면 같은 줄, 오른쪽 배지 때문에 좁으면 조각째 다음 줄로 ('AI가 쓴' / '글' 처럼 꺾이지 않게)
+            <View style={styles.dateRow}>
+              <Muted>
+                {formatDateKo(briefing.date)} {SESSION_LABEL[briefing.session]} 브리핑
+              </Muted>
+              <Muted>· {AI_TAG}</Muted>
+            </View>
+          ) : (
+            <Muted>
+              {formatDateKo(briefing.date)} {SESSION_LABEL[briefing.session]} 브리핑
+            </Muted>
+          )}
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
           {rate !== undefined ? <ChangeText value={rate} text={formatPct(rate)} style={{ fontSize: font.small, fontWeight: "600" }} /> : null}
@@ -98,4 +108,6 @@ const DATE_HEAD_SLOP = slopFor(17);
 
 const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  // 조각 사이 간격은 글자 한 칸쯤 ('브리핑 · AI가 쓴 글')
+  dateRow: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs },
 });
