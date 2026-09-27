@@ -260,4 +260,28 @@ describe("환율 우선 소스", () => {
     expect(await f.usdKrw()).toBe(1348.8);
     expect(naverCalls).toBe(1);
   });
+
+  it("usdKrwQuote: 실제 출처(toss·naver)와 받은 시각 — 둘 다 실패하면 전에 받은 값과 그때 시각 (매매 기록 스냅샷용)", async () => {
+    const { NaverFundamentals } = await import("../src/providers/market/fundamentals.js");
+    let naverOk = true;
+    const fetchFn = (async () =>
+      naverOk
+        ? new Response(JSON.stringify({ exchangeInfo: { closePrice: "1,348.80" } }), { status: 200, headers: { "content-type": "application/json" } })
+        : new Response("oops", { status: 503 })) as unknown as typeof fetch;
+    let t = Date.parse("2026-09-29T05:05:00+09:00");
+    const f = new NaverFundamentals(fetchFn, () => new Date(t));
+    f.fxPrimary = async () => 1357.2;
+    expect(await f.usdKrwQuote()).toEqual({ rate: 1357.2, source: "toss", asOf: "2026-09-29T05:05:00+09:00" });
+    t += 30_000; // 1분 캐시 안: 같은 값·같은 받은 시각
+    expect(await f.usdKrwQuote()).toEqual({ rate: 1357.2, source: "toss", asOf: "2026-09-29T05:05:00+09:00" });
+    t += 61_000;
+    f.fxPrimary = async () => null;
+    expect(await f.usdKrwQuote()).toEqual({ rate: 1348.8, source: "naver", asOf: "2026-09-29T05:06:31+09:00" });
+    t += 3_600_000;
+    naverOk = false;
+    // 토스·네이버 모두 실패: 한 시간 전에 받은 네이버 값 — 받은 시각이 그대로라 옛 값인 것을 알 수 있다
+    expect(await f.usdKrwQuote()).toEqual({ rate: 1348.8, source: "naver", asOf: "2026-09-29T05:06:31+09:00" });
+    expect(await f.usdKrw()).toBe(1348.8);
+    expect(await new NaverFundamentals(fetchFn, () => new Date(t)).usdKrwQuote()).toBeNull();
+  });
 });

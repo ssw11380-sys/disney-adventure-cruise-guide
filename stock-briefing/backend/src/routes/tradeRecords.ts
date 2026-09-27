@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { CODE_RE } from "../lib/codes.js";
 import { AppError } from "../lib/errors.js";
 import { seoulDate } from "../lib/time.js";
-import { addDays } from "../services/tradeRecordCalc.js";
+import { addDays, marketOf } from "../services/tradeRecordCalc.js";
 import { FeatureOffError, type TradeRecordService } from "../services/tradeRecordService.js";
 
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD 형식이어야 합니다");
@@ -47,11 +48,18 @@ export const tradeRecordRoutes: FastifyPluginAsync<{ service: TradeRecordService
 };
 
 /**
- * 관리용 (API_TOKEN 보호): 상태, 지금 스냅샷 찍기(마감 뒤에만, force 면 덮어쓰기), 지금 체결 받기.
- * 플래그가 꺼져 있으면 409, 토스 키가 없으면 503
+ * 관리용 (API_TOKEN 보호): 상태, 지금 스냅샷 찍기, 지금 체결 받기.
+ *  - GET  /                 상태 (플래그가 꺼져 있으면 { enabled: false } 만 — 공개 경로와 같게 데이터를 주지 않는다)
+ *  - POST /snapshot         { market, force } 마감 뒤에만. 토스 응답이 계좌 요약·직전 스냅샷과 맞지 않으면 409(SNAPSHOT_DOUBT).
+ *                           force 면 이미 있는 줄을 덮어쓰고, 의심이 있어도 그대로 저장한다(의심 내용은 reason 에 적음)
+ *  - POST /sync-trades      { market, codes? } codes 를 주면 그 종목만 (기록 전에 전부 팔아 자동 목록에 없는 종목의 체결을 채울 때)
+ * 실행은 플래그가 꺼져 있으면 409, 토스 키가 없으면 503
  */
 export const tradeRecordAdminRoutes: FastifyPluginAsync<{ service: TradeRecordService }> = async (app, { service }) => {
-  app.get("/", async () => ({ enabled: await service.enabled(), ...(await service.status()) }));
+  app.get("/", async () => {
+    if (!(await service.enabled())) return { enabled: false };
+    return { enabled: true, ...(await service.status()) };
+  });
 
   app.post("/snapshot", async (req) => {
     const body = z.object({ market, force: z.boolean().optional() }).parse(req.body ?? {});
@@ -59,8 +67,18 @@ export const tradeRecordAdminRoutes: FastifyPluginAsync<{ service: TradeRecordSe
   });
 
   app.post("/sync-trades", async (req) => {
-    const body = z.object({ market }).parse(req.body ?? {});
+    const body = z
+      .object({
+        market,
+        codes: z
+          .array(z.string().trim().toUpperCase().regex(CODE_RE, "종목 코드 형식이 아닙니다"))
+          .max(50)
+          .optional(),
+      })
+      .parse(req.body ?? {});
     if (!(await service.enabled())) throw new FeatureOffError();
-    return service.syncTrades(body.market);
+    const wrong = (body.codes ?? []).filter((c) => marketOf(c) !== body.market);
+    if (wrong.length) throw new AppError(400, "VALIDATION", `${body.market} 종목이 아닙니다: ${wrong.join(", ")}`);
+    return service.syncTrades(body.market, body.codes);
   });
 };

@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildSnapshotData,
   CLOSE_TOLERANCE_MS,
-  emptyHoldingsProblem,
+  DOUBT_ACCEPT_MS,
   missingDates,
   recentExpectedDates,
   sessionDate,
+  snapshotDoubts,
   snapshotDueAt,
   snapshotPlan,
   tradingDaysBetween,
@@ -13,6 +14,7 @@ import {
   zonedInstant,
 } from "../src/services/tradeRecordCalc.js";
 import { seoulIso } from "../src/lib/time.js";
+import { DOUBT_MS, UNSURE_MS } from "../src/services/tossSyncService.js";
 
 /** 한국 시간 ISO → Date */
 const kst = (s: string) => new Date(`${s}+09:00`);
@@ -115,7 +117,8 @@ describe("매매 기록 — 스냅샷 내용 (3-36)", () => {
   it("미국 스냅샷은 계좌·종목별 줄, 원화는 기록한 환율로, 원화 매입금액은 원화 장부(없으면 null — 지어내지 않음)", () => {
     const d = buildSnapshotData("US", accounts, {
       fx: 1390,
-      fxSource: "display",
+      fxSource: "naver",
+      fxAsOf: "2026-09-29T05:04:10+09:00",
       scheduledAt: "2026-09-29T05:05:00+09:00",
       krwCost: (account, code, qty) => (account === 3 && code === "SOXL" && qty === 25 ? { krw: 1_150_000, source: "book-exact" } : null),
     });
@@ -125,21 +128,68 @@ describe("매매 기록 — 스냅샷 내용 (3-36)", () => {
     ]);
     expect(d.holdings[0]).toMatchObject({ valueKrw: 1_321_195, costKrw: 1_150_000, costKrwSource: "book-exact" });
     expect(d.holdings[1]).toMatchObject({ valueKrw: 264_239, costKrw: null, costKrwSource: null });
-    expect(d.fx).toEqual({ usdKrw: 1390, source: "display" });
+    // 환율은 실제 출처와 받은 시각을 함께 (토스 표시 환율을 못 받아 네이버 값을 썼으면 'naver')
+    expect(d.fx).toEqual({ usdKrw: 1390, source: "naver", asOf: "2026-09-29T05:04:10+09:00" });
     // 원화 매입금액이 하나라도 없으면 합계도 null
     expect(d.totals).toMatchObject({ holdings: 2, valueKrw: 1_585_434, costKrw: null, valueUsd: 1140.6, costUsd: 1000.4 });
     const noFx = buildSnapshotData("US", accounts, { fx: null, fxSource: null, scheduledAt: "x", krwCost: () => null });
     expect(noFx.totals.valueKrw).toBeNull();
     expect(noFx.holdings[0]!.valueKrw).toBeNull();
+    expect(noFx.fx).toEqual({ usdKrw: null, source: null, asOf: null });
   });
 
-  it("보유가 비었는데 계좌 요약에 그 통화 매입금액이 있거나 모르면 믿지 않는다 (일시 오류로 보고 다시)", () => {
-    const empty = (purchaseKrw: number, purchaseUsd: number | null) => [{ account: 1, items: [], overview: { purchaseKrw, purchaseUsd, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } }];
-    expect(emptyHoldingsProblem("KR", empty(1000, 0))).toMatch(/비었/);
-    expect(emptyHoldingsProblem("KR", empty(0, 0))).toBeNull();
-    expect(emptyHoldingsProblem("US", empty(0, null))).toMatch(/비었/);
-    expect(emptyHoldingsProblem("US", empty(0, 0))).toBeNull();
-    expect(emptyHoldingsProblem("US", accounts)).toBeNull();
+  // 계좌 하나짜리 응답 (overview 는 주지 않은 칸만 기본값)
+  const acct = (account: number, items: (typeof accounts)[number]["items"], overview: Partial<(typeof accounts)[number]["overview"]> = {}) => ({
+    account,
+    items,
+    overview: { purchaseKrw: 0, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null, ...overview },
+  });
+
+  it("계좌마다 확인: 한 계좌 보유 목록만 비어 오고 그 계좌 요약 매입금액은 있으면 의심 (다른 계좌에 종목이 있어도)", () => {
+    const tsla = { code: "TSLA", name: "TSLA", currency: "USD" as const, quantity: 2, avgPrice: 300, lastPrice: 377.5, purchaseAmount: 600, marketValue: 755, marketValueAfterCost: 754 };
+    const soxl = accounts[0]!.items[1]!;
+    const ok = [acct(3, [soxl], { purchaseUsd: 825.4 }), acct(7, [tsla], { purchaseUsd: 600 })];
+    expect(snapshotDoubts("US", ok, [3, 7])).toEqual([]);
+    // 예전 검사(시장 전체)는 계좌 3 에 미국 종목이 있어 그냥 넘겼다 → 계좌 7 몫이 빠진 합계가 'ok' 로 영구히 남았다
+    const broken = [acct(3, [soxl], { purchaseUsd: 825.4 }), acct(7, [], { purchaseUsd: 600 })];
+    expect(snapshotDoubts("US", broken, [3, 7])).toEqual([{ kind: "empty", account: 7, text: "계좌 7: 미국 보유 목록이 비었는데 계좌 요약 매입금액은 $600" }]);
+    // 한국: 원화 요약이 있는데 한국 종목이 없으면 의심, 원화 요약이 0 이면(미국 종목만 있는 계좌) 괜찮다
+    expect(snapshotDoubts("KR", [acct(3, [soxl], { purchaseKrw: 700000, purchaseUsd: 825.4 })])).toEqual([
+      { kind: "empty", account: 3, text: "계좌 3: 한국 보유 목록이 비었는데 계좌 요약 매입금액은 700,000원" },
+    ]);
+    expect(snapshotDoubts("KR", [acct(3, [soxl], { purchaseUsd: 825.4 })])).toEqual([]);
+    expect(snapshotDoubts("KR", [acct(3, [], { purchaseUsd: 0 })])).toEqual([]); // 정말 빈 계좌 → 0종목 스냅샷도 사실
+  });
+
+  it("직전 스냅샷에 있던 계좌가 계좌 목록에서 빠지면 의심", () => {
+    const one = [acct(3, [accounts[0]!.items[1]!], { purchaseUsd: 825.4 })];
+    expect(snapshotDoubts("US", one, [3, 7, 7])).toEqual([{ kind: "missing-account", account: 7, text: "계좌 7: 직전 스냅샷에 있던 계좌가 토스 계좌 목록에서 빠짐" }]);
+    expect(snapshotDoubts("US", one, [])).toEqual([]); // 첫 스냅샷은 비교할 것이 없다
+  });
+
+  it("목록이 통째로 비었고 달러 요약이 없으면 'unsure', 다른 시장 종목이 있는 계좌의 달러 요약 빈칸은 '달러 종목 없음'", () => {
+    expect(snapshotDoubts("US", [acct(3, [], { purchaseUsd: null })]).map((d) => [d.kind, d.account])).toEqual([["unsure", 3]]);
+    expect(snapshotDoubts("KR", [acct(3, [], { purchaseUsd: null })]).map((d) => d.kind)).toEqual(["unsure"]);
+    expect(snapshotDoubts("US", [acct(3, [accounts[0]!.items[0]!], { purchaseKrw: 700000, purchaseUsd: null })])).toEqual([]);
+  });
+
+  it("종목 매입금액 합계가 계좌 요약과 1% 넘게 다르면(목록 일부만 옴) 'sum' — 반올림 차이는 넘긴다", () => {
+    const items = accounts[0]!.items; // 삼성전자 700,000원 + SOXL $825.4
+    expect(snapshotDoubts("US", [acct(3, items, { purchaseKrw: 700000, purchaseUsd: 825.4 + 750 })])).toEqual([
+      { kind: "sum", account: 3, text: "계좌 3: 미국 종목 매입금액 합계 $825.4 ≠ 계좌 요약 $1575.4" },
+    ]);
+    expect(snapshotDoubts("US", [acct(3, items, { purchaseKrw: 700000, purchaseUsd: 825.45 })])).toEqual([]);
+    expect(snapshotDoubts("KR", [acct(3, items, { purchaseKrw: 2_792_995, purchaseUsd: 825.4 })]).map((d) => d.kind)).toEqual(["sum"]);
+    expect(snapshotDoubts("KR", [acct(3, items, { purchaseKrw: 700_004, purchaseUsd: 825.4 })])).toEqual([]);
+    // 종목 매입금액을 모르면 맞춰 볼 수 없어 넘긴다
+    expect(snapshotDoubts("US", [acct(3, [{ ...items[1]!, purchaseAmount: null }], { purchaseUsd: 9999 })])).toEqual([]);
+  });
+
+  it("받아들이기 기준은 토스 동기화와 같다: unsure 30분, 목록이 비었거나 계좌가 빠진 것은 24시간", () => {
+    expect(DOUBT_ACCEPT_MS.unsure).toBe(UNSURE_MS);
+    expect(DOUBT_ACCEPT_MS.empty).toBe(DOUBT_MS);
+    expect(DOUBT_ACCEPT_MS["missing-account"]).toBe(DOUBT_MS);
+    expect(DOUBT_ACCEPT_MS.sum).toBe(30 * 60_000);
   });
 });
 

@@ -142,7 +142,8 @@ export interface AccountSnapshotTable {
 
 /**
  * 체결 기록 (3-36): 토스 주문 내역의 체결된 주문 1건 = 1줄 (계좌·주문번호로 중복 없음). 부분 체결은 누적 수량·금액과 마지막 체결 시각으로 고친다.
- * 수수료·세금은 토스 주문 내역 칸을 확인한 뒤 채운다(지금은 null, 원본은 raw)
+ * 수수료·세금은 토스 주문 내역 칸을 확인한 뒤 채운다(지금은 null, 원본은 raw). 체결 시점 환율은 저장하지 않는다 — 미국 체결의 원화 금액(3-37 원화 실현손익·
+ * 해외 양도세)은 원화 장부처럼 토스 과거 환율(usdKrwAt, 체결 시각 기준)로 채워야 한다
  */
 export interface TradeExecutionTable {
   id: Generated<number>;
@@ -157,9 +158,9 @@ export interface TradeExecutionTable {
   currency: string; // 'KRW' | 'USD'
   fee: number | null;
   tax: number | null;
-  executed_at: string; // 마지막 체결 시각 (없으면 주문 시각 — time_basis 로 구분), 토스가 준 표기 그대로
+  executed_at: string; // 마지막 체결 시각 (없으면 주문 시각, 그것도 없으면 처음 받은 시각 — time_basis 로 구분, 처음 받은 시각은 다시 받아도 바꾸지 않음), 토스가 준 표기 그대로
   executed_date: string; // 그 시장 거래일 YYYY-MM-DD
-  time_basis: string; // 'filled' | 'ordered'
+  time_basis: string; // 'filled' | 'ordered' | 'seen'
   order_status: string; // 'CLOSED' | 'OPEN'
   source: string; // 'toss-orders'
   raw: string; // JSON (계좌번호 칸은 뺌)

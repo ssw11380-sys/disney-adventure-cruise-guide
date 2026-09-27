@@ -162,12 +162,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     tossDeps = { provider: opts.providers.tossOpenApi, sync, autoSync, live, outboundIp, reconcile };
   }
   // 매매 기록 기반 (3-36, 플래그 tradeRecords): 시장마다 장 마감 뒤 계좌 스냅샷 1줄 + 토스 주문 내역의 체결 저장. 토스 키가 있을 때만 예약이 돌고
-  // (1분마다 확인, 서버를 켜면 1분 뒤 놓친 스냅샷 따라잡기), 키가 없으면 읽기만. 미국 원화 합계는 원화 장부와 같은 표시 환율
+  // (1분마다 확인, 서버를 켜면 1분 뒤 놓친 스냅샷 따라잡기), 키가 없으면 읽기만. 미국 원화 합계는 원화 장부와 같은 경로의 환율(토스 표시 환율 →
+  // 네이버 → 전에 받아 둔 값)이고, 실제 출처와 받은 시각을 함께 적는다
   const tradeRecords = new TradeRecordService({
     db: opts.db,
     toss: opts.providers.tossOpenApi,
     features,
-    displayFx: opts.providers.fundamentals ? () => opts.providers.fundamentals!.usdKrw() : null,
+    displayFx: opts.providers.fundamentals ? () => opts.providers.fundamentals!.usdKrwQuote() : null,
     isTradingDate: (market, date) => opts.providers.calendar.isTradingDate(market, date),
     now,
     log,

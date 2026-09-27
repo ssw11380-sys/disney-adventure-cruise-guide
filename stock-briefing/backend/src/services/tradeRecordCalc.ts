@@ -10,6 +10,8 @@ import { isKrTradingDate, isUsTradingDate, krRegularHours, tradingDate, usRegula
  *  - 방법: 예약 시각부터 30분 안이면 'close', 그 뒤 같은 거래일 안이면(서버가 늦게 켜졌거나 토스 오류 뒤 다시) 'intraday-fallback'.
  *    둘 다 그때 토스 보유 조회의 수량·평단·현재가 그대로다 — 한국은 NXT 애프터마켓, 미국은 애프터마켓 체결이 섞일 수 있어 '정규장 종가'와 조금 다를 수 있다
  *  - 거래일이 지나도록 못 찍은 날은 값을 지어내지 않고 빈칸(gap)으로 남긴다
+ *  - 한국 16:05 뒤에도 NXT 애프터마켓(~20:00)에서 체결될 수 있어, 거래일 D 에 체결(executed_date = D)됐어도 보유 변화는 D+1 스냅샷에 들어갈 수 있다.
+ *    그래서 체결과 스냅샷을 짝지을 때는 executed_date 가 아니라 스냅샷 asOf 와 체결 시각(executed_at)을 비교한다 (unexplainedChanges 가 그렇게 한다)
  */
 
 export type RecordMarket = "KR" | "US";
@@ -158,11 +160,17 @@ export interface SnapshotData {
   version: 1;
   /** 가격이 무엇인지 (사람이 읽는 설명) */
   priceBasis: string;
-  fx: { usdKrw: number | null; source: string | null } | null;
+  /**
+   * 미국만: 원화 합계에 쓴 환율과 실제 출처('toss' 토스 표시 환율 · 'naver' 네이버 환율 · 'unknown' 출처를 모름), 그 환율을 받은 시각(asOf —
+   * 받기에 실패해 전에 받아 둔 값을 썼으면 그때 시각이라 찍은 시각보다 이르다). 환율이 없으면 usdKrw·source·asOf 모두 null
+   */
+  fx: { usdKrw: number | null; source: string | null; asOf: string | null } | null;
   holdings: SnapshotHolding[];
   totals: SnapshotTotals;
   /** 찍은 때 토스 계좌 요약 (계좌 순번별 — 계좌번호 없음). 3-37 에서 토스 수익률과 맞춰 보는 데 쓴다 */
   accounts: Array<{ account: number } & AccountOverview>;
+  /** 오래 이어져 받아들인 의심 (snapshotDoubts) — 있으면 이 스냅샷은 계좌 몫이 빠졌을 수 있다. 없으면 칸이 없다 */
+  doubts?: string[];
 }
 
 export const PRICE_BASIS: Record<RecordMarket, string> = {
@@ -183,6 +191,8 @@ export function buildSnapshotData(
   ctx: {
     fx: number | null;
     fxSource: string | null;
+    /** 그 환율을 받은 시각 (모르면 null) */
+    fxAsOf?: string | null;
     scheduledAt: string;
     /** (계좌, 종목, 수량) → 원화 장부의 원화 매입금액. 수량이 맞지 않거나 없으면 null */
     krwCost: (account: number, code: string, quantity: number) => { krw: number; source: "book-exact" | "book-estimated" } | null;
@@ -220,7 +230,7 @@ export function buildSnapshotData(
   return {
     version: 1,
     priceBasis: PRICE_BASIS[market],
-    fx: us ? { usdKrw: ctx.fx, source: ctx.fx !== null ? ctx.fxSource : null } : null,
+    fx: us ? { usdKrw: ctx.fx, source: ctx.fx !== null ? ctx.fxSource : null, asOf: ctx.fx !== null ? ctx.fxAsOf ?? null : null } : null,
     holdings,
     totals: {
       holdings: holdings.length,
@@ -234,15 +244,80 @@ export function buildSnapshotData(
   };
 }
 
+// ── 토스 응답을 믿을 수 있는지 (계좌마다) ────────────────────────────────
+//
+// 스냅샷은 한 번 쓰면 다시 찍지 않으므로, 계좌 하나의 몫이 빠진 응답을 'ok' 로 남기면 틀린 합계가 영구히 남는다
+// (3-37 기간 수익률·'어제와 비교'·다음 스냅샷과의 '추정' 줄까지 틀어짐). 그래서 계좌마다 보고, 의심스러우면 찍지 않고 다시 묻는다.
+// 같은 의심이 오래 이어지면(정말 그 상태일 수 있음 — 계좌 해지, 전부 판 빈 계좌) 토스 동기화(tossSyncService)와 같은 기준으로
+// 받아들이되, 그 스냅샷에 의심 내용을 적어(reason·data.doubts) 나중에 가려낼 수 있게 한다.
+
 /**
- * 보유 목록이 그 시장 종목 없이 비었는데 계좌 요약에 그 통화 매입금액이 있거나(0 이 아님) 모르면(null) 일시 오류로 본다 — 까닭을 돌려준다.
- * 정말 그 시장 종목이 없으면(요약도 0) null → 0종목 스냅샷도 사실이다
+ * - empty: 그 계좌의 그 시장 보유 목록이 비었는데 계좌 요약의 그 통화 매입금액이 0 이 아님 (목록만 비어 온 일시 오류)
+ * - unsure: 그 계좌 보유 목록이 통째로 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음
+ * - sum: 그 계좌 종목 매입금액 합계가 요약 매입금액과 맞지 않음 (목록 일부만 온 일시 오류)
+ * - missing-account: 직전 스냅샷에 있던 계좌가 계좌 목록에서 빠짐
  */
-export function emptyHoldingsProblem(market: RecordMarket, accounts: AccountHoldings[]): string | null {
-  const any = accounts.some((a) => a.items.some((h) => marketOf(h.code) === market && h.quantity > 0));
-  if (any) return null;
-  const doubtful = accounts.some((a) => (market === "KR" ? a.overview.purchaseKrw !== 0 : a.overview.purchaseUsd !== 0));
-  return doubtful ? `${MARKET_NAME[market]} 보유 목록이 비었는데 계좌 요약에는 매입금액이 있거나 알 수 없음 — 일시 오류로 보고 다시 찍음` : null;
+export type DoubtKind = "empty" | "unsure" | "sum" | "missing-account";
+
+export interface SnapshotDoubt {
+  kind: DoubtKind;
+  /** 토스 계좌 순번(accountSeq) — 계좌번호가 아님 */
+  account: number;
+  text: string;
+}
+
+/**
+ * 같은 의심이 처음 본 뒤 이만큼 넘게, 두 번 이상 이어지면 받아들인다 (tossSyncService 의 UNSURE_MS 30분 · DOUBT_MS 24시간과 같은 값).
+ * 24시간 쪽은 그 거래일 안에 풀리지 않으면 그날은 빈칸이 되고, 다음 거래일 스냅샷에서 받아들인다
+ */
+export const DOUBT_ACCEPT_MS: Record<DoubtKind, number> = {
+  unsure: 30 * 60_000,
+  sum: 30 * 60_000,
+  empty: 24 * 3_600_000,
+  "missing-account": 24 * 3_600_000,
+};
+
+/** 종목 매입금액 합계와 요약 매입금액의 허용 차이: 요약의 1% 와 (원화 10원 · 달러 0.1달러) 가운데 큰 값 — 반올림·표시 차이는 넘기고 종목이 빠진 것만 잡는다 */
+export const SUM_TOLERANCE = { rel: 0.01, KRW: 10, USD: 0.1 } as const;
+
+const money = (n: number, cur: "KRW" | "USD") => (cur === "KRW" ? `${Math.round(n).toLocaleString("en-US")}원` : `$${round4(n)}`);
+
+/**
+ * 그 시장 스냅샷을 찍기 전에 계좌마다 토스 응답을 확인한다. 빈 배열이면 믿을 수 있다.
+ * 매입금액 요약은 계좌마다 통화별(원화 = 한국 종목, 달러 = 미국 종목 — 원화 장부 보정과 같은 뜻)이라 그 시장 통화 칸과 맞춰 본다.
+ * @param prevAccounts 직전 ok 스냅샷의 계좌 순번 (없으면 빈 배열)
+ */
+export function snapshotDoubts(market: RecordMarket, accounts: AccountHoldings[], prevAccounts: readonly number[] = []): SnapshotDoubt[] {
+  const out: SnapshotDoubt[] = [];
+  const name = MARKET_NAME[market];
+  const cur = market === "KR" ? "KRW" : "USD";
+  const listed = new Set(accounts.map((a) => a.account));
+  for (const acct of [...new Set(prevAccounts)].sort((x, y) => x - y)) {
+    if (!listed.has(acct)) out.push({ kind: "missing-account", account: acct, text: `계좌 ${acct}: 직전 스냅샷에 있던 계좌가 토스 계좌 목록에서 빠짐` });
+  }
+  for (const a of accounts) {
+    const held = a.items.filter((h) => h.quantity > 0);
+    const mine = held.filter((h) => marketOf(h.code) === market);
+    const summary = market === "KR" ? a.overview.purchaseKrw : a.overview.purchaseUsd;
+    if (mine.length === 0) {
+      if (summary !== null && summary !== 0) {
+        out.push({ kind: "empty", account: a.account, text: `계좌 ${a.account}: ${name} 보유 목록이 비었는데 계좌 요약 매입금액은 ${money(summary, cur)}` });
+      } else if (held.length === 0 && a.overview.purchaseUsd === null) {
+        // 목록이 통째로 비었고 달러 요약도 없다: 요약이 빠진 일시 오류와 전부 판 빈 계좌를 가릴 수 없다 (원화 요약은 없으면 0 으로 읽힌다).
+        // 목록에 다른 시장 종목이 있는 계좌의 달러 요약 빈칸은 '달러 종목 없음'으로 본다 (토스 동기화와 같은 기준)
+        out.push({ kind: "unsure", account: a.account, text: `계좌 ${a.account}: 보유 목록이 비었고 요약의 달러 매입금액이 없어 빈 계좌인지 확인할 수 없음` });
+      }
+      continue;
+    }
+    if (summary === null) continue;
+    const sameCur = held.filter((h) => h.currency === cur);
+    if (sameCur.some((h) => h.purchaseAmount === null || h.purchaseAmount === undefined)) continue; // 종목 매입금액을 모르면 맞춰 볼 수 없다
+    const sum = sameCur.reduce((s, h) => s + (h.purchaseAmount ?? 0), 0);
+    if (Math.abs(sum - summary) > Math.max(SUM_TOLERANCE[cur], Math.abs(summary) * SUM_TOLERANCE.rel)) {
+      out.push({ kind: "sum", account: a.account, text: `계좌 ${a.account}: ${name} 종목 매입금액 합계 ${money(sum, cur)} ≠ 계좌 요약 ${money(summary, cur)}` });
+    }
+  }
+  return out;
 }
 
 // ── 주문 내역으로 설명되지 않는 수량 변화 (추정) ─────────────────────────────
