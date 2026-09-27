@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import * as Device from "expo-device";
 import React, { useEffect, useState } from "react";
 import { Alert, Dimensions, PixelRatio, Pressable, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";

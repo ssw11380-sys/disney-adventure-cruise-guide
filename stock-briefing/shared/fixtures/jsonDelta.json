@@ -1,0 +1,1969 @@
+[
+ {
+  "name": "잔고: 한 종목 가격·등락·평가가 바뀜",
+  "base": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "next": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 352000,
+     "change": -3500,
+     "changeRate": -0.99,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:04.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3520000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 344960,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "patch": {
+   "#": {
+    "1": {
+     "quote": {
+      "price": 352000,
+      "change": -3500,
+      "changeRate": -0.99,
+      "asOf": "2026-09-28T10:00:04.000+09:00"
+     },
+     "evaluation": {
+      "marketValue": 3520000,
+      "afterCost": {
+       "profit": 344960
+      }
+     }
+    }
+   }
+  },
+  "hash": "68f448f1",
+  "baseHash": "62da7def"
+ },
+ {
+  "name": "잔고: 가격은 그대로 기준 시각(asOf)만 바뀜",
+  "base": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "next": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:01:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "patch": {
+   "#": {
+    "0": {
+     "quote": {
+      "asOf": "2026-09-28T10:01:00.000+09:00"
+     }
+    }
+   }
+  },
+  "hash": "f06bd6de",
+  "baseHash": "62da7def"
+ },
+ {
+  "name": "잔고: 칸이 새로 생기고(시세 지연) 사라짐(세션)",
+  "base": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "next": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "realtime": true,
+     "stale": true,
+     "fxRate": 1391.5
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "patch": {
+   "#": {
+    "2": {
+     "quote": {
+      "stale": true,
+      "fxRate": 1391.5,
+      "session": {
+       "-": 1
+      }
+     }
+    }
+   }
+  },
+  "hash": "1eb4416c",
+  "baseHash": "62da7def"
+ },
+ {
+  "name": "잔고: 시세가 없어짐(null)·오류 문구",
+  "base": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "next": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": null,
+    "quoteError": "시세를 불러오는 중입니다",
+    "evaluation": null
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "patch": {
+   "#": {
+    "0": {
+     "quote": null,
+     "quoteError": "시세를 불러오는 중입니다",
+     "evaluation": null
+    }
+   }
+  },
+  "hash": "3b4af3ac",
+  "baseHash": "62da7def"
+ },
+ {
+  "name": "잔고: null 이던 시세가 생김(객체)",
+  "base": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": null,
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "next": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "patch": {
+   "#": {
+    "0": {
+     "quote": {
+      "$": {
+       "code": "005930",
+       "currency": "KRW",
+       "price": 84300,
+       "change": 1200,
+       "changeRate": 1.44,
+       "high": 84800,
+       "low": 83600,
+       "volume": 14832110,
+       "asOf": "2026-09-28T10:00:00.000+09:00",
+       "source": "toss",
+       "session": {
+        "market": "KR",
+        "phase": "regular",
+        "open": true,
+        "eligible": true,
+        "until": "2026-09-28T15:30:00+09:00"
+       },
+       "realtime": true,
+       "stale": false
+      }
+     }
+    }
+   }
+  },
+  "hash": "62da7def",
+  "baseHash": "c7d68c6b"
+ },
+ {
+  "name": "잔고: 종목이 늘면 통째로",
+  "base": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "next": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "NVDA",
+    "name": "엔비디아",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 160.38,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "NVDA",
+     "currency": "USD",
+     "price": 178.2,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 678.2,
+     "low": -521.8,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:03.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 1782,
+     "costBasis": 1603.8,
+     "profit": 178.2,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 1778.436,
+      "profit": 174.636,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "patch": [
+   {
+    "code": "005930",
+    "name": "삼성전자",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 75870,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "005930",
+     "currency": "KRW",
+     "price": 84300,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 84800,
+     "low": 83600,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:00.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 843000,
+     "costBasis": 758700,
+     "profit": 84300,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 841314,
+      "profit": 82614,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "000660",
+    "name": "SK하이닉스",
+    "market": "KOSPI",
+    "quantity": 10,
+    "avgPrice": 315900,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "000660",
+     "currency": "KRW",
+     "price": 351000,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 351500,
+     "low": 350300,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:01.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 3510000,
+     "costBasis": 3159000,
+     "profit": 351000,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 3502980,
+      "profit": 343980,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "AAPL",
+    "name": "애플",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 228.96,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "AAPL",
+     "currency": "USD",
+     "price": 254.4,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 754.4,
+     "low": -445.6,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:02.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 2544,
+     "costBasis": 2289.6,
+     "profit": 254.4,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 2538.9120000000003,
+      "profit": 249.312,
+      "profitRate": 10.89
+     }
+    }
+   },
+   {
+    "code": "NVDA",
+    "name": "엔비디아",
+    "market": "NASDAQ",
+    "quantity": 10,
+    "avgPrice": 160.38,
+    "memo": null,
+    "tossSynced": true,
+    "quote": {
+     "code": "NVDA",
+     "currency": "USD",
+     "price": 178.2,
+     "change": 1200,
+     "changeRate": 1.44,
+     "high": 678.2,
+     "low": -521.8,
+     "volume": 14832110,
+     "asOf": "2026-09-28T10:00:03.000+09:00",
+     "source": "toss",
+     "session": {
+      "market": "KR",
+      "phase": "regular",
+      "open": true,
+      "eligible": true,
+      "until": "2026-09-28T15:30:00+09:00"
+     },
+     "realtime": true,
+     "stale": false
+    },
+    "quoteError": null,
+    "evaluation": {
+     "marketValue": 1782,
+     "costBasis": 1603.8,
+     "profit": 178.2,
+     "profitRate": 11.11,
+     "afterCost": {
+      "marketValue": 1778.436,
+      "profit": 174.636,
+      "profitRate": 10.89
+     }
+    }
+   }
+  ],
+  "hash": "d1ff83af",
+  "baseHash": "62da7def"
+ },
+ {
+  "name": "상세: 객체 뿌리, 숫자 0·음수·소수·큰 수·한글",
+  "base": {
+   "code": "AAPL",
+   "registered": true,
+   "quote": {
+    "price": 254.4,
+    "change": -4.1,
+    "changeRate": -1.59,
+    "marketCap": 3780000000000,
+    "priceKrw": 353997
+   },
+   "name": "애플"
+  },
+  "next": {
+   "code": "AAPL",
+   "registered": true,
+   "quote": {
+    "price": 0,
+    "change": -0.0001,
+    "changeRate": -1.59,
+    "marketCap": 3780000000001,
+    "priceKrw": 353997
+   },
+   "name": "애플 (Apple Inc.) — 가·나"
+  },
+  "patch": {
+   "quote": {
+    "price": 0,
+    "change": -0.0001,
+    "marketCap": 3780000000001
+   },
+   "name": "애플 (Apple Inc.) — 가·나"
+  },
+  "hash": "f420b04a",
+  "baseHash": "13ee8782"
+ },
+ {
+  "name": "특수 키($·#·-)가 있는 객체는 통째로",
+  "base": {
+   "a": {
+    "$": 1,
+    "b": 2
+   },
+   "c": [
+    1,
+    2,
+    3
+   ]
+  },
+  "next": {
+   "a": {
+    "$": 1,
+    "b": 3
+   },
+   "c": [
+    1,
+    9,
+    3
+   ]
+  },
+  "patch": {
+   "a": {
+    "$": {
+     "$": 1,
+     "b": 3
+    }
+   },
+   "c": {
+    "#": {
+     "1": 9
+    }
+   }
+  },
+  "hash": "1e931b7a",
+  "baseHash": "abf9a98c"
+ },
+ {
+  "name": "값의 종류가 바뀜(배열↔객체↔문자)",
+  "base": {
+   "x": [
+    1,
+    2
+   ],
+   "y": {
+    "z": 1
+   },
+   "w": "s",
+   "v": true
+  },
+  "next": {
+   "x": {
+    "k": 1
+   },
+   "y": [
+    1
+   ],
+   "w": {
+    "q": null
+   },
+   "v": null
+  },
+  "patch": {
+   "x": {
+    "$": {
+     "k": 1
+    }
+   },
+   "y": [
+    1
+   ],
+   "w": {
+    "$": {
+     "q": null
+    }
+   },
+   "v": null
+  },
+  "hash": "05e78ddb",
+  "baseHash": "fb1f7f3e"
+ },
+ {
+  "name": "지수: 배열 안 객체 값만",
+  "base": {
+   "indices": [
+    {
+     "code": "KOSPI",
+     "value": 3456.78,
+     "fetchedAt": "2026-09-28T10:00:00+09:00"
+    },
+    {
+     "code": "USDKRW",
+     "value": 1391.5,
+     "fetchedAt": "2026-09-28T10:00:00+09:00"
+    }
+   ]
+  },
+  "next": {
+   "indices": [
+    {
+     "code": "KOSPI",
+     "value": 3457.01,
+     "fetchedAt": "2026-09-28T10:00:30+09:00"
+    },
+    {
+     "code": "USDKRW",
+     "value": 1391.5,
+     "fetchedAt": "2026-09-28T10:00:30+09:00"
+    }
+   ]
+  },
+  "patch": {
+   "indices": {
+    "#": {
+     "0": {
+      "value": 3457.01,
+      "fetchedAt": "2026-09-28T10:00:30+09:00"
+     },
+     "1": {
+      "fetchedAt": "2026-09-28T10:00:30+09:00"
+     }
+    }
+   }
+  },
+  "hash": "38cf0935",
+  "baseHash": "879043b8"
+ }
+]

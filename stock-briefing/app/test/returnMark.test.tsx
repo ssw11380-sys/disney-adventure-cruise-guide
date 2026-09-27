@@ -32,7 +32,7 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => h.win,
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 48, left: 0, right: 0 }) }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: h.push }, useIsFocused: () => h.focused }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");

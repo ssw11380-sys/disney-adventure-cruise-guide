@@ -26,7 +26,7 @@ vi.mock("react-native-gesture-handler", () => {
   return { Gesture: chain, GestureDetector: "GestureDetector" };
 });
 vi.mock("expo-haptics", () => ({ selectionAsync: async () => undefined }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
   return { ...tokens, useTheme: () => (h.dark ? tokens.dark : tokens.light), useFontScale: (cap = Infinity) => Math.min(h.scale, cap) };

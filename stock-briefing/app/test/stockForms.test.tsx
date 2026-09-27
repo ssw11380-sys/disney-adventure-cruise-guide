@@ -54,7 +54,7 @@ vi.mock("react-native", async () => {
     ToastAndroid: { show: vi.fn(), SHORT: 0 },
   };
 });
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: vi.fn(), back: h.back, dismissTo: vi.fn() }, useLocalSearchParams: () => h.params }));
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => ({ invalidateQueries: async () => {} }) }));
 vi.mock("@/theme", async () => {

@@ -63,4 +63,14 @@ module.exports = defineConfig([
     ignores: ["src/tokens.ts", "src/widgets/palette.ts"],
     rules: { "no-restricted-syntax": ["error", ...designRules] },
   },
+  {
+    // 아이콘 글꼴 정리 (3-25 성능-10): 묶음 입구는 쓰지 않는 글꼴 18개(약 3.7MB)까지 업데이트·APK 에 넣는다 → 글꼴 한 가지씩만
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { paths: [{ name: "@expo/vector-icons", message: "쓰지 않는 아이콘 글꼴까지 들어갑니다. import Ionicons from \"@expo/vector-icons/Ionicons\" 처럼 한 가지씩 부르세요" }] },
+      ],
+    },
+  },
 ]);

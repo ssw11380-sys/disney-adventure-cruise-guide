@@ -21,7 +21,7 @@ vi.mock("react-native", () => ({
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 0.5, absoluteFill: {} },
   Platform: { OS: "android" },
 }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: vi.fn() } }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");

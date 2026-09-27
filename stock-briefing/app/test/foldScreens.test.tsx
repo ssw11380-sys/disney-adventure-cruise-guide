@@ -82,7 +82,7 @@ vi.mock("react-native", async () => {
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => h.insets }));
 vi.mock("react-native-svg", () => ({ Svg: "Svg", Path: "Path" }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({ router: { push: h.push }, Stack: { Screen: "StackScreen" }, useLocalSearchParams: () => h.params, usePathname: () => "/" }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { version: "1.4.0" } } }));
 vi.mock("@/theme", async () => {

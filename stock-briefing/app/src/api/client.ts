@@ -33,6 +33,8 @@ import type { AppErrorSummary, Evaluation,
   FeatureFlags,
 } from "./types";
 
+import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
+
 export class ApiRequestError extends Error {
   constructor(
     public readonly status: number,
@@ -44,13 +46,12 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function request<T>(baseUrl: string, token: string, path: string, init: RequestInit = {}, timeoutMs = 60_000): Promise<T> {
+/** 요청 한 번: 응답과 본문 글자. 연결·시간 초과는 ApiRequestError(0) */
+async function exchange(baseUrl: string, token: string, path: string, init: RequestInit, timeoutMs: number): Promise<{ res: Response; text: string }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  let res: Response;
-  let text: string;
   try {
-    res = await fetch(`${baseUrl}${path}`, {
+    const res = await fetch(`${baseUrl}${path}`, {
       ...init,
       headers: {
         accept: "application/json",
@@ -61,13 +62,78 @@ async function request<T>(baseUrl: string, token: string, path: string, init: Re
       signal: ctrl.signal,
     });
     // 헤더만 오고 본문이 멈추는 경우도 제한 시간에 끊는다: 타이머는 본문을 다 읽은 뒤에 푼다 (NET-01)
-    text = res.status === 204 ? "" : await res.text();
+    const text = res.status === 204 || res.status === 304 ? "" : await res.text();
+    return { res, text };
   } catch (e) {
     const aborted = ctrl.signal.aborted || (e as Error).name === "AbortError";
     throw new ApiRequestError(0, aborted ? "TIMEOUT" : "NETWORK", aborted ? "서버 응답이 없습니다 (시간 초과)" : `서버에 연결할 수 없습니다: ${baseUrl}`);
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function request<T>(baseUrl: string, token: string, path: string, init: RequestInit = {}, timeoutMs = 60_000): Promise<T> {
+  const { res, text } = await exchange(baseUrl, token, path, init, timeoutMs);
+  return result<T>(res, text);
+}
+
+/**
+ * 조건부 GET (플래그 pollSaver, 3-25 성능-16 — 규칙은 condCache.ts). 304 는 기억한 본문, 226 은 기억한 본문 + 차이(해시가 맞을 때만),
+ * 그 밖에는 request 와 같다. 차이를 쓸 수 없으면 조건 없이 한 번 더 받아 전체로 바꾼다 (옛 값을 보여 주지 않게)
+ */
+async function requestCond<T>(baseUrl: string, token: string, path: string, timeoutMs: number): Promise<T> {
+  const key = condKey(baseUrl, path);
+  const held = condGet(key);
+  const { res, text } = await exchange(baseUrl, token, path, { headers: condHeaders(held) }, timeoutMs);
+  if (res.status === 304 && held) {
+    condNote("same");
+    return JSON.parse(held.text) as T;
+  }
+  if (res.ok && res.status !== 304) {
+    let json: unknown = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      /* 아래 result 가 처리 */
+    }
+    if (!isDelta(json)) {
+      // 전체 본문: ETag 가 있으면 기억, 없으면(예전 서버·플래그 꺼짐) 잊는다
+      const etag = res.headers.get("etag");
+      if (etag && json !== null) condPut(key, etag, text);
+      else condDrop(key);
+      condNote("full");
+      return result<T>(res, text);
+    }
+    const out = rebuild(held, json);
+    if (out !== null) {
+      condPut(key, json.etag, JSON.stringify(out));
+      condNote("delta");
+      return out as T;
+    }
+    condNote("resync");
+  }
+  if (res.ok || res.status === 304) {
+    // 쓸 수 없는 차이·기억에 없는 304: 기억을 버리고 조건 없이 전체를 받는다
+    condDrop(key);
+    const again = await exchange(baseUrl, token, path, {}, timeoutMs);
+    const etag = again.res.headers.get("etag");
+    if (again.res.ok && etag && again.text && !isDelta(safeParse(again.text))) condPut(key, etag, again.text);
+    condNote("full");
+    return result<T>(again.res, again.text);
+  }
+  return result<T>(res, text);
+}
+
+function safeParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** 응답 → 값 (204 면 없음, 실패면 ApiRequestError) */
+function result<T>(res: Response, text: string): T {
   if (res.status === 204) return undefined as T;
   let json: unknown = null;
   try {
@@ -92,15 +158,25 @@ async function request<T>(baseUrl: string, token: string, path: string, init: Re
  */
 const stockPath = (code: string) => `/api/stocks/${encodeURIComponent(code)}`;
 
+export interface ApiOptions {
+  /**
+   * 끊겼을 때 데이터 절약(플래그 pollSaver)이 켜져 있는지 — 요청할 때마다 묻는다. 켜져 있으면 자주 묻는 GET(잔고·상세·지수·장 상태·플래그·/health)을
+   * 조건부로(304·바뀐 부분만) 받는다. 없거나 false 면 예전과 똑같이 요청한다
+   */
+  saver?: () => boolean;
+}
+
 /** 백엔드 REST 클라이언트. baseUrl/token 은 설정에서 온다. */
-export function createApi(baseUrl: string, token = "") {
+export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
   const get = <T>(path: string, timeoutMs?: number) => request<T>(baseUrl, token, path, {}, timeoutMs);
+  /** 자주 묻는 GET: pollSaver 가 켜져 있으면 조건부 */
+  const poll = <T>(path: string, timeoutMs = 60_000) => (opts.saver?.() ? requestCond<T>(baseUrl, token, path, timeoutMs) : get<T>(path, timeoutMs));
   const send = <T>(method: string, path: string, body?: unknown, timeoutMs?: number) =>
     request<T>(baseUrl, token, path, { method, body: body === undefined ? undefined : JSON.stringify(body) }, timeoutMs);
 
   return {
     baseUrl,
-    health: () => get<Health>("/health", 8_000),
+    health: () => poll<Health>("/health", 8_000),
     /** 앱 오류 보고 (lib/errorReport). 토큰·금액은 보내기 전에 지운다 */
     reportErrors: (errors: unknown[]) => send<{ saved: number; dropped: number }>("POST", "/api/app-errors", { errors }, 10_000),
     appErrorSummary: (days = 7) => get<AppErrorSummary>(`/api/admin/app-errors?days=${days}`),
@@ -109,10 +185,10 @@ export function createApi(baseUrl: string, token = "") {
     /** 종목 마스터만 (외부 검색을 기다리지 않아 바로) — 예전 서버는 local 을 무시하고 전체 결과를 준다 */
     searchStocksLocal: (q: string, limit = 20) => get<{ results: ListedStock[]; source: string }>(`/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}&local=1`, 5_000),
     // 3초마다 부르는 조회는 응답 없는 망에서 60초씩 묶이지 않게 15초로 끊는다 (서버 첫 호출 최대 약 13초 실측)
-    listStocks: () => get<RegisteredWithQuote[]>("/api/stocks?quotes=1", 15_000),
+    listStocks: () => poll<RegisteredWithQuote[]>("/api/stocks?quotes=1", 15_000),
     /** registered: false 면 등록하지 않은 종목의 미리 보기(발견 탭 등). 구버전 서버는 필드 없음(= 등록 종목) */
     getStock: (code: string) =>
-      get<RegisteredStock & { registered?: boolean; quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(stockPath(code), 15_000),
+      poll<RegisteredStock & { registered?: boolean; quote: Quote | null; quoteError: string | null; evaluation?: Evaluation | null }>(stockPath(code), 15_000),
     registerStock: (body: { code: string; quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
       send<RegisteredStock>("POST", "/api/stocks", body),
     updateStock: (code: string, body: { quantity?: number | null; avgPrice?: number | null; memo?: string | null }) =>
@@ -153,7 +229,7 @@ export function createApi(baseUrl: string, token = "") {
     sendTestNotification: () => send<SendSummary>("POST", "/api/notifications/test"),
 
     tossStatus: () => get<TossOpenApiStatus>("/api/admin/toss/status", 15_000),
-    features: () => get<FeatureFlags>("/api/features", 8_000),
+    features: () => poll<FeatureFlags>("/api/features", 8_000),
     importTossHoldings: () => send<TossImportResult>("POST", "/api/admin/toss/import-holdings", undefined, 60_000),
     /**
      * 해외 종목 원화 매입금액(토스 앱 원화 보기의 평가금액 − 평가손익)을 정확한 값으로 저장.
@@ -161,12 +237,12 @@ export function createApi(baseUrl: string, token = "") {
      */
     setKrwCost: (items: Record<string, number>) =>
       send<{ applied: string[]; skipped: { code: string; reason: "not_held" | "orders_failed" | "unexplained" | "changed" | "manual"; retryAfter?: string }[] }>("PUT", "/api/admin/toss/krw-cost", { items }),
-    marketStatus: () => get<MarketStatus>("/api/market/status", 10_000),
+    marketStatus: () => poll<MarketStatus>("/api/market/status", 10_000),
     /**
      * stale=1: 출처가 실패한 지수도 마지막 값(stale·fetchedAt)으로 받는다 — 이 앱은 "시세 지연"·실제 받은 시각으로 보여 준다.
      * 서버는 이 표시를 모르는 옛 앱(플래그 없음)에는 실패한 항목을 뺀다. 예전 서버는 플래그를 무시한다
      */
-    marketIndices: () => get<{ indices: MarketIndex[] }>("/api/market/indices?stale=1", 10_000),
+    marketIndices: () => poll<{ indices: MarketIndex[] }>("/api/market/indices?stale=1", 10_000),
     /**
      * r=1: 뒤 쪽의 판(v)을 서버가 잃었으면 빈 쪽 + restart 를 받는다 (checkRankPage 가 첫 쪽부터 다시 받는다).
      * 서버는 restart 를 모르는 옛 앱(플래그 없음)에는 지금 목록의 쪽을 준다. 예전 서버도 그렇게 주고, 판이 달라 이 앱이 알아챈다

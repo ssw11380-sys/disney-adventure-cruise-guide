@@ -1,10 +1,12 @@
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import Constants from "expo-constants";
 import React, { useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature, useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
+import { saverLabel } from "@/lib/pollSaver";
+import { condStats } from "@/api/condCache";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
 import { flushErrors, reportError } from "@/lib/errorReport";
@@ -43,6 +45,8 @@ export default function SettingsScreen() {
   const full = !!health.data && !health.data.limited;
   const notifySettings = useNotificationSettings(full);
   const stream = useLiveStream();
+  // 끊겼을 때 데이터 절약 (3-25): 서버 줄에 폴링 방식과 최근 응답 비율
+  const saverOn = useFeature("pollSaver", false);
   const [advanced, setAdvanced] = useState(false);
   // 당겨서 새로고침: 서버 상태와, 알림 카드가 보이면 알림 설정('다음 실행' 시각)도 함께 (BH-16)
   const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full ? notifySettings.refetch() : undefined]));
@@ -147,7 +151,8 @@ export default function SettingsScreen() {
           <Row label="서버 시각" value={formatDateKo(health.data.time, true)} />
           <Row label="시세" value={health.data.sources?.quotes ?? "-"} />
           <Row label="실시간" value={health.data.sources?.realtime ?? "-"} />
-          <Row label="앱 스트리밍" value={stream.connected ? `연결 · ${stream.ticks}건` : "폴링 3초"} />
+          <Row label="앱 스트리밍" value={stream.connected ? `연결 · ${stream.ticks}건` : saverOn ? "폴링 3~4초 · 절약" : "폴링 3초"} />
+          {saverOn ? <Row label="시세 받기" value={saverLabel(condStats())} /> : null}
           <Row label="뉴스" value={health.data.sources?.news ?? "-"} />
           <Row label="재무/공시" value={health.data.sources?.financials ?? "-"} />
           <Row label="수급" value={health.data.sources?.investorFlow ?? "-"} />

@@ -67,6 +67,11 @@ export const FEATURES = {
     description:
       "종목 상세 다듬기 (앱만, 서버 작업 없음): 휴대폰·접은 화면 시세 머리 아래 '보유 160주 · 평가손익 …(…%)' 한 줄, 차트를 과거로 옮겼을 때 차트 위 조작 줄의 '2일 전까지 보는 중 · 최신으로' 버튼, 휴대폰·접은 화면 차트 폭을 패널 폭 전부로(오른쪽 빈 띠 없음)·가격 축 글자를 오른쪽 끝에 맞춤. 끄면 모두 사라지고 예전 화면 그대로",
   },
+  pollSaver: {
+    default: true,
+    description:
+      "끊겼을 때 데이터 절약 (3-25 성능-16): 자주 묻는 GET(잔고·상세·지수·장 상태·플래그·/health)에 ETag·304(바뀐 것 없으면 본문 없음)·바뀐 부분만(226, 앱이 A-IM: json-delta 로 물을 때)·gzip. 앱은 웹소켓이 끊긴 동안 값이 그대로면 3초→4초로 늦추고(화면 지연 5초 안), 장이 닫히면 5분(열리는 순간 바로), 웹소켓 다시 붙기 간격 최대 2분. 끄면 응답이 바이트까지 예전과 같고 앱도 예전 주기(3초·1분·30초)",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

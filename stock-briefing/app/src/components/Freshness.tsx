@@ -1,10 +1,11 @@
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useCallback, useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { Quote } from "@/api/types";
 import { chartNotice, clockLabel, connection, liveLabel, OPEN_MAX_AGE_MS, staleBanner, streamFresh, type LiveTone, type QueryLike } from "@/lib/freshness";
 import { feedHealthy, liveCounts, marketSessions, recheckIn, sessionStatus } from "@/lib/liveDot";
 import { useLiveStream } from "@/lib/liveStream";
+import { resetPollBackoff } from "@/lib/pollSaver";
 import { useNow } from "@/lib/useNow";
 import { font, fontCap, space, useTheme } from "@/theme";
 
@@ -155,6 +156,8 @@ export function usePull(refetch: () => Promise<unknown>): { pulling: boolean; on
   const [pulling, setPulling] = useState(false);
   const onPull = useCallback(() => {
     setPulling(true);
+    // 사용자가 직접 당기면 늦춘 폴링 주기(pollSaver, 값이 그대로일 때 4초)를 다시 3초로
+    resetPollBackoff();
     void refetch().finally(() => setPulling(false));
   }, [refetch]);
   return { pulling, onPull };

@@ -8,14 +8,20 @@ import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/fres
 import { capToBoundary, marketBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
 import { useLiveStream, withLastTick } from "@/lib/liveStream";
 import { tradingNow } from "@/lib/marketTime";
+import { saverInterval, unchangedStreak } from "@/lib/pollSaver";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { ApiRequestError, createApi, type Api } from "./client";
-import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
+import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken, ready } = useSettings();
-  return useMemo(() => (ready ? createApi(apiUrl, apiToken) : deferredApi()), [apiUrl, apiToken, ready]);
+  const qc = useQueryClient();
+  // 끊겼을 때 데이터 절약(pollSaver): 요청할 때마다 마지막으로 받은 플래그를 본다 (받기 전·예전 서버면 꺼짐 → 예전 요청 그대로)
+  return useMemo(
+    () => (ready ? createApi(apiUrl, apiToken, { saver: () => featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "pollSaver", false) }) : deferredApi()),
+    [apiUrl, apiToken, ready, qc],
+  );
 }
 
 /** 저장된 서버 주소·토큰을 읽기 전의 API: 요청마다 읽기가 끝나길 기다렸다가 그 값으로 보낸다 */
@@ -127,15 +133,18 @@ export function useAnyMarketOpen(): { open: boolean; label: string; loaded: bool
 export function useLivePoll(): (q: Query<any, any, any, any>) => number {
   const { open } = useAnyMarketOpen();
   const stream = useLiveStream();
+  // 끊겼을 때 데이터 절약 (3-25): 값이 그대로면 3초→4초, 장이 닫히면 5분 (lib/pollSaver). 끄면 예전 주기 그대로
+  const saver = useFeature("pollSaver", false);
   return (q) => {
     const now = Date.now();
     const quotes = quotesOf(q.state.data);
-    const every = pollInterval({
+    const o = {
       open: sessionOpen(quotes) ?? open,
       // 체결 스트림은 등록 종목만 보낸다 → 미등록 종목 상세(발견 탭에서 연 종목)는 스트림이 있어도 3초 폴링으로
       streamFresh: streamed(q.state.data) && streamFresh(stream, now),
       failing: q.state.status === "error" || q.state.fetchFailureCount > 0,
-    });
+    };
+    const every = saver ? saverInterval({ ...o, unchanged: unchangedStreak(q) }) : pollInterval(o);
     return capToBoundary(every, nextBoundary(quotes, now), now);
   };
 }

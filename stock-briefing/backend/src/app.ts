@@ -47,6 +47,7 @@ import { marketSummaryRoutes } from "./routes/marketSummaries.js";
 import { defaultSummarySources, MarketSummaryService } from "./services/marketSummaryService.js";
 import { SUMMARY_WAIT_MS } from "./services/marketSummaryCalc.js";
 import { GoogleNewsRssProvider } from "./providers/news/googleRss.js";
+import { registerPollSaver } from "./lib/pollSaver.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -271,6 +272,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     if (started !== undefined) reply.header("server-timing", `app;dur=${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)}`);
     return payload;
   });
+  // 끊겼을 때 데이터 절약 (플래그 pollSaver, 3-25): 잔고·상세·지수 등 자주 묻는 GET 에 ETag·304·바뀐 부분만·gzip (라우트 등록 전에)
+  const pollSaver = registerPollSaver(app, { enabled: () => features.enabled("pollSaver") });
 
   // 인터넷에 노출할 때의 최소 보호: API_TOKEN 이 설정되면 /api/* 는 Bearer 토큰이 있어야 한다. /health 는 열어 둔다.
   if (opts.config.API_TOKEN) {
@@ -351,6 +354,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     // 시장 요약 일정 목록의 종류별 마지막 날짜 (지나면 그 일정은 빼고 요약한다 — 해마다 새로 넣기)
     marketSummary: marketSummaries ? { enabled: await features.enabled("marketSummary"), eventsCoverage: marketSummaries.eventsCoverage() } : null,
     stream: priceStream.status(),
+    // 켜져 있을 때만 (끄면 응답이 예전과 같게): 전체·304·바뀐 부분만·gzip 횟수
+    ...((await features.enabled("pollSaver")) ? { pollSaver: { ...pollSaver.stats, remembered: pollSaver.ring.size } } : {}),
     llmConfigured: opts.providers.generator.model !== "disabled",
     appErrors: await appErrors.counts(7).catch(() => null),
     quotes: stockService.quoteStatus(),

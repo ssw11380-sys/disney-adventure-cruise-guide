@@ -2,8 +2,10 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { createApi } from "@/api/client";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import type { CandleSeries, Evaluation, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
+import type { CandleSeries, Evaluation, FeatureFlags, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
 import { applyTickToCandles, isIntraday } from "./chartPrefs";
+import { featureOn } from "./features";
+import { SAVER } from "./pollSaver";
 import { applyTick, applyTicksToList, evaluate, latestPerCode, newTradingDay, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
 import { useSettings } from "./settings";
 
@@ -147,6 +149,11 @@ export function applyTicksToCache(qc: QueryClient, apiUrl: string, ticks: Map<st
     }
   }
   return touched;
+}
+
+/** 웹소켓 다시 붙기 간격 상한: 예전 30초, pollSaver 가 켜져 있으면 2분 (마지막으로 받은 플래그) */
+export function reconnectMax(qc: QueryClient, apiUrl: string): number {
+  return featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "pollSaver", false) ? SAVER.reconnectMaxMs : 30_000;
 }
 
 export function LiveStreamProvider({ children }: { children: React.ReactNode }) {
@@ -305,7 +312,8 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
         reconnectTimer = null;
         connect();
       }, backoff);
-      backoff = Math.min(backoff * 2, 30_000);
+      // 끊겼을 때 데이터 절약(pollSaver, 3-25)이 켜져 있으면 상한 2분 — 웹소켓이 막힌 망에서 헛된 연결 시도(시도마다 새 TLS 연결)를 1/4 로 (그동안은 폴링이 값을 준다)
+      backoff = Math.min(backoff * 2, reconnectMax(qc, apiUrl));
     };
 
     const disconnect = () => {

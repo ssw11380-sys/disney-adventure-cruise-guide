@@ -40,7 +40,7 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => h.win,
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => h.insets }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-device", () => ({ manufacturer: "samsung", modelName: "SM-F966N", osVersion: "16", platformApiLevel: 36 }));
 vi.mock("@/lib/appUpdate", () => ({ currentVersion: "1.4.0", describeRunningUpdate: () => ({ channel: "기본", updateId: "내장 번들", createdAt: null }) }));
 vi.mock("@/theme", async () => {

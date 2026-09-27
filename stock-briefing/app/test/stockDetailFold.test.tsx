@@ -43,7 +43,7 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => h.win,
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => h.insets }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", () => ({
   Stack: { Screen: "StackScreen" },
   router: { back: h.back, dismissTo: vi.fn(), push: vi.fn(), replace: h.replace, setParams: h.setParams, canGoBack: () => h.canGoBack },

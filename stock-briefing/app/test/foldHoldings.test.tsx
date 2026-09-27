@@ -44,7 +44,7 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => h.win,
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => h.insets }));
-vi.mock("@expo/vector-icons", () => ({ Ionicons: "Ionicons" }));
+vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("expo-router", async () => {
   const R = await import("react");
   const Tabs = Object.assign((p: Record<string, unknown>) => R.createElement("Tabs", p), { Screen: "TabsScreen" });
