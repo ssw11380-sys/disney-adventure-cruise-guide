@@ -441,10 +441,10 @@ describe("드래그 흉내: 800봉 · 보이는 120봉을 끝까지 옮기며 �
     expect(shown).toBeGreaterThan((shown + arrowsOnly) * 0.95);
   });
 
-  it("시간 지킴이(느슨하게): 681걸음 전체 계산(축 범위·최고·최저·글자 자리·평단·52주 자리)이 400ms 미만", () => {
+  it("시간 지킴이(느슨하게): 681걸음 전체 계산(축 범위·최고·최저·글자 자리·평단·52주 자리)이 2초 미만 (CI 느린 러너 여유 — 이 PC 실측 약 60ms)", () => {
     frame(0, true);
     const t0 = performance.now();
     for (let off = 0; off <= series.length - count; off++) frame(off, true);
-    expect(performance.now() - t0).toBeLessThan(400);
+    expect(performance.now() - t0).toBeLessThan(2000);
   });
 });
