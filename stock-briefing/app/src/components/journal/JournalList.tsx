@@ -10,7 +10,7 @@ import { beforeRecordNote, dayHeader, dayHeadSpeech, dayRealizedText, headLines,
 import { changeColor, font, space, touch, useTheme } from "@/theme";
 import { PeriodChips } from "./PeriodChips";
 import { StockPickerSheet } from "./StockPickerSheet";
-import { TradeDetailBody, TradeDetailSheet } from "./TradeDetail";
+import { TradeDetailPane, TradeDetailSheet } from "./TradeDetail";
 import { TradeRow } from "./TradeRow";
 
 /**
@@ -96,13 +96,8 @@ export function JournalList({ code, twoPane, today }: { code: string | null; two
               {content}
             </ScrollView>
           }
-          right={
-            picked ? (
-              <ScrollView contentContainerStyle={styles.paneContent} keyboardShouldPersistTaps="handled">
-                <TradeDetailBody item={picked} />
-              </ScrollView>
-            ) : null
-          }
+          // 오른쪽 거래 상세: 메모 자판이 열리면 메모 칸·[저장]까지 내린다 (휴대폰 아래 창과 같은 동작)
+          right={picked ? <TradeDetailPane item={picked} contentStyle={styles.paneContent} /> : null}
           empty={
             <View style={styles.hint}>
               <Text style={{ color: t.muted, fontSize: font.body }}>{JOURNAL.pickHint}</Text>

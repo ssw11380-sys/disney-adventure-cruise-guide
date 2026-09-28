@@ -1,12 +1,14 @@
 import React, { useState } from "react";
-import { Text, View, type LayoutChangeEvent } from "react-native";
+import { Text, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 import { Line, Path, Svg } from "react-native-svg";
 import { returnLineLabels } from "@/lib/journal";
+import { clampScale } from "@/lib/textScale";
 import { changeColor, font, space, useTheme } from "@/theme";
 
 /**
  * 날짜별 누적 수익률 선 (3-37 수익률 탭). 0% 가로선과 누적 값 선 하나 — 끝 값이 이익이면 빨강, 손실이면 파랑.
- * 위에 제목 '날짜별 누적 수익률', 아래 양 끝 날짜, 0% 선 오른쪽 끝에 '0%' (무엇을 그린 선인지 보이게).
+ * 위에 제목 '날짜별 누적 수익률', 아래 양 끝 날짜, 0% 선 오른쪽 끝에 '0%' (무엇을 그린 선인지 보이게 — 글자 높이는 글자 배율만큼 잡아
+ * 큰 글씨에서도 0% 선 위·그림 안에 둔다: 아래 날짜 줄과 겹치지 않게).
  * 숫자는 위 요약 문장이 읽으므로 화면 읽기에서는 숨긴다
  */
 export const RETURN_LINE_H = 120;
@@ -23,15 +25,27 @@ export function linePath(values: number[], w: number, h: number): { d: string; z
   return { d, zeroY: y(0) };
 }
 
+/** '0%' 글자 칸 높이 (글자 font.tiny × 줄 간격 1.4 × 글자 배율) */
+export function zeroLabelH(fontScale: number): number {
+  return Math.ceil(font.tiny * 1.4 * clampScale(fontScale));
+}
+
+/** '0%' 글자 위치: 0% 선 바로 위, 그림(RETURN_LINE_H) 안에서 넘치지 않게 */
+export function zeroLabelTop(zeroY: number, fontScale: number): number {
+  const hgt = zeroLabelH(fontScale);
+  return Math.max(0, Math.min(RETURN_LINE_H - hgt, zeroY - hgt));
+}
+
 export function ReturnLine({ series }: { series: { date: string; cum: number }[] }) {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
   const [w, setW] = useState(0);
   const values = series.map((s) => s.cum);
   const { d, zeroY } = linePath(values, w, RETURN_LINE_H);
   const color = changeColor(t, values.at(-1) ?? 0);
   const labels = returnLineLabels(series);
-  // '0%' 글자: 0% 선 바로 위 (그림 안에서 넘치지 않게)
-  const zeroTop = Math.max(0, Math.min(RETURN_LINE_H - ZERO_LABEL_H, zeroY - ZERO_LABEL_H));
+  // '0%' 글자: 0% 선 바로 위 (그림 안에서 넘치지 않게 — 높이는 글자 배율만큼)
+  const zeroTop = zeroLabelTop(zeroY, fontScale);
   return (
     <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden testID="return-line" style={{ gap: space.xxs }}>
       {labels ? <Text style={{ color: t.sub, fontSize: font.small, fontWeight: "700" }}>{labels.title}</Text> : null}
@@ -54,4 +68,3 @@ export function ReturnLine({ series }: { series: { date: string; cum: number }[]
   );
 }
 
-const ZERO_LABEL_H = Math.ceil(font.tiny * 1.4);

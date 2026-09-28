@@ -11,7 +11,7 @@ import { changeColor, font, radius, space, useTheme } from "@/theme";
  *   5주 · 평균 $37.50 · 23:10 · 판매 금액 $187.50
  *   메모: 실적 발표 뒤 일부 정리            (한 줄 말줄임)
  * 추정 줄([추정] 수량 변화)은 누를 수 없다. 화면 읽기는 한 줄 한 문장(lib/journal rowSpeech).
- * 종목 이름은 한 줄 말줄임, 큰 글씨(100% 초과)에서는 잔고 목록처럼 두 줄까지
+ * 종목 이름은 한 줄 말줄임, 큰 글씨(100% 초과)에서는 잔고 목록처럼 두 줄까지. 추정 줄 제목(오른쪽 숫자 없음 — "주식 수 +9주 (무상증자·주식배당 등)")은 잘리지 않게 줄바꿈
  */
 export function TradeRow({ item, selected, onPress }: { item: JournalItem; selected?: boolean; onPress?: (item: JournalItem) => void }) {
   const t = useTheme();
@@ -28,7 +28,7 @@ export function TradeRow({ item, selected, onPress }: { item: JournalItem; selec
             <Text style={{ color: sell ? t.down : t.up, fontSize: font.tiny, fontWeight: "700" }}>{sell ? "매도" : "매수"}</Text>
           </View>
         ) : null}
-        <Text style={[styles.name, { color: est ? t.sub : t.ink }]} numberOfLines={isBigText(fontScale) ? 2 : 1}>
+        <Text style={[styles.name, { color: est ? t.sub : t.ink }]} numberOfLines={est ? undefined : isBigText(fontScale) ? 2 : 1}>
           {titleText(item)}
         </Text>
         {!est ? (

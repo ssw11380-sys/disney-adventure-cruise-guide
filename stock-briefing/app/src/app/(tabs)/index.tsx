@@ -5,7 +5,7 @@ import { Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnyMarketOpen, useFeature, useHealth, useStockMutations, useStocks } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
-import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type AccountData } from "@/components/AccountBand";
+import { AccountBand, accountFigures, accountSpeech, bandJournalShown, fxNote, lineProfit, type AccountData } from "@/components/AccountBand";
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
 import { MarketStrip } from "@/components/MarketStrip";
@@ -32,7 +32,7 @@ import { excludedLabel, isHolding, sortHoldings, splitHoldings, summarize } from
 import { removeConfirm, removeKind, removeLabel } from "@/lib/rowActions";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { useSettingsGuide } from "@/lib/settingsLink";
-import { TAB_ICON } from "@/lib/textScale";
+import { clampScale, TAB_ICON } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useGuideMarks, useUx } from "@/lib/uxFlags";
 import { isWide, railWidth } from "@/lib/windowClass";
@@ -370,9 +370,23 @@ export default function StocksScreen() {
       </TableHead>
     </View>
   );
+  // 매매일지 아이콘 (3-37): 넓은 계좌 띠에 자리가 없으면(폴드 세로 704 × 큰 글씨 + 숫자 기준 점 등 — 띠 줄 수를 켜기 전과 같게 두느라) 보유 표 머리에.
+  // 띠와 같은 판단(bandJournalShown)이라 입구는 늘 하나. 끄면 머리 속성이 지금과 같다
+  const journalInHead =
+    wide && journalOn && heldPlan && summary.held > 0
+      ? !bandJournalShown({ data: account, oneLine: oneLineBand, dense, pad: heldPlan.pad, width: tableW, fontScale: clampScale(fontScale), action: !!gated(allocationOn, openAllocation), basis: basisOn })
+      : false;
   // 넓은 창 표 머리: 열 이름을 누르면 정렬 (설정의 정렬 값 그대로), 이름 칸의 "등록순 ▾" 는 정렬 창
   const tableHeader = (section: (typeof sections)[number]) => (
-    <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={sortLabel} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
+    <TableHeadRow
+      plan={(section.key === "held" ? heldPlan : watchPlan)!}
+      title={section.title}
+      sort={sort}
+      sortLabel={sortLabel}
+      onSort={pickSort}
+      onOpenSort={() => setSortOpen(true)}
+      {...(section.key === "held" && journalInHead ? { action: <JournalIconButton /> } : null)}
+    />
   );
   const empty = ux.emptyGuide ? (
     // 3-24 빈 화면 (플래그 emptyGuide): 무엇을 하면 되는지 한 문단 + 행동 버튼 하나 (토스 계좌는 설정의 칸 이름으로 알려 준다)

@@ -163,13 +163,21 @@ export function timeText(item: Pick<JournalItem, "at" | "timeBasis">): string {
   return `${p.mo}/${p.d} ${hm} 전`;
 }
 
-/** 읽는 시각: '9월 25일 오후 11시 10분' */
-export function speakTime(iso: string): string {
+/** 읽는 시각: '9월 25일 오후 11시 10분' · 초까지(seconds) '9월 25일 오후 11시 10분 4초' (상세의 체결 시각 — 화면이 초까지 보인다) */
+export function speakTime(iso: string, seconds = false): string {
   const p = kstParts(iso);
   if (!p) return "";
   const ampm = p.h < 12 ? "오전" : "오후";
   const h12 = p.h % 12 === 0 ? 12 : p.h % 12;
+  if (seconds) return `${p.mo}월 ${p.d}일 ${ampm} ${h12}시 ${p.mi}분 ${p.s}초`;
   return `${p.mo}월 ${p.d}일 ${ampm} ${h12}시${p.mi ? ` ${p.mi}분` : ""}`;
+}
+
+/** 상세 '체결' 줄 화면 읽기 (화면 글 detailTime 과 같은 내용을 읽는 말로) */
+function detailTimeSpeech(item: Pick<JournalItem, "at" | "timeBasis">): string {
+  if (item.timeBasis === "filled") return `체결 ${speakTime(item.at, true)}`;
+  if (item.timeBasis === "ordered") return `체결, 주문 시각 ${speakTime(item.at)}, 체결 시각 없음`;
+  return `체결, ${speakTime(item.at)} 전 확인, 토스가 체결 시각을 주지 않음`;
 }
 
 /** 상세의 체결 시각 줄 */
@@ -237,7 +245,13 @@ export function rightSign(item: JournalItem): number {
 export function titleText(item: JournalItem): string {
   if (item.kind === "estimated" && item.estimated) {
     const e = item.estimated;
-    if (e.reason === "split" && e.ratio) return `[추정] ${item.name} 주식 수 변화 (${e.ratio >= 1 ? `분할 추정 1→${e.ratio}` : `병합 추정 ${Math.round(1 / e.ratio)}→1`})`;
+    if (e.reason === "split" && e.ratio) {
+      // 정수 배수(1→N · N→1)는 분할·병합, 그 밖(무상증자·주식배당 1.5배 등)은 늘거나 준 수량
+      const whole = (x: number) => Math.abs(x - Math.round(x)) < 1e-6 && Math.round(x) >= 2;
+      if (whole(e.ratio)) return `[추정] ${item.name} 주식 수 변화 (분할 추정 1→${Math.round(e.ratio)})`;
+      if (whole(1 / e.ratio)) return `[추정] ${item.name} 주식 수 변화 (병합 추정 ${Math.round(1 / e.ratio)}→1)`;
+      return `[추정] ${item.name} 주식 수 ${e.qty > 0 ? "+" : "−"}${qtyText(Math.abs(e.qty))} (${e.qty > 0 ? "무상증자·주식배당 등" : "병합 등"})`;
+    }
     return `[추정] ${item.name} 수량 ${e.qty > 0 ? "+" : "−"}${qtyText(Math.abs(e.qty))}`;
   }
   return item.name;
@@ -366,7 +380,7 @@ export interface DetailRow {
 /** 거래 상세 위 표 (체결 · 수량 · 평균 체결가 · 금액 · 주문 상태) */
 export function detailRows(item: JournalItem): DetailRow[] {
   return [
-    { label: "체결", value: detailTime(item) },
+    { label: "체결", value: detailTime(item), speech: detailTimeSpeech(item) },
     { label: "수량", value: item.part ? `${qtyText(item.quantity)} (주문 ${qtyText(item.orderQuantity)} 중 이 날 몫)` : qtyText(item.quantity) },
     { label: "평균 체결가", value: avgText(item.price, item.currency), speech: `평균 체결가 ${speakAmount(avgText(item.price, item.currency))}` },
     { label: item.side === "SELL" ? "판매 금액" : "산 금액", value: money(item.amount, item.currency), speech: `${item.side === "SELL" ? "판매 금액" : "산 금액"} ${speakAmount(money(item.amount, item.currency))}` },
@@ -442,6 +456,22 @@ export function afterBuyText(item: JournalItem): string | null {
   return `이 매수 뒤 평균 구매가 ${avgText(a.avgCost, item.currency)} · ${qtyText(a.quantity)}`;
 }
 
+/** 서버 cleanNote 처럼: 줄바꿈·탭은 빈칸으로, 앞뒤 빈칸은 뗀다 (제어 문자는 서버가 지움) */
+function tidyNote(text: string | null | undefined): string {
+  return (text ?? "").replace(/[\r\n\t]+/g, " ").trim();
+}
+
+/** 입력 칸이 저장한 메모와 같은지 (같으면 [저장]을 끈다 — 서버에 보낼 것이 없음) */
+export function noteUnchanged(text: string, saved: string | null): boolean {
+  return tidyNote(text) === tidyNote(saved);
+}
+
+/** 저장 뒤 알림 글: 메모가 남으면 '저장했어요', 저장한 메모가 있었는데 비웠으면 '지웠어요', 처음부터 없었으면 없음 */
+export function noteResultText(before: string | null, after: string | null): string | null {
+  if (after) return JOURNAL.noteSaved;
+  return before ? JOURNAL.noteDeleted : null;
+}
+
 /** 메모 글자 수 (보이는 글자) */
 export function noteLength(text: string): number {
   return [...text].length;
@@ -478,6 +508,13 @@ export function stockPanelText(orders: number): string {
 export function returnsNotReady(r: JournalReturns): string {
   const need = r.needDays ?? 10;
   const record = r.recordDays ?? r.tradingDays ?? 0;
+  // 전체(원화): 미국 기록에 평가 환율이 없으면 기간을 늘려도 같다 — 그 까닭을 바로
+  if (r.usFxMissing) return "미국 계좌 기록에 평가 환율이 없어 전체(원화) 수익률을 계산할 수 없어요. 한국·미국은 따로 볼 수 있어요.";
+  if (record >= need && (r.tradingDays ?? 0) === 0) {
+    // 고른 기간이 주말·휴일뿐이거나 기록 시작 전 — 기록이 언제부터 있는지 말한다
+    const range = r.requested ? `(${mdKo(r.requested.from)} ~ ${mdKo(r.requested.to)})` : "";
+    return `고른 기간${range}에는 계좌 기록이 없어요.${r.recordSince ? ` 기록은 ${mdKo(r.recordSince)}부터 있고,` : ""} 주말·휴일과 기록 시작 전 날짜에는 기록이 없어요.`;
+  }
   if (record >= need) return `고른 기간 안에 계좌 기록이 ${r.tradingDays ?? 0}거래일뿐이라 수익률을 계산할 수 없어요. 기간을 더 길게 골라 주세요.`;
   const since = r.recordSince ?? r.actual?.from ?? null;
   return `기간 수익률은 매일 장 마감 뒤 찍은 계좌 기록으로 계산해요. 기록이 ${need}거래일 쌓이면 보여 드려요. 지금 ${record}거래일${since ? ` (${mdKo(since)}부터)` : ""}.`;
@@ -589,6 +626,8 @@ export interface TaxView {
   zeroNote: string | null;
   pending: string | null;
   excluded: { title: string; lines: string[] } | null;
+  /** 합계에 들어 있는, 평균 구매가를 추정한 매도 (분할·이관 전후 · 순서 모름) — 따로 알린다 */
+  estimated: { title: string; lines: string[] } | null;
 }
 
 export function taxView(d: JournalTax, retriesDone: boolean): TaxView | null {
@@ -597,8 +636,15 @@ export function taxView(d: JournalTax, retriesDone: boolean): TaxView | null {
   const won = (v: number, sign = false) => money(v, "KRW", sign);
   const netText = `${won(t.net, true)}${t.net < 0 ? " (손실)" : ""}`;
   const deduction = d.rules?.deduction ?? 2_500_000;
+  // 평균 구매가를 추정한 매도가 합계에 들어 있으면 합계 줄·아래 줄에 '추정 포함' (예전 서버는 칸이 없어 0)
+  const estN = d.estimatedIncluded ?? 0;
   const rows: TaxView["rows"] = [
-    { label: "양도차익 합계 (이익 − 손실)", value: netText, sign: shownSign(t.net, won(t.net)), speech: `양도차익 합계, 이익에서 손실을 뺀 금액, ${profitSpeech(t.net, "KRW")}` },
+    {
+      label: `양도차익 합계 (이익 − 손실${estN ? ", 추정 포함" : ""})`,
+      value: netText,
+      sign: shownSign(t.net, won(t.net)),
+      speech: `양도차익 합계, 이익에서 손실을 뺀 금액${estN ? ", 추정 포함" : ""}, ${profitSpeech(t.net, "KRW")}`,
+    },
     { label: "기본공제", value: won(-deduction, true), speech: `기본공제 ${speakAmount(won(deduction))} 빼기` },
     { label: "과세 대상 금액", value: won(t.base), speech: `과세 대상 금액 ${speakAmount(won(t.base))}` },
     { label: "세율", value: "22% (양도소득세 20% + 지방소득세 2%)", speech: "세율 22퍼센트, 양도소득세 20퍼센트와 지방소득세 2퍼센트" },
@@ -614,10 +660,11 @@ export function taxView(d: JournalTax, retriesDone: boolean): TaxView | null {
   return {
     title: `해외주식 양도세 추정 · ${d.year}년`,
     rows,
-    sub: `이익 ${won(t.gains, true)} · 손실 ${won(t.losses)} · 매도 ${t.sells}건`,
+    sub: `이익 ${won(t.gains, true)} · 손실 ${won(t.losses)} · 매도 ${t.sells}건${estN ? ` (추정 포함 ${estN}건)` : ""}`,
     zeroNote: t.net > 0 && t.base === 0 ? TAX.underDeduction : null,
     pending,
     excluded: exCount > 0 ? { title: `계산에 넣지 못한 매도 ${exCount}건이 있어 실제와 다를 수 있어요.`, lines } : null,
+    estimated: estN > 0 ? { title: `평균 구매가를 추정한 매도 ${estN}건이 합계에 들어 있어요.`, lines: (d.estimatedSells ?? []).map((x) => `${x.name} ${x.count}건 · ${x.reason}`) } : null,
   };
 }
 
@@ -626,7 +673,7 @@ export function taxItemLines(x: JournalTaxItem): [string, string] {
   const fx = x.fxSell;
   const src = !fx ? "" : fx.provisional ? "(결제일 전이라 최근 고시)" : fx.source === "naver-hana" ? "(하나은행 고시로 대신)" : fx.date !== x.settleDate ? `(${mdShort(fx.date)} 고시)` : "";
   const rate = fx ? `환율 ${fx.rate.toLocaleString("ko-KR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}원${src}` : "환율 없음";
-  const first = `${mdShort(x.tradeDate)} ${x.name} ${qtyText(x.quantity)} · 결제일 ${mdShort(x.settleDate)}${x.settleSource === "estimated" ? "(추정)" : ""} · ${rate}`;
+  const first = `${mdShort(x.tradeDate)} ${x.name} ${qtyText(x.quantity)} · 결제일 ${mdShort(x.settleDate)}${x.settleSource === "estimated" ? "(추정)" : ""} · ${rate}${x.estimate ? " · 추정 포함" : ""}`;
   const second = `양도가액 ${money(x.proceedsKrw, "KRW")} − 취득가액 ${money(x.costKrw, "KRW")}${x.costsKrw !== null ? ` − 비용 ${money(x.costsKrw, "KRW")}` : ""} = ${money(x.gainKrw, "KRW", true)}`;
   return [first, second];
 }

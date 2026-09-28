@@ -1102,6 +1102,8 @@ export interface JournalReturns {
   requested?: { from: string; to: string };
   actual?: { from: string; to: string } | null;
   clippedToRecordStart?: boolean;
+  /** 전체(원화)인데 고른 기간의 미국 기록에 평가 환율이 없어 숫자가 없음 (예전 서버는 없음) */
+  usFxMissing?: boolean;
   market?: ReturnsMarket;
   currency?: JournalCurrency;
   twr?: number | null;
@@ -1139,6 +1141,8 @@ export interface JournalTaxItem {
   costKrw: number;
   costsKrw: number | null;
   gainKrw: number;
+  /** 평균 구매가를 추정한 매도 (분할·이관 전후 · 순서 모름) — 합계에 들어 있음 */
+  estimate?: { status: "estimated" | "order-uncertain"; reason: string };
 }
 
 export interface JournalTax {
@@ -1150,6 +1154,9 @@ export interface JournalTax {
   complete?: boolean;
   fxPending?: number;
   excluded?: { code: string; name: string; count: number; reason: string }[];
+  /** 합계에 들어 있는, 평균 구매가를 추정한 매도 수와 종목·까닭 (예전 서버는 없음) */
+  estimatedIncluded?: number;
+  estimatedSells?: { code: string; name: string; count: number; reason: string }[];
   items?: JournalTaxItem[];
   kr?: { securitiesTax: { amount: number | null; sells: number; source: "toss" | null } };
   asOf?: string;

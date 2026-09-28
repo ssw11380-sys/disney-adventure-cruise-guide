@@ -10,7 +10,8 @@ import { changeColor, font, radius, space, touch, useTheme } from "@/theme";
 
 /**
  * 매매일지 '양도세 추정' 탭 (3-37, 참고용 — 세무 조언이 아님). 맨 위 '참고용 추정' 상자(늘 보임, 닫을 수 없음) →
- * 해외주식 합계(결제일 기준 연도) · 기본공제 · 과세 대상 · 세율 · 예상 세액(추정) → 빠진 매도·받는 중 → 매도별 계산 → 계산 기준 6줄(늘 펼침) → 국내 주식 → 고지.
+ * 해외주식 합계(결제일 기준 연도) · 기본공제 · 과세 대상 · 세율 · 예상 세액(추정) → 빠진 매도·받는 중 → 평균 구매가를 추정한 매도(합계에 들어 있음 —
+ * 합계 줄·아래 줄에 '추정 포함', 따로 상자에 종목·건수·까닭) → 매도별 계산 → 계산 기준 6줄(늘 펼침) → 국내 주식 → 고지.
  * 환율을 받는 중이면 1분마다 5번까지 다시 묻고(useJournalTax), 그래도 받는 중이면 빠진 매도로 보여 준다. 폴드 가로는 왼쪽 합계·기준 | 오른쪽 매도별 계산
  */
 export function TaxView({ twoPane, thisYear }: { twoPane: boolean; thisYear: number }) {
@@ -111,6 +112,16 @@ function TaxBody({ d, retriesDone, year, onYear, split }: { d: JournalTax; retri
         <View style={[styles.box, styles.col, { borderColor: t.warn }]} testID="tax-excluded">
           <Text style={{ color: t.warn, fontSize: font.small, fontWeight: "700" }}>{v.excluded.title}</Text>
           {v.excluded.lines.map((l) => (
+            <Text key={l} style={{ color: t.sub, fontSize: font.small }}>
+              {l}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+      {v.estimated ? (
+        <View style={[styles.box, styles.col, { borderColor: t.lineStrong }]} testID="tax-estimated">
+          <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{v.estimated.title}</Text>
+          {v.estimated.lines.map((l) => (
             <Text key={l} style={{ color: t.sub, fontSize: font.small }}>
               {l}
             </Text>

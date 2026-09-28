@@ -256,3 +256,45 @@ describe("켜면: 입구 자리 (§4.1 ②)", () => {
     }
   });
 });
+
+describe("검토 반영: 넓은 계좌 띠에 매매일지 아이콘이 들지 않으면 보유 표 머리에 (폴드 세로 큰 글씨도 잔고 탭에서 열 수 있게)", () => {
+  const bandRowOf = (r: R) => {
+    const b = r.all().find((n) => n.type === "Button" && n.props.accessibilityLabel === "비중 보기")!;
+    return parentOf(r, parentOf(r, b));
+  };
+  const bandIcons = (r: R) => r.all(bandRowOf(r).children).filter((n) => n.type === "Pressable" && n.props.accessibilityLabel === OPEN).length;
+  const head = (r: R, prefix: string) => r.all().find((n) => n.type === "TableHeadRow" && String(n.props.title).startsWith(prefix))!;
+  const isIcon = (v: unknown) => React.isValidElement(v) && (v.type as { name?: string }).name === "JournalIconButton";
+
+  // 130% 는 금액 길이에 따라 띠에 들기도 한다 (아래 "정확히 하나" 테스트가 모든 조합을 본다) — 이 예시 금액에서는 200% 가 띠에 들지 않는 경우
+  it("숫자 기준 켬(운영 기본) 704×933 × 200%: 띠에는 없고 보유 표 머리 action 에 아이콘 — 관심 표 머리에는 없음", () => {
+    for (const fs of [2]) {
+      const r = draw(704, 933, { allocationView: true, foldLayout: true, numberBasis: true, ...ON }, { fontScale: fs });
+      expect(bandIcons(r)).toBe(0);
+      expect(isIcon(head(r, "보유").props.action)).toBe(true);
+      expect(head(r, "관심").props.action).toBeUndefined();
+    }
+  });
+
+  it("띠·촘촘 띠 · 글자 100·130·200% · 숫자 기준 켬/끔 모두: 띠 아이콘과 표 머리 아이콘을 합쳐 정확히 하나", () => {
+    const extras: Record<string, boolean>[] = [{}, { numberBasis: true }, { densityMode: true }, { densityMode: true, numberBasis: true }];
+    for (const extra of extras) {
+      for (const [w, hh] of [
+        [704, 933],
+        [933, 704],
+      ] as const) {
+        for (const fs of [1, 1.3, 2]) {
+          const dense = "densityMode" in extra;
+          const r = draw(w, hh, { allocationView: true, foldLayout: true, ...extra, ...ON }, { fontScale: fs, dense });
+          const n = bandIcons(r) + (isIcon(head(r, "보유").props.action) ? 1 : 0);
+          expect(n, `${w}×${hh} ${fs} ${JSON.stringify(extra)}`).toBe(1);
+        }
+      }
+    }
+  });
+
+  it("매매일지를 끄면 표 머리에 action 이 없다 (머리 속성이 지금과 같음)", () => {
+    const r = draw(704, 933, { allocationView: true, foldLayout: true, numberBasis: true, tradeJournal: true }, { fontScale: 2 });
+    expect("action" in head(r, "보유").props).toBe(false);
+  });
+});

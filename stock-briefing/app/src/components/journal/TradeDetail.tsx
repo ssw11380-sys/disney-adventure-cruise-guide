@@ -1,17 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSaveTradeNote } from "@/api/hooks";
 import type { JournalItem } from "@/api/types";
 import { Button } from "@/components/ui";
-import { afterBuyText, calcRows, clampNote, detailRows, JOURNAL, NOTE_MAX, noteLength, type DetailRow } from "@/lib/journal";
+import { afterBuyText, calcRows, clampNote, detailRows, JOURNAL, NOTE_MAX, noteLength, noteResultText, noteUnchanged, type DetailRow } from "@/lib/journal";
 import { changeColor, font, radius, space, useTheme } from "@/theme";
 
 /**
  * 거래 상세 (3-37): 체결 · 수량 · 평균 체결가 · 금액 · 주문 상태, 매도는 '실현손익 계산'(판매 금액 − 평균 구매가 × 수량 = 실현손익 · 수수료·세금 · 원화로는)과
  * 계산 방법·출발한 기록, 매수는 '이 매수 뒤 평균 구매가'. 아래 메모(200자, 서버에 저장 — 저장 뒤 '메모를 저장했어요.' 3초, 실패하면 입력 그대로 두고 안내).
- * 휴대폰은 아래에서 올라오는 창(TradeDetailSheet), 폴드 가로 2단은 오른쪽 칸(TradeDetailBody 그대로), 폴드 세로는 가운데 창(최대 560dp)
- * 메모 [지우기]는 입력 칸만 비운다 — 저장한 메모는 비운 채 [저장]을 눌러야 지워진다 (한 번 누름으로 되돌릴 수 없이 지우지 않게)
+ * 휴대폰은 아래에서 올라오는 창(TradeDetailSheet), 폴드 가로 2단은 오른쪽 칸(TradeDetailPane), 폴드 세로는 가운데 창(최대 560dp).
+ * 둘 다 메모 자판이 열리면 메모 칸·[저장]이 자판 위에 보이게 한다 (edge-to-edge 라 창이 자판만큼 저절로 줄지 않음 — useKeyboardHeight)
+ * 메모 [지우기]는 입력 칸만 비운다 — 저장한 메모는 비운 채 [저장]을 눌러야 지워진다 (한 번 누름으로 되돌릴 수 없이 지우지 않게).
+ * [저장]은 입력이 저장한 메모와 다를 때만 켜지고(줄바꿈·앞뒤 빈칸은 서버처럼 정리해 비교), '메모를 지웠어요.'는 저장한 메모가 있었을 때만
  */
 export function TradeDetailBody({ item, onClose }: { item: JournalItem; onClose?: () => void }) {
   const t = useTheme();
@@ -63,6 +65,8 @@ function NoteEditor({ item }: { item: JournalItem }) {
   const t = useTheme();
   const save = useSaveTradeNote();
   const [text, setText] = useState(item.note ?? "");
+  // 서버에 저장된 메모 (저장이 끝나면 목록을 다시 받기 전에도 바로 바뀐다 — [저장] 켜짐·지웠어요 판단)
+  const [saved, setSaved] = useState<string | null>(item.note ?? null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 다른 거래를 고르면 그 거래의 메모로 다시 시작한다
@@ -70,6 +74,7 @@ function NoteEditor({ item }: { item: JournalItem }) {
   if (forKey !== item.key) {
     setForKey(item.key);
     setText(item.note ?? "");
+    setSaved(item.note ?? null);
     setMsg(null);
   }
   useEffect(() => () => {
@@ -81,10 +86,12 @@ function NoteEditor({ item }: { item: JournalItem }) {
       { account: item.account, orderId: item.orderId, note: value },
       {
         onSuccess: (r) => {
+          const done = noteResultText(saved, r.note);
           setText(r.note ?? "");
-          setMsg({ ok: true, text: r.note ? JOURNAL.noteSaved : JOURNAL.noteDeleted });
+          setSaved(r.note);
+          setMsg(done ? { ok: true, text: done } : null);
           if (timer.current) clearTimeout(timer.current);
-          timer.current = setTimeout(() => setMsg(null), 3_000);
+          if (done) timer.current = setTimeout(() => setMsg(null), 3_000);
         },
         // 실패하면 입력은 그대로 둔다
         onError: () => setMsg({ ok: false, text: JOURNAL.noteFailed }),
@@ -120,15 +127,55 @@ function NoteEditor({ item }: { item: JournalItem }) {
             setMsg(null);
           }}
         />
-        <Button title={JOURNAL.noteSave} compact accessibilityLabel="메모 저장" loading={save.isPending} onPress={() => submit(text)} />
+        <Button title={JOURNAL.noteSave} compact accessibilityLabel="메모 저장" loading={save.isPending} disabled={!save.isPending && noteUnchanged(text, saved)} onPress={() => submit(text)} />
       </View>
-      {!text && item.note && !msg ? <Text style={{ color: t.muted, fontSize: font.small }}>{JOURNAL.noteEmptyHint}</Text> : null}
+      {!text && saved && !msg ? <Text style={{ color: t.muted, fontSize: font.small }}>{JOURNAL.noteEmptyHint}</Text> : null}
       {msg ? (
         <Text style={{ color: msg.ok ? t.accent : t.warn, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">
           {msg.text}
         </Text>
       ) : null}
     </View>
+  );
+}
+
+/** 자판 높이 (0 = 닫힘). 부른 화면이 떠 있는 동안만 구독한다 */
+export function useKeyboardHeight(): number {
+  const [kb, setKb] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", (e) => setKb(e.endCoordinates.height));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKb(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return kb;
+}
+
+/**
+ * 폴드 가로 2단의 오른쪽 칸 거래 상세. 메모 자판이 열리면 자판 높이만큼 아래 여백을 더하고 끝(메모 칸·[저장])까지 내린다 —
+ * 휴대폰 아래 창처럼 자판이 메모 칸을 가리지 않게. 메모 칸이 여러 줄로 늘어도 끝을 따라간다
+ */
+export function TradeDetailPane({ item, contentStyle }: { item: JournalItem; contentStyle?: StyleProp<ViewStyle> }) {
+  const kb = useKeyboardHeight();
+  const up = kb > 0;
+  const scroll = useRef<ScrollView | null>(null);
+  useEffect(() => {
+    if (up) scroll.current?.scrollToEnd({ animated: true });
+  }, [up, kb]);
+  return (
+    <ScrollView
+      ref={scroll}
+      testID="trade-detail-pane"
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={[contentStyle, up ? { paddingBottom: kb + space.xl } : null]}
+      onContentSizeChange={() => {
+        if (up) scroll.current?.scrollToEnd({ animated: false });
+      }}
+    >
+      <TradeDetailBody item={item} />
+    </ScrollView>
   );
 }
 
@@ -143,16 +190,8 @@ export function TradeDetailSheet({ item, onClose }: { item: JournalItem; onClose
   const win = useWindowDimensions();
   const wide = win.width >= 560 + space.xl * 2;
   // 자판 높이 (0 = 닫힘). 창이 열려 있는 동안만 구독한다
-  const [kb, setKb] = useState(0);
+  const kb = useKeyboardHeight();
   const scroll = useRef<ScrollView | null>(null);
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardDidShow", (e) => setKb(e.endCoordinates.height));
-    const hide = Keyboard.addListener("keyboardDidHide", () => setKb(0));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
   const up = kb > 0;
   const maxH = up ? win.height - kb - insets.top - space.md * 2 : win.height * 0.85;
   return (

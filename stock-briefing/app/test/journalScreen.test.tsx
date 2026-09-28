@@ -454,3 +454,121 @@ describe("양도세 추정 탭", () => {
     expect(textOf(r.all().find((n) => n.props.testID === "tax-per-sell-none")!)).toBe("2026년 계산에 넣은 해외주식 매도가 없어요.");
   });
 });
+
+describe("검토 반영 (3-37 다듬기) — 화면", () => {
+  const flat = (n: HostNode, key = "style") => Object.assign({}, ...[n.props[key]].flat(Infinity).filter(Boolean)) as Record<string, unknown>;
+
+  it("회귀: 메모 [저장]은 바뀐 것이 있을 때만 켜진다 (빈칸만·같은 글은 꺼짐), 저장 뒤 다시 꺼지고, 저장한 메모를 비우면 '메모를 지웠어요.'", () => {
+    const r = draw();
+    press(r, byLabel(r, lib.rowSpeech(SELL), "Pressable"));
+    const input = () => r.all().find((n) => n.props.testID === "note-input")!;
+    const saveBtn = () => byLabel(r, "메모 저장");
+    expect(saveBtn().props.disabled).toBe(true);
+    r.act(() => (input().props.onChangeText as (v: string) => void)("  \n "));
+    expect(saveBtn().props.disabled).toBe(true);
+    r.act(() => (input().props.onChangeText as (v: string) => void)("실적"));
+    expect(saveBtn().props.disabled).toBe(false);
+    press(r, saveBtn());
+    const [, cb] = h.save.mock.calls[0] as [unknown, { onSuccess: (x: unknown) => void }];
+    r.act(() => cb.onSuccess({ account: 3, orderId: "o3", note: "실적", updatedAt: "x" }));
+    expect(r.text()).toContain("메모를 저장했어요.");
+    expect(saveBtn().props.disabled).toBe(true);
+    // 저장한 메모를 비우고 저장 → 지웠어요
+    press(r, byLabel(r, "메모 입력 칸 비우기"));
+    expect(saveBtn().props.disabled).toBe(false);
+    press(r, saveBtn());
+    const [, cb2] = h.save.mock.calls[1] as [unknown, { onSuccess: (x: unknown) => void }];
+    r.act(() => cb2.onSuccess({ account: 3, orderId: "o3", note: null, updatedAt: "x" }));
+    expect(r.text()).toContain("메모를 지웠어요.");
+    expect(saveBtn().props.disabled).toBe(true);
+  });
+
+  it("회귀: 폴드 가로(933×704) 오른쪽 거래 상세도 메모 자판이 열리면 자판 높이만큼 아래 여백을 두고 끝(메모 칸·[저장])까지 내린다, 닫으면 여백 없음", () => {
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    h.flags = { ...ON, foldLayout: true };
+    const r = draw();
+    press(r, byLabel(r, lib.rowSpeech(SELL), "Pressable"));
+    const pane = () => r.all().find((n) => n.props.testID === "trade-detail-pane")!;
+    expect(pane().type).toBe("ScrollView");
+    expect(pane().props.keyboardShouldPersistTaps).toBe("handled");
+    const scrollToEnd = vi.fn();
+    (pane().props.ref as { current: unknown }).current = { scrollToEnd };
+    const base = Number(flat(pane(), "contentContainerStyle").paddingBottom ?? 0);
+    r.act(() => h.kb.find((k) => k.ev === "keyboardDidShow" && !k.removed)!.fn({ endCoordinates: { height: 300 } }));
+    expect(Number(flat(pane(), "contentContainerStyle").paddingBottom)).toBeGreaterThanOrEqual(300);
+    expect(scrollToEnd).toHaveBeenCalled();
+    // 메모 칸이 늘어나도(여러 줄) 끝을 따라간다
+    scrollToEnd.mockReset();
+    r.act(() => (pane().props.onContentSizeChange as () => void)());
+    expect(scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    r.act(() => h.kb.find((k) => k.ev === "keyboardDidHide" && !k.removed)!.fn({ endCoordinates: { height: 0 } }));
+    expect(Number(flat(pane(), "contentContainerStyle").paddingBottom ?? 0)).toBe(base);
+    scrollToEnd.mockReset();
+    r.act(() => (pane().props.onContentSizeChange as () => void)());
+    expect(scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("회귀: 누적 수익률 선의 '0%' 글자 높이는 글자 배율만큼 — 200% 에서도 0% 선 위, 그림 안 (아래 날짜와 겹치지 않음)", async () => {
+    const { RETURN_LINE_H, zeroLabelTop, zeroLabelH } = await import("@/components/journal/ReturnLine");
+    for (const fs of [1, 1.3, 2]) {
+      h.win = { width: 360, height: 752, scale: 3, fontScale: fs };
+      h.params = { tab: "returns" };
+      h.returns = { enabled: true, ready: true, tradingDays: 10, recordDays: 10, needDays: 10, recordSince: "2026-09-28", actual: { from: "2026-09-28", to: "2026-10-12" }, market: "ALL", currency: "KRW", twr: 3, pnl: 1, startValue: 1, endValue: 1, buys: 0, sells: 0, transfersEstimated: 0, gaps: [], doubtedSkipped: [], priceBasis: { regularClose: 1, priceFallback: 0, fallbackCodes: [] }, series: [{ date: "2026-09-28", cum: 0 }, { date: "2026-10-01", cum: 1 }, { date: "2026-10-12", cum: 3 }] } as JournalReturns;
+      const r = draw();
+      const line = r.all().find((n) => n.props.testID === "return-line")!;
+      const box = r.all(line.children).find((n) => typeof n.props.onLayout === "function")!;
+      r.act(() => (box.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { width: 300 } } }));
+      const zero = r.all().find((n) => n.type === "Text" && n.children.join("") === "0%")!;
+      const st = flat(zero);
+      const hgt = zeroLabelH(fs);
+      expect(hgt).toBeGreaterThanOrEqual(Math.ceil(11 * 1.4 * fs) - 1);
+      expect(st.top).toBe(zeroLabelTop(RETURN_LINE_H - 4, fs));
+      // 0% 선(아래 끝 근처) 위에 글자 전체, 그림 높이 안
+      expect(Number(st.top) + hgt).toBeLessThanOrEqual(RETURN_LINE_H - 4);
+      expect(Number(st.top)).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("양도세: 평균 구매가를 추정한 매도가 합계에 있으면 합계 줄 '추정 포함' · 따로 상자 · 매도별 계산 첫 줄 '추정 포함'", () => {
+    h.params = { tab: "tax" };
+    h.tax = {
+      enabled: true,
+      year: 2026,
+      years: [2026],
+      rules: { rate: 0.22, nationalRate: 0.2, localRateOfNational: 0.1, deduction: 2_500_000, method: "moving-average", lawYear: 2026 },
+      totals: { gains: 0, losses: 0, net: 0, base: 0, nationalTax: 0, localTax: 0, tax: 0, sells: 1 },
+      complete: true,
+      fxPending: 0,
+      excluded: [],
+      estimatedIncluded: 1,
+      estimatedSells: [{ code: "SOXL", name: "SOXL", count: 1, reason: "분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요." }],
+      items: [{ key: "k", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", settleSource: "estimated", quantity: 5, proceedsUsd: 125, costsUsd: null, fxSell: { rate: 1350, source: "smbs", date: "2026-09-30", provisional: false }, proceedsKrw: 168_750, costKrw: 168_750, costsKrw: null, gainKrw: 0, estimate: { status: "estimated", reason: "x" } }],
+      kr: { securitiesTax: { amount: null, sells: 0, source: null } },
+    } as JournalTax;
+    const r = draw();
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-totals")!)).toContain("양도차익 합계 (이익 − 손실, 추정 포함)");
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-totals")!)).toContain("매도 1건 (추정 포함 1건)");
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-estimated")!)).toBe("평균 구매가를 추정한 매도 1건이 합계에 들어 있어요.SOXL 1건 · 분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요.");
+    press(r, byLabel(r, "매도별 계산 보기"));
+    expect(r.text()).toContain("환율 1,350.00원 · 추정 포함");
+  });
+
+  it("수익률: 전체(원화)에서 미국 평가 환율이 없으면 그 까닭 한 줄 (기간을 늘리라고 하지 않음)", () => {
+    h.params = { tab: "returns" };
+    h.returns = { enabled: true, ready: false, tradingDays: 0, recordDays: 30, needDays: 10, recordSince: "2026-09-28", market: "ALL", usFxMissing: true, actual: null };
+    const r = draw();
+    expect(r.all().find((n) => n.props.testID === "returns-not-ready")!.props.accessibilityLabel).toBe("미국 계좌 기록에 평가 환율이 없어 전체(원화) 수익률을 계산할 수 없어요. 한국·미국은 따로 볼 수 있어요.");
+  });
+});
+
+describe("검토 반영 (3-37 다듬기) — 추정 줄 제목", () => {
+  it("회귀: 주식 수 변화 추정 줄 제목('… 주식 수 +9주 (무상증자·주식배당 등)')은 200% 에서도 잘리지 않게 줄바꿈 (체결 줄 이름은 두 줄까지 그대로)", () => {
+    const est: JournalItem = { ...SELL, key: "est:3:000660:2026-09-21", kind: "estimated", orderId: null, side: null, code: "000660", name: "SK하이닉스", quantity: 9, realized: null, note: null, timeBasis: "seen", at: "2026-09-21T16:05:00+09:00", estimated: { qty: 9, reason: "split", ratio: 1.5 } };
+    h.journal = { ...LIST, days: [{ ...LIST.days[0]!, items: [SELL, est] }] };
+    h.win = { width: 360, height: 752, scale: 3, fontScale: 2 };
+    const r = draw();
+    const title = r.all().find((n) => n.type === "Text" && n.children.join("") === "[추정] SK하이닉스 주식 수 +9주 (무상증자·주식배당 등)")!;
+    expect(title.props.numberOfLines).toBeUndefined();
+    expect(r.all().find((n) => n.type === "Text" && n.children.join("") === "SOXL")!.props.numberOfLines).toBe(2);
+  });
+});

@@ -12,6 +12,10 @@ import {
   dayHeadSpeech,
   dayRealizedText,
   detailLine,
+  detailRows,
+  noteResultText,
+  noteUnchanged,
+  speakTime,
   detailTime,
   extraLines,
   headLines,
@@ -447,5 +451,77 @@ describe("매매일지 문구 (권유·세금 조언 표현 0건)", () => {
     expect(TAX.notice).toBe("참고용 추정이에요. 세금 신고·납부 금액이 아니며, 실제 세금은 홈택스나 세무 전문가에게 확인해 주세요.");
     expect(TAX.notAdvice).toBe("이 화면은 세무 조언이 아니에요.");
     expect(TAX.rules).toHaveLength(6);
+  });
+});
+
+describe("검토 반영 (3-37 다듬기)", () => {
+  it("'체결' 줄 화면 읽기는 읽는 말로 — '9월 25일 오후 11시 10분 4초' (주문 시각·확인 시각도)", () => {
+    const rows = (x: JournalItem) => detailRows(x).find((r) => r.label === "체결")!;
+    expect(rows(soxlSell)).toMatchObject({ value: "2026년 9월 25일 23:10:04", speech: "체결 9월 25일 오후 11시 10분 4초" });
+    expect(speakTime("2026-09-25T23:00:04+09:00", true)).toBe("9월 25일 오후 11시 0분 4초");
+    expect(speakTime("2026-09-25T23:10:00+09:00", true)).toBe("9월 25일 오후 11시 10분 0초");
+    expect(speakTime("2026-09-25T23:10:04+09:00")).toBe("9월 25일 오후 11시 10분");
+    expect(rows({ ...soxlSell, timeBasis: "ordered", at: "2026-09-25T22:31:00+09:00" }).speech).toBe("체결, 주문 시각 9월 25일 오후 10시 31분, 체결 시각 없음");
+    expect(rows({ ...soxlSell, timeBasis: "seen", at: "2026-09-29T05:05:00+09:00" }).speech).toBe("체결, 9월 29일 오전 5시 5분 전 확인, 토스가 체결 시각을 주지 않음");
+  });
+
+  it("주식 수 변화 추정 줄: 정수 배수는 분할·병합, 그 밖(무상증자 1.5배 등)은 늘어난 수량 + '무상증자·주식배당 등'", () => {
+    const est: JournalItem = { ...soxlSell, kind: "estimated", side: null, name: "삼성전자", realized: null, note: null, estimated: { qty: 5, reason: "split", ratio: 1.5 } };
+    expect(titleText(est)).toBe("[추정] 삼성전자 주식 수 +5주 (무상증자·주식배당 등)");
+    expect(titleText({ ...est, estimated: { qty: -2, reason: "split", ratio: 0.8 } })).toBe("[추정] 삼성전자 주식 수 −2주 (병합 등)");
+    expect(titleText({ ...est, estimated: { qty: 30, reason: "split", ratio: 4 } })).toBe("[추정] 삼성전자 주식 수 변화 (분할 추정 1→4)");
+    expect(rowSpeech(est)).toContain("추정, 삼성전자 주식 수 +5주 (무상증자·주식배당 등)");
+  });
+
+  it("메모 [저장]은 바뀐 것이 있을 때만 (서버처럼 줄바꿈·앞뒤 빈칸 정리 뒤 비교), '메모를 지웠어요.'는 저장한 메모가 있었을 때만", () => {
+    expect(noteUnchanged("", null)).toBe(true);
+    expect(noteUnchanged("  \n ", null)).toBe(true);
+    expect(noteUnchanged(" 실적 발표\n뒤 정리 ", "실적 발표 뒤 정리")).toBe(true);
+    expect(noteUnchanged("실적 발표", "실적 발표 뒤 정리")).toBe(false);
+    expect(noteUnchanged("", "실적 발표")).toBe(false);
+    expect(noteResultText("실적", "실적 발표")).toBe(JOURNAL.noteSaved);
+    expect(noteResultText("실적", null)).toBe(JOURNAL.noteDeleted);
+    expect(noteResultText(null, null)).toBeNull();
+  });
+
+  it("수익률 안내: 전체(원화)에서 미국 기록에 평가 환율이 없으면 그 까닭 · 고른 기간에 기록이 0일이면 기록 시작일과 '기록이 없어요'", () => {
+    const usFx = returnsNotReady({ enabled: true, ready: false, tradingDays: 0, recordDays: 30, needDays: 10, recordSince: "2026-09-28", market: "ALL", usFxMissing: true });
+    expect(usFx).toBe("미국 계좌 기록에 평가 환율이 없어 전체(원화) 수익률을 계산할 수 없어요. 한국·미국은 따로 볼 수 있어요.");
+    expect(usFx).not.toContain("기간을 더 길게");
+    const none = returnsNotReady({ enabled: true, ready: false, tradingDays: 0, recordDays: 30, needDays: 10, recordSince: "2026-09-28", requested: { from: "2026-10-03", to: "2026-10-04" }, actual: null });
+    expect(none).toBe("고른 기간(10월 3일 ~ 10월 4일)에는 계좌 기록이 없어요. 기록은 9월 28일부터 있고, 주말·휴일과 기록 시작 전 날짜에는 기록이 없어요.");
+    expect(none).not.toContain("기간을 더 길게");
+    // 1거래일은 지금 안내 그대로
+    expect(returnsNotReady({ enabled: true, ready: false, tradingDays: 1, recordDays: 30, needDays: 10, recordSince: "2026-09-28" })).toContain("1거래일뿐이라");
+  });
+
+  it("양도세: 평균 구매가를 추정한 매도가 합계에 있으면 합계 줄·아래 줄에 '추정 포함', 따로 상자(종목·건수·까닭), 매도별 계산 첫 줄에 '추정 포함'", () => {
+    const d: JournalTax = {
+      enabled: true,
+      year: 2026,
+      years: [2026],
+      rules: { rate: 0.22, nationalRate: 0.2, localRateOfNational: 0.1, deduction: 2_500_000, method: "moving-average", lawYear: 2026 },
+      totals: { gains: 4_000_000, losses: -550_000, net: 3_450_000, base: 950_000, nationalTax: 190_000, localTax: 19_000, tax: 209_000, sells: 12 },
+      complete: true,
+      fxPending: 0,
+      excluded: [],
+      items: [],
+      estimatedIncluded: 2,
+      estimatedSells: [{ code: "SOXL", name: "SOXL", count: 2, reason: "분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요." }],
+      kr: { securitiesTax: { amount: null, sells: 0, source: null } },
+    };
+    const v = taxView(d, false)!;
+    expect(v.rows[0]).toMatchObject({ label: "양도차익 합계 (이익 − 손실, 추정 포함)", value: "+3,450,000원" });
+    expect(v.rows[0]!.speech).toContain("추정 포함");
+    expect(v.sub).toBe("이익 +4,000,000원 · 손실 -550,000원 · 매도 12건 (추정 포함 2건)");
+    expect(v.estimated).toEqual({ title: "평균 구매가를 추정한 매도 2건이 합계에 들어 있어요.", lines: ["SOXL 2건 · 분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요."] });
+    // 없으면 지금 그대로
+    const plain = taxView({ ...d, estimatedIncluded: 0, estimatedSells: [] }, false)!;
+    expect(plain.rows[0]!.label).toBe("양도차익 합계 (이익 − 손실)");
+    expect(plain.estimated).toBeNull();
+    expect(taxView({ ...d, estimatedIncluded: undefined, estimatedSells: undefined }, false)!.estimated).toBeNull();
+    const item = { key: "k", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", settleSource: "estimated" as const, quantity: 5, proceedsUsd: 125, costsUsd: null, fxSell: { rate: 1350, source: "smbs", date: "2026-09-30", provisional: false }, proceedsKrw: 168_750, costKrw: 168_750, costsKrw: null, gainKrw: 0 };
+    expect(taxItemLines({ ...item, estimate: { status: "estimated", reason: "x" } })[0]).toBe("9/28 SOXL 5주 · 결제일 9/30(추정) · 환율 1,350.00원 · 추정 포함");
+    expect(taxItemLines(item)[0]).toBe("9/28 SOXL 5주 · 결제일 9/30(추정) · 환율 1,350.00원");
   });
 });
