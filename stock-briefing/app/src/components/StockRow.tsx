@@ -57,6 +57,8 @@ type StockRowProps = {
    * 이 줄 안에서 감싸므로 체결이 온 줄만 틀까지 다시 그린다 (목록 전체가 체결마다 틀을 다시 그리지 않게, 3-17). 늘 같은 함수를 넘긴다. 넓은 표에서는 쓰지 않는다
    */
   wrapRow?: (stock: RegisteredWithQuote, row: React.ReactElement, onLayout?: (e: LayoutChangeEvent) => void) => React.ReactElement;
+  /** 촘촘 휴대폰 줄 (3-39, 기능 플래그 densityMode + 설정 '잔고 표시 촘촘' — 잔고 화면만 넘긴다). 한 줄 표(columns)에서는 쓰지 않는다 */
+  dense?: boolean;
 };
 
 /**
@@ -77,7 +79,8 @@ export function sameRow(a: StockRowProps, b: StockRowProps): boolean {
     a.weightMax === b.weightMax &&
     a.onLayoutRow === b.onLayoutRow &&
     a.onRowAction === b.onRowAction &&
-    a.wrapRow === b.wrapRow
+    a.wrapRow === b.wrapRow &&
+    a.dense === b.dense
   );
 }
 
@@ -87,7 +90,7 @@ export const StockRow = React.memo(StockRowView, sameRow);
 /** 한 줄 표의 금액: 원화는 단위 없이("1,576,274"), 달러는 "$" 를 붙인다 (국내·미국 줄이 한 열에 섞이므로) */
 const cellMoney = (text: string) => text.replace("원", "");
 
-function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp, columns, zebra = false, weight = null, weightMax = 0, onLayoutRow, onRowAction, wrapRow }: StockRowProps) {
+function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp, columns, zebra = false, weight = null, weightMax = 0, onLayoutRow, onRowAction, wrapRow, dense }: StockRowProps) {
   const t = useTheme();
   const q = stock.quote;
   const live = liveProp ?? q?.live === true;
@@ -226,6 +229,8 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
       accessibilityLabel={label}
       accessibilityActions={a11yActions}
       onAccessibilityAction={a11yAction}
+      // 촘촘 줄(3-39)은 켰을 때만 속성을 넘긴다 (기본 줄은 받은 속성까지 지금과 같게)
+      {...(dense ? { dense: true } : null)}
     />
   );
   // 감싸는 틀이 있으면 줄 자리는 틀이 알린다 (줄은 틀 안에서 y=0)

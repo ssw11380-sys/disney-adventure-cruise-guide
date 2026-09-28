@@ -19,6 +19,7 @@ export { formatIndexValue };
  *  - 칸이 두 줄(이름 + 등락률 11 / 값 14 굵게 — 목업 크기)이라 띠 높이가 layout.stripH(48)
  *  - 글자 확대는 탭 머리와 같은 상한(fontCap.chrome 150%): 큰 글씨에서도 띠가 표를 밀어내지 않게 (200% 에서 띠 약 60)
  *  - trailing(시장 상태·검색 버튼)을 오른쪽 끝에 고정한다. 지수를 아직 못 받았어도 trailing 은 그린다 (검색 버튼이 사라지지 않게)
+ *  - 잔고 촘촘 모드(3-39, densityMode + 설정)에서는 휴대폰·접은 화면 잔고 띠도 dense (trailing 없이)
  * dense 를 주지 않으면 지금과 똑같다.
  */
 export function MarketStrip({ selected, onSelect, dense = false, trailing }: { selected?: string; onSelect?: (code: string) => void; dense?: boolean; trailing?: React.ReactNode } = {}) {

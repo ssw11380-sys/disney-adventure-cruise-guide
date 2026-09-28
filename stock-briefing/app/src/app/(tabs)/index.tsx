@@ -38,12 +38,14 @@ import { changeColor, font, fontCap, layout, slopFor, space, touch, useFontScale
  * 홈(잔고): 지수 띠 → 계좌 평가 → 보유 표 → 관심 표.
  * 넓은 창(펼친 폴드·태블릿, 기능 플래그 foldLayout — 3-42 웨이브 B): 탭 화면 머리 대신 맨 위 띠(지수 두 줄 칸 · 시장 상태 · 검색)를 고정하고,
  * 그 아래 계좌 띠(한 줄/두 줄) → 한 줄 44dp 표(숫자 열은 폭·글자 크기에 따라 pickCols). 접힌 화면·플래그 꺼짐은 지금 휴대폰 화면 그대로
+ * 촘촘(3-39, densityMode + 설정 '잔고 표시 촘촘'): 휴대폰·접은 화면은 지수 띠 두 줄 칸 · 계좌 요약 세 줄 · 구역 머리 44(비중 버튼) · 종목 줄 최소 44,
+ * 넓은 창은 두 줄 계좌 띠만 첫 줄로. 플래그가 꺼져 있거나 '기본'이면 지금 그대로
  */
 export default function StocksScreen() {
   const t = useTheme();
   const stocks = useStocks();
   const { data, error, refetch } = stocks;
-  const { sort, setSort, showKrw, afterCost } = useSettings();
+  const { sort, setSort, showKrw, afterCost, density } = useSettings();
   const { remove } = useStockMutations();
   const health = useHealth();
   const live = useAnyMarketOpen();
@@ -52,6 +54,9 @@ export default function StocksScreen() {
   // 비중 보기 (새 기능): 서버가 켤 때만 계좌 평가 패널에 '비중' 버튼
   const allocationOn = useFeature("allocationView", false);
   const openAllocation = useCallback(() => router.push("/portfolio/allocation"), []);
+  // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
+  const densityOn = useFeature("densityMode", false);
+  const dense = densityOn && density === "dense";
   // 값이 있으면 재조회가 실패해도 화면을 지우지 않고, 끊김·지연을 띠와 상태 글자로 알린다
   const { pulling, onPull } = usePull(refetch);
   // 초록 점: 서버가 실시간이라 하고(세션·거래 대상·서버 수신) 앱도 값을 제때 받고 세션이 안 끝났을 때만 (lib/liveDot).
@@ -257,7 +262,7 @@ export default function StocksScreen() {
       </Screen>
     ) : (
       <Screen scroll={false}>
-        <MarketStrip />
+        <MarketStrip {...(dense ? { dense: true } : null)} />
         <HoldingsSkeleton />
       </Screen>
     );
@@ -277,27 +282,49 @@ export default function StocksScreen() {
   const header = wide ? (
     <View>
       {summary.held > 0 && heldPlan ? (
-        <AccountBand data={account} oneLine={oneLineBand} rates={bandRates(tableW, fontScale)} pad={heldPlan.pad} onAllocation={gated(allocationOn, openAllocation)} />
+        <AccountBand data={account} oneLine={oneLineBand} rates={bandRates(tableW, fontScale)} pad={heldPlan.pad} onAllocation={gated(allocationOn, openAllocation)} {...(dense ? { dense: true } : null)} />
       ) : null}
     </View>
   ) : (
     <View>
-      <MarketStrip />
-      {summary.held > 0 ? <AccountPanel data={account} onAllocation={gated(allocationOn, openAllocation)} status={status} /> : null}
+      <MarketStrip {...(dense ? { dense: true } : null)} />
+      {summary.held > 0 ? <AccountPanel data={account} onAllocation={gated(allocationOn, openAllocation)} status={status} {...(dense ? { dense: true } : null)} /> : null}
     </View>
   );
 
   const sectionHeader = (section: (typeof sections)[number]) => (
     <View style={{ backgroundColor: t.bg }}>
-      <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
-        <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }} accessibilityRole="header">
-          {section.title}
-        </Text>
-        <Pressable onPress={() => setSortOpen(true)} hitSlop={SORT_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={{ flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xs }}>
-          <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel}</Text>
-          <Ionicons name="chevron-down" size={font.small} color={t.muted} />
-        </Pressable>
-      </View>
+      {dense ? (
+        // 촘촘 머리 줄 (3-39): 높이 44 를 정렬·비중 버튼이 채우고 위아래 hitSlop 은 0 — 누르는 곳이 머리 밖으로 나가지 않는다 (BAR_SLOP).
+        // 비중 버튼은 보유 구역에만 (계좌 요약에서 옮김 — 머리가 위에 붙어 보유 줄을 보는 동안 늘 보인다)
+        <View style={[styles.sectionBarDense, { backgroundColor: t.bg }]}>
+          <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }} accessibilityRole="header">
+            {section.title}
+          </Text>
+          <View style={styles.barEnd}>
+            {section.key === "held" && allocationOn ? (
+              <Pressable onPress={openAllocation} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel="비중 보기" style={styles.barBtn}>
+                <Ionicons name="pie-chart-outline" size={font.small} color={t.muted} />
+                <Text style={{ color: t.muted, fontSize: font.small }}>비중</Text>
+              </Pressable>
+            ) : null}
+            <Pressable onPress={() => setSortOpen(true)} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={styles.barBtn}>
+              <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel}</Text>
+              <Ionicons name="chevron-down" size={font.small} color={t.muted} />
+            </Pressable>
+          </View>
+        </View>
+      ) : (
+        <View style={[styles.sectionBar, { backgroundColor: t.bg }]}>
+          <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }} accessibilityRole="header">
+            {section.title}
+          </Text>
+          <Pressable onPress={() => setSortOpen(true)} hitSlop={SORT_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={{ flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xs }}>
+            <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel}</Text>
+            <Ionicons name="chevron-down" size={font.small} color={t.muted} />
+          </Pressable>
+        </View>
+      )}
       <TableHead>
         <HeadCell label="종목명" a11y="이름순 정렬" active={sort === "name"} onPress={() => pickSort("name")} flex />
         <HeadCell label={PRICE_HEAD} a11y="등락률순 정렬" active={sort === "changeRate"} onPress={() => pickSort("changeRate")} width={col.price} />
@@ -441,6 +468,8 @@ export default function StocksScreen() {
                     {...(ux.oneHand ? { onRowAction: rowAction } : null)}
                     // 3-24 휴대폰·접은 화면: 줄을 왼쪽으로 밀면 수정 · 지우기 버튼 (넓은 표는 길게 누르기 메뉴)
                     {...(swipeRows ? { wrapRow: swipeWrap } : null)}
+                    // 3-39 촘촘 휴대폰 줄 (넓은 표에는 넘기지 않는다 — 표 줄은 이미 44)
+                    {...(dense && !plans ? { dense: true } : null)}
                     {...(plans
                       ? section.key === "held"
                         ? { columns: plans.held, zebra: i % 2 === 1, weight: weights!.byCode.get(item.code) ?? null, weightMax: weights!.max }
@@ -512,17 +541,30 @@ const SPLIT_PCT_W = 62;
  * 아래로 더 넓히면 바로 밑 표 머리의 정렬 칸과 겹친다
  */
 const SORT_SLOP = { top: 14, bottom: space.s, left: space.sm, right: space.sm };
+/**
+ * 촘촘 구역 머리(3-39)의 정렬·비중 버튼: 버튼이 머리 높이 44 를 채우므로 위아래로 넓히지 않는다 — 머리 밖으로 나가면
+ * 위에 붙은 머리(스크롤 영역 맨 위)에서는 잘려 눌리지 않고, 관심 머리에서는 바로 위 보유 줄 아래쪽을 가려 종목 대신 정렬이 바뀐다.
+ * 좌우는 정렬 버튼과 같게(두 버튼 사이 20 안에서 8 + 8 이라 겹치지 않음)
+ */
+const BAR_SLOP = { top: 0, bottom: 0, left: space.sm, right: space.sm };
 
-/** 계좌 평가 패널 (휴대폰 화면): 총 평가금액(원화 환산) + 평가손익·수익률·매입·당일 + 국내/해외 구분 */
+/**
+ * 계좌 평가 패널 (휴대폰 화면): 총 평가금액(원화 환산) + 평가손익·수익률·매입·당일 + 국내/해외 구분.
+ * 촘촘(3-39, dense): 세 줄 — 윗줄('총 평가금액' + 상태) · 총액 · '평가손익 … · 당일 …'. 매입금액·국내/해외·환율 안내·비중 버튼(구역 머리로)은 그리지 않고,
+ * 화면 읽기 문장은 기본과 같다 (숨긴 숫자도 문장에는 남음)
+ */
 function AccountPanel({
   data,
   status,
   onAllocation,
+  dense = false,
 }: {
   data: AccountData;
   status: React.ReactNode;
   /** 비중 보기 화면 열기 (플래그 allocationView 가 꺼져 있으면 없음 → 버튼도 없음) */
   onAllocation?: () => void;
+  /** 촘촘 세 줄 (3-39) — 비중 버튼은 받아도 그리지 않는다 (구역 머리에 있음) */
+  dense?: boolean;
 }) {
   const t = useTheme();
   const { total, afterCost, fx, excluded } = data;
@@ -532,15 +574,38 @@ function AccountPanel({
   const dc = changeColor(t, main.day);
   // 화면 읽기: 계좌 요약을 한 문장으로 (3-22, 넓은 창 계좌 띠와 같은 문장). 상태 줄(실시간·지연)은 따로 읽는다
   const label = accountSpeech(data);
+  const top = (
+    <View style={styles.panelTop}>
+      <Text style={{ color: t.muted, fontSize: font.small, flexShrink: 0 }}>
+        총 평가금액{total ? "" : " (원화 종목)"}
+        {afterCost ? " · 비용 차감" : ""}
+      </Text>
+      {status}
+    </View>
+  );
+  // 합계에서 뺀 보유 종목(시세·평단·환율 없음)을 알린다 — 말없이 빠져 총액이 작아 보이지 않게 (BH-04 · BH-26 · BH-30). 촘촘에서도 그대로
+  const excludedLine = excluded ? <Text style={{ color: t.warn, fontSize: font.tiny }}>{excluded}</Text> : null;
+  if (dense)
+    return (
+      <View style={[styles.panel, styles.panelDense, { backgroundColor: t.surface, borderColor: t.line }]}>
+        {top}
+        <View accessible accessibilityLabel={label} style={{ gap: space.xxs }}>
+          <Text style={[styles.totalDense, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+            {formatQuote(main.value, "KRW")}
+            <Text style={{ fontSize: font.small, color: t.muted, fontWeight: "500" }}> 원</Text>
+          </Text>
+          {/* 말줄임 없이: 글자가 크거나 금액이 길면 숫자를 자르지 않고 다음 줄로 */}
+          <Text style={[styles.denseLine, { color: t.muted }]}>
+            평가손익 <Text style={{ color: pc, fontWeight: "700" }}>{formatPrice(profit, "KRW", { sign: true })}</Text>
+            <Text style={{ color: pc }}> {formatPct(rate)}</Text> · 당일 <Text style={{ color: dc, fontWeight: "700" }}>{formatPrice(main.day, "KRW", { sign: true })}</Text>
+          </Text>
+        </View>
+        {excludedLine}
+      </View>
+    );
   return (
     <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
-      <View style={styles.panelTop}>
-        <Text style={{ color: t.muted, fontSize: font.small, flexShrink: 0 }}>
-          총 평가금액{total ? "" : " (원화 종목)"}
-          {afterCost ? " · 비용 차감" : ""}
-        </Text>
-        {status}
-      </View>
+      {top}
       <View accessible accessibilityLabel={label} style={{ gap: space.xs }}>
       <Text style={[styles.total, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
         {formatQuote(main.value, "KRW")}
@@ -553,8 +618,7 @@ function AccountPanel({
         <Kpi label="당일손익" value={formatPrice(main.day, "KRW", { sign: true })} color={dc} />
       </View>
       </View>
-      {/* 합계에서 뺀 보유 종목(시세·평단·환율 없음)을 알린다 — 말없이 빠져 총액이 작아 보이지 않게 (BH-04 · BH-26 · BH-30) */}
-      {excluded ? <Text style={{ color: t.warn, fontSize: font.tiny }}>{excluded}</Text> : null}
+      {excludedLine}
       {showSplit ? (
         <View style={[styles.split, { borderTopColor: t.line }]}>
           {/* 숫자는 위 요약 문장에 들어 있다 → 조각으로 한 번 더 읽히지 않게 숨기고, 환율 안내 한 줄만 읽는다 */}
@@ -660,6 +724,13 @@ const styles = StyleSheet.create({
   // 비중 버튼(보이는 높이 32, hitSlop 으로 44): 위는 숫자·환율 글자라 넓혀도 겹치는 버튼이 없다
   panelActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: space.xs },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
+  // ── 촘촘(3-39) ── 계좌 세 줄 · 구역 머리 44 (위아래 여백 없음 — 버튼 둘이 머리 높이를 다 채워 누르는 곳이 머리 안)
+  panelDense: { paddingTop: space.s, paddingBottom: space.s, gap: space.xxs },
+  totalDense: { fontSize: font.h2, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  denseLine: { fontSize: font.small, fontVariant: ["tabular-nums"] },
+  sectionBarDense: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", minHeight: touch.min, paddingHorizontal: space.lg },
+  barEnd: { flexDirection: "row", alignItems: "stretch", gap: space.xl },
+  barBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, minHeight: touch.min },
   empty: { margin: space.lg, padding: space.lg, gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   // 3-24 관심 안내 칸 제목 줄 + 닫기(오른쪽, 누르는 영역 44×44 — CLOSE_SLOP)
   hintHead: { flexDirection: "row", alignItems: "center", gap: space.sm },
