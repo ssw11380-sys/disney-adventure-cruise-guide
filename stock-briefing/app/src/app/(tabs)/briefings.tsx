@@ -20,6 +20,8 @@ import { orderForTab, runChoice, runConfirm, sessionNow } from "@/lib/briefingRu
 import { accountCardItem } from "@/lib/accountBriefing";
 import { marketCardItem } from "@/lib/marketSummary";
 import { firstPick, gridColumns, isUnread, latestSession, noteListSession, noteTabHeadHidden, pickAuto, pickBriefing, pickByUser, selectedRowId, tabHeadOptions, usePick, type BriefingPick, type PickState } from "@/lib/briefingPick";
+// 브리핑 3차 1 (notifBack): 2단에서 알림으로 고른 것 지키기
+import { holdNotified } from "@/lib/briefingPick";
 import { markBriefingRead, useReadBriefings } from "@/lib/briefingRead";
 import { formatDateKo, formatPct } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
@@ -536,7 +538,9 @@ function WideBriefings(p: WideProps) {
     if (!p.twoPane || !settled) return;
     const fresh = noteListSession(latestKey);
     const gone = sel !== null && (sel.kind === "stock" ? !briefs.some((b) => b.id === sel.id) : sel.kind === "market" ? sel.id !== marketId : sel.id !== accountId);
-    if (sel && !(fresh && gone) && !accountGone && !marketGone) {
+    // 브리핑 3차 1 (notifBack): 알림으로 고른 것은 새 세션 목록이 계좌·시장 요약 목록보다 먼저 와도 한 번은 지킨다 (꺼져 있으면 늘 false)
+    const held = holdNotified(sel, gone, fresh);
+    if (sel && (held || !(fresh && gone)) && !accountGone && !marketGone) {
       if (!p.picked.highlight) pickBriefing(sel, { highlight: true });
       return;
     }
