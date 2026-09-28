@@ -9,7 +9,7 @@ import React, { useEffect, useRef } from "react";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { NotificationBridge } from "@/components/NotificationBridge";
+import { NotificationBridge, useSplashHold } from "@/components/NotificationBridge";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
 import { WidgetBridge } from "@/components/WidgetBridge";
@@ -67,9 +67,11 @@ function ThemedStatusBar() {
 function SplashGate() {
   const { ready } = useSettings();
   const restoring = useIsRestoring();
+  // 브리핑 3차 1: 앱이 꺼진 채 누른 알림으로 옮겨 가는 동안은 스플래시를 둔다 (잔고 탭이 잠깐 보였다 넘어가지 않게 · 최대 1.5초 한도는 그대로)
+  const hold = useSplashHold();
   useEffect(() => {
-    if (ready && !restoring) hideSplash();
-  }, [ready, restoring]);
+    if (ready && !restoring && !hold) hideSplash();
+  }, [ready, restoring, hold]);
   return null;
 }
 

@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useIsRestoring, useQueryClient } from "@tanstack/react-query";
 import * as Notifications from "expo-notifications";
 import { router, usePathname } from "expo-router";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import type { FeatureFlags } from "@/api/types";
 import { pickNotified } from "@/lib/briefingPick";
 import { markBriefingRead } from "@/lib/briefingRead";
@@ -21,6 +21,34 @@ const TAB_PATHS: ReadonlySet<string> = new Set(["/", "/briefings", "/discover", 
  * 다 읽을 때까지 이동을 미룬다. 최대 1.5초 — 스플래시가 가리는 시간과 같다(_layout SplashGate). 그 뒤엔 아는 것으로(모르면 지금처럼)
  */
 export const NAV_WAIT_MAX_MS = 1_500;
+
+/**
+ * 알림 이동이 남아 있는 동안 스플래시를 잡아 둔다 (_layout SplashGate 가 본다, 브리핑 3차 1). 예전에는 알림 응답을 받자마자(캐시 복원 전) 옮겨 가
+ * 스플래시 아래에서 이동이 끝났는데, 이제 복원을 기다려 플래그를 읽으므로 그 사이 스플래시가 먼저 내려가면 잔고 탭이 잠깐 보였다 넘어간다.
+ * 이동을 보낸 뒤 SPLASH_AFTER_NAV_MS(화면 전환 한 번) 지나서 놓는다. 스플래시의 최대 1.5초 한도(_layout)는 그대로라 놓지 못해도 내려간다.
+ * 앱을 쓰던 중(스플래시가 이미 내려감)에는 아무 일도 하지 않는다
+ */
+export const SPLASH_AFTER_NAV_MS = 300;
+let splashHold = false;
+const holdListeners = new Set<() => void>();
+function setSplashHold(v: boolean): void {
+  if (splashHold === v) return;
+  splashHold = v;
+  for (const l of holdListeners) l();
+}
+function subscribeHold(l: () => void): () => void {
+  holdListeners.add(l);
+  return () => {
+    holdListeners.delete(l);
+  };
+}
+/** 스플래시를 잡아 두는 중인지 (테스트·SplashGate) */
+export function splashHeld(): boolean {
+  return splashHold;
+}
+export function useSplashHold(): boolean {
+  return useSyncExternalStore(subscribeHold, splashHeld);
+}
 
 type Nav = Pick<typeof router, "canDismiss" | "dismissTo" | "navigate" | "push">;
 
@@ -140,24 +168,32 @@ export function NotificationBridge() {
     if (!path) return undefined;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let release: ReturnType<typeof setTimeout> | undefined;
+    // 콜드 스타트(문이 아직 닫힘): 옮겨 갈 때까지 스플래시를 잡아 둔다
+    if (!gate.current.open) setSplashHold(true);
     const go = () => {
       const { qc: client, apiUrl: url } = cache.current;
       const back = featureOn(client.getQueryData<FeatureFlags>([url, "features"]), "notifBack", false);
       const nav = notificationNav(data, { back, ...where.current });
       if (nav) runNotificationNav(nav);
+      release = setTimeout(() => setSplashHold(false), SPLASH_AFTER_NAV_MS);
     };
     const later = () => {
       // 루트 네비게이터가 준비된 뒤 이동
       if (!cancelled) timer = setTimeout(go, 50);
     };
     void claimResponse(key).then((first) => {
-      if (!first || cancelled) return;
+      // 정리된 뒤(cancelled)에는 정리가 이미 놓았다 — 다음 응답이 잡은 것을 놓지 않게 건드리지 않는다
+      if (cancelled) return;
+      if (!first) return setSplashHold(false);
       if (gate.current.open) later();
       else gate.current.waiting.push(later);
     });
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      if (release) clearTimeout(release);
+      setSplashHold(false);
     };
   }, [lastResponse]);
 

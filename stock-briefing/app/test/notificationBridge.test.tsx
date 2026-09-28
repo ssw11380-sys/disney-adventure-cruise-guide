@@ -238,6 +238,57 @@ describe("브리핑 3차 1 notifBack: 브리핑 알림을 누르면 대상, '뒤
       expect(moves()).toBe(1);
     });
 
+    it("옮겨 갈 때까지 스플래시를 잡아 두고(잔고 탭이 잠깐 보이지 않게), 이동을 보낸 뒤 0.3초 지나 놓는다", async () => {
+      h.restoring = true;
+      h.response = tap("cold-hold", ACCOUNT);
+      const r = await boot({ flags: ON });
+      const bridge = await import("@/components/NotificationBridge");
+      await settle();
+      expect(bridge.splashHeld()).toBe(true);
+      h.restoring = false;
+      r.rerender();
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+      expect(bridge.splashHeld()).toBe(true);
+      await vi.waitFor(() => expect(bridge.splashHeld()).toBe(false), { timeout: 1_000 });
+    });
+
+    it("플래그를 몰라도(지금 그대로 이동) 같다 · 이미 처리한 응답(OTA 다시 시작)·이동할 곳이 없는 알림은 잡지 않는다", async () => {
+      h.restoring = true;
+      h.response = tap("cold-hold-2", STOCK);
+      const r = await boot();
+      const bridge = await import("@/components/NotificationBridge");
+      await settle();
+      expect(bridge.splashHeld()).toBe(true);
+      h.restoring = false;
+      r.rerender();
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/42"));
+      await vi.waitFor(() => expect(bridge.splashHeld()).toBe(false), { timeout: 1_000 });
+      expect(moves()).toBe(1);
+      // 같은 응답을 새 JS 가 다시 받음(아직 되살리는 중) → 기기 기록을 읽으면 바로 놓는다 · 이동 없음
+      h.restoring = true;
+      await boot();
+      const again = await import("@/components/NotificationBridge");
+      await settle();
+      expect(again.splashHeld()).toBe(false);
+      // 이동할 곳이 없는 알림
+      h.response = tap("nowhere", { type: "briefing" });
+      await boot();
+      expect((await import("@/components/NotificationBridge")).splashHeld()).toBe(false);
+      expect(moves()).toBe(1);
+    });
+
+    it("앱을 쓰던 중(문이 이미 열림)에는 스플래시를 건드리지 않는다", async () => {
+      h.response = null;
+      const r = await boot({ flags: ON });
+      const bridge = await import("@/components/NotificationBridge");
+      await settle();
+      h.response = tap("warm-hold", ACCOUNT);
+      r.rerender();
+      expect(bridge.splashHeld()).toBe(false);
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+      expect(bridge.splashHeld()).toBe(false);
+    });
+
     it("2단(펼친 가로)이면 새 화면을 쌓지 않고 브리핑 탭 오른쪽 칸에 그 계좌 브리핑을 골라 둔다", async () => {
       h.twoPane = true;
       h.restoring = true;
