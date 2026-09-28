@@ -795,3 +795,9 @@ export const authFont = {
   sub: 12,
   tiny: 11,
 } as const;
+
+/** 토스 앱 안내 시트 (3-48, 기능 플래그 tossOpen). 단위 dp */
+export const tossSheet = {
+  /** 시트 최대 폭 (펼친 화면은 가운데 — 가격 알림 시트와 같은 폭) */
+  maxW: priceAlert.sheetMaxW,
+} as const;
