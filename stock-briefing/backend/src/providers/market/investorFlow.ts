@@ -31,7 +31,10 @@ export interface FlowTrendRow {
   close: number | null;
   /** 장중 값인지 (토스 웹만, 모르면 null) */
   inMarketTime: boolean | null;
-  /** 개인·기관·외국인 값이 모두 나왔는지 (토스 웹 hasIndividual·hasInstitution·hasForeigner — 셋 다 참일 때만 참, 모르면 null) */
+  /**
+   * 개인·기관·외국인 값이 모두 나왔는지 (토스 웹 hasIndividual·hasInstitution·hasForeigner — 셋 다 참일 때만 참, 모르면 null).
+   * 거짓인 분류의 값은 파서가 null 로 둔다 (아직 나오지 않은 값을 0 으로 읽지 않게)
+   */
   hasAll: boolean | null;
   /** 출처가 그 줄을 마지막으로 고친 시각 (토스 웹만) */
   updatedAt: string | null;
@@ -41,4 +44,9 @@ export interface FlowTrendRow {
 export interface FlowTrendSource {
   readonly name: string;
   trend(code: string, size: number): Promise<FlowTrendRow[]>;
+  /**
+   * 상장 주식 수 (토스 웹만 — 외국인 한도율을 보유율 반올림 없이 셈하려고). 모르면 null, 던지지 않는다.
+   * 없으면(네이버·테스트 가짜) 한도율은 보유율로 어림하고, 어림 오차가 크면 한도 줄을 뺀다
+   */
+  listedShares?(code: string): Promise<number | null>;
 }

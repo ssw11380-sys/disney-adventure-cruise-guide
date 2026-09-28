@@ -88,8 +88,11 @@ export function Button({
   );
 }
 
-/** 작은 선택 칩 (사각). 보이는 높이 32 + 위아래 hitSlop 6 = 44 (3-22) */
-export function Chip({ label, active, onPress, icon, accessibilityLabel }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap; accessibilityLabel?: string }) {
+/**
+ * 작은 선택 칩 (사각). 보이는 높이 32 + 위아래 hitSlop 6 = 44 (3-22).
+ * wideTouch: 이름이 짧은 칩('5일')도 누르는 폭이 44 가 되게 보이는 폭을 40 이상으로(좌우 hitSlop 2 씩 — 3-33 수급 탭 기간 칩). 없으면 지금 그대로
+ */
+export function Chip({ label, active, onPress, icon, accessibilityLabel, wideTouch }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap; accessibilityLabel?: string; wideTouch?: boolean }) {
   const t = useTheme();
   return (
     <Pressable
@@ -98,7 +101,8 @@ export function Chip({ label, active, onPress, icon, accessibilityLabel }: { lab
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ selected: !!active }}
       hitSlop={slopFor(CHIP_H, space.xxs)}
-      style={({ pressed }) => [styles.chip, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 }]}
+      // wideTouch 가 없으면 style 배열 모양까지 지금 그대로
+      style={({ pressed }) => [styles.chip, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 }, ...(wideTouch ? [styles.chipWide] : [])]}
     >
       {icon ? <Ionicons name={icon} size={12} color={active ? t.accent : t.muted} /> : null}
       <Text style={{ color: active ? t.ink : t.muted, fontSize: font.small, fontWeight: active ? "700" : "500" }}>{label}</Text>
@@ -384,6 +388,7 @@ const styles = StyleSheet.create({
   buttonCompact: { minHeight: COMPACT_H, paddingHorizontal: space.md },
   buttonText: { fontSize: font.body, fontWeight: "700" },
   chip: { flexDirection: "row", alignItems: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, minHeight: CHIP_H },
+  chipWide: { minWidth: touch.min - space.xxs * 2, justifyContent: "center" },
   segment: { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },
   segmentItem: { flex: 1, alignItems: "center", justifyContent: "center", minHeight: touch.min, paddingVertical: space.sm, borderBottomWidth: 2 },
   segmentCenter: { textAlign: "center" },

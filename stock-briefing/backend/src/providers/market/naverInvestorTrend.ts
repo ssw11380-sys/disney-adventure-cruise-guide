@@ -6,6 +6,8 @@ import type { FetchFn } from "./types.js";
 /**
  * 네이버 증권 모바일의 투자자별 매매 (3-33 수급 탭 2순위 — 토스 웹이 막힐 때만, 로그인 없음 — 시세 지표와 같은 호스트).
  *   GET https://m.stock.naver.com/api/stock/{코드}/trend?pageSize={N}   (최신순, pageSize 60 까지 — 61 부터 HTTP 400)
+ *   다음 쪽: &bizdate={앞 쪽 가장 오래된 날 YYYYMMDD} → 그날보다 앞날부터 (2026-09-29 실측: bizdate=20260701 → 6/30 부터). 첫 쪽이 60줄 꽉 차면
+ *   한 번 더 불러 '60일 전' 외국인 보유율 줄(61번째)까지 받는다 — 둘째 쪽은 덧붙임이라 실패해도 첫 쪽만 준다
  * 한국거래소 거래만(넥스트레이드 빠짐)이라 토스 앱 숫자와 같지 않다 — 화면이 기준을 밝힌다. 기타법인·외국인 한도는 없다.
  * 수는 "+5,330,121"·"-4,999,903"·"0"·"" 글자, 보유율은 "46.56%". 값이 없는 칸은 "" 또는 "-"(일부 ETN 의 보유율 — 530036 실측) → null.
  * 그 밖의 모양이면 던진다. 없는 코드는 빈 배열
@@ -15,6 +17,8 @@ const TIMEOUT_MS = 8_000;
 const UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Mobile Safari/537.36";
 /** 네이버가 한 번에 주는 최대 줄 수 */
 export const NAVER_TREND_MAX = 60;
+/** 수급 탭이 받는 줄 수 (토스 웹과 같게: 확정 60일 + 60일 전 보유율 한 줄 + 오늘(잠정)·여유 — 두 쪽) */
+export const NAVER_TREND_SIZE = 70;
 
 type Json = Record<string, unknown>;
 
@@ -70,8 +74,8 @@ export class NaverInvestorTrend implements FlowTrendSource {
 
   constructor(private readonly fetchFn: FetchFn = fetch) {}
 
-  async trend(code: string, size: number = NAVER_TREND_MAX): Promise<FlowTrendRow[]> {
-    const url = `${URL_BASE}/${encodeURIComponent(code)}/trend?pageSize=${Math.min(NAVER_TREND_MAX, Math.max(1, Math.floor(size)))}`;
+  private async page(code: string, size: number, before: string | null): Promise<FlowTrendRow[]> {
+    const url = `${URL_BASE}/${encodeURIComponent(code)}/trend?pageSize=${size}${before ? `&bizdate=${before}` : ""}`;
     let res: Response;
     try {
       res = await fetchWithTimeout(this.fetchFn, url, { headers: { "user-agent": UA, accept: "application/json", referer: "https://m.stock.naver.com/" } }, TIMEOUT_MS);
@@ -86,5 +90,21 @@ export class NaverInvestorTrend implements FlowTrendSource {
       throw new ProviderError(this.name, `JSON 파싱 실패: ${url}`, e);
     }
     return parseNaverTrend(json);
+  }
+
+  /** 최신순 size 줄까지 (60 넘게 청하면 첫 쪽이 꽉 찼을 때만 둘째 쪽 — 둘째 쪽 실패·모양 바뀜은 첫 쪽만) */
+  async trend(code: string, size: number = NAVER_TREND_SIZE): Promise<FlowTrendRow[]> {
+    const want = Math.max(1, Math.floor(size));
+    const first = await this.page(code, Math.min(NAVER_TREND_MAX, want), null);
+    const rest = want - first.length;
+    // 가장 오래된 날 (네이버는 최신순이지만 순서에 기대지 않는다)
+    const oldest = first.reduce<string | undefined>((m, r) => (m === undefined || r.date < m ? r.date : m), undefined);
+    if (first.length < NAVER_TREND_MAX || rest <= 0 || !oldest) return first;
+    try {
+      const more = await this.page(code, Math.min(NAVER_TREND_MAX, rest), oldest.replace(/-/g, ""));
+      return [...first, ...more.filter((r) => r.date < oldest)];
+    } catch {
+      return first;
+    }
   }
 }

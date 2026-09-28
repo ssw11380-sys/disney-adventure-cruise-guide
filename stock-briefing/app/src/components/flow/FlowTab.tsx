@@ -8,13 +8,17 @@ import { estimateTextWidth } from "@/lib/chartLayout";
 import {
   agoLine,
   agoMissing,
+  agoMissingNaverCap,
   agoSpeech,
   checkLine,
   FLOW_NAMES,
   FLOW_TEXT,
   highLow,
+  lastData,
   limitNote,
   missingNote,
+  missingNoteWide,
+  periodChipA11y,
   periodLabel,
   pickedLine,
   pickedParts,
@@ -27,12 +31,32 @@ import {
   sourceToss,
   staleLine,
   sumSub1,
+  sumSubWide,
   TABLE_HEAD,
   tableRowSpeech,
   todayNote,
   todayValues,
 } from "@/lib/flowText";
-import { barsSpeech, clampPick, dateKo, dateLong, DAY_TABLE_GAP, dayTableLayout, flowSumRows, formatPp, formatRatio, formatShares, hhmm, sharesSign, shortDate, showSumTable, stampKo } from "@/lib/flowView";
+import {
+  barsSpeech,
+  clampPick,
+  dateKo,
+  dateLong,
+  DAY_TABLE_GAP,
+  dayTableLayout,
+  flowSumRows,
+  formatLimitPct,
+  formatPp,
+  formatRatio,
+  formatShares,
+  hhmm,
+  lastDataOld,
+  sharesSign,
+  shortDate,
+  showSumTable,
+  stampKo,
+  sumColumns,
+} from "@/lib/flowView";
 import { clampScale } from "@/lib/textScale";
 import { changeColor, font, fontCap, space, touch, useFontScale, useTheme } from "@/theme";
 import { FlowBars } from "./FlowBars";
@@ -119,10 +143,11 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
   const pickedArgs = [dateKo(pickedDay.date), formatShares(pickedDay.individual), formatShares(pickedDay.foreign), formatShares(pickedDay.institution), pickedDay.close !== null ? pickedDay.close.toLocaleString("ko-KR") : null] as const;
   const picked = pickedLine(...pickedArgs);
   const labelW = Math.ceil(estimateTextWidth(FLOW_NAMES.foreign, font.small * clampScale(fs, fontCap.row))) + space.sm;
+  // 칩: 휴대폰은 합계와 막대를 함께, 넓은 칸은 막대 카드에서 막대만 바꾼다 (화면 읽기 이름에 무엇을 바꾸는지)
   const chips = (
     <View style={styles.chips}>
       {PERIODS.map((p) => (
-        <Chip key={p} label={periodLabel(p)} active={p === period} onPress={() => setPeriod(p)} />
+        <Chip key={p} label={periodLabel(p)} accessibilityLabel={periodChipA11y(wideSums ? "bars" : "both", p)} active={p === period} onPress={() => setPeriod(p)} wideTouch />
       ))}
     </View>
   );
@@ -134,8 +159,15 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
   const sumRows = flowSumRows(sum, sumDays, toss);
   const noteSum = wideSums ? d.sums["60"] : sum;
   const notePeriod = wideSums ? 60 : period;
+  // 넓은 칸 세 기간 표의 열 (자료가 모자라 같은 날 수가 되는 기간은 한 열로) · 열마다 값이 빠진 날
+  const cols = sumColumns(d.sums);
+  const wideMissing = cols.map((c) => [c.days, d.sums[String(c.period) as "5" | "20" | "60"].missing] as const).filter(([, m]) => m > 0);
   // 네이버는 한 번에 60줄까지라 집계 중인 오늘 줄이 끼면 확정 줄이 59개 (종목 자료가 짧은 것이 아님)
   const naverCap = !toss && d.today !== null && d.days.length + 1 >= NAVER_ROWS;
+  // 네이버 자료가 60줄에서 끊김 (둘째 쪽을 받지 못함 — 60일 전 보유율 줄이 없는 까닭)
+  const naverCut = !toss && d.days.length + (d.today ? 1 : 0) >= NAVER_ROWS;
+  // 마지막 자료가 받은 날보다 한참 앞 (거래정지·상장폐지 — '최근 20일'이 요즘이 아님)
+  const lastOld = lastDataOld(d.days[0]!.date, d.fetchedAt);
   const sumCard = (
     <Card>
       <View style={styles.headRow}>
@@ -144,10 +176,11 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
         </Text>
         {wideSums ? null : chips}
       </View>
-      <Muted>{wideSums ? FLOW_TEXT.sumSubWide : sumSub1(sumDays)}</Muted>
+      <Muted>{wideSums ? sumSubWide(cols.map((c) => c.days)) : sumSub1(sumDays)}</Muted>
       <Muted>{FLOW_TEXT.sumSub2}</Muted>
+      {lastOld ? <Muted>{lastData(dateKo(d.days[0]!.date))}</Muted> : null}
       {wideSums ? (
-        <SumTable d={d} />
+        <SumTable d={d} cols={cols} />
       ) : (
         <View>
           {sumRows.map((r) => (
@@ -159,7 +192,7 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
         </View>
       )}
       {noteSum.days < notePeriod ? <Muted>{naverCap ? shortDataNaverCap(noteSum.days) : shortData(noteSum.days)}</Muted> : null}
-      {noteSum.missing > 0 ? <Muted>{missingNote(noteSum.missing)}</Muted> : null}
+      {wideSums ? wideMissing.length ? <Muted>{missingNoteWide(wideMissing)}</Muted> : null : noteSum.missing > 0 ? <Muted>{missingNote(noteSum.missing)}</Muted> : null}
       <Muted>{FLOW_TEXT.signNote}</Muted>
       <Muted>{toss ? FLOW_TEXT.zeroNoteToss : FLOW_TEXT.zeroNoteNaver}</Muted>
       {d.today ? (
@@ -185,7 +218,8 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
         </Text>
         {wideSums ? chips : null}
       </View>
-      <View style={styles.picked} accessible accessibilityLabel={picked} accessibilityLiveRegion="polite" testID="flow-picked">
+      {/* 알림 영역(live region)은 두지 않는다 — 막대 칸의 값(accessibilityValue)이 같은 글을 읽어 한 번 옮길 때 두 번 읽지 않게 */}
+      <View style={styles.picked} accessible accessibilityLabel={picked} testID="flow-picked">
         {pickedParts(...pickedArgs).map((part, i) => (
           <Text key={i} style={[styles.num, { color: t.ink, fontSize: font.small }]}>
             {i ? `· ${part}` : part}
@@ -209,7 +243,15 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
   // ── ③ 외국인 보유율 ──
   const r = d.ratio;
   const ref = r ? (r.ago["20"] ?? r.ago["5"] ?? r.ago["60"]) : null;
-  const ratioCard = r ? (
+  const ratioCard = !r ? (
+    // 보유율 칸이 비어 있는 종목 (일부 ETN) — 카드가 말없이 사라지지 않게 한 줄
+    <Card>
+      <Text style={[styles.title, { color: t.ink }]} accessibilityRole="header">
+        {FLOW_TEXT.ratioTitle}
+      </Text>
+      <Text style={{ color: t.sub, fontSize: font.small }}>{FLOW_TEXT.ratioNone}</Text>
+    </Card>
+  ) : (
     <Card>
       <View style={styles.headRow}>
         <Text style={[styles.title, { color: t.ink }]} accessibilityRole="header">
@@ -220,13 +262,15 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
       <Muted>{ratioDateLine(dateKo(r.date))}</Muted>
       {PERIODS.map((n) => {
         const a = r.ago[String(n) as "5" | "20" | "60"];
+        // 없으면: 네이버가 60줄에서 끊긴 60일 전은 까닭을 붙인다 (60일 합계는 보이므로)
+        const missing = n === 60 && naverCut ? agoMissingNaverCap(n) : agoMissing(n);
         return (
           <Text
             key={n}
             style={[styles.num, { color: a ? t.ink : t.muted, fontSize: font.small }]}
-            accessibilityLabel={a ? agoSpeech(n, formatRatio(a.value), Math.abs(a.change).toFixed(2), /[1-9]/.test(a.change.toFixed(2)) ? Math.sign(a.change) : 0) : agoMissing(n)}
+            accessibilityLabel={a ? agoSpeech(n, shortDate(a.date), formatRatio(a.value), Math.abs(a.change).toFixed(2), /[1-9]/.test(a.change.toFixed(2)) ? Math.sign(a.change) : 0) : missing}
           >
-            {a ? agoLine(n, formatRatio(a.value), formatPp(a.change)) : agoMissing(n)}
+            {a ? agoLine(n, shortDate(a.date), formatRatio(a.value), formatPp(a.change)) : missing}
           </Text>
         );
       })}
@@ -241,19 +285,20 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
         </>
       ) : null}
       {ref ? <Muted>{pctPointNote(formatRatio(ref.value), formatRatio(r.now), formatPp(ref.change))}</Muted> : null}
-      {d.limit ? <Text style={{ color: t.sub, fontSize: font.small }}>{limitNote(formatRatio(d.limit.limitPct, 1), formatRatio(d.limit.usedPct, 1))}</Text> : null}
+      {d.limit ? <Text style={{ color: t.sub, fontSize: font.small }}>{limitNote(formatLimitPct(d.limit.limitPct), formatRatio(d.limit.usedPct, 1))}</Text> : null}
       <Muted>{FLOW_TEXT.ratioRevise}</Muted>
     </Card>
-  ) : null;
+  );
 
-  // ── ④ 읽는 법 (처음엔 접힘) ──
+  // ── ④ 읽는 법 (처음엔 접힘) — 외국인 뜻은 출처마다 (토스증권은 금융감독원 등록 외국인 기준, 네이버는 기준이 달라 값이 다름) ──
+  const aboutLines = toss ? FLOW_TEXT.about : FLOW_TEXT.about.map((line) => (line.startsWith(`${FLOW_NAMES.foreign}:`) ? FLOW_TEXT.aboutForeignNaver : line));
   const aboutCard = (
     <Card>
       <Pressable onPress={() => setAbout((v) => !v)} accessibilityRole="button" accessibilityLabel={FLOW_TEXT.aboutTitle} accessibilityState={{ expanded: about }} style={styles.toggle}>
         <Text style={[styles.title, { color: t.ink }]}>{FLOW_TEXT.aboutTitle}</Text>
         <Ionicons name={about ? "chevron-up" : "chevron-down"} size={font.body} color={t.muted} />
       </Pressable>
-      {about ? FLOW_TEXT.about.map((line) => <Text key={line} style={{ color: t.sub, fontSize: font.small, lineHeight: font.small * 1.5 }}>{line}</Text>) : null}
+      {about ? aboutLines.map((line) => <Text key={line} style={{ color: t.sub, fontSize: font.small, lineHeight: font.small * 1.5 }}>{line}</Text>) : null}
     </Card>
   );
 
@@ -289,28 +334,28 @@ function UsCard() {
 function SourceLines({ d }: { d: Supported }) {
   return (
     <View style={styles.source}>
-      <Muted>{d.source === "toss-web" ? sourceToss(stampKo(d.asOf)) : sourceNaver(stampKo(d.fetchedAt))}</Muted>
+      <Muted>{d.source === "toss-web" ? sourceToss(stampKo(d.asOf)) : sourceNaver(d.days[0] ? dateKo(d.days[0].date) : null, stampKo(d.fetchedAt))}</Muted>
       {d.check && d.check.days > 0 ? <Muted>{checkLine(d.check.days, d.check.same, stampKo(d.check.at))}</Muted> : null}
       {d.stale ? <Muted>{staleLine(stampKo(d.fetchedAt))}</Muted> : null}
     </View>
   );
 }
 
-/** 넓은 칸: 세 기간 합계 표 (구분 | 5일 | 20일 | 60일). 한 줄 = 한 요소 (세 기간 문장을 이어 읽음) */
-function SumTable({ d }: { d: Supported }) {
+/**
+ * 넓은 칸: 세 기간 합계 표 (구분 | 5일 | 20일 | 60일). 한 줄 = 한 요소 (세 기간 문장을 이어 읽음).
+ * 열 머리는 실제로 더한 날 수 — 자료가 12일치면 '5일 | 12일' (같은 합계를 두 열에 되풀이하지 않음, lib/flowView sumColumns)
+ */
+function SumTable({ d, cols }: { d: Supported; cols: ReturnType<typeof sumColumns> }) {
   const t = useTheme();
   const toss = d.source === "toss-web";
-  const byPeriod = PERIODS.map((p) => {
-    const s = d.sums[String(p) as "5" | "20" | "60"];
-    return flowSumRows(s, Math.min(p, s.days) || p, toss);
-  });
+  const byPeriod = cols.map((c) => flowSumRows(d.sums[String(c.period) as "5" | "20" | "60"], c.days, toss));
   return (
     <View>
       <View style={[styles.tableRow, { borderBottomColor: t.line }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
         <Text style={[styles.cellName, { color: t.muted, fontSize: font.small }]}>{TABLE_HEAD}</Text>
-        {PERIODS.map((p) => (
-          <Text key={p} style={[styles.cell, { color: t.muted, fontSize: font.small }]}>
-            {periodLabel(p)}
+        {cols.map((c) => (
+          <Text key={c.period} style={[styles.cell, { color: t.muted, fontSize: font.small }]}>
+            {periodLabel(c.days)}
           </Text>
         ))}
       </View>

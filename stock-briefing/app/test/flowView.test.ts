@@ -1,7 +1,31 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import * as text from "@/lib/flowText";
-import { barLayout, barsSpeech, dateKo, dateLong, DAY_TABLE_GAP, dayTableLayout, detailTabLabels, flowSumRows, formatPp, formatRatio, formatShares, hhmm, linePoints, lineSegments, PHONE_TABS, pickIndex, shortDate, showSumTable, stampKo, WIDE_TABS_BASE } from "@/lib/flowView";
+import {
+  barLayout,
+  barsSpeech,
+  dateKo,
+  dateLong,
+  DAY_TABLE_GAP,
+  dayTableLayout,
+  detailTabLabels,
+  flowSumRows,
+  formatLimitPct,
+  formatPp,
+  formatRatio,
+  formatShares,
+  hhmm,
+  lastDataOld,
+  linePoints,
+  lineSegments,
+  PHONE_TABS,
+  pickIndex,
+  shortDate,
+  showSumTable,
+  stampKo,
+  sumColumns,
+  WIDE_TABS_BASE,
+} from "@/lib/flowView";
 import { estimateTextWidth } from "@/lib/chartLayout";
 import { parseDetailTab, phoneTab, sideWidth, wideTab } from "@/lib/detailLayout";
 import type { FlowDay, FlowSum } from "@/api/types";
@@ -118,6 +142,15 @@ describe("주 수 formatShares", () => {
     expect(formatRatio(49, 1)).toBe("49.0%");
     expect(formatRatio(100, 1)).toBe("100.0%");
     expect(shortDate("2026-08-28")).toBe("8월 28일");
+  });
+
+  it("한도율 formatLimitPct: 둘째 자리가 0 이면 한 자리('49.0%' · '10.0%'), 아니면 두 자리(트리니티항공 '49.99%' — '50.0%'로 반올림하지 않음)", () => {
+    expect(formatLimitPct(49)).toBe("49.0%");
+    expect(formatLimitPct(10)).toBe("10.0%");
+    expect(formatLimitPct(40)).toBe("40.0%");
+    expect(formatLimitPct(48.6)).toBe("48.6%");
+    expect(formatLimitPct(49.99)).toBe("49.99%");
+    expect(formatLimitPct(33.33)).toBe("33.33%");
   });
 
   it("날짜·시각 (한국 시간, 기기 시간대와 상관없이)", () => {
@@ -250,6 +283,40 @@ describe("넓은 창: 합계를 세 기간 표로", () => {
     expect(showSumTable(676, 2)).toBe(false);
     expect(showSumTable(332, 1)).toBe(false);
   });
+
+  it("표의 열 (sumColumns): 실제로 더한 날 수, 자료가 모자라 같은 날 수가 된 기간은 한 열로", () => {
+    const s = (a: number, b: number, c: number) => ({ "5": { days: a }, "20": { days: b }, "60": { days: c } });
+    expect(sumColumns(s(5, 20, 60))).toEqual([{ period: 5, days: 5 }, { period: 20, days: 20 }, { period: 60, days: 60 }]);
+    // 12일치: '5일 | 12일' (예전: '5일 | 20일 | 60일' 머리에 같은 12일 합계가 두 번)
+    expect(sumColumns(s(5, 12, 12))).toEqual([{ period: 5, days: 5 }, { period: 20, days: 12 }]);
+    expect(sumColumns(s(5, 20, 43))).toEqual([{ period: 5, days: 5 }, { period: 20, days: 20 }, { period: 60, days: 43 }]);
+    expect(sumColumns(s(3, 3, 3))).toEqual([{ period: 5, days: 3 }]);
+  });
+});
+
+describe("마지막 자료가 오래됨 (lastDataOld — 거래정지·상장폐지)", () => {
+  it("받은 날(한국 날짜)보다 7일 넘게 앞이면 참 (530036: 7월 6일 자료를 9월 29일에 받음), 추석 연휴(9/23 → 9/28)는 거짓", () => {
+    expect(lastDataOld("2026-07-06", "2026-09-29T04:50:00+09:00")).toBe(true);
+    expect(lastDataOld("2026-09-23", "2026-09-28T10:00:00+09:00")).toBe(false);
+    expect(lastDataOld("2026-09-28", "2026-09-29T02:40:00+09:00")).toBe(false);
+    // 받은 때는 한국 날짜로 (UTC 로는 9/28 이지만 한국은 9/29)
+    expect(lastDataOld("2026-09-21", "2026-09-28T19:30:00Z")).toBe(true);
+    expect(lastDataOld("2026-09-22", "2026-09-28T19:30:00Z")).toBe(false);
+    expect(lastDataOld("x", "2026-09-29T00:00:00+09:00")).toBe(false);
+  });
+});
+
+describe("줄바꿈 막기 (WORD JOINER — 큰 글씨에서 기호·숫자만 줄 끝에 남지 않게)", () => {
+  it("뜻 풀이의 '+는'·'-는', 대조 줄의 '20일'은 붙어 있다 (보이는 글은 같음)", () => {
+    expect(text.WJ).toBe("\u2060");
+    expect(text.FLOW_TEXT.signNote).toContain(`-${text.WJ}는`);
+    expect(text.FLOW_TEXT.signNote).toContain(`+${text.WJ}는`);
+    expect(text.FLOW_TEXT.signNote.replaceAll(text.WJ, "")).toBe("+는 산 주식이 더 많았다는 뜻, -는 판 주식이 더 많았다는 뜻입니다.");
+    const line = text.checkLine(20, 19, "9월 29일 (화) 21:05");
+    expect(line).toContain(`20${text.WJ}일`);
+    expect(line.split(" (")[0]).not.toMatch(/\d일/); // 기간 수와 '일' 사이가 모두 붙어 있다 (확인 시각 글은 부르는 쪽 날짜)
+    expect(line.replaceAll(text.WJ, "")).toBe("토스증권 Open API 원자료와 최근 20일 비교: 20일 가운데 19일 같음 (9월 29일 (화) 21:05 확인)");
+  });
 });
 
 // ───────────────────────────── 문구 검사 ─────────────────────────────
@@ -275,11 +342,12 @@ function allTexts(): string[] {
   walk(text.FLOW_TEXT);
   out.push(
     text.periodLabel(20), text.sumSub1(20), text.shortData(43), text.shortDataNaverCap(59), text.missingNote(2), text.todayNote("9월 29일"), text.todayValues("10:05", "+12만 주", "-4만 주"),
+    text.periodChipA11y("both", 5), text.periodChipA11y("bars", 60), text.sumSubWide([5, 12]), text.missingNoteWide([[5, 1], [12, 2]]), text.lastData("7월 6일 (월)"), text.agoMissingNaverCap(60),
     text.pickedLine("9월 28일 (월)", "+742만 주", "-598만 주", "-363만 주", "270,000"), ...text.pickedParts("9월 28일 (월)", "+742만 주", "-598만 주", "-363만 주", null),
-    text.ratioDateLine("9월 28일 (월)"), text.agoLine(20, "46.75%", "-0.23%p"), text.agoMissing(60),
-    text.agoSpeech(5, "46.48%", "0.04", 1), text.agoSpeech(20, "46.75%", "0.23", -1), text.agoSpeech(60, "49.00%", "0.00", 0),
+    text.ratioDateLine("9월 28일 (월)"), text.agoLine(20, "8월 27일", "46.75%", "-0.23%p"), text.agoMissing(60),
+    text.agoSpeech(5, "9월 17일", "46.48%", "0.04", 1), text.agoSpeech(20, "8월 27일", "46.75%", "0.23", -1), text.agoSpeech(60, "6월 30일", "49.00%", "0.00", 0),
     text.highLow("46.96%", "46.46%"), text.pctPointNote("46.75%", "46.52%", "-0.23%p"), text.limitNote("49.0%", "100.0%"), text.sourceToss("9월 28일 (월) 20:15"),
-    text.sourceNaver("9월 29일 (화) 02:40"), text.checkLine(20, 20, "9월 29일 (화) 21:05"), text.checkLine(20, 19, "9월 29일 (화) 21:05"), text.staleLine("9월 29일 (화) 10:00"),
+    text.sourceNaver("9월 28일 (월)", "9월 29일 (화) 02:40"), text.sourceNaver(null, "9월 29일 (화) 02:40"), text.checkLine(20, 20, "9월 29일 (화) 21:05"), text.checkLine(20, 19, "9월 29일 (화) 21:05"), text.staleLine("9월 29일 (화) 10:00"),
     text.sumSpeech("개인", 20, "3,348만 주", -1), text.sumSpeech("기관", 20, "839만 주", 1), text.sumSpeech("외국인", 5, "0주", 0), text.sumSpeech("기관", 5, null, 0),
     text.barsSpeechHead("8월 28일", "9월 28일", 20), text.barsSpeechRow("개인", 9, 11), text.ratioSpeech(60, "6월 30일", "46.96%", "9월 28일", "46.52%", "46.96%", "46.46%"),
     text.tableRowSpeech("9월 28일 월요일", "+742만 주", "-598만 주", "-363만 주"), text.TABLE_HEAD,

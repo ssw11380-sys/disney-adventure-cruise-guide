@@ -6,7 +6,7 @@ import { createMigratedDb } from "../src/db/index.js";
 import { ProviderError } from "../src/lib/errors.js";
 import type { FlowTrendRow, FlowTrendSource, InvestorFlowDay } from "../src/providers/market/investorFlow.js";
 import { NaverInvestorTrend, parseNaverTrend } from "../src/providers/market/naverInvestorTrend.js";
-import { parseTossTradingTrend, TossTradingTrend } from "../src/providers/market/tossTradingTrend.js";
+import { parseTossStockInfo, parseTossTradingTrend, TossTradingTrend } from "../src/providers/market/tossTradingTrend.js";
 import { FEATURES, FeatureService } from "../src/services/featureService.js";
 import { FLOW_JUDGE_RE, FLOW_TEXT, flowWordingProblems } from "../src/services/flowText.js";
 import { buildFlowBody, compareFlows, flowCacheTtlMs, flowLimit, flowRatio, flowSums, isFinalRow, splitFlowRows } from "../src/services/investorFlowCalc.js";
@@ -27,6 +27,20 @@ const TOSS = {
   kepco: parseTossTradingTrend(FX("toss-kepco.json")),
 };
 const NAVER = { samsung: parseNaverTrend(FX("naver-samsung.json")), kt: parseNaverTrend(FX("naver-kt.json")) };
+/** 토스 웹 종목 정보 v2/stock-infos (상품 코드·상장 주식 수 — 2026-09-29 05:00 KST 실측, 쓰는 칸만). A520057 은 result null (ETN 은 Q) */
+const INFO = FX("toss-info.json") as Record<string, unknown>;
+/** 보유율이 1% 아래인 한도 종목 (9/28 줄) — YTN 040300 · 세종텔레콤 036630 · 트리니티항공 091810 */
+const LOW = Object.fromEntries(Object.entries(FX("toss-low-ratio.json") as Record<string, unknown>).map(([k, v]) => [k, parseTossTradingTrend(v)[0]!]));
+const shares = (pc: string) => parseTossStockInfo(INFO[pc])!.listedShares!;
+/** 가짜 토스 웹 응답: 종목 정보는 INFO(없으면 result null), Q520057 수급은 ETN 픽스처, 그 밖 수급은 HTTP 400 */
+const tossEtnFetch = (urls: string[] = []) =>
+  (async (url: string | URL | Request) => {
+    const u = String(url);
+    urls.push(u.replace("https://wts-info-api.tossinvest.com/api/", ""));
+    if (u.includes("/v2/stock-infos/")) return new Response(JSON.stringify(INFO[u.split("/").at(-1)!] ?? { result: null }), { status: 200 });
+    if (u.includes("productCode=Q520057")) return new Response(JSON.stringify(FX("toss-etn-q520057.json")), { status: 200 });
+    return new Response(JSON.stringify({ error: { statusCode: 400, code: "bad-request" } }), { status: 400 });
+  }) as unknown as typeof fetch;
 const at = (iso: string) => () => new Date(iso);
 /** 픽스처를 받은 때 (화 02:40 — 9/28 줄까지 모두 확정) */
 const NIGHT = at("2026-09-29T02:40:00+09:00");
@@ -72,6 +86,19 @@ describe("토스 웹 trading-trend 파서", () => {
     expect(one({ netIndividualsBuyVolume: null, inMarketTime: true })).toMatchObject({ individual: null, inMarketTime: true });
   });
 
+  it("has 가 거짓인 분류는 값을 null 로 (아직 안 나온 값을 0 으로 채워 보내도 '0주'·합계에 들어가지 않게 — 기타법인은 개인과 같이)", () => {
+    const one = (o: Record<string, unknown>) => parseTossTradingTrend({ result: { body: [{ baseDate: "2026-09-29", ...o }] } })[0]!;
+    const zeros = { netIndividualsBuyVolume: 0, netForeignerBuyVolume: 120_000, netInstitutionBuyVolume: -40_000, netOtherCorporationBuyVolume: 0, inMarketTime: true };
+    expect(one({ ...zeros, hasIndividual: false, hasInstitution: true, hasForeigner: true })).toMatchObject({ individual: null, otherCorp: null, foreign: 120_000, institution: -40_000, hasAll: false });
+    // KRX 잠정치가 나오기 전(외국인·기관도 아직)이면 0 자리값이 모두 null
+    expect(one({ ...zeros, netForeignerBuyVolume: 0, netInstitutionBuyVolume: 0, hasIndividual: false, hasInstitution: false, hasForeigner: false })).toMatchObject({ individual: null, foreign: null, institution: null, otherCorp: null });
+    // has 가 참이거나 칸이 없으면(모름) 값 그대로 — 진짜 0 은 0
+    expect(one({ ...zeros, hasIndividual: true, hasInstitution: true, hasForeigner: true })).toMatchObject({ individual: 0, otherCorp: 0 });
+    expect(one(zeros)).toMatchObject({ individual: 0, foreign: 120_000 });
+    // 값 모양 검사는 has 와 상관없이 (글자면 모양 바뀜)
+    expect(() => one({ netIndividualsBuyVolume: "0", hasIndividual: false })).toThrow(ProviderError);
+  });
+
   it("모양이 바뀌면 출처 실패 (result 없음 · body 가 배열 아님 · 날짜 모양 · 숫자 칸이 글자)", () => {
     for (const bad of [{}, { result: null }, { result: { body: "x" } }, { result: { body: [{ baseDate: "2026/09/28" }] } }, { result: { body: [{ baseDate: "2026-09-28", netIndividualsBuyVolume: "12" }] } }, { result: { body: [{ baseDate: "2026-09-28", foreignerRatio: Number.NaN }] } }, null, []]) {
       expect(() => parseTossTradingTrend(bad), JSON.stringify(bad)).toThrow(ProviderError);
@@ -79,18 +106,90 @@ describe("토스 웹 trading-trend 파서", () => {
     expect(parseTossTradingTrend({ result: { body: [] } })).toEqual([]);
   });
 
-  it("요청: A{코드}·size, 토스 웹과 같은 머리(UA·referer), HTTP 400(없는 코드·미국)은 출처 실패", async () => {
+  it("요청: 종목 정보(A)와 A{코드}·size 를 함께, 토스 웹과 같은 머리(UA·referer), 없는 코드(A·Q 모두 result null · HTTP 400)는 출처 실패", async () => {
     const calls: Array<{ url: string; headers: Record<string, string> }> = [];
     const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      calls.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
-      return String(url).includes("A999999") ? new Response('{"error":{"statusCode":400}}', { status: 400 }) : new Response(JSON.stringify(FX("toss-raw-2.json")), { status: 200 });
+      const u = String(url);
+      calls.push({ url: u, headers: (init?.headers ?? {}) as Record<string, string> });
+      if (u.includes("/v2/stock-infos/")) return new Response(JSON.stringify(INFO[u.split("/").at(-1)!] ?? { result: null }), { status: 200 });
+      return u.includes("A999999") ? new Response(JSON.stringify({ error: { statusCode: 400 } }), { status: 400 }) : new Response(JSON.stringify(FX("toss-raw-2.json")), { status: 200 });
     });
-    const src = new TossTradingTrend(fetchFn as unknown as typeof fetch);
+    const src = new TossTradingTrend(fetchFn as unknown as typeof fetch, NIGHT);
     expect(await src.trend("005930", 70)).toEqual(TOSS.samsung.slice(0, 2));
-    expect(calls[0]!.url).toBe("https://wts-info-api.tossinvest.com/api/v1/stock-infos/trade/trend/trading-trend?productCode=A005930&size=70");
-    expect(calls[0]!.headers.referer).toBe("https://tossinvest.com/");
-    expect(calls[0]!.headers["user-agent"]).toMatch(/Mozilla/);
+    expect(calls.map((c) => c.url).sort()).toEqual([
+      "https://wts-info-api.tossinvest.com/api/v1/stock-infos/trade/trend/trading-trend?productCode=A005930&size=70",
+      "https://wts-info-api.tossinvest.com/api/v2/stock-infos/A005930",
+    ]);
+    for (const c of calls) {
+      expect(c.headers.referer).toBe("https://tossinvest.com/");
+      expect(c.headers["user-agent"]).toMatch(/Mozilla/);
+    }
+    // 상장 주식 수는 받아 둔 종목 정보에서 (호출 없음), 다음 수급은 상품 코드를 알아 수급 한 번
+    expect(await src.listedShares("005930")).toBe(5_846_278_608);
+    calls.length = 0;
+    await src.trend("005930", 70);
+    expect(calls.map((c) => c.url)).toEqual(["https://wts-info-api.tossinvest.com/api/v1/stock-infos/trade/trend/trading-trend?productCode=A005930&size=70"]);
+    // 없는 코드: 종목 정보 A·Q 모두 없음 → 수급 A 400 → Q 는 부르지 않고 실패
+    calls.length = 0;
     await expect(src.trend("999999", 70)).rejects.toThrow(ProviderError);
+    expect(calls.map((c) => c.url.replace("https://wts-info-api.tossinvest.com/api/", "")).sort()).toEqual([
+      "v1/stock-infos/trade/trend/trading-trend?productCode=A999999&size=70",
+      "v2/stock-infos/A999999",
+      "v2/stock-infos/Q999999",
+    ]);
+    expect(await src.listedShares("999999")).toBeNull();
+  });
+
+  it("ETN 은 'Q' 상품 코드 (520057 실측: A 는 HTTP 400) — 종목 정보가 Q 를 알려 주면 Q 로 한 번 더, 다음부터는 Q 로 바로", async () => {
+    const urls: string[] = [];
+    const src = new TossTradingTrend(tossEtnFetch(urls), NIGHT);
+    const rows = await src.trend("520057", 70);
+    expect(rows.map((r) => r.date)).toEqual(["2026-09-28", "2026-09-23", "2026-09-22"]);
+    expect(rows[0]).toMatchObject({ individual: 394_885, foreign: 54_565, institution: -428_461, otherCorp: -73_989, foreignRatio: 0.17, foreignHolding: 54_954, foreignLimit: 31_500_000 });
+    expect(urls.sort()).toEqual([
+      "v1/stock-infos/trade/trend/trading-trend?productCode=A520057&size=70",
+      "v1/stock-infos/trade/trend/trading-trend?productCode=Q520057&size=70",
+      "v2/stock-infos/A520057",
+      "v2/stock-infos/Q520057",
+    ]);
+    expect(await src.listedShares("520057")).toBe(31_500_000);
+    urls.length = 0;
+    await src.trend("520057", 70);
+    expect(urls).toEqual(["v1/stock-infos/trade/trend/trading-trend?productCode=Q520057&size=70"]);
+  });
+
+  it("종목 정보를 받지 못하면(HTTP 500): A 가 400 이면 Q 로 한 번 더 · 상장 주식 수는 모름(null) · 5분 동안 종목 정보를 다시 부르지 않는다", async () => {
+    let t = Date.parse("2026-09-29T10:00:00+09:00");
+    const urls: string[] = [];
+    const fetchFn = async (url: string | URL | Request) => {
+      const u = String(url);
+      urls.push(u.replace("https://wts-info-api.tossinvest.com/api/", ""));
+      if (u.includes("/v2/stock-infos/")) return new Response("{}", { status: 500 });
+      if (u.includes("productCode=Q520057")) return new Response(JSON.stringify(FX("toss-etn-q520057.json")), { status: 200 });
+      return new Response("{}", { status: 400 });
+    };
+    const src = new TossTradingTrend(fetchFn as unknown as typeof fetch, () => new Date(t));
+    expect(await src.trend("520057", 70)).toHaveLength(3);
+    expect(urls.filter((u) => u.startsWith("v1/")).sort()).toEqual([
+      "v1/stock-infos/trade/trend/trading-trend?productCode=A520057&size=70",
+      "v1/stock-infos/trade/trend/trading-trend?productCode=Q520057&size=70",
+    ]);
+    expect(await src.listedShares("520057")).toBeNull();
+    urls.length = 0;
+    t += 4 * 60_000;
+    await src.trend("520057", 70);
+    expect(urls.filter((u) => u.startsWith("v2/"))).toEqual([]);
+    t += 2 * 60_000; // 5분이 지나면 다시 해 본다
+    await src.trend("520057", 70);
+    expect(urls.filter((u) => u.startsWith("v2/"))).toEqual(["v2/stock-infos/A520057"]);
+  });
+
+  it("종목 정보 파서: result null → 없음, 코드·상장 주식 수, 모양이 바뀌면 던진다", () => {
+    expect(parseTossStockInfo(INFO["A520057"])).toBeNull();
+    expect(parseTossStockInfo(INFO["Q520057"])).toEqual({ productCode: "Q520057", listedShares: 31_500_000 });
+    expect(parseTossStockInfo(INFO["A040300"])).toEqual({ productCode: "A040300", listedShares: 47_676_980 });
+    expect(parseTossStockInfo({ result: { code: "A005930", sharesOutstanding: 0 } })).toEqual({ productCode: "A005930", listedShares: null });
+    for (const bad of [{}, null, [], { result: "x" }, { result: { code: 5930 } }, { result: { code: "005930" } }]) expect(() => parseTossStockInfo(bad), JSON.stringify(bad)).toThrow(ProviderError);
   });
 });
 
@@ -133,6 +232,26 @@ describe("네이버 trend 파서", () => {
     const src = new NaverInvestorTrend((async (url: string) => (urls.push(String(url)), new Response("[]", { status: 200 }))) as unknown as typeof fetch);
     expect(await src.trend("005930", 70)).toEqual([]);
     expect(urls).toEqual(["https://m.stock.naver.com/api/stock/005930/trend?pageSize=60"]);
+  });
+
+  it("첫 쪽이 60줄 꽉 차면 둘째 쪽(bizdate=가장 오래된 날)으로 70줄까지 — '60일 전' 보유율 줄(6/30 46.96%)이 생긴다, 둘째 쪽 실패는 첫 쪽만", async () => {
+    const urls: string[] = [];
+    let p2ok = true;
+    const src = new NaverInvestorTrend((async (url: string) => {
+      const u = String(url);
+      urls.push(u.replace("https://m.stock.naver.com/api/stock/", ""));
+      if (u.includes("bizdate=")) return p2ok ? new Response(JSON.stringify(FX("naver-samsung-p2.json")), { status: 200 }) : new Response("[]", { status: 500 });
+      return new Response(JSON.stringify(FX("naver-samsung.json")), { status: 200 });
+    }) as unknown as typeof fetch);
+    const rows = await src.trend("005930", 70);
+    expect(urls).toEqual(["005930/trend?pageSize=60", "005930/trend?pageSize=10&bizdate=20260701"]);
+    expect(rows).toHaveLength(70);
+    expect(rows[60]).toMatchObject({ date: "2026-06-30", foreignRatio: 46.96 });
+    const body = buildFlowBody({ code: "005930", source: "naver", rows, fetchedAt: NIGHT(), stale: false, check: null, now: NIGHT() });
+    expect(body.ratio?.ago["60"]).toEqual({ value: 46.96, date: "2026-06-30", change: -0.4 });
+    expect(body.days).toHaveLength(60);
+    p2ok = false;
+    expect(await src.trend("005930", 70)).toHaveLength(60);
   });
 });
 
@@ -245,7 +364,28 @@ describe("외국인 보유율", () => {
 });
 
 describe("외국인 한도 (토스 웹만, 한도가 상장 주식 수의 99.5% 미만일 때)", () => {
-  it("KT 49.0% · 100.0%, 한국전력 40.0% · 51.4%, 삼성전자·KODEX 200 없음, 네이버 없음", () => {
+  it("상장 주식 수(토스 웹 종목 정보)로: KT 49.0% · 100.0%, 한국전력 40.0% · 51.4%, 삼성전자·ETN(한도 = 상장 주식 수) 없음", () => {
+    expect(flowLimit(TOSS.kt[0]!, shares("A030200"))).toEqual({ limitPct: 49, usedPct: 100 });
+    expect(flowLimit(TOSS.kepco[0]!, shares("A015760"))).toEqual({ limitPct: 40, usedPct: 51.4 });
+    expect(flowLimit(TOSS.samsung[0]!, shares("A005930"))).toBeNull();
+    const etn = parseTossTradingTrend(FX("toss-etn-q520057.json"));
+    expect(flowLimit(etn[0]!, shares("Q520057"))).toBeNull();
+    // 보유 0 인 날(9/22)도 한도 판정은 상장 주식 수로 (한도 없음)
+    expect(flowLimit(etn[2]!, shares("Q520057"))).toBeNull();
+  });
+
+  it("회귀: 보유율이 낮은 한도 종목의 한도율 — 보유율(소수 둘째 자리)로 셈하면 틀린다 (YTN 9.8 · 세종텔레콤 48.6 · 트리니티항공 50.1), 상장 주식 수로 10.00 · 49.00 · 49.99", () => {
+    // 상장 주식 수를 알면 정확히 (한도율 소수 둘째 자리 — 트리니티항공 49.99%)
+    expect(flowLimit(LOW["A040300"]!, shares("A040300"))).toEqual({ limitPct: 10, usedPct: 1.6 });
+    expect(flowLimit(LOW["A036630"]!, shares("A036630"))).toEqual({ limitPct: 49, usedPct: 0.7 });
+    expect(flowLimit(LOW["A091810"]!, shares("A091810"))).toEqual({ limitPct: 49.99, usedPct: 0.9 });
+    // 모르면(종목 정보를 받지 못함) 어림 오차가 커서(보유율 0.16% ± 0.01%p → 한도율 ± 0.6%p) 한도 줄을 뺀다 — 틀린 값을 사실처럼 보이지 않게
+    expect(flowLimit(LOW["A040300"]!)).toBeNull();
+    expect(flowLimit(LOW["A036630"]!)).toBeNull();
+    expect(flowLimit(LOW["A091810"]!)).toBeNull();
+  });
+
+  it("상장 주식 수를 모를 때: 보유율로 어림 — 오차가 0.05%p 안이면 소수 한 자리(KT 49.0 · 한국전력 40.0), 한도 없는 종목은 없음, 네이버 없음", () => {
     expect(flowLimit(TOSS.kt[0]!)).toEqual({ limitPct: 49, usedPct: 100 });
     expect(flowLimit(TOSS.kepco[0]!)).toEqual({ limitPct: 40, usedPct: 51.4 });
     expect(flowLimit(TOSS.samsung[0]!)).toBeNull();
@@ -260,16 +400,23 @@ describe("외국인 한도 (토스 웹만, 한도가 상장 주식 수의 99.5% 
     // 379800 모양: 보유율 0.07%, 보유 ÷ 한도 = 0.0705% (예전 계산 99.3%)
     expect(flowLimit(row("2026-09-28", { foreignRatio: 0.07, foreignHolding: 70_500, foreignLimit: 100_000_000 }))).toBeNull();
     expect(flowLimit(row("2026-09-28", { foreignRatio: 0.06, foreignHolding: 649, foreignLimit: 1_000_000 }))).toBeNull();
+    // 상장 주식 수를 알면 한도 = 상장 주식 수 → 없음
+    expect(flowLimit(row("2026-09-28", { foreignRatio: 0.07, foreignHolding: 70_500, foreignLimit: 100_000_000 }), 100_000_000)).toBeNull();
   });
 
-  it("실제 한도(30~50%)는 보유율이 낮아도 그대로 잡힌다", () => {
+  it("실제 한도(30~50%): 상장 주식 수를 알면 보유율이 낮아도 정확히, 모르면 어림 오차가 작을 때(보유가 한도의 약 20% 이상)만", () => {
     const listed = 100_000_000;
     const limitRow = (limitPct: number, ratio: number) => row("2026-09-28", { foreignRatio: ratio, foreignHolding: Math.round((listed * ratio) / 100), foreignLimit: Math.round((listed * limitPct) / 100) });
+    expect(flowLimit(limitRow(50, 20.34), listed)).toEqual({ limitPct: 50, usedPct: 40.7 });
+    expect(flowLimit(limitRow(49, 49), listed)).toEqual({ limitPct: 49, usedPct: 100 });
+    expect(flowLimit(limitRow(40, 20.56), listed)).toEqual({ limitPct: 40, usedPct: 51.4 });
+    expect(flowLimit(limitRow(30, 0.5), listed)).toEqual({ limitPct: 30, usedPct: 1.7 });
+    expect(flowLimit(limitRow(49, 0.05), listed)).toEqual({ limitPct: 49, usedPct: 0.1 });
     expect(flowLimit(limitRow(50, 20.34))).toEqual({ limitPct: 50, usedPct: 40.7 });
     expect(flowLimit(limitRow(49, 49))).toEqual({ limitPct: 49, usedPct: 100 });
     expect(flowLimit(limitRow(40, 20.56))).toEqual({ limitPct: 40, usedPct: 51.4 });
-    expect(flowLimit(limitRow(30, 0.5))).toEqual({ limitPct: 30, usedPct: 1.7 });
-    expect(flowLimit(limitRow(49, 0.05))).toEqual({ limitPct: 49, usedPct: 0.1 });
+    expect(flowLimit(limitRow(30, 0.5))).toBeNull();
+    expect(flowLimit(limitRow(49, 0.05))).toBeNull();
   });
 });
 
@@ -309,10 +456,15 @@ class FakeSource implements FlowTrendSource {
   calls: string[] = [];
   fail = false;
   wait: Promise<void> | null = null;
+  /** 상장 주식 수 (토스 웹 종목 정보 흉내 — 기본 모름) */
+  shares: number | null = null;
   constructor(
     readonly name: string,
     public rows: FlowTrendRow[],
   ) {}
+  async listedShares(): Promise<number | null> {
+    return this.shares;
+  }
   async trend(code: string): Promise<FlowTrendRow[]> {
     this.calls.push(code);
     if (this.wait) await this.wait;
@@ -334,7 +486,7 @@ class FakeOpenApi {
   }
 }
 
-async function makeService(o: { now: () => Date; toss?: FakeSource; naver?: FakeSource; openApi?: FakeOpenApi | null; flag?: boolean }) {
+async function makeService(o: { now: () => Date; toss?: FakeSource; tossSource?: FlowTrendSource; naver?: FakeSource; openApi?: FakeOpenApi | null; flag?: boolean }) {
   const db = await createMigratedDb(":memory:");
   const features = new FeatureService(db, o.now);
   if (o.flag === false) await features.set({ flowTab: false });
@@ -342,7 +494,7 @@ async function makeService(o: { now: () => Date; toss?: FakeSource; naver?: Fake
   const naver = o.naver ?? new FakeSource("naver", NAVER.samsung);
   const warns: Array<{ obj: Record<string, unknown>; msg: string }> = [];
   const log = { info: () => undefined, warn: (obj: Record<string, unknown>, msg: string) => void warns.push({ obj, msg }) };
-  const sources: InvestorFlowSources = { tossWeb: toss, naver, openApi: o.openApi ?? null };
+  const sources: InvestorFlowSources = { tossWeb: o.tossSource ?? toss, naver, openApi: o.openApi ?? null };
   const service = new InvestorFlowService({ features, sources, now: o.now, log });
   return { service, toss, naver, warns, db };
 }
@@ -374,6 +526,26 @@ describe("수급 서비스: 응답 모양", () => {
     const { service } = await makeService({ now: NIGHT, toss: new FakeSource("toss-web", TOSS.kt) });
     const r = await service.get("030200");
     expect(r.supported && r.limit).toEqual({ limitPct: 49, usedPct: 100 });
+  });
+
+  it("회귀: YTN 한도율은 토스 웹 종목 정보의 상장 주식 수로 10.00% (보유율로 셈하면 9.8%) — 종목 정보를 모르면 한도 줄 없음", async () => {
+    const toss = new FakeSource("toss-web", [LOW["A040300"]!]);
+    toss.shares = shares("A040300");
+    const { service } = await makeService({ now: NIGHT, toss });
+    expect(await service.get("040300")).toMatchObject({ source: "toss-web", limit: { limitPct: 10, usedPct: 1.6 } });
+    const x = await makeService({ now: NIGHT, toss: new FakeSource("toss-web", [LOW["A040300"]!]) });
+    expect(await x.service.get("040300")).toMatchObject({ source: "toss-web", limit: null });
+  });
+
+  it("ETN 520057 (실제 출처 코드 + 가짜 fetch): 토스 웹 Q 상품 코드로 받아 source toss-web · 기타법인 있음 · 한도 없음 · 네이버로 넘김 경고 없음", async () => {
+    const naver = new FakeSource("naver", NAVER.samsung);
+    const { service, warns } = await makeService({ now: NIGHT, tossSource: new TossTradingTrend(tossEtnFetch(), NIGHT), naver });
+    const r = await service.get("520057");
+    if (!r.supported) throw new Error("한국 종목");
+    expect(r).toMatchObject({ source: "toss-web", basis: "KRX+NXT", limit: null, asOf: "2026-09-28T20:19:14+09:00" });
+    expect(r.days[0]).toMatchObject({ date: "2026-09-28", otherCorp: -73_989, foreignRatio: 0.17 });
+    expect(naver.calls).toHaveLength(0);
+    expect(warns).toEqual([]);
   });
 
   it("미국 종목: 외부 호출 없이 supported: false", async () => {

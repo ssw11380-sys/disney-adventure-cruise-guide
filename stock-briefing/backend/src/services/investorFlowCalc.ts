@@ -7,7 +7,7 @@ import type { FlowTrendRow, InvestorFlowDay } from "../providers/market/investor
  *    지금 시각이 아니라 받은 때로 본다: 전에 받은 값을 다음 날 다시 줄 때 장중에 받은 잠정 값이 확정으로 바뀌어 합계에 들어가지 않게
  *  - 합계: 확정 줄 앞에서 5·20·60개 (빈 값은 빼고 더하고 그 날 수를 missing 에)
  *  - 외국인 보유율: 지금 값과 합계 창 바로 앞날 값의 차이, 61점 선(오래된 순)
- *  - 외국인 한도(토스 웹만): 한도가 상장 주식 수의 99.5% 미만인 종목만 한도·소진율 (보유율 칸의 끝자리 오차를 넉넉히 보고 판정)
+ *  - 외국인 한도(토스 웹만): 한도가 상장 주식 수의 99.5% 미만인 종목만 한도·소진율 (상장 주식 수는 토스 웹 종목 정보 — 모르면 보유율로 어림하고 오차가 크면 뺌)
  *  - 대조: 토스 웹 확정 줄 최근 20일과 토스 Open API 같은 날짜의 개인·외국인·기관 세 값
  */
 
@@ -53,7 +53,7 @@ export interface FlowRatio {
 }
 
 export interface FlowLimit {
-  /** 한도 ÷ 상장 주식 수 (%, 소수 한 자리) */
+  /** 한도 ÷ 상장 주식 수 (%) — 상장 주식 수를 알면 소수 둘째 자리(49.99), 보유율로 어림하면 첫째 자리 */
   limitPct: number;
   /** 보유 ÷ 한도 (%, 소수 한 자리) */
   usedPct: number;
@@ -207,23 +207,35 @@ export function flowRatio(final: readonly FlowTrendRow[]): FlowRatio | null {
 /** 한도가 없는 종목으로 보는 한도율 (한도 ÷ 상장 주식 수, %) — 이 이상이면 한도 = 상장 주식 수 */
 export const FLOW_NO_LIMIT_PCT = 99.5;
 /**
- * 보유율 칸은 소수 둘째 자리까지라(반올림이든 버림이든) 실제 값이 이만큼(%p) 더 클 수 있다.
- * 보유율이 1% 아래인 종목은 이 끝자리 차이만으로 한도율이 99.5% 아래로 내려가, 없는 한도를 보이게 된다 (379800 보유율 0.07% → 99.3%)
+ * 보유율 칸은 소수 둘째 자리까지라(실측은 반올림 — 트리니티항공 0.4386% → 0.44, 버림일 수도 있어 넉넉히) 실제 값이 이만큼(%p) 다를 수 있다.
+ * 보유율이 낮을수록 이 끝자리 차이가 한도율에서 크게 불어난다 (YTN 보유율 0.16% → 한도율 9.8%, 실제 10.00%)
  */
 const RATIO_STEP = 0.01;
+/** 상장 주식 수를 모를 때 보유율로 어림한 한도율의 오차가 이보다 크면(%p) 한도 줄을 뺀다 — 소수 한 자리로 보이는 값이 틀리지 않게 */
+const LIMIT_EST_MAX_ERR = 0.05;
 
 /**
- * 외국인 한도 (토스 웹 줄만 — 한도 칸이 있을 때). 한도가 상장 주식 수의 99.5% 이상일 수 있으면(= 한도 없음) null.
- * 상장 주식 수 = 보유 ÷ 보유율. 판정은 보유율을 가장 크게(+0.01%p) 본 값, 곧 상장 주식 수를 가장 작게 본 값으로 한다
- * (실제 한도는 30~50% 라 이 여유로 놓치는 종목은 보유율이 0.01% 안팎인 경우뿐). 보이는 한도율은 받은 보유율 그대로 계산
+ * 외국인 한도 (토스 웹 줄만 — 한도 칸이 있을 때). 한도가 상장 주식 수의 99.5% 이상이면(= 한도 없음) null. 소진율 = 보유 ÷ 한도.
+ *  - 상장 주식 수를 알면(토스 웹 종목 정보 sharesOutstanding): 한도율 = 한도 ÷ 상장 주식 수 (소수 둘째 자리 — 트리니티항공 49.99%)
+ *  - 모르면: 상장 주식 수 = 보유 ÷ 보유율 로 어림. 없는 한도 판정은 보유율을 가장 크게(+0.01%p) 본 값으로 하고,
+ *    어림 오차(보유율 ±0.01%p 가 한도율에서 커진 폭)가 0.05%p 보다 크면 한도 줄을 뺀다 (소수 한 자리로 보임)
  */
-export function flowLimit(row: FlowTrendRow): FlowLimit | null {
+export function flowLimit(row: FlowTrendRow, listedShares: number | null = null): FlowLimit | null {
   const { foreignHolding: hold, foreignLimit: limit, foreignRatio: ratio } = row;
-  if (hold === null || limit === null || ratio === null || !(hold > 0) || !(limit > 0) || !(ratio > 0)) return null;
-  const limitPctMax = (limit * (ratio + RATIO_STEP)) / hold;
-  if (!(limitPctMax < FLOW_NO_LIMIT_PCT)) return null;
-  const limitPct = (limit * ratio) / hold;
-  return { limitPct: round(limitPct, 1), usedPct: round((hold / limit) * 100, 1) };
+  if (hold === null || limit === null || !(hold >= 0) || !(limit > 0)) return null;
+  const usedPct = round((hold / limit) * 100, 1);
+  if (listedShares !== null && listedShares > 0) {
+    const pct = (limit / listedShares) * 100;
+    return pct < FLOW_NO_LIMIT_PCT ? { limitPct: round(pct, 2), usedPct } : null;
+  }
+  if (ratio === null || !(ratio > 0) || !(hold > 0)) return null;
+  const est = (r: number) => (limit * r) / hold;
+  const hi = est(ratio + RATIO_STEP);
+  if (!(hi < FLOW_NO_LIMIT_PCT)) return null;
+  const mid = est(ratio);
+  const lo = est(Math.max(0, ratio - RATIO_STEP));
+  if (Math.max(hi - mid, mid - lo) > LIMIT_EST_MAX_ERR) return null;
+  return { limitPct: round(mid, 1), usedPct };
 }
 
 export interface FlowCompare {
@@ -272,7 +284,17 @@ function isoOrNull(s: string | null): string | null {
 }
 
 /** 받은 줄 → 응답 본문 */
-export function buildFlowBody(o: { code: string; source: FlowSourceName; rows: readonly FlowTrendRow[]; fetchedAt: Date; stale: boolean; check: FlowCheck | null; now: Date }): InvestorFlowBody {
+export function buildFlowBody(o: {
+  code: string;
+  source: FlowSourceName;
+  rows: readonly FlowTrendRow[];
+  fetchedAt: Date;
+  stale: boolean;
+  check: FlowCheck | null;
+  now: Date;
+  /** 상장 주식 수 (토스 웹 종목 정보 — 한도율 계산, 모르면 null) */
+  listedShares?: number | null;
+}): InvestorFlowBody {
   const { final, today } = splitFlowRows(o.rows, o.source, o.fetchedAt, o.now);
   const fetchedAt = seoulIso(o.fetchedAt);
   const first = final[0];
@@ -288,7 +310,7 @@ export function buildFlowBody(o: { code: string; source: FlowSourceName; rows: r
     days: final.slice(0, FLOW_DAYS_MAX).map((r) => ({ date: r.date, individual: r.individual, foreign: r.foreign, institution: r.institution, otherCorp: r.otherCorp, foreignRatio: r.foreignRatio, close: r.close })),
     sums: flowSums(final, o.source),
     ratio: flowRatio(final),
-    limit: o.source === "toss-web" && first ? flowLimit(first) : null,
+    limit: o.source === "toss-web" && first ? flowLimit(first, o.listedShares ?? null) : null,
     check: o.source === "toss-web" ? o.check : null,
   };
 }

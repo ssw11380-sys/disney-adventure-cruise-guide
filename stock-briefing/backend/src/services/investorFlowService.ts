@@ -2,7 +2,7 @@ import { isKrCode } from "../lib/codes.js";
 import { AppError } from "../lib/errors.js";
 import { seoulIso } from "../lib/time.js";
 import type { FlowTrendRow, FlowTrendSource, InvestorFlowDay } from "../providers/market/investorFlow.js";
-import { NaverInvestorTrend, NAVER_TREND_MAX } from "../providers/market/naverInvestorTrend.js";
+import { NaverInvestorTrend, NAVER_TREND_SIZE } from "../providers/market/naverInvestorTrend.js";
 import { TossTradingTrend, TOSS_TREND_SIZE } from "../providers/market/tossTradingTrend.js";
 import type { FeatureService } from "./featureService.js";
 import { FLOW_TEXT } from "./flowText.js";
@@ -39,6 +39,8 @@ interface FlowLog {
 interface Snap {
   at: number;
   rows: FlowTrendRow[];
+  /** 상장 주식 수 (토스 웹 종목 정보 — 외국인 한도율, 모르면 null) */
+  listedShares?: number | null;
 }
 
 interface Entry {
@@ -124,7 +126,10 @@ export class InvestorFlowService {
     };
     let why: string;
     try {
-      e.toss = { at: t, rows: await sources.tossWeb.trend(code, TOSS_TREND_SIZE) };
+      const rows = await sources.tossWeb.trend(code, TOSS_TREND_SIZE);
+      // 상장 주식 수: trend 가 함께 받아 둔 종목 정보(캐시)라 보통 외부 호출이 늘지 않는다. 모르면 한도율을 보유율로 어림
+      const listedShares = sources.tossWeb.listedShares ? await sources.tossWeb.listedShares(code).catch(() => null) : null;
+      e.toss = { at: t, rows, listedShares };
       return served("toss-web", e.toss, false);
     } catch (err) {
       why = err instanceof Error ? err.message : String(err);
@@ -133,7 +138,7 @@ export class InvestorFlowService {
     if (e.toss && t - e.toss.at < TOSS_KEEP_MS) return served("toss-web", e.toss, true);
     this.deps.log?.warn({ code, reason: why }, "수급 출처를 네이버로 넘김");
     try {
-      e.naver = { at: t, rows: await sources.naver.trend(code, NAVER_TREND_MAX) };
+      e.naver = { at: t, rows: await sources.naver.trend(code, NAVER_TREND_SIZE) };
       return served("naver", e.naver, false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -150,7 +155,7 @@ export class InvestorFlowService {
     const { source, snap, stale } = await this.pick(code);
     const now = this.now();
     if (source === "toss-web") this.maybeCheck(code, snap);
-    return buildFlowBody({ code, source, rows: snap.rows, fetchedAt: new Date(snap.at), stale, check: this.checks.get(code) ?? null, now });
+    return buildFlowBody({ code, source, rows: snap.rows, fetchedAt: new Date(snap.at), stale, check: this.checks.get(code) ?? null, now, listedShares: snap.listedShares ?? null });
   }
 
   /** 뒤에서 대조 (응답은 기다리지 않는다). 키가 없거나 12시간(실패면 1시간) 안에 해 봤으면 하지 않는다 */

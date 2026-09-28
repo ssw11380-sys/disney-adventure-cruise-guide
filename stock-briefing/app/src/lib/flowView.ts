@@ -113,6 +113,15 @@ export function formatRatio(v: number, digits = 2): string {
   return `${v.toFixed(digits)}%`;
 }
 
+/**
+ * 외국인 한도율 '49.0%' · '10.0%' · '49.99%' — 서버가 상장 주식 수로 셈하면 소수 둘째 자리(트리니티항공 49.99)까지 오고,
+ * 둘째 자리가 0 이면 한 자리로 보인다 (49.99 를 '50.0%'로 반올림해 보이지 않게)
+ */
+export function formatLimitPct(v: number): string {
+  const tenth = Math.abs(Math.round(v * 10) - v * 10) < 1e-6;
+  return `${v.toFixed(tenth ? 1 : 2)}%`;
+}
+
 /** %p 차이 '+0.04%p' · '-0.23%p' · '0.00%p' */
 export function formatPp(v: number): string {
   return withSign(v, `${Math.abs(v).toFixed(2)}%p`, true);
@@ -173,6 +182,34 @@ export function flowSumRows(sum: FlowSum, period: number, withOther: boolean): S
     const sign = sharesSign(v);
     return { key, name: FLOW_NAMES[key], text: formatShares(v), sign, speech: sumSpeech(FLOW_NAMES[key], period, v === null ? null : formatShares(v, { sign: false }), sign) };
   });
+}
+
+/** 세 기간 표의 한 열: 기간 칸 이름(5·20·60)과 실제로 더한 날 수 */
+export interface SumColumn {
+  period: 5 | 20 | 60;
+  days: number;
+}
+
+/**
+ * 넓은 칸 세 기간 표의 열. 열 머리는 실제로 더한 날 수이고, 자료가 모자라 두 기간이 같은 날 수가 되면 한 열만 둔다
+ * (12일치면 '5일 | 12일' — '20일'·'60일' 열에 같은 12일 합계가 두 번 나오지 않게)
+ */
+export function sumColumns(sums: Record<"5" | "20" | "60", Pick<FlowSum, "days">>): SumColumn[] {
+  const out: SumColumn[] = [];
+  for (const period of [5, 20, 60] as const) {
+    const days = Math.min(period, sums[String(period) as "5" | "20" | "60"].days) || period;
+    if (!out.some((c) => c.days === days)) out.push({ period, days });
+  }
+  return out;
+}
+
+/** 마지막 자료 날(YYYY-MM-DD)이 받은 때(ISO)의 한국 날짜보다 maxDays 일 넘게 앞인지 — 거래정지·상장폐지로 자료가 끊긴 종목 (긴 연휴는 7일 안) */
+export function lastDataOld(lastDate: string, fetchedAt: string, maxDays = 7): boolean {
+  const t = Date.parse(fetchedAt);
+  const last = Date.parse(`${lastDate}T00:00:00Z`);
+  if (!Number.isFinite(t) || !Number.isFinite(last)) return false;
+  const fetchedDay = Date.parse(`${new Date(t + 9 * 3_600_000).toISOString().slice(0, 10)}T00:00:00Z`);
+  return (fetchedDay - last) / 86_400_000 > maxDays;
 }
 
 /** 합계를 칩 대신 세 기간 표(5일 | 20일 | 60일)로 한 번에 보일 만큼 넓은지 — 카드 안쪽 폭 ≥ 520 × 글자 배율 */
