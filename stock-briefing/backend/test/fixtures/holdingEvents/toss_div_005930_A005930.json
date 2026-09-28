@@ -1,0 +1,34 @@
+{
+ "result": [
+  {
+   "exDate": "2025-12-29",
+   "paymentDate": "2026-04-17",
+   "currency": "KRW",
+   "ratio": 0,
+   "cash": 566,
+   "cashKrw": 566,
+   "yieldRatio": 0.004837606838,
+   "ttmYieldRatio": 0.0213
+  },
+  {
+   "exDate": "2026-03-30",
+   "paymentDate": "2026-05-29",
+   "currency": "KRW",
+   "ratio": 0,
+   "cash": 372,
+   "cashKrw": 372,
+   "yieldRatio": 0.002070116861,
+   "ttmYieldRatio": 0.0174
+  },
+  {
+   "exDate": "2026-06-29",
+   "paymentDate": "2026-08-28",
+   "currency": "KRW",
+   "ratio": 0,
+   "cash": 374,
+   "cashKrw": 374,
+   "yieldRatio": 0.001101620029,
+   "ttmYieldRatio": 0.0125
+  }
+ ]
+}

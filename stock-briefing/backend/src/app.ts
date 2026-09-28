@@ -34,6 +34,7 @@ import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
 import { BriefingService } from "./services/briefingService.js";
 import { AccountBriefingService } from "./services/accountBriefingService.js";
+import { HoldingEventsService } from "./services/holdingEvents.js";
 import { DataCollector } from "./services/collector.js";
 import { DeviceService } from "./services/deviceService.js";
 import { NotificationService } from "./services/notificationService.js";
@@ -59,6 +60,7 @@ import { ValueScoreService } from "./services/valueScoreService.js";
 import { KrValueService } from "./services/krValueService.js";
 import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
+import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
 
 export interface BuildAppOptions {
@@ -324,6 +326,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     indicatorScores.start();
     app.addHook("onClose", async () => indicatorScores.stop());
   }
+  // 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents·holdingEarnings): 계좌 브리핑이 만들 때 부른다. 출처가 없으면(테스트 기본) 두지 않는다
+  const holdingEvents = opts.providers.holdingEvents ? new HoldingEventsService({ sources: opts.providers.holdingEvents, now, log }) : null;
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
@@ -333,6 +337,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     generator: opts.providers.generator,
     prompts,
     features,
+    // 브리핑 3차 4 비중 한 줄 (플래그 accountExposure): 레버리지·인버스는 지표 점수와 같은 토스 웹 상품 정보(같은 인스턴스·24시간 캐시)로 가린다
+    productInfo: opts.providers.productInfo ?? null,
+    holdingEvents,
     now,
     log,
   });
@@ -349,6 +356,18 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     const summary = await market;
     if (done.created.length > 0 || account) await notificationService.onSession({ ...done, account, market: summary });
   });
+  // 브리핑 3차 2 늦음·실패 안내 (플래그 briefingStatus): 실행이 끝날 때마다(알림을 보낸 뒤 — 위 리스너 다음) 실행 기록 한 줄. 꺼져 있으면 쓰지 않는다
+  const briefingStatus = new BriefingStatusService({
+    db: opts.db,
+    features,
+    settings: () => settingsStore.get(),
+    calendar: opts.providers.calendar,
+    progress: () => briefingService.progress,
+    llmConfigured: () => opts.providers.generator.model !== "disabled",
+    now,
+    log,
+  });
+  briefingService.onRunDone(briefingStatus.onRunDone);
   app.addHook("onClose", async () => notificationService.stop());
 
   app.decorate("stockService", stockService);
@@ -582,6 +601,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     // 계정(A단계): 켜져 있을 때만 (끄면 응답이 예전과 같게). 처음 비밀번호를 쓰는지는 내보내지 않는다 (공개 저장소에 적힌 1111 이 아직 되는지 알리는 셈 —
     // 주인은 앱 설정 맨 위 띠·/api/auth/me 로 본다)
     ...((await accountsOn()) ? { accounts: { enabled: true } } : {}),
+    // 다가오는 일정(브리핑 3차 5): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 받지 못한 것·두 출처가 다른 것 경고
+    ...(holdingEvents && (await features.enabled("holdingEvents")) ? { holdingEvents: holdingEvents.health() } : {}),
     disclaimer: DISCLAIMER,
   });
 
@@ -687,7 +708,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     memberQuota: new DistinctDailyQuota(MEMBER_AI_DAILY, () => seoulDate(now())),
     now,
   });
-  await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
+  await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler, status: briefingStatus });
   await app.register(accountBriefingRoutes, {
     prefix: "/api/account-briefings",
     service: accountBriefings,
@@ -722,7 +743,14 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
   // 계정 A단계: 주인 아닌 계정은 서로 다른 종목 점수를 사람마다 하루 MEMBER_SCORE_DAILY 개까지 — 캐시에 있든 없든 센다 (검증 4차)
-  await app.register(scoreRoutes, { prefix: "/api/scores", service: indicatorScores, memberQuota: new DistinctDailyQuota(MEMBER_SCORE_DAILY, () => seoulDate(now())), now });
+  await app.register(scoreRoutes, {
+    prefix: "/api/scores",
+    service: indicatorScores,
+    memberQuota: new DistinctDailyQuota(MEMBER_SCORE_DAILY, () => seoulDate(now())),
+    // 주인 아닌 계정에게는 종목 상세 미리 보기와 같은 이름 (주인 등록 표의 이름이 아니라)
+    publicName: (code) => indicatorScores.publicName(code),
+    now,
+  });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)

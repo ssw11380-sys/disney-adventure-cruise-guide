@@ -146,6 +146,8 @@ export default function StockDetailScreen() {
   // 지표 점수 (3-44, 기능 플래그 indicatorScores — 앱 fallback 꺼짐): 기업개요 탭 맨 위 요약 카드 + 'AI 기업개요 [AI가 쓴 글]' 제목,
   // 기술분석 탭 맨 위 추세 상세 카드. 꺼져 있으면 서버에 묻지도 않고 탭 내용이 지금 그대로다
   const scoresOn = useFeature("indicatorScores", false);
+  // 브리핑 3차 2 (플래그 briefingStatus, 앱 fallback 꺼짐): '최근 브리핑'의 실패 카드도 오류 원문 대신 쉬운 말 (브리핑 탭과 같게). 꺼지면 속성 없음 = 지금 그대로
+  const plainFail = useFeature("briefingStatus", false) ? { plainFail: true } : {};
   // 가치 지표 (3-44 2단계, 서버 되돌리기 스위치 valueScore — 앱 fallback 꺼짐): 가치분석 탭 맨 위 상세 카드 + 'AI 가치분석' 제목,
   // 요약 카드의 '가치분석 탭에서 지표별 값 보기'. 꺼져 있으면 가치분석 탭은 1단계 그대로(AI 글만)
   const valueOn = useFeature("valueScore", false);
@@ -669,7 +671,7 @@ export default function StockDetailScreen() {
           <View style={{ gap: space.sm }}>
             <Text style={[styles.panelTitle(t.ink), { paddingHorizontal: space.lg, paddingTop: space.sm }]}>최근 브리핑</Text>
             {briefings.data.map((b) => (
-              <BriefingCard key={b.id} briefing={b} mode="summary" showName={false} />
+              <BriefingCard key={b.id} briefing={b} mode="summary" showName={false} {...plainFail} />
             ))}
           </View>
         ) : null}

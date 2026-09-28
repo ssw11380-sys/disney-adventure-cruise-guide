@@ -39,6 +39,7 @@ const KNOWN_PERSONAL = new Set([
   "GET /api/briefings/:id",
   "POST /api/briefings/run",
   "GET /api/briefings/schedule",
+  "GET /api/briefings/status", // #95 브리핑 늦음·실패 안내 — 주인 등록 종목 이름·브리핑 id·실행 시각이 담긴다 (주인만, 빈 값도 주지 않음)
   "GET /api/account-briefings",
   "GET /api/account-briefings/:id",
   "POST /api/account-briefings/run",
@@ -269,6 +270,26 @@ describe("경로 정책 — 모든 경로 · 카나리아", () => {
         if (k in EMPTY_READS) expect(r.statusCode, k).toBe(200);
         else expect(r.statusCode, `${k} ${r.body}`).toBe(403);
       }
+    }
+    expect(leaks).toEqual([]);
+  });
+
+  it("#95 브리핑 늦음·실패 안내(GET /api/briefings/status): 주인은 못 만든 종목 이름을 보고, 주인 아닌 계정·세션 없음은 403 — 모든 GET 에도 표시 없음", async () => {
+    // 주인 등록 종목(이름에 카나리아)의 오늘 오후 브리핑이 실패한 것처럼 — 실행 전에 등록한 종목이라야 대상이 된다
+    await w.db.updateTable("registered_stocks").set({ name: CANARY_NAME, created_at: "2026-09-01T10:00:00+09:00" }).where("code", "=", "005930").execute();
+    await w.db.updateTable("briefings").set({ status: "failed", error: `api: ${CANARY} 500` }).where("id", "=", w.ids.briefing).execute();
+    const o = await w.app.inject({ method: "GET", url: "/api/briefings/status", headers: { "x-session-token": w.owner } });
+    expect(o.statusCode, o.body).toBe(200);
+    expect(o.json()).toMatchObject({ session: "afternoon", problems: [{ code: "005930", name: CANARY_NAME, briefingId: w.ids.briefing }] });
+    const m = { "x-session-token": w.member };
+    const seen = await w.app.inject({ method: "GET", url: "/api/briefings/status", headers: m });
+    expect(seen.statusCode).toBe(403);
+    expect(seen.json().code).toBe("personal_data_not_ready");
+    expect((await w.app.inject({ method: "GET", url: "/api/briefings/status" })).json().code).toBe("session_required");
+    const leaks: string[] = [];
+    for (const k of apiKeys().filter((x) => x.startsWith("GET "))) {
+      const r = await w.app.inject({ method: "GET", url: fill(k.slice(4), w), headers: m });
+      for (const mark of MARKS) if (r.body.includes(mark)) leaks.push(`${k} → ${mark}`);
     }
     expect(leaks).toEqual([]);
   });

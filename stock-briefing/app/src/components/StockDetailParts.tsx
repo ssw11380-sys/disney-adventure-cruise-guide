@@ -2,7 +2,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useEffect, useState } from "react";
 import { Animated, Linking, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useAnalysis, useStockMutations, useStockNews } from "@/api/hooks";
+import { useAnalysis, useFeature, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, Briefing, Disclosure, NewsItem } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { FlashPrice } from "@/components/FlashPrice";
@@ -304,6 +304,8 @@ export function MoreToggle({ open, onPress, label, count }: { open: boolean; onP
 /** 최근 브리핑 목록 (넓은 창의 '브리핑' 탭, 아랫줄 첫 칸). max 를 주면 앞의 max 장만 보이고 '더 보기'로 나머지 */
 export function BriefingList({ query, max }: { query: { data?: Briefing[]; isLoading: boolean; isError: boolean; error: unknown; refetch: () => unknown }; max?: number }) {
   const [open, setOpen] = useState(false);
+  // 브리핑 3차 2 (플래그 briefingStatus): 실패 카드는 오류 원문 대신 쉬운 말. 꺼지면 속성 없음 = 지금 그대로
+  const plainFail = useFeature("briefingStatus", false) ? { plainFail: true } : {};
   if (query.isLoading) return <Card><Loading /></Card>;
   if (query.isError) return <Card><ErrorView error={query.error} onRetry={() => void query.refetch()} /></Card>;
   const list = query.data ?? [];
@@ -312,7 +314,7 @@ export function BriefingList({ query, max }: { query: { data?: Briefing[]; isLoa
   return (
     <View style={{ gap: space.sm }}>
       {shown.map((b) => (
-        <BriefingCard key={b.id} briefing={b} mode="summary" showName={false} />
+        <BriefingCard key={b.id} briefing={b} mode="summary" showName={false} {...plainFail} />
       ))}
       {max && list.length > max ? (
         <View style={styles.moreRow}>

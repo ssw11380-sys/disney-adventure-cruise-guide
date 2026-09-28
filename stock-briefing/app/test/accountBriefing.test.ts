@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountBriefing, AccountData, RegisteredWithQuote } from "@/api/types";
-import { accountCardItem, accountCardSpeech, contributionSpeech, contributionTable, summaryShownLines, summarySpeech } from "@/lib/accountBriefing";
+import { accountCardItem, accountCardSpeech, contributionSpeech, contributionTable, leaders, summaryShownLines, summarySpeech } from "@/lib/accountBriefing";
 import { buildDigest, DEFAULT_PREFS, digestAccountOf, KR_PREVIOUS_DAY_LINE, planNotifications, US_PREVIOUS_DAY_LINE, usHolidayWhen, usPreviousDayLine } from "@/lib/briefingDigest";
 import { summarize } from "@/lib/portfolio";
 
@@ -254,5 +254,75 @@ describe("알림을 누르면", () => {
     expect(routeForNotification({ type: "briefing", digest: true, accountBriefingId: "x", briefingId: 11 })).toBe("/briefings");
     expect(routeForNotification({ type: "briefing", digest: true, briefingId: 11 })).toBe("/briefings");
     expect(routeForNotification({ type: "briefing", briefingId: 11 })).toBe("/briefings/11");
+  });
+});
+
+/**
+ * 합친 모습 리뷰 (main 에도 있던 버그, #65 이후): 상세 맨 위 요약 카드의 화면은 서버 요약 줄('기여 1위' = 당일 손익과 같은 방향 1위, leaders)인데
+ * 화면 읽기(summarySpeech)는 기여 표 첫 줄(크기 1위)을 읽어, 반대 방향 종목이 크기 1위인 날 서로 다른 종목을 말했다
+ */
+describe("상세 요약 카드 화면 읽기의 '기여 1위' = 화면의 요약 줄 (leaders)", () => {
+  const row = (code: string, name: string, amount: number, changeRate: number) => ({ code, name, currency: "KRW" as const, amount, changeRate, value: 1 });
+  // 9/28 월 오전 (합친 모습 미리보기와 같은 숫자): 당일 +508,113원인데 크기 1위는 애플 -171,154원
+  const data = (dayPnl: number, contributions: AccountData["contributions"]): AccountData => ({
+    version: 1, session: "morning", date: "2026-09-28", asOf: "2026-09-28T09:13:05+09:00", basis: "앱 잔고 화면과 같은 기준", afterCost: true, holdings: 21, stale: 0,
+    totalValue: 81_212_221, totalCost: 63_126_735, totalProfit: 18_085_486, totalProfitRate: 28.65, dayPnl, dayRate: 0.63,
+    contributions, others: null, markets: { kr: null, us: null }, excluded: [],
+    fx: { status: "none", reason: null, usdKrw: null, appliedRate: null, usdHoldingsKrwChange: null, priceEffect: null, fxEffect: null },
+    indices: [], missingIndices: [],
+    schedule: { kr: { date: "2026-09-28", tradingDay: true, now: "정규장", hours: "정규장 09:00~15:30", nextOpen: null }, us: { date: "2026-09-25", tradingDay: true, now: "미국 주간거래", hours: null }, disclosures: [] },
+    narrative: { source: "template", reason: null },
+  });
+  const up = [row("AAPL", "애플", -171_154, -1.59), row("NVDA", "엔비디아", 169_763, 1.74), row("QNTM", "퀀티넘", 148_403, 6), row("005930", "삼성전자", 144_000, 1.2)];
+  /** 서버 요약 줄(summaryText)의 '기여 1위 이름' */
+  const shownTop = (summary: string) => /기여 1위 (.+?) [+-][\d,]+원/.exec(summary)?.[1] ?? null;
+
+  it("오른 날 크기 1위가 손실 종목이어도: 화면('기여 1위 엔비디아 +169,763원')과 같은 종목·금액을 읽는다", () => {
+    const d = data(508_113, up);
+    const saved = "당일 +508,113원 (+0.63%) · 기여 1위 엔비디아 +169,763원\n총 평가금액 81,212,221원";
+    const speech = summarySpeech(d);
+    expect(speech).toContain("기여 1위 엔비디아 169,763원 이익");
+    expect(speech).not.toContain("애플");
+    expect(speech).toContain(`기여 1위 ${shownTop(saved)} `);
+    // 기여 표는 크기 순 그대로 (첫 줄 애플)
+    expect(contributionTable(d).lines[0]!.name).toBe("애플");
+  });
+
+  it("내린 날은 내린 종목 중 1위, 당일 손익 0 이면 크기 순, 같은 방향 종목이 없으면 '기여 1위' 없음 (서버 leaders 와 같은 규칙)", () => {
+    const down = [row("NVDA", "엔비디아", 169_763, 1.74), row("AAPL", "애플", -171_154, -1.59), row("000660", "SK하이닉스", -5_000, -0.3)];
+    expect(summarySpeech(data(-6_391, [row("NVDA", "엔비디아", 180_000, 2), ...down.slice(1)]))).toContain("기여 1위 애플 171,154원 손실");
+    expect(summarySpeech(data(0, up))).toContain("기여 1위 애플 171,154원 손실");
+    const none = summarySpeech(data(10_000, [row("AAPL", "애플", -5_000, -0.1)]));
+    expect(none).not.toContain("기여 1위");
+    expect(leaders({ dayPnl: 508_113, contributions: up }).map((c) => c.name)).toEqual(["엔비디아", "퀀티넘", "삼성전자"]);
+    expect(leaders({ dayPnl: -1, contributions: down }).map((c) => c.name)).toEqual(["애플", "SK하이닉스"]);
+    expect(leaders({ dayPnl: 0, contributions: down }).map((c) => c.name)).toEqual(["엔비디아", "애플", "SK하이닉스"]);
+  });
+});
+
+/** 합친 모습 리뷰: 3-32 숫자의 시각은 기여 1위 바로 뒤 — 비교·이번 주·휴장 조각의 시각으로 들리지 않게 */
+describe("카드 화면 읽기: 'H시 M분 기준'의 자리 (time 옵션)", () => {
+  it("기여 1위 바로 뒤, 비교·이번 주 일정·휴장 조각보다 앞", () => {
+    const b = briefing({
+      headline: {
+        ...briefing().headline!,
+        usPreviousDay: true,
+        since: { date: "2026-09-24", session: "morning", change: -120_000, qtyChanged: null },
+        week: [{ code: "O", name: "리얼티인컴", kind: "exDividend", date: "2026-09-30" }],
+      },
+    });
+    const s = accountCardSpeech(b, { time: true, since: true, week: true });
+    const at = (part: string) => {
+      const i = s.indexOf(part);
+      expect(i, part).toBeGreaterThan(-1);
+      return i;
+    };
+    expect(s).toContain("기여 1위 RGTX 1,234,567원 손실, 8시 40분 기준, 9월 24일");
+    expect(at("8시 40분 기준")).toBeLessThan(at("브리핑보다 총 평가금액"));
+    expect(at("브리핑보다 총 평가금액")).toBeLessThan(at("리얼티인컴 배당락일"));
+    expect(at("리얼티인컴 배당락일")).toBeLessThan(at("미국 휴장"));
+    expect(s.endsWith("미국 종목은 직전 거래일 등락, 자세히 보기")).toBe(true);
+    // 옵션이 없으면 시각 없음 (지금 문장)
+    expect(accountCardSpeech(b, { since: true, week: true })).not.toContain("8시 40분 기준");
   });
 });

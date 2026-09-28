@@ -154,8 +154,17 @@ export const MEMBER_CARRIED_TEXT = "재무 숫자는 예전에 받은 값입니�
 export const MEMBER_CARRIED_BADGE = "지난 값";
 
 type ScoreValueLike = { asOf?: { fetchedAt: string | null } | null; flags?: Array<{ key: string; text: string }> | null; badges?: string[] | null };
+type ScoreNameLike = { name?: string; trend?: { basis?: { kind: string; code: string; name: string } | null } | null };
 
-export function memberScoreView<T extends { computedAt: string; value?: ScoreValueLike | null }>(r: T, nowIso: string): T {
+/**
+ * 주인 아닌 계정의 지표 점수 (한국·미국 모두). publicName: 종목 마스터·검색의 이름 (종목 상세 미리 보기와 같은 이름) — 주면 이름·'이 종목 기준' 이름을 그것으로
+ * (계산 결과는 주인과 같은 캐시를 쓰므로 주인 등록 표의 이름이 실린다 — 등록 뒤 마스터 이름이 바뀐 종목이면 이름만으로 주인 등록 종목이 드러난다, #95 합친 뒤 카나리아)
+ */
+export function memberScoreView<T extends { computedAt: string; value?: ScoreValueLike | null } & ScoreNameLike>(r: T, nowIso: string, publicName?: string): T {
+  if (publicName !== undefined) {
+    const basis = r.trend?.basis;
+    r = { ...r, ...(r.name !== undefined ? { name: publicName } : {}), ...(r.trend && basis?.kind === "self" ? { trend: { ...r.trend, basis: { ...basis, name: publicName } } } : {}) };
+  }
   const v = r.value;
   if (!v) return { ...r, computedAt: nowIso };
   // 재무 받은 시각·'지난 값 M/D'(받은 날짜) 을 뺀다 — 한국·미국 가치 모두 (검증 5차: #94 한국 간이 가치 합친 뒤)

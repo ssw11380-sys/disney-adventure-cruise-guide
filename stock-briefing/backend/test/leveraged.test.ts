@@ -54,6 +54,14 @@ describe("상품 가리기", () => {
     expect(classifyProduct("252670", "KODEX 200선물인버스2X", null)).toMatchObject({ kind: "inverse" });
     expect(classifyProduct("ZZZZ", "ZZZZ", { group: "EF", leverageFactor: -2 })).toMatchObject({ kind: "inverse" });
   });
+  it("한글 이름 '베어' → 인버스 (브리핑 3차 4 검토 지적: 토스 한글 이름 '… 베어 3X'가 '3X' 만 보고 3배 레버리지로 점수를 받던 것)", () => {
+    expect(classifyProduct("SOXS", "디렉시온 데일리 반도체 베어 3X", null)).toEqual({ kind: "inverse", etf: true });
+    expect(classifyProduct("TSLQ", "AXS 테슬라 베어 데일리 ETF", null)).toEqual({ kind: "inverse", etf: true });
+    // 앞뒤가 한글인 낱말 속 '베어'('베어링')는 아님
+    expect(classifyProduct("999991", "베어링자산운용", null)).toMatchObject({ kind: "normal" });
+    // 보통 주식(ST)이라고 알려 주면 이름 규칙을 쓰지 않는 것은 그대로
+    expect(classifyProduct("BBW", "빌드-어-베어 워크숍", { group: "ST", leverageFactor: 0 })).toEqual({ kind: "normal", etf: false });
+  });
   it("채권·금리형 ETF → 제외 ('Ultra-Short Income' 은 인버스가 아니라 채권)", () => {
     expect(classifyProduct("153130", "KODEX 단기채권", { group: "EF" })).toEqual({ kind: "bond", etf: true });
     expect(classifyProduct("JPST", "JPMorgan Ultra-Short Income ETF", { group: "EF" })).toMatchObject({ kind: "bond" });

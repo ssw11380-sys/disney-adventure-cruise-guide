@@ -37,6 +37,7 @@ import type { AppErrorSummary, Evaluation,
   VolumeStatus,
   AuthResult,
   AuthMe,
+  BriefingStatus,
   ReconcileBadgeBody,
 } from "./types";
 import { authMessage, NOT_JSON, SESSION_INVALID, SESSION_REQUIRED } from "@/lib/connectionError";
@@ -263,6 +264,8 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     getBriefing: (id: number) => get<BriefingWithData>(`/api/briefings/${id}`),
     runBriefings: (session: BriefingSession, codes?: string[], force = false) =>
       send<RunResult>("POST", "/api/briefings/run", { session, codes, force }, 600_000),
+    /** 브리핑 늦음·실패 안내 (브리핑 3차 2, 플래그 briefingStatus). 꺼져 있거나 예전 서버면 404 → 부르는 쪽이 "모름"으로 본다 (예전 안내) */
+    briefingStatus: () => get<BriefingStatus>("/api/briefings/status", 10_000),
     /** 계좌 한 장 브리핑 (3-31). 예전 서버는 404 → 부르는 쪽이 "없음"으로 본다 */
     accountBriefings: (limit = 5) => get<AccountBriefing[]>(`/api/account-briefings?limit=${limit}`, 15_000),
     getAccountBriefing: (id: number) => get<AccountBriefingWithData>(`/api/account-briefings/${id}`, 15_000),

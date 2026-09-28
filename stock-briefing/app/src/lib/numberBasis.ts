@@ -255,6 +255,35 @@ export function quoteBasisLine(q: QuoteBasis | null | undefined, at: string): st
   return [...parts, ...(at ? [`${at} 계산`] : [])].join(" · ");
 }
 
+/** 상세 '시세 기준' 줄의 머리 (조각 첫머리) */
+export const QUOTE_BASIS_HEAD = "시세 기준:";
+const NBSP = " ";
+
+/**
+ * 상세 '시세 기준' 줄을 묶음째 줄바꿈할 조각 (좁은 칸·큰 글씨 — 같은 카드의 비중 두 줄과 같은 방식):
+ * ['시세 기준: ', '국내 NXT 포함 · ', '미국 정규장 9·', '주간거래 2·', '시간외 포함 1 · ', '09:13 계산'] (빈칸은 모두 줄바꿈 없는 공백).
+ * 기준 하나('말 수')가 한 조각이고 시장 이름은 그 시장 첫 조각에 붙는다. 이음표는 앞 조각 끝에 — 줄이 바뀌어도 새 줄이 '·'로
+ * 시작하지 않고, 수가 이름과 떨어지거나('시간외 포함' / '1') 낱말 가운데서('주' / '간거래') 꺾이지 않는다.
+ * 조각을 그대로 이으면 `시세 기준: ${quoteBasisLine}` 과 같은 글(줄바꿈 없는 공백만 다름) — 한 줄에 들어가면 지금 모양 그대로.
+ * 두 시장이 모두 없으면 null (예전 기록)
+ */
+export function quoteBasisChunks(q: QuoteBasis | null | undefined, at: string): string[] | null {
+  const markets = quoteMarkets(q);
+  if (!markets.length) return null;
+  const groups = markets.map(([name, m]) => (m.tags.length === 1 ? [`${name} ${quoteWord(m.tags[0]!.tag)}`] : m.tags.map((x, i) => `${i === 0 ? `${name} ` : ""}${quoteWord(x.tag)} ${x.count}`)));
+  if (at) groups.push([`${at} 계산`]);
+  const nb = (s: string) => s.replace(/ /g, NBSP);
+  const out = [`${nb(QUOTE_BASIS_HEAD)}${NBSP}`];
+  groups.forEach((g, gi) =>
+    g.forEach((p, pi) => {
+      // 시장 안 기준 사이는 '·'(빈칸 없음), 시장·시각 사이는 ' · '
+      const tail = pi < g.length - 1 ? "·" : gi < groups.length - 1 ? `${NBSP}·${NBSP}` : "";
+      out.push(`${nb(p)}${tail}`);
+    }),
+  );
+  return out;
+}
+
 /**
  * 같은 줄의 화면 읽기 문장: '시세 기준, 국내 NXT 포함, 미국 주간거래 12종목, 정규장 2종목, 8시 38분 계산'.
  * 기준이 여럿이면 기준마다 '{말} {수}종목' 을 쉼표로 (가운뎃점을 읽히지 않게). 두 시장이 모두 없으면 null

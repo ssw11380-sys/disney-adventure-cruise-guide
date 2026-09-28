@@ -601,6 +601,41 @@ export function useMarketSummary(id: number, enabled: boolean) {
   return useQuery({ queryKey: useKey("briefings", "market", id), queryFn: () => api.getMarketSummary(id), enabled: enabled && Number.isFinite(id) && id > 0 });
 }
 
+/**
+ * 브리핑 늦음·실패 안내 (브리핑 3차 2, 플래그 briefingStatus — 서버가 켤 때만 부른다). 404(꺼짐·예전 서버)는 null → 탭은 예전 안내.
+ * 탭이 보일 때 60초마다, 탭·앱으로 돌아올 때 30초 지났으면 다시 받는다. 쿼리 키가 "briefings" 아래라 브리핑 알림을 받거나 누르면·수동 생성이 끝나면 함께 다시 받는다
+ */
+export function briefingStatusQuery(api: Pick<Api, "briefingStatus">, apiUrl: string, focused: boolean, enabled: boolean) {
+  return queryOptions({
+    subscribed: focused,
+    gcTime: KEEP_WHILE_AWAY,
+    queryKey: [apiUrl, "briefings", "status"],
+    queryFn: () => orNullOn404(api.briefingStatus()),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 0,
+    enabled,
+  });
+}
+
+export function useBriefingStatus(enabled: boolean) {
+  const api = useApi();
+  const { apiUrl } = useSettings();
+  return useQuery(briefingStatusQuery(api, apiUrl, useScreenFocused(), enabled));
+}
+
+/** 예전 서버·꺼진 기능의 경로(404)는 null 로 */
+export async function orNullOn404<T>(p: Promise<T>): Promise<T | null> {
+  try {
+    return await p;
+  } catch (e) {
+    if (e instanceof ApiRequestError && e.status === 404) return null;
+    throw e;
+  }
+}
+
 /** 예전 서버에 없는 경로(404)는 빈 목록으로 */
 export async function orEmptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
   try {

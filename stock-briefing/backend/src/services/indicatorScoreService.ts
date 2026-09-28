@@ -1,5 +1,5 @@
 import cron, { type ScheduledTask } from "node-cron";
-import { classifyProduct, isHighDistribution, leverageFacts, verifyUnderlying, type LeverageFacts, type ProductFacts, type ProductKind } from "../analysis/leveraged.js";
+import { isHighDistribution, leverageFacts, productKindOf, verifyUnderlying, type LeverageFacts, type ProductFacts, type ProductKind } from "../analysis/leveraged.js";
 import { FAMILY_KEYS, TREND_CAL, TREND_VERSION, TREND_WEIGHTS, shownScore, trendBand, trendDisplayed, type FamilyKey, type TrendBand, type TrendResult, type TrendShown } from "../analysis/trendScore.js";
 import type { Db } from "../db/index.js";
 import type { Candle, CandleSeries } from "../domain/types.js";
@@ -116,6 +116,11 @@ export interface ScoreStock {
 export interface ScoreSources {
   /** 등록 종목 또는 종목 마스터·검색의 이름·시장. 모르는 코드면 null */
   stock(code: string): Promise<ScoreStock | null>;
+  /**
+   * 등록 표를 보지 않는 이름 (종목 마스터·검색 — 종목 상세 미리 보기와 같음). 주인 아닌 계정에게 보이는 이름 (계정 A단계, #95 합친 뒤).
+   * 모르는 코드면 null. 없으면(테스트 출처) stock 의 이름
+   */
+  publicStock?(code: string): Promise<{ name: string } | null>;
   /** 일봉 (오래된 → 최신). 출처 이름은 series.source. fresh = 장 마감 뒤 미리 계산 — 차트 캐시에 1분 넘게 묵은 봉을 쓰지 않고 새로 받는다 */
   candles(code: string, count: number, opts?: { fresh?: boolean }): Promise<CandleSeries>;
   /** 비교 지수 일봉 (네이버) */
@@ -280,6 +285,14 @@ export class IndicatorScoreService {
     return p;
   }
 
+  /** 주인 아닌 계정에게 보일 종목 이름 — 등록 표를 보지 않는다 (ScoreSources.publicStock, 없으면 stock). 모르면 null */
+  async publicName(code: string): Promise<string | null> {
+    const src = this.deps.sources;
+    const c = normalizeCode(code);
+    const s = src.publicStock ? await src.publicStock(c) : await src.stock(c);
+    return s?.name ?? null;
+  }
+
   /**
    * 주인 아닌 계정용 (계정 A단계 검증 6차 M2): 가치 칸이 '재무 받는 중'(pendingFacts · pendingRefresh)이면 받기가 끝날 때까지 waitMs 까지 기다렸다가
    * 다시 계산한다. 주인 등록 종목은 서버가 재무를 매일 미리 받아 두어 바로 점수가 나오고, 처음 보는 종목만 '계산 준비 중'으로 시작해
@@ -392,9 +405,8 @@ export class IndicatorScoreService {
     if (!stock) return null;
     const market = marketOf(code);
     const facts = await sources.product(code).catch(() => null);
-    // 토스 상품 정보가 없거나 분류 칸이 비면 종목 마스터 분류(ST·EF·EN)를 쓴다 — 보통 주식 이름의 'Bear'·'Short' 로 인버스를 짐작하지 않게
-    const hint: ProductFacts | null = facts || stock.groupCode ? { ...facts, group: facts?.group ?? stock.groupCode ?? null } : null;
-    const kind = classifyProduct(code, stock.name, hint);
+    // 토스 상품 정보가 없거나 분류 칸이 비면 종목 마스터 분류(ST·EF·EN)를 쓴다 — 보통 주식 이름의 'Bear'·'Short' 로 인버스를 짐작하지 않게 (계좌 비중 한 줄과 같은 함수)
+    const kind = productKindOf(code, stock.name, facts, stock.groupCode);
     const etf = kind.etf || stock.groupCode === "EF" || stock.groupCode === "EN";
     const trend = await this.trendBlock(stock, market, ctx, kind, facts, isHighDistribution(stock.name, facts, etf));
     const priceDate = trend.priceDate;
@@ -705,6 +717,11 @@ export class IndicatorScoreService {
   }
 }
 
+/** 종목 마스터 분류 (listed_stocks.group_code — ST 주권 · EF ETF · EN ETN). 모르면 null. 지표 점수·계좌 비중 한 줄(브리핑 3차 4)이 같이 쓴다 */
+export async function groupCodeOf(db: Db, code: string): Promise<string | null> {
+  return (await db.selectFrom("listed_stocks").select("group_code").where("code", "=", code).executeTakeFirst())?.group_code ?? null;
+}
+
 /**
  * 실제 출처로 만든 자료 묶음: 일봉은 차트와 같은 캐시(stockService.getCandles — 토스 웹 → 네이버 → 야후, 한 종목은 한 출처),
  * 비교 지수는 지수 띠와 같은 네이버 일봉(10분 캐시), 상품 정보는 토스 웹 v2/stock-infos(24시간 캐시), 이름·시장은 등록 종목 → 종목 마스터·검색
@@ -715,12 +732,17 @@ export function defaultScoreSources(deps: {
   indices: { candles(code: string, period: "D", count: number): Promise<CandleSeries | null> };
   product: { productFacts(code: string): Promise<ProductFacts | null> } | null;
 }): ScoreSources {
-  const group = async (code: string) => (await deps.db.selectFrom("listed_stocks").select("group_code").where("code", "=", code).executeTakeFirst())?.group_code ?? null;
+  const group = (code: string) => groupCodeOf(deps.db, code);
   return {
     stock: async (code) => {
       const reg = await deps.stocks.get(code);
       const s = reg ?? (await deps.stocks.preview(code));
       return s ? { code: s.code, name: s.name, market: s.market, groupCode: await group(s.code).catch(() => null), registered: !!reg } : null;
+    },
+    // 주인 아닌 계정에게 보이는 이름: 등록 표를 보지 않는 미리 보기 (GET /api/stocks/:code 의 주인 아닌 계정과 같은 이름)
+    publicStock: async (code) => {
+      const p = await deps.stocks.preview(code);
+      return p ? { name: p.name } : null;
     },
     // 장 마감 뒤 미리 계산(fresh)은 차트 캐시에 1분 넘게 묵은 봉을 쓰지 않는다 — 미국은 16:00~20:00 ET 가 한 장 구간이라 마감 직후 받아 둔 봉이 17:30 까지 남을 수 있음
     candles: (code, count, opts) => deps.stocks.getCandles(code, "D", count, opts?.fresh ? { maxAgeMs: 60_000 } : undefined),

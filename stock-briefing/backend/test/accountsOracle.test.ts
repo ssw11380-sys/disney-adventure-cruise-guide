@@ -355,6 +355,16 @@ describe("M2 (검증 5차): 지표 점수 가치 칸의 '지난 값' 날짜도 �
     // 가치 칸이 없으면 시각만
     expect(memberScoreView({ computedAt: "x" }, "y")).toEqual({ computedAt: "y" });
   });
+
+  it("이름은 종목 마스터·검색 이름으로 (#95 합친 뒤 카나리아 — 계산 캐시에 실린 주인 등록 표 이름을 보이지 않는다). '이 종목 기준'만 바꾸고 기초자산 기준은 그대로", () => {
+    const self = { code: "005930", name: "등록 표 이름", computedAt: "a", trend: { basis: { kind: "self", code: "005930", name: "등록 표 이름" }, score: 60 } };
+    const seen = memberScoreView(self, "b", "삼성전자");
+    expect(seen).toEqual({ code: "005930", name: "삼성전자", computedAt: "b", trend: { basis: { kind: "self", code: "005930", name: "삼성전자" }, score: 60 } });
+    const lev = { code: "SOXL", name: "등록 표 이름", computedAt: "a", trend: { basis: { kind: "underlying", code: "SOXX", name: "반도체 ETF" } } };
+    expect(memberScoreView(lev, "b", "디렉시온 반도체 3배").trend.basis).toEqual({ kind: "underlying", code: "SOXX", name: "반도체 ETF" });
+    // 이름을 주지 않으면(테스트·예전 경로) 그대로
+    expect(memberScoreView(self, "b").name).toBe("등록 표 이름");
+  });
 });
 
 describe("IP 별 제한·잠금의 키: IPv6 는 /64 로 묶는다 (검증 6차)", () => {

@@ -1,5 +1,7 @@
 import type { AccountBriefing, AccountData } from "@/api/types";
 import { sentence, speakAmount, speakClock, speakProfit, speakRate } from "@/lib/a11y";
+import { sinceLine } from "@/lib/accountSinceLast";
+import { weekLine } from "@/lib/holdingEvents";
 import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usHolidayWhen, usPreviousDayLine } from "@/lib/briefingDigest";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
@@ -33,6 +35,16 @@ export function contributionTable(d: Pick<AccountData, "contributions" | "others
   if (d.others) lines.push({ key: "__others", name: `그 외 ${d.others.count}종목`, amount: d.others.amount, changeRate: null, others: true });
   const sum = lines.reduce((a, l) => a + l.amount, 0);
   return { lines, sum, matches: Math.abs(sum - d.dayPnl) <= 1 };
+}
+
+/**
+ * '기여 1위·상위': 당일 손익과 같은 방향 종목만 크기 순으로 (당일 손익이 0 이면 크기 순 그대로). 서버 accountNumbers.leaders 와 같은 규칙 —
+ * 서버가 저장한 요약 줄 '기여 1위 …'(summaryText)와 목록 headline.top 이 이것으로 골랐다. 기여 표(contributions)는 크기 순 그대로 둔다
+ * (오른 날 표 첫 줄이 손실 종목일 수 있다 — 그 줄을 '기여 1위'로 읽으면 화면의 요약 줄과 다른 종목을 말하게 된다)
+ */
+export function leaders<T extends { amount: number }>(d: { dayPnl: number; contributions: readonly T[] }): T[] {
+  const dir = Math.sign(d.dayPnl);
+  return dir === 0 ? [...d.contributions] : d.contributions.filter((c) => Math.sign(c.amount) === dir);
 }
 
 /** 화면 읽기: 기여 표 한 줄을 한 문장으로 ("애플, 기여 18,089원 손실, 1.59% 하락") */
@@ -126,8 +138,14 @@ function contributorsSpeech(b: AccountBriefing): string[] {
  *  - trim = 플래그 briefingTrim (한국 휴장 날짜)
  *  - contributors = 플래그 moversMerge 로 기여 상위 묶음을 보일 때: '기여 1위 …' 조각 대신 묶음 전체와 'HH시 MM분 기준'
  *  - today = 접은 화면 계좌 줄의 휴장 줄(플래그 briefingCompactTop)을 보일 때 보는 날 — 휴장 조각을 보이는 줄과 같은 판단으로 (accountHolidayLines)
+ *  - since = 브리핑 3차 3 '9/25(금) 오전보다 총 평가 …' 한 줄(플래그 accountSinceLast)을 보일 때: 보이는 자리와 같은 순서로 기여(1위 또는 상위 묶음) 뒤·휴장 앞에
+ *    그 줄의 읽는 말 (비교가 없는 브리핑이면 그대로)
+ *  - week = 브리핑 3차 5 '이번 주 일정 · …' 한 줄(플래그 holdingEvents)을 보일 때: 보이는 자리와 같은 순서로 비교 줄 뒤·휴장 앞에 그 줄의 읽는 말 (없는 브리핑이면 그대로)
+ *  - time = 3-32 숫자의 시각(플래그 numberBasis — 카드·줄이 'HH:MM 기준'을 그릴 때): 'H시 M분 기준'을 기여 1위 바로 뒤(비교·이번 주·휴장 앞)에.
+ *    화면에서 그 시각은 당일 손익·기여 1위와 같은 줄(넓은 창 줄 끝)·당일 손익 이름 뒤(큰 카드)에 있다 — 끝에 두면 바로 앞의
+ *    '리얼티인컴 배당락일 9월 30일 수요일'·휴장 줄의 시각처럼 들렸다 (기여 상위 묶음은 이미 묶음 끝에 시각이 있어 부르는 쪽이 넘기지 않음)
  */
-export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string; time?: boolean } = {}): string {
+export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string; since?: boolean; week?: boolean; time?: boolean } = {}): string {
   const h = b.headline;
   const list = opts.contributors ? contributorsSpeech(b) : [];
   const top = list.length ? undefined : h?.top[0];
@@ -144,9 +162,12 @@ export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; co
     h ? `총 평가금액 ${speakAmount(formatWon(h.totalValue))}` : null,
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
     ...list,
-    ...holidays,
-    // 3-32 (numberBasis): 숫자의 시각 — 카드·줄이 'HH:MM 기준'을 그릴 때만 (기여 상위 묶음이 있으면 부르는 쪽이 넘기지 않음)
+    // 3-32 (numberBasis): 숫자의 시각 — 카드·줄이 'HH:MM 기준'을 그릴 때만 (기여 상위 묶음이 있으면 부르는 쪽이 넘기지 않음).
+    // 당일 손익·기여 1위 바로 뒤 (보이는 줄과 같은 자리 — 아래 비교·일정·휴장 줄의 시각으로 들리지 않게)
     opts.time && b.status !== "failed" && briefingTime(b.createdAt) ? `${speakClock(briefingTime(b.createdAt))} 기준` : null,
+    opts.since ? (sinceLine(b)?.speech ?? null) : null,
+    opts.week ? (weekLine(b)?.speech ?? null) : null,
+    ...holidays,
     "자세히 보기",
   ]);
 }
@@ -156,9 +177,11 @@ const profitText = (label: string, v: number) => `${label} ${speakProfit(formatW
 /**
  * 화면 읽기: 상세 화면 맨 위 요약 카드 한 문장. 화면의 요약 줄('당일 -250,267원 (-2.66%) · 기여 1위 …')과 같은 숫자를
  * 기호 없이 말로 ("당일손익 250,267원 손실, 2.66% 하락, 기여 1위 리게티 컴퓨팅 268,838원 손실, …"). opts.trim = 플래그 briefingTrim (없으면 예전 문장)
+ * '기여 1위'는 서버 요약 줄과 같은 규칙(leaders — 당일 손익과 같은 방향)으로 고른다. 표 첫 줄(크기 순)을 쓰면 반대 방향 종목이
+ * 크기 1위인 날 화면은 '기여 1위 엔비디아 +169,763원', 화면 읽기는 '기여 1위 애플 171,154원 손실'로 서로 다른 종목을 말했다
  */
 export function summarySpeech(d: AccountData, opts: { trim?: boolean } = {}): string {
-  const top = d.contributions[0];
+  const top = leaders(d)[0];
   return sentence([
     "요약",
     profitText("당일손익", d.dayPnl),

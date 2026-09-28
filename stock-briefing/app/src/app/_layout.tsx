@@ -13,7 +13,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import "@/lib/sessionStorage";
 import { AuthBridge } from "@/components/AuthBridge";
 import { InitialPasswordSheet } from "@/components/auth/InitialPasswordSheet";
-import { NotificationBridge } from "@/components/NotificationBridge";
+import { NotificationBridge, useSplashHold } from "@/components/NotificationBridge";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
 import { WidgetBridge } from "@/components/WidgetBridge";
@@ -86,10 +86,23 @@ function SplashGate() {
   const { ready } = useSettings();
   const restoring = useIsRestoring();
   const gate = useAuthGate();
+  // 브리핑 3차 1: 앱이 꺼진 채 누른 알림으로 옮겨 가는 동안은 스플래시를 둔다 (잔고 탭이 잠깐 보였다 넘어가지 않게 · 최대 1.5초 한도는 그대로).
+  // 로그인이 필요하면 알림 이동은 로그인 뒤로 미루고 바로 놓는다 (NotificationBridge — 로그인 화면이 스플래시 뒤에 묶이지 않게)
+  const hold = useSplashHold();
   useEffect(() => {
-    if (ready && !restoring && gate.ready) hideSplash();
-  }, [ready, restoring, gate.ready]);
+    if (ready && !restoring && gate.ready && !hold) hideSplash();
+  }, [ready, restoring, gate.ready, hold]);
   return null;
+}
+
+/**
+ * 알림을 누른 이동에 로그인 상태를 건넨다 (계정 A단계 + 브리핑 3차 1). 로그인이 필요하면 이동을 로그인 뒤로 미루고(로그인 화면 먼저 → 그다음 그 브리핑),
+ * 주인 아닌 계정이면 주인의 브리핑 상세 대신 브리핑 탭(맨 위 차분한 안내)으로만 — components/NotificationBridge
+ */
+function NotificationBridgeWithAuth() {
+  const gate = useAuthGate();
+  const { member } = useAccountView();
+  return <NotificationBridge auth={{ ready: gate.ready, needsLogin: gate.needsLogin, member }} />;
 }
 
 /** 첫 실행 안내(3-24)는 로그인한 뒤에만, 주인 아닌 계정에는 띄우지 않는다 (위젯·알림·토스 이야기라 — 계정 A단계) */
@@ -206,7 +219,7 @@ export default function RootLayout() {
                   {/* 가격 알림 (3-29, 플래그 priceAlerts): 조건 목록·확인 엔진·화면 위 알림 카드·알림 시트. 꺼져 있으면 아래를 그대로 그리기만 한다 */}
                   <PriceAlertProvider>
                     <ThemedStatusBar />
-                    <NotificationBridge />
+                    <NotificationBridgeWithAuth />
                     <WidgetBridge />
                     <ScreenTracker />
                     <HapticsBridge />

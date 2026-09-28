@@ -1,0 +1,28 @@
+{
+  "note": "브리핑 3차 2 (플래그 briefingStatus): 저장된 실패 브리핑 오류 글(error = `${kind}: ${message}`, 없으면 summary '브리핑 생성 실패: …') → 쉬운 말 종류. 서버 services/briefingStatus.failureKind 와 앱 lib/briefingStatus.failureKind 가 이 표를 같이 읽는다 (backend/test/briefingStatus.test.ts · app/test/briefingStatus.test.ts). 메시지는 llm/generator.ts toGenerationError 가 실제로 만드는 글 그대로 (연결 오류·시간 초과는 SDK 의 APIConnectionError·APIConnectionTimeoutError 가 APIError 의 하위 종류이고 상태 번호가 없어 'API 오류 : …' 가 된다 — backend/test/briefingStatus.test.ts 가 SDK 오류로 직접 확인)",
+  "cases": [
+    { "error": "api: API 사용량 제한에 걸렸습니다 (429). 잠시 뒤 다시 시도해 주세요", "kind": "busy" },
+    { "error": "api: Anthropic 서버 장애 (529). 잠시 뒤 다시 시도해 주세요", "kind": "busy" },
+    { "error": "api: Anthropic 서버 장애 (500). 잠시 뒤 다시 시도해 주세요", "kind": "outage" },
+    { "error": "api: Anthropic 서버 장애 (503). 잠시 뒤 다시 시도해 주세요", "kind": "outage" },
+    { "error": "api: API 오류 : Connection error.", "kind": "outage" },
+    { "error": "api: API 오류 : Request timed out.", "kind": "outage" },
+    { "error": "브리핑 생성 실패: api: API 오류 : Connection error.", "kind": "outage" },
+    { "error": "api: 모델 호출 실패: fetch failed", "kind": "outage" },
+    { "error": "config: API 키/자격 증명이 올바르지 않습니다 (401)", "kind": "setup" },
+    { "error": "config: 권한이 없습니다 (403). Bedrock 이면 모델 접근 권한(Model access)과 IAM 정책(bedrock-mantle:CreateInference)을 확인하세요", "kind": "setup" },
+    { "error": "config: 모델을 찾을 수 없습니다 (404): 모델 ID 와 리전을 확인하세요. model not found", "kind": "setup" },
+    { "error": "config: Anthropic 크레딧이 부족합니다. console.anthropic.com → Billing 에서 충전하세요", "kind": "setup" },
+    { "error": "config: ANTHROPIC_API_KEY 또는 Bedrock 자격 증명이 없어 브리핑을 생성할 수 없습니다", "kind": "setup" },
+    { "error": "refusal: 모델이 응답을 거절했습니다 (category=unknown)", "kind": "cutoff" },
+    { "error": "truncated: 응답이 max_tokens 에서 잘렸습니다 (1234자)", "kind": "cutoff" },
+    { "error": "api: 모델이 빈 응답을 반환했습니다", "kind": "other" },
+    { "error": "api: API 오류 400: invalid_request_error", "kind": "other" },
+    { "error": "fetch failed", "kind": "other" },
+    { "error": "Cannot read properties of undefined (reading 'price')", "kind": "other" },
+    { "error": "브리핑 생성 실패: api: API 사용량 제한에 걸렸습니다 (429). 잠시 뒤 다시 시도해 주세요", "kind": "busy" },
+    { "error": "api: Anthropic 서버 장애 (529). 잠시 뒤 다시 시도해 주세요 (이전 브리핑은 그대로 둡니다)", "kind": "busy" },
+    { "error": "", "kind": "other" },
+    { "error": null, "kind": "other" }
+  ]
+}

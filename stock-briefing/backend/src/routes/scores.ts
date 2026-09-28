@@ -20,10 +20,15 @@ export interface ScoreRouteDeps {
    * 캐시에 있든 없든 센다 (장 마감 뒤 미리 계산한 주인 등록 종목이 한도를 다 쓴 뒤 캐시 여부로 드러나지 않게). 없으면 한도 없음
    */
   memberQuota?: { take(userId: number, item: string): boolean };
+  /**
+   * 계정 A단계 (#95 합친 뒤): 주인 아닌 계정에게 보이는 종목 이름 = 종목 마스터·검색 이름 (종목 상세 미리 보기와 같게 — 주인 등록 표를 보지 않는다).
+   * 못 찾으면 null → 처음 보는 모르는 종목과 같은 404. 없으면(테스트) 계산 결과의 이름 그대로
+   */
+  publicName?: (code: string) => Promise<string | null>;
   now?: () => Date;
 }
 
-export const scoreRoutes: FastifyPluginAsync<ScoreRouteDeps> = async (app, { service, memberQuota, now = () => new Date() }) => {
+export const scoreRoutes: FastifyPluginAsync<ScoreRouteDeps> = async (app, { service, memberQuota, publicName, now = () => new Date() }) => {
   const off = { error: "NOT_FOUND", message: "지표 점수 기능이 꺼져 있습니다" };
 
   app.get("/:code", async (req, reply) => {
@@ -33,10 +38,10 @@ export const scoreRoutes: FastifyPluginAsync<ScoreRouteDeps> = async (app, { ser
     const who = owner ? null : sessionOf(req);
     if (who && memberQuota && !memberQuota.take(who.user.id, code)) return reply.code(429).send(SCORE_DAILY_LIMIT);
     // 주인 아닌 계정: 가치 칸이 '재무 받는 중'이면 받기를 잠깐 기다린다 — 처음 보는 종목만 '계산 준비 중'으로 시작해 주인 등록 종목이 본문으로 드러나지 않게 (검증 6차 M2)
-    const r = owner ? await service.get(code) : await service.getShared(code);
-    if (!r) return reply.code(404).send({ error: "NOT_FOUND", message: `종목을 찾을 수 없습니다: ${code}` });
-    // 주인 아닌 계정: 캐시 계산 시각 대신 요청 시각, 재무 받은 시각은 빈 값 (검증 4차 M2)
-    return owner ? r : memberScoreView(r, seoulIso(now()));
+    const [r, shown] = owner ? [await service.get(code), undefined] : await Promise.all([service.getShared(code), publicName ? publicName(code).catch(() => null) : Promise.resolve(undefined)]);
+    if (!r || shown === null) return reply.code(404).send({ error: "NOT_FOUND", message: `종목을 찾을 수 없습니다: ${code}` });
+    // 주인 아닌 계정: 캐시 계산 시각 대신 요청 시각, 재무 받은 시각은 빈 값 (검증 4차 M2), 이름은 종목 마스터·검색 이름 (#95 합친 뒤)
+    return owner ? r : memberScoreView(r, seoulIso(now()), shown);
   });
 
   app.get("/:code/history", async (req, reply) => {
