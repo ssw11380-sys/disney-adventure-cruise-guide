@@ -16,6 +16,10 @@ const UA = "stock-briefing/1.0 (personal use; contact: admin@stock-briefing.app)
 const TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
 /** 연결부터 본문 끝까지 한 요청의 제한 시간 (companyfacts 는 수 MB 라 넉넉히) */
 const REQUEST_TIMEOUT_MS = 15_000;
+/** 가치 지표용 큰 응답(companyfacts 수 MB · frames 약 1MB)의 제한 시간 */
+const BULK_TIMEOUT_MS = 60_000;
+/** SEC 요청 사이 최소 간격 (공식 한도 초당 10회 — 여유 있게 초당 약 6회 이하) */
+const MIN_GAP_MS = 160;
 /** 종목별로 뽑아 둔 결과(재무 표·공시 목록)를 몇 개까지 들고 있을지. 원본 JSON(대형주 companyfacts 는 수 MB)은 들고 있지 않는다 */
 const CACHE_MAX = 120;
 const FACTS_TTL_MS = 6 * 3_600_000;
@@ -144,6 +148,8 @@ export interface EdgarAnnualFinancials extends AnnualFinancials {
 interface Submissions {
   name: string | null;
   sic: string | null;
+  /** SIC 번호 (가치 지표의 리츠·스팩 판정) */
+  sicCode: number | null;
   website: string | null;
   address: string | null;
   fiscalYearEnd: string;
@@ -186,7 +192,7 @@ export class EdgarProvider implements FinancialsProvider {
   constructor(
     private readonly fetchFn: FetchFn = fetch,
     private readonly now: () => Date = () => new Date(),
-    private readonly opts: { timeoutMs?: number; cacheMax?: number } = {},
+    private readonly opts: { timeoutMs?: number; cacheMax?: number; minGapMs?: number } = {},
   ) {
     this.cache = new BoundedCache(opts.cacheMax ?? CACHE_MAX, Math.max(FACTS_TTL_MS, COMPANY_TTL_MS, DISCLOSURE_TTL_MS));
   }
@@ -196,9 +202,21 @@ export class EdgarProvider implements FinancialsProvider {
     return this.cache.size;
   }
 
-  /** SEC JSON 한 번. 연결부터 본문 끝까지 제한 시간 안에 못 받으면 끊고 실패로 (멈춘 연결이 브리핑·분석을 붙잡지 않게) */
-  private async getJson<T>(url: string): Promise<T> {
-    const ms = this.opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  /** 가치 지표(3-44 2단계)의 큰 요청(companyfacts·frames) 사이 최소 간격 — 주간 배치가 SEC 한도(초당 10회)를 넘지 않게. 분석·공시 요청은 예전 그대로 */
+  private nextAt = 0;
+  private async gate(): Promise<void> {
+    const gap = this.opts.minGapMs ?? MIN_GAP_MS;
+    if (gap <= 0) return;
+    const now = Date.now();
+    const at = Math.max(now, this.nextAt);
+    this.nextAt = at + gap;
+    if (at > now) await new Promise((r) => setTimeout(r, at - now));
+  }
+
+  /** SEC JSON 한 번. 연결부터 본문 끝까지 제한 시간 안에 못 받으면 끊고 실패로 (멈춘 연결이 브리핑·분석을 붙잡지 않게). notFound 가 있으면 404 는 그 값 */
+  private async getJson<T>(url: string, opts: { timeoutMs?: number; notFound?: T; paced?: boolean } = {}): Promise<T> {
+    if (opts.paced) await this.gate();
+    const ms = opts.timeoutMs ?? this.opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
     const signal = AbortSignal.timeout(ms);
     let onAbort = () => {};
     // 주입한 fetch 가 signal 을 따르지 않아도 제한 시간에 끝나게 같이 경쟁시킨다
@@ -214,6 +232,7 @@ export class EdgarProvider implements FinancialsProvider {
         if (e instanceof ProviderError) throw e;
         throw new ProviderError(this.name, `네트워크 오류: ${url}`, e);
       }
+      if (res.status === 404 && opts.notFound !== undefined) return opts.notFound;
       if (!res.ok) throw new ProviderError(this.name, `HTTP ${res.status}: ${url}${res.status === 403 ? " (SEC 요청 제한, 잠시 후 재시도)" : ""}`);
       try {
         return (await Promise.race([res.json() as Promise<T>, expired])) as T;
@@ -312,6 +331,32 @@ export class EdgarProvider implements FinancialsProvider {
   async getDividends(_stockCode: string, _years: number): Promise<DividendInfo[]> {
     return [];
   }
+
+  // ── 가치 지표 점수 (3-44 2단계): 원본은 들고 있지 않는다 (부르는 쪽이 줄여서 DB 에 저장) ──
+
+  /** 티커(대문자, SEC 표기 BRK-B) → CIK 10자리 (하루 1회 받는 목록) */
+  async tickerMap(): Promise<Map<string, string>> {
+    await this.resolveCik("AAPL").catch(() => undefined);
+    if (!this.tickers) throw new ProviderError(this.name, "SEC 티커 목록을 받지 못했습니다");
+    return new Map([...this.tickers.map].map(([t, v]) => [t, v.cik]));
+  }
+
+  /** companyfacts 원본 한 번 (캐시 없음). SEC 목록에 없는 티커(ETF 등)는 NotListedError */
+  async companyFactsRaw(stockCode: string): Promise<{ cik: string; raw: Json }> {
+    const { cik } = await this.resolveCik(stockCode);
+    return { cik, raw: await this.getJson<Json>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { timeoutMs: BULK_TIMEOUT_MS, paced: true }) };
+  }
+
+  /** 업종 번호(SIC)·이름 (submissions — 6시간 캐시). 리츠(6798)·스팩(6770) 판정에 쓴다 */
+  async sicOf(cik: string): Promise<{ sic: number | null; sicDescription: string | null; name: string | null }> {
+    const s = await this.submissions(cik, COMPANY_TTL_MS);
+    return { sic: s.sicCode, sicDescription: s.sic, name: s.name };
+  }
+
+  /** frames 한 번 (항목 하나·기간 하나의 전 회사 값). 그 기간 값이 없으면(404) 빈 배열 */
+  async frameRaw(tag: string, unit: string, period: string): Promise<Json> {
+    return this.getJson<Json>(`https://data.sec.gov/api/xbrl/frames/us-gaap/${tag}/${unit}/${period}.json`, { timeoutMs: BULK_TIMEOUT_MS, notFound: { data: [] }, paced: true });
+  }
 }
 
 function compactSubmissions(s: Json): Submissions {
@@ -333,6 +378,7 @@ function compactSubmissions(s: Json): Submissions {
   return {
     name: typeof s["name"] === "string" ? s["name"] : null,
     sic: typeof s["sicDescription"] === "string" ? s["sicDescription"] : null,
+    sicCode: s["sic"] !== undefined && s["sic"] !== null && s["sic"] !== "" && Number.isFinite(Number(s["sic"])) ? Number(s["sic"]) : null,
     website: typeof s["website"] === "string" && s["website"] ? s["website"] : null,
     address: addr ? [addr["street1"], addr["city"], addr["stateOrCountry"]].filter(Boolean).join(", ") : null,
     fiscalYearEnd: String(s["fiscalYearEnd"] ?? ""),

@@ -12,6 +12,7 @@ import { saverInterval, unchangedStreak } from "@/lib/pollSaver";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { ApiRequestError, createApi, type Api } from "./client";
+import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
 import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
@@ -445,6 +446,8 @@ export function useIndicatorScores(code: string, enabled: boolean) {
     enabled: enabled && !!code,
     staleTime: 30 * 60_000,
     retry: 0,
+    // 가치 지표가 서버 백그라운드 받기(SEC 재무·첫 비교 기준)를 기다리는 동안만 1분마다 다시 (화면을 보고 있을 때만)
+    refetchInterval: (q) => (valueWaiting(q.state.data) ? SCORE_WAIT_REFETCH_MS : false),
   });
 }
 

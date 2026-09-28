@@ -6,9 +6,10 @@ import { holding, quote } from "./helpers";
 import { render, type HostNode } from "./miniRender";
 
 /**
- * 종목 상세 '지표 점수' (3-44 1단계, 기능 플래그 indicatorScores — 앱 fallback 꺼짐).
+ * 종목 상세 '지표 점수' (3-44 1·2단계, 기능 플래그 indicatorScores — 앱 fallback 꺼짐. 가치·종합은 서버 플래그 valueScore).
  *  - 꺼져 있으면 서버에 묻지도 않고 탭 내용이 지금 그대로 (지금 화면 스냅숏은 stockDetailFold 테스트가 본다)
- *  - 켜지면 기업개요 탭 맨 위 요약 카드 + 'AI 기업개요 [AI가 쓴 글]', 기술분석 탭 맨 위 추세 상세 카드 + 'AI 기술분석 [AI가 쓴 글]'
+ *  - 켜지면 기업개요 탭 맨 위 요약 카드 + 'AI 기업개요 [AI가 쓴 글]', 가치분석 탭 맨 위 가치 상세 카드 + 'AI 가치분석 [AI가 쓴 글]',
+ *    기술분석 탭 맨 위 추세 상세 카드 + 'AI 기술분석 [AI가 쓴 글]'
  *  - 접은 화면(475×751)·펼친 가로(933×704 좌우 배치)·펼친 세로(704×933 한 단)·울트라 펼침 세로(윗줄+아랫줄), 글자 100·130%
  * 서버 응답은 공용 픽스처(shared/fixtures/indicatorScores.json — 서버 테스트가 지금 서버 코드의 응답과 같은지 본다)
  */
@@ -94,14 +95,17 @@ const { default: StockDetailScreen } = await import("@/app/stocks/[code]/index")
 const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const { light, scores } = await import("@/tokens");
 const { DISCLAIMER } = await import("@/lib/disclaimer");
+const { metricSpeech } = await import("@/lib/scoreView");
+const NV = FX.cases["NVDA"]!.value;
 
 const nvdaStock = () => ({ ...holding("NVDA", quote("NVDA", 178.2, { currency: "USD", change: 3.05, changeRate: 1.74, fxRate: 1391.5 }), 40, 120, {}, "엔비디아"), market: "NASDAQ" as const, registered: true });
 const soxlStock = () => ({ ...holding("SOXL", quote("SOXL", 151.45, { currency: "USD", change: 2.2, changeRate: 1.47, fxRate: 1391.5 }), 30, 40, {}, "SOXL"), market: "AMEX" as const, registered: true });
 
-function open(stock: RegisteredWithQuote, scoresCase: string | null, extra: { flag?: boolean; tab?: string; size?: [number, number]; fontScale?: number } = {}) {
+function open(stock: RegisteredWithQuote, scoresCase: string | null, extra: { flag?: boolean; valueFlag?: boolean; tab?: string; size?: [number, number]; fontScale?: number } = {}) {
   h.stock = stock;
   h.scores = scoresCase ? FX.cases[scoresCase] : undefined;
-  h.flags = { indicatorScores: extra.flag ?? true, foldLayout: true };
+  // 서버 /api/features 가 주는 두 플래그 (가치 끔 픽스처는 valueScore 도 꺼진 서버)
+  h.flags = { indicatorScores: extra.flag ?? true, valueScore: extra.valueFlag ?? scoresCase !== "NVDA_valueOff", foldLayout: true };
   h.params = { code: stock.code, ...(extra.tab ? { tab: extra.tab } : {}) };
   const [width, height] = extra.size ?? [475, 751];
   h.win = { width, height, scale: 2.625, fontScale: extra.fontScale ?? 1 };
@@ -133,36 +137,97 @@ describe("플래그 꺼짐", () => {
 });
 
 describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
-  it("NVDA: 지표 점수 · 가치 계산 준비 중 · 추세 69 다소 강함 · 날짜 · 예측 아님 · 펼침 · 고지 → 그 아래 AI 기업개요 [AI가 쓴 글]", () => {
+  it("NVDA: 지표 점수 · 가치 67 높은 편 · 추세 69 다소 강함 · 종합 68(두 점수의 평균, 작게) · 날짜(가격·재무) · 예측 아님 · 펼침 · 고지 → 그 아래 AI 기업개요 [AI가 쓴 글]", () => {
     const r = open(nvdaStock(), "NVDA");
     expect(h.scoreCalls[0]).toEqual(["NVDA", true]);
     const s = FX.cases["NVDA"]!;
     const text = r.text();
-    for (const need of ["지표 점수", "계산식 결과 · AI 글 아님", "가치 지표", "계산 준비 중", "추세 지표", "69", "다소 강함", s.trend.meaning!, "가격 9월 25일(금) 미국 종가", "점수는 과거·현재 숫자의 요약이며, 앞으로의 가격을 알려 주지 않습니다.", "구성·계산 방법 보기", "참고 정보이며 투자 권유가 아닙니다", "AI 기업개요", "AI가 쓴 글"])
+    for (const need of ["지표 점수", "계산식 결과 · AI 글 아님", "가치 지표", "67", "높은 편", s.value.text, "추세 지표", "69", "다소 강함", s.trend.meaning!, "가격 9월 25일(금) 미국 종가 · 재무 2026년 7월까지 4분기", "점수는 과거·현재 숫자의 요약이며, 앞으로의 가격을 알려 주지 않습니다.", "구성·계산 방법 보기", "참고 정보이며 투자 권유가 아닙니다", "AI 기업개요", "AI가 쓴 글"])
       expect(text, need).toContain(need);
-    // 종합: 없으면 없다고 (두 점수 아래 작게, 설계 5.4 · 목업 1)
-    expect(text).toContain("종합 지표");
-    expect(text).toContain("가치 지표 점수가 없어 합치지 않습니다");
-    expect(order(r, "추세 지표", "종합 지표", "가격 9월 25일")).toEqual([...order(r, "추세 지표", "종합 지표", "가격 9월 25일")].sort((a, b) => a - b));
-    const pos = order(r, "지표 점수", "추세 지표", "가격 9월 25일", "구성·계산 방법 보기", "참고 정보이며", "AI 기업개요");
+    // 종합: 두 점수 아래 작게 (띠 이름 없이 '두 점수의 평균')
+    expect(text).toContain("종합 지표68두 점수의 평균");
+    expect(text).not.toContain("계산 준비 중");
+    const pos = order(r, "지표 점수", "가치 지표", "추세 지표", "종합 지표", "가격 9월 25일", "구성·계산 방법 보기", "참고 정보이며", "AI 기업개요");
     expect([...pos].sort((a, b) => a - b)).toEqual(pos);
     expect(pos.every((p) => p >= 0)).toBe(true);
+    // 요약 카드에는 지난주 대비 변화 표시가 없다 (상세 카드만)
+    expect(text).not.toContain("지난주");
     // 카드가 AI 분석(불러오는 중)보다 위
     const all = r.all();
     expect(all.findIndex((n) => n.type === "Card")).toBeLessThan(all.findIndex((n) => n.type === "Loading"));
-    // 화면 읽기: 요약 한 문장, 추세 숫자는 '추세 지표 69점, 다소 강함'
-    expect(r.has("지표 점수. 가치 지표, 계산 준비 중. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.")).toBe(true);
+    // 화면 읽기: 요약 한 문장 (설계 5.7-F), 숫자마다 '가치 지표 66점, 0에서 100 중, 가운데쯤' · '추세 지표 69점, 다소 강함'
+    expect(r.has("지표 점수. 가치 지표 67점, 0에서 100 중, 높은 편. 추세 지표 69점, 다소 강함. 종합 지표 68점, 두 점수의 평균.")).toBe(true);
+    expect(r.has("가치 지표 67점, 0에서 100 중, 높은 편")).toBe(true);
+    // 새 앱은 score·band 를 쓰고 label('67점 · 높은 편' — 예전 앱용)은 보이지 않는다
+    expect(text).not.toContain(s.value.label);
     expect(r.has("추세 지표 69점, 다소 강함")).toBe(true);
     expect(r.has("AI 기업개요, AI가 쓴 글")).toBe(true);
+  });
+
+  it("가치 플래그를 끈 서버: 가치 '지금 계산하지 않음 · 지금 계산하지 않습니다'(상태 글과 이유가 같은 말), 종합 '없음 · 가치 지표 점수가 없어 합치지 않습니다', 가치분석 탭 이동 줄 없음", () => {
+    const r = open(nvdaStock(), "NVDA_valueOff");
+    const text = r.text();
+    expect(text).toContain("지금 계산하지 않음");
+    expect(text).not.toContain("계산 준비 중");
+    expect(text).toContain("가치 지표 점수는 지금 계산하지 않습니다.");
+    expect(text).not.toContain("다음 단계");
+    expect(text).toContain("가치 지표 점수가 없어 합치지 않습니다");
+    expect(r.has("지표 점수. 가치 지표, 지금 계산하지 않음, 가치 지표 점수는 지금 계산하지 않습니다. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.")).toBe(true);
+    r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    expect(r.text()).not.toContain("가치분석 탭에서 지표별 값 보기");
+    expect(r.text()).not.toContain("재무 SEC");
+  });
+
+  it("두 점수 차이가 30 이상이면 종합 아래 안내 한 줄 (예시 종목)", () => {
+    const r = open({ ...nvdaStock(), code: "ZZGAP", name: "예시 종목" }, "ZZGAP");
+    const text = r.text();
+    expect(text).toContain("종합 지표50두 점수의 평균");
+    expect(text).toContain("두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요.");
+    expect(order(r, "종합 지표", "두 점수의 차이가", "가격 9월 25일").every((p, i, a) => i === 0 || p > a[i - 1]!)).toBe(true);
+  });
+
+  it("한국 종목·SEC 재무 없음·받는 중: 가치 줄은 상태 글과 이유 (0점·50점으로 채우지 않음)", () => {
+    const kr = open({ ...nvdaStock(), code: "005930", name: "삼성전자", market: "KOSPI" as const }, "005930");
+    expect(kr.text()).toContain("계산 준비 중");
+    expect(kr.text()).toContain("한국 종목 가치 지표 점수는 다음 단계에서 계산합니다.");
+    const nof = open({ ...nvdaStock(), code: "ZZNOF", name: "예시 종목" }, "ZZNOF");
+    expect(nof.text()).toContain("점수 없음");
+    expect(nof.text()).toContain("SEC 재무제표를 찾지 못했습니다");
+    const pend = open({ ...nvdaStock(), code: "ZZNOF", name: "예시 종목" }, "ZZNOF_pending");
+    // 상태 글 '계산 준비 중' 옆 이유 글은 상태 글 없이 (같은 말 두 번이던 것, 검토 지적)
+    expect(pend.text()).toContain("계산 준비 중재무제표를 처음 받는 중입니다 (보통 몇 분 안)");
+    expect(pend.text()).not.toContain("계산 준비 중 —");
+    // 가치 막대는 점수가 있을 때만 (추세 막대 하나)
+    expect(pend.all().filter((n) => flat(n).height === scores.barH && typeof flat(n).width === "string")).toHaveLength(1);
   });
 
   it("막대는 회색 한 가지 (채움 t.sub · 바탕 t.lineStrong · 50 눈금 t.muted), 채움 폭 = 점수 %", () => {
     const r = open(nvdaStock(), "NVDA");
     const fills = r.all().filter((n) => flat(n).height === scores.barH && typeof flat(n).width === "string");
-    expect(fills.map((n) => [flat(n).width, flat(n).backgroundColor])).toEqual([["69%", light.sub]]);
+    // 가치 67 · 추세 69 두 막대 모두 같은 회색
+    expect(fills.map((n) => [flat(n).width, flat(n).backgroundColor])).toEqual([
+      ["67%", light.sub],
+      ["69%", light.sub],
+    ]);
     const colors = new Set(r.all().filter((n) => flat(n).height === scores.barH || flat(n).height === scores.tickH).map((n) => flat(n).backgroundColor).filter(Boolean));
     expect([...colors].sort()).toEqual([light.lineStrong, light.muted, light.sub].sort());
     for (const c of [light.up, light.down, light.accent, light.live]) expect(colors.has(c)).toBe(false);
+  });
+
+  it("펼치면 가치 묶음 5개(비중·막대·점수)·표시 최대 2개·'가치분석 탭에서 지표별 값 보기' → 가치분석 탭의 상세 카드", () => {
+    const r = open(nvdaStock(), "NVDA");
+    expect(r.text()).not.toContain("가치 지표 구성");
+    r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    const text = r.text();
+    const v = FX.cases["NVDA"]!.value;
+    expect(text).toContain("가치 지표 구성 · 묶음 비중");
+    for (const f of v.families!) expect(r.has(`${f.name} ${f.score}점, 비중 ${f.weight}`), f.name).toBe(true);
+    for (const f of v.flags!.slice(0, 2)) expect(text).toContain(`표시 · ${f.text}`);
+    expect(order(r, "가치 지표 구성", "추세 지표 구성", "이 점수는 어떻게 만들었나").every((p, i, a) => i === 0 || p > a[i - 1]!)).toBe(true);
+    expect(text).toContain(v.versionLine!);
+    r.act(() => (r.byLabel("가치분석 탭에서 지표별 값 보기").props.onPress as () => void)());
+    expect(segmented(r)[0]!.props.value).toBe("value");
+    expect(r.text()).toContain(`가치 지표 점수 ${v.score}/100 · ${v.band}`);
   });
 
   it("펼치면 추세 묶음 5개(비중·막대·점수)와 계산 방법·계산 방식 줄, '기술분석 탭에서 항목별 사실 보기' → 기술분석 탭의 상세 카드", () => {
@@ -198,15 +263,21 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     expect(textOf(row)).toContain("69");
     expect(textOf(row)).not.toContain("다소 강함");
     // 둘째 줄: 막대 + 띠
-    const barRow = big.all().find((n) => flat(n).flexDirection === "row" && hasBar(n))!;
+    const barRow = big.all().filter((n) => flat(n).flexDirection === "row" && hasBar(n)).at(-1)!;
     expect(textOf(barRow)).toBe("다소 강함");
-    // 가치 지표 줄: '가치 지표' 와 '계산 준비 중' 이 한 줄(row)에 붙지 않는다
-    const nameNode = big.all().find((n) => n.type === "Text" && textOf(n) === "가치 지표")!;
-    const parent = big.all().find((n) => n.children.includes(nameNode))!;
+    // 가치 점수 줄도 같은 두 줄 (이름·숫자 / 막대·띠)
+    const vRow = rowWith(big, "가치 지표");
+    expect(hasBar(vRow)).toBe(false);
+    expect(textOf(vRow)).toContain("67");
+    expect(big.all().filter((n) => flat(n).flexDirection === "row" && hasBar(n)).map(textOf)).toEqual(["높은 편", "다소 강함"]);
+    // 점수 없는 가치 줄(가치 끔): '가치 지표' 와 '계산 준비 중' 이 한 줄(row)에 붙지 않는다
+    const off = open(nvdaStock(), "NVDA_valueOff", { fontScale: 1.3 });
+    const nameNode = off.all().find((n) => n.type === "Text" && textOf(n) === "가치 지표")!;
+    const parent = off.all().find((n) => n.children.includes(nameNode))!;
     expect(flat(parent).flexDirection).not.toBe("row");
-    expect(parent.children.map((c) => (typeof c === "string" ? c : textOf(c)))).toEqual(["가치 지표", "계산 준비 중"]);
+    expect(parent.children.map((c) => (typeof c === "string" ? c : textOf(c)))).toEqual(["가치 지표", "지금 계산하지 않음"]);
     // 100% 는 이름 칸 옆에 상태 글 (한 줄)
-    const small = open(nvdaStock(), "NVDA");
+    const small = open(nvdaStock(), "NVDA_valueOff");
     const n1 = small.all().find((n) => n.type === "Text" && textOf(n) === "가치 지표")!;
     expect(flat(small.all().find((n) => n.children.includes(n1))!).flexDirection).toBe("row");
   });
@@ -270,13 +341,114 @@ describe("레버리지 ETF (SOXL)", () => {
 });
 
 describe("받기 실패 (보통 종목)", () => {
-  it("NVDA 비교 지수를 받지 못했을 때: 점수·막대 없이 '점수 없음' + 이유 (지수 대비 항목을 뺀 다른 점수를 보이지 않음)", () => {
+  it("NVDA 비교 지수를 받지 못했을 때: 추세는 점수·막대 없이 '점수 없음' + 이유, 가치 점수는 그대로, 종합 '추세 지표 점수가 없어 합치지 않습니다'", () => {
     const r = open(nvdaStock(), "NVDA_fetchFailed");
     const text = r.text();
     expect(text).toContain("점수 없음");
     expect(text).toContain("비교 지수(나스닥) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다");
-    expect(r.all().some((n) => n.props.importantForAccessibility === "no-hide-descendants")).toBe(false);
-    expect(text).toContain("두 점수가 모두 없습니다");
+    // 막대는 가치 줄 하나뿐
+    const fills = r.all().filter((n) => flat(n).height === scores.barH && typeof flat(n).width === "string");
+    expect(fills.map((n) => flat(n).width)).toEqual(["67%"]);
+    expect(text).toContain("추세 지표 점수가 없어 합치지 않습니다");
+  });
+});
+
+describe("가치분석 탭 — 가치 지표 상세 카드 (2단계)", () => {
+  it("NVDA: 머리 '가치 지표 점수 67/100 · 높은 편'(화면 읽기 '가치 지표 67점, 0에서 100 중, 높은 편') · 비교 대상 · 날짜 · 시세 표와 다를 수 있음 · 5묶음 · 표시 · 고지 → AI 가치분석 [AI가 쓴 글]", () => {
+    const r = open(nvdaStock(), "NVDA", { tab: "value" });
+    const v = FX.cases["NVDA"]!.value;
+    const text = r.text();
+    for (const need of [v.headline!, v.peerLine!, v.datesLine!, v.priceNote!, ...v.families!.map((f) => f.text), ...v.flags!.map((f) => `표시 · ${f.text}`), "과거·현재 숫자로 계산한 지표이며 앞으로의 가격이나 수익을 뜻하지 않습니다.", DISCLAIMER, v.versionLine!, "AI 가치분석", "AI가 쓴 글"])
+      expect(text, need).toContain(need);
+    expect(r.all().some((n) => n.props.accessibilityRole === "header" && n.props.accessibilityLabel === "가치 지표 67점, 0에서 100 중, 높은 편" && textOf(n) === "가치 지표 점수 67/100 · 높은 편")).toBe(true);
+    // 요약 카드에 없는 지난주 대비 줄은 이 종목(5점 넘게 바뀌지 않음)에는 없다
+    expect(text).not.toContain("지난주");
+    for (const f of v.families!) expect(r.has(`${f.name} ${f.score}점, 비중 ${f.weight}`)).toBe(true);
+    // 지표 줄은 '지표별 값 보기'를 눌러야 보인다
+    expect(text).not.toContain("업종 가운데값");
+    const toggle = r.byLabel("지표별 값 보기");
+    expect(toggle.props.accessibilityState).toEqual({ expanded: false });
+    r.act(() => (toggle.props.onPress as () => void)());
+    const t2 = r.text();
+    const a1 = v.families![0]!.metrics.find((m) => m.key === "A1")!;
+    for (const need of [a1.name, a1.value!, a1.peerMedian!, a1.positions!, a1.mix!, `→ ${a1.text}`, a1.meaning, a1.note!]) expect(t2, need).toContain(need);
+    // 화면 읽기: 지표 줄 하나가 보이는 글을 모두 담은 한 문장 (리뷰 — 예전에는 위치 문장·가운데값·비교별 위치가 빠졌다)
+    expect(r.has(metricSpeech(a1))).toBe(true);
+    expect(metricSpeech(a1)).toContain(a1.text.replace(/\.$/, ""));
+    expect(metricSpeech(a1)).toContain(a1.peerMedian!);
+    // 같은 값이 많은 지표 안내 (무배당 0% 사이의 0.1%) — 주주환원 머리 문장은 배당이 아닌 주식 수 변화
+    const e1 = v.families![4]!.metrics.find((m) => m.key === "E1")!;
+    expect(t2).toContain(e1.note!);
+    expect(v.families![4]!.text).not.toContain("배당이 많은 편");
+    // 쓰지 않는 지표(시장 70% 규칙)는 흐린 글자로 까닭만
+    const b3 = r.all().find((n) => n.type === "Text" && textOf(n) === "비교할 회사 자료가 모자라(70% 미만) 이 지표는 쓰지 않았습니다.")!;
+    expect(flat(b3).color).toBe(light.muted);
+    // 가치 막대는 회색 한 가지 (묶음 5개)
+    const fills = r.all().filter((n) => flat(n).height === scores.barH && typeof flat(n).width === "string");
+    expect(new Set(fills.map((n) => flat(n).backgroundColor))).toEqual(new Set([light.sub]));
+    expect(fills).toHaveLength(5);
+    // 카드가 AI 가치분석보다 위
+    expect(order(r, "가치 지표 점수", "AI 가치분석")[0]).toBeLessThan(order(r, "가치 지표 점수", "AI 가치분석")[1]!);
+  });
+
+  it("JPM (은행): 금융사 묶음·비중(35·30·10·15·10)과 금융사 안내", () => {
+    const r = open({ ...nvdaStock(), code: "JPM", name: "JP모건 체이스", market: "NYSE" as const }, "JPM", { tab: "value" });
+    const v = FX.cases["JPM"]!.value;
+    expect(v.families!.map((f) => f.weight)).toEqual([35, 30, 10, 15, 10]);
+    for (const f of v.families!) expect(r.has(`${f.name} ${f.score}점, 비중 ${f.weight}`)).toBe(true);
+    expect(r.text()).toContain("금융사(은행·보험 등)는 매출·현금흐름·부채비율의 뜻이 달라 금융사끼리 비교하고");
+  });
+
+  it("점수가 없으면 상태 글과 이유만: SOXL 대상 아님 · 한국 계산 준비 중 · SEC 재무 없음", () => {
+    const soxl = open(soxlStock(), "SOXL", { tab: "value" });
+    expect(soxl.text()).toContain("대상 아님");
+    expect(soxl.text()).toContain("ETF는 여러 종목을 묶은 상품이라");
+    expect(soxl.text()).not.toContain("지표별 값 보기");
+    const kr = open({ ...nvdaStock(), code: "005930", name: "삼성전자", market: "KOSPI" as const }, "005930", { tab: "value" });
+    expect(kr.text()).toContain("한국 종목 가치 지표 점수는 다음 단계에서 계산합니다.");
+    // 계산하지 않은 카드에는 SEC·Nasdaq 출처 줄이 없다 (리뷰: 한국·ETF 카드가 SEC 자료로 계산한 것처럼 읽히지 않게)
+    for (const t of [soxl.text(), kr.text()]) expect(t).not.toContain("재무 SEC");
+    const nof = open({ ...nvdaStock(), code: "ZZNOF", name: "예시 종목" }, "ZZNOF", { tab: "value" });
+    expect(nof.text()).toContain("SEC 재무제표를 찾지 못했습니다");
+    expect(nof.text()).toContain(DISCLAIMER);
+  });
+
+  it("플래그가 꺼져 있으면 가치분석 탭은 예전 그대로 (카드·'AI 가치분석' 제목 없음)", () => {
+    const r = open(nvdaStock(), "NVDA", { flag: false, tab: "value" });
+    expect(r.text()).not.toContain("가치 지표 점수");
+    expect(r.text()).not.toContain("AI가 쓴 글");
+  });
+
+  it("되돌리기 스위치 valueScore 를 끄면 가치분석 탭도 1단계 그대로 (리뷰): 상태만 있는 카드·'AI 가치분석' 제목 없음, 서버에 묻지 않음", () => {
+    const r = open(nvdaStock(), "NVDA_valueOff", { tab: "value" });
+    expect(h.flags).toMatchObject({ indicatorScores: true, valueScore: false });
+    const text = r.text();
+    expect(text).not.toContain("가치 지표 점수");
+    expect(text).not.toContain("계산 준비 중");
+    expect(text).not.toContain("AI 가치분석");
+    expect(text).not.toContain("AI가 쓴 글");
+    expect(h.scoreCalls).toEqual([]);
+    expect(r.all().some((n) => n.type === "Loading")).toBe(true); // AI 가치분석 글 자리 그대로
+    // 넓은 창 '가치' 탭도 같다
+    const wide = open(nvdaStock(), "NVDA_valueOff", { size: [933, 704], tab: "value" });
+    expect(wide.text()).not.toContain("AI 가치분석");
+  });
+
+  it("지난주 대비 바뀐 이유 (가치, 5점 넘게 바뀐 때만 — 서버가 낸 NVDA_change): 날짜 줄 아래 한 줄, 화면 읽기 '지난주 대비: …', 요약 카드에는 없음", () => {
+    const c = FX.cases["NVDA_change"]!.value.change!;
+    expect(c).toMatchObject({ from: "2026-09-18", diff: -10, family: "price" });
+    const r = open(nvdaStock(), "NVDA_change", { tab: "value" });
+    const text = r.text();
+    expect(text).toContain(c.text);
+    expect(c.text).toBe("지난주 9월 18일(금)보다 점수가 10점 낮아졌습니다. 가장 크게 바뀐 묶음은 주가 수준(−33점)이고, 비교 기준(업종 분포)이 9월 26일(토)에 새로 만들어졌습니다.");
+    expect(r.has(`지난주 대비: ${c.text}`)).toBe(true);
+    expect(order(r, FX.cases["NVDA_change"]!.value.datesLine!, c.text, "주가 수준")).toEqual([...order(r, FX.cases["NVDA_change"]!.value.datesLine!, c.text, "주가 수준")].sort((a, b) => a - b));
+    // 회색 세로선만 (좋음·나쁨 색 없음)
+    const box = r.all().find((n) => n.props.accessibilityLabel === `지난주 대비: ${c.text}`)!;
+    expect(flat(box).borderLeftColor).toBe(light.lineStrong);
+    // 요약 카드(기업개요 탭)에는 변화 표시를 두지 않는다
+    const summary = open(nvdaStock(), "NVDA_change");
+    expect(summary.text()).not.toContain("지난주");
   });
 });
 
@@ -293,6 +465,11 @@ describe("넓은 창", () => {
     // 넓은 창 탭 이름에 맞춘 이동 줄
     r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
     expect(r.has("기술 탭에서 항목별 사실 보기")).toBe(true);
+    expect(r.has("가치 탭에서 지표별 값 보기")).toBe(true);
+    // 오른쪽 칸 '가치' 탭: 가치 상세 카드 + 'AI 가치분석 [AI가 쓴 글]'
+    const v = open(nvdaStock(), "NVDA", { size: [933, 704], tab: "value" });
+    expect(v.text()).toContain(`가치 지표 점수 ${NV.score}/100 · ${NV.band}`);
+    expect(v.has("AI 가치분석, AI가 쓴 글")).toBe(true);
   });
 
   it("펼친 세로 704×933 (한 단): 가치 · 추세를 두 칸으로 나란히", () => {
@@ -308,5 +485,83 @@ describe("넓은 창", () => {
     const pos = order(r, "지표 점수", "AI 기업개요");
     expect(pos[0]).toBeGreaterThanOrEqual(0);
     expect(pos[0]).toBeLessThan(pos[1]!);
+  });
+});
+
+describe("검토 지적 3차 — 요약 카드에서 가치 상세 카드로 · 묶음 이름 칸 · 연간 기준 글", () => {
+  const cardOf = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "Card" && textOf(n).startsWith(`가치 지표 점수 ${NV.score}/100`))!;
+  const screenOf = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "Screen")!;
+  /** 스크롤 칸 ref: 한 칸 화면은 Screen 의 scrollRef, 좌우 배치는 SplitScreen 오른쪽 칸 ScrollView 의 ref */
+  const scrollRefOf = (r: ReturnType<typeof render>) =>
+    (screenOf(r)?.props.scrollRef ?? r.all().filter((n) => n.type === "ScrollView").map((n) => n.props.ref).find((x) => !!x && typeof x === "object")) as { current: unknown };
+  const layout = (n: HostNode, y: number) => (n.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y, width: 400, height: 900 } } });
+
+  it("'가치분석 탭에서 지표별 값 보기': 탭만 바꾸지 않고 가치 상세 카드 맨 위로 스크롤하고 지표별 값을 펼친다 (휴대폰 — 카드가 스크롤 칸에 바로 놓임)", () => {
+    const r = open(nvdaStock(), "NVDA");
+    const scrollTo = vi.fn();
+    (screenOf(r).props.scrollRef as { current: unknown }).current = { scrollTo };
+    r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    r.act(() => (r.byLabel("가치분석 탭에서 지표별 값 보기").props.onPress as () => void)());
+    expect(segmented(r)[0]!.props.value).toBe("value");
+    // 지표별 값이 펼쳐져 있다
+    expect(r.byLabel("지표별 값 접기").props.accessibilityState).toEqual({ expanded: true });
+    expect(r.text()).toContain(NV.families![0]!.metrics[0]!.peerMedian!);
+    // 카드가 자리를 재면 그 자리(− 위 여백 8)로 스크롤
+    r.act(() => layout(cardOf(r), 1234));
+    expect(scrollTo).toHaveBeenCalledWith({ y: 1226, animated: true });
+    // 한 번만: 다시 재어도(펼쳐 길어짐) 스크롤하지 않고, 다른 탭에 갔다 오면 접힌 채
+    r.act(() => layout(cardOf(r), 1234));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    r.act(() => (segmented(r)[0]!.props.onChange as (v: string) => void)("company"));
+    r.act(() => (segmented(r)[0]!.props.onChange as (v: string) => void)("value"));
+    expect(r.byLabel("지표별 값 보기").props.accessibilityState).toEqual({ expanded: false });
+    r.act(() => layout(cardOf(r), 1234));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it("넓은 창(704×933 한 단 · 933×704 좌우 배치): 탭 내용 칸 위치 + 그 안의 카드 위치로 스크롤 (좌우 배치는 오른쪽 칸 스크롤)", () => {
+    for (const size of [
+      [704, 933],
+      [933, 704],
+    ] as Array<[number, number]>) {
+      const r = open(nvdaStock(), "NVDA", { size, tab: "company" });
+      const scrollTo = vi.fn();
+      scrollRefOf(r).current = { scrollTo };
+      const body = r.all().find((n) => n.type === "View" && typeof n.props.onLayout === "function" && flat(n).paddingTop !== undefined && textOf(n).includes("지표 점수"))!;
+      r.act(() => layout(body, 900));
+      r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+      r.act(() => (r.byLabel("가치 탭에서 지표별 값 보기").props.onPress as () => void)());
+      expect(segmented(r)[0]!.props.value).toBe("value");
+      expect(r.byLabel("지표별 값 접기")).toBeDefined();
+      r.act(() => layout(cardOf(r), 0));
+      expect(scrollTo, size.join("×")).toHaveBeenCalledWith({ y: 892, animated: true });
+    }
+  });
+
+  it("묶음 이름 칸: 비중이 이름 끝 낱말과 줄바꿈 없는 빈칸으로 붙는다 ('수익성과 이익의 질 ·' / '25' 로 떨어지지 않게) — 상세 카드·요약 카드 펼침", () => {
+    const r = open(nvdaStock(), "NVDA", { tab: "value" });
+    const q = NV.families!.find((f) => f.key === "quality")!;
+    const big = r.all().find((n) => n.type === "Text" && textOf(n) === `${q.name}\u00A0·\u00A0${q.weight}`);
+    expect(big).toBeDefined();
+    // 이름 칸도 가장 긴 가치 묶음 이름이 한 줄에 들어가는 폭 (추세 칸 112 보다 넓게)
+    expect(flat(big!).width).toBe(scores.valueFamilyNameW);
+    expect(scores.valueFamilyNameW).toBeGreaterThan(scores.familyNameW);
+    expect(r.text()).not.toContain(`${q.name} · ${q.weight}`);
+    const s = open(nvdaStock(), "NVDA");
+    s.act(() => (s.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    const mini = s.all().find((n) => n.type === "Text" && textOf(n) === `${q.name}\u00A0·\u00A0${q.weight}`);
+    expect(flat(mini!).width).toBe(scores.valueFamilyMiniW);
+    expect(flat(s.all().find((n) => n.type === "Text" && /^추세\u00A0·\u00A035$/.test(textOf(n)))!).width).toBe(scores.familyNameW);
+    // 추세 묶음도 같은 이음 (거래량 뒷받침 · 10)
+    expect(s.all().some((n) => n.type === "Text" && /^거래량 뒷받침\u00A0·\u00A0\d+$/.test(textOf(n)))).toBe(true);
+  });
+
+  it("연간 재무로 계산한 지표(성장 등)는 값 줄 끝에 '(2026년 1월 결산 연간 기준)' — 최근 4분기 값으로 읽히지 않게", () => {
+    const r = open(nvdaStock(), "NVDA", { tab: "value" });
+    r.act(() => (r.byLabel("지표별 값 보기").props.onPress as () => void)());
+    const c1 = NV.families![3]!.metrics.find((m) => m.key === "C1")!;
+    expect(r.text()).toContain(`${c1.value} · ${c1.peerMedian} (2026년 1월 결산 연간 기준)`);
+    const a1 = NV.families![0]!.metrics.find((m) => m.key === "A1")!;
+    expect(r.text()).not.toContain(`${a1.value} · ${a1.peerMedian} (`);
   });
 });

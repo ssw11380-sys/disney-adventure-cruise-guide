@@ -29,6 +29,8 @@ import type { NewsProvider } from "./news/types.js";
 import type { MarketSummarySources } from "../services/marketSummaryService.js";
 import type { ProductFacts } from "../analysis/leveraged.js";
 import type { ScoreSources } from "../services/indicatorScoreService.js";
+import { defaultValueSources, type ValueSources } from "../services/valueScoreService.js";
+import { NasdaqScreener } from "./market/nasdaqScreener.js";
 
 export interface Providers {
   quotes: QuoteProvider;
@@ -69,6 +71,8 @@ export interface Providers {
   productInfo?: { productFacts(code: string): Promise<ProductFacts | null> } | null;
   /** 지표 점수 자료 묶음 (없으면 app.ts 가 차트 일봉·네이버 지수·종목 목록으로 만든다 — 테스트는 기록한 일봉을 넣는다) */
   scoreSources?: ScoreSources | null;
+  /** 가치 지표 출처 (SEC companyfacts·frames + Nasdaq 스크리너, 3-44 2단계). 없으면 가치 지표는 1단계 그대로('계산 준비 중') */
+  valueSources?: ValueSources | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   generator: TextGenerator;
   dart: DartProvider | null;
@@ -129,6 +133,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
   newsChain.push(new GoogleNewsRssProvider());
 
   const dart = cfg.DART_API_KEY ? new DartProvider({ apiKey: cfg.DART_API_KEY, db }) : null;
+  // 미국 재무·공시(SEC) — 분석 수집과 가치 지표가 같은 인스턴스를 써서 SEC 요청 간격을 함께 지킨다
+  const edgar = new EdgarProvider();
 
   const backend = resolveLlmBackend(cfg);
   const generator: TextGenerator = backend ? new ClaudeGenerator({ backend }) : new DisabledGenerator();
@@ -145,7 +151,9 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     master: tossOpenApi ?? new KisMasterProvider(), // 토스 마스터는 한국+미국 종목(한글명)까지
     news: new NewsProviderChain(newsChain, log),
     financials: dart,
-    financialsUs: new EdgarProvider(),
+    financialsUs: edgar,
+    // 가치 지표(3-44 2단계): 같은 SEC 인스턴스(요청 간격 공유) + Nasdaq 스크리너
+    valueSources: defaultValueSources(edgar, new NasdaqScreener()),
     // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번)
     calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log),
     regularCloseSources: { KR: [naver], US: [toss, yahoo] },

@@ -51,6 +51,7 @@ import { registerPollSaver } from "./lib/pollSaver.js";
 import { regularCloseLookup, TradeRecordService } from "./services/tradeRecordService.js";
 import { tradeRecordAdminRoutes, tradeRecordRoutes } from "./routes/tradeRecords.js";
 import { defaultScoreSources, IndicatorScoreService } from "./services/indicatorScoreService.js";
+import { ValueScoreService } from "./services/valueScoreService.js";
 import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
 import { BriefingStatusService } from "./services/briefingStatus.js";
@@ -266,9 +267,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const marketIndices = opts.providers.indices ?? new MarketIndices();
   // 지표 점수 (3-44, 플래그 indicatorScores): 종목 상세의 추세 지표 점수. 일봉은 차트와 같은 캐시, 비교 지수는 위 지수 목록과 같은 인스턴스.
   // 장 마감 뒤(한국 20:10 · 뉴욕 17:30, 평일·거래일만) 등록 종목을 미리 계산해 기록한다. 플래그가 꺼져 있으면 예약이 돌아도 아무것도 하지 않는다
+  // 가치 지표 (3-44 2단계, 플래그 valueScore): SEC 재무·주간 비교 기준. 출처가 없으면(테스트 기본) 1단계 그대로
+  const valueScores = new ValueScoreService({ db: opts.db, features, sources: opts.providers.valueSources ?? null, now, log });
   const indicatorScores = new IndicatorScoreService({
     db: opts.db,
     features,
+    value: valueScores,
     sources: opts.providers.scoreSources ?? defaultScoreSources({ db: opts.db, stocks: stockService, indices: marketIndices, product: opts.providers.productInfo ?? null }),
     now,
     log,
@@ -327,6 +331,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("priceStream", priceStream);
   app.decorate("tradeRecords", tradeRecords);
   app.decorate("indicatorScores", indicatorScores);
+  app.decorate("valueScores", valueScores);
 
   // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
   app.addHook("onRequest", async (req) => {
@@ -563,6 +568,7 @@ declare module "fastify" {
     tradeRecords: TradeRecordService;
     /** 지표 점수 (3-44): 종목 상세의 추세 지표 점수·장 마감 뒤 기록 */
     indicatorScores: IndicatorScoreService;
+    valueScores: ValueScoreService;
   }
 }
 

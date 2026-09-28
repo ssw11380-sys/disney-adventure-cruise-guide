@@ -315,6 +315,38 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create unique index if not exists uq_price_alerts_rule on price_alerts (code, kind, value)`.execute(db);
     },
   },
+  {
+    version: 11, // main 의 가장 큰 번호(10) + 1. 새 표만 추가하고 기존 표는 건드리지 않는다 (예전 서버로 되돌려도 모르고 지나갈 뿐)
+    up: async (db, dialect) => {
+      // 가치 지표 점수 (3-44 2단계, 플래그 valueScore): 종목별 SEC 재무(줄인 companyfacts)와 주 1회 비교 기준(업종 분포)
+      await db.schema
+        .createTable("value_fundamentals")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("code", "text", (c) => c.notNull())
+        .addColumn("cik", "text", (c) => c.notNull())
+        .addColumn("sic", "integer")
+        .addColumn("last_filed", "text")
+        .addColumn("fetched_at", "text", (c) => c.notNull())
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_value_fundamentals_code on value_fundamentals (code)`.execute(db);
+      await db.schema
+        .createTable("value_references")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("market", "text", (c) => c.notNull())
+        .addColumn("ref_date", "text", (c) => c.notNull())
+        .addColumn("method", "text", (c) => c.notNull())
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .execute();
+      // 시장·기준일마다 한 줄 (같은 날 다시 만들면 덮어쓴다)
+      await sql`create unique index if not exists uq_value_references_market_date on value_references (market, ref_date)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

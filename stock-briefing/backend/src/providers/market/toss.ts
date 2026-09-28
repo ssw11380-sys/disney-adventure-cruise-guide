@@ -88,6 +88,10 @@ export function parseProductFacts(r: Json): ProductFacts {
     leverageFactor: num(r["leverageFactor"]),
     singleStockEtp: bool(r["singleStockEtp"]),
     derivativeEtf: bool(r["derivativeEtf"]),
+    // 가치 지표(3-44 2단계)의 대상 아님 판정: 우선주·스팩·정리매매
+    commonShare: bool(r["commonShare"]),
+    spac: bool(r["spac"]),
+    clearance: bool(r["clearance"]),
   };
 }
 
