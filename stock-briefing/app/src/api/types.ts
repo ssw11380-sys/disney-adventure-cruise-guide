@@ -994,7 +994,8 @@ export interface QuoteBasis {
 // ── 매매일지 (3-37, 플래그 tradeJournal — 서버 journalService·journalCalc·journalReturns·taxRules 와 같은 모양) ──
 
 export type JournalCurrency = "KRW" | "USD";
-export type RealizedStatus = "ok" | "unknown-cost" | "order-uncertain" | "estimated";
+/** unexplained = 주식 수·매입금액이 기록과 다른 기간의 매도 (손익을 계산하지 않음 — '계산에서 뺀 매도') */
+export type RealizedStatus = "ok" | "unknown-cost" | "order-uncertain" | "unexplained";
 export type RealizedBasis = "snapshot" | "history-checked" | "history-only";
 
 /** 매도 한 몫의 실현손익 (이동평균법, 종목 통화). 모르면 gross null + reason */
@@ -1013,12 +1014,16 @@ export interface JournalRealized {
   net: number | null;
   /** 미국: 매수 당시 환율로 쌓은 원화 평균 구매가 기준 원화 실현손익 (추정) */
   krw: { gross: number | null; costKrw: number | null; sellFx: number | null; fxSource: "toss" | null; estimated: boolean; reason: string | null } | null;
+  /** unexplained 일 때: 무엇이 달라졌는지 (서버 문장) */
+  change?: string;
+  /** unexplained 일 때: 비율 짐작 이름표 ('1→4 분할로 보여요(추정)') — 숫자가 아님 */
+  guess?: string | null;
 }
 
 export interface JournalItem {
   key: string;
-  /** fill = 체결 몫, estimated = 주문 내역에 없는 수량 변화 (추정) */
-  kind: "fill" | "estimated";
+  /** fill = 체결 몫, change = 주문 내역으로 설명되지 않은 변화·큰 주가 변화 (그 기간은 손익·수익률 계산에서 뺌) */
+  kind: "fill" | "change";
   account: number;
   /** 계좌가 둘 이상일 때만 '계좌 2' */
   accountLabel: string | null;
@@ -1039,7 +1044,21 @@ export interface JournalItem {
   realized: JournalRealized | null;
   afterBuy?: { avgCost: number; quantity: number } | null;
   note: string | null;
-  estimated?: { qty: number; reason: "split" | "transfer"; ratio?: number };
+  /** kind 'change': 무엇이 달라졌는지 · 비율 짐작 이름표(숫자가 아님) · 설명되지 않는 수량 */
+  change?: { kind: "unexplained" | "possible-action"; text: string; guess: string | null; qty: number };
+}
+
+/** 계산에서 뺀 매도 (주식 수·매입금액이 기록과 다른 기간 — 손익 숫자 없음) */
+export interface JournalExcludedSell {
+  key: string;
+  code: string;
+  name: string;
+  date: string;
+  quantity: number;
+  currency: JournalCurrency;
+  reason: string;
+  change: string | null;
+  guess: string | null;
 }
 
 export interface JournalRealizedSum {
@@ -1078,6 +1097,8 @@ export interface JournalResponse {
     realized: JournalRealizedSum & { estimatedIncluded: boolean };
     costs: { toss: number; estimated: number; none: number };
     unknownSells: number;
+    /** 계산에서 뺀 매도 (예전 서버는 없음) */
+    excludedSells?: JournalExcludedSell[];
     truncated: string[];
   };
   days: { date: string; realized: JournalRealizedSum; items: JournalItem[] }[];
@@ -1114,11 +1135,12 @@ export interface JournalReturns {
   endValue?: number | null;
   buys?: number;
   sells?: number;
-  transfersEstimated?: number;
   gaps?: string[];
   doubtedSkipped?: string[];
-  /** 주문 내역에 없는 주식 수 변화를 확인하지 못해(알아보지 못한 병합·감자 등) 수익률·기간 손익에서 건너뛴 구간의 끝 날짜. 예전 서버는 없음 */
+  /** 주문 내역으로 설명되지 않는 변화·큰 주가 변화가 있어 수익률·기간 손익에서 건너뛴 구간의 끝 날짜. 예전 서버는 없음 */
   uncertainSkipped?: string[];
+  /** 고른 기간의 모든 구간을 건너뛰어 숫자가 없음 (ready false). 예전 서버는 없음 */
+  allSkipped?: boolean;
   priceBasis?: { regularClose: number; priceFallback: number; fallbackCodes: string[] };
   series?: { date: string; cum: number }[];
 }
@@ -1145,8 +1167,22 @@ export interface JournalTaxItem {
   costKrw: number;
   costsKrw: number | null;
   gainKrw: number;
-  /** 평균 구매가를 추정한 매도 (분할·이관 전후 — 합계에 들어 있음 · 순서 모름 — 기본으로 합계에서 빠져 uncertainItems 에) */
-  estimate?: { status: "estimated" | "order-uncertain"; reason: string };
+  /** 같은 날 사고판 순서를 몰라 추정한 매도 (기본으로 합계에서 빠져 uncertainItems 에 — includeUncertain 이면 합계에 '추정 포함') */
+  estimate?: { status: "order-uncertain"; reason: string };
+}
+
+/** 합계에서 뺀, 주식 수·매입금액이 기록과 다른 기간의 매도 (숫자 없음) */
+export interface JournalTaxUnexplained {
+  key: string;
+  code: string;
+  name: string;
+  tradeDate: string;
+  settleDate: string;
+  quantity: number;
+  proceedsUsd: number;
+  reason: string;
+  change: string | null;
+  guess: string | null;
 }
 
 export interface JournalTax {
@@ -1161,11 +1197,13 @@ export interface JournalTax {
   /** 합계에 들어 있는, 평균 구매가를 추정한 매도 수와 종목·까닭 (예전 서버는 없음) */
   estimatedIncluded?: number;
   estimatedSells?: { code: string; name: string; count: number; reason: string }[];
-  /** 순서 추정(사고판 순서·주문 내역에 없는 주식 수 변화를 몰라 취득가가 확실하지 않음)이라 합계에서 뺀 매도 수 · 그 추정 양도차익 합 · 매도별 계산 (까닭은 excluded 에도 — 예전 서버는 없음) */
+  /** 같은 날 사고판 순서를 몰라 합계에서 뺀 매도 수 · 그 추정 양도차익 합 · 매도별 계산 (까닭은 excluded 에도 — 예전 서버는 없음) */
   includeUncertain?: boolean;
   uncertainExcluded?: number;
   uncertainGainKrw?: number | null;
   uncertainItems?: JournalTaxItem[];
+  /** 주식 수·매입금액이 기록과 다른 기간의 매도 (늘 합계에서 뺌 — 예전 서버는 없음) */
+  unexplainedSells?: JournalTaxUnexplained[];
   items?: JournalTaxItem[];
   kr?: { securitiesTax: { amount: number | null; sells: number; source: "toss" | null } };
   asOf?: string;

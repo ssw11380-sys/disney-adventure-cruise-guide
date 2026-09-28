@@ -412,7 +412,7 @@ describe("양도세 추정 탭", () => {
     const totals = textOf(r.all().find((n) => n.props.testID === "tax-totals")!);
     expect(totals).toContain("해외주식 양도세 추정 · 2026년");
     expect(totals).toContain("예상 세액 (추정)209,000원");
-    expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toBe("계산에 넣지 못한 매도 2건이 있어 실제와 다를 수 있어요.테슬라 2건 · 기록 시작 전에 산 몫이라 취득가를 몰라요");
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toBe("계산에서 뺀 매도 2건이 있어 실제와 다를 수 있어요.테슬라 2건 · 기록 시작 전에 산 몫이라 취득가를 몰라요");
     for (const rule of lib.TAX.rules) expect(r.text()).toContain(rule);
     expect(r.text()).toContain(lib.TAX.krAssumption);
     expect(r.text()).toContain(lib.TAX.notAdvice);
@@ -430,7 +430,7 @@ describe("양도세 추정 탭", () => {
     h.taxTries = 5;
     r = draw();
     expect(r.all().some((n) => n.props.testID === "tax-pending")).toBe(false);
-    expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toContain("계산에 넣지 못한 매도 2건");
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toContain("계산에서 뺀 매도 2건");
   });
 
   it("폴드 가로: 왼쪽 합계·기준 | 오른쪽 매도별 계산(늘 펼침)", () => {
@@ -456,12 +456,12 @@ describe("양도세 추정 탭", () => {
 
   it("검토 반영 4차: 순서를 몰라 합계에서 뺀 매도 — 빠진 매도 상자에 추정 양도차익 줄 · 매도별 계산에 '합계에서 뺌'으로 따로 (폴드 가로 오른쪽 칸도)", () => {
     const u = { key: "u", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", settleSource: "estimated" as const, quantity: 15, proceedsUsd: 1800, costsUsd: null, fxSell: { rate: 1350, source: "smbs", date: "2026-09-30", provisional: false }, proceedsKrw: 2_430_000, costKrw: 2_025_000, costsKrw: null, gainKrw: 405_000, estimate: { status: "order-uncertain" as const, reason: "x" } };
-    const reason = "사고판 순서나 주문 내역에 없는 주식 수 변화(입고·출고·병합 등)를 몰라 취득가가 확실하지 않아 합계에서 뺐어요";
+    const reason = "같은 날 사고판 순서를 몰라 취득가가 확실하지 않아 합계에서 뺐어요";
     const tax: JournalTax = { ...TAX, items: [], excluded: [{ code: "SOXL", name: "SOXL", count: 1, reason }], totals: { gains: 0, losses: 0, net: 0, base: 0, nationalTax: 0, localTax: 0, tax: 0, sells: 0 }, uncertainExcluded: 1, uncertainGainKrw: 405_000, uncertainItems: [u] };
     h.params = { tab: "tax" };
     h.tax = tax;
     let r = draw();
-    expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toBe(`계산에 넣지 못한 매도 1건이 있어 실제와 다를 수 있어요.SOXL 1건 · ${reason}취득가가 확실하지 않아 뺀 매도 1건의 추정 양도차익은 +405,000원이에요.`);
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toBe(`계산에서 뺀 매도 1건이 있어 실제와 다를 수 있어요.SOXL 1건 · ${reason}사고판 순서를 몰라 뺀 매도 1건의 추정 양도차익은 +405,000원이에요.`);
     press(r, byLabel(r, "매도별 계산 보기"));
     expect(r.text()).toContain("환율 1,350.00원 · 합계에서 뺌");
     expect(r.text()).toContain("양도가액 2,430,000원 − 취득가액 2,025,000원 = +405,000원");
@@ -548,7 +548,7 @@ describe("검토 반영 (3-37 다듬기) — 화면", () => {
     }
   });
 
-  it("양도세: 평균 구매가를 추정한 매도가 합계에 있으면 합계 줄 '추정 포함' · 따로 상자 · 매도별 계산 첫 줄 '추정 포함'", () => {
+  it("양도세: 순서 모름 매도를 합계에 넣었으면(includeUncertain) 합계 줄 '추정 포함' · 따로 상자 · 매도별 계산 첫 줄 '추정 포함'", () => {
     h.params = { tab: "tax" };
     h.tax = {
       enabled: true,
@@ -560,14 +560,14 @@ describe("검토 반영 (3-37 다듬기) — 화면", () => {
       fxPending: 0,
       excluded: [],
       estimatedIncluded: 1,
-      estimatedSells: [{ code: "SOXL", name: "SOXL", count: 1, reason: "분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요." }],
-      items: [{ key: "k", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", settleSource: "estimated", quantity: 5, proceedsUsd: 125, costsUsd: null, fxSell: { rate: 1350, source: "smbs", date: "2026-09-30", provisional: false }, proceedsKrw: 168_750, costKrw: 168_750, costsKrw: null, gainKrw: 0, estimate: { status: "estimated", reason: "x" } }],
+      estimatedSells: [{ code: "SOXL", name: "SOXL", count: 1, reason: "같은 날 사고판 순서를 몰라 추정했어요." }],
+      items: [{ key: "k", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", settleSource: "estimated", quantity: 5, proceedsUsd: 125, costsUsd: null, fxSell: { rate: 1350, source: "smbs", date: "2026-09-30", provisional: false }, proceedsKrw: 168_750, costKrw: 168_750, costsKrw: null, gainKrw: 0, estimate: { status: "order-uncertain", reason: "x" } }],
       kr: { securitiesTax: { amount: null, sells: 0, source: null } },
     } as JournalTax;
     const r = draw();
     expect(textOf(r.all().find((n) => n.props.testID === "tax-totals")!)).toContain("양도차익 합계 (이익 − 손실, 추정 포함)");
     expect(textOf(r.all().find((n) => n.props.testID === "tax-totals")!)).toContain("매도 1건 (추정 포함 1건)");
-    expect(textOf(r.all().find((n) => n.props.testID === "tax-estimated")!)).toBe("평균 구매가를 추정한 매도 1건이 합계에 들어 있어요.SOXL 1건 · 분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요.");
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-estimated")!)).toBe("평균 구매가를 추정한 매도 1건이 합계에 들어 있어요.SOXL 1건 · 같은 날 사고판 순서를 몰라 추정했어요.");
     press(r, byLabel(r, "매도별 계산 보기"));
     expect(r.text()).toContain("환율 1,350.00원 · 추정 포함");
   });
@@ -580,14 +580,95 @@ describe("검토 반영 (3-37 다듬기) — 화면", () => {
   });
 });
 
-describe("검토 반영 (3-37 다듬기) — 추정 줄 제목", () => {
-  it("회귀: 주식 수 변화 추정 줄 제목('… 주식 수 +9주 (무상증자·주식배당 등)')은 200% 에서도 잘리지 않게 줄바꿈 (체결 줄 이름은 두 줄까지 그대로)", () => {
-    const est: JournalItem = { ...SELL, key: "est:3:000660:2026-09-21", kind: "estimated", orderId: null, side: null, code: "000660", name: "SK하이닉스", quantity: 9, realized: null, note: null, timeBasis: "seen", at: "2026-09-21T16:05:00+09:00", estimated: { qty: 9, reason: "split", ratio: 1.5 } };
-    h.journal = { ...LIST, days: [{ ...LIST.days[0]!, items: [SELL, est] }] };
+describe("검토 반영 7차 — 기록과 다른 기간 (계산에서 뺀 매도)", () => {
+  const R = "이 기간은 주식 수·매입금액이 기록과 달라 손익을 계산하지 않았어요.";
+  const EXCL = item({
+    key: "3:s1:0",
+    orderId: "s1",
+    code: "005930",
+    name: "삼성전자",
+    currency: "KRW",
+    market: "KR",
+    at: "2026-09-24T10:00:00+09:00",
+    realized: { ...realized(0, 0)!, status: "unexplained", reason: R, change: "수량 10 → 35주 · 기록된 매매대로라면 5주", guess: "1→4 분할로 보여요(추정)", gross: null, rate: null, avgCost: null, costAmount: null, krw: null },
+  });
+  const CHG: JournalItem = {
+    ...SELL,
+    key: "chg:3:005930:2026-09-24T16:05:00+09:00",
+    kind: "change",
+    orderId: null,
+    side: null,
+    code: "005930",
+    name: "삼성전자",
+    quantity: 30,
+    realized: null,
+    note: null,
+    timeBasis: "seen",
+    at: "2026-09-24T16:05:00+09:00",
+    change: { kind: "unexplained", text: "수량 10 → 35주 · 기록된 매매대로라면 5주", guess: "1→4 분할로 보여요(추정)", qty: 30 },
+  };
+  const withExcl = (): JournalResponse => ({
+    ...LIST,
+    summary: {
+      ...LIST.summary!,
+      sells: 2,
+      excludedSells: [{ key: "3:s1:0", code: "005930", name: "삼성전자", date: "2026-09-24", quantity: 5, currency: "KRW", reason: R, change: "수량 10 → 35주 · 기록된 매매대로라면 5주", guess: "1→4 분할로 보여요(추정)" }],
+    },
+    days: [LIST.days[0]!, { date: "2026-09-24", realized: { KRW: null, USD: null, krwTotal: null, krwTotalEstimated: false }, items: [CHG, EXCL] }, LIST.days[1]!],
+  });
+
+  it("요약 카드 아래 '계산에서 뺀 매도 1건' 상자(바뀐 것·이름표·토스증권 앱 안내) · 줄 오른쪽 '계산에서 뺌' · 기록과 다름 줄(누를 수 없음, 제목은 잘리지 않게 줄바꿈)", () => {
+    h.journal = withExcl();
     h.win = { width: 360, height: 752, scale: 3, fontScale: 2 };
     const r = draw();
-    const title = r.all().find((n) => n.type === "Text" && n.children.join("") === "[추정] SK하이닉스 주식 수 +9주 (무상증자·주식배당 등)")!;
+    expect(textOf(r.all().find((n) => n.props.testID === "journal-excluded")!)).toBe(
+      "계산에서 뺀 매도 1건9/24 삼성전자 5주 · 수량 10 → 35주 · 기록된 매매대로라면 5주 · 1→4 분할로 보여요(추정)주식 수·매입금액이 기록과 다른 기간의 매도라 위 실현손익 합계에 넣지 않았어요. 실제 손익은 토스증권 앱의 거래 내역에서 볼 수 있어요.",
+    );
+    expect(r.text()).toContain("계산에서 뺌");
+    const title = r.all().find((n) => n.type === "Text" && n.children.join("") === "[기록과 다름] 삼성전자")!;
     expect(title.props.numberOfLines).toBeUndefined();
-    expect(r.all().find((n) => n.type === "Text" && n.children.join("") === "SOXL")!.props.numberOfLines).toBe(2);
+    expect(r.text()).toContain("이 기간의 매도 손익과 수익률은 계산하지 않았어요.");
+    expect(r.all().some((n) => n.props.testID === `trade-${CHG.key}`)).toBe(false);
+  });
+
+  it("계산에서 뺀 매도를 누르면 상세: 실현손익 '계산하지 않음' + 까닭·달라진 것·토스증권 앱 안내 (숫자 없음)", () => {
+    h.journal = withExcl();
+    const r = draw();
+    press(r, r.all().find((n) => n.props.testID === "trade-3:s1:0")!);
+    const t = r.text();
+    expect(t).toContain("계산하지 않음");
+    expect(t).toContain("달라진 것: 수량 10 → 35주 · 기록된 매매대로라면 5주");
+    expect(t).toContain(lib.JOURNAL.excludedToss);
+    expect(t).not.toContain("= 실현손익");
+  });
+
+  it("수익률: 건너뛴 날을 큰 숫자 아래 한 줄로 · 모두 건너뛰면 숫자 대신 안내", () => {
+    h.params = { tab: "returns" };
+    h.returns = { enabled: true, ready: true, tradingDays: 10, recordDays: 10, needDays: 10, recordSince: "2026-09-28", actual: { from: "2026-09-28", to: "2026-10-12" }, market: "KR", currency: "KRW", twr: 1, pnl: 1000, startValue: 100_000, endValue: 101_000, buys: 0, sells: 0, gaps: [], doubtedSkipped: [], uncertainSkipped: ["2026-10-07"], priceBasis: { regularClose: 1, priceFallback: 0, fallbackCodes: [] }, series: [] } as JournalReturns;
+    let r = draw();
+    expect(textOf(r.all().find((n) => n.props.testID === "returns-ready")!)).toContain("주식 수·매입금액이 기록과 다르거나 주가가 한 번에 크게 바뀐 1일(10/7)은 수익률·기간 손익에서 뺐어요.");
+    h.returns = { enabled: true, ready: false, allSkipped: true, uncertainSkipped: ["2026-10-07"], tradingDays: 3, recordDays: 20, needDays: 10, recordSince: "2026-09-28", actual: { from: "2026-10-06", to: "2026-10-08" } } as JournalReturns;
+    r = draw();
+    expect(r.all().find((n) => n.props.testID === "returns-not-ready")!.props.accessibilityLabel).toContain("모두 주식 수·매입금액이 기록과 다르거나");
+  });
+
+  it("양도세: '기록과 달라 계산하지 않은 매도' 상자 — 매도마다 한 줄(판매 금액·바뀐 것·이름표) + 토스증권 앱 안내", () => {
+    h.params = { tab: "tax" };
+    h.tax = {
+      enabled: true,
+      year: 2026,
+      years: [2026],
+      totals: { gains: 0, losses: 0, net: 0, base: 0, nationalTax: 0, localTax: 0, tax: 0, sells: 0 },
+      complete: false,
+      fxPending: 0,
+      excluded: [{ code: "SOXL", name: "SOXL", count: 1, reason: "주식 수·매입금액이 기록과 다른 기간의 매도라 손익을 계산하지 않았어요" }],
+      items: [],
+      unexplainedSells: [{ key: "3:x1:0", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", quantity: 4000, proceedsUsd: 100_000, reason: R, change: "기록된 매도가 그때 가진 수량보다 많았어요 · 수량 1,000 → 0주", guess: "1→4 분할로 보여요(추정)" }],
+      kr: { securitiesTax: { amount: null, sells: 0, source: null } },
+    } as JournalTax;
+    const r = draw();
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-unexplained")!)).toBe(
+      "기록과 달라 계산하지 않은 매도9/28 SOXL 4,000주 · 판매 금액 $100,000.00 · 기록된 매도가 그때 가진 수량보다 많았어요 · 수량 1,000 → 0주 · 1→4 분할로 보여요(추정)이 매도는 위 합계에 넣지 않았어요. 실제 양도차익은 토스증권 앱에서 볼 수 있어요.",
+    );
   });
 });

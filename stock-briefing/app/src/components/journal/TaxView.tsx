@@ -12,7 +12,8 @@ import { changeColor, font, radius, space, touch, useTheme } from "@/theme";
  * 매매일지 '양도세 추정' 탭 (3-37, 참고용 — 세무 조언이 아님). 맨 위 '참고용 추정' 상자(늘 보임, 닫을 수 없음) →
  * 해외주식 합계(결제일 기준 연도) · 기본공제 · 과세 대상 · 세율 · 예상 세액(추정) → 빠진 매도·받는 중 → 평균 구매가를 추정한 매도(합계에 들어 있음 —
  * 합계 줄·아래 줄에 '추정 포함', 따로 상자에 종목·건수·까닭) → 매도별 계산 → 계산 기준 6줄(늘 펼침) → 국내 주식 → 고지.
- * 취득가가 확실하지 않아(순서 추정) 합계에서 뺀 매도는 빠진 매도 상자(까닭 + 추정 양도차익 한 줄)와 매도별 계산 끝('합계에서 뺌')에 따로 보인다.
+ * 사고판 순서를 몰라(순서 추정) 합계에서 뺀 매도는 빠진 매도 상자(까닭 + 추정 양도차익 한 줄)와 매도별 계산 끝('합계에서 뺌')에 따로 보인다.
+ * 주식 수·매입금액이 기록과 다른 기간의 매도는 숫자 없이 '기록과 달라 계산하지 않은 매도' 상자에 매도마다 한 줄 + 토스증권 앱 안내 (검토 반영 7차).
  * 환율을 받는 중이면 1분마다 5번까지 다시 묻고(useJournalTax), 그래도 받는 중이면 빠진 매도로 보여 준다. 폴드 가로는 왼쪽 합계·기준 | 오른쪽 매도별 계산
  */
 export function TaxView({ twoPane, thisYear }: { twoPane: boolean; thisYear: number }) {
@@ -117,6 +118,17 @@ function TaxBody({ d, retriesDone, year, onYear, split }: { d: JournalTax; retri
               {l}
             </Text>
           ))}
+        </View>
+      ) : null}
+      {v.unexplained ? (
+        <View style={[styles.box, styles.col, { borderColor: t.warn }]} testID="tax-unexplained">
+          <Text style={{ color: t.warn, fontSize: font.small, fontWeight: "700" }}>{v.unexplained.title}</Text>
+          {v.unexplained.lines.map((l, i) => (
+            <Text key={`${i}:${l}`} style={{ color: t.sub, fontSize: font.small }}>
+              {l}
+            </Text>
+          ))}
+          <Text style={{ color: t.muted, fontSize: font.small }}>{v.unexplained.note}</Text>
         </View>
       ) : null}
       {v.estimated ? (

@@ -86,7 +86,7 @@ export const journalRoutes: FastifyPluginAsync<{ service: JournalService; now: (
 
 /**
  * 관리용 (API_TOKEN 보호): 배포 뒤 확인·환율 미리 받기.
- *  - GET  /check           짝마다 원장 ↔ 스냅샷 대조(맞음·분할 추정·이관 추정·기록 전 모름), 빠진 환율
+ *  - GET  /check           짝마다 원장 ↔ 스냅샷 대조(맞음·설명되지 않은 구간·큰 주가 변화·기록 전 모름), 빠진 환율
  *  - POST /fx { from, to } 그 기간 체결의 토스 과거 환율·결제일 매매기준율을 지금 받는다 (꺼져 있으면 409)
  */
 export const journalAdminRoutes: FastifyPluginAsync<{ service: JournalService; now: () => Date }> = async (app, { service, now }) => {

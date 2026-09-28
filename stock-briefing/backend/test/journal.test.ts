@@ -20,15 +20,15 @@ import { fakeProviders } from "./helpers.js";
 const TS = (s: string) => `${s}+09:00`;
 const NOW = new Date("2026-09-30T20:00:00+09:00");
 
-type H = { code: string; name: string; qty: number; cost: number; price: number; costKrw?: number | null };
-function snapRow(date: string, market: "KR" | "US", asOf: string, holdings: H[], extra: { doubts?: unknown[]; fx?: number } = {}) {
+type H = { code: string; name: string; qty: number; cost: number; price: number; costKrw?: number | null; account?: number };
+function snapRow(date: string, market: "KR" | "US", asOf: string, holdings: H[], extra: { doubts?: unknown[]; fx?: number; accounts?: number[] } = {}) {
   const data = {
     version: 1,
     priceBasis: "",
     regularCloseBasis: "",
     fx: market === "US" ? { usdKrw: extra.fx ?? 1390, source: "toss", asOf } : null,
     holdings: holdings.map((h) => ({
-      account: 3,
+      account: h.account ?? 3,
       code: h.code,
       name: h.name,
       currency: market === "KR" ? "KRW" : "USD",
@@ -46,7 +46,7 @@ function snapRow(date: string, market: "KR" | "US", asOf: string, holdings: H[],
       costKrwSource: market === "US" ? (h.costKrw ? "book-exact" : null) : "toss",
     })),
     totals: { holdings: holdings.length, valueKrw: null, valueAfterCostKrw: null, costKrw: null, valueUsd: null, costUsd: null },
-    accounts: [{ account: 3, purchaseKrw: 0, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null }],
+    accounts: (extra.accounts ?? [3]).map((account) => ({ account, purchaseKrw: 0, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null })),
     ...(extra.doubts ? { doubts: extra.doubts } : {}),
   };
   return {
@@ -167,11 +167,11 @@ describe("매매일지 목록 (GET /api/journal)", () => {
     ]);
     // 매수 상세: 이 매수 뒤 평균 구매가
     expect(all.find((x) => x.orderId === "o2")!.afterBuy).toEqual({ avgCost: 34.0133, quantity: 30 });
-    // 이관 추정 줄 (주문 없이 수량이 는 NAVER)
-    const est = all.find((x) => x.kind === "estimated")!;
-    expect(est).toMatchObject({ code: "035420", name: "NAVER", side: null, quantity: 10, estimated: { qty: 10, reason: "transfer" } });
-    // 요약: 매도마다 반올림한 값의 합
-    expect(body.summary).toMatchObject({ orders: 4, buys: 2, sells: 2, unknownSells: 0, costs: { toss: 0, estimated: 2, none: 1 } }); // 미국 매도는 첫 미국 스냅샷 전이라 비용 비율이 없음
+    // 주문 내역으로 설명되지 않은 수량 변화 줄 (주문 없이 수량이 는 NAVER — 무엇이 달라졌는지, 짐작 이름표 없음)
+    const chg = all.find((x) => x.kind === "change")!;
+    expect(chg).toMatchObject({ code: "035420", name: "NAVER", side: null, quantity: 10, realized: null, change: { kind: "unexplained", qty: 10, text: "수량 10 → 20주 · 그 사이 기록된 매매 없음", guess: null } });
+    // 요약: 매도마다 반올림한 값의 합 · 계산에서 뺀 매도 없음
+    expect(body.summary).toMatchObject({ orders: 4, buys: 2, sells: 2, unknownSells: 0, excludedSells: [], costs: { toss: 0, estimated: 2, none: 1 } }); // 미국 매도는 첫 미국 스냅샷 전이라 비용 비율이 없음
     expect(body.summary.realized).toEqual({ KRW: 20_000, USD: 17.43, krwTotal: 44_703, krwTotalEstimated: true, estimatedIncluded: false });
     const dayK = body.days.find((d: { date: string }) => d.date === "2026-09-28");
     expect(dayK.realized).toMatchObject({ KRW: 10_000, USD: null });
@@ -320,28 +320,6 @@ describe("기간 수익률 (GET /api/journal/returns)", () => {
     await app.close();
   });
 
-  it("회귀: 종목이 통째로 사라지면(전량 이관 출고·상장폐지) 직전 스냅샷 가격으로 나간 흐름 — 가짜 손실이 아니라 0%", async () => {
-    const t = await setup({ seed: false, now: new Date("2026-10-15T20:00:00+09:00") });
-    const both = [
-      { code: "005930", name: "삼성전자", qty: 1, cost: 1000, price: 1000 },
-      { code: "000660", name: "SK하이닉스", qty: 1, cost: 1000, price: 1000 },
-    ];
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", TS(`${d}T16:05:00`), i < 6 ? both : both.slice(0, 1))))
-      .execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, sells: 1000, transfersEstimated: 1 });
-    // 일부만 출고(1주 → 0.5주)는 그날 가격 그대로
-    const t2 = await setup({ seed: false, now: new Date("2026-10-15T20:00:00+09:00") });
-    await t2.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", TS(`${d}T16:05:00`), i < 6 ? both : [both[0]!, { ...both[1]!, qty: 0.5, cost: 500 }])))
-      .execute();
-    expect((await t2.get("/api/journal/returns?preset=1M&market=KR")).body).toMatchObject({ ready: true, twr: 0, pnl: 0, transfersEstimated: 1 });
-    await t.app.close();
-    await t2.app.close();
-  });
 });
 
 describe("해외주식 양도세 추정 (GET /api/journal/tax)", () => {
@@ -535,257 +513,240 @@ describe("배경 환율 받기", () => {
     const { s } = await svc({});
     const c = await s.check();
     if (!c.enabled) throw new Error("켜져 있어야 함");
-    expect(c.pairs.find((p) => p.code === "SOXL")).toMatchObject({ preAnchor: "checked", anchors: 1, transfers: 0 });
-    expect(c.pairs.find((p) => p.code === "035420")).toMatchObject({ transfers: 1 });
+    expect(c.pairs.find((p) => p.code === "SOXL")).toMatchObject({ preAnchor: "checked", anchors: 1, unexplained: 0, priceJumps: 0 });
+    expect(c.pairs.find((p) => p.code === "035420")).toMatchObject({ unexplained: 1 });
     expect(c.fx.tossMissing).toBe(3);
     expect(c.fx.stdPending).toEqual(["2026-09-03", "2026-09-28", "2026-09-29"]);
   });
 });
 
-describe("검토 반영: 회사 행동·많이 판 매도가 수익률·실현손익·양도세에 가짜 손익을 만들지 않는다", () => {
+describe("검토 반영 7차 보수 규칙: 기록과 설명되지 않는 변화가 있던 기간은 합계·양도세·수익률 어디에도 틀린 숫자를 넣지 않는다", () => {
   const DAYS = ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"];
   const LATER = new Date("2026-10-15T20:00:00+09:00");
   const at = (i: number, hm: string) => TS(`${DAYS[i]}T${hm}:00`);
   const items = (body: { days: Array<{ items: Array<Record<string, any>> }> }) => body.days.flatMap((d) => d.items);
-
-  it("회귀: 무상증자 10→15(토스 매입금액 그대로)는 이관 흐름이 아니다 — 가짜 −14.29% 대신 0%, 추정 줄은 주식 수 변화(1.5배)", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = (qty: number, price: number) => ({ code: "005930", name: "삼성전자", qty, cost: 1500, price });
-    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1500, price: 150 };
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), [i < 6 ? a(10, 150) : a(15, 100), b])))
-      .execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, sells: 0, transfersEstimated: 0 });
-    const est = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body).filter((x) => x.kind === "estimated");
-    expect(est).toMatchObject([{ code: "005930", quantity: 5, estimated: { qty: 5, reason: "split", ratio: 1.5 } }]);
-    await t.app.close();
-  });
-
-  it("회귀: 분할 1→4 와 같은 날 매도 5주 — 가짜 −27.27%·가짜 실현손실 대신 0%·실현손익 0", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = (qty: number, cost: number, price: number) => ({ code: "005930", name: "삼성전자", qty, cost, price });
-    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), [i < 6 ? a(10, 1000, 100) : a(35, 875, 25), b])))
-      .execute();
-    await t.db.insertInto("trade_executions").values([tradeRow("s1", "005930", "SELL", [{ q: 5, a: 125, at: at(6, "10:00") }])]).execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, sells: 125, transfersEstimated: 0 });
-    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
-    expect(list.find((x) => x.orderId === "s1")!.realized).toMatchObject({ status: "estimated", gross: 0, costAmount: 125, reason: REASONS.split });
-    expect(list.filter((x) => x.kind === "estimated")).toMatchObject([{ estimated: { qty: 30, reason: "split", ratio: 4 } }]);
-    await t.app.close();
-  });
-
-  it("회귀: 기준점 뒤 기록된 수량보다 많이 판 매도(주문 내역에 없는 입고 5주) — 입고를 직전 가격 흐름으로 넣어 +12% (0 으로 되돌리면 +40%)", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = { code: "005930", name: "삼성전자", qty: 10, cost: 1000, price: 100 };
-    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 6 ? [a, b] : [b])))
-      .execute();
-    await t.db.insertInto("trade_executions").values([tradeRow("s2", "005930", "SELL", [{ q: 15, a: 1800, at: at(6, "10:00") }])]).execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 12, pnl: 300, buys: 500, sells: 1800, transfersEstimated: 1 });
-    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
-    expect(list.find((x) => x.orderId === "s2")!.realized).toMatchObject({ status: "order-uncertain", reason: REASONS.oversoldAfter, gross: 300 });
-    expect(list.filter((x) => x.kind === "estimated")).toMatchObject([{ estimated: { qty: 5, reason: "transfer" } }]);
-    await t.app.close();
-  });
-
-  it("양도세: 추정이 들어간 매도(분할 전후)는 합계에 넣되 '추정 포함'으로 따로 센다 — 취득가를 모름으로 빼지 않고 가짜 손실도 없다", async () => {
-    const t = await setup({ seed: false });
-    await t.db
-      .insertInto("account_snapshots")
-      .values([
-        snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 10, cost: 1000, price: 100, costKrw: 1_390_000 }]),
-        snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 35, cost: 875, price: 25, costKrw: 1_216_250 }]),
-      ])
-      .execute();
-    await t.db
-      .insertInto("trade_executions")
-      .values([tradeRow("b1", "SOXL", "BUY", [{ q: 10, a: 1000, at: TS("2026-09-01T23:00:00") }]), tradeRow("x1", "SOXL", "SELL", [{ q: 5, a: 125, at: TS("2026-09-28T23:30:00") }])])
-      .execute();
-    const std = (d: string) => ({ kind: "krw-std", at: d, rate: 1350, source: "smbs", fetched_at: "x" });
-    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
-    const { body } = await t.get("/api/journal/tax?year=2026");
-    expect(body.excluded).toEqual([]);
-    expect(body.items).toHaveLength(1);
-    expect(body.items[0]).toMatchObject({ key: "3:x1:0", proceedsKrw: 168_750, costKrw: 168_750, gainKrw: 0, estimate: { status: "estimated", reason: REASONS.split } });
-    expect(body.estimatedIncluded).toBe(1);
-    expect(body.estimatedSells).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: REASONS.split }]);
-    // 추정이 없는 해는 0 · 빈 목록 (예전 모양 그대로 + 두 칸)
-    const plain = await setup();
-    await plain.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-28"), std("2026-09-29")]).execute();
-    const p = (await plain.get("/api/journal/tax?year=2026")).body;
-    expect(p).toMatchObject({ estimatedIncluded: 0, estimatedSells: [] });
-    expect(p.items[0].estimate).toBeUndefined();
-    await t.app.close();
-    await plain.app.close();
-  });
-
-  it("회귀(4차): 1→4 분할 뒤 같은 날 전부 매도(다음 기록 0주) — 가짜 −75%·가짜 실현손실 −3,000,000 대신 0%·0 · 분할 줄", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = { code: "005930", name: "삼성전자", qty: 1000, cost: 1_000_000, price: 1000 };
-    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 6 ? [a, b] : [b])))
-      .execute();
-    await t.db.insertInto("trade_executions").values([tradeRow("s4", "005930", "SELL", [{ q: 4000, a: 1_000_000, at: at(6, "10:00") }])]).execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, sells: 1_000_000, transfersEstimated: 0 });
-    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
-    expect(list.find((x) => x.orderId === "s4")!.realized).toMatchObject({ status: "estimated", reason: REASONS.split, gross: 0, costAmount: 1_000_000, avgCost: 250 });
-    expect(list.filter((x) => x.kind === "estimated")).toMatchObject([{ quantity: 3000, estimated: { qty: 3000, reason: "split", ratio: 4 } }]);
-    await t.app.close();
-  });
-
-  it("회귀(4차): 4→1 병합 뒤 같은 날 전부 매도 — 가짜 +75%·가짜 실현이익 +750,000 대신 0%·0", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = { code: "005930", name: "삼성전자", qty: 1000, cost: 1_000_000, price: 1000 };
-    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 6 ? [a, b] : [b])))
-      .execute();
-    await t.db.insertInto("trade_executions").values([tradeRow("s5", "005930", "SELL", [{ q: 250, a: 1_000_000, at: at(6, "10:00") }])]).execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, transfersEstimated: 0 });
-    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
-    expect(list.find((x) => x.orderId === "s5")!.realized).toMatchObject({ status: "estimated", gross: 0, avgCost: 4000 });
-    expect(list.filter((x) => x.kind === "estimated")).toMatchObject([{ estimated: { qty: -750, reason: "split", ratio: 0.25 } }]);
-    await t.app.close();
-  });
-
+  const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
   const std = (d: string) => ({ kind: "krw-std", at: d, rate: 1350, source: "smbs", fetched_at: "x" });
   const usSnaps = (held: H) => [snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [held]), snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), [])];
-
-  it("양도세(4차): 미국 1→4 분할 뒤 전부 매도 — 취득가 = 양도가 (가짜 손실 약 −405,000,000원 없음), 합계에 '추정 포함'", async () => {
-    const t = await setup({ seed: false });
-    await t.db.insertInto("account_snapshots").values(usSnaps({ code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 100, costKrw: 139_000_000 })).execute();
+  const dropped = { status: "unexplained", reason: REASONS.unexplained, gross: null, rate: null, costAmount: null, avgCost: null };
+  /** 한국 12거래일 계좌: 삼성전자(i 번째 날 holdings(i)) + 늘 그대로인 SK하이닉스 */
+  async function kr(holdings: (i: number) => H[], trades: ReturnType<typeof tradeRow>[]) {
+    const t = await setup({ seed: false, now: LATER });
     await t.db
-      .insertInto("trade_executions")
-      .values([tradeRow("b1", "SOXL", "BUY", [{ q: 1000, a: 100_000, at: TS("2026-09-01T23:00:00") }]), tradeRow("x4", "SOXL", "SELL", [{ q: 4000, a: 100_000, at: TS("2026-09-28T23:30:00") }])])
+      .insertInto("account_snapshots")
+      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), [...holdings(i), b])))
       .execute();
-    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
-    const { body } = await t.get("/api/journal/tax?year=2026");
-    expect(body.items).toMatchObject([{ key: "3:x4:0", proceedsKrw: 135_000_000, costKrw: 135_000_000, gainKrw: 0, estimate: { status: "estimated", reason: REASONS.split } }]);
-    expect(body).toMatchObject({ excluded: [], uncertainExcluded: 0, uncertainGainKrw: null, uncertainItems: [], estimatedIncluded: 1, complete: true });
-    expect(body.totals).toMatchObject({ net: 0, tax: 0, sells: 1 });
+    if (trades.length) await t.db.insertInto("trade_executions").values(trades).execute();
+    const returns = (await t.get("/api/journal/returns?preset=1M&market=KR")).body;
+    const list = (await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body;
+    await t.app.close();
+    return { returns, list, rows: items(list) };
+  }
+  const sam = (qty: number, cost: number, price: number): H => ({ code: "005930", name: "삼성전자", qty, cost, price });
+
+  it("무상증자 10→15 (매도 없음): 수익률은 그 구간을 건너뛰어 0% · 목록에 '기록과 다름' 줄과 이름표 (그대로 두면 −14.29%)", async () => {
+    const { returns, rows } = await kr((i) => [i < 6 ? sam(10, 1500, 150) : sam(15, 1500, 100)], []);
+    expect(returns).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, sells: 0, uncertainSkipped: [DAYS[6]] });
+    expect(returns.transfersEstimated).toBeUndefined();
+    expect(rows.filter((x) => x.kind === "change")).toMatchObject([
+      { code: "005930", side: null, quantity: 5, change: { kind: "unexplained", qty: 5, text: "수량 10 → 15주 · 그 사이 기록된 매매 없음", guess: "무상증자·주식배당(주식 수 ×1.5)으로 보여요(추정)" } },
+    ]);
+  });
+
+  it("1→4 분할 + 같은 날 5주 매도: 그 매도는 실현손익 합계에서 빠지고 '계산에서 뺀 매도'에 까닭·바뀐 것·이름표 · 수익률 0% (예전 추정 0 이 합계에)", async () => {
+    const { returns, list, rows } = await kr((i) => [i < 6 ? sam(10, 1000, 100) : sam(35, 875, 25)], [tradeRow("s1", "005930", "SELL", [{ q: 5, a: 125, at: at(6, "10:00") }])]);
+    expect(returns).toMatchObject({ ready: true, twr: 0, pnl: 0, sells: 125, uncertainSkipped: [DAYS[6]] });
+    const change = "수량 10 → 35주 · 기록된 매매대로라면 5주";
+    expect(rows.find((x) => x.orderId === "s1")!.realized).toMatchObject({ ...dropped, change, guess: "1→4 분할로 보여요(추정)" });
+    expect(list.summary.realized).toMatchObject({ KRW: null, USD: null, krwTotal: null, estimatedIncluded: false });
+    expect(list.summary.excludedSells).toEqual([
+      { key: "3:s1:0", code: "005930", name: "삼성전자", date: "2026-10-07", quantity: 5, currency: "KRW", reason: REASONS.unexplained, change, guess: "1→4 분할로 보여요(추정)" },
+    ]);
+    expect(list.days.find((d: { date: string }) => d.date === "2026-10-07").realized).toMatchObject({ KRW: null });
+  });
+
+  it("1→4 분할 뒤 같은 날 모두 매도 · 4→1 병합 뒤 모두 매도 (다음 기록 0주): 손익 없음, 이름표만, 수익률 0% (예전 가짜 −75%·+75% → 4차 추정 0)", async () => {
+    const split = await kr((i) => (i < 6 ? [sam(1000, 1_000_000, 1000)] : []), [tradeRow("s4", "005930", "SELL", [{ q: 4000, a: 1_000_000, at: at(6, "10:00") }])]);
+    expect(split.returns).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, sells: 1_000_000, uncertainSkipped: [DAYS[6]] });
+    expect(split.rows.find((x) => x.orderId === "s4")!.realized).toMatchObject({ ...dropped, guess: "1→4 분할로 보여요(추정)" });
+    expect(split.rows.filter((x) => x.kind === "change")).toMatchObject([{ quantity: 3000, change: { kind: "unexplained", qty: 3000, text: "기록된 매도가 그때 가진 수량보다 많았어요 · 수량 1,000 → 0주" } }]);
+    expect(split.list.summary.realized.KRW).toBeNull();
+    const merge = await kr((i) => (i < 6 ? [sam(1000, 1_000_000, 1000)] : []), [tradeRow("s5", "005930", "SELL", [{ q: 250, a: 1_000_000, at: at(6, "10:00") }])]);
+    expect(merge.returns).toMatchObject({ ready: true, twr: 0, pnl: 0 });
+    expect(merge.rows.find((x) => x.orderId === "s5")!.realized).toMatchObject({ ...dropped, guess: "4→1 병합으로 보여요(추정)" });
+    expect(merge.rows.filter((x) => x.kind === "change")).toMatchObject([{ quantity: 750, change: { qty: -750, text: "수량 1,000 → 0주 · 기록된 매매대로라면 750주" } }]);
+  });
+
+  it("주문 내역에 없는 입고 5주 + 15주 모두 매도: 손익 없음 · 수익률은 입고 흐름 값을 매기지 않고 그 구간을 건너뜀 (예전 순서 추정 +300 · +12%)", async () => {
+    const { returns, rows } = await kr((i) => (i < 6 ? [sam(10, 1000, 100)] : []), [tradeRow("s2", "005930", "SELL", [{ q: 15, a: 1800, at: at(6, "10:00") }])]);
+    expect(returns).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, sells: 1800, uncertainSkipped: [DAYS[6]] });
+    expect(rows.find((x) => x.orderId === "s2")!.realized).toMatchObject({ ...dropped, change: "기록된 매도가 그때 가진 수량보다 많았어요 · 수량 10 → 0주", guess: null });
+  });
+
+  it("종목이 통째로 사라지거나(전량 출고·상장폐지) 일부만 나가면(주문 내역에 없음) 그 구간은 건너뜀 — 가짜 손실 없이 0%", async () => {
+    const whole = await kr((i) => (i < 6 ? [sam(1, 1000, 1000)] : []), []);
+    expect(whole.returns).toMatchObject({ ready: true, twr: 0, pnl: 0, sells: 0, uncertainSkipped: [DAYS[6]] });
+    const half = await kr((i) => [i < 6 ? sam(1, 1000, 1000) : sam(0.5, 500, 1000)], []);
+    expect(half.returns).toMatchObject({ ready: true, twr: 0, pnl: 0, uncertainSkipped: [DAYS[6]] });
+    expect(half.rows.filter((x) => x.kind === "change")).toMatchObject([{ quantity: 0.5, change: { qty: -0.5, text: "수량 1 → 0.5주 · 그 사이 기록된 매매 없음" } }]);
+  });
+
+  it("1→4 분할 + 입고 400주 + 400주 매도 · 1/10 병합 뒤 크게 내린 가격에 모두 매도 · 거래정지 날 0주였다가 분할 4,000주 매도: 모두 손익 없음·수익률 0% (예전 추정 경로 −40.5% · +49.85% · −74.98%)", async () => {
+    const mixed = await kr((i) => [i < 6 ? sam(1000, 1_000_000, 1000) : sam(4000, 1_000_000, 250)], [tradeRow("s8", "005930", "SELL", [{ q: 400, a: 100_000, at: at(6, "10:00") }])]);
+    expect(mixed.returns).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, sells: 100_000, uncertainSkipped: [DAYS[6]] });
+    expect(mixed.rows.find((x) => x.orderId === "s8")!.realized).toMatchObject({ ...dropped, guess: null });
+    expect(mixed.rows.filter((x) => x.kind === "change")).toHaveLength(1);
+    const merged = await kr((i) => (i < 6 ? [sam(1000, 1_000_000, 1000)] : []), [tradeRow("s9", "005930", "SELL", [{ q: 100, a: 600_000, at: at(6, "10:00") }])]);
+    expect(merged.returns).toMatchObject({ ready: true, twr: 0, pnl: 0, uncertainSkipped: [DAYS[6]] });
+    expect(merged.rows.find((x) => x.orderId === "s9")!.realized).toMatchObject(dropped);
+    const halted = await kr((i) => (i < 6 ? [sam(1000, 1_000_000, 1000)] : []), [tradeRow("s7", "005930", "SELL", [{ q: 4000, a: 1_000_000, at: at(7, "10:00") }])]);
+    expect(halted.returns).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, sells: 1_000_000, uncertainSkipped: [DAYS[6], DAYS[7]] });
+    expect(halted.rows.find((x) => x.orderId === "s7")!.realized).toMatchObject(dropped);
+  });
+
+  it("권리락 뒤 새 주식이 늦게 들어옴 + 그 사이 매도 (한국 −50%): 권리락부터 새 주식 기록까지 매도는 '계산에서 뺀 매도', 수익률은 그 구간을 건너뜀 · 새 주식 뒤 매도는 토스 평균에서 보통 계산", async () => {
+    const rows: Array<[number, number, number]> = [
+      [1000, 1_000_000, 1000],
+      [1000, 1_000_000, 1000],
+      [1000, 1_000_000, 500],
+      [800, 800_000, 505],
+      [800, 800_000, 510],
+      [1800, 800_000, 500],
+    ];
+    const r = await kr((i) => {
+      const x = rows[i] ?? [900, 400_000, 520];
+      return [sam(x[0], x[1], x[2])];
+    }, [tradeRow("w1", "005930", "SELL", [{ q: 200, a: 101_000, at: at(3, "10:00") }]), tradeRow("w2", "005930", "SELL", [{ q: 900, a: 468_000, at: at(6, "10:00") }])]);
+    expect(r.rows.find((x) => x.orderId === "w1")!.realized).toMatchObject({ ...dropped, reason: REASONS.possibleAction, change: "9월 30일 기록: 주가 1,000원 → 500원 (−50%) · 주식 수 1,000주 그대로", guess: "1→2 분할·무상증자일 수 있어요(추정)" });
+    expect(r.rows.find((x) => x.orderId === "w2")!.realized).toMatchObject({ status: "ok", gross: 68_000, costAmount: 400_000 });
+    expect(r.list.summary.realized.KRW).toBe(68_000);
+    expect(r.list.summary.excludedSells.map((x: { key: string; reason: string }) => [x.key, x.reason])).toEqual([["3:w1:0", REASONS.possibleAction]]);
+    expect(r.rows.filter((x) => x.kind === "change").map((x) => x.change.kind)).toEqual(["unexplained", "possible-action"]);
+    // 새 주식 뒤 구간(+36,000 ÷ 901,000)만 · 기간 손익도 그 구간 몫만
+    expect(r.returns).toMatchObject({ ready: true, twr: 4, pnl: 36_000, uncertainSkipped: [DAYS[2], DAYS[3], DAYS[4], DAYS[5]] });
+  });
+
+  it("분사처럼 수량은 같은데 토스 매입금액이 줄고 새 종목이 들어옴: 수익률은 그 구간을 건너뜀 (새 종목 매입금액과 상관없이 — 예전 짝짓기 경로 −16.67%)", async () => {
+    for (const childCost of [20_000, 30_000]) {
+      const t = await setup({ seed: false, now: LATER });
+      const parent = (cost: number, price: number): H => ({ code: "005930", name: "삼성전자", qty: 1000, cost, price });
+      const child: H = { code: "000660", name: "SK하이닉스", qty: 200, cost: childCost, price: 100 };
+      await t.db
+        .insertInto("account_snapshots")
+        .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 6 ? [parent(100_000, 100)] : [parent(80_000, 80), child])))
+        .execute();
+      expect((await t.get("/api/journal/returns?preset=1M&market=KR")).body).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, uncertainSkipped: [DAYS[6]] });
+      await t.app.close();
+    }
+  });
+
+  it("계좌가 새로 기록에 들어오면(계좌 목록이 바뀜) 그 구간은 건너뜀 — 새 계좌 보유가 수익으로 보이지 않게", async () => {
+    const t = await setup({ seed: false, now: LATER });
+    const other: H = { code: "005930", name: "삼성전자", qty: 10, cost: 1000, price: 100, account: 4 };
+    await t.db
+      .insertInto("account_snapshots")
+      .values(DAYS.map((d, i) => (i < 6 ? snapRow(d, "KR", at(i, "16:05"), [b]) : snapRow(d, "KR", at(i, "16:05"), [b, other], { accounts: [3, 4] }))))
+      .execute();
+    expect((await t.get("/api/journal/returns?preset=1M&market=KR")).body).toMatchObject({ ready: true, twr: 0, pnl: 0, uncertainSkipped: [DAYS[6]] });
     await t.app.close();
   });
 
-  it("양도세(4차): 회사 행동으로 설명되지 않는 '많이 판 매도'(순서 추정)는 기본으로 합계에서 빼고 까닭·추정 양도차익을 따로 — includeUncertain=1 이면 넣는다", async () => {
-    const t = await setup({ seed: false });
-    await t.db.insertInto("account_snapshots").values(usSnaps({ code: "SOXL", name: "SOXL", qty: 10, cost: 1000, price: 100, costKrw: 1_390_000 })).execute();
-    // 10주 기록 → 15주를 $120 에 팖 (1.5배 무상증자라면 약 $67 — 가격이 맞지 않아 주문 내역에 없는 입고 5주로 본다)
-    await t.db
-      .insertInto("trade_executions")
-      .values([tradeRow("b1", "SOXL", "BUY", [{ q: 10, a: 1000, at: TS("2026-09-01T23:00:00") }]), tradeRow("x5", "SOXL", "SELL", [{ q: 15, a: 1800, at: TS("2026-09-28T23:30:00") }])])
-      .execute();
-    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
-    const { body } = await t.get("/api/journal/tax?year=2026");
-    expect(body.items).toEqual([]);
-    expect(body.totals).toMatchObject({ net: 0, tax: 0, sells: 0 });
-    expect(body.excluded).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: TAX_EXCLUDE_REASON.uncertain }]);
-    expect(body).toMatchObject({ includeUncertain: false, uncertainExcluded: 1, uncertainGainKrw: 405_000, complete: false, estimatedIncluded: 0 });
-    expect(body.uncertainItems).toMatchObject([{ key: "3:x5:0", proceedsKrw: 2_430_000, costKrw: 2_025_000, gainKrw: 405_000, estimate: { status: "order-uncertain", reason: REASONS.oversoldAfter } }]);
-    const inc = (await t.get("/api/journal/tax?year=2026&includeUncertain=1")).body;
-    expect(inc).toMatchObject({ includeUncertain: true, uncertainExcluded: 0, excluded: [], estimatedIncluded: 1 });
-    expect(inc.totals).toMatchObject({ net: 405_000, sells: 1 });
-    await t.app.close();
+  it("양도세: 미국 분할 날 매도 · 분할 뒤 모두 매도 · 많이 판 매도 · 1대8 병합 · 가격 모르는 병합 — 모두 합계에서 빠지고 '계산에서 뺀 매도'에 (includeUncertain 이어도)", async () => {
+    const cases: Array<{ held: H; sell: [number, number]; guess: string | null; change: string; later?: boolean }> = [
+      { held: { code: "SOXL", name: "SOXL", qty: 10, cost: 1000, price: 100, costKrw: 1_390_000 }, sell: [5, 125], guess: "1→4 분할로 보여요(추정)", change: "수량 10 → 35주 · 기록된 매매대로라면 5주", later: true },
+      { held: { code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 100, costKrw: 139_000_000 }, sell: [4000, 100_000], guess: "1→4 분할로 보여요(추정)", change: "기록된 매도가 그때 가진 수량보다 많았어요 · 수량 1,000 → 0주" },
+      { held: { code: "SOXL", name: "SOXL", qty: 10, cost: 1000, price: 100, costKrw: 1_390_000 }, sell: [15, 1800], guess: null, change: "기록된 매도가 그때 가진 수량보다 많았어요 · 수량 10 → 0주" },
+      { held: { code: "SOXL", name: "SOXL", qty: 1003, cost: 100_300, price: 100, costKrw: 139_417_000 }, sell: [126, 100_800], guess: "8→1 병합으로 보여요(추정)", change: "수량 1,003 → 0주 · 기록된 매매대로라면 877주" },
+      { held: { code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 0, costKrw: 139_000_000 }, sell: [250, 100_000], guess: null, change: "수량 1,000 → 0주 · 기록된 매매대로라면 750주" },
+    ];
+    for (const c of cases) {
+      const t = await setup({ seed: false });
+      const snaps = c.later
+        ? [snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [c.held]), snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), [{ ...c.held, qty: 35, cost: 875, price: 25, costKrw: 1_216_250 }])]
+        : usSnaps(c.held);
+      await t.db.insertInto("account_snapshots").values(snaps).execute();
+      await t.db
+        .insertInto("trade_executions")
+        .values([tradeRow("b1", "SOXL", "BUY", [{ q: c.held.qty, a: c.held.cost, at: TS("2026-09-01T23:00:00") }]), tradeRow("x1", "SOXL", "SELL", [{ q: c.sell[0], a: c.sell[1], at: TS("2026-09-28T23:30:00") }])])
+        .execute();
+      await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
+      for (const inc of ["", "&includeUncertain=1"]) {
+        const { body } = await t.get(`/api/journal/tax?year=2026${inc}`);
+        expect(body.items, c.change).toEqual([]);
+        expect(body.totals, c.change).toMatchObject({ net: 0, tax: 0, sells: 0 });
+        expect(body, c.change).toMatchObject({ complete: false, estimatedIncluded: 0, uncertainExcluded: 0, uncertainGainKrw: null });
+        expect(body.excluded, c.change).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: TAX_EXCLUDE_REASON.unexplained }]);
+        expect(body.unexplainedSells, c.change).toEqual([
+          { key: "3:x1:0", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", quantity: c.sell[0], proceedsUsd: c.sell[1], reason: REASONS.unexplained, change: c.change, guess: c.guess },
+        ]);
+      }
+      await t.app.close();
+    }
   });
 
-  it("양도세(5차): 미국 1대8 병합 1,003주 → 126주(끝수 올림) 뒤 $800 에 모두 매도 — 양도차익 +675,000원·세액 0 (예전 +119,070,000원·세액 25,645,400원)", async () => {
-    const t = await setup({ seed: false });
-    await t.db.insertInto("account_snapshots").values(usSnaps({ code: "SOXL", name: "SOXL", qty: 1003, cost: 100_300, price: 100, costKrw: 139_417_000 })).execute();
-    await t.db
-      .insertInto("trade_executions")
-      .values([tradeRow("b1", "SOXL", "BUY", [{ q: 1003, a: 100_300, at: TS("2026-09-01T23:00:00") }]), tradeRow("m8", "SOXL", "SELL", [{ q: 126, a: 100_800, at: TS("2026-09-28T23:30:00") }])])
-      .execute();
-    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
-    const { body } = await t.get("/api/journal/tax?year=2026");
-    expect(body.items).toMatchObject([{ key: "3:m8:0", proceedsKrw: 136_080_000, costKrw: 135_405_000, gainKrw: 675_000, estimate: { status: "estimated", reason: REASONS.split } }]);
-    expect(body.totals).toMatchObject({ net: 675_000, tax: 0, sells: 1 });
-    expect(body).toMatchObject({ excluded: [], uncertainExcluded: 0, complete: true });
-    await t.app.close();
-  });
-
-  it("양도세(5차): 직전 가격이 없는 1대4 병합 뒤 모두 매도 — 확인하지 못해 합계에서 빼고 까닭·추정 양도차익은 따로 (예전 +$75,000 이 '추정 포함'으로 세액 21,725,000원)", async () => {
-    const t = await setup({ seed: false });
-    await t.db.insertInto("account_snapshots").values(usSnaps({ code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 0, costKrw: 139_000_000 })).execute();
-    await t.db
-      .insertInto("trade_executions")
-      .values([tradeRow("b1", "SOXL", "BUY", [{ q: 1000, a: 100_000, at: TS("2026-09-01T23:00:00") }]), tradeRow("m4", "SOXL", "SELL", [{ q: 250, a: 100_000, at: TS("2026-09-28T23:30:00") }])])
-      .execute();
-    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
-    const { body } = await t.get("/api/journal/tax?year=2026");
-    expect(body.items).toEqual([]);
-    expect(body.totals).toMatchObject({ net: 0, tax: 0, sells: 0 });
-    expect(body.excluded).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: TAX_EXCLUDE_REASON.uncertain }]);
-    expect(body).toMatchObject({ uncertainExcluded: 1, uncertainGainKrw: 101_250_000, estimatedIncluded: 0, complete: false });
-    expect(body.uncertainItems).toMatchObject([{ key: "3:m4:0", estimate: { status: "order-uncertain", reason: REASONS.changeUncertain } }]);
-    await t.app.close();
-  });
-
-  it("양도세(5차): 수량은 같은데 토스 매입금액이 줄어든 뒤(분사 등) 모두 매도 — 원화 취득가를 같은 비율로 고쳐 '추정 포함' (예전 가짜 손실 −27,000,000원이 '추정' 표시 없이)", async () => {
+  it("양도세: 분사 당일 매도(토스 매입금액만 줄어듦) · 분할 날 늦게 본 매수 + 매도 — 합계에서 빠짐 · 분사가 기록된 뒤 매도는 달러 손익은 토스 값으로 보통, 결제일 원화 취득가는 모름", async () => {
     const t = await setup({ seed: false });
     await t.db
       .insertInto("account_snapshots")
       .values([
-        snapRow("2026-09-24", "US", TS("2026-09-25T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 100, costKrw: 139_000_000 }]),
-        snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 1000, cost: 80_000, price: 80, costKrw: 111_200_000 }]),
-        snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), []),
+        snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 100, costKrw: 139_000_000 }]),
+        snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 500, cost: 40_000, price: 40, costKrw: 55_600_000 }]),
       ])
       .execute();
     await t.db
       .insertInto("trade_executions")
-      .values([tradeRow("b1", "SOXL", "BUY", [{ q: 1000, a: 100_000, at: TS("2026-09-01T23:00:00") }]), tradeRow("p1", "SOXL", "SELL", [{ q: 1000, a: 80_000, at: TS("2026-09-28T23:30:00") }])])
+      .values([
+        tradeRow("b1", "SOXL", "BUY", [{ q: 1000, a: 100_000, at: TS("2026-09-01T23:00:00") }]),
+        tradeRow("p2", "SOXL", "SELL", [{ q: 500, a: 20_000, at: TS("2026-09-28T23:30:00") }]),
+        tradeRow("p3", "SOXL", "SELL", [{ q: 100, a: 4_200, at: TS("2026-09-29T23:30:00") }]),
+      ])
       .execute();
-    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
+    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30"), std("2026-10-01")]).execute();
     const { body } = await t.get("/api/journal/tax?year=2026");
-    expect(body.items).toMatchObject([{ key: "3:p1:0", proceedsKrw: 108_000_000, costKrw: 108_000_000, gainKrw: 0, estimate: { status: "estimated", reason: REASONS.costChanged } }]);
-    expect(body).toMatchObject({ estimatedIncluded: 1, estimatedSells: [{ code: "SOXL", name: "SOXL", count: 1, reason: REASONS.costChanged }] });
-    // 기록 탭의 달러 실현손익은 토스 매입금액에서 출발 — 그대로 'ok'
+    expect(body.items).toEqual([]);
+    expect(body.excluded).toEqual([
+      { code: "SOXL", name: "SOXL", count: 1, reason: TAX_EXCLUDE_REASON.unexplained },
+      { code: "SOXL", name: "SOXL", count: 1, reason: TAX_EXCLUDE_REASON.changed },
+    ]);
+    expect(body.unexplainedSells).toMatchObject([{ key: "3:p2:0", change: "토스 매입금액 $40,000.00 · 기록된 매매대로라면 $50,000.00 (수량 500주는 같아요)" }]);
     const list = items((await t.get("/api/journal?from=2026-09-01&to=2026-09-30")).body);
-    expect(list.find((x) => x.orderId === "p1")!.realized).toMatchObject({ status: "ok", gross: 0 });
+    expect(list.find((x) => x.orderId === "p2")!.realized).toMatchObject(dropped);
+    expect(list.find((x) => x.orderId === "p3")!.realized).toMatchObject({ status: "ok", gross: -3_800, costAmount: 8_000 });
     await t.app.close();
+
+    const u = await setup({ seed: false });
+    await u.db
+      .insertInto("account_snapshots")
+      .values([
+        snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 100, costKrw: 139_000_000 }]),
+        snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 4000, cost: 120_000, price: 25, costKrw: 166_800_000 }]),
+      ])
+      .execute();
+    await u.db
+      .insertInto("trade_executions")
+      .values([
+        tradeRow("b1", "SOXL", "BUY", [{ q: 1000, a: 100_000, at: TS("2026-09-01T23:00:00") }]),
+        tradeRow("e4", "SOXL", "SELL", [{ q: 2000, a: 50_000, at: TS("2026-09-28T23:30:00") }]),
+        tradeRow("b2", "SOXL", "BUY", [{ q: 2000, a: 70_000, at: TS("2026-09-29T05:05:00"), basis: "seen" }]),
+      ])
+      .execute();
+    await u.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30"), std("2026-10-01")]).execute();
+    const ub = (await u.get("/api/journal/tax?year=2026")).body;
+    expect(ub).toMatchObject({ items: [], uncertainExcluded: 0, estimatedIncluded: 0 });
+    expect(ub.unexplainedSells.map((x: { key: string }) => x.key)).toEqual(["3:e4:0"]);
+    await u.app.close();
   });
 
-  it("회귀(5차): 권리락 가격이 먼저 내리고 3거래일 뒤 새 주식이 들어와 그날 모두 매도 — 무상증자로 봐 +1%·+10,000 (예전 −49.45%·실현손익 −990,000)", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = (price: number) => ({ code: "005930", name: "삼성전자", qty: 1000, cost: 1_000_000, price });
-    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 2 ? [a(1000), b] : i < 6 ? [a(500), b] : [b])))
-      .execute();
-    await t.db.insertInto("trade_executions").values([tradeRow("s6", "005930", "SELL", [{ q: 2000, a: 1_010_000, at: at(6, "10:00") }])]).execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 1, pnl: 10_000, sells: 1_010_000, transfersEstimated: 0 });
-    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
-    expect(list.find((x) => x.orderId === "s6")!.realized).toMatchObject({ status: "estimated", reason: REASONS.split, gross: 10_000, avgCost: 500 });
-    expect(list.filter((x) => x.kind === "estimated")).toMatchObject([{ estimated: { qty: 1000, reason: "split", ratio: 2 } }]);
-    await t.app.close();
-  });
-
-  it("회귀(5차): 거래정지 날 0주로 보였다가 다음 날 분할된 4,000주가 들어와 모두 매도 — 입고 흐름을 판 가격으로 재어 0% (예전 −74.98%)", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = { code: "005930", name: "삼성전자", qty: 1000, cost: 1_000_000, price: 1000 };
-    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 6 ? [a, b] : [b])))
-      .execute();
-    await t.db.insertInto("trade_executions").values([tradeRow("s7", "005930", "SELL", [{ q: 4000, a: 1_000_000, at: at(7, "10:00") }])]).execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 1_000_000, sells: 2_000_000, transfersEstimated: 2 });
-    await t.app.close();
+  it("보통 매매만 있는 계좌는 그대로: 실현손익·양도세·수익률이 이 변경 전과 같다 (계산에서 뺀 매도 0건)", async () => {
+    const { get, db, app } = await setup();
+    // 첫 양도세 테스트와 같은 결제일 환율 (9/3 1,369.4 · 9/28 1,352 · 9/29 1,350) — 같은 +22,266원
+    await db.insertInto("fx_rates").values([{ ...std("2026-09-03"), rate: 1369.4 }, { ...std("2026-09-28"), rate: 1352 }, std("2026-09-29")]).execute();
+    const list = (await get("/api/journal?from=2026-09-01&to=2026-09-30")).body;
+    expect(list.summary.excludedSells).toEqual([]);
+    expect(list.summary.realized).toEqual({ KRW: 20_000, USD: 17.43, krwTotal: 44_703, krwTotalEstimated: true, estimatedIncluded: false });
+    const tax = (await get("/api/journal/tax?year=2026")).body;
+    expect(tax).toMatchObject({ complete: true, excluded: [], unexplainedSells: [], totals: { net: 22_266, sells: 1 } });
+    await app.close();
   });
 });
 
@@ -964,111 +925,3 @@ describe("검토 반영 3차: 2025 추석 연휴 전후 미국 매수·매도가
   });
 });
 
-describe("검토 반영 6차: 분사·분할과 같은 구간의 입고·순서 모름·알아보지 못한 병합이 양도세·수익률에 가짜 손익을 만들지 않는다", () => {
-  const DAYS = ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"];
-  const LATER = new Date("2026-10-15T20:00:00+09:00");
-  const at = (i: number, hm: string) => TS(`${DAYS[i]}T${hm}:00`);
-  const items = (body: { days: Array<{ items: Array<Record<string, any>> }> }) => body.days.flatMap((d) => d.items);
-  const std = (d: string) => ({ kind: "krw-std", at: d, rate: 1350, source: "smbs", fetched_at: "x" });
-  const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
-
-  it("양도세: 분사 당일(다음 기록 전) 판 매도는 구간 처음에 토스 매입금액 비율로 고쳐 −27,000,000원이지만 순서 추정으로 합계에서 뺀다 (예전 'ok' −40,500,000원이 합계에 · 추정 0건)", async () => {
-    const t = await setup({ seed: false });
-    await t.db
-      .insertInto("account_snapshots")
-      .values([
-        snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 100, costKrw: 139_000_000 }]),
-        snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 500, cost: 40_000, price: 40, costKrw: 55_600_000 }]),
-      ])
-      .execute();
-    await t.db
-      .insertInto("trade_executions")
-      .values([tradeRow("b1", "SOXL", "BUY", [{ q: 1000, a: 100_000, at: TS("2026-09-01T23:00:00") }]), tradeRow("p2", "SOXL", "SELL", [{ q: 500, a: 20_000, at: TS("2026-09-28T23:30:00") }])])
-      .execute();
-    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
-    const { body } = await t.get("/api/journal/tax?year=2026");
-    expect(body.items).toEqual([]);
-    expect(body).toMatchObject({ uncertainExcluded: 1, uncertainGainKrw: -27_000_000, estimatedIncluded: 0, complete: false });
-    expect(body.excluded).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: TAX_EXCLUDE_REASON.uncertain }]);
-    expect(body.uncertainItems).toMatchObject([{ key: "3:p2:0", proceedsKrw: 27_000_000, costKrw: 54_000_000, gainKrw: -27_000_000, estimate: { status: "order-uncertain", reason: REASONS.costChangedSell } }]);
-    await t.app.close();
-  });
-
-  it("양도세: 1→4 분할 날 매도 + 늦게 본 매수(순서 모름) — 매도 먼저로 분할을 알아보고 양도차익 0 · 순서 추정으로 합계에서 뺌 (예전 −85,500,000원이 '추정 포함'으로 합계에)", async () => {
-    const t = await setup({ seed: false });
-    await t.db
-      .insertInto("account_snapshots")
-      .values([
-        snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 1000, cost: 100_000, price: 100, costKrw: 139_000_000 }]),
-        snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 4000, cost: 120_000, price: 25, costKrw: 166_800_000 }]),
-      ])
-      .execute();
-    await t.db
-      .insertInto("trade_executions")
-      .values([
-        tradeRow("b1", "SOXL", "BUY", [{ q: 1000, a: 100_000, at: TS("2026-09-01T23:00:00") }]),
-        tradeRow("e4", "SOXL", "SELL", [{ q: 2000, a: 50_000, at: TS("2026-09-28T23:30:00") }]),
-        tradeRow("b2", "SOXL", "BUY", [{ q: 2000, a: 70_000, at: TS("2026-09-29T05:05:00"), basis: "seen" }]),
-      ])
-      .execute();
-    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
-    const { body } = await t.get("/api/journal/tax?year=2026");
-    expect(body.items).toEqual([]);
-    expect(body.uncertainItems).toMatchObject([{ key: "3:e4:0", gainKrw: 0, estimate: { status: "order-uncertain", reason: REASONS.orderUncertain } }]);
-    expect(body).toMatchObject({ uncertainExcluded: 1, estimatedIncluded: 0 });
-    await t.app.close();
-  });
-
-  it("수익률: 1→4 분할 + 입고 400주 + 400주 매도 (한국) — 분할 줄 + 입고 400주만 흐름으로 0% (예전 이관 +3,400주로 −40.5%) · 목록 키가 겹치지 않는다", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = (qty: number, price: number) => ({ code: "005930", name: "삼성전자", qty, cost: 1_000_000, price });
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), [i < 6 ? a(1000, 1000) : a(4000, 250), b])))
-      .execute();
-    await t.db.insertInto("trade_executions").values([tradeRow("s8", "005930", "SELL", [{ q: 400, a: 100_000, at: at(6, "10:00") }])]).execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 100_000, sells: 100_000, transfersEstimated: 1, uncertainSkipped: [] });
-    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
-    expect(list.find((x) => x.orderId === "s8")!.realized).toMatchObject({ status: "order-uncertain", reason: REASONS.splitTransfer, gross: 0 });
-    const est = list.filter((x) => x.kind === "estimated");
-    expect(est).toHaveLength(2);
-    expect(est).toEqual(
-      expect.arrayContaining([expect.objectContaining({ estimated: { qty: 3000, reason: "split", ratio: 4 } }), expect.objectContaining({ estimated: { qty: 400, reason: "transfer" } })]),
-    );
-    expect(new Set(est.map((x) => x.key)).size).toBe(2);
-    await t.app.close();
-  });
-
-  it("수익률: 1/10 병합 뒤 크게 내린 가격에 모두 매도(알아보지 못함) — 그 구간을 건너뛰어 0% (예전 +49.85%)", async () => {
-    const t = await setup({ seed: false, now: LATER });
-    const a = { code: "005930", name: "삼성전자", qty: 1000, cost: 1_000_000, price: 1000 };
-    await t.db
-      .insertInto("account_snapshots")
-      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 6 ? [a, b] : [b])))
-      .execute();
-    await t.db.insertInto("trade_executions").values([tradeRow("s9", "005930", "SELL", [{ q: 100, a: 600_000, at: at(6, "10:00") }])]).execute();
-    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, uncertainSkipped: [DAYS[6]] });
-    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
-    expect(list.find((x) => x.orderId === "s9")!.realized).toMatchObject({ status: "order-uncertain", reason: REASONS.changeUncertain });
-    await t.app.close();
-  });
-
-  it("수익률: 분사 — 부모 토스 매입금액이 준 만큼(20,000)과 새 종목 입고 매입금액이 같으면 흐름이 아니다: 0% (예전 −16.67%) · 맞지 않으면 예전처럼 입고", async () => {
-    const run = async (childCost: number) => {
-      const t = await setup({ seed: false, now: LATER });
-      const parent = (cost: number, price: number) => ({ code: "005930", name: "삼성전자", qty: 1000, cost, price });
-      const child = { code: "000660", name: "SK하이닉스", qty: 200, cost: childCost, price: 100 };
-      await t.db
-        .insertInto("account_snapshots")
-        .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 6 ? [parent(100_000, 100)] : [parent(80_000, 80), child])))
-        .execute();
-      const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
-      await t.app.close();
-      return body;
-    };
-    expect(await run(20_000)).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, transfersEstimated: 0 });
-    expect(await run(30_000)).toMatchObject({ ready: true, twr: -16.67, buys: 20_000, transfersEstimated: 1 });
-  });
-});

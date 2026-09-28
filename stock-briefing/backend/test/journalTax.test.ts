@@ -121,57 +121,60 @@ describe("한 해 합계 (결제일 기준 연도, 손익통산)", () => {
   });
 });
 
-describe("검토 반영: 평균 구매가를 추정한 매도 — 분할·이관 전후는 합계에 넣고 '추정 포함', 순서 모름은 기본으로 합계에서 뺀다", () => {
-  const split = { status: "estimated" as const, reason: "분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요." };
+describe("검토 반영 7차: 설명되지 않은 기간의 매도는 늘 합계에서 빼고 따로 · 그 뒤 매도는 취득가 모름 · 순서 모름은 기본으로 합계에서 뺀다", () => {
   const order = { status: "order-uncertain" as const, reason: "같은 날 사고판 순서를 몰라 추정했어요." };
+  const why = { reason: "이 기간은 주식 수·매입금액이 기록과 달라 손익을 계산하지 않았어요.", change: "수량 1,000 → 0주 · 기록된 매매대로라면 750주", guess: "4→1 병합으로 보여요(추정)" };
   const rows = () => [
     item({ key: "a", gainParts: { proceeds: 1_000_000, cost: 900_000, costs: null } }),
-    item({ key: "b", gainParts: { proceeds: 1_000_000, cost: 900_000, costs: null }, estimate: split }),
-    item({ key: "c", gainParts: { proceeds: 1_000_000, cost: 1_100_000, costs: null }, estimate: split }),
+    item({ key: "u", quantity: 250, proceedsUsd: 100_000, gainParts: null, excluded: "unexplained", unexplained: why }),
+    item({ key: "c", code: "NVDA", name: "엔비디아", gainParts: null, excluded: "changed" }),
     item({ key: "d", code: "TSLA", name: "테슬라", gainParts: { proceeds: 500_000, cost: 400_000, costs: null }, estimate: order }),
-    item({ key: "e", gainParts: null, excluded: "cost", estimate: split }),
   ];
 
-  it("기본: estimated 는 합계에 (건수·종목·까닭), order-uncertain 은 합계에서 빼고 빠진 매도에 까닭 · 건수·추정 양도차익·매도별 계산은 따로", () => {
+  it("기본: 합계는 온전한 매도만 — 설명되지 않은 매도는 까닭·바뀐 것·이름표와 함께 따로(숫자 없음), 변화 뒤 매도는 취득가 모름, 순서 모름은 빼고 참고 값", () => {
     const s = taxSummary(2026, rows());
-    expect(s.totals).toMatchObject({ sells: 3, net: 100_000 });
-    expect(s.items.map((x) => x.key)).toEqual(["a", "b", "c"]);
-    expect(s.estimatedIncluded).toBe(2);
-    expect(s.estimatedSells).toEqual([{ code: "SOXL", name: "SOXL", count: 2, reason: split.reason }]);
-    expect(s.items.find((x) => x.key === "a")!.estimate).toBeUndefined();
-    expect(s.items.find((x) => x.key === "b")!.estimate).toEqual(split);
+    expect(s.totals).toMatchObject({ sells: 1, net: 100_000 });
+    expect(s.items.map((x) => x.key)).toEqual(["a"]);
     expect(s.excluded).toEqual([
-      { code: "SOXL", name: "SOXL", count: 1, reason: "기록 시작 전에 산 몫이라 취득가를 몰라요" },
+      { code: "NVDA", name: "엔비디아", count: 1, reason: TAX_EXCLUDE_REASON.changed },
+      { code: "SOXL", name: "SOXL", count: 1, reason: TAX_EXCLUDE_REASON.unexplained },
       { code: "TSLA", name: "테슬라", count: 1, reason: TAX_EXCLUDE_REASON.uncertain },
     ]);
-    expect(s).toMatchObject({ includeUncertain: false, uncertainExcluded: 1, uncertainGainKrw: 100_000, complete: false });
+    expect(s.unexplainedSells).toEqual([{ key: "u", code: "SOXL", name: "SOXL", tradeDate: "2026-09-25", settleDate: "2026-09-29", quantity: 250, proceedsUsd: 100_000, ...why }]);
+    expect(s).toMatchObject({ complete: false, includeUncertain: false, uncertainExcluded: 1, uncertainGainKrw: 100_000, estimatedIncluded: 0, estimatedSells: [] });
     expect(s.uncertainItems).toMatchObject([{ key: "d", gainKrw: 100_000, estimate: order }]);
   });
 
-  it("includeUncertain: 예전처럼 순서 모름도 합계에 넣고 '추정 포함'으로 센다", () => {
+  it("includeUncertain: 순서 모름은 합계에 넣고 '추정 포함' — 설명되지 않은 매도는 그래도 넣지 않는다", () => {
     const s = taxSummary(2026, rows(), { includeUncertain: true });
-    expect(s.totals.sells).toBe(4);
-    expect(s.estimatedIncluded).toBe(3);
-    expect(s.estimatedSells).toEqual([
-      { code: "SOXL", name: "SOXL", count: 2, reason: split.reason },
-      { code: "TSLA", name: "테슬라", count: 1, reason: order.reason },
-    ]);
-    expect(s.excluded).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: "기록 시작 전에 산 몫이라 취득가를 몰라요" }]);
-    expect(s).toMatchObject({ includeUncertain: true, uncertainExcluded: 0, uncertainGainKrw: null, uncertainItems: [] });
+    expect(s.totals).toMatchObject({ sells: 2, net: 200_000 });
+    expect(s.estimatedIncluded).toBe(1);
+    expect(s.estimatedSells).toEqual([{ code: "TSLA", name: "테슬라", count: 1, reason: order.reason }]);
+    expect(s.unexplainedSells.map((x) => x.key)).toEqual(["u"]);
+    expect(s.excluded.map((x) => x.reason)).toEqual([TAX_EXCLUDE_REASON.changed, TAX_EXCLUDE_REASON.unexplained]);
+    expect(s).toMatchObject({ uncertainExcluded: 0, uncertainGainKrw: null, uncertainItems: [] });
   });
 
-  it("분할 뒤 전부 판 매도의 가짜 손실(−405,000,000원, 순서 모름)이 예상 세액을 몰래 0 으로 만들지 않는다", () => {
-    const fake = { status: "order-uncertain" as const, reason: "기록된 수량보다 많이 판 매도라 평균 구매가를 추정했어요 (주문 순서나 주문 내역에 없는 입고를 몰라요)." };
+  it("설명되지 않은 매도는 결제일 환율을 받는 중이어도 '받는 중'이 아니라 빠진 매도 · 다른 해(결제일 기준) 매도는 세지 않는다", () => {
+    const s = taxSummary(2026, [
+      item({ key: "u", gainParts: null, excluded: "unexplained", pending: true, unexplained: why }),
+      item({ key: "v", settleDate: "2027-01-04", gainParts: null, excluded: "unexplained", unexplained: why }),
+    ]);
+    expect(s.fxPending).toBe(0);
+    expect(s.unexplainedSells.map((x) => x.key)).toEqual(["u"]);
+    expect(s.complete).toBe(false);
+  });
+
+  it("순서 모름 매도의 큰 손실이 예상 세액을 몰래 0 으로 만들지 않는다 (넣으면 세액 0)", () => {
     const list = [
       item({ key: "real", gainParts: { proceeds: 10_000_000, cost: 5_000_000, costs: null } }),
-      item({ key: "fake", gainParts: { proceeds: 135_000_000, cost: 540_000_000, costs: null }, estimate: fake }),
+      item({ key: "fake", gainParts: { proceeds: 135_000_000, cost: 540_000_000, costs: null }, estimate: order }),
     ];
     const s = taxSummary(2026, list);
     expect(s.totals).toEqual({ gains: 5_000_000, losses: 0, net: 5_000_000, ...taxFor(5_000_000), sells: 1 });
     expect(s.totals.tax).toBe(550_000);
     expect(s).toMatchObject({ uncertainExcluded: 1, uncertainGainKrw: -405_000_000, complete: false });
     expect(s.excluded).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: TAX_EXCLUDE_REASON.uncertain }]);
-    // 넣어 보면 세액 0 — 기본으로는 이렇게 되지 않는다
     expect(taxSummary(2026, list, { includeUncertain: true }).totals.tax).toBe(0);
   });
 });

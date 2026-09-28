@@ -3,8 +3,8 @@ import { AppError } from "../lib/errors.js";
 import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
 import type { DailyRate } from "../providers/market/fxStd.js";
 import type { FeatureKey } from "./featureService.js";
-import { REASONS, replayPair, round6, roundMoney, tossCosts, type Cur, type EstimatedRow, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
-import { periodReturns, presetRange, READY_DAYS, type Preset, type RetFlow, type RetSnap, type ReturnsBody, type ReturnsMarket } from "./journalReturns.js";
+import { replayPair, round6, roundMoney, tossCosts, type ChangeRow, type Cur, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
+import { periodReturns, presetRange, READY_DAYS, type Preset, type RetFlow, type RetSkip, type RetSnap, type ReturnsBody, type ReturnsMarket } from "./journalReturns.js";
 import { tradingDate } from "./marketContext.js";
 import { isKrBankDay, taxSummary, TAX_RULES, usSettleDate, type TaxFx, type TaxSellInput } from "./taxRules.js";
 import { addDays, marketOf, type RecordMarket, type SnapshotHolding } from "./tradeRecordCalc.js";
@@ -12,7 +12,8 @@ import { parseData, STATE_KEY, tradeView, type TradeRow, type TradeView } from "
 
 /**
  * 매매일지 (3-37, 플래그 tradeJournal — tradeRecords 가 꺼져 있으면 꺼진 것으로 봄). 3-36 이 쌓은 원자료(일별 계좌 스냅샷 + 토스 주문 내역의 체결)로
- *  1) 기록: 날짜별 체결 목록, 매도마다 이동평균법 실현손익(journalCalc), 거래마다 메모(trade_notes — 서버에 저장, 백업 포함, AI 에는 넣지 않음)
+ *  1) 기록: 날짜별 체결 목록, 매도마다 이동평균법 실현손익(journalCalc), 거래마다 메모(trade_notes — 서버에 저장, 백업 포함, AI 에는 넣지 않음).
+ *     주식 수·매입금액이 기록과 다른 기간의 매도는 손익 없이 '계산에서 뺀 매도'(summary.excludedSells)로 따로 (검토 반영 7차 보수 규칙)
  *  2) 수익률: 스냅샷 시간가중 수익률(journalReturns — 10거래일 쌓인 뒤 숫자)
  *  3) 양도세 추정: 해외주식 결제일 기준환율 원화 양도차익 · 22% · 250만 원 공제(taxRules — 참고용 추정)
  * 계산은 저장하지 않고 요청 때 돌린다. 요청은 네트워크를 기다리지 않는다 — 환율(토스 과거 환율·세법 기준환율)은 fx_rates 에 있는 값만 쓰고,
@@ -52,7 +53,8 @@ export interface JournalDeps {
 
 export interface JournalItem {
   key: string;
-  kind: "fill" | "estimated";
+  /** fill = 체결 몫, change = 주문 내역으로 설명되지 않은 변화·큰 주가 변화 (그 기간은 손익·수익률 계산에서 뺌) */
+  kind: "fill" | "change";
   account: number;
   accountLabel: string | null;
   orderId: string | null;
@@ -72,7 +74,21 @@ export interface JournalItem {
   realized: Realized | null;
   afterBuy?: { avgCost: number; quantity: number } | null;
   note: string | null;
-  estimated?: { qty: number; reason: EstimatedRow["reason"]; ratio?: number };
+  /** kind 'change': 무엇이 달라졌는지 · 비율 짐작 이름표(숫자에 쓰지 않음) · 설명되지 않는 수량(뒤 기록 − 기록대로 돌린 수량) */
+  change?: { kind: ChangeRow["kind"]; text: string; guess: string | null; qty: number };
+}
+
+/** 계산에서 뺀 매도 (주식 수·매입금액이 기록과 다른 기간 — 손익 숫자 없음) */
+export interface ExcludedSell {
+  key: string;
+  code: string;
+  name: string;
+  date: string;
+  quantity: number;
+  currency: Cur;
+  reason: string;
+  change: string | null;
+  guess: string | null;
 }
 
 export interface RealizedSum {
@@ -363,13 +379,30 @@ export class JournalService {
         orders: orderSet(),
         buys: orderSet("BUY"),
         sells: orderSet("SELL"),
-        realized: { ...realizedSum(sells), estimatedIncluded: sells.some((x) => x.realized && (x.realized.status === "estimated" || x.realized.status === "order-uncertain")) },
+        realized: { ...realizedSum(sells), estimatedIncluded: sells.some((x) => x.realized?.status === "order-uncertain") },
         costs: {
           toss: sells.filter((x) => x.realized?.costs.source === "toss").length,
           estimated: sells.filter((x) => x.realized?.costs.source === "estimated").length,
           none: sells.filter((x) => !x.realized?.costs.source).length,
         },
         unknownSells: sells.filter((x) => x.realized?.status === "unknown-cost").length,
+        // 주식 수·매입금액이 기록과 다른 기간의 매도: 합계에서 빼고 까닭·바뀐 것과 함께 따로 (새것부터)
+        excludedSells: sells
+          .filter((x) => x.realized?.status === "unexplained")
+          .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.key < b.key ? 1 : -1))
+          .map(
+            (x): ExcludedSell => ({
+              key: x.key,
+              code: x.code,
+              name: x.name,
+              date: seoulDateOf(x.at),
+              quantity: x.quantity,
+              currency: x.currency,
+              reason: x.realized!.reason ?? "",
+              change: x.realized!.change ?? null,
+              guess: x.realized!.guess ?? null,
+            }),
+          ),
         truncated: truncated.filter((c) => codes.includes(c)),
       },
       days,
@@ -414,15 +447,12 @@ export class JournalService {
           });
         });
       }
-      const estKeys = new Set<string>();
-      for (const e of p.res.estimated) {
-        // 한 기록에 주식 수 변화 줄과 이관 줄이 함께 있으면(분할과 같은 구간의 입고·출고) 뒤 줄 키에 까닭을 붙인다 (화면 목록 키가 겹치지 않게)
-        const base = `est:${p.account}:${p.code}:${e.date}`;
-        const key = estKeys.has(base) ? `${base}:${e.reason}` : base;
-        estKeys.add(key);
+      for (const e of p.res.changes) {
+        // 기록마다 한 줄 (구간 끝 기록 — 짝 안에서 겹치지 않음)
+        const qty = round6(e.toQty - e.expectedQty);
         out.push({
-          key,
-          kind: "estimated",
+          key: `chg:${p.account}:${p.code}:${e.at}`,
+          kind: "change",
           account: p.account,
           accountLabel: multi ? `계좌 ${p.account}` : null,
           orderId: null,
@@ -431,7 +461,7 @@ export class JournalService {
           market: p.market,
           currency: p.currency,
           side: null,
-          quantity: Math.abs(e.qty),
+          quantity: Math.abs(qty),
           orderQuantity: 0,
           amount: 0,
           price: null,
@@ -441,7 +471,7 @@ export class JournalService {
           part: null,
           realized: null,
           note: null,
-          estimated: { qty: e.qty, reason: e.reason, ...(e.ratio !== undefined ? { ratio: e.ratio } : {}) },
+          change: { kind: e.kind, text: e.text, guess: e.guess, qty },
         });
       }
     }
@@ -468,7 +498,7 @@ export class JournalService {
     const cost = held.every((h) => h.purchaseAmount !== null || h.avgPrice !== null) ? held.reduce((s, h) => s + (h.purchaseAmount ?? (h.avgPrice ?? 0) * h.quantity), 0) : null;
     const trades = mine.flatMap((p) => p.trades);
     const sells = mine.flatMap((p) => p.fills.filter((f) => f.side === "SELL").map((f) => p.res.fills.get(f.key)?.realized ?? null));
-    const known = sells.filter((r): r is Realized => !!r && r.status !== "unknown-cost" && r.gross !== null);
+    const known = sells.filter((r): r is Realized => !!r && r.status !== "unknown-cost" && r.status !== "unexplained" && r.gross !== null);
     const dates = trades.flatMap((t) => t.fills.map((f) => seoulDateOf(f.at))).sort();
     const memo = (await this.deps.db.selectFrom("registered_stocks").select("memo").where("code", "=", code).executeTakeFirst())?.memo ?? null;
     return {
@@ -525,55 +555,18 @@ export class JournalService {
     const requested = q.preset === "custom" ? { from: q.from!, to: q.to! } : presetRange(q.preset, today);
     const [snaps, trades, toss, since] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.recordSince()]);
     const flows: RetFlow[] = [];
-    for (const t of trades) for (const f of t.fills) if (f.quantity > 0) flows.push({ market: t.market, side: t.side, amount: f.amount, at: f.at, kind: "trade" });
-    // 주문 내역에 없는 수량 변화(이관 추정)는 그 스냅샷 가격으로 들어오고 나간 것으로 (분할·병합·무상증자 같은 회사 행동은 흐름이 아님).
-    // 그 스냅샷에 종목이 없으면(전량 출고·상장폐지, 입고된 몫까지 그 구간에 다 판 경우) 그 종목이 있던 직전 스냅샷의 가격과
-    // 그 구간 평균 판 가격(있으면) 가운데 낮은 쪽으로 — 빼지 않으면 가짜 손익이 된다. 알아보지 못한 분할(늘어남)은 판 가격이, 병합(줄어듦)은
-    // 직전 가격이 한 주 값에 가까워 가짜 흐름이 가장 작다 (거래정지 날 0주로 보였다가 분할된 4,000주가 들어와 전부 판 경우 −75% → 0%).
-    // 주식 수 변화를 확인하지 못한 이관(원장의 uncertain — 알아보지 못한 병합·감자 등)은 그 구간을 수익률·기간 손익에서 건너뛴다 (검토 반영 6차)
-    const pairs = this.pairs(trades, snaps, toss);
-    const pxOf = (h: SnapshotHolding | undefined) => {
-      const v = h ? (h.regularClose ?? h.price) : null;
-      return v !== null && v !== undefined && Number.isFinite(v) ? v : null;
-    };
-    const heldIn = (x: SnapLite, account: number, code: string) => x.holdings.find((h) => h.account === account && h.code === code && h.quantity > 0);
-    const snapAt = (market: RecordMarket, at: string) => snaps.find((x) => x.status === "ok" && x.market === market && x.asOf === at);
-    // 분사 (검토 반영 6차): 같은 계좌·같은 시장·같은 기록에서 새로 나타난 종목들(입고)의 토스 매입금액 합이 다른 종목의 토스 매입금액이 줄어든 합과
-    // 1% 안에서 맞으면 그 입고는 흐름이 아니다 — 부모 종목 가격이 내린 만큼 새 종목 값이 들어온 것 (가짜 −16.67% 대신 0%)
-    const place = (account: number, market: RecordMarket, at: string) => `${account}:${market}:${at}`;
-    const shrunk = new Map<string, number>();
-    const born = new Map<string, number>();
-    const isNew = (e: EstimatedRow) => e.reason === "transfer" && Math.abs(e.fromQty) <= 1e-6 && e.qty > 0;
-    for (const p of pairs.values()) {
-      for (const c of p.res.costShifts) if (c.amount > 0) shrunk.set(place(p.account, p.market, c.at), (shrunk.get(place(p.account, p.market, c.at)) ?? 0) + c.amount);
-      for (const e of p.res.estimated) {
-        if (!isNew(e)) continue;
-        const s = snapAt(p.market, e.at);
-        const h = s ? heldIn(s, p.account, p.code) : undefined;
-        const cost = h ? h.purchaseAmount : null;
-        const k = place(p.account, p.market, e.at);
-        born.set(k, cost !== null && cost !== undefined && Number.isFinite(cost) && cost > 0 ? (born.get(k) ?? 0) + cost : NaN);
-      }
-    }
-    const spunOff = (k: string) => {
-      const dec = shrunk.get(k);
-      const got = born.get(k);
-      return dec !== undefined && got !== undefined && Number.isFinite(got) && Math.abs(got - dec) <= dec * 0.01 + 0.01;
-    };
-    for (const p of pairs.values()) {
-      for (const e of p.res.estimated) {
-        if (e.reason !== "transfer") continue;
-        if (isNew(e) && spunOff(place(p.account, p.market, e.at))) continue;
-        const s = snapAt(p.market, e.at);
-        let px = s ? pxOf(heldIn(s, p.account, p.code)) : null;
-        if (px === null) {
-          const before = snaps.filter((x) => x.status === "ok" && x.market === p.market && Date.parse(x.asOf) < Date.parse(e.at) && heldIn(x, p.account, p.code));
-          px = pxOf(before.length ? heldIn(before.at(-1)!, p.account, p.code) : undefined);
-          if (e.sellPx !== undefined && (px === null || e.sellPx < px)) px = e.sellPx;
-        }
-        // 주식 수 변화를 확인하지 못한 이관(④ — 알아보지 못한 병합·감자일 수 있음): 가격을 몰라도 그 구간을 건너뛰도록 표시만 남긴다
-        if (px === null && !e.uncertain) continue;
-        flows.push({ market: p.market, side: e.qty > 0 ? "BUY" : "SELL", amount: Math.abs(e.qty) * (px ?? 0), at: e.at, kind: "transfer", ...(e.uncertain ? { uncertain: true } : {}) });
+    for (const t of trades) for (const f of t.fills) if (f.quantity > 0) flows.push({ market: t.market, side: t.side, amount: f.amount, at: f.at });
+    // 건너뛸 구간 (검토 반영 7차 보수 규칙 — 값을 매겨 흐름으로 넣지 않는다):
+    //  ① 짝마다 원장이 설명하지 못한 구간(입고·출고·분할·병합·분사·빠진 체결 등)과 큰 주가 변화 뒤 새 주식을 기다리는 구간
+    //  ② 계좌 목록이 바뀐 기록 사이 (새 계좌가 기록에 들어오거나 빠지면 평가금액이 흐름 없이 뛴다)
+    const skips: RetSkip[] = [];
+    for (const p of this.pairs(trades, snaps, toss).values()) for (const x of p.res.skips) skips.push({ market: p.market, ...x });
+    for (const market of ["KR", "US"] as const) {
+      const list = snaps.filter((x) => x.status === "ok" && x.market === market && x.doubtAccounts.length === 0);
+      for (let i = 1; i < list.length; i++) {
+        const a = [...new Set(list[i - 1]!.accounts)].sort().join(",");
+        const b = [...new Set(list[i]!.accounts)].sort().join(",");
+        if (a !== b) skips.push({ market, from: list[i - 1]!.asOf, to: list[i]!.asOf });
       }
     }
     const rs: RetSnap[] = snaps.map((s) => ({
@@ -585,7 +578,7 @@ export class JournalService {
       fx: s.fx,
       holdings: s.holdings.map((h) => ({ code: h.code, quantity: h.quantity, price: h.price, regularClose: h.regularClose ?? null })),
     }));
-    return { enabled: true, recordSince: since, ...periodReturns({ requested, market: q.market, recordSince: since }, rs, flows) };
+    return { enabled: true, recordSince: since, ...periodReturns({ requested, market: q.market, recordSince: since, skips }, rs, flows) };
   }
 
   // ── 양도세 추정 ──────────────────────────────────────────────────────
@@ -619,18 +612,14 @@ export class JournalService {
         const fxSell: TaxFx | null = typeof fx === "object" ? fx : null;
         const std = r?.std;
         const costsUsd = r?.realized?.costs.source === "toss" ? r.realized.costs.total : null;
-        const ok = !!std && std.proceeds !== null && std.cost !== null && fxSell !== null;
-        // 평균 구매가를 추정한 매도: 분할·이관 전후는 합계에 넣고 '추정 포함'으로 따로 센다 · 순서 모름은 기본으로 합계에서 뺀다 (taxSummary).
-        // 수량은 같은데 토스 매입금액이 달라져(분사 등) 원화 취득가를 그 비율로 고친 매도도 '추정 포함' (달라진 구간 안의 매도는 원장이 '순서 추정'으로 둔다)
-        const st = r?.realized?.status;
-        const estimate =
-          st === "estimated" || st === "order-uncertain"
-            ? { status: st, reason: r!.realized!.reason ?? "" }
-            : ok && std!.estimated
-              ? { status: "estimated" as const, reason: REASONS.costChanged }
-              : null;
+        const realized = r?.realized;
+        // 주식 수·매입금액이 기록과 다른 기간의 매도: 숫자 없이 늘 합계에서 빼고 까닭·바뀐 것·이름표를 따로 (taxSummary)
+        const unexplained = realized?.status === "unexplained";
+        const ok = !unexplained && !!std && std.proceeds !== null && std.cost !== null && fxSell !== null;
+        // 같은 날 사고판 순서를 몰라 추정한 매도는 기본으로 합계에서 뺀다 (taxSummary)
+        const estimate = realized?.status === "order-uncertain" ? { status: "order-uncertain" as const, reason: realized.reason ?? "" } : null;
         // 결제일 환율 대기: 이 매도의 결제일(또는 이 짝 매수의 결제일)이 아직 받는 중
-        const pending = !ok && (fx === "pending" || (std?.missing === "fx" && lookupPending(p.fills, settle, lookup)));
+        const pending = !ok && !unexplained && (fx === "pending" || (std?.missing === "fx" && lookupPending(p.fills, settle, lookup)));
         inputs.push({
           key: f.key,
           code: p.code,
@@ -643,9 +632,10 @@ export class JournalService {
           costsUsd,
           fxSell,
           gainParts: ok ? { proceeds: std!.proceeds!, cost: std!.cost!, costs: costsUsd !== null ? costsUsd * fxSell!.rate : null } : null,
-          excluded: ok ? null : std?.missing === "cost" ? "cost" : "fx",
+          excluded: unexplained ? "unexplained" : ok ? null : std?.missing === "cost" || std?.missing === "changed" ? std.missing : !std ? "cost" : "fx",
           pending,
           estimate,
+          ...(unexplained ? { unexplained: { reason: realized!.reason ?? "", change: realized!.change ?? null, guess: realized!.guess ?? null } } : {}),
         });
       }
     }
@@ -906,9 +896,9 @@ function verifiedTag(r: Realized | null, cur: Cur): Realized | null {
   return r;
 }
 
-/** 매도 줄 → 통화별 합계 (매도마다 반올림한 값의 합 — 목록 합 = 머리 합계) */
+/** 매도 줄 → 통화별 합계 (매도마다 반올림한 값의 합 — 목록 합 = 머리 합계). 모름·계산에서 뺀 매도(unexplained)는 넣지 않는다 */
 function realizedSum(sells: JournalItem[]): RealizedSum {
-  const known = sells.filter((x) => x.realized && x.realized.status !== "unknown-cost" && x.realized.gross !== null);
+  const known = sells.filter((x) => x.realized && x.realized.status !== "unknown-cost" && x.realized.status !== "unexplained" && x.realized.gross !== null);
   const kr = known.filter((x) => x.currency === "KRW").map((x) => x.realized!.gross!);
   const us = known.filter((x) => x.currency === "USD");
   const usKrw = us.map((x) => x.realized!.krw?.gross ?? null);

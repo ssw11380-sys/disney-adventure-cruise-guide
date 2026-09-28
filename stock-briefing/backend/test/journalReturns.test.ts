@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MIN_POINTS, periodReturns, presetRange, READY_DAYS, type RetFlow, type RetSnap } from "../src/services/journalReturns.js";
+import { MIN_POINTS, periodReturns, presetRange, READY_DAYS, type RetFlow, type RetSkip, type RetSnap } from "../src/services/journalReturns.js";
 
 /**
  * 기간 수익률 (3-37) — 스냅샷 시간가중 수익률(TWR). 순수 함수, 고정 값.
@@ -31,7 +31,7 @@ const nextDay = (d: string) => {
   x.setUTCDate(x.getUTCDate() + 1);
   return x.toISOString().slice(0, 10);
 };
-const flow = (market: "KR" | "US", side: "BUY" | "SELL", amount: number, at: string): RetFlow => ({ market, side, amount, at, kind: "trade" });
+const flow = (market: "KR" | "US", side: "BUY" | "SELL", amount: number, at: string): RetFlow => ({ market, side, amount, at });
 const days = (n: number, start = "2026-09-28") => {
   const out: string[] = [];
   for (let d = new Date(`${start}T12:00:00Z`); out.length < n; d.setUTCDate(d.getUTCDate() + 1)) {
@@ -42,7 +42,8 @@ const days = (n: number, start = "2026-09-28") => {
   return out;
 };
 const ONE = { minDays: 1 };
-const q = (from: string, to: string, market: "ALL" | "KR" | "US" = "KR") => ({ requested: { from, to }, market, recordSince: "2026-09-28" });
+const q = (from: string, to: string, market: "ALL" | "KR" | "US" = "KR", skips: RetSkip[] = []) => ({ requested: { from, to }, market, recordSince: "2026-09-28", skips });
+const asOf = (d: string) => `${d}T16:05:00+09:00`;
 
 describe("시간가중 수익률", () => {
   it("손계산: 매수·매도를 빼고 날마다 곱해 +1.82%, 기간 손익 +200,000원 (§9-17)", () => {
@@ -113,13 +114,12 @@ describe("시간가중 수익률", () => {
     expect(r.currency).toBe("KRW");
   });
 
-  it("주문 내역에 없는 수량 변화(이관)는 그날 가격으로 들어오고 나간 것으로 본다", () => {
-    const d = days(2);
-    const snaps = [KR(d[0]!, 1_000_000), KR(d[1]!, 2_000_000)];
-    const flows: RetFlow[] = [{ market: "KR", side: "BUY", amount: 1_000_000, at: `${d[1]}T16:05:00+09:00`, kind: "transfer" }];
-    const r = periodReturns(q(d[0]!, d[1]!), snaps, flows, ONE);
-    expect(r.twr).toBe(0);
-    expect(r.transfersEstimated).toBe(1);
+  it("주문 내역으로 설명되지 않은 구간(skips — 입고 등)은 수익률·기간 손익에서 건너뛰고 끝 날짜를 uncertainSkipped 로 (그대로 두면 +120%)", () => {
+    const d = days(3);
+    const snaps = [KR(d[0]!, 1_000_000), KR(d[1]!, 2_000_000), KR(d[2]!, 2_200_000)];
+    const r = periodReturns(q(d[0]!, d[2]!, "KR", [{ market: "KR", from: asOf(d[0]!), to: asOf(d[1]!) }]), snaps, [], ONE);
+    expect(r).toMatchObject({ ready: true, twr: 10, pnl: 200_000, uncertainSkipped: [d[1]], allSkipped: false });
+    expect(periodReturns(q(d[0]!, d[2]!), snaps, [], ONE)).toMatchObject({ twr: 120, uncertainSkipped: [] });
   });
 });
 
@@ -209,17 +209,36 @@ describe("검토 반영 3차: 마지막 기록일(recordUntil)", () => {
   });
 });
 
-describe("검토 반영 6차: 주식 수 변화를 확인하지 못한 이관(알아보지 못한 병합·감자 등)이 든 구간은 건너뛴다", () => {
-  it("그 구간은 수익률·기간 손익에서 빼고 끝 날짜를 uncertainSkipped 로 (그대로 두면 +43% · +310)", () => {
+describe("검토 반영 7차: 설명되지 않은 구간은 건너뛴다 (보수 규칙)", () => {
+  it("구간에 매매가 있어도 그 구간 손익만 빼고 수익률은 나머지 구간으로 이어 간다 (1/10 병합을 알아보지 못한 경우 그대로 두면 +43% · +310)", () => {
     const d = days(3);
     const snaps = [KR(d[0]!, 1000), KR(d[1]!, 100), KR(d[2]!, 110)];
-    // d1: 1/10 병합을 알아보지 못한 출고 900주를 직전 가격(1)으로 900 + 판 금액 300
-    const flows: RetFlow[] = [
-      flow("KR", "SELL", 300, `${d[1]}T10:00:00+09:00`),
-      { market: "KR", side: "SELL", amount: 900, at: `${d[1]}T16:05:00+09:00`, kind: "transfer", uncertain: true },
+    const flows: RetFlow[] = [flow("KR", "SELL", 300, `${d[1]}T10:00:00+09:00`)];
+    const r = periodReturns(q(d[0]!, d[2]!, "KR", [{ market: "KR", from: asOf(d[0]!), to: asOf(d[1]!) }]), snaps, flows, ONE);
+    expect(r).toMatchObject({ ready: true, twr: 10, pnl: 10, sells: 300, uncertainSkipped: [d[1]] });
+    expect(periodReturns(q(d[0]!, d[2]!), snaps, flows, ONE).uncertainSkipped).toEqual([]);
+  });
+
+  it("끝이 열린 구간(to null — 큰 주가 변화 뒤 새 주식을 기다리는 중)은 그 뒤 모든 구간 · 모든 구간을 건너뛰면 숫자 없이 allSkipped", () => {
+    const d = days(4);
+    const snaps = [KR(d[0]!, 1000), KR(d[1]!, 1100), KR(d[2]!, 550), KR(d[3]!, 560)];
+    const r = periodReturns(q(d[0]!, d[3]!, "KR", [{ market: "KR", from: asOf(d[1]!), to: null }]), snaps, [], ONE);
+    expect(r).toMatchObject({ ready: true, twr: 10, pnl: 100, uncertainSkipped: [d[2], d[3]] });
+    const all = periodReturns(q(d[1]!, d[3]!, "KR", [{ market: "KR", from: asOf(d[0]!), to: null }]), snaps, [], ONE);
+    expect(all).toMatchObject({ ready: false, allSkipped: true, twr: null, pnl: null, uncertainSkipped: [d[2], d[3]] });
+  });
+
+  it("전체(원화): 한 시장의 건너뛸 구간은 그 시장 구간만 뺀다 (한국 입고는 미국 구간을 건드리지 않음)", () => {
+    const snaps = [
+      KR("2026-09-28", 1_000_000),
+      US("2026-09-28", 100, 1400, "2026-09-29T05:05:00+09:00"),
+      KR("2026-09-29", 2_000_000),
+      US("2026-09-29", 110, 1400, "2026-09-30T05:05:00+09:00"),
     ];
-    const r = periodReturns(q(d[0]!, d[2]!), snaps, flows, ONE);
-    expect(r).toMatchObject({ ready: true, twr: 10, pnl: 10, uncertainSkipped: [d[1]], transfersEstimated: 1 });
-    expect(periodReturns(q(d[0]!, d[2]!), snaps, [], ONE).uncertainSkipped).toEqual([]);
+    const skip: RetSkip[] = [{ market: "KR", from: asOf("2026-09-28"), to: asOf("2026-09-29") }];
+    const r = periodReturns({ requested: { from: "2026-09-28", to: "2026-09-29" }, market: "ALL", recordSince: "2026-09-28", skips: skip }, snaps, [], ONE);
+    // 한국 구간(+1,000,000 입고)은 빼고, 미국 구간 +14,000 ÷ 2,140,000 = +0.65%
+    expect(r).toMatchObject({ ready: true, twr: 0.65, pnl: 14_000, uncertainSkipped: ["2026-09-29"] });
+    expect(periodReturns({ requested: { from: "2026-09-28", to: "2026-09-29" }, market: "US", recordSince: "2026-09-28", skips: skip }, snaps, [], ONE)).toMatchObject({ twr: 10, uncertainSkipped: [] });
   });
 });

@@ -84,7 +84,9 @@ export function taxFor(net: number): { base: number; nationalTax: number; localT
 export const TAX_EXCLUDE_REASON = {
   cost: "기록 시작 전에 산 몫이라 취득가를 몰라요",
   fx: "결제일 환율을 받지 못했어요",
-  uncertain: "사고판 순서나 주문 내역에 없는 주식 수 변화(입고·출고·병합 등)를 몰라 취득가가 확실하지 않아 합계에서 뺐어요",
+  changed: "주문 내역에 없는 주식 수·매입금액 변화 뒤라 결제일 환율로 잰 취득가를 몰라요",
+  unexplained: "주식 수·매입금액이 기록과 다른 기간의 매도라 손익을 계산하지 않았어요",
+  uncertain: "같은 날 사고판 순서를 몰라 취득가가 확실하지 않아 합계에서 뺐어요",
 } as const;
 
 export interface TaxFx {
@@ -111,15 +113,31 @@ export interface TaxSellInput {
   fxSell: TaxFx | null;
   /** 결제일 원화: 양도가액·취득가액(원 단위 전)·비용 원화. 계산할 수 없으면 null (excluded 에 까닭) */
   gainParts: { proceeds: number; cost: number; costs: number | null } | null;
-  excluded: null | "cost" | "fx";
+  /**
+   * 계산할 수 없는 까닭: cost = 기록 전 몫 · fx = 결제일 환율 없음 · changed = 주문 내역으로 설명되지 않은 변화 뒤라 결제일 원화 취득가를 모름 ·
+   * unexplained = 주식 수·매입금액이 기록과 다른 기간의 매도 (손익을 계산하지 않음 — unexplained 에 까닭·바뀐 것·이름표)
+   */
+  excluded: null | "cost" | "fx" | "changed" | "unexplained";
   /** 결제일 환율을 받는 중 (배경 작업이 곧 받는다) */
   pending: boolean;
-  /**
-   * 평균 구매가를 추정한 매도: 분할·이관 전후 'estimated' 는 합계에 넣고 '추정 포함'으로 따로 센다.
-   * 순서 모름·많이 판 매도·확인하지 못한 주식 수 변화(병합·분할을 알아보지 못한 0주 구간) 'order-uncertain' 은 기본으로 합계에서 빼고
-   * (가짜 손실·가짜 이익이 세액을 몰래 바꾸지 않게) 까닭과 매도별 계산을 따로 준다
-   */
-  estimate?: { status: "estimated" | "order-uncertain"; reason: string } | null;
+  /** 같은 날 사고판 순서를 몰라 추정한 매도 — 기본으로 합계에서 빼고 까닭과 매도별 계산을 따로 준다 (가짜 손익이 세액을 몰래 바꾸지 않게) */
+  estimate?: { status: "order-uncertain"; reason: string } | null;
+  /** excluded 'unexplained' 일 때: 까닭 · 무엇이 달라졌는지 · 비율 짐작 이름표(숫자에 쓰지 않음) */
+  unexplained?: { reason: string; change: string | null; guess: string | null } | null;
+}
+
+/** 합계에서 뺀, 주식 수·매입금액이 기록과 다른 기간의 매도 (숫자 없음 — 토스증권 앱에서 확인) */
+export interface TaxUnexplainedSell {
+  key: string;
+  code: string;
+  name: string;
+  tradeDate: string;
+  settleDate: string;
+  quantity: number;
+  proceedsUsd: number;
+  reason: string;
+  change: string | null;
+  guess: string | null;
 }
 
 export interface TaxItemView {
@@ -137,8 +155,8 @@ export interface TaxItemView {
   costKrw: number;
   costsKrw: number | null;
   gainKrw: number;
-  /** 평균 구매가를 추정한 매도일 때만 */
-  estimate?: { status: "estimated" | "order-uncertain"; reason: string };
+  /** 같은 날 사고판 순서를 몰라 추정한 매도일 때만 */
+  estimate?: { status: "order-uncertain"; reason: string };
 }
 
 export interface TaxTotals {
@@ -158,10 +176,10 @@ export interface TaxSummaryOptions {
 }
 
 /**
- * 그해(결제일 기준) 합계 · 매도별 계산 · 빠진 매도 · 추정이 들어간 매도(합계에 들어 있음 — 건수와 종목·까닭). 매도마다 원 단위로 먼저 반올림한 값의 합이 합계.
- * 순서를 모르는 매도(order-uncertain — 같은 날 사고판 순서 · 기록된 수량보다 많이 판 매도 · 확인하지 못한 주식 수 변화)는 기본으로 합계에서 뺀다:
- * 분할·병합 뒤 전부 판 매도처럼 원가가 몇 배로 부풀거나 줄어 가짜 손익이 세액을 조용히 바꿀 수 있어서다. 빠진 매도(excluded)에 까닭을 넣고
- * (예전 앱도 그 상자를 보여 준다) 건수·추정 양도차익 합·매도별 계산(uncertainItems)은 따로 준다. includeUncertain 이면 예전처럼 합계에 넣는다
+ * 그해(결제일 기준) 합계 · 매도별 계산 · 빠진 매도(종목·건수·까닭). 매도마다 원 단위로 먼저 반올림한 값의 합이 합계.
+ *  - 주식 수·매입금액이 기록과 다른 기간의 매도(unexplained)는 늘 합계에서 빼고 숫자 없이 따로 준다 (unexplainedSells — 까닭·바뀐 것·이름표)
+ *  - 같은 날 사고판 순서를 모르는 매도(order-uncertain)는 기본으로 합계에서 빼고 건수·추정 양도차익 합·매도별 계산(uncertainItems)을 따로 준다.
+ *    includeUncertain 이면 합계에 넣고 '추정 포함'으로 센다 (estimatedIncluded · estimatedSells)
  */
 export function taxSummary(
   year: number,
@@ -180,11 +198,13 @@ export function taxSummary(
   uncertainExcluded: number;
   uncertainGainKrw: number | null;
   uncertainItems: TaxItemView[];
+  unexplainedSells: TaxUnexplainedSell[];
 } {
   const includeUncertain = opts.includeUncertain === true;
   const mine = items.filter((x) => Number(x.settleDate.slice(0, 4)) === year);
   const views: TaxItemView[] = [];
   const uncertain: TaxItemView[] = [];
+  const unexplained: TaxUnexplainedSell[] = [];
   const out = new Map<string, { code: string; name: string; count: number; reason: string }>();
   const est = new Map<string, { code: string; name: string; count: number; reason: string }>();
   const count = (m: typeof out, code: string, name: string, reason: string) => {
@@ -195,6 +215,13 @@ export function taxSummary(
   };
   let pending = 0;
   for (const x of mine) {
+    if (x.excluded === "unexplained") {
+      // 설명되지 않은 기간의 매도: 받는 중인 환율과 상관없이 늘 빠진 매도 (숫자 없음)
+      count(out, x.code, x.name, TAX_EXCLUDE_REASON.unexplained);
+      const w = x.unexplained;
+      unexplained.push({ key: x.key, code: x.code, name: x.name, tradeDate: x.tradeDate, settleDate: x.settleDate, quantity: x.quantity, proceedsUsd: x.proceedsUsd, reason: w?.reason ?? TAX_EXCLUDE_REASON.unexplained, change: w?.change ?? null, guess: w?.guess ?? null });
+      continue;
+    }
     if (!x.gainParts) {
       if (x.pending) {
         pending++;
@@ -206,7 +233,7 @@ export function taxSummary(
     const proceedsKrw = Math.round(x.gainParts.proceeds);
     const costKrw = Math.round(x.gainParts.cost);
     const costsKrw = x.gainParts.costs === null ? null : Math.round(x.gainParts.costs);
-    const { gainParts: _g, excluded: _e, pending: _p, estimate, ...rest } = x;
+    const { gainParts: _g, excluded: _e, pending: _p, estimate, unexplained: _u, ...rest } = x;
     const view: TaxItemView = { ...rest, proceedsKrw, costKrw, costsKrw, gainKrw: proceedsKrw - costKrw - (costsKrw ?? 0), ...(estimate ? { estimate } : {}) };
     if (estimate?.status === "order-uncertain" && !includeUncertain) {
       uncertain.push(view);
@@ -233,5 +260,6 @@ export function taxSummary(
     uncertainExcluded: uncertain.length,
     uncertainGainKrw: uncertain.length ? uncertain.reduce((s, v) => s + v.gainKrw, 0) : null,
     uncertainItems: uncertain,
+    unexplainedSells: unexplained,
   };
 }

@@ -12,7 +12,8 @@ import { PeriodChips } from "./PeriodChips";
 import { ReturnLine } from "./ReturnLine";
 
 /**
- * 매매일지 '수익률' 탭 (3-37): 기간·시장 칩 → 큰 숫자 '수익률 (시간가중)' · 기간 손익 · 시작→끝 평가금액 · 그 사이 사고판 금액 · 누적 선 · '계산 방법' 펼침.
+ * 매매일지 '수익률' 탭 (3-37): 기간·시장 칩 → 큰 숫자 '수익률 (시간가중)' · 기간 손익 · 시작→끝 평가금액 · 그 사이 사고판 금액 ·
+ * 건너뛴 날(주식 수·매입금액이 기록과 다르거나 주가가 한 번에 크게 바뀐 기간 — 검토 반영 7차) · 누적 선 · '계산 방법' 펼침.
  * 스냅샷이 10거래일 쌓이기 전에는 숫자 대신 안내 한 줄. 폴드 가로(twoPane)는 왼쪽 요약·계산 방법 | 오른쪽 선 그림
  */
 export function ReturnsView({ twoPane, today }: { twoPane: boolean; today: string }) {
@@ -99,6 +100,7 @@ function ReadySummary({ r, open, onToggle }: { r: JournalReturns; open: boolean;
         <Text style={{ color: t.sub, fontSize: font.small }}>{l.values}</Text>
         {l.flows ? <Text style={{ color: t.sub, fontSize: font.small }}>{l.flows}</Text> : null}
         {l.clipped ? <Text style={{ color: t.muted, fontSize: font.small }}>{l.clipped}</Text> : null}
+        {l.skipped ? <Text style={{ color: t.warn, fontSize: font.small }}>{l.skipped}</Text> : null}
       </View>
       <Pressable onPress={onToggle} accessibilityRole="button" accessibilityLabel="계산 방법" accessibilityState={{ expanded: open }} style={styles.toggle}>
         <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "700" }}>계산 방법</Text>

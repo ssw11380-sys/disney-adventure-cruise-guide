@@ -7,14 +7,14 @@ import type { JournalItem, JournalResponse } from "@/api/types";
 import { TwoPane } from "@/components/TwoPane";
 import { Button, Chip, Empty, ErrorView, Loading } from "@/components/ui";
 import { beforeRecordNote, dayHeader, dayHeadSpeech, dayRealizedText, headLines, JOURNAL, periodRange, summaryView, type ListPreset } from "@/lib/journal";
-import { changeColor, font, space, touch, useTheme } from "@/theme";
+import { changeColor, font, radius, space, touch, useTheme } from "@/theme";
 import { PeriodChips } from "./PeriodChips";
 import { StockPickerSheet } from "./StockPickerSheet";
 import { TradeDetailPane, TradeDetailSheet } from "./TradeDetail";
 import { TradeRow } from "./TradeRow";
 
 /**
- * 매매일지 '기록' 탭 (3-37): 기간·종목 칩 → (종목이면 머리 카드) → 요약 카드 → 날짜별(새것부터) 체결 줄.
+ * 매매일지 '기록' 탭 (3-37): 기간·종목 칩 → (종목이면 머리 카드) → 요약 카드(계산에서 뺀 매도가 있으면 그 상자 — 매도마다 무엇이 달라졌는지) → 날짜별(새것부터) 체결 줄.
  * 줄을 누르면 거래 상세 — 휴대폰은 아래 창, 폴드 가로(twoPane)는 오른쪽 칸(고른 것이 없으면 안내 한 줄).
  * 빈 화면: 토스 연동 없음 → [설정 열기], 기간 안 0건 → [기간 1년으로 보기]
  */
@@ -147,6 +147,17 @@ function ListBody({ data, selected, onPick }: { data: JournalResponse; selected:
               {n}
             </Text>
           ))}
+          {s.excluded ? (
+            <View style={[styles.excluded, { borderColor: t.warn }]} testID="journal-excluded">
+              <Text style={{ color: t.warn, fontSize: font.small, fontWeight: "700" }}>{s.excluded.title}</Text>
+              {s.excluded.lines.map((l, i) => (
+                <Text key={`${i}:${l}`} style={{ color: t.sub, fontSize: font.small }}>
+                  {l}
+                </Text>
+              ))}
+              <Text style={{ color: t.muted, fontSize: font.small }}>{s.excluded.note}</Text>
+            </View>
+          ) : null}
         </View>
       ) : null}
       {data.days.map((d) => {
@@ -200,4 +211,5 @@ const styles = StyleSheet.create({
   sumValue: { flex: 1, fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"], textAlign: "right" },
   dayHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.xs },
   memoRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  excluded: { borderWidth: 1, borderRadius: radius.md, padding: space.md, gap: space.xxs, marginTop: space.xs },
 });
