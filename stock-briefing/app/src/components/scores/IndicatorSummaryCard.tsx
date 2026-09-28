@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useIndicatorScores } from "@/api/hooks";
 import type { IndicatorScores, TrendScoreBlock, ValueScoreBlock } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
-import { compositeLine, familySpeech, flagPreview, moreFlagsText, nameWidth, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech } from "@/lib/scoreView";
+import { compositeLine, familyLabel, familySpeech, flagPreview, moreFlagsText, nameWidth, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { LeverageNotice } from "./LeverageNotice";
@@ -248,7 +248,7 @@ function HowSection({ s, onTechnical, techTabLabel, onValue, valueTabLabel }: { 
           </Text>
           <Muted>{s.text.valueAbout ?? s.value.about}</Muted>
           {(s.value.families ?? []).map((f) => (
-            <FamilyMini key={f.key} f={f} />
+            <FamilyMini key={f.key} f={f} nameW={scores.valueFamilyMiniW} />
           ))}
           {flags.shown.map((f) => (
             <Text key={f.key} style={{ color: t.sub, fontSize: font.small, lineHeight: font.small * 1.5 }}>
@@ -287,13 +287,14 @@ function HowSection({ s, onTechnical, techTabLabel, onValue, valueTabLabel }: { 
   );
 }
 
-function FamilyMini({ f }: { f: { key: string; name: string; score: number | null; weight: number } }) {
+/** 묶음 한 줄 (펼침): 이름 · 비중 | 막대 | 점수. nameW: 이름 칸 기본 폭 (가치 묶음은 이름이 길어 넓게) */
+function FamilyMini({ f, nameW = scores.familyNameW }: { f: { key: string; name: string; score: number | null; weight: number }; nameW?: number }) {
   const t = useTheme();
   const fs = useFontScale();
   return (
     <View style={[styles.row, styles.mini]} accessible accessibilityLabel={familySpeech(f)}>
-      <Text style={{ color: t.sub, fontSize: font.small, width: nameWidth(scores.familyNameW, fs) }} numberOfLines={2}>
-        {f.name} · {f.weight}
+      <Text style={{ color: t.sub, fontSize: font.small, width: nameWidth(nameW, fs) }} numberOfLines={2}>
+        {familyLabel(f.name, f.weight)}
       </Text>
       <ScoreBar score={f.score} />
       <Text style={[styles.num, { color: t.ink, fontSize: font.body }]}>{f.score ?? "-"}</Text>

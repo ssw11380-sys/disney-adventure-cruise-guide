@@ -1,6 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import React from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View, type LayoutChangeEvent, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { addressLine, connectionKind, connectionText, SERVER_SECTION } from "@/lib/connectionError";
 import { shownSign } from "@/lib/format";
 import { changeColor, font, radius, slopFor, space, touch, useTheme } from "@/theme";
@@ -12,10 +12,14 @@ import { changeColor, font, radius, slopFor, space, touch, useTheme } from "@/th
 
 const NUM: TextStyle = { fontVariant: ["tabular-nums"] };
 
-/** 패널: 화면 폭을 채우는 평평한 블록. padded=false 면 표처럼 가장자리까지 쓴다 */
-export function Card({ children, style, padded = true }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; padded?: boolean }) {
+/** 패널: 화면 폭을 채우는 평평한 블록. padded=false 면 표처럼 가장자리까지 쓴다. onLayout: 자리를 잴 때 (가치 상세 카드로 스크롤) — 없으면 지금 그대로 */
+export function Card({ children, style, padded = true, onLayout }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; padded?: boolean; onLayout?: (e: LayoutChangeEvent) => void }) {
   const t = useTheme();
-  return <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.line, padding: padded ? space.lg : 0 }, style]}>{children}</View>;
+  return (
+    <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.line, padding: padded ? space.lg : 0 }, style]} {...(onLayout ? { onLayout } : null)}>
+      {children}
+    </View>
+  );
 }
 
 /** 패널 머리: 굵은 작은 제목 + 오른쪽 부가 요소 */

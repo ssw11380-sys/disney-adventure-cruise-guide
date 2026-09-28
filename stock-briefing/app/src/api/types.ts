@@ -848,6 +848,8 @@ export interface ValueMetricRow {
   name: string;
   /** '32.1배' · '12.3%' · '순현금' (계산 안 한 지표는 null) */
   value: string | null;
+  /** 연간 재무로 계산한 지표의 기준 '2026년 1월 결산 연간 기준' (성장·이익 안정성·ROE 안정성·주식 수 변화). 예전 서버·그 밖 지표는 없음 */
+  basis?: string | null;
   /** '업종 가운데값 25.0배' */
   peerMedian: string | null;
   /** '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' */

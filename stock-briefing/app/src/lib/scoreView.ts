@@ -46,9 +46,15 @@ export const trendHasScore = (t: TrendScoreBlock): boolean => t.status === "ok" 
 /** 가치 줄이 숫자·막대로 보이는지 (미국 보통주 점수 — ok·일부 지표 없이) */
 export const valueHasScore = (v: ValueScoreBlock): boolean => (v.status === "ok" || v.status === "partial") && v.score !== null && !!v.band;
 
-/** 화면 읽기: '가치 지표 57점, 0에서 100 중, 가운데쯤' (설계 5.7-F) — 배지가 있으면 덧붙임 / '가치 지표, 계산 준비 중' */
+/**
+ * 화면 읽기: '가치 지표 57점, 0에서 100 중, 가운데쯤' (설계 5.7-F) — 배지가 있으면 덧붙임.
+ * 점수가 없으면 상태 글과 이유 글까지: '가치 지표, 지금 계산하지 않음, 가치 지표 점수는 지금 계산하지 않습니다' (보이는 이유 줄을 TalkBack 도 읽게, 검토 지적)
+ */
 export function valueSpeech(v: ValueScoreBlock): string {
-  if (!valueHasScore(v)) return `${SCORE_LABELS.value}, ${v.label}`;
+  if (!valueHasScore(v)) {
+    const why = (v.reason?.text ?? v.text ?? "").replace(/[.\s]+$/, "");
+    return why && why !== v.label ? `${SCORE_LABELS.value}, ${v.label}, ${why}` : `${SCORE_LABELS.value}, ${v.label}`;
+  }
   const badges = v.badges?.length ? `, ${v.badges.join(", ")}` : "";
   return `${SCORE_LABELS.value} ${v.score}점, 0에서 100 중, ${v.band}${badges}`;
 }
@@ -71,7 +77,7 @@ const speakable = (s: string) => s.replace(/(\d+)\/100/g, "100 중 $1").replace(
 export function metricSpeech(m: ValueMetricRow): string {
   const lead = [m.name, m.value].filter(Boolean).join(" ");
   if (!m.used) return `${[m.name, m.value ?? "값 없음", m.text].map(speakable).join(", ")}.`;
-  const parts = [m.peerMedian ? `${lead}, ${m.peerMedian}` : lead, `위치 점수 ${m.score}`, m.positions, m.mix ? `비중 ${m.mix}` : null, m.text, m.note, m.meaning];
+  const parts = [m.peerMedian ? `${lead}, ${m.peerMedian}` : lead, m.basis ?? null, `위치 점수 ${m.score}`, m.positions, m.mix ? `비중 ${m.mix}` : null, m.text, m.note, m.meaning];
   return `${parts
     .filter((p): p is string => !!p)
     .map(speakable)
@@ -119,6 +125,26 @@ export function leverageSpeech(box: { title: string; lines: { parts: { text: str
   const clean = (s: string) => s.replace(/^\s*·\s*/, "").replace(/[.\s]+$/, "");
   return `${[box.title, ...box.lines.map((l) => l.parts.map((p) => p.text).join(""))].map(clean).filter(Boolean).join(". ")}.`;
 }
+
+/** 지표 줄의 값 · 가운데값 (연간 재무 지표는 뒤에 기준 글): '32.9% · 업종 가운데값 13.1% (2026년 1월 결산 연간 기준)' */
+export function metricMain(m: Pick<ValueMetricRow, "value" | "peerMedian" | "basis">): string {
+  const main = [m.value, m.peerMedian].filter(Boolean).join(" · ");
+  return m.basis && main ? `${main} (${m.basis})` : main;
+}
+
+/**
+ * 묶음 이름 칸의 비중 이음 글: 이름 끝 낱말 · 비중이 한 덩어리로 줄을 바꾸게 줄바꿈 없는 빈칸(U+00A0)으로 잇는다
+ * ('수익성과 이익의 질 ·' / '25' 처럼 비중만 다음 줄로 떨어지던 것, 검토 지적). '수익성과 이익의 질 · 25'
+ */
+export const WEIGHT_JOIN = " · ";
+export const familyLabel = (name: string, weight: number) => `${name}${WEIGHT_JOIN}${weight}`;
+
+/**
+ * 요약 카드의 '가치분석 탭에서 지표별 값 보기' 뒤 스크롤 위치: 탭 내용 칸의 스크롤 칸 안 위치 + 그 안에서 가치 상세 카드의 위치 − 위 여백.
+ * (휴대폰 화면은 카드가 스크롤 칸에 바로 놓여 탭 내용 칸 위치가 0)
+ */
+export const VALUE_JUMP_GAP = 8;
+export const valueJumpY = (bodyY: number, cardY: number): number => Math.max(0, Math.round(bodyY + cardY - VALUE_JUMP_GAP));
 
 /** 묶음 한 줄 화면 읽기: '추세 69점, 비중 35' (가치 묶음도 같은 틀) */
 export function familySpeech(f: Pick<ScoreFamily, "name" | "score" | "weight">): string {

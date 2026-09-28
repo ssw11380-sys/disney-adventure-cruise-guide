@@ -102,7 +102,7 @@ export const FEATURES = {
     // 3-44 2단계의 되돌리기 스위치 (indicatorScores 안의 가치 부분만). 끄기: PUT /api/admin/features {"valueScore": false}
     default: true,
     description:
-      "지표 점수의 가치 지표 점수·종합 (3-44 2단계, 미국 보통주만, indicatorScores 가 켜져 있을 때만 뜻이 있음): SEC 재무(companyfacts, 최근 4분기·공시일 기준)와 주 1회 비교 기준(Nasdaq 스크리너 업종·시가총액 + SEC frames, 표 value_references)으로 가치 지표 점수 0~100·띠·5묶음·지표별 값, 두 점수가 모두 있으면 종합(평균·차이 30 이상 안내). 재무는 표 value_fundamentals 에 저장하고 장 마감 뒤(뉴욕 17:30)·백그라운드로만 받음 — 화면 요청은 SEC 를 기다리지 않음. 끄면 1단계 그대로(가치 '계산 준비 중', 종합 없음)이고 SEC·Nasdaq 요청·저장이 0건",
+      "지표 점수의 가치 지표 점수·종합 (3-44 2단계, 미국 보통주만, indicatorScores 가 켜져 있을 때만 뜻이 있음): SEC 재무(companyfacts, 최근 4분기·공시일 기준)와 주 1회 비교 기준(Nasdaq 스크리너 업종·시가총액 + SEC frames, 표 value_references)으로 가치 지표 점수 0~100·띠·5묶음·지표별 값, 두 점수가 모두 있으면 종합(평균·차이 30 이상 안내). 재무는 표 value_fundamentals 에 저장하고 장 마감 뒤(뉴욕 17:30)·백그라운드로만 받음 — 화면 요청은 SEC 를 기다리지 않음. 끄면 1단계 그대로(가치 '지금 계산하지 않음', 종합 없음)이고 SEC·Nasdaq 요청·저장이 0건",
   },
   briefingTrim: {
     default: true,

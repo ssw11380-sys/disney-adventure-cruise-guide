@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAnyMarketOpen, useBriefings, useCandles, useFeature, useStock, useStockMutations } from "@/api/hooks";
 import type { AnalysisKind, CandlePeriod } from "@/api/types";
@@ -39,7 +39,7 @@ import { AiTitle } from "@/components/scores/AiTitle";
 import { IndicatorSummaryCard } from "@/components/scores/IndicatorSummaryCard";
 import { TrendScoreCard } from "@/components/scores/TrendScoreCard";
 import { ValueScoreCard } from "@/components/scores/ValueScoreCard";
-import { SCORE_LABELS } from "@/lib/scoreView";
+import { SCORE_LABELS, valueJumpY } from "@/lib/scoreView";
 
 type Tab = AnalysisKind | "news";
 const TABS: { value: Tab; label: string }[] = [
@@ -163,6 +163,11 @@ export default function StockDetailScreen() {
   // 차트 기간·탭: 주소 검색어에 있으면 그 값으로 연다 (없으면 지금처럼 일봉 · 기업개요, 넓은 창은 최근 브리핑)
   const [period, setPeriodState] = useState<CandlePeriod>(() => parseCandlePeriod(params.period));
   const [tabPick, setTabPick] = useState<DetailTab | null>(() => parseDetailTab(params.tab));
+  // 요약 카드의 '가치분석 탭에서 지표별 값 보기' (3-44 2단계): 가치분석 탭으로 바꾼 뒤 가치 상세 카드 맨 위로 스크롤하고 지표별 값을 펼친다
+  // (탭만 바꾸던 것, 검토 지적). 카드가 자리를 재면(onFocused) 스크롤하고 끝낸다. 탭 내용 칸 위치는 넓은 창만 — 휴대폰은 카드가 스크롤 칸에 바로 놓인다
+  const scrollRef = useRef<ScrollView>(null);
+  const tabBodyY = useRef(0);
+  const [valueFocus, setValueFocus] = useState(false);
   // 플래그가 켜져 있으면 고른 값을 주소 검색어에도 남긴다 (접고 펼 때 · ‹ › 로 넘길 때 이어지게)
   const setPeriod = (p: CandlePeriod) => {
     setPeriodState(p);
@@ -170,6 +175,7 @@ export default function StockDetailScreen() {
   };
   const setTab = (v: DetailTab) => {
     setTabPick(v);
+    if (v !== "value") setValueFocus(false);
     if (fold.on) router.setParams({ tab: v });
   };
   const tab = phoneTab(tabPick);
@@ -382,6 +388,21 @@ export default function StockDetailScreen() {
   // 지표 점수 (플래그 indicatorScores): 기초자산 화면 열기(레버리지 상품) · 기업개요·기술분석 탭(1단계)·가치분석 탭(2단계, valueScore 도 켜졌을 때) 맨 위 카드와
   // 그 아래 AI 글 제목. 꺼져 있으면 AI 분석을 그대로 돌려준다 (지금 화면과 한 글자도 같게)
   const openStock = (to: string) => router.push({ pathname: "/stocks/[code]", params: { code: to } } as never);
+  const openValue = () => {
+    setTab("value");
+    setValueFocus(true);
+  };
+  const onValueFocused = (y: number) => {
+    setValueFocus(false);
+    scrollRef.current?.scrollTo({ y: valueJumpY(mode === "phone" ? 0 : tabBodyY.current, y), animated: true });
+  };
+  const onTabBodyLayout = (e: LayoutChangeEvent) => {
+    tabBodyY.current = e.nativeEvent.layout.y;
+  };
+  // 가치 상세 카드로 스크롤하는 데 쓰는 속성 — 플래그(indicatorScores + valueScore)가 꺼져 있으면 붙이지 않는다 (지금 화면과 한 글자도 같게)
+  const jumpOn = scoresOn && valueOn;
+  const scrollProps = jumpOn ? { scrollRef } : null;
+  const bodyLayout = jumpOn ? { onLayout: onTabBodyLayout } : null;
   const withScores = (kind: AnalysisKind, ai: React.ReactNode, opts: { twoCol?: boolean; techLabel?: string; valueLabel?: string } = {}) =>
     scoresOn && (kind === "company" || kind === "technical" || (kind === "value" && valueOn)) ? (
       <>
@@ -391,12 +412,12 @@ export default function StockDetailScreen() {
             twoCol={opts.twoCol}
             onTechnical={() => setTab("technical")}
             techTabLabel={opts.techLabel}
-            onValue={valueOn ? () => setTab("value") : undefined}
+            onValue={valueOn ? openValue : undefined}
             valueTabLabel={opts.valueLabel}
             onOpenStock={openStock}
           />
         ) : kind === "value" ? (
-          <ValueScoreCard code={c} />
+          <ValueScoreCard code={c} focus={valueFocus} onFocused={onValueFocused} />
         ) : (
           <TrendScoreCard code={c} onOpenStock={openStock} />
         )}
@@ -431,6 +452,7 @@ export default function StockDetailScreen() {
     return (
       <Screen
         disclaimer
+        {...scrollProps}
         refreshing={pulling}
         onRefresh={onPull}
         top={<StaleBanner query={stock} open={open} maxAgeMs={openMaxAge} {...guideProps} />}
@@ -736,6 +758,7 @@ export default function StockDetailScreen() {
       <>
         <Stack.Screen options={{ headerShown: false }} />
         <SplitScreen
+          {...(jumpOn ? { rightScrollRef: scrollRef } : null)}
           head={header}
           top={banner}
           sideW={sideW}
@@ -756,7 +779,9 @@ export default function StockDetailScreen() {
             <>
               <View style={{ backgroundColor: t.surface }}>{sideStats}</View>
               {tabs}
-              <View style={styles.tabBody}>{tabBody()}</View>
+              <View style={styles.tabBody} {...bodyLayout}>
+                {tabBody()}
+              </View>
             </>
           }
         />
@@ -871,6 +896,7 @@ export default function StockDetailScreen() {
   return (
     <Screen
       disclaimer
+      {...scrollProps}
       refreshing={pulling}
       onRefresh={onPull}
       contentStyle={styles.wideContent}
@@ -892,7 +918,9 @@ export default function StockDetailScreen() {
         </View>
       ) : null}
       {tabs}
-      <View style={styles.tabBody}>{tabBody(foldDetail.wideBriefings)}</View>
+      <View style={styles.tabBody} {...bodyLayout}>
+        {tabBody(foldDetail.wideBriefings)}
+      </View>
     </Screen>
   );
 }

@@ -185,6 +185,23 @@ export interface ValueInputs {
    * (무배당 0% 와 다르게 — 설계 원칙 4). 비교 회사(frames 연간 값)는 늘 없음
    */
   divUnknown?: boolean;
+  /** 대상 종목만: 최근 5년 가운데 1주당 배당이 앞 해보다 줄어든 해가 있음 (표시 dividendCut — 점수는 그대로) */
+  dividendCut?: boolean;
+}
+
+/** 1주당 배당이 줄었다고 보는 기준 (앞 해의 99% 밑 — 반올림 차이는 빼고) */
+export const DIVIDEND_CUT_RATIO = 0.99;
+
+/**
+ * 두 해 희석 주식 수(보고한 그대로)로 본 분할·병합 배수: 한 해에 40% 넘게 바뀌었으면 0.5 단위로 맞춘 배수(9.89 → 10, 1.48 → 1.5, 0.1 → 1/10),
+ * 아니면 1. 가중평균 주식 수에는 자사주 매입 등 작은 변화가 섞여 있어 그대로 곱하면 분할 앞뒤 같은 배당(0.16 → 0.016 × 10)을 줄었다고 잘못 본다
+ */
+export function splitFactor(before: number | null, after: number | null): number {
+  if (!before || !after || !(before > 0) || !(after > 0)) return 1;
+  const k = after / before;
+  if (k > 1.4) return Math.max(1.5, Math.round(k * 2) / 2);
+  if (k < 1 / 1.4) return 1 / Math.max(1.5, Math.round((1 / k) * 2) / 2);
+  return 1;
 }
 
 export class FactBook {
@@ -287,7 +304,36 @@ export class FactBook {
     const shares = this.sharesAt(asOf, E);
     const divKnown = flow.dividends !== undefined || (flow.dps !== undefined && shares !== null);
     const divUnknown = !divKnown && this.dividendSeen(asOf, E);
-    return normalizeInputs({ flow, bal, balYearAgo, annual: this.annualHistory(asOf), shares, period, ...(divUnknown ? { divUnknown: true } : {}) });
+    const annual = this.annualHistory(asOf);
+    const cut = this.dividendCut(asOf, annual);
+    return normalizeInputs({ flow, bal, balYearAgo, annual, shares, period, ...(divUnknown ? { divUnknown: true } : {}), ...(cut ? { dividendCut: true } : {}) });
+  }
+
+  /**
+   * 최근 5년 가운데 1주당 배당이 앞 해보다 줄어든 해가 있는지 (설계 value-v1 §12 dividendCut, 표시만):
+   *  - 회계연도(연간 이력의 기간 끝) 최근 6개 → 이웃한 두 해 5쌍. 두 해 모두 연간 주당배당(선언액·지급액 태그) 값이 있을 때만 비교한다 —
+   *    배당을 아예 멈춘 해는 SEC 에 주당배당 줄이 없는 일이 많아 알 수 없다 (0 으로 보고했으면 줄어든 것으로 센다)
+   *  - 주식 분할·병합: 앞 해 값이 분할 전 보고서에만 있으면 주당배당과 주식 수가 모두 분할 전 기준이다. 두 해 희석 주식 수가 한 해에
+   *    40% 넘게 바뀌었으면 그 배수(0.5 단위로 맞춤, splitFactor)로 맞춰 비교한다 (10:1 분할 뒤 1/10 이 된 주당배당을 '줄었다'고 하지 않게 —
+   *    그해 합병으로 주식 수가 크게 늘며 배당을 줄인 드문 경우는 놓칠 수 있다)
+   *  - 앞 해의 99% 밑이면 줄어든 것 (반올림 차이는 빼고). 특별배당을 준 다음 해도 줄어든 해로 센다 (1주당 배당 숫자가 줄었으므로)
+   */
+  dividendCut(asOf: string, annual: readonly AnnualPoint[] = this.annualHistory(asOf)): boolean {
+    const dps = this.annualFlow("dps", asOf);
+    if (!dps.size) return false;
+    const near = (end: string): number | null => {
+      if (dps.has(end)) return dps.get(end)!;
+      for (const [e, v] of dps) if (Math.abs(daysBetween(e, end)) <= 7) return v;
+      return null;
+    };
+    const years = annual.slice(-6).map((a) => ({ dps: near(a.end), shares: a.shares }));
+    for (let i = 1; i < years.length; i++) {
+      const a = years[i - 1]!;
+      const b = years[i]!;
+      if (a.dps === null || b.dps === null || !(a.dps > 0)) continue;
+      if (b.dps * splitFactor(a.shares, b.shares) < a.dps * DIVIDEND_CUT_RATIO) return true;
+    }
+    return false;
   }
 
   /** 연간 이력 (오래된 → 최신, 최대 6개): 회계연도는 순이익 연간 값의 기간 끝으로 정한다 */

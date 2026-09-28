@@ -52,6 +52,8 @@ import {
   fiscalShort,
   formatMetric,
   industryKo,
+  annualBasis,
+  levelName,
   lowCoverageText,
   medianText,
   METRIC_NAME,
@@ -68,7 +70,9 @@ import {
   PRICE_NOTE,
   RULE_TEXT,
   sectorKo,
-  tieNote,
+  TIE_NOTE,
+  tieSentence,
+  topTieNote,
   VALUE_BAND_LINE,
   VALUE_FAMILY_ABOUT,
   VALUE_FAMILY_NAME,
@@ -87,7 +91,11 @@ import {
  *  - 비교 기준: 주 1회(토요일 09:00 KST) Nasdaq 스크리너 + SEC frames → value_references (최근 3줄). 없거나 7일 넘게 묵으면 매일 09:15 · 켤 때 다시
  *  - 점수: 최근 20거래일 평균 종가 × 최신 희석 주식 수 = 시가총액, 공시일까지의 최근 4분기 재무 → 지표 → 업종·시장·자기 지난 5년 순위 → 5묶음 → 0~100
  *  - 받기 실패: 재무를 받지 못해도 7일까지 지난 값('지난 값 M/D'), 그 뒤 '점수 없음 — 재무제표를 받지 못했습니다'.
+ *    재무를 받은 뒤 SEC 목록에서 빠졌으면(notListed) 실패와 같이 세고, 7일 뒤 '점수 없음 — SEC 재무제표를 찾지 못했습니다'로 끝난다.
  *    받은 지 오래됐다는 것만으로는 실패라고 하지 않는다 (미등록 종목은 열 때만 받는다 — 7일 넘게 묵었으면 '재무제표를 새로 받는 중')
+ *  - '… 받는 중·만드는 중'(앱이 1분마다 다시 묻는 대기)은 실제로 받는·만드는 중일 때만. 비교 기준이 없거나 2주 넘게 묵었으면 화면 요청이
+ *    백그라운드로 만들기를 건다 (30분에 한 번까지 — 플래그를 나중에 켰거나 첫 만들기가 실패한 서버가 다음 날 09:15 까지 기다리지 않게)
+ *  - 정리: 등록하지 않은 종목의 재무는 30일 넘게 새로 받지 않았으면(= 30일 넘게 열지 않음) 매일 09:15 에 지운다 (표·백업이 끝없이 커지지 않게)
  *  - 주식 수 확인: SEC 주식 수가 비교 기준(Nasdaq 시가총액 ÷ 가격)과 크게 다르면(마지막 보고서 뒤 분할·병합 등) '잠시 보류'
  *  - 문구는 valueScoreText 의 틀 (금지어 검사 analysis/scoreWording). AI 프롬프트·브리핑·알림·위젯·잔고 목록에는 넣지 않는다
  */
@@ -107,6 +115,8 @@ export interface ValueMetricRow {
   name: string;
   /** 화면 값 ('32.1배', '12.3%', '순현금') */
   value: string | null;
+  /** 연간 재무로 계산한 지표의 기준 ('2026년 1월 결산 연간 기준' — 성장·이익 안정성·ROE 안정성·주식 수 변화). 그 밖은 null (최근 4분기·최근 분기말) */
+  basis: string | null;
   /** '업종 가운데값 25.0배' */
   peerMedian: string | null;
   /** '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' */
@@ -208,6 +218,10 @@ const AVG_DAYS = 20;
 /** 받기 실패를 기억하는 시간 (그동안 다시 받지 않음) */
 const FAIL_BACKOFF_MS = 30 * 60_000;
 const NOT_LISTED_BACKOFF_MS = 24 * 3_600_000;
+/** 비교 기준이 없을 때 화면 요청이 만들기를 거는 간격 (실패가 이어져도 30분에 한 번까지) */
+export const REFERENCE_KICK_MS = 30 * 60_000;
+/** 등록하지 않은 종목의 재무를 지우는 기준 (이만큼 새로 받지 않았으면 = 이만큼 열지 않았으면) */
+export const FACTS_PRUNE_DAYS = 30;
 /** 줄여서 저장할 기간 (최근 약 8년) */
 const KEEP_YEARS = 8;
 /**
@@ -264,7 +278,12 @@ export class ValueScoreService {
   private readonly failures = new Map<string, { at: number; kind: "notListed" | "failed" }>();
   private readonly queue = new Set<string>();
   private worker: Promise<void> | null = null;
+  /** 백그라운드 받기에서 지금 받는 종목 */
+  private active: string | null = null;
   private building: Promise<unknown> | null = null;
+  /** 화면 요청이 건 비교 기준 만들기 (끝나면 null) · 마지막으로 건 때 */
+  private kicked: Promise<unknown> | null = null;
+  private lastKick = Number.NEGATIVE_INFINITY;
   private tasks: ScheduledTask[] = [];
   private startTimer: NodeJS.Timeout | null = null;
   /** 마지막 비교 기준 만들기 결과 (관리·로그용) */
@@ -323,19 +342,29 @@ export class ValueScoreService {
     await this.refreshFacts(code);
   }
 
-  /** 백그라운드 받기 (한 번에 하나, 사이 쉼). 화면 요청은 이것을 기다리지 않는다 */
-  requestRefresh(code: string): void {
+  /** 백그라운드 받기 (한 번에 하나, 사이 쉼). 화면 요청은 이것을 기다리지 않는다. 받기를 걸었거나 이미 받는 중이면 true (실패 뒤 쉬는 중이면 false) */
+  requestRefresh(code: string): boolean {
     const c = normalizeCode(code);
+    if (this.inFlight(c)) return true;
     const fail = this.failures.get(c);
     const t = this.now().getTime();
-    if (fail && t - fail.at < (fail.kind === "notListed" ? NOT_LISTED_BACKOFF_MS : FAIL_BACKOFF_MS)) return;
+    if (fail && t - fail.at < (fail.kind === "notListed" ? NOT_LISTED_BACKOFF_MS : FAIL_BACKOFF_MS)) return false;
     this.queue.add(c);
     if (!this.worker) this.worker = this.drain().finally(() => (this.worker = null));
+    return true;
   }
 
-  /** 테스트·관리용: 백그라운드 받기가 끝날 때까지 */
+  /** 이 종목 재무를 지금 받는 중이거나 받을 차례인지 */
+  private inFlight(code: string): boolean {
+    return this.queue.has(code) || this.active === code;
+  }
+
+  /** 테스트·관리용: 백그라운드 받기와 화면 요청이 건 비교 기준 만들기가 끝날 때까지 */
   async idle(): Promise<void> {
-    while (this.worker) await this.worker;
+    while (this.worker || this.kicked) {
+      await this.worker;
+      await this.kicked;
+    }
   }
 
   private async drain(): Promise<void> {
@@ -343,7 +372,12 @@ export class ValueScoreService {
     while (this.queue.size) {
       const c = this.queue.values().next().value as string;
       this.queue.delete(c);
-      if (await this.enabled()) await this.refreshFacts(c);
+      this.active = c;
+      try {
+        if (await this.enabled()) await this.refreshFacts(c);
+      } finally {
+        this.active = null;
+      }
       if (this.queue.size && pause > 0) await new Promise((r) => setTimeout(r, pause));
     }
   }
@@ -442,6 +476,46 @@ export class ValueScoreService {
     }
   }
 
+  /**
+   * 화면 요청이 비교 기준 만들기를 건다 (비교 기준이 없거나 2주 넘게 묵었을 때, 백그라운드 — 응답은 기다리지 않음).
+   * 이미 만드는 중이면 그대로, 30분 안에 건 적이 있으면 걸지 않는다. 지금 만드는 중이면 true
+   */
+  private kickReference(): boolean {
+    if (this.referenceInProgress()) return true;
+    const t = this.now().getTime();
+    if (t - this.lastKick < REFERENCE_KICK_MS) return false;
+    this.lastKick = t;
+    const run: Promise<unknown> = this.buildReference()
+      .catch(() => "failed")
+      .finally(() => {
+        if (this.kicked === run) this.kicked = null;
+      });
+    this.kicked = run;
+    return true;
+  }
+
+  /** 비교 기준을 지금 만드는 중인지 (예약·켤 때·화면 요청이 건 것 모두) */
+  referenceInProgress(): boolean {
+    return this.building !== null || this.kicked !== null;
+  }
+
+  /**
+   * 등록하지 않은 종목의 재무 정리: 30일 넘게 새로 받지 않은 줄을 지운다. 미등록 종목은 열 때(20시간 넘게 묵었으면) 다시 받으므로
+   * 받은 때가 곧 마지막으로 연 때다 — 30일 넘게 열지 않은 종목. 등록 종목은 그대로. 지운 줄 수
+   */
+  async prune(registered: readonly string[]): Promise<number> {
+    const cut = seoulIso(new Date(this.now().getTime() - FACTS_PRUNE_DAYS * 86_400_000));
+    const keep = registered.map(normalizeCode);
+    let q = this.deps.db.selectFrom("value_fundamentals").select("code").where("fetched_at", "<", cut);
+    if (keep.length) q = q.where("code", "not in", keep);
+    const old = (await q.execute()).map((r) => r.code);
+    if (!old.length) return 0;
+    await this.deps.db.deleteFrom("value_fundamentals").where("code", "in", old).execute();
+    for (const c of old) this.factsCache.delete(c);
+    this.deps.log?.info({ removed: old.length }, "가치 지표: 오래 열지 않은 미등록 종목 재무 정리");
+    return old.length;
+  }
+
   /** 등록 종목 가운데 재무가 없거나 20시간 넘게 묵은 종목을 백그라운드로 받는다 (켤 때) */
   async warm(codes: readonly string[]): Promise<void> {
     if (!(await this.enabled())) return;
@@ -454,9 +528,21 @@ export class ValueScoreService {
 
   start(registered: () => Promise<string[]>): void {
     this.stop();
-    // 주 1회: 토요일 09:00 KST (미국 금요일 장 마감 뒤). 매일 09:15 에 7일 넘게 묵었으면 다시 (실패한 주 대비)
+    // 주 1회: 토요일 09:00 KST (미국 금요일 장 마감 뒤). 매일 09:15 에 7일 넘게 묵었으면 다시 (실패한 주 대비) + 오래 열지 않은 미등록 종목 재무 정리
     this.tasks.push(cron.schedule("0 9 * * 6", () => void this.buildReference({ force: true }).catch(() => undefined), { timezone: "Asia/Seoul", name: "value-reference-weekly" }));
-    this.tasks.push(cron.schedule("15 9 * * *", () => void this.buildReference().catch(() => undefined), { timezone: "Asia/Seoul", name: "value-reference-check" }));
+    this.tasks.push(
+      cron.schedule(
+        "15 9 * * *",
+        () =>
+          void (async () => {
+            await this.buildReference().catch(() => undefined);
+            // 등록 목록을 읽지 못하면 지우지 않는다 (등록 종목 재무까지 지우지 않게)
+            const reg = (await this.enabled()) ? await registered().catch(() => null) : null;
+            if (reg) await this.prune(reg).catch(() => 0);
+          })(),
+        { timezone: "Asia/Seoul", name: "value-reference-check" },
+      ),
+    );
     // 켤 때(배포 뒤) 2분 뒤: 비교 기준이 없거나 묵었으면 만들고, 등록 종목 재무를 받아 둔다
     this.startTimer = setTimeout(() => {
       void (async () => {
@@ -478,13 +564,16 @@ export class ValueScoreService {
 
   /**
    * 가치 부분이 꺼진 서버의 가치 줄 (되돌리기 스위치 valueScore 꺼짐·출처 없음): 1단계와 같은 모양 — ETF 는 '대상 아님', 그 밖은
-   * '계산 준비 중 · 가치 지표 점수는 지금 계산하지 않습니다.' (2단계가 나간 뒤라 '다음 단계에서'라고 쓰지 않는다)
+   * '지금 계산하지 않음 · 가치 지표 점수는 지금 계산하지 않습니다.' (2단계가 나간 뒤라 '다음 단계에서'라고 쓰지 않고, 상태 글도 이유 글과 맞춘다)
    */
   static stage1Block(etf: boolean, text: string = VALUE_STATUS_TEXT.off): ValueBlock {
-    return etf ? baseBlock("excluded", "대상 아님", { code: "etf", text: STATUS_TEXT.valueEtf }) : baseBlock("pending", "계산 준비 중", { code: "later", text });
+    return etf ? baseBlock("excluded", "대상 아님", { code: "etf", text: STATUS_TEXT.valueEtf }) : baseBlock("pending", VALUE_STATUS_TEXT.offLabel, { code: "off", text });
   }
 
-  /** 종목 하나의 가치 줄. 네트워크(SEC) 없이 저장한 값만 읽는다 — 없으면 백그라운드로 받기를 걸고 '계산 준비 중' */
+  /**
+   * 종목 하나의 가치 줄. 네트워크(SEC) 없이 저장한 값만 읽는다 — 없으면 백그라운드로 받기를 걸고 '계산 준비 중'.
+   * waiting(앱이 1분마다 다시 묻는 대기)은 실제로 받는·만드는 중일 때만 (쉬는 중이면 끝나는 상태 글)
+   */
   async evaluate(a: ValueEvalArgs): Promise<ValueEval> {
     const code = normalizeCode(a.code);
     const plain = (block: ValueBlock, extra: Partial<ValueEval> = {}): ValueEval => ({ block, stored: null, fetchFailure: false, waiting: false, ...extra });
@@ -496,46 +585,54 @@ export class ValueScoreService {
     if (p?.clearance) return plain(baseBlock("excluded", "대상 아님", { code: "clearance", text: VALUE_STATUS_TEXT.clearance }));
 
     const ref = await this.reference();
+    // 비교 기준이 없거나 2주 넘게 묵었으면 백그라운드로 만들기를 건다 (재무 받기와 함께 진행 — 30분에 한 번까지)
+    const refOld = !!ref && daysBetween(ref.refDate, a.scoreDate) > REFERENCE_STALE_DAYS;
+    if (!ref || refOld) this.kickReference();
     const cls = ref?.classify(code) ?? null;
     if (cls?.industry === REIT_INDUSTRY) return plain(baseBlock("excluded", "대상 아님", { code: "reit", text: VALUE_STATUS_TEXT.reit }));
     if (cls?.industry === SPAC_INDUSTRY) return plain(baseBlock("excluded", "대상 아님", { code: "spac", text: VALUE_STATUS_TEXT.spac }));
 
     const facts = await this.loadFacts(code);
     const t = this.now().getTime();
+    const notListed = baseBlock("insufficient", "점수 없음", { code: "notListed", text: VALUE_STATUS_TEXT.notListed });
+    const factsFailed = baseBlock("unavailable", "점수 없음", { code: "factsFailed", text: VALUE_STATUS_TEXT.factsFailed });
     if (!facts) {
       const fail = this.failures.get(code);
-      if (fail?.kind === "notListed" && t - fail.at < NOT_LISTED_BACKOFF_MS) return plain(baseBlock("insufficient", "점수 없음", { code: "notListed", text: VALUE_STATUS_TEXT.notListed }));
-      if (fail?.kind === "failed" && t - fail.at < FAIL_BACKOFF_MS) return plain(baseBlock("unavailable", "점수 없음", { code: "factsFailed", text: VALUE_STATUS_TEXT.factsFailed }), { fetchFailure: true });
-      this.requestRefresh(code);
+      if (fail?.kind === "notListed" && t - fail.at < NOT_LISTED_BACKOFF_MS) return plain(notListed);
+      if (fail?.kind === "failed" && t - fail.at < FAIL_BACKOFF_MS) return plain(factsFailed, { fetchFailure: true });
+      if (!this.requestRefresh(code)) return plain(factsFailed, { fetchFailure: true });
       return plain(baseBlock("pending", "계산 준비 중", { code: "pendingFacts", text: VALUE_STATUS_TEXT.pendingFacts }), { waiting: true });
     }
     const age = t - Date.parse(facts.fetchedAt);
-    // 마지막으로 받은 뒤 실제로 받기에 실패했는지 — 받은 지 오래됐다는 것만으로는 실패가 아니다 (미등록 종목은 열 때만 받는다)
+    // 마지막으로 받은 뒤 실제로 받기에 실패했는지 — 받은 지 오래됐다는 것만으로는 실패가 아니다 (미등록 종목은 열 때만 받는다).
+    // 받은 뒤 SEC 목록에서 빠진 것(notListed)도 실패처럼 센다 — '새로 받는 중'이 끝나지 않던 것 (검토 지적)
     const fail = this.failures.get(code);
-    const failedSince = fail?.kind === "failed" && fail.at > Date.parse(facts.fetchedAt);
+    const failedSince = !!fail && fail.at > Date.parse(facts.fetchedAt);
     if (age >= FACTS_REFRESH_MS) this.requestRefresh(code);
+    const refreshing = this.inFlight(code);
     if (facts.sic === 6798) return plain(baseBlock("excluded", "대상 아님", { code: "reit", text: VALUE_STATUS_TEXT.reit }));
     if (facts.sic === 6770) return plain(baseBlock("excluded", "대상 아님", { code: "spac", text: VALUE_STATUS_TEXT.spac }));
     if (age >= FACTS_STALE_MS) {
-      if (failedSince) return plain(baseBlock("unavailable", "점수 없음", { code: "factsFailed", text: VALUE_STATUS_TEXT.factsFailed }), { fetchFailure: true });
-      // 오랜만에 연 종목: 뒤에서 새로 받는 중 (앱은 1분마다 다시 묻는다)
-      return plain(baseBlock("pending", "계산 준비 중", { code: "pendingRefresh", text: VALUE_STATUS_TEXT.pendingRefresh }), { waiting: true });
+      if (failedSince) return fail!.kind === "notListed" ? plain(notListed) : plain(factsFailed, { fetchFailure: true });
+      // 오랜만에 연 종목: 뒤에서 새로 받는 중 (앱은 1분마다 다시 묻는다). 받는 중이 아니면(쉬는 중) 끝나는 상태로
+      if (refreshing) return plain(baseBlock("pending", "계산 준비 중", { code: "pendingRefresh", text: VALUE_STATUS_TEXT.pendingRefresh }), { waiting: true });
+      return plain(factsFailed, { fetchFailure: true });
     }
-    if (!ref) {
-      // 첫 비교 기준을 만들지 못했으면 끝나는 상태로 (앱이 계속 다시 묻지 않게) — 하루 한 번(09:15) 다시 만든다
-      if (!this.building && this.lastBuild && !this.lastBuild.ok)
-        return plain(baseBlock("unavailable", "점수 없음", { code: "referenceFailed", text: VALUE_STATUS_TEXT.referenceFailed }), { fetchFailure: true });
-      return plain(baseBlock("pending", "계산 준비 중", { code: "pendingReference", text: VALUE_STATUS_TEXT.pendingReference }), { waiting: true });
+    if (!ref || refOld) {
+      // 지금 만드는 중일 때만 '만드는 중'(앱이 1분마다 다시 묻는다). 아니면 끝나는 상태 — 다음에 열 때(30분 뒤부터)·매일 09:15 에 다시 만든다
+      if (this.referenceInProgress())
+        return plain(baseBlock("pending", "계산 준비 중", { code: "pendingReference", text: ref ? VALUE_STATUS_TEXT.rebuildingReference : VALUE_STATUS_TEXT.pendingReference }), { waiting: true });
+      if (ref) return plain(baseBlock("insufficient", "점수 없음", { code: "referenceOld", text: VALUE_STATUS_TEXT.referenceOld }), { fetchFailure: true });
+      if (this.lastBuild && !this.lastBuild.ok) return plain(baseBlock("unavailable", "점수 없음", { code: "referenceFailed", text: VALUE_STATUS_TEXT.referenceFailed }), { fetchFailure: true });
+      return plain(baseBlock("pending", "계산 준비 중", { code: "referenceMissing", text: VALUE_STATUS_TEXT.referenceMissing }), { fetchFailure: true });
     }
-    if (daysBetween(ref.refDate, a.scoreDate) > REFERENCE_STALE_DAYS) return plain(baseBlock("insufficient", "점수 없음", { code: "referenceOld", text: VALUE_STATUS_TEXT.referenceOld }));
     if (a.candles === null) return plain(baseBlock("unavailable", "점수 없음", { code: "priceFailed", text: VALUE_STATUS_TEXT.priceFailed }), { fetchFailure: true });
-    if (a.splitHold) return plain(baseBlock("hold", "잠시 보류", { code: "split", text: `잠시 보류 — ${VALUE_STATUS_TEXT.hold}` }));
+    if (a.splitHold) return plain(baseBlock("hold", "잠시 보류", { code: "split", text: VALUE_STATUS_TEXT.hold }));
 
     const monthly = await a.monthly().catch(() => null);
     const now = this.core(facts, ref, cls, a.candles, monthly, a.scoreDate);
     // 마지막 보고서 뒤 주식 분할·병합 등: SEC 주식 수로 만든 시가총액이 틀리므로 점수를 내지 않는다
-    if (sharesMismatch(ref.quote(code), now.inputs?.shares, now.avgPrice))
-      return plain(baseBlock("hold", "잠시 보류", { code: "sharesMismatch", text: `잠시 보류 — ${VALUE_STATUS_TEXT.sharesMismatch}` }));
+    if (sharesMismatch(ref.quote(code), now.inputs?.shares, now.avgPrice)) return plain(baseBlock("hold", "잠시 보류", { code: "sharesMismatch", text: VALUE_STATUS_TEXT.sharesMismatch }));
     if (now.status !== "scored") return plain(baseBlock("insufficient", "점수 없음", now.reason!), { stored: { method: VALUE_VERSION, status: "insufficient", reason: now.reason!.code, reference: ref.refDate, fetchedAt: facts.fetchedAt } });
 
     // 지난주 (5거래일 전 봉까지 · 그날까지 제출된 재무 · 그날 쓰던 비교 기준)
@@ -549,8 +646,7 @@ export class ValueScoreService {
     }
     // '지난 값' 배지는 실제로 받기에 실패했을 때만. 받는 중이면 점수는 그대로 보이고 응답만 짧게 기억한다
     const carried = age >= FACTS_CARRY_MS && failedSince;
-    const refreshing = age >= FACTS_REFRESH_MS && !failedSince;
-    const block = scoredBlock(now, { ref, cls, change, carried, fetchedAt: facts.fetchedAt });
+    const block = scoredBlock(now, { ref, cls, change, carried, fetchedAt: facts.fetchedAt, cik: facts.cik });
     return { block, stored: storedOf(now, ref.refDate, facts), fetchFailure: false, waiting: refreshing };
   }
 
@@ -694,27 +790,54 @@ function metricValueText(m: MetricScore): string | null {
   return formatMetric(m.key, m.show);
 }
 
-export function metricRow(m: MetricScore): ValueMetricRow {
+/** 지표 줄을 만들 때 필요한 것: 경로(금융사면 '시장' 대신 '금융사 전체'), 연간 재무 기준(가장 최근 회계연도 끝) */
+export interface RowCtx {
+  path: ValuePath;
+  /** 연간 이력의 가장 최근 회계연도 끝 — 연간 재무로 계산한 지표의 기준 글 ('2026년 1월 결산 연간 기준') */
+  annualEnd: string | null;
+}
+/** 연간 재무로 계산한 지표 (최근 4분기 값이 아님): 성장 3년 · 이익·ROE 안정성 5년 · 주식 수 변화 3년 */
+export const ANNUAL_METRICS: ReadonlySet<MetricKey> = new Set<MetricKey>(["C1", "C2", "C3", "B5", "F2", "E2"]);
+
+/** 지표 한 줄의 문장: 쓰지 않음 · 규칙 · 같은 값 덩어리(중립 문장) · 위치 문장 */
+function metricSentence(m: MetricScore): string {
+  if (!m.adopted) return NOT_ADOPTED;
+  if (m.rule && m.why) return RULE_TEXT[m.why];
+  if (m.score === null || m.x === null) return NO_DATA;
+  // 같은 값이 많아 위치가 부풀려진 지표: '많은 편·적은 편' 대신 중립 문장 (검토 지적 — NVDA 배당 0.1% '많은 편')
+  if (tieDriven(m)) return tieSentence(Math.round(100 * m.peer!.tie), medianText(m.key, m.peer!.tieX) ?? "", m.score >= 50);
+  return positionSentence(m.key, m.score);
+}
+
+export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annualEnd: null }): ValueMetricRow {
   const level = m.peer?.level ?? null;
-  const levelName = level === "sector" ? "부문" : level === "market" ? "시장" : "업종";
-  const text = !m.adopted ? NOT_ADOPTED : m.rule && m.why ? RULE_TEXT[m.why] : m.score === null || m.x === null ? NO_DATA : positionSentence(m.key, m.score);
+  const lname = levelName(level, ctx.path);
   const median = m.peer ? medianText(m.key, m.peer.median) : null;
+  const positions = m.score !== null && m.rule !== "zeroLoss" ? positionText(m.pos, level, ctx.path) || null : null;
+  const notes: Array<string | null> = [m.blend && m.adopted ? BLEND_NOTE : null];
+  if (m.adopted && m.score !== null && tieDriven(m)) notes.push(TIE_NOTE);
+  // 맨 위 규칙(순현금 등): 같은 규칙 회사끼리 같은 순위라 보이는 위치는 그 무리의 가운데 — 그 무리 비율을 보이는 위치에서 되짚어 적는다
+  if (m.adopted && m.rule === "topTie" && m.pos.industry !== undefined && m.pos.industry < 99.5) {
+    const pos = Math.floor(m.pos.industry + 0.5);
+    notes.push(topTieNote(lname, Math.round(2 * (100 - m.pos.industry)), pos));
+  }
   return {
     key: m.key,
     name: METRIC_NAME[m.key],
     value: m.adopted ? metricValueText(m) : null,
-    peerMedian: median && m.score !== null ? `${levelName} 가운데값 ${median}` : null,
-    positions: m.score !== null && m.rule !== "zeroLoss" ? positionText(m.pos, level) || null : null,
-    mix: m.score !== null ? mixText(m.mix, level) : null,
+    basis: m.adopted && m.score !== null && ANNUAL_METRICS.has(m.key) && ctx.annualEnd ? annualBasis(ctx.annualEnd) : null,
+    peerMedian: median && m.score !== null ? `${lname} 가운데값 ${median}` : null,
+    positions,
+    mix: m.score !== null ? mixText(m.mix, level, ctx.path) : null,
     score: m.score === null ? null : roundScore(m.score),
-    text,
+    text: metricSentence(m),
     meaning: metricMeaning(m.key),
     used: m.adopted && m.score !== null,
-    note: [m.blend && m.adopted ? BLEND_NOTE : null, m.adopted && m.score !== null && tieDriven(m) ? tieNote(Math.round(100 * m.peer!.tie), medianText(m.key, m.peer!.tieX) ?? "") : null].filter(Boolean).join(" ") || null,
+    note: notes.filter(Boolean).join(" ") || null,
   };
 }
 
-export function familyRow(f: FamilyScore): ValueFamilyRow {
+export function familyRow(f: FamilyScore, ctx: RowCtx = { path: "general", annualEnd: null }): ValueFamilyRow {
   const present = f.metrics.filter((m) => m.adopted && m.score !== null);
   let text: string;
   if (!f.valid) text = f.why === "noCore" ? "핵심 지표 값이 없어 이 묶음은 빠졌습니다." : "값이 있는 지표가 절반보다 적어 이 묶음은 빠졌습니다.";
@@ -722,8 +845,7 @@ export function familyRow(f: FamilyScore): ValueFamilyRow {
     // 머리 문장: 가운데(50)에서 가장 먼 지표 — 같은 값이 많아 위치가 부풀려진 지표(무배당 0% 사이의 0.1% 등)는 되도록 고르지 않는다
     const pool = present.filter((m) => !tieDriven(m));
     const top = [...(pool.length ? pool : present)].sort((a, b) => Math.abs(b.score! - 50) - Math.abs(a.score! - 50))[0]!;
-    const s = top.rule && top.why ? RULE_TEXT[top.why] : positionSentence(top.key, top.score!);
-    text = `${METRIC_NAME[top.key]} — ${s}`;
+    text = `${METRIC_NAME[top.key]} — ${metricSentence(top)}`;
   }
   return {
     key: f.key,
@@ -733,11 +855,11 @@ export function familyRow(f: FamilyScore): ValueFamilyRow {
     score: f.score === null ? null : roundScore(f.score),
     scoreExact: f.score,
     text,
-    metrics: f.metrics.map(metricRow),
+    metrics: f.metrics.map((m) => metricRow(m, ctx)),
   };
 }
 
-function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; industry: string | null } | null; change: ValueBlock["change"]; carried: boolean; fetchedAt: string }): ValueBlock {
+function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; industry: string | null } | null; change: ValueBlock["change"]; carried: boolean; fetchedAt: string; cik: string | null }): ValueBlock {
   const r = c.result!;
   const shown = r.shown!;
   const band = valueBand(shown);
@@ -746,18 +868,20 @@ function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; 
   const flags: ValueBlock["flags"] = [];
   const core = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && CORE_METRICS[r.path].price.includes(m.key) && m.score !== null);
   for (const k of flagsKeys) {
-    if (k === "peerFallback") flags.push({ key: k, text: peerFallbackText(core?.peer?.level ?? "market", sectorKo(o.cls?.sector ?? null)) });
+    if (k === "peerFallback") flags.push({ key: k, text: peerFallbackText(core?.peer?.level ?? "market", sectorKo(o.cls?.sector ?? null), r.path) });
     else if (k !== "carriedForward") flags.push({ key: k, text: VALUE_FLAG_TEXT[k] });
   }
   if (o.carried) flags.push({ key: "carriedForward", text: carriedText(o.fetchedAt) });
   const level = core?.peer?.level ?? "market";
   const groupName = level === "industry" ? (o.cls?.industry ?? null) : level === "sector" ? (o.cls?.sector ?? null) : null;
-  const n = o.ref.groupSize(r.path, level, groupName);
+  // 비교한 회사 수 (대상 종목 자신은 빼고 — 검토 지적)
+  const n = o.ref.groupSize(r.path, level, groupName, o.cik);
   const ownUsed = r.families.find((f) => f.key === "price")!.metrics.some((m) => m.pos.own !== undefined);
   const badges = [...(r.status === "partial" ? [PARTIAL_BADGE] : []), ...(o.carried ? [carriedBadge(o.fetchedAt)] : [])];
   const notes: string[] = [];
   if (period.basis === "TTM") notes.push(PEER_TIMING_NOTE);
   if (r.status === "partial") notes.push(`계산에 쓴 묶음 비중 ${r.coverageWeight} (100 중)`);
+  const rowCtx: RowCtx = { path: r.path, annualEnd: c.inputs?.annual.at(-1)?.end ?? null };
   return {
     // 요약 줄 글: 예전 앱(1단계)은 점수 칸을 모르고 label 만 굵게 보이므로 숫자까지 넣는다 ('66점 · 가운데쯤'). 새 앱은 score·band 를 쓴다
     ...baseBlock(r.status, `${shown}점 · ${band}`, null),
@@ -772,7 +896,7 @@ function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; 
     priceNote: PRICE_NOTE,
     path: r.path,
     coverageWeight: r.coverageWeight,
-    families: r.families.map(familyRow),
+    families: r.families.map((f) => familyRow(f, rowCtx)),
     flags,
     notes,
     change: o.change,

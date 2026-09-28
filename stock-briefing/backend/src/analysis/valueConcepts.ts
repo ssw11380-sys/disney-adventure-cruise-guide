@@ -110,6 +110,8 @@ export function allTagNames(): string[] {
  * 총차입금 = 장기차입금(유동 포함) + 단기차입금·기업어음 + 리스부채 (설계: 'EV = 시가총액 + 총차입금(리스부채 포함) + 비지배지분 − 현금·단기금융상품').
  *  - LongTermDebt 가 있으면 그것(유동 부분 포함), 없으면 비유동 + 유동(LongTermDebtCurrent, 없으면 DebtCurrent)
  *  - DebtCurrent 로 유동 부분을 채웠으면 단기차입금·기업어음은 이미 들어 있을 수 있어 더하지 않는다
+ *  - 단기차입금(ShortTermBorrowings)과 기업어음(CommercialPaper)이 둘 다 있으면 큰 쪽 하나만 — 기업어음을 단기차입금 합계 안에 넣어
+ *    보고하는 회사가 많아 둘을 더하면 같은 빚을 두 번 센다 (검토 지적)
  *  - 리스: OperatingLeaseLiability(없으면 비유동 + 유동) + FinanceLeaseLiability(없으면 비유동 + 유동)
  * 차입 항목이 하나도 없으면 0 (빚이 없는 회사는 태그가 없다). 다만 차입 항목이 없는데 이자비용이 있으면 빚을 다른 태그로 적은 회사라
  * 모르는 것(null)으로 둔다 — 빚 0 으로 보면 '순현금'으로 맨 위에 오르게 된다. 재무상태표 자체가 없으면 부르는 쪽이 null 로 둔다
@@ -126,7 +128,7 @@ export function totalDebt(b: Partial<Record<InstantKey, number>>, interest?: num
     base = n(b.ltdNoncurrent) + b.debtCurrent;
     shortIncluded = true;
   } else base = n(b.ltdNoncurrent);
-  const short = shortIncluded ? 0 : n(b.stBorrowings) + n(b.commercialPaper);
+  const short = shortIncluded ? 0 : b.stBorrowings !== undefined && b.commercialPaper !== undefined ? Math.max(n(b.stBorrowings), n(b.commercialPaper)) : n(b.stBorrowings) + n(b.commercialPaper);
   const op = b.opLease !== undefined ? b.opLease : n(b.opLeaseNoncurrent) + n(b.opLeaseCurrent);
   const fin = b.finLease !== undefined ? b.finLease : n(b.finLeaseNoncurrent) + n(b.finLeaseCurrent);
   return Math.max(0, base) + Math.max(0, short) + Math.max(0, op) + Math.max(0, fin);

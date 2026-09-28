@@ -1,11 +1,11 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import React, { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { useIndicatorScores } from "@/api/hooks";
 import type { ValueFamilyRow, ValueMetricRow } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
 import { DISCLAIMER } from "@/lib/disclaimer";
-import { familySpeech, metricSpeech, nameWidth, SCORE_LABELS, stackRows, valueHasScore, valueSpeech } from "@/lib/scoreView";
+import { familySpeech, metricMain, metricSpeech, nameWidth, SCORE_LABELS, stackRows, valueHasScore, valueSpeech, WEIGHT_JOIN } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { ScoreBar } from "./ScoreBar";
@@ -15,16 +15,34 @@ import { ScoreBar } from "./ScoreBar";
  * 머리 '가치 지표 점수 57/100 · 가운데쯤' → 배지 → 비교 대상 문장 → 날짜 줄(20거래일 평균 주가 · 재무 기준 · 비교 기준) → 시세 표와 다를 수 있다는 안내
  * → 지난주 대비 바뀐 이유(5점 넘게 바뀐 때만) → 5묶음(막대·점수·가장 크게 작용한 지표 문장) → '지표별 값 보기'(지표마다 값·가운데값·위치·섞은 비중·문장)
  * → 표시 → 고지 → 계산 방식 줄. 점수가 없으면 상태 글과 이유만 (한국 '계산 준비 중', ETF '대상 아님', '점수 없음 — 이유').
- * 모든 문장은 서버가 만든다. 막대는 회색 한 가지 (좋음·나쁨 색 없음)
+ * 모든 문장은 서버가 만든다. 막대는 회색 한 가지 (좋음·나쁨 색 없음).
+ * focus: 요약 카드의 '가치분석 탭에서 지표별 값 보기'로 왔을 때 — 지표별 값을 펼친 채 그리고, 자리를 재면 onFocused(부모 안 위치)로 알려 화면이 이 카드 맨 위로 스크롤한다
  */
-export function ValueScoreCard({ code }: { code: string }) {
+export function ValueScoreCard({ code, focus = false, onFocused }: { code: string; focus?: boolean; onFocused?: (y: number) => void }) {
   const t = useTheme();
   const q = useIndicatorScores(code, true);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(focus);
+  // 이미 그려진 카드에 늦게 온 focus 도 펼친다 (한 번만)
+  const [seen, setSeen] = useState(focus);
+  if (focus !== seen) {
+    setSeen(focus);
+    if (focus) setOpen(true);
+  }
+  const y = useRef<number | null>(null);
+  const report = () => {
+    if (focus && y.current !== null) onFocused?.(y.current);
+  };
+  // 자리를 이미 잰 뒤 focus 가 오면 바로 알린다 (자리를 재기 전이면 onLayout 이 알린다)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- focus 가 바뀔 때만 (자리·콜백은 그때의 값)
+  useEffect(report, [focus]);
+  const onLayout = (e: LayoutChangeEvent) => {
+    y.current = e.nativeEvent.layout.y;
+    report();
+  };
   if (q.data === null) return null;
   if (!q.data) {
     return (
-      <Card style={styles.card}>
+      <Card style={styles.card} onLayout={onLayout}>
         <Text style={[styles.head, { color: t.ink }]} accessibilityRole="header">
           {SCORE_LABELS.valueDetail}
         </Text>
@@ -43,7 +61,7 @@ export function ValueScoreCard({ code }: { code: string }) {
   const v = s.value;
   const ok = valueHasScore(v);
   return (
-    <Card style={styles.card}>
+    <Card style={styles.card} onLayout={onLayout}>
       <View style={styles.headRow}>
         {/* 화면 읽기는 '57/100'(슬래시·분수) 대신 '가치 지표 57점, 0에서 100 중, 가운데쯤' */}
         <Text style={[styles.head, { color: t.ink }]} accessibilityRole="header" accessibilityLabel={ok ? valueSpeech(v) : undefined}>
@@ -118,8 +136,9 @@ function FamilyBlock({ f, open }: { f: ValueFamilyRow; open: boolean }) {
   const fs = useFontScale();
   const stack = stackRows(fs);
   const name = (
-    <Text style={[styles.famName, { color: t.ink }, stack ? { flexGrow: 1 } : { width: nameWidth(scores.familyNameW, fs) }]} numberOfLines={2}>
-      {f.name} <Text style={{ color: t.muted, fontWeight: "400" }}>· {f.weight}</Text>
+    <Text style={[styles.famName, { color: t.ink }, stack ? { flexGrow: 1 } : { width: nameWidth(scores.valueFamilyNameW, fs) }]} numberOfLines={2}>
+      {f.name}
+      <Text style={{ color: t.muted, fontWeight: "400" }}>{`${WEIGHT_JOIN}${f.weight}`}</Text>
     </Text>
   );
   const num = <Text style={[styles.num, { color: t.ink }]}>{f.score ?? "-"}</Text>;
@@ -158,7 +177,7 @@ function FamilyBlock({ f, open }: { f: ValueFamilyRow; open: boolean }) {
 /** 지표 한 줄: 이름 — 값 · 가운데값 / 위치 · 섞은 비중 / 문장 / 100에 가까울수록 … (쓰지 않는 지표는 흐리게 까닭만) */
 function MetricLine({ m }: { m: ValueMetricRow }) {
   const t = useTheme();
-  const main = [m.value, m.peerMedian].filter(Boolean).join(" · ");
+  const main = metricMain(m);
   return (
     <View style={styles.metric} accessible accessibilityLabel={metricSpeech(m)}>
       <Text style={{ color: m.used ? t.ink : t.muted, fontSize: font.small, fontWeight: "700", lineHeight: font.small * 1.45 }}>

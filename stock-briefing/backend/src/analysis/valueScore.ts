@@ -333,12 +333,12 @@ export class PeerBook {
     return { share: best / sorted.length, x: bestX };
   }
 
-  /** 업종 회사 수 (금융·일반 경로 안, 값과 상관없이) */
-  groupSize(path: ValuePath, level: PeerLevel, name: string | null): number {
+  /** 업종 회사 수 (금융·일반 경로 안, 값과 상관없이). 대상 종목 자신(selfCik)은 세지 않는다 — 비교하는 회사 수만 ('69개 회사'라 하고 68곳과 비교하던 것, 검토 지적) */
+  groupSize(path: ValuePath, level: PeerLevel, name: string | null, selfCik: string | null = null): number {
     const fin = path === "financial" ? 1 : 0;
     const secIdx = level === "sector" && name !== null ? this.ref.sectors.indexOf(name) : -1;
     const indIdx = level === "industry" && name !== null ? this.ref.industries.indexOf(name) : -1;
-    return this.ref.peers.filter((p) => p.f === fin && (level === "market" || (level === "sector" ? p.s === secIdx : p.i === indIdx))).length;
+    return this.ref.peers.filter((p) => p.f === fin && p.c !== selfCik && (level === "market" || (level === "sector" ? p.s === secIdx : p.i === indIdx))).length;
   }
 }
 
@@ -526,7 +526,7 @@ export function scoreValue(inp: ScoreInput): ValueScoreResult {
 
 export type ValueFlagKey =
   | "cyclicalPeak" | "cyclicalTrough" | "valueTrap" | "oneOff" | "sbcHeavy" | "smallEquity" | "negativeEquity" | "capitalImpairment"
-  | "earlyStage" | "payoutOver100" | "peerFallback" | "financial" | "carriedForward";
+  | "earlyStage" | "payoutOver100" | "dividendCut" | "peerFallback" | "financial" | "carriedForward";
 
 export function valueFlags(r: ValueScoreResult, aux: MetricAux, ctx: { cyclical: boolean; thresholds: ValueThresholds; metrics: MetricSet }): ValueFlagKey[] {
   const out: ValueFlagKey[] = [];
@@ -549,6 +549,7 @@ export function valueFlags(r: ValueScoreResult, aux: MetricAux, ctx: { cyclical:
   if (ctx.metrics.D1?.why === "capitalImpairment") out.push("capitalImpairment");
   if (aux.earlyStage) out.push("earlyStage");
   if (aux.payoutOver100) out.push("payoutOver100");
+  if (aux.dividendCut) out.push("dividendCut");
   // 업종 대신 부문·시장과 비교: 주가 수준 핵심 지표 기준
   const priceCore = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && CORE_METRICS[r.path].price.includes(m.key));
   if (priceCore?.peer && priceCore.peer.level !== "industry") out.push("peerFallback");

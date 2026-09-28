@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { IndicatorScores } from "@/api/types";
-import { barFraction, compositeLine, familySpeech, flagPreview, itemLine, leverageSpeech, metricSpeech, moreFlagsText, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech, valueWaiting } from "@/lib/scoreView";
+import { barFraction, compositeLine, familyLabel, familySpeech, flagPreview, itemLine, leverageSpeech, metricMain, metricSpeech, moreFlagsText, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueJumpY, valueSpeech, valueWaiting } from "@/lib/scoreView";
 
 /**
  * 지표 점수 화면 모양 (3-44 — 2단계부터 가치·종합). 서버 응답은 공용 픽스처(shared/fixtures/indicatorScores.json — 서버 테스트가 지금 서버 코드의 응답과 같은지 본다).
@@ -28,18 +28,21 @@ describe("화면 읽기 문장", () => {
     expect(trendSpeech(S["NVDA"]!.trend)).toBe("추세 지표 69점, 다소 강함");
     expect(valueSpeech(S["NVDA"]!.value)).toBe("가치 지표 67점, 0에서 100 중, 높은 편");
     expect(summarySpeech(S["NVDA"]!)).toBe("지표 점수. 가치 지표 67점, 0에서 100 중, 높은 편. 추세 지표 69점, 다소 강함. 종합 지표 68점, 두 점수의 평균.");
-    // 가치 플래그를 끈 서버·예전 서버: 1단계와 같은 문장
-    expect(summarySpeech(S["NVDA_valueOff"]!)).toBe("지표 점수. 가치 지표, 계산 준비 중. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
+    // 가치 플래그를 끈 서버: 상태 글과 보이는 이유 줄까지 읽는다 (검토 지적: 상태 글 '지금 계산하지 않음' · 이유도 TalkBack 이 읽게)
+    expect(summarySpeech(S["NVDA_valueOff"]!)).toBe("지표 점수. 가치 지표, 지금 계산하지 않음, 가치 지표 점수는 지금 계산하지 않습니다. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
   });
   it("두 점수 차이 30 이상: 종합 뒤에 차이 안내를 이어 읽는다 (마침표 겹침 없음)", () => {
     const sp = summarySpeech(S["ZZGAP"]!);
     expect(sp).toContain("종합 지표 50점, 두 점수의 평균. 두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요.");
     expect(sp).not.toMatch(/\.\./);
   });
-  it("가치 점수 없음·대상 아님·한국: 상태 글", () => {
-    expect(valueSpeech(S["ZZNOF"]!.value)).toBe("가치 지표, 점수 없음");
-    expect(valueSpeech(S["SOXL"]!.value)).toBe("가치 지표, 대상 아님");
-    expect(valueSpeech(S["005930"]!.value)).toBe("가치 지표, 계산 준비 중");
+  it("가치 점수 없음·대상 아님·한국: 상태 글과 이유 (보이는 이유 줄을 화면 읽기도 읽는다)", () => {
+    expect(valueSpeech(S["ZZNOF"]!.value)).toBe("가치 지표, 점수 없음, SEC 재무제표를 찾지 못했습니다 (외국 회사·새로 상장한 회사 등)");
+    expect(valueSpeech(S["SOXL"]!.value)).toBe("가치 지표, 대상 아님, ETF는 여러 종목을 묶은 상품이라, 한 회사의 재무로 계산하는 이 점수를 내지 않습니다");
+    expect(valueSpeech(S["005930"]!.value)).toBe("가치 지표, 계산 준비 중, 한국 종목 가치 지표 점수는 다음 단계에서 계산합니다");
+    expect(valueSpeech(S["ZZNOF_pending"]!.value)).toBe("가치 지표, 계산 준비 중, 재무제표를 처음 받는 중입니다 (보통 몇 분 안)");
+    // 예전 서버(이유 없이 label·text 만)도 그대로 읽는다
+    expect(valueSpeech({ method: "VALUE-1", status: "pending", label: "계산 준비 중", score: null, band: null, about: "", text: "" })).toBe("가치 지표, 계산 준비 중");
     const partial = { ...S["NVDA"]!.value, status: "partial" as const, badges: ["일부 지표 없이 계산", "지난 값 9/24"] };
     expect(valueSpeech(partial)).toBe("가치 지표 67점, 0에서 100 중, 높은 편, 일부 지표 없이 계산, 지난 값 9/24");
   });
@@ -54,13 +57,19 @@ describe("화면 읽기 문장", () => {
     for (const part of [a1.name, a1.value!, a1.peerMedian!, a1.text.replace(/\.$/, ""), a1.note!.replace(/\.$/, "")]) expect(metricSpeech(a1)).toContain(part);
     expect(metricSpeech(a1)).not.toMatch(/\.\.|\/100|→/);
     const e1 = S["NVDA"]!.value.families![4]!.metrics.find((m) => m.key === "E1")!;
-    expect(metricSpeech(e1)).toContain("비교한 회사의 77%가 같은 값(0.0%)이라");
+    // 같은 값 덩어리에 좌우된 지표: '배당이 많은 편' 대신 중립 문장 (검토 지적)
+    expect(metricSpeech(e1)).toContain("비교한 회사 대부분(77%)이 0.0%라 위치 점수가 크게 나왔습니다");
+    expect(metricSpeech(e1)).not.toContain("배당이 많은 편입니다");
+    // 연간 재무 지표는 기준 글도 읽는다
+    const c1 = S["NVDA"]!.value.families![3]!.metrics.find((m) => m.key === "C1")!;
+    expect(c1.basis).toBe("2026년 1월 결산 연간 기준");
+    expect(metricSpeech(c1)).toContain(`, 업종 가운데값 ${c1.peerMedian!.replace("업종 가운데값 ", "")}. 2026년 1월 결산 연간 기준. 위치 점수`);
     const b3 = S["NVDA"]!.value.families![1]!.metrics.find((m) => m.key === "B3")!;
     expect(metricSpeech(b3)).toBe("매출총이익 ÷ 자산, 값 없음, 비교할 회사 자료가 모자라(70% 미만) 이 지표는 쓰지 않았습니다.");
   });
   it("삼성전자: 68 다소 강함", () => expect(trendSpeech(S["005930"]!.trend)).toBe("추세 지표 68점, 다소 강함"));
   it("SOXL: 이 상품 자체 점수 없음 + 기초자산 참고", () => {
-    expect(summarySpeech(S["SOXL"]!)).toBe("지표 점수. 가치 지표, 대상 아님. 추세 지표, 이 상품 자체 점수 없음. 참고: 기초자산 SOXX 추세 지표 73 · 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
+    expect(summarySpeech(S["SOXL"]!)).toBe("지표 점수. 가치 지표, 대상 아님, ETF는 여러 종목을 묶은 상품이라, 한 회사의 재무로 계산하는 이 점수를 내지 않습니다. 추세 지표, 이 상품 자체 점수 없음. 참고: 기초자산 SOXX 추세 지표 73 · 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
   });
   it("레버리지 주의 상자: 줄 앞 '·'·줄 끝 마침표를 떼고 이어 읽는다 (마침표 겹침 없음)", () => {
     const sp = leverageSpeech(S["SOXL"]!.trend.leveraged!.box);
@@ -136,12 +145,22 @@ describe("보이는 모양", () => {
   it("가치 지표가 서버 백그라운드 받기를 기다리는 동안만 1분마다 다시 묻는다 (한국 '계산 준비 중'은 아님)", () => {
     expect(valueWaiting(S["ZZNOF_pending"])).toBe(true);
     // 오랜만에 연 종목(재무를 새로 받는 중)도 기다리는 중 — '받지 못했습니다'가 아니다 (리뷰)
-    const refreshing = { ...S["NVDA"]!, value: { ...S["NVDA_valueOff"]!.value, reason: { code: "pendingRefresh", text: "계산 준비 중 — 재무제표를 새로 받는 중입니다 (보통 몇 분 안)" } } };
-    expect(valueWaiting(refreshing)).toBe(true);
+    const withReason = (code: string) => ({ ...S["NVDA"]!, value: { ...S["NVDA_valueOff"]!.value, label: "계산 준비 중", reason: { code, text: "" } } });
+    expect(valueWaiting(withReason("pendingRefresh"))).toBe(true);
+    expect(valueWaiting(withReason("pendingReference"))).toBe(true);
+    // 서버가 받는·만드는 중이 아니면(비교 기준이 아직 없고 쉬는 중 · 만들기 실패 · SEC 목록에서 빠짐) 다시 묻지 않는다 (검토 지적: 1분마다 끝없이 묻던 것)
+    for (const code of ["referenceMissing", "referenceFailed", "notListed", "factsFailed", "off"]) expect(valueWaiting(withReason(code)), code).toBe(false);
     expect(valueWaiting(S["005930"])).toBe(false);
     expect(valueWaiting(S["NVDA"])).toBe(false);
     expect(valueWaiting(S["NVDA_valueOff"])).toBe(false);
     expect(valueWaiting(null)).toBe(false);
+  });
+  it("지표 줄 값 · 가운데값 (연간 기준 글) · 묶음 이름 비중 이음 · 가치 상세 카드로 스크롤할 자리", () => {
+    expect(metricMain({ value: "32.9%", peerMedian: "업종 가운데값 13.1%", basis: "2026년 1월 결산 연간 기준" })).toBe("32.9% · 업종 가운데값 13.1% (2026년 1월 결산 연간 기준)");
+    expect(metricMain({ value: "44.8배", peerMedian: "업종 가운데값 100배 넘음", basis: null })).toBe("44.8배 · 업종 가운데값 100배 넘음");
+    expect(metricMain({ value: null, peerMedian: null })).toBe("");
+    expect(familyLabel("수익성과 이익의 질", 25)).toBe("수익성과 이익의 질 · 25");
+    expect([valueJumpY(0, 1234), valueJumpY(900, 0), valueJumpY(0, 3)]).toEqual([1226, 892, 0]);
   });
   it("글자 130% 부터 두 줄", () => {
     expect([stackRows(1), stackRows(1.15), stackRows(1.3), stackRows(2)]).toEqual([false, false, true, true]);

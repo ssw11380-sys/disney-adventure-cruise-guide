@@ -15,7 +15,7 @@ import { compositeOf, type ScoreSources, type ScoresResponse, type ScoreStock } 
 import { STATUS_TEXT } from "../src/services/indicatorScoreText.js";
 import type { FrameRow, ReferenceSources, ScreenerRow } from "../src/services/valueReference.js";
 import { weeklyValueChange } from "../src/services/valueScoreService.js";
-import { gapText, howLinesV2, VALUE_STATUS_TEXT } from "../src/services/valueScoreText.js";
+import { gapText, howLinesV2, TIE_NOTE, VALUE_STATUS_TEXT } from "../src/services/valueScoreText.js";
 import { benchOf, candlesOf, tossInfo } from "./fixtures/indicatorScores/load.js";
 import { dailyOf, fakeValueSources, monthlyOf, referenceData } from "./fixtures/valueScores/load.js";
 import { fakeProviders } from "./helpers.js";
@@ -117,13 +117,16 @@ describe("플래그 valueScore (indicatorScores 안의 가치 부분 되돌리�
     expect(FEATURES.valueScore.description).toMatch(/끄면 .*0건/);
   });
 
-  it("끄면 1단계 모양 (가치 '계산 준비 중 · 지금 계산하지 않습니다', 종합 없음, 계산 방법 1단계, 출처 줄 없음) — SEC·Nasdaq 요청 0건, 가치 기록 0줄, 비교 기준 만들기도 안 함", async () => {
+  it("끄면 1단계 모양 (가치 '지금 계산하지 않음 · 지금 계산하지 않습니다', 종합 없음, 계산 방법 1단계, 출처 줄 없음) — SEC·Nasdaq 요청 0건, 가치 기록 0줄, 비교 기준 만들기도 안 함", async () => {
     const { value } = await start({ facts: [], flags: { valueScore: false } });
     const r = await get("NVDA");
     expect(r.status).toBe(200);
     // 2단계가 나간 뒤라 '다음 단계에서 계산합니다'라고 쓰지 않는다 (리뷰)
-    expect(r.body.value).toMatchObject({ status: "pending", label: "계산 준비 중", text: VALUE_STATUS_TEXT.off, score: null, versionLine: null });
+    // 상태 글도 이유 글과 맞춘다 ('계산 준비 중'이라 하고 '지금 계산하지 않습니다'라고 하던 것, 검토 지적)
+    expect(r.body.value).toMatchObject({ status: "pending", label: "지금 계산하지 않음", text: VALUE_STATUS_TEXT.off, reason: { code: "off", text: VALUE_STATUS_TEXT.off }, score: null, versionLine: null });
     expect(r.body.value.text).not.toContain("다음 단계");
+    expect(r.body.text.how.join(" ")).not.toContain("다음 단계");
+    expect(r.body.text.how).toContain("가치 지표 점수와 종합 지표 점수(두 점수의 평균)는 지금 계산하지 않습니다.");
     expect(r.body.composite).toMatchObject({ status: "none", reason: "valueMissing" });
     expect(r.body.text.how).not.toEqual(howLinesV2());
     await app!.valueScores.idle();
@@ -203,11 +206,12 @@ describe("GET /api/scores/:code — 미국 보통주 가치 지표 점수", () =
     expect([v.scoreExact, v.score]).toEqual([52.75, 53]);
   });
 
-  it("같은 값이 많은 지표: NVDA 배당수익률 0.1% 는 반도체 회사의 77% 가 0% 라 위치가 높게 나온다 → 지표 줄에 안내, 주주환원 머리 문장은 주식 수 변화로 (리뷰)", async () => {
+  it("같은 값이 많은 지표: NVDA 배당수익률 0.1% 는 반도체 회사의 77% 가 0% 라 위치가 높게 나온다 → '배당이 많은 편' 대신 중립 문장과 안내, 주주환원 머리 문장은 주식 수 변화로 (리뷰)", async () => {
     await start({ facts: ["NVDA"] });
     const payout = (await get("NVDA")).body.value.families.find((f) => f.key === "payout")!;
     const e1 = payout.metrics.find((m) => m.key === "E1")!;
-    expect(e1).toMatchObject({ value: "0.1%", note: "비교한 회사의 77%가 같은 값(0.0%)이라, 그 값과 조금만 달라도 위치 점수가 크게 달라집니다." });
+    expect(e1).toMatchObject({ value: "0.1%", text: "비교한 회사 대부분(77%)이 0.0%라 위치 점수가 크게 나왔습니다.", note: TIE_NOTE });
+    expect(e1.text).not.toContain("많은 편");
     expect(payout.text).toBe("주식 수 변화 (3년 연평균) — 주식 수가 줄어든 편입니다.");
     expect(payout.text).not.toContain("배당이 많은 편");
   });
@@ -390,11 +394,12 @@ describe("대상 아님 · 한국 · 받기 실패 · 지난 값", () => {
     expect((await get("MSFT")).body.value).toMatchObject({ status: "ok", badges: [] });
   });
 
-  it("첫 비교 기준을 만들지 못했으면 '점수 없음 — 비교 기준을 만들지 못했습니다'로 끝난다 (앱이 계속 다시 묻지 않게, 리뷰) — 하루 한 번 다시 만든다", async () => {
+  it("첫 비교 기준을 만들지 못했으면 '점수 없음 — 비교 기준을 만들지 못했습니다. 잠시 뒤 다시 만듭니다'로 끝난다 (앱이 계속 다시 묻지 않게, 리뷰)", async () => {
     const reference: ReferenceSources = { screener: async () => Promise.reject(new Error("Nasdaq 막힘")), tickers: async () => new Map(), frame: async () => [] };
     await start({ reference: null, facts: ["NVDA"], value: fakeValueSources({ reference }) });
     expect((await get("NVDA")).body.value.reason?.code).toBe("pendingReference");
-    expect(await app!.valueScores.buildReference()).toBe("failed");
+    await app!.valueScores.idle();
+    expect(app!.valueScores.lastBuild).toMatchObject({ ok: false });
     clock = new Date(clock.getTime() + 61_000);
     const b = (await get("NVDA")).body.value;
     expect(b).toMatchObject({ status: "unavailable", label: "점수 없음", reason: { code: "referenceFailed", text: VALUE_STATUS_TEXT.referenceFailed } });
@@ -406,7 +411,8 @@ describe("대상 아님 · 한국 · 받기 실패 · 지난 값", () => {
     // 10:1 분할이 Nasdaq 에는 반영됐고 SEC 는 아직 분할 전 (가격 1/10, 주식 수 10배)
     await start({ reference: { ...base, quotes: { ...base.quotes, NVDA: [cap, price / 10] } }, facts: ["NVDA"] });
     const b = (await get("NVDA")).body;
-    expect(b.value).toMatchObject({ status: "hold", label: "잠시 보류", reason: { code: "sharesMismatch", text: `잠시 보류 — ${VALUE_STATUS_TEXT.sharesMismatch}` }, score: null });
+    // 이유 글 앞에 상태 글('잠시 보류 —')을 다시 쓰지 않는다 (요약 카드가 상태 글 옆에 이유 글을 둔다, 검토 지적)
+    expect(b.value).toMatchObject({ status: "hold", label: "잠시 보류", reason: { code: "sharesMismatch", text: VALUE_STATUS_TEXT.sharesMismatch }, score: null });
     expect(b.composite.status).toBe("none");
     await app!.close();
     app = null;
@@ -415,9 +421,15 @@ describe("대상 아님 · 한국 · 받기 실패 · 지난 값", () => {
     for (const c of US) expect((await get(c)).body.value.status).not.toBe("hold");
   });
 
-  it("비교 기준이 14일 넘게 갱신되지 않으면 '점수 없음 — 비교 기준이 2주 넘게 갱신되지 않았습니다'", async () => {
-    await start({ reference: { ...referenceData(), refDate: "2026-09-10" }, facts: ["NVDA"] });
+  it("비교 기준이 14일 넘게 갱신되지 않으면 뒤에서 새로 만들기를 걸고('새로 만드는 중'), 만들지 못하면 '점수 없음 — 비교 기준이 2주 넘게 갱신되지 않았습니다'", async () => {
+    const { value } = await start({ reference: { ...referenceData(), refDate: "2026-09-10" }, facts: ["NVDA"] });
+    expect((await get("NVDA")).body.value).toMatchObject({ status: "pending", reason: { code: "pendingReference", text: VALUE_STATUS_TEXT.rebuildingReference } });
+    await app!.valueScores.idle();
+    expect(value.calls.screener).toBe(1); // 가짜 스크리너는 빈 줄 → 만들기 실패
+    clock = new Date(clock.getTime() + 61_000);
     expect((await get("NVDA")).body.value).toMatchObject({ status: "insufficient", reason: { code: "referenceOld", text: VALUE_STATUS_TEXT.referenceOld } });
+    await app!.valueScores.idle();
+    expect(value.calls.screener).toBe(1); // 30분 안에는 다시 걸지 않는다
   });
 });
 
@@ -586,3 +598,126 @@ const EXPECTED_VALUE: Record<string, [number | null, string | null, string | nul
   JPM: [51, "가운데쯤", "financial"],
   RGTI: [31, "낮은 편", "general"],
 };
+
+describe("검토 지적 3차 — 끝나지 않는 '받는 중·만드는 중', 금융사 말, 회사 수, 연간 기준 글, 정리", () => {
+  it("플래그를 나중에 켠 서버: 켤 때(2분 뒤) 만들기를 건너뛰었어도 화면 요청이 뒤에서 첫 비교 기준을 만든다 — 다음 날 09:15 까지 '만드는 중'으로 기다리지 않게", async () => {
+    const screener: ScreenerRow[] = Array.from({ length: 600 }, (_, k) => ({ symbol: `S${k}`, name: "", marketCap: k < 40 ? (k + 1) * 1e9 : null, sector: "Technology", industry: "Semiconductors" }));
+    const tickers = new Map(screener.slice(0, 40).map((r, k) => [r.symbol, String(k + 1).padStart(10, "0")]));
+    const frame = async (tag: { name: string }, period: string): Promise<FrameRow[]> =>
+      ["NetIncomeLoss", "Assets", "StockholdersEquity"].includes(tag.name) && (period === "CY2025" || period === "CY2026Q2I")
+        ? Array.from({ length: 40 }, (_, k) => ({ cik: k + 1, ...(period === "CY2025" ? { start: "2025-01-01" } : {}), end: period === "CY2025" ? "2025-12-31" : "2026-06-30", val: (k + 1) * 1e8 }))
+        : [];
+    const value = fakeValueSources({ reference: { screener: async () => screener, tickers: async () => tickers, frame } });
+    await start({ value, reference: null, facts: ["NVDA"], flags: { valueScore: false } });
+    (app!.valueScores as unknown as { deps: { referencePauseMs: number } }).deps.referencePauseMs = 0;
+    // 켤 때 만들기: 플래그가 꺼져 있어 아무것도 안 함
+    expect(await app!.valueScores.buildReference()).toBe("off");
+    await app!.inject({ method: "PUT", url: "/api/admin/features", payload: { valueScore: true } });
+    const first = (await get("NVDA")).body.value;
+    expect(first).toMatchObject({ status: "pending", label: "계산 준비 중", reason: { code: "pendingReference", text: VALUE_STATUS_TEXT.pendingReference } });
+    await app!.valueScores.idle();
+    expect(app!.valueScores.lastBuild).toMatchObject({ ok: true });
+    expect((await db.selectFrom("value_references").select("ref_date").execute()).length).toBe(1);
+    clock = new Date(clock.getTime() + 61_000);
+    expect((await get("NVDA")).body.value.reason?.code ?? "scored").not.toMatch(/^pending/);
+  });
+
+  it("첫 비교 기준 만들기가 실패하면 앱이 다시 묻지 않는 '점수 없음'으로 끝나고, 열 때 30분에 한 번까지 다시 만든다 (만드는 중일 때만 '만드는 중')", async () => {
+    const { value } = await start({ reference: null, facts: ["NVDA"] });
+    expect((await get("NVDA")).body.value.reason?.code).toBe("pendingReference");
+    await app!.valueScores.idle();
+    expect(value.calls.screener).toBe(1);
+    clock = new Date(clock.getTime() + 61_000);
+    const failed = (await get("NVDA")).body.value;
+    expect(failed).toMatchObject({ status: "unavailable", label: "점수 없음", reason: { code: "referenceFailed", text: "비교 기준을 만들지 못했습니다. 잠시 뒤 다시 만듭니다" } });
+    // 10분 뒤: 응답 기억(5분)이 지나도 30분 안이면 다시 만들지 않는다 — 여전히 끝나는 상태 (대기 코드가 아님)
+    clock = new Date(clock.getTime() + 10 * 60_000);
+    expect((await get("NVDA")).body.value.reason?.code).toBe("referenceFailed");
+    await app!.valueScores.idle();
+    expect(value.calls.screener).toBe(1);
+    // 31분 뒤: 다시 건다
+    clock = new Date(clock.getTime() + 21 * 60_000);
+    expect((await get("NVDA")).body.value.reason?.code).toBe("pendingReference");
+    await app!.valueScores.idle();
+    expect(value.calls.screener).toBe(2);
+  });
+
+  it("재무를 받은 뒤 SEC 목록에서 빠진 종목(notListed): 실패처럼 세어 36시간 뒤 '지난 값', 7일 뒤 '점수 없음 — SEC 재무제표를 찾지 못했습니다'로 끝난다 ('새로 받는 중'이 끝나지 않던 것)", async () => {
+    const value = fakeValueSources();
+    const gone = new Set<string>();
+    const orig = value.src.companyFacts;
+    value.src.companyFacts = async (c) => {
+      if (!gone.has(c)) return orig(c);
+      value.calls.facts.push(c);
+      return null;
+    };
+    await start({ value, facts: ["MSFT"] });
+    gone.add("MSFT");
+    await db.updateTable("value_fundamentals").set({ fetched_at: "2026-09-20T09:00:00+09:00" }).where("code", "=", "MSFT").execute();
+    // 8일 묵음: 뒤에서 받는 중 (받는 중일 때만)
+    expect((await get("MSFT")).body.value.reason?.code).toBe("pendingRefresh");
+    await app!.valueScores.idle();
+    expect(value.calls.facts).toEqual(["MSFT"]);
+    clock = new Date(clock.getTime() + 61_000);
+    const b = (await get("MSFT")).body.value;
+    expect(b).toMatchObject({ status: "insufficient", label: "점수 없음", reason: { code: "notListed", text: VALUE_STATUS_TEXT.notListed } });
+    // 하루 동안 다시 받지 않고, 계속 끝나는 상태
+    clock = new Date(clock.getTime() + 2 * 3_600_000);
+    expect((await get("MSFT")).body.value.reason?.code).toBe("notListed");
+    await app!.valueScores.idle();
+    expect(value.calls.facts).toEqual(["MSFT"]);
+    // 2일 묵음이면 점수는 그대로 '지난 값' 배지
+    await db.updateTable("value_fundamentals").set({ fetched_at: "2026-09-26T09:00:00+09:00" }).where("code", "=", "MSFT").execute();
+    clock = new Date(clock.getTime() + 6 * 3_600_000);
+    const carried = (await get("MSFT")).body.value;
+    expect(carried.status).toBe("ok");
+    expect(carried.badges).toContain("지난 값 9/26");
+  });
+
+  it("JPM(금융사): 지표 줄의 위치·비중·가운데값에 '시장' 대신 '금융사 전체'", async () => {
+    await start({ facts: ["JPM"] });
+    const v = (await get("JPM")).body.value;
+    const rows = v.families.flatMap((f) => f.metrics).filter((m) => m.used);
+    expect(rows.length).toBeGreaterThan(5);
+    for (const m of rows) expect(`${m.positions} ${m.mix} ${m.peerMedian ?? ""}`).not.toContain("시장");
+    expect(rows.find((m) => m.key === "F1")!.positions).toMatch(/^업종 안 위치 \d+\/100 · 금융사 전체 안 \d+\/100$/);
+    expect(rows.find((m) => m.key === "F1")!.mix).toBe("업종 70 · 금융사 전체 30");
+  });
+
+  it("비교한 회사 수는 자기 자신을 빼고 (NVDA: 반도체 업종 비교 회사 수 = 그 업종 일반 회사 − NVDA)", async () => {
+    await start({ facts: ["NVDA"] });
+    const v = (await get("NVDA")).body.value;
+    const ref = referenceData();
+    const ind = ref.industries.indexOf("Semiconductors");
+    const all = ref.peers.filter((p) => p.f === 0 && p.i === ind);
+    expect(all.some((p) => p.c === "0001045810")).toBe(true);
+    expect(v.peerLine).toContain(`같은 업종(반도체, ${all.length - 1}개 회사)`);
+  });
+
+  it("연간 재무로 계산한 지표에 기준 글 (NVDA 성장·이익 안정성·주식 수 변화: '2026년 1월 결산 연간 기준'), 최근 4분기 지표에는 없음", async () => {
+    await start({ facts: ["NVDA"] });
+    const rows = (await get("NVDA")).body.value.families.flatMap((f) => f.metrics);
+    const by = (k: string) => rows.find((m) => m.key === k)!;
+    for (const k of ["C1", "C2", "C3", "B5", "E2"]) expect(by(k).basis).toBe("2026년 1월 결산 연간 기준");
+    for (const k of ["A1", "B1", "B4", "D1", "E1"]) expect(by(k).basis).toBeNull();
+  });
+
+  it("상태 글과 이유 글이 같은 말로 겹치지 않는다 (요약 카드: '계산 준비 중' 옆 '계산 준비 중 — …'이던 것)", async () => {
+    await start({ facts: [...US] });
+    for (const c of [...US, "005930", "SOXL", "ZZNOF"]) {
+      const v = (await get(c)).body.value;
+      if (v.reason) expect(v.reason.text.startsWith(v.label)).toBe(false);
+    }
+  });
+
+  it("정리: 등록하지 않은 종목의 재무는 30일 넘게 새로 받지 않았으면(= 30일 넘게 열지 않음) 지운다, 등록 종목·최근에 연 종목은 그대로", async () => {
+    await start({ facts: ["NVDA", "MSFT", "AAPL"] });
+    await db.updateTable("value_fundamentals").set({ fetched_at: "2026-08-20T09:00:00+09:00" }).where("code", "in", ["NVDA", "MSFT"]).execute();
+    await db.updateTable("value_fundamentals").set({ fetched_at: "2026-09-10T09:00:00+09:00" }).where("code", "=", "AAPL").execute();
+    expect(await app!.valueScores.prune(["NVDA"])).toBe(1);
+    expect((await db.selectFrom("value_fundamentals").select("code").orderBy("code").execute()).map((r) => r.code)).toEqual(["AAPL", "NVDA"]);
+    // 지운 종목을 다시 열면 처음처럼 받는다
+    expect((await get("MSFT")).body.value.reason?.code).toBe("pendingFacts");
+    expect(await app!.valueScores.prune([])).toBe(1); // 등록 목록이 비면 NVDA 도 (AAPL 은 18일)
+  });
+});

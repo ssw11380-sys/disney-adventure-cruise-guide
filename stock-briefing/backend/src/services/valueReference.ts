@@ -131,8 +131,8 @@ export function referencePeriods(refDate: string): ReferencePeriods {
 }
 
 /**
- * frames 로 받을 항목 목록 (태그·기간). 필요한 것만: 매출·영업이익·순이익은 7년, 주식 수는 6년, 나머지 흐름은 최근 3개 연도
- * (가장 최근 회계연도가 CY(Y−2) 인 회사도 같은 항목이 있게)
+ * frames 로 받을 항목 목록 (태그·기간). 필요한 것만: 매출·영업이익·순이익은 7년, 주식 수는 6년(두 태그 — 대상 종목과 같은 정의), 나머지 흐름은
+ * 최근 3개 연도 (가장 최근 회계연도가 CY(Y−2) 인 회사도 같은 항목이 있게). 모두 216번 (문서 가치지표-계산.md 10장)
  */
 export function framePlan(p: ReferencePeriods): Array<{ key: string; tag: FactTag; period: string }> {
   const out: Array<{ key: string; tag: FactTag; period: string }> = [];
@@ -145,7 +145,8 @@ export function framePlan(p: ReferencePeriods): Array<{ key: string; tag: FactTa
       for (const period of k === "netIncome" && i > 0 ? last3 : periods) out.push({ key: `flow:${k}`, tag, period });
     });
   }
-  for (const period of p.annual.slice(-6)) out.push({ key: "shares", tag: SHARE_TAGS[0]!, period });
+  // 희석 주식 수: 대상 종목(companyfacts)과 같은 두 태그 — 앞 태그가 없는 회사는 '기본·희석 같음' 태그로 (주식 수 변화·주당이익 증가폭, 검토 지적)
+  for (const tag of SHARE_TAGS) for (const period of p.annual.slice(-6)) out.push({ key: "shares", tag, period });
   for (const k of INSTANT_KEYS) for (const tag of INSTANT_TAGS[k]) for (const period of p.latest) out.push({ key: `inst:${k}`, tag, period });
   for (const k of ["equity", "assets"] as const) for (const period of [...p.yearAgo, ...p.yearEnd]) out.push({ key: `inst:${k}`, tag: INSTANT_TAGS[k][0]!, period });
   // 지배주주 자본을 따로 보고하지 않는 회사(AVGO)의 1년 전 자본
@@ -155,7 +156,7 @@ export function framePlan(p: ReferencePeriods): Array<{ key: string; tag: FactTa
 
 /**
  * 받은 frames (`${tag}|${period}` → CIK → 값). 메모리를 아끼려고 값만 숫자로 두고, 기간 끝 날짜는 순이익 태그만 둔다
- * (회계연도 끝 맞추기에만 쓴다) — 한 번에 frames 약 170개 × 회사 수천 곳
+ * (회계연도 끝 맞추기에만 쓴다) — 한 번에 frames 216개 × 회사 수천 곳
  */
 export interface FrameData {
   val: Map<number, number>;
@@ -250,7 +251,7 @@ export function peerInputs(cik: number, frames: FrameMap, p: ReferencePeriods): 
       revenue: rev ?? (nii !== undefined && nonii !== undefined ? nii + nonii : null),
       opIncome: first(FLOW_TAGS.opIncome, period)?.val ?? null,
       netIncome: ni.val,
-      shares: get(SHARE_TAGS[0]!, period)?.val ?? null,
+      shares: first(SHARE_TAGS, period)?.val ?? null,
       assets: isLast ? (bal.assets ?? null) : yearEnd ? (get(INSTANT_TAGS.assets[0]!, yearEnd)?.val ?? null) : null,
       equity: isLast ? (bal.equity ?? null) : yearEnd ? (get(INSTANT_TAGS.equity[0]!, yearEnd)?.val ?? null) : null,
     });
@@ -292,20 +293,52 @@ export const REFERENCE_KEEP_RATIO = 0.85;
 export const REFERENCE_KEEP_RATIO_FIN = 0.8;
 /** 이보다 오래된 지난 기준과는 비교하지 않는다 (오래 막혀 있으면 새 기준을 받아들인다) */
 export const REFERENCE_DROP_MAX_DAYS = 35;
+/** 지표 채택 비율(값이 있는 회사 비율)이 지난 기준보다 이만큼(0~1, 10%p) 넘게 줄면 저장하지 않는다 — 주마다 흔들림은 1%p 안쪽 */
+export const REFERENCE_COVERAGE_DROP = 0.1;
+/** 빠지면 기준을 저장하지 않는 frames 태그 (순이익은 최근 세 연간 틀만 — 그 앞은 이력용) */
+const KEY_FRAME_TAGS: ReadonlySet<string> = new Set([FLOW_TAGS.revenue[0].name, FLOW_TAGS.opIncome[0].name, INSTANT_TAGS.assets[0].name]);
+
+/** 새 기준에서 받지 못한 핵심 frames: 순이익 CY(Y)·CY(Y−1)·CY(Y−2), 매출(Revenues)·영업이익·자산 (모든 기간) */
+export function keyFramesMissing(next: Pick<ValueReferenceData, "missingFrames" | "periods">): string[] {
+  const recent = new Set((next.periods?.annual ?? []).slice(-3));
+  return (next.missingFrames ?? []).filter((k) => {
+    const [tag, period] = k.split("|");
+    return tag === FLOW_TAGS.netIncome[0].name ? recent.has(period ?? "") : KEY_FRAME_TAGS.has(tag ?? "");
+  });
+}
 
 /**
- * 새 기준의 회사 수가 지난 기준보다 크게 줄었는지 (자료가 비어 한쪽으로 치우친 기준을 막기 — 예: 연간 보고서 철이 아닌데 틀이 비었을 때).
- * 줄었으면 까닭 글, 아니면 null. 지난 기준이 없거나 35일보다 오래되었으면 null
+ * 새 기준을 받아들이지 않을 까닭 (자료가 비어 한쪽으로 치우친 기준이 한 주 동안 쓰이지 않게 — 지난 기준을 그대로 쓴다):
+ *  - 회사 수가 지난 기준보다 크게 줄었다 (모집단·일반 85%, 금융 80% 밑 — 예: 연간 보고서 철이 아닌데 틀이 비었을 때)
+ *  - 핵심 frames(순이익 최근 세 해 · 매출 · 영업이익 · 자산)를 두 번 받아도 받지 못했다
+ *  - 어느 지표든 채택 비율이 지난 기준보다 10%p 넘게 줄었다 (frames 가 비어 온 때)
+ * 까닭 글, 아니면 null. 지난 기준이 없거나 35일보다 오래되었으면 null (오래 막혀 있으면 새 기준을 받아들인다)
  */
-export function referenceDrop(prev: Pick<ValueReferenceData, "refDate" | "counts"> | null | undefined, next: Pick<ValueReferenceData, "refDate" | "counts">): string | null {
+export function referenceDrop(
+  prev: (Pick<ValueReferenceData, "refDate" | "counts"> & Partial<Pick<ValueReferenceData, "coverage">>) | null | undefined,
+  next: Pick<ValueReferenceData, "refDate" | "counts"> & Partial<Pick<ValueReferenceData, "coverage" | "missingFrames" | "periods">>,
+): string | null {
   if (!prev || daysBetween(prev.refDate, next.refDate) > REFERENCE_DROP_MAX_DAYS) return null;
   const a = prev.counts;
   const b = next.counts;
-  const bad: string[] = [];
-  if (b.universe < a.universe * REFERENCE_KEEP_RATIO) bad.push(`모집단 ${a.universe} → ${b.universe}`);
-  if (b.general < a.general * REFERENCE_KEEP_RATIO) bad.push(`일반 ${a.general} → ${b.general}`);
-  if (b.financial < a.financial * REFERENCE_KEEP_RATIO_FIN) bad.push(`금융 ${a.financial} → ${b.financial}`);
-  return bad.length ? `비교 회사 수가 지난 기준(${prev.refDate})보다 크게 줄어 저장하지 않았습니다: ${bad.join(", ")}` : null;
+  const fewer: string[] = [];
+  if (b.universe < a.universe * REFERENCE_KEEP_RATIO) fewer.push(`모집단 ${a.universe} → ${b.universe}`);
+  if (b.general < a.general * REFERENCE_KEEP_RATIO) fewer.push(`일반 ${a.general} → ${b.general}`);
+  if (b.financial < a.financial * REFERENCE_KEEP_RATIO_FIN) fewer.push(`금융 ${a.financial} → ${b.financial}`);
+  const other: string[] = [];
+  const keys = keyFramesMissing({ missingFrames: next.missingFrames ?? [], periods: next.periods ?? { annual: [], latest: [], yearAgo: [] } });
+  if (keys.length) other.push(`받지 못한 핵심 frames ${keys.join(", ")}`);
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  for (const path of ["general", "financial"] as const)
+    for (const k of METRIC_ORDER) {
+      const was = prev.coverage?.[path]?.[k];
+      if (was === undefined || !next.coverage) continue;
+      const now = next.coverage[path]?.[k] ?? 0;
+      if (was - now > REFERENCE_COVERAGE_DROP) other.push(`${path === "general" ? "일반" : "금융"} ${k} 채택 비율 ${pct(was)} → ${pct(now)}`);
+    }
+  if (fewer.length) return `비교 회사 수가 지난 기준(${prev.refDate})보다 크게 줄어 저장하지 않았습니다: ${[...fewer, ...other].join(", ")}`;
+  if (other.length) return `새 비교 기준에 빠진 자료가 있어 저장하지 않았습니다(지난 기준 ${prev.refDate} 그대로): ${other.join(", ")}`;
+  return null;
 }
 
 /**

@@ -96,9 +96,9 @@ export const RULE_TEXT: Record<MetricWhy, string> = {
   lossFcf: "잉여현금흐름이 0 이하라 0점으로 계산했습니다.",
   capitalImpairment: "자본총계가 0 이하라(자본잠식) 0점으로 계산했습니다.",
   revenueNonPositive: "계산 안 함: 매출이 0 이하입니다.",
-  netCash: "빚보다 현금이 많아(순현금) 가장 높은 순위로 두었습니다.",
-  evNonPositive: "순현금이 시가총액보다 커서 가장 높은 순위로 두었습니다.",
-  noInterest: "빚이 거의 없고 이자비용이 없어 가장 높은 순위로 두었습니다.",
+  netCash: "빚보다 현금이 많아(순현금) 가장 높은 순위로 두었습니다(순현금 회사끼리는 같은 순위).",
+  evNonPositive: "순현금이 시가총액보다 커서 가장 높은 순위로 두었습니다(이런 회사끼리는 같은 순위).",
+  noInterest: "빚이 거의 없고 이자비용이 없어 가장 높은 순위로 두었습니다(이런 회사끼리는 같은 순위).",
   equityNonPositive: "계산 안 함: 자본이 0 이하입니다.",
   smallEquity: "계산 안 함: 장부상 자본이 아주 작아(자사주 매입 등) 값이 극단적으로 나옵니다.",
   negativeEquity: "계산 안 함: 자사주 매입이 쌓여 장부상 자본이 0 이하입니다.",
@@ -115,10 +115,20 @@ export const RULE_TEXT: Record<MetricWhy, string> = {
   noDividendData: "계산 안 함: 최근 1년 안에 배당 기록이 있지만 최근 4분기 배당 합계를 만들 수 없습니다 (배당이 없다는 뜻이 아닙니다).",
 };
 /**
- * 같은 값이 많은 지표 (무배당 0% 등): 위치가 그 덩어리에 크게 좌우된다는 안내. 비교 회사의 절반 이상이 같은 값이고
- * 이 회사 값은 그 값과 다를 때 지표 줄에 붙인다 (그 지표는 묶음 머리 문장으로 고르지 않음)
+ * 같은 값이 많은 지표 (무배당 0% 등): 비교 회사의 절반 이상이 같은 값이고 이 회사 값은 그 값과 다를 때, 위치가 그 덩어리에 크게 좌우된다.
+ * '배당이 많은 편' 같은 띠 문장 대신 중립 문장(지표 줄 · 화면 읽기)과 안내를 둔다 (그 지표는 묶음 머리 문장으로 고르지 않음, 검토 지적)
  */
-export const tieNote = (pct: number, valueText: string) => `비교한 회사의 ${pct}%가 같은 값(${valueText})이라, 그 값과 조금만 달라도 위치 점수가 크게 달라집니다.`;
+export const tieSentence = (pct: number, valueText: string, high: boolean) =>
+  `비교한 회사 ${pct >= 60 ? "대부분" : "절반 이상"}(${pct}%)이 ${valueText}${iraRa(valueText)} 위치 점수가 ${high ? "크게" : "작게"} 나왔습니다.`;
+export const TIE_NOTE = "같은 값이 많아 그 값과 조금만 달라도 위치 점수가 크게 달라지므로, 많은 편·적은 편으로 나누어 말하지 않았습니다.";
+/**
+ * 맨 위 규칙(순현금 등) 지표의 위치 안내: 같은 규칙 회사끼리는 모두 같은 순위라, 보이는 위치는 그 무리의 가운데 값이다
+ * (p = 100 × (아래 회사 + 0.5 × 같은 회사) / N → 같은 회사 비율 = 2 × (100 − p) / 100). 규칙 문장 '가장 높은 순위'와 보이는 위치(예: 68)가 어긋나 보이지 않게
+ */
+export const topTieNote = (groupName: string, sharePct: number, pos: number) =>
+  `${groupName} 비교 회사의 ${sharePct}%가 같은 맨 위 순위라, 위치 점수는 그 무리의 가운데 값(${pos})입니다.`;
+/** 연간 재무로 계산한 지표(성장 3년 · 이익·ROE 안정성 5년 · 주식 수 변화 3년)의 기준 — 최근 4분기 값으로 읽히지 않게 */
+export const annualBasis = (end: string) => `${end.slice(0, 4)}년 ${Number(end.slice(5, 7))}월 결산 연간 기준`;
 export const NOT_ADOPTED = "비교할 회사 자료가 모자라(70% 미만) 이 지표는 쓰지 않았습니다.";
 /** 경기 민감 회사의 PER: 최근 4분기 이익과 5년 평균 이익을 반씩 섞음 (설계 value-v1 §5.1) */
 export const BLEND_NOTE = "업황에 따라 이익이 크게 오르내리는 회사라, 최근 4분기 이익과 5년 평균 이익을 반씩 섞어 계산했습니다.";
@@ -135,21 +145,33 @@ export const VALUE_FLAG_TEXT: Record<Exclude<ValueFlagKey, "peerFallback" | "car
   capitalImpairment: "자본총계가 0 이하입니다(자본잠식). 재무 건전성 점수에 크게 반영됩니다.",
   earlyStage: "아직 영업이익이 나지 않는 회사는 이 점수 방식으로는 낮게 나오는 것이 보통입니다.",
   payoutOver100: "최근 4분기에 번 이익보다 많은 금액을 배당했습니다.",
+  dividendCut: "최근 5년 가운데 1주당 배당이 앞 해보다 줄어든 해가 있습니다.",
   financial: "금융사(은행·보험 등)는 매출·현금흐름·부채비율의 뜻이 달라 금융사끼리 비교하고, 묶음 비중도 따로 씁니다(주가 수준 35 · 수익성 30 · 건전성 10 · 성장 15 · 주주환원 10).",
 };
-export const peerFallbackText = (level: PeerLevel, sectorKo: string | null) =>
-  `같은 업종 회사가 적어 ${level === "sector" ? `같은 부문(${sectorKo ?? "부문"})` : "시장"} 전체와 비교했습니다.`;
+export const peerFallbackText = (level: PeerLevel, sectorKo: string | null, path: ValuePath = "general") =>
+  `같은 업종 회사가 적어 ${level === "sector" ? `같은 부문(${sectorKo ?? "부문"}) 전체` : path === "financial" ? "금융사 전체" : "시장 전체"}와 비교했습니다.`;
 export const carriedText = (fetchedAt: string) => `재무 숫자는 ${dateKo(fetchedAt.slice(0, 10))}에 받은 값입니다 (그 뒤 새로 받지 못함).`;
 
+/**
+ * 점수 없는 줄의 이유 글 (상태 글 '계산 준비 중'·'잠시 보류' 등은 label 에 따로 — 이유 글 앞에 다시 쓰지 않는다, 검토 지적).
+ * '… 중입니다'는 서버가 실제로 받는·만드는 중일 때만 (앱은 그동안만 1분마다 다시 묻는다)
+ */
 export const VALUE_STATUS_TEXT = {
-  pendingReference: "계산 준비 중 — 첫 비교 기준을 만드는 중입니다 (보통 하루 안)",
-  pendingFacts: "계산 준비 중 — 재무제표를 처음 받는 중입니다 (보통 몇 분 안)",
+  /** 첫 비교 기준을 지금 만드는 중 (비교 기준이 없으면 화면 요청이 백그라운드로 만들기를 건다 — 30분에 한 번까지) */
+  pendingReference: "첫 비교 기준을 만드는 중입니다 (보통 몇 분 안)",
+  /** 비교 기준이 2주 넘게 묵어 지금 새로 만드는 중 */
+  rebuildingReference: "비교 기준을 새로 만드는 중입니다 (보통 몇 분 안)",
+  pendingFacts: "재무제표를 처음 받는 중입니다 (보통 몇 분 안)",
   /** 재무를 받은 지 7일이 넘었지만 받기에 실패한 적은 없음 (오랜만에 연 종목 — 백그라운드로 새로 받는 중) */
-  pendingRefresh: "계산 준비 중 — 재무제표를 새로 받는 중입니다 (보통 몇 분 안)",
-  /** 비교 기준을 한 번도 만들지 못함 (첫 만들기 실패 — 하루 한 번 다시) */
-  referenceFailed: "비교 기준을 만들지 못했습니다. 하루 한 번 다시 만듭니다",
+  pendingRefresh: "재무제표를 새로 받는 중입니다 (보통 몇 분 안)",
+  /** 비교 기준을 만들지 못함 (마지막 만들기 실패 — 열면 30분에 한 번까지 다시, 그리고 매일 09:15) */
+  referenceFailed: "비교 기준을 만들지 못했습니다. 잠시 뒤 다시 만듭니다",
+  /** 비교 기준이 없고 지금 만드는 중도 아님 (방금 만들기를 건 뒤 30분 안) */
+  referenceMissing: "비교 기준이 아직 없습니다. 잠시 뒤 다시 만듭니다",
   /** 가치 부분을 끈 서버 (되돌리기 스위치 valueScore) */
   off: "가치 지표 점수는 지금 계산하지 않습니다.",
+  /** 가치 부분을 끈 서버의 상태 글 (label) — 이유 글 '지금 계산하지 않습니다'와 맞춘다 (검토 지적: '계산 준비 중'과 어긋남) */
+  offLabel: "지금 계산하지 않음",
   kr: "한국 종목 가치 지표 점수는 다음 단계에서 계산합니다.",
   spac: "스팩(기업인수목적회사)은 이 점수를 내지 않습니다.",
   preferred: "우선주는 아직 계산하지 않습니다. 보통주 화면의 점수를 참고하세요.",
@@ -191,6 +213,12 @@ export function valueDatesLine(a: { priceThrough: string; fiscalEnd: string; bas
   return `주가 ${dateKo(a.priceThrough)}까지 20거래일 평균 · 재무 ${fiscalLabel(a.fiscalEnd, a.basis)}, ${dateKo(a.filed)} 제출 · 비교 기준 ${dateKo(a.reference)}`;
 }
 
+/** 앞말의 마지막 한글 글자에 받침이 있으면 '이라', 없거나 한글이 아니면(0.0% 등) '라' */
+export function iraRa(word: string): "이라" | "라" {
+  const c = word.charCodeAt(word.length - 1);
+  return c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 !== 0 ? "이라" : "라";
+}
+
 /** 쓴 비교만 적는 머리 문장 */
 export function peerLine(p: { level: PeerLevel; nameKo: string | null; n: number; own: boolean; path: ValuePath }): string {
   const first =
@@ -213,17 +241,19 @@ export function gwaWa(word: string): "과" | "와" {
   return "와";
 }
 
-const COMPARE_NAME: Record<CompareKey, string> = { industry: "업종", market: "시장", own: "지난 5년" };
-/** 쓴 비교 비중: '업종 50 · 시장 20 · 지난 5년 30' (없는 비교는 비례 배분한 값) */
-export function mixText(mix: Partial<Record<CompareKey, number>>, level: PeerLevel | null): string {
-  const name = (k: CompareKey) => (k === "industry" && level === "sector" ? "부문" : k === "industry" && level === "market" ? "시장" : COMPARE_NAME[k]);
+/** 비교 무리 이름: 업종 · 부문 · 시장 (금융사 경로의 '시장'은 '금융사 전체' — 금융사끼리만 비교하므로, 검토 지적) */
+export const marketName = (path: ValuePath) => (path === "financial" ? "금융사 전체" : "시장");
+export const levelName = (level: PeerLevel | null, path: ValuePath) => (level === "sector" ? "부문" : level === "market" ? marketName(path) : "업종");
+/** 쓴 비교 비중: '업종 50 · 시장 20 · 지난 5년 30' (없는 비교는 비례 배분한 값, 금융사는 '금융사 전체 20') */
+export function mixText(mix: Partial<Record<CompareKey, number>>, level: PeerLevel | null, path: ValuePath = "general"): string {
+  const name = (k: CompareKey) => (k === "industry" ? levelName(level, path) : k === "market" ? marketName(path) : "지난 5년");
   return (Object.keys(mix) as CompareKey[]).map((k) => `${name(k)} ${Math.round(mix[k]!)}`).join(" · ");
 }
-/** 위치 줄: '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' */
-export function positionText(pos: Partial<Record<CompareKey, number>>, level: PeerLevel | null): string {
+/** 위치 줄: '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' (금융사는 '금융사 전체 안') */
+export function positionText(pos: Partial<Record<CompareKey, number>>, level: PeerLevel | null, path: ValuePath = "general"): string {
   const bits: string[] = [];
-  if (pos.industry !== undefined) bits.push(`${level === "sector" ? "부문" : level === "market" ? "시장" : "업종"} 안 위치 ${Math.floor(pos.industry + 0.5)}/100`);
-  if (pos.market !== undefined && level !== "market") bits.push(`시장 안 ${Math.floor(pos.market + 0.5)}/100`);
+  if (pos.industry !== undefined) bits.push(`${levelName(level, path)} 안 위치 ${Math.floor(pos.industry + 0.5)}/100`);
+  if (pos.market !== undefined && level !== "market") bits.push(`${marketName(path)} 안 ${Math.floor(pos.market + 0.5)}/100`);
   if (pos.own !== undefined) bits.push(`지난 5년 중 ${Math.floor(pos.own + 0.5)}/100`);
   return bits.join(" · ");
 }

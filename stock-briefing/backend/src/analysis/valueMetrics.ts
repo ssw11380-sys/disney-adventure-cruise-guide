@@ -74,6 +74,8 @@ export interface MetricAux {
   earlyStage: boolean;
   /** 배당 > 순이익 > 0 */
   payoutOver100: boolean;
+  /** 최근 5년 가운데 1주당 배당이 앞 해보다 줄어든 해가 있음 (대상 종목만 — 입력 dividendCut) */
+  dividendCut: boolean;
 }
 
 export interface MetricCtx {
@@ -159,6 +161,7 @@ export function computeAux(inp: ValueInputs): MetricAux {
     opAtLow: ops.length >= 4 && num(lastOp) ? lastOp <= Math.min(...ops) : null,
     earlyStage: ann.length >= 2 && ann.slice(-2).every((a) => num(a.opIncome) && a.opIncome <= 0),
     payoutOver100: num(f.dividends) && num(f.netIncome) && f.netIncome > 0 && f.dividends > f.netIncome,
+    dividendCut: inp.dividendCut === true,
   };
 }
 

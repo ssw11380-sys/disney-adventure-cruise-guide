@@ -164,14 +164,15 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     expect(r.has("AI 기업개요, AI가 쓴 글")).toBe(true);
   });
 
-  it("가치 플래그를 끈 서버(1단계와 같은 응답): 가치 '계산 준비 중 · 지금 계산하지 않습니다', 종합 '없음 · 가치 지표 점수가 없어 합치지 않습니다', 가치분석 탭 이동 줄 없음", () => {
+  it("가치 플래그를 끈 서버: 가치 '지금 계산하지 않음 · 지금 계산하지 않습니다'(상태 글과 이유가 같은 말), 종합 '없음 · 가치 지표 점수가 없어 합치지 않습니다', 가치분석 탭 이동 줄 없음", () => {
     const r = open(nvdaStock(), "NVDA_valueOff");
     const text = r.text();
-    expect(text).toContain("계산 준비 중");
+    expect(text).toContain("지금 계산하지 않음");
+    expect(text).not.toContain("계산 준비 중");
     expect(text).toContain("가치 지표 점수는 지금 계산하지 않습니다.");
     expect(text).not.toContain("다음 단계");
     expect(text).toContain("가치 지표 점수가 없어 합치지 않습니다");
-    expect(r.has("지표 점수. 가치 지표, 계산 준비 중. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.")).toBe(true);
+    expect(r.has("지표 점수. 가치 지표, 지금 계산하지 않음, 가치 지표 점수는 지금 계산하지 않습니다. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.")).toBe(true);
     r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
     expect(r.text()).not.toContain("가치분석 탭에서 지표별 값 보기");
     expect(r.text()).not.toContain("재무 SEC");
@@ -193,7 +194,9 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     expect(nof.text()).toContain("점수 없음");
     expect(nof.text()).toContain("SEC 재무제표를 찾지 못했습니다");
     const pend = open({ ...nvdaStock(), code: "ZZNOF", name: "예시 종목" }, "ZZNOF_pending");
-    expect(pend.text()).toContain("계산 준비 중 — 재무제표를 처음 받는 중입니다 (보통 몇 분 안)");
+    // 상태 글 '계산 준비 중' 옆 이유 글은 상태 글 없이 (같은 말 두 번이던 것, 검토 지적)
+    expect(pend.text()).toContain("계산 준비 중재무제표를 처음 받는 중입니다 (보통 몇 분 안)");
+    expect(pend.text()).not.toContain("계산 준비 중 —");
     // 가치 막대는 점수가 있을 때만 (추세 막대 하나)
     expect(pend.all().filter((n) => flat(n).height === scores.barH && typeof flat(n).width === "string")).toHaveLength(1);
   });
@@ -272,7 +275,7 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     const nameNode = off.all().find((n) => n.type === "Text" && textOf(n) === "가치 지표")!;
     const parent = off.all().find((n) => n.children.includes(nameNode))!;
     expect(flat(parent).flexDirection).not.toBe("row");
-    expect(parent.children.map((c) => (typeof c === "string" ? c : textOf(c)))).toEqual(["가치 지표", "계산 준비 중"]);
+    expect(parent.children.map((c) => (typeof c === "string" ? c : textOf(c)))).toEqual(["가치 지표", "지금 계산하지 않음"]);
     // 100% 는 이름 칸 옆에 상태 글 (한 줄)
     const small = open(nvdaStock(), "NVDA_valueOff");
     const n1 = small.all().find((n) => n.type === "Text" && textOf(n) === "가치 지표")!;
@@ -482,5 +485,83 @@ describe("넓은 창", () => {
     const pos = order(r, "지표 점수", "AI 기업개요");
     expect(pos[0]).toBeGreaterThanOrEqual(0);
     expect(pos[0]).toBeLessThan(pos[1]!);
+  });
+});
+
+describe("검토 지적 3차 — 요약 카드에서 가치 상세 카드로 · 묶음 이름 칸 · 연간 기준 글", () => {
+  const cardOf = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "Card" && textOf(n).startsWith(`가치 지표 점수 ${NV.score}/100`))!;
+  const screenOf = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "Screen")!;
+  /** 스크롤 칸 ref: 한 칸 화면은 Screen 의 scrollRef, 좌우 배치는 SplitScreen 오른쪽 칸 ScrollView 의 ref */
+  const scrollRefOf = (r: ReturnType<typeof render>) =>
+    (screenOf(r)?.props.scrollRef ?? r.all().filter((n) => n.type === "ScrollView").map((n) => n.props.ref).find((x) => !!x && typeof x === "object")) as { current: unknown };
+  const layout = (n: HostNode, y: number) => (n.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y, width: 400, height: 900 } } });
+
+  it("'가치분석 탭에서 지표별 값 보기': 탭만 바꾸지 않고 가치 상세 카드 맨 위로 스크롤하고 지표별 값을 펼친다 (휴대폰 — 카드가 스크롤 칸에 바로 놓임)", () => {
+    const r = open(nvdaStock(), "NVDA");
+    const scrollTo = vi.fn();
+    (screenOf(r).props.scrollRef as { current: unknown }).current = { scrollTo };
+    r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    r.act(() => (r.byLabel("가치분석 탭에서 지표별 값 보기").props.onPress as () => void)());
+    expect(segmented(r)[0]!.props.value).toBe("value");
+    // 지표별 값이 펼쳐져 있다
+    expect(r.byLabel("지표별 값 접기").props.accessibilityState).toEqual({ expanded: true });
+    expect(r.text()).toContain(NV.families![0]!.metrics[0]!.peerMedian!);
+    // 카드가 자리를 재면 그 자리(− 위 여백 8)로 스크롤
+    r.act(() => layout(cardOf(r), 1234));
+    expect(scrollTo).toHaveBeenCalledWith({ y: 1226, animated: true });
+    // 한 번만: 다시 재어도(펼쳐 길어짐) 스크롤하지 않고, 다른 탭에 갔다 오면 접힌 채
+    r.act(() => layout(cardOf(r), 1234));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    r.act(() => (segmented(r)[0]!.props.onChange as (v: string) => void)("company"));
+    r.act(() => (segmented(r)[0]!.props.onChange as (v: string) => void)("value"));
+    expect(r.byLabel("지표별 값 보기").props.accessibilityState).toEqual({ expanded: false });
+    r.act(() => layout(cardOf(r), 1234));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it("넓은 창(704×933 한 단 · 933×704 좌우 배치): 탭 내용 칸 위치 + 그 안의 카드 위치로 스크롤 (좌우 배치는 오른쪽 칸 스크롤)", () => {
+    for (const size of [
+      [704, 933],
+      [933, 704],
+    ] as Array<[number, number]>) {
+      const r = open(nvdaStock(), "NVDA", { size, tab: "company" });
+      const scrollTo = vi.fn();
+      scrollRefOf(r).current = { scrollTo };
+      const body = r.all().find((n) => n.type === "View" && typeof n.props.onLayout === "function" && flat(n).paddingTop !== undefined && textOf(n).includes("지표 점수"))!;
+      r.act(() => layout(body, 900));
+      r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+      r.act(() => (r.byLabel("가치 탭에서 지표별 값 보기").props.onPress as () => void)());
+      expect(segmented(r)[0]!.props.value).toBe("value");
+      expect(r.byLabel("지표별 값 접기")).toBeDefined();
+      r.act(() => layout(cardOf(r), 0));
+      expect(scrollTo, size.join("×")).toHaveBeenCalledWith({ y: 892, animated: true });
+    }
+  });
+
+  it("묶음 이름 칸: 비중이 이름 끝 낱말과 줄바꿈 없는 빈칸으로 붙는다 ('수익성과 이익의 질 ·' / '25' 로 떨어지지 않게) — 상세 카드·요약 카드 펼침", () => {
+    const r = open(nvdaStock(), "NVDA", { tab: "value" });
+    const q = NV.families!.find((f) => f.key === "quality")!;
+    const big = r.all().find((n) => n.type === "Text" && textOf(n) === `${q.name}\u00A0·\u00A0${q.weight}`);
+    expect(big).toBeDefined();
+    // 이름 칸도 가장 긴 가치 묶음 이름이 한 줄에 들어가는 폭 (추세 칸 112 보다 넓게)
+    expect(flat(big!).width).toBe(scores.valueFamilyNameW);
+    expect(scores.valueFamilyNameW).toBeGreaterThan(scores.familyNameW);
+    expect(r.text()).not.toContain(`${q.name} · ${q.weight}`);
+    const s = open(nvdaStock(), "NVDA");
+    s.act(() => (s.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    const mini = s.all().find((n) => n.type === "Text" && textOf(n) === `${q.name}\u00A0·\u00A0${q.weight}`);
+    expect(flat(mini!).width).toBe(scores.valueFamilyMiniW);
+    expect(flat(s.all().find((n) => n.type === "Text" && /^추세\u00A0·\u00A035$/.test(textOf(n)))!).width).toBe(scores.familyNameW);
+    // 추세 묶음도 같은 이음 (거래량 뒷받침 · 10)
+    expect(s.all().some((n) => n.type === "Text" && /^거래량 뒷받침\u00A0·\u00A0\d+$/.test(textOf(n)))).toBe(true);
+  });
+
+  it("연간 재무로 계산한 지표(성장 등)는 값 줄 끝에 '(2026년 1월 결산 연간 기준)' — 최근 4분기 값으로 읽히지 않게", () => {
+    const r = open(nvdaStock(), "NVDA", { tab: "value" });
+    r.act(() => (r.byLabel("지표별 값 보기").props.onPress as () => void)());
+    const c1 = NV.families![3]!.metrics.find((m) => m.key === "C1")!;
+    expect(r.text()).toContain(`${c1.value} · ${c1.peerMedian} (2026년 1월 결산 연간 기준)`);
+    const a1 = NV.families![0]!.metrics.find((m) => m.key === "A1")!;
+    expect(r.text()).not.toContain(`${a1.value} · ${a1.peerMedian} (`);
   });
 });

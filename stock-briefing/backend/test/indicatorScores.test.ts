@@ -162,7 +162,7 @@ describe("플래그", () => {
 });
 
 describe("GET /api/scores/:code — 보통 종목", () => {
-  it("NVDA (월 10:00 KST = 뉴욕 일요일 → 마지막 봉 9/25 금): 추세 69 다소 강함, 가치는 계산 준비 중, 종합 없음", async () => {
+  it("NVDA (월 10:00 KST = 뉴욕 일요일 → 마지막 봉 9/25 금): 추세 69 다소 강함, 가치 부분이 없는 서버라 가치는 '지금 계산하지 않음', 종합 없음", async () => {
     const { src } = fixtureSources();
     await start(src);
     const { status, body } = await get("NVDA");
@@ -196,7 +196,7 @@ describe("GET /api/scores/:code — 보통 종목", () => {
       ["T4", 67],
     ]);
     expect(t.versionLine).toBe("계산 방식 TREND-1 (보정 TREND-CAL-1) · 일봉 야후 · 비교 지수 나스닥(네이버)");
-    expect(body.value).toMatchObject({ status: "pending", label: "계산 준비 중", score: null });
+    expect(body.value).toMatchObject({ status: "pending", label: "지금 계산하지 않음", reason: { code: "off", text: "가치 지표 점수는 지금 계산하지 않습니다." }, score: null });
     expect(body.composite).toMatchObject({ status: "none", score: null, reason: "valueMissing", text: "없음 · 가치 지표 점수가 없어 합치지 않습니다" });
     expect(body.text.notForecast).toBe("점수는 과거·현재 숫자의 요약이며, 앞으로의 가격을 알려 주지 않습니다.");
     expect(body.text.disclaimerShort).toBe("참고 정보이며 투자 권유가 아닙니다");
