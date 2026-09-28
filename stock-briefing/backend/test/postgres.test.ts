@@ -72,6 +72,19 @@ describe.skipIf(!url)("postgres dialect", () => {
     const types9 = await sql<{ data_type: string }>`
       select data_type from information_schema.columns where table_name = 'indicator_scores' and column_name in ('score', 'score_today') order by column_name`.execute(db);
     expect(types9.rows.map((r) => r.data_type)).toEqual(["double precision", "double precision"]);
+    // 12 = 관심 종목 그룹 (3-34): 새 표 watch_groups (id 는 identity) + registered_stocks 의 비어 있을 수 있는 정수 칸 둘
+    const types12 = await sql<{ table_name: string; column_name: string; data_type: string; is_nullable: string; is_identity: string }>`
+      select table_name, column_name, data_type, is_nullable, is_identity from information_schema.columns
+      where table_schema = current_schema()
+        and ((table_name = 'registered_stocks' and column_name in ('watch_group_id', 'watch_position'))
+          or (table_name = 'watch_groups' and column_name in ('id', 'position')))
+      order by table_name, column_name`.execute(db);
+    expect(types12.rows).toEqual([
+      { table_name: "registered_stocks", column_name: "watch_group_id", data_type: "integer", is_nullable: "YES", is_identity: "NO" },
+      { table_name: "registered_stocks", column_name: "watch_position", data_type: "integer", is_nullable: "YES", is_identity: "NO" },
+      { table_name: "watch_groups", column_name: "id", data_type: "integer", is_nullable: "NO", is_identity: "YES" },
+      { table_name: "watch_groups", column_name: "position", data_type: "integer", is_nullable: "NO", is_identity: "NO" },
+    ]);
   });
 
   it("지표 점수 기록 (3-44): 같은 종목·기준일은 덮어쓴다 (Postgres on conflict)", async () => {
@@ -290,6 +303,20 @@ describe.skipIf(!url)("postgres dialect", () => {
     });
     await db.insertInto("account_snapshots").values(snapRow("2026-09-28")).execute();
     await db.insertInto("trade_executions").values(tradeRow("pg-bk-1")).execute();
+    // 관심 종목 그룹 (3-34): 그룹 둘 + 그룹·자리가 정해진 관심 종목 하나 — 그룹 id 도 identity 라 복구에 overriding·setval 이 필요하다
+    const groupRows = await db
+      .insertInto("watch_groups")
+      .values([
+        { name: "반도체", position: 0, created_at: ts, updated_at: ts },
+        { name: "배당", position: 1, created_at: ts, updated_at: ts },
+      ])
+      .returning(["id", "name", "position"])
+      .execute();
+    const semi = Number(groupRows[0]!.id);
+    await db
+      .insertInto("registered_stocks")
+      .values({ code: "005930", name: "삼성전자", market: "KOSPI", quantity: null, avg_price: null, memo: null, created_at: ts, updated_at: ts, watch_group_id: semi, watch_position: 0 })
+      .execute();
     const tables: Record<string, Record<string, unknown>[]> = {};
     for (const t of BACKUP_TABLES) tables[t] = (await sql<Record<string, unknown>>`select * from ${sql.table(t)}`.execute(db)).rows;
     const dir = await mkdtemp(join(tmpdir(), "pgbk-"));
@@ -320,7 +347,22 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect(ids).toHaveLength(2);
     expect(new Set(ids.map((r) => r.id)).size).toBe(2);
     expect((await db.selectFrom("account_snapshots").select("id").execute()).length).toBe(2);
+    // 관심 그룹: 되살린 그룹(id 그대로)·종목 칸, 새 그룹이 id 충돌 없이 맨 끝에 (앱 경로로)
+    expect(before["watch_groups"]).toBe(2);
+    expect((await db.selectFrom("watch_groups").select(["id", "name", "position"]).orderBy("id").execute()).map((g) => ({ ...g, id: Number(g.id) }))).toEqual(
+      groupRows.map((g) => ({ id: Number(g.id), name: g.name, position: g.position })),
+    );
+    expect(await db.selectFrom("registered_stocks").select(["code", "watch_group_id", "watch_position"]).where("code", "=", "005930").execute()).toEqual([
+      { code: "005930", watch_group_id: semi, watch_position: 0 },
+    ]);
+    const made = await app.inject({ method: "POST", url: "/api/watch-groups", payload: { name: "성장" } });
+    expect(made.statusCode).toBe(201);
+    expect(made.json().created.id).toBe(Math.max(...groupRows.map((g) => Number(g.id))) + 1);
+    expect(made.json().groups.map((g: { name: string }) => g.name)).toEqual(["반도체", "배당", "성장"]);
+    expect(made.json().items).toEqual([{ code: "005930", groupId: semi, position: 0 }]);
     await db.deleteFrom("account_snapshots").execute();
     await db.deleteFrom("trade_executions").execute();
+    await db.deleteFrom("watch_groups").execute();
+    await db.deleteFrom("registered_stocks").where("code", "=", "005930").execute();
   });
 });

@@ -30,6 +30,7 @@ const { useWatchGroups, WatchOpQueue, WATCH_GROUPS_OFF } = await import("@/lib/w
 const { ApiRequestError } = await import("@/api/client");
 const { shouldPersist } = await import("@/lib/queryPersist");
 const { holdingsOrder } = await import("@/lib/holdingsNav");
+const { watchModel } = await import("@/lib/watchGroups");
 type State = import("@/lib/watchGroupsQuery").WatchGroupsState;
 type Layout = import("@/lib/watchGroups").WatchLayout;
 
@@ -63,6 +64,7 @@ beforeEach(() => {
   h.api = { watchGroups: vi.fn(async () => LAYOUT), moveWatchStock: vi.fn(), createWatchGroup: vi.fn(), renameWatchGroup: vi.fn(), deleteWatchGroup: vi.fn(), orderWatchGroups: vi.fn() };
   h.alert.mockReset();
   h.announce.mockReset();
+  h.setView.mockReset();
   h.view = { selected: "all", collapsed: [] };
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   client.setQueryData(["http://x", "stocks"], LIST);
@@ -235,6 +237,137 @@ describe("조작: 낙관적 반영 · 차례 · 실패", () => {
     expect(applied).toEqual([]);
     await q.run(async () => LAYOUT);
     expect(applied).toEqual([LAYOUT]);
+  });
+});
+
+describe("잔고 목록의 종목이 바뀌면 (관심 해제 → 다시 추가 — 3-34 검토 must)", () => {
+  const model = (seen: { value: State }, list: RegisteredWithQuote[]) =>
+    watchModel(list, seen.value.layout, seen.value.view, true).buckets.map((b) => [b.name, ...b.stocks.map((s) => s.code)]);
+
+  it("관심 해제하면 캐시 배치에서 바로 빼고 서버 배치를 다시 받는다 → 다시 추가하면 '그룹 없음' 맨 끝 (예전 그룹·자리로 되살아나지 않음)", async () => {
+    const seen = mount();
+    await settle();
+    expect(model(seen, LIST)).toEqual([
+      ["반도체", "A", "B"],
+      ["그룹 없음", "C", "D"],
+    ]);
+    // 서버: A 행이 지워짐 (B 는 반도체 자리 1 그대로)
+    const afterRemove: Layout = { ...LAYOUT, items: [{ code: "B", groupId: 1, position: 1 }] };
+    h.api.watchGroups!.mockResolvedValue(afterRemove);
+    const without = LIST.filter((s) => s.code !== "A");
+    client.setQueryData(["http://x", "stocks"], without);
+    await settle();
+    expect(cache()!.items.map((i) => i.code)).toEqual(["B"]);
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(2);
+    // 같은 코드를 다시 추가: 서버는 새 행(그룹 없음 · 자리 없음) → 그룹 없음 맨 끝
+    const again = [...without, w("A", "가", 30)];
+    client.setQueryData(["http://x", "stocks"], again);
+    await settle();
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(3);
+    expect(model(seen, again)).toEqual([
+      ["반도체", "B"],
+      ["그룹 없음", "C", "D", "A"],
+    ]);
+  });
+
+  it("지우고 다시 추가한 것이 한 번의 목록 갱신에 섞여도(같은 코드 · 새 등록 시각) 서버 응답 전에 바로 '그룹 없음' 맨 끝 — 그 그룹 ↑ 번호가 서버와 맞는다", async () => {
+    // 캐시: 반도체 [S, K, H] · 서버: S 는 다시 등록돼 그룹 없음, 반도체 [K, H]
+    const list = [w("S", "에스", 1), w("K", "케이", 2), w("H", "에이치", 3)];
+    const three: Layout = {
+      on: true,
+      groups: [{ id: 1, name: "반도체", position: 0 }],
+      items: [
+        { code: "H", groupId: 1, position: 2 },
+        { code: "K", groupId: 1, position: 1 },
+        { code: "S", groupId: 1, position: 0 },
+      ],
+    };
+    h.api.watchGroups!.mockResolvedValue(three);
+    client.setQueryData(["http://x", "stocks"], list);
+    const seen = mount();
+    await settle();
+    expect(model(seen, list)).toEqual([["반도체", "S", "K", "H"], ["그룹 없음"]]);
+    const server = deferred<Layout>();
+    h.api.watchGroups!.mockImplementation(() => server.promise);
+    const readded = [w("K", "케이", 2), w("H", "에이치", 3), w("S", "에스", 40)];
+    client.setQueryData(["http://x", "stocks"], readded);
+    await settle();
+    // 서버 응답 전: 캐시에서 S 를 이미 뺐다
+    expect(model(seen, readded)).toEqual([
+      ["반도체", "K", "H"],
+      ["그룹 없음", "S"],
+    ]);
+    const serverNow: Layout = { ...three, items: [three.items[0]!, three.items[1]!] };
+    server.resolve(serverNow);
+    await settle();
+    expect(cache()).toEqual(serverNow);
+    // H 를 ↑ (반도체 1번째 → 0번째): 앱과 서버가 같은 번호로 계산
+    const m = watchModel(readded, seen.value.layout, seen.value.view, true);
+    expect(m.pos.get("H")).toEqual({ groupId: 1, groupName: "반도체", index: 1, count: 2 });
+    h.api.moveWatchStock!.mockResolvedValueOnce({ ...three, items: [{ code: "H", groupId: 1, position: 0 }, { code: "K", groupId: 1, position: 1 }] });
+    seen.value.ops.move({ code: "H", name: "에이치" }, 1, 0);
+    // 누르는 즉시 (낙관적): H 0 · K 1 — 서버가 계산할 값과 같다
+    expect(cache()!.items).toEqual([
+      { code: "H", groupId: 1, position: 0 },
+      { code: "K", groupId: 1, position: 1 },
+    ]);
+    await settle();
+    expect(h.api.moveWatchStock).toHaveBeenCalledWith({ code: "H", groupId: 1, index: 0 });
+    expect(model(seen, readded)).toEqual([
+      ["반도체", "H", "K"],
+      ["그룹 없음", "S"],
+    ]);
+  });
+
+  it("시세만 바뀐 목록(같은 종목 · 같은 등록 시각)은 다시 받지 않는다, 새 종목만 생기면 빼지 않고 다시 받는다, 꺼져 있으면 아무것도 안 한다", async () => {
+    const seen = mount();
+    await settle();
+    client.setQueryData(["http://x", "stocks"], LIST.map((s) => ({ ...s, quote: quote(s.code, 200) })));
+    await settle();
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(1);
+    client.setQueryData(["http://x", "stocks"], [...LIST, w("E", "마", 9)]);
+    await settle();
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(2);
+    expect(seen.value.layout).toEqual(LAYOUT);
+    cleanupRenders();
+    client.clear();
+    h.flags = {};
+    client.setQueryData(["http://x", "stocks"], LIST);
+    mount();
+    await settle();
+    client.setQueryData(["http://x", "stocks"], LIST.slice(1));
+    await settle();
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(2);
+    expect(cache()).toBeUndefined();
+  });
+});
+
+describe("기기 보기 상태 정리를 저장 (3-34 검토)", () => {
+  it("서버 배치를 받은 뒤 정리한 값이 저장값과 다르면 한 번 다시 저장 — 그룹 0개인데 '그룹 없음' → '전체', 지운 그룹 칩 → '전체'", async () => {
+    h.view = { selected: "none", collapsed: ["none"] };
+    h.api.watchGroups!.mockResolvedValue({ on: true, groups: [], items: [] });
+    const seen = mount();
+    await settle();
+    expect(seen.value.view).toEqual({ selected: "all", collapsed: ["none"] });
+    expect(h.setView).toHaveBeenCalledTimes(1);
+    expect(h.setView).toHaveBeenCalledWith({ selected: "all", collapsed: ["none"] });
+  });
+
+  it("정리할 것이 없으면 저장하지 않는다, 기기 캐시의 옛 배치만 있고 아직 받지 못했으면(오프라인) 저장하지 않는다", async () => {
+    h.view = { selected: 1, collapsed: [] };
+    mount();
+    await settle();
+    expect(h.setView).not.toHaveBeenCalled();
+    cleanupRenders();
+    client.clear();
+    // 기기 캐시에 옛 배치(그룹 1 없음)만 있고 서버는 응답하지 않음
+    client.setQueryData(["http://x", "stocks"], LIST);
+    client.setQueryData(["http://x", "watchGroups"], { on: true, groups: [], items: [] }, { updatedAt: Date.now() - 120_000 });
+    h.api.watchGroups!.mockImplementation(() => new Promise(() => undefined));
+    const seen = mount();
+    await settle();
+    expect(seen.value.view.selected).toBe("all");
+    expect(h.setView).not.toHaveBeenCalled();
   });
 });
 

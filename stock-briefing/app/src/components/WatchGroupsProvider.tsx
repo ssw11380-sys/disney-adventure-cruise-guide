@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { AccessibilityInfo, Alert } from "react-native";
 import { ApiRequestError } from "@/api/client";
 import { useApi, useFeature } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
 import { useSettings } from "@/lib/settings";
-import { applyToLayout, cleanGroupName, normalizeView, saveFailText, WATCH_OFF, type WatchLayout, type WatchOp } from "@/lib/watchGroups";
+import { applyToLayout, cleanGroupName, dropItems, normalizeView, rowStamps, saveFailText, stockSetChange, WATCH_OFF, type WatchLayout, type WatchOp } from "@/lib/watchGroups";
 import { WatchGroupsContext, WatchOpQueue, WATCH_GROUPS_OFF, type NameSave, type WatchGroupsState, type WatchOps, type WatchStatus } from "@/lib/watchGroupsQuery";
 import type { WatchView } from "@/lib/watchView";
 
@@ -19,7 +19,9 @@ const bare = (l: WatchLayout): WatchLayout => ({ on: l.on, groups: l.groups, ite
  *    예전 서버의 404 는 꺼짐, 배치의 on:false(이 계정은 쓸 수 없음 등)도 꺼짐처럼
  *  - 조작은 lib/watchGroupsQuery 의 저장 차례로: 누르는 즉시 캐시를 바꾸고(lib/watchGroups applyToLayout — 서버와 같은 규칙) 차례로 보낸 뒤 마지막 응답으로 맞춘다.
  *    실패하면 '저장하지 못했습니다' 창과 서버 값으로 되돌림
- *  - 고른 칩·접은 그룹은 기기 설정(settings.watchView)
+ *  - 잔고 목록의 종목이 바뀌면(관심 해제·다시 추가·동기화 제외·토스 가져오기·다른 기기) 사라진·다시 등록된 종목을 캐시 배치에서 빼고 서버 배치를 다시 받는다 —
+ *    다시 추가한 종목은 서버에서 '그룹 없음' 맨 끝이다 (설계 E8·E23)
+ *  - 고른 칩·접은 그룹은 기기 설정(settings.watchView). 서버에서 받은 배치로 정리한 값(지운 그룹 → '전체')이 저장값과 다르면 한 번 다시 저장한다
  */
 export function WatchGroupsProvider({ children }: { children: React.ReactNode }) {
   const flag = useFeature("watchGroups", false);
@@ -45,6 +47,25 @@ export function WatchGroupsProvider({ children }: { children: React.ReactNode })
   });
   const layout = flag && query.data?.on ? query.data : null;
   const status: WatchStatus = !flag ? "off" : query.data ? (query.data.on ? "ready" : "off") : query.isError ? "error" : "loading";
+
+  // 잔고 목록 캐시를 읽기만 한다 (enabled: false — 서버에 묻지 않음). 코드·등록 시각 글만 골라, 시세가 바뀔 때는 다시 그리지 않는다
+  const stamps = useQuery<RegisteredWithQuote[], Error, string>({ queryKey: [apiUrl, "stocks"], queryFn: api.listStocks, enabled: false, select: rowStamps }).data;
+  const lastStamps = useRef<{ url: string; stamps: string } | null>(null);
+  useEffect(() => {
+    if (!flag || stamps === undefined) return;
+    const prev = lastStamps.current;
+    lastStamps.current = { url: apiUrl, stamps };
+    if (!prev || prev.url !== apiUrl) return;
+    const change = stockSetChange(prev.stamps, stamps);
+    if (change.drop.length) {
+      const cur = qc.getQueryData<WatchLayout>(key);
+      if (cur?.on) {
+        const next = dropItems(cur, change.drop);
+        if (next !== cur) qc.setQueryData(key, next);
+      }
+    }
+    if (change.refetch) void qc.invalidateQueries({ queryKey: key });
+  }, [flag, stamps, apiUrl, qc, key]);
 
   const queue = useMemo(
     () =>
@@ -106,6 +127,12 @@ export function WatchGroupsProvider({ children }: { children: React.ReactNode })
   const again = query.refetch;
   const refetch = useCallback(() => void again(), [again]);
   const view = useMemo(() => normalizeView(watchView, layout), [watchView, layout]);
+  // 정리한 값을 그리기에만 쓰고 저장값을 두면, '그룹 없음'을 골라 둔 채 그룹을 다 지운 뒤 새 그룹을 만들었을 때 옛 '그룹 없음' 선택이 되살아났다 (3-34 검토).
+  // 이번 실행에서 서버 배치를 받은 뒤에만 (기기 캐시에 남은 옛 배치로 방금 고른 칩을 지우지 않게)
+  const fetched = query.isFetchedAfterMount;
+  useEffect(() => {
+    if (layout && fetched && view !== watchView) setView(view);
+  }, [layout, fetched, view, watchView, setView]);
   const value = useMemo<WatchGroupsState>(
     () => (flag ? { on: !!layout, layout: layout ?? WATCH_OFF, view, setView, ops, status, error: query.error, refetch } : WATCH_GROUPS_OFF),
     [flag, layout, view, setView, ops, status, query.error, refetch],

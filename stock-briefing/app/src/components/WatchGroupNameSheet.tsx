@@ -7,13 +7,17 @@ import type { NameSave } from "@/lib/watchGroupsQuery";
 import { font, radius, space, touch, useTheme } from "@/theme";
 import { tossSheet } from "@/tokens";
 
+/** 자판 이벤트가 오지 않을 때 시트 최대 높이 (창 높이 비율 — 360×752 에서 338, 자판 약 300 위에 남는 곳 안) */
+const KB_GUESS_SHEET = 0.45;
+
 /**
  * 관심 그룹 이름 창 (3-34, 기능 플래그 watchGroups) — Alert.prompt 는 iOS 전용이라 시트로 만든다.
  *  - 제목 '새 그룹' / '그룹 이름 바꾸기', 입력칸 자리 글자 '예: 반도체, 배당', 오른쪽 아래 글자 수 '3/10' (코드 포인트)
  *  - [취소] [만들기|바꾸기] — 저장하는 동안 '만드는 중'/'바꾸는 중', 두 번 누르기 막음
  *  - 앱이 먼저 검사하고(빔·10자·예약어·같은 이름·12개 — 서버와 같은 규칙) 서버도 다시 검사한다. 서버가 거절하면 그 글을 입력칸 아래 빨간 글로
  *  - 입력칸이 열리자마자 자판이 뜬다. 자판이 열리면 시트를 위쪽에 붙이고 높이를 자판 위까지로 줄인다 — edge-to-edge 라 창이 자판만큼
- *    줄어드는 동작(KeyboardAvoidingView·adjustResize)에 기대지 않는다 (가격 알림 시트와 같은 방식). 넘치면 위쪽 글만 스크롤, 버튼은 늘 보임
+ *    줄어드는 동작(KeyboardAvoidingView·adjustResize)에 기대지 않는다 (가격 알림 시트와 같은 방식). 넘치면 위쪽 글만 스크롤, 버튼은 늘 보임.
+ *    Modal 창에는 자판 이벤트가 오지 않을 수 있어(폰 확인 전) 입력칸 초점으로 한 번 더 대비한다 (아래 guess)
  *  - 저장하는 동안 창을 닫으면(바깥·뒤로 가기·취소) 응답이 와도 onDone 을 부르지 않는다 (닫은 뒤 종목이 몰래 옮겨지지 않게)
  */
 export function WatchGroupNameSheet({
@@ -47,10 +51,16 @@ export function WatchGroupNameSheet({
   const closedRef = useRef(false);
   // 자판 높이 (0 = 닫힘). 창이 열려 있는 동안만 구독한다
   const [kb, setKb] = useState(0);
+  // 자판 이벤트를 한 번이라도 받았는지 · 입력칸에 초점이 있는지 (아래 대비책)
+  const [kbEvents, setKbEvents] = useState(false);
+  const [focused, setFocused] = useState(false);
   useEffect(() => {
     // 개발 모드(StrictMode)는 붙였다 떼었다 다시 붙인다 — 다시 붙을 때 '닫힘'을 풀어 둔다
     closedRef.current = false;
-    const show = Keyboard.addListener("keyboardDidShow", (e) => setKb(e.endCoordinates.height));
+    const show = Keyboard.addListener("keyboardDidShow", (e) => {
+      setKbEvents(true);
+      setKb(e.endCoordinates.height);
+    });
     const hide = Keyboard.addListener("keyboardDidHide", () => setKb(0));
     return () => {
       closedRef.current = true;
@@ -60,7 +70,12 @@ export function WatchGroupNameSheet({
   }, []);
   const count = nameLength(text);
   const create = mode === "create";
-  const maxH = kb > 0 ? win.height - kb - insets.top - space.md * 2 : undefined;
+  // 대비책 (3-34 검토): RN 0.86 은 자판 이벤트를 앱 본 창에서만 보내는데 이 입력칸은 Modal(다른 창) 안이라, 이벤트가 오지 않으면 시트가 자판에 가린다.
+  // 입력칸에 초점이 있는데 자판 이벤트를 아직 한 번도 받지 못했으면 자판이 떠 있다고 보고, 위쪽에 붙이고 창 높이의 45%까지로 줄인다.
+  // 이벤트가 오면 그 높이를 쓰고(자판이 닫히면 아래로 — 지금 그대로), 초점이 빠지면 아래로
+  const guess = kb === 0 && focused && !kbEvents;
+  const up = kb > 0 || guess;
+  const maxH = kb > 0 ? win.height - kb - insets.top - space.md * 2 : guess ? Math.round(win.height * KB_GUESS_SHEET) : undefined;
 
   const close = () => {
     closedRef.current = true;
@@ -90,14 +105,14 @@ export function WatchGroupNameSheet({
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={close}>
-      <View style={[styles.backdrop, { justifyContent: kb > 0 ? "flex-start" : wide ? "center" : "flex-end", paddingTop: kb > 0 ? insets.top + space.md : 0 }]}>
+      <View style={[styles.backdrop, { justifyContent: up ? "flex-start" : wide ? "center" : "flex-end", paddingTop: up ? insets.top + space.md : 0 }]}>
         <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: t.scrim }]} onPress={close} accessibilityRole="button" accessibilityLabel="이름 창 닫기" />
         <View
           testID="watch-name-sheet"
           style={[
             styles.sheet,
-            wide || kb > 0 ? styles.sheetFloat : styles.sheetBottom,
-            { backgroundColor: t.surface, borderColor: t.lineStrong, maxHeight: maxH, paddingBottom: wide || kb > 0 ? space.lg : insets.bottom + space.lg },
+            wide || up ? styles.sheetFloat : styles.sheetBottom,
+            { backgroundColor: t.surface, borderColor: t.lineStrong, maxHeight: maxH, paddingBottom: wide || up ? space.lg : insets.bottom + space.lg },
           ]}
         >
           <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollBody} keyboardShouldPersistTaps="handled" bounces={false}>
@@ -114,6 +129,8 @@ export function WatchGroupNameSheet({
               placeholderTextColor={t.muted}
               accessibilityLabel={`그룹 이름, ${WATCH_GROUP_NAME_MAX}자까지`}
               autoFocus
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
               returnKeyType="done"
               onSubmitEditing={() => void submit()}
               style={[styles.input, { color: t.ink, borderColor: error ? t.danger : t.lineStrong, backgroundColor: t.bg }]}

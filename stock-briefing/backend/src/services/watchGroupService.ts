@@ -150,13 +150,14 @@ export const NAME_ERROR_TEXT: Record<NameError, string> = {
 };
 
 /**
- * 이름 정리: 유니코드 NFC, 탭·줄바꿈은 빈칸으로, 제어 문자(Cc)와 보이지 않는 서식 글자(Cf — 폭 없는 빈칸 U+200B 등)는 지우고,
+ * 이름 정리: 유니코드 NFC, 탭·줄바꿈과 빈칸처럼 보이는 글자(한글 채움 문자 U+3164·U+115F·U+1160·U+FFA0, 점자 빈칸 U+2800 — 3-34 검토:
+ * 빈 칩·빈 머리가 생겼다)는 빈칸으로, 제어 문자(Cc)와 보이지 않는 서식 글자(Cf — 폭 없는 빈칸 U+200B 등)는 지우고,
  * 안쪽 연속 빈칸은 하나로, 앞뒤 빈칸 없앰. 이모지를 잇는 U+200D(가족 이모지 등)만 남기되, 낱말 앞뒤에 붙은 것은 지운다
  */
 export function cleanGroupName(raw: string): string {
   return raw
     .normalize("NFC")
-    .replace(/[\t\n\v\f\r]/g, " ")
+    .replace(/[\t\n\v\f\rᅟᅠㅤﾠ⠀]/g, " ")
     .replace(/\p{Cc}/gu, "")
     .replace(/(?!‍)\p{Cf}/gu, "")
     .replace(/\s+/gu, " ")

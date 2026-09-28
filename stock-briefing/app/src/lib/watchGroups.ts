@@ -150,6 +150,39 @@ export function layoutFrom(groups: readonly WatchGroup[], stocks: readonly Order
   return { on: true, groups: sortGroups(groups), items };
 }
 
+/**
+ * 잔고 목록의 행 표시: 종목마다 '코드 + 등록 시각' (정렬해 한 글로). 관심 해제 뒤 다시 추가한 종목은 같은 코드라도 서버에 새 행이라 등록 시각이 새것이다.
+ * 시세만 바뀐 목록은 같은 글이라, 제공자가 이 값으로 잔고 목록을 지켜봐도 체결마다 다시 그리지 않는다
+ */
+export function rowStamps(list: readonly { code: string; createdAt: string }[]): string {
+  return list
+    .map((s) => `${s.code}\t${s.createdAt}`)
+    .sort()
+    .join("\n");
+}
+
+const parseStamps = (stamps: string) => new Map(stamps ? stamps.split("\n").map((r) => r.split("\t") as [string, string]) : []);
+
+/**
+ * 잔고 목록의 종목이 바뀐 뒤 (3-34 검토: 관심 해제 → 다시 추가하면 서버는 새 행 = '그룹 없음' 맨 끝인데, 캐시 배치는 예전 그룹·자리를 들고 있어
+ * 화면이 예전 그룹에 두었고, 그 그룹 안 ↑↓ 번호가 서버와 어긋나 옮기기가 조용히 안 먹었다).
+ * drop = 캐시 배치에서 바로 뺄 종목 (목록에서 사라짐 · 등록 시각이 바뀜 = 지웠다 다시 등록 — 서버에서 그 행의 그룹·자리는 이미 없다),
+ * refetch = 서버 배치를 다시 받을지 (종목이 하나라도 사라지거나 새로 생겼으면)
+ */
+export function stockSetChange(prev: string, next: string): { drop: string[]; refetch: boolean } {
+  if (prev === next) return { drop: [], refetch: false };
+  const a = parseStamps(prev);
+  const b = parseStamps(next);
+  const drop = [...a].filter(([code, at]) => b.get(code) !== at).map(([code]) => code);
+  return { drop, refetch: drop.length > 0 || [...b.keys()].some((code) => !a.has(code)) };
+}
+
+/** 캐시 배치에서 종목을 뺀다 (뺄 것이 없으면 같은 값) */
+export function dropItems(layout: WatchLayout, codes: readonly string[]): WatchLayout {
+  const gone = new Set(codes);
+  return layout.items.some((i) => gone.has(i.code)) ? { ...layout, items: layout.items.filter((i) => !gone.has(i.code)) } : layout;
+}
+
 /** 낙관적 반영: 잔고 목록과 지금 배치에 조작 하나를 적용한 새 배치 */
 export function applyToLayout(layout: WatchLayout, list: readonly RegisteredWithQuote[], op: WatchOp): WatchLayout {
   const next = applyOp(layout.groups, orderStocks(list, layout), op);
@@ -169,13 +202,14 @@ export const NAME_ERROR_TEXT: Record<NameError, string> = {
 };
 
 /**
- * 이름 정리 (서버와 같다): 유니코드 NFC, 탭·줄바꿈은 빈칸으로, 제어 문자(Cc)와 보이지 않는 서식 글자(Cf — 폭 없는 빈칸 U+200B 등)는 지우고,
+ * 이름 정리 (서버와 같다): 유니코드 NFC, 탭·줄바꿈과 빈칸처럼 보이는 글자(한글 채움 문자 U+3164·U+115F·U+1160·U+FFA0, 점자 빈칸 U+2800 — 3-34 검토:
+ * 빈 칩·빈 머리가 생겼다)는 빈칸으로, 제어 문자(Cc)와 보이지 않는 서식 글자(Cf — 폭 없는 빈칸 U+200B 등)는 지우고,
  * 안쪽 연속 빈칸은 하나로, 앞뒤 빈칸 없앰. 이모지를 잇는 U+200D(가족 이모지 등)만 남기되, 낱말 앞뒤에 붙은 것은 지운다
  */
 export function cleanGroupName(raw: string): string {
   return raw
     .normalize("NFC")
-    .replace(/[\t\n\v\f\r]/g, " ")
+    .replace(/[\t\n\v\f\rᅟᅠㅤﾠ⠀]/g, " ")
     .replace(/\p{Cc}/gu, "")
     .replace(/(?!‍)\p{Cf}/gu, "")
     .replace(/\s+/gu, " ")
@@ -315,11 +349,17 @@ export function watchChips(model: WatchModel): WatchChip[] {
 
 /**
  * 칩 줄을 그릴 때 고른 칩이 보이게 넘길 위치 (3-34 리뷰: 기기에 저장한 칩이 칩 줄 오른쪽 밖이면 앱을 다시 열었을 때 무엇으로 걸렀는지 안 보였다).
- * chip = 칩의 x·폭(칩 띠 안), view = 칩 띠 폭, fade = 끝 흐림 폭. 칩이 오른쪽 흐림 앞까지 다 보이면 null(넘기지 않음),
- * 아니면 칩 오른쪽 끝이 흐림 앞에 오게 넘기되 칩 왼쪽 끝이 왼쪽 흐림 밑으로 들어가지 않게 (칩이 띠보다 넓으면 왼쪽 맞춤)
+ * chip = 칩의 x·폭(칩 띠 안), view = 칩 띠 폭, fade = 끝 흐림 폭, offset = 칩 띠를 지금 넘겨 둔 만큼.
+ * 칩이 지금 보이는 곳(왼쪽 흐림 뒤 ~ 오른쪽 흐림 앞)에 다 들어 있으면 null(넘기지 않음) — 넘겨 둔 칩 줄에서 보이는 칩을 눌렀을 때 줄이 튀지 않게 (3-34 검토).
+ * 왼쪽으로 가려졌으면 칩 왼쪽 끝이 왼쪽 흐림 뒤에 오게, 오른쪽으로 가려졌으면 칩 오른쪽 끝이 흐림 앞에 오게 넘기되 칩 왼쪽 끝이 왼쪽 흐림 밑으로 들어가지 않게
+ * (칩이 띠보다 넓으면 왼쪽 맞춤)
  */
-export function chipRevealX(chip: { x: number; w: number }, view: number, fade: number): number | null {
-  if (view <= 0 || chip.x + chip.w <= view - fade) return null;
+export function chipRevealX(chip: { x: number; w: number }, view: number, fade: number, offset = 0): number | null {
+  if (view <= 0) return null;
+  // 왼쪽 흐림은 넘겨 두었을 때만 칠해진다 (ChipStrip)
+  const left = offset > 0 ? offset + fade : 0;
+  if (chip.x >= left && chip.x + chip.w <= offset + view - fade) return null;
+  if (chip.x < left) return Math.max(0, chip.x - fade);
   return Math.max(0, Math.min(chip.x - fade, chip.x + chip.w + fade - view));
 }
 
@@ -354,14 +394,17 @@ function objectOf(name: string): string {
   return particle === "을(를)" ? `${name.trim()} 종목을` : `${name}${particle}`;
 }
 
-/** 그룹 머리 화면 읽기: '반도체 그룹, 4종목' — 펼쳐짐·접힘은 상태(accessibilityState.expanded)로 읽으므로 이름표에 다시 넣지 않는다 */
+/** 그룹 머리 화면 읽기 이름표: '반도체 그룹, 4종목' — 펼쳐짐·접힘은 값(accessibilityValue.text)으로 뒤에 붙는다 (components/WatchChips WatchGroupHead) */
 export function groupHeadSpeech(name: string, groupId: number | null, count: number): string {
   return `${groupId === null ? name : `${name} 그룹`}, ${count}종목`;
 }
 
-/** 관심 줄 메뉴의 '지금' 줄: '지금: 반도체 · 2번째 (4종목 중)' */
-export function posLine(p: WatchPos): string {
-  return `지금: ${p.groupName} · ${p.index + 1}번째 (${p.count}종목 중)`;
+/**
+ * 관심 줄 메뉴의 '지금' 줄: '지금: 반도체 · 2번째 (4종목 중)'. 자리는 늘 내 순서 기준이라, 정렬이 '등록순'이 아니면(mine = false) 화면에 보이는 자리와
+ * 다를 수 있어 자리는 빼고 '지금: 반도체 (4종목)' 만 (3-34 검토 — 등락률 정렬에서 4번째 줄인데 '3번째'라고 나왔다)
+ */
+export function posLine(p: WatchPos, mine = true): string {
+  return mine ? `지금: ${p.groupName} · ${p.index + 1}번째 (${p.count}종목 중)` : `지금: ${p.groupName} (${p.count}종목)`;
 }
 
 /** 순서를 옮긴 뒤 알림: '삼성전자를 반도체 1번째로 옮겼습니다' (그룹이 하나도 없으면 '관심 1번째', 영문 이름은 'AMD 종목을 …') */

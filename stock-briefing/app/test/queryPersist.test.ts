@@ -30,6 +30,46 @@ describe("켜자마자 보일 캐시: 저장할 쿼리 고르기", () => {
   });
 });
 
+describe("관심 그룹 배치(watchGroups — 3-34)도 저장해 켤 때 바로 칩", () => {
+  it("저장 대상이고, 저장 → 새 실행에서 되살리면 같은 배치 (앱과 같은 dehydrate 조건 · 디스크에 적는 모양)", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { persistQueryClientRestore, persistQueryClientSave } = await import("@tanstack/react-query-persist-client");
+    const { PERSIST_BUSTER } = await import("@/lib/queryPersist");
+    expect(shouldPersist([url, "watchGroups"], ok(), NOW)).toBe(true);
+    const layout = {
+      on: true,
+      groups: [
+        { id: 3, name: "반도체", position: 0 },
+        { id: 5, name: "배당", position: 1 },
+      ],
+      items: [
+        { code: "000660", groupId: 3, position: 1 },
+        { code: "005930", groupId: 3, position: 0 },
+      ],
+    };
+    // 디스크 대신 글 한 줄 (앱의 persister 와 같이 cleanForDisk → JSON)
+    let disk: string | null = null;
+    const persister = {
+      persistClient: async (c: PersistedClient) => void (disk = JSON.stringify(cleanForDisk(c))),
+      restoreClient: async () => (disk ? (JSON.parse(disk) as PersistedClient) : undefined),
+      removeClient: async () => void (disk = null),
+    };
+    const dehydrateOptions = { shouldDehydrateQuery: (q: { queryKey: readonly unknown[]; state: { data: unknown; dataUpdatedAt: number; error: unknown } }) => shouldPersist(q.queryKey, q.state, Date.now()) };
+    const before = new QueryClient();
+    before.setQueryData([url, "watchGroups"], layout);
+    before.setQueryData([url, "market"], { open: true });
+    await persistQueryClientSave({ queryClient: before, persister, buster: PERSIST_BUSTER, dehydrateOptions });
+    expect(disk).toContain("반도체");
+    const after = new QueryClient();
+    await persistQueryClientRestore({ queryClient: after, persister, maxAge: PERSIST_MAX_AGE_MS, buster: PERSIST_BUSTER });
+    expect(after.getQueryData([url, "watchGroups"])).toEqual(layout);
+    // 저장 대상이 아닌 것은 되살리지 않음
+    expect(after.getQueryData([url, "market"])).toBeUndefined();
+    before.clear();
+    after.clear();
+  });
+});
+
 describe("기기에 적을 때 실패 흔적 지우기", () => {
   it("오류 상태의 옛 값 → 성공 상태의 옛 값 (받은 시각·값은 그대로)", () => {
     const client = {

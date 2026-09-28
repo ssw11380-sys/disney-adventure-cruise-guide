@@ -11,21 +11,23 @@ import { CHIP_H, CHIP_SLOP, ChipStrip, FADE_W } from "./chart/ChipStrip";
  *  - 칩은 옆으로 넘긴다 (차트 칩과 같은 ChipStrip — 끝 흐림, 칩 보이는 높이 32 + 누르는 영역 44). 칩을 누르면 폰에 있는 값으로 바로 그 그룹만
  *  - 줄 높이 44 (촘촘에서도). 글자는 표 줄과 같은 상한(140%) — 넘치면 옆으로 넘김
  *  - 휴대폰은 '관심 9' 머리 줄과 표 머리 사이, 넓은 표는 표 머리 아래 (화면 읽기가 '관심 9' 제목을 먼저 읽고 칩을 읽게)
- *  - 고른 칩이 칩 줄 오른쪽 밖(또는 [그룹·순서] 밑)이면 그릴 때 한 번 그 칩까지 넘긴다 — 기기에 저장한 칩으로 앱을 다시 열어도 무엇으로 걸렀는지 보이게.
- *    고른 칩마다 한 번만 (사용자가 넘겨 둔 칩 줄을 개수가 바뀔 때마다 되돌리지 않게)
+ *  - 고른 칩이 지금 보이는 곳 밖(칩 줄 오른쪽 밖 · [그룹·순서] 밑 · 흐림 밑)이면 그릴 때 한 번 그 칩까지 넘긴다 — 기기에 저장한 칩으로 앱을 다시 열어도 무엇으로 걸렀는지 보이게.
+ *    고른 칩마다 한 번만 (사용자가 넘겨 둔 칩 줄을 개수가 바뀔 때마다 되돌리지 않게), 지금 넘겨 둔 만큼을 보고 이미 다 보이면 넘기지 않는다 (보이는 칩을 누를 때마다 줄이 튀지 않게)
  */
 export function WatchChips({ chips, onPick, onEdit, pad, backdrop }: { chips: WatchChip[]; onPick: (key: WatchSelected) => void; onEdit: () => void; pad: number; backdrop: string }) {
   const t = useTheme();
   const scroll = useRef<ScrollView>(null);
-  const seen = useRef({ view: 0, chips: new Map<string, { x: number; w: number }>(), done: null as string | null });
+  const seen = useRef({ view: 0, x: 0, chips: new Map<string, { x: number; w: number }>(), done: null as string | null });
   const picked = String(chips.find((c) => c.selected)?.key ?? "all");
   const reveal = () => {
     const s = seen.current;
     const chip = s.chips.get(picked);
     if (s.done === picked || !s.view || !chip) return;
     s.done = picked;
-    const x = chipRevealX(chip, s.view, FADE_W);
-    if (x !== null) scroll.current?.scrollTo({ x, animated: false });
+    const x = chipRevealX(chip, s.view, FADE_W, s.x);
+    if (x === null) return;
+    s.x = x;
+    scroll.current?.scrollTo({ x, animated: false });
   };
   // 고른 칩이 바뀌면(자리는 이미 잰 칩) 한 번 확인
   useEffect(() => reveal());
@@ -38,6 +40,9 @@ export function WatchChips({ chips, onPick, onEdit, pad, backdrop }: { chips: Wa
         onViewWidth={(w) => {
           seen.current.view = w;
           reveal();
+        }}
+        onScrollX={(x) => {
+          seen.current.x = x;
         }}
       >
         {chips.map((c) => (
@@ -73,7 +78,9 @@ export function WatchChips({ chips, onPick, onEdit, pad, backdrop }: { chips: Wa
 
 /**
  * 관심 칸 '전체'의 그룹 머리 줄 (휴대폰·넓은 표 공통, 높이 44 · 줄 전체가 누르는 곳): '▾ 반도체 · 4' — 누르면 접고 편다 (이 기기에 기억).
- * 화면 읽기 '반도체 그룹, 4종목' + 상태 expanded(TalkBack 이 '펼쳐짐/접힘'을 읽는다 — 이름표에 또 넣으면 두 번 읽음) · 힌트 '두 번 탭하면 접습니다'
+ * 화면 읽기 '반도체 그룹, 4종목' + 값 '펼쳐짐'/'접힘' + 상태 expanded · 힌트 '두 번 탭하면 접습니다'.
+ * 값을 따로 주는 까닭 (3-34 검토): RN 0.86 안드로이드는 expanded 를 펼치기·접기 동작으로만 붙이고 읽을 글을 만들지 않아, 사용법 힌트를 끈 TalkBack 은
+ * 접혔는지 몰랐다. accessibilityValue.text 는 이름표 뒤에 붙어('반도체 그룹, 4종목, 접힘') 바뀔 때마다 새 글로 읽히고, 칩 이름표('반도체 그룹, 4종목')와도 갈린다
  */
 export function WatchGroupHead({ name, groupId, count, collapsed, onToggle, pad }: { name: string; groupId: number | null; count: number; collapsed: boolean; onToggle: () => void; pad: number }) {
   const t = useTheme();
@@ -83,6 +90,7 @@ export function WatchGroupHead({ name, groupId, count, collapsed, onToggle, pad 
       accessibilityRole="button"
       accessibilityLabel={groupHeadSpeech(name, groupId, count)}
       accessibilityState={{ expanded: !collapsed }}
+      accessibilityValue={{ text: collapsed ? "접힘" : "펼쳐짐" }}
       accessibilityHint={collapsed ? "두 번 탭하면 펼칩니다" : "두 번 탭하면 접습니다"}
       style={({ pressed }) => [styles.head, { paddingHorizontal: pad, backgroundColor: pressed ? t.rowPressed : t.bg, borderBottomColor: t.line }]}
     >

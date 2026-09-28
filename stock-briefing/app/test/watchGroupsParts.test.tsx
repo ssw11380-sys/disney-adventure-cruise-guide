@@ -130,14 +130,24 @@ describe("칩 줄 · 그룹 머리", () => {
     expect(r.text()).toContain("그룹·순서");
   });
 
-  it("그룹 머리: '반도체 그룹, 4종목' + 펼침 상태(TalkBack 이 '펼쳐짐/접힘'을 읽음 — 이름표에 또 넣지 않음) · 힌트, 높이 44", () => {
+  it("그룹 머리: '반도체 그룹, 4종목' + 값 '펼쳐짐'/'접힘'(안드로이드는 이름표 뒤에 붙여 읽음 — RN expanded 만으로는 읽지 않음, 3-34 검토) + 펼침 상태 · 힌트, 높이 44", () => {
     const toggle = vi.fn();
     const open = render(<WatchGroupHead name="반도체" groupId={7} count={4} collapsed={false} onToggle={toggle} pad={14} />).all()[0]!;
-    expect([open.props.accessibilityLabel, open.props.accessibilityState, open.props.accessibilityHint]).toEqual(["반도체 그룹, 4종목", { expanded: true }, "두 번 탭하면 접습니다"]);
+    expect([open.props.accessibilityLabel, open.props.accessibilityValue, open.props.accessibilityState, open.props.accessibilityHint]).toEqual([
+      "반도체 그룹, 4종목",
+      { text: "펼쳐짐" },
+      { expanded: true },
+      "두 번 탭하면 접습니다",
+    ]);
     const style = (open.props.style as (s: { pressed: boolean }) => unknown[])({ pressed: false });
     expect(JSON.stringify(style)).toContain(`"minHeight":${touch.min}`);
     const shut = render(<WatchGroupHead name="그룹 없음" groupId={null} count={2} collapsed onToggle={toggle} pad={14} />).all()[0]!;
-    expect([shut.props.accessibilityLabel, shut.props.accessibilityState, shut.props.accessibilityHint]).toEqual(["그룹 없음, 2종목", { expanded: false }, "두 번 탭하면 펼칩니다"]);
+    expect([shut.props.accessibilityLabel, shut.props.accessibilityValue, shut.props.accessibilityState, shut.props.accessibilityHint]).toEqual([
+      "그룹 없음, 2종목",
+      { text: "접힘" },
+      { expanded: false },
+      "두 번 탭하면 펼칩니다",
+    ]);
     (shut.props.onPress as () => void)();
     expect(toggle).toHaveBeenCalledTimes(1);
   });
@@ -198,6 +208,27 @@ describe("고른 칩까지 넘기기 · 빈 그룹 칸 · 넓은 표 머리", ()
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
+  it("칩 줄을 끝까지 넘겨 둔 채 보이는 칩을 누르면 줄이 튀지 않는다 — 지금 넘겨 둔 만큼을 본다 (3-34 검토: 띠 300 · 넘김 176 에서 x 264 칩을 누르면 48 로 돌아가 다음 칩이 흐림 밑에 숨었다)", () => {
+    const r = render(chipsOf(7));
+    const { scrollTo, chips, layout, view } = strip(r);
+    layout(chips[0]!, 0, 60);
+    layout(chips[1]!, 66, 80);
+    layout(chips[2]!, 264, 60);
+    layout(chips[3]!, 330, 146);
+    view(300);
+    expect(scrollTo).not.toHaveBeenCalled();
+    // 사용자가 끝까지 넘김
+    const sv = r.all().find((n) => n.type === "ScrollView")!;
+    r.act(() => (sv.props.onScroll as (e: unknown) => void)({ nativeEvent: { contentOffset: { x: 176, y: 0 } } }));
+    // 보이는 '배당' 칩(x 264)을 고름 → 다시 그림: 넘기지 않는다
+    r.rerender(chipsOf(3));
+    expect(scrollTo).not.toHaveBeenCalled();
+    // 왼쪽 흐림 밑에 반쯤 숨은 '반도체'(x 66) 를 고름 → 칩 왼쪽 끝이 흐림 뒤에 오게 가장 조금만
+    r.rerender(chipsOf(7));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenLastCalledWith({ x: 66 - FADE_W, animated: false });
+  });
+
   it("빈 그룹 칸 제목은 고른 그룹 이름을 말한다", () => {
     expect(render(<WatchEmptyGroup name="반도체" groupId={7} onOpen={() => undefined} />).text()).toContain("‘반도체’ 그룹에 종목이 없습니다");
     expect(render(<WatchEmptyGroup name="그룹 없음" groupId={null} onOpen={() => undefined} />).text()).toContain("‘그룹 없음’에 종목이 없습니다");
@@ -240,6 +271,27 @@ describe("이름 창 (WatchGroupNameSheet)", () => {
     r.unmount();
     expect(h.kb.length).toBeGreaterThan(0);
     expect(h.kb.every((k) => k.removed)).toBe(true);
+  });
+
+  it("대비책: 자판 이벤트가 Modal 창까지 오지 않아도, 입력칸에 초점이 있으면 위쪽에 붙이고 창 높이의 45%까지 — 이벤트가 오면 그 높이, 초점이 빠지면 아래로 (3-34 검토)", () => {
+    const r = render(<WatchGroupNameSheet mode="create" groups={[]} onSubmit={async () => ({ ok: true })} onClose={() => undefined} />);
+    const input = () => r.byLabel("그룹 이름, 10자까지");
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-end" });
+    r.act(() => (input().props.onFocus as () => void)());
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-start", paddingTop: space.md });
+    expect(flat(sheetBox(r)).maxHeight).toBe(Math.round(752 * 0.45));
+    // 입력칸 · [만들기] 가 보통 자판(약 300) 위에 들어간다: 위 여백 12 + 338 = 350 ≤ 752 − 300
+    expect(space.md + Math.round(752 * 0.45)).toBeLessThanOrEqual(752 - 300);
+    r.act(() => (input().props.onBlur as () => void)());
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-end" });
+    expect(flat(sheetBox(r)).maxHeight).toBeUndefined();
+    // 이벤트가 오는 기기: 자판 높이를 쓰고, 자판이 닫히면(초점은 남아도) 지금처럼 아래로
+    r.act(() => (input().props.onFocus as () => void)());
+    kbShow(r, 300);
+    expect(flat(sheetBox(r)).maxHeight).toBe(752 - 300 - space.md * 2);
+    r.act(() => h.kb.find((k) => k.ev === "keyboardDidHide" && !k.removed)!.fn({ endCoordinates: { height: 0 } }));
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-end" });
+    expect(flat(sheetBox(r)).maxHeight).toBeUndefined();
   });
 
   it("넓은 창(933×704)도 자판이 열리면 위쪽 (가운데 두면 자판에 가린다)", () => {
@@ -318,10 +370,12 @@ describe("관심 줄 메뉴 시트 (잔고)", () => {
     expect(JSON.stringify(style)).toContain(`"minHeight":${touch.min}`);
   });
 
-  it("정렬이 등록순이 아니면 위로·아래로 대신 안내 한 줄", () => {
+  it("정렬이 등록순이 아니면 위로·아래로 대신 안내 한 줄, '지금' 줄은 자리 없이 그룹·개수만 (화면 자리와 어긋나지 않게 — 3-34 검토)", () => {
     const r = host(false);
     expect(items(r)).toEqual(["메뉴 닫기", "그룹 옮기기", "수정", "관심 해제", "닫기"]);
     expect(r.text()).toContain("순서 옮기기는 정렬이 ‘등록순’일 때 쓸 수 있습니다");
+    expect(r.text()).toContain("지금: 미국배당성장ETF (2종목)");
+    expect(r.text()).not.toContain("번째");
   });
 
   it("그룹 고르기 → '＋ 새 그룹 만들고 옮기기' → 이름 창 → 만든 그룹으로 옮김", async () => {

@@ -252,7 +252,7 @@ export function WatchMenuHost({
     <WatchRowSheet
       key={`${s.code}:${target.step}`}
       title={s.name}
-      subtitle={posLine(p)}
+      subtitle={posLine(p, variant === "editor" || mine)}
       items={items}
       groups={sheetGroups(wg.layout.groups)}
       currentGroupId={p.groupId}

@@ -251,6 +251,58 @@
       ],
       "except": 3,
       "ok": "바꾼 이름"
+    },
+    {
+      "name": "ㅤ",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "ᅟᅠ",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": " ﾠ ",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "⠀⠀",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "ㅤ​⠀",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "반ㅤ도체",
+      "existing": [],
+      "ok": "반 도체"
+    },
+    {
+      "name": "ㅤ반도체⠀",
+      "existing": [],
+      "ok": "반도체"
+    },
+    {
+      "name": "ㅤ전체ㅤ",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": "그룹ﾠ없음",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": "배당⠀",
+      "existing": [
+        "배당"
+      ],
+      "error": "duplicate"
     }
   ]
 }

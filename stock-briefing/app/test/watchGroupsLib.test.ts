@@ -8,6 +8,7 @@ import {
   applyToLayout,
   chipRevealX,
   deleteGroupMessage,
+  dropItems,
   emptyGroupTitle,
   groupHeadSpeech,
   groupNameCheck,
@@ -18,9 +19,11 @@ import {
   objectParticle,
   parseWatchView,
   posLine,
+  rowStamps,
   saveFailText,
   selectChip,
   serializeWatchView,
+  stockSetChange,
   toggleFold,
   VIEW_DEFAULT,
   visibleWatch,
@@ -170,6 +173,9 @@ describe("잔고 관심 칸 줄 (watchEntries)", () => {
     expect(m.pos.get("042700")).toEqual({ groupId: 7, groupName: "반도체", index: 2, count: 4 });
     expect(posLine(m.pos.get("042700")!)).toBe("지금: 반도체 · 3번째 (4종목 중)");
     expect(posLine(m.pos.get("TSLA")!)).toBe("지금: 그룹 없음 · 2번째 (2종목 중)");
+    // 정렬이 '등록순'이 아니면 화면 자리와 다를 수 있어 자리는 빼고 그룹·개수만 (3-34 검토)
+    expect(posLine(m.pos.get("042700")!, false)).toBe("지금: 반도체 (4종목)");
+    expect(posLine(m.pos.get("TSLA")!, false)).toBe("지금: 그룹 없음 (2종목)");
   });
 
   it("서버에 없는 그룹을 고른 칩은 '전체', 접은 목록에서도 뺀다 · 없는 그룹을 가리키는 종목은 그룹 없음", () => {
@@ -223,6 +229,45 @@ describe("고른 칩까지 넘기기 (chipRevealX)", () => {
     expect(chipRevealX({ x: 200, w: 40 }, 250, 24)).toBe(14);
     expect(chipRevealX({ x: 400, w: 300 }, 250, 24)).toBe(376);
     expect(chipRevealX({ x: 10, w: 60 }, 0, 24)).toBeNull();
+  });
+
+  it("넘겨 둔 만큼(offset)을 본다: 이미 보이는 칩이면 넘기지 않고, 흐림 밑·밖이면 가장 조금만 (3-34 검토 — 보이는 칩을 누를 때마다 줄이 튀었다)", () => {
+    // 띠 300 · 흐림 24 · 끝까지 넘겨 둠(176): 보이는 곳 200~452
+    expect(chipRevealX({ x: 264, w: 60 }, 300, 24, 176)).toBeNull();
+    expect(chipRevealX({ x: 200, w: 60 }, 300, 24, 176)).toBeNull();
+    // 오른쪽 흐림 밑 → 오른쪽 끝이 흐림 앞에 (예전처럼)
+    expect(chipRevealX({ x: 400, w: 70 }, 300, 24, 176)).toBe(400 + 70 + 24 - 300);
+    // 왼쪽 흐림 밑 · 왼쪽 밖 → 왼쪽 끝이 흐림 뒤에
+    expect(chipRevealX({ x: 190, w: 60 }, 300, 24, 176)).toBe(166);
+    expect(chipRevealX({ x: 0, w: 60 }, 300, 24, 176)).toBe(0);
+    // 넘기지 않았으면(0) 왼쪽 흐림이 없어 첫 칩은 보인다 (예전과 같음)
+    expect(chipRevealX({ x: 0, w: 60 }, 300, 24, 0)).toBeNull();
+  });
+});
+
+describe("잔고 목록의 종목이 바뀜 (rowStamps · stockSetChange · dropItems — 3-34 검토 must)", () => {
+  const row = (code: string, m: number) => ({ code, createdAt: `2026-09-01T09:${String(m).padStart(2, "0")}:00+09:00` });
+  it("코드·등록 시각만 (순서·시세와 상관없이 같은 글)", () => {
+    expect(rowStamps([row("B", 2), row("A", 1)])).toBe(rowStamps([row("A", 1), row("B", 2)]));
+    expect(rowStamps([])).toBe("");
+  });
+
+  it("사라짐 · 다시 등록(등록 시각이 바뀜)은 빼고 다시 받기, 새 종목만 생기면 빼지 않고 다시 받기, 같으면 아무것도", () => {
+    const a = rowStamps([row("A", 1), row("B", 2), row("C", 3)]);
+    expect(stockSetChange(a, a)).toEqual({ drop: [], refetch: false });
+    expect(stockSetChange(a, rowStamps([row("B", 2), row("C", 3)]))).toEqual({ drop: ["A"], refetch: true });
+    expect(stockSetChange(a, rowStamps([row("A", 40), row("B", 2), row("C", 3)]))).toEqual({ drop: ["A"], refetch: true });
+    expect(stockSetChange(a, rowStamps([row("A", 1), row("B", 2), row("C", 3), row("D", 9)]))).toEqual({ drop: [], refetch: true });
+    expect(stockSetChange("", a)).toEqual({ drop: [], refetch: true });
+    expect(stockSetChange(a, "")).toEqual({ drop: ["A", "B", "C"], refetch: true });
+  });
+
+  it("배치에서 빼기: 뺄 것이 없으면 같은 값 (캐시를 다시 쓰지 않게)", () => {
+    const next = dropItems(LAYOUT, ["000660", "ZZZ"]);
+    expect(next.items.map((i) => i.code)).not.toContain("000660");
+    expect(next.items).toHaveLength(LAYOUT.items.length - 1);
+    expect(next.groups).toBe(LAYOUT.groups);
+    expect(dropItems(LAYOUT, ["ZZZ"])).toBe(LAYOUT);
   });
 });
 
