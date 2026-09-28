@@ -197,7 +197,11 @@ describe("계좌 상세 '일정·공시 모두 보기' 줄", () => {
     h.cached = SCHEDULE;
     r = render(<AccountBriefingBody numId={12} layout="stack" />);
     expect(link(r)[0]!.props.accessibilityLabel).toBe("보유 종목 일정과 공시 모두 보기, 새 공시 2건");
-    expect(allOf(link(r)[0]!).filter((n) => n.type === "Muted").map(rawOf)).toEqual(["· 새 공시 2건"]);
+    // '일정·공시 모두 보기' + 흐린 '· 새 공시 2건 ›' (꺾쇠는 그 묶음 끝 — 홀로 줄바꿈되지 않게)
+    const texts = kids(kids(link(r)[0]!)[0]!);
+    expect(texts.map(rawOf)).toEqual(["일정·공시 모두 보기", "· 새 공시 2건 ›"]);
+    expect(flat(texts[1]!.props.style)).toMatchObject({ color: dark.muted });
+    expect(flat(kids(texts[1]!)[0]!.props.style)).toMatchObject({ color: dark.accent, fontWeight: "600" });
     h.store.set("filingAlerts.viewed", JSON.stringify([MSFT_8K.accession]));
     cleanupRenders();
     forgetFilingViewed();
@@ -273,7 +277,10 @@ describe("'일정·공시' 화면", () => {
       expect(row.props.accessibilityState).toEqual({ expanded: false });
     }
     const first = list[0]!;
-    expect(allOf(first).filter((n) => n.type === "Text").map(rawOf)).toEqual(["7/30(목) 05:08 ·", "마이크로소프트", "새 공시", "연간 보고서(10-K)"]);
+    expect(allOf(first).filter((n) => n.type === "Text").map(rawOf)).toEqual(["7/30(목) 05:08 ·", "마이크로소프트", "새 공시", "연간 보고서", "(10-K)"]);
+    // 8-K 제목: 서식 번호 묶음 안 공백은 줄바꿈 없는 공백 (좁은 칸·큰 글씨에서 '8-K' / '2.02' 로 갈라지지 않게)
+    const k8 = list.find((p) => String(p.props.accessibilityLabel).includes("실적 발표, 8-K 2.02"))!;
+    expect(allOf(k8).filter((n) => n.type === "Text").map(rawOf).slice(-2)).toEqual(["실적 발표", "(8-K 2.02)"]);
     const chip = allOf(first).find((n) => n.type === "View" && flat(n.props.style).borderWidth)!;
     expect(flat(chip.props.style)).toMatchObject({ borderColor: dark.accent });
     for (const t of allOf(filingsCard(r)).filter((n) => n.type === "Text")) expect([dark.up, dark.down]).not.toContain(flat(t.props.style).color);
@@ -412,7 +419,9 @@ describe("'일정·공시' 화면", () => {
       expect(t.props.numberOfLines).toBeUndefined();
       expect(t.props.adjustsFontSizeToFit).toBeUndefined();
     }
-    const heads = allOf(filingsCard(r)).filter((n) => n.type === "View" && flat(n.props.style).flexWrap === "wrap");
+    const heads = allOf(filingsCard(r)).filter((n) => n.type === "View" && flat(n.props.style).flexWrap === "wrap" && flat(n.props.style).columnGap !== undefined);
+    const titles = allOf(filingsCard(r)).filter((n) => n.type === "View" && flat(n.props.style).flexWrap === "wrap" && flat(n.props.style).columnGap === undefined);
+    expect(titles).toHaveLength(FX.items.length);
     expect(heads.length).toBeGreaterThanOrEqual(FX.items.length);
     for (const v of heads) expect(flat(v.props.style).columnGap).toBe(fontScale >= 1.75 ? space.sm : fontScale >= 1.25 ? space.s : space.xs);
     for (const p of r.all().filter((n) => n.type === "Pressable")) expect(Number(flat(p.props.style).minHeight), String(p.props.accessibilityLabel)).toBeGreaterThanOrEqual(touch.min);

@@ -87,6 +87,15 @@ function wall(v: string | null): { text: string; speech: string } | null {
   return { text: `${mdw(m[1]!)} ${m[2]}`, speech: `${speakDay(m[1]!)} ${speakAmPm(m[2]!)}` };
 }
 
+/**
+ * 제목을 두 묶음으로: '중요 계약 체결 외 3건' + '(8-K 1.01)' — 좁은 칸·큰 글씨에서 서식 번호 묶음째 다음 줄로 가게 (묶음 안 공백은 줄바꿈 없는 공백).
+ * 괄호가 없으면 한 묶음
+ */
+export function titleChunks(title: string): string[] {
+  const m = /^(.*?)(\(.+\))$/.exec(title);
+  return m && m[1] ? [m[1], m[2]!.replace(/ /g, " ")] : [title];
+}
+
 /** 제목 '실적 발표(8-K 2.02)' → 읽는 말 '실적 발표, 8-K 2.02' · '연간 보고서(20-F, 외국 기업)' → '연간 보고서, 20-F, 외국 기업' */
 export function titleSpeech(title: string): string {
   const m = /^(.*)\((.+)\)$/.exec(title);

@@ -21,6 +21,7 @@ import {
   OPEN_ORIGINAL_SPEECH,
   SCHEDULE_OFF,
   scheduleFilingsView,
+  titleChunks,
   type FilingLine,
 } from "@/lib/filingAlerts";
 import { useFilingViewed } from "@/lib/filingViewed";
@@ -242,7 +243,14 @@ function FilingRow({
             </View>
           ) : null}
         </View>
-        <Text style={{ color: t.ink, fontSize: font.body }}>{line.title}</Text>
+        {/* 제목은 '이름' + '(서식 번호)' 두 묶음 — 좁은 칸·큰 글씨에서 서식 번호가 묶음째 다음 줄로 */}
+        <View style={styles.title}>
+          {titleChunks(line.title).map((p, i) => (
+            <Text key={i} style={{ color: t.ink, fontSize: font.body }}>
+              {p}
+            </Text>
+          ))}
+        </View>
       </Pressable>
       {expanded ? (
         <View style={styles.detail}>
@@ -278,6 +286,7 @@ const styles = StyleSheet.create({
   row: { borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: space.xs },
   rowHead: { minHeight: touch.min, justifyContent: "center", paddingVertical: space.xs, gap: space.xxs },
   num: { fontVariant: ["tabular-nums"] },
+  title: { flexDirection: "row", flexWrap: "wrap" },
   chip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.xs },
   detail: { gap: space.xxs, paddingBottom: space.xs },
   open: { minHeight: touch.min, justifyContent: "center" },

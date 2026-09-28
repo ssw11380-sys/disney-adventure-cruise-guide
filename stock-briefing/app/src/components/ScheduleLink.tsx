@@ -2,7 +2,6 @@ import { router } from "expo-router";
 import React from "react";
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useFeature } from "@/api/hooks";
-import { Muted } from "@/components/ui";
 import { sentence } from "@/lib/a11y";
 import { freshSuffix, SCHEDULE_LINK, SCHEDULE_LINK_SPEECH, scheduleFilingsView } from "@/lib/filingAlerts";
 import { useFilingViewed } from "@/lib/filingViewed";
@@ -23,6 +22,7 @@ export function ScheduleLink() {
   const fresh = filingsOn && cached?.filings ? scheduleFilingsView(cached.filings, viewed).fresh : 0;
   const suffix = freshSuffix(fresh);
   const gap = fontScale >= 1.75 ? space.sm : fontScale >= 1.25 ? space.s : space.xs;
+  const link = { color: t.accent, fontSize: font.body, fontWeight: "600" as const };
   return (
     <Pressable
       onPress={() => router.push("/schedule")}
@@ -32,8 +32,18 @@ export function ScheduleLink() {
     >
       {/* 좁은 칸·큰 글씨는 묶음째 줄바꿈 (다가오는 일정 줄과 같은 규칙) */}
       <View style={[styles.chunks, { columnGap: gap }]}>
-        <Text style={{ color: t.accent, fontSize: font.body, fontWeight: "600" }}>{`${SCHEDULE_LINK} ›`}</Text>
-        {suffix ? <Muted>{suffix}</Muted> : null}
+        {suffix ? (
+          <>
+            <Text style={link}>{SCHEDULE_LINK}</Text>
+            {/* 새 공시 수는 흐린 글, '›'는 그 묶음 끝에 붙여 홀로 줄바꿈되지 않게 */}
+            <Text style={{ color: t.muted, fontSize: font.small }}>
+              {suffix}
+              <Text style={link}>{" ›"}</Text>
+            </Text>
+          </>
+        ) : (
+          <Text style={link}>{`${SCHEDULE_LINK} ›`}</Text>
+        )}
       </View>
     </Pressable>
   );
