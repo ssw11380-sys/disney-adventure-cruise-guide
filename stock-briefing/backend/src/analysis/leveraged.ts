@@ -24,6 +24,12 @@ export interface ProductFacts {
   /** 단일 종목 레버리지 상품 (RGTX true) */
   singleStockEtp?: boolean | null;
   derivativeEtf?: boolean | null;
+  /** 보통주 (false = 우선주 — 가치 지표 '대상 아님', 3-44 2단계) */
+  commonShare?: boolean | null;
+  /** 스팩(기업인수목적회사) */
+  spac?: boolean | null;
+  /** 정리매매 */
+  clearance?: boolean | null;
 }
 
 /**

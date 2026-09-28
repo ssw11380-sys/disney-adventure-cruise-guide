@@ -203,6 +203,7 @@ export const STATUS_TEXT = {
   compositeValueMissing: "가치 지표 점수가 없어 합치지 않습니다",
   compositeTrendMissing: "추세 지표 점수가 없어 합치지 않습니다",
   compositeBothMissing: "두 점수가 모두 없습니다",
+  compositeDateMismatch: "두 점수의 기준일이 달라 합치지 않았습니다",
 } as const;
 
 /**

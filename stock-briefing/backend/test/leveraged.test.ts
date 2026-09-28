@@ -20,11 +20,14 @@ describe("토스 웹 상품 정보 읽기 (v2/stock-infos 기록 2026-09-28)", (
       leverageFactor: 3,
       singleStockEtp: false,
       derivativeEtf: true,
+      commonShare: true,
+      spac: false,
+      clearance: false,
     });
   });
   it("RGTX: ETF · 2배 · 단일 종목형", () => expect(parseProductFacts(tossInfo("RGTX"))).toMatchObject({ group: "EF", exchange: "NSQ", leverageFactor: 2, singleStockEtp: true }));
   it("MSFT: 주권 · 배수 0", () => expect(parseProductFacts(tossInfo("MSFT"))).toMatchObject({ group: "ST", exchange: "NSQ", leverageFactor: 0, singleStockEtp: false, derivativeEtf: false }));
-  it("칸이 없거나 이상하면 null", () => expect(parseProductFacts({ group: 3, leverageFactor: "x" })).toEqual({ name: null, englishName: null, detailName: null, group: null, exchange: null, leverageFactor: null, singleStockEtp: null, derivativeEtf: null }));
+  it("칸이 없거나 이상하면 null", () => expect(parseProductFacts({ group: 3, leverageFactor: "x" })).toEqual({ name: null, englishName: null, detailName: null, group: null, exchange: null, leverageFactor: null, singleStockEtp: null, derivativeEtf: null, commonShare: null, spac: null, clearance: null }));
 });
 
 describe("상품 가리기", () => {

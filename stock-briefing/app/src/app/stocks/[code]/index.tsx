@@ -38,6 +38,7 @@ import { alertButtonA11y, alertButtonText } from "@/lib/priceAlerts";
 import { AiTitle } from "@/components/scores/AiTitle";
 import { IndicatorSummaryCard } from "@/components/scores/IndicatorSummaryCard";
 import { TrendScoreCard } from "@/components/scores/TrendScoreCard";
+import { ValueScoreCard } from "@/components/scores/ValueScoreCard";
 import { SCORE_LABELS } from "@/lib/scoreView";
 
 type Tab = AnalysisKind | "news";
@@ -375,18 +376,20 @@ export default function StockDetailScreen() {
     : "";
 
   const openChart = () => router.push(`/stocks/${c}/chart?period=${period}` as never);
-  // 지표 점수 (플래그 indicatorScores): 기초자산 화면 열기(레버리지 상품) · 기업개요·기술분석 탭 맨 위 카드와 그 아래 AI 글 제목.
+  // 지표 점수 (플래그 indicatorScores): 기초자산 화면 열기(레버리지 상품) · 기업개요·가치분석(2단계)·기술분석 탭 맨 위 카드와 그 아래 AI 글 제목.
   // 꺼져 있으면 AI 분석을 그대로 돌려준다 (지금 화면과 한 글자도 같게)
   const openStock = (to: string) => router.push({ pathname: "/stocks/[code]", params: { code: to } } as never);
-  const withScores = (kind: AnalysisKind, ai: React.ReactNode, opts: { twoCol?: boolean; techLabel?: string } = {}) =>
-    scoresOn && (kind === "company" || kind === "technical") ? (
+  const withScores = (kind: AnalysisKind, ai: React.ReactNode, opts: { twoCol?: boolean; techLabel?: string; valueLabel?: string } = {}) =>
+    scoresOn && (kind === "company" || kind === "technical" || kind === "value") ? (
       <>
         {kind === "company" ? (
-          <IndicatorSummaryCard code={c} twoCol={opts.twoCol} onTechnical={() => setTab("technical")} techTabLabel={opts.techLabel} onOpenStock={openStock} />
+          <IndicatorSummaryCard code={c} twoCol={opts.twoCol} onTechnical={() => setTab("technical")} techTabLabel={opts.techLabel} onValue={() => setTab("value")} valueTabLabel={opts.valueLabel} onOpenStock={openStock} />
+        ) : kind === "value" ? (
+          <ValueScoreCard code={c} />
         ) : (
           <TrendScoreCard code={c} onOpenStock={openStock} />
         )}
-        <AiTitle title={kind === "company" ? SCORE_LABELS.aiCompany : SCORE_LABELS.aiTechnical} />
+        <AiTitle title={kind === "company" ? SCORE_LABELS.aiCompany : kind === "value" ? SCORE_LABELS.aiValue : SCORE_LABELS.aiTechnical} />
         {ai}
       </>
     ) : (
@@ -681,7 +684,7 @@ export default function StockDetailScreen() {
     ) : wTab === "news" ? (
       <NewsTab code={c} us={us} />
     ) : (
-      withScores(wTab, <AnalysisTab key={`${c}:${wTab}`} code={c} kind={wTab} requested={!unregistered || !!asked[wTab]} onRequest={requestAi} />, { twoCol: mode === "wide", techLabel: SCORE_LABELS.toTechnicalWide })
+      withScores(wTab, <AnalysisTab key={`${c}:${wTab}`} code={c} kind={wTab} requested={!unregistered || !!asked[wTab]} onRequest={requestAi} />, { twoCol: mode === "wide", techLabel: SCORE_LABELS.toTechnicalWide, valueLabel: SCORE_LABELS.toValueWide })
     );
   const tabs = <Segmented options={WIDE_TABS} value={wTab} onChange={setTab} />;
 
