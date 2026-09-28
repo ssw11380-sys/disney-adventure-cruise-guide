@@ -4,7 +4,8 @@ import { StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { ClipPath, Defs, G, Line, Path, Rect, Svg, Text as SvgText } from "react-native-svg";
 import type { Candle, CandlePeriod, ChartUnit } from "@/api/types";
-import { AXIS_GAP_R, axisWidth, fitAxisWidth, LABEL_PAD, placeInsideLabels, priceDomain, readoutBasis, volumeBars, type InsideLabel, type LabelSpot } from "@/lib/chartBasis";
+import { AXIS_GAP_R, axisWidth, fitAxisWidth, LABEL_PAD, placeInsideLabels, priceDomain, readoutBasis, volumeBars, type Box, type InsideLabel, type LabelSpot } from "@/lib/chartBasis";
+import { arrowBox, arrowPath, headroomDomain, highLowTexts, HL, HL_HEAD_BOTTOM, HL_HEAD_TOP, layoutHighLow, settleWithInside, visibleExtremes, type HighLowMark } from "@/lib/chartHighLow";
 import { estimateTextWidth, formatChartValue, maLegendItems } from "@/lib/chartLayout";
 import { formatPct, formatVolume, shownSign } from "@/lib/format";
 import { haptic } from "@/lib/haptics";
@@ -79,6 +80,12 @@ export interface PriceChartProps {
    * 거의 늘 막대 위에 겹쳐 읽기 어려웠다(2026-09-27 검증). 상자는 그림 안 평단·52주 글자와 같은 바탕색·불투명도. 끄면 예전 그대로(바탕 없음)
    */
   paneLabelBox?: boolean;
+  /**
+   * 보이는 구간 최고·최저가 표시 (3-46, 기능 플래그 chartHighLow + 설정 '차트 최고·최저가 표시' — CandleChart 가 정한다):
+   * 가장 높은 고가에 상승색 ↓ 와 '255,000원 (-22.3%, 26.07.27)', 가장 낮은 저가에 하락색 ↑ 와 '181,100원 (+9.3%, 26.07.14)' (lib/chartHighLow),
+   * 가격 축 위아래에 글자 자리 여백, 그림의 화면 읽기 문장. 끄면(기본) 지금 그대로 — 축 범위·그림·화면 읽기 모두
+   */
+  highLow?: boolean;
 }
 
 const X_AXIS_H = 18;
@@ -169,13 +176,20 @@ export function PriceChart(p: PriceChartProps) {
   const rsiS = useMemo(() => (p.indicator === "rsi" ? rsi(closes, 14) : null), [closes, p.indicator]);
   const macdS = useMemo(() => (p.indicator === "macd" ? macd(closes) : null), [closes, p.indicator]);
 
+  // ── 보이는 구간 최고·최저 (3-46 chartHighLow — 켰을 때만) ──
+  // 드래그·핀치는 JS 에서 봉 한 칸 바뀔 때마다 다시 그리므로(runOnJS), 보이는 봉(visible)에 매단 이 계산도 봉과 같은 그리기에서 바뀐다.
+  // 가격 칸이 너무 낮으면(좁은 폰 + RSI·MACD) 여백을 내면 봉이 눌려서 표시하지 않는다
+  const extremes = useMemo(() => (p.highLow && priceH >= HL.MIN_PRICE_H ? visibleExtremes(visible, "candle") : null), [p.highLow, priceH, visible]);
+
   // ── 가격 도메인 (lib/chartBasis priceDomain) ──
   // 봉 + 현재가(최신 구간일 때) + 평단(±25% 안쪽)으로 정하고, 이동평균·볼린저 선은 그 범위에서 조금(LINE_OVERSHOOT)까지만 넓힌다.
-  // 넘는 선은 가격 칸에서 잘라 그린다 (아래 ClipPath) — 크게 떨어진 종목의 120일선 옛 값이 봉을 차트 바닥에 눌러 두지 않게
+  // 넘는 선은 가격 칸에서 잘라 그린다 (아래 ClipPath) — 크게 떨어진 종목의 120일선 옛 값이 봉을 차트 바닥에 눌러 두지 않게.
+  // 최고·최저 표시가 있으면 글자·화살표가 잘리지 않을 만큼만 위아래를 더 넓힌다 (lib/chartHighLow headroomDomain — 이미 넉넉하면 그대로)
   const domain = useMemo<[number, number]>(() => {
     const lines: Series[] = [...mas.map((m) => m.values.slice(start, end)), ...(bb ? [bb.upper.slice(start, end), bb.lower.slice(start, end)] : [])];
-    return priceDomain({ bars: visible, lines, current: view.offset === 0 ? p.currentPrice : null, avg: p.avgPrice });
-  }, [visible, mas, bb, start, end, p.currentPrice, p.avgPrice, view.offset]);
+    const base = priceDomain({ bars: visible, lines, current: view.offset === 0 ? p.currentPrice : null, avg: p.avgPrice });
+    return extremes ? headroomDomain(base, { hi: extremes.high.value, lo: extremes.low.value }, { priceH, top: HL_HEAD_TOP, bottom: HL_HEAD_BOTTOM }) : base;
+  }, [visible, mas, bb, start, end, p.currentPrice, p.avgPrice, view.offset, extremes, priceH]);
 
   const priceTicks = useMemo(() => niceTicks(domain[0], domain[1], 5).filter((v) => v > domain[0] && v < domain[1]), [domain]);
   // 지수·환율 축 눈금: 간격이 1 미만이면 소수 자리를 늘린다 (원/위안 201.5, 201.6 …)
@@ -203,6 +217,15 @@ export function PriceChart(p: PriceChartProps) {
   const xOf = useCallback((i: number) => i * step + step / 2, [step]);
   // 보이는 봉의 상자 (그림 안 글자가 봉을 가리지 않는 자리를 고를 때)
   const barBoxes = useMemo(() => visible.map((c, i) => ({ left: xOf(i) - bodyW / 2, right: xOf(i) + bodyW / 2, top: yOf(c.high), bottom: yOf(c.low) })), [visible, xOf, yOf, bodyW]);
+  // 최고·최저 글자·자리 (3-46): % 는 지금 현재가(과거로 옮겨도 지금 값) 기준, 현재가를 모르면 전체 시계열 마지막 봉 종가
+  const latestBar = candles[total - 1];
+  const hlNow = p.currentPrice && Number.isFinite(p.currentPrice) && p.currentPrice > 0 ? p.currentPrice : (latestBar?.close ?? null);
+  const hlTexts = useMemo(() => (extremes ? highLowTexts(visible, extremes, { unit: currency, period: p.period, current: hlNow }) : null), [extremes, visible, currency, p.period, hlNow]);
+  const hlLayout = useCallback(
+    (avoid?: Box[]): HighLowMark[] => (extremes && hlTexts ? layoutHighLow({ plotW, bottomLimit: priceH + HL.BOTTOM_SLACK, xOf, yOf, ex: extremes, texts: hlTexts, avoid }) : []),
+    [extremes, hlTexts, plotW, priceH, xOf, yOf],
+  );
+  const hlBase = useMemo(() => hlLayout(), [hlLayout]);
 
   // ── 캔들 path (상승/하락 각각 몸통·꼬리 하나의 path 로) ──
   const candlePaths = useMemo(() => {
@@ -416,8 +439,9 @@ export function PriceChart(p: PriceChartProps) {
         fixed: true,
         lead: MA_SWATCH_W + MA_SWATCH_GAP,
       });
-    if (!want.length) return [];
-    // 글자 상자는 가격 칸 아래 틈까지 (오늘 52주 신저가 — 선이 바닥에 붙어도 현재가선을 끊지 않고 선 아래에)
+    if (!want.length) return { labels: [], marks: hlBase };
+    // 글자 상자는 가격 칸 아래 틈까지 (오늘 52주 신저가 — 선이 바닥에 붙어도 현재가선을 끊지 않고 선 아래에).
+    // 최고·최저 표시(3-46)가 있으면 그 글자·화살표를 피하고(avoid), 평단 글자와 겹칠 수밖에 없으면 최고·최저를 다른 자리로(없으면 화살표만) — settleWithInside
     const placed = placeInsideLabels({
       plotW,
       plotH: priceH,
@@ -425,9 +449,11 @@ export function PriceChart(p: PriceChartProps) {
       bars: barBoxes,
       labels: want,
       lines: currentY === null ? [] : [currentY],
+      ...(hlBase.length ? { avoid: hlBase.flatMap((m) => [arrowBox(m), ...(m.showText ? [m.box] : [])]) } : null),
     });
-    return want.flatMap((w, i) => (placed[i] ? [{ key: w.key, ma: w.ma, text: w.text, spot: placed[i]! }] : []));
-  }, [avgIn, avgOut, high52In, low52In, p.avgPrice, p.high52w, p.low52w, maOff, maWord, yOf, priceH, volH, indH, plotW, barBoxes, currentY, currency]);
+    const settled = hlBase.length ? settleWithInside({ marks: hlBase, labels: want, placed, relayout: hlLayout }) : { marks: hlBase, placed };
+    return { labels: want.flatMap((w, i) => (settled.placed[i] ? [{ key: w.key, ma: w.ma, text: w.text, spot: settled.placed[i]! }] : [])), marks: settled.marks };
+  }, [avgIn, avgOut, high52In, low52In, p.avgPrice, p.high52w, p.low52w, maOff, maWord, yOf, priceH, volH, indH, plotW, barBoxes, currentY, currency, hlBase, hlLayout]);
   const labelBg = p.labelBg ?? t.surface;
 
   return (
@@ -445,7 +471,8 @@ export function PriceChart(p: PriceChartProps) {
         part={p.showMaValues === false ? "all" : "top"}
       />
       <GestureDetector gesture={gesture}>
-        <View style={{ width, height }} collapsable={false}>
+        {/* 최고·최저 표시가 있으면(3-46) 그림을 한 덩어리로 읽는다: '보이는 구간 최고 255,000원 7월 27일, 최저 …' (끄면 속성 자체가 없다 — 지금 그대로) */}
+        <View style={{ width, height }} collapsable={false} {...(hlTexts ? { accessible: true, accessibilityLabel: hlTexts.speech } : null)}>
           <Svg width={width} height={height}>
             <Defs>
               <ClipPath id={clipId}>
@@ -489,9 +516,13 @@ export function PriceChart(p: PriceChartProps) {
             {low52In ? <Tag y={yOf(p.low52w!)} plotW={plotW} axisW={axisW} color={t.muted} dotted /> : null}
             {avgIn ? <Tag y={yOf(p.avgPrice!)} plotW={plotW} axisW={axisW} color={t.gold} dashed /> : null}
             {showCurrent ? <Tag y={yOf(p.currentPrice!)} plotW={plotW} axisW={axisW} label={axisPrice(p.currentPrice!, currency)} labelAt={axisText} color={curColor} dashed filled /> : null}
+            {/* 보이는 구간 최고·최저 (3-46 chartHighLow): 선 뒤·그림 안 글자 앞. 가격 칸 자르기 틀 밖 — 최저 글자는 칸 아래 3dp 틈까지 내려갈 수 있다 */}
+            {inside.marks.map((m) => (
+              <HighLowMarkView key={m.kind} m={m} color={m.kind === "high" ? upColor : downColor} bg={labelBg} />
+            ))}
             {/* 그림 안 글자 (평단 · 52주 · 벗어난 이동평균): 봉·서로·현재가선을 가리지 않는 자리에 옅은 바탕 상자와 함께 (inside).
                 평단 글자는 오른쪽 축이 아니라 그림 안 선 곁에 적는다 → 축 폭에 잘리거나 현재가 태그와 겹치지 않는다 */}
-            {inside.map((l) => (
+            {inside.labels.map((l) => (
               <LabelText
                 key={l.key}
                 spot={l.spot}
@@ -692,6 +723,28 @@ function LabelText({ spot, label, color, bg, bold, swatch }: { spot: LabelSpot; 
       >
         {label}
       </SvgText>
+    </>
+  );
+}
+
+/**
+ * 보이는 구간 최고·최저 한 개 (3-46, 기능 플래그 chartHighLow): 꼬리 끝을 가리키는 화살표 + 바탕 상자 + 글자 (글자 자리가 없으면 화살표만).
+ * 최고 = 상승색 · 최저 = 하락색 (토스 캡처와 같은 관례 — docs/디자인-규칙.md 예외). 바탕 상자는 차트 바탕색을 불투명으로 깔아
+ * 봉·선 위에서도 글자 대비가 4.5 이상 (그림 안 평단 글자의 0.85 반투명이면 3.4 까지 떨어진다)
+ */
+function HighLowMarkView({ m, color, bg }: { m: HighLowMark; color: string; bg: string }) {
+  const b = m.box;
+  return (
+    <>
+      <Path d={arrowPath(m)} stroke={color} strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      {m.showText ? (
+        <>
+          <Rect x={b.left} y={b.top} width={b.right - b.left} height={b.bottom - b.top} fill={bg} rx={radius.sm / 2} />
+          <SvgText x={m.tx} y={m.ty} textAnchor={m.anchor} fill={color} fontSize={font.tiny}>
+            {m.text}
+          </SvgText>
+        </>
+      ) : null}
     </>
   );
 }

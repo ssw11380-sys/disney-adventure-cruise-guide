@@ -214,6 +214,35 @@ export interface PriceAlertTable {
   fired_value: number | null; // 울린 순간 조건을 판정한 값 (가격 · 등락률 · 거래량 배율)
 }
 
+/**
+ * 가치 지표 점수용 SEC 재무 (3-44 2단계, 플래그 valueScore): 종목마다 1줄. companyfacts 원본(수 MB)을 가치 지표에 쓰는 태그·최근 약 8년만 남긴 JSON.
+ * 장 마감 뒤(뉴욕 17:30)·백그라운드로만 받고 화면 요청은 이 값을 읽는다. 다시 받을 수 있는 캐시지만 백업에 넣는다(받기 실패 7일 버팀)
+ */
+export interface ValueFundamentalsTable {
+  id: Generated<number>;
+  code: string;
+  cik: string;
+  sic: number | null; // SEC SIC 번호 (6798 리츠 · 6770 스팩 판정)
+  last_filed: string | null; // 가장 늦은 제출일 (새 공시 확인)
+  fetched_at: string; // 받은 때 (KST ISO)
+  data: string; // JSON (analysis/secFacts CompactFacts)
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * 가치 지표 비교 기준 (3-44 2단계): 시장·기준일마다 1줄, 주 1회(토요일 09:00 KST). 비교 회사마다 지표 값(순위용)과 업종·부문, 시장 기준값.
+ * 최근 3줄만 남긴다
+ */
+export interface ValueReferenceTable {
+  id: Generated<number>;
+  market: string; // 'US'
+  ref_date: string; // YYYY-MM-DD
+  method: string; // 'VALUE-1'
+  data: string; // JSON (analysis/valueScore ValueReferenceData)
+  created_at: string;
+}
+
 /** 계정 (계정 A단계, 플래그 accounts) */
 export interface UserTable {
   id: Generated<number>;
@@ -241,6 +270,8 @@ export interface SessionTable {
 }
 
 export interface Database {
+  value_fundamentals: ValueFundamentalsTable;
+  value_references: ValueReferenceTable;
   listed_stocks: ListedStockTable;
   registered_stocks: RegisteredStockTable;
   quote_cache: QuoteCacheTable;

@@ -11,6 +11,7 @@ import { Platform } from "react-native";
  *  - widgetRowCurrency: 잔고 위젯(다듬은 모습) 종목 줄의 손익 금액 통화 — 원화(기본, 합계와 같은 기준) · 종목 통화
  *  - haptics: 누를 때 짧은 진동 (3-24, 기능 플래그 oneHand 가 켜져 있을 때만 설정 화면에 보인다. 기본 켬 — lib/haptics)
  *  - density: 잔고 표시 기본 · 촘촘 (3-39, 기능 플래그 densityMode 가 켜져 있을 때만 설정 화면에 보이고 잔고에 쓰인다. 위젯은 읽지 않는다)
+ *  - chartHighLow: 차트 최고·최저가 표시 (3-46, 기능 플래그 chartHighLow 가 켜져 있을 때만 설정 화면에 보이고 차트에 쓰인다. 기본 켬)
  * 위젯(백그라운드)도 같은 키를 읽으므로 키 이름을 바꾸면 widgets/ 쪽도 같이 바꿔야 한다.
  */
 
@@ -24,6 +25,7 @@ export const STORAGE_KEYS = {
   widgetRowCurrency: "settings.widgetRowCurrency",
   haptics: "settings.haptics",
   density: "settings.density",
+  chartHighLow: "settings.chartHighLow",
 } as const;
 
 /** 잔고 위젯 종목 줄 손익 금액: 원화(기본) · 종목 통화 */
@@ -89,6 +91,8 @@ interface Settings {
   haptics: boolean;
   /** 잔고 표시 기본 · 촘촘 (기본 '기본', 3-39 — 플래그 densityMode 가 꺼져 있으면 잔고는 이 값과 상관없이 기본) */
   density: Density;
+  /** 차트 최고·최저가 표시 (기본 켬, 3-46 — 플래그 chartHighLow 가 꺼져 있으면 차트는 이 값과 상관없이 지금 그대로) */
+  chartHighLow: boolean;
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
   setApiToken: (token: string) => Promise<void>;
@@ -101,6 +105,7 @@ interface Settings {
   setWidgetRowCurrency: (v: WidgetRowCurrency) => Promise<void>;
   setHaptics: (on: boolean) => Promise<void>;
   setDensity: (v: Density) => Promise<void>;
+  setChartHighLow: (on: boolean) => Promise<void>;
 }
 
 /**
@@ -138,6 +143,7 @@ const Ctx = createContext<Settings>({
   widgetRowCurrency: "krw",
   haptics: true,
   density: "basic",
+  chartHighLow: true,
   ready: false,
   setApiUrl: noop,
   setApiToken: noop,
@@ -149,6 +155,7 @@ const Ctx = createContext<Settings>({
   setWidgetRowCurrency: noop,
   setHaptics: noop,
   setDensity: noop,
+  setChartHighLow: noop,
 });
 
 async function persist(key: string, value: string | null): Promise<void> {
@@ -206,10 +213,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [widgetRowCurrency, setWidgetRowCurrencyState] = useState<WidgetRowCurrency>("krw");
   const [haptics, setHapticsState] = useState(true);
   const [density, setDensityState] = useState<Density>("basic");
+  const [chartHighLow, setChartHighLowState] = useState(true);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency, STORAGE_KEYS.haptics, STORAGE_KEYS.density])
+    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency, STORAGE_KEYS.haptics, STORAGE_KEYS.density, STORAGE_KEYS.chartHighLow])
       .then((pairs) => {
         const m = new Map(pairs);
         const u = m.get(STORAGE_KEYS.apiUrl);
@@ -232,6 +240,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         const hp = m.get(STORAGE_KEYS.haptics);
         if (hp) setHapticsState(hp !== "0");
         setDensityState(densityOf(m.get(STORAGE_KEYS.density)));
+        // 차트 최고·최저가 표시: 저장한 적 없으면 켬
+        const hl = m.get(STORAGE_KEYS.chartHighLow);
+        if (hl) setChartHighLowState(hl !== "0");
       })
       .catch(() => {})
       .finally(() => {
@@ -297,9 +308,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     await persist(STORAGE_KEYS.density, v);
   }, []);
 
+  const setChartHighLow = useCallback(async (on: boolean) => {
+    setChartHighLowState(on);
+    await persist(STORAGE_KEYS.chartHighLow, on ? "1" : "0");
+  }, []);
+
   const value = useMemo(
-    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity }),
-    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity],
+    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, chartHighLow, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity, setChartHighLow }),
+    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, chartHighLow, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity, setChartHighLow],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

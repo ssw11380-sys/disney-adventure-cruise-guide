@@ -14,6 +14,8 @@ import type { TrendShown } from "../src/analysis/trendScore.js";
 import { dailyRunDue, latestScoreDate, weeklyChange, type ScoreSources, type ScoresResponse, type ScoreStock } from "../src/services/indicatorScoreService.js";
 import { benchFetchFailed, changeText, DISTRIBUTION_NOTE, howLines, leverageBox, STATUS_TEXT, trendNoteText, trendReasonText, underlyingFetchFailed } from "../src/services/indicatorScoreText.js";
 import { benchOf, candlesOf, expected, tossInfo } from "./fixtures/indicatorScores/load.js";
+import { dailyOf, fakeValueSources, monthlyOf, referenceData } from "./fixtures/valueScores/load.js";
+import type { ValueSources } from "../src/services/valueScoreService.js";
 import { fakeProviders } from "./helpers.js";
 
 /**
@@ -42,6 +44,10 @@ const STOCKS: Record<string, ScoreStock> = {
   "005930": { code: "005930", name: "삼성전자", market: "KOSPI" },
   "000660": { code: "000660", name: "SK하이닉스", market: "KOSPI" },
   "035420": { code: "035420", name: "NAVER", market: "KOSPI" },
+  // 2단계 공용 픽스처 (가치 지표): 은행 · 예시 종목
+  JPM: { code: "JPM", name: "JP모건 체이스", market: "NYSE" },
+  ZZGAP: { code: "ZZGAP", name: "예시 종목 (두 점수 차이 큼)", market: "NASDAQ" },
+  ZZNOF: { code: "ZZNOF", name: "예시 종목 (SEC 재무 없음)", market: "NASDAQ" },
 };
 const FIX_SYM = (code: string) => (/^\d{6}$/.test(code) ? `${code}.KS` : code);
 
@@ -68,7 +74,7 @@ function fixtureSources(
       const raw = over.candles?.[code];
       const o = typeof raw === "function" ? raw() : raw;
       if (o instanceof Error) throw o;
-      const cs = o ?? candlesOf(FIX_SYM(code));
+      const cs = o ?? (code === "JPM" ? dailyOf("JPM") : candlesOf(FIX_SYM(code === "ZZGAP" ? "NVDA" : code === "ZZNOF" ? "AAPL" : code)));
       return { code, period: "D", candles: cs.slice(-count), source: "yahoo" };
     },
     benchmark: async (code) => {
@@ -79,7 +85,7 @@ function fixtureSources(
         if (o instanceof Error) throw o;
         return o ?? null;
       }
-      return code === "NASDAQ" ? benchOf("NVDA") : code === "KOSPI" ? benchOf("005930.KS") : null;
+      return code === "NASDAQ" ? benchOf("NVDA") : code === "KOSPI" ? benchOf("005930.KS") : code === "SPX" ? dailyOf("SPX") : null;
     },
     product: async (code) => {
       calls.product++;
@@ -90,6 +96,7 @@ function fixtureSources(
       calls.registered++;
       return (over.registered ?? []).map((c) => stocks[c]!);
     },
+    monthly: async (code) => monthlyOf(code === "ZZGAP" ? "NVDA" : code),
   };
   return { src, calls };
 }
@@ -104,10 +111,10 @@ afterEach(async () => {
 });
 
 /** 서버 기본은 켜짐 — on: false 면 PUT 없이 기본값 그대로 */
-async function start(sources: ScoreSources, at = kst("2026-09-28T10:00:00"), on = true) {
+async function start(sources: ScoreSources, at = kst("2026-09-28T10:00:00"), on = true, valueSources?: ValueSources) {
   clock = at;
   db = await createMigratedDb(":memory:");
-  app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ scoreSources: sources }), logger: false, enableScheduler: false, now: () => clock });
+  app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ scoreSources: sources, ...(valueSources ? { valueSources } : {}) }), logger: false, enableScheduler: false, now: () => clock });
   if (on) await app.inject({ method: "PUT", url: "/api/admin/features", payload: { indicatorScores: true } });
   return app;
 }
@@ -155,7 +162,7 @@ describe("플래그", () => {
 });
 
 describe("GET /api/scores/:code — 보통 종목", () => {
-  it("NVDA (월 10:00 KST = 뉴욕 일요일 → 마지막 봉 9/25 금): 추세 69 다소 강함, 가치는 계산 준비 중, 종합 없음", async () => {
+  it("NVDA (월 10:00 KST = 뉴욕 일요일 → 마지막 봉 9/25 금): 추세 69 다소 강함, 가치 부분이 없는 서버라 가치는 '지금 계산하지 않음', 종합 없음", async () => {
     const { src } = fixtureSources();
     await start(src);
     const { status, body } = await get("NVDA");
@@ -189,7 +196,7 @@ describe("GET /api/scores/:code — 보통 종목", () => {
       ["T4", 67],
     ]);
     expect(t.versionLine).toBe("계산 방식 TREND-1 (보정 TREND-CAL-1) · 일봉 야후 · 비교 지수 나스닥(네이버)");
-    expect(body.value).toMatchObject({ status: "pending", label: "계산 준비 중", score: null });
+    expect(body.value).toMatchObject({ status: "pending", label: "지금 계산하지 않음", reason: { code: "off", text: "가치 지표 점수는 지금 계산하지 않습니다." }, score: null });
     expect(body.composite).toMatchObject({ status: "none", score: null, reason: "valueMissing", text: "없음 · 가치 지표 점수가 없어 합치지 않습니다" });
     expect(body.text.notForecast).toBe("점수는 과거·현재 숫자의 요약이며, 앞으로의 가격을 알려 주지 않습니다.");
     expect(body.text.disclaimerShort).toBe("참고 정보이며 투자 권유가 아닙니다");
@@ -694,28 +701,54 @@ describe("문구 (금지어 · 미래형)", () => {
 
 describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서버 응답)", () => {
   /** shared/fixtures/indicatorScores.json — 지금 서버 코드가 기록한 일봉으로 낸 응답과 같아야 한다. 바꿀 때: UPDATE_SCORE_FIXTURE=1 npx vitest run test/indicatorScores.test.ts */
-  it("NVDA · 삼성전자 · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 지난주 대비 바뀐 종목 · 받기 실패(NVDA 지수·SOXL 기초자산)", async () => {
+  it("2단계(가치·종합 켜짐): NVDA · MSFT · AAPL · META · JPM(은행) · RGTI(적자) · 차이 큰 예시 · SEC 재무 없는 예시 · 삼성전자 · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 지난주 대비 바뀐 종목(추세·가치) · 재무 받는 중 · 가치 끔 · 받기 실패", async () => {
     const { stock } = jumpCandles();
     const { src } = fixtureSources({
       candles: { ZJMP: stock, SHRT: candlesOf("NVDA").slice(-120), SQQQ: new Error("기록 없음") },
       stocks: { ZJMP: { code: "ZJMP", name: "합성 종목", market: "NASDAQ" }, SHRT: { code: "SHRT", name: "짧은 기록", market: "NASDAQ" } },
     });
-    await start(src);
+    const value = fakeValueSources({ alias: { ZZGAP: "RGTI" } });
+    await start(src, undefined, true, value.src);
+    await app!.valueScores.saveReference(referenceData());
+    for (const c of ["NVDA", "MSFT", "AAPL", "META", "JPM", "RGTI", "ZZGAP"]) await app!.valueScores.refreshFacts(c);
     const cases: Record<string, unknown> = {};
-    for (const c of ["NVDA", "005930", "QQQ", "SOXL", "RGTX", "SQQQ", "SHRT", "ZJMP"]) {
+    const take = async (c: string, key = c) => {
       const { computedAt: _t, ...body } = (await get(c)).body;
-      cases[c] = body;
-    }
+      cases[key] = body;
+    };
+    for (const c of ["NVDA", "MSFT", "AAPL", "META", "JPM", "RGTI", "ZZGAP", "005930", "QQQ", "SOXL", "RGTX", "SQQQ", "SHRT", "ZJMP"]) await take(c);
+    // SEC 목록에 없는 종목: 처음엔 '재무제표를 처음 받는 중' → 백그라운드 확인 뒤 '점수 없음'
+    await take("ZZNOF", "ZZNOF_pending");
+    await app!.valueScores.idle();
+    clock = new Date(clock.getTime() + 61_000);
+    await take("ZZNOF");
+    // 가치 플래그를 끈 서버 (1단계와 같은 가치 줄)
+    await app!.close();
+    await start(fixtureSources().src, undefined, true, fakeValueSources().src);
+    await app!.inject({ method: "PUT", url: "/api/admin/features", payload: { valueScore: false } });
+    await take("NVDA", "NVDA_valueOff");
+    // 지난주 대비 바뀐 이유 (가치): 지난주에 쓰던 비교 기준(9/17)은 비교 회사 주가 수준 값(이익·자산·매출 ÷ 시가총액)을 1/5 로 둔 것 →
+    // 이번 주(9/26 기준)와 가치 점수가 5점 넘게 달라 상세 카드에 한 줄 (서버 코드가 낸 응답 그대로)
+    await app!.close();
+    await start(fixtureSources().src, undefined, true, fakeValueSources().src);
+    const base = referenceData();
+    const fifth = (x: number | null, j: number) => (j < 5 && x !== null && Math.abs(x) < 1e300 ? x * 0.2 : x);
+    await app!.valueScores.saveReference({ ...base, refDate: "2026-09-17", peers: base.peers.map((p) => ({ ...p, x: p.x.map(fifth) })) });
+    await app!.valueScores.saveReference(base);
+    await app!.valueScores.refreshFacts("NVDA");
+    await take("NVDA", "NVDA_change");
     // 받기 실패 모습 (앱 화면 테스트용): 네이버 지수·기초자산 일봉을 받지 못한 서버
     await app!.close();
     const down = fixtureSources({ candles: { SOXX: new Error("야후 실패") }, bench: { NASDAQ: new Error("네이버 지수 실패") } });
-    await start(down.src);
+    await start(down.src, undefined, true, fakeValueSources().src);
+    await app!.valueScores.saveReference(referenceData());
+    await app!.valueScores.refreshFacts("NVDA");
     for (const c of ["NVDA", "SOXL"]) {
       const { computedAt: _t, ...body } = (await get(c)).body;
       cases[`${c}_fetchFailed`] = body;
     }
     const file = new URL("../../shared/fixtures/indicatorScores.json", import.meta.url);
-    const fixture = { note: "지표 점수 1단계 서버 응답 (GET /api/scores/:code, computedAt 제외) — 기록한 야후 공개 일봉(backend/test/fixtures/indicatorScores)으로 서버 코드가 낸 값. 2026-09-28 10:00 KST 기준", cases };
+    const fixture = { note: "지표 점수 2단계 서버 응답 (GET /api/scores/:code, computedAt 제외) — 기록한 야후 공개 일봉(backend/test/fixtures/indicatorScores·valueScores)과 SEC 재무·2026-09-26 비교 기준(backend/test/fixtures/valueScores)으로 서버 코드가 낸 값. 2026-09-28 10:00 KST 기준. ZZ 로 시작하는 코드는 예시 종목(다른 종목 기록을 빌림)", cases };
     if (process.env["UPDATE_SCORE_FIXTURE"] === "1") writeFileSync(file, `${JSON.stringify(fixture, null, 1)}\n`);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(fixture);
   });

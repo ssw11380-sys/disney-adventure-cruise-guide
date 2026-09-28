@@ -29,6 +29,7 @@ export function SplitScreen({
   sideW,
   refreshing,
   onRefresh,
+  rightScrollRef,
 }: {
   head: React.ReactNode;
   top?: React.ReactNode;
@@ -38,6 +39,8 @@ export function SplitScreen({
   sideW: number;
   refreshing?: boolean;
   onRefresh?: () => void;
+  /** 오른쪽 칸 스크롤을 부르는 쪽이 옮길 때 (요약 카드 '가치 탭에서 지표별 값 보기' → 가치 상세 카드로). 주지 않으면 지금과 같다 */
+  rightScrollRef?: React.Ref<ScrollView>;
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
@@ -62,6 +65,7 @@ export function SplitScreen({
         <View style={[styles.divider, { width: layout.divider, backgroundColor: t.line }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden />
         <View style={{ width: sideW + insets.right }}>
           <ScrollView
+            ref={rightScrollRef}
             style={styles.fill}
             contentContainerStyle={[styles.rightContent, { paddingRight: insets.right }]}
             keyboardShouldPersistTaps="handled"

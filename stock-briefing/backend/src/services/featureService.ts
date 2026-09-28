@@ -98,6 +98,12 @@ export const FEATURES = {
     description:
       "종목 상세 '지표 점수' (3-44 1단계, 코드 계산 · AI 글 아님, 기본 켜짐): 기업개요 탭 맨 위 요약 카드(가치 지표는 '계산 준비 중', 추세 지표 점수 0~100·띠·한 줄 뜻, 종합 줄은 두 점수가 모두 있을 때 평균 — 1단계는 '없음 · 이유')와 기술분석 탭 맨 위 추세 상세 카드(5묶음·사실 문장·지난주보다 5점 넘게 바뀐 이유), 레버리지 ETF 는 이 상품 자체 점수 없이 기초자산 참고 줄과 레버리지 주의 사실 상자. 장 마감 뒤 하루 한 번(한국 20:10 · 미국 17:30 ET) 등록 종목을 계산해 indicator_scores 에 기록, GET /api/scores/:code. 잔고 목록·알림·위젯·브리핑·AI 글에는 넣지 않음. 끄면 계산·일봉 요청·저장·화면이 모두 0건이고 경로는 404",
   },
+  valueScore: {
+    // 3-44 2단계의 되돌리기 스위치 (indicatorScores 안의 가치 부분만). 끄기: PUT /api/admin/features {"valueScore": false}
+    default: true,
+    description:
+      "지표 점수의 가치 지표 점수·종합 (3-44 2단계, 미국 보통주만, indicatorScores 가 켜져 있을 때만 뜻이 있음): SEC 재무(companyfacts, 최근 4분기·공시일 기준)와 주 1회 비교 기준(Nasdaq 스크리너 업종·시가총액 + SEC frames, 표 value_references)으로 가치 지표 점수 0~100·띠·5묶음·지표별 값, 두 점수가 모두 있으면 종합(평균·차이 30 이상 안내). 재무는 표 value_fundamentals 에 저장하고 장 마감 뒤(뉴욕 17:30)·백그라운드로만 받음 — 화면 요청은 SEC 를 기다리지 않음. 끄면 1단계 그대로(가치 '지금 계산하지 않음', 종합 없음)이고 SEC·Nasdaq 요청·저장이 0건",
+  },
   briefingTrim: {
     default: true,
     description:
@@ -135,6 +141,11 @@ export const FEATURES = {
     default: true,
     description:
       "로그인·회원가입 (계정 A단계): 아이디·비밀번호 로그인, 자동 로그인(기본 켬 — 1년 유지·쓸 때마다 연장, 서버가 401 session_invalid 를 줄 때만 로그아웃 · 끄면 12시간·앱을 닫으면 다시 로그인), 회원가입(아이디·비밀번호 2번·이메일), 주인 계정 '서성원'(처음 비밀번호 1111 — 한 번 권유·설정 띠, 서버를 다시 켜도 되돌리지 않음), 비밀번호 변경(다른 기기 로그아웃)·모든 기기에서 로그아웃·이메일 변경. /api/* 는 세션(X-Session-Token)이 있어야 하고(플래그·로그인·가입만 빼고, API 토큰 확인은 그 앞에 그대로), 주인 아닌 계정은 공유 경로 목록(시장·종목 정보 — 보유 정보는 뺌)만 열리고 개인 경로는 빈 값·403 personal_data_not_ready, 관리 경로는 403. 끄면 로그인 화면·세션 확인이 없고 /api/auth/* 는 404 — 지금과 같음. 비상 끄기: Railway 변수 ACCOUNTS_DISABLED=1",
+  },
+  chartHighLow: {
+    default: true,
+    description:
+      "차트 최고·최저가 표시 (3-46, 앱만): 종목 상세(휴대폰·넓은 창)·지수 상세·전체 화면 차트의 보이는 구간 가장 높은 고가에 빨간 ↓와 '255,000원 (-22.3%, 26.07.27)', 가장 낮은 저가에 파란 ↑와 '181,100원 (+9.3%, 26.07.14)'(% = 현재가가 그 값보다 몇 % 높은지·낮은지, 소수 한 자리 버림), 드래그·확대하면 보이는 봉으로 다시 계산, 가격 축 위아래에 글자 자리 여백. 설정 > 표시 '차트 최고·최저가 표시'(기본 켬, 기기에 저장 settings.chartHighLow). 끄면 설정 줄이 없고 차트는 지금 그대로",
   },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 

@@ -316,7 +316,39 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
     },
   },
   {
-    version: 11, // main 의 가장 큰 번호(10) + 1 (계정 A단계). 다른 브랜치가 먼저 11 을 쓰면 합칠 때 12 로 — 번호가 겹치면 이미 그 번호까지 올라간 DB 는 이 표를 건너뛴다
+    version: 11, // main 의 가장 큰 번호(10) + 1. 새 표만 추가하고 기존 표는 건드리지 않는다 (예전 서버로 되돌려도 모르고 지나갈 뿐)
+    up: async (db, dialect) => {
+      // 가치 지표 점수 (3-44 2단계, 플래그 valueScore): 종목별 SEC 재무(줄인 companyfacts)와 주 1회 비교 기준(업종 분포)
+      await db.schema
+        .createTable("value_fundamentals")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("code", "text", (c) => c.notNull())
+        .addColumn("cik", "text", (c) => c.notNull())
+        .addColumn("sic", "integer")
+        .addColumn("last_filed", "text")
+        .addColumn("fetched_at", "text", (c) => c.notNull())
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_value_fundamentals_code on value_fundamentals (code)`.execute(db);
+      await db.schema
+        .createTable("value_references")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("market", "text", (c) => c.notNull())
+        .addColumn("ref_date", "text", (c) => c.notNull())
+        .addColumn("method", "text", (c) => c.notNull())
+        .addColumn("data", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .execute();
+      // 시장·기준일마다 한 줄 (같은 날 다시 만들면 덮어쓴다)
+      await sql`create unique index if not exists uq_value_references_market_date on value_references (market, ref_date)`.execute(db);
+    },
+  },
+  {
+    version: 12, // 계정 A단계. main 의 11(가치 지표 점수, #90) 다음 — 번호가 겹치면 이미 그 번호까지 올라간 DB 는 이 표를 건너뛰므로 늘 main 의 가장 큰 번호 + 1
     up: async (db, dialect) => {
       // 로그인·회원가입 (플래그 accounts). 새 표만 추가하고 기존 표는 건드리지 않는다. 예전 서버로 되돌려도 이 표를 모르고 지나갈 뿐이다.
       // 시각은 이 저장소 방식대로 seoulIso(+09:00) 글자로 적는다
@@ -356,7 +388,7 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
     },
   },
   {
-    version: 12, // 계정 A단계 보안 보강: 푸시 기기 등록을 로그인 세션에 묶는다
+    version: 13, // 계정 A단계 보안 보강: 푸시 기기 등록을 로그인 세션에 묶는다
     up: async (db) => {
       // 세션을 끊으면(로그아웃·모든 기기에서 로그아웃·비밀번호 변경) 그 세션으로 등록한 기기도 지운다 — 잃어버린 폰으로 주인 계좌 알림이 가지 않게.
       // 비어 있을 수 있는 칸 하나만 더한다 (FK 없음 — 세션을 지워도 기기 행은 남고, 알림은 살아 있는 세션의 기기에만 간다).

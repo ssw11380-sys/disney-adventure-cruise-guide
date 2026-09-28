@@ -788,9 +788,10 @@ export interface AuthMe {
 }
 
 /**
- * GET /api/scores/:code — 지표 점수 (3-44 1단계, 플래그 indicatorScores). 서버 services/indicatorScoreService 의 ScoresResponse 와 같은 모양.
+ * GET /api/scores/:code — 지표 점수 (3-44, 플래그 indicatorScores). 서버 services/indicatorScoreService 의 ScoresResponse 와 같은 모양.
  * 모든 문장은 서버가 만든다(금지어 검사를 서버 한 곳에서) — 앱은 배치만 하고, 앱에 고정된 글은 줄 이름·버튼뿐이다.
- * 이번 단계는 추세 지표 점수만 계산한다: 가치는 '계산 준비 중'(ETF 는 '대상 아님'), 종합 숫자는 두 점수가 모두 있을 때만(지금은 늘 none — 화면은 '없음 · 이유').
+ * 1단계: 추세 지표 점수. 2단계(서버 플래그 valueScore): 미국 보통주 가치 지표 점수와 종합(두 점수가 모두 있을 때 평균) — 한국은 '계산 준비 중', ETF 는 '대상 아님'.
+ * 예전 서버(1단계)는 가치 칸에 label·text 만 준다 → 새 칸은 모두 없을 수 있다고 보고 그린다.
  * trend.reason.code 'fetchFailed' = 받기 실패(일봉·비교 지수·기초자산 일봉) — 서버가 5분 뒤 다시 계산한다
  */
 export type TrendBandName = "강함" | "다소 강함" | "중립" | "다소 약함" | "약함";
@@ -858,15 +859,82 @@ export interface TrendScoreBlock {
   } | null;
   versionLine: string;
 }
+/** 가치 지표 띠 (보이는 정수로: 0~33 · 34~66 · 67~100) */
+export type ValueBandName = "낮은 편" | "가운데쯤" | "높은 편";
+/** 가치 지표 한 지표 줄 (가치분석 탭 상세) — 모든 글은 서버가 만든다 */
+export interface ValueMetricRow {
+  key: string;
+  name: string;
+  /** '32.1배' · '12.3%' · '순현금' (계산 안 한 지표는 null) */
+  value: string | null;
+  /** 연간 재무로 계산한 지표의 기준 '2026년 1월 결산 연간 기준' (성장·이익 안정성·ROE 안정성·주식 수 변화). 예전 서버·그 밖 지표는 없음 */
+  basis?: string | null;
+  /** '업종 가운데값 25.0배' */
+  peerMedian: string | null;
+  /** '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' */
+  positions: string | null;
+  /** 실제로 쓴 비교 비중 '업종 50 · 시장 20 · 지난 5년 30' */
+  mix: string | null;
+  score: number | null;
+  text: string;
+  meaning: string;
+  /** 점수에 쓴 지표인지 (시장 70% 규칙으로 안 쓰는 지표 · 값이 없는 지표는 false) */
+  used: boolean;
+  note?: string | null;
+}
+export interface ValueFamilyRow {
+  key: "price" | "quality" | "health" | "growth" | "payout";
+  name: string;
+  about: string;
+  weight: number;
+  score: number | null;
+  scoreExact: number | null;
+  text: string;
+  metrics: ValueMetricRow[];
+}
+/** 가치 지표 칸. 예전 서버(1단계)는 method·status·label·score·band·about·text 만 준다 */
+export interface ValueScoreBlock {
+  method: string;
+  /** ok · partial(일부 지표 없이) · insufficient·unavailable(점수 없음) · excluded(대상 아님) · pending(계산 준비 중) · hold(잠시 보류) */
+  status: "ok" | "partial" | "insufficient" | "unavailable" | "excluded" | "pending" | "hold";
+  /**
+   * 요약 카드 줄의 글: '66점 · 가운데쯤'(점수 있음 — 예전 앱이 이 글만 굵게 보이므로 숫자까지) · 점수 없음 · 대상 아님 · 계산 준비 중 · 잠시 보류.
+   * 새 앱은 점수가 있으면 score·band 를 쓴다
+   */
+  label: string;
+  score: number | null;
+  scoreExact?: number | null;
+  band: ValueBandName | string | null;
+  about: string;
+  /** 요약 카드 설명 줄 (점수가 있으면 뜻, 없으면 이유) */
+  text: string;
+  reason?: { code: string; text: string } | null;
+  /** '일부 지표 없이 계산' · '지난 값 9/24' */
+  badges?: string[];
+  headline?: string | null;
+  peerLine?: string | null;
+  datesLine?: string | null;
+  priceNote?: string | null;
+  path?: "general" | "financial" | null;
+  coverageWeight?: number | null;
+  families?: ValueFamilyRow[];
+  flags?: { key: string; text: string }[];
+  notes?: string[];
+  change?: { from: string; prev: number; now: number; diff: number; family: string; familyName: string; familyDiff: number; cause: string; text: string } | null;
+  asOf?: { priceThrough: string | null; fiscalEnd: string | null; filed: string | null; form: string | null; basis: "FY" | "TTM" | null; fiscalLabel: string | null; fiscalShort: string | null; reference: string | null; fetchedAt: string | null };
+  /** 계산 방식·출처 줄 — 점수를 계산했을 때만 (한국·ETF·점수 없음은 null) */
+  versionLine?: string | null;
+}
 export interface IndicatorScores {
   code: string;
   name: string;
   market: "KR" | "US";
   asOf: { priceDate: string | null; scoreDate: string; market: "KR" | "US"; line: string | null };
-  value: { method: string; status: "pending" | "excluded" | "ok"; label: string; score: number | null; band: string | null; about: string; text: string };
+  value: ValueScoreBlock;
   trend: TrendScoreBlock;
-  composite: { status: "ok" | "none"; score: number | null; reason: string | null; text: string; gap: number | null; gapNote: boolean };
-  text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string };
+  /** 종합 = 화면에 보이는 두 정수의 평균 (둘 다 있고 기준일이 같을 때만). 차이 30 이상이면 gapNote·gapText */
+  composite: { status: "ok" | "none"; score: number | null; reason: string | null; text: string; gap: number | null; gapNote: boolean; gapText?: string | null };
+  text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string; valueAbout?: string; valueDetailNote?: string };
   computedAt: string;
 }
 

@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { IndicatorScores } from "@/api/types";
-import { barFraction, compositeLine, familySpeech, itemLine, leverageSpeech, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech } from "@/lib/scoreView";
+import { barFraction, compositeLine, familyLabel, familySpeech, flagPreview, itemLine, leverageSpeech, metricMain, metricSpeech, moreFlagsText, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueJumpY, valueSpeech, valueWaiting } from "@/lib/scoreView";
 
 /**
- * 지표 점수 화면 모양 (3-44 1단계). 서버 응답은 공용 픽스처(shared/fixtures/indicatorScores.json — 서버 테스트가 지금 서버 코드의 응답과 같은지 본다).
+ * 지표 점수 화면 모양 (3-44 — 2단계부터 가치·종합). 서버 응답은 공용 픽스처(shared/fixtures/indicatorScores.json — 서버 테스트가 지금 서버 코드의 응답과 같은지 본다).
  * 앱에 고정된 글(줄 이름·버튼·화면 읽기 틀)도 서버와 같은 금지어 검사를 통과해야 한다
  */
 const fx = JSON.parse(readFileSync(new URL("../../shared/fixtures/indicatorScores.json", import.meta.url), "utf8")) as { cases: Record<string, IndicatorScores> };
@@ -24,13 +24,52 @@ const problems = (s: string) => {
 const texts = (v: unknown): string[] => (typeof v === "string" ? [v] : Array.isArray(v) ? v.flatMap(texts) : v && typeof v === "object" ? Object.values(v).flatMap(texts) : []);
 
 describe("화면 읽기 문장", () => {
-  it("NVDA: '추세 지표 69점, 다소 강함' (가치는 계산 준비 중, 종합은 없음)", () => {
+  it("NVDA: '가치 지표 67점, 0에서 100 중, 높은 편' · '추세 지표 69점, 다소 강함' · 종합 68 (설계 5.7-F)", () => {
     expect(trendSpeech(S["NVDA"]!.trend)).toBe("추세 지표 69점, 다소 강함");
-    expect(summarySpeech(S["NVDA"]!)).toBe("지표 점수. 가치 지표, 계산 준비 중. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
+    expect(valueSpeech(S["NVDA"]!.value)).toBe("가치 지표 67점, 0에서 100 중, 높은 편");
+    expect(summarySpeech(S["NVDA"]!)).toBe("지표 점수. 가치 지표 67점, 0에서 100 중, 높은 편. 추세 지표 69점, 다소 강함. 종합 지표 68점, 두 점수의 평균.");
+    // 가치 플래그를 끈 서버: 상태 글과 보이는 이유 줄까지 읽는다 (검토 지적: 상태 글 '지금 계산하지 않음' · 이유도 TalkBack 이 읽게)
+    expect(summarySpeech(S["NVDA_valueOff"]!)).toBe("지표 점수. 가치 지표, 지금 계산하지 않음, 가치 지표 점수는 지금 계산하지 않습니다. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
+  });
+  it("두 점수 차이 30 이상: 종합 뒤에 차이 안내를 이어 읽는다 (마침표 겹침 없음)", () => {
+    const sp = summarySpeech(S["ZZGAP"]!);
+    expect(sp).toContain("종합 지표 50점, 두 점수의 평균. 두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요.");
+    expect(sp).not.toMatch(/\.\./);
+  });
+  it("가치 점수 없음·대상 아님·한국: 상태 글과 이유 (보이는 이유 줄을 화면 읽기도 읽는다)", () => {
+    expect(valueSpeech(S["ZZNOF"]!.value)).toBe("가치 지표, 점수 없음, SEC 재무제표를 찾지 못했습니다 (외국 회사·새로 상장한 회사 등)");
+    expect(valueSpeech(S["SOXL"]!.value)).toBe("가치 지표, 대상 아님, ETF는 여러 종목을 묶은 상품이라, 한 회사의 재무로 계산하는 이 점수를 내지 않습니다");
+    expect(valueSpeech(S["005930"]!.value)).toBe("가치 지표, 계산 준비 중, 한국 종목 가치 지표 점수는 다음 단계에서 계산합니다");
+    expect(valueSpeech(S["ZZNOF_pending"]!.value)).toBe("가치 지표, 계산 준비 중, 재무제표를 처음 받는 중입니다 (보통 몇 분 안)");
+    // 예전 서버(이유 없이 label·text 만)도 그대로 읽는다
+    expect(valueSpeech({ method: "VALUE-1", status: "pending", label: "계산 준비 중", score: null, band: null, about: "", text: "" })).toBe("가치 지표, 계산 준비 중");
+    const partial = { ...S["NVDA"]!.value, status: "partial" as const, badges: ["일부 지표 없이 계산", "지난 값 9/24"] };
+    expect(valueSpeech(partial)).toBe("가치 지표 67점, 0에서 100 중, 높은 편, 일부 지표 없이 계산, 지난 값 9/24");
+  });
+  it("가치 묶음·지표 줄 화면 읽기", () => {
+    const f = S["NVDA"]!.value.families![0]!;
+    expect(familySpeech(f)).toBe(`주가 수준 ${f.score}점, 비중 30`);
+    const a1 = f.metrics.find((m) => m.key === "A1")!;
+    // 리뷰: 줄 전체를 한 덩어리로 읽으므로 보이는 글(가운데값·비교별 위치·비중·문장·안내·뜻)을 모두 담는다. '72/100' 은 '100 중 72'
+    expect(metricSpeech(a1)).toBe(
+      "PER (이익 대비 주가) 44.8배, 업종 가운데값 100배 넘음. 위치 점수 71. 업종 안 위치 100 중 76, 시장 안 100 중 57. 비중 업종 71, 시장 29. 이익에 비해 주가 수준이 낮은 편입니다. 업황에 따라 이익이 크게 오르내리는 회사라, 최근 4분기 이익과 5년 평균 이익을 반씩 섞어 계산했습니다. 100에 가까울수록: 이익에 비해 주가 수준이 낮은 편.",
+    );
+    for (const part of [a1.name, a1.value!, a1.peerMedian!, a1.text.replace(/\.$/, ""), a1.note!.replace(/\.$/, "")]) expect(metricSpeech(a1)).toContain(part);
+    expect(metricSpeech(a1)).not.toMatch(/\.\.|\/100|→/);
+    const e1 = S["NVDA"]!.value.families![4]!.metrics.find((m) => m.key === "E1")!;
+    // 같은 값 덩어리에 좌우된 지표: '배당이 많은 편' 대신 중립 문장 (검토 지적)
+    expect(metricSpeech(e1)).toContain("비교한 회사 대부분(77%)이 0.0%라 위치 점수가 크게 나왔습니다");
+    expect(metricSpeech(e1)).not.toContain("배당이 많은 편입니다");
+    // 연간 재무 지표는 기준 글도 읽는다
+    const c1 = S["NVDA"]!.value.families![3]!.metrics.find((m) => m.key === "C1")!;
+    expect(c1.basis).toBe("2026년 1월 결산 연간 기준");
+    expect(metricSpeech(c1)).toContain(`, 업종 가운데값 ${c1.peerMedian!.replace("업종 가운데값 ", "")}. 2026년 1월 결산 연간 기준. 위치 점수`);
+    const b3 = S["NVDA"]!.value.families![1]!.metrics.find((m) => m.key === "B3")!;
+    expect(metricSpeech(b3)).toBe("매출총이익 ÷ 자산, 값 없음, 비교할 회사 자료가 모자라(70% 미만) 이 지표는 쓰지 않았습니다.");
   });
   it("삼성전자: 68 다소 강함", () => expect(trendSpeech(S["005930"]!.trend)).toBe("추세 지표 68점, 다소 강함"));
   it("SOXL: 이 상품 자체 점수 없음 + 기초자산 참고", () => {
-    expect(summarySpeech(S["SOXL"]!)).toBe("지표 점수. 가치 지표, 대상 아님. 추세 지표, 이 상품 자체 점수 없음. 참고: 기초자산 SOXX 추세 지표 73 · 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
+    expect(summarySpeech(S["SOXL"]!)).toBe("지표 점수. 가치 지표, 대상 아님, ETF는 여러 종목을 묶은 상품이라, 한 회사의 재무로 계산하는 이 점수를 내지 않습니다. 추세 지표, 이 상품 자체 점수 없음. 참고: 기초자산 SOXX 추세 지표 73 · 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
   });
   it("레버리지 주의 상자: 줄 앞 '·'·줄 끝 마침표를 떼고 이어 읽는다 (마침표 겹침 없음)", () => {
     const sp = leverageSpeech(S["SOXL"]!.trend.leveraged!.box);
@@ -41,6 +80,7 @@ describe("화면 읽기 문장", () => {
   });
   it("점수 없음·대상 아님·받기 실패", () => {
     expect(trendSpeech(S["NVDA_fetchFailed"]!.trend)).toBe("추세 지표, 점수 없음");
+    expect(valueSpeech(S["NVDA_fetchFailed"]!.value)).toBe("가치 지표 67점, 0에서 100 중, 높은 편");
     expect(trendSpeech(S["SHRT"]!.trend)).toBe("추세 지표, 점수 없음");
     expect(trendSpeech(S["SQQQ"]!.trend)).toBe("추세 지표, 대상 아님");
   });
@@ -56,16 +96,71 @@ describe("보이는 모양", () => {
     expect([barFraction(69), barFraction(0), barFraction(100), barFraction(130), barFraction(-5), barFraction(null)]).toEqual([0.69, 0, 1, 1, 0, null]);
   });
   it("점수 줄은 본인 점수가 있을 때만 (레버리지·인버스·짧은 기록은 상태 글)", () => {
-    expect(Object.fromEntries(Object.entries(S).map(([k, v]) => [k, trendHasScore(v.trend)]))).toEqual({ NVDA: true, "005930": true, QQQ: true, SOXL: false, RGTX: false, SQQQ: false, SHRT: false, ZJMP: true, NVDA_fetchFailed: false, SOXL_fetchFailed: false });
+    expect(Object.fromEntries(Object.entries(S).map(([k, v]) => [k, trendHasScore(v.trend)]))).toEqual({
+      NVDA: true,
+      MSFT: true,
+      AAPL: true,
+      META: true,
+      JPM: true,
+      RGTI: true,
+      ZZGAP: true,
+      "005930": true,
+      QQQ: true,
+      SOXL: false,
+      RGTX: false,
+      SQQQ: false,
+      SHRT: false,
+      ZJMP: true,
+      ZZNOF_pending: true,
+      ZZNOF: true,
+      NVDA_valueOff: true,
+      NVDA_change: true,
+      NVDA_fetchFailed: false,
+      SOXL_fetchFailed: false,
+    });
+    // 가치 줄은 미국 보통주 점수만 (한국 · ETF · 받는 중 · SEC 재무 없음 · 가치 끔은 상태 글)
+    expect(Object.entries(S).filter(([, v]) => valueHasScore(v.value)).map(([k]) => k)).toEqual(["NVDA", "MSFT", "AAPL", "META", "JPM", "RGTI", "ZZGAP", "NVDA_change", "NVDA_fetchFailed"]);
   });
-  it("종합 숫자는 두 점수가 모두 있을 때만, 없으면 '없음'과 이유 (설계 5.4 '없으면 없다고')", () => {
-    for (const s of Object.values(S)) expect(showComposite(s)).toBe(false);
-    expect(compositeLine(S["NVDA"]!)).toEqual({ score: null, label: "없음", reason: "가치 지표 점수가 없어 합치지 않습니다" });
-    expect(compositeLine(S["SOXL"]!)).toEqual({ score: null, label: "없음", reason: "가치 지표 점수가 없어 합치지 않습니다" });
-    expect(compositeLine(S["SQQQ"]!)).toEqual({ score: null, label: "없음", reason: "두 점수가 모두 없습니다" });
-    const both = { ...S["NVDA"]!, composite: { status: "ok", score: 63, reason: null, text: "63 · 두 점수의 평균", gap: 12, gapNote: false } } as const;
-    expect(compositeLine(both)).toEqual({ score: 63, label: "63", reason: "두 점수의 평균" });
-    expect(summarySpeech(both).endsWith("종합 지표 63점, 두 점수의 평균.")).toBe(true);
+  it("종합 숫자는 두 점수가 모두 있을 때만 = 두 정수의 평균, 없으면 '없음'과 이유 (설계 5.4 '없으면 없다고')", () => {
+    for (const s of Object.values(S)) {
+      expect(showComposite(s)).toBe(valueHasScore(s.value) && trendHasScore(s.trend));
+      if (showComposite(s)) expect(s.composite.score).toBe(Math.floor((s.value.score! + s.trend.score!) / 2 + 0.5));
+    }
+    expect(compositeLine(S["NVDA"]!)).toEqual({ score: 68, label: "68", reason: "두 점수의 평균", gapText: null });
+    expect(compositeLine(S["SOXL"]!)).toEqual({ score: null, label: "없음", reason: "가치 지표 점수가 없어 합치지 않습니다", gapText: null });
+    expect(compositeLine(S["SQQQ"]!)).toEqual({ score: null, label: "없음", reason: "두 점수가 모두 없습니다", gapText: null });
+    expect(compositeLine(S["NVDA_fetchFailed"]!)).toEqual({ score: null, label: "없음", reason: "추세 지표 점수가 없어 합치지 않습니다", gapText: null });
+    expect(compositeLine(S["ZZGAP"]!)).toEqual({ score: 50, label: "50", reason: "두 점수의 평균", gapText: "두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요." });
+    // 예전 서버(차이 안내 칸 없음)
+    const old = { ...S["NVDA"]!, composite: { status: "ok", score: 63, reason: null, text: "63 · 두 점수의 평균", gap: 12, gapNote: false } } as const;
+    expect(compositeLine(old)).toEqual({ score: 63, label: "63", reason: "두 점수의 평균", gapText: null });
+    expect(summarySpeech(old).endsWith("종합 지표 63점, 두 점수의 평균.")).toBe(true);
+  });
+  it("요약 카드 펼침의 표시는 최대 2개 + '표시 n개 더 — 가치분석 탭'", () => {
+    const v = { ...S["NVDA"]!.value, flags: [1, 2, 3, 4].map((i) => ({ key: `k${i}`, text: `표시 ${i}` })) };
+    expect(flagPreview(v)).toEqual({ shown: v.flags.slice(0, 2), more: 2 });
+    expect(flagPreview(S["SOXL"]!.value)).toEqual({ shown: [], more: 0 });
+    expect([moreFlagsText(2, false), moreFlagsText(1, true)]).toEqual(["표시 2개 더 — 가치분석 탭", "표시 1개 더 — 가치 탭"]);
+  });
+  it("가치 지표가 서버 백그라운드 받기를 기다리는 동안만 1분마다 다시 묻는다 (한국 '계산 준비 중'은 아님)", () => {
+    expect(valueWaiting(S["ZZNOF_pending"])).toBe(true);
+    // 오랜만에 연 종목(재무를 새로 받는 중)도 기다리는 중 — '받지 못했습니다'가 아니다 (리뷰)
+    const withReason = (code: string) => ({ ...S["NVDA"]!, value: { ...S["NVDA_valueOff"]!.value, label: "계산 준비 중", reason: { code, text: "" } } });
+    expect(valueWaiting(withReason("pendingRefresh"))).toBe(true);
+    expect(valueWaiting(withReason("pendingReference"))).toBe(true);
+    // 서버가 받는·만드는 중이 아니면(비교 기준이 아직 없고 쉬는 중 · 만들기 실패 · SEC 목록에서 빠짐) 다시 묻지 않는다 (검토 지적: 1분마다 끝없이 묻던 것)
+    for (const code of ["referenceMissing", "referenceFailed", "notListed", "factsFailed", "off"]) expect(valueWaiting(withReason(code)), code).toBe(false);
+    expect(valueWaiting(S["005930"])).toBe(false);
+    expect(valueWaiting(S["NVDA"])).toBe(false);
+    expect(valueWaiting(S["NVDA_valueOff"])).toBe(false);
+    expect(valueWaiting(null)).toBe(false);
+  });
+  it("지표 줄 값 · 가운데값 (연간 기준 글) · 묶음 이름 비중 이음 · 가치 상세 카드로 스크롤할 자리", () => {
+    expect(metricMain({ value: "32.9%", peerMedian: "업종 가운데값 13.1%", basis: "2026년 1월 결산 연간 기준" })).toBe("32.9% · 업종 가운데값 13.1% (2026년 1월 결산 연간 기준)");
+    expect(metricMain({ value: "44.8배", peerMedian: "업종 가운데값 100배 넘음", basis: null })).toBe("44.8배 · 업종 가운데값 100배 넘음");
+    expect(metricMain({ value: null, peerMedian: null })).toBe("");
+    expect(familyLabel("수익성과 이익의 질", 25)).toBe("수익성과 이익의 질 · 25");
+    expect([valueJumpY(0, 1234), valueJumpY(900, 0), valueJumpY(0, 3)]).toEqual([1226, 892, 0]);
   });
   it("글자 130% 부터 두 줄", () => {
     expect([stackRows(1), stackRows(1.15), stackRows(1.3), stackRows(2)]).toEqual([false, false, true, true]);
