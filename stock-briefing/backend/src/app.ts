@@ -53,6 +53,7 @@ import { tradeRecordAdminRoutes, tradeRecordRoutes } from "./routes/tradeRecords
 import { defaultScoreSources, IndicatorScoreService } from "./services/indicatorScoreService.js";
 import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
+import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
 
 export interface BuildAppOptions {
@@ -301,6 +302,18 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     const summary = await market;
     if (done.created.length > 0 || account) await notificationService.onSession({ ...done, account, market: summary });
   });
+  // 브리핑 3차 2 늦음·실패 안내 (플래그 briefingStatus): 실행이 끝날 때마다(알림을 보낸 뒤 — 위 리스너 다음) 실행 기록 한 줄. 꺼져 있으면 쓰지 않는다
+  const briefingStatus = new BriefingStatusService({
+    db: opts.db,
+    features,
+    settings: () => settingsStore.get(),
+    calendar: opts.providers.calendar,
+    progress: () => briefingService.progress,
+    llmConfigured: () => opts.providers.generator.model !== "disabled",
+    now,
+    log,
+  });
+  briefingService.onRunDone(briefingStatus.onRunDone);
   app.addHook("onClose", async () => notificationService.stop());
 
   app.decorate("stockService", stockService);
@@ -501,7 +514,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     financials: opts.providers.financials,
     financialsUs: opts.providers.financialsUs,
   });
-  await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
+  await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler, status: briefingStatus });
   await app.register(accountBriefingRoutes, {
     prefix: "/api/account-briefings",
     service: accountBriefings,

@@ -16,6 +16,7 @@ import { sentence, speakAmount, speakMove, speakProfit, speakRate } from "@/lib/
 import { createdTimeSameDay } from "@/lib/briefingPick";
 import { AI_NOTE } from "@/lib/disclaimer";
 import { estimateText } from "@/lib/briefingRun";
+import { failedCardText, failedRunText } from "@/lib/briefingStatus";
 import { afterMarketLabel, formatDateKo, formatPct, formatPrice, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
 import { changeColor, font, fontCap, slopFor, space, touch, useTheme } from "@/theme";
@@ -58,6 +59,8 @@ export function BriefingBody({
   const regenOn = useFeature("briefingManualRun", false); // 새 기능(3-19): 서버가 켤 때만
   // 브리핑 2차 6 (플래그 briefingSafeWording, 앱 fallback 꺼짐): 머리에 'AI가 쓴 글 · 틀릴 수 있음' 한 줄 (실패 브리핑에는 없음). 꺼지면 지금 그대로
   const aiOn = useFeature("briefingSafeWording", false);
+  // 브리핑 3차 2 (플래그 briefingStatus, 앱 fallback 꺼짐): 실패 카드·다시 만들기 실패 창을 오류 원문 대신 쉬운 말로. 꺼지면 지금 그대로
+  const plainFail = useFeature("briefingStatus", false);
   // 2단 오른쪽 칸: 도구 줄의 '근거 뉴스 N · 공시 N' 을 누르면 아래 근거 자료로 스크롤한다
   const scrollRef = useRef<ScrollView | null>(null);
   const sourcesY = useRef<number | null>(null);
@@ -93,7 +96,7 @@ export function BriefingBody({
                     onSuccess: (r) => {
                       const res = r.results[0];
                       if (res?.status === "ok" && res.briefingId) open(res.briefingId);
-                      else Alert.alert("다시 만들기 실패", res?.error ?? "결과가 없습니다");
+                      else Alert.alert("다시 만들기 실패", res ? (plainFail ? failedRunText(res.error) : (res.error ?? "결과가 없습니다")) : "결과가 없습니다");
                     },
                     onError: (e) => Alert.alert("다시 만들기 실패", e instanceof Error ? e.message : String(e)),
                   },
@@ -138,7 +141,7 @@ export function BriefingBody({
   };
   const failedCard = (
     <Card>
-      <Text style={{ color: t.danger }}>{d.error ?? d.summary}</Text>
+      <Text style={{ color: t.danger }}>{plainFail ? failedCardText(d) : (d.error ?? d.summary)}</Text>
     </Card>
   );
   const text =

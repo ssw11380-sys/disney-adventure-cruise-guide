@@ -1,8 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
+import { NotFoundError } from "../lib/errors.js";
 import type { BriefingScheduler } from "../scheduler.js";
 import type { BriefingService } from "../services/briefingService.js";
+import type { BriefingStatusService } from "../services/briefingStatus.js";
 
 const sessionEnum = z.enum(["morning", "afternoon"]);
 const listQuery = z.object({
@@ -18,9 +20,9 @@ const runBody = z.object({
 });
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
-export const briefingRoutes: FastifyPluginAsync<{ service: BriefingService; scheduler: BriefingScheduler | null }> = async (
+export const briefingRoutes: FastifyPluginAsync<{ service: BriefingService; scheduler: BriefingScheduler | null; status?: BriefingStatusService | null }> = async (
   app,
-  { service, scheduler },
+  { service, scheduler, status },
 ) => {
   /** 종목별 최신 브리핑 (홈 화면) */
   app.get("/latest", async () => service.latestPerStock());
@@ -33,6 +35,15 @@ export const briefingRoutes: FastifyPluginAsync<{ service: BriefingService; sche
     if (q.date) filter.date = q.date;
     if (q.session) filter.session = q.session;
     return service.list(filter);
+  });
+
+  /**
+   * 늦음·실패 안내 (브리핑 3차 2, 플래그 briefingStatus): 오늘 예약 시각이 지난 가장 최근 회차의 상태. 오류 원문은 넣지 않는다.
+   * 플래그가 꺼져 있으면 404 (앱은 예전 안내 그대로)
+   */
+  app.get("/status", async () => {
+    if (!status || !(await status.enabled())) throw new NotFoundError("브리핑 상태 안내가 꺼져 있습니다");
+    return status.status();
   });
 
   /** 상세 (수집 데이터 포함) */

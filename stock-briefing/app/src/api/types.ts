@@ -892,3 +892,40 @@ export interface VolumeStatus {
   asOf: string;
   reason: string | null;
 }
+
+/** 브리핑 3차 2 (플래그 briefingStatus): 실패 브리핑 오류 글의 쉬운 종류 (서버 services/briefingStatus.failureKind 와 같은 표) */
+export type BriefingFailureKind = "busy" | "outage" | "setup" | "cutoff" | "other";
+/** 안내 이유: 오류 종류 + 서버가 도중에 다시 켜져 줄이 없는 종목 */
+export type BriefingReasonKind = BriefingFailureKind | "restart";
+
+/** 못 만든 종목 하나 */
+export interface BriefingStatusProblem {
+  code: string;
+  name: string;
+  /** 누르면 열 브리핑 (실패 브리핑, 줄이 없으면 같은 회차의 가장 최근 브리핑). 없으면 누를 수 없음 */
+  briefingId: number | null;
+  kind: BriefingReasonKind;
+  /** 이번 회차 줄이 아예 없음 */
+  missing: boolean;
+}
+
+/** 브리핑 늦음·실패 안내 (서버 GET /api/briefings/status — 플래그가 꺼져 있거나 예전 서버면 404) */
+export interface BriefingStatus {
+  session: BriefingSession | null;
+  date: string;
+  scheduledAt: string | null;
+  state: "ok" | "late" | "partial" | "allFailed" | "slow" | "missed" | "llmOff" | "none";
+  /** 완료가 예약 + 20분 뒤 */
+  late: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  total: number;
+  done: number;
+  problems: BriefingStatusProblem[];
+  reasonKind: BriefingReasonKind | null;
+  nextRunAt: string | null;
+  /** 자동으로 한 번 더 만드는 시각 — 지금 서버는 늘 null */
+  retryAt: string | null;
+  /** 상세의 '이 종목 다시 만들기'가 있는지 (플래그 briefingManualRun) */
+  manualRun: boolean;
+}
