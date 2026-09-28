@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "주식 브리핑",
+    "name": "가즈아 불기둥",
     "slug": "stock-briefing",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -19,7 +19,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#021037",
+        "backgroundColor": "#0C112C",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -41,6 +41,7 @@
       [
         "expo-notifications",
         {
+          "icon": "./assets/notification-icon.png",
           "color": "#1f6f5c",
           "defaultChannel": "briefings"
         }
