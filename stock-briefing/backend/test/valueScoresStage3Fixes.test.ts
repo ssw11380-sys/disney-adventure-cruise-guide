@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { compactCompanyFacts, dividendCutOf, FactBook, mergeCompanyFacts, PREDECESSOR_CIK, spanKind, splitFactor } from "../src/analysis/secFacts.js";
+import { compactCompanyFacts, DIVIDEND_JUMP_RATIO, dividendCutOf, FactBook, mergeCompanyFacts, PREDECESSOR_CIK, spanKind, splitFactor } from "../src/analysis/secFacts.js";
 import { scoreWordingProblems } from "../src/analysis/scoreWording.js";
 import { REFERENCE_DROP_MAX_DAYS, REFERENCE_STALE_DAYS, referenceDrop } from "../src/services/valueReference.js";
 import { defaultValueSources, metricRow } from "../src/services/valueScoreService.js";
 import { mixText, topTieNote, VALUE_STATUS_TEXT } from "../src/services/valueScoreText.js";
 import { valueAboutOf, VALUE_ABOUT } from "../src/services/indicatorScoreText.js";
-import type { MetricScore } from "../src/analysis/valueScore.js";
+import { LITE_METRIC_ORDER, type MetricScore } from "../src/analysis/valueScore.js";
 import type { EdgarProvider } from "../src/providers/dart/edgar.js";
 import type { NasdaqScreener } from "../src/providers/market/nasdaqScreener.js";
 import { secExtra, SEC_EXTRA } from "./fixtures/valueScores/load.js";
@@ -32,6 +32,14 @@ describe("(a) 비교 기준: 새 기준을 거절하는 동안 지켜 둔 지난
     expect(referenceDrop(prev, shrunk("2026-10-10"))).toBeNull();
     // 2단계 규칙(35일)이면 10/11~10/31 사이에 새 기준은 거절되고 지난 기준은 '2주 넘게 갱신되지 않았습니다'가 되었다
   });
+  it("채택 비율은 그 기준의 지표 순서로 본다 — 한국 간이 기준의 당좌비율(D5, 미국 목록에 없음)이 비면 거절", () => {
+    const krCounts = { screener: 4400, mapped: 2044, withData: 2039, universe: 2039, general: 1985, financial: 54 };
+    const order = [...LITE_METRIC_ORDER];
+    const cov = (d5: number) => ({ general: Object.fromEntries(order.map((k) => [k, k === "D5" ? d5 : 0.99])), financial: { A1: 1, A3: 1 } });
+    const prevKr = { refDate: "2026-09-27", counts: krCounts, coverage: cov(0.98), order };
+    expect(referenceDrop(prevKr, { refDate: "2026-10-04", counts: krCounts, coverage: cov(0.4), order })).toMatch(/일반 D5 채택 비율 98% → 40%/);
+    expect(referenceDrop(prevKr, { refDate: "2026-10-04", counts: krCounts, coverage: cov(0.97), order })).toBeNull();
+  });
 });
 
 describe("(b) 분할 배수는 가장 가까운 흔한 배수로 (LRCX 10:1 이 9.5 로 덜 맞춰지던 것)", () => {
@@ -53,7 +61,7 @@ describe("(b) 분할 배수는 가장 가까운 흔한 배수로 (LRCX 10:1 이 
   });
 });
 
-describe("(c) 배당 삭감 표시: 특별배당을 준 해의 다음 해는 앞앞 해와도 견준다 (두 앞 해 모두보다 적을 때만)", () => {
+describe("(c) 배당 삭감 표시: 앞 해가 25% 넘게 뛴 해(특별배당일 수 있음)의 다음 해만 앞앞 해 수준과 견준다", () => {
   it("실제 재무: 특별배당 뒤 해로 잘못 붙던 FAST·CTAS·WRB·COST 는 표시 없음, 실제로 줄인 INTC 2023·T 2022·MMM 2024 는 표시", () => {
     const got = Object.fromEntries((["FAST", "CTAS", "WRB", "COST", "INTC", "T", "MMM", "LRCX", "F"] as const).map((t) => [t, book(t).dividendCut(AS_OF)]));
     expect(got).toEqual({ FAST: false, CTAS: false, WRB: false, COST: false, INTC: true, T: true, MMM: true, LRCX: false, F: true });
@@ -74,12 +82,18 @@ describe("(c) 배당 삭감 표시: 특별배당을 준 해의 다음 해는 앞
     expect(dividendCutOf(tail.slice(0, 3))).toBe(false);
     expect(dividendCutOf(tail)).toBe(true);
   });
-  it("규칙: 앞 해만 크고(특별배당) 앞앞 해보다는 크면 줄어든 해가 아님, 앞앞 해 값이 없으면 앞 해만, 분할은 두 쌍 모두 맞춤", () => {
+  it("규칙: 앞 해만 크게 뛰고(특별배당) 앞앞 해보다는 크면 줄어든 해가 아님, 앞앞 해 값이 없으면 앞 해만, 분할은 두 쌍 모두 맞춤", () => {
     const y = (dps: number | null, shares = 100) => ({ dps, shares });
+    expect(DIVIDEND_JUMP_RATIO).toBe(1.25);
     // COST 식: 3.84 → 19.36(특별 15) → 4.92
     expect(dividendCutOf([y(3.84), y(19.36), y(4.92)])).toBe(false);
     // 특별배당 없이 실제로 줄임
     expect(dividendCutOf([y(1), y(1.1), y(0.6)])).toBe(true);
+    // 배당을 올린 다음 해에 조금 줄임 (앞 해가 25% 안으로 오름 — 특별배당 아님): 앞앞 해보다는 많아도 줄어든 해 (첫 3단계 규칙은 놓쳤다, 검토 지적)
+    expect(dividendCutOf([y(1), y(1.2), y(1.1)])).toBe(true);
+    // 앞 해가 25% 넘게 뛰었으면 앞앞 해 수준 밑으로 내려갔을 때만
+    expect(dividendCutOf([y(1), y(1.3), y(1.1)])).toBe(false);
+    expect(dividendCutOf([y(1), y(1.3), y(0.9)])).toBe(true);
     // 앞앞 해 값이 없으면(배당 시작 해) 앞 해와만
     expect(dividendCutOf([y(null), y(1.46), y(0.74)])).toBe(true);
     // FAST 식: 앞앞 해가 2:1 분할 전(1.24 · 5.8억 주) → 앞 해 0.89(11.5억 주, 특별 포함) → 0.78 : 앞앞 해를 분할 뒤 기준 0.62 로 맞추면 0.78 은 줄지 않음

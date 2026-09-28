@@ -99,8 +99,16 @@ const LITE_HIGH_LOW: Partial<Record<MetricKey, [string, string]>> = {
 };
 const highLow = (k: MetricKey, grade?: "full" | "lite") => (grade === "lite" ? (LITE_HIGH_LOW[k] ?? HIGH_LOW[k]) : HIGH_LOW[k]);
 export const metricMeaning = (k: MetricKey, grade?: "full" | "lite") => `100에 가까울수록: ${highLow(k, grade)[0].replace(/입니다\.$/, "").replace(/\.$/, "")}`;
-/** 묶음 설명 (한국 간이 성장은 '최근 2년') */
-export const familyAbout = (k: ValueFamilyKey, grade?: "full" | "lite") => (grade === "lite" && k === "growth" ? "높을수록 최근 2년 늘어난 폭이 큰 편" : VALUE_FAMILY_ABOUT[k]);
+/**
+ * 한국 간이 계산(3단계)의 묶음 설명: 성장은 '최근 2년'(연간 3개 결산), 주주환원은 배당수익률 하나뿐이라 '주식 수'를 말하지 않는다
+ * (간이 계산에는 주식 수 변화 지표가 없다 — 같은 카드의 KR_LITE_NOTE 와 어긋나던 것, 검토 지적)
+ */
+export const LITE_FAMILY_ABOUT: Partial<Record<ValueFamilyKey, string>> = {
+  growth: "높을수록 최근 2년 늘어난 폭이 큰 편",
+  payout: "높을수록 주가에 비해 배당이 많은 편",
+};
+/** 묶음 설명 (한국 간이는 LITE_FAMILY_ABOUT 먼저) */
+export const familyAbout = (k: ValueFamilyKey, grade?: "full" | "lite") => (grade === "lite" ? (LITE_FAMILY_ABOUT[k] ?? VALUE_FAMILY_ABOUT[k]) : VALUE_FAMILY_ABOUT[k]);
 export const MID_SENTENCE = "비교한 회사들 가운데쯤입니다.";
 /** 위치 점수 → 문장 (67 이상 높을 때, 33 이하 낮을 때, 그 사이 가운데쯤) */
 export function positionSentence(k: MetricKey, score: number, grade?: "full" | "lite"): string {
@@ -270,24 +278,29 @@ export function gwaWa(word: string): "과" | "와" {
   return "와";
 }
 
-/** 비교 무리 이름: 업종 · 부문 · 시장 (금융사 경로의 '시장'은 '금융사 전체' — 금융사끼리만 비교하므로, 검토 지적) */
-export const marketName = (path: ValuePath) => (path === "financial" ? "금융사 전체" : "시장");
-export const levelName = (level: PeerLevel | null, path: ValuePath) => (level === "sector" ? "부문" : level === "market" ? marketName(path) : "업종");
+/** 비교 시장: 미국(US — 이름에 나라를 붙이지 않음) · 한국(KR — '한국 시장'·'한국 금융사 전체', 설명 줄·머리 문장과 같은 이름) */
+export type NameMarket = "US" | "KR";
 /**
- * 쓴 비교 비중: '업종 50 · 시장 20 · 지난 5년 30' (없는 비교는 비례 배분한 값, 금융사는 '금융사 전체 20').
+ * 비교 무리 이름: 업종 · 부문 · 시장 (금융사 경로의 '시장'은 '금융사 전체' — 금융사끼리만 비교하므로, 검토 지적).
+ * 한국 종목은 '한국 시장'·'한국 금융사 전체' — 같은 카드의 설명 줄·머리 문장·표시가 그렇게 부른다 (지표 줄만 '시장'이던 것, 검토 지적)
+ */
+export const marketName = (path: ValuePath, market: NameMarket = "US") => `${market === "KR" ? "한국 " : ""}${path === "financial" ? "금융사 전체" : "시장"}`;
+export const levelName = (level: PeerLevel | null, path: ValuePath, market: NameMarket = "US") => (level === "sector" ? "부문" : level === "market" ? marketName(path, market) : "업종");
+/**
+ * 쓴 비교 비중: '업종 50 · 시장 20 · 지난 5년 30' (없는 비교는 비례 배분한 값, 금융사는 '금융사 전체 20', 한국은 '한국 시장 29').
  * 업종 자리가 시장으로 내려가면(같은 업종 회사가 적음) 두 비교가 같은 무리라 한 항목으로 합친다 — '시장 50 · 시장 50' 대신 '시장 100' (검토 지적)
  */
-export function mixText(mix: Partial<Record<CompareKey, number>>, level: PeerLevel | null, path: ValuePath = "general"): string {
-  const name = (k: CompareKey) => (k === "industry" ? levelName(level, path) : k === "market" ? marketName(path) : "지난 5년");
+export function mixText(mix: Partial<Record<CompareKey, number>>, level: PeerLevel | null, path: ValuePath = "general", market: NameMarket = "US"): string {
+  const name = (k: CompareKey) => (k === "industry" ? levelName(level, path, market) : k === "market" ? marketName(path, market) : "지난 5년");
   const sums = new Map<string, number>();
   for (const k of Object.keys(mix) as CompareKey[]) sums.set(name(k), (sums.get(name(k)) ?? 0) + mix[k]!);
   return [...sums].map(([n, w]) => `${n} ${Math.round(w)}`).join(" · ");
 }
-/** 위치 줄: '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' (금융사는 '금융사 전체 안') */
-export function positionText(pos: Partial<Record<CompareKey, number>>, level: PeerLevel | null, path: ValuePath = "general"): string {
+/** 위치 줄: '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' (금융사는 '금융사 전체 안', 한국은 '한국 시장 안') */
+export function positionText(pos: Partial<Record<CompareKey, number>>, level: PeerLevel | null, path: ValuePath = "general", market: NameMarket = "US"): string {
   const bits: string[] = [];
-  if (pos.industry !== undefined) bits.push(`${levelName(level, path)} 안 위치 ${Math.floor(pos.industry + 0.5)}/100`);
-  if (pos.market !== undefined && level !== "market") bits.push(`${marketName(path)} 안 ${Math.floor(pos.market + 0.5)}/100`);
+  if (pos.industry !== undefined) bits.push(`${levelName(level, path, market)} 안 위치 ${Math.floor(pos.industry + 0.5)}/100`);
+  if (pos.market !== undefined && level !== "market") bits.push(`${marketName(path, market)} 안 ${Math.floor(pos.market + 0.5)}/100`);
   if (pos.own !== undefined) bits.push(`지난 5년 중 ${Math.floor(pos.own + 0.5)}/100`);
   return bits.join(" · ");
 }
@@ -350,17 +363,21 @@ export function valueVersionLine(ref: string | null): string {
   return [`계산 방식 ${VALUE_VERSION}`, "재무 SEC(미국 증권거래위원회) 공시", "업종 분류 Nasdaq", ref ? `비교 기준 ${dateKo(ref)}` : null].filter(Boolean).join(" · ");
 }
 
-/** 구성·계산 방법 (2단계: 가치·추세·종합, 3단계: 한국 간이 — kr 이 꺼져 있으면 한국은 '지금 계산하지 않습니다') */
+/**
+ * 구성·계산 방법 (2단계: 가치·추세·종합, 3단계: 한국 간이 — kr 이 꺼져 있으면 한국은 '지금 계산하지 않습니다').
+ * 첫 줄은 미국 종목 계산이라고 밝히고, 한국 줄에 지표 수(일반 11 · 금융사 8)와 '지난 5년 비교 없음'을 적는다 — 한국 카드에서 '약 20개 ·
+ * 지난 5년과 비교'로 읽히던 것 (검토 지적)
+ */
 export function howLinesV2(kr = true): string[] {
   return [
-    "가치: 재무 숫자 약 20개를 같은 업종·시장 회사들(그리고 이 회사의 지난 5년)과 비교한 순위를, 5개 묶음 비중으로 평균했습니다. 여러 순위의 평균이라 아주 높거나 낮은 점수는 드뭅니다.",
+    "가치(미국 종목): 재무 숫자 약 20개를 같은 업종·시장 회사들(그리고 이 회사의 지난 5년)과 비교한 순위를, 5개 묶음 비중으로 평균했습니다. 여러 순위의 평균이라 아주 높거나 낮은 점수는 드뭅니다.",
     "가치 묶음 비중: 주가 수준 30 · 수익성과 이익의 질 25 · 재무 건전성 20 · 성장 15 · 주주환원 10 (금융사는 35 · 30 · 10 · 15 · 10).",
     "추세: 최근 약 1년 일봉으로 16개 항목을 고정된 기준에 따라 계산했습니다. 50은 '뚜렷한 추세 없음'이고, 최근 5거래일 점수의 평균을 보여 줍니다.",
     "추세와 모멘텀 묶음(합쳐 70%)은 서로 겹치는 흐름을 봅니다. 여러 지표를 섞었지만 몇 가지 흐름이 겹칩니다.",
     "종합: 화면에 보이는 두 점수를 더해 2로 나눈 값입니다. 두 점수는 만드는 방식이 달라(가치는 다른 회사와 비교한 순위, 추세는 고정 기준) 평균의 뜻은 제한적입니다.",
     "비중은 설명하기 쉽도록 정한 설계값이며, 과거 수익률에 맞춰 고르지 않았습니다. 몇 점 차이는 큰 뜻이 없습니다.",
     kr
-      ? "한국 종목은 네이버 증권 재무 요약(최근 5개 분기·3개 결산)으로 간이 계산하고('간이 계산' 표시), 한국 상장 회사끼리만 비교합니다. 잉여현금흐름·기업가치 같은 몇 지표는 빠집니다."
+      ? "가치(한국 종목): 네이버 증권 재무 요약(최근 5개 분기·3개 결산)으로 간이 계산합니다('간이 계산' 표시). 재무 숫자 11개(금융사는 8개)를 같은 업종·한국 시장 회사들과만 비교하고, 이 회사의 지난 5년과는 비교하지 않습니다. 잉여현금흐름·기업가치 같은 몇 지표는 빠집니다."
       : "한국 종목 가치 지표 점수는 지금 계산하지 않습니다.",
     "한국 종목과 미국 종목은 쓰는 재무 자료와 비교 대상이 달라, 서로의 가치 지표 점수를 견주지 않습니다.",
     "지난 약 11년 미국·한국 대형주 자료로 맞춰 보니, 점수가 높았던 종목이 그 뒤 더 오른 관계는 우연과 구별하기 어려울 만큼 약했습니다. 가치 지표를 흉내 낸 간이 계산으로 맞춰 본 기간에는 점수가 높았던 종목이 오히려 덜 올랐습니다.",
@@ -433,7 +450,7 @@ export const industryKo = (s: string | null) => (s ? (INDUSTRY_KO[s] ?? s) : nul
 export const LITE_BADGE = "간이 계산";
 /** 한국 종목 상세 카드 안내 (간이 계산이 무엇을 빼는지 · 미국과 견주지 않음 — 설계 B8) */
 export const KR_LITE_NOTE =
-  "한국 종목은 네이버 증권의 재무 요약(최근 5개 분기·3개 결산)으로 계산한 간이 계산입니다. 잉여현금흐름·기업가치·투하자본이익률·이익 안정성·주식 수 변화 지표가 없고, 한국 상장 회사끼리만 비교해 미국 종목 점수와 견주지 않습니다.";
+  "한국 종목은 네이버 증권의 재무 요약(최근 5개 분기·3개 결산)으로 계산한 간이 계산입니다. 잉여현금흐름·기업가치·투하자본이익률·이익 안정성·주식 수 변화 지표가 없고, 이 회사의 지난 5년과도 비교하지 않습니다. 한국 상장 회사끼리만 비교해 미국 종목 점수와 견주지 않습니다.";
 /** 비교 회사 첫 채우기 중 (밤마다 나눠 받음 — 며칠 걸림, 앱이 다시 묻지 않는 끝나는 상태) */
 export const krFirstFillText = (pct: number) => `비교할 한국 회사 재무를 처음 모으는 중입니다 (밤마다 나눠 받아 며칠 걸립니다 · 지금 ${pct}%)`;
 /** 머리 문장 (한국) */

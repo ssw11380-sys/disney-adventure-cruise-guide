@@ -85,10 +85,11 @@ import {
   valueDatesLine,
   valueHeadline,
   valueVersionLine,
+  type NameMarket,
 } from "./valueScoreText.js";
 
 /**
- * 가치 지표 점수 (3-44 2단계, 플래그 indicatorScores + valueScore). 미국 보통주만 — 한국은 3단계('계산 준비 중'), ETF·스팩·우선주·리츠는 '대상 아님'.
+ * 가치 지표 점수 (3-44 2단계, 플래그 indicatorScores + valueScore). 미국 보통주 — 한국 보통주는 3단계 간이 계산(krValueService), ETF·스팩·우선주·리츠는 '대상 아님'.
  *  - 재무: SEC companyfacts 를 줄여 value_fundamentals 에 저장. 등록 종목은 장 마감 뒤(뉴욕 17:30, 추세 계산 직전)에 20시간 넘게 묵었으면 다시 받고,
  *    미등록 종목은 처음 열 때 백그라운드로 받는다. 화면 요청은 SEC 를 기다리지 않는다 (저장한 값만 읽음 — 없으면 '계산 준비 중')
  *  - 비교 기준: 주 1회(토요일 09:00 KST) Nasdaq 스크리너 + SEC frames → value_references (최근 3줄). 없거나 7일 넘게 묵으면 매일 09:15 · 켤 때 다시
@@ -826,6 +827,8 @@ export interface RowCtx {
   grade?: ValueGrade;
   /** 연간 이력의 가장 최근 회계연도 끝 — 연간 재무로 계산한 지표의 기준 글 ('2026년 1월 결산 연간 기준') */
   annualEnd: string | null;
+  /** 비교 시장 (KR 이면 위치·가운데값·비중 글의 무리 이름이 '한국 시장'·'한국 금융사 전체' — 없으면 미국) */
+  market?: NameMarket;
 }
 /** 연간 재무로 계산한 지표 (최근 4분기 값이 아님): 성장 3년 · 이익·ROE 안정성 5년 · 주식 수 변화 3년 */
 export const ANNUAL_METRICS: ReadonlySet<MetricKey> = new Set<MetricKey>(["C1", "C2", "C3", "B5", "F2", "E2"]);
@@ -842,9 +845,9 @@ function metricSentence(m: MetricScore, grade?: ValueGrade): string {
 
 export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annualEnd: null }): ValueMetricRow {
   const level = m.peer?.level ?? null;
-  const lname = levelName(level, ctx.path);
+  const lname = levelName(level, ctx.path, ctx.market);
   const median = m.peer ? medianText(m.key, m.peer.median) : null;
-  const positions = m.score !== null && m.rule !== "zeroLoss" ? positionText(m.pos, level, ctx.path) || null : null;
+  const positions = m.score !== null && m.rule !== "zeroLoss" ? positionText(m.pos, level, ctx.path, ctx.market) || null : null;
   const notes: Array<string | null> = [m.blend && m.adopted ? BLEND_NOTE : null];
   if (m.adopted && m.score !== null && tieDriven(m)) notes.push(TIE_NOTE);
   // 맨 위 규칙(순현금 등): 같은 규칙 회사끼리 같은 순위라 보이는 위치는 그 무리의 가운데 — 그 무리 비율을 보이는 위치에서 되짚어 적는다
@@ -859,7 +862,7 @@ export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annua
     basis: m.adopted && m.score !== null && ANNUAL_METRICS.has(m.key) && ctx.annualEnd ? annualBasis(ctx.annualEnd) : null,
     peerMedian: median && m.score !== null ? `${lname} 가운데값 ${median}` : null,
     positions,
-    mix: m.score !== null ? mixText(m.mix, level, ctx.path) : null,
+    mix: m.score !== null ? mixText(m.mix, level, ctx.path, ctx.market) : null,
     score: m.score === null ? null : roundScore(m.score),
     text: metricSentence(m, ctx.grade),
     meaning: metricMeaning(m.key, ctx.grade),

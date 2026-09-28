@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildKrReference,
   compactKrFacts,
+  krAnnualAvailable,
   krAux,
   krAvailable,
   krCandidates,
@@ -13,8 +14,12 @@ import {
   krLiteMetrics,
   KR_CAP_CUT,
   KR_FINANCIAL_UPJONG,
+  KR_KEEP_ANNUAL,
+  KR_KEEP_QUARTERS,
   KR_NIGHT_CAP,
+  mergeKrFacts,
   monthEndOf,
+  type KrColRow,
   type KrFacts,
   type KrMember,
 } from "../src/analysis/krValue.js";
@@ -22,10 +27,13 @@ import { scoreWordingProblems } from "../src/analysis/scoreWording.js";
 import { LITE_CORE_METRICS, LITE_FAMILY_METRICS, LITE_METRIC_ORDER, PeerBook, scoreValue, VALUE_WEIGHTS } from "../src/analysis/valueScore.js";
 import { NaverDiscover } from "../src/providers/market/naverDiscover.js";
 import { NaverFinanceClient, parseKrNumber, parseNaverFinance, parseNaverIntegration } from "../src/providers/market/naverFinance.js";
+import { referenceDrop } from "../src/services/valueReference.js";
 import { familyRow } from "../src/services/valueScoreService.js";
 import {
   familyAbout,
   howLinesV2,
+  mixText,
+  positionText,
   krCauseQuarter,
   krDatesLine,
   krFirstFillText,
@@ -40,7 +48,7 @@ import {
   VALUE_STATUS_TEXT,
 } from "../src/services/valueScoreText.js";
 import { valueAboutOf } from "../src/services/indicatorScoreText.js";
-import { KR_CODES, membersRaw, naverRaw, type KrCode } from "./fixtures/krValue/load.js";
+import { KR_CODES, krWorld, membersRaw, naverRaw, type KrCode } from "./fixtures/krValue/load.js";
 
 /**
  * 한국 간이 가치 (3-44 3단계) — 순수 함수 시험. 네트워크 없음.
@@ -112,14 +120,21 @@ describe("입력 만들기 (최근 4분기 · 최근 분기 잔액 · 연간 2�
     // 되짚은 주식 수: 지배주주순이익 ÷ EPS = 약 67억 주 (보통주 59억 + 우선주 8억 — 네이버 EPS 기준)
     expect(inp.shares! / 1e9).toBeCloseTo(6.73, 1);
   });
-  it("미래 자료를 섞지 않는다: 분기는 끝 + 45일, 연간은 결산 + 90일부터", () => {
+  it("미래 자료를 섞지 않는다: 분기는 끝 + 45일, 연간은 결산 + 90일 — 같은 달 4분기 열을 쓸 수 있으면(+45일) 그날부터", () => {
     expect([krAvailable("2026-06", 45, "2026-08-13"), krAvailable("2026-06", 45, "2026-08-14"), krAvailable("2025-12", 90, "2026-03-30"), krAvailable("2025-12", 90, "2026-03-31")]).toEqual([false, true, false, true]);
     const before = krInputs(factsOf("005930"), "2026-08-13")!;
     expect(before.quarter).toBe("2026-03");
     expect(before.ttm.eps).toBe(733 + 1_783 + 2_864 + 6_993);
-    const march = krInputs(factsOf("005930"), "2026-03-30")!;
-    expect(march.annual.map((a) => a.k)).toEqual(["2023-12", "2024-12"]);
-    expect(march.fiscalEnd).toBe("2024-12-31");
+    // 2025.12 분기 열이 있어 2/14(+45일)부터 2025 결산도 쓴다 — 4분기와 연간 실적은 같은 공시로 함께 나온다
+    const f = factsOf("005930");
+    expect(krInputs(f, "2026-02-13")!.annual.map((a) => a.k)).toEqual(["2023-12", "2024-12"]);
+    expect(krInputs(f, "2026-02-14")!.annual.map((a) => a.k)).toEqual(["2023-12", "2024-12", "2025-12"]);
+    expect(krInputs(f, "2026-03-30")!.fiscalEnd).toBe("2025-12-31");
+    expect([krAnnualAvailable(f, "2025-12", "2026-02-13"), krAnnualAvailable(f, "2025-12", "2026-02-14")]).toEqual([false, true]);
+    // 같은 달 분기 열이 없으면 결산 + 90일
+    const noQ4: KrFacts = { ...f, q: f.q.filter((r) => r[0] !== "2025-12") };
+    expect(krInputs(noQ4, "2026-03-30")!.annual.map((a) => a.k)).toEqual(["2023-12", "2024-12"]);
+    expect(krInputs(noQ4, "2026-03-31")!.annual.map((a) => a.k)).toEqual(["2023-12", "2024-12", "2025-12"]);
     expect(krInputs(factsOf("005930"), "2025-08-01")).toBeNull();
     expect(monthEndOf("2026-02")).toBe("2026-02-28");
   });
@@ -130,6 +145,88 @@ describe("입력 만들기 (최근 4분기 · 최근 분기 잔액 · 연간 2�
     const hole: KrFacts = { ...f, q: f.q.map((r) => (r[0] === "2026-03" ? ([r[0], null, ...r.slice(2)] as typeof r) : r)) };
     expect(krInputs(hole, AS_OF)!.ttm.rev).toBeNull();
     expect(krInputs(hole, AS_OF)!.ttm.eps).not.toBeNull();
+  });
+});
+
+describe("1~3월에도 성장 묶음이 빠지지 않는다 (새 결산이 실적 열로 바뀌며 가장 오래된 결산이 표에서 빠지는 때 — 검토 지적)", () => {
+  /** 표 모양 바꾸기 (시험용): 있는 열의 값을 빌려 다른 끝 달 열을 만든다 (scale 배) */
+  const pick = (rows: readonly KrColRow[], k: string, from: string, scale = 1): KrColRow => {
+    const src = rows.find((r) => r[0] === from)!;
+    return [k, ...src.slice(1).map((v) => (v === null ? null : (v as number) * scale))] as KrColRow;
+  };
+  /** 2026년 1월 표: 2025 결산은 아직 추정 열 → 연간 2022(시험용 — 2023 값 × 0.9, 실제 값 아님)·2023·2024, 분기 2024.09~2025.09 */
+  const janShape = (f: KrFacts): KrFacts => ({
+    ...f,
+    a: [pick(f.a, "2022-12", "2023-12", 0.9), pick(f.a, "2023-12", "2023-12"), pick(f.a, "2024-12", "2024-12")],
+    q: [pick(f.q, "2024-09", "2025-09", 0.8), pick(f.q, "2024-12", "2025-12", 0.8), pick(f.q, "2025-03", "2026-03", 0.8), pick(f.q, "2025-06", "2025-06"), pick(f.q, "2025-09", "2025-09")],
+  });
+  /** 2026년 3월 표: 잠정 실적 뒤 2025 결산이 실적 열 → 2022 결산은 표에서 빠짐. 연간 2023~2025, 분기 2024.12~2025.12 (withQ4 false: 4분기 열이 아직 없음) */
+  const marShape = (f: KrFacts, withQ4 = true): KrFacts => ({
+    ...f,
+    a: f.a.filter((r) => r[0] >= "2023-12" && r[0] <= "2025-12"),
+    q: [pick(f.q, "2024-12", "2025-12", 0.8), pick(f.q, "2025-03", "2026-03", 0.8), pick(f.q, "2025-06", "2025-06"), pick(f.q, "2025-09", "2025-09"), ...(withQ4 ? [pick(f.q, "2025-12", "2025-12")] : [])],
+  });
+
+  it("삼성전자 2026-03-20, 3월 표만 있을 때(이어 둔 앞 결산 없음 — 첫 채우기 등): 4분기 열을 쓸 수 있어 2025 대 2023 성장 — 성장 묶음 그대로, 비중 100", () => {
+    const { members, facts } = krWorld();
+    const ref = new PeerBook(buildKrReference(members, facts, AS_OF));
+    const f = marShape(factsOf("005930"));
+    const inp = krInputs(f, "2026-03-20")!;
+    expect(inp.annual.map((a) => a.k)).toEqual(["2023-12", "2024-12", "2025-12"]);
+    expect(inp.quarter).toBe("2025-12");
+    const m = krLiteMetrics(inp, 60_000, false);
+    expect([m.C1?.x, m.C2?.x, m.C3?.x].every((x) => typeof x === "number" && Number.isFinite(x))).toBe(true);
+    const r = scoreValue({ grade: "lite", path: "general", sector: null, industry: "반도체와반도체장비", cik: "005930", metrics: m, own: {}, peers: ref });
+    expect(r.families.find((x) => x.key === "growth")!.valid).toBe(true);
+    expect([r.status, r.coverageWeight]).toEqual(["ok", 100]);
+  });
+
+  it("잠정 실적 뒤 4분기 +45일 전(2026-02-10): 새로 받은 표에서 빠진 2022 결산을 이어 두어 2024 대 2022 성장 — 이어 두지 않으면 결산 2개뿐('연간 재무 부족')", () => {
+    const jan = janShape(factsOf("005930"));
+    const mar = marShape(factsOf("005930"));
+    const merged = mergeKrFacts(mar, jan);
+    expect(merged.a.map((r) => r[0])).toEqual(["2022-12", "2023-12", "2024-12", "2025-12"]);
+    expect(merged.q.map((r) => r[0])).toEqual(["2024-09", "2024-12", "2025-03", "2025-06", "2025-09", "2025-12"]);
+    const kept = krInputs(merged, "2026-02-10")!;
+    expect(kept.annual.map((a) => a.k)).toEqual(["2022-12", "2023-12", "2024-12"]);
+    expect(krLiteMetrics(kept, 60_000, false).C1!.x).toBeCloseTo(Math.sqrt(jan.a[2]![1]! / jan.a[0]![1]!) - 1, 12);
+    const fresh = krInputs(mar, "2026-02-10")!;
+    expect(fresh.annual.map((a) => a.k)).toEqual(["2023-12", "2024-12"]);
+    expect(krLiteMetrics(fresh, 60_000, false).C1).toMatchObject({ x: null, why: "fewYears" });
+  });
+
+  it("주 1회 비교 기준: 1월 표로 만든 지난 기준(3/8) 뒤 3월 표로 바뀌어도(3/15) 성장 지표 채택 비율이 그대로라 새 기준을 거절하지 않는다", () => {
+    const { members, facts } = krWorld();
+    const map = (fn: (f: KrFacts) => KrFacts) => new Map([...facts].map(([k, f]) => [k, fn(f)]));
+    const jan = map(janShape);
+    const prev = buildKrReference(members, jan, "2026-03-08");
+    expect(prev.coverage.general["C1"]).toBe(1);
+    // 4분기 열이 있으면 새로 받은 표만으로도
+    const next = buildKrReference(members, map((f) => marShape(f)), "2026-03-15", prev);
+    expect([next.coverage.general["C1"], next.coverage.general["C2"], next.coverage.general["C3"]]).toEqual([1, 1, 1]);
+    expect(referenceDrop(prev, next)).toBeNull();
+    // 4분기 열이 아직 없고 앞 결산도 이어 두지 않았으면(예전 규칙) 성장 채택 비율이 0 → 새 기준 거절 (지적된 모습)
+    const bare = buildKrReference(members, map((f) => marShape(f, false)), "2026-03-15", prev);
+    expect(bare.coverage.general["C1"]).toBe(0);
+    expect(referenceDrop(prev, bare)).toMatch(/일반 C1 채택 비율 100% → 0%/);
+    // 이어 두면 4분기 열이 없어도 2024 대 2022 로 그대로
+    const kept = buildKrReference(members, new Map([...facts].map(([k, f]) => [k, mergeKrFacts(marShape(f, false), janShape(f))])), "2026-03-15", prev);
+    expect(kept.coverage.general["C1"]).toBe(1);
+    expect(referenceDrop(prev, kept)).toBeNull();
+  });
+
+  it("이어 두기 규칙: 같은 끝 달은 새 값, 연간 5개·분기 8개까지, 다른 종목 줄은 섞지 않음", () => {
+    const f = factsOf("005930");
+    const old: KrFacts = { ...f, a: [pick(f.a, "2020-12", "2023-12"), pick(f.a, "2021-12", "2023-12"), pick(f.a, "2022-12", "2023-12"), pick(f.a, "2023-12", "2023-12", 2)], q: Array.from({ length: 8 }, (_, i) => pick(f.q, `${2023 + Math.floor(i / 4)}-${String(3 * (i % 4) + 3).padStart(2, "0")}`, "2025-06")) };
+    const m = mergeKrFacts(f, old);
+    expect(m.a.map((r) => r[0])).toEqual(["2021-12", "2022-12", "2023-12", "2024-12", "2025-12"]);
+    expect(m.a.length).toBe(KR_KEEP_ANNUAL);
+    // 2023 결산은 새로 받은 값 (옛 줄은 2배로 바꿔 둔 것)
+    expect(m.a[2]).toEqual(f.a[0]);
+    expect(m.q.length).toBe(KR_KEEP_QUARTERS);
+    expect(m.q.at(-1)![0]).toBe("2026-06");
+    expect(mergeKrFacts(f, { ...old, code: "000660" })).toBe(f);
+    expect(mergeKrFacts(f, null)).toBe(f);
   });
 });
 
@@ -216,6 +313,18 @@ describe("재무 다시 받기 (분기에 한 번 돌아가며 — 공시가 났
     // 공시와 상관없이 120일
     expect(krDue(row("2026-06", "2026-06-01"), "2026-09-29")).toEqual({ due: true, priority: 3, why: "rotation" });
     expect(KR_NIGHT_CAP).toBe(700);
+  });
+  it("다음 분기가 결산 달 분기(4분기)면 결산 + 90일(+3일)부터 — 잠정 실적을 내지 않는 회사는 사업보고서로 나오므로 2월 중순~3월 말에 주마다 다시 받지 않는다", () => {
+    // 2025.09 까지 있음 → 2025.12 분기(12월 결산)는 12/31 + 93 = 4/3 부터 (예전 45+3 이면 2/17 부터 7일마다)
+    expect(krDue(row("2025-09", "2026-01-10", "2024-12"), "2026-02-17").due).toBe(false);
+    expect(krDue(row("2025-09", "2026-01-10", "2024-12"), "2026-04-02").due).toBe(false);
+    expect(krDue(row("2025-09", "2026-01-10", "2024-12"), "2026-04-03")).toEqual({ due: true, priority: 1, why: "newQuarter" });
+    // 연간 열을 모르면 12월 결산으로 본다
+    expect(krDue(row("2025-09", "2026-01-10"), "2026-02-17").due).toBe(false);
+    // 3월 결산 회사: 2025.12 분기는 보통 분기 (+48일), 2026.03 분기가 결산 달 분기 (+93일)
+    expect(krDue(row("2025-09", "2025-12-01", "2025-03"), "2026-02-17")).toMatchObject({ due: true, why: "newQuarter" });
+    expect(krDue(row("2025-12", "2026-02-17", "2025-03"), "2026-05-18").due).toBe(false);
+    expect(krDue(row("2025-12", "2026-02-17", "2025-03"), "2026-07-02")).toMatchObject({ due: true, why: "newQuarter" });
   });
 });
 
@@ -399,5 +508,27 @@ describe("문구 (금지어 · 미래형) — 한국 간이 틀", () => {
     // 한국 종목과 미국 종목을 견주지 않는다는 줄 (설계 B8)
     expect(howLinesV2(true).join(" ")).toMatch(/서로의 가치 지표 점수를 견주지 않습니다/);
     expect(howLinesV2(true).join(" ")).not.toMatch(/다음 단계에서/);
+  });
+  it("한국 카드에서 어긋나던 글 (검토 지적): 주주환원 설명에 '주식 수' 없음 · 계산 방법 첫 줄은 미국 종목 · 한국 줄은 지표 수와 '지난 5년 비교 없음'", () => {
+    // 간이 계산 주주환원은 배당수익률 하나 — 같은 카드의 안내('주식 수 변화 지표가 없고')와 맞춘다
+    expect(familyAbout("payout", "lite")).toBe("높을수록 주가에 비해 배당이 많은 편");
+    expect(familyAbout("payout")).toBe("높을수록 배당이 많거나 주식 수가 줄어든 편");
+    expect(KR_LITE_NOTE).toMatch(/주식 수 변화 지표가 없고, 이 회사의 지난 5년과도 비교하지 않습니다/);
+    const how = howLinesV2(true);
+    expect(how[0]).toMatch(/^가치\(미국 종목\): 재무 숫자 약 20개/);
+    const krLine = how.find((l) => l.startsWith("가치(한국 종목)"))!;
+    expect(krLine).toMatch(/재무 숫자 11개\(금융사는 8개\)/);
+    expect(krLine).toMatch(/이 회사의 지난 5년과는 비교하지 않습니다/);
+    // 지표 수는 간이 묶음 표와 같다
+    expect(Object.values(LITE_FAMILY_METRICS.general).flat().length).toBe(11);
+    expect(Object.values(LITE_FAMILY_METRICS.financial).flat().length).toBe(8);
+    expect([...how, familyAbout("payout", "lite")].flatMap((t) => scoreWordingProblems(t))).toEqual([]);
+  });
+  it("지표 줄의 무리 이름도 '한국 시장'·'한국 금융사 전체' (설명 줄·머리 문장과 같게 — 미국은 그대로)", () => {
+    expect(mixText({ industry: 71.4, market: 28.6 }, "industry", "general", "KR")).toBe("업종 71 · 한국 시장 29");
+    expect(mixText({ industry: 50, market: 50 }, "market", "financial", "KR")).toBe("한국 금융사 전체 100");
+    expect(positionText({ industry: 72, market: 64 }, "industry", "general", "KR")).toBe("업종 안 위치 72/100 · 한국 시장 안 64/100");
+    expect(positionText({ industry: 72 }, "market", "financial", "KR")).toBe("한국 금융사 전체 안 위치 72/100");
+    expect(mixText({ industry: 71.4, market: 28.6 }, "industry")).toBe("업종 71 · 시장 29");
   });
 });

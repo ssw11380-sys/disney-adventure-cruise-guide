@@ -255,9 +255,17 @@ export function splitFactor(before: number | null, after: number | null): number
 }
 
 /**
- * 배당 삭감 판정 (순수 함수): 최근 6개 회계연도(이웃한 두 해 5쌍)에서 뒤 해의 1주당 배당이 앞 해와 앞앞 해(years 가 7개면 첫 쌍의 앞앞 해는
- * 7번째 앞 해) 모두의 99% 밑이면 줄어든 해. 주식 분할·병합은 splitFactor 로 앞 해 기준에 맞춘다. 두 해 모두 값이 있는 쌍만 본다 —
- * 앞앞 해 값이 없으면 앞 해만 (특별배당인지 알 수 없어 예전 규칙 그대로)
+ * 앞 해 1주당 배당이 앞앞 해보다 이만큼(배) 넘게 뛰었으면 특별배당·일시 배당이 섞였을 수 있다고 본다. 2단계 검토의 특별배당 회사들
+ * (COST 5.0배 · WRB 4.3배 · CTAS 2.0배 · F 2.5배 · FAST 1.44배·1.61배)이 모두 넘고, 정기 배당을 올린 해는 대개 이 안이다 (1.00 → 1.20 = 1.2배)
+ */
+export const DIVIDEND_JUMP_RATIO = 1.25;
+
+/**
+ * 배당 삭감 판정 (순수 함수): 최근 6개 회계연도(이웃한 두 해 5쌍)에서 뒤 해의 1주당 배당이 앞 해의 99% 밑이면 줄어든 해.
+ * 다만 앞 해가 앞앞 해보다 25% 넘게 뛰었으면(특별배당일 수 있음) 뒤 해가 앞앞 해 수준 밑으로 내려갔을 때만 줄어든 해 — 특별배당을 준 해의
+ * 다음 해만 달리 본다 (예전 3단계 첫 규칙은 모든 해에 '앞 두 해 모두보다 적을 때'를 적용해 1.00 → 1.20 → 1.10 같은 실제 삭감을 놓쳤다,
+ * 검토 지적). years 가 7개면 첫 쌍의 앞앞 해는 7번째 앞 해. 주식 분할·병합은 splitFactor 로 앞 해 기준에 맞춘다. 두 해 모두 값이 있는
+ * 쌍만 본다 — 앞앞 해 값이 없으면 앞 해만 (특별배당인지 알 수 없어 예전 규칙 그대로)
  */
 export function dividendCutOf(years: ReadonlyArray<{ dps: number | null; shares: number | null }>): boolean {
   const ys = years.slice(-7);
@@ -269,10 +277,10 @@ export function dividendCutOf(years: ReadonlyArray<{ dps: number | null; shares:
     const bAdj = b.dps * splitFactor(a.shares, b.shares);
     if (!(bAdj < a.dps * DIVIDEND_CUT_RATIO)) continue;
     const z = i >= 2 ? ys[i - 2]! : null;
-    // 앞앞 해 (앞 해 주식 수 기준으로 맞춤): 특별배당으로 앞 해만 컸던 것이면 앞앞 해보다는 줄지 않았다
+    // 앞앞 해 (앞 해 주식 수 기준으로 맞춤): 앞 해가 크게 뛰었으면(특별배당) 앞앞 해 수준보다 줄었을 때만
     if (z && z.dps !== null && z.dps > 0) {
       const zAdj = z.dps / splitFactor(z.shares, a.shares);
-      if (!(bAdj < zAdj * DIVIDEND_CUT_RATIO)) continue;
+      if (a.dps > zAdj * DIVIDEND_JUMP_RATIO && !(bAdj < zAdj * DIVIDEND_CUT_RATIO)) continue;
     }
     return true;
   }
@@ -391,11 +399,11 @@ export class FactBook {
    *  - 회계연도(연간 이력의 기간 끝) 최근 6개 → 이웃한 두 해 5쌍. 두 해 모두 연간 주당배당(선언액·지급액 태그) 값이 있을 때만 비교한다 —
    *    배당을 아예 멈춘 해는 SEC 에 주당배당 줄이 없는 일이 많아 알 수 없다 (0 으로 보고했으면 줄어든 것으로 센다)
    *  - 주식 분할·병합: 앞 해 값이 분할 전 보고서에만 있으면 주당배당과 주식 수가 모두 분할 전 기준이다. 두 해 희석 주식 수가 한 해에
-   *    40% 넘게 바뀌었으면 그 배수(0.5 단위로 맞춤, splitFactor)로 맞춰 비교한다 (10:1 분할 뒤 1/10 이 된 주당배당을 '줄었다'고 하지 않게 —
-   *    그해 합병으로 주식 수가 크게 늘며 배당을 줄인 드문 경우는 놓칠 수 있다)
-   *  - 앞 두 해 모두의 99% 밑일 때만 줄어든 해 (반올림 차이는 빼고, 앞앞 해 값이 없으면 앞 해만) — 특별배당·일시 배당을 준 해 다음 해는
-   *    특별배당 앞 해와 견주므로 '줄어든 해'로 세지 않는다 (COST 2024 특별배당 15달러 → 2025, FAST·WRB·CTAS·F 도 같은 모양 — 검토 지적).
-   *    앞앞 해도 특별배당이 있었거나 특별배당 없이 크게 올렸다가 조금 줄인 해는 놓칠 수 있다 (문서 14장 10)
+   *    40% 넘게 바뀌었으면 그 배수(가장 가까운 흔한 배수 SPLIT_RATIOS 로 맞춤 — 10:1 은 10, splitFactor)로 맞춰 비교한다 (10:1 분할 뒤
+   *    1/10 이 된 주당배당을 '줄었다'고 하지 않게 — 그해 합병으로 주식 수가 크게 늘며 배당을 줄인 드문 경우는 놓칠 수 있다)
+   *  - 앞 해의 99% 밑이면 줄어든 해 (반올림 차이는 빼고). 앞 해가 앞앞 해보다 25% 넘게 뛰었으면(특별배당·일시 배당일 수 있음) 앞앞 해
+   *    수준의 99% 밑일 때만 — 특별배당을 준 해 다음 해를 '줄어든 해'로 세지 않는다 (COST 2024 특별배당 15달러 → 2025, FAST·WRB·CTAS·F 도
+   *    같은 모양 — 검토 지적). 정기 배당을 한 해에 25% 넘게 올렸다가 조금 줄인 해는 놓칠 수 있다 (문서 14장 10, dividendCutOf)
    */
   dividendCut(asOf: string, annual: readonly AnnualPoint[] = this.annualHistory(asOf, 7)): boolean {
     return dividendCutOf(this.dividendYears(asOf, annual));

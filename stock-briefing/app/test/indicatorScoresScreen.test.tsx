@@ -586,7 +586,8 @@ describe("3단계 — 한국 간이 가치 (삼성전자·SK하이닉스·KB금�
     // 가치분석 탭으로 가는 줄 (한국 가치가 켜진 서버)
     r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
     expect(r.text()).toContain("가치분석 탭에서 지표별 값 보기");
-    expect(r.text()).toContain("한국 종목은 네이버 증권 재무 요약");
+    expect(r.text()).toContain("가치(한국 종목): 네이버 증권 재무 요약");
+    expect(r.text()).toContain("이 회사의 지난 5년과는 비교하지 않습니다");
   });
   it("가치분석 탭: 머리·배지·한국 비교 문장·날짜 줄·간이 안내·5묶음(성장 '2년', 당좌비율)·고지·계산 방식 줄", () => {
     const r = open(krStock("005930", "삼성전자"), "005930", { tab: "value" });

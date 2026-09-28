@@ -322,8 +322,8 @@ export function keyFramesMissing(next: Pick<ValueReferenceData, "missingFrames" 
  * 까닭 글, 아니면 null. 지난 기준이 없거나 13일보다 오래되었으면 null — 지난 기준이 점수 없음(14일 넘음)이 되기 전에 새 기준을 받아들인다
  */
 export function referenceDrop(
-  prev: (Pick<ValueReferenceData, "refDate" | "counts"> & Partial<Pick<ValueReferenceData, "coverage">>) | null | undefined,
-  next: Pick<ValueReferenceData, "refDate" | "counts"> & Partial<Pick<ValueReferenceData, "coverage" | "missingFrames" | "periods">>,
+  prev: (Pick<ValueReferenceData, "refDate" | "counts"> & Partial<Pick<ValueReferenceData, "coverage" | "order">>) | null | undefined,
+  next: Pick<ValueReferenceData, "refDate" | "counts"> & Partial<Pick<ValueReferenceData, "coverage" | "missingFrames" | "periods" | "order">>,
 ): string | null {
   if (!prev || daysBetween(prev.refDate, next.refDate) > REFERENCE_DROP_MAX_DAYS) return null;
   const a = prev.counts;
@@ -336,8 +336,10 @@ export function referenceDrop(
   const keys = keyFramesMissing({ missingFrames: next.missingFrames ?? [], periods: next.periods ?? { annual: [], latest: [], yearAgo: [] } });
   if (keys.length) other.push(`받지 못한 핵심 frames ${keys.join(", ")}`);
   const pct = (v: number) => `${Math.round(v * 100)}%`;
+  // 그 기준의 지표 순서로 (한국 간이 기준에는 미국 목록에 없는 당좌비율 D5 가 있다 — 미국 목록으로 돌면 D5 를 보지 않았다, 검토 지적)
+  const order = next.order ?? prev.order ?? METRIC_ORDER;
   for (const path of ["general", "financial"] as const)
-    for (const k of METRIC_ORDER) {
+    for (const k of order) {
       const was = prev.coverage?.[path]?.[k];
       if (was === undefined || !next.coverage) continue;
       const now = next.coverage[path]?.[k] ?? 0;

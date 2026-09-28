@@ -141,8 +141,10 @@ describe("한국 간이 가치 점수 (요약 카드 · 가치분석 탭이 쓰�
       ["growth", ["C1", "C2", "C3"]],
       ["payout", ["E1"]],
     ]);
-    // 자기 지난 5년 비교 없이 업종 71 · 시장 29
-    expect(v.families[0]!.metrics[0]!.mix).toBe("업종 71 · 시장 29");
+    // 자기 지난 5년 비교 없이 업종 71 · 한국 시장 29 (무리 이름은 설명 줄·머리 문장처럼 '한국 시장')
+    expect(v.families[0]!.metrics[0]!.mix).toBe("업종 71 · 한국 시장 29");
+    expect(v.families[0]!.metrics[0]!.positions).toMatch(/^업종 안 위치 \d+\/100 · 한국 시장 안 \d+\/100$/);
+    expect(v.families.find((f) => f.key === "payout")!.about).toBe("높을수록 주가에 비해 배당이 많은 편");
     // 종합: 보이는 두 정수의 평균 (두 가격 기준일이 같음)
     expect(b.trend.status).toBe("ok");
     expect(b.composite).toMatchObject({ status: "ok", score: Math.floor((v.score! + b.trend.score!) / 2 + 0.5) });
@@ -159,6 +161,24 @@ describe("한국 간이 가치 점수 (요약 카드 · 가치분석 탭이 쓰�
     expect(v.families.map((f) => f.weight)).toEqual([35, 30, 10, 15, 10]);
     expect(v.flags.map((f) => f.key)).toContain("financial");
     expect(JSON.stringify(v.families)).not.toMatch(/시장 안/);
+    // 지표 줄의 무리 이름도 '한국 금융사 전체' (가운데값 · 위치 · 비중)
+    const rows = v.families.flatMap((f) => f.metrics).filter((m) => m.used);
+    expect(rows.every((m) => /한국 금융사 전체/.test(`${m.mix}`))).toBe(true);
+    expect(JSON.stringify(v.families)).not.toMatch(/(?<!한국 )금융사 전체/);
+  });
+
+  it("다시 받을 때 네이버 표에서 빠진 앞 결산·분기는 이어 둔다 (저장한 줄 + 새 줄 — 1~3월 성장 묶음이 빠지지 않게)", async () => {
+    await start({ facts: ["005930"] });
+    const read = async () => JSON.parse((await db.selectFrom("value_fundamentals").select("data").where("code", "=", "005930").executeTakeFirstOrThrow()).data) as { a: Array<[string]>; q: Array<[string]> };
+    const before = await read();
+    // 저장한 줄에 표에 없는 앞 결산(2022)·분기(2025.03)를 넣어 두면 다시 받아도 남는다
+    const first = before.a[0]!;
+    const q0 = before.q[0]!;
+    await db.updateTable("value_fundamentals").set({ data: JSON.stringify({ ...before, a: [["2022-12", ...first.slice(1)], ...before.a], q: [["2025-03", ...q0.slice(1)], ...before.q] }), fetched_at: "2026-09-01T00:00:00+09:00" }).where("code", "=", "005930").execute();
+    expect(await app!.krValue.refreshFacts("005930", { summary: false })).toBe("ok");
+    const after = await read();
+    expect(after.a.map((r) => r[0])).toEqual(["2022-12", "2023-12", "2024-12", "2025-12"]);
+    expect(after.q.map((r) => r[0])).toEqual(["2025-03", "2025-06", "2025-09", "2025-12", "2026-03", "2026-06"]);
   });
 
   it("대상 아님: 우선주(코드 끝) · 스팩(이름) · ETF — 네이버 재무 요청 없이", async () => {

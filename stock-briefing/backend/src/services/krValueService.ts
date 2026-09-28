@@ -13,6 +13,7 @@ import {
   KR_MIN_FILL,
   KR_NIGHT_CAP,
   KR_SOURCE,
+  mergeKrFacts,
   monthEndOf,
   type KrFacts,
   type KrMember,
@@ -162,10 +163,12 @@ export class KrValueService {
     const summary = opts.summary !== false;
     try {
       const got = await src.finance(c, { summary });
-      const old = summary ? null : await this.loadFacts(c).catch(() => null);
+      const old = await this.loadFacts(c).catch(() => null);
       const integ = got?.integration ? parseNaverIntegration(got.integration) : null;
+      // 네이버 표에서 빠진 앞 결산·분기는 전에 저장한 것을 이어 둔다 (새 결산이 실적 열로 바뀌는 1~3월에 성장 묶음이 빠지지 않게)
       const made = got ? compactKrFacts(c, parseNaverFinance(got.annual, "annual"), parseNaverFinance(got.quarter, "quarter"), integ) : null;
-      const facts = made && !integ && old?.facts.i ? { ...made, i: old.facts.i } : made;
+      const merged = made ? mergeKrFacts(made, old?.facts) : null;
+      const facts = merged && !integ && old?.facts.i ? { ...merged, i: old.facts.i } : merged;
       if (!facts) {
         this.failures.set(c, { at: this.now().getTime(), kind: "notFound" });
         return "notFound";
@@ -686,7 +689,7 @@ function krScoredBlock(c: Core, o: { ref: PeerBook; industry: string | null; cha
     priceNote: PRICE_NOTE,
     path: r.path,
     coverageWeight: r.coverageWeight,
-    families: r.families.map((f) => familyRow(f, { path: r.path, grade: "lite", annualEnd: inp.fiscalEnd })),
+    families: r.families.map((f) => familyRow(f, { path: r.path, grade: "lite", annualEnd: inp.fiscalEnd, market: "KR" })),
     flags,
     notes,
     change: o.change,

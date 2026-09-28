@@ -7,7 +7,9 @@ import { buildLevels, encodeX, LITE_METRIC_ORDER, quantile, VALUE_VERSION, type 
  * 한국 간이 가치 지표 (3-44 3단계, 설계 S4 '한국 간이 가치' · 가치지표-계산.md 18장) — 순수 함수, 네트워크 없음.
  *  - 재무: 네이버 증권 재무 요약(연간 3개 결산 · 분기 5개, 실적 열만 — 증권사 추정 열은 파서가 버림). 금액 억원, 주당 값 원, 비율 %
  *  - 흐름(매출·영업이익·지배주주순이익·EPS)은 최근 4개 분기 합, 잔액(BPS·부채비율·당좌비율)은 최근 분기, 성장은 연간 2년(3개 결산), 배당은 최근 결산
- *  - 미래 자료를 섞지 않게: 분기는 끝난 뒤 45일(분기·반기 보고서 기한), 연간은 90일(사업보고서 기한)이 지나야 쓴다 (설계 B11)
+ *  - 미래 자료를 섞지 않게: 분기는 끝난 뒤 45일(분기·반기 보고서 기한), 연간은 90일(사업보고서 기한)이 지나야 쓴다 (설계 B11).
+ *    다만 같은 공시로 함께 나오는 4분기 열을 쓸 수 있으면(+45일) 연간 열도 그날부터 쓴다 (krAnnualAvailable). 새로 받을 때 표에서 빠진
+ *    앞 결산·분기는 이어 둔다 (mergeKrFacts — 연간 5개·분기 8개)
  *  - 가격 대비 값은 주당 값으로(EPS·BPS ÷ 20거래일 평균 주가) — 네이버 EPS·BPS 는 우선주를 합친 주식 수 기준이라 보통주 시가총액과 섞지 않는다.
  *    매출 대비(PSR)는 '지배주주순이익 ÷ EPS'로 되짚은 주식 수로 주당 매출을 만든다
  *  - 한국 종목은 한국 상장 회사끼리만 비교한다 (미국 종목과 견주지 않음 — 설계 B8)
@@ -46,6 +48,25 @@ export interface KrFacts {
   dropped: number;
 }
 
+/** 저장해 두는 열 수 (새로 받을 때 네이버 표에서 빠진 앞 열을 이만큼까지 이어 둔다 — mergeKrFacts) */
+export const KR_KEEP_ANNUAL = 5;
+export const KR_KEEP_QUARTERS = 8;
+
+/**
+ * 새로 받은 재무 요약에 전에 저장한 열을 이어 붙인다 (같은 끝 달은 새 값). 네이버 표는 연간 실적 3열·분기 실적 5열만 보여,
+ * 새 결산이 실적 열로 바뀌면(잠정 실적 1~3월) 가장 오래된 결산이 표에서 빠진다 — 그 결산을 버리면 새 결산을 쓸 수 있게 될 때까지
+ * '2년 전 결산'이 없어 성장 묶음이 해마다 몇 주씩 빠졌다 (검토 지적). 연간 5개 · 분기 8개까지 둔다. 결산 달이 바뀐 회사도 그대로 이어 두지만
+ * 성장은 끝 달이 정확히 24개월 앞인 결산만 쓰므로 섞이지 않는다
+ */
+export function mergeKrFacts(next: KrFacts, prev: KrFacts | null | undefined): KrFacts {
+  if (!prev || prev.kind !== "kr" || prev.code !== next.code) return next;
+  const merge = (now: readonly KrColRow[], old: readonly KrColRow[], keep: number): KrColRow[] => {
+    const have = new Set(now.map((r) => r[0]));
+    return [...old.filter((r) => !have.has(r[0])), ...now].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).slice(-keep);
+  };
+  return { ...next, a: merge(next.a, prev.a, KR_KEEP_ANNUAL), q: merge(next.q, prev.q, KR_KEEP_QUARTERS) };
+}
+
 /** 파싱한 표 → 저장 모양. 실적 열이 하나도 없으면 null */
 export function compactKrFacts(code: string, annual: KrFinanceTable | null, quarter: KrFinanceTable | null, integ: KrIntegration | null): KrFacts | null {
   const rows = (t: KrFinanceTable | null): KrColRow[] =>
@@ -78,6 +99,15 @@ export function monthEndOf(k: string): string {
 const monthsBetween = (a: string, b: string) => (Number(b.slice(0, 4)) - Number(a.slice(0, 4))) * 12 + Number(b.slice(5, 7)) - Number(a.slice(5, 7));
 /** 그 열을 asOf 에 쓸 수 있는지 (끝 + lag 일) */
 export const krAvailable = (k: string, lagDays: number, asOf: string) => addDays(monthEndOf(k), lagDays) <= asOf;
+/**
+ * 연간 열을 asOf 에 쓸 수 있는지: 결산 + 90일(사업보고서 기한), 또는 같은 끝 달의 분기 열(4분기)이 있고 그 분기를 쓸 수 있을 때(+45일).
+ * 네이버 4분기 열과 연간 실적 열은 같은 공시(잠정 실적·사업보고서)로 함께 실적이 되므로, 4분기를 쓰는 날부터 연간도 쓴다 —
+ * 예전에는 4분기는 +45일, 연간은 +90일이라 2월 중순~3월 말 사이 규칙이 어긋났다 (검토 지적)
+ */
+export function krAnnualAvailable(f: Pick<KrFacts, "q">, k: string, asOf: string): boolean {
+  if (krAvailable(k, KR_ANNUAL_LAG_DAYS, asOf)) return true;
+  return f.q.some((r) => r[0] === k) && krAvailable(k, KR_QUARTER_LAG_DAYS, asOf);
+}
 
 export interface KrAnnual {
   k: string;
@@ -125,7 +155,7 @@ function sharesFrom(rows: readonly KrColRow[]): number | null {
   return med(good.length ? good : est(1));
 }
 
-/** asOf 에 알 수 있던 열로 만든 입력 (분기 45일 · 연간 90일 늦춤). 쓸 수 있는 분기가 없으면 null */
+/** asOf 에 알 수 있던 열로 만든 입력 (분기 45일 · 연간 90일 — 4분기 열을 쓸 수 있으면 그날부터, krAnnualAvailable). 쓸 수 있는 분기가 없으면 null */
 export function krInputs(f: KrFacts, asOf: string): KrInputs | null {
   const qs = f.q.filter((r) => krAvailable(r[0], KR_QUARTER_LAG_DAYS, asOf));
   if (!qs.length) return null;
@@ -134,7 +164,7 @@ export function krInputs(f: KrFacts, asOf: string): KrInputs | null {
   const consecutive = four.length === 4 && four.every((r, i) => i === 0 || monthsBetween(four[i - 1]![0], r[0]) === 3);
   const sum = (j: 1 | 2 | 4 | 5) => (consecutive && four.every((r) => r[j] !== null) ? four.reduce((a, r) => a + r[j]!, 0) : null);
   const ya = qs.find((r) => monthsBetween(r[0], last[0]) === 12) ?? null;
-  const ann = f.a.filter((r) => krAvailable(r[0], KR_ANNUAL_LAG_DAYS, asOf)).slice(-3);
+  const ann = f.a.filter((r) => krAnnualAvailable(f, r[0], asOf)).slice(-3);
   const annual = ann.map(toAnnual);
   const lastA = annual.at(-1) ?? null;
   return {
@@ -303,7 +333,9 @@ export type KrDueWhy = "missing" | "newQuarter" | "annualPending" | "rotation";
 /**
  * 다시 받을 때인지 (오늘 날짜 KST). 우선순위가 작을수록 먼저:
  *  0 missing — 받은 적 없음
- *  1 newQuarter — 저장한 최근 분기 다음 분기가 끝나고 45일(+3일)이 지났는데 아직 그 분기가 없음 (7일마다 다시)
+ *  1 newQuarter — 저장한 최근 분기 다음 분기가 끝나고 45일(+3일)이 지났는데 아직 그 분기가 없음 (7일마다 다시). 다음 분기가 결산 달
+ *    분기(4분기)면 90일(+3일) — 4분기·연간 실적은 잠정 실적을 내지 않는 회사는 사업보고서(결산 + 90일)로 나오므로, 45일로 두면
+ *    2월 중순~3월 말 6주 동안 중소형주 대부분을 주마다 다시 받았다(밤마다 최대 700종목 — 설계 B14 '공시가 난 회사만'과 어긋남, 검토 지적)
  *  2 annualPending — 결산 달 분기는 들어왔는데 연간 열이 아직 그 결산 전 (사업보고서가 늦게 나옴 — 7일마다 다시)
  *  3 rotation — 120일 넘게 받지 않음
  */
@@ -315,7 +347,10 @@ export function krDue(row: { lastQuarter: string | null; annualEnd: string | nul
     const y = Number(row.lastQuarter.slice(0, 4));
     const mo = Number(row.lastQuarter.slice(5, 7)) + 3;
     const next = `${mo > 12 ? y + 1 : y}-${String(mo > 12 ? mo - 12 : mo).padStart(2, "0")}`;
-    if (addDays(monthEndOf(next), KR_QUARTER_LAG_DAYS + 3) <= today && since >= KR_RETRY_DAYS) return { due: true, priority: 1, why: "newQuarter" };
+    // 결산 달: 저장한 연간 열의 달 (없으면 12월 — 한국 상장사 대부분)
+    const fyEndQuarter = next.slice(5, 7) === (row.annualEnd ?? "0000-12").slice(5, 7);
+    const lag = fyEndQuarter ? KR_ANNUAL_LAG_DAYS : KR_QUARTER_LAG_DAYS;
+    if (addDays(monthEndOf(next), lag + 3) <= today && since >= KR_RETRY_DAYS) return { due: true, priority: 1, why: "newQuarter" };
     // 결산 달(연간 열의 달)과 같은 달 분기가 들어왔는데 연간 열이 그보다 앞이면 사업보고서를 기다리는 중
     if (row.annualEnd && row.lastQuarter.slice(5, 7) === row.annualEnd.slice(5, 7) && row.annualEnd < row.lastQuarter && addDays(monthEndOf(row.lastQuarter), KR_ANNUAL_LAG_DAYS) <= today && since >= KR_RETRY_DAYS)
       return { due: true, priority: 2, why: "annualPending" };
