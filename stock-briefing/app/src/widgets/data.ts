@@ -10,7 +10,9 @@ import {
   gateExtended,
   NO_FEATURES,
   payloadMarket,
+  pickBoard,
   REUSE_OPEN_MS,
+  widgetFeatures,
   withExtended,
   type WidgetBrief,
   type WidgetBriefing,
@@ -134,6 +136,10 @@ export interface WidgetData {
    * 위젯 4종을 모두 그린다). 여러 조회가 한꺼번에 성공해도 하나만 true. 저장하지 않는다
    */
   recovered?: boolean;
+  /**
+   * 주인 아닌 계정의 지수·환율 판을 이번에 공유 경로(/api/market/indices)로 새로 받았는지 (검증 6차 — 백그라운드 작업이 판 위젯을 다시 그리게). 저장하지 않는다
+   */
+  boardFresh?: boolean;
 }
 
 const LAST_KEY = "widget.lastStocks";
@@ -317,7 +323,7 @@ function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
 }
 
 export async function saveWidgetView(data: WidgetData, apiUrl: string): Promise<void> {
-  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, ...rest } = data;
+  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, boardFresh: _f, ...rest } = data;
   const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
   try {
     await AsyncStorage.setItem(VIEW_KEY, JSON.stringify({ apiUrl, view }));
@@ -825,6 +831,9 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
         out.indices = prevView.indices;
         if (prevView.indicesAt !== undefined) out.indicesAt = prevView.indicesAt;
       }
+      // 주인 아닌 계정: 지수·환율 판은 공유 데이터라 공유 경로로 받는다 (검증 6차 — 예전에는 개인 경로 /api/widget 의 403 에 판까지 비어
+      // 지수·환율 위젯이 '개인 종목 기능은 준비 중'만 보였다). 로그인 전(세션 없음)은 공유 경로도 403 이라 묻지 않는다
+      if (e.reason === "personal" && opts.board) await sharedBoard(out, apiUrl, apiToken);
       keepBoard(out, prevView);
       await saveWidgetView(out, apiUrl);
       return out;
@@ -882,6 +891,41 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     }
   }
   return out;
+}
+
+/**
+ * 주인 아닌 계정의 지수·환율 판 (검증 6차): 공유 경로 /api/market/indices?stale=1(앱 지수 띠와 같은 목록)에서 판 9개, 위젯 플래그는 /api/features.
+ * 못 받으면 그대로 둔다 (마지막 판은 keepBoard 가 둔다)
+ */
+async function sharedBoard(out: WidgetData, apiUrl: string, token: string): Promise<void> {
+  const [idx, flags] = await Promise.all([
+    getJson<{ indices?: unknown }>(`${apiUrl}/api/market/indices?stale=1`, token).catch(() => null),
+    getJson<{ features?: Record<string, boolean> }>(`${apiUrl}/api/features`, token).catch(() => null),
+  ]);
+  if (flags?.features && typeof flags.features === "object") {
+    out.features = widgetFeatures(flags.features);
+    out.featuresAt = out.fetchedAt;
+  }
+  const rows = Array.isArray(idx?.indices) ? (idx.indices as Parameters<typeof pickBoard>[0]) : [];
+  const list = pickBoard(rows).filter((i) => Number.isFinite(i.value) && Number.isFinite(i.change) && Number.isFinite(i.changeRate));
+  if (list.length) {
+    out.board = list;
+    out.boardAt = out.fetchedAt;
+    out.boardFresh = true;
+  }
+}
+
+/**
+ * 마지막으로 그린 위젯 데이터의 상태 (백그라운드 작업이 '조용한 안내'로 바뀐 순간을 알아보게 — 검증 6차). 적어 둔 것이 없으면 null
+ */
+export async function lastWidgetState(): Promise<{ error: string | null; stocks: number; briefings: number } | null> {
+  try {
+    const { apiUrl } = await readSettings();
+    const v = await readWidgetView(apiUrl);
+    return v ? { error: v.error, stocks: v.stocks.length, briefings: v.briefings.length } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -101,6 +101,11 @@ export function quietState(error: string | null): boolean {
   return !!error && /로그인|준비 중/.test(error);
 }
 
+/** 로그인한 주인 아닌 계정이라 개인 데이터가 없는 상태인지 ('개인 종목 기능은 준비 중' — 공유 데이터인 지수·환율 판은 보통처럼 그린다, 검증 6차) */
+export function memberState(error: string | null): boolean {
+  return !!error && /준비 중/.test(error) && !/로그인/.test(error);
+}
+
 /** 조회 실패 사유를 짧은 한국어로 (영어 오류 문구를 위젯에 그대로 보이지 않게) */
 export function failureText(error: string | null): string | null {
   if (!error) return null;

@@ -509,6 +509,19 @@ describe("설정 '계정' 칸 · 주인 아닌 계정 안내 · 처음 비밀번
     expect(sessionFor(SERVER)).toBeNull();
   });
 
+  it("비상 모드로 막 바뀐 순간의 [모든 기기에서 로그아웃](404)도 같은 안내 — 세션은 그대로 (검증 6차 — 예전에는 '잠시 뒤 다시 해 주세요')", async () => {
+    for (const user of [MEMBER, OWNER]) {
+      await saveSession({ apiUrl: SERVER, token: "gzs1_x", remember: true, user });
+      h.api.logoutAll!.mockRejectedValueOnce(apiErr(404, "NOT_FOUND"));
+      const r = render(<AccountCard />);
+      r.act(() => (byTitle(r, "모든 기기에서 로그아웃").props.onPress as () => void)());
+      (h.alert.mock.calls.at(-1)![2] as { text: string; onPress?: () => void }[]).find((b) => b.text === "로그아웃")!.onPress!();
+      await settle(r);
+      expect(sessionFor(SERVER)?.token, user.loginId).toBe("gzs1_x");
+      expect(h.alert.mock.calls.at(-1)!.slice(0, 2)).toEqual(["로그아웃하지 못했어요", "로그인 기능이 잠시 꺼져 있어 지금은 로그아웃할 수 없어요. 다시 켜지면 로그아웃할 수 있어요."]);
+    }
+  });
+
   it("처음 비밀번호 권유 시트: 로그인 직후 한 번, [나중에] 로 닫고 다시 뜨지 않음", async () => {
     await saveSession({ apiUrl: SERVER, token: "gzs1_o", remember: true, user: OWNER });
     expect(render(<InitialPasswordSheet />).tree).toEqual([]);

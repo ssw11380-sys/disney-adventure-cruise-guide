@@ -90,6 +90,40 @@ const intros = () => h.fake.started.filter((a): a is FakeTiming => a.kind === "t
 const loops = () => h.fake.started.filter((a): a is FakeLoop => a.kind === "loop");
 const L360 = () => heroLayout(360, 752, { top: 28, bottom: 24 });
 
+/**
+ * 불기둥 가로 밝기 모의 (검증 6차): 붉은 빛 위(바깥 밝기 약 33)에 옆빛 칸(폭 W)·심 칸(폭 Wc, 가운데)을 sRGB 로 차례로 합성한 밝기(0.2126R+0.7152G+0.0722B)를
+ * 몸통 폭 1 단위로 0.02 마다. 반폭(fwhm)·최고점 20% 폭(w20)·가장 큰 꺾임(2차 차분)을 준다 — 웹 캡처 측정(pillar5)과 같은 방식
+ */
+function pillarProfile(W: number, Wc: number, glow: { offset: number; stopColor: string; stopOpacity: number }[], core: { offset: number; stopColor: string; stopOpacity: number }[]) {
+  const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const at = (st: typeof glow, v: number) => {
+    const u = Math.min(1, Math.max(0, v));
+    const i = Math.max(1, st.findIndex((x) => x.offset >= u));
+    const [a, b] = [st[i - 1]!, st[i]!];
+    const t = Math.min(1, Math.max(0, (u - a.offset) / (b.offset - a.offset)));
+    const [ca, cb] = [rgb(a.stopColor), rgb(b.stopColor)];
+    return { c: ca.map((v, k) => v + (cb[k]! - v) * t), a: a.stopOpacity + (b.stopOpacity - a.stopOpacity) * t };
+  };
+  const BG = [70, 22, 36];
+  const lum = (p: number[]) => 0.2126 * p[0]! + 0.7152 * p[1]! + 0.0722 * p[2]!;
+  const over = (d: number[], s: { c: number[]; a: number }) => d.map((v, k) => s.c[k]! * s.a + v * (1 - s.a));
+  const xs: [number, number][] = [];
+  for (let x = -W / 2; x <= W / 2 + 1e-9; x += 0.02) {
+    let p = over(BG, at(glow, (x + W / 2) / W));
+    if (Math.abs(x) <= Wc / 2) p = over(p, at(core, (x + Wc / 2) / Wc));
+    xs.push([x, lum(p)]);
+  }
+  const bg = lum(BG);
+  const peak = Math.max(...xs.map((v) => v[1]));
+  const width = (f: number) => {
+    const inx = xs.filter((v) => v[1] >= bg + f * (peak - bg)).map((v) => v[0]);
+    return inx.length ? inx[inx.length - 1]! - inx[0]! : 0;
+  };
+  let kink = 0;
+  for (let i = 1; i < xs.length - 1; i++) kink = Math.max(kink, Math.abs(xs[i + 1]![1] - 2 * xs[i]![1] + xs[i - 1]![1]));
+  return { peak, fwhm: width(0.5), w20: width(0.2), kink };
+}
+
 beforeEach(() => {
   cleanupRenders();
   resetLoginHeroForTests();
@@ -354,24 +388,36 @@ describe("불기둥 모양·색 (검증 4차 — 세로 빛 기둥: 뾰족한 �
     expect(r.all().filter((n) => n.type === "Mask")).toHaveLength(2);
     const grad = (suffix: string) => r.all().find((n) => n.type === "SvgLinearGradient" && String(n.props.id).endsWith(suffix))!;
     const stops = (suffix: string) => grad(suffix).children.map((c) => (c as HostNode).props as { offset: number; stopColor: string; stopOpacity: number });
-    // 가로: 양 끝 투명(부드럽게 옅어짐), 가운데가 가장 밝다. 심의 가운데는 따뜻한 흰색·불투명도 0.9 이상
+    // 가로: **종 모양** — 양 끝 투명, 가운데 한 점이 가장 밝고(평평한 곳 없음) 양옆으로 고르게 옅어진다, 좌우 같게 (검증 6차 — 평평한 심·주황 어깨는 네온관처럼 보였다)
     for (const s of ["pGlowX", "pCoreX"]) {
       const st = stops(s);
       expect(st[0]!.stopOpacity).toBe(0);
       expect(st.at(-1)!.stopOpacity).toBe(0);
-      const mid = st.find((x) => x.offset === 0.5)!;
-      expect(mid.stopOpacity).toBe(Math.max(...st.map((x) => x.stopOpacity)));
+      const top = Math.max(...st.map((x) => x.stopOpacity));
+      expect(st.filter((x) => x.stopOpacity === top).map((x) => x.offset), s).toEqual([0.5]);
+      for (let i = 1; i < st.length; i++) {
+        const [a, b] = [st[i - 1]!, st[i]!];
+        if (b.offset <= 0.5) expect(b.stopOpacity, `${s} ${b.offset}`).toBeGreaterThan(a.stopOpacity);
+        else expect(b.stopOpacity, `${s} ${b.offset}`).toBeLessThan(a.stopOpacity);
+        expect(st[st.length - 1 - i]!.stopOpacity).toBeCloseTo(b.stopOpacity, 6);
+      }
     }
-    expect(stops("pCoreX").find((x) => x.offset === 0.5)).toMatchObject({ stopColor: C.pillarCore });
-    expect(stops("pCoreX").find((x) => x.offset === 0.5)!.stopOpacity).toBeGreaterThanOrEqual(0.9);
-    // 검증 5차 — 보이는 기둥을 몸통보다 넓게: 심은 몸통 폭 이상이고 가운데가 평평(0.9 이상이 심 칸의 0.4 이상 = 몸통의 약 0.8배),
-    // 옆빛은 원형 빛(붉은색)에 묻히지 않는 주황이 칸의 0.22~0.78 (몸통의 약 1.7배)에서 0.7 이상
-    expect(P.coreW).toBeGreaterThanOrEqual(scene.bw);
-    const flat = stops("pCoreX").filter((x) => x.stopOpacity >= 0.9);
-    expect(flat.at(-1)!.offset - flat[0]!.offset).toBeGreaterThanOrEqual(0.4);
-    const shoulder = stops("pGlowX").filter((x) => x.offset >= 0.22 && x.offset <= 0.78);
-    expect(shoulder.every((x) => x.stopColor === C.pillarWarm && x.stopOpacity >= 0.7)).toBe(true);
+    // 심의 가운데는 따뜻한 흰색, 가장 밝은 곳 0.7~0.85 (하얗게 타지 않게), 가장자리는 주황·양 끝은 붉은색 (원형 빛에 묻히지 않게 가운데 쪽은 주황)
+    const coreMid = stops("pCoreX").find((x) => x.offset === 0.5)!;
+    expect(coreMid.stopColor).toBe(C.pillarCore);
+    expect(coreMid.stopOpacity).toBeGreaterThanOrEqual(0.7);
+    expect(coreMid.stopOpacity).toBeLessThanOrEqual(0.85);
+    expect(stops("pGlowX").find((x) => x.offset === 0.5)!.stopColor).toBe(C.pillarWarm);
     expect(C.pillarWarm).not.toBe(C.glow);
+    // 합성한 가로 밝기 (sRGB 합성 — 웹·안드로이드와 같은 방식, 붉은 빛 위 바깥 밝기 약 33): 보이는 폭이 몸통의 2~3배이고 꺾임 없이 부드럽다.
+    // 5차 모양(칸 3 · 평평한 심 0.9~0.95 · 주황 어깨 0.7~0.88)은 반폭 1.68배·꺾임 5.2 였다 (웹 캡처 1.5~1.8배와 같음)
+    const p = pillarProfile(P.w / scene.bw, P.coreW / scene.bw, stops("pGlowX"), stops("pCoreX"));
+    expect(p.fwhm, JSON.stringify(p)).toBeGreaterThanOrEqual(2);
+    expect(p.fwhm).toBeLessThanOrEqual(3);
+    expect(p.w20).toBeGreaterThanOrEqual(2.6);
+    expect(p.w20).toBeLessThanOrEqual(3.4);
+    expect(p.kink).toBeLessThan(2);
+    expect(p.peak).toBeLessThanOrEqual(235);
     // 세로(아래 0 → 위 1): 아래 끝·위 끝 투명 (몸통 뒤에서 옅게 시작, 위로 사라짐 — 뾰족한 끝 없음)
     for (const s of ["pGlowY", "pCoreY"]) {
       const g = grad(s);
@@ -385,7 +431,16 @@ describe("불기둥 모양·색 (검증 4차 — 세로 빛 기둥: 뾰족한 �
     const coreY = stops("pCoreY");
     const glowY = stops("pGlowY");
     expect(coreY.filter((x) => x.offset <= 0.1).every((x) => x.stopOpacity <= 0.3)).toBe(true);
+    // 옆빛도 아래 끝에서 천천히 켜진다 (검증 6차 — 0.05 에서 이미 1 이라 몸통보다 넓은 빛이 봉 위에서 평평한 가로 선으로 끝났다): 0.1 에서 0.6 이하, 가장 밝은 곳은 0.2 이상
+    const at = (st: typeof coreY, o: number) => {
+      const i = st.findIndex((x) => x.offset >= o);
+      const [a, b] = [st[i - 1]!, st[i]!];
+      return a.stopOpacity + ((b.stopOpacity - a.stopOpacity) * (o - a.offset)) / (b.offset - a.offset);
+    };
+    expect(at(glowY, 0.1)).toBeLessThanOrEqual(0.6);
+    expect(at(glowY, 0.05)).toBeLessThanOrEqual(0.3);
     const peak = (st: typeof coreY) => st.reduce((a, b) => (b.stopOpacity > a.stopOpacity ? b : a)).offset;
+    expect(peak(glowY)).toBeGreaterThanOrEqual(0.2);
     expect(peak(coreY)).toBeGreaterThan(peak(glowY));
     // 움직임은 세로 크기·불투명도만 (네이티브 드라이버)
     const tf = flatStyle(box.props.style).transform as Record<string, unknown>[];

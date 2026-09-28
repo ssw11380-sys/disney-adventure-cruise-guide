@@ -7,10 +7,12 @@ import { addPendingLogout, clearSession, dropPendingLogout, pendingLogoutsFor, s
  *    못 빼도 서버가 로그아웃할 때 이 세션으로 등록한 기기를 지운다. 기기에 적어 둔 알림 토큰은 남긴다 — 주인으로 다시 로그인하면 그대로 다시 등록 (setPushRebind)
  *  - 이 기기만: 서버에 알리고(실패해도 진행) 저장한 세션을 지운다. 인터넷·서버 오류로 알리지 못했으면 그 세션 토큰을 적어 두고
  *    다음에 앱이 켜지거나 앞으로 돌아왔을 때 다시 알린다 (flushPendingLogouts — 서버 세션이 살아 있으면 그 세션의 기기로 알림이 계속 가므로)
- *  - 모든 기기: 서버가 모든 세션을 끊어야 하므로, 서버 요청이 실패하면 오류를 던지고 아무것도 지우지 않는다
+ *  - 모든 기기: 서버가 모든 세션을 끊어야 하므로, 서버 요청이 실패하면 오류를 던지고 아무것도 지우지 않는다 (404 — 비상 모드 — 면 LogoutUnavailableError)
  *  - 주인 아닌 계정인데 서버가 로그아웃 주소를 모르면(404 — 로그인 기능이 꺼진 비상 모드) 세션을 **지우지 않고** 던진다 (검증 5차):
  *    비상 모드 서버는 세션 머리글이 없는 요청을 API 토큰만으로 주인으로 보므로, 세션을 잊으면 그 폰에 주인 잔고·브리핑이 보인다.
- *    세션을 계속 보내야 서버가 그 계정으로 막는다 (설정의 계정 칸도 비상 모드에서는 [로그아웃]을 보이지 않는다)
+ *    세션을 계속 보내야 서버가 그 계정으로 막는다 (설정의 계정 칸도 비상 모드에서는 [로그아웃]을 보이지 않는다).
+ *    단 **자동 로그인을 끈(메모리에만) 세션은 앱을 닫으면 사라진다** — 그 뒤 비상 모드 서버는 그 폰을 API 토큰만 = 주인으로 본다(앱이 막을 수 없음).
+ *    그래서 가입자가 있으면 비상 모드 전에 API 토큰을 바꾼다 (설계 1장 '비상 모드'·5장 운영 규칙, 검증 6차)
  */
 let beforeLogout: ((api: Api) => Promise<void>) | null = null;
 let pushRebind: ((api: Api) => Promise<void>) | null = null;
@@ -43,7 +45,11 @@ export async function logout(api: Api, apiUrl: string, all = false): Promise<voi
   const s = sessionFor(apiUrl);
   if (!s) return;
   if (s.user.isOwner && beforeLogout) await within(beforeLogout(api), 5_000);
-  if (all) await api.logoutAll();
+  if (all)
+    await api.logoutAll().catch((e: unknown) => {
+      // 로그인 기능이 막 꺼진 서버(비상 모드 — 로그아웃 주소 404): 한 기기 로그아웃과 같은 안내 (검증 6차 — 예전에는 '잠시 뒤 다시 해 주세요'). 아무것도 지우지 않는다
+      throw e instanceof ApiRequestError && e.status === 404 ? new LogoutUnavailableError() : e;
+    });
   else
     await api.logout().catch((e: unknown) => {
       if (!s.user.isOwner && e instanceof ApiRequestError && e.status === 404) throw new LogoutUnavailableError();

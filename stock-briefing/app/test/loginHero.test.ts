@@ -281,11 +281,12 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
 });
 
 describe("불기둥 (검증 4·5차 — 마지막 종가에서 그림 위쪽으로 솟는 세로 빛 기둥: 뾰족한 끝·부풂·아래 크림 심지 없이, 몸통보다 넓게 보이게)", () => {
-  it("그리는 칸은 몸통의 3배, 가운데 따뜻한 흰 심은 몸통보다 넓게(1.5~2배 — 검증 5차: 0.9 는 가는 흰 선으로 보였다), 높이는 그림 칸의 0.3~0.4", () => {
-    expect(PILLAR_W).toBeGreaterThanOrEqual(2);
-    expect(PILLAR_W).toBeLessThanOrEqual(3);
-    expect(PILLAR_CORE_W).toBeGreaterThanOrEqual(1.5);
-    expect(PILLAR_CORE_W).toBeLessThanOrEqual(2);
+  it("그리는 칸은 몸통의 4~5.5배(양 끝은 투명 — 보이는 폭은 2~3배, loginHeroView 합성 테스트), 가운데 심 칸은 몸통의 2배보다 넓고 기둥 칸보다 좁게, 높이는 그림 칸의 0.3~0.4", () => {
+    // 검증 5차: 심 0.9 는 가는 흰 선, 6차: 칸 3 · 심 1.8 에 평평한 심은 보이는 폭이 몸통의 1.5~1.8배인 단단한 관으로 보였다
+    expect(PILLAR_W).toBeGreaterThanOrEqual(4);
+    expect(PILLAR_W).toBeLessThanOrEqual(5.5);
+    expect(PILLAR_CORE_W).toBeGreaterThan(2);
+    expect(PILLAR_CORE_W).toBeLessThan(PILLAR_W);
     expect(PILLAR_H).toBeGreaterThanOrEqual(0.3);
     expect(PILLAR_H).toBeLessThanOrEqual(0.4);
   });
