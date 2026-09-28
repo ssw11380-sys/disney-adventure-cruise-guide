@@ -47,9 +47,10 @@ export interface AccountHeadline {
   usHolidayDate?: string;
   /**
    * 지난 같은 세션 브리핑과 비교 한 줄 (브리핑 3차 3, 플래그 accountSinceLast — 비교가 저장된 브리핑만. 예전 앱은 모르는 칸):
-   * 비교한 브리핑의 날짜·세션, 총 평가금액 변화(원), 수량이 바뀐 종목 수 (지난 브리핑에 종목별 값이 없으면 null)
+   * 비교한 브리핑의 날짜·세션, 총 평가금액 변화(원), 수량이 바뀐 종목 수 (지난 브리핑에 종목별 값이 없으면 null),
+   * 한쪽 브리핑 합계에서만 빠져 금액 비교에서 뺀 종목 수 (있을 때만). 합계에서 뺀 종목이 달라 금액을 맞추지 못한 브리핑(scope mixed)은 칸이 없다
    */
-  since?: { date: string; session: AccountSession; change: number; qtyChanged: number | null };
+  since?: { date: string; session: AccountSession; change: number; qtyChanged: number | null; leftOut?: number };
 }
 
 export interface AccountBriefing {
@@ -402,16 +403,25 @@ function toBriefing(r: { id: number; briefing_date: string; session: string; sta
           ...(d.krPreviousDay ? { krPreviousDay: true as const } : {}),
           ...(d.usPreviousDay ? { usPreviousDay: true as const } : {}),
           ...(d.usHolidayDate ? { usHolidayDate: d.usHolidayDate } : {}),
-          ...(d.sinceLast ? { since: sinceHeadline(d.sinceLast) } : {}),
+          ...(d.sinceLast && d.sinceLast.scope !== "mixed" ? { since: sinceHeadline(d.sinceLast) } : {}),
         }
       : null,
   };
 }
 
-/** 목록·카드의 '9/25(금) 오전보다 총 평가 …' 한 줄에 쓰는 값 (브리핑 3차 3) */
+/**
+ * 목록·카드의 '9/25(금) 오전보다 총 평가 …' 한 줄에 쓰는 값 (브리핑 3차 3). 금액 비교에서 뺀 종목이 있으면(scope common) 그 수를 leftOut 으로.
+ * scope mixed(합계에서 뺀 종목이 달라 금액에 섞였을 수 있음)는 한 줄을 싣지 않는다 — 부르는 쪽이 거른다 (상세 카드에는 설명과 함께 보임)
+ */
 function sinceHeadline(s: NonNullable<AccountData["sinceLast"]>): NonNullable<AccountHeadline["since"]> {
   const p = s.positions;
-  return { date: s.prev.date, session: s.prev.session, change: s.value.change, qtyChanged: p ? p.added.length + p.removed.length + p.increased.length + p.decreased.length : null };
+  return {
+    date: s.prev.date,
+    session: s.prev.session,
+    change: s.value.change,
+    qtyChanged: p ? p.added.length + p.removed.length + p.increased.length + p.decreased.length : null,
+    ...(s.scope === "common" && s.oneSide.length ? { leftOut: s.oneSide.length } : {}),
+  };
 }
 
 /** p 를 ms 까지 기다린다. 늦으면 timeout (p 는 뒤에서 끝나도 무시하고, 나중 실패도 처리된 것으로) */

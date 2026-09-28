@@ -73,6 +73,19 @@ describe("보유 종목별 값 (positionsOf, 순수)", () => {
     expect(totals.totalValue).toBe(700_000);
   });
 
+  it("시세에 통화 칸이 없으면 computeAccount 와 같이 KRW 로 본다 (미국 코드여도) — 값의 합 = 총 평가금액이 깨지지 않게", () => {
+    const us = holding("TSLA", "테슬라", 420, 3, { currency: "USD" });
+    const noCur: AccountHolding = { ...us, quote: { price: 420, change: 0, changeRate: 0, fxRate: 1391.5 } };
+    const list = [holding("005930", "삼성전자", 70_000, 10), noCur];
+    const totals = computeAccount(list);
+    const ps = positionsOf(list);
+    expect(ps[1]).toMatchObject({ code: "TSLA", currency: "KRW", value: 1_260 });
+    expect(sumOf(ps.map((p) => p.value ?? 0))).toBe(totals.totalValue);
+    expect(sumOf(ps.map((p) => p.cost ?? 0))).toBe(totals.totalCost);
+    // 시세가 없으면(값 null) 보이는 통화만 코드로 짐작
+    expect(positionsOf([holding("TSLA", "테슬라", 420, 3, { currency: "USD", quote: false })])[0]).toMatchObject({ currency: "USD", value: null });
+  });
+
   it("비용 차감(afterCost): 앱 잔고 기본값과 같은 값으로 나누고, 작은 조각이 많아도 합이 정확히 맞는다 (무작위 300회)", () => {
     let seed = 11;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -143,16 +156,119 @@ describe("지난 브리핑과 비교 (compareSinceLast, 순수 — 공용 픽스
     });
   });
 
-  it("총 평가가 0 이던 브리핑(모두 시세 없음)과는 비율·비중을 내지 않는다", () => {
+  it("총 평가가 0 이던 브리핑(모두 시세 없음)과는 비율·비중을 내지 않는다 · 그 종목이 이번에 들어와도 한쪽 합계에만 있어 뺀다", () => {
     const prev = input("2026-09-25", [P("A", null)]);
-    const s = compareSinceLast({ id: 1, data: prev }, input("2026-09-28", [P("A", 1000)]));
+    // 새로 담은 B 만 금액 변화 (A 는 두 번 다 시세 없음)
+    const s = compareSinceLast({ id: 1, data: prev }, input("2026-09-28", [P("A", null), P("B", 1000)]));
     expect(s.value).toEqual({ from: 0, to: 1000, change: 1000, rate: null });
     expect(s.weights).toEqual([]);
+    // A 가 이번에 시세를 받았어도 지난 합계에 없던 값이라 비교에서 뺀다 (예전: +1000 · 비율 없음)
+    const a = compareSinceLast({ id: 1, data: prev }, input("2026-09-28", [P("A", 1000)]));
+    expect(a.value).toEqual({ from: 0, to: 0, change: 0, rate: null });
+    expect(a.oneSide).toEqual([{ code: "A", name: "A", side: "prev", why: "price" }]);
   });
 
   it("지난 브리핑의 합계에서 뺀 종목(excluded)은 excludedPrev 로 (예전 기록에도 있는 칸)", () => {
     const prev = input("2026-09-25", [P("A", 1000)], { excluded: [{ code: "T", name: "테슬라", reason: "시세를 받지 못해 합계에서 뺐습니다" }] });
     expect(compareSinceLast({ id: 1, data: prev }, input("2026-09-28", [P("A", 1000)])).excludedPrev).toEqual([{ code: "T", name: "테슬라" }]);
+  });
+
+  // ── 리뷰 고침: 한쪽 브리핑 합계에서만 빠진 종목이 가짜 변화를 만들지 않게 ──
+  const T = (reason: string) => [{ code: "T", name: "테슬라", reason }];
+  const NO_PRICE = "시세를 받지 못해 합계에서 뺐습니다";
+  const NO_FX = "환율을 받지 못해 원화 합계에서 뺐습니다";
+
+  it("이번에만 빠짐(리뷰 재현 — 금 삼성전자 + 테슬라 5.6M, 월 테슬라 시세 없음): 값이 그대로면 총 평가 0원·비중 변화 없음 (고치기 전: -5,600,000원 -41.18% · 58.8% → 100.0%)", () => {
+    const prev = input("2026-09-25", [P("S", 8_000_000, 100, "삼성전자"), P("T", 5_600_000, 3, "테슬라")]);
+    const now = input("2026-09-28", [P("S", 8_000_000, 100, "삼성전자"), P("T", null, 3, "테슬라")], { excluded: T(NO_PRICE) });
+    const s = compareSinceLast({ id: 1, data: prev }, now);
+    expect(s.value).toEqual({ from: 8_000_000, to: 8_000_000, change: 0, rate: 0 });
+    expect(s.profit.change).toBe(0);
+    expect(s.weights).toEqual([]);
+    expect(s.positions).toEqual({ added: [], removed: [], increased: [], decreased: [] });
+    expect(s.scope).toBe("common");
+    expect(s.oneSide).toEqual([{ code: "T", name: "테슬라", side: "now", why: "price" }]);
+  });
+
+  it("지난번에만 빠짐(환율을 받지 못함): 값이 그대로면 0원 (고치기 전: +5,844,300원 +83.49% · 100.0% → 54.5%), 이유는 환율", () => {
+    const prev = input("2026-09-25", [P("S", 7_000_000, 100, "삼성전자"), P("T", null, 3, "테슬라")], { excluded: T(NO_FX) });
+    const now = input("2026-09-28", [P("S", 7_000_000, 100, "삼성전자"), P("T", 5_844_300, 3, "테슬라")]);
+    const s = compareSinceLast({ id: 1, data: prev }, now);
+    expect(s.value).toEqual({ from: 7_000_000, to: 7_000_000, change: 0, rate: 0 });
+    expect(s.weights).toEqual([]);
+    expect(s.oneSide).toEqual([{ code: "T", name: "테슬라", side: "prev", why: "fx" }]);
+  });
+
+  it("평가손익도 같은 범위로: 한쪽에만 들어 있는 종목의 (평가 − 매입)을 그 합계의 평가손익에서 뺀다", () => {
+    const Q = (code: string, value: number | null, cost: number | null): AccountPosition => ({ code, name: code, currency: "KRW", quantity: 1, value, cost });
+    const prev: SinceLastInput = { ...input("2026-09-25", [Q("A", 1_000, 800), Q("B", 500, 700)]), totalProfit: 200 - 200 };
+    const now: SinceLastInput = { ...input("2026-09-28", [Q("A", 1_100, 800), Q("B", null, null)], { excluded: [{ code: "B", name: "B", reason: NO_PRICE }] }), totalProfit: 300 };
+    const s = compareSinceLast({ id: 1, data: prev }, now);
+    expect(s.value).toEqual({ from: 1_000, to: 1_100, change: 100, rate: 10 });
+    expect(s.profit).toEqual({ from: 200, to: 300, change: 100 });
+  });
+
+  it("새 종목·없어진 종목의 값은 그대로 금액 변화에 들어 있다 (한쪽에만 보유 — 수량 변화로 말함) · 시세 없는 새 종목도 '한쪽 합계에서만 빠진 종목'이 아님", () => {
+    const prev = input("2026-09-25", [P("A", 1_000), P("R", 500)]);
+    const now = input("2026-09-28", [P("A", 1_000), P("N", 300), P("X", null)], { excluded: [{ code: "X", name: "X", reason: NO_PRICE }] });
+    const s = compareSinceLast({ id: 1, data: prev }, now);
+    expect(s.value).toMatchObject({ from: 1_500, to: 1_300, change: -200 });
+    expect(s.scope).toBe("all");
+    expect(s.oneSide).toEqual([]);
+    expect(s.positions!.added.map((x) => x.code)).toEqual(["N", "X"]);
+  });
+
+  it("무작위 500회: 수량·값이 그대로면 어느 종목이 한쪽에서 빠져도 총 평가·평가손익 변화 0 · 비중 변화 없음 · 금액은 두 브리핑 모두 값이 있는 종목의 합", () => {
+    let seed = 7;
+    const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let n = 0; n < 500; n++) {
+      const codes = Array.from({ length: 1 + (n % 9) }, (_, i) => `C${i}`);
+      const vals = codes.map(() => 1 + Math.floor(rnd() * 5_000_000));
+      const costs = vals.map((v) => Math.max(1, Math.round(v * (0.5 + rnd()))));
+      const miss = () => codes.map(() => rnd() < 0.3);
+      const mp = miss();
+      const mn = miss();
+      const side = (m: boolean[], date: string): SinceLastInput => {
+        const positions: AccountPosition[] = codes.map((c, i) => ({ code: c, name: c, currency: "KRW", quantity: 1, value: m[i] ? null : vals[i]!, cost: m[i] ? null : costs[i]! }));
+        const counted = positions.filter((p) => p.value !== null);
+        return {
+          session: "morning",
+          date,
+          asOf: `${date}T08:38:00+09:00`,
+          totalValue: sumOf(counted.map((p) => p.value!)),
+          totalProfit: sumOf(counted.map((p) => p.value! - p.cost!)),
+          excluded: positions.filter((p) => p.value === null).map((p) => ({ code: p.code, name: p.name, reason: rnd() < 0.5 ? NO_PRICE : NO_FX })),
+          positions,
+        };
+      };
+      const s = compareSinceLast({ id: 1, data: side(mp, "2026-09-25") }, side(mn, "2026-09-28"));
+      const common = sumOf(codes.map((_, i) => (mp[i] || mn[i] ? 0 : vals[i]!)));
+      expect(s.value.from).toBe(common);
+      expect(s.value.to).toBe(common);
+      expect(s.value.change).toBe(0);
+      expect(s.profit.change).toBe(0);
+      expect(s.weights).toEqual([]);
+      expect(s.oneSide.map((o) => o.code)).toEqual(codes.filter((_, i) => mp[i] !== mn[i]));
+      expect(s.scope).toBe(codes.some((_, i) => mp[i] !== mn[i]) ? "common" : "all");
+    }
+  });
+
+  it("종목별 값이 없는 지난 브리핑(배포 첫날): 합계에서 뺀 종목 목록이 다르면 mixed(뺄 수 없어 합계 그대로), 같으면 all", () => {
+    const old = (excluded: SinceLastInput["excluded"]): { id: number; data: SinceLastInput } => ({
+      id: 1,
+      data: { session: "morning", date: "2026-09-25", asOf: "2026-09-25T08:38:00+09:00", totalValue: 1_000, totalProfit: 0, excluded },
+    });
+    const now = input("2026-09-28", [P("A", 900), P("T", null, 3, "테슬라")], { excluded: T(NO_PRICE) });
+    expect(compareSinceLast(old([]), now)).toMatchObject({
+      scope: "mixed",
+      oneSide: [{ code: "T", name: "테슬라", side: "now", why: "price" }],
+      value: { from: 1_000, to: 900, change: -100 },
+      positions: null,
+      weights: null,
+    });
+    expect(compareSinceLast(old(T(NO_FX)), now)).toMatchObject({ scope: "all", oneSide: [] });
+    // 지난번에만 뺀 종목 → side prev · 이유는 지난 기록의 것
+    expect(compareSinceLast(old(T(NO_FX)), input("2026-09-28", [P("A", 900)])).oneSide).toEqual([{ code: "T", name: "테슬라", side: "prev", why: "fx" }]);
   });
 });
 
@@ -290,6 +406,40 @@ describe("계좌 브리핑 저장: positions·sinceLast (서비스)", () => {
     const again = await make(svc, "morning", "2026-09-28", true);
     expect(again.id).toBe(first.id);
     expect((await svc.get(again.id)).data!.sinceLast!.positions!.added).toEqual([{ code: "005930", name: "삼성전자", from: 0, to: 10 }]);
+  });
+
+  it("월 오전에만 엔비디아 환율을 받지 못함: 금액·비중은 SK하이닉스끼리(엔비디아 뺌) · 목록 한 줄에 leftOut 1 · 이유 fx", async () => {
+    const { svc, st } = await setup();
+    const fri = await make(svc, "morning", "2026-09-25");
+    st.list = [holding("000660", "SK하이닉스", 345_000, 10), holding("NVDA", "엔비디아", 322.8, 5, { currency: "USD", fx: null })];
+    st.at = "2026-09-28T08:38:00+09:00";
+    const mon = await make(svc, "morning", "2026-09-28");
+    const d = (await svc.get(mon.id)).data!;
+    expect(d.excluded.map((e) => e.code)).toEqual(["NVDA"]);
+    const s = d.sinceLast!;
+    expect(s.prev.id).toBe(fri.id);
+    // 엔비디아 값이 금요일 합계에만 있어도 가짜 '줄어듦'이 나오지 않는다: 3,300,000 → 3,450,000
+    expect(s.value).toEqual({ from: 3_300_000, to: 3_450_000, change: 150_000, rate: 4.55 });
+    expect(s.weights).toEqual([]);
+    expect(s.scope).toBe("common");
+    expect(s.oneSide).toEqual([{ code: "NVDA", name: "엔비디아", side: "now", why: "fx" }]);
+    expect((await svc.list())[0]!.headline!.since).toEqual({ date: "2026-09-25", session: "morning", change: 150_000, qtyChanged: 0, leftOut: 1 });
+  });
+
+  it("예전 기록(positions 없음)과 비교하는데 이번에만 시세가 없는 종목: 뺄 수 없어 합계 그대로(scope mixed) · 목록 한 줄은 싣지 않음", async () => {
+    const { svc, st, flags } = await setup();
+    flags.accountSinceLast = false;
+    await make(svc, "morning", "2026-09-25");
+    flags.accountSinceLast = true;
+    st.list = [holding("000660", "SK하이닉스", 330_000, 10), holding("NVDA", "엔비디아", 322.8, 5, { currency: "USD", quote: false })];
+    st.at = "2026-09-28T08:38:00+09:00";
+    const mon = await make(svc, "morning", "2026-09-28");
+    const s = (await svc.get(mon.id)).data!.sinceLast!;
+    expect(s).toMatchObject({ scope: "mixed", oneSide: [{ code: "NVDA", name: "엔비디아", side: "now", why: "price" }], positions: null, weights: null });
+    expect(s.value.change).toBe(-Math.round(322.8 * 5 * 1391.5));
+    const listed = (await svc.list())[0]!;
+    expect(listed.id).toBe(mon.id);
+    expect(listed.headline).not.toHaveProperty("since");
   });
 
   it("꺼짐: positions·sinceLast 칸이 없고(예전 모양 그대로) 지난 브리핑을 찾지 않는다 · headline 에 since 없음", async () => {

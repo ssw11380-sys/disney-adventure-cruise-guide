@@ -193,21 +193,39 @@ export interface AccountWeightChange {
   change: number;
 }
 
+/** 한쪽 브리핑 합계에서만 빠진 종목 한 줄. side = 값이 없던(합계에서 뺀) 브리핑, why = 시세 또는 환율을 받지 못함 */
+export interface AccountOneSide {
+  code: string;
+  name: string;
+  side: "prev" | "now";
+  why: "price" | "fx";
+}
+
 /** 지난 같은 세션 계좌 브리핑과 비교 (브리핑 3차 3 — services/accountSinceLast.compareSinceLast) */
 export interface AccountSinceLast {
   /** 비교한 지난 브리핑 (기준 시각 = 두 브리핑의 asOf) */
   prev: { id: number; date: string; session: AccountSession; asOf: string };
-  /** 총 평가금액(원): 지난 → 이번. rate = 변화 ÷ 지난 값 (%) */
+  /** 총 평가금액(원): 지난 → 이번. rate = 변화 ÷ 지난 값 (%). scope 가 common 이면 oneSide 종목을 뺀 값 */
   value: { from: number; to: number; change: number; rate: number | null };
-  /** 평가손익(원): 지난 → 이번 */
+  /** 평가손익(원): 지난 → 이번. scope 가 common 이면 oneSide 종목을 뺀 값 */
   profit: { from: number; to: number; change: number };
   /** 수량이 바뀐 종목 (지난 브리핑에 종목별 값이 없으면 null) */
   positions: { added: AccountQtyChange[]; removed: AccountQtyChange[]; increased: AccountQtyChange[]; decreased: AccountQtyChange[] } | null;
-  /** 비중 변화가 큰 종목: 두 브리핑 모두 값이 있는 종목 중 0.5%p 이상, 큰 순 3개 (지난 브리핑에 종목별 값이 없으면 null) */
+  /** 비중 변화가 큰 종목: 두 브리핑 모두 값이 있는 종목 중 0.5%p 이상, 큰 순 3개 (지난 브리핑에 종목별 값이 없으면 null). 분모는 value 의 from·to */
   weights: AccountWeightChange[] | null;
-  /** 시세가 없어 합계에서 뺀 종목 (이번 · 지난) */
+  /** 시세·환율이 없어 합계에서 뺀 종목 (이번 · 지난) */
   excludedNow: Array<{ code: string; name: string }>;
   excludedPrev: Array<{ code: string; name: string }>;
+  /**
+   * 금액·비중을 어떤 종목으로 비교했는지 (리뷰 고침 — 한쪽 합계에서만 빠진 종목이 가짜 변화를 만들지 않게):
+   *  - all: 두 브리핑의 합계 그대로 (한쪽 합계에서만 빠진 종목 없음)
+   *  - common: 두 브리핑 모두 보유했는데 한쪽 합계에서만 빠진 종목(oneSide)을 양쪽에서 빼고 비교 (value·profit·weights 모두)
+   *  - mixed: 지난 브리핑에 종목별 값이 없어 뺄 수 없는데 합계에서 뺀 종목이 두 브리핑에서 다름 → 금액은 합계 그대로(그 종목 값이 섞였을 수 있음).
+   *    목록 headline 에는 한 줄을 싣지 않는다
+   */
+  scope: "all" | "common" | "mixed";
+  /** 한쪽 브리핑 합계에서만 빠진 종목 (common: 두 브리핑 모두 보유 · mixed: 두 브리핑의 합계에서 뺀 종목 목록이 다른 것) */
+  oneSide: AccountOneSide[];
 }
 
 /** 오늘 한국 휴장인데 국내 보유분이 있는지 (국내 등락이 직전 거래일 것인지) */
@@ -442,7 +460,9 @@ export function positionsOf(list: readonly AccountHolding[], opts: { afterCost?:
     if (!(quantity > 0) || s.avgPrice === null) continue;
     const q = s.quote;
     const ev = s.evaluation;
-    const currency = q?.currency ?? (/^\d/.test(s.code) ? "KRW" : "USD");
+    // 시세가 있으면 computeAccount 와 같은 통화 규칙(통화 칸이 없으면 KRW) — 포함 여부·환율 곱이 합계와 어긋나지 않게.
+    // 시세가 없으면(값 null) 보이는 통화만 코드로 짐작한다
+    const currency = q ? (q.currency ?? "KRW") : /^\d/.test(s.code) ? "KRW" : "USD";
     const p: AccountPosition = { code: s.code, name: s.name, currency, quantity, value: null, cost: null };
     const fx = q ? (currency === "USD" ? fxOf(q) : 1) : null;
     const native = ev ? (afterCost && ev.afterCost ? ev.afterCost.marketValue : ev.marketValue) : NaN;

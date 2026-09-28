@@ -159,8 +159,9 @@ function AccountBriefingView({ b, top, layout, title, trim, since = false }: { b
           {summary}
           {/* 2단 오른쪽 칸은 넓은 창 두 칸과 같은 한 줄 띠 (폰 화면은 큰 숫자 카드 그대로) */}
           {layout === "pane" ? <TotalsBand d={d} /> : <TotalsCard d={d} />}
-          {since ? <SinceLastCard d={d} /> : null}
           <ContributionCard d={d} wide={layout === "pane"} trim={trim} />
+          {/* 기여 표 아래 — 오늘 무엇이 계좌를 움직였는지(기여 표)가 첫 화면에서 밀려나지 않게 */}
+          {since ? <SinceLastCard d={d} /> : null}
           <ImpactCard d={d} trim={trim} />
           <ScheduleCard s={d.schedule} asOf={d.asOf} />
           {narrative}
@@ -218,8 +219,8 @@ function AccountSplit({ d, top, head, header, summary, narrative, basis, trim, s
               {header}
               {summary}
               <TotalsBand d={d} />
-              {since ? <SinceLastCard d={d} /> : null}
               <ContributionCard d={d} wide trim={trim} />
+              {since ? <SinceLastCard d={d} /> : null}
             </>
           }
           right={
@@ -306,8 +307,9 @@ function BandKpi({ label, value, sub, tone, rate }: { label: string; value: stri
 }
 
 /**
- * 브리핑 3차 3 (플래그 accountSinceLast): '지난 오전 브리핑과 비교' 카드 — 총 평가 카드(넓은 창·2단은 총 평가 띠) 바로 아래.
- * 두 브리핑이 저장한 숫자 그대로(서버 계산): 기간 · 총 평가금액·평가손익 변화(지난 → 이번) · 수량이 바뀐 종목 · 비중 변화가 큰 종목 · 작은 글(사고판 금액·첫날·뺀 종목·비교 기준).
+ * 브리핑 3차 3 (플래그 accountSinceLast): '지난 오전 브리핑과 비교' 카드 — 당일 손익 기여 표 바로 아래(세 칸은 기여 표가 가운데 칸이라 왼쪽 칸 총 평가 띠 아래).
+ * 두 브리핑이 저장한 숫자로(서버 계산): 기간 · 총 평가금액·평가손익 변화(지난 → 이번) · 수량이 바뀐 종목 · 비중 변화가 큰 종목 ·
+ * 작은 글(수량 변화·첫날·한쪽 합계에서만 빠진 종목·합계에서 뺀 종목·비교 기준).
  * 색은 변화 금액·%p 에만(보이는 부호). 화면 읽기는 묶음마다 한 문장. 예전 기록(칸 없음)은 그리지 않고, 비교할 브리핑이 없으면 한 줄
  */
 function SinceLastCard({ d }: { d: AccountData }) {

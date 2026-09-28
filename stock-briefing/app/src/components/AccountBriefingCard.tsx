@@ -82,7 +82,6 @@ export function AccountBriefingCard({
                 <Muted>보유 {h.holdings}종목</Muted>
               </View>
             </View>
-            {since ? <SinceLineText briefing={briefing} /> : null}
             {top ? (
               <Text style={{ color: t.sub, fontSize: font.small }}>
                 기여 1위 <Text style={{ color: t.ink, fontWeight: "700" }}>{top.name}</Text>{" "}
@@ -91,6 +90,8 @@ export function AccountBriefingCard({
               </Text>
             ) : null}
             {block ? <ContributorsBlock briefing={briefing} /> : null}
+            {/* 기여 묶음 뒤에 (묶음 머리의 'HH:MM 기준'이 이 줄의 시각으로 읽히지 않게, 당일 손익 묶음을 가르지 않게) */}
+            {since ? <SinceLineText briefing={briefing} /> : null}
             {h.krPreviousDay ? <Muted>{trim ? krPreviousDayLine(briefing.date) : KR_PREVIOUS_DAY_LINE}</Muted> : null}
             {h.usPreviousDay ? <Muted>{usPreviousDayLine(briefing.date, h.usHolidayDate)}</Muted> : null}
             {trim ? (
@@ -192,8 +193,9 @@ export function AccountBriefingRow({
           ) : null}
         </View>
       )}
-      {since && !failed ? <SinceLineText briefing={briefing} cap={fontCap.row} /> : null}
       {block && !failed ? <ContributorsBlock briefing={briefing} /> : null}
+      {/* 기여 묶음 뒤, 휴장 줄 앞 (당일 손익 묶음을 가르지 않게) */}
+      {since && !failed ? <SinceLineText briefing={briefing} cap={fontCap.row} /> : null}
       {holidays.map((l) => (
         <Text key={l.text} style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
           {l.text}
@@ -245,23 +247,25 @@ export function ContributorsBlock({ briefing }: { briefing: AccountBriefing }) {
 
 /**
  * 브리핑 3차 3 (플래그 accountSinceLast): '9/25(금) 오전보다 총 평가 +544,322원 · 수량 바뀐 종목 2' 한 줄 (비교가 저장된 브리핑만, 없으면 그리지 않음).
- * 두 묶음(총 평가 변화 · 수량)을 따로 두어 좁으면 묶음째 다음 줄로. 금액만 보이는 부호의 등락 색. 누르는 곳이 따로 없다 (줄·카드 전체가 링크 하나)
+ * 묶음(총 평가 변화 · 'N종목 빼고 비교' · 수량)을 따로 두어 좁으면 묶음째 다음 줄로 (구분점은 앞 묶음 끝에).
+ * 금액만 보이는 부호의 등락 색. 누르는 곳이 따로 없다 (줄·카드 전체가 링크 하나)
  */
 export function SinceLineText({ briefing, cap }: { briefing: AccountBriefing; cap?: number }) {
   const t = useTheme();
   const l = sinceLine(briefing);
   if (!l) return null;
+  const rest = [l.left, l.qty].filter((x): x is string => x !== null);
   return (
     <View style={styles.rowNums}>
       <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={cap}>
         {l.head} <Text style={[styles.num, { color: changeColor(t, l.sign) }]}>{l.amount}</Text>
-        {l.qty ? " ·" : null}
+        {rest.length ? " ·" : null}
       </Text>
-      {l.qty ? (
-        <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={cap}>
-          {l.qty}
+      {rest.map((x, i) => (
+        <Text key={x} style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={cap}>
+          {i < rest.length - 1 ? `${x} ·` : x}
         </Text>
-      ) : null}
+      ))}
     </View>
   );
 }

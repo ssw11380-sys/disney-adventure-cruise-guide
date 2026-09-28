@@ -6,8 +6,9 @@ import { cleanupRenders, render, type HostNode } from "./miniRender";
 
 /**
  * 브리핑 3차 3 — 지난 브리핑과 비교 (플래그 accountSinceLast, 앱 fallback 꺼짐) 화면.
- *  - 계좌 상세: 총 평가 카드(2단 오른쪽 칸·넓은 창 두/세 칸은 총 평가 띠) 바로 아래 '지난 오전 브리핑과 비교' 카드. 비교할 브리핑이 없으면 한 줄, 예전 기록은 없음
- *  - 브리핑 탭: 접은 화면 계좌 줄·큰 카드·카드 격자 계좌 줄에 '9/25(금) 오전보다 총 평가 …' 한 줄 (2단 계좌 줄에는 없음)
+ *  - 계좌 상세: 당일 손익 기여 표(2단 오른쪽 칸·넓은 창 두 칸도) 바로 아래 '지난 오전 브리핑과 비교' 카드 — 세 칸은 기여 표가 가운데 칸이라 왼쪽 칸 총 평가 띠 아래.
+ *    비교할 브리핑이 없으면 한 줄, 예전 기록은 없음
+ *  - 브리핑 탭: 접은 화면 계좌 줄·큰 카드·카드 격자 계좌 줄에 '9/25(금) 오전보다 총 평가 …' 한 줄 — 기여(1위·상위 묶음) 뒤, 휴장 줄 앞 (2단 계좌 줄에는 없음)
  *  - 꺼짐: 새 칸이 와도 그림 트리가 지금과 같음
  * 시계는 고정 (월 9/28 08:40), RN 부품·공용 UI 는 문자열 요소로, API 훅은 가짜로 바꿔 끼운다
  */
@@ -86,10 +87,12 @@ const pick = await import("@/lib/briefingPick");
 const readStore = await import("@/lib/briefingRead");
 const { dark } = await import("@/tokens");
 
-type Case = { name: string; expected: AccountSinceLast; app: { title: string; range: string; qty: string[] | null; weights: string[] | null; notes: string[]; headSpeech: string; line: string; lineSpeech: string } };
+type Case = { name: string; expected: AccountSinceLast; app: { title: string; range: string; qty: string[] | null; weights: string[] | null; notes: string[]; headSpeech: string; line: string | null; lineSpeech: string | null } };
 const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/accountSinceLast.json", import.meta.url), "utf8")) as { cases: Case[] };
 const MONDAY = fixture.cases.find((c) => c.name === "monday")!;
 const FIRST = fixture.cases.find((c) => c.name === "firstDay")!;
+const EXCLUDED = fixture.cases.find((c) => c.name === "excluded")!;
+const MIXED = fixture.cases.find((c) => c.name === "mixedFirstDay")!;
 
 /** 월 9/28 08:38 오전 계좌 브리핑 (숫자는 픽스처 monday 의 이번 브리핑) */
 const DATA: AccountData = {
@@ -108,10 +111,15 @@ const DATA: AccountData = {
   schedule: { kr: { date: "2026-09-28", tradingDay: true, now: "개장 전", hours: "정규장 09:00~15:30", nextOpen: null }, us: { date: "2026-09-28", tradingDay: true, now: "미국 휴장 시간", hours: "정규장 9/28 22:30~9/29 05:00 (한국 시간)" }, disclosures: [] },
   narrative: { source: "template", reason: null },
 };
-const since = (s: AccountSinceLast) => ({
-  date: s.prev.date, session: s.prev.session, change: s.value.change,
-  qtyChanged: s.positions ? s.positions.added.length + s.positions.removed.length + s.positions.increased.length + s.positions.decreased.length : null,
-});
+/** 서버 toBriefing·sinceHeadline 과 같은 값 (금액을 맞추지 못한 비교 — scope mixed — 는 한 줄 없음) */
+const since = (s: AccountSinceLast) =>
+  s.scope === "mixed"
+    ? undefined
+    : {
+        date: s.prev.date, session: s.prev.session, change: s.value.change,
+        qtyChanged: s.positions ? s.positions.added.length + s.positions.removed.length + s.positions.increased.length + s.positions.decreased.length : null,
+        ...(s.scope === "common" && s.oneSide?.length ? { leftOut: s.oneSide.length } : {}),
+      };
 const ACCOUNT: AccountBriefing = {
   id: 12, date: "2026-09-28", session: "morning", status: "ok", summary: "당일 +212,000원 (+1.81%) · 기여 1위 엔비디아 +150,000원\n총 평가금액 11,926,340원",
   detail: "- 설명", model: "template", template: true, createdAt: "2026-09-28T08:38:00+09:00",
@@ -119,7 +127,8 @@ const ACCOUNT: AccountBriefing = {
 };
 const withSince = (s: AccountSinceLast | null | undefined): { item: AccountBriefing; detail: AccountBriefingWithData } => {
   const data: AccountData = s === undefined ? DATA : { ...DATA, sinceLast: s, positions: [] };
-  const item = s ? { ...ACCOUNT, headline: { ...ACCOUNT.headline!, since: since(s) } } : ACCOUNT;
+  const head = s ? since(s) : undefined;
+  const item = head ? { ...ACCOUNT, headline: { ...ACCOUNT.headline!, since: head } } : ACCOUNT;
   return { item, detail: { ...item, data } };
 };
 
@@ -186,15 +195,16 @@ describe("계좌 상세: '지난 오전 브리핑과 비교' 카드", () => {
     h.flags.accountSinceLast = true;
   });
 
-  it("폰(stack): 총 평가 카드 바로 아래 · 제목·기간·금액·수량·비중·작은 글 · 화면 읽기 묶음 세 문장", () => {
+  it("폰(stack): 당일 손익 기여 표 바로 아래(첫 화면에서 기여 표를 밀어내지 않게) · 제목·기간·금액·수량·비중·작은 글 · 화면 읽기 묶음 세 문장", () => {
     const r = render(<AccountBriefingBody numId={12} layout="stack" />);
     const screen = ofType(r, "Screen")[0]!;
     const names = cardNames(kids(screen));
     const at = names.indexOf("지난 오전 브리핑과 비교");
     expect(at).toBeGreaterThan(0);
-    expect(names[at + 1]).toBe("당일 손익 기여");
-    // 바로 앞은 총 평가 카드 ('총 평가금액 · 비용 차감')
-    expect(names[at - 1]).toMatch(/^총 평가금액 · 비용/);
+    // 총 평가 카드 → 기여 표 → 비교 카드 → 보유분·지수·환율
+    expect(names[at - 2]).toMatch(/^총 평가금액 · 비용/);
+    expect(names[at - 1]).toBe("당일 손익 기여");
+    expect(names[at + 1]).toBe("보유분·지수·환율");
     const card = sinceCard(r)!;
     const text = rawOf(card);
     for (const s of [MONDAY.app.range, "총 평가금액", "-419,338원", " (-3.40%)", "평가손익", "+546,000원", "수량이 바뀐 종목", "비중 변화가 큰 종목", ...MONDAY.app.notes]) expect(text, s).toContain(s);
@@ -255,27 +265,53 @@ describe("계좌 상세: '지난 오전 브리핑과 비교' 카드", () => {
     expect(rawOf(card)).not.toContain("사고판");
   });
 
-  it("2단 오른쪽 칸(pane): 총 평가 띠 바로 아래", () => {
+  it("2단 오른쪽 칸(pane): 기여 표 바로 아래", () => {
     const r = render(<AccountBriefingBody numId={12} layout="pane" />);
     const names = cardNames(kids(ofType(r, "Screen")[0]!));
     const at = names.indexOf("지난 오전 브리핑과 비교");
-    expect(names[at - 1]).toMatch(/^총 평가금액 · 비용/);
-    expect(names[at + 1]).toBe("당일 손익 기여");
+    expect(names[at - 2]).toMatch(/^총 평가금액 · 비용/);
+    expect(names[at - 1]).toBe("당일 손익 기여");
+    expect(names[at + 1]).toBe("보유분·지수·환율");
   });
 
   it.each([
-    ["세 칸 933×704", { width: 933, height: 704 }, ["요약", "총 평가", "비교"]],
-    ["두 칸 704×933", { width: 704, height: 933 }, ["요약", "총 평가", "비교", "당일 손익 기여"]],
-  ])("넓은 창 %s: 왼쪽 칸 총 평가 띠 아래", (_n, size, _order) => {
+    ["세 칸 933×704", { width: 933, height: 704 }],
+    ["두 칸 704×933", { width: 704, height: 933 }],
+  ])("넓은 창 %s: 왼쪽 칸 (두 칸은 기여 표 아래, 세 칸은 기여 표가 가운데 칸이라 총 평가 띠 아래)", (_n, size) => {
     h.win = { ...size, scale: 2.625, fontScale: 1 };
     const r = render(<AccountBriefingBody numId={12} layout="split" />);
     const left = ofType(r, "ScrollView")[0]!;
     const names = cardNames(kids(left));
     const at = names.indexOf("지난 오전 브리핑과 비교");
     expect(at).toBeGreaterThan(0);
-    expect(names[at - 1]).toMatch(/^총 평가금액 · 비용/);
-    if (size.width === 704) expect(names[at + 1]).toBe("당일 손익 기여");
-    else expect(names.includes("당일 손익 기여")).toBe(false); // 세 칸은 기여 표가 가운데 칸
+    if (size.width === 704) {
+      expect(names[at - 2]).toMatch(/^총 평가금액 · 비용/);
+      expect(names[at - 1]).toBe("당일 손익 기여");
+      expect(at).toBe(names.length - 1);
+    } else {
+      expect(names[at - 1]).toMatch(/^총 평가금액 · 비용/);
+      expect(names.includes("당일 손익 기여")).toBe(false); // 세 칸은 기여 표가 가운데 칸
+    }
+  });
+
+  it("한쪽 브리핑 합계에서만 빠진 종목(리뷰 고침): 두 브리핑 모두 값이 있는 종목끼리의 금액·비중과 사실대로의 작은 글 ('비교에서 뺐습니다' 없음)", () => {
+    h.detail = withSince(EXCLUDED.expected).detail;
+    const card = sinceCard(render(<AccountBriefingBody numId={12} layout="stack" />))!;
+    const text = rawOf(card);
+    for (const s of ["+300,000원", " (+3.33%)", ...EXCLUDED.app.notes]) expect(text, s).toContain(s);
+    expect(chunkRows(card)).toContain("9,000,000원 → 9,300,000원");
+    for (const w of EXCLUDED.app.weights!) expect(chunkRows(card)).toContain(w);
+    expect(text).not.toContain("비교에서 뺐습니다");
+    expect(text).not.toContain("-1,000,000원");
+    expect(allOf(card).find((n) => n.props.accessible === true)!.props.accessibilityLabel).toBe(EXCLUDED.app.headSpeech);
+  });
+
+  it("종목별 값이 없어 그 종목을 빼지 못한 비교(mixed): 카드에 금액 그대로 + 사실대로의 작은 글", () => {
+    h.detail = withSince(MIXED.expected).detail;
+    const card = sinceCard(render(<AccountBriefingBody numId={12} layout="stack" />))!;
+    const text = rawOf(card);
+    for (const s of ["-700,000원", ...MIXED.app.notes]) expect(text, s).toContain(s);
+    expect(rawOf(card)).not.toContain("수량이 바뀐 종목");
   });
 
   it("예전 기록(칸 없음)은 켜도 카드가 없고 그림 트리가 꺼진 것과 같다", () => {
@@ -329,13 +365,13 @@ describe("브리핑 탭 계좌 카드·줄 한 줄", () => {
   });
   const lineOf = (r: R) => r.all().filter((n) => n.type === "View" && kids(n).some((k) => k.type === "Text" && rawOf(k).includes("오전보다 총 평가"))).map((v) => kids(v).map(rawOf).join(" "));
 
-  it("접은 화면 맨 위 계좌 줄(475×751): 숫자 줄 아래 '9/25(금) 오전보다 총 평가 -419,338원 ·' + '수량 바뀐 종목 4' · 화면 읽기 조각은 총 평가 뒤", async () => {
+  it("접은 화면 맨 위 계좌 줄(475×751): 숫자 줄 아래 '9/25(금) 오전보다 총 평가 -419,338원 ·' + '수량 바뀐 종목 4' · 화면 읽기 조각은 기여 1위 뒤(보이는 순서)", async () => {
     h.flags.briefingCompactTop = true;
     const r = render(<BriefingsScreen />);
     await settle(r);
     expect(lineOf(r)).toEqual(["9/25(금) 오전보다 총 평가 -419,338원 · 수량 바뀐 종목 4"]);
     const label = labels(r).find((l) => l.startsWith("내 계좌 브리핑"))!;
-    expect(label).toContain(`총 평가금액 11,926,340원, ${MONDAY.app.lineSpeech}, `);
+    expect(label).toContain(`총 평가금액 11,926,340원, 기여 1위 엔비디아 150,000원 이익, ${MONDAY.app.lineSpeech}, 자세히 보기`);
     // 금액만 색 (줄어듦 = 파랑)
     const amount = r.all().find((n) => n.type === "Text" && rawOf(n) === "-419,338원")!;
     expect(JSON.stringify(amount.props.style)).toContain(dark.down);
@@ -364,6 +400,43 @@ describe("브리핑 탭 계좌 카드·줄 한 줄", () => {
     const grid = render(<BriefingsScreen />);
     await settle(grid);
     expect(lineOf(grid)).toEqual(["9/25(금) 오전보다 총 평가 -419,338원 · 수량 바뀐 종목 4"]);
+  });
+
+  it("자리(리뷰 고침): 기여 상위 묶음 뒤·휴장 줄 앞 — 당일 손익 묶음을 가르지 않고, 묶음 머리의 '08:38 기준'이 이 줄의 시각으로 읽히지 않게", () => {
+    const item = withSince(MONDAY.expected).item;
+    const idxOf = (list: HostNode[], re: RegExp) => list.findIndex((n) => re.test(rawOf(n)));
+    // 접은 화면 계좌 줄 (기여 상위 묶음 켬)
+    const row = render(<AccountBriefingRow briefing={item} selected={false} onPress={() => undefined} role="link" contributors since />);
+    const rowKids = kids(ofType(row, "Pressable")[0]!);
+    const contrib = idxOf(rowKids, /당일 손익 기여 상위/);
+    expect(contrib).toBeGreaterThan(0);
+    expect(idxOf(rowKids, /오전보다 총 평가/)).toBe(contrib + 1);
+    // 큰 카드: 기여 상위 묶음 뒤, 한국 휴장 줄 앞
+    const kr = { ...item, headline: { ...item.headline!, krPreviousDay: true } };
+    const card = render(<AccountBriefingCard briefing={kr} contributors since />);
+    const cardKids = kids(ofType(card, "Pressable")[0]!);
+    const block = idxOf(cardKids, /당일 손익 기여 상위/);
+    const line = idxOf(cardKids, /오전보다 총 평가/);
+    expect(line).toBe(block + 1);
+    expect(idxOf(cardKids, /휴장/)).toBe(line + 1);
+    // 기여 1위 한 줄(묶음 끔)이면 그 줄 뒤
+    const one = kids(ofType(render(<AccountBriefingCard briefing={item} since />), "Pressable")[0]!);
+    expect(idxOf(one, /오전보다 총 평가/)).toBe(idxOf(one, /^기여 1위/) + 1);
+  });
+
+  it("금액 비교에서 뺀 종목이 있으면 '· 1종목 빼고 비교' 묶음 · 금액을 맞추지 못한 비교(mixed)는 줄 없음", async () => {
+    h.flags.briefingCompactTop = true;
+    h.accounts = [withSince(EXCLUDED.expected).item];
+    const r = render(<BriefingsScreen />);
+    await settle(r);
+    expect(lineOf(r)).toEqual([EXCLUDED.app.line]);
+    expect(labels(r).find((l) => l.startsWith("내 계좌 브리핑"))).toContain(EXCLUDED.app.lineSpeech!);
+    cleanupRenders();
+    h.accounts = [withSince(MIXED.expected).item];
+    const m = render(<BriefingsScreen />);
+    await settle(m);
+    expect(lineOf(m)).toEqual([]);
+    expect(labels(m).find((l) => l.startsWith("내 계좌 브리핑"))).not.toContain("오전 브리핑보다");
   });
 
   it("비교가 없는 브리핑·실패 브리핑은 줄 없음 · 수량 모름(첫날)은 수량 조각 없음", () => {

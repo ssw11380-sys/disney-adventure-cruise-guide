@@ -338,6 +338,13 @@ export interface AccountSinceLast {
   weights: AccountWeightChange[] | null;
   excludedNow: { code: string; name: string }[];
   excludedPrev: { code: string; name: string }[];
+  /**
+   * 금액·비중 비교 범위 (서버 accountNumbers.AccountSinceLast.scope): all = 두 합계 그대로, common = 한쪽 합계에서만 빠진 종목(oneSide)을 양쪽에서 빼고,
+   * mixed = 종목별 값이 없어 뺄 수 없음(합계에서 뺀 종목이 두 브리핑에서 다름). 칸이 없으면 all
+   */
+  scope?: "all" | "common" | "mixed";
+  /** 한쪽 브리핑 합계에서만 빠진 종목. side = 값이 없던 브리핑, why = 시세(price)·환율(fx)을 받지 못함. 칸이 없으면 없음 */
+  oneSide?: { code: string; name: string; side: "prev" | "now"; why: "price" | "fx" }[];
 }
 
 export interface AccountHeadline {
@@ -353,8 +360,9 @@ export interface AccountHeadline {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만 옴) */
   usHolidayDate?: string;
-  /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교 한 줄 — 날짜·세션·총 평가 변화·수량 바뀐 종목 수(모르면 null). 비교가 저장된 브리핑만 옴 */
-  since?: { date: string; session: BriefingSession; change: number; qtyChanged: number | null };
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교 한 줄 — 날짜·세션·총 평가 변화·수량 바뀐 종목 수(모르면 null)·
+   *  금액 비교에서 뺀 종목 수 leftOut(한쪽 브리핑 합계에서만 빠진 종목, 있을 때만). 비교가 저장된 브리핑만 오고, 합계에서 뺀 종목이 달라 금액을 맞추지 못한 브리핑은 안 옴 */
+  since?: { date: string; session: BriefingSession; change: number; qtyChanged: number | null; leftOut?: number };
 }
 
 export interface AccountBriefing {

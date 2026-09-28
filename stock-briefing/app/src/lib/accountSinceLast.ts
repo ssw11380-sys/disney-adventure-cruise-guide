@@ -11,9 +11,10 @@ import { mdw } from "@/lib/marketSummary";
 
 /** 수량이 바뀐 종목 줄을 몇 개까지 보이는지 (넘으면 '외 N종목') */
 export const QTY_LINES_MAX = 8;
-export const SINCE_NOTE_TRADED = "수량이 바뀐 종목이 있어, 총 평가금액 변화에는 사고판 금액이 함께 들어 있습니다.";
+// 팔면 그 종목의 평가이익도 평가손익에서 빠지고, 수량은 사고판 것 말고도(분할·잔고 수정·첫 등록·동기화) 바뀐다 → 두 금액 모두·'사고판 것 등'
+export const SINCE_NOTE_TRADED = "수량이 바뀐 종목이 있어, 총 평가금액·평가손익 변화에는 수량 변화(사고판 것 등)가 함께 들어 있습니다.";
 export const SINCE_NOTE_FIRST = "종목별 변화는 다음 브리핑부터 보입니다 (이전 브리핑에 종목별 값이 없음).";
-export const SINCE_NOTE_BASIS = "두 브리핑에 저장된 숫자를 그대로 비교합니다 · 미국 종목은 그때의 환율로 원화 환산.";
+export const SINCE_NOTE_BASIS = "두 브리핑에 저장된 숫자로 비교합니다 · 미국 종목은 그때의 환율로 원화 환산.";
 export const QTY_HEAD = "수량이 바뀐 종목";
 export const QTY_NONE = "수량이 바뀐 종목 없음";
 export const WEIGHT_HEAD = "비중 변화가 큰 종목";
@@ -70,6 +71,43 @@ export function sinceNone(session: BriefingSession): string {
 /** 금액 변화를 말로: '544,322원 늘어남' · '1,000원 줄어듦' · '변화 없음' (보이는 값 기준) */
 function speakChange(amount: string, sign: number): string {
   return sign === 0 ? "변화 없음" : `${speakAmount(amount)} ${sign > 0 ? "늘어남" : "줄어듦"}`;
+}
+
+/** 말 끝에 '으로/로': 받침이 없거나 ㄹ 받침이면 '로' ('원으로' · '이익으로' · '손실로') */
+function withRo(word: string): string {
+  const c = word.charCodeAt(word.length - 1) - 0xac00;
+  const jong = c >= 0 && c < 11172 ? c % 28 : 0;
+  return `${word}${jong === 0 || jong === 8 ? "로" : "으로"}`;
+}
+
+/** 평가손익 값을 말로: '1,234,000원 이익' · '500,000원 손실' · '0원' (보이는 부호 기준) */
+function speakPnl(v: number): string {
+  const text = formatWon(v, { sign: true });
+  const s = shownSign(v, text);
+  return s === 0 ? speakAmount(text) : `${speakAmount(text)} ${s > 0 ? "이익" : "손실"}`;
+}
+
+/** 두 값 → '12,345,678원에서 11,926,340원으로' (화면의 '지난 → 이번'을 화면 읽기에도) */
+const speakFromTo = (from: string, to: string) => `${from}에서 ${withRo(to)}`;
+
+/** 한쪽 브리핑 합계에서만 빠진 종목 한 조각: '테슬라(이번 브리핑에서 시세를 받지 못함)' */
+function oneSideText(o: NonNullable<AccountSinceLast["oneSide"]>[number]): string {
+  return `${o.name}(${o.side === "now" ? "이번" : "지난"} 브리핑에서 ${o.why === "fx" ? "환율을" : "시세를"} 받지 못함)`;
+}
+
+/** 금액·비중을 두 브리핑 모두 값이 있는 종목끼리 비교했을 때 (scope common) */
+export function sinceNoteCommon(names: string[]): string {
+  return `한쪽 브리핑 합계에서만 빠진 종목이 있어, 총 평가금액·평가손익·비중은 두 브리핑 모두 값이 있는 종목끼리 비교했습니다: ${names.join(", ")}.`;
+}
+
+/** 종목별 값이 없어 그 종목을 빼지 못했을 때 (scope mixed) */
+export function sinceNoteMixed(names: string[]): string {
+  return `두 브리핑의 합계에서 뺀 종목이 다르지만, 지난 브리핑에 종목별 값이 없어 총 평가금액·평가손익 변화에서 그 종목을 빼지 못했습니다: ${names.join(", ")}.`;
+}
+
+/** 두 브리핑 모두(또는 그 종목이 있는 한쪽에서만) 합계에서 뺀 종목 — 금액·비중 어느 쪽에도 들어 있지 않음 */
+export function sinceNoteExcluded(names: string[]): string {
+  return `시세나 환율을 받지 못해 합계에서 뺀 종목(${names.join(", ")})은 금액·비중 비교에 들어 있지 않습니다.`;
 }
 
 export interface SinceQtyLine {
@@ -150,30 +188,37 @@ export function sinceLastView(s: AccountSinceLast, now: Pick<AccountData, "sessi
         return { key: w.code, body: parts.join(" "), parts, change: `(${ppText(w.change)})`, sign: Math.sign(w.change) };
       })
     : null;
-  // 합계에서 뺀 종목 (이번·지난, 같은 종목은 한 번)
+  // 한쪽 브리핑 합계에서만 빠진 종목 (서버가 금액·비중 비교에서 양쪽 모두 뺐거나 — common — 종목별 값이 없어 빼지 못함 — mixed)
+  const oneSide = s.scope === "common" || s.scope === "mixed" ? (s.oneSide ?? []) : [];
+  const oneSideCodes = new Set(oneSide.map((o) => o.code));
+  // 그 밖에 합계에서 뺀 종목 (이번·지난, 같은 종목은 한 번): 두 브리핑 모두 뺐거나 그 종목이 한쪽 브리핑에만 있음 → 금액·비중 어느 쪽에도 없음
   const seen = new Set<string>();
-  const excluded = [...s.excludedNow, ...s.excludedPrev].filter((e) => !seen.has(e.code) && !!seen.add(e.code)).map((e) => e.name);
+  const excluded = [...s.excludedNow, ...s.excludedPrev].filter((e) => !oneSideCodes.has(e.code) && !seen.has(e.code) && !!seen.add(e.code)).map((e) => e.name);
   const notes = [
     qty && qty.count > 0 ? SINCE_NOTE_TRADED : null,
     s.positions === null ? SINCE_NOTE_FIRST : null,
-    excluded.length ? `시세가 없어 합계에서 뺀 종목(${excluded.join(", ")})은 비교에서 뺐습니다.` : null,
+    oneSide.length ? (s.scope === "mixed" ? sinceNoteMixed : sinceNoteCommon)(oneSide.map(oneSideText)) : null,
+    excluded.length ? sinceNoteExcluded(excluded) : null,
     SINCE_NOTE_BASIS,
   ].filter((x): x is string => x !== null);
   const rateWord = rate ? `${Math.abs(s.value.rate!).toFixed(2)}퍼센트` : null;
+  const valueFrom = formatWon(s.value.from);
+  const valueTo = formatWon(s.value.to);
   return {
     title: sinceTitle(now.session),
     range: `${stamp(s.prev.asOf, s.prev.date)} → ${stamp(now.asOf, now.date)}`,
-    value: { amount, rate, sign, rateSign: rate ? shownSign(s.value.rate, rate) : 0, ...toText(fromTo(formatWon(s.value.from), formatWon(s.value.to))) },
+    value: { amount, rate, sign, rateSign: rate ? shownSign(s.value.rate, rate) : 0, ...toText(fromTo(valueFrom, valueTo)) },
     profit: { amount: profitAmount, sign: profitSign, ...toText(fromTo(formatWon(s.profit.from, { sign: true }), formatWon(s.profit.to, { sign: true }))) },
     qty,
     weights,
     notes,
+    // 보이는 '지난 → 이번' 두 값도 읽는다 (묶음 하나로 읽혀 안의 글에 따로 갈 수 없으므로)
     headSpeech: sentence([
       sinceTitle(now.session),
       `${speakStamp(s.prev.asOf, s.prev.date)}부터 ${speakStamp(now.asOf, now.date)}까지`,
-      `총 평가금액 ${speakChange(amount, sign)}`,
+      `총 평가금액 ${speakFromTo(speakAmount(valueFrom), speakAmount(valueTo))} ${speakChange(amount, sign)}`,
       rateWord,
-      `평가손익 ${speakChange(profitAmount, profitSign)}`,
+      `평가손익 ${speakFromTo(speakPnl(s.profit.from), speakPnl(s.profit.to))} ${speakChange(profitAmount, profitSign)}`,
     ]),
     qtySpeech: qty ? (qty.count ? sentence([`${QTY_HEAD} ${qty.count}개`, ...all!.map((l) => l.speech)]) : QTY_NONE) : null,
     weightSpeech: weights
@@ -190,6 +235,8 @@ export interface SinceLine {
   /** '+544,322원' */
   amount: string;
   sign: number;
+  /** '1종목 빼고 비교' — 한쪽 브리핑 합계에서만 빠져 금액 비교에서 뺀 종목이 있을 때 (없으면 null) */
+  left: string | null;
   /** '수량 바뀐 종목 2' (없으면 null) */
   qty: string | null;
   /** 보이는 한 줄 전체 */
@@ -200,7 +247,8 @@ export interface SinceLine {
 
 /**
  * 브리핑 탭 계좌 카드·줄의 한 줄 (headline.since — 비교가 저장된 브리핑만): '9/25(금) 오전보다 총 평가 +544,322원 · 수량 바뀐 종목 2'.
- * '어제'가 아니라 날짜로. 실패한 브리핑·비교가 없는 브리핑은 null
+ * 한쪽 브리핑 합계에서만 빠진 종목을 빼고 비교했으면 '· 1종목 빼고 비교'를 붙인다 (자세한 이유는 상세 카드).
+ * '어제'가 아니라 날짜로. 실패한 브리핑·비교가 없는 브리핑(금액을 맞추지 못한 브리핑 포함 — 서버가 칸을 싣지 않음)은 null
  */
 export function sinceLine(b: Pick<AccountBriefing, "status" | "headline">): SinceLine | null {
   const s = b.status === "ok" ? b.headline?.since : undefined;
@@ -208,13 +256,19 @@ export function sinceLine(b: Pick<AccountBriefing, "status" | "headline">): Sinc
   const head = `${mdw(s.date)} ${SESSION_LABEL[s.session]}보다 총 평가`;
   const amount = formatWon(s.change, { sign: true });
   const sign = shownSign(s.change, amount);
+  const left = s.leftOut ? `${s.leftOut}종목 빼고 비교` : null;
   const qty = s.qtyChanged ? `수량 바뀐 종목 ${s.qtyChanged}` : null;
   return {
     head,
     amount,
     sign,
+    left,
     qty,
-    text: `${head} ${amount}${qty ? ` · ${qty}` : ""}`,
-    speech: sentence([`${speakDay(s.date)} ${SESSION_LABEL[s.session]} 브리핑보다 총 평가금액 ${speakChange(amount, sign)}`, qty ? `수량이 바뀐 종목 ${s.qtyChanged}개` : null]),
+    text: [`${head} ${amount}`, left, qty].filter((x): x is string => x !== null).join(" · "),
+    speech: sentence([
+      `${speakDay(s.date)} ${SESSION_LABEL[s.session]} 브리핑보다 총 평가금액 ${speakChange(amount, sign)}`,
+      s.leftOut ? `한쪽 브리핑 합계에서만 빠진 ${s.leftOut}종목은 빼고 비교` : null,
+      qty ? `수량이 바뀐 종목 ${s.qtyChanged}개` : null,
+    ]),
   };
 }

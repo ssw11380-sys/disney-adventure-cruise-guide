@@ -127,7 +127,8 @@ function contributorsSpeech(b: AccountBriefing): string[] {
  *  - trim = 플래그 briefingTrim (한국 휴장 날짜)
  *  - contributors = 플래그 moversMerge 로 기여 상위 묶음을 보일 때: '기여 1위 …' 조각 대신 묶음 전체와 'HH시 MM분 기준'
  *  - today = 접은 화면 계좌 줄의 휴장 줄(플래그 briefingCompactTop)을 보일 때 보는 날 — 휴장 조각을 보이는 줄과 같은 판단으로 (accountHolidayLines)
- *  - since = 브리핑 3차 3 '9/25(금) 오전보다 총 평가 …' 한 줄(플래그 accountSinceLast)을 보일 때: 총 평가금액 바로 뒤에 그 줄의 읽는 말 (비교가 없는 브리핑이면 그대로)
+ *  - since = 브리핑 3차 3 '9/25(금) 오전보다 총 평가 …' 한 줄(플래그 accountSinceLast)을 보일 때: 보이는 자리와 같은 순서로 기여(1위 또는 상위 묶음) 뒤·휴장 앞에
+ *    그 줄의 읽는 말 (비교가 없는 브리핑이면 그대로)
  */
 export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string; since?: boolean } = {}): string {
   const h = b.headline;
@@ -144,9 +145,9 @@ export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; co
     h ? `당일손익 ${speakProfit(formatWon(h.dayPnl, { sign: true }), Math.sign(h.dayPnl)) ?? "없음"}` : null,
     h ? speakRate(h.dayRate) : null,
     h ? `총 평가금액 ${speakAmount(formatWon(h.totalValue))}` : null,
-    opts.since ? (sinceLine(b)?.speech ?? null) : null,
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
     ...list,
+    opts.since ? (sinceLine(b)?.speech ?? null) : null,
     ...holidays,
     "자세히 보기",
   ]);
