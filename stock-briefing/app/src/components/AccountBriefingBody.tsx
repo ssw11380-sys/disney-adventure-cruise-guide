@@ -6,6 +6,7 @@ import { useAccountBriefing, useFeature, useFeatures } from "@/api/hooks";
 import type { AccountBriefingWithData, AccountData, AccountEvents, AccountExposure, AccountSchedule } from "@/api/types";
 import { BriefingSplit, type BodyLayout } from "@/components/BriefingBody";
 import { StaleBanner } from "@/components/Freshness";
+import { ScheduleLink } from "@/components/ScheduleLink";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
@@ -46,6 +47,8 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   const events = useFeature("holdingEvents", false);
   // 3-32 (플래그 numberBasis, 앱 fallback 꺼짐): 총 평가 카드 아래 '시세 기준' 한 줄 (저장한 quoteBasis 가 있는 브리핑만). 꺼지면 지금 그대로
   const quoteBasisOn = useFeature("numberBasis", false);
+  // 3-38 (플래그 holdingSchedule, 앱 fallback 꺼짐): '다가오는 일정'(없으면 '오늘 일정') 카드 맨 아래 '일정·공시 모두 보기' 줄. 꺼지면 지금 그대로
+  const schedule = useFeature("holdingSchedule", false);
   const flags = useFeatures();
   const q = useAccountBriefing(numId ?? 0, on && numId !== null);
   // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
@@ -85,7 +88,7 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} /></Screen>;
   if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
   // 2단 오른쪽 칸은 끊김·지연 띠를 탭 위쪽에 한 번만 둔다
-  return <AccountBriefingView b={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} />;
+  return <AccountBriefingView b={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} schedule={schedule} />;
 }
 
 /**
@@ -104,6 +107,7 @@ function AccountBriefingView({
   exposure = false,
   events = false,
   quoteBasisOn,
+  schedule = false,
 }: {
   b: AccountBriefingWithData;
   top: React.ReactNode;
@@ -115,9 +119,14 @@ function AccountBriefingView({
   events?: boolean;
   /** 3-32 (플래그 numberBasis): 총 평가 카드·띠 아래 '시세 기준' 줄 */
   quoteBasisOn: boolean;
+  /** 3-38 (플래그 holdingSchedule): '일정·공시 모두 보기' 줄 */
+  schedule?: boolean;
 }) {
   const t = useTheme();
   const d = b.data;
+  // 3-38: '다가오는 일정' 카드가 있으면 그 끝, 없으면 '오늘 일정' 카드 끝에 한 줄 (꺼지면 어느 카드에도 없음 — 카드 트리가 지금과 같다)
+  const scheduleLink = schedule ? <ScheduleLink /> : null;
+  const upcoming = events && d?.events ? d.events : null;
   const failed = b.status === "failed" || !d;
   const header = (
     <View style={styles.header}>
@@ -184,7 +193,7 @@ function AccountBriefingView({
     );
 
   if (layout === "split" && !failed && d) {
-    return <AccountSplit d={d} top={top} head={title?.(b)} header={header} summary={summary} narrative={narrative} basis={basis} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} />;
+    return <AccountSplit d={d} top={top} head={title?.(b)} header={header} summary={summary} narrative={narrative} basis={basis} trim={trim} since={since} exposure={exposure} events={events} quoteBasisOn={quoteBasisOn} scheduleLink={scheduleLink} />;
   }
 
   // stack(지금 폰 화면)·pane(2단 오른쪽 칸)·실패: 한 줄로 쌓기
@@ -203,9 +212,9 @@ function AccountBriefingView({
           {/* 기여 표 아래 — 오늘 무엇이 계좌를 움직였는지(기여 표)가 첫 화면에서 밀려나지 않게 */}
           {since ? <SinceLastCard d={d} /> : null}
           <ImpactCard d={d} trim={trim} />
-          <ScheduleCard s={d.schedule} asOf={d.asOf} />
+          <ScheduleCard s={d.schedule} asOf={d.asOf} footer={upcoming ? null : scheduleLink} />
           {/* 브리핑 3차 5: '오늘 일정' 바로 아래 */}
-          {events && d.events ? <UpcomingCard e={d.events} /> : null}
+          {upcoming ? <UpcomingCard e={upcoming} footer={scheduleLink} /> : null}
           {narrative}
           {basis}
         </>
@@ -233,6 +242,7 @@ function AccountSplit({
   exposure = false,
   events = false,
   quoteBasisOn,
+  scheduleLink = null,
 }: {
   d: AccountData;
   top: React.ReactNode;
@@ -247,6 +257,8 @@ function AccountSplit({
   events?: boolean;
   /** 3-32 (플래그 numberBasis): 총 평가 띠 아래 '시세 기준' 줄 */
   quoteBasisOn: boolean;
+  /** 3-38 (플래그 holdingSchedule): '일정·공시 모두 보기' 줄 (꺼지면 null) */
+  scheduleLink?: React.ReactNode;
 }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -259,9 +271,9 @@ function AccountSplit({
   const impact = (
     <>
       <ImpactCard d={d} trim={trim} />
-      <ScheduleCard s={d.schedule} asOf={d.asOf} />
+      <ScheduleCard s={d.schedule} asOf={d.asOf} footer={events && d.events ? null : scheduleLink} />
       {/* 브리핑 3차 5: 오른쪽 칸 '오늘 일정' 아래 */}
-      {events && d.events ? <UpcomingCard e={d.events} /> : null}
+      {events && d.events ? <UpcomingCard e={d.events} footer={scheduleLink} /> : null}
     </>
   );
   return (
@@ -679,7 +691,7 @@ function ImpactCard({ d, trim }: { d: AccountData; trim: boolean }) {
 }
 
 /** 오늘 일정: 한국·미국 장 운영과 브리핑을 만든 때의 장 상태, 보유 국내 종목의 최근 공시 */
-function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
+function ScheduleCard({ s, asOf, footer = null }: { s: AccountSchedule; asOf: string; footer?: React.ReactNode }) {
   const t = useTheme();
   const at = briefingTime(asOf);
   return (
@@ -709,6 +721,8 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
       ) : (
         <Muted>없음 (종목 브리핑이 받아 둔 공시 기준)</Muted>
       )}
+      {/* 3-38 (플래그 holdingSchedule): '다가오는 일정' 카드가 없을 때만 '일정·공시 모두 보기' */}
+      {footer}
     </Card>
   );
 }
@@ -719,10 +733,12 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
  * '10/29(목) 오전 5시 이후 · 마이크로소프트 실적 발표 (예정)'(실적 발표일을 넣었을 때만), 없으면 한 줄, 작은 글(뜻·받지 못한 것·국내 배당), 기준 시각·출처.
  * 누르는 곳 없음. 색 없음(등락이 아님). 좁은 칸·큰 글씨는 ' · ' 묶음째 줄바꿈. 화면 읽기는 제목 묶음·줄마다·기준 한 문장씩
  */
-function UpcomingCard({ e }: { e: AccountEvents }) {
+export function UpcomingCard({ e, notes = [], footer = null }: { e: AccountEvents; notes?: readonly string[]; footer?: React.ReactNode }) {
   const t = useTheme();
   const chunkRow = useChunkRow();
-  const v = eventsView(e);
+  const view = eventsView(e);
+  // 3-38 '일정·공시' 화면이 덧붙이는 작은 글 (미국 실적은 공시로 보인다는 글) — 없으면 지금 그대로
+  const v = notes.length ? { ...view, notes: [...view.notes, ...notes] } : view;
   // 묶음 끝 ' ·' 의 공백은 줄바꿈 없는 공백 — '·' 하나만 다음 줄 맨 앞에 남지 않게 (비중 두 줄과 같은 규칙)
   const joined = (parts: string[]) => parts.map((p, i) => (i < parts.length - 1 ? `${p} ·` : p));
   return (
@@ -752,6 +768,8 @@ function UpcomingCard({ e }: { e: AccountEvents }) {
       <View accessible accessibilityLabel={v.basisSpeech}>
         <Muted style={{ fontSize: font.tiny }}>{v.basis}</Muted>
       </View>
+      {/* 3-38 (플래그 holdingSchedule): 기준 줄 바로 아래 '일정·공시 모두 보기' */}
+      {footer}
     </Card>
   );
 }

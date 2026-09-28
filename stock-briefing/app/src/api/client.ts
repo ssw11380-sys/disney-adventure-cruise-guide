@@ -37,6 +37,8 @@ import type { AppErrorSummary, Evaluation,
   VolumeStatus,
   BriefingStatus,
   ReconcileBadgeBody,
+  FilingAlertItem,
+  HoldingSchedule,
 } from "./types";
 import { authMessage, NOT_JSON } from "@/lib/connectionError";
 
@@ -276,6 +278,10 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     priceAlertVolume: (codes: string[]) => get<{ items: VolumeStatus[] }>(`/api/price-alerts/volume?codes=${codes.map(encodeURIComponent).join(",")}`, 45_000),
     /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis). 예전 서버는 404 → 부르는 쪽(reconcileBadgeQuery)이 꺼짐으로 본다 */
     reconcileBadge: () => get<ReconcileBadgeBody>("/api/admin/toss/reconcile/badge", 8_000),
+    /** '일정·공시' 화면 (3-38, 플래그 holdingSchedule). 꺼져 있거나 예전 서버면 404 */
+    holdingSchedule: () => get<HoldingSchedule>("/api/schedule", 20_000),
+    /** 새 공시 알림 목록 (3-38, 플래그 filingAlerts — 앱이 앞에 있을 때 확인). 꺼져 있으면 404 */
+    filingAlerts: () => get<{ asOf: string; items: FilingAlertItem[] }>("/api/filings/alerts?days=3", 12_000),
   };
 }
 

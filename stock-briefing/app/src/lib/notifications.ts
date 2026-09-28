@@ -6,6 +6,7 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { ApiRequestError, type Api } from "@/api/client";
 import type { BriefingPick } from "@/lib/briefingPick";
+import { CHANNEL_ABOUT, CHANNEL_NAME, parseAccession } from "@/lib/filingAlerts";
 import { parseBriefingId, parseStockCode } from "@/lib/freshness";
 import type { AlertNotification } from "@/lib/priceAlerts";
 
@@ -18,6 +19,8 @@ import type { AlertNotification } from "@/lib/priceAlerts";
 export const ANDROID_CHANNEL = "briefings";
 /** 가격 알림(가격·등락률·거래량) 채널 — 브리핑과 따로 끄고 켤 수 있게 미리 만든다 (3-19) */
 export const PRICE_CHANNEL = "prices";
+/** 새 공시 알림 채널 (3-38) — 브리핑·가격보다 한 단계 낮은 중요도(DEFAULT). 런타임에 만들어 OTA 로도 생긴다 */
+export const FILING_CHANNEL = "filings";
 const TOKEN_KEY = "push.expoToken";
 
 /**
@@ -60,6 +63,20 @@ export async function ensureAndroidChannel(): Promise<void> {
     description: "가격·등락률·거래량 알림",
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 150, 100, 150],
+    sound: "default",
+  });
+}
+
+/**
+ * 새 공시 알림 채널 (3-38, 플래그 filingAlerts): 기능이 켜져 있을 때만 만든다 — 앞 화면 확인(FilingAlertBridge)이 켤 때, 알림을 보내기 직전에.
+ * 꺼져 있으면 기기 설정의 채널 목록도 지금과 같다
+ */
+export async function ensureFilingChannel(): Promise<void> {
+  if (Platform.OS !== "android") return;
+  await Notifications.setNotificationChannelAsync(FILING_CHANNEL, {
+    name: CHANNEL_NAME,
+    description: CHANNEL_ABOUT,
+    importance: Notifications.AndroidImportance.DEFAULT,
     sound: "default",
   });
 }
@@ -159,6 +176,11 @@ export function routeForNotification(data: Record<string, unknown> | undefined):
   if (data["type"] === "priceAlert" && typeof data["code"] === "string") {
     const code = parseStockCode(data["code"]);
     if (code) return `/stocks/${code}`;
+  }
+  // 새 공시 알림(3-38)은 '일정·공시' 화면에서 그 공시를 펼친다. 접수 번호 모양이 아니면 화면만 (주소에 넣기 전에 거른다)
+  if (data["type"] === "filing") {
+    const focus = parseAccession(data["focus"]);
+    return focus ? `/schedule?focus=${focus}` : "/schedule";
   }
   return null;
 }

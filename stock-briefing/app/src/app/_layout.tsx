@@ -9,6 +9,7 @@ import React, { useEffect, useRef } from "react";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { FilingAlertBridge } from "@/components/FilingAlertBridge";
 import { NotificationBridge, useSplashHold } from "@/components/NotificationBridge";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
@@ -165,6 +166,8 @@ export default function RootLayout() {
                   <PriceAlertProvider>
                     <ThemedStatusBar />
                     <NotificationBridge />
+                    {/* 3-38 새 공시 알림: 앱이 앞에 있을 때 5분마다 확인 (플래그 filingAlerts — 꺼져 있으면 요청 0) */}
+                    <FilingAlertBridge />
                     <WidgetBridge />
                     <ScreenTracker />
                     <HapticsBridge />

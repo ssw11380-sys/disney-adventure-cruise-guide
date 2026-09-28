@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { AccountBriefing, LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import type { AccountBriefing, FilingAlertItem, LatestBriefing, RegisteredWithQuote } from "@/api/types";
+import { parseAccession } from "@/lib/filingAlerts";
 import { defaultApiUrl, STORAGE_KEYS, widgetRowCurrencyOf } from "@/lib/settings";
 import { fillFromLast, type PnlMode } from "./model";
 import {
@@ -53,6 +54,8 @@ export interface WidgetData {
   latestIds?: number[];
   /** 최근 계좌 한 장 브리핑 id (3-31 서버, 플래그 accountBriefing 이 켜져 있을 때). 백그라운드 알림이 새 계좌 브리핑을 알아보게 */
   accountIds?: number[];
+  /** 새 공시 알림 대상 접수 번호 (3-38 서버, 플래그 filingAlerts 가 켜져 있고 있을 때). 백그라운드 알림이 모르는 번호가 있을 때만 목록을 받게 */
+  filingIds?: string[];
   /** 지수 줄 (코스피·나스닥·원/달러). 예전 서버·플래그 꺼짐이면 null */
   indices: WidgetIndex[] | null;
   /** indices 를 받은 시각 (앱이 받은 지수와 어느 쪽이 새것인지 견줄 때) */
@@ -638,6 +641,20 @@ export async function loadAccountBriefings(): Promise<AccountBriefing[] | null> 
   }
 }
 
+/**
+ * 새 공시 알림 목록 (3-38, 플래그 filingAlerts). 백그라운드 확인이 위젯 응답의 filingIds 에서 모르는 접수 번호를 찾았을 때만 부른다.
+ * 받지 못하면(끊김·5xx·시간 초과·끈 서버 404) null — 이번엔 넘기고 다음 확인에서
+ */
+export async function loadFilingAlerts(): Promise<FilingAlertItem[] | null> {
+  const { apiUrl, apiToken } = await readSettings();
+  try {
+    const r = await getJson<{ items?: FilingAlertItem[] }>(`${apiUrl}/api/filings/alerts?days=3`, apiToken);
+    return Array.isArray(r?.items) ? r.items : null;
+  } catch {
+    return null;
+  }
+}
+
 async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promise<T> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -705,6 +722,7 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
       if (p.summary) out.summary = p.summary;
       if (payload.latestIds) out.latestIds = payload.latestIds;
       if (Array.isArray(payload.accountIds)) out.accountIds = payload.accountIds.filter((id) => Number.isInteger(id) && id > 0);
+      if (Array.isArray(payload.filingIds)) out.filingIds = payload.filingIds.filter((id) => parseAccession(id) !== null);
       full = true;
       fresh = !reuse;
     } else {

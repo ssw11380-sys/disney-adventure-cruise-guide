@@ -1160,3 +1160,66 @@ export interface QuoteBasis {
   kr: MarketQuoteBasis | null;
   us: MarketQuoteBasis | null;
 }
+
+/** 새 공시 알림 (3-38, 플래그 filingAlerts — 서버 services/filingAlerts FilingItem 과 같은 모양): 보유 미국 종목의 SEC 공시 한 줄 */
+export interface FilingAlertItem {
+  /** 접수 번호 "0001193125-26-323632" (알림 '본 것' 기록의 열쇠) */
+  accession: string;
+  code: string;
+  name: string;
+  /** "8-K" · "8-K/A" · "10-Q" … */
+  form: string;
+  /** 8-K 항목 번호 ["2.02","9.01"] */
+  items: string[];
+  /** 서버가 서식·항목 번호를 우리말로 옮긴 제목 '실적 발표(8-K 2.02)' */
+  title: string;
+  /** SEC 접수 시각 UTC (모르면 null — 날짜만) */
+  acceptedAt: string | null;
+  /** 접수 시각의 한국 벽시계 'YYYY-MM-DDTHH:MM' (서버가 만든다) */
+  kst: string | null;
+  /** 접수 시각의 미국 동부 벽시계 */
+  et: string | null;
+  filingDate: string;
+  /** 서버가 처음 본 때 UTC */
+  firstSeenAt: string;
+  /** SEC 원문 (https, 주 문서) */
+  url: string;
+}
+
+/** '일정·공시' 화면의 공시 줄: 펼친 내용 · 새 공시 여부 */
+export interface ScheduleFilingItem extends FilingAlertItem {
+  /** 들어 있는 항목 '2.02 실적 발표 — …' (8-K 만) */
+  detail: string[];
+  /** 한 줄 설명 (8-K 외 서식 · 6-K · 정정) */
+  note: string | null;
+  /** 서버가 처음 본 뒤 24시간 안이고 기준 잡기 줄이 아님 */
+  isNew: boolean;
+}
+
+/** '일정·공시' 화면의 최근 공시 칸 (filingAlerts 가 켜져 있을 때) */
+export interface ScheduleFilings {
+  items: ScheduleFilingItem[];
+  /** 서버가 주지 않고 넘긴 줄 수 (60줄 밖) */
+  more: number;
+  /** 확인하는 보유 미국 종목 수 */
+  watched: number;
+  notCovered: { code: string; name: string; reason: "etf" | "notFound" }[];
+  /** 마지막 확인이 실패한 종목 */
+  failed: { code: string; name: string }[];
+  /** 아직 한 번도 확인하지 않은 종목 (새로 산 종목 등) */
+  pending: { code: string; name: string }[];
+  /** 확인하는 모든 종목을 마지막으로 받은 시각 (한국 시간 ISO) */
+  lastOkAt: string | null;
+  warning: "stale" | "partial" | "shape" | "blocked" | null;
+}
+
+/** GET /api/schedule (3-38, 플래그 holdingSchedule) */
+export interface HoldingSchedule {
+  asOf: string;
+  /** 다가오는 일정 (holdingEvents 가 꺼져 있으면 null) — 계좌 브리핑의 events 와 같은 모양 */
+  events: AccountEvents | null;
+  /** 최근 공시 (미국) — filingAlerts 가 꺼져 있으면 null */
+  filings: ScheduleFilings | null;
+  /** 한국 공시: DART 키가 없으면 noDartKey, 있으면 notYet (이번 범위 밖) */
+  kr: { filings: "noDartKey" | "notYet" };
+}

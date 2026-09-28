@@ -9,7 +9,8 @@ import { loadMarketSummaries } from "@/lib/marketSummaryLoad";
 import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
-import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
+import { checkFilingIds } from "@/lib/filingNotify";
+import { loadAccountBriefings, loadFilingAlerts, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
 import { failureText } from "@/widgets/model";
 import { payloadMarket, shouldSkipFetch } from "@/widgets/payload";
 import { redrawAllWidgets } from "@/widgets/redraw";
@@ -205,6 +206,9 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
           }
         }
       }
+      // 3-38 새 공시 알림 (서버 플래그 filingAlerts): 위젯 응답에 모르는 접수 번호가 있을 때만 규칙·목록 두 요청 → 알림 1건 (없으면 추가 요청 0).
+      // 이 부분의 오류는 여기서 멈춘다 — 위젯 갱신·브리핑 알림에 영향 없음
+      if (data.filingIds?.length) await checkFilingIds(data.filingIds, { prefs: loadNotifyPrefs, alerts: loadFilingAlerts }).catch(() => 0);
     }
     await refreshWidgets({
       stocks: data.stocks,
