@@ -6,7 +6,9 @@ import { dragShift, dragTarget } from "@/lib/watchDrag";
 import {
   applyOp,
   applyToLayout,
+  chipRevealX,
   deleteGroupMessage,
+  emptyGroupTitle,
   groupHeadSpeech,
   groupNameCheck,
   movedSpeech,
@@ -64,8 +66,10 @@ describe("공용 픽스처 (서버 services/watchGroupService 와 같은 답)", 
     expect(groupNameCheck(c.name, existing, c.except === undefined ? undefined : c.except + 1)).toEqual(c.ok !== undefined ? { ok: true, name: c.ok } : { ok: false, error: c.error });
   });
 
-  it("입력칸 글자 수는 정리한 이름의 코드 포인트", () => {
+  it("입력칸 글자 수는 정리한 이름의 코드 포인트 (보이지 않는 서식 글자는 세지 않음)", () => {
     expect(nameLength("  반도체  ")).toBe(3);
+    expect(nameLength("반도​체⁠")).toBe(3);
+    expect(nameLength("​")).toBe(0);
     expect(nameLength("👨‍👩‍👧‍👦")).toBe(7);
     expect(nameLength("🚀")).toBe(1);
   });
@@ -137,6 +141,8 @@ describe("잔고 관심 칸 줄 (watchEntries)", () => {
     expect(shape(watchEntries(watchModel(watchOf("created"), LAYOUT, { selected: 3, collapsed: [3] }, true)))).toEqual(["KO#1/3", "005380#2/3", "O#3/3"]);
     expect(shape(watchEntries(watchModel(watchOf("created"), LAYOUT, { selected: "none", collapsed: [] }, true)))).toEqual(["AAPL#1/2", "TSLA#2/2"]);
     expect(shape(watchEntries(watchModel(watchOf("created"), LAYOUT, { selected: 9, collapsed: [] }, true)))).toEqual(["(빈 그룹)"]);
+    // 빈 칸은 고른 그룹 이름을 안다 (칸 제목 '‘빈 그룹’ 그룹에 종목이 없습니다')
+    expect(watchEntries(watchModel(watchOf("created"), LAYOUT, { selected: 9, collapsed: [] }, true))).toEqual([{ kind: "empty", groupId: 9, name: "빈 그룹" }]);
   });
 
   it("그룹이 하나도 없으면 머리 없이 지금 순서 그대로 (= 등록순)", () => {
@@ -187,11 +193,36 @@ describe("칩 (watchChips)", () => {
     ]);
   });
 
-  it("모든 종목을 그룹에 넣었으면 '그룹 없음 0' 은 숨긴다 (지금 고른 칩이면 보인다) · 그룹이 없으면 '전체' 하나", () => {
+  it("모든 종목을 그룹에 넣었으면 '그룹 없음 0' 은 숨긴다 (지금 고른 칩이면 보인다)", () => {
     const all: WatchLayout = { on: true, groups: [{ id: 1, name: "모두", position: 0 }], items: watchOf("created").map((s, i) => ({ code: s.code, groupId: 1, position: i })) };
     expect(watchChips(watchModel(watchOf("created"), all, VIEW_DEFAULT, true)).map((c) => c.label)).toEqual(["전체", "모두"]);
     expect(watchChips(watchModel(watchOf("created"), all, { selected: "none", collapsed: [] }, true)).map((c) => `${c.label} ${c.count}`)).toEqual(["전체 9", "모두 9", "그룹 없음 0"]);
-    expect(watchChips(watchModel(watchOf("created"), { on: true, groups: [], items: [] }, VIEW_DEFAULT, true)).map((c) => `${c.label} ${c.count}`)).toEqual(["전체 9", "그룹 없음 9"]);
+  });
+
+  it("그룹이 하나도 없으면 칩은 '전체 9' 하나뿐 (설계 1.1 ②·E4 — 첫날 모든 사용자가 보는 모양), '그룹 없음'을 골라 둔 채 그룹을 다 지워도 '전체'", () => {
+    const none: WatchLayout = { on: true, groups: [], items: [] };
+    const chips = watchChips(watchModel(watchOf("created"), none, VIEW_DEFAULT, true));
+    expect(chips.map((c) => [`${c.label} ${c.count}`, c.speech, c.selected])).toEqual([["전체 9", "관심 전체, 9종목", true]]);
+    // 예전에 '그룹 없음' 칩을 골라 두었고 그 뒤 그룹을 모두 지움 → 칩은 '전체' 하나(선택됨), 줄은 관심 전체
+    const left = watchModel(watchOf("created"), none, { selected: "none", collapsed: ["none"] }, true);
+    expect(left.view.selected).toBe("all");
+    expect(watchChips(left).map((c) => [c.label, c.selected])).toEqual([["전체", true]]);
+    expect(codes(visibleWatch(left))).toEqual(codes(watchOf("created")));
+    expect(normalizeView({ selected: "none", collapsed: [] }, none)).toEqual({ selected: "all", collapsed: [] });
+    // 그룹이 있으면 '그룹 없음' 선택은 그대로
+    expect(normalizeView({ selected: "none", collapsed: [] }, LAYOUT).selected).toBe("none");
+  });
+});
+
+describe("고른 칩까지 넘기기 (chipRevealX)", () => {
+  it("다 보이면 넘기지 않고, 오른쪽 흐림 밑·띠 밖이면 칩 오른쪽 끝이 흐림 앞에 오게, 띠보다 넓으면 왼쪽 맞춤", () => {
+    // 360×752 130% 캡처: 칩 띠 폭 약 250, '그룹 없음' 칩 x 225.8~318.5 → [그룹·순서] 밑에 숨었다
+    expect(chipRevealX({ x: 0, w: 60 }, 250, 24)).toBeNull();
+    expect(chipRevealX({ x: 150, w: 70 }, 250, 24)).toBeNull();
+    expect(chipRevealX({ x: 225.8, w: 92.7 }, 250, 24)).toBeCloseTo(92.5, 5);
+    expect(chipRevealX({ x: 200, w: 40 }, 250, 24)).toBe(14);
+    expect(chipRevealX({ x: 400, w: 300 }, 250, 24)).toBe(376);
+    expect(chipRevealX({ x: 10, w: 60 }, 0, 24)).toBeNull();
   });
 });
 
@@ -257,11 +288,19 @@ describe("글 (화면 읽기·창)", () => {
     expect(objectParticle("애플")).toBe("을");
     expect(objectParticle("NVDA")).toBe("을(를)");
     expect(movedSpeech("삼성전자", "반도체", 0, true)).toBe("삼성전자를 반도체 1번째로 옮겼습니다");
+    // 한글로 끝나지 않는 이름은 '을(를)' 대신 '… 종목을' (화면 읽기가 괄호째 읽지 않게)
+    expect(movedSpeech("AMD", "반도체", 0, true)).toBe("AMD 종목을 반도체 1번째로 옮겼습니다");
+    expect(movedSpeech("KODEX 200", "배당", 1, true)).toBe("KODEX 200 종목을 배당 2번째로 옮겼습니다");
+    expect(movedToGroupSpeech("SCHD", "배당", 3)).toBe("SCHD 종목을 배당 그룹 맨 끝으로 옮겼습니다");
+    for (const s of [movedSpeech("TSMC", "반도체", 0, false), movedToGroupSpeech("SOXL", "그룹 없음", null)]) expect(s).not.toContain("(");
     expect(movedSpeech("삼성전자", "그룹 없음", 2, false)).toBe("삼성전자를 관심 3번째로 옮겼습니다");
     expect(movedToGroupSpeech("삼성전자", "배당", 3)).toBe("삼성전자를 배당 그룹 맨 끝으로 옮겼습니다");
     expect(movedToGroupSpeech("애플", "그룹 없음", null)).toBe("애플을 그룹 없음 맨 끝으로 옮겼습니다");
-    expect(groupHeadSpeech("반도체", 7, 4, false)).toBe("반도체 그룹, 4종목, 펼쳐짐");
-    expect(groupHeadSpeech("그룹 없음", null, 2, true)).toBe("그룹 없음, 2종목, 접힘");
+    // 펼쳐짐·접힘은 상태(expanded)가 읽는다 — 이름표에 넣지 않는다 (두 번 읽지 않게)
+    expect(groupHeadSpeech("반도체", 7, 4)).toBe("반도체 그룹, 4종목");
+    expect(groupHeadSpeech("그룹 없음", null, 2)).toBe("그룹 없음, 2종목");
+    expect(emptyGroupTitle("반도체", 7)).toBe("‘반도체’ 그룹에 종목이 없습니다");
+    expect(emptyGroupTitle("그룹 없음", null)).toBe("‘그룹 없음’에 종목이 없습니다");
   });
   it("지우기 확인·저장 실패 글", () => {
     expect(deleteGroupMessage(4)).toBe("그룹만 지워집니다. 안의 4종목은 관심 종목으로 남고 ‘그룹 없음’ 맨 끝으로 옮겨집니다.");

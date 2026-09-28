@@ -119,7 +119,7 @@ function WatchGroupsBody() {
         )
       }
       onPick={(id) => setPicked({ id })}
-      onMenu={(s) => setMenu({ stock: s, step: "menu" })}
+      onMenu={(s, step) => setMenu({ stock: s, step })}
       onDragging={setDragging}
     />
   );
@@ -269,7 +269,8 @@ function OrderCard({
   groups: readonly WatchGroup[];
   sortNote: React.ReactNode;
   onPick: (id: number | null) => void;
-  onMenu: (s: RegisteredWithQuote) => void;
+  /** ⋯ 버튼은 메뉴부터, 화면 읽기 동작 '그룹 옮기기'는 그룹 고르기부터 (잔고 탭과 같게) */
+  onMenu: (s: RegisteredWithQuote, step: WatchMenuTarget["step"]) => void;
   onDragging: (on: boolean) => void;
 }) {
   const bucket = model?.buckets.find((b) => b.groupId === editing) ?? null;
@@ -317,7 +318,17 @@ interface Drag {
  * 한 그룹의 종목 순서 목록. 줄 왼쪽 ≡ 를 250ms 길게 누르면 줄이 들리고(진동) 위아래로 따라오며, 다른 줄 가운데를 지날 때마다 자리가 바뀐다(진동).
  * 놓으면 저장. 끄는 동안 바깥 스크롤은 멈춘다 (onDragging)
  */
-function OrderList({ model, stocks, onMenu, onDragging }: { model: WatchModel; stocks: RegisteredWithQuote[]; onMenu: (s: RegisteredWithQuote) => void; onDragging: (on: boolean) => void }) {
+function OrderList({
+  model,
+  stocks,
+  onMenu,
+  onDragging,
+}: {
+  model: WatchModel;
+  stocks: RegisteredWithQuote[];
+  onMenu: (s: RegisteredWithQuote, step: WatchMenuTarget["step"]) => void;
+  onDragging: (on: boolean) => void;
+}) {
   const wg = useWatchGroups();
   // 줄 높이 (글자 크기에 따라 다르다): 그릴 때 쓰는 값은 상태, 끄는 동안 콜백이 읽는 값은 ref (둘 다 onLayout 때 적는다)
   const [heights, setHeights] = useState<number[]>([]);
@@ -368,7 +379,7 @@ function OrderList({ model, stocks, onMenu, onDragging }: { model: WatchModel; s
               heightsRef.current[i] = h;
               setHeights((prev) => (prev[i] === h ? prev : Object.assign([...prev], { [i]: h })));
             }}
-            onMenu={() => onMenu(s)}
+            onMenu={(step) => onMenu(s, step)}
           />
         );
       })}
@@ -399,7 +410,7 @@ function OrderRow({
   shift: number;
   live: React.RefObject<DragHandlers>;
   onLayout: (e: LayoutChangeEvent) => void;
-  onMenu: () => void;
+  onMenu: (step: WatchMenuTarget["step"]) => void;
 }) {
   const t = useTheme();
   const wg = useWatchGroups();
@@ -449,7 +460,7 @@ function OrderRow({
           else if (a === "down") go(p.index + 1);
           else if (a === "top") go(0);
           else if (a === "bottom") go(p.count - 1);
-          else if (a === "group") onMenu();
+          else if (a === "group") onMenu("groups");
         }}
         style={styles.grow}
       >
@@ -462,7 +473,7 @@ function OrderRow({
       </View>
       <IconBtn icon="arrow-up" label={`${stock.name} 위로 옮기기`} disabled={first} onPress={() => go(p.index - 1)} />
       <IconBtn icon="arrow-down" label={`${stock.name} 아래로 옮기기`} disabled={last} onPress={() => go(p.index + 1)} />
-      <IconBtn icon="ellipsis-horizontal" label={`${stock.name} 메뉴`} onPress={onMenu} />
+      <IconBtn icon="ellipsis-horizontal" label={`${stock.name} 메뉴`} onPress={() => onMenu("menu")} />
     </View>
   );
 }

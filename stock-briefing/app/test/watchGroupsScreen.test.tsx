@@ -27,8 +27,8 @@ vi.mock("react-native", () => ({
   ScrollView: "ScrollView",
   Modal: "Modal",
   TextInput: "TextInput",
-  KeyboardAvoidingView: "KeyboardAvoidingView",
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1, absoluteFill: {} },
+  Keyboard: { addListener: () => ({ remove: () => undefined }) },
   Alert: { alert: h.alert },
   AccessibilityInfo: { announceForAccessibility: h.announce },
   Platform: { OS: "android" },
@@ -321,6 +321,15 @@ describe("종목 순서 카드", () => {
     expect((row.props.accessibilityActions as { name: string }[]).map((a) => a.name)).toEqual(["down", "bottom", "group"]);
     r.act(() => (row.props.onAccessibilityAction as (e: unknown) => void)({ nativeEvent: { actionName: "bottom" } }));
     expect(ops.move).toHaveBeenLastCalledWith(STOCKS[2], 7, 2, "SK하이닉스를 반도체 3번째로 옮겼습니다");
+    // 화면 읽기 '그룹 옮기기'는 잔고 탭처럼 그룹 고르기부터 (메뉴 한 단계를 건너뜀)
+    r.act(() => (row.props.onAccessibilityAction as (e: unknown) => void)({ nativeEvent: { actionName: "group" } }));
+    expect(r.text()).toContain("‘SK하이닉스’ 옮길 그룹");
+    expect(r.has("맨 위로 옮기기")).toBe(false);
+    press(r, "닫기");
+    // ⋯ 버튼은 지금처럼 메뉴부터
+    press(r, "SK하이닉스 메뉴");
+    expect(r.has("맨 위로 옮기기")).toBe(true);
+    expect(r.text()).not.toContain("‘SK하이닉스’ 옮길 그룹");
     // 끌기 손잡이는 화면 읽기에서 숨김 (버튼·동작으로 같은 일)
     for (const g of byType(r, "GestureDetector")) expect((g.children[0] as HostNode).props.accessibilityElementsHidden).toBe(true);
   });

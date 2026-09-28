@@ -69,6 +69,11 @@ export function WatchGroupsProvider({ children }: { children: React.ReactNode })
     const named = async (send: () => Promise<WatchLayout>): Promise<NameSave> => {
       try {
         const l = await queue.run(send, { quiet: true });
+        // 만든 그룹: 앞선 조작이 아직 차례에 남아 있으면 이 응답은 캐시에 쓰이지 않는다(마지막 응답만) → 그룹 하나만 먼저 넣어 둔다.
+        // 곧바로 이어지는 '새 그룹 만들고 옮기기'의 낙관적 옮기기가 모르는 그룹이라 '그룹 없음' 맨 앞으로 새지 않게
+        const made = l.created ? l.groups.find((g) => g.id === l.created!.id) : undefined;
+        const cur = qc.getQueryData<WatchLayout>(key);
+        if (made && cur?.on && !cur.groups.some((g) => g.id === made.id)) qc.setQueryData(key, { ...cur, groups: [...cur.groups, made] });
         return { ok: true, ...(l.created ? { created: l.created } : null) };
       } catch (e) {
         return { ok: false, message: saveFailText(e) };

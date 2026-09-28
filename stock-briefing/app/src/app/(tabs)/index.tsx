@@ -415,9 +415,18 @@ export default function StocksScreen() {
       </TableHead>
     </View>
   );
-  // 넓은 창 표 머리: 열 이름을 누르면 정렬 (설정의 정렬 값 그대로), 이름 칸의 "등록순 ▾" 는 정렬 창
+  // 넓은 창 표 머리: 열 이름을 누르면 정렬 (설정의 정렬 값 그대로), 이름 칸의 "등록순 ▾" 는 정렬 창.
+  // 3-34 관심 칸 '내 순서'면 화면 읽기도 휴대폰과 같은 긴 문장 ('… 지금 등록순, 관심 종목은 내 순서' — 정렬 창에는 '내 순서' 항목이 없으므로)
   const tableHeader = (section: (typeof sections)[number]) => (
-    <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={headSort(section.key).label} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
+    <TableHeadRow
+      plan={(section.key === "held" ? heldPlan : watchPlan)!}
+      title={section.title}
+      sort={sort}
+      sortLabel={headSort(section.key).label}
+      {...(section.key === "watch" && myOrder ? { sortA11y: headSort(section.key).a11y } : null)}
+      onSort={pickSort}
+      onOpenSort={() => setSortOpen(true)}
+    />
   );
   const empty = ux.emptyGuide ? (
     // 3-24 빈 화면 (플래그 emptyGuide): 무엇을 하면 되는지 한 문단 + 행동 버튼 하나 (토스 계좌는 설정의 칸 이름으로 알려 준다)
@@ -548,7 +557,7 @@ export default function StocksScreen() {
                 // 3-34 그룹 머리(누르면 접기) · 빈 그룹 칸
                 if (entry.kind === "groupHead")
                   return <WatchGroupHead key={entry.key} name={entry.name} groupId={entry.groupId} count={entry.count} collapsed={entry.collapsed} onToggle={() => toggleGroup(entry.groupId)} pad={plans?.watch?.pad ?? space.lg} />;
-                if (entry.kind === "empty") return <WatchEmptyGroup key="watch-empty" onOpen={openWatchEditor} />;
+                if (entry.kind === "empty") return <WatchEmptyGroup key="watch-empty" name={entry.name} groupId={entry.groupId} onOpen={openWatchEditor} />;
                 const item = entry.stock;
                 const i = entry.index;
                 const marked = mark.code === item.code;

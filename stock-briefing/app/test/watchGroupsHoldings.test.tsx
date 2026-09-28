@@ -246,14 +246,16 @@ describe("켬: 칩 · 그룹 머리 · 위에 붙는 머리", () => {
     expect(listShape(draw(state({ view: { selected: 3, collapsed: [3] } })))).toEqual(["#", "#", "035420", "AAPL", "#", "KO", "O"]);
     const empty = draw(state({ layout: { ...LAYOUT, groups: [...LAYOUT.groups, { id: 9, name: "빈 그룹", position: 2 }] }, view: { selected: 9, collapsed: [] } }));
     expect(listShape(empty)).toEqual(["#", "#", "035420", "AAPL", "#", "(빈 그룹)"]);
+    // 빈 칸은 고른 그룹 이름을 받는다 (제목 '‘빈 그룹’ 그룹에 종목이 없습니다')
+    expect([byType(empty, "WatchEmptyGroup")[0]!.props.name, byType(empty, "WatchEmptyGroup")[0]!.props.groupId]).toEqual(["빈 그룹", 9]);
     (byType(empty, "WatchEmptyGroup")[0]!.props.onOpen as () => void)();
     expect(h.push).toHaveBeenCalledWith("/watch-groups");
   });
 
-  it("그룹이 하나도 없으면 머리 없이 지금 순서 + 칩 줄('전체' 하나)", () => {
+  it("그룹이 하나도 없으면 머리 없이 지금 순서 + 칩 줄('전체' 하나 — 설계 E4, '그룹 없음 6' 칩은 없음)", () => {
     const r = draw(state({ layout: { on: true, groups: [], items: [] } }));
     expect(listShape(r)).toEqual(["#", "#", "035420", "AAPL", "#", "005930", "000660", "042700", "KO", "O", "TSLA"]);
-    expect((byType(r, "WatchChips")[0]!.props.chips as { label: string }[]).map((c) => c.label)).toEqual(["전체", "그룹 없음"]);
+    expect((byType(r, "WatchChips")[0]!.props.chips as { label: string; count: number; selected: boolean }[]).map((c) => [c.label, c.count, c.selected])).toEqual([["전체", 6, true]]);
   });
 
   it("관심 종목이 없으면 관심 구역·칩 줄이 없다", () => {
@@ -352,6 +354,8 @@ describe("켬: 촘촘 · 넓은 표", () => {
     const r = draw(state());
     const heads = byType(r, "TableHeadRow");
     expect(heads.map((n) => n.props.sortLabel)).toEqual(["등록순", "내 순서"]);
+    // 화면 읽기도 휴대폰과 같은 문장 (보유 머리는 넘기지 않아 기본 '정렬 바꾸기, 지금 등록순')
+    expect(heads.map((n) => n.props.sortA11y)).toEqual([undefined, "정렬 바꾸기, 지금 등록순, 관심 종목은 내 순서"]);
     const watchHead = stickyChild(r, (byType(r, "ScrollView")[0]!.props.stickyHeaderIndices as number[])[1]!);
     expect(watchHead.children.filter((c) => typeof c !== "string").map((c) => (c as HostNode).type)).toEqual(["TableHeadRow", "WatchChips"]);
     const pad = (byType(r, "WatchChips")[0]!.props.pad as number) ?? 0;

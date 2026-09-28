@@ -74,6 +74,75 @@
       "error": "tooLong"
     },
     {
+      "name": "​",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": " ​⁠﻿ ",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "‍",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "반도​체",
+      "existing": [],
+      "ok": "반도체"
+    },
+    {
+      "name": "‮반도체‎",
+      "existing": [],
+      "ok": "반도체"
+    },
+    {
+      "name": "‍고 ‍배당‍",
+      "existing": [],
+      "ok": "고 배당"
+    },
+    {
+      "name": "가나다라마바사아자차​",
+      "existing": [],
+      "ok": "가나다라마바사아자차"
+    },
+    {
+      "name": "전체​",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": "⁠전체",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": "전‍체",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": "그룹‌없음",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": "배당​",
+      "existing": [
+        "배당"
+      ],
+      "error": "duplicate"
+    },
+    {
+      "name": "e‍tf",
+      "existing": [
+        "ETF"
+      ],
+      "error": "duplicate"
+    },
+    {
       "name": "전체",
       "existing": [],
       "error": "reserved"

@@ -184,8 +184,13 @@ describe("그룹 만들기 · 이름 바꾸기 · 지우기 · 순서", () => {
     expect(await err(create(app, "x".repeat(5000)))).toEqual([400, { error: "VALIDATION", message: "이름은 10자까지입니다" }]);
     expect(await err(create(app, " 그룹 없음 "))).toEqual([400, { error: "VALIDATION", message: "‘전체’·‘그룹 없음’은 그룹 이름으로 쓸 수 없습니다" }]);
     expect(await err(create(app, "전체"))).toEqual([400, { error: "VALIDATION", message: "‘전체’·‘그룹 없음’은 그룹 이름으로 쓸 수 없습니다" }]);
+    // 보이지 않는 글자(폭 없는 빈칸 U+200B · U+2060 · 이음 U+200D)로 빈 이름·예약어·겹침을 피해 가지 못한다 (예전 앱이 보내도 서버가 막음)
+    expect(await err(create(app, "​"))).toEqual([400, { error: "VALIDATION", message: "이름을 넣어 주세요" }]);
+    expect(await err(create(app, "전체​"))).toEqual([400, { error: "VALIDATION", message: "‘전체’·‘그룹 없음’은 그룹 이름으로 쓸 수 없습니다" }]);
+    expect(await err(create(app, "전‍체"))).toEqual([400, { error: "VALIDATION", message: "‘전체’·‘그룹 없음’은 그룹 이름으로 쓸 수 없습니다" }]);
     expect((await create(app, "ETF")).statusCode).toBe(201);
     expect(await err(create(app, "etf"))).toEqual([409, { error: "DUPLICATE", message: "같은 이름의 그룹이 이미 있습니다" }]);
+    expect(await err(create(app, "⁠ETF​"))).toEqual([409, { error: "DUPLICATE", message: "같은 이름의 그룹이 이미 있습니다" }]);
     // 코드 포인트 10자 (이모지 하나 = 1자, 가족 이모지는 7자)
     expect((await create(app, "🚀반도체")).statusCode).toBe(201);
     for (let i = 3; i <= WATCH_GROUP_LIMIT; i++) expect((await create(app, `그룹${i}`)).statusCode).toBe(201);

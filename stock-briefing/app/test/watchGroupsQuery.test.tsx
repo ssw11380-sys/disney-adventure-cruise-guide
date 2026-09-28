@@ -193,6 +193,30 @@ describe("조작: 낙관적 반영 · 차례 · 실패", () => {
     expect(h.alert).not.toHaveBeenCalled();
   });
 
+  it("'새 그룹 만들고 옮기기': 만들기 뒤에 다른 조작이 차례에 남아 있어도(만들기 응답이 마지막이 아님) 만든 그룹을 캐시에 먼저 넣어, 이어지는 옮기기가 '그룹 없음' 맨 앞으로 새지 않는다", async () => {
+    const seen = mount();
+    await settle();
+    const made = deferred<Layout>();
+    h.api.createWatchGroup!.mockImplementationOnce(() => made.promise);
+    const pending = seen.value.ops.create("배당");
+    // 만들기 응답 전에 들어온 조작 (끝나지 않음)
+    h.api.moveWatchStock!.mockImplementation(() => new Promise(() => undefined));
+    seen.value.ops.move({ code: "D", name: "라" }, 1, 0);
+    await settle();
+    made.resolve({ ...LAYOUT, groups: [...LAYOUT.groups, { id: 5, name: "배당", position: 1 }], created: { id: 5, name: "배당" } });
+    expect(await pending).toEqual({ ok: true, created: { id: 5, name: "배당" } });
+    expect(cache()!.groups.map((g) => [g.id, g.name, g.position])).toEqual([
+      [1, "반도체", 0],
+      [5, "배당", 1],
+    ]);
+    expect(cache()).not.toHaveProperty("created");
+    // 이어서 만든 그룹 맨 끝(0번째)으로 옮기면 캐시도 그 그룹에 (예전: 모르는 그룹 → 그룹 없음 0번째)
+    seen.value.ops.move({ code: "B", name: "나" }, 5, 0, "나를 배당 그룹 맨 끝으로 옮겼습니다");
+    expect(cache()!.items.find((i) => i.code === "B")).toEqual({ code: "B", groupId: 5, position: 0 });
+    // 옮긴 D 는 낙관적 값 그대로 (만들기 응답이 덮지 않음)
+    expect(cache()!.items.find((i) => i.code === "D")).toEqual({ code: "D", groupId: 1, position: 0 });
+  });
+
   it("저장 차례 (순수): 실패가 섞이면 줄이 빌 때 한 번 다시 받는다", async () => {
     const applied: Layout[] = [];
     const deps = { apply: (l: Layout) => void applied.push(l), refetch: vi.fn(), fail: vi.fn() };

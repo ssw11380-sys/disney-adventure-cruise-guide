@@ -6,9 +6,13 @@ import { render, type HostNode } from "./miniRender";
 
 /**
  * 관심 그룹 부품 (3-34, 플래그 watchGroups): 잔고 줄의 화면 읽기 동작 더하기(StockRow moreActions — 없으면 지금 그대로),
- * 칩 줄·그룹 머리(이름표·선택·펼침 상태·44), 관심 줄 메뉴 시트(잔고: 그룹 옮기기 · 위로 · 아래로 · 수정 · 관심 해제, 다른 정렬이면 안내 한 줄)
+ * 칩 줄·그룹 머리(이름표·선택·펼침 상태·44), 고른 칩까지 넘기기, 빈 그룹 칸 제목, 넓은 표 머리 정렬 이름표, 관심 줄 메뉴 시트(잔고: 그룹 옮기기 · 위로 · 아래로 · 수정 · 관심 해제,
+ * 다른 정렬이면 안내 한 줄), 이름 창(자판이 열리면 위로 · 닫은 뒤 늦게 온 응답은 버림)
  */
-const h = vi.hoisted(() => ({ win: { width: 360, height: 752, scale: 3, fontScale: 1 } }));
+const h = vi.hoisted(() => ({
+  win: { width: 360, height: 752, scale: 3, fontScale: 1 },
+  kb: [] as { ev: string; fn: (e: { endCoordinates: { height: number } }) => void; removed: boolean }[],
+}));
 vi.mock("react-native", () => ({
   View: "View",
   Text: "Text",
@@ -16,11 +20,17 @@ vi.mock("react-native", () => ({
   ScrollView: "ScrollView",
   Modal: "Modal",
   TextInput: "TextInput",
-  KeyboardAvoidingView: "KeyboardAvoidingView",
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1, absoluteFill: {} },
   Platform: { OS: "android" },
   AccessibilityInfo: { announceForAccessibility: vi.fn() },
   useWindowDimensions: () => h.win,
+  Keyboard: {
+    addListener: (ev: string, fn: (e: { endCoordinates: { height: number } }) => void) => {
+      const sub = { ev, fn, removed: false };
+      h.kb.push(sub);
+      return { remove: () => void (sub.removed = true) };
+    },
+  },
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 48, left: 0, right: 0 }) }));
 vi.mock("expo-linear-gradient", () => ({ LinearGradient: "LinearGradient" }));
@@ -29,7 +39,7 @@ vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
   return { ...tokens, useTheme: () => tokens.dark, useFontScale: () => 1 };
 });
-vi.mock("@/components/HoldingsTable", () => ({ TableLine: "TableLine" }));
+vi.mock("@/components/HoldingsTable", () => ({ TableLine: "TableLine", ColDivider: "ColDivider" }));
 vi.mock("@/components/StockLine", async () => {
   const R = await import("react");
   const StockLine = (p: Record<string, unknown>) => R.createElement("StockLine", p);
@@ -39,11 +49,15 @@ vi.mock("@/components/ui", () => ({ Button: "Button" }));
 
 const { StockRow, sameRow } = await import("@/components/StockRow");
 const { watchRowA11yActions } = await import("@/lib/rowActions");
-const { WatchChips, WatchGroupHead } = await import("@/components/WatchChips");
+const { WatchChips, WatchEmptyGroup, WatchGroupHead } = await import("@/components/WatchChips");
+const { WatchGroupNameSheet } = await import("@/components/WatchGroupNameSheet");
+const { TableHeadRow } = await import("@/components/HoldingsTableHead");
+const { pickCols } = await import("@/lib/holdingsColumns");
+const { FADE_W } = await import("@/components/chart/ChipStrip");
 const { WatchMenuHost } = await import("@/components/WatchRowSheet");
 const { WatchGroupsContext } = await import("@/lib/watchGroupsQuery");
 const { watchChips, watchModel } = await import("@/lib/watchGroups");
-const { touch } = await import("@/tokens");
+const { space, touch } = await import("@/tokens");
 type State = import("@/lib/watchGroupsQuery").WatchGroupsState;
 
 const avgo = holding("AVGO", quote("AVGO", 345.2, { currency: "USD", change: 5.9, changeRate: 1.74, fxRate: 1400 }), null, null, undefined, "브로드컴");
@@ -116,16 +130,157 @@ describe("칩 줄 · 그룹 머리", () => {
     expect(r.text()).toContain("그룹·순서");
   });
 
-  it("그룹 머리: '반도체 그룹, 4종목, 펼쳐짐' · 펼침 상태 · 힌트, 접히면 '접힘'·'펼칩니다', 높이 44", () => {
+  it("그룹 머리: '반도체 그룹, 4종목' + 펼침 상태(TalkBack 이 '펼쳐짐/접힘'을 읽음 — 이름표에 또 넣지 않음) · 힌트, 높이 44", () => {
     const toggle = vi.fn();
     const open = render(<WatchGroupHead name="반도체" groupId={7} count={4} collapsed={false} onToggle={toggle} pad={14} />).all()[0]!;
-    expect([open.props.accessibilityLabel, open.props.accessibilityState, open.props.accessibilityHint]).toEqual(["반도체 그룹, 4종목, 펼쳐짐", { expanded: true }, "두 번 탭하면 접습니다"]);
+    expect([open.props.accessibilityLabel, open.props.accessibilityState, open.props.accessibilityHint]).toEqual(["반도체 그룹, 4종목", { expanded: true }, "두 번 탭하면 접습니다"]);
     const style = (open.props.style as (s: { pressed: boolean }) => unknown[])({ pressed: false });
     expect(JSON.stringify(style)).toContain(`"minHeight":${touch.min}`);
     const shut = render(<WatchGroupHead name="그룹 없음" groupId={null} count={2} collapsed onToggle={toggle} pad={14} />).all()[0]!;
-    expect([shut.props.accessibilityLabel, shut.props.accessibilityHint]).toEqual(["그룹 없음, 2종목, 접힘", "두 번 탭하면 펼칩니다"]);
+    expect([shut.props.accessibilityLabel, shut.props.accessibilityState, shut.props.accessibilityHint]).toEqual(["그룹 없음, 2종목", { expanded: false }, "두 번 탭하면 펼칩니다"]);
     (shut.props.onPress as () => void)();
     expect(toggle).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("고른 칩까지 넘기기 · 빈 그룹 칸 · 넓은 표 머리", () => {
+  /** 칩 띠(ScrollView)에 가짜 scrollTo 를 달고, 띠 폭·칩 자리를 알린다 */
+  const strip = (r: ReturnType<typeof render>) => {
+    const sv = r.all().find((n) => n.type === "ScrollView")!;
+    const scrollTo = vi.fn();
+    (sv.props.ref as { current: unknown }).current = { scrollTo };
+    const chips = r.all().filter((n) => n.type === "Pressable" && n.props.hitSlop);
+    const layout = (n: HostNode, x: number, width: number) => r.act(() => (n.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x, y: 0, width, height: 32 } } }));
+    const view = (width: number) => r.act(() => (sv.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { x: 0, y: 0, width, height: 44 } } }));
+    return { scrollTo, chips, layout, view };
+  };
+  const TWO = {
+    on: true,
+    groups: [
+      { id: 7, name: "반도체", position: 0 },
+      { id: 3, name: "배당", position: 1 },
+    ],
+    items: [
+      { code: "A", groupId: 7, position: 0 },
+      { code: "B", groupId: 3, position: 0 },
+    ],
+  };
+  const chipsOf = (selected: "none" | number) => (
+    <WatchChips chips={watchChips(watchModel(LIST, TWO, { selected, collapsed: [] }, true))} onPick={() => undefined} onEdit={() => undefined} pad={14} backdrop="#000" />
+  );
+
+  it("기기에 저장한 칩이 띠 오른쪽 밖(360 · 130% 캡처: '그룹 없음' x 225.8~318.5, 띠 250)이면 그릴 때 한 번 그 칩까지 넘긴다", () => {
+    const r = render(chipsOf("none"));
+    const { scrollTo, chips, layout, view } = strip(r);
+    expect(chips.map((c) => c.props.accessibilityLabel)).toEqual(["관심 전체, 3종목", "반도체 그룹, 1종목", "배당 그룹, 1종목", "그룹 없음, 1종목"]);
+    layout(chips[0]!, 0, 60);
+    layout(chips[1]!, 66, 80);
+    layout(chips[2]!, 152, 68);
+    layout(chips[3]!, 225.8, 92.7);
+    expect(scrollTo).not.toHaveBeenCalled(); // 띠 폭을 아직 모름
+    view(250);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    const arg = scrollTo.mock.calls[0]![0] as { x: number; animated: boolean };
+    // 칩 오른쪽 끝(318.5)이 오른쪽 흐림(FADE_W) 앞에 오게
+    expect(arg.x).toBeCloseTo(318.5 + FADE_W - 250, 5);
+    expect(arg.animated).toBe(false);
+    // 개수가 바뀌어 칩 자리를 다시 알려도 되돌려 넘기지 않는다 (사용자가 넘겨 둔 칩 줄을 지킴)
+    layout(chips[3]!, 225.8, 100);
+    view(250);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it("고른 칩이 다 보이면 넘기지 않는다", () => {
+    const r = render(chipsOf(7));
+    const { scrollTo, chips, layout, view } = strip(r);
+    layout(chips[1]!, 66, 80);
+    view(250);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("빈 그룹 칸 제목은 고른 그룹 이름을 말한다", () => {
+    expect(render(<WatchEmptyGroup name="반도체" groupId={7} onOpen={() => undefined} />).text()).toContain("‘반도체’ 그룹에 종목이 없습니다");
+    expect(render(<WatchEmptyGroup name="그룹 없음" groupId={null} onOpen={() => undefined} />).text()).toContain("‘그룹 없음’에 종목이 없습니다");
+  });
+
+  it("넓은 표 머리: 정렬 버튼 이름표를 넘기면 그 문장('… 관심 종목은 내 순서'), 안 넘기면 지금 그대로", () => {
+    const head = (extra: { sortA11y?: string }) => render(<TableHeadRow plan={pickCols(853)} title="관심 9" sort="created" sortLabel="내 순서" onSort={() => undefined} onOpenSort={() => undefined} {...extra} />);
+    expect(head({ sortA11y: "정렬 바꾸기, 지금 등록순, 관심 종목은 내 순서" }).has("정렬 바꾸기, 지금 등록순, 관심 종목은 내 순서")).toBe(true);
+    expect(head({}).has("정렬 바꾸기, 지금 내 순서")).toBe(true);
+  });
+});
+
+describe("이름 창 (WatchGroupNameSheet)", () => {
+  beforeEach(() => {
+    h.kb = [];
+    h.win = { width: 360, height: 752, scale: 3, fontScale: 1 };
+  });
+  const flat = (n: HostNode) => Object.assign({}, ...(n.props.style as object[]).filter(Boolean)) as Record<string, unknown>;
+  const backdrop = (r: ReturnType<typeof render>) => r.all().find((n) => n.type === "Modal")!.children.find((c): c is HostNode => typeof c !== "string")!;
+  const sheetBox = (r: ReturnType<typeof render>) => r.all().find((n) => n.props.testID === "watch-name-sheet")!;
+  const button = (r: ReturnType<typeof render>, title: string) => r.all().find((n) => n.type === "Button" && n.props.title === title)!;
+  const kbShow = (r: ReturnType<typeof render>, height: number) => r.act(() => h.kb.find((k) => k.ev === "keyboardDidShow" && !k.removed)!.fn({ endCoordinates: { height } }));
+
+  it("자판이 열리면(360×752, 자판 300) 시트를 위쪽에 붙이고 높이를 자판 위까지 — 입력칸·[만들기]가 자판에 가리지 않는다, 닫히면 아래로, 창을 닫으면 구독을 뗀다", () => {
+    const r = render(<WatchGroupNameSheet mode="create" groups={[]} onSubmit={async () => ({ ok: true })} onClose={() => undefined} />);
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-end" });
+    expect(flat(sheetBox(r)).maxHeight).toBeUndefined();
+    kbShow(r, 300);
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-start", paddingTop: space.md });
+    // 위 여백(안전 영역 0 + 12) · 아래는 자판 위 12 까지: 752 − 300 − 0 − 24 = 428 (시트 높이는 글자 200% 에서도 이 안 — 넘치면 위쪽 글만 스크롤)
+    expect(flat(sheetBox(r)).maxHeight).toBe(752 - 300 - space.md * 2);
+    // 입력칸은 스크롤 칸 안, 버튼 줄은 스크롤 밖(늘 보임). 자판이 열린 채 [만들기]를 한 번에 누를 수 있게 handled
+    const sv = sheetBox(r).children.find((c): c is HostNode => typeof c !== "string" && c.type === "ScrollView")!;
+    expect(JSON.stringify(sv)).toContain("그룹 이름, 10자까지");
+    expect(sv.props.keyboardShouldPersistTaps).toBe("handled");
+    expect(JSON.stringify(sv)).not.toContain('"title":"만들기"');
+    expect(button(r, "만들기")).toBeTruthy();
+    r.act(() => h.kb.find((k) => k.ev === "keyboardDidHide")!.fn({ endCoordinates: { height: 0 } }));
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-end" });
+    r.unmount();
+    expect(h.kb.length).toBeGreaterThan(0);
+    expect(h.kb.every((k) => k.removed)).toBe(true);
+  });
+
+  it("넓은 창(933×704)도 자판이 열리면 위쪽 (가운데 두면 자판에 가린다)", () => {
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    const r = render(<WatchGroupNameSheet mode="rename" initial="반도체" exceptId={7} groups={[{ id: 7, name: "반도체", position: 0 }]} onSubmit={async () => ({ ok: true })} onClose={() => undefined} />);
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "center" });
+    kbShow(r, 280);
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-start" });
+    expect(flat(sheetBox(r)).maxHeight).toBe(704 - 280 - space.md * 2);
+  });
+
+  it("저장하는 동안 창을 닫으면(바깥 · 취소) 응답이 와도 onDone 을 부르지 않는다 — 닫힌 뒤 종목이 몰래 옮겨지지 않게", async () => {
+    for (const how of ["이름 창 닫기", "취소"]) {
+      type Made = { ok: true; created: { id: number; name: string } };
+      let finish: (v: Made) => void = () => undefined;
+      const onSubmit = vi.fn((_name: string) => new Promise<Made>((res) => (finish = res)));
+      const onDone = vi.fn();
+      const onClose = vi.fn();
+      const r = render(<WatchGroupNameSheet mode="create" groups={[]} onSubmit={onSubmit} onDone={onDone} onClose={onClose} />);
+      r.act(() => (r.byLabel("그룹 이름, 10자까지").props.onChangeText as (v: string) => void)("반도체"));
+      r.act(() => (button(r, "만들기").props.onPress as () => void)());
+      expect(onSubmit).toHaveBeenCalledWith("반도체");
+      if (how === "취소") r.act(() => (button(r, "취소").props.onPress as () => void)());
+      else r.act(() => (r.byLabel(how).props.onPress as () => void)());
+      expect(onClose).toHaveBeenCalledTimes(1);
+      finish({ ok: true, created: { id: 12, name: "반도체" } });
+      await new Promise((res) => setTimeout(res, 0));
+      expect(onDone).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("닫지 않았으면 저장 뒤 onDone → 닫기 (지금 그대로)", async () => {
+    const onDone = vi.fn();
+    const onClose = vi.fn();
+    const r = render(<WatchGroupNameSheet mode="create" groups={[]} onSubmit={async () => ({ ok: true, created: { id: 12, name: "배당" } })} onDone={onDone} onClose={onClose} />);
+    r.act(() => (r.byLabel("그룹 이름, 10자까지").props.onChangeText as (v: string) => void)("배당"));
+    r.act(() => (button(r, "만들기").props.onPress as () => void)());
+    await new Promise((res) => setTimeout(res, 0));
+    expect(onDone).toHaveBeenCalledWith({ ok: true, created: { id: 12, name: "배당" } });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 

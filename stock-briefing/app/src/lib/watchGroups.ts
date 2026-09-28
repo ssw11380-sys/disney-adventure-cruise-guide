@@ -39,11 +39,15 @@ export interface WatchLayout {
 
 export const WATCH_OFF: WatchLayout = Object.freeze({ on: false, groups: [], items: [] }) as WatchLayout;
 
-/** 서버에 없는 그룹(지워짐)을 고른 칩은 '전체'로, 접은 목록에서도 뺀다 */
+/**
+ * 서버에 없는 그룹(지워짐)을 고른 칩은 '전체'로, 접은 목록에서도 뺀다.
+ * 그룹이 하나도 없으면 '그룹 없음'을 고른 칩도 '전체'로 (그룹을 다 지운 뒤 — 그때 칩 줄은 '전체' 하나뿐, 설계 E4)
+ */
 export function normalizeView(view: WatchView, layout: WatchLayout | null): WatchView {
   if (!layout) return view;
   const ids = new Set(layout.groups.map((g) => g.id));
-  const selected = typeof view.selected === "number" && !ids.has(view.selected) ? "all" : view.selected;
+  const gone = typeof view.selected === "number" ? !ids.has(view.selected) : view.selected === "none" && ids.size === 0;
+  const selected = gone ? "all" : view.selected;
   const collapsed = view.collapsed.filter((c) => c === "none" || ids.has(c));
   return selected === view.selected && collapsed.length === view.collapsed.length ? view : { selected, collapsed };
 }
@@ -164,26 +168,37 @@ export const NAME_ERROR_TEXT: Record<NameError, string> = {
   limit: "그룹은 12개까지 만들 수 있습니다",
 };
 
+/**
+ * 이름 정리 (서버와 같다): 유니코드 NFC, 탭·줄바꿈은 빈칸으로, 제어 문자(Cc)와 보이지 않는 서식 글자(Cf — 폭 없는 빈칸 U+200B 등)는 지우고,
+ * 안쪽 연속 빈칸은 하나로, 앞뒤 빈칸 없앰. 이모지를 잇는 U+200D(가족 이모지 등)만 남기되, 낱말 앞뒤에 붙은 것은 지운다
+ */
 export function cleanGroupName(raw: string): string {
   return raw
     .normalize("NFC")
     .replace(/[\t\n\v\f\r]/g, " ")
     .replace(/\p{Cc}/gu, "")
+    .replace(/(?!‍)\p{Cf}/gu, "")
     .replace(/\s+/gu, " ")
-    .trim();
+    .trim()
+    .split(" ")
+    .map((w) => w.replace(/^‍+|‍+$/g, ""))
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** 이름 글자 수 (코드 포인트 — 입력칸의 '3/10' 도 이 값) */
 export const nameLength = (raw: string) => Array.from(cleanGroupName(raw)).length;
 
-const nameKey = (n: string) => cleanGroupName(n).toLowerCase();
+/** 보이는 글자만 (낱말 안에 남은 U+200D 도 뺀다) — 빈 이름·예약어·겹침 검사용 ('전‍체' 가 '전체' 검사를 피해 가지 않게) */
+const visible = (name: string) => name.replace(/‍/g, "");
+const nameKey = (n: string) => visible(cleanGroupName(n)).toLowerCase();
 const RESERVED = new Set(["전체", "그룹없음"]);
 
 export function groupNameCheck(raw: string, existing: readonly { id: number; name: string }[], exceptId?: number): { ok: true; name: string } | { ok: false; error: NameError } {
   const name = cleanGroupName(raw);
-  if (!name) return { ok: false, error: "empty" };
+  if (!visible(name)) return { ok: false, error: "empty" };
   if (Array.from(name).length > WATCH_GROUP_NAME_MAX) return { ok: false, error: "tooLong" };
-  if (RESERVED.has(name.replace(/\s/gu, ""))) return { ok: false, error: "reserved" };
+  if (RESERVED.has(visible(name).replace(/\s/gu, ""))) return { ok: false, error: "reserved" };
   const key = nameKey(name);
   if (existing.some((g) => g.id !== exceptId && nameKey(g.name) === key)) return { ok: false, error: "duplicate" };
   if (exceptId === undefined && existing.length >= WATCH_GROUP_LIMIT) return { ok: false, error: "limit" };
@@ -198,7 +213,7 @@ export const NONE_NAME = "그룹 없음";
 export type WatchEntry =
   | { kind: "groupHead"; key: string; groupId: number | null; name: string; count: number; collapsed: boolean }
   | { kind: "row"; stock: RegisteredWithQuote; groupId: number | null; index: number; count: number }
-  | { kind: "empty"; groupId: number | null };
+  | { kind: "empty"; groupId: number | null; name: string };
 
 /** 종목의 그룹·자리 (↑↓·메뉴 '지금' 줄·알림 문장) — 늘 '내 순서' 기준 */
 export interface WatchPos {
@@ -257,7 +272,7 @@ export function watchEntries(model: WatchModel): WatchEntry[] {
   if (view.selected !== "all") {
     const b = buckets.find((x) => (view.selected === "none" ? x.groupId === null : x.groupId === view.selected));
     if (!b) return [];
-    return b.stocks.length ? rows(b) : [{ kind: "empty", groupId: b.groupId }];
+    return b.stocks.length ? rows(b) : [{ kind: "empty", groupId: b.groupId, name: b.name }];
   }
   if (!hasGroups) return rows(buckets[buckets.length - 1]!);
   const out: WatchEntry[] = [];
@@ -282,17 +297,30 @@ export interface WatchChip {
   selected: boolean;
 }
 
-/** 칩 줄: 전체 → 그룹들(그룹 순서) → 그룹 없음(종목이 있거나 지금 고른 칩일 때만). 만든 그룹은 0종목이어도 보인다 */
+/**
+ * 칩 줄: 전체 → 그룹들(그룹 순서) → 그룹 없음(종목이 있거나 지금 고른 칩일 때만). 만든 그룹은 0종목이어도 보인다.
+ * 그룹이 하나도 없으면 '전체' 하나뿐 (설계 1.1 ②·E4 — 그때 '그룹 없음 9' 는 '전체 9' 와 같은 목록이라 두지 않는다)
+ */
 export function watchChips(model: WatchModel): WatchChip[] {
-  const { buckets, view } = model;
+  const { buckets, view, hasGroups } = model;
   const total = buckets.reduce((a, b) => a + b.stocks.length, 0);
   const out: WatchChip[] = [{ key: "all", label: "전체", count: total, speech: `관심 전체, ${total}종목`, selected: view.selected === "all" }];
   for (const b of buckets) {
     if (b.groupId === null) {
-      if (b.stocks.length || view.selected === "none") out.push({ key: "none", label: NONE_NAME, count: b.stocks.length, speech: `${NONE_NAME}, ${b.stocks.length}종목`, selected: view.selected === "none" });
+      if (hasGroups && (b.stocks.length || view.selected === "none")) out.push({ key: "none", label: NONE_NAME, count: b.stocks.length, speech: `${NONE_NAME}, ${b.stocks.length}종목`, selected: view.selected === "none" });
     } else out.push({ key: b.groupId, label: b.name, count: b.stocks.length, speech: `${b.name} 그룹, ${b.stocks.length}종목`, selected: view.selected === b.groupId });
   }
   return out;
+}
+
+/**
+ * 칩 줄을 그릴 때 고른 칩이 보이게 넘길 위치 (3-34 리뷰: 기기에 저장한 칩이 칩 줄 오른쪽 밖이면 앱을 다시 열었을 때 무엇으로 걸렀는지 안 보였다).
+ * chip = 칩의 x·폭(칩 띠 안), view = 칩 띠 폭, fade = 끝 흐림 폭. 칩이 오른쪽 흐림 앞까지 다 보이면 null(넘기지 않음),
+ * 아니면 칩 오른쪽 끝이 흐림 앞에 오게 넘기되 칩 왼쪽 끝이 왼쪽 흐림 밑으로 들어가지 않게 (칩이 띠보다 넓으면 왼쪽 맞춤)
+ */
+export function chipRevealX(chip: { x: number; w: number }, view: number, fade: number): number | null {
+  if (view <= 0 || chip.x + chip.w <= view - fade) return null;
+  return Math.max(0, Math.min(chip.x - fade, chip.x + chip.w + fade - view));
 }
 
 /** 화면에 보이는 관심 종목 순서 (고른 칩 · 접은 그룹 반영) — 종목 상세 ‹ › · 이어 보기 */
@@ -309,7 +337,7 @@ export function stockSub(s: { code: string; market: string }): string {
   return m ? `${s.code} · ${m}` : s.code;
 }
 
-/** 받침이 있으면 '을', 없으면 '를'. 한글이 아니면(영문 티커 등) '을(를)' */
+/** 받침이 있으면 '을', 없으면 '를'. 한글로 끝나지 않으면(영문 티커 등) '을(를)' */
 export function objectParticle(word: string): string {
   const last = word.trim().slice(-1);
   const c = last.charCodeAt(0);
@@ -317,9 +345,18 @@ export function objectParticle(word: string): string {
   return "을(를)";
 }
 
-/** 그룹 머리 화면 읽기: '반도체 그룹, 4종목, 펼쳐짐' */
-export function groupHeadSpeech(name: string, groupId: number | null, count: number, collapsed: boolean): string {
-  return `${groupId === null ? name : `${name} 그룹`}, ${count}종목, ${collapsed ? "접힘" : "펼쳐짐"}`;
+/**
+ * 알림 문장의 '무엇을': 한글로 끝나면 '삼성전자를'·'애플을', 아니면(AMD·TSMC·KODEX 200 등) 'AMD 종목을'
+ * — '을(를)'을 붙이면 화면 읽기가 괄호째 읽어 어색하다
+ */
+function objectOf(name: string): string {
+  const particle = objectParticle(name);
+  return particle === "을(를)" ? `${name.trim()} 종목을` : `${name}${particle}`;
+}
+
+/** 그룹 머리 화면 읽기: '반도체 그룹, 4종목' — 펼쳐짐·접힘은 상태(accessibilityState.expanded)로 읽으므로 이름표에 다시 넣지 않는다 */
+export function groupHeadSpeech(name: string, groupId: number | null, count: number): string {
+  return `${groupId === null ? name : `${name} 그룹`}, ${count}종목`;
 }
 
 /** 관심 줄 메뉴의 '지금' 줄: '지금: 반도체 · 2번째 (4종목 중)' */
@@ -327,14 +364,19 @@ export function posLine(p: WatchPos): string {
   return `지금: ${p.groupName} · ${p.index + 1}번째 (${p.count}종목 중)`;
 }
 
-/** 순서를 옮긴 뒤 알림: '삼성전자를 반도체 1번째로 옮겼습니다' (그룹이 하나도 없으면 '관심 1번째') */
+/** 순서를 옮긴 뒤 알림: '삼성전자를 반도체 1번째로 옮겼습니다' (그룹이 하나도 없으면 '관심 1번째', 영문 이름은 'AMD 종목을 …') */
 export function movedSpeech(name: string, groupName: string, index: number, hasGroups: boolean): string {
-  return `${name}${objectParticle(name)} ${hasGroups ? groupName : "관심"} ${index + 1}번째로 옮겼습니다`;
+  return `${objectOf(name)} ${hasGroups ? groupName : "관심"} ${index + 1}번째로 옮겼습니다`;
 }
 
 /** 그룹을 옮긴 뒤 알림: '삼성전자를 배당 그룹 맨 끝으로 옮겼습니다' / '… 그룹 없음 맨 끝으로 …' */
 export function movedToGroupSpeech(name: string, groupName: string, groupId: number | null): string {
-  return `${name}${objectParticle(name)} ${groupId === null ? groupName : `${groupName} 그룹`} 맨 끝으로 옮겼습니다`;
+  return `${objectOf(name)} ${groupId === null ? groupName : `${groupName} 그룹`} 맨 끝으로 옮겼습니다`;
+}
+
+/** 고른 그룹이 비었을 때 칸 제목: '‘반도체’ 그룹에 종목이 없습니다' / '‘그룹 없음’에 종목이 없습니다' (무엇을 골라 두었는지 말한다) */
+export function emptyGroupTitle(name: string, groupId: number | null): string {
+  return groupId === null ? `‘${name}’에 종목이 없습니다` : `‘${name}’ 그룹에 종목이 없습니다`;
 }
 
 /** 지우기 확인 창 본문 */

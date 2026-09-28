@@ -8,7 +8,7 @@ import { clearOf, slopFor, space } from "@/theme";
 export const CHIP_H = 32;
 export const CHIP_SLOP = slopFor(CHIP_H, space.s / 2);
 /** 흐려지는 가장자리 폭 */
-const FADE_W = space.xl;
+export const FADE_W = space.xl;
 
 /**
  * 옆으로 넘기는 칩 띠 (차트의 기간·봉 수·이동평균 칩).
@@ -22,8 +22,21 @@ const FADE_W = space.xl;
  * 넘어갈 것 같지만 누르기는 그 밑의 칩(RSI 켜기·1분봉)으로 갔다 (2026-09-26 검증).
  * backdrop 은 띠 뒤 바탕색(패널 t.surface, 전체 화면 t.bg). 스크롤 영역은 흐림을 얹는 틀을 위아래로 꽉 채운다.
  * 모든 창에서 쓴다 — 처음에는 넓은 창만이었으나 접은 화면에서도 잘린 칩이 깨져 보여(2026-09-26 RGTX 캡처) 버그 수정으로 넓혔다.
+ * scrollRef·onViewWidth(선택): 부르는 쪽이 고른 칩까지 넘길 때만 (3-34 관심 칩 줄 — 차트 칩은 넘기지 않아 지금 그대로)
  */
-export function ChipStrip({ children, backdrop, style }: { children: React.ReactNode; backdrop: string; style?: StyleProp<ViewStyle> }) {
+export function ChipStrip({
+  children,
+  backdrop,
+  style,
+  scrollRef,
+  onViewWidth,
+}: {
+  children: React.ReactNode;
+  backdrop: string;
+  style?: StyleProp<ViewStyle>;
+  scrollRef?: React.Ref<ScrollView>;
+  onViewWidth?: (width: number) => void;
+}) {
   // 폭·내용 폭·스크롤 위치는 이벤트 때만 바뀌므로 ref 에 두고, 가장자리가 바뀔 때만 다시 그린다 (넘기는 동안 매번 그리지 않게).
   // 접고 펴서 폭이 바뀌면 onLayout 이 새 폭을 알려 다시 계산한다
   const metrics = useRef({ view: 0, content: 0, x: 0 });
@@ -36,10 +49,14 @@ export function ChipStrip({ children, backdrop, style }: { children: React.React
   return (
     <View style={[styles.chipScroll, style]}>
       <ScrollView
+        {...(scrollRef ? { ref: scrollRef } : null)}
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.chips}
-        onLayout={(e) => sync({ view: e.nativeEvent.layout.width })}
+        onLayout={(e) => {
+          sync({ view: e.nativeEvent.layout.width });
+          onViewWidth?.(e.nativeEvent.layout.width);
+        }}
         onContentSizeChange={(w: number) => sync({ content: w })}
         onScroll={(e) => sync({ x: e.nativeEvent.contentOffset.x })}
         scrollEventThrottle={16}

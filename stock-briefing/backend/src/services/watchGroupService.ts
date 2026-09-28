@@ -149,18 +149,28 @@ export const NAME_ERROR_TEXT: Record<NameError, string> = {
   limit: "그룹은 12개까지 만들 수 있습니다",
 };
 
-/** 이름 정리: 유니코드 NFC, 탭·줄바꿈은 빈칸으로, 제어 문자는 지우고, 안쪽 연속 빈칸은 하나로, 앞뒤 빈칸 없앰 */
+/**
+ * 이름 정리: 유니코드 NFC, 탭·줄바꿈은 빈칸으로, 제어 문자(Cc)와 보이지 않는 서식 글자(Cf — 폭 없는 빈칸 U+200B 등)는 지우고,
+ * 안쪽 연속 빈칸은 하나로, 앞뒤 빈칸 없앰. 이모지를 잇는 U+200D(가족 이모지 등)만 남기되, 낱말 앞뒤에 붙은 것은 지운다
+ */
 export function cleanGroupName(raw: string): string {
   return raw
     .normalize("NFC")
     .replace(/[\t\n\v\f\r]/g, " ")
     .replace(/\p{Cc}/gu, "")
+    .replace(/(?!‍)\p{Cf}/gu, "")
     .replace(/\s+/gu, " ")
-    .trim();
+    .trim()
+    .split(" ")
+    .map((w) => w.replace(/^‍+|‍+$/g, ""))
+    .filter(Boolean)
+    .join(" ");
 }
 
-/** 겹침 비교용 (대소문자·빈칸 무시) */
-const nameKey = (n: string) => cleanGroupName(n).toLowerCase();
+/** 보이는 글자만 (낱말 안에 남은 U+200D 도 뺀다) — 빈 이름·예약어·겹침 검사용 ('전‍체' 가 '전체' 검사를 피해 가지 않게) */
+const visible = (name: string) => name.replace(/‍/g, "");
+/** 겹침 비교용 (대소문자·빈칸·보이지 않는 글자 무시) */
+const nameKey = (n: string) => visible(cleanGroupName(n)).toLowerCase();
 const RESERVED = new Set(["전체", "그룹없음"]);
 
 /**
@@ -169,9 +179,9 @@ const RESERVED = new Set(["전체", "그룹없음"]);
  */
 export function groupNameCheck(raw: string, existing: readonly { id: number; name: string }[], exceptId?: number): { ok: true; name: string } | { ok: false; error: NameError } {
   const name = cleanGroupName(raw);
-  if (!name) return { ok: false, error: "empty" };
+  if (!visible(name)) return { ok: false, error: "empty" };
   if (Array.from(name).length > WATCH_GROUP_NAME_MAX) return { ok: false, error: "tooLong" };
-  if (RESERVED.has(name.replace(/\s/gu, ""))) return { ok: false, error: "reserved" };
+  if (RESERVED.has(visible(name).replace(/\s/gu, ""))) return { ok: false, error: "reserved" };
   const key = nameKey(name);
   if (existing.some((g) => g.id !== exceptId && nameKey(g.name) === key)) return { ok: false, error: "duplicate" };
   if (exceptId === undefined && existing.length >= WATCH_GROUP_LIMIT) return { ok: false, error: "limit" };
