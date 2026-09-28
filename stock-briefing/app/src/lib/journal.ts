@@ -503,6 +503,7 @@ export function stockPanelText(orders: number): string {
 
 /**
  * 숫자를 못 보여 줄 때 안내: 기록 전체가 아직 짧음('지금 N거래일' — 기록 전체 길이) · 기록은 충분한데 고른 기간 안 기록이 2번보다 적음.
+ * 기간 안 기록이 0일이면 마지막 기록일(recordUntil) 뒤인지 · 기록 시작 전인지 · 그 사이인지로 까닭을 나눈다.
  * recordDays 가 없는 예전 서버는 기간 안 거래일로 센다
  */
 export function returnsNotReady(r: JournalReturns): string {
@@ -511,9 +512,18 @@ export function returnsNotReady(r: JournalReturns): string {
   // 전체(원화): 미국 기록에 평가 환율이 없으면 기간을 늘려도 같다 — 그 까닭을 바로
   if (r.usFxMissing) return "미국 계좌 기록에 평가 환율이 없어 전체(원화) 수익률을 계산할 수 없어요. 한국·미국은 따로 볼 수 있어요.";
   if (record >= need && (r.tradingDays ?? 0) === 0) {
-    // 고른 기간이 주말·휴일뿐이거나 기록 시작 전 — 기록이 언제부터 있는지 말한다
+    // 고른 기간에 기록이 0일: 마지막 기록 뒤(기록이 멈춤 — 동기화 실패 등) · 기록 시작 전 · 그 사이(주말·휴일·빠진 날)를 나눠 말한다
     const range = r.requested ? `(${mdKo(r.requested.from)} ~ ${mdKo(r.requested.to)})` : "";
-    return `고른 기간${range}에는 계좌 기록이 없어요.${r.recordSince ? ` 기록은 ${mdKo(r.recordSince)}부터 있고,` : ""} 주말·휴일과 기록 시작 전 날짜에는 기록이 없어요.`;
+    const head = `고른 기간${range}에는 계좌 기록이 없어요.`;
+    const since = r.recordSince ?? null;
+    const until = r.recordUntil ?? null;
+    if (until && r.requested && r.requested.from > until) {
+      return `${head} 마지막 기록은 ${mdKo(until)}이고, 그 뒤로는 계좌 기록이 저장되지 않았어요. 기록은 매일 장 마감 뒤 저장돼요.`;
+    }
+    if (since && r.requested && r.requested.to < since) return `${head} 기록은 ${mdKo(since)}부터 있어요.`;
+    if (since && until) return `${head} 기록은 ${mdKo(since)}부터 ${mdKo(until)}까지 있고, 그 사이 주말·휴일과 기록이 빠진 날에는 기록이 없어요.`;
+    // 마지막 기록일을 주지 않는 예전 서버
+    return `${head}${since ? ` 기록은 ${mdKo(since)}부터 있고,` : ""} 주말·휴일과 기록 시작 전 날짜에는 기록이 없어요.`;
   }
   if (record >= need) return `고른 기간 안에 계좌 기록이 ${r.tradingDays ?? 0}거래일뿐이라 수익률을 계산할 수 없어요. 기간을 더 길게 골라 주세요.`;
   const since = r.recordSince ?? r.actual?.from ?? null;

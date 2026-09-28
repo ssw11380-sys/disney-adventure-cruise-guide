@@ -1098,6 +1098,8 @@ export interface JournalReturns {
   tradingDays?: number;
   /** 기록 전체의 거래일 수 (공개 조건 — 이것이 needDays 이상이어야 숫자). 예전 서버는 없음 */
   recordDays?: number;
+  /** 그 시장 기록의 마지막 날짜 (고른 기간이 이 뒤면 '그 뒤로 기록이 저장되지 않음'). 예전 서버는 없음 */
+  recordUntil?: string | null;
   needDays?: number;
   requested?: { from: string; to: string };
   actual?: { from: string; to: string } | null;

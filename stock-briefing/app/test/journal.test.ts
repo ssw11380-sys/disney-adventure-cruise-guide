@@ -495,6 +495,19 @@ describe("검토 반영 (3-37 다듬기)", () => {
     expect(returnsNotReady({ enabled: true, ready: false, tradingDays: 1, recordDays: 30, needDays: 10, recordSince: "2026-09-28" })).toContain("1거래일뿐이라");
   });
 
+  it("검토 반영 3차: 기록이 중간에 멈춘 경우(9/9~9/28 뒤로 없음, 10/5~10/12 고름)는 '주말·휴일·기록 시작 전'이 아니라 마지막 기록일을 말한다", () => {
+    const base = { enabled: true, ready: false, tradingDays: 0, recordDays: 14, needDays: 10, recordSince: "2026-09-09", recordUntil: "2026-09-28", actual: null } as const;
+    const after = returnsNotReady({ ...base, requested: { from: "2026-10-05", to: "2026-10-12" } });
+    expect(after).toBe("고른 기간(10월 5일 ~ 10월 12일)에는 계좌 기록이 없어요. 마지막 기록은 9월 28일이고, 그 뒤로는 계좌 기록이 저장되지 않았어요. 기록은 매일 장 마감 뒤 저장돼요.");
+    expect(after).not.toContain("주말·휴일");
+    // 기록 시작 전만 고름
+    expect(returnsNotReady({ ...base, requested: { from: "2026-09-01", to: "2026-09-06" } })).toBe("고른 기간(9월 1일 ~ 9월 6일)에는 계좌 기록이 없어요. 기록은 9월 9일부터 있어요.");
+    // 기록 사이의 주말·휴일
+    expect(returnsNotReady({ ...base, requested: { from: "2026-09-19", to: "2026-09-20" } })).toBe(
+      "고른 기간(9월 19일 ~ 9월 20일)에는 계좌 기록이 없어요. 기록은 9월 9일부터 9월 28일까지 있고, 그 사이 주말·휴일과 기록이 빠진 날에는 기록이 없어요.",
+    );
+  });
+
   it("양도세: 평균 구매가를 추정한 매도가 합계에 있으면 합계 줄·아래 줄에 '추정 포함', 따로 상자(종목·건수·까닭), 매도별 계산 첫 줄에 '추정 포함'", () => {
     const d: JournalTax = {
       enabled: true,
