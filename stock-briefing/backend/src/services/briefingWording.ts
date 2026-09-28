@@ -128,9 +128,10 @@ const isBlank = (l: string) => l.trim().length === 0;
 /**
  * 상세 글 검사. 줄마다 보고, '## ' 제목 줄이 걸리면 그 제목과 다음 제목 전까지의 줄을 모두, 제목이 아닌 줄이 걸리면 그 줄만 뺀다.
  * 내용 줄(빈 줄 제외)이 모두 빠진 제목도 빼고, 빈 줄이 3줄 넘게 이어지면 1줄로. 뺀 내용 줄이 있으면 끝에 '(문장 검사에서 N줄을 뺐습니다)'.
- * 걸린 것이 없으면 글자 하나 바꾸지 않고 그대로 (dropped 0)
+ * 걸린 것이 없으면 글자 하나 바꾸지 않고 그대로 (dropped 0). banned: 거르는 말 (기본 브리핑 금지어 — AI 가치분석은 더 엄격한 VALUE_AI_BANNED, 'g' 플래그 필요)
  */
-export function cleanDetail(detail: string, source: string): { text: string; dropped: number } {
+export function cleanDetail(detail: string, source: string, banned: RegExp = BRIEFING_BANNED): { text: string; dropped: number } {
+  const hit1 = (l: string) => forbiddenIn(l, source, banned);
   const lines = detail.split("\n");
   // 절: 첫 제목 앞 줄들(heading null) + 제목마다 그 아래 줄들
   const sections: Array<{ heading: string | null; body: string[] }> = [{ heading: null, body: [] }];
@@ -142,13 +143,13 @@ export function cleanDetail(detail: string, source: string): { text: string; dro
   let dropped = 0;
   const out: string[] = [];
   for (const sec of sections) {
-    if (sec.heading !== null && findBanned(sec.heading, source) !== null) {
+    if (sec.heading !== null && hit1(sec.heading) !== null) {
       hit = true;
       dropped += sec.body.filter((l) => !isBlank(l)).length;
       continue;
     }
     const had = sec.body.filter((l) => !isBlank(l)).length;
-    const kept = sec.body.filter((l) => isBlank(l) || findBanned(l, source) === null);
+    const kept = sec.body.filter((l) => isBlank(l) || hit1(l) === null);
     const keptContent = kept.filter((l) => !isBlank(l)).length;
     if (keptContent < had) {
       hit = true;

@@ -400,6 +400,8 @@ export class IndicatorScoreService {
           monthly: () => (this.deps.sources.monthly ? this.deps.sources.monthly(code, MONTHLY_CANDLES) : Promise.resolve(null)),
           scoreDate,
           splitHold: trend.block.status === "hold",
+          // 한국 우선주 이유 글: 같은 회사 보통주 점수가 실제로 나오는지 볼 때만 부른다 (가치 점수 개선 1단계 [9])
+          candlesOf: async (c) => (await this.fetchCut(c, ctx))?.candles ?? null,
         })
       : { block: ValueScoreService.stage1Block(etf), stored: null, fetchFailure: false, waiting: false };
     // 종합 (가치 점수 개선 1단계 [4]): 식 · 차이 안내 25점부터(compositeFormula) · 30점 넘으면 숫자 대신 문장(compositeGapHide)

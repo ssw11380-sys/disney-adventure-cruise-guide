@@ -166,7 +166,7 @@ export class KrValueService {
   private reitMemo: { at: number; codes: Set<string> } | null = null;
   /**
    * 종목 마스터의 리츠 코드 (listed_stocks.group_code 'RT' — 한국투자증권 종목 정보의 공식 분류, 1시간 기억). 마스터가 비었거나 읽지 못하면 빈 집합 —
-   * 그때는 네이버 업종 280(부동산) 안의 '리츠' 이름으로 가린다 (krIsReit)
+   * 그때는 네이버 업종 280(부동산) 안의 '리츠' 이름으로 가린다 (krIsReit). 운영 서버는 토스 Open API 마스터(ETF 가 아니면 모두 'ST')라 늘 빈 집합이다
    */
   async reitCodes(): Promise<Set<string>> {
     const t = this.now().getTime();
@@ -606,10 +606,10 @@ export class KrValueService {
     const tf = await readValueTextFlags(this.deps.features);
     // 저장한 재무 (네트워크 없음) — 리츠 판정의 네이버 업종 번호도 여기서 (마스터 분류를 모를 때만 씀)
     const facts = await this.loadFacts(code);
-    // 리츠는 공식 분류로 (긴급 고침 — 이름 속 '리츠' 글자로 메리츠금융지주가 빠지던 것)
+    // 리츠는 공식 분류로 (긴급 고침 — 이름 속 '리츠' 글자로 메리츠금융지주가 빠지던 것). 마스터 분류는 'RT' 일 때만 증거 — 토스 마스터의 'ST' 는 건너뛰고 네이버 업종·이름으로
     const hint = { reitCodes: await this.reitCodes(), groupCode: a.groupCode ?? null, upjongCode: facts?.facts.i?.industryCode ?? null };
     const ex = krExclusion(code, a.name, hint) ?? (p?.spac ? "spac" : p?.commonShare === false ? "preferred" : null);
-    if (ex === "preferred" && tf.reasonDetail) return plain(block("excluded", "대상 아님", ex, preferredText(await this.commonWithFacts(code))));
+    if (ex === "preferred" && tf.reasonDetail) return plain(block("excluded", "대상 아님", ex, preferredText(await this.commonScored(code, a))));
     if (ex) return plain(block("excluded", "대상 아님", ex, VALUE_STATUS_TEXT[ex]));
     if (p?.clearance) return plain(block("excluded", "대상 아님", "clearance", VALUE_STATUS_TEXT.clearance));
 
@@ -665,18 +665,28 @@ export class KrValueService {
   }
 
   /**
-   * 우선주의 같은 회사 보통주 이름 (가치 점수 개선 1단계 [9]): 보통주 코드(끝 자리 0)의 저장한 재무 요약으로 점수를 낼 수 있을 때만 — 없으면 null
-   * ('보통주 화면에 점수가 있습니다'가 틀린 말이 되지 않게)
+   * 우선주의 같은 회사 보통주 이름 (가치 점수 개선 1단계 [9], 보고서 '점수가 있을 때만'): 보통주 코드(끝 자리 0)를 보통주 화면과 같은 계산
+   * (저장한 재무 요약 · 이번 주 비교 기준 · 보통주 일봉 · 주식 수 확인)으로 실제로 점수가 나올 때만 이름, 아니면 null.
+   * 예전에는 재무 요약에 EPS·BPS 가 있는지만 봐, 보통주가 '점수 없음'(묶음 부족·가격 기준 문제)·'잠시 보류'여도 '보통주 화면에 점수가 있습니다'가 나갈 수 있었다
+   * (검토 지적). 네이버 재무 요청은 하지 않는다 (저장한 값만 — 보통주 일봉만 받는다)
    */
-  private async commonWithFacts(code: string): Promise<string | null> {
+  private async commonScored(code: string, a: ValueEvalArgs): Promise<string | null> {
     const common = `${code.slice(0, 5)}0`;
-    if (common === code) return null;
+    if (common === code || !a.candlesOf) return null;
     const f = await this.loadFacts(common).catch(() => null);
     if (!f) return null;
-    const inp = krInputs(f.facts, this.today());
-    if (!inp || (inp.ttm.eps === null && inp.bps === null)) return null;
-    const row = await this.deps.db.selectFrom("listed_stocks").select("name").where("code", "=", common).executeTakeFirst().catch(() => undefined);
-    return row?.name ?? f.facts.i?.name ?? null;
+    const ref = await this.reference().catch(() => null);
+    if (!ref || daysBetween(ref.refDate, a.scoreDate) > REFERENCE_STALE_DAYS) return null;
+    const row = await this.deps.db.selectFrom("listed_stocks").select(["name", "group_code"]).where("code", "=", common).executeTakeFirst().catch(() => undefined);
+    const name = row?.name ?? f.facts.i?.name ?? null;
+    if (!name) return null;
+    if (krExclusion(common, name, { reitCodes: await this.reitCodes(), groupCode: row?.group_code ?? null, upjongCode: f.facts.i?.industryCode ?? null })) return null;
+    const candles = await a.candlesOf(common).catch(() => null);
+    if (!candles?.length) return null;
+    const now = this.core(f.facts, ref, this.classify(ref, common, f.facts), candles, a.scoreDate);
+    if (now.status !== "scored" || now.result?.shown === null || now.result?.shown === undefined) return null;
+    if (sharesMismatch(ref.quote(common), now.inputs?.shares ?? null, now.avgPrice)) return null;
+    return name;
   }
 
   /** 업종: 이번 주 목록(비교 기준 symbols) → 네이버 요약 지표의 업종 번호 → 모름 */

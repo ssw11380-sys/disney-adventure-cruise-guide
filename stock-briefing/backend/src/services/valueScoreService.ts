@@ -95,6 +95,7 @@ import {
   blendRankZeroNote,
   CLOSE_GAP_NOTE,
   closeGapText,
+  CYCLICAL_PEAK_MARGIN,
   CYCLICAL_WHY_OLD,
   cyclicalWhy,
   familyAboutOf,
@@ -107,6 +108,7 @@ import {
   INSURER_HEALTH_NOTE,
   INSURER_INDUSTRIES,
   KR_FIN_MIX_NOTE,
+  LOSS_ACCRUAL_MEANING,
   LOSS_NOTE_SHARE,
   lossAccrualText,
   lossClumpSentence,
@@ -234,6 +236,11 @@ export interface ValueEvalArgs {
   name?: string;
   /** 종목 마스터 분류 (listed_stocks.group_code — 한국 리츠 'RT' 판정. 모르면 null) */
   groupCode?: string | null;
+  /**
+   * 다른 종목의 끝난 정규장 일봉 (기준 거래일까지 자름 — 받기 실패면 null). 한국 우선주 이유 글 '같은 회사 보통주(○○) 화면에 가치 지표 점수가
+   * 있습니다'를 보통주 점수가 실제로 나올 때만 쓰려고 (가치 점수 개선 1단계 [9]). 없으면 그 문장을 쓰지 않는다
+   */
+  candlesOf?: (code: string) => Promise<Candle[] | null>;
 }
 export interface ValueEval {
   block: ValueBlock;
@@ -900,7 +907,7 @@ export interface RowExtra {
   plainPer?: number | "loss" | null;
   /** 경기 민감 까닭 (업종 목록 · 이익률 오르내림 — 가장 낮은 해·높은 해 %) */
   cyclical?: { byIndustry: boolean; lo: number | null; hi: number | null } | null;
-  /** 영업이익 기준 PER (영업 외 손익이 세전이익의 30% 이상일 때) */
+  /** 영업이익 기준 PER (영업 외 이익이 세전이익의 30% 이상일 때만 — 영업 외 손실 쪽은 없음, oneOffOf) */
   opPer?: { taxPct: number; per: number } | null;
   /** 금융사 종류 (재무 건전성 안내) */
   finKind?: FinKind | null;
@@ -969,9 +976,11 @@ export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annua
   // [3] 흑자 회사끼리 보면 띠가 달라지는 지표: 적자 비율 때문에 위치가 크게 나왔다는 사실 문장
   if (showProfitPos && !m.rule && !tieDriven(m) && band3(m.score!) !== band3(clump!.score!)) text = lossClumpSentence(m.key, lossPct, clump!.score!, ctx.grade);
   // [10] 순손실 회사의 이익의 현금 뒷받침: 좋은 뜻으로 읽히는 위치 문장 대신 숫자 사실
-  if (lossAccrual(m, ctx) && m.adopted && m.score !== null && typeof x.ocf === "number") {
+  const lossRow = lossAccrual(m, ctx) && m.adopted && m.score !== null && typeof x.ocf === "number";
+  if (lossRow) {
     const unit = x.unit ?? "USD";
-    text = lossAccrualText(moneyEok(x.ni!, unit), moneyEok(x.ocf, unit), x.ocf < 0, Math.abs(x.ocf) < Math.abs(x.ni!));
+    const ocf = x.ocf!;
+    text = lossAccrualText(moneyEok(Math.abs(x.ni!), unit), moneyEok(Math.abs(ocf), unit), ocf < 0, Math.abs(ocf) < Math.abs(x.ni!));
   }
   return {
     key: m.key,
@@ -983,7 +992,8 @@ export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annua
     mix: m.score !== null ? mixText(m.mix, level, ctx.path, ctx.market) : null,
     score: m.score === null ? null : roundScore(m.score),
     text,
-    meaning: metricMeaning(m.key, ctx.grade),
+    // [10] 순손실 회사의 이익의 현금 뒷받침: '100에 가까울수록: 이익이 현금으로 잘 뒷받침되는 편'을 붙이지 않는다 (좋은 뜻으로 읽히던 것)
+    meaning: lossRow ? LOSS_ACCRUAL_MEANING : metricMeaning(m.key, ctx.grade),
     used: m.adopted && m.score !== null,
     note: notes.filter(Boolean).join(" ") || null,
   };
@@ -1002,7 +1012,8 @@ const ZERO_LABEL: Partial<Record<string, string>> = {
 /**
  * 두 쪽 문장 (가치 점수 개선 1단계 [2] valueFamilyTwoSided): '막대를 길게 만든 지표: …' / '막대를 짧게 만든 지표: …' — 위치 67 이상 · 33 이하 지표를
  * 가장 튀는 순으로. 띠가 높은 편인 묶음은 긴 쪽만, 낮은 편은 짧은 쪽만 (소수 쪽 지표를 대표 문장으로 말하지 않게 — 검토: 13/249 묶음).
- * 0점 규칙 지표는 '(적자)'처럼 사실을 붙이고, 순손실 회사의 이익의 현금 뒷받침은 '(순손실 회사)'를 붙인다
+ * 0점 규칙 지표는 '(적자)'처럼 사실을 붙인다. 순손실 회사의 이익의 현금 뒷받침은 대표 지표로 고르지 않는다 (보고서 '묶음 머리 문장으로 뽑지 않음(인텔)' —
+ * 예전에는 '(순손실 회사)'를 붙여 긴 쪽 맨 앞에 두어 좋은 뜻으로 읽혔다, 검토 지적). 그 지표밖에 없을 때만 '(순손실 회사)'를 붙여 가운데 줄에
  */
 function twoSidedText(f: FamilyScore, ctx: RowCtx): string {
   const fb = band3(f.score!);
@@ -1022,12 +1033,13 @@ function twoSidedText(f: FamilyScore, ctx: RowCtx): string {
             : "";
     return [shortMetricName(r.m.key, ctx.grade), `${r.s}${tag}`];
   };
-  const long = rows.filter((r) => r.s >= 67).sort((a, b) => b.s - a.s || a.i - b.i);
-  const short = rows.filter((r) => r.s <= 33).sort((a, b) => a.s - b.s || a.i - b.i);
+  const pick = rows.filter((r) => !lossAccrual(r.m, ctx));
+  const long = pick.filter((r) => r.s >= 67).sort((a, b) => b.s - a.s || a.i - b.i);
+  const short = pick.filter((r) => r.s <= 33).sort((a, b) => a.s - b.s || a.i - b.i);
   const lines: string[] = [];
   if (fb !== "low" && long.length) lines.push(twoSidedLine(true, long.map(label)));
   if (fb !== "high" && short.length) lines.push(twoSidedLine(false, short.map(label)));
-  return lines.length ? lines.join("\n") : twoSidedMidLine(rows.map(label));
+  return lines.length ? lines.join("\n") : twoSidedMidLine((pick.length ? pick : rows).map(label));
 }
 
 /**
@@ -1082,16 +1094,37 @@ export function familyRow(f: FamilyScore, ctx: RowCtx = { path: "general", annua
 }
 
 /**
- * 표시 글 (가치 점수 개선 1단계): 영업 외 손익 절대 기준([3] valueOneOffAbs — 세전이익의 30% 이상), 가치 함정 방향 말([2]), 초기 단계 햇수([10]).
- * 표시는 점수에 쓰지 않는다. 끄면 valueFlags 그대로·예전 글
+ * 영업 외 손익 (가치 점수 개선 1단계 [3] valueOneOffAbs — 글 재료, 점수에 쓰지 않음). pct: 영업 외 **이익**(세전이익 − 영업이익)이 세전이익의 30% 이상일 때
+ * 그 비율(둘 다 플러스일 때만 — 알파벳 51%). loss: 영업 외 **손실**(세전이익 < 영업이익 — 이자 비용이 큰 버라이즌) — 이때는 새 표시·영업이익 기준 PER 을
+ * 쓰지 않고 예전 표시 규칙 그대로 둔다 (영업이익 기준 PER 이 이자를 없는 것으로 쳐 빚이 많은 회사를 싸 보이게 하던 것, 검토 지적)
+ */
+export function oneOffOf(pretax: number | null | undefined, op: number | null | undefined): { pct: number | null; loss: boolean } {
+  if (typeof pretax !== "number" || typeof op !== "number" || !Number.isFinite(pretax) || !Number.isFinite(op)) return { pct: null, loss: false };
+  const loss = pretax < op;
+  const pct = pretax > 0 && op > 0 && pretax - op >= ONE_OFF_ABS_SHARE * pretax ? Math.round((100 * (pretax - op)) / pretax) : null;
+  return { pct, loss };
+}
+
+/**
+ * 표시 글 (가치 점수 개선 1단계): 영업 외 이익 절대 기준([3] valueOneOffAbs — 세전이익의 30% 이상, 영업 외 손실 쪽은 예전 기준 그대로), 가치 함정 방향 말([2]),
+ * 초기 단계 햇수·경기 정점 까닭([10]). 표시는 점수에 쓰지 않는다. 끄면 valueFlags 그대로·예전 글
  */
 export function flagRows(
   keys: readonly ValueFlagKey[],
   t: ValueTextFlags,
-  o: { oneOffPct: number | null; lossYears: { from: string; to: string; n: number; all: boolean } | null; fallbackText: string; carried: string | null },
+  o: {
+    oneOffPct: number | null;
+    lossYears: { from: string; to: string; n: number; all: boolean } | null;
+    fallbackText: string;
+    carried: string | null;
+    /** 영업 외 손실 쪽 (세전이익 < 영업이익): 예전 표시(시장 상위 5% 기준)를 그대로 둔다 */
+    oneOffLoss?: boolean;
+    /** 경기 민감이 업종 목록 때문인지 (false = 이익률 오르내림 — 팔란티어). 모르면 null */
+    cyclicalByIndustry?: boolean | null;
+  },
 ): ValueBlock["flags"] {
   let ks = [...keys];
-  if (t.oneOffAbs) {
+  if (t.oneOffAbs && !o.oneOffLoss) {
     ks = ks.filter((k) => k !== "oneOff");
     if (o.oneOffPct !== null) {
       // 예전 자리(경기·가치 함정 표시 뒤)에 둔다
@@ -1106,6 +1139,7 @@ export function flagRows(
     else if (k === "oneOff" && t.oneOffAbs && o.oneOffPct !== null) out.push({ key: k, text: oneOffAbsText(o.oneOffPct) });
     else if (k === "valueTrap" && t.directionWords) out.push({ key: k, text: VALUE_TRAP_V2 });
     else if (k === "earlyStage" && t.wordingFacts && o.lossYears) out.push({ key: k, text: lossYearsText(o.lossYears.from, o.lossYears.to, o.lossYears.n, o.lossYears.all) });
+    else if (k === "cyclicalPeak" && t.wordingFacts && o.cyclicalByIndustry === false) out.push({ key: k, text: CYCLICAL_PEAK_MARGIN });
     else out.push({ key: k, text: VALUE_FLAG_TEXT[k] });
   }
   if (o.carried) out.push({ key: "carriedForward", text: o.carried });
@@ -1155,13 +1189,16 @@ function scoredBlock(
   const flow = c.inputs?.flow ?? {};
   const flagsKeys = valueFlags(r, c.aux!, { cyclical: c.cyclical!, thresholds: o.ref.ref.thresholds, metrics: c.metrics! });
   const core = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && coreOf(r.grade, r.path).price.includes(m.key) && m.score !== null);
-  // [3] 영업 외 손익 (세전이익의 30% 이상 — 세전이익·영업이익이 모두 플러스일 때만)
-  const pretax = flow.pretax;
+  // [3] 영업 외 이익 (세전이익의 30% 이상 — 세전이익·영업이익이 모두 플러스이고 세전이익이 더 클 때만. 영업 외 손실 쪽은 예전 표시 그대로)
   const op = flow.opIncome;
-  const oneOffPct = typeof pretax === "number" && typeof op === "number" && pretax > 0 && op > 0 && Math.abs(pretax - op) >= ONE_OFF_ABS_SHARE * pretax ? Math.round((100 * Math.abs(pretax - op)) / pretax) : null;
+  const oneOff = oneOffOf(flow.pretax, op);
+  const oneOffPct = oneOff.pct;
   const annual = c.inputs?.annual ?? [];
+  const industry = o.cls?.industry ?? null;
   const flags = flagRows(flagsKeys, t, {
     oneOffPct,
+    oneOffLoss: oneOff.loss,
+    cyclicalByIndustry: c.cyclical ? !!industry && CYCLICAL_INDUSTRIES.has(industry) : null,
     lossYears: lossStreak(annual.map((a) => ({ end: a.end, op: a.opIncome }))),
     fallbackText: peerFallbackText(core?.peer?.level ?? "market", sectorKo(o.cls?.sector ?? null), r.path),
     carried: o.carried ? carriedText(o.fetchedAt) : null,
@@ -1183,7 +1220,6 @@ function scoredBlock(
     .slice(-5)
     .map((a) => (typeof a.opIncome === "number" && typeof a.revenue === "number" && a.revenue > 0 ? Math.max(-1, Math.min(1, a.opIncome / a.revenue)) : null))
     .filter((v): v is number => v !== null);
-  const industry = o.cls?.industry ?? null;
   const tax = c.aux?.taxRate ?? o.ref.ref.thresholds.taxRateP50;
   const finIndustry = level === "industry" ? industry : null;
   const extra: RowExtra = {

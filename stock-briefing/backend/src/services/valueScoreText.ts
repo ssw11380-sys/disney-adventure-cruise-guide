@@ -486,15 +486,18 @@ export function familyAboutOf(k: ValueFamilyKey, o: { grade?: "full" | "lite" | 
 
 /** [2] 비교 시점 안내 (방향 말 + 내부 이름 'SEC 공통 자료' 뺌) */
 export const PEER_TIMING_NOTE_V2 =
-  "비교 회사 값은 각 회사의 가장 최근 회계연도 값이고, 이 회사 값은 최근 4분기 값입니다. 이익이 빠르게 늘고 있는 회사는 이 차이로 주가 수준 막대가 조금 길게(주가가 실제보다 낮은 쪽으로) 계산되는 편입니다.";
+  "비교 회사 값은 각 회사의 가장 최근 회계연도 값이고, 이 회사 값은 최근 4분기 값입니다. 이익이 빠르게 늘고 있는 회사는 이 차이로 주가 수준 막대가 조금 길게(이익에 비해 주가가 실제보다 낮아 보이는 쪽으로) 계산되는 편입니다.";
 /** [2] 가치 함정 표시 (방향 말) */
 export const VALUE_TRAP_V2 = "주가 수준 막대는 길지만(이익·순자산·매출에 비해 주가가 낮은 쪽) 이익이 줄고 있거나 재무 부담이 커서, 이 숫자만으로 판단하기 어렵습니다.";
 
-/** [2] 두 쪽 문장 (valueFamilyTwoSided): 위치 67 이상 · 33 이하 지표를 가장 튀는 순으로 */
-export const TWO_SIDED_LONG = "막대를 길게 만든 지표";
-export const TWO_SIDED_SHORT = "막대를 짧게 만든 지표";
+/**
+ * [2] 두 쪽 문장 (valueFamilyTwoSided): 위치 67 이상 · 33 이하 지표를 가장 튀는 순으로.
+ * 뒤 숫자가 PER 배수가 아니라 위치 점수(0~100)라는 것을 앞머리에 적는다 — 'PER 70'을 'PER 70배'로 읽지 않게 (검토 지적, 화면 읽기도 같은 글)
+ */
+export const TWO_SIDED_LONG = "막대를 길게 만든 지표(위치 점수)";
+export const TWO_SIDED_SHORT = "막대를 짧게 만든 지표(위치 점수)";
 /** 67 이상 · 33 이하 지표가 없을 때: 가운데쯤 지표를 그대로 적는다 */
-export const TWO_SIDED_MID = "가운데쯤(34~66)인 지표";
+export const TWO_SIDED_MID = "가운데쯤인 지표(위치 점수 34~66)";
 export const twoSidedMidLine = (items: ReadonlyArray<readonly [string, number | string]>) => `${TWO_SIDED_MID}: ${items.map(([n, s]) => `${n} ${s}`).join(" · ")}`;
 export const twoSidedLine = (long: boolean, items: ReadonlyArray<readonly [string, number | string]>) => `${long ? TWO_SIDED_LONG : TWO_SIDED_SHORT}: ${items.map(([n, s]) => `${n} ${s}`).join(" · ")}`;
 /** 지표 짧은 이름 ('PER (이익 대비 주가)' → 'PER', '매출 성장 (3년 연평균)' → '매출 성장') */
@@ -546,7 +549,11 @@ export function priceNoteV2(o: { blend: boolean; close: string | null }): string
   return [PRICE_NOTE_BASE, o.blend ? PRICE_NOTE_BLEND : null, o.close ?? (o.blend ? null : PRICE_NOTE_SMALL)].filter(Boolean).join(" ");
 }
 
-/** [3] 영업 외 손익 (valueOneOffAbs): 세전이익의 30% 이상이면 표시 + PER 줄에 영업이익 기준 PER */
+/**
+ * [3] 영업 외 손익 (valueOneOffAbs): 영업 외 **이익**(세전이익 − 영업이익)이 세전이익의 30% 이상이면 표시 + PER 줄에 영업이익 기준 PER (알파벳 17.2 ↔ 35.0배).
+ * 영업 외 **손실**(이자 비용 등 — 버라이즌)은 이 표시·줄을 쓰지 않는다: 영업이익 기준 PER 은 해마다 나가는 이자를 없는 것으로 쳐 빚이 많은 회사가 싸 보이는
+ * 숫자가 된다(버라이즌 12.7 → 9.4배, 검토 지적). 그쪽은 예전 표시(시장 상위 5% 기준) 그대로
+ */
 export const ONE_OFF_ABS_SHARE = 0.3;
 export const oneOffAbsText = (pct: number) => `영업 외 손익이 세전이익의 ${pct}%로 커서 순이익 기준 지표(PER·ROE)가 영업이익 기준 지표와 차이가 큽니다.`;
 export const opPerNote = (taxPct: number, per: string) => `영업이익으로 계산하면(세금 ${taxPct}% 가정) PER 약 ${per}입니다.`;
@@ -581,11 +588,20 @@ export const KR_QUARTER_GAP_TEXT = "재무 요약의 최근 4개 분기 실적 �
 export const preferredText = (commonName: string | null) =>
   commonName ? `우선주는 따로 계산하지 않습니다. 같은 회사 보통주(${commonName}) 화면에 가치 지표 점수가 있습니다.` : "우선주는 따로 계산하지 않습니다.";
 
-/** [10] 사실과 다른 문장 (valueWordingFacts) */
+/**
+ * [10] 사실과 다른 문장 (valueWordingFacts): 순손실 회사의 이익의 현금 뒷받침. 금액은 부호 없는 크기로 받는다 — '순손실(−2.39억 달러)'(이중 부정)·
+ * 음수끼리 '작을 뿐'(헷갈림) 대신 '순손실은 2.39억 달러이고, 영업활동에서도 현금이 0.61억 달러 빠져나갔습니다(순손실보다 적은 금액)' (검토 지적)
+ */
 export function lossAccrualText(ni: string, ocf: string, ocfNegative: boolean, ocfSmaller: boolean): string {
   const head = "순손실 회사라 '이익이 현금으로 뒷받침되는지'로 읽지 않습니다.";
-  return ocfNegative ? `${head} 영업현금흐름(${ocf})도 마이너스이며, 순손실(${ni})보다 ${ocfSmaller ? "작을 뿐입니다" : "큽니다"}.` : `${head} 순손실(${ni})이지만 영업현금흐름은 ${ocf}로 플러스입니다.`;
+  return ocfNegative
+    ? `${head} 순손실은 ${ni}이고, 영업활동에서도 현금이 ${ocf} 빠져나갔습니다(순손실보다 ${ocfSmaller ? "적은" : "많은"} 금액).`
+    : `${head} 순손실은 ${ni}이지만, 영업현금흐름은 플러스(${ocf})입니다.`;
 }
+/** 순손실 회사의 이익의 현금 뒷받침 줄 뜻 (예전 '100에 가까울수록: 이익이 현금으로 잘 뒷받침되는 편' 대신 — 좋은 뜻으로 읽히지 않게) */
+export const LOSS_ACCRUAL_MEANING = "순손실 회사는 100에 가까워도 '이익이 현금으로 잘 뒷받침되는 편'이라는 뜻이 아닙니다.";
+/** [10] 경기 정점 표시 — 업종 목록이 아니라 이익률 오르내림으로 경기 민감이 된 회사(팔란티어)는 '업황에 따라'를 쓰지 않는다 */
+export const CYCLICAL_PEAK_MARGIN = "이익이 최근 몇 년 중 가장 높은 수준입니다. 이익이 크게 오르내리는 회사는 이익이 많을 때 PER이 낮게 보이는 경향이 있습니다.";
 export const lossYearsText = (from: string, to: string, n: number, all: boolean) =>
   `${from === to ? `${to}년` : `${from}~${to}년`}${all ? `, 자료가 있는 ${n}년 모두` : ` ${n}년 연속`} 영업손실입니다. 영업손실인 회사는 이 점수 방식으로는 낮게 나오는 것이 보통입니다.`;
 /** 한국 간이: 부채비율이 이 값(%) 이상이면 자본이 아주 작다는 표시 (아시아나항공 5,496%) */

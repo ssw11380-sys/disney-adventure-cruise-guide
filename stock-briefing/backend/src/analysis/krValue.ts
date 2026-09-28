@@ -300,28 +300,31 @@ export interface KrMember {
   upjongCode: string;
 }
 
-/** 종목 마스터(한국투자증권 종목 정보 — listed_stocks.group_code)의 리츠 분류 */
+/** 종목 마스터(한국투자증권 종목 정보 — listed_stocks.group_code)의 리츠 분류. 토스 Open API 마스터(운영 서버)는 ETF 가 아니면 모두 'ST' 라 이 분류가 없다 */
 export const KR_REIT_GROUP = "RT";
 /** 네이버 업종 '부동산' (리츠와 부동산 회사가 함께 있음 — 이 업종 안에서 이름에 '리츠'가 든 종목만 리츠로 본다) */
 export const KR_REIT_UPJONG = "280";
 
-/** 리츠 판정에 쓰는 분류 (있는 것부터: 마스터 리츠 목록 → 이 종목 마스터 분류 → 네이버 업종 → 이름 끝) */
+/** 리츠 판정에 쓰는 분류 (있는 것부터: 마스터 리츠 목록 → 이 종목 마스터 분류가 'RT' → 네이버 업종 → 이름 끝) */
 export interface KrReitHint {
-  /** 종목 마스터의 리츠 코드 전체 (group_code 'RT'). 비어 있으면 쓰지 않는다 */
+  /** 종목 마스터의 리츠 코드 전체 (group_code 'RT'). 비어 있으면 쓰지 않는다 (토스 마스터를 쓰는 운영 서버는 늘 비어 있다) */
   reitCodes?: ReadonlySet<string> | null;
-  /** 이 종목의 마스터 분류 (모르면 null) */
+  /** 이 종목의 마스터 분류 (모르면 null). 'RT' 일 때만 증거로 쓴다 — 'ST' 는 리츠가 아니라는 증거가 아니다 (토스 마스터는 리츠도 'ST') */
   groupCode?: string | null;
   /** 이 종목의 네이버 업종 번호 (모르면 null) */
   upjongCode?: string | null;
 }
 /**
  * 리츠인지 (긴급 버그 고침 2026-09-29): 예전에는 이름에 '리츠'가 **들어 있으면** 리츠로 봐 메리츠금융지주(22조 금융지주)·블리츠웨이가 '대상 아님'이었고
- * 비교 회사에서도 빠졌다. 이제 공식 분류를 먼저 본다 — 종목 마스터 리츠 목록(RT 23곳) → 이 종목 마스터 분류 → 네이버 업종 280(부동산) 안의 '리츠' 이름
- * (같은 업종의 SK디앤디·한국토지신탁 같은 부동산 회사는 리츠가 아님, 이리츠코크렙은 이름 끝이 '리츠'가 아니어도 리츠) → 아무것도 모를 때만 이름 끝 '리츠'
+ * 비교 회사에서도 빠졌다. 이제 공식 분류를 먼저 본다 — 종목 마스터 리츠 목록(KIS 마스터의 RT 23곳 — 개발 DB) → 이 종목 마스터 분류가 'RT' →
+ * 네이버 업종 280(부동산) 안의 '리츠' 이름 (같은 업종의 SK디앤디·한국토지신탁 같은 부동산 회사는 리츠가 아님, 이리츠코크렙은 이름 끝이 '리츠'가 아니어도 리츠)
+ * → 아무것도 모를 때만 이름 끝 '리츠'.
+ * 운영 서버는 토스 Open API 마스터라 리츠 목록이 비고 리츠 종목도 'ST' 로 온다 — 'ST' 에서 바로 '리츠 아님'을 내면 SK리츠 같은 리츠 23곳이 모두 점수를
+ * 받았다(검토 지적). 그래서 'RT' 가 아닌 분류는 건너뛰고 네이버 업종·이름으로 본다 (대상 종목과 비교 회사가 같은 규칙)
  */
 export function krIsReit(code: string, name: string | null | undefined, hint: KrReitHint = {}): boolean {
   if (hint.reitCodes && hint.reitCodes.size) return hint.reitCodes.has(code);
-  if (hint.groupCode) return hint.groupCode === KR_REIT_GROUP;
+  if (hint.groupCode === KR_REIT_GROUP) return true;
   const n = (name ?? "").trim();
   if (hint.upjongCode) return hint.upjongCode === KR_REIT_UPJONG && /리츠|REIT/i.test(n);
   return /리츠$|REIT$/i.test(n);
