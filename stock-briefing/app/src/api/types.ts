@@ -294,6 +294,50 @@ export interface AccountData {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) '12/25(금) 미국 휴장'. 예전 서버에는 없음 → '지난밤' */
   usHolidayDate?: string;
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 보유 종목별 수량·원화 평가. 꺼짐·예전 기록에는 없음 */
+  positions?: AccountPosition[];
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교. 켜졌는데 비교할 브리핑이 없으면 null, 꺼짐·예전 기록에는 칸이 없음 */
+  sinceLast?: AccountSinceLast | null;
+}
+
+/** 브리핑 3차 3: 계좌 브리핑이 저장한 보유 종목 한 줄 (서버 accountNumbers.AccountPosition 과 같은 모양) */
+export interface AccountPosition {
+  code: string;
+  name: string;
+  currency: Currency;
+  quantity: number;
+  /** 원화 평가금액(원). 시세가 없어 합계에서 뺀 종목은 null */
+  value: number | null;
+  cost: number | null;
+}
+
+/** 수량이 바뀐 종목 한 줄 (새 종목은 from 0, 없어진 종목은 to 0) */
+export interface AccountQtyChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+}
+
+/** 비중(%, 소수 한 자리) 변화 한 줄. change = to − from */
+export interface AccountWeightChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+  change: number;
+}
+
+/** 브리핑 3차 3: 지난 같은 세션 계좌 브리핑과 비교 (서버 accountNumbers.AccountSinceLast 와 같은 모양) */
+export interface AccountSinceLast {
+  prev: { id: number; date: string; session: BriefingSession; asOf: string };
+  value: { from: number; to: number; change: number; rate: number | null };
+  profit: { from: number; to: number; change: number };
+  /** 지난 브리핑에 종목별 값이 없으면(배포 첫날) null */
+  positions: { added: AccountQtyChange[]; removed: AccountQtyChange[]; increased: AccountQtyChange[]; decreased: AccountQtyChange[] } | null;
+  weights: AccountWeightChange[] | null;
+  excludedNow: { code: string; name: string }[];
+  excludedPrev: { code: string; name: string }[];
 }
 
 export interface AccountHeadline {
@@ -309,6 +353,8 @@ export interface AccountHeadline {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만 옴) */
   usHolidayDate?: string;
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교 한 줄 — 날짜·세션·총 평가 변화·수량 바뀐 종목 수(모르면 null). 비교가 저장된 브리핑만 옴 */
+  since?: { date: string; session: BriefingSession; change: number; qtyChanged: number | null };
 }
 
 export interface AccountBriefing {

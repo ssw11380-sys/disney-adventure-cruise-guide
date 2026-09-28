@@ -4,6 +4,7 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { AccountBriefing } from "@/api/types";
 import { accountCardSpeech, accountHolidayLines, briefingTime, contributorsHead } from "@/lib/accountBriefing";
+import { sinceLine } from "@/lib/accountSinceLast";
 import { briefingWhen } from "@/lib/briefingPick";
 import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usPreviousDayLine } from "@/lib/briefingDigest";
 import { formatDateKo, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
@@ -24,6 +25,7 @@ export function AccountBriefingCard({
   selected = false,
   trim = false,
   contributors = false,
+  since = false,
 }: {
   briefing: AccountBriefing;
   /** 넓은 창에서 보던 계좌 브리핑 (3-42 접고 펴기 이어 보기). 기본 false = 지금 모양 그대로 */
@@ -32,6 +34,8 @@ export function AccountBriefingCard({
   trim?: boolean;
   /** 브리핑 2차 3 (플래그 moversMerge): 기여 상위 묶음. 기본 false = 지금 '기여 1위' 줄 그대로 */
   contributors?: boolean;
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 숫자 아래 '9/25(금) 오전보다 총 평가 …' 한 줄. 기본 false = 지금 그대로 */
+  since?: boolean;
 }) {
   const t = useTheme();
   const h = briefing.headline;
@@ -44,7 +48,7 @@ export function AccountBriefingCard({
         onPress={() => router.push(`/briefings/account/${briefing.id}`)}
         {...(selected ? { accessibilityState: { selected: true } } : {})}
         accessibilityRole="link"
-        accessibilityLabel={accountCardSpeech(briefing, block ? { trim, contributors: true } : { trim })}
+        accessibilityLabel={accountCardSpeech(briefing, { ...(block ? { trim, contributors: true } : { trim }), ...(since ? { since: true } : {}) })}
         style={styles.press}
       >
         <View style={styles.head}>
@@ -78,6 +82,7 @@ export function AccountBriefingCard({
                 <Muted>보유 {h.holdings}종목</Muted>
               </View>
             </View>
+            {since ? <SinceLineText briefing={briefing} /> : null}
             {top ? (
               <Text style={{ color: t.sub, fontSize: font.small }}>
                 기여 1위 <Text style={{ color: t.ink, fontWeight: "700" }}>{top.name}</Text>{" "}
@@ -119,6 +124,7 @@ export function AccountBriefingRow({
   trim = false,
   holidayLines = false,
   contributors = false,
+  since = false,
 }: {
   briefing: AccountBriefing;
   selected: boolean;
@@ -130,6 +136,8 @@ export function AccountBriefingRow({
   holidayLines?: boolean;
   /** 브리핑 2차 3 (플래그 moversMerge, 접은 화면만): 기여 상위 묶음. 기본 false = 지금 '기여 1위' 묶음 그대로 */
   contributors?: boolean;
+  /** 브리핑 3차 3 (플래그 accountSinceLast — 접은 화면·카드 격자만, 2단 계좌 줄은 넘기지 않음): 숫자 줄 아래 '9/25(금) 오전보다 총 평가 …'. 기본 false = 지금 그대로 */
+  since?: boolean;
 }) {
   const t = useTheme();
   const today = viewDateOf(new Date(useNow(60_000)));
@@ -139,7 +147,7 @@ export function AccountBriefingRow({
   const failed = briefing.status === "failed" || !h;
   const holidays = holidayLines && !failed ? accountHolidayLines(briefing, { trim, today }) : [];
   // 옵션을 쓰지 않으면 예전 문장 그대로 (옵션 칸 자체를 넘기지 않는다)
-  const speechOpts = { trim, ...(block ? { contributors: true } : {}), ...(holidayLines ? { today } : {}) };
+  const speechOpts = { trim, ...(block ? { contributors: true } : {}), ...(holidayLines ? { today } : {}), ...(since ? { since: true } : {}) };
   return (
     <Pressable
       onPress={onPress}
@@ -184,6 +192,7 @@ export function AccountBriefingRow({
           ) : null}
         </View>
       )}
+      {since && !failed ? <SinceLineText briefing={briefing} cap={fontCap.row} /> : null}
       {block && !failed ? <ContributorsBlock briefing={briefing} /> : null}
       {holidays.map((l) => (
         <Text key={l.text} style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
@@ -230,6 +239,29 @@ export function ContributorsBlock({ briefing }: { briefing: AccountBriefing }) {
           </View>
         );
       })}
+    </View>
+  );
+}
+
+/**
+ * 브리핑 3차 3 (플래그 accountSinceLast): '9/25(금) 오전보다 총 평가 +544,322원 · 수량 바뀐 종목 2' 한 줄 (비교가 저장된 브리핑만, 없으면 그리지 않음).
+ * 두 묶음(총 평가 변화 · 수량)을 따로 두어 좁으면 묶음째 다음 줄로. 금액만 보이는 부호의 등락 색. 누르는 곳이 따로 없다 (줄·카드 전체가 링크 하나)
+ */
+export function SinceLineText({ briefing, cap }: { briefing: AccountBriefing; cap?: number }) {
+  const t = useTheme();
+  const l = sinceLine(briefing);
+  if (!l) return null;
+  return (
+    <View style={styles.rowNums}>
+      <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={cap}>
+        {l.head} <Text style={[styles.num, { color: changeColor(t, l.sign) }]}>{l.amount}</Text>
+        {l.qty ? " ·" : null}
+      </Text>
+      {l.qty ? (
+        <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={cap}>
+          {l.qty}
+        </Text>
+      ) : null}
     </View>
   );
 }

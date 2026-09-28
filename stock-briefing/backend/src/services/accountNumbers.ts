@@ -152,6 +152,62 @@ export interface AccountData extends AccountTotals {
    * '12/25(금)'처럼 날짜로 밝힌다. 예전 기록에는 없다(없으면 '지난밤')
    */
   usHolidayDate?: string;
+  /**
+   * 보유 종목별 수량·원화 평가 (브리핑 3차 3, 플래그 accountSinceLast — 다음 브리핑이 수량·비중 변화를 알게). 꺼짐·예전 기록에는 칸이 없다
+   */
+  positions?: AccountPosition[];
+  /**
+   * 지난 같은 세션 브리핑과 비교 (브리핑 3차 3, 플래그 accountSinceLast). 만들 때 계산해 저장한다 — 나중에 옛 브리핑을 열어도 그때 기준 그대로.
+   * 켜져 있었는데 비교할 브리핑이 없으면(처음·10일 넘음) null, 꺼짐·예전 기록에는 칸이 없다
+   */
+  sinceLast?: AccountSinceLast | null;
+}
+
+/** 계좌 브리핑이 저장하는 보유 종목 한 줄 (브리핑 3차 3) */
+export interface AccountPosition {
+  code: string;
+  name: string;
+  currency: "KRW" | "USD";
+  /** 등록한 보유 수량 (자동 동기화가 켜져 있으면 브리핑 직전 토스 동기화 값) */
+  quantity: number;
+  /** 원화 평가금액(원, 정수, 앱 잔고와 같은 기준 — 합계에 넣은 종목의 합이 totalValue 와 같게 나눔). 시세·환율이 없어 합계에서 뺀 종목은 null */
+  value: number | null;
+  /** 원화 매입금액(원, 정수 — 합이 totalCost 와 같게 나눔). 합계에서 뺀 종목은 null */
+  cost: number | null;
+}
+
+/** 수량이 바뀐 종목 한 줄. 새 종목은 from 0, 없어진 종목은 to 0 */
+export interface AccountQtyChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+}
+
+/** 비중(%, 소수 한 자리) 변화 한 줄. change = to − from (보이는 두 값의 차) */
+export interface AccountWeightChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+  change: number;
+}
+
+/** 지난 같은 세션 계좌 브리핑과 비교 (브리핑 3차 3 — services/accountSinceLast.compareSinceLast) */
+export interface AccountSinceLast {
+  /** 비교한 지난 브리핑 (기준 시각 = 두 브리핑의 asOf) */
+  prev: { id: number; date: string; session: AccountSession; asOf: string };
+  /** 총 평가금액(원): 지난 → 이번. rate = 변화 ÷ 지난 값 (%) */
+  value: { from: number; to: number; change: number; rate: number | null };
+  /** 평가손익(원): 지난 → 이번 */
+  profit: { from: number; to: number; change: number };
+  /** 수량이 바뀐 종목 (지난 브리핑에 종목별 값이 없으면 null) */
+  positions: { added: AccountQtyChange[]; removed: AccountQtyChange[]; increased: AccountQtyChange[]; decreased: AccountQtyChange[] } | null;
+  /** 비중 변화가 큰 종목: 두 브리핑 모두 값이 있는 종목 중 0.5%p 이상, 큰 순 3개 (지난 브리핑에 종목별 값이 없으면 null) */
+  weights: AccountWeightChange[] | null;
+  /** 시세가 없어 합계에서 뺀 종목 (이번 · 지난) */
+  excludedNow: Array<{ code: string; name: string }>;
+  excludedPrev: Array<{ code: string; name: string }>;
 }
 
 /** 오늘 한국 휴장인데 국내 보유분이 있는지 (국내 등락이 직전 거래일 것인지) */
@@ -371,6 +427,40 @@ function fxImpact(us: RawRow[], usDay: number, usdKrw: MarketIndex | null): Acco
   // 원화 변화는 나눈 뒤의 두 값의 합으로 정의한다 — 따로 반올림하면 '변화 = 가격 효과 + 환율 효과' 가 1원 어긋날 수 있다.
   // 반올림 전 원래 값(Σ 지금 달러 평가 × 적용 환율 − 전일 달러 평가 × (적용 환율 − 변동))과는 2원 안에서 같다 (테스트)
   return { status: "computed", reason: null, usdKrw: idx, appliedRate, usdHoldingsKrwChange: usDay + fxEffect, priceEffect: usDay, fxEffect };
+}
+
+/**
+ * 보유 종목별 수량·원화 평가 (브리핑 3차 3, 플래그 accountSinceLast): 수량 > 0·평단 있는 종목 모두, 등록 순서 그대로.
+ * 값은 computeAccount 와 같은 규칙(시세·평가가 있고, 미국은 환율이 있어야 합계에 넣음 · afterCost 면 비용 차감)으로 원화 환산해,
+ * 합계에 넣은 종목끼리 원 단위로 나눈다 → 값의 합 = totalValue, 매입의 합 = totalCost (정확히). 합계에서 뺀 종목은 value·cost null
+ */
+export function positionsOf(list: readonly AccountHolding[], opts: { afterCost?: boolean } = {}): AccountPosition[] {
+  const afterCost = opts.afterCost ?? true;
+  const rows: Array<{ p: AccountPosition; value: number; cost: number } | { p: AccountPosition; value: null; cost: null }> = [];
+  for (const s of list) {
+    const quantity = s.quantity ?? 0;
+    if (!(quantity > 0) || s.avgPrice === null) continue;
+    const q = s.quote;
+    const ev = s.evaluation;
+    const currency = q?.currency ?? (/^\d/.test(s.code) ? "KRW" : "USD");
+    const p: AccountPosition = { code: s.code, name: s.name, currency, quantity, value: null, cost: null };
+    const fx = q ? (currency === "USD" ? fxOf(q) : 1) : null;
+    const native = ev ? (afterCost && ev.afterCost ? ev.afterCost.marketValue : ev.marketValue) : NaN;
+    if (!q || !ev || !fx || !Number.isFinite(q.price) || !Number.isFinite(native)) {
+      rows.push({ p, value: null, cost: null });
+      continue;
+    }
+    rows.push({ p, value: native * fx, cost: currency === "USD" ? (ev.costBasisKrw ?? ev.costBasis * fx) : ev.costBasis });
+  }
+  const counted = rows.filter((r): r is { p: AccountPosition; value: number; cost: number } => r.value !== null);
+  // computeAccount 와 같은 반올림: 평가·매입을 따로 반올림한 합계로 나눈다
+  const values = apportion(counted.map((r) => r.value));
+  const costs = apportion(counted.map((r) => r.cost));
+  counted.forEach((r, i) => {
+    r.p.value = values[i]!;
+    r.p.cost = costs[i]!;
+  });
+  return rows.map((r) => r.p);
 }
 
 /** 지수·환율 영향에 쓰는 지수 (없으면 missing) */

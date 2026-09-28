@@ -1,0 +1,196 @@
+{
+  "note": "브리핑 3차 3 '지난 브리핑과 비교' (플래그 accountSinceLast) 공용 픽스처. 서버(backend/test/accountSinceLast.test.ts)는 prev·now 로 compareSinceLast 를 돌려 expected 와 같은지, 앱(app/test/accountSinceLast.test.ts)은 expected 로 만든 글·화면 읽기 문장이 app 과 같은지 본다. 숫자는 모두 예시 값 (비중은 원 값 ÷ 총 평가 × 100 을 소수 한 자리로 반올림, 변화 = 반올림한 두 값의 차)",
+  "cases": [
+    {
+      "name": "monday",
+      "about": "월 9/28 08:38 오전 ↔ 금 9/25 08:38 오전: 새 종목·없어진 종목·늘어남·줄어듦, 비중 변화 0.5%p 이상 3개(큰 순), 총 평가 줄어듦·평가손익 늘어남",
+      "prev": {
+        "id": 41,
+        "data": {
+          "session": "morning", "date": "2026-09-25", "asOf": "2026-09-25T08:38:00+09:00",
+          "totalValue": 12345678, "totalProfit": 1234000, "excluded": [],
+          "positions": [
+            { "code": "000660", "name": "SK하이닉스", "currency": "KRW", "quantity": 10, "value": 3300000, "cost": 2500000 },
+            { "code": "035420", "name": "NAVER", "currency": "KRW", "quantity": 20, "value": 2467284, "cost": 2400000 },
+            { "code": "NVDA", "name": "엔비디아", "currency": "USD", "quantity": 5, "value": 2246913, "cost": 1800000 },
+            { "code": "AAPL", "name": "애플", "currency": "USD", "quantity": 4, "value": 1481481, "cost": 1100000 },
+            { "code": "TSLA", "name": "테슬라", "currency": "USD", "quantity": 3, "value": 1850000, "cost": 1500000 },
+            { "code": "MSFT", "name": "마이크로소프트", "currency": "USD", "quantity": 2, "value": 1000000, "cost": 811678 }
+          ]
+        }
+      },
+      "now": {
+        "session": "morning", "date": "2026-09-28", "asOf": "2026-09-28T08:38:00+09:00",
+        "totalValue": 11926340, "totalProfit": 1780000, "excluded": [],
+        "positions": [
+          { "code": "000660", "name": "SK하이닉스", "currency": "KRW", "quantity": 8, "value": 3450000, "cost": 2000000 },
+          { "code": "035420", "name": "NAVER", "currency": "KRW", "quantity": 20, "value": 2400000, "cost": 2400000 },
+          { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 10, "value": 843000, "cost": 710000 },
+          { "code": "NVDA", "name": "엔비디아", "currency": "USD", "quantity": 8, "value": 2706900, "cost": 2900000 },
+          { "code": "AAPL", "name": "애플", "currency": "USD", "quantity": 4, "value": 1405010, "cost": 1100000 },
+          { "code": "MSFT", "name": "마이크로소프트", "currency": "USD", "quantity": 2, "value": 1121430, "cost": 1036340 }
+        ]
+      },
+      "expected": {
+        "prev": { "id": 41, "date": "2026-09-25", "session": "morning", "asOf": "2026-09-25T08:38:00+09:00" },
+        "value": { "from": 12345678, "to": 11926340, "change": -419338, "rate": -3.4 },
+        "profit": { "from": 1234000, "to": 1780000, "change": 546000 },
+        "positions": {
+          "added": [{ "code": "005930", "name": "삼성전자", "from": 0, "to": 10 }],
+          "removed": [{ "code": "TSLA", "name": "테슬라", "from": 3, "to": 0 }],
+          "increased": [{ "code": "NVDA", "name": "엔비디아", "from": 5, "to": 8 }],
+          "decreased": [{ "code": "000660", "name": "SK하이닉스", "from": 10, "to": 8 }]
+        },
+        "weights": [
+          { "code": "NVDA", "name": "엔비디아", "from": 18.2, "to": 22.7, "change": 4.5 },
+          { "code": "000660", "name": "SK하이닉스", "from": 26.7, "to": 28.9, "change": 2.2 },
+          { "code": "MSFT", "name": "마이크로소프트", "from": 8.1, "to": 9.4, "change": 1.3 }
+        ],
+        "excludedNow": [],
+        "excludedPrev": []
+      },
+      "app": {
+        "title": "지난 오전 브리핑과 비교",
+        "range": "9/25(금) 08:38 → 9/28(월) 08:38",
+        "value": { "change": "-419,338원 (-3.40%)", "fromTo": "12,345,678원 → 11,926,340원" },
+        "profit": { "change": "+546,000원", "fromTo": "+1,234,000원 → +1,780,000원" },
+        "qty": ["새 종목 · 삼성전자 10주", "없어진 종목 · 테슬라 (전에 3주)", "수량 늘어남 · 엔비디아 5주 → 8주", "수량 줄어듦 · SK하이닉스 10주 → 8주"],
+        "weights": ["엔비디아 18.2% → 22.7% (+4.5%p)", "SK하이닉스 26.7% → 28.9% (+2.2%p)", "마이크로소프트 8.1% → 9.4% (+1.3%p)"],
+        "notes": ["수량이 바뀐 종목이 있어, 총 평가금액 변화에는 사고판 금액이 함께 들어 있습니다.", "두 브리핑에 저장된 숫자를 그대로 비교합니다 · 미국 종목은 그때의 환율로 원화 환산."],
+        "headSpeech": "지난 오전 브리핑과 비교, 9월 25일 금요일 8시 38분부터 9월 28일 월요일 8시 38분까지, 총 평가금액 419,338원 줄어듦, 3.40퍼센트, 평가손익 546,000원 늘어남",
+        "line": "9/25(금) 오전보다 총 평가 -419,338원 · 수량 바뀐 종목 4",
+        "lineSpeech": "9월 25일 금요일 오전 브리핑보다 총 평가금액 419,338원 줄어듦, 수량이 바뀐 종목 4개"
+      }
+    },
+    {
+      "name": "firstDay",
+      "about": "배포 첫날: 지난 브리핑에 종목별 값(positions)이 없음 → 총 평가·평가손익만 비교",
+      "prev": {
+        "id": 41,
+        "data": { "session": "morning", "date": "2026-09-25", "asOf": "2026-09-25T08:38:00+09:00", "totalValue": 12345678, "totalProfit": 1234000, "excluded": [] }
+      },
+      "now": {
+        "session": "morning", "date": "2026-09-28", "asOf": "2026-09-28T08:38:00+09:00",
+        "totalValue": 12890000, "totalProfit": 1780000, "excluded": [],
+        "positions": [
+          { "code": "000660", "name": "SK하이닉스", "currency": "KRW", "quantity": 10, "value": 3450000, "cost": 2500000 },
+          { "code": "NVDA", "name": "엔비디아", "currency": "USD", "quantity": 8, "value": 9440000, "cost": 8610000 }
+        ]
+      },
+      "expected": {
+        "prev": { "id": 41, "date": "2026-09-25", "session": "morning", "asOf": "2026-09-25T08:38:00+09:00" },
+        "value": { "from": 12345678, "to": 12890000, "change": 544322, "rate": 4.41 },
+        "profit": { "from": 1234000, "to": 1780000, "change": 546000 },
+        "positions": null,
+        "weights": null,
+        "excludedNow": [],
+        "excludedPrev": []
+      },
+      "app": {
+        "title": "지난 오전 브리핑과 비교",
+        "range": "9/25(금) 08:38 → 9/28(월) 08:38",
+        "value": { "change": "+544,322원 (+4.41%)", "fromTo": "12,345,678원 → 12,890,000원" },
+        "profit": { "change": "+546,000원", "fromTo": "+1,234,000원 → +1,780,000원" },
+        "qty": null,
+        "weights": null,
+        "notes": ["종목별 변화는 다음 브리핑부터 보입니다 (이전 브리핑에 종목별 값이 없음).", "두 브리핑에 저장된 숫자를 그대로 비교합니다 · 미국 종목은 그때의 환율로 원화 환산."],
+        "headSpeech": "지난 오전 브리핑과 비교, 9월 25일 금요일 8시 38분부터 9월 28일 월요일 8시 38분까지, 총 평가금액 544,322원 늘어남, 4.41퍼센트, 평가손익 546,000원 늘어남",
+        "line": "9/25(금) 오전보다 총 평가 +544,322원",
+        "lineSpeech": "9월 25일 금요일 오전 브리핑보다 총 평가금액 544,322원 늘어남"
+      }
+    },
+    {
+      "name": "excluded",
+      "about": "지금 테슬라 시세가 없어 합계에서 뺌(value null): 없어진 종목으로 세지 않고(수량 그대로) 비중 비교에서도 뺌",
+      "prev": {
+        "id": 41,
+        "data": {
+          "session": "morning", "date": "2026-09-25", "asOf": "2026-09-25T08:38:00+09:00",
+          "totalValue": 10000000, "totalProfit": 500000, "excluded": [],
+          "positions": [
+            { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 100, "value": 6000000, "cost": 5500000 },
+            { "code": "TSLA", "name": "테슬라", "currency": "USD", "quantity": 3, "value": 1000000, "cost": 1000000 },
+            { "code": "NVDA", "name": "엔비디아", "currency": "USD", "quantity": 5, "value": 3000000, "cost": 3000000 }
+          ]
+        }
+      },
+      "now": {
+        "session": "morning", "date": "2026-09-28", "asOf": "2026-09-28T08:38:00+09:00",
+        "totalValue": 9000000, "totalProfit": 500000, "excluded": [{ "code": "TSLA", "name": "테슬라", "reason": "시세를 받지 못해 합계에서 뺐습니다" }],
+        "positions": [
+          { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 100, "value": 6000000, "cost": 5500000 },
+          { "code": "TSLA", "name": "테슬라", "currency": "USD", "quantity": 3, "value": null, "cost": null },
+          { "code": "NVDA", "name": "엔비디아", "currency": "USD", "quantity": 5, "value": 3000000, "cost": 3000000 }
+        ]
+      },
+      "expected": {
+        "prev": { "id": 41, "date": "2026-09-25", "session": "morning", "asOf": "2026-09-25T08:38:00+09:00" },
+        "value": { "from": 10000000, "to": 9000000, "change": -1000000, "rate": -10 },
+        "profit": { "from": 500000, "to": 500000, "change": 0 },
+        "positions": { "added": [], "removed": [], "increased": [], "decreased": [] },
+        "weights": [
+          { "code": "005930", "name": "삼성전자", "from": 60, "to": 66.7, "change": 6.7 },
+          { "code": "NVDA", "name": "엔비디아", "from": 30, "to": 33.3, "change": 3.3 }
+        ],
+        "excludedNow": [{ "code": "TSLA", "name": "테슬라" }],
+        "excludedPrev": []
+      },
+      "app": {
+        "title": "지난 오전 브리핑과 비교",
+        "range": "9/25(금) 08:38 → 9/28(월) 08:38",
+        "value": { "change": "-1,000,000원 (-10.00%)", "fromTo": "10,000,000원 → 9,000,000원" },
+        "profit": { "change": "0원", "fromTo": "+500,000원 → +500,000원" },
+        "qty": [],
+        "weights": ["삼성전자 60.0% → 66.7% (+6.7%p)", "엔비디아 30.0% → 33.3% (+3.3%p)"],
+        "notes": ["시세가 없어 합계에서 뺀 종목(테슬라)은 비교에서 뺐습니다.", "두 브리핑에 저장된 숫자를 그대로 비교합니다 · 미국 종목은 그때의 환율로 원화 환산."],
+        "headSpeech": "지난 오전 브리핑과 비교, 9월 25일 금요일 8시 38분부터 9월 28일 월요일 8시 38분까지, 총 평가금액 1,000,000원 줄어듦, 10.00퍼센트, 평가손익 변화 없음",
+        "line": "9/25(금) 오전보다 총 평가 -1,000,000원",
+        "lineSpeech": "9월 25일 금요일 오전 브리핑보다 총 평가금액 1,000,000원 줄어듦"
+      }
+    },
+    {
+      "name": "afternoonQuiet",
+      "about": "월 9/28 16:05 오후 ↔ 금 9/25 16:07 오후 (같은 세션끼리), 수량 그대로·비중 변화 0.5%p 미만 → '없음' 줄, 사고판 문장 없음",
+      "prev": {
+        "id": 42,
+        "data": {
+          "session": "afternoon", "date": "2026-09-25", "asOf": "2026-09-25T16:07:00+09:00",
+          "totalValue": 2000000, "totalProfit": 100000, "excluded": [],
+          "positions": [
+            { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 10, "value": 1000000, "cost": 950000 },
+            { "code": "000660", "name": "SK하이닉스", "currency": "KRW", "quantity": 4, "value": 1000000, "cost": 950000 }
+          ]
+        }
+      },
+      "now": {
+        "session": "afternoon", "date": "2026-09-28", "asOf": "2026-09-28T16:05:00+09:00",
+        "totalValue": 2012000, "totalProfit": 112000, "excluded": [],
+        "positions": [
+          { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 10, "value": 1014000, "cost": 950000 },
+          { "code": "000660", "name": "SK하이닉스", "currency": "KRW", "quantity": 4, "value": 998000, "cost": 950000 }
+        ]
+      },
+      "expected": {
+        "prev": { "id": 42, "date": "2026-09-25", "session": "afternoon", "asOf": "2026-09-25T16:07:00+09:00" },
+        "value": { "from": 2000000, "to": 2012000, "change": 12000, "rate": 0.6 },
+        "profit": { "from": 100000, "to": 112000, "change": 12000 },
+        "positions": { "added": [], "removed": [], "increased": [], "decreased": [] },
+        "weights": [],
+        "excludedNow": [],
+        "excludedPrev": []
+      },
+      "app": {
+        "title": "지난 오후 브리핑과 비교",
+        "range": "9/25(금) 16:07 → 9/28(월) 16:05",
+        "value": { "change": "+12,000원 (+0.60%)", "fromTo": "2,000,000원 → 2,012,000원" },
+        "profit": { "change": "+12,000원", "fromTo": "+100,000원 → +112,000원" },
+        "qty": [],
+        "weights": [],
+        "notes": ["두 브리핑에 저장된 숫자를 그대로 비교합니다 · 미국 종목은 그때의 환율로 원화 환산."],
+        "headSpeech": "지난 오후 브리핑과 비교, 9월 25일 금요일 16시 7분부터 9월 28일 월요일 16시 5분까지, 총 평가금액 12,000원 늘어남, 0.60퍼센트, 평가손익 12,000원 늘어남",
+        "line": "9/25(금) 오후보다 총 평가 +12,000원",
+        "lineSpeech": "9월 25일 금요일 오후 브리핑보다 총 평가금액 12,000원 늘어남"
+      }
+    }
+  ]
+}

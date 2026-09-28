@@ -18,6 +18,7 @@ import {
   krPreviousDay,
   leaders,
   pickIndices,
+  positionsOf,
   sessionKo,
   summaryText,
   templateNarrative,
@@ -28,6 +29,7 @@ import {
   type AccountHolding,
   type AccountSession,
 } from "./accountNumbers.js";
+import { compareSinceLast, SINCE_LAST_DAYS } from "./accountSinceLast.js";
 
 /** 목록·알림에 쓰는 머리 숫자 (data 에서 뽑는다) */
 export interface AccountHeadline {
@@ -43,6 +45,11 @@ export interface AccountHeadline {
   usPreviousDay?: true;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) 앱이 '12/25(금) 미국 휴장 …'으로 보인다 */
   usHolidayDate?: string;
+  /**
+   * 지난 같은 세션 브리핑과 비교 한 줄 (브리핑 3차 3, 플래그 accountSinceLast — 비교가 저장된 브리핑만. 예전 앱은 모르는 칸):
+   * 비교한 브리핑의 날짜·세션, 총 평가금액 변화(원), 수량이 바뀐 종목 수 (지난 브리핑에 종목별 값이 없으면 null)
+   */
+  since?: { date: string; session: AccountSession; change: number; qtyChanged: number | null };
 }
 
 export interface AccountBriefing {
@@ -72,7 +79,7 @@ export interface AccountBriefingDeps {
   calendar: { status(): Promise<MarketStatus> } | null;
   generator: TextGenerator;
   prompts: PromptStore;
-  features: { enabled(key: "accountBriefing" | "accountBriefingLlm"): Promise<boolean> };
+  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast"): Promise<boolean> };
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -191,6 +198,15 @@ export class AccountBriefingService {
       data.narrative.reason = "시세를 받지 못함";
       return await this.save(date, session, { status: "failed", summary: "시세를 받지 못해 계좌 브리핑을 만들지 못했습니다", detail: "", data, model: "template" });
     }
+    // 브리핑 3차 3 (플래그 accountSinceLast): 종목별 값을 저장하고 지난 같은 세션 브리핑과 비교해 둔다. 꺼지면 칸도 조회도 없다
+    if (await this.deps.features.enabled("accountSinceLast").catch(() => false)) {
+      data.positions = positionsOf(holdings, { afterCost: true });
+      const prev = await this.previousOk(date, session).catch((e: unknown) => {
+        this.deps.log?.warn({ session, date, err: (e as Error).message }, "지난 계좌 브리핑을 읽지 못해 비교 없이 저장");
+        return null;
+      });
+      data.sinceLast = prev ? compareSinceLast(prev, data) : null;
+    }
     const n = await this.narrative(data);
     data.narrative = { source: n.source, reason: n.reason };
     return await this.save(date, session, { status: "ok", summary: summaryText(data), detail: n.text, data, model: n.model });
@@ -259,6 +275,26 @@ export class AccountBriefingService {
       for (const d of list) if (d.filedAt >= since && d.filedAt <= date) out.push({ code: h.code, name: h.name, title: d.title, filedAt: d.filedAt, url: d.url ?? null });
     }
     return out.sort((a, b) => (a.filedAt < b.filedAt ? 1 : a.filedAt > b.filedAt ? -1 : 0)).slice(0, DISCLOSURE_MAX);
+  }
+
+  /**
+   * 비교할 지난 계좌 브리핑 (브리핑 3차 3): 같은 세션, 날짜가 앞선 성공한 것 중 가장 최근 (SINCE_LAST_DAYS 일 안). 실패한 브리핑은 건너뛴다.
+   * 오전은 오전끼리, 오후는 오후끼리 — 오전(밤사이 미국)과 오후(한국 마감)는 기준이 달라 섞으면 헷갈린다. 월요일 오전은 금요일 오전과
+   */
+  private async previousOk(date: string, session: AccountSession): Promise<{ id: number; data: AccountData } | null> {
+    const r = await this.deps.db
+      .selectFrom("account_briefings")
+      .select(["id", "data"])
+      .where("session", "=", session)
+      .where("status", "=", "ok")
+      .where("briefing_date", "<", date)
+      .where("briefing_date", ">=", shiftDate(date, -SINCE_LAST_DAYS))
+      .orderBy("briefing_date", "desc")
+      .orderBy("id", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    const data = r ? parseData(r.data) : null;
+    return r && data ? { id: r.id, data } : null;
   }
 
   private async save(
@@ -366,9 +402,16 @@ function toBriefing(r: { id: number; briefing_date: string; session: string; sta
           ...(d.krPreviousDay ? { krPreviousDay: true as const } : {}),
           ...(d.usPreviousDay ? { usPreviousDay: true as const } : {}),
           ...(d.usHolidayDate ? { usHolidayDate: d.usHolidayDate } : {}),
+          ...(d.sinceLast ? { since: sinceHeadline(d.sinceLast) } : {}),
         }
       : null,
   };
+}
+
+/** 목록·카드의 '9/25(금) 오전보다 총 평가 …' 한 줄에 쓰는 값 (브리핑 3차 3) */
+function sinceHeadline(s: NonNullable<AccountData["sinceLast"]>): NonNullable<AccountHeadline["since"]> {
+  const p = s.positions;
+  return { date: s.prev.date, session: s.prev.session, change: s.value.change, qtyChanged: p ? p.added.length + p.removed.length + p.increased.length + p.decreased.length : null };
 }
 
 /** p 를 ms 까지 기다린다. 늦으면 timeout (p 는 뒤에서 끝나도 무시하고, 나중 실패도 처리된 것으로) */
