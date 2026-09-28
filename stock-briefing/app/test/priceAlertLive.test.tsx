@@ -14,6 +14,7 @@ import { render, type HostNode } from "./miniRender";
 const API = "https://server.test";
 const T0 = Date.parse("2026-12-08T10:12:05+09:00");
 const FIRED_KEY = "priceAlerts.fired.v1";
+const NAMES_KEY = "priceAlerts.names.v1";
 
 const h = vi.hoisted(() => ({
   app: { currentState: "active" as string, listeners: [] as ((s: string) => void)[] },
@@ -22,6 +23,7 @@ const h = vi.hoisted(() => ({
   api: null as unknown,
   store: new Map<string, string>(),
   firedReads: 0,
+  reads: 0,
   reader: false,
   announce: [] as string[],
   alert: [] as unknown[],
@@ -59,6 +61,7 @@ vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
     getItem: async (k: string) => {
+      h.reads++;
       if (k === "priceAlerts.fired.v1") h.firedReads++;
       return h.store.get(k) ?? null;
     },
@@ -83,6 +86,7 @@ const { PriceAlertProvider } = await import("@/components/PriceAlertProvider");
 const { installHaptics, setHapticPolicy } = await import("@/lib/haptics");
 const { installPriceAlertNotifier, announceText } = await import("@/lib/priceAlerts");
 const { ApiRequestError } = await import("@/api/client");
+const { PriceAlertContext, PRICE_ALERTS_OFF } = await import("@/lib/priceAlertContext");
 
 class FakeWS {
   static all: FakeWS[] = [];
@@ -163,9 +167,11 @@ beforeEach(() => {
   environmentManager.setIsServer(() => false);
   FakeWS.all = [];
   h.app = { currentState: "active", listeners: [] };
+  h.settings = { apiUrl: API, apiToken: "", ready: true };
   h.features = { features: { priceAlerts: true } };
   h.store.clear();
   h.firedReads = 0;
+  h.reads = 0;
   h.reader = false;
   h.announce = [];
   h.alert = [];
@@ -335,6 +341,44 @@ describe("이번 실행 · 앱이 앞에 있을 때 받은 값만", () => {
     await settle(r);
     expect(haptics).toEqual([]);
     r.act(() => void setList([samsung(88_800)]));
+    await settle(r);
+    expect(haptics).toHaveLength(1);
+    r.unmount();
+  });
+
+  it("실행 도중 켜지면(features 를 늦게 받음) 켜기 전에 받은 값으로는 울리지 않고 켠 뒤 새 값으로 울린다 · 꺼져 있는 동안 AppState 구독·기기 읽기 0", async () => {
+    fakeApi();
+    h.features = undefined;
+    const r = render(tree(qc, false));
+    setList([samsung(88_700)]); // 켜기 전에 받은 값 (조건 88,600원 이상에 맞음)
+    await settle(r, 1_000);
+    expect(h.app.listeners).toHaveLength(0);
+    expect(h.reads).toBe(0);
+    // 꺼져 있는 동안 뒤로 갔다 왔을 수 있다 (사건을 듣지 않았으므로 모름)
+    h.app.currentState = "background";
+    h.app.currentState = "active";
+    h.features = { features: { priceAlerts: true } };
+    r.rerender(tree(qc, false));
+    await settle(r);
+    expect(h.app.listeners).toHaveLength(1);
+    expect(haptics).toEqual([]);
+    r.act(() => void setList([samsung(88_700)]));
+    await settle(r);
+    expect(haptics).toHaveLength(1);
+    r.unmount();
+  });
+
+  it("처음 그릴 때 뒤였고 'active' 사건이 구독보다 먼저 왔어도, 켜지는 때 앞에 있으면 그때부터 울린다 (그 실행 내내 조용하지 않음)", async () => {
+    fakeApi();
+    h.features = undefined;
+    h.app.currentState = "background";
+    const r = render(tree(qc, false));
+    await settle(r);
+    h.app.currentState = "active"; // 구독 전이라 듣는 이가 없다
+    h.features = { features: { priceAlerts: true } };
+    r.rerender(tree(qc, false));
+    await settle(r);
+    r.act(() => void setList([samsung(88_700)]));
     await settle(r);
     expect(haptics).toHaveLength(1);
     r.unmount();
@@ -569,6 +613,105 @@ describe("ListWatch (잔고 탭이 가려져도 목록을 받음 · 요청이 �
   });
 });
 
+describe("서버 주소를 바꿈", () => {
+  it("옛 서버의 잔고 코드 모음으로 새 서버의 조건을 거르지 않는다 → 새 서버의 활성 가격 조건으로 새 서버 목록을 받는다", async () => {
+    const srv = fakeApi();
+    const r = render(tree(qc, false));
+    setList([samsung()]);
+    await settle(r);
+    const B = "https://other.test";
+    srv.rules = [rule({ id: 40, code: "000660", value: 400_000 })];
+    srv.list = [hynix()];
+    srv.calls.listStocks = 0;
+    h.settings = { ...h.settings, apiUrl: B };
+    r.rerender(tree(qc, false));
+    await settle(r);
+    // 전에는 옛 서버 코드 모음(005930)에 000660 이 없어 '쉬는 중'으로 보고 목록을 받지 않았다
+    expect(srv.calls.listStocks).toBeGreaterThanOrEqual(1);
+    expect(qc.getQueryData([B, "stocks"])).toEqual([hynix()]);
+    r.unmount();
+  });
+});
+
+describe("저장 · 종목 이름 기억", () => {
+  function drawWithProbe(client: QueryClient) {
+    const box = { ctx: PRICE_ALERTS_OFF };
+    function Probe() {
+      box.ctx = React.useContext(PriceAlertContext);
+      return null;
+    }
+    const r = render(
+      <QueryClientProvider client={client}>
+        <PriceAlertProvider>
+          <Probe />
+        </PriceAlertProvider>
+      </QueryClientProvider>,
+    );
+    return { r, box };
+  }
+
+  it("[알림 저장]을 아주 빨리 두 번 눌러도 요청은 한 번 (오류 창·오류 진동 없음) · 저장한 종목 이름을 기억", async () => {
+    const srv = fakeApi();
+    let creates = 0;
+    (h.api as { createPriceAlert: () => Promise<PriceAlertRule> }).createPriceAlert = async () => {
+      creates++;
+      return rule({ id: 41, code: "000660", kind: "rateUp", value: 5, currency: null });
+    };
+    const { r, box } = drawWithProbe(qc);
+    setList([samsung()]);
+    await settle(r);
+    r.act(() => box.ctx.openSheet({ code: "000660", name: "SK하이닉스", quote: hynix().quote }));
+    await settle(r);
+    const row = r.all().find((n) => n.props.accessibilityRole === "radio" && String(n.props.accessibilityLabel).startsWith("전일 대비 5.00% 이상 상승"))!;
+    r.act(() => (row.props.onPress as () => void)());
+    srv.rules = [rule(), rule({ id: 41, code: "000660", kind: "rateUp", value: 5, currency: null })];
+    const saveBtn = r.byLabel("알림 저장");
+    r.act(() => {
+      (saveBtn.props.onPress as () => void)();
+      (saveBtn.props.onPress as () => void)();
+    });
+    await settle(r);
+    expect(creates).toBe(1);
+    expect(h.alert).toEqual([]);
+    expect(haptics.some((x) => x.includes("error"))).toBe(false);
+    expect(r.all().some((n) => n.type === "Modal")).toBe(false);
+    // 잔고 목록에 없는 000660 도 시트의 이름으로 기억
+    expect(JSON.parse(h.store.get(NAMES_KEY)!)).toEqual({ "005930": "삼성전자", "000660": "SK하이닉스" });
+    // 잠금이 풀려 다음 저장도 된다
+    r.act(() => box.ctx.openSheet({ code: "005930", name: "삼성전자", quote: samsung().quote }));
+    await settle(r);
+    const next = r.all().find((n) => n.props.accessibilityRole === "radio" && String(n.props.accessibilityLabel).startsWith("80,000원 이하"))!;
+    r.act(() => (next.props.onPress as () => void)());
+    r.act(() => (r.byLabel("알림 저장").props.onPress as () => void)());
+    await settle(r);
+    expect(creates).toBe(2);
+    r.unmount();
+  });
+
+  it("등록에서 뺀(잔고 목록에 없는) 종목의 조건도 기억해 둔 이름으로 · 조건이 없어진 종목의 이름은 지운다", async () => {
+    // 앞 실행: 목록에 삼성전자가 있을 때 조건이 있는 종목의 이름을 적어 둔다
+    const srv = fakeApi();
+    const first = drawWithProbe(qc);
+    setList([samsung()]);
+    await settle(first.r);
+    expect(JSON.parse(h.store.get(NAMES_KEY)!)).toEqual({ "005930": "삼성전자" });
+    first.r.unmount();
+    // 다음 실행: 삼성전자를 등록에서 뺌 → 목록에 없고 조건은 registered 거짓
+    srv.rules = [rule({ registered: false })];
+    qc = new QueryClient();
+    const { r, box } = drawWithProbe(qc);
+    setList([hynix()]);
+    await settle(r);
+    expect(box.ctx.nameOf("005930")).toBe("삼성전자");
+    expect(box.ctx.nameOf("999999")).toBe("999999");
+    srv.rules = [];
+    r.act(() => void qc.invalidateQueries({ queryKey: [API, "priceAlerts"], exact: true }));
+    await settle(r);
+    expect(JSON.parse(h.store.get(NAMES_KEY)!)).toEqual({});
+    r.unmount();
+  });
+});
+
 describe("문맥 (설정 칸이 읽는 값)", () => {
   it("종목 이름: 목록을 받기 전에는 코드, 이번 실행에서 목록을 받으면 이름으로 다시 그린다 (설정 칸이 코드로 남지 않게)", async () => {
     // 활성 가격 조건이 없어 목록을 스스로 받지 않는 경우 (거래량 조건만 — 설정 탭을 먼저 연 때)
@@ -617,6 +760,7 @@ describe("꺼짐 (priceAlerts false 또는 받은 값 없음)", () => {
       expect(srv.calls).toEqual({ priceAlerts: 0, listStocks: 0 });
       expect(srv.volumeCodes).toEqual([]);
       expect(h.firedReads).toBe(0);
+      expect(h.store.has(NAMES_KEY)).toBe(false);
       r.unmount();
     }
   });

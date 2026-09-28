@@ -25,6 +25,7 @@ import {
   quoteSpeech,
   ratioText,
   removeConfirmText,
+  removeLabel,
   rowSpeech,
   ruleLabel,
   ruleSpeech,
@@ -136,6 +137,28 @@ describe("조건 글 · 미리 채우는 값", () => {
     expect(stepDraft(d("rateUp", 30), 1, q).value).toBe(30);
     expect(stepDraft(d("rateUp", 1.15), 1, q).value).toBe(2.15);
     expect(stepDraft(d("volume", 3), 1, q).value).toBe(3);
+  });
+
+  it("stepDraft: 입력칸을 비웠거나 읽을 수 없는 값(NaN)이면 미리 채운 값(start)에서 한 칸 — NaN 을 돌려주지 않는다", () => {
+    const q = kq(84_300);
+    const nan = Number.NaN;
+    // 미리 채운 값에서
+    expect(stepDraft(d("priceAbove", nan, "KRW"), 1, q, 88_600).value).toBe(89_400);
+    expect(stepDraft(d("priceBelow", nan, "KRW"), -1, q, 80_000).value).toBe(79_200);
+    expect(stepDraft(d("priceAbove", nan, "USD"), 1, uq(11.34), 12).value).toBe(12.1);
+    expect(stepDraft(d("rateUp", nan), 1, q, 5).value).toBe(6);
+    expect(stepDraft(d("rateDown", nan), -1, q, 5).value).toBe(4);
+    expect(stepDraft(d("rateUp", Infinity), 1, q, 5).value).toBe(6);
+    // 미리 채운 값이 없으면 가격은 지금 시세, 등락률은 1 에서
+    expect(stepDraft(d("priceAbove", nan, "KRW"), 1, q).value).toBe(85_100);
+    expect(stepDraft(d("rateUp", nan), -1, q).value).toBe(1);
+    expect(stepDraft(d("rateUp", nan), 1, q, nan).value).toBe(2);
+    // 시작할 값이 하나도 없으면 그대로 (값을 지어내지 않음)
+    const stuck = d("priceAbove", nan, "KRW");
+    expect(stepDraft(stuck, 1, null)).toBe(stuck);
+    for (const [draft, start] of [[d("priceAbove", nan, "KRW"), 88_600], [d("rateUp", nan), 5], [d("rateDown", nan), undefined]] as const) {
+      for (const dir of [1, -1] as const) expect(Number.isFinite(stepDraft(draft, dir, q, start).value), `${draft.kind} ${dir}`).toBe(true);
+    }
   });
 });
 
@@ -353,6 +376,10 @@ describe("알림 글 (카드 · 알림 목록)", () => {
     const c = removeConfirmText(rule({ kind: "rateUp", value: 3, currency: null }));
     expect(c).toEqual({ title: "알림 지우기", message: "'전일 대비 +3.00% 이상' 알림을 지울까요?", cancel: "취소", ok: "지우기" });
     for (const x of Object.values(c)) keep(x);
+    // 설정 칸 (여러 종목이 한 목록): 확인 창·지우기 이름표에 종목 이름
+    expect(keep(removeConfirmText(rule(), "삼성전자").message)).toBe("'삼성전자 · 88,600원 이상' 알림을 지울까요?");
+    expect(keep(removeLabel(rule()))).toBe("알림 지우기, 88,600원 이상");
+    expect(keep(removeLabel(rule({ kind: "rateUp", value: 5, currency: null }), "삼성전자"))).toBe("알림 지우기, 삼성전자, 전일 대비 5.00% 이상 상승");
   });
 });
 

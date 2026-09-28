@@ -5,7 +5,7 @@ import type { PriceAlertRule } from "@/api/types";
 import { confirmRemoveAlert } from "@/components/PriceAlertSheet";
 import { Card, Muted, SectionTitle } from "@/components/ui";
 import { usePriceAlerts } from "@/lib/priceAlertContext";
-import { ALERT_TEXT, firedLine, firedSpeech, ruleLabel, ruleSpeech } from "@/lib/priceAlerts";
+import { ALERT_TEXT, firedLine, firedSpeech, removeLabel, ruleLabel, ruleSpeech } from "@/lib/priceAlerts";
 import { useNow } from "@/lib/useNow";
 import { font, space, touch, useTheme } from "@/theme";
 
@@ -22,7 +22,7 @@ export function PriceAlertSettingsCard() {
   return <PriceAlertSettingsList rules={rules} names={names} nowMs={nowMs} onRemove={(r) => void remove(r)} />;
 }
 
-/** 모든 조건 목록 (종목 · 조건 · 오늘 울렸는지)과 지우기 — 지우기는 시트와 같은 확인 창 */
+/** 모든 조건 목록 (종목 · 조건 · 오늘 울렸는지)과 지우기 — 지우기는 시트와 같은 확인 창. 여러 종목이 한 목록이라 지우기 이름표·확인 창에 종목 이름을 넣는다 */
 export function PriceAlertSettingsList({ rules, names, nowMs, onRemove }: { rules: PriceAlertRule[]; names: Record<string, string>; nowMs: number; onRemove: (rule: PriceAlertRule) => void }) {
   const t = useTheme();
   return (
@@ -40,7 +40,7 @@ export function PriceAlertSettingsList({ rules, names, nowMs, onRemove }: { rule
                 <Text style={{ color: t.ink, fontSize: font.body }}>{`${name} · ${ruleLabel(r)}`}</Text>
                 <Text style={{ color: t.muted, fontSize: font.small }}>{firedLine(r, nowMs)}</Text>
               </View>
-              <Pressable onPress={() => confirmRemoveAlert(r, () => onRemove(r))} accessibilityRole="button" accessibilityLabel={`알림 지우기, ${ruleSpeech(r)}`} style={styles.remove}>
+              <Pressable onPress={() => confirmRemoveAlert(r, () => onRemove(r), name)} accessibilityRole="button" accessibilityLabel={removeLabel(r, name)} style={styles.remove}>
                 <Ionicons name="close" size={font.h2} color={t.muted} />
               </Pressable>
             </View>

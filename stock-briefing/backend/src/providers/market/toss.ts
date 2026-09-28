@@ -563,6 +563,7 @@ export class TossProvider implements QuoteProvider, StockSearchProvider {
       const dt = String(c["dt"] ?? "");
       const o = num(c["open"]), h = num(c["high"]), l = num(c["low"]), cl = num(c["close"]);
       if (!/^\d{4}-\d{2}-\d{2}/.test(dt) || o === null || h === null || l === null || cl === null) continue;
+      // 분봉의 dt 는 봉이 끝나는 시각이다 (2026-09-28 실측 — Candle.time 주석). 3-29 거래량 급증이 이 뜻에 기대므로 바꾸면 volumeBaseline 도 같이
       out.push({ date: dt.slice(0, 10), ...(intraday ? { time: dt } : {}), open: o, high: h, low: l, close: cl, volume: num(c["volume"]) ?? 0 });
     }
     // 토스는 최신순 → 오래된 순으로. 분봉은 시각(오프셋 포함)으로 정렬

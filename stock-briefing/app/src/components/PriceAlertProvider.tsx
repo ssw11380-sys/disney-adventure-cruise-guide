@@ -23,12 +23,24 @@ import { priceAlert } from "@/tokens";
  *    조건마다 그 종목 거래일에 한 번 (서버 기록 firedOn + 기기 기록 + 이번 실행 메모리)
  *  - 울리면: 기록 → 화면 위 카드 → 진동 한 번 → 화면 읽기 한 번 → 조건마다 알림 목록 한 줄(권한이 이미 있을 때, 소리 없음) → 서버에 울림 기록 → 조건 목록 캐시 고침
  *  - ListWatch: 활성 가격·등락률 조건이 있으면 잔고 목록을 늘 받아 둔다 (잔고 탭이 가려져도·소켓이 끊겨도). VolumeWatch: 활성 거래량 조건 종목의 상태를 30초마다
+ *  - 종목 이름: 이번 실행에서 받은 잔고 목록 → 목록 캐시 → 기기에 기억해 둔 이름(조건이 있는 종목만 — 등록에서 뺀 종목도 설정 칸에 이름으로) → 코드
  */
 
 /** 이 모듈을 불러온 때 (lib/liveStream 의 SESSION_START 와 같은 뜻 — 기기에 저장해 둔 옛 값은 이보다 오래됐다) */
 const RUN_START = Date.now();
 /** 서버에 못 보냈을 때도 하루 한 번을 지키는 기기 기록: { "<조건 id>": "<마지막으로 울린 날짜>" } */
 const FIRED_KEY = "priceAlerts.fired.v1";
+/** 조건이 있는 종목의 이름: { "<코드>": "<이름>" } — 등록에서 빼 잔고 목록에 없는 종목도 설정 칸에 코드 대신 이름으로 */
+const NAMES_KEY = "priceAlerts.names.v1";
+const NO_NAMES: Record<string, string> = Object.freeze({}) as Record<string, string>;
+
+/** 기기에 저장한 { 글자: 글자 } 읽기 (모양이 다른 값은 뺀다) */
+function readStringMap(raw: string | null): Record<string, string> {
+  const v: unknown = raw ? JSON.parse(raw) : {};
+  const out: Record<string, string> = {};
+  if (v && typeof v === "object") for (const [k, d] of Object.entries(v)) if (typeof d === "string") out[k] = d;
+  return out;
+}
 
 const is404 = (e: unknown) => e instanceof ApiRequestError && e.status === 404;
 
@@ -103,12 +115,7 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
       setDeviceLoaded(true);
     };
     AsyncStorage.getItem(FIRED_KEY)
-      .then((raw) => {
-        const v: unknown = raw ? JSON.parse(raw) : {};
-        const out: Record<string, string> = {};
-        if (v && typeof v === "object") for (const [k, d] of Object.entries(v)) if (typeof d === "string") out[k] = d;
-        done(out);
-      })
+      .then((raw) => done(readStringMap(raw)))
       .catch(() => done({}));
     return () => {
       alive = false;
@@ -120,19 +127,68 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
   const memory = useRef<Set<string>>(new Set());
   // 앱이 마지막으로 앞에 온 때 (처음 그릴 때 이미 앞이면 RUN_START)
   const activeSince = useRef<number>(AppState.currentState === "active" ? RUN_START : Number.POSITIVE_INFINITY);
+  // AppState 를 첫 그림부터 쭉 보고 있었는지 (꺼져 있는 동안은 구독하지 않으므로 — 꺼짐 = 구독 0 — 그사이 뒤로 갔다 왔는지 모른다)
+  const watchedFromMount = useRef(on);
   useEffect(() => {
     if (!on) return;
+    // 구독을 붙이는 지금 앞에 있는데 앞에 온 때를 모르면 지금부터로 본다: 처음 그릴 때 뒤였고 'active' 사건이 구독보다 먼저 왔음(Infinity 로 남으면
+    // 그 실행 내내 울리지 않음) · 실행 도중 켜짐(옛 값이면 준비 순간의 확인이 뒤에 있던 동안 들어온 값까지 봄)
+    if (AppState.currentState === "active" && (!watchedFromMount.current || activeSince.current === Number.POSITIVE_INFINITY)) activeSince.current = Date.now();
+    watchedFromMount.current = true;
     const sub = AppState.addEventListener("change", (s) => {
       if (s === "active") activeSince.current = Date.now();
     });
-    return () => sub.remove();
+    return () => {
+      sub.remove();
+      watchedFromMount.current = false;
+    };
   }, [on]);
 
-  // 이번 실행에서 받은 잔고 목록의 코드 모음 (쉬는 중 규칙 · 목록·거래량 받기 판단). 처음 본 모음은 기억만, 바뀌면 조건 목록을 다시 받는다
-  const [listKey, setListKey] = useState<string | null>(null);
-  // 이번 실행에서 받은 잔고 목록의 종목 이름 (설정 칸이 목록을 받은 뒤 이름으로 다시 그려지게 — 못 받았으면 기기에 저장해 둔 목록 캐시, 그것도 없으면 코드)
-  const [names, setNames] = useState<Record<string, string>>({});
-  const lastListKey = useRef<string | null>(null);
+  // 이번 실행에서 받은 잔고 목록 — 코드 모음(쉬는 중 규칙 · 목록·거래량 받기 판단)과 종목 이름(설정 칸이 목록을 받은 뒤 이름으로 다시 그려지게).
+  // 받은 서버 주소를 같이 적어 두고 지금 주소와 다르면 없는 것으로 본다 (서버를 바꾸면 옛 서버의 코드 모음으로 조건을 거르지 않게)
+  const [listSeen, setListSeen] = useState<{ url: string; key: string; names: Record<string, string> } | null>(null);
+  const listKey = listSeen?.url === apiUrl ? listSeen.key : null;
+  const names = listSeen?.url === apiUrl ? listSeen.names : NO_NAMES;
+  // 마지막으로 본 코드 모음 (이 서버에서 처음 본 모음은 기억만, 바뀌면 조건 목록을 다시 받는다)
+  const lastListKey = useRef<{ url: string; key: string } | null>(null);
+
+  // 기기에 기억해 둔 종목 이름 (켜져 있을 때 한 번 읽는다. null = 아직 읽는 중) · 이번 실행에서 저장한 조건의 종목 이름
+  const [savedNames, setSavedNames] = useState<Record<string, string> | null>(null);
+  const [createdNames, setCreatedNames] = useState<Record<string, string>>({});
+  // 기기에 마지막으로 적은(또는 읽은) 글 — 같으면 다시 적지 않는다
+  const writtenNames = useRef<string | null>(null);
+  useEffect(() => {
+    if (!on || savedNames !== null) return;
+    let alive = true;
+    const done = (v: Record<string, string>) => {
+      if (!alive) return;
+      writtenNames.current = JSON.stringify(v);
+      setSavedNames(v);
+    };
+    AsyncStorage.getItem(NAMES_KEY)
+      .then((raw) => done(readStringMap(raw)))
+      .catch(() => done({}));
+    return () => {
+      alive = false;
+    };
+  }, [on, savedNames]);
+  // 기억할 이름 = '조건이 있는 종목'의 이름만 (조건이 없어진 종목은 뺀다 — 많아야 30종목). 조건 목록을 받기 전에는 읽은 그대로
+  const rememberedNames = useMemo(() => {
+    if (savedNames === null || rulesQ.data === undefined) return savedNames;
+    const next: Record<string, string> = {};
+    for (const r of rules) {
+      const n = names[r.code] ?? createdNames[r.code] ?? savedNames[r.code];
+      if (n && n !== r.code) next[r.code] = n;
+    }
+    return next;
+  }, [savedNames, rulesQ.data, rules, names, createdNames]);
+  useEffect(() => {
+    if (!on || rememberedNames === null || rulesQ.data === undefined) return;
+    const json = JSON.stringify(rememberedNames);
+    if (json === writtenNames.current) return;
+    writtenNames.current = json;
+    AsyncStorage.setItem(NAMES_KEY, json).catch(() => undefined);
+  }, [on, rememberedNames, rulesQ.data]);
 
   // 화면 위 카드 (최신부터)
   const [banner, setBanner] = useState<Hit[]>([]);
@@ -174,7 +230,10 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
     const st = qc.getQueryState<RegisteredWithQuote[]>([apiUrl, "stocks"]);
     return st?.data && st.dataUpdatedAt >= RUN_START ? new Set(st.data.map((s) => s.code)) : null;
   }, [qc, apiUrl]);
-  const nameOf = useCallback((code: string) => names[code] ?? qc.getQueryData<RegisteredWithQuote[]>([apiUrl, "stocks"])?.find((s) => s.code === code)?.name ?? code, [names, qc, apiUrl]);
+  const nameOf = useCallback(
+    (code: string) => names[code] ?? qc.getQueryData<RegisteredWithQuote[]>([apiUrl, "stocks"])?.find((s) => s.code === code)?.name ?? rememberedNames?.[code] ?? code,
+    [names, qc, apiUrl, rememberedNames],
+  );
 
   /** 울린다: 기록 → 카드 → 진동 한 번 → 화면 읽기 한 번 → 알림 목록 → 서버 기록 → 조건 목록 캐시 */
   const fire = useCallback(
@@ -250,12 +309,12 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
     if (!on) return;
     const noteList = (list: RegisteredWithQuote[]) => {
       const k = codesKey(list);
-      // 등록 종목이 바뀌면 조건 목록을 다시 받는다 (registered 가 옛 값으로 남지 않게). 처음 본 모음은 기억만
-      if (lastListKey.current !== null && lastListKey.current !== k) void qc.invalidateQueries({ queryKey: [apiUrl, "priceAlerts"], exact: true });
-      lastListKey.current = k;
-      setListKey(k);
+      // 등록 종목이 바뀌면 조건 목록을 다시 받는다 (registered 가 옛 값으로 남지 않게). 이 서버에서 처음 본 모음은 기억만
+      const last = lastListKey.current;
+      if (last !== null && last.url === apiUrl && last.key !== k) void qc.invalidateQueries({ queryKey: [apiUrl, "priceAlerts"], exact: true });
+      lastListKey.current = { url: apiUrl, key: k };
       const next = Object.fromEntries(list.map((s) => [s.code, s.name]));
-      setNames((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+      setListSeen((prev) => (prev && prev.url === apiUrl && prev.key === k && JSON.stringify(prev.names) === JSON.stringify(next) ? prev : { url: apiUrl, key: k, names: next }));
     };
     const first = qc.getQueryState<RegisteredWithQuote[]>([apiUrl, "stocks"]);
     if (first?.data && first.dataUpdatedAt >= RUN_START) noteList(first.data);
@@ -294,6 +353,8 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
   const [sheet, setSheet] = useState<{ code: string; name: string; quote: Quote | null } | null>(null);
   const [sheetVolume, setSheetVolume] = useState<VolumeStatus | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  // 저장 잠금: busy 는 다음 그림에서야 바뀌므로 [알림 저장]을 아주 빨리 두 번 누르면 요청이 두 번 갈 수 있다 → 누르는 순간 잠근다
+  const saving = useRef(false);
   const openSheet = useCallback(
     (s: { code: string; name: string; quote: Quote | null }) => {
       setSheet(s);
@@ -320,11 +381,14 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
     [api, refetchRules],
   );
   const save = (body: { code: string; kind: PriceAlertKind; value: number }) => {
-    if (busy) return;
+    if (saving.current) return;
+    saving.current = true;
     setBusy(true);
+    const name = sheet?.code === body.code ? sheet.name : null;
     api
       .createPriceAlert(body)
       .then(() => {
+        if (name) setCreatedNames((prev) => (prev[body.code] === name ? prev : { ...prev, [body.code]: name }));
         setSheet(null);
         haptic("success");
         try {
@@ -338,7 +402,10 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
         haptic("error");
         Alert.alert(ALERT_TEXT.saveFailTitle, e instanceof Error ? e.message : String(e));
       })
-      .finally(() => setBusy(false));
+      .finally(() => {
+        saving.current = false;
+        setBusy(false);
+      });
   };
 
   const value = useMemo<PriceAlertState>(() => (on ? { on: true, rules, openSheet, remove, nameOf } : PRICE_ALERTS_OFF), [on, rules, openSheet, remove, nameOf]);

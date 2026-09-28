@@ -8,7 +8,7 @@ import { inTradingHours, isKrCode, tradingDate } from "./marketTime";
  *  - 조건 글·미리 채우는 값·값 검사(서버 checkValue 와 같은 규칙)
  *  - 울려도 되는 시세인지(이번 거래일·연속 거래 중·세션 경계 전·지연 아님)와 울릴 조건 고르기 (앱이 켜져 있는 동안 체결·시세로)
  *  - 화면 위 알림 카드·알림 목록·화면 읽기 문장
- * 숫자는 모두 캐시의 시세·서버 응답 값을 모양만 바꿔 쓴다 (배율 표기만 내림 소수 한 자리). 이 파일의 글에는 권유·전망 말을 쓰지 않는다
+ * 숫자는 모두 캐시의 시세·서버 응답 값을 모양만 바꿔 쓴다 (배율 표기만 내림 소수 한 자리). 이 파일의 글에는 투자 판단을 이끄는 말을 쓰지 않는다
  */
 
 /** 조건 하나를 글·검사에 쓰는 최소 모양 (저장한 조건과 시트의 고른 줄이 같이 쓴다) */
@@ -211,17 +211,25 @@ function priceStepUnits(p: number, cur: Currency): number {
   return Math.max(s, Math.round(toUnits(p, cur) / (100 * s)) * s);
 }
 
-/** [−]·[+] 한 번: 가격은 위 단위만큼(정수로 더하고 뺌), 등락률은 1%p (1~30). 거래량은 칩으로 고르므로 그대로 */
-export function stepDraft(draft: AlertDraft, dir: 1 | -1, quote: Quote | null): AlertDraft {
+/**
+ * [−]·[+] 한 번: 가격은 위 단위만큼(정수로 더하고 뺌), 등락률은 1%p (1~30). 거래량은 칩으로 고르므로 그대로.
+ * 입력칸을 비웠거나 읽을 수 없는 글(값 NaN)이면 start(그 줄에 미리 채운 값)에서 시작한다 — 없으면 가격은 지금 시세, 등락률은 1.
+ * 그래도 시작할 값이 없으면 그대로 돌려준다 (입력칸에 'NaN' 이 보이지 않게)
+ */
+export function stepDraft(draft: AlertDraft, dir: 1 | -1, quote: Quote | null, start?: number): AlertDraft {
   if (draft.kind === "volume") return draft;
+  const live = quote && Number.isFinite(quote.price) && quote.price > 0 ? quote.price : null;
+  const fallback = start !== undefined && Number.isFinite(start) ? start : isPriceKind(draft.kind) ? live : 1;
+  const value = Number.isFinite(draft.value) ? draft.value : fallback;
+  if (value === null || !Number.isFinite(value)) return draft;
   if (isPriceKind(draft.kind)) {
     const cur = draft.currency ?? "KRW";
-    const base = quote && quote.price > 0 ? quote.price : draft.value;
+    const base = live ?? value;
     const inc = priceStepUnits(base, cur);
     const min = toUnits(niceStep(base, cur), cur);
-    return { ...draft, value: fromUnits(Math.max(min, toUnits(draft.value, cur) + dir * inc), cur) };
+    return { ...draft, value: fromUnits(Math.max(min, toUnits(value, cur) + dir * inc), cur) };
   }
-  const next = Math.round((draft.value + dir) * 100) / 100;
+  const next = Math.round((value + dir) * 100) / 100;
   return { ...draft, value: Math.min(30, Math.max(1, next)) };
 }
 
@@ -451,9 +459,15 @@ export function announceText(hits: Hit[]): string {
   return hits.length > 3 ? `${head}. 외 ${hits.length - 3}건` : head;
 }
 
-/** 지우기 확인 창 글 */
-export function removeConfirmText(rule: AlertDraft): { title: string; message: string; cancel: string; ok: string } {
-  return { title: "알림 지우기", message: `'${ruleLabel(rule)}' 알림을 지울까요?`, cancel: "취소", ok: "지우기" };
+/** 지우기 확인 창 글. name 을 주면(여러 종목을 한 목록에 보이는 설정 칸) 조건 앞에 종목 이름: '삼성전자 · 88,600원 이상' 알림을 지울까요? */
+export function removeConfirmText(rule: AlertDraft, name?: string): { title: string; message: string; cancel: string; ok: string } {
+  const what = name ? `${name} · ${ruleLabel(rule)}` : ruleLabel(rule);
+  return { title: "알림 지우기", message: `'${what}' 알림을 지울까요?`, cancel: "취소", ok: "지우기" };
+}
+
+/** 지우기 버튼 이름표: 알림 지우기, 88,600원 이상 · 설정 칸은 종목 이름까지 — 알림 지우기, 삼성전자, 88,600원 이상 */
+export function removeLabel(rule: AlertDraft, name?: string): string {
+  return name ? `알림 지우기, ${name}, ${ruleSpeech(rule)}` : `알림 지우기, ${ruleSpeech(rule)}`;
 }
 
 /** 알림 버튼 글 · 이름표 (4.1) */

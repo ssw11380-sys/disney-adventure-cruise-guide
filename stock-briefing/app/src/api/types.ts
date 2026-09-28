@@ -170,7 +170,7 @@ export type CandlePeriod = "1m" | "5m" | "30m" | "D" | "W" | "M";
 
 export interface Candle {
   date: string;
-  /** 분봉만: 봉 시작 시각 ISO(현지 오프셋 포함) */
+  /** 분봉만: 봉 시각 ISO(현지 오프셋 포함). 서버 출처마다 뜻이 다르다 — 토스 웹 차트(30분봉은 늘 여기)는 봉이 끝나는 시각, 토스 OpenAPI 1분·5분봉은 시작 시각 (backend domain/types.ts Candle.time) */
   time?: string;
   open: number;
   high: number;

@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 import { Alert, Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { PriceAlertKind, PriceAlertRule, Quote, VolumeStatus } from "@/api/types";
-import { Button, Chip, Muted } from "@/components/ui";
+import { Button, Chip } from "@/components/ui";
 import {
   ALERT_PER_CODE,
   ALERT_TEXT,
@@ -17,6 +17,7 @@ import {
   quoteLine,
   quoteSpeech,
   removeConfirmText,
+  removeLabel,
   rowSpeech,
   ruleLabel,
   ruleSpeech,
@@ -32,17 +33,19 @@ import { priceAlert } from "@/tokens";
 
 /**
  * 지우기 확인 창 (시트의 지우기 버튼과 설정 칸의 지우기 버튼이 같이 쓴다). 확인하면 onConfirm. 글은 순수 함수 removeConfirmText
+ * (설정 칸은 여러 종목을 한 목록에 보이므로 종목 이름 name 을 넘긴다)
  */
-export function confirmRemoveAlert(rule: AlertDraft, onConfirm: () => void): void {
-  const c = removeConfirmText(rule);
+export function confirmRemoveAlert(rule: AlertDraft, onConfirm: () => void, name?: string): void {
+  const c = removeConfirmText(rule, name);
   Alert.alert(c.title, c.message, [
     { text: c.cancel, style: "cancel" },
     { text: c.ok, style: "destructive", onPress: onConfirm },
   ]);
 }
 
-/** 입력칸에 보이는 값 (원은 쉼표, 달러는 센트까지, 등락률은 그대로) */
+/** 입력칸에 보이는 값 (원은 쉼표, 달러는 센트까지, 등락률은 그대로). 읽을 수 없는 값(NaN)은 빈칸 — 'NaN' 을 그리지 않는다 */
 function inputText(d: AlertDraft): string {
+  if (!Number.isFinite(d.value)) return "";
   if (isPriceKind(d.kind)) return d.currency === "USD" ? d.value.toFixed(2) : Math.round(d.value).toLocaleString("ko-KR");
   return String(d.value);
 }
@@ -131,9 +134,11 @@ export function PriceAlertSheet({
         </View>
       );
     const unit = isPriceKind(key) ? (cur === "USD" ? "달러" : "원") : "%";
+    // 입력칸을 비운 채 [−]·[+]를 누르면 이 줄에 미리 채운 값에서 시작
+    const start = presets.find((p) => p.key === key)?.draft.value;
     return (
       <View style={styles.stepper}>
-        <Pressable onPress={() => setDraft(stepDraft(picked.draft, -1, quote))} accessibilityRole="button" accessibilityLabel="값 줄이기" style={[styles.stepBtn, { borderColor: t.lineStrong, backgroundColor: t.surfaceAlt }]}>
+        <Pressable onPress={() => setDraft(stepDraft(picked.draft, -1, quote, start))} accessibilityRole="button" accessibilityLabel="값 줄이기" style={[styles.stepBtn, { borderColor: t.lineStrong, backgroundColor: t.surfaceAlt }]}>
           <Ionicons name="remove" size={font.title} color={t.ink} />
         </Pressable>
         <TextInput
@@ -145,7 +150,7 @@ export function PriceAlertSheet({
           maxFontSizeMultiplier={fontCap.row}
           style={[styles.input, { color: t.ink, borderColor: t.lineStrong, backgroundColor: t.bg }]}
         />
-        <Pressable onPress={() => setDraft(stepDraft(picked.draft, 1, quote))} accessibilityRole="button" accessibilityLabel="값 늘리기" style={[styles.stepBtn, { borderColor: t.lineStrong, backgroundColor: t.surfaceAlt }]}>
+        <Pressable onPress={() => setDraft(stepDraft(picked.draft, 1, quote, start))} accessibilityRole="button" accessibilityLabel="값 늘리기" style={[styles.stepBtn, { borderColor: t.lineStrong, backgroundColor: t.surfaceAlt }]}>
           <Ionicons name="add" size={font.title} color={t.ink} />
         </Pressable>
         <Text style={{ color: t.muted, fontSize: font.small }}>{unit}</Text>
@@ -190,7 +195,7 @@ export function PriceAlertSheet({
                       <Text style={{ color: t.ink, fontSize: font.body }}>{ruleLabel(r)}</Text>
                       <Text style={{ color: t.muted, fontSize: font.small }}>{firedLine(r, nowMs)}</Text>
                     </View>
-                    <Pressable onPress={() => confirmRemoveAlert(r, () => onRemove(r))} accessibilityRole="button" accessibilityLabel={`알림 지우기, ${ruleSpeech(r)}`} style={styles.iconBtn}>
+                    <Pressable onPress={() => confirmRemoveAlert(r, () => onRemove(r))} accessibilityRole="button" accessibilityLabel={removeLabel(r)} style={styles.iconBtn}>
                       <Ionicons name="close" size={font.h2} color={t.muted} />
                     </Pressable>
                   </View>
@@ -227,9 +232,11 @@ export function PriceAlertSheet({
                   );
                 })}
           </ScrollView>
-          {/* 아래 고정: 글자가 커져도 스크롤 없이 [알림 저장]이 보인다 */}
+          {/* 아래 고정: 글자가 커져도 스크롤 없이 [알림 저장]이 보인다. 고정 글은 확대 상한(fontCap.row) — 큰 글씨에서 스크롤 칸을 다 차지하지 않게 */}
           <View style={[styles.foot, { borderTopColor: t.line }]}>
-            <Muted style={{ fontSize: font.tiny }}>{ALERT_TEXT.sheetFoot}</Muted>
+            <Text style={[styles.footText, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+              {ALERT_TEXT.sheetFoot}
+            </Text>
             <Button
               title={busy ? ALERT_TEXT.saving : ALERT_TEXT.save}
               accessibilityLabel={ALERT_TEXT.save}
@@ -266,4 +273,6 @@ const styles = StyleSheet.create({
   chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, paddingLeft: space.lg + font.title + space.md, paddingRight: space.lg, paddingTop: space.xs, paddingBottom: space.sm },
   msg: { fontSize: font.small, paddingLeft: space.lg + font.title + space.md, paddingRight: space.lg, paddingBottom: space.sm },
   foot: { gap: space.sm, paddingHorizontal: space.lg, paddingTop: space.sm, borderTopWidth: StyleSheet.hairlineWidth },
+  // Muted 와 같은 줄 높이 (Muted 는 확대 상한을 받지 않아 Text 로 그린다)
+  footText: { fontSize: font.tiny, lineHeight: 17 },
 });

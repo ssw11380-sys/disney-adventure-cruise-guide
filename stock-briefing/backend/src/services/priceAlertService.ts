@@ -4,7 +4,7 @@ import type { PriceAlertTable } from "../db/schema.js";
 import type { Candle } from "../domain/types.js";
 import { isKrCode, normalizeCode } from "../lib/codes.js";
 import { AppError } from "../lib/errors.js";
-import { seoulIso } from "../lib/time.js";
+import { seoulDate, seoulIso } from "../lib/time.js";
 import type { FeatureService } from "./featureService.js";
 import { VOLUME_REASON, volumeNotOk, volumeStatus, volumeWindow, type VolumeStatus } from "./volumeBaseline.js";
 
@@ -40,6 +40,21 @@ export const VOLUME_MAX_CODES = 10;
 export const VOLUME_TIMES = [2, 3, 5, 10] as const;
 /** 거래량 상태 계산의 시간 예산 기본값(ms): 넘으면 남은 종목의 봉을 받지 않는다 (앱 요청 시간 제한 45초 안에 끝나게) */
 const VOLUME_BUDGET_MS = 35_000;
+/**
+ * 거래량 상태 응답의 마감 기본값(ms): 예산 안에 시작한 받기도 이때까지 끝나지 않으면 기다리지 않고 그 종목은 unavailable.
+ * 예산 직전에 시작한 받기는 토스 요청 한도 8초에 봉 캐시의 '받는 중인 요청 뒤 한 번 더'까지 겹쳐 16초쯤 걸릴 수 있다 → 예산만으로는 45초를 넘길 수 있음
+ */
+const VOLUME_DEADLINE_MS = 40_000;
+
+/** 실제 달력 날짜인지 (YYYY-MM-DD 모양 + 2026-13-45·2026-02-30 같은 없는 날 거절) */
+export function isCalendarDate(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const t = Date.parse(`${s}T00:00:00Z`);
+  return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === s;
+}
+
+/** 두 날짜(YYYY-MM-DD) 사이 날 수 (b − a) */
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 
 /** 소수 둘째 자리까지인 수인지 (센트·등락률). v*100 이 정수인지로 보면 0.29*100 = 28.999999999999996 처럼 부동소수 꼬리 때문에 정상 값을 거절한다 — 앱 lib/priceAlerts 와 같은 식 */
 export function hasCents(v: number): boolean {
@@ -91,13 +106,24 @@ export class PriceAlertService {
   private readonly candles: (code: string) => Promise<Candle[]>;
   private readonly now: () => Date;
   private readonly volumeBudgetMs: number;
+  private readonly volumeDeadlineMs: number;
+  /** 만들기를 한 번에 하나씩 (한도 '세기 → 넣기'가 겹치지 않게). 서버는 한 프로세스라 이 줄로 충분하다 */
+  private createQueue: Promise<unknown> = Promise.resolve();
 
-  constructor(deps: { db: Db; features: Pick<FeatureService, "enabled">; candles: (code: string) => Promise<Candle[]>; now?: () => Date; volumeBudgetMs?: number }) {
+  constructor(deps: {
+    db: Db;
+    features: Pick<FeatureService, "enabled">;
+    candles: (code: string) => Promise<Candle[]>;
+    now?: () => Date;
+    volumeBudgetMs?: number;
+    volumeDeadlineMs?: number;
+  }) {
     this.db = deps.db;
     this.features = deps.features;
     this.candles = deps.candles;
     this.now = deps.now ?? (() => new Date());
     this.volumeBudgetMs = deps.volumeBudgetMs ?? VOLUME_BUDGET_MS;
+    this.volumeDeadlineMs = deps.volumeDeadlineMs ?? VOLUME_DEADLINE_MS;
   }
 
   enabled(): Promise<boolean> {
@@ -122,8 +148,17 @@ export class PriceAlertService {
     return toRule(r, !!reg);
   }
 
-  /** 검사 차례: 값 범위 → 등록 종목 → 같은 조건 → 한도(한 종목 5 → 거래량 10 → 모두 30) */
-  async create(input: { code: string; kind: PriceAlertKind; value: number }): Promise<PriceAlertRule> {
+  /**
+   * 검사 차례: 값 범위 → 등록 종목 → 같은 조건 → 한도(한 종목 5 → 거래량 10 → 모두 30).
+   * 한도는 '세고 → 넣기'라 서로 다른 조건이 동시에 오면 둘 다 통과할 수 있으므로 만들기는 줄을 세워 하나씩 한다 (같은 조건은 유일 색인이 한 번 더 막음)
+   */
+  create(input: { code: string; kind: PriceAlertKind; value: number }): Promise<PriceAlertRule> {
+    const run = this.createQueue.then(() => this.createNow(input));
+    this.createQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async createNow(input: { code: string; kind: PriceAlertKind; value: number }): Promise<PriceAlertRule> {
     const code = normalizeCode(input.code);
     const { kind, value } = input;
     const currency = isPriceKind(kind) ? (isKrCode(code) ? "KRW" : "USD") : null;
@@ -161,9 +196,13 @@ export class PriceAlertService {
 
   /**
    * 앱이 울린 뒤 알려 준다. 한 문장으로 '그날 처음'만 적는다 (동시에 두 번 와도 한 번만 참).
-   * 날짜는 YYYY-MM-DD 글자라 글자 순서 = 날짜 순서 → 더 옛 날짜(늦게 도착한 요청·기기 시계 차이)가 이미 적힌 새 날짜를 덮지 않는다
+   * 날짜는 YYYY-MM-DD 글자라 글자 순서 = 날짜 순서 → 더 옛 날짜(늦게 도착한 요청·기기 시계 차이)가 이미 적힌 새 날짜를 덮지 않는다.
+   * 그래서 먼 앞날(기기 시계가 틀림)이 한 번 적히면 그날까지 기록이 굳는다 → 실제 날짜이고 서버 오늘(서울) 앞뒤 하루 안만 적는다
+   * (미국 종목은 뉴욕 날짜라 서울보다 하루 늦을 수 있음. 3-30 이 fired_on 을 그대로 이어 쓴다)
    */
   async markFired(id: number, date: string, at: string, value: number): Promise<{ first: boolean; rule: PriceAlertRule }> {
+    if (!isCalendarDate(date)) throw new AppError(400, "VALIDATION", "date: 날짜는 YYYY-MM-DD 로 넣어 주세요");
+    if (Math.abs(daysBetween(seoulDate(this.now()), date)) > 1) throw new AppError(400, "VALIDATION", "date: 오늘 앞뒤 하루 안의 날짜만 적습니다");
     if (!(await this.get(id))) throw new AppError(404, "NOT_FOUND", "알림을 찾을 수 없습니다");
     const r = await this.db
       .updateTable("price_alerts")
@@ -176,9 +215,25 @@ export class PriceAlertService {
     return { first: Number(r.numUpdatedRows) === 1, rule };
   }
 
+  /** 봉 받기를 남은 시간(ms)까지만 기다린다. 넘으면 "late" (받기는 뒤에서 끝나 캐시에 남고, 실패해도 조용히) */
+  private async candlesWithin(code: string, ms: number): Promise<Candle[] | "late"> {
+    const p = this.candles(code);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"late">((resolve) => {
+      timer = setTimeout(() => resolve("late"), Math.max(0, ms));
+    });
+    try {
+      return await Promise.race([p, late]);
+    } finally {
+      clearTimeout(timer);
+      p.catch(() => undefined);
+    }
+  }
+
   /**
    * 거래량 급증 상태 (종목마다 순서대로 — 한 번에 몰아 보내지 않음): 정규장이고 개장 뒤 30분이 지났을 때만 30분봉을 받는다.
-   * 시간 예산(volumeBudgetMs)이 지나면 남은 종목의 봉은 받지 않고 unavailable. 시간은 실제 시계로 잰다 (주입된 now 는 테스트에서 고정)
+   * 시간 예산(volumeBudgetMs)이 지나면 남은 종목의 봉은 받지 않고 unavailable. 예산 안에 시작한 받기도 마감(volumeDeadlineMs)까지만 기다린다
+   * (그 종목도 unavailable) → 응답이 앱 시간 제한 45초 안에 늘 온다. 시간은 실제 시계로 잰다 (주입된 now 는 테스트에서 고정)
    */
   async volume(codes: string[]): Promise<VolumeStatus[]> {
     const started = Date.now();
@@ -194,11 +249,15 @@ export class PriceAlertService {
         out.push(volumeNotOk(code, now, "unavailable", VOLUME_REASON.budget));
         continue;
       }
-      let candles: Candle[];
+      let candles: Candle[] | "late";
       try {
-        candles = await this.candles(code);
+        candles = await this.candlesWithin(code, this.volumeDeadlineMs - (Date.now() - started));
       } catch {
         out.push(volumeNotOk(code, now, "unavailable", VOLUME_REASON.unavailable));
+        continue;
+      }
+      if (candles === "late") {
+        out.push(volumeNotOk(code, this.now(), "unavailable", VOLUME_REASON.budget));
         continue;
       }
       out.push(volumeStatus(code, candles, this.now()));

@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import { AppError } from "../lib/errors.js";
-import { PRICE_ALERT_KINDS, VOLUME_MAX_CODES, type PriceAlertService } from "../services/priceAlertService.js";
+import { isCalendarDate, PRICE_ALERT_KINDS, VOLUME_MAX_CODES, type PriceAlertService } from "../services/priceAlertService.js";
 
 /** 종목 코드 글 (routes/stocks.ts 의 codeParam 과 같은 규칙·같은 글) */
 const CODE_MSG = "종목 코드는 6자리 숫자(한국) 또는 티커(미국)";
@@ -18,7 +18,8 @@ const createBody = z.object(
 );
 const firedBody = z.object(
   {
-    date: z.string("날짜는 YYYY-MM-DD 로 넣어 주세요").regex(/^\d{4}-\d{2}-\d{2}$/, "날짜는 YYYY-MM-DD 로 넣어 주세요"),
+    // 모양과 실제 날짜 (2026-13-45 거절). 서버 오늘 앞뒤 하루 안인지는 서비스 markFired 가 본다
+    date: z.string("날짜는 YYYY-MM-DD 로 넣어 주세요").refine(isCalendarDate, "날짜는 YYYY-MM-DD 로 넣어 주세요"),
     at: z
       .string("시각 형식이 올바르지 않습니다")
       .max(40, "시각 형식이 올바르지 않습니다")
@@ -38,7 +39,7 @@ const disabled = () => new AppError(409, "DISABLED", "가격 알림 기능이 �
  *  - GET    /api/price-alerts                  { rules } (종목 코드, id 순. 줄마다 registered = 지금 등록 종목인지)
  *  - POST   /api/price-alerts                  { code, kind, value } → 201 조건
  *  - DELETE /api/price-alerts/:id              204
- *  - POST   /api/price-alerts/:id/fired        { date, at, value } → { first, rule } (그날 처음 울렸으면 first)
+ *  - POST   /api/price-alerts/:id/fired        { date, at, value } → { first, rule } (그날 처음 울렸으면 first. date 는 실제 날짜이고 서버 오늘 앞뒤 하루 안)
  *  - GET    /api/price-alerts/volume?codes=A,B { items } 거래량 급증 상태 (최대 10종목, 순서대로)
  */
 export const priceAlertRoutes: FastifyPluginAsync<{ service: PriceAlertService }> = async (app, { service }) => {

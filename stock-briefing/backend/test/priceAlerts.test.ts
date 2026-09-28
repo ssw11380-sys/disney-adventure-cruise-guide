@@ -205,6 +205,32 @@ describe("검사 차례 (값 범위 → 등록 종목 → 같은 조건 → 한�
     expect(res.find((r) => r.statusCode === 409)!.json().error).toBe("DUPLICATE");
     expect((await db.selectFrom("price_alerts").selectAll().execute()).length).toBe(1);
   });
+
+  it("서로 다른 조건을 동시에 저장해도 한도를 넘지 않는다 (세기 → 넣기를 한 번에 하나씩) · 거절 뒤에도 다음 저장은 된다", async () => {
+    const db = await createMigratedDb(":memory:");
+    dbs.push(db);
+    const codes = Array.from({ length: 8 }, (_, i) => String(400_000 + i));
+    await register(db, "005930", ...codes);
+    const svc = new PriceAlertService({ db, features: { enabled: async () => true }, candles: async () => [], now: NOW });
+    const count = async () => (await db.selectFrom("price_alerts").select("id").execute()).length;
+    const settle = async (ps: Promise<unknown>[]) => (await Promise.allSettled(ps)).map((r) => (r.status === "fulfilled" ? "ok" : (r.reason as Error).message));
+    // 한 종목 5개: 4개 있을 때 서로 다른 셋을 같이 → 하나만 (전에는 셋 다 세기를 통과해 7개가 됐다)
+    for (const v of [1, 2, 3, 4]) await svc.create({ code: "005930", kind: "rateUp", value: v });
+    expect(await settle([10, 11, 12].map((v) => svc.create({ code: "005930", kind: "rateUp", value: v })))).toEqual(["ok", "한 종목에 알림은 5개까지입니다", "한 종목에 알림은 5개까지입니다"]);
+    expect(await count()).toBe(5);
+    // 모두 30개: 29개 있을 때 두 종목에 같이 → 하나만
+    await db
+      .insertInto("price_alerts")
+      .values([...codes.slice(0, 4).flatMap((code) => [1, 2, 3, 4, 5].map((k) => ({ code, value: 1000 * k }))), ...[1, 2, 3, 4].map((k) => ({ code: codes[4]!, value: 1000 * k }))].map((r) => ({ ...r, kind: "priceAbove", currency: "KRW", created_at: "x", fired_on: null, fired_at: null, fired_value: null })))
+      .execute();
+    expect(await count()).toBe(29);
+    expect(await settle([codes[5]!, codes[6]!].map((code) => svc.create({ code, kind: "priceAbove", value: 1000 })))).toEqual(["ok", "알림은 모두 30개까지입니다"]);
+    expect(await count()).toBe(30);
+    // 거절된 저장(값 오류·한도)이 줄을 막지 않는다: 하나 지우면 다음 저장이 들어간다
+    await expect(svc.create({ code: codes[7]!, kind: "volume", value: 4 })).rejects.toThrow("2·3·5·10배 중 하나로 골라 주세요");
+    await svc.remove(1);
+    await expect(svc.create({ code: codes[7]!, kind: "volume", value: 3 })).resolves.toMatchObject({ code: codes[7], kind: "volume" });
+  });
 });
 
 describe("울림 기록 (조건마다 하루 한 번)", () => {
@@ -222,6 +248,29 @@ describe("울림 기록 (조건마다 하루 한 번)", () => {
     const old = await fired(app, id, "2026-12-08", 1);
     expect(old.json()).toMatchObject({ first: false, rule: { firedOn: "2026-12-09", firedValue: 89_000 } });
     expect((await app.inject({ method: "POST", url: "/api/price-alerts/999/fired", payload: { date: "2026-12-08", at: "2026-12-08T01:00:00Z", value: 1 } })).statusCode).toBe(404);
+  });
+
+  it("날짜는 실제 날짜이고 서버 오늘(서울, 고정 시계 12/8) 앞뒤 하루 안만 적는다 — 먼 날짜로 서버 기록이 굳지 않게", async () => {
+    const { app, db } = await setup();
+    await register(db, "005930");
+    const { id } = (await post(app, { code: "005930", kind: "priceAbove", value: 88_600 })).json() as { id: number };
+    const send = (date: string) => app.inject({ method: "POST", url: `/api/price-alerts/${id}/fired`, payload: { date, at: "2026-12-08T01:12:05.000Z", value: 88_700 } });
+    for (const date of ["2026-13-45", "2026-02-30", "2026-00-10", "2026-12-00"]) {
+      const r = await send(date);
+      expect(r.statusCode, date).toBe(400);
+      expect(r.json()).toEqual({ error: "VALIDATION", message: "date: 날짜는 YYYY-MM-DD 로 넣어 주세요" });
+    }
+    for (const date of ["2099-01-01", "2026-12-10", "2026-12-06", "2025-12-08"]) {
+      const r = await send(date);
+      expect(r.statusCode, date).toBe(400);
+      expect(r.json()).toEqual({ error: "VALIDATION", message: "date: 오늘 앞뒤 하루 안의 날짜만 적습니다" });
+    }
+    expect(await db.selectFrom("price_alerts").select("fired_on").execute()).toEqual([{ fired_on: null }]);
+    // 어제(미국 종목은 뉴욕 날짜라 서울보다 하루 늦을 수 있음)·오늘·내일은 적는다
+    expect((await send("2026-12-07")).json().first).toBe(true);
+    expect((await send("2026-12-08")).json().first).toBe(true);
+    expect((await send("2026-12-09")).json().first).toBe(true);
+    expect((await rules(app))[0]!.firedOn).toBe("2026-12-09");
   });
 
   it("두 요청을 같이 보내도 참은 하나", async () => {
@@ -308,6 +357,43 @@ describe("거래량 급증 상태 (GET /volume)", () => {
       expect(calls).toEqual(["005930", "000660"]);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("예산 안에 시작한 받기가 느려도 마감(volumeDeadlineMs)에 끊고 돌려준다 — 앱 시간 제한(45초) 안에 늘 응답 (가짜 시계)", async () => {
+    const db = await createMigratedDb(":memory:");
+    dbs.push(db);
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      const svc = new PriceAlertService({
+        db,
+        features: { enabled: async () => true },
+        candles: async (code) => {
+          calls.push(code);
+          // 첫 종목 10ms, 둘째는 토스가 느린 경우(8초 + 겹친 받기 한 번 더)
+          await wait(code === "005930" ? 10 : 16_000);
+          return aBars();
+        },
+        now: NOW,
+        volumeBudgetMs: 50,
+        volumeDeadlineMs: 100,
+      });
+      let items: Awaited<ReturnType<PriceAlertService["volume"]>> | null = null;
+      const started = Date.now();
+      void svc.volume(["005930", "000660", "005935"]).then((v) => void (items = v));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(items).not.toBeNull();
+      expect(Date.now() - started).toBeLessThanOrEqual(100);
+      expect(items!.map((i) => i.status)).toEqual(["ok", "unavailable", "unavailable"]);
+      expect(items![1]).toMatchObject({ code: "000660", reason: "시간 안에 30분봉을 받지 못함" });
+      // 셋째는 예산(50ms)이 지나 받지 않는다
+      expect(calls).toEqual(["005930", "000660"]);
+      // 느린 받기가 나중에 끝나도 아무 일 없음 (타이머·거부가 남지 않음)
+      await vi.advanceTimersByTimeAsync(20_000);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -95,7 +95,8 @@ const { PriceAlertContext, PRICE_ALERTS_OFF } = await import("@/lib/priceAlertCo
 const { PriceAlertSheet } = await import("@/components/PriceAlertSheet");
 const { PriceAlertBanner } = await import("@/components/PriceAlertBanner");
 const { PriceAlertSettingsCard, PriceAlertSettingsList } = await import("@/components/PriceAlertSettingsCard");
-const { space } = await import("@/tokens");
+const { space, fontCap } = await import("@/tokens");
+const { ALERT_TEXT } = await import("@/lib/priceAlerts");
 
 type R = ReturnType<typeof render>;
 const SESSION = { market: "KR" as const, phase: "regular", label: "한국 정규장", open: true, eligible: true, until: "2026-12-08T15:20:00+09:00" };
@@ -252,6 +253,45 @@ describe("알림 시트", () => {
     expect(onSave).toHaveBeenLastCalledWith({ code: "005930", kind: "priceAbove", value: 90_000 });
     expect(r.byLabel("알림 값").props.keyboardType).toBe("number-pad");
     expect(r.byLabel("알림 값").props.returnKeyType).toBe("done");
+  });
+
+  it("입력칸을 비우거나 읽을 수 없는 글을 넣고 [+]·[−] → 'NaN' 이 아니라 그 줄에 미리 채운 값에서 한 칸", () => {
+    const { r, onSave } = sheet();
+    press(r, radio(r, "88,600원 이상"));
+    typeIn(r, "");
+    expect(inputValue(r)).toBe("");
+    expect(saveBtn(r).props.disabled).toBe(true);
+    press(r, r.byLabel("값 늘리기"));
+    expect(inputValue(r)).toBe("89,400");
+    typeIn(r, "abc");
+    press(r, r.byLabel("값 줄이기"));
+    expect(inputValue(r)).toBe("87,800");
+    press(r, saveBtn(r));
+    expect(onSave).toHaveBeenLastCalledWith({ code: "005930", kind: "priceAbove", value: 87_800 });
+    // 등락률 줄 (미리 채운 값 5)
+    press(r, radio(r, "전일 대비 5.00% 이상 상승"));
+    typeIn(r, "");
+    press(r, r.byLabel("값 줄이기"));
+    expect(inputValue(r)).toBe("4");
+    typeIn(r, "");
+    press(r, r.byLabel("값 늘리기"));
+    expect(inputValue(r)).toBe("6");
+    // 미국 종목 ($12.00 줄)
+    const us = sheet({ quote: quote("AAPL", 11.34, { currency: "USD", changeRate: -1.2, asOf: "2026-12-08T23:40:00+09:00" }), code: "AAPL", name: "AAPL" }).r;
+    press(us, radio(us, "12.00달러 이상"));
+    typeIn(us, "");
+    press(us, us.byLabel("값 늘리기"));
+    expect(inputValue(us)).toBe("12.10");
+    for (const x of [r, us]) {
+      expect(x.text()).not.toContain("NaN");
+      expect(x.all().some((n) => /NaN/.test(String(n.props.accessibilityLabel ?? "")) || /NaN/.test(String(n.props.value ?? "")))).toBe(false);
+    }
+  });
+
+  it("아래 고정 글은 글자 확대 상한(fontCap.row) — 큰 글씨에서 스크롤 칸을 다 차지하지 않게", () => {
+    const { r } = sheet();
+    const foot = r.all().find((n) => n.type === "Text" && n.children.includes(ALERT_TEXT.sheetFoot))!;
+    expect(foot.props.maxFontSizeMultiplier).toBe(fontCap.row);
   });
 
   it("등락률 +6.2% 에서 '+5% 이상'을 직접 넣으면 '이미 맞음' 줄 (저장은 켜짐)", () => {
@@ -423,9 +463,11 @@ describe("설정 '가격 알림' 칸", () => {
     expect(r.text()).toContain("에코프로비엠 · 80,000원 이하");
     expect(r.text()).toContain("등록 종목이 아니라 확인하지 않음");
     expect(r.has("삼성전자, 88,600원 이상, 오늘 9시 41분 울림")).toBe(true);
-    press(r, r.byLabel("알림 지우기, 88,600원 이상"));
+    // 여러 종목이 한 목록이라 지우기 이름표·확인 창에 종목 이름 (같은 조건이 두 종목에 있어도 구별)
+    expect(r.has("알림 지우기, 88,600원 이상")).toBe(false);
+    press(r, r.byLabel("알림 지우기, 삼성전자, 88,600원 이상"));
     const [title, message, buttons] = h.alert.mock.calls[0]! as [string, string, { text: string; onPress?: () => void }[]];
-    expect([title, message]).toEqual(["알림 지우기", "'88,600원 이상' 알림을 지울까요?"]);
+    expect([title, message]).toEqual(["알림 지우기", "'삼성전자 · 88,600원 이상' 알림을 지울까요?"]);
     buttons[1]!.onPress!();
     expect(onRemove).toHaveBeenCalledWith(rules[0]);
   });
@@ -443,7 +485,8 @@ describe("설정 '가격 알림' 칸", () => {
     );
     const inner = render(<PriceAlertSettingsList rules={rules} names={names} nowMs={h.now} onRemove={vi.fn()} />);
     expect(outer.text()).toBe(inner.text());
-    press(outer, outer.byLabel("알림 지우기, 80,000원 이하"));
+    press(outer, outer.byLabel("알림 지우기, 에코프로비엠, 80,000원 이하"));
+    expect(h.alert.mock.calls.at(-1)![1]).toBe("'에코프로비엠 · 80,000원 이하' 알림을 지울까요?");
     (h.alert.mock.calls.at(-1)![2] as { onPress?: () => void }[])[1]!.onPress!();
     expect(remove).toHaveBeenCalledWith(rules[1]);
   });
