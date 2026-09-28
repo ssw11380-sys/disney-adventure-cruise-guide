@@ -1,11 +1,12 @@
 import { router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useFeature } from "@/api/hooks";
 import { sentence } from "@/lib/a11y";
 import { freshSuffix, SCHEDULE_LINK, SCHEDULE_LINK_SPEECH, scheduleFilingsView } from "@/lib/filingAlerts";
 import { useFilingViewed } from "@/lib/filingViewed";
 import { useCachedSchedule } from "@/lib/scheduleQuery";
+import { useChunkRow } from "@/lib/useChunkRow";
 import { font, space, touch, useTheme } from "@/theme";
 
 /**
@@ -15,13 +16,12 @@ import { font, space, touch, useTheme } from "@/theme";
  */
 export function ScheduleLink() {
   const t = useTheme();
-  const { fontScale } = useWindowDimensions();
   const filingsOn = useFeature("filingAlerts", false);
   const cached = useCachedSchedule();
   const [viewed] = useFilingViewed();
   const fresh = filingsOn && cached?.filings ? scheduleFilingsView(cached.filings, viewed).fresh : 0;
   const suffix = freshSuffix(fresh);
-  const gap = fontScale >= 1.75 ? space.sm : fontScale >= 1.25 ? space.s : space.xs;
+  const chunkRow = useChunkRow();
   const link = { color: t.accent, fontSize: font.body, fontWeight: "600" as const };
   return (
     <Pressable
@@ -31,7 +31,7 @@ export function ScheduleLink() {
       style={({ pressed }) => [styles.row, { minHeight: touch.min, borderTopColor: t.line, backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}
     >
       {/* 좁은 칸·큰 글씨는 묶음째 줄바꿈 (다가오는 일정 줄과 같은 규칙) */}
-      <View style={[styles.chunks, { columnGap: gap }]}>
+      <View style={[chunkRow, styles.baseline]}>
         {suffix ? (
           <>
             <Text style={link}>{SCHEDULE_LINK}</Text>
@@ -51,5 +51,5 @@ export function ScheduleLink() {
 
 const styles = StyleSheet.create({
   row: { justifyContent: "center", borderTopWidth: StyleSheet.hairlineWidth, marginTop: space.xs, paddingVertical: space.s },
-  chunks: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline" },
+  baseline: { alignItems: "baseline" },
 });

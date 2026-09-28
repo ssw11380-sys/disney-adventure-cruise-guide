@@ -1,6 +1,6 @@
 import { router } from "expo-router";
 import React, { useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAccountBriefing, useFeature, useFeatures } from "@/api/hooks";
 import type { AccountBriefingWithData, AccountData, AccountEvents, AccountExposure, AccountSchedule } from "@/api/types";
@@ -17,6 +17,8 @@ import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, 
 import { EXPOSURE_ABOUT, exposureView } from "@/lib/accountExposure";
 import { QTY_HEAD, QTY_NONE, sinceLastView, sinceNone, WEIGHT_HEAD, WEIGHT_NONE } from "@/lib/accountSinceLast";
 import { eventsView } from "@/lib/holdingEvents";
+// 묶음째 줄바꿈하는 줄: 묶음 사이를 글자 크기에 맞춰 넓힌다 (200% 에서 '·퀀티넘'처럼 붙어 보이지 않게) — 100% 4 · 130% 6 · 175% 이상 8
+import { useChunkRow } from "@/lib/useChunkRow";
 import { usHolidayWhen } from "@/lib/briefingDigest";
 import { mdw } from "@/lib/marketSummary";
 import { accountColumns } from "@/lib/briefingPick";
@@ -550,13 +552,6 @@ function SinceRow({ label, fromTo, children }: { label: string; fromTo: string[]
       </View>
     </View>
   );
-}
-
-/** 묶음째 줄바꿈하는 줄: 묶음 사이를 글자 크기에 맞춰 넓힌다 (200% 에서 '·퀀티넘'처럼 붙어 보이지 않게) — 100% 4 · 130% 6 · 175% 이상 8 */
-function useChunkRow(): ViewStyle {
-  const { fontScale } = useWindowDimensions();
-  const gap = fontScale >= 1.75 ? space.sm : fontScale >= 1.25 ? space.s : space.xs;
-  return { flexDirection: "row", flexWrap: "wrap", columnGap: gap };
 }
 
 /** 색은 그 글자에 보이는 값으로 — "0원"·"0.00%" 로 보이는 값을 손실·이익 색으로 칠하지 않게 (BH-38) */

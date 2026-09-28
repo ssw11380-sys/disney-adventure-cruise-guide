@@ -16,6 +16,14 @@ export function filingTrigger(): Notifications.NotificationTriggerInput {
   return Platform.OS === "android" ? { channelId: FILING_CHANNEL } : null;
 }
 
+/**
+ * 공시 알림에 쓰는 규칙: 조용한 시간은 서버 알림 묶음(briefingDigest)이 켜져 있을 때만 — 설정 화면도 그때만 조용한 시간과 '공시 알림'의 조용한 시간 줄을 보인다.
+ * (묶음이 꺼진 서버는 브리핑에도 조용한 시간을 쓰지 않는다)
+ */
+export function filingRules(p: NotifyPrefs): NotifyPrefs {
+  return p.digest === false ? { ...p, quietEnabled: false } : p;
+}
+
 async function granted(): Promise<boolean> {
   try {
     return (await Notifications.getPermissionsAsync()).status === "granted";
@@ -32,7 +40,7 @@ export async function notifyFilings(items: readonly FilingAlertItem[], opts: { p
   if (!(await granted())) return 0;
   return withFilingSeen(async () => {
     const now = opts.now ?? new Date();
-    const plan = planFilingNotification({ items, seen: new Set(await readFilingSeen()), init: await filingInit(), prefs: opts.prefs, enabled: await filingAlertsEnabled(), now });
+    const plan = planFilingNotification({ items, seen: new Set(await readFilingSeen()), init: await filingInit(), prefs: filingRules(opts.prefs), enabled: await filingAlertsEnabled(), now });
     if (plan.message) {
       await ensureFilingChannel().catch(() => undefined);
       await Notifications.scheduleNotificationAsync({ content: { title: plan.message.title, body: plan.message.body, data: plan.message.data, sound: "default" }, trigger: filingTrigger() });
@@ -63,7 +71,7 @@ export async function checkFilingIds(ids: readonly string[] | undefined, load: F
   if (!(await granted())) return 0;
   const prefs = await load.prefs();
   if (!prefs) return 0;
-  if (init && inQuietHours(prefs, now)) return 0;
+  if (init && inQuietHours(filingRules(prefs), now)) return 0;
   const items = await load.alerts();
   if (!items) return 0;
   return notifyFilings(items, { prefs, now });

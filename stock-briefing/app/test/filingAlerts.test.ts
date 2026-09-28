@@ -34,7 +34,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 
 const F = await import("@/lib/filingAlerts");
 const S = await import("@/lib/filingSeen");
-const { notifyFilings, checkFilingIds } = await import("@/lib/filingNotify");
+const { notifyFilings, checkFilingIds, filingRules } = await import("@/lib/filingNotify");
 const { routeForNotification, notificationNav } = await import("@/lib/notifications");
 
 type Fixture = {
@@ -193,6 +193,8 @@ describe("알림 문구 (설계 2.4)", () => {
       data: { focus: MSFT_10K.accession },
     });
     expect(F.filingMessage([])).toBeNull();
+    // 접수 시각을 모르면 SEC 제출일(미국 날짜)이라고 밝힌다
+    expect(F.filingMessage([{ ...MSFT_8K, acceptedAt: null, kst: null, et: null }])!.body).toBe("실적 발표(8-K 2.02) · SEC 제출일 7/29(수) (미국 날짜)");
   });
 });
 
@@ -200,8 +202,15 @@ describe("알림 규칙 planFilingNotification (표)", () => {
   const plan = (over: Partial<Parameters<typeof F.planFilingNotification>[0]> = {}) =>
     F.planFilingNotification({ items: FX.alerts, seen: new Set(), init: true, prefs: PREFS, enabled: true, now: NOW, ...over });
 
-  it("기준을 아직 안 잡음 → 모두 '본 것', 알림 0", () => {
+  it("기준을 아직 안 잡음 → 접수 30분이 지난 것은 모두 '본 것'(알림 0), 30분 안의 것은 알림 — 첫 확인이 곧 첫 새 공시인 기기에서 사라지지 않게", () => {
     expect(plan({ init: false })).toEqual({ message: null, markSeen: FX.alerts.map((a) => a.accession), notified: [], init: true, deferred: false });
+    const just = alert({ accession: "0001193125-26-400000", acceptedAt: "2026-07-29T21:40:00Z" }); // 23분 전
+    const p = plan({ init: false, items: [just, ...FX.alerts] });
+    expect(p).toMatchObject({ init: true, deferred: false, notified: [just], message: { title: "마이크로소프트 새 공시" } });
+    expect(p.markSeen).toEqual([...FX.alerts.map((a) => a.accession), just.accession]);
+    // 첫 확인이 조용한 시간이면 30분 지난 것만 적고 새 것은 미룸 (기준은 잡음)
+    const quiet = plan({ init: false, items: [just, ...FX.alerts], now: new Date("2026-07-29T21:55:00Z") });
+    expect(quiet).toEqual({ message: null, markSeen: FX.alerts.map((a) => a.accession), notified: [], init: true, deferred: true });
   });
   it("새 공시 2건 → 알림 1건(묶음), 모두 '본 것'", () => {
     const p = plan();
@@ -275,6 +284,16 @@ describe("기기 기록 · 보내기", () => {
     expect(seen[0]).toBe("0000000000-26-000010");
     await S.addFilingSeen(["0000000000-26-000010"]);
     expect((await S.readFilingSeen()).at(-1)).toBe("0000000000-26-000010");
+  });
+
+  it("알림 묶음(briefingDigest)이 꺼진 서버: 조용한 시간을 쓰지 않는다 (설정 화면도 그때 조용한 시간을 보이지 않음)", async () => {
+    await S.setFilingInit();
+    const night = new Date("2026-07-29T15:00:00Z"); // 00:00 KST
+    const late = alert({ accession: "0001193125-26-400002", acceptedAt: "2026-07-29T14:50:00Z" });
+    expect(filingRules({ ...FULL, digest: false }).quietEnabled).toBe(false);
+    expect(filingRules(FULL)).toBe(FULL);
+    expect(await notifyFilings([late], { prefs: FULL, now: night })).toBe(0);
+    expect(await notifyFilings([late], { prefs: { ...FULL, digest: false }, now: night })).toBe(1);
   });
 
   it("'공시 알림' 스위치는 기기에 (기본 켬)", async () => {

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type ScrollView, type ViewStyle } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollView } from "react-native";
 import { useFeature, useFeatures } from "@/api/hooks";
 import type { HoldingSchedule, ScheduleFilingItem, ScheduleFilings } from "@/api/types";
 import { UpcomingCard } from "@/components/AccountBriefingBody";
@@ -26,6 +26,7 @@ import {
 } from "@/lib/filingAlerts";
 import { useFilingViewed } from "@/lib/filingViewed";
 import { useHoldingSchedule } from "@/lib/scheduleQuery";
+import { useChunkRow } from "@/lib/useChunkRow";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { font, radius, space, touch, useTheme } from "@/theme";
 
@@ -57,13 +58,13 @@ function ScheduleBody({ focus }: { focus: string | null }) {
   const fold = useFoldLayout();
   const two = fold.on && fold.twoPane;
   const scrollRef = useRef<ScrollView>(null);
-  // 알림에서 온 줄의 위치: 두 칸 줄의 y + 공시 카드 y + 줄 y (한 번만 스크롤)
-  const pos = useRef<{ row: number; card: number | null; line: number | null; done: boolean }>({ row: 0, card: null, line: null, done: false });
+  // 알림에서 온 줄의 위치: 두 칸 줄의 y + 공시 카드 y + 줄 y (셋 다 잰 뒤 한 번만 스크롤 — 두 칸이면 두 칸 줄 y 도 기다린다)
+  const pos = useRef<{ row: number | null; card: number | null; line: number | null; done: boolean }>({ row: null, card: null, line: null, done: false });
   const tryScroll = () => {
     const p = pos.current;
-    if (p.done || p.card === null || p.line === null) return;
+    if (p.done || p.card === null || p.line === null || (two && p.row === null)) return;
     p.done = true;
-    scrollRef.current?.scrollTo({ y: Math.max(0, (two ? p.row : 0) + p.card + p.line - space.md), animated: true });
+    scrollRef.current?.scrollTo({ y: Math.max(0, (two ? (p.row ?? 0) : 0) + p.card + p.line - space.md), animated: true });
   };
   const data = q.data;
   const failed = !data && q.isError;
@@ -97,6 +98,14 @@ function ScheduleBody({ focus }: { focus: string | null }) {
     </View>
   ) : null;
   const kr = data?.filings ? <KrCard kind={data.kr.filings} /> : null;
+  // 서버가 일정·공시 둘 다 꺼 두었으면(holdingEvents·filingAlerts 끔) 빈 화면 대신 한 줄
+  if (data && !data.events && !data.filings) {
+    return (
+      <Screen>
+        <Empty title={SCHEDULE_OFF} />
+      </Screen>
+    );
+  }
   return (
     <Screen disclaimer scrollRef={scrollRef} refreshing={q.isRefetching} onRefresh={() => void q.refetch()}>
       {two ? (
@@ -104,6 +113,7 @@ function ScheduleBody({ focus }: { focus: string | null }) {
           style={styles.cols}
           onLayout={(e: LayoutChangeEvent) => {
             pos.current.row = e.nativeEvent.layout.y;
+            tryScroll();
           }}
         >
           <View style={styles.col}>
@@ -144,12 +154,6 @@ function KrCard({ kind }: { kind: HoldingSchedule["kr"]["filings"] }) {
   );
 }
 
-/** 좁은 칸·큰 글씨는 ' · ' 묶음째 줄바꿈 (다가오는 일정과 같은 규칙) */
-function useChunkRow(): ViewStyle {
-  const { fontScale } = useWindowDimensions();
-  const gap = fontScale >= 1.75 ? space.sm : fontScale >= 1.25 ? space.s : space.xs;
-  return { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: gap, rowGap: space.xxs };
-}
 
 /** ② 최근 공시 (미국) */
 function FilingsCard({ f, focus, onFocusLayout }: { f: ScheduleFilings; focus: string | null; onFocusLayout: (y: number) => void }) {
@@ -216,7 +220,8 @@ function FilingRow({
   onLayout?: ((y: number) => void) | undefined;
 }) {
   const t = useTheme();
-  const chunkRow = useChunkRow();
+  // 좁은 칸·큰 글씨는 ' · ' 묶음째 줄바꿈 (다가오는 일정과 같은 규칙) + 칩과 가운데 맞춤
+  const chunkRow = [useChunkRow(), styles.chunkExtra];
   const [openFailed, setOpenFailed] = useState(false);
   const openOriginal = () => {
     setOpenFailed(false);
@@ -286,6 +291,7 @@ const styles = StyleSheet.create({
   row: { borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: space.xs },
   rowHead: { minHeight: touch.min, justifyContent: "center", paddingVertical: space.xs, gap: space.xxs },
   num: { fontVariant: ["tabular-nums"] },
+  chunkExtra: { alignItems: "center", rowGap: space.xxs },
   title: { flexDirection: "row", flexWrap: "wrap" },
   chip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.xs },
   detail: { gap: space.xxs, paddingBottom: space.xs },

@@ -40,8 +40,11 @@ class FakeSec implements FilingSource {
   constructor(public at: () => Date) {
     for (const t of ["MSFT", "NVDA", "AAPL", "O", "TSM", "RGTI", "TSLA", "SPY"]) this.docs.set(CIK[t]!, SUB(t));
   }
+  /** 티커 목록 받기를 멈춰 둔다 (느린 SEC 흉내) */
+  resolveGate: Promise<void> | null = null;
   async resolveCik(code: string): Promise<{ cik: string }> {
     this.resolves.push(code);
+    if (this.resolveGate) await this.resolveGate;
     if (this.resolveFail) throw this.resolveFail;
     const cik = CIK[code];
     if (!cik) throw new NotListedError("edgar", `SEC 에 등록된 티커가 아닙니다: ${code}`);
@@ -71,7 +74,7 @@ afterEach(async () => {
   db = null;
 });
 
-async function setup(opts: { holdings: FilingHolding[]; at: string; on?: boolean; budgetMs?: number }) {
+async function setup(opts: { holdings: FilingHolding[]; at: string; on?: boolean; budgetMs?: number; resolveBudgetMs?: number }) {
   db = await createMigratedDb(":memory:");
   const clock = { now: new Date(opts.at), real: 0 };
   const flags = { on: opts.on ?? true };
@@ -87,6 +90,7 @@ async function setup(opts: { holdings: FilingHolding[]; at: string; on?: boolean
     clock: () => clock.real,
     log: { warn: (_o, m) => void warns.push(m), info: () => undefined },
     ...(opts.budgetMs !== undefined ? { budgetMs: opts.budgetMs } : {}),
+    ...(opts.resolveBudgetMs !== undefined ? { resolveBudgetMs: opts.resolveBudgetMs } : {}),
   });
   const at = (iso: string) => {
     clock.now = new Date(iso);
@@ -227,6 +231,42 @@ describe("확인 작업", () => {
     expect(src.resolves).toEqual(["ABCD", "MSFT"]);
     expect(isExchangeProduct(H("O", "리얼티인컴"))).toBe(false);
     expect(isExchangeProduct(H("VNO", "Vornado Realty Trust", null))).toBe(false);
+    // 회사 이름의 낱말 조각('etn'·'Bear')으로 빼지 않는다 (종목 마스터 분류를 모를 때도)
+    expect(isExchangeProduct(H("BBW", "Build-A-Bear Workshop", null))).toBe(false);
+    expect(isExchangeProduct(H("VNET", "VNET Group Vietnam Holdings", null))).toBe(false);
+    expect(isExchangeProduct(H("SQQQ", "ProShares UltraPro Short QQQ", null))).toBe(false); // 표·ETF 낱말 없음 → SEC 목록에 없어 notFound 로 빠진다
+    expect(isExchangeProduct(H("TQQQ", "프로셰어즈 울트라프로 QQQ", null))).toBe(true); // 레버리지 정적 표
+    expect(isExchangeProduct(H("KWEB", "크레인셰어즈 중국 인터넷ETF", null))).toBe(true);
+    expect(isExchangeProduct(H("XYZ", "Some ETF", "ST"))).toBe(false); // 종목 마스터가 보통 주식이라고 하면 그대로
+  });
+
+  it("화면·위젯 요청은 CIK 를 찾느라 한도(기본 2초)보다 오래 기다리지 않고, 찾기는 한 번에 하나 — 끝나면 다음 요청부터 쓴다 (확인 작업은 기다림)", async () => {
+    const { svc, src, db } = await setup({ holdings: [MSFT, NVDA], at: "2026-07-29T19:00:00Z", resolveBudgetMs: 50 });
+    let release!: () => void;
+    src.resolveGate = new Promise<void>((r) => (release = r));
+    const t0 = Date.now();
+    expect(await svc.newIds()).toEqual([]);
+    const plan = await svc.watchPlan();
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(plan.unresolved.map((u) => u.code)).toEqual(["MSFT", "NVDA"]);
+    // 느린 받기가 끝나지 않은 동안 새로 찾지 않는다 (티커 목록을 겹쳐 받지 않게)
+    expect(src.resolves).toEqual(["MSFT"]);
+    release();
+    await vi.waitFor(async () => expect((await svc.watchPlan()).watched.map((w) => w.code)).toEqual(["MSFT", "NVDA"]));
+    expect(src.resolves).toEqual(["MSFT", "NVDA"]);
+    // 확인 작업은 끝까지 기다린다 (처음 켠 서버 — 기억 없음, 받기가 한도보다 느림)
+    const at = new Date("2026-07-29T19:00:00Z");
+    const src2 = new FakeSec(() => at);
+    src2.resolveGate = new Promise<void>((r) => setTimeout(r, 120));
+    const svc2 = new FilingWatchService({ db, features: { enabled: async () => true }, source: src2, holdings: async () => [MSFT], now: () => at, resolveBudgetMs: 10 });
+    expect(await svc2.sweep()).toMatchObject({ checked: 1, failed: [] });
+  });
+
+  it("상태: 새로 산(아직 확인 전) 종목이 있어도 다른 종목의 마지막 확인 시각은 그대로", async () => {
+    const { svc, holdings } = await setup({ holdings: [MSFT], at: "2026-07-29T19:00:00Z" });
+    await svc.sweep();
+    holdings.list = [MSFT, NVDA];
+    expect(await svc.status()).toMatchObject({ pending: [{ code: "NVDA", name: "엔비디아" }], lastOkAt: "2026-07-30T04:00:00+09:00", warning: null });
   });
 
   it("한국 종목만 보유하면 확인 호출 0", async () => {

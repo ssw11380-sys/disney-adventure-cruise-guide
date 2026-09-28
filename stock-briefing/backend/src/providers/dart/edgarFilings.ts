@@ -124,5 +124,6 @@ export function splitItems(v: unknown): string[] {
 export function filingUrl(cik: string, accession: string, primaryDoc: string): string {
   const acc = accession.replace(/-/g, "");
   const base = `https://www.sec.gov/Archives/edgar/data/${Number(cik)}/${acc}`;
-  return primaryDoc && /^[\w.\-/]+$/.test(primaryDoc) ? `${base}/${primaryDoc}` : `${base}/${accession}-index.htm`;
+  // 파일 이름 조각만 ('..'·빈 조각·앞 '.' 없음) — 그 공시 폴더 밖을 가리키지 않게
+  return primaryDoc && /^[\w-]+(?:[./][\w-]+)*$/.test(primaryDoc) ? `${base}/${primaryDoc}` : `${base}/${accession}-index.htm`;
 }

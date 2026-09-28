@@ -380,6 +380,29 @@ describe("'일정·공시' 화면", () => {
     expect(ofType(r, "Card").map(cardName)).toEqual(["최근 공시 (미국)", "한국 공시"]);
   });
 
+  it("서버가 일정·공시 둘 다 꺼 둠(events·filings null): 빈 화면 대신 한 줄", () => {
+    h.schedule = { ...SCHEDULE, events: null, filings: null };
+    const r = render(<ScheduleScreen focus={null} />);
+    expect(ofType(r, "Empty")[0]!.props.title).toBe(F.SCHEDULE_OFF);
+    expect(ofType(r, "Card")).toHaveLength(0);
+  });
+
+  it("두 칸(933×704)에서 알림으로 오면 두 칸 줄 y 까지 잰 뒤에 한 번 스크롤 (먼저 잰 카드·줄만으로 가지 않음)", () => {
+    h.flags.foldLayout = true;
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    const r = render(<ScheduleScreen focus={MSFT_8K.accession} />);
+    const row = rows(r).find((p) => String(p.props.accessibilityLabel).includes("실적 발표, 8-K 2.02"))!;
+    const cols = ofType(r, "View").find((n) => flat(n.props.style).flexDirection === "row" && typeof n.props.onLayout === "function")!;
+    const wrap = ofType(r, "View").find((n) => typeof n.props.onLayout === "function" && kids(n)[0]?.type === "Card")!;
+    const line = ofType(r, "View").filter((n) => typeof n.props.onLayout === "function" && allOf(n).some((x) => x === row)).at(-1)!;
+    (wrap.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { y: 0 } } });
+    (line.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { y: 150 } } });
+    expect(h.scrollTo).not.toHaveBeenCalled();
+    (cols.props.onLayout as (e: unknown) => void)({ nativeEvent: { layout: { y: 40 } } });
+    expect(h.scrollTo).toHaveBeenCalledTimes(1);
+    expect(h.scrollTo).toHaveBeenCalledWith({ y: 40 + 150 - space.md, animated: true });
+  });
+
   it("holdingSchedule 꺼짐(남은 주소로 들어옴): '지금은 일정·공시를 볼 수 없습니다' 한 줄", () => {
     h.flags.holdingSchedule = false;
     const r = render(<ScheduleScreen focus={null} />);

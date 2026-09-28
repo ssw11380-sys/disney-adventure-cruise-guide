@@ -49,6 +49,8 @@ export const FILING_DAYS = 30;
 export const NOTIFY_LINES_MAX = 3;
 /** 접수 뒤 이 시간이 지난 공시는 알리지 않는다 (서버 ALERT_MAX_AGE_MS 와 같다) */
 export const ALERT_MAX_AGE_MS = 24 * 3_600_000;
+/** 이 기기 첫 확인에서도 알리는 새 공시: 접수 뒤 이 시간 안 (서버 5분 + 백그라운드 15분 + 여유) */
+export const FIRST_CHECK_FRESH_MS = 30 * 60_000;
 /** 대상 아님 줄에 보이는 이름 수 */
 const NAMES_MAX = 5;
 const ACCESSION_RE = /^\d{10}-\d{2}-\d{6}$/;
@@ -243,7 +245,8 @@ export function filingMessage(items: readonly FilingAlertItem[]): FilingMessage 
   const data = { type: "filing" as const, accessions: items.map((i) => i.accession), focus: items[0]!.accession };
   if (items.length === 1) {
     const i = items[0]!;
-    return { title: `${i.name} 새 공시`, body: `${i.title} · SEC에 ${filingLine(i).when} 올라옴`, data };
+    // 접수 시각을 모르면 SEC 제출일(미국 날짜)이라고 밝힌다 (화면 펼침 글과 같게)
+    return { title: `${i.name} 새 공시`, body: i.kst ? `${i.title} · SEC에 ${filingLine(i).when} 올라옴` : `${i.title} · SEC 제출일 ${mdw(i.filingDate)} (미국 날짜)`, data };
   }
   const shown = items.slice(0, NOTIFY_LINES_MAX).map((i) => `${i.name} · ${i.title}`);
   const more = items.length - shown.length;
@@ -279,7 +282,8 @@ export interface FilingPlan {
 
 /**
  * 알림 규칙 (설계 6.2, 표 테스트):
- *  1. 기준을 아직 안 잡음 → 모두 '본 것', 알림 0
+ *  1. 기준을 아직 안 잡음(이 기기 첫 확인) → 접수 30분이 지난 것은 '본 것'(켜자마자 며칠 치가 쏟아지지 않게), 30분 안의 것은 아래 규칙대로 —
+ *     첫 확인이 곧 첫 새 공시일 때(기능을 켠 뒤 앱을 열지 않은 기기) 그 공시가 사라지지 않게
  *  2. 이미 본 접수 번호 → 건너뜀
  *  3. 접수 시각(없으면 서버가 처음 본 시각)이 24시간보다 오래됨 → 조용히 '본 것'
  *  4. 이 기기 '공시 알림' 끔 · 종목별 알림에서 끈 종목 → 조용히 '본 것' (다시 켰을 때 밀린 것이 쏟아지지 않게)
@@ -287,21 +291,25 @@ export interface FilingPlan {
  *  6. 남은 것 → 알림 1건, 모두 '본 것'
  */
 export function planFilingNotification(input: FilingPlanInput): FilingPlan {
-  const fresh = input.items.filter((i, idx, arr) => !input.seen.has(i.accession) && arr.findIndex((x) => x.accession === i.accession) === idx);
-  const none: FilingPlan = { message: null, markSeen: [], notified: [], init: false, deferred: false };
-  if (!input.init) return { ...none, markSeen: fresh.map((i) => i.accession), init: true };
-  if (!fresh.length) return none;
   const now = input.now.getTime();
+  const refOf = (i: FilingAlertItem) => Date.parse(i.acceptedAt ?? i.firstSeenAt);
+  const unseen = input.items.filter((i, idx, arr) => !input.seen.has(i.accession) && arr.findIndex((x) => x.accession === i.accession) === idx);
+  const baseline = input.init ? [] : unseen.filter((i) => !(now - refOf(i) <= FIRST_CHECK_FRESH_MS));
+  const fresh = input.init ? unseen : unseen.filter((i) => !baseline.includes(i));
+  const init = !input.init;
+  const base = baseline.map((i) => i.accession);
+  const none: FilingPlan = { message: null, markSeen: base, notified: [], init, deferred: false };
+  if (!fresh.length) return none;
   const muted = new Set(input.prefs.mutedCodes);
   const quiet: string[] = [];
   const send: FilingAlertItem[] = [];
   for (const i of fresh) {
-    const ref = Date.parse(i.acceptedAt ?? i.firstSeenAt);
+    const ref = refOf(i);
     if (Number.isNaN(ref) || now - ref > ALERT_MAX_AGE_MS || !input.enabled || muted.has(i.code)) quiet.push(i.accession);
     else send.push(i);
   }
-  if (send.length && inQuietHours(input.prefs, input.now)) return { ...none, markSeen: quiet, deferred: true };
-  return { message: filingMessage(send), markSeen: [...quiet, ...send.map((i) => i.accession)], notified: send, init: false, deferred: false };
+  if (send.length && inQuietHours(input.prefs, input.now)) return { ...none, markSeen: [...base, ...quiet], deferred: true };
+  return { message: filingMessage(send), markSeen: [...base, ...quiet, ...send.map((i) => i.accession)], notified: send, init, deferred: false };
 }
 
 // ── 설정 '마지막 공시 알림' ─────────────────────────────────────────

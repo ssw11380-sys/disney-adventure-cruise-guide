@@ -206,9 +206,6 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
           }
         }
       }
-      // 3-38 새 공시 알림 (서버 플래그 filingAlerts): 위젯 응답에 모르는 접수 번호가 있을 때만 규칙·목록 두 요청 → 알림 1건 (없으면 추가 요청 0).
-      // 이 부분의 오류는 여기서 멈춘다 — 위젯 갱신·브리핑 알림에 영향 없음
-      if (data.filingIds?.length) await checkFilingIds(data.filingIds, { prefs: loadNotifyPrefs, alerts: loadFilingAlerts }).catch(() => 0);
     }
     await refreshWidgets({
       stocks: data.stocks,
@@ -224,6 +221,9 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
       board: data.board ? { at: data.boardAt ?? data.fetchedAt, list: data.board } : null,
     });
     await logWidgetRefresh("background", "ok");
+    // 3-38 새 공시 알림 (서버 플래그 filingAlerts, 로컬 모드): 위젯 응답에 모르는 접수 번호가 있을 때만 규칙·목록 두 요청 → 알림 1건 (없으면 추가 요청 0).
+    // 위젯을 다시 그린 뒤에 한다 — 느린 요청이 위젯 갱신을 늦추지 않게. 이 부분의 오류는 여기서 멈춘다 (위젯 갱신·브리핑 알림에 영향 없음)
+    if (local && data.filingIds?.length) await checkFilingIds(data.filingIds, { prefs: loadNotifyPrefs, alerts: loadFilingAlerts }).catch(() => 0);
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch {
     await logWidgetRefresh("background", "failed");

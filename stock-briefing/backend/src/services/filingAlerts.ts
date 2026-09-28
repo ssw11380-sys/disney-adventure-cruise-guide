@@ -1,9 +1,7 @@
+import type { Selectable } from "kysely";
 import { productKindOf } from "../analysis/leveraged.js";
 import type { Db } from "../db/index.js";
-import type { Selectable } from "kysely";
 import type { SecFilingTable } from "../db/schema.js";
-
-type SecFilingRowDb = Selectable<SecFilingTable>;
 import { isKrCode } from "../lib/codes.js";
 import { NotListedError } from "../lib/errors.js";
 import { seoulDate, seoulIso } from "../lib/time.js";
@@ -34,8 +32,15 @@ export const STALE_AFTER_MS = 30 * 60_000;
 export const NEW_FOR_MS = 24 * 3_600_000;
 /** SEC 티커 목록을 받지 못했을 때 다시 묻기까지 (위젯 요청마다 큰 목록을 다시 받지 않게) */
 const RESOLVE_RETRY_MS = 10 * 60_000;
+/** 찾은 CIK 를 다시 찾아보기까지 (티커 목록은 EdgarProvider 가 하루 캐시) */
+const CIK_TTL_MS = 24 * 3_600_000;
 /** SEC 목록에 없는 종목을 다시 찾아보기까지 */
 const NOT_LISTED_TTL_MS = 24 * 3_600_000;
+/**
+ * 화면·위젯 요청이 CIK 를 찾느라 기다리는 최대 시간 (티커 목록 약 800KB 를 처음 받거나 하루 만에 다시 받을 때). 넘으면 그 종목은 이번엔 '모름'으로 두고
+ * 받기는 뒤에서 끝나 다음 요청부터 쓴다 — 위젯 응답(앱 제한 12초)이 SEC 를 기다리지 않게. 확인 작업(sweep)은 기다린다
+ */
+export const REQUEST_RESOLVE_BUDGET_MS = 2_000;
 /** 아직 확인하지 않은 종목을 화면이 열릴 때 뒤에서 한 번 받는 최소 간격 */
 const PENDING_KICK_MS = 10 * 60_000;
 /** 한 번에 넣는 줄 수 (SQLite 변수 한도 아래로) */
@@ -72,6 +77,8 @@ export interface FilingWatchDeps {
   clock?: () => number;
   log?: FilingLogger;
   budgetMs?: number;
+  /** 화면·위젯 요청이 CIK 를 찾느라 기다리는 최대 시간 (기본 REQUEST_RESOLVE_BUDGET_MS — 테스트는 짧게) */
+  resolveBudgetMs?: number;
 }
 
 export interface WatchPlan {
@@ -140,6 +147,8 @@ export interface SweepResult {
   deferred: number;
 }
 
+type SecFilingRowDb = Selectable<SecFilingTable>;
+
 // ── 순수 함수 ──────────────────────────────────────────────────────
 
 const ET = "America/New_York";
@@ -175,11 +184,16 @@ function minutesIntoEdgarDay(now: Date): number {
   return Number(w.hm.slice(0, 2)) * 60 + Number(w.hm.slice(3, 5)) - 6 * 60;
 }
 
-/** ETF·ETN 인지 (네트워크 없음): 종목 마스터 분류 · 레버리지 표 · 이름의 ETF/ETN 표시 */
+/**
+ * ETF·ETN 인지 (네트워크 없음): 종목 마스터 분류(EF·EN) · 레버리지 정적 표(SOXL·TQQQ 등) · 이름의 낱말 'ETF'/'ETN'.
+ * 이름의 Bear·Short·2X 같은 짐작은 쓰지 않는다 — 'Build-A-Bear Workshop' 같은 회사를 빼지 않게. 가려지지 않은 ETF 는 SEC 목록에 없어 'SEC 목록에 없음'으로 빠진다
+ */
 export function isExchangeProduct(h: FilingHolding): boolean {
   if (h.groupCode === "EF" || h.groupCode === "EN") return true;
-  if (/\bET[FN]s?\b|ETF|ETN/i.test(h.name)) return true;
-  return productKindOf(h.code, h.name, null, h.groupCode ?? null).etf;
+  if (h.groupCode === "ST") return false;
+  if (/\bET[FN]s?\b/i.test(h.name)) return true;
+  const k = productKindOf(h.code, h.name, null, null);
+  return k.kind === "leveraged" && k.source === "table";
 }
 
 /** 이 줄을 알리지 않을 만큼 오래됐는지 (접수 시각, 모르면 그 제출일 끝) */
@@ -204,6 +218,28 @@ export class FilingWatchService {
   /** 티커 → CIK (null = SEC 목록에 없음). 위젯·화면 요청이 SEC 티커 목록을 다시 받지 않게 */
   private readonly cikMemo = new Map<string, { cik: string | null; at: number }>();
   private resolveFailedAt = 0;
+  /** 지금 CIK 를 찾는 중인 일 (한 번에 하나) */
+  private resolving: Promise<void> | null = null;
+
+  /** p 를 deadline(한도 시계)까지 기다린다. null 이면 끝까지. 늦으면 timeout (p 는 뒤에서 끝난다) */
+  private async waitUntil(p: Promise<unknown>, deadline: number | null): Promise<"ok" | "timeout"> {
+    const settled = p.then(
+      () => "ok" as const,
+      () => "ok" as const,
+    );
+    if (deadline === null) return settled;
+    const ms = deadline - this.clock();
+    if (ms <= 0) return "timeout";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"timeout">((res) => {
+      timer = setTimeout(() => res("timeout"), ms);
+    });
+    try {
+      return await Promise.race([settled, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   constructor(private readonly deps: FilingWatchDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -214,12 +250,16 @@ export class FilingWatchService {
     return this.running;
   }
 
-  /** 티커 → CIK. undefined = 모름(티커 목록을 받지 못함 — 다음에 다시), null = SEC 목록에 없음 */
-  private async cikOf(code: string): Promise<string | null | undefined> {
-    const t = this.now().getTime();
+  /** 기억한 값이 아직 쓸 만하면 그 값 (undefined = 없음·지남) */
+  private memoFresh(code: string, t: number): string | null | undefined {
     const hit = this.cikMemo.get(code);
-    if (hit && (hit.cik !== null ? t - hit.at < ALERT_MAX_AGE_MS : t - hit.at < NOT_LISTED_TTL_MS)) return hit.cik;
-    if (t - this.resolveFailedAt < RESOLVE_RETRY_MS) return hit ? hit.cik : undefined;
+    if (!hit) return undefined;
+    return (hit.cik !== null ? t - hit.at < CIK_TTL_MS : t - hit.at < NOT_LISTED_TTL_MS) ? hit.cik : undefined;
+  }
+
+  /** 한 종목 찾기 (기억에 적음). 티커 목록을 받지 못하면 10분 동안 다시 묻지 않는다 */
+  private async resolveOne(code: string): Promise<string | null | undefined> {
+    const t = this.now().getTime();
     try {
       const { cik } = await this.deps.source.resolveCik(code);
       this.cikMemo.set(code, { cik, at: t });
@@ -231,12 +271,46 @@ export class FilingWatchService {
       }
       this.resolveFailedAt = t;
       this.deps.log?.warn({ code, err: errorText(e) }, "SEC 티커 목록을 받지 못함 (10분 뒤 다시)");
-      return hit ? hit.cik : undefined;
+      return this.cikMemo.get(code)?.cik;
     }
   }
 
-  /** 보유 → 미국 · ETF 가리기 · CIK (같은 CIK 는 하나로, 이름은 등록 순 첫 종목) */
-  async watchPlan(): Promise<WatchPlan> {
+  /**
+   * 티커 → CIK. undefined = 모름(티커 목록을 받지 못함·기다리는 시간이 다 됨 — 다음에 다시), null = SEC 목록에 없음.
+   * 찾기는 한 번에 하나만 (티커 목록 약 800KB 를 여러 번 겹쳐 받지 않게). deadline(실제 시계)이 있으면 그때까지만 기다리고, 받기는 뒤에서 끝나 기억에 남는다
+   */
+  private async cikOf(code: string, deadline: number | null): Promise<string | null | undefined> {
+    const t = this.now().getTime();
+    const fresh = this.memoFresh(code, t);
+    if (fresh !== undefined) return fresh;
+    const stale = this.cikMemo.get(code)?.cik;
+    if (t - this.resolveFailedAt < RESOLVE_RETRY_MS) return stale;
+    // 다른 종목을 찾는 중이면(티커 목록을 받는 중) 그것부터 기다린다 — 끝나면 대개 기억·캐시로 바로 찾는다
+    while (this.resolving) {
+      if ((await this.waitUntil(this.resolving, deadline)) === "timeout") return stale;
+      const again = this.memoFresh(code, this.now().getTime());
+      if (again !== undefined) return again;
+      if (this.now().getTime() - this.resolveFailedAt < RESOLVE_RETRY_MS) return stale;
+    }
+    const p = this.resolveOne(code);
+    const mark = p.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.resolving = mark;
+    void mark.then(() => {
+      if (this.resolving === mark) this.resolving = null;
+    });
+    if ((await this.waitUntil(p, deadline)) === "timeout") return stale;
+    return p;
+  }
+
+  /**
+   * 보유 → 미국 · ETF 가리기 · CIK (같은 CIK 는 하나로, 이름은 등록 순 첫 종목).
+   * budgetMs: CIK 를 찾느라 기다리는 최대 시간 (화면·위젯 요청 — 넘으면 그 종목은 이번엔 '모름'). 확인 작업은 null(기다림)
+   */
+  async watchPlan(budgetMs: number | null = this.deps.resolveBudgetMs ?? REQUEST_RESOLVE_BUDGET_MS): Promise<WatchPlan> {
+    const deadline = budgetMs === null ? null : this.clock() + budgetMs;
     const plan: WatchPlan = { watched: [], notCovered: [], unresolved: [] };
     const byCik = new Map<string, WatchPlan["watched"][number]>();
     const seen = new Set<string>();
@@ -247,7 +321,7 @@ export class FilingWatchService {
         plan.notCovered.push({ code: h.code, name: h.name, reason: "etf" });
         continue;
       }
-      const cik = await this.cikOf(h.code);
+      const cik = await this.cikOf(h.code, deadline);
       if (cik === undefined) plan.unresolved.push({ code: h.code, name: h.name });
       else if (cik === null) plan.notCovered.push({ code: h.code, name: h.name, reason: "notFound" });
       else {
@@ -279,7 +353,7 @@ export class FilingWatchService {
   private async sweepNow(only?: ReadonlySet<string>): Promise<SweepResult> {
     const started = this.clock();
     const budget = this.deps.budgetMs ?? SWEEP_BUDGET_MS;
-    const plan = await this.watchPlan();
+    const plan = await this.watchPlan(null);
     const since = seoulDateDaysAgo(this.now(), FILING_KEEP_DAYS);
     const out: SweepResult = { ran: true, checked: 0, inserted: 0, failed: [], deferred: 0 };
     const targets = only ? plan.watched.filter((w) => only.has(w.cik)) : plan.watched;
@@ -463,8 +537,9 @@ export class FilingWatchService {
         if (/HTTP 403/.test(r.last_error)) blocked = true;
       }
       if (!r?.last_ok_at) {
-        allOk = false;
+        // 아직 한 번도 확인하지 않은 종목(새로 삼)은 '아직 확인 전'으로 따로 밝히고, 다른 종목의 마지막 확인 시각은 그대로 보인다
         if (!r?.last_error) pending.push({ code: w.code, name: w.name });
+        else allOk = false;
         continue;
       }
       if (lastOk === null || r.last_ok_at < lastOk) lastOk = r.last_ok_at;

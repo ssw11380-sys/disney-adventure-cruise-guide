@@ -71,7 +71,8 @@ describe("parseRecentFilings", () => {
     expect(acceptedIso("")).toBeNull();
     expect(filingUrl("0000789019", "0001193125-26-323632", "msft-20260729.htm")).toBe("https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-20260729.htm");
     expect(filingUrl("0000789019", "0001193125-26-323632", "")).toBe("https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/0001193125-26-323632-index.htm");
-    expect(filingUrl("0000789019", "0001193125-26-323632", "../x?y")).toMatch(/-index\.htm$/);
+    for (const bad of ["../x?y", "../../x.htm", "a/../b.htm", ".hidden", "a//b.htm"]) expect(filingUrl("0000789019", "0001193125-26-323632", bad), bad).toMatch(/0001193125-26-323632-index\.htm$/);
+    expect(filingUrl("0001046179", "0001046179-26-000656", "xslF345X06/wk-form4_1788948541.xml")).toBe("https://www.sec.gov/Archives/edgar/data/1046179/000104617926000656/xslF345X06/wk-form4_1788948541.xml");
   });
 });
 
