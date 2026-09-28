@@ -5,7 +5,7 @@ import { useIndicatorScores } from "@/api/hooks";
 import type { ValueFamilyRow, ValueMetricRow } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
 import { DISCLAIMER } from "@/lib/disclaimer";
-import { familySpeech, metricMain, metricSpeech, nameWidth, SCORE_LABELS, stackRows, valueHasScore, valueSpeech, WEIGHT_JOIN } from "@/lib/scoreView";
+import { familySpeech, metricMain, metricSpeech, nameWidth, SCORE_LABELS, stackRows, valueHasScore, valueSpeech, weightJoin } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { ScoreBar } from "./ScoreBar";
@@ -138,7 +138,7 @@ function FamilyBlock({ f, open }: { f: ValueFamilyRow; open: boolean }) {
   const name = (
     <Text style={[styles.famName, { color: t.ink }, stack ? { flexGrow: 1 } : { width: nameWidth(scores.valueFamilyNameW, fs) }]} numberOfLines={2}>
       {f.name}
-      <Text style={{ color: t.muted, fontWeight: "400" }}>{`${WEIGHT_JOIN}${f.weight}`}</Text>
+      <Text style={{ color: t.muted, fontWeight: "400" }}>{`${weightJoin(fs)}${f.weight}`}</Text>
     </Text>
   );
   const num = <Text style={[styles.num, { color: t.ink }]}>{f.score ?? "-"}</Text>;

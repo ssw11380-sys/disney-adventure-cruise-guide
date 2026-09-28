@@ -43,7 +43,7 @@ export function barFraction(score: number | null | undefined): number | null {
 /** 추세 줄이 숫자·막대로 보이는지 (본인 점수가 있을 때만) */
 export const trendHasScore = (t: TrendScoreBlock): boolean => t.status === "ok" && t.score !== null && t.band !== null;
 
-/** 가치 줄이 숫자·막대로 보이는지 (미국 보통주 점수 — ok·일부 지표 없이) */
+/** 가치 줄이 숫자·막대로 보이는지 (미국 보통주 점수 · 3단계 한국 간이 점수 — ok·일부 지표 없이) */
 export const valueHasScore = (v: ValueScoreBlock): boolean => (v.status === "ok" || v.status === "partial") && v.score !== null && !!v.band;
 
 /**
@@ -86,7 +86,10 @@ export function metricSpeech(m: ValueMetricRow): string {
 
 /** 가치 지표 '계산 준비 중'이 서버 백그라운드 받기 때문일 때 다시 묻는 간격 */
 export const SCORE_WAIT_REFETCH_MS = 60_000;
-/** 서버가 재무·비교 기준을 받는 중이라 곧 바뀌는지 (처음 받기 · 오랜만에 새로 받기 · 첫 비교 기준). 한국 '계산 준비 중'은 3단계까지 그대로라 아님 */
+/**
+ * 서버가 재무·비교 기준을 받는 중이라 곧 바뀌는지 (처음 받기 · 오랜만에 새로 받기 · 첫 비교 기준 — 미국·한국 같은 이유 번호).
+ * 한국 비교 회사 첫 채우기(krFirstFill — 밤마다 나눠 며칠)와 '지금 계산하지 않음'(krOff)은 곧 바뀌지 않으므로 아님
+ */
 const WAIT_CODES: ReadonlySet<string> = new Set(["pendingFacts", "pendingRefresh", "pendingReference"]);
 export const valueWaiting = (d: IndicatorScores | null | undefined): boolean => !!d && d.value.status === "pending" && WAIT_CODES.has(d.value.reason?.code ?? "");
 
@@ -103,10 +106,23 @@ export function compositeLine(s: IndicatorScores): { score: number | null; label
   return { score: null, label: head || "없음", reason: rest.length ? rest.join(" · ") : null, gapText: null };
 }
 
-/** 화면 읽기: '추세 지표 69점, 다소 강함' / '추세 지표, 이 상품 자체 점수 없음' */
+/**
+ * 이유 글에서 앞에 붙은 상태 글('잠시 보류 — …')을 뗀다 — 상태 글은 줄 이름 옆에 따로 보이므로 (3단계 서버는 붙이지 않지만 예전 서버 응답도 그리게)
+ */
+export function reasonOnly(label: string, text: string | null | undefined): string | null {
+  if (!text) return null;
+  const t = text.startsWith(`${label} — `) ? text.slice(label.length + 3) : text;
+  return t || null;
+}
+
+/**
+ * 화면 읽기: '추세 지표 69점, 다소 강함' / 점수가 없으면 상태 글과 보이는 이유 글까지 —
+ * '추세 지표, 이 상품 자체 점수 없음, 매일 3배를 다시 맞추는 상품이라 …' · '추세 지표, 잠시 보류, 주식 분할·병합 반영을 확인하는 중입니다' (검토 지적)
+ */
 export function trendSpeech(t: TrendScoreBlock): string {
   if (trendHasScore(t)) return `${SCORE_LABELS.trend} ${t.score}점, ${t.band}`;
-  return `${SCORE_LABELS.trend}, ${t.label}`;
+  const why = reasonOnly(t.label, t.reason?.text)?.replace(/[.\s]+$/, "");
+  return why ? `${SCORE_LABELS.trend}, ${t.label}, ${why}` : `${SCORE_LABELS.trend}, ${t.label}`;
 }
 
 /** 요약 카드 전체 화면 읽기 (설계 5.7-F) */
@@ -137,7 +153,13 @@ export function metricMain(m: Pick<ValueMetricRow, "value" | "peerMedian" | "bas
  * ('수익성과 이익의 질 ·' / '25' 처럼 비중만 다음 줄로 떨어지던 것, 검토 지적). '수익성과 이익의 질 · 25'
  */
 export const WEIGHT_JOIN = " · ";
-export const familyLabel = (name: string, weight: number) => `${name}${WEIGHT_JOIN}${weight}`;
+/**
+ * 큰 글씨(두 줄 배치 130% 이상)에서는 '·' 앞을 보통 빈칸으로 — 좁은 이름 칸에서 '가격 안정성 · 10' 이 한 덩어리라 낱말 가운데서 끊기던 것
+ * ('가격 안정 / 성 · 10', 200% — 검토 지적). 이때는 '가격 안정성' / '· 10' 으로 빈칸에서 바뀐다 ('·'와 숫자는 붙은 채)
+ */
+export const WEIGHT_JOIN_BREAKABLE = " · ";
+export const weightJoin = (fontScale: number) => (stackRows(fontScale) ? WEIGHT_JOIN_BREAKABLE : WEIGHT_JOIN);
+export const familyLabel = (name: string, weight: number, fontScale = 1) => `${name}${weightJoin(fontScale)}${weight}`;
 
 /**
  * 요약 카드의 '가치분석 탭에서 지표별 값 보기' 뒤 스크롤 위치: 탭 내용 칸의 스크롤 칸 안 위치 + 그 안에서 가치 상세 카드의 위치 − 위 여백.
