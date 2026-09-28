@@ -9,7 +9,8 @@ import type { FrameRow, ReferenceSources, ScreenerRow } from "../../../src/servi
 /**
  * 가치 지표 점수 픽스처 (test/fixtures/valueScores, 2026-09-28 기록 — 모두 로그인 없는 공개 자료).
  *  - sec/<티커>.json.gz: SEC companyfacts 원본에서 가치 지표 태그·정기 보고서·2019-06 이후 기간만 남긴 것 (SEC 모양 그대로)
- *    MSFT(6월 결산, 최근 = 10-K) · NVDA(1월 결산, 설비투자·이자 태그 바뀜) · AAPL(9월 결산, 9개월 누적) · META · JPM(은행) · RGTI(적자)
+ *    MSFT(6월 결산, 최근 = 10-K) · NVDA(1월 결산, 설비투자·이자 태그 바뀜) · AAPL(9월 결산, 9개월 누적) · META · JPM(은행) · RGTI(적자) ·
+ *    COST(8월 결산, 12·12·12·16주 분기 — 3단계) 와 3단계 검토 지적 확인용 종목(SEC_EXTRA)
  *  - reference.json.gz: 2026-09-26 에 실제로 만든 비교 기준(SEC frames + Nasdaq 스크리너, 모집단 3,055곳)에서 시험 종목 업종·금융사 전부와
  *    나머지 1/4 만 남긴 것 (지표 채택 비율·시장 기준값은 원래 값)
  *  - prices.json: 야후 공개 차트 — JPM·S&P500 일봉, 6종목 월봉 (2026-09-25 종가까지)
@@ -19,13 +20,20 @@ import type { FrameRow, ReferenceSources, ScreenerRow } from "../../../src/servi
 const here = (name: string) => fileURLToPath(new URL(`./${name}`, import.meta.url));
 const gz = (name: string) => JSON.parse(gunzipSync(readFileSync(here(name))).toString("utf8")) as unknown;
 
-export const SEC_TICKERS = ["MSFT", "NVDA", "AAPL", "META", "JPM", "RGTI"] as const;
+export const SEC_TICKERS = ["MSFT", "NVDA", "AAPL", "META", "JPM", "RGTI", "COST"] as const;
 export type SecTicker = (typeof SEC_TICKERS)[number];
-export const CIK: Record<SecTicker, string> = { MSFT: "0000789019", NVDA: "0001045810", AAPL: "0000320193", META: "0001326801", JPM: "0000019617", RGTI: "0001838359" };
+export const CIK: Record<SecTicker, string> = { MSFT: "0000789019", NVDA: "0001045810", AAPL: "0000320193", META: "0001326801", JPM: "0000019617", RGTI: "0001838359", COST: "0000909832" };
 /** SEC SIC (submissions, 2026-09-28) */
-export const SIC: Record<SecTicker, number> = { MSFT: 7372, NVDA: 3674, AAPL: 3571, META: 7370, JPM: 6021, RGTI: 7371 };
+export const SIC: Record<SecTicker, number> = { MSFT: 7372, NVDA: 3674, AAPL: 3571, META: 7370, JPM: 6021, RGTI: 7371, COST: 5331 };
 
 export const secFacts = (t: SecTicker) => gz(`sec/${t}.json.gz`) as Record<string, unknown>;
+/**
+ * 3단계 검토 지적 확인용 (2026-09-28 받은 SEC companyfacts 를 같은 방법으로 줄인 것, 2017-06 이후 기간):
+ * 배당 삭감 표시 — 특별배당 뒤 해(FAST·F·CTAS·WRB·COST), 실제 삭감(INTC 2023·T 2022·MMM 2024), 10:1 분할(LRCX 2024) ·
+ * COST 12·12·12·16주 분기 · XOM 지주회사 전환(새 CIK 0002115436 는 전환 뒤 10-Q 하나뿐, 예전 CIK 0000034088 = XOM-predecessor)
+ */
+export const SEC_EXTRA = ["LRCX", "FAST", "F", "CTAS", "WRB", "COST", "INTC", "T", "MMM", "XOM", "XOM-predecessor"] as const;
+export const secExtra = (t: (typeof SEC_EXTRA)[number]) => gz(`sec/${t}.json.gz`) as Record<string, unknown>;
 export const referenceData = () => gz("reference.json.gz") as ValueReferenceData;
 export const screenerSample = () => JSON.parse(readFileSync(here("screener-sample.json"), "utf8")) as unknown;
 export const frameSample = () => JSON.parse(readFileSync(here("frame-sample.json"), "utf8")) as unknown;

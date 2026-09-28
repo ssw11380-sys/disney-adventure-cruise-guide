@@ -115,6 +115,21 @@ export function isPreopenQuotes(q: Map<string, UsQuote>): boolean {
   return pre / q.size >= 0.5;
 }
 
+/** 한국 업종 구성 종목 한 줄 (krUpjongMembers) — 네이버 원본 값 그대로 */
+export interface KrUpjongMember {
+  code: string;
+  name: string;
+  /** KOSPI · KOSDAQ · KONEX */
+  market: string;
+  /** stock · etf · etn · konex … */
+  endType: string;
+  price: number | null;
+  /** 시가총액 (원) */
+  marketCap: number | null;
+  upjong: string;
+  upjongCode: string;
+}
+
 export interface SectorDetail {
   theme: ThemeSummary;
   description: string | null;
@@ -451,6 +466,44 @@ export class NaverDiscover {
       if (!cursor) break;
     }
     return [...out.values()];
+  }
+
+  /**
+   * 한국 업종(네이버 upjong) 전체 구성 종목 — 3-44 3단계 '한국 간이 가치'의 비교 회사 목록·업종·시가총액 (주 1회, 일요일 새벽).
+   * 업종 목록(sectors, 2쪽) + 업종마다 50개씩 끝까지(약 130~150번, 요청 사이 pauseMs). 구성 종목 원본의 stockEndType(stock·etf·etn·konex)과
+   * 시가총액(marketValue, 원)·현재가를 그대로 둔다 — 보통주 거르기·시가총액 하위 20% 빼기는 부르는 쪽(analysis/krValue)이 한다
+   */
+  async krUpjongMembers(opts: { pauseMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<KrUpjongMember[]> {
+    const pause = opts.pauseMs ?? 300;
+    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const list = await this.sectors("KR", "sector", "day");
+    const out: KrUpjongMember[] = [];
+    const seen = new Set<string>();
+    for (const s of list) {
+      let cursor: string | null = null;
+      for (let page = 0; page < 60; page++) {
+        await sleep(pause);
+        const r = await this.json(`${BASE}/domestic/sector/item/list?sectorType=upjong&sectorCode=${encodeURIComponent(s.id)}&sectorSortType=CHANGE_RATE&size=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+        for (const it of (r["items"] as Json[] | undefined) ?? []) {
+          const code = String(it["itemCode"] ?? it["id"] ?? "").toUpperCase();
+          if (!code || seen.has(code)) continue;
+          seen.add(code);
+          out.push({
+            code,
+            name: String(it["name"] ?? code),
+            market: String(it["marketType"] ?? ""),
+            endType: String(it["stockEndType"] ?? ""),
+            price: num(it["currentPrice"]),
+            marketCap: num(it["marketValue"]),
+            upjong: s.name,
+            upjongCode: s.id,
+          });
+        }
+        cursor = r["hasNext"] === true && typeof r["cursor"] === "string" ? r["cursor"] : null;
+        if (!cursor) break;
+      }
+    }
+    return out;
   }
 
   /** 테마·업종 구성 종목 (등락률순, 최대 maxItems) + 설명 */

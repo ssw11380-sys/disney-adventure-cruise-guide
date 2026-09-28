@@ -36,7 +36,6 @@ import {
   trendMeaning,
   trendNoteText,
   trendReasonText,
-  VALUE_ABOUT,
   versionLine,
   type RichLine,
   type ScoreMarket,
@@ -292,8 +291,8 @@ export class IndicatorScoreService {
       let failed = 0;
       for (const s of list) {
         try {
-          // 가치 지표: 저장한 SEC 재무가 20시간 넘게 묵었으면 먼저 다시 받는다 (그날 제출한 보고서까지 — 화면 요청은 SEC 를 기다리지 않음)
-          if (market === "US") await this.deps.value?.refreshIfStale(s.code).catch(() => undefined);
+          // 가치 지표: 저장한 재무(미국 SEC · 한국 네이버 재무 요약)가 20시간 넘게 묵었으면 먼저 다시 받는다 (화면 요청은 기다리지 않음)
+          await this.deps.value?.refreshIfStale(s.code).catch(() => undefined);
           const r = await this.get(s.code, { fresh: true, store: true });
           if (r && !isFetchFailure(r)) computed++;
           else failed++;
@@ -383,6 +382,7 @@ export class IndicatorScoreService {
     const v: ValueEval = valueOn
       ? await this.deps.value!.evaluate({
           code,
+          name: stock.name,
           etf,
           product: facts as ValueEvalProduct,
           candles: trend.candles,
@@ -392,6 +392,7 @@ export class IndicatorScoreService {
         })
       : { block: ValueScoreService.stage1Block(etf), stored: null, fetchFailure: false, waiting: false };
     const composite = compositeOf(v.block, trend.block, priceDate);
+    const krOn = valueOn && (await this.deps.value!.krEnabled());
     const line = priceDate ? `${priceDateLine(priceDate, market)}${v.block.asOf.fiscalShort ? ` · ${v.block.asOf.fiscalShort}` : ""}` : null;
     const resp: ScoresResponse = {
       code,
@@ -401,7 +402,7 @@ export class IndicatorScoreService {
       value: v.block,
       trend: trend.block,
       composite,
-      text: { titleNote: CARD_TITLE_NOTE, notForecast: NOT_FORECAST, how: valueOn ? howLinesV2() : howLines(), disclaimerShort: DISCLAIMER_SHORT, detailNote: DETAIL_NOTE, trendAbout: TREND_ABOUT, valueAbout: VALUE_ABOUT, valueDetailNote: VALUE_DETAIL_NOTE },
+      text: { titleNote: CARD_TITLE_NOTE, notForecast: NOT_FORECAST, how: valueOn ? howLinesV2(krOn) : howLines(), disclaimerShort: DISCLAIMER_SHORT, detailNote: DETAIL_NOTE, trendAbout: TREND_ABOUT, valueAbout: v.block.about, valueDetailNote: VALUE_DETAIL_NOTE },
       computedAt: seoulIso(this.now()),
     };
     if (v.waiting || v.fetchFailure) valueWaits.set(resp, v);
@@ -517,7 +518,8 @@ export class IndicatorScoreService {
     const common = { ...base, benchmark: t.bench, candleSource: source, versionLine: versionLine(source, t.benchName) };
     if (r.status !== "ok") {
       const hold = r.status === "hold";
-      return { ...common, status: r.status, label: hold ? "잠시 보류" : "점수 없음", reason: { code: r.reason.code, text: hold ? `잠시 보류 — ${trendReasonText(r.reason)}` : trendReasonText(r.reason) } };
+      // 상태 글('잠시 보류')은 label 에 따로 — 이유 글 앞에 다시 쓰지 않는다 (요약 카드가 상태 글 옆에 이유 글을 둔다, 검토 지적)
+      return { ...common, status: r.status, label: hold ? "잠시 보류" : "점수 없음", reason: { code: r.reason.code, text: trendReasonText(r.reason) } };
     }
     const score = shownScore(r.score);
     const band = trendBand(r.score)!;

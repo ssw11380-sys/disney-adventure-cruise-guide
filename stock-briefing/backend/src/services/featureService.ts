@@ -104,6 +104,12 @@ export const FEATURES = {
     description:
       "지표 점수의 가치 지표 점수·종합 (3-44 2단계, 미국 보통주만, indicatorScores 가 켜져 있을 때만 뜻이 있음): SEC 재무(companyfacts, 최근 4분기·공시일 기준)와 주 1회 비교 기준(Nasdaq 스크리너 업종·시가총액 + SEC frames, 표 value_references)으로 가치 지표 점수 0~100·띠·5묶음·지표별 값, 두 점수가 모두 있으면 종합(평균·차이 30 이상 안내). 재무는 표 value_fundamentals 에 저장하고 장 마감 뒤(뉴욕 17:30)·백그라운드로만 받음 — 화면 요청은 SEC 를 기다리지 않음. 끄면 1단계 그대로(가치 '지금 계산하지 않음', 종합 없음)이고 SEC·Nasdaq 요청·저장이 0건",
   },
+  krValueScore: {
+    // 3-44 3단계의 되돌리기 스위치 (한국 간이 가치만). 끄기: PUT /api/admin/features {"krValueScore": false}
+    default: true,
+    description:
+      "지표 점수의 한국 종목 가치 지표 점수·종합 (3-44 3단계 '간이 계산', indicatorScores · valueScore 가 켜져 있을 때만 뜻이 있음): 네이버 증권 재무 요약(최근 5개 분기·3개 결산, 실적 열만 — 증권사 추정 열은 버림)과 주 1회 한국 비교 기준(일요일 05:00 KST, 네이버 업종 구성 종목·시가총액 — 한국 상장 보통주끼리만)으로 가치 지표 점수 0~100·띠·'간이 계산' 배지·5묶음·지표별 값, 추세와 함께 종합. 재무는 표 value_fundamentals(cik 칸 'naver')에 저장하고 밤 02:30 에 분기에 한 번 돌아가며(새 분기 실적이 나올 때가 된 회사·120일 넘은 회사, 밤마다 700종목까지 — 첫 채우기는 며칠 밤) 받음, 화면 요청은 네이버를 기다리지 않음. 우선주·스팩·리츠·ETF 는 '대상 아님'. 끄면 한국 가치 줄은 '지금 계산하지 않음'(종합 없음)이고 네이버 재무·업종 요청 0건 — 미국 가치(valueScore)는 그대로",
+  },
   briefingTrim: {
     default: true,
     description:

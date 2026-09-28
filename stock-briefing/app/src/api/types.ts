@@ -774,7 +774,8 @@ export interface FeatureFlags {
 /**
  * GET /api/scores/:code — 지표 점수 (3-44, 플래그 indicatorScores). 서버 services/indicatorScoreService 의 ScoresResponse 와 같은 모양.
  * 모든 문장은 서버가 만든다(금지어 검사를 서버 한 곳에서) — 앱은 배치만 하고, 앱에 고정된 글은 줄 이름·버튼뿐이다.
- * 1단계: 추세 지표 점수. 2단계(서버 플래그 valueScore): 미국 보통주 가치 지표 점수와 종합(두 점수가 모두 있을 때 평균) — 한국은 '계산 준비 중', ETF 는 '대상 아님'.
+ * 1단계: 추세 지표 점수. 2단계(서버 플래그 valueScore): 미국 보통주 가치 지표 점수와 종합(두 점수가 모두 있을 때 평균) — ETF 는 '대상 아님'.
+ * 3단계(서버 플래그 krValueScore): 한국 보통주도 가치 지표 점수(간이 계산 — grade 'lite', 배지 '간이 계산')와 종합. 끈 서버는 한국 가치 줄이 '지금 계산하지 않음'.
  * 예전 서버(1단계)는 가치 칸에 label·text 만 준다 → 새 칸은 모두 없을 수 있다고 보고 그린다.
  * trend.reason.code 'fetchFailed' = 받기 실패(일봉·비교 지수·기초자산 일봉) — 서버가 5분 뒤 다시 계산한다
  */
@@ -879,6 +880,8 @@ export interface ValueFamilyRow {
 /** 가치 지표 칸. 예전 서버(1단계)는 method·status·label·score·band·about·text 만 준다 */
 export interface ValueScoreBlock {
   method: string;
+  /** 계산 등급 (3단계): full = 미국(SEC 재무 전체), lite = 한국 간이(네이버 재무 요약, 배지 '간이 계산'). 점수가 없거나 예전 서버면 없음·null */
+  grade?: "full" | "lite" | null;
   /** ok · partial(일부 지표 없이) · insufficient·unavailable(점수 없음) · excluded(대상 아님) · pending(계산 준비 중) · hold(잠시 보류) */
   status: "ok" | "partial" | "insufficient" | "unavailable" | "excluded" | "pending" | "hold";
   /**

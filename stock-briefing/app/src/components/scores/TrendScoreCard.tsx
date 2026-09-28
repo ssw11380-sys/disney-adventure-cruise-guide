@@ -5,7 +5,7 @@ import { useIndicatorScores } from "@/api/hooks";
 import type { ScoreFamily } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
 import { DISCLAIMER } from "@/lib/disclaimer";
-import { familySpeech, itemLine, nameWidth, SCORE_LABELS, stackRows, trendHasScore, trendSpeech, WEIGHT_JOIN } from "@/lib/scoreView";
+import { familySpeech, itemLine, nameWidth, reasonOnly, SCORE_LABELS, stackRows, trendHasScore, trendSpeech, weightJoin } from "@/lib/scoreView";
 import { font, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { LeverageNotice } from "./LeverageNotice";
@@ -71,7 +71,7 @@ export function TrendScoreCard({ code, onOpenStock }: { code: string; onOpenStoc
       ) : (
         <View style={styles.gapXs}>
           <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }}>{tr.label}</Text>
-          {tr.reason ? <Text style={{ color: t.sub, fontSize: font.small }}>{tr.reason.text}</Text> : null}
+          {reasonOnly(tr.label, tr.reason?.text) ? <Text style={{ color: t.sub, fontSize: font.small }}>{reasonOnly(tr.label, tr.reason?.text)}</Text> : null}
           {tr.reference ? (
             <View style={styles.refRow}>
               <Text style={{ color: t.sub, fontSize: font.small, flexShrink: 1 }}>{tr.reference.text}</Text>
@@ -106,7 +106,7 @@ function FamilyBlock({ f }: { f: ScoreFamily }) {
   const name = (
     <Text style={[styles.famName, { color: t.ink }, stack ? { flexGrow: 1 } : { width: nameWidth(scores.familyNameW, fs) }]} numberOfLines={2}>
       {f.name}
-      <Text style={{ color: t.muted, fontWeight: "400" }}>{`${WEIGHT_JOIN}${f.weight}`}</Text>
+      <Text style={{ color: t.muted, fontWeight: "400" }}>{`${weightJoin(fs)}${f.weight}`}</Text>
     </Text>
   );
   const num = <Text style={[styles.num, { color: t.ink }]}>{f.score ?? "-"}</Text>;
