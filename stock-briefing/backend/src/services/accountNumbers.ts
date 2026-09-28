@@ -32,6 +32,10 @@ export interface AccountHolding {
     fxRate?: number | null;
     priceKrw?: number | null;
     stale?: boolean;
+    /** 시세 기준 원문('KRX+NXT 통합'·'주간거래' 등 — StockService 가 이미 주는 값, 3-32 quoteBasisOf) */
+    priceBasis?: string;
+    /** 시세 시각 (StockService 가 이미 주는 값) */
+    asOf?: string;
   } | null;
   evaluation: Evaluation | null;
 }
@@ -152,6 +156,8 @@ export interface AccountData extends AccountTotals {
    * '12/25(금)'처럼 날짜로 밝힌다. 예전 기록에는 없다(없으면 '지난밤')
    */
   usHolidayDate?: string;
+  /** 합계에 넣은 종목 시세의 기준 (3-32, 플래그 numberBasis 를 켰을 때 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
+  quoteBasis?: QuoteBasis;
 }
 
 /** 오늘 한국 휴장인데 국내 보유분이 있는지 (국내 등락이 직전 거래일 것인지) */
@@ -1140,4 +1146,54 @@ export function cleanNarrative(text: string): string {
 
 export function sessionKo(s: AccountSession): string {
   return SESSION_KO[s];
+}
+
+export type QuoteBasisTag = "NXT" | "주간거래" | "시간외" | "정규장" | "모름";
+export interface MarketQuoteBasis {
+  count: number;
+  tags: Array<{ tag: QuoteBasisTag; count: number }>;
+}
+/** 계좌 브리핑을 만들 때 합계에 넣은 종목 시세의 기준 (3-32). 시장은 통화로 (computeAccount 와 같음) */
+export interface QuoteBasis {
+  kr: MarketQuoteBasis | null;
+  us: MarketQuoteBasis | null;
+}
+
+/** 시세 priceBasis 원문 → 짧은 기준 (providers/market/toss·tossOpenApi·naver 가 주는 글) */
+const BASIS_TAG_OF = new Map<string, Exclude<QuoteBasisTag, "모름">>([
+  ["KRX+NXT 통합", "NXT"],
+  ["KRX 정규장", "정규장"],
+  ["정규장", "정규장"],
+  ["주간거래", "주간거래"],
+  ["최근 체결(시간외 포함)", "시간외"],
+]);
+/** 기준 수가 같을 때의 차례 (정규장이 아닌 것 먼저, 모르는 기준은 끝) */
+const BASIS_TAG_ORDER: readonly QuoteBasisTag[] = ["NXT", "주간거래", "시간외", "정규장", "모름"];
+
+/** 앱 lib/numberBasis basisTag 와 같은 표 (공용 픽스처 numberBasis.json). 모르는 값·빈 값·없음(예전 시세)은 null */
+export function basisTagOf(priceBasis: string | null | undefined): Exclude<QuoteBasisTag, "모름"> | null {
+  return priceBasis ? (BASIS_TAG_OF.get(priceBasis) ?? null) : null;
+}
+
+/**
+ * 합계에 넣은 종목(computeAccount 와 같은 대상 — 시세·평가가 있고 excluded 에 없는 종목)의 시장별 시세 기준.
+ * 시장은 통화(USD → us, 그 밖 → kr), 기준은 많은 순(같으면 NXT·주간거래·시간외·정규장·모름). 종목이 없는 시장은 null
+ */
+export function quoteBasisOf(holdings: readonly AccountHolding[], totals: Pick<AccountTotals, "excluded">): QuoteBasis {
+  const out = new Set(totals.excluded.map((x) => x.code));
+  const counted = holdings.filter((h) => h.quote && h.evaluation && !out.has(h.code));
+  const market = (usd: boolean): MarketQuoteBasis | null => {
+    const list = counted.filter((h) => (h.quote!.currency === "USD") === usd);
+    if (!list.length) return null;
+    const counts = new Map<QuoteBasisTag, number>();
+    for (const h of list) {
+      const tag = basisTagOf(h.quote!.priceBasis) ?? "모름";
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+    const tags = [...counts]
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count || BASIS_TAG_ORDER.indexOf(a.tag) - BASIS_TAG_ORDER.indexOf(b.tag));
+    return { count: list.length, tags };
+  };
+  return { kr: market(false), us: market(true) };
 }

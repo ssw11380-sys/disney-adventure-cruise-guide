@@ -204,4 +204,16 @@ describe("BH-15: 연결 중에 닫은 소켓이 나중에 열려도 좀비로 �
     r.act(() => ws2.open());
     expect(seen.connected).toBe(true);
   });
+
+  it("'reconcile' 알림(3-32)은 토스 대조 배지만 무효화하고 잔고(stocks)·상세는 다시 받지 않는다", () => {
+    const r = mount();
+    const ws1 = FakeWS.all[0]!;
+    r.act(() => ws1.open());
+    const qc = h.qc as QueryClient;
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    const fetch = vi.spyOn(qc, "fetchQuery");
+    r.act(() => ws1.message({ type: "reconcile", at: Date.parse("2026-09-28T14:00:05+09:00") }));
+    expect(invalidate.mock.calls.map((c) => c[0])).toEqual([{ queryKey: ["https://server.test", "reconcileBadge"] }]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

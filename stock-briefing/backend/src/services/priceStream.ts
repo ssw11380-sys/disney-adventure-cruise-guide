@@ -191,8 +191,11 @@ export class PriceStream {
     return !prev || prev.price !== tick.price;
   }
 
-  /** 앱에 알림만 보낸다 (예: 잔고가 바뀌었으니 다시 받아 가라) */
-  notify(type: "holdings"): void {
+  /**
+   * 앱에 알림만 보낸다 (예: 잔고가 바뀌었으니 다시 받아 가라).
+   * reconcile: 토스 대조 기록이 새로 생겼다 → 앱이 '숫자 기준' 배지를 다시 받는다 (3-32, 플래그 numberBasis 일 때만 보냄). 예전 앱은 모르는 종류라 무시한다
+   */
+  notify(type: "holdings" | "reconcile"): void {
     this.broadcast(JSON.stringify({ type, at: Date.now() }));
   }
 

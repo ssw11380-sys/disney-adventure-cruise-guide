@@ -70,6 +70,8 @@ export interface WidgetStock {
   q: [number, number, number, "KRW" | "USD", string, number | null, 0 | 1] | null;
   /** 평가: [평가금, 매입금, 비용 차감 평가금|null, 원화 매입금|null, 원화 매입금 출처|null] */
   e: [number, number, number | null, number | null, "exact" | "estimated" | null] | null;
+  /** 시세 기준 원문(quote.priceBasis — 'KRX+NXT 통합' 등). &ms=1 이고 numberBasis 켬일 때만, 기준이 있는 종목만 (3-32) */
+  b?: string;
 }
 
 /**
@@ -115,6 +117,8 @@ export interface WidgetFeatures {
    * 없으면(예전 서버) 새 앱은 꺼짐 — 브리핑 위젯은 지금 그림 그대로
    */
   marketSummary?: boolean;
+  /** 숫자 기준 (3-32) — 지금 앱(&ms=1)이 물을 때 · 켬일 때만 true 칸을 넣는다 (끄면 칸 없음 — 응답·ETag 가 예전과 같게) */
+  numberBasis?: boolean;
 }
 
 /**
@@ -394,6 +398,8 @@ export function buildWidgetPayload(
     extended?: boolean | undefined;
     /** 브리핑 위젯 첫 줄 (새 앱 &ms=1 이고 marketSummary 가 켜져 있을 때 부르는 쪽이 넘긴다) */
     summary?: WidgetSummary | null | undefined;
+    /** 지금 앱(&ms=1)이고 numberBasis 가 켜져 있음: 종목에 시세 기준 원문(b)을 넣는다 (3-32). 튜플 q 의 모양은 그대로 */
+    basis?: boolean | undefined;
   } = {},
 ): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
@@ -418,7 +424,10 @@ export function buildWidgetPayload(
   const payload: WidgetPayload = {
     v: 1,
     market,
-    stocks: stocks.map((s) => slim(s, sharedFx)),
+    stocks: stocks.map((s) => {
+      const w = slim(s, sharedFx);
+      return extra.basis && s.quote?.priceBasis ? { ...w, b: s.quote.priceBasis } : w;
+    }),
     latestIds: ok.map((b) => b.latest!.id).sort((a, b) => a - b),
     briefings: ok.slice(0, 3).map((b) => ({ id: b.latest!.id, code: b.code, name: b.name, session: b.latest!.session, date: b.latest!.date, summary: b.latest!.summary.split("\n").find((l) => l.trim()) ?? "", createdAt: b.latest!.createdAt })),
   };
