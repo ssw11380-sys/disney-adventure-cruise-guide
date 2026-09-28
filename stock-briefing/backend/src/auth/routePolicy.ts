@@ -23,13 +23,13 @@ export const SHARED_ROUTES: ReadonlySet<string> = new Set([
   "GET /api/stocks/:code", // 가림: 등록 여부와 상관없이 미리 보기 모양
   "GET /api/stocks/:code/quote", // 가림: 캐시의 받은 시각·ttl 지난 스냅샷·주인 앱의 3초 갱신 가격을 쓰지 않음 (검증 7차)
   "GET /api/stocks/:code/candles", // 가림: 새 값 시간(분봉 20초·일봉 60초) 안의 봉만 캐시에서 (검증 7차)
-  "GET /api/stocks/:code/analysis/:kind", // refresh 무시 + 사용자별 하루 한도
+  "GET /api/stocks/:code/analysis/:kind", // refresh 무시 + 사용자별 하루 한도, 글은 공개 이름으로 만든 것만 (검증 8차)
   "GET /api/stocks/:code/news", // 가림: 등록 표를 보지 않음
-  "GET /api/scores/:code", // 가림: 계산 시각·재무 받은 시각을 요청 시각 값으로 + 하루 한도
+  "GET /api/scores/:code", // 가림: 계산 시각·재무 받은 시각을 요청 시각 값으로 + 하루 한도, 계산은 공개 이름·시장으로 (검증 8차)
   "GET /api/market-summaries", // 가림: 내 종목 비교를 뺌
   "GET /api/market-summaries/latest",
   "GET /api/market-summaries/:id",
-  "POST /api/app-errors", // 운영 진단
+  "POST /api/app-errors", // 운영 진단 — 주인 아닌 계정은 주인과 다른 분당 몫 (검증 8차)
 ]);
 
 /**
@@ -158,7 +158,8 @@ type ScoreNameLike = { name?: string; trend?: { basis?: { kind: string; code: st
 
 /**
  * 주인 아닌 계정의 지표 점수 (한국·미국 모두). publicName: 종목 마스터·검색의 이름 (종목 상세 미리 보기와 같은 이름) — 주면 이름·'이 종목 기준' 이름을 그것으로
- * (계산 결과는 주인과 같은 캐시를 쓰므로 주인 등록 표의 이름이 실린다 — 등록 뒤 마스터 이름이 바뀐 종목이면 이름만으로 주인 등록 종목이 드러난다, #95 합친 뒤 카나리아)
+ * (#95 합친 뒤 카나리아: 계산 결과는 주인과 같은 캐시를 쓰는데 등록 표 이름으로 계산했었다. 검증 8차부터 계산 자체가 공개 이름·시장으로 하고 —
+ *  기초자산 참고 줄·'기초자산 기준' 이름 포함, indicatorScoreService defaultScoreSources — 여기서는 한 번 더 이 종목 이름을 맞춘다)
  */
 export function memberScoreView<T extends { computedAt: string; value?: ScoreValueLike | null } & ScoreNameLike>(r: T, nowIso: string, publicName?: string): T {
   if (publicName !== undefined) {

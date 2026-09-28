@@ -10,6 +10,7 @@ import { NaverDiscover } from "../src/providers/market/naverDiscover.js";
 import { summaryLines, type MarketSummaryData } from "../src/services/marketSummaryCalc.js";
 import type { MarketSummarySources } from "../src/services/marketSummaryService.js";
 import { fakeProviders } from "./helpers.js";
+import { MEMBER_VARIANTS, NAME_CANARY, NAME_MARKS, nameCanaryProviders, OWNER_WARM_URLS, plantRegisteredNames } from "./nameCanary.js";
 
 /**
  * 계정 A단계 검증 4차 (M1): **API 토큰만으로는 주인 개인 데이터가 절대 나가지 않는다** (API 토큰은 앱 묶음 안에 있어 앱을 가진 누구나 꺼낼 수 있다).
@@ -23,6 +24,8 @@ import { fakeProviders } from "./helpers.js";
  * test/accountsStream.test.ts (검증 6차 — 로그아웃·모든 기기·비밀번호 변경·되돌리기·기한 지남·비상 → 보통 모드)
  * 비상 모드(ACCOUNTS_DISABLED=1 · 플래그 끔)는 문서(설계 5장) 그대로: API 토큰만 = 주인 (계정 전과 같음 — 가입자가 있으면 켜기 전에 API 토큰을 바꾼다),
  * 주인 아닌 계정의 세션(살아 있음·기한 지남·끊김)을 보낸 요청만 그 계정으로 막는다
+ * 등록 표 이름 카나리아(검증 8차, test/nameCanary): 주인 등록 표 이름·시장을 마스터와 다르게 두고 주인이 공유 캐시(분석 글·점수)를 먼저 채운 뒤,
+ * :code 가 있는 경로는 여러 종목(레버리지 상품·기초자산·등록 표에만 있는 종목)으로 부른다 — 가짜 모델은 분석 글에 종목 이름을 쓴다
  */
 vi.stubEnv("ACCOUNTS_DISABLED", "");
 afterAll(() => vi.unstubAllEnvs());
@@ -31,9 +34,9 @@ const API_TOKEN = "matrix-api-token-7f3";
 const T0 = Date.parse("2026-09-23T16:30:00+09:00");
 const HOUR = 3_600_000;
 const CANARY = "OWNER-CANARY-7f3";
-const CANARY_NAME = "카나리아전자";
+const CANARY_NAME = NAME_CANARY.stock;
 const CANARY_PUSH = "ExponentPushToken[canary7f3]";
-const MARKS = [CANARY, CANARY_NAME, "canary7f3", "777.77"];
+const MARKS = [CANARY, "canary7f3", "777.77", ...NAME_MARKS];
 
 type Viewer = "owner" | "member" | "none" | "expired" | "revoked" | "tokenOnly";
 
@@ -58,7 +61,7 @@ async function world(env: Record<string, string> = {}, db0?: Db): Promise<World>
   const app = await buildApp({
     config: loadConfig({ DATABASE_URL: ":memory:", API_TOKEN, ...env }),
     db,
-    providers: fakeProviders({ marketSummary: {} as MarketSummarySources, discover: new NaverDiscover(async () => Promise.reject(new Error("네트워크 없음"))) }),
+    providers: fakeProviders({ ...nameCanaryProviders(), marketSummary: {} as MarketSummarySources, discover: new NaverDiscover(async () => Promise.reject(new Error("네트워크 없음"))) }),
     logger: false,
     enableScheduler: false,
     now: () => new Date(clock.t),
@@ -103,6 +106,10 @@ async function seed(w: World): Promise<void> {
     .insertInto("account_snapshots")
     .values({ snapshot_date: "2026-09-23", market: "KR", status: "ok", method: "close", as_of: ts, scheduled_at: ts, source: "toss-openapi", reason: null, holdings_count: 1, total_value_krw: 777.77, data: JSON.stringify({ memo: CANARY }), created_at: ts, updated_at: ts })
     .execute();
+  // 등록 표 이름 카나리아: 토스 동기화처럼 이름·시장을 마스터와 다르게 + 등록 표에만 있는 종목·기초자산, 그다음 주인이 공유 캐시를 채운다
+  expect((await app.inject({ method: "POST", url: "/api/stocks", headers: o, payload: { code: "SOXX", quantity: 1, avgPrice: 100 } })).statusCode).toBe(201);
+  await plantRegisteredNames(db, ts);
+  for (const url of OWNER_WARM_URLS) expect((await app.inject({ method: "GET", url, headers: o })).statusCode, url).toBe(200);
   const signup = await app.inject({ method: "POST", url: "/api/auth/signup", headers: bearer, payload: { loginId: "newbie", password: "abcd1234", passwordConfirm: "abcd1234", email: "n@example.com" } });
   expect(signup.statusCode, signup.body).toBe(201);
   w.tokens.member = signup.json().token as string;
@@ -128,14 +135,14 @@ function headersOf(w: World, v: Viewer): Record<string, string> {
   }
 }
 
-function fill(url: string, w: World): string {
+function fill(url: string, w: World, v: { code: string; kind: string } = MEMBER_VARIANTS[0]!): string {
   return url
     .replace("/api/briefings/:id", `/api/briefings/${w.ids.briefing}`)
     .replace("/api/account-briefings/:id", `/api/account-briefings/${w.ids.account}`)
     .replace("/api/market-summaries/:id", `/api/market-summaries/${w.ids.summary}`)
     .replace("/api/price-alerts/:id", `/api/price-alerts/${w.ids.alert}`)
-    .replace(":code", "005930")
-    .replace(":kind", "company")
+    .replace(":code", v.code)
+    .replace(":kind", v.kind)
     .replace(":market", "KR")
     .replace(":category", "up")
     .replace(":id", "1")
@@ -157,9 +164,16 @@ const allKeys = (w: World) => [...new Set(w.app.routeList.filter((r) => r.url.st
 /** 부르면 이 사람의 세션이 끝나는 경로 — 행렬 맨 끝에 따로 부른다 */
 const ENDS_SESSION = new Set(["POST /api/auth/logout", "POST /api/auth/logout-all"]);
 
+/** 경로 하나를 부른다 — :code · :kind 가 있는 GET 은 종목 여러 벌로 (등록 표 이름 카나리아) */
 async function call(w: World, key: string, v: Viewer) {
   const [method, url] = key.split(" ") as [string, string];
-  return w.app.inject({ method: method as "GET", url: fill(url, w), headers: headersOf(w, v), ...(method === "GET" ? {} : { payload: PAYLOAD }) });
+  const variants = method === "GET" && /:code|:kind/.test(url) ? MEMBER_VARIANTS : [MEMBER_VARIANTS[0]!];
+  const out = [];
+  for (const x of variants) {
+    const at = fill(url, w, x);
+    out.push({ at, r: await w.app.inject({ method: method as "GET", url: at, headers: headersOf(w, v), ...(method === "GET" ? {} : { payload: PAYLOAD }) }) });
+  }
+  return out;
 }
 
 describe("M1 경로 × 보는 사람 행렬 (계정 켜짐 · API 토큰 있음)", () => {
@@ -190,24 +204,26 @@ describe("M1 경로 × 보는 사람 행렬 (계정 켜짐 · API 토큰 있음)
       const statuses: Record<string, number> = {};
       const keys = allKeys(w).filter((k) => !ENDS_SESSION.has(k));
       for (const key of [...keys, ...allKeys(w).filter((k) => ENDS_SESSION.has(k))]) {
-        const r = await call(w, key, v);
-        statuses[key] = r.statusCode;
-        for (const m of MARKS) if (r.body.includes(m)) leaks.push(`${key} → ${m}`);
-        const open = NO_SESSION_ROUTES.has(key);
-        if (v === "none") expect(r.json(), key).toMatchObject({ error: "UNAUTHORIZED" });
-        else if (v === "tokenOnly") {
-          if (!open && key !== "POST /api/auth/logout") {
-            expect(r.statusCode, `${key} ${r.body}`).toBe(403);
-            expect(r.json().code, key).toBe("session_required");
+        for (const { at, r } of await call(w, key, v)) {
+          const where = `${key} (${at})`;
+          statuses[key] = Math.min(statuses[key] ?? 999, r.statusCode);
+          for (const m of MARKS) if (r.body.includes(m)) leaks.push(`${where} → ${m}`);
+          const open = NO_SESSION_ROUTES.has(key);
+          if (v === "none") expect(r.json(), where).toMatchObject({ error: "UNAUTHORIZED" });
+          else if (v === "tokenOnly") {
+            if (!open && key !== "POST /api/auth/logout") {
+              expect(r.statusCode, `${where} ${r.body}`).toBe(403);
+              expect(r.json().code, where).toBe("session_required");
+            }
+          } else if (v === "expired" || v === "revoked") {
+            if (!open) {
+              expect(r.statusCode, `${where} ${r.body}`).toBe(401);
+              expect(r.json().code, where).toBe("session_invalid");
+            }
+          } else if (!AUTH_ROUTES.has(key) && r.statusCode < 300) {
+            // 주인 아닌 계정: 성공한 개인 경로는 빈 값뿐 (표시 검사가 위에서 본다)
+            expect(r.statusCode, where).toBe(200);
           }
-        } else if (v === "expired" || v === "revoked") {
-          if (!open) {
-            expect(r.statusCode, `${key} ${r.body}`).toBe(401);
-            expect(r.json().code, key).toBe("session_invalid");
-          }
-        } else if (!AUTH_ROUTES.has(key) && r.statusCode < 300) {
-          // 주인 아닌 계정: 성공한 개인 경로는 빈 값뿐 (표시 검사가 위에서 본다)
-          expect(r.statusCode, key).toBe(200);
         }
       }
       expect(leaks).toEqual([]);
@@ -294,6 +310,12 @@ describe("M1 비상 모드 (문서와 같게: API 토큰만 = 주인, 주인 아
           expect(list.json()).toEqual([]);
           expect((await get("/api/widget", h)).json().code).toBe("personal_data_not_ready");
           for (const url of ["/api/market-summaries", "/health", `/api/briefings/${w.ids.briefing}`, "/api/devices"]) for (const m of MARKS) expect((await get(url, h)).body, url).not.toContain(m);
+          // 공유 캐시(분석 글·지표 점수)의 등록 표 이름 — 비상 모드에도 주인 아닌 계정 보기 (검증 8차)
+          for (const url of ["/api/stocks/005930/analysis/company", "/api/stocks/SOXX/analysis/technical", "/api/stocks/900001/analysis/company", "/api/scores/SOXL", "/api/scores/RGTX", "/api/scores/SOXX"]) {
+            const r = await get(url, h);
+            expect(r.statusCode, `${url} ${r.body}`).toBe(url.includes("900001") ? 404 : 200);
+            for (const m of MARKS) expect(r.body, url).not.toContain(m);
+          }
           const dev = await w.app.inject({ method: "POST", url: "/api/devices", headers: h, payload: { token: "ExponentPushToken[member]", platform: "android" } });
           expect(dev.statusCode).toBe(403);
         }

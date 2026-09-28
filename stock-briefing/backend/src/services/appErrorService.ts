@@ -22,7 +22,14 @@ export const appErrorInput = z.object({
 });
 export type AppErrorInput = z.infer<typeof appErrorInput>;
 
-const MAX_PER_MINUTE = 30;
+/** 주인(계정 전·비상 모드의 API 토큰 포함)의 분당 보고 수 */
+export const MAX_PER_MINUTE = 30;
+/**
+ * 주인 아닌 계정 (계정 A단계 검증 8차): 한 사람 분당 MEMBER_PER_MINUTE 건, 모두 합쳐 MEMBERS_PER_MINUTE 건 — 주인 몫(MAX_PER_MINUTE)과 따로 센다.
+ * 한 창을 같이 쓰면 가입자가 분당 30건을 보내 주인 앱 오류 보고가 버려지고, 응답의 saved·dropped 로 주인 앱의 이번 1분 보고 수가 드러났다
+ */
+export const MEMBER_PER_MINUTE = 10;
+export const MEMBERS_PER_MINUTE = 30;
 const MAX_ROWS = 5000;
 const MESSAGE_MAX = 500;
 const STACK_MAX = 4000;
@@ -73,8 +80,14 @@ export interface AppErrorSummary {
   recent: { at: string; kind: string; message: string; screen: string | null; appVersion: string | null; updateId: string | null }[];
 }
 
+type Window = { start: number; count: number };
+
 export class AppErrorService {
-  private window: { start: number; count: number } = { start: 0, count: 0 };
+  /** 주인 몫 */
+  private window: Window = { start: 0, count: 0 };
+  /** 주인 아닌 계정 모두 합친 몫 · 사람마다 몫 */
+  private members: Window = { start: 0, count: 0 };
+  private readonly perMember = new Map<string, Window>();
   private readonly now: () => Date;
 
   constructor(
@@ -84,13 +97,30 @@ export class AppErrorService {
     this.now = now ?? (() => new Date());
   }
 
-  /** 저장한 건수를 돌려준다 (분당 한도를 넘은 건은 버림) */
-  async record(list: AppErrorInput[]): Promise<{ saved: number; dropped: number }> {
+  /**
+   * 저장한 건수를 돌려준다 (분당 한도를 넘은 건은 버림). member = 주인 아닌 계정의 사용자 키 (없으면 주인 몫).
+   * 응답의 saved·dropped 는 보낸 사람의 몫으로만 정해진다 (주인 아닌 계정에게 주인 앱의 보고 수가 드러나지 않게)
+   */
+  async record(list: AppErrorInput[], member?: string | null): Promise<{ saved: number; dropped: number }> {
     const t = this.now().getTime();
-    if (t - this.window.start >= 60_000) this.window = { start: t, count: 0 };
-    const room = Math.max(0, MAX_PER_MINUTE - this.window.count);
+    const fresh = (w: Window): Window => (t - w.start >= 60_000 ? { start: t, count: 0 } : w);
+    let room: number;
+    let own: Window | null = null;
+    if (member == null) {
+      this.window = fresh(this.window);
+      room = Math.max(0, MAX_PER_MINUTE - this.window.count);
+    } else {
+      this.members = fresh(this.members);
+      if (this.perMember.size > 1000) for (const [k, w] of this.perMember) if (t - w.start >= 60_000) this.perMember.delete(k);
+      own = fresh(this.perMember.get(member) ?? { start: t, count: 0 });
+      this.perMember.set(member, own);
+      room = Math.max(0, Math.min(MEMBER_PER_MINUTE - own.count, MEMBERS_PER_MINUTE - this.members.count));
+    }
     const take = list.slice(0, room);
-    this.window.count += take.length;
+    if (own) {
+      own.count += take.length;
+      this.members.count += take.length;
+    } else this.window.count += take.length;
     if (take.length === 0) return { saved: 0, dropped: list.length };
     const at = seoulIso(this.now());
     await this.db

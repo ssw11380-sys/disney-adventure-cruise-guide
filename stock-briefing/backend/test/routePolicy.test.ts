@@ -10,6 +10,7 @@ import { NaverDiscover } from "../src/providers/market/naverDiscover.js";
 import { summaryLines, type MarketSummaryData } from "../src/services/marketSummaryCalc.js";
 import type { MarketSummarySources } from "../src/services/marketSummaryService.js";
 import { fakeProviders } from "./helpers.js";
+import { MEMBER_VARIANTS, NAME_CANARY, NAME_MARKS, nameCanaryProviders, OWNER_WARM_URLS, plantRegisteredNames } from "./nameCanary.js";
 
 /**
  * 계정 A단계 경로 정책: 새 계정(주인 아님)이 주인의 개인 데이터를 보지도 바꾸지도 못하는지.
@@ -18,6 +19,8 @@ import { fakeProviders } from "./helpers.js";
  *     /api 밖 경로(/ · /health — 관문을 지나지 않음)도 센다: OUTSIDE_API_ROUTES 에 없으면 실패
  *  2. 카나리아: 주인 데이터에 눈에 띄는 표시를 심고, 주인 아닌 계정으로 모든 GET 을 불러 본문에 표시가 하나도 없어야 한다.
  *     쓰기 경로는 모두 403 이고 표 행 수가 그대로여야 한다. 세션 없는 요청은 403 session_required
+ *     등록 표 이름 카나리아(검증 8차, test/nameCanary): 등록 표 이름·시장을 마스터와 다르게 바꾸고, 가짜 모델은 분석 글에 종목 이름을 쓰고,
+ *     레버리지 상품(SOXL·RGTX)·기초자산은 기록한 일봉으로 — 주인이 공유 캐시(분석·점수)를 먼저 채운 뒤 :code 가 있는 경로를 여러 종목으로 부른다
  */
 vi.stubEnv("ACCOUNTS_DISABLED", "");
 afterAll(() => vi.unstubAllEnvs());
@@ -79,9 +82,9 @@ const KNOWN_PERSONAL = new Set([
 ]);
 
 const CANARY = "OWNER-CANARY-7f3";
-const CANARY_NAME = "카나리아전자";
+const CANARY_NAME = NAME_CANARY.stock;
 const CANARY_PUSH = "ExponentPushToken[canary7f3]";
-const MARKS = [CANARY, CANARY_NAME, "canary7f3", "777.77"];
+const MARKS = [CANARY, "canary7f3", "777.77", ...NAME_MARKS];
 
 describe("decide (순수 함수)", () => {
   const owner: AuthState = { kind: "user", user: { id: 1, loginId: "서성원", email: null, isOwner: true, usingInitialPassword: false }, session: { id: 1, remember: true, expiresAt: "" } };
@@ -132,7 +135,7 @@ async function world(): Promise<World> {
     config: loadConfig({ DATABASE_URL: ":memory:" }),
     db,
     // 시장 요약 경로는 출처가 있어야 등록된다 (요약은 직접 넣는다 — 출처는 부르지 않음). 발견 탭 출처는 네트워크 없이 실패
-    providers: fakeProviders({ marketSummary: {} as MarketSummarySources, discover: new NaverDiscover(async () => Promise.reject(new Error("네트워크 없음"))) }),
+    providers: fakeProviders({ ...nameCanaryProviders(), marketSummary: {} as MarketSummarySources, discover: new NaverDiscover(async () => Promise.reject(new Error("네트워크 없음"))) }),
     logger: false,
     enableScheduler: false,
     now: () => new Date("2026-09-23T16:30:00+09:00"),
@@ -165,25 +168,35 @@ async function world(): Promise<World> {
     .insertInto("account_snapshots")
     .values({ snapshot_date: "2026-09-23", market: "KR", status: "ok", method: "close", as_of: ts, scheduled_at: ts, source: "toss-openapi", reason: null, holdings_count: 1, total_value_krw: 777.77, data: JSON.stringify({ memo: CANARY }), created_at: ts, updated_at: ts })
     .execute();
+  // 등록 표 이름 카나리아: 토스 동기화처럼 이름·시장을 마스터와 다르게 + 등록 표에만 있는 종목·기초자산, 그다음 주인이 공유 캐시(분석·점수)를 채운다
+  expect((await app.inject({ method: "POST", url: "/api/stocks", headers: o, payload: { code: "SOXX", quantity: 1, avgPrice: 100 } })).statusCode).toBe(201);
+  await plantRegisteredNames(db, "2026-09-23T16:30:00+09:00");
+  for (const url of OWNER_WARM_URLS) expect((await app.inject({ method: "GET", url, headers: o })).statusCode, url).toBe(200);
   const member = (await app.inject({ method: "POST", url: "/api/auth/signup", payload: { loginId: "newbie", password: "abcd1234", passwordConfirm: "abcd1234", email: "n@example.com" } })).json().token as string;
   return { app, db, owner, member, ids: { briefing: Number(b.id), account: Number(a.id), summary: Number(s.id), alert: Number(alert.json().id) } };
 }
 
-/** 경로 모양 → 실제 주소 (심은 코드·id 로 채운다) */
-function fill(url: string, w: World): string {
+/** 경로 모양 → 실제 주소 (심은 코드·id 로 채운다). v: :code · :kind 를 채울 종목·종류 (기본 005930 · company) */
+function fill(url: string, w: World, v: { code: string; kind: string } = MEMBER_VARIANTS[0]!): string {
   return url
     .replace("/api/briefings/:id", `/api/briefings/${w.ids.briefing}`)
     .replace("/api/account-briefings/:id", `/api/account-briefings/${w.ids.account}`)
     .replace("/api/market-summaries/:id", `/api/market-summaries/${w.ids.summary}`)
     .replace("/api/price-alerts/:id", `/api/price-alerts/${w.ids.alert}`)
-    .replace(":code", "005930")
-    .replace(":kind", "company")
+    .replace(":code", v.code)
+    .replace(":kind", v.kind)
     .replace(":market", "KR")
     .replace(":category", "up")
     .replace(":id", "1")
     .replace(":name", "backup-20260923-000000.sbk")
     .replace(":token", encodeURIComponent(CANARY_PUSH));
 }
+
+/** 경로 하나를 부를 주소들: :code · :kind 가 있으면 종목 여러 벌 (등록 표 이름 카나리아), 없으면 한 번 */
+const urlsOf = (k: string, w: World): string[] => {
+  const url = k.slice(k.indexOf(" ") + 1);
+  return /:code|:kind/.test(url) ? MEMBER_VARIANTS.map((v) => fill(url, w, v)) : [fill(url, w)];
+};
 
 const TABLES = ["registered_stocks", "price_alerts", "devices", "briefings", "account_briefings", "market_summaries", "account_snapshots", "meta", "users"] as const;
 async function counts(db: Db): Promise<Record<string, number>> {
@@ -253,7 +266,10 @@ describe("경로 정책 — 모든 경로 · 카나리아", () => {
 
   it("주인은 심은 데이터를 본다 (카나리아가 제대로 심겼는지)", async () => {
     const o = { "x-session-token": w.owner };
-    expect((await w.app.inject({ method: "GET", url: "/api/stocks", headers: o })).body).toContain(CANARY);
+    const mine = (await w.app.inject({ method: "GET", url: "/api/stocks", headers: o })).body;
+    for (const mark of [CANARY, ...NAME_MARKS]) expect(mine).toContain(mark);
+    // 등록 표에만 있는 종목의 분석 글은 주인에게 등록 표 이름으로 (공개 이름이 없으므로)
+    expect((await w.app.inject({ method: "GET", url: "/api/stocks/900001/analysis/company", headers: o })).body).toContain(NAME_CANARY.only);
     expect((await w.app.inject({ method: "GET", url: "/api/market-summaries", headers: o })).body).toContain(CANARY_NAME);
     expect((await w.app.inject({ method: "GET", url: `/api/briefings/${w.ids.briefing}`, headers: o })).body).toContain(CANARY);
     expect((await w.app.inject({ method: "GET", url: "/api/devices", headers: o })).body).toContain("canary7f3");
@@ -263,15 +279,22 @@ describe("경로 정책 — 모든 경로 · 카나리아", () => {
     const m = { "x-session-token": w.member };
     const leaks: string[] = [];
     for (const k of apiKeys().filter((x) => x.startsWith("GET "))) {
-      const url = fill(k.slice(4), w);
-      const r = await w.app.inject({ method: "GET", url, headers: m });
-      for (const mark of MARKS) if (r.body.includes(mark)) leaks.push(`${k} → ${mark}`);
-      if (!SHARED_ROUTES.has(k) && !AUTH_ROUTES.has(k)) {
-        if (k in EMPTY_READS) expect(r.statusCode, k).toBe(200);
-        else expect(r.statusCode, `${k} ${r.body}`).toBe(403);
+      for (const url of urlsOf(k, w)) {
+        const r = await w.app.inject({ method: "GET", url, headers: m });
+        for (const mark of MARKS) if (r.body.includes(mark)) leaks.push(`${url} → ${mark}`);
+        if (!SHARED_ROUTES.has(k) && !AUTH_ROUTES.has(k)) {
+          if (k in EMPTY_READS) expect(r.statusCode, url).toBe(200);
+          else expect(r.statusCode, `${url} ${r.body}`).toBe(403);
+        }
       }
     }
     expect(leaks).toEqual([]);
+    // 이 테스트가 실제로 이름을 본문에 싣는 응답을 받았는지 (가짜 모델이 쓴 종목 이름 · 레버리지 기초자산 참고 줄)
+    const a = (await w.app.inject({ method: "GET", url: "/api/stocks/005930/analysis/company", headers: m })).json();
+    expect(a.content).toContain("종목: 삼성전자 (005930)");
+    const soxl = (await w.app.inject({ method: "GET", url: "/api/scores/SOXL", headers: m })).json();
+    expect(soxl.trend.reference).toMatchObject({ code: "SOXX", status: "ok" });
+    expect(soxl.trend.basis.kind).toBe("underlying");
   });
 
   it("#95 브리핑 늦음·실패 안내(GET /api/briefings/status): 주인은 못 만든 종목 이름을 보고, 주인 아닌 계정·세션 없음은 403 — 모든 GET 에도 표시 없음", async () => {
@@ -288,8 +311,10 @@ describe("경로 정책 — 모든 경로 · 카나리아", () => {
     expect((await w.app.inject({ method: "GET", url: "/api/briefings/status" })).json().code).toBe("session_required");
     const leaks: string[] = [];
     for (const k of apiKeys().filter((x) => x.startsWith("GET "))) {
-      const r = await w.app.inject({ method: "GET", url: fill(k.slice(4), w), headers: m });
-      for (const mark of MARKS) if (r.body.includes(mark)) leaks.push(`${k} → ${mark}`);
+      for (const url of urlsOf(k, w)) {
+        const r = await w.app.inject({ method: "GET", url, headers: m });
+        for (const mark of MARKS) if (r.body.includes(mark)) leaks.push(`${url} → ${mark}`);
+      }
     }
     expect(leaks).toEqual([]);
   });

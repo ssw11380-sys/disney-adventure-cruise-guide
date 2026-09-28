@@ -37,9 +37,13 @@ export const scoreRoutes: FastifyPluginAsync<ScoreRouteDeps> = async (app, { ser
     const owner = ownerView(req);
     const who = owner ? null : sessionOf(req);
     if (who && memberQuota && !memberQuota.take(who.user.id, code)) return reply.code(429).send(SCORE_DAILY_LIMIT);
-    // 주인 아닌 계정: 가치 칸이 '재무 받는 중'이면 받기를 잠깐 기다린다 — 처음 보는 종목만 '계산 준비 중'으로 시작해 주인 등록 종목이 본문으로 드러나지 않게 (검증 6차 M2)
-    const [r, shown] = owner ? [await service.get(code), undefined] : await Promise.all([service.getShared(code), publicName ? publicName(code).catch(() => null) : Promise.resolve(undefined)]);
-    if (!r || shown === null) return reply.code(404).send({ error: "NOT_FOUND", message: `종목을 찾을 수 없습니다: ${code}` });
+    const notFound = { error: "NOT_FOUND", message: `종목을 찾을 수 없습니다: ${code}` };
+    // 주인 아닌 계정: 공개 이름(종목 마스터·검색)을 **계산 전에** 본다 — 등록 표에만 있는 종목은 계산(주인 캐시·일봉 받기) 없이 처음 보는 모르는 종목과 같은 404 (검증 8차).
+    // 가치 칸이 '재무 받는 중'이면 받기를 잠깐 기다린다 — 처음 보는 종목만 '계산 준비 중'으로 시작해 주인 등록 종목이 본문으로 드러나지 않게 (검증 6차 M2)
+    const shown = owner || !publicName ? undefined : await publicName(code).catch(() => null);
+    if (shown === null) return reply.code(404).send(notFound);
+    const r = owner ? await service.get(code) : await service.getShared(code);
+    if (!r) return reply.code(404).send(notFound);
     // 주인 아닌 계정: 캐시 계산 시각 대신 요청 시각, 재무 받은 시각은 빈 값 (검증 4차 M2), 이름은 종목 마스터·검색 이름 (#95 합친 뒤)
     return owner ? r : memberScoreView(r, seoulIso(now()), shown);
   });
