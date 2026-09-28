@@ -566,4 +566,16 @@ describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", a
       expect(bandRows(r, w, fs, true, k), `÷${k}`).toBe(2);
     }
   });
+
+  // 다듬기 2차 첫 캡처에서 찾은 것: '비중' 버튼 어림이 넓어 끄고 한 줄인 띠(웹 63dp)를 두 줄로 보고 줄바꿈을 두면 켜서 두 줄(124dp)
+  it("끄고 한 줄에 거의 맞는 띠 673×841 촘촘 200% → 줄바꿈을 막아 켜도 한 줄", () => {
+    const off = drawAt(673, 841, 2, true, false);
+    expect(h.bandProps.at(-1)?.oneLine).toBe(false);
+    const r = drawAt(673, 841, 2, true, true);
+    expect(textIn(marks(r)[0]!)).toBe("");
+    expect(flat(bandBox(r).props.style).flexWrap).toBeUndefined();
+    expect(bandRows(r, 673, 2, true)).toBe(1);
+    // 실제 폭이 어림보다 조금 좁으면(÷ 1.08) 끈 띠도 한 줄
+    expect(bandRows(off, 673, 2, false, 1.08)).toBe(1);
+  });
 });

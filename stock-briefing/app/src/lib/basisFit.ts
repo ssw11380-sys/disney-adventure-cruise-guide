@@ -167,10 +167,17 @@ export interface BandFit {
 }
 
 /**
+ * '끄고 한 줄'로 볼 여유 — 여유를 뺀 칸 어림이 띠 안쪽 폭(어림)보다 2% 안에서 넘치면 끄고 한 줄로 본다.
+ * 칸 어림(÷ SLACK)은 웹 미리보기 실측과 ±0.5% 지만 '비중' 버튼 어림이 실제보다 넓어(200% 에서 약 6dp) 안쪽 폭을 좁게 잡는다
+ * (673 × 200% 촘촘: 칸 550.1 · 안쪽 폭 어림 544.6 · 실제 550.8 — 끄면 한 줄). 이 틈에서는 새 줄(+61dp)보다 칸 글자 조금(약 8%) 줄임을 고른다
+ */
+export const OFF_ONE_LINE_TOL = 1.02;
+
+/**
  * 넓은 창 두 줄 띠의 둘째 줄·촘촘 띠의 한 줄 (AccountBand): 칸 묶음(줄바꿈) | 점 | [비중].
  *  - width: 띠 폭(표 폭), pad: 띠 좌우 여백, cells: 점과 같은 줄의 칸들, action: '비중' 버튼이 있는지
  *  - 칸이 점 + 글과 한 줄에 들어가면 점 + 글, 아니면 점만.
- *  - 끄고도 칸이 한 줄이면(어림에서 여유 SLACK 을 뺀 폭 — 웹 미리보기 실측과 ±0.5%) 점과 함께 한 줄로 두고(글자를 MIN_FIT 까지 줄여서라도) 줄바꿈을 막는다.
+ *  - 끄고도 칸이 한 줄이면(어림에서 여유 SLACK 을 뺀 폭이 안쪽 폭 × OFF_ONE_LINE_TOL 안) 점과 함께 한 줄로 두고(글자를 MIN_FIT 까지 줄여서라도) 줄바꿈을 막는다.
  *    끄면 줄바꿈하는 띠는 그대로 줄바꿈 (칸 셋이 두 줄 — 점 칸 44 를 빼도 두 줄)
  */
 export function bandBasisFit(o: { width: number; pad: number; fontScale: number; cells: readonly BandCellText[]; action: boolean }): BandFit {
@@ -179,6 +186,6 @@ export function bandBasisFit(o: { width: number; pad: number; fontScale: number;
   const textW = markTextWidth(o.fontScale);
   const dotOnly = sum + textW > room;
   const mark = dotOnly ? DOT_MARK_W : textW;
-  const offOneLine = sum / SLACK <= room;
+  const offOneLine = sum / SLACK <= room * OFF_ONE_LINE_TOL;
   return { dotOnly, noWrap: offOneLine && sum * MIN_FIT + mark <= room };
 }

@@ -11,6 +11,7 @@ import {
   markTextWidth,
   MIN_FIT,
   panelBasisFit,
+  OFF_ONE_LINE_TOL,
   SLACK,
   TOTAL_LINE,
   type BandCellText,
@@ -326,8 +327,8 @@ describe("넓은 창 띠: 점 줄의 칸이 꺼졌을 때처럼 한 줄 · 끄�
   ])("%s → 이제 줄바꿈 그대로 · 점만, 칸 줄 수 켬 = 끔", (_name, w, fs, cells) => {
     const f = bandBasisFit({ width: w, pad: space.md, fontScale: fs, cells, action: true });
     expect(f).toEqual({ dotOnly: true, noWrap: false });
-    // 여유를 뺀 어림(≈ 웹 미리보기 실측)으로도 끄면 두 줄
-    expect(sumOf(cells, fs) / SLACK).toBeGreaterThan(inner(w, fs));
+    // 여유를 뺀 어림(≈ 웹 미리보기 실측)으로도 끄면 두 줄 — '끄고 한 줄'로 보는 여유(2%)보다 더 넘친다
+    expect(sumOf(cells, fs) / SLACK).toBeGreaterThan(inner(w, fs) * OFF_ONE_LINE_TOL);
     for (const k of [SLACK, 1.08]) {
       const off = rows(cells, inner(w, fs), fs, k);
       expect(off, `÷${k}`).toBe(2);
@@ -342,21 +343,35 @@ describe("넓은 창 띠: 점 줄의 칸이 꺼졌을 때처럼 한 줄 · 끄�
     expect(rows(DENSE, inner(704, 2) - DOT_MARK_W, 2, SLACK)).toBe(2);
   });
 
+  // 다듬기 2차 첫 캡처에서 찾은 것: '비중' 버튼 어림이 실제보다 넓어(200% 에서 104.4 · 실측 98.2) 안쪽 폭을 좁게 잡으면,
+  // 끄고 한 줄인 띠(웹 미리보기 63dp)를 두 줄로 보고 줄바꿈을 두어 켜면 두 줄(124dp, +61dp)이 됐다 → 2% 안의 넘침은 끄고 한 줄로 본다
+  it("673 × 200% 촘촘 띠: 칸 어림 550.1 이 안쪽 폭 어림 544.6 을 1% 넘지만 실제(550.8)로는 끄고 한 줄 → 줄바꿈을 막는다", () => {
+    const f = bandBasisFit({ width: 673, pad: space.md, fontScale: 2, cells: DENSE, action: true });
+    expect(f).toEqual({ dotOnly: true, noWrap: true });
+    expect(sumOf(DENSE, 2) / SLACK).toBeGreaterThan(inner(673, 2));
+    expect(sumOf(DENSE, 2) / SLACK).toBeLessThanOrEqual(inner(673, 2) * OFF_ONE_LINE_TOL);
+    // 실제 안쪽 폭('비중' 실측 98.2)이면 끈 칸은 한 줄, 점(44)을 더하면 두 줄 — 그래서 막아야 새 줄이 없다
+    const real = 673 - space.md * 2 - 98.2;
+    expect(549.6).toBeLessThanOrEqual(real);
+    expect(rows(DENSE, real - DOT_MARK_W, 2, SLACK)).toBe(2);
+  });
+
   // 넓은 창 띠는 창 폭 600 부터 (tokens windowClass.mediumMin). 그보다 좁은 표 폭(560·568 × 150%+ · 13억)은 점 칸 44 때문에 칸이 세 줄이 될 수 있다
-  it("폭 600~960 × 글자 100~200% × 네 계좌: 줄바꿈을 막는 것은 끄고 한 줄일 때만 (실제 폭 = 어림 ÷ 1.05~1.25)", () => {
+  it("폭 600~960 × 글자 100~200% × 네 계좌: 줄바꿈을 막는 것은 끄고 한 줄일 때만 (실제 폭 = 어림 ÷ 1.07~1.25), 켠 칸 줄 수 ≤ 끈 줄 수", () => {
     for (const [name, cells] of Object.entries(SETS))
       for (let w = 600; w <= 960; w += 8)
         for (const fs of [1, 1.15, 1.3, 1.5, 1.75, 2]) {
           const f = bandBasisFit({ width: w, pad: space.md, fontScale: fs, cells, action: true });
-          for (const k of [SLACK, 1.061, 1.08, 1.15, 1.25]) {
+          // 실제 폭이 어림 ÷ (1.05 × 1.02) 보다 좁으면: 줄바꿈을 막은 띠(한 줄로 누름)는 끄고도 한 줄이었다 — 끄고 두 줄인 띠를 켜서 한 줄로 누르지 않는다
+          for (const k of [SLACK * OFF_ONE_LINE_TOL, 1.08, 1.15, 1.25]) {
             const off = rows(cells, inner(w, fs), fs, k);
-            const at = `${name} ${w} ${pct(fs)} ÷${k}`;
-            // 줄바꿈을 막으면(한 줄로 누름) 끈 띠도 한 줄이었다 — 끄고 두 줄인 띠를 켜서 한 줄로 누르지 않는다
-            if (f.noWrap) expect(off, at).toBe(1);
+            if (f.noWrap) expect(off, `${name} ${w} ${pct(fs)} ÷${k}`).toBe(1);
           }
-          // 웹 미리보기 실측(어림 ÷ 1.05 안팎)에서는 켠 칸 줄 수가 끈 줄 수와 같다
+          // 웹 미리보기 실측(어림 ÷ 1.05 안팎)에서는 켠 칸 줄 수가 끈 줄 수보다 많지 않다 (2% 틈에서는 끈 두 줄 → 켠 한 줄일 수 있음)
           const off = rows(cells, inner(w, fs), fs, SLACK);
-          expect(rowsOn(f, cells, w, fs, SLACK), `${name} ${w} ${pct(fs)}`).toBe(off);
+          const on = rowsOn(f, cells, w, fs, SLACK);
+          expect(on, `${name} ${w} ${pct(fs)}`).toBeLessThanOrEqual(off);
+          if (!f.noWrap) expect(on, `${name} ${w} ${pct(fs)}`).toBe(off);
         }
   });
 
