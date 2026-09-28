@@ -1,4 +1,7 @@
-import { useFeatures } from "@/api/hooks";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import type { Api } from "@/api/client";
+import { featuresQuery, useApi, useFeatures } from "@/api/hooks";
 import { useSessionVersion } from "./account";
 import { featureOn } from "./features";
 import { accountsSeenFor, isFailOpen, noteActiveServer, sessionFor, sessionLoaded, type StoredSession } from "./session";
@@ -25,9 +28,33 @@ export function gateOf(o: { settingsReady: boolean; loaded: boolean; flag: boole
   return { ready, on, session: o.session, needsLogin: ready && on && !o.session };
 }
 
-/** 받은 플래그 (없으면 null = 모름) */
+/** 이번 실행에서 기능 플래그를 새로 받은 서버 주소 */
+const freshDone = new Set<string>();
+export function resetFreshFeaturesForTests(): void {
+  freshDone.clear();
+}
+
+/**
+ * 설정(서버 주소)을 다 읽은 뒤 그 서버 주소의 기능 플래그를 이번 실행에서 한 번 새로 받는다 (기기 저장 캐시가 30초 안 된 것이어도 — 서버 모드가
+ * 바뀐 직후 앱을 켜도 옛 accounts 값을 믿지 않게). 검증 4차: 예전에는 관문이 처음 그려질 때(설정을 읽기 전 — 번들 기본 주소) 받아, 진짜 주소로
+ * 바뀐 뒤에는 되살린 캐시를 그대로 믿었다. 받기 시작했으면 true
+ */
+export function freshFeaturesOnce(qc: QueryClient, api: Pick<Api, "features">, apiUrl: string): boolean {
+  if (freshDone.has(apiUrl)) return false;
+  freshDone.add(apiUrl);
+  void qc.fetchQuery({ ...featuresQuery(api, apiUrl), staleTime: 0 }).catch(() => undefined);
+  return true;
+}
+
+/** 받은 플래그 (없으면 null = 모름). 설정을 다 읽은 뒤 그 서버 주소로 한 번 새로 받는다 */
 export function useAccountsFlag(): boolean | null {
-  const features = useFeatures({ fresh: true });
+  const { apiUrl, ready } = useSettings();
+  const qc = useQueryClient();
+  const api = useApi();
+  const features = useFeatures();
+  useEffect(() => {
+    if (ready) freshFeaturesOnce(qc, api, apiUrl);
+  }, [ready, apiUrl, qc, api]);
   return features.data ? featureOn(features.data, "accounts", false) : null;
 }
 

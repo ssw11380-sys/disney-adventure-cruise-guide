@@ -79,6 +79,59 @@ describe("위젯·백그라운드의 세션", () => {
   });
 });
 
+describe("자동 로그인을 끈 세션(메모리에만 — 검증 4차 M1): 위젯·백그라운드는 개인 데이터를 묻지도 적지도 않고 '로그인하면 보여요'", () => {
+  const memoryOnly = async () => {
+    h.store.delete("auth.session.v1");
+    const m = await freshModules();
+    await m.s.saveSession({ ...session, token: "gzs1_memory", remember: false });
+    h.calls = [];
+    return m;
+  };
+
+  it("잔고·브리핑 위젯: 서버에 묻지 않고(세션도 API 토큰도 보내지 않음) 로그인 필요, 적어 둔 개인 데이터는 지운다", async () => {
+    const { data } = await memoryOnly();
+    const { failureText } = await import("@/widgets/model");
+    h.store.set("widget.lastStocks", JSON.stringify({ at: 1, apiUrl: SERVER, stocks: [{ code: "005930", name: "삼성전자", quantity: 5 }] }));
+    h.store.set("widget.payload", JSON.stringify({ at: Date.now(), apiUrl: SERVER, path: "/api/widget", etag: null, body: { v: 1, stocks: [], briefings: [] } }));
+    for (const opts of [undefined, { stocks: true, briefings: true, reuse: true }] as const) {
+      const d = await data.loadWidgetData(opts);
+      expect(d.stocks).toEqual([]);
+      expect(d.error).toBe(data.LOGIN_NEEDED);
+      expect(failureText(d.error)).toBe("로그인하면 보여요");
+    }
+    expect(h.calls.filter((c) => /\/api\/(widget|stocks|briefings|account-briefings|notifications)/.test(c.url))).toEqual([]);
+    expect(h.store.has("widget.lastStocks")).toBe(false);
+    expect(h.store.has("widget.payload")).toBe(false);
+    // 메모리 세션 토큰은 위젯·백그라운드 요청 어디에도 실리지 않는다
+    expect(h.calls.some((c) => c.headers["x-session-token"] === "gzs1_memory")).toBe(false);
+  });
+
+  it("백그라운드 알림(브리핑·계좌 브리핑·시장 요약): 묻지 않는다", async () => {
+    h.store.set("rq.cache", JSON.stringify({ clientState: { queries: [{ queryKey: [SERVER, "features"], state: { data: { features: { marketSummary: true } } } }] } }));
+    const { data, summaries } = await memoryOnly();
+    await expect(data.loadLatestBriefings()).rejects.toThrow(data.LOGIN_NEEDED);
+    expect(await data.loadAccountBriefings()).toBeNull();
+    expect(await summaries.loadMarketSummaries()).toBeNull();
+    expect(h.calls).toEqual([]);
+  });
+
+  it("앱이 받은 잔고를 위젯에 바로 넘길 때도(WidgetBridge → pushWidgetData) 잔고를 적지 않고 '로그인하면 보여요'", async () => {
+    const { data } = await memoryOnly();
+    const row = { code: "005930", name: "삼성전자", market: "KOSPI", quantity: 5, avgPrice: 70000, memo: null, createdAt: "x", updatedAt: "x", quote: null };
+    const d = await data.pushWidgetData({ stocks: [row] as never, filled: [], showKrw: false, afterCost: true, fetchedAt: Date.now(), market: null, rowKrw: true });
+    expect(d.stocks).toEqual([]);
+    expect(d.error).toBe(data.LOGIN_NEEDED);
+    expect(JSON.stringify(await data.loadCachedWidgetData())).not.toContain("삼성전자");
+    expect(h.store.has("widget.lastStocks")).toBe(false);
+  });
+
+  it("자동 로그인 켬 세션은 그대로 기기 저장 세션으로 묻는다 (앱을 닫아도 위젯·알림이 온다)", async () => {
+    const { data } = await freshModules();
+    await data.loadLatestBriefings();
+    expect(h.calls[0]!.headers["x-session-token"]).toBe("gzs1_saved");
+  });
+});
+
 describe("로그인이 필요하면 위젯이 적어 둔 개인 데이터로 그리지 않는다 (계정 A단계 검증 지적)", () => {
   const ownerRow = { code: "005930", name: "삼성전자", market: "KOSPI", quantity: 123, avgPrice: 71111, memo: null, createdAt: "x", updatedAt: "x", quote: null };
   const seed = () => {
@@ -88,8 +141,8 @@ describe("로그인이 필요하면 위젯이 적어 둔 개인 데이터로 그
   };
   // 로그인한 주인 아닌 계정에는 '로그인 필요'가 아니라 '개인 종목 기능은 준비 중' (검증 지적 — 이미 로그인해 있는데 로그인하라고 했다)
   const cases: [string, () => Response, "login" | "personal", string][] = [
-    ["401 session_invalid (세션 끊김)", () => new Response(JSON.stringify({ error: "SESSION_INVALID", code: "session_invalid" }), { status: 401 }), "login", "로그인 필요 · 앱에서 로그인"],
-    ["403 session_required (로그아웃 뒤)", () => new Response(JSON.stringify({ error: "SESSION_REQUIRED", code: "session_required" }), { status: 403 }), "login", "로그인 필요 · 앱에서 로그인"],
+    ["401 session_invalid (세션 끊김)", () => new Response(JSON.stringify({ error: "SESSION_INVALID", code: "session_invalid" }), { status: 401 }), "login", "로그인하면 보여요"],
+    ["403 session_required (로그아웃 뒤·다시 설치·API 토큰만)", () => new Response(JSON.stringify({ error: "SESSION_REQUIRED", code: "session_required" }), { status: 403 }), "login", "로그인하면 보여요"],
     ["403 personal_data_not_ready (주인 아닌 계정)", () => new Response(JSON.stringify({ error: "PERSONAL_DATA_NOT_READY", code: "personal_data_not_ready" }), { status: 403 }), "personal", "개인 종목 기능은 준비 중"],
   ];
   for (const [label, res, reason, shown] of cases) {

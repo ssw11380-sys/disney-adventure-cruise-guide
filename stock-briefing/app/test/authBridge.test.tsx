@@ -21,10 +21,12 @@ const h = vi.hoisted(() => ({
   store: new Map<string, string>(),
   rebind: vi.fn(async () => undefined),
   // 앱처럼 같은 객체를 돌려준다 (useApi·useQueryClient 는 앱에서 메모된 값)
-  qc: { clear: () => undefined } as { clear: () => void },
+  qc: { clear: () => undefined } as { clear: () => void; fetchQuery?: (o: { queryKey: unknown[] }) => Promise<unknown> },
+  /** 관문이 기능 플래그를 새로 받은 서버 주소 (lib/authGate freshFeaturesOnce) */
+  fresh: [] as unknown[],
   api: {} as Record<string, unknown>,
 }));
-h.qc = { clear: () => void h.order.push("qc.clear") };
+h.qc = { clear: () => void h.order.push("qc.clear"), fetchQuery: async (o) => void h.fresh.push(o.queryKey[0]) };
 h.api = { me: async () => ({ user: { id: 1, loginId: "서성원", email: null, isOwner: true, usingInitialPassword: false }, session: { id: 1, remember: true, expiresAt: "" } }) };
 
 vi.mock("react-native", () => ({ AppState: { addEventListener: () => ({ remove: () => undefined }), currentState: "active" }, Platform: { OS: "android" } }));
@@ -33,6 +35,7 @@ vi.mock("@/lib/queryPersist", () => ({ queryPersister: { removeClient: async () 
 vi.mock("@/api/condCache", () => ({ condReset: () => h.order.push("cond.reset") }));
 vi.mock("@/api/hooks", () => ({
   useApi: () => h.api,
+  featuresQuery: (_api: unknown, url: string) => ({ queryKey: [url, "features"] }),
   useFeatures: () => ({ data: h.flag === null ? undefined : { features: { accounts: h.flag } } }),
   useFeature: (key: string, fallback = false) => (key === "accounts" ? (h.flag ?? fallback) : fallback),
 }));
@@ -42,6 +45,7 @@ const { AuthBridge } = await import("@/components/AuthBridge");
 const { flushPendingLogouts, logout, setPushRebind } = await import("@/lib/logout");
 const { ApiRequestError } = await import("@/api/client");
 const { PENDING_LOGOUT_KEY, pendingLogoutsFor } = await import("@/lib/session");
+const { resetFreshFeaturesForTests } = await import("@/lib/authGate");
 
 const settle = async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -51,12 +55,14 @@ const settle = async () => {
 beforeEach(() => {
   cleanupRenders();
   resetSessionForTests();
+  resetFreshFeaturesForTests();
   h.store.clear();
   installSessionStorage({ getItem: async (k) => h.store.get(k) ?? null, setItem: async (k, v) => void h.store.set(k, v), removeItem: async (k) => void h.store.delete(k) });
   h.ready = true;
   h.apiUrl = SERVER;
   h.flag = true;
   h.order.length = 0;
+  h.fresh.length = 0;
   h.rebind.mockClear();
   setPushRebind(h.rebind);
 });
@@ -86,11 +92,17 @@ describe("AuthBridge", () => {
     const r = render(<AuthBridge />);
     await settle();
     expect(h.store.has(DEVICE_KEY)).toBe(false);
+    // 기능 플래그 새로 받기도 설정을 읽은 뒤 진짜 서버 주소로 한 번 (검증 4차 — 번들 기본 주소로 받지 않는다)
+    expect(h.fresh).toEqual([]);
     h.ready = true;
     h.apiUrl = SERVER;
     r.rerender();
     await settle();
     expect(JSON.parse(h.store.get(DEVICE_KEY)!)).toEqual({ apiUrl: SERVER, accountsSeen: true });
+    expect(h.fresh).toEqual([SERVER]);
+    r.rerender();
+    await settle();
+    expect(h.fresh).toEqual([SERVER]);
   });
 
   it("주인으로 로그인하면 알림 등록을 새 세션에 다시 묶는다 — 주인 아닌 계정·플래그 꺼짐은 하지 않는다", async () => {

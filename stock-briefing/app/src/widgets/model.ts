@@ -96,7 +96,8 @@ export function asOfLabel(ms: number, now: number): string {
 /** 조회 실패 사유를 짧은 한국어로 (영어 오류 문구를 위젯에 그대로 보이지 않게) */
 export function failureText(error: string | null): string | null {
   if (!error) return null;
-  if (/로그인/.test(error)) return "로그인 필요 · 앱에서 로그인";
+  // 로그인 필요 (세션 없음·끊김·자동 로그인 끔 — 계정 A단계): 잔고 대신 이 한 줄 (검증 4차)
+  if (/로그인/.test(error)) return "로그인하면 보여요";
   // 로그인한 주인 아닌 계정 (계정 A단계 — 서버 403 personal_data_not_ready): 로그인하라고 하지 않는다
   if (/준비 중/.test(error)) return "개인 종목 기능은 준비 중";
   if (/HTTP 401|토큰/.test(error)) return "갱신 실패 · 토큰 확인";

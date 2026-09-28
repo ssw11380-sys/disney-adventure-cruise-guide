@@ -9,7 +9,7 @@ import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type Ac
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
 import { MemberNotice } from "@/components/MemberNotice";
-import { useAccountView } from "@/lib/account";
+import { MEMBER_EMPTY_HOLDINGS, useAccountView } from "@/lib/account";
 import { MarketStrip } from "@/components/MarketStrip";
 import { useReturnMark } from "@/components/ReturnMark";
 import { HoldingsSkeleton } from "@/components/Skeleton";
@@ -347,8 +347,18 @@ export default function StocksScreen() {
   const tableHeader = (section: (typeof sections)[number]) => (
     <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={sortLabel} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
   );
-  // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목 검색' 빈 칸 안내 대신 맨 위 안내 띠만
-  const empty = member ? null : ux.emptyGuide ? (
+  // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목 검색' 대신 차분한 안내 + [시장·종목 둘러보기] (발견 탭 — 검증 4차)
+  const empty = member ? (
+    <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
+      <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">
+        {MEMBER_EMPTY_HOLDINGS.title}
+      </Text>
+      <Text style={{ color: t.muted, fontSize: font.small }}>{MEMBER_EMPTY_HOLDINGS.hint}</Text>
+      <View style={{ flexDirection: "row", marginTop: space.sm, width: "100%", maxWidth: layout.readableMax, alignSelf: "center" }}>
+        <Button title={MEMBER_EMPTY_HOLDINGS.action} icon="compass-outline" variant="secondary" onPress={() => router.navigate("/discover")} style={{ flex: 1 }} />
+      </View>
+    </View>
+  ) : ux.emptyGuide ? (
     // 3-24 빈 화면 (플래그 emptyGuide): 무엇을 하면 되는지 한 문단 + 행동 버튼 하나 (토스 계좌는 설정의 칸 이름으로 알려 준다)
     <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
       <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">

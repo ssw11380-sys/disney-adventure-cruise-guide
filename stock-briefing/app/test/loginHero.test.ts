@@ -27,7 +27,11 @@ import {
   SIDE_COUNT,
   SIDE_GAP,
   FLAME_START,
+  HERO_START_DELAY_MS,
+  PILLAR_CORE_W,
+  PILLAR_H,
   PILLAR_W,
+  SIDE_BAND,
   type FrameItem,
   type HeroScene,
   type LoginLayout,
@@ -176,8 +180,9 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
           // 상한가 봉은 로고 묶음과 겹치지 않는다 (보일 때)
           if (!it.id.startsWith("side") && it.opacity > 0 && overlaps(it.rect, logo)) bad.push(`${label} t=${t} ${it.id} 로고와 겹침`);
         }
-        // 불기둥은 그림 영역 가로 안, 위 끝은 상태 표시줄 아래 (가장 밝은 절정이 배터리·신호 아이콘 밑에 오지 않게 — 검증 지적)
-        if (it.id === "pillar" && (it.rect.x < 0 || it.rect.x + it.rect.w > L.heroW + EPS || it.rect.y < top - EPS)) bad.push(`${label} t=${t} ${it.id} 화면·상태 표시줄 밖`);
+        // 불기둥은 그림 영역 안 (위로 갈수록 투명해져 그림 영역 위 끝까지 올라가도 된다 — 검증 4차), 가장 밝은 아래 40% 는 상태 표시줄 아래
+        if (it.id === "pillar" && (it.rect.x < 0 || it.rect.x + it.rect.w > L.heroW + EPS || it.rect.y < -EPS)) bad.push(`${label} t=${t} ${it.id} 그림 영역 밖`);
+        if (it.id === "pillar" && it.opacity > 0 && it.rect.y + it.rect.h - 0.4 * it.rect.h < top - EPS) bad.push(`${label} t=${t} ${it.id} 밝은 곳이 상태 표시줄 밑`);
         // 상한가 봉은 시가(몸통 아래)를 기준으로 자란다: 자라는 동안 아래 끝이 제자리
         const m = /^limit(\d+)$/.exec(it.id);
         if (m) {
@@ -275,27 +280,65 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
   });
 });
 
-describe("불기둥 (마지막 봉 하나에서 솟는 기둥 — 검증 지적)", () => {
+describe("불기둥 (검증 4차 — 마지막 종가에서 그림 위쪽으로 솟는 세로 빛 기둥: 뾰족한 끝·부풂·아래 크림 심지 없이)", () => {
+  it("폭은 몸통의 2~3배, 가운데 심은 몸통 폭보다 좁고, 높이는 그림 칸의 0.3~0.4", () => {
+    expect(PILLAR_W).toBeGreaterThanOrEqual(2);
+    expect(PILLAR_W).toBeLessThanOrEqual(3);
+    expect(PILLAR_CORE_W).toBeLessThan(1);
+    expect(PILLAR_H).toBeGreaterThanOrEqual(0.3);
+    expect(PILLAR_H).toBeLessThanOrEqual(0.4);
+  });
   for (const [W, H, top, bottom] of SIZES) {
-    it(`${W}×${H}: 마지막 봉 가운데에서 몸통 폭으로 시작해(몸통 뒤에 숨음) 조금 부풀었다가 위로 가늘어지고(아래 끝은 몸통 뒤), 그림 칸 안·상태 표시줄 아래`, () => {
+    it(`${W}×${H}: 마지막 봉 가운데에서 몸통 뒤(종가 조금 아래)부터 곧게 위로 — 같은 폭, 그림 영역 위 끝을 넘지 않고, 밝은 아래쪽은 상태 표시줄 아래`, () => {
       const L = heroLayout(W, H, { top, bottom });
       const s = heroScene(L);
       const last = s.limit[9]!;
       const P = s.pillar;
       expect(P.cx).toBeCloseTo(last.body.x + last.body.w / 2, 6);
-      expect(P.w).toBeCloseTo(s.bw, 6);
-      expect(P.maxW).toBeCloseTo(s.bw * PILLAR_W, 6);
-      expect(P.w).toBeGreaterThanOrEqual(s.bw);
+      expect(P.w).toBeCloseTo(s.bw * PILLAR_W, 6);
+      expect(P.coreW).toBeCloseTo(s.bw * PILLAR_CORE_W, 6);
       // 아래 끝은 몸통 위 끝보다 아래(몸통에 가려 봉에서 솟는 모양), 몸통 아래 끝보다는 위
       expect(P.base).toBeGreaterThan(last.body.y);
       expect(P.base).toBeLessThan(last.body.y + last.body.h);
-      // 위 끝: 그림 칸 안, 상태 표시줄(안전 영역 위) 아래
-      expect(P.top).toBeGreaterThanOrEqual(s.plot.y0 - EPS);
-      expect(P.top).toBeGreaterThanOrEqual(top);
+      // 높이: 종가에서 그림 칸 h × PILLAR_H 까지 — 그림 영역 위 끝(0)에 닿으면 거기서 멈춘다 (그래도 h 의 0.28 이상)
+      const rise = last.body.y - P.top;
+      expect(rise).toBeLessThanOrEqual(PILLAR_H * s.plot.h + EPS);
+      expect(P.top === 0 || Math.abs(rise - PILLAR_H * s.plot.h) < EPS).toBe(true);
+      expect(rise / s.plot.h).toBeGreaterThanOrEqual(0.28);
+      expect(P.top).toBeGreaterThanOrEqual(0);
+      expect(P.base - 0.4 * (P.base - P.top)).toBeGreaterThanOrEqual(top);
       // 빛의 가운데도 마지막 봉 종가
       expect(s.glow.cy).toBeCloseTo(last.body.y, 6);
     });
   }
+});
+
+describe("횡보 띠·천장 띠·시작 (검증 4차)", () => {
+  it("횡보 띠 높이는 그림 칸의 0.2 (예전 0.14 — 봉이 납작한 점처럼 보였다), 횡보 봉 색은 불투명도 0.7", async () => {
+    const { authColors } = await import("@/tokens");
+    expect(SIDE_BAND).toBe(0.2);
+    const s = heroScene(heroLayout(360, 752, { top: 28, bottom: 24 }));
+    const ys = s.side.flatMap((c) => [c.box.y, c.box.y + c.box.h]);
+    const bandBottom = s.plot.y0 + s.plot.h * 0.98;
+    expect(Math.max(...ys)).toBeLessThanOrEqual(bandBottom + EPS);
+    expect(Math.min(...ys)).toBeGreaterThanOrEqual(bandBottom - SIDE_BAND * s.plot.h - EPS);
+    expect(authColors.sideUp).toMatch(/,\s*0\.7\)$/);
+    expect(authColors.sideDown).toMatch(/,\s*0\.7\)$/);
+  });
+  it("천장 띠는 화면 한 픽셀 두께 (예전 1.5dp — 몸통 위에 굵은 크림 띠로 보였다), 몸통 위 끝(픽셀에 맞춘 자리)에", () => {
+    const dpr = 2.625;
+    const snap = (v: number) => Math.round(v * dpr) / dpr;
+    const s = heroScene(heroLayout(475, 751, { top: 28, bottom: 24 }), snap, 1 / dpr);
+    for (const c of s.limit) {
+      expect(c.capH).toBeCloseTo(1 / dpr, 9);
+      expect(Math.abs(c.body.y * dpr - Math.round(c.body.y * dpr))).toBeLessThan(1e-6);
+    }
+    // 크기를 모르면(테스트 기본) 0.5dp
+    expect(heroScene(heroLayout(475, 751, { top: 28, bottom: 24 })).limit[0]!.capH).toBe(0.5);
+  });
+  it("첫 재생은 화면이 뜬 뒤 0.1초에 시작 (예전 0.22초)", () => {
+    expect(HERO_START_DELAY_MS).toBe(100);
+  });
 });
 
 describe("화면 픽셀에 맞춤 (폴드 dpr 2.625 — 봉마다 굵기가 달라 보이지 않게)", () => {

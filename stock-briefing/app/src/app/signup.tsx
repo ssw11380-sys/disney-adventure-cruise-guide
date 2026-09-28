@@ -7,7 +7,7 @@ import { AuthButton, AuthField, AuthLink, AuthNotice } from "@/components/auth/A
 import { AuthFrame } from "@/components/auth/AuthFrame";
 import { authErrorView } from "@/lib/authErrors";
 import { confirmError, EMAIL_NOTE, emailError, fieldMessage, HELP, loginIdError, normalizeEmail, normalizeLoginId, passwordError, signupErrors, type SignupField } from "@/lib/authRules";
-import { markFailOpen, saveSession, setRememberPreference } from "@/lib/session";
+import { markFailOpen, saveSession } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
 import { authColors as C, authFont, authLayout, fontCap } from "@/tokens";
 
@@ -56,7 +56,6 @@ export default function SignupScreen() {
     setBusy(true);
     try {
       const r = await api.signup({ loginId: normalizeLoginId(v.loginId), password: v.password, passwordConfirm: v.passwordConfirm, email: normalizeEmail(v.email), remember: true, deviceName: Device.modelName ?? null });
-      setRememberPreference(true);
       await saveSession({ apiUrl, token: r.token, remember: true, user: r.user });
     } catch (e) {
       const view = authErrorView(e);

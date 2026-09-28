@@ -11,6 +11,7 @@ import { tradingNow } from "@/lib/marketTime";
 import { saverInterval, unchangedStreak } from "@/lib/pollSaver";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
 import { loadedCredentials, useSettings } from "@/lib/settings";
+import { loginRequiredFor } from "@/lib/session";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
 import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
@@ -177,23 +178,25 @@ export function useStock(code: string) {
  * 로그인 관문(lib/authGate)이 앱을 켤 때마다 서버의 지금 계정 모드를 보게 (예전 서버로 바꾼 뒤 옛 'accounts 켬'으로 로그인 화면이 남지 않게).
  * 다른 화면은 그대로 (화면을 열 때마다 요청하지 않게)
  */
-export function useFeatures(opts: { fresh?: boolean } = {}) {
+export function useFeatures() {
   const api = useApi();
   const { apiUrl } = useSettings();
-  return useQuery(featuresQuery(api, apiUrl, opts));
+  return useQuery(featuresQuery(api, apiUrl));
 }
 
-/** useFeatures 의 쿼리 옵션 (테스트가 같은 옵션으로 구독한다) */
-export function featuresQuery(api: Pick<Api, "features">, apiUrl: string, opts: { fresh?: boolean } = {}) {
+/**
+ * useFeatures 의 쿼리 옵션 (테스트·로그인 관문이 같은 옵션을 쓴다). 30초마다 묻되, 로그인 화면이 떠 있는 동안(계정 모드 · 이 서버 세션 없음)은 묻지 않는다
+ * (검증 4차 — 앱으로 돌아올 때 한 번은 묻는다. 로그인하면 캐시를 비우고 다시 받으며 30초 묻기가 다시 걸린다)
+ */
+export function featuresQuery(api: Pick<Api, "features">, apiUrl: string) {
   return queryOptions({
     queryKey: [apiUrl, "features"],
     queryFn: api.features,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    refetchInterval: () => (loginRequiredFor(apiUrl) ? false : 30_000),
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: 0,
-    ...(opts.fresh ? { refetchOnMount: "always" as const } : {}),
   });
 }
 

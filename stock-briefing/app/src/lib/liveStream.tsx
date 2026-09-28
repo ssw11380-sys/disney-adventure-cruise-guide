@@ -7,7 +7,7 @@ import { applyTickToCandles, isIntraday } from "./chartPrefs";
 import { featureOn } from "./features";
 import { SAVER } from "./pollSaver";
 import { applyTick, applyTicksToList, evaluate, latestPerCode, newTradingDay, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
-import { accountsSeenFor, isFailOpen, sessionFor, sessionVersion, subscribeSession } from "./session";
+import { personalBlocked, sessionFor, sessionVersion, subscribeSession } from "./session";
 import { useSettings } from "./settings";
 
 /**
@@ -167,7 +167,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
   useSyncExternalStore(subscribeSession, sessionVersion, sessionVersion);
   const session = sessionFor(apiUrl);
   const streamToken = session?.token ?? null;
-  const blocked = session ? !session.user.isOwner : accountsSeenFor(apiUrl) && !isFailOpen(apiUrl);
+  const blocked = personalBlocked(apiUrl);
 
   useEffect(() => {
     if (!apiUrl || !ready || blocked) return; // 저장된 토큰을 읽은 뒤에 붙는다

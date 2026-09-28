@@ -7,7 +7,7 @@ import { AuthButton, AuthCheckbox, AuthField, AuthLink, AuthNotice } from "@/com
 import { AuthFrame } from "@/components/auth/AuthFrame";
 import { AUTH_TEXT, authErrorView, type AuthErrorView } from "@/lib/authErrors";
 import { fieldMessage, normalizeLoginId } from "@/lib/authRules";
-import { lastEndReason, markFailOpen, rememberPreference, requestInitialPasswordPrompt, saveSession, setRememberPreference } from "@/lib/session";
+import { lastEndReason, markFailOpen, requestInitialPasswordPrompt, saveSession } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
 import { authLayout, space, touch } from "@/tokens";
 
@@ -35,7 +35,8 @@ export default function LoginScreen() {
   const { apiUrl } = useSettings();
   const [loginId, setLoginId] = useState("");
   const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(rememberPreference());
+  // '자동 로그인'은 이 화면을 열 때마다 늘 켬으로 시작한다 (검증 4차 — 지난번 선택을 기억하면 한 번 끈 뒤 매번 로그인이 풀리는 것처럼 보였다)
+  const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<AuthErrorView | null>(null);
   const passwordRef = useRef<TextInput>(null);
@@ -57,7 +58,6 @@ export default function LoginScreen() {
     setErr(null);
     try {
       const r = await api.login({ loginId: normalizeLoginId(loginId), password, remember, deviceName: Device.modelName ?? null });
-      setRememberPreference(remember);
       if (r.user.usingInitialPassword) requestInitialPasswordPrompt();
       // 저장하면 앱 루트(Stack.Protected)가 로그인 화면을 닫고 앱으로 넘긴다
       await saveSession({ apiUrl, token: r.token, remember, user: r.user });

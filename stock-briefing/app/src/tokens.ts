@@ -674,23 +674,21 @@ export const authColors = {
   bgMid: "#04061A",
   bgBottom: "#030410",
   grid: "rgba(255,255,255,0.055)",
-  /** 눈금 색의 불투명도 (글자 옆에서 옅어지는 눈금 그러데이션용) */
-  gridLine: "#FFFFFF",
-  gridOpacity: 0.055,
   baseline: "rgba(255,255,255,0.13)",
-  sideUp: "rgba(255,75,85,0.55)",
-  sideDown: "rgba(61,142,255,0.55)",
+  /** 횡보 봉 (검증 4차: 55% → 70% — 어두운 바탕에서 흐려 점처럼 보였다) */
+  sideUp: "rgba(255,75,85,0.7)",
+  sideDown: "rgba(61,142,255,0.7)",
   limitLow: "#D8152E",
   limitHigh: "#FF5A4E",
   limitWick: "#E61F33",
   limitCap: "#FFD7A1",
   glow: "#FF2D3A",
-  flame: "#FF8A2E",
-  flameHot: "#FF3A1E",
-  flameCore: "#FFD7A1",
-  /** 불기둥 밝은 부분 (아래쪽 주황-노랑), 가장 뜨거운 가운데 (거의 흰 크림) */
-  flameLight: "#FFB347",
-  flameWhite: "#FFF1D6",
+  /** 불기둥 (검증 4차 — 세로 빛 기둥): 양옆 붉은 빛 · 그 안쪽 따뜻한 주황 · 가운데 따뜻한 흰 심. 위로 갈수록 투명 */
+  pillarRed: "#FF4A3D",
+  pillarWarm: "#FF9E6B",
+  pillarCore: "#FFF3E4",
+  /** 가림(mask) 색 — 흰색의 불투명도만큼 보인다 (불기둥 위아래를 옅게) */
+  maskOn: "#FFFFFF",
   goldHi: "#F7E7B4",
   gold: "#E3B341",
   goldLo: "#B8862B",

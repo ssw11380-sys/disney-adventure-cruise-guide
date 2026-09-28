@@ -8,12 +8,13 @@ import { useAccountView } from "@/lib/account";
 import { authErrorView } from "@/lib/authErrors";
 import { emailError, fieldMessage } from "@/lib/authRules";
 import { logout } from "@/lib/logout";
-import { updateSessionUser, type StoredSession } from "@/lib/session";
+import { activeSession, updateSessionUser, type StoredSession } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
 import { font, fontCap, radius, space, touch, useTheme } from "@/theme";
 
 /**
- * 설정 탭 맨 위 '계정' 칸 (계정 A단계, 기능 플래그 accounts — 꺼져 있거나 로그인 전이면 없음).
+ * 설정 탭 맨 위 '계정' 칸 (계정 A단계, 기능 플래그 accounts — 꺼져 있거나 로그인 전이면 없음. 다만 꺼져 있어도 지금 서버에 주인 아닌 계정 세션이 있으면
+ * 아이디와 [로그아웃]만 — 검증 4차: 끈 동안에도 그 계정 폰에서 로그아웃할 수 있게. 비밀번호·이메일 바꾸기는 서버가 꺼 두어 뺀다).
  * 아이디(주인이면 '주인') · 이메일 등록/변경(지금 비밀번호를 함께 — 세션만으로는 바꾸지 못하게) · 자동 로그인 · [비밀번호 바꾸기] · [로그아웃] · [모든 기기에서 로그아웃](확인 창).
  * 처음 비밀번호(1111)를 쓰는 중이면 칸 위에 띠 '처음 비밀번호를 쓰고 있어요' + [바꾸기] (바꿀 때까지)
  */
@@ -21,11 +22,16 @@ export const INITIAL_PW_BANNER = "처음 비밀번호를 쓰고 있어요";
 
 export function AccountCard() {
   const acct = useAccountView();
-  if (!acct.on || !acct.session) return null;
-  return <AccountCardBody session={acct.session} />;
+  if (acct.on && acct.session) return <AccountCardBody session={acct.session} />;
+  const here = activeSession();
+  if (!acct.on && acct.member && here && !here.user.isOwner) return <AccountCardBody session={here} limited />;
+  return null;
 }
 
-function AccountCardBody({ session }: { session: StoredSession }) {
+/** 플래그가 꺼져 있을 때(비상 모드) 주인 아닌 계정에게 보이는 한 줄 */
+export const ACCOUNTS_OFF_NOTE = "로그인 기능이 잠시 꺼져 있어요. 이 기기에서 로그아웃할 수 있어요.";
+
+function AccountCardBody({ session, limited = false }: { session: StoredSession; limited?: boolean }) {
   const t = useTheme();
   const api = useApi();
   const { apiUrl } = useSettings();
@@ -97,6 +103,18 @@ function AccountCardBody({ session }: { session: StoredSession }) {
     }
   };
 
+  if (limited) {
+    return (
+      <Card>
+        <SectionTitle>계정</SectionTitle>
+        <Muted style={{ fontSize: font.small }}>{ACCOUNTS_OFF_NOTE}</Muted>
+        <Row label="아이디" value={u.loginId} />
+        <View style={[styles.buttons, { paddingTop: space.sm }]}>
+          <Button title="로그아웃" icon="log-out-outline" variant="secondary" compact onPress={() => out(false)} loading={leaving === "here"} />
+        </View>
+      </Card>
+    );
+  }
   return (
     <Card>
       {u.usingInitialPassword ? (

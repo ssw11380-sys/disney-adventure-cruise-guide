@@ -37,8 +37,6 @@ export interface KeyValueStorage {
 export const SESSION_KEY = "auth.session.v1";
 /** 이 기기가 이 서버에서 계정 모드를 봤는지 (토큰 없음) — 오프라인으로 켜도 로그인 화면을 알맞게 */
 export const DEVICE_KEY = "auth.device.v1";
-/** '자동 로그인' 체크의 마지막 선택 */
-export const REMEMBER_KEY = "auth.rememberPref.v1";
 /**
  * 서버에 알리지 못한 로그아웃 (인터넷이 끊긴 채 로그아웃) — 서버 주소와 그 세션 토큰. 다음에 앱이 켜지거나 앞으로 돌아왔을 때 다시 알린다
  * (서버 세션이 살아 있으면 그 세션으로 등록한 기기로 알림이 계속 가므로). 서버가 받으면 지운다
@@ -51,7 +49,6 @@ export type EndReason = "invalid" | "logout";
 let storage: KeyValueStorage | null = null;
 let current: StoredSession | null = null;
 let seen: { apiUrl: string; on: boolean } | null = null;
-let rememberPref = true;
 let loading: Promise<void> | null = null;
 let loaded = false;
 let ended: EndReason | null = null;
@@ -129,7 +126,7 @@ function parseSession(raw: string | null): StoredSession | null {
 }
 
 /**
- * 저장된 세션·기기 표시·자동 로그인 선택을 한 번 읽는다 (여러 번 불러도 한 번). 저장소가 없으면(테스트) 바로 끝.
+ * 저장된 세션·기기 표시·못 알린 로그아웃을 한 번 읽는다 (여러 번 불러도 한 번). 저장소가 없으면(테스트) 바로 끝.
  * 읽기가 실패해도 저장된 값을 지우지 않는다 (다음 실행에 다시 읽는다)
  */
 export function loadSession(): Promise<void> {
@@ -141,7 +138,7 @@ export function loadSession(): Promise<void> {
   const s = storage;
   loading ??= (async () => {
     try {
-      const [rawSession, rawDevice, rawRemember, rawPending] = await Promise.all([s.getItem(SESSION_KEY), s.getItem(DEVICE_KEY), s.getItem(REMEMBER_KEY), s.getItem(PENDING_LOGOUT_KEY)]);
+      const [rawSession, rawDevice, rawPending] = await Promise.all([s.getItem(SESSION_KEY), s.getItem(DEVICE_KEY), s.getItem(PENDING_LOGOUT_KEY)]);
       try {
         const list = JSON.parse(rawPending ?? "[]") as unknown;
         if (Array.isArray(list)) {
@@ -161,7 +158,6 @@ export function loadSession(): Promise<void> {
           /* 무시 */
         }
       }
-      if (rawRemember === "0") rememberPref = false;
     } catch {
       /* 읽지 못함: 세션 없이 (저장된 값은 그대로) */
     } finally {
@@ -211,10 +207,18 @@ export async function sessionTokenFor(apiUrl: string): Promise<string | null> {
   return sessionFor(apiUrl)?.token ?? null;
 }
 
-/** 직접 fetch 하는 곳(위젯·백그라운드)의 머리글 */
-export async function sessionHeaders(apiUrl: string): Promise<Record<string, string>> {
-  const t = await sessionTokenFor(apiUrl);
-  return t ? { "x-session-token": t } : {};
+/**
+ * 위젯·백그라운드 작업이 쓸 세션 (검증 4차 M1). 기기에 저장한 세션(자동 로그인 켬)만 보낸다 — stored.
+ * 자동 로그인을 끈 세션(메모리에만)이면 memory: 개인 데이터를 묻지도 적지도 않는다 (위젯은 '로그인하면 보여요' — 앱을 닫으면 사라져야 할 세션이라
+ * 홈 화면에 잔고를 남기지 않게. 앱이 떠 있을 때 같은 JS 로 돌아도 같다). 세션이 없으면 none (로그아웃·다시 설치 — 서버가 API 토큰만으로는 주인 데이터를 주지 않는다)
+ */
+export type BackgroundSession = { kind: "stored"; token: string } | { kind: "memory" } | { kind: "none" };
+
+export async function backgroundSessionFor(apiUrl: string): Promise<BackgroundSession> {
+  await loadSession();
+  const s = sessionFor(apiUrl);
+  if (!s) return { kind: "none" };
+  return s.remember ? { kind: "stored", token: s.token } : { kind: "memory" };
 }
 
 async function write(fn: (s: KeyValueStorage) => Promise<void>): Promise<void> {
@@ -299,13 +303,18 @@ export function isFailOpen(apiUrl: string): boolean {
   return !!failOpen && sameServer(failOpen, apiUrl);
 }
 
-export function rememberPreference(): boolean {
-  return rememberPref;
+/**
+ * 이 서버에서 로그인이 필요한지 (계정 모드를 봤고 이 서버의 세션이 없음 — 예전 서버 fail-open 빼고). 로그인 화면이 떠 있는 동안
+ * 기능 플래그 30초 묻기·가격 알림을 멈추는 데 쓴다 (검증 4차 — 서버는 어차피 403 을 준다). 세션을 저장·지우는 그 자리에서 바로 바뀐다
+ */
+export function loginRequiredFor(apiUrl: string): boolean {
+  return !sessionFor(apiUrl) && accountsSeenFor(apiUrl) && !isFailOpen(apiUrl);
 }
 
-export function setRememberPreference(on: boolean): void {
-  rememberPref = on;
-  void write((st) => st.setItem(REMEMBER_KEY, on ? "1" : "0"));
+/** 주인 개인 데이터를 부르지 않아야 하는지: 로그인이 필요하거나 주인 아닌 계정 (실시간 스트림·가격 알림) */
+export function personalBlocked(apiUrl: string): boolean {
+  const s = sessionFor(apiUrl);
+  return s ? !s.user.isOwner : loginRequiredFor(apiUrl);
 }
 
 /** 마지막으로 세션이 끝난 까닭 (로그인 화면이 '다시 로그인해 주세요'를 한 번 보여 준다) */
@@ -365,7 +374,6 @@ export function resetSessionForTests(): void {
   storage = null;
   current = null;
   seen = null;
-  rememberPref = true;
   loading = null;
   loaded = false;
   ended = null;

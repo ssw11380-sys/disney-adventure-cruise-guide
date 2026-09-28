@@ -1,9 +1,10 @@
 import { useIsRestoring, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AppState } from "react-native";
 import { useApi, useMarketStatus } from "@/api/hooks";
 import type { FeatureFlags, LatestBriefing, MarketIndex, RegisteredWithQuote } from "@/api/types";
 import { widgetChip } from "@/lib/liveDot";
+import { personalBlocked, sessionFor, sessionVersion, subscribeSession } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
 import { pickBoard, pickWidgetIndices, widgetFeatures } from "@/widgets/payload";
 import { widgetPushDue } from "@/widgets/pushPolicy";
@@ -24,6 +25,11 @@ export function WidgetBridge() {
   const { apiUrl, showKrw, afterCost, widgetRowCurrency } = useSettings();
   // 다듬은 잔고 위젯 종목 줄 손익 통화 (설정 "위젯 종목 금액") — 바꾸면 바로 다시 그린다 (key)
   const rowKrw = widgetRowCurrency === "krw";
+  // 계정 A단계 (검증 4차 M1): 로그인 전·주인 아닌 계정·자동 로그인을 끈 세션(메모리에만)이면 앱이 받은 데이터를 위젯에 넘기지 않는다 —
+  // 위젯은 계정이 바뀔 때 그린 '로그인하면 보여요'(또는 준비 중) 그대로 (앱을 닫으면 사라져야 할 세션의 잔고를 홈 화면에 남기지 않게)
+  useSyncExternalStore(subscribeSession, sessionVersion, sessionVersion);
+  const here = sessionFor(apiUrl);
+  const blocked = personalBlocked(apiUrl) || (!!here && !here.remember);
   const stocks = useQuery<RegisteredWithQuote[]>({ queryKey: [apiUrl, "stocks"], queryFn: api.listStocks, enabled: false });
   const data = stocks.data;
   const dataAt = stocks.dataUpdatedAt;
@@ -76,7 +82,7 @@ export function WidgetBridge() {
   useEffect(() => {
     push.current = (leaving: boolean) => {
       const now = Date.now();
-      if (!data) return;
+      if (!data || blocked) return;
       // 장 상태 칩: 위젯이 스스로 받는 /api/widget(&sessions=1 — 이 앱이 붙이는 표시)과 같은 함수(lib/liveDot widgetChip = 서버 widgetPayload.marketChip) — 장 상태와 잔고 시세의 세션으로.
       // 예전에는 달력만 봐서(useAnyMarketOpen) 추석 미국 주간거래에 앱이 그리면 "한국 휴장", 위젯이 받으면 "미국 주간거래"로 번갈아 바뀌었다.
       // 넘기는 순간의 시각으로 잔고를 새로 받을 때마다(세션 경계 1초 뒤 포함) 다시 계산하고, 칩 문구가 바뀌면 바로 넘긴다.
@@ -93,17 +99,17 @@ export function WidgetBridge() {
       void refreshWidgets({ stocks: data, dataAt, showKrw, afterCost, rowKrw, market, marketPolished, features, indices, board, appBriefings });
     };
     push.current(false);
-  }, [data, dataAt, flagKey, briefKey, showKrw, afterCost, rowKrw, ms, fetchedThisSession, features, indices, board, appBriefings]);
+  }, [data, dataAt, flagKey, briefKey, showKrw, afterCost, rowKrw, ms, fetchedThisSession, features, indices, board, appBriefings, blocked]);
   // 잔고를 이번 실행에서 받지 않았을 때 (검증 지적): 위젯 종목 브리핑·알림으로 앱을 새로 켜 브리핑 상세에 바로 들어가면 잔고 탭이 아래에 가려져
   // 잔고를 받지 않으므로 위의 넘김은 3-16 규칙(기기 저장값 잔고로 위젯을 덮지 않음)에 막힌다. 그래도 목록이 바뀌면(다시 만들기·브리핑 알림으로 받음)
   // 브리핑 위젯만 바로 다시 그린다 — 잔고·자산·지수 위젯과 저장된 잔고·칩은 그대로, 3종목은 저장된 잔고로 고른다 (refresh.tsx refreshBriefingWidget).
   // 잔고를 받은 뒤로는 위의 넘김이 브리핑까지 함께 넘긴다 (키에 목록). 같은 목록은 다시 그리지 않는다
   const briefOnlyKey = useRef("");
   useEffect(() => {
-    if (!appBriefings || !briefKey || (data && fetchedThisSession) || briefOnlyKey.current === briefKey) return;
+    if (blocked || !appBriefings || !briefKey || (data && fetchedThisSession) || briefOnlyKey.current === briefKey) return;
     briefOnlyKey.current = briefKey;
     void refreshBriefingWidget(appBriefings);
-  }, [appBriefings, briefKey, data, fetchedThisSession]);
+  }, [appBriefings, briefKey, data, fetchedThisSession, blocked]);
   useEffect(() => {
     const sub = AppState.addEventListener("change", (st) => {
       if (st === "background") push.current(true);

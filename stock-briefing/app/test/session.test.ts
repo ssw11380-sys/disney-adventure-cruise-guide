@@ -14,14 +14,11 @@ import {
   markFailOpen,
   onAccountChange,
   persistsPersonal,
-  rememberPreference,
-  REMEMBER_KEY,
   resetSessionForTests,
   saveSession,
   SESSION_KEY,
   sessionFor,
-  sessionHeaders,
-  setRememberPreference,
+  backgroundSessionFor,
   subscribeSession,
   updateSessionUser,
   type AccountUser,
@@ -93,8 +90,15 @@ describe("세션 저장 (자동 로그인 켬·끔)", () => {
     await saveSession({ apiUrl: SERVER, token: "gzs1_a", remember: true, user: OWNER });
     expect(sessionFor(`${SERVER}/`)?.token).toBe("gzs1_a");
     expect(sessionFor("https://other.test")).toBeNull();
-    expect(await sessionHeaders(SERVER)).toEqual({ "x-session-token": "gzs1_a" });
-    expect(await sessionHeaders("https://other.test")).toEqual({});
+    expect(await backgroundSessionFor(SERVER)).toEqual({ kind: "stored", token: "gzs1_a" });
+    expect(await backgroundSessionFor("https://other.test")).toEqual({ kind: "none" });
+  });
+
+  it("위젯·백그라운드는 기기에 저장한 세션만 — 자동 로그인 끔(메모리만)이면 memory (개인 데이터를 묻지 않는다, 검증 4차 M1)", async () => {
+    await saveSession({ apiUrl: SERVER, token: "gzs1_mem", remember: false, user: OWNER });
+    expect(await backgroundSessionFor(SERVER)).toEqual({ kind: "memory" });
+    await clearSession("logout");
+    expect(await backgroundSessionFor(SERVER)).toEqual({ kind: "none" });
   });
 
   it("깨진 저장값은 세션 없음으로 보되 지우지 않는다, 읽기 실패도 지우지 않는다", async () => {
@@ -126,14 +130,10 @@ describe("세션 저장 (자동 로그인 켬·끔)", () => {
     expect(accountsSeenFor(SERVER)).toBe(true);
   });
 
-  it("사용자 정보 갱신·직접 로그아웃·자동 로그인 선택 기억·fail-open", async () => {
+  it("사용자 정보 갱신·직접 로그아웃·fail-open", async () => {
     const st = memoryStorage();
     installSessionStorage(st);
     await loadSession();
-    expect(rememberPreference()).toBe(true);
-    setRememberPreference(false);
-    await flush();
-    expect(st.map.get(REMEMBER_KEY)).toBe("0");
     await saveSession({ apiUrl: SERVER, token: "gzs1_x", remember: true, user: OWNER });
     await updateSessionUser(SERVER, { ...OWNER, usingInitialPassword: false, email: "o@example.com" });
     expect(JSON.parse(st.map.get(SESSION_KEY)!).user).toMatchObject({ usingInitialPassword: false, email: "o@example.com" });

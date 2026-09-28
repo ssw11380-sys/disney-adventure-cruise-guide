@@ -66,7 +66,7 @@ vi.mock("react-native", async () => {
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 28, bottom: 24, left: 0, right: 0 }) }));
 vi.mock("expo-linear-gradient", () => ({ LinearGradient: "LinearGradient" }));
-vi.mock("react-native-svg", () => ({ Svg: "Svg", Defs: "Defs", Ellipse: "Ellipse", LinearGradient: "SvgLinearGradient", Line: "Line", Path: "Path", RadialGradient: "RadialGradient", Rect: "Rect", Stop: "Stop", Text: "SvgText" }));
+vi.mock("react-native-svg", () => ({ Svg: "Svg", Defs: "Defs", Ellipse: "Ellipse", LinearGradient: "SvgLinearGradient", Line: "Line", Mask: "Mask", Path: "Path", RadialGradient: "RadialGradient", Rect: "Rect", Stop: "Stop", Text: "SvgText" }));
 vi.mock("expo-status-bar", () => ({ StatusBar: "StatusBar" }));
 vi.mock("expo-device", () => ({ modelName: "SM-F966N" }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
@@ -216,8 +216,41 @@ describe("로그인 화면", () => {
     expect(h.api.login!.mock.calls[0]![0]).toMatchObject({ remember: false });
     expect(sessionFor(SERVER)?.remember).toBe(false);
     expect(h.store.has(SESSION_KEY)).toBe(false);
-    expect(h.store.get("auth.rememberPref.v1")).toBe("0");
     expect(initialPasswordPromptPending()).toBe(false);
+  });
+
+  it("자동 로그인 체크는 로그인 화면을 열 때마다 늘 켬 (지난번에 끄고 로그인했어도 — 검증 4차, 선택을 기기에 적지 않는다)", async () => {
+    h.api.login!.mockResolvedValue(authResult({ ...OWNER, usingInitialPassword: false }));
+    const r = render(<LoginScreen />);
+    press(r, "자동 로그인");
+    typeIn(r, "아이디", "서성원");
+    typeIn(r, "비밀번호", "newpass99");
+    press(r, "로그인");
+    await settle(r);
+    expect(sessionFor(SERVER)?.remember).toBe(false);
+    const { clearSession } = await import("@/lib/session");
+    await clearSession("logout");
+    const again = render(<LoginScreen />);
+    expect(again.byLabel("자동 로그인").props.accessibilityState).toEqual({ checked: true });
+    expect(again.text()).not.toContain("앱을 완전히 닫으면 다시 로그인해요");
+    expect([...h.store.keys()].some((k) => k.startsWith("auth.rememberPref"))).toBe(false);
+  });
+
+  it("잠김(429): 서버가 준 남은 시간(retryAfterSec)으로 몇 분 뒤인지 (검증 4차 — 예전에는 늘 '10분 뒤')", async () => {
+    const r = render(<LoginScreen />);
+    typeIn(r, "아이디", "서성원");
+    typeIn(r, "비밀번호", "1234");
+    for (const [sec, text] of [[360, "여러 번 틀려서 잠시 막아 두었어요. 6분 뒤에 다시 해 주세요"], [30, "여러 번 틀려서 잠시 막아 두었어요. 1분 뒤에 다시 해 주세요"], [600, "여러 번 틀려서 잠시 막아 두었어요. 10분 뒤에 다시 해 주세요"]] as const) {
+      h.api.login!.mockRejectedValueOnce(apiErr(429, "TOO_MANY_ATTEMPTS", { code: "too_many_attempts", message: "여러 번 틀려서 잠시 막아 두었어요. 10분 뒤에 다시 해 주세요", retryAfterSec: sec }));
+      press(r, "로그인");
+      await settle(r);
+      expect(r.text()).toContain(text);
+    }
+    // IP 제한(요청이 너무 잦음)도 남은 분
+    h.api.login!.mockRejectedValueOnce(apiErr(429, "TOO_MANY_ATTEMPTS", { code: "too_many_attempts", message: "요청이 너무 잦아요. 잠시 뒤에 다시 해 주세요", retryAfterSec: 125 }));
+    press(r, "로그인");
+    await settle(r);
+    expect(r.text()).toContain("요청이 너무 잦아요. 3분 뒤에 다시 해 주세요");
   });
 
   it("틀림·인터넷 오류·API 토큰 오류는 알맞은 문구, 세션은 만들지 않는다", async () => {
@@ -434,8 +467,19 @@ describe("설정 '계정' 칸 · 주인 아닌 계정 안내 · 처음 비밀번
     h.flag = false;
     noteActiveServer(SERVER);
     expect(render(<MemberNotice />).text()).toBe("개인 종목 기능은 준비 중이에요 — 시장·종목 정보는 지금 볼 수 있어요");
-    // 계정 칸·로그인 화면은 꺼짐 그대로 (on·session 없음)
+    // 로그인 화면은 꺼짐 그대로 (on·session 없음)
     expect(accountViewOf(false, currentSession(), activeSession())).toEqual({ on: false, session: null, member: true });
+    // 설정 '계정' 칸은 보인다 — 아이디와 [로그아웃]만 (검증 4차: 꺼진 동안에도 이 기기에서 로그아웃할 수 있게. 비밀번호·이메일 바꾸기는 서버가 꺼 두어 뺌)
+    const card = render(<AccountCard />);
+    expect(card.text()).toContain("로그인 기능이 잠시 꺼져 있어요");
+    expect(Object.fromEntries(card.all().filter((n) => n.type === "Row").map((n) => [n.props.label, n.props.value]))).toEqual({ 아이디: "newbie" });
+    byTitle(card, "로그아웃");
+    expect(card.all().filter((n) => ["비밀번호 바꾸기", "이메일 등록", "이메일 변경", "모든 기기에서 로그아웃"].includes(String(n.props.title)))).toEqual([]);
+    card.act(() => (byTitle(card, "로그아웃").props.onPress as () => void)());
+    (h.alert.mock.calls.at(-1)![2] as { text: string; onPress?: () => void }[]).find((b) => b.text === "로그아웃")!.onPress!();
+    await settle(card);
+    expect(sessionFor(SERVER)).toBeNull();
+    await saveSession({ apiUrl: SERVER, token: "gzs1_m", remember: true, user: MEMBER });
     // 다른 서버로 바꿨으면 그 서버는 세션을 받지 않으므로 안내 없음
     noteActiveServer("https://other.test");
     expect(render(<MemberNotice />).tree).toEqual([]);
@@ -452,6 +496,12 @@ describe("설정 '계정' 칸 · 주인 아닌 계정 안내 · 처음 비밀번
     requestInitialPasswordPrompt();
     const r = render(<InitialPasswordSheet />);
     expect(r.text()).toContain("처음 비밀번호를 쓰고 있어요");
+    // 로그인 화면과 같은 어두운 색 (앱 테마와 상관없이 — 검증 4차): 시트 바탕·가림막·금색 [비밀번호 바꾸기] 그러데이션
+    const { authColors: C } = await import("@/tokens");
+    const bgs = r.all().map((n) => flatStyle(n.props.style).backgroundColor).filter(Boolean);
+    expect(bgs).toContain(C.sheet);
+    expect(bgs).toContain(C.scrim);
+    expect(r.all().some((n) => n.type === "LinearGradient" && (n.props.colors as string[])[0] === C.primaryTop)).toBe(true);
     expect(r.text()).toContain("다른 사람도 알 수 있는 비밀번호예요. 지금 바꾸는 것을 권해요.");
     press(r, "나중에");
     expect(initialPasswordPromptPending()).toBe(false);

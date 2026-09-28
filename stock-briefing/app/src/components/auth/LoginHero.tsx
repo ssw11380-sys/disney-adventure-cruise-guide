@@ -1,7 +1,7 @@
 import { LinearGradient } from "expo-linear-gradient";
 import React, { memo, useEffect, useId, useMemo, useState } from "react";
 import { AccessibilityInfo, Animated, AppState, Easing, PixelRatio, Platform, StyleSheet, View } from "react-native";
-import { Defs, Ellipse, LinearGradient as SvgLinearGradient, Line, Path, RadialGradient, Rect, Stop, Svg } from "react-native-svg";
+import { Defs, LinearGradient as SvgLinearGradient, Line, Mask, RadialGradient, Rect, Stop, Svg } from "react-native-svg";
 import {
   BREATH_MS,
   breathTrack,
@@ -25,7 +25,7 @@ import { GoldWordmark, LogoSubtitle } from "./AuthParts";
  * ─────────────────────────────────────────────────────────────────────────────
  *  <LoginHero/> — 로그인 첫 화면 그림 (계정 A단계, hero-spec.md)
  *  금색 '가즈아 불기둥'·선·부제가 먼저(0.2~0.8초 — 첫 화면부터 브랜드가 보이게) · 횡보 16봉(0.15~1.5초) → 빨간 상한가 10봉이 한 개씩
- *  계단처럼(1.5~3.6초) → 절정: 붉은 빛 + 마지막 봉에서 솟는 불기둥(3.6~4.2초),
+ *  계단처럼(1.5~3.6초) → 절정: 붉은 빛 + 마지막 봉에서 그림 위쪽으로 솟는 세로 빛 기둥(3.6~4.2초),
  *  그 뒤에는 빛·불기둥만 3.6초에 한 번 아주 천천히 숨 쉰다 (밝기 1 → 0.82 → 1, 깜빡임 없음).
  *
  *  움직임은 모두 UI 스레드: RN Animated 네이티브 드라이버의 시계 하나(0 → 4200ms)와 숨쉬기 하나에, 봉·빛·글자마다
@@ -46,6 +46,12 @@ import { GoldWordmark, LogoSubtitle } from "./AuthParts";
 const NATIVE = Platform.OS !== "web";
 /** 봉 몸통·꼬리 자리·폭을 화면 픽셀에 (봉마다 굵기가 달라 보이지 않게). 없으면(테스트의 가짜 RN) 그대로 */
 const snapPx = (v: number) => (typeof PixelRatio?.roundToNearestPixel === "function" ? PixelRatio.roundToNearestPixel(v) : v);
+/** 화면 한 픽셀(dp) — 상한가 천장 띠 두께. 모르면(테스트) 0.5 */
+const hairPx = (): number => (typeof PixelRatio?.get === "function" && PixelRatio.get() > 0 ? 1 / PixelRatio.get() : 0.5);
+/**
+ * 불기둥을 그릴지 (기기에서 가림(mask) 그림이 이상하면 false 로 → 붉은 빛(glow)만 — 아이콘 A 처럼. 로고의 WORDMARK_GRADIENT 와 같은 비상 스위치)
+ */
+export const PILLAR_COLUMN = true;
 /** 숨쉬기를 멈출 때 밝기를 1 로 되돌리는 시간 (한 번에 최대 18% 튀지 않게) */
 const BREATH_SETTLE_MS = 180;
 const TRACKS = heroTracks();
@@ -106,7 +112,7 @@ export const LoginHero = memo(function LoginHero({ layout, logo = true, animate 
   const key = layoutKey(layout);
   // 같은 배치면 장면·움직임 노드를 다시 만들지 않는다 (입력할 때마다 화면이 다시 그려져도 시계에 붙은 노드는 그대로)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const scene = useMemo(() => heroScene(layout, snapPx), [key]);
+  const scene = useMemo(() => heroScene(layout, snapPx, hairPx()), [key]);
   const still = frozenAt !== undefined ? frozenAt : animate ? null : HERO_MS;
   const [clock] = useState(() => new Animated.Value(still ?? (introPlayed ? HERO_MS : 0)));
   const [breath] = useState(() => new Animated.Value(0));
@@ -177,6 +183,7 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
   const H = L.heroH;
   const P = scene.pillar;
   const pH = P.base - P.top;
+  const pillarOn = PILLAR_COLUMN && pH > 1;
   const nodes = useMemo(() => {
     const breathe = breath.interpolate({ inputRange: [...BREATH.input], outputRange: [...BREATH.output] });
     const ps = growTrack(TRACKS.pillar.grow);
@@ -230,16 +237,18 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
           <Line x1={scene.baseline.x1} x2={scene.baseline.x2} y1={scene.baseline.y} y2={scene.baseline.y} stroke={C.baseline} strokeWidth={1} />
         </Svg>
       </Animated.View>
-      {/* 불기둥: 마지막 상한가 봉에서 위로 솟는 기둥 하나 (봉 뒤에서 시작 — 아래 끝은 몸통에 가려 봉에서 솟아오르는 모양).
-          둘레 옅은 주황 빛 → 기둥(주황-노랑, 몸통 폭 이상에서 위로 가늘어짐) → 가운데 심(거의 흰 크림) → 아래 뜨거운 점.
-          예전 세 봉 위 타원 불꽃은 붉은 빛 위에서 봉과 떨어진 갈색 얼룩·촛불처럼 보였다 (검증 지적) */}
-      <Animated.View
-        testID="hero-pillar"
-        renderToHardwareTextureAndroid
-        style={{ position: "absolute", left: P.cx - P.haloW / 2, top: P.top, width: P.haloW, height: pH, opacity: nodes.pillar.opacity, transform: [{ translateY: nodes.pillar.shift }, { scaleY: nodes.pillar.scale }] }}
-      >
-        <PillarArt uid={uid} pillar={P} />
-      </Animated.View>
+      {/* 불기둥 (검증 4차): 마지막 종가에서 그림 위쪽으로 곧게 솟는 세로 빛 기둥 — 같은 폭(부풂 없음), 뾰족한 끝 없이 위로 갈수록 투명,
+          가로로는 붉은 빛 → 가운데 따뜻한 흰 심. 아래 끝은 몸통 뒤에서 옅게 시작한다 (예전 불꽃 모양은 촛불처럼 보였다).
+          움직임은 세로 크기(아래 끝 기준)·불투명도만 — 네이티브 드라이버 */}
+      {pillarOn ? (
+        <Animated.View
+          testID="hero-pillar"
+          renderToHardwareTextureAndroid
+          style={{ position: "absolute", left: P.cx - P.w / 2, top: P.top, width: P.w, height: pH, opacity: nodes.pillar.opacity, transform: [{ translateY: nodes.pillar.shift }, { scaleY: nodes.pillar.scale }] }}
+        >
+          <PillarArt uid={uid} pillar={P} />
+        </Animated.View>
+      ) : null}
       {/* 횡보 봉 16개: 몸통 가운데 기준으로 0.3 → 1 (자리·폭은 화면 픽셀에 맞춤) */}
       {scene.side.map((c, i) => {
         const color = c.up ? C.sideUp : C.sideDown;
@@ -269,56 +278,79 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
   );
 });
 
+/** 기둥의 가로 빛 (양옆 투명 → 붉은 빛 → 가운데 따뜻한 주황): [위치 0~1, 색, 불투명도] */
+export const PILLAR_GLOW_X: readonly (readonly [number, string, number])[] = [
+  [0, C.pillarRed, 0],
+  [0.14, C.pillarRed, 0.1],
+  [0.3, C.pillarRed, 0.4],
+  [0.5, C.pillarWarm, 0.78],
+  [0.7, C.pillarRed, 0.4],
+  [0.86, C.pillarRed, 0.1],
+  [1, C.pillarRed, 0],
+];
+/** 가운데 심의 가로 빛 (따뜻한 주황 → 따뜻한 흰색) */
+export const PILLAR_CORE_X: readonly (readonly [number, string, number])[] = [
+  [0, C.pillarWarm, 0],
+  [0.22, C.pillarWarm, 0.4],
+  [0.5, C.pillarCore, 0.95],
+  [0.78, C.pillarWarm, 0.4],
+  [1, C.pillarWarm, 0],
+];
 /**
- * 불기둥 모양 (그리는 칸 기준, 아래 끝 = 칸 아래 끝 h, 가로 가운데 = 칸 가운데). 아래는 폭 baseW(봉 몸통 폭 — 몸통 뒤에 꼭 숨음)에서 시작해
- * 아래에서 20% 높이까지 maxW 로 조금 부풀었다가 위로 가늘어져 끝(top)이 뾰족하다
+ * 세로로 얼마나 보이는지 (아래 끝 0 → 위 끝 1, 가림(mask)의 흰색 불투명도): 붉은 빛은 몸통 뒤에서 옅게 시작해 곧 가장 밝고 위로 갈수록 투명.
+ * 가운데 심은 몸통 바로 위에서는 옅고(아래 크림 심지처럼 보이지 않게) 조금 위에서 가장 밝았다가 붉은 빛보다 먼저 사라진다 — 아래는 붉게, 가운데는 따뜻한 흰색, 위는 투명
  */
-export function pillarPath(P: Pick<ScenePillar, "haloW">, h: number, baseW: number, maxW: number, top: number): string {
-  const cx = P.haloW / 2;
-  const s = h - top;
-  const yb = h - 0.2 * s;
-  const [l0, r0, lm, rm] = [cx - baseW / 2, cx + baseW / 2, cx - maxW / 2, cx + maxW / 2];
-  return [
-    `M ${l0} ${h}`,
-    `C ${l0} ${h - 0.08 * s} ${lm} ${yb + 0.06 * s} ${lm} ${yb}`,
-    `C ${lm} ${yb - 0.3 * s} ${cx - maxW * 0.28} ${top + 0.25 * s} ${cx} ${top}`,
-    `C ${cx + maxW * 0.28} ${top + 0.25 * s} ${rm} ${yb - 0.3 * s} ${rm} ${yb}`,
-    `C ${rm} ${yb + 0.06 * s} ${r0} ${h - 0.08 * s} ${r0} ${h}`,
-    "Z",
-  ].join(" ");
-}
+export const PILLAR_GLOW_Y: readonly (readonly [number, number])[] = [
+  [0, 0],
+  [0.05, 1],
+  [0.35, 0.8],
+  [0.7, 0.3],
+  [1, 0],
+];
+export const PILLAR_CORE_Y: readonly (readonly [number, number])[] = [
+  [0, 0],
+  [0.1, 0.3],
+  [0.22, 1],
+  [0.45, 0.5],
+  [0.75, 0.08],
+  [1, 0],
+];
 
 /**
- * 불기둥 그림: 둘레 옅은 주황 빛(타원) → 기둥(아래 주황-노랑 → 위 붉게 옅어짐) → 가운데 심(거의 흰 크림, 불투명도 0.95 — 붉은 빛 위에서도 뚜렷이 밝다).
- * 아래 끝은 몸통 폭이라 몸통 뒤에 숨는다 (칸 아래로 잘리는 모양이 몸통 양옆으로 보이지 않게)
+ * 불기둥 그림 (그리는 칸 = 기둥 폭 w × 높이, 아래 끝 = 칸 아래 끝): 가로 빛 그러데이션을 세로 가림(mask — 흰색 불투명도)으로 위아래를 옅게 한 사각형 둘.
+ * 모양 선(Path)이 없어 끝이 뾰족하거나 부풀지 않고, 흐림 필터 없이 가로·세로 모두 부드럽다
  */
 function PillarArt({ uid, pillar: P }: { uid: string; pillar: ScenePillar }) {
   const h = P.base - P.top;
-  const cx = P.haloW / 2;
+  const w = P.w;
+  const cx0 = (w - P.coreW) / 2;
   const ref = (name: string) => `url(#${uid}${name})`;
+  const stopsX = (list: readonly (readonly [number, string, number])[]) => list.map(([o, c, a]) => <Stop key={o} offset={o} stopColor={c} stopOpacity={a} />);
+  const stopsY = (list: readonly (readonly [number, number])[]) => list.map(([o, a]) => <Stop key={o} offset={o} stopColor={C.maskOn} stopOpacity={a} />);
   return (
-    <Svg width={P.haloW} height={h}>
+    <Svg width={w} height={h}>
       <Defs>
-        <RadialGradient id={`${uid}halo`} cx="50%" cy="72%" r="50%">
-          <Stop offset="0" stopColor={C.flame} stopOpacity={0.5} />
-          <Stop offset="0.5" stopColor={C.flameHot} stopOpacity={0.2} />
-          <Stop offset="1" stopColor={C.flameHot} stopOpacity={0} />
-        </RadialGradient>
-        <SvgLinearGradient id={`${uid}pillar`} x1={0} y1={h} x2={0} y2={0} gradientUnits="userSpaceOnUse">
-          <Stop offset="0" stopColor={C.flameLight} stopOpacity={0.95} />
-          <Stop offset="0.35" stopColor={C.flame} stopOpacity={0.88} />
-          <Stop offset="0.7" stopColor={C.flameHot} stopOpacity={0.5} />
-          <Stop offset="1" stopColor={C.flameHot} stopOpacity={0} />
+        <SvgLinearGradient id={`${uid}pGlowX`} x1={0} y1={0} x2={w} y2={0} gradientUnits="userSpaceOnUse">
+          {stopsX(PILLAR_GLOW_X)}
         </SvgLinearGradient>
-        <SvgLinearGradient id={`${uid}pillarCore`} x1={0} y1={h} x2={0} y2={h * 0.38} gradientUnits="userSpaceOnUse">
-          <Stop offset="0" stopColor={C.flameWhite} stopOpacity={0.95} />
-          <Stop offset="0.55" stopColor={C.flameCore} stopOpacity={0.8} />
-          <Stop offset="1" stopColor={C.flameCore} stopOpacity={0} />
+        <SvgLinearGradient id={`${uid}pCoreX`} x1={cx0} y1={0} x2={cx0 + P.coreW} y2={0} gradientUnits="userSpaceOnUse">
+          {stopsX(PILLAR_CORE_X)}
         </SvgLinearGradient>
+        <SvgLinearGradient id={`${uid}pGlowY`} x1={0} y1={h} x2={0} y2={0} gradientUnits="userSpaceOnUse">
+          {stopsY(PILLAR_GLOW_Y)}
+        </SvgLinearGradient>
+        <SvgLinearGradient id={`${uid}pCoreY`} x1={0} y1={h} x2={0} y2={0} gradientUnits="userSpaceOnUse">
+          {stopsY(PILLAR_CORE_Y)}
+        </SvgLinearGradient>
+        <Mask id={`${uid}pGlowM`} maskUnits="userSpaceOnUse" x={0} y={0} width={w} height={h}>
+          <Rect x={0} y={0} width={w} height={h} fill={ref("pGlowY")} />
+        </Mask>
+        <Mask id={`${uid}pCoreM`} maskUnits="userSpaceOnUse" x={0} y={0} width={w} height={h}>
+          <Rect x={0} y={0} width={w} height={h} fill={ref("pCoreY")} />
+        </Mask>
       </Defs>
-      <Ellipse cx={cx} cy={h * 0.56} rx={P.haloW / 2} ry={h * 0.44} fill={ref("halo")} />
-      <Path testID="hero-pillar-body" d={pillarPath(P, h, P.w, P.maxW, 0)} fill={ref("pillar")} />
-      <Path testID="hero-pillar-core" d={pillarPath(P, h, P.w * 0.5, P.maxW * 0.46, h * 0.38)} fill={ref("pillarCore")} />
+      <Rect testID="hero-pillar-glow" x={0} y={0} width={w} height={h} fill={ref("pGlowX")} mask={ref("pGlowM")} />
+      <Rect testID="hero-pillar-core" x={cx0} y={0} width={P.coreW} height={h} fill={ref("pCoreX")} mask={ref("pCoreM")} />
     </Svg>
   );
 }

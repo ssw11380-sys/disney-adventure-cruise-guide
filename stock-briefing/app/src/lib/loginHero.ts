@@ -132,7 +132,7 @@ export interface HeroGeometry {
   /** 빛 두 개 (가운데·반지름) */
   glow: { cx: number; cy: number; r: number };
   glow2: { cx: number; cy: number; r: number };
-  /** 불기둥 높이 (마지막 봉 종가에서 위로) */
+  /** 불기둥 높이 (마지막 봉 종가에서 위로 — 그림 영역 위 끝에서 멈추는 것은 장면이 정한다) */
   pillarH: number;
   /** 상한가 한 계단 높이 */
   step: number;
@@ -143,8 +143,13 @@ export interface HeroGeometry {
  * 상태 표시줄(배터리·신호 아이콘) 밑까지 올라왔다 — 불기둥이 그림 칸 안(PILLAR_H 만큼)에 들어오게 내린다
  */
 export const LAST_CLOSE = 0.18;
-/** 불기둥 높이 (그림 칸 h 의 몇 배) — 위 끝이 그림 칸 위 끝(y0) 아래에 오게 LAST_CLOSE 보다 조금 작게 */
-export const PILLAR_H = 0.17;
+/**
+ * 불기둥 높이 (그림 칸 h 의 몇 배 — 검증 4차: 0.17 의 짧은 불꽃이 촛불처럼 보여, 그림 위쪽으로 길게 솟는 빛 기둥으로). 그림 영역 위 끝(0)에 닿으면 거기서 멈춘다 —
+ * 위로 갈수록 투명해 상태 표시줄 밑까지 올라가도 되고(hero-spec 4.1), 가장 밝은 아래쪽은 상태 표시줄 아래 (테스트)
+ */
+export const PILLAR_H = 0.36;
+/** 횡보 띠 높이 (그림 칸 h 의 몇 배 — 검증 4차: 0.14 는 횡보 봉이 납작한 점처럼 보였다) */
+export const SIDE_BAND = 0.2;
 
 /** 횡보 봉 16개 (띠 단위 u: 시가·종가·고가·저가, 위가 +) — hero-spec 5.3 */
 const SIDE: readonly (readonly [number, number, number, number])[] = [
@@ -176,7 +181,7 @@ export function heroCandles(p: Plot): HeroGeometry {
   const cx = (i: number) => p.x0 + (i + 0.5) * slot;
   const bw = clamp(slot * 0.58, 5, 14);
   const wickW = clamp(Math.round(bw * 0.2 * 2) / 2, 1.5, 2.5);
-  const bandH = p.h * 0.14;
+  const bandH = p.h * SIDE_BAND;
   const bandBottom = p.y0 + p.h * 0.98;
   const bandMid = bandBottom - bandH / 2;
   const y = (u: number) => bandMid - (u * bandH) / 2;
@@ -255,22 +260,19 @@ export interface SceneLimit {
 }
 
 /**
- * 불기둥 (마지막 상한가 봉 하나에서 위로 솟는 기둥 — 검증 지적 반영: 예전 세 봉 위 떠 있던 타원 불꽃은 봉에서 떨어진 갈색 얼룩·'촛불'처럼 보였다).
- * 아래 끝은 마지막 봉 종가(몸통 위 끝)보다 조금 아래(몸통 뒤에 숨어 봉에서 솟아오르게), 아래 폭은 봉 몸통 폭 이상이고 위로 가늘어진다.
- * 가운데는 밝은 크림·주황(불투명도 0.9 이상), 둘레는 옅은 주황 빛
+ * 불기둥 (검증 4차): 마지막 상한가 봉 종가에서 그림 위쪽으로 곧게 솟는 **세로 빛 기둥** — 폭이 위아래 같고(부풂 없음), 끝이 뾰족하지 않고
+ * 위로 갈수록 투명해진다. 가로로는 가운데가 밝고 양옆으로 부드럽게 옅어진다 (붉은 빛 → 가운데 따뜻한 흰 심).
+ * 예전 모양(몸통 폭에서 부풀었다가 뾰족해지는 불꽃 + 아래까지 내려온 크림 심)은 촛불처럼 보였다.
+ * 아래 끝은 종가(몸통 위 끝)보다 조금 아래 — 몸통 뒤에서 옅게 시작해 봉에서 솟는 모양
  */
 export interface ScenePillar {
   cx: number;
-  /** 아래 끝 y (몸통 위 끝보다 overlap 만큼 아래), 위 끝 y */
+  /** 아래 끝 y (몸통 위 끝보다 조금 아래 — 몸통 뒤), 위 끝 y (그림 영역 위 끝 0 아래) */
   base: number;
   top: number;
-  /**
-   * 기둥 아래 폭 = 봉 몸통 폭 (아래 끝이 몸통 뒤에 꼭 숨게 — 몸통보다 넓으면 납작한 아래 끝이 봉 양옆으로 보였다),
-   * 가장 넓은 곳(아래에서 20% 높이) = 몸통 폭 × PILLAR_W, 둘레 빛 폭(그리는 칸의 폭)
-   */
+  /** 기둥 폭 = 몸통 폭 × PILLAR_W (그리는 칸의 폭 — 양옆은 투명으로 옅어짐), 가운데 따뜻한 흰 심 폭 = 몸통 폭 × PILLAR_CORE_W */
   w: number;
-  maxW: number;
-  haloW: number;
+  coreW: number;
 }
 
 export interface HeroScene {
@@ -291,9 +293,9 @@ export interface HeroScene {
 
 /** 로고 묶음(글자·금색 선·부제) 위아래로 이만큼 안에 걸리는 눈금은 그리지 않는다 (금색 선과 눈금이 1~2dp 어긋나 한 줄이 틀어진 것처럼 보였다) */
 export const GRID_LOGO_GAP = 8;
-/** 불기둥 가장 넓은 곳 = 봉 몸통 폭 × PILLAR_W (아래 끝은 몸통 폭), 둘레 빛 폭 = × PILLAR_HALO_W */
-export const PILLAR_W = 1.3;
-export const PILLAR_HALO_W = 3.2;
+/** 불기둥 폭 = 봉 몸통 폭 × PILLAR_W (2~3배 — 양옆으로 옅어지는 빛까지), 가운데 따뜻한 흰 심 폭 = × PILLAR_CORE_W */
+export const PILLAR_W = 2.8;
+export const PILLAR_CORE_W = 0.9;
 
 /** 화면 픽셀에 맞추는 함수 (그리는 쪽은 PixelRatio.roundToNearestPixel, 테스트는 그대로) */
 export type Snap = (v: number) => number;
@@ -304,8 +306,9 @@ const asIs: Snap = (v) => v;
  *  - 눈금은 로고 묶음 높이(± GRID_LOGO_GAP)에 걸리면 그리지 않는다
  *  - snap: 봉 몸통·꼬리의 x·폭과 y, 눈금 y 를 화면 픽셀에 맞춘다 (폴드 dpr 2.625 에서 봉마다 굵기가 24/25px·꼬리 2/3px 로 달라 보였다).
  *    폭은 한 번만 맞춰 모든 봉이 같은 굵기
+ *  - hair: 화면 한 픽셀(dp) — 상한가 몸통 맨 위 천장 띠 두께 (검증 4차: 1.5dp 는 굵은 크림 띠로 보였다. 픽셀에 맞춘 몸통 위 끝에 한 픽셀 밝은 선)
  */
-export function heroScene(layout: LoginLayout, snap: Snap = asIs): HeroScene {
+export function heroScene(layout: LoginLayout, snap: Snap = asIs, hair = 0.5): HeroScene {
   const p = layout.plot;
   const g = heroCandles(p);
   const logo = logoBox(layout);
@@ -330,20 +333,19 @@ export function heroScene(layout: LoginLayout, snap: Snap = asIs): HeroScene {
         k: i - SIDE_COUNT,
         body: { x, y: top, w: bw, h: bottom - top },
         wick: { x: snap(c.cx - wickW / 2), y: bottom, w: wickW, h: snap(c.low) - bottom },
-        capH: 1.5,
+        capH: hair,
         radius: Math.min(2, bw * 0.12),
       });
     }
   });
   const last = limit[limit.length - 1]!;
   const pillar: ScenePillar = {
-    // 가운데는 픽셀에 맞춘 몸통의 가운데 (아래 끝이 몸통 옆으로 반 픽셀이라도 삐져나오지 않게)
+    // 가운데는 픽셀에 맞춘 몸통의 가운데
     cx: last.body.x + bw / 2,
     base: last.body.y + Math.min(3, last.body.h * 0.3),
-    top: last.body.y - g.pillarH,
-    w: bw,
-    maxW: bw * PILLAR_W,
-    haloW: bw * PILLAR_HALO_W,
+    top: Math.max(0, last.body.y - g.pillarH),
+    w: bw * PILLAR_W,
+    coreW: bw * PILLAR_CORE_W,
   };
   return {
     layout,
@@ -369,8 +371,8 @@ export const HERO_MS = 4200;
 /** 숨쉬기 한 번 (빛·불기둥 밝기 1 → 0.82 → 1) */
 export const BREATH_MS = 3600;
 export const BREATH_MIN = 0.82;
-/** 첫 재생을 화면이 뜬 뒤 조금 늦게 (스플래시가 내려가고 첫 그리기가 끝난 뒤 — 처음부터 보이게) */
-export const HERO_START_DELAY_MS = 220;
+/** 첫 재생을 화면이 뜬 뒤 조금 늦게 (스플래시가 내려가고 첫 그리기가 끝난 뒤 — 처음부터 보이게). 검증 4차: 0.22 → 0.1초 (빈 첫 화면이 길어 보였다) */
+export const HERO_START_DELAY_MS = 100;
 /** 크기가 0 이 되면 안드로이드 행렬이 깨질 수 있어 이보다 작게는 줄이지 않는다 (불투명도로 가린다) */
 export const MIN_SCALE = 0.01;
 
@@ -555,7 +557,7 @@ export function heroFrame(scene: HeroScene, t: number, phase = 0, tracks: HeroTr
   const P = scene.pillar;
   const ps = sampleTrack(growTrack(tracks.pillar.grow), t);
   const [py, ph] = scaleAbout(P.top, P.base - P.top, P.base, ps);
-  out.push({ id: "pillar", rect: { x: P.cx - P.haloW / 2, y: py, w: P.haloW, h: ph }, opacity: sampleTrack(tracks.pillar.opacity, t) * breath });
+  out.push({ id: "pillar", rect: { x: P.cx - P.w / 2, y: py, w: P.w, h: ph }, opacity: sampleTrack(tracks.pillar.opacity, t) * breath });
   const L = scene.logo;
   const shift = sampleTrack(tracks.logo.shift, t);
   out.push({ id: "logo", rect: { x: L.x, y: L.y + shift, w: L.w, h: L.wordH }, opacity: sampleTrack(tracks.logo.opacity, t) });

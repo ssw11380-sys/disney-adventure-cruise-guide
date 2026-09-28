@@ -60,20 +60,22 @@ export default function SettingsScreen() {
   const densityOn = useFeature("densityMode", false);
   // 이동평균선 기간·색 (3-39): 켜져 있을 때만 '차트 이동평균선' 줄 + [설정] → 새 화면 '이동평균선'
   const maOn = useFeature("maCustom", false);
-  // 계정 A단계 (플래그 accounts): 맨 위 '계정' 칸. 주인 아닌 계정은 알림·가격 알림·토스 칸을 숨긴다 (개인 종목 기능은 다음 단계 — 서버도 막는다)
+  // 계정 A단계 (플래그 accounts): 맨 위 '계정' 칸. 주인 아닌 계정은 알림·가격 알림·토스 칸과 주인만 쓰는 줄(잔고·위젯·매매 기록·스트림·첫 실행 안내)을
+  // 숨기고 알림 설정도 묻지 않는다 (개인 종목 기능은 다음 단계 — 서버도 막는다, 검증 4차)
   const { member } = useAccountView();
+  const owner = !member;
   // 차트 최고·최저가 표시 (3-46): 켜져 있을 때만 '차트 최고·최저가 표시' 스위치 (꺼져 있으면 저장된 값과 상관없이 차트는 지금 그대로)
   const hlOn = useFeature("chartHighLow", false);
   const health = useHealth();
   // 알림·토스 카드는 토큰이 맞는 서버에서만 보인다 (토큰이 없으면 서버가 401 을 주므로 묻지 않는다)
   const full = !!health.data && !health.data.limited;
-  const notifySettings = useNotificationSettings(full);
+  const notifySettings = useNotificationSettings(full && owner);
   const stream = useLiveStream();
   // 끊겼을 때 데이터 절약 (3-25): 서버 줄에 폴링 방식과 최근 응답 비율
   const saverOn = useFeature("pollSaver", false);
   // 매매 기록 (3-36): 서버가 쌓는 일별 계좌 스냅샷 상태 한 줄 (읽기만). 꺼져 있거나 예전 서버면 줄 없음
   const tradeRecordsOn = useFeature("tradeRecords", false);
-  const recordsLabel = tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords));
+  const recordsLabel = owner ? tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords)) : null;
   const [advanced, setAdvanced] = useState(false);
   // 3-24 (emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도, lib/uxFlags connectionGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
   // 누를 때마다 새 요청이라(at) 사용자가 칸을 접은 뒤 다른 화면에서 또 눌러도 다시 펼친다. 플래그가 꺼져 있으면 검색어를 보지 않는다
@@ -132,7 +134,7 @@ export default function SettingsScreen() {
     if (settling()) scrollToConnect();
   };
   // 당겨서 새로고침: 서버 상태와, 알림 카드가 보이면 알림 설정('다음 실행' 시각)도 함께 (BH-16)
-  const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full ? notifySettings.refetch() : undefined]));
+  const { pulling, onPull } = usePull(() => Promise.all([health.refetch(), full && owner ? notifySettings.refetch() : undefined]));
   // 서버 연결 입력 중인 주소·토큰: 한 칸 ↔ 두 칸, 폰 접기 ↔ 펴기로 카드가 새로 그려져도 지워지지 않게 화면이 들고 있는다.
   // 저장된 값이 바뀌면(저장·다른 곳에서 변경) 새 값으로 다시 시작하고, 사용자가 '서버 연결'을 접으면 저장하지 않은 입력을 버린다
   // (지금과 같다 — 다시 펴면 저장된 주소·토큰)
@@ -186,13 +188,15 @@ export default function SettingsScreen() {
         </View>
         <Toggle value={showKrw} onValueChange={(v) => void setShowKrw(v)} accessibilityLabel="해외주식 원화 표시" />
       </View>
-      <View style={styles.line}>
-        <View style={{ flex: 1, paddingRight: space.md }}>
-          <Text style={styles.label(t.ink)}>수수료·세금 차감 평가</Text>
-          <Muted style={{ fontSize: font.tiny }}>토스 앱과 같은 평가금액·손익 (토스 연동 종목)</Muted>
+      {owner ? (
+        <View style={styles.line}>
+          <View style={{ flex: 1, paddingRight: space.md }}>
+            <Text style={styles.label(t.ink)}>수수료·세금 차감 평가</Text>
+            <Muted style={{ fontSize: font.tiny }}>토스 앱과 같은 평가금액·손익 (토스 연동 종목)</Muted>
+          </View>
+          <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} accessibilityLabel="수수료·세금 차감 평가" />
         </View>
-        <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} accessibilityLabel="수수료·세금 차감 평가" />
-      </View>
+      ) : null}
       {ux.oneHand || alerts.on ? (
         // 3-24 햅틱 끄기 (플래그 oneHand): 끄면 차트 십자선 진동까지 모두 멈춘다. 가격 알림(3-29) 진동도 이 스위치를 따른다
         <View style={styles.line}>
@@ -203,15 +207,17 @@ export default function SettingsScreen() {
           <Toggle value={haptics} onValueChange={(v) => void setHaptics(v)} accessibilityLabel="누를 때 진동" />
         </View>
       ) : null}
-      <View style={{ gap: space.s, paddingTop: space.s }}>
-        <Text style={styles.label(t.ink)}>잔고 정렬</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
-          {SORT_OPTIONS.map((o) => (
-            <Chip key={o.value} label={o.label} accessibilityLabel={`잔고 정렬 ${o.label}`} active={sort === o.value} onPress={() => void setSort(o.value)} />
-          ))}
+      {owner ? (
+        <View style={{ gap: space.s, paddingTop: space.s }}>
+          <Text style={styles.label(t.ink)}>잔고 정렬</Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
+            {SORT_OPTIONS.map((o) => (
+              <Chip key={o.value} label={o.label} accessibilityLabel={`잔고 정렬 ${o.label}`} active={sort === o.value} onPress={() => void setSort(o.value)} />
+            ))}
+          </View>
         </View>
-      </View>
-      {densityOn ? (
+      ) : null}
+      {densityOn && owner ? (
         // 3-39 잔고 표시 기본 · 촘촘 (플래그 densityMode). 목록(DENSITY_OPTIONS)은 켜져 있을 때만 읽는다
         <View style={{ gap: space.s, paddingTop: space.sm }}>
           <View style={{ gap: space.xxs }}>
@@ -245,12 +251,14 @@ export default function SettingsScreen() {
           <Toggle value={chartHighLow !== false} onValueChange={(v) => void setChartHighLow(v)} accessibilityLabel="차트 최고·최저가 표시" />
         </View>
       ) : null}
-      <View style={{ gap: space.xxs, paddingTop: space.sm }}>
-        <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
-        <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
-        {widgetLogOn ? <WidgetRefreshStatus /> : null}
-      </View>
-      {widgetPolishOn ? (
+      {owner ? (
+        <View style={{ gap: space.xxs, paddingTop: space.sm }}>
+          <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
+          <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>
+          {widgetLogOn ? <WidgetRefreshStatus /> : null}
+        </View>
+      ) : null}
+      {widgetPolishOn && owner ? (
         <View style={{ gap: space.s, paddingTop: space.sm }}>
           <View style={{ gap: space.xxs }}>
             <Text style={styles.label(t.ink)}>위젯 종목 금액</Text>
@@ -284,7 +292,7 @@ export default function SettingsScreen() {
           <Row label="서버 시각" value={formatDateKo(health.data.time, true)} />
           <Row label="시세" value={health.data.sources?.quotes ?? "-"} />
           <Row label="실시간" value={health.data.sources?.realtime ?? "-"} />
-          <Row label="앱 스트리밍" value={stream.connected ? `연결 · ${stream.ticks}건` : saverOn ? "폴링 3~4초 · 절약" : "폴링 3초"} />
+          {owner ? <Row label="앱 스트리밍" value={stream.connected ? `연결 · ${stream.ticks}건` : saverOn ? "폴링 3~4초 · 절약" : "폴링 3초"} /> : null}
           {saverOn ? <Row label="시세 받기" value={saverLabel(condStats())} /> : null}
           <Row label="뉴스" value={health.data.sources?.news ?? "-"} />
           <Row label="재무/공시" value={health.data.sources?.financials ?? "-"} />
@@ -360,8 +368,8 @@ export default function SettingsScreen() {
       <Row label="앱 버전" value={Constants.expoConfig?.version ?? "-"} />
       <Row label="시세" value="토스증권 · 네이버 증권" />
       <Row label="공시" value="DART · SEC EDGAR" />
-      {ux.firstRun ? (
-        // 3-24 첫 실행 안내 다시 보기 (플래그 firstRun)
+      {ux.firstRun && owner ? (
+        // 3-24 첫 실행 안내 다시 보기 (플래그 firstRun). 주인 아닌 계정에는 없다 (위젯·알림·토스 이야기라 — 첫 실행 안내도 띄우지 않는다)
         <Button title="처음 사용 안내 다시 보기" icon="help-circle-outline" variant="secondary" compact style={{ marginTop: space.xs }} onPress={() => router.push("/welcome")} />
       ) : null}
       <Muted style={{ fontSize: font.tiny, marginTop: space.xs }}>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</Muted>

@@ -33,6 +33,12 @@ export const AUTH_TEXT = {
   passwordChanged: "비밀번호를 바꿨어요. 다른 기기는 로그아웃돼요.",
 } as const;
 
+/** 429 문구: 남은 초 → 분(올림, 1분 이상). 잠김(여러 번 틀림)과 요청이 너무 잦음을 나눈다 */
+export function retryText(serverMessage: string | null, sec: number): string {
+  const min = Math.max(1, Math.ceil(sec / 60));
+  return serverMessage && /틀려서/.test(serverMessage) ? `여러 번 틀려서 잠시 막아 두었어요. ${min}분 뒤에 다시 해 주세요` : `요청이 너무 잦아요. ${min}분 뒤에 다시 해 주세요`;
+}
+
 export function authErrorView(e: unknown): AuthErrorView {
   const x = (e && typeof e === "object" ? e : {}) as { status?: unknown; code?: unknown; body?: unknown };
   const status = typeof x.status === "number" ? x.status : -1;
@@ -44,7 +50,12 @@ export function authErrorView(e: unknown): AuthErrorView {
   if (status === 401) return view(AUTH_TEXT.apiToken, { showServer: true });
   if (status >= 500) return view(AUTH_TEXT.server);
   const msg = typeof body.message === "string" && body.message ? body.message : null;
-  if (status === 429) return view(msg ?? AUTH_TEXT.tooMany);
+  // 잠김·너무 잦음: 서버가 준 남은 시간(retryAfterSec)으로 몇 분 뒤인지 (검증 4차 — 예전 문구는 늘 '10분 뒤')
+  if (status === 429) {
+    const sec = typeof (body as { retryAfterSec?: unknown }).retryAfterSec === "number" ? ((body as { retryAfterSec: number }).retryAfterSec) : null;
+    if (sec === null) return view(msg ?? AUTH_TEXT.tooMany);
+    return view(retryText(msg, sec));
+  }
   if (status === 400 || status === 409 || status === 403) {
     const fields: Record<string, string> = {};
     if (body.fields && typeof body.fields === "object") {

@@ -43,5 +43,12 @@ export const MEMBER_NOTICE = "개인 종목 기능은 준비 중이에요 — �
 /** 주인 아닌 계정이 비중 화면을 딥링크로 열었을 때 (수량·평균 단가를 넣으라는 말·'잔고로' 버튼 없이) */
 export const MEMBER_EMPTY_ALLOCATION = { title: "개인 종목 기능은 준비 중이에요", hint: "내 종목을 담는 기능이 열리면 여기에서 비중을 볼 수 있어요. 시장·종목 정보는 지금 볼 수 있어요." } as const;
 
+/** 주인 아닌 계정의 잔고 탭 빈 칸 (검증 4차): 차분한 안내 + [시장·종목 둘러보기] 하나 (발견 탭으로) — 종목 추가·계좌 불러오기 말은 없이 */
+export const MEMBER_EMPTY_HOLDINGS = {
+  title: "지금은 시장·종목 정보를 볼 수 있어요",
+  hint: "발견 탭에서 오늘 움직인 종목과 테마를 보고, 종목을 누르면 시세·차트·지표 점수를 볼 수 있어요.",
+  action: "시장·종목 둘러보기",
+} as const;
+
 /** 주인 아닌 계정의 브리핑 탭 빈 칸 (종목을 추가하라는 말·버튼 없이) */
 export const MEMBER_EMPTY_BRIEFINGS = { title: "종목 브리핑은 준비 중이에요", hint: "내 종목을 담는 기능이 열리면 여기에 종목마다 브리핑이 쌓여요." } as const;
