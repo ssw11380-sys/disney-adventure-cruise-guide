@@ -11,7 +11,7 @@ import { parsePromptFile, PromptStore } from "../src/llm/prompts.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { Candle } from "../src/domain/types.js";
 import type { GenerateRequest, GenerateResult, TextGenerator } from "../src/llm/generator.js";
-import { isOldValueText, safeValueText } from "../src/services/analysisService.js";
+import { isOldValueText, safeValueCheck, safeValueText, VALUE_AI_BANNED } from "../src/services/analysisService.js";
 import { cleanDetail } from "../src/services/briefingWording.js";
 import { FEATURES } from "../src/services/featureService.js";
 import { compositeOf, type ScoreSources, type ScoresResponse, type ScoreStock } from "../src/services/indicatorScoreService.js";
@@ -19,6 +19,7 @@ import { krReasonOf } from "../src/services/krValueService.js";
 import { bigPeersOf, closeGap, familyRow, flagRows, lossStreak, metricRow, oneOffOf, priceNoteOf, reasonOf, type Core, type RowCtx } from "../src/services/valueScoreService.js";
 import {
   BANK_HEALTH_NOTE,
+  blendPosPrefix,
   blendRankNote,
   blendRankZeroNote,
   closeGapText,
@@ -34,6 +35,7 @@ import {
   gapTextV2,
   howLinesV2,
   INSURER_HEALTH_NOTE,
+  keepWords,
   KR_FIN_MIX_NOTE,
   KR_QUARTER_GAP_TEXT,
   krFewQuartersText,
@@ -49,6 +51,7 @@ import {
   PRICE_NOTE,
   PRICE_NOTE_BASE,
   PRICE_NOTE_BLEND,
+  PRICE_NOTE_BLEND_PLAIN,
   PRICE_NOTE_SMALL,
   profitMedianText,
   SHARES_MISSING_TEXT,
@@ -77,6 +80,8 @@ const kst = (s: string) => new Date(`${s}+09:00`);
 /** 두 쪽 문장의 이름·점수 사이 줄바꿈 없는 빈칸 · 숫자와 '점' 사이 보이지 않는 줄 묶음 글자 */
 const NB = "\u00a0";
 const WJ = "\u2060";
+/** 두 쪽 문장 지표 이름 안쪽 묶음 (1단계 검토 3차): 한글 글자 사이 U+2060, ' ÷' 앞은 U+00A0 — 시험용으로 따로 적은 같은 규칙 */
+const kw = (name: string) => name.replace(/ ÷/g, `${NB}÷`).replace(/(?<=[가-힣])(?=[가-힣])/g, WJ);
 let app: FastifyInstance | null = null;
 let db: Db;
 afterEach(async () => {
@@ -216,12 +221,12 @@ describe("[2] 방향 말 · 두 쪽 문장 (valueDirectionWords · valueFamilyTw
 
   it("엔비디아 주가 수준 49: 길게 만든 지표 80·71 / 짧게 만든 지표 5·25 (보고서 그림 2), 가운데쯤 64 는 빼고, 가장 튀는 순", () => {
     const f = fam("price", [ms("A1", 71), ms("A2", 80), ms("A3", 5), ms("A4", 25), ms("A5", 64)], 49);
-    expect(familyRow(f, ON).text).toBe(`막대를 길게 만든 지표: 기업가치 ÷ 영업이익${NB}80${WJ}점 · PER${NB}71${WJ}점\n막대를 짧게 만든 지표: PBR${NB}5${WJ}점 · PSR${NB}25${WJ}점`);
+    expect(familyRow(f, ON).text).toBe(`막대를 길게 만든 지표: ${kw("기업가치 ÷ 영업이익")}${NB}80${WJ}점 · PER${NB}71${WJ}점\n막대를 짧게 만든 지표: PBR${NB}5${WJ}점 · PSR${NB}25${WJ}점`);
     // 띠가 높은 편인 묶음은 긴 쪽만, 낮은 편은 짧은 쪽만 (소수 쪽 지표를 대표로 말하지 않게)
     expect(familyRow(fam("quality", [ms("B1", 100), ms("B6", 1)], 70), ON).text).toBe(`막대를 길게 만든 지표: ROE${NB}100${WJ}점`);
-    expect(familyRow(fam("quality", [ms("B1", 90), ms("B4", 10), ms("B2", 5)], 30), ON).text).toBe(`막대를 짧게 만든 지표: ROIC${NB}5${WJ}점 · 영업이익률${NB}10${WJ}점`);
+    expect(familyRow(fam("quality", [ms("B1", 90), ms("B4", 10), ms("B2", 5)], 30), ON).text).toBe(`막대를 짧게 만든 지표: ROIC${NB}5${WJ}점 · ${kw("영업이익률")}${NB}10${WJ}점`);
     // 67 이상·33 이하가 없으면 가운데쯤 지표를 그대로
-    expect(familyRow(fam("payout", [ms("E1", 65)], 65), ON).text).toBe(`가운데쯤(34~66)인 지표: 배당수익률${NB}65${WJ}점`);
+    expect(familyRow(fam("payout", [ms("E1", 65)], 65), ON).text).toBe(`가운데쯤(34~66)인 지표: ${kw("배당수익률")}${NB}65${WJ}점`);
     // 끄면 예전 한 줄 (가장 튀는 지표 하나)
     expect(familyRow(f).text).toBe("PBR (순자산 대비 주가) — 순자산에 비해 주가 수준이 높은 편입니다.");
   });
@@ -229,15 +234,33 @@ describe("[2] 방향 말 · 두 쪽 문장 (valueDirectionWords · valueFamilyTw
   it("0점 규칙 지표는 '(적자)'처럼 사실을 붙이고, 같은 값 덩어리 지표는 '(비교 회사 77%가 0.0%)'를 붙인다", () => {
     const z = ms("A1", 0, { x: -Infinity, rule: "zeroLoss", why: "lossNi", show: null, pos: { industry: 0, market: 0 } });
     const fcf = ms("A5", 0, { x: -Infinity, rule: "zeroLoss", why: "lossFcf", show: -1.7, pos: { industry: 0, market: 0 } });
-    expect(familyRow(fam("price", [z, ms("A3", 9), fcf], 3), ON).text).toBe(`막대를 짧게 만든 지표: PER${NB}0${WJ}점(적자) · 잉여현금흐름 수익률${NB}0${WJ}점(마이너스) · PBR${NB}9${WJ}점`);
+    expect(familyRow(fam("price", [z, ms("A3", 9), fcf], 3), ON).text).toBe(`막대를 짧게 만든 지표: PER${NB}0${WJ}점${kw("(적자)")} · ${kw("잉여현금흐름 수익률")}${NB}0${WJ}점${kw("(마이너스)")} · PBR${NB}9${WJ}점`);
     const e1 = ms("E1", 82, { x: 0.001, show: 0.1, peer: peer({ tie: 0.77, tieX: 0 }) });
-    expect(familyRow(fam("payout", [e1, ms("E2", 72)], 77), ON).text).toBe(`막대를 길게 만든 지표: 배당수익률${NB}82${WJ}점(비교 회사 77%가 0.0%) · 주식 수 변화${NB}72${WJ}점`);
+    expect(familyRow(fam("payout", [e1, ms("E2", 72)], 77), ON).text).toBe(`막대를 길게 만든 지표: ${kw("배당수익률")}${NB}82${WJ}점${kw("(비교 회사 77%가 0.0%)")} · ${kw("주식 수 변화")}${NB}72${WJ}점`);
     expect(twoSidedMidLine([["ROE", 49], ["ROA", 55]])).toBe(`가운데쯤(34~66)인 지표: ROE${NB}49${WJ}점 · ROA${NB}55${WJ}점`);
     // 숫자는 위치 점수라 '점'을 붙인다 (엔비디아 'PER 71'이 'PER 71배'로 읽히던 것 — 바로 아래 PER 줄은 27.9배). 이름과 숫자는 줄바꿈 없는 빈칸으로 묶는다
     // (360 화면에서 'PER' / '70'으로 갈리던 것)
     expect(twoSidedLine(true, [["PER", 71]])).toBe("막대를 길게 만든 지표: PER\u00a071\u2060점");
-    expect(twoSidedItem("PER", 0, "(적자)")).toBe("PER\u00a00\u2060점(적자)");
+    expect(twoSidedItem("PER", 0, "(적자)")).toBe("PER\u00a00\u2060점(적\u2060자)");
+    // 붙이는 사실 글 안 낱말도 묶는다 (인텔 360 글자 200% '0점(영업적 / 자)'가 갈리던 것)
+    expect(twoSidedItem("기업가치 ÷ 영업이익", 0, "(영업적자)")).toBe("기\u2060업\u2060가\u2060치\u00a0÷ 영\u2060업\u2060이\u2060익\u00a00\u2060점(영\u2060업\u2060적\u2060자)");
     expect(twoSidedLine(false, [["PBR", 5]])).not.toMatch(/PBR 5(?!\u2060점)/);
+  });
+
+  it("지표 이름 안쪽도 묶는다: 한글 글자 사이 U+2060 · ' ÷' 앞 U+00A0 — '영업이익 / 률 100점'·'기업가치 ÷ 영업이 / 익 78점'처럼 낱말 가운데서 줄이 바뀌지 않게 (1단계 검토 3차)", () => {
+    expect(keepWords("영업이익률")).toBe("영\u2060업\u2060이\u2060익\u2060률");
+    expect(keepWords("기업가치 ÷ 영업이익")).toBe("기\u2060업\u2060가\u2060치\u00a0÷ 영\u2060업\u2060이\u2060익");
+    // 낱말 사이 빈칸은 그대로 (줄은 여기서만 바뀐다) · 영문 이름은 그대로
+    expect(keepWords("주당이익 증가폭")).toBe("주\u2060당\u2060이\u2060익 증\u2060가\u2060폭");
+    expect(keepWords("PER")).toBe("PER");
+    expect(twoSidedItem("영업이익률", 100)).toBe("영\u2060업\u2060이\u2060익\u2060률\u00a0100\u2060점");
+    // 보이지 않는 글자를 빼면 예전 글과 한 글자도 같다 (화면 읽기·검색은 같은 글)
+    const plain = (s: string) => s.replace(/\u2060/g, "");
+    expect(plain(twoSidedLine(true, [["기업가치 ÷ 영업이익", 78], ["PER", 70]])).replace(/\u00a0/g, " ")).toBe("막대를 길게 만든 지표: 기업가치 ÷ 영업이익 78점 · PER 70점");
+    // 줄이 바뀔 수 있는 곳: 보통 빈칸만 (이름 속 낱말 사이 · 지표 사이 ' · ' 앞뒤)
+    const line = twoSidedLine(true, [["기업가치 ÷ 영업이익", 78], ["주당이익 증가폭", 100], ["이익의 현금 뒷받침", 1]]);
+    const breaks = [...line.slice(line.indexOf(": ") + 2)].filter((c) => c === " ").length;
+    expect(breaks).toBe(2 * 2 + 1 + 1 + 2); // ' · ' 두 번(빈칸 넷) + '÷' 뒤 하나 + '주당이익 증가폭' 하나 + '이익의 현금 뒷받침' 둘
   });
 
   it("검사: 공용 픽스처 모든 묶음에서 대표 문장이 묶음 띠와 같은 쪽 (높은 편에 '짧게' 없음 · 낮은 편에 '길게' 없음 — 소수 쪽 문장 0건)", () => {
@@ -253,7 +276,7 @@ describe("[2] 방향 말 · 두 쪽 문장 (valueDirectionWords · valueFamilyTw
         if (f.score <= 33) expect(f.text, `${k} ${f.key}`).not.toContain("막대를 길게");
         // 적힌 위치 점수는 그 묶음 지표의 점수와 같다
         for (const m of f.text.matchAll(/([^:·\n]+?)\u00a0(\d+)\u2060점(?:\([^)]*\))?(?= ·|\n|$)/g)) {
-          const name = m[1]!.trim();
+          const name = m[1]!.replace(/\u2060/g, "").replace(/\u00a0/g, " ").trim();
           const row = f.metrics.find((x) => x.name.replace(/ \([^)]*\)$/, "") === name);
           if (row) {
             expect(row.score, `${k} ${name}`).toBe(Number(m[2]));
@@ -303,8 +326,14 @@ describe("[3] PER 줄 · 적자 회사 덩어리 · 가격 안내 · 영업 외 
     const row = metricRow(a1, ctx);
     expect(row.value).toBe("28.3배 (최근 4분기 · 흔히 쓰는 계산)");
     expect(row.peerMedian).toBe("흑자 회사 가운데값 58.6배 · 비교한 업종 68곳 중 43%는 적자");
-    expect(row.positions).toBe("업종 안 위치 76/100 (흑자 회사끼리 59) · 시장 안 57/100 (흑자 회사끼리 24)");
-    expect(row.text).toBe("비교한 회사의 43%가 적자라 위치 점수가 크게 나왔습니다. 흑자 회사끼리 보면 가운데쯤입니다.");
+    // 위치·문장은 첫 숫자(28.3배)가 아니라 섞은 값(44.8배)으로 매긴 것 — 위치 줄 앞에 밝힌다 (1단계 검토 3차: 27.9배와 가운데값 58.6배를 견주어 '가운데쯤'을 모순으로 읽던 것)
+    expect(row.positions).toBe("순위용 44.8배 기준: 업종 안 위치 76/100 (흑자 회사끼리 59) · 시장 안 57/100 (흑자 회사끼리 24)");
+    expect(row.positions).toBe(blendPosPrefix("44.8배", "업종 안 위치 76/100 (흑자 회사끼리 59) · 시장 안 57/100 (흑자 회사끼리 24)"));
+    // '크게 나왔습니다'(점수가 높다로 읽힘) 대신 무엇보다 높은지 (1단계 검토 3차)
+    expect(row.text).toBe("비교한 회사의 43%가 적자라 흑자 회사끼리만 볼 때보다 위치 점수가 높게 나왔습니다. 흑자 회사끼리 보면 가운데쯤입니다.");
+    // 섞지 않는 회사(경기 민감 아님)는 앞머리 없음 · PER 줄 두 값을 끄면 앞머리 없음
+    expect(metricRow({ ...a1, blend: false }, ctx).positions).toBe("업종 안 위치 76/100 (흑자 회사끼리 59) · 시장 안 57/100 (흑자 회사끼리 24)");
+    expect(metricRow(a1, { ...ctx, text: { ...VALUE_TEXT_ON, perPlain: false } }).positions).toBe("업종 안 위치 76/100 (흑자 회사끼리 59) · 시장 안 57/100 (흑자 회사끼리 24)");
     expect(row.note).toBe("순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 44.8배를 썼습니다(업황에 따라 이익이 크게 오르내리는 업종이라).");
     expect(row.score).toBe(71); // 점수는 그대로
     // 끄면 예전 줄 ('100배 넘음'·섞은 값·예전 섞기 안내)
@@ -315,8 +344,10 @@ describe("[3] PER 줄 · 적자 회사 덩어리 · 가격 안내 · 영업 외 
 
   it("팔란티어 식: 경기 민감 까닭이 이익률이면 실제 숫자, 흑자끼리 띠가 낮으면 그 문장 · 인텔 식: 섞은 이익도 0 이하", () => {
     expect(cyclicalWhy({ byIndustry: false, lo: -26.7, hi: 31.6 })).toBe("최근 5년 영업이익률이 가장 낮은 해 −26.7%, 가장 높은 해 31.6%로 오르내림이 커서");
-    expect(lossClumpSentence("A1", 58, 3)).toBe("비교한 회사의 58%가 적자라 위치 점수가 크게 나왔습니다. 흑자 회사끼리 보면 이익에 비해 주가 수준이 높은 편입니다.");
-    expect(lossClumpSentence("A2", 47, 50)).toBe("비교한 회사의 47%가 영업적자라 위치 점수가 크게 나왔습니다. 흑자 회사끼리 보면 가운데쯤입니다.");
+    expect(lossClumpSentence("A1", 58, 3)).toBe("비교한 회사의 58%가 적자라 흑자 회사끼리만 볼 때보다 위치 점수가 높게 나왔습니다. 흑자 회사끼리 보면 이익에 비해 주가 수준이 높은 편입니다.");
+    expect(lossClumpSentence("A2", 47, 50)).toBe("비교한 회사의 47%가 영업적자라 흑자 회사끼리만 볼 때보다 위치 점수가 높게 나왔습니다. 흑자 회사끼리 보면 가운데쯤입니다.");
+    // 보이는 점수가 가운데쯤(36~54)이어도 '크게 나왔습니다'가 붙어 '점수가 높다'로 읽히던 것 (COST PER 49점 · 377300 PER 36점 — 1단계 검토 3차)
+    expect(lossClumpSentence("A1", 30, 20)).not.toContain("크게");
     expect(profitMedianText("A2", "73.4배", "업종", 64, 47)).toBe("영업이익 흑자 회사 가운데값 73.4배 · 비교한 업종 64곳 중 47%는 영업적자");
     expect(blendRankNote("278.0배", cyclicalWhy({ byIndustry: false, lo: -26.7, hi: 31.6 }))).toContain("섞은 278.0배를 썼습니다(최근 5년 영업이익률이 가장 낮은 해");
     expect(blendRankZeroNote("업황에 따라 이익이 크게 오르내리는 업종이라", true)).toBe("순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 값을 썼습니다(업황에 따라 이익이 크게 오르내리는 업종이라). 섞은 이익도 0 이하라 0점입니다.");
@@ -327,7 +358,12 @@ describe("[3] PER 줄 · 적자 회사 덩어리 · 가격 안내 · 영업 외 
   it("가격 안내: 기본 · 경기 민감(섞기로 크게 다름) · 마지막 종가가 20일 평균과 5% 넘게 다르면 그 가격의 PER·PBR, 끄면 예전 한 줄", () => {
     const t = { ...VALUE_TEXT_ON };
     expect(priceNoteOf(t, { blend: false, close: null })).toBe(`${PRICE_NOTE_BASE} ${PRICE_NOTE_SMALL}`);
-    expect(priceNoteOf(t, { blend: true, close: null })).toBe(`${PRICE_NOTE_BASE} ${PRICE_NOTE_BLEND}`);
+    // PER 줄 첫 숫자가 시세 표와 같은 최근 4분기 PER 이면 다른 것은 순위에 쓴 섞은 값뿐 (예전 'PER은 … 시세 표와 크게 다릅니다'가 보이는 27.9배와 맞지 않던 것 — 1단계 검토 3차)
+    expect(priceNoteOf(t, { blend: true, close: null })).toBe(`${PRICE_NOTE_BASE} ${PRICE_NOTE_BLEND_PLAIN}`);
+    expect(PRICE_NOTE_BLEND_PLAIN).toBe("이 종목은 순위에 쓴 PER(섞은 값)이 시세 표의 PER과 크게 다릅니다(아래 PER 줄에 두 값을 함께 적었습니다).");
+    // PER 줄 두 값(valuePerPlain)을 끄면 PER 줄이 섞은 값이라 예전 문장에서 괄호만 뺀다
+    expect(priceNoteOf({ ...t, perPlain: false }, { blend: true, close: null })).toBe(`${PRICE_NOTE_BASE} 이 종목의 PER은 순위용 계산이 달라 시세 표와 크게 다릅니다.`);
+    expect(PRICE_NOTE_BLEND).toContain("이 종목의 PER은 순위용 계산이 달라");
     const meta = closeGap(660.86, { date: "2026-09-25", close: 751.66 }, 24.9, 6.49);
     expect(meta).toBe(closeGapText("2026-09-25", 13.74, "28.3배", "7.4배"));
     expect(meta).toBe("9월 25일(금) 종가가 20거래일 평균보다 13.7% 높아, 그 가격으로는 PER 28.3배 · PBR 7.4배입니다.");
@@ -367,6 +403,29 @@ describe("[3] PER 줄 · 적자 회사 덩어리 · 가격 안내 · 영업 외 
     const flow = (t: "T" | "MMM") => new FactBook(compactCompanyFacts(secExtra(t), "2018-01-01")).inputs("2026-09-25")!.flow;
     expect(oneOffOf(flow("T").pretax, flow("T").opIncome)).toEqual({ pct: null, loss: false });
     expect(oneOffOf(flow("MMM").pretax, flow("MMM").opIncome)).toEqual({ pct: null, loss: true });
+  });
+
+  it("영업손실 회사(영업이익 ≤ 0)는 새 기준을 쓰지 않고 예전 표시 그대로 — 영업 외 이익으로 세전이익이 흑자인 회사의 유일한 경고가 사라지던 것 (1단계 검토 3차 must)", () => {
+    const base = { lossYears: null, fallbackText: "", carried: null };
+    const on = { ...VALUE_TEXT_OFF, oneOffAbs: true };
+    const rows = (keys: Array<"oneOff">, pretax: number, op: number, t = on) => {
+      const o = oneOffOf(pretax, op);
+      return flagRows(keys, t, { ...base, oneOffPct: o.pct, oneOffLoss: o.loss });
+    };
+    // 검토 재현: 세전이익 50억 · 영업이익 −10억 (순이익이 모두 영업 밖에서 — 예전 기준 |50 − (−10)| ÷ 10 = 6, 시장 상위 5%(2.47) 넘음)
+    expect(oneOffOf(50e8, -10e8)).toEqual({ pct: null, loss: true });
+    expect(rows(["oneOff"], 50e8, -10e8)).toEqual([{ key: "oneOff", text: VALUE_FLAG_TEXT.oneOff }]); // 고치기 전: []
+    expect(rows(["oneOff"], 50e8, -10e8, VALUE_TEXT_OFF)).toEqual([{ key: "oneOff", text: VALUE_FLAG_TEXT.oneOff }]); // 끈 것과 같음
+    // 영업 외 이익으로 손실이 줄어든 회사 · 영업이익 0 도 같은 쪽 (예전 기준에 안 걸렸으면 표시 없음 그대로)
+    expect(oneOffOf(-5e8, -10e8)).toEqual({ pct: null, loss: true });
+    expect(oneOffOf(3e8, 0)).toEqual({ pct: null, loss: true });
+    expect(rows(["oneOff"], -5e8, -10e8)).toEqual([{ key: "oneOff", text: VALUE_FLAG_TEXT.oneOff }]);
+    expect(rows([], 50e8, -10e8)).toEqual([]);
+    // 영업이익 기준 PER 도 없음 (영업이익이 플러스이고 영업 외 이익일 때만)
+    expect(oneOffOf(50e8, -10e8).pct).toBeNull();
+    // 흑자 회사 쪽은 그대로: 30% 넘으면 새 표시, 안 넘으면 표시를 뺀다(예전 기준에 걸렸어도)
+    expect(rows(["oneOff"], 100, 60)).toEqual([{ key: "oneOff", text: oneOffAbsText(40) }]);
+    expect(rows(["oneOff"], 100, 80)).toEqual([]);
   });
 });
 
@@ -436,6 +495,9 @@ describe("[9] 점수 없음·대상 아님 이유 글 (valueReasonDetail)", () =
     const epis: Core = { status: "insufficient", reason: { code: "priceInvalid", text: VALUE_STATUS_TEXT.priceInvalid }, detail: "fewQuarters:3" };
     expect(krReasonOf(epis, { ...VALUE_TEXT_ON })).toEqual({ code: "krFewQuarters", text: krFewQuartersText(3) });
     expect(krFewQuartersText(3)).toBe("재무 요약에 분기 실적이 아직 3개뿐입니다(4개 필요 — 새로 상장했거나 분할로 새로 생긴 회사 등). 회사 재무에 문제가 있다는 뜻은 아닙니다.");
+    // 하나도 없으면 '0개뿐' 대신 (1단계 검토 3차)
+    expect(krFewQuartersText(0)).toBe("재무 요약에 분기 실적이 아직 없습니다(4개 필요 — 새로 상장했거나 분할로 새로 생긴 회사 등). 회사 재무에 문제가 있다는 뜻은 아닙니다.");
+    expect(krReasonOf({ ...epis, detail: "fewQuarters:0" }, { ...VALUE_TEXT_ON })).toEqual({ code: "krFewQuarters", text: krFewQuartersText(0) });
     expect(krReasonOf({ ...epis, detail: "quarterGap" }, { ...VALUE_TEXT_ON })).toEqual({ code: "krQuarterGap", text: KR_QUARTER_GAP_TEXT });
     expect(krReasonOf(epis, VALUE_TEXT_OFF)).toEqual(epis.reason);
     expect(preferredText("삼성전자")).toBe("우선주는 따로 계산하지 않습니다. 같은 회사 보통주(삼성전자) 화면에 가치 지표 점수가 있습니다.");
@@ -591,6 +653,38 @@ describe("급한 버그: 한국 리츠를 이름 속 '리츠' 글자로 가리�
       expect(r.composite.score, code).toBeNull();
     }
   });
+
+  it("재무를 받기 전에도: 주간 구성 종목 목록의 업종 번호(280)로 이리츠코크렙(이름 끝이 '리츠' 아님)을 바로 '대상 아님' — '계산 준비 중'·네이버 요청 없음 (1단계 검토 3차)", async () => {
+    db = await createMigratedDb(":memory:");
+    const clock = kst("2026-09-28T10:00:00");
+    const world = krWorld();
+    const koreit: KrMember = { code: "088260", name: "이리츠코크렙", market: "KOSPI", endType: "stock", price: 5_000, marketCap: 4e11, upjong: "부동산", upjongCode: "280" };
+    const meritz: KrMember = { code: "138040", name: "메리츠금융지주", market: "KOSPI", endType: "stock", price: 150_000, marketCap: 22e12, upjong: "증권", upjongCode: "321" };
+    const kr = fakeKrSources({ members: [...world.members, koreit, meritz], alias: { "088260": "105560", "138040": "105560" } });
+    const stocks: Record<string, ScoreStock> = {
+      "088260": { code: "088260", name: "이리츠코크렙", market: "KOSPI", groupCode: "ST" },
+      "138040": { code: "138040", name: "메리츠금융지주", market: "KOSPI", groupCode: "ST" },
+    };
+    const src: ScoreSources = { ...sources(), stock: async (c) => stocks[c] ?? null, candles: async (c, n) => ({ code: c, period: "D", candles: candlesOf("005930.KS").slice(-n), source: "yahoo" }) };
+    app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ scoreSources: src, valueSources: fakeValueSources().src, krValueSources: kr.src }), logger: false, enableScheduler: false, now: () => clock });
+    await app.krValue.saveReference(buildKrReference(world.members, world.facts, "2026-09-27"));
+    // 주간 구성 종목 목록 저장 (가짜 목록은 작아 최소 개수를 낮춤)
+    (app.krValue as unknown as { deps: { minMembers?: number } }).deps.minMembers = 1;
+    await app.krValue.members();
+    const before = kr.calls.finance.length;
+    const r = (await app.inject({ method: "GET", url: "/api/scores/088260" })).json() as ScoresResponse;
+    expect(r.value).toMatchObject({ status: "excluded", label: "대상 아님", reason: { code: "reit", text: VALUE_STATUS_TEXT.reit } });
+    await new Promise((res) => setTimeout(res, 20));
+    expect(kr.calls.finance.slice(before)).not.toContain("088260"); // 네이버 재무 요청 없음 (고치기 전: '계산 준비 중' + 요청 한 번)
+    // 목록에서 리츠가 아닌 업종(321)이면 재무 요약 업종 번호가 280 이어도 그대로 계산 대상 (목록이 먼저)
+    await app.krValue.refreshFacts("138040");
+    const row = await db.selectFrom("value_fundamentals").select("data").where("code", "=", "138040").executeTakeFirstOrThrow();
+    const data = JSON.parse(row.data) as { i: { industryCode: string | null } };
+    data.i.industryCode = "280";
+    await db.updateTable("value_fundamentals").set({ data: JSON.stringify(data), fetched_at: "2026-09-28T09:59:00+09:00" }).where("code", "=", "138040").execute();
+    const m = (await app.inject({ method: "GET", url: "/api/scores/138040" })).json() as ScoresResponse;
+    expect(m.value.reason?.code).not.toBe("reit");
+  });
 });
 
 // ── [10] 사실과 다른 문장 ───────────────────────────────────
@@ -614,10 +708,10 @@ describe("[10] 사실과 다른 설명 문장 (valueWordingFacts)", () => {
     expect(familyRow(f, { ...ctx, text: { ...VALUE_TEXT_ON, familyTwoSided: false } }).text).toBe("ROE (자기자본이익률) — 자본으로 이익을 내는 효율이 낮은 편입니다.");
     expect(familyRow(f, { path: "general", annualEnd: null }).text).toBe("이익의 현금 뒷받침 — 이익이 현금으로 잘 뒷받침되는 편입니다."); // 끄면 예전
     // 두 쪽 문장에서도 대표 지표로 고르지 않는다 (보고서 '묶음 머리 문장으로 뽑지 않음(인텔)' — 예전 '막대를 길게 만든 지표: 이익의 현금 뒷받침 98(순손실 회사)')
-    expect(familyRow(f, ctx).text).toBe(`막대를 짧게 만든 지표: ROE${NB}3${WJ}점 · 영업이익률${NB}6${WJ}점`);
+    expect(familyRow(f, ctx).text).toBe(`막대를 짧게 만든 지표: ROE${NB}3${WJ}점 · ${kw("영업이익률")}${NB}6${WJ}점`);
     expect(familyRow(fam("quality", [b6, ms("B1", 80)], 85), ctx).text).toBe(`막대를 길게 만든 지표: ROE${NB}80${WJ}점`);
     // 그 지표밖에 없으면 '(순손실 회사)'를 붙여 가운데 줄에
-    expect(familyRow(fam("quality", [b6], 98), ctx).text).toBe(`가운데쯤(34~66)인 지표: 이익의 현금 뒷받침${NB}98${WJ}점(순손실 회사)`);
+    expect(familyRow(fam("quality", [b6], 98), ctx).text).toBe(`가운데쯤(34~66)인 지표: ${kw("이익의 현금 뒷받침")}${NB}98${WJ}점${kw("(순손실 회사)")}`);
     expect([moneyEok(-0.61e8, "USD"), moneyEok(-2.39e8, "USD"), moneyEok(-1.13e10, "USD"), moneyEok(1234e8, "KRW")]).toEqual(["−0.61억 달러", "−2.39억 달러", "−113억 달러", "1,234억원"]);
   });
 
@@ -756,6 +850,71 @@ describe("[8] AI 가치분석 글 금지어 검사 (valueAiSafeWording, 서버�
     "과대평가된 주가입니다.",
     "현금 창출력이 탄탄한 회사입니다.",
   ];
+  // 1단계 검토 3차: 가치 판정·시점·권유·영어 (예전 검사로는 54개 중 37개 · 40개 중 24개가 지나갔다 — scratchpad verif-s1c/adv.mts 등)
+  const ATTACKS3 = [
+    // 가치 판정
+    "현재 PER은 역사적 저점 수준입니다.",
+    "주가는 바닥권에 있습니다.",
+    "PER 8배로 업종 평균보다 크게 할인된 가격에 거래되고 있습니다.",
+    "내재가치 대비 할인되어 거래되고 있습니다.",
+    "업종 대비 프리미엄을 받고 있습니다.",
+    "재무구조가 건전합니다.",
+    "재무 상태가 견고합니다.",
+    "재무 상태가 매우 건실합니다.",
+    "펀더멘털이 견고합니다.",
+    "재무 구조가 불안합니다.",
+    "탁월한 수익성을 보여 줍니다.",
+    "경쟁력 있는 회사입니다.",
+    "경쟁력이 높은 회사입니다.",
+    "경제적 해자를 갖춘 기업입니다.",
+    "경제적 해자가 넓은 기업입니다.",
+    "주주 친화적인 배당 정책입니다.",
+    "배당 투자자에게 유리한 구조입니다.",
+    "주가가 내재가치보다 낮습니다.",
+    "현재 주가는 내재가치보다 낮습니다.",
+    "밸류에이션 하단에 있습니다.",
+    "업사이드가 큽니다.",
+    "업사이드가 제한적입니다.",
+    "업사이드가 남아 있습니다.",
+    "리레이팅이 진행 중입니다.",
+    "가치주로 분류됩니다.",
+    "저PER 종목입니다.",
+    "고배당주입니다.",
+    "과열 구간입니다.",
+    "주가가 과열되었습니다.",
+    "고점 부근입니다.",
+    "바닥을 다졌습니다.",
+    "PER 12배로 역사적 저점 수준입니다.",
+    "현금 창출력이 돋보입니다.",
+    "실적이 부진합니다.",
+    "재무 체력이 열악합니다.",
+    "매우 안정된 재무 구조입니다.",
+    "이익 체력이 강합니다.",
+    "주가가 이익에 비해 과도하게 높습니다.",
+    "밸류에이션이 과도하게 높습니다.",
+    "PER이 지나치게 높습니다.",
+    "업계 최고 수준입니다.",
+    "주가가 이익에 비해 낮게 형성되어 있습니다.",
+    "시장 지배력이 압도적입니다.",
+    // 권유·행동
+    "관심을 가질 필요가 있습니다.",
+    "눈여겨볼 필요가 있습니다.",
+    "신중한 접근이 필요합니다.",
+    "투자 시 유의해야 합니다.",
+    "포트폴리오에 편입을 검토할 만합니다.",
+    "매집하기에 적당합니다.",
+    "장기적으로 들고 가도 됩니다.",
+    "배당을 노리는 투자자라면 살펴볼 종목입니다.",
+    "지금 사두면 좋습니다.",
+    // 예측
+    "하반기 반등이 점쳐집니다.",
+    "실적 개선이 이어질 것으로 봅니다.",
+    "이익은 계속 늘어나겠다.",
+    // 영어
+    "Strong Buy.",
+    "The stock looks undervalued.",
+    "BUY rating.",
+  ];
   // 새 프롬프트가 쓰는 사실 문장·표 줄 (걸리면 안 됨)
   const FACTS = [
     "## 주가와 재무 숫자",
@@ -780,6 +939,29 @@ describe("[8] AI 가치분석 글 금지어 검사 (valueAiSafeWording, 서버�
     "1. 영업이익률은 2023년 2.5%에서 2025년 10.9%로 높아졌습니다.",
     "2. EPS는 2,131원, BPS는 57,930원입니다.",
   ];
+  // 1단계 검토 3차: 사실 문장인데 걸리던 것(앱 지표 이름·은행 지표·계정 이름·과거 사실)과 새 금지어와 겹치는 사실 말 (걸리면 안 됨)
+  const FACTS3 = [
+    "공정가치로 평가된 금융자산은 3.2조원입니다.",
+    "이익 안정성 자료는 확인 안 됨.",
+    "위험가중자산 자료는 확인 안 됨.",
+    "| 장기투자자산 | 1.2조원 |",
+    "영업이익은 2024년 반등해 12조원입니다.",
+    "환율에 따라 원화 금액이 달라질 수 있습니다.",
+    "바닥재 매출은 2025년 1.1조원입니다.",
+    "유리기판 매출은 늘었습니다.",
+    "재무 건전성 묶음 자료는 확인 안 됨.",
+    "2023년 S&P 500 지수에 편입되었습니다.",
+    "2024년 자회사로 편입하였습니다.",
+    "매출은 늘었고 PER은 12.0배입니다.",
+    "Best Buy(BBY)의 매출은 2025년 415억 달러입니다.",
+    "피해자 보상 비용 2.1억 달러가 영업비용에 들어 있습니다.",
+    "건강관리 장비 매출은 늘었습니다.",
+    "프리미엄 제품 매출 비중은 30%입니다.",
+    "과도기 비용은 없습니다.",
+    "매출이 줄었고 영업이익도 줄었습니다.",
+    "배당성향 = 배당금 / 순이익 = 25%",
+    "이자보상배율은 8.2배입니다.",
+  ];
   it("가치분석 금지어: 평가·권유·예측 공격 문장 39개를 모두 빼고, 사실 문장·표 줄은 한 글자도 바꾸지 않는다", () => {
     const passed = ATTACKS.filter((a) => safeValueText(`## 숫자로 본 변화\n1. 매출은 3년 연속 늘었습니다.\n2. ${a}`).includes(a));
     expect(passed).toEqual([]);
@@ -788,6 +970,46 @@ describe("[8] AI 가치분석 글 금지어 검사 (valueAiSafeWording, 서버�
     expect(safeValueText(facts)).toBe(facts);
     // 브리핑 금지어만으로는 대부분 지나갔다 (고치기 전 검사)
     expect(ATTACKS.filter((a) => cleanDetail(`## 변화\n${a}`, "").dropped === 0).length).toBeGreaterThan(20);
+  });
+
+  it("1단계 검토 3차: 가치 판정·시점·권유·영어 공격 문장도 모두 빼고, 걸리던 사실 문장(이익 안정성·위험가중자산·공정가치로 평가된·장기투자자산·반등해 12조원)은 그대로", () => {
+    const passed = ATTACKS3.filter((a) => safeValueText(`## 숫자로 본 변화\n1. 매출은 3년 연속 늘었습니다.\n2. ${a}`).includes(a));
+    expect(passed).toEqual([]);
+    expect(ATTACKS3.length).toBeGreaterThan(50);
+    for (const f of FACTS3) expect(safeValueCheck(f), f).toEqual({ text: f, dropped: 0 });
+    // 같은 줄에 다른 금지어가 있으면 예외 말이 있어도 걸린다
+    expect(safeValueCheck("이익 안정성이 높아 안정적입니다.").dropped).toBe(1);
+    expect(safeValueCheck("위험가중자산이 늘어 부담입니다.").dropped).toBe(1);
+    // 예외 말은 원문 그대로 보인다 (빈칸으로 바꾸는 것은 검사할 때만)
+    expect(safeValueText("## 빚과 자본\n위험가중자산 자료는 확인 안 됨.")).toBe("## 빚과 자본\n위험가중자산 자료는 확인 안 됨.");
+    // 고치기 전 금지어(가치분석 금지어에서 새 말을 뺀 것)로는 대부분 지나갔다
+    const before = new RegExp(VALUE_AI_BANNED.source.split("|내재 ?가치|")[0]!, "g");
+    expect(ATTACKS3.filter((a) => cleanDetail(`## 변화\n${a}`, "", before).dropped === 0).length).toBeGreaterThan(30);
+  });
+
+  it("뺀 줄 수를 서버 기록에 남긴다 ('AI 가치분석 문장 검사' — 새로 만든 글은 0줄이어도, 전에 만든 글은 뺀 줄이 있을 때만)", async () => {
+    db = await createMigratedDb(":memory:");
+    const lines: string[] = [];
+    app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:" }),
+      db,
+      providers: fakeProviders({ generator: new ValueGen() }),
+      logger: { level: "info", stream: { write: (l: string) => void lines.push(l) } },
+      enableScheduler: false,
+      now: () => kst("2026-09-28T10:00:00"),
+    });
+    await app.inject({ method: "POST", url: "/api/admin/master/refresh" });
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { valueAiSafeWording: true } });
+    const logs = () => lines.map((l) => JSON.parse(l) as { msg: string; code?: string; dropped?: number; from?: string }).filter((l) => l.msg === "AI 가치분석 문장 검사");
+    await app.inject({ method: "GET", url: "/api/stocks/000660/analysis/value" });
+    expect(logs()).toEqual([expect.objectContaining({ code: "000660", dropped: 2, from: "new" })]);
+    // 전에 만든 글을 다시 볼 때: 뺀 줄이 있으면 'cache' 로 한 번 더
+    await app.inject({ method: "GET", url: "/api/stocks/000660/analysis/value" });
+    expect(logs().map((l) => l.from)).toEqual(["new", "cache"]);
+    // 끄면 기록 없음
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { valueAiSafeWording: false } });
+    await app.inject({ method: "GET", url: "/api/stocks/000660/analysis/value" });
+    expect(logs()).toHaveLength(2);
   });
 
   it("예전 프롬프트로 만든 글('## 강점'·'## 리스크'·'## 가치투자 관점 요약')은 그 절을 통째로 뺀다 (7일 캐시 글)", () => {
@@ -855,6 +1077,8 @@ describe("새 글 틀 전부 금지어·미래형 검사", () => {
       ...["A1", "A2"].flatMap((k) => [profitMedianText(k as "A1", "58.6배", "업종", 68, 43), lossClumpSentence(k as "A1", 43, 50), lossClumpSentence(k as "A1", 43, 80), lossClumpSentence(k as "A1", 43, 10)]),
       PRICE_NOTE_BASE,
       PRICE_NOTE_BLEND,
+      PRICE_NOTE_BLEND_PLAIN,
+      blendPosPrefix("44.8배", "업종 안 위치 76/100 · 시장 안 57/100"),
       PRICE_NOTE_SMALL,
       closeGapText("2026-09-25", -7.3, "22.2배", "10.1배")!,
       oneOffAbsText(51),
@@ -865,6 +1089,7 @@ describe("새 글 틀 전부 금지어·미래형 검사", () => {
       KR_FIN_MIX_NOTE,
       SHARES_MISSING_TEXT,
       krFewQuartersText(3),
+      krFewQuartersText(0),
       KR_QUARTER_GAP_TEXT,
       preferredText("삼성전자"),
       preferredText(null),

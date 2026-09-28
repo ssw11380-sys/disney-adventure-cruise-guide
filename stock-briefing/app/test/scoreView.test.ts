@@ -88,9 +88,15 @@ describe("화면 읽기 문장", () => {
     expect(metricSpeech(a1n)).toContain("PER (이익 대비 주가) 27.9배 (최근 4분기, 흔히 쓰는 계산), 흑자 회사 가운데값 58.6배, 비교한 업종 68곳 중 43%는 적자.");
     expect(metricSpeech(a1n)).toContain("업종 안 위치 100 중 76 (흑자 회사끼리 59)");
     expect(metricSpeech(a1n)).toContain("순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 44.8배를 썼습니다");
+    // 위치는 섞은 값으로 매긴 것 — 위치 줄 앞머리도 읽는다 (1단계 검토 3차)
+    expect(metricSpeech(a1n)).toContain("순위용 44.8배 기준: 업종 안 위치 100 중 76");
     expect(metricSpeech(a1n)).not.toMatch(/\.\.|\/100|→/);
-    // [2] 두 쪽 문장은 묶음 글 그대로 (두 줄 · 숫자는 위치 점수 '점', 이름·숫자·'점'은 줄이 갈리지 않게 묶음)
-    expect(S["NVDA"]!.value.families![0]!.text).toBe("막대를 길게 만든 지표: 기업가치 ÷ 영업이익\u00a080\u2060점 · PER\u00a071\u2060점\n막대를 짧게 만든 지표: PBR\u00a05\u2060점 · PSR\u00a025\u2060점");
+    // [2] 두 쪽 문장은 묶음 글 그대로 (두 줄 · 숫자는 위치 점수 '점', 이름·숫자·'점'은 줄이 갈리지 않게 묶음 — 이름 안 한글 글자 사이도 U+2060, ' ÷' 앞은 U+00A0)
+    expect(S["NVDA"]!.value.families![0]!.text).toBe(
+      "막대를 길게 만든 지표: 기\u2060업\u2060가\u2060치\u00a0÷ 영\u2060업\u2060이\u2060익\u00a080\u2060점 · PER\u00a071\u2060점\n막대를 짧게 만든 지표: PBR\u00a05\u2060점 · PSR\u00a025\u2060점",
+    );
+    // 보이지 않는 글자를 빼면 보통 글
+    expect(S["NVDA"]!.value.families![0]!.text.replace(/\u2060/g, "").replace(/\u00a0/g, " ")).toBe("막대를 길게 만든 지표: 기업가치 ÷ 영업이익 80점 · PER 71점\n막대를 짧게 만든 지표: PBR 5점 · PSR 25점");
     expect(S["NVDA"]!.value.families![0]!.about).toBe("막대가 길수록: 이익·순자산·매출에 비해 주가가 낮은 쪽 (비교 회사 기준)");
   });
   it("삼성전자: 68 다소 강함", () => expect(trendSpeech(S["005930"]!.trend)).toBe("추세 지표 68점, 다소 강함"));

@@ -182,6 +182,21 @@ export class KrValueService {
     return codes;
   }
 
+  private upjongMemo: { at: number; map: Map<string, string> } | null = null;
+  /**
+   * 주간 업종 구성 종목 목록(readMembers — 비교 기준과 같은 목록)의 네이버 업종 번호 (1시간 기억, 목록을 새로 받으면 버림). 없으면 null.
+   * 리츠 판정에 저장한 재무 요약의 업종 번호보다 먼저 쓴다 — 재무를 아직 받지 않은 이리츠코크렙(이름 끝이 '리츠' 아님)이 처음 열 때
+   * '계산 준비 중'·네이버 요청 한 번 뒤에야 '대상 아님'이 되던 것, 네이버 응답에 업종 번호가 비면 일반 회사로 점수가 나올 수 있던 것 (1단계 검토 3차)
+   */
+  private async memberUpjong(code: string): Promise<string | null> {
+    const t = this.now().getTime();
+    if (!this.upjongMemo || t - this.upjongMemo.at >= 3_600_000) {
+      const snap = await this.readMembers().catch(() => null);
+      this.upjongMemo = { at: t, map: new Map((snap?.rows ?? []).filter((m) => !!m.upjongCode).map((m) => [m.code, m.upjongCode])) };
+    }
+    return this.upjongMemo.map.get(code) ?? null;
+  }
+
   /** 세 플래그(indicatorScores · valueScore · krValueScore)와 출처가 있어야 */
   async enabled(): Promise<boolean> {
     if (!this.deps.sources) return false;
@@ -356,6 +371,7 @@ export class KrValueService {
     const value = JSON.stringify({ date: this.today(), rows: rows.map((m): MemberRow => [m.code, m.name, m.market, m.endType, m.price, m.marketCap, m.upjong, m.upjongCode]) });
     await this.deps.db.insertInto("meta").values({ key: MEMBERS_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
     this.fillMemo = null;
+    this.upjongMemo = null;
     this.deps.log?.info({ rows: rows.length, common }, "가치 지표(한국): 업종 구성 종목 받음");
     return rows;
   }
@@ -604,10 +620,12 @@ export class KrValueService {
     const p = a.product;
     // 가치 점수 개선 1단계 글 플래그 (모두 글만 — 점수는 그대로)
     const tf = await readValueTextFlags(this.deps.features);
-    // 저장한 재무 (네트워크 없음) — 리츠 판정의 네이버 업종 번호도 여기서 (마스터 분류를 모를 때만 씀)
+    // 저장한 재무 (네트워크 없음)
     const facts = await this.loadFacts(code);
-    // 리츠는 공식 분류로 (긴급 고침 — 이름 속 '리츠' 글자로 메리츠금융지주가 빠지던 것). 마스터 분류는 'RT' 일 때만 증거 — 토스 마스터의 'ST' 는 건너뛰고 네이버 업종·이름으로
-    const hint = { reitCodes: await this.reitCodes(), groupCode: a.groupCode ?? null, upjongCode: facts?.facts.i?.industryCode ?? null };
+    // 리츠는 공식 분류로 (긴급 고침 — 이름 속 '리츠' 글자로 메리츠금융지주가 빠지던 것). 마스터 분류는 'RT' 일 때만 증거 — 토스 마스터의 'ST' 는 건너뛰고 네이버 업종·이름으로.
+    // 네이버 업종 번호는 주간 구성 종목 목록(비교 회사와 같은 답) → 저장한 재무 요약 순서 (재무를 받기 전에도 리츠를 가리게 — 1단계 검토 3차)
+    const upjongCode = (await this.memberUpjong(code)) ?? facts?.facts.i?.industryCode ?? null;
+    const hint = { reitCodes: await this.reitCodes(), groupCode: a.groupCode ?? null, upjongCode };
     const ex = krExclusion(code, a.name, hint) ?? (p?.spac ? "spac" : p?.commonShare === false ? "preferred" : null);
     if (ex === "preferred" && tf.reasonDetail) return plain(block("excluded", "대상 아님", ex, preferredText(await this.commonScored(code, a))));
     if (ex) return plain(block("excluded", "대상 아님", ex, VALUE_STATUS_TEXT[ex]));
@@ -680,7 +698,8 @@ export class KrValueService {
     const row = await this.deps.db.selectFrom("listed_stocks").select(["name", "group_code"]).where("code", "=", common).executeTakeFirst().catch(() => undefined);
     const name = row?.name ?? f.facts.i?.name ?? null;
     if (!name) return null;
-    if (krExclusion(common, name, { reitCodes: await this.reitCodes(), groupCode: row?.group_code ?? null, upjongCode: f.facts.i?.industryCode ?? null })) return null;
+    const upjongCode = (await this.memberUpjong(common)) ?? f.facts.i?.industryCode ?? null;
+    if (krExclusion(common, name, { reitCodes: await this.reitCodes(), groupCode: row?.group_code ?? null, upjongCode })) return null;
     const candles = await a.candlesOf(common).catch(() => null);
     if (!candles?.length) return null;
     const now = this.core(f.facts, ref, this.classify(ref, common, f.facts), candles, a.scoreDate);

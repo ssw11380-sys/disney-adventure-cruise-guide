@@ -128,10 +128,11 @@ const isBlank = (l: string) => l.trim().length === 0;
 /**
  * 상세 글 검사. 줄마다 보고, '## ' 제목 줄이 걸리면 그 제목과 다음 제목 전까지의 줄을 모두, 제목이 아닌 줄이 걸리면 그 줄만 뺀다.
  * 내용 줄(빈 줄 제외)이 모두 빠진 제목도 빼고, 빈 줄이 3줄 넘게 이어지면 1줄로. 뺀 내용 줄이 있으면 끝에 '(문장 검사에서 N줄을 뺐습니다)'.
- * 걸린 것이 없으면 글자 하나 바꾸지 않고 그대로 (dropped 0). banned: 거르는 말 (기본 브리핑 금지어 — AI 가치분석은 더 엄격한 VALUE_AI_BANNED, 'g' 플래그 필요)
+ * 걸린 것이 없으면 글자 하나 바꾸지 않고 그대로 (dropped 0). banned: 거르는 말 (기본 브리핑 금지어 — AI 가치분석은 더 엄격한 VALUE_AI_BANNED, 'g' 플래그 필요).
+ * allow: 검사 전에 빈칸으로 바꿔 두는 사실 말 ('g' 플래그 — AI 가치분석의 '이익 안정성'·'위험가중자산' 등). 없으면 그대로 본다. 돌려주는 글은 원문 그대로
  */
-export function cleanDetail(detail: string, source: string, banned: RegExp = BRIEFING_BANNED): { text: string; dropped: number } {
-  const hit1 = (l: string) => forbiddenIn(l, source, banned);
+export function cleanDetail(detail: string, source: string, banned: RegExp = BRIEFING_BANNED, allow?: RegExp): { text: string; dropped: number } {
+  const hit1 = (l: string) => forbiddenIn(allow ? l.replace(allow, (m) => " ".repeat(m.length)) : l, source, banned);
   const lines = detail.split("\n");
   // 절: 첫 제목 앞 줄들(heading null) + 제목마다 그 아래 줄들
   const sections: Array<{ heading: string | null; body: string[] }> = [{ heading: null, body: [] }];

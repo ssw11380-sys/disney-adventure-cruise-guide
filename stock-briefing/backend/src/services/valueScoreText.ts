@@ -496,11 +496,17 @@ export const TWO_SIDED_SHORT = "막대를 짧게 만든 지표";
 /** 67 이상 · 33 이하 지표가 없을 때: 가운데쯤 지표를 그대로 적는다 */
 export const TWO_SIDED_MID = "가운데쯤(34~66)인 지표";
 /**
+ * 두 쪽 문장 지표 이름 안쪽도 묶는다 (1단계 검토 3차 — '영업이익 / 률 100점'·'기업가치 ÷ 영업이 / 익 78점'처럼 낱말 가운데서 갈리던 것):
+ * 한글 글자 사이에 U+2060(보이지 않고 읽지 않음), ' ÷' 앞 빈칸은 U+00A0(÷ 가 줄 맨 앞에 홀로 오지 않게). 줄은 이름 속 낱말 사이 빈칸('주당이익 / 증가폭 100점')과
+ * 지표 사이 ' · '에서만 바뀐다
+ */
+export const keepWords = (name: string) => name.replace(/ ÷/g, "\u00a0÷").replace(/(?<=[가-힣])(?=[가-힣])/g, "\u2060");
+/**
  * 두 쪽 문장의 지표 하나 'PER 70점': 숫자가 PER 배수가 아니라 위치 점수라는 것을 '점'으로 붙이고('PER 70'을 'PER 70배'로 읽지 않게 — 바로 아래 PER 줄은 27.9배,
  * 검토 지적 · 화면 읽기도 같은 글), 이름과 숫자 사이는 줄바꿈 없는 빈칸(U+00A0), 숫자와 '점' 사이는 보이지 않는 줄 묶음 글자(U+2060 — 읽지 않음)라
- * 좁은 화면에서 'PER' / '70점'이나 '100' / '점'으로 갈리지 않는다(한글은 글자 사이에서도 줄이 바뀐다). tag 는 '(적자)' 같은 사실
+ * 좁은 화면에서 'PER' / '70점'이나 '100' / '점'으로 갈리지 않는다(한글은 글자 사이에서도 줄이 바뀐다). tag 는 '(적자)' 같은 사실 (tag 안 낱말도 묶음 — '(영업적 / 자)')
  */
-export const twoSidedItem = (name: string, score: number, tag = "") => `${name}\u00a0${score}\u2060점${tag}`;
+export const twoSidedItem = (name: string, score: number, tag = "") => `${keepWords(name)}\u00a0${score}\u2060점${keepWords(tag)}`;
 type TwoSidedItem = readonly [name: string, score: number, tag?: string];
 export const twoSidedMidLine = (items: ReadonlyArray<TwoSidedItem>) => `${TWO_SIDED_MID}: ${items.map(([n, s, t]) => twoSidedItem(n, s, t)).join(" · ")}`;
 export const twoSidedLine = (long: boolean, items: ReadonlyArray<TwoSidedItem>) => `${long ? TWO_SIDED_LONG : TWO_SIDED_SHORT}: ${items.map(([n, s, t]) => twoSidedItem(n, s, t)).join(" · ")}`;
@@ -531,16 +537,26 @@ export function profitMedianText(k: MetricKey, median: string, lname: string, n:
   return `${op ? "영업이익 " : ""}흑자 회사 가운데값 ${median} · 비교한 ${lname} ${n.toLocaleString("en-US")}곳 중 ${lossPct}%는 ${op ? "영업적자" : "적자"}`;
 }
 export const profitPosText = (base: string, p: number) => `${base} (흑자 회사끼리 ${Math.floor(p + 0.5)})`;
-/** 흑자 회사끼리 보면 띠가 달라질 때의 문장 */
+/**
+ * 흑자 회사끼리 보면 띠가 달라질 때의 문장. 적자 회사는 늘 맨 아래 순위라, 넣고 보면 흑자 회사끼리만 볼 때보다 위치 점수가 높다 — '크게 나왔습니다'는
+ * 보이는 점수가 36~54점일 때도 붙어 '점수가 높다'로 읽혔으므로(COST PER 49점 · 377300 PER 36점, 1단계 검토 3차) 무엇보다 높은지를 적는다
+ */
 export function lossClumpSentence(k: MetricKey, lossPct: number, profitScore: number, grade?: "full" | "lite"): string {
   const s = Math.floor(profitScore + 0.5);
   const tail = s >= 67 ? highLow(k, grade)[0] : s <= 33 ? highLow(k, grade)[1] : "가운데쯤입니다.";
-  return `비교한 회사의 ${lossPct}%가 ${k === "A2" ? "영업적자" : "적자"}라 위치 점수가 크게 나왔습니다. 흑자 회사끼리 보면 ${tail}`;
+  return `비교한 회사의 ${lossPct}%가 ${k === "A2" ? "영업적자" : "적자"}라 흑자 회사끼리만 볼 때보다 위치 점수가 높게 나왔습니다. 흑자 회사끼리 보면 ${tail}`;
 }
 
 /** [3] 가격 안내 (valuePriceNote2) */
 export const PRICE_NOTE_BASE = "PER·PBR은 최근 20거래일 평균 주가로 계산했습니다.";
 export const PRICE_NOTE_BLEND = "이 종목의 PER은 순위용 계산이 달라 시세 표와 크게 다릅니다(아래 PER 줄에 두 값을 함께 적었습니다).";
+/**
+ * valuePerPlain 을 켜면 PER 줄 첫 숫자가 시세 표와 같은 최근 4분기 PER(엔비디아 27.9배 ↔ 시세 표 28.43배)이라, 다른 것은 순위에 쓴 섞은 값뿐이다
+ * ('PER은 … 시세 표와 크게 다릅니다'가 보이는 27.9배와 맞지 않던 것, 1단계 검토 3차)
+ */
+export const PRICE_NOTE_BLEND_PLAIN = "이 종목은 순위에 쓴 PER(섞은 값)이 시세 표의 PER과 크게 다릅니다(아래 PER 줄에 두 값을 함께 적었습니다).";
+/** [3] 경기 민감 회사 PER 줄의 위치 앞머리 (valuePerPlain): 위치·문장은 첫 숫자(27.9배)가 아니라 섞은 값(44.8배)으로 매긴 것 (1단계 검토 3차) */
+export const blendPosPrefix = (blended: string, positions: string) => `순위용 ${blended} 기준: ${positions}`;
 export const PRICE_NOTE_SMALL = "시세 표의 PER·PBR은 그날 가격이라 조금 다를 수 있습니다.";
 /** 20거래일 평균과 마지막 종가가 이 비율보다 크게 다르면 그 가격의 PER·PBR 한 줄 (메타 14%·인텔 18%) */
 export const CLOSE_GAP_NOTE = 0.05;
@@ -586,8 +602,9 @@ export const KR_FIN_MIX_NOTE = "한국 금융사 전체 비교에는 은행·보
 
 /** [9] 이유 글 (valueReasonDetail) */
 export const SHARES_MISSING_TEXT = "이 앱이 이 회사의 주식 수 자료를 읽지 못해 계산하지 않았습니다. 회사 재무에 문제가 있다는 뜻은 아닙니다.";
+/** 분기 실적이 4개보다 적을 때 (0개면 '0개뿐' 대신 '아직 없습니다' — 1단계 검토 3차) */
 export const krFewQuartersText = (n: number) =>
-  `재무 요약에 분기 실적이 아직 ${n}개뿐입니다(4개 필요 — 새로 상장했거나 분할로 새로 생긴 회사 등). 회사 재무에 문제가 있다는 뜻은 아닙니다.`;
+  `재무 요약에 분기 실적이 아직 ${n > 0 ? `${n}개뿐입니다` : "없습니다"}(4개 필요 — 새로 상장했거나 분할로 새로 생긴 회사 등). 회사 재무에 문제가 있다는 뜻은 아닙니다.`;
 export const KR_QUARTER_GAP_TEXT = "재무 요약의 최근 4개 분기 실적 가운데 빈 값이 있어 계산하지 않았습니다. 회사 재무에 문제가 있다는 뜻은 아닙니다.";
 export const preferredText = (commonName: string | null) =>
   commonName ? `우선주는 따로 계산하지 않습니다. 같은 회사 보통주(${commonName}) 화면에 가치 지표 점수가 있습니다.` : "우선주는 따로 계산하지 않습니다.";

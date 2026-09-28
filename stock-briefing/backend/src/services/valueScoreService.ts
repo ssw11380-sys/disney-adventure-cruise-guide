@@ -121,7 +121,9 @@ import {
   PER_PLAIN_TAG,
   PRICE_NOTE_BASE,
   PRICE_NOTE_BLEND,
+  PRICE_NOTE_BLEND_PLAIN,
   PRICE_NOTE_SMALL,
+  blendPosPrefix,
   profitMedianText,
   SHARES_MISSING_TEXT,
   showOf,
@@ -947,7 +949,7 @@ export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annua
   const clump = t.medianText && m.loss && m.peer && m.score !== null ? m.loss : null;
   const lossPct = clump ? Math.round(100 * clump.share) : 0;
   const showProfitPos = !!clump && clump.share >= LOSS_NOTE_SHARE && clump.score !== null && m.rule !== "zeroLoss";
-  const positions = m.score !== null && m.rule !== "zeroLoss" ? positionText(m.pos, level, ctx.path, ctx.market, showProfitPos ? clump!.pos : undefined) || null : null;
+  let positions = m.score !== null && m.rule !== "zeroLoss" ? positionText(m.pos, level, ctx.path, ctx.market, showProfitPos ? clump!.pos : undefined) || null : null;
   let peerMedian = median && m.score !== null ? `${lname} 가운데값 ${median}` : null;
   if (clump && clump.median !== null) {
     const pm = medianText(m.key, clump.median, false);
@@ -962,6 +964,9 @@ export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annua
       // [3] 첫 숫자는 남과 같은 최근 4분기 PER, 순위에 쓴 섞은 값은 한 줄 (엔비디아 28.3배 · 섞은 44.8배)
       value = `${x.plainPer === "loss" ? "적자" : formatMetric("A1", x.plainPer)} ${PER_PLAIN_TAG}`;
       notes.push(m.rule === "zeroLoss" ? blendRankZeroNote(why, x.plainPer === "loss") : blendRankNote(formatMetric("A1", m.show) ?? "값", why));
+      // 위치·문장은 첫 숫자(27.9배)가 아니라 섞은 값(44.8배)으로 매긴 것 — 위치 줄 앞에 밝힌다 (27.9배와 가운데값 58.6배를 견주어 '가운데쯤'을 모순으로 읽던 것, 1단계 검토 3차)
+      const blended = formatMetric("A1", m.show);
+      if (positions && blended) positions = blendPosPrefix(blended, positions);
     } else notes.push(t.wordingFacts ? blendNoteOf(why) : BLEND_NOTE);
   }
   if (m.adopted && m.score !== null && tieDriven(m)) notes.push(TIE_NOTE);
@@ -1095,18 +1100,19 @@ export function familyRow(f: FamilyScore, ctx: RowCtx = { path: "general", annua
 
 /**
  * 영업 외 손익 (가치 점수 개선 1단계 [3] valueOneOffAbs — 글 재료, 점수에 쓰지 않음). pct: 영업 외 **이익**(세전이익 − 영업이익)이 세전이익의 30% 이상일 때
- * 그 비율(둘 다 플러스일 때만 — 알파벳 51%). loss: 영업 외 **손실**(세전이익 < 영업이익 — 이자 비용이 큰 버라이즌) — 이때는 새 표시·영업이익 기준 PER 을
- * 쓰지 않고 예전 표시 규칙 그대로 둔다 (영업이익 기준 PER 이 이자를 없는 것으로 쳐 빚이 많은 회사를 싸 보이게 하던 것, 검토 지적)
+ * 그 비율(둘 다 플러스일 때만 — 알파벳 51%). loss: 새 기준을 쓰지 않고 예전 표시 규칙(시장 상위 5%) 그대로 두는 경우 — 영업 외 **손실**(세전이익 < 영업이익 —
+ * 이자 비용이 큰 버라이즌: 영업이익 기준 PER 이 이자를 없는 것으로 쳐 빚이 많은 회사를 싸 보이게 하던 것, 검토 지적) 또는 **영업손실**(영업이익 ≤ 0 —
+ * 세전이익이 영업 밖에서만 나 PER 이 보통 숫자로 보이는 회사: 비율을 세전이익 몫으로 셀 수 없어 새 기준이면 유일한 경고가 사라지던 것, 1단계 검토 3차 must)
  */
 export function oneOffOf(pretax: number | null | undefined, op: number | null | undefined): { pct: number | null; loss: boolean } {
   if (typeof pretax !== "number" || typeof op !== "number" || !Number.isFinite(pretax) || !Number.isFinite(op)) return { pct: null, loss: false };
-  const loss = pretax < op;
+  const loss = pretax < op || op <= 0;
   const pct = pretax > 0 && op > 0 && pretax - op >= ONE_OFF_ABS_SHARE * pretax ? Math.round((100 * (pretax - op)) / pretax) : null;
   return { pct, loss };
 }
 
 /**
- * 표시 글 (가치 점수 개선 1단계): 영업 외 이익 절대 기준([3] valueOneOffAbs — 세전이익의 30% 이상, 영업 외 손실 쪽은 예전 기준 그대로), 가치 함정 방향 말([2]),
+ * 표시 글 (가치 점수 개선 1단계): 영업 외 이익 절대 기준([3] valueOneOffAbs — 세전이익의 30% 이상, 영업 외 손실 쪽·영업손실 회사는 예전 기준 그대로), 가치 함정 방향 말([2]),
  * 초기 단계 햇수·경기 정점 까닭([10]). 표시는 점수에 쓰지 않는다. 끄면 valueFlags 그대로·예전 글
  */
 export function flagRows(
@@ -1117,7 +1123,7 @@ export function flagRows(
     lossYears: { from: string; to: string; n: number; all: boolean } | null;
     fallbackText: string;
     carried: string | null;
-    /** 영업 외 손실 쪽 (세전이익 < 영업이익): 예전 표시(시장 상위 5% 기준)를 그대로 둔다 */
+    /** 영업 외 손실 쪽 (세전이익 < 영업이익) 또는 영업손실 (영업이익 ≤ 0): 예전 표시(시장 상위 5% 기준)를 그대로 둔다 (oneOffOf) */
     oneOffLoss?: boolean;
     /** 경기 민감이 업종 목록 때문인지 (false = 이익률 오르내림 — 팔란티어). 모르면 null */
     cyclicalByIndustry?: boolean | null;
@@ -1170,7 +1176,7 @@ export function closeGap(avg: number | undefined, last: { date: string; close: n
 /** 가격 안내 (끄면 예전 한 줄) */
 export function priceNoteOf(t: ValueTextFlags, o: { blend: boolean; close: string | null }): string {
   if (!t.priceNote2) return PRICE_NOTE;
-  const blend = o.blend ? (t.perPlain ? PRICE_NOTE_BLEND : PRICE_NOTE_BLEND.replace(/\(아래 PER 줄에 두 값을 함께 적었습니다\)/, "")) : null;
+  const blend = o.blend ? (t.perPlain ? PRICE_NOTE_BLEND_PLAIN : PRICE_NOTE_BLEND.replace(/\(아래 PER 줄에 두 값을 함께 적었습니다\)/, "")) : null;
   return [PRICE_NOTE_BASE, blend, o.close ?? (o.blend ? null : PRICE_NOTE_SMALL)].filter(Boolean).join(" ");
 }
 /** 금융사 종류 (재무 건전성 안내) */
@@ -1189,7 +1195,7 @@ function scoredBlock(
   const flow = c.inputs?.flow ?? {};
   const flagsKeys = valueFlags(r, c.aux!, { cyclical: c.cyclical!, thresholds: o.ref.ref.thresholds, metrics: c.metrics! });
   const core = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && coreOf(r.grade, r.path).price.includes(m.key) && m.score !== null);
-  // [3] 영업 외 이익 (세전이익의 30% 이상 — 세전이익·영업이익이 모두 플러스이고 세전이익이 더 클 때만. 영업 외 손실 쪽은 예전 표시 그대로)
+  // [3] 영업 외 이익 (세전이익의 30% 이상 — 세전이익·영업이익이 모두 플러스이고 세전이익이 더 클 때만. 영업 외 손실 쪽·영업손실 회사는 예전 표시 그대로)
   const op = flow.opIncome;
   const oneOff = oneOffOf(flow.pretax, op);
   const oneOffPct = oneOff.pct;

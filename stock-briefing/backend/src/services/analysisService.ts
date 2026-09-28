@@ -47,6 +47,8 @@ export interface AnalysisServiceDeps {
    * 새로 만든다. 의존성이 없거나 읽기가 실패하면 끔
    */
   valueSafe?: () => Promise<boolean>;
+  /** AI 가치분석 문장 검사에서 뺀 줄 수 기록 (규정 검토 C-1·S-1 — 운영에서 걸린 비율을 보려고, 브리핑의 '종목 브리핑 문장 검사'와 같은 모양) */
+  log?: { info(obj: Record<string, unknown>, msg: string): void };
   now?: () => Date;
 }
 
@@ -67,7 +69,7 @@ export class AnalysisService {
       const cached = await this.latest(code, kind);
       if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) {
         if (!safe) return { ...cached, cached: true };
-        if (!isOldValueText(cached.content)) return safeAnalysis({ ...cached, cached: true });
+        if (!isOldValueText(cached.content)) return this.safeAnalysis({ ...cached, cached: true }, "cache");
         oldCached = cached;
       }
     }
@@ -76,14 +78,24 @@ export class AnalysisService {
     if (existing) return existing;
     const fallback = oldCached;
     const p = this.generate(code, kind, safe)
-      .then((a) => (safe ? safeAnalysis(a) : a))
+      .then((a) => (safe ? this.safeAnalysis(a, "new") : a))
       .catch((e: unknown) => {
-        if (fallback) return safeAnalysis({ ...fallback, cached: true });
+        if (fallback) return this.safeAnalysis({ ...fallback, cached: true }, "oldCache");
         throw e;
       })
       .finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
+  }
+
+  /**
+   * 가치분석 금지어 검사를 한 글 + 기록. 새로 만든 글은 뺀 줄이 없어도(0줄) 남기고, 전에 만든 글은 뺀 줄이 있을 때만 남긴다
+   * (같은 글을 볼 때마다 세지 않게). from: new 새로 만든 글 · cache 전에 만든 새 형식 글 · oldCache 새로 만들기에 실패해 보인 예전 형식 글
+   */
+  private safeAnalysis(a: Analysis, from: "new" | "cache" | "oldCache"): Analysis {
+    const r = safeValueCheck(a.content);
+    if (from === "new" || r.dropped > 0) this.deps.log?.info({ code: a.code, dropped: r.dropped, from }, "AI 가치분석 문장 검사");
+    return { ...a, content: r.text };
   }
 
   /** 플래그 valueAiSafeWording (의존성이 없거나 읽기가 실패하면 끔) */
@@ -164,7 +176,10 @@ export class AnalysisService {
  * AI 가치분석 글에서 줄을 빼는 말 (가치 점수 개선 1단계 [8]). 브리핑 금지어(BRIEFING_BANNED — 뉴스 요약에 맞춰 느슨함)만으로는 가치분석 글에 흔한
  * 평가·권유·예측 말('적정 주가'·'과소평가'·'장기 보유에 적합'·'담아볼 만'·'전망이 밝'·'예상되며'·'강점'·'리스크')이 지나갔다(검토: 공격 문장 35개 중 29개 통과).
  * 그래서 점수 글 금지어(SCORE_BANNED_RE·SCORE_FUTURE_RE)와 가치분석 전용 말을 더한다. 표 줄(PER·부채비율·배당수익률 숫자)과
- * '늘었습니다·줄었습니다' 사실 문장은 걸리지 않게 낱말을 고른다 (시험: valueImprove1 '[8]')
+ * '늘었습니다·줄었습니다' 사실 문장은 걸리지 않게 낱말을 고른다 (시험: valueImprove1 '[8]').
+ * 1단계 검토 3차: 가치 판정·시점·권유 말('내재가치보다 낮습니다'·'역사적 저점'·'바닥권'·'할인된 가격'·'재무구조가 건전'·'해자'·'관심을 가질 필요'·
+ * 'Strong Buy' — 공격 문장 54개 중 37개가 지나갔다)과 규정 검토 C-11 의 계좌 목록 낱말(고점·저점·바닥·과열·유리·불리)을 더한다.
+ * 사실 말과 겹치는 것은 좁혀 쓴다: '바닥재'·'피해자'·'유리 기판'·'재무 건전성'(묶음 이름)·'과도기'·'늘었고 PER은'·'Best Buy'는 걸리지 않게
  */
 const VALUE_AI_EXTRA = [
   // 평가 말 (싸다·비싸다·강점·리스크·적정 주가·과소평가 …)
@@ -178,8 +193,27 @@ const VALUE_AI_EXTRA = [
   // 예측·추측 (전망·예상·가능성·향후·내년 …)
   "전망|예상|예측|가능성|기대|향후|앞으로|내년|오를|내릴|밝(?:습|다|은 ?편)|어둡",
   "것 같|보입|보인다|보여집|수 있(?:습|다|어|을)",
+  // 가치 판정 (내재가치·업사이드·할인된 가격·프리미엄·건전·견고·해자·경쟁력 …)
+  "내재 ?가치|업사이드|다운사이드|리 ?레이팅|디 ?레이팅|(?<![피가])해자|경쟁력|시장 ?지배력|압도|탁월|돋보|친화",
+  "할인(?:된|되|돼|받|거래)|프리미엄(?:을|이)? ?(?:받|붙|부여|구간|수준)|(?:낮게|높게) 형성|과도(?!기)|지나치|지나친|최고 수준|최저 수준",
+  "건전(?!성)|건실|견고|건강(?:하|한|합|해)|불안(?:하|한|합|정)|열악|부진|체력|안정(?:된|되어|돼)",
+  "가치주|성장주|배당주|고배당|저P[EB]R|고P[EB]R|유리(?:하|한|합|해)|불리(?:하|한|합|해)",
+  // 시점 (역사적 저점·바닥권·과열·고점 부근·밸류에이션 하단)
+  "저점|고점|바닥(?!재)|천장|과열|밸류에이션 ?(?:하단|상단|밴드)",
+  // 권유·행동 (관심을 가질 필요·눈여겨·유의·신중·적당·살펴볼·들고 가·매집·노리는·포트폴리오)
+  "관심을? ?가(?:질|져)|눈여겨|필요(?:가|성이)? ?있|필요합|유의(?:해|하|할)|신중|적당|살펴볼|들고 가|매집|노리(?:는|고|면|기)|포트폴리오|점쳐|점칠",
+  // 영어 (Strong Buy·BUY rating·undervalued …) — 한 식에 한글 금지어와 함께 두므로 'i' 플래그 대신 대소문자를 따로 적는다.
+  // 'Buy' 한 낱말은 회사 이름(Best Buy)에도 있어 대문자 'BUY'·'Strong Buy'·'Buy rating'처럼 권유로 쓰는 모양만 본다
+  "[Ss]trong ?(?:[Bb]uy|[Ss]ell)|STRONG ?(?:BUY|SELL)|\\b(?:BUY|SELL)\\b|\\b(?:[Bb]uy|[Ss]ell) (?:rating|recommendation|signal)|[Uu]nder ?valued|[Oo]ver ?valued|UNDERVALUED|OVERVALUED|[Oo]utperform|[Uu]nderperform|OUTPERFORM|UNDERPERFORM",
 ].join("|");
 export const VALUE_AI_BANNED = new RegExp([BRIEFING_BANNED.source, SCORE_BANNED_RE.source, SCORE_FUTURE_RE.source, VALUE_AI_EXTRA].join("|"), "g");
+
+/**
+ * 가치분석 금지어에 걸리지만 사실을 적는 말 (검토: '공정가치로 평가된 금융자산'·'이익 안정성'(앱 지표 이름)·'위험가중자산'(은행 지표)·
+ * '장기투자자산'(계정 이름)·'영업이익은 2024년 반등해 12조원'·'환율에 따라 원화 금액이 달라질 수 있습니다'). 이 말은 빈칸으로 바꾼 뒤 검사한다 —
+ * 같은 줄에 다른 금지어가 있으면 그대로 걸린다('이익 안정성이 높아 안정적입니다' → '안정적'). 보이는 글은 원문 그대로
+ */
+export const VALUE_AI_ALLOW = /공정 ?가치로 평가|이익 ?안정성|위험 ?가중|장기 ?투자(?:자산|증권|금융자산)|반등(?:했|하였)|반등해(?= ?\d)|달라질 수 있습니다/g;
 
 /** 예전 프롬프트(value_analysis — 평가하는 애널리스트)로 만든 글인지: 예전 형식의 평가 절 제목이 있으면 */
 const OLD_VALUE_HEADING = /^##\s*(?:강점|리스크|가치투자 관점 요약)\s*$/m;
@@ -192,9 +226,12 @@ export const isOldValueText = (text: string) => OLD_VALUE_HEADING.test(text);
  * 저장한 원문은 그대로 두고 보일 때만 고친다 (전에 만든 글도 같은 검사를 받게)
  */
 export function safeValueText(text: string): string {
-  return cleanDetail(text, "", VALUE_AI_BANNED).text;
+  return safeValueCheck(text).text;
 }
-const safeAnalysis = (a: Analysis): Analysis => ({ ...a, content: safeValueText(a.content) });
+/** safeValueText + 뺀 줄 수 (기록용) */
+export function safeValueCheck(text: string): { text: string; dropped: number } {
+  return cleanDetail(text, "", VALUE_AI_BANNED, VALUE_AI_ALLOW);
+}
 
 function snapshotForPrompt(s: AnalysisSnapshot, kind: AnalysisKind): Record<string, unknown> {
   const base = { stock: s.stock, quote: s.quote };
