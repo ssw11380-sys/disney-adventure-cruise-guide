@@ -106,14 +106,17 @@ export function Chip({ label, active, onPress, icon, accessibilityLabel }: { lab
   );
 }
 
-/** 밑줄 탭 (증권사 앱의 종목 상세 탭처럼) */
+/**
+ * 밑줄 탭 (증권사 앱의 종목 상세 탭처럼). a11y: 화면 읽기 이름 — 자리가 모자라 이름을 줄인 탭(3-33 수급 탭이 켜진 종목 상세)이
+ * 원래 이름을 읽게 한다. 그 탭은 두 줄로 넘어가도 가운데 맞춤. 없으면 지금 그대로 (label 을 읽음)
+ */
 export function Segmented<T extends string>({
   options,
   value,
   onChange,
   style,
 }: {
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; a11y?: string }[];
   value: T;
   onChange: (v: T) => void;
   style?: StyleProp<ViewStyle>;
@@ -123,9 +126,10 @@ export function Segmented<T extends string>({
     <View style={[styles.segment, { borderBottomColor: t.line, backgroundColor: t.surface }, style]} accessibilityRole="tablist">
       {options.map((o) => {
         const active = o.value === value;
+        const text: TextStyle = { color: active ? t.ink : t.muted, fontSize: font.body, fontWeight: active ? "700" : "500" };
         return (
-          <Pressable key={o.value} onPress={() => onChange(o.value)} accessibilityRole="tab" accessibilityLabel={o.label} accessibilityState={{ selected: active }} style={[styles.segmentItem, { borderBottomColor: active ? t.ink : "transparent" }]}>
-            <Text style={{ color: active ? t.ink : t.muted, fontSize: font.body, fontWeight: active ? "700" : "500" }}>{o.label}</Text>
+          <Pressable key={o.value} onPress={() => onChange(o.value)} accessibilityRole="tab" accessibilityLabel={o.a11y ?? o.label} accessibilityState={{ selected: active }} style={[styles.segmentItem, { borderBottomColor: active ? t.ink : "transparent" }]}>
+            <Text style={o.a11y ? [text, styles.segmentCenter] : text}>{o.label}</Text>
           </Pressable>
         );
       })}
@@ -382,6 +386,7 @@ const styles = StyleSheet.create({
   chip: { flexDirection: "row", alignItems: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, minHeight: CHIP_H },
   segment: { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },
   segmentItem: { flex: 1, alignItems: "center", justifyContent: "center", minHeight: touch.min, paddingVertical: space.sm, borderBottomWidth: 2 },
+  segmentCenter: { textAlign: "center" },
   badge: { borderWidth: 1, borderRadius: 3, paddingHorizontal: space.xs, paddingVertical: space.xxs },
   rateBox: { minWidth: 64, alignItems: "flex-end", borderRadius: 3, paddingHorizontal: space.s, paddingVertical: space.xxs },
   center: { alignItems: "center", justifyContent: "center", padding: space.xl },

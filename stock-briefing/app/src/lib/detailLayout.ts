@@ -86,23 +86,29 @@ export function fillChartHeight(paneH: number, chromeH: number): number {
 
 // ── 탭 ──
 
-/** 넓은 창의 탭: 최근 브리핑이 첫 탭이다 (휴대폰 화면은 지금처럼 기업개요 · 가치분석 · 기술분석 · 뉴스·공시, 최근 브리핑은 아래) */
-export type DetailTab = AnalysisKind | "news" | "briefing";
+/**
+ * 넓은 창의 탭: 최근 브리핑이 첫 탭이다 (휴대폰 화면은 지금처럼 기업개요 · 가치분석 · 기술분석 · 뉴스·공시, 최근 브리핑은 아래).
+ * flow = 수급 탭 (3-33, 플래그 flowTab) — 켜져 있을 때만 쓰고, 꺼져 있으면 아래 함수들이 기본 탭으로 바꾼다
+ */
+export type DetailTab = AnalysisKind | "news" | "briefing" | "flow";
 const TAB_VALUES: readonly DetailTab[] = ["briefing", "news", "company", "value", "technical"];
 
-/** 주소 검색어의 탭 값 검증 (여러 번 넣었으면 첫 값, 모르는 값이면 null = 배치의 기본 탭) */
-export function parseDetailTab(raw: string | string[] | undefined): DetailTab | null {
+/** 주소 검색어의 탭 값 검증 (여러 번 넣었으면 첫 값, 모르는 값이면 null = 배치의 기본 탭). flow 는 flowOn 일 때만 */
+export function parseDetailTab(raw: string | string[] | undefined, flowOn = false): DetailTab | null {
   const s = Array.isArray(raw) ? raw[0] : raw;
+  if (flowOn && s === "flow") return "flow";
   return TAB_VALUES.find((v) => v === s) ?? null;
 }
 
-/** 휴대폰 화면의 탭: 브리핑 탭은 없으므로(최근 브리핑은 늘 아래에 있다) 기업개요로 — 고른 적 없으면 지금처럼 기업개요 */
-export function phoneTab(pick: DetailTab | null): AnalysisKind | "news" {
+/** 휴대폰 화면의 탭: 브리핑 탭은 없으므로(최근 브리핑은 늘 아래에 있다) 기업개요로 — 고른 적 없으면 지금처럼 기업개요. 수급 탭은 켜져 있을 때만 */
+export function phoneTab(pick: DetailTab | null, flowOn = false): AnalysisKind | "news" | "flow" {
+  if (pick === "flow") return flowOn ? "flow" : "company";
   return pick && pick !== "briefing" ? pick : "company";
 }
 
-/** 넓은 창 배치의 탭: 고른 적 없으면 최근 브리핑 */
-export function wideTab(pick: DetailTab | null): DetailTab {
+/** 넓은 창 배치의 탭: 고른 적 없으면 최근 브리핑. 수급 탭은 켜져 있을 때만 */
+export function wideTab(pick: DetailTab | null, flowOn = false): DetailTab {
+  if (pick === "flow" && !flowOn) return "briefing";
   return pick ?? "briefing";
 }
 

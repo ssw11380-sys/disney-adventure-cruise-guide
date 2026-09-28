@@ -200,6 +200,11 @@ export const FEATURES = {
     description:
       "숫자 기준·토스 대조 배지 (3-32): 잔고 계좌 합계 옆 점과 짧은 글(토스와 0.1% 이내·차이 N%·수량 다름·대기), 누르면 '숫자 기준' 창(시세 기준·시각·비용 차감·환율·당일손익·토스 대조·최근 7일 장중 비율), 대조 기록 뒤 실시간 연결로 앱에 알림(reconcile). 잔고·자산 위젯 기준 시각 뒤 '· NXT·주간거래 포함'(자리가 남을 때만, /api/widget &ms=1 응답에 종목 기준 b), 브리핑 탭 계좌 카드·줄 'HH:MM 기준', 계좌 브리핑 상세 '시세 기준' 줄(새 브리핑에 quoteBasis 저장). 끄면 모두 예전 그대로",
   },
+  flowTab: {
+    default: true,
+    description:
+      "종목 상세 '수급' 탭 (3-33): 한국 종목의 개인·외국인·기관·기타법인 순매수(산 주식 수 − 판 주식 수) 5·20·60일 합계와 날마다 막대(20일 기본), 외국인 보유율 60일 추이·5·20·60일 전과 %p 차이·한도 종목의 한도 소진율. 자료는 토스증권 웹 공개 자료(KRX+NXT 합산, 로그인 없음) → 막히면 네이버 증권(KRX만, 화면에 기준을 밝힘), 메모리 캐시(평일 장 시간 10분·그 밖 60분), 저장 없음. 오늘 값은 저녁(20:30) 확정 전까지 잠정으로만 보이고 합계에 넣지 않음. 토스 Open API 키가 있으면 종목마다 12시간에 한 번 최근 20일을 대조해 개수만 표시(원자료는 관리 경로 GET /api/admin/investor-flow/check). 미국 종목은 '해당 없음'. 새 경로 GET /api/investor-flow/:code(공용). 끄면 탭이 없고 경로 404, 토스 웹·네이버·Open API 수급 호출 0 — 화면이 지금과 한 글자도 같음",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

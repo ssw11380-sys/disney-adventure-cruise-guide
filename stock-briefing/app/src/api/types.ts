@@ -1109,6 +1109,52 @@ export interface IndicatorScores {
   computedAt: string;
 }
 
+/** 수급 탭 기간 (3-33) — 장이 열린 날 수 */
+export type FlowPeriod = 5 | 20 | 60;
+/** 순매수 합계 (산 주식 수 − 판 주식 수). 값이 모두 없으면 null */
+export interface FlowSum {
+  individual: number | null;
+  foreign: number | null;
+  institution: number | null;
+  otherCorp: number | null;
+  days: number;
+  missing: number;
+}
+export interface FlowDay {
+  date: string;
+  individual: number | null;
+  foreign: number | null;
+  institution: number | null;
+  otherCorp: number | null;
+  foreignRatio: number | null;
+  close: number | null;
+}
+/** 종목 상세 '수급' 탭 (3-33, 플래그 flowTab — 서버 GET /api/investor-flow/:code, 칸은 더하기만) */
+export type InvestorFlow =
+  | { code: string; supported: false; reason: string }
+  | {
+      code: string;
+      supported: true;
+      source: "toss-web" | "naver";
+      basis: "KRX+NXT" | "KRX";
+      asOf: string;
+      fetchedAt: string;
+      stale: boolean;
+      today: { date: string; updatedAt: string | null; individual: number | null; foreign: number | null; institution: number | null } | null;
+      days: FlowDay[];
+      sums: Record<"5" | "20" | "60", FlowSum>;
+      ratio: {
+        now: number;
+        date: string;
+        ago: Record<"5" | "20" | "60", { value: number; date: string; change: number } | null>;
+        series: [string, number][];
+        high: number;
+        low: number;
+      } | null;
+      limit: { limitPct: number; usedPct: number } | null;
+      check: { at: string; days: number; same: number } | null;
+    };
+
 /** 가격 알림 조건 종류 (3-29, 플래그 priceAlerts) — 서버 services/priceAlertService 와 같은 글자 */
 export type PriceAlertKind = "priceAbove" | "priceBelow" | "rateUp" | "rateDown" | "volume";
 
