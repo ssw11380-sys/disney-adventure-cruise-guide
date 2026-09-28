@@ -56,6 +56,9 @@ import { KrValueService } from "./services/krValueService.js";
 import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
+import { journalAdminRoutes, journalRoutes } from "./routes/journal.js";
+import { JournalService } from "./services/journalService.js";
+import { SmbsStdRates } from "./providers/market/fxStd.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -284,6 +287,27 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     indicatorScores.start();
     app.addHook("onClose", async () => indicatorScores.stop());
   }
+  // 매매일지 (3-37, 플래그 tradeJournal): 3-36 원자료로 체결 목록·실현손익·기간 수익률·해외주식 양도세 추정. 요청은 저장한 환율만 쓰고,
+  // 없는 환율(토스 과거 환율·결제일 매매기준율 — 서울외국환중개 공개 값, 못 받으면 하나은행 고시)은 배경 작업이 10분마다 받는다(플래그가 켜져 있을 때만).
+  // 테스트(예약 없음)는 네트워크를 쓰지 않는다
+  const journal = new JournalService({
+    db: opts.db,
+    features,
+    fx:
+      opts.enableScheduler === false
+        ? null
+        : {
+            tossAt: opts.providers.tossOpenApi ? (iso) => opts.providers.tossOpenApi!.usdKrwAt(iso) : null,
+            std: (from, to) => new SmbsStdRates().range(from, to),
+            naver: async () => ((await marketIndices.candles("USDKRW", "D", 250))?.candles ?? []).map((c) => ({ date: c.date, rate: c.close })),
+          },
+    now,
+    log,
+  });
+  if (opts.enableScheduler !== false) {
+    journal.start();
+    app.addHook("onClose", async () => journal.stop());
+  }
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
@@ -324,6 +348,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("indicatorScores", indicatorScores);
   app.decorate("valueScores", valueScores);
   app.decorate("krValue", krValue);
+  app.decorate("journal", journal);
 
   // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
   app.addHook("onRequest", async (req) => {
@@ -533,6 +558,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
   await app.register(scoreRoutes, { prefix: "/api/scores", service: indicatorScores });
+  await app.register(journalRoutes, { prefix: "/api", service: journal, now });
+  await app.register(journalAdminRoutes, { prefix: "/api/admin/journal", service: journal, now });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
@@ -563,6 +590,8 @@ declare module "fastify" {
     valueScores: ValueScoreService;
     /** 한국 간이 가치 (3-44 3단계) */
     krValue: KrValueService;
+    /** 매매일지 (3-37): 체결 목록·실현손익·기간 수익률·양도세 추정 */
+    journal: JournalService;
   }
 }
 

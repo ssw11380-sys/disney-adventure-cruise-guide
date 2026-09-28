@@ -238,7 +238,34 @@ export interface ValueReferenceTable {
   created_at: string;
 }
 
+/**
+ * 거래 메모 (3-37, 플래그 tradeJournal): 주문 하나 = 메모 하나. 체결 표와 따로 둬 토스 동기화(upsert)가 덮어쓰지 않게.
+ * 사람이 쓴 값이라 백업에 넣는다. AI 브리핑·프롬프트에는 넣지 않는다. (로그인 B단계에서 user_id 를 더한다)
+ */
+export interface TradeNoteTable {
+  id: Generated<number>;
+  account: number; // 토스 계좌 순번 (trade_executions.account 와 같음)
+  order_id: string;
+  note: string; // 1~200자, 제어 문자 지움. 빈 글이면 행을 지운다
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * 환율 기록 (3-37): 세법 기준환율(날짜별)과 토스 과거 환율(분별). 다시 받을 수 있지만 지난 값은 바뀌지 않아 받은 대로 두고 백업에 넣는다(복구 뒤 같은 세액)
+ */
+export interface FxRateTable {
+  id: Generated<number>;
+  kind: string; // 'krw-std'(매매기준율, at = YYYY-MM-DD) | 'toss-usdkrw'(토스 과거 환율, at = 분 단위 한국 시간 ISO)
+  at: string;
+  rate: number;
+  source: string; // 'smbs' | 'naver-hana' | 'toss'
+  fetched_at: string;
+}
+
 export interface Database {
+  trade_notes: TradeNoteTable;
+  fx_rates: FxRateTable;
   value_fundamentals: ValueFundamentalsTable;
   value_references: ValueReferenceTable;
   listed_stocks: ListedStockTable;

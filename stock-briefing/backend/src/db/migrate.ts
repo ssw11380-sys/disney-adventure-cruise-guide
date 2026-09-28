@@ -347,6 +347,38 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create unique index if not exists uq_value_references_market_date on value_references (market, ref_date)`.execute(db);
     },
   },
+  {
+    // main 의 가장 큰 번호(11) + 1. 다른 작업(로그인 A·지표 점수 3단계)이 먼저 병합되면 병합 때 다시 매긴다 — 'if not exists' 라 번호가 바뀌어도 안전.
+    // 새 표만 추가하고 기존 표는 건드리지 않는다 (예전 서버로 되돌려도 모르고 지나갈 뿐)
+    version: 12,
+    up: async (db, dialect) => {
+      // 매매일지 (3-37, 플래그 tradeJournal): 거래 메모(주문 하나 = 메모 하나 — 체결 표와 따로 둬 토스 동기화가 덮어쓰지 않게)와
+      // 환율 기록(세법 기준환율·토스 과거 환율 — 지난 값은 바뀌지 않아 받은 대로 둔다). 환율은 8바이트 실수 (Postgres real 은 4바이트 — BH-48)
+      const dbl = dialect === "postgres" ? "double precision" : "real";
+      await db.schema
+        .createTable("trade_notes")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("account", "integer", (c) => c.notNull())
+        .addColumn("order_id", "text", (c) => c.notNull())
+        .addColumn("note", "text", (c) => c.notNull())
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_trade_notes_account_order on trade_notes (account, order_id)`.execute(db);
+      await db.schema
+        .createTable("fx_rates")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("kind", "text", (c) => c.notNull())
+        .addColumn("at", "text", (c) => c.notNull())
+        .addColumn("rate", dbl, (c) => c.notNull())
+        .addColumn("source", "text", (c) => c.notNull())
+        .addColumn("fetched_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_fx_rates_kind_at on fx_rates (kind, at)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

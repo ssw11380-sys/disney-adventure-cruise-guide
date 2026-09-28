@@ -159,6 +159,12 @@ export const FEATURES = {
     description:
       "숫자 기준·토스 대조 배지 (3-32): 잔고 계좌 합계 옆 점과 짧은 글(토스와 0.1% 이내·차이 N%·수량 다름·대기), 누르면 '숫자 기준' 창(시세 기준·시각·비용 차감·환율·당일손익·토스 대조·최근 7일 장중 비율), 대조 기록 뒤 실시간 연결로 앱에 알림(reconcile). 잔고·자산 위젯 기준 시각 뒤 '· NXT·주간거래 포함'(자리가 남을 때만, /api/widget &ms=1 응답에 종목 기준 b), 브리핑 탭 계좌 카드·줄 'HH:MM 기준', 계좌 브리핑 상세 '시세 기준' 줄(새 브리핑에 quoteBasis 저장). 끄면 모두 예전 그대로",
   },
+  // 앱에 켜고 끄는 화면이 없어 꺼 두면 보이지 않음 → 기본 켬 (3-44 와 같은 결정, 2026-09-28). 끄기: PUT /api/admin/features {"tradeJournal": false}
+  tradeJournal: {
+    default: true,
+    description:
+      "매매일지 (3-37): 설정·잔고 계좌 칸·종목 상세에서 여는 '매매일지'(기록 — 체결 목록·이동평균법 실현손익·거래 메모, 수익률 — 스냅샷 시간가중 수익률(10거래일 뒤), 양도세 추정 — 해외주식 결제일 기준환율·22%·250만 원 공제, 참고용). 새 표 trade_notes·fx_rates. tradeRecords 가 꺼져 있으면 꺼진 것으로 봄. 끄면 입구·화면 없음, /api/journal* 빈 값·쓰기 409, 환율 받기 0건",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

@@ -1,0 +1,863 @@
+import type { Db } from "../db/index.js";
+import { AppError } from "../lib/errors.js";
+import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
+import type { DailyRate } from "../providers/market/fxStd.js";
+import type { FeatureKey } from "./featureService.js";
+import { replayPair, round6, roundMoney, tossCosts, type Cur, type EstimatedRow, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
+import { periodReturns, presetRange, READY_DAYS, type Preset, type RetFlow, type RetSnap, type ReturnsBody, type ReturnsMarket } from "./journalReturns.js";
+import { tradingDate } from "./marketContext.js";
+import { taxSummary, TAX_RULES, usSettleDate, type TaxFx, type TaxSellInput } from "./taxRules.js";
+import { addDays, marketOf, type RecordMarket, type SnapshotHolding } from "./tradeRecordCalc.js";
+import { parseData, STATE_KEY, tradeView, type TradeRow, type TradeView } from "./tradeRecordService.js";
+
+/**
+ * 매매일지 (3-37, 플래그 tradeJournal — tradeRecords 가 꺼져 있으면 꺼진 것으로 봄). 3-36 이 쌓은 원자료(일별 계좌 스냅샷 + 토스 주문 내역의 체결)로
+ *  1) 기록: 날짜별 체결 목록, 매도마다 이동평균법 실현손익(journalCalc), 거래마다 메모(trade_notes — 서버에 저장, 백업 포함, AI 에는 넣지 않음)
+ *  2) 수익률: 스냅샷 시간가중 수익률(journalReturns — 10거래일 쌓인 뒤 숫자)
+ *  3) 양도세 추정: 해외주식 결제일 기준환율 원화 양도차익 · 22% · 250만 원 공제(taxRules — 참고용 추정)
+ * 계산은 저장하지 않고 요청 때 돌린다. 요청은 네트워크를 기다리지 않는다 — 환율(토스 과거 환율·세법 기준환율)은 fx_rates 에 있는 값만 쓰고,
+ * 없는 값은 배경 작업(10분마다, 플래그가 켜져 있을 때만)이 받는다.
+ * 토스와 1원까지 맞는지는 사용자 표본 5건으로 확인하기 전이라 '(추정)' 꼬리표를 둔다 (TOSS_VERIFIED)
+ */
+
+/** 표본 대조가 끝난 항목만 true 로 바꾸는 작은 PR 을 따로 낸다 (그 항목의 '(추정)'이 사라짐). headline: 큰 숫자가 비용 빼기 전(gross)·뒤(net) */
+export const TOSS_VERIFIED = { krRealized: false, usRealizedUsd: false, usRealizedKrw: false, headline: "gross" as "gross" | "net" };
+
+export class JournalOffError extends AppError {
+  constructor() {
+    super(409, "FEATURE_OFF", "매매일지(tradeJournal)가 꺼져 있습니다");
+  }
+}
+
+export interface JournalFxSources {
+  /** 토스 과거 매수 환율 (그 분). 실패하면 던진다 */
+  tossAt?: ((iso: string) => Promise<number>) | null;
+  /** 서울외국환중개 매매기준율 (기간). 실패하면 던진다 */
+  std?: ((from: string, to: string) => Promise<DailyRate[]>) | null;
+  /** 하나은행 고시 일별 종가 (네이버, 최근 1년) — 매매기준율 대신·교차 확인 */
+  naver?: (() => Promise<DailyRate[]>) | null;
+}
+
+export interface JournalDeps {
+  db: Db;
+  features: { enabled(key: FeatureKey): Promise<boolean> };
+  fx?: JournalFxSources | null;
+  now?: () => Date;
+  log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
+  /** 배경 환율 받기 간격 (기본 10분) · 서버를 켠 뒤 첫 확인 (기본 2분) · 토스 요청 사이 (기본 350ms — MARKET_INFO 초당 3회) */
+  tickMs?: number;
+  startupDelayMs?: number;
+  pauseMs?: number;
+}
+
+export interface JournalItem {
+  key: string;
+  kind: "fill" | "estimated";
+  account: number;
+  accountLabel: string | null;
+  orderId: string | null;
+  code: string;
+  name: string;
+  market: RecordMarket;
+  currency: Cur;
+  side: "BUY" | "SELL" | null;
+  quantity: number;
+  orderQuantity: number;
+  amount: number;
+  price: number | null;
+  at: string;
+  timeBasis: "filled" | "ordered" | "seen";
+  status: "CLOSED" | "OPEN";
+  part: { index: number; count: number } | null;
+  realized: Realized | null;
+  afterBuy?: { avgCost: number; quantity: number } | null;
+  note: string | null;
+  estimated?: { qty: number; reason: EstimatedRow["reason"]; ratio?: number };
+}
+
+export interface RealizedSum {
+  KRW: number | null;
+  USD: number | null;
+  krwTotal: number | null;
+  krwTotalEstimated: boolean;
+}
+
+export interface StockJournalHead {
+  code: string;
+  name: string;
+  market: RecordMarket;
+  holding: { quantity: number; avgCost: number | null; currency: Cur; asOf: string } | null;
+  orders: number;
+  buys: number;
+  sells: number;
+  realized: { amount: number | null; currency: Cur; sells: number; unknown: number };
+  firstTrade: string | null;
+  lastTrade: string | null;
+  recordSince: string | null;
+  memo: string | null;
+}
+
+/** 메모 한 건의 최대 글자 수 */
+export const NOTE_MAX = 200;
+/** 세법 기준환율: 받기를 이만큼 해 봐도 없으면 '받지 못함' (그 전까지는 '받는 중') */
+const STD_MAX_TRIES = 3;
+/** 결제일에 고시가 없을 때 직전 고시를 찾아볼 날 수 */
+const PRIOR_DAYS = 10;
+/** 한 번에 받을 토스 과거 환율 수 */
+const TOSS_BATCH = 200;
+const FX_STATE_KEY = "journal_fx_state";
+
+interface FxState {
+  /** 매매기준율을 받아 본 기간 (그 안에 줄이 없는 날은 고시가 없는 날) */
+  stdCovered: Array<[string, string]>;
+  /** 날짜(또는 '분 시각') → 받기를 해 본 횟수·마지막 시각 */
+  tries: Record<string, { n: number; last: string }>;
+}
+
+interface SnapLite {
+  id: number;
+  date: string;
+  market: RecordMarket;
+  status: "ok" | "gap";
+  asOf: string;
+  accounts: number[];
+  doubtAccounts: number[];
+  holdings: SnapshotHolding[];
+  fx: number | null;
+}
+
+type TradeFull = TradeView & { costs: { fee: number | null; tax: number | null } | null; raw: Record<string, unknown> | null };
+
+interface PairData {
+  account: number;
+  code: string;
+  market: RecordMarket;
+  currency: Cur;
+  trades: TradeFull[];
+  fills: LedgerFill[];
+  res: PairResult;
+}
+
+const pairKey = (account: number, code: string) => `${account}:${code}`;
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** 분 단위 한국 시간 ISO (토스 과거 환율의 키) */
+export const minuteKey = (iso: string) => seoulIso(new Date(Math.floor(Date.parse(iso) / 60_000) * 60_000));
+const sumRounded = (xs: number[], cur: Cur) => roundMoney(xs.reduce((s, x) => s + x, 0), cur);
+
+export class JournalService {
+  private readonly now: () => Date;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private first: ReturnType<typeof setTimeout> | null = null;
+  private running: Promise<void> | null = null;
+  /** 파싱한 스냅샷 (id → 고친 시각·값) — 요청마다 JSON 을 다시 읽지 않게 */
+  private readonly snapCache = new Map<number, { updatedAt: string; snap: SnapLite }>();
+
+  constructor(private readonly deps: JournalDeps) {
+    this.now = deps.now ?? (() => new Date());
+  }
+
+  async enabled(): Promise<boolean> {
+    return (await this.deps.features.enabled("tradeJournal")) && (await this.deps.features.enabled("tradeRecords"));
+  }
+
+  // ── 읽기 ─────────────────────────────────────────────────────────────
+
+  private async snapshots(): Promise<SnapLite[]> {
+    const db = this.deps.db;
+    const rows = await db.selectFrom("account_snapshots").select(["id", "snapshot_date", "market", "status", "as_of", "updated_at"]).orderBy("as_of").execute();
+    const need = rows.filter((r) => r.status === "ok" && this.snapCache.get(Number(r.id))?.updatedAt !== r.updated_at).map((r) => Number(r.id));
+    for (let i = 0; i < need.length; i += 200) {
+      const part = await db.selectFrom("account_snapshots").select(["id", "data", "updated_at"]).where("id", "in", need.slice(i, i + 200)).execute();
+      for (const p of part) {
+        const d = parseData(p.data);
+        const row = rows.find((r) => Number(r.id) === Number(p.id))!;
+        this.snapCache.set(Number(p.id), {
+          updatedAt: p.updated_at,
+          snap: {
+            id: Number(p.id),
+            date: row.snapshot_date,
+            market: row.market as RecordMarket,
+            status: "ok",
+            asOf: row.as_of,
+            accounts: (d?.accounts ?? []).map((a) => Number(a.account)).filter((n) => Number.isFinite(n)),
+            doubtAccounts: (d?.doubts ?? []).map((x) => Number(x.account)),
+            holdings: (d?.holdings ?? []).map((h) => ({ ...h, account: Number(h.account), quantity: Number(h.quantity) })),
+            fx: d?.fx?.usdKrw ?? null,
+          },
+        });
+      }
+    }
+    return rows.map((r) =>
+      r.status === "ok" && this.snapCache.get(Number(r.id))
+        ? this.snapCache.get(Number(r.id))!.snap
+        : { id: Number(r.id), date: r.snapshot_date, market: r.market as RecordMarket, status: "gap" as const, asOf: r.as_of, accounts: [], doubtAccounts: [], holdings: [], fx: null },
+    );
+  }
+
+  private async trades(code?: string): Promise<TradeFull[]> {
+    let q = this.deps.db.selectFrom("trade_executions").selectAll();
+    if (code) q = q.where("code", "=", code);
+    const rows = await q.orderBy("executed_at").orderBy("id").execute();
+    return rows.map((r) => {
+      let raw: Record<string, unknown> | null = null;
+      try {
+        const v = JSON.parse(r.raw) as unknown;
+        raw = v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+      } catch {
+        raw = null;
+      }
+      const col = r.fee !== null || r.tax !== null ? { fee: r.fee === null ? null : Number(r.fee), tax: r.tax === null ? null : Number(r.tax) } : null;
+      return { ...tradeView(r as unknown as TradeRow), costs: col ?? tossCosts(raw), raw };
+    });
+  }
+
+  private async tossRates(): Promise<Map<string, number>> {
+    const rows = await this.deps.db.selectFrom("fx_rates").select(["at", "rate"]).where("kind", "=", "toss-usdkrw").execute();
+    return new Map(rows.map((r) => [r.at, Number(r.rate)]));
+  }
+
+  private async names(codes: string[], snaps: SnapLite[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!codes.length) return out;
+    for (const r of await this.deps.db.selectFrom("registered_stocks").select(["code", "name"]).where("code", "in", codes).execute()) if (r.name) out.set(r.code, r.name);
+    for (let i = snaps.length - 1; i >= 0; i--) for (const h of snaps[i]!.holdings) if (!out.has(h.code) && h.name && h.name !== h.code) out.set(h.code, h.name);
+    const left = codes.filter((c) => !out.has(c));
+    if (left.length) for (const r of await this.deps.db.selectFrom("listed_stocks").select(["code", "name"]).where("code", "in", left).execute()) if (r.name) out.set(r.code, r.name);
+    for (const c of codes) if (!out.has(c)) out.set(c, c);
+    return out;
+  }
+
+  private async notes(): Promise<Map<string, string>> {
+    const rows = await this.deps.db.selectFrom("trade_notes").select(["account", "order_id", "note"]).execute();
+    return new Map(rows.map((r) => [`${Number(r.account)}:${r.order_id}`, r.note]));
+  }
+
+  private async recordSince(): Promise<string | null> {
+    const r = await this.deps.db.selectFrom("account_snapshots").select((eb) => eb.fn.min("snapshot_date").as("since")).executeTakeFirst();
+    return (r?.since as string | null | undefined) ?? null;
+  }
+
+  /**
+   * 짝마다 원장: 체결이 있는 짝 + 스냅샷에만 나온 짝(주문 내역에 없는 수량 변화 추정 줄을 보이려고). code 를 주면 그 종목만.
+   * stdAt 을 주면 해외 양도세용 결제일 원화도
+   */
+  private pairs(trades: TradeFull[], snaps: SnapLite[], toss: Map<string, number>, stdAt?: (f: LedgerFill) => number | null, code?: string): Map<string, PairData> {
+    const groups = new Map<string, { account: number; code: string; list: TradeFull[] }>();
+    for (const t of trades) {
+      if (code && t.code !== code) continue;
+      const k = pairKey(t.account, t.code);
+      const g = groups.get(k) ?? { account: t.account, code: t.code, list: [] };
+      g.list.push(t);
+      groups.set(k, g);
+    }
+    for (const s of snaps) for (const h of s.holdings) if ((!code || h.code === code) && !groups.has(pairKey(h.account, h.code))) groups.set(pairKey(h.account, h.code), { account: h.account, code: h.code, list: [] });
+    const out = new Map<string, PairData>();
+    for (const [key, { account, code, list }] of groups) {
+      const market = marketOf(code);
+      const currency: Cur = market === "KR" ? "KRW" : "USD";
+      const fills: LedgerFill[] = [];
+      for (const t of list) {
+        t.fills.forEach((f, i) => {
+          if (!(f.quantity > 0)) return;
+          fills.push({
+            key: `${t.account}:${t.orderId}:${i}`,
+            account: t.account,
+            orderId: t.orderId,
+            code,
+            side: t.side,
+            quantity: f.quantity,
+            amount: f.amount,
+            at: f.at,
+            basis: f.basis,
+            orderQuantity: t.quantity,
+            orderCosts: t.costs,
+            seq: t.id * 1000 + i,
+          });
+        });
+      }
+      const anchors = this.anchorsFor(account, code, market, snaps);
+      const res = replayPair(fills, anchors, {
+        currency,
+        ...(currency === "USD" ? { fxAt: (at: string) => toss.get(minuteKey(at)) ?? null } : {}),
+        ...(stdAt && currency === "USD" ? { stdAt } : {}),
+      });
+      out.set(key, { account, code, market, currency, trades: list, fills, res });
+    }
+    return out;
+  }
+
+  /** 기준점: 그 계좌가 목록에 있고 그 계좌를 의심하지 않은 그 시장 ok 스냅샷 (그 종목이 없으면 0주) */
+  private anchorsFor(account: number, code: string, market: RecordMarket, snaps: SnapLite[]): LedgerAnchor[] {
+    const out: LedgerAnchor[] = [];
+    for (const s of snaps) {
+      if (s.status !== "ok" || s.market !== market || !s.accounts.includes(account) || s.doubtAccounts.includes(account)) continue;
+      const h = s.holdings.find((x) => x.account === account && x.code === code && x.quantity > 0);
+      const cost = h ? (h.purchaseAmount ?? (h.avgPrice !== null ? h.avgPrice * h.quantity : null)) : 0;
+      const ratio = h && h.marketValue && h.marketValueAfterCost !== null && h.marketValue > 0 ? Math.max(0, 1 - h.marketValueAfterCost / h.marketValue) : null;
+      out.push({
+        asOf: s.asOf,
+        date: s.date,
+        quantity: h ? round6(h.quantity) : 0,
+        cost,
+        costKrw: market === "US" ? (h ? h.costKrw : 0) : null,
+        costKrwEstimated: h?.costKrwSource === "book-estimated",
+        costRatio: ratio,
+      });
+    }
+    return out;
+  }
+
+  // ── 기록 ─────────────────────────────────────────────────────────────
+
+  async journal(q: { from: string; to: string; code?: string }) {
+    const [snaps, trades, toss, notes, since] = await Promise.all([this.snapshots(), this.trades(q.code), this.tossRates(), this.notes(), this.recordSince()]);
+    const pairs = this.pairs(trades, snaps, toss, undefined, q.code);
+    const accounts = new Set((await this.deps.db.selectFrom("trade_executions").select("account").groupBy("account").execute()).map((r) => Number(r.account)));
+    const codes = [...new Set([...pairs.values()].map((p) => p.code))];
+    const names = await this.names(codes, snaps);
+    const items = this.items(pairs, names, notes, accounts.size > 1).filter((x) => {
+      const d = seoulDateOf(x.at);
+      return d >= q.from && d <= q.to;
+    });
+    const fills = items.filter((x) => x.kind === "fill");
+    const orderKey = (x: JournalItem) => `${x.account}:${x.orderId}`;
+    const orderSet = (side?: "BUY" | "SELL") => new Set(fills.filter((x) => !side || x.side === side).map(orderKey)).size;
+    const sells = fills.filter((x) => x.side === "SELL");
+    // 날짜별 (새것부터), 날짜 안에서는 시각이 늦은 것부터
+    const byDay = new Map<string, JournalItem[]>();
+    for (const x of items) byDay.set(seoulDateOf(x.at), [...(byDay.get(seoulDateOf(x.at)) ?? []), x]);
+    const days = [...byDay]
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([date, list]) => ({
+        date,
+        realized: realizedSum(list.filter((x) => x.side === "SELL")),
+        items: list.sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.key < b.key ? 1 : -1)),
+      }));
+    const stockCount = new Map<string, Set<string>>();
+    for (const x of fills) stockCount.set(x.code, (stockCount.get(x.code) ?? new Set()).add(orderKey(x)));
+    const truncated = await this.truncatedCodes();
+    const head = q.code ? await this.stockHead(q.code, pairs, names, snaps, since) : undefined;
+    return {
+      enabled: true as const,
+      from: q.from,
+      to: q.to,
+      code: q.code ?? null,
+      recordSince: since,
+      verified: TOSS_VERIFIED,
+      summary: {
+        // 목록 건수 = 기간 안에 몫이 있는 주문 수 (며칠에 나뉜 주문도 1건) = 저장한 체결 건수 (완료 기준 3)
+        orders: orderSet(),
+        buys: orderSet("BUY"),
+        sells: orderSet("SELL"),
+        realized: { ...realizedSum(sells), estimatedIncluded: sells.some((x) => x.realized && (x.realized.status === "estimated" || x.realized.status === "order-uncertain")) },
+        costs: {
+          toss: sells.filter((x) => x.realized?.costs.source === "toss").length,
+          estimated: sells.filter((x) => x.realized?.costs.source === "estimated").length,
+          none: sells.filter((x) => !x.realized?.costs.source).length,
+        },
+        unknownSells: sells.filter((x) => x.realized?.status === "unknown-cost").length,
+        truncated: truncated.filter((c) => codes.includes(c)),
+      },
+      days,
+      stocks: [...stockCount].map(([code, set]) => ({ code, name: names.get(code) ?? code, count: set.size })).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : 1)),
+      ...(head ? { head } : {}),
+    };
+  }
+
+  private items(pairs: Map<string, PairData>, names: Map<string, string>, notes: Map<string, string>, multi: boolean): JournalItem[] {
+    const out: JournalItem[] = [];
+    for (const p of pairs.values()) {
+      const name = names.get(p.code) ?? p.code;
+      for (const t of p.trades) {
+        const live = t.fills.filter((f) => f.quantity > 0);
+        t.fills.forEach((f, i) => {
+          if (!(f.quantity > 0)) return;
+          const key = `${t.account}:${t.orderId}:${i}`;
+          const r = p.res.fills.get(key);
+          const realized = t.side === "SELL" ? verifiedTag(r?.realized ?? null, p.currency) : null;
+          out.push({
+            key,
+            kind: "fill",
+            account: t.account,
+            accountLabel: multi ? `계좌 ${t.account}` : null,
+            orderId: t.orderId,
+            code: p.code,
+            name,
+            market: p.market,
+            currency: p.currency,
+            side: t.side,
+            quantity: f.quantity,
+            orderQuantity: t.quantity,
+            amount: f.amount,
+            price: f.quantity > 0 ? Math.round((f.amount / f.quantity) * 1e4) / 1e4 : null,
+            at: f.at,
+            timeBasis: f.basis,
+            status: t.status,
+            part: live.length > 1 ? { index: live.indexOf(f) + 1, count: live.length } : null,
+            realized,
+            ...(t.side === "BUY" ? { afterBuy: r?.afterBuy ?? null } : {}),
+            note: notes.get(`${t.account}:${t.orderId}`) ?? null,
+          });
+        });
+      }
+      for (const e of p.res.estimated) {
+        out.push({
+          key: `est:${p.account}:${p.code}:${e.date}`,
+          kind: "estimated",
+          account: p.account,
+          accountLabel: multi ? `계좌 ${p.account}` : null,
+          orderId: null,
+          code: p.code,
+          name,
+          market: p.market,
+          currency: p.currency,
+          side: null,
+          quantity: Math.abs(e.qty),
+          orderQuantity: 0,
+          amount: 0,
+          price: null,
+          at: e.at,
+          timeBasis: "seen",
+          status: "CLOSED",
+          part: null,
+          realized: null,
+          note: null,
+          estimated: { qty: e.qty, reason: e.reason, ...(e.ratio !== undefined ? { ratio: e.ratio } : {}) },
+        });
+      }
+    }
+    return out;
+  }
+
+  private async truncatedCodes(): Promise<string[]> {
+    const row = await this.deps.db.selectFrom("meta").select("value").where("key", "=", STATE_KEY).executeTakeFirst();
+    try {
+      const v = row ? (JSON.parse(row.value) as { truncated?: Record<string, unknown> }) : null;
+      return Object.keys(v?.truncated ?? {}).sort();
+    } catch {
+      return [];
+    }
+  }
+
+  private async stockHead(code: string, pairs: Map<string, PairData>, names: Map<string, string>, snaps: SnapLite[], since: string | null): Promise<StockJournalHead> {
+    const market = marketOf(code);
+    const currency: Cur = market === "KR" ? "KRW" : "USD";
+    const mine = [...pairs.values()].filter((p) => p.code === code);
+    const last = [...snaps].reverse().find((s) => s.status === "ok" && s.market === market);
+    const held = last ? last.holdings.filter((h) => h.code === code && h.quantity > 0) : [];
+    const qty = round6(held.reduce((s, h) => s + h.quantity, 0));
+    const cost = held.every((h) => h.purchaseAmount !== null || h.avgPrice !== null) ? held.reduce((s, h) => s + (h.purchaseAmount ?? (h.avgPrice ?? 0) * h.quantity), 0) : null;
+    const trades = mine.flatMap((p) => p.trades);
+    const sells = mine.flatMap((p) => p.fills.filter((f) => f.side === "SELL").map((f) => p.res.fills.get(f.key)?.realized ?? null));
+    const known = sells.filter((r): r is Realized => !!r && r.status !== "unknown-cost" && r.gross !== null);
+    const dates = trades.flatMap((t) => t.fills.map((f) => seoulDateOf(f.at))).sort();
+    const memo = (await this.deps.db.selectFrom("registered_stocks").select("memo").where("code", "=", code).executeTakeFirst())?.memo ?? null;
+    return {
+      code,
+      name: names.get(code) ?? (held[0]?.name || code),
+      market,
+      holding: qty > 0 && last ? { quantity: qty, avgCost: cost !== null && qty > 0 ? Math.round((cost / qty) * 1e4) / 1e4 : null, currency, asOf: last.asOf } : null,
+      orders: new Set(trades.map((t) => `${t.account}:${t.orderId}`)).size,
+      buys: new Set(trades.filter((t) => t.side === "BUY").map((t) => `${t.account}:${t.orderId}`)).size,
+      sells: new Set(trades.filter((t) => t.side === "SELL").map((t) => `${t.account}:${t.orderId}`)).size,
+      realized: { amount: known.length ? sumRounded(known.map((r) => r.gross!), currency) : null, currency, sells: known.length, unknown: sells.length - known.length },
+      firstTrade: dates[0] ?? null,
+      lastTrade: dates.at(-1) ?? null,
+      recordSince: since,
+      memo: memo && memo.trim() ? memo : null,
+    };
+  }
+
+  /** 종목 상세 '매매 기록' 칸 · 이 종목 머리 카드 */
+  async stock(code: string): Promise<StockJournalHead> {
+    const [snaps, trades, toss, since] = await Promise.all([this.snapshots(), this.trades(code), this.tossRates(), this.recordSince()]);
+    const pairs = this.pairs(trades, snaps, toss, undefined, code);
+    const names = await this.names([code], snaps);
+    return this.stockHead(code, pairs, names, snaps, since);
+  }
+
+  // ── 메모 ─────────────────────────────────────────────────────────────
+
+  /** 거래 메모 저장 (빈 글 → 지움). 200자 넘음·제어 문자만 → 400, 그 (계좌, 주문번호) 체결 없음 → 404 */
+  async saveNote(account: number, orderId: string, text: string): Promise<{ account: number; orderId: string; note: string | null; updatedAt: string }> {
+    const clean = cleanNote(text);
+    if (clean === null) throw new AppError(400, "VALIDATION", "메모에 쓸 수 있는 글자가 없습니다");
+    if ([...clean].length > NOTE_MAX) throw new AppError(400, "VALIDATION", `메모는 ${NOTE_MAX}자까지입니다`);
+    const db = this.deps.db;
+    const exists = await db.selectFrom("trade_executions").select("id").where("account", "=", account).where("order_id", "=", orderId).executeTakeFirst();
+    if (!exists) throw new AppError(404, "NOT_FOUND", "그 주문의 체결 기록이 없습니다");
+    const iso = seoulIso(this.now());
+    if (clean === "") {
+      await db.deleteFrom("trade_notes").where("account", "=", account).where("order_id", "=", orderId).execute();
+      return { account, orderId, note: null, updatedAt: iso };
+    }
+    await db
+      .insertInto("trade_notes")
+      .values({ account, order_id: orderId, note: clean, created_at: iso, updated_at: iso })
+      .onConflict((oc) => oc.columns(["account", "order_id"]).doUpdateSet({ note: clean, updated_at: iso }))
+      .execute();
+    return { account, orderId, note: clean, updatedAt: iso };
+  }
+
+  // ── 수익률 ───────────────────────────────────────────────────────────
+
+  async returns(q: { preset: Preset; from?: string; to?: string; market: ReturnsMarket }): Promise<ReturnsBody & { enabled: true; recordSince: string | null }> {
+    const today = seoulDate(this.now());
+    const requested = q.preset === "custom" ? { from: q.from!, to: q.to! } : presetRange(q.preset, today);
+    const [snaps, trades, toss, since] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.recordSince()]);
+    const flows: RetFlow[] = [];
+    for (const t of trades) for (const f of t.fills) if (f.quantity > 0) flows.push({ market: t.market, side: t.side, amount: f.amount, at: f.at, kind: "trade" });
+    // 주문 내역에 없는 수량 변화(이관 추정)는 그 스냅샷 가격으로 들어오고 나간 것으로 (분할·병합은 흐름이 아님)
+    const pairs = this.pairs(trades, snaps, toss);
+    for (const p of pairs.values()) {
+      for (const e of p.res.estimated) {
+        if (e.reason !== "transfer") continue;
+        const s = snaps.find((x) => x.status === "ok" && x.market === p.market && x.asOf === e.at);
+        const h = s?.holdings.find((x) => x.account === p.account && x.code === p.code);
+        const px = h ? (h.regularClose ?? h.price) : null;
+        if (px === null || px === undefined) continue;
+        flows.push({ market: p.market, side: e.qty > 0 ? "BUY" : "SELL", amount: Math.abs(e.qty) * px, at: e.at, kind: "transfer" });
+      }
+    }
+    const rs: RetSnap[] = snaps.map((s) => ({
+      date: s.date,
+      market: s.market,
+      asOf: s.asOf,
+      status: s.status,
+      doubted: s.doubtAccounts.length > 0,
+      fx: s.fx,
+      holdings: s.holdings.map((h) => ({ code: h.code, quantity: h.quantity, price: h.price, regularClose: h.regularClose ?? null })),
+    }));
+    return { enabled: true, recordSince: since, ...periodReturns({ requested, market: q.market, recordSince: since }, rs, flows) };
+  }
+
+  // ── 양도세 추정 ──────────────────────────────────────────────────────
+
+  async tax(year: number) {
+    const now = this.now();
+    const today = seoulDate(now);
+    const [snaps, trades, toss, lookup] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.stdLookup(today)]);
+    const settle = (f: LedgerFill) => usSettleDate(tradingDate(f.at, false)).kr;
+    const pairs = this.pairs(trades, snaps, toss, (f) => {
+      const r = lookup(settle(f));
+      return typeof r === "object" ? r.rate : null;
+    });
+    const names = await this.names([...new Set(trades.map((t) => t.code))], snaps);
+    const inputs: TaxSellInput[] = [];
+    const years = new Set<number>([Number(today.slice(0, 4))]);
+    const krSells: Array<{ year: number; order: string; tax: number | null }> = [];
+    for (const p of pairs.values()) {
+      for (const f of p.fills) {
+        if (f.side !== "SELL") continue;
+        const r = p.res.fills.get(f.key);
+        if (p.market === "KR") {
+          krSells.push({ year: Number(seoulDateOf(f.at).slice(0, 4)), order: `${f.account}:${f.orderId}`, tax: r?.realized?.costs.source === "toss" ? r.realized.costs.tax : null });
+          continue;
+        }
+        const tradeDate = tradingDate(f.at, false);
+        const settleDate = usSettleDate(tradeDate).kr;
+        years.add(Number(settleDate.slice(0, 4)));
+        const fx = lookup(settleDate);
+        const fxSell: TaxFx | null = typeof fx === "object" ? fx : null;
+        const std = r?.std;
+        const costsUsd = r?.realized?.costs.source === "toss" ? r.realized.costs.total : null;
+        const ok = !!std && std.proceeds !== null && std.cost !== null && fxSell !== null;
+        // 결제일 환율 대기: 이 매도의 결제일(또는 이 짝 매수의 결제일)이 아직 받는 중
+        const pending = !ok && (fx === "pending" || (std?.missing === "fx" && lookupPending(p.fills, settle, lookup)));
+        inputs.push({
+          key: f.key,
+          code: p.code,
+          name: names.get(p.code) ?? p.code,
+          tradeDate,
+          settleDate,
+          settleSource: "estimated",
+          quantity: f.quantity,
+          proceedsUsd: f.amount,
+          costsUsd,
+          fxSell,
+          gainParts: ok ? { proceeds: std!.proceeds!, cost: std!.cost!, costs: costsUsd !== null ? costsUsd * fxSell!.rate : null } : null,
+          excluded: ok ? null : std?.missing === "cost" ? "cost" : "fx",
+          pending,
+        });
+      }
+    }
+    const s = taxSummary(year, inputs);
+    const kr = krSells.filter((x) => x.year === year);
+    const krTaxes = kr.map((x) => x.tax).filter((x): x is number => x !== null);
+    return {
+      enabled: true as const,
+      year,
+      years: [...years].sort(),
+      rules: TAX_RULES,
+      ...s,
+      kr: { securitiesTax: { amount: krTaxes.length ? Math.round(krTaxes.reduce((a, b) => a + b, 0)) : null, sells: new Set(kr.map((x) => x.order)).size, source: krTaxes.length ? ("toss" as const) : null } },
+      asOf: seoulIso(now),
+    };
+  }
+
+  /** 결제일 → 매매기준율 (고시가 없는 날은 직전 고시, 결제일 전이면 최근 고시로 잠정) · 'pending'(받는 중) · 'none'(받지 못함) */
+  private async stdLookup(today: string): Promise<(date: string) => TaxFx | "pending" | "none"> {
+    const rows = (await this.deps.db.selectFrom("fx_rates").select(["at", "rate", "source"]).where("kind", "=", "krw-std").orderBy("at").execute()).map((r) => ({ at: r.at, rate: Number(r.rate), source: r.source }));
+    const byDate = new Map(rows.map((r) => [r.at, r]));
+    const st = await this.fxState();
+    const covered = (d: string) => st.stdCovered.some(([a, b]) => d >= a && d <= b);
+    const prior = (d: string) => {
+      const floor = addDays(d, -PRIOR_DAYS);
+      for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.at < d && rows[i]!.at >= floor) return rows[i]!;
+      return null;
+    };
+    return (date) => {
+      const hit = byDate.get(date);
+      if (hit) return { rate: hit.rate, source: hit.source, date, provisional: false };
+      if (date > today) {
+        const p = prior(addDays(today, 1));
+        return p ? { rate: p.rate, source: p.source, date: p.at, provisional: true } : "pending";
+      }
+      if (covered(date)) {
+        const p = prior(date);
+        return p ? { rate: p.rate, source: p.source, date: p.at, provisional: false } : "none";
+      }
+      return (st.tries[date]?.n ?? 0) >= STD_MAX_TRIES ? "none" : "pending";
+    };
+  }
+
+  private async fxState(): Promise<FxState> {
+    const row = await this.deps.db.selectFrom("meta").select("value").where("key", "=", FX_STATE_KEY).executeTakeFirst();
+    try {
+      const v = row ? (JSON.parse(row.value) as Partial<FxState>) : null;
+      return {
+        stdCovered: Array.isArray(v?.stdCovered) ? v!.stdCovered.filter((x) => Array.isArray(x) && typeof x[0] === "string" && typeof x[1] === "string") : [],
+        tries: v?.tries && typeof v.tries === "object" ? v.tries : {},
+      };
+    } catch {
+      return { stdCovered: [], tries: {} };
+    }
+  }
+
+  private async saveFxState(st: FxState): Promise<void> {
+    // 받아 본 기간은 겹치면 합친다
+    const merged: Array<[string, string]> = [];
+    for (const [a, b] of [...st.stdCovered].sort((x, y) => (x[0] < y[0] ? -1 : 1))) {
+      const last = merged.at(-1);
+      if (last && a <= addDays(last[1], 1)) last[1] = b > last[1] ? b : last[1];
+      else merged.push([a, b]);
+    }
+    const value = JSON.stringify({ stdCovered: merged, tries: st.tries });
+    await this.deps.db.insertInto("meta").values({ key: FX_STATE_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
+  }
+
+  // ── 배경 환율 받기 ───────────────────────────────────────────────────
+
+  /** 10분마다(플래그가 켜져 있을 때만) 없는 환율을 받는다. 서버를 켠 뒤 2분에 첫 확인 */
+  start(): void {
+    if (this.timer || this.first || !this.deps.fx) return;
+    const run = () => void this.tick().catch((e: unknown) => this.deps.log?.warn({ err: errText(e) }, "매매일지: 환율 받기 실패"));
+    this.first = setTimeout(() => {
+      this.first = null;
+      run();
+      this.timer = setInterval(run, this.deps.tickMs ?? 10 * 60_000);
+      this.timer.unref?.();
+    }, this.deps.startupDelayMs ?? 2 * 60_000);
+    this.first.unref?.();
+  }
+
+  async stop(): Promise<void> {
+    if (this.first) clearTimeout(this.first);
+    if (this.timer) clearInterval(this.timer);
+    this.first = null;
+    this.timer = null;
+    await this.running?.catch(() => undefined);
+  }
+
+  /** 한 번 (겹쳐 부르면 도는 것을 같이 기다린다). 플래그가 꺼져 있으면 아무것도 부르지 않는다 */
+  tick(): Promise<void> {
+    this.running ??= this.runTick().finally(() => {
+      this.running = null;
+    });
+    return this.running;
+  }
+
+  private async runTick(): Promise<void> {
+    if (!(await this.enabled()) || !this.deps.fx) return;
+    const trades = (await this.trades()).filter((t) => t.market === "US");
+    if (!trades.length) return;
+    const fills = trades.flatMap((t) => t.fills.filter((f) => f.quantity > 0));
+    await this.fetchToss(fills.map((f) => f.at));
+    const today = seoulDate(this.now());
+    const dates = [...new Set(fills.map((f) => usSettleDate(tradingDate(f.at, false)).kr))].filter((d) => d <= today).sort();
+    await this.fetchStd(dates);
+  }
+
+  /** 관리용: 그 기간 체결의 토스 과거 환율·결제일 매매기준율을 지금 받는다 */
+  async prefetch(from: string, to: string): Promise<{ toss: number; std: number }> {
+    if (!(await this.enabled())) throw new JournalOffError();
+    const trades = (await this.trades()).filter((t) => t.market === "US");
+    const fills = trades.flatMap((t) => t.fills.filter((f) => f.quantity > 0 && seoulDateOf(f.at) >= from && seoulDateOf(f.at) <= to));
+    const toss = await this.fetchToss(fills.map((f) => f.at));
+    const today = seoulDate(this.now());
+    const std = await this.fetchStd([...new Set(fills.map((f) => usSettleDate(tradingDate(f.at, false)).kr))].filter((d) => d <= today).sort());
+    return { toss, std };
+  }
+
+  private async fetchToss(ats: string[]): Promise<number> {
+    const get = this.deps.fx?.tossAt;
+    if (!get) return 0;
+    const have = await this.tossRates();
+    const st = await this.fxState();
+    const nowMs = this.now().getTime();
+    const want = [...new Set(ats.map(minuteKey))].filter((k) => !have.has(k) && !backoff(st.tries[`t:${k}`], nowMs)).sort().slice(0, TOSS_BATCH);
+    let n = 0;
+    for (const [i, k] of want.entries()) {
+      if (i > 0) await sleep(this.deps.pauseMs ?? 350);
+      try {
+        const rate = await get(k);
+        if (!(rate > 0)) throw new Error("환율 없음");
+        await this.deps.db
+          .insertInto("fx_rates")
+          .values({ kind: "toss-usdkrw", at: k, rate, source: "toss", fetched_at: seoulIso(this.now()) })
+          .onConflict((oc) => oc.columns(["kind", "at"]).doNothing())
+          .execute();
+        delete st.tries[`t:${k}`];
+        n++;
+      } catch (e) {
+        const prev = st.tries[`t:${k}`];
+        st.tries[`t:${k}`] = { n: (prev?.n ?? 0) + 1, last: seoulIso(this.now()) };
+        this.deps.log?.warn({ at: k, err: errText(e) }, "매매일지: 토스 과거 환율 받기 실패 (다음에 다시)");
+      }
+    }
+    if (want.length) await this.saveFxState(st);
+    return n;
+  }
+
+  /**
+   * 결제일 매매기준율: 서울외국환중개 공개 값을 그 기간 한 번에 받고, 네이버(하나은행 고시) 값과 1% 넘게 다르면 쓰지 않는다.
+   * 매매기준율을 받지 못한 날은 네이버 값으로 대신한다('naver-hana'). 받아 본 기간은 '고시가 없는 날'을 가리려고 적는다
+   */
+  private async fetchStd(dates: string[]): Promise<number> {
+    const fx = this.deps.fx;
+    if (!fx || !dates.length) return 0;
+    const st = await this.fxState();
+    const have = new Set((await this.deps.db.selectFrom("fx_rates").select("at").where("kind", "=", "krw-std").execute()).map((r) => r.at));
+    const covered = (d: string) => st.stdCovered.some(([a, b]) => d >= a && d <= b);
+    const nowMs = this.now().getTime();
+    const want = dates.filter((d) => !have.has(d) && !covered(d) && !backoff(st.tries[d], nowMs));
+    if (!want.length) return 0;
+    const from = want[0]!, to = want.at(-1)!;
+    const naver = fx.naver ? await fx.naver().catch((e: unknown) => (this.deps.log?.warn({ err: errText(e) }, "매매일지: 네이버 환율 받기 실패"), [] as DailyRate[])) : [];
+    const naverBy = new Map(naver.map((r) => [r.date, r.rate]));
+    let std: DailyRate[] | null = null;
+    if (fx.std) {
+      try {
+        std = await fx.std(from, to);
+      } catch (e) {
+        this.deps.log?.warn({ from, to, err: errText(e) }, "매매일지: 매매기준율 받기 실패");
+      }
+    }
+    const iso = seoulIso(this.now());
+    let n = 0;
+    const put = async (date: string, rate: number, source: string) => {
+      const r = await this.deps.db.insertInto("fx_rates").values({ kind: "krw-std", at: date, rate, source, fetched_at: iso }).onConflict((oc) => oc.columns(["kind", "at"]).doNothing()).executeTakeFirst();
+      if (Number(r.numInsertedOrUpdatedRows ?? 0) > 0) n++;
+    };
+    if (std) {
+      const got = new Set<string>();
+      for (const r of std) {
+        const nv = naverBy.get(r.date);
+        if (nv !== undefined && Math.abs(r.rate - nv) / nv > 0.01) {
+          this.deps.log?.warn({ date: r.date, smbs: r.rate, naver: nv }, "매매일지: 매매기준율이 하나은행 고시와 1% 넘게 달라 쓰지 않음");
+          continue;
+        }
+        got.add(r.date);
+        await put(r.date, r.rate, "smbs");
+      }
+      // 받아 본 기간 안에서 줄이 없는 날은 고시가 없는 날 (직전 고시를 쓴다). 1% 넘게 달라 버린 날은 네이버 값으로.
+      // 오늘은 아직 고시 전일 수 있어 받은 줄이 있을 때만 받아 본 것으로 적는다
+      const today = seoulDate(this.now());
+      const coverTo = to < today || std.some((r) => r.date === today) ? to : addDays(today, -1);
+      if (coverTo >= from) st.stdCovered.push([from, coverTo]);
+      for (const d of want) if (!got.has(d) && naverBy.has(d) && std.some((r) => r.date === d)) await put(d, naverBy.get(d)!, "naver-hana");
+    } else {
+      // 매매기준율을 못 받음: 네이버 값으로 대신, 그것도 없으면 다음에 다시
+      for (const d of want) {
+        const nv = naverBy.get(d);
+        if (nv !== undefined) await put(d, nv, "naver-hana");
+        else st.tries[d] = { n: (st.tries[d]?.n ?? 0) + 1, last: iso };
+      }
+    }
+    for (const d of want) if (have.has(d) || covered(d)) delete st.tries[d];
+    await this.saveFxState(st);
+    if (n) this.deps.log?.info({ n, from, to }, "매매일지: 결제일 기준환율 저장");
+    return n;
+  }
+
+  /** 관리용 점검: 짝마다 원장 ↔ 스냅샷 대조 · 빠진 환율 */
+  async check() {
+    if (!(await this.enabled())) return { enabled: false as const };
+    const [snaps, trades, toss] = await Promise.all([this.snapshots(), this.trades(), this.tossRates()]);
+    const pairs = this.pairs(trades, snaps, toss);
+    const today = seoulDate(this.now());
+    const lookup = await this.stdLookup(today);
+    const us = trades.filter((t) => t.market === "US").flatMap((t) => t.fills.filter((f) => f.quantity > 0));
+    const missingToss = [...new Set(us.map((f) => minuteKey(f.at)))].filter((k) => !toss.has(k));
+    const settleDates = [...new Set(us.map((f) => usSettleDate(tradingDate(f.at, false)).kr))].sort();
+    return {
+      enabled: true as const,
+      pairs: [...pairs.values()].map((p) => ({ account: p.account, code: p.code, ...p.res.check, holding: p.res.holding })),
+      fx: {
+        tossMissing: missingToss.length,
+        stdPending: settleDates.filter((d) => lookup(d) === "pending"),
+        stdNone: settleDates.filter((d) => lookup(d) === "none"),
+      },
+      readyDays: READY_DAYS,
+    };
+  }
+}
+
+/** 표본 대조 전이면 원화 실현손익은 늘 '(추정)' */
+function verifiedTag(r: Realized | null, cur: Cur): Realized | null {
+  if (!r) return r;
+  if (cur === "USD" && r.krw && !TOSS_VERIFIED.usRealizedKrw) return { ...r, krw: { ...r.krw, estimated: true } };
+  return r;
+}
+
+/** 매도 줄 → 통화별 합계 (매도마다 반올림한 값의 합 — 목록 합 = 머리 합계) */
+function realizedSum(sells: JournalItem[]): RealizedSum {
+  const known = sells.filter((x) => x.realized && x.realized.status !== "unknown-cost" && x.realized.gross !== null);
+  const kr = known.filter((x) => x.currency === "KRW").map((x) => x.realized!.gross!);
+  const us = known.filter((x) => x.currency === "USD");
+  const usKrw = us.map((x) => x.realized!.krw?.gross ?? null);
+  const krwTotal = !known.length || usKrw.some((v) => v === null) ? null : Math.round(kr.reduce((s, v) => s + v, 0) + usKrw.reduce<number>((s, v) => s + (v ?? 0), 0));
+  return {
+    KRW: kr.length ? sumRounded(kr, "KRW") : null,
+    USD: us.length ? sumRounded(us.map((x) => x.realized!.gross!), "USD") : null,
+    krwTotal,
+    krwTotalEstimated: us.length > 0 || known.some((x) => x.realized!.status !== "ok"),
+  };
+}
+
+/** 제어 문자는 지우고(줄바꿈·탭은 빈칸으로) 앞뒤 빈칸을 뗀다. 글자가 있었는데 제어 문자뿐이면 null */
+export function cleanNote(text: string): string | null {
+  const spaced = text.replace(/[\r\n\t]+/g, " ");
+  const clean = [...spaced].filter((ch) => !isHidden(ch.codePointAt(0) ?? 0)).join("").trim();
+  if (clean === "" && text.trim() !== "" && spaced.trim() !== "") return null;
+  return clean;
+}
+
+/** 지우는 글자: 제어 문자(C0·C1)와 보이지 않는 방향·너비 문자 */
+const HIDDEN = new Set([0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff]);
+function isHidden(cp: number): boolean {
+  return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) || HIDDEN.has(cp);
+}
+
+/** 받기 실패 뒤 기다림: 1시간 · 6시간 · 그 뒤 하루 */
+function backoff(t: { n: number; last: string } | undefined, nowMs: number): boolean {
+  if (!t) return false;
+  const wait = t.n <= 1 ? 3_600_000 : t.n === 2 ? 6 * 3_600_000 : 24 * 3_600_000;
+  return nowMs - Date.parse(t.last) < wait;
+}
+
+function lookupPending(fills: LedgerFill[], settle: (f: LedgerFill) => string, lookup: (d: string) => TaxFx | "pending" | "none"): boolean {
+  return fills.some((f) => lookup(settle(f)) === "pending");
+}
+

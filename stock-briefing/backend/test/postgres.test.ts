@@ -55,7 +55,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     // 7 = 시장 전체 요약 표 (날짜·세션 하나에 한 건)
     const idx = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename = 'market_summaries'`.execute(db);
     expect(idx.rows.map((r) => r.indexname)).toContain("uq_market_summaries_date_session");
@@ -72,6 +72,11 @@ describe.skipIf(!url)("postgres dialect", () => {
     const types9 = await sql<{ data_type: string }>`
       select data_type from information_schema.columns where table_name = 'indicator_scores' and column_name in ('score', 'score_today') order by column_name`.execute(db);
     expect(types9.rows.map((r) => r.data_type)).toEqual(["double precision", "double precision"]);
+    // 12 = 매매일지 (3-37): 거래 메모(계좌·주문번호마다 하나)·환율 기록(종류·시각마다 하나). 환율은 8바이트
+    const idx12 = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename in ('trade_notes', 'fx_rates')`.execute(db);
+    expect(idx12.rows.map((r) => r.indexname)).toEqual(expect.arrayContaining(["uq_trade_notes_account_order", "uq_fx_rates_kind_at"]));
+    const types12 = await sql<{ data_type: string }>`select data_type from information_schema.columns where table_name = 'fx_rates' and column_name = 'rate'`.execute(db);
+    expect(types12.rows.map((r) => r.data_type)).toEqual(["double precision"]);
   });
 
   it("지표 점수 기록 (3-44): 같은 종목·기준일은 덮어쓴다 (Postgres on conflict)", async () => {
@@ -290,6 +295,9 @@ describe.skipIf(!url)("postgres dialect", () => {
     });
     await db.insertInto("account_snapshots").values(snapRow("2026-09-28")).execute();
     await db.insertInto("trade_executions").values(tradeRow("pg-bk-1")).execute();
+    // 매매일지 두 표 (3-37): 메모·환율도 되살아나야 복구 뒤 같은 메모·같은 세액
+    await db.insertInto("trade_notes").values({ account: 3, order_id: "pg-bk-1", note: "실적 발표 뒤 일부 정리", created_at: ts, updated_at: ts }).execute();
+    await db.insertInto("fx_rates").values({ kind: "krw-std", at: "2026-09-28", rate: 1352.35, source: "smbs", fetched_at: ts }).execute();
     const tables: Record<string, Record<string, unknown>[]> = {};
     for (const t of BACKUP_TABLES) tables[t] = (await sql<Record<string, unknown>>`select * from ${sql.table(t)}`.execute(db)).rows;
     const dir = await mkdtemp(join(tmpdir(), "pgbk-"));
@@ -320,7 +328,14 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect(ids).toHaveLength(2);
     expect(new Set(ids.map((r) => r.id)).size).toBe(2);
     expect((await db.selectFrom("account_snapshots").select("id").execute()).length).toBe(2);
+    expect(before["trade_notes"]).toBe(1);
+    expect(before["fx_rates"]).toBe(1);
+    expect(await db.selectFrom("fx_rates").select(["kind", "at", "rate"]).execute()).toEqual([{ kind: "krw-std", at: "2026-09-28", rate: 1352.35 }]);
+    await db.insertInto("trade_notes").values({ account: 3, order_id: "pg-bk-2", note: "메모", created_at: ts, updated_at: ts }).execute();
+    expect((await db.selectFrom("trade_notes").select("id").execute()).length).toBe(2);
     await db.deleteFrom("account_snapshots").execute();
     await db.deleteFrom("trade_executions").execute();
+    await db.deleteFrom("trade_notes").execute();
+    await db.deleteFrom("fx_rates").execute();
   });
 });
