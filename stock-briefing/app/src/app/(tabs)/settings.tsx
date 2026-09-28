@@ -14,6 +14,7 @@ import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
 import { flushErrors, reportError } from "@/lib/errorReport";
 import { NotificationSettingsCard } from "@/components/NotificationSettingsCard";
+import { PriceAlertSettingsCard } from "@/components/PriceAlertSettingsCard";
 import { ScreenInfoCard } from "@/components/ScreenInfoCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
 import { WidgetRefreshStatus } from "@/components/WidgetRefreshStatus";
@@ -28,6 +29,7 @@ import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useSticky } from "@/lib/useSticky";
 import { useBoxWidth } from "@/lib/useBoxWidth";
 import { useUx } from "@/lib/uxFlags";
+import { usePriceAlerts } from "@/lib/priceAlertContext";
 import { isWide } from "@/lib/windowClass";
 import { font, radius, space, touch, useTheme } from "@/theme";
 import { settingsReveal } from "@/tokens";
@@ -45,6 +47,8 @@ export default function SettingsScreen() {
   const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency, haptics, setHaptics } = useSettings();
   // 3-24 플래그: oneHand('누를 때 진동' 스위치), firstRun('처음 사용 안내 다시 보기'), emptyGuide(서버 연결 칸 열기·빈 칸 안내)
   const ux = useUx();
+  // 가격 알림 (3-29, 플래그 priceAlerts): 루트 제공자가 내려 준 문맥만 읽는다 (없으면 꺼짐 — 지금 화면 그대로)
+  const alerts = usePriceAlerts();
   // 다듬은 잔고 위젯(widgetPolish)에서만 쓰는 설정이라 플래그가 켜져 있을 때만 보인다
   const widgetPolishOn = useFeature("widgetPolish", false);
   // 위젯 자동 갱신 기록 요약·배터리 설정 열기 (위젯 리뷰 2). 기록은 늘 적고 보여 주는 것만 플래그 뒤에
@@ -178,12 +182,12 @@ export default function SettingsScreen() {
         </View>
         <Toggle value={afterCost} onValueChange={(v) => void setAfterCost(v)} accessibilityLabel="수수료·세금 차감 평가" />
       </View>
-      {ux.oneHand ? (
-        // 3-24 햅틱 끄기 (플래그 oneHand): 끄면 차트 십자선 진동까지 모두 멈춘다
+      {ux.oneHand || alerts.on ? (
+        // 3-24 햅틱 끄기 (플래그 oneHand): 끄면 차트 십자선 진동까지 모두 멈춘다. 가격 알림(3-29) 진동도 이 스위치를 따른다
         <View style={styles.line}>
           <View style={{ flex: 1, paddingRight: space.md }}>
             <Text style={styles.label(t.ink)}>누를 때 진동</Text>
-            <Muted style={{ fontSize: font.tiny }}>줄 밀기·길게 누르기·정렬·관심 추가·당겨서 새로고침·차트 십자선. 차트 십자선 말고는 휴대폰의 &apos;터치 진동&apos;이 켜져 있어야 울립니다</Muted>
+            <Muted style={{ fontSize: font.tiny }}>{ux.oneHand ? `${HAPTIC_NOTE}${alerts.on ? " · 가격 알림 진동도 이 스위치를 따릅니다" : ""}` : "가격 알림이 울릴 때 진동"}</Muted>
           </View>
           <Toggle value={haptics} onValueChange={(v) => void setHaptics(v)} accessibilityLabel="누를 때 진동" />
         </View>
@@ -319,6 +323,8 @@ export default function SettingsScreen() {
     </Card>
   );
   const notify = full ? <NotificationSettingsCard /> : null;
+  // 가격 알림 칸 (3-29): 서버에 연결됐고 켜져 있을 때만, 알림 칸 바로 아래
+  const priceAlertCard = full && alerts.on ? <PriceAlertSettingsCard /> : null;
   const toss = full ? <TossOpenApiCard /> : null;
   // 3-24 빈 칸 안내 (플래그 emptyGuide): 서버에 연결되지 않았거나 토큰이 맞지 않아 알림·토스 칸이 비었을 때 까닭과 버튼 하나
   const serverGap =
@@ -348,6 +354,7 @@ export default function SettingsScreen() {
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
             {display}
             {notify}
+            {priceAlertCard}
             {serverGap}
             {two ? info : null}
           </View>
@@ -368,6 +375,7 @@ export default function SettingsScreen() {
     <Screen refreshing={pulling} onRefresh={onPull} {...(measure ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
       {display}
       {notify}
+      {priceAlertCard}
       {toss}
       {serverGap}
       <AppUpdateCard />
@@ -378,6 +386,9 @@ export default function SettingsScreen() {
     </Screen>
   );
 }
+
+/** 설정 > 표시 '누를 때 진동' 설명 (3-24 글 그대로) */
+const HAPTIC_NOTE = "줄 밀기·길게 누르기·정렬·관심 추가·당겨서 새로고침·차트 십자선. 차트 십자선 말고는 휴대폰의 '터치 진동'이 켜져 있어야 울립니다";
 
 /** 서버 칸의 연결 오류 글: 플래그 emptyGuide 가 켜져 있으면 설정 칸 이름에 맞춘 문구 (lib/connectionError), 아니면 오류 글 그대로 */
 function serverErrorText(error: unknown, guide: boolean): string {

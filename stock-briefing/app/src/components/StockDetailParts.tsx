@@ -12,6 +12,7 @@ import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPricePart
 import { formatDateKo, relativeTime } from "@/lib/format";
 import { analysisView } from "@/lib/freshness";
 import { navLabel, navSpeech, type HoldingsNav } from "@/lib/holdingsNav";
+import { alertButtonA11y, alertButtonText } from "@/lib/priceAlerts";
 import { font, fontCap, radius, slopFor, space, touch, useTheme } from "@/theme";
 import { foldDetail, oneHand } from "@/tokens";
 
@@ -438,6 +439,7 @@ export function DetailHeader({
   onNext,
   onBack,
   action,
+  alert,
 }: {
   name: string;
   sub: string;
@@ -450,6 +452,8 @@ export function DetailHeader({
   onBack: () => void;
   /** 오른쪽 버튼 (지수 상세처럼 없으면 null) */
   action: HeaderAction | null;
+  /** 가격 알림 종 버튼 (3-29, 플래그 priceAlerts · 등록 종목만). 없으면 지금 머리 그대로 */
+  alert?: { count: number; onPress: () => void };
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
@@ -468,6 +472,7 @@ export function DetailHeader({
       state: lines,
       pager: nav ? navLabel(nav) : null,
       action: action?.kind === "watch" ? "관심 추가" : action ? null : false,
+      ...(alert ? { alert: true } : null),
     }).tier;
   // 긴 표기로 한 줄에 들어가지 않으면 짧은 표기(기준 시각 "9/23 20:00")로 다시 어림하고, 그래도 안 되면 둘째 줄로
   const long = fit(state.map((l) => l.text));
@@ -534,6 +539,12 @@ export function DetailHeader({
             </Pressable>
           </View>
         ) : null}
+        {alert ? (
+          // 가격 알림 (3-29): 수정 버튼 앞 종 — 조건이 있으면 채운 금색
+          <Pressable onPress={alert.onPress} accessibilityRole="button" accessibilityLabel={alertButtonA11y(alert.count)} style={styles.icon}>
+            <Ionicons name={alert.count ? "notifications" : "notifications-outline"} size={foldDetail.headIcon} color={alert.count ? t.gold : t.ink} />
+          </Pressable>
+        ) : null}
         {!action ? null : action.kind === "edit" ? (
           <Pressable onPress={action.onPress} accessibilityRole="button" accessibilityLabel="보유 정보 수정" style={styles.icon}>
             <Ionicons name="create-outline" size={foldDetail.headIcon} color={t.ink} />
@@ -562,14 +573,20 @@ export function DetailHeader({
 /** 아래 막대 왼쪽 버튼: 미등록 종목은 관심 추가, 관심 종목은 관심 해제, 보유 종목은 보유 정보 수정 */
 export type BarStar = { kind: "watch"; busy: boolean } | { kind: "unwatch"; label: string } | { kind: "edit" };
 
+/** 아래 막대 왼쪽 버튼 글 (막대와 가격 알림 버튼 폭 어림 alertBarLabel 이 같이 쓴다) */
+export function barStarText(star: BarStar): string {
+  return star.kind === "watch" ? (star.busy ? "추가 중" : "관심 추가") : star.kind === "unwatch" ? star.label : "보유 수정";
+}
+
 /**
  * 종목 상세 아래 고정 막대 (엄지가 닿는 곳): [관심 추가 / 관심 해제 / 보유 수정] [차트 크게].
  * 머리 오른쪽 버튼(관심 추가·수정)과 차트의 전체 화면 버튼을 아래로 한 번 더 둔다 — 넓은 창은 합친 머리·차트가 늘 보이므로 두지 않는다.
- * 버튼 높이 44 (oneHand.barButtonH), 고지 바로 위
+ * 버튼 높이 44 (oneHand.barButtonH), 고지 바로 위.
+ * 가격 알림(3-29, 플래그 priceAlerts · 등록 종목만): alert 가 있으면 가운데에 [종 알림 n] (내용 폭, 좁으면 종 아이콘만 — lib/detailLayout alertBarLabel). 없으면 지금 두 버튼 그대로
  */
-export function DetailBottomBar({ star, onStar, onChart }: { star: BarStar; onStar: () => void; onChart: () => void }) {
+export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarStar; onStar: () => void; onChart: () => void; alert?: { count: number; label: boolean; onPress: () => void } }) {
   const t = useTheme();
-  const starText = star.kind === "watch" ? (star.busy ? "추가 중" : "관심 추가") : star.kind === "unwatch" ? star.label : "보유 수정";
+  const starText = barStarText(star);
   const starA11y = star.kind === "watch" ? "관심 종목에 추가" : star.kind === "unwatch" ? `관심 종목에서 빼기, ${star.label}` : "보유 정보 수정";
   const starIcon: keyof typeof Ionicons.glyphMap = star.kind === "watch" ? "star-outline" : star.kind === "unwatch" ? "star" : "create-outline";
   const starColor = star.kind === "edit" ? t.ink : t.gold;
@@ -591,6 +608,21 @@ export function DetailBottomBar({ star, onStar, onChart }: { star: BarStar; onSt
           {starText}
         </Text>
       </Pressable>
+      {alert ? (
+        <Pressable
+          onPress={alert.onPress}
+          accessibilityRole="button"
+          accessibilityLabel={alertButtonA11y(alert.count)}
+          style={({ pressed }) => [styles.barBtnCompact, alert.label ? null : styles.barBtnIcon, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
+        >
+          <Ionicons name={alert.count ? "notifications" : "notifications-outline"} size={font.title} color={t.gold} />
+          {alert.label ? (
+            <Text style={{ color: t.gold, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
+              {alertButtonText(alert.count)}
+            </Text>
+          ) : null}
+        </Pressable>
+      ) : null}
       <Pressable
         onPress={onChart}
         accessibilityRole="button"
@@ -704,4 +736,7 @@ const styles = StyleSheet.create({
   barBtn: { flex: 1, minHeight: touch.min, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.sm },
   headTitle: { flexDirection: "row", alignItems: "baseline", gap: space.sm, flexShrink: 1 },
   headPrice: { flexDirection: "row", alignItems: "baseline", gap: space.xs, flexShrink: 0 },
+  // 3-29 가격 알림 버튼 (막대 가운데): 내용 폭, 좁으면 종 아이콘만
+  barBtnCompact: { flex: 0, minHeight: touch.min, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.md },
+  barBtnIcon: { width: touch.min, paddingHorizontal: 0 },
 });

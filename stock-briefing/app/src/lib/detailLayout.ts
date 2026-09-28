@@ -147,6 +147,8 @@ export interface DetailHeaderInput {
   pager: string | null;
   /** 오른쪽 버튼 글자 (수정 = null 아이콘만, 관심 추가 = "관심 추가", 버튼 없음 = false) */
   action: string | null | false;
+  /** 가격 알림 종 버튼(아이콘 44)이 수정 버튼 앞에 있는지 (3-29, 플래그 priceAlerts — 없으면 지금 결과 그대로) */
+  alert?: boolean;
 }
 
 export interface DetailHeaderLayout {
@@ -188,7 +190,7 @@ export function detailHeaderLayout(o: DetailHeaderInput): DetailHeaderLayout {
   // 오른쪽: ‹ n/17 › (버튼 44 둘 + 가운데 글자) · 수정(44) 또는 관심 추가(별 + 글자)
   const pager = o.pager ? touch.min * 2 + w(o.pager, font.small) + space.xs * 2 : 0;
   const action = o.action === false ? 0 : o.action ? w(o.action, font.small) + font.title + space.xs * 3 : touch.min;
-  const fixed = HEAD_PAD * 2 + touch.min + space.sm + nameMin + (pager ? space.sm + pager : 0) + (action ? space.sm + action : 0);
+  const fixed = HEAD_PAD * 2 + touch.min + space.sm + nameMin + (pager ? space.sm + pager : 0) + (action ? space.sm + action : 0) + (o.alert ? touch.min + space.sm : 0);
   const gaps = space.md;
   if (fixed + (quote ? gaps + quote : 0) + (state ? gaps + state : 0) <= o.width) return { tier: "one" };
   if (fixed + (quote ? gaps + quote : 0) <= o.width) return { tier: "stateBelow" };
@@ -232,4 +234,18 @@ export function headPriceParts(maxW: number, name: string, price: { text: string
   if (room >= unitW + rateW) return { unit: true, rate: true };
   if (room >= rateW) return { unit: false, rate: true };
   return { unit: false, rate: false };
+}
+
+/**
+ * 종목 상세 아래 막대에 가격 알림 버튼을 글자와 함께 둘 수 있는지 (3-29, 플래그 priceAlerts — 순수 함수). 거짓이면 종 아이콘만(폭 touch.min).
+ * 막대 안쪽 폭(창 폭 − 좌우 여백 − 버튼 사이 둘)에 알림 버튼(내용 폭, 좌우 space.md)과 나머지 두 버튼(flex 1 — 둘 중 넓은 내용 폭 × 2, 좌우 space.sm)이 들어가면 참.
+ * 글자 폭은 어림(estimateTextWidth — 실제 글꼴보다 조금 넓게), 글자 배율은 막대 글자 상한(fontCap.chrome)까지
+ */
+export function alertBarLabel(winW: number, fontScale: number, starText: string, alertText: string): boolean {
+  const s = clampScale(fontScale, fontCap.chrome);
+  const inner = winW - space.lg * 2 - space.sm * 2;
+  const content = (text: string) => font.title + space.xs + estimateTextWidth(text, font.body * s);
+  const alertW = content(alertText) + space.md * 2;
+  const restW = 2 * Math.max(content(starText), content("차트 크게")) + space.sm * 2 * 2;
+  return alertW + restW <= inner;
 }

@@ -5,6 +5,8 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { ApiRequestError, type Api } from "@/api/client";
+import { parseStockCode } from "@/lib/freshness";
+import type { AlertNotification } from "@/lib/priceAlerts";
 
 /**
  * 푸시 알림 등록.
@@ -13,18 +15,23 @@ import { ApiRequestError, type Api } from "@/api/client";
  */
 
 export const ANDROID_CHANNEL = "briefings";
-/** 가격 알림(목표가·급등락) 채널 — 브리핑과 따로 끄고 켤 수 있게 미리 만든다 (3-19) */
+/** 가격 알림(가격·등락률·거래량) 채널 — 브리핑과 따로 끄고 켤 수 있게 미리 만든다 (3-19) */
 export const PRICE_CHANNEL = "prices";
 const TOKEN_KEY = "push.expoToken";
 
-// 앱이 포그라운드일 때도 배너/목록에 표시
+/**
+ * 앱이 앞에 있을 때 온 알림을 어떻게 보일지 (순수 함수). 브리핑 알림은 지금처럼 배너·목록·소리.
+ * 가격 알림(3-29)은 앱이 앞에 있을 때만 올리고 화면 위 카드·진동이 이미 알리므로 목록에만, 소리·팝업 없이
+ * (expo-notifications 안드로이드는 shouldPlaySound: false 면 채널 소리·진동과 상관없이 조용히 올린다)
+ */
+export function presentationFor(data: Record<string, unknown> | undefined): { shouldShowBanner: boolean; shouldShowList: boolean; shouldPlaySound: boolean; shouldSetBadge: boolean } {
+  if (data?.["type"] === "priceAlert") return { shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false };
+  return { shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false };
+}
+
+// 앱이 포그라운드일 때도 배너/목록에 표시 (가격 알림은 목록에만 조용히)
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
+  handleNotification: async (n) => presentationFor(n.request.content.data as Record<string, unknown> | undefined),
 });
 
 export class PushSetupError extends Error {
@@ -49,7 +56,7 @@ export async function ensureAndroidChannel(): Promise<void> {
   });
   await Notifications.setNotificationChannelAsync(PRICE_CHANNEL, {
     name: "가격 알림",
-    description: "목표가·급등락 알림",
+    description: "가격·등락률·거래량 알림",
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 150, 100, 150],
     sound: "default",
@@ -147,5 +154,27 @@ export function routeForNotification(data: Record<string, unknown> | undefined):
   if (data["digest"] === true) return "/briefings";
   if (data["type"] === "briefing" && typeof data["briefingId"] === "number") return `/briefings/${data["briefingId"]}`;
   if (data["type"] === "briefing" && typeof data["briefingId"] === "string") return `/briefings/${data["briefingId"]}`;
+  // 가격 알림(3-29)은 그 종목 상세로. 코드는 화면 주소에 넣기 전에 거른다 ("../x" 같은 값은 이동하지 않음)
+  if (data["type"] === "priceAlert" && typeof data["code"] === "string") {
+    const code = parseStockCode(data["code"]);
+    if (code) return `/stocks/${code}`;
+  }
   return null;
+}
+
+/**
+ * 가격 알림 한 줄을 휴대폰 알림 목록에 올린다 (3-29, 앱이 앞에 있을 때만 불린다 — lib/priceAlerts notifyPriceAlert 로 넣어 준다).
+ * 알림 권한이 이미 있을 때만 (이 기능은 권한을 묻지 않는다). 채널은 trigger 에서만 읽힌다 (backgroundBriefings 와 같음). 실패는 조용히 넘긴다
+ */
+export async function postPriceAlert(content: AlertNotification): Promise<void> {
+  try {
+    const perm = await Notifications.getPermissionsAsync();
+    if (perm.status !== "granted") return;
+    await Notifications.scheduleNotificationAsync({
+      content: { title: content.title, body: content.body, data: content.data },
+      trigger: Platform.OS === "android" ? { channelId: PRICE_CHANNEL } : null,
+    });
+  } catch {
+    /* 알림 목록 줄은 없어도 되는 것 (화면 위 카드·진동은 이미 알렸다) */
+  }
 }

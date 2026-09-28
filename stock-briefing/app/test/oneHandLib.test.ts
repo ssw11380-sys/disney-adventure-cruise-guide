@@ -101,6 +101,15 @@ describe("햅틱: 새 곳은 oneHand 켜짐 + 설정 켬일 때만, 차트 십�
     expect(hapticCall("error", "ios")).toEqual({ first: { fn: "notificationAsync", arg: "error" }, fallback: null });
   });
 
+  it("가격 알림(3-29): 설정 '누를 때 진동'만 따르고(oneHand 와 상관없이), 모든 플랫폼에서 진동기 notificationAsync(warning)", () => {
+    expect(hapticAllowed("alert", { oneHand: false, user: true })).toBe(true);
+    expect(hapticAllowed("alert", { oneHand: true, user: true })).toBe(true);
+    expect(hapticAllowed("alert", { oneHand: false, user: false })).toBe(false);
+    expect(hapticAllowed("alert", { oneHand: true, user: false })).toBe(false);
+    expect(hapticCall("alert", "android")).toEqual({ first: { fn: "notificationAsync", arg: "warning" }, fallback: null });
+    expect(hapticCall("alert", "ios")).toEqual({ first: { fn: "notificationAsync", arg: "warning" }, fallback: null });
+  });
+
   it("엔진이 없거나(테스트·웹) 허용되지 않으면 부르지 않고, 기종에 없는 종류는 대신 진동기", async () => {
     const calls: string[] = [];
     const engine = {

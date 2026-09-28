@@ -10,8 +10,9 @@
  *  - success: 관심 추가·관심 해제·삭제·동기화 제외가 끝났을 때
  *  - error: 그 일이 실패했을 때
  *  - chart: 차트 십자선 (예전부터 있던 곳) — 플래그가 꺼져 있으면 지금처럼 늘 울리고, 켜져 있으면 설정을 따른다
+ *  - alert: 가격 알림이 울릴 때 (3-29, 플래그 priceAlerts) — 설정 '누를 때 진동'만 따른다(oneHand 가 꺼져 있어도). 진동기라 휴대폰 '터치 진동'과 상관없이 울린다
  */
-export type HapticKind = "select" | "press" | "success" | "error" | "chart";
+export type HapticKind = "select" | "press" | "success" | "error" | "chart" | "alert";
 
 export interface HapticPolicy {
   /** 기능 플래그 oneHand (서버, 앱 fallback 꺼짐) */
@@ -24,6 +25,8 @@ export interface HapticPolicy {
 export function hapticAllowed(kind: HapticKind, p: HapticPolicy): boolean {
   // 차트 십자선: 플래그가 꺼져 있으면 예전 그대로(늘), 켜져 있으면 사용자가 끈 경우 울리지 않는다
   if (kind === "chart") return !p.oneHand || p.user;
+  // 가격 알림: 설정 '누를 때 진동'만 따른다 (이 설정은 HapticsBridge 가 늘 넘긴다)
+  if (kind === "alert") return p.user;
   return p.oneHand && p.user;
 }
 
@@ -38,7 +41,7 @@ export interface HapticEngine {
 export type HapticCall =
   | { fn: "selectionAsync" }
   | { fn: "impactAsync"; arg: "light" | "medium" }
-  | { fn: "notificationAsync"; arg: "success" | "error" }
+  | { fn: "notificationAsync"; arg: "success" | "error" | "warning" }
   | { fn: "performAndroidHapticsAsync"; arg: "segment-tick" | "long-press" | "confirm" | "reject" };
 
 /**
@@ -50,14 +53,16 @@ export type HapticCall =
  */
 export function hapticCall(kind: HapticKind, os: string): { first: HapticCall; fallback: HapticCall | null } {
   if (kind === "chart") return { first: { fn: "selectionAsync" }, fallback: null };
-  const plain: Record<Exclude<HapticKind, "chart">, HapticCall> = {
+  // 가격 알림: 터치 피드백이 아니라 진동기 (알림이므로 휴대폰 '터치 진동' 설정과 상관없이)
+  if (kind === "alert") return { first: { fn: "notificationAsync", arg: "warning" }, fallback: null };
+  const plain: Record<Exclude<HapticKind, "chart" | "alert">, HapticCall> = {
     select: { fn: "selectionAsync" },
     press: { fn: "impactAsync", arg: "medium" },
     success: { fn: "notificationAsync", arg: "success" },
     error: { fn: "notificationAsync", arg: "error" },
   };
   if (os !== "android") return { first: plain[kind], fallback: null };
-  const android: Record<Exclude<HapticKind, "chart">, "segment-tick" | "long-press" | "confirm" | "reject"> = {
+  const android: Record<Exclude<HapticKind, "chart" | "alert">, "segment-tick" | "long-press" | "confirm" | "reject"> = {
     select: "segment-tick",
     press: "long-press",
     success: "confirm",

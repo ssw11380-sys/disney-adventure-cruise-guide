@@ -115,6 +115,10 @@ export const FEATURES = {
   moversMerge: {
     default: true,
     description: "변동 카드 합치기 (브리핑 2차 3, 앱만): '변동 큰 종목' 카드를 없애고 목록 1~3위에 순위, 계좌 카드·줄에 당일 손익 기여 상위 3종목(원화 금액만). 계좌 브리핑이 없거나 실패하면 예전 카드. 끄면 예전 그대로",
+  priceAlerts: {
+    default: true,
+    description:
+      "가격·등락률·거래량 알림 (3-29, 앱을 켜 둔 동안): 종목 상세 '알림'에서 조건 저장(표 price_alerts, 백업 포함, 한 종목 5개·모두 30개·거래량 10개), 앱이 앞에 있는 동안 실시간 체결·시세로 확인해 화면 위 알림·진동(설정 '누를 때 진동')·알림 목록 한 줄(소리 없음), 거래량 급증은 서버가 30분봉으로 오늘 정규장 누적을 지난 거래일(최대 20일) 개장 뒤 같은 경과 시간 평균과 견줌. 조건마다 하루 한 번. 끄면 버튼·설정 칸·알림이 없고 /api/price-alerts 는 빈 목록·409, 봉 조회 0 (저장된 조건은 지우지 않음)",
   },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 

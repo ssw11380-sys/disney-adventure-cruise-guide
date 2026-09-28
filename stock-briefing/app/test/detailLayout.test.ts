@@ -157,4 +157,14 @@ describe("합친 머리 배치 (detailHeaderLayout)", () => {
     expect(detailHeaderLayout(tight).tier).not.toBe("one");
     expect(detailHeaderLayout({ ...tight, pager: null, action: false }).tier).toBe("one");
   });
+
+  it("가격 알림 종(3-29, alert)이 있으면 그 폭(44 + 간격)만큼 한 단계 일찍 둘째 줄로 내려가고, 없으면 지금 결과 그대로", () => {
+    const short = { ...base, state: ["한국 휴장", "9/23 20:00"] };
+    const widths = Array.from({ length: 400 }, (_, i) => 560 + i);
+    const edge = widths.find((w) => detailHeaderLayout({ ...short, width: w }).tier === "one" && detailHeaderLayout({ ...short, width: w, alert: true }).tier !== "one");
+    expect(edge).toBeDefined();
+    expect(detailHeaderLayout({ ...short, width: edge! + 52, alert: true }).tier).toBe("one");
+    for (const w of widths) expect(detailHeaderLayout({ ...short, width: w, alert: false }).tier).toBe(detailHeaderLayout({ ...short, width: w }).tier);
+    expect(detailHeaderLayout({ ...base, alert: true }).tier).toBe("one");
+  });
 });

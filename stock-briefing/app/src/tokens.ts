@@ -621,3 +621,23 @@ export const scores = {
   /** 레버리지 주의 상자 왼쪽 강조선 두께 */
   noticeBar: 3,
 } as const;
+
+/** 가격 알림 (3-29, 기능 플래그 priceAlerts). 단위 dp·ms */
+export const priceAlert = {
+  /** 화면 위 알림 카드 최대 폭 (펼친 화면은 가운데) */
+  bannerMaxW: 520,
+  /** 알림 시트 최대 폭 (펼친 화면은 가운데) */
+  sheetMaxW: 560,
+  /** 알림 시트 최대 높이 = 창 높이 × 이 값 (안은 스크롤, 저장 버튼은 늘 보임) */
+  sheetMaxHRatio: 0.85,
+  /** 한 카드에 보이는 알림 줄 수 (넘치면 '외 N건') */
+  bannerRows: 3,
+  /** 알림 카드가 저절로 닫히기까지 (화면 읽기가 켜져 있으면 닫지 않음) */
+  bannerHideMs: 10_000,
+  /** 거래량 급증 상태를 묻는 간격 (거래량 조건이 있을 때만) */
+  volumePollMs: 30_000,
+  /** 거래량 조건 종목이 모두 정규장 밖(closed)일 때 묻는 간격 */
+  volumeIdleMs: 300_000,
+  /** 조건 목록 받기가 실패했을 때(404 제외) 다시 묻는 간격 */
+  rulesRetryMs: 60_000,
+} as const;

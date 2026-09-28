@@ -193,6 +193,22 @@ export interface IndicatorScoreTable {
   updated_at: string;
 }
 
+/**
+ * 가격 알림 조건 (3-29, 플래그 priceAlerts): 조건 하나 = 1줄. 같은 (종목·종류·값)은 하나만. 등록 종목인지는 표에 두지 않고 읽을 때 registered_stocks 로 정한다.
+ * fired_on 은 그 조건이 마지막으로 울린 거래일 (조건마다 하루 한 번 — 앱이 울린 뒤 알려 준다). 3-30(앱이 꺼져 있어도 알림)이 이 칸을 이어 쓴다
+ */
+export interface PriceAlertTable {
+  id: Generated<number>;
+  code: string;
+  kind: string; // 'priceAbove' | 'priceBelow' | 'rateUp' | 'rateDown' | 'volume'
+  value: number; // 가격(종목 통화) · 등락률(양수 %) · 거래량 배수
+  currency: string | null; // 가격 조건만 'KRW' | 'USD', 그 밖에는 null
+  created_at: string;
+  fired_on: string | null; // YYYY-MM-DD, 마지막으로 울린 그 종목 거래일
+  fired_at: string | null; // 울린 때 ISO (앱이 보낸 값)
+  fired_value: number | null; // 울린 순간 조건을 판정한 값 (가격 · 등락률 · 거래량 배율)
+}
+
 export interface Database {
   listed_stocks: ListedStockTable;
   registered_stocks: RegisteredStockTable;
@@ -208,4 +224,5 @@ export interface Database {
   account_snapshots: AccountSnapshotTable;
   trade_executions: TradeExecutionTable;
   indicator_scores: IndicatorScoreTable;
+  price_alerts: PriceAlertTable;
 }
