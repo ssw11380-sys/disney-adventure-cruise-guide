@@ -456,12 +456,12 @@ describe("양도세 추정 탭", () => {
 
   it("검토 반영 4차: 순서를 몰라 합계에서 뺀 매도 — 빠진 매도 상자에 추정 양도차익 줄 · 매도별 계산에 '합계에서 뺌'으로 따로 (폴드 가로 오른쪽 칸도)", () => {
     const u = { key: "u", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", settleSource: "estimated" as const, quantity: 15, proceedsUsd: 1800, costsUsd: null, fxSell: { rate: 1350, source: "smbs", date: "2026-09-30", provisional: false }, proceedsKrw: 2_430_000, costKrw: 2_025_000, costsKrw: null, gainKrw: 405_000, estimate: { status: "order-uncertain" as const, reason: "x" } };
-    const reason = "사고판 순서나 주문 내역에 없는 입고를 몰라 취득가가 확실하지 않아 합계에서 뺐어요";
+    const reason = "사고판 순서나 주문 내역에 없는 주식 수 변화(입고·출고·병합 등)를 몰라 취득가가 확실하지 않아 합계에서 뺐어요";
     const tax: JournalTax = { ...TAX, items: [], excluded: [{ code: "SOXL", name: "SOXL", count: 1, reason }], totals: { gains: 0, losses: 0, net: 0, base: 0, nationalTax: 0, localTax: 0, tax: 0, sells: 0 }, uncertainExcluded: 1, uncertainGainKrw: 405_000, uncertainItems: [u] };
     h.params = { tab: "tax" };
     h.tax = tax;
     let r = draw();
-    expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toBe(`계산에 넣지 못한 매도 1건이 있어 실제와 다를 수 있어요.SOXL 1건 · ${reason}순서를 몰라 뺀 매도 1건의 추정 양도차익은 +405,000원이에요 (확실하지 않아요).`);
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toBe(`계산에 넣지 못한 매도 1건이 있어 실제와 다를 수 있어요.SOXL 1건 · ${reason}취득가가 확실하지 않아 뺀 매도 1건의 추정 양도차익은 +405,000원이에요.`);
     press(r, byLabel(r, "매도별 계산 보기"));
     expect(r.text()).toContain("환율 1,350.00원 · 합계에서 뺌");
     expect(r.text()).toContain("양도가액 2,430,000원 − 취득가액 2,025,000원 = +405,000원");

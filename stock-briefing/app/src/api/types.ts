@@ -1159,7 +1159,7 @@ export interface JournalTax {
   /** 합계에 들어 있는, 평균 구매가를 추정한 매도 수와 종목·까닭 (예전 서버는 없음) */
   estimatedIncluded?: number;
   estimatedSells?: { code: string; name: string; count: number; reason: string }[];
-  /** 순서를 몰라(순서 추정) 합계에서 뺀 매도 수 · 그 추정 양도차익 합 · 매도별 계산 (까닭은 excluded 에도 — 예전 서버는 없음) */
+  /** 순서 추정(사고판 순서·주문 내역에 없는 주식 수 변화를 몰라 취득가가 확실하지 않음)이라 합계에서 뺀 매도 수 · 그 추정 양도차익 합 · 매도별 계산 (까닭은 excluded 에도 — 예전 서버는 없음) */
   includeUncertain?: boolean;
   uncertainExcluded?: number;
   uncertainGainKrw?: number | null;

@@ -667,9 +667,9 @@ export function taxView(d: JournalTax, retriesDone: boolean): TaxView | null {
   const exCount = ex.reduce((s, x) => s + x.count, 0) + (pendingN > 0 && retriesDone ? pendingN : 0);
   const lines = ex.map((x) => `${x.name} ${x.count}건 · ${x.reason}`);
   if (pendingN > 0 && retriesDone) lines.push(`${pendingN}건 · 결제일 환율을 아직 받지 못했어요`);
-  // 순서를 몰라 합계에서 뺀 매도 (까닭 줄은 excluded 에 서버가 넣었다): 그 추정 양도차익을 참고로 한 줄
+  // 순서 추정(사고판 순서·주문 내역에 없는 주식 수 변화를 몰라 취득가가 확실하지 않음)이라 합계에서 뺀 매도 (까닭 줄은 excluded 에 서버가 넣었다): 그 추정 양도차익을 참고로 한 줄
   const unN = d.uncertainExcluded ?? 0;
-  if (unN > 0 && d.uncertainGainKrw !== null && d.uncertainGainKrw !== undefined) lines.push(`순서를 몰라 뺀 매도 ${unN}건의 추정 양도차익은 ${won(d.uncertainGainKrw, true)}이에요 (확실하지 않아요).`);
+  if (unN > 0 && d.uncertainGainKrw !== null && d.uncertainGainKrw !== undefined) lines.push(`취득가가 확실하지 않아 뺀 매도 ${unN}건의 추정 양도차익은 ${won(d.uncertainGainKrw, true)}이에요.`);
   return {
     title: `해외주식 양도세 추정 · ${d.year}년`,
     rows,

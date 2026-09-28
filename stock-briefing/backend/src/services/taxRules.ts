@@ -84,7 +84,7 @@ export function taxFor(net: number): { base: number; nationalTax: number; localT
 export const TAX_EXCLUDE_REASON = {
   cost: "기록 시작 전에 산 몫이라 취득가를 몰라요",
   fx: "결제일 환율을 받지 못했어요",
-  uncertain: "사고판 순서나 주문 내역에 없는 입고를 몰라 취득가가 확실하지 않아 합계에서 뺐어요",
+  uncertain: "사고판 순서나 주문 내역에 없는 주식 수 변화(입고·출고·병합 등)를 몰라 취득가가 확실하지 않아 합계에서 뺐어요",
 } as const;
 
 export interface TaxFx {
@@ -116,7 +116,8 @@ export interface TaxSellInput {
   pending: boolean;
   /**
    * 평균 구매가를 추정한 매도: 분할·이관 전후 'estimated' 는 합계에 넣고 '추정 포함'으로 따로 센다.
-   * 순서 모름·많이 판 매도 'order-uncertain' 은 기본으로 합계에서 빼고(가짜 손실이 세액을 몰래 낮추지 않게) 까닭과 매도별 계산을 따로 준다
+   * 순서 모름·많이 판 매도·확인하지 못한 주식 수 변화(병합·분할을 알아보지 못한 0주 구간) 'order-uncertain' 은 기본으로 합계에서 빼고
+   * (가짜 손실·가짜 이익이 세액을 몰래 바꾸지 않게) 까닭과 매도별 계산을 따로 준다
    */
   estimate?: { status: "estimated" | "order-uncertain"; reason: string } | null;
 }
@@ -158,8 +159,8 @@ export interface TaxSummaryOptions {
 
 /**
  * 그해(결제일 기준) 합계 · 매도별 계산 · 빠진 매도 · 추정이 들어간 매도(합계에 들어 있음 — 건수와 종목·까닭). 매도마다 원 단위로 먼저 반올림한 값의 합이 합계.
- * 순서를 모르는 매도(order-uncertain — 같은 날 사고판 순서 · 기록된 수량보다 많이 판 매도)는 기본으로 합계에서 뺀다:
- * 분할 뒤 전부 판 매도처럼 원가가 몇 배로 부풀어 가짜 손실이 세액을 조용히 낮출 수 있어서다. 빠진 매도(excluded)에 까닭을 넣고
+ * 순서를 모르는 매도(order-uncertain — 같은 날 사고판 순서 · 기록된 수량보다 많이 판 매도 · 확인하지 못한 주식 수 변화)는 기본으로 합계에서 뺀다:
+ * 분할·병합 뒤 전부 판 매도처럼 원가가 몇 배로 부풀거나 줄어 가짜 손익이 세액을 조용히 바꿀 수 있어서다. 빠진 매도(excluded)에 까닭을 넣고
  * (예전 앱도 그 상자를 보여 준다) 건수·추정 양도차익 합·매도별 계산(uncertainItems)은 따로 준다. includeUncertain 이면 예전처럼 합계에 넣는다
  */
 export function taxSummary(

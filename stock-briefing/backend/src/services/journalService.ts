@@ -3,7 +3,7 @@ import { AppError } from "../lib/errors.js";
 import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
 import type { DailyRate } from "../providers/market/fxStd.js";
 import type { FeatureKey } from "./featureService.js";
-import { replayPair, round6, roundMoney, tossCosts, type Cur, type EstimatedRow, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
+import { REASONS, replayPair, round6, roundMoney, tossCosts, type Cur, type EstimatedRow, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
 import { periodReturns, presetRange, READY_DAYS, type Preset, type RetFlow, type RetSnap, type ReturnsBody, type ReturnsMarket } from "./journalReturns.js";
 import { tradingDate } from "./marketContext.js";
 import { isKrBankDay, taxSummary, TAX_RULES, usSettleDate, type TaxFx, type TaxSellInput } from "./taxRules.js";
@@ -522,7 +522,9 @@ export class JournalService {
     const flows: RetFlow[] = [];
     for (const t of trades) for (const f of t.fills) if (f.quantity > 0) flows.push({ market: t.market, side: t.side, amount: f.amount, at: f.at, kind: "trade" });
     // 주문 내역에 없는 수량 변화(이관 추정)는 그 스냅샷 가격으로 들어오고 나간 것으로 (분할·병합·무상증자 같은 회사 행동은 흐름이 아님).
-    // 그 스냅샷에 종목이 없으면(전량 출고·상장폐지, 입고된 몫까지 그 구간에 다 판 경우) 그 종목이 있던 직전 스냅샷의 가격으로 — 빼지 않으면 가짜 손익이 된다
+    // 그 스냅샷에 종목이 없으면(전량 출고·상장폐지, 입고된 몫까지 그 구간에 다 판 경우) 그 종목이 있던 직전 스냅샷의 가격과
+    // 그 구간 평균 판 가격(있으면) 가운데 낮은 쪽으로 — 빼지 않으면 가짜 손익이 된다. 알아보지 못한 분할(늘어남)은 판 가격이, 병합(줄어듦)은
+    // 직전 가격이 한 주 값에 가까워 가짜 흐름이 가장 작다 (거래정지 날 0주로 보였다가 분할된 4,000주가 들어와 전부 판 경우 −75% → 0%)
     const pairs = this.pairs(trades, snaps, toss);
     const pxOf = (h: SnapshotHolding | undefined) => {
       const v = h ? (h.regularClose ?? h.price) : null;
@@ -537,6 +539,7 @@ export class JournalService {
         if (px === null) {
           const before = snaps.filter((x) => x.status === "ok" && x.market === p.market && Date.parse(x.asOf) < Date.parse(e.at) && held(x));
           px = pxOf(before.length ? held(before.at(-1)!) : undefined);
+          if (e.sellPx !== undefined && (px === null || e.sellPx < px)) px = e.sellPx;
         }
         if (px === null) continue;
         flows.push({ market: p.market, side: e.qty > 0 ? "BUY" : "SELL", amount: Math.abs(e.qty) * px, at: e.at, kind: "transfer" });
@@ -586,9 +589,15 @@ export class JournalService {
         const std = r?.std;
         const costsUsd = r?.realized?.costs.source === "toss" ? r.realized.costs.total : null;
         const ok = !!std && std.proceeds !== null && std.cost !== null && fxSell !== null;
-        // 평균 구매가를 추정한 매도: 분할·이관 전후는 합계에 넣고 '추정 포함'으로 따로 센다 · 순서 모름은 기본으로 합계에서 뺀다 (taxSummary)
+        // 평균 구매가를 추정한 매도: 분할·이관 전후는 합계에 넣고 '추정 포함'으로 따로 센다 · 순서 모름은 기본으로 합계에서 뺀다 (taxSummary).
+        // 수량은 같은데 토스 매입금액이 달라져(분사 등) 원화 취득가를 그 비율로 고친 매도도 '추정 포함'
         const st = r?.realized?.status;
-        const estimate = st === "estimated" || st === "order-uncertain" ? { status: st, reason: r!.realized!.reason ?? "" } : null;
+        const estimate =
+          st === "estimated" || st === "order-uncertain"
+            ? { status: st, reason: r!.realized!.reason ?? "" }
+            : ok && std!.estimated
+              ? { status: "estimated" as const, reason: REASONS.costChanged }
+              : null;
         // 결제일 환율 대기: 이 매도의 결제일(또는 이 짝 매수의 결제일)이 아직 받는 중
         const pending = !ok && (fx === "pending" || (std?.missing === "fx" && lookupPending(p.fills, settle, lookup)));
         inputs.push({

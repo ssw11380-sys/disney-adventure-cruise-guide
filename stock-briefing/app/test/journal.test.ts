@@ -539,7 +539,7 @@ describe("검토 반영 (3-37 다듬기)", () => {
   });
 
   it("검토 반영 4차: 순서를 모르는 매도는 합계에서 빠짐 — 빠진 매도 상자에 까닭 + 추정 양도차익 한 줄, 매도별 계산 첫 줄 '합계에서 뺌'", () => {
-    const reason = "사고판 순서나 주문 내역에 없는 입고를 몰라 취득가가 확실하지 않아 합계에서 뺐어요";
+    const reason = "사고판 순서나 주문 내역에 없는 주식 수 변화(입고·출고·병합 등)를 몰라 취득가가 확실하지 않아 합계에서 뺐어요";
     const item = { key: "u", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", settleSource: "estimated" as const, quantity: 4000, proceedsUsd: 100_000, costsUsd: null, fxSell: { rate: 1350, source: "smbs", date: "2026-09-30", provisional: false }, proceedsKrw: 135_000_000, costKrw: 540_000_000, costsKrw: null, gainKrw: -405_000_000, estimate: { status: "order-uncertain" as const, reason: "x" } };
     const d: JournalTax = {
       enabled: true,
@@ -557,7 +557,7 @@ describe("검토 반영 (3-37 다듬기)", () => {
       kr: { securitiesTax: { amount: null, sells: 0, source: null } },
     };
     const v = taxView(d, false)!;
-    expect(v.excluded).toEqual({ title: "계산에 넣지 못한 매도 1건이 있어 실제와 다를 수 있어요.", lines: [`SOXL 1건 · ${reason}`, "순서를 몰라 뺀 매도 1건의 추정 양도차익은 -405,000,000원이에요 (확실하지 않아요)."] });
+    expect(v.excluded).toEqual({ title: "계산에 넣지 못한 매도 1건이 있어 실제와 다를 수 있어요.", lines: [`SOXL 1건 · ${reason}`, "취득가가 확실하지 않아 뺀 매도 1건의 추정 양도차익은 -405,000,000원이에요."] });
     // 합계 줄에는 '추정 포함'을 붙이지 않는다 (합계에 들어 있지 않음)
     expect(v.rows[0]!.label).toBe("양도차익 합계 (이익 − 손실)");
     expect(taxItemLines(item, true)[0]).toBe("9/28 SOXL 4,000주 · 결제일 9/30(추정) · 환율 1,350.00원 · 합계에서 뺌");

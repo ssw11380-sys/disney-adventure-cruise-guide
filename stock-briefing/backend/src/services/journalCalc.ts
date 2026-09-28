@@ -10,11 +10,15 @@
  *  - 기준점이 없는 짝: 0주에서 음수 없이 돌면 'history-only'(토스 잔고와 맞춰 보지 못함), 음수면 모름
  *  - 기준점마다 대조: 수량이 다르면 회사 행동(분할·병합·무상증자·주식배당 — 비율과 상관없이 토스 매입금액이 그대로, 사이 매도만큼 줄어든 값.
  *    수량 변화 2% 이상 · 매입금액 차이 0.5% 이하이면서 수량 변화의 1/10 이하) 또는 이관(그 밖) 추정 줄 + 사이 매도는 'estimated'.
- *    회사 행동은 사이 몫의 뒤(끝 가정)·앞(처음 가정) 둘 다 계산해 토스 매입금액에 더 가까운 쪽을 고르고(같으면 흔한 배수 모양 → 처음 가정),
- *    처음 가정이면 사이 몫을 행동 뒤 수량으로 다시 계산한다 (1→4 분할 날 판 5주가 분할 전 평균으로 계산되어 가짜 손실이 나지 않게).
- *    다음 스냅샷이 0주(행동 뒤 같은 구간에 전부 팖)면 매입금액으로 맞춰 볼 수 없어: 행동 뒤 수량(판 수량 − 산 수량)이 흔한 배수(COMMON_RATIOS,
- *    1주 미만 끝수 현금 포함)이고, 판 가격이 그 배수와 맞으며(직전 스냅샷 가격을 알 때 — 모르면 수량이 늘어나는 쪽만), 그 수량으로 다시 돌려
- *    많이 판 매도 없이 딱 0주에서 끝나면 회사 행동(처음 가정). 아니면 이관 추정 + 많이 판 매도는 'order-uncertain' (양도세 합계에서는 기본으로 뺀다)
+ *    회사 행동은 행동 시점을 사이 몫의 앞(처음 가정)·몫 사이(판 가격도 맞을 때 — 시간외 매매 뒤 행동)·뒤(끝 가정)마다 계산해 토스 매입금액에
+ *    가장 가까운 쪽을 고르고(같으면 흔한 배수 모양 → 이른 시점), 행동 뒤 몫은 행동 뒤 수량으로 다시 계산한다
+ *    (1→4 분할 날 판 5주가 분할 전 평균으로 계산되어 가짜 손실이 나지 않게).
+ *    다음 스냅샷이 0주(행동 뒤 같은 구간에 전부 팖)면 매입금액으로 맞춰 볼 수 없어: ① 행동 시점마다 행동 뒤 수량(그 뒤 판 수량 − 산 수량)이
+ *    흔한 배수(COMMON_RATIOS, 1주 미만 끝수 현금·올림 포함)이고, 판 가격이 그 배수와 맞으며(직전 기록 가격 — 권리락 뒤 늦게 들어온 새 주식은
+ *    앞 기록에서 한 번에 내린 가격까지), 그 수량으로 다시 돌려 많이 판 매도 없이 딱 0주에서 끝나면 회사 행동. 가격을 모르면 받아들이지 않는다.
+ *    ② 흔하지 않은 큰 배수인데 판 가격이 따라가면 행동으로 계산하되 'order-uncertain' ③ 판 가격이 직전 가격 쪽이면 이관 'estimated'
+ *    ④ 그 밖은 이관 + 구간 매도 모두 'order-uncertain' (방향과 상관없이 — 양도세 합계에서는 기본으로 뺀다)
+ *  - 수량은 같은데 토스 매입금액이 0.5% 넘게 달라지면(분사 등) 결제일 원화 매입금액도 같은 비율로 고치고 그 뒤 매도의 양도세 줄을 추정으로 표시
  *  - 기준점 뒤 기록된 수량보다 많이 판 매도: 0 으로 되돌리지 않고 수량을 음수로 둔다 → 다음 기준점의 이관 추정이 빠진 입고만큼 나온다.
  *    그 매도는 기준점 평균으로 추정한 'order-uncertain', 그 구간의 다음 매도는 평균을 모름
  *  - 같은 두 기준점 사이 반대 방향 몫 가운데 체결 시각(filled)이 아닌 것이 있으면 순서를 모른다 → 매수 먼저·매도 먼저로 계산해
@@ -39,6 +43,9 @@ export const REASONS = {
   split: "분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요.",
   oversoldAfter: "기록된 수량보다 많이 판 매도라 평균 구매가를 추정했어요 (주문 순서나 주문 내역에 없는 입고를 몰라요).",
   transfer: "주문 내역에 없는 수량 변화가 있어 평균 구매가를 추정했어요.",
+  splitUncertain: "분할·병합·감자 같은 주식 수 변화로 보이지만 비율이 흔하지 않아 평균 구매가를 추정했어요.",
+  changeUncertain: "주문 내역에 없는 주식 수 변화(분할·병합·입고·출고 등)를 확인하지 못해 평균 구매가를 추정했어요.",
+  costChanged: "수량은 그대로인데 토스 매입금액이 달라져(분사 등) 원화 취득가를 같은 비율로 추정했어요.",
   krwNoFx: "판매 때 환율을 받지 못해 원화 손익은 빼요.",
   krwNoBuyFx: "매수 때 환율을 받지 못해 원화 손익은 빼요.",
   krwNoBothFx: "매수·판매 때 환율을 받지 못해 원화 손익은 빼요.",
@@ -119,6 +126,8 @@ export interface StdValue {
   cost: number | null;
   /** 원가를 모름(기록 전 몫) · 결제일 환율 없음 */
   missing: null | "cost" | "fx";
+  /** 취득가를 토스 매입금액 비율로 고쳐 추정함 (수량은 같은데 매입금액이 달라짐 — 분사 등). 아니면 없음 */
+  estimated?: true;
 }
 
 export interface FillResult {
@@ -137,6 +146,11 @@ export interface EstimatedRow {
   reason: "split" | "transfer";
   /** 분할·병합·무상증자 배수 (1→4 면 4, 4→1 이면 0.25, 10→15 면 1.5) */
   ratio?: number;
+  /**
+   * 이관 줄이고 그 기록에 종목이 없을 때(0주) 그 구간 매도의 평균 판 가격 (종목 통화). 수익률의 이관 흐름 값에 쓴다 —
+   * 분할을 알아보지 못한 입고를 분할 전 가격으로 재면 몇 배로 부풀기 때문. 없으면 없음
+   */
+  sellPx?: number;
 }
 
 export interface PairCheck {
@@ -224,6 +238,8 @@ interface State {
   /** 해외 양도세: 결제일 기준환율로 쌓은 원화 매입금액 — 모르면 null */
   std: number | null;
   stdWhy: "cost" | "fx" | null;
+  /** 결제일 원화 매입금액을 토스 매입금액 비율로 고친 적이 있음 (추정 — 분사 등) */
+  stdEst: boolean;
   /** 원장보다 많이 판 매도가 있었음 (앞부분 기록 없음) */
   neg: boolean;
   /** 기준점(스냅샷)에서 출발한 원장 — 많이 판 매도를 0 으로 되돌리지 않는다 */
@@ -282,6 +298,7 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
     s.krwEst = false;
     s.std = 0;
     s.stdWhy = null;
+    s.stdEst = false;
     return;
   }
   const last = Math.abs(s.qty - f.quantity) <= EPS;
@@ -324,7 +341,7 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
     const proceeds = std !== null ? f.amount * std : null;
     if (s.std !== null) {
       const cs = share(s.std);
-      stdOut = { proceeds, cost: cs, missing: proceeds === null ? "fx" : null };
+      stdOut = { proceeds, cost: cs, missing: proceeds === null ? "fx" : null, ...(s.stdEst ? { estimated: true as const } : {}) };
       s.std = last ? 0 : s.std - cs;
     } else stdOut = { proceeds, cost: null, missing: s.stdWhy ?? "cost" };
   }
@@ -337,6 +354,7 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
     s.krwWhy = null;
     s.std = 0;
     s.stdWhy = null;
+    s.stdEst = false;
     s.costWhy = null;
   }
   out.set(f.key, { realized, ...(stdOut ? { std: stdOut } : {}) });
@@ -385,7 +403,10 @@ function oversoldAfter(s: State, f: LedgerFill, fx: number | null, std: number |
   let stdOut: StdValue | undefined;
   if (opts.stdAt) {
     const proceeds = std !== null ? f.amount * std : null;
-    stdOut = known && s.std !== null ? { proceeds, cost: share(s.std), missing: proceeds === null ? "fx" : null } : { proceeds, cost: null, missing: known ? (s.stdWhy ?? "cost") : "cost" };
+    stdOut =
+      known && s.std !== null
+        ? { proceeds, cost: share(s.std), missing: proceeds === null ? "fx" : null, ...(s.stdEst ? { estimated: true as const } : {}) }
+        : { proceeds, cost: null, missing: known ? (s.stdWhy ?? "cost") : "cost" };
   }
   s.qty = round6(s.qty - f.quantity);
   s.cost = null;
@@ -394,6 +415,7 @@ function oversoldAfter(s: State, f: LedgerFill, fx: number | null, std: number |
   s.krwWhy = REASONS.krwNoBook;
   s.std = null;
   s.stdWhy = "cost";
+  s.stdEst = false;
   out.set(f.key, { realized, ...(stdOut ? { std: stdOut } : {}) });
 }
 
@@ -490,48 +512,137 @@ function simpleRatio(r: number): boolean {
   return nearWhole(r) || nearWhole(1 / r) || Math.abs(r * 100 - Math.round(r * 100)) <= r * 100 * 1e-4;
 }
 
-/** 분할 N · 병합 1/N 에 쓰는 N */
-const SPLIT_N = [...Array.from({ length: 19 }, (_, i) => i + 2), 25, 30, 40, 50, 100];
+/** 분할 N · 병합 1/N 에 쓰는 N (미국 병합에 흔한 35·60·75·80·150·200·250·300·500·1000 포함) */
+const SPLIT_N = [...Array.from({ length: 19 }, (_, i) => i + 2), 25, 30, 35, 40, 50, 60, 75, 80, 100, 150, 200, 250, 300, 500, 1000];
 /**
  * 회사 행동 뒤 같은 구간에 전부 팔아 토스 매입금액으로 맞춰 볼 수 없을 때 받아들이는 흔한 배수 —
- * 분할 N · 병합 1/N (N = 2~20 · 25 · 30 · 40 · 50 · 100), 무상증자·주식배당 1.02~1.10(1% 단위) · 1.15 · 1.2 · 1.25 · 1.3 · 1.4 · 1.5 · 2.5
+ * 분할 N · 병합 1/N (N = SPLIT_N), 무상증자·주식배당 1.02~1.10(1% 단위) · 1.15 · 1.2 · 1.25 · 1.3 · 1.4 · 1.5 · 2.5
  */
 export const COMMON_RATIOS: readonly number[] = [...SPLIT_N, ...SPLIT_N.map((n) => 1 / n), 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5, 2.5];
 
 /**
- * fromQty 주가 회사 행동 뒤 toQty 주가 되었다고 볼 흔한 배수 (COMMON_RATIOS 가운데 — 없으면 null). 행동 뒤 수량은 딱 배수만큼이거나,
- * 온 주식 수(정수)였다면 1주 미만 끝수를 현금으로 받아 내린 값이다 (333주 × 1.05 = 349.65 → 349주). 여럿이 맞으면 실제 배수에 가장 가까운 것.
- * 수량 변화 2% 미만(CORP_MIN_CHANGE)은 보지 않는다
+ * fromQty 주가 회사 행동 뒤 toQty 주가 되었다고 볼 수 있는 흔한 배수들 (COMMON_RATIOS 가운데, 실제 배수에 가까운 순 — 없으면 빈 목록).
+ * 행동 뒤 수량은 딱 배수만큼이거나, 정수 주식으로 받았다면 1주 미만 끝수를 현금으로 받아 내린 값(333주 × 1.05 = 349.65 → 349주 ·
+ * 소수 주식 10.5주 1/10 병합 = 1.05 → 1주)이거나 끝수를 올려 준 값(미국 병합에 흔함 — 1,003주 1/8 병합 = 125.375 → 126주)이다.
+ * 끝수 때문에 여럿이 맞으면(적은 수량) 판 가격으로 고른다 (priceFit). 수량 변화 2% 미만(CORP_MIN_CHANGE)은 보지 않는다
  */
-export function commonRatio(fromQty: number, toQty: number): number | null {
-  if (!(fromQty > EPS) || !(toQty > EPS)) return null;
+export function commonRatios(fromQty: number, toQty: number): number[] {
+  if (!(fromQty > EPS) || !(toQty > EPS)) return [];
   const k = toQty / fromQty;
-  if (Math.abs(k - 1) < CORP_MIN_CHANGE) return null;
-  const whole = Math.abs(fromQty - Math.round(fromQty)) <= EPS;
-  let best: number | null = null;
+  if (Math.abs(k - 1) < CORP_MIN_CHANGE) return [];
+  const wholeTo = Math.abs(toQty - Math.round(toQty)) <= EPS;
+  const out: number[] = [];
   for (const r of COMMON_RATIOS) {
     const exact = fromQty * r;
     const tol = 1e-6 + exact * 1e-9;
-    const fits = Math.abs(toQty - exact) <= tol || (whole && toQty >= Math.floor(exact + tol) - tol && toQty <= exact + tol);
-    if (fits && (best === null || Math.abs(Math.log(r / k)) < Math.abs(Math.log(best / k)))) best = r;
+    const fits = Math.abs(toQty - exact) <= tol || (wholeTo && toQty >= Math.floor(exact + tol) - tol && toQty <= Math.ceil(exact - tol) + tol);
+    if (fits) out.push(r);
   }
-  return best === null ? null : tidyRatio(best);
+  return out.sort((x, y) => Math.abs(Math.log(x / k)) - Math.abs(Math.log(y / k))).map(tidyRatio);
+}
+
+const LN15 = Math.log(1.5);
+/** 늦게 들어온 새 주식을 찾을 때 거슬러 보는 기간 (권리락 → 신주 상장 약 한 달, 미국 주식배당 배당락 → 지급 몇 주) */
+const REF_DAYS = 120;
+const okPrice = (p: number | null | undefined): number | null => (p !== null && p !== undefined && Number.isFinite(p) && p > 0 ? p : null);
+
+/** 가격 비율 x(행동 전 가격 ÷ 판 가격)가 배수 r 쪽: 1(행동 없음)보다 r 에 가깝고 r 의 ×1.5·÷1.5 안. 맞으면 로그 거리, 아니면 null */
+function towardR(x: number, r: number): number | null {
+  const off = Math.abs(Math.log(x / r));
+  return off < Math.abs(Math.log(x)) && off <= LN15 ? off : null;
+}
+
+/** 가격 비율 x 가 행동 없음(1) 쪽: 배수 r 보다 1 에 가깝고 ×1.5·÷1.5 안 (r = Infinity 면 ×1.5 안이기만) */
+function towardOne(x: number, r: number): number | null {
+  const off = Math.abs(Math.log(x));
+  return off < Math.abs(Math.log(x / r)) && off <= LN15 ? off : null;
+}
+
+/** 몫들의 평균 가격 (수량·금액이 없으면 null) */
+function avgPx(fs: LedgerFill[]): number | null {
+  const q = fs.reduce((s, f) => s + f.quantity, 0);
+  const amt = fs.reduce((s, f) => s + f.amount, 0);
+  return q > EPS && amt > 0 ? amt / q : null;
 }
 
 /**
- * 판 가격이 배수 r 와 맞는지 (회사 행동 뒤 같은 구간에 전부 판 경우의 교차 확인). implied = 직전 스냅샷 가격 ÷ 그 구간 평균 판 가격.
- *  - 가격을 알면: implied 가 1(행동 없음)보다 r 에 가깝고(로그 거리) r 의 1.5배·1/1.5배 안 — 1,000원 종목을 250원에 팔았으면 4배 분할
- *  - 가격을 모르면: 수량이 늘어나는 쪽(분할·무상증자 — 원장은 이미 '많이 판 매도'라 순서 추정)만 배수 모양으로 받아들인다.
- *    줄어드는 쪽(병합)은 부분 매도 뒤 출고와 구별할 수 없어 받아들이지 않는다 (가짜 손실을 만들지 않게)
+ * 매도 묶음의 판 가격이 기준 가격 base 에서 배수 r 쪽(none 이면 행동 없음 쪽)인지: 평균 판 가격의 비율이 그쪽이고
+ * 매도마다 목표(r 또는 1)의 ×1.5·÷1.5 안 — 분할 전·뒤 매도가 섞여 평균만 우연히 맞는 경우(500주 1,000원 + 2,000주 250원 → 평균 400원 = 2.5배)를 막는다.
+ * 맞으면 평균의 로그 거리, 아니면 null
  */
-function priceFits(r: number, refPrice: number | null | undefined, sells: LedgerFill[]): boolean {
-  const q = sells.reduce((s, f) => s + f.quantity, 0);
-  const amt = sells.reduce((s, f) => s + f.amount, 0);
-  if (!(q > EPS) || !(amt > 0)) return false;
-  if (refPrice === null || refPrice === undefined || !(refPrice > 0) || !Number.isFinite(refPrice)) return r > 1;
-  const implied = refPrice / (amt / q);
-  const off = Math.abs(Math.log(implied / r));
-  return off < Math.abs(Math.log(implied)) && off <= Math.log(1.5);
+function groupFit(fs: LedgerFill[], base: number, r: number, none: boolean): number | null {
+  const avg = avgPx(fs);
+  if (avg === null) return null;
+  const off = none ? towardOne(base / avg, r) : towardR(base / avg, r);
+  if (off === null) return null;
+  const target = none ? 1 : r;
+  for (const f of fs) if (!(f.quantity > EPS && f.amount > 0) || Math.abs(Math.log(base / (f.amount / f.quantity) / target)) > LN15) return null;
+  return off;
+}
+
+/**
+ * 판 가격이 배수 r 의 회사 행동과 맞는지 (행동 뒤 같은 구간에 전부 판 경우의 교차 확인). refs = 행동 전 기록의 한 주 가격들
+ * (가장 최근이 먼저 — 수량이 같던 기록만, REF_DAYS 안). 행동 앞 매도(pre)는 refs[0] 에서 행동 없음 쪽, 행동 뒤 매도(post)는 배수 쪽이어야 한다.
+ *  - 바로: refs[0] ÷ 판 가격이 r 쪽 — 1,000원 종목을 250원에 팔았으면 4배 분할
+ *  - 늦게 들어온 새 주식(r > 1 — 무상증자·주식배당: 권리락·배당락 날 가격이 먼저 내리고 새 주식은 몇 주 뒤): 판 가격은 refs[0] 과 같은 쪽이고,
+ *    앞 기록 사이에서 가격이 한 번에 r 만큼 내렸으며, 내리기 전 가격 ÷ 판 가격이 r 쪽
+ * 가격을 모르면(refs 가 비면) 맞춰 볼 수 없다 (null — 수량만 보고 받아들이지 않는다). 맞으면 수량으로 무게를 준 로그 거리
+ */
+function priceFit(r: number, refs: number[], pre: LedgerFill[], post: LedgerFill[]): number | null {
+  const ref = refs[0];
+  if (ref === undefined || !post.length) return null;
+  let postErr = groupFit(post, ref, r, false);
+  if (postErr === null && r > 1 && groupFit(post, ref, r, true) !== null) {
+    for (let m = 0; m + 1 < refs.length; m++) {
+      if (towardR(refs[m + 1]! / refs[m]!, r) === null) continue;
+      const e = groupFit(post, refs[m + 1]!, r, false);
+      if (e !== null && (postErr === null || e < postErr)) postErr = e;
+    }
+  }
+  if (postErr === null) return null;
+  const preErr = pre.length ? groupFit(pre, ref, r, true) : 0;
+  if (preErr === null) return null;
+  const qPre = pre.reduce((s, f) => s + f.quantity, 0);
+  const qPost = post.reduce((s, f) => s + f.quantity, 0);
+  return (preErr * qPre + postErr * qPost) / (qPre + qPost);
+}
+
+/** 매입금액으로 맞춘 가운데 시점 행동의 판 가격 확인: 매도가 없으면 통과, 있으면 가격을 알아야 하고 앞 매도는 행동 없음 쪽 · 뒤 매도는 배수 쪽 */
+function midPriceOk(k: number, refs: number[], pre: LedgerFill[], post: LedgerFill[]): boolean {
+  if (!pre.length && !post.length) return true;
+  const ref = refs[0];
+  if (ref === undefined) return false;
+  if (pre.length && groupFit(pre, ref, k, true) === null) return false;
+  return !post.length || priceFit(k, refs, [], post) !== null;
+}
+
+/** 회사 행동 후보: 구간 몫 p 바로 앞에서 fromQty → toQty (p = 몫 수면 구간 끝) */
+interface Cand {
+  p: number;
+  k: number;
+  fromQty: number;
+  toQty: number;
+  /** 토스 매입금액과의 차이 (0주로 끝난 구간은 0) */
+  diff: number;
+  state: State;
+  /** 다시 돌린 결과 (끝 가정은 이미 적힌 그대로라 null) */
+  out: Out | null;
+  /** 흔한 배수 (0주로 끝난 구간) */
+  ratio?: number;
+  /** 판 가격 로그 거리 (0주로 끝난 구간) */
+  err?: number;
+}
+
+/**
+ * 매입금액으로 고른 두 후보 가운데 x 가 나은지: 토스 매입금액에 더 가까운 쪽, 같으면(1원·1센트 안 — 매수만 있는 구간) 배수가 흔한 모양인 쪽,
+ * 그래도 같으면 이른 시점 (회사 행동은 장 시작 전에 반영되므로 구간 몫은 행동 뒤인 경우가 많다 — 1→4 분할 날 판 5주가 분할 전 평균으로 계산되어 가짜 손실이 나지 않게)
+ */
+function betterCand(x: Cand, y: Cand, cur: Cur): boolean {
+  if (x.diff < y.diff - unit(cur)) return true;
+  if (Math.abs(x.diff - y.diff) > unit(cur)) return false;
+  const sx = simpleRatio(x.k);
+  const sy = simpleRatio(y.k);
+  return sx !== sy ? sx : x.p < y.p;
 }
 
 /**
@@ -560,7 +671,7 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
   };
 
   // ── 첫 기준점 전 (0주에서) ──
-  let s: State = { qty: 0, cost: 0, krw: 0, krwEst: false, krwWhy: null, std: 0, stdWhy: null, neg: false, anchored: false, costWhy: null, ratio: null };
+  let s: State = { qty: 0, cost: 0, krw: 0, krwEst: false, krwWhy: null, std: 0, stdWhy: null, stdEst: false, neg: false, anchored: false, costWhy: null, ratio: null };
   const firstEnd = anchors[0] ? t(anchors[0].asOf) : Infinity;
   const pre = runSegment(s, segs[0]!, -Infinity, firstEnd, opts, out);
   s = pre.state;
@@ -587,76 +698,164 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
   // 순서 모름 꼬리표 (기록 전 구간)
   if (preOk) for (const k of pre.uncertain) tagUncertain(out, k);
 
-  // 기준점 i 뒤 구간(segs[i + 1])을 start 에서 돌려 target 에 적는다 (출발 기준점 표시 · 순서 모름 꼬리표까지)
-  const runAfter = (i: number, start: State, target: Out): State => {
+  /**
+   * 기준점 i 뒤 구간(segs[i + 1])을 start 에서 돌려 target 에 적는다 (출발 기준점 표시 · 순서 모름 꼬리표까지).
+   * at 을 주면 회사 행동이 그 구간 몫 at.p 바로 앞에 있었다고 보고, 그때 수량을 at.toQty 로 바꿔 이어 돌린다 (매입금액은 그대로)
+   */
+  const runAfter = (i: number, start: State, target: Out, at?: { p: number; toQty: number }): State => {
     const a = anchors[i]!;
     const seg = segs[i + 1]!;
+    const begin = t(a.asOf);
     const end = anchors[i + 1] ? t(anchors[i + 1]!.asOf) : Infinity;
-    const r = runSegment(start, seg, t(a.asOf), end, opts, target);
+    const uncertain: string[] = [];
+    let st: State;
+    if (!at) {
+      const r = runSegment(start, seg, begin, end, opts, target);
+      st = r.state;
+      uncertain.push(...r.uncertain);
+    } else {
+      const before = seg.slice(0, at.p);
+      const after = seg.slice(at.p);
+      const r1 = runSegment(clone(start), before, begin, after[0] ? t(after[0].at) : end, opts, target);
+      const r2 = runSegment({ ...r1.state, qty: at.toQty }, after, before.length ? t(before[before.length - 1]!.at) : begin, end, opts, target);
+      st = r2.state;
+      uncertain.push(...r1.uncertain, ...r2.uncertain);
+    }
     for (const k of sellKeys(seg)) {
       const x = target.get(k)?.realized;
       if (!x || x.status === "unknown-cost") continue;
       x.basis = "snapshot";
       x.anchorDate = a.date;
     }
-    for (const k of r.uncertain) tagUncertain(target, k);
-    return r.state;
+    for (const k of uncertain) tagUncertain(target, k);
+    return st;
+  };
+
+  /** 기준점 j 에서 거슬러 수량이 같던 기록들의 한 주 가격 (가장 최근이 먼저, REF_DAYS 안). 기준점 j 가격을 모르면 빈 목록 */
+  const priceRefs = (j: number): number[] => {
+    const base = anchors[j]!;
+    const p0 = okPrice(base.price);
+    if (p0 === null) return [];
+    const refs = [p0];
+    for (let m = j - 1; m >= 0; m--) {
+      const x = anchors[m]!;
+      if (Math.abs(x.quantity - base.quantity) > EPS || t(base.asOf) - t(x.asOf) > REF_DAYS * 86_400_000) break;
+      const p = okPrice(x.price);
+      if (p !== null) refs.push(p);
+    }
+    return refs;
   };
 
   // ── 기준점마다 ──
-  /** 지금 구간이 출발한 원장 (회사 행동 '처음 가정'으로 구간을 다시 돌릴 때) */
+  /** 지금 구간이 출발한 원장 (회사 행동 시점을 바꿔 구간을 다시 돌릴 때) */
   let segStart: State | null = null;
   for (let i = 0; i < anchors.length; i++) {
     const a = anchors[i]!;
     /** 앞 구간의 수량 변화가 회사 행동(분할·무상증자 등)으로 설명됨 — 결제일 원화·원화 장부를 이어 쓴다 */
     let corp = false;
+    /** 수량은 같은데 토스 매입금액이 달라짐(분사 등): 결제일 원화 매입금액에 곱할 비율 */
+    let stdScale: number | null = null;
     if (i > 0) {
       // 앞 구간 끝 원장과 이 스냅샷 대조
-      const prevSells = sellKeys(segs[i]!);
+      const seg = segs[i]!;
+      const prevSells = sellKeys(seg);
       if (Math.abs(s.qty - a.quantity) > EPS) {
-        // 끝 가정: 행동이 구간 끝에 있었다 — 구간 몫은 행동 전 수량으로 계산한 그대로, 수량만 바뀜
-        const endK = s.qty > EPS && a.quantity > EPS ? a.quantity / s.qty : 0;
-        const endDiff = s.cost !== null && a.cost !== null ? corpFit(endK, a.cost, s.cost) : null;
-        // 처음 가정: 행동이 구간 처음에 있었다 — 행동 뒤 수량으로 구간을 다시 돌려 스냅샷(수량·매입금액)과 맞춰 본다
-        let start: { k: number; toQty: number; diff: number; state: State; out: Out; fromQty: number; ratio?: number } | null = null;
-        if (segStart && segs[i]!.length && segStart.qty > EPS && segStart.cost !== null && a.cost !== null && a.quantity > EPS) {
-          const k = (a.quantity - (s.qty - segStart.qty)) / segStart.qty;
-          if (k > 0 && Math.abs(k - 1) > 1e-4) {
-            const toQty = round6(segStart.qty * k);
-            const scaled: State = { ...segStart, qty: toQty };
-            const tmp: Out = new Map();
-            const e = runAfter(i - 1, scaled, tmp);
-            const diff = e.cost !== null && Math.abs(e.qty - a.quantity) <= EPS ? corpFit(k, a.cost, e.cost) : null;
-            if (diff !== null) start = { k, toQty, diff, state: e, out: tmp, fromQty: segStart.qty };
+        const n = seg.length;
+        const start0 = segStart;
+        const refs = priceRefs(i - 1);
+        const sellsIn = (from: number, to: number) => seg.slice(from, to).filter((f) => f.side === "SELL");
+        /** 구간 몫 [0, p) 를 적용한 수량 (행동 전 — 많이 판 매도가 끼면 null) */
+        const qtyBefore = (p: number): number | null => {
+          let q = start0!.qty;
+          for (let j = 0; j < p; j++) {
+            const f = seg[j]!;
+            q = round6(q + (f.side === "BUY" ? f.quantity : -f.quantity));
+            if (q < -EPS) return null;
+          }
+          return q;
+        };
+        /** 몫 [p, n) 의 판 수량 − 산 수량 */
+        const netSold = (p: number) => round6(seg.slice(p).reduce((acc, f) => acc + (f.side === "SELL" ? f.quantity : -f.quantity), 0));
+        let pick: Cand | null = null;
+        /** 회사 행동을 확인하지 못해 구간 매도를 '순서 추정'(양도세 합계에서 뺌)으로 둘 까닭 */
+        let unsure: string | null = null;
+        if (a.quantity > EPS) {
+          // 행동 시점 p 마다 (p = 0 은 처음 가정 — 행동이 구간 처음, p = n 은 끝 가정 — 구간 몫은 행동 전 수량으로 계산한 그대로):
+          // 그때 수량을 행동 뒤 수량으로 바꿔 구간을 다시 돌려 스냅샷(수량·매입금액)과 맞춰 본다.
+          // 가운데 시점(시간외 NXT·미국 애프터마켓 뒤 행동, 기록이 빠진 날)은 판 가격도 맞아야 한다 (행동 전 매도는 직전 가격 쪽 · 뒤 매도는 배수 쪽)
+          const cands: Cand[] = [];
+          if (start0 && n && start0.cost !== null && a.cost !== null) {
+            for (let p = 0; p < n; p++) {
+              const q = qtyBefore(p);
+              if (q === null || !(q > EPS)) continue;
+              const toQty = round6(a.quantity + netSold(p));
+              const k = toQty / q;
+              if (!(k > 0) || Math.abs(k - 1) <= 1e-4) continue;
+              if (p > 0 && !midPriceOk(k, refs, sellsIn(0, p), sellsIn(p, n))) continue;
+              const tmp: Out = new Map();
+              const e = runAfter(i - 1, start0, tmp, { p, toQty });
+              const diff = e.cost !== null && Math.abs(e.qty - a.quantity) <= EPS ? corpFit(k, a.cost, e.cost) : null;
+              if (diff !== null) cands.push({ p, k, fromQty: q, toQty, diff, state: e, out: tmp });
+            }
+          }
+          const endK = s.qty > EPS ? a.quantity / s.qty : 0;
+          const endDiff = s.cost !== null && a.cost !== null ? corpFit(endK, a.cost, s.cost) : null;
+          if (endDiff !== null) cands.push({ p: n, k: endK, fromQty: s.qty, toQty: a.quantity, diff: endDiff, state: s, out: null });
+          for (const c of cands) if (!pick || betterCand(c, pick, cur)) pick = c;
+        } else if (start0 && n && start0.qty > EPS && start0.cost !== null) {
+          // 전부 판 경우 (스냅샷 0주·0원): 매입금액으로 맞춰 볼 수 없다.
+          // ① 행동 시점 p 마다: 그때 수량 → 행동 뒤 수량(몫 [p, n) 의 판 − 산)이 흔한 배수(끝수 현금·올림 포함)이고 판 가격이 맞으며(priceFit),
+          //    다시 돌려 많이 판 매도 없이 딱 0주에서 끝나면 회사 행동 — 판 가격이 가장 잘 맞는 것 (같으면 이른 시점)
+          const clean = (e: State, tmp: Out) =>
+            Math.abs(e.qty) <= EPS && e.cost !== null && ![...tmp.values()].some((v) => v.realized && (v.realized.status === "unknown-cost" || v.realized.reason === REASONS.oversoldAfter));
+          if (refs.length) {
+            for (let p = 0; p < n; p++) {
+              const q = qtyBefore(p);
+              if (q === null || !(q > EPS)) continue;
+              const toQty = netSold(p);
+              for (const r of commonRatios(q, toQty)) {
+                const err = priceFit(r, refs, sellsIn(0, p), sellsIn(p, n));
+                if (err === null || (pick && err >= pick.err! - 1e-9)) continue;
+                const tmp: Out = new Map();
+                const e = runAfter(i - 1, start0, tmp, { p, toQty });
+                if (clean(e, tmp)) pick = { p, k: toQty / q, fromQty: q, toQty, diff: 0, state: e, out: tmp, ratio: r, err };
+              }
+            }
+          }
+          const sells = sellsIn(0, n);
+          if (!pick && sells.length) {
+            // ② 흔하지 않은 큰 배수(1.5배 이상 · 1/1.5 이하 — 10주 → 3주 감자, 입고가 섞인 분할 등)인데 판 가격이 그 배수를 따라가면
+            //    행동으로 계산하되 '순서 추정'(양도세 합계에서 뺌)
+            // ③ 판 가격이 직전 가격 쪽이면 이관 (부분 매도 뒤 출고, 입고 뒤 매도) — 지금처럼 '추정'
+            // ④ 그 밖(가격을 모름 · 어느 쪽도 아님)은 이관으로 두고 구간 매도를 모두 '순서 추정' — 방향과 상관없이
+            //    (병합을 놓친 매도의 가짜 이익·분할을 놓친 매도의 가짜 손실이 양도세 합계에 조용히 들지 않게)
+            const toQty0 = netSold(0);
+            const k0 = toQty0 / start0.qty;
+            let transferOk = false;
+            if (refs.length) {
+              if (k0 > EPS && Math.abs(Math.log(k0)) >= LN15 && groupFit(sells, refs[0]!, k0, false) !== null) {
+                const tmp: Out = new Map();
+                const e = runAfter(i - 1, start0, tmp, { p: 0, toQty: toQty0 });
+                if (clean(e, tmp)) {
+                  pick = { p: 0, k: k0, fromQty: start0.qty, toQty: toQty0, diff: 0, state: e, out: tmp };
+                  unsure = REASONS.splitUncertain;
+                }
+              }
+              if (!pick) transferOk = groupFit(sells, refs[0]!, k0 > EPS && Math.abs(k0 - 1) >= CORP_MIN_CHANGE ? k0 : Infinity, true) !== null;
+            }
+            if (!pick && !transferOk) unsure = REASONS.changeUncertain;
           }
         }
-        // 전부 판 경우 (스냅샷 0주·0원): 매입금액으로 맞춰 볼 수 없다 — 행동 뒤 수량(= 판 수량 − 산 수량)이 흔한 배수이고,
-        // 판 가격이 그 배수와 맞으며(직전 종가를 알 때), 그 수량으로 다시 돌려 많이 판 매도 없이 딱 0주에서 끝나면 회사 행동 (처음 가정).
-        // 아니면 예전처럼 이관 + 많이 판 매도는 '순서 추정' (양도세 합계에서는 뺀다 — taxSummary)
-        if (segStart && segs[i]!.length && segStart.qty > EPS && segStart.cost !== null && a.quantity <= EPS) {
-          const toQty = round6(segStart.qty - s.qty);
-          const ratio = commonRatio(segStart.qty, toQty);
-          if (ratio !== null && priceFits(ratio, anchors[i - 1]!.price, segs[i]!.filter((f) => f.side === "SELL"))) {
-            const tmp: Out = new Map();
-            const e = runAfter(i - 1, { ...segStart, qty: toQty }, tmp);
-            const clean = Math.abs(e.qty) <= EPS && e.cost !== null && ![...tmp.values()].some((v) => v.realized && (v.realized.status === "unknown-cost" || v.realized.reason === REASONS.oversoldAfter));
-            if (clean) start = { k: toQty / segStart.qty, toQty, diff: 0, state: e, out: tmp, fromQty: segStart.qty, ratio };
-          }
-        }
-        // 둘 다 맞으면 토스 매입금액에 더 가까운 쪽. 매입금액이 같으면(매수만 있는 구간) 배수가 흔한 모양인 쪽, 그래도 같으면 처음 가정
-        // (회사 행동은 장 시작 전에 반영되므로 구간 몫은 행동 뒤인 경우가 많다) — 1→4 분할 날 판 5주가 분할 전 평균으로 계산되어 가짜 손실이 나지 않게
-        const useStart =
-          start !== null &&
-          (endDiff === null ||
-            start.diff < endDiff - unit(cur) ||
-            (Math.abs(start.diff - endDiff) <= unit(cur) && (simpleRatio(start.k) || !simpleRatio(endK))));
         let row: EstimatedRow;
-        if (useStart) {
-          for (const [key, v] of start!.out) out.set(key, v);
-          row = { at: a.asOf, date: a.date, qty: round6(start!.toQty - start!.fromQty), fromQty: start!.fromQty, toQty: start!.toQty, reason: "split", ratio: start!.ratio ?? tidyRatio(start!.k) };
-          s = start!.state;
-        } else if (endDiff !== null) row = { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "split", ratio: tidyRatio(endK) };
-        else row = { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "transfer" };
+        if (pick) {
+          if (pick.out) for (const [key, v] of pick.out) out.set(key, v);
+          s = pick.state;
+          row = { at: a.asOf, date: a.date, qty: round6(pick.toQty - pick.fromQty), fromQty: pick.fromQty, toQty: pick.toQty, reason: "split", ratio: pick.ratio ?? tidyRatio(pick.k) };
+        } else {
+          row = { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "transfer" };
+          const px = a.quantity <= EPS ? avgPx(sellsIn(0, n)) : null;
+          if (px !== null) row.sellPx = round4(px);
+        }
         estimated.push(row);
         corp = row.reason === "split";
         if (corp) check.splits++;
@@ -664,23 +863,35 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
         mark(prevSells, (r) => {
           // 많이 판 매도의 '순서 추정'은 그대로 둔다 (그 까닭이 더 가깝다)
           if (r.status === "unknown-cost" || r.reason === REASONS.oversoldAfter) return;
+          if (unsure) {
+            r.status = "order-uncertain";
+            r.reason = unsure;
+            return;
+          }
           r.status = "estimated";
           r.reason = corp ? REASONS.split : REASONS.transfer;
         });
-      } else if (a.cost !== null && s.cost !== null && !costClose(s.cost, a.cost, a.quantity, cur)) check.drift++;
+      } else if (a.cost !== null && s.cost !== null && !costClose(s.cost, a.cost, a.quantity, cur)) {
+        check.drift++;
+        // 수량은 같은데 토스 매입금액이 0.5% 넘게 달라짐(분사 등 — 토스가 매입금액을 나눠 적음): 결제일 원화 취득가도 같은 비율로 고친다 (추정)
+        if (s.cost > 0 && a.cost >= 0 && Math.abs(a.cost / s.cost - 1) > CORP_COST_TOL) stdScale = a.cost / s.cost;
+      }
     }
     // 스냅샷 값으로 맞춘다 (원화 매입금액은 토스 원화 장부 값, 없으면 수량이 맞거나 회사 행동일 때만 쌓아 온 값)
     const sameQty = Math.abs(s.qty - a.quantity) <= EPS;
     const carry = (sameQty && (i > 0 || preOk)) || corp;
+    const keepStd = a.quantity > EPS && carry;
     const next: State = {
       qty: a.quantity,
       cost: a.quantity <= EPS ? 0 : (a.cost ?? (carry && s.cost !== null ? s.cost : null)),
       krw: a.quantity <= EPS ? 0 : (a.costKrw ?? (carry && s.krw !== null ? s.krw : null)),
       krwEst: a.costKrw !== null ? a.costKrwEstimated : s.krwEst,
       krwWhy: a.quantity <= EPS || a.costKrw !== null ? null : carry && s.krw !== null ? null : REASONS.krwNoBook,
-      // 결제일 원화: 스냅샷은 모른다 — 수량이 맞으면(첫 기준점은 기록 전 원장이 맞을 때만) 쌓아 온 값, 회사 행동이면 그대로, 이관이면 모름
-      std: a.quantity <= EPS ? 0 : carry ? s.std : null,
+      // 결제일 원화: 스냅샷은 모른다 — 수량이 맞으면(첫 기준점은 기록 전 원장이 맞을 때만) 쌓아 온 값(토스 매입금액이 달라졌으면 그 비율로 고친 추정),
+      // 회사 행동이면 그대로, 이관이면 모름
+      std: a.quantity <= EPS ? 0 : carry ? (s.std !== null && stdScale !== null ? s.std * stdScale : s.std) : null,
       stdWhy: a.quantity <= EPS ? null : carry ? s.stdWhy : "cost",
+      stdEst: keepStd && s.std !== null && (s.stdEst || stdScale !== null),
       neg: false,
       anchored: true,
       costWhy: null,
