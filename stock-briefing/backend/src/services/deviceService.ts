@@ -81,7 +81,9 @@ export class DeviceService {
   /**
    * 알림을 보낼 기기. 로그인 세션으로 등록한 기기는 그 세션이 살아 있고 주인 세션일 때만 (끊김·기한 지남·지워짐이면 빼고 — 계정 A단계:
    * 로그아웃하거나 '모든 기기에서 로그아웃'으로 끊긴 폰, 자동 로그인을 끈 채 12시간 넘게 안 쓴 폰으로 주인 계좌 알림이 가지 않게).
-   * 세션 없이(계정 전·비상 모드) 등록한 기기는 계정이 꺼져 있을 때만 보낸다 (검증 4차 — 켜져 있으면 주인 세션이 있어야 주인 데이터)
+   * 세션 없이(계정 전·비상 모드) 등록한 기기는 계정이 꺼져 있을 때만 보낸다 (검증 4차 — 켜져 있으면 주인 세션이 있어야 주인 데이터).
+   * 자동 로그인을 끈 세션(remember 0 — 앱을 닫으면 로그아웃되는 폰)의 기기에는 보내지 않는다 (검증 5차: 위젯·백그라운드 알림처럼 닫은 뒤 최대 12시간
+   * 주인 브리핑·계좌 요약이 오지 않게. 앱도 그런 세션에서는 기기를 다시 묶지 않는다)
    */
   async enabledTokens(): Promise<string[]> {
     const nowIso = seoulIso(this.now());
@@ -93,7 +95,7 @@ export class DeviceService {
       .select("d.token")
       .where("d.enabled", "=", 1)
       .where((eb) => {
-        const bound = eb.and([eb("s.id", "is not", null), eb("s.revoked_at", "is", null), eb("s.expires_at", ">", nowIso), eb("u.is_owner", "=", 1)]);
+        const bound = eb.and([eb("s.id", "is not", null), eb("s.revoked_at", "is", null), eb("s.expires_at", ">", nowIso), eb("s.remember", "=", 1), eb("u.is_owner", "=", 1)]);
         return strict ? bound : eb.or([eb("d.session_id", "is", null), bound]);
       })
       .execute();

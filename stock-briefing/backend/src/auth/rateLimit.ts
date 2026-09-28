@@ -81,21 +81,67 @@ export class LoginLock {
   }
 }
 
-/** 한 아이디를 모든 IP 에서 합쳐 이만큼 연속으로 틀리면 그 아이디 전체를 잠근다 (IP 별 5번보다 훨씬 높게 — 남이 주인을 잠그기 어렵게) */
+/**
+ * 시간 창 잠금 (검증 5차): windowMs 안에 maxFails 번 틀리면 lockMs 동안 잠근다. **창보다 오래된 틀림은 세지 않는다** —
+ * LoginLock 처럼 잠기거나 맞힐 때까지 쌓기만 하면, IP 한 곳에서 '5번 틀림 → 그 IP 10분 잠금'을 되풀이해 90분 만에 아이디 전체 잠금(50)에 닿는다
+ */
+export class WindowLock {
+  private readonly fails = new Map<string, { times: number[]; lockedUntil: number }>();
+
+  constructor(
+    private readonly now: () => number,
+    private readonly maxFails: number,
+    private readonly windowMs: number,
+    private readonly lockMs: number,
+    private readonly maxKeys = 10_000,
+  ) {}
+
+  lockedFor(key: string): number {
+    const e = this.fails.get(key);
+    if (!e || e.lockedUntil <= this.now()) return 0;
+    return Math.max(1, Math.ceil((e.lockedUntil - this.now()) / 1000));
+  }
+
+  fail(key: string): number {
+    const t = this.now();
+    const e = this.fails.get(key) ?? { times: [], lockedUntil: 0 };
+    if (e.lockedUntil > t) return this.lockedFor(key);
+    e.times = e.times.filter((x) => t - x < this.windowMs);
+    e.times.push(t);
+    if (e.times.length >= this.maxFails) {
+      e.times = [];
+      e.lockedUntil = t + this.lockMs;
+    }
+    this.fails.delete(key);
+    this.fails.set(key, e);
+    while (this.fails.size > this.maxKeys) this.fails.delete(this.fails.keys().next().value!);
+    return this.lockedFor(key);
+  }
+
+  succeed(key: string): void {
+    this.fails.delete(key);
+  }
+}
+
+/**
+ * 한 아이디를 모든 IP 에서 합쳐 GLOBAL_LOCK_WINDOW_MS(10분) 안에 이만큼 틀리면 그 아이디 전체를 잠근다 (IP 별 5번보다 훨씬 높게 — 남이 주인을 잠그기 어렵게).
+ * IP 한 곳은 10분에 5번(그 뒤 10분 잠금)까지만 틀릴 수 있으므로, 아이디 전체를 잠그려면 10분 안에 IP 가 10곳 넘게 필요하다
+ */
 export const GLOBAL_LOCK_FAILS = 50;
+export const GLOBAL_LOCK_WINDOW_MS = 10 * 60_000;
 
 /**
  * 로그인 잠금 (검증 4차): **아이디 + IP** 별로 5번 틀리면 10분 — 남이 다른 곳(IP)에서 주인 아이디를 일부러 틀려도 주인 폰(다른 IP)은 잠기지 않는다.
- * 아이디 전체 잠금은 모든 IP 를 합쳐 GLOBAL_LOCK_FAILS 번 (여러 IP 로 나눠 비밀번호를 맞혀 보는 것을 막는 몫 — IP 별 로그인 10분 20번 제한과 함께).
+ * 아이디 전체 잠금은 모든 IP 를 합쳐 10분 안에 GLOBAL_LOCK_FAILS 번 (여러 IP 로 나눠 비밀번호를 맞혀 보는 것을 막는 몫 — IP 별 로그인 10분 20번 제한과 함께).
  * 없는 아이디도 같은 규칙 (잠김 응답으로 계정이 있는지 알 수 없게). 맞으면 그 IP 와 아이디 전체 횟수를 지운다
  */
 export class LoginGuard {
   private readonly perIp: LoginLock;
-  private readonly global: LoginLock;
+  private readonly global: WindowLock;
 
-  constructor(now: () => number, maxFails = 5, lockMs = 10 * 60_000, globalFails = GLOBAL_LOCK_FAILS) {
+  constructor(now: () => number, maxFails = 5, lockMs = 10 * 60_000, globalFails = GLOBAL_LOCK_FAILS, globalWindowMs = GLOBAL_LOCK_WINDOW_MS) {
     this.perIp = new LoginLock(now, maxFails, lockMs, 20_000);
-    this.global = new LoginLock(now, globalFails, lockMs);
+    this.global = new WindowLock(now, globalFails, globalWindowMs, lockMs);
   }
 
   private static k(id: string, ip: string): string {

@@ -568,11 +568,12 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     await db.destroy();
   });
 
-  it("푸시 기기 세션 칸(13, 계정 보안 보강)은 비어 있을 수 있는 칸 하나와 색인만 — 기존 행·다른 표는 그대로", async () => {
+  it("푸시 기기 세션 칸(13, 계정 보안 보강)은 비어 있을 수 있는 칸 하나와 색인만 — 기존 행·다른 표는 그대로 (칸이 이미 있는지 먼저 본다 — 검증 5차)", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     await migrate(db, "postgres");
     expect(inserted).toEqual([13]);
     expect(sqls.filter((s) => !/schema_version/i.test(s))).toEqual([
+      expect.stringMatching(/from information_schema\.columns where table_schema = current_schema\(\) and table_name = \$1 and column_name = \$2/i),
       expect.stringMatching(/alter table "?devices"? add column "?session_id"? integer/i),
       expect.stringMatching(/create index if not exists idx_devices_session on devices \(session_id\)/i),
     ]);
@@ -593,6 +594,21 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
       await db.insertInto("devices").values({ token: "ExponentPushToken[old]", platform: "android", device_name: null, enabled: 1, disabled_reason: null, created_at: "x", last_seen_at: "x" }).execute();
       await migrate(db, "sqlite");
       expect(await db.selectFrom("devices").select(["token", "session_id"]).execute()).toEqual([{ token: "ExponentPushToken[old]", session_id: null }]);
+    } finally {
+      await db.destroy();
+    }
+  });
+  it("SQLite: 13 이 칸만 더하고 멈췄어도(색인·번호 적기 전) 다음 기동에 다시 돌아 끝난다 — '칸이 이미 있음'으로 서버가 못 뜨지 않게 (검증 5차)", async () => {
+    const db = await createMigratedDb(":memory:");
+    try {
+      await sql`delete from schema_version where version = 13`.execute(db);
+      await sql`drop index if exists idx_devices_session`.execute(db);
+      await migrate(db, "sqlite");
+      await migrate(db, "sqlite");
+      const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual(MIGRATION_VERSIONS);
+      const idx = await sql<{ name: string }>`select name from sqlite_master where type = 'index' and name = 'idx_devices_session'`.execute(db);
+      expect(idx.rows).toHaveLength(1);
     } finally {
       await db.destroy();
     }

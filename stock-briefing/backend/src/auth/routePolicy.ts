@@ -136,9 +136,23 @@ export function memberAnalysisView<T extends { id: number; createdAt: string; ca
   return { ...a, id: 0, createdAt: nowIso, cached: false };
 }
 
-export function memberScoreView<T extends { computedAt: string; value?: { asOf?: { fetchedAt: string | null } | null } | null }>(r: T, nowIso: string): T {
+/** 주인 아닌 계정에게 주는 '지난 값' 안내 (재무를 받은 날짜 없이 — 날짜는 주인 등록 종목만 매일 다시 받으므로 캐시 상태가 드러난다, 검증 5차) */
+export const MEMBER_CARRIED_TEXT = "재무 숫자는 예전에 받은 값입니다 (그 뒤 새로 받지 못함).";
+export const MEMBER_CARRIED_BADGE = "지난 값";
+
+type ScoreValueLike = { asOf?: { fetchedAt: string | null } | null; flags?: Array<{ key: string; text: string }> | null; badges?: string[] | null };
+
+export function memberScoreView<T extends { computedAt: string; value?: ScoreValueLike | null }>(r: T, nowIso: string): T {
   const v = r.value;
-  return { ...r, computedAt: nowIso, ...(v && v.asOf ? { value: { ...v, asOf: { ...v.asOf, fetchedAt: null } } } : {}) };
+  if (!v) return { ...r, computedAt: nowIso };
+  // 재무 받은 시각·'지난 값 M/D'(받은 날짜) 을 뺀다 — 한국·미국 가치 모두 (검증 5차: #94 한국 간이 가치 합친 뒤)
+  const value: ScoreValueLike = {
+    ...v,
+    ...(v.asOf ? { asOf: { ...v.asOf, fetchedAt: null } } : {}),
+    ...(v.flags ? { flags: v.flags.map((f) => (f.key === "carriedForward" ? { ...f, text: MEMBER_CARRIED_TEXT } : f)) } : {}),
+    ...(v.badges ? { badges: v.badges.map((b) => (b.startsWith(MEMBER_CARRIED_BADGE) ? MEMBER_CARRIED_BADGE : b)) } : {}),
+  };
+  return { ...r, computedAt: nowIso, value };
 }
 
 /** 로그인한 사용자 (없으면 null) */

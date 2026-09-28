@@ -127,22 +127,24 @@ describe("푸시 기기 등록은 로그인 세션에 묶인다", () => {
     expect(await app.deviceService.enabledTokens()).toEqual([HERE]);
   });
 
-  it("기한이 지난 세션(자동 로그인 끔 12시간)의 기기에는 보내지 않고, 청소하면 행도 지운다. 세션 없이 등록한 기기는 비상 모드(플래그 끔)에서만 보낸다", async () => {
+  it("자동 로그인을 끈 세션(12시간)의 기기에는 보내지 않고(검증 5차 — 앱을 닫으면 로그아웃되는 폰), 기한이 지나 청소하면 행도 지운다. 세션 없이 등록한 기기는 비상 모드(플래그 끔)에서만 보낸다", async () => {
     const { app, db, clock } = await makeApp();
     const short = await loginToken(app, "1111", false);
     await register(app, LOST, S(short));
+    const kept = await loginToken(app, "1111", true);
+    await register(app, HERE, S(kept));
     await app.inject({ method: "PUT", url: "/api/admin/features", headers: S(short), payload: { accounts: false } });
     await register(app, OLD);
-    // 끈 동안(비상 모드): 계정 전처럼 세션 없이 등록한 기기에도
-    expect((await app.deviceService.enabledTokens()).sort()).toEqual([LOST, OLD].sort());
+    // 끈 동안(비상 모드): 계정 전처럼 세션 없이 등록한 기기에도. 자동 로그인을 끈 세션의 기기는 비상 모드에서도 뺀다
+    expect((await app.deviceService.enabledTokens()).sort()).toEqual([HERE, OLD].sort());
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accounts: true } });
-    // 켜면: 살아 있는 주인 세션에 묶인 기기만 (검증 4차 M1)
-    expect(await app.deviceService.enabledTokens()).toEqual([LOST]);
+    // 켜면: 살아 있는 주인 세션(자동 로그인 켬)에 묶인 기기만 (검증 4차 M1 · 5차)
+    expect(await app.deviceService.enabledTokens()).toEqual([HERE]);
     clock.t += 13 * HOUR;
-    expect(await app.deviceService.enabledTokens()).toEqual([]);
+    expect(await app.deviceService.enabledTokens()).toEqual([HERE]);
     clock.t += 31 * DAY;
     await app.authService.purge();
-    expect(await deviceRows(db)).toEqual([OLD]);
+    expect(await deviceRows(db)).toEqual([HERE, OLD].sort());
   });
 });
 

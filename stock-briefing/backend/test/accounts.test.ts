@@ -147,6 +147,41 @@ describe("주인 계정", () => {
     expect((await login(app, OWNER, "newpass99")).statusCode).toBe(200);
   });
 
+  it("켤 때 주인 확인이 실패했어도(DB 오류) 주인 아이디로는 가입할 수 없고, 다음 로그인 전에 주인을 다시 만든다 (검증 5차 — 남이 먼저 차지하지 못하게)", async () => {
+    const db = await createMigratedDb(":memory:");
+    try {
+      // 켤 때 ensureOwner 가 실패한 서버 (주인 없음) — 서비스만 만들고 ensureOwner 는 부르지 않는다
+      const auth = new AuthService({ db, scryptN: 1024 });
+      const input = { loginId: "  서성원 ", password: "abcd1234", passwordConfirm: "abcd1234", email: "x@example.com", remember: true, ip: "10.0.0.1" };
+      await expect(auth.signup(input)).rejects.toMatchObject({ status: 409, code: "login_id_taken" });
+      // 가입이 주인 확인을 다시 해 주인이 생겼다
+      expect(await db.selectFrom("users").select(["login_id", "is_owner"]).execute()).toEqual([{ login_id: OWNER, is_owner: 1 }]);
+      const fresh = await createMigratedDb(":memory:");
+      try {
+        const late = new AuthService({ db: fresh, scryptN: 1024 });
+        // 로그인도 먼저 주인을 확인한다 — 처음 비밀번호로 바로 들어간다
+        const r = await late.login({ loginId: OWNER, password: "1111", remember: true, ip: "10.0.0.2" });
+        expect(r.user).toMatchObject({ loginId: OWNER, isOwner: true, usingInitialPassword: true });
+      } finally {
+        await fresh.destroy();
+      }
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it("주인 아이디를 (예전에) 주인 아닌 계정이 차지했으면 그 계정을 주인으로 올리지 않고 'taken' — 운영자가 확인", async () => {
+    const db = await createMigratedDb(":memory:");
+    try {
+      await db.insertInto("users").values({ login_id: OWNER, login_id_key: loginIdKey(OWNER), email: "t@example.com", password_hash: await hashPassword("abcd1234", 1024), is_owner: 0, initial_password: 0, created_at: "x", updated_at: "x" }).execute();
+      const auth = new AuthService({ db, scryptN: 1024 });
+      expect(await auth.ensureOwner()).toBe("taken");
+      expect(await db.selectFrom("users").select("is_owner").execute()).toEqual([{ is_owner: 0 }]);
+    } finally {
+      await db.destroy();
+    }
+  });
+
   it("OWNER_LOGIN_ID·OWNER_INITIAL_PASSWORD 로 바꿀 수 있다 (없을 때만)", async () => {
     const { app } = await makeApp({ env: { OWNER_LOGIN_ID: "  Owner_A ", OWNER_INITIAL_PASSWORD: "s3cret-init" } });
     expect((await login(app, "owner_a", "s3cret-init")).json().user).toMatchObject({ loginId: "Owner_A", isOwner: true, usingInitialPassword: true });

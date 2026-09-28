@@ -181,6 +181,12 @@ describe.skipIf(!url)("postgres dialect", () => {
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
       expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      // 13 이 칸만 더하고 멈춘 DB 도 다시 돌려 끝난다 (검증 5차 — '칸이 이미 있음'으로 서버가 못 뜨지 않게)
+      await sql`delete from schema_version where version = 13`.execute(db);
+      await sql`drop index if exists idx_devices_session`.execute(db);
+      await migrate(db, "postgres");
+      const again = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
+      expect(again.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {

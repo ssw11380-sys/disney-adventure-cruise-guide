@@ -149,6 +149,8 @@ export class AuthService {
   private readonly n: number;
   /** 세션을 끊을 때마다 늘린다 — 끊기 전에 DB 를 읽기 시작한 요청이 끊긴 세션을 캐시에 다시 넣지 않게 */
   private gen = 0;
+  /** 주인 계정을 확인했는지 (검증 5차 — 켤 때 DB 오류로 실패했으면 로그인·가입 전에 다시 해 본다) */
+  private ownerChecked = false;
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -166,11 +168,22 @@ export class AuthService {
 
   // ── 주인 계정 ────────────────────────────────────────────────
 
-  /** 주인이 없을 때만 만든다 (있으면 비밀번호를 되돌리지 않는다). 여러 서버가 동시에 켜져도 한 명 */
-  async ensureOwner(): Promise<"created" | "exists"> {
+  /** 주인 아이디 (OWNER_LOGIN_ID, 없으면 '서성원') — 가입에서 늘 예약 */
+  private ownerLoginId(): string {
+    return normalizeLoginId(this.deps.ownerLoginId || "서성원");
+  }
+
+  /**
+   * 주인이 없을 때만 만든다 (있으면 비밀번호를 되돌리지 않는다). 여러 서버가 동시에 켜져도 한 명.
+   * 주인 아이디를 이미 주인 아닌 계정이 쓰고 있으면(검증 5차 전 — 켤 때 실패한 사이 누가 그 아이디로 가입) 그 계정을 주인으로 올리지 않고 "taken" (운영자가 확인)
+   */
+  async ensureOwner(): Promise<"created" | "exists" | "taken"> {
     const owner = await this.deps.db.selectFrom("users").select("id").where("is_owner", "=", 1).executeTakeFirst();
-    if (owner) return "exists";
-    const loginId = normalizeLoginId(this.deps.ownerLoginId || "서성원");
+    if (owner) {
+      this.ownerChecked = true;
+      return "exists";
+    }
+    const loginId = this.ownerLoginId();
     const ts = seoulIso(this.now());
     const res = await this.deps.db
       .insertInto("users")
@@ -187,8 +200,21 @@ export class AuthService {
       .onConflict((oc) => oc.doNothing())
       .executeTakeFirst();
     const created = Number(res.numInsertedOrUpdatedRows ?? 0) > 0;
-    if (created) this.deps.log?.info({}, "계정: 주인 계정을 만들었습니다 (처음 비밀번호 — 설정에서 바꾸세요)");
-    return created ? "created" : "exists";
+    this.ownerChecked = true;
+    if (created) {
+      this.deps.log?.info({}, "계정: 주인 계정을 만들었습니다 (처음 비밀번호 — 설정에서 바꾸세요)");
+      return "created";
+    }
+    // 만들지 못함: 다른 서버가 먼저 만들었거나(주인 있음), 주인 아이디를 주인 아닌 계정이 쓰고 있다
+    if (await this.deps.db.selectFrom("users").select("id").where("is_owner", "=", 1).executeTakeFirst()) return "exists";
+    this.deps.log?.warn({}, "계정: 주인 아이디를 주인 아닌 계정이 쓰고 있어 주인 계정을 만들지 못했습니다 (DB 에서 그 계정을 확인해 주세요)");
+    return "taken";
+  }
+
+  /** 켤 때 주인 확인이 실패했으면 다시 (로그인·가입 전 — 한 번 확인되면 다시 묻지 않는다). 또 실패해도 로그인·가입은 그대로 진행 */
+  private async ownerReady(): Promise<void> {
+    if (this.ownerChecked) return;
+    await this.ensureOwner().catch((e: unknown) => this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 주인 계정 확인 다시 실패"));
   }
 
   /** 주인이 아직 처음 비밀번호인지 (테스트·운영 확인용 — /health 에는 내보내지 않는다). 주인이 없으면 null */
@@ -242,6 +268,7 @@ export class AuthService {
     if (!input.password) fields["password"] = "required";
     if (Object.keys(fields).length) throw new AuthFailure(400, "invalid", MSG.invalid, { fields });
     const key = loginIdKey(input.loginId);
+    await this.ownerReady();
     const locked = this.lock.lockedFor(key, input.ip);
     if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.lockedFor(locked), { retryAfterSec: locked });
     const row = await this.userByKey(key);
@@ -269,6 +296,9 @@ export class AuthService {
     const loginId = normalizeLoginId(input.loginId);
     const key = loginIdKey(loginId);
     const email = normalizeEmail(input.email);
+    await this.ownerReady();
+    // 주인 아이디는 늘 예약 (검증 5차 — 켤 때 주인을 못 만든 사이 누가 그 아이디로 가입하면 주인이 영영 생기지 않았다)
+    if (key === loginIdKey(this.ownerLoginId())) throw new AuthFailure(409, "login_id_taken", MSG.loginIdTaken, { fields: { loginId: "login_id_taken" } });
     await this.assertFree(key, email, null);
     // 만드는 계정은 IP 별 한 시간 5개, 전체 하루 30개 (형식이 맞고 겹치지 않는 가입만 센다)
     const ipHit = this.signupIp.hit(input.ip);

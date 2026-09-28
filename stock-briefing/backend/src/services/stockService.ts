@@ -85,6 +85,11 @@ interface SessionContext {
   /** 시장별로 웹소켓이 준 마지막 체결 시각 (등록 종목 중). 이번 세션에 이 시장 체결이 왔는지 보는 데 쓴다 */
   wsTradeAt: Record<"KR" | "US", number>;
   facts: Map<string, StockSessionFacts>;
+  /**
+   * 계정 A단계 검증 5차 (M2): 주인 아닌 계정에게 주는 시세 — 주인 등록 종목 때문에 서버에 쌓인 종목별 상태(세션 자격 캐시 · 토스 웹소켓 구독·체결 ·
+   * 3초 갱신에서 본 가격 변화)를 보지 않는다. 그래서 등록 종목과 처음 보는 종목의 session(eligible·halted)·realtime·live 가 같은 규칙으로 나온다
+   */
+  shared?: boolean;
 }
 
 /** 종목 하나의 지금 세션과 웹소켓을 믿어도 되는지 (sessionView) */
@@ -648,11 +653,12 @@ export class StockService {
    * 한 종목 현재가 (상세 화면·/quote). 캐시가 ttl 안이면 그대로, 오래됐으면 마지막 값으로 답하고 뒤에서 새로 받는다.
    * 캐시가 없거나 fresh 면 새로 받을 때까지 기다린다. 새로 받지 못하면 마지막 값(stale), 그것도 없으면 던진다
    */
-  async getQuote(code: string, opts: { fresh?: boolean; quick?: Map<string, LiveTick> } = {}): Promise<Quote> {
+  async getQuote(code: string, opts: { fresh?: boolean; quick?: Map<string, LiveTick>; shared?: boolean } = {}): Promise<Quote> {
     await this.hydrate();
     // 웹소켓이 방금(1분 안) 체결을 준 종목은 토스 웹을 부르지 않는다 (받아 둔 값만 — 그 체결을 믿지 못할 때(초록 점과 같은 기준) 목록과 같은 가격이 되게).
-    // 오래된 체결뿐이면(이 세션 체결을 아직 안 줌) 토스 웹 가격도 받는다
-    const wsTick = this.deps.live?.get(code);
+    // 오래된 체결뿐이면(이 세션 체결을 아직 안 줌) 토스 웹 가격도 받는다.
+    // shared(주인 아닌 계정 — 검증 5차 M2): 웹소켓 체결을 보지 않고 늘 토스 웹 가격을 받아 본다 (웹소켓은 주인 등록 종목만 구독한다)
+    const wsTick = opts.shared ? undefined : this.deps.live?.get(code);
     const wsFresh = !!wsTick && Math.abs(this.now().getTime() - wsTick.receivedAt) <= TICK_FRESH_MS;
     const quickP = opts.quick ? Promise.resolve(opts.quick) : wsFresh ? Promise.resolve(this.quickCached([code])) : this.quickNow([code]);
     const calendarP = this.calendarNow();
@@ -667,7 +673,8 @@ export class StockService {
       await this.refreshQuotes([code]);
     }
     const quick = await quickP;
-    const q = this.current(code, quick, this.sessionContext([code], await calendarP));
+    const calendar = await calendarP;
+    const q = this.current(code, quick, opts.shared ? this.sharedContext(calendar) : this.sessionContext([code], calendar));
     if (!q) throw new ProviderError(this.deps.quotes.name, this.quoteErrors.get(code) ?? `${code} 시세 없음`);
     return q;
   }
@@ -870,6 +877,14 @@ export class StockService {
     return within(p, this.calendarLast ? QUICK_WAIT_MS : COLD_WAIT_MS, this.calendarLast);
   }
 
+  /**
+   * 주인 아닌 계정에게 주는 시세의 세션 문맥 (검증 5차 M2): 장 달력만 본다. 종목별 세션 자격(주간거래·NXT·ETP·거래정지)은 주인 등록 종목만
+   * 미리 받아 두므로 쓰지 않고(늘 모름 → eligible·halted 가 null), 토스 웹소켓(주인 등록 종목만 구독)도 쓰지 않는다
+   */
+  private sharedContext(calendar: MarketStatus | null): SessionContext {
+    return { now: this.now(), calendar, ws: null, wsTradeAt: { KR: -Infinity, US: -Infinity }, facts: new Map(), shared: true };
+  }
+
   private sessionContext(codes: string[], calendar: MarketStatus | null): SessionContext {
     const now = this.now();
     const wsTradeAt = { KR: -Infinity, US: -Infinity };
@@ -966,10 +981,11 @@ export class StockService {
     const { session, wsLive } = o.view;
     // 자격을 모를 때만 쓰는 증거: 웹소켓 체결 시각, 공식 API 시세의 마지막 체결 시각, 3초 갱신에서 본 가격 변화(바뀌기 전 값을 받은 때)
     // (토스 웹·네이버 시세의 asOf 와 폴링 체결 시각은 받은 시각이라 증거가 아니다)
+    // shared(주인 아닌 계정): 웹소켓 체결·3초 갱신 가격 변화는 주인 등록 종목만 쌓이므로 증거로 쓰지 않는다 (검증 5차 M2)
     const evidence = [
-      Date.parse(this.deps.live?.get(code)?.timestamp ?? ""),
+      ctx.shared ? NaN : Date.parse(this.deps.live?.get(code)?.timestamp ?? ""),
       h.quote.source === "toss-openapi" ? Date.parse(h.quote.asOf) : NaN,
-      this.quickMovedAt.get(code) ?? NaN,
+      ctx.shared ? NaN : (this.quickMovedAt.get(code) ?? NaN),
     ].filter((x) => Number.isFinite(x));
     const realtime = realtimeOf({
       session,
@@ -1000,7 +1016,7 @@ export class StockService {
     const view = ctx ? this.sessionView(code, ctx) : null;
     const trust = view?.session.open ? { wsLive: view.wsLive, start: view.start, now: t } : null;
     const phase = (view?.session ?? sessionAt(code, new Date(t))).phase;
-    const pick = this.liveTick(h.quote, quick, trust, phase);
+    const pick = this.liveTick(h.quote, quick, trust, phase, ctx?.shared === true);
     let tick = pick?.tick ?? null;
     // 스냅샷(asOf)과 체결의 거래일(현지 날짜)이 다르면 섞지 않는다 — 어제 스냅샷의 전일 종가에 오늘 체결을 대면 등락이 이틀치가 된다.
     // 스냅샷을 새로 받으면(10초~1분 안, rolled) 같은 날이 되어 다시 붙는다
@@ -1055,7 +1071,7 @@ export class StockService {
    * 이번 세션 내내 가격이 멈췄다 (점은 토스 웹 가격을 받는다는 이유로 켜짐)
    * 미국 공식 API 시세의 애프터마켓·장 마감·휴장(phase)에는 토스 웹 가격이 정규장 종가라 쓰지 않는다 (webIsRegularClose) — 웹소켓 체결만
    */
-  private liveTick(quote: Quote, quick: Map<string, LiveTick> | undefined, trust: WsTrust | null, phase: SessionPhase): { tick: LiveTick; polled: boolean } | null {
+  private liveTick(quote: Quote, quick: Map<string, LiveTick> | undefined, trust: WsTrust | null, phase: SessionPhase, shared = false): { tick: LiveTick; polled: boolean } | null {
     const quoteAt = Date.parse(quote.asOf);
     const usable = (tick: LiveTick | null | undefined): LiveTick | null => {
       if (!tick) return null;
@@ -1064,7 +1080,8 @@ export class StockService {
     };
     // 웹소켓 마지막 체결이 스냅샷보다 오래됐으면(예: 웹소켓이 이 세션 체결을 아직 안 줌) 토스 웹 일괄 가격으로 — 웹소켓이 멈춘 종목도 3초 갱신이 붙게.
     // polled = 토스 웹 가격 (timestamp 가 체결 시각이 아니라 받은 시각)
-    const ws = usable(this.deps.live?.get(quote.code));
+    // shared(주인 아닌 계정 — 검증 5차 M2): 웹소켓 체결은 주인 등록 종목만 오므로 쓰지 않는다 (토스 웹 가격만)
+    const ws = shared ? null : usable(this.deps.live?.get(quote.code));
     const polled = quick && quote.source.startsWith("toss") && !webIsRegularClose(quote, phase) ? usable(quick.get(quote.code)) : null;
     if (ws && polled && trust && polled.receivedAt >= ws.receivedAt && !this.wsFollows(ws, quoteAt, trust)) return { tick: polled, polled: true };
     if (ws) return { tick: ws, polled: false };

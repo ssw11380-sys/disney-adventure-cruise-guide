@@ -389,15 +389,26 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
   },
   {
     version: 13, // 계정 A단계 보안 보강: 푸시 기기 등록을 로그인 세션에 묶는다
-    up: async (db) => {
+    up: async (db, dialect) => {
       // 세션을 끊으면(로그아웃·모든 기기에서 로그아웃·비밀번호 변경) 그 세션으로 등록한 기기도 지운다 — 잃어버린 폰으로 주인 계좌 알림이 가지 않게.
       // 비어 있을 수 있는 칸 하나만 더한다 (FK 없음 — 세션을 지워도 기기 행은 남고, 알림은 살아 있는 세션의 기기에만 간다).
-      // 예전 서버로 되돌려도 이 칸을 모르고 지나갈 뿐이다
-      await db.schema.alterTable("devices").addColumn("session_id", "integer").execute();
+      // 예전 서버로 되돌려도 이 칸을 모르고 지나갈 뿐이다.
+      // 여러 번 돌려도 안전하게 (검증 5차): 칸을 더한 뒤 색인·schema_version 적기 전에 멈췄다면 다음 기동 때 '칸이 이미 있음'으로 서버가 뜨지 못했다
+      if (!(await hasColumn(db, dialect, "devices", "session_id"))) await db.schema.alterTable("devices").addColumn("session_id", "integer").execute();
       await sql`create index if not exists idx_devices_session on devices (session_id)`.execute(db);
     },
   },
 ];
+
+/** 표에 칸이 있는지 (SQLite: pragma_table_info · Postgres: information_schema — 지금 스키마) */
+export async function hasColumn(db: Kysely<Database>, dialect: Dialect, table: string, column: string): Promise<boolean> {
+  if (dialect === "postgres") {
+    const r = await sql<{ n: number }>`select count(*)::int as n from information_schema.columns where table_schema = current_schema() and table_name = ${table} and column_name = ${column}`.execute(db);
+    return Number(r.rows[0]?.n ?? 0) > 0;
+  }
+  const r = await sql<{ name: string }>`select name from pragma_table_info(${table})`.execute(db);
+  return r.rows.some((x) => x.name === column);
+}
 
 /** 마이그레이션 번호 (테스트: 1 부터 빈 곳·겹침 없이 하나씩 — 두 브랜치가 같은 번호를 쓰면 이미 그 번호까지 올라간 DB 는 뒤의 것을 건너뛴다) */
 export const MIGRATION_VERSIONS: readonly number[] = migrations.map((m) => m.version);
