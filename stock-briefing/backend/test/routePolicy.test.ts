@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { sql } from "kysely";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
-import { AUTH_ROUTES, decide, EMPTY_READS, NO_SESSION_ROUTES, OUTSIDE_API_ROUTES, routeKey, SANITIZED_ROUTES, SHARED_HEALTH_KEYS, SHARED_ROUTES, type AuthState } from "../src/auth/routePolicy.js";
+import { AUTH_ROUTES, decide, EMPTY_READS, NO_SESSION_ROUTES, OUTSIDE_API_ROUTES, ownerView, routeKey, SANITIZED_ROUTES, SHARED_HEALTH_KEYS, SHARED_ROUTES, type AuthState } from "../src/auth/routePolicy.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { NaverDiscover } from "../src/providers/market/naverDiscover.js";
@@ -104,6 +104,15 @@ describe("decide (순수 함수)", () => {
     expect(decide("POST /api/stocks", member)).toMatchObject({ action: "deny", status: 403, body: { code: "personal_data_not_ready" } });
     // 목록에 없는 새 경로는 기본으로 막힌다
     expect(decide("GET /api/something-new", member)).toMatchObject({ action: "deny", body: { code: "personal_data_not_ready" } });
+  });
+  it("ownerView (검증 9차 — 닫힌 쪽으로): 주인 모습은 플래그 꺼짐(off)·주인 세션만. 관문이 채우기 전(null)·채우지 않은 요청(undefined)·세션 없음·주인 아닌 계정은 모두 주인 아님", () => {
+    const req = (auth: AuthState | null | undefined) => ({ auth }) as unknown as FastifyRequest;
+    expect(ownerView(req({ kind: "off" }))).toBe(true);
+    expect(ownerView(req(owner))).toBe(true);
+    expect(ownerView(req(null))).toBe(false);
+    expect(ownerView(req(undefined))).toBe(false);
+    expect(ownerView(req({ kind: "anonymous" }))).toBe(false);
+    expect(ownerView(req(member))).toBe(false);
   });
   it("routeKey: HEAD 는 GET, 끝 슬래시는 뺀다", () => {
     expect(routeKey("HEAD", "/api/stocks/")).toBe("GET /api/stocks");

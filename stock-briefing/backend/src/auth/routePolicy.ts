@@ -135,10 +135,15 @@ export function decide(key: string, auth: AuthState): Decision {
   return { action: "deny", status: 403, body: PERSONAL_NOT_READY };
 }
 
-/** 이 요청이 주인의 모습(보유 정보 포함)을 봐도 되는지 — 플래그 꺼짐(지금처럼)이거나 주인 세션 */
+/**
+ * 이 요청이 주인의 모습(보유 정보 포함)·서버 처리 시간을 봐도 되는지 — 플래그 꺼짐(지금처럼, `off`)이거나 주인 세션만.
+ * 보는 사람을 모르면(null·undefined) **주인 아님** (검증 9차 — 닫힌 쪽으로): 계정이 켜져 있는데 관문이 채우기 전에 끝난 응답
+ * (세션 끊김 401 · API 토큰 401 · 인증 확인 503 · 없는 주소 404 · /api 밖 경로). 플래그가 꺼져 있으면 app.ts 가 요청 맨 앞에서 `off` 를 채운다
+ */
 export function ownerView(req: FastifyRequest): boolean {
   const a = req.auth;
-  return !a || a.kind === "off" || (a.kind === "user" && a.user.isOwner);
+  if (!a) return false;
+  return a.kind === "off" || (a.kind === "user" && a.user.isOwner);
 }
 
 /**
@@ -194,7 +199,7 @@ export function viewerKey(req: FastifyRequest): string {
 
 declare module "fastify" {
   interface FastifyRequest {
-    /** 계정 A단계: 요청의 인증 상태 (플래그가 꺼져 있으면 off) */
+    /** 계정 A단계: 요청의 인증 상태 (플래그가 꺼져 있으면 off, 켜져 있으면 관문이 채우기 전까지 null = 주인 아님) */
     auth: AuthState | null;
   }
 }

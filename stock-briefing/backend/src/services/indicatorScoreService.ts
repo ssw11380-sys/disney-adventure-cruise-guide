@@ -239,6 +239,11 @@ export const factsPending = (v: ValueBlock): boolean => v.status === "pending" &
 const valueWaits = new WeakMap<ScoresResponse, ValueEval>();
 /** 공개 이름·시장을 못 찾아 주인 등록 표의 이름·시장으로 계산한 응답 (주인 아닌 계정에게 주지 않는다 — getShared, 검증 8차) */
 const registeredOnly = new WeakSet<ScoresResponse>();
+/**
+ * 하루 기록(indicator_scores)으로 남길 수 있는데 아직 남기지 않은 응답 — 주인 아닌 계정의 계산(store:false, 검증 9차).
+ * 같은 결과(캐시·계산 중)를 주인 요청·장 마감 뒤 미리 계산이 받을 때 그 요청이 남긴다 (가입자 요청은 주인 기록을 쓰지 않는다)
+ */
+const unsaved = new WeakMap<ScoresResponse, { trend: Record<string, unknown> | null; value: Record<string, unknown> | null }>();
 
 interface Ctx {
   scoreDate: string;
@@ -268,17 +273,25 @@ export class IndicatorScoreService {
     return this.deps.features.enabled("indicatorScores");
   }
 
-  /** 종목 하나의 지표 점수. 모르는 종목이면 null. 플래그는 부르는 쪽(경로)이 먼저 본다 */
+  /**
+   * 종목 하나의 지표 점수. 모르는 종목이면 null. 플래그는 부르는 쪽(경로)이 먼저 본다.
+   * store(기본 true): 등록 종목의 하루 기록을 남긴다 — 주인 아닌 계정의 요청(getShared)은 false (검증 9차). 남기지 않은 결과를 true 인 요청이 받으면 그때 남긴다
+   */
   async get(code: string, opts: { store?: boolean; fresh?: boolean } = {}): Promise<ScoresResponse | null> {
     const c = normalizeCode(code);
     const scoreDate = latestScoreDate(marketOf(c), this.now());
     const key = `${c}|${scoreDate}`;
     const t = this.now().getTime();
+    const store = opts.store !== false;
+    const keep = async (r: ScoresResponse | null): Promise<ScoresResponse | null> => {
+      if (r && store) await this.persist(r);
+      return r;
+    };
     const hit = this.cache.get(key);
-    if (!opts.fresh && hit && t - hit.at < hit.ttl) return hit.resp;
+    if (!opts.fresh && hit && t - hit.at < hit.ttl) return keep(hit.resp);
     const running = this.inflight.get(key);
-    if (running) return running;
-    const p = this.compute(c, { scoreDate, fresh: opts.fresh === true }, opts.store !== false)
+    if (running) return running.then(keep);
+    const p = this.compute(c, { scoreDate, fresh: opts.fresh === true }, store)
       .then((resp) => {
         if (resp) {
           const lagging = resp.asOf.priceDate !== null && resp.asOf.priceDate < scoreDate;
@@ -313,17 +326,19 @@ export class IndicatorScoreService {
    * (모르는 종목과 같게, 검증 8차. 등록 표에만 있는 종목은 경로가 공개 이름을 먼저 보고 계산 전에 404)
    */
   async getShared(code: string, waitMs: number = MEMBER_VALUE_WAIT_MS): Promise<ScoresResponse | null> {
-    let r = await this.get(code);
+    // 주인 하루 기록(indicator_scores)은 쓰지 않는다 (검증 9차 — store:false, 주인 요청·미리 계산이 같은 결과를 받을 때 남김)
+    const shared = { store: false } as const;
+    let r = await this.get(code, shared);
     if (r && registeredOnly.has(r)) {
       this.forget(code);
-      r = await this.get(code);
+      r = await this.get(code, shared);
       if (r && registeredOnly.has(r)) return null;
     }
     if (!r || !this.deps.value || !factsPending(r.value)) return r;
     if (!(await this.deps.value.waitFacts(code, waitMs))) return r;
     // 받아 둔 '계산 준비 중' 응답(짧게 기억)을 버리고 다시 — 방금 받은 재무로
     this.forget(code);
-    const again = await this.get(code);
+    const again = await this.get(code, shared);
     return again && !registeredOnly.has(again) ? again : r;
   }
 
@@ -464,10 +479,24 @@ export class IndicatorScoreService {
     };
     if (v.waiting || v.fetchFailure) valueWaits.set(resp, v);
     if (stock.public === false) registeredOnly.add(resp);
-    // 받기 실패는 기록하지 않는다 (그날 기록이 빠진 채로 두고 40분 뒤·다음에 열 때 다시 계산해 채운다)
-    if (store && stock.registered !== false && !isFetchFailure(resp)) await this.save(resp, trend.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 기록 저장 실패"));
-    if (store && stock.registered !== false && v.stored && !v.fetchFailure && !v.waiting) await this.saveValue(resp, v.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 가치 기록 저장 실패"));
+    // 하루 기록: 등록 종목만. 받기 실패는 기록하지 않는다 (그날 기록이 빠진 채로 두고 40분 뒤·다음에 열 때 다시 계산해 채운다)
+    const rows = {
+      trend: stock.registered !== false && !isFetchFailure(resp) ? trend.stored : null,
+      value: stock.registered !== false && v.stored && !v.fetchFailure && !v.waiting ? v.stored : null,
+    };
+    if (rows.trend || rows.value) unsaved.set(resp, rows);
+    if (store) await this.persist(resp);
     return resp;
+  }
+
+  /** 아직 남기지 않은 하루 기록을 남긴다 (한 번만 — 먼저 지우고 쓴다) */
+  private async persist(resp: ScoresResponse): Promise<void> {
+    const rows = unsaved.get(resp);
+    if (!rows) return;
+    unsaved.delete(resp);
+    const code = resp.code;
+    if (rows.trend) await this.save(resp, rows.trend).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 기록 저장 실패"));
+    if (rows.value) await this.saveValue(resp, rows.value).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 가치 기록 저장 실패"));
   }
 
   private async fetchCut(code: string, ctx: Ctx): Promise<{ candles: Candle[]; source: string } | null> {

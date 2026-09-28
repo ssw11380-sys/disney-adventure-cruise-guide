@@ -390,6 +390,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.addHook("onRequest", async (req) => {
     (req as { startedAt?: bigint }).startedAt = process.hrtime.bigint();
   });
+  // 보는 사람의 처음 값 (검증 9차 — 닫힌 쪽으로): 계정이 켜져 있으면 null(= 주인 아님, routePolicy.ownerView)으로 두고 관문이 채운다 —
+  // 관문 전에 끝난 응답(API 토큰 401 · 세션 끊김 401 · 인증 확인 503 · 없는 주소 404 · /api 밖 경로)은 주인 모습·서버 처리 시간을 받지 않는다.
+  // 꺼져 있으면(관리 API · 비상 끄기) 계정 전처럼 API 토큰 = 주인이라 맨 앞에서 off (관문·/health 가 주인 아닌 계정의 세션이면 그 계정으로 바꾼다)
+  app.decorateRequest("auth", null);
+  app.addHook("onRequest", async (req) => {
+    if (!(await accountsOn())) req.auth = { kind: "off" };
+  });
   app.addHook("onSend", async (req, reply, payload) => {
     const started = (req as { startedAt?: bigint }).startedAt;
     if (started !== undefined && ownerView(req)) reply.header("server-timing", `app;dur=${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)}`);
@@ -424,7 +431,6 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   //    DB 를 못 읽으면 503 auth_unavailable (로그아웃 아님)
   //  - 그다음 경로 정책(auth/routePolicy): 세션 없음은 403 session_required, 주인 아닌 계정은 공유 경로만 (개인은 빈 값·403)
   //  - 플래그를 읽지 못하면 켜짐으로 본다 (featureService FAIL_ON — 오류로 문이 열리지 않게)
-  app.decorateRequest("auth", null);
   /**
    * 비상 모드(관리 API 로 끔 · 비상 끄기 ACCOUNTS_DISABLED=1 둘 다) = 계정 전처럼 **API 토큰만 = 주인**. 이때 막는 것은 하나뿐:
    * 세션 헤더가 주인 아닌 계정의 세션(살아 있음·기한 지남·끊김 모두 — 검증 4차)이면 그 계정으로 본다 (그 폰에 주인 잔고·메모가 보이거나 알림 기기가 등록되지 않게).
@@ -475,6 +481,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       if (enforce(req, reply, key, member)) return reply;
       return;
     }
+    // 맨 앞에서 꺼짐으로 읽은 뒤 그새 켜졌으면 모르는 사람으로 되돌린다 (아래에서 401·503 으로 끝나도 주인 모습이 아니게)
+    req.auth = null;
     if (NO_SESSION_ROUTES.has(key)) {
       req.auth = { kind: "anonymous" };
       return;
