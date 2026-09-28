@@ -1,5 +1,5 @@
-import React from "react";
-import { Pressable, StyleSheet, Text, View, type AccessibilityActionEvent, type GestureResponderEvent } from "react-native";
+import React, { useEffect, useState } from "react";
+import { AccessibilityInfo, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent, type GestureResponderEvent } from "react-native";
 import type { FlowDay } from "@/api/types";
 import { FLOW_NAMES } from "@/lib/flowText";
 import { barHeight, barLayout, barScale, BAR_ROW_H, pickIndex } from "@/lib/flowView";
@@ -9,12 +9,36 @@ const KEYS = ["individual", "foreign", "institution"] as const;
 /** 막대 줄 사이 */
 const ROW_GAP = space.xs;
 
+/** 화면 읽기(TalkBack)가 켜져 있는지 — 처음 값은 비동기로 오고, 켜고 끄면 따라 바뀐다. 모르면 꺼짐 */
+function useScreenReader(): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    let sub: { remove(): void } | undefined;
+    try {
+      Promise.resolve(AccessibilityInfo.isScreenReaderEnabled()).then(
+        (v) => alive && setOn(v === true),
+        () => undefined,
+      );
+      sub = AccessibilityInfo.addEventListener("screenReaderChanged", (v: boolean) => alive && setOn(v === true));
+    } catch {
+      // 화면 읽기 상태를 모르는 환경 — 꺼진 것으로 (누르기 그대로)
+    }
+    return () => {
+      alive = false;
+      sub?.remove();
+    };
+  }, []);
+  return on;
+}
+
 /**
  * 날마다 막대 세 줄 (개인 · 외국인 · 기관 — 3-33 수급 탭). 막대 하나 = 하루, 왼쪽이 오래된 날. 세 줄은 같은 눈금(보이는 기간 |값| 최대),
  * 가운데 0선에서 위(+, 산 주식이 많음)·아래(−) — 색은 앱 공통 등락 색(빨강·파랑), 같은 뜻을 +/− 글자로도 보인다(합계·고른 날 줄).
  * 그림(react-native-svg)이 아니라 View 로 그린다 — 막대가 많아야 60개 × 세 줄이라 View 로 충분하고, 부품 테스트가 svg 가짜 없이 돈다.
  * 누르기: 막대 위 투명 칸 하나(세 줄 높이 ≥ 44)에서 누른 x 로 가장 가까운 날을 고른다 — 60일 막대가 가늘어도 누를 수 있게.
- * 화면 읽기: 칸 하나로 요약을 읽고(adjustable), 위·아래로 쓸어 날을 하나씩 옮긴다 (정확한 값은 '날짜별 숫자 보기' 표)
+ * 화면 읽기: 칸 하나로 요약을 읽고(adjustable), 위·아래로 쓸어 날을 하나씩 옮긴다 (정확한 값은 '날짜별 숫자 보기' 표).
+ * 화면 읽기가 켜져 있으면 누르기(onPress)는 받지 않는다 — 두 번 두드림은 칸 가운데를 누른 것이 되어 엉뚱한 날(가운데 날)로 옮겨 가기 때문
  */
 export function FlowBars({
   days,
@@ -36,6 +60,7 @@ export function FlowBars({
   pickedText: string;
 }) {
   const t = useTheme();
+  const reader = useScreenReader();
   const area = Math.max(0, width - labelW);
   const n = days.length;
   const { slot, bar } = barLayout(area, n);
@@ -95,7 +120,7 @@ export function FlowBars({
       {/* 누르는 칸: 세 줄 전체 높이, 막대 칸 폭 */}
       <Pressable
         testID="flow-bars-press"
-        onPress={onPress}
+        onPress={reader ? undefined : onPress}
         accessibilityRole="adjustable"
         accessibilityLabel={speech}
         accessibilityValue={{ text: pickedText }}

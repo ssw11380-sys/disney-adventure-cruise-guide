@@ -6,7 +6,7 @@ import { NaverInvestorTrend, NAVER_TREND_SIZE } from "../providers/market/naverI
 import { TossTradingTrend, TOSS_TREND_SIZE } from "../providers/market/tossTradingTrend.js";
 import type { FeatureService } from "./featureService.js";
 import { FLOW_TEXT } from "./flowText.js";
-import { buildFlowBody, compareFlows, FLOW_CHECK_DAYS, flowCacheTtlMs, splitFlowRows, type FlowCheck, type FlowCompare, type FlowSourceName, type InvestorFlowResponse } from "./investorFlowCalc.js";
+import { buildFlowBody, compareFlows, FLOW_CHECK_DAYS, flowCacheTtlMs, kst, splitFlowRows, type FlowCheck, type FlowCompare, type FlowSourceName, type InvestorFlowResponse } from "./investorFlowCalc.js";
 
 /**
  * 종목 상세 '수급' 탭 (3-33, 플래그 flowTab) 자료 서비스. 공용 경로 GET /api/investor-flow/:code 가 부른다 (시장 자료 — 계정마다 다른 값 없음).
@@ -17,7 +17,7 @@ import { buildFlowBody, compareFlows, FLOW_CHECK_DAYS, flowCacheTtlMs, splitFlow
  * 같은 종목 동시 요청은 하나로 묶는다.
  *
  * 대조: 토스 웹 자료를 준 뒤 뒤에서(응답을 기다리게 하지 않음) 종목마다 12시간에 한 번(실패면 1시간 뒤) 토스 Open API 수급 원자료를 받아
- * 최근 20일 세 값을 견주고 개수만 다음 응답의 check 에 싣는다. 원자료(날짜별 두 값)는 관리 경로에만 — 토스 Open API 정책(본인 목적, 제3자 배포 금지)
+ * 최근 20일(오늘 빼고 · Open API 값이 빈 날 빼고) 세 값을 견주고 개수만 다음 응답의 check 에 싣는다. 원자료(날짜별 두 값)는 관리 경로에만 — 토스 Open API 정책(본인 목적, 제3자 배포 금지)
  */
 
 export interface InvestorFlowSources {
@@ -173,14 +173,17 @@ export class InvestorFlowService {
     void job.finally(() => this.running.delete(job));
   }
 
-  /** 대조 한 번: 결과 개수를 기억하고, 다른 날이 있으면 경고 로그(날짜·칸 이름만). 확정 줄은 그 자료를 받은 때 기준 */
+  /**
+   * 대조 한 번: 결과 개수를 기억하고, 다른 날이 있으면 경고 로그(날짜·칸 이름만). 확정 줄은 그 자료를 받은 때 기준.
+   * 오늘(한국 날짜)은 빼고 센다 — Open API 의 오늘 값은 저녁까지 잠정·빈 값일 수 있어 '19일 같음'으로 잘못 보이지 않게
+   */
   private async compare(code: string, snap: Snap): Promise<FlowCompare> {
     const api = this.deps.sources?.openApi;
     if (!api) throw new Error("토스 Open API 없음");
     const at = this.now();
     const days = await api.getInvestorFlow(code, CHECK_FETCH_DAYS);
     const { final } = splitFlowRows(snap.rows, "toss-web", new Date(snap.at), this.now());
-    const c = compareFlows(final, days);
+    const c = compareFlows(final, days, FLOW_CHECK_DAYS, { today: kst(at).date });
     this.checks.set(code, { at: seoulIso(at), days: c.days, same: c.same });
     if (c.same < c.days) this.deps.log?.warn({ code, days: c.days, same: c.same, diffs: c.diffs }, "수급 대조: 토스 Open API 와 다른 날이 있음");
     return c;

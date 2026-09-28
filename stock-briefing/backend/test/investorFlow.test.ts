@@ -32,6 +32,12 @@ const INFO = FX("toss-info.json") as Record<string, unknown>;
 /** 보유율이 1% 아래인 한도 종목 (9/28 줄) — YTN 040300 · 세종텔레콤 036630 · 트리니티항공 091810 */
 const LOW = Object.fromEntries(Object.entries(FX("toss-low-ratio.json") as Record<string, unknown>).map(([k, v]) => [k, parseTossTradingTrend(v)[0]!]));
 const shares = (pc: string) => parseTossStockInfo(INFO[pc])!.listedShares!;
+/**
+ * ETF 네 종목 (252670·122630·233740·069500 — 2026-09-29 06:20 KST 실측, 쓰는 칸만): 최근 4줄(9/28·9/23·9/22·9/21)과 그때 종목 정보.
+ * ETF 는 설정·환매로 상장 주식 수가 날마다 바뀌고, 한도 주식 수 = 그날 상장 주식 수 (한도 없음)
+ */
+const ETF_FX = FX("toss-etf-shares.json") as Record<string, { info: unknown; trend: unknown }>;
+const ETF = Object.fromEntries(Object.entries(ETF_FX).map(([k, v]) => [k, parseTossTradingTrend(v.trend)]));
 /** 가짜 토스 웹 응답: 종목 정보는 INFO(없으면 result null), Q520057 수급은 ETN 픽스처, 그 밖 수급은 HTTP 400 */
 const tossEtnFetch = (urls: string[] = []) =>
   (async (url: string | URL | Request) => {
@@ -404,6 +410,31 @@ describe("외국인 한도 (토스 웹만, 한도가 상장 주식 수의 99.5% 
     expect(flowLimit(row("2026-09-28", { foreignRatio: 0.07, foreignHolding: 70_500, foreignLimit: 100_000_000 }), 100_000_000)).toBeNull();
   });
 
+  it("회귀: ETF 는 상장 주식 수가 날마다 바뀐다 — 24시간 기억한 앞날 상장 주식 수를 그날 줄 한도와 견주면 없는 한도(94.96~99.44%)가 보였다 (252670·122630·233740·069500 실측)", () => {
+    // 예전 계산(한도 ÷ 기억한 상장 주식 수)으로 없는 한도가 나오던 짝: 252670 9/22 줄 × 9/21 상장 주식 수 = 96.02%
+    const r = ETF["A252670"]![2]!;
+    expect(r.date).toBe("2026-09-22");
+    const prevShares = ETF["A252670"]![3]!.foreignLimit!; // 9/21 한도 = 9/21 상장 주식 수
+    expect(Math.round((r.foreignLimit! / prevShares) * 10_000) / 100).toBe(96.02);
+    expect(flowLimit(r, prevShares)).toBeNull();
+    // 모든 ETF · 모든 줄: 앞날 상장 주식 수와 짝지어도, 그날 종목 정보로도, 모를 때도 한도 없음
+    for (const [pc, rows] of Object.entries(ETF)) {
+      expect(rows).toHaveLength(4);
+      for (let i = 0; i + 1 < rows.length; i++) expect(flowLimit(rows[i]!, rows[i + 1]!.foreignLimit), `${pc} ${rows[i]!.date}`).toBeNull();
+      expect(flowLimit(rows[0]!, parseTossStockInfo(ETF_FX[pc]!.info)!.listedShares), pc).toBeNull();
+      for (const row of rows) expect(flowLimit(row), `${pc} ${row.date}`).toBeNull();
+    }
+  });
+
+  it("상장 주식 수가 그 줄과 다른 날 값이면(보유 ÷ 상장 주식 수가 그 줄의 보유율로 반올림되지 않으면) 쓰지 않는다 — 한도 종목은 보유율 어림으로, 어림 오차가 크면 한도 줄 없음", () => {
+    // KT: 상장 주식 수가 2% 많게 기억됨 → 보유 ÷ 상장 = 48.04% ≠ 49.00 → 어림 49.0% (예전: 48.04%)
+    expect(flowLimit(TOSS.kt[0]!, Math.round(shares("A030200") * 1.02))).toEqual({ limitPct: 49, usedPct: 100 });
+    // YTN: 10% 다름 → 0.15% ≠ 0.16 → 어림 오차가 커서 없음 (예전: 9.09%)
+    expect(flowLimit(LOW["A040300"]!, Math.round(shares("A040300") * 1.1))).toBeNull();
+    // 같은 날 상장 주식 수는 그대로 쓴다 (반올림이 맞음 — 122630 0.5376% → 0.54 처럼 토스는 반올림)
+    expect(flowLimit(LOW["A091810"]!, shares("A091810"))).toEqual({ limitPct: 49.99, usedPct: 0.9 });
+  });
+
   it("실제 한도(30~50%): 상장 주식 수를 알면 보유율이 낮아도 정확히, 모르면 어림 오차가 작을 때(보유가 한도의 약 20% 이상)만", () => {
     const listed = 100_000_000;
     const limitRow = (limitPct: number, ratio: number) => row("2026-09-28", { foreignRatio: ratio, foreignHolding: Math.round((listed * ratio) / 100), foreignLimit: Math.round((listed * limitPct) / 100) });
@@ -432,6 +463,17 @@ describe("토스 Open API 원자료와 대조 (최근 20일, 세 값이 모두 �
     const c = compareFlows(TOSS.samsung, api);
     expect(c).toMatchObject({ days: 20, same: 19 });
     expect(c.diffs).toEqual([{ date: TOSS.samsung[3]!.date, fields: ["institution"] }]);
+  });
+
+  it("Open API 값이 빈 날(아직 나오지 않은 잠정 값)과 오늘은 세지 않는다 — 대조 줄이 '19일 같음'으로 잘못 나오지 않게", () => {
+    // 9/28 을 오늘로: 9/28 은 Open API 가 잠정 값(외국인 +1)이라도 빼고, 9/23 은 Open API 개인이 비어 빼고 센다
+    const api = apiDays(TOSS.samsung).map((d, i) => (i === 0 ? { ...d, foreign: (d.foreign ?? 0) + 1 } : i === 1 ? { ...d, individual: null } : d));
+    const c = compareFlows(TOSS.samsung, api, 20, { today: TOSS.samsung[0]!.date });
+    expect(c).toMatchObject({ days: 19, same: 19, diffs: [] });
+    expect(c.rows.map((x) => x.date)).not.toContain(TOSS.samsung[0]!.date);
+    expect(c.rows.map((x) => x.date)).not.toContain(TOSS.samsung[1]!.date);
+    // 오늘을 주지 않아도 빈 값은 다른 날로 세지 않는다
+    expect(compareFlows(TOSS.samsung, apiDays(TOSS.samsung).map((d, i) => (i === 1 ? { ...d, individual: null } : d)))).toMatchObject({ days: 19, same: 19, diffs: [] });
   });
 
   it("두 쪽에 다 있는 날만 센다 (Open API 가 15일만 주면 15일)", () => {
@@ -535,6 +577,14 @@ describe("수급 서비스: 응답 모양", () => {
     expect(await service.get("040300")).toMatchObject({ source: "toss-web", limit: { limitPct: 10, usedPct: 1.6 } });
     const x = await makeService({ now: NIGHT, toss: new FakeSource("toss-web", [LOW["A040300"]!]) });
     expect(await x.service.get("040300")).toMatchObject({ source: "toss-web", limit: null });
+  });
+
+  it("회귀: ETF 252670 — 앞날 상장 주식 수를 기억하고 있어도 없는 한도(96.0%)를 보이지 않는다", async () => {
+    const rows = ETF["A252670"]!.slice(2); // 가장 최근 줄 = 9/22
+    const toss = new FakeSource("toss-web", rows);
+    toss.shares = rows[1]!.foreignLimit; // 9/21 상장 주식 수
+    const { service } = await makeService({ now: NIGHT, toss });
+    expect(await service.get("252670")).toMatchObject({ source: "toss-web", limit: null });
   });
 
   it("ETN 520057 (실제 출처 코드 + 가짜 fetch): 토스 웹 Q 상품 코드로 받아 source toss-web · 기타법인 있음 · 한도 없음 · 네이버로 넘김 경고 없음", async () => {
@@ -720,6 +770,20 @@ describe("수급 서비스: 토스 Open API 대조 (개수만)", () => {
     const w = warns.find((x) => x.msg === "수급 대조: 토스 Open API 와 다른 날이 있음");
     // 순매수 숫자는 로그에 없다 (날짜·칸 이름만 — 값은 관리 경로로)
     expect(w?.obj).toEqual({ code: "005930", days: 20, same: 19, diffs: [{ date: TOSS.samsung[2]!.date, fields: ["institution"] }] });
+  });
+
+  it("오늘(21:00 확정) 토스 웹 줄이 있어도 오늘은 대조하지 않는다 — Open API 오늘 값이 잠정·빈 값이면 '19일 같음'으로 잘못 나오던 것", async () => {
+    let t = Date.parse("2026-09-29T21:00:00+09:00");
+    const today = row("2026-09-29", { updatedAt: "2026-09-29T20:15:00.000+09:00" });
+    const toss = new FakeSource("toss-web", [today, ...TOSS.samsung]);
+    const openApi = new FakeOpenApi([{ date: "2026-09-29", close: 100, individual: 5, foreign: null, institution: -3 }, ...apiDays(TOSS.samsung, 21)]);
+    const { service, warns } = await makeService({ now: () => new Date(t), toss, openApi });
+    const first = await service.get("005930");
+    expect(first.supported && first.days[0]!.date).toBe("2026-09-29"); // 오늘 줄은 확정
+    await service.idle();
+    t += 61 * 60_000;
+    expect(await service.get("005930")).toMatchObject({ check: { days: 20, same: 20 } });
+    expect(warns.some((w) => w.msg === "수급 대조: 토스 Open API 와 다른 날이 있음")).toBe(false);
   });
 
   it("키 없음 → check: null · 대조가 끝나지 않아도 응답은 바로", async () => {

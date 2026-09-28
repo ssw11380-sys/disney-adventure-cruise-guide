@@ -7,8 +7,9 @@ import type { FlowTrendRow, InvestorFlowDay } from "../providers/market/investor
  *    지금 시각이 아니라 받은 때로 본다: 전에 받은 값을 다음 날 다시 줄 때 장중에 받은 잠정 값이 확정으로 바뀌어 합계에 들어가지 않게
  *  - 합계: 확정 줄 앞에서 5·20·60개 (빈 값은 빼고 더하고 그 날 수를 missing 에)
  *  - 외국인 보유율: 지금 값과 합계 창 바로 앞날 값의 차이, 61점 선(오래된 순)
- *  - 외국인 한도(토스 웹만): 한도가 상장 주식 수의 99.5% 미만인 종목만 한도·소진율 (상장 주식 수는 토스 웹 종목 정보 — 모르면 보유율로 어림하고 오차가 크면 뺌)
- *  - 대조: 토스 웹 확정 줄 최근 20일과 토스 Open API 같은 날짜의 개인·외국인·기관 세 값
+ *  - 외국인 한도(토스 웹만): 한도가 있는지는 그 줄의 보유율로만 판정(한도가 상장 주식 수의 99.5% 미만), 한도율은 상장 주식 수(토스 웹 종목 정보 —
+ *    그 줄과 같은 날 값일 때만)로 다듬고, 모르면 보유율로 어림하고 오차가 크면 뺌
+ *  - 대조: 토스 웹 확정 줄 최근 20일(오늘 빼고)과 토스 Open API 같은 날짜의 개인·외국인·기관 세 값 (Open API 값이 빈 날은 세지 않음)
  */
 
 export type FlowSourceName = "toss-web" | "naver";
@@ -213,25 +214,35 @@ export const FLOW_NO_LIMIT_PCT = 99.5;
 const RATIO_STEP = 0.01;
 /** 상장 주식 수를 모를 때 보유율로 어림한 한도율의 오차가 이보다 크면(%p) 한도 줄을 뺀다 — 소수 한 자리로 보이는 값이 틀리지 않게 */
 const LIMIT_EST_MAX_ERR = 0.05;
+/** 보유율 칸의 반올림 폭 (소수 둘째 자리 반올림 — 실측 122630 0.5376% → 0.54 · 069500 22.555% → 22.56) + 수 오차 여유 */
+const RATIO_HALF = RATIO_STEP / 2 + 1e-9;
+
+/**
+ * 상장 주식 수가 그 줄과 같은 날 값인지: 보유 ÷ 상장 주식 수가 그 줄의 보유율(소수 둘째 자리 반올림)과 맞을 때만.
+ * 종목 정보는 24시간 기억하는데 ETF 는 설정·환매로 상장 주식 수가 날마다 바뀐다 (252670: 9/21 110.5억 → 9/22 106.1억 주)
+ */
+function sharesMatchRow(hold: number, ratio: number, listedShares: number): boolean {
+  return Math.abs((hold / listedShares) * 100 - ratio) <= RATIO_HALF;
+}
 
 /**
  * 외국인 한도 (토스 웹 줄만 — 한도 칸이 있을 때). 한도가 상장 주식 수의 99.5% 이상이면(= 한도 없음) null. 소진율 = 보유 ÷ 한도.
- *  - 상장 주식 수를 알면(토스 웹 종목 정보 sharesOutstanding): 한도율 = 한도 ÷ 상장 주식 수 (소수 둘째 자리 — 트리니티항공 49.99%)
- *  - 모르면: 상장 주식 수 = 보유 ÷ 보유율 로 어림. 없는 한도 판정은 보유율을 가장 크게(+0.01%p) 본 값으로 하고,
- *    어림 오차(보유율 ±0.01%p 가 한도율에서 커진 폭)가 0.05%p 보다 크면 한도 줄을 뺀다 (소수 한 자리로 보임)
+ *  1. 한도가 있는지는 그 줄 안에서만 판정: 상장 주식 수 = 보유 ÷ 보유율 로 어림하되 보유율을 가장 크게(+0.01%p) 본 한도율도 99.5% 미만일 때만.
+ *     다른 날 값일 수 있는 종목 정보의 상장 주식 수로는 판정하지 않는다 (ETF 에 없는 한도 92~99% 가 보이던 것). 보유율·보유가 0 이면 모름 → null
+ *  2. 한도율: 상장 주식 수(토스 웹 종목 정보 sharesOutstanding)가 그 줄과 같은 날 값이면(sharesMatchRow) 한도 ÷ 상장 주식 수 (소수 둘째 자리 — 트리니티항공 49.99%)
+ *  3. 아니면 보유율 어림 — 어림 오차(보유율 ±0.01%p 가 한도율에서 커진 폭)가 0.05%p 보다 크면 한도 줄을 뺀다 (소수 한 자리로 보임)
  */
 export function flowLimit(row: FlowTrendRow, listedShares: number | null = null): FlowLimit | null {
   const { foreignHolding: hold, foreignLimit: limit, foreignRatio: ratio } = row;
-  if (hold === null || limit === null || !(hold >= 0) || !(limit > 0)) return null;
-  const usedPct = round((hold / limit) * 100, 1);
-  if (listedShares !== null && listedShares > 0) {
-    const pct = (limit / listedShares) * 100;
-    return pct < FLOW_NO_LIMIT_PCT ? { limitPct: round(pct, 2), usedPct } : null;
-  }
-  if (ratio === null || !(ratio > 0) || !(hold > 0)) return null;
+  if (hold === null || limit === null || ratio === null || !(hold > 0) || !(limit > 0) || !(ratio > 0)) return null;
   const est = (r: number) => (limit * r) / hold;
   const hi = est(ratio + RATIO_STEP);
   if (!(hi < FLOW_NO_LIMIT_PCT)) return null;
+  const usedPct = round((hold / limit) * 100, 1);
+  if (listedShares !== null && listedShares > 0 && sharesMatchRow(hold, ratio, listedShares)) {
+    const pct = (limit / listedShares) * 100;
+    return pct < FLOW_NO_LIMIT_PCT ? { limitPct: round(pct, 2), usedPct } : null;
+  }
   const mid = est(ratio);
   const lo = est(Math.max(0, ratio - RATIO_STEP));
   if (Math.max(hi - mid, mid - lo) > LIMIT_EST_MAX_ERR) return null;
@@ -247,15 +258,22 @@ export interface FlowCompare {
   rows: Array<{ date: string; same: boolean; fields: Array<"individual" | "foreign" | "institution">; web: Pick<FlowTrendRow, "individual" | "foreign" | "institution">; api: Pick<InvestorFlowDay, "individual" | "foreign" | "institution"> }>;
 }
 
-/** 토스 웹 확정 줄 최근 days 개와 토스 Open API 같은 날짜의 세 값 비교 (두 쪽에 다 있는 날만 센다) */
-export function compareFlows(webFinal: readonly FlowTrendRow[], api: readonly InvestorFlowDay[], days = FLOW_CHECK_DAYS): FlowCompare {
+const CHECK_KEYS = ["individual", "foreign", "institution"] as const;
+
+/**
+ * 토스 웹 확정 줄 최근 days 개와 토스 Open API 같은 날짜의 세 값 비교 (두 쪽에 다 있는 날만 센다).
+ * today(한국 날짜)를 주면 그날(과 그 뒤 날짜)은 빼고 센다 — Open API 의 오늘 값은 저녁까지 잠정이라 받은 때에 따라 다를 수 있다.
+ * Open API 세 값 가운데 빈 값(null — 아직 나오지 않음)이 있는 날도 세지 않는다 (다른 날로 세지 않게)
+ */
+export function compareFlows(webFinal: readonly FlowTrendRow[], api: readonly InvestorFlowDay[], days = FLOW_CHECK_DAYS, o: { today?: string } = {}): FlowCompare {
   const byDate = new Map(api.map((d) => [d.date, d]));
   const out: FlowCompare = { days: 0, same: 0, diffs: [], rows: [] };
-  for (const w of webFinal.slice(0, days)) {
+  const past = o.today ? webFinal.filter((w) => w.date < o.today!) : webFinal;
+  for (const w of past.slice(0, days)) {
     const a = byDate.get(w.date);
-    if (!a) continue;
+    if (!a || CHECK_KEYS.some((k) => a[k] === null)) continue;
     out.days++;
-    const fields = (["individual", "foreign", "institution"] as const).filter((k) => w[k] !== a[k]);
+    const fields = CHECK_KEYS.filter((k) => w[k] !== a[k]);
     if (fields.length === 0) out.same++;
     else out.diffs.push({ date: w.date, fields: [...fields] });
     out.rows.push({

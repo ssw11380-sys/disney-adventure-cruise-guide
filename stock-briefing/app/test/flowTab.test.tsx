@@ -15,8 +15,11 @@ const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 const h = vi.hoisted(() => ({
   win: { width: 360, height: 752, scale: 2.625, fontScale: 1 },
-  query: { data: undefined as unknown, isLoading: false, isError: false, error: null as unknown, refetch: vi.fn(async () => undefined) },
+  query: { data: undefined as unknown, isLoading: false, isError: false, isFetching: false, error: null as unknown, refetch: vi.fn(async () => undefined) },
   calls: [] as Array<[string, boolean]>,
+  /** 화면 읽기(TalkBack) 켜짐 흉내 · 켜짐/꺼짐 바뀜 알림 받는 함수 */
+  reader: false,
+  readerFns: [] as Array<(on: boolean) => void>,
 }));
 
 vi.mock("react-native", () => ({
@@ -27,6 +30,13 @@ vi.mock("react-native", () => ({
   Switch: "Switch",
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
   useWindowDimensions: () => h.win,
+  AccessibilityInfo: {
+    isScreenReaderEnabled: async () => h.reader,
+    addEventListener: (_name: string, fn: (on: boolean) => void) => {
+      h.readerFns.push(fn);
+      return { remove: () => void (h.readerFns = h.readerFns.filter((f) => f !== fn)) };
+    },
+  },
 }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 vi.mock("@/theme", async () => {
@@ -65,15 +75,22 @@ const press = (r: R, n: HostNode, ev: unknown = {}) => r.act(() => (n.props.onPr
 const sumRows = (r: R) => r.all().filter((n) => n.props.accessible === true && typeof n.props.accessibilityLabel === "string" && /최근 \d+일 합계/.test(n.props.accessibilityLabel as string));
 const bars = (r: R, key: string) => r.all().filter((n) => typeof n.props.testID === "string" && (n.props.testID as string).startsWith(`flow-bar-${key}-`));
 
-function open(data: unknown, o: { us?: boolean; width?: number; fontScale?: number; error?: boolean } = {}) {
-  h.query = { data, isLoading: data === undefined && !o.error, isError: !!o.error, error: o.error ? new Error("x") : null, refetch: vi.fn(async () => undefined) };
+function open(data: unknown, o: { us?: boolean; width?: number; fontScale?: number; error?: boolean; fetching?: boolean } = {}) {
+  h.query = { data, isLoading: data === undefined && !o.error, isError: !!o.error, isFetching: !!o.fetching, error: o.error ? new Error("x") : null, refetch: vi.fn(async () => undefined) };
   h.win = { ...h.win, width: o.width ?? 360, fontScale: o.fontScale ?? 1 };
   return render(<FlowTab code={o.us ? "AAPL" : "005930"} us={!!o.us} width={o.width ?? 360} />);
 }
 
 beforeEach(() => {
   h.calls = [];
+  h.reader = false;
+  h.readerFns = [];
 });
+/** 비동기로 온 화면 읽기 상태를 반영 (약속이 풀리게 한 번 쉬고 다시 그림) */
+const settle = async (r: R) => {
+  await new Promise((res) => setTimeout(res, 0));
+  r.act(() => undefined);
+};
 
 describe("한국 종목 (삼성전자, 토스 웹 자료)", () => {
   it("합계 카드: 기본 20일 네 줄 (개인·외국인·기관·기타법인) — 글자·부호·색, 한 줄 = 한 요소", () => {
@@ -120,7 +137,7 @@ describe("한국 종목 (삼성전자, 토스 웹 자료)", () => {
   it("막대: 처음엔 가장 최근 날 줄, 누른 x 로 그날 줄 · 세 줄 같은 눈금(가장 큰 |값|이 반 줄 28)", () => {
     const r = open(FX.cases.samsung);
     const pickedNode = () => r.all().find((n) => n.props.testID === "flow-picked")!;
-    const picked = () => pickedNode().props.accessibilityLabel as string;
+    const picked = () => plain(pickedNode().props.accessibilityLabel as string);
     // 주 수에 늘 '주' (옆의 종가 '원'과 헷갈리지 않게), 조각마다 한 덩어리 (숫자와 단위가 줄에서 갈라지지 않게)
     expect(picked()).toBe("9월 28일 (월) · 개인 +742만 주 · 외국인 -598만 주 · 기관 -363만 주 · 종가 270,000원");
     expect(r.all(pickedNode().children).filter((n) => n.type === "Text").map(textOf)).toEqual(["9월 28일 (월)", "· 개인 +742만 주", "· 외국인 -598만 주", "· 기관 -363만 주", "· 종가 270,000원"]);
@@ -209,6 +226,7 @@ describe("한국 종목 (삼성전자, 토스 웹 자료)", () => {
     expect(texts(r)).toContain("개인: 개인 투자자입니다.");
     expect(texts(r)).toContain("외국인: 금융감독원에 등록한 외국인 투자자입니다.");
     expect(texts(r)).toContain("모두 지난 기록입니다. 이 숫자만으로 주가가 어떻게 될지는 알 수 없습니다.");
+    expect(texts(r)).toContain("기타법인: 투자 회사가 아닌 일반 회사 등입니다. 회사가 자기 회사 주식을 사면 보통 여기에 들어갑니다.");
   });
 
   it("출처 줄 · 대조 20/20", () => {
@@ -242,12 +260,16 @@ describe("다른 경우", () => {
     expect(sumRows(r).map((n) => textOf(n))).toEqual(["개인-3,225만 주", "외국인-1,564만 주", "기관+895만 주"]);
     const all = texts(r);
     expect(all).toContain("기타법인 값이 없어 세 값을 더해도 대개 0이 되지 않습니다.");
-    expect(all).toContain("자료: 네이버 증권 · 한국거래소 거래만 (넥스트레이드 거래가 빠져 토스 앱 숫자와 같지 않습니다) · 9월 28일 (월)까지 · 9월 29일 (화) 02:40에 받음");
+    // ETF·ETN 은 넥스트레이드 거래가 없어 '빠져'가 틀린 말이라 기준이 다르다는 것만
+    expect(all).toContain("자료: 네이버 증권 · 한국거래소 거래만 (기준이 달라 토스 앱 숫자와 다를 때가 있습니다) · 9월 28일 (월)까지 · 9월 29일 (화) 02:40에 받음");
     expect(all.some((s) => s.startsWith("토스증권 Open API"))).toBe(false);
     // 읽는 법: '금융감독원에 등록한'은 토스증권 기준이라 네이버 자료에서는 기준이 다르다고
     press(r, r.byLabel("이 숫자들이 뜻하는 것"));
     expect(texts(r)).toContain("외국인: 외국인 투자자입니다. 네이버 증권은 셈하는 기준이 토스증권과 달라 숫자가 같지 않습니다.");
     expect(texts(r)).not.toContain("외국인: 금융감독원에 등록한 외국인 투자자입니다.");
+    // 기타법인 값이 없는 자료라 기타법인 뜻 줄도 없다 (여섯 줄)
+    expect(texts(r).some((s) => s.startsWith("기타법인:"))).toBe(false);
+    expect(texts(r).filter((s) => /^(개인|외국인|기관|기타법인): |^순매수라고|^오늘 값은|^모두 지난/.test(s))).toHaveLength(6);
   });
 
   it("네이버 폴백 60줄(둘째 쪽을 받지 못함): 60일 전 보유율이 없는 까닭 한 줄 (60일 합계는 보이므로)", () => {
@@ -314,8 +336,51 @@ describe("다른 경우", () => {
     const retry = fail.all().find((n) => n.type === "Pressable" && n.props.accessibilityLabel === "수급 자료 다시 불러오기")!;
     press(fail, retry);
     expect(h.query.refetch).toHaveBeenCalledTimes(1);
+    expect(retry.props.accessibilityState).toEqual({ disabled: false, busy: false });
+    // 다시 받는 중에는 버튼이 '불러오는 중'(돌아가는 표시 · 화면 읽기 busy)이고 또 누를 수 없다
+    const again = open(undefined, { error: true, fetching: true });
+    const busy = again.all().find((n) => n.type === "Pressable" && n.props.accessibilityLabel === "수급 자료 다시 불러오기")!;
+    expect(busy.props.accessibilityState).toEqual({ disabled: true, busy: true });
+    expect(busy.props.disabled).toBe(true);
+    expect(again.all(busy.children).some((n) => n.type === "ActivityIndicator")).toBe(true);
     expect(texts(open(undefined))).toContain("수급 자료를 불러오는 중");
     expect(texts(open(null))).toContain("지금은 수급 자료를 볼 수 없습니다.");
+  });
+
+  it("빈 값: 화면에는 '—', 화면 읽기는 '값 없음' (고른 날 줄 · 막대 칸 값 · 날짜별 표)", () => {
+    const d = clone(FX.cases.samsung);
+    d.days[0] = { ...d.days[0]!, individual: null, institution: null };
+    const r = open(d);
+    const pickedNode = r.all().find((n) => n.props.testID === "flow-picked")!;
+    expect(plain(pickedNode.props.accessibilityLabel as string)).toBe("9월 28일 (월) · 개인 값 없음 · 외국인 -598만 주 · 기관 값 없음 · 종가 270,000원");
+    expect(r.all(pickedNode.children).filter((n) => n.type === "Text").map(textOf)).toEqual(["9월 28일 (월)", "· 개인 —", "· 외국인 -598만 주", "· 기관 —", "· 종가 270,000원"]);
+    const area = r.all().find((n) => n.props.testID === "flow-bars-press")!;
+    expect(plain((area.props.accessibilityValue as { text: string }).text)).toBe("9월 28일 (월) · 개인 값 없음 · 외국인 -598만 주 · 기관 값 없음 · 종가 270,000원");
+    press(r, pressables(r).find((n) => /날짜별 숫자/.test(String(n.props.accessibilityLabel)))!);
+    const table = r.all().find((n) => n.props.testID === "flow-day-table")!;
+    const row0 = r.all(table.children).filter((n) => n.props.accessible === true)[0]!;
+    expect(row0.props.accessibilityLabel).toBe("9월 28일 월요일, 개인 값 없음, 외국인 -598만 주, 기관 값 없음");
+    expect(r2cells(row0).map(textOf)).toEqual(["9월 28일", "—", "-598만", "—"]);
+  });
+
+  it("화면 읽기가 켜져 있으면 막대 칸은 누르기를 받지 않는다 (두 번 두드림이 칸 가운데 날을 고르지 않게) — 날은 위·아래 쓸기로만", async () => {
+    h.reader = true;
+    const r = open(FX.cases.samsung);
+    await settle(r);
+    const area = () => r.all().find((n) => n.props.testID === "flow-bars-press")!;
+    const picked = () => plain(r.all().find((n) => n.props.testID === "flow-picked")!.props.accessibilityLabel as string);
+    expect(area().props.onPress).toBeUndefined();
+    expect(area().props.accessibilityRole).toBe("adjustable");
+    r.act(() => (area().props.onAccessibilityAction as (e: unknown) => void)({ nativeEvent: { actionName: "decrement" } }));
+    expect(picked()).toMatch(/^9월 23일 \(수\) · /);
+    // 화면 읽기를 끄면 다시 누를 수 있다
+    r.act(() => h.readerFns.forEach((f) => f(false)));
+    expect(typeof area().props.onPress).toBe("function");
+    // 꺼져 있을 때(기본)는 처음부터 누를 수 있다
+    h.reader = false;
+    const off = open(FX.cases.samsung);
+    await settle(off);
+    expect(typeof off.all().find((n) => n.props.testID === "flow-bars-press")!.props.onPress).toBe("function");
   });
 
   it("미국 종목: 서버에 묻지 않고 '해당 없음' 안내 세 줄", () => {
@@ -382,6 +447,9 @@ describe("날짜별 숫자 표: 큰 글씨 (글자 200%)", () => {
     for (const c of cells) {
       expect(c.props.maxFontSizeMultiplier).toBe(1.4);
       expect(c.props.numberOfLines).toBe(1);
+      // 글자를 저절로 줄이지 않는다 (고정 폭 열 표 — 1.4배 상한과 폭 계산으로 한 줄)
+      expect(c.props.adjustsFontSizeToFit).toBeUndefined();
+      expect(c.props.minimumFontScale).toBeUndefined();
     }
     // 9/21 개인 -1,243만 주: 칸에는 '-1,243만' (단위는 표 위) — '-1,243' / '만 주'로 갈라지지 않는다
     const d21 = rows.find((n) => String(n.props.accessibilityLabel).startsWith("9월 21일"))!;
@@ -389,9 +457,15 @@ describe("날짜별 숫자 표: 큰 글씨 (글자 200%)", () => {
     expect(d21.props.accessibilityLabel).toBe("9월 21일 월요일, 개인 -1,243만 주, 외국인 +595만 주, 기관 +460만 주");
   });
 
-  it("아주 좁은 칸(240)은 날짜를 위 줄에 따로 두고 세 칸이 폭을 나눈다", () => {
+  it("아주 좁은 칸(240)은 날짜를 위 줄에 따로 두고 세 칸이 폭을 나눈다 — 그래도 모자라면 표 글자 상한만 낮춘다(저절로 줄이기 없음)", () => {
     const rows = openTable(240);
-    expect(flat(r2cells(rows[0]!)[0]!).width).toBe("100%");
+    const cells = r2cells(rows[0]!);
+    expect(flat(cells[0]!).width).toBe("100%");
+    for (const c of cells) {
+      expect(c.props.maxFontSizeMultiplier).toBeLessThan(1.4);
+      expect(c.props.maxFontSizeMultiplier).toBeGreaterThanOrEqual(1);
+      expect(c.props.adjustsFontSizeToFit).toBeUndefined();
+    }
   });
 });
 

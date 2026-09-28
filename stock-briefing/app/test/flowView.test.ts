@@ -23,6 +23,7 @@ import {
   shortDate,
   showSumTable,
   stampKo,
+  sharesOrNull,
   sumColumns,
   WIDE_TABS_BASE,
 } from "@/lib/flowView";
@@ -34,6 +35,10 @@ import type { FlowDay, FlowSum } from "@/api/types";
  * 3-33 수급 탭 순수 함수 (lib/flowView · lib/flowText). 설계서 3.1 탭 이름 표 · 3.4 숫자 모양 · 3.5 화면 읽기 · 3.6 막대 폭.
  * 문구 검사: 서버 검사기(backend/src/analysis/scoreWording.ts 금지어·미래형 + backend/src/services/flowText.ts 수급 판단 낱말)의 정규식을 파일에서 그대로 읽어 쓴다
  */
+
+const WJ = "\u2060";
+/** 줄바꿈 막기 글자를 뺀 보이는 글 */
+const plain = (s: string) => s.replaceAll(WJ, "");
 
 // ───────────────────────────── 탭 이름 (설계서 3.1 표) ─────────────────────────────
 
@@ -154,19 +159,55 @@ describe("주 수 formatShares", () => {
   });
 
   it("날짜·시각 (한국 시간, 기기 시간대와 상관없이)", () => {
-    expect(dateKo("2026-09-28")).toBe("9월 28일 (월)");
-    expect(dateKo("2026-10-03")).toBe("10월 3일 (토)");
+    expect(plain(dateKo("2026-09-28"))).toBe("9월 28일 (월)");
+    expect(plain(dateKo("2026-10-03"))).toBe("10월 3일 (토)");
     expect(dateLong("2026-09-28")).toBe("9월 28일 월요일");
     expect(hhmm("2026-09-28T20:15:40+09:00")).toBe("20:15");
     expect(hhmm("2026-09-28T15:05:00Z")).toBe("00:05");
     expect(hhmm(null)).toBeNull();
-    expect(stampKo("2026-09-28T20:15:40+09:00")).toBe("9월 28일 (월) 20:15");
-    expect(stampKo("2026-09-28T16:00:00Z")).toBe("9월 29일 (화) 01:00");
+    expect(plain(stampKo("2026-09-28T20:15:40+09:00"))).toBe("9월 28일 (월) 20:15");
+    expect(plain(stampKo("2026-09-28T16:00:00Z"))).toBe("9월 29일 (화) 01:00");
     expect(stampKo(undefined)).toBe("-");
+  });
+
+  it("날짜·시각 글은 한 덩어리 (360 × 200% 출처 줄에서 '9월 28' / '일 (월)'처럼 갈라지지 않게 — 숫자와 '월'·'일' 사이, 띄어쓰기 뒤에 WJ)", () => {
+    expect(dateKo("2026-09-28")).toBe(`9${WJ}월 ${WJ}28${WJ}일 ${WJ}(월)`);
+    expect(stampKo("2026-09-28T20:15:40+09:00")).toBe(`9${WJ}월 ${WJ}28${WJ}일 ${WJ}(월) ${WJ}20:15`);
+    // 줄이 바뀔 수 있는 곳이 없다: 띄어쓰기 뒤는 모두 WJ, 숫자 바로 뒤 '월'·'일' 없음
+    for (const s of [dateKo("2026-12-31"), stampKo("2026-12-31T09:05:00+09:00")]) {
+      expect(s).not.toMatch(/ (?!\u2060)/);
+      expect(s).not.toMatch(/d[월일]/);
+    }
+    // 화면 읽기·축 글(요일 없는 날짜)은 그대로
+    expect(shortDate("2026-09-28")).toBe("9월 28일");
+  });
+
+  it("주 수 화면 읽기 값 (sharesOrNull): 빈 값은 null — 부르는 쪽이 '값 없음'으로 ('—'를 읽지 않게)", () => {
+    expect(sharesOrNull(7_422_778)).toBe("+742만 주");
+    expect(sharesOrNull(0)).toBe("0주");
+    expect(sharesOrNull(null)).toBeNull();
+    expect(sharesOrNull(undefined)).toBeNull();
+    expect(sharesOrNull(Number.NaN)).toBeNull();
   });
 });
 
 // ───────────────────────────── 합계 줄·화면 읽기 ─────────────────────────────
+
+describe("화면 읽기: 빈 값은 '값 없음' ('—'를 읽지 않게)", () => {
+  it("날짜별 표 한 줄 · 고른 날 줄", () => {
+    expect(text.tableRowSpeech("9월 28일 월요일", null, "-598만 주", null)).toBe("9월 28일 월요일, 개인 값 없음, 외국인 -598만 주, 기관 값 없음");
+    expect(text.pickedLine("9월 28일 (월)", null, "+1주", "-1주", null)).toBe("9월 28일 (월) · 개인 값 없음 · 외국인 +1주 · 기관 -1주");
+    expect(text.pickedLine("9월 28일 (월)", "+742만 주", "-598만 주", "-363만 주", "270,000")).toBe("9월 28일 (월) · 개인 +742만 주 · 외국인 -598만 주 · 기관 -363만 주 · 종가 270,000원");
+  });
+});
+
+describe("네이버 폴백 출처 줄", () => {
+  it("기준이 다르다는 것만 적는다 — ETF·ETN 은 넥스트레이드 거래가 없어 '넥스트레이드 거래가 빠져'가 틀린 말이라", () => {
+    const line = text.sourceNaver("9월 28일 (월)", "9월 29일 (화) 02:40");
+    expect(line).toBe("자료: 네이버 증권 · 한국거래소 거래만 (기준이 달라 토스 앱 숫자와 다를 때가 있습니다) · 9월 28일 (월)까지 · 9월 29일 (화) 02:40에 받음");
+    expect(line).not.toContain("넥스트레이드");
+  });
+});
 
 const SUM20: FlowSum = { individual: -33_476_518, foreign: -13_640_206, institution: 8_385_452, otherCorp: 38_799_061, days: 20, missing: 0 };
 
@@ -274,6 +315,21 @@ describe("날짜별 숫자 표 배치 (dayTableLayout — 글자 1.4배까지, �
     expect(dayTableLayout(212, 2).fits).toBe(false);
     expect(dayTableLayout(240, 1).fits).toBe(true);
   });
+  it("칸 글자를 저절로 줄이지 않는다(adjustsFontSizeToFit 없음) — 날짜를 위에 두어도 세 칸이 모자라면 표 글자 상한(cap)만 낮춰 '-9,999만'이 한 줄에 든다", () => {
+    // 명세 폭은 상한 그대로 1.4
+    for (const fs of [1, 1.3, 2]) for (const inner of [332, 447, 676, sideWidth(fs) - 28]) expect(dayTableLayout(inner, fs).cap).toBe(1.4);
+    for (const inner of [230, 212, 200, 190]) {
+      const l = dayTableLayout(inner, 2);
+      expect(l.fits).toBe(false);
+      expect(l.cap).toBeGreaterThanOrEqual(1);
+      expect(l.cap).toBeLessThanOrEqual(1.4);
+      const cellW = (inner - 2 * DAY_TABLE_GAP) / 3;
+      expect(estimateTextWidth("-9,999만", 12 * l.cap), `${inner}`).toBeLessThanOrEqual(cellW);
+    }
+    expect(dayTableLayout(212, 2).cap).toBeLessThan(1.4);
+    // 글자 100% 는 상한을 낮출 일이 없다
+    expect(dayTableLayout(212, 1).cap).toBe(1.4);
+  });
 });
 
 describe("넓은 창: 합계를 세 기간 표로", () => {
@@ -307,6 +363,13 @@ describe("마지막 자료가 오래됨 (lastDataOld — 거래정지·상장폐
 });
 
 describe("줄바꿈 막기 (WORD JOINER — 큰 글씨에서 기호·숫자만 줄 끝에 남지 않게)", () => {
+  it("보유율 'N일 전' 줄: 화살표는 뒤 값과 한 덩어리('→ +0.04%p' — 360 × 200% 에서 '→'만 줄 끝에 남지 않게), 괄호 안 날짜도 붙어 있다", () => {
+    const line = text.agoLine(5, "9월 17일", "46.48%", "+0.04%p");
+    expect(line).toContain(`→ ${WJ}+0.04%p`);
+    expect(line).toContain(`9${WJ}월 ${WJ}17${WJ}일`);
+    expect(plain(line)).toBe("5일 전(9월 17일) 46.48% → +0.04%p");
+  });
+
   it("뜻 풀이의 '+는'·'-는', 대조 줄의 '20일'은 붙어 있다 (보이는 글은 같음)", () => {
     expect(text.WJ).toBe("\u2060");
     expect(text.FLOW_TEXT.signNote).toContain(`-${text.WJ}는`);
@@ -350,7 +413,7 @@ function allTexts(): string[] {
     text.sourceNaver("9월 28일 (월)", "9월 29일 (화) 02:40"), text.sourceNaver(null, "9월 29일 (화) 02:40"), text.checkLine(20, 20, "9월 29일 (화) 21:05"), text.checkLine(20, 19, "9월 29일 (화) 21:05"), text.staleLine("9월 29일 (화) 10:00"),
     text.sumSpeech("개인", 20, "3,348만 주", -1), text.sumSpeech("기관", 20, "839만 주", 1), text.sumSpeech("외국인", 5, "0주", 0), text.sumSpeech("기관", 5, null, 0),
     text.barsSpeechHead("8월 28일", "9월 28일", 20), text.barsSpeechRow("개인", 9, 11), text.ratioSpeech(60, "6월 30일", "46.96%", "9월 28일", "46.52%", "46.96%", "46.46%"),
-    text.tableRowSpeech("9월 28일 월요일", "+742만 주", "-598만 주", "-363만 주"), text.TABLE_HEAD,
+    text.tableRowSpeech("9월 28일 월요일", "+742만 주", "-598만 주", "-363만 주"), text.tableRowSpeech("9월 28일 월요일", null, null, null), text.pickedLine("9월 28일 (월)", null, null, null, null), text.TABLE_HEAD,
   );
   return out;
 }

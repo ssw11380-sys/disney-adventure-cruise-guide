@@ -51,6 +51,7 @@ import {
   formatShares,
   hhmm,
   lastDataOld,
+  sharesOrNull,
   sharesSign,
   shortDate,
   showSumTable,
@@ -105,7 +106,8 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
         {q.isError ? (
           <View style={styles.errorRow} accessibilityRole="alert">
             <Text style={{ color: t.sub, fontSize: font.small, flexShrink: 1 }}>{FLOW_TEXT.fail}</Text>
-            <Button title={FLOW_TEXT.retry} variant="secondary" compact onPress={() => void q.refetch()} accessibilityLabel={FLOW_TEXT.retryA11y} />
+            {/* 다시 받는 중에는 돌아가는 표시 + 누를 수 없음 (화면 읽기 busy) — 눌렀는데 아무 일도 없어 보이지 않게 */}
+            <Button title={FLOW_TEXT.retry} variant="secondary" compact loading={q.isFetching} onPress={() => void q.refetch()} accessibilityLabel={FLOW_TEXT.retryA11y} />
           </View>
         ) : (
           <Loading label={FLOW_TEXT.loading} />
@@ -140,8 +142,10 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
   const bars = d.days.slice(0, period).reverse();
   const pickedIdx = clampPick(pick, bars.length);
   const pickedDay = bars[pickedIdx]!;
-  const pickedArgs = [dateKo(pickedDay.date), formatShares(pickedDay.individual), formatShares(pickedDay.foreign), formatShares(pickedDay.institution), pickedDay.close !== null ? pickedDay.close.toLocaleString("ko-KR") : null] as const;
-  const picked = pickedLine(...pickedArgs);
+  const pickedClose = pickedDay.close !== null ? pickedDay.close.toLocaleString("ko-KR") : null;
+  // 화면에 보이는 조각 (빈 값 '—') · 화면 읽기 한 줄 (빈 값 '값 없음')
+  const pickedArgs = [dateKo(pickedDay.date), formatShares(pickedDay.individual), formatShares(pickedDay.foreign), formatShares(pickedDay.institution), pickedClose] as const;
+  const picked = pickedLine(dateKo(pickedDay.date), sharesOrNull(pickedDay.individual), sharesOrNull(pickedDay.foreign), sharesOrNull(pickedDay.institution), pickedClose);
   const labelW = Math.ceil(estimateTextWidth(FLOW_NAMES.foreign, font.small * clampScale(fs, fontCap.row))) + space.sm;
   // 칩: 휴대폰은 합계와 막대를 함께, 넓은 칸은 막대 카드에서 막대만 바꾼다 (화면 읽기 이름에 무엇을 바꾸는지)
   const chips = (
@@ -290,8 +294,11 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
     </Card>
   );
 
-  // ── ④ 읽는 법 (처음엔 접힘) — 외국인 뜻은 출처마다 (토스증권은 금융감독원 등록 외국인 기준, 네이버는 기준이 달라 값이 다름) ──
-  const aboutLines = toss ? FLOW_TEXT.about : FLOW_TEXT.about.map((line) => (line.startsWith(`${FLOW_NAMES.foreign}:`) ? FLOW_TEXT.aboutForeignNaver : line));
+  // ── ④ 읽는 법 (처음엔 접힘) — 외국인 뜻은 출처마다 (토스증권은 금융감독원 등록 외국인 기준, 네이버는 기준이 달라 값이 다름).
+  //    네이버 자료는 기타법인 값이 없어 기타법인 뜻 줄도 뺀다 ──
+  const aboutLines = toss
+    ? FLOW_TEXT.about
+    : FLOW_TEXT.about.filter((line) => !line.startsWith(`${FLOW_NAMES.otherCorp}:`)).map((line) => (line.startsWith(`${FLOW_NAMES.foreign}:`) ? FLOW_TEXT.aboutForeignNaver : line));
   const aboutCard = (
     <Card>
       <Pressable onPress={() => setAbout((v) => !v)} accessibilityRole="button" accessibilityLabel={FLOW_TEXT.aboutTitle} accessibilityState={{ expanded: about }} style={styles.toggle}>
@@ -374,45 +381,40 @@ function SumTable({ d, cols }: { d: Supported; cols: ReturnType<typeof sumColumn
 }
 
 /**
- * 날짜별 숫자 표 (최근 날부터). 한 줄 = 한 요소 (화면 읽기는 '주'까지 읽는다).
+ * 날짜별 숫자 표 (최근 날부터). 한 줄 = 한 요소 (화면 읽기는 '주'까지 읽고, 빈 값은 '값 없음').
  * 고정 폭 열 표라 글자는 fontCap.row(1.4배)까지만 커지고, 칸에는 '주' 없이 숫자만(표 위 '단위: 주') — 큰 글씨에서 '-1,243' / '만 주'처럼
  * 숫자와 단위가 두 줄로 갈라져 1만 배 작은 값으로 읽히지 않게. 날짜 열은 가장 넓은 날짜가 한 줄에 들어가는 폭이고,
- * 그래도 한 줄에 다 들어가지 않는 좁은 칸이면 날짜를 위에 따로 둔다 (lib/flowView dayTableLayout)
+ * 그래도 한 줄에 다 들어가지 않는 좁은 칸이면 날짜를 위에 따로 둔다 (lib/flowView dayTableLayout).
+ * 칸 글자를 저절로 줄이지 않는다(adjustsFontSizeToFit 없음) — 휴대폰보다 좁은 칸만 표 전체의 확대 상한(cap)을 낮춘다
  */
 function DayTable({ days, inner }: { days: Supported["days"]; inner: number }) {
   const t = useTheme();
   const fs = useFontScale();
-  const { dateW, fits } = dayTableLayout(inner, fs);
+  const { dateW, fits, cap } = dayTableLayout(inner, fs);
   const dateCol = fits ? { width: dateW } : styles.dateAbove;
   const cell = (v: number | null) => (
-    <Text
-      style={[styles.dayCell, styles.num, { color: changeColor(t, sharesSign(v)), fontSize: font.small }]}
-      maxFontSizeMultiplier={fontCap.row}
-      numberOfLines={1}
-      adjustsFontSizeToFit
-      minimumFontScale={0.7}
-    >
+    <Text style={[styles.dayCell, styles.num, { color: changeColor(t, sharesSign(v)), fontSize: font.small }]} maxFontSizeMultiplier={cap} numberOfLines={1}>
       {formatShares(v, { unit: false })}
     </Text>
   );
   return (
     <View testID="flow-day-table">
-      <Text style={[styles.unit, { color: t.muted, fontSize: font.tiny }]} maxFontSizeMultiplier={fontCap.row} importantForAccessibility="no" accessibilityElementsHidden>
+      <Text style={[styles.unit, { color: t.muted, fontSize: font.tiny }]} maxFontSizeMultiplier={cap} importantForAccessibility="no" accessibilityElementsHidden>
         {FLOW_TEXT.tableUnit}
       </Text>
       <View style={[styles.tableRow, styles.dayRow, { borderBottomColor: t.line }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-        <Text style={[dateCol, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row} numberOfLines={1}>
+        <Text style={[dateCol, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={cap} numberOfLines={1}>
           {FLOW_TEXT.tableDate}
         </Text>
         {(["individual", "foreign", "institution"] as const).map((k) => (
-          <Text key={k} style={[styles.dayCell, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row} numberOfLines={1}>
+          <Text key={k} style={[styles.dayCell, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={cap} numberOfLines={1}>
             {FLOW_NAMES[k]}
           </Text>
         ))}
       </View>
       {days.map((x) => (
-        <View key={x.date} style={[styles.tableRow, styles.dayRow, { borderBottomColor: t.line }]} accessible accessibilityLabel={tableRowSpeech(dateLong(x.date), formatShares(x.individual), formatShares(x.foreign), formatShares(x.institution))}>
-          <Text style={[dateCol, styles.num, { color: t.sub, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row} numberOfLines={1}>
+        <View key={x.date} style={[styles.tableRow, styles.dayRow, { borderBottomColor: t.line }]} accessible accessibilityLabel={tableRowSpeech(dateLong(x.date), sharesOrNull(x.individual), sharesOrNull(x.foreign), sharesOrNull(x.institution))}>
+          <Text style={[dateCol, styles.num, { color: t.sub, fontSize: font.small }]} maxFontSizeMultiplier={cap} numberOfLines={1}>
             {shortDate(x.date)}
           </Text>
           {cell(x.individual)}

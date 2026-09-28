@@ -1,7 +1,7 @@
 import type { FlowDay, FlowSum } from "@/api/types";
 import { estimateTextWidth } from "@/lib/chartLayout";
 import type { DetailTab } from "@/lib/detailLayout";
-import { barsSpeechHead, barsSpeechRow, FLOW_NAMES, FLOW_TAB, sumSpeech } from "@/lib/flowText";
+import { barsSpeechHead, barsSpeechRow, FLOW_NAMES, FLOW_TAB, keepTogether, sumSpeech } from "@/lib/flowText";
 import { clampScale } from "@/lib/textScale";
 import { font, fontCap, space } from "@/tokens";
 
@@ -102,6 +102,11 @@ export function formatShares(n: number | null | undefined, o: { unit?: boolean; 
   return withSign(n, body, sign);
 }
 
+/** 화면 읽기용 주 수: 빈 값은 null (부르는 쪽 flowText 가 '값 없음'으로 — 화면의 '—'를 읽지 않게) */
+export function sharesOrNull(n: number | null | undefined): string | null {
+  return n === null || n === undefined || !Number.isFinite(n) ? null : formatShares(n);
+}
+
 /** 보이는 글자의 부호 (-1·0·1) — 색과 화면 읽기를 글자에 맞춘다 */
 export function sharesSign(n: number | null | undefined): number {
   if (n === null || n === undefined || !Number.isFinite(n)) return 0;
@@ -136,9 +141,9 @@ export function shortDate(date: string): string {
 const WEEK = ["일", "월", "화", "수", "목", "금", "토"] as const;
 const weekdayOf = (date: string) => WEEK[new Date(`${date}T12:00:00+09:00`).getUTCDay()] ?? "";
 
-/** '2026-09-28' → '9월 28일 (월)' */
+/** '2026-09-28' → '9월 28일 (월)' — 한 덩어리 (보이지 않는 WJ 로 붙임: 큰 글씨에서 '9월 28' / '일 (월)'로 갈라지지 않게) */
 export function dateKo(date: string): string {
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${shortDate(date)} (${weekdayOf(date)})` : date;
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? keepTogether(`${shortDate(date)} (${weekdayOf(date)})`) : date;
 }
 
 /** '2026-09-28' → '9월 28일 월요일' (화면 읽기) */
@@ -154,12 +159,12 @@ export function hhmm(iso: string | null | undefined): string | null {
   return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
 }
 
-/** 시각 → '9월 28일 (월) 20:15' (한국 시간, 출처 줄) */
+/** 시각 → '9월 28일 (월) 20:15' (한국 시간, 출처 줄) — 날짜와 시각까지 한 덩어리 */
 export function stampKo(iso: string | null | undefined): string {
   const t = iso ? Date.parse(iso) : NaN;
   if (!Number.isFinite(t)) return "-";
   const date = new Date(t + 9 * 3_600_000).toISOString().slice(0, 10);
-  return `${dateKo(date)} ${hhmm(iso)}`;
+  return keepTogether(`${shortDate(date)} (${weekdayOf(date)}) ${hhmm(iso)}`);
 }
 
 // ── 합계 줄 ──
@@ -226,15 +231,25 @@ const WIDEST_DATE = "12월 31일";
 const WIDEST_CELL = "-9,999만";
 
 /**
- * 날짜별 숫자 표 배치. 글자는 고정 폭 열 표 규칙대로 fontCap.row(1.4배)까지만 커진다.
+ * 날짜별 숫자 표 배치. 글자는 고정 폭 열 표 규칙대로 fontCap.row(1.4배)까지만 커지고, 칸 글자를 저절로 줄이지 않는다(adjustsFontSizeToFit 없음).
  * dateW: 날짜 열 폭(가장 넓은 날짜가 한 줄에 들어가는 폭). fits: 날짜 + 세 칸이 한 줄에 들어가는지 —
- * 아니면 날짜를 한 줄 위에 따로 두고 세 칸이 폭을 나눈다 (숫자가 '만'·'주' 앞에서 두 줄로 갈라지지 않게)
+ * 아니면 날짜를 한 줄 위에 따로 두고 세 칸이 폭을 나눈다 (숫자가 '만'·'주' 앞에서 두 줄로 갈라지지 않게).
+ * cap: 표 글자 확대 상한 (maxFontSizeMultiplier) — 보통 1.4, 날짜를 위에 두고도 세 칸이 모자라는 아주 좁은 칸(휴대폰보다 좁음)만
+ * 가장 넓은 칸 글('-9,999만')이 한 줄에 드는 만큼 낮춘다 (1 아래로는 낮추지 않음 — 말줄임 없이 표 전체 글자가 같은 크기)
  */
-export function dayTableLayout(inner: number, fontScale: number): { dateW: number; fits: boolean } {
-  const size = font.small * clampScale(fontScale, fontCap.row);
-  const dateW = Math.ceil(estimateTextWidth(WIDEST_DATE, size));
-  const cellW = estimateTextWidth(WIDEST_CELL, size);
-  return { dateW, fits: inner >= dateW + 3 * (cellW + DAY_TABLE_GAP) };
+export function dayTableLayout(inner: number, fontScale: number): { dateW: number; fits: boolean; cap: number } {
+  const widths = (scale: number) => {
+    const size = font.small * scale;
+    return { dateW: Math.ceil(estimateTextWidth(WIDEST_DATE, size)), cellW: estimateTextWidth(WIDEST_CELL, size) };
+  };
+  const scale = clampScale(fontScale, fontCap.row);
+  const { dateW, cellW } = widths(scale);
+  const fits = inner >= dateW + 3 * (cellW + DAY_TABLE_GAP);
+  // 날짜를 위에 둔 줄: 세 칸 + 사이 둘
+  const room = (inner - 2 * DAY_TABLE_GAP) / 3;
+  if (fits || cellW <= room) return { dateW, fits, cap: fontCap.row };
+  const cap = Math.max(1, Math.floor((room / widths(1).cellW) * 100) / 100);
+  return { dateW: widths(Math.min(scale, cap)).dateW, fits, cap };
 }
 
 // ── 막대 (설계서 3.6) ──

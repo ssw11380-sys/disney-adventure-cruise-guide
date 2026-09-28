@@ -10,6 +10,14 @@
 export const WJ = "\u2060";
 /** 'N일' — 숫자와 '일'이 줄에서 갈라지지 않게 */
 const nDays = (n: number) => `${n}${WJ}일`;
+/**
+ * 날짜·시각 글 한 덩어리로 ('9월 28일 (월) 20:15'): 숫자와 '월'·'일' 사이, 띄어쓰기 뒤에 WJ — 큰 글씨(360 × 200%) 출처 줄에서
+ * '9월 28' / '일 (월)'처럼 갈라지지 않게. 줄은 덩어리 앞뒤에서만 바뀐다 (띄어쓰기 앞은 원래 줄이 바뀌지 않는 곳)
+ */
+export const keepTogether = (s: string) => s.replace(/(\d)(?=[월일])/g, `$1${WJ}`).replace(/ (?!\u2060)/g, ` ${WJ}`);
+/** 화면 읽기에서 빈 값 (화면에 보이는 '—'를 읽지 않게) */
+export const NO_VALUE_SPEECH = "값 없음";
+const say = (v: string | null) => v ?? NO_VALUE_SPEECH;
 
 /** 탭 이름·화면 읽기 이름 */
 export const FLOW_TAB = { label: "수급", a11y: "수급, 투자자별 매매" } as const;
@@ -101,16 +109,19 @@ export const pickedParts = (date: string, ind: string, fr: string, inst: string,
   `기관 ${inst}`,
   ...(close ? [`종가 ${close}원`] : []),
 ];
-/** 고른 날 한 줄 (화면 읽기·막대 값): '9월 28일 (월) · 개인 +742만 주 · 외국인 -598만 주 · 기관 -363만 주 · 종가 270,000원' */
-export const pickedLine = (date: string, ind: string, fr: string, inst: string, close: string | null) => pickedParts(date, ind, fr, inst, close).join(" · ");
+/**
+ * 고른 날 한 줄 (화면 읽기·막대 값): '9월 28일 (월) · 개인 +742만 주 · 외국인 -598만 주 · 기관 -363만 주 · 종가 270,000원'.
+ * 빈 값(null)은 '값 없음' (화면의 '—'를 읽지 않게)
+ */
+export const pickedLine = (date: string, ind: string | null, fr: string | null, inst: string | null, close: string | null) => pickedParts(date, say(ind), say(fr), say(inst), close).join(" · ");
 
 // 보유율
 export const ratioDateLine = (date: string) => `${date} · ${FLOW_TEXT.ratioAbout}`;
 /**
  * '5일 전(9월 17일) 46.48% → +0.04%p' — N 은 장이 열린 날 수라(추석을 건너면 달력으로 11일 앞) 그 날짜를 함께 보인다.
- * date 는 요일 없는 날짜 '9월 17일' (괄호가 겹치지 않게)
+ * date 는 요일 없는 날짜 '9월 17일' (괄호가 겹치지 않게). 날짜는 한 덩어리, 화살표는 뒤 값과 한 덩어리('→ +0.04%p' — 큰 글씨에서 '→'만 줄 끝에 남지 않게)
  */
-export const agoLine = (n: number, date: string, value: string, change: string) => `${nDays(n)} 전(${date}) ${value} → ${change}`;
+export const agoLine = (n: number, date: string, value: string, change: string) => `${nDays(n)} 전(${keepTogether(date)}) ${value} → ${WJ}${change}`;
 /** 화면 읽기 (기호 '→'·'%p'를 말로): '5일 전인 9월 17일 46.48%, 지금은 그때보다 0.04퍼센트포인트 높습니다'. abs 는 부호 없는 '0.04' */
 export function agoSpeech(n: number, date: string, value: string, abs: string, sign: number): string {
   const head = `${n}일 전인 ${date} ${value}`;
@@ -127,8 +138,12 @@ export const limitNote = (limitPct: string, usedPct: string) => `이 종목은 �
 
 // 출처
 export const sourceToss = (when: string) => `자료: 토스증권 웹 공개 화면 · 한국거래소와 넥스트레이드 거래를 합친 값 · ${when} 반영`;
-/** 네이버: 받은 시각만으로는 자료가 언제까지인지 모르므로(거래정지 종목은 7월에 끝남) 마지막 자료 날도 적는다. last 는 '9월 28일 (월)' (자료가 없으면 null) */
-export const sourceNaver = (last: string | null, when: string) => `자료: 네이버 증권 · 한국거래소 거래만 (넥스트레이드 거래가 빠져 토스 앱 숫자와 같지 않습니다) · ${last ? `${last}까지 · ` : ""}${when}에 받음`;
+/**
+ * 네이버: 받은 시각만으로는 자료가 언제까지인지 모르므로(거래정지 종목은 7월에 끝남) 마지막 자료 날도 적는다. last 는 '9월 28일 (월)' (자료가 없으면 null).
+ * 까닭은 '기준이 다르다'까지만 — ETF·ETN 은 넥스트레이드에서 거래되지 않아 '넥스트레이드 거래가 빠져'가 틀린 말이고, 앱은 종목 종류를 모른다.
+ * ('…수 있습니다'는 문구 검사가 막는 추측 말이라 '다를 때가 있습니다')
+ */
+export const sourceNaver = (last: string | null, when: string) => `자료: 네이버 증권 · 한국거래소 거래만 (기준이 달라 토스 앱 숫자와 다를 때가 있습니다) · ${last ? `${last}까지 · ` : ""}${when}에 받음`;
 export const checkLine = (days: number, same: number, when: string) =>
   same === days
     ? `토스증권 Open API 원자료와 최근 ${nDays(days)} 비교: ${nDays(days)} 모두 같음 (${when} 확인)`
@@ -148,7 +163,7 @@ export const barsSpeechHead = (from: string, to: string, n: number) => `날마�
 export const barsSpeechRow = (name: string, up: number, down: number) => `${name}은 산 쪽이 많은 날 ${up}일, 판 쪽이 많은 날 ${down}일.`;
 export const ratioSpeech = (n: number, fromDate: string, from: string, toDate: string, to: string, high: string, low: string) =>
   `외국인 보유율 ${n}일, ${fromDate} ${from}에서 ${toDate} ${to}, 가장 높음 ${high}, 가장 낮음 ${low}`;
-/** 날짜별 숫자 표 한 줄: '9월 28일 월요일, 개인 +742만 주, 외국인 -598만 주, 기관 -363만 주' */
-export const tableRowSpeech = (date: string, ind: string, fr: string, inst: string) => `${date}, 개인 ${ind}, 외국인 ${fr}, 기관 ${inst}`;
+/** 날짜별 숫자 표 한 줄: '9월 28일 월요일, 개인 +742만 주, 외국인 -598만 주, 기관 -363만 주' (빈 값 null 은 '값 없음') */
+export const tableRowSpeech = (date: string, ind: string | null, fr: string | null, inst: string | null) => `${date}, 개인 ${say(ind)}, 외국인 ${say(fr)}, 기관 ${say(inst)}`;
 /** 넓은 창 세 기간 표 머리 */
 export const TABLE_HEAD = "구분";
