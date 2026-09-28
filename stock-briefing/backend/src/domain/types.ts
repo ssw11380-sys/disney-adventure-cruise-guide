@@ -146,7 +146,12 @@ export function isIntraday(period: CandlePeriod): boolean {
 
 export interface Candle {
   date: string; // YYYY-MM-DD (주/월봉은 해당 기간 시작일 또는 마지막 거래일, 소스에 따름)
-  /** 분봉만: 봉 시작 시각 ISO(현지 오프셋 포함, 예 2026-09-23T10:25:00+09:00) */
+  /**
+   * 분봉만: 봉 시각 ISO(현지 오프셋 포함, 예 2026-09-23T10:25:00+09:00). **출처마다 뜻이 다르다**:
+   *  - 토스 웹 차트(toss.ts fetchChart — 30분봉은 늘 여기서 옴): 봉이 **끝나는** 시각 (2026-09-28 실측, 3-29 거래량 급증 volumeBaseline 이 이 뜻에 기댐)
+   *  - 토스 OpenAPI 1분봉·그 집계(tossOpenApi.ts aggregateIntraday — 1m/5m): 봉 **시작** 시각
+   * 30분봉을 다른 출처에서 받게 되거나 한쪽으로 맞추면 volumeBaseline 의 '시각 − 30분'도 같이 고쳐야 한다
+   */
   time?: string;
   open: number;
   high: number;

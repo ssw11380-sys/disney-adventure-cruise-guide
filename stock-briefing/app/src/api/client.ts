@@ -32,6 +32,9 @@ import type { AppErrorSummary, Evaluation,
   TossOpenApiStatus,
   FeatureFlags,
   IndicatorScores,
+  PriceAlertKind,
+  PriceAlertRule,
+  VolumeStatus,
 } from "./types";
 import { authMessage, NOT_JSON } from "@/lib/connectionError";
 
@@ -260,6 +263,13 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     discoverThemes: (market: DiscoverMarket, kind: ThemeKind, period: ThemePeriod) => get<ThemeList>(`/api/discover/${market}/themes?kind=${kind}&period=${period}`, 20_000),
     discoverTheme: (market: DiscoverMarket, kind: ThemeKind, id: string) => get<ThemeDetail>(`/api/discover/${market}/themes/${encodeURIComponent(id)}?kind=${kind}`, 20_000),
     marketCandles: (code: string, period: CandlePeriod, count: number) => get<CandleSeries>(`/api/market/indices/${encodeURIComponent(code)}/candles?period=${period}&count=${count}`),
+    /** 가격 알림 (3-29, 플래그 priceAlerts). 예전 서버는 404 → 부르는 쪽이 "조건 없음"으로 본다 */
+    priceAlerts: () => get<{ rules: PriceAlertRule[] }>("/api/price-alerts", 10_000),
+    createPriceAlert: (body: { code: string; kind: PriceAlertKind; value: number }) => send<PriceAlertRule>("POST", "/api/price-alerts", body),
+    deletePriceAlert: (id: number) => send<void>("DELETE", `/api/price-alerts/${id}`),
+    priceAlertFired: (id: number, body: { date: string; at: string; value: number }) => send<{ first: boolean }>("POST", `/api/price-alerts/${id}/fired`, body, 10_000),
+    // 시간 제한 45초: 서버가 여러 종목 30분봉을 순서대로 받고 시간 예산 35초 안에 끝낸다. 15초면 느린 토스에서 매번 시간 초과
+    priceAlertVolume: (codes: string[]) => get<{ items: VolumeStatus[] }>(`/api/price-alerts/volume?codes=${codes.map(encodeURIComponent).join(",")}`, 45_000),
   };
 }
 

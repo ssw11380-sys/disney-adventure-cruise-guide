@@ -21,7 +21,7 @@ export interface MarketContext {
   todayIncomplete: boolean;
 }
 
-function parts(d: Date, tz: string): { date: string; minutes: number; weekday: number } {
+export function parts(d: Date, tz: string): { date: string; minutes: number; weekday: number } {
   const f = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, weekday: "short" }).formatToParts(d);
   const g = (t: string) => f.find((p) => p.type === t)?.value ?? "";
   const h = Number(g("hour")) % 24;

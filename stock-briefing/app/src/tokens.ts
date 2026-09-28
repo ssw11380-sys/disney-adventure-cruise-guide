@@ -621,3 +621,31 @@ export const scores = {
   /** 레버리지 주의 상자 왼쪽 강조선 두께 */
   noticeBar: 3,
 } as const;
+
+/** 가격 알림 (3-29, 기능 플래그 priceAlerts). 단위 dp·ms */
+export const priceAlert = {
+  /** 화면 위 알림 카드 최대 폭 (펼친 화면은 가운데) */
+  bannerMaxW: 520,
+  /** 알림 시트 최대 폭 (펼친 화면은 가운데) */
+  sheetMaxW: 560,
+  /** 알림 시트 최대 높이 = 창 높이 × 이 값 (안은 스크롤, 저장 버튼은 늘 보임) */
+  sheetMaxHRatio: 0.85,
+  /** 한 카드에 보이는 알림 줄 수 (넘치면 '외 N건') */
+  bannerRows: 3,
+  /** 알림 카드가 저절로 닫히기까지 (화면 읽기가 켜져 있으면 닫지 않음) */
+  bannerHideMs: 10_000,
+  /** 거래량 급증 상태를 묻는 간격 (거래량 조건이 있을 때만) */
+  volumePollMs: 30_000,
+  /** 거래량 조건 종목이 모두 정규장 밖(closed)일 때 묻는 간격 */
+  volumeIdleMs: 300_000,
+  /** 조건 목록 받기가 실패했을 때(404 제외) 다시 묻는 간격 */
+  rulesRetryMs: 60_000,
+  /** 세션 경계(until) 뒤 이만큼 지나 목록(과 열린 상세)을 다시 받는다 (useLivePoll 의 capToBoundary 와 같은 1초) */
+  boundaryDelayMs: 1_000,
+  /** 경계가 지났는데 받은 값이 아직 옛 세션이면(서버 시계가 조금 늦음) 이만큼 뒤 다시 */
+  boundaryRetryMs: 3_000,
+  /** 같은 경계로 다시 받는 횟수 상한 */
+  boundaryTries: 3,
+  /** 경계 타이머 한 번의 최대 대기 (먼 경계는 이 간격으로 다시 잰다 — 긴 타이머를 걸지 않게) */
+  boundaryMaxWaitMs: 300_000,
+} as const;

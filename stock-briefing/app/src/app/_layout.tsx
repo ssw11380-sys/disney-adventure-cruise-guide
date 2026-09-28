@@ -10,12 +10,15 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
+import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
 import { WidgetBridge } from "@/components/WidgetBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
 import { installHaptics, type HapticEngine } from "@/lib/haptics";
 import { LiveStreamProvider } from "@/lib/liveStream";
+import { postPriceAlert } from "@/lib/notifications";
+import { installPriceAlertNotifier } from "@/lib/priceAlerts";
 import { PERSIST_BUSTER, PERSIST_MAX_AGE_MS, queryPersister, shouldPersist } from "@/lib/queryPersist";
 import { SettingsProvider, useSettings } from "@/lib/settings";
 import { font, useTheme } from "@/theme";
@@ -24,6 +27,8 @@ import { font, useTheme } from "@/theme";
 installErrorHandlers();
 // 햅틱 엔진 (3-24): expo-haptics 는 APK 에 이미 있다(차트 십자선이 써 왔음). 울릴지는 lib/haptics 가 플래그·설정으로 정한다
 installHaptics(Haptics as unknown as HapticEngine, Platform.OS);
+// 가격 알림(3-29)을 휴대폰 알림 목록에 올리는 함수 (권한이 이미 있을 때만, 소리 없이). 울릴지는 PriceAlertProvider 가 플래그로 정한다
+installPriceAlertNotifier(postPriceAlert);
 
 // 저장된 설정(라이트/다크)과 마지막 잔고를 읽을 때까지 스플래시를 둔다 → 라이트 모드에서 어두운 첫 화면이 번쩍이지 않게.
 // 읽기가 늦어도 1.5초 뒤에는 연다
@@ -152,14 +157,17 @@ export default function RootLayout() {
               {/* 3-24 플래그(oneHand·firstRun·emptyGuide)를 한 번 받아 아래 화면에 내려 준다 */}
               <UxFlagsProvider>
                 <GuideMarksProvider>
-                  <ThemedStatusBar />
-                  <NotificationBridge />
-                  <WidgetBridge />
-                  <ScreenTracker />
-                  <HapticsBridge />
-                  <ConnectionWordingBridge />
-                  <Navigator />
-                  <FirstRunGate />
+                  {/* 가격 알림 (3-29, 플래그 priceAlerts): 조건 목록·확인 엔진·화면 위 알림 카드·알림 시트. 꺼져 있으면 아래를 그대로 그리기만 한다 */}
+                  <PriceAlertProvider>
+                    <ThemedStatusBar />
+                    <NotificationBridge />
+                    <WidgetBridge />
+                    <ScreenTracker />
+                    <HapticsBridge />
+                    <ConnectionWordingBridge />
+                    <Navigator />
+                    <FirstRunGate />
+                  </PriceAlertProvider>
                 </GuideMarksProvider>
               </UxFlagsProvider>
             </LiveStreamProvider>

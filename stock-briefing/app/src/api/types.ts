@@ -170,7 +170,7 @@ export type CandlePeriod = "1m" | "5m" | "30m" | "D" | "W" | "M";
 
 export interface Candle {
   date: string;
-  /** 분봉만: 봉 시작 시각 ISO(현지 오프셋 포함) */
+  /** 분봉만: 봉 시각 ISO(현지 오프셋 포함). 서버 출처마다 뜻이 다르다 — 토스 웹 차트(30분봉은 늘 여기)는 봉이 끝나는 시각, 토스 OpenAPI 1분·5분봉은 시작 시각 (backend domain/types.ts Candle.time) */
   time?: string;
   open: number;
   high: number;
@@ -849,4 +849,46 @@ export interface IndicatorScores {
   composite: { status: "ok" | "none"; score: number | null; reason: string | null; text: string; gap: number | null; gapNote: boolean };
   text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string };
   computedAt: string;
+}
+
+/** 가격 알림 조건 종류 (3-29, 플래그 priceAlerts) — 서버 services/priceAlertService 와 같은 글자 */
+export type PriceAlertKind = "priceAbove" | "priceBelow" | "rateUp" | "rateDown" | "volume";
+
+/** 가격 알림 조건 (서버 GET /api/price-alerts 의 한 줄) */
+export interface PriceAlertRule {
+  id: number;
+  code: string;
+  kind: PriceAlertKind;
+  /** 가격(종목 통화) · 등락률(양수 %) · 거래량 배수 */
+  value: number;
+  /** 가격 조건만 종목 통화, 그 밖에는 null */
+  currency: Currency | null;
+  createdAt: string;
+  /** 마지막으로 울린 그 종목 거래일 YYYY-MM-DD */
+  firedOn: string | null;
+  firedAt: string | null;
+  firedValue: number | null;
+  /** 지금 등록 종목(보유·관심)인지 — 아니면 쉬는 중 (확인하지 않음) */
+  registered: boolean;
+}
+
+export type VolumeState = "ok" | "closed" | "early" | "short" | "unavailable";
+
+/** 거래량 급증 상태 (서버 GET /api/price-alerts/volume 의 한 줄 — services/volumeBaseline 과 같은 모양) */
+export interface VolumeStatus {
+  code: string;
+  status: VolumeState;
+  /** 그 시장의 오늘 날짜. closed 면 null */
+  date: string | null;
+  /** 오늘 정규장 누적 거래량 (ok 일 때만) */
+  volume: number | null;
+  /** 지난 거래일들의 같은 경과 시간 누적 평균 (ok 일 때만) */
+  expected: number | null;
+  /** volume ÷ 평균, 소수 둘째 자리 (ok 일 때만) */
+  ratio: number | null;
+  /** 평균에 쓴 지난 거래일 수 */
+  days: number;
+  minutes: number | null;
+  asOf: string;
+  reason: string | null;
 }

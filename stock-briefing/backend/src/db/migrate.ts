@@ -292,6 +292,29 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create unique index if not exists uq_indicator_scores_code_date_kind on indicator_scores (code, score_date, kind)`.execute(db);
     },
   },
+  {
+    version: 10, // main 의 가장 큰 번호(9) + 1 (작업지시 3-29 0.4). 번호가 겹치면 이미 그 번호까지 올라간 DB 는 이 표를 건너뛴다
+    up: async (db, dialect) => {
+      // 가격 알림 조건 (3-29, 플래그 priceAlerts). 새 표만 추가하고 기존 표는 건드리지 않는다. 예전 서버로 되돌려도 이 표를 모르고 지나갈 뿐이다.
+      // 값은 Postgres 에서 double precision (real 은 4바이트라 끝자리가 달라진다 — 버전 6 BH-48)
+      const num = dialect === "postgres" ? "double precision" : "real";
+      await db.schema
+        .createTable("price_alerts")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("code", "text", (c) => c.notNull())
+        .addColumn("kind", "text", (c) => c.notNull())
+        .addColumn("value", num, (c) => c.notNull())
+        .addColumn("currency", "text")
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("fired_on", "text")
+        .addColumn("fired_at", "text")
+        .addColumn("fired_value", num)
+        .execute();
+      // 같은 (종목·조건 종류·값)은 하나만 (동시에 두 번 저장해도 하나만 들어간다)
+      await sql`create unique index if not exists uq_price_alerts_rule on price_alerts (code, kind, value)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

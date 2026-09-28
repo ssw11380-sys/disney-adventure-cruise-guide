@@ -14,10 +14,10 @@ import { ChartNotice, StaleBanner, useFeedState, usePull } from "@/components/Fr
 import { DetailSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
 import { SplitScreen } from "@/components/SplitScreen";
-import { AnalysisPreview, AnalysisTab, BriefingList, DetailBottomBar, DetailHeader, FillChart, HeadTitle, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type BarStar, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
+import { AnalysisPreview, AnalysisTab, barStarText, BriefingList, DetailBottomBar, DetailHeader, FillChart, HeadTitle, NewsColumns, NewsTab, PaneTitle, PairGrid, Range52, StatColumns, StatList, type BarStar, type HeaderAction, type StateLine, type StatProps } from "@/components/StockDetailParts";
 import { ErrorView, LiveDot, Segmented, Stat, StatGrid } from "@/components/ui";
 import { detailNames, detailSubtitle, holdingLine, realText } from "@/lib/detailText";
-import { detailMode, parseDetailTab, priceRowPassed, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
+import { alertBarLabel, detailMode, parseDetailTab, priceRowPassed, shortStamp, phoneTab, sideWidth, splitColumns, statColumns, wideChartHeight, wideTab, type DetailTab } from "@/lib/detailLayout";
 import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, formatKrwCompact, formatNumber, formatPct, formatPrice, formatQuote, formatQuoteDisplay, formatVolume, isUsMarket, shownSign, toDisplay } from "@/lib/format";
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { rememberNav, useCachedRow, useHoldingsNav, type NavItem } from "@/lib/holdingsNav";
@@ -26,13 +26,15 @@ import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isBigText } from "@/lib/textScale";
-import { changeColor, font, layout, slopFor, space, useTheme } from "@/theme";
+import { changeColor, font, layout, slopFor, space, touch, useTheme } from "@/theme";
 import { foldDetail, oneHand } from "@/tokens";
 import { sentence, speakMove, speakRate } from "@/lib/a11y";
 import { haptic } from "@/lib/haptics";
 import { removeConfirm } from "@/lib/rowActions";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { useUx } from "@/lib/uxFlags";
+import { usePriceAlerts } from "@/lib/priceAlertContext";
+import { alertButtonA11y, alertButtonText } from "@/lib/priceAlerts";
 import { AiTitle } from "@/components/scores/AiTitle";
 import { IndicatorSummaryCard } from "@/components/scores/IndicatorSummaryCard";
 import { TrendScoreCard } from "@/components/scores/TrendScoreCard";
@@ -82,6 +84,8 @@ export default function StockDetailScreen() {
   const { showKrw, afterCost } = useSettings();
   // 3-24 플래그: oneHand(아래 막대·머리 현재가·햅틱), emptyGuide(연결 오류의 '설정 열기') — 꺼져 있으면 지금 화면 그대로
   const ux = useUx();
+  // 가격 알림 (3-29, 플래그 priceAlerts): 루트 제공자가 정한 문맥 하나만 읽는다 (제공자가 없거나 꺼져 있으면 on 거짓 — 지금 화면 그대로)
+  const alerts = usePriceAlerts();
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏). 이 화면은 루트 스택 위라 설정 탭까지 닫고 간다 (lib/settingsLink)
   const guideProps = useSettingsGuide();
   // 스크롤하면 머리에 현재가 (휴대폰·접은 화면, oneHand): 시세 머리의 가격 줄 아래 끝(스크롤 안 위치)을 재어 두고,
@@ -387,6 +391,10 @@ export default function StockDetailScreen() {
   // 3-24 아래 막대 왼쪽 버튼: 미등록 → 관심 추가, 관심(수량 없음) → 관심 해제(토스 종목은 동기화 제외), 보유 → 보유 수정
   const barStar: BarStar = unregistered ? { kind: "watch", busy: adding } : s.quantity ? { kind: "edit" } : { kind: "unwatch", label: removeConfirm(s).confirm };
   const onBarStar = () => (barStar.kind === "watch" ? addWatch() : barStar.kind === "unwatch" ? unwatch() : router.push(`/stocks/${c}/edit`));
+  // 가격 알림 (3-29, 플래그 priceAlerts): 등록 종목에서만 (체결 스트림이 등록 종목만 보낸다). 거짓이면 속성을 아예 넘기지 않는다 (지금 화면과 같게)
+  const alertOn = alerts.on && !unregistered;
+  const alertCount = alerts.rules.filter((r) => r.code === c).length;
+  const openAlerts = () => alerts.openSheet({ code: c, name, quote: q ?? null });
   // 머리 제목: 시세 머리와 같은 글 (현재가 = 머리 값)
   const headTitlePrice =
     ux.oneHand && headPrice && q
@@ -408,7 +416,20 @@ export default function StockDetailScreen() {
         refreshing={pulling}
         onRefresh={onPull}
         top={<StaleBanner query={stock} open={open} maxAgeMs={openMaxAge} {...guideProps} />}
-        {...(ux.oneHand ? { onScroll, scrollEventThrottle: oneHand.scrollThrottle, bottom: <DetailBottomBar star={barStar} onStar={onBarStar} onChart={openChart} /> } : null)}
+        {...(ux.oneHand
+          ? {
+              onScroll,
+              scrollEventThrottle: oneHand.scrollThrottle,
+              bottom: (
+                <DetailBottomBar
+                  star={barStar}
+                  onStar={onBarStar}
+                  onChart={openChart}
+                  {...(alertOn ? { alert: { count: alertCount, label: alertBarLabel(win.width, win.fontScale, barStarText(barStar), alertButtonText(alertCount)), onPress: openAlerts } } : null)}
+                />
+              ),
+            }
+          : null)}
       >
         <Stack.Screen
           options={{
@@ -429,7 +450,17 @@ export default function StockDetailScreen() {
                 </Pressable>
               );
               // 머리 현재가(oneHand)일 때만 폭을 잰다 — 꺼져 있으면 지금 그대로
-              return ux.oneHand ? <View onLayout={onHeadRightLayout}>{right}</View> : right;
+              if (ux.oneHand) return <View onLayout={onHeadRightLayout}>{right}</View>;
+              // 가격 알림 (3-29): 한 손 막대가 없으면 수정 버튼 왼쪽에 종 (등록 종목만)
+              if (!alertOn) return right;
+              return (
+                <View style={styles.headRight}>
+                  <Pressable onPress={openAlerts} accessibilityRole="button" accessibilityLabel={alertButtonA11y(alertCount)} style={styles.headBell}>
+                    <Ionicons name={alertCount ? "notifications" : "notifications-outline"} size={foldDetail.headIcon} color={alertCount ? t.gold : t.ink} />
+                  </Pressable>
+                  {right}
+                </View>
+              );
             },
           }}
         />
@@ -616,6 +647,7 @@ export default function StockDetailScreen() {
       onNext={() => go(nav?.next ?? null)}
       onBack={onBack}
       action={action}
+      {...(alertOn ? { alert: { count: alertCount, onPress: openAlerts } } : null)}
     />
   );
   const banner = <StaleBanner query={stock} open={open} maxAgeMs={openMaxAge} {...guideProps} />;
@@ -865,6 +897,9 @@ const styles = {
     feedBrief: { minWidth: 0, paddingBottom: space.md, gap: space.xs },
     sideEnd: { paddingBottom: space.md },
     vline: { width: StyleSheet.hairlineWidth, alignSelf: "stretch" },
+    // 3-29 휴대폰 머리 오른쪽 [종][수정]: 종은 누르는 곳 44×44 (hitSlop 없이 칸 자체). 사이는 수정 버튼 hitSlop 왼쪽(space.sm)만큼 — 누르는 곳이 겹치지 않게
+    headRight: { flexDirection: "row", alignItems: "center", gap: space.sm },
+    headBell: { width: touch.min, minHeight: touch.min, alignItems: "center", justifyContent: "center" },
   }),
   sub: (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] }),
   panelTitle: (color: string) => ({ color, fontSize: font.body, fontWeight: "700" as const }),
