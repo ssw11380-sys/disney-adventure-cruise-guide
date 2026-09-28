@@ -1,6 +1,6 @@
 {
-  "version": "1.4.0",
-  "apkUrl": "https://expo.dev/artifacts/eas/uDZBo_IBaVp6wuudOfCdztTYOxlnC_zJ9_tjPxhsi4U.apk",
-  "notes": "새 위젯 \"지수·환율\"(코스피·코스닥·나스닥·S&P500·다우·필라반도체·원/달러·원/100엔·원/위안), 잔고 위젯 누적↔당일 손익 전환과 지수 한 줄, 위젯 라이트·다크 자동 전환과 크기별 배치, 큰 글씨·화면 읽기 대응, 점검 보고서 결함 19건 수정",
-  "publishedAt": "2026-09-25"
+  "version": "1.5.0",
+  "apkUrl": "https://expo.dev/artifacts/eas/wAF__KeTiq6ma3-QOMOhif64NgZvIlDqubevwzneevY.apk",
+  "notes": "앱 이름이 '가즈아 불기둥'으로 바뀌고 새 아이콘(빨간 상한가 캔들 4개)·알림 아이콘·시작 화면 그림이 들어갑니다. 덮어 설치하면 데이터는 그대로입니다. 이 버전을 설치해야 앞으로의 업데이트를 받습니다.",
+  "publishedAt": "2026-09-28"
 }
