@@ -22,7 +22,7 @@ import { accountColumns } from "@/lib/briefingPick";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatIndexValue, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
 import { viewState } from "@/lib/freshness";
-import { quoteBasisLine, quoteBasisSpeech } from "@/lib/numberBasis";
+import { quoteBasisChunks, quoteBasisSpeech } from "@/lib/numberBasis";
 import { changeColor, font, fontCap, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB, layout as L } from "@/tokens";
 
@@ -322,16 +322,20 @@ function totalsSpeech(d: AccountData): string {
 /**
  * 3-32 (플래그 numberBasis): '보유 N종목 합계' 바로 아래 '시세 기준: 국내 NXT 포함 · 미국 정규장 · 08:38 계산'.
  * 총 평가 문장 묶음(totalsSpeech) 밖이라 이 줄 하나를 자기 이름표로 한 번만 읽는다 (Muted 에는 이름표가 없어 View 로 감쌈).
- * 켰을 때만 그리고(부르는 쪽이 거름), 저장한 기준이 없는 예전 브리핑이면 그리지 않는다
+ * 켰을 때만 그리고(부르는 쪽이 거름), 저장한 기준이 없는 예전 브리핑이면 그리지 않는다.
+ * 좁은 칸·큰 글씨는 기준 묶음째 다음 줄로 (quoteBasisChunks — 조각 끝에 이음표·줄바꿈 없는 공백이 있어 조각 사이 간격을 따로 두지 않는다).
+ * 한 글로 그리면 '· 09:13 계산'처럼 '·'로 시작하는 줄, '시간외 포함' / '1', '정규장 9·주' / '간거래 2'처럼 꺾였다
  */
 function QuoteBasisRow({ d }: { d: AccountData }) {
   const at = briefingTime(d.asOf);
-  const line = quoteBasisLine(d.quoteBasis, at);
+  const chunks = quoteBasisChunks(d.quoteBasis, at);
   const speech = quoteBasisSpeech(d.quoteBasis, at);
-  if (!line || !speech) return null;
+  if (!chunks || !speech) return null;
   return (
-    <View accessible accessibilityLabel={speech}>
-      <Muted>{`시세 기준: ${line}`}</Muted>
+    <View accessible accessibilityLabel={speech} style={styles.quoteBasis}>
+      {chunks.map((p, i) => (
+        <Muted key={i}>{p}</Muted>
+      ))}
     </View>
   );
 }
@@ -816,6 +820,8 @@ const styles = StyleSheet.create({
   disclosure: { minHeight: touch.min, flexDirection: "row", alignItems: "center", paddingVertical: space.xs },
   basis: { paddingHorizontal: space.lg, fontSize: font.tiny },
   chunks: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs },
+  // 3-32 '시세 기준' 줄: 묶음째 줄바꿈 (조각 끝의 이음표·줄바꿈 없는 공백이 간격 — 한 줄이면 한 글과 같은 모양)
+  quoteBasis: { flexDirection: "row", flexWrap: "wrap" },
   // 브리핑 3차 3 '지난 브리핑과 비교' 카드
   sinceHead: { gap: space.xs },
   sinceRow: { gap: space.xxs, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },

@@ -177,16 +177,24 @@ export function AccountBriefingRow({
       style={({ pressed }) => [styles.row, { borderBottomColor: t.line, backgroundColor: selected || pressed ? t.surfaceAlt : t.surface }]}
     >
       {selected ? <View style={[styles.selBar, { backgroundColor: t.accent }]} /> : null}
+      {/*
+        머리: [지갑 · 제목] [배지] [날짜 ›] 세 묶음. 한 줄에 모자라면(큰 글씨·좁은 칸) 뒤 묶음째 다음 줄로 — 제목을 말줄임으로 자르지 않는다
+        (예전: 360·200% 에서 '내 계좌 브…'). 배지도 제목과 같은 글자 상한. 한 줄에 들어가면 지금 모양 그대로
+      */}
       <View style={styles.rowHead}>
-        <Ionicons name="wallet-outline" size={ROW_ICON} color={t.gold} />
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
-          내 계좌 브리핑
-        </Text>
-        {!failed && briefing.template ? <Badge>{trim ? "숫자 요약" : "기본 설명"}</Badge> : null}
-        <Text style={[styles.rowWhen, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
-          {briefingWhen(briefing)}
-        </Text>
-        <Ionicons name="chevron-forward" size={ROW_ICON - 2} color={t.muted} />
+        <View style={styles.rowTitle}>
+          <Ionicons name="wallet-outline" size={ROW_ICON} color={t.gold} />
+          <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700", flexShrink: 1 }} numberOfLines={1} maxFontSizeMultiplier={fontCap.row}>
+            내 계좌 브리핑
+          </Text>
+        </View>
+        {!failed && briefing.template ? <Badge cap={fontCap.row}>{trim ? "숫자 요약" : "기본 설명"}</Badge> : null}
+        <View style={styles.rowEnd}>
+          <Text style={[styles.rowWhen, { color: t.muted }]} maxFontSizeMultiplier={fontCap.row}>
+            {briefingWhen(briefing)}
+          </Text>
+          <Ionicons name="chevron-forward" size={ROW_ICON - 2} color={t.muted} />
+        </View>
       </View>
       {failed ? (
         <Text style={{ color: t.danger, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
@@ -322,8 +330,11 @@ const ROW_ICON = 18;
 const styles = StyleSheet.create({
   row: { minHeight: FB.accountRowH, justifyContent: "center", gap: space.xxs, paddingLeft: space.lg, paddingRight: space.md, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   selBar: { position: "absolute", left: 0, top: 0, bottom: 0, width: FB.selBar },
-  rowHead: { flexDirection: "row", alignItems: "center", gap: space.s },
-  rowWhen: { marginLeft: "auto", fontSize: font.small, flexShrink: 0 },
+  // 줄 머리: 세 묶음(제목 · 배지 · 날짜 ›)을 옆으로, 모자라면 묶음째 다음 줄로. 제목 묶음만 줄어든다(혼자서도 넘칠 때만 말줄임)
+  rowHead: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: space.xxs },
+  rowTitle: { flexDirection: "row", alignItems: "center", gap: space.s, flexShrink: 1, minWidth: 0 },
+  rowEnd: { flexDirection: "row", alignItems: "center", gap: space.s, marginLeft: "auto", flexShrink: 0 },
+  rowWhen: { fontSize: font.small, flexShrink: 0 },
   rowNums: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", columnGap: space.xs },
   press: { minHeight: touch.min, gap: space.sm },
   head: { flexDirection: "row", alignItems: "center", gap: space.xs, flexWrap: "wrap" },

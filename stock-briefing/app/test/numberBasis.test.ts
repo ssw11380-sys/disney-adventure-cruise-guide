@@ -13,6 +13,7 @@ import {
   diffPctText,
   hmLabel,
   marketBasis,
+  quoteBasisChunks,
   quoteBasisLine,
   quoteBasisSpeech,
   RECONCILE_OFF,
@@ -343,5 +344,52 @@ describe("quoteBasisLine · quoteBasisSpeech: 계좌 브리핑 상세 '시세 �
     expect(quoteBasisSpeech(server, "08:38")).toBe("시세 기준, 국내 NXT 포함, 미국 주간거래 12종목, 정규장 2종목, 기준 모름 1종목, 8시 38분 계산");
     expect(quoteBasisSpeech(krOnly, "08:38")).toBe("시세 기준, 국내 NXT 포함, 8시 38분 계산");
     expect(quoteBasisSpeech(krOnly, "16:00")).toBe("시세 기준, 국내 NXT 포함, 16시 계산");
+  });
+
+  // 합친 모습 리뷰: 한 글로 그리면 좁은 칸·큰 글씨에서 '· 09:13 계산'(줄 첫머리 '·'), '…시간외 포함' / '1 · 09:13 계산'(수가 이름과 떨어짐),
+  // '미국 정규장 9·주' / '간거래 2'(낱말 가운데)로 꺾였다 → 기준 하나('말 수')가 한 묶음, 이음표는 앞 묶음 끝, 묶음 안 빈칸은 줄바꿈 없는 공백
+  describe("quoteBasisChunks: 묶음째 줄바꿈할 조각", () => {
+    const plain = (s: string) => s.replace(/ /g, " ");
+    const mixed: QuoteBasis = {
+      kr: { count: 9, tags: [{ tag: "NXT", count: 9 }] },
+      us: {
+        count: 12,
+        tags: [
+          { tag: "정규장", count: 9 },
+          { tag: "주간거래", count: 2 },
+          { tag: "시간외", count: 1 },
+        ],
+      },
+    };
+
+    it("기준 하나가 한 조각, 시장 이름은 그 시장 첫 조각에, 이음표는 앞 조각 끝 (시장 안 '·', 시장·시각 사이 ' · ')", () => {
+      expect(quoteBasisChunks(mixed, "09:13")!.map(plain)).toEqual(["시세 기준: ", "국내 NXT 포함 · ", "미국 정규장 9·", "주간거래 2·", "시간외 포함 1 · ", "09:13 계산"]);
+      expect(quoteBasisChunks(server, "08:38")!.map(plain)).toEqual(["시세 기준: ", "국내 NXT 포함 · ", "미국 주간거래 12·", "정규장 2·", "기준 모름 1 · ", "08:38 계산"]);
+      expect(quoteBasisChunks(krOnly, "08:38")!.map(plain)).toEqual(["시세 기준: ", "국내 NXT 포함 · ", "08:38 계산"]);
+      // 시각을 모르면 마지막 시장 조각에 이음표 없음
+      expect(quoteBasisChunks(krOnly, "")!.map(plain)).toEqual(["시세 기준: ", "국내 NXT 포함"]);
+      expect(quoteBasisChunks(mixed, "")!.map(plain).at(-1)).toBe("시간외 포함 1");
+    });
+
+    it("조각을 이으면 '시세 기준: ' + 한 줄 글 그대로 (한 줄에 들어가면 지금 모양)", () => {
+      for (const [q, at] of [[mixed, "09:13"], [server, "08:38"], [krOnly, "08:38"], [krOnly, ""], [{ kr: null, us: mixed.us }, "16:00"]] as const) {
+        expect(plain(quoteBasisChunks(q, at)!.join(""))).toBe(`시세 기준: ${quoteBasisLine(q, at)}`);
+      }
+    });
+
+    it("어느 조각도 '·'·빈칸으로 시작하지 않고(줄이 바뀌어도 새 줄 첫머리가 '·'가 아님), 조각 안에 보통 빈칸이 없다(수·낱말이 떨어지지 않음)", () => {
+      for (const q of [mixed, server, krOnly]) {
+        for (const p of quoteBasisChunks(q, "09:13")!) {
+          expect(p).not.toMatch(/^[\s ·]/);
+          expect(p).not.toMatch(/ /);
+        }
+      }
+    });
+
+    it("없음(예전 기록)·두 시장 모두 없음 → null", () => {
+      expect(quoteBasisChunks(undefined, "08:38")).toBeNull();
+      expect(quoteBasisChunks(null, "08:38")).toBeNull();
+      expect(quoteBasisChunks({ kr: null, us: null }, "08:38")).toBeNull();
+    });
   });
 });

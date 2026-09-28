@@ -9,7 +9,9 @@ import { cleanupRenders, render, type HostNode } from "./miniRender";
  *  - 켬: 큰 카드 '당일 손익 · 08:38 기준', 넓은 창 줄 끝 '08:38 기준', 화면 읽기 '… 8시 38분 기준, 자세히 보기'.
  *    기여 상위 묶음(2+3)이 있는 줄·카드는 더하지 않음(묶음 머리에 이미 '08:38 기준' — 정확히 한 번). 실패 브리핑은 없음
  *  - 상세(stack·pane·split): 저장한 quoteBasis 가 있으면 '보유 N종목 합계' 아래 '시세 기준: 국내 NXT 포함 · 미국 정규장 · 08:38 계산',
- *    그 줄을 감싼 View 의 이름표로 한 번만 읽힘. 총 평가 묶음 이름표·'기준:' 줄은 켬·끔이 같다. 예전 기록(quoteBasis 없음)은 줄 없음
+ *    그 줄을 감싼 View 의 이름표로 한 번만 읽힘. 총 평가 묶음 이름표·'기준:' 줄은 켬·끔이 같다. 예전 기록(quoteBasis 없음)은 줄 없음.
+ *    좁은 칸·큰 글씨는 기준 묶음째 다음 줄로 — 줄은 묶음(Muted) 여럿을 줄바꿈하는 View (합친 글은 한 줄 글과 같음)
+ *  - 화면 읽기의 'H시 M분 기준'은 기여 1위 바로 뒤 (보이는 줄과 같은 자리 — 뒤의 비교·이번 주 일정 줄의 시각으로 들리지 않게)
  * 시계는 고정 (useNow), RN 부품·공용 UI·종목 카드는 문자열 요소로, API 훅은 가짜로 바꿔 끼운다 (briefingCompactTop.test.tsx·foldBriefings.test.tsx 방식)
  */
 const h = vi.hoisted(() => ({
@@ -138,6 +140,14 @@ type R = ReturnType<typeof render>;
 const rawOf = (n: HostNode | string): string => (typeof n === "string" ? n : n.children.map(rawOf).join(""));
 const kids = (n: HostNode) => n.children.filter((c): c is HostNode => typeof c !== "string");
 const ofType = (r: R, type: string) => r.all().filter((n) => n.type === type);
+/** 줄바꿈 없는 공백을 보통 공백으로 (묶음째 줄바꿈하는 줄의 글을 한 줄 글과 견줄 때) */
+const plain = (s: string) => s.replace(/\u00a0/g, " ");
+/** '시세 기준' 줄 = 이름표가 그 줄의 읽는 말인 View (그 안의 Muted 묶음들) */
+const basisRow = (r: R, speech = LINE_SPEECH) => {
+  const hits = r.all().filter((n) => n.type === "View" && n.props.accessibilityLabel === speech);
+  expect(hits).toHaveLength(1);
+  return hits[0]!;
+};
 const labels = (r: R) => r.all().map((n) => n.props.accessibilityLabel).filter((x): x is string => typeof x === "string");
 const account = (r: R) => {
   const hits = r.all().filter((n) => n.type === "Pressable" && String(n.props.accessibilityLabel ?? "").startsWith("내 계좌 브리핑"));
@@ -265,6 +275,37 @@ describe("켬: 브리핑 탭 계좌 카드·줄 'HH:MM 기준'", () => {
     expect(String(row.props.accessibilityLabel)).toContain("8시 38분 기준, 자세히 보기");
   });
 
+  // 합친 모습 리뷰: 704 카드 격자 줄이 '…기여 1위 엔비디아…, (비교), (이번 주 일정), 리얼티인컴 배당락일 9월 30일 수요일, 9시 13분 기준, 자세히 보기'로
+  // 읽혀 시각이 배당락일의 시각처럼 들렸다. 보이는 자리(둘째 줄 끝 · 큰 카드 '당일 손익' 이름 뒤)처럼 기여 1위 바로 뒤로
+  it("화면 읽기 'H시 M분 기준'은 기여 1위 바로 뒤 — 비교·이번 주 일정 줄보다 앞 (카드 격자 줄·큰 카드)", async () => {
+    h.flags = { ...h.flags, foldLayout: true, accountSinceLast: true, holdingEvents: true };
+    const SINCE = "9월 25일 금요일 오전 브리핑보다 총 평가금액 420,295원 늘어남, 수량이 바뀐 종목 4개";
+    const WEEK = "이번 주 보유 종목 일정, 리얼티인컴 배당락일 9월 30일 수요일";
+    h.accounts = [
+      {
+        ...ACCOUNT,
+        headline: {
+          ...ACCOUNT.headline!,
+          since: { date: "2026-09-25", session: "morning", change: 420_295, qtyChanged: 4 },
+          week: [{ code: "O", name: "리얼티인컴", kind: "exDividend", date: "2026-09-30" }],
+        },
+      },
+    ];
+    size(704, 861);
+    const row = account(await tab());
+    expect(row.props.accessibilityLabel).toBe(`${CARD_SPEECH}, 8시 38분 기준, ${SINCE}, ${WEEK}, 자세히 보기`);
+    // 보이는 순서도 같다: 둘째 줄(당일 · 기여 1위 · 08:38 기준) → 비교 줄 → 이번 주 줄
+    const text = rawOf(row);
+    expect(text.indexOf("08:38 기준")).toBeGreaterThan(-1);
+    expect(text.indexOf("08:38 기준")).toBeLessThan(text.indexOf("9/25(금) 오전보다"));
+    expect(text.indexOf("9/25(금) 오전보다")).toBeLessThan(text.indexOf("이번 주 일정"));
+    // 접은 화면 큰 카드('당일 손익 · 08:38 기준')도 같은 자리
+    h.flags.foldLayout = false;
+    size(475, 751);
+    const card = account(await tab());
+    expect(card.props.accessibilityLabel).toBe(`${CARD_SPEECH}, 8시 38분 기준, ${SINCE}, ${WEEK}, 자세히 보기`);
+  });
+
   it("실패한 계좌 브리핑: 시각 없음", async () => {
     h.accounts = [FAILED];
     let r = await tab();
@@ -283,15 +324,18 @@ describe("켬: 계좌 브리핑 상세 '시세 기준' 줄", () => {
     const off = render(<AccountBriefingBody numId={12} layout={layout} />);
     h.flags.numberBasis = true;
     const r = render(<AccountBriefingBody numId={12} layout={layout} />);
-    const lines = ofType(r, "Muted").map(rawOf);
-    const at = lines.indexOf(LINE);
-    expect(at).toBeGreaterThan(0);
-    expect(lines[at - 1]).toBe("보유 17종목 합계 · 앱 잔고 화면과 같은 기준");
-    expect(lines.filter((l) => l === LINE)).toHaveLength(1);
-    // 감싼 View 의 이름표 (Muted 는 이름표가 없음)
-    const wrap = r.all().find((n) => n.type === "View" && n.props.accessibilityLabel === LINE_SPEECH)!;
+    // 감싼 View 의 이름표 (Muted 는 이름표가 없음). 줄은 묶음(Muted)들을 줄바꿈하는 View — 합친 글이 한 줄 글과 같다
+    const wrap = basisRow(r);
     expect(wrap.props.accessible).toBe(true);
-    expect(rawOf(wrap)).toBe(LINE);
+    expect(plain(rawOf(wrap))).toBe(LINE);
+    expect(wrap.props.style).toMatchObject({ flexDirection: "row", flexWrap: "wrap" });
+    expect(kids(wrap).every((k) => k.type === "Muted")).toBe(true);
+    expect(kids(wrap).map(rawOf).map(plain)).toEqual(["시세 기준: ", "국내 NXT 포함 · ", "미국 정규장 · ", "08:38 계산"]);
+    // '보유 N종목 합계' 줄 바로 다음 (같은 카드 안)
+    const muted = ofType(r, "Muted");
+    const first = muted.indexOf(kids(wrap)[0]!);
+    expect(rawOf(muted[first - 1]!)).toBe("보유 17종목 합계 · 앱 잔고 화면과 같은 기준");
+    expect(r.all().filter((n) => n.type === "View" && plain(rawOf(n)) === LINE)).toHaveLength(1);
     expect(labels(r).filter((l) => l.includes("시세 기준"))).toEqual([LINE_SPEECH]);
     // 총 평가 묶음 이름표(totalsSpeech)는 켬·끔이 같고, 그 묶음 안에 이 줄이 없다
     const totals = (x: R) => labels(x).filter((l) => l.startsWith("총 평가금액"));
@@ -320,7 +364,31 @@ describe("켬: 계좌 브리핑 상세 '시세 기준' 줄", () => {
       data: { ...DATA, quoteBasis: { kr: DATA.quoteBasis!.kr, us: { count: 14, tags: [{ tag: "주간거래", count: 12 }, { tag: "정규장", count: 2 }] } } },
     } satisfies AccountBriefingWithData;
     const r = render(<AccountBriefingBody numId={12} layout="stack" />);
-    expect(ofType(r, "Muted").map(rawOf)).toContain("시세 기준: 국내 NXT 포함 · 미국 주간거래 12·정규장 2 · 08:38 계산");
-    expect(labels(r)).toContain("시세 기준, 국내 NXT 포함, 미국 주간거래 12종목, 정규장 2종목, 8시 38분 계산");
+    const speech = "시세 기준, 국내 NXT 포함, 미국 주간거래 12종목, 정규장 2종목, 8시 38분 계산";
+    expect(labels(r)).toContain(speech);
+    expect(plain(rawOf(basisRow(r, speech)))).toBe("시세 기준: 국내 NXT 포함 · 미국 주간거래 12·정규장 2 · 08:38 계산");
+  });
+
+  // 합친 모습 리뷰 (360·100% '· 09:13 계산', 704 두 칸 '…시간외 포함' / '1 · 09:13 계산', 933 세 칸 '정규장 9·주간거래' / '2·시간외 포함 1',
+  // 475·200% '미국 정규장 9·주' / '간거래 2'): 한 글이라 아무 데서나 꺾였다 → 기준 하나('말 수')가 한 묶음, 이음표는 앞 묶음 끝
+  it.each(["stack", "pane", "split"] as const)("%s: 기준 묶음째 줄바꿈 — 새 줄이 '·'로 시작하지 않고 수가 이름과 붙어 있다", (layout) => {
+    if (layout === "split") size(933, 632);
+    h.flags.numberBasis = true;
+    h.detail = {
+      ...ACCOUNT,
+      data: { ...DATA, quoteBasis: { kr: DATA.quoteBasis!.kr, us: { count: 12, tags: [{ tag: "정규장", count: 9 }, { tag: "주간거래", count: 2 }, { tag: "시간외", count: 1 }] } } },
+    } satisfies AccountBriefingWithData;
+    const r = render(<AccountBriefingBody numId={12} layout={layout} />);
+    const wrap = basisRow(r, "시세 기준, 국내 NXT 포함, 미국 정규장 9종목, 주간거래 2종목, 시간외 포함 1종목, 8시 38분 계산");
+    const parts = kids(wrap).map(rawOf);
+    expect(parts.map(plain)).toEqual(["시세 기준: ", "국내 NXT 포함 · ", "미국 정규장 9·", "주간거래 2·", "시간외 포함 1 · ", "08:38 계산"]);
+    expect(plain(parts.join(""))).toBe("시세 기준: 국내 NXT 포함 · 미국 정규장 9·주간거래 2·시간외 포함 1 · 08:38 계산");
+    for (const p of parts) {
+      expect(p).not.toMatch(/^[\s\u00a0·]/); // 묶음(= 줄이 바뀌면 새 줄 첫머리)이 '·'·빈칸으로 시작하지 않음
+      expect(p).not.toMatch(/ /); // 묶음 안 빈칸은 모두 줄바꿈 없는 공백 — '시간외 포함' / '1' 처럼 떨어지지 않음
+    }
+    // 묶음 사이 간격은 묶음 끝의 공백이 맡는다 (칸 사이 간격을 따로 두면 '9· 주간거래'처럼 벌어짐)
+    expect(wrap.props.style).not.toHaveProperty("columnGap");
+    expect(wrap.props.style).not.toHaveProperty("gap");
   });
 });
