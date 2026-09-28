@@ -17,6 +17,8 @@ export interface PriceAlertState {
   remove: (rule: PriceAlertRule) => Promise<void>;
   /** 종목 이름 (잔고 목록 캐시, 없으면 코드) — 설정 칸이 쓴다 (설정 화면이 쿼리 클라이언트를 직접 읽지 않게) */
   nameOf: (code: string) => string;
+  /** 조건 목록을 아직 한 번도 받지 못했고 마지막 요청이 실패함(404 아님) — rules 가 빈 것은 '없음'이 아니라 '모름'. 없으면 거짓 */
+  rulesFailed?: boolean;
 }
 
 export const PRICE_ALERTS_OFF: PriceAlertState = Object.freeze({
@@ -25,6 +27,7 @@ export const PRICE_ALERTS_OFF: PriceAlertState = Object.freeze({
   openSheet: () => {},
   remove: () => Promise.resolve(),
   nameOf: (code: string) => code,
+  rulesFailed: false,
 });
 
 export const PriceAlertContext = React.createContext<PriceAlertState>(PRICE_ALERTS_OFF);

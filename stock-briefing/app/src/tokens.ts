@@ -640,4 +640,12 @@ export const priceAlert = {
   volumeIdleMs: 300_000,
   /** 조건 목록 받기가 실패했을 때(404 제외) 다시 묻는 간격 */
   rulesRetryMs: 60_000,
+  /** 세션 경계(until) 뒤 이만큼 지나 목록(과 열린 상세)을 다시 받는다 (useLivePoll 의 capToBoundary 와 같은 1초) */
+  boundaryDelayMs: 1_000,
+  /** 경계가 지났는데 받은 값이 아직 옛 세션이면(서버 시계가 조금 늦음) 이만큼 뒤 다시 */
+  boundaryRetryMs: 3_000,
+  /** 같은 경계로 다시 받는 횟수 상한 */
+  boundaryTries: 3,
+  /** 경계 타이머 한 번의 최대 대기 (먼 경계는 이 간격으로 다시 잰다 — 긴 타이머를 걸지 않게) */
+  boundaryMaxWaitMs: 300_000,
 } as const;

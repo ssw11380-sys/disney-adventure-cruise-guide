@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   announce: [] as string[],
   alert: [] as unknown[],
   push: [] as string[],
+  path: "/",
 }));
 
 vi.mock("react-native", () => ({
@@ -56,7 +57,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
-vi.mock("expo-router", () => ({ router: { push: (p: string) => void h.push.push(p) } }));
+vi.mock("expo-router", () => ({ router: { push: (p: string) => void h.push.push(p) }, usePathname: () => h.path }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
@@ -176,6 +177,7 @@ beforeEach(() => {
   h.announce = [];
   h.alert = [];
   h.push = [];
+  h.path = "/";
   haptics = [];
   notified = [];
   installHaptics({ selectionAsync: async () => undefined, impactAsync: async () => undefined, notificationAsync: async (s: never) => void haptics.push(`notificationAsync:${s}`) }, "android");
@@ -360,12 +362,41 @@ describe("이번 실행 · 앱이 앞에 있을 때 받은 값만", () => {
     h.features = { features: { priceAlerts: true } };
     r.rerender(tree(qc, false));
     await settle(r);
-    expect(h.app.listeners).toHaveLength(1);
+    expect(h.app.listeners).toHaveLength(2); // 제공자 + 경계 타이머(BoundaryWatch — 활성 가격 조건이 있을 때)
     expect(haptics).toEqual([]);
     r.act(() => void setList([samsung(88_700)]));
     await settle(r);
     expect(haptics).toHaveLength(1);
     r.unmount();
+  });
+
+  it("저장된 플래그가 없어 늦게 켜져도, 켜기 전에 받은 목록을 준비되는 순간 한 번 다시 받아 이미 맞은 조건이 바로 울린다 (다음 주기 30초를 기다리지 않음)", async () => {
+    const srv = fakeApi();
+    srv.list = [samsung(88_700)];
+    h.features = undefined;
+    const r = render(tree(qc, false));
+    setList([samsung(88_700)]); // 켜기 전에 받은 목록 (잔고 탭이 먼저 받음)
+    await settle(r, 500);
+    srv.calls.listStocks = 0;
+    h.features = { features: { priceAlerts: true } };
+    r.rerender(tree(qc, false));
+    await settle(r);
+    expect(srv.calls.listStocks).toBe(1);
+    expect(haptics).toHaveLength(1);
+    expect(Date.now() - T0).toBeLessThan(3_000);
+    r.unmount();
+
+    // 처음 그릴 때부터 켜져 있으면(저장된 플래그) 이번 실행에서 받은 목록을 그대로 확인 — 다시 받지 않는다
+    const again = fakeApi();
+    h.store.clear();
+    haptics = [];
+    qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
+    const r2 = render(tree(qc, false, "b"));
+    setList([samsung(88_700)]);
+    await settle(r2);
+    expect(again.calls.listStocks).toBe(0);
+    expect(haptics).toHaveLength(1);
+    r2.unmount();
   });
 
   it("처음 그릴 때 뒤였고 'active' 사건이 구독보다 먼저 왔어도, 켜지는 때 앞에 있으면 그때부터 울린다 (그 실행 내내 조용하지 않음)", async () => {
@@ -471,6 +502,40 @@ describe("조건 목록 받기 실패", () => {
     r.unmount();
   });
 
+  it("한 번도 받지 못하면 문맥 rulesFailed 참(설정 칸·시트가 빈 상태 대신 '불러오지 못함'), 받으면 거짓 · 404 는 거짓(조건 없음)", async () => {
+    const srv = fakeApi();
+    srv.rulesError = new ApiRequestError(500, "INTERNAL", "서버 오류");
+    const box = { ctx: PRICE_ALERTS_OFF };
+    function Probe() {
+      box.ctx = React.useContext(PriceAlertContext);
+      return null;
+    }
+    const draw = () => (
+      <QueryClientProvider client={qc}>
+        <PriceAlertProvider>
+          <Probe />
+        </PriceAlertProvider>
+      </QueryClientProvider>
+    );
+    const r = render(draw());
+    await settle(r, 5_000);
+    expect(box.ctx.rules).toEqual([]);
+    expect(box.ctx.rulesFailed).toBe(true);
+    srv.rulesError = null;
+    await settle(r, 60_000);
+    expect(box.ctx.rules).toHaveLength(1);
+    expect(box.ctx.rulesFailed).toBe(false);
+    r.unmount();
+
+    const old = fakeApi();
+    old.rulesError = new ApiRequestError(404, "HTTP_404", "없음");
+    qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
+    const r2 = render(draw());
+    await settle(r2, 1_000);
+    expect(box.ctx.rulesFailed).toBe(false);
+    r2.unmount();
+  });
+
   it("404(예전 서버)면 조건 없음으로 보고 1분·5분이 지나도 다시 묻지 않는다", async () => {
     const srv = fakeApi();
     srv.rulesError = new ApiRequestError(404, "HTTP_404", "없음");
@@ -524,6 +589,21 @@ describe("화면 위 카드", () => {
     r2.act(() => (bannerRows(r2)[0]!.props.onPress as () => void)());
     expect(h.push).toEqual(["/stocks/005930"]);
     expect(bannerRows(r2)).toHaveLength(0);
+    r2.unmount();
+  });
+
+  it("이미 그 종목 상세를 보고 있으면 줄을 눌러도 카드만 닫고 같은 상세를 또 쌓지 않는다 (다른 종목 상세면 연다)", async () => {
+    h.path = "/stocks/005930";
+    const r = await fired();
+    r.act(() => (bannerRows(r)[0]!.props.onPress as () => void)());
+    expect(h.push).toEqual([]);
+    expect(bannerRows(r)).toHaveLength(0);
+    r.unmount();
+    h.path = "/stocks/000660";
+    qc = new QueryClient();
+    const r2 = await fired();
+    r2.act(() => (bannerRows(r2)[0]!.props.onPress as () => void)());
+    expect(h.push).toEqual(["/stocks/005930"]);
     r2.unmount();
   });
 
@@ -613,6 +693,94 @@ describe("ListWatch (잔고 탭이 가려져도 목록을 받음 · 요청이 �
   });
 });
 
+describe("세션 경계 (체결이 촘촘해도 경계 뒤에 목록을 다시 받는다 — 검토 must)", () => {
+  // 08:59:40 에 '장 시작 전' 세션으로 받은 목록 → 09:00 부터 250ms 마다 체결. 체결은 가격만 고치고 세션은 그대로 두며,
+  // 캐시를 고칠 때마다 react-query 가 ListWatch 의 30초 주기 타이머를 다시 건다 (useLivePoll 의 알려진 한계) → 주기만으로는 목록을 다시 받지 못한다
+  const PRE = { market: "KR" as const, phase: "preopen", label: "한국 장 시작 전", open: false, eligible: true, until: "2026-12-08T09:00:00+09:00" };
+  const REG = { ...SESSION, until: "2026-12-08T15:20:00+09:00" };
+  const at = (hms: string) => Date.parse(`2026-12-08T${hms}+09:00`);
+  const kr = (price: number, session: typeof PRE, asOf: string): RegisteredWithQuote =>
+    holding("005930", quote("005930", price, { prevClose: 81_400, change: price - 81_400, changeRate: Math.round(((price - 81_400) / 81_400) * 10_000) / 100, asOf, session, priceBasis: "KRX 정규장" }), 10, 70_000, undefined, "삼성전자");
+  /** from 부터 ms 동안 250ms 마다 체결 (값이 바뀌어야 캐시를 고친다 → 88,700 · 88,750 번갈아) */
+  async function stream(r: R, w: FakeWS, ms: number) {
+    for (let i = 0; i < ms / 250; i++) {
+      const iso = new Date(Date.now()).toISOString();
+      r.act(() => w.message(tick(i % 2 ? 88_750 : 88_700, iso)));
+      await settle(r, 250);
+    }
+  }
+
+  it("장 시작 전에 받은 목록 + 09:00 부터 촘촘한 체결 → 09:00:01 에 목록을 다시 받아 3초 안에 울린다", async () => {
+    vi.setSystemTime(at("08:59:40"));
+    const srv = fakeApi();
+    const r = render(tree(qc));
+    setList([kr(84_300, PRE, "2026-12-08T08:59:00+09:00")]);
+    await settle(r);
+    const w = ws(r);
+    srv.list = [kr(88_700, REG, "2026-12-08T09:00:00+09:00")];
+    srv.calls.listStocks = 0;
+    await settle(r, at("09:00:00") - Date.now());
+    await stream(r, w, 120_000);
+    expect(srv.calls.listStocks).toBeGreaterThanOrEqual(1);
+    expect(haptics).toHaveLength(1);
+    expect(Date.parse(srv.fired[0]![1].at)).toBeLessThanOrEqual(at("09:00:03"));
+    expect((qc.getQueryData([API, "stocks"]) as RegisteredWithQuote[])[0]!.quote!.session).toMatchObject({ phase: "regular", open: true });
+    r.unmount();
+  });
+
+  it("경계를 뒤에서 넘기고(받지 않음) 체결이 흐르는 채로 돌아오면, 돌아온 때 목록을 다시 받아 울린다", async () => {
+    vi.setSystemTime(at("08:59:40"));
+    const srv = fakeApi();
+    const r = render(tree(qc));
+    setList([kr(84_300, PRE, "2026-12-08T08:59:00+09:00")]);
+    await settle(r);
+    const w = ws(r);
+    // 앱(_layout)처럼 focusManager 도 AppState 에 묶는다 (뒤에 있으면 주기 받기를 건너뜀)
+    const toState = (s: string) =>
+      r.act(() => {
+        h.app.currentState = s;
+        focusManager.setFocused(s === "active");
+        for (const fn of [...h.app.listeners]) fn(s);
+      });
+    toState("background");
+    srv.list = [kr(88_700, REG, "2026-12-08T09:00:00+09:00")];
+    srv.calls.listStocks = 0;
+    await settle(r, at("09:00:00") - Date.now());
+    await stream(r, w, 10_000); // 뒤로 가면 소켓을 닫으므로 이 체결은 버려진다
+    expect(srv.calls.listStocks).toBe(0); // 뒤에 있는 동안은 받지 않는다
+    expect(haptics).toEqual([]);
+    toState("active");
+    // 돌아오면 다시 붙은 소켓으로 체결이 촘촘히 온다 (재연결 스냅샷·체결이 주기 타이머를 또 민다)
+    const w2 = ws(r);
+    expect(w2).not.toBe(w);
+    await stream(r, w2, 3_000);
+    expect(srv.calls.listStocks).toBe(1);
+    expect(haptics).toHaveLength(1);
+    await stream(r, w2, 60_000);
+    expect(srv.calls.listStocks).toBe(1); // 새 세션을 받은 뒤에는 경계 타이머가 다시 받지 않는다 (다음 경계 15:20)
+    r.unmount();
+  });
+
+  it("서버가 경계 직후 옛 세션을 주면 3초 뒤 다시 (같은 경계에 3번까지), 경계가 오지 않았으면 받지 않는다", async () => {
+    vi.setSystemTime(at("08:59:40"));
+    const srv = fakeApi();
+    const r = render(tree(qc));
+    setList([kr(84_300, PRE, "2026-12-08T08:59:00+09:00")]);
+    await settle(r);
+    const w = ws(r);
+    srv.list = [kr(84_300, PRE, "2026-12-08T08:59:59+09:00")]; // 서버 시계가 늦음 — 아직 장 시작 전
+    srv.calls.listStocks = 0;
+    await stream(r, w, 19_000); // 08:59:59 — 경계 전에는 받지 않는다
+    expect(srv.calls.listStocks).toBe(0);
+    await stream(r, w, 20_000); // 09:00:01 · 09:00:04 · 09:00:07
+    expect(srv.calls.listStocks).toBe(3);
+    await stream(r, w, 60_000);
+    expect(srv.calls.listStocks).toBe(3);
+    expect(haptics).toEqual([]);
+    r.unmount();
+  });
+});
+
 describe("서버 주소를 바꿈", () => {
   it("옛 서버의 잔고 코드 모음으로 새 서버의 조건을 거르지 않는다 → 새 서버의 활성 가격 조건으로 새 서버 목록을 받는다", async () => {
     const srv = fakeApi();
@@ -686,6 +854,46 @@ describe("저장 · 종목 이름 기억", () => {
     await settle(r);
     expect(creates).toBe(2);
     r.unmount();
+  });
+
+  it("시트 A 를 열고 닫은 뒤 B 를 열면, 늦게 온 A 의 거래량 응답(성공·실패)은 B 시트에 쓰지 않는다", async () => {
+    fakeApi();
+    const pending = new Map<string, { ok: (v: { items: VolumeStatus[] }) => void; fail: (e: unknown) => void }>();
+    (h.api as { priceAlertVolume: (codes: string[]) => Promise<{ items: VolumeStatus[] }> }).priceAlertVolume = (codes) =>
+      new Promise((ok, fail) => void pending.set(codes.join(","), { ok, fail }));
+    const { r, box } = drawWithProbe(qc);
+    setList([samsung(), hynix()]);
+    await settle(r);
+    const volumeLine = () => r.all().find((n) => n.props.accessibilityRole === "radio" && String(n.props.accessibilityLabel).startsWith("거래량"))!;
+    r.act(() => box.ctx.openSheet({ code: "005930", name: "삼성전자", quote: samsung().quote }));
+    await settle(r);
+    r.act(() => (r.byLabel("닫기").props.onPress as () => void)());
+    r.act(() => box.ctx.openSheet({ code: "000660", name: "SK하이닉스", quote: hynix().quote }));
+    await settle(r);
+    r.act(() => pending.get("000660")!.ok({ items: [vol({ code: "000660", ratio: 2.05 })] }));
+    await settle(r);
+    expect(volumeLine().props.accessibilityLabel).toBe("거래량 같은 시각 평균 3배 이상, 지금 2.0배, 최근 18거래일 같은 시각 평균과 견줌");
+    // 늦게 온 A(삼성전자 3.29배) — 전에는 B 시트가 A 의 값으로 바뀌었다
+    r.act(() => pending.get("005930")!.ok({ items: [vol({ ratio: 3.29 })] }));
+    await settle(r);
+    expect(volumeLine().props.accessibilityLabel).toContain("지금 2.0배");
+    expect(r.text()).not.toContain("3.2배");
+    r.unmount();
+
+    // 실패도 같다: A 가 늦게 실패해도 B 의 값이 '정규장 시간에 30분봉으로 확인합니다'로 바뀌지 않는다
+    pending.clear();
+    qc = new QueryClient();
+    const second = drawWithProbe(qc);
+    setList([samsung(), hynix()]);
+    await settle(second.r);
+    second.r.act(() => second.box.ctx.openSheet({ code: "005930", name: "삼성전자", quote: samsung().quote }));
+    second.r.act(() => second.box.ctx.openSheet({ code: "000660", name: "SK하이닉스", quote: hynix().quote }));
+    second.r.act(() => pending.get("000660")!.ok({ items: [vol({ code: "000660", ratio: 2.05 })] }));
+    await settle(second.r);
+    second.r.act(() => pending.get("005930")!.fail(new Error("시간 초과")));
+    await settle(second.r);
+    expect(second.r.text()).toContain("지금 2.0배");
+    second.r.unmount();
   });
 
   it("등록에서 뺀(잔고 목록에 없는) 종목의 조건도 기억해 둔 이름으로 · 조건이 없어진 종목의 이름은 지운다", async () => {

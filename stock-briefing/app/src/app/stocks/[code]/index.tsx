@@ -26,7 +26,7 @@ import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isBigText } from "@/lib/textScale";
-import { changeColor, font, layout, slopFor, space, useTheme } from "@/theme";
+import { changeColor, font, layout, slopFor, space, touch, useTheme } from "@/theme";
 import { foldDetail, oneHand } from "@/tokens";
 import { sentence, speakMove, speakRate } from "@/lib/a11y";
 import { haptic } from "@/lib/haptics";
@@ -455,7 +455,7 @@ export default function StockDetailScreen() {
               if (!alertOn) return right;
               return (
                 <View style={styles.headRight}>
-                  <Pressable onPress={openAlerts} accessibilityRole="button" accessibilityLabel={alertButtonA11y(alertCount)} hitSlop={slopFor(foldDetail.headIcon, space.sm)}>
+                  <Pressable onPress={openAlerts} accessibilityRole="button" accessibilityLabel={alertButtonA11y(alertCount)} style={styles.headBell}>
                     <Ionicons name={alertCount ? "notifications" : "notifications-outline"} size={foldDetail.headIcon} color={alertCount ? t.gold : t.ink} />
                   </Pressable>
                   {right}
@@ -897,8 +897,9 @@ const styles = {
     feedBrief: { minWidth: 0, paddingBottom: space.md, gap: space.xs },
     sideEnd: { paddingBottom: space.md },
     vline: { width: StyleSheet.hairlineWidth, alignSelf: "stretch" },
-    // 3-29 휴대폰 머리 오른쪽 [종][수정]
-    headRight: { flexDirection: "row", alignItems: "center", gap: space.md },
+    // 3-29 휴대폰 머리 오른쪽 [종][수정]: 종은 누르는 곳 44×44 (hitSlop 없이 칸 자체). 사이는 수정 버튼 hitSlop 왼쪽(space.sm)만큼 — 누르는 곳이 겹치지 않게
+    headRight: { flexDirection: "row", alignItems: "center", gap: space.sm },
+    headBell: { width: touch.min, minHeight: touch.min, alignItems: "center", justifyContent: "center" },
   }),
   sub: (color: string) => ({ color, fontSize: font.small, fontVariant: ["tabular-nums" as const] }),
   panelTitle: (color: string) => ({ color, fontSize: font.body, fontWeight: "700" as const }),

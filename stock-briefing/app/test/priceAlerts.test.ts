@@ -17,6 +17,7 @@ import {
   hitBody,
   hitSpeech,
   hitTitle,
+  isDetailPath,
   metNow,
   notificationContent,
   presetDrafts,
@@ -29,6 +30,7 @@ import {
   rowSpeech,
   ruleLabel,
   ruleSpeech,
+  sessionEdges,
   stepDraft,
   validateDraft,
   volumeNote,
@@ -160,6 +162,21 @@ describe("조건 글 · 미리 채우는 값", () => {
       for (const dir of [1, -1] as const) expect(Number.isFinite(stepDraft(draft, dir, q, start).value), `${draft.kind} ${dir}`).toBe(true);
     }
   });
+
+  it("stepDraft: 저장 단위보다 잘게 넣은 값에서 시작해도 결과는 1센트 · 1원 단위 → 값 검사를 통과한다 (12.345 + → 12.45)", () => {
+    const up = stepDraft(d("priceAbove", 12.345, "USD"), 1, uq(11.34));
+    expect(up.value).toBe(12.45);
+    expect(validateDraft(up, [])).toBeNull();
+    const down = stepDraft(d("priceBelow", 12.345, "USD"), -1, uq(11.34));
+    expect(down.value).toBe(12.25);
+    expect(validateDraft(down, [])).toBeNull();
+    const krw = stepDraft(d("priceAbove", 84_350.5, "KRW"), 1, kq(84_300));
+    expect(krw.value).toBe(85_151);
+    expect(validateDraft(krw, [])).toBeNull();
+    // 이미 단위에 맞는 값은 그대로 (전과 같은 결과)
+    expect(stepDraft(d("priceAbove", 12, "USD"), 1, uq(11.34)).value).toBe(12.1);
+    expect(stepDraft(d("priceAbove", 88_600, "KRW"), 1, kq(84_300)).value).toBe(89_400);
+  });
 });
 
 describe("값 검사 (서버 checkValue 와 같은 규칙 · hasCents)", () => {
@@ -260,6 +277,26 @@ describe("울려도 되는 시세 · 가격·등락률 확인 (now 2026-12-08 10
     expect(hits([rule()], kq(88_700), { registered: false })).toHaveLength(0);
     expect(hits([rule()], kq(88_700), { list: new Set(["000660"]) })).toHaveLength(0);
     expect(hits([rule()], kq(88_700), { list: new Set(["005930"]) })).toHaveLength(1);
+  });
+
+  it("sessionEdges: 지난 경계 중 가장 늦은 것 · 앞으로 올 경계 중 가장 이른 것 (경계 없는 시세는 건너뜀)", () => {
+    const at = (hm: string) => `2026-12-08T${hm}:00+09:00`;
+    const s = (until: string | null) => kq(84_300, { session: { ...SESSION, until } });
+    expect(sessionEdges([s(at("09:00")), s(at("10:00")), s(at("15:20")), s(at("15:30")), s(null), kq(1, { session: undefined }), null], NOW)).toEqual({ passed: Date.parse(at("10:00")), next: Date.parse(at("15:20")) });
+    expect(sessionEdges([], NOW)).toEqual({ passed: null, next: null });
+    // 바로 그 순간은 지난 것으로 (quoteDate 가 until ≤ now 를 울리지 않으므로 같은 기준)
+    expect(sessionEdges([s(new Date(NOW).toISOString())], NOW)).toEqual({ passed: NOW, next: null });
+  });
+
+  it("isDetailPath: 지금 경로가 그 종목 상세인지 (끝 빗금·인코딩 무시, 편집·차트 화면은 아님)", () => {
+    expect(isDetailPath("/stocks/005930", "005930")).toBe(true);
+    expect(isDetailPath("/stocks/005930/", "005930")).toBe(true);
+    expect(isDetailPath("/stocks/BRK%2EB", "BRK.B")).toBe(true);
+    expect(isDetailPath("/stocks/000660", "005930")).toBe(false);
+    expect(isDetailPath("/stocks/005930/edit", "005930")).toBe(false);
+    expect(isDetailPath("/", "005930")).toBe(false);
+    expect(isDetailPath("/stocks/%E0%A4%A", "005930")).toBe(false);
+    expect(isDetailPath(null, "005930")).toBe(false);
   });
 
   it("울린 값(firedValue): 가격 조건은 가격, 등락률 조건은 등락률", () => {

@@ -47,6 +47,9 @@ export const ALERT_TEXT = {
   settingsTitle: "가격 알림",
   settingsAbout: "앱을 켜 둔 동안만 확인합니다. 조건은 종목 화면의 '알림'(종 모양)에서 만듭니다",
   settingsEmpty: "아직 만든 알림이 없습니다",
+  /** 조건 목록을 한 번도 받지 못함(404 아닌 오류) — 빈 상태로 보이지 않게 (1분마다 다시 묻는다) */
+  loadFailed: "알림 목록을 불러오지 못했습니다 · 잠시 뒤 다시 불러옵니다",
+  sheetLoadFailed: "켜진 알림을 불러오지 못했습니다",
   notRegistered: "등록 종목이 아니라 확인하지 않음",
   notYet: "오늘 아직 울리지 않음",
   duplicate: "같은 알림이 이미 있습니다",
@@ -155,6 +158,8 @@ export function niceStep(p: number, cur: Currency): number {
 const unitOf = (cur: Currency) => (cur === "USD" ? 10_000 : 1);
 const toUnits = (v: number, cur: Currency) => Math.round(v * unitOf(cur));
 const fromUnits = (u: number, cur: Currency) => u / unitOf(cur);
+/** 저장할 수 있는 가장 작은 값 (정수 단위): 1센트 = 만분의 1 달러 100개, 1원 */
+const SAVE_UNITS: Record<Currency, number> = { USD: 100, KRW: 1 };
 
 /** 가격 5% 위·아래를 보기 좋은 단위로 (위는 올림, 아래는 내림) */
 export function pricePreset(p: number, cur: Currency): { above: number; below: number } {
@@ -227,7 +232,10 @@ export function stepDraft(draft: AlertDraft, dir: 1 | -1, quote: Quote | null, s
     const base = live ?? value;
     const inc = priceStepUnits(base, cur);
     const min = toUnits(niceStep(base, cur), cur);
-    return { ...draft, value: fromUnits(Math.max(min, toUnits(value, cur) + dir * inc), cur) };
+    // 입력칸에 저장 단위보다 잘게 넣은 값(12.345)에서 시작해도 결과는 저장할 수 있는 단위(1센트 · 1원)로 반올림한다 —
+    // 입력칸(센트까지 보임)·줄 제목·값 검사가 같은 값을 보게 (전에는 12.445 가 되어 '12.45' 로 보이는데 소수 오류로 저장이 꺼졌다)
+    const next = Math.round((toUnits(value, cur) + dir * inc) / SAVE_UNITS[cur]) * SAVE_UNITS[cur];
+    return { ...draft, value: fromUnits(Math.max(min, next), cur) };
   }
   const next = Math.round((value + dir) * 100) / 100;
   return { ...draft, value: Math.min(30, Math.max(1, next)) };
@@ -301,6 +309,23 @@ export function quoteDate(quote: Quote | null | undefined, code: string, nowMs: 
     if (s.until && Date.parse(s.until) <= nowMs) return null;
   } else if (!inTradingHours(nowIso, code)) return null;
   return date;
+}
+
+/**
+ * 받은 시세들의 세션 경계(until): 이미 지난 것 중 가장 늦은 것(passed — 그 시세의 세션은 경계 전 값이라 quoteDate 가 null)과
+ * 앞으로 올 것 중 가장 이른 것(next). 체결은 가격만 고치고 세션은 그대로 두므로, 경계를 넘으면 목록·상세를 서버에서 다시 받아야 새 세션이 온다.
+ * 체결이 이 값을 바꾸지 않으므로 경계 타이머(PriceAlertProvider BoundaryWatch)는 체결 사건에 다시 걸리지 않는다
+ */
+export function sessionEdges(quotes: readonly (Quote | null | undefined)[], nowMs: number): { passed: number | null; next: number | null } {
+  let passed: number | null = null;
+  let next: number | null = null;
+  for (const q of quotes) {
+    const until = q?.session?.until ? Date.parse(q.session.until) : NaN;
+    if (!Number.isFinite(until)) continue;
+    if (until <= nowMs) passed = passed === null ? until : Math.max(passed, until);
+    else next = next === null ? until : Math.min(next, until);
+  }
+  return { passed, next };
 }
 
 /** 서버 기록(firedOn) + 기기 기록 + 이번 실행 메모리를 합친 조회 */
@@ -468,6 +493,18 @@ export function removeConfirmText(rule: AlertDraft, name?: string): { title: str
 /** 지우기 버튼 이름표: 알림 지우기, 88,600원 이상 · 설정 칸은 종목 이름까지 — 알림 지우기, 삼성전자, 88,600원 이상 */
 export function removeLabel(rule: AlertDraft, name?: string): string {
   return name ? `알림 지우기, ${name}, ${ruleSpeech(rule)}` : `알림 지우기, ${ruleSpeech(rule)}`;
+}
+
+/** 지금 경로(expo-router usePathname)가 그 종목 상세인지 — 화면 위 카드 줄을 눌렀을 때 같은 상세를 스택에 하나 더 쌓지 않게 */
+export function isDetailPath(path: string | null | undefined, code: string): boolean {
+  if (!path) return false;
+  let p = path;
+  try {
+    p = decodeURIComponent(path);
+  } catch {
+    /* 읽을 수 없는 경로는 그대로 견준다 */
+  }
+  return p.replace(/\/+$/, "") === `/stocks/${code}`;
 }
 
 /** 알림 버튼 글 · 이름표 (4.1) */

@@ -181,13 +181,18 @@ describe("종목 상세: 알림 버튼 (등록 종목만)", () => {
     expect(right.has("가격 알림 설정")).toBe(false);
   });
 
-  it("oneHand 끔 + 켬: 머리 오른쪽 [종][수정] (종 44dp), 누르면 시트", () => {
+  it("oneHand 끔 + 켬: 머리 오른쪽 [종][수정] (종 누르는 곳 44×44 · 수정과 겹치지 않음), 누르면 시트", () => {
     const openSheet = vi.fn();
     const r = openDetail(samsung(), { alerts: { rules: [], openSheet }, oneHand: false });
     const right = render((stackOptions(r).headerRight as () => React.ReactElement)());
     expect(pressables(right).map((n) => n.props.accessibilityLabel)).toEqual(["가격 알림 설정", "보유 정보 수정"]);
     const bell = right.byLabel("가격 알림 설정");
-    expect(bell.props.hitSlop).toBeTruthy();
+    // 전에는 아이콘 21 + hitSlop 8×2 = 폭 37 이고, 사이 12 에 양쪽 hitSlop 8 이 겹쳐 4dp 가 두 버튼의 누르는 곳이었다
+    expect(bell.props.style).toMatchObject({ width: 44, minHeight: 44 });
+    expect(bell.props.hitSlop).toBeUndefined();
+    const edit = right.byLabel("보유 정보 수정");
+    const row = right.all().find((n) => n.type === "View" && n.children.includes(bell))!;
+    expect((row.props.style as { gap: number }).gap).toBeGreaterThanOrEqual((edit.props.hitSlop as { left: number }).left);
     right.act(() => (bell.props.onPress as () => void)());
     expect(openSheet).toHaveBeenCalledTimes(1);
   });
@@ -336,6 +341,31 @@ describe("알림 시트", () => {
     expect(saveBtn(r2).props.disabled).toBe(false);
   });
 
+  it("조건 목록을 받지 못했으면 '켜진 알림을 불러오지 못했습니다' 한 줄 (받았고 없으면 줄 없음)", () => {
+    const failed = render(
+      <PriceAlertSheet code="005930" name="삼성전자" quote={kq(84_300)} rules={[]} rulesFailed volume={undefined} busy={false} onSave={vi.fn()} onRemove={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(failed.text()).toContain(ALERT_TEXT.sheetLoadFailed);
+    expect(sheet().r.text()).not.toContain(ALERT_TEXT.sheetLoadFailed);
+  });
+
+  it("달러 입력칸에 소수 셋째 자리(12.345)를 넣고 [+]·[−] → 센트로 반올림해 보이는 값과 저장 값이 같다 (저장 켜짐)", () => {
+    const { r, onSave } = sheet({ code: "NVDA", name: "엔비디아", quote: quote("NVDA", 11.34, { currency: "USD", changeRate: 1.2, asOf: "2026-12-08T10:12:00+09:00" }) });
+    press(r, radio(r, "12.00달러 이상"));
+    typeIn(r, "12.345");
+    expect(r.text()).toContain(ALERT_TEXT.decimals);
+    press(r, r.byLabel("값 늘리기"));
+    expect(inputValue(r)).toBe("12.45");
+    expect(r.text()).not.toContain(ALERT_TEXT.decimals);
+    expect(saveBtn(r).props.disabled).toBe(false);
+    press(r, saveBtn(r));
+    expect(onSave).toHaveBeenCalledWith({ code: "NVDA", kind: "priceAbove", value: 12.45 });
+    typeIn(r, "12.345");
+    press(r, r.byLabel("값 줄이기"));
+    expect(inputValue(r)).toBe("12.25");
+    expect(saveBtn(r).props.disabled).toBe(false);
+  });
+
   it("시세가 없으면 안내 한 줄과 거래량 줄만", () => {
     const { r } = sheet({ quote: null });
     expect(r.text()).toContain("시세를 받지 못해 가격·등락률 조건은 고를 수 없습니다");
@@ -474,6 +504,25 @@ describe("설정 '가격 알림' 칸", () => {
 
   it("빈 상태 글", () => {
     expect(render(<PriceAlertSettingsList rules={[]} names={{}} nowMs={h.now} onRemove={vi.fn()} />).text()).toContain("아직 만든 알림이 없습니다");
+  });
+
+  it("조건 목록을 한 번도 받지 못했으면(404 아닌 오류) 빈 상태 대신 '불러오지 못함' — 겉 부품은 문맥 rulesFailed 로", () => {
+    const failed = render(<PriceAlertSettingsList rules={[]} names={{}} nowMs={h.now} onRemove={vi.fn()} failed />);
+    expect(failed.text()).toContain(ALERT_TEXT.loadFailed);
+    expect(failed.text()).not.toContain(ALERT_TEXT.settingsEmpty);
+    const outer = render(
+      <PriceAlertContext.Provider value={{ on: true, rules: [], openSheet: vi.fn(), remove: vi.fn(async () => undefined), nameOf: (c: string) => c, rulesFailed: true }}>
+        <PriceAlertSettingsCard />
+      </PriceAlertContext.Provider>,
+    );
+    expect(outer.text()).toContain(ALERT_TEXT.loadFailed);
+    // rulesFailed 가 없는 문맥(예전 모양)은 지금 빈 상태 그대로
+    const plain = render(
+      <PriceAlertContext.Provider value={{ on: true, rules: [], openSheet: vi.fn(), remove: vi.fn(async () => undefined), nameOf: (c: string) => c }}>
+        <PriceAlertSettingsCard />
+      </PriceAlertContext.Provider>,
+    );
+    expect(plain.text()).toContain(ALERT_TEXT.settingsEmpty);
   });
 
   it("겉 부품은 문맥의 조건·이름으로 속 부품과 같은 글을 그린다 (쿼리 클라이언트 없이)", () => {

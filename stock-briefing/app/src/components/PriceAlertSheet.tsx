@@ -67,6 +67,7 @@ export function PriceAlertSheet({
   name,
   quote,
   rules,
+  rulesFailed = false,
   volume,
   busy,
   onSave,
@@ -78,6 +79,8 @@ export function PriceAlertSheet({
   quote: Quote | null;
   /** 이 종목의 조건 */
   rules: PriceAlertRule[];
+  /** 조건 목록을 한 번도 받지 못함 — 켜진 알림이 없는 것이 아니라 모르는 것 ('불러오지 못함' 한 줄) */
+  rulesFailed?: boolean;
   /** 시트를 열 때 한 번 받은 거래량 상태 (받는 중·실패면 undefined·null) */
   volume: VolumeStatus | null | undefined;
   busy: boolean;
@@ -201,6 +204,8 @@ export function PriceAlertSheet({
                   </View>
                 ))}
               </>
+            ) : rulesFailed ? (
+              <Text style={[styles.groupHead, { color: t.warn }]}>{ALERT_TEXT.sheetLoadFailed}</Text>
             ) : null}
             <Text style={[styles.groupHead, { color: full ? t.warn : t.muted }]} accessibilityRole="header">
               {full ? ALERT_TEXT.perCodeFull : ALERT_TEXT.newHead}
