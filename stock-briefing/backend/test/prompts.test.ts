@@ -32,6 +32,23 @@ describe("prompt templates", () => {
     expect(summary.userTemplate).toContain("{{detail}}");
   });
 
+  it("브리핑 2차 6 새 프롬프트 두 개: 사용자 부분 변수, 시스템 부분에 예전 말(애널리스트·평가 꼬리표·지지/저항·체크포인트·보유자 해석)이 없다", async () => {
+    const store = new PromptStore();
+    const detail = await store.load("briefing_detail_safe");
+    const summary = await store.load("briefing_summary_safe");
+    expect(detail.userTemplate).toContain("{{data_json}}");
+    expect(summary.userTemplate).toContain("{{detail}}");
+    // 사용자 부분은 예전 상세 프롬프트와 같다 (데이터·보유 정보를 같은 틀로 넘긴다)
+    expect(detail.userTemplate).toBe((await store.load("briefing_detail")).userTemplate);
+    // 새 프롬프트는 금지 규칙 안에서 '지지선·저항선'·'과매수' 같은 이름을 직접 적어야 하므로 금지어 검사(findBanned)가 아니라 이 목록으로 본다
+    const OLD_WORDS = ["애널리스트", "(긍정/부정/중립)", "지지/저항", "체크포인트", "그 의미", "영향 방향", "주가 영향", "보유자 관점", "다음 세션"];
+    for (const t of [detail, summary]) {
+      expect(t.system.length, t.name).toBeGreaterThan(50);
+      for (const w of OLD_WORDS) expect(t.system, `${t.name}: ${w}`).not.toContain(w);
+    }
+    expect(detail.system).toContain("편집자");
+  });
+
   it("없는 파일은 경로를 담은 오류를 낸다", async () => {
     await expect(new PromptStore("/nonexistent").load("briefing_detail")).rejects.toThrow("briefing_detail.md");
   });

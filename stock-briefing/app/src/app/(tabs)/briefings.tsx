@@ -46,6 +46,11 @@ type Order = "movers" | "registered";
  *  - 저절로 골라진 첫 미확인은 읽음으로 적지 않고, 사용자가 누른 브리핑만 적는다. 저절로 골라진 것을 보다가 다른 브리핑을 고르면 그때 읽음
  *  - 목록 머리·도구 줄 끝의 '⋯' = 수동 생성 (목록 맨 아래 카드와 같은 동작)
  *  - 오른쪽 본문은 체결(약 0.1초마다 등락률이 바뀜)에 다시 그리지 않는다 (DetailPane — React.memo)
+ *
+ * 브리핑 2차 2·3 (플래그 briefingCompactTop·moversMerge, 앱 fallback 꺼짐 — 끄면 위 그대로):
+ *  - compactTop: 접은 화면 맨 위 카드 두 장 → 계좌 줄 → 시장 줄 → 안내 한 줄(한 덩어리). 넓은 창도 계좌 줄이 시장 줄 위
+ *  - moversMerge: 계좌 브리핑이 정상이면 접은 화면 '변동 큰 종목' 카드 → 목록 1~3위 순위 + 순위 1 위 기준 줄 + 계좌 카드·줄의 기여 상위 묶음.
+ *    넓은 창 2단은 기준 줄을 목록 끝 → 첫 줄 위로
  */
 export default function BriefingsScreen() {
   const t = useTheme();
@@ -66,6 +71,15 @@ export default function BriefingsScreen() {
   const summaryOn = useFeature("marketSummary", false);
   const summaries = useMarketSummaries(summaryOn);
   const summary = marketCardItem(summaryOn, summaries.data);
+  // 브리핑 2차 4 (플래그 briefingTrim, 앱 fallback 꺼짐): 틀린 문장·되풀이 정리. 여기서 한 번 읽어 카드·줄에 trim 으로 넘긴다. 꺼지면 지금 그대로
+  const trim = useFeature("briefingTrim", false);
+  // 브리핑 2차 6 (플래그 briefingSafeWording, 앱 fallback 꺼짐): 접은 화면 종목 카드 날짜 줄 끝 ' · AI가 쓴 글'. 여기서 한 번 읽어 카드에 넘긴다. 꺼지면 지금 그대로
+  const aiTag = useFeature("briefingSafeWording", false);
+  // 브리핑 2차 2 (플래그 briefingCompactTop, 앱 fallback 꺼짐): 접은 화면 맨 위 시장 요약·계좌 카드 → 넓은 창 줄 모양 두 줄(계좌 먼저)과 안내 한 줄,
+  // 넓은 창도 계좌 줄을 위로. 여기서 한 번 읽어 줄에 속성으로 넘긴다. 꺼지면 지금 그대로
+  const compactTop = useFeature("briefingCompactTop", false);
+  // 브리핑 2차 3 (플래그 moversMerge, 앱 fallback 꺼짐): '변동 큰 종목' 카드 → 목록 1~3위 순위 + 계좌 카드·줄의 기여 상위 묶음. 꺼지면 지금 그대로
+  const moversMerge = useFeature("moversMerge", false);
   // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약이 켜져 있으면 그것도)을 함께
   const { pulling, onPull } = usePull(() => Promise.all([refetch(), stocks.refetch(), ...(accountOn ? [accounts.refetch()] : []), ...(summaryOn ? [summaries.refetch()] : [])]));
   const [order, setOrder] = useState<Order>("movers");
@@ -91,6 +105,11 @@ export default function BriefingsScreen() {
   useEffect(() => {
     if (wide) scrolledTo.current = null;
   }, [wide]);
+  // 브리핑 2차 4 (trim): 보이는 시장 요약이 한국 휴장을 이미 말하는지 (한국 요약 · 성공 · 휴장) — 그러면 접은 화면 탭 휴장 줄을 숨긴다 (같은 말 두 번 방지)
+  const summarySaysKrHoliday = summary?.status === "ok" && summary.data?.market === "KR" && !!summary.data.holiday;
+  // 브리핑 2차 3: '합치기 가능' = moversMerge 켬 + 계좌 브리핑이 있고 성공(headline 있음) + 기여 상위가 비어 있지 않음.
+  // 아니면 접은 화면은 예전 '변동 큰 종목' 카드 그대로 (넓은 창 2단의 기준 줄 옮기기는 계좌 브리핑과 상관없이 moversMerge 만 본다)
+  const merge = moversMerge && account?.status === "ok" && !!account.headline && account.headline.top.length > 0;
 
   // 17종목 × 약 25초: 누르기 전에 한 번 묻는다 (3-19, 플래그를 끄면 예전처럼 바로)
   const confirmRun = (session: BriefingSession) => {
@@ -227,8 +246,12 @@ export default function BriefingsScreen() {
         accountSettled={!accountOn || accounts.data !== undefined || accounts.isError}
         market={summary}
         marketSettled={!summaryOn || summaries.data !== undefined || summaries.isError}
-        holiday={wideHoliday}
-        criterion={movers ? "변동 큰 순 = 전일 대비 등락률 크기 순 · 매매 권유가 아닙니다" : null}
+        trim={trim}
+        compactTop={compactTop}
+        criterionTop={moversMerge}
+        // 브리핑 2차 2 (compactTop): 시장 줄이 한국 휴장을 이미 말하면 목록 위 안내에서 휴장 글을 뺀다 (같은 말 두 번 방지)
+        holiday={compactTop && summarySaysKrHoliday ? null : wideHoliday}
+        criterion={movers ? CRITERION : null}
         ratesFail={ratesFailText}
         banner={banner}
         manual={manual}
@@ -254,14 +277,60 @@ export default function BriefingsScreen() {
     scrolledTo.current = hlId;
     scrollRef.current?.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - space.xl), animated: false });
   };
+  // 브리핑 2차 3 (합치기 가능 + 변동 큰 순): '변동 큰 종목' 카드 대신 목록 1~3위 카드에 순위 네모, 순위 1 바로 위에 기준 줄 한 번
+  const ranked = merge && movers;
+  const rankOf = (i: (typeof withBriefing)[number]) => {
+    const n = ranked ? top.indexOf(i) + 1 : 0;
+    return n > 0 ? { rank: n } : {};
+  };
+  // 브리핑 2차 2 (compactTop): 맨 위 묶음 — 계좌 줄 → 시장 줄 → 안내 한 줄을 틈 없는 한 덩어리로 (Screen 의 gap 이 줄 사이에 끼지 않게).
+  // 줄은 넓은 창 줄처럼 화면 가장자리까지, 줄 아래 구분선으로 나뉜다. 누르면 지금 카드처럼 전체 화면 상세
+  const topNote = account && summary ? "시장·계좌 요약은 숫자로 만든 것 · 매매 권유가 아닙니다" : account ? "계좌 요약은 숫자로 만든 것 · 매매 권유가 아닙니다" : "시장 요약은 숫자로 만든 것 · 매매 권유가 아닙니다";
+  const compactBlock =
+    compactTop && (account || summary) ? (
+      <View>
+        {account ? (
+          <AccountBriefingRow
+            briefing={account}
+            role="link"
+            selected={hl?.kind === "account" && hl.id === account.id}
+            onPress={() => router.push(`/briefings/account/${account.id}`)}
+            trim={trim}
+            holidayLines
+            contributors={merge}
+          />
+        ) : null}
+        {summary ? (
+          <MarketSummaryRow
+            summary={summary}
+            role="link"
+            selected={hl?.kind === "market" && hl.id === summary.id}
+            onPress={() => router.push(`/briefings/market/${summary.id}`)}
+            trim={trim}
+            holidayLine
+            holdBig
+          />
+        ) : null}
+        <Muted style={styles.topNote}>{topNote}</Muted>
+      </View>
+    ) : null;
   return (
     <Screen disclaimer refreshing={pulling} onRefresh={onPull} top={<StaleBanner query={latest} {...guideProps} />} {...(hlId !== null ? { scrollRef } : {})}>
       {head}
-      {summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} /> : null}
-      {account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} /> : null}
+      {compactBlock}
+      {!compactTop && summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} trim={trim} /> : null}
+      {!compactTop && account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} trim={trim} contributors={merge} /> : null}
       {banner}
-      {krHoliday ? <Muted style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>한국 휴장일 · 국내 종목 브리핑 없음{market.data?.KR.opensAt ? ` · 다음 개장 ${formatDateKo(market.data.KR.opensAt, true)}` : ""}</Muted> : null}
-      {movers && top.length > 0 ? (
+      {/* 탭 휴장 줄. trim(브리핑 2차 4)이면 '국내 종목 브리핑 없음'(틀린 말 — 목록에 직전 거래일 국내 브리핑이 있음) 대신 등락 기준을 밝히고(넓은 창 문구와 같게),
+          보이는 시장 요약이 한국 휴장을 이미 말하면 숨긴다. 한국 휴장일 아침('밤사이 미국' 요약)·요약 꺼짐·없음·실패면 남긴다.
+          compactTop(브리핑 2차 2)이면 시장 줄이 한국 휴장을 말할 때 trim 과 상관없이 숨긴다 (넓은 창과 같은 규칙) */}
+      {krHoliday && !((trim || compactTop) && summarySaysKrHoliday) ? (
+        <Muted style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>
+          {trim ? "한국 휴장일 · 국내 종목은 직전 거래일 등락" : "한국 휴장일 · 국내 종목 브리핑 없음"}
+          {market.data?.KR.opensAt ? ` · 다음 개장 ${formatDateKo(market.data.KR.opensAt, true)}` : ""}
+        </Muted>
+      ) : null}
+      {movers && top.length > 0 && !merge ? (
         <Card>
           <SectionTitle>변동 큰 종목</SectionTitle>
           {top.map((i) => (
@@ -302,6 +371,8 @@ export default function BriefingsScreen() {
         value={mode}
         onChange={setMode}
       />
+      {/* 브리핑 2차 3: 기준 줄은 보기 탭과 첫 카드(순위 1) 사이에 한 번 */}
+      {ranked && withBriefing.length > 0 ? <Muted style={styles.criterion}>{CRITERION}</Muted> : null}
       {items.length === 0 ? (
         (guideEmpty?.none ?? <Empty title="등록된 종목이 없습니다" hint="잔고 탭에서 종목을 추가하세요." />)
       ) : withBriefing.length === 0 ? (
@@ -309,7 +380,7 @@ export default function BriefingsScreen() {
       ) : (
         withBriefing.map((i) => {
           const selected = hlId !== null && i.latest!.id === hlId;
-          const card = <BriefingCard key={i.code} briefing={i.latest!} mode={mode} rate={movers ? (rates.get(i.code) ?? null) : undefined} selected={selected} />;
+          const card = <BriefingCard key={i.code} briefing={i.latest!} mode={mode} rate={movers ? (rates.get(i.code) ?? null) : undefined} selected={selected} aiTag={aiTag} {...rankOf(i)} />;
           return selected ? (
             <View key={i.code} onLayout={onHighlightLayout}>
               {card}
@@ -345,6 +416,12 @@ interface WideProps {
   market: MarketSummary | undefined;
   /** 시장 요약 목록을 알고 있는지 (꺼짐·받음·못 받음) */
   marketSettled: boolean;
+  /** 브리핑 2차 4 (플래그 briefingTrim): 계좌 줄 배지·화면 읽기, 시장 줄 화면 읽기의 업종 말 */
+  trim: boolean;
+  /** 브리핑 2차 2 (플래그 briefingCompactTop): 계좌 줄을 시장 줄 위로, 두 줄에 휴장 줄 */
+  compactTop: boolean;
+  /** 브리핑 2차 3 (플래그 moversMerge): 2단 목록의 기준 줄을 목록 끝 → 첫 줄 바로 위로 (카드 격자는 이미 목록 위 안내에 있어 그대로) */
+  criterionTop: boolean;
   /** 목록 위 안내: 휴장 (넓은 창용 짧은 문구) */
   holiday: string | null;
   /** 변동 큰 순의 기준·매매 권유 아님 ('변동 큰 종목' 카드 대신). 2단은 목록 아래, 카드 격자는 목록 위 안내에 */
@@ -496,6 +573,27 @@ function WideBriefings(p: WideProps) {
   const notice = p.twoPane ? noticeOf([p.holiday, p.ratesFail]) : noticeOf([p.holiday, p.criterion, p.ratesFail]);
 
   if (p.twoPane) {
+    // 목록 맨 위 두 줄 (2단: 누르면 오른쪽 칸). compactTop(브리핑 2차 2)이면 두 줄에 휴장 줄 — 넓은 창 계좌 줄에는 기여 상위를 넣지 않는다 (2단 첫 화면 줄 수를 지키려고)
+    const marketRowPane = p.market ? (
+      <MarketSummaryRow
+        summary={p.market}
+        role="button"
+        selected={sel?.kind === "market" && sel.id === p.market.id}
+        onPress={() => chooseBriefing({ kind: "market", id: p.market!.id })}
+        trim={p.trim}
+        holidayLine={p.compactTop}
+      />
+    ) : null;
+    const accountRowPane = p.account ? (
+      <AccountBriefingRow
+        briefing={p.account}
+        role="button"
+        selected={sel?.kind === "account" && sel.id === p.account.id}
+        onPress={() => chooseBriefing({ kind: "account", id: p.account!.id })}
+        trim={p.trim}
+        holidayLines={p.compactTop}
+      />
+    ) : null;
     const left = (
       <View style={[styles.listPane, { backgroundColor: t.surface }]}>
         <View style={[styles.listHead, { borderBottomColor: t.line }]}>
@@ -508,23 +606,18 @@ function WideBriefings(p: WideProps) {
           </View>
         </View>
         {notice}
-        {p.market ? (
-          <MarketSummaryRow summary={p.market} role="button" selected={sel?.kind === "market" && sel.id === p.market.id} onPress={() => chooseBriefing({ kind: "market", id: p.market!.id })} />
-        ) : null}
-        {p.account ? (
-          <AccountBriefingRow
-            briefing={p.account}
-            role="button"
-            selected={sel?.kind === "account" && sel.id === p.account.id}
-            onPress={() => chooseBriefing({ kind: "account", id: p.account!.id })}
-          />
-        ) : null}
+        {/* 브리핑 2차 2 (compactTop): 계좌 줄이 시장 줄 위 (꺼지면 지금처럼 시장 줄 먼저) */}
+        {p.compactTop ? null : marketRowPane}
+        {accountRowPane}
+        {p.compactTop ? marketRowPane : null}
         <ScrollView
           style={styles.fill}
           contentContainerStyle={styles.listContent}
           refreshControl={<RefreshControl refreshing={p.pulling} onRefresh={p.onPull} tintColor={t.muted} colors={[t.accent]} progressBackgroundColor={t.surface} />}
         >
           {p.banner}
+          {/* 브리핑 2차 3 (moversMerge): 기준 줄을 순위 1 바로 위로 (목록과 함께 스크롤) */}
+          {p.criterionTop && p.criterion && !emptyView ? <Muted style={[styles.criterion, styles.criterionTop]}>{p.criterion}</Muted> : null}
           {emptyView ??
             p.list.map((i) => (
               <BriefingRow
@@ -539,7 +632,7 @@ function WideBriefings(p: WideProps) {
               />
             ))}
           <View style={styles.listFoot}>
-            {p.criterion && !emptyView ? <Muted style={styles.criterion}>{p.criterion}</Muted> : null}
+            {p.criterion && !emptyView && !p.criterionTop ? <Muted style={styles.criterion}>{p.criterion}</Muted> : null}
             {p.manual}
             {p.missingNote}
           </View>
@@ -575,6 +668,26 @@ function WideBriefings(p: WideProps) {
   const inner = (gridW ?? winW) - 2 * space.md;
   const cols = gridColumns(inner, fontScale, { minW: L.briefCardMinW, gap: space.sm, max: FB.cardMaxCols, cap: fontCap.row });
   const cardW = Math.floor((inner - (cols - 1) * space.sm) / cols);
+  const marketRowGrid = p.market ? (
+    <MarketSummaryRow
+      summary={p.market}
+      role="link"
+      selected={hl?.kind === "market" && hl.id === p.market.id}
+      onPress={() => router.push(`/briefings/market/${p.market!.id}`)}
+      trim={p.trim}
+      holidayLine={p.compactTop}
+    />
+  ) : null;
+  const accountRowGrid = p.account ? (
+    <AccountBriefingRow
+      briefing={p.account}
+      role="link"
+      selected={hl?.kind === "account" && hl.id === p.account.id}
+      onPress={() => router.push(`/briefings/account/${p.account!.id}`)}
+      trim={p.trim}
+      holidayLines={p.compactTop}
+    />
+  ) : null;
   return (
     <WideFrame rail={p.rail}>
       <Screen disclaimer refreshing={p.pulling} onRefresh={p.onPull} top={p.stale}>
@@ -590,12 +703,10 @@ function WideBriefings(p: WideProps) {
             ) : null}
           </View>
           {notice}
-          {p.market ? (
-            <MarketSummaryRow summary={p.market} role="link" selected={hl?.kind === "market" && hl.id === p.market.id} onPress={() => router.push(`/briefings/market/${p.market!.id}`)} />
-          ) : null}
-          {p.account ? (
-            <AccountBriefingRow briefing={p.account} role="link" selected={hl?.kind === "account" && hl.id === p.account.id} onPress={() => router.push(`/briefings/account/${p.account!.id}`)} />
-          ) : null}
+          {/* 브리핑 2차 2 (compactTop): 계좌 줄이 시장 줄 위 (꺼지면 지금처럼 시장 줄 먼저) */}
+          {p.compactTop ? null : marketRowGrid}
+          {accountRowGrid}
+          {p.compactTop ? marketRowGrid : null}
         </View>
         {p.banner}
         {emptyView ?? (
@@ -626,6 +737,9 @@ function WideBriefings(p: WideProps) {
 /** 변동 큰 종목 한 줄(글자 약 19 + 위아래 6) — 100% 배치는 그대로, 누르는 영역만 44 로 */
 const TOP_ROW_SLOP = slopFor(31);
 
+/** 변동 큰 순의 기준·매매 권유 아님 ('변동 큰 종목' 카드 대신 — 넓은 창 목록 위·아래, 브리핑 2차 3 이면 접은 화면 순위 1 바로 위) */
+const CRITERION = "변동 큰 순 = 전일 대비 등락률 크기 순 · 매매 권유가 아닙니다";
+
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   listPane: { flex: 1 },
@@ -635,6 +749,10 @@ const styles = StyleSheet.create({
   listContent: { paddingBottom: space.xl },
   listFoot: { gap: space.sm, paddingTop: space.sm },
   criterion: { paddingHorizontal: space.lg, fontSize: font.tiny },
+  // 2단 목록 첫 줄 위 기준 줄 (브리핑 2차 3): 목록 줄과 붙지 않게 위아래 조금
+  criterionTop: { paddingVertical: space.xs },
+  // 접은 화면 맨 위 묶음 끝 안내 한 줄 (브리핑 2차 2)
+  topNote: { fontSize: font.tiny, paddingHorizontal: space.lg, paddingTop: space.s },
   tool: { minHeight: FB.listHeadH, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, paddingHorizontal: space.md },
 });

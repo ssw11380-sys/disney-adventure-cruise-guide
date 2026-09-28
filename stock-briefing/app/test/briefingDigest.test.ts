@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildDigest, byMove, DEFAULT_PREFS, inQuietHours, planNotifications, quietWarnings } from "@/lib/briefingDigest";
+import { buildDigest, byMove, DEFAULT_PREFS, digestSettingNote, inQuietHours, krPreviousDayLine, planNotifications, quietWarnings } from "@/lib/briefingDigest";
 import { estimateText, orderForTab, runConfirm, sessionSeconds } from "@/lib/briefingRun";
 
 const item = (code: string, changeRate: number | null, session: "morning" | "afternoon" = "afternoon", date = "2026-09-24") => ({
@@ -95,5 +96,31 @@ describe("설정 경고 (3-19 리뷰)", () => {
     expect(sessionSeconds(17)).toBe(18 * 25);
     expect(sessionSeconds(1)).toBe(50);
     expect(sessionSeconds(0)).toBe(0);
+  });
+});
+
+describe("브리핑 2차 4 (플래그 briefingTrim): 설정 알림 설명·휴장 날짜 줄", () => {
+  const OLD = "브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (종목 수와 변동 큰 2종목)";
+
+  it("설정 알림 설명: 꺼짐·계좌 브리핑 끔이면 예전 글, 켬이면 지금 알림 모양대로 (시장 요약 켬/끔)", () => {
+    expect(digestSettingNote({ trim: false, account: true, market: true })).toBe(OLD);
+    expect(digestSettingNote({ trim: true, account: false, market: true })).toBe(OLD);
+    expect(digestSettingNote({ trim: true, account: true, market: true })).toBe("브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (제목: 계좌 당일 손익 · 본문: 시장 요약 한 줄, 기여 1·2위, 변동 큰 2종목)");
+    expect(digestSettingNote({ trim: true, account: true, market: false })).toBe("브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (제목: 계좌 당일 손익 · 본문: 기여 1·2위, 변동 큰 2종목)");
+  });
+
+  it("설정 카드는 digestSettingNote 로 설명을 만들고 옛 글을 직접 쓰지 않는다 (카드는 네이티브 모듈을 불러와 그리지 않고 파일로 본다)", () => {
+    const src = readFileSync(new URL("../src/components/NotificationSettingsCard.tsx", import.meta.url), "utf8");
+    expect(src).toContain("digestSettingNote(");
+    expect(src).not.toContain(OLD);
+    expect(src).not.toContain("(종목 수와 변동 큰 2종목)");
+    expect(src).toMatch(/useFeature\("briefingTrim", false\)/);
+    expect(src).toMatch(/useFeature\("accountBriefing", false\)/);
+    expect(src).toMatch(/useFeature\("marketSummary", false\)/);
+  });
+
+  it("화면의 한국 휴장 줄에 브리핑 날짜: '9/25(금) 한국 휴장 · 국내 종목은 직전 거래일 등락' (월요일에 금요일 브리핑이 남아도 맞는 말)", () => {
+    expect(krPreviousDayLine("2026-09-25")).toBe("9/25(금) 한국 휴장 · 국내 종목은 직전 거래일 등락");
+    expect(krPreviousDayLine("2026-10-09")).toBe("10/9(금) 한국 휴장 · 국내 종목은 직전 거래일 등락");
   });
 });

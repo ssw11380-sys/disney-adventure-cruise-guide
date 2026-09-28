@@ -49,6 +49,11 @@ describe("투자 권유 금지 문구", () => {
     expect(hits).toEqual([]);
   });
 
+  it("AI 가 쓴 글에 사실이 아닌 표시('숫자는 코드가 넣음' 같은 말)를 붙이지 않는다 — 주석 포함 0건 (브리핑 2차 6)", () => {
+    const hits = targets.filter((f) => /코드가\s*(넣|계산|만)/.test(readFileSync(f, "utf8"))).map((f) => f.slice(ROOT.length));
+    expect(hits).toEqual([]);
+  });
+
   it("분석·브리핑 프롬프트마다 매수/매도 지시 금지 규칙이 있다", () => {
     const prompts = files(join(ROOT, "backend/prompts"), [".md"]).filter((f) => !f.endsWith("README.md"));
     expect(prompts.length).toBeGreaterThanOrEqual(5);
@@ -58,6 +63,10 @@ describe("투자 권유 금지 문구", () => {
 
 describe("고지 문구", () => {
   it("앱 공통 고지 문구가 그대로다", () => expect(read("app/src/lib/disclaimer.ts")).toContain(`DISCLAIMER = "${DISCLAIMER}"`));
+  it("종목 브리핑 'AI가 쓴 글' 표시 문구 (브리핑 2차 6)", () => {
+    expect(read("app/src/lib/disclaimer.ts")).toContain('AI_NOTE = "AI가 쓴 글 · 틀릴 수 있음"');
+    expect(read("app/src/lib/disclaimer.ts")).toContain('AI_TAG = "AI가 쓴 글"');
+  });
   it("위젯 고지 한 줄은 권유가 아님을 밝힌다", () => expect(read("app/src/lib/disclaimer.ts")).toMatch(/DISCLAIMER_SHORT = ".*투자 권유가 아닙니다"/));
   it("서버 고지 문구가 앱과 같다", () => expect(read("backend/src/app.ts")).toContain(`DISCLAIMER = "${DISCLAIMER}"`));
   it("설정 화면에 고지가 있다", () => expect(read("app/src/app/(tabs)/settings.tsx")).toContain(DISCLAIMER));

@@ -57,6 +57,8 @@ import { MUTED_LH, SegText, Words } from "./MarketSummaryCard";
  */
 export function MarketSummaryBody({ numId, layout, title }: { numId: number | null; layout: BodyLayout; title?: (s: MarketSummary) => React.ReactNode }) {
   const on = useFeature("marketSummary", false); // 새 기능: 서버가 켤 때만
+  // 브리핑 2차 4 (플래그 briefingTrim, 앱 fallback 꺼짐): 업종 말을 부호로, '내 보유 종목과 지수' 머리의 되풀이 줄 빼기. 꺼지면 지금 그대로
+  const trim = useFeature("briefingTrim", false);
   const flags = useFeatures();
   const q = useMarketSummary(numId ?? 0, on && numId !== null);
   // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
@@ -87,7 +89,7 @@ export function MarketSummaryBody({ numId, layout, title }: { numId: number | nu
   const view = viewState(q);
   if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} /></Screen>;
   if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
-  return <SummaryView s={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} />;
+  return <SummaryView s={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} />;
 }
 
 /**
@@ -108,7 +110,7 @@ interface Fit {
   scale: number;
 }
 
-function SummaryView({ s, top, layout, title }: { s: MarketSummary; top: React.ReactNode; layout: BodyLayout; title?: (s: MarketSummary) => React.ReactNode }) {
+function SummaryView({ s, top, layout, title, trim }: { s: MarketSummary; top: React.ReactNode; layout: BodyLayout; title?: (s: MarketSummary) => React.ReactNode; trim: boolean }) {
   const t = useTheme();
   const now = new Date(useNow(60_000));
   const win = useWindowDimensions();
@@ -141,8 +143,8 @@ function SummaryView({ s, top, layout, title }: { s: MarketSummary; top: React.R
       </Screen>
     );
   }
-  const summary = <SummaryLinesCard d={d} now={now} />;
-  const holdings = <HoldingsCard d={d} fit={fit} />;
+  const summary = <SummaryLinesCard d={d} now={now} trim={trim} />;
+  const holdings = <HoldingsCard d={d} fit={fit} trim={trim} />;
   const rest = (
     <>
       <IndicesCard d={d} fit={fit} />
@@ -181,10 +183,10 @@ function SummaryView({ s, top, layout, title }: { s: MarketSummary; top: React.R
   );
 }
 
-/** 요약 5~6줄 (카드와 같은 줄 — 볼 때 날짜로 '오늘/밤사이') */
-function SummaryLinesCard({ d, now }: { d: MarketSummaryData; now: Date }) {
+/** 요약 5~6줄 (카드와 같은 줄 — 볼 때 날짜로 '오늘/밤사이'). trim(briefingTrim)이면 업종 말을 부호로 */
+function SummaryLinesCard({ d, now, trim }: { d: MarketSummaryData; now: Date; trim: boolean }) {
   const t = useTheme();
-  const lines = summarySegLines(d, now);
+  const lines = summarySegLines(d, now, trim ? { signWords: true } : {});
   return (
     <Card>
       <View accessible accessibilityLabel={lines.map((l) => speakText(l.segs.map((x) => x.text).join(""))).join(". ")} style={{ gap: space.xs }}>
@@ -205,15 +207,16 @@ const colW = (w: number, scale: number) => Math.round(w * scale);
 
 /**
  * 내 보유 종목과 지수: 높음·비슷·낮음으로 묶은 표 (종목 | 등락률 | 비교 지수 | 차이 %p).
- * 칸이 좁거나 글자가 크면(이름 칸이 nameMinW 보다 좁아짐) 비교 지수를 종목 이름 아래 줄로 내린 3칸 표 (holdingsTableMode)
+ * 칸이 좁거나 글자가 크면(이름 칸이 nameMinW 보다 좁아짐) 비교 지수를 종목 이름 아래 줄로 내린 3칸 표 (holdingsTableMode).
+ * trim(briefingTrim)이면 머리 첫 줄('미국 12종목 · 지수보다 높음 2 (…)' — 바로 위 요약 줄과 같은 말)을 빼고 둘째 줄만
  */
-function HoldingsCard({ d, fit }: { d: MarketSummaryData; fit: Fit }) {
+function HoldingsCard({ d, fit, trim }: { d: MarketSummaryData; fit: Fit; trim: boolean }) {
   const t = useTheme();
   const [width, onLayout] = useMeasuredWidth(fit.guess);
   const mode = holdingsTableMode(width, fit.scale);
   const h = d.holdings;
   const us = d.market === "US";
-  const segs = holdingsSegs(d, { mine: false });
+  const segs = trim ? null : holdingsSegs(d, { mine: false });
   const aux = h && h.compared > 0 ? holdingsAuxSegs(h) : null;
   // 머리 두 줄('미국 12종목 · 지수보다 높음 2 (…)' · '내 미국 12종목: 상승 8 · 하락 4 / 나스닥 +0.48% · …')은 화면 읽기 한 칸 — 기호는 말로 ('+3.18%p' → '3.18%포인트 높음')
   const headSpeech = [segs, aux].filter((x): x is Seg[] => !!x).map((x) => speakText(x.map((s) => s.text).join(""))).join(". ");

@@ -2,7 +2,7 @@ import type { QuoteSession } from "../domain/types.js";
 import { isKrCode } from "../lib/codes.js";
 import { knownTradingDays, type MarketState, type MarketStatus } from "../providers/market/calendar.js";
 import type { StockSessionFacts } from "../providers/market/tossRealtime.js";
-import { US_HOLIDAYS, usRegularCloseMinutes } from "./marketContext.js";
+import { krRegularHours, US_HOLIDAYS, usRegularCloseMinutes } from "./marketContext.js";
 
 /**
  * 종목 하나의 "지금 거래 세션"과 초록 점(실시간) 판단 — 순수 함수 (단위 테스트: test/liveSession.test.ts).
@@ -15,6 +15,8 @@ import { US_HOLIDAYS, usRegularCloseMinutes } from "./marketContext.js";
  *   · 15:20~15:30 동시호가 · 15:30~15:40 장 마감 · 15:40~16:00 NXT 애프터마켓(NXT 대상만 — 한국거래소는 시간외 종가라 가격이 안 바뀜)
  *   · 16:00~20:00 애프터마켓(한국거래소 애프터마켓 2026-09-14~ + NXT. 한국거래소는 ETF·ETN·관리·투자경고 종목 등이 빠지고 목록이 없어,
  *     NXT 종목은 대상, ETF·ETN 은 아님, 그 밖은 모름 → 이 세션에 체결이 있었던 종목만)
+ *   수능일·새해 첫 거래일(marketContext KR_SPECIAL_HOURS)은 정규장 개장·마감이 옮겨진 만큼 앞뒤 경계도 옮기고,
+ *   그날 NXT·애프터마켓 운영 시간은 공지로 확인하지 못해 그 세션들은 "대상"을 모름으로 낮춘다(체결이 있었던 종목만)
  * 미국 (뉴욕 시각·서머타임. 정규장 거래일은 토스 달력 → 없으면 US_HOLIDAYS)
  *   전날 20:00~04:00 주간거래(토스 주간거래 대상만, 다음 날이 정규장인 밤만) · 04:00~09:30 프리마켓
  *   · 09:30~마감 정규장 · 마감~마감+4시간 애프터마켓(보통 16:00~20:00, 조기 폐장 13:00 이면 17:00 까지) — 프리·정규·애프터는 모든 종목
@@ -144,6 +146,7 @@ function krSession(t: number, calendar: MarketStatus | null | undefined, stock: 
   const { day, known } = krTradingDay(date, cal);
   if (!day) return closed("holiday", iso(nextKrOpen(t, date, cal)));
   if (m < KR_NXT_PRE) return closed("closed", at(KR_NXT_PRE));
+  const h = krRegularHours(date);
   const halted = stock?.halted === true;
   const nxtHalted = halted || stock?.nxtHalted === true;
   // NXT 대상: 토스 stock-infos(nxtSupported) → 없으면 토스 시세의 거래소 구분(integrated = KRX+NXT, krx = KRX 만) → 모름
@@ -166,6 +169,7 @@ function krSession(t: number, calendar: MarketStatus | null | undefined, stock: 
       until: at(to),
     };
   };
+  if (h.reason) return krSpecialDay(m, h, open, closed, at, () => iso(nextKrOpen(t, date, cal)));
   if (m < KR_OPEN_AUCTION) return open("nxt_pre", KR_NXT_PRE, KR_OPEN_AUCTION);
   if (m < KR_REGULAR) return closed("auction", at(KR_REGULAR));
   if (m < KR_CLOSE_AUCTION) return open("regular", KR_REGULAR, KR_CLOSE_AUCTION);
@@ -174,6 +178,34 @@ function krSession(t: number, calendar: MarketStatus | null | undefined, stock: 
   if (m < KR_KRX_AFTER) return open("nxt_after", KR_NXT_AFTER, KR_KRX_AFTER);
   if (m < KR_END) return open("after", KR_KRX_AFTER, KR_END);
   return closed("closed", iso(nextKrOpen(t, date, cal)));
+}
+
+/**
+ * 한국 정규장 시각이 평소와 다른 날(수능일 10:00~16:30, 새해 첫 거래일 10:00~15:30 — krRegularHours).
+ * 아침 경계는 개장이 늦어진 만큼(s1), 오후 경계는 마감이 늦어진 만큼(s2) 옮긴다:
+ *   NXT 프리 08:00~08:50+s1 · 동시호가 ~개장 · 정규장 개장~마감−10분 · 마감 동시호가 ~마감 · 장 마감 ~15:40+s2 · NXT 애프터 ~16:00+s2 · 애프터마켓 ~20:00
+ * 그날 NXT·애프터마켓 운영 시간은 공지로 확인하지 못했다 → 하루 내내 NXT 프리·NXT 애프터·애프터마켓의 "대상"(true)을 모름(null)으로 낮춘다
+ * (이 세션에 체결이 있었던 종목만 점). 정규장은 그대로 대상, 대상이 아닌 종목(KRX 전용·거래정지)은 그대로 아님
+ */
+function krSpecialDay(
+  m: number,
+  h: { open: number; close: number },
+  open: (phase: KrOpenPhase, from: number, to: number) => StockSession,
+  closed: (phase: "closed" | "auction", until: string) => StockSession,
+  at: (min: number) => string,
+  nextOpen: () => string,
+): StockSession {
+  const s1 = h.open - KR_REGULAR;
+  const s2 = h.close - KR_REGULAR_END;
+  const unsure = (s: StockSession): StockSession => (s.eligible === true ? { ...s, eligible: null } : s);
+  if (m < KR_OPEN_AUCTION + s1) return unsure(open("nxt_pre", KR_NXT_PRE, KR_OPEN_AUCTION + s1));
+  if (m < h.open) return closed("auction", at(h.open));
+  if (m < h.close - 10) return open("regular", h.open, h.close - 10);
+  if (m < h.close) return closed("auction", at(h.close));
+  if (m < KR_NXT_AFTER + s2) return closed("closed", at(KR_NXT_AFTER + s2));
+  if (m < KR_KRX_AFTER + s2) return unsure(open("nxt_after", KR_NXT_AFTER + s2, KR_KRX_AFTER + s2));
+  if (m < KR_END) return unsure(open("after", KR_KRX_AFTER + s2, KR_END));
+  return closed("closed", nextOpen());
 }
 
 // ── 미국 ──────────────────────────────────────────────────────────

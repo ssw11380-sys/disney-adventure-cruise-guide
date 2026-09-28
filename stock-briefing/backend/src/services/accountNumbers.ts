@@ -1,8 +1,8 @@
-import { formatRate, formatWon, KR_PREVIOUS_DAY_LINE, US_PREVIOUS_DAY_LINE } from "../notifications/digest.js";
+import { formatRate, formatWon, KR_PREVIOUS_DAY_LINE, US_PREVIOUS_DAY_LINE, usHolidayWhen, usPreviousDayLine } from "../notifications/digest.js";
 import type { MarketStatus } from "../providers/market/calendar.js";
 import type { MarketIndex } from "../providers/market/indices.js";
 import { seoulDate } from "../lib/time.js";
-import { isKrTradingDate, isUsTradingDate, marketContext } from "./marketContext.js";
+import { isKrTradingDate, isUsTradingDate, krRegularHours, marketContext, usRegularCloseMinutes } from "./marketContext.js";
 import type { Evaluation } from "./stockService.js";
 
 /**
@@ -144,9 +144,14 @@ export interface AccountData extends AccountTotals {
   krPreviousDay?: boolean;
   /**
    * 지난밤(이번 브리핑이 보는) 미국 정규장이 평일 휴장(추수감사절 등)이었는데 미국 보유 종목이 있음 → 미국 종목의 등락·당일 손익은
-   * 그 전 거래일 것이라 이미 앞 브리핑에 담긴 움직임이다. 요약·알림·설명에 밝힌다. 예전 기록에는 없다(없으면 false)
+   * 그 전 거래일 것이라 이미 앞 브리핑에 담긴 움직임이다. 금요일에 쉰 다음 월요일도 같다. 요약·알림·설명에 밝힌다. 예전 기록에는 없다(없으면 false)
    */
   usPreviousDay?: boolean;
+  /**
+   * 쉰 미국 정규장의 뉴욕 날짜 (YYYY-MM-DD, usPreviousDay 가 참일 때만). 브리핑 날짜의 전날이면 '지난밤', 아니면(금요일 휴장 다음 월요일)
+   * '12/25(금)'처럼 날짜로 밝힌다. 예전 기록에는 없다(없으면 '지난밤')
+   */
+  usHolidayDate?: string;
 }
 
 /** 오늘 한국 휴장인데 국내 보유분이 있는지 (국내 등락이 직전 거래일 것인지) */
@@ -176,14 +181,28 @@ export function usLastSessionDate(now: Date): string {
 }
 
 /**
- * 지난밤 미국 정규장이 평일 휴장(추수감사절·독립기념일 등)이었는데 미국 보유분이 있는지 → 미국 등락이 그 전 거래일 것(이미 앞 브리핑에 담긴 움직임).
- * 주말은 뺀다 (월요일 오전의 금요일 등락은 주말 동안 처음 보는 움직임이라 따로 밝히지 않는다)
+ * 이번 브리핑이 보는 미국 정규장이 쉰 날(뉴욕 날짜). usLastSessionDate 에서 시작해 토·일이면 금요일까지 거슬러 올라가,
+ * 그 날이 미국 휴장일이면 그 날짜, 아니면 null. 평일 휴장은 거슬러 올라가지 않는다(그 날짜가 답).
+ * 예) 2026-12-28(월) 오전·오후 → 12/27(일) → 12/25(금) 성탄절 휴장 → "2026-12-25". 11/27(금) 오전 → "2026-11-26"(추수감사절)
+ */
+export function usSkippedSession(now: Date): string | null {
+  let d = usLastSessionDate(now);
+  for (let i = 0; i < 2; i++) {
+    const wd = new Date(`${d}T12:00:00Z`).getUTCDay();
+    if (wd !== 0 && wd !== 6) break;
+    const x = new Date(`${d}T12:00:00Z`);
+    x.setUTCDate(x.getUTCDate() - 1);
+    d = x.toISOString().slice(0, 10);
+  }
+  return isUsTradingDate(d) ? null : d;
+}
+
+/**
+ * 이번 브리핑이 보는 미국 정규장이 휴장(추수감사절·독립기념일 등)이었는데 미국 보유분이 있는지 → 미국 등락이 그 전 거래일 것(이미 앞 브리핑에 담긴 움직임).
+ * 금요일에 쉰 다음 월요일(오전·오후)도 참이다 — 월요일의 미국 몫은 목요일 움직임이라 금요일 아침 브리핑에 이미 담겼다 (usSkippedSession)
  */
 export function usPreviousDay(now: Date, totals: Pick<AccountTotals, "markets">): boolean {
-  if (totals.markets.us === null) return false;
-  const d = usLastSessionDate(now);
-  const wd = new Date(`${d}T12:00:00Z`).getUTCDay();
-  return wd >= 1 && wd <= 5 && !isUsTradingDate(d);
+  return totals.markets.us !== null && usSkippedSession(now) !== null;
 }
 
 /** 상위 몇 종목까지 따로 보여 주는지 (나머지는 '그 외 N종목') */
@@ -193,6 +212,18 @@ export const ACCOUNT_INDEX_CODES = ["KOSPI", "KOSDAQ", "NASDAQ", "SPX"] as const
 export const BASIS =
   "총 평가금액은 수수료·세금 예상액을 뺀 값(앱 기본 설정), 당일 손익은 전일 대비 등락 × 수량이며 미국 종목은 적용 환율로 원화 환산(앱 잔고 화면과 같음). 환율 효과는 원/달러 전일 대비 변동으로 따로 계산해 당일 손익에 넣지 않음";
 export const KR_HOURS = "정규장 09:00~15:30 · 넥스트레이드 08:00~20:00";
+
+/** 자정부터 분 → "HH:MM" */
+const hhmm = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+
+/**
+ * 오늘 일정의 한국 시간 (서울 날짜). 평소는 KR_HOURS 그대로, 수능일·새해 첫 거래일(krRegularHours 의 reason)은 '정규장 10:00~16:30 (수능일)'.
+ * 특수일의 넥스트레이드 시간은 그날 공지를 확인하지 못해 적지 않는다
+ */
+export function krHoursText(date: string): string {
+  const h = krRegularHours(date);
+  return h.reason ? `정규장 ${hhmm(h.open)}~${hhmm(h.close)} (${h.reason})` : KR_HOURS;
+}
 
 const sum = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0);
 const round2 = (x: number) => Math.round(x * 100) / 100;
@@ -400,9 +431,13 @@ export function usSessionDate(now: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** 미국 정규장(09:30~16:00 ET)을 한국 시간으로: "정규장 9/25 22:30~9/26 05:00 (한국 시간)". 조기 폐장은 반영하지 않는다 */
-export function usRegularKst(nyDate: string): string {
-  return `정규장 ${kstShort(nyWall(nyDate, 9, 30))}~${kstShort(nyWall(nyDate, 16, 0))} (한국 시간)`;
+/**
+ * 미국 정규장(09:30~마감 ET)을 한국 시간으로: "정규장 9/25 22:30~9/26 05:00 (한국 시간)".
+ * 마감(closeMinutes, 뉴욕 자정부터 분)이 16:00 이 아니면(조기 폐장 13:00) 끝에 ' · 조기 폐장'
+ */
+export function usRegularKst(nyDate: string, closeMinutes = 16 * 60): string {
+  const early = closeMinutes !== 16 * 60 ? " · 조기 폐장" : "";
+  return `정규장 ${kstShort(nyWall(nyDate, 9, 30))}~${kstShort(nyWall(nyDate, Math.floor(closeMinutes / 60), closeMinutes % 60))} (한국 시간)${early}`;
 }
 
 /** 오늘 일정: 한국·미국 장 운영(달력·휴장 목록)과 지금 상태, 종목 브리핑이 받아 둔 최근 공시 */
@@ -417,10 +452,10 @@ export function buildSchedule(status: MarketStatus | null, now: Date, disclosure
       date,
       tradingDay: krTrading,
       now: marketContext("005930", status, now).label,
-      hours: krTrading ? KR_HOURS : null,
+      hours: krTrading ? krHoursText(date) : null,
       nextOpen: krTrading ? null : (status?.KR.opensAt ?? null),
     },
-    us: { date: usDate, tradingDay: usTrading, now: marketContext("AAPL", status, now).label, hours: usTrading ? usRegularKst(usDate) : null },
+    us: { date: usDate, tradingDay: usTrading, now: marketContext("AAPL", status, now).label, hours: usTrading ? usRegularKst(usDate, usRegularCloseMinutes(usDate, status?.US ?? null)) : null },
     disclosures,
   };
 }
@@ -445,13 +480,15 @@ export function leaders(d: { dayPnl: number; contributions: readonly AccountRow[
 
 /**
  * 알림·카드용 요약 두 줄 (코드로 만든다 — 숫자가 늘 맞게). 오늘 한국 휴장이면 국내 등락이, 지난밤 미국 평일 휴장이면 미국 등락이
- * 직전 거래일 것임을 다음 줄에 밝힌다
+ * 직전 거래일 것임을 다음 줄에 밝힌다. 미국 휴장일이 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) '12/25(금) 미국 휴장 …'.
+ * date 가 없으면 예전 문구(US_PREVIOUS_DAY_NOTE)
  */
-export function summaryText(d: AccountTotals & { krPreviousDay?: boolean; usPreviousDay?: boolean }): string {
+export function summaryText(d: AccountTotals & { krPreviousDay?: boolean; usPreviousDay?: boolean; date?: string; usHolidayDate?: string }): string {
   const top = leaders(d)[0];
   const line1 = `당일 ${won(d.dayPnl)}${d.dayRate !== null ? ` (${formatRate(d.dayRate)})` : ""}${top ? ` · 기여 1위 ${top.name} ${won(top.amount)}` : ""}`;
   const line2 = `총 평가금액 ${won(d.totalValue, false)}${d.fx.status === "computed" ? ` · 환율 효과 ${won(d.fx.fxEffect!)}` : ""}`;
-  return [line1, line2, ...(d.krPreviousDay ? [KR_PREVIOUS_DAY_NOTE] : []), ...(d.usPreviousDay ? [US_PREVIOUS_DAY_NOTE] : [])].join("\n");
+  const usLine = d.date ? usPreviousDayLine(d.date, d.usHolidayDate) : US_PREVIOUS_DAY_NOTE;
+  return [line1, line2, ...(d.krPreviousDay ? [KR_PREVIOUS_DAY_NOTE] : []), ...(d.usPreviousDay ? [usLine] : [])].join("\n");
 }
 
 function contributionLine(r: AccountRow, rank: number): string {
@@ -488,7 +525,7 @@ export function factsText(d: AccountData): string {
   lines.push(`- 총 평가금액: ${won(d.totalValue, false)} (보유 ${d.holdings}종목${d.stale ? `, 시세 지연 ${d.stale}종목` : ""})`);
   lines.push(`- 당일 손익: ${won(d.dayPnl)}${d.dayRate !== null ? ` (${formatRate(d.dayRate)})` : ""}`);
   if (d.krPreviousDay) lines.push("- 참고: 오늘 한국은 휴장이라 국내 종목의 등락률과 당일 손익은 직전 거래일 것입니다(앱 잔고 화면과 같은 기준)");
-  if (d.usPreviousDay) lines.push("- 참고: 지난밤 미국은 휴장이라 미국 종목의 등락률과 당일 손익은 직전 거래일 것입니다(앞 브리핑에 이미 담긴 움직임, 앱 잔고 화면과 같은 기준)");
+  if (d.usPreviousDay) lines.push(`- 참고: ${usHolidayWhen(d.date, d.usHolidayDate)} 미국은 휴장이라 미국 종목의 등락률과 당일 손익은 직전 거래일 것입니다(앞 브리핑에 이미 담긴 움직임, 앱 잔고 화면과 같은 기준)`);
   lines.push(`- 누적 평가손익: ${won(d.totalProfit)}${d.totalProfitRate !== null ? ` (${formatRate(d.totalProfitRate)})` : ""}`);
   const m: string[] = [];
   if (d.markets.kr) m.push(`국내 보유분 ${d.markets.kr.count}종목 ${won(d.markets.kr.day)}${d.markets.kr.dayRate !== null ? ` (${formatRate(d.markets.kr.dayRate)})` : ""}`);
@@ -516,7 +553,7 @@ export function templateNarrative(d: AccountData): string {
   const top = leaders(d)[0];
   out.push(`- ${SESSION_KO[d.session]} 기준 당일 손익은 ${won(d.dayPnl)}${d.dayRate !== null ? `(${formatRate(d.dayRate)})` : ""}입니다.${top ? ` 가장 크게 기여한 종목은 ${top.name}(${won(top.amount)})입니다.` : ""}`);
   if (d.krPreviousDay) out.push("- 오늘 한국은 휴장이라 국내 종목의 당일 손익은 직전 거래일 등락입니다.");
-  if (d.usPreviousDay) out.push("- 지난밤 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).");
+  if (d.usPreviousDay) out.push(`- ${usHolidayWhen(d.date, d.usHolidayDate)} 미국은 휴장이라 미국 종목의 당일 손익은 직전 거래일 등락입니다(앞 브리핑에 이미 담긴 움직임).`);
   if (d.contributions.length > 1 || d.others) {
     const listed = d.contributions.map((r) => `${r.name} ${won(r.amount)}`).join(", ");
     out.push(`- 기여 순서: ${listed}${d.others ? `, 그 외 ${d.others.count}종목 ${won(d.others.amount)}` : ""}.`);
@@ -917,7 +954,7 @@ function withFinal(f: number): string {
   return Array.from({ length: 19 * 21 }, (_, k) => String.fromCharCode(0xac00 + k * 28 + f)).join("");
 }
 /** 받침이 ㄹ 인 글자 ('할·될·오를·흔들릴·달라질') */
-const RIEUL_FINAL = withFinal(8);
+export const RIEUL_FINAL = withFinal(8);
 /** 받침이 ㅂ 인 글자 ('합시다·늘립시다'의 '합·립') */
 const BIEUP_FINAL = withFinal(17);
 /** 받침이 ㅆ 인 글자 ('었·았·였·했·됐·났·컸·있…' — 과거형과 '있다'). '겠'(추측)은 뺀다 */
@@ -1030,7 +1067,7 @@ const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
  * 금지어가 사실 목록에 그대로 있는 더 긴 말(공시 제목 '주식매수선택권부여에관한신고'·'공개매수신고서'·종목 이름)의 일부면 넘어간다.
  * 금지어 앞뒤로 빈칸 없이 붙은 글자를 한 자씩 늘려 가며 사실에 있는지 보고, 2자 이상 늘어나면 옮겨 쓴 것으로 본다
  */
-function forbiddenIn(text: string, facts: string, re: RegExp = FORBIDDEN): string | null {
+export function forbiddenIn(text: string, facts: string, re: RegExp = FORBIDDEN): string | null {
   for (const m of text.matchAll(re)) {
     let s = m.index!;
     let e = s + m[0].length;

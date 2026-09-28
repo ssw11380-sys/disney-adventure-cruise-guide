@@ -20,6 +20,8 @@
 |---|---|---|
 | `briefing_detail.md` | 오전/오후 상세 브리핑 | `{{stock_name}}` `{{stock_code}}` `{{session_label}}` `{{date}}` `{{avg_price}}` `{{quantity}}` `{{data_json}}` `{{missing_list}}` `{{notes_list}}` `{{market_state}}` `{{previous_summary}}` |
 | `briefing_summary.md` | 상세 브리핑을 3줄 요약 (알림 본문) | `{{stock_name}}` `{{stock_code}}` `{{session_label}}` `{{date}}` `{{detail}}` `{{market_state}}` |
+| `briefing_detail_safe.md` | 오전/오후 상세 브리핑 — 플래그 `briefingSafeWording` 이 켜졌을 때 (브리핑 2차 6: 해석·평가·전망·지지/저항·체크포인트 없이 사실만. 데이터에서 지지·저항 후보·RSI 구간 이름·MACD 교차 이름을 뺌. 걸린 줄은 서버 검사가 뺌) | `briefing_detail.md` 와 같음 |
+| `briefing_summary_safe.md` | 요약 둘째 줄(사실 한 줄) — 플래그 `briefingSafeWording` 이 켜졌을 때. 첫 줄(가격·등락률)은 서버가 시세로 만들어 붙임 | `briefing_summary.md` 와 같음 |
 | `company_overview.md` | 종목 상세 > 회사 소개 | `{{stock_name}}` `{{stock_code}}` `{{date}}` `{{data_json}}` `{{missing_list}}` `{{notes_list}}` |
 | `value_analysis.md` | 종목 상세 > 가치투자 분석 | `{{stock_name}}` `{{stock_code}}` `{{date}}` `{{data_json}}` `{{missing_list}}` `{{notes_list}}` |
 | `technical_analysis.md` | 종목 상세 > 기술적 분석 | `{{stock_name}}` `{{stock_code}}` `{{date}}` `{{data_json}}` `{{missing_list}}` `{{notes_list}}` `{{market_state}}` |

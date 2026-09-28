@@ -11,6 +11,9 @@ import { fileURLToPath } from "node:url";
 export type PromptName =
   | "briefing_detail"
   | "briefing_summary"
+  // 브리핑 2차 6 (플래그 briefingSafeWording): 평가 꼬리표·지지/저항·체크포인트 없는 사실 정리
+  | "briefing_detail_safe"
+  | "briefing_summary_safe"
   | "company_overview"
   | "value_analysis"
   | "technical_analysis"

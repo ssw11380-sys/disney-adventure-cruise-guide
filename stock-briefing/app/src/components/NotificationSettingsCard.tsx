@@ -2,8 +2,8 @@ import { DateTimePickerAndroid } from "@react-native-community/datetimepicker";
 import * as Notifications from "expo-notifications";
 import React, { useEffect, useState } from "react";
 import { Alert, Platform, Pressable, StyleSheet, Text, View } from "react-native";
-import { useApi, useNotificationMutations, useNotificationSettings, useRegisteredStocks } from "@/api/hooks";
-import { quietWarnings } from "@/lib/briefingDigest";
+import { useApi, useFeature, useNotificationMutations, useNotificationSettings, useRegisteredStocks } from "@/api/hooks";
+import { digestSettingNote, quietWarnings } from "@/lib/briefingDigest";
 import { sessionSeconds } from "@/lib/briefingRun";
 import { briefingTrigger, disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
@@ -35,6 +35,11 @@ export function NotificationSettingsCard() {
   const stocks = useRegisteredStocks(showMuted);
   // 조용한 시간 안내는 세션이 끝나는 예상 시각까지 본다 — 서버가 다 만든 시각으로 판단한다 (BH-58). 종목 수를 모르면 시작 시각만
   const runSeconds = sessionSeconds(stocks.data?.length ?? 0);
+  // 알림 묶음 설명 (브리핑 2차 4, 플래그 briefingTrim): 켜져 있으면 지금 알림 모양대로(계좌 브리핑·시장 요약 플래그에 맞춰), 꺼져 있으면 예전 글
+  const trim = useFeature("briefingTrim", false);
+  const accountOn = useFeature("accountBriefing", false);
+  const marketOn = useFeature("marketSummary", false);
+  const digestNote = digestSettingNote({ trim, account: accountOn, market: marketOn });
 
   useEffect(() => {
     let alive = true;
@@ -217,7 +222,7 @@ export function NotificationSettingsCard() {
                     );
                   })
                 : null}
-              <Muted style={{ fontSize: font.tiny }}>브리핑 알림은 오전·오후마다 1건으로 묶어 보냅니다 (종목 수와 변동 큰 2종목)</Muted>
+              <Muted style={{ fontSize: font.tiny }}>{digestNote}</Muted>
             </>
           ) : null}
           {s.schedule?.jobs.map((j) => (

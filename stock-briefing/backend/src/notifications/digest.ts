@@ -28,6 +28,8 @@ export interface DigestAccount {
   krPreviousDay?: boolean;
   /** 지난밤 미국 평일 휴장이라 미국 종목의 등락이 직전 거래일 것(앞 브리핑에 담긴 움직임) → 본문에 한 줄로 밝힌다 */
   usPreviousDay?: boolean;
+  /** 쉰 미국 정규장의 뉴욕 날짜 (YYYY-MM-DD, usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) 줄에 날짜를 적는다 */
+  usHolidayDate?: string;
 }
 
 /**
@@ -51,6 +53,28 @@ export interface DigestMarket {
 export const KR_PREVIOUS_DAY_LINE = "오늘 한국 휴장 · 국내 종목은 직전 거래일 등락";
 /** 지난밤 미국 평일 휴장일 때 붙이는 한 줄 (accountNumbers.US_PREVIOUS_DAY_NOTE 와 같다. 앱 briefingDigest 도 같은 문구) */
 export const US_PREVIOUS_DAY_LINE = "지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락";
+
+const WEEKDAY_KO = "일월화수목금토";
+/** "12/25(금)" (marketSummaryCalc 의 mdw 와 같은 모양 — 그 파일이 이 파일을 불러오므로 여기에 따로 둔다) */
+const monthDayWeekday = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}(${WEEKDAY_KO[new Date(`${date}T12:00:00Z`).getUTCDay()]})`;
+/** 달력 전날 YYYY-MM-DD */
+const dayBefore = (date: string) => {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
+/** 미국 휴장 앞말: 휴장일이 없거나 브리핑 날짜(서울)의 달력 전날이면 '지난밤', 아니면 '12/25(금)' (앱 briefingDigest 와 같다) */
+export function usHolidayWhen(briefingDate: string, holidayDate?: string | null): string {
+  if (!holidayDate || holidayDate === dayBefore(briefingDate)) return "지난밤";
+  return monthDayWeekday(holidayDate);
+}
+
+/** '지난밤 미국 휴장 · 미국 종목은 직전 거래일 등락'(= US_PREVIOUS_DAY_LINE) 또는 '12/25(금) 미국 휴장 · 미국 종목은 직전 거래일 등락' */
+export function usPreviousDayLine(briefingDate: string, holidayDate?: string | null): string {
+  const when = usHolidayWhen(briefingDate, holidayDate);
+  return when === "지난밤" ? US_PREVIOUS_DAY_LINE : `${when} 미국 휴장 · 미국 종목은 직전 거래일 등락`;
+}
 
 export interface QuietHours {
   quietEnabled: boolean;
@@ -130,7 +154,7 @@ function accountDigest(session: "morning" | "afternoon", date: string, items: Di
   if (top.length) lines.push(top.map((t, i) => `${i === 0 ? "기여 1위" : "2위"} ${t.name} ${formatWon(t.amount)}`).join(" · "));
   // 첫 줄이 같은 시장의 휴장을 이미 말하면 예전 휴장 줄은 뺀다 (다른 시장의 휴장 줄은 남긴다 — 9/24 아침은 첫 줄이 미국이라 한국 휴장 줄을 둔다)
   if (a.krPreviousDay && !(market?.market === "KR" && market.holiday)) lines.push(KR_PREVIOUS_DAY_LINE);
-  if (a.usPreviousDay && !(market?.market === "US" && market.holiday)) lines.push(US_PREVIOUS_DAY_LINE);
+  if (a.usPreviousDay && !(market?.market === "US" && market.holiday)) lines.push(usPreviousDayLine(date, a.usHolidayDate));
   const ranked = byMove(items);
   if (items.length) {
     const movers = ranked.filter((i) => i.changeRate !== null).slice(0, 2);
