@@ -35,3 +35,6 @@ export function useAccountView(): AccountView {
 
 /** 주인 아닌 계정 안내 문구 (잔고·브리핑 탭 맨 위) */
 export const MEMBER_NOTICE = "개인 종목 기능은 준비 중이에요 — 시장·종목 정보는 지금 볼 수 있어요";
+
+/** 주인 아닌 계정의 브리핑 탭 빈 칸 (종목을 추가하라는 말·버튼 없이) */
+export const MEMBER_EMPTY_BRIEFINGS = { title: "종목 브리핑은 준비 중이에요", hint: "내 종목을 담는 기능이 열리면 여기에 종목마다 브리핑이 쌓여요." } as const;

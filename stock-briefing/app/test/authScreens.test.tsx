@@ -357,6 +357,31 @@ describe("설정 '계정' 칸 · 주인 아닌 계정 안내 · 처음 비밀번
     expect(render(<MemberNotice />).tree).toEqual([]);
   });
 
+  it("이메일 등록·변경: 지금 비밀번호를 함께 넣어야 하고 서버에 둘 다 보낸다 (세션만으로는 못 바꾸게). 틀리면 비밀번호 칸 아래에", async () => {
+    await saveSession({ apiUrl: SERVER, token: "gzs1_o", remember: true, user: { ...OWNER, usingInitialPassword: false } });
+    const r = render(<AccountCard />);
+    r.act(() => (byTitle(r, "이메일 등록").props.onPress as () => void)());
+    expect(r.byLabel("지금 비밀번호").props.secureTextEntry).toBe(true);
+    typeIn(r, "이메일", "me@example.com");
+    press(r, "이메일 저장");
+    expect(r.text()).toContain("지금 비밀번호를 넣어 주세요");
+    expect(h.api.changeEmail).not.toHaveBeenCalled();
+    typeIn(r, "지금 비밀번호", "0000");
+    h.api.changeEmail!.mockRejectedValueOnce(apiErr(400, "BAD_CURRENT_PASSWORD", { code: "bad_current_password", message: "지금 비밀번호가 맞지 않아요", fields: { current: "bad_current_password" } }));
+    press(r, "이메일 저장");
+    await settle(r);
+    expect(h.api.changeEmail).toHaveBeenLastCalledWith("me@example.com", "0000");
+    expect(r.text()).toContain("지금 비밀번호가 맞지 않아요");
+    typeIn(r, "지금 비밀번호", "1111");
+    h.api.changeEmail!.mockResolvedValueOnce({ user: { ...OWNER, email: "me@example.com", usingInitialPassword: false } });
+    press(r, "이메일 저장");
+    await settle(r);
+    expect(h.api.changeEmail).toHaveBeenLastCalledWith("me@example.com", "1111");
+    expect(sessionFor(SERVER)?.user.email).toBe("me@example.com");
+    // 저장하면 칸을 닫고 넣은 비밀번호를 남기지 않는다
+    expect(r.all().some((n) => n.props.accessibilityLabel === "지금 비밀번호")).toBe(false);
+  });
+
   it("모든 기기에서 로그아웃: 확인 창 뒤 서버에 알리고(주인은 알림 등록부터 빼고) 세션을 지운다. 서버에 닿지 않으면 지우지 않는다", async () => {
     await saveSession({ apiUrl: SERVER, token: "gzs1_o", remember: true, user: { ...OWNER, usingInitialPassword: false } });
     const unregister = vi.fn(async () => undefined);

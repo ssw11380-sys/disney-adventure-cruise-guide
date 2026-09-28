@@ -1,5 +1,5 @@
 import * as Device from "expo-device";
-import { router } from "expo-router";
+import { router, useIsFocused } from "expo-router";
 import React, { useRef, useState } from "react";
 import { AccessibilityInfo, type TextInput } from "react-native";
 import { useApi } from "@/api/hooks";
@@ -20,8 +20,18 @@ import { authLayout, space, touch } from "@/tokens";
  *  - 성공하면 세션을 저장하고 루트가 앱으로 넘긴다. 처음 비밀번호(1111)면 들어간 뒤 바꾸기 권유를 한 번
  *  - 예전 서버(로그인 주소가 없음, 404)면 로그인 없이 지금처럼 들어간다 (fail-open)
  */
+/** 회원가입·서버 설정이 위에 올라와 로그인 화면이 가려졌는지 — 그림 숨쉬기를 멈춘다 (내비게이션 밖 — 테스트 — 에서는 보이는 것으로) */
+function useCovered(): boolean {
+  try {
+    return !useIsFocused();
+  } catch {
+    return false;
+  }
+}
+
 export default function LoginScreen() {
   const api = useApi();
+  const covered = useCovered();
   const { apiUrl } = useSettings();
   const [loginId, setLoginId] = useState("");
   const [password, setPassword] = useState("");
@@ -64,7 +74,7 @@ export default function LoginScreen() {
   };
 
   return (
-    <AuthFrame top="hero" footer={<AuthLink title="서버 설정" icon="settings-outline" onPress={() => router.push("/server")} />}>
+    <AuthFrame top="hero" covered={covered} footer={<AuthLink title="서버 설정" icon="settings-outline" onPress={() => router.push("/server")} />}>
       {ended && !err ? <AuthNotice tone="info" text={AUTH_TEXT.sessionEnded} /> : null}
       <AuthField
         label="아이디"

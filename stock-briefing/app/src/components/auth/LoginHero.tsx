@@ -1,6 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
-import React, { memo, useEffect, useId, useMemo, useRef, useState } from "react";
-import { AccessibilityInfo, Animated, AppState, Easing, Platform, Pressable, StyleSheet, View } from "react-native";
+import React, { memo, useEffect, useId, useMemo, useState } from "react";
+import { AccessibilityInfo, Animated, AppState, Easing, Platform, StyleSheet, View } from "react-native";
 import { Defs, Ellipse, LinearGradient as SvgLinearGradient, Line, RadialGradient, Rect, Stop, Svg } from "react-native-svg";
 import {
   BREATH_MS,
@@ -18,7 +18,7 @@ import {
   type Track,
 } from "@/lib/loginHero";
 import { authColors as C, authLayout } from "@/tokens";
-import { AuthLogo, GoldWordmark, LogoSubtitle } from "./AuthParts";
+import { GoldWordmark, LogoSubtitle } from "./AuthParts";
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────
@@ -30,9 +30,11 @@ import { AuthLogo, GoldWordmark, LogoSubtitle } from "./AuthParts";
  *  interpolate(시간표 lib/loginHero heroTracks)로 opacity·transform(translate·scale)만 잇는다. 프레임마다 JS 일 없음, SVG 속성은 움직이지 않는다.
  *  (reanimated 는 1.4.0 APK 에서 한 번도 쓰지 않아 OTA 로 처음 쓰지 않는다 — hero-spec 7.1)
  *
- *  - 앱을 켠 뒤 처음 보일 때 한 번 재생, 그 뒤(로그아웃 뒤 등)에는 마지막 장면 + 숨쉬기. 그림을 누르면 한 번 다시 재생
- *  - '애니메이션 줄이기'(안드로이드 애니메이션 삭제 포함)면 처음부터 마지막 장면에 멈춤 — 숨쉬기·다시 재생도 없음
- *  - 키보드가 떠 그림을 접으면(layout.collapsed) 로고 한 줄만 (재생 중이었으면 마지막 장면으로), 앱이 뒤로 가면 숨쉬기를 멈춘다
+ *  - 앱을 켠 뒤 처음 보일 때 한 번 재생, 그 뒤(로그아웃 뒤 등)에는 마지막 장면 + 숨쉬기. 눌러도 다시 재생하지 않는다
+ *    (한 번 잘못 누르면 로고·봉이 한순간에 사라졌다가 3.7초 뒤에야 돌아와서 — 검증 지적)
+ *  - '애니메이션 줄이기'(안드로이드 애니메이션 삭제 포함)면 처음부터 마지막 장면에 멈춤 — 숨쉬기도 없음
+ *  - paused(키보드가 떠 그림이 위로 밀려남 · 회원가입·서버 설정이 위에 올라와 가려짐): 숨쉬기를 멈춘다. 재생 중이면 끝까지 둔다 (그림은 그대로 — 뛰지 않게)
+ *  - 앱이 뒤로 가면 숨쉬기를 멈추고, 재생 중이었으면 마지막 장면으로
  *  - 크기가 바뀌면(접기·펴기) 자리만 다시 계산하고 마지막 장면으로
  *  - at(ms): 그 순간에 멈춘 그림 (테스트·화면 캡처용). animate={false}: 마지막 장면에 멈춘 그림 (회원가입 두 칸 화면)
  * ─────────────────────────────────────────────────────────────────────────────
@@ -90,9 +92,11 @@ export interface LoginHeroProps {
   animate?: boolean;
   /** 이 순간(ms)에 멈춘 그림 — 테스트·캡처용 */
   at?: number;
+  /** 키보드가 떠 그림이 밀려났거나 다른 화면이 위에 올라와 가려졌을 때 — 숨쉬기를 멈춘다 (재생 중이면 끝까지 둔다) */
+  paused?: boolean;
 }
 
-export const LoginHero = memo(function LoginHero({ layout, logo = true, animate = true, at: frozenAt }: LoginHeroProps) {
+export const LoginHero = memo(function LoginHero({ layout, logo = true, animate = true, at: frozenAt, paused = false }: LoginHeroProps) {
   const key = layoutKey(layout);
   // 같은 배치면 장면·움직임 노드를 다시 만들지 않는다 (입력할 때마다 화면이 다시 그려져도 시계에 붙은 노드는 그대로)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,93 +106,51 @@ export const LoginHero = memo(function LoginHero({ layout, logo = true, animate 
   const [breath] = useState(() => new Animated.Value(0));
   const reduce = useReduceMotion(still === null);
   const active = useAppActive(still === null);
-  const [replayTick, setReplayTick] = useState(0);
-  const replayWanted = useRef(false);
-  const playing = useRef(false);
-  const collapsed = layout.collapsed;
+  /** 마지막 장면에 닿았는지 (그 뒤에만 숨쉰다). 이번 실행에서 이미 재생했으면 처음부터 마지막 장면 */
+  const [done, setDone] = useState(() => introPlayed);
 
+  // 처음 한 번 재생. 움직임 줄이기·앱이 뒤로·크기 바뀜(접기·펴기)이면 마지막 장면으로 (paused 는 보지 않는다 — 키보드가 떠도 재생은 끝까지)
   useEffect(() => {
     if (still !== null) {
       clock.setValue(still);
-      breath.setValue(0);
       return;
     }
     if (reduce === null) return;
-    if (reduce || collapsed || !active) {
-      // 멈춘 마지막 장면 (움직임 줄이기 · 키보드로 접힘 · 앱이 뒤에)
+    if (reduce || !active || introPlayed) {
       clock.setValue(HERO_MS);
-      breath.setValue(0);
       return;
     }
+    introPlayed = true;
     let alive = true;
-    const runs: Animated.CompositeAnimation[] = [];
-    const breathe = () => {
-      if (!alive) return;
-      breath.setValue(0);
-      const b = Animated.loop(Animated.timing(breath, { toValue: 1, duration: BREATH_MS, easing: Easing.linear, useNativeDriver: NATIVE, isInteraction: false }));
-      runs.push(b);
-      b.start();
-    };
-    const replay = replayWanted.current;
-    replayWanted.current = false;
-    if (replay || !introPlayed) {
-      introPlayed = true;
-      playing.current = true;
-      clock.setValue(0);
-      breath.setValue(0);
-      const intro = Animated.timing(clock, {
-        toValue: HERO_MS,
-        duration: HERO_MS,
-        delay: replay ? 0 : HERO_START_DELAY_MS,
-        easing: Easing.linear,
-        useNativeDriver: NATIVE,
-        isInteraction: false,
-      });
-      runs.push(intro);
-      intro.start(({ finished }) => {
-        if (!alive) return;
-        playing.current = false;
-        if (finished) breathe();
-      });
-    } else {
-      clock.setValue(HERO_MS);
-      breathe();
-    }
+    clock.setValue(0);
+    const intro = Animated.timing(clock, { toValue: HERO_MS, duration: HERO_MS, delay: HERO_START_DELAY_MS, easing: Easing.linear, useNativeDriver: NATIVE, isInteraction: false });
+    intro.start(({ finished }) => {
+      if (alive && finished) setDone(true);
+    });
     return () => {
+      // 도중에 끊기면(움직임 줄이기·앱이 뒤로·크기 바뀜) 다음 실행이 마지막 장면으로 둔다 → 숨쉬기를 할 수 있게
       alive = false;
-      playing.current = false;
-      for (const r of runs) r.stop();
+      intro.stop();
+      setDone(true);
     };
-  }, [still, reduce, collapsed, active, replayTick, key, clock, breath]);
+  }, [still, reduce, active, key, clock]);
 
-  const onReplay = () => {
-    if (still !== null || reduce !== false || collapsed || playing.current) return;
-    replayWanted.current = true;
-    setReplayTick((n) => n + 1);
-  };
+  // 숨쉬기: 마지막 장면 뒤, 보이는 동안만 (움직임 줄이기·가려짐·키보드·앱이 뒤면 멈추고 밝기 1 로)
+  useEffect(() => {
+    if (still !== null || reduce !== false || !done || paused || !active) return;
+    breath.setValue(0);
+    const b = Animated.loop(Animated.timing(breath, { toValue: 1, duration: BREATH_MS, easing: Easing.linear, useNativeDriver: NATIVE, isInteraction: false }));
+    b.start();
+    return () => {
+      b.stop();
+      breath.setValue(0);
+    };
+  }, [still, reduce, done, paused, active, breath]);
 
   return (
-    <View style={{ width: layout.heroW, height: layout.heroH, overflow: "visible", zIndex: 0 }} testID="login-hero">
-      {collapsed ? null : (
-        // 그림을 누르면 한 번 다시 재생. 꾸밈이라 화면 읽기에서는 이 누르는 곳을 건너뛴다 (안의 로고 머리글은 읽힘)
-        <Pressable
-          onPress={onReplay}
-          accessible={false}
-          importantForAccessibility="no"
-          accessibilityRole="none"
-          accessibilityLabel="첫 화면 그림 (누르면 다시 재생)"
-          style={[StyleSheet.absoluteFill, { overflow: "visible" }]}
-          testID="login-hero-replay"
-        >
-          <HeroArt scene={scene} clock={clock} breath={breath} />
-          {logo ? <HeroLogo scene={scene} clock={clock} /> : null}
-        </Pressable>
-      )}
-      {collapsed && logo ? (
-        <View style={{ position: "absolute", left: layout.logoX, top: layout.logoY }}>
-          <AuthLogo size={layout.logoSize} subtitle={false} />
-        </View>
-      ) : null}
+    <View style={{ width: layout.heroW, height: layout.heroH, overflow: "visible", zIndex: 0, pointerEvents: "box-none" }} testID="login-hero">
+      <HeroArt scene={scene} clock={clock} breath={breath} />
+      {logo ? <HeroLogo scene={scene} clock={clock} /> : null}
     </View>
   );
 });
@@ -205,6 +167,7 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
     const breathe = breath.interpolate({ inputRange: [...BREATH.input], outputRange: [...BREATH.output] });
     return {
       grid: at(clock, TRACKS.grid),
+      gridLead: at(clock, TRACKS.gridLead),
       glow: Animated.multiply(at(clock, TRACKS.glow), breathe),
       side: scene.side.map((c, i) => {
         const tr = TRACKS.side[i]!;
@@ -267,7 +230,33 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
           <Line x1={scene.baseline.x1} x2={scene.baseline.x2} y1={scene.baseline.y} y2={scene.baseline.y} stroke={C.baseline} strokeWidth={1} />
         </Svg>
       </Animated.View>
-      {/* 불기둥: 마지막 세 봉 위 세로 타원 (아래 기준으로 자란다) */}
+      {/* 로고 옆 눈금의 왼쪽 부분: 로고가 나타나기 전에는 줄이 그림 칸 왼쪽 끝부터 이어지고, 로고가 나타나는 동안 사라진다 (끝 40dp 는 오른쪽 부분과 겹쳐 옅어짐) */}
+      {scene.grid.some((g) => g.lead) ? (
+        <Animated.View testID="hero-grid-lead" style={{ position: "absolute", left: 0, top: 0, width: L.heroW, height: H, opacity: nodes.gridLead }}>
+          <Svg width={L.heroW} height={H}>
+            <Defs>
+              {scene.grid.map((g, i) =>
+                g.lead ? (
+                  <SvgLinearGradient key={i} id={`${uid}lead${i}`} x1={g.x1} y1={0} x2={g.lead.x2} y2={0} gradientUnits="userSpaceOnUse">
+                    <Stop offset="0" stopColor={C.gridLine} stopOpacity={C.gridOpacity} />
+                    <Stop offset="1" stopColor={C.gridLine} stopOpacity={0} />
+                  </SvgLinearGradient>
+                ) : null,
+              )}
+            </Defs>
+            {scene.grid.map((g, i) =>
+              g.lead ? (
+                <React.Fragment key={`l${i}`}>
+                  <Line x1={g.lead.x1} x2={g.x1} y1={g.y} y2={g.y} stroke={C.grid} strokeWidth={1} />
+                  <Line x1={g.x1} x2={g.lead.x2} y1={g.y} y2={g.y} stroke={ref(`lead${i}`)} strokeWidth={1} />
+                </React.Fragment>
+              ) : null,
+            )}
+          </Svg>
+        </Animated.View>
+      ) : null}
+      {/* 불기둥: 마지막 세 봉 위 세로 타원 (아래 기준으로 자란다). 크림색 뜨거운 가운데는 마지막 불기둥에만 — 옅은 두 불꽃에 두면
+          어두운 붉은 빛 위에서 회색·보라 얼룩처럼 보였다 (검증 지적) */}
       {scene.flames.map((f, i) => (
         <Animated.View
           key={`f${i}`}
@@ -278,7 +267,7 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
           <Svg width={2 * f.rx} height={2 * f.ry}>
             <Defs>
               <RadialGradient id={`${uid}flame${i}`} cx="50%" cy="58%" r="50%">
-                <Stop offset="0" stopColor={C.flameCore} stopOpacity={0.5} />
+                <Stop offset="0" stopColor={i === scene.flames.length - 1 ? C.flameCore : C.flame} stopOpacity={0.5} />
                 <Stop offset="0.2" stopColor={C.flame} stopOpacity={0.55} />
                 <Stop offset="0.55" stopColor={C.flameHot} stopOpacity={0.22} />
                 <Stop offset="1" stopColor={C.flameHot} stopOpacity={0} />

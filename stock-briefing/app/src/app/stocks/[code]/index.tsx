@@ -32,6 +32,7 @@ import { sentence, speakMove, speakRate } from "@/lib/a11y";
 import { haptic } from "@/lib/haptics";
 import { removeConfirm } from "@/lib/rowActions";
 import { useSettingsGuide } from "@/lib/settingsLink";
+import { useAccountView } from "@/lib/account";
 import { useUx } from "@/lib/uxFlags";
 import { usePriceAlerts } from "@/lib/priceAlertContext";
 import { alertButtonA11y, alertButtonText } from "@/lib/priceAlerts";
@@ -88,6 +89,8 @@ export default function StockDetailScreen() {
   const ux = useUx();
   // 가격 알림 (3-29, 플래그 priceAlerts): 루트 제공자가 정한 문맥 하나만 읽는다 (제공자가 없거나 꺼져 있으면 on 거짓 — 지금 화면 그대로)
   const alerts = usePriceAlerts();
+  // 계정 A단계 (플래그 accounts): 주인 아닌 계정 — 관심 추가 버튼을 두지 않는다 (꺼져 있으면 늘 false — 지금 화면 그대로)
+  const { member } = useAccountView();
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏). 이 화면은 루트 스택 위라 설정 탭까지 닫고 간다 (lib/settingsLink)
   const guideProps = useSettingsGuide();
   // 스크롤하면 머리에 현재가 (휴대폰·접은 화면, oneHand): 시세 머리의 가격 줄 아래 끝(스크롤 안 위치)을 재어 두고,
@@ -245,8 +248,10 @@ export default function StockDetailScreen() {
   // 업종 자리표시('-')는 뺀다 (2026-09-26 버그 수정 — lib/detailText)
   const { title: name, alias } = detailNames(s.name, s.code, q?.fullName);
   const industry = realText(q?.industry);
-  // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가
+  // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가.
+  // 계정 A단계: 주인 아닌 계정은 관심 추가 버튼을 두지 않는다 (개인 종목 기능은 다음 단계 — 서버가 막아 '실패' 창만 떴다)
   const unregistered = s.registered === false;
+  const canWatch = !member;
   const subtitle = detailSubtitle({ code: s.code, market: s.market, industry, status: unregistered ? "미등록" : s.quantity ? null : "관심", alias });
   const addWatch = () => {
     if (adding) return;
@@ -393,8 +398,8 @@ export default function StockDetailScreen() {
       ai
     );
   // 3-24 아래 막대 왼쪽 버튼: 미등록 → 관심 추가, 관심(수량 없음) → 관심 해제(토스 종목은 동기화 제외), 보유 → 보유 수정
-  const barStar: BarStar = unregistered ? { kind: "watch", busy: adding } : s.quantity ? { kind: "edit" } : { kind: "unwatch", label: removeConfirm(s).confirm };
-  const onBarStar = () => (barStar.kind === "watch" ? addWatch() : barStar.kind === "unwatch" ? unwatch() : router.push(`/stocks/${c}/edit`));
+  const barStar: BarStar | null = unregistered ? (canWatch ? { kind: "watch", busy: adding } : null) : s.quantity ? { kind: "edit" } : { kind: "unwatch", label: removeConfirm(s).confirm };
+  const onBarStar = () => (!barStar ? undefined : barStar.kind === "watch" ? addWatch() : barStar.kind === "unwatch" ? unwatch() : router.push(`/stocks/${c}/edit`));
   // 가격 알림 (3-29, 플래그 priceAlerts): 등록 종목에서만 (체결 스트림이 등록 종목만 보낸다). 거짓이면 속성을 아예 넘기지 않는다 (지금 화면과 같게)
   const alertOn = alerts.on && !unregistered;
   const alertCount = alerts.rules.filter((r) => r.code === c).length;
@@ -429,7 +434,7 @@ export default function StockDetailScreen() {
                   star={barStar}
                   onStar={onBarStar}
                   onChart={openChart}
-                  {...(alertOn ? { alert: { count: alertCount, label: alertBarLabel(win.width, win.fontScale, barStarText(barStar), alertButtonText(alertCount)), onPress: openAlerts } } : null)}
+                  {...(alertOn ? { alert: { count: alertCount, label: alertBarLabel(win.width, win.fontScale, barStar ? barStarText(barStar) : "", alertButtonText(alertCount)), onPress: openAlerts } } : null)}
                 />
               ),
             }
@@ -444,7 +449,7 @@ export default function StockDetailScreen() {
             ...(ux.oneHand ? { headerTitle: () => <HeadTitle name={name} price={headTitlePrice} rightW={headRightW} /> } : usedHeadTitle ? { headerTitle: undefined } : {}),
             headerRight: () => {
               const right = unregistered ? (
-                <Pressable onPress={addWatch} disabled={adding} accessibilityRole="button" accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={slopFor(font.small * 1.35, space.xs)} style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginRight: space.sm, paddingHorizontal: space.xs }}>
+                !canWatch ? null : <Pressable onPress={addWatch} disabled={adding} accessibilityRole="button" accessibilityLabel="관심 종목에 추가" accessibilityState={{ busy: adding, disabled: adding }} hitSlop={slopFor(font.small * 1.35, space.xs)} style={{ flexDirection: "row", alignItems: "center", gap: space.xs, marginRight: space.sm, paddingHorizontal: space.xs }}>
                   <Ionicons name="star-outline" size={20} color={t.gold} />
                   <Text style={{ color: t.gold, fontSize: font.small, fontWeight: "700" }}>{adding ? "추가 중" : "관심 추가"}</Text>
                 </Pressable>
@@ -616,7 +621,7 @@ export default function StockDetailScreen() {
   // ── 넓은 창 (3-42 웨이브 C) ──
   const us = isUsMarket(s.market);
   const requestAi = (k: AnalysisKind) => setAsked((m) => ({ ...m, [k]: true }));
-  const action: HeaderAction = unregistered ? { kind: "watch", busy: adding, onPress: addWatch } : { kind: "edit", onPress: () => router.push(`/stocks/${c}/edit`) };
+  const action: HeaderAction | null = unregistered ? (canWatch ? { kind: "watch", busy: adding, onPress: addWatch } : null) : { kind: "edit", onPress: () => router.push(`/stocks/${c}/edit`) };
   // 시장 상태 줄: 실시간(초록 점) 또는 까닭 · 달러 종목 원화 환산 · 시간외 · 시세 기준과 시각
   const state: StateLine[] = q
     ? [

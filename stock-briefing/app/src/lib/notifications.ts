@@ -126,6 +126,31 @@ export async function unregisterPush(api: Api): Promise<void> {
   }
 }
 
+/**
+ * 로그아웃할 때 (계정 A단계, lib/logout 이 5초까지 기다린다): 서버에서 이 기기 등록을 빼되, 기기에 적어 둔 토큰(= 이 기기에서 알림을 켜 둠)은 남긴다.
+ * 주인으로 다시 로그인하면 rebindPush 가 그대로 다시 등록한다 — 예전에는 로그아웃하면 알림 설정이 조용히 꺼진 채 남았다.
+ * 빼지 못해도(인터넷 끊김) 서버가 로그아웃할 때 이 세션으로 등록한 기기를 지운다
+ */
+export async function detachPush(api: Api): Promise<void> {
+  const token = await getStoredToken();
+  if (!token) return;
+  try {
+    await api.unregisterDevice(token);
+  } catch {
+    /* 서버가 세션을 끊으며 지운다 */
+  }
+}
+
+/**
+ * 로그인한 뒤·비밀번호를 바꾼 뒤 (계정 A단계): 이 기기에서 알림을 켜 둔 경우만(적어 둔 토큰이 있을 때) 지금 로그인 세션으로 다시 등록한다.
+ * 권한 창을 띄우거나 토큰을 새로 받지 않는다. 서버는 세션을 끊을 때 그 세션으로 등록한 기기를 지우므로 새 세션에 다시 묶어야 알림이 온다
+ */
+export async function rebindPush(api: Api): Promise<void> {
+  const token = await getStoredToken();
+  if (!token) return;
+  await api.registerDevice({ token, platform: Platform.OS === "android" ? "android" : Platform.OS === "ios" ? "ios" : "unknown", deviceName: Device.modelName });
+}
+
 export async function getStoredToken(): Promise<string | null> {
   try {
     return await AsyncStorage.getItem(TOKEN_KEY);

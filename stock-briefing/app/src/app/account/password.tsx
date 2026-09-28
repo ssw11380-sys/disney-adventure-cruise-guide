@@ -7,6 +7,7 @@ import { Screen } from "@/components/Screen";
 import { Button, Card, Muted, SectionTitle } from "@/components/ui";
 import { AUTH_TEXT, authErrorView } from "@/lib/authErrors";
 import { confirmError, fieldMessage, HELP, passwordError } from "@/lib/authRules";
+import { rebindPushNow } from "@/lib/logout";
 import { sessionFor, updateSessionUser } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
 import { font, fontCap, radius, space, touch, useTheme } from "@/theme";
@@ -48,6 +49,8 @@ export default function PasswordScreen() {
     try {
       const r = await api.changePassword({ current: v.current, next: v.next, nextConfirm: v.nextConfirm });
       await updateSessionUser(apiUrl, r.user);
+      // 서버는 다른 세션과 계정 전(세션 없이) 등록한 알림 기기를 지운다 → 이 기기에서 알림을 켜 두었으면 지금 세션으로 다시 등록
+      void rebindPushNow(api);
       setErrors({});
       setDone(true);
       AccessibilityInfo.announceForAccessibility(AUTH_TEXT.passwordChanged);

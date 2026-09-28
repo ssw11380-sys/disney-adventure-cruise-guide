@@ -23,8 +23,11 @@ import { installHaptics, type HapticEngine } from "@/lib/haptics";
 import { LiveStreamProvider } from "@/lib/liveStream";
 import { useAccountView } from "@/lib/account";
 import { useAuthGate } from "@/lib/authGate";
-import { setBeforeLogout } from "@/lib/logout";
-import { postPriceAlert, unregisterPush } from "@/lib/notifications";
+import { setBeforeLogout, setPushRebind } from "@/lib/logout";
+import { detachPush, postPriceAlert, rebindPush } from "@/lib/notifications";
+import { onAccountChange } from "@/lib/session";
+import { clearWidgetAccountData, signedOutWidgetData } from "@/widgets/data";
+import { redrawAllWidgets } from "@/widgets/redraw";
 import { installPriceAlertNotifier } from "@/lib/priceAlerts";
 import { PERSIST_BUSTER, PERSIST_MAX_AGE_MS, queryPersister, shouldPersist } from "@/lib/queryPersist";
 import { SettingsProvider, useSettings } from "@/lib/settings";
@@ -37,8 +40,13 @@ installErrorHandlers();
 installHaptics(Haptics as unknown as HapticEngine, Platform.OS);
 // 가격 알림(3-29)을 휴대폰 알림 목록에 올리는 함수 (권한이 이미 있을 때만, 소리 없이). 울릴지는 PriceAlertProvider 가 플래그로 정한다
 installPriceAlertNotifier(postPriceAlert);
-// 주인 계정이 로그아웃하면 이 기기의 알림 등록을 먼저 서버에서 뺀다 (로그아웃한 폰으로 브리핑 알림이 가지 않게, 계정 A단계)
-setBeforeLogout((api) => unregisterPush(api));
+// 주인 계정이 로그아웃하면 이 기기의 알림 등록을 먼저 서버에서 뺀다 (로그아웃한 폰으로 브리핑 알림이 가지 않게, 계정 A단계).
+// 기기에 적어 둔 알림 토큰은 남겨, 주인으로 다시 로그인하면(또는 비밀번호를 바꾸면) 새 세션으로 다시 등록한다
+setBeforeLogout((api) => detachPush(api));
+setPushRebind((api) => rebindPush(api));
+// 계정이 바뀌면(로그아웃·세션 끊김·다른 사람 로그인) 위젯이 적어 둔 앞 사람의 잔고·브리핑을 지우고 '로그인 필요' 빈 위젯으로 다시 그린다.
+// 새 계정의 잔고를 받으면 WidgetBridge 가 다시 채운다 (react-query 캐시 비우기는 AuthBridge 가 같은 자리에서)
+onAccountChange(() => void clearWidgetAccountData().then(() => redrawAllWidgets(signedOutWidgetData())));
 
 // 저장된 설정(라이트/다크)과 마지막 잔고를 읽을 때까지 스플래시를 둔다 → 라이트 모드에서 어두운 첫 화면이 번쩍이지 않게.
 // 읽기가 늦어도 1.5초 뒤에는 연다

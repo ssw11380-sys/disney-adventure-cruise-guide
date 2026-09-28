@@ -4,6 +4,7 @@ import {
   BREATH_MS,
   breathTrack,
   EASE_OUT,
+  GLOW_START,
   HERO_MS,
   heroFrame,
   heroLayout,
@@ -15,6 +16,9 @@ import {
   layoutKey,
   MINI_COUNT,
   miniStairs,
+  miniStairsBox,
+  wordmarkBaseline,
+  wordmarkH,
   revealScrollY,
   sampleTrack,
   SIDE_COUNT,
@@ -160,7 +164,7 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
     for (const t of TIMES) {
       const f = heroFrame(scene, t);
       for (const it of f) {
-        if (/^(side|limit|wick|cap)d/.test(it.id)) {
+        if (/^(side|limit|wick|cap)\d/.test(it.id)) {
           // 봉·꼬리·천장 띠: 그림 칸 안
           if (!inside(it.rect, scene.plot)) bad.push(`${label} t=${t} ${it.id} 칸 밖`);
           // 상한가 봉은 로고 묶음과 겹치지 않는다 (보일 때)
@@ -169,7 +173,7 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
         // 불기둥 빛은 그림 영역 가로 안, 위로는 상태 표시줄 밑까지 (화면 위 끝을 넘지 않음)
         if (/^flame|^core/.test(it.id) && (it.rect.x < 0 || it.rect.x + it.rect.w > L.heroW + EPS || it.rect.y < -EPS)) bad.push(`${label} t=${t} ${it.id} 화면 밖`);
         // 상한가 봉은 시가(몸통 아래)를 기준으로 자란다: 자라는 동안 아래 끝이 제자리
-        const m = /^limit(d)$/.exec(it.id);
+        const m = /^limit(\d+)$/.exec(it.id);
         if (m) {
           const c = scene.limit[+m[1]!]!;
           if (Math.abs(it.rect.y + it.rect.h - (c.body.y + c.body.h)) > 1e-6) bad.push(`${label} t=${t} ${it.id} 아래 끝이 움직임`);
@@ -189,15 +193,13 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
 
   it("로고 묶음은 그림 영역 안 — 입력 칸과 겹치지 않는다 (한 칸: 그림 아래 끝 위, 두 칸: 오른쪽 입력 칸 왼쪽)", () => {
     for (const [W, H, top, bottom] of MANY) {
-      for (const kb of [false, true]) {
-        const L = heroLayout(W, H, { top, bottom }, kb);
-        const lb = heroScene(L).logo;
-        const label = `${W}×${H}(${top}/${bottom})${kb ? " 키보드" : ""}`;
-        expect(lb.y + lb.h, label).toBeLessThanOrEqual(L.heroH);
-        expect(lb.y, label).toBeGreaterThanOrEqual(top);
-        if (L.mode === "two") expect(lb.x + Math.ceil(lb.size * authLayout.wordmarkCanvas), label).toBeLessThanOrEqual(L.formX - L.gutter);
-        else expect(lb.x + lb.w, label).toBeLessThanOrEqual(L.formX + L.formW);
-      }
+      const L = heroLayout(W, H, { top, bottom });
+      const lb = heroScene(L).logo;
+      const label = `${W}×${H}(${top}/${bottom})`;
+      expect(lb.y + lb.h, label).toBeLessThanOrEqual(L.heroH);
+      expect(lb.y, label).toBeGreaterThanOrEqual(top);
+      if (L.mode === "two") expect(lb.x + Math.ceil(lb.size * authLayout.wordmarkCanvas), label).toBeLessThanOrEqual(L.formX - L.gutter);
+      else expect(lb.x + lb.w, label).toBeLessThanOrEqual(L.formX + L.formW);
     }
   });
 
@@ -210,9 +212,38 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
         if (crossesY && L.x < g.x2 && L.x + L.w > s.plot.x0) {
           expect(g.x1, `${W}×${H} y=${g.y}`).toBeGreaterThanOrEqual(L.x + L.w);
           expect(g.fade).toBeGreaterThan(0);
-        } else expect(g.fade).toBe(0);
+          // 왼쪽 부분: 그림 칸 왼쪽 끝부터 오른쪽 부분이 진해지는 곳까지 (로고가 나타나기 전에는 줄이 끊기지 않게)
+          expect(g.lead).toEqual({ x1: s.plot.x0, x2: Math.min(g.x2, g.x1 + g.fade) });
+        } else {
+          expect(g.fade).toBe(0);
+          expect(g.lead).toBeNull();
+        }
       }
     }
+  });
+
+  it("로고 옆 눈금의 왼쪽 부분은 로고가 나타나기 전에는 눈금과 함께 보이고, 로고가 나타나는 만큼 사라진다 (둘이 함께 진하게 보이는 순간은 없다)", () => {
+    const t = heroTracks();
+    const s = heroScene(heroLayout(360, 752, { top: 28, bottom: 24 }));
+    const leads = s.grid.filter((g) => g.lead);
+    expect(leads.length).toBeGreaterThan(0);
+    for (const ms of TIMES) {
+      const f = byId(heroFrame(s, ms));
+      const lead = f[`gridLead${s.grid.indexOf(leads[0]!)}`]!;
+      if (ms <= 3700) expect(lead.opacity, `t=${ms}`).toBeCloseTo(sampleTrack(t.grid, ms), 6);
+      expect(lead.opacity + f.logo!.opacity, `t=${ms}`).toBeLessThanOrEqual(1 + 1e-9);
+    }
+    expect(byId(heroFrame(s, 500))[`gridLead${s.grid.indexOf(leads[0]!)}`]!.opacity).toBe(1);
+    expect(byId(heroFrame(s, HERO_MS))[`gridLead${s.grid.indexOf(leads[0]!)}`]!.opacity).toBe(0);
+  });
+
+  it("빛은 상한가 봉이 절반쯤 오른 뒤(2.6초)부터 켜진다 — 봉이 바닥에 있는 동안 빈 오른쪽 위가 먼저 붉어지지 않게", () => {
+    const t = heroTracks();
+    expect(GLOW_START).toBe(2600);
+    for (const ms of [0, 1500, 1800, 2600]) expect(sampleTrack(t.glow, ms), `t=${ms}`).toBe(0);
+    expect(sampleTrack(t.glow, 3000)).toBeGreaterThan(0);
+    expect(sampleTrack(t.glow, 3600)).toBeCloseTo(0.7, 6);
+    expect(sampleTrack(t.glow, HERO_MS)).toBe(1);
   });
 
   it("처음(0초)에는 봉·로고가 보이지 않고, 1.5초에는 횡보 16봉만, 3.6초에는 상한가 10봉까지 (로고는 아직)", () => {
@@ -231,21 +262,28 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
 });
 
 describe("그 밖", () => {
-  it("같은 배치면 같은 열쇠 (입력할 때마다 그림을 다시 만들지 않게), 크기·키보드가 바뀌면 다른 열쇠", () => {
+  it("같은 배치면 같은 열쇠 (입력할 때마다 그림을 다시 만들지 않게), 크기가 바뀌면 다른 열쇠", () => {
     const a = heroLayout(360, 752, { top: 28, bottom: 24 });
     expect(layoutKey(heroLayout(360, 752, { top: 28, bottom: 24 }))).toBe(layoutKey(a));
-    expect(layoutKey(heroLayout(360, 752, { top: 28, bottom: 24 }, true))).not.toBe(layoutKey(a));
     expect(layoutKey(heroLayout(933, 704, { top: 28, bottom: 24 }))).not.toBe(layoutKey(a));
   });
 
-  it("회원가입 머리의 작은 계단: 6개, 몸통·꼬리가 칸 안, 한 칸씩 오르고 몸통이 세로로 길다", () => {
-    for (const w of [authLayout.miniStairsW, 72, 112]) {
-      const { bodies, wicks } = miniStairs(w, authLayout.miniStairsH);
+  it("회원가입 머리의 작은 계단: 로고 글자에 맞춘 크기(30sp 85×94 · 34sp 95×106), 6개, 몸통·꼬리가 칸 안, 한 칸씩 오르고 몸통이 세로로 길다", () => {
+    expect(miniStairsBox(30)).toMatchObject({ w: 85, h: 94 });
+    expect(miniStairsBox(34)).toMatchObject({ w: 95, h: 106 });
+    for (const size of [30, 34]) {
+      const box = miniStairsBox(size);
+      // 맨 아래(첫 봉 꼬리 끝 = 칸 아래 끝)를 로고 글자 바탕선에 — 로고 묶음(글자 칸 + 선) 아래 끝에서 바탕선까지
+      expect(box.baselineGap).toBe(wordmarkH(size) + authLayout.logoLineGap + authLayout.logoLineH - wordmarkBaseline(size));
+      const { bodies, wicks, bw } = miniStairs(box.w, box.h);
       expect(bodies).toHaveLength(MINI_COUNT);
-      for (const x of wicks) expect(inside(x, { x0: 0, y0: 0, w, h: authLayout.miniStairsH })).toBe(true);
-      if (w === authLayout.miniStairsW) for (const x of bodies) expect(x.h).toBeGreaterThan(1.5 * x.w);
+      // 몸통 폭이 점처럼 작지 않다 (예전 60 칸은 4.6dp)
+      expect(bw).toBeGreaterThanOrEqual(7);
+      expect(Math.max(...wicks.map((x) => x.y + x.h))).toBeCloseTo(box.h, 6);
+      for (const x of wicks) expect(inside(x, { x0: 0, y0: 0, w: box.w, h: box.h })).toBe(true);
       for (const [k, b] of bodies.entries()) {
-        expect(inside(b, { x0: 0, y0: 0, w, h: authLayout.miniStairsH })).toBe(true);
+        expect(b.h, `${size} ${k}`).toBeGreaterThan(1.5 * b.w);
+        expect(inside(b, { x0: 0, y0: 0, w: box.w, h: box.h })).toBe(true);
         if (k) expect(b.y).toBeLessThan(bodies[k - 1]!.y);
       }
     }

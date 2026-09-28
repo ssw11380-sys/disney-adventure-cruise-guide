@@ -12,6 +12,7 @@ import {
   loadSession,
   markAccountsSeen,
   markFailOpen,
+  onAccountChange,
   rememberPreference,
   REMEMBER_KEY,
   resetSessionForTests,
@@ -20,6 +21,7 @@ import {
   sessionFor,
   sessionHeaders,
   setRememberPreference,
+  subscribeSession,
   updateSessionUser,
   type AccountUser,
   type KeyValueStorage,
@@ -208,5 +210,45 @@ describe("API 요청의 세션 머리글·로그아웃 규칙", () => {
     reply = json(400, { error: "INVALID", code: "invalid", message: "확인", fields: { loginId: "login_id_format" } });
     const e = (await createApi(SERVER, "").signup({ loginId: "x", password: "", passwordConfirm: "", email: "", remember: true }).catch((x: unknown) => x)) as ApiRequestError;
     expect(e.body).toMatchObject({ code: "invalid", fields: { loginId: "login_id_format" } });
+  });
+});
+
+describe("계정이 바뀔 때 (캐시·위젯 데이터 비우기, 계정 A단계 검증 지적)", () => {
+  const MEMBER: AccountUser = { id: 7, loginId: "newbie", email: "n@example.com", isOwner: false, usingInitialPassword: false };
+  it("다른 사람으로 로그인·로그아웃·세션 끊김이면 화면에 알리기(emit) **전에** 동기로 부른다. 같은 사람이 다시 로그인·켤 때 읽어 오기는 바뀜이 아니다", async () => {
+    resetSessionForTests();
+    installSessionStorage(memoryStorage({ [SESSION_KEY]: JSON.stringify({ apiUrl: SERVER, token: "gzs1_o", remember: true, user: OWNER, savedAt: 1 }) }));
+    const order: string[] = [];
+    const off = onAccountChange((next, prev) => order.push(`hook:${prev?.user.loginId ?? "-"}>${next?.user.loginId ?? "-"}`));
+    subscribeSession(() => order.push("emit"));
+    await loadSession();
+    expect(order).toEqual(["emit"]);
+    order.length = 0;
+    // 같은 사람(주인)이 다시 로그인: 캐시를 버리지 않는다
+    await saveSession({ apiUrl: SERVER, token: "gzs1_o2", remember: true, user: OWNER });
+    expect(order).toEqual(["emit"]);
+    order.length = 0;
+    await clearSession("logout");
+    expect(order).toEqual(["hook:서성원>-", "emit"]);
+    order.length = 0;
+    // 자동 로그인을 끈 채 앱을 닫아 세션이 없던 기기에 다른 사람이 로그인: 기기에 남은 캐시는 앞 사람 것일 수 있다
+    await saveSession({ apiUrl: SERVER, token: "gzs1_m", remember: false, user: MEMBER });
+    expect(order).toEqual(["hook:->newbie", "emit"]);
+    order.length = 0;
+    expect(handleSessionInvalid(SERVER, "gzs1_m")).toBe(true);
+    expect(order).toEqual(["hook:newbie>-", "emit"]);
+    off();
+    await saveSession({ apiUrl: SERVER, token: "gzs1_o3", remember: true, user: OWNER });
+    expect(order.filter((x) => x.startsWith("hook"))).toHaveLength(1);
+  });
+
+  it("비우는 쪽이 실패해도 로그인·로그아웃은 된다", async () => {
+    resetSessionForTests();
+    const off = onAccountChange(() => {
+      throw new Error("비우기 실패");
+    });
+    await saveSession({ apiUrl: SERVER, token: "gzs1_x", remember: true, user: OWNER });
+    expect(sessionFor(SERVER)?.token).toBe("gzs1_x");
+    off();
   });
 });

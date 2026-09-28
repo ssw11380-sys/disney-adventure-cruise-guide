@@ -8,14 +8,16 @@ import { cleanupRenders, render, type HostNode } from "./miniRender";
 /**
  * <LoginHero/> 움직이는 그림 (hero-spec.md 7·8장). RN Animated 는 계산하는 가짜(fakeAnimated)로 바꿔,
  *  - 시계가 t 일 때 화면에 놓이는 자리·불투명도가 순수 함수 heroFrame 과 같은지 (0.5·1.5·2.5·3.6·4.2초)
- *  - 처음 한 번 재생(네이티브 드라이버) → 숨쉬기, 두 번째로 보이면 마지막 장면, 누르면 다시 한 번
- *  - 움직임 줄이기 → 마지막 장면에 멈춤, 키보드로 접힘·앱이 뒤로·크기 바뀜 → 마지막 장면
+ *  - 처음 한 번 재생(네이티브 드라이버) → 숨쉬기, 두 번째로 보이면 마지막 장면, 눌러도 다시 재생하지 않음 (누르는 곳이 없다)
+ *  - 움직임 줄이기·앱이 뒤로·크기 바뀜 → 마지막 장면, paused(키보드로 밀려남·가려짐) → 숨쉬기만 멈춤 (재생은 끝까지, 그림 자리는 그대로)
+ *  - 키보드가 떠도 AuthFrame 은 그림을 접지 않는다 (입력 칸이 한순간에 뛰지 않게) — 아래만 비우고, 내려가면 제자리로 스크롤한 뒤 없앤다
  *  - 로고 글자는 입력 칸과 겹치지 않는다 (AuthFrame 네 크기)
  */
 const h = vi.hoisted(() => ({
   reduce: false,
   reduceListeners: [] as ((v: boolean) => void)[],
   appListeners: [] as ((s: string) => void)[],
+  kb: {} as Record<string, (e?: { endCoordinates?: { height: number } }) => void>,
   fake: null as unknown as ReturnType<typeof makeFakeAnimated>,
   win: { width: 360, height: 752, scale: 3, fontScale: 1 },
 }));
@@ -33,7 +35,12 @@ vi.mock("react-native", async () => {
     Animated: h.fake.Animated,
     Easing: h.fake.Easing,
     StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1, absoluteFill: { position: "absolute", left: 0, top: 0, right: 0, bottom: 0 } },
-    Keyboard: { addListener: () => ({ remove: () => undefined }) },
+    Keyboard: {
+      addListener: (ev: string, cb: (e?: { endCoordinates?: { height: number } }) => void) => {
+        h.kb[ev] = cb;
+        return { remove: () => void delete h.kb[ev] };
+      },
+    },
     AccessibilityInfo: {
       isReduceMotionEnabled: () => Promise.resolve(h.reduce),
       addEventListener: (_: string, cb: (v: boolean) => void) => {
@@ -86,6 +93,7 @@ beforeEach(() => {
   h.reduce = false;
   h.reduceListeners.length = 0;
   h.appListeners.length = 0;
+  for (const k of Object.keys(h.kb)) delete h.kb[k];
   h.fake.started.length = 0;
   h.win = { width: 360, height: 752, scale: 3, fontScale: 1 };
 });
@@ -102,8 +110,9 @@ describe("그림 구성", () => {
     expect(logo.props.accessibilityRole).toBe("header");
     const art = r.all().find((n) => n.props.importantForAccessibility === "no-hide-descendants" && n.children.some((c) => typeof c !== "string" && c.props.testID === "hero-glow"));
     expect(art).toBeTruthy();
-    // 다시 재생용 누르는 곳은 화면 읽기에 따로 잡히지 않는다 (로고 머리글은 그대로 읽힘)
-    expect(byTest(r, "login-hero-replay").props.accessible).toBe(false);
+    // 누르는 곳이 없다 — 한 번 잘못 눌러 로고·봉이 사라졌다 다시 그려지지 않게 (예전 '누르면 다시 재생' 뺌)
+    expect(r.all().filter((n) => n.type === "Pressable" || typeof n.props.onPress === "function")).toHaveLength(0);
+    expect(r.all().filter((n) => n.props.testID === "login-hero-replay")).toHaveLength(0);
     // 그림 영역 크기 = 배치 (한 칸: 화면 폭 × 그림 높이)
     expect(byTest(r, "login-hero").props.style).toMatchObject({ width: 360, height: 308 });
     // 부제는 사실만
@@ -157,6 +166,9 @@ describe("시계가 t 일 때 보이는 모습 = heroFrame (0.5·1.5·2.5·3.6·
         expect((word.transform as { translateY: number }[])[0]!.translateY).toBeCloseTo(want.logo!.rect.y - scene.logo.y, 6);
         const line = style(byTest(r, "hero-logo-line"));
         expect(line.opacity).toBeCloseTo(want.line!.opacity, 6);
+        // 로고 옆 눈금의 왼쪽 부분 (로고 전에는 보이고 로고가 나타나며 사라짐)
+        const leadIdx = scene.grid.findIndex((g) => g.lead);
+        if (leadIdx >= 0) expect(style(byTest(r, "hero-grid-lead")).opacity, `t=${t} lead`).toBeCloseTo(want[`gridLead${leadIdx}`]!.opacity, 6);
         cleanupRenders();
       }
     });
@@ -188,23 +200,7 @@ describe("재생 · 숨쉬기 · 움직임 줄이기", () => {
     expect(style(byTest(again, "hero-limit-9")).opacity).toBe(1);
   });
 
-  it("그림을 누르면 한 번 다시 재생 (기다림 없이), 재생 중에 또 누르면 무시", async () => {
-    const r = render(<LoginHero layout={L360()} />);
-    await settle(r);
-    r.act(() => intros()[0]!.finish());
-    const firstLoop = loops()[0]!;
-    r.act(() => (byTest(r, "login-hero-replay").props.onPress as () => void)());
-    expect(intros()).toHaveLength(2);
-    expect(intros()[1]!.config.delay).toBe(0);
-    expect(firstLoop.stopped).toBe(true);
-    expect(style(byTest(r, "hero-limit-9")).opacity).toBe(0);
-    r.act(() => (byTest(r, "login-hero-replay").props.onPress as () => void)());
-    expect(intros()).toHaveLength(2);
-    r.act(() => intros()[1]!.finish());
-    expect(loops()).toHaveLength(2);
-  });
-
-  it("움직임 줄이기: 재생·숨쉬기 없이 처음부터 마지막 장면, 눌러도 다시 재생하지 않음", async () => {
+  it("움직임 줄이기: 재생·숨쉬기 없이 처음부터 마지막 장면", async () => {
     h.reduce = true;
     const r = render(<LoginHero layout={L360()} />);
     await settle(r);
@@ -213,8 +209,6 @@ describe("재생 · 숨쉬기 · 움직임 줄이기", () => {
     expect(visibleBox(style(byTest(r, "hero-body-9"))).h).toBeCloseTo(heroScene(L360()).limit[9]!.body.h, 6);
     expect(style(byTest(r, "hero-logo-word")).opacity).toBe(1);
     expect(style(byTest(r, "hero-glow")).opacity).toBe(1);
-    r.act(() => (byTest(r, "login-hero-replay").props.onPress as () => void)());
-    expect(h.fake.started).toHaveLength(0);
   });
 
   it("재생 중에 움직임 줄이기를 켜면 바로 마지막 장면에 멈춘다", async () => {
@@ -227,21 +221,24 @@ describe("재생 · 숨쉬기 · 움직임 줄이기", () => {
     expect(loops()).toHaveLength(0);
   });
 
-  it("키보드로 접히면 로고 한 줄(22)만 — 재생 중이었으면 멈추고, 펼치면 다시 재생하지 않고 마지막 장면 + 숨쉬기", async () => {
+  it("paused(키보드로 밀려남·가려짐): 재생 중이면 끝까지 두고 그림은 그대로, 숨쉬기는 멈췄다가 풀리면 다시", async () => {
     const r = render(<LoginHero layout={L360()} />);
     await settle(r);
     const intro = intros()[0]!;
-    const folded = heroLayout(360, 752, { top: 28, bottom: 24 }, true);
-    r.rerender(<LoginHero layout={folded} />);
-    expect(intro.stopped).toBe(true);
-    expect(countTest(r, /^hero-side-/)).toBe(0);
-    expect(r.byLabel("가즈아 불기둥")).toBeTruthy();
-    expect(r.all().find((n) => n.type === "SvgText")!.props.fontSize).toBe(22);
-    expect(byTest(r, "login-hero").props.style).toMatchObject({ height: 100 });
+    r.rerender(<LoginHero layout={L360()} paused />);
+    // 재생은 멈추지 않는다 (마지막 장면으로 건너뛰지도 않는다 — 한순간에 바뀌지 않게), 그림·로고는 그대로
+    expect(intro.stopped).toBe(false);
+    expect(countTest(r, /^hero-side-\d+$/)).toBe(16);
+    expect(byTest(r, "login-hero").props.style).toMatchObject({ width: 360, height: 308 });
+    r.act(() => intro.finish());
+    expect(loops()).toHaveLength(0);
     r.rerender(<LoginHero layout={L360()} />);
+    expect(loops()).toHaveLength(1);
+    const breathing = loops()[0]!;
+    r.rerender(<LoginHero layout={L360()} paused />);
+    expect(breathing.stopped).toBe(true);
     expect(intros()).toHaveLength(1);
     expect(style(byTest(r, "hero-limit-9")).opacity).toBe(1);
-    expect(loops().filter((l) => !l.stopped)).toHaveLength(1);
   });
 
   it("앱이 뒤로 가면 숨쉬기를 멈추고, 돌아오면 다시", async () => {
@@ -284,6 +281,66 @@ describe("재생 · 숨쉬기 · 움직임 줄이기", () => {
     await settle(r);
     expect(h.fake.started).toHaveLength(0);
     expect(style(byTest(r, "hero-limit-9")).opacity).toBe(1);
+  });
+});
+
+describe("AuthFrame 키보드 (접지 않고 스크롤로 밀어낸다)", () => {
+  const bottomPad = (r: Screen) => {
+    const sv = r.all().find((n) => n.type === "ScrollView")!;
+    return flatStyle(sv.props.contentContainerStyle).paddingBottom as number;
+  };
+  it("키보드가 떠도 그림 높이·봉·로고는 그대로 (입력 칸이 뛰지 않게), 아래만 키보드 높이만큼 비우고 숨쉬기를 멈춘다. 내려가면 제자리로 스크롤한 뒤 빈 곳을 없앤다", async () => {
+    const r = render(
+      <AuthFrame top="hero">
+        <></>
+      </AuthFrame>,
+    );
+    await settle(r);
+    r.act(() => intros()[0]!.finish());
+    expect(loops()).toHaveLength(1);
+    const before = { hero: byTest(r, "login-hero").props.style, pad: bottomPad(r) };
+    r.act(() => h.kb["keyboardDidShow"]!({ endCoordinates: { height: 300 } }));
+    expect(byTest(r, "login-hero").props.style).toEqual(before.hero);
+    expect(countTest(r, /^hero-side-\d+$/)).toBe(16);
+    expect(r.byLabel("가즈아 불기둥")).toBeTruthy();
+    expect(bottomPad(r)).toBe(before.pad + 300);
+    expect(loops()[0]!.stopped).toBe(true);
+    r.act(() => h.kb["keyboardDidHide"]!());
+    // 제자리로 스크롤하는 동안은 빈 곳을 남긴다 (한 번에 튀지 않게), 숨쉬기는 다시
+    expect(bottomPad(r)).toBe(before.pad + 300);
+    expect(loops().filter((l) => !l.stopped)).toHaveLength(1);
+    await new Promise((res) => setTimeout(res, 340));
+    r.rerender();
+    expect(bottomPad(r)).toBe(before.pad);
+    expect(byTest(r, "login-hero").props.style).toEqual(before.hero);
+  });
+
+  it("두 칸(933×704)은 키보드가 떠도 그림이 보이므로 숨쉬기를 멈추지 않는다, covered(가려짐)면 멈춘다", async () => {
+    h.win = { width: 933, height: 704, scale: 2.6, fontScale: 1 };
+    const r = render(
+      <AuthFrame top="hero">
+        <></>
+      </AuthFrame>,
+    );
+    await settle(r);
+    r.act(() => intros()[0]!.finish());
+    r.act(() => h.kb["keyboardDidShow"]!({ endCoordinates: { height: 300 } }));
+    expect(loops().filter((l) => !l.stopped)).toHaveLength(1);
+    r.rerender(
+      <AuthFrame top="hero" covered>
+        <></>
+      </AuthFrame>,
+    );
+    expect(loops().filter((l) => !l.stopped)).toHaveLength(0);
+  });
+});
+
+describe("불기둥 색 (크림색 가운데는 마지막 불기둥에만)", () => {
+  it("옅은 두 불꽃의 가운데는 주황(flame), 마지막 불기둥만 크림(flameCore) — 붉은 빛 위에서 회색 얼룩처럼 보이지 않게", async () => {
+    const { authColors } = await import("@/tokens");
+    const r = render(<LoginHero layout={L360()} at={HERO_MS} />);
+    const centers = r.all().filter((n) => n.type === "RadialGradient" && /flame\d$/.test(String(n.props.id))).map((g) => (g.children[0] as HostNode).props.stopColor);
+    expect(centers).toEqual([authColors.flame, authColors.flame, authColors.flameCore]);
   });
 });
 

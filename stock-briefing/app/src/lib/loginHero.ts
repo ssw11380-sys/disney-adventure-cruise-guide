@@ -42,14 +42,15 @@ export interface LoginLayout {
   logoSize: number;
   logoX: number;
   logoY: number;
-  /** 키보드가 떠 그림을 접었는지 */
-  collapsed: boolean;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-/** 창 크기·안전 영역 → 배치. keyboard 면 한 칸 그림을 글자 한 줄(72dp, 로고 22)로 접는다 */
-export function heroLayout(W: number, H: number, insets: Insets, keyboard = false): LoginLayout {
+/**
+ * 창 크기·안전 영역 → 배치. 키보드가 떠도 배치는 바꾸지 않는다 — 그림을 접으면 입력 칸이 한순간에 200dp 넘게 뛰어서,
+ * 대신 화면을 부드럽게 스크롤해 그림을 위로 밀어낸다 (AuthFrame)
+ */
+export function heroLayout(W: number, H: number, insets: Insets): LoginLayout {
   const logoSize = W < authLayout.wideMin ? authFont.logo : authFont.logoWide;
   if (W >= authLayout.twoColMin && W > H) {
     const heroW = W - authLayout.rightW;
@@ -58,26 +59,21 @@ export function heroLayout(W: number, H: number, insets: Insets, keyboard = fals
     const inner = H - insets.top - insets.bottom;
     const h = Math.min(inner - 80, w);
     const plot = { x0: authLayout.twoPlotInset, y0: insets.top + (inner - h) / 2, w, h };
-    return { mode: "two", gutter: authLayout.gutterWide, formW, formX: heroW + authLayout.gutterWide, screenW: W, heroW, heroH: H, plot, logoSize, logoX: plot.x0, logoY: plot.y0 + 4, collapsed: false };
+    return { mode: "two", gutter: authLayout.gutterWide, formW, formX: heroW + authLayout.gutterWide, screenW: W, heroW, heroH: H, plot, logoSize, logoX: plot.x0, logoY: plot.y0 + 4 };
   }
   const gutter = W < authLayout.wideMin ? authLayout.gutter : authLayout.gutterWide;
   const formW = Math.min(W - 2 * gutter, authLayout.formMaxW);
   const formX = (W - formW) / 2;
   const inner = H - insets.top - insets.bottom;
-  const body = keyboard ? authLayout.heroKeyboardH : clamp(Math.round(inner * authLayout.heroRatio), authLayout.heroMin, authLayout.heroMax);
-  const pw = Math.min(W - 2 * gutter, authLayout.plotMaxW);
-  const plot = { x0: (W - pw) / 2, y0: insets.top + authLayout.plotTop, w: pw, h: body - 2 * authLayout.plotTop };
-  if (keyboard) {
-    // 접은 머리: 로고 한 줄을 72dp 가운데에
-    const size = authFont.logoCollapsed;
-    return { mode: "one", gutter, formW, formX, screenW: W, heroW: W, heroH: body + insets.top, plot, logoSize: size, logoX: formX, logoY: insets.top + (body - wordmarkH(size)) / 2, collapsed: true };
-  }
-  return { mode: "one", gutter, formW, formX, screenW: W, heroW: W, heroH: body + insets.top, plot, logoSize, logoX: formX, logoY: plot.y0 + 4, collapsed: false };
+  const body = clamp(Math.round(inner * authLayout.heroRatio), authLayout.heroMin, authLayout.heroMax);
+  // 그림 칸 폭 = 입력 칸 폭 (로고·차트·입력 칸의 왼쪽 끝이 한 줄 — 펼친 폴드 세로 704 에서 왼쪽 선이 둘로 보이지 않게)
+  const plot = { x0: formX, y0: insets.top + authLayout.plotTop, w: formW, h: body - 2 * authLayout.plotTop };
+  return { mode: "one", gutter, formW, formX, screenW: W, heroW: W, heroH: body + insets.top, plot, logoSize, logoX: formX, logoY: plot.y0 + 4 };
 }
 
 /** 같은 배치인지 (화면이 다시 그려져도 그림·움직임을 새로 만들지 않게) */
 export function layoutKey(l: LoginLayout): string {
-  return [l.mode, l.screenW, l.heroW, l.heroH, l.plot.x0, l.plot.y0, l.plot.w, l.plot.h, l.logoSize, l.logoX, l.logoY, l.collapsed ? 1 : 0].join("|");
+  return [l.mode, l.screenW, l.heroW, l.heroH, l.plot.x0, l.plot.y0, l.plot.w, l.plot.h, l.logoSize, l.logoX, l.logoY].join("|");
 }
 
 // ─── 로고 ('가즈아 불기둥' 금색 글자 + 선 + 부제) ─────────────────────────────
@@ -100,12 +96,12 @@ export interface LogoBox {
   h: number;
 }
 
-/** 로고 묶음의 자리 (그림 영역 기준). 접은 머리는 부제 없이 글자와 선만 */
+/** 로고 묶음의 자리 (그림 영역 기준) */
 export function logoBox(l: LoginLayout): LogoBox {
   const size = l.logoSize;
   const wordH = wordmarkH(size);
   const lineY = l.logoY + wordH + authLayout.logoLineGap;
-  const subY = l.collapsed ? null : lineY + authLayout.logoLineH + authLayout.logoSubGap;
+  const subY: number | null = lineY + authLayout.logoLineH + authLayout.logoSubGap;
   const bottom = subY === null ? lineY + authLayout.logoLineH : subY + authLayout.logoSubH;
   return { x: l.logoX, y: l.logoY, size, w: Math.round(size * authLayout.wordmarkInk), wordH, lineY, subY, h: bottom - l.logoY };
 }
@@ -225,6 +221,11 @@ export interface GridLine {
   x2: number;
   /** 로고 옆을 지나는 줄: 로고 오른쪽 끝에서 시작해 fade dp 동안 옅게 → 진하게 (글자와 겹치지 않게) */
   fade: number;
+  /**
+   * 로고 옆을 지나는 줄의 왼쪽 부분 (그림 칸 왼쪽 끝 ~ x1 + fade, 끝 fade dp 는 진하게 → 옅게). 로고가 나타나기 전(0~3.7초)에는 이 부분도 보여
+   * 줄이 화면 가운데에서 끊겨 시작하지 않고, 로고가 나타나는 동안(3.7~4.2초) 사라진다 (gridLead 시간표). 로고와 겹치지 않는 줄은 없음
+   */
+  lead: { x1: number; x2: number } | null;
 }
 
 export interface SceneSide {
@@ -293,8 +294,9 @@ export function heroScene(layout: LoginLayout): HeroScene {
   const line = (y: number): GridLine => {
     const x2 = p.x0 + p.w;
     const hitsLogo = y >= logo.y - 6 && y <= logo.y + logo.h + 6 && logo.x < x2 && logo.x + logo.w > p.x0;
-    if (!hitsLogo) return { y, x1: p.x0, x2, fade: 0 };
-    return { y, x1: Math.min(x2, logo.x + logo.w + 8), x2, fade: GRID_FADE };
+    if (!hitsLogo) return { y, x1: p.x0, x2, fade: 0, lead: null };
+    const x1 = Math.min(x2, logo.x + logo.w + 8);
+    return { y, x1, x2, fade: GRID_FADE, lead: { x1: p.x0, x2: Math.min(x2, x1 + GRID_FADE) } };
   };
   const side: SceneSide[] = [];
   const limit: SceneLimit[] = [];
@@ -326,7 +328,7 @@ export function heroScene(layout: LoginLayout): HeroScene {
     wickW: g.wickW,
     step: g.step,
     grid: g.grid.map(line),
-    baseline: { y: g.baseline, x1: p.x0, x2: p.x0 + p.w, fade: 0 },
+    baseline: { y: g.baseline, x1: p.x0, x2: p.x0 + p.w, fade: 0, lead: null },
     side,
     limit,
     glow: g.glow,
@@ -412,6 +414,8 @@ export function sampleTrack(tr: Track, t: number): number {
 export interface HeroTracks {
   /** 눈금·바닥선 불투명도 */
   grid: Track;
+  /** 로고 옆 눈금의 왼쪽 부분(GridLine.lead): 눈금과 함께 나타나고, 로고가 나타나는 동안(3.7~4.2초) 로고 불투명도만큼 사라진다 */
+  gridLead: Track;
   /** 빛(glow·glow2) 불투명도 — 숨쉬기를 곱한다 */
   glow: Track;
   /** 횡보 봉 i: 불투명도, 세로 크기(몸통 가운데 기준 0.3 → 1) */
@@ -437,7 +441,10 @@ export const CAP_DELAY = 0;
 export const CAP_DUR = 80;
 export const FLAME_START = 3600;
 
-/** 전체 시간표 (4.2초, 모든 요소는 나타나기만 하고 사라지지 않는다 — 깜빡임 없음) */
+/** 빛(glow·glow2)이 켜지기 시작하는 때 — 상한가 봉이 절반쯤 오른 뒤 (그 전에는 봉이 아직 바닥에 있는데 빈 오른쪽 위가 먼저 붉어졌다) */
+export const GLOW_START = 2600;
+
+/** 전체 시간표 (4.2초, 모든 요소는 나타나기만 하고 사라지지 않는다 — 깜빡임 없음. 로고 옆 눈금의 왼쪽 부분만 로고와 자리를 바꾼다) */
 export function heroTracks(): HeroTracks {
   const side = Array.from({ length: SIDE_COUNT }, (_, i) => {
     const s = SIDE_START + SIDE_GAP * i;
@@ -452,13 +459,15 @@ export function heroTracks(): HeroTracks {
     const s = FLAME_START + i * 40;
     return { grow: easeTrack(s, HERO_MS - s), opacity: easeTrack(s, HERO_MS - s) };
   });
+  const logoOpacity = easeTrack(3700, 500);
   return {
     grid: linearTrack(0, 300),
-    glow: joinTracks(linearTrack(LIMIT_START, FLAME_START - LIMIT_START, 0, 0.7), easeTrack(FLAME_START, HERO_MS - FLAME_START, 0.7, 1)),
+    gridLead: joinTracks(linearTrack(0, 300), mapTrack(logoOpacity, (v) => 1 - v)),
+    glow: joinTracks(linearTrack(GLOW_START, FLAME_START - GLOW_START, 0, 0.7), easeTrack(FLAME_START, HERO_MS - FLAME_START, 0.7, 1)),
     side,
     limit,
     flames,
-    logo: { opacity: easeTrack(3700, 500), shift: easeTrack(3700, 500, 8, 0) },
+    logo: { opacity: logoOpacity, shift: easeTrack(3700, 500, 8, 0) },
     line: easeTrack(3850, 350),
     lineShow: linearTrack(3850, 40),
     sub: linearTrack(3850, 350),
@@ -499,7 +508,11 @@ export function heroFrame(scene: HeroScene, t: number, phase = 0, tracks: HeroTr
   const out: FrameItem[] = [];
   const breath = sampleTrack(breathTrack(), phase);
   const gridO = sampleTrack(tracks.grid, t);
-  for (const [i, g] of scene.grid.entries()) out.push({ id: `grid${i}`, rect: { x: g.x1, y: g.y, w: g.x2 - g.x1, h: 0 }, opacity: gridO });
+  const leadO = sampleTrack(tracks.gridLead, t);
+  for (const [i, g] of scene.grid.entries()) {
+    out.push({ id: `grid${i}`, rect: { x: g.x1, y: g.y, w: g.x2 - g.x1, h: 0 }, opacity: gridO });
+    if (g.lead) out.push({ id: `gridLead${i}`, rect: { x: g.lead.x1, y: g.y, w: g.lead.x2 - g.lead.x1, h: 0 }, opacity: leadO });
+  }
   scene.side.forEach((c, i) => {
     const tr = tracks.side[i]!;
     const s = sampleTrack(growTrack(tr.scale), t);
@@ -537,13 +550,26 @@ export function heroFrame(scene: HeroScene, t: number, phase = 0, tracks: HeroTr
 
 // ─── 회원가입 머리의 작은 정지 계단 ───────────────────────────────────────────
 
-/** 작은 계단의 봉 수 — 64dp 남짓한 칸에 10개를 넣으면 봉이 점처럼 보여, 봉 모양(세로로 긴 몸통)이 보이게 6개로 줄인다 */
+/** 작은 계단의 봉 수 — 100dp 남짓한 칸에 10개를 넣으면 봉이 점처럼 보여, 봉 모양(세로로 긴 몸통)이 보이게 6개로 줄인다 */
 export const MINI_COUNT = 6;
+
+/**
+ * 회원가입 머리의 작은 계단 칸 (로고 글자 크기에 맞춘다): 높이 = 로고 글자 칸 × 2.4, 폭 = 높이 × 0.9, 빛 거리 = 높이 × 0.4.
+ * baselineGap: 로고 묶음(글자 + 금색 선) 아래 끝에서 글자 바탕선까지 — 계단 맨 아래를 바탕선에 맞추려고 계단 아래에 두는 여백
+ */
+export function miniStairsBox(size: number): { w: number; h: number; glow: number; baselineGap: number } {
+  const h = Math.round(wordmarkH(size) * authLayout.miniStairsH);
+  const logoBottom = wordmarkH(size) + authLayout.logoLineGap + authLayout.logoLineH;
+  return { w: Math.round(h * authLayout.miniStairsW), h, glow: Math.round(h * authLayout.miniStairsGlow), baselineGap: logoBottom - wordmarkBaseline(size) };
+}
+
+/** SVG 로고 글자 바탕선 y (글자 칸 위 끝 기준 — GoldWordmark 가 이 자리에 글자를 놓는다) */
+export const wordmarkBaseline = (size: number) => Math.round(size * 1.02);
 
 /** 폭 w × 높이 h 칸에 상한가 봉 계단 (몸통·아래 꼬리). 아래에서 위로 한 칸씩, 윗꼬리 없음 */
 export function miniStairs(w: number, h: number, count = MINI_COUNT): { bw: number; bodies: Rect[]; wicks: Rect[] } {
   const slot = w / count;
-  const bw = clamp(slot * 0.56, 2, 8);
+  const bw = clamp(slot * 0.56, 2, 10);
   const step = (h * 0.86) / (count + 0.18);
   const base = h - 0.18 * step;
   const bodies: Rect[] = [];

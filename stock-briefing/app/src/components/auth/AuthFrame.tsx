@@ -12,18 +12,41 @@ import { LoginHero } from "./LoginHero";
  *  - 한 칸(휴대폰·접은 폴드·펼친 폴드 세로): 위 그림(로그인) 또는 로고 + 작은 정지 계단 머리(회원가입), 아래 입력 묶음(가운데, 최대 폭 420),
  *    맨 아래 footer('서버 설정')와 고지 문구. 창이 높아 남는 높이는 40% 를 입력 묶음 위, 60% 를 아래에 둔다
  *  - 두 칸(창 폭 840 이상이고 가로가 더 김 — 펼친 폴드8 933×704): 왼쪽 그림(회원가입은 움직이지 않는 마지막 장면) · 오른쪽 입력(폭 420, 세로 가운데)
- *  - 키보드: 한 칸 로그인은 그림을 로고 한 줄(72dp)로 접고, 누른 칸(비밀번호면 [로그인] 버튼까지)이 키보드 위에 보이게 스크롤한다.
- *    키보드 높이만큼 아래를 비워 끝까지 스크롤할 수 있다. 두 칸은 그림을 접지 않고 오른쪽만 스크롤
+ *  - 키보드: 배치는 그대로 두고(그림을 접지 않는다 — 접으면 입력 칸이 한순간에 200dp 넘게 뛰었다), 누른 칸(비밀번호면 [로그인] 버튼까지)이
+ *    키보드 위에 오도록 부드럽게 스크롤해 그림을 위로 밀어낸다. 키보드 높이만큼 아래를 비워 끝까지 스크롤할 수 있고, 키보드가 내려가면
+ *    먼저 부드럽게 제자리로 스크롤한 뒤 빈 곳을 없앤다 (그림이 한 번에 튀어나오지 않게). 두 칸은 오른쪽만 스크롤
+ *  - 그림의 숨쉬기는 한 칸에서 키보드가 떠 있거나 다른 화면(회원가입·서버 설정)이 위에 올라와 가려졌을 때(covered) 멈춘다
  *  - 큰 글씨로 넘치면 화면 전체가 스크롤된다
  */
-export function AuthFrame({ top, title, lead, footer, children }: { top: "hero" | "header"; title?: string; lead?: string; footer?: React.ReactNode; children: React.ReactNode }) {
+/** 키보드가 내려간 뒤 제자리로 스크롤하고 아래 빈 곳을 없애기까지 (안드로이드 scrollTo 움직임 약 250ms) */
+const KB_SETTLE_MS = 300;
+
+export function AuthFrame({
+  top,
+  title,
+  lead,
+  footer,
+  covered = false,
+  children,
+}: {
+  top: "hero" | "header";
+  title?: string;
+  lead?: string;
+  footer?: React.ReactNode;
+  /** 다른 화면이 위에 올라와 이 화면이 가려졌는지 (그림 숨쉬기를 멈춘다) */
+  covered?: boolean;
+  children: React.ReactNode;
+}) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
+  /** 아래에 비워 둘 높이 (키보드가 내려간 뒤에도 제자리로 스크롤하는 동안은 남긴다) */
   const [kb, setKb] = useState(0);
+  /** 키보드가 지금 떠 있는지 */
+  const [kbShown, setKbShown] = useState(false);
   const kbRef = useRef(0);
   const scrollRef = useRef<ScrollView>(null);
   const contentRef = useRef<View>(null);
-  const scroll = useRef({ y: 0, h: 0 });
+  const scroll = useRef({ y: 0, h: 0, contentH: 0 });
   const pending = useRef<{ input: TextInput | null; below: number } | null>(null);
 
   /** 누른 칸을 키보드 위로 (키보드가 떠 있을 때만) */
@@ -55,34 +78,51 @@ export function AuthFrame({ top, title, lead, footer, children }: { top: "hero" 
     [revealNow],
   );
   useEffect(() => {
+    let settle: ReturnType<typeof setTimeout> | null = null;
+    let revealTimer: ReturnType<typeof setTimeout> | null = null;
     const show = Keyboard.addListener("keyboardDidShow", (e) => {
+      if (settle) clearTimeout(settle);
+      settle = null;
       kbRef.current = e.endCoordinates?.height ?? 0;
       setKb(kbRef.current);
+      setKbShown(kbRef.current > 0);
+      // 아래 빈 곳이 생긴 뒤(스크롤할 수 있게 된 뒤) 누른 칸을 보이게 — 부드럽게 (한 칸 로그인은 그림이 위로 밀려난다)
+      if (revealTimer) clearTimeout(revealTimer);
+      revealTimer = setTimeout(revealNow, 60);
     });
     const hide = Keyboard.addListener("keyboardDidHide", () => {
+      const was = kbRef.current;
       kbRef.current = 0;
-      setKb(0);
+      setKbShown(false);
+      // 아래 빈 곳(키보드 높이)을 바로 없애면 스크롤이 한 번에 제자리로 튄다 → 먼저 부드럽게 돌아간 뒤 없앤다
+      const s = scroll.current;
+      const maxY = Math.max(0, s.contentH - was - s.h);
+      if (s.y > maxY) scrollRef.current?.scrollTo({ y: maxY, animated: true });
+      if (settle) clearTimeout(settle);
+      settle = setTimeout(() => {
+        settle = null;
+        setKb(0);
+      }, KB_SETTLE_MS);
     });
     return () => {
+      if (settle) clearTimeout(settle);
+      if (revealTimer) clearTimeout(revealTimer);
       show.remove();
       hide.remove();
     };
-  }, []);
-  // 키보드가 뜨고 그림을 접은 뒤(배치가 끝난 뒤) 누른 칸을 보이게
-  useEffect(() => {
-    if (kb <= 0) return;
-    const t = setTimeout(revealNow, 80);
-    return () => clearTimeout(t);
-  }, [kb, revealNow]);
+  }, [revealNow]);
 
-  const kbOpen = kb > 0;
-  // 입력할 때마다 화면이 다시 그려져도 같은 배치(같은 객체)를 넘긴다 → 그림은 다시 그리지 않는다
-  const L = useMemo(() => heroLayout(width, height, { top: insets.top, bottom: insets.bottom }, top === "hero" && kbOpen), [width, height, insets.top, insets.bottom, top, kbOpen]);
+  const kbOpen = kbShown;
+  // 입력할 때마다·키보드가 떠도 같은 배치(같은 객체)를 넘긴다 → 그림은 다시 그리지 않고 자리도 그대로
+  const L = useMemo(() => heroLayout(width, height, { top: insets.top, bottom: insets.bottom }), [width, height, insets.top, insets.bottom]);
   const onScroll = (e: { nativeEvent: { contentOffset: { y: number } } }) => {
     scroll.current.y = e.nativeEvent.contentOffset.y;
   };
   const onLayout = (e: { nativeEvent: { layout: { height: number } } }) => {
     scroll.current.h = e.nativeEvent.layout.height;
+  };
+  const onContentSizeChange = (_w: number, h: number) => {
+    scroll.current.contentH = h;
   };
   const heading = title ? (
     <View style={styles.heading}>
@@ -111,7 +151,8 @@ export function AuthFrame({ top, title, lead, footer, children }: { top: "hero" 
           <StatusBar style="light" />
           <AuthBackground />
           <View style={styles.row}>
-            <LoginHero layout={L} animate={top === "hero"} />
+            {/* 두 칸은 키보드가 떠도 그림이 보이므로 숨쉬기를 멈추지 않는다 (가려졌을 때만) */}
+            <LoginHero layout={L} animate={top === "hero"} paused={covered} />
             <ScrollView
               ref={scrollRef}
               style={{ width: authLayout.rightW }}
@@ -119,6 +160,7 @@ export function AuthFrame({ top, title, lead, footer, children }: { top: "hero" 
               keyboardShouldPersistTaps="handled"
               onScroll={onScroll}
               onLayout={onLayout}
+              onContentSizeChange={onContentSizeChange}
               scrollEventThrottle={32}
             >
               <View ref={contentRef}>
@@ -143,15 +185,17 @@ export function AuthFrame({ top, title, lead, footer, children }: { top: "hero" 
           keyboardShouldPersistTaps="handled"
           onScroll={onScroll}
           onLayout={onLayout}
+          onContentSizeChange={onContentSizeChange}
           scrollEventThrottle={32}
         >
           <View ref={contentRef} style={styles.grow}>
             {top === "hero" ? (
-              <LoginHero layout={L} />
+              // 한 칸: 키보드가 뜨면 그림이 위로 밀려나므로 숨쉬기를 멈춘다 (재생 중이면 끝까지)
+              <LoginHero layout={L} paused={covered || kbOpen} />
             ) : (
               <View style={[styles.header, { paddingTop: insets.top + authLayout.headerTop, width: L.formW }]}>
                 <AuthLogo size={L.logoSize} subtitle={false} />
-                <MiniStairs />
+                <MiniStairs size={L.logoSize} />
               </View>
             )}
             <View style={{ flex: 2, minHeight: top === "hero" ? authLayout.heroGap : authLayout.headerTop }} />

@@ -8,6 +8,7 @@ import { AccountBriefingBody } from "@/components/AccountBriefingBody";
 import { AccountBriefingCard, AccountBriefingRow } from "@/components/AccountBriefingCard";
 import { MarketSummaryBody } from "@/components/MarketSummaryBody";
 import { MemberNotice } from "@/components/MemberNotice";
+import { MEMBER_EMPTY_BRIEFINGS, useAccountView } from "@/lib/account";
 import { MarketSummaryCard, MarketSummaryRow } from "@/components/MarketSummaryCard";
 import { BriefingBody } from "@/components/BriefingBody";
 import { BriefingCard } from "@/components/BriefingCard";
@@ -88,6 +89,8 @@ export default function BriefingsScreen() {
   const ux = useUx();
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
   const guideProps = useSettingsGuide();
+  // 계정 A단계 (플래그 accounts): 주인 아닌 계정 (꺼져 있으면 늘 false — 지금 화면 그대로)
+  const { member } = useAccountView();
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);
   // 3-42 넓은 창: 플래그가 꺼져 있으면 on=false → 아래는 모두 지금 그대로
   const fold = useFoldLayout();
@@ -215,8 +218,12 @@ export default function BriefingsScreen() {
       <Muted style={{ paddingHorizontal: space.lg }}>브리핑 없음: {items.filter((i) => !i.latest).map((i) => i.name).join(", ")}</Muted>
     ) : null;
 
-  // 3-24 빈 목록 (플래그 emptyGuide): 무엇을 하면 되는지 한 문장 + 버튼 하나. 꺼져 있으면 아래 예전 안내 그대로
-  const guideEmpty = ux.emptyGuide
+  // 3-24 빈 목록 (플래그 emptyGuide): 무엇을 하면 되는지 한 문장 + 버튼 하나. 꺼져 있으면 아래 예전 안내 그대로.
+  // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목을 추가하면…'·[종목 검색] 대신 차분한 안내만 (버튼 없음)
+  const memberEmpty = member ? <Empty title={MEMBER_EMPTY_BRIEFINGS.title} hint={MEMBER_EMPTY_BRIEFINGS.hint} /> : null;
+  const guideEmpty = memberEmpty
+    ? { none: memberEmpty, noBriefing: memberEmpty }
+    : ux.emptyGuide
     ? {
         none: <Empty title="등록된 종목이 없습니다" hint="종목을 추가하면 평일 장 시작 전·마감 뒤에 종목마다 브리핑이 만들어집니다." action={<Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} />} />,
         noBriefing: (

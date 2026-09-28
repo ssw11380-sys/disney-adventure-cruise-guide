@@ -731,11 +731,8 @@ export const authLayout = {
   heroRatio: 0.4,
   heroMin: 240,
   heroMax: 380,
-  /** 키보드가 뜨면 그림을 이 높이(글자 한 줄)로 접는다 */
-  heroKeyboardH: 72,
-  /** 그림 칸(plot): 한 칸은 위 12dp·최대 폭 560, 두 칸은 옆 40dp */
+  /** 그림 칸(plot): 한 칸은 위 12dp·입력 칸과 같은 폭(왼쪽 끝이 한 줄), 두 칸은 옆 40dp */
   plotTop: 12,
-  plotMaxW: 560,
   twoPlotInset: 40,
   /** 그림 아래 입력 묶음까지 */
   heroGap: 8,
@@ -763,18 +760,19 @@ export const authLayout = {
   wordmarkInk: 6.3,
   /** 회원가입 글자 머리 위 여백 (안전 영역 아래) */
   headerTop: 32,
-  /** 회원가입 머리 오른쪽 작은 정지 계단 (상한가 봉 6개), 빛이 번지는 거리 */
-  miniStairsW: 60,
-  miniStairsH: 72,
-  miniStairsGlow: 28,
+  /**
+   * 회원가입 머리 오른쪽 작은 정지 계단 (상한가 봉 6개): 높이 = 로고 글자 칸 높이 × 2.4 (30sp 94 · 34sp 106), 폭 = 높이 × 0.9,
+   * 맨 아래를 로고 글자 바탕선에 맞춘다. 빛이 번지는 거리 = 높이 × 0.4
+   */
+  miniStairsH: 2.4,
+  miniStairsW: 0.9,
+  miniStairsGlow: 0.4,
 } as const;
 
 /** 로그인·회원가입 글자 크기 (hero-spec.md 3장) */
 export const authFont = {
   logo: 30,
   logoWide: 34,
-  /** 키보드가 떠 그림을 접었을 때 한 줄 로고 */
-  logoCollapsed: 22,
   title: 20,
   input: 16,
   button: 16,

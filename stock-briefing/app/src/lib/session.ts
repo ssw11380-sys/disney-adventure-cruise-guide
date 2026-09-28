@@ -39,6 +39,12 @@ export const SESSION_KEY = "auth.session.v1";
 export const DEVICE_KEY = "auth.device.v1";
 /** '자동 로그인' 체크의 마지막 선택 */
 export const REMEMBER_KEY = "auth.rememberPref.v1";
+/**
+ * 서버에 알리지 못한 로그아웃 (인터넷이 끊긴 채 로그아웃) — 서버 주소와 그 세션 토큰. 다음에 앱이 켜지거나 앞으로 돌아왔을 때 다시 알린다
+ * (서버 세션이 살아 있으면 그 세션으로 등록한 기기로 알림이 계속 가므로). 서버가 받으면 지운다
+ */
+export const PENDING_LOGOUT_KEY = "auth.pendingLogout.v1";
+const PENDING_MAX = 5;
 
 export type EndReason = "invalid" | "logout";
 
@@ -53,8 +59,35 @@ let ended: EndReason | null = null;
 let failOpen: string | null = null;
 /** 처음 비밀번호로 로그인한 직후 권유 시트를 한 번 */
 let initialPrompt = false;
+let pendingLogouts: { apiUrl: string; token: string }[] = [];
 let version = 0;
 const listeners = new Set<() => void>();
+/** 계정이 바뀔 때 부르는 함수 (앱 캐시·위젯 데이터 비우기) — 테스트가 모듈 상태를 지워도 남긴다 (모듈을 읽을 때 한 번 끼우는 쪽이 있다) */
+const accountHooks = new Set<(next: StoredSession | null, prev: StoredSession | null) => void>();
+
+/** 누구의 세션인지 (서버 주소 + 사용자). 같은 사람이 다시 로그인하면 같다 */
+const accountKey = (s: StoredSession | null): string | null => (s ? `${clean(s.apiUrl)}|${s.user.id}` : null);
+
+/**
+ * 계정이 바뀌면(다른 사람으로 로그인·로그아웃·세션 끊김) fn 을 부른다 — 세션을 저장·지우는 **그 자리에서, 화면을 다시 그리기 전에** 동기로.
+ * 앱은 여기서 react-query·기기 저장 캐시를 비워 다음 사람에게 앞 사람의 잔고가 한 순간도 그려지지 않게 하고, 위젯 데이터도 지운다.
+ * 저장된 세션을 켤 때 읽어 오는 것(loadSession)은 바뀜이 아니다. 해제 함수를 돌려준다
+ */
+export function onAccountChange(fn: (next: StoredSession | null, prev: StoredSession | null) => void): () => void {
+  accountHooks.add(fn);
+  return () => void accountHooks.delete(fn);
+}
+
+function accountChanged(prev: StoredSession | null, next: StoredSession | null): void {
+  if (accountKey(prev) === accountKey(next)) return;
+  for (const f of [...accountHooks]) {
+    try {
+      f(next, prev);
+    } catch {
+      /* 비우기 실패가 로그인·로그아웃을 막지 않게 */
+    }
+  }
+}
 
 const clean = (url: string) => url.trim().replace(/\/+$/, "");
 export const sameServer = (a: string, b: string): boolean => clean(a) === clean(b);
@@ -106,7 +139,16 @@ export function loadSession(): Promise<void> {
   const s = storage;
   loading ??= (async () => {
     try {
-      const [rawSession, rawDevice, rawRemember] = await Promise.all([s.getItem(SESSION_KEY), s.getItem(DEVICE_KEY), s.getItem(REMEMBER_KEY)]);
+      const [rawSession, rawDevice, rawRemember, rawPending] = await Promise.all([s.getItem(SESSION_KEY), s.getItem(DEVICE_KEY), s.getItem(REMEMBER_KEY), s.getItem(PENDING_LOGOUT_KEY)]);
+      try {
+        const list = JSON.parse(rawPending ?? "[]") as unknown;
+        if (Array.isArray(list)) {
+          const read = list.filter((x): x is { apiUrl: string; token: string } => !!x && typeof x.apiUrl === "string" && typeof x.token === "string" && !!x.token);
+          pendingLogouts = [...pendingLogouts, ...read.filter((x) => !pendingLogouts.some((p) => p.token === x.token))].slice(-PENDING_MAX);
+        }
+      } catch {
+        /* 깨진 값은 무시 */
+      }
       // 읽는 사이 로그인했으면 그 세션을 둔다
       current ??= parseSession(rawSession);
       if (!seen && rawDevice) {
@@ -165,7 +207,10 @@ async function write(fn: (s: KeyValueStorage) => Promise<void>): Promise<void> {
 
 /** 로그인·가입 성공: 자동 로그인 켬이면 기기에 저장, 끔이면 메모리에만 (전에 저장한 세션은 지운다) */
 export async function saveSession(s: Omit<StoredSession, "savedAt"> & { savedAt?: number }): Promise<void> {
+  const prev = current;
   current = { ...s, apiUrl: clean(s.apiUrl), savedAt: s.savedAt ?? Date.now() };
+  // 앞 사람의 캐시를 화면이 다시 그려지기 전에 비운다 (자동 로그인을 끈 채 앱을 닫아 세션이 없던 경우도 — 기기에 남은 캐시는 앞 사람 것일 수 있다)
+  accountChanged(prev ?? null, current);
   ended = null;
   if (failOpen && sameServer(failOpen, s.apiUrl)) failOpen = null;
   seen = { apiUrl: clean(s.apiUrl), on: true };
@@ -191,8 +236,10 @@ export async function updateSessionUser(apiUrl: string, user: AccountUser): Prom
 /** 세션을 지운다 (직접 로그아웃·세션 끊김). 기기 표시(계정 모드를 봄)는 남긴다 — 다음에 로그인 화면이 나오게 */
 export async function clearSession(reason: EndReason): Promise<void> {
   if (!current) return;
+  const prev = current;
   current = null;
   ended = reason;
+  accountChanged(prev, null);
   emit();
   await write((st) => st.removeItem(SESSION_KEY));
 }
@@ -260,6 +307,28 @@ export function dismissInitialPasswordPrompt(): void {
   emit();
 }
 
+/** 서버에 알리지 못한 로그아웃을 적어 둔다 (lib/logout — 인터넷 오류·서버 오류로 POST /api/auth/logout 이 닿지 않았을 때) */
+export async function addPendingLogout(apiUrl: string, token: string): Promise<void> {
+  if (!token || pendingLogouts.some((p) => p.token === token)) return;
+  pendingLogouts = [...pendingLogouts, { apiUrl: clean(apiUrl), token }].slice(-PENDING_MAX);
+  const saved = pendingLogouts;
+  await write((st) => st.setItem(PENDING_LOGOUT_KEY, JSON.stringify(saved)));
+}
+
+/** 이 서버에 다시 알려야 할 로그아웃 세션 토큰 (읽기가 끝나길 기다린다) */
+export async function pendingLogoutsFor(apiUrl: string): Promise<string[]> {
+  await loadSession();
+  return pendingLogouts.filter((p) => sameServer(p.apiUrl, apiUrl)).map((p) => p.token);
+}
+
+/** 서버가 받았다(또는 이미 끝난 세션) → 지운다 */
+export async function dropPendingLogout(token: string): Promise<void> {
+  if (!pendingLogouts.some((p) => p.token === token)) return;
+  pendingLogouts = pendingLogouts.filter((p) => p.token !== token);
+  const saved = pendingLogouts;
+  await write((st) => (saved.length ? st.setItem(PENDING_LOGOUT_KEY, JSON.stringify(saved)) : st.removeItem(PENDING_LOGOUT_KEY)));
+}
+
 /** useSyncExternalStore 용 */
 export function subscribeSession(fn: () => void): () => void {
   listeners.add(fn);
@@ -281,6 +350,7 @@ export function resetSessionForTests(): void {
   ended = null;
   failOpen = null;
   initialPrompt = false;
+  pendingLogouts = [];
   version = 0;
   listeners.clear();
 }

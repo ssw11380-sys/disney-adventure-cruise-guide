@@ -4,7 +4,7 @@ import React, { createContext, useContext, useId, useRef, useState } from "react
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type TextInputProps, type TextStyle, type ViewStyle } from "react-native";
 import { Defs, LinearGradient as SvgLinearGradient, RadialGradient, Rect, Stop, Svg, Text as SvgText } from "react-native-svg";
 import { DISCLAIMER } from "@/lib/disclaimer";
-import { miniStairs, wordmarkH } from "@/lib/loginHero";
+import { miniStairs, miniStairsBox, wordmarkBaseline, wordmarkH } from "@/lib/loginHero";
 import { authColors as C, authFont, authLayout, fontCap, space, touch } from "@/tokens";
 
 /**
@@ -236,7 +236,7 @@ export function GoldWordmark({ size }: { size: number }) {
           </SvgLinearGradient>
         </Defs>
       ) : null}
-      <SvgText x={0} y={Math.round(size * 1.02)} fontSize={size} fontWeight="800" letterSpacing={-0.6} fontFamily={WORDMARK_FONT} fill={WORDMARK_GRADIENT ? `url(#${uid}gold)` : C.gold}>
+      <SvgText x={0} y={wordmarkBaseline(size)} fontSize={size} fontWeight="800" letterSpacing={-0.6} fontFamily={WORDMARK_FONT} fill={WORDMARK_GRADIENT ? `url(#${uid}gold)` : C.gold}>
         가즈아 불기둥
       </SvgText>
     </Svg>
@@ -264,18 +264,25 @@ export function LogoSubtitle() {
 }
 
 /**
- * 회원가입 머리 오른쪽: 로그인 그림의 상한가 계단을 줄인 작은 정지 표시 (봉 6개, 60 × 72 — 몸통이 세로로 길어 봉으로 보이게) +
- * 맨 위 봉 둘레 옅은 붉은 빛. 빛은 칸 밖으로 번지게 그린다 (칸 경계에 빛이 잘린 선이 생기지 않게). 움직임 없음, 꾸밈이라 화면 읽기에서 뺌
+ * 회원가입 머리 오른쪽: 로그인 그림의 상한가 계단을 줄인 작은 정지 표시 (봉 6개, 로고 글자 크기에 맞춤 — 30sp 85 × 94 · 34sp 95 × 106,
+ * 몸통이 세로로 길어 봉으로 보이게) + 맨 위 봉 둘레 옅은 붉은 빛. 맨 아래를 로고 글자 바탕선에 맞춘다 (머리가 flex-end 로 로고 묶음 아래 끝에 맞추므로
+ * 그 차이만큼 아래 여백). 빛은 칸 밖으로 번지게 그린다 (칸 경계에 빛이 잘린 선이 생기지 않게). 움직임 없음, 꾸밈이라 화면 읽기에서 뺌
  */
-export function MiniStairs() {
+export function MiniStairs({ size }: { size: number }) {
   const uid = useId().replace(/[^A-Za-z0-9_-]/g, "");
-  const W = authLayout.miniStairsW;
-  const H = authLayout.miniStairsH;
-  const P = authLayout.miniStairsGlow;
+  const box = miniStairsBox(size);
+  const W = box.w;
+  const H = box.h;
+  const P = box.glow;
   const { bodies, wicks } = miniStairs(W, H);
   const top = bodies[bodies.length - 1]!;
   return (
-    <View style={{ width: W, height: H, overflow: "visible", pointerEvents: "none" }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+    <View
+      testID="mini-stairs"
+      style={{ width: W, height: H, marginBottom: box.baselineGap, overflow: "visible", pointerEvents: "none" }}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
       <View style={{ position: "absolute", left: -P, top: -P }}>
         <Svg width={W + 2 * P} height={H + 2 * P}>
           <Defs>
@@ -294,7 +301,7 @@ export function MiniStairs() {
             <Rect key={`w${k}`} x={P + w.x} y={P + w.y} width={w.w} height={w.h} fill={C.limitWick} />
           ))}
           {bodies.map((b, k) => (
-            <Rect key={`b${k}`} x={P + b.x} y={P + b.y} width={b.w} height={b.h} rx={1} fill={`url(#${uid}limit)`} />
+            <Rect key={`b${k}`} x={P + b.x} y={P + b.y} width={b.w} height={b.h} rx={1.5} fill={`url(#${uid}limit)`} />
           ))}
         </Svg>
       </View>

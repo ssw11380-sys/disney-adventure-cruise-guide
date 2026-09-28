@@ -35,15 +35,41 @@ async function withSession(apiUrl: string): Promise<{ headers: Record<string, st
   return { headers: sent ? { "x-session-token": sent } : {}, sent };
 }
 
-/** 401 session_invalid 면 앱과 같은 규칙으로 로그아웃(보낸 토큰이 지금 토큰일 때만), 403 session_required 면 계정 모드 표시만 */
-async function noteAuth(res: Response, apiUrl: string, sent: string | null): Promise<void> {
-  if (res.status !== 401 && res.status !== 403) return;
+/** 위젯이 그릴 수 없는 까닭 — 로그인이 필요함 (세션 끊김·세션 없음·주인 아닌 계정). model.failureText 가 '로그인'으로 알아본다 */
+export const LOGIN_NEEDED = "로그인 필요";
+
+/**
+ * 서버가 '이 사람에게는 개인 데이터를 줄 수 없다'고 답함 (401 session_invalid · 403 session_required · 403 personal_data_not_ready).
+ * 이때는 마지막으로 받은 잔고·브리핑으로 그리지 않고 위젯이 적어 둔 개인 데이터를 지운다 — 로그아웃·세션 끊김 뒤, 다른 계정이 로그인한 뒤에도
+ * 홈 화면 위젯이 주인의 보유 수량·손익을 계속 보여 주지 않게 (계정 A단계 검증 지적)
+ */
+export class LoginNeededError extends Error {
+  constructor() {
+    super(LOGIN_NEEDED);
+    this.name = "LoginNeededError";
+  }
+}
+
+/**
+ * 401 session_invalid 면 앱과 같은 규칙으로 로그아웃(보낸 토큰이 지금 토큰일 때만), 403 session_required 면 계정 모드 표시.
+ * 개인 데이터를 받을 수 없는 응답이면 true
+ */
+async function noteAuth(res: Response, apiUrl: string, sent: string | null): Promise<boolean> {
+  if (res.status !== 401 && res.status !== 403) return false;
   try {
     const b = (await res.clone().json()) as { code?: unknown };
-    if (res.status === 401 && b.code === "session_invalid") handleSessionInvalid(apiUrl, sent);
-    if (res.status === 403 && b.code === "session_required") markAccountsSeen(apiUrl, true);
+    if (res.status === 401 && b.code === "session_invalid") {
+      handleSessionInvalid(apiUrl, sent);
+      return true;
+    }
+    if (res.status === 403 && b.code === "session_required") {
+      markAccountsSeen(apiUrl, true);
+      return true;
+    }
+    return res.status === 403 && b.code === "personal_data_not_ready";
   } catch {
     /* 본문이 JSON 이 아님 */
+    return false;
   }
 }
 
@@ -199,6 +225,20 @@ async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showK
 const PAYLOAD_KEY = "widget.payload";
 const VIEW_KEY = "widget.view";
 const PNL_KEY = "widget.pnlMode";
+
+/**
+ * 위젯이 적어 둔 개인 데이터(마지막 잔고·마지막 /api/widget 응답·마지막으로 그린 데이터·실패 표시)를 지운다 (계정 A단계).
+ * 계정이 바뀔 때(로그아웃·세션 끊김·다른 사람 로그인 — 앱 루트가 lib/session onAccountChange 로 부른다)와 서버가 개인 데이터를 주지 않을 때.
+ * 손익 보기(누적·당일)는 표시 설정이라 남긴다
+ */
+export async function clearWidgetAccountData(): Promise<void> {
+  await Promise.all([LAST_KEY, PAYLOAD_KEY, VIEW_KEY, RETRY_KEY].map((k) => AsyncStorage.removeItem(k).catch(() => undefined)));
+}
+
+/** 로그인이 필요할 때 그리는 빈 위젯 데이터 ('갱신 실패 · 로그인 필요', 숫자 없음) */
+export function signedOutWidgetData(now = Date.now()): WidgetData {
+  return { stocks: [], briefings: [], showKrw: false, afterCost: true, brief: null, fetchedAt: now, error: LOGIN_NEEDED, filled: [], market: null, indices: null, board: null, features: NO_FEATURES };
+}
 /**
  * 위젯 갱신이 실패한 뒤 아직 성공하지 못했다는 표시 (위젯 2차): 마지막 실패 시각과 서버 주소. 어느 갱신이든(백그라운드 작업·위젯 주기·크기 변경·추가·↻)
  * 서버 조회에 실패하면 그 조회를 다 마친 뒤(위젯에 그릴 값을 적은 뒤) 적고, 서버에서 받는 데 성공하면 지운다.
@@ -599,7 +639,7 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers, ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
-    await noteAuth(res, apiUrl, session.sent);
+    if (await noteAuth(res, apiUrl, session.sent)) throw new LoginNeededError();
     if (res.status === 404) {
       // 로그인 페이지·프록시의 HTML 404 는 서버에 닿지 못한 것 (예전 서버의 404 는 JSON 오류 본문 — Fastify)
       if (await isHtml(res)) throw new Error(NOT_JSON);
@@ -672,7 +712,7 @@ async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promi
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers }, signal: ctrl.signal });
-    await noteAuth(res, apiUrl, session.sent);
+    if (await noteAuth(res, apiUrl, session.sent)) throw new LoginNeededError();
     if (!res.ok) throw new Error((await isPortalPage(res)) ? NOT_JSON : `HTTP ${res.status}`);
     return await jsonBody<T>(res);
   } finally {
@@ -760,6 +800,19 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     ok = true;
   } catch (e) {
     out.error = e instanceof Error ? e.message : String(e);
+    if (e instanceof LoginNeededError) {
+      // 로그인이 필요함: 앞 사람(주인)의 잔고·브리핑으로 그리지 않고 적어 둔 개인 데이터를 지운다. 지수·환율 판·플래그는 개인 데이터가 아니라 남긴다
+      await clearWidgetAccountData();
+      if (prevView) {
+        out.features = prevView.features;
+        if (prevView.featuresAt !== undefined) out.featuresAt = prevView.featuresAt;
+        out.indices = prevView.indices;
+        if (prevView.indicesAt !== undefined) out.indicesAt = prevView.indicesAt;
+      }
+      keepBoard(out, prevView);
+      await saveWidgetView(out, apiUrl);
+      return out;
+    }
     const cached = await readCachedPayload(apiUrl);
     // 칩: 받아 둔 응답의 것(플래그로 거름), 없으면(업데이트 직후 등) 마지막으로 그린 것 — 실패했다고 칩이 사라지지 않게
     out.market = cached ? payloadMarket(cached.body) : (prevView?.market ?? null);

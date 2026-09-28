@@ -96,6 +96,7 @@ export function asOfLabel(ms: number, now: number): string {
 /** 조회 실패 사유를 짧은 한국어로 (영어 오류 문구를 위젯에 그대로 보이지 않게) */
 export function failureText(error: string | null): string | null {
   if (!error) return null;
+  if (/로그인/.test(error)) return "로그인 필요 · 앱에서 로그인";
   if (/HTTP 401|토큰/.test(error)) return "갱신 실패 · 토큰 확인";
   if (/abort|timeout|시간/i.test(error)) return "갱신 실패 · 응답 없음";
   if (/network|fetch|연결/i.test(error)) return "갱신 실패 · 연결 안 됨";

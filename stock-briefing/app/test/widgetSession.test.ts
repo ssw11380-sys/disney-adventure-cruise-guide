@@ -78,3 +78,51 @@ describe("위젯·백그라운드의 세션", () => {
     expect(s.sessionFor(SERVER)).toBeNull();
   });
 });
+
+describe("로그인이 필요하면 위젯이 적어 둔 개인 데이터로 그리지 않는다 (계정 A단계 검증 지적)", () => {
+  const ownerRow = { code: "005930", name: "삼성전자", market: "KOSPI", quantity: 123, avgPrice: 71111, memo: null, createdAt: "x", updatedAt: "x", quote: null };
+  const seed = () => {
+    h.store.set("widget.lastStocks", JSON.stringify({ at: 1, apiUrl: SERVER, stocks: [ownerRow] }));
+    h.store.set("widget.view", JSON.stringify({ apiUrl: SERVER, view: { stocks: [ownerRow], briefings: [], fetchedAt: 1, error: null, filled: [], market: null, indices: null, board: null, features: {} } }));
+    h.store.set("widget.payload", JSON.stringify({ at: 1, apiUrl: SERVER, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: null, body: { v: 1, stocks: [ownerRow], briefings: [] } }));
+  };
+  const cases: [string, () => Response][] = [
+    ["401 session_invalid (세션 끊김)", () => new Response(JSON.stringify({ error: "SESSION_INVALID", code: "session_invalid" }), { status: 401 })],
+    ["403 session_required (로그아웃 뒤)", () => new Response(JSON.stringify({ error: "SESSION_REQUIRED", code: "session_required" }), { status: 403 })],
+    ["403 personal_data_not_ready (주인 아닌 계정)", () => new Response(JSON.stringify({ error: "PERSONAL_DATA_NOT_READY", code: "personal_data_not_ready" }), { status: 403 })],
+  ];
+  for (const [label, res] of cases) {
+    it(`${label}: 잔고 없이 '로그인 필요', 마지막 잔고·응답·그린 데이터를 지운다`, async () => {
+      seed();
+      reply = res;
+      const { data } = await freshModules();
+      const { failureText } = await import("@/widgets/model");
+      const d = await data.loadWidgetData();
+      expect(d.stocks).toEqual([]);
+      expect(d.error).toBe(data.LOGIN_NEEDED);
+      expect(failureText(d.error)).toBe("로그인 필요 · 앱에서 로그인");
+      expect(h.store.has("widget.lastStocks")).toBe(false);
+      expect(h.store.has("widget.payload")).toBe(false);
+      expect(JSON.stringify(await data.loadCachedWidgetData())).not.toContain("삼성전자");
+    });
+  }
+
+  it("인터넷 오류는 예전처럼 마지막 잔고를 둔다 (로그아웃이 아니다)", async () => {
+    seed();
+    reply = () => Promise.reject(new TypeError("Network request failed"));
+    const { data } = await freshModules();
+    const d = await data.loadWidgetData();
+    expect(d.stocks.map((s) => s.code)).toEqual(["005930"]);
+    expect(h.store.has("widget.lastStocks")).toBe(true);
+  });
+
+  it("clearWidgetAccountData: 계정이 바뀌면(앱 루트가 부른다) 적어 둔 개인 데이터를 지우고 손익 보기 설정은 남긴다", async () => {
+    seed();
+    h.store.set("widget.pnlMode", "day");
+    const { data } = await freshModules();
+    await data.clearWidgetAccountData();
+    for (const k of ["widget.lastStocks", "widget.view", "widget.payload"]) expect(h.store.has(k)).toBe(false);
+    expect(h.store.get("widget.pnlMode")).toBe("day");
+    expect(data.signedOutWidgetData(5)).toMatchObject({ stocks: [], briefings: [], error: data.LOGIN_NEEDED, fetchedAt: 5 });
+  });
+});

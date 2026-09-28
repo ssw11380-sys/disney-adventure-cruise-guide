@@ -217,9 +217,12 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
       sendNoSession<AuthResult>("POST", "/api/auth/signup", body, 20_000),
     me: () => get<AuthMe>("/api/auth/me", 10_000),
     logout: () => send<void>("POST", "/api/auth/logout", undefined, 10_000),
+    /** 서버에 알리지 못했던 로그아웃을 그 세션 토큰으로 다시 알린다 (지금 세션은 붙이지 않는다 — lib/logout flushPendingLogouts) */
+    logoutSession: (sessionToken: string) => request<void>(baseUrl, token, "/api/auth/logout", { method: "POST", headers: { "x-session-token": sessionToken } }, 10_000, false),
     logoutAll: () => send<void>("POST", "/api/auth/logout-all", undefined, 10_000),
     changePassword: (body: { current: string; next: string; nextConfirm: string }) => send<{ ok: true; revokedOthers: number; user: AccountUser }>("POST", "/api/auth/password", body, 20_000),
-    changeEmail: (email: string) => send<{ user: AccountUser }>("PUT", "/api/auth/email", { email }, 10_000),
+    /** 이메일 등록·변경: 지금 비밀번호를 함께 보낸다 (서버가 다시 확인 — 세션만으로는 바꾸지 못하게) */
+    changeEmail: (email: string, current: string) => send<{ user: AccountUser }>("PUT", "/api/auth/email", { email, current }, 10_000),
     health: () => poll<Health>("/health", 8_000),
     /** 앱 오류 보고 (lib/errorReport). 토큰·금액은 보내기 전에 지운다 */
     reportErrors: (errors: unknown[]) => send<{ saved: number; dropped: number }>("POST", "/api/app-errors", { errors }, 10_000),

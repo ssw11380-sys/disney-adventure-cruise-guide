@@ -14,7 +14,7 @@ import { font, fontCap, radius, space, touch, useTheme } from "@/theme";
 
 /**
  * 설정 탭 맨 위 '계정' 칸 (계정 A단계, 기능 플래그 accounts — 꺼져 있거나 로그인 전이면 없음).
- * 아이디(주인이면 '주인') · 이메일 등록/변경 · 자동 로그인 · [비밀번호 바꾸기] · [로그아웃] · [모든 기기에서 로그아웃](확인 창).
+ * 아이디(주인이면 '주인') · 이메일 등록/변경(지금 비밀번호를 함께 — 세션만으로는 바꾸지 못하게) · 자동 로그인 · [비밀번호 바꾸기] · [로그아웃] · [모든 기기에서 로그아웃](확인 창).
  * 처음 비밀번호(1111)를 쓰는 중이면 칸 위에 띠 '처음 비밀번호를 쓰고 있어요' + [바꾸기] (바꿀 때까지)
  */
 export const INITIAL_PW_BANNER = "처음 비밀번호를 쓰고 있어요";
@@ -32,26 +32,42 @@ function AccountCardBody({ session }: { session: StoredSession }) {
   const u = session.user;
   const [editing, setEditing] = useState(false);
   const [email, setEmail] = useState(u.email ?? "");
+  const [current, setCurrent] = useState("");
   const [emailMsg, setEmailMsg] = useState<string | null>(null);
+  const [currentMsg, setCurrentMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [leaving, setLeaving] = useState<"here" | "all" | null>(null);
 
+  const closeEdit = () => {
+    setEditing(false);
+    setEmail(u.email ?? "");
+    setCurrent("");
+    setEmailMsg(null);
+    setCurrentMsg(null);
+  };
+
   const saveEmail = async () => {
     const code = emailError(email);
-    if (code) {
-      setEmailMsg(fieldMessage("email", code));
+    const needPw = current ? null : fieldMessage("current", "required");
+    setEmailMsg(code ? fieldMessage("email", code) : null);
+    setCurrentMsg(needPw);
+    if (code || needPw) {
+      AccessibilityInfo.announceForAccessibility((code ? fieldMessage("email", code) : needPw)!);
       return;
     }
     setSaving(true);
     try {
-      const r = await api.changeEmail(email.trim());
+      const r = await api.changeEmail(email.trim(), current);
       await updateSessionUser(apiUrl, r.user);
-      setEditing(false);
-      setEmailMsg(null);
+      closeEdit();
       AccessibilityInfo.announceForAccessibility("이메일을 저장했어요");
     } catch (e) {
       const v = authErrorView(e);
-      setEmailMsg(v.fields["email"] ?? v.message);
+      const pw = v.fields["current"] ?? null;
+      setCurrentMsg(pw);
+      setEmailMsg(v.fields["email"] ?? (pw ? null : v.message));
+      const say = pw ?? v.fields["email"] ?? v.message;
+      if (say) AccessibilityInfo.announceForAccessibility(say);
     } finally {
       setSaving(false);
     }
@@ -117,19 +133,28 @@ function AccountCardBody({ session }: { session: StoredSession }) {
             style={[styles.input, { color: t.ink, borderColor: emailMsg ? t.danger : t.line, backgroundColor: t.surfaceAlt }]}
           />
           {emailMsg ? <Text style={{ color: t.danger, fontSize: font.small }}>{emailMsg}</Text> : <Muted style={{ fontSize: font.tiny }}>비밀번호를 잃어버렸을 때 확인용으로만 씁니다.</Muted>}
+          <TextInput
+            value={current}
+            onChangeText={(v) => {
+              setCurrent(v);
+              setCurrentMsg(null);
+            }}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="current-password"
+            textContentType="password"
+            accessibilityLabel="지금 비밀번호"
+            accessibilityHint={currentMsg ?? "이메일을 바꾸려면 지금 비밀번호를 한 번 더 넣어 주세요"}
+            placeholder="지금 비밀번호"
+            placeholderTextColor={t.muted}
+            maxFontSizeMultiplier={fontCap.chrome}
+            style={[styles.input, { color: t.ink, borderColor: currentMsg ? t.danger : t.line, backgroundColor: t.surfaceAlt }]}
+          />
+          {currentMsg ? <Text style={{ color: t.danger, fontSize: font.small }}>{currentMsg}</Text> : null}
           <View style={styles.buttons}>
             <Button title="저장" compact onPress={() => void saveEmail()} loading={saving} accessibilityLabel="이메일 저장" />
-            <Button
-              title="취소"
-              compact
-              variant="secondary"
-              onPress={() => {
-                setEditing(false);
-                setEmail(u.email ?? "");
-                setEmailMsg(null);
-              }}
-              accessibilityLabel="이메일 바꾸기 취소"
-            />
+            <Button title="취소" compact variant="secondary" onPress={closeEdit} accessibilityLabel="이메일 바꾸기 취소" />
           </View>
         </View>
       ) : null}

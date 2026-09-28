@@ -13,24 +13,28 @@ describe("로그인 배치 (hero-spec 4.2)", () => {
     expect(l).toMatchObject({ mode: "one", gutter: 24, formW: 312, formX: 24, heroW: 360, heroH: 308, logoSize: 30, logoX: 24, logoY: 44 });
     expect(l.plot).toEqual({ x0: 24, y0: 40, w: 312, h: 256 });
   });
-  it("475×751 한 칸 (접은 폴드8): 입력 27.5 · 420", () => {
+  it("475×751 한 칸 (접은 폴드8): 입력 27.5 · 420, 그림 칸도 같은 폭 (로고·차트·입력 칸 왼쪽 끝이 한 줄)", () => {
     const l = heroLayout(475, 751, { top: 28, bottom: 24 });
-    expect(l).toMatchObject({ mode: "one", formW: 420, formX: 27.5, heroH: 308, logoSize: 30 });
-    expect(l.plot).toEqual({ x0: 24, y0: 40, w: 427, h: 256 });
+    expect(l).toMatchObject({ mode: "one", formW: 420, formX: 27.5, heroH: 308, logoSize: 30, logoX: 27.5 });
+    expect(l.plot).toEqual({ x0: 27.5, y0: 40, w: 420, h: 256 });
   });
   it("933×704 두 칸 (펼친 폴드8 가로): 왼쪽 그림 513 · 오른쪽 입력 545 · 356, 로고 34", () => {
     const l = heroLayout(933, 704, { top: 24, bottom: 16 });
     expect(l).toMatchObject({ mode: "two", formW: 356, formX: 545, heroW: 513, heroH: 704, logoSize: 34, logoX: 40, logoY: 143.5 });
     expect(l.plot).toEqual({ x0: 40, y0: 139.5, w: 433, h: 433 });
   });
-  it("704×933 한 칸 (펼친 폴드8 세로): 가운데 420, 그림 380", () => {
+  it("704×933 한 칸 (펼친 폴드8 세로): 가운데 420, 그림 380 — 그림 칸도 입력 칸과 같은 142 · 420 (왼쪽 선이 둘로 보이지 않게)", () => {
     const l = heroLayout(704, 933, { top: 28, bottom: 24 });
     expect(l).toMatchObject({ mode: "one", gutter: 32, formW: 420, formX: 142, heroH: 380, logoSize: 34, logoX: 142 });
-    expect(l.plot).toEqual({ x0: 72, y0: 40, w: 560, h: 328 });
+    expect(l.plot).toEqual({ x0: 142, y0: 40, w: 420, h: 328 });
   });
-  it("키보드가 뜨면 한 칸 그림을 72dp 머리(로고 22 한 줄, 가운데)로 접는다 (두 칸은 그대로)", () => {
-    expect(heroLayout(360, 752, { top: 28, bottom: 24 }, true)).toMatchObject({ heroH: 100, collapsed: true, logoSize: 22, logoX: 24, logoY: 49.5 });
-    expect(heroLayout(933, 704, { top: 24, bottom: 16 }, true)).toMatchObject({ mode: "two", collapsed: false });
+  it("한 칸이면 어느 크기에서나 그림 칸 = 입력 칸 (왼쪽 끝·폭), 로고도 같은 왼쪽 끝", () => {
+    for (const W of [320, 360, 393, 412, 475, 600, 704, 768])
+      for (const H of [640, 752, 933, 1024]) {
+        const l = heroLayout(W, H, { top: 28, bottom: 24 });
+        if (l.mode !== "one") continue;
+        expect([l.plot.x0, l.plot.w, l.logoX], `${W}×${H}`).toEqual([l.formX, l.formW, l.formX]);
+      }
   });
 });
 
