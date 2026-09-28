@@ -7,7 +7,8 @@ import { briefingMarketDate, type BriefingSession, type RunDoneListener, type Ru
 /**
  * 브리핑 늦음·실패 안내 (브리핑 3차 2, 플래그 briefingStatus).
  * 브리핑 탭 맨 위 한 덩어리: 오늘 예약 시각이 지난 가장 최근 회차가 늦었는지·일부/전부 못 만들었는지·실행되지 않았는지·아직 만드는 중인지.
- *  - 실행 기록: 실행이 끝날 때마다(알림을 보낸 뒤) meta `briefing_run_log` 에 한 줄 (최근 20건, 서버를 다시 켜도 남음)
+ *  - 실행 기록: 실행이 끝날 때마다(알림을 보낸 뒤) meta `briefing_run_log` 에 한 줄 (전체 실행 최근 20건 + 한 종목 다시 만들기 최근 20건,
+ *    정기 실행 최근 4건은 늘 남김 — 서버를 다시 켜도 남는다). 기록이 없어도(그날 플래그를 켬·저장 실패) 그 회차 줄이 있으면 줄로만 판단한다
  *  - 못 만든 종목은 지금 briefings 표에서 센다 — 수동으로 다시 만들어 성공하면 안내에서 빠진다. 시각은 실행 기록에서
  *  - 오류 원문은 보내지 않는다: 저장된 오류 글에서 종류만 뽑는다 (failureKind — 앱도 같은 표를 쓴다, shared/fixtures/briefingFailure.json)
  *  - 스케줄러는 실패 종목을 다시 만들지 않고 놓친 회차를 따라잡지 않는다 → '잠시 뒤 다시 만들어집니다'라고 말하지 않는다 (retryAt 은 늘 null)
@@ -31,7 +32,8 @@ export function failureKind(error: string | null | undefined): FailureKind {
   if (e.startsWith("refusal:") || e.startsWith("truncated:")) return "cutoff";
   if (e.startsWith("api:")) {
     if (/\(429\)|사용량 제한|\(529\)/.test(e)) return "busy";
-    if (/\(5\d\d\)|서버 장애|모델 호출 실패/.test(e)) return "outage";
+    // 연결 오류·시간 초과: SDK 의 APIConnectionError(시간 초과 포함)는 상태 번호가 없어 'API 오류 : Connection error.' 로 저장된다 (llm/generator.ts toGenerationError)
+    if (/\(5\d\d\)|서버 장애|모델 호출 실패|API 오류 :|Connection error|timed out/i.test(e)) return "outage";
   }
   return "other";
 }
@@ -47,7 +49,10 @@ export const MISSED_BOOT_MS = 5 * 60_000;
 /** 이름을 보이는 최대 개수 (넘으면 '외 N종목' — 앱이 자른다) */
 export const NAMES_MAX = 5;
 export const RUN_LOG_KEY = "briefing_run_log";
+/** 전체 실행(정기·수동 생성) · 한 종목 다시 만들기를 각각 이만큼 남긴다 (다시 만들기를 많이 해도 정기 기록이 밀려나지 않게) */
 export const RUN_LOG_MAX = 20;
+/** 정기 실행 기록은 최근 이만큼(이틀 치 오전·오후)을 늘 남긴다 */
+export const RUN_LOG_SCHEDULE_KEEP = 4;
 
 /** 실행 기록 한 줄 (실행이 끝날 때) */
 export interface RunLogEntry {
@@ -67,6 +72,8 @@ export interface RunLogEntry {
   skipped: number;
   /** 휴장으로 건너뛴 종목 (못 만든 것으로 세지 않는다) */
   skippedCodes: string[];
+  /** 한 종목 다시 만들기(partial)가 다룬 종목 — 그 줄을 정기 실행이 만든 줄로 세지 않게 (전체 실행은 없음) */
+  codes?: string[];
 }
 
 export interface StatusProblem {
@@ -171,7 +178,10 @@ export interface JudgeInput {
 
 /**
  * 판단 (순수). 순서: 모델 없음 → 오늘 회차 없음 → 도는 중(20분 넘으면 만드는 중) → 대상 종목 없음(모두 휴장·등록 없음)
- * → 빠짐(줄·실행 기록 없음 + 예약 뒤 45분 지남 또는 서버가 예약 뒤에 켜지고 5분 지남) → 모두/일부 못 만듦 → 늦음 → 정상.
+ * → 빠짐(그 회차 줄 0 + 전체 실행 기록 0 + 예약 뒤 45분 지남 또는 서버가 예약 뒤에 켜지고 5분 지남) → 모두/일부 못 만듦 → 늦음 → 정상.
+ *  - 줄 0: 한 종목 다시 만들기(partial 기록에 적힌 종목)로 생긴 줄은 세지 않는다 — 정기 실행이 빠진 날 한 종목만 다시 만들어도 '빠짐'
+ *  - 전체 실행 기록이 없는데 줄이 있으면(그날 플래그를 켬·기록 저장 실패·도중 재시작) 줄로만 판단하고 늦음은 모른다(안 보임).
+ *    줄이 없는 종목의 이유는 서버가 첫 줄 뒤에 켜졌을 때만 '서버 다시 시작', 그 밖은 '그 밖'
  * 줄이 없는 종목(briefingId null)은 부르는 쪽이 같은 회차의 가장 최근 브리핑으로 채운다
  */
 export function judgeStatus(i: JudgeInput): BriefingStatus {
@@ -218,18 +228,24 @@ export function judgeStatus(i: JudgeInput): BriefingStatus {
   // 모두 휴장이라 건너뛴 날·등록 종목 없음 → 탭 휴장 줄이 이미 말한다
   if (trading.length === 0) return base;
 
-  const firstRow = i.rows.length ? Math.min(...i.rows.map((r) => ms(r.createdAt)).filter((t) => !Number.isNaN(t))) : Number.NaN;
-  // 실행 기록 없이 줄만 있고 서버가 그 뒤에 켜졌으면 도중에 다시 켜진 것 (기록은 실행이 끝날 때 쓰므로)
-  const restarted = !latestFull && i.rows.length > 0 && i.bootAt.getTime() > firstRow;
-  if (!latestFull && !restarted) {
-    // 전체 실행 기록이 없다: 아직 돌지 않았거나(늦게 알아챈 예약 — 30분까지 돈다) 빠졌다
+  // 한 종목 다시 만들기로 생긴 줄은 정기·전체 실행이 만든 줄로 세지 않는다 (기록에 적힌 종목만 — 모르면 센다)
+  const remade = new Set(mine.filter((r) => r.partial).flatMap((r) => r.codes ?? []));
+  const runRows = i.rows.filter((r) => !remade.has(r.code));
+  const rowTimes = runRows.map((r) => ms(r.createdAt)).filter((t) => !Number.isNaN(t));
+  const firstRow = rowTimes.length ? Math.min(...rowTimes) : Number.NaN;
+  if (!latestFull && runRows.length === 0) {
+    // 전체 실행 기록도, 그 실행이 만든 줄도 없다: 아직 돌지 않았거나(늦게 알아챈 예약 — 30분까지 돈다) 빠졌다
     // 서버가 예약 뒤에 켜졌으면 켜진 지 5분 뒤부터 (08:31 에 켜짐 → 08:36)
     const boot = i.bootAt.getTime();
     const due = now >= sched + MISSED_AFTER_MS || (boot > sched && now >= boot + MISSED_BOOT_MS);
     const before = trading.filter((s) => !(ms(s.createdAt) >= sched));
-    if (due && before.length > 0) return { ...base, state: "missed", total: before.length };
+    // 다시 만들기로 대상 종목이 모두 성공 브리핑을 가졌으면 말하지 않는다 (목록과 안내가 어긋나지 않게)
+    const made = new Set(i.rows.filter((r) => r.status === "ok").map((r) => r.code));
+    if (due && before.some((s) => !made.has(s.code))) return { ...base, state: "missed", total: before.length };
     return { ...base, state: "ok" };
   }
+  // 전체 실행 기록 없이 줄만 있고 서버가 첫 줄 뒤에 켜졌으면 도중에 다시 켜진 것 (기록은 실행이 끝날 때 쓰므로)
+  const restarted = !latestFull && i.bootAt.getTime() > firstRow;
 
   // 대상: 실행 시작 전에 등록한 종목 (그 뒤에 추가한 종목은 이번 회차 대상이 아니다). 휴장으로 건너뛴 종목은 뺀다
   const runStart = latestFull ? ms(latestFull.startedAt) : firstRow;
@@ -242,7 +258,7 @@ export function judgeStatus(i: JudgeInput): BriefingStatus {
     const r = rowBy.get(s.code);
     if (r?.status === "ok") continue;
     if (r) problems.push({ code: s.code, name: s.name, briefingId: r.id, kind: failureKind(r.error), missing: false });
-    else problems.push({ code: s.code, name: s.name, briefingId: null, kind: latestFull ? "other" : "restart", missing: true });
+    else problems.push({ code: s.code, name: s.name, briefingId: null, kind: restarted ? "restart" : "other", missing: true });
   }
   const counts = { ...times, late, total: eligible.length, done: eligible.length - problems.length };
   if (problems.length > 0) {
@@ -270,7 +286,21 @@ export function runLogEntry(done: Parameters<RunDoneListener>[0], finishedAt: st
     failed: r.filter((x) => x.status === "failed").length,
     skipped: r.filter((x) => x.status === "skipped").length,
     skippedCodes: r.filter((x) => x.status === "skipped").map((x) => x.code),
+    ...(done.partial ? { codes: r.map((x) => x.code) } : {}),
   };
+}
+
+/**
+ * 기록 자르기 (오래된 것부터 순서 유지): 전체 실행 최근 20건 + 한 종목 다시 만들기 최근 20건 + 정기 실행 최근 4건.
+ * 많이 실패한 날 종목마다 다시 만들어도 오늘 정기 기록이 밀려나 '빠짐'으로 잘못 보이지 않게
+ */
+export function trimRunLog(list: RunLogEntry[]): RunLogEntry[] {
+  const keep = new Set<RunLogEntry>([
+    ...list.filter((r) => !r.partial).slice(-RUN_LOG_MAX),
+    ...list.filter((r) => r.partial).slice(-RUN_LOG_MAX),
+    ...list.filter((r) => !r.partial && r.trigger === "schedule").slice(-RUN_LOG_SCHEDULE_KEEP),
+  ]);
+  return list.filter((r) => keep.has(r));
 }
 
 export interface BriefingStatusDeps {
@@ -305,7 +335,7 @@ export class BriefingStatusService {
     if (!(await this.enabled())) return;
     const entry = runLogEntry(done, seoulIso(this.deps.now()));
     const write = this.queue.then(async () => {
-      const list = [...(await this.runs()), entry].slice(-RUN_LOG_MAX);
+      const list = trimRunLog([...(await this.runs()), entry]);
       const value = JSON.stringify(list);
       await this.deps.db.insertInto("meta").values({ key: RUN_LOG_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
     });

@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
+import Anthropic from "@anthropic-ai/sdk";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
-import { DisabledGenerator, GenerationError, type GenerateRequest, type GenerateResult } from "../src/llm/generator.js";
+import { ClaudeGenerator, DisabledGenerator, GenerationError, type GenerateRequest, type GenerateResult } from "../src/llm/generator.js";
 import { BriefingScheduler, scheduledAtFor } from "../src/scheduler.js";
 import type { BriefingService, RunProgress } from "../src/services/briefingService.js";
 import {
@@ -13,7 +14,9 @@ import {
   nextRunAt,
   pickSession,
   RUN_LOG_KEY,
+  RUN_LOG_MAX,
   runLogEntry,
+  trimRunLog,
   type BriefingStatus,
   type JudgeInput,
   type RunLogEntry,
@@ -98,6 +101,23 @@ function input(now: string, over: Partial<JudgeInput> = {}): JudgeInput {
 
 describe("오류 글 → 종류 (공용 픽스처 — 앱과 같은 표)", () => {
   it.each(fixture.cases)("$error → $kind", ({ error, kind }) => expect(failureKind(error)).toBe(kind));
+
+  it("SDK 연결 오류·시간 초과가 실제로 저장되는 글('api: API 오류 : …') → 장애(outage) — '그 밖'이 아님", async () => {
+    const gen = new ClaudeGenerator({ backend: { kind: "anthropic", apiKey: "test-key", model: "m" }, maxRetries: 0 });
+    const client = (gen as unknown as { anthropic: { beta: { messages: { create: (...a: unknown[]) => Promise<unknown> } } } }).anthropic;
+    const stored: string[] = [];
+    for (const err of [new Anthropic.APIConnectionError({ message: undefined }), new Anthropic.APIConnectionTimeoutError()]) {
+      client.beta.messages.create = () => Promise.reject(err);
+      const e = await gen.generate({ system: "s", user: "u" }).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(GenerationError);
+      // briefingService.generate 가 저장하는 모양 그대로
+      stored.push(`${(e as GenerationError).kind}: ${(e as GenerationError).message}`);
+    }
+    expect(stored).toEqual(["api: API 오류 : Connection error.", "api: API 오류 : Request timed out."]);
+    for (const e of stored) expect(failureKind(e)).toBe("outage");
+    // 상태 번호가 있는 4xx 는 그대로 '그 밖'
+    expect(failureKind("api: API 오류 400: invalid_request_error")).toBe("other");
+  });
 });
 
 describe("회차 고르기 · 다음 브리핑 시각", () => {
@@ -171,6 +191,54 @@ describe("판단 (고정 시계)", () => {
       ["모건스탠리", true, null],
       ["알파벳", true, null],
     ]);
+  });
+
+  it("전체 실행 기록이 없어도 그 회차 줄이 있으면 줄로만 판단 — '빠짐'이 아님 (그날 플래그를 켬·기록 저장 실패), 늦음은 모름", () => {
+    // 서버는 전날부터 켜져 있음(줄보다 먼저) → 도중 재시작이 아님
+    const allOk = judgeStatus(input("2026-09-28T09:20:00", { runs: [] }));
+    expect(allOk).toMatchObject({ state: "ok", late: false, finishedAt: null, problems: [] });
+    // 429 두 건: 이름이 숨지 않고 partial
+    const rows = rowsFor("2026-09-28", { fail: { TSLA: RATE_LIMIT, PLTR: RATE_LIMIT } });
+    const two = judgeStatus(input("2026-09-28T09:20:00", { runs: [], rows }));
+    expect(two).toMatchObject({ state: "partial", reasonKind: "busy", total: 17, done: 15, late: false, startedAt: null, finishedAt: null });
+    expect(two.problems.map((p) => [p.name, p.briefingId, p.missing])).toEqual([
+      ["테슬라", rows.find((r) => r.code === "TSLA")!.id, false],
+      ["팔란티어", rows.find((r) => r.code === "PLTR")!.id, false],
+    ]);
+    // 예약 뒤 한참(15:00)이어도 그대로
+    expect(judgeStatus(input("2026-09-28T15:00:00", { runs: [] })).state).toBe("ok");
+    // 줄이 없는 종목: 서버가 첫 줄보다 먼저 켜졌으면 '서버 다시 시작'이 아니라 '그 밖'
+    const gap = judgeStatus(input("2026-09-28T09:20:00", { runs: [], rows: rowsFor("2026-09-28", { missing: ["GOOGL"] }) }));
+    expect(gap).toMatchObject({ state: "partial", reasonKind: "other", done: 16, problems: [{ name: "알파벳", missing: true, kind: "other", briefingId: null }] });
+  });
+
+  it("정기 실행이 빠진 날 한 종목만 다시 만든 줄은 세지 않는다 → 여전히 '빠짐' (대상이 모두 성공이면 말하지 않음)", () => {
+    const partial = entry({ trigger: "manual", partial: true, scheduledAt: null, firedAt: null, startedAt: iso("2026-09-28T09:05:00"), finishedAt: iso("2026-09-28T09:05:40"), total: 1, ok: 1, codes: ["TSLA"] });
+    const rows = rowsFor("2026-09-28", { codes: ["TSLA"], at: "09:05" });
+    expect(judgeStatus(input("2026-09-28T09:14:59", { runs: [partial], rows })).state).toBe("ok");
+    expect(judgeStatus(input("2026-09-28T09:15:00", { runs: [partial], rows }))).toMatchObject({ state: "missed", total: 17 });
+    // 기록에 종목이 없는 한 종목 기록이면 줄로 판단 (모르면 센다)
+    const old: RunLogEntry = { ...partial };
+    delete old.codes;
+    expect(judgeStatus(input("2026-09-28T09:15:00", { runs: [old], rows })).state).toBe("partial");
+    // 대상 종목이 모두 성공 브리핑을 가졌으면(하나씩 다 다시 만듦) 빠짐을 말하지 않는다
+    const each = STOCKS.map((s) => ({ ...partial, codes: [s.code] }));
+    expect(judgeStatus(input("2026-09-28T09:15:00", { runs: each, rows: rowsFor("2026-09-28", { at: "09:05" }) })).state).toBe("ok");
+  });
+
+  it("실행 기록 자르기: 한 종목 다시 만들기를 많이 해도 정기 기록은 남는다", () => {
+    const sched = entry();
+    const partials = Array.from({ length: 30 }, (_, n) => entry({ trigger: "manual", partial: true, scheduledAt: null, firedAt: null, startedAt: iso(`2026-09-28T09:${String(n + 10).padStart(2, "0")}:00`), total: 1, codes: ["TSLA"] }));
+    const kept = trimRunLog([sched, ...partials]);
+    expect(kept[0]).toBe(sched);
+    expect(kept.filter((r) => r.partial)).toHaveLength(RUN_LOG_MAX);
+    expect(kept.at(-1)).toBe(partials.at(-1));
+    // 전체 실행(수동 생성)이 많아도 정기 실행 최근 4건은 남긴다
+    const manuals = Array.from({ length: 25 }, () => entry({ trigger: "manual", scheduledAt: null, firedAt: null }));
+    const days = ["2026-09-25", "2026-09-28"].flatMap((date) => (["morning", "afternoon"] as const).map((session) => entry({ date, session })));
+    const k2 = trimRunLog([...days, ...manuals]);
+    expect(k2.filter((r) => r.trigger === "schedule")).toHaveLength(4);
+    expect(k2.filter((r) => r.trigger === "manual")).toHaveLength(RUN_LOG_MAX);
   });
 
   it("빠짐: 줄·기록 없음 — 09:14 는 아직(30분 늦게까지 돌 수 있음), 09:15 부터 missed", () => {
@@ -509,5 +577,53 @@ describe("GET /api/briefings/status (서버 전체)", () => {
     const c = await start({ at: "2026-09-28T08:30:00", stocks: [THREE[0]!] });
     for (let n = 0; n < 22; n++) await c.app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", codes: ["005930"], force: true } });
     expect(await runLog(c.db)).toHaveLength(20);
+  });
+
+  it("많이 실패한 날 한 종목 다시 만들기를 21번 해도 오늘 정기 기록이 남아 '빠짐'으로 바뀌지 않는다", async () => {
+    const c = await start({ at: "2026-09-28T08:30:00", stocks: THREE });
+    c.gen.fail.set("TSLA", new GenerationError("API 사용량 제한에 걸렸습니다 (429). 잠시 뒤 다시 시도해 주세요", "api"));
+    await scheduled(c, "morning", "08:30");
+    c.clock.t = kst("2026-09-28T09:00:00");
+    for (let n = 0; n < 21; n++) await c.app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", codes: ["TSLA"], force: true } });
+    const log = (await runLog(c.db))!;
+    expect(log.filter((e) => e.trigger === "schedule")).toHaveLength(1);
+    expect(log.filter((e) => e.partial)).toHaveLength(20);
+    expect(log.at(-1)).toMatchObject({ partial: true, codes: ["TSLA"] });
+    c.clock.t = kst("2026-09-28T09:20:00");
+    expect((await status(c)).body).toMatchObject({ state: "partial", reasonKind: "busy", finishedAt: expect.any(String), problems: [{ code: "TSLA", kind: "busy" }] });
+  });
+
+  it("오전 실행 때 플래그가 꺼져 있었다가 켜도(기록 없음) 줄로 판단 — 거짓 '빠짐' 없음, 못 만든 종목은 그대로 보임", async () => {
+    const c = await start({ at: "2026-09-28T07:00:00", stocks: THREE });
+    const flag = (on: boolean) => c.app.inject({ method: "PUT", url: "/api/admin/features", payload: { briefingStatus: on } });
+    expect((await flag(false)).statusCode).toBe(200);
+    c.clock.t = kst("2026-09-28T08:30:00");
+    c.gen.fail.set("000660", new GenerationError("API 사용량 제한에 걸렸습니다 (429). 잠시 뒤 다시 시도해 주세요", "api"));
+    await scheduled(c, "morning", "08:30");
+    expect(await runLog(c.db)).toBeNull();
+    expect((await flag(true)).statusCode).toBe(200);
+    c.clock.t = kst("2026-09-28T09:20:00");
+    expect((await status(c)).body).toMatchObject({ state: "partial", reasonKind: "busy", total: 3, done: 2, finishedAt: null, late: false, problems: [{ code: "000660", name: "SK하이닉스", missing: false }] });
+    // 그 종목을 다시 만들어 성공하면 아무것도 안 보임
+    c.gen.fail.clear();
+    await c.app.inject({ method: "POST", url: "/api/briefings/run", payload: { session: "morning", codes: ["000660"], force: true } });
+    expect((await status(c)).body.state).toBe("ok");
+  });
+
+  it("실행 기록 저장이 실패해도(경고만) 줄로 판단 — 거짓 '빠짐' 없음", async () => {
+    const c = await start({ at: "2026-09-28T07:00:00", stocks: THREE });
+    // meta 쓰기만 막는다
+    const db = c.db;
+    const insertInto = db.insertInto.bind(db);
+    const spy = vi.spyOn(db, "insertInto").mockImplementation(((table: string) => {
+      if (table === "meta") throw new Error("disk full");
+      return insertInto(table as never);
+    }) as typeof db.insertInto);
+    c.clock.t = kst("2026-09-28T08:30:00");
+    await scheduled(c, "morning", "08:30");
+    spy.mockRestore();
+    expect(await runLog(c.db)).toBeNull();
+    c.clock.t = kst("2026-09-28T09:20:00");
+    expect((await status(c)).body).toMatchObject({ state: "ok", problems: [] });
   });
 });

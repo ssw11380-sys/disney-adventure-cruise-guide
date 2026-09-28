@@ -194,11 +194,14 @@ export default function BriefingsScreen() {
   const llmOff = health.data?.llmConfigured === false;
   const krHoliday = market.data && !market.data.KR.isTradingDay;
 
+  // 3-24 (emptyGuide): 브리핑이 하나도 없으면 빈 화면 안의 버튼 하나가 수동 생성을 맡는다 → 아래 '수동 생성' 카드는 숨긴다 (같은 일 버튼이 셋이 되지 않게)
+  const guideNoBriefing = ux.emptyGuide && items.length > 0 && withBriefing.length === 0;
   const oldBanner =
     llmOff || (last && last.failed > 0) ? (
       <Card style={{ borderLeftWidth: 3, borderLeftColor: t.danger }}>
         <Text style={{ color: t.danger, fontSize: font.body, fontWeight: "700" }}>{llmOff ? "브리핑 모델이 설정되지 않았습니다" : `최근 실행에서 ${last!.failed}개 종목이 실패했습니다`}</Text>
-        <Muted>{llmOff ? "브리핑을 만드는 모델 키가 서버에 설정되지 않아 새 브리핑을 만들 수 없습니다. 관리자에게 알려 주세요." : last!.lastError ?? ""}</Muted>
+        {/* 브리핑 3차 2 (briefingStatus): 켜진 채 상태를 못 받아 이 안내로 돌아와도 오류 원문 대신 쉬운 말 (꺼지면 원문 그대로) */}
+        <Muted>{llmOff ? "브리핑을 만드는 모델 키가 서버에 설정되지 않아 새 브리핑을 만들 수 없습니다. 관리자에게 알려 주세요." : statusOn && last!.lastError ? failedRunText(last!.lastError) : last!.lastError ?? ""}</Muted>
         {last ? <Muted>{formatDateKo(last.finishedAt, true)} · {last.session === "morning" ? "오전" : "오후"} · 성공 {last.ok} / 실패 {last.failed} / 건너뜀 {last.skipped}</Muted> : null}
       </Card>
     ) : null;
@@ -210,12 +213,11 @@ export default function BriefingsScreen() {
     if (twoPaneNow) chooseBriefing({ kind: "stock", id: p.briefingId, code: p.code });
     else router.push(`/briefings/${p.briefingId}`);
   };
-  const banner = statusOn ? <BriefingStatusSlot fallback={oldBanner} onOpen={openProblem} role={twoPaneNow ? "button" : "link"} refetchRef={statusRefetch} /> : oldBanner;
+  // 브리핑이 하나도 없으면(emptyGuide) 안내는 '수동 생성' 대신 빈 화면의 '지금 만들기'를 가리킨다
+  const banner = statusOn ? <BriefingStatusSlot fallback={oldBanner} onOpen={openProblem} role={twoPaneNow ? "button" : "link"} refetchRef={statusRefetch} nowButton={guideNoBriefing} /> : oldBanner;
   // 실패 브리핑 카드·줄 글을 쉬운 말로 (꺼지면 속성을 넘기지 않아 지금과 같다)
   const plainFail = statusOn ? { plainFail: true } : {};
   const ratesFailText = moversOn && order === "movers" && stocks.isError ? "등락률을 불러오지 못해 등록순으로 보여 줍니다 · 당겨서 다시 시도" : null;
-  // 3-24 (emptyGuide): 브리핑이 하나도 없으면 빈 화면 안의 버튼 하나가 수동 생성을 맡는다 → 아래 '수동 생성' 카드는 숨긴다 (같은 일 버튼이 셋이 되지 않게)
-  const guideNoBriefing = ux.emptyGuide && items.length > 0 && withBriefing.length === 0;
   const manual =
     items.length > 0 && !guideNoBriefing ? (
       <Card>

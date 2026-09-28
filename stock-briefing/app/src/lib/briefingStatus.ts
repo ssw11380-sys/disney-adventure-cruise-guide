@@ -17,7 +17,8 @@ export function failureKind(error: string | null | undefined): BriefingFailureKi
   if (e.startsWith("refusal:") || e.startsWith("truncated:")) return "cutoff";
   if (e.startsWith("api:")) {
     if (/\(429\)|사용량 제한|\(529\)/.test(e)) return "busy";
-    if (/\(5\d\d\)|서버 장애|모델 호출 실패/.test(e)) return "outage";
+    // 연결 오류·시간 초과: SDK 가 상태 번호 없이 'API 오류 : Connection error.' 로 남긴다 (서버와 같은 표)
+    if (/\(5\d\d\)|서버 장애|모델 호출 실패|API 오류 :|Connection error|timed out/i.test(e)) return "outage";
   }
   return "other";
 }
@@ -106,12 +107,25 @@ export const NAMES_MAX = 5;
 /** 문장 끝 마침표를 떼고 따옴표를 뺀 화면 읽기 조각 */
 const said = (s: string | null) => (s ? s.replace(/['"‘’“”]/g, "").replace(/\.$/, "") : null);
 
+/** 안내가 가리키는 전체 다시 만들기 버튼 */
+export interface StatusViewOptions {
+  /**
+   * 빈 화면의 '지금 만들기'가 수동 생성을 맡는지 (3-24 emptyGuide + 브리핑이 하나도 없음 — 탭이 '수동 생성' 카드와 '⋯'를 숨긴다).
+   * 그러면 "아래 '수동 생성'을 누르세요" 대신 "'지금 만들기'를 누르세요"
+   */
+  nowButton?: boolean;
+}
+
 /**
  * 서버 상태 → 안내. ok·none 이면 null (아무것도 안 보임).
  * now 는 '다음 브리핑(16:00)'·'내일 08:30' 을 고르는 데만 쓴다
  */
-export function statusView(s: BriefingStatus | null | undefined, now: number): StatusView | null {
+export function statusView(s: BriefingStatus | null | undefined, now: number, opts: StatusViewOptions = {}): StatusView | null {
   if (!s) return null;
+  // 전체를 다시 만드는 버튼: 보통은 탭 아래 '수동 생성' 카드, 브리핑이 하나도 없으면 빈 화면의 '지금 만들기'
+  const press = opts.nowButton ? "'지금 만들기'를 누르세요" : "아래 '수동 생성'을 누르세요";
+  // 설정 문제(키·크레딧·권한·모델)는 고치기 전에는 수동 생성·다시 만들기·다음 예약 실행이 모두 같은 이유로 실패한다 → 할 일은 관리자 확인뿐
+  const setup = s.reasonKind === "setup";
   const ses = s.session === "afternoon" ? "오후" : "오전";
   const sched = kstClock(s.scheduledAt);
   const fin = kstClock(s.finishedAt);
@@ -132,8 +146,17 @@ export function statusView(s: BriefingStatus | null | undefined, now: number): S
       const timeSaid = s.late && sched && fin ? `예정 ${speakClock(sched)}, ${speakClock(fin)} 완료` : fin ? `${speakClock(fin)} 완료` : null;
       // 이름을 누르면 상세의 '이 종목 다시 만들기' (briefingManualRun). 누를 이름이 없거나 꺼져 있으면 다음 예약 브리핑을 말한다
       const canOpen = s.problems.some((p) => p.briefingId !== null);
-      const note = s.manualRun && canOpen ? "이름을 누르면 그 종목만 다시 만드는 버튼이 있습니다." : next ? `다음 브리핑(${next})에 새로 만듭니다.` : null;
-      const noteSaid = s.manualRun && canOpen ? said(note) : nextSaid ? `다음 브리핑 ${nextSaid}에 새로 만듭니다` : null;
+      const button = s.manualRun && canOpen;
+      const note = setup
+        ? button
+          ? "관리자가 설정을 고친 뒤 이름을 눌러 그 종목만 다시 만드세요."
+          : `관리자가 설정을 고친 뒤 ${press}.`
+        : button
+          ? "이름을 누르면 그 종목만 다시 만드는 버튼이 있습니다."
+          : next
+            ? `다음 브리핑(${next})에 새로 만듭니다.`
+            : null;
+      const noteSaid = setup || button ? said(note) : nextSaid ? `다음 브리핑 ${nextSaid}에 새로 만듭니다` : null;
       const parts = [reason ? `이유: ${reason}` : null, time].filter((x): x is string => !!x);
       return {
         ...base,
@@ -148,8 +171,9 @@ export function statusView(s: BriefingStatus | null | undefined, now: number): S
     case "allFailed": {
       const title = `${ses} 브리핑을 하나도 만들지 못했습니다`;
       const line = reason ? `이유: ${reason}` : null;
-      const note = `지금 만들려면 아래 '수동 생성'을 누르세요.${next ? ` 다음 브리핑(${next})에도 새로 만듭니다.` : ""}`;
-      const noteSaid = sentence(["지금 만들려면 아래 수동 생성을 누르세요", nextSaid ? `다음 브리핑 ${nextSaid}에도 새로 만듭니다` : null]);
+      // 설정 문제면 다음 예약 실행도 같은 이유로 실패하므로 '새로 만듭니다'를 약속하지 않는다
+      const note = setup ? `관리자가 설정을 고친 뒤 ${press}.` : `지금 만들려면 ${press}.${next ? ` 다음 브리핑(${next})에도 새로 만듭니다.` : ""}`;
+      const noteSaid = setup ? said(note) : sentence([`지금 만들려면 ${said(press)}`, nextSaid ? `다음 브리핑 ${nextSaid}에도 새로 만듭니다` : null]);
       return { ...base, tone: "danger", title, line, small: { parts: [], note }, speech: sentence(["브리핑 안내", title, reason ? `이유 ${reason}` : null, noteSaid]) };
     }
     case "late": {
@@ -177,7 +201,7 @@ export function statusView(s: BriefingStatus | null | undefined, now: number): S
     }
     case "missed": {
       const title = `오늘 ${ses} 브리핑이 만들어지지 않았습니다`;
-      const note = "지금 만들려면 아래 '수동 생성'을 누르세요.";
+      const note = `지금 만들려면 ${press}.`;
       return {
         ...base,
         tone: "warn",
@@ -200,6 +224,11 @@ export function problemSpeech(p: Pick<BriefingStatusProblem, "name">, session: s
 /** 실패 브리핑 목록 줄·카드 첫 줄: "만들지 못함 · AI 서비스가 잠시 붐빔" */
 export function failedLine(b: { error: string | null; summary: string }): string {
   return `만들지 못함 · ${REASON_SHORT[failureKind(b.error ?? b.summary)]}`;
+}
+
+/** 실패 브리핑 이유의 화면 읽기 (기호 없이): "이유 AI 서비스가 잠시 붐빔" — 목록 줄·격자 칸은 앞에 '생성 실패'가 이미 있다 */
+export function failedReasonSpeech(b: { error: string | null; summary: string }): string {
+  return `이유 ${REASON_SHORT[failureKind(b.error ?? b.summary)]}`;
 }
 
 /** 실패 브리핑 상세 카드: "이 브리핑을 만들지 못했습니다 · 이유: AI 서비스가 잠시 붐볐습니다 (08:36)" */

@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } fro
 import type { Briefing } from "@/api/types";
 import { sentence, speakRate } from "@/lib/a11y";
 import { briefingWhen } from "@/lib/briefingPick";
-import { failedLine } from "@/lib/briefingStatus";
+import { failedLine, failedReasonSpeech } from "@/lib/briefingStatus";
 import { formatDateKo, formatPct, SESSION_LABEL, shownSign } from "@/lib/format";
 import { changeColor, font, fontCap, radius, slopFor, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
@@ -153,6 +153,8 @@ export function briefingItemSpeech(p: Pick<ItemProps, "briefing" | "name" | "rat
 }
 
 const firstLine = (b: Briefing, plainFail = false) => (b.status === "failed" ? (plainFail ? failedLine(b) : (b.error ?? b.summary)) : (b.summary.split("\n").find((l) => l.trim()) ?? ""));
+/** 화면 읽기의 첫 줄: 쉬운 말 실패면 기호 없이 '이유 …' ('생성 실패'는 briefingItemSpeech 가 이미 말한다 — '만들지 못함'과 겹치지 않게) */
+const firstLineSpeech = (b: Briefing, plainFail = false) => (b.status === "failed" && plainFail ? failedReasonSpeech(b) : firstLine(b, plainFail));
 
 /** 2단 목록 한 줄 (56). 누르면 오른쪽 칸만 바뀐다 */
 export function BriefingRow(p: ItemProps) {
@@ -164,7 +166,7 @@ export function BriefingRow(p: ItemProps) {
     <Pressable
       onPress={p.onPress}
       accessibilityRole="button"
-      accessibilityLabel={briefingItemSpeech(p, line)}
+      accessibilityLabel={briefingItemSpeech(p, firstLineSpeech(b, p.plainFail))}
       accessibilityState={{ selected: p.selected }}
       style={({ pressed }) => [styles.row, { borderBottomColor: t.line, backgroundColor: p.selected || pressed ? t.surfaceAlt : t.surface }]}
     >
@@ -239,7 +241,7 @@ export function BriefingTile(p: ItemProps & { mode: "line" | "summary" | "detail
     <Pressable
       onPress={p.onPress}
       accessibilityRole="link"
-      accessibilityLabel={briefingItemSpeech(p, failed ? firstLine(b, p.plainFail) : p.mode === "line" ? (lines[0] ?? "") : lines.join(" "))}
+      accessibilityLabel={briefingItemSpeech(p, failed ? firstLineSpeech(b, p.plainFail) : p.mode === "line" ? (lines[0] ?? "") : lines.join(" "))}
       accessibilityState={selected}
       style={({ pressed }) => [styles.tile, frame(pressed)]}
     >

@@ -8,7 +8,7 @@ import { font, slopFor, space, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
 import { sentence, speakRate } from "@/lib/a11y";
 import { AI_TAG } from "@/lib/disclaimer";
-import { failedLine } from "@/lib/briefingStatus";
+import { failedLine, failedReasonSpeech } from "@/lib/briefingStatus";
 import { RankMark } from "./BriefingList";
 import { MarkdownView } from "./MarkdownView";
 import { Badge, Card, ChangeText, Muted } from "./ui";
@@ -97,7 +97,9 @@ export function BriefingCard({
         </View>
       </Pressable>
       {failed ? (
-        <Text style={{ color: t.danger, fontSize: font.small }}>{plainFail ? failedLine(briefing) : (briefing.error ?? briefing.summary)}</Text>
+        <Text style={{ color: t.danger, fontSize: font.small }} {...(plainFail ? { accessibilityLabel: `만들지 못함, ${failedReasonSpeech(briefing)}` } : {})}>
+          {plainFail ? failedLine(briefing) : (briefing.error ?? briefing.summary)}
+        </Text>
       ) : mode === "line" ? (
         <Text style={{ color: t.ink, fontSize: font.body, lineHeight: 22 }} numberOfLines={1}>
           {lines[0] ?? ""}

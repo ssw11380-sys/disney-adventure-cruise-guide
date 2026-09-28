@@ -74,6 +74,9 @@ export function BriefingBody({
   const q = d.data?.quote ?? null;
   const failed = d.status === "failed";
   const ai = aiOn && !failed;
+  // 브리핑 3차 2 (briefingStatus): 실패 브리핑이면 '이 종목 다시 만들기'를 실패 카드 바로 아래로 (근거 자료 아래라 첫 화면에 안 보이던 것).
+  // 꺼져 있거나 성공 브리핑이면 지금 자리 그대로
+  const regenFirst = plainFail && failed;
   const open = (next: number) => (onPick ? onPick(next, d.code) : router.replace(`/briefings/${next}`));
 
   const regen = regenOn ? (
@@ -203,10 +206,13 @@ export function BriefingBody({
           </>
         )}
 
+        {/* 실패 브리핑(briefingStatus 켬)이면 다시 만들기를 실패 카드 바로 아래 */}
+        {regenFirst ? regen : null}
+
         {sources}
 
         {/* 이 종목만 다시 만들기 (3-19): 전체를 다시 만들지 않고 약 30초 */}
-        {regen}
+        {regenFirst ? null : regen}
 
         {past}
       </Screen>
@@ -247,8 +253,9 @@ export function BriefingBody({
           left={
             <>
               <Head d={d} ai={ai} />
+              {regenFirst ? regen : null}
               {sources}
-              {regen}
+              {regenFirst ? null : regen}
               {past}
             </>
           }
@@ -272,8 +279,9 @@ export function BriefingBody({
         {toolbar}
         {bodyText}
       </View>
+      {regenFirst ? regen : null}
       {sources ? <View onLayout={(e) => (sourcesY.current = e.nativeEvent.layout.y)}>{sources}</View> : null}
-      {regen}
+      {regenFirst ? null : regen}
       {past}
     </Screen>
   );
