@@ -456,7 +456,7 @@ function OrderRow({
         <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} numberOfLines={2}>
           {stock.name}
         </Text>
-        <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={1}>
+        <Text style={{ color: t.muted, fontSize: font.small }} numberOfLines={2}>
           {stockSub(stock)}
         </Text>
       </View>

@@ -363,6 +363,33 @@ describe("예전 앱 안전 · 다른 쓰기와 칸", () => {
   });
 });
 
+describe("재시작·재배포 뒤 유지 (로드맵 완료 기준)", () => {
+  it("파일 DB: 그룹·순서를 바꾸고 서버를 닫았다가 다시 열면(마이그레이션이 다시 돎) 배치가 그대로", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wg-db-"));
+    const file = join(dir, "app.sqlite");
+    const first = await createMigratedDb(file);
+    await register(first, "A", "B", "C", "D");
+    const app1 = await buildApp({ config: loadConfig({ DATABASE_URL: file }), db: first, providers: fakeProviders(), logger: false, enableScheduler: false, now: NOW });
+    const semi = ((await create(app1, "반도체")).json() as WatchLayout).created!.id;
+    await create(app1, "배당");
+    await move(app1, "C", semi, 0);
+    await move(app1, "A", semi, 1);
+    await move(app1, "D", null, 0);
+    await app1.inject({ method: "PUT", url: "/api/watch-groups/order", payload: { ids: [semi + 1, semi] } });
+    const before = await get(app1);
+    const orderBefore = await order(app1, first);
+    await app1.close();
+    await first.destroy();
+    const second = await createMigratedDb(file);
+    dbs.push(second);
+    const app2 = await buildApp({ config: loadConfig({ DATABASE_URL: file }), db: second, providers: fakeProviders(), logger: false, enableScheduler: false, now: NOW });
+    apps.push(app2);
+    expect(await get(app2)).toEqual(before);
+    expect(await order(app2, second)).toEqual(orderBefore);
+    expect(orderBefore).toEqual([["배당"], ["반도체", "C", "A"], ["그룹 없음", "D", "B"]]);
+  });
+});
+
 describe("백업 (3-7)", () => {
   const KEY = "test-key-not-a-secret";
 
