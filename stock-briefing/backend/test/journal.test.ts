@@ -540,3 +540,223 @@ describe("배경 환율 받기", () => {
     expect(c.fx.stdPending).toEqual(["2026-09-03", "2026-09-28", "2026-09-29"]);
   });
 });
+
+describe("검토 반영: 회사 행동·많이 판 매도가 수익률·실현손익·양도세에 가짜 손익을 만들지 않는다", () => {
+  const DAYS = ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"];
+  const LATER = new Date("2026-10-15T20:00:00+09:00");
+  const at = (i: number, hm: string) => TS(`${DAYS[i]}T${hm}:00`);
+  const items = (body: { days: Array<{ items: Array<Record<string, any>> }> }) => body.days.flatMap((d) => d.items);
+
+  it("회귀: 무상증자 10→15(토스 매입금액 그대로)는 이관 흐름이 아니다 — 가짜 −14.29% 대신 0%, 추정 줄은 주식 수 변화(1.5배)", async () => {
+    const t = await setup({ seed: false, now: LATER });
+    const a = (qty: number, price: number) => ({ code: "005930", name: "삼성전자", qty, cost: 1500, price });
+    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1500, price: 150 };
+    await t.db
+      .insertInto("account_snapshots")
+      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), [i < 6 ? a(10, 150) : a(15, 100), b])))
+      .execute();
+    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
+    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, buys: 0, sells: 0, transfersEstimated: 0 });
+    const est = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body).filter((x) => x.kind === "estimated");
+    expect(est).toMatchObject([{ code: "005930", quantity: 5, estimated: { qty: 5, reason: "split", ratio: 1.5 } }]);
+    await t.app.close();
+  });
+
+  it("회귀: 분할 1→4 와 같은 날 매도 5주 — 가짜 −27.27%·가짜 실현손실 대신 0%·실현손익 0", async () => {
+    const t = await setup({ seed: false, now: LATER });
+    const a = (qty: number, cost: number, price: number) => ({ code: "005930", name: "삼성전자", qty, cost, price });
+    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
+    await t.db
+      .insertInto("account_snapshots")
+      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), [i < 6 ? a(10, 1000, 100) : a(35, 875, 25), b])))
+      .execute();
+    await t.db.insertInto("trade_executions").values([tradeRow("s1", "005930", "SELL", [{ q: 5, a: 125, at: at(6, "10:00") }])]).execute();
+    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
+    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, sells: 125, transfersEstimated: 0 });
+    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
+    expect(list.find((x) => x.orderId === "s1")!.realized).toMatchObject({ status: "estimated", gross: 0, costAmount: 125, reason: REASONS.split });
+    expect(list.filter((x) => x.kind === "estimated")).toMatchObject([{ estimated: { qty: 30, reason: "split", ratio: 4 } }]);
+    await t.app.close();
+  });
+
+  it("회귀: 기준점 뒤 기록된 수량보다 많이 판 매도(주문 내역에 없는 입고 5주) — 입고를 직전 가격 흐름으로 넣어 +12% (0 으로 되돌리면 +40%)", async () => {
+    const t = await setup({ seed: false, now: LATER });
+    const a = { code: "005930", name: "삼성전자", qty: 10, cost: 1000, price: 100 };
+    const b = { code: "000660", name: "SK하이닉스", qty: 10, cost: 1000, price: 100 };
+    await t.db
+      .insertInto("account_snapshots")
+      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), i < 6 ? [a, b] : [b])))
+      .execute();
+    await t.db.insertInto("trade_executions").values([tradeRow("s2", "005930", "SELL", [{ q: 15, a: 1800, at: at(6, "10:00") }])]).execute();
+    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
+    expect(body).toMatchObject({ ready: true, twr: 12, pnl: 300, buys: 500, sells: 1800, transfersEstimated: 1 });
+    const list = items((await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body);
+    expect(list.find((x) => x.orderId === "s2")!.realized).toMatchObject({ status: "order-uncertain", reason: REASONS.oversoldAfter, gross: 300 });
+    expect(list.filter((x) => x.kind === "estimated")).toMatchObject([{ estimated: { qty: 5, reason: "transfer" } }]);
+    await t.app.close();
+  });
+
+  it("양도세: 추정이 들어간 매도(분할 전후)는 합계에 넣되 '추정 포함'으로 따로 센다 — 취득가를 모름으로 빼지 않고 가짜 손실도 없다", async () => {
+    const t = await setup({ seed: false });
+    await t.db
+      .insertInto("account_snapshots")
+      .values([
+        snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 10, cost: 1000, price: 100, costKrw: 1_390_000 }]),
+        snapRow("2026-09-28", "US", TS("2026-09-29T05:05:00"), [{ code: "SOXL", name: "SOXL", qty: 35, cost: 875, price: 25, costKrw: 1_216_250 }]),
+      ])
+      .execute();
+    await t.db
+      .insertInto("trade_executions")
+      .values([tradeRow("b1", "SOXL", "BUY", [{ q: 10, a: 1000, at: TS("2026-09-01T23:00:00") }]), tradeRow("x1", "SOXL", "SELL", [{ q: 5, a: 125, at: TS("2026-09-28T23:30:00") }])])
+      .execute();
+    const std = (d: string) => ({ kind: "krw-std", at: d, rate: 1350, source: "smbs", fetched_at: "x" });
+    await t.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-30")]).execute();
+    const { body } = await t.get("/api/journal/tax?year=2026");
+    expect(body.excluded).toEqual([]);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({ key: "3:x1:0", proceedsKrw: 168_750, costKrw: 168_750, gainKrw: 0, estimate: { status: "estimated", reason: REASONS.split } });
+    expect(body.estimatedIncluded).toBe(1);
+    expect(body.estimatedSells).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: REASONS.split }]);
+    // 추정이 없는 해는 0 · 빈 목록 (예전 모양 그대로 + 두 칸)
+    const plain = await setup();
+    await plain.db.insertInto("fx_rates").values([std("2026-09-03"), std("2026-09-28"), std("2026-09-29")]).execute();
+    const p = (await plain.get("/api/journal/tax?year=2026")).body;
+    expect(p).toMatchObject({ estimatedIncluded: 0, estimatedSells: [] });
+    expect(p.items[0].estimate).toBeUndefined();
+    await t.app.close();
+    await plain.app.close();
+  });
+});
+
+describe("검토 반영: 매매기준율 '받아 본 기간'은 실제로 온 줄이 있는 곳만", () => {
+  const business = (from: string, to: string) => {
+    const out: string[] = [];
+    for (let d = new Date(`${from}T12:00:00Z`); d.toISOString().slice(0, 10) <= to; d.setUTCDate(d.getUTCDate() + 1)) {
+      const s = d.toISOString().slice(0, 10);
+      if (![0, 6].includes(d.getUTCDay()) && !["2026-09-24", "2026-09-25"].includes(s)) out.push(s);
+    }
+    return out;
+  };
+  const fxState = async (db: Db) => {
+    const row = await db.selectFrom("meta").select("value").where("key", "=", "journal_fx_state").executeTakeFirst();
+    return row ? (JSON.parse(row.value) as { stdCovered: Array<[string, string]>; tries: Record<string, { n: number; last: string }> }) : null;
+  };
+  /** 2024-10 · 2025-03 · 2025-04 매수, 2025-07 · 2026-09 매도 (예시 — 실제 계좌와 무관). 결제일(국내) 2024-10-10 · 2025-03-13 · 2025-04-17 · 2025-07-10 · 2026-09-28 */
+  async function svc(std: (from: string, to: string) => Promise<Array<{ date: string; rate: number }>>, naver: () => Promise<Array<{ date: string; rate: number }>>) {
+    const db = await createMigratedDb(":memory:");
+    await db
+      .insertInto("trade_executions")
+      .values([
+        tradeRow("u1", "AMD", "BUY", [{ q: 1, a: 100, at: TS("2024-10-08T23:00:00") }]),
+        tradeRow("u2", "AMD", "BUY", [{ q: 1, a: 110, at: TS("2025-03-11T23:00:00") }]),
+        tradeRow("u3", "AMD", "BUY", [{ q: 1, a: 120, at: TS("2025-04-15T23:00:00") }]),
+        tradeRow("u4", "AMD", "SELL", [{ q: 1, a: 130, at: TS("2025-07-08T23:00:00") }]),
+        tradeRow("u5", "AMD", "SELL", [{ q: 1, a: 140, at: TS("2026-09-22T23:00:00") }]),
+      ])
+      .execute();
+    const clock = { now: NOW };
+    const features = new FeatureService(db, () => clock.now);
+    const calls: string[] = [];
+    const s = new JournalService({
+      db,
+      features,
+      fx: { tossAt: async () => 1390, std: async (from, to) => (calls.push(`${from}~${to}`), std(from, to)), naver },
+      now: () => clock.now,
+      pauseMs: 0,
+      log: { info: () => {}, warn: () => {} },
+    });
+    return { db, s, calls, clock };
+  }
+  const covered = (st: { stdCovered: Array<[string, string]> }, d: string) => st.stdCovered.some(([a, b]) => d >= a && d <= b);
+  const EARLY = ["2024-10-10", "2025-03-13", "2025-04-17"];
+
+  it("회귀: 응답 줄이 2025-06 부터만 있으면(앞 해 조각이 빔) 그 앞 결제일은 받아 본 기간이 아니다 — 며칠 전 고시로 메우지 않고 1시간 뒤 다시 받는다", async () => {
+    const { db, s, calls, clock } = await svc(
+      async (from, to) => business(from, to).filter((d) => d >= "2025-06-02").map((d) => ({ date: d, rate: 1350 })),
+      async () => business("2025-09-29", "2026-09-30").map((d) => ({ date: d, rate: 1351 })),
+    );
+    await s.tick();
+    const st = (await fxState(db))!;
+    for (const d of EARLY) {
+      expect(covered(st, d)).toBe(false);
+      expect(st.tries[d]?.n).toBe(1);
+    }
+    expect(st.stdCovered.length).toBeGreaterThan(0);
+    expect(st.stdCovered.every(([a]) => a >= "2025-06-02")).toBe(true);
+    const have = (await db.selectFrom("fx_rates").select("at").where("kind", "=", "krw-std").execute()).map((r) => r.at);
+    for (const d of EARLY) expect(have).not.toContain(d);
+    expect(have).toEqual(expect.arrayContaining(["2025-07-10", "2026-09-28"]));
+    // 2025 매도는 매수 결제일 환율을 아직 못 받아 '받는 중' (지어낸 환율로 계산하지 않음)
+    expect((await s.tax(2025)).fxPending).toBe(1);
+    // 기다리는 동안은 묻지 않고, 1시간 뒤 빈 곳만 다시 묻는다
+    const n = calls.length;
+    await s.tick();
+    expect(calls.length).toBe(n);
+    clock.now = new Date(NOW.getTime() + 61 * 60_000);
+    await s.tick();
+    expect(calls.length).toBeGreaterThan(n);
+    expect(calls[n]!.startsWith("2024-10-10~")).toBe(true);
+    // 받기를 다 해 봐도 없으면 '받지 못함' — 그래도 앞선 고시로 메우지 않는다
+    const cur = (await fxState(db))!;
+    await db
+      .updateTable("meta")
+      .set({ value: JSON.stringify({ ...cur, tries: Object.fromEntries(EARLY.map((d) => [d, { n: 3, last: "x" }])) }) })
+      .where("key", "=", "journal_fx_state")
+      .execute();
+    const tax = await s.tax(2025);
+    expect(tax.fxPending).toBe(0);
+    expect(tax.items).toEqual([]);
+    expect(tax.excluded).toEqual([{ code: "AMD", name: "AMD", count: 1, reason: "결제일 환율을 받지 못했어요" }]);
+  });
+
+  it("회귀: 줄 사이가 영업일 3일보다 길게 비면(가운데 조각이 빔) 그 사이 결제일은 받아 본 기간이 아니다 · 짧은 빈칸은 직전 고시", async () => {
+    const { db, s } = await svc(async (from, to) => business(from, to).filter((d) => d < "2025-04-01" || d > "2025-05-30").map((d) => ({ date: d, rate: 1350 })), async () => []);
+    await s.tick();
+    const st = (await fxState(db))!;
+    expect(covered(st, "2025-03-13")).toBe(true);
+    expect(covered(st, "2025-04-17")).toBe(false);
+    expect(st.tries["2025-04-17"]?.n).toBe(1);
+    // 짧은 빈칸(영업일 1~3일 — 목록에 없는 휴일 등)은 받아 본 기간 안: 직전 고시
+    const two = await svc(async (from, to) => business(from, to).filter((d) => d !== "2025-04-17").map((d) => ({ date: d, rate: 1350 })), async () => []);
+    await two.s.tick();
+    const st2 = (await fxState(two.db))!;
+    expect(covered(st2, "2025-04-17")).toBe(true);
+    expect(st2.tries["2025-04-17"]).toBeUndefined();
+  });
+
+  it("회귀: 예전 모양의 넓은 '받아 본 기간'이 남아 있어도 직전 고시가 영업일 3일보다 오래되면 쓰지 않는다 ('받는 중')", async () => {
+    const t = await setup();
+    const row = (at: string, rate: number) => ({ kind: "krw-std", at, rate, source: "smbs", fetched_at: "x" });
+    await t.db.insertInto("fx_rates").values([row("2026-09-03", 1369.4), row("2026-09-18", 1352)]).execute();
+    await t.db.insertInto("meta").values({ key: "journal_fx_state", value: JSON.stringify({ stdCovered: [["2026-09-01", "2026-09-30"]], tries: {} }) }).execute();
+    // 9/28 결제 매수·9/29 결제 매도: 9/18 고시와 사이 영업일 9/21·22·23·28·29 — 3일보다 많음
+    const b = (await t.get("/api/journal/tax?year=2026")).body;
+    expect(b.items).toEqual([]);
+    expect(b.fxPending).toBe(1);
+    await t.app.close();
+  });
+});
+
+describe("검토 반영: 매매기준율 조각·받아 본 기간 계산 (순수)", () => {
+  it("한 해씩 조각 (2/29 시작은 다음 해 2/28까지) · 온 줄 사이 빠진 영업일 3일까지만 한 구간", async () => {
+    const { coveredSpans, yearChunks } = await import("../src/services/journalService.js");
+    expect(yearChunks("2024-10-10", "2026-09-28")).toEqual([
+      ["2024-10-10", "2025-10-09"],
+      ["2025-10-10", "2026-09-28"],
+    ]);
+    expect(yearChunks("2028-02-29", "2029-03-10")).toEqual([
+      ["2028-02-29", "2029-02-28"],
+      ["2029-03-01", "2029-03-10"],
+    ]);
+    expect(yearChunks("2026-09-03", "2026-09-29")).toEqual([["2026-09-03", "2026-09-29"]]);
+    // 9/18(금) 다음 줄이 9/23(수): 사이 영업일 9/21·22 → 한 구간 · 9/23 다음 9/30: 사이 9/28·29 (9/24·25 추석) → 한 구간
+    expect(coveredSpans(["2026-09-17", "2026-09-18", "2026-09-23", "2026-09-30"])).toEqual([["2026-09-17", "2026-09-30"]]);
+    // 9/1(화) 다음 9/7(월): 사이 영업일 3일(9/2·3·4) → 한 구간 · 9/1 다음 9/8: 4일 → 끊는다
+    expect(coveredSpans(["2026-09-01", "2026-09-07"])).toEqual([["2026-09-01", "2026-09-07"]]);
+    expect(coveredSpans(["2026-09-01", "2026-09-08", "2026-09-09"])).toEqual([
+      ["2026-09-01", "2026-09-01"],
+      ["2026-09-08", "2026-09-09"],
+    ]);
+    expect(coveredSpans([])).toEqual([]);
+  });
+});

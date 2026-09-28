@@ -91,6 +91,8 @@ export interface TaxSellInput {
   excluded: null | "cost" | "fx";
   /** 결제일 환율을 받는 중 (배경 작업이 곧 받는다) */
   pending: boolean;
+  /** 평균 구매가를 추정한 매도 (분할·이관 전후 'estimated' · 순서 모름 'order-uncertain') — 합계에 넣고 '추정 포함'으로 따로 센다 */
+  estimate?: { status: "estimated" | "order-uncertain"; reason: string } | null;
 }
 
 export interface TaxItemView {
@@ -108,6 +110,8 @@ export interface TaxItemView {
   costKrw: number;
   costsKrw: number | null;
   gainKrw: number;
+  /** 평균 구매가를 추정한 매도일 때만 */
+  estimate?: { status: "estimated" | "order-uncertain"; reason: string };
 }
 
 export interface TaxTotals {
@@ -121,14 +125,25 @@ export interface TaxTotals {
   sells: number;
 }
 
-/** 그해(결제일 기준) 합계 · 매도별 계산 · 빠진 매도. 매도마다 원 단위로 먼저 반올림한 값의 합이 합계 */
+/**
+ * 그해(결제일 기준) 합계 · 매도별 계산 · 빠진 매도 · 추정이 들어간 매도(합계에 들어 있음 — 건수와 종목·까닭). 매도마다 원 단위로 먼저 반올림한 값의 합이 합계
+ */
 export function taxSummary(
   year: number,
   items: TaxSellInput[],
-): { totals: TaxTotals; items: TaxItemView[]; excluded: Array<{ code: string; name: string; count: number; reason: string }>; complete: boolean; fxPending: number } {
+): {
+  totals: TaxTotals;
+  items: TaxItemView[];
+  excluded: Array<{ code: string; name: string; count: number; reason: string }>;
+  complete: boolean;
+  fxPending: number;
+  estimatedIncluded: number;
+  estimatedSells: Array<{ code: string; name: string; count: number; reason: string }>;
+} {
   const mine = items.filter((x) => Number(x.settleDate.slice(0, 4)) === year);
   const views: TaxItemView[] = [];
   const out = new Map<string, { code: string; name: string; count: number; reason: string }>();
+  const est = new Map<string, { code: string; name: string; count: number; reason: string }>();
   let pending = 0;
   for (const x of mine) {
     if (!x.gainParts) {
@@ -146,8 +161,14 @@ export function taxSummary(
     const proceedsKrw = Math.round(x.gainParts.proceeds);
     const costKrw = Math.round(x.gainParts.cost);
     const costsKrw = x.gainParts.costs === null ? null : Math.round(x.gainParts.costs);
-    const { gainParts: _g, excluded: _e, pending: _p, ...rest } = x;
-    views.push({ ...rest, proceedsKrw, costKrw, costsKrw, gainKrw: proceedsKrw - costKrw - (costsKrw ?? 0) });
+    const { gainParts: _g, excluded: _e, pending: _p, estimate, ...rest } = x;
+    views.push({ ...rest, proceedsKrw, costKrw, costsKrw, gainKrw: proceedsKrw - costKrw - (costsKrw ?? 0), ...(estimate ? { estimate } : {}) });
+    if (estimate) {
+      const k = `${x.code}|${estimate.reason}`;
+      const e = est.get(k) ?? { code: x.code, name: x.name, count: 0, reason: estimate.reason };
+      e.count++;
+      est.set(k, e);
+    }
   }
   const gains = views.reduce((s, v) => s + (v.gainKrw > 0 ? v.gainKrw : 0), 0);
   const losses = views.reduce((s, v) => s + (v.gainKrw < 0 ? v.gainKrw : 0), 0);
@@ -159,5 +180,7 @@ export function taxSummary(
     excluded: [...out.values()].sort((a, b) => b.count - a.count || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
     complete: out.size === 0 && pending === 0,
     fxPending: pending,
+    estimatedIncluded: views.filter((v) => v.estimate).length,
+    estimatedSells: [...est.values()].sort((a, b) => b.count - a.count || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
   };
 }

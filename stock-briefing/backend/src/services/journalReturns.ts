@@ -56,6 +56,11 @@ export interface ReturnsBody {
   requested: { from: string; to: string };
   actual: { from: string; to: string } | null;
   clippedToRecordStart: boolean;
+  /**
+   * 전체(원화)인데 고른 기간의 미국 기록이 모두 평가 환율 없이 저장됨 — 원화로 이을 수 없어 숫자가 없다(기간을 늘려도 같음).
+   * 한국·미국(달러)은 따로 계산된다
+   */
+  usFxMissing: boolean;
   market: ReturnsMarket;
   currency: "KRW" | "USD";
   /** 퍼센트 (소수 둘째 자리) */
@@ -149,6 +154,7 @@ export function periodReturns(
   const points: Point[] = usable.map((snap) => ({ snap, value: valueOf(snap, basis, fallbackCodes) }));
   basis.fallbackCodes = [...fallbackCodes].sort();
   const clipped = !!q.recordSince && requested.from < q.recordSince;
+  const usFxMissing = market === "ALL" && !usable.some((s) => s.market === "US") && inRange.some((s) => s.market === "US" && s.status === "ok" && !s.doubted && s.fx === null);
   const base: ReturnsBody = {
     ready: false,
     tradingDays: 0,
@@ -157,6 +163,7 @@ export function periodReturns(
     requested,
     actual: null,
     clippedToRecordStart: clipped,
+    usFxMissing,
     market,
     currency,
     twr: null,

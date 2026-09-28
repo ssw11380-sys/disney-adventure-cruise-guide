@@ -177,3 +177,20 @@ describe("공개 조건 · 기간", () => {
     expect(presetRange("1Y", "2026-10-12")).toEqual({ from: "2025-10-12", to: "2026-10-12" });
   });
 });
+
+describe("검토 반영: 전체(원화)에서 미국 기록에 평가 환율이 없을 때", () => {
+  it("고른 기간의 미국 스냅샷이 모두 환율 없음이면 기록이 충분해도 까닭 usFxMissing ('기간을 더 길게'가 아님) — 한국만은 숫자", () => {
+    const d = days(12);
+    const kr = d.map((x, i) => KR(x, 1_000_000 + i));
+    const usNoFx = d.map((x) => US(x, 100, 1390, `${nextDay(x)}T05:05:00+09:00`, { fx: null }));
+    const r = periodReturns(q(d[0]!, d[11]!, "ALL"), [...kr, ...usNoFx], []);
+    expect(r).toMatchObject({ ready: false, usFxMissing: true, tradingDays: 0, twr: null });
+    const k = periodReturns(q(d[0]!, d[11]!, "KR"), [...kr, ...usNoFx], []);
+    expect(k).toMatchObject({ ready: true, usFxMissing: false });
+    // 환율이 있는 미국 기록이 있으면 까닭 없음
+    const usOk = d.map((x) => US(x, 100, 1390, `${nextDay(x)}T05:05:00+09:00`));
+    expect(periodReturns(q(d[0]!, d[11]!, "ALL"), [...kr, ...usOk], []).usFxMissing).toBe(false);
+    // 미국 기록이 아예 없으면(환율 문제가 아님) 까닭 없음
+    expect(periodReturns(q(d[0]!, d[11]!, "ALL"), kr, []).usFxMissing).toBe(false);
+  });
+});

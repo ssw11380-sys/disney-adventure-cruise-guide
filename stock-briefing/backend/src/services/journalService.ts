@@ -103,6 +103,11 @@ export const NOTE_MAX = 200;
 const STD_MAX_TRIES = 3;
 /** 결제일에 고시가 없을 때 직전 고시를 찾아볼 날 수 */
 const PRIOR_DAYS = 10;
+/**
+ * 매매기준율 줄 사이에 고시가 빠져도 '고시가 없는 날'(목록에 없는 휴일 등)로 볼 은행 영업일 수. 이보다 길게 비면 응답이 모자란 것
+ * (한 해 조각이 비었거나 줄이 끊김)으로 보고 받아 본 기간에서 빼 다시 받는다 — 그 날을 오래된 고시로 메우지 않는다
+ */
+export const STD_GAP_DAYS = 3;
 /** 한 번에 받을 토스 과거 환율 수 */
 const TOSS_BATCH = 200;
 const FX_STATE_KEY = "journal_fx_state";
@@ -513,8 +518,8 @@ export class JournalService {
     const [snaps, trades, toss, since] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.recordSince()]);
     const flows: RetFlow[] = [];
     for (const t of trades) for (const f of t.fills) if (f.quantity > 0) flows.push({ market: t.market, side: t.side, amount: f.amount, at: f.at, kind: "trade" });
-    // 주문 내역에 없는 수량 변화(이관 추정)는 그 스냅샷 가격으로 들어오고 나간 것으로 (분할·병합은 흐름이 아님).
-    // 전량 출고·상장폐지처럼 그 스냅샷에 종목이 없으면 그 종목이 있던 직전 스냅샷의 가격으로 (빼지 않으면 가짜 손실이 된다)
+    // 주문 내역에 없는 수량 변화(이관 추정)는 그 스냅샷 가격으로 들어오고 나간 것으로 (분할·병합·무상증자 같은 회사 행동은 흐름이 아님).
+    // 그 스냅샷에 종목이 없으면(전량 출고·상장폐지, 입고된 몫까지 그 구간에 다 판 경우) 그 종목이 있던 직전 스냅샷의 가격으로 — 빼지 않으면 가짜 손익이 된다
     const pairs = this.pairs(trades, snaps, toss);
     const pxOf = (h: SnapshotHolding | undefined) => {
       const v = h ? (h.regularClose ?? h.price) : null;
@@ -526,7 +531,7 @@ export class JournalService {
         const held = (x: SnapLite) => x.holdings.find((h) => h.account === p.account && h.code === p.code && h.quantity > 0);
         const s = snaps.find((x) => x.status === "ok" && x.market === p.market && x.asOf === e.at);
         let px = s ? pxOf(held(s)) : null;
-        if (px === null && e.qty < 0) {
+        if (px === null) {
           const before = snaps.filter((x) => x.status === "ok" && x.market === p.market && Date.parse(x.asOf) < Date.parse(e.at) && held(x));
           px = pxOf(before.length ? held(before.at(-1)!) : undefined);
         }
@@ -577,6 +582,9 @@ export class JournalService {
         const std = r?.std;
         const costsUsd = r?.realized?.costs.source === "toss" ? r.realized.costs.total : null;
         const ok = !!std && std.proceeds !== null && std.cost !== null && fxSell !== null;
+        // 평균 구매가를 추정한 매도(분할·이관 전후 · 순서 모름): 합계에는 넣고 '추정 포함'으로 따로 센다
+        const st = r?.realized?.status;
+        const estimate = st === "estimated" || st === "order-uncertain" ? { status: st, reason: r!.realized!.reason ?? "" } : null;
         // 결제일 환율 대기: 이 매도의 결제일(또는 이 짝 매수의 결제일)이 아직 받는 중
         const pending = !ok && (fx === "pending" || (std?.missing === "fx" && lookupPending(p.fills, settle, lookup)));
         inputs.push({
@@ -593,6 +601,7 @@ export class JournalService {
           gainParts: ok ? { proceeds: std!.proceeds!, cost: std!.cost!, costs: costsUsd !== null ? costsUsd * fxSell!.rate : null } : null,
           excluded: ok ? null : std?.missing === "cost" ? "cost" : "fx",
           pending,
+          estimate,
         });
       }
     }
@@ -616,21 +625,24 @@ export class JournalService {
     const byDate = new Map(rows.map((r) => [r.at, r]));
     const st = await this.fxState();
     const covered = (d: string) => st.stdCovered.some(([a, b]) => d >= a && d <= b);
-    const prior = (d: string) => {
-      const floor = addDays(d, -PRIOR_DAYS);
-      for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.at < d && rows[i]!.at >= floor) return rows[i]!;
-      return null;
+    const dates = rows.map((r) => r.at);
+    // 직전 고시: 가까운 것만 (priorStd — 오래된 고시로 빈칸을 메우지 않는다)
+    const prior = (d: string, inclusive: boolean) => {
+      const at = priorStd(dates, d, inclusive);
+      return at === null ? null : byDate.get(at)!;
     };
     return (date) => {
       const hit = byDate.get(date);
       if (hit) return { rate: hit.rate, source: hit.source, date, provisional: false };
       if (date > today) {
-        const p = prior(addDays(today, 1));
+        // 결제일 전: 오늘까지의 최근 고시로 잠정 (오늘 고시는 아직일 수 있어 오늘은 빈칸으로 세지 않는다)
+        const p = byDate.get(today) ?? prior(today, false);
         return p ? { rate: p.rate, source: p.source, date: p.at, provisional: true } : "pending";
       }
       if (covered(date)) {
-        const p = prior(date);
-        return p ? { rate: p.rate, source: p.source, date: p.at, provisional: false } : "none";
+        const p = prior(date, true);
+        if (p) return { rate: p.rate, source: p.source, date: p.at, provisional: false };
+        // 받아 본 기간인데 가까운 고시가 없다(예전 모양의 넓은 기간 등) — 받지 못한 날로 센다
       }
       return (st.tries[date]?.n ?? 0) >= STD_MAX_TRIES ? "none" : "pending";
     };
@@ -747,39 +759,48 @@ export class JournalService {
   /**
    * 결제일 매매기준율: 서울외국환중개 공개 값을 그 기간 한 번에 받고, 네이버(하나은행 고시) 값과 1% 넘게 다르면 쓰지 않는다.
    * 매매기준율을 받지 못한 날은 네이버 값으로 대신한다('naver-hana'). 받아 본 기간은 '고시가 없는 날'을 가리려고 적는다.
-   *  - '받음'으로 보는 조건: 응답이 그 기간 한국 은행 영업일의 절반 이상을 덮는다. 빈 배열(모양이 바뀜 · 오류를 HTTP 200 오류 페이지로 줌)이나
-   *    듬성듬성한 응답은 '받지 못함'과 같게 — 네이버로 대신하고, 그것도 없으면 받기 횟수를 올려 다시(1시간·6시간·하루 뒤) 묻는다
-   *  - 받아 본 기간(stdCovered)은 실제 줄이 있는 구간(첫 요청일 ~ 마지막 줄)에만 적는다 — 줄이 끊긴 뒤의 날을 며칠 전 고시로 조용히 메우지 않게
-   *  - 결제일(한국 은행 영업일)인데 줄이 없으면 네이버 값으로 대신한다. 네이버에도 없으면(목록에 없는 휴일) 받아 본 기간 안에서는 직전 고시
+   *  - 기간은 한 해씩 조각내 묻고(조각 하나가 실패해도 나머지는 쓴다), 받아 본 기간(stdCovered)은 **실제로 온 줄 사이**에만 적는다:
+   *    줄과 줄 사이에 고시가 빠진 은행 영업일이 STD_GAP_DAYS(3) 이하면 한 구간(그 날은 목록에 없는 휴일 — 직전 고시), 더 길면 끊는다.
+   *    그래서 빈 배열(모양 바뀜 · HTTP 200 오류 페이지)·한 해 조각이 빈 응답·중간에 끊긴 응답의 빈 곳은 받아 본 기간이 아니다
+   *  - 받아 본 기간 밖 결제일은 네이버(하나은행 고시) 값으로 대신하고, 그것도 없으면 받기 횟수를 올려 다시(1시간·6시간·하루 뒤) 묻는다
+   *    — 오래된 고시로 메우지 않는다 (STD_MAX_TRIES 번 뒤 '받지 못함')
    */
   private async fetchStd(dates: string[]): Promise<number> {
     const fx = this.deps.fx;
     if (!fx || !dates.length) return 0;
     const st = await this.fxState();
     const have = new Set((await this.deps.db.selectFrom("fx_rates").select("at").where("kind", "=", "krw-std").execute()).map((r) => r.at));
-    const covered = (d: string) => st.stdCovered.some(([a, b]) => d >= a && d <= b);
+    const haveList = [...have].sort();
+    // 받아 본 기간이어도 가까운 직전 고시가 없으면(예전 모양의 넓은 기간 등) 다시 받는다 — stdLookup 이 '받는 중'에서 멈추지 않게
+    const covered = (d: string) => st.stdCovered.some(([a, b]) => d >= a && d <= b) && priorStd(haveList, d, true) !== null;
     const nowMs = this.now().getTime();
     const want = dates.filter((d) => !have.has(d) && !covered(d) && !backoff(st.tries[d], nowMs));
     if (!want.length) return 0;
     const from = want[0]!, to = want.at(-1)!;
     const naver = fx.naver ? await fx.naver().catch((e: unknown) => (this.deps.log?.warn({ err: errText(e) }, "매매일지: 네이버 환율 받기 실패"), [] as DailyRate[])) : [];
     const naverBy = new Map(naver.map((r) => [r.date, r.rate]));
-    let std: DailyRate[] | null = null;
+    // 한 해씩 조각내 묻는다 — 조각이 실패하면 그 조각만 빈다 (빈 곳은 아래에서 받아 본 기간으로 적지 않음)
+    const got = new Map<string, number>();
+    let asked = false;
     if (fx.std) {
-      try {
-        std = await fx.std(from, to);
-      } catch (e) {
-        this.deps.log?.warn({ from, to, err: errText(e) }, "매매일지: 매매기준율 받기 실패");
+      for (const [a, b] of yearChunks(from, to)) {
+        try {
+          for (const r of await fx.std(a, b)) if (r.date >= a && r.date <= b && r.rate > 0) got.set(r.date, r.rate);
+          asked = true;
+        } catch (e) {
+          this.deps.log?.warn({ from: a, to: b, err: errText(e) }, "매매일지: 매매기준율 받기 실패");
+        }
       }
     }
     const iso = seoulIso(this.now());
     const today = seoulDate(this.now());
     // 오늘은 아직 고시 전일 수 있다: 오늘 줄이 없으면 오늘은 '아직'(받기 횟수를 올리지 않고 다음에 다시)
-    const dueTo = to < today || std?.some((r) => r.date === today) ? to : addDays(today, -1);
-    const rows = (std ?? []).filter((r) => r.date >= from && r.date <= dueTo);
+    const dueTo = to < today || got.has(today) ? to : addDays(today, -1);
+    const rows = [...got].filter(([d]) => d >= from && d <= dueTo).sort((x, y) => (x[0] < y[0] ? -1 : 1)).map(([date, rate]) => ({ date, rate }));
     const bankDays = countDays(from, dueTo, isKrBankDay);
-    const stdOk = rows.length > 0 && rows.length * 2 >= bankDays;
-    if (std && !stdOk && bankDays > 0) this.deps.log?.warn({ from, to, rows: rows.length, bankDays }, "매매일지: 매매기준율 응답이 비었거나 모자라 받지 못한 것으로 봄");
+    const spans = coveredSpans(rows.map((r) => r.date));
+    if (asked && bankDays > 0 && rows.length * 2 < bankDays) this.deps.log?.warn({ from, to, rows: rows.length, bankDays, spans }, "매매일지: 매매기준율 응답이 비었거나 모자라 받지 못한 것으로 봄 (온 줄 사이만 받아 본 기간)");
+    const inSpans = (d: string) => spans.some(([a, b]) => d >= a && d <= b);
     let n = 0;
     const done = new Set<string>();
     const put = async (date: string, rate: number, source: string) => {
@@ -796,14 +817,13 @@ export class JournalService {
       }
       await put(r.date, r.rate, "smbs");
     }
-    const lastRow = rows.at(-1)?.date ?? null;
-    if (stdOk && lastRow) st.stdCovered.push([from, lastRow]);
+    st.stdCovered.push(...spans);
     for (const d of want) {
       if (d > dueTo || done.has(d)) continue;
       const nv = naverBy.get(d);
       if (nv !== undefined) await put(d, nv, "naver-hana");
-      // 받아 본 기간 안인데 줄도 네이버 값도 없음 → 고시가 없는 날(직전 고시). 그 밖은 받지 못함 → 다음에 다시
-      else if (stdOk && lastRow && d <= lastRow) done.add(d);
+      // 온 줄 사이의 짧은 빈칸인데 줄도 네이버 값도 없음 → 고시가 없는 날(직전 고시). 그 밖은 받지 못함 → 다음에 다시
+      else if (inSpans(d)) done.add(d);
       else st.tries[d] = { n: (st.tries[d]?.n ?? 0) + 1, last: iso };
     }
     for (const d of done) delete st.tries[d];
@@ -869,6 +889,50 @@ export function cleanNote(text: string): string | null {
 const HIDDEN = new Set([0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff]);
 function isHidden(cp: number): boolean {
   return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) || HIDDEN.has(cp);
+}
+
+/**
+ * 온 줄의 날짜들(오름차순) → 받아 본 기간들. 이웃한 두 줄 사이에 빠진 은행 영업일이 STD_GAP_DAYS 이하면 한 구간, 더 길면 끊는다.
+ * 첫 줄 앞·마지막 줄 뒤는 넣지 않는다 (그 앞뒤는 응답이 덮었는지 모른다)
+ */
+export function coveredSpans(dates: string[]): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (const d of dates) {
+    const last = out.at(-1);
+    if (last && countDays(addDays(last[1], 1), addDays(d, -1), isKrBankDay) <= STD_GAP_DAYS) last[1] = d;
+    else out.push([d, d]);
+  }
+  return out;
+}
+
+/**
+ * 날짜 d 에 고시가 없을 때 쓸 직전 고시일 (오름차순 dates 가운데): d 전 PRIOR_DAYS 안, 그리고 사이에 고시가 빠진 은행 영업일이
+ * STD_GAP_DAYS 이하일 때만 (inclusive 면 d 자신도 빠진 날로 센다). 오래된 고시로 빈칸을 메우지 않는다
+ */
+function priorStd(dates: string[], d: string, inclusive: boolean): string | null {
+  const floor = addDays(d, -PRIOR_DAYS);
+  for (let i = dates.length - 1; i >= 0; i--) {
+    const at = dates[i]!;
+    if (at >= d) continue;
+    if (at < floor) return null;
+    return countDays(addDays(at, 1), inclusive ? d : addDays(d, -1), isKrBankDay) <= STD_GAP_DAYS ? at : null;
+  }
+  return null;
+}
+
+/** [from, to] 를 한 해(시작일 + 1년 − 1일, 2/29 시작이면 다음 해 2/28)씩 */
+export function yearChunks(from: string, to: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  for (let a = from; a <= to; ) {
+    const [y, m, d] = a.split("-").map(Number) as [number, number, number];
+    const e = new Date(Date.UTC(y + 1, m - 1, d));
+    e.setUTCDate(e.getUTCDate() - 1);
+    const end = e.toISOString().slice(0, 10);
+    const b = end < to ? end : to;
+    out.push([a, b]);
+    a = addDays(b, 1);
+  }
+  return out;
 }
 
 /** [from, to] 가운데 조건에 맞는 날 수 (to < from 이면 0) */

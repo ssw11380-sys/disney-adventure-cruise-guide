@@ -8,7 +8,11 @@
  *  - 기준점(anchor) = 스냅샷(토스 보유 조회의 수량·매입금액). 그 뒤 매도는 'snapshot' — 토스 평단에서 출발
  *  - 첫 기준점 전 매도: 0주에서 돌린 결과가 첫 기준점과 맞으면 'history-checked', 맞지 않으면 모름(unknown-cost)
  *  - 기준점이 없는 짝: 0주에서 음수 없이 돌면 'history-only'(토스 잔고와 맞춰 보지 못함), 음수면 모름
- *  - 기준점마다 대조: 수량이 다르면 분할(매입금액 같고 수량 N배·1/N) 또는 이관(그 밖) 추정 줄 + 사이 매도는 'estimated'
+ *  - 기준점마다 대조: 수량이 다르면 회사 행동(분할·병합·무상증자·주식배당 — 비율과 상관없이 토스 매입금액이 그대로, 사이 매도만큼 줄어든 값) 또는
+ *    이관(그 밖) 추정 줄 + 사이 매도는 'estimated'. 회사 행동은 사이 몫의 뒤(끝 가정)·앞(처음 가정) 둘 다 맞춰 보고, 처음 가정이면
+ *    사이 매도를 행동 뒤 수량으로 다시 계산한다 (1→4 분할 날 판 5주가 분할 전 평균으로 계산되어 가짜 손실이 나지 않게)
+ *  - 기준점 뒤 기록된 수량보다 많이 판 매도: 0 으로 되돌리지 않고 수량을 음수로 둔다 → 다음 기준점의 이관 추정이 빠진 입고만큼 나온다.
+ *    그 매도는 기준점 평균으로 추정한 'order-uncertain', 그 구간의 다음 매도는 평균을 모름
  *  - 같은 두 기준점 사이 반대 방향 몫 가운데 체결 시각(filled)이 아닌 것이 있으면 순서를 모른다 → 매수 먼저·매도 먼저로 계산해
  *    값이 1원·1센트 넘게 다르면 매수 먼저 값 + 'order-uncertain'
  * 미국 종목은 토스 원화 보기처럼 매수 당시 환율(토스 매수 환율 usdKrwAt)로 원화 매입금액도 이동평균으로 함께 쌓는다(추정).
@@ -28,9 +32,12 @@ export const REASONS = {
   oversold: "기록된 수량보다 많이 판 매도라 평균 구매가를 몰라요.",
   noAvg: "토스 잔고에 매입금액이 없어 평균 구매가를 몰라요.",
   orderUncertain: "같은 날 사고판 순서를 몰라 추정했어요.",
-  split: "분할·병합 전후라 평균 구매가를 추정했어요.",
+  split: "분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요.",
+  oversoldAfter: "기록된 수량보다 많이 판 매도라 평균 구매가를 추정했어요 (주문 순서나 주문 내역에 없는 입고를 몰라요).",
   transfer: "주문 내역에 없는 수량 변화가 있어 평균 구매가를 추정했어요.",
   krwNoFx: "판매 때 환율을 받지 못해 원화 손익은 빼요.",
+  krwNoBuyFx: "매수 때 환율을 받지 못해 원화 손익은 빼요.",
+  krwNoBothFx: "매수·판매 때 환율을 받지 못해 원화 손익은 빼요.",
   krwNoBook: "원화 매입금액을 몰라 원화 손익은 빼요.",
 } as const;
 
@@ -119,7 +126,7 @@ export interface EstimatedRow {
   fromQty: number;
   toQty: number;
   reason: "split" | "transfer";
-  /** 분할·병합 배수 (1→4 면 4, 4→1 이면 0.25) */
+  /** 분할·병합·무상증자 배수 (1→4 면 4, 4→1 이면 0.25, 10→15 면 1.5) */
   ratio?: number;
 }
 
@@ -210,6 +217,10 @@ interface State {
   stdWhy: "cost" | "fx" | null;
   /** 원장보다 많이 판 매도가 있었음 (앞부분 기록 없음) */
   neg: boolean;
+  /** 기준점(스냅샷)에서 출발한 원장 — 많이 판 매도를 0 으로 되돌리지 않는다 */
+  anchored: boolean;
+  /** 매입금액을 모르는 까닭 (null 이면 토스 잔고에 매입금액 없음) */
+  costWhy: string | null;
   /** 직전 기준점의 비용 차감 비율 */
   ratio: number | null;
 }
@@ -230,7 +241,7 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
       if (s.krw !== null && fx !== null) s.krw += f.amount * fx;
       else if (s.krw !== null) {
         s.krw = null;
-        s.krwWhy = REASONS.krwNoFx;
+        s.krwWhy = REASONS.krwNoBuyFx;
       }
     }
     if (opts.stdAt) {
@@ -245,6 +256,10 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
   }
   // 매도
   const costs = sellCosts(f, s, cur);
+  if (f.quantity > s.qty + EPS && s.anchored) {
+    oversoldAfter(s, f, fx, std, costs, opts, out);
+    return;
+  }
   if (f.quantity > s.qty + EPS) {
     s.neg = true;
     out.set(f.key, {
@@ -264,7 +279,7 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
   const share = (v: number) => (last ? v : (v * f.quantity) / s.qty);
   let realized: Realized;
   if (s.cost === null) {
-    realized = { ...blank(costs), status: "unknown-cost", reason: REASONS.noAvg };
+    realized = { ...blank(costs), status: "unknown-cost", reason: s.costWhy ?? REASONS.noAvg };
   } else {
     const avg = s.cost / s.qty;
     const c = share(s.cost);
@@ -290,7 +305,7 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
       realized.krw = { gross: realized.gross === null ? null : Math.round(f.amount * fx - ck), costKrw: Math.round(ck), sellFx: fx, fxSource: "toss", estimated: s.krwEst, reason: null };
       s.krw = last ? 0 : s.krw - ck;
     } else {
-      realized.krw = { gross: null, costKrw: null, sellFx: fx, fxSource: fx !== null ? "toss" : null, estimated: s.krwEst, reason: fx === null ? REASONS.krwNoFx : (s.krwWhy ?? REASONS.krwNoBook) };
+      realized.krw = { gross: null, costKrw: null, sellFx: fx, fxSource: fx !== null ? "toss" : null, estimated: s.krwEst, reason: krwReason(s, fx) };
       if (s.krw !== null) s.krw = last ? 0 : s.krw - share(s.krw);
     }
   }
@@ -313,7 +328,63 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
     s.krwWhy = null;
     s.std = 0;
     s.stdWhy = null;
+    s.costWhy = null;
   }
+  out.set(f.key, { realized, ...(stdOut ? { std: stdOut } : {}) });
+}
+
+/** 원화 손익을 뺀 까닭: 빠진 환율을 바로 (매수 때 · 판매 때 · 둘 다), 그 밖은 원화 장부 없음 */
+function krwReason(s: State, fx: number | null): string {
+  const buyMissing = s.krw === null && s.krwWhy === REASONS.krwNoBuyFx;
+  if (fx === null) return buyMissing ? REASONS.krwNoBothFx : REASONS.krwNoFx;
+  return s.krwWhy ?? REASONS.krwNoBook;
+}
+
+/**
+ * 기준점 뒤 기록된 수량보다 많이 판 매도: 주문 순서가 틀렸거나(늦게 적힌 매수) 주문 내역에 없는 입고가 있었다.
+ * 값은 지금 평균 구매가로 판 수량 전부를 추정('order-uncertain'), 수량은 음수로 두어 다음 기준점의 이관 추정이 빠진 입고만큼 나오게 한다.
+ * 그 구간의 다음 매도는 평균 구매가를 모른다 (다음 기준점에서 다시 안다)
+ */
+function oversoldAfter(s: State, f: LedgerFill, fx: number | null, std: number | null, costs: Realized["costs"], opts: LedgerOptions, out: Out): void {
+  const cur = opts.currency;
+  const known = s.qty > EPS && s.cost !== null;
+  const share = (v: number) => (v * f.quantity) / s.qty;
+  let realized: Realized;
+  if (known) {
+    const c = share(s.cost!);
+    const gross = roundMoney(f.amount - c, cur);
+    realized = {
+      status: "order-uncertain",
+      reason: REASONS.oversoldAfter,
+      basis: null,
+      anchorDate: null,
+      avgCost: round4(s.cost! / s.qty),
+      costAmount: roundMoney(c, cur),
+      gross,
+      rate: c > 0 ? round2(((f.amount - c) / c) * 100) : null,
+      costs,
+      net: costs.total !== null ? roundMoney(gross - costs.total, cur) : null,
+      krw: null,
+    };
+  } else realized = { ...blank(costs), status: "unknown-cost", reason: s.costWhy ?? (s.cost === null ? REASONS.noAvg : REASONS.oversold) };
+  if (cur === "USD") {
+    if (known && s.krw !== null && fx !== null) {
+      const ck = share(s.krw);
+      realized.krw = { gross: Math.round(f.amount * fx - ck), costKrw: Math.round(ck), sellFx: fx, fxSource: "toss", estimated: true, reason: null };
+    } else realized.krw = { gross: null, costKrw: null, sellFx: fx, fxSource: fx !== null ? "toss" : null, estimated: true, reason: known ? krwReason(s, fx) : REASONS.krwNoBook };
+  }
+  let stdOut: StdValue | undefined;
+  if (opts.stdAt) {
+    const proceeds = std !== null ? f.amount * std : null;
+    stdOut = known && s.std !== null ? { proceeds, cost: share(s.std), missing: proceeds === null ? "fx" : null } : { proceeds, cost: null, missing: known ? (s.stdWhy ?? "cost") : "cost" };
+  }
+  s.qty = round6(s.qty - f.quantity);
+  s.cost = null;
+  s.costWhy = REASONS.oversold;
+  s.krw = null;
+  s.krwWhy = REASONS.krwNoBook;
+  s.std = null;
+  s.stdWhy = "cost";
   out.set(f.key, { realized, ...(stdOut ? { std: stdOut } : {}) });
 }
 
@@ -375,15 +446,22 @@ function runSegment(s: State, fills: LedgerFill[], startMs: number, endMs: numbe
   return { state: a, uncertain };
 }
 
-/** 스냅샷과 원장의 수량이 다를 때: 매입금액이 거의 같고(±0.5%) 수량 비율이 정수 N 또는 1/N(±0.1%)이면 분할·병합 */
-function splitRatio(replayQty: number, replayCost: number | null, a: LedgerAnchor): number | null {
-  if (!(replayQty > EPS) || !(a.quantity > EPS) || replayCost === null || a.cost === null || !(replayCost > 0)) return null;
-  if (Math.abs(a.cost - replayCost) > replayCost * 0.005) return null;
-  const r = a.quantity / replayQty;
+/** 회사 행동으로 볼 매입금액 차이: 토스 매입금액이 행동 전 원장 값의 ±0.5% 안 */
+const CORP_COST_TOL = 0.005;
+const costNear = (a: number, b: number) => b > 0 && Math.abs(a - b) <= b * CORP_COST_TOL;
+
+/** 배수 정리: 정수 N·1/N 근처(±0.1%)는 딱 맞춘 값, 그 밖(무상증자 1.5 등)은 넷째 자리 */
+function tidyRatio(r: number): number {
   const near = (x: number) => Math.abs(x - Math.round(x)) <= Math.round(x) * 0.001 && Math.round(x) >= 2;
   if (near(r)) return Math.round(r);
   if (near(1 / r)) return round4(1 / Math.round(1 / r));
-  return null;
+  return round4(r);
+}
+
+/** 끝 가정: 구간 몫을 다 적용한 뒤 수량만 바뀌었다(매입금액이 거의 같음) → 배수. 사이 매도는 행동 전 수량으로 계산한 그대로 */
+function corpAtEnd(end: State, a: LedgerAnchor): number | null {
+  if (!(end.qty > EPS) || !(a.quantity > EPS) || end.cost === null || a.cost === null) return null;
+  return costNear(a.cost, end.cost) ? tidyRatio(a.quantity / end.qty) : null;
 }
 
 /**
@@ -412,7 +490,7 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
   };
 
   // ── 첫 기준점 전 (0주에서) ──
-  let s: State = { qty: 0, cost: 0, krw: 0, krwEst: false, krwWhy: null, std: 0, stdWhy: null, neg: false, ratio: null };
+  let s: State = { qty: 0, cost: 0, krw: 0, krwEst: false, krwWhy: null, std: 0, stdWhy: null, neg: false, anchored: false, costWhy: null, ratio: null };
   const firstEnd = anchors[0] ? t(anchors[0].asOf) : Infinity;
   const pre = runSegment(s, segs[0]!, -Infinity, firstEnd, opts, out);
   s = pre.state;
@@ -439,51 +517,83 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
   // 순서 모름 꼬리표 (기록 전 구간)
   if (preOk) for (const k of pre.uncertain) tagUncertain(out, k);
 
+  // 기준점 i 뒤 구간(segs[i + 1])을 start 에서 돌려 target 에 적는다 (출발 기준점 표시 · 순서 모름 꼬리표까지)
+  const runAfter = (i: number, start: State, target: Out): State => {
+    const a = anchors[i]!;
+    const seg = segs[i + 1]!;
+    const end = anchors[i + 1] ? t(anchors[i + 1]!.asOf) : Infinity;
+    const r = runSegment(start, seg, t(a.asOf), end, opts, target);
+    for (const k of sellKeys(seg)) {
+      const x = target.get(k)?.realized;
+      if (!x || x.status === "unknown-cost") continue;
+      x.basis = "snapshot";
+      x.anchorDate = a.date;
+    }
+    for (const k of r.uncertain) tagUncertain(target, k);
+    return r.state;
+  };
+
   // ── 기준점마다 ──
+  /** 지금 구간이 출발한 원장 (회사 행동 '처음 가정'으로 구간을 다시 돌릴 때) */
+  let segStart: State | null = null;
   for (let i = 0; i < anchors.length; i++) {
     const a = anchors[i]!;
+    /** 앞 구간의 수량 변화가 회사 행동(분할·무상증자 등)으로 설명됨 — 결제일 원화·원화 장부를 이어 쓴다 */
+    let corp = false;
     if (i > 0) {
       // 앞 구간 끝 원장과 이 스냅샷 대조
       const prevSells = sellKeys(segs[i]!);
       if (Math.abs(s.qty - a.quantity) > EPS) {
-        const ratio = splitRatio(s.qty, s.cost, a);
-        const row: EstimatedRow = { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: ratio !== null ? "split" : "transfer" };
-        if (ratio !== null) row.ratio = ratio;
+        const ratioEnd = corpAtEnd(s, a);
+        let row: EstimatedRow | null = ratioEnd !== null ? { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "split", ratio: ratioEnd } : null;
+        // 처음 가정: 행동이 구간 처음에 있었다 — 행동 뒤 수량으로 구간을 다시 돌려 스냅샷(수량·매입금액)과 맞으면 그 값으로 바꾼다
+        if (!row && segStart && segs[i]!.length && segStart.qty > EPS && segStart.cost !== null && a.cost !== null && a.quantity > EPS) {
+          const k = (a.quantity - (s.qty - segStart.qty)) / segStart.qty;
+          if (k > 0 && Math.abs(k - 1) > 1e-4) {
+            const toQty = round6(segStart.qty * k);
+            const scaled: State = { ...segStart, qty: toQty };
+            const tmp: Out = new Map();
+            const e = runAfter(i - 1, scaled, tmp);
+            if (e.cost !== null && Math.abs(e.qty - a.quantity) <= EPS && costNear(a.cost, e.cost)) {
+              for (const [key, v] of tmp) out.set(key, v);
+              row = { at: a.asOf, date: a.date, qty: round6(toQty - segStart.qty), fromQty: segStart.qty, toQty, reason: "split", ratio: tidyRatio(k) };
+              s = e;
+            }
+          }
+        }
+        if (!row) row = { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "transfer" };
         estimated.push(row);
-        if (ratio !== null) check.splits++;
+        corp = row.reason === "split";
+        if (corp) check.splits++;
         else check.transfers++;
         mark(prevSells, (r) => {
-          if (r.status === "unknown-cost") return;
+          // 많이 판 매도의 '순서 추정'은 그대로 둔다 (그 까닭이 더 가깝다)
+          if (r.status === "unknown-cost" || r.reason === REASONS.oversoldAfter) return;
           r.status = "estimated";
-          r.reason = ratio !== null ? REASONS.split : REASONS.transfer;
+          r.reason = corp ? REASONS.split : REASONS.transfer;
         });
       } else if (a.cost !== null && s.cost !== null && !costClose(s.cost, a.cost, a.quantity, cur)) check.drift++;
     }
-    // 스냅샷 값으로 맞춘다 (원화 매입금액은 토스 원화 장부 값, 없으면 수량이 맞을 때만 쌓아 온 값)
+    // 스냅샷 값으로 맞춘다 (원화 매입금액은 토스 원화 장부 값, 없으면 수량이 맞거나 회사 행동일 때만 쌓아 온 값)
     const sameQty = Math.abs(s.qty - a.quantity) <= EPS;
-    const ratioSplit = i > 0 && !sameQty ? splitRatio(s.qty, s.cost, a) : null;
+    const carry = (sameQty && (i > 0 || preOk)) || corp;
     const next: State = {
       qty: a.quantity,
-      cost: a.quantity <= EPS ? 0 : a.cost ?? (sameQty && s.cost !== null && (i > 0 || preOk) ? s.cost : null),
-      krw: a.quantity <= EPS ? 0 : a.costKrw ?? (sameQty && s.krw !== null && (i > 0 || preOk) ? s.krw : null),
+      cost: a.quantity <= EPS ? 0 : (a.cost ?? (carry && s.cost !== null ? s.cost : null)),
+      krw: a.quantity <= EPS ? 0 : (a.costKrw ?? (carry && s.krw !== null ? s.krw : null)),
       krwEst: a.costKrw !== null ? a.costKrwEstimated : s.krwEst,
-      krwWhy: a.quantity <= EPS || a.costKrw !== null ? null : sameQty && s.krw !== null ? null : REASONS.krwNoBook,
-      // 결제일 원화: 스냅샷은 모른다 — 수량이 맞으면(첫 기준점은 기록 전 원장이 맞을 때만) 쌓아 온 값, 분할이면 그대로, 이관이면 모름
-      std: a.quantity <= EPS ? 0 : (sameQty && (i > 0 || preOk)) || ratioSplit !== null ? s.std : null,
-      stdWhy: a.quantity <= EPS ? null : (sameQty && (i > 0 || preOk)) || ratioSplit !== null ? s.stdWhy : "cost",
+      krwWhy: a.quantity <= EPS || a.costKrw !== null ? null : carry && s.krw !== null ? null : REASONS.krwNoBook,
+      // 결제일 원화: 스냅샷은 모른다 — 수량이 맞으면(첫 기준점은 기록 전 원장이 맞을 때만) 쌓아 온 값, 회사 행동이면 그대로, 이관이면 모름
+      std: a.quantity <= EPS ? 0 : carry ? s.std : null,
+      stdWhy: a.quantity <= EPS ? null : carry ? s.stdWhy : "cost",
       neg: false,
+      anchored: true,
+      costWhy: null,
       ratio: a.costRatio,
     };
-    const end = anchors[i + 1] ? t(anchors[i + 1]!.asOf) : Infinity;
-    const seg = segs[i + 1]!;
-    const r = runSegment(next, seg, t(a.asOf), end, opts, out);
-    s = r.state;
-    mark(sellKeys(seg), (x) => {
-      if (x.status === "unknown-cost") return;
-      x.basis = "snapshot";
-      x.anchorDate = a.date;
-    });
-    for (const k of r.uncertain) tagUncertain(out, k);
+    // 구간을 돌리면 원장이 바뀌므로 출발 값은 따로 둔다
+    segStart = clone(next);
+    s = runAfter(i, next, out);
     // 기준점에 매입금액이 없어 구간 매도를 모름: 까닭은 apply 가 적었다 (noAvg)
   }
   return {

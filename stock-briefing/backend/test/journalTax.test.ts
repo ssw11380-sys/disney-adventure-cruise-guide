@@ -96,3 +96,26 @@ describe("한 해 합계 (결제일 기준 연도, 손익통산)", () => {
     expect(s.complete).toBe(false);
   });
 });
+
+describe("검토 반영: 평균 구매가를 추정한 매도는 합계에 넣고 '추정 포함'으로 따로 센다", () => {
+  it("estimated·order-uncertain 매도: 매도별 계산에 estimate, 건수(estimatedIncluded)와 종목·까닭 목록(estimatedSells) — 빠진 매도와 섞지 않는다", () => {
+    const split = { status: "estimated" as const, reason: "분할·무상증자 같은 주식 수 변화 전후라 평균 구매가를 추정했어요." };
+    const order = { status: "order-uncertain" as const, reason: "같은 날 사고판 순서를 몰라 추정했어요." };
+    const s = taxSummary(2026, [
+      item({ key: "a", gainParts: { proceeds: 1_000_000, cost: 900_000, costs: null } }),
+      item({ key: "b", gainParts: { proceeds: 1_000_000, cost: 900_000, costs: null }, estimate: split }),
+      item({ key: "c", gainParts: { proceeds: 1_000_000, cost: 1_100_000, costs: null }, estimate: split }),
+      item({ key: "d", code: "TSLA", name: "테슬라", gainParts: { proceeds: 500_000, cost: 400_000, costs: null }, estimate: order }),
+      item({ key: "e", gainParts: null, excluded: "cost", estimate: split }),
+    ]);
+    expect(s.totals.sells).toBe(4);
+    expect(s.estimatedIncluded).toBe(3);
+    expect(s.estimatedSells).toEqual([
+      { code: "SOXL", name: "SOXL", count: 2, reason: split.reason },
+      { code: "TSLA", name: "테슬라", count: 1, reason: order.reason },
+    ]);
+    expect(s.items.find((x) => x.key === "a")!.estimate).toBeUndefined();
+    expect(s.items.find((x) => x.key === "b")!.estimate).toEqual(split);
+    expect(s.excluded).toEqual([{ code: "SOXL", name: "SOXL", count: 1, reason: "기록 시작 전에 산 몫이라 취득가를 몰라요" }]);
+  });
+});
