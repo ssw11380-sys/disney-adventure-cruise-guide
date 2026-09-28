@@ -1,5 +1,5 @@
-import type { ReconcileBadgeBody, RegisteredWithQuote } from "@/api/types";
-import { speakClock } from "@/lib/a11y";
+import type { MarketQuoteBasis, QuoteBasis, QuoteBasisTag, ReconcileBadgeBody, RegisteredWithQuote } from "@/api/types";
+import { sentence, speakClock } from "@/lib/a11y";
 import { formatDateKo } from "@/lib/format";
 import { reconcileLabel } from "@/lib/freshness";
 import { fxOf, isHolding, sharedFx } from "@/lib/portfolio";
@@ -231,4 +231,37 @@ export function basisRows(o: {
     rows.push({ key: "toss", label: "토스 대조", lines, ...(muted.length ? { muted } : {}) });
   }
   return rows;
+}
+
+// ── PR 2: 계좌 브리핑 상세 '시세 기준' 줄 (서버가 브리핑을 만들 때 저장한 quoteBasis) ──
+
+const quoteWord = (tag: QuoteBasisTag) => (tag === "모름" ? UNKNOWN_WORD : BASIS_WORD[tag]);
+/** 저장한 기준의 시장 (한국 → 미국, 종목이 없는 시장은 뺌) */
+function quoteMarkets(q: QuoteBasis | null | undefined): [string, MarketQuoteBasis][] {
+  const out: [string, MarketQuoteBasis][] = [];
+  if (q?.kr?.tags.length) out.push(["국내", q.kr]);
+  if (q?.us?.tags.length) out.push(["미국", q.us]);
+  return out;
+}
+
+/**
+ * 계좌 브리핑 상세 '시세 기준' 줄 (at = briefingTime(d.asOf)): '국내 NXT 포함 · 미국 주간거래 12·정규장 2 · 08:38 계산'.
+ * 기준이 하나면 말만, 여럿이면 '말 수'를 가운뎃점(빈칸 없음)으로. 두 시장이 모두 없으면 null (예전 기록)
+ */
+export function quoteBasisLine(q: QuoteBasis | null | undefined, at: string): string | null {
+  const markets = quoteMarkets(q);
+  if (!markets.length) return null;
+  const parts = markets.map(([name, m]) => `${name} ${m.tags.length === 1 ? quoteWord(m.tags[0]!.tag) : m.tags.map((x) => `${quoteWord(x.tag)} ${x.count}`).join("·")}`);
+  return [...parts, ...(at ? [`${at} 계산`] : [])].join(" · ");
+}
+
+/**
+ * 같은 줄의 화면 읽기 문장: '시세 기준, 국내 NXT 포함, 미국 주간거래 12종목, 정규장 2종목, 8시 38분 계산'.
+ * 기준이 여럿이면 기준마다 '{말} {수}종목' 을 쉼표로 (가운뎃점을 읽히지 않게). 두 시장이 모두 없으면 null
+ */
+export function quoteBasisSpeech(q: QuoteBasis | null | undefined, at: string): string | null {
+  const markets = quoteMarkets(q);
+  if (!markets.length) return null;
+  const parts = markets.map(([name, m]) => (m.tags.length === 1 ? `${name} ${quoteWord(m.tags[0]!.tag)}` : m.tags.map((x, i) => `${i === 0 ? `${name} ` : ""}${quoteWord(x.tag)} ${x.count}종목`).join(", ")));
+  return sentence(["시세 기준", ...parts, at ? `${speakClock(at)} 계산` : null]);
 }

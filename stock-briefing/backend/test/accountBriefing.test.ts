@@ -1574,6 +1574,27 @@ describe("계좌 브리핑 (서버)", () => {
     await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accountBriefing: false } });
     expect((await app.inject({ method: "GET", url: "/api/widget" })).json()).not.toHaveProperty("accountIds");
   });
+
+  it("숫자 기준 (3-32, numberBasis): 켜면 합계 종목의 시세 기준(quoteBasis)을 저장하고, 끄면 칸이 없다. 요약·설명·모델 입력은 켜도 꺼도 같다", async () => {
+    const { gen } = await setup();
+    const run = async () => {
+      const res = await app.inject({ method: "POST", url: "/api/account-briefings/run", payload: { session: "afternoon", force: true } });
+      expect(res.statusCode).toBe(200);
+      const b = (await list())[0]!;
+      const d = (await app.inject({ method: "GET", url: `/api/account-briefings/${b.id}` })).json() as { summary: string; detail: string; data: AccountData };
+      return { summary: d.summary, detail: d.detail, data: d.data, user: gen.requests.filter((r) => r.label === "account_briefing").at(-1)!.user };
+    };
+    const on = await run();
+    // 보유 000660·005930·AAPL, MixedQuotes 시세에는 priceBasis 가 없다 → 모두 '모름'
+    expect(on.data.quoteBasis).toEqual({ kr: { count: 2, tags: [{ tag: "모름", count: 2 }] }, us: { count: 1, tags: [{ tag: "모름", count: 1 }] } });
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { numberBasis: false } });
+    const off = await run();
+    expect(off.data).not.toHaveProperty("quoteBasis");
+    expect(off.summary).toBe(on.summary);
+    expect(off.detail).toBe(on.detail);
+    expect(off.user).toBe(on.user);
+    expect(factsText(off.data)).toBe(factsText(on.data));
+  });
 });
 
 describe("기여 1위는 당일 손익과 같은 방향 (2026-09-25 캡처: 오른 날 '기여 1위 애플 -171,154원')", () => {

@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb } from "../src/db/index.js";
 import { TossOpenApiProvider } from "../src/providers/market/tossOpenApi.js";
 import type { ReconcileBadgeBody } from "../src/routes/admin.js";
+import { basisTagOf, quoteBasisOf, type AccountHolding } from "../src/services/accountNumbers.js";
 import { FeatureService } from "../src/services/featureService.js";
 import { regularOpenAt } from "../src/services/marketContext.js";
 import { reconcileAfterSync } from "../src/services/reconcileAfterSync.js";
@@ -199,5 +201,73 @@ describe("동기화 뒤 대조 → 실시간 알림 (3-32)", () => {
     await expect(failing(r)).rejects.toThrow("db down");
     expect(after).toBe(0);
     await db.destroy();
+  });
+});
+
+// ── PR 2: 계좌 브리핑에 저장하는 시세 기준 (quoteBasisOf) ──
+
+const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/numberBasis.json", import.meta.url), "utf8")) as {
+  tags: Array<[string | null, string | null]>;
+};
+
+describe("basisTagOf: 앱 basisTag 와 같은 표 (공용 픽스처, 3-32 PR 2)", () => {
+  it.each(fixture.tags)("%j → %j", (raw, tag) => {
+    expect(basisTagOf(raw)).toBe(tag);
+  });
+});
+
+describe("quoteBasisOf: 합계에 넣은 종목의 시장별 시세 기준 (3-32 PR 2)", () => {
+  const ev = { marketValue: 1, costBasis: 1, profit: 0, profitRate: 0, costRate: null, afterCost: null, costBasisKrw: null, krwCostSource: null } as const;
+  let seq = 0;
+  const h = (currency: "KRW" | "USD", priceBasis: string | undefined, o: { evaluation?: boolean; code?: string } = {}): AccountHolding => {
+    const code = o.code ?? `X${++seq}`;
+    return {
+      code,
+      name: code,
+      quantity: 1,
+      avgPrice: 1,
+      quote: { currency, price: 1, change: 0, changeRate: 0, ...(priceBasis ? { priceBasis } : {}) },
+      evaluation: o.evaluation === false ? null : { ...ev },
+    };
+  };
+  const rep = <T>(n: number, f: () => T) => Array.from({ length: n }, f);
+
+  it("국내 3(NXT) + 미국 14(주간거래 12·정규장 2) + 미국 기준 없음 1 + 합계 제외 1 + 평가 없음 1", () => {
+    const list = [
+      ...rep(3, () => h("KRW", "KRX+NXT 통합")),
+      ...rep(12, () => h("USD", "주간거래")),
+      ...rep(2, () => h("USD", "정규장")),
+      h("USD", undefined),
+      h("USD", "주간거래", { code: "NOFX" }), // 환율을 몰라 computeAccount 가 excluded 에 넣은 종목
+      h("KRW", "KRX+NXT 통합", { evaluation: false }), // 평가 없음 (평단·수량 없음)
+    ];
+    expect(quoteBasisOf(list, { excluded: [{ code: "NOFX", name: "NOFX", reason: "환율을 받지 못해 원화 합계에서 뺐습니다" }] })).toEqual({
+      kr: { count: 3, tags: [{ tag: "NXT", count: 3 }] },
+      us: {
+        count: 15,
+        tags: [
+          { tag: "주간거래", count: 12 },
+          { tag: "정규장", count: 2 },
+          { tag: "모름", count: 1 },
+        ],
+      },
+    });
+  });
+
+  it("국내만 → us: null, 시세 없는 종목은 세지 않음", () => {
+    const noQuote: AccountHolding = { code: "NQ", name: "NQ", quantity: 1, avgPrice: 1, quote: null, evaluation: null };
+    expect(quoteBasisOf([h("KRW", "KRX 정규장"), noQuote], { excluded: [] })).toEqual({ kr: { count: 1, tags: [{ tag: "정규장", count: 1 }] }, us: null });
+    expect(quoteBasisOf([], { excluded: [] })).toEqual({ kr: null, us: null });
+  });
+
+  it("같은 수(1·1)면 NXT 가 정규장 앞, 주간거래가 시간외 앞", () => {
+    expect(quoteBasisOf([h("KRW", "KRX 정규장"), h("KRW", "KRX+NXT 통합")], { excluded: [] }).kr).toEqual({
+      count: 2,
+      tags: [
+        { tag: "NXT", count: 1 },
+        { tag: "정규장", count: 1 },
+      ],
+    });
+    expect(quoteBasisOf([h("USD", "최근 체결(시간외 포함)"), h("USD", "주간거래"), h("USD", "알 수 없는 기준")], { excluded: [] }).us!.tags.map((x) => x.tag)).toEqual(["주간거래", "시간외", "모름"]);
   });
 });

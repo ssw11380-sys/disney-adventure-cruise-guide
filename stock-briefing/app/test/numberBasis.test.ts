@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { ReconcileBadgeBody, RegisteredWithQuote } from "@/api/types";
+import type { QuoteBasis, ReconcileBadgeBody, RegisteredWithQuote } from "@/api/types";
 import { reconcileLabel } from "@/lib/freshness";
 import {
   BASIS_FOOT,
@@ -13,6 +13,8 @@ import {
   diffPctText,
   hmLabel,
   marketBasis,
+  quoteBasisLine,
+  quoteBasisSpeech,
   RECONCILE_OFF,
   RECONCILE_POLL_MS,
   reconcileBadge,
@@ -305,5 +307,41 @@ describe("reconcileLabel: 설정 화면(두 인자)은 지금과 같은 글", ()
     const r = { last: { at: "x", diffKrw: 104_000, diffPct: 0.104, missing: 0 } };
     expect(reconcileLabel(r, () => "9/28 14:00")).toBe("차이 +104,000원 (+0.10%) · 9/28 14:00");
     expect(reconcileLabel(r, () => "9/28 14:00", diffPctText)).toBe("차이 +104,000원 (+0.104%) · 9/28 14:00");
+  });
+});
+
+describe("quoteBasisLine · quoteBasisSpeech: 계좌 브리핑 상세 '시세 기준' 줄 (3-32 PR 2)", () => {
+  // 서버 quoteBasisOf 순수 테스트(backend/test/numberBasis.test.ts)의 결과 그대로
+  const server: QuoteBasis = {
+    kr: { count: 3, tags: [{ tag: "NXT", count: 3 }] },
+    us: {
+      count: 15,
+      tags: [
+        { tag: "주간거래", count: 12 },
+        { tag: "정규장", count: 2 },
+        { tag: "모름", count: 1 },
+      ],
+    },
+  };
+  const krOnly: QuoteBasis = { kr: server.kr, us: null };
+
+  it("줄: 시장마다 기준이 하나면 말만, 여럿이면 '말 수'를 가운뎃점으로, 끝에 계산 시각", () => {
+    expect(quoteBasisLine(server, "08:38")).toBe("국내 NXT 포함 · 미국 주간거래 12·정규장 2·기준 모름 1 · 08:38 계산");
+    expect(quoteBasisLine(krOnly, "08:38")).toBe("국내 NXT 포함 · 08:38 계산");
+    expect(quoteBasisLine({ kr: server.kr, us: { count: 1, tags: [{ tag: "정규장", count: 1 }] } }, "08:38")).toBe("국내 NXT 포함 · 미국 정규장 · 08:38 계산");
+  });
+
+  it("없음(예전 기록)·두 시장 모두 없음 → null", () => {
+    expect(quoteBasisLine(undefined, "08:38")).toBeNull();
+    expect(quoteBasisLine(null, "08:38")).toBeNull();
+    expect(quoteBasisLine({ kr: null, us: null }, "08:38")).toBeNull();
+    expect(quoteBasisSpeech(undefined, "08:38")).toBeNull();
+    expect(quoteBasisSpeech({ kr: null, us: null }, "08:38")).toBeNull();
+  });
+
+  it("화면 읽기: 가운뎃점 대신 쉼표, 여럿이면 기준마다 'N종목', 시각은 말로", () => {
+    expect(quoteBasisSpeech(server, "08:38")).toBe("시세 기준, 국내 NXT 포함, 미국 주간거래 12종목, 정규장 2종목, 기준 모름 1종목, 8시 38분 계산");
+    expect(quoteBasisSpeech(krOnly, "08:38")).toBe("시세 기준, 국내 NXT 포함, 8시 38분 계산");
+    expect(quoteBasisSpeech(krOnly, "16:00")).toBe("시세 기준, 국내 NXT 포함, 16시 계산");
   });
 });

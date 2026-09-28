@@ -295,6 +295,8 @@ export interface AccountData {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) '12/25(금) 미국 휴장'. 예전 서버에는 없음 → '지난밤' */
   usHolidayDate?: string;
+  /** 합계에 넣은 종목 시세의 기준 (3-32, 서버 numberBasis 를 켠 뒤 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
+  quoteBasis?: QuoteBasis;
 }
 
 export interface AccountHeadline {
@@ -971,4 +973,17 @@ export interface ReconcileBadgeBody {
   intraday: { n: number; withinPct: number | null; skipped: number } | null;
   /** 자동 동기화 상태 — '숫자 기준' 창 설명과 '오래된 기록' 판단에 */
   sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null } | null;
+}
+
+/** 계좌 브리핑 시세 기준 (3-32 — 서버 accountNumbers.ts 의 QuoteBasisTag·MarketQuoteBasis·QuoteBasis 와 같은 모양) */
+export type QuoteBasisTag = "NXT" | "주간거래" | "시간외" | "정규장" | "모름";
+export interface MarketQuoteBasis {
+  count: number;
+  /** 기준별 종목 수 (많은 순, 같으면 NXT·주간거래·시간외·정규장·모름) */
+  tags: { tag: QuoteBasisTag; count: number }[];
+}
+/** 계좌 브리핑을 만들 때 합계에 넣은 종목 시세의 기준. 종목이 없는 시장은 null */
+export interface QuoteBasis {
+  kr: MarketQuoteBasis | null;
+  us: MarketQuoteBasis | null;
 }

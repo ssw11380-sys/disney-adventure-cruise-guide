@@ -31,6 +31,8 @@ import { buildWidgetPayload, widgetBrief, widgetSummary, type BriefSchedule, typ
  *  - ms=1: 브리핑 위젯 첫 줄(시장 전체 요약)을 그릴 수 있는 새 앱. features 에 marketSummary 를 넣고, 켜져 있으면 가장 최근 시장 요약의 숫자(ms)를 넣는다.
  *    끄면 요약을 조회하지도 않는다(DB 조회 0). 예전 앱(표시 없음)에는 둘 다 넣지 않아 응답·ETag 가 바이트까지 그대로다 — 요약이 새로 생겨도
  *    예전 앱은 304 를 그대로 받는다. 새 앱의 ETag 는 새 요약이 저장될 때(하루 두 번) 바뀐다
+ *  - numberBasis(3-32): 같은 ms=1 앱이 물을 때만 플래그를 읽고, 켜져 있을 때만 features.numberBasis 와 종목 시세 기준(b)을 넣는다.
+ *    끄면 칸을 넣지 않아 응답·ETag 가 바이트까지 예전과 같다. 예전 앱(표시 없음)의 응답도 그대로 (새 표시를 더하지 않는 까닭은 WIDGET_PATH 를 글자 그대로 보는 테스트)
  */
 export const widgetRoutes: FastifyPluginAsync<{
   stocks: StockService;
@@ -83,7 +85,9 @@ export const widgetRoutes: FastifyPluginAsync<{
           .then(async (on) => (on && deps.summaries ? widgetSummary((await deps.summaries.list(1))?.[0]) : null))
           .catch(() => null)
       : null;
-    const [list, latest, status, f, idx, accountIds, sched, msOn, ms] = await Promise.all([
+    // 숫자 기준 (3-32): 시장 요약과 같은 방식 — 지금 앱(&ms=1)이 물을 때만 플래그를 본다
+    const basisOn = wantsSummary && deps.features ? deps.features.enabled("numberBasis").catch(() => false) : null;
+    const [list, latest, status, f, idx, accountIds, sched, msOn, ms, basis] = await Promise.all([
       deps.stocks.listWithQuotes(),
       deps.briefings.latestPerStock(),
       deps.calendar.status().catch(() => null),
@@ -93,11 +97,13 @@ export const widgetRoutes: FastifyPluginAsync<{
       schedule,
       summaryOn,
       summary,
+      basisOn,
     ]);
+    // marketSummary 는 새 앱(&ms=1)에만 — 예전 앱의 features 칸은 그대로. numberBasis 는 켜져 있을 때만 칸을 더한다
+    const withSummary = f && msOn !== null ? { ...f, marketSummary: msOn } : f;
     const body = JSON.stringify(
       buildWidgetPayload(list, latest, status, {
-        // marketSummary 는 새 앱(&ms=1)에만 — 예전 앱의 features 칸은 그대로
-        features: f && msOn !== null ? { ...f, marketSummary: msOn } : f,
+        features: withSummary && basis === true ? { ...withSummary, numberBasis: true } : withSummary,
         indices: wantsIndices ? idx : null,
         board: wantsBoard ? idx : null,
         accountIds,
@@ -106,6 +112,7 @@ export const widgetRoutes: FastifyPluginAsync<{
         brief: newUi ? widgetBrief(latest, sched) : null,
         extended: wantsSessions && f?.widgetExtended === true,
         summary: ms,
+        basis: basis === true,
       }),
     );
     const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 16)}"`;

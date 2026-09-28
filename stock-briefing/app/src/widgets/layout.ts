@@ -109,6 +109,8 @@ export interface HeaderInput {
   /** 기준 시각 글자를 긴 것부터 (asOfVariants). 갱신 중이면 ["갱신 중"] */
   sub: string[];
   delayed: boolean;
+  /** 숫자 기준 짧은 글 ('NXT·주간거래 포함', 3-32 numberBasis). 없거나 null 이면 지금 결과와 똑같다 */
+  basis?: string | null;
 }
 
 export interface HeaderPlan {
@@ -133,13 +135,35 @@ function headerWidth(i: HeaderInput, p: HeaderPlan, scale: number): number {
   return parts.reduce((a, b) => a + b, 0) + HEADER_GAP * (parts.length - 1);
 }
 
-/** 기준 시각을 긴 것부터, 칩은 있는 쪽부터 넣어 보고 들어가는 첫 배치. 제목과 "지연"은 늘 남긴다 */
+/**
+ * 숫자 기준 글을 붙일 기준 시각 글인지 (3-32): 첫 후보가 시각 글('14:03 기준'·'지연 · 14:03 기준')일 때만.
+ * '갱신 중'·'갱신 실패'가 앞이면 붙이지 않는다
+ */
+export function basisSubOk(sub: string | undefined, basis: string | null | undefined): sub is string {
+  return !!basis && !!sub && sub.endsWith(" 기준");
+}
+
+/** 기준 시각 글 뒤에 숫자 기준을 붙인 글: '14:03 기준 · NXT·주간거래 포함' */
+export function withBasis(sub: string, basis: string): string {
+  return `${sub} · ${basis}`;
+}
+
+/**
+ * 기준 시각을 긴 것부터, 칩은 있는 쪽부터 넣어 보고 들어가는 첫 배치. 제목과 "지연"은 늘 남긴다.
+ * 숫자 기준(basis, 3-32)은 첫 후보(칩·가장 긴 기준 시각)가 그대로 들어가고 기준을 붙여도 들어갈 때만 붙인다 — 다른 칸은 하나도 빼지 않는다
+ */
 export function planHeader(i: HeaderInput, width: number, scale: number): HeaderPlan {
   const room = headerRoom(width);
   const candidates: HeaderPlan[] = [];
   for (const sub of i.sub) for (const chip of i.chip ? [true, false] : [false]) candidates.push({ chip, sub, delayed: i.delayed });
   candidates.push({ chip: false, sub: null, delayed: i.delayed });
-  return candidates.find((p) => headerWidth(i, p, scale) <= room) ?? { chip: false, sub: null, delayed: i.delayed };
+  const best = candidates.find((p) => headerWidth(i, p, scale) <= room) ?? { chip: false, sub: null, delayed: i.delayed };
+  const sub0 = i.sub[0];
+  if (basisSubOk(sub0, i.basis) && best.sub === sub0 && best.chip === !!i.chip) {
+    const plan = { ...best, sub: withBasis(sub0, i.basis!) };
+    if (headerWidth(i, plan, scale) <= room) return plan;
+  }
+  return best;
 }
 
 // ── 잔고 위젯 합계 줄 ──────────────────────────────────────────────────
@@ -655,6 +679,8 @@ export interface TitleInput {
   /** 기준 시각 후보 (긴 것부터, asOfVariants). 갱신 중이면 ["갱신 중"], 메모를 뺐으면 맨 앞에 "갱신 실패" */
   sub: string[];
   delayed: boolean;
+  /** 숫자 기준 짧은 글 ('NXT·주간거래 포함', 3-32 numberBasis). 없거나 null 이면 지금 결과와 똑같다 */
+  basis?: string | null;
 }
 
 export interface TitlePlan {
@@ -679,8 +705,21 @@ export function titleWidth(p: TitlePlan, scale: number): number {
  */
 const TITLE_COST = { title: [0, 2], chip: [0, 4], noChip: 8, sub: [0, 1, 5], noSub: 12 } as const;
 
-/** 제목 줄: 폭(room)에 들어가는 조합 중 버리는 값이 가장 작은 것 (같으면 긴 제목·긴 칩·긴 기준 시각 쪽) */
+/**
+ * 제목 줄: 폭(room)에 들어가는 조합 중 버리는 값이 가장 작은 것 (같으면 긴 제목·긴 칩·긴 기준 시각 쪽).
+ * 숫자 기준(basis, 3-32)은 고른 것이 가장 긴 제목·첫 칩·가장 긴 기준 시각 그대로일 때만, 기준을 붙여도 들어가면 붙인다
+ */
 export function planTitle(i: TitleInput, room: number, scale: number): TitlePlan {
+  const best = planTitleBase(i, room, scale);
+  const sub0 = i.sub[0];
+  if (basisSubOk(sub0, i.basis) && best.title === i.titles[0] && best.chip === (i.chips[0] ?? null) && best.sub === sub0) {
+    const plan = { ...best, sub: withBasis(sub0, i.basis!) };
+    if (titleWidth(plan, scale) <= room) return plan;
+  }
+  return best;
+}
+
+function planTitleBase(i: TitleInput, room: number, scale: number): TitlePlan {
   const chips = [...i.chips.map((c, k) => ({ c, cost: TITLE_COST.chip[Math.min(k, 1)]! })), { c: null, cost: TITLE_COST.noChip }];
   const subs = [...i.sub.map((s, k) => ({ s, cost: TITLE_COST.sub[Math.min(k, 2)]! })), { s: null, cost: TITLE_COST.noSub }];
   let best: TitlePlan | null = null;
@@ -1126,6 +1165,8 @@ export interface AssetInput {
   /** "총 -12,345,678원" */
   cum: string | null;
   note: string[];
+  /** 숫자 기준 짧은 글 ('NXT·주간거래 포함', 3-32 numberBasis). 없거나 null 이면 지금 결과와 똑같다 */
+  basis?: string | null;
 }
 
 export type AssetLineMode = "both" | "day" | "dayValue" | null;
@@ -1162,12 +1203,18 @@ export function planAsset(i: AssetInput): AssetPlan {
   }
   for (const asOf of i.asOf) tops.push({ label: false, chip: false, asOf });
   tops.push({ label: true, chip: false, asOf: null });
-  const top =
-    tops.find((t) => {
-      const left = (t.label ? labelW : 0) + (t.chip ? space.xs + chipW : 0);
-      const right = t.asOf ? textWidth(t.asOf, F.xs, s) : 0;
-      return left + (left && right ? space.xs : 0) + right <= content;
-    }) ?? null;
+  const fits = (t: NonNullable<AssetPlan["top"]>) => {
+    const left = (t.label ? labelW : 0) + (t.chip ? space.xs + chipW : 0);
+    const right = t.asOf ? textWidth(t.asOf, F.xs, s) : 0;
+    return left + (left && right ? space.xs : 0) + right <= content;
+  };
+  let top = tops.find(fits) ?? null;
+  // 숫자 기준 (3-32): 첫 윗줄 후보(이름·칩·가장 긴 기준 시각)가 그대로 들어가고 기준을 붙여도 들어갈 때만 (윗줄 높이는 같음)
+  const asOf0 = i.asOf[0];
+  if (top && basisSubOk(asOf0, i.basis) && top === tops[0]) {
+    const plan = { ...top, asOf: withBasis(asOf0, i.basis!) };
+    if (fits(plan)) top = plan;
+  }
   const totalFont = i.total ? fitFont(i.total, content, F.bigger, s, true) : F.bigger;
   let line: AssetLineMode = null;
   let lineFont: number = F.sm;

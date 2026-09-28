@@ -6,6 +6,7 @@ import { evalView } from "@/lib/liveTick";
 import { fxOf, totals } from "@/lib/portfolio";
 import { DISCLAIMER_SHORT } from "@/lib/disclaimer";
 import { sentence, speakAmount, speakProfit } from "@/lib/a11y";
+import { basisShort, basisSpeech, countedHoldings } from "@/lib/numberBasis";
 import {
   accountMix,
   asOfMs,
@@ -193,7 +194,22 @@ type StockWidgetProps = {
   now: number;
   /** 장 상태 칩 (없으면 칩 없이) */
   market?: WidgetMarket | null;
+  /**
+   * 숫자 기준 (numberBasis, 3-32): 켜져 있을 때만 true. 기준 시각 뒤 ' · NXT·주간거래 포함' 을 자리가 남을 때만 붙인다
+   * (잔고 두 모습·자산 위젯 — 합계에 들어간 종목(countedHoldings)의 시세 기준이 모두 알려져 있을 때만)
+   */
+  basis?: boolean;
 };
+
+/** 위젯 기준 글 (3-32): 잔고 화면과 같은 대상(countedHoldings)의 시세 기준을 모아 한 번. 꺼져 있거나 모르는 기준이 있으면 null */
+function widgetBasis(props: { basis?: boolean; stocks: RegisteredWithQuote[] }): string | null {
+  return props.basis ? basisShort(countedHoldings(props.stocks).map((s) => s.quote)) : null;
+}
+
+/** 고른 기준 시각 글에 기준이 붙었으면 화면 읽기 조각 '시세 NXT, 주간거래 포함' (아니면 null) */
+function basisSaid(shown: string | null | undefined, basis: string | null): string | null {
+  return basis && shown?.endsWith(` · ${basis}`) ? `시세 ${basisSpeech(basis)}` : null;
+}
 
 export interface HoldingsExtra {
   /** 손익을 눌러 누적 ↔ 당일 (widgetPnlToggle). 꺼져 있으면 예전처럼 누적만, 누르면 앱 */
@@ -611,11 +627,12 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
   const chips = chipTexts(market, stocks, usFirst);
   const sub = refreshing ? ["갱신 중"] : asOfVariants(asOf, now);
   const alert = !refreshing && failureText(error) ? "갱신 실패" : null;
+  const basis = widgetBasis(props);
   const plan = planHoldingsPolished({
     width,
     height,
     scale,
-    title: { titles: head.titles, chips: chips.map((x) => x.text), sub, delayed },
+    title: { titles: head.titles, chips: chips.map((x) => x.text), sub, delayed, basis },
     total: total && cum ? { total, fixed: { amount: cum.amount, rate: cum.rate }, toggle: chosen ? { amount: chosen.amount, rate: chosen.rate } : null } : null,
     indices: items,
     rows,
@@ -628,7 +645,7 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
     ...(props.wideExtras === false ? { wideExtras: false } : {}),
   });
   const pnl = plan.total?.toggle ? chosen : cum;
-  const headerLabel = sentence([head.speech, chips[0]?.text, alert && plan.title.sub === alert ? alert : null, refreshing ? "갱신 중" : sub[0], delayed ? "시세 지연" : null]);
+  const headerLabel = sentence([head.speech, chips[0]?.text, alert && plan.title.sub === alert ? alert : null, refreshing ? "갱신 중" : sub[0], basisSaid(plan.title.sub, basis), delayed ? "시세 지연" : null]);
   const titleGroup = (
     <TitleGroup plan={plan.title} chips={chips} market={market} refreshing={refreshing} label={headerLabel} {...(plan.compact ? { padTop: POLISH_TOP } : { height: TOUCH })} c={c} />
   );
@@ -701,11 +718,12 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const sub = refreshing ? ["갱신 중"] : asOfVariants(asOf, now);
   // 메모 줄이 들어갈 높이가 없으면 머리 줄에 "갱신 실패" (갱신 중일 때는 "갱신 중"이 먼저)
   const alert = !refreshing && failureText(error) ? "갱신 실패" : null;
+  const basis = widgetBasis(props);
   const plan = planHoldings({
     width,
     height,
     scale,
-    header: { title, chip: market?.label ?? null, sub, delayed },
+    header: { title, chip: market?.label ?? null, sub, delayed, basis },
     total: total && cum ? { total, fixed: { amount: cum.amount, rate: cum.rate }, toggle: chosen ? { amount: chosen.amount, rate: chosen.rate } : null } : null,
     indices: items,
     rows,
@@ -715,7 +733,7 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   });
   // 전환 칸을 둔 배치면 저장된 쪽, 아니면(플래그 꺼짐·낮은 위젯) 누적
   const pnl = plan.total?.toggle ? chosen : cum;
-  const headerLabel = sentence([`잔고 ${rows.length}종목`, market?.label, alert && plan.header.sub === alert ? alert : null, refreshing ? "갱신 중" : sub[0], delayed ? "시세 지연" : null]);
+  const headerLabel = sentence([`잔고 ${rows.length}종목`, market?.label, alert && plan.header.sub === alert ? alert : null, refreshing ? "갱신 중" : sub[0], basisSaid(plan.header.sub, basis), delayed ? "시세 지연" : null]);
   return (
     <FlexWidget style={listRootStyle(c)}>
       <Header title={title} plan={plan.header} market={market} refreshing={refreshing} label={headerLabel} c={c} />
@@ -910,6 +928,7 @@ export function AssetWidget(props: StockWidgetProps & WidgetFrame) {
   const variants = asOfVariants(asOf, now);
   const asOfTexts = delayed ? [...variants.map((v) => `지연 · ${v}`), "지연"] : variants;
   const total = t && line ? formatPrice(t.value, t.currency) : null;
+  const basis = widgetBasis(props);
   const plan = planAsset({
     width,
     height,
@@ -921,12 +940,13 @@ export function AssetWidget(props: StockWidgetProps & WidgetFrame) {
     day: t && line ? { text: line.day.text, value: fmt(t.day) } : null,
     cum: line?.total.text ?? null,
     note: noteParts(error, filled.length, excludedCount(stocks)),
+    basis,
   });
   const empty = error ? `${failureText(error)} · 눌러서 앱 열기` : excludedCount(stocks) ? `시세 없음 · ${excludedCount(stocks)}종목` : "보유 종목 없음";
   // 위젯 전체가 한 칸(앱 열기)이라 화면 읽기는 가려진 칸까지 한 문장으로
   const label =
     t && total
-      ? sentence([`총 평가 ${speakAmount(total)}`, `오늘 ${speakProfit(fmt(t.day), t.day)}`, `총 손익 ${speakProfit(fmt(t.profit), t.profit)}`, market?.label, asOfTexts[0]])
+      ? sentence([`총 평가 ${speakAmount(total)}`, `오늘 ${speakProfit(fmt(t.day), t.day)}`, `총 손익 ${speakProfit(fmt(t.profit), t.profit)}`, market?.label, asOfTexts[0], basisSaid(plan.top?.asOf, basis)])
       : sentence(["총 평가", empty]);
   // 오늘 손익과 총손익은 각자 부호 색 (이 팔레트의 등락색)
   const dayColor = tone(t?.day ?? 0, c);
