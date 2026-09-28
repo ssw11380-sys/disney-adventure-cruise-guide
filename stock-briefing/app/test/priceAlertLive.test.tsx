@@ -569,6 +569,35 @@ describe("ListWatch (잔고 탭이 가려져도 목록을 받음 · 요청이 �
   });
 });
 
+describe("문맥 (설정 칸이 읽는 값)", () => {
+  it("종목 이름: 목록을 받기 전에는 코드, 이번 실행에서 목록을 받으면 이름으로 다시 그린다 (설정 칸이 코드로 남지 않게)", async () => {
+    // 활성 가격 조건이 없어 목록을 스스로 받지 않는 경우 (거래량 조건만 — 설정 탭을 먼저 연 때)
+    const srv = fakeApi();
+    srv.rules = [rule({ id: 30, kind: "volume", value: 3, currency: null })];
+    srv.volume = [];
+    const { PriceAlertContext } = await import("@/lib/priceAlertContext");
+    const seen: string[] = [];
+    function Probe() {
+      const v = React.useContext(PriceAlertContext);
+      seen.push(`${v.on}:${v.rules.length}:${v.nameOf("005930")}`);
+      return null;
+    }
+    const r = render(
+      <QueryClientProvider client={qc}>
+        <PriceAlertProvider>
+          <Probe />
+        </PriceAlertProvider>
+      </QueryClientProvider>,
+    );
+    await settle(r);
+    expect(seen.at(-1)).toBe("true:1:005930");
+    r.act(() => void setList([samsung()]));
+    await settle(r);
+    expect(seen.at(-1)).toBe("true:1:삼성전자");
+    r.unmount();
+  });
+});
+
 describe("꺼짐 (priceAlerts false 또는 받은 값 없음)", () => {
   it("같은 체결에도 카드·진동·알림 0, 조건·거래량·목록 요청 0, 기기 기록 읽기 0", async () => {
     const cases: ({ features: Record<string, boolean> } | undefined)[] = [{ features: { priceAlerts: false } }, { features: {} }, undefined];

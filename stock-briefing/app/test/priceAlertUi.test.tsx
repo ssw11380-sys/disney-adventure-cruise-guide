@@ -144,7 +144,7 @@ describe("종목 상세: 알림 버튼 (등록 종목만)", () => {
     expect(pressables(b).map((n) => n.props.accessibilityLabel)).toEqual(["보유 정보 수정", "가격 알림 설정, 켜진 알림 2개", "차트 전체 화면"]);
     // 44dp (내용 폭, 좌우 space.md)
     const style = Object.assign({}, ...((btn.props.style as (s: { pressed: boolean }) => unknown[])({ pressed: false }).filter(Boolean) as object[]));
-    expect(style).toMatchObject({ minHeight: 44, flex: 0, paddingHorizontal: space.md });
+    expect(style).toMatchObject({ minHeight: 44, flexGrow: 0, flexShrink: 0, paddingHorizontal: space.md });
     b.act(() => (btn.props.onPress as () => void)());
     expect(openSheet).toHaveBeenCalledWith({ code: "005930", name: "삼성전자", quote: samsung().quote });
   });

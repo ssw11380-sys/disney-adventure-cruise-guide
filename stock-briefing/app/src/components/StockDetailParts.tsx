@@ -736,7 +736,7 @@ const styles = StyleSheet.create({
   barBtn: { flex: 1, minHeight: touch.min, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.sm },
   headTitle: { flexDirection: "row", alignItems: "baseline", gap: space.sm, flexShrink: 1 },
   headPrice: { flexDirection: "row", alignItems: "baseline", gap: space.xs, flexShrink: 0 },
-  // 3-29 가격 알림 버튼 (막대 가운데): 내용 폭, 좁으면 종 아이콘만
-  barBtnCompact: { flex: 0, minHeight: touch.min, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.md },
+  // 3-29 가격 알림 버튼 (막대 가운데): 내용 폭(늘거나 줄지 않음 — 웹의 flex: 0 은 폭 0 에서 시작해 글자가 한 자씩 꺾인다), 좁으면 종 아이콘만
+  barBtnCompact: { flexGrow: 0, flexShrink: 0, minHeight: touch.min, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.md },
   barBtnIcon: { width: touch.min, paddingHorizontal: 0 },
 });

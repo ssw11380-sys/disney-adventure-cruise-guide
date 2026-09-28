@@ -130,6 +130,8 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
 
   // 이번 실행에서 받은 잔고 목록의 코드 모음 (쉬는 중 규칙 · 목록·거래량 받기 판단). 처음 본 모음은 기억만, 바뀌면 조건 목록을 다시 받는다
   const [listKey, setListKey] = useState<string | null>(null);
+  // 이번 실행에서 받은 잔고 목록의 종목 이름 (설정 칸이 목록을 받은 뒤 이름으로 다시 그려지게 — 못 받았으면 기기에 저장해 둔 목록 캐시, 그것도 없으면 코드)
+  const [names, setNames] = useState<Record<string, string>>({});
   const lastListKey = useRef<string | null>(null);
 
   // 화면 위 카드 (최신부터)
@@ -172,7 +174,7 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
     const st = qc.getQueryState<RegisteredWithQuote[]>([apiUrl, "stocks"]);
     return st?.data && st.dataUpdatedAt >= RUN_START ? new Set(st.data.map((s) => s.code)) : null;
   }, [qc, apiUrl]);
-  const nameOf = useCallback((code: string) => qc.getQueryData<RegisteredWithQuote[]>([apiUrl, "stocks"])?.find((s) => s.code === code)?.name ?? code, [qc, apiUrl]);
+  const nameOf = useCallback((code: string) => names[code] ?? qc.getQueryData<RegisteredWithQuote[]>([apiUrl, "stocks"])?.find((s) => s.code === code)?.name ?? code, [names, qc, apiUrl]);
 
   /** 울린다: 기록 → 카드 → 진동 한 번 → 화면 읽기 한 번 → 알림 목록 → 서버 기록 → 조건 목록 캐시 */
   const fire = useCallback(
@@ -252,6 +254,8 @@ export function PriceAlertProvider({ children }: { children: React.ReactNode }) 
       if (lastListKey.current !== null && lastListKey.current !== k) void qc.invalidateQueries({ queryKey: [apiUrl, "priceAlerts"], exact: true });
       lastListKey.current = k;
       setListKey(k);
+      const next = Object.fromEntries(list.map((s) => [s.code, s.name]));
+      setNames((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     };
     const first = qc.getQueryState<RegisteredWithQuote[]>([apiUrl, "stocks"]);
     if (first?.data && first.dataUpdatedAt >= RUN_START) noteList(first.data);
