@@ -3,7 +3,7 @@ import React, { useRef, useState } from "react";
 import { Linking, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button } from "@/components/ui";
-import { openTossApp, openTossStore, TOSS_APP, tossFindParts, type TossAppTarget } from "@/lib/tossApp";
+import { openTossApp, openTossStore, TOSS_APP, tossFindParts, tossFindText, type TossAppTarget } from "@/lib/tossApp";
 import { font, radius, space, useTheme } from "@/theme";
 import { tossSheet } from "@/tokens";
 
@@ -55,8 +55,10 @@ export function TossAppSheet({ target, onClose }: { target: TossAppTarget; onClo
           <Text style={[styles.title, { color: t.ink }]} accessibilityRole="header">
             {TOSS_APP.sheetTitle}
           </Text>
-          <Text style={[styles.body, { color: t.ink }]} testID="toss-app-find">
+          {/* 화면에는 두 줄(검색 경로 / 이름·코드), 화면 읽기는 한 문장 */}
+          <Text style={[styles.body, { color: t.ink }]} testID="toss-app-find" accessibilityLabel={tossFindText(target)}>
             {parts.before}
+            {"\n"}
             <Text style={styles.strong}>{parts.strong}</Text>
             {parts.after}
           </Text>
@@ -66,7 +68,7 @@ export function TossAppSheet({ target, onClose }: { target: TossAppTarget; onClo
             <View style={styles.fail} accessible accessibilityRole="alert" accessibilityLiveRegion="polite" accessibilityLabel={step === "storeFail" ? `${TOSS_APP.fail} ${TOSS_APP.storeFail}` : TOSS_APP.fail}>
               <Ionicons name="alert-circle-outline" size={font.title} color={t.warn} />
               <View style={styles.failText}>
-                <Text style={{ color: t.warn, fontSize: font.small }}>{TOSS_APP.fail}</Text>
+                <Text style={{ color: t.warn, fontSize: font.small }}>{TOSS_APP.failLines.join("\n")}</Text>
                 {step === "storeFail" ? <Text style={{ color: t.warn, fontSize: font.small }}>{TOSS_APP.storeFail}</Text> : null}
               </View>
             </View>

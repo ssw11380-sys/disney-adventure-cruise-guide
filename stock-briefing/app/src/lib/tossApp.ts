@@ -31,6 +31,8 @@ export const TOSS_APP = {
   scrim: "토스 앱 안내 닫기",
   note: "주문은 토스 앱에서 직접 합니다.",
   fail: "토스 앱을 열지 못했습니다. 토스 앱이 설치되어 있는지 확인해 주세요.",
+  /** 화면에는 두 문장을 두 줄로 (좁은 폰에서 '확인해'가 두 줄로 갈라지지 않게). 화면 읽기는 fail 한 줄 */
+  failLines: ["토스 앱을 열지 못했습니다.", "토스 앱이 설치되어 있는지 확인해 주세요."],
   store: "Play 스토어에서 보기",
   storeFail: "Play 스토어를 열지 못했습니다. 잠시 뒤 다시 눌러 주세요.",
 } as const;
@@ -61,15 +63,18 @@ export function tossAppTarget({ code, name, fullName }: { code: string; name: st
   return { name: full && tickerKey(full) !== tickerKey(c) ? full : own, code: c };
 }
 
-/** 시트 첫 문장을 세 조각으로 (가운데 '"삼성전자"(005930)' 는 굵게 그린다) */
+/**
+ * 시트 첫 문장을 세 조각으로 (가운데 '"삼성전자"(005930)' 는 굵게 그린다).
+ * 화면에는 before 뒤에서 줄을 바꿔 '토스 앱 → 증권 → 검색에서' / '"삼성전자"(005930)을 찾아 주세요.' 두 줄로 — 좁은 폰에서 '요.' 한 글자만 다음 줄로 떨어지지 않게
+ */
 export function tossFindParts(t: TossAppTarget): { before: string; strong: string; after: string } {
-  return { before: "토스 앱 → 증권 → 검색에서 ", strong: `"${t.name}"(${t.code})`, after: "을 찾아 주세요." };
+  return { before: "토스 앱 → 증권 → 검색에서", strong: `"${t.name}"(${t.code})`, after: "을 찾아 주세요." };
 }
 
-/** 시트 첫 문장: '토스 앱 → 증권 → 검색에서 "삼성전자"(005930)을 찾아 주세요.' */
+/** 시트 첫 문장 (화면 읽기·테스트): '토스 앱 → 증권 → 검색에서 "삼성전자"(005930)을 찾아 주세요.' */
 export function tossFindText(t: TossAppTarget): string {
   const p = tossFindParts(t);
-  return p.before + p.strong + p.after;
+  return `${p.before} ${p.strong}${p.after}`;
 }
 
 /** 시트 본문 전체 (첫 문장 + 주문 안내) — 화면 읽기·테스트용 */

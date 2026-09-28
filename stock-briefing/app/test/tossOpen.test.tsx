@@ -119,6 +119,8 @@ const tree = (nodes: (HostNode | string)[]): unknown =>
 /** 트리 지문 (바꾸기 전 main 코드에서 뜬 값과 같아야 한다) */
 const print = (nodes: (HostNode | string)[]) => createHash("sha1").update(JSON.stringify(tree(nodes))).digest("hex");
 const nodeText = (n: HostNode): string => n.children.map((c) => (typeof c === "string" ? c : nodeText(c))).join("");
+/** 시트 글 (화면에서 일부러 바꾼 줄은 띄어쓰기로 — 문장 비교용) */
+const sheetText = (n: HostNode): string => nodeText(n).replace(/\n/g, " ");
 const flat = (n: HostNode): Record<string, unknown> => Object.assign({}, ...[n.props.style].flat(Infinity).filter(Boolean));
 
 // ── 종목 ──
@@ -213,6 +215,7 @@ describe("버튼을 둘 종목과 시트 글 (lib/tossApp)", () => {
     expect(TOSS_APP.label).toBe("토스 앱 열기");
     expect(TOSS_APP.a11y).toBe(A11Y);
     expect(TOSS_APP.fail).toBe(FAIL);
+    expect(TOSS_APP.failLines.join(" ")).toBe(FAIL);
     expect(TOSS_APP.store).toBe("Play 스토어에서 보기");
   });
 
@@ -380,7 +383,7 @@ describe("누르면 '토스 앱에서 찾기' 시트", () => {
         const m = sheet(r)!;
         expect(m.props.visible, `${size} ${name}`).toBe(true);
         expect(m.props.transparent).toBe(true);
-        const text = nodeText(m);
+        const text = sheetText(m);
         expect(text, `${size} ${name}`).toContain(`토스 앱 → 증권 → 검색에서 ${want[name as keyof typeof want]}을 찾아 주세요.`);
         expect(text).toContain("주문은 토스 앱에서 직접 합니다.");
         const title = r.all(m.children).find((n) => n.props.accessibilityRole === "header")!;
@@ -397,7 +400,9 @@ describe("누르면 '토스 앱에서 찾기' 시트", () => {
     const r = open(apple(), "phone475", { tossOpen: true });
     openSheet(r);
     const body = r.all(sheet(r)!.children).find((n) => n.props.testID === "toss-app-find")!;
-    expect(nodeText(body)).toBe('토스 앱 → 증권 → 검색에서 "애플"(AAPL)을 찾아 주세요.');
+    // 화면: 검색 경로 / 이름·코드 두 줄 (좁은 폰에서 '요.' 만 떨어지지 않게), 화면 읽기: 한 문장
+    expect(nodeText(body)).toBe('토스 앱 → 증권 → 검색에서\n"애플"(AAPL)을 찾아 주세요.');
+    expect(body.props.accessibilityLabel).toBe('토스 앱 → 증권 → 검색에서 "애플"(AAPL)을 찾아 주세요.');
     const strong = body.children.find((c): c is HostNode => typeof c !== "string")!;
     expect(nodeText(strong)).toBe('"애플"(AAPL)');
     expect(flat(strong).fontWeight).toBe("700");
@@ -407,7 +412,7 @@ describe("누르면 '토스 앱에서 찾기' 시트", () => {
     const rgtx = (): Detail => ({ ...withMarket(apple(), "RGTX", "NASDAQ", "RGTX"), quote: { ...apple().quote!, code: "RGTX", fullName: "Defiance Daily Target 2X Long RGTI ETF" } });
     const r = open(rgtx(), "phone475", { tossOpen: true });
     openSheet(r);
-    expect(nodeText(sheet(r)!)).toContain('검색에서 "Defiance Daily Target 2X Long RGTI ETF"(RGTX)을 찾아 주세요.');
+    expect(sheetText(sheet(r)!)).toContain('검색에서 "Defiance Daily Target 2X Long RGTI ETF"(RGTX)을 찾아 주세요.');
   });
 
   it("휴대폰은 아래에 붙고, 넓은 창은 가운데 (가격 알림 시트와 같은 모양)", () => {
@@ -466,7 +471,7 @@ describe("[토스 앱 열기] → supertoss://, 못 열면 Play 스토어", () =
     tap(r, sheetButton(r, "토스 앱 열기"));
     await settle(r);
     expect(sheet(r)).not.toBeNull();
-    const text = nodeText(sheet(r)!);
+    const text = sheetText(sheet(r)!);
     expect(text).toContain(FAIL);
     // 안드로이드 오류 글은 보이지 않는다
     expect(text).not.toMatch(/Error|Intent|Activity|undefined|supertoss/);
@@ -510,7 +515,7 @@ describe("[토스 앱 열기] → supertoss://, 못 열면 Play 스토어", () =
     tap(r, sheetButton(r, "Play 스토어에서 보기"));
     await settle(r);
     expect(h.openURL.mock.calls).toEqual([[TOSS_SCHEME], [STORE_APP], [STORE_WEB]]);
-    const text = nodeText(sheet(r)!);
+    const text = sheetText(sheet(r)!);
     expect(text).toContain(FAIL);
     expect(text).toContain(TOSS_APP.storeFail);
     expect(r.all(sheet(r)!.children).find((n) => n.props.accessibilityRole === "alert")!.props.accessibilityLabel).toBe(`${FAIL} ${TOSS_APP.storeFail}`);
