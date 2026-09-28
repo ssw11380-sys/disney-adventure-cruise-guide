@@ -142,12 +142,21 @@ describe("설정 '공시 알림' 줄", () => {
     expect(notes(block(r)!)).toEqual([F.SETTING_ABOUT, F.SETTING_MUTED, F.KR_NOT_YET, "마지막 공시 알림 7/30(목) 07:03 · SEC에 올라온 뒤 1시간 58분"]);
   });
 
-  it("'브리핑 알림'(이 기기)이 꺼져 있으면 스위치 흐리게 + 안내", async () => {
+  it("'브리핑 알림'(이 기기)이 꺼져 있으면 스위치 흐리게·꺼진 모양 + 안내 (이 기기에는 공시 알림이 오지 않으므로) — 저장한 값은 그대로", async () => {
     h.local = false;
     const r = render(<NotificationSettingsCard />);
     await settle(r);
     const toggle = r.all().find((n) => n.type === "Toggle" && n.props.accessibilityLabel === F.SETTING_TITLE)!;
     expect(toggle.props.disabled).toBe(true);
+    // 기기 저장값은 기본 켬이지만, 이 기기 알림이 꺼져 있으면 켜진 모양으로 보이지 않는다
+    expect(toggle.props.value).toBe(false);
+    expect(h.store.get("filingAlerts.enabled")).toBeUndefined();
     expect(notes(block(r)!)).toContain(F.SETTING_DEVICE_OFF);
+    // 브리핑 알림이 켜진 기기에서는 저장한 값(기본 켬) 그대로
+    cleanupRenders();
+    h.local = true;
+    const on = render(<NotificationSettingsCard />);
+    await settle(on);
+    expect(on.all().find((n) => n.type === "Toggle" && n.props.accessibilityLabel === F.SETTING_TITLE)!.props).toMatchObject({ value: true, disabled: false });
   });
 });

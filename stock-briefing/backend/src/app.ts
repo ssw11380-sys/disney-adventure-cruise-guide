@@ -297,11 +297,15 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const filingHoldings = async () => {
     const held = await heldStocks();
     const us = held.filter((s) => !isKrCode(s.code)).map((s) => s.code);
-    // ETF·ETN 가리기에 종목 마스터 분류(ST·EF·EN)를 쓴다 (네트워크 없음)
+    // ETF·ETN 가리기: 종목 마스터 분류(ST·EF·EN)가 있으면 그것 (네트워크 없음). 미국 종목은 보통 이 표에 없어 아래 토스 상품 정보로 본다
     const groups = us.length ? new Map((await opts.db.selectFrom("listed_stocks").select(["code", "group_code"]).where("code", "in", us).execute()).map((r) => [r.code, r.group_code])) : new Map<string, string | null>();
     return held.map((s) => ({ code: s.code, name: s.name, groupCode: groups.get(s.code) ?? null }));
   };
-  const filingWatch = opts.providers.secFilings ? new FilingWatchService({ db: opts.db, features, source: opts.providers.secFilings, holdings: filingHoldings, now, log }) : null;
+  // ETF·ETN 가리기: 미국 종목은 종목 마스터에 없어 토스 웹 상품 정보(group EF·EN — 지표 점수·계좌 비중과 같은 출처, 24시간 캐시)로 본다
+  const productInfo = opts.providers.productInfo ?? null;
+  const filingWatch = opts.providers.secFilings
+    ? new FilingWatchService({ db: opts.db, features, source: opts.providers.secFilings, holdings: filingHoldings, now, log, product: productInfo ? (code) => productInfo.productFacts(code) : null })
+    : null;
   if (filingWatch && opts.enableScheduler !== false) {
     const sweep = () => void filingWatch.sweep().catch((e: unknown) => log.warn({ err: e instanceof Error ? e.message : String(e) }, "SEC 공시 확인 실패"));
     const task = cron.schedule("*/5 6-22 * * 1-5", sweep, { timezone: "America/New_York", name: "sec-filings" });

@@ -1,5 +1,5 @@
 import type { Selectable } from "kysely";
-import { productKindOf } from "../analysis/leveraged.js";
+import { productKindOf, type ProductFacts } from "../analysis/leveraged.js";
 import type { Db } from "../db/index.js";
 import type { SecFilingTable } from "../db/schema.js";
 import { isKrCode } from "../lib/codes.js";
@@ -10,7 +10,9 @@ import { filingDetail, filingTitle } from "./filingTitles.js";
 
 /**
  * 3-38 새 공시 알림 (플래그 filingAlerts) — SEC EDGAR 확인 작업.
- *  - 대상: 보유(수량 > 0) 미국 종목 중 ETF·ETN 이 아니고 SEC 티커 목록에 있는 것 (같은 CIK 는 한 번 — GOOG·GOOGL, 이름은 등록 순 첫 종목)
+ *  - 대상: 보유(수량 > 0) 미국 종목 중 ETF·ETN 이 아니고 SEC 티커 목록에 있는 것 (같은 CIK 는 한 번 — GOOG·GOOGL, 이름은 등록 순 첫 종목).
+ *    ETF·ETN 가리기: 미국 종목은 종목 마스터(listed_stocks — 한국 표)에 없으므로 토스 웹 상품 정보(group EF·EN, 지표 점수·계좌 비중과 같은 출처)로 본다 —
+ *    QQQ 는 'ETF·ETN'으로 보이고, SEC 목록에 있는 상품형 신탁(GLD·SLV·USO 처럼 10-K·8-K 를 내는 것)도 알리지 않는다
  *  - 5분마다(미국 동부 평일 06:00~22:59 — SEC 가 공시를 받는 시간, app.ts cron) CIK 마다 차례로 submissions 를 받아(EdgarProvider 의 gate — 요청 사이 160ms)
  *    알림 서식 줄만 표 sec_filings 에 넣는다 (cik·접수 번호마다 한 줄, 이미 있으면 그대로)
  *  - 기준 잡기(알림 폭탄 막기): 처음 보는 CIK(새로 산 종목·기능을 처음 켬)의 첫 확인에서 넣는 줄은 모두 baseline 1(알리지 않음, 화면에는 보임).
@@ -45,6 +47,13 @@ export const REQUEST_RESOLVE_BUDGET_MS = 2_000;
 const PENDING_KICK_MS = 10 * 60_000;
 /** 한 번에 넣는 줄 수 (SQLite 변수 한도 아래로) */
 const INSERT_CHUNK = 50;
+/** SEC 가 요청을 막으면(403) 이만큼 확인을 쉰다 — 막힌 동안 5분마다 두드려 같은 IP 의 재무·가치 지표 SEC 호출까지 오래 막히지 않게 */
+export const BLOCKED_PAUSE_MS = 10 * 60_000;
+/** 토스 상품 정보(ETF 가리기)를 다시 묻기까지: 받은 값은 하루, 받지 못했으면 10분 */
+const PRODUCT_TTL_MS = 24 * 3_600_000;
+const PRODUCT_RETRY_MS = 10 * 60_000;
+/** 확인 작업(sweep)이 상품 정보를 기다리는 최대 시간 (화면·위젯 요청은 CIK 찾기와 같은 한도) */
+const PRODUCT_WAIT_MS = 10_000;
 
 export interface FilingHolding {
   code: string;
@@ -79,6 +88,11 @@ export interface FilingWatchDeps {
   budgetMs?: number;
   /** 화면·위젯 요청이 CIK 를 찾느라 기다리는 최대 시간 (기본 REQUEST_RESOLVE_BUDGET_MS — 테스트는 짧게) */
   resolveBudgetMs?: number;
+  /**
+   * 토스 웹 상품 정보 (ETF·ETN 가리기 — 로그인 없음, 토스 쪽 24시간 캐시. 지표 점수·계좌 비중이 쓰는 같은 출처). 종목 마스터 분류가 없는 종목(미국)만 묻는다.
+   * 없으면(테스트 기본) 이름의 낱말 'ETF'/'ETN'·레버리지 표만
+   */
+  product?: ((code: string) => Promise<ProductFacts | null>) | null;
 }
 
 export interface WatchPlan {
@@ -139,7 +153,8 @@ export interface FilingStatus {
 
 export interface SweepResult {
   ran: boolean;
-  reason?: "off" | "running";
+  /** off 플래그 꺼짐 · running 이미 도는 중 · blocked SEC 가 막아(403) 쉬는 중 */
+  reason?: "off" | "running" | "blocked";
   checked: number;
   inserted: number;
   failed: string[];
@@ -185,12 +200,16 @@ function minutesIntoEdgarDay(now: Date): number {
 }
 
 /**
- * ETF·ETN 인지 (네트워크 없음): 종목 마스터 분류(EF·EN) · 레버리지 정적 표(SOXL·TQQQ 등) · 이름의 낱말 'ETF'/'ETN'.
- * 이름의 Bear·Short·2X 같은 짐작은 쓰지 않는다 — 'Build-A-Bear Workshop' 같은 회사를 빼지 않게. 가려지지 않은 ETF 는 SEC 목록에 없어 'SEC 목록에 없음'으로 빠진다
+ * ETF·ETN 인지: 종목 마스터 분류(EF·EN — 한국 종목) · 토스 상품 정보(facts — group EF·EN 또는 파생형 ETF, 미국 종목) · 레버리지 정적 표(SOXL·TQQQ 등) ·
+ * 이름의 낱말 'ETF'/'ETN'. 종목 마스터나 토스가 다른 분류(주권 ST·외국 주권 FS 등)라고 하면 그대로 회사로 본다.
+ * 이름의 Bear·Short·2X 같은 짐작은 쓰지 않는다 — 'Build-A-Bear Workshop' 같은 회사를 빼지 않게. 상품 정보를 받지 못해 가려지지 않은 ETF 는 대개 SEC 목록에 없어
+ * 'SEC 목록에 없음'으로 빠진다
  */
-export function isExchangeProduct(h: FilingHolding): boolean {
+export function isExchangeProduct(h: FilingHolding, facts?: ProductFacts | null): boolean {
   if (h.groupCode === "EF" || h.groupCode === "EN") return true;
   if (h.groupCode === "ST") return false;
+  if (facts?.group === "EF" || facts?.group === "EN" || facts?.derivativeEtf === true) return true;
+  if (facts?.group) return false;
   if (/\bET[FN]s?\b/i.test(h.name)) return true;
   const k = productKindOf(h.code, h.name, null, null);
   return k.kind === "leveraged" && k.source === "table";
@@ -220,6 +239,11 @@ export class FilingWatchService {
   private resolveFailedAt = 0;
   /** 지금 CIK 를 찾는 중인 일 (한 번에 하나) */
   private resolving: Promise<void> | null = null;
+  /** SEC 가 막아(403) 확인을 쉬는 끝 시각 (한도 시계) */
+  private blockedUntil = Number.NEGATIVE_INFINITY;
+  /** 토스 상품 정보 (ETF 가리기): null = 받지 못함 · 받는 중인 일 */
+  private readonly productMemo = new Map<string, { facts: ProductFacts | null; at: number }>();
+  private readonly productInflight = new Map<string, Promise<void>>();
 
   /** p 를 deadline(한도 시계)까지 기다린다. null 이면 끝까지. 늦으면 timeout (p 는 뒤에서 끝난다) */
   private async waitUntil(p: Promise<unknown>, deadline: number | null): Promise<"ok" | "timeout"> {
@@ -306,18 +330,55 @@ export class FilingWatchService {
   }
 
   /**
+   * 종목 마스터 분류가 없는 종목의 토스 상품 정보 (ETF 가리기). 기억한 값이 있으면 그것, 없으면 한꺼번에 묻고 deadline(한도 시계)까지만 기다린다 —
+   * 늦은 것은 뒤에서 끝나 다음 요청부터 쓴다. undefined = 모름(이번엔 이름·표 규칙만)
+   */
+  private async productsOf(codes: readonly string[], deadline: number): Promise<Map<string, ProductFacts | null | undefined>> {
+    const out = new Map<string, ProductFacts | null | undefined>();
+    const product = this.deps.product;
+    if (!product || !codes.length) return out;
+    const fresh = (code: string): boolean => {
+      const hit = this.productMemo.get(code);
+      return !!hit && this.now().getTime() - hit.at < (hit.facts ? PRODUCT_TTL_MS : PRODUCT_RETRY_MS);
+    };
+    const waits: Promise<void>[] = [];
+    for (const code of codes) {
+      if (fresh(code)) continue;
+      let p = this.productInflight.get(code);
+      if (!p) {
+        p = Promise.resolve()
+          .then(() => product(code))
+          .then(
+            (facts) => void this.productMemo.set(code, { facts, at: this.now().getTime() }),
+            () => void this.productMemo.set(code, { facts: null, at: this.now().getTime() }),
+          )
+          .finally(() => this.productInflight.delete(code));
+        this.productInflight.set(code, p);
+      }
+      waits.push(p);
+    }
+    if (waits.length) await this.waitUntil(Promise.all(waits), deadline);
+    for (const code of codes) out.set(code, this.productMemo.get(code)?.facts);
+    return out;
+  }
+
+  /**
    * 보유 → 미국 · ETF 가리기 · CIK (같은 CIK 는 하나로, 이름은 등록 순 첫 종목).
-   * budgetMs: CIK 를 찾느라 기다리는 최대 시간 (화면·위젯 요청 — 넘으면 그 종목은 이번엔 '모름'). 확인 작업은 null(기다림)
+   * budgetMs: CIK·상품 정보를 찾느라 기다리는 최대 시간 (화면·위젯 요청 — 넘으면 그 종목은 이번엔 '모름'). 확인 작업은 null(CIK 는 기다림, 상품 정보는 10초까지)
    */
   async watchPlan(budgetMs: number | null = this.deps.resolveBudgetMs ?? REQUEST_RESOLVE_BUDGET_MS): Promise<WatchPlan> {
     const deadline = budgetMs === null ? null : this.clock() + budgetMs;
     const plan: WatchPlan = { watched: [], notCovered: [], unresolved: [] };
     const byCik = new Map<string, WatchPlan["watched"][number]>();
     const seen = new Set<string>();
-    for (const h of await this.deps.holdings()) {
-      if (isKrCode(h.code) || seen.has(h.code)) continue;
-      seen.add(h.code);
-      if (isExchangeProduct(h)) {
+    const us = (await this.deps.holdings()).filter((h) => !isKrCode(h.code) && !seen.has(h.code) && !!seen.add(h.code));
+    // 종목 마스터 분류가 없는 종목(미국)만 토스 상품 정보를 묻는다 (이름·표로 이미 가려지는 것은 묻지 않음)
+    const facts = await this.productsOf(
+      us.filter((h) => !h.groupCode && !isExchangeProduct(h)).map((h) => h.code),
+      deadline ?? this.clock() + PRODUCT_WAIT_MS,
+    );
+    for (const h of us) {
+      if (isExchangeProduct(h, facts.get(h.code))) {
         plan.notCovered.push({ code: h.code, name: h.name, reason: "etf" });
         continue;
       }
@@ -339,11 +400,12 @@ export class FilingWatchService {
 
   /** cron 이 부른다. 플래그가 꺼져 있으면 SEC 호출 0, 이미 도는 중이면 건너뜀 */
   async sweep(only?: ReadonlySet<string>): Promise<SweepResult> {
-    const skipped = (reason: "off" | "running"): SweepResult => ({ ran: false, reason, checked: 0, inserted: 0, failed: [], deferred: 0 });
+    const skipped = (reason: NonNullable<SweepResult["reason"]>): SweepResult => ({ ran: false, reason, checked: 0, inserted: 0, failed: [], deferred: 0 });
     if (this.running) return skipped("running");
     this.running = true;
     try {
       if (!(await this.deps.features.enabled("filingAlerts").catch(() => false))) return skipped("off");
+      if (this.clock() < this.blockedUntil) return skipped("blocked");
       return await this.sweepNow(only);
     } finally {
       this.running = false;
@@ -379,6 +441,13 @@ export class FilingWatchService {
           .execute()
           .catch(() => undefined);
         this.deps.log?.warn({ code: w.code, cik: w.cik, err: msg }, "SEC 공시를 받지 못함 (다음 확인 때 다시)");
+        // SEC 가 막았으면(403) 남은 종목을 두드리지 않고 10분 쉰다 (막힌 동안 계속 부르면 같은 IP 의 재무·가치 지표 호출까지 오래 막힌다)
+        if (/HTTP 403/.test(msg)) {
+          this.blockedUntil = this.clock() + BLOCKED_PAUSE_MS;
+          out.deferred = targets.length - i - 1;
+          this.deps.log?.warn({ deferred: out.deferred }, "SEC 가 요청을 막음(403) — 10분 쉬고 다시 확인");
+          break;
+        }
       }
     }
     await this.pruneDaily();

@@ -13,6 +13,14 @@ import type { FetchFn } from "../market/types.js";
  */
 
 const UA = "stock-briefing/1.0 (personal use; contact: admin@stock-briefing.app)";
+/**
+ * 운영에서 쓸 User-Agent (환경 변수 SEC_USER_AGENT — 'Company Name contact@example.com' 형식, SEC 공정 접근 규칙). 연락 메일 모양(@)이 없거나 비면 undefined → 기본 UA.
+ * 3-38 새 공시 확인 작업이 5분마다 부르므로, 막히면(403) 같은 IP 의 재무·가치 지표 SEC 호출도 멈춘다 — 실제로 받는 메일로 바꿔 두는 편이 안전하다
+ */
+export function secUserAgent(v: string | undefined | null): string | undefined {
+  const s = (v ?? "").trim();
+  return /\S+@\S+\.\S+/.test(s) ? s : undefined;
+}
 const TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
 /** 연결부터 본문 끝까지 한 요청의 제한 시간 (companyfacts 는 수 MB 라 넉넉히) */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -188,13 +196,16 @@ export class EdgarProvider implements FinancialsProvider {
   readonly name = "edgar";
   private tickers: { at: number; map: Map<string, { cik: string; title: string }> } | null = null;
   private readonly cache: BoundedCache;
+  /** 요청마다 보내는 User-Agent (SEC_USER_AGENT 가 있으면 그것, 없으면 기본) */
+  private readonly ua: string;
 
   constructor(
     private readonly fetchFn: FetchFn = fetch,
     private readonly now: () => Date = () => new Date(),
-    private readonly opts: { timeoutMs?: number; cacheMax?: number; minGapMs?: number } = {},
+    private readonly opts: { timeoutMs?: number; cacheMax?: number; minGapMs?: number; userAgent?: string | undefined } = {},
   ) {
     this.cache = new BoundedCache(opts.cacheMax ?? CACHE_MAX, Math.max(FACTS_TTL_MS, COMPANY_TTL_MS, DISCLOSURE_TTL_MS));
+    this.ua = secUserAgent(opts.userAgent) ?? UA;
   }
 
   /** 테스트·진단용: 들고 있는 종목별 결과 수 */
@@ -227,7 +238,7 @@ export class EdgarProvider implements FinancialsProvider {
     try {
       let res: Response;
       try {
-        res = await Promise.race([this.fetchFn(url, { headers: { "user-agent": UA, accept: "application/json" }, signal }), expired]);
+        res = await Promise.race([this.fetchFn(url, { headers: { "user-agent": this.ua, accept: "application/json" }, signal }), expired]);
       } catch (e) {
         if (e instanceof ProviderError) throw e;
         throw new ProviderError(this.name, `네트워크 오류: ${url}`, e);

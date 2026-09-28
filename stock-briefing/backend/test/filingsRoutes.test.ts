@@ -4,7 +4,8 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { NotListedError } from "../src/lib/errors.js";
-import { HoldingEventsService, type HoldingEventSources } from "../src/services/holdingEvents.js";
+import { SCHEDULE_EVENTS_BUDGET_MS } from "../src/routes/filings.js";
+import { EVENTS_BUDGET_MS, HoldingEventsService, type HoldingEventSources } from "../src/services/holdingEvents.js";
 import { fakeProviders } from "./helpers.js";
 
 /**
@@ -129,6 +130,38 @@ describe("3-38 경로", () => {
     expect(body.filings.items).toEqual(FIXTURE.items);
     expect(body.filings).toMatchObject({ more: 0, watched: 5, notCovered: [], failed: [], pending: [], warning: null, lastOkAt: "2026-07-30T07:03:00+09:00" });
     expect(FIXTURE.total).toBe(FIXTURE.items.length);
+    // 오류가 없으면 실패 칸은 없다
+    expect(body).not.toHaveProperty("eventsFailed");
+    expect(body).not.toHaveProperty("filingsFailed");
+  });
+
+  it("GET /api/schedule: 일정 모으기는 앱 요청 제한(20초)보다 짧은 한도로 · 한쪽이 오류여도 다른 쪽은 그대로 (eventsFailed·filingsFailed)", async () => {
+    const { at } = await start({ events: true });
+    await sweepToNow(at);
+    // 앱 holdingSchedule 요청 제한 20초 (app/src/api/client.ts) — 일정이 느려도 공시 목록과 함께 그 안에 답하게
+    expect(SCHEDULE_EVENTS_BUDGET_MS).toBeLessThanOrEqual(12_000);
+    expect(SCHEDULE_EVENTS_BUDGET_MS).toBeLessThan(EVENTS_BUDGET_MS);
+    const collect = vi.spyOn(HoldingEventsService.prototype, "collect");
+    await get("/api/schedule");
+    expect(collect.mock.calls[0]![0]).toMatchObject({ budgetMs: SCHEDULE_EVENTS_BUDGET_MS });
+    // 일정 오류: 공시 목록은 그대로
+    collect.mockRejectedValueOnce(new Error("토스 배당 요약 오류"));
+    at("2026-07-29T22:30:00Z");
+    let r = await get("/api/schedule");
+    expect(r.statusCode).toBe(200);
+    let body = r.json();
+    expect(body).toMatchObject({ events: null, eventsFailed: true, kr: { filings: "noDartKey" } });
+    expect(body.filings.items).toHaveLength(FIXTURE.items.length);
+    expect(body).not.toHaveProperty("filingsFailed");
+    collect.mockRestore();
+    // 공시 목록 오류: 일정은 그대로
+    const list = vi.spyOn(app!.filingWatch!, "list").mockRejectedValueOnce(new Error("db 오류"));
+    r = await get("/api/schedule");
+    expect(r.statusCode).toBe(200);
+    body = r.json();
+    expect(body).toMatchObject({ filings: null, filingsFailed: true, events: { days: 30 } });
+    expect(body).not.toHaveProperty("eventsFailed");
+    list.mockRestore();
   });
 
   it("GET /api/schedule: DART 키가 있으면 notYet, 다가오는 일정은 holdingEvents 를 따르고 holdingEarnings 는 읽기만(캘린더 호출 0) · 일정은 10분 캐시(보유가 바뀌면 새로)", async () => {

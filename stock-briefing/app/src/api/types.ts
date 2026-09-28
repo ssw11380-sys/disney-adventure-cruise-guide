@@ -1222,4 +1222,8 @@ export interface HoldingSchedule {
   filings: ScheduleFilings | null;
   /** 한국 공시: DART 키가 없으면 noDartKey, 있으면 notYet (이번 범위 밖) */
   kr: { filings: "noDartKey" | "notYet" };
+  /** 서버가 일정을 모으다 오류 (켜져 있는데 events null) — 화면은 '일정을 받지 못했습니다' */
+  eventsFailed?: true;
+  /** 서버가 공시 목록을 읽다 오류 (켜져 있는데 filings null) — 화면은 '공시 목록을 받지 못했습니다' */
+  filingsFailed?: true;
 }

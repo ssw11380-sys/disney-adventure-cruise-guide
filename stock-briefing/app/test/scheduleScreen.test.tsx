@@ -197,9 +197,15 @@ describe("계좌 상세 '일정·공시 모두 보기' 줄", () => {
     h.cached = SCHEDULE;
     r = render(<AccountBriefingBody numId={12} layout="stack" />);
     expect(link(r)[0]!.props.accessibilityLabel).toBe("보유 종목 일정과 공시 모두 보기, 새 공시 2건");
-    // '일정·공시 모두 보기' + 흐린 '· 새 공시 2건 ›' (꺾쇠는 그 묶음 끝 — 홀로 줄바꿈되지 않게)
+    // '일정·공시 모두 보기 ·' + 흐린 '새 공시 2건 ›' — '·'는 앞 묶음 끝(흐린 글), 꺾쇠는 뒤 묶음 끝 (200% 에서 둘째 줄이 '·'로 시작하거나 꺾쇠가 홀로 줄바꿈되지 않게)
     const texts = kids(kids(link(r)[0]!)[0]!);
-    expect(texts.map(rawOf)).toEqual(["일정·공시 모두 보기", "· 새 공시 2건 ›"]);
+    const plain = (n: HostNode) => rawOf(n).replace(/\u00a0/g, " ");
+    expect(texts.map(plain)).toEqual(["일정·공시 모두 보기 ·", "새 공시 2건 ›"]);
+    expect(rawOf(texts[0]!)).toMatch(/보기\u00a0·$/);
+    expect(rawOf(texts[1]!)).toBe("새\u00a0공시\u00a02건\u00a0›");
+    expect(rawOf(texts[1]!).startsWith("·")).toBe(false);
+    expect(flat(texts[0]!.props.style)).toMatchObject({ color: dark.accent, fontWeight: "600" });
+    expect(flat(kids(texts[0]!)[0]!.props.style)).toMatchObject({ color: dark.muted });
     expect(flat(texts[1]!.props.style)).toMatchObject({ color: dark.muted });
     expect(flat(kids(texts[1]!)[0]!.props.style)).toMatchObject({ color: dark.accent, fontWeight: "600" });
     h.store.set("filingAlerts.viewed", JSON.stringify([MSFT_8K.accession]));
@@ -261,7 +267,10 @@ describe("'일정·공시' 화면", () => {
     const up = card(r, "다가오는 일정")!;
     const muted = allOf(up).filter((n) => n.type === "Muted").map(rawOf);
     expect(muted).toEqual([SEP.app.sub, ...SEP.app.notes, F.EARNINGS_AFTER_FILING, SEP.app.basis]);
-    expect(allOf(card(r, "한국 공시")!).filter((n) => n.type === "Muted").map(rawOf)).toEqual([F.KR_NO_KEY]);
+    // 한국 공시: DART 키 안내 + 국내 공시는 계좌 상세 '오늘 일정' 카드에 있다는 한 줄 ('모두 보기'에서 국내 공시가 사라진 것처럼 보이지 않게)
+    const krCard = card(r, "한국 공시")!;
+    expect(allOf(krCard).filter((n) => n.type === "Muted").map(rawOf)).toEqual([F.KR_NO_KEY, F.KR_IN_ACCOUNT]);
+    expect(kids(krCard)[0]!.props.accessibilityLabel).toBe(`${F.KR_HEAD}, ${F.KR_NO_KEY}, ${F.KR_IN_ACCOUNT}`);
     // 이 화면에는 계좌 상세 링크가 없다
     expect(link(r)).toHaveLength(0);
   });
@@ -298,7 +307,14 @@ describe("'일정·공시' 화면", () => {
     expect(row8k().props.accessibilityLabel).toBe("7월 30일 목요일 오전 5시 4분, 마이크로소프트, 실적 발표, 8-K 2.02");
     const want = FX.app.lines.find((l) => l.accession === MSFT_8K.accession)!;
     expect(r.has(want.timeSpeech)).toBe(true);
-    expect(r.text()).toContain(want.time);
+    // 접수 시각은 묶음째 줄바꿈 ('한국 …'·'미국 동부 …' 묶음 안은 줄바꿈 없는 공백, '·'는 앞 묶음 끝) — 이으면 같은 글
+    const timeRow = r.byLabel(want.timeSpeech);
+    expect(flat(timeRow.props.style)).toMatchObject({ flexDirection: "row", flexWrap: "wrap" });
+    const parts = kids(timeRow).map(rawOf);
+    expect(parts).toHaveLength(3);
+    expect(parts.join(" ").replace(/\u00a0/g, " ")).toBe(want.time);
+    for (const part of parts) expect(part).not.toMatch(/ /);
+    expect(parts[1]).toMatch(/\u00a0·$/);
     expect(r.text()).toContain(F.ITEMS_HEAD);
     expect(r.has("2.02 실적 발표 — 분기·연간 실적 같은 영업 결과를 알림")).toBe(true);
     expect(r.has("9.01 재무제표·첨부 서류 — 다른 항목에 딸린 첨부 서류")).toBe(true);
@@ -350,7 +366,10 @@ describe("'일정·공시' 화면", () => {
     cleanupRenders();
     h.scheduleError = true;
     r = render(<ScheduleScreen focus={null} />);
-    expect(r.text()).toContain(F.FILINGS_FAILED);
+    // 요청 전체 실패: 일정도 같은 요청이라 '일정·공시를 받지 못했습니다' 한 줄 (배당락일 카드가 말없이 사라지지 않게)
+    expect(r.text()).toBe(F.SCHEDULE_FAILED);
+    expect(ofType(r, "Card")).toHaveLength(1);
+    expect(r.has(F.SCHEDULE_FAILED)).toBe(true);
     cleanupRenders();
     h.scheduleError = false;
     h.schedule = { ...SCHEDULE, filings: { ...FILINGS, items: [] } };
@@ -370,10 +389,55 @@ describe("'일정·공시' 화면", () => {
     for (const t of ["SEC 공시 확인이 7/30 06:10 이후 되지 않았습니다. 서버가 다시 확인하면 채워집니다.", "공시를 받지 못한 종목: 테슬라 (다음 확인 때 다시 받습니다)", "공시를 확인하지 않는 종목: QQQ (ETF·ETN)", F.KR_NOT_YET]) expect(r.text()).toContain(t);
   });
 
-  it("filingAlerts 가 꺼진 서버(filings null): 공시·한국 칸 없이 다가오는 일정만 · holdingEvents 도 꺼지면(events null) 일정 칸 없음", () => {
+  it("요청 전체 실패 글은 앱이 아는 서버 플래그로: 공시가 꺼졌으면 '일정을 …', 일정이 꺼졌으면 '공시 목록을 …'", () => {
+    h.scheduleError = true;
+    h.flags.filingAlerts = false;
+    let r = render(<ScheduleScreen focus={null} />);
+    expect(r.text()).toBe(F.EVENTS_FAILED_SCREEN);
+    cleanupRenders();
+    h.flags = { ...h.flags, filingAlerts: true, holdingEvents: false };
+    r = render(<ScheduleScreen focus={null} />);
+    expect(r.text()).toBe(F.FILINGS_FAILED);
+  });
+
+  it("서버가 한쪽만 받지 못함(eventsFailed·filingsFailed): 그 칸에 제목 + 한 줄, 다른 칸은 그대로", () => {
+    h.schedule = { ...SCHEDULE, events: null, eventsFailed: true };
+    let r = render(<ScheduleScreen focus={null} />);
+    expect(ofType(r, "Card").map(cardName)).toEqual(["다가오는 일정", "최근 공시 (미국)", "한국 공시"]);
+    const ev = card(r, "다가오는 일정")!;
+    expect(kids(ev)[0]!.props.accessibilityLabel).toBe(`다가오는 일정, ${F.EVENTS_FAILED_SCREEN}`);
+    expect(allOf(ev).filter((n) => n.type === "Muted").map(rawOf)).toEqual([F.EVENTS_FAILED_SCREEN]);
+    // 국내 보유 수를 모르면 계좌 상세 안내 한 줄은 그대로
+    expect(allOf(card(r, "한국 공시")!).filter((n) => n.type === "Muted").map(rawOf)).toEqual([F.KR_NO_KEY, F.KR_IN_ACCOUNT]);
+    cleanupRenders();
+    h.schedule = { ...SCHEDULE, filings: null, filingsFailed: true };
+    r = render(<ScheduleScreen focus={null} />);
+    expect(ofType(r, "Card").map(cardName)).toEqual(["다가오는 일정", "최근 공시 (미국)", "한국 공시"]);
+    expect(allOf(card(r, "최근 공시 (미국)")!).filter((n) => n.type === "Muted").map(rawOf)).toEqual([F.FILINGS_FAILED]);
+    // 공시 칸이 보이지 않으면 '미국 실적은 … 공시로 보입니다'도 붙이지 않는다
+    expect(r.text()).not.toContain(F.EARNINGS_AFTER_FILING);
+    cleanupRenders();
+    // 둘 다 받지 못함: 빈 화면('볼 수 없습니다')이 아니라 두 칸 모두 받지 못했다고
+    h.schedule = { ...SCHEDULE, events: null, filings: null, eventsFailed: true, filingsFailed: true };
+    r = render(<ScheduleScreen focus={null} />);
+    expect(ofType(r, "Empty")).toHaveLength(0);
+    expect(r.text()).toContain(F.EVENTS_FAILED_SCREEN);
+    expect(r.text()).toContain(F.FILINGS_FAILED);
+  });
+
+  it("국내 보유가 없다고 알면(일정 kr 0) 한국 공시 칸은 DART 한 줄만", () => {
+    h.schedule = { ...SCHEDULE, events: { ...SCHEDULE.events!, kr: 0 } };
+    const r = render(<ScheduleScreen focus={null} />);
+    expect(allOf(card(r, "한국 공시")!).filter((n) => n.type === "Muted").map(rawOf)).toEqual([F.KR_NO_KEY]);
+  });
+
+  it("filingAlerts 가 꺼진 서버(filings null): 공시·한국 칸 없이 다가오는 일정만 ('미국 실적은 … 공시로 보입니다' 없음) · holdingEvents 도 꺼지면(events null) 일정 칸 없음", () => {
     h.schedule = { ...SCHEDULE, filings: null };
     let r = render(<ScheduleScreen focus={null} />);
     expect(ofType(r, "Card").map(cardName)).toEqual(["다가오는 일정"]);
+    // 이 화면 어디에서도 그 공시를 볼 수 없으므로 붙이지 않는다
+    expect(r.text()).not.toContain(F.EARNINGS_AFTER_FILING);
+    expect(allOf(card(r, "다가오는 일정")!).filter((n) => n.type === "Muted").map(rawOf)).toEqual([SEP.app.sub, ...SEP.app.notes, SEP.app.basis]);
     cleanupRenders();
     h.schedule = { ...SCHEDULE, events: null };
     r = render(<ScheduleScreen focus={null} />);

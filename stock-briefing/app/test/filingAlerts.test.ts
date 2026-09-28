@@ -78,6 +78,8 @@ describe("문구 (공용 픽스처 texts 와 같음 — 서버가 같은 글을 
       filingsNoUs: F.FILINGS_NO_US,
       filingsNoneCovered: F.FILINGS_NONE_COVERED,
       filingsFailed: F.FILINGS_FAILED,
+      scheduleFailed: F.SCHEDULE_FAILED,
+      eventsFailedScreen: F.EVENTS_FAILED_SCREEN,
       titleNote: F.TITLE_NOTE,
       notCovered: F.notCoveredNote([
         { code: "QQQ", name: "QQQ", reason: "etf" },
@@ -98,6 +100,7 @@ describe("문구 (공용 픽스처 texts 와 같음 — 서버가 같은 글을 
       krHead: F.KR_HEAD,
       krNoKey: F.KR_NO_KEY,
       krNotYet: F.KR_NOT_YET,
+      krInAccount: F.KR_IN_ACCOUNT,
       settingTitle: F.SETTING_TITLE,
       settingAbout: F.SETTING_ABOUT,
       settingQuiet: F.settingQuiet("22:00", "07:00"),
@@ -119,17 +122,40 @@ describe("공시 줄 글·화면 읽기 (공용 픽스처)", () => {
     const l = F.filingLine(item, item.isNew);
     expect({ when: l.when, head: l.head, speech: l.speech, time: l.time, timeSpeech: l.timeSpeech }).toEqual({ when: want.when, head: want.head, speech: want.speech, time: want.time, timeSpeech: want.timeSpeech });
     expect(l.title).toBe(item.title);
+    // 펼친 첫 줄 묶음: 이으면 같은 글 · 묶음 안은 줄바꿈 없는 공백 · '·'는 앞 묶음 끝 (다음 줄이 '·'로 시작하지 않게)
+    expect(l.timeParts.join(" ").replace(/\u00a0/g, " ")).toBe(want.time);
+    for (const part of l.timeParts) expect(part).not.toMatch(/ /);
+    expect(l.timeParts.slice(1).some((p) => p.startsWith("·"))).toBe(false);
   });
 
   it("접수 시각을 모르면 제출일만 (미국 날짜라고 밝힘)", () => {
     const l = F.filingLine({ ...MSFT_8K, acceptedAt: null, kst: null, et: null });
-    expect(l).toMatchObject({ when: "7/29(수)", head: "7/29(수) · 마이크로소프트", time: "SEC 제출일: 7/29(수) (미국 날짜)" });
+    expect(l).toMatchObject({ when: "7/29(수)", head: "7/29(수) · 마이크로소프트", time: "SEC 제출일: 7/29(수) (미국 날짜)", timeParts: ["SEC\u00a0제출일:", "7/29(수)\u00a0(미국\u00a0날짜)"] });
     expect(l.speech).toBe("7월 29일 수요일, 마이크로소프트, 실적 발표, 8-K 2.02");
   });
 
   it("오전·오후 읽기: 자정 0시 = 오전 12시 · 정오 = 오후 12시 · 분이 0 이면 '시'까지", () => {
     expect(["00:00", "00:30", "05:04", "12:00", "16:04", "23:59", "x"].map(F.speakAmPm)).toEqual(["오전 12시", "오전 12시 30분", "오전 5시 4분", "오후 12시", "오후 4시 4분", "오후 11시 59분", "x"]);
     expect(F.titleSpeech("연간 보고서(20-F, 외국 기업)")).toBe("연간 보고서, 20-F, 외국 기업");
+  });
+
+  it("SEC 접수 시간 (미국 동부 평일 06:00~22:59 — 서버 inEdgarHours 와 같은 창, 기기 Intl 없이 서머타임 규칙)", () => {
+    const cases: Array<[string, boolean]> = [
+      ["2026-07-29T09:59:00Z", false], // 수 05:59 EDT
+      ["2026-07-29T10:00:00Z", true], // 수 06:00
+      ["2026-07-30T02:59:00Z", true], // 수 22:59
+      ["2026-07-30T03:00:00Z", false], // 수 23:00
+      ["2026-09-26T00:30:00Z", true], // 금 20:30 EDT = 한국 토 09:30 (미국 애프터마켓·주간거래 모두 닫힘)
+      ["2026-08-01T14:00:00Z", false], // 토
+      ["2026-08-02T14:00:00Z", false], // 일
+      ["2026-04-03T15:00:00Z", true], // 성금요일 11:00 EDT (미국 증시 휴장, SEC 는 받음)
+      ["2026-03-06T10:59:00Z", false], // 금 05:59 EST
+      ["2026-03-06T11:00:00Z", true], // 금 06:00 EST
+      ["2026-03-09T10:00:00Z", true], // 월 06:00 EDT (3/8 서머타임 시작)
+      ["2026-11-02T10:30:00Z", false], // 월 05:30 EST (11/1 서머타임 끝)
+      ["2026-11-02T11:00:00Z", true],
+    ];
+    for (const [iso, want] of cases) expect(F.inEdgarHours(Date.parse(iso)), iso).toBe(want);
   });
 
   it("접수 번호 모양만 받는다", () => {
@@ -144,7 +170,9 @@ describe("'최근 공시 (미국)' 칸", () => {
   it("줄 · 새 공시(서버 isNew 이고 이 기기에서 펼쳐 보지 않음) · 제목 뜻 · 기준", () => {
     const v = F.scheduleFilingsView(base);
     expect(v.lines.map((l) => [l.line.head, l.isNew])).toEqual(FX.items.map((i) => [expect.stringContaining(i.name), i.isNew]));
-    expect(v).toMatchObject({ title: "최근 공시 (미국)", sub: "보유 미국 종목 · 최근 30일 · SEC", more: 0, empty: null, fresh: 2, notes: [F.TITLE_NOTE], basis: "7/30 07:03 기준 · 출처 SEC EDGAR", basisSpeech: "7월 30일 오전 7시 3분 기준, 출처 SEC EDGAR" });
+    expect(v).toMatchObject({ title: "최근 공시 (미국)", sub: "보유 미국 종목 · 최근 30일 · SEC", more: 0, empty: null, fresh: 2, notes: [F.TITLE_NOTE], basis: "7/30 07:03 기준 · 출처 SEC EDGAR", basisSpeech: "7월 30일 7시 3분 기준, 출처 SEC EDGAR" });
+    // 기준 줄 읽기는 같은 화면 '다가오는 일정' 기준 줄과 같은 24시간 말투 ('16시 15분' — 공시 줄의 접수 시각만 오전·오후)
+    expect(F.scheduleFilingsView({ ...base, lastOkAt: "2026-09-25T16:15:00+09:00" }).basisSpeech).toBe("9월 25일 16시 15분 기준, 출처 SEC EDGAR");
     const seen = F.scheduleFilingsView(base, new Set([MSFT_8K.accession]));
     expect(seen.fresh).toBe(1);
     expect(seen.lines.find((l) => l.item.accession === MSFT_8K.accession)!.line.speech).not.toMatch(/새 공시/);
@@ -176,9 +204,16 @@ describe("'최근 공시 (미국)' 칸", () => {
     expect(F.scheduleFilingsView({ ...base, lastOkAt: null }).basis).toBe("출처 SEC EDGAR");
   });
 
-  it("계좌 상세 링크 끝 '· 새 공시 N건'", () => {
-    expect(F.freshSuffix(2)).toBe("· 새 공시 2건");
-    expect(F.freshSuffix(0)).toBeNull();
+  it("계좌 상세 링크 끝 '새 공시 N건' ('·'는 링크 글 묶음 끝에 붙인다)", () => {
+    expect(F.freshCount(2)).toBe("새 공시 2건");
+    expect(F.freshCount(0)).toBeNull();
+  });
+
+  it("요청이 실패했을 때 한 줄: 앱이 아는 서버 플래그로 — 둘 다 켜짐·모름이면 '일정·공시', 공시가 꺼졌으면 '일정', 일정이 꺼졌으면 '공시 목록'", () => {
+    expect(F.scheduleFailedText(true, true)).toBe(F.SCHEDULE_FAILED);
+    expect(F.scheduleFailedText(false, false)).toBe(F.SCHEDULE_FAILED);
+    expect(F.scheduleFailedText(true, false)).toBe(F.EVENTS_FAILED_SCREEN);
+    expect(F.scheduleFailedText(false, true)).toBe(F.FILINGS_FAILED);
   });
 });
 

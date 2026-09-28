@@ -117,3 +117,59 @@ describe("백그라운드 확인의 새 공시 알림", () => {
     expect(scheduled).toEqual([]);
   });
 });
+
+describe("휴장 건너뛰기와 SEC 접수 시간 (3-38 리뷰 — 미국 휴장이지만 SEC 는 공시를 받는 때)", () => {
+  const API = "https://server.test";
+  /** 두 시장·연장 세션이 모두 닫힌 칩으로 10분 전에 받아 둔 응답 (다음 개장은 이틀 뒤) → 지금 규칙이면 최대 2시간 건너뜀 */
+  const closedCache = (now: number) =>
+    store.set(
+      "widget.payload",
+      JSON.stringify({ at: now - 10 * 60_000, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: '"c"', body: { v: 1, market: { label: "휴장", open: false, nextChangeAt: new Date(now + 2 * 86_400_000).toISOString() }, stocks: [], briefings: [], latestIds: [] } }),
+    );
+  /** 앱이 마지막으로 받은 서버 플래그 (기기 저장 react-query 캐시) */
+  const flags = (on: boolean) => store.set("rq.cache", JSON.stringify({ clientState: { queries: [{ queryKey: [API, "features"], state: { data: { features: { filingAlerts: on } } } }] } }));
+  const at = (iso: string) => {
+    const t = Date.parse(iso);
+    vi.setSystemTime(t);
+    closedCache(t);
+  };
+
+  it.each([
+    ["금요일 20:45 동부 = 한국 토 09:45 (미국 애프터마켓·주간거래 모두 닫힘)", "2026-09-26T00:45:00Z"],
+    ["성금요일 07:30 동부 = 한국 20:30 (미국 증시 휴장, SEC 는 받음)", "2026-04-03T11:30:00Z"],
+  ])("%s: 공시 알림이 켜져 있으면 건너뛰지 않고 묻는다 → 새 공시 알림", async (_n, iso) => {
+    await import("@/lib/filingSeen").then((s) => s.setFilingInit());
+    flags(true);
+    at(iso);
+    const fresh = { ...FX.alerts[0]!, acceptedAt: new Date(Date.parse(iso) - 5 * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z") };
+    serve({ filingIds: [fresh.accession], alerts: [fresh] });
+    await runBriefingCheck();
+    expect(asked).toEqual(["/api/widget", "/api/notifications/settings", "/api/filings/alerts"]);
+    expect(scheduled).toHaveLength(1);
+  });
+
+  it("공시 플래그가 꺼져 있거나 모름 · SEC 접수 시간 밖(토요일) · 이 기기 '공시 알림' 끔 · 알림을 켜지 않은 기기면 지금처럼 건너뛴다 (요청 0)", async () => {
+    const skipped = async () => {
+      asked.length = 0;
+      await runBriefingCheck();
+      return asked.length === 0;
+    };
+    at("2026-09-26T00:45:00Z");
+    flags(false);
+    expect(await skipped()).toBe(true);
+    store.delete("rq.cache");
+    expect(await skipped()).toBe(true);
+    flags(true);
+    at("2026-09-26T14:00:00Z"); // 토 10:00 동부 — SEC 가 새 공시를 받지 않음
+    expect(await skipped()).toBe(true);
+    at("2026-09-26T00:45:00Z");
+    store.set("filingAlerts.enabled", "0");
+    expect(await skipped()).toBe(true);
+    store.delete("filingAlerts.enabled");
+    store.delete("push.localMode");
+    expect(await skipped()).toBe(true);
+    // 같은 때 알림을 켠 기기는 묻는다 (위 규칙이 아니었다면 이것도 건너뛰었다)
+    store.set("push.localMode", "1");
+    expect(await skipped()).toBe(false);
+  });
+});

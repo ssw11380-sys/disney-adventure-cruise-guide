@@ -1,8 +1,9 @@
 import type { FilingAlertItem, ScheduleFilingItem, ScheduleFilings } from "@/api/types";
-import { sentence } from "@/lib/a11y";
+import { sentence, speakClock } from "@/lib/a11y";
 import { speakDay } from "@/lib/accountSinceLast";
 import { inQuietHours, type NotifyPrefs } from "@/lib/briefingDigest";
 import { mdw } from "@/lib/marketSummary";
+import { nyOffsetByRule } from "@/lib/marketTime";
 
 /**
  * 3-38 새 공시 알림·일정 화면 (플래그 filingAlerts·holdingSchedule) 순수 함수 — React Native 를 불러오지 않는다 (테스트·백그라운드 태스크).
@@ -23,6 +24,10 @@ export const FILINGS_HEAD = "최근 공시 (미국)";
 export const FILINGS_NO_US = "미국 보유 종목이 없어 공시를 확인하지 않습니다.";
 export const FILINGS_NONE_COVERED = "공시를 확인하는 미국 보유 종목이 없습니다.";
 export const FILINGS_FAILED = "공시 목록을 받지 못했습니다. 화면을 다시 열면 다시 받습니다.";
+/** '일정·공시' 요청이 실패했을 때 (일정도 같은 요청이라 함께 밝힌다) — 서버가 공시를 꺼 두었으면 EVENTS_FAILED_SCREEN */
+export const SCHEDULE_FAILED = "일정·공시를 받지 못했습니다. 화면을 다시 열면 다시 받습니다.";
+/** 일정만 받지 못함 (서버 eventsFailed · 공시가 꺼진 서버의 요청 실패) */
+export const EVENTS_FAILED_SCREEN = "일정을 받지 못했습니다. 화면을 다시 열면 다시 받습니다.";
 export const TITLE_NOTE = "공시 제목은 SEC 서식과 항목 번호를 우리말로 옮긴 것이며, 내용 요약이 아닙니다.";
 export const STALE_NEVER = "SEC 공시 확인이 아직 되지 않았습니다. 서버가 다시 확인하면 채워집니다.";
 export const NEW_CHIP = "새 공시";
@@ -34,6 +39,8 @@ export const OPEN_FAILED = "원문을 열지 못했습니다.";
 export const KR_HEAD = "한국 공시";
 export const KR_NO_KEY = "한국 공시 알림은 DART 키가 있어야 받을 수 있습니다.";
 export const KR_NOT_YET = "한국 공시 알림은 다음 단계에서 넣습니다.";
+/** 한국 공시 칸 둘째 줄 — 계좌 상세 '오늘 일정' 카드의 '최근 공시 (보유 국내 종목, 3일)'이 이 화면에 없는 까닭을 밝힌다 */
+export const KR_IN_ACCOUNT = "보유 국내 종목의 최근 공시(3일)는 계좌 브리핑 상세의 '오늘 일정' 카드에서 볼 수 있습니다.";
 export const SETTING_TITLE = "공시 알림";
 export const SETTING_ABOUT = "보유 미국 종목에 새 SEC 공시(실적 발표·분기 보고서 등)가 올라오면 알립니다.";
 export const SETTING_MUTED = "종목별 알림에서 끈 종목은 공시 알림도 오지 않습니다.";
@@ -82,6 +89,20 @@ export function speakAmPm(hm: string): string {
   return `${h < 12 ? "오전" : "오후"} ${h12}시${min ? ` ${min}분` : ""}`;
 }
 
+/** 묶음 안의 공백을 줄바꿈 없는 공백으로 — 좁은 칸·큰 글씨에서 묶음째 다음 줄로 가게 (묶음 사이 줄바꿈은 부르는 쪽의 줄 모양이 맡는다) */
+const keep = (t: string) => t.replace(/ /g, "\u00a0");
+
+/**
+ * SEC 가 새 공시를 받는 시간인지: 미국 동부 평일 06:00~22:59 (서버 services/filingAlerts inEdgarHours · cron 과 같은 창).
+ * 기기 Intl 시간대 자료에 기대지 않고 미국 서머타임 규칙(nyOffsetByRule)으로 — 백그라운드 확인이 휴장 건너뛰기를 할지 정할 때 쓴다
+ */
+export function inEdgarHours(now: number): boolean {
+  const et = new Date(now + nyOffsetByRule(now) * 60_000);
+  const wd = et.getUTCDay();
+  const h = et.getUTCHours();
+  return wd >= 1 && wd <= 5 && h >= 6 && h <= 22;
+}
+
 /** 벽시계 'YYYY-MM-DDTHH:MM' → { text: '7/30(목) 05:04', speech: '7월 30일 목요일 오전 5시 4분' } (읽지 못하면 null) */
 function wall(v: string | null): { text: string; speech: string } | null {
   const m = v ? /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/.exec(v) : null;
@@ -116,6 +137,11 @@ export interface FilingLine {
   speech: string;
   /** 펼친 첫 줄 'SEC에 올라온 시각: 한국 7/30(목) 05:04 · 미국 동부 7/29(수) 16:04' */
   time: string;
+  /**
+   * 같은 줄을 묶음으로: ['SEC에 올라온 시각:', '한국 7/30(목) 05:04 ·', '미국 동부 7/29(수) 16:04'] — 묶음 안 공백은 줄바꿈 없는 공백,
+   * '·'는 앞 묶음 끝에 (200% 에서 '한국 9/8(화)' / '20:25 · …'처럼 날짜와 시각이 갈라지거나 '·'로 줄이 시작하지 않게)
+   */
+  timeParts: string[];
   timeSpeech: string;
 }
 
@@ -131,18 +157,22 @@ export function filingLine(i: FilingAlertItem, isNew = false): FilingLine {
     title: i.title,
     speech: sentence([k?.speech ?? speakDay(i.filingDate), i.name, titleSpeech(i.title), isNew ? NEW_CHIP : null]),
     time: k && e ? `SEC에 올라온 시각: 한국 ${k.text} · 미국 동부 ${e.text}` : `SEC 제출일: ${mdw(i.filingDate)} (미국 날짜)`,
+    timeParts: (k && e ? ["SEC에 올라온 시각:", `한국 ${k.text} ·`, `미국 동부 ${e.text}`] : ["SEC 제출일:", `${mdw(i.filingDate)} (미국 날짜)`]).map(keep),
     timeSpeech: k && e ? sentence(["SEC에 올라온 시각", `한국 ${k.speech}`, `미국 동부 ${e.speech}`]) : sentence(["SEC 제출일", `${speakDay(i.filingDate)} 미국 날짜`]),
   };
 }
 
-/** 순간(ISO) → 서울 { text: '9/29 08:40', speech: '9월 29일 8시 40분' } */
+/**
+ * 순간(ISO) → 서울 { text: '9/29 08:40', speech: '9월 29일 8시 40분' }. 기준 줄 읽기는 다가오는 일정 카드(lib/holdingEvents stamp)와 같은 24시간 말투
+ * ('16시 15분') — 같은 화면의 두 기준 줄이 다르게 읽히지 않게. 공시 줄의 접수 시각은 오전·오후(speakAmPm) 그대로
+ */
 function stamp(iso: string | null): { text: string; speech: string } | null {
   const t = iso ? Date.parse(iso) : NaN;
   if (Number.isNaN(t)) return null;
   const s = new Date(t + 9 * 3_600_000).toISOString();
   const md = `${Number(s.slice(5, 7))}/${Number(s.slice(8, 10))}`;
   const hm = s.slice(11, 16);
-  return { text: `${md} ${hm}`, speech: `${Number(s.slice(5, 7))}월 ${Number(s.slice(8, 10))}일 ${speakAmPm(hm)}` };
+  return { text: `${md} ${hm}`, speech: `${Number(s.slice(5, 7))}월 ${Number(s.slice(8, 10))}일 ${speakClock(hm)}` };
 }
 
 const names = (list: readonly { name: string }[]) => {
@@ -223,9 +253,19 @@ export function scheduleFilingsView(f: ScheduleFilings, viewed: ReadonlySet<stri
   };
 }
 
-/** 계좌 상세 링크 줄 끝 '· 새 공시 2건' (0이면 null) */
-export function freshSuffix(n: number): string | null {
-  return n > 0 ? `· 새 공시 ${n}건` : null;
+/**
+ * 계좌 상세 링크 줄 끝 '새 공시 2건' (0이면 null). 앞의 '·'는 링크 글 묶음 끝에 붙인다 ('일정·공시 모두 보기 ·' + '새 공시 2건 ›') —
+ * 200% 에서 둘째 줄이 '·'로 시작하지 않게
+ */
+export function freshCount(n: number): string | null {
+  return n > 0 ? `새 공시 ${n}건` : null;
+}
+
+/** '일정·공시' 요청이 실패했을 때 한 줄 (앱이 아는 서버 플래그로 — 공시가 꺼져 있으면 일정만, 일정이 꺼져 있으면 공시만, 모르면 둘 다) */
+export function scheduleFailedText(eventsOn: boolean, filingsOn: boolean): string {
+  if (eventsOn && !filingsOn) return EVENTS_FAILED_SCREEN;
+  if (filingsOn && !eventsOn) return FILINGS_FAILED;
+  return SCHEDULE_FAILED;
 }
 
 // ── 알림 ──────────────────────────────────────────────────────────

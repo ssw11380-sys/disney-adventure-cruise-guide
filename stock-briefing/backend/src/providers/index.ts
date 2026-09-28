@@ -149,7 +149,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
 
   const dart = cfg.DART_API_KEY ? new DartProvider({ apiKey: cfg.DART_API_KEY, db }) : null;
   // 미국 재무·공시(SEC) — 분석 수집과 가치 지표가 같은 인스턴스를 써서 SEC 요청 간격을 함께 지킨다
-  const edgar = new EdgarProvider();
+  // SEC User-Agent: SEC_USER_AGENT(회사 이름 + 연락 메일)가 있으면 그것, 없으면 코드 기본값 (3-38)
+  const edgar = new EdgarProvider(fetch, undefined, { userAgent: cfg.SEC_USER_AGENT });
 
   const backend = resolveLlmBackend(cfg);
   const generator: TextGenerator = backend ? new ClaudeGenerator({ backend }) : new DisabledGenerator();

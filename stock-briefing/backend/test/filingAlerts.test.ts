@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { NotListedError, ProviderError } from "../src/lib/errors.js";
-import { FilingWatchService, inEdgarHours, isExchangeProduct, localMinute, tooOldToAlert, type FilingHolding, type FilingSource } from "../src/services/filingAlerts.js";
+import type { ProductFacts } from "../src/analysis/leveraged.js";
+import { BLOCKED_PAUSE_MS, FilingWatchService, inEdgarHours, isExchangeProduct, localMinute, tooOldToAlert, type FilingHolding, type FilingSource } from "../src/services/filingAlerts.js";
 
 /**
  * 3-38 새 공시 알림 — SEC 확인 작업 (FilingWatchService). 녹화한 SEC 응답(test/fixtures/secFilings)을 '그 시각에 SEC 에 있던 줄'만 남겨 돌려주는
@@ -74,7 +75,7 @@ afterEach(async () => {
   db = null;
 });
 
-async function setup(opts: { holdings: FilingHolding[]; at: string; on?: boolean; budgetMs?: number; resolveBudgetMs?: number }) {
+async function setup(opts: { holdings: FilingHolding[]; at: string; on?: boolean; budgetMs?: number; resolveBudgetMs?: number; product?: (code: string) => Promise<ProductFacts | null> }) {
   db = await createMigratedDb(":memory:");
   const clock = { now: new Date(opts.at), real: 0 };
   const flags = { on: opts.on ?? true };
@@ -91,6 +92,7 @@ async function setup(opts: { holdings: FilingHolding[]; at: string; on?: boolean
     log: { warn: (_o, m) => void warns.push(m), info: () => undefined },
     ...(opts.budgetMs !== undefined ? { budgetMs: opts.budgetMs } : {}),
     ...(opts.resolveBudgetMs !== undefined ? { resolveBudgetMs: opts.resolveBudgetMs } : {}),
+    ...(opts.product ? { product: opts.product } : {}),
   });
   const at = (iso: string) => {
     clock.now = new Date(iso);
@@ -238,6 +240,70 @@ describe("확인 작업", () => {
     expect(isExchangeProduct(H("TQQQ", "프로셰어즈 울트라프로 QQQ", null))).toBe(true); // 레버리지 정적 표
     expect(isExchangeProduct(H("KWEB", "크레인셰어즈 중국 인터넷ETF", null))).toBe(true);
     expect(isExchangeProduct(H("XYZ", "Some ETF", "ST"))).toBe(false); // 종목 마스터가 보통 주식이라고 하면 그대로
+    // 토스 상품 정보: EF·EN·파생형 ETF 는 가리고, 주권(ST)·외국 주권(FS)이라고 하면 이름에 'ETF' 가 있어도 회사로
+    expect(isExchangeProduct(H("QQQ", "인베스코 QQQ", null), { group: "EF" })).toBe(true);
+    expect(isExchangeProduct(H("X1", "X1", null), { group: "EN" })).toBe(true);
+    expect(isExchangeProduct(H("X2", "X2", null), { group: null, derivativeEtf: true })).toBe(true);
+    expect(isExchangeProduct(H("TSM", "TSMC", null), { group: "FS" })).toBe(false);
+    expect(isExchangeProduct(H("ETFX", "Some ETF Holdings Inc", null), { group: "ST" })).toBe(false);
+    expect(isExchangeProduct(H("QQQ", "인베스코 QQQ", null), null)).toBe(false);
+  });
+
+  it("미국 ETF(종목 마스터에 없음)는 토스 상품 정보(group EF·EN)로 가린다 — QQQ 는 'ETF·ETN', SEC 목록에 있는 상품형 신탁(GLD)도 확인하지 않음 · 주권(ST)·외국 주권(FS)은 확인", async () => {
+    // 토스 웹 v2/stock-infos 의 group.code (녹화: MSFT ST · SOXL·RGTX EF). GLD 처럼 SEC 목록에 있고 10-K·8-K 를 내는 신탁은 가리지 않으면 알림이 온다
+    const TOSS: Record<string, ProductFacts | null> = {
+      QQQ: { group: "EF", leverageFactor: 0 },
+      GLD: { group: "EF", leverageFactor: 0 },
+      SVIX: { group: "EN", leverageFactor: -1 },
+      MSFT: { group: "ST", leverageFactor: 0 },
+      TSM: { group: "FS", leverageFactor: 0 },
+      NVDA: null, // 받지 못함 → 이름·표 규칙 → SEC 목록으로
+    };
+    const asked: string[] = [];
+    const { svc, src, at } = await setup({
+      holdings: [H("QQQ", "인베스코 QQQ", null), H("GLD", "SPDR 골드 트러스트", null), H("SVIX", "SVIX", null), H("MSFT", "마이크로소프트", null), H("TSM", "TSMC", null), H("NVDA", "엔비디아", null), H("SOXL", "디렉시온 데일리 반도체 불 3X", null), H("005930", "삼성전자")],
+      at: "2026-07-29T19:00:00Z",
+      product: async (code) => {
+        asked.push(code);
+        return TOSS[code] ?? null;
+      },
+    });
+    const plan = await svc.watchPlan();
+    expect(plan.notCovered).toEqual([
+      { code: "QQQ", name: "인베스코 QQQ", reason: "etf" },
+      { code: "GLD", name: "SPDR 골드 트러스트", reason: "etf" },
+      { code: "SVIX", name: "SVIX", reason: "etf" },
+      { code: "SOXL", name: "디렉시온 데일리 반도체 불 3X", reason: "etf" },
+    ]);
+    expect(plan.watched.map((w) => w.code)).toEqual(["MSFT", "TSM", "NVDA"]);
+    // 이름·레버리지 표로 이미 가려지는 종목(SOXL)과 한국 종목은 묻지 않는다. ETF 는 티커 목록(CIK)도 찾지 않는다
+    expect(asked).toEqual(["QQQ", "GLD", "SVIX", "MSFT", "TSM", "NVDA"]);
+    expect(src.resolves).toEqual(["MSFT", "TSM", "NVDA"]);
+    // 받은 값은 하루 기억 (위젯·화면 요청마다 토스에 묻지 않음), 받지 못한 값(NVDA)은 10분 뒤 다시
+    await svc.watchPlan();
+    expect(asked).toHaveLength(6);
+    at("2026-07-29T19:11:00Z");
+    await svc.sweep();
+    expect(asked.slice(6)).toEqual(["NVDA"]);
+    expect(src.subs).toEqual([CIK.MSFT, CIK.TSM, CIK.NVDA]);
+  });
+
+  it("토스 상품 정보가 느리면 화면·위젯 요청은 한도까지만 기다리고 그 종목은 이번엔 이름·표 규칙으로 — 뒤에서 끝나 다음 요청부터 'ETF·ETN'", async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const { svc } = await setup({
+      holdings: [H("QQQ", "인베스코 QQQ", null), MSFT],
+      at: "2026-07-29T19:00:00Z",
+      resolveBudgetMs: 30,
+      product: async (code) => {
+        await hold;
+        return code === "QQQ" ? { group: "EF", leverageFactor: 0 } : { group: "ST", leverageFactor: 0 };
+      },
+    });
+    const first = await svc.watchPlan();
+    expect(first.notCovered).toEqual([{ code: "QQQ", name: "인베스코 QQQ", reason: "notFound" }]);
+    release();
+    await vi.waitFor(async () => expect((await svc.watchPlan()).notCovered).toEqual([{ code: "QQQ", name: "인베스코 QQQ", reason: "etf" }]));
   });
 
   it("화면·위젯 요청은 CIK 를 찾느라 한도(기본 2초)보다 오래 기다리지 않고, 찾기는 한 번에 하나 — 끝나면 다음 요청부터 쓴다 (확인 작업은 기다림)", async () => {
@@ -286,12 +352,12 @@ describe("확인 작업", () => {
   });
 
   it("403(SEC 요청 제한)·시간 초과: 그 종목은 이전 줄 그대로 · 상태에 이름과 경고, 다음 확인에서 성공하면 지운다", async () => {
-    const { svc, src, at, db } = await setup({ holdings: [MSFT, NVDA, TSM], at: "2026-07-29T19:00:00Z" });
+    const { svc, src, at, db, clock } = await setup({ holdings: [MSFT, NVDA, TSM], at: "2026-07-29T19:00:00Z" });
     await svc.sweep();
     const before = (await db.selectFrom("sec_filings").select("accession").where("cik", "=", CIK.NVDA!).execute()).length;
     at("2026-07-29T20:10:00Z");
-    src.fail.set(CIK.NVDA!, new ProviderError("edgar", "HTTP 403: https://data.sec.gov/submissions/CIK0001045810.json (SEC 요청 제한, 잠시 후 재시도)"));
-    src.fail.set(CIK.TSM!, new ProviderError("edgar", "시간 초과 15000ms: https://data.sec.gov/submissions/CIK0001046179.json"));
+    src.fail.set(CIK.NVDA!, new ProviderError("edgar", "시간 초과 15000ms: https://data.sec.gov/submissions/CIK0001045810.json"));
+    src.fail.set(CIK.TSM!, new ProviderError("edgar", "HTTP 403: https://data.sec.gov/submissions/CIK0001046179.json (SEC 요청 제한, 잠시 후 재시도)"));
     expect(await svc.sweep()).toMatchObject({ checked: 1, inserted: 2, failed: ["NVDA", "TSM"] });
     expect((await db.selectFrom("sec_filings").select("accession").where("cik", "=", CIK.NVDA!).execute()).length).toBe(before);
     const s = await svc.status();
@@ -304,9 +370,38 @@ describe("확인 작업", () => {
     expect(s.lastOkAt).toBe("2026-07-30T04:00:00+09:00");
     expect(await svc.health()).toEqual({ lastOkAt: "2026-07-30T04:00:00+09:00", watched: 3, notCovered: 0, failed: ["NVDA", "TSM"], warning: "blocked" });
     src.fail.clear();
-    at("2026-07-29T20:15:00Z");
+    // 403 뒤 10분은 쉰다 (아래 따로 시험) — 10분이 지난 확인에서 모두 받으면 지운다
+    clock.real += BLOCKED_PAUSE_MS;
+    at("2026-07-29T20:20:00Z");
     await svc.sweep();
-    expect(await svc.status()).toMatchObject({ failed: [], warning: null, lastOkAt: "2026-07-30T05:15:00+09:00" });
+    expect(await svc.status()).toMatchObject({ failed: [], warning: null, lastOkAt: "2026-07-30T05:20:00+09:00" });
+  });
+
+  it("SEC 가 막으면(403) 남은 종목을 부르지 않고 10분 쉰다 — 그동안 확인은 SEC 호출 0 (같은 IP 의 재무·가치 지표 호출까지 오래 막히지 않게)", async () => {
+    const { svc, src, at, clock } = await setup({ holdings: [MSFT, NVDA, TSM], at: "2026-07-29T19:00:00Z" });
+    await svc.sweep();
+    at("2026-07-29T20:10:00Z");
+    src.subs.length = 0;
+    src.fail.set(CIK.MSFT!, new ProviderError("edgar", "HTTP 403: https://data.sec.gov/submissions/CIK0000789019.json (SEC 요청 제한, 잠시 후 재시도)"));
+    expect(await svc.sweep()).toMatchObject({ ran: true, checked: 0, failed: ["MSFT"], deferred: 2 });
+    expect(src.subs).toEqual([CIK.MSFT]);
+    expect((await svc.status()).warning).toBe("blocked");
+    // 5분 뒤 확인: 쉬는 중 (SEC 호출 0)
+    src.fail.clear();
+    clock.real += 5 * 60_000;
+    at("2026-07-29T20:15:00Z");
+    expect(await svc.sweep()).toMatchObject({ ran: false, reason: "blocked", checked: 0 });
+    expect(src.subs).toEqual([CIK.MSFT]);
+    // 10분이 지나면 다시 모두 확인
+    clock.real += 5 * 60_000;
+    at("2026-07-29T20:20:00Z");
+    expect(await svc.sweep()).toMatchObject({ ran: true, checked: 3, failed: [] });
+    expect(await svc.status()).toMatchObject({ failed: [], warning: null });
+    // 시간 초과 등 다른 오류는 쉬지 않고 다음 종목을 계속 부른다
+    src.subs.length = 0;
+    src.fail.set(CIK.MSFT!, new ProviderError("edgar", "시간 초과 15000ms"));
+    expect(await svc.sweep()).toMatchObject({ checked: 2, failed: ["MSFT"], deferred: 0 });
+    expect(src.subs).toEqual([CIK.MSFT, CIK.NVDA, CIK.TSM]);
   });
 
   it("모양이 바뀌면 줄을 넣지 않고 'shape', SEC 접수 시간에 30분 넘게 모두 받지 못하면 'stale' (접수 시간 밖·열린 뒤 30분 안은 아님)", async () => {

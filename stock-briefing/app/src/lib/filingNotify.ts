@@ -1,10 +1,14 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import type { FilingAlertItem } from "@/api/types";
 import { inQuietHours, type NotifyPrefs } from "@/lib/briefingDigest";
-import { planFilingNotification } from "@/lib/filingAlerts";
+import { inEdgarHours, planFilingNotification } from "@/lib/filingAlerts";
 import { addFilingSeen, appendFilingLog, filingAlertsEnabled, filingInit, readFilingSeen, setFilingInit, withFilingSeen } from "@/lib/filingSeen";
+import { persistedFeatureOn } from "@/lib/marketSummaryLoad";
 import { ensureFilingChannel, FILING_CHANNEL } from "@/lib/notifications";
+import { PERSIST_STORAGE_KEY } from "@/lib/queryPersist";
+import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 
 /**
  * 3-38 새 공시 알림 — 로컬 알림 보내기 (백그라운드 확인 runBriefingCheck · 앱이 앞에 있을 때 FilingAlertBridge 가 같이 쓴다).
@@ -75,4 +79,18 @@ export async function checkFilingIds(ids: readonly string[] | undefined, load: F
   const items = await load.alerts();
   if (!items) return 0;
   return notifyFilings(items, { prefs, now });
+}
+
+/**
+ * 백그라운드 확인이 휴장 건너뛰기(두 시장·연장 세션이 모두 닫히면 최대 2시간 — widgets/payload shouldSkipFetch)를 공시 때문에 하지 않을지.
+ * SEC 접수 시간(미국 동부 평일 06:00~22:59)이고, 앱이 마지막으로 받은 서버 플래그(기기 저장본)에서 filingAlerts 가 켜져 있고, 이 기기 '공시 알림'이 켜져 있을 때 true.
+ * 미국 증시는 쉬지만 SEC 는 공시를 받는 때(성금요일 · 금요일 20:00~22:59 동부 = 한국 토요일 오전 · 한국 휴일의 미국 애프터마켓 뒤)에도 15분 확인을 이어 가
+ * '20분 안' 기준을 지키게. 부르는 쪽이 로컬 모드(알림을 켠 기기)인지 본다. 플래그를 모르거나 꺼져 있으면 false — 지금과 같다
+ */
+export async function filingWatchDue(now: number): Promise<boolean> {
+  if (!inEdgarHours(now)) return false;
+  if (!(await filingAlertsEnabled())) return false;
+  const pairs = await AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, PERSIST_STORAGE_KEY]).catch(() => [] as [string, string | null][]);
+  const m = new Map(pairs);
+  return persistedFeatureOn(m.get(PERSIST_STORAGE_KEY) ?? null, m.get(STORAGE_KEYS.apiUrl) || defaultApiUrl(), "filingAlerts");
 }

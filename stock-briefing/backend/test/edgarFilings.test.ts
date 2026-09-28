@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
-import { EdgarProvider } from "../src/providers/dart/edgar.js";
+import { describe, expect, it, vi } from "vitest";
+import { EdgarProvider, secUserAgent } from "../src/providers/dart/edgar.js";
 import { acceptedIso, FilingShapeError, filingUrl, isAlertForm, parseRecentFilings, splitItems } from "../src/providers/dart/edgarFilings.js";
 
 /**
@@ -77,22 +77,60 @@ describe("parseRecentFilings", () => {
 });
 
 describe("EdgarProvider.submissionsJson", () => {
-  it("같은 User-Agent 로 submissions 원본을 받고, 요청 사이를 160ms 이상 띄운다 (가치 지표 배치와 같은 gate)", async () => {
-    const calls: Array<{ url: string; ua: string | null; at: number }> = [];
-    const fetchFn = (async (url: string, init?: RequestInit) => {
-      calls.push({ url, ua: new Headers(init?.headers).get("user-agent"), at: Date.now() });
-      return new Response(JSON.stringify(SEC("sub_MSFT")), { status: 200, headers: { "content-type": "application/json" } });
+  it("같은 User-Agent 로 submissions 원본을 받고, 요청 사이를 160ms 띄운다 (가치 지표 배치와 같은 gate) — 가짜 시계", async () => {
+    // 실제 시계로 fetch 시각 차이를 재면 전체 실행에서 147ms 처럼 짧게 보여 자주 실패했다 (첫 fetch 가 gate 를 지난 뒤 몇 ms 늦게 찍힘).
+    // Date·setTimeout 만 가짜로 두고 gate 가 잡은 자리 시각을 그대로 본다 (Response.json 은 진짜 비동기 그대로)
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], now: Date.UTC(2026, 8, 29, 13, 0, 0) });
+    try {
+      const t0 = Date.now();
+      const calls: Array<{ url: string; ua: string | null; at: number }> = [];
+      const fetchFn = (async (url: string, init?: RequestInit) => {
+        calls.push({ url, ua: new Headers(init?.headers).get("user-agent"), at: Date.now() - t0 });
+        return new Response(JSON.stringify(SEC("sub_MSFT")), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch;
+      const edgar = new EdgarProvider(fetchFn);
+      const all = Promise.all([edgar.submissionsJson("0000789019"), edgar.submissionsJson("0001045810"), edgar.submissionsJson("0000320193")]);
+      // 두 번째·세 번째는 자리가 올 때까지 fetch 하지 않는다
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls.map((c) => c.at)).toEqual([0]);
+      await vi.advanceTimersByTimeAsync(159);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(200);
+      await all;
+      expect(calls.map((c) => c.url)).toEqual([
+        "https://data.sec.gov/submissions/CIK0000789019.json",
+        "https://data.sec.gov/submissions/CIK0001045810.json",
+        "https://data.sec.gov/submissions/CIK0000320193.json",
+      ]);
+      expect(calls.every((c) => /stock-briefing\/1\.0 .*contact:/.test(c.ua ?? ""))).toBe(true);
+      expect(calls.map((c) => c.at)).toEqual([0, 160, 320]);
+      // 간격이 지난 뒤의 요청은 기다리지 않는다
+      await vi.advanceTimersByTimeAsync(1_000);
+      const later = edgar.submissionsJson("0000789019");
+      await vi.advanceTimersByTimeAsync(0);
+      await later;
+      expect(calls.at(-1)!.at).toBe(1_360);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("SEC_USER_AGENT 를 주면 그 User-Agent 로 (회사 이름 + 연락 메일 — SEC 공정 접근 규칙), 비우면 기본값", async () => {
+    const seen: string[] = [];
+    const fetchFn = (async (_url: string, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers).get("user-agent") ?? "");
+      return new Response(JSON.stringify(SEC("sub_MSFT")), { status: 200 });
     }) as typeof fetch;
-    const edgar = new EdgarProvider(fetchFn);
-    await Promise.all([edgar.submissionsJson("0000789019"), edgar.submissionsJson("0001045810"), edgar.submissionsJson("0000320193")]);
-    expect(calls.map((c) => c.url)).toEqual([
-      "https://data.sec.gov/submissions/CIK0000789019.json",
-      "https://data.sec.gov/submissions/CIK0001045810.json",
-      "https://data.sec.gov/submissions/CIK0000320193.json",
-    ]);
-    expect(calls.every((c) => /stock-briefing\/1\.0 .*contact:/.test(c.ua ?? ""))).toBe(true);
-    // 타이머가 1~2ms 일찍 울릴 수 있어 150 으로 본다 (설정 160)
-    for (let i = 1; i < calls.length; i++) expect(calls[i]!.at - calls[i - 1]!.at).toBeGreaterThanOrEqual(150);
+    await new EdgarProvider(fetchFn, undefined, { minGapMs: 0, userAgent: "Example Co ops@example.com" }).submissionsJson("0000789019");
+    await new EdgarProvider(fetchFn, undefined, { minGapMs: 0, userAgent: "  " }).submissionsJson("0000789019");
+    expect(seen[0]).toBe("Example Co ops@example.com");
+    expect(seen[1]).toMatch(/^stock-briefing\/1\.0 .*contact:/);
+    expect(secUserAgent("")).toBeUndefined();
+    expect(secUserAgent("  Example Co ops@example.com ")).toBe("Example Co ops@example.com");
+    // 연락 메일 모양이 없으면 쓰지 않는다 (SEC 가 이름 없는 봇으로 막지 않게 — 기본값 그대로)
+    expect(secUserAgent("my-bot")).toBeUndefined();
   });
 
   it("403(SEC 요청 제한)은 ProviderError — 이유에 'SEC 요청 제한'", async () => {
