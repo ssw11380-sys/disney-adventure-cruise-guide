@@ -201,9 +201,14 @@ type StockWidgetProps = {
   basis?: boolean;
 };
 
-/** 위젯 기준 글 (3-32): 잔고 화면과 같은 대상(countedHoldings)의 시세 기준을 모아 한 번. 꺼져 있거나 모르는 기준이 있으면 null */
-function widgetBasis(props: { basis?: boolean; stocks: RegisteredWithQuote[] }): string | null {
-  return props.basis ? basisShort(countedHoldings(props.stocks).map((s) => s.quote)) : null;
+/**
+ * 위젯 기준 글 (3-32): 잔고 화면과 같은 대상(countedHoldings)의 시세 기준을 모아 한 번. 꺼져 있거나 모르는 기준이 있으면 null.
+ * 이번에 시세를 못 받아 마지막 값으로 채운 종목(fillFromLast → filled, 그림의 '이전 값')은 그때의 기준이 지금과 다를 수 있어 '모름'으로 센다 (결정 B)
+ */
+function widgetBasis(props: { basis?: boolean; stocks: RegisteredWithQuote[]; filled?: string[] }): string | null {
+  if (!props.basis) return null;
+  const filled = new Set(props.filled ?? []);
+  return basisShort(countedHoldings(props.stocks).map((s) => (filled.has(s.code) ? {} : s.quote)));
 }
 
 /** 고른 기준 시각 글에 기준이 붙었으면 화면 읽기 조각 '시세 NXT, 주간거래 포함' (아니면 null) */

@@ -3,9 +3,10 @@ import { StyleSheet, Text, View } from "react-native";
 import type { Currency } from "@/api/types";
 import { Button } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
+import { bandBasisFit } from "@/lib/basisFit";
 import { formatPct, formatPrice, formatQuote, shownSign } from "@/lib/format";
 import type { Bucket as Totals } from "@/lib/portfolio";
-import { changeColor, font, fontCap, layout, space, useTheme } from "@/theme";
+import { changeColor, font, fontCap, layout, space, useFontScale, useTheme } from "@/theme";
 
 /**
  * 잔고 계좌 요약의 숫자와 화면 읽기 문장 (휴대폰 계좌 패널과 넓은 창 계좌 띠가 같이 쓴다 — 같은 숫자·같은 문장).
@@ -99,21 +100,48 @@ export function fxNote(d: AccountData): string | null {
  * 화면 읽기는 휴대폰 패널과 같은 한 문장 (칸 조각은 숨긴다), '비중' 버튼은 문장 밖에 두어 따로 고를 수 있다
  * 촘촘(3-39, 기능 플래그 densityMode + 설정 — dense): 두 줄 띠는 첫 줄만(총 평가금액 · 평가손익·수익률 · 당일손익) + 비중 버튼, 한 줄 띠는 그대로.
  *  숨긴 국내·해외·매입금액도 화면 읽기 문장에는 그대로 남는다
- * 숫자 기준 점(3-32, 기능 플래그 numberBasis — basis): '비중' 버튼 바로 앞, 요약 문장 묶음 밖. 없으면 지금 그대로
+ * 숫자 기준 점(3-32, 기능 플래그 numberBasis — basis): '비중' 버튼 바로 앞, 요약 문장 묶음 밖. 없으면 지금 그대로.
+ *  점 + 글이 칸을 다음 줄로 밀면 점만, 점만으로도 밀면 칸 묶음의 줄바꿈을 막아 칸 글자를 조금 줄인다 (lib/basisFit — '큰 글씨면 점만').
+ *  좁은 한 줄 띠(rates 거짓)는 늘 점만. width 는 띠 폭(표 폭) — 배치를 어림하는 데만 쓴다
  */
-export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, dense = false, basis }: { data: AccountData; oneLine: boolean; rates?: boolean; pad: number; onAllocation?: () => void; dense?: boolean; basis?: React.ReactNode }) {
+export function AccountBand({
+  data,
+  oneLine,
+  rates = true,
+  pad,
+  onAllocation,
+  dense = false,
+  basis,
+  width,
+}: {
+  data: AccountData;
+  oneLine: boolean;
+  rates?: boolean;
+  pad: number;
+  onAllocation?: () => void;
+  dense?: boolean;
+  /** 숫자 기준 점 그리기 (dotOnly: 글 없이 점만) */
+  basis?: (dotOnly: boolean) => React.ReactNode;
+  width?: number;
+}) {
   const t = useTheme();
+  const fontScale = useFontScale();
   const { main, profit, rate, lines, showSplit } = accountFigures(data);
   const pc = changeColor(t, profit);
   const dayText = formatPrice(main.day, "KRW", { sign: true });
   const dc = changeColor(t, shownSign(main.day, dayText));
   const dayRate = dayRateOf(data);
   const dayRateText = dayRate === null ? null : formatPct(dayRate);
-  const total = (
-    <Cell key="total" first label={`총 평가금액${data.total ? "" : " (원화 종목)"}${data.afterCost ? " · 비용 차감" : ""}`} value={formatQuote(main.value, "KRW")} unit="원" big />
-  );
-  const profitCell = <Cell key="profit" label="평가손익 · 수익률" value={formatPrice(profit, "KRW", { sign: true })} color={pc} sub={formatPct(rate)} subColor={pc} />;
+  const totalLabel = `총 평가금액${data.total ? "" : " (원화 종목)"}${data.afterCost ? " · 비용 차감" : ""}`;
+  const totalValue = formatQuote(main.value, "KRW");
+  const profitValue = formatPrice(profit, "KRW", { sign: true });
+  const rateText = formatPct(rate);
+  const costValue = formatPrice(main.cost, "KRW");
+  const total = <Cell key="total" first label={totalLabel} value={totalValue} unit="원" big />;
+  const profitCell = <Cell key="profit" label="평가손익 · 수익률" value={profitValue} color={pc} sub={rateText} subColor={pc} />;
   const day = <Cell key="day" label="당일손익" value={dayText} color={dc} sub={dayRateText} subColor={changeColor(t, dayRateText ? shownSign(dayRate, dayRateText) : 0)} />;
+  // 국내·해외 칸 이름 (해외는 환율을 붙인다)
+  const splitLabel = (l: AccountLine) => (l.label === "해외" && data.fx ? `해외 · 환율 ${data.fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}` : l.label);
   // 국내·해외 칸 (firstAt0: 줄의 첫 칸이면 왼쪽 구분선 없음).
   // 수익률은 두 줄 띠와 넓은 한 줄 띠(rates)에서 — 좁은 한 줄 띠(800~839)는 금액만 (화면 읽기 문장에는 늘 있다)
   const split = (firstAt0: boolean, withRate: boolean) =>
@@ -121,10 +149,33 @@ export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, de
       ? lines.map((l, i) => {
           const { p, r } = lineProfit(l);
           const rt = formatPct(r);
-          const label = l.label === "해외" && data.fx ? `해외 · 환율 ${data.fx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}` : l.label;
-          return <Cell key={l.label} first={firstAt0 && i === 0} label={label} value={formatPrice(l.tot.value, l.cur)} sub={withRate ? rt : null} subColor={changeColor(t, shownSign(p, rt))} />;
+          return <Cell key={l.label} first={firstAt0 && i === 0} label={splitLabel(l)} value={formatPrice(l.tot.value, l.cur)} sub={withRate ? rt : null} subColor={changeColor(t, shownSign(p, rt))} />;
         })
       : null;
+  // 숫자 기준 점 배치 (3-32 '큰 글씨면 점만'): 점과 같은 줄의 칸 글(두 줄 띠는 둘째 줄, 촘촘은 첫 줄)로 어림한다.
+  // 한 줄 띠는 칸이 다음 줄로 넘어가지 않고 글자가 줄어드는 띠라 지금처럼 rates 로만 (좁은 한 줄 띠는 점만)
+  const fit =
+    basis && !oneLine
+      ? bandBasisFit({
+          width: width ?? 0,
+          pad,
+          fontScale,
+          action: !!onAllocation,
+          cells: dense
+            ? [
+                { label: totalLabel, value: totalValue, unit: "원", big: true, first: true },
+                { label: "평가손익 · 수익률", value: profitValue, sub: rateText },
+                { label: "당일손익", value: dayText, sub: dayRateText },
+              ]
+            : [
+                ...(showSplit ? lines.map((l, i) => ({ label: splitLabel(l), value: formatPrice(l.tot.value, l.cur), sub: formatPct(lineProfit(l).r), first: i === 0 })) : []),
+                { label: "매입금액", value: costValue, first: !showSplit },
+              ],
+        })
+      : null;
+  const mark = basis ? basis(oneLine ? !rates : fit!.dotOnly) : null;
+  // 줄바꿈하는 칸 묶음: 점 때문에 칸이 다음 줄로 가면 줄바꿈을 막는다 (칸 글자가 조금 줄어든다 — 한 줄 띠와 같은 규칙). 점이 없으면 지금 그대로
+  const wrap = fit?.noWrap ? null : styles.wrap;
   const label = accountSpeech(data);
   const button = onAllocation ? (
     <View style={styles.action}>
@@ -149,18 +200,18 @@ export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, de
             {day}
             {split(false, rates)}
           </View>
-          {basis}
+          {mark}
           {button}
         </View>
       ) : dense ? (
         // 촘촘 두 줄 띠 → 한 줄 (48): 칸 묶음과 비중 버튼이 같은 줄. 글자가 커져 칸이 한 줄에 안 들어가면 다음 줄로 넘긴다
         <View style={[styles.line2, { paddingHorizontal: pad }]}>
-          <View accessible accessibilityLabel={label} style={[styles.cells, styles.wrap]}>
+          <View accessible accessibilityLabel={label} style={[styles.cells, wrap]}>
             {total}
             {profitCell}
             {day}
           </View>
-          {basis}
+          {mark}
           {button}
         </View>
       ) : (
@@ -173,11 +224,11 @@ export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, de
           </View>
           <View style={[styles.line2, styles.second, { paddingHorizontal: pad, borderTopColor: t.line }]}>
             {/* 숫자는 위 요약 문장에 들어 있다 → 조각으로 한 번 더 읽히지 않게 숨긴다 */}
-            <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[styles.cells, styles.wrap]}>
+            <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[styles.cells, wrap]}>
               {split(true, true)}
-              <Cell first={!showSplit} label="매입금액" value={formatPrice(main.cost, "KRW")} />
+              <Cell first={!showSplit} label="매입금액" value={costValue} />
             </View>
-            {basis}
+            {mark}
             {button}
           </View>
         </>

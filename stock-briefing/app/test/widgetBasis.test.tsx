@@ -256,6 +256,46 @@ describe("그림: 기준 글이 보이면 그 글만 늘고, 안 보이면 트�
   });
 });
 
+describe("이전 값으로 채운 시세는 기준을 모르는 것으로 본다 (3-32 다듬기 · 결정 B)", () => {
+  // 이번에 시세를 못 받아 마지막 값으로 채운 보유 종목(model.ts fillFromLast → filled)은 그때의 기준이 지금 시세와 다를 수 있다
+  const drawFilled = (kind: Kind, stocks: RegisteredWithQuote[], filled: string[], basis: boolean): Node[] => {
+    const common = { stocks, showKrw: true, fetchedAt: NOW, error: null, now: NOW, market: MARKET, width: 780, fontScale: 1, filled, ...(basis ? { basis: true } : {}) };
+    if (kind === "asset") return render(<AssetWidget {...common} height={110} />);
+    return render(<HoldingsWidget {...common} height={250} {...(kind === "polished" ? { polish: true } : {})} />);
+  };
+
+  it("합계에 든 보유 종목 하나라도 이전 값이면 ' · NXT·주간거래 포함' 을 붙이지 않는다 — 트리 전체가 끈 것과 같다", () => {
+    for (const kind of ["holdings", "polished", "asset"] as const) {
+      // 채운 것이 없으면 붙는다 (대조군)
+      expect(texts(drawFilled(kind, STOCKS, [], true)).some((t) => t.endsWith(` · ${BASIS}`)), kind).toBe(true);
+      for (const code of ["AVGO", "005930"]) {
+        const on = drawFilled(kind, STOCKS, [code], true);
+        expect(shape(on), `${kind} ${code}`).toEqual(shape(drawFilled(kind, STOCKS, [code], false)));
+        expect(texts(on).some((t) => t.includes("포함")), `${kind} ${code}`).toBe(false);
+        expect(labels(on).some((l) => l.includes("시세 ")), `${kind} ${code}`).toBe(false);
+      }
+    }
+  });
+
+  it("fillFromLast 가 채운 목록 그대로 넘기면 붙지 않고, 다음에 새 시세를 받으면(채운 것 없음) 다시 붙는다", async () => {
+    const { fillFromLast } = await import("@/widgets/model");
+    // AVGO 시세를 이번에 못 받음 → 직전 목록(STOCKS)의 값으로 채움
+    const now = STOCKS.map((s) => (s.code === "AVGO" ? { ...s, quote: null, evaluation: null } : s));
+    const got = fillFromLast(now, STOCKS, NOW);
+    expect(got.filled).toEqual(["AVGO"]);
+    // 채운 시세에도 예전 기준 글자(priceBasis)가 남아 있다 — 그래도 모르는 것으로 본다
+    expect(got.stocks.find((s) => s.code === "AVGO")!.quote!.priceBasis).toBe("주간거래");
+    for (const kind of ["holdings", "polished", "asset"] as const) {
+      expect(texts(drawFilled(kind, got.stocks, got.filled, true)).some((t) => t.includes("포함")), kind).toBe(false);
+      expect(texts(drawFilled(kind, STOCKS, [], true)).some((t) => t.endsWith(` · ${BASIS}`)), kind).toBe(true);
+    }
+  });
+
+  it("관심 종목(합계 밖) 코드가 filled 에 있어도 막지 않는다 (fillFromLast 는 보유 종목만 채우지만, 합계에 든 종목만 본다)", () => {
+    for (const kind of ["holdings", "polished", "asset"] as const) expect(texts(drawFilled(kind, STOCKS, ["042700"], true)).some((t) => t.endsWith(` · ${BASIS}`)), kind).toBe(true);
+  });
+});
+
 describe("대상: 잔고 화면과 같은 countedHoldings", () => {
   it("환율 없는 달러 종목(주간거래)은 합계 밖이라 세지 않는다 → 'NXT 포함'", () => {
     const noFx = us("RGTX", "RGTX", 10.64, { priceBasis: "주간거래" });
