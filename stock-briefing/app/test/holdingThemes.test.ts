@@ -226,6 +226,14 @@ describe("계좌 브리핑 카드 (설계 2.3)", () => {
     expect(v.lines[1]!.speech).toBe("미국 · 등락률 높은 3개, 양자컴퓨터 6.21% 상승, 반도체팹리스 2.10% 상승, 소프트웨어 1.40% 상승");
   });
 
+  it("한국 장 시작 전에 만든 브리핑: 날짜 대신 '장 시작 전 · 직전 거래일 값', 장중이면 '장중'", () => {
+    const pre = accountThemesView({ ...SNAP, markets: { KR: { ...SNAP.markets.KR!, session: "pre", basisDay: null } } }, "08:38");
+    expect(pre.basis).toBe("보유 17종목 중 15종목 연결 · 한국 장 시작 전 · 직전 거래일 값 · 08:38 기준");
+    const live = accountThemesView({ ...SNAP, markets: { KR: { ...SNAP.markets.KR!, session: "regular", basisDay: "2026-09-29" } } }, "11:00");
+    expect(live.basis).toBe("보유 17종목 중 15종목 연결 · 한국 9/29(화) 장중 · 11:00 기준");
+    clean(pre.basis);
+  });
+
   it("묶음이 없으면 줄 없음 (카드를 그리지 않는다)", () => {
     expect(accountThemesView({ ...SNAP, mostHeld: [], markets: {} }, "08:38").lines).toEqual([]);
   });

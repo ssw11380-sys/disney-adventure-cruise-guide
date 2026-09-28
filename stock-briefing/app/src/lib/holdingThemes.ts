@@ -240,6 +240,8 @@ function sessionWord(m: HtMarket, s: NonNullable<HoldingThemesSnapshot["markets"
   if (m === "US") return `미국 ${d} 정규장`.replace(/\s+/g, " ").trim();
   if (s.session === "regular") return `한국 ${d} 장중`.replace(/\s+/g, " ");
   if (s.session === "extended") return `한국 ${d} 시간외`.replace(/\s+/g, " ");
+  // 장 시작 전(08:00~09:00): 값은 직전 거래일 것 (출처가 오늘 값을 아직 주지 않음)
+  if (s.session === "pre") return "한국 장 시작 전 · 직전 거래일 값";
   return `한국 ${d} 마감`.replace(/\s+/g, " ");
 }
 

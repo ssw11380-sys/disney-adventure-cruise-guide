@@ -199,7 +199,7 @@ function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.
       )}
       <View style={styles.chipGroup}>
         {(["day", "week"] as const).map((p) => (
-          <Chip key={p} label={PERIOD_LABEL[p]} active={p === period} onPress={() => savePrefs({ period: p })} />
+          <Chip key={p} wideTouch label={PERIOD_LABEL[p]} active={p === period} accessibilityLabel={`${PERIOD_LABEL[p]}, 기간`} onPress={() => savePrefs({ period: p })} />
         ))}
       </View>
     </View>

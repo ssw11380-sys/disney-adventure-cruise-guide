@@ -251,6 +251,8 @@ describe("'내 종목 테마' 화면", () => {
       ["오늘", true],
       ["1주", false],
     ]);
+    // 기간 칩은 글자가 짧아도 누르는 폭 44 이상 (공용 Chip 의 wideTouch — 3-33 수급 탭과 같은 속성)
+    expect(byType(r, "Chip").filter((c) => c.props.wideTouch).map((c) => c.props.label)).toEqual(["오늘", "1주"]);
     const headers = r.all().filter((n) => n.props.accessibilityRole === "header").map(textIn);
     expect(headers).toEqual(["내 종목이 많이 속한 테마", "등락률 높은 3개", "등락률 낮은 3개", "내 테마 6개 · 등락률 높은 순", "연결하지 못한 종목 1"]);
     const text = textIn(screen);
