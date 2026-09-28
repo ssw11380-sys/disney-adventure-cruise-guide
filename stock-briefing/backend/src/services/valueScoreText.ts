@@ -497,9 +497,10 @@ export const TWO_SIDED_SHORT = "막대를 짧게 만든 지표";
 export const TWO_SIDED_MID = "가운데쯤(34~66)인 지표";
 /**
  * 두 쪽 문장의 지표 하나 'PER 70점': 숫자가 PER 배수가 아니라 위치 점수라는 것을 '점'으로 붙이고('PER 70'을 'PER 70배'로 읽지 않게 — 바로 아래 PER 줄은 27.9배,
- * 검토 지적 · 화면 읽기도 같은 글), 이름과 숫자 사이는 줄바꿈 없는 빈칸(U+00A0)이라 좁은 화면에서 'PER' / '70점'으로 갈리지 않는다. tag 는 '(적자)' 같은 사실
+ * 검토 지적 · 화면 읽기도 같은 글), 이름과 숫자 사이는 줄바꿈 없는 빈칸(U+00A0), 숫자와 '점' 사이는 보이지 않는 줄 묶음 글자(U+2060 — 읽지 않음)라
+ * 좁은 화면에서 'PER' / '70점'이나 '100' / '점'으로 갈리지 않는다(한글은 글자 사이에서도 줄이 바뀐다). tag 는 '(적자)' 같은 사실
  */
-export const twoSidedItem = (name: string, score: number, tag = "") => `${name}\u00a0${score}점${tag}`;
+export const twoSidedItem = (name: string, score: number, tag = "") => `${name}\u00a0${score}\u2060점${tag}`;
 type TwoSidedItem = readonly [name: string, score: number, tag?: string];
 export const twoSidedMidLine = (items: ReadonlyArray<TwoSidedItem>) => `${TWO_SIDED_MID}: ${items.map(([n, s, t]) => twoSidedItem(n, s, t)).join(" · ")}`;
 export const twoSidedLine = (long: boolean, items: ReadonlyArray<TwoSidedItem>) => `${long ? TWO_SIDED_LONG : TWO_SIDED_SHORT}: ${items.map(([n, s, t]) => twoSidedItem(n, s, t)).join(" · ")}`;

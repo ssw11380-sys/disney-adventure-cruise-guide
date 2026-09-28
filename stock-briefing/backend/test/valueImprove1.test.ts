@@ -74,8 +74,9 @@ import { fakeProviders, VALUE_STAGE1_KEYS, valueStage1 } from "./helpers.js";
  */
 
 const kst = (s: string) => new Date(`${s}+09:00`);
-/** 두 쪽 문장의 이름·점수 사이 줄바꿈 없는 빈칸 */
+/** 두 쪽 문장의 이름·점수 사이 줄바꿈 없는 빈칸 · 숫자와 '점' 사이 보이지 않는 줄 묶음 글자 */
 const NB = "\u00a0";
+const WJ = "\u2060";
 let app: FastifyInstance | null = null;
 let db: Db;
 afterEach(async () => {
@@ -215,12 +216,12 @@ describe("[2] 방향 말 · 두 쪽 문장 (valueDirectionWords · valueFamilyTw
 
   it("엔비디아 주가 수준 49: 길게 만든 지표 80·71 / 짧게 만든 지표 5·25 (보고서 그림 2), 가운데쯤 64 는 빼고, 가장 튀는 순", () => {
     const f = fam("price", [ms("A1", 71), ms("A2", 80), ms("A3", 5), ms("A4", 25), ms("A5", 64)], 49);
-    expect(familyRow(f, ON).text).toBe(`막대를 길게 만든 지표: 기업가치 ÷ 영업이익${NB}80점 · PER${NB}71점\n막대를 짧게 만든 지표: PBR${NB}5점 · PSR${NB}25점`);
+    expect(familyRow(f, ON).text).toBe(`막대를 길게 만든 지표: 기업가치 ÷ 영업이익${NB}80${WJ}점 · PER${NB}71${WJ}점\n막대를 짧게 만든 지표: PBR${NB}5${WJ}점 · PSR${NB}25${WJ}점`);
     // 띠가 높은 편인 묶음은 긴 쪽만, 낮은 편은 짧은 쪽만 (소수 쪽 지표를 대표로 말하지 않게)
-    expect(familyRow(fam("quality", [ms("B1", 100), ms("B6", 1)], 70), ON).text).toBe(`막대를 길게 만든 지표: ROE${NB}100점`);
-    expect(familyRow(fam("quality", [ms("B1", 90), ms("B4", 10), ms("B2", 5)], 30), ON).text).toBe(`막대를 짧게 만든 지표: ROIC${NB}5점 · 영업이익률${NB}10점`);
+    expect(familyRow(fam("quality", [ms("B1", 100), ms("B6", 1)], 70), ON).text).toBe(`막대를 길게 만든 지표: ROE${NB}100${WJ}점`);
+    expect(familyRow(fam("quality", [ms("B1", 90), ms("B4", 10), ms("B2", 5)], 30), ON).text).toBe(`막대를 짧게 만든 지표: ROIC${NB}5${WJ}점 · 영업이익률${NB}10${WJ}점`);
     // 67 이상·33 이하가 없으면 가운데쯤 지표를 그대로
-    expect(familyRow(fam("payout", [ms("E1", 65)], 65), ON).text).toBe(`가운데쯤(34~66)인 지표: 배당수익률${NB}65점`);
+    expect(familyRow(fam("payout", [ms("E1", 65)], 65), ON).text).toBe(`가운데쯤(34~66)인 지표: 배당수익률${NB}65${WJ}점`);
     // 끄면 예전 한 줄 (가장 튀는 지표 하나)
     expect(familyRow(f).text).toBe("PBR (순자산 대비 주가) — 순자산에 비해 주가 수준이 높은 편입니다.");
   });
@@ -228,15 +229,15 @@ describe("[2] 방향 말 · 두 쪽 문장 (valueDirectionWords · valueFamilyTw
   it("0점 규칙 지표는 '(적자)'처럼 사실을 붙이고, 같은 값 덩어리 지표는 '(비교 회사 77%가 0.0%)'를 붙인다", () => {
     const z = ms("A1", 0, { x: -Infinity, rule: "zeroLoss", why: "lossNi", show: null, pos: { industry: 0, market: 0 } });
     const fcf = ms("A5", 0, { x: -Infinity, rule: "zeroLoss", why: "lossFcf", show: -1.7, pos: { industry: 0, market: 0 } });
-    expect(familyRow(fam("price", [z, ms("A3", 9), fcf], 3), ON).text).toBe(`막대를 짧게 만든 지표: PER${NB}0점(적자) · 잉여현금흐름 수익률${NB}0점(마이너스) · PBR${NB}9점`);
+    expect(familyRow(fam("price", [z, ms("A3", 9), fcf], 3), ON).text).toBe(`막대를 짧게 만든 지표: PER${NB}0${WJ}점(적자) · 잉여현금흐름 수익률${NB}0${WJ}점(마이너스) · PBR${NB}9${WJ}점`);
     const e1 = ms("E1", 82, { x: 0.001, show: 0.1, peer: peer({ tie: 0.77, tieX: 0 }) });
-    expect(familyRow(fam("payout", [e1, ms("E2", 72)], 77), ON).text).toBe(`막대를 길게 만든 지표: 배당수익률${NB}82점(비교 회사 77%가 0.0%) · 주식 수 변화${NB}72점`);
-    expect(twoSidedMidLine([["ROE", 49], ["ROA", 55]])).toBe(`가운데쯤(34~66)인 지표: ROE${NB}49점 · ROA${NB}55점`);
+    expect(familyRow(fam("payout", [e1, ms("E2", 72)], 77), ON).text).toBe(`막대를 길게 만든 지표: 배당수익률${NB}82${WJ}점(비교 회사 77%가 0.0%) · 주식 수 변화${NB}72${WJ}점`);
+    expect(twoSidedMidLine([["ROE", 49], ["ROA", 55]])).toBe(`가운데쯤(34~66)인 지표: ROE${NB}49${WJ}점 · ROA${NB}55${WJ}점`);
     // 숫자는 위치 점수라 '점'을 붙인다 (엔비디아 'PER 71'이 'PER 71배'로 읽히던 것 — 바로 아래 PER 줄은 27.9배). 이름과 숫자는 줄바꿈 없는 빈칸으로 묶는다
     // (360 화면에서 'PER' / '70'으로 갈리던 것)
-    expect(twoSidedLine(true, [["PER", 71]])).toBe("막대를 길게 만든 지표: PER\u00a071점");
-    expect(twoSidedItem("PER", 0, "(적자)")).toBe("PER\u00a00점(적자)");
-    expect(twoSidedLine(false, [["PBR", 5]])).not.toMatch(/PBR 5(?!점)/);
+    expect(twoSidedLine(true, [["PER", 71]])).toBe("막대를 길게 만든 지표: PER\u00a071\u2060점");
+    expect(twoSidedItem("PER", 0, "(적자)")).toBe("PER\u00a00\u2060점(적자)");
+    expect(twoSidedLine(false, [["PBR", 5]])).not.toMatch(/PBR 5(?!\u2060점)/);
   });
 
   it("검사: 공용 픽스처 모든 묶음에서 대표 문장이 묶음 띠와 같은 쪽 (높은 편에 '짧게' 없음 · 낮은 편에 '길게' 없음 — 소수 쪽 문장 0건)", () => {
@@ -251,7 +252,7 @@ describe("[2] 방향 말 · 두 쪽 문장 (valueDirectionWords · valueFamilyTw
         if (f.score >= 67) expect(f.text, `${k} ${f.key}`).not.toContain("막대를 짧게");
         if (f.score <= 33) expect(f.text, `${k} ${f.key}`).not.toContain("막대를 길게");
         // 적힌 위치 점수는 그 묶음 지표의 점수와 같다
-        for (const m of f.text.matchAll(/([^:·\n]+?)\u00a0(\d+)점(?:\([^)]*\))?(?= ·|\n|$)/g)) {
+        for (const m of f.text.matchAll(/([^:·\n]+?)\u00a0(\d+)\u2060점(?:\([^)]*\))?(?= ·|\n|$)/g)) {
           const name = m[1]!.trim();
           const row = f.metrics.find((x) => x.name.replace(/ \([^)]*\)$/, "") === name);
           if (row) {
@@ -613,10 +614,10 @@ describe("[10] 사실과 다른 설명 문장 (valueWordingFacts)", () => {
     expect(familyRow(f, { ...ctx, text: { ...VALUE_TEXT_ON, familyTwoSided: false } }).text).toBe("ROE (자기자본이익률) — 자본으로 이익을 내는 효율이 낮은 편입니다.");
     expect(familyRow(f, { path: "general", annualEnd: null }).text).toBe("이익의 현금 뒷받침 — 이익이 현금으로 잘 뒷받침되는 편입니다."); // 끄면 예전
     // 두 쪽 문장에서도 대표 지표로 고르지 않는다 (보고서 '묶음 머리 문장으로 뽑지 않음(인텔)' — 예전 '막대를 길게 만든 지표: 이익의 현금 뒷받침 98(순손실 회사)')
-    expect(familyRow(f, ctx).text).toBe(`막대를 짧게 만든 지표: ROE${NB}3점 · 영업이익률${NB}6점`);
-    expect(familyRow(fam("quality", [b6, ms("B1", 80)], 85), ctx).text).toBe(`막대를 길게 만든 지표: ROE${NB}80점`);
+    expect(familyRow(f, ctx).text).toBe(`막대를 짧게 만든 지표: ROE${NB}3${WJ}점 · 영업이익률${NB}6${WJ}점`);
+    expect(familyRow(fam("quality", [b6, ms("B1", 80)], 85), ctx).text).toBe(`막대를 길게 만든 지표: ROE${NB}80${WJ}점`);
     // 그 지표밖에 없으면 '(순손실 회사)'를 붙여 가운데 줄에
-    expect(familyRow(fam("quality", [b6], 98), ctx).text).toBe(`가운데쯤(34~66)인 지표: 이익의 현금 뒷받침${NB}98점(순손실 회사)`);
+    expect(familyRow(fam("quality", [b6], 98), ctx).text).toBe(`가운데쯤(34~66)인 지표: 이익의 현금 뒷받침${NB}98${WJ}점(순손실 회사)`);
     expect([moneyEok(-0.61e8, "USD"), moneyEok(-2.39e8, "USD"), moneyEok(-1.13e10, "USD"), moneyEok(1234e8, "KRW")]).toEqual(["−0.61억 달러", "−2.39억 달러", "−113억 달러", "1,234억원"]);
   });
 
