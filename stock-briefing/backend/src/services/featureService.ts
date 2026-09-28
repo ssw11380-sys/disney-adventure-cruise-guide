@@ -115,6 +115,7 @@ export const FEATURES = {
   moversMerge: {
     default: true,
     description: "변동 카드 합치기 (브리핑 2차 3, 앱만): '변동 큰 종목' 카드를 없애고 목록 1~3위에 순위, 계좌 카드·줄에 당일 손익 기여 상위 3종목(원화 금액만). 계좌 브리핑이 없거나 실패하면 예전 카드. 끄면 예전 그대로",
+  },
   priceAlerts: {
     default: true,
     description:
