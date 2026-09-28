@@ -1,0 +1,226 @@
+{
+  "note": "브리핑 3차 4 '비중 한 줄' (플래그 accountExposure) 공용 픽스처. 서버(backend/test/accountExposure.test.ts)는 positions·kinds 로 exposureOf 를 돌려 expected 와 같은지, 앱(app/test/accountExposure.test.ts)은 expected 로 만든 두 줄·화면 읽기 문장이 app 과 같은지 본다. 숫자는 모두 예시 값. 비중 = 종목 원화 평가금액(비용 차감) ÷ 합계에 넣은 종목 값의 합 × 100 을 소수 한 자리로 반올림 (상위 3종목·레버리지·인버스·미국 상장은 원 값을 더한 뒤 반올림). kinds 에 없는 종목은 보통 상품(레버리지·인버스 아님, 상품 정보를 받음). L = 배수의 크기 (인버스는 앱이 '-2배'로), null = 배수를 모름",
+  "cases": [
+    {
+      "name": "levInv",
+      "about": "설계서 예: 9종목, 가장 큰 종목 엔비디아 · 상위 3종목 · 레버리지 SOXL(표 3배)·RGTX(상품 정보 2배) · 미국 상장",
+      "asOf": "2026-09-28T08:38:00+09:00",
+      "positions": [
+        { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 20, "value": 1500000, "cost": 1400000 },
+        { "code": "000660", "name": "SK하이닉스", "currency": "KRW", "quantity": 3, "value": 1100000, "cost": 900000 },
+        { "code": "069500", "name": "KODEX 200", "currency": "KRW", "quantity": 25, "value": 1160000, "cost": 1000000 },
+        { "code": "NVDA", "name": "엔비디아", "currency": "USD", "quantity": 8, "value": 2130000, "cost": 1500000 },
+        { "code": "AAPL", "name": "애플", "currency": "USD", "quantity": 3, "value": 1190000, "cost": 1000000 },
+        { "code": "TSLA", "name": "테슬라", "currency": "USD", "quantity": 2, "value": 1010000, "cost": 800000 },
+        { "code": "MSFT", "name": "마이크로소프트", "currency": "USD", "quantity": 1.5, "value": 1000000, "cost": 900000 },
+        { "code": "SOXL", "name": "SOXL", "currency": "USD", "quantity": 15, "value": 610000, "cost": 500000 },
+        { "code": "RGTX", "name": "RGTX", "currency": "USD", "quantity": 10, "value": 300000, "cost": 400000 }
+      ],
+      "kinds": {
+        "SOXL": { "kind": "leveraged", "L": 3, "guessed": false },
+        "RGTX": { "kind": "leveraged", "L": 2, "guessed": false }
+      },
+      "expected": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "count": 9,
+        "top1": { "code": "NVDA", "name": "엔비디아", "weight": 21.3 },
+        "top3": { "weight": 48.2 },
+        "levInv": {
+          "weight": 9.1,
+          "items": [
+            { "code": "SOXL", "name": "SOXL", "kind": "leveraged", "L": 3, "weight": 6.1 },
+            { "code": "RGTX", "name": "RGTX", "kind": "leveraged", "L": 2, "weight": 3 }
+          ]
+        },
+        "us": { "weight": 62.4, "count": 6 },
+        "excluded": 0,
+        "guessedByName": 0
+      },
+      "app": {
+        "line1": "비중 · 가장 큰 종목 엔비디아 21.3% · 상위 3종목 48.2% · 레버리지·인버스 9.1% · 미국 상장 62.4%",
+        "line2": "레버리지·인버스: SOXL(3배) · RGTX(2배) · 보유 종목 평가금액 기준, 현금 제외 · 08:38 기준",
+        "speech": "비중, 8시 38분 기준, 가장 큰 종목 엔비디아 21.3퍼센트, 상위 3종목 합 48.2퍼센트, 레버리지 인버스 상품 9.1퍼센트, SOXL 3배, RGTX 2배, 미국 상장 종목 62.4퍼센트, 현금 제외"
+      }
+    },
+    {
+      "name": "noLev",
+      "about": "레버리지·인버스 없음 · 5종목 (국내 3 · 미국 2)",
+      "asOf": "2026-09-28T08:38:00+09:00",
+      "positions": [
+        { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 35, "value": 3000000, "cost": 2500000 },
+        { "code": "000660", "name": "SK하이닉스", "currency": "KRW", "quantity": 6, "value": 2000000, "cost": 1800000 },
+        { "code": "035420", "name": "NAVER", "currency": "KRW", "quantity": 4, "value": 1000000, "cost": 1100000 },
+        { "code": "AAPL", "name": "애플", "currency": "USD", "quantity": 7, "value": 2500000, "cost": 2000000 },
+        { "code": "MSFT", "name": "마이크로소프트", "currency": "USD", "quantity": 2, "value": 1500000, "cost": 1400000 }
+      ],
+      "kinds": {},
+      "expected": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "count": 5,
+        "top1": { "code": "005930", "name": "삼성전자", "weight": 30 },
+        "top3": { "weight": 75 },
+        "levInv": { "weight": 0, "items": [] },
+        "us": { "weight": 40, "count": 2 },
+        "excluded": 0,
+        "guessedByName": 0
+      },
+      "app": {
+        "line1": "비중 · 가장 큰 종목 삼성전자 30.0% · 상위 3종목 75.0% · 레버리지·인버스 없음 · 미국 상장 40.0%",
+        "line2": "보유 종목 평가금액 기준, 현금 제외 · 08:38 기준",
+        "speech": "비중, 8시 38분 기준, 가장 큰 종목 삼성전자 30.0퍼센트, 상위 3종목 합 75.0퍼센트, 레버리지 인버스 상품 없음, 미국 상장 종목 40.0퍼센트, 현금 제외"
+      }
+    },
+    {
+      "name": "tieFour",
+      "about": "4종목 · 가장 큰 값이 셋 같음 → 먼저 등록한 종목(삼성전자)",
+      "asOf": "2026-09-28T08:38:00+09:00",
+      "positions": [
+        { "code": "005380", "name": "현대차", "currency": "KRW", "quantity": 5, "value": 1000000, "cost": 900000 },
+        { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 35, "value": 3000000, "cost": 2500000 },
+        { "code": "000660", "name": "SK하이닉스", "currency": "KRW", "quantity": 9, "value": 3000000, "cost": 2800000 },
+        { "code": "AAPL", "name": "애플", "currency": "USD", "quantity": 8, "value": 3000000, "cost": 2600000 }
+      ],
+      "kinds": {},
+      "expected": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "count": 4,
+        "top1": { "code": "005930", "name": "삼성전자", "weight": 30 },
+        "top3": { "weight": 90 },
+        "levInv": { "weight": 0, "items": [] },
+        "us": { "weight": 30, "count": 1 },
+        "excluded": 0,
+        "guessedByName": 0
+      },
+      "app": {
+        "line1": "비중 · 가장 큰 종목 삼성전자 30.0% · 상위 3종목 90.0% · 레버리지·인버스 없음 · 미국 상장 30.0%",
+        "line2": "보유 종목 평가금액 기준, 현금 제외 · 08:38 기준",
+        "speech": "비중, 8시 38분 기준, 가장 큰 종목 삼성전자 30.0퍼센트, 상위 3종목 합 90.0퍼센트, 레버리지 인버스 상품 없음, 미국 상장 종목 30.0퍼센트, 현금 제외"
+      }
+    },
+    {
+      "name": "threeInverse",
+      "about": "3종목 → '상위 3종목' 조각 없음 · 인버스 -1배(상품 정보 leverageFactor -1)",
+      "asOf": "2026-09-28T08:38:00+09:00",
+      "positions": [
+        { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 59, "value": 5000000, "cost": 4200000 },
+        { "code": "NVDA", "name": "엔비디아", "currency": "USD", "quantity": 12, "value": 3000000, "cost": 2000000 },
+        { "code": "114800", "name": "KODEX 인버스", "currency": "KRW", "quantity": 400, "value": 2000000, "cost": 2100000 }
+      ],
+      "kinds": {
+        "114800": { "kind": "inverse", "L": 1, "guessed": false }
+      },
+      "expected": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "count": 3,
+        "top1": { "code": "005930", "name": "삼성전자", "weight": 50 },
+        "top3": null,
+        "levInv": {
+          "weight": 20,
+          "items": [{ "code": "114800", "name": "KODEX 인버스", "kind": "inverse", "L": 1, "weight": 20 }]
+        },
+        "us": { "weight": 30, "count": 1 },
+        "excluded": 0,
+        "guessedByName": 0
+      },
+      "app": {
+        "line1": "비중 · 가장 큰 종목 삼성전자 50.0% · 레버리지·인버스 20.0% · 미국 상장 30.0%",
+        "line2": "레버리지·인버스: KODEX 인버스(-1배) · 보유 종목 평가금액 기준, 현금 제외 · 08:38 기준",
+        "speech": "비중, 8시 38분 기준, 가장 큰 종목 삼성전자 50.0퍼센트, 레버리지 인버스 상품 20.0퍼센트, KODEX 인버스 마이너스 1배, 미국 상장 종목 30.0퍼센트, 현금 제외"
+      }
+    },
+    {
+      "name": "one",
+      "about": "보유 1종목 → '가장 큰 종목 삼성전자 100%' 대신 '보유 1종목' · 미국 없음",
+      "asOf": "2026-09-28T08:38:00+09:00",
+      "positions": [{ "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 59, "value": 5000000, "cost": 4200000 }],
+      "kinds": {},
+      "expected": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "count": 1,
+        "top1": { "code": "005930", "name": "삼성전자", "weight": 100 },
+        "top3": null,
+        "levInv": { "weight": 0, "items": [] },
+        "us": { "weight": 0, "count": 0 },
+        "excluded": 0,
+        "guessedByName": 0
+      },
+      "app": {
+        "line1": "비중 · 보유 1종목 · 레버리지·인버스 없음 · 미국 상장 없음",
+        "line2": "보유 종목 평가금액 기준, 현금 제외 · 08:38 기준",
+        "speech": "비중, 8시 38분 기준, 보유 1종목, 레버리지 인버스 상품 없음, 미국 상장 종목 없음, 현금 제외"
+      }
+    },
+    {
+      "name": "excludedGuessed",
+      "about": "오후 16:05 · 시세 없는 테슬라(합계에서 뺌) · 상품 정보를 받지 못해 이름으로 가린 인버스 2배 1종목 · 레버리지는 값 큰 순",
+      "asOf": "2026-09-28T16:05:00+09:00",
+      "positions": [
+        { "code": "005930", "name": "삼성전자", "currency": "KRW", "quantity": 47, "value": 4000000, "cost": 3500000 },
+        { "code": "252670", "name": "KODEX 200선물인버스2X", "currency": "KRW", "quantity": 500, "value": 1000000, "cost": 1100000 },
+        { "code": "TSLA", "name": "테슬라", "currency": "USD", "quantity": 3, "value": null, "cost": null },
+        { "code": "NVDA", "name": "엔비디아", "currency": "USD", "quantity": 12, "value": 3000000, "cost": 2000000 },
+        { "code": "SOXL", "name": "SOXL", "currency": "USD", "quantity": 50, "value": 2000000, "cost": 1500000 }
+      ],
+      "kinds": {
+        "252670": { "kind": "inverse", "L": 2, "guessed": true },
+        "SOXL": { "kind": "leveraged", "L": 3, "guessed": false }
+      },
+      "expected": {
+        "asOf": "2026-09-28T16:05:00+09:00",
+        "count": 4,
+        "top1": { "code": "005930", "name": "삼성전자", "weight": 40 },
+        "top3": { "weight": 90 },
+        "levInv": {
+          "weight": 30,
+          "items": [
+            { "code": "SOXL", "name": "SOXL", "kind": "leveraged", "L": 3, "weight": 20 },
+            { "code": "252670", "name": "KODEX 200선물인버스2X", "kind": "inverse", "L": 2, "weight": 10 }
+          ]
+        },
+        "us": { "weight": 50, "count": 2 },
+        "excluded": 1,
+        "guessedByName": 1
+      },
+      "app": {
+        "line1": "비중 · 가장 큰 종목 삼성전자 40.0% · 상위 3종목 90.0% · 레버리지·인버스 30.0% · 미국 상장 50.0%",
+        "line2": "레버리지·인버스: SOXL(3배) · KODEX 200선물인버스2X(-2배) · 보유 종목 평가금액 기준, 현금 제외 · 시세가 없는 1종목은 빼고 계산 · 16:05 기준 · 상품 정보를 받지 못한 1종목은 이름으로 구분했습니다",
+        "speech": "비중, 16시 5분 기준, 가장 큰 종목 삼성전자 40.0퍼센트, 상위 3종목 합 90.0퍼센트, 레버리지 인버스 상품 30.0퍼센트, SOXL 3배, KODEX 200선물인버스2X 마이너스 2배, 미국 상장 종목 50.0퍼센트, 현금 제외, 시세가 없는 1종목은 빼고 계산, 상품 정보를 받지 못한 1종목은 이름으로 구분했습니다"
+      }
+    },
+    {
+      "name": "unknownMultiple",
+      "about": "배수를 모르는 레버리지(이름에 'Bull'만)·인버스(이름에 'Short'만) → '(레버리지)'·'(인버스)' · 모두 미국",
+      "asOf": "2026-09-28T08:38:00+09:00",
+      "positions": [
+        { "code": "AAPL", "name": "애플", "currency": "USD", "quantity": 10, "value": 6000000, "cost": 5000000 },
+        { "code": "XBUL", "name": "Example Bull ETF", "currency": "USD", "quantity": 10, "value": 2500000, "cost": 2400000 },
+        { "code": "XSHT", "name": "Example Short ETF", "currency": "USD", "quantity": 10, "value": 1500000, "cost": 1600000 }
+      ],
+      "kinds": {
+        "XBUL": { "kind": "leveraged", "L": null, "guessed": true },
+        "XSHT": { "kind": "inverse", "L": null, "guessed": true }
+      },
+      "expected": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "count": 3,
+        "top1": { "code": "AAPL", "name": "애플", "weight": 60 },
+        "top3": null,
+        "levInv": {
+          "weight": 40,
+          "items": [
+            { "code": "XBUL", "name": "Example Bull ETF", "kind": "leveraged", "L": null, "weight": 25 },
+            { "code": "XSHT", "name": "Example Short ETF", "kind": "inverse", "L": null, "weight": 15 }
+          ]
+        },
+        "us": { "weight": 100, "count": 3 },
+        "excluded": 0,
+        "guessedByName": 2
+      },
+      "app": {
+        "line1": "비중 · 가장 큰 종목 애플 60.0% · 레버리지·인버스 40.0% · 미국 상장 100.0%",
+        "line2": "레버리지·인버스: Example Bull ETF(레버리지) · Example Short ETF(인버스) · 보유 종목 평가금액 기준, 현금 제외 · 08:38 기준 · 상품 정보를 받지 못한 2종목은 이름으로 구분했습니다",
+        "speech": "비중, 8시 38분 기준, 가장 큰 종목 애플 60.0퍼센트, 레버리지 인버스 상품 40.0퍼센트, Example Bull ETF 레버리지, Example Short ETF 인버스, 미국 상장 종목 100.0퍼센트, 현금 제외, 상품 정보를 받지 못한 2종목은 이름으로 구분했습니다"
+      }
+    }
+  ]
+}

@@ -298,6 +298,38 @@ export interface AccountData {
   positions?: AccountPosition[];
   /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교. 켜졌는데 비교할 브리핑이 없으면 null, 꺼짐·예전 기록에는 칸이 없음 */
   sinceLast?: AccountSinceLast | null;
+  /** 브리핑 3차 4 (플래그 accountExposure): 비중 한 줄. 켜졌는데 값이 있는 종목이 없으면 null, 꺼짐·예전 기록에는 칸이 없음 */
+  exposure?: AccountExposure | null;
+}
+
+/** 브리핑 3차 4: 비중 한 줄의 레버리지·인버스 종목 (값이 큰 순). L = 배수의 크기(인버스도 양수), 모르면 null. weight = 비중(%) */
+export interface AccountExposureItem {
+  code: string;
+  name: string;
+  kind: "leveraged" | "inverse";
+  L: number | null;
+  weight: number;
+}
+
+/**
+ * 브리핑 3차 4: 비중 한 줄 (서버 accountNumbers.AccountExposure 와 같은 모양). 비중 = 보유 종목 원화 평가금액(비용 차감) ÷ 합계 × 100, 소수 한 자리 —
+ * 여럿의 합은 원 값을 더한 뒤 반올림. 현금 제외
+ */
+export interface AccountExposure {
+  /** 기준 시각 = 계좌 브리핑 asOf */
+  asOf: string;
+  /** 비중 분모에 넣은 종목 수 */
+  count: number;
+  top1: { code: string; name: string; weight: number };
+  /** 4종목 이상일 때만 */
+  top3: { weight: number } | null;
+  levInv: { weight: number; items: AccountExposureItem[] };
+  /** 미국 상장(달러) 종목 합과 그 수 */
+  us: { weight: number; count: number };
+  /** 시세·환율이 없어 합계에서 뺀 보유 종목 수 */
+  excluded: number;
+  /** 토스 상품 정보를 받지 못해 이름 규칙으로 가린 종목 수 */
+  guessedByName: number;
 }
 
 /** 브리핑 3차 3: 계좌 브리핑이 저장한 보유 종목 한 줄 (서버 accountNumbers.AccountPosition 과 같은 모양) */

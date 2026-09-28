@@ -161,6 +161,43 @@ export interface AccountData extends AccountTotals {
    * 켜져 있었는데 비교할 브리핑이 없으면(처음·10일 넘음) null, 꺼짐·예전 기록에는 칸이 없다
    */
   sinceLast?: AccountSinceLast | null;
+  /**
+   * 비중 한 줄 (브리핑 3차 4, 플래그 accountExposure): 가장 큰 종목·상위 3종목·레버리지·인버스·미국 상장 비중. 만들 때 계산해 저장한다(그때 기준 그대로).
+   * 켜져 있었는데 값이 있는 종목이 없으면 null, 꺼짐·예전 기록에는 칸이 없다
+   */
+  exposure?: AccountExposure | null;
+}
+
+/** 비중 한 줄의 레버리지·인버스 종목 한 줄 (값이 큰 순). L = 배수의 크기(인버스도 양수), 모르면 null. weight = 비중(%, 소수 한 자리) */
+export interface AccountExposureItem {
+  code: string;
+  name: string;
+  kind: "leveraged" | "inverse";
+  L: number | null;
+  weight: number;
+}
+
+/**
+ * 비중 한 줄 (브리핑 3차 4 — exposureOf). 비중 = 종목 원화 평가금액(비용 차감, 앱 잔고와 같은 기준) ÷ 합계에 넣은 종목 값의 합 × 100, 소수 한 자리.
+ * 여럿을 더한 비중(상위 3종목·레버리지·인버스·미국 상장)은 원 값을 더한 뒤 반올림한다 (조각 반올림의 합이 아님). 현금·예수금은 모름(토스 보유 조회에 없음) — 분모에 없음
+ */
+export interface AccountExposure {
+  /** 기준 시각 = 계좌 브리핑의 asOf */
+  asOf: string;
+  /** 비중 분모에 넣은 종목 수 (시세·환율이 있어 합계에 넣은 보유 종목) */
+  count: number;
+  /** 가장 큰 종목 (값이 같으면 먼저 등록한 종목). 1종목이면 100 */
+  top1: { code: string; name: string; weight: number };
+  /** 상위 3종목 합 (4종목 이상일 때만, 아니면 null) */
+  top3: { weight: number } | null;
+  /** 레버리지·인버스 상품 합과 그 종목들 (없으면 weight 0 · 빈 목록) */
+  levInv: { weight: number; items: AccountExposureItem[] };
+  /** 미국 상장(달러) 종목 합과 그 수 (수가 0 이면 앱이 '미국 상장 없음' — 비중이 0.0 으로 반올림되는 작은 보유와 가르려고). 국내 상장 해외 ETF 는 원화 종목이라 들지 않음 */
+  us: { weight: number; count: number };
+  /** 시세·환율이 없어 합계에서 뺀 보유 종목 수 (비중 계산에 없음) */
+  excluded: number;
+  /** 토스 상품 정보를 받지 못해 이름 규칙으로 레버리지·인버스를 가린 종목 수 (analysis/leveraged levInvOf guessed) */
+  guessedByName: number;
 }
 
 /** 계좌 브리핑이 저장하는 보유 종목 한 줄 (브리핑 3차 3) */
@@ -481,6 +518,46 @@ export function positionsOf(list: readonly AccountHolding[], opts: { afterCost?:
     r.p.cost = costs[i]!;
   });
   return rows.map((r) => r.p);
+}
+
+/**
+ * 비중 한 줄 (브리핑 3차 4, 플래그 accountExposure — 순수). positions = positionsOf 결과(값 null = 합계에서 뺀 종목), kinds = 종목별 레버리지·인버스
+ * (analysis/leveraged levInvOf — 없는 종목은 보통 상품). 합계에 넣은 종목이 없거나 합이 0 이면 null.
+ * 판단하지 않고 숫자만: 가장 큰 종목·상위 3종목(4종목 이상)·레버리지·인버스(값 큰 순)·미국 상장
+ */
+export function exposureOf(
+  positions: readonly AccountPosition[],
+  kinds: ReadonlyMap<string, { kind: "leveraged" | "inverse" | null; L: number | null; guessed: boolean }>,
+  asOf: string,
+): AccountExposure | null {
+  const counted = positions.map((p, i) => ({ p, i })).filter((x): x is { p: AccountPosition & { value: number }; i: number } => x.p.value !== null);
+  const total = sum(counted.map((x) => x.p.value));
+  if (!counted.length || !(total > 0)) return null;
+  const weight = (v: number) => Math.round((v / total) * 100 * 10) / 10;
+  // 값이 큰 순, 같으면 먼저 등록한 종목
+  const ranked = [...counted].sort((a, b) => b.p.value - a.p.value || a.i - b.i);
+  const top = ranked[0]!.p;
+  const usd = counted.filter((x) => x.p.currency === "USD");
+  const lev = ranked.filter((x) => {
+    const k = kinds.get(x.p.code)?.kind;
+    return k === "leveraged" || k === "inverse";
+  });
+  return {
+    asOf,
+    count: counted.length,
+    top1: { code: top.code, name: top.name, weight: weight(top.value) },
+    top3: counted.length > 3 ? { weight: weight(sum(ranked.slice(0, 3).map((x) => x.p.value))) } : null,
+    levInv: {
+      weight: weight(sum(lev.map((x) => x.p.value))),
+      items: lev.map((x) => {
+        const k = kinds.get(x.p.code)!;
+        return { code: x.p.code, name: x.p.name, kind: k.kind as "leveraged" | "inverse", L: k.L, weight: weight(x.p.value) };
+      }),
+    },
+    us: { weight: weight(sum(usd.map((x) => x.p.value))), count: usd.length },
+    excluded: positions.length - counted.length,
+    guessedByName: counted.filter((x) => kinds.get(x.p.code)?.guessed === true).length,
+  };
 }
 
 /** 지수·환율 영향에 쓰는 지수 (없으면 missing) */

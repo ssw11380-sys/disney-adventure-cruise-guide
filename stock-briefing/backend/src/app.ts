@@ -290,6 +290,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     generator: opts.providers.generator,
     prompts,
     features,
+    // 브리핑 3차 4 비중 한 줄 (플래그 accountExposure): 레버리지·인버스는 지표 점수와 같은 토스 웹 상품 정보(같은 인스턴스·24시간 캐시)로 가린다
+    productInfo: opts.providers.productInfo ?? null,
     now,
     log,
   });

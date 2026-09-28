@@ -116,6 +116,43 @@ export function classifyProduct(code: string, name: string, facts: ProductFacts 
 }
 
 /**
+ * 상품 가리기 입력을 한곳에서 (지표 점수 3-44 · 계좌 비중 한 줄 브리핑 3차 4 가 같이 씀): 토스 웹 상품 정보가 없거나 분류 칸이 비면
+ * 종목 마스터 분류(listed_stocks.group_code — ST·EF·EN)를 group 으로 넣는다 — 보통 주식 이름의 'Bear'·'Short' 로 인버스를 짐작하지 않게
+ */
+export function productKindOf(code: string, name: string, facts: ProductFacts | null | undefined, groupCode?: string | null): ProductKind {
+  const hint: ProductFacts | null = facts || groupCode ? { ...facts, group: facts?.group ?? groupCode ?? null } : null;
+  return classifyProduct(code, name, hint);
+}
+
+/** 계좌 비중 한 줄(브리핑 3차 4)의 상품 종류. L = 배수의 크기(인버스도 양수, 모르면 null), guessed = 토스 상품 정보 없이 이름 규칙으로 가림 */
+export interface LevInv {
+  kind: "leveraged" | "inverse" | null;
+  L: number | null;
+  guessed: boolean;
+}
+
+/**
+ * 레버리지·인버스인지와 배수 (브리핑 3차 4, 지표 점수와 같은 가리기 — productKindOf). 배수는 아는 것만: 상품 정보의 배수(인버스는 음수의 크기) →
+ * 정적 표 → 이름의 '2X' → 국내 '레버리지'(2배). 그 밖은 null — classifyProduct 가 점수 계산용으로 채우는 기본 2배를 화면에 옮기지 않게.
+ * guessed: 상품 정보를 받지 못했고 종목 마스터도 보통 주식(ST)이라고 하지 않았고 정적 표에도 없어, 이름 규칙으로 가린 것
+ */
+export function levInvOf(code: string, name: string, facts: ProductFacts | null | undefined, groupCode?: string | null): LevInv {
+  const kind = productKindOf(code, name, facts, groupCode);
+  const guessed = !facts && groupCode !== "ST" && !LEVERAGED_TABLE[code];
+  const lf = typeof facts?.leverageFactor === "number" && Number.isFinite(facts.leverageFactor) ? facts.leverageFactor : null;
+  const names = [name, facts?.name, facts?.englishName, facts?.detailName].filter((x): x is string => typeof x === "string" && x.length > 0).join(" ");
+  const nameL = Number(MULT_RE.exec(names)?.[1] ?? NaN);
+  const byName = Number.isFinite(nameL) && nameL > 0 ? nameL : null;
+  if (kind.kind === "leveraged") {
+    const table = LEVERAGED_TABLE[code];
+    const L = lf !== null && lf > 1 ? lf : kind.source === "table" && table ? table.L : (byName ?? (isKrCode(code) && /레버리지/.test(names) ? 2 : null));
+    return { kind: "leveraged", L, guessed };
+  }
+  if (kind.kind === "inverse") return { kind: "inverse", L: lf !== null && lf < 0 ? Math.abs(lf) : byName, guessed };
+  return { kind: null, L: null, guessed };
+}
+
+/**
  * 분배금이 큰 상품 (추세 계산 9.6): 커버드콜·옵션 프리미엄 상품. 일봉에 분배금이 들어 있지 않아 가격만으로 계산한 추세가 실제 수익보다 낮게 나온다 →
  * 점수는 내되 안내 한 줄을 붙인다. ETF·ETN 일 때만 본다(회사 이름의 '프리미엄'은 상관없음)
  */

@@ -1,3 +1,4 @@
+import { levInvOf, type LevInv, type ProductFacts } from "../analysis/leveraged.js";
 import type { Db } from "../db/index.js";
 import { isKrCode } from "../lib/codes.js";
 import { NotFoundError } from "../lib/errors.js";
@@ -14,6 +15,7 @@ import {
   checkNarrative,
   cleanNarrative,
   computeAccount,
+  exposureOf,
   factsText,
   krPreviousDay,
   leaders,
@@ -27,9 +29,11 @@ import {
   type AccountData,
   type AccountDisclosure,
   type AccountHolding,
+  type AccountPosition,
   type AccountSession,
 } from "./accountNumbers.js";
 import { compareSinceLast, SINCE_LAST_DAYS } from "./accountSinceLast.js";
+import { groupCodeOf } from "./indicatorScoreService.js";
 
 /** 목록·알림에 쓰는 머리 숫자 (data 에서 뽑는다) */
 export interface AccountHeadline {
@@ -80,7 +84,14 @@ export interface AccountBriefingDeps {
   calendar: { status(): Promise<MarketStatus> } | null;
   generator: TextGenerator;
   prompts: PromptStore;
-  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast"): Promise<boolean> };
+  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure"): Promise<boolean> };
+  /**
+   * 토스 웹 상품 정보 (브리핑 3차 4 비중 한 줄의 레버리지·인버스 — 지표 점수와 같은 출처·같은 24시간 캐시, 시세를 받으며 대부분 이미 캐시에 있음).
+   * 없으면 종목 마스터 분류·정적 표·이름 규칙으로만 가린다
+   */
+  productInfo?: { productFacts(code: string): Promise<ProductFacts | null> } | null;
+  /** 상품 정보를 종목마다 기다리는 최대 시간 (기본 PRODUCT_WAIT_MS — 테스트는 짧게) */
+  productWaitMs?: number;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -90,6 +101,9 @@ const LLM_WAIT_MS = 90_000;
 /** 최근 공시: 오늘 포함 며칠 안에 낸 것만 */
 const DISCLOSURE_DAYS = 3;
 const DISCLOSURE_MAX = 8;
+/** 비중 한 줄의 상품 정보: 종목마다 기다리는 최대 시간과 동시에 부르는 수 (세션 알림이 늦어지지 않게 — 늦으면 표·이름 규칙으로) */
+const PRODUCT_WAIT_MS = 8_000;
+const PRODUCT_CONCURRENCY = 4;
 
 /**
  * 계좌 한 장 브리핑 (3-31). 세션(오전·오후)마다 종목별 브리핑이 끝난 뒤 계좌 전체 요약 한 건을 만든다.
@@ -208,6 +222,16 @@ export class AccountBriefingService {
       });
       data.sinceLast = prev ? compareSinceLast(prev, data) : null;
     }
+    // 브리핑 3차 4 (플래그 accountExposure): 비중 한 줄. 종목별 값은 위와 같은 positionsOf (지난 브리핑과 비교가 꺼져 있으면 저장하지 않고 비중에만 쓴다).
+    // 꺼지면 칸도 상품 정보 호출도 없다. 계산이 뜻밖에 실패해도 계좌 브리핑·알림은 그대로 (칸 없이 저장)
+    if (await this.deps.features.enabled("accountExposure").catch(() => false)) {
+      try {
+        const positions = data.positions ?? positionsOf(holdings, { afterCost: true });
+        data.exposure = exposureOf(positions, await this.productKinds(positions.filter((p) => p.value !== null)), data.asOf);
+      } catch (e) {
+        this.deps.log?.warn({ session, date, err: (e as Error).message }, "비중 한 줄을 계산하지 못해 칸 없이 저장");
+      }
+    }
     const n = await this.narrative(data);
     data.narrative = { source: n.source, reason: n.reason };
     return await this.save(date, session, { status: "ok", summary: summaryText(data), detail: n.text, data, model: n.model });
@@ -246,6 +270,31 @@ export class AccountBriefingService {
       this.deps.log?.warn({ err: msg }, "계좌 브리핑 모델 호출 실패 — 기본 문장으로");
       return template(`모델 호출 실패 (${msg})`);
     }
+  }
+
+  /**
+   * 비중 한 줄의 레버리지·인버스 (브리핑 3차 4): 합계에 넣은 종목마다 토스 웹 상품 정보(종목마다 최대 PRODUCT_WAIT_MS, 동시에 PRODUCT_CONCURRENCY 개) +
+   * 종목 마스터 분류로 levInvOf. 상품 정보가 없거나 늦거나 실패하면 정적 표·이름 규칙으로 (guessed) — 계좌 브리핑은 늘 만든다
+   */
+  private async productKinds(list: readonly AccountPosition[]): Promise<Map<string, LevInv>> {
+    const wait = this.deps.productWaitMs ?? PRODUCT_WAIT_MS;
+    const info = this.deps.productInfo ?? null;
+    const out = new Map<string, LevInv>();
+    const one = async (p: AccountPosition) => {
+      const [facts, group] = await Promise.all([
+        // 부르는 순간 던져도(동기 오류) 이 종목만 상품 정보 없이
+        info ? settleWithin(Promise.resolve().then(() => info.productFacts(p.code)), wait).then((r) => (r.kind === "ok" ? r.value : null)) : Promise.resolve(null),
+        groupCodeOf(this.deps.db, p.code).catch(() => null),
+      ]);
+      out.set(p.code, levInvOf(p.code, p.name, facts, group));
+    };
+    const queue = [...list];
+    await Promise.all(
+      Array.from({ length: Math.min(PRODUCT_CONCURRENCY, queue.length) }, async () => {
+        for (let p = queue.shift(); p; p = queue.shift()) await one(p);
+      }),
+    );
+    return out;
   }
 
   /**
