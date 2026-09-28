@@ -324,6 +324,9 @@ describe("수익률 글", () => {
     expect(m).toContain("현금 입출금과 배당은 넣지 않았어요. 주식 평가금액만의 수익률이에요.");
     expect(m.some((x) => x.startsWith("빠진 날"))).toBe(false);
     expect(returnsMethod({ ...ready, market: "US", gaps: ["2026-10-01"] })).toEqual(expect.arrayContaining(["빠진 날 1일은 앞뒤를 이어 계산했어요.", "달러 기준이에요. 환율은 넣지 않았어요."]));
+    // 검토 반영 6차: 주식 수 변화를 확인하지 못한 구간은 건너뛰었다고 알린다 (없으면 줄 없음)
+    expect(returnsMethod({ ...ready, uncertainSkipped: ["2026-10-07"] })).toContain("주문 내역에 없는 주식 수 변화를 확인하지 못한 1일은 수익률·기간 손익에서 뺐어요.");
+    expect(m.some((x) => x.includes("확인하지 못한"))).toBe(false);
     // 회귀: 화면에 보이는 시작→끝 평가금액·그 사이 사고판 금액·기록 시작일부터 계산한 까닭도 읽는다
     expect(returnsSpeech(ready)).toBe(
       "9월 28일부터 10월 12일까지 10거래일, 수익률 시간가중 3.42% 상승, 기간 손익 456,000원 이익, 시작 평가금액 12,340,000원에서 끝 12,800,000원, 그 사이 매수 1,000,000원, 매도 500,000원, 수익률 계산에서 뺐어요, 고른 기간보다 기록이 짧아 기록 시작일부터 계산했어요",

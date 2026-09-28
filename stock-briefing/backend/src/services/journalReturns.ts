@@ -11,6 +11,8 @@
  *  - 시장: 한국(원) = 한국 스냅샷, 미국(달러) = 미국 스냅샷 달러 값(환율 효과 없음), 전체(원화) = 두 시장 스냅샷을 시각 순으로 이어, 시점마다
  *    '그 시각까지의 최신 한국 + 최신 미국(그 스냅샷 환율)'. 한 시장의 흐름은 그 시장의 다음 스냅샷에서 센다(미국은 그 스냅샷 환율로 원화)
  *  - 빈칸(gap)은 앞뒤를 한 구간으로 이어 계산, 의심을 안고 저장한 스냅샷은 평가 시점에서 뺀다
+ *  - 주식 수 변화를 확인하지 못한 이관(uncertain — 알아보지 못한 병합·감자 등)이 든 구간은 수익률·기간 손익에서 건너뛴다 (uncertainSkipped — 그 구간 끝 날짜).
+ *    이관 흐름 값이 한 주 값과 크게 달라 가짜 수익률이 되기 때문 (1/10 병합 뒤 크게 내린 가격에 팖이 +50% 로 보이던 것)
  *  - 현금 입출금·배당은 넣지 않는다(토스 Open API 가 주지 않음 — 주식 평가금액만의 가격 수익률)
  *  - 공개 조건(로드맵 '3-36 뒤 최소 2주를 모은 다음 공개'): 기록 전체(기간과 상관없이)의 평가 시점이 READY_DAYS(10)거래일 미만이면 숫자를 주지 않는다
  *    (ready false, recordDays 로 '지금 N거래일'). 기록이 충분해도 고른 기간 안 평가 시점이 MIN_POINTS(2) 미만이면 계산할 수 없어 ready false
@@ -44,6 +46,8 @@ export interface RetFlow {
   at: string;
   /** trade = 체결, transfer = 주문 내역에 없는 수량 변화(이관 추정 — 그날 가격) */
   kind: "trade" | "transfer";
+  /** 주식 수 변화를 확인하지 못한 이관 — 그 구간은 수익률·기간 손익에서 건너뛴다 */
+  uncertain?: boolean;
 }
 
 export interface ReturnsBody {
@@ -78,6 +82,8 @@ export interface ReturnsBody {
   transfersEstimated: number;
   gaps: string[];
   doubtedSkipped: string[];
+  /** 주식 수 변화를 확인하지 못한 이관이 있어 수익률·기간 손익에서 건너뛴 구간의 끝 날짜 */
+  uncertainSkipped: string[];
   priceBasis: { regularClose: number; priceFallback: number; fallbackCodes: string[] };
   /** 날짜별 누적 수익률 (퍼센트) */
   series: Array<{ date: string; cum: number }>;
@@ -183,13 +189,14 @@ export function periodReturns(
     transfersEstimated: 0,
     gaps,
     doubtedSkipped,
+    uncertainSkipped: [],
     priceBasis: basis,
     series: [],
   };
 
   // 전체: 두 시장이 모두 한 번 이상 나온 시점부터. 시점마다 그 시장 몫만 바뀐다
   const latest: Partial<Record<"KR" | "US", Point>> = {};
-  const seq: Array<{ p: Point; total: number; flowIn: number; flowOut: number; transfers: number }> = [];
+  const seq: Array<{ p: Point; total: number; flowIn: number; flowOut: number; transfers: number; uncertain: boolean }> = [];
   const toBase = (p: Point, v: number) => (market === "ALL" && p.snap.market === "US" ? v * (p.snap.fx ?? 0) : v);
   for (const p of points) {
     const m = p.snap.market;
@@ -201,7 +208,8 @@ export function periodReturns(
     // 이 시장의 앞 시점 뒤 ~ 이 시점까지의 흐름 (전체의 첫 시점이면 흐름 없음 — 시작 값에 이미 들어 있다)
     let flowIn = 0,
       flowOut = 0,
-      transfers = 0;
+      transfers = 0,
+      uncertain = false;
     if (prev && seq.length > 0) {
       const t1 = t(prev.snap.asOf),
         t2 = t(p.snap.asOf);
@@ -213,9 +221,10 @@ export function periodReturns(
         if (f.side === "BUY") flowIn += v;
         else flowOut += v;
         if (f.kind === "transfer") transfers++;
+        if (f.uncertain) uncertain = true;
       }
     }
-    seq.push({ p, total, flowIn, flowOut, transfers });
+    seq.push({ p, total, flowIn, flowOut, transfers, uncertain });
   }
   if (seq.length === 0) return base;
   const tradingDays = new Set(seq.map((x) => x.p.snap.date)).size;
@@ -225,7 +234,9 @@ export function periodReturns(
   let growth = 1;
   let buys = 0,
     sells = 0,
-    transfers = 0;
+    transfers = 0,
+    skippedPnl = 0;
+  const uncertainSkipped: string[] = [];
   const series: Array<{ date: string; cum: number }> = [{ date: seq[0]!.p.snap.date, cum: 0 }];
   for (let k = 1; k < seq.length; k++) {
     const a = seq[k - 1]!,
@@ -234,7 +245,11 @@ export function periodReturns(
     sells += b.flowOut;
     transfers += b.transfers;
     const denom = a.total + b.flowIn;
-    if (denom > 0) growth *= 1 + (b.total + b.flowOut - b.flowIn - a.total) / denom;
+    if (b.uncertain) {
+      // 주식 수 변화를 확인하지 못한 이관이 든 구간: 수익률은 그대로 이어 가고 그 구간 손익은 빼 둔다
+      skippedPnl += b.total + b.flowOut - b.flowIn - a.total;
+      if (uncertainSkipped.at(-1) !== b.p.snap.date) uncertainSkipped.push(b.p.snap.date);
+    } else if (denom > 0) growth *= 1 + (b.total + b.flowOut - b.flowIn - a.total) / denom;
     const cum = pct(growth - 1);
     const last = series.at(-1)!;
     if (last.date === b.p.snap.date) last.cum = cum;
@@ -249,12 +264,13 @@ export function periodReturns(
     tradingDays,
     actual,
     twr: pct(growth - 1),
-    pnl: round(seq.at(-1)!.total - seq[0]!.total - buys + sells),
+    pnl: round(seq.at(-1)!.total - seq[0]!.total - buys + sells - skippedPnl),
     startValue,
     endValue,
     buys: round(buys),
     sells: round(sells),
     transfersEstimated: transfers,
+    uncertainSkipped,
     series,
   };
 }

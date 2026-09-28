@@ -1117,6 +1117,8 @@ export interface JournalReturns {
   transfersEstimated?: number;
   gaps?: string[];
   doubtedSkipped?: string[];
+  /** 주문 내역에 없는 주식 수 변화를 확인하지 못해(알아보지 못한 병합·감자 등) 수익률·기간 손익에서 건너뛴 구간의 끝 날짜. 예전 서버는 없음 */
+  uncertainSkipped?: string[];
   priceBasis?: { regularClose: number; priceFallback: number; fallbackCodes: string[] };
   series?: { date: string; cum: number }[];
 }

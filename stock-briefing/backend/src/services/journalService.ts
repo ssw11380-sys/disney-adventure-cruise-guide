@@ -414,9 +414,14 @@ export class JournalService {
           });
         });
       }
+      const estKeys = new Set<string>();
       for (const e of p.res.estimated) {
+        // 한 기록에 주식 수 변화 줄과 이관 줄이 함께 있으면(분할과 같은 구간의 입고·출고) 뒤 줄 키에 까닭을 붙인다 (화면 목록 키가 겹치지 않게)
+        const base = `est:${p.account}:${p.code}:${e.date}`;
+        const key = estKeys.has(base) ? `${base}:${e.reason}` : base;
+        estKeys.add(key);
         out.push({
-          key: `est:${p.account}:${p.code}:${e.date}`,
+          key,
           kind: "estimated",
           account: p.account,
           accountLabel: multi ? `계좌 ${p.account}` : null,
@@ -524,25 +529,51 @@ export class JournalService {
     // 주문 내역에 없는 수량 변화(이관 추정)는 그 스냅샷 가격으로 들어오고 나간 것으로 (분할·병합·무상증자 같은 회사 행동은 흐름이 아님).
     // 그 스냅샷에 종목이 없으면(전량 출고·상장폐지, 입고된 몫까지 그 구간에 다 판 경우) 그 종목이 있던 직전 스냅샷의 가격과
     // 그 구간 평균 판 가격(있으면) 가운데 낮은 쪽으로 — 빼지 않으면 가짜 손익이 된다. 알아보지 못한 분할(늘어남)은 판 가격이, 병합(줄어듦)은
-    // 직전 가격이 한 주 값에 가까워 가짜 흐름이 가장 작다 (거래정지 날 0주로 보였다가 분할된 4,000주가 들어와 전부 판 경우 −75% → 0%)
+    // 직전 가격이 한 주 값에 가까워 가짜 흐름이 가장 작다 (거래정지 날 0주로 보였다가 분할된 4,000주가 들어와 전부 판 경우 −75% → 0%).
+    // 주식 수 변화를 확인하지 못한 이관(원장의 uncertain — 알아보지 못한 병합·감자 등)은 그 구간을 수익률·기간 손익에서 건너뛴다 (검토 반영 6차)
     const pairs = this.pairs(trades, snaps, toss);
     const pxOf = (h: SnapshotHolding | undefined) => {
       const v = h ? (h.regularClose ?? h.price) : null;
       return v !== null && v !== undefined && Number.isFinite(v) ? v : null;
     };
+    const heldIn = (x: SnapLite, account: number, code: string) => x.holdings.find((h) => h.account === account && h.code === code && h.quantity > 0);
+    const snapAt = (market: RecordMarket, at: string) => snaps.find((x) => x.status === "ok" && x.market === market && x.asOf === at);
+    // 분사 (검토 반영 6차): 같은 계좌·같은 시장·같은 기록에서 새로 나타난 종목들(입고)의 토스 매입금액 합이 다른 종목의 토스 매입금액이 줄어든 합과
+    // 1% 안에서 맞으면 그 입고는 흐름이 아니다 — 부모 종목 가격이 내린 만큼 새 종목 값이 들어온 것 (가짜 −16.67% 대신 0%)
+    const place = (account: number, market: RecordMarket, at: string) => `${account}:${market}:${at}`;
+    const shrunk = new Map<string, number>();
+    const born = new Map<string, number>();
+    const isNew = (e: EstimatedRow) => e.reason === "transfer" && Math.abs(e.fromQty) <= 1e-6 && e.qty > 0;
+    for (const p of pairs.values()) {
+      for (const c of p.res.costShifts) if (c.amount > 0) shrunk.set(place(p.account, p.market, c.at), (shrunk.get(place(p.account, p.market, c.at)) ?? 0) + c.amount);
+      for (const e of p.res.estimated) {
+        if (!isNew(e)) continue;
+        const s = snapAt(p.market, e.at);
+        const h = s ? heldIn(s, p.account, p.code) : undefined;
+        const cost = h ? h.purchaseAmount : null;
+        const k = place(p.account, p.market, e.at);
+        born.set(k, cost !== null && cost !== undefined && Number.isFinite(cost) && cost > 0 ? (born.get(k) ?? 0) + cost : NaN);
+      }
+    }
+    const spunOff = (k: string) => {
+      const dec = shrunk.get(k);
+      const got = born.get(k);
+      return dec !== undefined && got !== undefined && Number.isFinite(got) && Math.abs(got - dec) <= dec * 0.01 + 0.01;
+    };
     for (const p of pairs.values()) {
       for (const e of p.res.estimated) {
         if (e.reason !== "transfer") continue;
-        const held = (x: SnapLite) => x.holdings.find((h) => h.account === p.account && h.code === p.code && h.quantity > 0);
-        const s = snaps.find((x) => x.status === "ok" && x.market === p.market && x.asOf === e.at);
-        let px = s ? pxOf(held(s)) : null;
+        if (isNew(e) && spunOff(place(p.account, p.market, e.at))) continue;
+        const s = snapAt(p.market, e.at);
+        let px = s ? pxOf(heldIn(s, p.account, p.code)) : null;
         if (px === null) {
-          const before = snaps.filter((x) => x.status === "ok" && x.market === p.market && Date.parse(x.asOf) < Date.parse(e.at) && held(x));
-          px = pxOf(before.length ? held(before.at(-1)!) : undefined);
+          const before = snaps.filter((x) => x.status === "ok" && x.market === p.market && Date.parse(x.asOf) < Date.parse(e.at) && heldIn(x, p.account, p.code));
+          px = pxOf(before.length ? heldIn(before.at(-1)!, p.account, p.code) : undefined);
           if (e.sellPx !== undefined && (px === null || e.sellPx < px)) px = e.sellPx;
         }
-        if (px === null) continue;
-        flows.push({ market: p.market, side: e.qty > 0 ? "BUY" : "SELL", amount: Math.abs(e.qty) * px, at: e.at, kind: "transfer" });
+        // 주식 수 변화를 확인하지 못한 이관(④ — 알아보지 못한 병합·감자일 수 있음): 가격을 몰라도 그 구간을 건너뛰도록 표시만 남긴다
+        if (px === null && !e.uncertain) continue;
+        flows.push({ market: p.market, side: e.qty > 0 ? "BUY" : "SELL", amount: Math.abs(e.qty) * (px ?? 0), at: e.at, kind: "transfer", ...(e.uncertain ? { uncertain: true } : {}) });
       }
     }
     const rs: RetSnap[] = snaps.map((s) => ({
@@ -590,7 +621,7 @@ export class JournalService {
         const costsUsd = r?.realized?.costs.source === "toss" ? r.realized.costs.total : null;
         const ok = !!std && std.proceeds !== null && std.cost !== null && fxSell !== null;
         // 평균 구매가를 추정한 매도: 분할·이관 전후는 합계에 넣고 '추정 포함'으로 따로 센다 · 순서 모름은 기본으로 합계에서 뺀다 (taxSummary).
-        // 수량은 같은데 토스 매입금액이 달라져(분사 등) 원화 취득가를 그 비율로 고친 매도도 '추정 포함'
+        // 수량은 같은데 토스 매입금액이 달라져(분사 등) 원화 취득가를 그 비율로 고친 매도도 '추정 포함' (달라진 구간 안의 매도는 원장이 '순서 추정'으로 둔다)
         const st = r?.realized?.status;
         const estimate =
           st === "estimated" || st === "order-uncertain"

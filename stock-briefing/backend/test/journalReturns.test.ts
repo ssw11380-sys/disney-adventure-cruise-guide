@@ -208,3 +208,18 @@ describe("검토 반영 3차: 마지막 기록일(recordUntil)", () => {
     expect(periodReturns(q("2026-10-05", "2026-10-12", "US"), snaps, []).recordUntil).toBeNull();
   });
 });
+
+describe("검토 반영 6차: 주식 수 변화를 확인하지 못한 이관(알아보지 못한 병합·감자 등)이 든 구간은 건너뛴다", () => {
+  it("그 구간은 수익률·기간 손익에서 빼고 끝 날짜를 uncertainSkipped 로 (그대로 두면 +43% · +310)", () => {
+    const d = days(3);
+    const snaps = [KR(d[0]!, 1000), KR(d[1]!, 100), KR(d[2]!, 110)];
+    // d1: 1/10 병합을 알아보지 못한 출고 900주를 직전 가격(1)으로 900 + 판 금액 300
+    const flows: RetFlow[] = [
+      flow("KR", "SELL", 300, `${d[1]}T10:00:00+09:00`),
+      { market: "KR", side: "SELL", amount: 900, at: `${d[1]}T16:05:00+09:00`, kind: "transfer", uncertain: true },
+    ];
+    const r = periodReturns(q(d[0]!, d[2]!), snaps, flows, ONE);
+    expect(r).toMatchObject({ ready: true, twr: 10, pnl: 10, uncertainSkipped: [d[1]], transfersEstimated: 1 });
+    expect(periodReturns(q(d[0]!, d[2]!), snaps, [], ONE).uncertainSkipped).toEqual([]);
+  });
+});
