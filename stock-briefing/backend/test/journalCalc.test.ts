@@ -460,6 +460,137 @@ describe("검토 반영 7차: 예전에 비율을 추정하던 경우는 모두 
   });
 });
 
+describe("검토 반영 8차: 휴장일 다음 날 권리락 · 끝이 0주인 구간 · 같은 시각 사고팔기 · 0주에서 새로 산 몫", () => {
+  const dropped = { status: "unexplained", reason: REASONS.unexplained, gross: null, rate: null, avgCost: null, costAmount: null, net: null, krw: null };
+  const kst = (d: string, hm = "16:05") => `${d}T${hm}:00+09:00`;
+  const kr = (side: "BUY" | "SELL", quantity: number, amount: number, day: string, hm = "10:00") => fill({ side, quantity, amount, at: kst(day, hm), code: "005930" });
+  const krA = (date: string, quantity: number, cost: number, price: number | null = null) => anchor({ asOf: kst(date), date, quantity, cost, price });
+
+  it("(꼭) 추석 연휴(9/24·9/25) 다음 거래일의 권리락 −50%: 하루 변화로 보고 새 주식 기록까지 매도는 계산에서 뺌·수익률 건너뜀 (평일로 세면 놓쳐 −99,000 이 'ok')", () => {
+    const rows: Array<[string, number, number, number]> = [
+      ["2026-09-22", 1000, 1_000_000, 1000],
+      ["2026-09-23", 1000, 1_000_000, 1000],
+      ["2026-09-28", 1000, 1_000_000, 500],
+      ["2026-09-29", 1000, 1_000_000, 505],
+      ["2026-09-30", 800, 800_000, 510],
+      ["2026-10-01", 800, 800_000, 500],
+      ["2026-10-02", 800, 800_000, 500],
+      ["2026-10-06", 800, 800_000, 500],
+      ["2026-10-13", 800, 800_000, 500],
+      ["2026-10-14", 1800, 800_000, 500],
+      ["2026-10-15", 1800, 800_000, 505],
+    ];
+    const anchors = rows.map(([d, q, c, p]) => krA(d, q, c, p));
+    const f = [kr("SELL", 200, 101_000, "2026-09-30")];
+    const r = replayPair(f, anchors, { currency: "KRW" });
+    const jump = "주가 1,000원 → 500원 (−50%) · 주식 수 1,000주 그대로";
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ ...dropped, reason: REASONS.possibleAction, change: `9월 28일 기록: ${jump}`, guess: "1→2 분할·무상증자일 수 있어요(추정)" });
+    expect(r.skips).toEqual([{ from: kst("2026-09-23"), to: kst("2026-10-14") }]);
+    expect(r.changes.map((c) => [c.kind, c.fromDate, c.date])).toEqual([
+      ["possible-action", "2026-09-23", "2026-09-28"],
+      ["unexplained", "2026-10-13", "2026-10-14"],
+    ]);
+    // 마지막 기록 뒤 체결 가격도 거래일로 센다: 9/23 기록 뒤 9/28 매도 500원은 하루 변화
+    const g = [kr("SELL", 100, 50_000, "2026-09-28")];
+    expect(replayPair(g, [krA("2026-09-23", 1000, 1_000_000, 1000)], { currency: "KRW" }).fills.get(g[0]!.key)!.realized).toMatchObject({
+      ...dropped,
+      reason: REASONS.possibleAction,
+      change: "매도 가격 500원 · 직전 기록 주가 1,000원보다 −50%",
+    });
+  });
+
+  it("(꼭) 미국 노동절(9/7) 다음 날 늦게 반영된 1→4 분할(−75%, 수량 그대로)에 옛 수량 10주를 모두 팖: −$750 을 넣지 않고 계산에서 뺌", () => {
+    const f = [fill({ side: "SELL", quantity: 10, amount: 250, at: "2026-09-08T23:30:00+09:00" })];
+    const a = anchor({ asOf: "2026-09-05T05:05:00+09:00", date: "2026-09-04", quantity: 10, cost: 1000, price: 100 });
+    const b = anchor({ asOf: "2026-09-09T05:05:00+09:00", date: "2026-09-08", quantity: 0, cost: 0 });
+    const r = replayPair(f, [a, b], { currency: "USD", stdAt: () => 1350 });
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ ...dropped, reason: REASONS.possibleAction, change: "매도 가격 $25.00 · 직전 기록 주가 $100.00보다 −75%", guess: "1→4 분할·무상증자일 수 있어요(추정)" });
+    expect(r.fills.get(f[0]!.key)!.std).toEqual({ proceeds: 337_500, cost: null, missing: "unexplained" });
+    expect(r.skips).toEqual([{ from: a.asOf, to: b.asOf }]);
+  });
+
+  it("(꼭) 분사 당일 모회사를 전부 팖 (끝 0주): 같은 구간에 다른 종목이 주문 없이 들어왔으면 계산에서 뺌 — 행동 전 원가로 −$20,000 을 넣지 않음", () => {
+    const US1 = "2026-09-26T05:05:00+09:00";
+    const US2 = "2026-09-29T05:05:00+09:00";
+    const f = [fill({ side: "BUY", quantity: 1000, amount: 100_000, at: "2026-09-01T23:00:00+09:00" }), fill({ side: "SELL", quantity: 1000, amount: 80_000, at: "2026-09-28T23:30:00+09:00" })];
+    const anchors = [anchor({ asOf: US1, date: "2026-09-25", quantity: 1000, cost: 100_000, price: 100 }), anchor({ asOf: US2, date: "2026-09-28", quantity: 0, cost: 0 })];
+    const run = (arrivals?: Map<string, number | null>) => replayPair(f, anchors, { currency: "USD", stdAt: () => 1390, ...(arrivals ? { arrivals } : {}) });
+    const r = run(new Map([[US2, 20_000]]));
+    const text = "수량 1,000 → 0주 · 같은 기간 다른 종목이 주문 없이 들어와(분사 등일 수 있어요) 매입금액을 맞춰 보지 못했어요";
+    expect(r.fills.get(f[1]!.key)!.realized).toMatchObject({ ...dropped, change: text, guess: null });
+    expect(r.fills.get(f[1]!.key)!.std).toEqual({ proceeds: 111_200_000, cost: null, missing: "unexplained" });
+    expect(r.changes).toEqual([{ at: US2, date: "2026-09-28", fromDate: "2026-09-25", kind: "unexplained", fromQty: 1000, toQty: 0, expectedQty: 0, text, guess: null }]);
+    expect(r.skips).toEqual([{ from: US1, to: US2 }]);
+    // 들어온 종목의 매입금액을 모르면 역시 뺌
+    expect(run(new Map([[US2, null]])).fills.get(f[1]!.key)!.realized).toMatchObject(dropped);
+    // 다른 종목이 들어오지 않았거나(보통 매매), 들어온 몫이 매입금액의 0.5% 보다 작으면(토스 이벤트 주식 1주 등 — 분사였어도 허용폭 안) 보통 계산
+    for (const x of [undefined, new Map([[US2, 400]])]) expect(run(x).fills.get(f[1]!.key)!.realized).toMatchObject({ status: "ok", gross: -20_000 });
+    // 반만 팔아 수량이 남으면 원래대로 토스 매입금액으로 맞춰 본다 (들어온 종목과 상관없이 설명되는 구간)
+    const half = [f[0]!, fill({ side: "SELL", quantity: 500, amount: 40_000, at: "2026-09-28T23:30:00+09:00" })];
+    const h = replayPair(half, [anchors[0]!, anchor({ asOf: US2, date: "2026-09-28", quantity: 500, cost: 50_000, price: 80 })], { currency: "USD", arrivals: new Map([[US2, 20_000]]) });
+    expect(h.fills.get(half[1]!.key)!.realized).toMatchObject({ status: "ok", gross: -10_000 });
+  });
+
+  it("(권장) 첫 기록이 0주인데 그 뒤 주문 없이 주식이 들어오면(90일 안): 첫 기록 전 매도도 계산에서 뺌 — 권리락 −50% 매도 −500,000 을 'history-checked' 로 넣지 않음", () => {
+    const f = [kr("BUY", 10, 1_000_000, "2026-09-01"), kr("SELL", 10, 500_000, "2026-09-03")];
+    const r = replayPair(f, [krA("2026-09-10", 0, 0), krA("2026-09-11", 0, 0), krA("2026-09-21", 10, 0, 50_000)], { currency: "KRW" });
+    expect(r.fills.get(f[1]!.key)!.realized).toMatchObject({ ...dropped, change: "첫 기록(9월 10일) 0주 · 9월 21일 기록에서 주문 없이 10주가 들어왔어요(판 뒤 늦게 들어온 새 주식일 수 있어요)" });
+    expect(r.fills.get(f[0]!.key)!.afterBuy).toBeNull();
+    // 90일 넘게 뒤에 들어오면 보통 계산 그대로
+    const late = replayPair(f, [krA("2026-09-10", 0, 0), krA("2026-12-18", 0, 0), krA("2026-12-21", 10, 0, 50_000)], { currency: "KRW" });
+    expect(late.fills.get(f[1]!.key)!.realized).toMatchObject({ status: "ok", basis: "history-checked", gross: -500_000 });
+  });
+
+  it("(권장) 기록 뒤 모두 판 구간(끝 0주 — 매입금액을 맞춰 보지 못함) 다음 90일 안에 같은 종목이 주문 없이 들어오면 그 매도도 계산에서 뺌 (주식배당 3% 처럼 큰 주가 변화로 안 잡히는 권리락)", () => {
+    const f = [kr("SELL", 1000, 970_000, "2026-09-22")];
+    const anchors = [krA("2026-09-21", 1000, 1_000_000, 1000), krA("2026-09-22", 0, 0), krA("2026-09-23", 0, 0), krA("2026-10-14", 30, 0, 970)];
+    const r = replayPair(f, anchors, { currency: "KRW" });
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ ...dropped, change: "수량 1,000 → 0주 · 10월 14일 기록에서 주문 없이 30주가 들어왔어요(판 뒤 늦게 들어온 새 주식일 수 있어요)" });
+    expect(r.skips).toEqual([
+      { from: kst("2026-09-21"), to: kst("2026-09-22") },
+      { from: kst("2026-09-23"), to: kst("2026-10-14") },
+    ]);
+    // 들어오지 않으면 보통 계산 (−30,000)
+    expect(replayPair(f, anchors.slice(0, 3), { currency: "KRW" }).fills.get(f[0]!.key)!.realized).toMatchObject({ status: "ok", gross: -30_000 });
+  });
+
+  it("(권장) 같은 시각에 체결된 매수·매도는 저장 순서(매도 먼저 저장)로 정하지 않는다: 0주에서 사고판 단타는 보통 계산, 값이 순서에 따라 다르면 '순서 추정'", () => {
+    const sell = kr("SELL", 10, 1_100_000, "2026-09-28");
+    const buy = kr("BUY", 10, 1_000_000, "2026-09-28");
+    const r = replayPair([sell, buy], [krA("2026-09-25", 0, 0), krA("2026-09-28", 0, 0)], { currency: "KRW" });
+    expect(r.fills.get(sell.key)!.realized).toMatchObject({ status: "ok", gross: 100_000 });
+    expect(r.skips).toEqual([]);
+    expect(r.changes).toEqual([]);
+    // 가진 주식이 있으면 두 순서 모두 가능 → 매수 먼저 값 + '순서 추정' (토스 매입금액 1,100,000 과 맞음)
+    const s2 = kr("SELL", 10, 1_300_000, "2026-09-28");
+    const b2 = kr("BUY", 10, 1_200_000, "2026-09-28");
+    const r2 = replayPair([s2, b2], [krA("2026-09-25", 10, 1_000_000), krA("2026-09-28", 10, 1_100_000)], { currency: "KRW" });
+    expect(r2.fills.get(s2.key)!.realized).toMatchObject({ status: "order-uncertain", reason: REASONS.orderUncertain, gross: 200_000 });
+    expect(r2.skips).toEqual([]);
+  });
+
+  it("(권장) 큰 주가 변화 뒤 모두 팔고 0주에서 새로 사고판 몫은 보통 계산 — 90일 창은 0주가 된 구간까지만 (미국 −70%)", () => {
+    const U = (date: string, asOf: string, quantity: number, cost: number, price: number | null = null) => anchor({ asOf, date, quantity, cost, price });
+    const anchors = [
+      U("2026-09-23", "2026-09-24T05:05:00+09:00", 10, 1000, 100),
+      U("2026-09-24", "2026-09-25T05:05:00+09:00", 10, 1000, 30),
+      U("2026-09-25", "2026-09-26T05:05:00+09:00", 0, 0),
+      U("2026-09-28", "2026-09-29T05:05:00+09:00", 0, 0),
+      U("2026-09-29", "2026-09-30T05:05:00+09:00", 0, 0),
+    ];
+    const f = [
+      fill({ side: "SELL", quantity: 10, amount: 300, at: "2026-09-25T23:30:00+09:00" }),
+      fill({ side: "BUY", quantity: 5, amount: 750, at: "2026-09-28T22:40:00+09:00" }),
+      fill({ side: "SELL", quantity: 5, amount: 850, at: "2026-09-29T01:00:00+09:00" }),
+    ];
+    const r = replayPair(f, anchors, { currency: "USD" });
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ ...dropped, reason: REASONS.possibleAction, change: "9월 24일 기록: 주가 $100.00 → $30.00 (−70%) · 주식 수 10주 그대로" });
+    expect(r.fills.get(f[1]!.key)!.afterBuy).toEqual({ avgCost: 150, quantity: 5 });
+    expect(r.fills.get(f[2]!.key)!.realized).toMatchObject({ status: "ok", gross: 100 });
+    expect(r.skips).toEqual([{ from: anchors[0]!.asOf, to: anchors[2]!.asOf }]);
+  });
+});
+
 describe("비용 (수수료·세금) 과 원화", () => {
   it("토스 원본에 수수료·세금 칸이 있으면 몫 비율로 나눠 'toss' — DB 값은 고쳐 쓰지 않는다 (§9-13)", () => {
     expect(tossCosts({ execution: { commission: "1.20", tax: 0.05 } })).toEqual({ fee: 1.2, tax: 0.05 });

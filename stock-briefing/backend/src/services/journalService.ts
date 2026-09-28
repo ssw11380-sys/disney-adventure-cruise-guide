@@ -216,10 +216,9 @@ export class JournalService {
     );
   }
 
-  private async trades(code?: string): Promise<TradeFull[]> {
-    let q = this.deps.db.selectFrom("trade_executions").selectAll();
-    if (code) q = q.where("code", "=", code);
-    const rows = await q.orderBy("executed_at").orderBy("id").execute();
+  /** 모든 종목의 체결 (종목을 골라도 모두 — 같은 계좌에 주문 없이 들어온 다른 종목을 가리려고 원장이 다른 종목의 체결도 본다) */
+  private async trades(): Promise<TradeFull[]> {
+    const rows = await this.deps.db.selectFrom("trade_executions").selectAll().orderBy("executed_at").orderBy("id").execute();
     return rows.map((r) => {
       let raw: Record<string, unknown> | null = null;
       try {
@@ -261,9 +260,10 @@ export class JournalService {
 
   /**
    * 짝마다 원장: 체결이 있는 짝 + 스냅샷에만 나온 짝(주문 내역에 없는 수량 변화 추정 줄을 보이려고). code 를 주면 그 종목만.
-   * stdAt 을 주면 해외 양도세용 결제일 원화도
+   * stdAt 을 주면 해외 양도세용 결제일 원화도. trades 는 늘 모든 종목 (같은 계좌에 주문 없이 들어온 다른 종목을 보려고 — arrivals)
    */
   private pairs(trades: TradeFull[], snaps: SnapLite[], toss: Map<string, number>, stdAt?: (f: LedgerFill) => number | null, code?: string): Map<string, PairData> {
+    const arrived = arrivals(trades, snaps);
     const groups = new Map<string, { account: number; code: string; list: TradeFull[] }>();
     for (const t of trades) {
       if (code && t.code !== code) continue;
@@ -298,10 +298,12 @@ export class JournalService {
         });
       }
       const anchors = this.anchorsFor(account, code, market, snaps);
+      const arr = arrived.get(`${account}:${market}`);
       const res = replayPair(fills, anchors, {
         currency,
         ...(currency === "USD" ? { fxAt: (at: string) => toss.get(minuteKey(at)) ?? null } : {}),
         ...(stdAt && currency === "USD" ? { stdAt } : {}),
+        ...(arr ? { arrivals: arr } : {}),
       });
       out.set(key, { account, code, market, currency, trades: list, fills, res });
     }
@@ -312,7 +314,7 @@ export class JournalService {
   private anchorsFor(account: number, code: string, market: RecordMarket, snaps: SnapLite[]): LedgerAnchor[] {
     const out: LedgerAnchor[] = [];
     for (const s of snaps) {
-      if (s.status !== "ok" || s.market !== market || !s.accounts.includes(account) || s.doubtAccounts.includes(account)) continue;
+      if (!anchorSnap(s, account, market)) continue;
       const h = s.holdings.find((x) => x.account === account && x.code === code && x.quantity > 0);
       const cost = h ? (h.purchaseAmount ?? (h.avgPrice !== null ? h.avgPrice * h.quantity : null)) : 0;
       const ratio = h && h.marketValue && h.marketValueAfterCost !== null && h.marketValue > 0 ? Math.max(0, 1 - h.marketValueAfterCost / h.marketValue) : null;
@@ -335,7 +337,7 @@ export class JournalService {
   // ── 기록 ─────────────────────────────────────────────────────────────
 
   async journal(q: { from: string; to: string; code?: string }) {
-    const [snaps, trades, toss, notes, since] = await Promise.all([this.snapshots(), this.trades(q.code), this.tossRates(), this.notes(), this.recordSince()]);
+    const [snaps, trades, toss, notes, since] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.notes(), this.recordSince()]);
     const pairs = this.pairs(trades, snaps, toss, undefined, q.code);
     const accounts = new Set((await this.deps.db.selectFrom("trade_executions").select("account").groupBy("account").execute()).map((r) => Number(r.account)));
     const codes = [...new Set([...pairs.values()].map((p) => p.code))];
@@ -360,7 +362,7 @@ export class JournalService {
       }));
     // 종목 고르기 목록: 종목을 골랐어도 기간 안 체결이 있는 모든 종목 (고른 종목에서 다른 종목으로 바로 바꿀 수 있게)
     const stockCount = new Map<string, Set<string>>();
-    for (const t of q.code ? await this.trades() : trades) {
+    for (const t of trades) {
       if (!t.fills.some((f) => f.quantity > 0 && seoulDateOf(f.at) >= q.from && seoulDateOf(f.at) <= q.to)) continue;
       stockCount.set(t.code, (stockCount.get(t.code) ?? new Set()).add(`${t.account}:${t.orderId}`));
     }
@@ -519,7 +521,7 @@ export class JournalService {
 
   /** 종목 상세 '매매 기록' 칸 · 이 종목 머리 카드 */
   async stock(code: string): Promise<StockJournalHead> {
-    const [snaps, trades, toss, since] = await Promise.all([this.snapshots(), this.trades(code), this.tossRates(), this.recordSince()]);
+    const [snaps, trades, toss, since] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.recordSince()]);
     const pairs = this.pairs(trades, snaps, toss, undefined, code);
     const names = await this.names([code], snaps);
     return this.stockHead(code, pairs, names, snaps, since);
@@ -887,6 +889,52 @@ export class JournalService {
       readyDays: READY_DAYS,
     };
   }
+}
+
+/** 원장 기준점이 되는 스냅샷: 그 계좌가 목록에 있고 그 계좌를 의심하지 않은 그 시장 ok 스냅샷 */
+const anchorSnap = (s: SnapLite, account: number, market: RecordMarket) => s.status === "ok" && s.market === market && s.accounts.includes(account) && !s.doubtAccounts.includes(account);
+
+/**
+ * 주문 없이 새로 들어온 종목 (분사·합병의 흔적 — 원장 opts.arrivals): 같은 계좌·시장의 앞 기준점에 없던(0주) 종목이 뒤 기준점에 있고,
+ * 그 사이 기록된 체결로 설명되지 않는 수량이 있으면 그 몫의 토스 매입금액 (매입금액을 모르면 null).
+ * `${account}:${market}` → 뒤 기준점 asOf → 들어온 몫 매입금액 합 (그 시장 통화)
+ */
+function arrivals(trades: Array<Pick<TradeView, "account" | "code" | "side" | "fills">>, snaps: SnapLite[]): Map<string, Map<string, number | null>> {
+  const out = new Map<string, Map<string, number | null>>();
+  const byPair = new Map<string, Array<Pick<TradeView, "side" | "fills">>>();
+  for (const t of trades) {
+    const list = byPair.get(pairKey(t.account, t.code));
+    if (list) list.push(t);
+    else byPair.set(pairKey(t.account, t.code), [t]);
+  }
+  const accounts = [...new Set(snaps.flatMap((s) => s.accounts))];
+  for (const market of ["KR", "US"] as const) {
+    for (const account of accounts) {
+      const list = snaps.filter((s) => anchorSnap(s, account, market));
+      for (let i = 1; i < list.length; i++) {
+        const prev = list[i - 1]!;
+        const cur = list[i]!;
+        const from = Date.parse(prev.asOf);
+        const to = Date.parse(cur.asOf);
+        for (const h of cur.holdings) {
+          if (h.account !== account || !(h.quantity > 0) || prev.holdings.some((x) => x.account === account && x.code === h.code && x.quantity > 0)) continue;
+          let net = 0;
+          for (const t of byPair.get(pairKey(account, h.code)) ?? [])
+            for (const f of t.fills) if (f.quantity > 0 && Date.parse(f.at) > from && Date.parse(f.at) <= to) net += t.side === "BUY" ? f.quantity : -f.quantity;
+          const extra = round6(h.quantity - net);
+          if (!(extra > 1e-6)) continue;
+          const cost = h.purchaseAmount ?? (h.avgPrice !== null ? h.avgPrice * h.quantity : null);
+          const part = cost === null ? null : (cost * Math.min(extra, h.quantity)) / h.quantity;
+          const key = `${account}:${market}`;
+          const m = out.get(key) ?? new Map<string, number | null>();
+          const was = m.get(cur.asOf);
+          m.set(cur.asOf, was === null || part === null ? null : (was ?? 0) + part);
+          out.set(key, m);
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /** 표본 대조 전이면 원화 실현손익은 늘 '(추정)' */
