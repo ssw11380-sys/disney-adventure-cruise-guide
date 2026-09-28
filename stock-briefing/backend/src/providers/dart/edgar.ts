@@ -362,6 +362,14 @@ export class EdgarProvider implements FinancialsProvider {
   async frameRaw(tag: string, unit: string, period: string): Promise<Json> {
     return this.getJson<Json>(`https://data.sec.gov/api/xbrl/frames/us-gaap/${tag}/${unit}/${period}.json`, { timeoutMs: BULK_TIMEOUT_MS, notFound: { data: [] }, paced: true });
   }
+
+  /**
+   * 새 공시 알림 (3-38, 플래그 filingAlerts): submissions 원본 한 번 (캐시 없음 — 5분마다 새 공시를 보려고). 가치 지표 배치와 같은 요청 간격(gate)을
+   * 함께 써서 합쳐도 초당 10회를 넘지 않게. 줄 뽑기는 edgarFilings.parseRecentFilings
+   */
+  async submissionsJson(cik: string): Promise<unknown> {
+    return this.getJson<Json>(`https://data.sec.gov/submissions/CIK${cik}.json`, { paced: true });
+  }
 }
 
 function compactSubmissions(s: Json): Submissions {

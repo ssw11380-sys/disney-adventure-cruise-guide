@@ -32,6 +32,7 @@ import type { ProductFacts } from "../analysis/leveraged.js";
 import type { ScoreSources } from "../services/indicatorScoreService.js";
 import { defaultValueSources, type ValueSources } from "../services/valueScoreService.js";
 import type { HoldingEventSources } from "../services/holdingEvents.js";
+import type { FilingSource } from "../services/filingAlerts.js";
 import { NasdaqScreener } from "./market/nasdaqScreener.js";
 import { defaultKrValueSources, type KrValueSources } from "../services/krValueService.js";
 
@@ -82,6 +83,11 @@ export interface Providers {
   holdingEvents?: HoldingEventSources | null;
   /** 한국 간이 가치 출처 (네이버 재무 요약 + 업종 구성 종목, 3-44 3단계). 없으면 한국 가치 줄은 '지금 계산하지 않음' */
   krValueSources?: KrValueSources | null;
+  /**
+   * 새 공시 알림 출처 (3-38 — SEC EDGAR 티커→CIK · submissions, 로그인·키 없음). 가치 지표와 같은 EdgarProvider 인스턴스(요청 간격 공유).
+   * 없으면(테스트 기본) 공시 확인 작업을 두지 않는다 — 네트워크 없이
+   */
+  secFilings?: FilingSource | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   generator: TextGenerator;
   dart: DartProvider | null;
@@ -163,6 +169,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     financialsUs: edgar,
     // 가치 지표(3-44 2단계): 같은 SEC 인스턴스(요청 간격 공유) + Nasdaq 스크리너
     valueSources: defaultValueSources(edgar, new NasdaqScreener()),
+    // 새 공시 알림(3-38): 같은 SEC 인스턴스 (User-Agent·요청 간격 gate 공유 — 가치 지표 배치와 겹쳐도 초당 10회 아래)
+    secFilings: edgar,
     // 한국 간이 가치(3-44 3단계): 네이버 재무 요약(요청 사이 0.7초) + 업종 구성 종목(발견 탭과 같은 네이버 공개 JSON)
     krValueSources: defaultKrValueSources(new NaverFinanceClient(), new NaverDiscover()),
     // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번)

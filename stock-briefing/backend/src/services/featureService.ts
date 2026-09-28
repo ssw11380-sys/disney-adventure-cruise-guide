@@ -190,6 +190,16 @@ export const FEATURES = {
     description:
       "숫자 기준·토스 대조 배지 (3-32): 잔고 계좌 합계 옆 점과 짧은 글(토스와 0.1% 이내·차이 N%·수량 다름·대기), 누르면 '숫자 기준' 창(시세 기준·시각·비용 차감·환율·당일손익·토스 대조·최근 7일 장중 비율), 대조 기록 뒤 실시간 연결로 앱에 알림(reconcile). 잔고·자산 위젯 기준 시각 뒤 '· NXT·주간거래 포함'(자리가 남을 때만, /api/widget &ms=1 응답에 종목 기준 b), 브리핑 탭 계좌 카드·줄 'HH:MM 기준', 계좌 브리핑 상세 '시세 기준' 줄(새 브리핑에 quoteBasis 저장). 끄면 모두 예전 그대로",
   },
+  filingAlerts: {
+    default: true,
+    description:
+      "새 공시 알림 (3-38): 보유 미국 종목(ETF·ETN 제외)의 SEC EDGAR 새 공시(8-K·10-Q·10-K·6-K·20-F·40-F와 정정 — 공식 submissions API, 로그인·키 없음)를 서버가 5분마다(미국 동부 평일 06:00~22:59, 요청 사이 160ms) 확인해 표 sec_filings 에 저장(처음 보는 종목은 기준 잡기 — 알리지 않음, 접수 24시간 넘은 것도 알리지 않음, 90일 보관). 제목은 서식·8-K 항목 번호를 우리말로 옮긴 것('실적 발표(8-K 2.02)'). GET /api/filings/alerts, /api/widget &ms=1 응답에 새 알림 접수 번호(filingIds — 있을 때만), /health 에 filingAlerts. 앱은 백그라운드 확인(15분)·앱이 앞에 있을 때(5분)에 알림 1건(채널 '공시 알림', 조용한 시간이면 끝난 뒤, 종목별 알림에서 끈 종목·이 기기 '공시 알림' 끔은 알리지 않음), 설정 > 알림 '공시 알림' 줄, '일정·공시' 화면의 '최근 공시 (미국)'. 한국 공시(DART)는 키 뒤. 끄면 SEC 확인 호출 0, 경로 404, 위젯 응답·/health 가 예전과 같고 앱 알림·설정 줄·화면 칸 없음(받아 둔 표는 지우지 않음)",
+  },
+  holdingSchedule: {
+    default: true,
+    description:
+      "일정·공시 화면 (3-38): 계좌 브리핑 상세 '다가오는 일정' 카드(없으면 '오늘 일정' 카드) 맨 아래 '일정·공시 모두 보기' → /schedule 화면 — 30일 안 배당락일(다가오는 일정과 같은 출처·캐시, 열 때 받음 · 실적 발표일은 holdingEarnings 를 읽기만) + 최근 30일 미국 공시(filingAlerts 가 켜져 있을 때) + 한국 공시 안내(DART 키 뒤). GET /api/schedule. 끄면 줄 없음(카드가 지금과 같음), 경로 404, 화면은 '지금은 볼 수 없습니다' 한 줄",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

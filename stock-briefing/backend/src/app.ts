@@ -58,6 +58,9 @@ import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
 import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
+import { FilingWatchService, inEdgarHours } from "./services/filingAlerts.js";
+import { filingRoutes } from "./routes/filings.js";
+import { isKrCode } from "./lib/codes.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -288,6 +291,24 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }
   // 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents·holdingEarnings): 계좌 브리핑이 만들 때 부른다. 출처가 없으면(테스트 기본) 두지 않는다
   const holdingEvents = opts.providers.holdingEvents ? new HoldingEventsService({ sources: opts.providers.holdingEvents, now, log }) : null;
+  // 새 공시 알림 (3-38, 플래그 filingAlerts): 보유 미국 종목의 SEC 새 공시를 5분마다(미국 동부 평일 06:00~22:59 — SEC 접수 시간) 확인해 표에 넣는다.
+  // 표·확인 작업은 공용(SEC 공개 자료), 경로는 보유 종목으로 거른다. 출처가 없으면(테스트 기본) 두지 않는다 — 네트워크 없이
+  const heldStocks = async () => (await stockService.list()).filter((s) => (s.quantity ?? 0) > 0);
+  const filingHoldings = async () => {
+    const held = await heldStocks();
+    const us = held.filter((s) => !isKrCode(s.code)).map((s) => s.code);
+    // ETF·ETN 가리기에 종목 마스터 분류(ST·EF·EN)를 쓴다 (네트워크 없음)
+    const groups = us.length ? new Map((await opts.db.selectFrom("listed_stocks").select(["code", "group_code"]).where("code", "in", us).execute()).map((r) => [r.code, r.group_code])) : new Map<string, string | null>();
+    return held.map((s) => ({ code: s.code, name: s.name, groupCode: groups.get(s.code) ?? null }));
+  };
+  const filingWatch = opts.providers.secFilings ? new FilingWatchService({ db: opts.db, features, source: opts.providers.secFilings, holdings: filingHoldings, now, log }) : null;
+  if (filingWatch && opts.enableScheduler !== false) {
+    const sweep = () => void filingWatch.sweep().catch((e: unknown) => log.warn({ err: e instanceof Error ? e.message : String(e) }, "SEC 공시 확인 실패"));
+    const task = cron.schedule("*/5 6-22 * * 1-5", sweep, { timezone: "America/New_York", name: "sec-filings" });
+    // 서버를 켤 때 SEC 접수 시간 안이면 바로 한 번 (자동 배포 뒤 5분을 기다리지 않게)
+    if (inEdgarHours(now())) sweep();
+    app.addHook("onClose", async () => void task.stop());
+  }
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
@@ -343,6 +364,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("indicatorScores", indicatorScores);
   app.decorate("valueScores", valueScores);
   app.decorate("krValue", krValue);
+  app.decorate("filingWatch", filingWatch);
 
   // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
   app.addHook("onRequest", async (req) => {
@@ -446,6 +468,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
     // 다가오는 일정(브리핑 3차 5): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 받지 못한 것·두 출처가 다른 것 경고
     ...(holdingEvents && (await features.enabled("holdingEvents")) ? { holdingEvents: holdingEvents.health() } : {}),
+    // 새 공시 알림(3-38): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 확인 종목 수 · 경고(stale·partial·shape·blocked)
+    ...(filingWatch && (await features.enabled("filingAlerts")) ? { filingAlerts: await filingWatch.health().catch(() => null) } : {}),
     disclaimer: DISCLAIMER,
   });
 
@@ -548,7 +572,17 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
   // schedule: 브리핑 위젯 안내에 설정한 브리핑 시간을 쓴다 (BH-68 — 예전에는 늘 '평일 08:30·16:00')
   // 브리핑 위젯 첫 줄(시장 전체 요약): 새 앱이 &ms=1 로 물을 때만, 플래그가 켜져 있을 때만 가장 최근 요약을 읽는다
-  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}) });
+  await app.register(widgetRoutes, { prefix: "/api/widget", stocks: stockService, briefings: briefingService, calendar: opts.providers.calendar, features, indices: marketIndices, accounts: accountBriefings, schedule: () => settingsStore.get(), ...(summaries ? { summaries } : {}), filings: filingWatch });
+  // 새 공시 알림·일정 화면 (3-38): GET /api/filings/alerts (filingAlerts) · GET /api/schedule (holdingSchedule) — 둘 다 개인 경로(보유 종목 기준)
+  await app.register(filingRoutes, {
+    prefix: "/api",
+    features,
+    filings: filingWatch,
+    events: holdingEvents,
+    holdings: async () => (await heldStocks()).map((s) => ({ code: s.code, name: s.name })),
+    dartKey: Boolean(opts.config.DART_API_KEY),
+    now,
+  });
   await app.register(featureAdminRoutes, { prefix: "/api/admin/features", features });
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
@@ -584,6 +618,8 @@ declare module "fastify" {
     valueScores: ValueScoreService;
     /** 한국 간이 가치 (3-44 3단계) */
     krValue: KrValueService;
+    /** 새 공시 알림 (3-38): SEC 확인 작업 (출처가 없는 테스트 기본은 null) */
+    filingWatch: FilingWatchService | null;
   }
 }
 

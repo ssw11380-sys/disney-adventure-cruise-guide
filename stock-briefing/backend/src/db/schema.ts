@@ -238,7 +238,37 @@ export interface ValueReferenceTable {
   created_at: string;
 }
 
+/**
+ * SEC 공시 확인 (3-38, 플래그 filingAlerts): CIK 마다 1줄 — 공용 (SEC 공개 자료, 여러 사람이 같은 CIK 를 가져도 한 번만 받는다).
+ * first_ok_at 이 없는 CIK 의 첫 확인은 기준 잡기(그때 받은 줄은 알리지 않음). 백업에 넣지 않는다 (다시 받을 수 있음)
+ */
+export interface SecFilingWatchTable {
+  cik: string; // 10자리
+  first_ok_at: string | null; // ISO UTC — 처음으로 받은 때 (기준을 잡은 때)
+  last_try_at: string | null;
+  last_ok_at: string | null;
+  last_error: string | null; // 마지막 시도가 실패했으면 이유 (성공하면 null)
+}
+
+/** 받은 SEC 공시 (알림 서식 8-K·10-Q·10-K·6-K·20-F·40-F 와 정정만, 제출일 90일 보관) — 공용. (cik, accession) 마다 1줄 */
+export interface SecFilingTable {
+  id: Generated<number>;
+  cik: string;
+  accession: string; // "0001193125-26-323632"
+  form: string; // "8-K" · "8-K/A" …
+  items: string; // "2.02,9.01" · ""
+  accepted_at: string | null; // SEC 접수 시각 ISO UTC "2026-07-29T20:04:53Z"
+  filing_date: string; // YYYY-MM-DD (SEC 제출일)
+  report_date: string | null;
+  primary_doc: string;
+  description: string;
+  baseline: number; // 1 = 알리지 않음 (기준 잡기 · 접수 24시간 넘음)
+  first_seen_at: string; // 서버가 처음 본 때 ISO UTC
+}
+
 export interface Database {
+  sec_filing_watch: SecFilingWatchTable;
+  sec_filings: SecFilingTable;
   value_fundamentals: ValueFundamentalsTable;
   value_references: ValueReferenceTable;
   listed_stocks: ListedStockTable;

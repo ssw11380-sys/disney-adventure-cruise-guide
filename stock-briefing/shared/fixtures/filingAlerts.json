@@ -1,0 +1,365 @@
+{
+  "about": "3-38 새 공시 알림 공용 픽스처. items·alerts 는 서버(backend/test/filingsRoutes.test.ts)가 녹화한 SEC 응답(backend/test/fixtures/secFilings)과 고정 시계(clock: 기준 잡기 → MSFT 실적 8-K·10-K 새 줄 → 한국 7/30(목) 07:03)로 만든 값과 같은지 보고, 앱(app/test/filingAlerts.test.ts·scheduleScreen.test.tsx)은 줄 글·화면 읽기(app.lines)를 본다. texts 는 앱 화면 문구 — 서버 문구 검사(BRIEFING_BANNED)와 앱 상수가 같은지 둘 다 본다",
+  "clock": {
+    "baseline": "2026-07-29T19:00:00Z",
+    "sweep": "2026-07-29T20:10:00Z",
+    "now": "2026-07-29T22:03:00Z"
+  },
+  "holdings": [
+    {
+      "code": "MSFT",
+      "name": "마이크로소프트"
+    },
+    {
+      "code": "NVDA",
+      "name": "엔비디아"
+    },
+    {
+      "code": "TSM",
+      "name": "TSMC"
+    },
+    {
+      "code": "TSLA",
+      "name": "테슬라"
+    },
+    {
+      "code": "AAPL",
+      "name": "애플"
+    }
+  ],
+  "items": [
+    {
+      "accession": "0001193125-26-323660",
+      "code": "MSFT",
+      "name": "마이크로소프트",
+      "form": "10-K",
+      "items": [],
+      "title": "연간 보고서(10-K)",
+      "acceptedAt": "2026-07-29T20:08:01Z",
+      "kst": "2026-07-30T05:08",
+      "et": "2026-07-29T16:08",
+      "filingDate": "2026-07-29",
+      "firstSeenAt": "2026-07-29T20:10:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm",
+      "detail": [],
+      "note": "한 해 재무제표와 사업 내용을 담은 정식 보고서",
+      "isNew": true
+    },
+    {
+      "accession": "0001193125-26-323632",
+      "code": "MSFT",
+      "name": "마이크로소프트",
+      "form": "8-K",
+      "items": [
+        "2.02",
+        "9.01"
+      ],
+      "title": "실적 발표(8-K 2.02)",
+      "acceptedAt": "2026-07-29T20:04:53Z",
+      "kst": "2026-07-30T05:04",
+      "et": "2026-07-29T16:04",
+      "filingDate": "2026-07-29",
+      "firstSeenAt": "2026-07-29T20:10:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-20260729.htm",
+      "detail": [
+        "2.02 실적 발표 — 분기·연간 실적 같은 영업 결과를 알림",
+        "9.01 재무제표·첨부 서류 — 다른 항목에 딸린 첨부 서류"
+      ],
+      "note": null,
+      "isNew": true
+    },
+    {
+      "accession": "0001046179-26-000459",
+      "code": "TSM",
+      "name": "TSMC",
+      "form": "6-K",
+      "items": [],
+      "title": "외국 기업 수시 보고(6-K)",
+      "acceptedAt": "2026-07-24T10:33:23Z",
+      "kst": "2026-07-24T19:33",
+      "et": "2026-07-24T06:33",
+      "filingDate": "2026-07-24",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1046179/000104617926000459/tsm-monthend6kx20260724.htm",
+      "detail": [],
+      "note": "외국 기업이 본국에서 알린 내용을 SEC에도 올린 것입니다. 무슨 내용인지는 원문을 봐야 알 수 있습니다.",
+      "isNew": false
+    },
+    {
+      "accession": "0001628280-26-049270",
+      "code": "TSLA",
+      "name": "테슬라",
+      "form": "10-Q",
+      "items": [],
+      "title": "분기 보고서(10-Q)",
+      "acceptedAt": "2026-07-23T01:02:31Z",
+      "kst": "2026-07-23T10:02",
+      "et": "2026-07-22T21:02",
+      "filingDate": "2026-07-23",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1318605/000162828026049270/tsla-20260630.htm",
+      "detail": [],
+      "note": "분기 재무제표와 사업 내용을 담은 정식 보고서",
+      "isNew": false
+    },
+    {
+      "accession": "0001628280-26-049213",
+      "code": "TSLA",
+      "name": "테슬라",
+      "form": "8-K",
+      "items": [
+        "2.02",
+        "9.01"
+      ],
+      "title": "실적 발표(8-K 2.02)",
+      "acceptedAt": "2026-07-22T20:35:52Z",
+      "kst": "2026-07-23T05:35",
+      "et": "2026-07-22T16:35",
+      "filingDate": "2026-07-22",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1318605/000162828026049213/tsla-20260722.htm",
+      "detail": [
+        "2.02 실적 발표 — 분기·연간 실적 같은 영업 결과를 알림",
+        "9.01 재무제표·첨부 서류 — 다른 항목에 딸린 첨부 서류"
+      ],
+      "note": null,
+      "isNew": false
+    },
+    {
+      "accession": "0001046179-26-000451",
+      "code": "TSM",
+      "name": "TSMC",
+      "form": "6-K",
+      "items": [],
+      "title": "외국 기업 수시 보고(6-K)",
+      "acceptedAt": "2026-07-16T11:45:43Z",
+      "kst": "2026-07-16T20:45",
+      "et": "2026-07-16T07:45",
+      "filingDate": "2026-07-16",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1046179/000104617926000451/tsm-20260716x6k.htm",
+      "detail": [],
+      "note": "외국 기업이 본국에서 알린 내용을 SEC에도 올린 것입니다. 무슨 내용인지는 원문을 봐야 알 수 있습니다.",
+      "isNew": false
+    },
+    {
+      "accession": "0001046179-26-000447",
+      "code": "TSM",
+      "name": "TSMC",
+      "form": "6-K",
+      "items": [],
+      "title": "외국 기업 수시 보고(6-K)",
+      "acceptedAt": "2026-07-13T11:01:35Z",
+      "kst": "2026-07-13T20:01",
+      "et": "2026-07-13T07:01",
+      "filingDate": "2026-07-13",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1046179/000104617926000447/tsm-revenue20260713.htm",
+      "detail": [],
+      "note": "외국 기업이 본국에서 알린 내용을 SEC에도 올린 것입니다. 무슨 내용인지는 원문을 봐야 알 수 있습니다.",
+      "isNew": false
+    },
+    {
+      "accession": "0001045810-26-000060",
+      "code": "NVDA",
+      "name": "엔비디아",
+      "form": "8-K",
+      "items": [
+        "5.02"
+      ],
+      "title": "임원·이사 변경(8-K 5.02)",
+      "acceptedAt": "2026-07-02T13:23:16Z",
+      "kst": "2026-07-02T22:23",
+      "et": "2026-07-02T09:23",
+      "filingDate": "2026-07-02",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000060/nvda-20260628.htm",
+      "detail": [
+        "5.02 임원·이사 변경 — 임원·이사의 선임·퇴임이나 보수 계약"
+      ],
+      "note": null,
+      "isNew": false
+    },
+    {
+      "accession": "0001628280-26-046717",
+      "code": "TSLA",
+      "name": "테슬라",
+      "form": "8-K",
+      "items": [
+        "2.02",
+        "9.01"
+      ],
+      "title": "실적 발표(8-K 2.02)",
+      "acceptedAt": "2026-07-02T13:01:26Z",
+      "kst": "2026-07-02T22:01",
+      "et": "2026-07-02T09:01",
+      "filingDate": "2026-07-02",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1318605/000162828026046717/tsla-20260702.htm",
+      "detail": [
+        "2.02 실적 발표 — 분기·연간 실적 같은 영업 결과를 알림",
+        "9.01 재무제표·첨부 서류 — 다른 항목에 딸린 첨부 서류"
+      ],
+      "note": null,
+      "isNew": false
+    },
+    {
+      "accession": "0001046179-26-000381",
+      "code": "TSM",
+      "name": "TSMC",
+      "form": "6-K",
+      "items": [],
+      "title": "외국 기업 수시 보고(6-K)",
+      "acceptedAt": "2026-07-02T11:10:57Z",
+      "kst": "2026-07-02T20:10",
+      "et": "2026-07-02T07:10",
+      "filingDate": "2026-07-02",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1046179/000104617926000381/a20260702changeofaztreasur.htm",
+      "detail": [],
+      "note": "외국 기업이 본국에서 알린 내용을 SEC에도 올린 것입니다. 무슨 내용인지는 원문을 봐야 알 수 있습니다.",
+      "isNew": false
+    },
+    {
+      "accession": "0001045810-26-000056",
+      "code": "NVDA",
+      "name": "엔비디아",
+      "form": "8-K",
+      "items": [
+        "5.07"
+      ],
+      "title": "주주총회 투표 결과(8-K 5.07)",
+      "acceptedAt": "2026-06-30T20:27:26Z",
+      "kst": "2026-07-01T05:27",
+      "et": "2026-06-30T16:27",
+      "filingDate": "2026-06-30",
+      "firstSeenAt": "2026-07-29T19:00:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000056/nvda-20260624.htm",
+      "detail": [
+        "5.07 주주총회 투표 결과 — 주주총회에서 투표한 결과를 알림"
+      ],
+      "note": null,
+      "isNew": false
+    }
+  ],
+  "total": 11,
+  "alerts": [
+    {
+      "accession": "0001193125-26-323660",
+      "code": "MSFT",
+      "name": "마이크로소프트",
+      "form": "10-K",
+      "items": [],
+      "title": "연간 보고서(10-K)",
+      "acceptedAt": "2026-07-29T20:08:01Z",
+      "kst": "2026-07-30T05:08",
+      "et": "2026-07-29T16:08",
+      "filingDate": "2026-07-29",
+      "firstSeenAt": "2026-07-29T20:10:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm"
+    },
+    {
+      "accession": "0001193125-26-323632",
+      "code": "MSFT",
+      "name": "마이크로소프트",
+      "form": "8-K",
+      "items": [
+        "2.02",
+        "9.01"
+      ],
+      "title": "실적 발표(8-K 2.02)",
+      "acceptedAt": "2026-07-29T20:04:53Z",
+      "kst": "2026-07-30T05:04",
+      "et": "2026-07-29T16:04",
+      "filingDate": "2026-07-29",
+      "firstSeenAt": "2026-07-29T20:10:00Z",
+      "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323632/msft-20260729.htm"
+    }
+  ],
+  "app": {
+    "lines": [
+      {
+        "accession": "0001193125-26-323632",
+        "when": "7/30(목) 05:04",
+        "head": "7/30(목) 05:04 · 마이크로소프트",
+        "speech": "7월 30일 목요일 오전 5시 4분, 마이크로소프트, 실적 발표, 8-K 2.02, 새 공시",
+        "time": "SEC에 올라온 시각: 한국 7/30(목) 05:04 · 미국 동부 7/29(수) 16:04",
+        "timeSpeech": "SEC에 올라온 시각, 한국 7월 30일 목요일 오전 5시 4분, 미국 동부 7월 29일 수요일 오후 4시 4분"
+      },
+      {
+        "accession": "0001193125-26-323660",
+        "when": "7/30(목) 05:08",
+        "head": "7/30(목) 05:08 · 마이크로소프트",
+        "speech": "7월 30일 목요일 오전 5시 8분, 마이크로소프트, 연간 보고서, 10-K, 새 공시",
+        "time": "SEC에 올라온 시각: 한국 7/30(목) 05:08 · 미국 동부 7/29(수) 16:08",
+        "timeSpeech": "SEC에 올라온 시각, 한국 7월 30일 목요일 오전 5시 8분, 미국 동부 7월 29일 수요일 오후 4시 8분"
+      },
+      {
+        "accession": "0001046179-26-000459",
+        "when": "7/24(금) 19:33",
+        "head": "7/24(금) 19:33 · TSMC",
+        "speech": "7월 24일 금요일 오후 7시 33분, TSMC, 외국 기업 수시 보고, 6-K",
+        "time": "SEC에 올라온 시각: 한국 7/24(금) 19:33 · 미국 동부 7/24(금) 06:33",
+        "timeSpeech": "SEC에 올라온 시각, 한국 7월 24일 금요일 오후 7시 33분, 미국 동부 7월 24일 금요일 오전 6시 33분"
+      },
+      {
+        "accession": "0001045810-26-000056",
+        "when": "7/1(수) 05:27",
+        "head": "7/1(수) 05:27 · 엔비디아",
+        "speech": "7월 1일 수요일 오전 5시 27분, 엔비디아, 주주총회 투표 결과, 8-K 5.07",
+        "time": "SEC에 올라온 시각: 한국 7/1(수) 05:27 · 미국 동부 6/30(화) 16:27",
+        "timeSpeech": "SEC에 올라온 시각, 한국 7월 1일 수요일 오전 5시 27분, 미국 동부 6월 30일 화요일 오후 4시 27분"
+      }
+    ],
+    "notifications": {
+      "one": {
+        "title": "마이크로소프트 새 공시",
+        "body": "연간 보고서(10-K) · SEC에 7/30(목) 05:08 올라옴"
+      },
+      "two": {
+        "title": "보유 종목 새 공시 2건",
+        "body": "마이크로소프트 · 연간 보고서(10-K)\n마이크로소프트 · 실적 발표(8-K 2.02)"
+      }
+    }
+  },
+  "texts": {
+    "scheduleTitle": "일정·공시",
+    "scheduleLink": "일정·공시 모두 보기",
+    "scheduleLinkSpeech": "보유 종목 일정과 공시 모두 보기",
+    "scheduleOff": "지금은 일정·공시를 볼 수 없습니다",
+    "eventsLoading": "일정을 받는 중…",
+    "earningsAfterFiling": "미국 실적은 발표된 뒤 공시(8-K 2.02)로 보입니다.",
+    "filingsHead": "최근 공시 (미국)",
+    "filingsSub": "보유 미국 종목 · 최근 30일 · SEC",
+    "filingsNone": "최근 30일 안에 올라온 공시가 없습니다.",
+    "filingsNoUs": "미국 보유 종목이 없어 공시를 확인하지 않습니다.",
+    "filingsFailed": "공시 목록을 받지 못했습니다. 화면을 다시 열면 다시 받습니다.",
+    "titleNote": "공시 제목은 SEC 서식과 항목 번호를 우리말로 옮긴 것이며, 내용 요약이 아닙니다.",
+    "notCovered": "공시를 확인하지 않는 종목: QQQ, SOXL (ETF·ETN) · ABCD (SEC 목록에 없음)",
+    "stale": "SEC 공시 확인이 9/29 07:55 이후 되지 않았습니다. 서버가 다시 확인하면 채워집니다.",
+    "staleNever": "SEC 공시 확인이 아직 되지 않았습니다. 서버가 다시 확인하면 채워집니다.",
+    "failed": "공시를 받지 못한 종목: 테슬라 (다음 확인 때 다시 받습니다)",
+    "pending": "아직 공시를 확인하지 않은 종목: 테슬라 (서버가 확인하는 중입니다)",
+    "basis": "9/29 08:40 기준 · 출처 SEC EDGAR",
+    "newChip": "새 공시",
+    "expandHint": "누르면 자세히",
+    "itemsHead": "들어 있는 항목",
+    "openOriginal": "SEC 원문 보기 (영어)",
+    "openOriginalSpeech": "SEC 원문 보기, 영어, 브라우저로 열림",
+    "openFailed": "원문을 열지 못했습니다.",
+    "krHead": "한국 공시",
+    "krNoKey": "한국 공시 알림은 DART 키가 있어야 받을 수 있습니다.",
+    "krNotYet": "한국 공시 알림은 다음 단계에서 넣습니다.",
+    "settingTitle": "공시 알림",
+    "settingAbout": "보유 미국 종목에 새 SEC 공시(실적 발표·분기 보고서 등)가 올라오면 알립니다.",
+    "settingQuiet": "조용한 시간(22:00~07:00)에 올라온 공시는 조용한 시간이 끝난 뒤 한 번에 알립니다.",
+    "settingMuted": "종목별 알림에서 끈 종목은 공시 알림도 오지 않습니다.",
+    "settingDeviceOff": "위 브리핑 알림을 켜야 이 기기에 알림이 옵니다.",
+    "settingLast": "마지막 공시 알림 7/30(목) 07:03 · SEC에 올라온 뒤 1시간 59분",
+    "notifyOne": "마이크로소프트 새 공시",
+    "notifyMany": "보유 종목 새 공시 5건",
+    "notifyMore": "외 2건",
+    "channelName": "공시 알림",
+    "channelAbout": "보유 미국 종목의 새 SEC 공시"
+  }
+}

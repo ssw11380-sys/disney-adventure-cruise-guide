@@ -217,6 +217,11 @@ export interface WidgetPayload {
   brief?: WidgetBrief;
   /** 브리핑 위젯 첫 줄 — 가장 최근 시장 요약의 숫자 (새 앱 &ms=1 만, 플래그 marketSummary 가 켜져 있고 성공한 요약이 있을 때만) */
   ms?: WidgetSummary;
+  /**
+   * 새 공시 알림 (3-38, 플래그 filingAlerts): 알림 대상 새 SEC 공시의 접수 번호 (최근 3일, 최신 10개). 앱 백그라운드 확인이 모르는 번호가 있을 때만 목록을 받게.
+   * 지금 앱(&ms=1)이 물었고 켜져 있고 있을 때만 — 없거나 끄면 칸이 없어 응답·ETag 가 바이트까지 예전과 같다
+   */
+  filingIds?: string[];
 }
 
 /** 지수 띠 목록(stale 을 아는 앱용)에서 위젯 줄(또는 판)에 넣을 것만, 정해진 순서로. 값은 그대로 (앱 지수 띠와 같은 숫자가 되게) */
@@ -400,6 +405,8 @@ export function buildWidgetPayload(
     summary?: WidgetSummary | null | undefined;
     /** 지금 앱(&ms=1)이고 numberBasis 가 켜져 있음: 종목에 시세 기준 원문(b)을 넣는다 (3-32). 튜플 q 의 모양은 그대로 */
     basis?: boolean | undefined;
+    /** 새 공시 알림 접수 번호 (3-38 — 지금 앱 &ms=1 이고 filingAlerts 가 켜져 있을 때 부르는 쪽이 넘긴다) */
+    filingIds?: readonly string[] | null | undefined;
   } = {},
 ): WidgetPayload {
   const byCode = new Map(stocks.map((s) => [s.code, s]));
@@ -439,5 +446,6 @@ export function buildWidgetPayload(
   if (extra.accountIds?.length) payload.accountIds = [...extra.accountIds];
   if (extra.brief) payload.brief = extra.brief;
   if (extra.summary) payload.ms = extra.summary;
+  if (extra.filingIds?.length) payload.filingIds = [...extra.filingIds];
   return payload;
 }
