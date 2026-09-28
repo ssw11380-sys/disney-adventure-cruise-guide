@@ -18,7 +18,7 @@ import { dailyOf, fakeValueSources, monthlyOf, referenceData } from "./fixtures/
 import type { ValueSources } from "../src/services/valueScoreService.js";
 import type { KrValueSources } from "../src/services/krValueService.js";
 import { fakeKrSources, krReference } from "./fixtures/krValue/load.js";
-import { fakeProviders } from "./helpers.js";
+import { fakeProviders, valueStage1 } from "./helpers.js";
 
 /**
  * 지표 점수 1단계 (3-44, 플래그 indicatorScores): GET /api/scores/:code · 장 마감 뒤 미리 계산·기록 · 레버리지 처리 · 문구.
@@ -734,6 +734,16 @@ describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서
     await app!.valueScores.idle();
     clock = new Date(clock.getTime() + 61_000);
     await take("ZZNOF");
+    // 가치 점수 개선 1단계 글 플래그 13개를 모두 끈 서버 (지금 운영 서버와 같은 글 — 앱이 예전 서버 응답도 그리는지 시험, 점수는 위와 같아야 함)
+    await app!.close();
+    const v1 = fakeValueSources({ alias: { ZZGAP: "RGTI" } });
+    await start(fixtureSources().src, undefined, true, v1.src, fakeKrSources().src);
+    await app!.inject({ method: "PUT", url: "/api/admin/features", payload: valueStage1(false) });
+    await app!.valueScores.saveReference(referenceData());
+    await app!.krValue.saveReference(krReference());
+    for (const c of ["NVDA", "JPM", "ZZGAP"]) await app!.valueScores.refreshFacts(c);
+    await app!.krValue.refreshFacts("105560");
+    for (const c of ["NVDA", "JPM", "ZZGAP", "105560"]) await take(c, `${c}_stage1Off`);
     // 가치 플래그를 끈 서버 (1단계와 같은 가치 줄)
     await app!.close();
     await start(fixtureSources().src, undefined, true, fakeValueSources().src);

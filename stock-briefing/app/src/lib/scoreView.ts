@@ -98,13 +98,30 @@ export const showComposite = (s: IndicatorScores): boolean => s.composite.status
 
 /**
  * 종합 줄 (늘 둔다 — 설계 5.4 '없으면 없다고', 목업 1·2): 두 점수가 있으면 평균 숫자 + '두 점수의 평균',
- * 없으면 서버 글 '없음 · 가치 지표 점수가 없어 합치지 않습니다'를 상태('없음')와 이유로 나눈다
+ * 없으면 서버 글 '없음 · 가치 지표 점수가 없어 합치지 않습니다'를 상태('없음')와 이유로 나눈다.
+ * formulaOn(가치 점수 개선 1단계 [4], 플래그 compositeFormula — 앱 fallback 꺼짐)이고 서버가 식을 주면 formula '= (51 + 80) ÷ 2' 도 (끄면 예전 모양 그대로)
  */
-export function compositeLine(s: IndicatorScores): { score: number | null; label: string; reason: string | null; gapText: string | null } {
-  if (showComposite(s)) return { score: s.composite.score, label: String(s.composite.score), reason: SCORE_LABELS.compositeNote, gapText: s.composite.gapNote ? (s.composite.gapText ?? null) : null };
+export function compositeLine(s: IndicatorScores, formulaOn = false): { score: number | null; label: string; reason: string | null; gapText: string | null; formula?: string } {
+  if (showComposite(s)) {
+    const base = { score: s.composite.score, label: String(s.composite.score), reason: SCORE_LABELS.compositeNote, gapText: s.composite.gapNote ? (s.composite.gapText ?? null) : null };
+    return formulaOn && s.composite.formula ? { ...base, formula: s.composite.formula } : base;
+  }
   const [head, ...rest] = s.composite.text.split(" · ");
   return { score: null, label: head || "없음", reason: rest.length ? rest.join(" · ") : null, gapText: null };
 }
+
+/** 식 화면 읽기: '= (51 + 80) ÷ 2' → '51과 80을 더해 2로 나눈 값' (기호를 '플러스·나누기'로 읽지 않게) */
+export function formulaSpeech(formula: string): string {
+  const m = /\((\d+)\s*\+\s*(\d+)\)\s*÷\s*2/.exec(formula);
+  if (!m) return formula.replace(/^=\s*/, "");
+  const a = m[1]!;
+  const b = m[2]!;
+  return `${a}${gwaWaNum(a)} ${b}${euRulNum(b)} 더해 2로 나눈 값`;
+}
+/** 점수(0~100) 읽기 끝소리로 조사: 영·일·삼·육·칠·팔·십·백은 받침 있음, 이·사·오·구는 없음 */
+const numHasBatchim = (n: string) => ["0", "1", "3", "6", "7", "8"].includes(n.at(-1)!);
+const gwaWaNum = (n: string) => (numHasBatchim(n) ? "과" : "와");
+const euRulNum = (n: string) => (numHasBatchim(n) ? "을" : "를");
 
 /**
  * 이유 글에서 앞에 붙은 상태 글('잠시 보류 — …')을 뗀다 — 상태 글은 줄 이름 옆에 따로 보이므로 (3단계 서버는 붙이지 않지만 예전 서버 응답도 그리게)
@@ -125,12 +142,16 @@ export function trendSpeech(t: TrendScoreBlock): string {
   return why ? `${SCORE_LABELS.trend}, ${t.label}, ${why}` : `${SCORE_LABELS.trend}, ${t.label}`;
 }
 
-/** 요약 카드 전체 화면 읽기 (설계 5.7-F) */
-export function summarySpeech(s: IndicatorScores): string {
+/** 요약 카드 전체 화면 읽기 (설계 5.7-F). formulaOn: 종합 식도 읽는다 ('종합 지표 66점, 두 점수의 평균, 51과 80을 더해 2로 나눈 값') */
+export function summarySpeech(s: IndicatorScores, formulaOn = false): string {
   const parts = [SCORE_LABELS.title, valueSpeech(s.value), trendSpeech(s.trend)];
   if (s.trend.reference?.status === "ok") parts.push(s.trend.reference.text);
-  const c = compositeLine(s);
-  parts.push(c.score !== null ? `${SCORE_LABELS.composite} ${c.score}점, ${SCORE_LABELS.compositeNote}` : `${SCORE_LABELS.composite} ${c.label}${c.reason ? `, ${c.reason}` : ""}`);
+  const c = compositeLine(s, formulaOn);
+  parts.push(
+    c.score !== null
+      ? `${SCORE_LABELS.composite} ${c.score}점, ${SCORE_LABELS.compositeNote}${c.formula ? `, ${formulaSpeech(c.formula)}` : ""}`
+      : `${SCORE_LABELS.composite} ${c.label}${c.reason ? `, ${c.reason}` : ""}`,
+  );
   // 차이 안내는 문장 끝 마침표를 떼고 이어 읽는다 (마침표가 겹치지 않게)
   if (c.gapText) parts.push(c.gapText.replace(/[.\s]+$/, ""));
   return `${parts.join(". ")}.`;

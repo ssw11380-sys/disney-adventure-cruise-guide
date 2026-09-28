@@ -101,11 +101,11 @@ const NV = FX.cases["NVDA"]!.value;
 const nvdaStock = () => ({ ...holding("NVDA", quote("NVDA", 178.2, { currency: "USD", change: 3.05, changeRate: 1.74, fxRate: 1391.5 }), 40, 120, {}, "엔비디아"), market: "NASDAQ" as const, registered: true });
 const soxlStock = () => ({ ...holding("SOXL", quote("SOXL", 151.45, { currency: "USD", change: 2.2, changeRate: 1.47, fxRate: 1391.5 }), 30, 40, {}, "SOXL"), market: "AMEX" as const, registered: true });
 
-function open(stock: RegisteredWithQuote, scoresCase: string | null, extra: { flag?: boolean; valueFlag?: boolean; krFlag?: boolean; tab?: string; size?: [number, number]; fontScale?: number } = {}) {
+function open(stock: RegisteredWithQuote, scoresCase: string | null, extra: { flag?: boolean; valueFlag?: boolean; krFlag?: boolean; tab?: string; size?: [number, number]; fontScale?: number; flags?: Record<string, boolean> } = {}) {
   h.stock = stock;
   h.scores = scoresCase ? FX.cases[scoresCase] : undefined;
   // 서버 /api/features 가 주는 세 플래그 (가치 끔 픽스처는 valueScore, 한국 가치 끔 픽스처는 krValueScore 도 꺼진 서버). krFlag null = 예전 서버(플래그 없음 → 앱 fallback 꺼짐)
-  h.flags = { indicatorScores: extra.flag ?? true, valueScore: extra.valueFlag ?? scoresCase !== "NVDA_valueOff", foldLayout: true };
+  h.flags = { indicatorScores: extra.flag ?? true, valueScore: extra.valueFlag ?? scoresCase !== "NVDA_valueOff", foldLayout: true, ...extra.flags };
   const kr = extra.krFlag ?? scoresCase !== "005930_krOff";
   if (kr) h.flags["krValueScore"] = true;
   else h.flags["krValueScore"] = false;
@@ -181,12 +181,45 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     expect(r.text()).not.toContain("재무 SEC");
   });
 
-  it("두 점수 차이가 30 이상이면 종합 아래 안내 한 줄 (예시 종목)", () => {
-    const r = open({ ...nvdaStock(), code: "ZZGAP", name: "예시 종목" }, "ZZGAP");
+  it("두 점수 차이가 30 이상이면 종합 아래 안내 한 줄 (예시 종목 — 가치 점수 개선 1단계 플래그를 끈 서버·지금 운영 서버 응답)", () => {
+    const r = open({ ...nvdaStock(), code: "ZZGAP", name: "예시 종목" }, "ZZGAP_stage1Off");
     const text = r.text();
     expect(text).toContain("종합 지표50두 점수의 평균");
     expect(text).toContain("두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요.");
     expect(order(r, "종합 지표", "두 점수의 차이가", "가격 9월 25일").every((p, i, a) => i === 0 || p > a[i - 1]!)).toBe(true);
+  });
+
+  it("가치 점수 개선 1단계 [4] compositeGapHide 서버: 차이 30 넘으면 종합 숫자 대신 '없음 · 까닭' (앱 플래그와 상관없이 — 예전 앱도 같은 모양)", () => {
+    for (const flags of [{ compositeFormula: false }, { compositeFormula: true }] as Array<Record<string, boolean>>) {
+      const r = open({ ...nvdaStock(), code: "ZZGAP", name: "예시 종목" }, "ZZGAP", { flags });
+      const text = r.text();
+      expect(text).toContain("종합 지표없음두 점수 차이가 39점이라 평균을 보이지 않습니다");
+      expect(text).not.toContain("종합 지표50");
+      expect(text).not.toContain("함께 보세요");
+      expect(r.has("지표 점수. 가치 지표 30점, 0에서 100 중, 낮은 편. 추세 지표 69점, 다소 강함. 종합 지표 없음, 두 점수 차이가 39점이라 평균을 보이지 않습니다.")).toBe(true);
+    }
+  });
+
+  it("가치 점수 개선 1단계 [4] compositeFormula: 종합 숫자는 두 점수보다 작게(20 → 16)·식 '= (67 + 69) ÷ 2' 옆에, 화면 읽기 '67과 69를 더해 2로 나눈 값' — 끄면 지금 모양", () => {
+    const on = open(nvdaStock(), "NVDA", { flags: { compositeFormula: true } });
+    expect(on.text()).toContain("종합 지표68= (67 + 69) ÷ 2두 점수의 평균");
+    const nums = on.all().filter((n) => n.type === "Text" && ["67", "69", "68"].includes(textOf(n)));
+    const size = (s: string) => flat(nums.find((n) => textOf(n) === s)!).fontSize as number;
+    expect([size("67"), size("69"), size("68")]).toEqual([20, 20, 16]);
+    expect(on.has("지표 점수. 가치 지표 67점, 0에서 100 중, 높은 편. 추세 지표 69점, 다소 강함. 종합 지표 68점, 두 점수의 평균, 67과 69를 더해 2로 나눈 값.")).toBe(true);
+    // 앱 플래그가 꺼져 있으면(서버가 식을 주어도) 지금 모양 그대로
+    const off = open(nvdaStock(), "NVDA");
+    expect(off.text()).toContain("종합 지표68두 점수의 평균");
+    expect(off.text()).not.toContain("÷");
+    const offNums = off.all().filter((n) => n.type === "Text" && textOf(n) === "68");
+    expect(flat(offNums[0]!).fontSize).toBe(20);
+    // 예전 서버(식 없음) + 앱 플래그 켬: 식 없이 크기도 그대로
+    const old = open(nvdaStock(), "NVDA_stage1Off", { flags: { compositeFormula: true } });
+    expect(old.text()).toContain("종합 지표68두 점수의 평균");
+    expect(flat(old.all().filter((n) => n.type === "Text" && textOf(n) === "68")[0]!).fontSize).toBe(20);
+    // 큰 글씨(200%)에서도 식이 숫자·설명과 한 줄로 흐른다 (줄 바꿈 칸 — 잘림 없음은 웹 미리보기 캡처로 확인)
+    const big = open(nvdaStock(), "NVDA", { flags: { compositeFormula: true }, fontScale: 2 });
+    expect(big.text()).toContain("= (67 + 69) ÷ 2");
   });
 
   it("한국 가치를 끈 서버·SEC 재무 없음·받는 중: 가치 줄은 상태 글과 이유 (0점·50점으로 채우지 않음)", () => {
@@ -378,7 +411,8 @@ describe("가치분석 탭 — 가치 지표 상세 카드 (2단계)", () => {
     // 화면 읽기: 지표 줄 하나가 보이는 글을 모두 담은 한 문장 (리뷰 — 예전에는 위치 문장·가운데값·비교별 위치가 빠졌다)
     expect(r.has(metricSpeech(a1))).toBe(true);
     expect(metricSpeech(a1)).toContain(a1.text.replace(/\.$/, ""));
-    expect(metricSpeech(a1)).toContain(a1.peerMedian!);
+    // 가운데값 글의 ' · '는 화면 읽기에서 쉼표 ('흑자 회사 가운데값 58.6배, 비교한 업종 68곳 중 43%는 적자' — 가치 점수 개선 1단계 [3])
+    expect(metricSpeech(a1)).toContain(a1.peerMedian!.replace(/ · /g, ", "));
     // 같은 값이 많은 지표 안내 (무배당 0% 사이의 0.1%) — 주주환원 머리 문장은 배당이 아닌 주식 수 변화
     const e1 = v.families![4]!.metrics.find((m) => m.key === "E1")!;
     expect(t2).toContain(e1.note!);

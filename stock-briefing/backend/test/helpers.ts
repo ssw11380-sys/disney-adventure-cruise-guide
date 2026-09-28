@@ -169,3 +169,25 @@ export function fakeProviders(over: Partial<Providers> = {}): Providers {
     ...over,
   };
 }
+
+/**
+ * 가치 점수 개선 1단계 (2026-09-29) 플래그 13개 — 글·표시만 바꾸고 점수는 그대로. 예전 글을 확인하는 시험은 이 값으로 모두 끄고
+ * (끄면 지금과 같은지), 새 글은 test/valueImprove1.test.ts 가 켜서 본다
+ */
+export const VALUE_STAGE1_KEYS = [
+  "valueDirectionWords",
+  "valueFamilyTwoSided",
+  "valuePerPlain",
+  "valueMedianText",
+  "valuePriceNote2",
+  "valueOneOffAbs",
+  "compositeFormula",
+  "compositeGapHide",
+  "valueFinancialNote",
+  "valueInsurerNote",
+  "valueReasonDetail",
+  "valueWordingFacts",
+  "valueAiSafeWording",
+] as const;
+export type ValueStage1Key = (typeof VALUE_STAGE1_KEYS)[number];
+export const valueStage1 = (on: boolean): Record<ValueStage1Key, boolean> => Object.fromEntries(VALUE_STAGE1_KEYS.map((k) => [k, on])) as Record<ValueStage1Key, boolean>;

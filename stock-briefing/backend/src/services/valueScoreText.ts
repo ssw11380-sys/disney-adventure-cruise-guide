@@ -161,7 +161,7 @@ export const NOT_ADOPTED = "비교할 회사 자료가 모자라(70% 미만) 이
 export const BLEND_NOTE = "업황에 따라 이익이 크게 오르내리는 회사라, 최근 4분기 이익과 5년 평균 이익을 반씩 섞어 계산했습니다.";
 export const NO_DATA = "자료 없음";
 
-export const VALUE_FLAG_TEXT: Record<Exclude<ValueFlagKey, "peerFallback" | "carriedForward">, string> = {
+export const VALUE_FLAG_TEXT: Record<Exclude<ValueFlagKey, "peerFallback" | "carriedForward" | "thinEquity">, string> = {
   cyclicalPeak: "이익이 최근 몇 년 중 가장 높은 수준입니다. 업황에 따라 이익이 크게 오르내리는 회사는 이익이 많을 때 PER이 낮게 보이는 경향이 있습니다.",
   cyclicalTrough: "이익이 최근 몇 년 중 가장 낮은 수준입니다. 이런 때는 PER이 높게 보이거나 계산되지 않는 경향이 있습니다.",
   valueTrap: "주가 수준 점수는 높지만 이익이 줄고 있거나 재무 부담이 커서, 이 숫자만으로 판단하기 어렵습니다.",
@@ -256,14 +256,15 @@ export function iraRa(word: string): "이라" | "라" {
   return c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 !== 0 ? "이라" : "라";
 }
 
-/** 쓴 비교만 적는 머리 문장 */
-export function peerLine(p: { level: PeerLevel; nameKo: string | null; n: number; own: boolean; path: ValuePath }): string {
+/** 쓴 비교만 적는 머리 문장 (first: 첫 무리 글을 바꿔 쓸 때 — 금융사 '은행 · Nasdaq 분류, 228곳 — …', 가치 점수 개선 1단계 [5]) */
+export function peerLine(p: { level: PeerLevel; nameKo: string | null; n: number; own: boolean; path: ValuePath; first?: string }): string {
   const first =
-    p.level === "industry"
+    p.first ??
+    (p.level === "industry"
       ? `같은 업종(${p.nameKo ?? "업종"}, ${p.n}개 회사)`
       : p.level === "sector"
         ? `같은 부문(${p.nameKo ?? "부문"}, ${p.n}개 회사)`
-        : `미국 상장 ${p.path === "financial" ? "금융사" : "회사"} ${p.n}개`;
+        : `미국 상장 ${p.path === "financial" ? "금융사" : "회사"} ${p.n}개`);
   const parts = [first, p.level === "market" ? null : p.path === "financial" ? "금융사 전체" : "같은 시장", p.own ? "이 회사의 지난 5년" : null].filter(Boolean);
   const joined = parts.join("·");
   return `${joined}${gwaWa(joined)} 비교해, 재무 숫자가 어디쯤인지 정해진 규칙으로 계산한 위치입니다.`;
@@ -296,11 +297,15 @@ export function mixText(mix: Partial<Record<CompareKey, number>>, level: PeerLev
   for (const k of Object.keys(mix) as CompareKey[]) sums.set(name(k), (sums.get(name(k)) ?? 0) + mix[k]!);
   return [...sums].map(([n, w]) => `${n} ${Math.round(w)}`).join(" · ");
 }
-/** 위치 줄: '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' (금융사는 '금융사 전체 안', 한국은 '한국 시장 안') */
-export function positionText(pos: Partial<Record<CompareKey, number>>, level: PeerLevel | null, path: ValuePath = "general", market: NameMarket = "US"): string {
+/**
+ * 위치 줄: '업종 안 위치 72/100 · 시장 안 64/100 · 지난 5년 중 31/100' (금융사는 '금융사 전체 안', 한국은 '한국 시장 안').
+ * profit 이 있으면 업종·시장 위치 옆에 '(흑자 회사끼리 59)' (가치 점수 개선 1단계 [3] — 없으면 예전 글 그대로)
+ */
+export function positionText(pos: Partial<Record<CompareKey, number>>, level: PeerLevel | null, path: ValuePath = "general", market: NameMarket = "US", profit?: Partial<Record<CompareKey, number>>): string {
   const bits: string[] = [];
-  if (pos.industry !== undefined) bits.push(`${levelName(level, path, market)} 안 위치 ${Math.floor(pos.industry + 0.5)}/100`);
-  if (pos.market !== undefined && level !== "market") bits.push(`${marketName(path, market)} 안 ${Math.floor(pos.market + 0.5)}/100`);
+  const withProfit = (s: string, k: CompareKey) => (profit?.[k] !== undefined ? profitPosText(s, profit[k]!) : s);
+  if (pos.industry !== undefined) bits.push(withProfit(`${levelName(level, path, market)} 안 위치 ${Math.floor(pos.industry + 0.5)}/100`, "industry"));
+  if (pos.market !== undefined && level !== "market") bits.push(withProfit(`${marketName(path, market)} 안 ${Math.floor(pos.market + 0.5)}/100`, "market"));
   if (pos.own !== undefined) bits.push(`지난 5년 중 ${Math.floor(pos.own + 0.5)}/100`);
   return bits.join(" · ");
 }
@@ -338,10 +343,13 @@ export function showOf(k: MetricKey, x: number | null): number | null {
       return 100 * x;
   }
 }
-/** 가운데값 글 (±∞ 는 규칙 이름으로, 배수가 100배를 넘으면 '100배 넘음' — 적자 회사가 많은 업종은 이익 대비 배수의 가운데값이 아주 커진다) */
-export function medianText(k: MetricKey, x: number | null): string | null {
+/**
+ * 가운데값 글 (±∞ 는 규칙 이름으로, 배수가 100배를 넘으면 '100배 넘음' — 적자 회사가 많은 업종은 이익 대비 배수의 가운데값이 아주 커진다).
+ * cap = false 면 100배가 넘어도 숫자 그대로 (흑자 회사 가운데값 — 가치 점수 개선 1단계 [3])
+ */
+export function medianText(k: MetricKey, x: number | null, cap = true): string | null {
   if (x === null) return null;
-  if (METRIC_UNIT[k] === "배" && (k === "A1" || k === "A2" || k === "A3" || k === "A4") && x > 0 && 1 / x > 100) return "100배 넘음";
+  if (cap && METRIC_UNIT[k] === "배" && (k === "A1" || k === "A2" || k === "A3" || k === "A4") && x > 0 && 1 / x > 100) return "100배 넘음";
   if (x === Infinity) return k === "D2" ? "순현금" : k === "D3" ? "이자 없음" : "맨 위";
   if (x === -Infinity || ((k === "A1" || k === "A2") && x <= 0)) return k === "A1" ? "적자" : k === "A2" ? "영업적자" : "0점 규칙";
   return formatMetric(k, showOf(k, x));
@@ -368,8 +376,8 @@ export function valueVersionLine(ref: string | null): string {
  * 첫 줄은 미국 종목 계산이라고 밝히고, 한국 줄에 지표 수(일반 11 · 금융사 8)와 '지난 5년 비교 없음'을 적는다 — 한국 카드에서 '약 20개 ·
  * 지난 5년과 비교'로 읽히던 것 (검토 지적)
  */
-export function howLinesV2(kr = true): string[] {
-  return [
+export function howLinesV2(kr = true, opts: { gapHide?: boolean } = {}): string[] {
+  const lines = [
     "가치(미국 종목): 재무 숫자 약 20개를 같은 업종·시장 회사들(그리고 이 회사의 지난 5년)과 비교한 순위를, 5개 묶음 비중으로 평균했습니다. 여러 순위의 평균이라 아주 높거나 낮은 점수는 드뭅니다.",
     "가치 묶음 비중: 주가 수준 30 · 수익성과 이익의 질 25 · 재무 건전성 20 · 성장 15 · 주주환원 10 (금융사는 35 · 30 · 10 · 15 · 10).",
     "추세: 최근 약 1년 일봉으로 16개 항목을 고정된 기준에 따라 계산했습니다. 50은 '뚜렷한 추세 없음'이고, 최근 5거래일 점수의 평균을 보여 줍니다.",
@@ -386,6 +394,9 @@ export function howLinesV2(kr = true): string[] {
       : "증권사가 낸 앞날 추정 숫자와 의견은 쓰지 않았습니다. SEC 에 이미 제출된 재무와 이미 거래된 가격만 썼습니다.",
     "장 마감 뒤 하루 한 번 바뀝니다(한국 20:10, 미국은 한국 시간 아침). 장중에는 그대로입니다. 비교 기준(업종 분포)은 주 1회 바뀝니다.",
   ];
+  // 가치 점수 개선 1단계 [4] (compositeGapHide): 종합 줄에 '30점 넘게 벌어지면 숫자 대신 까닭' 한 문장
+  if (opts.gapHide) lines[4] = `${lines[4]} ${HOW_GAP_HIDE}`;
+  return lines;
 }
 
 /** Nasdaq 부문·업종 이름 → 한국어 (없으면 원래 이름) */
@@ -443,6 +454,160 @@ const INDUSTRY_KO: Record<string, string> = {
 };
 export const sectorKo = (s: string | null) => (s ? (SECTOR_KO[s] ?? s) : null);
 export const industryKo = (s: string | null) => (s ? (INDUSTRY_KO[s] ?? s) : null);
+
+// ── 가치 점수 개선 1단계 (2026-09-29, 검토 보고서 개선안 — 글만, 점수 그대로) ─────────────
+// 플래그마다 나눈 글 (services/valueTextFlags). 끄면 위의 예전 글을 그대로 쓴다
+
+/** [2] 방향 말 (valueDirectionWords): 묶음 설명을 '막대가 길수록'으로 — '높은 편'이 싸다·좋다로 번갈아 읽히던 것 (검토: 26/50종목) */
+export const DIRECTION_ABOUT: Record<ValueFamilyKey, string> = {
+  price: "막대가 길수록: 이익·순자산·매출에 비해 주가가 낮은 쪽 (비교 회사 기준)",
+  quality: "막대가 길수록: 이익을 내는 효율이 높은 쪽",
+  health: "막대가 길수록: 빚 부담이 작은 쪽",
+  growth: "막대가 길수록: 최근 3년 늘어난 폭이 큰 쪽",
+  payout: "막대가 길수록: 배당이 많거나 주식 수가 줄어든 쪽",
+};
+/** 금융사 경로의 주가 수준은 PER·PBR 뿐 (매출 대비 없음) */
+export const DIRECTION_ABOUT_FIN_PRICE = "막대가 길수록: 이익·순자산에 비해 주가가 낮은 쪽 (비교 회사 기준)";
+/** 한국 간이 (성장 2년 · 주주환원은 배당 하나) */
+export const LITE_DIRECTION_ABOUT: Partial<Record<ValueFamilyKey, string>> = {
+  growth: "막대가 길수록: 최근 2년 늘어난 폭이 큰 쪽",
+  payout: "막대가 길수록: 주가에 비해 배당이 많은 쪽",
+};
+/** [5] 금융사 재무 건전성 묶음 설명 (valueFinancialNote) — '빚 부담'이 아니라 자기자본 ÷ 총자산 하나 */
+export const FIN_HEALTH_ABOUT = "막대가 길수록: 총자산에 비해 자기자본 여유가 큰 쪽";
+
+/** 묶음 설명: 플래그·경로·등급에 맞춰 (둘 다 끄면 예전 familyAbout 그대로) */
+export function familyAboutOf(k: ValueFamilyKey, o: { grade?: "full" | "lite" | undefined; path?: ValuePath | undefined; direction?: boolean | undefined; financial?: boolean | undefined }): string {
+  if (o.financial && o.path === "financial" && k === "health") return FIN_HEALTH_ABOUT;
+  if (!o.direction) return familyAbout(k, o.grade);
+  if (k === "price" && o.path === "financial") return DIRECTION_ABOUT_FIN_PRICE;
+  return o.grade === "lite" ? (LITE_DIRECTION_ABOUT[k] ?? DIRECTION_ABOUT[k]) : DIRECTION_ABOUT[k];
+}
+
+/** [2] 비교 시점 안내 (방향 말 + 내부 이름 'SEC 공통 자료' 뺌) */
+export const PEER_TIMING_NOTE_V2 =
+  "비교 회사 값은 각 회사의 가장 최근 회계연도 값이고, 이 회사 값은 최근 4분기 값입니다. 이익이 빠르게 늘고 있는 회사는 이 차이로 주가 수준 막대가 조금 길게(주가가 실제보다 낮은 쪽으로) 계산되는 편입니다.";
+/** [2] 가치 함정 표시 (방향 말) */
+export const VALUE_TRAP_V2 = "주가 수준 막대는 길지만(이익·순자산·매출에 비해 주가가 낮은 쪽) 이익이 줄고 있거나 재무 부담이 커서, 이 숫자만으로 판단하기 어렵습니다.";
+
+/** [2] 두 쪽 문장 (valueFamilyTwoSided): 위치 67 이상 · 33 이하 지표를 가장 튀는 순으로 */
+export const TWO_SIDED_LONG = "막대를 길게 만든 지표";
+export const TWO_SIDED_SHORT = "막대를 짧게 만든 지표";
+/** 67 이상 · 33 이하 지표가 없을 때: 가운데쯤 지표를 그대로 적는다 */
+export const TWO_SIDED_MID = "가운데쯤(34~66)인 지표";
+export const twoSidedMidLine = (items: ReadonlyArray<readonly [string, number | string]>) => `${TWO_SIDED_MID}: ${items.map(([n, s]) => `${n} ${s}`).join(" · ")}`;
+export const twoSidedLine = (long: boolean, items: ReadonlyArray<readonly [string, number | string]>) => `${long ? TWO_SIDED_LONG : TWO_SIDED_SHORT}: ${items.map(([n, s]) => `${n} ${s}`).join(" · ")}`;
+/** 지표 짧은 이름 ('PER (이익 대비 주가)' → 'PER', '매출 성장 (3년 연평균)' → '매출 성장') */
+export const shortMetricName = (k: MetricKey, grade?: "full" | "lite") => metricName(k, grade).replace(/ \([^)]*\)$/, "");
+
+/** [3] PER 줄 (valuePerPlain): 첫 숫자는 남과 같은 최근 4분기 PER */
+export const PER_PLAIN_TAG = "(최근 4분기 · 흔히 쓰는 계산)";
+export const blendRankNote = (blended: string, why: string) => `순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 ${blended}를 썼습니다(${why}).`;
+/** 섞은 이익이 0 이하일 때 (인텔: 최근 4분기도 적자) */
+export const blendRankZeroNote = (why: string, plainLoss: boolean) =>
+  `순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 값을 썼습니다(${why}). 섞은 이익${plainLoss ? "도" : "이"} 0 이하라 0점입니다.`;
+/** 경기 민감 까닭 — 예전 말 (valueWordingFacts 꺼짐) */
+export const CYCLICAL_WHY_OLD = "업황에 따라 이익이 크게 오르내리는 회사라";
+/** [10] 경기 민감 까닭 (valueWordingFacts): 업종 목록이면 업종, 이익률 기준이면 실제 숫자 (팔란티어가 '업황에 따라…'로 읽히던 것) */
+export function cyclicalWhy(c: { byIndustry: boolean; lo: number | null; hi: number | null }): string {
+  if (c.byIndustry || c.lo === null || c.hi === null) return "업황에 따라 이익이 크게 오르내리는 업종이라";
+  return `최근 5년 영업이익률이 가장 낮은 해 ${signedPct(c.lo)}%, 가장 높은 해 ${signedPct(c.hi)}%로 오르내림이 커서`;
+}
+/** 섞기 안내 (valuePerPlain 꺼짐, valueWordingFacts 켬) */
+export const blendNoteOf = (why: string) => `${why}, 최근 4분기 이익과 5년 평균 이익을 반씩 섞어 계산했습니다.`;
+const signedPct = (v: number) => `${v < 0 ? "−" : ""}${(Math.round(Math.abs(v) * 10) / 10).toFixed(1)}`;
+
+/** [3] 적자 회사 덩어리 (valueMedianText) — 적자 비율이 이보다 크면 위치 옆에 흑자 회사끼리 위치 */
+export const LOSS_NOTE_SHARE = 0.1;
+export function profitMedianText(k: MetricKey, median: string, lname: string, n: number, lossPct: number): string {
+  const op = k === "A2";
+  return `${op ? "영업이익 " : ""}흑자 회사 가운데값 ${median} · 비교한 ${lname} ${n.toLocaleString("en-US")}곳 중 ${lossPct}%는 ${op ? "영업적자" : "적자"}`;
+}
+export const profitPosText = (base: string, p: number) => `${base} (흑자 회사끼리 ${Math.floor(p + 0.5)})`;
+/** 흑자 회사끼리 보면 띠가 달라질 때의 문장 */
+export function lossClumpSentence(k: MetricKey, lossPct: number, profitScore: number, grade?: "full" | "lite"): string {
+  const s = Math.floor(profitScore + 0.5);
+  const tail = s >= 67 ? highLow(k, grade)[0] : s <= 33 ? highLow(k, grade)[1] : "가운데쯤입니다.";
+  return `비교한 회사의 ${lossPct}%가 ${k === "A2" ? "영업적자" : "적자"}라 위치 점수가 크게 나왔습니다. 흑자 회사끼리 보면 ${tail}`;
+}
+
+/** [3] 가격 안내 (valuePriceNote2) */
+export const PRICE_NOTE_BASE = "PER·PBR은 최근 20거래일 평균 주가로 계산했습니다.";
+export const PRICE_NOTE_BLEND = "이 종목의 PER은 순위용 계산이 달라 시세 표와 크게 다릅니다(아래 PER 줄에 두 값을 함께 적었습니다).";
+export const PRICE_NOTE_SMALL = "시세 표의 PER·PBR은 그날 가격이라 조금 다를 수 있습니다.";
+/** 20거래일 평균과 마지막 종가가 이 비율보다 크게 다르면 그 가격의 PER·PBR 한 줄 (메타 14%·인텔 18%) */
+export const CLOSE_GAP_NOTE = 0.05;
+export function closeGapText(date: string, pct: number, per: string | null, pbr: string | null): string | null {
+  const vals = [per ? `PER ${per}` : null, pbr ? `PBR ${pbr}` : null].filter(Boolean);
+  if (!vals.length) return null;
+  return `${dateKo(date)} 종가가 20거래일 평균보다 ${(Math.round(Math.abs(pct) * 10) / 10).toFixed(1)}% ${pct >= 0 ? "높아" : "낮아"}, 그 가격으로는 ${vals.join(" · ")}입니다.`;
+}
+export function priceNoteV2(o: { blend: boolean; close: string | null }): string {
+  return [PRICE_NOTE_BASE, o.blend ? PRICE_NOTE_BLEND : null, o.close ?? (o.blend ? null : PRICE_NOTE_SMALL)].filter(Boolean).join(" ");
+}
+
+/** [3] 영업 외 손익 (valueOneOffAbs): 세전이익의 30% 이상이면 표시 + PER 줄에 영업이익 기준 PER */
+export const ONE_OFF_ABS_SHARE = 0.3;
+export const oneOffAbsText = (pct: number) => `영업 외 손익이 세전이익의 ${pct}%로 커서 순이익 기준 지표(PER·ROE)가 영업이익 기준 지표와 차이가 큽니다.`;
+export const opPerNote = (taxPct: number, per: string) => `영업이익으로 계산하면(세금 ${taxPct}% 가정) PER 약 ${per}입니다.`;
+
+/** [5] 금융사 (valueFinancialNote) */
+export const FIN_INDUSTRY_KO: Record<string, string> = { "Major Banks": "은행" };
+/** 은행 업종 (Nasdaq · 네이버) — 큰 은행 가운데값·은행 안내 */
+export const BANK_INDUSTRIES: ReadonlySet<string> = new Set(["Major Banks", "Banks", "Commercial Banks", "Savings Institutions", "은행"]);
+/** 보험 업종 (Nasdaq · 네이버) */
+export const INSURER_INDUSTRIES: ReadonlySet<string> = new Set(["Life Insurance", "Property-Casualty Insurers", "Accident &Health Insurance", "Specialty Insurers", "생명보험", "손해보험"]);
+/** 작은 회사 · 큰 회사 기준 (달러) */
+export const FIN_SMALL_CAP = 5e9;
+export const FIN_BIG_CAP = 50e9;
+export const finPeerFirst = (nameKo: string, n: number, small: number | null) =>
+  `같은 업종(${nameKo} · Nasdaq 분류, ${n.toLocaleString("en-US")}곳${small !== null ? ` — 그중 ${small.toLocaleString("en-US")}곳은 시가총액 50억 달러 미만` : ""})`;
+export function finHealthFacts(o: { value: string | null; lname: string; median: string | null; big: { word: string; n: number; median: string } | null }): string | null {
+  if (!o.value) return null;
+  return [`자기자본 ÷ 총자산 ${o.value}`, o.median ? `${o.lname} 가운데값 ${o.median}` : null, o.big ? `시가총액 500억 달러 넘는 ${o.big.word} ${o.big.n}곳 가운데값 ${o.big.median}` : null].filter(Boolean).join(" · ");
+}
+export const BANK_HEALTH_NOTE =
+  "은행 감독에 쓰는 자본비율(BIS·CET1)과 다른 단순 비율입니다. 국채·중앙은행 예치금처럼 위험이 낮은 자산을 많이 가진 대형 은행은 이 비율이 낮게 나오는 편이라, 이 막대 하나로 은행의 건전성을 말할 수는 없습니다.";
+export const INSURER_HEALTH_NOTE =
+  "보험사는 가진 채권·주식의 평가이익(또는 손실)이 자본에 크게 들어 있어, 자기자본 ÷ 총자산의 뜻이 은행과 다릅니다. 이 막대 하나로 보험사의 건전성을 말할 수는 없습니다.";
+export const FIN_OTHER_HEALTH_NOTE = "금융사 감독에 쓰는 자본비율과 다른 단순 비율입니다. 이 막대 하나로 이 회사의 건전성을 말할 수는 없습니다.";
+export const KR_FIN_MIX_NOTE = "한국 금융사 전체 비교에는 은행·보험·증권·카드 회사가 함께 들어 있습니다.";
+
+/** [9] 이유 글 (valueReasonDetail) */
+export const SHARES_MISSING_TEXT = "이 앱이 이 회사의 주식 수 자료를 읽지 못해 계산하지 않았습니다. 회사 재무에 문제가 있다는 뜻은 아닙니다.";
+export const krFewQuartersText = (n: number) =>
+  `재무 요약에 분기 실적이 아직 ${n}개뿐입니다(4개 필요 — 새로 상장했거나 분할로 새로 생긴 회사 등). 회사 재무에 문제가 있다는 뜻은 아닙니다.`;
+export const KR_QUARTER_GAP_TEXT = "재무 요약의 최근 4개 분기 실적 가운데 빈 값이 있어 계산하지 않았습니다. 회사 재무에 문제가 있다는 뜻은 아닙니다.";
+export const preferredText = (commonName: string | null) =>
+  commonName ? `우선주는 따로 계산하지 않습니다. 같은 회사 보통주(${commonName}) 화면에 가치 지표 점수가 있습니다.` : "우선주는 따로 계산하지 않습니다.";
+
+/** [10] 사실과 다른 문장 (valueWordingFacts) */
+export function lossAccrualText(ni: string, ocf: string, ocfNegative: boolean, ocfSmaller: boolean): string {
+  const head = "순손실 회사라 '이익이 현금으로 뒷받침되는지'로 읽지 않습니다.";
+  return ocfNegative ? `${head} 영업현금흐름(${ocf})도 마이너스이며, 순손실(${ni})보다 ${ocfSmaller ? "작을 뿐입니다" : "큽니다"}.` : `${head} 순손실(${ni})이지만 영업현금흐름은 ${ocf}로 플러스입니다.`;
+}
+export const lossYearsText = (from: string, to: string, n: number, all: boolean) =>
+  `${from === to ? `${to}년` : `${from}~${to}년`}${all ? `, 자료가 있는 ${n}년 모두` : ` ${n}년 연속`} 영업손실입니다. 영업손실인 회사는 이 점수 방식으로는 낮게 나오는 것이 보통입니다.`;
+/** 한국 간이: 부채비율이 이 값(%) 이상이면 자본이 아주 작다는 표시 (아시아나항공 5,496%) */
+export const THIN_EQUITY_DEBT = 1000;
+export const thinEquityText = (debtRatio: number) =>
+  `자본(순자산)이 총자산에 비해 아주 작아(부채비율 ${Math.round(debtRatio).toLocaleString("en-US")}%), 순자산으로 나누는 PBR·ROE 는 작은 변화에도 크게 바뀝니다.`;
+
+/** 금액 글 ('−0.61억 달러', '−187억 달러', '1,234억원') */
+export function moneyEok(v: number, unit: "USD" | "KRW"): string {
+  const e = v / 1e8;
+  const a = Math.abs(e);
+  const body = a >= 100 ? Math.round(a).toLocaleString("en-US") : a >= 10 ? (Math.round(a * 10) / 10).toFixed(1) : (Math.round(a * 100) / 100).toFixed(2);
+  return `${e < 0 ? "−" : ""}${body}억${unit === "USD" ? " 달러" : "원"}`;
+}
+
+/** [4] 종합 (compositeFormula · compositeGapHide) */
+export const COMPOSITE_GAP_NOTE_V2 = 25;
+export const COMPOSITE_GAP_HIDE = 30;
+export const compositeFormulaText = (v: number, t: number) => `= (${v} + ${t}) ÷ 2`;
+export const gapTextV2 = (d: number) => `두 점수 차이가 ${d}점입니다. 평균 하나로는 이 차이가 가려집니다.`;
+export const gapHideText = (d: number) => `두 점수 차이가 ${d}점이라 평균을 보이지 않습니다`;
+export const HOW_GAP_HIDE = "두 점수 차이가 30점을 넘으면 종합 숫자 대신 그 까닭을 적습니다.";
 
 // ── 한국 간이 계산 (3-44 3단계) ─────────────────────────────
 

@@ -13,7 +13,7 @@ import { KR_LITE_NOTE, LITE_BADGE, VALUE_STATUS_TEXT } from "../src/services/val
 import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
 import { fakeKrSources, KR_CODES, KR_NAMES, krWorld, type KrCode } from "./fixtures/krValue/load.js";
 import { fakeValueSources, referenceData } from "./fixtures/valueScores/load.js";
-import { fakeProviders } from "./helpers.js";
+import { fakeProviders, valueStage1 } from "./helpers.js";
 
 /**
  * 한국 간이 가치 (3-44 3단계, 플래그 indicatorScores + valueScore + krValueScore): GET /api/scores/:code 의 한국 가치·종합,
@@ -72,7 +72,8 @@ async function start(opts: { members?: KrMember[]; registered?: string[]; failFi
   // 합성 세상은 보통주 161곳 (실제 2,765)
   deps.minMembers = 100;
   if (opts.nightCap) (app.krValue as unknown as { deps: { nightCap?: number } }).deps.nightCap = opts.nightCap;
-  if (opts.kr === false) await app.inject({ method: "PUT", url: "/api/admin/features", payload: { krValueScore: false } });
+  // 이 파일은 3단계 글을 본다 — 가치 점수 개선 1단계 글 플래그는 끈 채 (끄면 지금과 같음을 함께 확인). 새 글은 valueImprove1.test.ts
+  await app.inject({ method: "PUT", url: "/api/admin/features", payload: { ...valueStage1(false), ...(opts.kr === false ? { krValueScore: false } : {}) } });
   if (opts.reference !== false) {
     // 일요일 새벽 비교 기준 (합성 비교 회사 · 기록한 재무)
     await app.krValue.saveReference(buildKrReference(world.members, world.facts, "2026-09-27"));

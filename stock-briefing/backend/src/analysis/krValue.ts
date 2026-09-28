@@ -300,21 +300,55 @@ export interface KrMember {
   upjongCode: string;
 }
 
-/** 한국 종목의 가치 지표 '대상 아님' 까닭 (보통주가 아닌 것): 우선주(코드 끝 0 아님) · 스팩 · 리츠 */
-export function krExclusion(code: string, name: string | null | undefined): "preferred" | "spac" | "reit" | null {
+/** 종목 마스터(한국투자증권 종목 정보 — listed_stocks.group_code)의 리츠 분류 */
+export const KR_REIT_GROUP = "RT";
+/** 네이버 업종 '부동산' (리츠와 부동산 회사가 함께 있음 — 이 업종 안에서 이름에 '리츠'가 든 종목만 리츠로 본다) */
+export const KR_REIT_UPJONG = "280";
+
+/** 리츠 판정에 쓰는 분류 (있는 것부터: 마스터 리츠 목록 → 이 종목 마스터 분류 → 네이버 업종 → 이름 끝) */
+export interface KrReitHint {
+  /** 종목 마스터의 리츠 코드 전체 (group_code 'RT'). 비어 있으면 쓰지 않는다 */
+  reitCodes?: ReadonlySet<string> | null;
+  /** 이 종목의 마스터 분류 (모르면 null) */
+  groupCode?: string | null;
+  /** 이 종목의 네이버 업종 번호 (모르면 null) */
+  upjongCode?: string | null;
+}
+/**
+ * 리츠인지 (긴급 버그 고침 2026-09-29): 예전에는 이름에 '리츠'가 **들어 있으면** 리츠로 봐 메리츠금융지주(22조 금융지주)·블리츠웨이가 '대상 아님'이었고
+ * 비교 회사에서도 빠졌다. 이제 공식 분류를 먼저 본다 — 종목 마스터 리츠 목록(RT 23곳) → 이 종목 마스터 분류 → 네이버 업종 280(부동산) 안의 '리츠' 이름
+ * (같은 업종의 SK디앤디·한국토지신탁 같은 부동산 회사는 리츠가 아님, 이리츠코크렙은 이름 끝이 '리츠'가 아니어도 리츠) → 아무것도 모를 때만 이름 끝 '리츠'
+ */
+export function krIsReit(code: string, name: string | null | undefined, hint: KrReitHint = {}): boolean {
+  if (hint.reitCodes && hint.reitCodes.size) return hint.reitCodes.has(code);
+  if (hint.groupCode) return hint.groupCode === KR_REIT_GROUP;
+  const n = (name ?? "").trim();
+  if (hint.upjongCode) return hint.upjongCode === KR_REIT_UPJONG && /리츠|REIT/i.test(n);
+  return /리츠$|REIT$/i.test(n);
+}
+/** 한국 종목의 가치 지표 '대상 아님' 까닭 (보통주가 아닌 것): 우선주(코드 끝 0 아님) · 스팩 · 리츠(공식 분류 — krIsReit) */
+export function krExclusion(code: string, name: string | null | undefined, hint: KrReitHint = {}): "preferred" | "spac" | "reit" | null {
   if (!/0$/.test(code)) return "preferred";
   const n = name ?? "";
   if (/스팩|SPAC/i.test(n)) return "spac";
-  if (/리츠|REIT/i.test(n)) return "reit";
+  if (krIsReit(code, n, hint)) return "reit";
   return null;
 }
 /** 비교 회사가 될 수 있는 보통주: 코스피·코스닥 주식(ETF·ETN·코넥스 아님) · 우선주·스팩·리츠 아님 · 시가총액 있음 */
-export function krCommonStock(m: KrMember): boolean {
-  return m.endType === "stock" && (m.market === "KOSPI" || m.market === "KOSDAQ") && !krExclusion(m.code, m.name) && num(m.marketCap) && m.marketCap > 0 && num(m.price) && m.price > 0;
+export function krCommonStock(m: KrMember, reitCodes?: ReadonlySet<string> | null): boolean {
+  return (
+    m.endType === "stock" &&
+    (m.market === "KOSPI" || m.market === "KOSDAQ") &&
+    !krExclusion(m.code, m.name, { reitCodes: reitCodes ?? null, upjongCode: m.upjongCode || null }) &&
+    num(m.marketCap) &&
+    m.marketCap > 0 &&
+    num(m.price) &&
+    m.price > 0
+  );
 }
 /** 재무를 받을 후보: 보통주 가운데 시가총액 하위 20% 를 뺀 것 (큰 순) */
-export function krCandidates(members: readonly KrMember[]): KrMember[] {
-  const common = members.filter(krCommonStock);
+export function krCandidates(members: readonly KrMember[], reitCodes?: ReadonlySet<string> | null): KrMember[] {
+  const common = members.filter((m) => krCommonStock(m, reitCodes));
   const caps = common.map((m) => m.marketCap!).sort((a, b) => a - b);
   const cut = quantile(caps, KR_CAP_CUT) ?? 0;
   return common.filter((m) => m.marketCap! >= cut).sort((a, b) => b.marketCap! - a.marketCap!);
@@ -397,8 +431,8 @@ const usable = (inp: KrInputs | null): inp is KrInputs => !!inp && (num(inp.ttm.
  * 비교 회사 = 후보(보통주, 시가총액 하위 20% 뺌) 가운데 재무가 있는 회사. 가격은 목록의 현재가(그 주 기준 — 미국이 스크리너 시가총액을 쓰는 것과 같음).
  * 업종 자리 층은 미국과 같은 규칙(15곳 · 두 주 연속)으로, 부문 층은 없다(네이버 업종 한 층 → 시장)
  */
-export function buildKrReference(members: readonly KrMember[], facts: ReadonlyMap<string, KrFacts>, refDate: string, prev?: ValueReferenceData | null): ValueReferenceData {
-  const cands = krCandidates(members);
+export function buildKrReference(members: readonly KrMember[], facts: ReadonlyMap<string, KrFacts>, refDate: string, prev?: ValueReferenceData | null, reitCodes?: ReadonlySet<string> | null): ValueReferenceData {
+  const cands = krCandidates(members, reitCodes);
   const industries: string[] = [];
   const idx = (v: string) => {
     let i = industries.indexOf(v);
@@ -413,7 +447,7 @@ export function buildKrReference(members: readonly KrMember[], facts: ReadonlyMa
     symbols[m.code] = [0, idx(m.upjong)];
     industryCodes[m.upjongCode] = m.upjong;
     pairs.set(m.upjong, ["", m.upjong]);
-    if (krCommonStock(m)) quotes[m.code] = [m.marketCap!, m.price!];
+    if (krCommonStock(m, reitCodes)) quotes[m.code] = [m.marketCap!, m.price!];
   }
   const peers: PeerRow[] = [];
   const counts: Record<ValuePath, number> = { general: 0, financial: 0 };

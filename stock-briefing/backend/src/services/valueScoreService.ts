@@ -4,6 +4,7 @@ import { compactCompanyFacts, FactBook, mergeCompanyFacts, PREDECESSOR_CIK, type
 import { computeAux, computeMetrics, type MetricAux, type MetricKey, type MetricSet, type MetricValue } from "../analysis/valueMetrics.js";
 import {
   coreOf,
+  CYCLICAL_INDUSTRIES,
   FAMILY_METRICS,
   FISCAL_STALE_DAYS,
   isCyclical,
@@ -26,6 +27,7 @@ import {
   type ValueBand,
   type ValueFamilyKey,
   type ValueFlagKey,
+  type PeerLevel,
   type ValueGrade,
   type ValuePath,
   type ValueReferenceData,
@@ -86,7 +88,48 @@ import {
   valueHeadline,
   valueVersionLine,
   type NameMarket,
+  BANK_HEALTH_NOTE,
+  BANK_INDUSTRIES,
+  blendNoteOf,
+  blendRankNote,
+  blendRankZeroNote,
+  CLOSE_GAP_NOTE,
+  closeGapText,
+  CYCLICAL_WHY_OLD,
+  cyclicalWhy,
+  familyAboutOf,
+  FIN_BIG_CAP,
+  FIN_INDUSTRY_KO,
+  FIN_OTHER_HEALTH_NOTE,
+  FIN_SMALL_CAP,
+  finHealthFacts,
+  finPeerFirst,
+  INSURER_HEALTH_NOTE,
+  INSURER_INDUSTRIES,
+  KR_FIN_MIX_NOTE,
+  LOSS_NOTE_SHARE,
+  lossAccrualText,
+  lossClumpSentence,
+  lossYearsText,
+  moneyEok,
+  ONE_OFF_ABS_SHARE,
+  oneOffAbsText,
+  opPerNote,
+  PEER_TIMING_NOTE_V2,
+  PER_PLAIN_TAG,
+  PRICE_NOTE_BASE,
+  PRICE_NOTE_BLEND,
+  PRICE_NOTE_SMALL,
+  profitMedianText,
+  SHARES_MISSING_TEXT,
+  showOf,
+  preferredText,
+  shortMetricName,
+  twoSidedMidLine,
+  twoSidedLine,
+  VALUE_TRAP_V2,
 } from "./valueScoreText.js";
+import { readValueTextFlags, VALUE_TEXT_OFF, type ValueTextFlags } from "./valueTextFlags.js";
 
 /**
  * 가치 지표 점수 (3-44 2단계, 플래그 indicatorScores + valueScore). 미국 보통주 — 한국 보통주는 3단계 간이 계산(krValueService), ETF·스팩·우선주·리츠는 '대상 아님'.
@@ -187,8 +230,10 @@ export interface ValueEvalArgs {
   scoreDate: string;
   /** 추세 쪽이 분할·병합을 의심해 보류 중 */
   splitHold: boolean;
-  /** 종목 이름 (한국: 스팩·리츠 판정) */
+  /** 종목 이름 (한국: 스팩 판정 · 리츠는 마스터 분류를 모를 때만) */
   name?: string;
+  /** 종목 마스터 분류 (listed_stocks.group_code — 한국 리츠 'RT' 판정. 모르면 null) */
+  groupCode?: string | null;
 }
 export interface ValueEval {
   block: ValueBlock;
@@ -277,6 +322,11 @@ export interface Core {
   priceThrough?: string;
   /** 한국 간이: 쓴 최근 분기 'YYYY-MM' (지난주 대비 까닭 — 새 분기 실적) */
   quarter?: string;
+  /**
+   * 점수 없음의 속 까닭 (이유 글을 고를 때만 — 가치 점수 개선 1단계 [9], 플래그 valueReasonDetail): sharesMissing = 주식 수 자료 없음(버크셔 B),
+   * fewQuarters:n = 한국 분기 실적 n개(4개 필요), quarterGap = 한국 최근 4개 분기 가운데 빈 값. 이유 코드·글은 플래그가 켜졌을 때만 바꾼다
+   */
+  detail?: string;
 }
 
 const pct1 = (v: number) => Math.round(v * 10) / 10;
@@ -608,8 +658,10 @@ export class ValueScoreService {
       return plain(baseBlock("pending", VALUE_STATUS_TEXT.offLabel, { code: "krOff", text: VALUE_STATUS_TEXT.krOff }, valueAboutOf("general", "KR")));
     }
     const p = a.product;
+    // 가치 점수 개선 1단계 글 플래그 (모두 글만 — 점수는 그대로)
+    const tf = await readValueTextFlags(this.deps.features);
     if (p?.spac) return plain(baseBlock("excluded", "대상 아님", { code: "spac", text: VALUE_STATUS_TEXT.spac }));
-    if (p?.commonShare === false) return plain(baseBlock("excluded", "대상 아님", { code: "preferred", text: VALUE_STATUS_TEXT.preferred }));
+    if (p?.commonShare === false) return plain(baseBlock("excluded", "대상 아님", { code: "preferred", text: tf.reasonDetail ? preferredText(null) : VALUE_STATUS_TEXT.preferred }));
     if (p?.clearance) return plain(baseBlock("excluded", "대상 아님", { code: "clearance", text: VALUE_STATUS_TEXT.clearance }));
 
     const ref = await this.reference();
@@ -662,7 +714,10 @@ export class ValueScoreService {
     const now = this.core(facts, ref, cls, a.candles, monthly, a.scoreDate);
     // 마지막 보고서 뒤 주식 분할·병합 등: SEC 주식 수로 만든 시가총액이 틀리므로 점수를 내지 않는다
     if (sharesMismatch(ref.quote(code), now.inputs?.shares, now.avgPrice)) return plain(baseBlock("hold", "잠시 보류", { code: "sharesMismatch", text: VALUE_STATUS_TEXT.sharesMismatch }));
-    if (now.status !== "scored") return plain(baseBlock("insufficient", "점수 없음", now.reason!), { stored: { method: VALUE_VERSION, status: "insufficient", reason: now.reason!.code, reference: ref.refDate, fetchedAt: facts.fetchedAt } });
+    if (now.status !== "scored") {
+      const reason = reasonOf(now, tf);
+      return plain(baseBlock("insufficient", "점수 없음", reason), { stored: { method: VALUE_VERSION, status: "insufficient", reason: reason.code, reference: ref.refDate, fetchedAt: facts.fetchedAt } });
+    }
 
     // 지난주 (5거래일 전 봉까지 · 그날까지 제출된 재무 · 그날 쓰던 비교 기준)
     let change: ValueBlock["change"] = null;
@@ -675,7 +730,8 @@ export class ValueScoreService {
     }
     // '지난 값' 배지는 실제로 받기에 실패했을 때만. 받는 중이면 점수는 그대로 보이고 응답만 짧게 기억한다
     const carried = age >= FACTS_CARRY_MS && failedSince;
-    const block = scoredBlock(now, { ref, cls, change, carried, fetchedAt: facts.fetchedAt, cik: facts.cik });
+    const lastBar = a.candles.filter((c) => c.date <= a.scoreDate).at(-1) ?? null;
+    const block = scoredBlock(now, { ref, cls, change, carried, fetchedAt: facts.fetchedAt, cik: facts.cik, text: tf, lastClose: lastBar ? { date: lastBar.date, close: lastBar.close } : null });
     return { block, stored: storedOf(now, ref.refDate, facts), fetchFailure: false, waiting: refreshing };
   }
 
@@ -690,7 +746,7 @@ export class ValueScoreService {
     if (!inputs || !inputs.period) return { status: "insufficient", reason: { code: "noUsGaap", text: VALUE_STATUS_TEXT.noUsGaap } };
     const lastFy = inputs.annual.at(-1)?.end ?? null;
     if (!lastFy || daysBetween(lastFy, scoreDate) > FISCAL_STALE_DAYS) return { status: "insufficient", reason: { code: "fiscalOld", text: VALUE_STATUS_TEXT.fiscalOld } };
-    if (!inputs.shares || inputs.shares <= 0) return { status: "insufficient", reason: { code: "priceInvalid", text: VALUE_STATUS_TEXT.priceInvalid } };
+    if (!inputs.shares || inputs.shares <= 0) return { status: "insufficient", reason: { code: "priceInvalid", text: VALUE_STATUS_TEXT.priceInvalid }, detail: "sharesMissing" };
     const mcap = avgPrice * inputs.shares;
     const aux = computeAux(inputs);
     const th = ref.ref.thresholds;
@@ -829,6 +885,29 @@ export interface RowCtx {
   annualEnd: string | null;
   /** 비교 시장 (KR 이면 위치·가운데값·비중 글의 무리 이름이 '한국 시장'·'한국 금융사 전체' — 없으면 미국) */
   market?: NameMarket;
+  /** 가치 점수 개선 1단계 글 플래그 (없으면 모두 끔 — 예전 글 그대로) */
+  text?: ValueTextFlags;
+  /** 글 재료 (대상 종목 — 없으면 그 글을 쓰지 않음) */
+  extra?: RowExtra;
+}
+/** 지표·묶음 글 재료 (가치 점수 개선 1단계 — 점수에는 쓰지 않는다) */
+export interface RowExtra {
+  /** 최근 4분기 순이익·영업현금흐름 (원래 단위 — 미국 달러) */
+  ni?: number | null;
+  ocf?: number | null;
+  unit?: "USD" | "KRW";
+  /** 경기 민감 회사의 섞지 않은 최근 4분기 PER (순이익 ≤ 0 이면 'loss') */
+  plainPer?: number | "loss" | null;
+  /** 경기 민감 까닭 (업종 목록 · 이익률 오르내림 — 가장 낮은 해·높은 해 %) */
+  cyclical?: { byIndustry: boolean; lo: number | null; hi: number | null } | null;
+  /** 영업이익 기준 PER (영업 외 손익이 세전이익의 30% 이상일 때) */
+  opPer?: { taxPct: number; per: number } | null;
+  /** 금융사 종류 (재무 건전성 안내) */
+  finKind?: FinKind | null;
+  /** 업종 무리 이름 (금융사 재무 건전성 가운데값 글 '은행 가운데값') */
+  groupName?: string | null;
+  /** 시가총액 500억 달러 넘는 같은 업종 회사의 자기자본 ÷ 총자산 가운데값 (미국 은행) */
+  bigPeers?: { word: string; n: number; median: number } | null;
 }
 /** 연간 재무로 계산한 지표 (최근 4분기 값이 아님): 성장 3년 · 이익·ROE 안정성 5년 · 주식 수 변화 3년 */
 export const ANNUAL_METRICS: ReadonlySet<MetricKey> = new Set<MetricKey>(["C1", "C2", "C3", "B5", "F2", "E2"]);
@@ -843,48 +922,157 @@ function metricSentence(m: MetricScore, grade?: ValueGrade): string {
   return positionSentence(m.key, m.score, grade);
 }
 
+/** 띠 셋 (위치 점수 → 높음·가운데·낮음, positionSentence 와 같은 경계) */
+const band3 = (s: number) => {
+  const r = Math.floor(s + 0.5);
+  return r >= 67 ? "high" : r <= 33 ? "low" : "mid";
+};
+/** 순손실 회사의 '이익의 현금 뒷받침' (가치 점수 개선 1단계 [10]: 좋은 뜻으로 읽히는 문장을 쓰지 않는다) */
+const lossAccrual = (m: MetricScore, ctx: RowCtx) => m.key === "B6" && !!ctx.text?.wordingFacts && typeof ctx.extra?.ni === "number" && ctx.extra.ni < 0;
+
 export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annualEnd: null }): ValueMetricRow {
+  const t = ctx.text ?? VALUE_TEXT_OFF;
+  const x = ctx.extra ?? {};
   const level = m.peer?.level ?? null;
   const lname = levelName(level, ctx.path, ctx.market);
   const median = m.peer ? medianText(m.key, m.peer.median) : null;
-  const positions = m.score !== null && m.rule !== "zeroLoss" ? positionText(m.pos, level, ctx.path, ctx.market) || null : null;
-  const notes: Array<string | null> = [m.blend && m.adopted ? BLEND_NOTE : null];
+  // 적자 회사 덩어리 (가치 점수 개선 1단계 [3] valueMedianText): 흑자 회사 가운데값·적자 비율·흑자 회사끼리 위치 — 점수는 그대로
+  const clump = t.medianText && m.loss && m.peer && m.score !== null ? m.loss : null;
+  const lossPct = clump ? Math.round(100 * clump.share) : 0;
+  const showProfitPos = !!clump && clump.share >= LOSS_NOTE_SHARE && clump.score !== null && m.rule !== "zeroLoss";
+  const positions = m.score !== null && m.rule !== "zeroLoss" ? positionText(m.pos, level, ctx.path, ctx.market, showProfitPos ? clump!.pos : undefined) || null : null;
+  let peerMedian = median && m.score !== null ? `${lname} 가운데값 ${median}` : null;
+  if (clump && clump.median !== null) {
+    const pm = medianText(m.key, clump.median, false);
+    if (pm) peerMedian = lossPct > 0 ? profitMedianText(m.key, pm, lname, m.peer!.n, lossPct) : `${lname} 가운데값 ${pm}`;
+  }
+  // 경기 민감 PER (섞기): 까닭 글 — [10] 이면 업종 목록·이익률 숫자로, 아니면 예전 말
+  const why = t.wordingFacts ? cyclicalWhy(x.cyclical ?? { byIndustry: true, lo: null, hi: null }) : CYCLICAL_WHY_OLD;
+  let value = m.adopted ? metricValueText(m) : null;
+  const notes: Array<string | null> = [];
+  if (m.blend && m.adopted) {
+    if (t.perPlain && m.key === "A1" && x.plainPer !== undefined && x.plainPer !== null) {
+      // [3] 첫 숫자는 남과 같은 최근 4분기 PER, 순위에 쓴 섞은 값은 한 줄 (엔비디아 28.3배 · 섞은 44.8배)
+      value = `${x.plainPer === "loss" ? "적자" : formatMetric("A1", x.plainPer)} ${PER_PLAIN_TAG}`;
+      notes.push(m.rule === "zeroLoss" ? blendRankZeroNote(why, x.plainPer === "loss") : blendRankNote(formatMetric("A1", m.show) ?? "값", why));
+    } else notes.push(t.wordingFacts ? blendNoteOf(why) : BLEND_NOTE);
+  }
   if (m.adopted && m.score !== null && tieDriven(m)) notes.push(TIE_NOTE);
   // 맨 위 규칙(순현금 등): 같은 규칙 회사끼리 같은 순위라 보이는 위치는 그 무리의 가운데 — 그 무리 비율을 보이는 위치에서 되짚어 적는다
   if (m.adopted && m.rule === "topTie" && m.pos.industry !== undefined && m.pos.industry < 99.5) {
     const pos = Math.floor(m.pos.industry + 0.5);
     notes.push(topTieNote(lname, Math.round(2 * (100 - m.pos.industry)), pos));
   }
+  // [3] 영업 외 손익이 큰 회사: 영업이익 기준 PER 한 줄 (valueOneOffAbs)
+  if (t.oneOffAbs && m.key === "A1" && m.adopted && x.opPer) notes.push(opPerNote(x.opPer.taxPct, formatMetric("A1", x.opPer.per) ?? ""));
+  let text = metricSentence(m, ctx.grade);
+  // [3] 흑자 회사끼리 보면 띠가 달라지는 지표: 적자 비율 때문에 위치가 크게 나왔다는 사실 문장
+  if (showProfitPos && !m.rule && !tieDriven(m) && band3(m.score!) !== band3(clump!.score!)) text = lossClumpSentence(m.key, lossPct, clump!.score!, ctx.grade);
+  // [10] 순손실 회사의 이익의 현금 뒷받침: 좋은 뜻으로 읽히는 위치 문장 대신 숫자 사실
+  if (lossAccrual(m, ctx) && m.adopted && m.score !== null && typeof x.ocf === "number") {
+    const unit = x.unit ?? "USD";
+    text = lossAccrualText(moneyEok(x.ni!, unit), moneyEok(x.ocf, unit), x.ocf < 0, Math.abs(x.ocf) < Math.abs(x.ni!));
+  }
   return {
     key: m.key,
     name: metricName(m.key, ctx.grade),
-    value: m.adopted ? metricValueText(m) : null,
+    value,
     basis: m.adopted && m.score !== null && ANNUAL_METRICS.has(m.key) && ctx.annualEnd ? annualBasis(ctx.annualEnd) : null,
-    peerMedian: median && m.score !== null ? `${lname} 가운데값 ${median}` : null,
+    peerMedian,
     positions,
     mix: m.score !== null ? mixText(m.mix, level, ctx.path, ctx.market) : null,
     score: m.score === null ? null : roundScore(m.score),
-    text: metricSentence(m, ctx.grade),
+    text,
     meaning: metricMeaning(m.key, ctx.grade),
     used: m.adopted && m.score !== null,
     note: notes.filter(Boolean).join(" ") || null,
   };
 }
 
+/** 0점 규칙 지표의 짧은 사실 (두 쪽 문장 안 — 적자 0점 사실 글을 남긴다) */
+const ZERO_LABEL: Partial<Record<string, string>> = {
+  lossNi: "적자",
+  lossOp: "영업적자",
+  lossFcf: "마이너스",
+  capitalImpairment: "자본잠식",
+  deepLoss: "영업손실이 매출보다 큰 해가 많음",
+  revenueNonPositive: "매출 0 이하",
+};
+
+/**
+ * 두 쪽 문장 (가치 점수 개선 1단계 [2] valueFamilyTwoSided): '막대를 길게 만든 지표: …' / '막대를 짧게 만든 지표: …' — 위치 67 이상 · 33 이하 지표를
+ * 가장 튀는 순으로. 띠가 높은 편인 묶음은 긴 쪽만, 낮은 편은 짧은 쪽만 (소수 쪽 지표를 대표 문장으로 말하지 않게 — 검토: 13/249 묶음).
+ * 0점 규칙 지표는 '(적자)'처럼 사실을 붙이고, 순손실 회사의 이익의 현금 뒷받침은 '(순손실 회사)'를 붙인다
+ */
+function twoSidedText(f: FamilyScore, ctx: RowCtx): string {
+  const fb = band3(f.score!);
+  const rows = f.metrics
+    .map((m, i) => ({ m, i }))
+    .filter(({ m }) => m.adopted && m.score !== null)
+    .map(({ m, i }) => ({ m, i, s: roundScore(m.score!) }));
+  const label = (r: { m: MetricScore; s: number }): readonly [string, string] => {
+    const tag =
+      r.m.rule === "zeroLoss" && r.m.why && ZERO_LABEL[r.m.why]
+        ? `(${ZERO_LABEL[r.m.why]})`
+        : lossAccrual(r.m, ctx)
+          ? "(순손실 회사)"
+          : // 같은 값이 많아 위치가 부풀려진 지표 (NVDA 배당 0.1% — 반도체 회사의 77%가 0.0%): '많은 편'으로 읽히지 않게 그 사실을 붙인다
+            tieDriven(r.m)
+            ? `(비교 회사 ${Math.round(100 * r.m.peer!.tie)}%가 ${medianText(r.m.key, r.m.peer!.tieX) ?? "같은 값"})`
+            : "";
+    return [shortMetricName(r.m.key, ctx.grade), `${r.s}${tag}`];
+  };
+  const long = rows.filter((r) => r.s >= 67).sort((a, b) => b.s - a.s || a.i - b.i);
+  const short = rows.filter((r) => r.s <= 33).sort((a, b) => a.s - b.s || a.i - b.i);
+  const lines: string[] = [];
+  if (fb !== "low" && long.length) lines.push(twoSidedLine(true, long.map(label)));
+  if (fb !== "high" && short.length) lines.push(twoSidedLine(false, short.map(label)));
+  return lines.length ? lines.join("\n") : twoSidedMidLine(rows.map(label));
+}
+
+/**
+ * 금융사 재무 건전성 묶음 글 (가치 점수 개선 1단계 [5] valueFinancialNote): 실제 비율·업종 가운데값·(미국 은행) 큰 은행 가운데값 + 감독 자본비율과
+ * 다른 단순 비율이라는 안내. 한국은 은행·보험·증권·카드를 함께 비교한다는 사실을 앞에
+ */
+function finHealthText(f: FamilyScore, ctx: RowCtx): string | null {
+  const m = f.metrics.find((q) => q.key === "F3" && q.adopted && q.score !== null);
+  if (!m) return null;
+  const x = ctx.extra ?? {};
+  const lname = m.peer?.level === "industry" && x.groupName ? x.groupName : levelName(m.peer?.level ?? null, ctx.path, ctx.market);
+  const facts = finHealthFacts({
+    value: formatMetric("F3", m.show),
+    lname,
+    median: m.peer ? medianText("F3", m.peer.median) : null,
+    big: x.bigPeers ? { word: x.bigPeers.word, n: x.bigPeers.n, median: formatMetric("F3", showOf("F3", x.bigPeers.median)) ?? "" } : null,
+  });
+  if (!facts) return null;
+  const note = x.finKind === "bank" ? BANK_HEALTH_NOTE : x.finKind === "insurer" && ctx.text?.insurerNote ? INSURER_HEALTH_NOTE : FIN_OTHER_HEALTH_NOTE;
+  return [facts, ctx.market === "KR" ? `${KR_FIN_MIX_NOTE} ${note}` : note].join("\n");
+}
+
 export function familyRow(f: FamilyScore, ctx: RowCtx = { path: "general", annualEnd: null }): ValueFamilyRow {
+  const t = ctx.text ?? VALUE_TEXT_OFF;
   const present = f.metrics.filter((m) => m.adopted && m.score !== null);
   let text: string;
   if (!f.valid) text = f.why === "noCore" ? "핵심 지표 값이 없어 이 묶음은 빠졌습니다." : "값이 있는 지표가 절반보다 적어 이 묶음은 빠졌습니다.";
   else {
-    // 머리 문장: 가운데(50)에서 가장 먼 지표 — 같은 값이 많아 위치가 부풀려진 지표(무배당 0% 사이의 0.1% 등)는 되도록 고르지 않는다
-    const pool = present.filter((m) => !tieDriven(m));
-    const top = [...(pool.length ? pool : present)].sort((a, b) => Math.abs(b.score! - 50) - Math.abs(a.score! - 50))[0]!;
-    text = `${metricName(top.key, ctx.grade)} — ${metricSentence(top, ctx.grade)}`;
+    const fin = t.financialNote && ctx.path === "financial" && f.key === "health" ? finHealthText(f, ctx) : null;
+    if (fin) text = fin;
+    else if (t.familyTwoSided) text = twoSidedText(f, ctx);
+    else {
+      // 머리 문장: 가운데(50)에서 가장 먼 지표 — 같은 값이 많아 위치가 부풀려진 지표(무배당 0% 사이의 0.1% 등)는 되도록 고르지 않는다.
+      // [10] 순손실 회사의 이익의 현금 뒷받침은 고르지 않는다 (좋은 뜻으로 읽히는 문장이 머리에 오던 것 — 인텔)
+      const pool = present.filter((m) => !tieDriven(m) && !lossAccrual(m, ctx));
+      const base = present.filter((m) => !lossAccrual(m, ctx));
+      const top = [...(pool.length ? pool : base.length ? base : present)].sort((a, b) => Math.abs(b.score! - 50) - Math.abs(a.score! - 50))[0]!;
+      text = `${metricName(top.key, ctx.grade)} — ${metricRow(top, ctx).text}`;
+      // 예전 글(플래그 모두 끔)은 metricSentence 와 같다 — metricRow 의 문장은 끔일 때 metricSentence 그대로
+    }
   }
   return {
     key: f.key,
     name: VALUE_FAMILY_NAME[f.key],
-    about: familyAbout(f.key, ctx.grade),
+    about: familyAboutOf(f.key, { grade: ctx.grade, path: ctx.path, direction: t.directionWords, financial: t.financialNote }),
     weight: f.weight,
     score: f.score === null ? null : roundScore(f.score),
     scoreExact: f.score,
@@ -893,19 +1081,91 @@ export function familyRow(f: FamilyScore, ctx: RowCtx = { path: "general", annua
   };
 }
 
-function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; industry: string | null } | null; change: ValueBlock["change"]; carried: boolean; fetchedAt: string; cik: string | null }): ValueBlock {
+/**
+ * 표시 글 (가치 점수 개선 1단계): 영업 외 손익 절대 기준([3] valueOneOffAbs — 세전이익의 30% 이상), 가치 함정 방향 말([2]), 초기 단계 햇수([10]).
+ * 표시는 점수에 쓰지 않는다. 끄면 valueFlags 그대로·예전 글
+ */
+export function flagRows(
+  keys: readonly ValueFlagKey[],
+  t: ValueTextFlags,
+  o: { oneOffPct: number | null; lossYears: { from: string; to: string; n: number; all: boolean } | null; fallbackText: string; carried: string | null },
+): ValueBlock["flags"] {
+  let ks = [...keys];
+  if (t.oneOffAbs) {
+    ks = ks.filter((k) => k !== "oneOff");
+    if (o.oneOffPct !== null) {
+      // 예전 자리(경기·가치 함정 표시 뒤)에 둔다
+      const after = Math.max(-1, ...["cyclicalPeak", "cyclicalTrough", "valueTrap"].map((k) => ks.indexOf(k as ValueFlagKey)));
+      ks.splice(after + 1, 0, "oneOff");
+    }
+  }
+  const out: ValueBlock["flags"] = [];
+  for (const k of ks) {
+    if (k === "carriedForward" || k === "thinEquity") continue;
+    if (k === "peerFallback") out.push({ key: k, text: o.fallbackText });
+    else if (k === "oneOff" && t.oneOffAbs && o.oneOffPct !== null) out.push({ key: k, text: oneOffAbsText(o.oneOffPct) });
+    else if (k === "valueTrap" && t.directionWords) out.push({ key: k, text: VALUE_TRAP_V2 });
+    else if (k === "earlyStage" && t.wordingFacts && o.lossYears) out.push({ key: k, text: lossYearsText(o.lossYears.from, o.lossYears.to, o.lossYears.n, o.lossYears.all) });
+    else out.push({ key: k, text: VALUE_FLAG_TEXT[k] });
+  }
+  if (o.carried) out.push({ key: "carriedForward", text: o.carried });
+  return out;
+}
+
+/** 최근 연속 영업손실 햇수 (연간 이력 오래된 → 최신, 영업이익 ≤ 0 이 가장 최근 해부터 이어진 수). 가장 최근 해가 흑자이거나 이력이 없으면 null */
+export function lossStreak(years: ReadonlyArray<{ end: string; op: number | null }>): { from: string; to: string; n: number; all: boolean } | null {
+  let n = 0;
+  for (let i = years.length - 1; i >= 0; i--) {
+    const op = years[i]!.op;
+    if (typeof op === "number" && op <= 0) n++;
+    else break;
+  }
+  if (!n) return null;
+  return { from: years[years.length - n]!.end.slice(0, 4), to: years.at(-1)!.end.slice(0, 4), n, all: n === years.length };
+}
+
+/** 마지막 종가로 본 PER·PBR 글 (20거래일 평균과 5% 넘게 다를 때만 — 가치 점수 개선 1단계 [3] valuePriceNote2) */
+export function closeGap(avg: number | undefined, last: { date: string; close: number } | null, perAvg: number | null, pbrAvg: number | null): string | null {
+  if (!last || !avg || !(avg > 0) || !(last.close > 0)) return null;
+  const ratio = last.close / avg;
+  if (Math.abs(ratio - 1) <= CLOSE_GAP_NOTE) return null;
+  const per = perAvg !== null && perAvg > 0 ? formatMetric("A1", perAvg * ratio) : null;
+  const pbr = pbrAvg !== null && pbrAvg > 0 ? formatMetric("A3", pbrAvg * ratio) : null;
+  return closeGapText(last.date, 100 * (ratio - 1), per, pbr);
+}
+/** 가격 안내 (끄면 예전 한 줄) */
+export function priceNoteOf(t: ValueTextFlags, o: { blend: boolean; close: string | null }): string {
+  if (!t.priceNote2) return PRICE_NOTE;
+  const blend = o.blend ? (t.perPlain ? PRICE_NOTE_BLEND : PRICE_NOTE_BLEND.replace(/\(아래 PER 줄에 두 값을 함께 적었습니다\)/, "")) : null;
+  return [PRICE_NOTE_BASE, blend, o.close ?? (o.blend ? null : PRICE_NOTE_SMALL)].filter(Boolean).join(" ");
+}
+/** 금융사 종류 (재무 건전성 안내) */
+export type FinKind = "bank" | "insurer" | "other";
+export const finKindOf = (industry: string | null): FinKind => (!industry ? "other" : BANK_INDUSTRIES.has(industry) ? "bank" : INSURER_INDUSTRIES.has(industry) ? "insurer" : "other");
+
+function scoredBlock(
+  c: Core,
+  o: { ref: PeerBook; cls: { sector: string | null; industry: string | null } | null; change: ValueBlock["change"]; carried: boolean; fetchedAt: string; cik: string | null; text?: ValueTextFlags; lastClose?: { date: string; close: number } | null },
+): ValueBlock {
+  const t = o.text ?? VALUE_TEXT_OFF;
   const r = c.result!;
   const shown = r.shown!;
   const band = valueBand(shown);
   const period = c.period!;
+  const flow = c.inputs?.flow ?? {};
   const flagsKeys = valueFlags(r, c.aux!, { cyclical: c.cyclical!, thresholds: o.ref.ref.thresholds, metrics: c.metrics! });
-  const flags: ValueBlock["flags"] = [];
   const core = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && coreOf(r.grade, r.path).price.includes(m.key) && m.score !== null);
-  for (const k of flagsKeys) {
-    if (k === "peerFallback") flags.push({ key: k, text: peerFallbackText(core?.peer?.level ?? "market", sectorKo(o.cls?.sector ?? null), r.path) });
-    else if (k !== "carriedForward") flags.push({ key: k, text: VALUE_FLAG_TEXT[k] });
-  }
-  if (o.carried) flags.push({ key: "carriedForward", text: carriedText(o.fetchedAt) });
+  // [3] 영업 외 손익 (세전이익의 30% 이상 — 세전이익·영업이익이 모두 플러스일 때만)
+  const pretax = flow.pretax;
+  const op = flow.opIncome;
+  const oneOffPct = typeof pretax === "number" && typeof op === "number" && pretax > 0 && op > 0 && Math.abs(pretax - op) >= ONE_OFF_ABS_SHARE * pretax ? Math.round((100 * Math.abs(pretax - op)) / pretax) : null;
+  const annual = c.inputs?.annual ?? [];
+  const flags = flagRows(flagsKeys, t, {
+    oneOffPct,
+    lossYears: lossStreak(annual.map((a) => ({ end: a.end, op: a.opIncome }))),
+    fallbackText: peerFallbackText(core?.peer?.level ?? "market", sectorKo(o.cls?.sector ?? null), r.path),
+    carried: o.carried ? carriedText(o.fetchedAt) : null,
+  });
   const level = core?.peer?.level ?? "market";
   const groupName = level === "industry" ? (o.cls?.industry ?? null) : level === "sector" ? (o.cls?.sector ?? null) : null;
   // 비교한 회사 수 (대상 종목 자신은 빼고 — 검토 지적)
@@ -913,9 +1173,47 @@ function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; 
   const ownUsed = r.families.find((f) => f.key === "price")!.metrics.some((m) => m.pos.own !== undefined);
   const badges = [...(r.status === "partial" ? [PARTIAL_BADGE] : []), ...(o.carried ? [carriedBadge(o.fetchedAt)] : [])];
   const notes: string[] = [];
-  if (period.basis === "TTM") notes.push(PEER_TIMING_NOTE);
+  if (period.basis === "TTM") notes.push(t.directionWords ? PEER_TIMING_NOTE_V2 : PEER_TIMING_NOTE);
   if (r.status === "partial") notes.push(`계산에 쓴 묶음 비중 ${r.coverageWeight} (100 중)`);
-  const rowCtx: RowCtx = { path: r.path, annualEnd: c.inputs?.annual.at(-1)?.end ?? null };
+  // 글 재료 (점수에는 쓰지 않음)
+  const mcap = c.mcap ?? null;
+  const ni = typeof flow.netIncome === "number" ? flow.netIncome : null;
+  const blend = !!c.metrics?.A1?.blend;
+  const margins = annual
+    .slice(-5)
+    .map((a) => (typeof a.opIncome === "number" && typeof a.revenue === "number" && a.revenue > 0 ? Math.max(-1, Math.min(1, a.opIncome / a.revenue)) : null))
+    .filter((v): v is number => v !== null);
+  const industry = o.cls?.industry ?? null;
+  const tax = c.aux?.taxRate ?? o.ref.ref.thresholds.taxRateP50;
+  const finIndustry = level === "industry" ? industry : null;
+  const extra: RowExtra = {
+    ni,
+    ocf: typeof flow.ocf === "number" ? flow.ocf : null,
+    unit: "USD",
+    plainPer: blend && mcap ? (ni !== null && ni > 0 ? mcap / ni : "loss") : null,
+    cyclical: c.cyclical ? { byIndustry: !!industry && CYCLICAL_INDUSTRIES.has(industry), lo: margins.length ? 100 * Math.min(...margins) : null, hi: margins.length ? 100 * Math.max(...margins) : null } : null,
+    opPer: oneOffPct !== null && mcap && typeof op === "number" && op > 0 ? { taxPct: Math.round(100 * tax), per: mcap / (op * (1 - tax)) } : null,
+    finKind: r.path === "financial" ? finKindOf(industry) : null,
+    groupName: finIndustry ? (FIN_INDUSTRY_KO[finIndustry] ?? industryKo(finIndustry)) : null,
+    bigPeers: r.path === "financial" && t.financialNote ? bigPeersOf(o.ref, r.path, level, groupName, o.cik, finKindOf(industry)) : null,
+  };
+  const rowCtx: RowCtx = { path: r.path, annualEnd: c.inputs?.annual.at(-1)?.end ?? null, text: t, extra };
+  // [5] 금융사 비교 무리 이름: Nasdaq 'Major Banks' 는 작은 은행이 대부분 — '은행 · Nasdaq 분류, 228곳 — 그중 186곳은 시가총액 50억 달러 미만'
+  let first: string | undefined;
+  if (t.financialNote && r.path === "financial" && level === "industry" && groupName) {
+    const peers = o.ref.groupPeers(r.path, level, groupName, o.cik);
+    const caps = peers.map((p) => o.ref.quote(p.t)?.cap ?? null).filter((v): v is number => v !== null);
+    const small = caps.filter((v) => v < FIN_SMALL_CAP).length;
+    // 작은 회사 수는 시가총액을 아는 회사가 80% 넘을 때만, 절반 넘게 작을 때만 적는다 (모르는 회사를 작다고 세지 않게)
+    first = finPeerFirst(FIN_INDUSTRY_KO[groupName] ?? industryKo(groupName) ?? "업종", n, caps.length >= 0.8 * peers.length && small * 2 > n ? small : null);
+  }
+  const avg = c.avgPrice;
+  const perAvg = mcap && ni !== null && ni > 0 ? mcap / ni : null;
+  const pbrAvg = c.metrics?.A3?.x && c.metrics.A3.x > 0 ? 1 / c.metrics.A3.x : null;
+  // 섞은 PER 이 흔히 쓰는 PER 과 실제로 크게 다를 때만 '시세 표와 크게 다릅니다' (둘 다 적자면 같은 '적자' — 인텔)
+  const a1 = c.metrics?.A1;
+  const blendedPer = a1?.blend && a1.rule !== "zeroLoss" && typeof a1.show === "number" ? a1.show : null;
+  const blendDiffers = blend && (blendedPer === null ? perAvg !== null : perAvg === null || Math.abs(perAvg / blendedPer - 1) > 0.1);
   return {
     // 요약 줄 글: 예전 앱(1단계)은 점수 칸을 모르고 label 만 굵게 보이므로 숫자까지 넣는다 ('66점 · 가운데쯤'). 새 앱은 score·band 를 쓴다
     ...baseBlock(r.status, `${shown}점 · ${band}`, null),
@@ -927,9 +1225,9 @@ function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; 
     text: `${valueAboutOf(r.path)}: ${VALUE_BAND_LINE[band]}`,
     badges,
     headline: valueHeadline(shown, band),
-    peerLine: peerLine({ level, nameKo: level === "industry" ? industryKo(groupName) : level === "sector" ? sectorKo(groupName) : null, n, own: ownUsed, path: r.path }),
+    peerLine: peerLine({ level, nameKo: level === "industry" ? industryKo(groupName) : level === "sector" ? sectorKo(groupName) : null, n, own: ownUsed, path: r.path, ...(first ? { first } : {}) }),
     datesLine: valueDatesLine({ priceThrough: c.priceThrough!, fiscalEnd: period.end, basis: period.basis, filed: period.filed, reference: o.ref.refDate }),
-    priceNote: PRICE_NOTE,
+    priceNote: priceNoteOf(t, { blend: blendDiffers, close: t.priceNote2 ? closeGap(avg, o.lastClose ?? null, perAvg, pbrAvg) : null }),
     path: r.path,
     coverageWeight: r.coverageWeight,
     families: r.families.map((f) => familyRow(f, rowCtx)),
@@ -949,6 +1247,31 @@ function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; 
     },
     versionLine: valueVersionLine(o.ref.refDate),
   };
+}
+
+/**
+ * 큰 은행끼리 가운데값 (가치 점수 개선 1단계 [5]): 같은 업종 비교 회사 가운데 스크리너 시가총액이 500억 달러 넘는 곳의 자기자본 ÷ 총자산.
+ * 미국 은행만, 3곳 이상일 때만 (시가총액이 없는 예전 기준이면 null)
+ */
+export function bigPeersOf(ref: PeerBook, path: ValuePath, level: PeerLevel, groupName: string | null, cik: string | null, kind: FinKind | null): { word: string; n: number; median: number } | null {
+  if (kind !== "bank" || level !== "industry" || !groupName) return null;
+  const peers = ref.groupPeers(path, level, groupName, cik);
+  // 시가총액을 아는 회사가 80% 넘을 때만 (모르는 큰 은행을 빼고 세지 않게)
+  if (peers.filter((p) => ref.quote(p.t)).length < 0.8 * peers.length) return null;
+  const xs = peers
+    .filter((p) => (ref.quote(p.t)?.cap ?? 0) > FIN_BIG_CAP)
+    .map((p) => ref.peerValue(p, "F3"))
+    .filter((v): v is number => v !== null && Number.isFinite(v))
+    .sort((a, b) => a - b);
+  if (xs.length < 3) return null;
+  const m = xs.length >> 1;
+  return { word: "은행", n: xs.length, median: xs.length % 2 ? xs[m]! : (xs[m - 1]! + xs[m]!) / 2 };
+}
+
+/** 점수 없음 이유 (가치 점수 개선 1단계 [9] valueReasonDetail — 속 까닭이 있으면 그 글, 끄면 예전 글) */
+export function reasonOf(c: Core, t: ValueTextFlags): { code: string; text: string } {
+  if (t.reasonDetail && c.detail === "sharesMissing") return { code: "sharesMissing", text: SHARES_MISSING_TEXT };
+  return c.reason!;
 }
 
 /** 지난주 대비 (화면 정수 차이가 5점 넘을 때만): 같은 쪽으로 움직인 묶음 가운데 비중 × 변화가 가장 큰 것 + 까닭 */

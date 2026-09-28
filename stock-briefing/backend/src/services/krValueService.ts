@@ -3,6 +3,7 @@ import {
   buildKrReference,
   compactKrFacts,
   krAux,
+  krAvailable,
   krCandidates,
   krCrossCheck,
   krDue,
@@ -12,6 +13,8 @@ import {
   KR_FINANCIAL_UPJONG,
   KR_MIN_FILL,
   KR_NIGHT_CAP,
+  KR_QUARTER_LAG_DAYS,
+  KR_REIT_GROUP,
   KR_SOURCE,
   mergeKrFacts,
   monthEndOf,
@@ -29,28 +32,49 @@ import type { NaverDiscover } from "../providers/market/naverDiscover.js";
 import type { FeatureService } from "./featureService.js";
 import { valueAboutOf } from "./indicatorScoreText.js";
 import { REFERENCE_REBUILD_DAYS, REFERENCE_STALE_DAYS, referenceDrop } from "./valueReference.js";
-import { baseBlock, familyRow, FACTS_CARRY_MS, FACTS_REFRESH_MS, sharesMismatch, weeklyValueChange, type Core, type ValueBlock, type ValueEval, type ValueEvalArgs } from "./valueScoreService.js";
+import {
+  baseBlock,
+  closeGap,
+  familyRow,
+  finKindOf,
+  flagRows,
+  FACTS_CARRY_MS,
+  FACTS_REFRESH_MS,
+  lossStreak,
+  priceNoteOf,
+  sharesMismatch,
+  weeklyValueChange,
+  type Core,
+  type RowExtra,
+  type ValueBlock,
+  type ValueEval,
+  type ValueEvalArgs,
+} from "./valueScoreService.js";
 import {
   carriedBadge,
   carriedText,
   fiscalShort,
   krCauseQuarter,
   krDatesLine,
+  krFewQuartersText,
   krFirstFillText,
   KR_LITE_NOTE,
+  KR_QUARTER_GAP_TEXT,
   krPeerLine,
   krVersionLine,
   LITE_BADGE,
   lowCoverageText,
   PARTIAL_BADGE,
   peerFallbackText,
-  PRICE_NOTE,
+  preferredText,
+  THIN_EQUITY_DEBT,
+  thinEquityText,
   valueChangeText,
   valueHeadline,
   VALUE_BAND_LINE,
-  VALUE_FLAG_TEXT,
   VALUE_STATUS_TEXT,
 } from "./valueScoreText.js";
+import { readValueTextFlags, VALUE_TEXT_OFF, type ValueTextFlags } from "./valueTextFlags.js";
 
 /**
  * 한국 간이 가치 지표 (3-44 3단계, 플래그 indicatorScores + valueScore + krValueScore). 설계 S4 · 가치지표-계산.md 18장.
@@ -137,6 +161,25 @@ export class KrValueService {
 
   constructor(private readonly deps: KrValueDeps) {
     this.now = deps.now ?? (() => new Date());
+  }
+
+  private reitMemo: { at: number; codes: Set<string> } | null = null;
+  /**
+   * 종목 마스터의 리츠 코드 (listed_stocks.group_code 'RT' — 한국투자증권 종목 정보의 공식 분류, 1시간 기억). 마스터가 비었거나 읽지 못하면 빈 집합 —
+   * 그때는 네이버 업종 280(부동산) 안의 '리츠' 이름으로 가린다 (krIsReit)
+   */
+  async reitCodes(): Promise<Set<string>> {
+    const t = this.now().getTime();
+    if (this.reitMemo && t - this.reitMemo.at < 3_600_000) return this.reitMemo.codes;
+    const rows = await this.deps.db
+      .selectFrom("listed_stocks")
+      .select("code")
+      .where("group_code", "=", KR_REIT_GROUP)
+      .execute()
+      .catch(() => [] as Array<{ code: string }>);
+    const codes = new Set(rows.map((r) => r.code));
+    this.reitMemo = { at: t, codes };
+    return codes;
   }
 
   /** 세 플래그(indicatorScores · valueScore · krValueScore)와 출처가 있어야 */
@@ -322,7 +365,7 @@ export class KrValueService {
     const t = this.now().getTime();
     if (this.fillMemo && t - this.fillMemo.at < FILL_MEMO_MS) return this.fillMemo.value;
     const snap = await this.readMembers();
-    const cands = snap ? krCandidates(snap.rows) : [];
+    const cands = snap ? krCandidates(snap.rows, await this.reitCodes()) : [];
     const have = new Set((await this.deps.db.selectFrom("value_fundamentals").select("code").where("cik", "=", KR_SOURCE).execute()).map((r) => r.code));
     const withFacts = cands.filter((m) => have.has(m.code)).length;
     const value = { candidates: cands.length, withFacts, ratio: cands.length ? withFacts / cands.length : 0 };
@@ -344,7 +387,7 @@ export class KrValueService {
       const snap = await this.members();
       if (!snap) return empty("noMembers");
       const today = this.today();
-      const cands = krCandidates(snap.rows);
+      const cands = krCandidates(snap.rows, await this.reitCodes());
       const capOf = new Map(cands.map((m) => [m.code, m.marketCap ?? 0]));
       const codes = [...new Set([...(opts.registered ?? []).filter(isKrCode).map(normalizeCode), ...cands.map((m) => m.code)])];
       const stored = await this.allFacts();
@@ -442,7 +485,7 @@ export class KrValueService {
         const stored = await this.allFacts();
         const facts = new Map([...stored].map(([k, v]) => [k, v.facts]));
         const prev = await this.reference(addDays(today, -1)).catch(() => null);
-        const data = buildKrReference(snap.rows, facts, today, prev?.ref ?? null);
+        const data = buildKrReference(snap.rows, facts, today, prev?.ref ?? null, await this.reitCodes());
         const fill = data.counts.mapped ? data.counts.withData / data.counts.mapped : 0;
         if (fill < KR_MIN_FILL) {
           this.lastBuild = { at, ok: false, filling: true, counts: data.counts };
@@ -492,7 +535,7 @@ export class KrValueService {
   async prune(registered: readonly string[]): Promise<number> {
     const snap = await this.readMembers();
     if (!snap) return 0;
-    const keep = new Set([...krCandidates(snap.rows).map((m) => m.code), ...registered.map(normalizeCode)]);
+    const keep = new Set([...krCandidates(snap.rows, await this.reitCodes()).map((m) => m.code), ...registered.map(normalizeCode)]);
     const cut = seoulIso(new Date(this.now().getTime() - PRUNE_DAYS * 86_400_000));
     const old = (await this.deps.db.selectFrom("value_fundamentals").select("code").where("cik", "=", KR_SOURCE).where("fetched_at", "<", cut).execute()).map((r) => r.code).filter((c) => !keep.has(c));
     if (!old.length) return 0;
@@ -559,14 +602,20 @@ export class KrValueService {
     const about = valueAboutOf("general", "KR");
     const block = (status: ValueBlock["status"], label: string, code2: string, text: string) => baseBlock(status, label, { code: code2, text }, about);
     const p = a.product;
-    const ex = krExclusion(code, a.name) ?? (p?.spac ? "spac" : p?.commonShare === false ? "preferred" : null);
+    // 가치 점수 개선 1단계 글 플래그 (모두 글만 — 점수는 그대로)
+    const tf = await readValueTextFlags(this.deps.features);
+    // 저장한 재무 (네트워크 없음) — 리츠 판정의 네이버 업종 번호도 여기서 (마스터 분류를 모를 때만 씀)
+    const facts = await this.loadFacts(code);
+    // 리츠는 공식 분류로 (긴급 고침 — 이름 속 '리츠' 글자로 메리츠금융지주가 빠지던 것)
+    const hint = { reitCodes: await this.reitCodes(), groupCode: a.groupCode ?? null, upjongCode: facts?.facts.i?.industryCode ?? null };
+    const ex = krExclusion(code, a.name, hint) ?? (p?.spac ? "spac" : p?.commonShare === false ? "preferred" : null);
+    if (ex === "preferred" && tf.reasonDetail) return plain(block("excluded", "대상 아님", ex, preferredText(await this.commonWithFacts(code))));
     if (ex) return plain(block("excluded", "대상 아님", ex, VALUE_STATUS_TEXT[ex]));
     if (p?.clearance) return plain(block("excluded", "대상 아님", "clearance", VALUE_STATUS_TEXT.clearance));
 
     const ref = await this.reference();
     const refOld = !!ref && daysBetween(ref.refDate, a.scoreDate) > REFERENCE_STALE_DAYS;
     const t = this.now().getTime();
-    const facts = await this.loadFacts(code);
     const fail = this.failures.get(code);
     if (!facts) {
       if (fail?.kind === "notFound" && t - fail.at < NOT_FOUND_BACKOFF_MS) return plain(block("insufficient", "점수 없음", "notListed", VALUE_STATUS_TEXT.krNotFound));
@@ -596,7 +645,10 @@ export class KrValueService {
     const now = this.core(facts.facts, ref, cls, a.candles, a.scoreDate);
     // 주식 분할·병합 뒤 네이버 주당 값이 아직 분할 전이면: 되짚은 주식 수가 목록(시가총액 ÷ 현재가)과 크게 다르다 → 잠시 보류
     if (sharesMismatch(ref.quote(code), now.inputs?.shares ?? null, now.avgPrice)) return plain(block("hold", "잠시 보류", "sharesMismatch", VALUE_STATUS_TEXT.sharesMismatch));
-    if (now.status !== "scored") return plain(baseBlock("insufficient", "점수 없음", now.reason!, valueAboutOf(now.path ?? "general", "KR")), { stored: { method: VALUE_VERSION, grade: "lite", status: "insufficient", reason: now.reason!.code, reference: ref.refDate, fetchedAt: facts.fetchedAt } });
+    if (now.status !== "scored") {
+      const reason = krReasonOf(now, tf);
+      return plain(baseBlock("insufficient", "점수 없음", reason, valueAboutOf(now.path ?? "general", "KR")), { stored: { method: VALUE_VERSION, grade: "lite", status: "insufficient", reason: reason.code, reference: ref.refDate, fetchedAt: facts.fetchedAt } });
+    }
 
     let change: ValueBlock["change"] = null;
     if (now.result!.shown !== null && a.candles.length > AVG_DAYS + 5) {
@@ -607,8 +659,24 @@ export class KrValueService {
       if (prev.status === "scored" && prev.result!.shown !== null) change = krWeeklyChange(now, prev, ref.refDate, prevRef.refDate);
     }
     const carried = age >= FACTS_CARRY_MS && failedSince;
-    const out = krScoredBlock(now, { ref, industry: cls, change, carried, fetchedAt: facts.fetchedAt, code });
+    const lastBar = a.candles.filter((c) => c.date <= a.scoreDate).at(-1) ?? null;
+    const out = krScoredBlock(now, { ref, industry: cls, change, carried, fetchedAt: facts.fetchedAt, code, text: tf, lastClose: lastBar ? { date: lastBar.date, close: lastBar.close } : null });
     return { block: out, stored: krStored(now, ref.refDate, facts.fetchedAt), fetchFailure: false, waiting: refreshing };
+  }
+
+  /**
+   * 우선주의 같은 회사 보통주 이름 (가치 점수 개선 1단계 [9]): 보통주 코드(끝 자리 0)의 저장한 재무 요약으로 점수를 낼 수 있을 때만 — 없으면 null
+   * ('보통주 화면에 점수가 있습니다'가 틀린 말이 되지 않게)
+   */
+  private async commonWithFacts(code: string): Promise<string | null> {
+    const common = `${code.slice(0, 5)}0`;
+    if (common === code) return null;
+    const f = await this.loadFacts(common).catch(() => null);
+    if (!f) return null;
+    const inp = krInputs(f.facts, this.today());
+    if (!inp || (inp.ttm.eps === null && inp.bps === null)) return null;
+    const row = await this.deps.db.selectFrom("listed_stocks").select("name").where("code", "=", common).executeTakeFirst().catch(() => undefined);
+    return row?.name ?? f.facts.i?.name ?? null;
   }
 
   /** 업종: 이번 주 목록(비교 기준 symbols) → 네이버 요약 지표의 업종 번호 → 모름 */
@@ -638,7 +706,13 @@ export class KrValueService {
     if (result.status === "insufficient") {
       const r = result.reasons[0]!;
       const text = r.code === "priceInvalid" ? VALUE_STATUS_TEXT.priceInvalid : r.code === "lowCoverage" ? lowCoverageText(r.pct ?? 0) : VALUE_STATUS_TEXT.fewFamilies;
-      return { status: "insufficient", reason: { code: r.code, text }, ...base, ...kr } as Core;
+      // 속 까닭 (이유 글 — 플래그 valueReasonDetail 일 때만 씀): 최근 4분기 주당이익을 만들 수 없어 주가 수준이 빠진 것이면, 쓸 수 있는 분기 실적 수
+      let detail: string | undefined;
+      if (r.code === "priceInvalid" && inp.ttm.eps === null) {
+        const qn = facts.q.filter((q) => krAvailable(q[0], KR_QUARTER_LAG_DAYS, scoreDate)).length;
+        detail = qn < 4 ? `fewQuarters:${qn}` : "quarterGap";
+      }
+      return { status: "insufficient", reason: { code: r.code, text }, ...(detail ? { detail } : {}), ...base, ...kr } as Core;
     }
     return { status: "scored", ...base, ...kr } as Core;
   }
@@ -657,7 +731,18 @@ export function krWeeklyChange(now: Core, prev: Core, refNow: string, refPrev: s
   return { ...c, cause, text: valueChangeText({ from: c.from, diff: c.diff, family: c.family, familyDiff: c.familyDiff, cause }) };
 }
 
-function krScoredBlock(c: Core, o: { ref: PeerBook; industry: string | null; change: ValueBlock["change"]; carried: boolean; fetchedAt: string; code: string }): ValueBlock {
+/** 점수 없음 이유 (한국, 가치 점수 개선 1단계 [9] valueReasonDetail — 분기 실적 수 · 빈 값, 끄면 예전 글) */
+export function krReasonOf(c: Core, t: ValueTextFlags): { code: string; text: string } {
+  if (t.reasonDetail && c.detail?.startsWith("fewQuarters:")) return { code: "krFewQuarters", text: krFewQuartersText(Number(c.detail.slice("fewQuarters:".length))) };
+  if (t.reasonDetail && c.detail === "quarterGap") return { code: "krQuarterGap", text: KR_QUARTER_GAP_TEXT };
+  return c.reason!;
+}
+
+function krScoredBlock(
+  c: Core,
+  o: { ref: PeerBook; industry: string | null; change: ValueBlock["change"]; carried: boolean; fetchedAt: string; code: string; text?: ValueTextFlags; lastClose?: { date: string; close: number } | null },
+): ValueBlock {
+  const t = o.text ?? VALUE_TEXT_OFF;
   const r = c.result!;
   const inp = (c as KrCore).krInputs;
   const shown = r.shown!;
@@ -665,16 +750,27 @@ function krScoredBlock(c: Core, o: { ref: PeerBook; industry: string | null; cha
   const flagsKeys = valueFlags(r, c.aux!, { cyclical: false, thresholds: o.ref.ref.thresholds, metrics: c.metrics! });
   const core = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && m.score !== null && (r.path === "financial" ? m.key === "A3" : m.key === "A1"));
   const level = core?.peer?.level ?? "market";
-  const flags: ValueBlock["flags"] = [];
-  for (const k of flagsKeys) {
-    if (k === "peerFallback") flags.push({ key: k, text: peerFallbackText(level === "sector" ? "market" : level, null, r.path).replace("시장 전체", "한국 시장 전체").replace("금융사 전체", "한국 금융사 전체") });
-    else if (k !== "carriedForward") flags.push({ key: k, text: VALUE_FLAG_TEXT[k] });
+  const flags = flagRows(flagsKeys, t, {
+    oneOffPct: null,
+    lossYears: lossStreak(inp.annual.map((a) => ({ end: a.end, op: a.op }))),
+    fallbackText: peerFallbackText(level === "sector" ? "market" : level, null, r.path).replace("시장 전체", "한국 시장 전체").replace("금융사 전체", "한국 금융사 전체"),
+    carried: o.carried ? carriedText(o.fetchedAt) : null,
+  });
+  // [10] 자본이 아주 작은 회사 (부채비율 1,000% 이상, 금융사 제외): PBR·ROE 가 작은 변화에도 크게 바뀐다는 사실 (아시아나항공 5,496%)
+  if (t.wordingFacts && r.path !== "financial" && typeof inp.debtRatio === "number" && inp.debtRatio >= THIN_EQUITY_DEBT) {
+    const at = flags.findIndex((f) => f.key === "carriedForward");
+    flags.splice(at < 0 ? flags.length : at, 0, { key: "thinEquity", text: thinEquityText(inp.debtRatio) });
   }
-  if (o.carried) flags.push({ key: "carriedForward", text: carriedText(o.fetchedAt) });
   const n = o.ref.groupSize(r.path, level, level === "industry" ? o.industry : null, o.code);
   const about = valueAboutOf(r.path, "KR");
   const end = monthEndOf(inp.quarter);
   const notes = [KR_LITE_NOTE, ...(r.status === "partial" ? [`계산에 쓴 묶음 비중 ${r.coverageWeight} (100 중)`] : [])];
+  const extra: RowExtra = { unit: "KRW", finKind: r.path === "financial" ? finKindOf(o.industry) : null, groupName: level === "industry" ? o.industry : null };
+  // [3] 가격 안내 (20거래일 평균과 마지막 종가 — 한국은 섞기 없음)
+  const eps = inp.ttm.eps;
+  const perAvg = typeof eps === "number" && eps > 0 && c.avgPrice ? c.avgPrice / eps : null;
+  const pbrAvg = typeof inp.bps === "number" && inp.bps > 0 && c.avgPrice ? c.avgPrice / inp.bps : null;
+  const close = t.priceNote2 ? closeGap(c.avgPrice, o.lastClose ?? null, perAvg, pbrAvg) : null;
   return {
     ...baseBlock(r.status, `${shown}점 · ${band}`, null, about),
     grade: "lite",
@@ -686,10 +782,10 @@ function krScoredBlock(c: Core, o: { ref: PeerBook; industry: string | null; cha
     headline: valueHeadline(shown, band),
     peerLine: krPeerLine({ level, nameKo: level === "industry" ? o.industry : null, n, path: r.path }),
     datesLine: krDatesLine({ priceThrough: c.priceThrough!, quarter: inp.quarter, reference: o.ref.refDate }),
-    priceNote: PRICE_NOTE,
+    priceNote: priceNoteOf(t, { blend: false, close }),
     path: r.path,
     coverageWeight: r.coverageWeight,
-    families: r.families.map((f) => familyRow(f, { path: r.path, grade: "lite", annualEnd: inp.fiscalEnd, market: "KR" })),
+    families: r.families.map((f) => familyRow(f, { path: r.path, grade: "lite", annualEnd: inp.fiscalEnd, market: "KR", text: t, extra })),
     flags,
     notes,
     change: o.change,

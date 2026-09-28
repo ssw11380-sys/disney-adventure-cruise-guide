@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { IndicatorScores } from "@/api/types";
-import { barFraction, compositeLine, familyLabel, familySpeech, flagPreview, itemLine, leverageSpeech, metricMain, metricSpeech, moreFlagsText, nameWidth, reasonOnly, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueJumpY, valueSpeech, valueWaiting, weightJoin, WEIGHT_JOIN } from "@/lib/scoreView";
+import { barFraction, compositeLine, familyLabel, familySpeech, flagPreview, formulaSpeech, itemLine, leverageSpeech, metricMain, metricSpeech, moreFlagsText, nameWidth, reasonOnly, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueJumpY, valueSpeech, valueWaiting, weightJoin, WEIGHT_JOIN } from "@/lib/scoreView";
 
 /**
  * 지표 점수 화면 모양 (3-44 — 2단계부터 가치·종합). 서버 응답은 공용 픽스처(shared/fixtures/indicatorScores.json — 서버 테스트가 지금 서버 코드의 응답과 같은지 본다).
@@ -31,10 +31,26 @@ describe("화면 읽기 문장", () => {
     // 가치 플래그를 끈 서버: 상태 글과 보이는 이유 줄까지 읽는다 (검토 지적: 상태 글 '지금 계산하지 않음' · 이유도 TalkBack 이 읽게)
     expect(summarySpeech(S["NVDA_valueOff"]!)).toBe("지표 점수. 가치 지표, 지금 계산하지 않음, 가치 지표 점수는 지금 계산하지 않습니다. 추세 지표 69점, 다소 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
   });
-  it("두 점수 차이 30 이상: 종합 뒤에 차이 안내를 이어 읽는다 (마침표 겹침 없음)", () => {
-    const sp = summarySpeech(S["ZZGAP"]!);
+  it("두 점수 차이 30 이상: 종합 뒤에 차이 안내를 이어 읽는다 (마침표 겹침 없음 — 가치 점수 개선 1단계 플래그를 끈 서버)", () => {
+    const sp = summarySpeech(S["ZZGAP_stage1Off"]!);
     expect(sp).toContain("종합 지표 50점, 두 점수의 평균. 두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요.");
     expect(sp).not.toMatch(/\.\./);
+  });
+  it("가치 점수 개선 1단계 [4]: 차이 30 넘으면 '종합 지표 없음, 까닭' · 식은 '67과 69를 더해 2로 나눈 값'으로 읽는다 (앱 플래그 compositeFormula 일 때만)", () => {
+    expect(summarySpeech(S["ZZGAP"]!)).toContain("종합 지표 없음, 두 점수 차이가 39점이라 평균을 보이지 않습니다.");
+    expect(summarySpeech(S["ZZGAP"]!, true)).toBe(summarySpeech(S["ZZGAP"]!));
+    expect(summarySpeech(S["NVDA"]!, true)).toBe("지표 점수. 가치 지표 67점, 0에서 100 중, 높은 편. 추세 지표 69점, 다소 강함. 종합 지표 68점, 두 점수의 평균, 67과 69를 더해 2로 나눈 값.");
+    expect(summarySpeech(S["NVDA"]!)).toBe("지표 점수. 가치 지표 67점, 0에서 100 중, 높은 편. 추세 지표 69점, 다소 강함. 종합 지표 68점, 두 점수의 평균.");
+    expect([formulaSpeech("= (51 + 80) ÷ 2"), formulaSpeech("= (42 + 65) ÷ 2"), formulaSpeech("= (100 + 9) ÷ 2"), formulaSpeech("= (30 + 70) ÷ 2")]).toEqual([
+      "51과 80을 더해 2로 나눈 값",
+      "42와 65를 더해 2로 나눈 값",
+      "100과 9를 더해 2로 나눈 값",
+      "30과 70을 더해 2로 나눈 값",
+    ]);
+    // 25~30점 차이 안내 (명령형 없음)
+    const ko = { ...S["NVDA"]!, composite: { status: "ok", score: 66, reason: null, text: "두 점수의 평균", gap: 29, gapNote: true, gapText: "두 점수 차이가 29점입니다. 평균 하나로는 이 차이가 가려집니다.", formula: "= (51 + 80) ÷ 2" } } as const;
+    expect(summarySpeech(ko, true)).toContain("종합 지표 66점, 두 점수의 평균, 51과 80을 더해 2로 나눈 값. 두 점수 차이가 29점입니다. 평균 하나로는 이 차이가 가려집니다.");
+    expect(summarySpeech(ko, true)).not.toMatch(/\.\.|세요/);
   });
   it("가치 점수 없음·대상 아님·한국: 상태 글과 이유 (보이는 이유 줄을 화면 읽기도 읽는다)", () => {
     expect(valueSpeech(S["ZZNOF"]!.value)).toBe("가치 지표, 점수 없음, SEC 재무제표를 찾지 못했습니다 (외국 회사·새로 상장한 회사 등)");
@@ -47,8 +63,8 @@ describe("화면 읽기 문장", () => {
     const partial = { ...S["NVDA"]!.value, status: "partial" as const, badges: ["일부 지표 없이 계산", "지난 값 9/24"] };
     expect(valueSpeech(partial)).toBe("가치 지표 67점, 0에서 100 중, 높은 편, 일부 지표 없이 계산, 지난 값 9/24");
   });
-  it("가치 묶음·지표 줄 화면 읽기", () => {
-    const f = S["NVDA"]!.value.families![0]!;
+  it("가치 묶음·지표 줄 화면 읽기 (가치 점수 개선 1단계 플래그를 끈 서버의 예전 글)", () => {
+    const f = S["NVDA_stage1Off"]!.value.families![0]!;
     expect(familySpeech(f)).toBe(`주가 수준 ${f.score}점, 비중 30`);
     const a1 = f.metrics.find((m) => m.key === "A1")!;
     // 리뷰: 줄 전체를 한 덩어리로 읽으므로 보이는 글(가운데값·비교별 위치·비중·문장·안내·뜻)을 모두 담는다. '72/100' 은 '100 중 72'
@@ -67,6 +83,15 @@ describe("화면 읽기 문장", () => {
     expect(metricSpeech(c1)).toContain(`, 업종 가운데값 ${c1.peerMedian!.replace("업종 가운데값 ", "")}. 2026년 1월 결산 연간 기준. 위치 점수`);
     const b3 = S["NVDA"]!.value.families![1]!.metrics.find((m) => m.key === "B3")!;
     expect(metricSpeech(b3)).toBe("매출총이익 ÷ 자산, 값 없음, 비교할 회사 자료가 모자라(70% 미만) 이 지표는 쓰지 않았습니다.");
+    // 가치 점수 개선 1단계 [3] (서버 기본 켬): 최근 4분기 PER · 흑자 회사 가운데값 · 흑자 회사끼리 위치도 한 문장으로 읽는다
+    const a1n = S["NVDA"]!.value.families![0]!.metrics.find((m) => m.key === "A1")!;
+    expect(metricSpeech(a1n)).toContain("PER (이익 대비 주가) 27.9배 (최근 4분기, 흔히 쓰는 계산), 흑자 회사 가운데값 58.6배, 비교한 업종 68곳 중 43%는 적자.");
+    expect(metricSpeech(a1n)).toContain("업종 안 위치 100 중 76 (흑자 회사끼리 59)");
+    expect(metricSpeech(a1n)).toContain("순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 44.8배를 썼습니다");
+    expect(metricSpeech(a1n)).not.toMatch(/\.\.|\/100|→/);
+    // [2] 두 쪽 문장은 묶음 글 그대로 (두 줄)
+    expect(S["NVDA"]!.value.families![0]!.text).toBe("막대를 길게 만든 지표: 기업가치 ÷ 영업이익 80 · PER 71\n막대를 짧게 만든 지표: PBR 5 · PSR 25");
+    expect(S["NVDA"]!.value.families![0]!.about).toBe("막대가 길수록: 이익·순자산·매출에 비해 주가가 낮은 쪽 (비교 회사 기준)");
   });
   it("삼성전자: 68 다소 강함", () => expect(trendSpeech(S["005930"]!.trend)).toBe("추세 지표 68점, 다소 강함"));
   it("SOXL: 이 상품 자체 점수 없음 + 기초자산 참고", () => {
@@ -126,20 +151,32 @@ describe("보이는 모양", () => {
       NVDA_change: true,
       NVDA_fetchFailed: false,
       SOXL_fetchFailed: false,
+      NVDA_stage1Off: true,
+      JPM_stage1Off: true,
+      ZZGAP_stage1Off: true,
+      "105560_stage1Off": true,
     });
     // 가치 줄은 미국 보통주 · 한국 보통주(간이) 점수만 (ETF · 받는 중 · SEC 재무 없음 · 가치 끔 · 한국 가치 끔은 상태 글)
-    expect(Object.entries(S).filter(([, v]) => valueHasScore(v.value)).map(([k]) => k).sort()).toEqual(["000660", "005930", "105560", "AAPL", "COST", "JPM", "META", "MSFT", "NVDA", "NVDA_change", "NVDA_fetchFailed", "RGTI", "ZZGAP"].sort());
+    expect(Object.entries(S).filter(([, v]) => valueHasScore(v.value)).map(([k]) => k).sort()).toEqual(
+      ["000660", "005930", "105560", "AAPL", "COST", "JPM", "META", "MSFT", "NVDA", "NVDA_change", "NVDA_fetchFailed", "RGTI", "ZZGAP", "NVDA_stage1Off", "JPM_stage1Off", "ZZGAP_stage1Off", "105560_stage1Off"].sort(),
+    );
   });
-  it("종합 숫자는 두 점수가 모두 있을 때만 = 두 정수의 평균, 없으면 '없음'과 이유 (설계 5.4 '없으면 없다고')", () => {
+  it("종합 숫자는 두 점수가 모두 있을 때만 = 두 정수의 평균, 없으면 '없음'과 이유 (설계 5.4 '없으면 없다고') · 차이 30 넘으면 숫자 대신 까닭 (1단계 [4])", () => {
     for (const s of Object.values(S)) {
-      expect(showComposite(s)).toBe(valueHasScore(s.value) && trendHasScore(s.trend));
+      const wide = s.composite.reason === "gapWide";
+      expect(showComposite(s)).toBe(valueHasScore(s.value) && trendHasScore(s.trend) && !wide);
       if (showComposite(s)) expect(s.composite.score).toBe(Math.floor((s.value.score! + s.trend.score!) / 2 + 0.5));
+      if (wide) expect(Math.abs(s.value.score! - s.trend.score!)).toBeGreaterThan(30);
     }
     expect(compositeLine(S["NVDA"]!)).toEqual({ score: 68, label: "68", reason: "두 점수의 평균", gapText: null });
+    expect(compositeLine(S["NVDA"]!, true)).toEqual({ score: 68, label: "68", reason: "두 점수의 평균", gapText: null, formula: "= (67 + 69) ÷ 2" });
+    expect(compositeLine(S["NVDA_stage1Off"]!, true)).toEqual({ score: 68, label: "68", reason: "두 점수의 평균", gapText: null });
     expect(compositeLine(S["SOXL"]!)).toEqual({ score: null, label: "없음", reason: "가치 지표 점수가 없어 합치지 않습니다", gapText: null });
     expect(compositeLine(S["SQQQ"]!)).toEqual({ score: null, label: "없음", reason: "두 점수가 모두 없습니다", gapText: null });
     expect(compositeLine(S["NVDA_fetchFailed"]!)).toEqual({ score: null, label: "없음", reason: "추세 지표 점수가 없어 합치지 않습니다", gapText: null });
-    expect(compositeLine(S["ZZGAP"]!)).toEqual({ score: 50, label: "50", reason: "두 점수의 평균", gapText: "두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요." });
+    expect(compositeLine(S["ZZGAP_stage1Off"]!)).toEqual({ score: 50, label: "50", reason: "두 점수의 평균", gapText: "두 점수의 차이가 39점이라 평균만으로는 상태가 잘 드러나지 않습니다. 두 점수를 함께 보세요." });
+    expect(compositeLine(S["ZZGAP"]!, true)).toEqual({ score: null, label: "없음", reason: "두 점수 차이가 39점이라 평균을 보이지 않습니다", gapText: null });
+    expect(compositeLine(S["105560"]!)).toEqual({ score: null, label: "없음", reason: "두 점수 차이가 34점이라 평균을 보이지 않습니다", gapText: null });
     // 예전 서버(차이 안내 칸 없음)
     const old = { ...S["NVDA"]!, composite: { status: "ok", score: 63, reason: null, text: "63 · 두 점수의 평균", gap: 12, gapNote: false } } as const;
     expect(compositeLine(old)).toEqual({ score: 63, label: "63", reason: "두 점수의 평균", gapText: null });

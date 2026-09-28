@@ -32,7 +32,8 @@ export const secFacts = (t: SecTicker) => gz(`sec/${t}.json.gz`) as Record<strin
  * 배당 삭감 표시 — 특별배당 뒤 해(FAST·F·CTAS·WRB·COST), 실제 삭감(INTC 2023·T 2022·MMM 2024), 10:1 분할(LRCX 2024) ·
  * COST 12·12·12·16주 분기 · XOM 지주회사 전환(새 CIK 0002115436 는 전환 뒤 10-Q 하나뿐, 예전 CIK 0000034088 = XOM-predecessor)
  */
-export const SEC_EXTRA = ["LRCX", "FAST", "F", "CTAS", "WRB", "COST", "INTC", "T", "MMM", "XOM", "XOM-predecessor"] as const;
+export const SEC_EXTRA = ["LRCX", "FAST", "F", "CTAS", "WRB", "COST", "INTC", "T", "MMM", "XOM", "XOM-predecessor", "KO"] as const;
+// KO (2026-09-29 추가): 52/53주 회계연도 배당 창 — 작년 1분기 끝 3/28 ↔ 올해 4/3 라 '연간 + 올해 누적 − 작년 누적'이 371일을 덮어 4월 1일 배당을 두 번 셌다
 export const secExtra = (t: (typeof SEC_EXTRA)[number]) => gz(`sec/${t}.json.gz`) as Record<string, unknown>;
 export const referenceData = () => gz("reference.json.gz") as ValueReferenceData;
 export const screenerSample = () => JSON.parse(readFileSync(here("screener-sample.json"), "utf8")) as unknown;

@@ -1052,8 +1052,12 @@ export interface IndicatorScores {
   asOf: { priceDate: string | null; scoreDate: string; market: "KR" | "US"; line: string | null };
   value: ValueScoreBlock;
   trend: TrendScoreBlock;
-  /** 종합 = 화면에 보이는 두 정수의 평균 (둘 다 있고 기준일이 같을 때만). 차이 30 이상이면 gapNote·gapText */
-  composite: { status: "ok" | "none"; score: number | null; reason: string | null; text: string; gap: number | null; gapNote: boolean; gapText?: string | null };
+  /**
+   * 종합 = 화면에 보이는 두 정수의 평균 (둘 다 있고 기준일이 같을 때만). 차이 30 이상이면 gapNote·gapText.
+   * 가치 점수 개선 1단계 [4]: 서버 compositeFormula 면 식 formula '= (51 + 80) ÷ 2' 와 25점부터 안내, compositeGapHide 면 차이 30 초과는
+   * status 'none' · reason 'gapWide' · text '없음 · 두 점수 차이가 41점이라 평균을 보이지 않습니다' (예전 앱도 '없음 · 까닭'으로 그림)
+   */
+  composite: { status: "ok" | "none"; score: number | null; reason: string | null; text: string; gap: number | null; gapNote: boolean; gapText?: string | null; formula?: string | null };
   text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string; valueAbout?: string; valueDetailNote?: string };
   computedAt: string;
 }

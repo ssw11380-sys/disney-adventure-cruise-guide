@@ -3,6 +3,7 @@ import { NotFoundError } from "../lib/errors.js";
 import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
 import type { TextGenerator } from "../llm/generator.js";
 import { renderTemplate, type PromptName, type PromptStore } from "../llm/prompts.js";
+import { cleanDetail } from "./briefingWording.js";
 import type { AnalysisSnapshot, DataCollector } from "./collector.js";
 
 export type AnalysisKind = "company" | "value" | "technical";
@@ -38,6 +39,11 @@ export interface AnalysisServiceDeps {
   prompts: PromptStore;
   /** 등록 종목·종목 마스터에 없을 때 이름·시장 찾기 (StockService.preview: 외부 검색으로 대신 찾는다 — 신규 상장 등). 모르면 null */
   lookup?: (code: string) => Promise<{ code: string; name: string; market: string } | null>;
+  /**
+   * 가치 점수 개선 1단계 [8] (플래그 valueAiSafeWording): AI 가치분석 글을 새 프롬프트(value_analysis_safe — '평가하는 애널리스트'·강점/리스크 없음)로
+   * 만들고, 보일 때마다(전에 만든 글 포함) 브리핑과 같은 금지어 검사로 걸린 줄을 뺀다. 의존성이 없거나 읽기가 실패하면 끔
+   */
+  valueSafe?: () => Promise<boolean>;
   now?: () => Date;
 }
 
@@ -51,19 +57,29 @@ export class AnalysisService {
   }
 
   async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean } = {}): Promise<Analysis> {
+    const safe = kind === "value" && (await this.valueSafeOn());
     if (!opts.refresh) {
       const cached = await this.latest(code, kind);
-      if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) return { ...cached, cached: true };
+      if (cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind]) return safe ? safeAnalysis({ ...cached, cached: true }) : { ...cached, cached: true };
     }
-    const key = `${code}:${kind}`;
+    const key = `${code}:${kind}:${safe ? "safe" : "plain"}`;
     const existing = this.inflight.get(key);
     if (existing) return existing;
-    const p = this.generate(code, kind).finally(() => this.inflight.delete(key));
+    const p = this.generate(code, kind, safe)
+      .then((a) => (safe ? safeAnalysis(a) : a))
+      .finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
   }
 
-  private async generate(code: string, kind: AnalysisKind): Promise<Analysis> {
+  /** 플래그 valueAiSafeWording (의존성이 없거나 읽기가 실패하면 끔) */
+  private async valueSafeOn(): Promise<boolean> {
+    const read = this.deps.valueSafe;
+    if (!read) return false;
+    return read().catch(() => false);
+  }
+
+  private async generate(code: string, kind: AnalysisKind, safe = false): Promise<Analysis> {
     const stock =
       (await this.deps.db.selectFrom("registered_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
       (await this.deps.db.selectFrom("listed_stocks").select(["code", "name", "market"]).where("code", "=", code).executeTakeFirst()) ??
@@ -72,7 +88,7 @@ export class AnalysisService {
     if (!stock) throw new NotFoundError(`종목 ${code} 을 찾을 수 없습니다`);
 
     const snapshot = await this.deps.collector.collectAnalysis(stock, kind);
-    const prompt = await this.deps.prompts.load(PROMPT_FOR[kind]);
+    const prompt = await this.deps.prompts.load(safe && kind === "value" ? "value_analysis_safe" : PROMPT_FOR[kind]);
     const result = await this.deps.generator.generate({
       system: prompt.system,
       user: renderTemplate(prompt.userTemplate, {
@@ -129,6 +145,16 @@ export class AnalysisService {
     return { id: r.id, code: r.code, kind: r.kind as AnalysisKind, content: r.content, missing, model: r.model, createdAt: r.created_at, cached: true };
   }
 }
+
+/**
+ * AI 가치분석 글 금지어 검사 (가치 점수 개선 1단계 [8], 플래그 valueAiSafeWording): 브리핑과 같은 검사(BRIEFING_BANNED — 매매 권유·평가 꼬리표·
+ * 가격 신호·전망 말)로 걸린 줄(제목이면 그 절 전체)을 빼고 끝에 '(문장 검사에서 N줄을 뺐습니다)'. 걸린 것이 없으면 글자 하나 바꾸지 않는다.
+ * 출처 글(뉴스·공시 제목)은 없으므로 예외 없이 본다. 저장한 원문은 그대로 두고 보일 때만 고친다 (전에 만든 글도 같은 검사를 받게)
+ */
+export function safeValueText(text: string): string {
+  return cleanDetail(text, "").text;
+}
+const safeAnalysis = (a: Analysis): Analysis => ({ ...a, content: safeValueText(a.content) });
 
 function snapshotForPrompt(s: AnalysisSnapshot, kind: AnalysisKind): Record<string, unknown> {
   const base = { stock: s.stock, quote: s.quote };
