@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGenerator, fakeProviders, SAMPLE_MASTER } from "./helpers.js";
 import { IndicatorScoreService } from "../src/services/indicatorScoreService.js";
+import { AuthService } from "../src/auth/authService.js";
 import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
 
 /**
@@ -55,7 +56,7 @@ describe.skipIf(!url)("postgres dialect", () => {
   it("마이그레이션이 두 번 실행돼도 안전하다", async () => {
     await migrate(db, "postgres");
     const rows = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(rows.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     // 7 = 시장 전체 요약 표 (날짜·세션 하나에 한 건)
     const idx = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename = 'market_summaries'`.execute(db);
     expect(idx.rows.map((r) => r.indexname)).toContain("uq_market_summaries_date_session");
@@ -72,6 +73,28 @@ describe.skipIf(!url)("postgres dialect", () => {
     const types9 = await sql<{ data_type: string }>`
       select data_type from information_schema.columns where table_name = 'indicator_scores' and column_name in ('score', 'score_today') order by column_name`.execute(db);
     expect(types9.rows.map((r) => r.data_type)).toEqual(["double precision", "double precision"]);
+    // 11 = 계정 (아이디 비교 키·이메일·주인 한 명 유일, 세션 토큰 해시 유일)
+    const idx11 = await sql<{ indexname: string }>`select indexname from pg_indexes where tablename in ('users', 'sessions')`.execute(db);
+    expect(idx11.rows.map((r) => r.indexname)).toEqual(expect.arrayContaining(["uq_users_login_id_key", "uq_users_email", "uq_users_owner", "uq_sessions_token_hash", "idx_sessions_user"]));
+  });
+
+  it("계정 (A단계): 주인 시드는 두 번 해도 한 명, 가입·로그인·세션 확인·모든 기기 로그아웃 (Postgres)", async () => {
+    const auth = new AuthService({ db, now: () => new Date("2026-09-28T10:00:00+09:00"), scryptN: 1024 });
+    try {
+      expect(await auth.ensureOwner()).toBe("created");
+      expect(await auth.ensureOwner()).toBe("exists");
+      expect((await db.selectFrom("users").select("id").where("is_owner", "=", 1).execute()).length).toBe(1);
+      const s = await auth.signup({ loginId: "pgUser1", password: "abcd1234", passwordConfirm: "abcd1234", email: "PG@Example.com", remember: true, ip: "1.1.1.1" });
+      await expect(auth.signup({ loginId: "PGUSER1", password: "abcd1234", passwordConfirm: "abcd1234", email: "x@example.com", remember: true, ip: "1.1.1.2" })).rejects.toMatchObject({ code: "login_id_taken" });
+      const l = await auth.login({ loginId: "서성원", password: "1111", remember: false, ip: "1.1.1.3" });
+      expect((await auth.authenticate(s.token))?.user).toMatchObject({ loginId: "pgUser1", email: "pg@example.com", isOwner: false });
+      expect((await auth.authenticate(l.token))?.user).toMatchObject({ isOwner: true, usingInitialPassword: true });
+      expect(await auth.logoutAll(l.user.id)).toBe(1);
+      expect(await auth.authenticate(l.token)).toBeNull();
+    } finally {
+      await db.deleteFrom("sessions").execute();
+      await db.deleteFrom("users").execute();
+    }
   });
 
   it("지표 점수 기록 (3-44): 같은 종목·기준일은 덮어쓴다 (Postgres on conflict)", async () => {
@@ -157,7 +180,7 @@ describe.skipIf(!url)("postgres dialect", () => {
       await migrate(db, "postgres");
       expect(await read()).toEqual({ quantity: 16.123455, avg_price: 1234.5677 });
       const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       const doubles = await sql<{ n: number }>`select count(*) as n from information_schema.columns where table_name = 'registered_stocks' and data_type = 'double precision'`.execute(db);
       expect(Number(doubles.rows[0]!.n)).toBe(2);
     } finally {

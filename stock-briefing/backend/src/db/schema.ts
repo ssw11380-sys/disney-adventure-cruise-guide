@@ -209,6 +209,32 @@ export interface PriceAlertTable {
   fired_value: number | null; // 울린 순간 조건을 판정한 값 (가격 · 등락률 · 거래량 배율)
 }
 
+/** 계정 (계정 A단계, 플래그 accounts) */
+export interface UserTable {
+  id: Generated<number>;
+  login_id: string; // 보이는 아이디 (NFC)
+  login_id_key: string; // 비교용 (NFC + 소문자)
+  email: string | null; // 소문자
+  password_hash: string; // scrypt$N$r$p$소금$키
+  is_owner: number; // 1 = 주인 (지금까지의 데이터 주인, 한 명)
+  initial_password: number; // 1 = 처음 비밀번호(바꾸기 권유)
+  created_at: string;
+  updated_at: string;
+}
+
+/** 로그인 세션 (토큰은 sha256 만) */
+export interface SessionTable {
+  id: Generated<number>;
+  user_id: number;
+  token_hash: string;
+  remember: number; // 1 = 자동 로그인 (1년), 0 = 12시간
+  device_label: string | null;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+}
+
 export interface Database {
   listed_stocks: ListedStockTable;
   registered_stocks: RegisteredStockTable;
@@ -225,4 +251,6 @@ export interface Database {
   trade_executions: TradeExecutionTable;
   indicator_scores: IndicatorScoreTable;
   price_alerts: PriceAlertTable;
+  users: UserTable;
+  sessions: SessionTable;
 }

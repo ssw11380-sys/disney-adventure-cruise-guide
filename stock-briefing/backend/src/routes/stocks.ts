@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { ownerView } from "../auth/routePolicy.js";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import { evaluate, type StockService } from "../services/stockService.js";
 
@@ -41,8 +42,10 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
 
   app.get("/:code", async (req, reply) => {
     const { code } = codeParam.parse(req.params);
-    // 등록하지 않은 종목(발견 탭에서 누른 종목 등)도 종목 마스터에 있으면 미리 보기로 보여 준다 (registered: false)
-    const registered = await service.get(code);
+    // 등록하지 않은 종목(발견 탭에서 누른 종목 등)도 종목 마스터에 있으면 미리 보기로 보여 준다 (registered: false).
+    // 계정 A단계: 주인 아닌 계정은 등록 표를 보지 않는다 — 주인이 등록한 종목도 등록하지 않은 종목과 같은 미리 보기 (수량·평단·메모·토스 표시 없음)
+    const owner = ownerView(req);
+    const registered = owner ? await service.get(code) : null;
     const stock = registered ?? (await service.preview(code));
     if (!stock) return reply.code(404).send({ error: "NOT_FOUND", message: `종목을 찾을 수 없습니다: ${code}` });
     let quote = null;
@@ -52,7 +55,7 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
     } catch (e) {
       quoteError = e instanceof Error ? e.message : String(e);
     }
-    const { detail, krw, synced, inSnapshot } = await service.holdingMeta();
+    const { detail, krw, synced, inSnapshot } = owner ? await service.holdingMeta() : { detail: new Map(), krw: new Map(), synced: new Set<string>(), inSnapshot: new Set<string>() };
     return {
       ...stock,
       registered: !!registered,

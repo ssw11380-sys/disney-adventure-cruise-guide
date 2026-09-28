@@ -50,6 +50,12 @@ export class AnalysisService {
     this.now = deps.now ?? (() => new Date());
   }
 
+  /** 캐시에 있는 아직 쓸 만한(기한 안) 분석. 없으면 null (모델을 부르지 않는다 — 계정 A단계 주인 아닌 계정의 하루 한도 판단) */
+  async fresh(code: string, kind: AnalysisKind): Promise<Analysis | null> {
+    const cached = await this.latest(code, kind);
+    return cached && this.now().getTime() - Date.parse(cached.createdAt) < TTL_MS[kind] ? { ...cached, cached: true } : null;
+  }
+
   async get(code: string, kind: AnalysisKind, opts: { refresh?: boolean } = {}): Promise<Analysis> {
     if (!opts.refresh) {
       const cached = await this.latest(code, kind);

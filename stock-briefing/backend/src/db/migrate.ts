@@ -315,6 +315,46 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create unique index if not exists uq_price_alerts_rule on price_alerts (code, kind, value)`.execute(db);
     },
   },
+  {
+    version: 11, // main 의 가장 큰 번호(10) + 1 (계정 A단계). 다른 브랜치가 먼저 11 을 쓰면 합칠 때 12 로 — 번호가 겹치면 이미 그 번호까지 올라간 DB 는 이 표를 건너뛴다
+    up: async (db, dialect) => {
+      // 로그인·회원가입 (플래그 accounts). 새 표만 추가하고 기존 표는 건드리지 않는다. 예전 서버로 되돌려도 이 표를 모르고 지나갈 뿐이다.
+      // 시각은 이 저장소 방식대로 seoulIso(+09:00) 글자로 적는다
+      await db.schema
+        .createTable("users")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("login_id", "text", (c) => c.notNull()) // 보이는 아이디 (NFC, 앞뒤 공백 없음)
+        .addColumn("login_id_key", "text", (c) => c.notNull()) // 비교용: NFC + 소문자
+        .addColumn("email", "text") // 소문자. 주인은 비어 있을 수 있다
+        .addColumn("password_hash", "text", (c) => c.notNull()) // scrypt$N$r$p$소금$키
+        .addColumn("is_owner", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("initial_password", "integer", (c) => c.notNull().defaultTo(0))
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("updated_at", "text", (c) => c.notNull())
+        .execute();
+      await sql`create unique index if not exists uq_users_login_id_key on users (login_id_key)`.execute(db);
+      // 이메일이 없는(NULL) 행은 여러 개여도 된다 (SQLite·Postgres 공통)
+      await sql`create unique index if not exists uq_users_email on users (email)`.execute(db);
+      // 주인은 한 명 (여러 서버가 동시에 켜져 시드해도)
+      await sql`create unique index if not exists uq_users_owner on users (is_owner) where is_owner = 1`.execute(db);
+      await db.schema
+        .createTable("sessions")
+        .ifNotExists()
+        .addColumn("id", "integer", idColumn(dialect))
+        .addColumn("user_id", "integer", (c) => c.notNull().references("users.id").onDelete("cascade"))
+        .addColumn("token_hash", "text", (c) => c.notNull()) // sha256(토큰) hex — 토큰 자체는 적지 않는다
+        .addColumn("remember", "integer", (c) => c.notNull()) // 1 = 자동 로그인 (1년, 쓸 때마다 연장)
+        .addColumn("device_label", "text")
+        .addColumn("created_at", "text", (c) => c.notNull())
+        .addColumn("last_seen_at", "text", (c) => c.notNull())
+        .addColumn("expires_at", "text", (c) => c.notNull())
+        .addColumn("revoked_at", "text")
+        .execute();
+      await sql`create unique index if not exists uq_sessions_token_hash on sessions (token_hash)`.execute(db);
+      await sql`create index if not exists idx_sessions_user on sessions (user_id)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

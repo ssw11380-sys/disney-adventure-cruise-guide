@@ -3,10 +3,14 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
-import type { AppConfig } from "./config.js";
+import { envOn, type AppConfig } from "./config.js";
+import { AuthService } from "./auth/authService.js";
+import { AUTH_UNAVAILABLE, decide, NO_SESSION_ROUTES, routeKey, SESSION_INVALID, viewerKey, type AuthState } from "./auth/routePolicy.js";
+import { DailyQuota } from "./auth/rateLimit.js";
+import { authRoutes } from "./routes/auth.js";
 import { detectDialect, type Db } from "./db/index.js";
 import { AppError, ProviderError } from "./lib/errors.js";
-import { seoulIso } from "./lib/time.js";
+import { seoulDate, seoulIso } from "./lib/time.js";
 import { GenerationError } from "./llm/generator.js";
 import { PromptStore } from "./llm/prompts.js";
 import { defaultsFromCron, NotificationSettingsStore, timeToCron } from "./notifications/settings.js";
@@ -67,19 +71,44 @@ export interface BuildAppOptions {
   now?: () => Date;
   /** 푸시 영수증 확인 대기 시간 (테스트용) */
   receiptDelayMs?: number;
+  /** 계정 (테스트용): 비밀번호 해시 비용을 낮춘다 */
+  auth?: { scryptN?: number };
 }
 
 export const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.";
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const logger = opts.logger === false ? false : { level: opts.config.LOG_LEVEL, ...(typeof opts.logger === "object" ? opts.logger : {}), serializers: { req: logReq, path: logPath } };
-  const app = Fastify({ logger });
+  // Railway 앞단 프록시 뒤에서 실제 요청 IP 를 읽는다 (IP 별 로그인 제한 — 설정 TRUST_PROXY_HOPS, Railway 에서는 기본 1)
+  const hops = opts.config.trustProxyHops ?? 0;
+  // (Fastify 가 숫자를 받을 때와 같은 규칙: 가까운 쪽부터 hops 개의 주소를 믿는다)
+  const app = Fastify({ logger, ...(hops > 0 ? { trustProxy: (_addr: string, i: number) => i < hops } : {}) });
+  // 등록된 경로 목록 (계정 경로 정책 테스트가 모든 /api 경로를 센다 — 새 경로가 공유·개인 중 어디인지 정하지 않고 새지 않게)
+  const routeList: Array<{ method: string; url: string }> = [];
+  app.addHook("onRoute", (r) => {
+    for (const m of Array.isArray(r.method) ? r.method : [r.method]) routeList.push({ method: String(m), url: r.url });
+  });
+  app.decorate("routeList", routeList);
   await app.register(cors, { origin: true });
   await app.register(websocket, { options: { maxPayload: 4096 } });
   const log = app.log;
   const now = opts.now ?? (() => new Date());
   // 기능 켜고 끄기 (3-15): 플래그 목록은 featureService.ts 한 곳
-  const features = new FeatureService(opts.db, now);
+  // 로그인·회원가입 (계정 A단계, 플래그 accounts). 비상 끄기: ACCOUNTS_DISABLED=1 (설정 객체를 따로 만든 경우 — 테스트·스크립트 — 에도 프로세스 환경 변수를 본다).
+  // 비상 끄기면 앱에도 플래그를 꺼짐으로 준다 (로그인 화면이 나오지 않게)
+  const accountsKilled = Boolean(opts.config.accountsDisabled) || envOn(process.env["ACCOUNTS_DISABLED"]);
+  const features = new FeatureService(opts.db, now, new Set(accountsKilled ? (["accounts"] as const) : []));
+  const auth = new AuthService({
+    db: opts.db,
+    now,
+    log: app.log,
+    ownerLoginId: opts.config.OWNER_LOGIN_ID,
+    ownerInitialPassword: opts.config.OWNER_INITIAL_PASSWORD,
+    ...(opts.auth?.scryptN ? { scryptN: opts.auth.scryptN } : {}),
+  });
+  const accountsOn = () => features.enabled("accounts");
+  // 주인 계정: 없을 때만 만든다 (플래그와 상관없이 — 나중에 켜도 바로 쓰게. 이미 있으면 비밀번호를 되돌리지 않는다)
+  if (!accountsKilled) await auth.ensureOwner().catch((e: unknown) => app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 주인 계정 확인 실패"));
 
   const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now });
   // 가격·등락률·거래량 알림 (3-29, 플래그 priceAlerts): 조건 저장·울림 기록, 거래량 급증은 차트와 같은 30분봉 캐시(450개)로 계산
@@ -314,6 +343,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("priceStream", priceStream);
   app.decorate("tradeRecords", tradeRecords);
   app.decorate("indicatorScores", indicatorScores);
+  app.decorate("authService", auth);
 
   // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
   app.addHook("onRequest", async (req) => {
@@ -325,7 +355,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     return payload;
   });
   // 끊겼을 때 데이터 절약 (플래그 pollSaver, 3-25): 잔고·상세·지수 등 자주 묻는 GET 에 ETag·304·바뀐 부분만·gzip (라우트 등록 전에)
-  const pollSaver = registerPollSaver(app, { enabled: () => features.enabled("pollSaver") });
+  // 옛 본문 기억은 보는 사람마다 나눈다 (계정 A단계 — 주인 아닌 계정의 차이 계산에 주인의 옛 본문이 섞이지 않게)
+  const pollSaver = registerPollSaver(app, { enabled: () => features.enabled("pollSaver"), scope: viewerKey });
 
   // 인터넷에 노출할 때의 최소 보호: API_TOKEN 이 설정되면 /api/* 는 Bearer 토큰이 있어야 한다. /health 는 열어 둔다.
   if (opts.config.API_TOKEN) {
@@ -344,6 +375,44 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       }
     });
   }
+
+  // 계정 관문 (계정 A단계, 플래그 accounts): API 토큰 확인 **뒤에**, 라우터가 고른 경로로 판단한다 (퍼센트 인코딩으로 못 피함).
+  //  - 꺼져 있으면 지금처럼 (API 토큰 = 주인), /api/auth/* 는 없는 주소(404)
+  //  - 세션 헤더(X-Session-Token, 웹소켓은 ?session= 도)가 있으면 확인: 없는 토큰·끊김·기한 지남 → 401 session_invalid (앱이 로그아웃하는 유일한 응답)
+  //    DB 를 못 읽으면 503 auth_unavailable (로그아웃 아님)
+  //  - 그다음 경로 정책(auth/routePolicy): 세션 없음은 403 session_required, 주인 아닌 계정은 공유 경로만 (개인은 빈 값·403)
+  app.decorateRequest("auth", null);
+  app.addHook("onRequest", async (req, reply) => {
+    const route = req.routeOptions.url;
+    if (!route || !route.startsWith("/api/")) return; // 맞는 경로가 없으면(404) 그대로
+    const key = routeKey(req.method, route);
+    if (!(await accountsOn())) {
+      req.auth = { kind: "off" };
+      if (route.startsWith("/api/auth/")) return reply.code(404).send({ error: "NOT_FOUND", message: `없는 주소입니다: ${req.method} ${req.url.split("?")[0]}` });
+      return;
+    }
+    if (NO_SESSION_ROUTES.has(key)) {
+      req.auth = { kind: "anonymous" };
+      return;
+    }
+    const token = sessionTokenOf(req, route);
+    let state: AuthState = { kind: "anonymous" };
+    if (token) {
+      let ctx;
+      try {
+        ctx = await auth.authenticate(token);
+      } catch (e) {
+        app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 세션 확인 실패 (DB)");
+        return reply.code(503).header("retry-after", "10").send(AUTH_UNAVAILABLE);
+      }
+      if (!ctx) return reply.code(401).send(SESSION_INVALID);
+      state = { kind: "user", ...ctx };
+    }
+    req.auth = state;
+    const d = decide(key, state);
+    if (d.action === "deny") return reply.code(d.status).send(d.body);
+    if (d.action === "empty") return reply.code(200).send(d.body(req));
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) {
@@ -415,6 +484,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     backup: await backups.status().catch(() => null),
     // 매매 기록(3-36): 켜져 있을 때만 (끄면 응답이 예전과 같게). 최근 5·30거래일 스냅샷이 빠진 날이 있으면 warning — ok 는 그대로 true
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
+    // 계정(A단계): 켜져 있을 때만 (끄면 응답이 예전과 같게). 주인이 아직 처음 비밀번호(1111)인지
+    ...((await accountsOn()) ? { accounts: { enabled: true, ownerInitialPassword: await auth.ownerUsesInitialPassword().catch(() => null) } } : {}),
     disclaimer: DISCLAIMER,
   });
 
@@ -500,6 +571,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     news: opts.providers.news,
     financials: opts.providers.financials,
     financialsUs: opts.providers.financialsUs,
+    // 계정 A단계: 주인 아닌 계정이 새로 만드는 분석은 사람마다 하루 10건까지 (캐시에 있는 것은 제한 없음)
+    memberQuota: new DailyQuota(10, () => seoulDate(now())),
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
   await app.register(accountBriefingRoutes, {
@@ -514,6 +587,19 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     },
   });
   await app.register(featureRoutes, { prefix: "/api/features", features });
+  await app.register(authRoutes, { prefix: "/api/auth", auth });
+  // 끝난 세션 청소: 켠 뒤 1분, 그 뒤 하루 한 번 (기한이 지났거나 끊긴 지 30일 넘은 행)
+  if (opts.enableScheduler !== false && !accountsKilled) {
+    const sweep = () => void auth.purge().then((n) => (n ? app.log.info({ removed: n }, "계정: 끝난 세션 청소") : undefined)).catch(() => undefined);
+    const first = setTimeout(sweep, 60_000);
+    const daily = setInterval(sweep, 86_400_000);
+    first.unref?.();
+    daily.unref?.();
+    app.addHook("onClose", async () => {
+      clearTimeout(first);
+      clearInterval(daily);
+    });
+  }
   // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
   // schedule: 브리핑 위젯 안내에 설정한 브리핑 시간을 쓴다 (BH-68 — 예전에는 늘 '평일 08:30·16:00')
   // 브리핑 위젯 첫 줄(시장 전체 요약): 새 앱이 &ms=1 로 물을 때만, 플래그가 켜져 있을 때만 가장 최근 요약을 읽는다
@@ -550,7 +636,23 @@ declare module "fastify" {
     tradeRecords: TradeRecordService;
     /** 지표 점수 (3-44): 종목 상세의 추세 지표 점수·장 마감 뒤 기록 */
     indicatorScores: IndicatorScoreService;
+    /** 등록된 모든 경로 (메서드·주소) — 계정 경로 정책 테스트용 */
+    routeList: ReadonlyArray<{ method: string; url: string }>;
+    /** 로그인·회원가입 (계정 A단계) */
+    authService: AuthService;
   }
+}
+
+/** 세션 토큰: X-Session-Token(또는 X-Session) 헤더, 웹소켓(/api/stream)은 헤더를 못 붙이는 클라이언트(웹)를 위해 ?session= 도 */
+function sessionTokenOf(req: FastifyRequest, route: string): string | null {
+  const h = req.headers["x-session-token"] ?? req.headers["x-session"];
+  const v = Array.isArray(h) ? h[0] : h;
+  if (typeof v === "string" && v.trim()) return v.trim();
+  if (route === "/api/stream") {
+    const q = (req.query as { session?: unknown } | undefined)?.session;
+    if (typeof q === "string" && q) return q;
+  }
+  return null;
 }
 
 /** 요청 경로(쿼리 제외)를 퍼센트 디코딩한다. 깨진 인코딩이면 원문 그대로 (그러면 /api/ 로 시작하지 않아 라우터도 못 찾는다) */
@@ -595,7 +697,7 @@ function redactPushToken(url: string, route: string | undefined): string {
 }
 
 /**
- * 주소에서 이름이 token 인 쿼리 값(퍼센트 인코딩한 이름 포함)을 [redacted] 로 바꾼다.
+ * 주소에서 이름이 token·session 인 쿼리 값(퍼센트 인코딩한 이름 포함)을 [redacted] 로 바꾼다 (API 토큰·세션 토큰이 로그에 남지 않게).
  * 라우터는 '?' 와 '#' 중 앞선 곳부터 쿼리로 읽으므로 '?', '#', ';', '&' 뒤의 이름=값을 모두 본다
  */
 export function redactToken(url: string): string {
@@ -612,7 +714,8 @@ function isTokenName(key: string): boolean {
   } catch {
     // 깨진 인코딩: 원문 이름으로 비교
   }
-  return name.trim().toLowerCase() === "token";
+  const n = name.trim().toLowerCase();
+  return n === "token" || n === "session";
 }
 
 /** 비밀값 비교 (길이가 같을 때 시간 일정 비교) */
