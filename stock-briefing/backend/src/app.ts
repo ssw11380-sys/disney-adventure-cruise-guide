@@ -30,6 +30,7 @@ import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
 import { BriefingService } from "./services/briefingService.js";
 import { AccountBriefingService } from "./services/accountBriefingService.js";
+import { HoldingEventsService } from "./services/holdingEvents.js";
 import { DataCollector } from "./services/collector.js";
 import { DeviceService } from "./services/deviceService.js";
 import { NotificationService } from "./services/notificationService.js";
@@ -281,6 +282,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     indicatorScores.start();
     app.addHook("onClose", async () => indicatorScores.stop());
   }
+  // 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents·holdingEarnings): 계좌 브리핑이 만들 때 부른다. 출처가 없으면(테스트 기본) 두지 않는다
+  const holdingEvents = opts.providers.holdingEvents ? new HoldingEventsService({ sources: opts.providers.holdingEvents, now, log }) : null;
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
@@ -292,6 +295,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     features,
     // 브리핑 3차 4 비중 한 줄 (플래그 accountExposure): 레버리지·인버스는 지표 점수와 같은 토스 웹 상품 정보(같은 인스턴스·24시간 캐시)로 가린다
     productInfo: opts.providers.productInfo ?? null,
+    holdingEvents,
     now,
     log,
   });
@@ -435,6 +439,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     backup: await backups.status().catch(() => null),
     // 매매 기록(3-36): 켜져 있을 때만 (끄면 응답이 예전과 같게). 최근 5·30거래일 스냅샷이 빠진 날이 있으면 warning — ok 는 그대로 true
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
+    // 다가오는 일정(브리핑 3차 5): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 받지 못한 것·두 출처가 다른 것 경고
+    ...(holdingEvents && (await features.enabled("holdingEvents")) ? { holdingEvents: holdingEvents.health() } : {}),
     disclaimer: DISCLAIMER,
   });
 

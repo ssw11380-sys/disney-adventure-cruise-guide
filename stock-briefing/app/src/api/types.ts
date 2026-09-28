@@ -300,6 +300,50 @@ export interface AccountData {
   sinceLast?: AccountSinceLast | null;
   /** 브리핑 3차 4 (플래그 accountExposure): 비중 한 줄. 켜졌는데 값이 있는 종목이 없으면 null, 꺼짐·예전 기록에는 칸이 없음 */
   exposure?: AccountExposure | null;
+  /** 브리핑 3차 5 (플래그 holdingEvents): 다가오는 일정. 꺼짐·예전 기록에는 칸이 없음 */
+  events?: AccountEvents;
+}
+
+/** 브리핑 3차 5: 다가오는 일정 한 줄 (서버 accountNumbers.AccountEventItem 과 같은 모양) */
+export interface AccountEventItem {
+  code: string;
+  name: string;
+  /** exDividend = 배당락일, earnings = 실적 발표 (예정) */
+  kind: "exDividend" | "earnings";
+  /** YYYY-MM-DD. 배당락일은 그 시장 날짜(미국 종목은 미국 날짜 — usDate), 실적은 한국 날짜 */
+  date: string;
+  /** 실적 발표 한국 시각 'HH:MM' (미국 실적만) */
+  kstTime?: string;
+  /** 토스가 보인 시각 글 '오전 5시 이후' (미국 실적만) */
+  timeText?: string;
+  /** 주당 배당금 (배당락일, 발표된 값이 있을 때만) */
+  amount?: number;
+  currency?: Currency;
+  /** date 가 미국 날짜인지 */
+  usDate: boolean;
+  source: "toss" | "naver" | "toss+naver";
+}
+
+/** 브리핑 3차 5: 다가오는 일정 (서버 accountNumbers.AccountEvents 와 같은 모양) */
+export interface AccountEvents {
+  /** 기준 시각 = 계좌 브리핑 asOf */
+  asOf: string;
+  /** 브리핑 날짜부터 며칠 안 (30) */
+  days: number;
+  items: AccountEventItem[];
+  /** 실적 발표일을 넣었는지 (그때 플래그 holdingEarnings) */
+  earnings: boolean;
+  /** 배당 일정을 받지 못한 보유 종목 */
+  failed: { code: string; name: string }[];
+  /** 실적 발표일을 받지 못함 */
+  earningsFailed: boolean;
+  /** 토스·네이버 배당락일이 달라 뺀 종목 */
+  conflicts: { code: string; name: string }[];
+  /** 일정을 찾아본 보유 종목 수 (시장별) */
+  kr: number;
+  us: number;
+  /** 그 주 첫 오전 브리핑이면 이번 주 일정, 아니면 null */
+  week: AccountEventItem[] | null;
 }
 
 /** 브리핑 3차 4: 비중 한 줄의 레버리지·인버스 종목 (값이 큰 순). L = 배수의 크기(인버스도 양수), 모르면 null. weight = 비중(%) */
@@ -396,6 +440,8 @@ export interface AccountHeadline {
   /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교 한 줄 — 날짜·세션·총 평가 변화·수량 바뀐 종목 수(모르면 null)·
    *  금액 비교에서 뺀 종목 수 leftOut(한쪽 브리핑 합계에서만 빠진 종목, 있을 때만). 비교가 저장된 브리핑만 오고, 합계에서 뺀 종목이 달라 금액을 맞추지 못한 브리핑은 안 옴 */
   since?: { date: string; session: BriefingSession; change: number; qtyChanged: number | null; leftOut?: number };
+  /** 브리핑 3차 5 (플래그 holdingEvents): 이번 주 보유 종목 일정 — 그 주 첫 오전 계좌 브리핑이고 일정이 있을 때만 옴 (날짜 순 전부) */
+  week?: { code: string; name: string; kind: "exDividend" | "earnings"; date: string }[];
 }
 
 export interface AccountBriefing {

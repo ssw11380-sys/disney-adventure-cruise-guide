@@ -166,6 +166,56 @@ export interface AccountData extends AccountTotals {
    * 켜져 있었는데 값이 있는 종목이 없으면 null, 꺼짐·예전 기록에는 칸이 없다
    */
   exposure?: AccountExposure | null;
+  /**
+   * 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents — services/holdingEvents): 보유 종목의 30일 안 배당락일(과 플래그 holdingEarnings 면 실적 발표일),
+   * 그 주 첫 오전 브리핑이면 이번 주 일정. 만들 때 받아 저장한다(그때 기준 그대로). 꺼짐·출처 없음·예전 기록에는 칸이 없다
+   */
+  events?: AccountEvents;
+}
+
+/** 다가오는 일정 한 줄 (브리핑 3차 5) */
+export interface AccountEventItem {
+  code: string;
+  /** 보유 종목 이름 (앱 잔고와 같은 이름) */
+  name: string;
+  /** exDividend = 배당락일, earnings = 실적 발표 (예정) */
+  kind: "exDividend" | "earnings";
+  /** YYYY-MM-DD. 배당락일은 그 시장 날짜(미국 종목은 미국 날짜 — usDate), 실적 발표는 토스가 준 한국 날짜 */
+  date: string;
+  /** 실적 발표 한국 시각 'HH:MM' (미국 실적만 — 토스가 준 값 그대로, 서머타임을 우리가 계산하지 않음) */
+  kstTime?: string;
+  /** 토스가 보인 시각 글 '오전 5시 이후' (미국 실적만) */
+  timeText?: string;
+  /** 주당 배당금 (배당락일만 — 토스 배당 요약이 준 발표 값, 네이버만으로 안 날은 없음) */
+  amount?: number;
+  currency?: "KRW" | "USD";
+  /** date 가 미국 날짜인지 (미국 종목 배당락일) */
+  usDate: boolean;
+  /** 출처: toss · naver(토스를 받지 못한 날 미국 배당락일) · toss+naver(두 출처 날짜가 같음) */
+  source: "toss" | "naver" | "toss+naver";
+}
+
+/** 다가오는 일정 (브리핑 3차 5 — AccountData.events) */
+export interface AccountEvents {
+  /** 기준 시각 = 계좌 브리핑 asOf */
+  asOf: string;
+  /** 브리핑 날짜(한국)부터 며칠 안 (30) */
+  days: number;
+  /** 날짜 순 (같은 날은 시각 → 배당락일 → 실적 → 등록 순) */
+  items: AccountEventItem[];
+  /** 실적 발표일을 넣었는지 (그때 플래그 holdingEarnings) */
+  earnings: boolean;
+  /** 배당 일정을 받지 못한 보유 종목 (토스 실패 + 캐시 없음, 미국은 네이버도 모름) */
+  failed: Array<{ code: string; name: string }>;
+  /** 실적 발표일(캘린더)을 받지 못함 (earnings 가 true 일 때만 뜻이 있음) */
+  earningsFailed: boolean;
+  /** 토스와 네이버의 배당락일이 달라 뺀 미국 종목 (틀린 날짜를 보이지 않게) */
+  conflicts: Array<{ code: string; name: string }>;
+  /** 일정을 찾아본 보유 종목 수 (시장별) — 국내 종목이 있으면 앱이 '국내 종목 배당은 보통 기준일 뒤에 정해져 …'를 붙인다 */
+  kr: number;
+  us: number;
+  /** 그 주 첫 오전 계좌 브리핑이면 브리핑 날짜 ~ 그 주 일요일의 일정 (없으면 빈 배열), 아니면 null */
+  week: AccountEventItem[] | null;
 }
 
 /** 비중 한 줄의 레버리지·인버스 종목 한 줄 (값이 큰 순). L = 배수의 크기(인버스도 양수), 모르면 null. weight = 비중(%, 소수 한 자리) */

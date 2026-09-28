@@ -33,6 +33,7 @@ import {
   type AccountSession,
 } from "./accountNumbers.js";
 import { compareSinceLast, SINCE_LAST_DAYS } from "./accountSinceLast.js";
+import { EVENTS_BUDGET_MS, mondayOf, weekItems, type CollectedEvents, type CollectInput } from "./holdingEvents.js";
 import { groupCodeOf } from "./indicatorScoreService.js";
 
 /** 목록·알림에 쓰는 머리 숫자 (data 에서 뽑는다) */
@@ -55,6 +56,11 @@ export interface AccountHeadline {
    * 한쪽 브리핑 합계에서만 빠져 금액 비교에서 뺀 종목 수 (있을 때만). 합계에서 뺀 종목이 달라 금액을 맞추지 못한 브리핑(scope mixed)은 칸이 없다
    */
   since?: { date: string; session: AccountSession; change: number; qtyChanged: number | null; leftOut?: number };
+  /**
+   * 이번 주 보유 종목 일정 (브리핑 3차 5, 플래그 holdingEvents — 그 주 첫 오전 계좌 브리핑이고 이번 주 일정이 있을 때만. 예전 앱은 모르는 칸):
+   * 날짜 순 전부 (앱이 앞 2건 + '외 N건'). date 는 배당락일이면 그 시장 날짜(미국 날짜), 실적이면 한국 날짜
+   */
+  week?: Array<{ code: string; name: string; kind: "exDividend" | "earnings"; date: string }>;
 }
 
 export interface AccountBriefing {
@@ -84,7 +90,7 @@ export interface AccountBriefingDeps {
   calendar: { status(): Promise<MarketStatus> } | null;
   generator: TextGenerator;
   prompts: PromptStore;
-  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure"): Promise<boolean> };
+  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure" | "holdingEvents" | "holdingEarnings"): Promise<boolean> };
   /**
    * 토스 웹 상품 정보 (브리핑 3차 4 비중 한 줄의 레버리지·인버스 — 지표 점수와 같은 출처·같은 24시간 캐시, 시세를 받으며 대부분 이미 캐시에 있음).
    * 없으면 종목 마스터 분류·정적 표·이름 규칙으로만 가린다
@@ -94,6 +100,12 @@ export interface AccountBriefingDeps {
   productWaitMs?: number;
   /** 상품 정보를 모든 종목 합쳐 기다리는 최대 시간 (기본 PRODUCT_BUDGET_MS — 테스트는 짧게) */
   productBudgetMs?: number;
+  /**
+   * 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents — services/holdingEvents.HoldingEventsService). 없으면(출처를 두지 않은 테스트 기본) 칸 없이 지금 그대로
+   */
+  holdingEvents?: { collect(input: CollectInput): Promise<CollectedEvents> } | null;
+  /** 일정을 모두 합쳐 기다리는 최대 시간 (기본 holdingEvents.EVENTS_BUDGET_MS — 테스트는 짧게) */
+  eventsBudgetMs?: number;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -106,6 +118,8 @@ const DISCLOSURE_MAX = 8;
 /** 비중 한 줄의 상품 정보: 종목마다 기다리는 최대 시간과 동시에 부르는 수 (세션 알림이 늦어지지 않게 — 늦으면 표·이름 규칙으로) */
 const PRODUCT_WAIT_MS = 8_000;
 const PRODUCT_CONCURRENCY = 4;
+/** 다가오는 일정: 모으기가 스스로 지키는 시간(eventsBudgetMs)에 더해 기다려 주는 여유. 넘으면 칸 없이 저장한다 (출처가 멈춰도 알림이 늦어지지 않게) */
+const EVENTS_GRACE_MS = 1_000;
 /**
  * 비중 한 줄의 상품 정보: 모든 종목을 합쳐 기다리는 최대 시간. 토스 웹이 멈춘 날 종목 수만큼(19종목 = 5차례 × 8초 ≈ 40초) 계좌 브리핑·세션 알림이
  * 늦어지지 않게 (app.ts onRunDone 이 계좌 브리핑을 기다린다 — 브리핑 3차 4 검토 지적). 넘으면 남은 종목은 부르지 않고 표·이름 규칙으로
@@ -194,6 +208,12 @@ export class AccountBriefingService {
       return null;
     }
     const now = this.now();
+    // 브리핑 3차 5 (플래그 holdingEvents): 다가오는 일정은 시세와 상관없어 먼저 부르고 아래 계산과 함께 기다린다 (최대 20초 — 시장 요약과 겹쳐 알림을 더 늦추지 않게).
+    // 꺼지면 부르지 않는다(배당·캘린더·네이버 호출 0). 실패해도 계좌 브리핑은 그대로 (칸 없이)
+    const eventsP = this.upcoming(holdings, date, now).catch((e: unknown) => {
+      this.deps.log?.warn({ session, date, err: (e as Error).message }, "다가오는 일정을 받지 못해 칸 없이 저장");
+      return null;
+    });
     const [indexList, status, disclosures] = await Promise.all([
       this.deps.indices ? this.deps.indices.list({ stale: true }).catch(() => [] as MarketIndex[]) : Promise.resolve([] as MarketIndex[]),
       this.deps.calendar ? this.deps.calendar.status().catch(() => null) : Promise.resolve(null),
@@ -239,6 +259,16 @@ export class AccountBriefingService {
       } catch (e) {
         this.deps.log?.warn({ session, date, err: (e as Error).message }, "비중 한 줄을 계산하지 못해 칸 없이 저장");
       }
+    }
+    const waited = await settleWithin(eventsP, (this.deps.eventsBudgetMs ?? EVENTS_BUDGET_MS) + EVENTS_GRACE_MS);
+    if (waited.kind === "timeout") this.deps.log?.warn({ session, date }, "다가오는 일정이 제한 시간 안에 오지 않아 칸 없이 저장");
+    const events = waited.kind === "ok" ? waited.value : null;
+    if (events) {
+      const week = await this.weekOf(date, session, events).catch((e: unknown) => {
+        this.deps.log?.warn({ session, date, err: (e as Error).message }, "이번 주 일정을 가리지 못해 이번 주 없이 저장");
+        return null;
+      });
+      data.events = { ...events, week };
     }
     const n = await this.narrative(data);
     data.narrative = { source: n.source, reason: n.reason };
@@ -306,6 +336,41 @@ export class AccountBriefingService {
       }),
     );
     return out;
+  }
+
+  /**
+   * 다가오는 일정 (브리핑 3차 5): 플래그 holdingEvents 가 켜져 있고 출처가 있을 때만 모은다 (실적 발표일은 holdingEarnings 도 켜져 있을 때만).
+   * 기준 날짜 = 브리핑 날짜(한국), 기준 시각 = asOf
+   */
+  private async upcoming(holdings: AccountHolding[], date: string, now: Date): Promise<CollectedEvents | null> {
+    const src = this.deps.holdingEvents;
+    if (!src || !(await this.deps.features.enabled("holdingEvents").catch(() => false))) return null;
+    const earnings = await this.deps.features.enabled("holdingEarnings").catch(() => false);
+    return src.collect({
+      holdings: holdings.map((h) => ({ code: h.code, name: h.name })),
+      today: date,
+      asOf: seoulIso(now),
+      earnings,
+      ...(this.deps.eventsBudgetMs !== undefined ? { budgetMs: this.deps.eventsBudgetMs } : {}),
+    });
+  }
+
+  /**
+   * 이번 주 일정 (브리핑 3차 5): 그 주(월~일) 첫 오전 계좌 브리핑일 때만 — 같은 주에 앞선 성공한 오전 계좌 브리핑이 없으면(월요일, 월요일이 두 시장 모두
+   * 휴장이라 계좌 브리핑이 없었으면 화요일) 브리핑 날짜 ~ 일요일의 일정(없으면 빈 배열). 오후 브리핑·그 뒤 오전 브리핑은 null
+   */
+  private async weekOf(date: string, session: AccountSession, events: CollectedEvents): Promise<CollectedEvents["items"] | null> {
+    if (session !== "morning") return null;
+    const earlier = await this.deps.db
+      .selectFrom("account_briefings")
+      .select(["id"])
+      .where("session", "=", "morning")
+      .where("status", "=", "ok")
+      .where("briefing_date", ">=", mondayOf(date))
+      .where("briefing_date", "<", date)
+      .limit(1)
+      .executeTakeFirst();
+    return earlier ? null : weekItems(events.items, date);
   }
 
   /**
@@ -464,6 +529,7 @@ function toBriefing(r: { id: number; briefing_date: string; session: string; sta
           ...(d.usPreviousDay ? { usPreviousDay: true as const } : {}),
           ...(d.usHolidayDate ? { usHolidayDate: d.usHolidayDate } : {}),
           ...(d.sinceLast && d.sinceLast.scope !== "mixed" ? { since: sinceHeadline(d.sinceLast) } : {}),
+          ...(d.events?.week?.length ? { week: d.events.week.map((w) => ({ code: w.code, name: w.name, kind: w.kind, date: w.date })) } : {}),
         }
       : null,
   };

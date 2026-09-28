@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { AccountBriefing } from "@/api/types";
 import { accountCardSpeech, accountHolidayLines, briefingTime, contributorsHead } from "@/lib/accountBriefing";
 import { sinceLine } from "@/lib/accountSinceLast";
+import { weekLine } from "@/lib/holdingEvents";
 import { briefingWhen } from "@/lib/briefingPick";
 import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usPreviousDayLine } from "@/lib/briefingDigest";
 import { formatDateKo, formatPct, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
@@ -26,6 +27,7 @@ export function AccountBriefingCard({
   trim = false,
   contributors = false,
   since = false,
+  week = false,
 }: {
   briefing: AccountBriefing;
   /** 넓은 창에서 보던 계좌 브리핑 (3-42 접고 펴기 이어 보기). 기본 false = 지금 모양 그대로 */
@@ -36,6 +38,8 @@ export function AccountBriefingCard({
   contributors?: boolean;
   /** 브리핑 3차 3 (플래그 accountSinceLast): 숫자 아래 '9/25(금) 오전보다 총 평가 …' 한 줄. 기본 false = 지금 그대로 */
   since?: boolean;
+  /** 브리핑 3차 5 (플래그 holdingEvents): '이번 주 일정 · …' 한 줄 (그 주 첫 오전 브리핑에 일정이 있을 때만). 기본 false = 지금 그대로 */
+  week?: boolean;
 }) {
   const t = useTheme();
   const h = briefing.headline;
@@ -48,7 +52,7 @@ export function AccountBriefingCard({
         onPress={() => router.push(`/briefings/account/${briefing.id}`)}
         {...(selected ? { accessibilityState: { selected: true } } : {})}
         accessibilityRole="link"
-        accessibilityLabel={accountCardSpeech(briefing, { ...(block ? { trim, contributors: true } : { trim }), ...(since ? { since: true } : {}) })}
+        accessibilityLabel={accountCardSpeech(briefing, { ...(block ? { trim, contributors: true } : { trim }), ...(since ? { since: true } : {}), ...(week ? { week: true } : {}) })}
         style={styles.press}
       >
         <View style={styles.head}>
@@ -92,6 +96,7 @@ export function AccountBriefingCard({
             {block ? <ContributorsBlock briefing={briefing} /> : null}
             {/* 기여 묶음 뒤에 (묶음 머리의 'HH:MM 기준'이 이 줄의 시각으로 읽히지 않게, 당일 손익 묶음을 가르지 않게) */}
             {since ? <SinceLineText briefing={briefing} /> : null}
+            {week ? <WeekLineText briefing={briefing} /> : null}
             {h.krPreviousDay ? <Muted>{trim ? krPreviousDayLine(briefing.date) : KR_PREVIOUS_DAY_LINE}</Muted> : null}
             {h.usPreviousDay ? <Muted>{usPreviousDayLine(briefing.date, h.usHolidayDate)}</Muted> : null}
             {trim ? (
@@ -126,6 +131,7 @@ export function AccountBriefingRow({
   holidayLines = false,
   contributors = false,
   since = false,
+  week = false,
 }: {
   briefing: AccountBriefing;
   selected: boolean;
@@ -139,6 +145,8 @@ export function AccountBriefingRow({
   contributors?: boolean;
   /** 브리핑 3차 3 (플래그 accountSinceLast — 접은 화면·카드 격자만, 2단 계좌 줄은 넘기지 않음): 숫자 줄 아래 '9/25(금) 오전보다 총 평가 …'. 기본 false = 지금 그대로 */
   since?: boolean;
+  /** 브리핑 3차 5 (플래그 holdingEvents — 접은 화면·카드 격자만, 2단 계좌 줄은 넘기지 않음): '이번 주 일정 · …' 한 줄. 기본 false = 지금 그대로 */
+  week?: boolean;
 }) {
   const t = useTheme();
   const today = viewDateOf(new Date(useNow(60_000)));
@@ -148,7 +156,7 @@ export function AccountBriefingRow({
   const failed = briefing.status === "failed" || !h;
   const holidays = holidayLines && !failed ? accountHolidayLines(briefing, { trim, today }) : [];
   // 옵션을 쓰지 않으면 예전 문장 그대로 (옵션 칸 자체를 넘기지 않는다)
-  const speechOpts = { trim, ...(block ? { contributors: true } : {}), ...(holidayLines ? { today } : {}), ...(since ? { since: true } : {}) };
+  const speechOpts = { trim, ...(block ? { contributors: true } : {}), ...(holidayLines ? { today } : {}), ...(since ? { since: true } : {}), ...(week ? { week: true } : {}) };
   return (
     <Pressable
       onPress={onPress}
@@ -196,6 +204,7 @@ export function AccountBriefingRow({
       {block && !failed ? <ContributorsBlock briefing={briefing} /> : null}
       {/* 기여 묶음 뒤, 휴장 줄 앞 (당일 손익 묶음을 가르지 않게) */}
       {since && !failed ? <SinceLineText briefing={briefing} cap={fontCap.row} /> : null}
+      {week && !failed ? <WeekLineText briefing={briefing} cap={fontCap.row} /> : null}
       {holidays.map((l) => (
         <Text key={l.text} style={{ color: t.muted, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
           {l.text}
@@ -264,6 +273,26 @@ export function SinceLineText({ briefing, cap }: { briefing: AccountBriefing; ca
       {rest.map((x, i) => (
         <Text key={x} style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={cap}>
           {i < rest.length - 1 ? `${x} ·` : x}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * 브리핑 3차 5 (플래그 holdingEvents): '이번 주 일정 · 마이크로소프트 실적 10/29(목) · 메타 실적 10/29(목) 외 1건' 한 줄
+ * (headline.week — 그 주 첫 오전 계좌 브리핑이고 이번 주 일정이 있을 때만, 없으면 그리지 않음). 묶음째 다음 줄로(구분점은 앞 묶음 끝에).
+ * 색 없음. 누르는 곳이 따로 없다 (줄·카드 전체가 링크 하나 — 누르면 상세의 '다가오는 일정')
+ */
+export function WeekLineText({ briefing, cap }: { briefing: AccountBriefing; cap?: number }) {
+  const t = useTheme();
+  const l = weekLine(briefing);
+  if (!l) return null;
+  return (
+    <View style={styles.rowNums}>
+      {l.parts.map((p, i) => (
+        <Text key={i} style={{ color: i === 0 ? t.muted : t.sub, fontSize: font.small }} maxFontSizeMultiplier={cap}>
+          {i < l.parts.length - 1 ? `${p} ·` : p}
         </Text>
       ))}
     </View>

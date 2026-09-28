@@ -1,0 +1,282 @@
+{
+  "about": "브리핑 3차 5 다가오는 일정 공용 픽스처. input 이 있는 경우는 서버(backend/test/holdingEvents.test.ts)가 녹화한 토스·네이버 응답으로 모아 events 와 같은지 보고, 앱(app/test/holdingEvents.test.ts)은 events 로 카드 글·화면 읽기를 본다. input 이 없는 경우는 손으로 만든 모양(받지 못함·두 출처 다름 등). week 는 계좌 브리핑의 headline.week → 탭 한 줄",
+  "cases": [
+    {
+      "name": "sep28",
+      "input": {
+        "today": "2026-09-28",
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "earnings": false,
+        "firstMorning": true,
+        "holdings": [
+          { "code": "005930", "name": "삼성전자" },
+          { "code": "MSFT", "name": "마이크로소프트" },
+          { "code": "O", "name": "리얼티인컴" },
+          { "code": "NVDA", "name": "엔비디아" },
+          { "code": "TSLA", "name": "테슬라" }
+        ]
+      },
+      "events": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "days": 30,
+        "items": [{ "code": "O", "name": "리얼티인컴", "kind": "exDividend", "date": "2026-09-30", "amount": 0.2715, "currency": "USD", "usDate": true, "source": "toss+naver" }],
+        "earnings": false,
+        "failed": [],
+        "earningsFailed": false,
+        "conflicts": [],
+        "kr": 1,
+        "us": 4,
+        "week": [{ "code": "O", "name": "리얼티인컴", "kind": "exDividend", "date": "2026-09-30", "amount": 0.2715, "currency": "USD", "usDate": true, "source": "toss+naver" }]
+      },
+      "app": {
+        "title": "다가오는 일정 (보유 종목 · 30일 안)",
+        "lines": ["9/30(수) · 리얼티인컴 배당락일 (미국 날짜) · 주당 $0.2715"],
+        "more": 0,
+        "empty": null,
+        "notes": ["배당락일: 이날부터 산 주식에는 이번 배당이 붙지 않습니다.", "국내 종목 배당은 보통 기준일 뒤에 정해져 미리 보이지 않습니다."],
+        "basis": "9/28 08:38 기준 · 출처 토스증권·네이버",
+        "speech": {
+          "head": "다가오는 일정, 보유 종목 30일 안, 1건",
+          "lines": ["9월 30일 수요일 미국 날짜, 리얼티인컴 배당락일, 주당 0.2715달러"],
+          "basis": "9월 28일 8시 38분 기준, 출처 토스증권 네이버"
+        }
+      }
+    },
+    {
+      "name": "oct26Earnings",
+      "input": {
+        "today": "2026-10-26",
+        "asOf": "2026-10-26T08:38:00+09:00",
+        "earnings": true,
+        "firstMorning": true,
+        "holdings": [
+          { "code": "MSFT", "name": "마이크로소프트" },
+          { "code": "META", "name": "메타" },
+          { "code": "AAPL", "name": "애플" },
+          { "code": "NVDA", "name": "엔비디아" },
+          { "code": "TSLA", "name": "테슬라" },
+          { "code": "005930", "name": "삼성전자" }
+        ]
+      },
+      "events": {
+        "asOf": "2026-10-26T08:38:00+09:00",
+        "days": 30,
+        "items": [
+          { "code": "MSFT", "name": "마이크로소프트", "kind": "earnings", "date": "2026-10-29", "kstTime": "05:00", "timeText": "오전 5시 이후", "usDate": false, "source": "toss" },
+          { "code": "META", "name": "메타", "kind": "earnings", "date": "2026-10-29", "kstTime": "05:00", "timeText": "오전 5시 이후", "usDate": false, "source": "toss" },
+          { "code": "AAPL", "name": "애플", "kind": "earnings", "date": "2026-10-30", "kstTime": "05:00", "timeText": "오전 5시 이후", "usDate": false, "source": "toss" },
+          { "code": "MSFT", "name": "마이크로소프트", "kind": "exDividend", "date": "2026-11-19", "amount": 0.98, "currency": "USD", "usDate": true, "source": "toss+naver" },
+          { "code": "NVDA", "name": "엔비디아", "kind": "earnings", "date": "2026-11-19", "kstTime": "06:00", "timeText": "오전 6시 이후", "usDate": false, "source": "toss" }
+        ],
+        "earnings": true,
+        "failed": [],
+        "earningsFailed": false,
+        "conflicts": [],
+        "kr": 1,
+        "us": 5,
+        "week": [
+          { "code": "MSFT", "name": "마이크로소프트", "kind": "earnings", "date": "2026-10-29", "kstTime": "05:00", "timeText": "오전 5시 이후", "usDate": false, "source": "toss" },
+          { "code": "META", "name": "메타", "kind": "earnings", "date": "2026-10-29", "kstTime": "05:00", "timeText": "오전 5시 이후", "usDate": false, "source": "toss" },
+          { "code": "AAPL", "name": "애플", "kind": "earnings", "date": "2026-10-30", "kstTime": "05:00", "timeText": "오전 5시 이후", "usDate": false, "source": "toss" }
+        ]
+      },
+      "app": {
+        "title": "다가오는 일정 (보유 종목 · 30일 안)",
+        "lines": [
+          "10/29(목) 오전 5시 이후 · 마이크로소프트 실적 발표 (예정)",
+          "10/29(목) 오전 5시 이후 · 메타 실적 발표 (예정)",
+          "10/30(금) 오전 5시 이후 · 애플 실적 발표 (예정)",
+          "11/19(목) · 마이크로소프트 배당락일 (미국 날짜) · 주당 $0.98",
+          "11/19(목) 오전 6시 이후 · 엔비디아 실적 발표 (예정)"
+        ],
+        "more": 0,
+        "empty": null,
+        "notes": [
+          "배당락일: 이날부터 산 주식에는 이번 배당이 붙지 않습니다.",
+          "실적 발표일은 토스증권 캘린더에 오른 큰 종목만 보이고, 회사 사정으로 날짜가 바뀌기도 합니다.",
+          "국내 종목 배당은 보통 기준일 뒤에 정해져 미리 보이지 않습니다."
+        ],
+        "basis": "10/26 08:38 기준 · 출처 토스증권·네이버",
+        "speech": {
+          "head": "다가오는 일정, 보유 종목 30일 안, 5건",
+          "lines": [
+            "10월 29일 목요일 오전 5시 이후, 마이크로소프트 실적 발표 예정",
+            "10월 29일 목요일 오전 5시 이후, 메타 실적 발표 예정",
+            "10월 30일 금요일 오전 5시 이후, 애플 실적 발표 예정",
+            "11월 19일 목요일 미국 날짜, 마이크로소프트 배당락일, 주당 0.98달러",
+            "11월 19일 목요일 오전 6시 이후, 엔비디아 실적 발표 예정"
+          ],
+          "basis": "10월 26일 8시 38분 기준, 출처 토스증권 네이버"
+        }
+      }
+    },
+    {
+      "name": "none",
+      "input": {
+        "today": "2026-09-28",
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "earnings": false,
+        "firstMorning": false,
+        "holdings": [
+          { "code": "MSFT", "name": "마이크로소프트" },
+          { "code": "NVDA", "name": "엔비디아" },
+          { "code": "TSLA", "name": "테슬라" }
+        ]
+      },
+      "events": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "days": 30,
+        "items": [],
+        "earnings": false,
+        "failed": [],
+        "earningsFailed": false,
+        "conflicts": [],
+        "kr": 0,
+        "us": 3,
+        "week": null
+      },
+      "app": {
+        "title": "다가오는 일정 (보유 종목 · 30일 안)",
+        "lines": [],
+        "more": 0,
+        "empty": "30일 안에 알려진 배당락일이 없습니다.",
+        "notes": [],
+        "basis": "9/28 08:38 기준 · 출처 토스증권",
+        "speech": {
+          "head": "다가오는 일정, 보유 종목 30일 안, 30일 안에 알려진 배당락일이 없습니다.",
+          "lines": [],
+          "basis": "9월 28일 8시 38분 기준, 출처 토스증권"
+        }
+      }
+    },
+    {
+      "name": "noneEarnings",
+      "events": {
+        "asOf": "2026-09-28T16:05:00+09:00",
+        "days": 30,
+        "items": [],
+        "earnings": true,
+        "failed": [],
+        "earningsFailed": false,
+        "conflicts": [],
+        "kr": 1,
+        "us": 1,
+        "week": null
+      },
+      "app": {
+        "title": "다가오는 일정 (보유 종목 · 30일 안)",
+        "lines": [],
+        "more": 0,
+        "empty": "30일 안에 알려진 배당락일·실적 발표일이 없습니다.",
+        "notes": ["실적 발표일은 토스증권 캘린더에 오른 큰 종목만 보이고, 회사 사정으로 날짜가 바뀌기도 합니다.", "국내 종목 배당은 보통 기준일 뒤에 정해져 미리 보이지 않습니다."],
+        "basis": "9/28 16:05 기준 · 출처 토스증권",
+        "speech": {
+          "head": "다가오는 일정, 보유 종목 30일 안, 30일 안에 알려진 배당락일·실적 발표일이 없습니다.",
+          "lines": [],
+          "basis": "9월 28일 16시 5분 기준, 출처 토스증권"
+        }
+      }
+    },
+    {
+      "name": "allFailed",
+      "events": {
+        "asOf": "2026-09-28T08:38:00+09:00",
+        "days": 30,
+        "items": [],
+        "earnings": true,
+        "failed": [{ "code": "005930", "name": "삼성전자" }, { "code": "TSLA", "name": "테슬라" }],
+        "earningsFailed": true,
+        "conflicts": [],
+        "kr": 1,
+        "us": 1,
+        "week": []
+      },
+      "app": {
+        "title": "다가오는 일정 (보유 종목 · 30일 안)",
+        "lines": [],
+        "more": 0,
+        "empty": "일정을 받지 못했습니다. 다음 브리핑 때 다시 받습니다.",
+        "notes": ["국내 종목 배당은 보통 기준일 뒤에 정해져 미리 보이지 않습니다."],
+        "basis": "9/28 08:38 기준 · 출처 토스증권",
+        "speech": {
+          "head": "다가오는 일정, 보유 종목 30일 안, 일정을 받지 못했습니다. 다음 브리핑 때 다시 받습니다.",
+          "lines": [],
+          "basis": "9월 28일 8시 38분 기준, 출처 토스증권"
+        }
+      }
+    },
+    {
+      "name": "partial",
+      "events": {
+        "asOf": "2026-12-01T08:38:00+09:00",
+        "days": 30,
+        "items": [
+          { "code": "AAPL", "name": "애플", "kind": "exDividend", "date": "2026-12-07", "usDate": true, "source": "naver" },
+          { "code": "005930", "name": "삼성전자", "kind": "exDividend", "date": "2026-12-29", "amount": 370, "currency": "KRW", "usDate": false, "source": "toss" }
+        ],
+        "earnings": true,
+        "failed": [{ "code": "TSLA", "name": "테슬라" }],
+        "earningsFailed": true,
+        "conflicts": [{ "code": "MSFT", "name": "마이크로소프트" }],
+        "kr": 1,
+        "us": 3,
+        "week": null
+      },
+      "app": {
+        "title": "다가오는 일정 (보유 종목 · 30일 안)",
+        "lines": ["12/7(월) · 애플 배당락일 (미국 날짜)", "12/29(화) · 삼성전자 배당락일 · 주당 370원"],
+        "more": 0,
+        "empty": null,
+        "notes": [
+          "배당락일: 이날부터 산 주식에는 이번 배당이 붙지 않습니다.",
+          "실적 발표일을 받지 못했습니다. 다음 브리핑 때 다시 받습니다.",
+          "배당 일정을 받지 못한 종목: 테슬라 (다음 브리핑 때 다시 받습니다)",
+          "토스증권과 네이버의 배당락일이 달라 뺀 종목: 마이크로소프트",
+          "국내 종목 배당은 보통 기준일 뒤에 정해져 미리 보이지 않습니다."
+        ],
+        "basis": "12/1 08:38 기준 · 출처 토스증권·네이버",
+        "speech": {
+          "head": "다가오는 일정, 보유 종목 30일 안, 2건",
+          "lines": ["12월 7일 월요일 미국 날짜, 애플 배당락일", "12월 29일 화요일, 삼성전자 배당락일, 주당 370원"],
+          "basis": "12월 1일 8시 38분 기준, 출처 토스증권 네이버"
+        }
+      }
+    }
+  ],
+  "week": [
+    {
+      "name": "oct26",
+      "week": [
+        { "code": "MSFT", "name": "마이크로소프트", "kind": "earnings", "date": "2026-10-29" },
+        { "code": "META", "name": "메타", "kind": "earnings", "date": "2026-10-29" },
+        { "code": "AAPL", "name": "애플", "kind": "earnings", "date": "2026-10-30" }
+      ],
+      "app": {
+        "parts": ["이번 주 일정", "마이크로소프트 실적 10/29(목)", "메타 실적 10/29(목) 외 1건"],
+        "text": "이번 주 일정 · 마이크로소프트 실적 10/29(목) · 메타 실적 10/29(목) 외 1건",
+        "speech": "이번 주 보유 종목 일정, 마이크로소프트 실적 10월 29일 목요일, 메타 실적 10월 29일 목요일, 외 1건"
+      }
+    },
+    {
+      "name": "sep28",
+      "week": [{ "code": "O", "name": "리얼티인컴", "kind": "exDividend", "date": "2026-09-30" }],
+      "app": {
+        "parts": ["이번 주 일정", "리얼티인컴 배당락일 9/30(수)"],
+        "text": "이번 주 일정 · 리얼티인컴 배당락일 9/30(수)",
+        "speech": "이번 주 보유 종목 일정, 리얼티인컴 배당락일 9월 30일 수요일"
+      }
+    },
+    {
+      "name": "two",
+      "week": [
+        { "code": "MSFT", "name": "마이크로소프트", "kind": "earnings", "date": "2026-10-29" },
+        { "code": "O", "name": "리얼티인컴", "kind": "exDividend", "date": "2026-10-30" }
+      ],
+      "app": {
+        "parts": ["이번 주 일정", "마이크로소프트 실적 10/29(목)", "리얼티인컴 배당락일 10/30(금)"],
+        "text": "이번 주 일정 · 마이크로소프트 실적 10/29(목) · 리얼티인컴 배당락일 10/30(금)",
+        "speech": "이번 주 보유 종목 일정, 마이크로소프트 실적 10월 29일 목요일, 리얼티인컴 배당락일 10월 30일 금요일"
+      }
+    }
+  ]
+}

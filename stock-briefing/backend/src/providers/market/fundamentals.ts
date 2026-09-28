@@ -33,6 +33,11 @@ export interface Fundamentals {
    * 없으면 영문(ETF: "Defiance Daily Target 2X Long RGTI ETF"). 모르면 null
    */
   name?: string | null;
+  /**
+   * 가장 최근에 발표된 배당락일 (미국만 — 네이버 basic 의 exDividendAt '2026.11.19.' → '2026-11-19', 미국 날짜).
+   * 브리핑 3차 5 다가오는 일정이 토스 배당 요약과 맞춰 보는 데 쓴다. 칸이 없으면 없음 (예전 모양에 칸을 새로 만들지 않게)
+   */
+  exDividendAt?: string;
   source: string;
 }
 
@@ -144,6 +149,8 @@ export class NaverFundamentals {
       if (!j || !infos) continue;
       const f = fromInfos(infos, "naver-world");
       f.name = realText(j["stockName"]) ?? realText(j["stockNameEng"]);
+      const exDividendAt = naverDate(infos.find((it) => it["code"] === "exDividendAt")?.["value"]);
+      if (exDividendAt) f.exDividendAt = exDividendAt;
       // 미국 시총은 "1조 4,944억 USD" 같은 한글 표기라 발행주식수 × 현재가로 대신 계산할 수 있게 원화 시총도 같이 둔다
       const shares = parseNum(j["countOfListedStock"]);
       const price = parseNum(j["closePriceRaw"] ?? j["closePrice"]);
@@ -151,6 +158,16 @@ export class NaverFundamentals {
       return f;
     }
     return failed ? FAILED : null;
+  }
+
+  /**
+   * 미국 종목의 가장 최근 발표 배당락일 (브리핑 3차 5 다가오는 일정 — 토스 배당 요약과 맞춰 보기). get() 과 같은 1시간 캐시.
+   * 'YYYY-MM-DD' = 네이버가 준 날짜, null = 받았는데 배당락일 칸이 없음, undefined = 받지 못함(모름). 한국 종목은 늘 undefined
+   */
+  async exDividendAt(code: string, market?: string | null): Promise<string | null | undefined> {
+    if (isKrCode(normalizeCode(code))) return undefined;
+    const f = await this.get(code, market).catch(() => null);
+    return f ? (f.exDividendAt ?? null) : undefined;
   }
 
   /** 네이버 자동완성으로 티커 → 로이터 코드 (예: IONQ → IONQ.K, BRK.B → BRKb). 못 찾거나 받기에 실패하면 null */
@@ -192,6 +209,13 @@ function fromInfos(infos: Json[], source: string): Fundamentals {
     industry: m.get("industryGroupKor") ?? null,
     source,
   };
+}
+
+/** 네이버 날짜 글 '2026.11.19.' · '2026.11.19' → '2026-11-19'. 모양이 다르면 null */
+export function naverDate(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const m = /^(\d{4})\.(\d{2})\.(\d{2})\.?$/.exec(v.trim());
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
 /** 자리표시가 아닌 글자 ("-" · "—" · "N/A" · 공백이면 null) */

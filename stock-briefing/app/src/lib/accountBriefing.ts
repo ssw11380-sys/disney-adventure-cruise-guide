@@ -1,6 +1,7 @@
 import type { AccountBriefing, AccountData } from "@/api/types";
 import { sentence, speakAmount, speakClock, speakProfit, speakRate } from "@/lib/a11y";
 import { sinceLine } from "@/lib/accountSinceLast";
+import { weekLine } from "@/lib/holdingEvents";
 import { KR_PREVIOUS_DAY_LINE, krPreviousDayLine, usHolidayWhen, usPreviousDayLine } from "@/lib/briefingDigest";
 import { gated } from "@/lib/features";
 import { formatDateKo, formatWon, SESSION_LABEL, shownSign } from "@/lib/format";
@@ -129,8 +130,9 @@ function contributorsSpeech(b: AccountBriefing): string[] {
  *  - today = 접은 화면 계좌 줄의 휴장 줄(플래그 briefingCompactTop)을 보일 때 보는 날 — 휴장 조각을 보이는 줄과 같은 판단으로 (accountHolidayLines)
  *  - since = 브리핑 3차 3 '9/25(금) 오전보다 총 평가 …' 한 줄(플래그 accountSinceLast)을 보일 때: 보이는 자리와 같은 순서로 기여(1위 또는 상위 묶음) 뒤·휴장 앞에
  *    그 줄의 읽는 말 (비교가 없는 브리핑이면 그대로)
+ *  - week = 브리핑 3차 5 '이번 주 일정 · …' 한 줄(플래그 holdingEvents)을 보일 때: 보이는 자리와 같은 순서로 비교 줄 뒤·휴장 앞에 그 줄의 읽는 말 (없는 브리핑이면 그대로)
  */
-export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string; since?: boolean } = {}): string {
+export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string; since?: boolean; week?: boolean } = {}): string {
   const h = b.headline;
   const list = opts.contributors ? contributorsSpeech(b) : [];
   const top = list.length ? undefined : h?.top[0];
@@ -148,6 +150,7 @@ export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; co
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
     ...list,
     opts.since ? (sinceLine(b)?.speech ?? null) : null,
+    opts.week ? (weekLine(b)?.speech ?? null) : null,
     ...holidays,
     "자세히 보기",
   ]);

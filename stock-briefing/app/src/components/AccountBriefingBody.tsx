@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAccountBriefing, useFeature, useFeatures } from "@/api/hooks";
-import type { AccountBriefingWithData, AccountData, AccountExposure, AccountSchedule } from "@/api/types";
+import type { AccountBriefingWithData, AccountData, AccountEvents, AccountExposure, AccountSchedule } from "@/api/types";
 import { BriefingSplit, type BodyLayout } from "@/components/BriefingBody";
 import { StaleBanner } from "@/components/Freshness";
 import { useSettingsGuide } from "@/lib/settingsLink";
@@ -15,6 +15,7 @@ import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, localDay, summaryShownLines, summarySpeech, templateNote } from "@/lib/accountBriefing";
 import { EXPOSURE_ABOUT, exposureView } from "@/lib/accountExposure";
 import { QTY_HEAD, QTY_NONE, sinceLastView, sinceNone, WEIGHT_HEAD, WEIGHT_NONE } from "@/lib/accountSinceLast";
+import { eventsView } from "@/lib/holdingEvents";
 import { usHolidayWhen } from "@/lib/briefingDigest";
 import { mdw } from "@/lib/marketSummary";
 import { accountColumns } from "@/lib/briefingPick";
@@ -40,6 +41,8 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   const since = useFeature("accountSinceLast", false);
   // 브리핑 3차 4 (플래그 accountExposure, 앱 fallback 꺼짐): 총 평가 카드·띠 아래 '비중 · 가장 큰 종목 …' 두 줄. 꺼지면 지금 그대로
   const exposure = useFeature("accountExposure", false);
+  // 브리핑 3차 5 (플래그 holdingEvents, 앱 fallback 꺼짐): '오늘 일정' 아래 '다가오는 일정' 카드. 꺼지면 지금 그대로
+  const events = useFeature("holdingEvents", false);
   const flags = useFeatures();
   const q = useAccountBriefing(numId ?? 0, on && numId !== null);
   // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
@@ -79,7 +82,7 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} /></Screen>;
   if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
   // 2단 오른쪽 칸은 끊김·지연 띠를 탭 위쪽에 한 번만 둔다
-  return <AccountBriefingView b={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} since={since} exposure={exposure} />;
+  return <AccountBriefingView b={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} since={since} exposure={exposure} events={events} />;
 }
 
 /**
@@ -88,7 +91,25 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
  *  - '무엇이 계좌를 움직였나' 카드: 기본 설명(template)이면 그리지 않음(기여 표·보유분 줄을 문장으로 되풀이), 모델 설명이면 제목만 '모델이 쓴 설명'
  *  - 기여 표 아래 설명의 휴장 날짜, '지수·환율 영향' 제목 → '보유분·지수·환율'
  */
-function AccountBriefingView({ b, top, layout, title, trim, since = false, exposure = false }: { b: AccountBriefingWithData; top: React.ReactNode; layout: BodyLayout; title?: (b: AccountBriefingWithData) => React.ReactNode; trim: boolean; since?: boolean; exposure?: boolean }) {
+function AccountBriefingView({
+  b,
+  top,
+  layout,
+  title,
+  trim,
+  since = false,
+  exposure = false,
+  events = false,
+}: {
+  b: AccountBriefingWithData;
+  top: React.ReactNode;
+  layout: BodyLayout;
+  title?: (b: AccountBriefingWithData) => React.ReactNode;
+  trim: boolean;
+  since?: boolean;
+  exposure?: boolean;
+  events?: boolean;
+}) {
   const t = useTheme();
   const d = b.data;
   const failed = b.status === "failed" || !d;
@@ -157,7 +178,7 @@ function AccountBriefingView({ b, top, layout, title, trim, since = false, expos
     );
 
   if (layout === "split" && !failed && d) {
-    return <AccountSplit d={d} top={top} head={title?.(b)} header={header} summary={summary} narrative={narrative} basis={basis} trim={trim} since={since} exposure={exposure} />;
+    return <AccountSplit d={d} top={top} head={title?.(b)} header={header} summary={summary} narrative={narrative} basis={basis} trim={trim} since={since} exposure={exposure} events={events} />;
   }
 
   // stack(지금 폰 화면)·pane(2단 오른쪽 칸)·실패: 한 줄로 쌓기
@@ -177,6 +198,8 @@ function AccountBriefingView({ b, top, layout, title, trim, since = false, expos
           {since ? <SinceLastCard d={d} /> : null}
           <ImpactCard d={d} trim={trim} />
           <ScheduleCard s={d.schedule} asOf={d.asOf} />
+          {/* 브리핑 3차 5: '오늘 일정' 바로 아래 */}
+          {events && d.events ? <UpcomingCard e={d.events} /> : null}
           {narrative}
           {basis}
         </>
@@ -191,7 +214,31 @@ function AccountBriefingView({ b, top, layout, title, trim, since = false, expos
  *  - 2칸 (울트라 세로·폴드8 세로 — 창이 3칸에 모자람): 요약·총 평가·기여 표 | 지수·환율·오늘 일정·설명
  * 칸 수는 좌우 화면 여백을 뺀 창 폭으로 정한다 (lib/briefingPick accountColumns)
  */
-function AccountSplit({ d, top, head, header, summary, narrative, basis, trim, since = false, exposure = false }: { d: AccountData; top: React.ReactNode; head: React.ReactNode; header: React.ReactNode; summary: React.ReactNode; narrative: React.ReactNode; basis: React.ReactNode; trim: boolean; since?: boolean; exposure?: boolean }) {
+function AccountSplit({
+  d,
+  top,
+  head,
+  header,
+  summary,
+  narrative,
+  basis,
+  trim,
+  since = false,
+  exposure = false,
+  events = false,
+}: {
+  d: AccountData;
+  top: React.ReactNode;
+  head: React.ReactNode;
+  header: React.ReactNode;
+  summary: React.ReactNode;
+  narrative: React.ReactNode;
+  basis: React.ReactNode;
+  trim: boolean;
+  since?: boolean;
+  exposure?: boolean;
+  events?: boolean;
+}) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // 바로 전 칸 수: 3칸은 912 에서 켜고 888 아래로 좁아져야 끈다 (창 크기를 끌어 바꿀 때 깜빡이지 않게).
@@ -204,6 +251,8 @@ function AccountSplit({ d, top, head, header, summary, narrative, basis, trim, s
     <>
       <ImpactCard d={d} trim={trim} />
       <ScheduleCard s={d.schedule} asOf={d.asOf} />
+      {/* 브리핑 3차 5: 오른쪽 칸 '오늘 일정' 아래 */}
+      {events && d.events ? <UpcomingCard e={d.events} /> : null}
     </>
   );
   return (
@@ -632,6 +681,48 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
   );
 }
 
+/**
+ * 브리핑 3차 5 (플래그 holdingEvents): '다가오는 일정 (보유 종목 · 30일 안)' 카드 — '오늘 일정' 바로 아래(넓은 창은 오른쪽 칸).
+ * 서버가 계좌 브리핑을 만들 때 받아 둔 일정 그대로: 날짜 순 줄(8개까지, '외 N건') '9/30(수) · 리얼티인컴 배당락일 (미국 날짜) · 주당 $0.2715' ·
+ * '10/29(목) 오전 5시 이후 · 마이크로소프트 실적 발표 (예정)'(실적 발표일을 넣었을 때만), 없으면 한 줄, 작은 글(뜻·받지 못한 것·국내 배당), 기준 시각·출처.
+ * 누르는 곳 없음. 색 없음(등락이 아님). 좁은 칸·큰 글씨는 ' · ' 묶음째 줄바꿈. 화면 읽기는 제목 묶음·줄마다·기준 한 문장씩
+ */
+function UpcomingCard({ e }: { e: AccountEvents }) {
+  const t = useTheme();
+  const chunkRow = useChunkRow();
+  const v = eventsView(e);
+  // 묶음 끝 ' ·' 의 공백은 줄바꿈 없는 공백 — '·' 하나만 다음 줄 맨 앞에 남지 않게 (비중 두 줄과 같은 규칙)
+  const joined = (parts: string[]) => parts.map((p, i) => (i < parts.length - 1 ? `${p} ·` : p));
+  return (
+    <Card>
+      <View accessible accessibilityLabel={v.headSpeech} style={styles.upcomingHead}>
+        <SectionTitle>{v.title}</SectionTitle>
+        {v.empty ? <Muted>{v.empty}</Muted> : null}
+      </View>
+      {v.lines.map((l) => (
+        <View key={l.key} accessible accessibilityLabel={l.speech} style={[styles.upcomingRow, { borderBottomColor: t.line }]}>
+          <View style={chunkRow}>
+            {joined(l.parts).map((p, i) => (
+              <Text key={i} style={[styles.num, { color: i === 0 ? t.sub : t.ink, fontSize: font.body, fontWeight: i === 0 ? "600" : "400" }]}>
+                {p}
+              </Text>
+            ))}
+          </View>
+        </View>
+      ))}
+      {v.more > 0 ? <Muted>외 {v.more}건</Muted> : null}
+      {v.notes.map((n) => (
+        <Muted key={n} style={{ fontSize: font.tiny }}>
+          {n}
+        </Muted>
+      ))}
+      <View accessible accessibilityLabel={v.basisSpeech}>
+        <Muted style={{ fontSize: font.tiny }}>{v.basis}</Muted>
+      </View>
+    </Card>
+  );
+}
+
 function DisclosureText({ name, title, filedAt, link }: { name: string; title: string; filedAt: string; link: boolean }) {
   const t = useTheme();
   return (
@@ -704,4 +795,7 @@ const styles = StyleSheet.create({
   sinceGroup: { gap: space.xxs, paddingTop: space.xs },
   // 브리핑 3차 4 비중 두 줄 (총 평가 카드 안, 가는 줄로 위와 나눔)
   exposure: { gap: space.xxs, paddingTop: space.s, borderTopWidth: StyleSheet.hairlineWidth },
+  // 브리핑 3차 5 다가오는 일정 카드
+  upcomingHead: { gap: space.xxs },
+  upcomingRow: { paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
 });

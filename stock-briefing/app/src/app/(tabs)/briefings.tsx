@@ -90,6 +90,8 @@ export default function BriefingsScreen() {
   const statusOn = useFeature("briefingStatus", false);
   // 브리핑 3차 3 (플래그 accountSinceLast, 앱 fallback 꺼짐): 계좌 카드·줄(2단 계좌 줄 빼고)의 '9/25(금) 오전보다 총 평가 …' 한 줄. 여기서 한 번 읽어 넘긴다. 꺼지면 지금 그대로
   const sinceOn = useFeature("accountSinceLast", false);
+  // 브리핑 3차 5 (플래그 holdingEvents, 앱 fallback 꺼짐): 계좌 카드·줄(2단 계좌 줄 빼고)의 '이번 주 일정 · …' 한 줄. 여기서 한 번 읽어 넘긴다. 꺼지면 지금 그대로
+  const weekOn = useFeature("holdingEvents", false);
   const statusRefetch = useRef<(() => Promise<unknown>) | null>(null);
   // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약·늦음/실패 안내가 켜져 있으면 그것도)을 함께
   const { pulling, onPull } = usePull(() =>
@@ -293,6 +295,7 @@ export default function BriefingsScreen() {
         picked={picked}
         plainFail={statusOn}
         since={sinceOn}
+        week={weekOn}
       />
     );
   }
@@ -328,6 +331,7 @@ export default function BriefingsScreen() {
             holidayLines
             contributors={merge}
             since={sinceOn}
+            week={weekOn}
           />
         ) : null}
         {summary ? (
@@ -349,7 +353,7 @@ export default function BriefingsScreen() {
       {head}
       {compactBlock}
       {!compactTop && summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} trim={trim} /> : null}
-      {!compactTop && account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} trim={trim} contributors={merge} since={sinceOn} /> : null}
+      {!compactTop && account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} trim={trim} contributors={merge} since={sinceOn} week={weekOn} /> : null}
       {banner}
       {/* 탭 휴장 줄. trim(브리핑 2차 4)이면 '국내 종목 브리핑 없음'(틀린 말 — 목록에 직전 거래일 국내 브리핑이 있음) 대신 등락 기준을 밝히고(넓은 창 문구와 같게),
           보이는 시장 요약이 한국 휴장을 이미 말하면 숨긴다. 한국 휴장일 아침('밤사이 미국' 요약)·요약 꺼짐·없음·실패면 남긴다.
@@ -474,6 +478,8 @@ interface WideProps {
   plainFail?: boolean;
   /** 브리핑 3차 3 (accountSinceLast): 카드 격자 계좌 줄의 '… 오전보다 총 평가 …' 한 줄 (2단 계좌 줄에는 넣지 않음 — 첫 화면 줄 수를 지키려고) */
   since?: boolean;
+  /** 브리핑 3차 5 (holdingEvents): 카드 격자 계좌 줄의 '이번 주 일정 · …' 한 줄 (2단 계좌 줄에는 넣지 않음 — 상세에 있음) */
+  week?: boolean;
 }
 
 const SORT_OPTIONS: { value: Order; label: string }[] = [
@@ -724,6 +730,7 @@ function WideBriefings(p: WideProps) {
       trim={p.trim}
       holidayLines={p.compactTop}
       {...(p.since ? { since: true } : {})}
+      {...(p.week ? { week: true } : {})}
     />
   ) : null;
   return (
