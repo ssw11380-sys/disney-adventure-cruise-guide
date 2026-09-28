@@ -1,0 +1,824 @@
+{
+"note": "네이버 증권 업종 목록(front-api/stock/sectors/all upjong)과 구성 종목(front-api/domestic/sector/item/list) 2026-09-28 받음 — 업종 3개·한 쪽 앞 몇 줄만",
+"sectors": {
+"isSuccess": true,
+"result": {
+"sectors": [
+{
+"code": "301",
+"name": "은행",
+"changeRate": 1.49,
+"risingCount": 11,
+"unchangedCount": 0,
+"fallingCount": 0,
+"topItems": [
+{
+"code": "139130",
+"name": "iM금융지주",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/stock/Stock139130.svg"
+},
+{
+"code": "175330",
+"name": "JB금융지주",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/stock/Stock175330.svg"
+},
+{
+"code": "138930",
+"name": "BNK금융지주",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/stock/Stock138930.svg"
+}
+]
+},
+{
+"code": "25",
+"name": "기타",
+"changeRate": -1.59,
+"risingCount": 489,
+"unchangedCount": 76,
+"fallingCount": 972,
+"topItems": [
+{
+"code": "570119",
+"name": "한투 인버스2X은선물 ETN",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/brand/domestic/StockBRANDKOREA.svg"
+},
+{
+"code": "530143",
+"name": "삼성 인버스 2X 은 선물 ETN",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/brand/domestic/StockBRANDSAMSUNGSECURIITES.svg"
+},
+{
+"code": "500030",
+"name": "신한 인버스 2X 은 선물 ETN(H)",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/brand/domestic/StockBRANDSHINHAN.svg"
+}
+]
+},
+{
+"code": "278",
+"name": "반도체와반도체장비",
+"changeRate": -5.09,
+"risingCount": 65,
+"unchangedCount": 6,
+"fallingCount": 100,
+"topItems": [
+{
+"code": "024850",
+"name": "HLB이노베이션",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/stock/Stock024850.svg"
+},
+{
+"code": "413300",
+"name": "티엘엔지니어링",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/konex/StockCommonKONEX.svg"
+},
+{
+"code": "412350",
+"name": "레이저쎌",
+"itemLogoUrl": "https://ssl.pstatic.net/imgstock/fn/real/logo/stock/Stock412350.svg"
+}
+]
+}
+],
+"hasNext": false,
+"cursor": null
+}
+},
+"pages": {
+"278": {
+"isSuccess": true,
+"result": {
+"sectorInfo": {
+"sectorName": "반도체와반도체장비",
+"changeRate": -5.09
+},
+"items": [
+{
+"feModelType": "domestic",
+"id": "024850",
+"name": "HLB이노베이션",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSDAQ",
+"itemCode": "024850",
+"currentPrice": 19680,
+"fluctuationsType": "UPPER_LIMIT",
+"fluctuations": "4540",
+"fluctuationsRatio": "29.99",
+"accumulatedTradingVolume": 1286610,
+"accumulatedTradingValue": 25217687000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/024850_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 624909000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 1286610,
+"accumulatedTradingValue": 25217687000
+}
+},
+{
+"feModelType": "domestic",
+"id": "413300",
+"name": "티엘엔지니어링",
+"stockEndType": "konex",
+"stockExchangeType": "KRX",
+"marketType": "KONEX",
+"itemCode": "413300",
+"currentPrice": 2040,
+"fluctuationsType": "RISING",
+"fluctuations": "240",
+"fluctuationsRatio": "13.33",
+"accumulatedTradingVolume": 1,
+"accumulatedTradingValue": 2000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/413300_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 2757000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 1,
+"accumulatedTradingValue": 2000
+}
+},
+{
+"feModelType": "domestic",
+"id": "412350",
+"name": "레이저쎌",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSDAQ",
+"itemCode": "412350",
+"currentPrice": 5990,
+"fluctuationsType": "RISING",
+"fluctuations": "560",
+"fluctuationsRatio": "10.31",
+"accumulatedTradingVolume": 649468,
+"accumulatedTradingValue": 3900311000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/412350_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 87472000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 649468,
+"accumulatedTradingValue": 3900311000
+}
+},
+{
+"feModelType": "domestic",
+"id": "052860",
+"name": "아이앤씨",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSDAQ",
+"itemCode": "052860",
+"currentPrice": 7390,
+"fluctuationsType": "RISING",
+"fluctuations": "600",
+"fluctuationsRatio": "8.84",
+"accumulatedTradingVolume": 283930,
+"accumulatedTradingValue": 2095759000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/052860_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 132036000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 283930,
+"accumulatedTradingValue": 2095759000
+}
+},
+{
+"feModelType": "domestic",
+"id": "025560",
+"name": "미래산업",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "025560",
+"currentPrice": 7080,
+"fluctuationsType": "RISING",
+"fluctuations": "560",
+"fluctuationsRatio": "8.59",
+"accumulatedTradingVolume": 1781428,
+"accumulatedTradingValue": 12641000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/025560_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 196673000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 1781428,
+"accumulatedTradingValue": 12641000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "092870",
+"name": "엑시콘",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSDAQ",
+"itemCode": "092870",
+"currentPrice": 46350,
+"fluctuationsType": "RISING",
+"fluctuations": "3400",
+"fluctuationsRatio": "7.92",
+"accumulatedTradingVolume": 757742,
+"accumulatedTradingValue": 34773339000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/092870_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 604904000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 757742,
+"accumulatedTradingValue": 34773339000
+}
+},
+{
+"feModelType": "domestic",
+"id": "094360",
+"name": "칩스앤미디어",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSDAQ",
+"itemCode": "094360",
+"currentPrice": 12380,
+"fluctuationsType": "RISING",
+"fluctuations": "730",
+"fluctuationsRatio": "6.27",
+"accumulatedTradingVolume": 751421,
+"accumulatedTradingValue": 9417623000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/094360_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 264378000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 1741558,
+"accumulatedTradingValue": 21941662000
+}
+},
+{
+"feModelType": "domestic",
+"id": "064520",
+"name": "테크엘",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSDAQ",
+"itemCode": "064520",
+"currentPrice": 1548,
+"fluctuationsType": "RISING",
+"fluctuations": "82",
+"fluctuationsRatio": "5.59",
+"accumulatedTradingVolume": 16213,
+"accumulatedTradingValue": 24324000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/064520_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 34599000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 16213,
+"accumulatedTradingValue": 24324000
+}
+},
+{
+"feModelType": "domestic",
+"id": "418420",
+"name": "라온텍",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSDAQ",
+"itemCode": "418420",
+"currentPrice": 4360,
+"fluctuationsType": "RISING",
+"fluctuations": "230",
+"fluctuationsRatio": "5.57",
+"accumulatedTradingVolume": 335383,
+"accumulatedTradingValue": 1466439000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/418420_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 134177000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 335383,
+"accumulatedTradingValue": 1466439000
+}
+},
+{
+"feModelType": "domestic",
+"id": "149010",
+"name": "아이케이세미콘",
+"stockEndType": "konex",
+"stockExchangeType": "KRX",
+"marketType": "KONEX",
+"itemCode": "149010",
+"currentPrice": 3480,
+"fluctuationsType": "RISING",
+"fluctuations": "180",
+"fluctuationsRatio": "5.45",
+"accumulatedTradingVolume": 160,
+"accumulatedTradingValue": 549000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/149010_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 10857000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 160,
+"accumulatedTradingValue": 549000
+}
+},
+{
+"feModelType": "domestic",
+"id": "077500",
+"name": "유니퀘스트",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "077500",
+"currentPrice": 9630,
+"fluctuationsType": "RISING",
+"fluctuations": "440",
+"fluctuationsRatio": "4.79",
+"accumulatedTradingVolume": 992462,
+"accumulatedTradingValue": 9723000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/077500_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 208008000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 992462,
+"accumulatedTradingValue": 9723000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "950250",
+"name": "테라뷰",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSDAQ",
+"itemCode": "950250",
+"currentPrice": 3310,
+"fluctuationsType": "RISING",
+"fluctuations": "150",
+"fluctuationsRatio": "4.75",
+"accumulatedTradingVolume": 1250264,
+"accumulatedTradingValue": 4200747000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/950250_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 118156000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 1250264,
+"accumulatedTradingValue": 4200747000
+}
+}
+],
+"hasNext": false,
+"cursor": null
+}
+},
+"301": {
+"isSuccess": true,
+"result": {
+"sectorInfo": {
+"sectorName": "은행",
+"changeRate": 1.39
+},
+"items": [
+{
+"feModelType": "domestic",
+"id": "139130",
+"name": "iM금융지주",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "139130",
+"currentPrice": 18760,
+"fluctuationsType": "RISING",
+"fluctuations": "950",
+"fluctuationsRatio": "5.33",
+"accumulatedTradingVolume": 455807,
+"accumulatedTradingValue": 8496000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/139130_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 2970897000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 530819,
+"accumulatedTradingValue": 9888000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "175330",
+"name": "JB금융지주",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "175330",
+"currentPrice": 31150,
+"fluctuationsType": "RISING",
+"fluctuations": "1000",
+"fluctuationsRatio": "3.32",
+"accumulatedTradingVolume": 372702,
+"accumulatedTradingValue": 11540000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/175330_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 5810154000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 408188,
+"accumulatedTradingValue": 12631000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "138930",
+"name": "BNK금융지주",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "138930",
+"currentPrice": 16490,
+"fluctuationsType": "RISING",
+"fluctuations": "520",
+"fluctuationsRatio": "3.26",
+"accumulatedTradingVolume": 767538,
+"accumulatedTradingValue": 12569000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/138930_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 5059787000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 874507,
+"accumulatedTradingValue": 14316000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "279570",
+"name": "케이뱅크",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "279570",
+"currentPrice": 5490,
+"fluctuationsType": "RISING",
+"fluctuations": "140",
+"fluctuationsRatio": "2.62",
+"accumulatedTradingVolume": 613436,
+"accumulatedTradingValue": 3354000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/279570_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 2227266000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 613436,
+"accumulatedTradingValue": 3354000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "316140",
+"name": "우리금융지주",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "316140",
+"currentPrice": 36250,
+"fluctuationsType": "RISING",
+"fluctuations": "900",
+"fluctuationsRatio": "2.55",
+"accumulatedTradingVolume": 1683728,
+"accumulatedTradingValue": 60994000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/316140_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 26708512000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 2065725,
+"accumulatedTradingValue": 74821000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "323410",
+"name": "카카오뱅크",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "323410",
+"currentPrice": 20350,
+"fluctuationsType": "RISING",
+"fluctuations": "430",
+"fluctuationsRatio": "2.16",
+"accumulatedTradingVolume": 839743,
+"accumulatedTradingValue": 17026000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/323410_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 9709400000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 1071200,
+"accumulatedTradingValue": 21708000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "024110",
+"name": "기업은행",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "024110",
+"currentPrice": 20800,
+"fluctuationsType": "RISING",
+"fluctuations": "400",
+"fluctuationsRatio": "1.96",
+"accumulatedTradingVolume": 1037460,
+"accumulatedTradingValue": 21555000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/024110_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 16586458000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 1305279,
+"accumulatedTradingValue": 27095000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "006220",
+"name": "제주은행",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "006220",
+"currentPrice": 9720,
+"fluctuationsType": "RISING",
+"fluctuations": "150",
+"fluctuationsRatio": "1.57",
+"accumulatedTradingVolume": 88827,
+"accumulatedTradingValue": 862000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/006220_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 367401000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 88827,
+"accumulatedTradingValue": 862000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "055550",
+"name": "신한지주",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "055550",
+"currentPrice": 110900,
+"fluctuationsType": "RISING",
+"fluctuations": "1600",
+"fluctuationsRatio": "1.46",
+"accumulatedTradingVolume": 947069,
+"accumulatedTradingValue": 104883000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/055550_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 52062031000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 1005006,
+"accumulatedTradingValue": 111290000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "086790",
+"name": "하나금융지주",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "086790",
+"currentPrice": 134400,
+"fluctuationsType": "RISING",
+"fluctuations": "1300",
+"fluctuationsRatio": "0.98",
+"accumulatedTradingVolume": 624349,
+"accumulatedTradingValue": 83912000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/086790_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 36418355000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 681046,
+"accumulatedTradingValue": 91514000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "105560",
+"name": "KB금융",
+"stockEndType": "stock",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "105560",
+"currentPrice": 173600,
+"fluctuationsType": "RISING",
+"fluctuations": "400",
+"fluctuationsRatio": "0.23",
+"accumulatedTradingVolume": 826685,
+"accumulatedTradingValue": 143626000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/105560_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 61573790000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 894318,
+"accumulatedTradingValue": 155379000000
+}
+}
+],
+"hasNext": false,
+"cursor": null
+}
+},
+"25": {
+"isSuccess": true,
+"result": {
+"sectorInfo": {
+"sectorName": "기타",
+"changeRate": -1.59
+},
+"items": [
+{
+"feModelType": "domestic",
+"id": "570119",
+"name": "한투 인버스2X은선물 ETN",
+"stockEndType": "etn",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "570119",
+"currentPrice": 43410,
+"fluctuationsType": "RISING",
+"fluctuations": "6320",
+"fluctuationsRatio": "17.04",
+"accumulatedTradingVolume": 21,
+"accumulatedTradingValue": 0,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/570119_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 43410000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 21,
+"accumulatedTradingValue": 0
+}
+},
+{
+"feModelType": "domestic",
+"id": "530143",
+"name": "삼성 인버스 2X 은 선물 ETN",
+"stockEndType": "etn",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "530143",
+"currentPrice": 44820,
+"fluctuationsType": "RISING",
+"fluctuations": "6510",
+"fluctuationsRatio": "16.99",
+"accumulatedTradingVolume": 17052,
+"accumulatedTradingValue": 729000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/530143_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 44820000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 17052,
+"accumulatedTradingValue": 729000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "500030",
+"name": "신한 인버스 2X 은 선물 ETN(H)",
+"stockEndType": "etn",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "500030",
+"currentPrice": 64,
+"fluctuationsType": "RISING",
+"fluctuations": "9",
+"fluctuationsRatio": "16.36",
+"accumulatedTradingVolume": 394673,
+"accumulatedTradingValue": 24000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/500030_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 2176000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 394673,
+"accumulatedTradingValue": 24000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "520093",
+"name": "미래에셋 인버스 2X 은 선물 ETN B",
+"stockEndType": "etn",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "520093",
+"currentPrice": 2265,
+"fluctuationsType": "RISING",
+"fluctuations": "309",
+"fluctuationsRatio": "15.8",
+"accumulatedTradingVolume": 69781,
+"accumulatedTradingValue": 151000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/520093_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 27180000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 69781,
+"accumulatedTradingValue": 151000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "580081",
+"name": "KB 인버스 2X 은 선물 ETN",
+"stockEndType": "etn",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "580081",
+"currentPrice": 44530,
+"fluctuationsType": "RISING",
+"fluctuations": "5765",
+"fluctuationsRatio": "14.87",
+"accumulatedTradingVolume": 4354,
+"accumulatedTradingValue": 186000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/580081_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 44530000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 4354,
+"accumulatedTradingValue": 186000000
+}
+},
+{
+"feModelType": "domestic",
+"id": "610101",
+"name": "메리츠 인버스 2X 은 선물 ETN(H)",
+"stockEndType": "etn",
+"stockExchangeType": "KRX",
+"marketType": "KOSPI",
+"itemCode": "610101",
+"currentPrice": 46355,
+"fluctuationsType": "RISING",
+"fluctuations": "5895",
+"fluctuationsRatio": "14.57",
+"accumulatedTradingVolume": 4522,
+"accumulatedTradingValue": 204000000,
+"miniImageChartUrl": "https://financial-vn.pstatic.net/chart/mobile/mini/krx/610101_interest.png",
+"tradableStatus": "tradable",
+"marketValue": 46355000000,
+"newlyListed": false,
+"isNxt": false,
+"krxNxtIntegratedPriceInfo": {
+"accumulatedTradingVolume": 4522,
+"accumulatedTradingValue": 204000000
+}
+}
+],
+"hasNext": false,
+"cursor": null
+}
+}
+}
+}

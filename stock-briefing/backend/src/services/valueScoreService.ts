@@ -1,9 +1,9 @@
 import cron, { type ScheduledTask } from "node-cron";
 import type { ProductFacts } from "../analysis/leveraged.js";
-import { compactCompanyFacts, FactBook, type CompactFacts, type PeriodInfo, type ValueInputs } from "../analysis/secFacts.js";
+import { compactCompanyFacts, FactBook, mergeCompanyFacts, PREDECESSOR_CIK, type CompactFacts, type PeriodInfo, type ValueInputs } from "../analysis/secFacts.js";
 import { computeAux, computeMetrics, type MetricAux, type MetricKey, type MetricSet, type MetricValue } from "../analysis/valueMetrics.js";
 import {
-  CORE_METRICS,
+  coreOf,
   FAMILY_METRICS,
   FISCAL_STALE_DAYS,
   isCyclical,
@@ -26,6 +26,7 @@ import {
   type ValueBand,
   type ValueFamilyKey,
   type ValueFlagKey,
+  type ValueGrade,
   type ValuePath,
   type ValueReferenceData,
   type ValueScoreResult,
@@ -35,12 +36,14 @@ import type { Candle } from "../domain/types.js";
 import { isKrCode, normalizeCode } from "../lib/codes.js";
 import { seoulIso } from "../lib/time.js";
 import type { FeatureService } from "./featureService.js";
-import { STATUS_TEXT, VALUE_ABOUT } from "./indicatorScoreText.js";
+import { STATUS_TEXT, VALUE_ABOUT, valueAboutOf } from "./indicatorScoreText.js";
 import { addDays, daysBetween } from "../analysis/secFacts.js";
-import { buildReferenceData, parseFrame, referenceDrop, type ReferenceSources } from "./valueReference.js";
+import { buildReferenceData, parseFrame, REFERENCE_REBUILD_DAYS, REFERENCE_STALE_DAYS, referenceDrop, type ReferenceSources } from "./valueReference.js";
 import type { EdgarProvider } from "../providers/dart/edgar.js";
 import type { NasdaqScreener } from "../providers/market/nasdaqScreener.js";
 import { NotListedError } from "../lib/errors.js";
+import { KR_SOURCE } from "../analysis/krValue.js";
+import type { KrValueService } from "./krValueService.js";
 import {
   BLEND_NOTE,
   carriedBadge,
@@ -56,7 +59,7 @@ import {
   levelName,
   lowCoverageText,
   medianText,
-  METRIC_NAME,
+  metricName,
   metricMeaning,
   mixText,
   NO_DATA,
@@ -74,7 +77,7 @@ import {
   tieSentence,
   topTieNote,
   VALUE_BAND_LINE,
-  VALUE_FAMILY_ABOUT,
+  familyAbout,
   VALUE_FAMILY_NAME,
   VALUE_FLAG_TEXT,
   VALUE_STATUS_TEXT,
@@ -144,6 +147,8 @@ export interface ValueFamilyRow {
 }
 export interface ValueBlock {
   method: string;
+  /** 계산 등급 — full = 미국(SEC 재무 전체), lite = 한국 간이(네이버 재무 요약, 배지 '간이 계산'). 점수를 냈을 때만, 그 밖은 null */
+  grade: ValueGrade | null;
   status: ValueStatus;
   label: string;
   score: number | null;
@@ -181,6 +186,8 @@ export interface ValueEvalArgs {
   scoreDate: string;
   /** 추세 쪽이 분할·병합을 의심해 보류 중 */
   splitHold: boolean;
+  /** 종목 이름 (한국: 스팩·리츠 판정) */
+  name?: string;
 }
 export interface ValueEval {
   block: ValueBlock;
@@ -196,6 +203,8 @@ export interface ValueScoreDeps {
   db: Db;
   features: Pick<FeatureService, "enabled">;
   sources: ValueSources | null;
+  /** 한국 간이 가치 (3단계, 플래그 krValueScore). 없으면 한국은 '지금 계산하지 않음' */
+  kr?: KrValueService | null;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
   /** 테스트: 백그라운드 받기 사이 쉼·비교 기준 frames 사이 쉼 */
@@ -209,9 +218,8 @@ export const FACTS_REFRESH_MS = 20 * 3_600_000;
 export const FACTS_CARRY_MS = 36 * 3_600_000;
 /** 이보다 오래 받지 못했으면 점수 없음 */
 export const FACTS_STALE_MS = 7 * 86_400_000;
-/** 비교 기준: 7일 넘으면 다시 만들고, 14일 넘으면 점수 없음 */
-export const REFERENCE_REBUILD_DAYS = 7;
-export const REFERENCE_STALE_DAYS = 14;
+/** 비교 기준: 7일 넘으면 다시 만들고, 14일 넘으면 점수 없음 (새 기준 거절 규칙과 한곳에 — valueReference) */
+export { REFERENCE_REBUILD_DAYS, REFERENCE_STALE_DAYS };
 /** 주가: 마지막 봉이 기준 거래일보다 이만큼(달력 일) 넘게 앞서면 점수 없음 (5거래일) */
 const PRICE_STALE_DAYS = 8;
 const AVG_DAYS = 20;
@@ -251,8 +259,8 @@ interface LoadedFacts {
   book: FactBook;
 }
 
-/** 대상 종목 한 시점의 계산 (지금 · 지난주) */
-interface Core {
+/** 대상 종목 한 시점의 계산 (지금 · 지난주) — 한국 간이(krValueService)도 같은 모양 */
+export interface Core {
   status: "scored" | "insufficient";
   reason?: { code: string; text: string };
   result?: ValueScoreResult;
@@ -266,6 +274,8 @@ interface Core {
   cyclical?: boolean;
   ownMonths?: number;
   priceThrough?: string;
+  /** 한국 간이: 쓴 최근 분기 'YYYY-MM' (지난주 대비 까닭 — 새 분기 실적) */
+  quarter?: string;
 }
 
 const pct1 = (v: number) => Math.round(v * 10) / 10;
@@ -291,6 +301,11 @@ export class ValueScoreService {
 
   constructor(private readonly deps: ValueScoreDeps) {
     this.now = deps.now ?? (() => new Date());
+  }
+
+  /** 한국 간이 가치가 켜져 있는지 (구성·계산 방법 줄) */
+  async krEnabled(): Promise<boolean> {
+    return !!this.deps.kr && (await this.deps.kr.enabled());
   }
 
   /** 가치 부분이 켜져 있는지: 두 플래그 + 출처가 있어야 (없으면 1단계 그대로) */
@@ -334,7 +349,11 @@ export class ValueScoreService {
 
   /** 장 마감 뒤 계산 직전: 저장한 재무가 20시간 넘게 묵었으면 다시 받는다 (플래그·출처가 없으면 아무것도 안 함) */
   async refreshIfStale(code: string): Promise<void> {
-    if (!(await this.enabled()) || isKrCode(code)) return;
+    if (isKrCode(code)) {
+      if (this.deps.kr && (await this.deps.kr.enabled())) await this.deps.kr.refreshIfStale(code);
+      return;
+    }
+    if (!(await this.enabled())) return;
     const f = await this.loadFacts(code);
     if (f && this.now().getTime() - Date.parse(f.fetchedAt) < FACTS_REFRESH_MS) return;
     const fail = this.failures.get(normalizeCode(code));
@@ -506,7 +525,8 @@ export class ValueScoreService {
   async prune(registered: readonly string[]): Promise<number> {
     const cut = seoulIso(new Date(this.now().getTime() - FACTS_PRUNE_DAYS * 86_400_000));
     const keep = registered.map(normalizeCode);
-    let q = this.deps.db.selectFrom("value_fundamentals").select("code").where("fetched_at", "<", cut);
+    // 한국 행(cik 'naver' — 비교 회사 재무)은 한국 서비스가 따로 정리한다 (분기에 한 번 받으므로 30일 규칙이면 비교 회사가 지워진다)
+    let q = this.deps.db.selectFrom("value_fundamentals").select("code").where("fetched_at", "<", cut).where("cik", "!=", KR_SOURCE);
     if (keep.length) q = q.where("code", "not in", keep);
     const old = (await q.execute()).map((r) => r.code);
     if (!old.length) return 0;
@@ -528,6 +548,8 @@ export class ValueScoreService {
 
   start(registered: () => Promise<string[]>): void {
     this.stop();
+    // 한국 간이 가치 (3단계): 밤마다 재무 돌려 받기 · 일요일 새벽 비교 기준 (플래그가 꺼져 있으면 아무것도 하지 않음)
+    this.deps.kr?.start(registered);
     // 주 1회: 토요일 09:00 KST (미국 금요일 장 마감 뒤). 매일 09:15 에 7일 넘게 묵었으면 다시 (실패한 주 대비) + 오래 열지 않은 미등록 종목 재무 정리
     this.tasks.push(cron.schedule("0 9 * * 6", () => void this.buildReference({ force: true }).catch(() => undefined), { timezone: "Asia/Seoul", name: "value-reference-weekly" }));
     this.tasks.push(
@@ -554,6 +576,7 @@ export class ValueScoreService {
   }
 
   stop(): void {
+    this.deps.kr?.stop();
     for (const t of this.tasks) void t.destroy();
     this.tasks = [];
     if (this.startTimer) clearTimeout(this.startTimer);
@@ -578,7 +601,11 @@ export class ValueScoreService {
     const code = normalizeCode(a.code);
     const plain = (block: ValueBlock, extra: Partial<ValueEval> = {}): ValueEval => ({ block, stored: null, fetchFailure: false, waiting: false, ...extra });
     if (a.etf) return plain(ValueScoreService.stage1Block(true));
-    if (isKrCode(code)) return plain(baseBlock("pending", "계산 준비 중", { code: "kr", text: VALUE_STATUS_TEXT.kr }));
+    // 한국 (3단계): 간이 계산 서비스가 켜져 있으면 그쪽으로, 아니면 '지금 계산하지 않음' (네이버 재무 요청 0건)
+    if (isKrCode(code)) {
+      if (this.deps.kr && (await this.deps.kr.enabled())) return this.deps.kr.evaluate(a);
+      return plain(baseBlock("pending", VALUE_STATUS_TEXT.offLabel, { code: "krOff", text: VALUE_STATUS_TEXT.krOff }, valueAboutOf("general", "KR")));
+    }
     const p = a.product;
     if (p?.spac) return plain(baseBlock("excluded", "대상 아님", { code: "spac", text: VALUE_STATUS_TEXT.spac }));
     if (p?.commonShare === false) return plain(baseBlock("excluded", "대상 아님", { code: "preferred", text: VALUE_STATUS_TEXT.preferred }));
@@ -613,7 +640,8 @@ export class ValueScoreService {
     if (facts.sic === 6798) return plain(baseBlock("excluded", "대상 아님", { code: "reit", text: VALUE_STATUS_TEXT.reit }));
     if (facts.sic === 6770) return plain(baseBlock("excluded", "대상 아님", { code: "spac", text: VALUE_STATUS_TEXT.spac }));
     if (age >= FACTS_STALE_MS) {
-      if (failedSince) return fail!.kind === "notListed" ? plain(notListed) : plain(factsFailed, { fetchFailure: true });
+      // 받은 뒤 목록에서 빠진 것은 처음부터 없던 것(외국 회사 등)과 까닭 글을 달리한다 (상장 폐지·합병·티커 변경 등, 검토 지적)
+      if (failedSince) return fail!.kind === "notListed" ? plain(baseBlock("insufficient", "점수 없음", { code: "notListed", text: VALUE_STATUS_TEXT.notListedAfter })) : plain(factsFailed, { fetchFailure: true });
       // 오랜만에 연 종목: 뒤에서 새로 받는 중 (앱은 1분마다 다시 묻는다). 받는 중이 아니면(쉬는 중) 끝나는 상태로
       if (refreshing) return plain(baseBlock("pending", "계산 준비 중", { code: "pendingRefresh", text: VALUE_STATUS_TEXT.pendingRefresh }), { waiting: true });
       return plain(factsFailed, { fetchFailure: true });
@@ -742,16 +770,17 @@ function monthEnd(date: string): string {
   return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
 }
 
-function baseBlock(status: ValueStatus, label: string, reason: { code: string; text: string } | null): ValueBlock {
+export function baseBlock(status: ValueStatus, label: string, reason: { code: string; text: string } | null, about: string = VALUE_ABOUT): ValueBlock {
   return {
     method: VALUE_VERSION,
+    grade: null,
     status,
     label,
     score: null,
     scoreExact: null,
     band: null,
-    about: VALUE_ABOUT,
-    text: reason?.text ?? VALUE_ABOUT,
+    about,
+    text: reason?.text ?? about,
     reason,
     badges: [],
     headline: null,
@@ -793,6 +822,8 @@ function metricValueText(m: MetricScore): string | null {
 /** 지표 줄을 만들 때 필요한 것: 경로(금융사면 '시장' 대신 '금융사 전체'), 연간 재무 기준(가장 최근 회계연도 끝) */
 export interface RowCtx {
   path: ValuePath;
+  /** 계산 등급 (lite = 한국 간이 — 성장 지표 이름이 '2년') */
+  grade?: ValueGrade;
   /** 연간 이력의 가장 최근 회계연도 끝 — 연간 재무로 계산한 지표의 기준 글 ('2026년 1월 결산 연간 기준') */
   annualEnd: string | null;
 }
@@ -800,13 +831,13 @@ export interface RowCtx {
 export const ANNUAL_METRICS: ReadonlySet<MetricKey> = new Set<MetricKey>(["C1", "C2", "C3", "B5", "F2", "E2"]);
 
 /** 지표 한 줄의 문장: 쓰지 않음 · 규칙 · 같은 값 덩어리(중립 문장) · 위치 문장 */
-function metricSentence(m: MetricScore): string {
+function metricSentence(m: MetricScore, grade?: ValueGrade): string {
   if (!m.adopted) return NOT_ADOPTED;
   if (m.rule && m.why) return RULE_TEXT[m.why];
   if (m.score === null || m.x === null) return NO_DATA;
   // 같은 값이 많아 위치가 부풀려진 지표: '많은 편·적은 편' 대신 중립 문장 (검토 지적 — NVDA 배당 0.1% '많은 편')
   if (tieDriven(m)) return tieSentence(Math.round(100 * m.peer!.tie), medianText(m.key, m.peer!.tieX) ?? "", m.score >= 50);
-  return positionSentence(m.key, m.score);
+  return positionSentence(m.key, m.score, grade);
 }
 
 export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annualEnd: null }): ValueMetricRow {
@@ -823,15 +854,15 @@ export function metricRow(m: MetricScore, ctx: RowCtx = { path: "general", annua
   }
   return {
     key: m.key,
-    name: METRIC_NAME[m.key],
+    name: metricName(m.key, ctx.grade),
     value: m.adopted ? metricValueText(m) : null,
     basis: m.adopted && m.score !== null && ANNUAL_METRICS.has(m.key) && ctx.annualEnd ? annualBasis(ctx.annualEnd) : null,
     peerMedian: median && m.score !== null ? `${lname} 가운데값 ${median}` : null,
     positions,
     mix: m.score !== null ? mixText(m.mix, level, ctx.path) : null,
     score: m.score === null ? null : roundScore(m.score),
-    text: metricSentence(m),
-    meaning: metricMeaning(m.key),
+    text: metricSentence(m, ctx.grade),
+    meaning: metricMeaning(m.key, ctx.grade),
     used: m.adopted && m.score !== null,
     note: notes.filter(Boolean).join(" ") || null,
   };
@@ -845,12 +876,12 @@ export function familyRow(f: FamilyScore, ctx: RowCtx = { path: "general", annua
     // 머리 문장: 가운데(50)에서 가장 먼 지표 — 같은 값이 많아 위치가 부풀려진 지표(무배당 0% 사이의 0.1% 등)는 되도록 고르지 않는다
     const pool = present.filter((m) => !tieDriven(m));
     const top = [...(pool.length ? pool : present)].sort((a, b) => Math.abs(b.score! - 50) - Math.abs(a.score! - 50))[0]!;
-    text = `${METRIC_NAME[top.key]} — ${metricSentence(top)}`;
+    text = `${metricName(top.key, ctx.grade)} — ${metricSentence(top, ctx.grade)}`;
   }
   return {
     key: f.key,
     name: VALUE_FAMILY_NAME[f.key],
-    about: VALUE_FAMILY_ABOUT[f.key],
+    about: familyAbout(f.key, ctx.grade),
     weight: f.weight,
     score: f.score === null ? null : roundScore(f.score),
     scoreExact: f.score,
@@ -866,7 +897,7 @@ function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; 
   const period = c.period!;
   const flagsKeys = valueFlags(r, c.aux!, { cyclical: c.cyclical!, thresholds: o.ref.ref.thresholds, metrics: c.metrics! });
   const flags: ValueBlock["flags"] = [];
-  const core = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && CORE_METRICS[r.path].price.includes(m.key) && m.score !== null);
+  const core = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && coreOf(r.grade, r.path).price.includes(m.key) && m.score !== null);
   for (const k of flagsKeys) {
     if (k === "peerFallback") flags.push({ key: k, text: peerFallbackText(core?.peer?.level ?? "market", sectorKo(o.cls?.sector ?? null), r.path) });
     else if (k !== "carriedForward") flags.push({ key: k, text: VALUE_FLAG_TEXT[k] });
@@ -885,10 +916,12 @@ function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; 
   return {
     // 요약 줄 글: 예전 앱(1단계)은 점수 칸을 모르고 label 만 굵게 보이므로 숫자까지 넣는다 ('66점 · 가운데쯤'). 새 앱은 score·band 를 쓴다
     ...baseBlock(r.status, `${shown}점 · ${band}`, null),
+    grade: "full",
     score: shown,
     scoreExact: r.score,
     band,
-    text: `${VALUE_ABOUT}: ${VALUE_BAND_LINE[band]}`,
+    about: valueAboutOf(r.path),
+    text: `${valueAboutOf(r.path)}: ${VALUE_BAND_LINE[band]}`,
     badges,
     headline: valueHeadline(shown, band),
     peerLine: peerLine({ level, nameKo: level === "industry" ? industryKo(groupName) : level === "sector" ? sectorKo(groupName) : null, n, own: ownUsed, path: r.path }),
@@ -992,12 +1025,17 @@ function storedOf(c: Core, refDate: string, facts: LoadedFacts): Record<string, 
 export function defaultValueSources(edgar: EdgarProvider, screener: NasdaqScreener): ValueSources {
   return {
     companyFacts: async (code) => {
+      let got: { cik: string; raw: Record<string, unknown> };
       try {
-        return await edgar.companyFactsRaw(code);
+        got = await edgar.companyFactsRaw(code);
       } catch (e) {
         if (e instanceof NotListedError) return null;
         throw e;
       }
+      // 지주회사 전환으로 CIK 가 바뀐 회사(XOM 2026): 예전 CIK 의 재무를 이어 붙인다 (새 CIK 에는 전환 뒤 보고서만 있어 연간 이력이 비었다)
+      const old = PREDECESSOR_CIK[got.cik];
+      if (old) got = { cik: got.cik, raw: mergeCompanyFacts(got.raw, await edgar.companyFactsRawByCik(old)) };
+      return got;
     },
     sic: async (cik) => (await edgar.sicOf(cik)).sic,
     reference: {

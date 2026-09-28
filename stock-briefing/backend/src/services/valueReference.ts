@@ -131,8 +131,8 @@ export function referencePeriods(refDate: string): ReferencePeriods {
 }
 
 /**
- * frames 로 받을 항목 목록 (태그·기간). 필요한 것만: 매출·영업이익·순이익은 7년, 주식 수는 6년(두 태그 — 대상 종목과 같은 정의), 나머지 흐름은
- * 최근 3개 연도 (가장 최근 회계연도가 CY(Y−2) 인 회사도 같은 항목이 있게). 모두 216번 (문서 가치지표-계산.md 10장)
+ * frames 로 받을 항목 목록 (태그·기간). 필요한 것만: 매출·영업이익·순이익은 7년, 주식 수는 6년(세 태그 — 대상 종목과 같은 정의), 나머지 흐름은
+ * 최근 3개 연도 (가장 최근 회계연도가 CY(Y−2) 인 회사도 같은 항목이 있게). 모두 222번 (주식 수 세 태그 — 3단계에서 기본 주식 수를 더함, 문서 가치지표-계산.md 5장)
  */
 export function framePlan(p: ReferencePeriods): Array<{ key: string; tag: FactTag; period: string }> {
   const out: Array<{ key: string; tag: FactTag; period: string }> = [];
@@ -145,7 +145,7 @@ export function framePlan(p: ReferencePeriods): Array<{ key: string; tag: FactTa
       for (const period of k === "netIncome" && i > 0 ? last3 : periods) out.push({ key: `flow:${k}`, tag, period });
     });
   }
-  // 희석 주식 수: 대상 종목(companyfacts)과 같은 두 태그 — 앞 태그가 없는 회사는 '기본·희석 같음' 태그로 (주식 수 변화·주당이익 증가폭, 검토 지적)
+  // 희석 주식 수: 대상 종목(companyfacts)과 같은 세 태그 — 앞 태그가 없는 회사는 '기본·희석 같음', 그것도 없으면 기본 주식 수 (주식 수 변화·주당이익 증가폭, 검토 지적)
   for (const tag of SHARE_TAGS) for (const period of p.annual.slice(-6)) out.push({ key: "shares", tag, period });
   for (const k of INSTANT_KEYS) for (const tag of INSTANT_TAGS[k]) for (const period of p.latest) out.push({ key: `inst:${k}`, tag, period });
   for (const k of ["equity", "assets"] as const) for (const period of [...p.yearAgo, ...p.yearEnd]) out.push({ key: `inst:${k}`, tag: INSTANT_TAGS[k][0]!, period });
@@ -156,7 +156,7 @@ export function framePlan(p: ReferencePeriods): Array<{ key: string; tag: FactTa
 
 /**
  * 받은 frames (`${tag}|${period}` → CIK → 값). 메모리를 아끼려고 값만 숫자로 두고, 기간 끝 날짜는 순이익 태그만 둔다
- * (회계연도 끝 맞추기에만 쓴다) — 한 번에 frames 216개 × 회사 수천 곳
+ * (회계연도 끝 맞추기에만 쓴다) — 한 번에 frames 222개 × 회사 수천 곳
  */
 export interface FrameData {
   val: Map<number, number>;
@@ -291,8 +291,15 @@ export const LEVEL_PREV_MAX_DAYS = 21;
 /** 비교 회사 수 급감 막기: 지난 기준보다 이 비율 밑으로 줄면 저장하지 않는다 (모집단·일반 / 금융) */
 export const REFERENCE_KEEP_RATIO = 0.85;
 export const REFERENCE_KEEP_RATIO_FIN = 0.8;
-/** 이보다 오래된 지난 기준과는 비교하지 않는다 (오래 막혀 있으면 새 기준을 받아들인다) */
-export const REFERENCE_DROP_MAX_DAYS = 35;
+/** 비교 기준: 7일 넘으면 다시 만들고, 14일 넘으면 점수 없음 ('비교 기준이 2주 넘게 갱신되지 않았습니다') */
+export const REFERENCE_REBUILD_DAYS = 7;
+export const REFERENCE_STALE_DAYS = 14;
+/**
+ * 새 기준을 거절하고 지난 기준을 지키는 것은 지난 기준이 이 일수까지일 때만 — 그보다 오래되면 새 기준을 받아들인다. 점수 없음 기준(14일)보다
+ * 하루 짧게 두어, 새 기준을 거절하는 동안 지켜 둔 지난 기준이 '2주 넘게 갱신 안 됨 → 점수 없음'이 되지 않게 한다 (2단계는 35일이라
+ * 15~35일 사이에 새 기준은 거절되고 지난 기준은 점수 없음이 되었다 — 검토 지적)
+ */
+export const REFERENCE_DROP_MAX_DAYS = REFERENCE_STALE_DAYS - 1;
 /** 지표 채택 비율(값이 있는 회사 비율)이 지난 기준보다 이만큼(0~1, 10%p) 넘게 줄면 저장하지 않는다 — 주마다 흔들림은 1%p 안쪽 */
 export const REFERENCE_COVERAGE_DROP = 0.1;
 /** 빠지면 기준을 저장하지 않는 frames 태그 (순이익은 최근 세 연간 틀만 — 그 앞은 이력용) */
@@ -312,7 +319,7 @@ export function keyFramesMissing(next: Pick<ValueReferenceData, "missingFrames" 
  *  - 회사 수가 지난 기준보다 크게 줄었다 (모집단·일반 85%, 금융 80% 밑 — 예: 연간 보고서 철이 아닌데 틀이 비었을 때)
  *  - 핵심 frames(순이익 최근 세 해 · 매출 · 영업이익 · 자산)를 두 번 받아도 받지 못했다
  *  - 어느 지표든 채택 비율이 지난 기준보다 10%p 넘게 줄었다 (frames 가 비어 온 때)
- * 까닭 글, 아니면 null. 지난 기준이 없거나 35일보다 오래되었으면 null (오래 막혀 있으면 새 기준을 받아들인다)
+ * 까닭 글, 아니면 null. 지난 기준이 없거나 13일보다 오래되었으면 null — 지난 기준이 점수 없음(14일 넘음)이 되기 전에 새 기준을 받아들인다
  */
 export function referenceDrop(
   prev: (Pick<ValueReferenceData, "refDate" | "counts"> & Partial<Pick<ValueReferenceData, "coverage">>) | null | undefined,

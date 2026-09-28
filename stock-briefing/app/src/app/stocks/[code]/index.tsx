@@ -22,6 +22,7 @@ import { afterMarketLabel, currencyOfMarket, formatArrowDisplay, formatDateKo, f
 import { openMaxAge, parseStockCode, viewState } from "@/lib/freshness";
 import { rememberNav, useCachedRow, useHoldingsNav, type NavItem } from "@/lib/holdingsNav";
 import { quoteLive, sessionNote, sessionOpen } from "@/lib/liveDot";
+import { isKrCode } from "@/lib/marketTime";
 import { evalView, evaluate } from "@/lib/liveTick";
 import { useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
@@ -148,6 +149,9 @@ export default function StockDetailScreen() {
   // 토스 앱 열기 (3-48, 기능 플래그 tossOpen — 앱 fallback 꺼짐, 사용자 결정 '토스 앱만 열기'): '시세' 칸 제목 줄 오른쪽 버튼 → 안내 시트 → 토스 앱 자체를 연다.
   // 종목은 사용자가 토스 앱에서 직접 찾고 주문도 토스 앱에서 직접 (주문·로그인 API·서버 호출 없음). 이름이 없는 종목(lib/tossApp)이나 꺼져 있으면 버튼·줄을 넘기지 않는다 (지금 화면과 한 글자도 같게)
   const tossOn = useFeature("tossOpen", false);
+  // 한국 간이 가치 (3-44 3단계, 서버 되돌리기 스위치 krValueScore — 앱 fallback 꺼짐): 한국 종목의 가치분석 탭 상세 카드·'가치분석 탭에서 지표별 값 보기'.
+  // 꺼져 있으면(예전 서버 포함) 한국 종목 가치분석 탭은 2단계 그대로(AI 글만) — 요약 카드는 서버가 준 줄 그대로('지금 계산하지 않음')
+  const krValueOn = useFeature("krValueScore", false);
   // 차트의 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
@@ -408,11 +412,13 @@ export default function StockDetailScreen() {
     tabBodyY.current = e.nativeEvent.layout.y;
   };
   // 가치 상세 카드로 스크롤하는 데 쓰는 속성 — 플래그(indicatorScores + valueScore)가 꺼져 있으면 붙이지 않는다 (지금 화면과 한 글자도 같게)
-  const jumpOn = scoresOn && valueOn;
+  // 한국 종목은 krValueScore 도 켜져 있어야 가치분석 탭 카드를 둔다 (끈 서버는 2단계 그대로)
+  const valueCard = valueOn && (!isKrCode(c) || krValueOn);
+  const jumpOn = scoresOn && valueCard;
   const scrollProps = jumpOn ? { scrollRef } : null;
   const bodyLayout = jumpOn ? { onLayout: onTabBodyLayout } : null;
   const withScores = (kind: AnalysisKind, ai: React.ReactNode, opts: { twoCol?: boolean; techLabel?: string; valueLabel?: string } = {}) =>
-    scoresOn && (kind === "company" || kind === "technical" || (kind === "value" && valueOn)) ? (
+    scoresOn && (kind === "company" || kind === "technical" || (kind === "value" && valueCard)) ? (
       <>
         {kind === "company" ? (
           <IndicatorSummaryCard
@@ -420,7 +426,7 @@ export default function StockDetailScreen() {
             twoCol={opts.twoCol}
             onTechnical={() => setTab("technical")}
             techTabLabel={opts.techLabel}
-            onValue={valueOn ? openValue : undefined}
+            onValue={valueCard ? openValue : undefined}
             valueTabLabel={opts.valueLabel}
             onOpenStock={openStock}
           />

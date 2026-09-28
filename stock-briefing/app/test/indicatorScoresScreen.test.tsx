@@ -101,11 +101,14 @@ const NV = FX.cases["NVDA"]!.value;
 const nvdaStock = () => ({ ...holding("NVDA", quote("NVDA", 178.2, { currency: "USD", change: 3.05, changeRate: 1.74, fxRate: 1391.5 }), 40, 120, {}, "엔비디아"), market: "NASDAQ" as const, registered: true });
 const soxlStock = () => ({ ...holding("SOXL", quote("SOXL", 151.45, { currency: "USD", change: 2.2, changeRate: 1.47, fxRate: 1391.5 }), 30, 40, {}, "SOXL"), market: "AMEX" as const, registered: true });
 
-function open(stock: RegisteredWithQuote, scoresCase: string | null, extra: { flag?: boolean; valueFlag?: boolean; tab?: string; size?: [number, number]; fontScale?: number } = {}) {
+function open(stock: RegisteredWithQuote, scoresCase: string | null, extra: { flag?: boolean; valueFlag?: boolean; krFlag?: boolean; tab?: string; size?: [number, number]; fontScale?: number } = {}) {
   h.stock = stock;
   h.scores = scoresCase ? FX.cases[scoresCase] : undefined;
-  // 서버 /api/features 가 주는 두 플래그 (가치 끔 픽스처는 valueScore 도 꺼진 서버)
+  // 서버 /api/features 가 주는 세 플래그 (가치 끔 픽스처는 valueScore, 한국 가치 끔 픽스처는 krValueScore 도 꺼진 서버). krFlag null = 예전 서버(플래그 없음 → 앱 fallback 꺼짐)
   h.flags = { indicatorScores: extra.flag ?? true, valueScore: extra.valueFlag ?? scoresCase !== "NVDA_valueOff", foldLayout: true };
+  const kr = extra.krFlag ?? scoresCase !== "005930_krOff";
+  if (kr) h.flags["krValueScore"] = true;
+  else h.flags["krValueScore"] = false;
   h.params = { code: stock.code, ...(extra.tab ? { tab: extra.tab } : {}) };
   const [width, height] = extra.size ?? [475, 751];
   h.win = { width, height, scale: 2.625, fontScale: extra.fontScale ?? 1 };
@@ -186,10 +189,10 @@ describe("접은 화면 475×751 — 기업개요 탭 요약 카드", () => {
     expect(order(r, "종합 지표", "두 점수의 차이가", "가격 9월 25일").every((p, i, a) => i === 0 || p > a[i - 1]!)).toBe(true);
   });
 
-  it("한국 종목·SEC 재무 없음·받는 중: 가치 줄은 상태 글과 이유 (0점·50점으로 채우지 않음)", () => {
-    const kr = open({ ...nvdaStock(), code: "005930", name: "삼성전자", market: "KOSPI" as const }, "005930");
-    expect(kr.text()).toContain("계산 준비 중");
-    expect(kr.text()).toContain("한국 종목 가치 지표 점수는 다음 단계에서 계산합니다.");
+  it("한국 가치를 끈 서버·SEC 재무 없음·받는 중: 가치 줄은 상태 글과 이유 (0점·50점으로 채우지 않음)", () => {
+    const kr = open({ ...nvdaStock(), code: "005930", name: "삼성전자", market: "KOSPI" as const }, "005930_krOff");
+    expect(kr.text()).toContain("지금 계산하지 않음한국 종목 가치 지표 점수는 지금 계산하지 않습니다.");
+    expect(kr.text()).not.toContain("다음 단계에서");
     const nof = open({ ...nvdaStock(), code: "ZZNOF", name: "예시 종목" }, "ZZNOF");
     expect(nof.text()).toContain("점수 없음");
     expect(nof.text()).toContain("SEC 재무제표를 찾지 못했습니다");
@@ -404,8 +407,8 @@ describe("가치분석 탭 — 가치 지표 상세 카드 (2단계)", () => {
     expect(soxl.text()).toContain("대상 아님");
     expect(soxl.text()).toContain("ETF는 여러 종목을 묶은 상품이라");
     expect(soxl.text()).not.toContain("지표별 값 보기");
-    const kr = open({ ...nvdaStock(), code: "005930", name: "삼성전자", market: "KOSPI" as const }, "005930", { tab: "value" });
-    expect(kr.text()).toContain("한국 종목 가치 지표 점수는 다음 단계에서 계산합니다.");
+    const kr = open({ ...nvdaStock(), code: "005930", name: "삼성전자", market: "KOSPI" as const }, "005930_krOff", { tab: "value", krFlag: true });
+    expect(kr.text()).toContain("한국 종목 가치 지표 점수는 지금 계산하지 않습니다.");
     // 계산하지 않은 카드에는 SEC·Nasdaq 출처 줄이 없다 (리뷰: 한국·ETF 카드가 SEC 자료로 계산한 것처럼 읽히지 않게)
     for (const t of [soxl.text(), kr.text()]) expect(t).not.toContain("재무 SEC");
     const nof = open({ ...nvdaStock(), code: "ZZNOF", name: "예시 종목" }, "ZZNOF", { tab: "value" });
@@ -563,5 +566,86 @@ describe("검토 지적 3차 — 요약 카드에서 가치 상세 카드로 · 
     expect(r.text()).toContain(`${c1.value} · ${c1.peerMedian} (2026년 1월 결산 연간 기준)`);
     const a1 = NV.families![0]!.metrics.find((m) => m.key === "A1")!;
     expect(r.text()).not.toContain(`${a1.value} · ${a1.peerMedian} (`);
+  });
+});
+
+describe("3단계 — 한국 간이 가치 (삼성전자·SK하이닉스·KB금융) · 2단계 남은 지적", () => {
+  const krStock = (code: string, name: string) => ({ ...nvdaStock(), code, name, market: "KOSPI" as const });
+  it("요약 카드: 가치 줄 막대·숫자·띠 + '간이 계산' 배지, 종합 숫자, 날짜 줄 '가격 9월 23일(수) 한국 종가 · 재무 2026년 6월까지 4분기'", () => {
+    const r = open(krStock("005930", "삼성전자"), "005930");
+    const v = FX.cases["005930"]!.value;
+    const text = r.text();
+    expect(v.grade).toBe("lite");
+    expect(r.all().filter((n) => n.type === "Badge").map(textOf)).toContain("간이 계산");
+    expect(r.has(`가치 지표 ${v.score}점, 0에서 100 중, ${v.band}, 간이 계산`)).toBe(true);
+    expect(text).toContain("가격 9월 23일(수) 한국 종가 · 재무 2026년 6월까지 4분기");
+    expect(text).toContain("재무 숫자가 같은 업종·한국 시장 회사들 사이 어디쯤인지");
+    const c = FX.cases["005930"]!.composite;
+    expect(c.status).toBe("ok");
+    expect(text).toContain(`종합 지표${c.score}두 점수의 평균`);
+    // 가치분석 탭으로 가는 줄 (한국 가치가 켜진 서버)
+    r.act(() => (r.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    expect(r.text()).toContain("가치분석 탭에서 지표별 값 보기");
+    expect(r.text()).toContain("한국 종목은 네이버 증권 재무 요약");
+  });
+  it("가치분석 탭: 머리·배지·한국 비교 문장·날짜 줄·간이 안내·5묶음(성장 '2년', 당좌비율)·고지·계산 방식 줄", () => {
+    const r = open(krStock("005930", "삼성전자"), "005930", { tab: "value" });
+    const v = FX.cases["005930"]!.value;
+    const text = r.text();
+    expect(text).toContain(v.headline!);
+    expect(text).toContain(v.peerLine!);
+    expect(v.peerLine).toMatch(/·한국 시장과 비교해/);
+    expect(text).toContain(v.datesLine!);
+    expect(text).toContain("한국 종목은 네이버 증권의 재무 요약(최근 5개 분기·3개 결산)으로 계산한 간이 계산입니다.");
+    expect(text).toContain(v.versionLine!);
+    expect(v.versionLine).toMatch(/간이\(한국\)/);
+    expect(text).toContain(DISCLAIMER);
+    r.act(() => (r.byLabel("지표별 값 보기").props.onPress as () => void)());
+    const after = r.text();
+    for (const n of ["매출 성장 (2년 연평균)", "당좌비율", "PER (이익 대비 주가)"]) expect(after, n).toContain(n);
+    expect(after).not.toContain("재무 SEC");
+    expect(after).toContain("AI 가치분석");
+  });
+  it("KB금융: 금융사 경로 비중 35·30·10·15·10 · 설명 줄 '업종·한국 금융사 전체' · 지표 줄에 '시장 안' 없음", () => {
+    const r = open(krStock("105560", "KB금융"), "105560", { tab: "value" });
+    const v = FX.cases["105560"]!.value;
+    expect(v.path).toBe("financial");
+    expect(v.families!.map((f) => f.weight)).toEqual([35, 30, 10, 15, 10]);
+    r.act(() => (r.byLabel("지표별 값 보기").props.onPress as () => void)());
+    expect(r.text()).not.toContain("시장 안 위치");
+    const sum = open(krStock("105560", "KB금융"), "105560");
+    expect(sum.text()).toContain("재무 숫자가 같은 업종·한국 금융사 전체 회사들 사이 어디쯤인지");
+  });
+  it("앱 fallback: krValueScore 를 모르는 예전 서버면 한국 종목 가치분석 탭은 2단계 그대로(AI 글만), 요약 카드의 가치분석 탭 줄도 없음 — 미국 종목은 그대로", () => {
+    const r = open(krStock("005930", "삼성전자"), "005930", { tab: "value", krFlag: false });
+    expect(r.text()).not.toContain("AI 가치분석");
+    expect(r.text()).not.toContain("가치 지표 점수");
+    const sum = open(krStock("005930", "삼성전자"), "005930", { krFlag: false });
+    sum.act(() => (sum.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    expect(sum.text()).not.toContain("가치분석 탭에서 지표별 값 보기");
+    const us = open(nvdaStock(), "NVDA", { tab: "value", krFlag: false });
+    expect(us.text()).toContain("AI 가치분석");
+  });
+  it("넓은 창 933×704 '가치' 탭 · 704×933 두 칸에도 한국 카드", () => {
+    const wide = open(krStock("000660", "SK하이닉스"), "000660", { size: [933, 704], tab: "value" });
+    expect(wide.text()).toContain(FX.cases["000660"]!.value.headline!);
+    const col = open(krStock("000660", "SK하이닉스"), "000660", { size: [704, 933], tab: "company" });
+    expect(col.all().some((n) => n.type === "Badge" && textOf(n) === "간이 계산")).toBe(true);
+  });
+  it("추세 보류 줄: 상태 글 '잠시 보류' 옆 이유 글에 상태 글을 다시 쓰지 않는다, 화면 읽기는 이유까지 (검토 지적)", () => {
+    const r = open({ ...nvdaStock(), code: "ZSPL", name: "합성 종목" }, "ZSPL");
+    expect(r.text()).toContain("잠시 보류주식 분할·병합 반영을 확인하는 중입니다");
+    expect(r.text()).not.toContain("잠시 보류 —");
+    const all = r.all().map((n) => String(n.props.accessibilityLabel ?? "")).join(" | ");
+    expect(all).toContain("추세 지표, 잠시 보류, 주식 분할·병합 반영을 확인하는 중입니다");
+  });
+  it("큰 글씨 200% 묶음 이름: '·' 앞 빈칸은 보통 빈칸 (낱말 가운데서 끊기지 않게), 100% 는 줄바꿈 없는 빈칸 그대로", () => {
+    const big = open(nvdaStock(), "NVDA", { fontScale: 2 });
+    big.act(() => (big.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    const names = big.all().filter((n) => n.type === "Text").map(textOf).filter((t) => /가격 안정성/.test(t));
+    expect(names).toContain("가격 안정성 · 10");
+    const small = open(nvdaStock(), "NVDA");
+    small.act(() => (small.byLabel("구성·계산 방법 보기").props.onPress as () => void)());
+    expect(small.all().filter((n) => n.type === "Text").map(textOf)).toContain("가격 안정성 · 10");
   });
 });

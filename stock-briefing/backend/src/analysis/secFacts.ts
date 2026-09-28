@@ -34,15 +34,43 @@ export const daysBetween = (a: string, b: string) => Math.round((t0(b) - t0(a)) 
 export function addDays(d: string, n: number): string {
   return new Date(t0(d) + n * DAY).toISOString().slice(0, 10);
 }
-/** 기간 길이(일) → 종류. 52/53주 회계연도의 13·14주 분기까지 */
-function spanKind(start: string | null, end: string): "Q" | "H" | "9M" | "Y" | "other" | "instant" {
+/**
+ * 기간 길이(일) → 종류. 52/53주 회계연도의 13·14주 분기와 12·12·12·16주 분기(COST — 1분기 12주·반기 24주 = 168일·3분기 누적 36주 = 252일)·
+ * 16·12·12·12주 분기(1분기 16주 = 112일·반기 28주·3분기 누적 40주)까지. 2단계까지는 반기 170일·3분기 누적 260일부터라 COST 의 24·36주 누적을
+ * 몰라 최근 4분기를 만들지 못했다 (검토 지적 — 가치 지표 점수 없음)
+ */
+export function spanKind(start: string | null, end: string): "Q" | "H" | "9M" | "Y" | "other" | "instant" {
   if (!start) return "instant";
   const d = daysBetween(start, end) + 1;
-  if (d >= 80 && d <= 100) return "Q";
-  if (d >= 170 && d <= 200) return "H";
-  if (d >= 260 && d <= 290) return "9M";
+  if (d >= 80 && d <= 115) return "Q";
+  if (d >= 165 && d <= 205) return "H";
+  if (d >= 245 && d <= 295) return "9M";
   if (d >= 350 && d <= 380) return "Y";
   return "other";
+}
+
+/**
+ * 지주회사 전환 등으로 CIK 가 바뀐 회사: 새 CIK → 예전 CIK (설계 B9 'XOM CIK 변경'). SEC 티커 목록은 새 CIK 만 가리키는데, 새 CIK 의
+ * companyfacts 에는 전환 뒤 보고서(첫 10-Q)만 있어 연간 이력이 비었다 (XOM: 2026년 ExxonMobil Holdings Corp 0002115436, 예전 Exxon Mobil
+ * Corporation 0000034088 — 검토 지적). 예전 CIK 재무를 이어 붙인다 (같은 기간은 늦게 낸 값이 이긴다 — secFacts 의 공시일 규칙 그대로)
+ */
+export const PREDECESSOR_CIK: Readonly<Record<string, string>> = { "0002115436": "0000034088" };
+
+/** 두 companyfacts 원본 합치기 (새 CIK 의 이름·CIK 그대로, 태그·단위마다 줄을 잇는다 — 같은 줄은 줄이기에서 한 번만 남는다) */
+export function mergeCompanyFacts(primary: Json, predecessor: Json): Json {
+  const out: Json = { ...primary, facts: {} };
+  const facts = out["facts"] as Record<string, Record<string, { units: Record<string, Json[]> } & Json>>;
+  for (const src of [predecessor, primary]) {
+    for (const [tax, tags] of Object.entries((src["facts"] as Record<string, Record<string, Json>> | undefined) ?? {})) {
+      const t = (facts[tax] ??= {});
+      for (const [name, body] of Object.entries(tags)) {
+        const units = ((body as { units?: Record<string, Json[]> }).units ?? {}) as Record<string, Json[]>;
+        const cur = (t[name] ??= { ...(body as Json), units: {} } as { units: Record<string, Json[]> } & Json);
+        for (const [u, rows] of Object.entries(units)) cur.units[u] = [...(cur.units[u] ?? []), ...rows];
+      }
+    }
+  }
+  return out;
 }
 
 /** companyfacts 원본 JSON → 저장용 모양 (since 이후 기간 끝만). USD 가 아닌 금액은 넣지 않는다 */
@@ -192,16 +220,63 @@ export interface ValueInputs {
 /** 1주당 배당이 줄었다고 보는 기준 (앞 해의 99% 밑 — 반올림 차이는 빼고) */
 export const DIVIDEND_CUT_RATIO = 0.99;
 
+/** 흔한 분할·병합 배수 (3:2 · 2:1 · … · 50:1). 한 해 주식 수 비율이 이 가운데 하나와 8% 안이면 그 배수로 본다 */
+export const SPLIT_RATIOS: readonly number[] = [1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25, 30, 40, 50];
+/** 주식 수 비율이 흔한 배수와 이만큼(비율로) 안이면 그 배수 */
+export const SPLIT_TOLERANCE = 1.08;
+/** 이보다 크게 바뀌면(1,000배 안팎) 분할이 아니라 단위가 바뀐 것 (WRB 는 2022년까지 주식 수를 천 주 단위로 보고) */
+const UNIT_JUMP = 200;
+
 /**
- * 두 해 희석 주식 수(보고한 그대로)로 본 분할·병합 배수: 한 해에 40% 넘게 바뀌었으면 0.5 단위로 맞춘 배수(9.89 → 10, 1.48 → 1.5, 0.1 → 1/10),
- * 아니면 1. 가중평균 주식 수에는 자사주 매입 등 작은 변화가 섞여 있어 그대로 곱하면 분할 앞뒤 같은 배당(0.16 → 0.016 × 10)을 줄었다고 잘못 본다
+ * 두 해 희석 주식 수(보고한 그대로)로 본 분할·병합 배수: 한 해에 40% 넘게 바뀌었으면 가장 가까운 흔한 배수(SPLIT_RATIOS — 9.66 → 10, 1.46 → 1.5,
+ * 3.92 → 4, 0.1 → 1/10), 흔한 배수와 8% 넘게 다르면 비율 그대로(합병 등), 아니면 1. 가중평균 주식 수에는 자사주 매입 등 작은 변화가 섞여 있어
+ * 그대로 곱하면 분할 앞뒤 같은 배당(0.16 → 0.016 × 10)을 줄었다고 잘못 본다. 3단계 전에는 0.5 단위로 맞춰 10:1 분할을 9.5 로 덜 맞췄다
+ * (LRCX 2024 — 9.66 → 9.5, 검토 지적). 1,000배 안팎으로 바뀐 것은 단위(천 주 → 주)가 바뀐 것으로 보고 그 몫을 뺀다 (WRB 2022→2023)
  */
 export function splitFactor(before: number | null, after: number | null): number {
   if (!before || !after || !(before > 0) || !(after > 0)) return 1;
-  const k = after / before;
-  if (k > 1.4) return Math.max(1.5, Math.round(k * 2) / 2);
-  if (k < 1 / 1.4) return 1 / Math.max(1.5, Math.round((1 / k) * 2) / 2);
-  return 1;
+  let k = after / before;
+  if (k >= UNIT_JUMP) k /= 1000;
+  else if (k <= 1 / UNIT_JUMP) k *= 1000;
+  const up = k >= 1;
+  const r = up ? k : 1 / k;
+  if (r <= 1.4) return 1;
+  let best = r;
+  let bestGap = Infinity;
+  for (const s of SPLIT_RATIOS) {
+    const gap = Math.max(r / s, s / r);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = s;
+    }
+  }
+  const f = bestGap <= SPLIT_TOLERANCE ? best : r;
+  return up ? f : 1 / f;
+}
+
+/**
+ * 배당 삭감 판정 (순수 함수): 최근 6개 회계연도(이웃한 두 해 5쌍)에서 뒤 해의 1주당 배당이 앞 해와 앞앞 해(years 가 7개면 첫 쌍의 앞앞 해는
+ * 7번째 앞 해) 모두의 99% 밑이면 줄어든 해. 주식 분할·병합은 splitFactor 로 앞 해 기준에 맞춘다. 두 해 모두 값이 있는 쌍만 본다 —
+ * 앞앞 해 값이 없으면 앞 해만 (특별배당인지 알 수 없어 예전 규칙 그대로)
+ */
+export function dividendCutOf(years: ReadonlyArray<{ dps: number | null; shares: number | null }>): boolean {
+  const ys = years.slice(-7);
+  const first = Math.max(1, ys.length - 5);
+  for (let i = first; i < ys.length; i++) {
+    const a = ys[i - 1]!;
+    const b = ys[i]!;
+    if (a.dps === null || b.dps === null || !(a.dps > 0)) continue;
+    const bAdj = b.dps * splitFactor(a.shares, b.shares);
+    if (!(bAdj < a.dps * DIVIDEND_CUT_RATIO)) continue;
+    const z = i >= 2 ? ys[i - 2]! : null;
+    // 앞앞 해 (앞 해 주식 수 기준으로 맞춤): 특별배당으로 앞 해만 컸던 것이면 앞앞 해보다는 줄지 않았다
+    if (z && z.dps !== null && z.dps > 0) {
+      const zAdj = z.dps / splitFactor(z.shares, a.shares);
+      if (!(bAdj < zAdj * DIVIDEND_CUT_RATIO)) continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 export class FactBook {
@@ -304,8 +379,10 @@ export class FactBook {
     const shares = this.sharesAt(asOf, E);
     const divKnown = flow.dividends !== undefined || (flow.dps !== undefined && shares !== null);
     const divUnknown = !divKnown && this.dividendSeen(asOf, E);
-    const annual = this.annualHistory(asOf);
-    const cut = this.dividendCut(asOf, annual);
+    // 배당 삭감 표시는 최근 6개 회계연도 + 그 앞 한 해(첫 쌍의 앞앞 해)를 본다
+    const hist = this.annualHistory(asOf, 7);
+    const annual = hist.slice(-6);
+    const cut = this.dividendCut(asOf, hist);
     return normalizeInputs({ flow, bal, balYearAgo, annual, shares, period, ...(divUnknown ? { divUnknown: true } : {}), ...(cut ? { dividendCut: true } : {}) });
   }
 
@@ -316,24 +393,23 @@ export class FactBook {
    *  - 주식 분할·병합: 앞 해 값이 분할 전 보고서에만 있으면 주당배당과 주식 수가 모두 분할 전 기준이다. 두 해 희석 주식 수가 한 해에
    *    40% 넘게 바뀌었으면 그 배수(0.5 단위로 맞춤, splitFactor)로 맞춰 비교한다 (10:1 분할 뒤 1/10 이 된 주당배당을 '줄었다'고 하지 않게 —
    *    그해 합병으로 주식 수가 크게 늘며 배당을 줄인 드문 경우는 놓칠 수 있다)
-   *  - 앞 해의 99% 밑이면 줄어든 것 (반올림 차이는 빼고). 특별배당을 준 다음 해도 줄어든 해로 센다 (1주당 배당 숫자가 줄었으므로)
+   *  - 앞 두 해 모두의 99% 밑일 때만 줄어든 해 (반올림 차이는 빼고, 앞앞 해 값이 없으면 앞 해만) — 특별배당·일시 배당을 준 해 다음 해는
+   *    특별배당 앞 해와 견주므로 '줄어든 해'로 세지 않는다 (COST 2024 특별배당 15달러 → 2025, FAST·WRB·CTAS·F 도 같은 모양 — 검토 지적).
+   *    앞앞 해도 특별배당이 있었거나 특별배당 없이 크게 올렸다가 조금 줄인 해는 놓칠 수 있다 (문서 14장 10)
    */
-  dividendCut(asOf: string, annual: readonly AnnualPoint[] = this.annualHistory(asOf)): boolean {
+  dividendCut(asOf: string, annual: readonly AnnualPoint[] = this.annualHistory(asOf, 7)): boolean {
+    return dividendCutOf(this.dividendYears(asOf, annual));
+  }
+
+  /** 최근 7개 회계연도의 연간 주당배당·희석 주식 수 (배당 삭감 표시용) */
+  dividendYears(asOf: string, annual: readonly AnnualPoint[] = this.annualHistory(asOf, 7)): Array<{ end: string; dps: number | null; shares: number | null }> {
     const dps = this.annualFlow("dps", asOf);
-    if (!dps.size) return false;
     const near = (end: string): number | null => {
       if (dps.has(end)) return dps.get(end)!;
       for (const [e, v] of dps) if (Math.abs(daysBetween(e, end)) <= 7) return v;
       return null;
     };
-    const years = annual.slice(-6).map((a) => ({ dps: near(a.end), shares: a.shares }));
-    for (let i = 1; i < years.length; i++) {
-      const a = years[i - 1]!;
-      const b = years[i]!;
-      if (a.dps === null || b.dps === null || !(a.dps > 0)) continue;
-      if (b.dps * splitFactor(a.shares, b.shares) < a.dps * DIVIDEND_CUT_RATIO) return true;
-    }
-    return false;
+    return annual.slice(-7).map((a) => ({ end: a.end, dps: dps.size ? near(a.end) : null, shares: a.shares }));
   }
 
   /** 연간 이력 (오래된 → 최신, 최대 6개): 회계연도는 순이익 연간 값의 기간 끝으로 정한다 */

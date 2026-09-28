@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useIndicatorScores } from "@/api/hooks";
 import type { IndicatorScores, TrendScoreBlock, ValueScoreBlock } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
-import { compositeLine, familyLabel, familySpeech, flagPreview, moreFlagsText, nameWidth, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech } from "@/lib/scoreView";
+import { compositeLine, familyLabel, familySpeech, flagPreview, moreFlagsText, nameWidth, reasonOnly, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { LeverageNotice } from "./LeverageNotice";
@@ -219,7 +219,7 @@ function TrendRow({ trend }: { trend: TrendScoreBlock }) {
   if (!trendHasScore(trend)) {
     const ref = trend.reference;
     return (
-      <StatusRow name={SCORE_LABELS.trend} label={trend.label} text={ref ? [trend.reason?.text, ref.note].filter(Boolean).join(" ") : (trend.reason?.text ?? null)}>
+      <StatusRow name={SCORE_LABELS.trend} label={trend.label} text={ref ? [reasonOnly(trend.label, trend.reason?.text), ref.note].filter(Boolean).join(" ") : reasonOnly(trend.label, trend.reason?.text)}>
         {ref ? (
           <View style={styles.refRow}>
             <Text style={{ color: t.sub, fontSize: font.small, flexShrink: 1 }}>{ref.text}</Text>
@@ -294,7 +294,7 @@ function FamilyMini({ f, nameW = scores.familyNameW }: { f: { key: string; name:
   return (
     <View style={[styles.row, styles.mini]} accessible accessibilityLabel={familySpeech(f)}>
       <Text style={{ color: t.sub, fontSize: font.small, width: nameWidth(nameW, fs) }} numberOfLines={2}>
-        {familyLabel(f.name, f.weight)}
+        {familyLabel(f.name, f.weight, fs)}
       </Text>
       <ScoreBar score={f.score} />
       <Text style={[styles.num, { color: t.ink, fontSize: font.body }]}>{f.score ?? "-"}</Text>
