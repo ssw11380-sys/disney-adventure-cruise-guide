@@ -18,7 +18,7 @@ import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
 import { closeOpenRow, SwipeRow, type SwipeAction } from "@/components/SwipeRow";
 import { TossImportButton } from "@/components/TossImportButton";
 import { Button, ErrorView, TableHead } from "@/components/ui";
-import { MIN_FIT, panelBasisFit } from "@/lib/basisFit";
+import { panelBasisFit } from "@/lib/basisFit";
 import { gated } from "@/lib/features";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
@@ -596,7 +596,7 @@ function AccountPanel({
   /**
    * 숫자 기준 점 그리기 (3-32, 플래그 numberBasis — dotOnly: 글 없이 점만). 있으면 총액 줄 오른쪽 끝(촘촘이면 요약 묶음 오른쪽)에 두고 — 새 줄 없음,
    * 요약 문장 묶음 밖이라 화면 읽기로 따로 고를 수 있다. 없으면 지금 나무 그대로.
-   * 점 + 글이 줄을 늘리면 점만, 촘촘에서 점만으로도 늘면 점을 총액 줄 옆으로 (lib/basisFit panelBasisFit — '큰 글씨면 점만')
+   * 점 + 글이 줄을 늘리면 점만, 촘촘에서 '평가손익 · 당일' 줄이 점 옆에서 한 줄로 안 들어가면 점을 총액 줄 옆으로 (lib/basisFit panelBasisFit — '큰 글씨면 점만')
    */
   basis?: (dotOnly: boolean) => React.ReactNode;
   /** 패널 폭(창 폭)·시스템 글자 배율 — 점 배치 어림에만 쓴다 */
@@ -635,10 +635,9 @@ function AccountPanel({
         <Text style={{ fontSize: font.small, color: t.muted, fontWeight: "500" }}> 원</Text>
       </Text>
     );
-    // 말줄임 없이: 글자가 크거나 금액이 길면 숫자를 자르지 않고 다음 줄로.
-    // 단 숫자 기준 점 옆에서 한 줄로 두는 경우(fitLine — 꺼졌을 때 한 줄)는 한 줄 그대로, 모자라면 글자를 조금(MIN_FIT 까지) 줄인다
+    // 말줄임 없이: 글자가 크거나 금액이 길면 숫자를 자르지 않고 다음 줄로 (숫자 기준 점을 켜도 이 줄은 줄이거나 한 줄로 묶지 않는다)
     const denseLine = (
-      <Text style={[styles.denseLine, { color: t.muted }]} {...(fit?.fitLine ? { numberOfLines: 1, adjustsFontSizeToFit: true, minimumFontScale: MIN_FIT } : null)}>
+      <Text style={[styles.denseLine, { color: t.muted }]}>
         평가손익 <Text style={{ color: pc, fontWeight: "700" }}>{profitText}</Text>
         <Text style={{ color: pc }}> {rateText}</Text> · 당일 <Text style={{ color: dc, fontWeight: "700" }}>{dayValue}</Text>
       </Text>
@@ -653,7 +652,9 @@ function AccountPanel({
       <View style={[styles.panel, styles.panelDense, { backgroundColor: t.surface, borderColor: t.line }]}>
         {top}
         {/* 숫자 기준 점(3-32)은 요약 묶음 오른쪽 — 새 줄·숨기는 칸 없음. 윗줄 상태 점 옆에는 두지 않는다 (점 두 개가 붙어 헷갈림).
-            점만으로도 '평가손익 · 당일' 줄이 늘면 점을 총액 줄 옆에 두고 그 줄은 아래에 꺼졌을 때와 같은 폭으로 (요약 문장은 총액 칸이 읽고 줄은 숨김) */}
+            '평가손익 · 당일' 줄이 점 옆에서 한 줄로 안 들어가면 점을 총액 줄 옆에 두고 그 줄은 아래에 꺼졌을 때와 같은 폭·같은 글자로 (요약 문장은 총액 칸이 읽고 줄은 숨김).
+            총액 줄 옆 점은 누르는 칸 44 가 총액 글보다 높아도 줄이 두꺼워지지 않게 위아래를 거둔다(tuck) — 거둔 자리는 윗줄 아래쪽·아래 줄 위쪽과 겹치므로,
+            점 줄은 점만 누르게(box-none) 하고 아래 줄은 누름을 받지 않게(none) 한다 (둘 다 누를 것이 없는 글) */}
         {basis && fit ? (
           fit.spot === "group" ? (
             <View style={[styles.totalRow, fit.dotOnly && styles.totalRowDot]}>
@@ -662,13 +663,13 @@ function AccountPanel({
             </View>
           ) : (
             <>
-              <View style={[styles.totalRow, styles.totalRowDot]}>
+              <View style={[styles.totalRow, styles.totalRowDot, styles.passThrough, fit.tuck > 0 && { marginVertical: -fit.tuck }]}>
                 <View accessible accessibilityLabel={label} style={{ flex: 1 }}>
                   {denseTotal}
                 </View>
                 {basis(true)}
               </View>
-              <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+              <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={styles.noTouch}>
                 {denseLine}
               </View>
             </>
@@ -847,6 +848,9 @@ const styles = StyleSheet.create({
   totalRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
   // 점만일 때는 띄우지 않는다: 점이 누르는 칸(44) 가운데라 이미 옆 글과 떨어져 보이고, 그만큼 옆 글이 넓게 쓴다
   totalRowDot: { gap: 0 },
+  // 숫자 기준 점을 총액 줄 옆에 거둬 둘 때: 점 줄 자체는 누름을 받지 않고(안의 점만), 겹친 아래 줄은 누름을 통과시킨다
+  passThrough: { pointerEvents: "box-none" },
+  noTouch: { pointerEvents: "none" },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)

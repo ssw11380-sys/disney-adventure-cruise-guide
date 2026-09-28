@@ -4,16 +4,17 @@ import { font, fontCap, layout, space, touch } from "@/tokens";
 /**
  * 숫자 기준 점(3-32, 플래그 numberBasis)을 어디에 어떤 모양으로 둘지 — '큰 글씨면 점만' (사용자가 맡긴 결정 A).
  * 순수 함수 (RN·훅을 부르지 않는다 → 단위 테스트). 목표: 켜도 계좌 패널·띠의 줄 수가 꺼졌을 때와 같다 (새 줄 0).
- *  - 글자 폭은 어림이다(안드로이드 기본 글꼴 — 숫자·라틴 Roboto, 한글 Noto CJK — 폭에 5% 여유). 모자랄 쪽으로 틀리지 않게 넉넉히 잡고,
- *    그래도 실제 글꼴이 더 넓을 때를 위해 '한 줄로 두고 글자를 조금 줄이는' 안전판(fitLine·noWrap)을 함께 쓴다
+ *  - 글자 폭은 어림이다(안드로이드 기본 글꼴 — 숫자·라틴 Roboto, 한글 Noto CJK — 폭에 5% 여유). 어림은 실제보다 넓다(웹 미리보기 실측의 1.05~1.06배).
+ *    그래서 '켠 모양'은 어림으로 재면 실제로도 그 줄 수 안에 들고, '끈 모양'의 줄 수는 어림만으로는 알 수 없다(어림이 2줄이어도 실제는 1줄일 수 있음).
+ *    → 끈 줄 수에 기대지 않는다: 휴대폰 촘촘은 점 옆에서 '한 줄'로 들어갈 때만 옆에 두고, 띠는 끄고도 한 줄(여유를 뺀 어림)일 때만 줄바꿈을 막는다
  *  - 점 옆 글의 폭은 지금 글이 아니라 나올 수 있는 가장 긴 글(MARK_TEXT_SAMPLES)로 잰다 — 대조 결과가 바뀌어도 배치가 흔들리지 않게
- *  - 차례: 점 + 글 → 점만(누르는 칸 44×44 그대로, 화면 읽기는 같은 문장) → 한 줄이던 것은 한 줄로 두고 글자를 조금(최대 MIN_FIT) 줄임
- *    → (휴대폰 촘촘만) 점을 총액 줄 옆으로 옮겨 '평가손익 · 당일' 줄은 꺼졌을 때와 같은 폭
+ *  - 차례(휴대폰 촘촘): 점 + 글 → 점만(누르는 칸 44×44 그대로, 화면 읽기는 같은 문장) → 점을 총액 줄 옆으로 옮겨 '평가손익 · 당일' 줄은 꺼졌을 때와 같은 폭·같은 글자
+ *    (그 줄은 줄이지도 한 줄로 묶지도 않는다 — 3-39 '말줄임 없이 다음 줄로' 그대로)
  */
 
 /** 어림 여유 (실제 글꼴보다 조금 넓게) */
-const SLACK = 1.05;
-/** 한 줄로 두려고 글자를 줄일 때의 하한 (띠 칸 숫자 0.6 · 이름 0.7 보다 위 — 잘리지 않게) */
+export const SLACK = 1.05;
+/** 띠 칸 묶음을 한 줄로 두려고 칸 글자를 줄일 때의 하한 (띠 칸 숫자 0.6 · 이름 0.7 보다 위 — 잘리지 않게) */
 export const MIN_FIT = 0.75;
 
 /** 글자 한 자의 폭 (글자 크기 대비) — Roboto 숫자 0.56 · 쉼표 0.22 · 가운뎃점 0.26, Noto CJK 한글 1 을 조금 넉넉하게 */
@@ -82,21 +83,32 @@ export function lineCount(text: string, width: number, size: number): number {
 export interface PanelFit {
   /** 점만 (글 없음) */
   dotOnly: boolean;
-  /** 촘촘: 점 자리 — 요약 묶음(총액 + '평가손익 · 당일' 줄) 옆(group) 또는 총액 줄 옆(total, 그 줄은 아래에 꺼졌을 때와 같은 폭) */
+  /** 촘촘: 점 자리 — 요약 묶음(총액 + '평가손익 · 당일' 줄) 옆(group) 또는 총액 줄 옆(total, 그 줄은 아래에 꺼졌을 때와 같은 폭·같은 글자) */
   spot: "group" | "total";
-  /** 촘촘: '평가손익 · 당일' 줄을 한 줄로 두고 모자라면 글자를 줄인다 (꺼졌을 때 한 줄이고 점 옆에서도 MIN_FIT 까지 줄이면 들어갈 때) */
-  fitLine: boolean;
+  /**
+   * 총액 줄 옆(total)일 때 점 줄이 위아래로 겹쳐 들어가는 dp (group 이면 0). 누르는 칸 44 가 총액 글 높이보다 높아 줄이 두꺼워지지 않게,
+   * 그 차이의 반만큼 위아래를 음수 여백으로 거둔다 → 총액 줄이 차지하는 높이는 총액 글 높이(어림)와 같다
+   */
+  tuck: number;
 }
 
 /** 총액 글자는 남은 폭에 맞춰 0.6 까지 줄어든다 (계좌 패널 total·totalDense 의 minimumFontScale) */
 const TOTAL_MIN = 0.6;
+/**
+ * 촘촘 총액 줄(font.h2 + ' 원') 높이 어림 — 글자 크기의 1.5배. 안드로이드 Roboto(글자 여백 포함 1.33배)·Noto CJK(1.45배)보다 높게 잡는다:
+ * 낮게 잡으면 거둔 만큼 총액 글이 위아래 줄과 겹치므로, 틀리면 몇 dp 밀리는 쪽으로
+ */
+export const TOTAL_LINE = 1.5;
 
 /**
  * 휴대폰·접은 화면 계좌 패널의 점 (index.tsx AccountPanel).
  *  - width: 패널 폭(창 폭 — 패널 좌우 여백 space.lg 는 여기서 뺀다), fontScale: 시스템 글자 배율(패널 글자는 상한 없이 커진다)
  *  - total: 총액 숫자 글('67,050,074'), line: 촘촘이면 '평가손익 +… +…% · 당일 +…' 한 줄 글 (기본 패널은 없음)
  * 기본 패널: 총액 줄 = 총액(0.6 까지 줄어듦) | 점 — 한 줄이 늘 한 줄이라 총액이 0.6 에도 안 들어가 잘릴 때만 점만.
- * 촘촘: 요약 묶음 | 점 — '평가손익 · 당일' 줄 수가 꺼졌을 때보다 늘면 점만 → 그래도 늘면(한 줄이던 것) 조금 줄여 한 줄 → 그래도 안 되면 총액 줄 옆
+ * 촘촘: 요약 묶음 | 점 — '평가손익 · 당일' 줄이 점 + 글 옆에서 한 줄(어림)이면 글, 점(44) 옆에서 한 줄이면 점만.
+ *  어림은 실제보다 넓어 '옆에서 한 줄'이면 실제로도 한 줄이고 끈 줄(더 넓은 폭)도 한 줄 → 줄 수 같음.
+ *  두 줄 이상이면 끈 줄 수를 어림으로 알 수 없으므로(어림 2줄이 실제 1줄일 수 있다) 옆에 두지 않고 점을 총액 줄 옆으로 —
+ *  그 줄은 꺼졌을 때와 같은 폭·같은 글자라 줄 수가 늘 같다
  */
 export function panelBasisFit(o: { width: number; fontScale: number; total: string; line?: string | null }): PanelFit {
   const s = clampScale(o.fontScale);
@@ -105,20 +117,16 @@ export function panelBasisFit(o: { width: number; fontScale: number; total: stri
   const gap = space.sm;
   if (!o.line) {
     const need = (basisTextWidth(o.total, font.hero * s) + basisTextWidth(" 원", font.body * s)) * TOTAL_MIN;
-    return { dotOnly: need > room - gap - textW, spot: "group", fitLine: false };
+    return { dotOnly: need > room - gap - textW, spot: "group", tuck: 0 };
   }
   const line = o.line;
   const lineSize = font.small * s;
   const totalNeed = (basisTextWidth(o.total, font.h2 * s) + basisTextWidth(" 원", font.small * s)) * TOTAL_MIN;
-  const off = lineCount(line, room, lineSize);
-  const lineW = basisTextWidth(line, lineSize);
-  // 한 줄이던 줄은 점 옆에서도 한 줄로 두고, 실제 글꼴이 어림보다 넓으면 글자를 조금 줄인다 (MIN_FIT 까지 들어갈 때만)
-  const fit = (w: number) => off === 1 && lineW * MIN_FIT <= w;
   const textRoom = room - gap - textW;
-  if (totalNeed <= textRoom && lineCount(line, textRoom, lineSize) === off) return { dotOnly: false, spot: "group", fitLine: fit(textRoom) };
+  if (totalNeed <= textRoom && lineCount(line, textRoom, lineSize) === 1) return { dotOnly: false, spot: "group", tuck: 0 };
   const dotRoom = room - DOT_MARK_W;
-  if (totalNeed <= dotRoom && (lineCount(line, dotRoom, lineSize) === off || fit(dotRoom))) return { dotOnly: true, spot: "group", fitLine: fit(dotRoom) };
-  return { dotOnly: true, spot: "total", fitLine: false };
+  if (totalNeed <= dotRoom && lineCount(line, dotRoom, lineSize) === 1) return { dotOnly: true, spot: "group", tuck: 0 };
+  return { dotOnly: true, spot: "total", tuck: Math.max(0, (touch.min - font.h2 * s * TOTAL_LINE) / 2) };
 }
 
 // ── 넓은 창 계좌 띠 ──────────────────────────────────────────────────
@@ -151,14 +159,19 @@ export function bandActionWidth(fontScale: number): number {
 
 export interface BandFit {
   dotOnly: boolean;
-  /** 칸 묶음을 줄바꿈하지 않는다 — 모자라면 칸 글자가 줄어든다 (한 줄 띠와 같은 규칙). 점 칸 때문에 새 줄이 생기지 않게 */
+  /**
+   * 칸 묶음을 줄바꿈하지 않는다 — 모자라면 칸 글자가 줄어든다 (한 줄 띠와 같은 규칙). 끄고도 칸이 한 줄인 띠에서 점 칸 때문에 새 줄이 생기지 않게.
+   * 끄면 칸이 다음 줄로 넘어가는 띠(큰 글씨 · 좁은 폭 · 큰 금액)는 거짓 — 3-39 '줄여 자르지 않고 다음 줄로' 그대로, 점만 더한다
+   */
   noWrap: boolean;
 }
 
 /**
  * 넓은 창 두 줄 띠의 둘째 줄·촘촘 띠의 한 줄 (AccountBand): 칸 묶음(줄바꿈) | 점 | [비중].
  *  - width: 띠 폭(표 폭), pad: 띠 좌우 여백, cells: 점과 같은 줄의 칸들, action: '비중' 버튼이 있는지
- *  - 칸이 점 + 글과 한 줄에 들어가면 점 + 글, 아니면 점만. 점과 함께 한 줄에 들어가면(글자를 MIN_FIT 까지 줄여서라도) 줄바꿈을 막는다
+ *  - 칸이 점 + 글과 한 줄에 들어가면 점 + 글, 아니면 점만.
+ *  - 끄고도 칸이 한 줄이면(어림에서 여유 SLACK 을 뺀 폭 — 웹 미리보기 실측과 ±0.5%) 점과 함께 한 줄로 두고(글자를 MIN_FIT 까지 줄여서라도) 줄바꿈을 막는다.
+ *    끄면 줄바꿈하는 띠는 그대로 줄바꿈 (칸 셋이 두 줄 — 점 칸 44 를 빼도 두 줄)
  */
 export function bandBasisFit(o: { width: number; pad: number; fontScale: number; cells: readonly BandCellText[]; action: boolean }): BandFit {
   const room = o.width - o.pad * 2 - (o.action ? bandActionWidth(o.fontScale) : 0);
@@ -166,5 +179,6 @@ export function bandBasisFit(o: { width: number; pad: number; fontScale: number;
   const textW = markTextWidth(o.fontScale);
   const dotOnly = sum + textW > room;
   const mark = dotOnly ? DOT_MARK_W : textW;
-  return { dotOnly, noWrap: sum * MIN_FIT + mark <= room };
+  const offOneLine = sum / SLACK <= room;
+  return { dotOnly, noWrap: offOneLine && sum * MIN_FIT + mark <= room };
 }

@@ -356,32 +356,39 @@ describe("켬 + 촘촘 (3-39)", () => {
 });
 
 // ── 큰 글씨면 점만 (3-32 다듬기 · 사용자가 맡긴 결정 A) ─────────────────────────────
-// 점 + 글이 줄을 늘리는 자리(촘촘 130%+ · 704 두 줄 띠 130% · 넓은 촘촘 띠 130% · 폭 어림이 모자라는 곳)는 점만 — 누르는 칸 44 · 창 · 화면 읽기 문장은 그대로.
-// 높이 비교: 같은 화면을 끄고/켜고 그려, 그려진 글(촘촘 '평가손익 · 당일' 줄 · 점 줄의 띠 칸)을 같은 어림(lib/basisFit)으로 줄 수를 세어 켬 ≤ 끔.
-// 계좌 숫자는 웹 미리보기 가짜 서버와 같은 자릿수 (총 67,050,245원 · 평가손익 +6,627,011원 +10.97% · 당일 +517,450원 · 국내 -17.36% · 해외 $25,583.00 +55.20%)
+// 점 + 글이 줄을 늘리는 자리(촘촘 휴대폰 · 704 두 줄 띠 130% · 넓은 촘촘 띠 130% · 폭 어림이 모자라는 곳)는 점만 — 누르는 칸 44 · 창 · 화면 읽기 문장은 그대로.
+// 휴대폰 촘촘은 '평가손익 · 당일' 줄이 점 옆에서 한 줄(어림)일 때만 요약 옆, 아니면 점을 총액 줄 옆에 두고 그 줄은 꺼졌을 때와 같은 폭·같은 글자.
+// 높이 비교: 같은 화면을 끄고/켜고 그려, 그려진 글(촘촘 '평가손익 · 당일' 줄 · 점 줄의 띠 칸)의 줄 수를 어림(lib/basisFit)으로 세어 켬 ≤ 끔.
+// 켬·끔을 같은 어림으로만 세면 순환 검증이라, 실제 폭이 어림보다 좁은 경우(어림 ÷ 1.061 — 웹 미리보기 실측 · ÷ 1.08)로도 센다.
+// 계좌 숫자는 웹 미리보기 가짜 서버와 같은 자릿수 (총 67,050,245원 · 평가손익 +6,627,011원 +10.97% · 당일 +517,450원 · 국내 -17.36% · 해외 $25,583.00 +55.20%),
+// 큰 계좌는 수량 20배 (총 13억)
 describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", async () => {
   const fit = await import("@/lib/basisFit");
   const { font } = await import("@/tokens");
   const AT = "2026-09-28T14:02:00+09:00";
-  const WEB: RegisteredWithQuote[] = [
-    holding("005930", quote("005930", 314_515, { change: 1_000, changeRate: 0.32, priceBasis: "KRX+NXT 통합", asOf: AT }), 100, 380_584, undefined, "삼성전자"),
-    holding("AAPL", quote("AAPL", 255.83, { currency: "USD", change: 3, changeRate: 1.19, fxRate: 1391.5, priceBasis: "주간거래", asOf: AT }), 100, 164.84, { costBasisKrw: 22_364_834, krwCostSource: "exact" }, "애플"),
+  const web = (q: number): RegisteredWithQuote[] => [
+    holding("005930", quote("005930", 314_515, { change: 1_000, changeRate: 0.32, priceBasis: "KRX+NXT 통합", asOf: AT }), 100 * q, 380_584, undefined, "삼성전자"),
+    holding("AAPL", quote("AAPL", 255.83, { currency: "USD", change: 3, changeRate: 1.19, fxRate: 1391.5, priceBasis: "주간거래", asOf: AT }), 100 * q, 164.84, { costBasisKrw: 22_364_834 * q, krwCostSource: "exact" }, "애플"),
     ...WATCH,
   ];
+  const WEB = web(1);
+  const BIG = web(20);
+  /** 어림이 실제보다 넓은 정도: 1(어림 그대로) · 웹 미리보기 실측 · 더 좁은 글꼴 */
+  const KS = [1, 1.061, 1.08];
   const LINE_RE = /^평가손익 [+−-]?\d/;
   const denseLineOf = (r: R) => r.all().find((n) => n.type === "Text" && LINE_RE.test(textIn(n)))!;
   const panelRoom = (w: number) => w - space.lg * 2;
-  /** 촘촘 '평가손익 · 당일' 줄 수 (어림) — 점과 같은 줄이면 점 칸만큼 좁다. 한 줄로 두는 줄(numberOfLines 1)은 MIN_FIT 까지 줄여 들어가야 1 */
-  const denseLines = (r: R, w: number, fs: number, on: boolean) => {
+  /** 촘촘 '평가손익 · 당일' 줄 수 (실제 폭 = 어림 ÷ k) — 점과 같은 줄이면 점 칸만큼 좁다. 이 줄은 켜도 줄이거나 한 줄로 묶지 않는다 */
+  const denseLines = (r: R, w: number, fs: number, on: boolean, k = 1) => {
     const node = denseLineOf(r);
+    expect(node.props.numberOfLines).toBeUndefined();
+    expect(node.props.adjustsFontSizeToFit).toBeUndefined();
     const line = textIn(node);
-    const size = font.small * Math.max(fs, 1);
+    const size = (font.small * Math.max(fs, 1)) / k;
     const mark = on ? marks(r)[0]! : null;
     if (!mark || !all(parentOf(r, mark)).includes(node)) return fit.lineCount(line, panelRoom(w), size);
     const markW = textIn(mark) ? space.sm + fit.markTextWidth(fs) : fit.DOT_MARK_W;
-    const room = panelRoom(w) - markW;
-    if (node.props.numberOfLines === 1) return fit.basisTextWidth(line, size) * fit.MIN_FIT <= room ? 1 : Infinity;
-    return fit.lineCount(line, room, size);
+    return fit.lineCount(line, panelRoom(w) - markW, size);
   };
   /** 띠 칸 한 칸의 글 (Cell: 이름 Text | 값 Text[값 · ' 원' · ' 등락률']) */
   const cellText = (cell: HostNode): import("@/lib/basisFit").BandCellText => {
@@ -390,18 +397,22 @@ describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", a
     const [value, ...rest] = parts;
     return { label: textIn(label!), value: value!, unit: rest.find((p) => p === "원") ?? null, sub: rest.find((p) => p !== "원") ?? null, big: rest.includes("원"), first: !("borderLeftWidth" in flat(cell.props.style)) };
   };
-  /** '비중' 버튼 줄의 칸 줄 수 (어림 — flexWrap 이면 칸 자연 폭을 차례로 채움, 줄바꿈을 막았으면 1) */
-  const bandRows = (r: R, w: number, fs: number, on: boolean) => {
+  /** '비중' 버튼 줄의 칸 묶음 */
+  const bandBox = (r: R) => {
     const button = allocation(r)[0]!;
     const row = parentOf(r, parentOf(r, button));
-    const box = row.children.find((c) => typeof c !== "string" && c.type === "View" && !all(c).includes(button) && !String(c.props.accessibilityLabel ?? "").startsWith("숫자 기준")) as HostNode;
+    return row.children.find((c) => typeof c !== "string" && c.type === "View" && !all(c).includes(button) && !String(c.props.accessibilityLabel ?? "").startsWith("숫자 기준")) as HostNode;
+  };
+  /** '비중' 버튼 줄의 칸 줄 수 (실제 폭 = 어림 ÷ k — flexWrap 이면 칸 자연 폭을 차례로 채움, 줄바꿈을 막았으면 1) */
+  const bandRows = (r: R, w: number, fs: number, on: boolean, k = 1) => {
+    const box = bandBox(r);
     if (flat(box.props.style).flexWrap !== "wrap") return 1;
     const mark = on ? marks(r)[0]! : null;
     const width = w - space.md * 2 - fit.bandActionWidth(fs) - (mark ? (textIn(mark) ? fit.markTextWidth(fs) : fit.DOT_MARK_W) : 0);
     let n = 1;
     let x = 0;
     for (const cell of box.children as HostNode[]) {
-      const cw = fit.bandCellWidth(cellText(cell), fs);
+      const cw = fit.bandCellWidth(cellText(cell), fs) / k;
       if (x > 0 && x + cw > width) {
         n += 1;
         x = cw;
@@ -409,13 +420,26 @@ describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", a
     }
     return n;
   };
-  const drawAt = (w: number, hh: number, fs: number, dense: boolean, on: boolean): R => {
+  const drawAt = (w: number, hh: number, fs: number, dense: boolean, on: boolean, stocks = WEB): R => {
     size(w, hh, fs);
     h.density = dense ? "dense" : undefined;
-    h.stocks = WEB;
+    h.stocks = stocks;
     h.flags = { allocationView: true, foldLayout: true, ...(dense ? { densityMode: true } : {}), ...(on ? { numberBasis: true } : {}) };
     h.bandProps = [];
     return draw();
+  };
+  /** 점이 총액 줄 옆일 때: 누르는 칸 44 와 총액 글 높이 어림(16 × 배율 × 1.5)의 차이 반만큼 위아래를 거두고, 점 줄은 점만·아래 줄은 누름을 받지 않는다 */
+  const expectTucked = (r: R, fs: number) => {
+    const row = parentOf(r, marks(r)[0]!);
+    const tuck = Math.max(0, (touch.min - font.h2 * fs * fit.TOTAL_LINE) / 2);
+    const st = flat(row.props.style);
+    if (tuck > 0) expect(st.marginVertical).toBeCloseTo(-tuck, 5);
+    else expect(st.marginVertical).toBeUndefined();
+    expect(st.pointerEvents).toBe("box-none");
+    const line = denseLineOf(r);
+    const hidden = r.all().find((n) => n.props.importantForAccessibility === "no-hide-descendants" && all(n).includes(line))!;
+    expect(hidden.props.accessibilityElementsHidden).toBe(true);
+    expect(flat(hidden.props.style).pointerEvents).toBe("none");
   };
 
   // [폭, 높이, 글자, 촘촘, 점만, 촘촘 휴대폰 점 자리]
@@ -424,14 +448,14 @@ describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", a
     [360, 752, 1.3, false, false],
     [360, 752, 2, false, true],
     [360, 752, 1, true, true, "group"],
-    [360, 752, 1.3, true, true, "group"],
+    [360, 752, 1.3, true, true, "total"],
     [360, 752, 2, true, true, "total"],
     [475, 751, 1, false, false],
     [475, 751, 1.3, false, false],
     [475, 751, 2, false, false],
     [475, 751, 1, true, false, "group"],
     [475, 751, 1.3, true, true, "group"],
-    [475, 751, 2, true, true, "group"],
+    [475, 751, 2, true, true, "total"],
     [704, 933, 1, false, false],
     [704, 933, 1.3, false, true],
     [704, 933, 2, false, true],
@@ -450,7 +474,7 @@ describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", a
     expect(marks(off)).toHaveLength(0);
     const wideBand = w >= 704;
     const oneLine = wideBand && h.bandProps.at(-1)?.oneLine === true;
-    const offLines = wideBand ? (oneLine ? 1 : bandRows(off, w, fs, false)) : dense ? denseLines(off, w, fs, false) : 1;
+    const offLines = (k: number) => (wideBand ? (oneLine ? 1 : bandRows(off, w, fs, false, k)) : dense ? denseLines(off, w, fs, false, k) : 1);
 
     const r = drawAt(w, hh, fs, dense, true);
     const found = marks(r);
@@ -462,10 +486,12 @@ describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", a
     expect(mark.props.accessibilityRole).toBe("button");
     expectTouch(mark);
     expect(mark.props.hitSlop).toBeUndefined();
-    // 줄 수: 켬 ≤ 끔 (휴대폰 촘촘은 같음)
-    const onLines = wideBand ? (oneLine ? 1 : bandRows(r, w, fs, true)) : dense ? denseLines(r, w, fs, true) : 1;
-    expect(onLines).toBeLessThanOrEqual(offLines);
-    if (!wideBand && dense) expect(onLines).toBe(offLines);
+    // 줄 수: 켬 ≤ 끔 (휴대폰 촘촘은 같음) — 어림 그대로 · 실제 폭이 어림보다 좁을 때(÷ 1.061 · ÷ 1.08) 모두
+    for (const k of KS) {
+      const onLines = wideBand ? (oneLine ? 1 : bandRows(r, w, fs, true, k)) : dense ? denseLines(r, w, fs, true, k) : 1;
+      expect(onLines, `÷${k}`).toBeLessThanOrEqual(offLines(k));
+      if (!wideBand && dense) expect(onLines, `÷${k}`).toBe(offLines(k));
+    }
     if (!wideBand) {
       const row = parentOf(r, mark);
       // 점만이면 요약과 점 사이를 띄우지 않는다 (점이 44 칸 가운데라 이미 떨어져 보임)
@@ -473,14 +499,16 @@ describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", a
       if (dense) {
         const line = denseLineOf(r);
         expect(all(row).includes(line)).toBe(spot === "group");
-        if (spot === "total") {
+        if (spot === "group") {
+          // 요약 옆: 거두지 않는다
+          expect(flat(row.props.style).marginVertical).toBeUndefined();
+        } else {
           // 총액 줄 옆: 요약 문장은 총액 칸 하나가 읽고, '평가손익 · 당일' 줄은 꺼졌을 때와 같은 폭 · 화면 읽기에서 숨김
           const [summary] = summaries(r);
           expect(all(row)).toContain(summary);
           expect(String(summary!.props.accessibilityLabel)).toContain("평가손익");
           expect(all(summary!)).not.toContain(line);
-          const hidden = r.all().find((n) => n.props.importantForAccessibility === "no-hide-descendants" && all(n).includes(line));
-          expect(hidden?.props.accessibilityElementsHidden).toBe(true);
+          expectTucked(r, fs);
         }
       }
     }
@@ -500,5 +528,42 @@ describe("큰 글씨면 점만 (결정 A) — 켜도 줄이 늘지 않는다", a
     // 704 × 130% 두 줄 띠 둘째 줄: 점 + 글이면 '매입금액' 칸이 다음 줄 → 점만이면 한 줄
     const band = drawAt(704, 933, 1.3, false, true);
     expect(bandRows(band, 704, 1.3, true)).toBe(1);
+  });
+
+  // 다듬기 1차에서 한 줄이 늘던 자리 (웹 미리보기 검증): 어림으로 센 끈 줄 수 = 점 옆 줄 수라 요약 옆에 두었는데, 실제 끈 줄이 어림보다 적었다
+  it.each([
+    ["384×854 촘촘 130% (1 → 2줄, +22dp)", 384, 854, 1.3, WEB],
+    ["360×752 촘촘 200% · 13억 (2 → 3줄, +35dp)", 360, 752, 2, BIG],
+  ])("%s → 점은 총액 줄 옆, '평가손익 · 당일' 줄은 꺼졌을 때와 같은 폭", (_name, w, hh, fs, stocks) => {
+    const off = drawAt(w, hh, fs, true, false, stocks);
+    const r = drawAt(w, hh, fs, true, true, stocks);
+    const mark = marks(r)[0]!;
+    expect(textIn(mark)).toBe("");
+    expect(all(parentOf(r, mark)).includes(denseLineOf(r))).toBe(false);
+    expectTucked(r, fs);
+    for (const k of KS) expect(denseLines(r, w, fs, true, k), `÷${k}`).toBe(denseLines(off, w, fs, false, k));
+    // 요약 옆(점 44 만큼 좁은 폭)이었다면 웹 미리보기 실측 폭(÷ 1.061)에서 한 줄이 늘었다
+    const line = textIn(denseLineOf(r));
+    const size = (font.small * fs) / 1.061;
+    expect(fit.lineCount(line, panelRoom(w) - fit.DOT_MARK_W, size)).toBe(fit.lineCount(line, panelRoom(w), size) + 1);
+  });
+
+  // 다듬기 1차의 회귀 (웹 미리보기 검증): 끄면 칸이 다음 줄로 넘어가는 띠도 켜면 줄바꿈을 막아 칸 글자를 0.82~0.86배로 줄였다
+  it.each([
+    ["600×960 촘촘 130%", 600, 960, 1.3, true, WEB],
+    ["600×960 두 줄 띠 200%", 600, 960, 2, false, WEB],
+    ["704×933 촘촘 200% · 13억", 704, 933, 2, true, BIG],
+  ])("끄면 줄바꿈하는 띠 %s → 켜도 줄바꿈 그대로 · 점만, 칸 줄 수 켬 = 끔", (_name, w, hh, fs, dense, stocks) => {
+    const off = drawAt(w, hh, fs, dense, false, stocks);
+    expect(h.bandProps.at(-1)?.oneLine).toBe(false);
+    expect(flat(bandBox(off).props.style).flexWrap).toBe("wrap");
+    const r = drawAt(w, hh, fs, dense, true, stocks);
+    expect(textIn(marks(r)[0]!)).toBe("");
+    // 칸 묶음은 끈 것과 같은 줄바꿈 (글자를 줄여 한 줄로 누르지 않는다)
+    expect(flat(bandBox(r).props.style).flexWrap).toBe("wrap");
+    for (const k of [fit.SLACK, 1.08]) {
+      expect(bandRows(off, w, fs, false, k), `÷${k}`).toBe(2);
+      expect(bandRows(r, w, fs, true, k), `÷${k}`).toBe(2);
+    }
   });
 });

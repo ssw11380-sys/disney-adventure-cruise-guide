@@ -101,7 +101,8 @@ export function fxNote(d: AccountData): string | null {
  * 촘촘(3-39, 기능 플래그 densityMode + 설정 — dense): 두 줄 띠는 첫 줄만(총 평가금액 · 평가손익·수익률 · 당일손익) + 비중 버튼, 한 줄 띠는 그대로.
  *  숨긴 국내·해외·매입금액도 화면 읽기 문장에는 그대로 남는다
  * 숫자 기준 점(3-32, 기능 플래그 numberBasis — basis): '비중' 버튼 바로 앞, 요약 문장 묶음 밖. 없으면 지금 그대로.
- *  점 + 글이 칸을 다음 줄로 밀면 점만, 점만으로도 밀면 칸 묶음의 줄바꿈을 막아 칸 글자를 조금 줄인다 (lib/basisFit — '큰 글씨면 점만').
+ *  점 + 글이 칸을 다음 줄로 밀면 점만, 점만으로도 밀면(끄고는 한 줄인 띠만) 칸 묶음의 줄바꿈을 막아 칸 글자를 조금 줄인다 (lib/basisFit — '큰 글씨면 점만').
+ *  끄고도 칸이 다음 줄로 넘어가는 띠는 켜도 그대로 줄바꿈 (글자를 줄이지 않는다 — 3-39 규칙).
  *  좁은 한 줄 띠(rates 거짓)는 늘 점만. width 는 띠 폭(표 폭) — 배치를 어림하는 데만 쓴다
  */
 export function AccountBand({
@@ -174,7 +175,8 @@ export function AccountBand({
         })
       : null;
   const mark = basis ? basis(oneLine ? !rates : fit!.dotOnly) : null;
-  // 줄바꿈하는 칸 묶음: 점 때문에 칸이 다음 줄로 가면 줄바꿈을 막는다 (칸 글자가 조금 줄어든다 — 한 줄 띠와 같은 규칙). 점이 없으면 지금 그대로
+  // 줄바꿈하는 칸 묶음: 끄고는 한 줄인 칸이 점 때문에 다음 줄로 가면 줄바꿈을 막는다 (칸 글자가 조금 줄어든다 — 한 줄 띠와 같은 규칙).
+  // 끄고도 다음 줄로 넘어가는 칸(큰 글씨·좁은 폭·큰 금액)은 그대로 줄바꿈. 점이 없으면 지금 그대로
   const wrap = fit?.noWrap ? null : styles.wrap;
   const label = accountSpeech(data);
   const button = onAllocation ? (
