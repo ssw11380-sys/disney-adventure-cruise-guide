@@ -554,6 +554,32 @@ describe("검토 반영 8차: 휴장일 다음 날 권리락 · 끝이 0주인 �
     expect(replayPair(f, anchors.slice(0, 3), { currency: "KRW" }).fills.get(f[0]!.key)!.realized).toMatchObject({ status: "ok", gross: -30_000 });
   });
 
+  it("(9차) C15: 첫 기록 전에 모두 팔고 조금 다시 산 뒤 90일 안에 주문 없이 주식이 들어오면: 모두 판 매도는 계산에서 뺌(예전 −5,000,000 'history-checked') · 다시 산 몫은 보통", () => {
+    // 1,000주 10,000,000원 → 권리락 −50% 날 모두 5,000,000원에 팖 → 10주 다시 삼 → 첫 기록 10주 50,000원 → 3주 뒤 1,000주가 주문 없이
+    const f = [kr("BUY", 1000, 10_000_000, "2026-09-01"), kr("SELL", 1000, 5_000_000, "2026-09-03"), kr("BUY", 10, 50_000, "2026-09-04")];
+    const r = replayPair(f, [krA("2026-09-10", 10, 50_000, 5000), krA("2026-09-11", 10, 50_000, 5000), krA("2026-10-01", 1010, 50_000, 5000)], { currency: "KRW" });
+    expect(r.fills.get(f[1]!.key)!.realized).toMatchObject({ ...dropped, change: "첫 기록 전 9월 3일 모두 팔아 0주 · 10월 1일 기록에서 주문 없이 1,000주가 들어왔어요(판 뒤 늦게 들어온 새 주식일 수 있어요)" });
+    expect(r.fills.get(f[0]!.key)!.afterBuy).toBeNull();
+    expect(r.fills.get(f[2]!.key)!.afterBuy).toEqual({ avgCost: 5000, quantity: 10 });
+    // 90일 넘게 뒤에 들어오면 보통 계산 그대로
+    const late = replayPair(f, [krA("2026-09-10", 10, 50_000, 5000), krA("2026-12-10", 10, 50_000, 5000), krA("2026-12-11", 1010, 50_000, 5000)], { currency: "KRW" });
+    expect(late.fills.get(f[1]!.key)!.realized).toMatchObject({ status: "ok", basis: "history-checked", gross: -5_000_000 });
+  });
+
+  it("(9차) C16: 주식배당 3%(−3%) 날 1,000주를 모두 팔고 다른 구간에서 100주를 다시 산 뒤 100 → 130주 입고: 모두 판 매도는 계산에서 뺌(예전 −30,000 'ok') · 다시 산 몫은 보통", () => {
+    const f = [kr("SELL", 1000, 970_000, "2026-09-22"), kr("BUY", 100, 97_000, "2026-09-24")];
+    const anchors = [krA("2026-09-21", 1000, 1_000_000, 1000), krA("2026-09-22", 0, 0), krA("2026-09-24", 100, 97_000, 970), krA("2026-10-14", 130, 97_000, 970)];
+    const r = replayPair(f, anchors, { currency: "KRW" });
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ ...dropped, change: "수량 1,000 → 0주 · 10월 14일 기록에서 주문 없이 30주가 들어왔어요(판 뒤 늦게 들어온 새 주식일 수 있어요)" });
+    expect(r.fills.get(f[1]!.key)!.afterBuy).toEqual({ avgCost: 970, quantity: 100 });
+    expect(r.skips).toEqual([
+      { from: kst("2026-09-21"), to: kst("2026-09-22") },
+      { from: kst("2026-09-24"), to: kst("2026-10-14") },
+    ]);
+    // 들어오지 않으면 보통 계산 (−30,000)
+    expect(replayPair(f, anchors.slice(0, 3), { currency: "KRW" }).fills.get(f[0]!.key)!.realized).toMatchObject({ status: "ok", gross: -30_000 });
+  });
+
   it("(권장) 같은 시각에 체결된 매수·매도는 저장 순서(매도 먼저 저장)로 정하지 않는다: 0주에서 사고판 단타는 보통 계산, 값이 순서에 따라 다르면 '순서 추정'", () => {
     const sell = kr("SELL", 10, 1_100_000, "2026-09-28");
     const buy = kr("BUY", 10, 1_000_000, "2026-09-28");

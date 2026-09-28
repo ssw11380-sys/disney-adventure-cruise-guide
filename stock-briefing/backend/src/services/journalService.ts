@@ -895,42 +895,54 @@ export class JournalService {
 const anchorSnap = (s: SnapLite, account: number, market: RecordMarket) => s.status === "ok" && s.market === market && s.accounts.includes(account) && !s.doubtAccounts.includes(account);
 
 /**
- * 주문 없이 새로 들어온 종목 (분사·합병의 흔적 — 원장 opts.arrivals): 같은 계좌·시장의 앞 기준점에 없던(0주) 종목이 뒤 기준점에 있고,
- * 그 사이 기록된 체결로 설명되지 않는 수량이 있으면 그 몫의 토스 매입금액 (매입금액을 모르면 null).
- * `${account}:${market}` → 뒤 기준점 asOf → 들어온 몫 매입금액 합 (그 시장 통화)
+ * 주문 없이 새로 들어온 종목 (분사·합병의 흔적 — 원장 opts.arrivals). 같은 계좌·시장의 이웃한 두 기준점 사이에서
+ *  ① 앞 기준점에 없던(0주) 종목이 뒤 기준점에 있고, 그 사이 기록된 체결로 설명되지 않는 수량이 있으면 그 몫의 토스 매입금액 (모르면 null)
+ *  ② 앞·뒤 기준점에 모두 없는(0주) 종목을 그 사이 산 것보다 많이 팔았으면 — 주문 없이 들어와 그 구간에 팔린 주식
+ *     (분사 신설회사가 들어온 날 모두 판 경우 — 기록에 한 번도 보이지 않음). 매입금액은 모름(null)
+ * `${account}:${market}` → 뒤 기준점 asOf → 들어온 몫 매입금액 합 (그 시장 통화, 하나라도 모르면 null)
  */
 function arrivals(trades: Array<Pick<TradeView, "account" | "code" | "side" | "fills">>, snaps: SnapLite[]): Map<string, Map<string, number | null>> {
   const out = new Map<string, Map<string, number | null>>();
-  const byPair = new Map<string, Array<Pick<TradeView, "side" | "fills">>>();
+  const put = (key: string, asOf: string, part: number | null) => {
+    const m = out.get(key) ?? new Map<string, number | null>();
+    const was = m.get(asOf);
+    m.set(asOf, was === null || part === null ? null : (was ?? 0) + part);
+    out.set(key, m);
+  };
+  // 계좌·시장마다 체결 몫 (시각 순) — 구간마다 앞에서부터 한 번씩 훑는다
+  const moves = new Map<string, Array<{ code: string; q: number; ms: number }>>();
   for (const t of trades) {
-    const list = byPair.get(pairKey(t.account, t.code));
-    if (list) list.push(t);
-    else byPair.set(pairKey(t.account, t.code), [t]);
+    const key = `${t.account}:${marketOf(t.code)}`;
+    const list = moves.get(key) ?? [];
+    for (const f of t.fills) if (f.quantity > 0) list.push({ code: t.code, q: t.side === "BUY" ? f.quantity : -f.quantity, ms: Date.parse(f.at) });
+    moves.set(key, list);
   }
+  for (const list of moves.values()) list.sort((a, b) => a.ms - b.ms);
   const accounts = [...new Set(snaps.flatMap((s) => s.accounts))];
   for (const market of ["KR", "US"] as const) {
     for (const account of accounts) {
+      const key = `${account}:${market}`;
       const list = snaps.filter((s) => anchorSnap(s, account, market));
+      const mv = moves.get(key) ?? [];
+      const held = (s: SnapLite, code: string) => s.holdings.some((x) => x.account === account && x.code === code && x.quantity > 0);
+      let p = 0;
       for (let i = 1; i < list.length; i++) {
         const prev = list[i - 1]!;
         const cur = list[i]!;
         const from = Date.parse(prev.asOf);
         const to = Date.parse(cur.asOf);
+        // 이 구간(앞 기록 시각 초과 ~ 뒤 기록 시각 이하)의 종목별 순매수 수량
+        while (p < mv.length && mv[p]!.ms <= from) p++;
+        const net = new Map<string, number>();
+        for (let j = p; j < mv.length && mv[j]!.ms <= to; j++) net.set(mv[j]!.code, (net.get(mv[j]!.code) ?? 0) + mv[j]!.q);
         for (const h of cur.holdings) {
-          if (h.account !== account || !(h.quantity > 0) || prev.holdings.some((x) => x.account === account && x.code === h.code && x.quantity > 0)) continue;
-          let net = 0;
-          for (const t of byPair.get(pairKey(account, h.code)) ?? [])
-            for (const f of t.fills) if (f.quantity > 0 && Date.parse(f.at) > from && Date.parse(f.at) <= to) net += t.side === "BUY" ? f.quantity : -f.quantity;
-          const extra = round6(h.quantity - net);
+          if (h.account !== account || !(h.quantity > 0) || held(prev, h.code)) continue;
+          const extra = round6(h.quantity - (net.get(h.code) ?? 0));
           if (!(extra > 1e-6)) continue;
           const cost = h.purchaseAmount ?? (h.avgPrice !== null ? h.avgPrice * h.quantity : null);
-          const part = cost === null ? null : (cost * Math.min(extra, h.quantity)) / h.quantity;
-          const key = `${account}:${market}`;
-          const m = out.get(key) ?? new Map<string, number | null>();
-          const was = m.get(cur.asOf);
-          m.set(cur.asOf, was === null || part === null ? null : (was ?? 0) + part);
-          out.set(key, m);
+          put(key, cur.asOf, cost === null ? null : (cost * Math.min(extra, h.quantity)) / h.quantity);
         }
+        for (const [code, n] of net) if (round6(n) < -1e-6 && !held(prev, code) && !held(cur, code)) put(key, cur.asOf, null);
       }
     }
   }

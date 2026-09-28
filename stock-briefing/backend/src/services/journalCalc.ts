@@ -25,7 +25,9 @@
  *    그 사이 0주가 되면 거기까지 — 0주에서 새로 산 몫은 권리락 뒤에 산 것이라 보통 계산.
  *  - 끝 기록이 0주인 구간은 매입금액을 맞춰 볼 수 없다. 그래서 끝이 0주이고 매도가 있는 구간은 다음 둘 가운데 하나면 설명되지 않음:
  *    ① 같은 계좌·같은 구간에 다른 종목이 주문 없이 새로 들어옴(분사·합병의 흔적 — 들어온 몫의 토스 매입금액이 그 종목 매입금액의 0.5% 이상,
- *       opts.arrivals) ② 0주가 된 뒤 90일 안에 같은 종목이 주문 없이 들어옴(늦게 들어온 새 주식 — 첫 기록이 0주면 그 전 매도도).
+ *       또는 기록에 보이지 않고 그 구간에 팔린 몫처럼 매입금액을 모름 — opts.arrivals)
+ *    ② 0주가 된 뒤 90일 안에 같은 종목이 주문 없이 들어옴(늦게 들어온 새 주식 — 그 사이 다시 사 둔 몫이 있어도. 첫 기록 전 원장이 90일 안에
+ *       0주에 닿았으면(첫 기록이 0주 · 첫 기록 전에 모두 팔고 다시 삼) 그때까지의 첫 기록 전 매도도).
  *  - 같은 시각에 체결된 매수·매도는 순서를 모르는 몫으로 본다 (매수 먼저·매도 먼저로 계산 — 저장 순서로 정하지 않음).
  *  - 비율 짐작('1→4 분할로 보여요(추정)')은 이름표로만 — 어떤 숫자에도 쓰지 않는다.
  * 미국 종목은 토스 원화 보기처럼 매수 당시 환율(토스 매수 환율 usdKrwAt)로 원화 매입금액도 이동평균으로 함께 쌓는다(추정).
@@ -736,12 +738,25 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
     }
   });
 
-  // ── 0주에서 같은 종목이 주문 없이 들어옴 (판 뒤 늦게 들어온 새 주식일 수 있음): 그 앞 90일 안에 끝이 0주인 구간(매입금액을 맞춰 보지 못한 구간)의
-  //    매도는 계산하지 않는다. 첫 기록이 0주이고 90일 안이면 첫 기록 전 매도도 (첫 기록 전에는 주가가 없어 큰 주가 변화도 볼 수 없다) ──
+  // ── 같은 종목이 주문 없이 들어옴 (판 뒤 늦게 들어온 새 주식일 수 있음 — 그 사이 다시 사 둔 몫이 있어도): 그 앞 90일 안에 끝이 0주인 구간
+  //    (매입금액을 맞춰 보지 못한 구간)의 매도는 계산하지 않는다. 첫 기록 전 원장이 90일 안에 0주에 닿았으면(첫 기록이 0주 · 첫 기록 전에 모두 팔고
+  //    다시 삼) 그때까지의 첫 기록 전 몫도 (첫 기록 전에는 주가가 없어 큰 주가 변화도 볼 수 없다) ──
+  /** 첫 기록 전 원장이 마지막으로 0주가 된 때 · 그때까지의 몫 수 · 문장 (첫 기록이 0주면 첫 기록 — 모든 몫) */
+  let preZero: { at: number; count: number; text: string } | null = null;
+  if (a1 && preOk) {
+    if (a1.quantity <= EPS) preZero = { at: t(a1.asOf), count: segs[0]!.length, text: `첫 기록(${md(a1.date)}) 0주` };
+    else {
+      let q = 0;
+      for (const [i, f] of segs[0]!.entries()) {
+        q = round6(q + (f.side === "BUY" ? f.quantity : -f.quantity));
+        if (f.side === "SELL" && q <= EPS) preZero = { at: t(f.at), count: i + 1, text: `첫 기록 전 ${md(fillDate(f))} 모두 팔아 0주` };
+      }
+    }
+  }
   let preArrival: string | null = null;
   for (let k = 0; k < spans.length; k++) {
     const x = spans[k]!;
-    if (x.state !== "unexplained" || claimed.has(k) || !x.to || x.from.quantity > EPS || !(x.to.quantity > x.expectedQty + EPS)) continue;
+    if (x.state !== "unexplained" || claimed.has(k) || !x.to || !(x.to.quantity > x.expectedQty + EPS)) continue;
     const what = `${md(x.to.date)} 기록에서 주문 없이 ${fmtQty(round6(x.to.quantity - x.expectedQty))}주가 들어왔어요(판 뒤 늦게 들어온 새 주식일 수 있어요)`;
     const since = t(x.from.asOf);
     for (let j = k - 1; j >= 0; j--) {
@@ -750,11 +765,11 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
       if (sp.state === "ok" && !windowOf.has(j) && hasSell(sp.seg) && sp.to!.quantity <= EPS)
         Object.assign(sp, { state: "unexplained", text: `${sp.from.quantity > EPS ? `수량 ${fmtQty(sp.from.quantity)} → 0주` : "0주에서 사고팔아 다시 0주"} · ${what}`, guess: null });
     }
-    if (a1 && a1.quantity <= EPS && since - t(a1.asOf) <= windowMs) preArrival ??= `첫 기록(${md(a1.date)}) 0주 · ${what}`;
+    if (preZero && since - preZero.at <= windowMs) preArrival ??= `${preZero.text} · ${what}`;
   }
-  if (preArrival && preOk) {
-    // 첫 기록까지 0주: 첫 기록 전 매도(0주에서 돌려 첫 기록과 맞춘 것)도 계산하지 않는다 — 첫 기록 전에는 주가가 없어 큰 주가 변화도 볼 수 없다
-    for (const f of segs[0]!) {
+  if (preArrival && preZero) {
+    // 첫 기록 전 0주가 된 때까지의 몫(0주에서 돌려 첫 기록과 맞춘 것)도 계산하지 않는다 — 그 뒤 다시 산 몫은 보통
+    for (const f of segs[0]!.slice(0, preZero.count)) {
       const r = out.get(f.key)?.realized;
       if (f.side === "BUY" || (r && r.status !== "unknown-cost")) exclude(out, f, REASONS.unexplained, preArrival, null);
     }

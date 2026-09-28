@@ -837,6 +837,55 @@ describe("검토 반영 8차: 휴장일 다음 날 권리락 · 분사 당일 �
     expect(list.summary.excludedSells).toHaveLength(1);
     await t.app.close();
   });
+
+  // ── 검토 반영 9차: 신설회사가 들어온 구간에 그 주식까지 모두 팔아 기록에 한 번도 보이지 않는 경우 ──
+  const spinText = (from: string) => `수량 ${from} → 0주 · 같은 기간 다른 종목이 주문 없이 들어와(분사 등일 수 있어요) 매입금액을 맞춰 보지 못했어요`;
+
+  it("(꼭, 9차) 미국 C1-US: 분사 당일 모회사 AAA 1,000주($80,000)와 신설회사 BBB 500주($20,000)를 같은 구간에 모두 팖, 다음 기록엔 둘 다 없음: 모회사 매도도 계산에서 빼고 실현손익·양도세 합계에 넣지 않음 (예전 −$20,000 'ok' · 양도차손 −27,000,000원 · 1건)", async () => {
+    const { tax, list, sell } = await spinOff([], [tradeRow("c2", "BBB", "SELL", [{ q: 500, a: 20_000, at: TS("2026-09-28T23:40:00") }])]);
+    expect(sell).toMatchObject({ ...dropped, change: spinText("1,000") });
+    expect(list.summary.realized).toMatchObject({ KRW: null, USD: null, krwTotal: null });
+    expect(list.summary.excludedSells).toMatchObject([{ key: "3:x1:0", code: "AAA", change: spinText("1,000") }]);
+    expect(tax.items).toEqual([]);
+    expect(tax.totals).toMatchObject({ gains: 0, losses: 0, net: 0, sells: 0 });
+    // 신설회사 매도는 가진 것보다 많이 판 매도로 따로 — 둘 다 '기록과 달라 계산하지 않은 매도'
+    expect(tax.unexplainedSells.map((x: { code: string }) => x.code).sort()).toEqual(["AAA", "BBB"]);
+  });
+
+  it("(9차) 같은 구간에 다른 종목을 0주에서 사고팔았으면(기록된 단타) 주문 없이 들어온 종목이 아님: 모회사 매도는 그대로 보통 계산", async () => {
+    const r = await spinOff(
+      [],
+      [tradeRow("c3", "BBB", "BUY", [{ q: 500, a: 20_000, at: TS("2026-09-28T23:35:00") }]), tradeRow("c4", "BBB", "SELL", [{ q: 500, a: 21_000, at: TS("2026-09-28T23:45:00") }])],
+    );
+    expect(r.sell).toMatchObject({ status: "ok", gross: -20_000 });
+    expect(r.list.summary.excludedSells).toEqual([]);
+    expect(r.tax.totals).toMatchObject({ losses: -27_000_000, sells: 2 });
+    expect(r.tax.unexplainedSells).toEqual([]);
+  });
+
+  it("(꼭, 9차) 한국 C1-KR: 거래정지 중 기록 모회사 100주 1,000,000원 → 변경상장일 모회사 100주(700,000원)·신설회사 30주(300,000원)를 모두 팖, 다음 기록엔 둘 다 없음: 둘 다 계산에서 뺌 (예전 모회사 −300,000 'ok'가 합계에)", async () => {
+    const t = await setup({ seed: false });
+    await t.db
+      .insertInto("account_snapshots")
+      .values([
+        snapRow("2026-09-28", "KR", TS("2026-09-28T16:05:00"), [{ code: "005930", name: "모회사", qty: 100, cost: 1_000_000, price: 10_000 }]),
+        snapRow("2026-09-29", "KR", TS("2026-09-29T16:05:00"), []),
+      ])
+      .execute();
+    await t.db
+      .insertInto("trade_executions")
+      .values([tradeRow("k1", "005930", "SELL", [{ q: 100, a: 700_000, at: TS("2026-09-29T10:00:00") }]), tradeRow("k2", "000990", "SELL", [{ q: 30, a: 300_000, at: TS("2026-09-29T10:05:00") }])])
+      .execute();
+    const list = (await t.get("/api/journal?from=2026-09-01&to=2026-09-30")).body;
+    expect(items(list).find((x) => x.orderId === "k1")!.realized).toMatchObject({ ...dropped, change: spinText("100") });
+    expect(items(list).find((x) => x.orderId === "k2")!.realized).toMatchObject(dropped);
+    expect(list.summary.realized).toMatchObject({ KRW: null, USD: null, krwTotal: null });
+    expect(list.summary.excludedSells.map((x: { code: string }) => x.code).sort()).toEqual(["000990", "005930"]);
+    // 모회사 종목 머리 카드도 합계에 넣지 않음
+    const head = (await t.get("/api/journal?from=2026-09-01&to=2026-09-30&code=005930")).body.head;
+    expect(head.realized).toMatchObject({ amount: null, sells: 0, unknown: 1 });
+    await t.app.close();
+  });
 });
 
 describe("검토 반영: 매매기준율 '받아 본 기간'은 실제로 온 줄이 있는 곳만", () => {
