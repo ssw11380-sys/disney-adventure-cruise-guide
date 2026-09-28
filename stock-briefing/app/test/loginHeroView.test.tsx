@@ -364,6 +364,14 @@ describe("불기둥 모양·색 (검증 4차 — 세로 빛 기둥: 뾰족한 �
     }
     expect(stops("pCoreX").find((x) => x.offset === 0.5)).toMatchObject({ stopColor: C.pillarCore });
     expect(stops("pCoreX").find((x) => x.offset === 0.5)!.stopOpacity).toBeGreaterThanOrEqual(0.9);
+    // 검증 5차 — 보이는 기둥을 몸통보다 넓게: 심은 몸통 폭 이상이고 가운데가 평평(0.9 이상이 심 칸의 0.4 이상 = 몸통의 약 0.8배),
+    // 옆빛은 원형 빛(붉은색)에 묻히지 않는 주황이 칸의 0.22~0.78 (몸통의 약 1.7배)에서 0.7 이상
+    expect(P.coreW).toBeGreaterThanOrEqual(scene.bw);
+    const flat = stops("pCoreX").filter((x) => x.stopOpacity >= 0.9);
+    expect(flat.at(-1)!.offset - flat[0]!.offset).toBeGreaterThanOrEqual(0.4);
+    const shoulder = stops("pGlowX").filter((x) => x.offset >= 0.22 && x.offset <= 0.78);
+    expect(shoulder.every((x) => x.stopColor === C.pillarWarm && x.stopOpacity >= 0.7)).toBe(true);
+    expect(C.pillarWarm).not.toBe(C.glow);
     // 세로(아래 0 → 위 1): 아래 끝·위 끝 투명 (몸통 뒤에서 옅게 시작, 위로 사라짐 — 뾰족한 끝 없음)
     for (const s of ["pGlowY", "pCoreY"]) {
       const g = grad(s);

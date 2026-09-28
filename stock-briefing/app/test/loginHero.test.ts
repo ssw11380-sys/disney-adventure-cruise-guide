@@ -180,8 +180,8 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
           // 상한가 봉은 로고 묶음과 겹치지 않는다 (보일 때)
           if (!it.id.startsWith("side") && it.opacity > 0 && overlaps(it.rect, logo)) bad.push(`${label} t=${t} ${it.id} 로고와 겹침`);
         }
-        // 불기둥은 그림 영역 안 (위로 갈수록 투명해져 그림 영역 위 끝까지 올라가도 된다 — 검증 4차), 가장 밝은 아래 40% 는 상태 표시줄 아래
-        if (it.id === "pillar" && (it.rect.x < 0 || it.rect.x + it.rect.w > L.heroW + EPS || it.rect.y < -EPS)) bad.push(`${label} t=${t} ${it.id} 그림 영역 밖`);
+        // 불기둥은 그림 영역 안, 위 끝은 상태 표시줄(위 안전 영역) 아래 — 검증 5차 (빛줄기가 배터리·신호 아이콘에 꽂혀 보였다)
+        if (it.id === "pillar" && (it.rect.x < 0 || it.rect.x + it.rect.w > L.heroW + EPS || it.rect.y < top - EPS)) bad.push(`${label} t=${t} ${it.id} 그림 영역 밖·상태 표시줄 밑`);
         if (it.id === "pillar" && it.opacity > 0 && it.rect.y + it.rect.h - 0.4 * it.rect.h < top - EPS) bad.push(`${label} t=${t} ${it.id} 밝은 곳이 상태 표시줄 밑`);
         // 상한가 봉은 시가(몸통 아래)를 기준으로 자란다: 자라는 동안 아래 끝이 제자리
         const m = /^limit(\d+)$/.exec(it.id);
@@ -280,11 +280,12 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
   });
 });
 
-describe("불기둥 (검증 4차 — 마지막 종가에서 그림 위쪽으로 솟는 세로 빛 기둥: 뾰족한 끝·부풂·아래 크림 심지 없이)", () => {
-  it("폭은 몸통의 2~3배, 가운데 심은 몸통 폭보다 좁고, 높이는 그림 칸의 0.3~0.4", () => {
+describe("불기둥 (검증 4·5차 — 마지막 종가에서 그림 위쪽으로 솟는 세로 빛 기둥: 뾰족한 끝·부풂·아래 크림 심지 없이, 몸통보다 넓게 보이게)", () => {
+  it("그리는 칸은 몸통의 3배, 가운데 따뜻한 흰 심은 몸통보다 넓게(1.5~2배 — 검증 5차: 0.9 는 가는 흰 선으로 보였다), 높이는 그림 칸의 0.3~0.4", () => {
     expect(PILLAR_W).toBeGreaterThanOrEqual(2);
     expect(PILLAR_W).toBeLessThanOrEqual(3);
-    expect(PILLAR_CORE_W).toBeLessThan(1);
+    expect(PILLAR_CORE_W).toBeGreaterThanOrEqual(1.5);
+    expect(PILLAR_CORE_W).toBeLessThanOrEqual(2);
     expect(PILLAR_H).toBeGreaterThanOrEqual(0.3);
     expect(PILLAR_H).toBeLessThanOrEqual(0.4);
   });
@@ -300,17 +301,31 @@ describe("불기둥 (검증 4차 — 마지막 종가에서 그림 위쪽으로 
       // 아래 끝은 몸통 위 끝보다 아래(몸통에 가려 봉에서 솟는 모양), 몸통 아래 끝보다는 위
       expect(P.base).toBeGreaterThan(last.body.y);
       expect(P.base).toBeLessThan(last.body.y + last.body.h);
-      // 높이: 종가에서 그림 칸 h × PILLAR_H 까지 — 그림 영역 위 끝(0)에 닿으면 거기서 멈춘다 (그래도 h 의 0.28 이상)
+      // 높이: 종가에서 그림 칸 h × PILLAR_H 까지 — 상태 표시줄(위 안전 영역) 아래 끝에 닿으면 거기서 멈춘다 (검증 5차, 그래도 h 의 0.28 이상)
       const rise = last.body.y - P.top;
       expect(rise).toBeLessThanOrEqual(PILLAR_H * s.plot.h + EPS);
-      expect(P.top === 0 || Math.abs(rise - PILLAR_H * s.plot.h) < EPS).toBe(true);
+      expect(P.top === L.safeTop || Math.abs(rise - PILLAR_H * s.plot.h) < EPS).toBe(true);
       expect(rise / s.plot.h).toBeGreaterThanOrEqual(0.28);
-      expect(P.top).toBeGreaterThanOrEqual(0);
+      expect(P.top).toBeGreaterThanOrEqual(top);
       expect(P.base - 0.4 * (P.base - P.top)).toBeGreaterThanOrEqual(top);
       // 빛의 가운데도 마지막 봉 종가
       expect(s.glow.cy).toBeCloseTo(last.body.y, 6);
     });
   }
+});
+
+describe("횡보 띠 자리 (검증 5차 — 가로 눈금이 윗꼬리를 가로지르고, 봉 묶음이 띠 위쪽으로 쏠려 바닥선 위에 약 18dp 빈 곳)", () => {
+  it("모든 크기에서 가로 눈금이 횡보 봉(윗꼬리 끝 ~ 아래꼬리 끝)을 가로지르지 않고, 가장 낮은 아래꼬리는 바닥선 바로 위(6dp 안팎)", () => {
+    const bad: string[] = [];
+    for (const [W, H, top, bottom] of MANY) {
+      const s = heroScene(heroLayout(W, H, { top, bottom }));
+      const hi = Math.min(...s.side.map((c) => c.box.y));
+      const lo = Math.max(...s.side.map((c) => c.box.y + c.box.h));
+      for (const g of s.grid) if (g.y >= hi - 1 && g.y <= lo + 1) bad.push(`${W}×${H}(${top}) 눈금 ${g.y.toFixed(1)} · 횡보 ${hi.toFixed(1)}~${lo.toFixed(1)}`);
+      if (s.baseline.y - lo > 7 || s.baseline.y - lo < 5) bad.push(`${W}×${H}(${top}) 바닥선과 ${(s.baseline.y - lo).toFixed(1)}dp`);
+    }
+    expect(bad).toEqual([]);
+  });
 });
 
 describe("횡보 띠·천장 띠·시작 (검증 4차)", () => {

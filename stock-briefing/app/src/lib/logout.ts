@@ -8,6 +8,9 @@ import { addPendingLogout, clearSession, dropPendingLogout, pendingLogoutsFor, s
  *  - 이 기기만: 서버에 알리고(실패해도 진행) 저장한 세션을 지운다. 인터넷·서버 오류로 알리지 못했으면 그 세션 토큰을 적어 두고
  *    다음에 앱이 켜지거나 앞으로 돌아왔을 때 다시 알린다 (flushPendingLogouts — 서버 세션이 살아 있으면 그 세션의 기기로 알림이 계속 가므로)
  *  - 모든 기기: 서버가 모든 세션을 끊어야 하므로, 서버 요청이 실패하면 오류를 던지고 아무것도 지우지 않는다
+ *  - 주인 아닌 계정인데 서버가 로그아웃 주소를 모르면(404 — 로그인 기능이 꺼진 비상 모드) 세션을 **지우지 않고** 던진다 (검증 5차):
+ *    비상 모드 서버는 세션 머리글이 없는 요청을 API 토큰만으로 주인으로 보므로, 세션을 잊으면 그 폰에 주인 잔고·브리핑이 보인다.
+ *    세션을 계속 보내야 서버가 그 계정으로 막는다 (설정의 계정 칸도 비상 모드에서는 [로그아웃]을 보이지 않는다)
  */
 let beforeLogout: ((api: Api) => Promise<void>) | null = null;
 let pushRebind: ((api: Api) => Promise<void>) | null = null;
@@ -41,8 +44,20 @@ export async function logout(api: Api, apiUrl: string, all = false): Promise<voi
   if (!s) return;
   if (s.user.isOwner && beforeLogout) await within(beforeLogout(api), 5_000);
   if (all) await api.logoutAll();
-  else await api.logout().catch((e: unknown) => (reachedServer(e) ? undefined : addPendingLogout(apiUrl, s.token)));
+  else
+    await api.logout().catch((e: unknown) => {
+      if (!s.user.isOwner && e instanceof ApiRequestError && e.status === 404) throw new LogoutUnavailableError();
+      return reachedServer(e) ? undefined : addPendingLogout(apiUrl, s.token);
+    });
   await clearSession("logout");
+}
+
+/** 로그인 기능이 꺼진 서버(비상 모드)에서 주인 아닌 계정이 로그아웃하려 함 — 세션을 지우지 않았다 */
+export class LogoutUnavailableError extends Error {
+  constructor() {
+    super("로그인 기능이 잠시 꺼져 있어 지금은 로그아웃할 수 없어요. 다시 켜지면 로그아웃할 수 있어요.");
+    this.name = "LogoutUnavailableError";
+  }
 }
 
 /** 서버가 답한 오류(4xx — 세션이 이미 끝남 등)면 true. 인터넷 오류·시간 초과·5xx·모르는 오류는 false (다시 알려야 한다) */

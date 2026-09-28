@@ -10,7 +10,7 @@ import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
 import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
-import { failureText } from "@/widgets/model";
+import { failureText, quietState } from "@/widgets/model";
 import { payloadMarket, shouldSkipFetch } from "@/widgets/payload";
 import { redrawAllWidgets } from "@/widgets/redraw";
 import { marketWidgetPlaced, refreshWidgets } from "@/widgets/refresh";
@@ -159,6 +159,13 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
     // 지수·환율 위젯이 홈 화면에 있을 때만 판 9개를 함께 묻는다 (같은 요청 한 번, 없으면 응답이 예전과 같다)
     const data = await loadWidgetData({ stocks: true, briefings: true, board: await marketWidgetPlaced() });
+    if (quietState(data.error)) {
+      // 로그인 필요(자동 로그인 끔·로그인 전)·주인 아닌 계정: 실패가 아니다 — 실패로 세지 않고 다시 그리지 않는다 (검증 5차).
+      // 위젯은 loadWidgetData 가 이미 '로그인하면 보여요'로 적었다. 개인 데이터가 없으니 알림도 없다
+      await AsyncStorage.removeItem(BG_FAIL_KEY).catch(() => undefined);
+      await logWidgetRefresh("background", "skipped");
+      return BackgroundTask.BackgroundTaskResult.Success;
+    }
     if (data.error) {
       // 연달아 두 번째 실패부터는 위젯에도 보이게 (위젯이 스스로 갱신하다 실패했을 때와 같은 '갱신 실패 · …') — 위젯 리뷰 6
       await noteWidgetFailure(data);

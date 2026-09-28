@@ -7,14 +7,15 @@ import { Badge, Button, Card, Muted, Row, SectionTitle } from "@/components/ui";
 import { useAccountView } from "@/lib/account";
 import { authErrorView } from "@/lib/authErrors";
 import { emailError, fieldMessage } from "@/lib/authRules";
-import { logout } from "@/lib/logout";
+import { logout, LogoutUnavailableError } from "@/lib/logout";
 import { activeSession, updateSessionUser, type StoredSession } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
 import { font, fontCap, radius, space, touch, useTheme } from "@/theme";
 
 /**
  * 설정 탭 맨 위 '계정' 칸 (계정 A단계, 기능 플래그 accounts — 꺼져 있거나 로그인 전이면 없음. 다만 꺼져 있어도 지금 서버에 주인 아닌 계정 세션이 있으면
- * 아이디와 [로그아웃]만 — 검증 4차: 끈 동안에도 그 계정 폰에서 로그아웃할 수 있게. 비밀번호·이메일 바꾸기는 서버가 꺼 두어 뺀다).
+ * 아이디와 안내 한 줄만 — **[로그아웃] 없음** (검증 5차: 비상 모드에서는 서버가 로그아웃을 받지 않고(404), 세션을 잊으면 그 뒤 요청이 API 토큰만 =
+ * 주인이 되어 그 폰에 주인 잔고가 보였다. 세션을 계속 보내야 서버가 그 계정으로 막는다. 로그인 기능이 다시 켜지면 보통 칸이 되어 로그아웃할 수 있다).
  * 아이디(주인이면 '주인') · 이메일 등록/변경(지금 비밀번호를 함께 — 세션만으로는 바꾸지 못하게) · 자동 로그인 · [비밀번호 바꾸기] · [로그아웃] · [모든 기기에서 로그아웃](확인 창).
  * 처음 비밀번호(1111)를 쓰는 중이면 칸 위에 띠 '처음 비밀번호를 쓰고 있어요' + [바꾸기] (바꿀 때까지)
  */
@@ -28,8 +29,8 @@ export function AccountCard() {
   return null;
 }
 
-/** 플래그가 꺼져 있을 때(비상 모드) 주인 아닌 계정에게 보이는 한 줄 */
-export const ACCOUNTS_OFF_NOTE = "로그인 기능이 잠시 꺼져 있어요. 이 기기에서 로그아웃할 수 있어요.";
+/** 플래그가 꺼져 있을 때(비상 모드) 주인 아닌 계정에게 보이는 한 줄 (로그아웃 버튼 없음 — 검증 5차) */
+export const ACCOUNTS_OFF_NOTE = "로그인 기능이 잠시 꺼져 있어요. 다시 켜지면 여기에서 로그아웃할 수 있어요.";
 
 function AccountCardBody({ session, limited = false }: { session: StoredSession; limited?: boolean }) {
   const t = useTheme();
@@ -85,7 +86,7 @@ function AccountCardBody({ session, limited = false }: { session: StoredSession;
       try {
         await logout(api, apiUrl, all);
       } catch (e) {
-        Alert.alert("로그아웃하지 못했어요", authErrorView(e).message ?? "잠시 뒤 다시 해 주세요");
+        Alert.alert("로그아웃하지 못했어요", e instanceof LogoutUnavailableError ? e.message : (authErrorView(e).message ?? "잠시 뒤 다시 해 주세요"));
       } finally {
         setLeaving(null);
       }
@@ -107,11 +108,8 @@ function AccountCardBody({ session, limited = false }: { session: StoredSession;
     return (
       <Card>
         <SectionTitle>계정</SectionTitle>
-        <Muted style={{ fontSize: font.small }}>{ACCOUNTS_OFF_NOTE}</Muted>
         <Row label="아이디" value={u.loginId} />
-        <View style={[styles.buttons, { paddingTop: space.sm }]}>
-          <Button title="로그아웃" icon="log-out-outline" variant="secondary" compact onPress={() => out(false)} loading={leaving === "here"} />
-        </View>
+        <Muted style={{ fontSize: font.small, paddingTop: space.sm }}>{ACCOUNTS_OFF_NOTE}</Muted>
       </Card>
     );
   }

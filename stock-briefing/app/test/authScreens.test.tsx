@@ -469,17 +469,14 @@ describe("설정 '계정' 칸 · 주인 아닌 계정 안내 · 처음 비밀번
     expect(render(<MemberNotice />).text()).toBe("개인 종목 기능은 준비 중이에요 — 시장·종목 정보는 지금 볼 수 있어요");
     // 로그인 화면은 꺼짐 그대로 (on·session 없음)
     expect(accountViewOf(false, currentSession(), activeSession())).toEqual({ on: false, session: null, member: true });
-    // 설정 '계정' 칸은 보인다 — 아이디와 [로그아웃]만 (검증 4차: 꺼진 동안에도 이 기기에서 로그아웃할 수 있게. 비밀번호·이메일 바꾸기는 서버가 꺼 두어 뺌)
+    // 설정 '계정' 칸은 보인다 — 아이디와 안내 한 줄만, **버튼 없음** (검증 5차: 비상 모드에서 [로그아웃]을 누르면 서버 404 → 세션만 잊고
+    // API 토큰만 = 주인이 되어 그 폰에 주인 잔고가 보였다. 세션을 계속 보내야 서버가 그 계정으로 막는다)
     const card = render(<AccountCard />);
-    expect(card.text()).toContain("로그인 기능이 잠시 꺼져 있어요");
+    expect(card.text()).toContain("로그인 기능이 잠시 꺼져 있어요. 다시 켜지면 여기에서 로그아웃할 수 있어요.");
     expect(Object.fromEntries(card.all().filter((n) => n.type === "Row").map((n) => [n.props.label, n.props.value]))).toEqual({ 아이디: "newbie" });
-    byTitle(card, "로그아웃");
-    expect(card.all().filter((n) => ["비밀번호 바꾸기", "이메일 등록", "이메일 변경", "모든 기기에서 로그아웃"].includes(String(n.props.title)))).toEqual([]);
-    card.act(() => (byTitle(card, "로그아웃").props.onPress as () => void)());
-    (h.alert.mock.calls.at(-1)![2] as { text: string; onPress?: () => void }[]).find((b) => b.text === "로그아웃")!.onPress!();
-    await settle(card);
-    expect(sessionFor(SERVER)).toBeNull();
-    await saveSession({ apiUrl: SERVER, token: "gzs1_m", remember: true, user: MEMBER });
+    expect(card.all().filter((n) => n.type === "Button")).toEqual([]);
+    expect(card.text()).not.toContain("이 기기에서 로그아웃할 수 있어요");
+    expect(sessionFor(SERVER)?.token).toBe("gzs1_m");
     // 다른 서버로 바꿨으면 그 서버는 세션을 받지 않으므로 안내 없음
     noteActiveServer("https://other.test");
     expect(render(<MemberNotice />).tree).toEqual([]);
@@ -488,6 +485,28 @@ describe("설정 '계정' 칸 · 주인 아닌 계정 안내 · 처음 비밀번
     await saveSession({ apiUrl: SERVER, token: "gzs1_o", remember: true, user: OWNER });
     expect(render(<MemberNotice />).tree).toEqual([]);
     expect(accountViewOf(false, null, null)).toEqual({ on: false, session: null, member: false });
+  });
+
+  it("비상 모드(서버가 로그아웃 주소를 모름 — 404)에서 주인 아닌 계정의 로그아웃은 세션을 지우지 않는다 (검증 5차 — 지우면 API 토큰만 = 주인 잔고가 보임)", async () => {
+    await saveSession({ apiUrl: SERVER, token: "gzs1_m", remember: true, user: MEMBER });
+    // 플래그가 막 꺼져 설정 칸이 아직 보통 모습일 때 누른 경우
+    h.api.logout!.mockRejectedValueOnce(apiErr(404, "NOT_FOUND"));
+    const r = render(<AccountCard />);
+    r.act(() => (byTitle(r, "로그아웃").props.onPress as () => void)());
+    (h.alert.mock.calls.at(-1)![2] as { text: string; onPress?: () => void }[]).find((b) => b.text === "로그아웃")!.onPress!();
+    await settle(r);
+    expect(sessionFor(SERVER)?.token).toBe("gzs1_m");
+    expect(h.store.has(SESSION_KEY)).toBe(true);
+    expect(h.alert.mock.calls.at(-1)![0]).toBe("로그아웃하지 못했어요");
+    expect(h.alert.mock.calls.at(-1)![1]).toBe("로그인 기능이 잠시 꺼져 있어 지금은 로그아웃할 수 없어요. 다시 켜지면 로그아웃할 수 있어요.");
+    // 주인은 404 여도 이 기기에서 로그아웃 (비상 모드에서 주인은 API 토큰만으로도 주인 — 잊어도 드러나는 것이 없다)
+    await saveSession({ apiUrl: SERVER, token: "gzs1_o", remember: true, user: OWNER });
+    h.api.logout!.mockRejectedValueOnce(apiErr(404, "NOT_FOUND"));
+    const o = render(<AccountCard />);
+    o.act(() => (byTitle(o, "로그아웃").props.onPress as () => void)());
+    (h.alert.mock.calls.at(-1)![2] as { text: string; onPress?: () => void }[]).find((b) => b.text === "로그아웃")!.onPress!();
+    await settle(o);
+    expect(sessionFor(SERVER)).toBeNull();
   });
 
   it("처음 비밀번호 권유 시트: 로그인 직후 한 번, [나중에] 로 닫고 다시 뜨지 않음", async () => {

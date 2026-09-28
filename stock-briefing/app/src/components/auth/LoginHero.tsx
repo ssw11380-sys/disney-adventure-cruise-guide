@@ -237,8 +237,8 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
           <Line x1={scene.baseline.x1} x2={scene.baseline.x2} y1={scene.baseline.y} y2={scene.baseline.y} stroke={C.baseline} strokeWidth={1} />
         </Svg>
       </Animated.View>
-      {/* 불기둥 (검증 4차): 마지막 종가에서 그림 위쪽으로 곧게 솟는 세로 빛 기둥 — 같은 폭(부풂 없음), 뾰족한 끝 없이 위로 갈수록 투명,
-          가로로는 붉은 빛 → 가운데 따뜻한 흰 심. 아래 끝은 몸통 뒤에서 옅게 시작한다 (예전 불꽃 모양은 촛불처럼 보였다).
+      {/* 불기둥 (검증 4·5차): 마지막 종가에서 그림 위쪽(상태 표시줄 아래)으로 곧게 솟는 세로 빛 기둥 — 같은 폭(부풂 없음), 뾰족한 끝 없이 위로 갈수록 투명,
+          가로로는 주황 어깨 → 가운데 평평한 따뜻한 흰 심(몸통보다 넓게). 아래 끝은 몸통 뒤에서 옅게 시작한다 (예전 불꽃 모양은 촛불, 가는 심은 심지처럼 보였다).
           움직임은 세로 크기(아래 끝 기준)·불투명도만 — 네이티브 드라이버 */}
       {pillarOn ? (
         <Animated.View
@@ -278,41 +278,52 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
   );
 });
 
-/** 기둥의 가로 빛 (양옆 투명 → 붉은 빛 → 가운데 따뜻한 주황): [위치 0~1, 색, 불투명도] */
+/**
+ * 기둥의 가로 빛 (그리는 칸 = 몸통 × 3): 양옆 투명 → 붉은 끝 → 주황 어깨 → 가운데 따뜻한 주황. [위치 0~1, 색, 불투명도].
+ * 검증 5차: 붉은 옆빛은 같은 색 원형 빛(glow)에 묻혀 보이지 않았다 → 0.22~0.78 을 주황으로 (몸통의 약 1.7배 폭이 불투명도 0.7 이상)
+ */
 export const PILLAR_GLOW_X: readonly (readonly [number, string, number])[] = [
   [0, C.pillarRed, 0],
-  [0.14, C.pillarRed, 0.1],
-  [0.3, C.pillarRed, 0.4],
-  [0.5, C.pillarWarm, 0.78],
-  [0.7, C.pillarRed, 0.4],
-  [0.86, C.pillarRed, 0.1],
+  [0.1, C.pillarRed, 0.18],
+  [0.22, C.pillarWarm, 0.7],
+  [0.36, C.pillarWarm, 0.82],
+  [0.5, C.pillarWarm, 0.88],
+  [0.64, C.pillarWarm, 0.82],
+  [0.78, C.pillarWarm, 0.7],
+  [0.9, C.pillarRed, 0.18],
   [1, C.pillarRed, 0],
 ];
-/** 가운데 심의 가로 빛 (따뜻한 주황 → 따뜻한 흰색) */
+/**
+ * 가운데 심의 가로 빛 (심 칸 = 몸통 × 1.8): 가운데가 **평평한** 따뜻한 흰색 (0.28~0.72 — 몸통의 약 0.8배 폭이 0.9 이상), 양옆은 주황으로 옅어짐.
+ * 검증 5차: 예전 심은 몸통보다 좁고 가운데 한 점만 밝아 가는 흰 선(심지·광선검)으로 보였다
+ */
 export const PILLAR_CORE_X: readonly (readonly [number, string, number])[] = [
   [0, C.pillarWarm, 0],
-  [0.22, C.pillarWarm, 0.4],
+  [0.12, C.pillarWarm, 0.5],
+  [0.28, C.pillarCore, 0.9],
   [0.5, C.pillarCore, 0.95],
-  [0.78, C.pillarWarm, 0.4],
+  [0.72, C.pillarCore, 0.9],
+  [0.88, C.pillarWarm, 0.5],
   [1, C.pillarWarm, 0],
 ];
 /**
- * 세로로 얼마나 보이는지 (아래 끝 0 → 위 끝 1, 가림(mask)의 흰색 불투명도): 붉은 빛은 몸통 뒤에서 옅게 시작해 곧 가장 밝고 위로 갈수록 투명.
- * 가운데 심은 몸통 바로 위에서는 옅고(아래 크림 심지처럼 보이지 않게) 조금 위에서 가장 밝았다가 붉은 빛보다 먼저 사라진다 — 아래는 붉게, 가운데는 따뜻한 흰색, 위는 투명
+ * 세로로 얼마나 보이는지 (아래 끝 0 → 위 끝 1, 가림(mask)의 흰색 불투명도): 주황 빛은 몸통 뒤에서 옅게 시작해 곧 가장 밝고 위로 갈수록 투명.
+ * 가운데 심은 몸통 바로 위에서는 옅고(아래 크림 심지처럼 보이지 않게) 조금 위에서 가장 밝았다가 길게 옅어진다 — 짧은 불꽃이 아니라 위로 뻗는 기둥으로
  */
 export const PILLAR_GLOW_Y: readonly (readonly [number, number])[] = [
   [0, 0],
+  [0.02, 0.6],
   [0.05, 1],
-  [0.35, 0.8],
-  [0.7, 0.3],
+  [0.4, 0.8],
+  [0.75, 0.35],
   [1, 0],
 ];
 export const PILLAR_CORE_Y: readonly (readonly [number, number])[] = [
   [0, 0],
-  [0.1, 0.3],
-  [0.22, 1],
-  [0.45, 0.5],
-  [0.75, 0.08],
+  [0.08, 0.3],
+  [0.2, 0.95],
+  [0.45, 0.75],
+  [0.75, 0.3],
   [1, 0],
 ];
 

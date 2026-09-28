@@ -42,6 +42,8 @@ export interface LoginLayout {
   logoSize: number;
   logoX: number;
   logoY: number;
+  /** 위 안전 영역(상태 표시줄) 높이 — 불기둥은 이 아래에서 멈춘다 (검증 5차: 빛줄기가 배터리·신호 아이콘에 꽂혀 보였다) */
+  safeTop: number;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -59,7 +61,7 @@ export function heroLayout(W: number, H: number, insets: Insets): LoginLayout {
     const inner = H - insets.top - insets.bottom;
     const h = Math.min(inner - 80, w);
     const plot = { x0: authLayout.twoPlotInset, y0: insets.top + (inner - h) / 2, w, h };
-    return { mode: "two", gutter: authLayout.gutterWide, formW, formX: heroW + authLayout.gutterWide, screenW: W, heroW, heroH: H, plot, logoSize, logoX: plot.x0, logoY: plot.y0 + 4 };
+    return { mode: "two", gutter: authLayout.gutterWide, formW, formX: heroW + authLayout.gutterWide, screenW: W, heroW, heroH: H, plot, logoSize, logoX: plot.x0, logoY: plot.y0 + 4, safeTop: insets.top };
   }
   const gutter = W < authLayout.wideMin ? authLayout.gutter : authLayout.gutterWide;
   const formW = Math.min(W - 2 * gutter, authLayout.formMaxW);
@@ -68,12 +70,12 @@ export function heroLayout(W: number, H: number, insets: Insets): LoginLayout {
   const body = clamp(Math.round(inner * authLayout.heroRatio), authLayout.heroMin, authLayout.heroMax);
   // 그림 칸 폭 = 입력 칸 폭 (로고·차트·입력 칸의 왼쪽 끝이 한 줄 — 펼친 폴드 세로 704 에서 왼쪽 선이 둘로 보이지 않게)
   const plot = { x0: formX, y0: insets.top + authLayout.plotTop, w: formW, h: body - 2 * authLayout.plotTop };
-  return { mode: "one", gutter, formW, formX, screenW: W, heroW: W, heroH: body + insets.top, plot, logoSize, logoX: formX, logoY: plot.y0 + 4 };
+  return { mode: "one", gutter, formW, formX, screenW: W, heroW: W, heroH: body + insets.top, plot, logoSize, logoX: formX, logoY: plot.y0 + 4, safeTop: insets.top };
 }
 
 /** 같은 배치인지 (화면이 다시 그려져도 그림·움직임을 새로 만들지 않게) */
 export function layoutKey(l: LoginLayout): string {
-  return [l.mode, l.screenW, l.heroW, l.heroH, l.plot.x0, l.plot.y0, l.plot.w, l.plot.h, l.logoSize, l.logoX, l.logoY].join("|");
+  return [l.mode, l.screenW, l.heroW, l.heroH, l.plot.x0, l.plot.y0, l.plot.w, l.plot.h, l.logoSize, l.logoX, l.logoY, l.safeTop].join("|");
 }
 
 // ─── 로고 ('가즈아 불기둥' 금색 글자 + 선 + 부제) ─────────────────────────────
@@ -140,16 +142,24 @@ export interface HeroGeometry {
 
 /**
  * 마지막 상한가 종가 자리 (그림 칸 위에서 h 의 몇 배). 0.12 → 0.18 (검증 지적): 한 칸 화면에서 불기둥 위 끝·가장 밝은 곳이
- * 상태 표시줄(배터리·신호 아이콘) 밑까지 올라왔다 — 불기둥이 그림 칸 안(PILLAR_H 만큼)에 들어오게 내린다
+ * 상태 표시줄(배터리·신호 아이콘) 밑까지 올라왔다. 0.18 → 0.25 (검증 5차): 불기둥을 상태 표시줄 아래에서 멈추게 하니 한 칸 화면(360×752)에서
+ * 보이는 기둥이 그림 칸의 0.23 뿐이라, 계단 끝을 조금 내려 약 0.29~0.30 이 보이게 (704×933 0.29)
  */
-export const LAST_CLOSE = 0.18;
+export const LAST_CLOSE = 0.25;
 /**
- * 불기둥 높이 (그림 칸 h 의 몇 배 — 검증 4차: 0.17 의 짧은 불꽃이 촛불처럼 보여, 그림 위쪽으로 길게 솟는 빛 기둥으로). 그림 영역 위 끝(0)에 닿으면 거기서 멈춘다 —
- * 위로 갈수록 투명해 상태 표시줄 밑까지 올라가도 되고(hero-spec 4.1), 가장 밝은 아래쪽은 상태 표시줄 아래 (테스트)
+ * 불기둥 높이 (그림 칸 h 의 몇 배 — 검증 4차: 0.17 의 짧은 불꽃이 촛불처럼 보여, 그림 위쪽으로 길게 솟는 빛 기둥으로).
+ * 위 안전 영역(상태 표시줄) 아래 끝에 닿으면 거기서 멈춘다 (검증 5차 — 그 위는 그리지 않는다. 위로 갈수록 투명해 끝이 잘려 보이지 않는다)
  */
 export const PILLAR_H = 0.36;
 /** 횡보 띠 높이 (그림 칸 h 의 몇 배 — 검증 4차: 0.14 는 횡보 봉이 납작한 점처럼 보였다) */
 export const SIDE_BAND = 0.2;
+
+/**
+ * 횡보 봉이 쓰는 띠 단위 범위 (가장 낮은 저가 · 가장 높은 고가). 검증 5차: 예전에는 띠 가운데를 u 0 에 두어 봉이 띠 위쪽으로 쏠리고
+ * (가장 낮은 아래꼬리와 바닥선 사이 약 18dp) 가로 눈금이 윗꼬리 끝을 가로질렀다 → 가장 낮은 저가를 띠 아래 끝에 맞춘다 (크기는 그대로)
+ */
+export const SIDE_LOW = -0.55;
+export const SIDE_HIGH = 0.75;
 
 /** 횡보 봉 16개 (띠 단위 u: 시가·종가·고가·저가, 위가 +) — hero-spec 5.3 */
 const SIDE: readonly (readonly [number, number, number, number])[] = [
@@ -183,8 +193,8 @@ export function heroCandles(p: Plot): HeroGeometry {
   const wickW = clamp(Math.round(bw * 0.2 * 2) / 2, 1.5, 2.5);
   const bandH = p.h * SIDE_BAND;
   const bandBottom = p.y0 + p.h * 0.98;
-  const bandMid = bandBottom - bandH / 2;
-  const y = (u: number) => bandMid - (u * bandH) / 2;
+  // 띠 단위 1 = 띠 높이의 절반 (예전과 같은 크기). 가장 낮은 저가(SIDE_LOW)가 띠 아래 끝 — 봉 묶음은 띠의 아래 (SIDE_HIGH − SIDE_LOW)/2 만큼
+  const y = (u: number) => bandBottom - ((u - SIDE_LOW) * bandH) / 2;
   const candles: HeroCandle[] = SIDE.map(([o, c, hi, lo], i) => {
     let top = y(Math.max(o, c));
     let bottom = y(Math.min(o, c));
@@ -267,7 +277,7 @@ export interface SceneLimit {
  */
 export interface ScenePillar {
   cx: number;
-  /** 아래 끝 y (몸통 위 끝보다 조금 아래 — 몸통 뒤), 위 끝 y (그림 영역 위 끝 0 아래) */
+  /** 아래 끝 y (몸통 위 끝보다 조금 아래 — 몸통 뒤), 위 끝 y (위 안전 영역 아래 — 상태 표시줄에 닿지 않게) */
   base: number;
   top: number;
   /** 기둥 폭 = 몸통 폭 × PILLAR_W (그리는 칸의 폭 — 양옆은 투명으로 옅어짐), 가운데 따뜻한 흰 심 폭 = 몸통 폭 × PILLAR_CORE_W */
@@ -293,9 +303,13 @@ export interface HeroScene {
 
 /** 로고 묶음(글자·금색 선·부제) 위아래로 이만큼 안에 걸리는 눈금은 그리지 않는다 (금색 선과 눈금이 1~2dp 어긋나 한 줄이 틀어진 것처럼 보였다) */
 export const GRID_LOGO_GAP = 8;
-/** 불기둥 폭 = 봉 몸통 폭 × PILLAR_W (2~3배 — 양옆으로 옅어지는 빛까지), 가운데 따뜻한 흰 심 폭 = × PILLAR_CORE_W */
-export const PILLAR_W = 2.8;
-export const PILLAR_CORE_W = 0.9;
+/**
+ * 불기둥 폭 = 봉 몸통 폭 × PILLAR_W (그리는 칸 — 양옆으로 옅어지는 주황 빛까지), 가운데 따뜻한 흰 심 폭 = × PILLAR_CORE_W.
+ * 검증 5차: 심이 몸통보다 좁고(0.9) 가운데만 밝아 눈에 보이는 기둥이 몸통의 0.4배(3~4dp) — 가는 흰 선(심지·광선검)으로 보였다.
+ * 심을 몸통보다 넓게(1.8) 하고 가운데를 평평하게, 옆빛은 붉은 빛(원형 빛과 같은 색이라 묻힘) 대신 주황으로 → 보이는 기둥이 몸통의 약 1.5~2배
+ */
+export const PILLAR_W = 3;
+export const PILLAR_CORE_W = 1.8;
 
 /** 화면 픽셀에 맞추는 함수 (그리는 쪽은 PixelRatio.roundToNearestPixel, 테스트는 그대로) */
 export type Snap = (v: number) => number;
@@ -342,8 +356,10 @@ export function heroScene(layout: LoginLayout, snap: Snap = asIs, hair = 0.5): H
   const pillar: ScenePillar = {
     // 가운데는 픽셀에 맞춘 몸통의 가운데
     cx: last.body.x + bw / 2,
-    base: last.body.y + Math.min(3, last.body.h * 0.3),
-    top: Math.max(0, last.body.y - g.pillarH),
+    // 아래 끝은 몸통 뒤 5dp(몸통이 낮으면 0.35) — 옅게 시작하는 부분이 몸통에 가려 기둥이 봉에서 바로 솟아 보이게 (검증 5차: 3dp 는 봉 위에 틈이 보였다)
+    base: last.body.y + Math.min(5, last.body.h * 0.35),
+    // 위 끝은 상태 표시줄 아래에서 멈춘다 (검증 5차)
+    top: Math.max(layout.safeTop, last.body.y - g.pillarH),
     w: bw * PILLAR_W,
     coreW: bw * PILLAR_CORE_W,
   };

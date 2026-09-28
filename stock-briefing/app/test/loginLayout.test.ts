@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiRequestError } from "@/api/client";
 import { AUTH_TEXT, authErrorView } from "@/lib/authErrors";
-import { heroCandles, heroLayout, LIMIT_COUNT, logoBox } from "@/lib/loginHero";
+import { heroCandles, heroLayout, LIMIT_COUNT, logoBox, SIDE_HIGH, SIDE_LOW } from "@/lib/loginHero";
 
 /**
  * 로그인 화면 배치 (hero-spec.md 4.2 표의 네 크기 — 위 28·아래 24, 933×704 는 위 24·아래 16)와 그림 기하(5장), 오류 문구.
@@ -39,16 +39,23 @@ describe("로그인 배치 (hero-spec 4.2)", () => {
 });
 
 describe("그림 기하 (hero-spec 5장)", () => {
-  it("360×752: 봉 26개, 몸통 7 · 꼬리 1.5, 한 계단 16.4, 첫 상한가 시가 248.9, 마지막 종가 86.1 (그림 칸 위에서 0.18 · 횡보 띠 0.2 — 검증 4차)", () => {
+  it("360×752: 봉 26개, 몸통 7 · 꼬리 1.5, 한 계단 15.7, 첫 상한가 시가 260.5, 마지막 종가 104 (그림 칸 위에서 0.25 · 횡보 띠 0.2, 가장 낮은 저가가 띠 아래 끝 — 검증 5차)", () => {
     const g = heroCandles(heroLayout(360, 752, { top: 28, bottom: 24 }).plot);
     expect(g.candles).toHaveLength(26);
     expect(g.candles.filter((c) => c.kind === "limit")).toHaveLength(LIMIT_COUNT);
     expect(g.bw).toBeCloseTo(7, 0);
     expect(g.wickW).toBe(1.5);
     const limits = g.candles.filter((c) => c.kind === "limit");
-    expect(limits[0]!.bottom).toBeCloseTo(248.94, 1);
-    expect(limits[9]!.top).toBeCloseTo(86.08, 1);
-    expect(limits[0]!.bottom - limits[1]!.bottom).toBeCloseTo(16.38, 1);
+    expect(limits[0]!.bottom).toBeCloseTo(260.5, 1);
+    expect(limits[9]!.top).toBeCloseTo(104, 1);
+    expect(limits[0]!.bottom - limits[1]!.bottom).toBeCloseTo(15.74, 1);
+    // 횡보 봉: 가장 낮은 저가가 띠 아래 끝(그림 칸 0.98), 바닥선은 그 6dp 아래 (예전: 저가와 바닥선 사이 약 18dp)
+    const side = g.candles.filter((c) => c.kind === "side");
+    const bandBottom = 40 + 256 * 0.98;
+    expect(Math.max(...side.map((c) => c.low))).toBeCloseTo(bandBottom, 6);
+    expect(g.baseline - Math.max(...side.map((c) => c.low))).toBeCloseTo(6, 6);
+    // 가장 높은 고가는 띠 아래 끝에서 (SIDE_HIGH − SIDE_LOW) × 띠 높이 / 2 위 (봉 크기는 예전 그대로 — 띠 단위 1 = 띠 높이의 절반)
+    expect(Math.min(...side.map((c) => c.high))).toBeCloseTo(bandBottom - ((SIDE_HIGH - SIDE_LOW) * 256 * 0.2) / 2, 6);
     // 상한가 봉은 윗꼬리가 없다 (고가 = 종가)
     for (const c of limits) expect(c.high).toBe(c.top);
     // 늘 같은 그림

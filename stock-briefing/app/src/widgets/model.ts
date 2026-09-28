@@ -93,6 +93,14 @@ export function asOfLabel(ms: number, now: number): string {
   return `${today ? hm : `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${hm}`} 기준`;
 }
 
+/**
+ * 실패가 아닌 조용한 안내 상태인지 (검증 5차): 로그인이 필요함(자동 로그인 끔·로그인 전·세션 끊김)·주인 아닌 계정.
+ * 사용자가 고른 정상 상태라 '갱신 실패' 표시·실패 기록·연달아 실패 다시 그리기를 하지 않는다 (failureText 와 같은 글로 알아본다)
+ */
+export function quietState(error: string | null): boolean {
+  return !!error && /로그인|준비 중/.test(error);
+}
+
 /** 조회 실패 사유를 짧은 한국어로 (영어 오류 문구를 위젯에 그대로 보이지 않게) */
 export function failureText(error: string | null): string | null {
   if (!error) return null;
@@ -273,7 +281,8 @@ export const HOME_URI = "stockbriefing://";
  * 아니면 서버 알림 설정의 브리핑 시간(예전: 늘 "평일 08:30·16:00"). 시간을 모르면(예전 서버) 시간을 지어내지 않는다
  */
 export function briefingEmptyText(error: string | null, brief: WidgetBrief | null | undefined): string {
-  if (error) return `${failureText(error)} · ↻ 로 다시 시도`;
+  // 로그인 필요·주인 아닌 계정: 다시 시도할 일이 아니다 — 앱을 열어 로그인 (검증 5차)
+  if (error) return quietState(error) ? `${failureText(error)} · 눌러서 앱 열기` : `${failureText(error)} · ↻ 로 다시 시도`;
   if (!brief) return "아직 브리핑이 없습니다. 설정한 브리핑 시간에 생성됩니다.";
   if (brief.failed > 0) return `브리핑 생성 실패 ${brief.failed}종목. 앱의 브리핑 탭에서 확인해 주세요.`;
   const times = [brief.morning, brief.afternoon].filter((x): x is string => !!x);

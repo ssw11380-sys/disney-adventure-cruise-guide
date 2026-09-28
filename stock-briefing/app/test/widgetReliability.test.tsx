@@ -363,6 +363,27 @@ describe("리뷰 6: 실패가 위젯에 바로 보인다", () => {
     expect(dark(shared.updates.find((u) => u.widgetName === WIDGET_NAMES.holdings)!.rendered)).toContain("지연");
   });
 
+  it("검증 5차: 로그인이 필요한 상태(403 session_required — 로그아웃·자동 로그인 끔·다시 설치)는 실패가 아니다: 연달아 와도 '갱신 실패'로 다시 그리지 않고 기록은 건너뜀", async () => {
+    placeAll();
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "SESSION_REQUIRED", code: "session_required" }), { status: 403, headers: { "content-type": "application/json" } }));
+    shared.updates = [];
+    for (const hm of ["10:15", "10:30", "10:45"]) {
+      vi.setSystemTime(T(hm));
+      await runBriefingCheck();
+    }
+    expect(shared.updates).toHaveLength(0);
+    expect((await readWidgetRefreshLog()).map((e) => [e.s, e.r, e.e ?? null])).toEqual([
+      ["background", "skipped", null],
+      ["background", "skipped", null],
+      ["background", "skipped", null],
+    ]);
+    // 위젯 ↻ 도 실패가 아니라 건너뜀으로 적고, 그린 모습에 '갱신 실패'가 없다
+    const drawn = dark((await run({ widgetInfo: info(WIDGET_NAMES.holdings), widgetAction: "WIDGET_CLICK", clickAction: "REFRESH" })).at(-1));
+    expect(drawn.join(" ")).not.toMatch(/갱신 실패/);
+    expect(drawn.join(" ")).toMatch(/로그인하면 보여요 · 눌러서 앱 열기/);
+    expect((await readWidgetRefreshLog()).at(-1)).toMatchObject({ s: "button", r: "skipped" });
+  });
+
   it("성공하면 연속 실패 수를 지운다 (실패 → 성공 → 실패는 다시 그리지 않는다)", async () => {
     placeAll();
     serve();

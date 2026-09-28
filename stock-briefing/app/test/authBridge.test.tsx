@@ -121,6 +121,19 @@ describe("AuthBridge", () => {
     await settle();
     expect(h.rebind).toHaveBeenCalledTimes(1);
   });
+
+  it("자동 로그인을 끈 주인 세션은 알림 등록을 다시 묶지 않는다 (검증 5차 — 앱을 닫아 로그아웃된 폰에 주인 푸시가 가지 않게)", async () => {
+    const r = render(<AuthBridge />);
+    await saveSession({ apiUrl: SERVER, token: "gzs1_short", remember: false, user: OWNER });
+    r.rerender();
+    await settle();
+    expect(h.rebind).not.toHaveBeenCalled();
+    // 자동 로그인을 켜고 다시 로그인하면 묶는다
+    await saveSession({ apiUrl: SERVER, token: "gzs1_long", remember: true, user: OWNER });
+    r.rerender();
+    await settle();
+    expect(h.rebind).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("인터넷이 끊긴 채 로그아웃 (서버에 알리지 못한 세션)", () => {
