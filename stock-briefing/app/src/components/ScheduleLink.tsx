@@ -3,7 +3,7 @@ import React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useFeature } from "@/api/hooks";
 import { sentence } from "@/lib/a11y";
-import { freshCount, SCHEDULE_LINK, SCHEDULE_LINK_SPEECH, scheduleFilingsView } from "@/lib/filingAlerts";
+import { freshCount, SCHEDULE_LINK, SCHEDULE_LINK_HINT, scheduleFilingsView } from "@/lib/filingAlerts";
 import { useFilingViewed } from "@/lib/filingViewed";
 import { useCachedSchedule } from "@/lib/scheduleQuery";
 import { useChunkRow } from "@/lib/useChunkRow";
@@ -14,6 +14,8 @@ import { font, space, touch, useTheme } from "@/theme";
  * 누르는 줄 44dp 이상, 글자색 accent·굵기 600. 새 공시(서버가 처음 본 뒤 24시간 · 이 기기에서 아직 펼쳐 보지 않음)가 있으면 오른쪽에 흐린 '· 새 공시 2건'
  * ('·'는 링크 글 묶음 끝에 붙여 200% 에서 둘째 줄이 '·'로 시작하지 않게, 묶음 안 공백은 줄바꿈 없는 공백) —
  * '일정·공시' 화면을 이미 받아 둔 경우에만 센다 (이 줄 때문에 새 요청을 만들지 않음). filingAlerts 가 꺼져 있으면 붙이지 않는다
+ * (부르는 쪽도 filingAlerts 가 꺼져 있으면 이 줄을 그리지 않는다 — 그 화면이 계좌 상세 카드와 같은 배당락일 카드뿐이라).
+ * 화면 읽기 이름은 보이는 글 그대로 '일정·공시 모두 보기[, 새 공시 2건]'(음성 명령으로 보이는 글을 말해도 맞게), 뜻은 힌트 '보유 종목 일정과 공시 화면 열기'
  */
 export function ScheduleLink() {
   const t = useTheme();
@@ -29,7 +31,8 @@ export function ScheduleLink() {
     <Pressable
       onPress={() => router.push("/schedule")}
       accessibilityRole="button"
-      accessibilityLabel={sentence([SCHEDULE_LINK_SPEECH, count])}
+      accessibilityLabel={sentence([SCHEDULE_LINK, count])}
+      accessibilityHint={SCHEDULE_LINK_HINT}
       style={({ pressed }) => [styles.row, { minHeight: touch.min, borderTopColor: t.line, backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}
     >
       {/* 좁은 칸·큰 글씨는 묶음째 줄바꿈 (다가오는 일정 줄과 같은 규칙) */}

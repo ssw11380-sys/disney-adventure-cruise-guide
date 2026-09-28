@@ -1,9 +1,10 @@
-import type { FilingAlertItem, ScheduleFilingItem, ScheduleFilings } from "@/api/types";
+import type { FilingAlertItem, HoldingSchedule, ScheduleFilingItem, ScheduleFilings } from "@/api/types";
 import { sentence, speakClock } from "@/lib/a11y";
 import { speakDay } from "@/lib/accountSinceLast";
 import { inQuietHours, type NotifyPrefs } from "@/lib/briefingDigest";
+import type { EventsView } from "@/lib/holdingEvents";
 import { mdw } from "@/lib/marketSummary";
-import { nyOffsetByRule } from "@/lib/marketTime";
+import { isKrCode, nyOffsetByRule } from "@/lib/marketTime";
 
 /**
  * 3-38 새 공시 알림·일정 화면 (플래그 filingAlerts·holdingSchedule) 순수 함수 — React Native 를 불러오지 않는다 (테스트·백그라운드 태스크).
@@ -14,10 +15,16 @@ import { nyOffsetByRule } from "@/lib/marketTime";
 // ── 문구 ──────────────────────────────────────────────────────────
 
 export const SCHEDULE_TITLE = "일정·공시";
+/** '일정·공시' 화면이 꺼져 있고(holdingSchedule) 공시 알림만 켜져 있을 때 알림으로 온 화면의 제목 (최근 3일 새 공시만) */
+export const ALERTS_TITLE = "새 공시";
 export const SCHEDULE_LINK = "일정·공시 모두 보기";
-export const SCHEDULE_LINK_SPEECH = "보유 종목 일정과 공시 모두 보기";
+/** 링크의 화면 읽기 이름은 보이는 글(SCHEDULE_LINK) 그대로 — 음성 명령으로 보이는 글을 말해도 맞게(label-in-name). 뜻은 힌트로 */
+export const SCHEDULE_LINK_HINT = "보유 종목 일정과 공시 화면 열기";
 export const SCHEDULE_OFF = "지금은 일정·공시를 볼 수 없습니다";
+/** 받는 중 한 줄 — 앱이 아는 서버 플래그로 (scheduleLoadingText) */
+export const SCHEDULE_LOADING = "일정·공시를 받는 중…";
 export const EVENTS_LOADING = "일정을 받는 중…";
+export const FILINGS_LOADING = "공시를 받는 중…";
 /** 실적 발표일(holdingEarnings)이 꺼져 있고 미국 보유가 있을 때 '다가오는 일정' 카드 작은 글 */
 export const EARNINGS_AFTER_FILING = "미국 실적은 발표된 뒤 공시(8-K 2.02)로 보입니다.";
 export const FILINGS_HEAD = "최근 공시 (미국)";
@@ -32,14 +39,22 @@ export const TITLE_NOTE = "공시 제목은 SEC 서식과 항목 번호를 우�
 export const STALE_NEVER = "SEC 공시 확인이 아직 되지 않았습니다. 서버가 다시 확인하면 채워집니다.";
 export const NEW_CHIP = "새 공시";
 export const EXPAND_HINT = "누르면 자세히";
+/** 펼친 줄의 힌트 */
+export const COLLAPSE_HINT = "누르면 접기";
 export const ITEMS_HEAD = "들어 있는 항목";
 export const OPEN_ORIGINAL = "SEC 원문 보기 (영어)";
 export const OPEN_ORIGINAL_SPEECH = "SEC 원문 보기, 영어, 브라우저로 열림";
 export const OPEN_FAILED = "원문을 열지 못했습니다.";
 export const KR_HEAD = "한국 공시";
+/** 설정 '공시 알림' 줄의 DART 안내 (알림 설정이라 '알림은') */
 export const KR_NO_KEY = "한국 공시 알림은 DART 키가 있어야 받을 수 있습니다.";
+/** '일정·공시' 화면 한국 공시 칸 (목록 화면이라 '공시는' — 키가 없으면 종목 브리핑도 국내 공시를 받지 않는다) */
+export const KR_SCREEN_NO_KEY = "한국 공시는 DART 키가 있어야 받을 수 있습니다.";
 export const KR_NOT_YET = "한국 공시 알림은 다음 단계에서 넣습니다.";
-/** 한국 공시 칸 둘째 줄 — 계좌 상세 '오늘 일정' 카드의 '최근 공시 (보유 국내 종목, 3일)'이 이 화면에 없는 까닭을 밝힌다 */
+/**
+ * 한국 공시 칸 둘째 줄 — 계좌 상세 '오늘 일정' 카드의 '최근 공시 (보유 국내 종목, 3일)'이 이 화면에 없는 까닭을 밝힌다.
+ * DART 키가 있는 서버(kr notYet)에서만 — 키가 없으면 종목 브리핑이 국내 공시를 받지 않아 그 카드도 늘 '없음'이다 (3-38 리뷰 3)
+ */
 export const KR_IN_ACCOUNT = "보유 국내 종목의 최근 공시(3일)는 계좌 브리핑 상세의 '오늘 일정' 카드에서 볼 수 있습니다.";
 export const SETTING_TITLE = "공시 알림";
 export const SETTING_ABOUT = "보유 미국 종목에 새 SEC 공시(실적 발표·분기 보고서 등)가 올라오면 알립니다.";
@@ -67,6 +82,15 @@ export function filingsSub(days: number): string {
 }
 export function filingsNone(days: number): string {
   return `최근 ${days}일 안에 올라온 공시가 없습니다.`;
+}
+/** 알림으로 온 '새 공시' 화면(ALERTS_TITLE)의 공시 칸 — 서버 알림 목록 기간(/api/filings/alerts?days=3) */
+export const ALERT_DAYS = 3;
+/**
+ * '새 공시' 화면 공시 칸의 없음 — 기준 잡기 줄(처음 확인할 때 이미 있던 공시)은 빠지므로 '새 공시'라고 밝힌다
+ * (아래 줄은 '보유 미국 종목 · 최근 3일 · SEC' 그대로 — 화면 제목 '새 공시'가 밝히고, 폰 글자 200% 에서 '· SEC'가 홀로 줄을 시작하지 않게)
+ */
+export function alertsNone(days: number): string {
+  return `최근 ${days}일 안에 새 공시가 없습니다.`;
 }
 export function settingQuiet(start: string, end: string): string {
   return `조용한 시간(${start}~${end})에 올라온 공시는 조용한 시간이 끝난 뒤 한 번에 알립니다.`;
@@ -223,7 +247,7 @@ export interface FilingsView {
  * '최근 공시 (미국)' 칸의 글 (설계 2.2 ②). viewed = 이 기기에서 펼쳐 본 접수 번호 — '새 공시' 칩은 서버 isNew 이고 아직 펼쳐 보지 않은 줄에만.
  * 미국 보유 종목이 없으면(확인 0 · 대상 아님만) '미국 보유 종목이 없어 …'
  */
-export function scheduleFilingsView(f: ScheduleFilings, viewed: ReadonlySet<string> = new Set(), days = FILING_DAYS): FilingsView {
+export function scheduleFilingsView(f: ScheduleFilings, viewed: ReadonlySet<string> = new Set(), days = FILING_DAYS, mode: "schedule" | "alerts" = "schedule"): FilingsView {
   const all = f.items.map((item) => {
     const isNew = item.isNew && !viewed.has(item.accession);
     return { item, line: filingLine(item, isNew), isNew };
@@ -239,13 +263,14 @@ export function scheduleFilingsView(f: ScheduleFilings, viewed: ReadonlySet<stri
     notCoveredNote(f.notCovered),
   ].filter((x): x is string => x !== null);
   const at = stamp(f.lastOkAt);
+  const alerts = mode === "alerts";
   return {
     title: FILINGS_HEAD,
     sub: filingsSub(days),
     lines,
     more: all.length - lines.length + Math.max(0, f.more),
-    // 미국 보유가 ETF·ETN 뿐이면 '없어'가 아니라 '확인하는 종목이 없습니다' (아래 대상 아님 글이 이유를 밝힌다)
-    empty: all.length ? null : noUs ? (f.notCovered.length ? FILINGS_NONE_COVERED : FILINGS_NO_US) : filingsNone(days),
+    // 미국 보유가 ETF·ETN 뿐이면 '없어'가 아니라 '확인하는 종목이 없습니다' (아래 대상 아님 글이 이유를 밝힌다). 알림 목록('새 공시' 화면)은 보유 여부를 모른다
+    empty: all.length ? null : alerts ? alertsNone(days) : noUs ? (f.notCovered.length ? FILINGS_NONE_COVERED : FILINGS_NO_US) : filingsNone(days),
     notes,
     basis: [at ? `${at.text} 기준` : null, "출처 SEC EDGAR"].filter((x): x is string => x !== null).join(" · "),
     basisSpeech: sentence([at ? `${at.speech} 기준` : null, "출처 SEC EDGAR"]),
@@ -266,6 +291,62 @@ export function scheduleFailedText(eventsOn: boolean, filingsOn: boolean): strin
   if (eventsOn && !filingsOn) return EVENTS_FAILED_SCREEN;
   if (filingsOn && !eventsOn) return FILINGS_FAILED;
   return SCHEDULE_FAILED;
+}
+
+/** 받는 중 한 줄 (실패 글과 같은 규칙 — 공시가 꺼져 있으면 '일정을', 일정이 꺼져 있으면 '공시를', 모르면 둘 다) */
+export function scheduleLoadingText(eventsOn: boolean, filingsOn: boolean): string {
+  if (eventsOn && !filingsOn) return EVENTS_LOADING;
+  if (filingsOn && !eventsOn) return FILINGS_LOADING;
+  return SCHEDULE_LOADING;
+}
+
+/** 화면 제목: '일정·공시' 화면이 꺼져 있고 공시 알림만 켜져 있으면(알림으로 옴) '새 공시' */
+export function scheduleScreenTitle(scheduleOn: boolean, filingsOn: boolean): string {
+  return !scheduleOn && filingsOn ? ALERTS_TITLE : SCHEDULE_TITLE;
+}
+
+/** 계좌 상세 '다가오는 일정'의 받지 못함 글 끝 (저장본이라 다음 브리핑 때) */
+export const AGAIN_BRIEFING = "다음 브리핑 때 다시 받습니다";
+/** 이 화면은 열 때 받는다 — 서버는 받지 못한 결과를 캐시하지 않고, 앱은 곧바로 다시 묻는다 (lib/scheduleQuery scheduleStaleMs) */
+export const AGAIN_SCREEN = "화면을 다시 열면 다시 받습니다";
+
+/** '다가오는 일정'의 받지 못함 글을 이 화면에 맞게 (AGAIN_BRIEFING → AGAIN_SCREEN) */
+export function screenRetryView(v: EventsView): EventsView {
+  const fix = (t: string) => t.split(AGAIN_BRIEFING).join(AGAIN_SCREEN);
+  return { ...v, empty: v.empty === null ? null : fix(v.empty), notes: v.notes.map(fix), headSpeech: fix(v.headSpeech) };
+}
+
+/**
+ * '미국 실적은 발표된 뒤 공시(8-K 2.02)로 보입니다.'를 붙일지: 이 화면에 공시 칸이 있고 그 칸이 확인하는 미국 종목이 있을 때만
+ * (미국 보유가 ETF·ETN 뿐이면 공시 칸이 '확인하는 종목이 없습니다'라 붙이지 않는다 — 3-38 리뷰 3)
+ */
+export function filingsCoverUs(f: ScheduleFilings | null | undefined): boolean {
+  return !!f && (f.watched > 0 || f.failed.length > 0 || f.pending.length > 0);
+}
+
+/** 서버 알림 목록(/api/filings/alerts)을 공시 칸 모양으로 — '새 공시' 화면(ALERTS_TITLE)이 쓴다. 펼친 항목 풀이는 알림 목록에 없어 비운다 */
+export function alertsAsFilings(items: readonly FilingAlertItem[]): ScheduleFilings {
+  return {
+    items: items.map((i) => ({ ...i, detail: [], note: null, isNew: false })),
+    more: 0,
+    watched: 0,
+    notCovered: [],
+    failed: [],
+    pending: [],
+    lastOkAt: null,
+    warning: null,
+  };
+}
+
+/** 받은 '일정·공시'에 받지 못한 칸·종목이 있는지 (있으면 화면을 다시 열 때 곧바로 다시 묻는다) */
+export function scheduleHasFailure(s: HoldingSchedule | undefined): boolean {
+  if (!s) return false;
+  return !!s.eventsFailed || !!s.filingsFailed || !!(s.events && (s.events.failed.length > 0 || s.events.earningsFailed));
+}
+
+/** 받아 둔 위젯 응답의 종목(c 코드 · qty 수량)에 보유(수량 > 0) 미국 종목이 있는지 — 없으면 공시 알림이 올 일이 없다 */
+export function holdsUs(stocks: readonly { c: string; qty: number | null }[] | null | undefined): boolean {
+  return !!stocks?.some((s) => !isKrCode(s.c) && (s.qty ?? 0) > 0);
 }
 
 // ── 알림 ──────────────────────────────────────────────────────────
@@ -321,12 +402,21 @@ export interface FilingPlan {
 }
 
 /**
+ * 종목별 알림에서 끈 종목인지: 그 회사(CIK)의 보유 코드(서버 codes — GOOGL·GOOG)를 모두 껐을 때만 조용히.
+ * 하나라도 켜져 있으면 그 종목의 공시이기도 하므로 알린다. 예전 서버(codes 없음)는 대표 코드 하나로
+ */
+function mutedAll(i: FilingAlertItem, muted: ReadonlySet<string>): boolean {
+  const codes = i.codes?.length ? i.codes : [i.code];
+  return codes.every((c) => muted.has(c));
+}
+
+/**
  * 알림 규칙 (설계 6.2, 표 테스트):
  *  1. 기준을 아직 안 잡음(이 기기 첫 확인) → 접수 30분이 지난 것은 '본 것'(켜자마자 며칠 치가 쏟아지지 않게), 30분 안의 것은 아래 규칙대로 —
  *     첫 확인이 곧 첫 새 공시일 때(기능을 켠 뒤 앱을 열지 않은 기기) 그 공시가 사라지지 않게
  *  2. 이미 본 접수 번호 → 건너뜀
  *  3. 접수 시각(없으면 서버가 처음 본 시각)이 24시간보다 오래됨 → 조용히 '본 것'
- *  4. 이 기기 '공시 알림' 끔 · 종목별 알림에서 끈 종목 → 조용히 '본 것' (다시 켰을 때 밀린 것이 쏟아지지 않게)
+ *  4. 이 기기 '공시 알림' 끔 · 종목별 알림에서 끈 종목(같은 회사를 두 코드로 가지면 둘 다 껐을 때) → 조용히 '본 것' (다시 켰을 때 밀린 것이 쏟아지지 않게)
  *  5. 조용한 시간이면 → 아무것도 적지 않고 미룸 (끝난 뒤 첫 확인에서 3번 규칙 안의 것만 한 번에)
  *  6. 남은 것 → 알림 1건, 모두 '본 것'
  */
@@ -345,7 +435,7 @@ export function planFilingNotification(input: FilingPlanInput): FilingPlan {
   const send: FilingAlertItem[] = [];
   for (const i of fresh) {
     const ref = refOf(i);
-    if (Number.isNaN(ref) || now - ref > ALERT_MAX_AGE_MS || !input.enabled || muted.has(i.code)) quiet.push(i.accession);
+    if (Number.isNaN(ref) || now - ref > ALERT_MAX_AGE_MS || !input.enabled || mutedAll(i, muted)) quiet.push(i.accession);
     else send.push(i);
   }
   if (send.length && inQuietHours(input.prefs, input.now)) return { ...none, markSeen: [...base, ...quiet], deferred: true };
@@ -371,10 +461,18 @@ function span(ms: number): string {
   return h ? `${h}시간${m ? ` ${m}분` : ""}` : `${m}분`;
 }
 
-/** '마지막 공시 알림 7/30(목) 07:03 · SEC에 올라온 뒤 1시간 59분' (기록이 없으면 null) */
+/**
+ * '마지막 공시 알림 7/30(목) 07:03 · SEC에 올라온 뒤 1시간 59분' (기록이 없으면 null).
+ * 여러 건을 묶어 알리면 기록이 같은 알린 시각으로 최신 공시부터 붙는다 — 마지막 묶음에서 가장 늦게 올라온(가장 최신) 공시로 잰다
+ * (묶음의 가장 오래된 공시로 재면 '20분 안' 기준을 확인할 때 늦은 시간이 부풀려 보였다 — 3-38 리뷰 3)
+ */
 export function lastAlertLine(log: readonly FilingLogEntry[]): string | null {
-  const last = log[log.length - 1];
-  if (!last) return null;
+  const tail = log[log.length - 1];
+  if (!tail) return null;
+  const accOf = (e: FilingLogEntry) => (e.acceptedAt ? Date.parse(e.acceptedAt) : NaN);
+  const last = log
+    .filter((e) => e.notifiedAt === tail.notifiedAt)
+    .reduce((best, e) => (Number.isNaN(accOf(best)) || accOf(e) > accOf(best) ? e : best), tail);
   const t = Date.parse(last.notifiedAt);
   if (Number.isNaN(t)) return null;
   const k = new Date(t + 9 * 3_600_000).toISOString();

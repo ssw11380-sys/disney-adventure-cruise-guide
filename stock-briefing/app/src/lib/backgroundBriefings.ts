@@ -152,12 +152,12 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
     // 두 시장이 모두 닫혀 있으면 2시간에 한 번만 서버에 묻는다 (휴장 중 위젯 트래픽을 줄이려고, 3-16).
     // 보유 종목의 연장 세션(미국 프리·애프터·주간거래 등, 칩의 ext — widgetExtended)이 열려 있으면 장중처럼 묻는다 (위젯 리뷰 1).
     // 앞선 위젯 갱신(이 작업·위젯 주기·크기 변경·↻)이 실패한 채면 장 상태와 상관없이 묻는다 — '갱신 실패'가 휴장 2시간 동안 남지 않게 (위젯 2차)
-    // 3-38: 알림을 켠 기기이고 새 공시 알림이 켜져 있으면 SEC 접수 시간(미국 동부 평일 06:00~22:59)에는 건너뛰지 않는다 — 미국 휴장이지만 SEC 는 받는 때
-    // (성금요일 · 금요일 20:00~22:59 동부 · 한국 휴일 밤)에도 공시 알림이 2시간씩 늦지 않게 (filingWatchDue)
+    // 3-38: 알림을 켠 기기이고 새 공시 알림이 켜져 있고 보유 미국 종목이 있으면 SEC 접수 시간(미국 동부 평일 06:00~22:59)에는 건너뛰지 않는다 —
+    // 미국 휴장이지만 SEC 는 받는 때(성금요일 · 금요일 20:00~22:59 동부 등)에도 공시 알림이 2시간씩 늦지 않게 (filingWatchDue — 국내 종목만 가졌으면 지금처럼 건너뜀)
     const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
     const cached = await readCachedPayload();
     const now = Date.now();
-    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, now) && !(local && (await filingWatchDue(now)))) {
+    if ((await pendingRetry()) === null && shouldSkipFetch(cached ? { at: cached.at, market: payloadMarket(cached.body) } : null, now) && !(local && (await filingWatchDue(now, cached?.body.stocks)))) {
       await logWidgetRefresh("background", "skipped");
       return BackgroundTask.BackgroundTaskResult.Success;
     }

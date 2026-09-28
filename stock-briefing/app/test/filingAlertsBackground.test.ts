@@ -120,12 +120,19 @@ describe("백그라운드 확인의 새 공시 알림", () => {
 
 describe("휴장 건너뛰기와 SEC 접수 시간 (3-38 리뷰 — 미국 휴장이지만 SEC 는 공시를 받는 때)", () => {
   const API = "https://server.test";
+  /** 보유 종목 (위젯 응답 모양) — 기본은 미국 MSFT 3주 + 삼성전자 */
+  const US = { c: "MSFT", n: "마이크로소프트", qty: 3, avg: 400, q: null, e: null };
+  const KR = { c: "005930", n: "삼성전자", qty: 10, avg: 70_000, q: null, e: null };
+  let held: unknown[] = [US, KR];
   /** 두 시장·연장 세션이 모두 닫힌 칩으로 10분 전에 받아 둔 응답 (다음 개장은 이틀 뒤) → 지금 규칙이면 최대 2시간 건너뜀 */
   const closedCache = (now: number) =>
     store.set(
       "widget.payload",
-      JSON.stringify({ at: now - 10 * 60_000, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: '"c"', body: { v: 1, market: { label: "휴장", open: false, nextChangeAt: new Date(now + 2 * 86_400_000).toISOString() }, stocks: [], briefings: [], latestIds: [] } }),
+      JSON.stringify({ at: now - 10 * 60_000, apiUrl: API, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: '"c"', body: { v: 1, market: { label: "휴장", open: false, nextChangeAt: new Date(now + 2 * 86_400_000).toISOString() }, stocks: held, briefings: [], latestIds: [] } }),
     );
+  beforeEach(() => {
+    held = [US, KR];
+  });
   /** 앱이 마지막으로 받은 서버 플래그 (기기 저장 react-query 캐시) */
   const flags = (on: boolean) => store.set("rq.cache", JSON.stringify({ clientState: { queries: [{ queryKey: [API, "features"], state: { data: { features: { filingAlerts: on } } } }] } }));
   const at = (iso: string) => {
@@ -170,6 +177,26 @@ describe("휴장 건너뛰기와 SEC 접수 시간 (3-38 리뷰 — 미국 휴�
     expect(await skipped()).toBe(true);
     // 같은 때 알림을 켠 기기는 묻는다 (위 규칙이 아니었다면 이것도 건너뛰었다)
     store.set("push.localMode", "1");
+    expect(await skipped()).toBe(false);
+  });
+
+  it("보유 미국 종목이 없으면(국내 종목만 · 미국은 관심 종목뿐) SEC 접수 시간이어도 지금처럼 건너뛴다 — 공시 알림이 올 일이 없다 (리뷰 3)", async () => {
+    const skipped = async () => {
+      asked.length = 0;
+      await runBriefingCheck();
+      return asked.length === 0;
+    };
+    flags(true);
+    // 평일 한국 저녁 20:30 = 수 07:30 EDT (SEC 접수 시간 · 두 시장 닫힘)
+    held = [KR];
+    at("2026-07-29T11:30:00Z");
+    expect(await skipped()).toBe(true);
+    held = [KR, { ...US, qty: null }, { ...US, c: "NVDA", qty: 0 }];
+    at("2026-07-29T11:30:00Z");
+    expect(await skipped()).toBe(true);
+    // 미국 종목을 가지면 묻는다
+    held = [KR, US];
+    at("2026-07-29T11:30:00Z");
     expect(await skipped()).toBe(false);
   });
 });

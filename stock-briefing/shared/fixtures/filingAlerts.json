@@ -31,6 +31,9 @@
     {
       "accession": "0001193125-26-323660",
       "code": "MSFT",
+      "codes": [
+        "MSFT"
+      ],
       "name": "마이크로소프트",
       "form": "10-K",
       "items": [],
@@ -48,6 +51,9 @@
     {
       "accession": "0001193125-26-323632",
       "code": "MSFT",
+      "codes": [
+        "MSFT"
+      ],
       "name": "마이크로소프트",
       "form": "8-K",
       "items": [
@@ -71,6 +77,9 @@
     {
       "accession": "0001046179-26-000459",
       "code": "TSM",
+      "codes": [
+        "TSM"
+      ],
       "name": "TSMC",
       "form": "6-K",
       "items": [],
@@ -88,6 +97,9 @@
     {
       "accession": "0001628280-26-049270",
       "code": "TSLA",
+      "codes": [
+        "TSLA"
+      ],
       "name": "테슬라",
       "form": "10-Q",
       "items": [],
@@ -105,6 +117,9 @@
     {
       "accession": "0001628280-26-049213",
       "code": "TSLA",
+      "codes": [
+        "TSLA"
+      ],
       "name": "테슬라",
       "form": "8-K",
       "items": [
@@ -128,6 +143,9 @@
     {
       "accession": "0001046179-26-000451",
       "code": "TSM",
+      "codes": [
+        "TSM"
+      ],
       "name": "TSMC",
       "form": "6-K",
       "items": [],
@@ -145,6 +163,9 @@
     {
       "accession": "0001046179-26-000447",
       "code": "TSM",
+      "codes": [
+        "TSM"
+      ],
       "name": "TSMC",
       "form": "6-K",
       "items": [],
@@ -162,6 +183,9 @@
     {
       "accession": "0001045810-26-000060",
       "code": "NVDA",
+      "codes": [
+        "NVDA"
+      ],
       "name": "엔비디아",
       "form": "8-K",
       "items": [
@@ -183,6 +207,9 @@
     {
       "accession": "0001628280-26-046717",
       "code": "TSLA",
+      "codes": [
+        "TSLA"
+      ],
       "name": "테슬라",
       "form": "8-K",
       "items": [
@@ -206,6 +233,9 @@
     {
       "accession": "0001046179-26-000381",
       "code": "TSM",
+      "codes": [
+        "TSM"
+      ],
       "name": "TSMC",
       "form": "6-K",
       "items": [],
@@ -223,6 +253,9 @@
     {
       "accession": "0001045810-26-000056",
       "code": "NVDA",
+      "codes": [
+        "NVDA"
+      ],
       "name": "엔비디아",
       "form": "8-K",
       "items": [
@@ -247,6 +280,9 @@
     {
       "accession": "0001193125-26-323660",
       "code": "MSFT",
+      "codes": [
+        "MSFT"
+      ],
       "name": "마이크로소프트",
       "form": "10-K",
       "items": [],
@@ -261,6 +297,9 @@
     {
       "accession": "0001193125-26-323632",
       "code": "MSFT",
+      "codes": [
+        "MSFT"
+      ],
       "name": "마이크로소프트",
       "form": "8-K",
       "items": [
@@ -325,18 +364,25 @@
   "texts": {
     "scheduleTitle": "일정·공시",
     "scheduleLink": "일정·공시 모두 보기",
-    "scheduleLinkSpeech": "보유 종목 일정과 공시 모두 보기",
+    "scheduleLinkHint": "보유 종목 일정과 공시 화면 열기",
     "scheduleOff": "지금은 일정·공시를 볼 수 없습니다",
+    "alertsTitle": "새 공시",
+    "scheduleLoading": "일정·공시를 받는 중…",
     "eventsLoading": "일정을 받는 중…",
+    "filingsLoading": "공시를 받는 중…",
     "earningsAfterFiling": "미국 실적은 발표된 뒤 공시(8-K 2.02)로 보입니다.",
     "filingsHead": "최근 공시 (미국)",
     "filingsSub": "보유 미국 종목 · 최근 30일 · SEC",
     "filingsNone": "최근 30일 안에 올라온 공시가 없습니다.",
+    "alertsNone": "최근 3일 안에 새 공시가 없습니다.",
     "filingsNoUs": "미국 보유 종목이 없어 공시를 확인하지 않습니다.",
     "filingsNoneCovered": "공시를 확인하는 미국 보유 종목이 없습니다.",
     "filingsFailed": "공시 목록을 받지 못했습니다. 화면을 다시 열면 다시 받습니다.",
     "scheduleFailed": "일정·공시를 받지 못했습니다. 화면을 다시 열면 다시 받습니다.",
     "eventsFailedScreen": "일정을 받지 못했습니다. 화면을 다시 열면 다시 받습니다.",
+    "retryEarnings": "실적 발표일을 받지 못했습니다. 화면을 다시 열면 다시 받습니다.",
+    "retryDividends": "배당 일정을 받지 못했습니다. 화면을 다시 열면 다시 받습니다.",
+    "retryStocks": "배당 일정을 받지 못한 종목: 테슬라 (화면을 다시 열면 다시 받습니다)",
     "titleNote": "공시 제목은 SEC 서식과 항목 번호를 우리말로 옮긴 것이며, 내용 요약이 아닙니다.",
     "notCovered": "공시를 확인하지 않는 종목: QQQ, SOXL (ETF·ETN) · ABCD (SEC 목록에 없음)",
     "stale": "SEC 공시 확인이 9/29 07:55 이후 되지 않았습니다. 서버가 다시 확인하면 채워집니다.",
@@ -346,12 +392,14 @@
     "basis": "9/29 08:40 기준 · 출처 SEC EDGAR",
     "newChip": "새 공시",
     "expandHint": "누르면 자세히",
+    "collapseHint": "누르면 접기",
     "itemsHead": "들어 있는 항목",
     "openOriginal": "SEC 원문 보기 (영어)",
     "openOriginalSpeech": "SEC 원문 보기, 영어, 브라우저로 열림",
     "openFailed": "원문을 열지 못했습니다.",
     "krHead": "한국 공시",
     "krNoKey": "한국 공시 알림은 DART 키가 있어야 받을 수 있습니다.",
+    "krScreenNoKey": "한국 공시는 DART 키가 있어야 받을 수 있습니다.",
     "krNotYet": "한국 공시 알림은 다음 단계에서 넣습니다.",
     "krInAccount": "보유 국내 종목의 최근 공시(3일)는 계좌 브리핑 상세의 '오늘 일정' 카드에서 볼 수 있습니다.",
     "settingTitle": "공시 알림",

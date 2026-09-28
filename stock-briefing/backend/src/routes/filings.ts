@@ -5,7 +5,10 @@ import { seoulDate, seoulIso } from "../lib/time.js";
 import type { FilingWatchService, ScheduleFilingItem, FilingStatus } from "../services/filingAlerts.js";
 import type { CollectedEvents, CollectInput } from "../services/holdingEvents.js";
 
-/** 화면 일정(배당락일) 캐시 — 보유 목록·실적 플래그가 바뀌면 버린다 (공시 목록은 늘 새로: 알림을 누르고 들어오면 방금 온 공시가 보이게) */
+/**
+ * 화면 일정(배당락일) 캐시 — 보유 목록·실적 플래그가 바뀌면 버린다 (공시 목록은 늘 새로: 알림을 누르고 들어오면 방금 온 공시가 보이게).
+ * 받지 못한 종목이 섞인 결과는 캐시하지 않는다 (eventsComplete)
+ */
 const EVENTS_CACHE_MS = 10 * 60_000;
 /** 화면 '최근 공시 (미국)' 기간·최대 줄 수 */
 export const SCHEDULE_FILING_DAYS = 30;
@@ -15,6 +18,11 @@ export const SCHEDULE_FILING_LIMIT = 60;
  * 이미 준비된 공시 목록과 함께 제때 답한다 (못 받은 종목은 일정 카드가 '받지 못함'으로 밝힘). 계좌 브리핑의 한도(20초)는 그대로
  */
 export const SCHEDULE_EVENTS_BUDGET_MS = 10_000;
+
+/** 일정을 모두 받았는지 (받지 못한 종목·실적 없음) — 이때만 10분 캐시 */
+export function eventsComplete(e: Pick<CollectedEvents, "failed" | "earningsFailed">): boolean {
+  return e.failed.length === 0 && !e.earningsFailed;
+}
 
 const alertsQuery = z.object({
   days: z.coerce.number("days 는 1~3").int("days 는 1~3").min(1, "days 는 1~3").max(3, "days 는 1~3").default(3),
@@ -74,7 +82,9 @@ export const filingRoutes: FastifyPluginAsync<{
       const t = now.getTime();
       if (eventsCache && eventsCache.key === key && t - eventsCache.at < EVENTS_CACHE_MS && t >= eventsCache.at) return { ...eventsCache.value, week: null };
       const value = await deps.events.collect({ holdings, today: seoulDate(now), asOf: seoulIso(now), earnings, budgetMs: SCHEDULE_EVENTS_BUDGET_MS });
-      eventsCache = { key, at: t, value };
+      // 받지 못한 종목·실적이 섞인 결과는 캐시하지 않는다 (3-38 리뷰 3) — 10초 한도로 끊긴 받기가 뒤에서 끝나면 화면을 다시 열 때 바로 채워지게
+      // (앱은 이때 '화면을 다시 열면 다시 받습니다'라고 쓰고 곧바로 다시 묻는다 — app/src/lib/scheduleQuery scheduleStaleMs)
+      if (eventsComplete(value)) eventsCache = { key, at: t, value };
       return { ...value, week: null };
     };
     const loadFilings = async (): Promise<ScheduleResponse["filings"]> => {

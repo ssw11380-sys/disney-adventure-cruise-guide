@@ -3,7 +3,7 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import type { FilingAlertItem } from "@/api/types";
 import { inQuietHours, type NotifyPrefs } from "@/lib/briefingDigest";
-import { inEdgarHours, planFilingNotification } from "@/lib/filingAlerts";
+import { holdsUs, inEdgarHours, planFilingNotification } from "@/lib/filingAlerts";
 import { addFilingSeen, appendFilingLog, filingAlertsEnabled, filingInit, readFilingSeen, setFilingInit, withFilingSeen } from "@/lib/filingSeen";
 import { persistedFeatureOn } from "@/lib/marketSummaryLoad";
 import { ensureFilingChannel, FILING_CHANNEL } from "@/lib/notifications";
@@ -83,12 +83,14 @@ export async function checkFilingIds(ids: readonly string[] | undefined, load: F
 
 /**
  * 백그라운드 확인이 휴장 건너뛰기(두 시장·연장 세션이 모두 닫히면 최대 2시간 — widgets/payload shouldSkipFetch)를 공시 때문에 하지 않을지.
- * SEC 접수 시간(미국 동부 평일 06:00~22:59)이고, 앱이 마지막으로 받은 서버 플래그(기기 저장본)에서 filingAlerts 가 켜져 있고, 이 기기 '공시 알림'이 켜져 있을 때 true.
- * 미국 증시는 쉬지만 SEC 는 공시를 받는 때(성금요일 · 금요일 20:00~22:59 동부 = 한국 토요일 오전 · 한국 휴일의 미국 애프터마켓 뒤)에도 15분 확인을 이어 가
+ * SEC 접수 시간(미국 동부 평일 06:00~22:59)이고, 받아 둔 위젯 응답에 보유(수량 > 0) 미국 종목이 있고(3-38 리뷰 3 — 국내 종목만 가진 사람은
+ * 공시 알림이 올 일이 없어 지금처럼 건너뛴다), 앱이 마지막으로 받은 서버 플래그(기기 저장본)에서 filingAlerts 가 켜져 있고, 이 기기 '공시 알림'이 켜져 있을 때 true.
+ * 두 시장과 보유 종목의 연장 세션이 모두 닫혔지만 SEC 는 공시를 받는 때(성금요일 · 금요일 20:00~22:59 동부 = 한국 토요일 오전 ·
+ * 미국 연장 세션이 끝난 뒤의 한국 휴일 오전 등 — 보유 미국 종목이 있으면 평일에는 프리·애프터마켓이 이미 이 시간을 덮는다)에도 15분 확인을 이어 가
  * '20분 안' 기준을 지키게. 부르는 쪽이 로컬 모드(알림을 켠 기기)인지 본다. 플래그를 모르거나 꺼져 있으면 false — 지금과 같다
  */
-export async function filingWatchDue(now: number): Promise<boolean> {
-  if (!inEdgarHours(now)) return false;
+export async function filingWatchDue(now: number, stocks: readonly { c: string; qty: number | null }[] | null | undefined): Promise<boolean> {
+  if (!inEdgarHours(now) || !holdsUs(stocks)) return false;
   if (!(await filingAlertsEnabled())) return false;
   const pairs = await AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, PERSIST_STORAGE_KEY]).catch(() => [] as [string, string | null][]);
   const m = new Map(pairs);

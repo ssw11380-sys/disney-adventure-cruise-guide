@@ -107,7 +107,13 @@ export interface WatchPlan {
 /** 알림·화면의 공시 한 줄 */
 export interface FilingItem {
   accession: string;
+  /** 대표 코드 (같은 CIK 를 여러 종목으로 가지면 등록 순 첫 종목) */
   code: string;
+  /**
+   * 이 회사(CIK)의 보유 코드 전부 (GOOGL·GOOG) — 앱이 종목별 알림 끄기를 판단할 때 쓴다 (3-38 리뷰 3: 대표 코드 하나만 보면
+   * GOOG 만 끈 사람은 알림이 계속 오고, GOOGL 만 끈 사람은 둘 다 조용해졌다)
+   */
+  codes: string[];
   name: string;
   form: string;
   items: string[];
@@ -529,6 +535,7 @@ export class FilingWatchService {
       out.push({
         accession: r.accession,
         code: w.code,
+        codes: [...w.codes],
         name: w.name,
         form: r.form,
         items,

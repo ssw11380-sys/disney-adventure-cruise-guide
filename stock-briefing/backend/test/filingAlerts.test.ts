@@ -144,6 +144,7 @@ describe("확인 작업", () => {
       {
         accession: "0001193125-26-323660",
         code: "MSFT",
+        codes: ["MSFT"],
         name: "마이크로소프트",
         form: "10-K",
         items: [],
@@ -158,6 +159,7 @@ describe("확인 작업", () => {
       {
         accession: "0001193125-26-323632",
         code: "MSFT",
+        codes: ["MSFT"],
         name: "마이크로소프트",
         form: "8-K",
         items: ["2.02", "9.01"],
@@ -211,6 +213,11 @@ describe("확인 작업", () => {
     const a = await svc.alerts({ days: 3, limit: 30 });
     expect(a.map((x) => `${x.code} ${x.accession}`)).toEqual(["MSFT 0001193125-26-323660", "MSFT 0001193125-26-323632"]);
     expect((await svc.status()).watched).toBe(3);
+    // 알파벳 줄에는 보유 코드 전부 (앱이 종목별 알림 끄기를 둘 다로 판단 — 3-38 리뷰 3)
+    const alphabet = (await svc.list({ days: 30, limit: 60 })).items.filter((i) => i.code === "GOOGL");
+    expect(alphabet.length).toBeGreaterThan(0);
+    for (const i of alphabet) expect(i.codes).toEqual(["GOOGL", "GOOG"]);
+    for (const i of a) expect(i.codes).toEqual(["MSFT"]);
   });
 
   it("ETF·ETN 은 확인하지 않고(SEC 호출 0), SEC 목록에 없으면 notFound, 한국 종목은 보지 않는다", async () => {

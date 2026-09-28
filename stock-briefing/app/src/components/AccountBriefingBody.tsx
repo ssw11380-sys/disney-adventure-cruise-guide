@@ -16,7 +16,7 @@ import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, localDay, summaryShownLines, summarySpeech, templateNote } from "@/lib/accountBriefing";
 import { EXPOSURE_ABOUT, exposureView } from "@/lib/accountExposure";
 import { QTY_HEAD, QTY_NONE, sinceLastView, sinceNone, WEIGHT_HEAD, WEIGHT_NONE } from "@/lib/accountSinceLast";
-import { eventsView } from "@/lib/holdingEvents";
+import { eventsView, type EventsView } from "@/lib/holdingEvents";
 // 묶음째 줄바꿈하는 줄: 묶음 사이를 글자 크기에 맞춰 넓힌다 (200% 에서 '·퀀티넘'처럼 붙어 보이지 않게) — 100% 4 · 130% 6 · 175% 이상 8
 import { useChunkRow } from "@/lib/useChunkRow";
 import { usHolidayWhen } from "@/lib/briefingDigest";
@@ -49,8 +49,11 @@ export function AccountBriefingBody({ numId, layout, title }: { numId: number | 
   const events = useFeature("holdingEvents", false);
   // 3-32 (플래그 numberBasis, 앱 fallback 꺼짐): 총 평가 카드 아래 '시세 기준' 한 줄 (저장한 quoteBasis 가 있는 브리핑만). 꺼지면 지금 그대로
   const quoteBasisOn = useFeature("numberBasis", false);
-  // 3-38 (플래그 holdingSchedule, 앱 fallback 꺼짐): '다가오는 일정'(없으면 '오늘 일정') 카드 맨 아래 '일정·공시 모두 보기' 줄. 꺼지면 지금 그대로
-  const schedule = useFeature("holdingSchedule", false);
+  // 3-38 (플래그 holdingSchedule, 앱 fallback 꺼짐): '다가오는 일정'(없으면 '오늘 일정') 카드 맨 아래 '일정·공시 모두 보기' 줄. 꺼지면 지금 그대로.
+  // 공시 알림(filingAlerts)이 꺼져 있으면 줄도 없다 — 그 화면이 이 카드와 같은 배당락일 카드뿐이라 (3-38 리뷰 3)
+  const scheduleOn = useFeature("holdingSchedule", false);
+  const scheduleFilings = useFeature("filingAlerts", false);
+  const schedule = scheduleOn && scheduleFilings;
   const flags = useFeatures();
   const q = useAccountBriefing(numId ?? 0, on && numId !== null);
   // 3-24 연결 오류의 '설정 열기'·칸 이름 문구 (플래그 emptyGuide, 꺼져 있으면 null — 지금 그대로)
@@ -728,10 +731,22 @@ function ScheduleCard({ s, asOf, footer = null }: { s: AccountSchedule; asOf: st
  * '10/29(목) 오전 5시 이후 · 마이크로소프트 실적 발표 (예정)'(실적 발표일을 넣었을 때만), 없으면 한 줄, 작은 글(뜻·받지 못한 것·국내 배당), 기준 시각·출처.
  * 누르는 곳 없음. 색 없음(등락이 아님). 좁은 칸·큰 글씨는 ' · ' 묶음째 줄바꿈. 화면 읽기는 제목 묶음·줄마다·기준 한 문장씩
  */
-export function UpcomingCard({ e, notes = [], footer = null }: { e: AccountEvents; notes?: readonly string[]; footer?: React.ReactNode }) {
+export function UpcomingCard({
+  e,
+  notes = [],
+  footer = null,
+  adjust,
+}: {
+  e: AccountEvents;
+  notes?: readonly string[];
+  footer?: React.ReactNode;
+  /** 3-38 '일정·공시' 화면: 받지 못한 글을 그 화면에 맞게 ('화면을 다시 열면 다시 받습니다') — 없으면 지금 그대로 */
+  adjust?: (v: EventsView) => EventsView;
+}) {
   const t = useTheme();
   const chunkRow = useChunkRow();
-  const view = eventsView(e);
+  const base = eventsView(e);
+  const view = adjust ? adjust(base) : base;
   // 3-38 '일정·공시' 화면이 덧붙이는 작은 글 (미국 실적은 공시로 보인다는 글) — 없으면 지금 그대로
   const v = notes.length ? { ...view, notes: [...view.notes, ...notes] } : view;
   // 묶음 끝 ' ·' 의 공백은 줄바꿈 없는 공백 — '·' 하나만 다음 줄 맨 앞에 남지 않게 (비중 두 줄과 같은 규칙)

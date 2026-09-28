@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FilingAlertItem, ScheduleFilingItem, ScheduleFilings } from "@/api/types";
+import type { AccountEvents, FilingAlertItem, HoldingSchedule, ScheduleFilingItem, ScheduleFilings } from "@/api/types";
 
 /**
  * 3-38 새 공시 알림 (플래그 filingAlerts) — 앱 순수 함수·기기 기록·알림 보내기.
@@ -32,7 +32,11 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   },
 }));
 
+vi.mock("@/api/hooks", () => ({ useApi: () => ({ baseUrl: "" }) }));
+
 const F = await import("@/lib/filingAlerts");
+const H = await import("@/lib/holdingEvents");
+const { scheduleStaleMs, SCHEDULE_STALE_MS } = await import("@/lib/scheduleQuery");
 const S = await import("@/lib/filingSeen");
 const { notifyFilings, checkFilingIds, filingRules } = await import("@/lib/filingNotify");
 const { routeForNotification, notificationNav } = await import("@/lib/notifications");
@@ -51,6 +55,8 @@ const PREFS = { quietEnabled: true, quietStart: "22:00", quietEnd: "07:00", mute
 const FULL = { digest: true, accountBriefing: false, ...PREFS };
 const MSFT_8K = FX.alerts.find((a) => a.form === "8-K")!;
 const MSFT_10K = FX.alerts.find((a) => a.form === "10-K")!;
+/** 일정 칸 (받지 못함 글을 바꿔 보는 시험용) */
+const EMPTY_EVENTS: AccountEvents = { days: 30, asOf: "2026-07-30T07:03:00+09:00", earnings: false, earningsFailed: false, kr: 0, us: 1, items: [], failed: [], conflicts: [], week: null };
 /** 알림 하나 만들기 (접수 시각을 바꿔 쓰는 시험용) */
 const alert = (over: Partial<FilingAlertItem>): FilingAlertItem => ({ ...MSFT_8K, ...over });
 
@@ -68,18 +74,26 @@ describe("문구 (공용 픽스처 texts 와 같음 — 서버가 같은 글을 
     expect({
       scheduleTitle: F.SCHEDULE_TITLE,
       scheduleLink: F.SCHEDULE_LINK,
-      scheduleLinkSpeech: F.SCHEDULE_LINK_SPEECH,
+      scheduleLinkHint: F.SCHEDULE_LINK_HINT,
       scheduleOff: F.SCHEDULE_OFF,
+      alertsTitle: F.ALERTS_TITLE,
+      scheduleLoading: F.SCHEDULE_LOADING,
       eventsLoading: F.EVENTS_LOADING,
+      filingsLoading: F.FILINGS_LOADING,
       earningsAfterFiling: F.EARNINGS_AFTER_FILING,
       filingsHead: F.FILINGS_HEAD,
       filingsSub: F.filingsSub(30),
       filingsNone: F.filingsNone(30),
+      alertsNone: F.alertsNone(3),
       filingsNoUs: F.FILINGS_NO_US,
       filingsNoneCovered: F.FILINGS_NONE_COVERED,
       filingsFailed: F.FILINGS_FAILED,
       scheduleFailed: F.SCHEDULE_FAILED,
       eventsFailedScreen: F.EVENTS_FAILED_SCREEN,
+      ...(() => {
+        const [retryEarnings, retryDividends, retryStocks] = F.screenRetryView({ ...H.eventsView(EMPTY_EVENTS), notes: [H.EARNINGS_FAILED, H.DIVIDENDS_FAILED, H.failedNote(["테슬라"])] }).notes;
+        return { retryEarnings, retryDividends, retryStocks };
+      })(),
       titleNote: F.TITLE_NOTE,
       notCovered: F.notCoveredNote([
         { code: "QQQ", name: "QQQ", reason: "etf" },
@@ -93,12 +107,14 @@ describe("문구 (공용 픽스처 texts 와 같음 — 서버가 같은 글을 
       basis: F.scheduleFilingsView({ items: [], more: 0, watched: 1, notCovered: [], failed: [], pending: [], lastOkAt: "2026-09-29T08:40:00+09:00", warning: null }).basis,
       newChip: F.NEW_CHIP,
       expandHint: F.EXPAND_HINT,
+      collapseHint: F.COLLAPSE_HINT,
       itemsHead: F.ITEMS_HEAD,
       openOriginal: F.OPEN_ORIGINAL,
       openOriginalSpeech: F.OPEN_ORIGINAL_SPEECH,
       openFailed: F.OPEN_FAILED,
       krHead: F.KR_HEAD,
       krNoKey: F.KR_NO_KEY,
+      krScreenNoKey: F.KR_SCREEN_NO_KEY,
       krNotYet: F.KR_NOT_YET,
       krInAccount: F.KR_IN_ACCOUNT,
       settingTitle: F.SETTING_TITLE,
@@ -215,6 +231,81 @@ describe("'최근 공시 (미국)' 칸", () => {
     expect(F.scheduleFailedText(true, false)).toBe(F.EVENTS_FAILED_SCREEN);
     expect(F.scheduleFailedText(false, true)).toBe(F.FILINGS_FAILED);
   });
+
+  it("받는 중 한 줄도 같은 규칙 (리뷰 3 — 공시도 함께 받는데 '일정을 받는 중…'이라고만 쓰던 것)", () => {
+    expect(F.scheduleLoadingText(true, true)).toBe("일정·공시를 받는 중…");
+    expect(F.scheduleLoadingText(false, false)).toBe("일정·공시를 받는 중…");
+    expect(F.scheduleLoadingText(true, false)).toBe("일정을 받는 중…");
+    expect(F.scheduleLoadingText(false, true)).toBe("공시를 받는 중…");
+  });
+
+  it("화면 제목: '일정·공시' 화면이 꺼져 있고 공시 알림만 켜져 있으면 '새 공시'", () => {
+    expect(F.scheduleScreenTitle(true, true)).toBe("일정·공시");
+    expect(F.scheduleScreenTitle(true, false)).toBe("일정·공시");
+    expect(F.scheduleScreenTitle(false, true)).toBe("새 공시");
+    expect(F.scheduleScreenTitle(false, false)).toBe("일정·공시");
+  });
+
+  it("'새 공시' 화면(알림 목록): 줄은 같은 글, 칩·항목 풀이 없음, 아래 줄 '최근 3일', 없으면 '최근 3일 안에 새 공시가 없습니다.'", () => {
+    const f = F.alertsAsFilings(FX.alerts);
+    expect(f.items.map((i) => [i.accession, i.detail, i.note, i.isNew])).toEqual(FX.alerts.map((a) => [a.accession, [], null, false]));
+    const v = F.scheduleFilingsView(f, new Set(), F.ALERT_DAYS, "alerts");
+    expect(v).toMatchObject({ sub: "보유 미국 종목 · 최근 3일 · SEC", empty: null, fresh: 0, notes: [F.TITLE_NOTE], basis: "출처 SEC EDGAR" });
+    expect(v.lines.map((l) => l.line.head)).toEqual(FX.alerts.map((a) => FX.app.lines.find((l) => l.accession === a.accession)!.head));
+    // 보유 여부를 모르므로 '미국 보유 종목이 없어 …'가 아니라 새 공시가 없다고만
+    expect(F.scheduleFilingsView(F.alertsAsFilings([]), new Set(), F.ALERT_DAYS, "alerts")).toMatchObject({ empty: "최근 3일 안에 새 공시가 없습니다.", notes: [] });
+  });
+
+  it("'미국 실적은 … 공시로 보입니다'는 공시 칸이 확인하는 미국 종목이 있을 때만 (ETF 뿐이면 없음 — 리뷰 3)", () => {
+    expect(F.filingsCoverUs(base)).toBe(true);
+    expect(F.filingsCoverUs(null)).toBe(false);
+    expect(F.filingsCoverUs({ ...base, items: [], watched: 0, notCovered: [{ code: "QQQ", name: "QQQ", reason: "etf" }] })).toBe(false);
+    // 아직 확인 전 · 받지 못함이어도 확인하는 종목이다
+    expect(F.filingsCoverUs({ ...base, watched: 0, pending: [{ code: "O", name: "리얼티인컴" }] })).toBe(true);
+    expect(F.filingsCoverUs({ ...base, watched: 0, failed: [{ code: "TSLA", name: "테슬라" }] })).toBe(true);
+  });
+
+  it("'다가오는 일정'의 받지 못함 글을 이 화면에 맞게 — '다음 브리핑 때' → '화면을 다시 열면' (리뷰 3)", () => {
+    const failed = H.eventsView({ ...EMPTY_EVENTS, failed: [{ code: "MSFT", name: "마이크로소프트" }] });
+    expect(failed.empty).toBe(H.EVENTS_FAILED);
+    const v = F.screenRetryView(failed);
+    expect(v.empty).toBe(F.EVENTS_FAILED_SCREEN);
+    expect(v.headSpeech).toBe(`다가오는 일정, 보유 종목 30일 안, ${F.EVENTS_FAILED_SCREEN}`);
+    const some = F.screenRetryView(H.eventsView({ ...EMPTY_EVENTS, us: 2, failed: [{ code: "TSLA", name: "테슬라" }] }));
+    expect(some.notes).toContain("배당 일정을 받지 못한 종목: 테슬라 (화면을 다시 열면 다시 받습니다)");
+    expect(JSON.stringify(some)).not.toContain(F.AGAIN_BRIEFING);
+    // 받지 못한 것이 없으면 그대로
+    const ok = H.eventsView(EMPTY_EVENTS);
+    expect(F.screenRetryView(ok)).toEqual(ok);
+  });
+
+  it("받지 못한 칸·종목이 있으면 화면을 다시 열 때 곧바로 다시 묻는다 (staleTime 0) — 나머지는 1분 (리뷰 3)", () => {
+    const ok: HoldingSchedule = { asOf: "2026-07-30T07:03:00+09:00", events: EMPTY_EVENTS, filings: base, kr: { filings: "noDartKey" } };
+    expect(F.scheduleHasFailure(ok)).toBe(false);
+    expect(F.scheduleHasFailure(undefined)).toBe(false);
+    expect(scheduleStaleMs(ok)).toBe(SCHEDULE_STALE_MS);
+    expect(scheduleStaleMs(undefined)).toBe(SCHEDULE_STALE_MS);
+    const bads: HoldingSchedule[] = [
+      { ...ok, events: null, eventsFailed: true },
+      { ...ok, filings: null, filingsFailed: true },
+      { ...ok, events: { ...EMPTY_EVENTS, failed: [{ code: "MSFT", name: "마이크로소프트" }] } },
+      { ...ok, events: { ...EMPTY_EVENTS, earnings: true, earningsFailed: true } },
+    ];
+    for (const bad of bads) {
+      expect(F.scheduleHasFailure(bad)).toBe(true);
+      expect(scheduleStaleMs(bad)).toBe(0);
+    }
+    // 공시 칸의 '받지 못한 종목'은 서버의 다음 확인 때 다시 받는다 (화면을 다시 열어도 같음) — 곧바로 다시 묻지 않는다
+    expect(scheduleStaleMs({ ...ok, filings: { ...base, failed: [{ code: "TSLA", name: "테슬라" }] } })).toBe(SCHEDULE_STALE_MS);
+  });
+
+  it("보유 미국 종목 판단 (받아 둔 위젯 응답 — 수량 > 0 인 미국 코드)", () => {
+    expect(F.holdsUs([{ c: "MSFT", qty: 3 }])).toBe(true);
+    expect(F.holdsUs([{ c: "005930", qty: 10 }, { c: "0126Z0", qty: 1 }])).toBe(false);
+    expect(F.holdsUs([{ c: "MSFT", qty: null }, { c: "NVDA", qty: 0 }])).toBe(false);
+    expect(F.holdsUs([])).toBe(false);
+    expect(F.holdsUs(undefined)).toBe(false);
+  });
 });
 
 describe("알림 문구 (설계 2.4)", () => {
@@ -267,6 +358,17 @@ describe("알림 규칙 planFilingNotification (표)", () => {
     expect(plan({ prefs: { ...PREFS, mutedCodes: ["MSFT"] } })).toMatchObject({ message: null, markSeen: FX.alerts.map((a) => a.accession) });
     expect(plan({ enabled: false })).toMatchObject({ message: null, markSeen: FX.alerts.map((a) => a.accession) });
   });
+  it("같은 회사를 두 코드로 가짐(GOOGL·GOOG — 서버 codes): 둘 다 껐을 때만 조용히, 하나만 끄면 어느 쪽이든 알림 · 예전 서버(codes 없음)는 대표 코드로 (리뷰 3)", () => {
+    const goog = alert({ accession: "0001652044-26-000100", code: "GOOGL", codes: ["GOOGL", "GOOG"], name: "알파벳 A" });
+    const one = (mutedCodes: string[]) => plan({ items: [goog], prefs: { ...PREFS, mutedCodes } }).message;
+    expect(one([])).not.toBeNull();
+    expect(one(["GOOG"])).not.toBeNull();
+    expect(one(["GOOGL"])).not.toBeNull();
+    expect(one(["GOOGL", "GOOG"])).toBeNull();
+    const { codes: _c, ...legacy } = goog;
+    expect(plan({ items: [legacy], prefs: { ...PREFS, mutedCodes: ["GOOGL"] } }).message).toBeNull();
+    expect(plan({ items: [legacy], prefs: { ...PREFS, mutedCodes: ["GOOG"] } }).message).not.toBeNull();
+  });
   it("조용한 시간(22:00~07:00)은 미룸(아무것도 적지 않음 — 24시간 넘은 것만 적음), 07:00 이 되면 보냄 · 시작=끝이면 조용한 시간 없음 · 조용한 시간을 끈 사용자는 바로", () => {
     const old = alert({ accession: "0001045810-26-000060", acceptedAt: "2026-07-27T00:00:00Z" });
     const at0659 = new Date("2026-07-29T21:59:00Z");
@@ -288,6 +390,22 @@ describe("기기 기록 · 보내기", () => {
     expect(await notifyFilings([MSFT_10K, MSFT_8K], { prefs: FULL, now: NOW })).toBe(0);
     expect(await S.readFilingLog()).toEqual([{ accession: MSFT_8K.accession, acceptedAt: MSFT_8K.acceptedAt, notifiedAt: "2026-07-29T22:03:00.000Z" }]);
     expect(F.lastAlertLine(await S.readFilingLog())).toBe("마지막 공시 알림 7/30(목) 07:03 · SEC에 올라온 뒤 1시간 58분");
+  });
+
+  it("'마지막 공시 알림'은 마지막 묶음의 가장 최신 공시로 잰다 (여러 건을 묶어 알리면 기록이 최신 먼저 붙는다 — 리뷰 3)", async () => {
+    await S.setFilingInit();
+    // 16:04 실적 8-K · 16:08 10-K 를 07:03 에 한 번에 알림 → 최신(10-K 20:08:01Z)에서 1시간 54분
+    expect(await notifyFilings([MSFT_10K, MSFT_8K], { prefs: FULL, now: NOW })).toBe(1);
+    const log = await S.readFilingLog();
+    expect(log.map((e) => e.accession)).toEqual([MSFT_10K.accession, MSFT_8K.accession]);
+    expect(F.lastAlertLine(log)).toBe("마지막 공시 알림 7/30(목) 07:03 · SEC에 올라온 뒤 1시간 54분");
+    // 순서가 거꾸로 적혀 있어도(예전 기록) 같은 묶음 안의 가장 최신으로
+    expect(F.lastAlertLine([...log].reverse())).toBe("마지막 공시 알림 7/30(목) 07:03 · SEC에 올라온 뒤 1시간 54분");
+    // 앞 묶음은 보지 않는다 · 접수 시각을 모르는 줄만 있으면 걸린 시간 없이
+    const earlier = { accession: "0001045810-26-000060", acceptedAt: "2026-07-29T22:02:00Z", notifiedAt: "2026-07-29T22:02:30.000Z" };
+    expect(F.lastAlertLine([earlier, ...log])).toBe("마지막 공시 알림 7/30(목) 07:03 · SEC에 올라온 뒤 1시간 54분");
+    expect(F.lastAlertLine([{ accession: "x", acceptedAt: null, notifiedAt: "2026-07-29T22:03:00.000Z" }])).toBe("마지막 공시 알림 7/30(목) 07:03");
+    expect(F.lastAlertLine([])).toBeNull();
   });
 
   it("알림 권한이 없으면 아무것도 적지 않는다 (권한을 다시 주면 24시간 안의 것만)", async () => {

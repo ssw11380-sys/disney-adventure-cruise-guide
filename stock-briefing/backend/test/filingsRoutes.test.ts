@@ -4,7 +4,7 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { NotListedError } from "../src/lib/errors.js";
-import { SCHEDULE_EVENTS_BUDGET_MS } from "../src/routes/filings.js";
+import { eventsComplete, SCHEDULE_EVENTS_BUDGET_MS } from "../src/routes/filings.js";
 import { EVENTS_BUDGET_MS, HoldingEventsService, type HoldingEventSources } from "../src/services/holdingEvents.js";
 import { fakeProviders } from "./helpers.js";
 
@@ -187,6 +187,43 @@ describe("3-38 경로", () => {
     // holdingEvents 를 끄면 events null, filingAlerts 를 끄면 filings null
     await off({ holdingEvents: false, filingAlerts: false });
     expect((await get("/api/schedule")).json()).toMatchObject({ events: null, filings: null, kr: { filings: "notYet" } });
+  });
+
+  it("GET /api/schedule: 받지 못한 종목·실적이 섞인 일정은 캐시하지 않는다 (다시 열면 다시 모음) — 모두 받은 일정만 10분 캐시 (3-38 리뷰 3)", async () => {
+    const { at } = await start({ events: true });
+    await sweepToNow(at);
+    const real = HoldingEventsService.prototype.collect;
+    const collect = vi.spyOn(HoldingEventsService.prototype, "collect");
+    // 1) 10초 한도로 MSFT 배당을 받지 못함 → 캐시하지 않음
+    collect.mockImplementationOnce(async function (this: HoldingEventsService, input) {
+      const v = await real.call(this, input);
+      return { ...v, items: [], failed: [{ code: "MSFT", name: "마이크로소프트" }] };
+    });
+    let body = (await get("/api/schedule")).json();
+    expect(body.events.failed).toEqual([{ code: "MSFT", name: "마이크로소프트" }]);
+    // 2) 1분 뒤 다시 열면 다시 모은다 (뒤에서 받기가 끝났으면 채워짐)
+    at("2026-07-29T22:04:00Z");
+    body = (await get("/api/schedule")).json();
+    expect(collect).toHaveBeenCalledTimes(2);
+    expect(body.events.failed).toEqual([]);
+    expect(body.events.items).toMatchObject([{ code: "MSFT", kind: "exDividend" }]);
+    // 3) 모두 받은 일정은 10분 캐시
+    at("2026-07-29T22:10:00Z");
+    await get("/api/schedule");
+    expect(collect).toHaveBeenCalledTimes(2);
+    // 실적을 받지 못한 결과도 캐시하지 않는다
+    at("2026-07-29T22:30:00Z");
+    collect.mockImplementationOnce(async function (this: HoldingEventsService, input) {
+      return { ...(await real.call(this, input)), earningsFailed: true };
+    });
+    await get("/api/schedule");
+    at("2026-07-29T22:31:00Z");
+    await get("/api/schedule");
+    expect(collect).toHaveBeenCalledTimes(4);
+    collect.mockRestore();
+    expect(eventsComplete({ failed: [], earningsFailed: false })).toBe(true);
+    expect(eventsComplete({ failed: [{ code: "O", name: "리얼티인컴" }], earningsFailed: false })).toBe(false);
+    expect(eventsComplete({ failed: [], earningsFailed: true })).toBe(false);
   });
 
   it("끄면: 경로 404 (holdingSchedule · filingAlerts), 확인 작업 SEC 호출 0", async () => {

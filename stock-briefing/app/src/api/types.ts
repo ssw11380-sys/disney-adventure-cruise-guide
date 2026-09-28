@@ -1165,7 +1165,10 @@ export interface QuoteBasis {
 export interface FilingAlertItem {
   /** 접수 번호 "0001193125-26-323632" (알림 '본 것' 기록의 열쇠) */
   accession: string;
+  /** 대표 코드 (같은 회사를 여러 종목으로 가지면 등록 순 첫 종목) */
   code: string;
+  /** 그 회사(CIK)의 보유 코드 전부 (GOOGL·GOOG) — 종목별 알림 끄기를 모두로 판단 (3-38 리뷰 3). 예전 서버는 없음 → code 하나 */
+  codes?: string[];
   name: string;
   /** "8-K" · "8-K/A" · "10-Q" … */
   form: string;
