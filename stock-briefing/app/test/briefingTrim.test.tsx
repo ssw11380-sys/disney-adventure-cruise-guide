@@ -378,3 +378,48 @@ describe("켬: 시장 요약 상세·카드", () => {
     expect(card).not.toContain("강한 업종");
   });
 });
+
+/**
+ * 합친 모습 리뷰 (예전부터 — 3차 줄들과 무관): 360·200% 에서 계좌 줄 제목이 '내 계좌 브…', 475·360 200% 에서 시장 줄 제목이 '금요일(9/25) 미국 …'로
+ * 말줄임됐다 (제목은 글자 상한 fontCap.row 인데 배지만 200% 로 커져 폭을 차지). 머리를 세 묶음(지갑·제목 | 배지 | 날짜 ›)으로 나눠
+ * 모자라면 뒤 묶음째 다음 줄로, 배지도 같은 상한. 한 줄에 들어가면 같은 모양 (묶음 사이 간격 = 예전 칸 사이 간격)
+ */
+describe("넓은 창·접은 화면 계좌 줄·시장 줄 머리: 제목을 말줄임하지 않고 묶음째 줄바꿈", () => {
+  const kidsOf = (n: HostNode) => n.children.filter((c): c is HostNode => typeof c !== "string");
+  const headOf = (r: R, title: string) => {
+    const hits = r.all().filter((n) => n.type === "View" && (n.props.style as { flexWrap?: string } | undefined)?.flexWrap === "wrap" && kidsOf(n).some((k) => rawOf(k).startsWith(title)));
+    expect(hits.length).toBeGreaterThan(0);
+    return hits.at(-1)!;
+  };
+  const check = (head: HostNode, icon: string) => {
+    expect(head.props.style).toMatchObject({ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 6 });
+    const [title, badge, end] = kidsOf(head);
+    expect(kidsOf(head).map((k) => k.type)).toEqual(["View", "Badge", "View"]);
+    // 지갑·지구 아이콘과 제목은 한 묶음 (제목만 다음 줄로 떨어지지 않게), 이 묶음만 줄어든다
+    expect(kidsOf(title!).map((k) => k.type)).toEqual(["Ionicons", "Text"]);
+    expect(kidsOf(title!)[0]!.props.name).toBe(icon);
+    expect(title!.props.style).toMatchObject({ flexDirection: "row", flexShrink: 1 });
+    // 배지는 제목·날짜와 같은 글자 상한
+    expect(badge!.props.cap).toBe(1.4);
+    // 날짜 ›: 한 묶음, 오른쪽 끝 (줄이 바뀌면 다음 줄 오른쪽)
+    expect(kidsOf(end!).map((k) => k.type)).toEqual(["Text", "Ionicons"]);
+    expect(kidsOf(end!)[1]!.props.name).toBe("chevron-forward");
+    expect(end!.props.style).toMatchObject({ marginLeft: "auto", flexShrink: 0 });
+  };
+
+  it("계좌 줄", () => {
+    const r = render(<AccountBriefingRow briefing={ACCOUNT} selected={false} onPress={() => undefined} role="button" trim />);
+    check(headOf(r, "내 계좌 브리핑"), "wallet-outline");
+    expect(badges(r)).toEqual(["숫자 요약"]);
+    // 배지가 없는 브리핑(모델 설명)은 두 묶음
+    const llm = render(<AccountBriefingRow briefing={{ ...ACCOUNT, template: false, model: "m" }} selected={false} onPress={() => undefined} role="link" />);
+    expect(kidsOf(headOf(llm, "내 계좌 브리핑")).map((k) => k.type)).toEqual(["View", "View"]);
+  });
+
+  it("시장 줄", async () => {
+    const { MarketSummaryRow } = await import("@/components/MarketSummaryCard");
+    const r = render(<MarketSummaryRow summary={US_MORNING} selected={false} onPress={() => undefined} role="button" />);
+    const head = r.all().find((n) => n.type === "View" && kidsOf(n).some((k) => k.type === "View" && kidsOf(k).some((x) => x.type === "Ionicons" && x.props.name === "globe-outline")))!;
+    check(head, "globe-outline");
+  });
+});

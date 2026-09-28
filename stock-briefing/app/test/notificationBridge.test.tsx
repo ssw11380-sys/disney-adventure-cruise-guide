@@ -17,7 +17,21 @@ const h = vi.hoisted(() => ({
   received: [] as ((n: unknown) => void)[],
   /** 무효화한 쿼리 키 */
   invalidated: [] as unknown[],
+  /** 브리핑 3차 1 (notifBack): 지금 화면 주소 · 펼친 가로 2단 · 저장된 캐시 복원 중 · 설정을 읽었는지 */
+  path: "/" as string,
+  twoPane: false,
+  restoring: false,
+  ready: true,
 }));
+
+/** 설정의 서버 주소 (플래그 캐시 키) */
+const API = "https://server.test";
+
+vi.mock("@/lib/useFoldLayout", () => ({
+  useFoldLayout: () => ({ on: h.twoPane, width: h.twoPane ? "expanded" : "compact", short: h.twoPane, twoPane: h.twoPane, rail: false }),
+}));
+vi.mock("@tanstack/react-query", async (importOriginal) => ({ ...(await importOriginal<typeof import("@tanstack/react-query")>()), useIsRestoring: () => h.restoring }));
+vi.mock("@/lib/settings", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/settings")>()), useSettings: () => ({ apiUrl: API, ready: h.ready }) }));
 
 vi.mock("expo-notifications", () => ({
   setNotificationHandler: () => undefined,
@@ -29,7 +43,7 @@ vi.mock("expo-notifications", () => ({
     return { remove: () => void h.received.splice(h.received.indexOf(f), 1) };
   },
 }));
-vi.mock("expo-router", () => ({ router: { push: h.push, navigate: h.navigate, dismissTo: h.dismissTo, canDismiss: () => h.canDismiss } }));
+vi.mock("expo-router", () => ({ router: { push: h.push, navigate: h.navigate, dismissTo: h.dismissTo, canDismiss: () => h.canDismiss }, usePathname: () => h.path }));
 vi.mock("expo-device", () => ({ isDevice: true, modelName: "test" }));
 vi.mock("expo-constants", () => ({ default: { expoConfig: { extra: {} } } }));
 vi.mock("react-native", () => ({ Platform: { OS: "android" } }));
@@ -47,14 +61,18 @@ const tap = (identifier: string, data: Record<string, unknown>, date = Date.pars
   notification: { date, request: { identifier, content: { title: "브리핑", body: "", data } } },
 });
 
-/** JS 를 새로 띄운다 (앱 시작·OTA 다시 시작): 모듈 상태·화면 상태·쿼리 캐시는 새로, 기기 저장소는 그대로 */
-async function boot() {
+/**
+ * JS 를 새로 띄운다 (앱 시작·OTA 다시 시작): 모듈 상태·화면 상태·쿼리 캐시는 새로, 기기 저장소는 그대로.
+ * flags: 저장된 캐시에서 되살린 기능 플래그 (브리핑 3차 1 notifBack 시험용 — 없으면 플래그를 모르는 첫 설치와 같다)
+ */
+async function boot(opts: { flags?: Record<string, boolean> } = {}) {
   vi.resetModules();
   const R = await import("react");
   const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
   const { render } = await import("./miniRender");
   const { NotificationBridge } = await import("@/components/NotificationBridge");
   const client = new QueryClient();
+  if (opts.flags) client.setQueryData([API, "features"], { features: opts.flags, updatedAt: null });
   const invalidate = client.invalidateQueries.bind(client);
   client.invalidateQueries = ((filters?: { queryKey?: unknown }) => {
     h.invalidated.push(filters?.queryKey);
@@ -71,6 +89,10 @@ beforeEach(() => {
   h.canDismiss = false;
   h.received.length = 0;
   h.invalidated.length = 0;
+  h.path = "/";
+  h.twoPane = false;
+  h.restoring = false;
+  h.ready = true;
   for (const f of [h.push, h.navigate, h.dismissTo]) f.mockReset();
 });
 
@@ -165,5 +187,256 @@ describe("BH-16: 브리핑 알림을 받거나 누르면 브리핑 목록을 다
     await boot();
     h.received[0]!({ request: { identifier: "p-1", content: { data: { type: "price", code: "005930" } } } });
     expect(h.invalidated.some(briefingsKey)).toBe(false);
+  });
+});
+
+describe("브리핑 3차 1 notifBack: 브리핑 알림을 누르면 대상, '뒤로'는 브리핑 탭", () => {
+  const ON = { notifBack: true };
+  /** 계좌 앞머리 세션 알림 · 묶음(시장 요약 첫 줄) · 종목 하나 · 가격 알림 */
+  const ACCOUNT = { type: "briefing", digest: true, session: "morning", date: "2026-09-28", count: 17, accountBriefingId: 5, briefingId: 42, code: "NVDA", marketSummaryId: 900 };
+  const DIGEST = { type: "briefing", digest: true, session: "morning", date: "2026-09-28", count: 17, briefingId: 42, code: "NVDA", marketSummaryId: 900 };
+  const STOCK = { type: "briefing", briefingId: 42, code: "NVDA", session: "morning", date: "2026-09-28" };
+  const PRICE = { type: "priceAlert", code: "005930" };
+  type Fn = { mock: { invocationCallOrder: number[] } };
+  const before = (a: Fn, b: Fn) => a.mock.invocationCallOrder[0]! < b.mock.invocationCallOrder[0]!;
+
+  describe("콜드 스타트 (앱이 꺼진 채 알림을 누름 — 잔고 탭 위에서 시작)", () => {
+    it("저장된 캐시를 되살리는 동안은 움직이지 않고, 끝나면 브리핑 탭 → 계좌 브리핑 상세 순서로 (뒤로 = 브리핑 탭)", async () => {
+      h.restoring = true;
+      h.response = tap("cold-1", ACCOUNT);
+      const r = await boot({ flags: ON });
+      await settle();
+      expect(moves()).toBe(0);
+      h.restoring = false;
+      r.rerender();
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+      expect(h.navigate).toHaveBeenCalledWith("/briefings");
+      expect(before(h.navigate, h.push)).toBe(true);
+      expect(h.dismissTo).not.toHaveBeenCalled();
+      expect(moves()).toBe(2);
+    });
+
+    it("설정을 아직 못 읽었어도 기다린다 (플래그 캐시 키가 서버 주소라서)", async () => {
+      h.ready = false;
+      h.response = tap("cold-2", STOCK);
+      const r = await boot({ flags: ON });
+      await settle();
+      expect(moves()).toBe(0);
+      h.ready = true;
+      r.rerender();
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/42"));
+      expect(before(h.navigate, h.push)).toBe(true);
+    });
+
+    it("되살리기가 1.5초 넘게 끝나지 않으면 플래그를 모르는 것으로 보고 지금처럼 상세만 연다 (스플래시와 같은 한도)", async () => {
+      h.restoring = true;
+      h.response = tap("cold-3", ACCOUNT);
+      await boot();
+      await settle();
+      expect(moves()).toBe(0);
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"), { timeout: 3_000 });
+      expect(moves()).toBe(1);
+    });
+
+    it("옮겨 갈 때까지 스플래시를 잡아 두고(잔고 탭이 잠깐 보이지 않게), 이동을 보낸 뒤 0.3초 지나 놓는다", async () => {
+      h.restoring = true;
+      h.response = tap("cold-hold", ACCOUNT);
+      const r = await boot({ flags: ON });
+      const bridge = await import("@/components/NotificationBridge");
+      await settle();
+      expect(bridge.splashHeld()).toBe(true);
+      h.restoring = false;
+      r.rerender();
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+      expect(bridge.splashHeld()).toBe(true);
+      await vi.waitFor(() => expect(bridge.splashHeld()).toBe(false), { timeout: 1_000 });
+    });
+
+    it("플래그를 몰라도(지금 그대로 이동) 같다 · 이미 처리한 응답(OTA 다시 시작)·이동할 곳이 없는 알림은 잡지 않는다", async () => {
+      h.restoring = true;
+      h.response = tap("cold-hold-2", STOCK);
+      const r = await boot();
+      const bridge = await import("@/components/NotificationBridge");
+      await settle();
+      expect(bridge.splashHeld()).toBe(true);
+      h.restoring = false;
+      r.rerender();
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/42"));
+      await vi.waitFor(() => expect(bridge.splashHeld()).toBe(false), { timeout: 1_000 });
+      expect(moves()).toBe(1);
+      // 같은 응답을 새 JS 가 다시 받음(아직 되살리는 중) → 기기 기록을 읽으면 바로 놓는다 · 이동 없음
+      h.restoring = true;
+      await boot();
+      const again = await import("@/components/NotificationBridge");
+      await settle();
+      expect(again.splashHeld()).toBe(false);
+      // 이동할 곳이 없는 알림
+      h.response = tap("nowhere", { type: "briefing" });
+      await boot();
+      expect((await import("@/components/NotificationBridge")).splashHeld()).toBe(false);
+      expect(moves()).toBe(1);
+    });
+
+    it("앱을 쓰던 중(문이 이미 열림)에는 스플래시를 건드리지 않는다", async () => {
+      h.response = null;
+      const r = await boot({ flags: ON });
+      const bridge = await import("@/components/NotificationBridge");
+      await settle();
+      h.response = tap("warm-hold", ACCOUNT);
+      r.rerender();
+      expect(bridge.splashHeld()).toBe(false);
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+      expect(bridge.splashHeld()).toBe(false);
+    });
+
+    it("2단(펼친 가로)이면 새 화면을 쌓지 않고 브리핑 탭 오른쪽 칸에 그 계좌 브리핑을 골라 둔다", async () => {
+      h.twoPane = true;
+      h.restoring = true;
+      h.response = tap("cold-4", ACCOUNT);
+      const r = await boot({ flags: ON });
+      h.restoring = false;
+      r.rerender();
+      await vi.waitFor(() => expect(h.navigate).toHaveBeenCalledWith("/briefings"));
+      const pick = await import("@/lib/briefingPick");
+      expect(pick.currentPick()).toEqual({ pick: { kind: "account", id: 5 }, highlight: true });
+      expect(h.push).not.toHaveBeenCalled();
+      expect(moves()).toBe(1);
+    });
+  });
+
+  describe("웜 (앱을 쓰는 중에 누름)", () => {
+    it("종목 상세 위: 쌓인 화면을 닫고 브리핑 탭으로(dismissTo) → 상세 (뒤로 = 브리핑 탭, 보던 종목 상세는 닫힘)", async () => {
+      h.canDismiss = true;
+      h.path = "/stocks/005930";
+      h.response = tap("warm-1", ACCOUNT);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+      expect(h.dismissTo).toHaveBeenCalledWith("/briefings");
+      expect(before(h.dismissTo, h.push)).toBe(true);
+      expect(h.navigate).not.toHaveBeenCalled();
+    });
+
+    it("탭 안(잔고 탭 등): 탭만 브리핑으로 바꾸고 → 상세", async () => {
+      h.path = "/";
+      h.response = tap("warm-2", STOCK);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/42"));
+      expect(h.navigate).toHaveBeenCalledWith("/briefings");
+      expect(before(h.navigate, h.push)).toBe(true);
+      expect(moves()).toBe(2);
+    });
+
+    it("같은 계좌 브리핑을 보던 중: 같은 화면이 두 겹으로 쌓이지 않는다 (브리핑 탭까지 닫고 하나만)", async () => {
+      h.canDismiss = true;
+      h.path = "/briefings/account/5";
+      h.response = tap("warm-3", ACCOUNT);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledTimes(1));
+      expect(h.dismissTo).toHaveBeenCalledTimes(1);
+      expect(h.dismissTo).toHaveBeenCalledWith("/briefings");
+      await settle();
+      expect(moves()).toBe(2);
+    });
+
+    it("입력 중 화면(잔고 수정) 위: 입력을 잃지 않게 지금처럼 위에 쌓기만 한다", async () => {
+      h.canDismiss = true;
+      h.path = "/stocks/005930/edit";
+      h.response = tap("warm-4", ACCOUNT);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+      await settle();
+      expect(moves()).toBe(1);
+    });
+
+    it("묶음 알림은 지금처럼 브리핑 탭 (종목 상세 위면 dismissTo 한 번)", async () => {
+      h.canDismiss = true;
+      h.path = "/stocks/005930";
+      h.response = tap("warm-5", DIGEST);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(moves()).toBe(1));
+      expect(h.dismissTo).toHaveBeenCalledWith("/briefings");
+      await settle();
+      expect(moves()).toBe(1);
+    });
+
+    it("가격 알림은 켜져 있어도 지금 그대로 (종목 상세만 연다)", async () => {
+      h.canDismiss = true;
+      h.path = "/stocks/AAPL";
+      h.response = tap("warm-6", PRICE);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/stocks/005930"));
+      await settle();
+      expect(moves()).toBe(1);
+    });
+  });
+
+  describe("펼친 가로 2단: push 0회, 오른쪽 칸에서 고르기", () => {
+    it("종목 알림: 그 종목 브리핑을 고르고(목록 줄 강조) 읽음으로 적는다", async () => {
+      h.twoPane = true;
+      h.canDismiss = true;
+      h.path = "/stocks/005930";
+      h.response = tap("pane-1", STOCK);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(h.dismissTo).toHaveBeenCalledWith("/briefings"));
+      const pick = await import("@/lib/briefingPick");
+      expect(pick.currentPick()).toEqual({ pick: { kind: "stock", id: 42, code: "NVDA" }, highlight: true });
+      await vi.waitFor(() => expect(h.store.get("briefings.read")).toBe("[42]"));
+      expect(h.push).not.toHaveBeenCalled();
+    });
+
+    it("묶음 알림: 알림 첫 줄인 시장 요약을 고른다", async () => {
+      h.twoPane = true;
+      h.response = tap("pane-2", DIGEST);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(h.navigate).toHaveBeenCalledWith("/briefings"));
+      const pick = await import("@/lib/briefingPick");
+      expect(pick.currentPick()).toEqual({ pick: { kind: "market", id: 900 }, highlight: true });
+      await settle();
+      expect(h.push).not.toHaveBeenCalled();
+      expect(h.store.has("briefings.read")).toBe(false);
+    });
+
+    it("가격 알림은 2단에서도 지금 그대로", async () => {
+      h.twoPane = true;
+      h.response = tap("pane-3", PRICE);
+      await boot({ flags: ON });
+      await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/stocks/005930"));
+      const pick = await import("@/lib/briefingPick");
+      expect(pick.currentPick().pick).toBeNull();
+    });
+  });
+
+  describe("플래그 꺼짐·모름 → 지금과 똑같은 호출", () => {
+    for (const [label, flags] of [["꺼짐", { notifBack: false }], ["모름", undefined]] as const) {
+      it(`${label}: 종목 상세 위 계좌 알림 → push 만 (뒤로 = 보던 화면)`, async () => {
+        h.canDismiss = true;
+        h.path = "/stocks/005930";
+        h.response = tap(`off-1-${label}`, ACCOUNT);
+        await boot(flags ? { flags } : {});
+        await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+        await settle();
+        expect(moves()).toBe(1);
+      });
+
+      it(`${label}: 2단이어도 전체 화면 상세를 쌓고 고르지 않는다`, async () => {
+        h.twoPane = true;
+        h.response = tap(`off-2-${label}`, STOCK);
+        await boot(flags ? { flags } : {});
+        await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/42"));
+        await settle();
+        expect(moves()).toBe(1);
+        const pick = await import("@/lib/briefingPick");
+        expect(pick.currentPick().pick).toBeNull();
+      });
+    }
+  });
+
+  it("켜져 있어도 같은 응답으로 두 번 움직이지 않는다 (OTA 다시 시작)", async () => {
+    h.response = tap("once-1", ACCOUNT);
+    await boot({ flags: ON });
+    await vi.waitFor(() => expect(moves()).toBe(2));
+    await boot({ flags: ON });
+    await settle();
+    expect(moves()).toBe(2);
   });
 });

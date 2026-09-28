@@ -295,8 +295,136 @@ export interface AccountData {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) '12/25(금) 미국 휴장'. 예전 서버에는 없음 → '지난밤' */
   usHolidayDate?: string;
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 보유 종목별 수량·원화 평가. 꺼짐·예전 기록에는 없음 */
+  positions?: AccountPosition[];
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교. 켜졌는데 비교할 브리핑이 없으면 null, 꺼짐·예전 기록에는 칸이 없음 */
+  sinceLast?: AccountSinceLast | null;
+  /** 브리핑 3차 4 (플래그 accountExposure): 비중 한 줄. 켜졌는데 값이 있는 종목이 없으면 null, 꺼짐·예전 기록에는 칸이 없음 */
+  exposure?: AccountExposure | null;
+  /** 브리핑 3차 5 (플래그 holdingEvents): 다가오는 일정. 꺼짐·예전 기록에는 칸이 없음 */
+  events?: AccountEvents;
   /** 합계에 넣은 종목 시세의 기준 (3-32, 서버 numberBasis 를 켠 뒤 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
   quoteBasis?: QuoteBasis;
+}
+
+/** 브리핑 3차 5: 다가오는 일정 한 줄 (서버 accountNumbers.AccountEventItem 과 같은 모양) */
+export interface AccountEventItem {
+  code: string;
+  name: string;
+  /** exDividend = 배당락일, earnings = 실적 발표 (예정) */
+  kind: "exDividend" | "earnings";
+  /** YYYY-MM-DD. 배당락일은 그 시장 날짜(미국 종목은 미국 날짜 — usDate), 실적은 한국 날짜 */
+  date: string;
+  /** 실적 발표 한국 시각 'HH:MM' (미국 실적만) */
+  kstTime?: string;
+  /** 토스가 보인 시각 글 '오전 5시 이후' (미국 실적만) */
+  timeText?: string;
+  /** 주당 배당금 (배당락일, 발표된 값이 있을 때만) */
+  amount?: number;
+  currency?: Currency;
+  /** date 가 미국 날짜인지 */
+  usDate: boolean;
+  source: "toss" | "naver" | "toss+naver";
+}
+
+/** 브리핑 3차 5: 다가오는 일정 (서버 accountNumbers.AccountEvents 와 같은 모양) */
+export interface AccountEvents {
+  /** 기준 시각 = 계좌 브리핑 asOf */
+  asOf: string;
+  /** 브리핑 날짜부터 며칠 안 (30) */
+  days: number;
+  items: AccountEventItem[];
+  /** 실적 발표일을 넣었는지 (그때 플래그 holdingEarnings) */
+  earnings: boolean;
+  /** 배당 일정을 받지 못한 보유 종목 */
+  failed: { code: string; name: string }[];
+  /** 실적 발표일을 받지 못함 */
+  earningsFailed: boolean;
+  /** 토스·네이버 배당락일이 달라 뺀 종목 */
+  conflicts: { code: string; name: string }[];
+  /** 일정을 찾아본 보유 종목 수 (시장별) */
+  kr: number;
+  us: number;
+  /** 그 주 첫 오전 브리핑이면 이번 주 일정, 아니면 null */
+  week: AccountEventItem[] | null;
+}
+
+/** 브리핑 3차 4: 비중 한 줄의 레버리지·인버스 종목 (값이 큰 순). L = 배수의 크기(인버스도 양수), 모르면 null. weight = 비중(%) */
+export interface AccountExposureItem {
+  code: string;
+  name: string;
+  kind: "leveraged" | "inverse";
+  L: number | null;
+  weight: number;
+}
+
+/**
+ * 브리핑 3차 4: 비중 한 줄 (서버 accountNumbers.AccountExposure 와 같은 모양). 비중 = 보유 종목 원화 평가금액(비용 차감) ÷ 합계 × 100, 소수 한 자리 —
+ * 여럿의 합은 원 값을 더한 뒤 반올림. 현금 제외
+ */
+export interface AccountExposure {
+  /** 기준 시각 = 계좌 브리핑 asOf */
+  asOf: string;
+  /** 비중 분모에 넣은 종목 수 */
+  count: number;
+  top1: { code: string; name: string; weight: number };
+  /** 4종목 이상일 때만 */
+  top3: { weight: number } | null;
+  /** uncounted = 합계에서 뺀 레버리지·인버스 종목 (비중 모름, 서버가 늘 채움 — 없는 기록은 빈 목록으로 봄) */
+  levInv: { weight: number; items: AccountExposureItem[]; uncounted?: Omit<AccountExposureItem, "weight">[] };
+  /** 미국 상장(달러) 종목 합과 그 수 (합계에 넣은 것). uncounted = 합계에서 뺀 미국 종목 수 (없는 기록은 0 으로 봄) */
+  us: { weight: number; count: number; uncounted?: number };
+  /** 시세·환율이 없어 합계에서 뺀 보유 종목 수 */
+  excluded: number;
+  /** 토스 상품 정보를 받지 못해 이름 규칙으로 가린 종목 수 */
+  guessedByName: number;
+}
+
+/** 브리핑 3차 3: 계좌 브리핑이 저장한 보유 종목 한 줄 (서버 accountNumbers.AccountPosition 과 같은 모양) */
+export interface AccountPosition {
+  code: string;
+  name: string;
+  currency: Currency;
+  quantity: number;
+  /** 원화 평가금액(원). 시세가 없어 합계에서 뺀 종목은 null */
+  value: number | null;
+  cost: number | null;
+}
+
+/** 수량이 바뀐 종목 한 줄 (새 종목은 from 0, 없어진 종목은 to 0) */
+export interface AccountQtyChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+}
+
+/** 비중(%, 소수 한 자리) 변화 한 줄. change = to − from */
+export interface AccountWeightChange {
+  code: string;
+  name: string;
+  from: number;
+  to: number;
+  change: number;
+}
+
+/** 브리핑 3차 3: 지난 같은 세션 계좌 브리핑과 비교 (서버 accountNumbers.AccountSinceLast 와 같은 모양) */
+export interface AccountSinceLast {
+  prev: { id: number; date: string; session: BriefingSession; asOf: string };
+  value: { from: number; to: number; change: number; rate: number | null };
+  profit: { from: number; to: number; change: number };
+  /** 지난 브리핑에 종목별 값이 없으면(배포 첫날) null */
+  positions: { added: AccountQtyChange[]; removed: AccountQtyChange[]; increased: AccountQtyChange[]; decreased: AccountQtyChange[] } | null;
+  weights: AccountWeightChange[] | null;
+  excludedNow: { code: string; name: string }[];
+  excludedPrev: { code: string; name: string }[];
+  /**
+   * 금액·비중 비교 범위 (서버 accountNumbers.AccountSinceLast.scope): all = 두 합계 그대로, common = 한쪽 합계에서만 빠진 종목(oneSide)을 양쪽에서 빼고,
+   * mixed = 종목별 값이 없어 뺄 수 없음(합계에서 뺀 종목이 두 브리핑에서 다름). 칸이 없으면 all
+   */
+  scope?: "all" | "common" | "mixed";
+  /** 한쪽 브리핑 합계에서만 빠진 종목. side = 값이 없던 브리핑, why = 시세(price)·환율(fx)을 받지 못함. 칸이 없으면 없음 */
+  oneSide?: { code: string; name: string; side: "prev" | "now"; why: "price" | "fx" }[];
 }
 
 export interface AccountHeadline {
@@ -312,6 +440,11 @@ export interface AccountHeadline {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만 옴) */
   usHolidayDate?: string;
+  /** 브리핑 3차 3 (플래그 accountSinceLast): 지난 같은 세션 브리핑과 비교 한 줄 — 날짜·세션·총 평가 변화·수량 바뀐 종목 수(모르면 null)·
+   *  금액 비교에서 뺀 종목 수 leftOut(한쪽 브리핑 합계에서만 빠진 종목, 있을 때만). 비교가 저장된 브리핑만 오고, 합계에서 뺀 종목이 달라 금액을 맞추지 못한 브리핑은 안 옴 */
+  since?: { date: string; session: BriefingSession; change: number; qtyChanged: number | null; leftOut?: number };
+  /** 브리핑 3차 5 (플래그 holdingEvents): 이번 주 보유 종목 일정 — 그 주 첫 오전 계좌 브리핑이고 일정이 있을 때만 옴 (날짜 순 전부) */
+  week?: { code: string; name: string; kind: "exDividend" | "earnings"; date: string }[];
 }
 
 export interface AccountBriefing {
@@ -965,6 +1098,43 @@ export interface VolumeStatus {
   minutes: number | null;
   asOf: string;
   reason: string | null;
+}
+
+/** 브리핑 3차 2 (플래그 briefingStatus): 실패 브리핑 오류 글의 쉬운 종류 (서버 services/briefingStatus.failureKind 와 같은 표) */
+export type BriefingFailureKind = "busy" | "outage" | "setup" | "cutoff" | "other";
+/** 안내 이유: 오류 종류 + 서버가 도중에 다시 켜져 줄이 없는 종목 */
+export type BriefingReasonKind = BriefingFailureKind | "restart";
+
+/** 못 만든 종목 하나 */
+export interface BriefingStatusProblem {
+  code: string;
+  name: string;
+  /** 누르면 열 브리핑 (실패 브리핑, 줄이 없으면 같은 회차의 가장 최근 브리핑). 없으면 누를 수 없음 */
+  briefingId: number | null;
+  kind: BriefingReasonKind;
+  /** 이번 회차 줄이 아예 없음 */
+  missing: boolean;
+}
+
+/** 브리핑 늦음·실패 안내 (서버 GET /api/briefings/status — 플래그가 꺼져 있거나 예전 서버면 404) */
+export interface BriefingStatus {
+  session: BriefingSession | null;
+  date: string;
+  scheduledAt: string | null;
+  state: "ok" | "late" | "partial" | "allFailed" | "slow" | "missed" | "llmOff" | "none";
+  /** 완료가 예약 + 20분 뒤 */
+  late: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  total: number;
+  done: number;
+  problems: BriefingStatusProblem[];
+  reasonKind: BriefingReasonKind | null;
+  nextRunAt: string | null;
+  /** 자동으로 한 번 더 만드는 시각 — 지금 서버는 늘 null */
+  retryAt: string | null;
+  /** 상세의 '이 종목 다시 만들기'가 있는지 (플래그 briefingManualRun) */
+  manualRun: boolean;
 }
 
 /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis — 서버 GET /api/admin/toss/reconcile/badge 와 같은 모양) */

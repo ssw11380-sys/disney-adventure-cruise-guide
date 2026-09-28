@@ -85,12 +85,30 @@ export interface SessionDone {
   created: Array<{ briefing: Briefing; changeRate: number | null }>;
   /** 이미 만든 브리핑도 다시 만들었는지 (수동 실행의 force). 계좌 브리핑(3-31)도 이때만 덮어쓴다 */
   force?: boolean;
+  /** 브리핑 3차 2 (늦음·실패 안내 실행 기록): 이 실행을 시작한 시각 */
+  startedAt?: string;
+  /** 정기 실행: 스케줄러가 부른 시각 · 그 cron 의 예약 시각(ISO, 모르면 null). 수동 실행이면 null */
+  firedAt?: string | null;
+  scheduledAt?: string | null;
 }
 export type SessionListener = (done: SessionDone) => Promise<void> | void;
 /** 실행 한 번이 끝날 때마다 (새로 만든 브리핑이 없어도, 도중에 예외로 끝나도). 계좌 브리핑(3-31)과 세션 알림이 여기에 붙는다 */
 export type RunDoneListener = (done: SessionDone & { force: boolean; results: RunResult["results"] }) => Promise<void> | void;
 /** 실행 한 번이 시작될 때 (알림이 이 실행 동안 쓸 플래그 값을 여기서 정한다) */
 export type SessionStartListener = (start: { session: BriefingSession; trigger: "schedule" | "manual"; partial: boolean }) => Promise<void> | void;
+
+/** 지금 도는 실행 (브리핑 3차 2 '아직 만드는 중' 안내). 실행 완료 리스너(계좌 브리핑·알림)가 끝날 때까지 남는다 */
+export interface RunProgress {
+  session: BriefingSession;
+  date: string;
+  trigger: "schedule" | "manual";
+  partial: boolean;
+  startedAt: string;
+  /** 이번 실행의 종목 수 (목록을 읽기 전에는 0) */
+  total: number;
+  /** 끝난 종목 수 (성공·실패·건너뜀·이미 있음 모두) */
+  done: number;
+}
 
 /**
  * 브리핑 파이프라인: 수집 → 프롬프트 조립 → Claude(상세) → Claude(요약) → 저장.
@@ -106,6 +124,7 @@ export class BriefingService {
   /** 지금 실행이 끝나기를 기다리는 정기 실행 (wait) */
   private idleWaiters: Array<() => void> = [];
   private _lastRun: LastRun | null = null;
+  private _progress: RunProgress | null = null;
 
   constructor(private readonly deps: BriefingServiceDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -113,6 +132,11 @@ export class BriefingService {
 
   get lastRun(): LastRun | null {
     return this._lastRun;
+  }
+
+  /** 지금 도는 실행 (없으면 null) — 브리핑 3차 2 '아직 만드는 중' 안내 */
+  get progress(): RunProgress | null {
+    return this._progress;
   }
 
   /** 4단계(푸시)에서 알림 발송기를 여기에 붙인다. */
@@ -148,7 +172,7 @@ export class BriefingService {
    */
   async runSession(
     session: BriefingSession,
-    opts: { codes?: string[]; force?: boolean; trigger?: "schedule" | "manual"; wait?: boolean; staleBefore?: Date } = {},
+    opts: { codes?: string[]; force?: boolean; trigger?: "schedule" | "manual"; wait?: boolean; staleBefore?: Date; firedAt?: Date; scheduledAt?: string | null } = {},
   ): Promise<RunResult> {
     if (this.running && !opts.wait) throw new Error("브리핑이 이미 실행 중입니다");
     // 끝나는 순간 여럿이 깨어나도 먼저 잡은 쪽만 돌고 나머지는 다시 기다린다 (검사와 잡기 사이에 await 없음)
@@ -160,6 +184,8 @@ export class BriefingService {
     const created: SessionDone["created"] = [];
     const trigger = opts.trigger ?? "manual";
     const partial = !!opts.codes?.length;
+    const progress: RunProgress = { session, date, trigger, partial, startedAt, total: 0, done: 0 };
+    this._progress = progress;
     // 휴장 판단은 세션마다 시장별로 한 번 — 세션 날짜(date)가 다루는 현지 거래일로 (자정을 넘겨도, 달력을 다시 받아도 종목마다 달라지지 않게)
     const trading = new Map<"KR" | "US", Promise<boolean>>();
     const tradingFor = (code: string): Promise<boolean> => {
@@ -182,8 +208,10 @@ export class BriefingService {
     try {
       let stocks = await this.deps.db.selectFrom("registered_stocks").selectAll().orderBy("created_at").execute();
       if (opts.codes?.length) stocks = stocks.filter((s) => opts.codes!.includes(s.code));
+      progress.total = stocks.length;
       await this.deps.collector.warm?.(stocks.map((s) => s.code));
       for (const row of stocks) {
+        progress.done = results.length;
         const stock: RegisteredStock = {
           code: row.code, name: row.name, market: row.market as RegisteredStock["market"],
           quantity: row.quantity, avgPrice: row.avg_price, memo: row.memo, createdAt: row.created_at, updatedAt: row.updated_at,
@@ -207,7 +235,12 @@ export class BriefingService {
       }
     } finally {
       // 도중에 예외로 끝나도 이미 만든 브리핑은 알린다
-      const done = { session, date, trigger, partial, created, force: opts.force === true, results };
+      progress.done = results.length;
+      const done = {
+        session, date, trigger, partial, created, force: opts.force === true, results,
+        // 브리핑 3차 2 실행 기록 (더하기만 — 다른 리스너는 모르는 칸)
+        startedAt, firedAt: opts.firedAt ? seoulIso(opts.firedAt) : null, scheduledAt: opts.scheduledAt ?? null,
+      };
       if (created.length > 0) {
         for (const l of this.sessionListeners) {
           try {
@@ -224,6 +257,7 @@ export class BriefingService {
           this.deps.log?.warn({ err: (e as Error).message }, "실행 완료 리스너 오류");
         }
       }
+      this._progress = null;
       this.running = false;
       for (const w of this.idleWaiters.splice(0)) w();
     }

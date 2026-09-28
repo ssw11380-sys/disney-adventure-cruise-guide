@@ -30,6 +30,7 @@ import { BriefingScheduler } from "./scheduler.js";
 import { AnalysisService } from "./services/analysisService.js";
 import { BriefingService } from "./services/briefingService.js";
 import { AccountBriefingService } from "./services/accountBriefingService.js";
+import { HoldingEventsService } from "./services/holdingEvents.js";
 import { DataCollector } from "./services/collector.js";
 import { DeviceService } from "./services/deviceService.js";
 import { NotificationService } from "./services/notificationService.js";
@@ -55,6 +56,7 @@ import { ValueScoreService } from "./services/valueScoreService.js";
 import { KrValueService } from "./services/krValueService.js";
 import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
+import { BriefingStatusService } from "./services/briefingStatus.js";
 import { priceAlertRoutes } from "./routes/priceAlerts.js";
 
 export interface BuildAppOptions {
@@ -284,6 +286,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     indicatorScores.start();
     app.addHook("onClose", async () => indicatorScores.stop());
   }
+  // 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents·holdingEarnings): 계좌 브리핑이 만들 때 부른다. 출처가 없으면(테스트 기본) 두지 않는다
+  const holdingEvents = opts.providers.holdingEvents ? new HoldingEventsService({ sources: opts.providers.holdingEvents, now, log }) : null;
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
@@ -293,6 +297,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     generator: opts.providers.generator,
     prompts,
     features,
+    // 브리핑 3차 4 비중 한 줄 (플래그 accountExposure): 레버리지·인버스는 지표 점수와 같은 토스 웹 상품 정보(같은 인스턴스·24시간 캐시)로 가린다
+    productInfo: opts.providers.productInfo ?? null,
+    holdingEvents,
     now,
     log,
   });
@@ -309,6 +316,18 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     const summary = await market;
     if (done.created.length > 0 || account) await notificationService.onSession({ ...done, account, market: summary });
   });
+  // 브리핑 3차 2 늦음·실패 안내 (플래그 briefingStatus): 실행이 끝날 때마다(알림을 보낸 뒤 — 위 리스너 다음) 실행 기록 한 줄. 꺼져 있으면 쓰지 않는다
+  const briefingStatus = new BriefingStatusService({
+    db: opts.db,
+    features,
+    settings: () => settingsStore.get(),
+    calendar: opts.providers.calendar,
+    progress: () => briefingService.progress,
+    llmConfigured: () => opts.providers.generator.model !== "disabled",
+    now,
+    log,
+  });
+  briefingService.onRunDone(briefingStatus.onRunDone);
   app.addHook("onClose", async () => notificationService.stop());
 
   app.decorate("stockService", stockService);
@@ -425,6 +444,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     backup: await backups.status().catch(() => null),
     // 매매 기록(3-36): 켜져 있을 때만 (끄면 응답이 예전과 같게). 최근 5·30거래일 스냅샷이 빠진 날이 있으면 warning — ok 는 그대로 true
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
+    // 다가오는 일정(브리핑 3차 5): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 받지 못한 것·두 출처가 다른 것 경고
+    ...(holdingEvents && (await features.enabled("holdingEvents")) ? { holdingEvents: holdingEvents.health() } : {}),
     disclaimer: DISCLAIMER,
   });
 
@@ -511,7 +532,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     financials: opts.providers.financials,
     financialsUs: opts.providers.financialsUs,
   });
-  await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
+  await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler, status: briefingStatus });
   await app.register(accountBriefingRoutes, {
     prefix: "/api/account-briefings",
     service: accountBriefings,

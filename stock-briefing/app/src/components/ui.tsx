@@ -133,12 +133,18 @@ export function Segmented<T extends string>({
   );
 }
 
-export function Badge({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" | "bad" | "gold" }) {
+/**
+ * 작은 테두리 글. cap 은 글자 확대 상한(maxFontSizeMultiplier) — 제목이 fontCap.row 로 묶인 줄 머리에서 배지만 200% 로 커져
+ * 제목을 말줄임으로 밀어내지 않게 같은 상한을 준다. 주지 않으면 지금과 같음
+ */
+export function Badge({ children, tone = "neutral", cap }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" | "bad" | "gold"; cap?: number }) {
   const t = useTheme();
   const color = tone === "good" ? t.accent : tone === "warn" ? t.warn : tone === "bad" ? t.danger : tone === "gold" ? t.gold : t.muted;
   return (
     <View style={[styles.badge, { borderColor: color }]}>
-      <Text style={{ color, fontSize: font.tiny, fontWeight: "700" }}>{children}</Text>
+      <Text style={{ color, fontSize: font.tiny, fontWeight: "700" }} {...(cap !== undefined ? { maxFontSizeMultiplier: cap } : {})}>
+        {children}
+      </Text>
     </View>
   );
 }

@@ -5,7 +5,8 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { ApiRequestError, type Api } from "@/api/client";
-import { parseStockCode } from "@/lib/freshness";
+import type { BriefingPick } from "@/lib/briefingPick";
+import { parseBriefingId, parseStockCode } from "@/lib/freshness";
 import type { AlertNotification } from "@/lib/priceAlerts";
 
 /**
@@ -160,6 +161,71 @@ export function routeForNotification(data: Record<string, unknown> | undefined):
     if (code) return `/stocks/${code}`;
   }
   return null;
+}
+
+/**
+ * 알림을 누른 뒤 옮겨 가는 방법 (브리핑 3차 1, 플래그 notifBack — NotificationBridge 가 부른다).
+ *  - legacy: 지금 그대로 (openNotificationPath). 플래그 꺼짐·모름, 브리핑이 아닌 알림(가격 알림), 입력 중인 화면 위
+ *  - tab: 브리핑 탭만 (묶음 알림 · 2단인데 고를 시장 요약이 없는 묶음 알림)
+ *  - tabThenPush: 브리핑 탭으로 바꾼 뒤 상세를 쌓는다 → '뒤로' = 브리핑 탭 (폰·접은 화면·펼친 세로 카드 격자)
+ *  - pane: 펼친 가로 2단 — 새 화면을 쌓지 않고 브리핑 탭 오른쪽 칸에서 그 브리핑을 고른다
+ */
+export type NotificationNav = { kind: "legacy"; path: string } | { kind: "tab" } | { kind: "tabThenPush"; path: string } | { kind: "pane"; pick: BriefingPick };
+
+export interface NotificationNavContext {
+  /** 플래그 notifBack (모르면 false → 지금 그대로) */
+  back: boolean;
+  /** 펼친 가로 2단인지 (useFoldLayout().twoPane) */
+  twoPane: boolean;
+  /** 지금 화면 주소 (usePathname). 모르면 null */
+  path: string | null;
+}
+
+/** 입력을 잃을 수 있는 화면: 잔고 수정·종목 검색·이동평균선·첫 실행 안내 (알림을 눌러도 닫지 않고 지금처럼 위에 쌓기만 한다) */
+const INPUT_SCREENS: readonly RegExp[] = [/^\/stocks\/[^/]+\/edit\/?$/, /^\/stocks\/add\/?$/, /^\/chart-lines\/?$/, /^\/welcome\/?$/];
+
+export function isInputScreen(path: string | null | undefined): boolean {
+  return !!path && INPUT_SCREENS.some((re) => re.test(path));
+}
+
+/** 알림 data 의 id (숫자 또는 숫자 글자) */
+function idOf(v: unknown): number | null {
+  if (typeof v === "number") return Number.isInteger(v) && v > 0 ? v : null;
+  return typeof v === "string" ? parseBriefingId(v) : null;
+}
+
+/** 2단 오른쪽 칸에서 고를 브리핑: 계좌 브리핑 · 종목 브리핑 · 묶음이면 알림 첫 줄의 시장 요약 (id 가 이상하면 null) */
+function paneFor(path: string, data: Record<string, unknown>): BriefingPick | null {
+  const account = /^\/briefings\/account\/([^/]+)$/.exec(path);
+  if (account) {
+    const id = parseBriefingId(account[1]);
+    return id ? { kind: "account", id } : null;
+  }
+  if (path === "/briefings") {
+    const id = idOf(data["marketSummaryId"]);
+    return id ? { kind: "market", id } : null;
+  }
+  const stock = /^\/briefings\/([^/]+)$/.exec(path);
+  if (!stock) return null;
+  const id = parseBriefingId(stock[1]);
+  if (!id) return null;
+  const code = typeof data["code"] === "string" ? parseStockCode(data["code"]) : null;
+  return code ? { kind: "stock", id, code } : { kind: "stock", id };
+}
+
+/**
+ * 알림을 누른 뒤 어디로 어떻게 갈지 (순수 함수 — 표 테스트 test/notifBack.test.ts). 이동할 곳이 없으면 null.
+ * 켜져 있으면 브리핑 알림의 '뒤로'가 브리핑 탭이 되게 한다 (지금은 콜드 스타트면 잔고 탭, 앱을 쓰던 중이면 보던 화면)
+ */
+export function notificationNav(data: Record<string, unknown> | undefined, ctx: NotificationNavContext): NotificationNav | null {
+  const path = routeForNotification(data);
+  if (!path || !data) return null;
+  if (!ctx.back || data["type"] !== "briefing" || isInputScreen(ctx.path)) return { kind: "legacy", path };
+  if (ctx.twoPane) {
+    const pick = paneFor(path, data);
+    if (pick) return { kind: "pane", pick };
+  }
+  return path === "/briefings" ? { kind: "tab" } : { kind: "tabThenPush", path };
 }
 
 /**

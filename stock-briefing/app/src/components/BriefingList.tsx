@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } fro
 import type { Briefing } from "@/api/types";
 import { sentence, speakRate } from "@/lib/a11y";
 import { briefingWhen } from "@/lib/briefingPick";
+import { failedLine, failedReasonSpeech } from "@/lib/briefingStatus";
 import { formatDateKo, formatPct, SESSION_LABEL, shownSign } from "@/lib/format";
 import { changeColor, font, fontCap, radius, slopFor, space, touch, useTheme } from "@/theme";
 import { foldBriefings as FB } from "@/tokens";
@@ -133,6 +134,8 @@ interface ItemProps {
   /** 지금 고른 브리핑 (2단 오른쪽에 보이는 것 / 접고 펴기 전에 보던 것) */
   selected: boolean;
   onPress: () => void;
+  /** 실패 브리핑 글을 쉬운 말로 (브리핑 3차 2, 플래그 briefingStatus). 없으면 오류 원문 그대로 */
+  plainFail?: boolean;
 }
 
 /** 화면 읽기 한 문장: "읽지 않음, 변동 큰 순 1위, 퀀티넘, 6.00% 상승, 9월 25일 (금) 오전 브리핑, 요약 …" */
@@ -149,19 +152,21 @@ export function briefingItemSpeech(p: Pick<ItemProps, "briefing" | "name" | "rat
   ]);
 }
 
-const firstLine = (b: Briefing) => (b.status === "failed" ? (b.error ?? b.summary) : (b.summary.split("\n").find((l) => l.trim()) ?? ""));
+const firstLine = (b: Briefing, plainFail = false) => (b.status === "failed" ? (plainFail ? failedLine(b) : (b.error ?? b.summary)) : (b.summary.split("\n").find((l) => l.trim()) ?? ""));
+/** 화면 읽기의 첫 줄: 쉬운 말 실패면 기호 없이 '이유 …' ('생성 실패'는 briefingItemSpeech 가 이미 말한다 — '만들지 못함'과 겹치지 않게) */
+const firstLineSpeech = (b: Briefing, plainFail = false) => (b.status === "failed" && plainFail ? failedReasonSpeech(b) : firstLine(b, plainFail));
 
 /** 2단 목록 한 줄 (56). 누르면 오른쪽 칸만 바뀐다 */
 export function BriefingRow(p: ItemProps) {
   const t = useTheme();
   const b = p.briefing;
   const failed = b.status === "failed";
-  const line = firstLine(b);
+  const line = firstLine(b, p.plainFail);
   return (
     <Pressable
       onPress={p.onPress}
       accessibilityRole="button"
-      accessibilityLabel={briefingItemSpeech(p, line)}
+      accessibilityLabel={briefingItemSpeech(p, firstLineSpeech(b, p.plainFail))}
       accessibilityState={{ selected: p.selected }}
       style={({ pressed }) => [styles.row, { borderBottomColor: t.line, backgroundColor: p.selected || pressed ? t.surfaceAlt : t.surface }]}
     >
@@ -236,13 +241,13 @@ export function BriefingTile(p: ItemProps & { mode: "line" | "summary" | "detail
     <Pressable
       onPress={p.onPress}
       accessibilityRole="link"
-      accessibilityLabel={briefingItemSpeech(p, failed ? firstLine(b) : p.mode === "line" ? (lines[0] ?? "") : lines.join(" "))}
+      accessibilityLabel={briefingItemSpeech(p, failed ? firstLineSpeech(b, p.plainFail) : p.mode === "line" ? (lines[0] ?? "") : lines.join(" "))}
       accessibilityState={selected}
       style={({ pressed }) => [styles.tile, frame(pressed)]}
     >
       {head}
       {failed ? (
-        <Text style={{ color: t.danger, fontSize: font.small }}>{firstLine(b)}</Text>
+        <Text style={{ color: t.danger, fontSize: font.small }}>{firstLine(b, p.plainFail)}</Text>
       ) : (
         <Text style={{ color: t.sub, fontSize: font.body, lineHeight: TILE_LINE }} numberOfLines={p.mode === "line" ? 1 : FB.cardLines}>
           {p.mode === "line" ? (lines[0] ?? "") : lines.join("\n")}

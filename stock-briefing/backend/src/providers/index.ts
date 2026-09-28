@@ -31,6 +31,7 @@ import type { MarketSummarySources } from "../services/marketSummaryService.js";
 import type { ProductFacts } from "../analysis/leveraged.js";
 import type { ScoreSources } from "../services/indicatorScoreService.js";
 import { defaultValueSources, type ValueSources } from "../services/valueScoreService.js";
+import type { HoldingEventSources } from "../services/holdingEvents.js";
 import { NasdaqScreener } from "./market/nasdaqScreener.js";
 import { defaultKrValueSources, type KrValueSources } from "../services/krValueService.js";
 
@@ -75,6 +76,10 @@ export interface Providers {
   scoreSources?: ScoreSources | null;
   /** 가치 지표 출처 (SEC companyfacts·frames + Nasdaq 스크리너, 3-44 2단계). 없으면 가치 지표는 1단계 그대로('계산 준비 중') */
   valueSources?: ValueSources | null;
+  /**
+   * 다가오는 일정 출처 (브리핑 3차 5 — 토스 웹 배당 요약·공개 캘린더 + 네이버 배당락일, 모두 로그인 없음). 없으면(테스트 기본) 계좌 브리핑에 일정 칸이 없다
+   */
+  holdingEvents?: HoldingEventSources | null;
   /** 한국 간이 가치 출처 (네이버 재무 요약 + 업종 구성 종목, 3-44 3단계). 없으면 한국 가치 줄은 '지금 계산하지 않음' */
   krValueSources?: KrValueSources | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
@@ -164,6 +169,13 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log),
     regularCloseSources: { KR: [naver], US: [toss, yahoo] },
     productInfo: toss,
+    // 다가오는 일정 (브리핑 3차 5): 토스 웹(시세와 같은 인스턴스 — 상품 코드 캐시 공유) + 네이버(같은 fundamentals 1시간 캐시)
+    holdingEvents: {
+      dividends: (code) => toss.dividendSummary(code),
+      calendar: (ym) => toss.calendarMonth(ym),
+      productCode: (code) => toss.productCode(code),
+      naverExDividend: (code) => fundamentals.exDividendAt(code),
+    },
     investorFlow: kis ?? tossOpenApi,
     generator,
     dart,

@@ -1,5 +1,5 @@
 import cron, { type ScheduledTask } from "node-cron";
-import { classifyProduct, isHighDistribution, leverageFacts, verifyUnderlying, type LeverageFacts, type ProductFacts, type ProductKind } from "../analysis/leveraged.js";
+import { isHighDistribution, leverageFacts, productKindOf, verifyUnderlying, type LeverageFacts, type ProductFacts, type ProductKind } from "../analysis/leveraged.js";
 import { FAMILY_KEYS, TREND_CAL, TREND_VERSION, TREND_WEIGHTS, shownScore, trendBand, trendDisplayed, type FamilyKey, type TrendBand, type TrendResult, type TrendShown } from "../analysis/trendScore.js";
 import type { Db } from "../db/index.js";
 import type { Candle, CandleSeries } from "../domain/types.js";
@@ -371,9 +371,8 @@ export class IndicatorScoreService {
     if (!stock) return null;
     const market = marketOf(code);
     const facts = await sources.product(code).catch(() => null);
-    // 토스 상품 정보가 없거나 분류 칸이 비면 종목 마스터 분류(ST·EF·EN)를 쓴다 — 보통 주식 이름의 'Bear'·'Short' 로 인버스를 짐작하지 않게
-    const hint: ProductFacts | null = facts || stock.groupCode ? { ...facts, group: facts?.group ?? stock.groupCode ?? null } : null;
-    const kind = classifyProduct(code, stock.name, hint);
+    // 토스 상품 정보가 없거나 분류 칸이 비면 종목 마스터 분류(ST·EF·EN)를 쓴다 — 보통 주식 이름의 'Bear'·'Short' 로 인버스를 짐작하지 않게 (계좌 비중 한 줄과 같은 함수)
+    const kind = productKindOf(code, stock.name, facts, stock.groupCode);
     const etf = kind.etf || stock.groupCode === "EF" || stock.groupCode === "EN";
     const trend = await this.trendBlock(stock, market, ctx, kind, facts, isHighDistribution(stock.name, facts, etf));
     const priceDate = trend.priceDate;
@@ -684,6 +683,11 @@ export class IndicatorScoreService {
   }
 }
 
+/** 종목 마스터 분류 (listed_stocks.group_code — ST 주권 · EF ETF · EN ETN). 모르면 null. 지표 점수·계좌 비중 한 줄(브리핑 3차 4)이 같이 쓴다 */
+export async function groupCodeOf(db: Db, code: string): Promise<string | null> {
+  return (await db.selectFrom("listed_stocks").select("group_code").where("code", "=", code).executeTakeFirst())?.group_code ?? null;
+}
+
 /**
  * 실제 출처로 만든 자료 묶음: 일봉은 차트와 같은 캐시(stockService.getCandles — 토스 웹 → 네이버 → 야후, 한 종목은 한 출처),
  * 비교 지수는 지수 띠와 같은 네이버 일봉(10분 캐시), 상품 정보는 토스 웹 v2/stock-infos(24시간 캐시), 이름·시장은 등록 종목 → 종목 마스터·검색
@@ -694,7 +698,7 @@ export function defaultScoreSources(deps: {
   indices: { candles(code: string, period: "D", count: number): Promise<CandleSeries | null> };
   product: { productFacts(code: string): Promise<ProductFacts | null> } | null;
 }): ScoreSources {
-  const group = async (code: string) => (await deps.db.selectFrom("listed_stocks").select("group_code").where("code", "=", code).executeTakeFirst())?.group_code ?? null;
+  const group = (code: string) => groupCodeOf(deps.db, code);
   return {
     stock: async (code) => {
       const reg = await deps.stocks.get(code);
