@@ -32,7 +32,8 @@ export const scoreRoutes: FastifyPluginAsync<ScoreRouteDeps> = async (app, { ser
     const owner = ownerView(req);
     const who = owner ? null : sessionOf(req);
     if (who && memberQuota && !memberQuota.take(who.user.id, code)) return reply.code(429).send(SCORE_DAILY_LIMIT);
-    const r = await service.get(code);
+    // 주인 아닌 계정: 가치 칸이 '재무 받는 중'이면 받기를 잠깐 기다린다 — 처음 보는 종목만 '계산 준비 중'으로 시작해 주인 등록 종목이 본문으로 드러나지 않게 (검증 6차 M2)
+    const r = owner ? await service.get(code) : await service.getShared(code);
     if (!r) return reply.code(404).send({ error: "NOT_FOUND", message: `종목을 찾을 수 없습니다: ${code}` });
     // 주인 아닌 계정: 캐시 계산 시각 대신 요청 시각, 재무 받은 시각은 빈 값 (검증 4차 M2)
     return owner ? r : memberScoreView(r, seoulIso(now()));

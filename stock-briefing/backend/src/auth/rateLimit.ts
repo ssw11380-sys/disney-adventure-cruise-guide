@@ -1,7 +1,35 @@
+import { isIPv6 } from "node:net";
+
 /**
  * 메모리 속도 제한·잠금 (계정 A단계, 새 패키지 없음). 서버를 다시 켜면 비워진다 — 지금 Railway 는 1대.
  * 키 수는 상한(maxKeys)을 넘으면 가장 오래된 것부터 버린다.
  */
+
+/**
+ * IP 별 제한·잠금의 키 (검증 6차): IPv6 는 앞 64비트(/64 네트워크)로 묶는다 — 기기 하나가 제 /64 안에서 주소를 바꿔 가며(임시 주소 등)
+ * IP 별 로그인 제한(10분 20번)·아이디+IP 잠금(5번)을 피해, 혼자서 10분 안에 아이디 전체 잠금(50번)을 채우지 못하게.
+ * IPv4 는 그대로, IPv4 를 품은 IPv6(::ffff:1.2.3.4)는 IPv4 로, 영역 표시(%eth0)는 뺀다. 모르는 모양은 그대로 (소문자)
+ */
+export function ipKey(ip: string): string {
+  let a = ip.trim().toLowerCase();
+  const zone = a.indexOf("%");
+  if (zone >= 0) a = a.slice(0, zone);
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(a);
+  if (mapped) return mapped[1]!;
+  if (!isIPv6(a)) return a;
+  // 끝이 IPv4 모양(64:ff9b::1.2.3.4 등)이면 16진 두 칸으로
+  const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(a);
+  if (v4) {
+    const [p, q, r, s] = v4.slice(1).map(Number) as [number, number, number, number];
+    a = `${a.slice(0, v4.index)}${((p << 8) | q).toString(16)}:${((r << 8) | s).toString(16)}`;
+  }
+  const [head = "", tail] = a.split("::");
+  const hs = head ? head.split(":") : [];
+  const ts = tail ? tail.split(":") : [];
+  const parts = tail === undefined ? hs : [...hs, ...Array<string>(Math.max(0, 8 - hs.length - ts.length)).fill("0"), ...ts];
+  const net = parts.slice(0, 4).map((h) => parseInt(h || "0", 16).toString(16));
+  return `${net.join(":")}::/64`;
+}
 
 /** 고정 창 제한: 창(windowMs) 안에서 limit 번까지 */
 export class WindowLimiter {

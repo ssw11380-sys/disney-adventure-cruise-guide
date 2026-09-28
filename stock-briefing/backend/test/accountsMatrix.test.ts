@@ -19,6 +19,8 @@ import { fakeProviders } from "./helpers.js";
  *  - 기한 지난·끊긴 세션: 401 session_invalid (앱이 로그아웃하는 유일한 응답)
  *  - 아무것도 없음: API 토큰 확인에서 401 UNAUTHORIZED
  *  - 쓰기 경로는 주인 표의 행 수를 바꾸지 않는다
+ * 요청 한 번씩 부르는 행렬이라 실시간 스트림은 **연결 시점**(업그레이드 전 거절)까지다. 이미 열린 연결이 세션이 끝난 뒤 닫히는지는
+ * test/accountsStream.test.ts (검증 6차 — 로그아웃·모든 기기·비밀번호 변경·되돌리기·기한 지남·비상 → 보통 모드)
  * 비상 모드(ACCOUNTS_DISABLED=1 · 플래그 끔)는 문서(설계 5장) 그대로: API 토큰만 = 주인 (계정 전과 같음 — 가입자가 있으면 켜기 전에 API 토큰을 바꾼다),
  * 주인 아닌 계정의 세션(살아 있음·기한 지남·끊김)을 보낸 요청만 그 계정으로 막는다
  */
@@ -228,7 +230,7 @@ describe("M1 경로 × 보는 사람 행렬 (계정 켜짐 · API 토큰 있음)
     expect((await w.app.inject({ method: "GET", url: "/health", headers: headersOf(w, "owner") })).json()).toHaveProperty("devices", 1);
   });
 
-  it("웹소켓 스트림: 세션이 없거나 끝났거나 주인이 아니면 업그레이드 전에 거절", async () => {
+  it("웹소켓 스트림: 세션이 없거나 끝났거나 주인이 아니면 업그레이드 전에 거절 (연결한 뒤 세션이 끝나면 닫히는지는 accountsStream)", async () => {
     for (const [v, code] of [["tokenOnly", 403], ["expired", 401], ["revoked", 401], ["member", 403], ["none", 401]] as const) {
       const r = await w.app.inject({ method: "GET", url: "/api/stream", headers: headersOf(w, v) });
       expect(r.statusCode, v).toBe(code);

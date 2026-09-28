@@ -242,6 +242,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     log,
   });
   app.addHook("onClose", async () => priceStream.stop());
+  // 계정 A단계 검증 6차 M1: 세션을 끊으면 그 세션으로 연 스트림 연결을 바로 닫는다 (로그아웃 · 모든 기기에서 로그아웃 · 비밀번호 변경의 다른 세션 · 비상 되돌리기).
+  // 기한 지남·다른 서버에서 끊음·비상 모드 → 보통 모드는 ping(25초)마다 다시 확인해 닫는다 (연결의 recheck — 아래 /api/stream)
+  auth.onRevoke((r) =>
+    priceStream.revoke((a) => a.sessionId !== null && ((r.sessionIds?.includes(a.sessionId) ?? false) || (r.userId !== undefined && a.userId === r.userId && a.sessionId !== r.exceptSessionId))),
+  );
+  // 플래그를 바꾸면(예: 비상 모드 → 보통 모드) 바로 다시 확인 — 세션 없이(API 토큰만) 연 연결이 계정이 켜진 뒤에도 남지 않게
+  features.onChange(() => void priceStream.recheck());
 
   const collector = new DataCollector({
     quotes: opts.providers.quotes,
@@ -402,7 +409,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   /**
    * 비상 모드(관리 API 로 끔 · 비상 끄기 ACCOUNTS_DISABLED=1 둘 다) = 계정 전처럼 **API 토큰만 = 주인**. 이때 막는 것은 하나뿐:
    * 세션 헤더가 주인 아닌 계정의 세션(살아 있음·기한 지남·끊김 모두 — 검증 4차)이면 그 계정으로 본다 (그 폰에 주인 잔고·메모가 보이거나 알림 기기가 등록되지 않게).
-   * 막지 못하는 것: 세션 머리글이 없는 요청(로그아웃·앱 다시 설치한 가입자 폰, API 토큰을 꺼낸 사람), 세션 확인이 DB 오류일 때 — 그래서 가입자가 있으면
+   * 막지 못하는 것: 세션 머리글이 없는 요청(로그아웃·앱 다시 설치한 가입자 폰, 자동 로그인을 끄고 쓰다 앱을 닫은 가입자 폰 — 검증 6차, API 토큰을 꺼낸 사람), 세션 확인이 DB 오류일 때 — 그래서 가입자가 있으면
    * 비상 모드 전에 API 토큰(Railway API_TOKEN)을 바꾸고 새 값은 주인 폰에만 넣는다 (docs 설계 5장). 끝난 세션의 사용자를 모르면(지운 행) 지금처럼
    */
   const offMember = async (req: FastifyRequest, route: string): Promise<AuthState | null> => {
@@ -646,9 +653,25 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   app.decorate("marketSummaries", summaries);
   if (summaries) await app.register(marketSummaryRoutes, { prefix: "/api/market-summaries", service: summaries });
 
-  /** GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token= */
-  app.get("/api/stream", { websocket: true }, (socket) => {
-    priceStream.attach(socket);
+  /**
+   * GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token=, 세션은 X-Session-Token 또는 ?session=.
+   * 연결할 때(관문)만이 아니라 연결하는 동안에도 확인한다 (검증 6차 M1): 연결마다 연 세션을 적어 두고, 세션을 끊으면 바로 닫고(auth.onRevoke),
+   * ping(25초)마다·플래그를 바꿀 때 다시 확인한다 — 계정이 켜져 있으면 살아 있는 주인 세션만, 세션 없이 연 연결(비상 모드에 API 토큰만)은 계정이 켜지면 닫는다.
+   * 비상 모드(계정 꺼짐)에는 계정 전처럼 API 토큰 = 주인이라 두고, 확인이 DB 오류면 두고 다음 ping 에 다시
+   */
+  app.get("/api/stream", { websocket: true }, (socket, req) => {
+    const token = sessionTokenOf(req, "/api/stream");
+    const a = req.auth;
+    const who = a?.kind === "user" ? { sessionId: a.session.id, userId: a.user.id } : { sessionId: null, userId: null };
+    priceStream.attach(socket, {
+      ...who,
+      recheck: async () => {
+        if (!(await accountsOn())) return true;
+        if (!token) return false;
+        const ctx = await auth.authenticate(token);
+        return !!ctx && ctx.user.isOwner;
+      },
+    });
   });
 
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });

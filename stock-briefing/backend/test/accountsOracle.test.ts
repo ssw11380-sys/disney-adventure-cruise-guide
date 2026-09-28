@@ -3,7 +3,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { MEMBER_AI_DAILY, MEMBER_CARRIED_BADGE, MEMBER_CARRIED_TEXT, MEMBER_SCORE_DAILY, memberScoreView } from "../src/auth/routePolicy.js";
 import { carriedBadge, carriedText } from "../src/services/valueScoreText.js";
-import { GLOBAL_LOCK_FAILS } from "../src/auth/rateLimit.js";
+import { GLOBAL_LOCK_FAILS, ipKey } from "../src/auth/rateLimit.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { seoulIso } from "../src/lib/time.js";
@@ -11,6 +11,9 @@ import { memberSummary } from "../src/routes/marketSummaries.js";
 import type { MarketSummary } from "../src/services/marketSummaryService.js";
 import type { CandlePeriod, CandleSeries } from "../src/domain/types.js";
 import type { LiveTick, StockSessionFacts, TossRealtime } from "../src/providers/market/tossRealtime.js";
+import type { ScoreSources, ScoreStock } from "../src/services/indicatorScoreService.js";
+import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
+import { dailyOf, fakeValueSources, monthlyOf, referenceData } from "./fixtures/valueScores/load.js";
 import { FakeQuoteProvider, fakeProviders } from "./helpers.js";
 
 /**
@@ -350,5 +353,106 @@ describe("M2 (검증 5차): 지표 점수 가치 칸의 '지난 값' 날짜도 �
     expect(JSON.stringify(seen)).not.toMatch(/9\/27|9월 27일|2026-09-27/);
     // 가치 칸이 없으면 시각만
     expect(memberScoreView({ computedAt: "x" }, "y")).toEqual({ computedAt: "y" });
+  });
+});
+
+describe("IP 별 제한·잠금의 키: IPv6 는 /64 로 묶는다 (검증 6차)", () => {
+  it("ipKey: IPv6 는 앞 네 칸(/64), IPv4·IPv4 를 품은 IPv6 는 IPv4, 영역 표시는 뺀다", () => {
+    expect(ipKey("2001:db8:1:2:aaaa:bbbb:cccc:dddd")).toBe("2001:db8:1:2::/64");
+    expect(ipKey("2001:DB8:1:2::1")).toBe("2001:db8:1:2::/64");
+    expect(ipKey("2001:db8:0001:0002::ffff")).toBe("2001:db8:1:2::/64");
+    expect(ipKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(ipKey("fe80::1%eth0")).toBe("fe80:0:0:0::/64");
+    expect(ipKey("64:ff9b::192.0.2.33")).toBe("64:ff9b:0:0::/64");
+    expect(ipKey("::1")).toBe("0:0:0:0::/64");
+    expect(ipKey("::ffff:10.1.2.3")).toBe("10.1.2.3");
+    expect(ipKey("10.1.2.3")).toBe("10.1.2.3");
+    expect(ipKey("unknown")).toBe("unknown");
+  });
+
+  it("같은 /64 안에서 주소를 바꿔도 아이디+IP 잠금(5번)에 걸린다 — 다른 /64(주인 폰)는 그대로 로그인", async () => {
+    const { app } = await makeApp();
+    for (let i = 1; i <= 4; i++) expect((await login(app, OWNER, "bad", { remoteAddress: `2001:db8:1:2::${i}` })).statusCode).toBe(400);
+    const fifth = await login(app, OWNER, "bad", { remoteAddress: "2001:db8:1:2:ffff::9" });
+    expect(fifth.statusCode).toBe(429);
+    expect((await login(app, OWNER, "1111", { remoteAddress: "2001:db8:1:2::77" })).statusCode).toBe(429);
+    expect((await login(app, OWNER, "1111", { remoteAddress: "2001:db8:9:9::1" })).statusCode).toBe(200);
+  });
+});
+
+/**
+ * 검증 6차 M2: 지표 점수 가치 칸의 **상태**도 주인 등록 종목을 드러내지 않는다 (가치 기능 켬 — 5차 두 서버 비교는 가짜 출처에서 가치가 꺼져 이 길을 못 봤다).
+ * 주인 등록 종목은 서버가 재무(SEC)를 매일 미리 받아 두어 바로 점수가 나오고, 처음 보는 종목은 '계산 준비 중'(pendingFacts)으로 시작했다 → 본문만으로 갈렸다.
+ * 이제 주인 아닌 계정의 요청은 재무 받기를 잠깐(MEMBER_VALUE_WAIT_MS) 기다렸다가 계산한다 — 두 서버의 본문이 같다 (응답 속도 차이는 남는다 — 설계 3장)
+ */
+describe("M2 (검증 6차): 가치 기능을 켠 서버 둘 — 주인이 재무를 받아 둔 종목과 처음 보는 종목의 점수 본문이 같다", () => {
+  const T2 = Date.parse("2026-09-28T10:00:00+09:00");
+  const NVDA: ScoreStock = { code: "NVDA", name: "엔비디아", market: "NASDAQ" };
+
+  function scoreSources(): ScoreSources {
+    return {
+      stock: async (code) => (code === "NVDA" ? NVDA : null),
+      candles: async (code, count) => ({ code, period: "D", candles: candlesOf(code).slice(-count), source: "yahoo" }),
+      benchmark: async (code) => (code === "NASDAQ" ? benchOf("NVDA") : code === "SPX" ? dailyOf("SPX") : null),
+      product: async () => null,
+      registered: async () => [NVDA],
+      monthly: async (code) => monthlyOf(code),
+    };
+  }
+
+  async function server(o: { facts: boolean; hold?: Map<string, Promise<void>> }) {
+    const clock = { t: T2 };
+    const db = await createMigratedDb(":memory:");
+    const value = fakeValueSources(o.hold ? { hold: o.hold } : {});
+    const app = await buildApp({
+      config: loadConfig({ DATABASE_URL: ":memory:" }),
+      db,
+      providers: fakeProviders({ scoreSources: scoreSources(), valueSources: value.src }),
+      logger: false,
+      enableScheduler: false,
+      now: () => new Date(clock.t),
+      auth: { scryptN: 1024 },
+    });
+    opened.push({ app, db, clock });
+    await app.valueScores.saveReference(referenceData());
+    // 주인 등록 종목처럼 재무를 미리 받아 둔 서버 (장 마감 뒤 refreshIfStale · 매일 warm)
+    if (o.facts) expect(await app.valueScores.refreshFacts("NVDA")).toBe("ok");
+    const owner = (await login(app, OWNER, "1111")).json().token as string;
+    const member = (await app.inject({ method: "POST", url: "/api/auth/signup", payload: { loginId: "member1", password: "abcd1234", passwordConfirm: "abcd1234", email: "m@example.com" } })).json().token as string;
+    return { app, owner, member, value };
+  }
+
+  it("주인 아닌 계정: 재무를 받아 둔 서버와 처음 보는 서버에서 가치 칸·종합·본문 전체가 같다 (둘 다 점수 — '계산 준비 중'으로 갈리지 않음)", async () => {
+    const warm = await server({ facts: true });
+    const cold = await server({ facts: false });
+    const a = await warm.app.inject({ method: "GET", url: "/api/scores/NVDA", headers: S(warm.member) });
+    const b = await cold.app.inject({ method: "GET", url: "/api/scores/NVDA", headers: S(cold.member) });
+    expect(a.statusCode, a.body).toBe(200);
+    expect(b.statusCode, b.body).toBe(200);
+    expect(a.json().value.status, JSON.stringify(a.json().value.reason)).toBe("ok");
+    expect(b.json()).toEqual(a.json());
+    // 처음 보는 서버는 이 요청이 재무를 한 번 받았다 (기다렸다가 계산)
+    expect(cold.value.calls.facts).toEqual(["NVDA"]);
+  });
+
+  it("주인은 예전처럼 기다리지 않는다 — 처음 보는 종목은 '계산 준비 중'(앱이 1분 뒤 다시 묻는다)", async () => {
+    const cold = await server({ facts: false });
+    const r = (await cold.app.inject({ method: "GET", url: "/api/scores/NVDA", headers: S(cold.owner) })).json();
+    expect(r.value).toMatchObject({ status: "pending", reason: { code: "pendingFacts" } });
+  });
+
+  it("재무 받기가 기다리는 시간 안에 끝나지 않으면 그대로 '계산 준비 중' (요청을 붙잡아 두지 않는다)", async () => {
+    let release!: () => void;
+    const hold = new Map([["NVDA", new Promise<void>((r) => (release = r))]]);
+    const cold = await server({ facts: false, hold });
+    const t0 = Date.now();
+    const r = await cold.app.indicatorScores.getShared("NVDA", 80);
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(r?.value).toMatchObject({ status: "pending", reason: { code: "pendingFacts" } });
+    release();
+    await cold.app.valueScores.idle();
+    // 받기가 끝난 뒤에는 기다림 없이 점수
+    const again = await cold.app.indicatorScores.getShared("NVDA", 80);
+    expect(again?.value.status).toBe("ok");
   });
 });

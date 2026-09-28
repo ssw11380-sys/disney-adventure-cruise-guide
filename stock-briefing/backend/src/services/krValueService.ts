@@ -23,6 +23,7 @@ import { FISCAL_STALE_DAYS, PeerBook, roundScore, scoreValue, valueBand, valueFl
 import type { Db } from "../db/index.js";
 import type { Candle } from "../domain/types.js";
 import { isKrCode, normalizeCode } from "../lib/codes.js";
+import { DoneWaiters } from "../lib/concurrency.js";
 import { seoulIso } from "../lib/time.js";
 import { parseNaverFinance, parseNaverIntegration, type NaverFinanceClient } from "../providers/market/naverFinance.js";
 import type { NaverDiscover } from "../providers/market/naverDiscover.js";
@@ -122,6 +123,8 @@ export class KrValueService {
   private readonly refBooks = new Map<string, PeerBook>();
   private readonly failures = new Map<string, { at: number; kind: "notFound" | "failed" }>();
   private readonly queue = new Set<string>();
+  /** 재무 받기가 끝나기를 기다리는 요청 (waitFacts) */
+  private readonly waiters = new DoneWaiters();
   private worker: Promise<void> | null = null;
   private active: string | null = null;
   private building: Promise<unknown> | null = null;
@@ -246,6 +249,13 @@ export class KrValueService {
     return this.queue.has(code) || this.active === code;
   }
 
+  /** 이 종목 재무 받기가 끝날 때까지 ms 까지 (받는 중이 아니면 바로 true) — 주인 아닌 계정의 점수 요청 (검증 6차 M2, ValueScoreService.waitFacts) */
+  waitFacts(code: string, ms: number): Promise<boolean> {
+    const c = normalizeCode(code);
+    if (!this.inFlight(c)) return Promise.resolve(true);
+    return this.waiters.wait(c, ms);
+  }
+
   private async drain(): Promise<void> {
     const pause = this.deps.pauseMs ?? 500;
     while (this.queue.size) {
@@ -256,6 +266,7 @@ export class KrValueService {
         if (await this.enabled()) await this.refreshFacts(c);
       } finally {
         this.active = null;
+        this.waiters.done(c);
       }
       if (this.queue.size && pause > 0) await new Promise((r) => setTimeout(r, pause));
     }

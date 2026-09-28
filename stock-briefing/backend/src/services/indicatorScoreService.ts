@@ -217,6 +217,11 @@ const marketOf = (code: string): ScoreMarket => (isKrCode(code) ? "KR" : "US");
 const cutTo = <T extends { date: string }>(cs: readonly T[], date: string) => cs.filter((c) => c.date <= date);
 /** 받기 실패 (잠시 뒤 다시 계산, 기록하지 않음) */
 export const isFetchFailure = (resp: ScoresResponse): boolean => resp.trend.reason?.code === "fetchFailed";
+
+/** 주인 아닌 계정의 점수 요청이 재무 받기를 기다리는 최대 시간 (검증 6차 M2 — 앱의 점수 요청 시간 초과 20초 안에서 넉넉히) */
+export const MEMBER_VALUE_WAIT_MS = 8_000;
+/** 가치 칸이 이 종목 재무를 받는 중이라 '계산 준비 중'인지 (처음 받기 · 오랜만에 새로 받기 — 종목마다 캐시에 따라 갈리는 상태) */
+export const factsPending = (v: ValueBlock): boolean => v.status === "pending" && (v.reason?.code === "pendingFacts" || v.reason?.code === "pendingRefresh");
 /** 가치 쪽 받기 실패·백그라운드 받기 대기 (응답을 짧게만 기억, 가치 기록은 남기지 않음) */
 const valueWaits = new WeakMap<ScoresResponse, ValueEval>();
 
@@ -273,6 +278,22 @@ export class IndicatorScoreService {
       .finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
+  }
+
+  /**
+   * 주인 아닌 계정용 (계정 A단계 검증 6차 M2): 가치 칸이 '재무 받는 중'(pendingFacts · pendingRefresh)이면 받기가 끝날 때까지 waitMs 까지 기다렸다가
+   * 다시 계산한다. 주인 등록 종목은 서버가 재무를 매일 미리 받아 두어 바로 점수가 나오고, 처음 보는 종목만 '계산 준비 중'으로 시작해
+   * **본문만으로** 주인 등록 종목이 드러났다 (응답 속도보다 확실한 신호). 받기가 waitMs 안에 끝나지 않으면(출처가 느림·줄이 김) 그대로 '계산 준비 중'.
+   * 주인은 예전처럼 기다리지 않는다 (get)
+   */
+  async getShared(code: string, waitMs: number = MEMBER_VALUE_WAIT_MS): Promise<ScoresResponse | null> {
+    const r = await this.get(code);
+    if (!r || !this.deps.value || !factsPending(r.value)) return r;
+    if (!(await this.deps.value.waitFacts(code, waitMs))) return r;
+    // 받아 둔 '계산 준비 중' 응답(짧게 기억)을 버리고 다시 — 방금 받은 재무로
+    const c = normalizeCode(code);
+    this.cache.delete(`${c}|${latestScoreDate(marketOf(c), this.now())}`);
+    return (await this.get(code)) ?? r;
   }
 
   /**

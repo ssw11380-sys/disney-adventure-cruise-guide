@@ -4,7 +4,7 @@ import type { Db } from "../db/index.js";
 import type { Database } from "../db/schema.js";
 import { seoulIso } from "../lib/time.js";
 import { hashPassword, looksLikeToken, newSessionToken, SCRYPT_N, tokenHash, verifyPassword } from "./password.js";
-import { LoginGuard, LoginLock, WindowLimiter } from "./rateLimit.js";
+import { ipKey, LoginGuard, LoginLock, WindowLimiter } from "./rateLimit.js";
 import { confirmError, emailError, loginIdKey, normalizeEmail, normalizeLoginId, passwordError, signupErrors, type SignupInput } from "./rules.js";
 
 /**
@@ -103,6 +103,17 @@ interface CachedSession {
   user: AuthUser;
 }
 
+/**
+ * 끊은 세션 (검증 6차 M1 — 실시간 스트림처럼 연결할 때만 확인하는 곳이 이미 열린 연결을 바로 닫게).
+ *  - sessionIds: 이 세션들 (로그아웃)
+ *  - userId: 이 사람의 세션 모두 (exceptSessionId 는 빼고 — 비밀번호 변경은 지금 세션을 둔다)
+ */
+export interface RevokedSessions {
+  sessionIds?: number[];
+  userId?: number;
+  exceptSessionId?: number;
+}
+
 export interface AuthServiceDeps {
   db: Db;
   now?: () => Date;
@@ -151,6 +162,8 @@ export class AuthService {
   private gen = 0;
   /** 주인 계정을 확인했는지 (검증 5차 — 켤 때 DB 오류로 실패했으면 로그인·가입 전에 다시 해 본다) */
   private ownerChecked = false;
+  /** 세션을 끊을 때 알릴 곳 (검증 6차 — 실시간 스트림이 그 세션의 연결을 닫는다) */
+  private readonly revokeListeners = new Set<(r: RevokedSessions) => void>();
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -164,6 +177,22 @@ export class AuthService {
     this.signupAll = new WindowLimiter(30, 86_400_000, this.nowMs);
     this.passwordUser = new WindowLimiter(10, 10 * 60_000, this.nowMs);
     this.emailUser = new WindowLimiter(5, 3_600_000, this.nowMs);
+  }
+
+  /** 세션을 끊을 때마다 부른다 (DB 에 적은 뒤). 되돌리는 함수로 뺀다 */
+  onRevoke(fn: (r: RevokedSessions) => void): () => void {
+    this.revokeListeners.add(fn);
+    return () => this.revokeListeners.delete(fn);
+  }
+
+  private revoked(r: RevokedSessions): void {
+    for (const fn of this.revokeListeners) {
+      try {
+        fn(r);
+      } catch (e) {
+        this.deps.log?.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 세션 끊김 알림 실패");
+      }
+    }
   }
 
   // ── 주인 계정 ────────────────────────────────────────────────
@@ -253,6 +282,7 @@ export class AuthService {
       await remember(trx);
     });
     this.forget((s) => s.userId === userId);
+    this.revoked({ userId });
     this.lock.clear(loginIdKey(row.login_id));
     this.deps.log?.warn({ userId }, "계정: 주인 비밀번호를 OWNER_RESET_PASSWORD 로 되돌렸습니다 (주인 세션·기기 등록을 모두 끊음 — 같은 값은 다시 적용하지 않음, 변수는 지워도 됩니다)");
     return "reset";
@@ -261,7 +291,9 @@ export class AuthService {
   // ── 로그인·가입 ──────────────────────────────────────────────
 
   async login(input: { loginId: string; password: string; remember: boolean; deviceName?: string | null; ip: string }): Promise<{ token: string; user: AuthUser; session: SessionView }> {
-    const ipHit = this.loginIp.hit(input.ip);
+    // IP 별 키: IPv6 는 /64 로 묶는다 (검증 6차 — 주소를 바꿔 가며 IP 별 제한·잠금을 피하지 못하게)
+    const ip = ipKey(input.ip);
+    const ipHit = this.loginIp.hit(ip);
     if (!ipHit.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: ipHit.retryAfterSec });
     const fields: Record<string, string> = {};
     if (!normalizeLoginId(input.loginId)) fields["loginId"] = "required";
@@ -269,27 +301,28 @@ export class AuthService {
     if (Object.keys(fields).length) throw new AuthFailure(400, "invalid", MSG.invalid, { fields });
     const key = loginIdKey(input.loginId);
     await this.ownerReady();
-    const locked = this.lock.lockedFor(key, input.ip);
+    const locked = this.lock.lockedFor(key, ip);
     if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.lockedFor(locked), { retryAfterSec: locked });
     const row = await this.userByKey(key);
     const tooLong = input.password.length > LOGIN_PASSWORD_MAX;
     // 없는 아이디도 해시를 한 번 계산해 응답 시간을 비슷하게
     const ok = row && !tooLong ? await verifyPassword(input.password, row.password_hash) : (await verifyPassword("x", await this.dummyHash()), false);
     if (!row || !ok) {
-      const lockedNow = this.lock.fail(key, input.ip);
+      const lockedNow = this.lock.fail(key, ip);
       this.deps.log?.warn({ ip: input.ip, ...(row ? { userId: row.id } : {}), locked: lockedNow > 0 }, "계정: 로그인 실패");
       if (lockedNow > 0) throw new AuthFailure(429, "too_many_attempts", MSG.lockedFor(lockedNow), { retryAfterSec: lockedNow });
       throw new AuthFailure(400, "bad_credentials", MSG.badCredentials);
     }
-    this.lock.succeed(key, input.ip);
+    this.lock.succeed(key, ip);
     const created = await this.createSession(Number(row.id), input.remember, input.deviceName ?? null);
     this.deps.log?.info({ userId: row.id, remember: input.remember }, "계정: 로그인");
     return { token: created.token, user: toUser(row), session: created.session };
   }
 
   async signup(input: SignupInput & { remember: boolean; deviceName?: string | null; ip: string }): Promise<{ token: string; user: AuthUser; session: SessionView }> {
-    // 시도는 IP 별 한 시간 20번 (형식 오류·겹친 아이디·이메일 확인 포함 — 알아내기를 막는 몫)
-    const tryHit = this.signupTryIp.hit(input.ip);
+    // 시도는 IP 별 한 시간 20번 (형식 오류·겹친 아이디·이메일 확인 포함 — 알아내기를 막는 몫). IPv6 는 /64 로 묶는다 (검증 6차)
+    const ip = ipKey(input.ip);
+    const tryHit = this.signupTryIp.hit(ip);
     if (!tryHit.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: tryHit.retryAfterSec });
     const fields = signupErrors(input);
     if (Object.keys(fields).length) throw new AuthFailure(400, "invalid", MSG.invalid, { fields });
@@ -301,7 +334,7 @@ export class AuthService {
     if (key === loginIdKey(this.ownerLoginId())) throw new AuthFailure(409, "login_id_taken", MSG.loginIdTaken, { fields: { loginId: "login_id_taken" } });
     await this.assertFree(key, email, null);
     // 만드는 계정은 IP 별 한 시간 5개, 전체 하루 30개 (형식이 맞고 겹치지 않는 가입만 센다)
-    const ipHit = this.signupIp.hit(input.ip);
+    const ipHit = this.signupIp.hit(ip);
     if (!ipHit.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: ipHit.retryAfterSec });
     const all = this.signupAll.hit("all");
     if (!all.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: all.retryAfterSec });
@@ -451,6 +484,7 @@ export class AuthService {
       await dropDevices(trx, { sessionIds: [sessionId] });
     });
     this.forget((s) => s.sessionId === sessionId);
+    this.revoked({ sessionIds: [sessionId] });
   }
 
   /** 이 사람의 모든 세션 (이 기기 포함) + 그 세션들로 등록한 푸시 기기. 주인이면 계정 전(세션 없이) 등록한 기기도 */
@@ -463,6 +497,7 @@ export class AuthService {
       return Number(r.numUpdatedRows ?? 0);
     });
     this.forget((s) => s.userId === userId);
+    this.revoked({ userId });
     this.deps.log?.info({ userId }, "계정: 모든 기기에서 로그아웃");
     return n;
   }
@@ -497,6 +532,7 @@ export class AuthService {
       return Number(r.numUpdatedRows ?? 0);
     });
     this.forget((s) => s.userId === ctx.user.id);
+    this.revoked({ userId: ctx.user.id, exceptSessionId: ctx.session.id });
     this.deps.log?.info({ userId: ctx.user.id, revokedOthers: revoked }, "계정: 비밀번호 변경");
     return { revokedOthers: revoked, user: { ...toUser(row), usingInitialPassword: false } };
   }

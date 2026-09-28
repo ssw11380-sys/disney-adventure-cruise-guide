@@ -185,6 +185,7 @@ export class FeatureService {
   private cache: { at: number; stored: Stored } | null = null;
   /** 바꾸기는 한 줄로 (읽고-고쳐-쓰기 사이에 다른 변경이 사라지지 않게) */
   private queue: Promise<unknown> = Promise.resolve();
+  private readonly changeListeners = new Set<() => void>();
 
   constructor(
     private readonly db: Db,
@@ -258,7 +259,20 @@ export class FeatureService {
     const value = JSON.stringify(next);
     await this.db.insertInto("meta").values({ key: FEATURES_META_KEY, value }).onConflict((oc) => oc.column("key").doUpdateSet({ value })).execute();
     this.cache = { at: this.now().getTime(), stored: next };
+    for (const fn of this.changeListeners) {
+      try {
+        fn();
+      } catch {
+        /* 알림 실패는 바꾸기를 막지 않는다 */
+      }
+    }
     return this.all();
+  }
+
+  /** 플래그를 바꾼 뒤(이 서버에서) 부른다 — 계정 A단계 검증 6차: 비상 모드 → 보통 모드가 되면 세션 없이 연 실시간 스트림을 바로 닫게 */
+  onChange(fn: () => void): () => void {
+    this.changeListeners.add(fn);
+    return () => this.changeListeners.delete(fn);
   }
 }
 
