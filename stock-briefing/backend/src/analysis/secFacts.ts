@@ -180,6 +180,11 @@ export interface ValueInputs {
   /** 시가총액용 최신 희석 주식 수 (대상 종목만) */
   shares: number | null;
   period: PeriodInfo | null;
+  /**
+   * 대상 종목만: 최근 1년 안에 배당 기록이 있는데 최근 4분기 배당을 만들 수 없음 → 배당수익률 '자료 없음'
+   * (무배당 0% 와 다르게 — 설계 원칙 4). 비교 회사(frames 연간 값)는 늘 없음
+   */
+  divUnknown?: boolean;
 }
 
 export class FactBook {
@@ -206,7 +211,14 @@ export class FactBook {
    */
   flowTTM(key: FlowKey, asOf: string, E: string): number | null {
     const s = pickSeries(this.c.flows[key], asOf, E);
-    return ttmFrom(s, E);
+    return ttmFrom(s, E, key === "dividends" || key === "dps");
+  }
+
+  /** 최근 1년(기간 끝이 E 앞 400일 안) 사이 배당(지급액·주당 배당) 기록이 있는지 — 0 보다 큰 값만 */
+  dividendSeen(asOf: string, E: string): boolean {
+    const from = addDays(E, -400);
+    for (const k of ["dividends", "dps"] as const) for (const r of this.c.flows[k] ?? []) if (r[3] <= asOf && r[1] > from && r[1] <= E && r[2] > 0) return true;
+    return false;
   }
 
   /** 잔액 항목의 date 시점 값 (±tol 일) */
@@ -272,7 +284,10 @@ export class FactBook {
     if (asYa !== null) balYearAgo.assets = asYa;
     const etYa = this.instant("equityTotal", asOf, ya, 12);
     if (etYa !== null && balYearAgo.equity === undefined) balYearAgo.equity = etYa - (this.instant("nci", asOf, ya, 12) ?? 0);
-    return normalizeInputs({ flow, bal, balYearAgo, annual: this.annualHistory(asOf), shares: this.sharesAt(asOf, E), period });
+    const shares = this.sharesAt(asOf, E);
+    const divKnown = flow.dividends !== undefined || (flow.dps !== undefined && shares !== null);
+    const divUnknown = !divKnown && this.dividendSeen(asOf, E);
+    return normalizeInputs({ flow, bal, balYearAgo, annual: this.annualHistory(asOf), shares, period, ...(divUnknown ? { divUnknown: true } : {}) });
   }
 
   /** 연간 이력 (오래된 → 최신, 최대 6개): 회계연도는 순이익 연간 값의 기간 끝으로 정한다 */
@@ -330,8 +345,12 @@ export function normalizeInputs(inp: ValueInputs): ValueInputs {
   return { ...inp, bal: b, flow: f };
 }
 
-/** 기간 값 묶음에서 E 까지의 최근 4분기 값 */
-function ttmFrom(s: Map<string, Point>, E: string): number | null {
+/**
+ * 기간 값 묶음에서 E 까지의 최근 4분기 값. startFill(배당만): 작년 같은 기간 누적 줄이 없으면 그때는 배당이 없었던 것으로 본다 —
+ * 올해 처음 배당한 회사(META 2024: 직전 연간·작년 같은 기간 줄 모두 없음 → 올해 누적 그대로)나 작년 그 기간 뒤에 배당을 시작한 회사
+ * (직전 연간 + 올해 누적). 직전 연간만 없고 작년 같은 기간 줄은 있으면 앞뒤가 맞지 않아 만들지 않는다
+ */
+function ttmFrom(s: Map<string, Point>, E: string, startFill = false): number | null {
   const at = [...s.values()].filter((p) => p.end === E && p.start);
   const annual = at.find(isFY);
   if (annual) return annual.val;
@@ -345,6 +364,7 @@ function ttmFrom(s: Map<string, Point>, E: string): number | null {
   const len = daysBetween(ytd.start!, ytd.end);
   const prevEnd = addDays(E, -365);
   const ytdPrev = [...s.values()].find((p) => p.start && Math.abs(daysBetween(p.end, prevEnd)) <= 12 && Math.abs(daysBetween(p.start, p.end) - len) <= 12);
-  if (!fyPrev || !ytdPrev) return null;
-  return fyPrev.val + ytd.val - ytdPrev.val;
+  if (fyPrev && ytdPrev) return fyPrev.val + ytd.val - ytdPrev.val;
+  if (startFill && !ytdPrev) return (fyPrev?.val ?? 0) + ytd.val;
+  return null;
 }

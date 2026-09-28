@@ -8,9 +8,11 @@ import type { AnnualPoint, ValueInputs } from "./secFacts.js";
  * 규칙 (설계 value-v1 §5):
  *  - 이익·영업이익·잉여현금흐름이 0 이하 → 그 지표 0점 (값이 없는 것과 다름)
  *  - 자본 ≤ 0 → PBR·ROE 계산 안 함. 부채비율은 '장부상 자본 음수'(영업이익 > 0 이고 이자보상이 시장 가운데 이상)면 계산 안 함, 그 밖(자본잠식)은 0점
+ *  - PBR·ROE 는 지배주주 자본, ROIC 의 투하자본·부채비율은 자본총계(비지배지분 포함 — 설계 §5.2·§5.3)
+ *  - 이익 안정성: 최근 5년 가운데 절반 넘는 해에 영업손실이 매출보다 크면(영업이익률 −100% 아래) 0점 — 잘라 낸 값끼리는 오르내림이 0 으로 보여서
  *  - 순현금(순차입금 ≤ 0) → 순차입금 부담 맨 위 · 순현금이 시가총액보다 커 EV ≤ 0 이고 영업이익 > 0 → EV/영업이익 맨 위
  *  - 이자비용이 없고 차입금도 거의 없음 → 이자보상 맨 위. 차입금이 있는데 이자비용 자료가 없으면 계산 안 함
- *  - 무배당 = 0% (유효한 값)
+ *  - 무배당 = 0% (유효한 값). 최근 1년 안에 배당 기록이 있는데 최근 4분기 배당을 만들 수 없으면 '자료 없음'(계산 안 함 — 0% 와 다름)
  *  - 성장·주식 수 변화: 3년 전 값과 비교. 한 해에 주식 수가 50% 넘게 바뀐 구간(분할·병합·합병)은 계산 안 함
  */
 
@@ -34,7 +36,7 @@ export interface MetricValue {
 export type MetricWhy =
   | "lossNi" | "lossOp" | "lossFcf" | "noCapex" | "equityNonPositive" | "smallEquity" | "negativeEquity" | "capitalImpairment"
   | "revenueNonPositive" | "investedNonPositive" | "noGrossProfit" | "fewYears" | "netCash" | "evNonPositive" | "noInterest" | "noInterestData"
-  | "baseNonPositive" | "shareJump" | "noCurrent" | "missing";
+  | "baseNonPositive" | "shareJump" | "noCurrent" | "missing" | "deepLoss" | "noDividendData";
 
 export type MetricUnit = "배" | "%" | "%p";
 export const METRIC_UNIT: Record<MetricKey, MetricUnit> = {
@@ -50,6 +52,9 @@ export const METRIC_UNIT: Record<MetricKey, MetricUnit> = {
 export interface MetricAux {
   /** 최근 5개 연도 영업이익률 표준편차 (경기 민감 판정) */
   opMarginStd: number | null;
+  /** 위 표준편차에 쓴 해 수와, 그 가운데 영업손실이 매출보다 큰 해(−100% 로 잘린 해) 수 */
+  marginYears: number;
+  deepLossYears: number;
   /** 최근 연간 순이익 ÷ 5년 평균 순이익 (경기 정점) */
   niToAvg5: number | null;
   /** |세전이익 − 영업이익| ÷ |영업이익| (영업 외 손익) */
@@ -132,6 +137,7 @@ export function computeAux(inp: ValueInputs): MetricAux {
   const b = inp.bal;
   const ann = inp.annual.slice(-5);
   const margins = ann.map((a) => margin(a.opIncome, a.revenue)).filter(num);
+  const deepLossYears = margins.filter((m) => m <= -1).length;
   const nis = ann.map((a) => a.netIncome).filter(num);
   const avgNi = nis.length >= 4 ? nis.reduce((x, y) => x + y, 0) / nis.length : null;
   const lastNi = ann.at(-1)?.netIncome;
@@ -141,6 +147,8 @@ export function computeAux(inp: ValueInputs): MetricAux {
   const pretax = f.pretax;
   return {
     opMarginStd: margins.length >= 4 ? stdev(margins) : null,
+    marginYears: margins.length,
+    deepLossYears,
     niToAvg5: avgNi !== null && avgNi > 0 && num(lastNi) ? lastNi / avgNi : null,
     nonOpRatio: num(pretax) && num(f.opIncome) && f.opIncome !== 0 ? Math.abs(pretax - f.opIncome) / Math.abs(f.opIncome) : null,
     sbcToRevenue: num(f.sbc) && num(f.revenue) && f.revenue > 0 ? f.sbc / f.revenue : null,
@@ -161,6 +169,8 @@ export function computeMetrics(inp: ValueInputs, mcap: number, ctx: MetricCtx): 
   const m: MetricSet = {};
   if (!(mcap > 0)) return m;
   const eq = b.equity;
+  // 자본총계 (비지배지분 포함): ROIC 투하자본·부채비율 (설계 §5.2·§5.3)
+  const eqTotal = num(b.equityTotal) ? b.equityTotal : num(eq) ? eq + (num(b.nci) ? b.nci : 0) : undefined;
   const assets = b.assets;
   const avgEq = avg2(eq, inp.balYearAgo.equity);
   const avgAssets = avg2(assets, inp.balYearAgo.assets);
@@ -221,9 +231,10 @@ export function computeMetrics(inp: ValueInputs, mcap: number, ctx: MetricCtx): 
     m.F2 = roes.length >= 4 ? ok(-stdev(roes), 100 * stdev(roes)) : skip("fewYears");
     if (num(eq) && num(assets) && assets > 0) m.F3 = ok(eq / assets, (100 * eq) / assets);
   } else {
-    if (num(op) && num(eq) && debt !== null) {
+    if (num(op) && num(eqTotal) && debt !== null) {
       const t = aux.taxRate ?? ctx.medianTaxRate;
-      const ic = eq + debt - cash;
+      // 투하자본은 최근 분기말 값 (설계는 평균 — 비교 회사 1년 전 차입금·현금을 받지 않아 같은 정의로 맞춤, 문서 17장)
+      const ic = eqTotal + debt - cash;
       m.B2 = ic > 0 ? ok((op * (1 - t)) / ic, (100 * op * (1 - t)) / ic) : skip("investedNonPositive");
     }
     if (num(avgAssets) && avgAssets > 0) {
@@ -231,15 +242,20 @@ export function computeMetrics(inp: ValueInputs, mcap: number, ctx: MetricCtx): 
       m.B3 = gp !== null ? ok(gp / avgAssets, (100 * gp) / avgAssets) : skip("noGrossProfit");
     }
     if (num(op) && num(rev)) m.B4 = rev > 0 ? ok(op / rev, (100 * op) / rev) : skip("revenueNonPositive");
-    m.B5 = aux.opMarginStd !== null ? ok(-aux.opMarginStd, 100 * aux.opMarginStd) : skip("fewYears");
+    m.B5 =
+      aux.opMarginStd === null
+        ? skip("fewYears")
+        : aux.deepLossYears * 2 > aux.marginYears
+          ? zero("deepLoss")
+          : ok(-aux.opMarginStd, 100 * aux.opMarginStd);
     if (num(ni) && num(f.ocf) && num(avgAssets) && avgAssets > 0) {
       const acc = (ni - f.ocf) / avgAssets;
       m.B6 = ok(-acc, 100 * acc);
     }
 
     // ── 재무 건전성 ──
-    if (num(b.liabilities) && num(eq)) {
-      if (eq > 0) m.D1 = ok(-(b.liabilities / eq), (100 * b.liabilities) / eq);
+    if (num(b.liabilities) && num(eqTotal)) {
+      if (eqTotal > 0) m.D1 = ok(-(b.liabilities / eqTotal), (100 * b.liabilities) / eqTotal);
       else {
         const cov = aux.coverage ?? (num(op) && op > 0 && (!num(f.interest) || f.interest <= 0) ? Infinity : null);
         const negBook = num(op) && op > 0 && cov !== null && ctx.medianCoverage !== null && cov >= ctx.medianCoverage;
@@ -291,8 +307,9 @@ export function computeMetrics(inp: ValueInputs, mcap: number, ctx: MetricCtx): 
   }
 
   // ── 주주환원 ──
-  const div = num(f.dividends) ? f.dividends : num(f.dps) && num(inp.shares) ? f.dps * inp.shares : 0;
-  m.E1 = ok(Math.max(0, div) / mcap, (100 * Math.max(0, div)) / mcap);
+  const div = num(f.dividends) ? f.dividends : num(f.dps) && num(inp.shares) ? f.dps * inp.shares : inp.divUnknown ? null : 0;
+  // 배당 기록은 있는데 최근 4분기 값을 만들 수 없으면 '자료 없음' (무배당 0% 와 다름 — 설계 원칙 4)
+  m.E1 = div === null ? skip("noDividendData") : ok(Math.max(0, div) / mcap, (100 * Math.max(0, div)) / mcap);
   const sh = sharesContinuous(ann);
   if (sh) {
     const g = (sh.now / sh.then) ** (1 / 3) - 1;

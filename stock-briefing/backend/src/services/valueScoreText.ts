@@ -111,7 +111,14 @@ export const RULE_TEXT: Record<MetricWhy, string> = {
   shareJump: "계산 안 함: 3년 사이 주식 수가 한 해에 50% 넘게 바뀌었습니다(분할·병합·합병 등).",
   noCurrent: "계산 안 함: 유동자산·유동부채 자료가 없습니다.",
   missing: "자료 없음",
+  deepLoss: "최근 5년 가운데 절반 넘는 해에 영업손실이 매출보다 커서 0점으로 계산했습니다.",
+  noDividendData: "계산 안 함: 최근 1년 안에 배당 기록이 있지만 최근 4분기 배당 합계를 만들 수 없습니다 (배당이 없다는 뜻이 아닙니다).",
 };
+/**
+ * 같은 값이 많은 지표 (무배당 0% 등): 위치가 그 덩어리에 크게 좌우된다는 안내. 비교 회사의 절반 이상이 같은 값이고
+ * 이 회사 값은 그 값과 다를 때 지표 줄에 붙인다 (그 지표는 묶음 머리 문장으로 고르지 않음)
+ */
+export const tieNote = (pct: number, valueText: string) => `비교한 회사의 ${pct}%가 같은 값(${valueText})이라, 그 값과 조금만 달라도 위치 점수가 크게 달라집니다.`;
 export const NOT_ADOPTED = "비교할 회사 자료가 모자라(70% 미만) 이 지표는 쓰지 않았습니다.";
 /** 경기 민감 회사의 PER: 최근 4분기 이익과 5년 평균 이익을 반씩 섞음 (설계 value-v1 §5.1) */
 export const BLEND_NOTE = "업황에 따라 이익이 크게 오르내리는 회사라, 최근 4분기 이익과 5년 평균 이익을 반씩 섞어 계산했습니다.";
@@ -137,6 +144,12 @@ export const carriedText = (fetchedAt: string) => `재무 숫자는 ${dateKo(fet
 export const VALUE_STATUS_TEXT = {
   pendingReference: "계산 준비 중 — 첫 비교 기준을 만드는 중입니다 (보통 하루 안)",
   pendingFacts: "계산 준비 중 — 재무제표를 처음 받는 중입니다 (보통 몇 분 안)",
+  /** 재무를 받은 지 7일이 넘었지만 받기에 실패한 적은 없음 (오랜만에 연 종목 — 백그라운드로 새로 받는 중) */
+  pendingRefresh: "계산 준비 중 — 재무제표를 새로 받는 중입니다 (보통 몇 분 안)",
+  /** 비교 기준을 한 번도 만들지 못함 (첫 만들기 실패 — 하루 한 번 다시) */
+  referenceFailed: "비교 기준을 만들지 못했습니다. 하루 한 번 다시 만듭니다",
+  /** 가치 부분을 끈 서버 (되돌리기 스위치 valueScore) */
+  off: "가치 지표 점수는 지금 계산하지 않습니다.",
   kr: "한국 종목 가치 지표 점수는 다음 단계에서 계산합니다.",
   spac: "스팩(기업인수목적회사)은 이 점수를 내지 않습니다.",
   preferred: "우선주는 아직 계산하지 않습니다. 보통주 화면의 점수를 참고하세요.",
@@ -152,12 +165,15 @@ export const VALUE_STATUS_TEXT = {
   priceStale: "최근 주가가 없어 계산하지 않았습니다 (거래정지 등)",
   priceFailed: "일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다",
   hold: "주식 분할·병합 반영을 확인하는 중입니다",
+  /** SEC 주식 수가 지금 주식 수(Nasdaq 시가총액 ÷ 가격)와 크게 다름 — 마지막 보고서 뒤 분할·병합 등 */
+  sharesMismatch: "마지막 재무제표의 주식 수가 지금 주식 수와 크게 달라(주식 분할·병합 등) 다음 보고서를 기다립니다",
 } as const;
 export const lowCoverageText = (pct: number) => `쓸 수 있는 지표가 모자랍니다 (필요한 비중 70, 지금 ${pct})`;
 export const PARTIAL_BADGE = "일부 지표 없이 계산";
 export const carriedBadge = (fetchedAt: string) => `지난 값 ${Number(fetchedAt.slice(5, 7))}/${Number(fetchedAt.slice(8, 10))}`;
 export const PRICE_NOTE = "점수용 값은 최근 20거래일 평균 가격 기준이라 위 시세 표의 PER·PBR과 조금 다를 수 있습니다.";
-export const PEER_TIMING_NOTE = "비교 회사 값은 각 회사의 가장 최근 회계연도 값(SEC 공통 자료)이고, 이 회사 값은 최근 4분기 값입니다.";
+export const PEER_TIMING_NOTE =
+  "비교 회사 값은 각 회사의 가장 최근 회계연도 값(SEC 공통 자료)이고, 이 회사 값은 최근 4분기 값입니다. 이익이 빠르게 늘고 있는 회사는 이 차이로 주가 수준 점수가 조금 높게 계산되는 편입니다.";
 export const VALUE_DETAIL_NOTE = "과거·현재 숫자로 계산한 지표이며 앞으로의 가격이나 수익을 뜻하지 않습니다.";
 
 export const valueHeadline = (v: number, band: ValueBand) => `가치 지표 점수 ${v}/100 · ${band}`;

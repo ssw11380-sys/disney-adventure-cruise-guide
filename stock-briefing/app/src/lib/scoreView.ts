@@ -60,16 +60,29 @@ export function flagPreview(v: ValueScoreBlock, max = 2): { shown: { key: string
 }
 export const moreFlagsText = (n: number, wide: boolean) => `${SCORE_LABELS.flags} ${n}개 더 — ${wide ? "가치" : "가치분석"} 탭`;
 
-/** 지표 한 줄 화면 읽기: 'PER (이익 대비 주가) 27.9배, 위치 점수 77' / '… 쓰지 않음' */
+/** 화면 읽기용으로 다듬기: '72/100' → '100 중 72', ' · ' → 쉼표, 앞 화살표·끝 마침표 떼기 (마침표가 겹치지 않게) */
+const speakable = (s: string) => s.replace(/(\d+)\/100/g, "100 중 $1").replace(/ · /g, ", ").replace(/^→\s*/, "").replace(/[.\s]+$/, "");
+
+/**
+ * 지표 한 줄 화면 읽기 — 줄 전체를 한 덩어리로 읽으므로 보이는 글을 모두 담는다 (값 · 가운데값 · 위치 점수 · 비교별 위치 · 비중 · 문장 · 안내 · 뜻):
+ * 'PER (이익 대비 주가) 27.9배, 업종 가운데값 35.0배. 위치 점수 77. 업종 안 위치 100 중 80, 시장 안 100 중 70. 비중 업종 71, 시장 29. 이익에 비해 …'
+ * 쓰지 않는 지표는 '이름, 값 없음, 까닭'
+ */
 export function metricSpeech(m: ValueMetricRow): string {
-  if (!m.used) return `${m.name}, ${m.value ?? "값 없음"}, ${m.text}`;
-  return `${m.name} ${m.value ?? ""}, 위치 점수 ${m.score}`.replace(/ ,/, ",");
+  const lead = [m.name, m.value].filter(Boolean).join(" ");
+  if (!m.used) return `${[m.name, m.value ?? "값 없음", m.text].map(speakable).join(", ")}.`;
+  const parts = [m.peerMedian ? `${lead}, ${m.peerMedian}` : lead, `위치 점수 ${m.score}`, m.positions, m.mix ? `비중 ${m.mix}` : null, m.text, m.note, m.meaning];
+  return `${parts
+    .filter((p): p is string => !!p)
+    .map(speakable)
+    .join(". ")}.`;
 }
 
 /** 가치 지표 '계산 준비 중'이 서버 백그라운드 받기 때문일 때 다시 묻는 간격 */
 export const SCORE_WAIT_REFETCH_MS = 60_000;
-/** 서버가 재무·비교 기준을 받는 중이라 곧 바뀌는지 (한국 '계산 준비 중'은 3단계까지 그대로라 아님) */
-export const valueWaiting = (d: IndicatorScores | null | undefined): boolean => !!d && d.value.status === "pending" && (d.value.reason?.code === "pendingFacts" || d.value.reason?.code === "pendingReference");
+/** 서버가 재무·비교 기준을 받는 중이라 곧 바뀌는지 (처음 받기 · 오랜만에 새로 받기 · 첫 비교 기준). 한국 '계산 준비 중'은 3단계까지 그대로라 아님 */
+const WAIT_CODES: ReadonlySet<string> = new Set(["pendingFacts", "pendingRefresh", "pendingReference"]);
+export const valueWaiting = (d: IndicatorScores | null | undefined): boolean => !!d && d.value.status === "pending" && WAIT_CODES.has(d.value.reason?.code ?? "");
 
 /** 종합 숫자: 두 점수가 모두 있을 때만 */
 export const showComposite = (s: IndicatorScores): boolean => s.composite.status === "ok" && s.composite.score !== null;

@@ -2,7 +2,9 @@ import { FLOW_KEYS, FLOW_TAGS, INSTANT_KEYS, INSTANT_TAGS, SHARE_TAGS, type Fact
 import { addDays, daysBetween, normalizeInputs, type AnnualPoint, type ValueInputs } from "../analysis/secFacts.js";
 import { computeAux, computeMetrics, type MetricAux } from "../analysis/valueMetrics.js";
 import {
+  buildLevels,
   encodeX,
+  FISCAL_STALE_DAYS,
   isCyclical,
   isFinancial,
   METRIC_ORDER,
@@ -19,7 +21,9 @@ import {
 /**
  * 가치 지표 비교 기준 (3-44 2단계, 주 1회): 미국 상장 보통주의 지표 분포.
  *  - 회사 목록·업종·시가총액: Nasdaq 스크리너(로그인 없는 공개 JSON, 한 번에 약 7,000줄 — 리츠·스팩·우선주는 뺌)
- *  - 재무: SEC frames (항목 하나·기간 하나의 전 회사 값 — 공공 자료). 회사마다 '가장 최근 회계연도'(CY 연간 틀) 값과 '최근 분기말' 잔액
+ *  - 재무: SEC frames (항목 하나·기간 하나의 전 회사 값 — 공공 자료). 회사마다 '가장 최근 회계연도'(CY 연간 틀) 값과 '최근 분기말' 잔액.
+ *    가장 최근 회계연도는 최근 세 연간 틀(CY(Y)·CY(Y−1)·CY(Y−2)) 가운데 그 회사 값이 있는 가장 최근 것 — 1~3월에는 12월 결산 회사가
+ *    아직 연간 보고서를 내지 않아 CY(Y−1) 이 비어 있으므로 CY(Y−2) 로 (결산이 18개월보다 오래되면 뺀다)
  *  - 티커 → CIK: SEC company_tickers.json
  *  - 시가총액 하위 20% 는 뺀다(아주 작은 회사의 들쭉날쭉한 숫자가 분포를 흔들지 않게). 금융사는 따로 모은다(일반 회사와 섞지 않음)
  * 한계(문서에 적음): 비교 회사의 흐름 값은 가장 최근 회계연도 값이라 대상 종목의 최근 4분기 값보다 최대 1년 앞선 숫자일 수 있다 —
@@ -32,6 +36,8 @@ export interface ScreenerRow {
   marketCap: number | null;
   sector: string;
   industry: string;
+  /** 마지막 가격 (달러, 없으면 null) — 대상 종목의 SEC 주식 수 확인용 */
+  price?: number | null;
 }
 export interface FrameRow {
   cik: number;
@@ -55,12 +61,14 @@ export function parseScreener(raw: unknown): ScreenerRow[] {
     const symbol = typeof r["symbol"] === "string" ? r["symbol"].trim().toUpperCase() : "";
     if (!symbol) continue;
     const cap = Number(String(r["marketCap"] ?? "").replace(/[$,]/g, ""));
+    const price = Number(String(r["lastsale"] ?? "").replace(/[$,]/g, ""));
     out.push({
       symbol,
       name: typeof r["name"] === "string" ? r["name"] : "",
       marketCap: Number.isFinite(cap) && cap > 0 ? cap : null,
       sector: typeof r["sector"] === "string" ? r["sector"].trim() : "",
       industry: typeof r["industry"] === "string" ? r["industry"].trim() : "",
+      price: String(r["lastsale"] ?? "").trim() && Number.isFinite(price) && price > 0 ? price : null,
     });
   }
   return out;
@@ -92,19 +100,21 @@ export function screenerExcluded(r: ScreenerRow): boolean {
 }
 
 export interface ReferencePeriods {
-  /** 연간 틀 (오래된 → 최신): CY(Y−5) … CY(Y) */
+  /** 기준일 (결산이 18개월보다 오래된 회사를 뺄 때) */
+  refDate: string;
+  /** 연간 틀 (오래된 → 최신): CY(Y−6) … CY(Y) — 가장 최근 회계연도가 CY(Y−2) 인 회사도 5년 이력이 되게 */
   annual: string[];
   /** 최근 분기말 (우선 → 대신): 기준일보다 50일 넘게 지난 가장 최근 분기말, 그 전 분기말 */
   latest: [string, string];
   /** 위 두 분기말의 1년 전 */
   yearAgo: [string, string];
-  /** 연말 잔액 (자산·자본) CY(Y−5)Q4I … CY(Y−1)Q4I */
+  /** 연말 잔액 (자산·자본) CY(Y−6)Q4I … CY(Y−1)Q4I */
   yearEnd: string[];
 }
 
 export function referencePeriods(refDate: string): ReferencePeriods {
   const Y = Number(refDate.slice(0, 4));
-  const annual = [5, 4, 3, 2, 1, 0].map((k) => `CY${Y - k}`);
+  const annual = [6, 5, 4, 3, 2, 1, 0].map((k) => `CY${Y - k}`);
   // 분기말 후보: 올해·작년의 분기
   const qEnds: Array<{ y: number; q: number; date: string }> = [];
   for (const y of [Y - 1, Y])
@@ -117,22 +127,25 @@ export function referencePeriods(refDate: string): ReferencePeriods {
   const q1 = ok.at(-1)!;
   const q0 = ok.at(-2)!;
   const name = (e: { y: number; q: number }, back = 0) => `CY${e.y - back}Q${e.q}I`;
-  return { annual, latest: [name(q1), name(q0)], yearAgo: [name(q1, 1), name(q0, 1)], yearEnd: [5, 4, 3, 2, 1].map((k) => `CY${Y - k}Q4I`) };
+  return { refDate, annual, latest: [name(q1), name(q0)], yearAgo: [name(q1, 1), name(q0, 1)], yearEnd: [6, 5, 4, 3, 2, 1].map((k) => `CY${Y - k}Q4I`) };
 }
 
-/** frames 로 받을 항목 목록 (태그·기간). 필요한 것만: 매출·영업이익·순이익·주식 수는 6년, 나머지 흐름은 최근 2개 연도 */
+/**
+ * frames 로 받을 항목 목록 (태그·기간). 필요한 것만: 매출·영업이익·순이익은 7년, 주식 수는 6년, 나머지 흐름은 최근 3개 연도
+ * (가장 최근 회계연도가 CY(Y−2) 인 회사도 같은 항목이 있게)
+ */
 export function framePlan(p: ReferencePeriods): Array<{ key: string; tag: FactTag; period: string }> {
   const out: Array<{ key: string; tag: FactTag; period: string }> = [];
-  const last2 = p.annual.slice(-2);
+  const last3 = p.annual.slice(-3);
   for (const k of FLOW_KEYS) {
     if (k === "dps") continue; // 비교 회사는 배당 지급액만 (주당 배당은 대상 종목에서 지급액이 없을 때만)
-    const periods = k === "revenue" || k === "opIncome" || k === "netIncome" || k === "nii" || k === "nonii" ? p.annual : last2;
-    // 순이익 대신 태그(ProfitLoss)는 최근 2개 연도만
+    const periods = k === "revenue" || k === "opIncome" || k === "netIncome" || k === "nii" || k === "nonii" ? p.annual : last3;
+    // 순이익 대신 태그(ProfitLoss)는 최근 3개 연도만
     FLOW_TAGS[k].forEach((tag, i) => {
-      for (const period of k === "netIncome" && i > 0 ? last2 : periods) out.push({ key: `flow:${k}`, tag, period });
+      for (const period of k === "netIncome" && i > 0 ? last3 : periods) out.push({ key: `flow:${k}`, tag, period });
     });
   }
-  for (const period of p.annual.slice(-5)) out.push({ key: "shares", tag: SHARE_TAGS[0]!, period });
+  for (const period of p.annual.slice(-6)) out.push({ key: "shares", tag: SHARE_TAGS[0]!, period });
   for (const k of INSTANT_KEYS) for (const tag of INSTANT_TAGS[k]) for (const period of p.latest) out.push({ key: `inst:${k}`, tag, period });
   for (const k of ["equity", "assets"] as const) for (const period of [...p.yearAgo, ...p.yearEnd]) out.push({ key: `inst:${k}`, tag: INSTANT_TAGS[k][0]!, period });
   // 지배주주 자본을 따로 보고하지 않는 회사(AVGO)의 1년 전 자본
@@ -163,7 +176,7 @@ export function frameData(rows: readonly FrameRow[], withEnd: boolean): FrameDat
 }
 const NI_TAGS = new Set<string>(FLOW_TAGS.netIncome.map((t) => t.name));
 
-/** 한 회사의 비교용 입력 (frames 에서). 최근 회계연도가 없거나 최근 분기말 자산이 없으면 null */
+/** 한 회사의 비교용 입력 (frames 에서). 최근 회계연도가 없거나(최근 세 연간 틀 모두 없음·결산 18개월 넘음) 최근 분기말 자산이 없으면 null */
 export function peerInputs(cik: number, frames: FrameMap, p: ReferencePeriods): ValueInputs | null {
   const get = (tag: FactTag, period: string): { val: number; end: string } | undefined => {
     const f = frames.get(fk(tag, period));
@@ -177,18 +190,27 @@ export function peerInputs(cik: number, frames: FrameMap, p: ReferencePeriods): 
     }
     return undefined;
   };
-  // 가장 최근 회계연도: CY(Y−1) 값이 기준. CY(Y) 값은 그 기간 끝이 한 해 앞 값과 같은 달·날(±10일)일 때만 —
-  // 10-Q 의 '최근 12개월' 줄(AMZN 2025-07~2026-06)이 CY(Y) 틀에 들어오는 일이 있어서다
+  // 가장 최근 회계연도: 최근 세 연간 틀(CY(Y) → CY(Y−1) → CY(Y−2)) 가운데 이 회사 값이 있는 가장 최근 것.
+  // 다만 그 값의 기간 끝이 한 해(두 해) 앞 틀 값과 같은 달·날(±10일)이 아니면 건너뛴다 — 아직 연간 보고서를 내지 않은 해의 틀에는
+  // 10-Q 의 '최근 12개월' 줄(AMZN 2025-07~2026-06)이 들어오는 일이 있어서다. 1~3월(12월 결산 회사가 연간 보고서를 내기 전)에도
+  // CY(Y−2) 값으로 비교 회사에 남는다 (예전에는 이때 대부분이 빠졌다)
   const years = p.annual;
-  const Y1 = years.length - 2;
-  const prevFy = first(FLOW_TAGS.netIncome, years[Y1]!);
-  const curFy = first(FLOW_TAGS.netIncome, years[Y1 + 1]!);
-  const sameFyEnd = (a: string, b: string) => Math.abs(daysBetween(addDays(a, 365), b)) <= 10;
+  const n = years.length;
+  const cands = [n - 1, n - 2, n - 3].map((i) => ({ i, r: first(FLOW_TAGS.netIncome, years[i]!) }));
   let k = -1;
-  if (curFy && (!prevFy || sameFyEnd(prevFy.end, curFy.end))) k = Y1 + 1;
-  else if (prevFy) k = Y1;
+  for (const c of cands) {
+    if (!c.r) continue;
+    const older = cands.find((o) => o.i < c.i && o.r);
+    // 앞 값과 끝 날짜가 어긋나면 건너뛰되, 앞 값이 이미 18개월보다 오래되었으면(회계연도 끝을 바꾼 회사 등) 이 값을 쓴다
+    const misaligned = older && Math.abs(daysBetween(addDays(older.r!.end, Math.round(365.25 * (c.i - older.i))), c.r.end)) > 10;
+    if (misaligned && daysBetween(older!.r!.end, p.refDate) <= FISCAL_STALE_DAYS) continue;
+    k = c.i;
+    break;
+  }
   if (k < 0) return null;
   const fyEnd = first(FLOW_TAGS.netIncome, years[k]!)!.end;
+  // 결산이 18개월보다 오래된 회사는 뺀다 (대상 종목의 '최근 연간 재무가 18개월보다 오래됨'과 같은 기준)
+  if (!fyEnd || daysBetween(fyEnd, p.refDate) > FISCAL_STALE_DAYS) return null;
   // 최근 분기말: 우선 분기에 자산이 있으면 그 분기, 없으면 대신 분기 (한 회사는 한 분기로)
   const qFound = get(INSTANT_TAGS.assets[0]!, p.latest[0]) ? 0 : get(INSTANT_TAGS.assets[0]!, p.latest[1]) ? 1 : -1;
   if (qFound < 0) return null;
@@ -259,6 +281,31 @@ export interface BuildOptions {
   pauseMs?: number;
   sleep?: (ms: number) => Promise<void>;
   log?: (msg: string) => void;
+  /** 지난 비교 기준 (업종 자리 층을 두 주 연속 조건이 바뀌었을 때만 바꾸려고). 없으면 이번 주 조건 그대로 */
+  prev?: ValueReferenceData | null;
+}
+
+/** 지난 기준과 층을 이어 쓰는 최대 간격 (이보다 오래된 기준이면 이번 주 조건 그대로) */
+export const LEVEL_PREV_MAX_DAYS = 21;
+/** 비교 회사 수 급감 막기: 지난 기준보다 이 비율 밑으로 줄면 저장하지 않는다 (모집단·일반 / 금융) */
+export const REFERENCE_KEEP_RATIO = 0.85;
+export const REFERENCE_KEEP_RATIO_FIN = 0.8;
+/** 이보다 오래된 지난 기준과는 비교하지 않는다 (오래 막혀 있으면 새 기준을 받아들인다) */
+export const REFERENCE_DROP_MAX_DAYS = 35;
+
+/**
+ * 새 기준의 회사 수가 지난 기준보다 크게 줄었는지 (자료가 비어 한쪽으로 치우친 기준을 막기 — 예: 연간 보고서 철이 아닌데 틀이 비었을 때).
+ * 줄었으면 까닭 글, 아니면 null. 지난 기준이 없거나 35일보다 오래되었으면 null
+ */
+export function referenceDrop(prev: Pick<ValueReferenceData, "refDate" | "counts"> | null | undefined, next: Pick<ValueReferenceData, "refDate" | "counts">): string | null {
+  if (!prev || daysBetween(prev.refDate, next.refDate) > REFERENCE_DROP_MAX_DAYS) return null;
+  const a = prev.counts;
+  const b = next.counts;
+  const bad: string[] = [];
+  if (b.universe < a.universe * REFERENCE_KEEP_RATIO) bad.push(`모집단 ${a.universe} → ${b.universe}`);
+  if (b.general < a.general * REFERENCE_KEEP_RATIO) bad.push(`일반 ${a.general} → ${b.general}`);
+  if (b.financial < a.financial * REFERENCE_KEEP_RATIO_FIN) bad.push(`금융 ${a.financial} → ${b.financial}`);
+  return bad.length ? `비교 회사 수가 지난 기준(${prev.refDate})보다 크게 줄어 저장하지 않았습니다: ${bad.join(", ")}` : null;
 }
 
 /**
@@ -294,7 +341,7 @@ export async function buildReferenceData(src: ReferenceSources, refDate: string,
     }
     frames.set(key, frameData(rows, NI_TAGS.has(item.tag.name)));
   }
-  const critical = [fk(FLOW_TAGS.netIncome[0], p.annual.at(-2)!), fk(INSTANT_TAGS.assets[0], p.latest[0])];
+  const critical = [fk(FLOW_TAGS.netIncome[0], p.annual.at(-2)!), fk(FLOW_TAGS.netIncome[0], p.annual.at(-3)!), fk(INSTANT_TAGS.assets[0], p.latest[0])];
   if (critical.some((k) => missing.includes(k))) throw new Error(`핵심 frames 를 받지 못했습니다: ${critical.filter((k) => missing.includes(k)).join(", ")}`);
 
   // 회사 목록: 스크리너 → CIK, 같은 회사(여러 종류 주식)는 시가총액이 큰 줄 하나
@@ -306,9 +353,13 @@ export async function buildReferenceData(src: ReferenceSources, refDate: string,
     return i;
   };
   const symbols: Record<string, [number, number]> = {};
+  const quotes: Record<string, [number, number]> = {};
+  const pairs = new Map<string, readonly [string, string]>();
   const byCik = new Map<string, { row: ScreenerRow; cik: string }>();
   for (const r of screener) {
     symbols[r.symbol] = [idx(sectors, r.sector), idx(industries, r.industry)];
+    pairs.set(`${r.sector}|${r.industry}`, [r.sector, r.industry]);
+    if (r.marketCap && r.price) quotes[r.symbol] = [r.marketCap, r.price];
     if (screenerExcluded(r) || !r.marketCap) continue;
     const cik = tickers.get(secTicker(r.symbol));
     if (!cik) continue;
@@ -360,6 +411,9 @@ export async function buildReferenceData(src: ReferenceSources, refDate: string,
     });
   }
   for (const path of ["general", "financial"] as const) for (const k of METRIC_ORDER) if (counts[path]) coverage[path][k] = Math.round((1000 * (have[path][k] ?? 0)) / counts[path]) / 1000;
+  // 업종 자리 층: 두 주 연속 조건이 바뀌어야 바뀐다 (지난 기준이 3주보다 오래되었으면 이번 주 조건 그대로)
+  const prev = opts.prev && daysBetween(opts.prev.refDate, refDate) <= LEVEL_PREV_MAX_DAYS && opts.prev.refDate < refDate ? opts.prev.levels : null;
+  const levels = buildLevels(peers, sectors, industries, pairs.values(), prev);
   opts.log?.(`비교 기준: 스크리너 ${screener.length} · CIK ${byCik.size} · 재무 ${withData.length} · 모집단 ${universe.length} (일반 ${counts.general} · 금융 ${counts.financial}) · 빠진 frames ${missing.length}`);
   return {
     v: 1,
@@ -376,5 +430,7 @@ export async function buildReferenceData(src: ReferenceSources, refDate: string,
     coverage,
     counts: { screener: screener.length, mapped: byCik.size, withData: withData.length, universe: universe.length, general: counts.general, financial: counts.financial },
     missingFrames: missing,
+    quotes,
+    levels,
   };
 }

@@ -876,7 +876,10 @@ export interface ValueScoreBlock {
   method: string;
   /** ok · partial(일부 지표 없이) · insufficient·unavailable(점수 없음) · excluded(대상 아님) · pending(계산 준비 중) · hold(잠시 보류) */
   status: "ok" | "partial" | "insufficient" | "unavailable" | "excluded" | "pending" | "hold";
-  /** 요약 카드 줄의 글: 띠 이름 · 점수 없음 · 대상 아님 · 계산 준비 중 · 잠시 보류 */
+  /**
+   * 요약 카드 줄의 글: '66점 · 가운데쯤'(점수 있음 — 예전 앱이 이 글만 굵게 보이므로 숫자까지) · 점수 없음 · 대상 아님 · 계산 준비 중 · 잠시 보류.
+   * 새 앱은 점수가 있으면 score·band 를 쓴다
+   */
   label: string;
   score: number | null;
   scoreExact?: number | null;
@@ -898,7 +901,8 @@ export interface ValueScoreBlock {
   notes?: string[];
   change?: { from: string; prev: number; now: number; diff: number; family: string; familyName: string; familyDiff: number; cause: string; text: string } | null;
   asOf?: { priceThrough: string | null; fiscalEnd: string | null; filed: string | null; form: string | null; basis: "FY" | "TTM" | null; fiscalLabel: string | null; fiscalShort: string | null; reference: string | null; fetchedAt: string | null };
-  versionLine?: string;
+  /** 계산 방식·출처 줄 — 점수를 계산했을 때만 (한국·ETF·점수 없음은 null) */
+  versionLine?: string | null;
 }
 export interface IndicatorScores {
   code: string;

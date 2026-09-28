@@ -701,7 +701,7 @@ describe("문구 (금지어 · 미래형)", () => {
 
 describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서버 응답)", () => {
   /** shared/fixtures/indicatorScores.json — 지금 서버 코드가 기록한 일봉으로 낸 응답과 같아야 한다. 바꿀 때: UPDATE_SCORE_FIXTURE=1 npx vitest run test/indicatorScores.test.ts */
-  it("2단계(가치·종합 켜짐): NVDA · MSFT · AAPL · META · JPM(은행) · RGTI(적자) · 차이 큰 예시 · SEC 재무 없는 예시 · 삼성전자 · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 지난주 대비 바뀐 종목 · 재무 받는 중 · 가치 끔 · 받기 실패", async () => {
+  it("2단계(가치·종합 켜짐): NVDA · MSFT · AAPL · META · JPM(은행) · RGTI(적자) · 차이 큰 예시 · SEC 재무 없는 예시 · 삼성전자 · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 지난주 대비 바뀐 종목(추세·가치) · 재무 받는 중 · 가치 끔 · 받기 실패", async () => {
     const { stock } = jumpCandles();
     const { src } = fixtureSources({
       candles: { ZJMP: stock, SHRT: candlesOf("NVDA").slice(-120), SQQQ: new Error("기록 없음") },
@@ -727,6 +727,16 @@ describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서
     await start(fixtureSources().src, undefined, true, fakeValueSources().src);
     await app!.inject({ method: "PUT", url: "/api/admin/features", payload: { valueScore: false } });
     await take("NVDA", "NVDA_valueOff");
+    // 지난주 대비 바뀐 이유 (가치): 지난주에 쓰던 비교 기준(9/17)은 비교 회사 주가 수준 값(이익·자산·매출 ÷ 시가총액)을 1/5 로 둔 것 →
+    // 이번 주(9/26 기준)와 가치 점수가 5점 넘게 달라 상세 카드에 한 줄 (서버 코드가 낸 응답 그대로)
+    await app!.close();
+    await start(fixtureSources().src, undefined, true, fakeValueSources().src);
+    const base = referenceData();
+    const fifth = (x: number | null, j: number) => (j < 5 && x !== null && Math.abs(x) < 1e300 ? x * 0.2 : x);
+    await app!.valueScores.saveReference({ ...base, refDate: "2026-09-17", peers: base.peers.map((p) => ({ ...p, x: p.x.map(fifth) })) });
+    await app!.valueScores.saveReference(base);
+    await app!.valueScores.refreshFacts("NVDA");
+    await take("NVDA", "NVDA_change");
     // 받기 실패 모습 (앱 화면 테스트용): 네이버 지수·기초자산 일봉을 받지 못한 서버
     await app!.close();
     const down = fixtureSources({ candles: { SOXX: new Error("야후 실패") }, bench: { NASDAQ: new Error("네이버 지수 실패") } });

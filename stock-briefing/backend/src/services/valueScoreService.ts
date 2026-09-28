@@ -5,6 +5,7 @@ import { computeAux, computeMetrics, type MetricAux, type MetricKey, type Metric
 import {
   CORE_METRICS,
   FAMILY_METRICS,
+  FISCAL_STALE_DAYS,
   isCyclical,
   isFinancial,
   OWN_MONTHS,
@@ -36,7 +37,7 @@ import { seoulIso } from "../lib/time.js";
 import type { FeatureService } from "./featureService.js";
 import { STATUS_TEXT, VALUE_ABOUT } from "./indicatorScoreText.js";
 import { addDays, daysBetween } from "../analysis/secFacts.js";
-import { buildReferenceData, parseFrame, type ReferenceSources } from "./valueReference.js";
+import { buildReferenceData, parseFrame, referenceDrop, type ReferenceSources } from "./valueReference.js";
 import type { EdgarProvider } from "../providers/dart/edgar.js";
 import type { NasdaqScreener } from "../providers/market/nasdaqScreener.js";
 import { NotListedError } from "../lib/errors.js";
@@ -67,6 +68,7 @@ import {
   PRICE_NOTE,
   RULE_TEXT,
   sectorKo,
+  tieNote,
   VALUE_BAND_LINE,
   VALUE_FAMILY_ABOUT,
   VALUE_FAMILY_NAME,
@@ -84,7 +86,9 @@ import {
  *    미등록 종목은 처음 열 때 백그라운드로 받는다. 화면 요청은 SEC 를 기다리지 않는다 (저장한 값만 읽음 — 없으면 '계산 준비 중')
  *  - 비교 기준: 주 1회(토요일 09:00 KST) Nasdaq 스크리너 + SEC frames → value_references (최근 3줄). 없거나 7일 넘게 묵으면 매일 09:15 · 켤 때 다시
  *  - 점수: 최근 20거래일 평균 종가 × 최신 희석 주식 수 = 시가총액, 공시일까지의 최근 4분기 재무 → 지표 → 업종·시장·자기 지난 5년 순위 → 5묶음 → 0~100
- *  - 받기 실패: 재무를 받지 못해도 7일까지 지난 값('지난 값 M/D'), 그 뒤 '점수 없음 — 재무제표를 받지 못했습니다'
+ *  - 받기 실패: 재무를 받지 못해도 7일까지 지난 값('지난 값 M/D'), 그 뒤 '점수 없음 — 재무제표를 받지 못했습니다'.
+ *    받은 지 오래됐다는 것만으로는 실패라고 하지 않는다 (미등록 종목은 열 때만 받는다 — 7일 넘게 묵었으면 '재무제표를 새로 받는 중')
+ *  - 주식 수 확인: SEC 주식 수가 비교 기준(Nasdaq 시가총액 ÷ 가격)과 크게 다르면(마지막 보고서 뒤 분할·병합 등) '잠시 보류'
  *  - 문구는 valueScoreText 의 틀 (금지어 검사 analysis/scoreWording). AI 프롬프트·브리핑·알림·위젯·잔고 목록에는 넣지 않는다
  */
 
@@ -151,7 +155,8 @@ export interface ValueBlock {
   notes: string[];
   change: { from: string; prev: number; now: number; diff: number; family: ValueFamilyKey; familyName: string; familyDiff: number; cause: string; text: string } | null;
   asOf: { priceThrough: string | null; fiscalEnd: string | null; filed: string | null; form: string | null; basis: "FY" | "TTM" | null; fiscalLabel: string | null; fiscalShort: string | null; reference: string | null; fetchedAt: string | null };
-  versionLine: string;
+  /** '계산 방식 VALUE-1 · 재무 SEC … · 비교 기준 M월 D일' — 점수를 계산했을 때만 (한국·ETF·점수 없음은 null — SEC 자료로 계산한 것처럼 읽히지 않게) */
+  versionLine: string | null;
 }
 
 export interface ValueEvalArgs {
@@ -197,8 +202,6 @@ export const FACTS_STALE_MS = 7 * 86_400_000;
 /** 비교 기준: 7일 넘으면 다시 만들고, 14일 넘으면 점수 없음 */
 export const REFERENCE_REBUILD_DAYS = 7;
 export const REFERENCE_STALE_DAYS = 14;
-/** 재무: 결산일이 18개월보다 오래되면 점수 없음 */
-const FISCAL_STALE_DAYS = 548;
 /** 주가: 마지막 봉이 기준 거래일보다 이만큼(달력 일) 넘게 앞서면 점수 없음 (5거래일) */
 const PRICE_STALE_DAYS = 8;
 const AVG_DAYS = 20;
@@ -207,6 +210,23 @@ const FAIL_BACKOFF_MS = 30 * 60_000;
 const NOT_LISTED_BACKOFF_MS = 24 * 3_600_000;
 /** 줄여서 저장할 기간 (최근 약 8년) */
 const KEEP_YEARS = 8;
+/**
+ * 주식 수 확인 (마지막 보고서 뒤 분할·병합 등 — 봉은 이미 보정됐는데 SEC 주식 수는 그 전 값인 때):
+ *  - SEC 주식 수 ÷ Nasdaq 주식 수(시가총액 ÷ 가격, 비교 기준을 만든 날) < 0.6 (정분할) 또는 > 8 (큰 병합)
+ *  - 점수용 시가총액 ÷ Nasdaq 시가총액 < 0.4 (비교 기준을 만든 뒤 생긴 정분할 — 가격이 이만큼 움직이는 일은 드물다)
+ * 여러 종류 주식(상장한 종류만 시가총액에 넣는 회사)은 SEC 주식 수가 더 크게 나오므로 '크다' 쪽은 넉넉히 둔다
+ */
+export const SHARES_RATIO_LOW = 0.6;
+export const SHARES_RATIO_HIGH = 8;
+export const CAP_RATIO_LOW = 0.4;
+export function sharesMismatch(q: { cap: number; price: number } | null, shares: number | null | undefined, avgPrice: number | null | undefined): { shares: number; cap: number } | null {
+  if (!q || !shares || !(shares > 0) || !avgPrice || !(avgPrice > 0)) return null;
+  const rs = shares / (q.cap / q.price);
+  const rc = (avgPrice * shares) / q.cap;
+  return rs < SHARES_RATIO_LOW || rs > SHARES_RATIO_HIGH || rc < CAP_RATIO_LOW ? { shares: rs, cap: rc } : null;
+}
+/** 같은 값이 많은 지표: 비교 회사의 이 비율 이상이 같은 값이면 (무배당 0% 등) */
+export const TIE_SHARE = 0.5;
 
 interface LoadedFacts {
   code: string;
@@ -395,10 +415,15 @@ export class ValueScoreService {
     const run = (async () => {
       const at = seoulIso(this.now());
       try {
+        // 지난 기준 (오늘 전에 만든 것): 업종 자리 층을 두 주 연속 조건이 바뀌었을 때만 바꾸고, 회사 수가 크게 줄면 저장하지 않는다
+        const prev = await this.reference(addDays(today, -1)).catch(() => null);
         const data = await buildReferenceData(this.deps.sources!.reference, today, {
           pauseMs: this.deps.referencePauseMs ?? 250,
           log: (msg) => this.deps.log?.info({}, `가치 지표: ${msg}`),
+          prev: prev?.ref ?? null,
         });
+        const drop = referenceDrop(prev?.ref ?? null, data);
+        if (drop) throw new Error(drop);
         await this.saveReference(data);
         this.lastBuild = { at, ok: true, refDate: data.refDate, counts: data.counts, missing: data.missingFrames.length };
         this.deps.log?.info({ refDate: data.refDate, ...data.counts, missing: data.missingFrames.length }, "가치 지표: 비교 기준 만듦");
@@ -451,8 +476,11 @@ export class ValueScoreService {
 
   // ── 점수 ─────────────────────────────────────────────
 
-  /** 1단계와 같은 가치 줄 (플래그 꺼짐·출처 없음·한국) */
-  static stage1Block(etf: boolean, text: string = STATUS_TEXT.valuePending): ValueBlock {
+  /**
+   * 가치 부분이 꺼진 서버의 가치 줄 (되돌리기 스위치 valueScore 꺼짐·출처 없음): 1단계와 같은 모양 — ETF 는 '대상 아님', 그 밖은
+   * '계산 준비 중 · 가치 지표 점수는 지금 계산하지 않습니다.' (2단계가 나간 뒤라 '다음 단계에서'라고 쓰지 않는다)
+   */
+  static stage1Block(etf: boolean, text: string = VALUE_STATUS_TEXT.off): ValueBlock {
     return etf ? baseBlock("excluded", "대상 아님", { code: "etf", text: STATUS_TEXT.valueEtf }) : baseBlock("pending", "계산 준비 중", { code: "later", text });
   }
 
@@ -482,17 +510,32 @@ export class ValueScoreService {
       return plain(baseBlock("pending", "계산 준비 중", { code: "pendingFacts", text: VALUE_STATUS_TEXT.pendingFacts }), { waiting: true });
     }
     const age = t - Date.parse(facts.fetchedAt);
+    // 마지막으로 받은 뒤 실제로 받기에 실패했는지 — 받은 지 오래됐다는 것만으로는 실패가 아니다 (미등록 종목은 열 때만 받는다)
+    const fail = this.failures.get(code);
+    const failedSince = fail?.kind === "failed" && fail.at > Date.parse(facts.fetchedAt);
     if (age >= FACTS_REFRESH_MS) this.requestRefresh(code);
     if (facts.sic === 6798) return plain(baseBlock("excluded", "대상 아님", { code: "reit", text: VALUE_STATUS_TEXT.reit }));
     if (facts.sic === 6770) return plain(baseBlock("excluded", "대상 아님", { code: "spac", text: VALUE_STATUS_TEXT.spac }));
-    if (age >= FACTS_STALE_MS) return plain(baseBlock("unavailable", "점수 없음", { code: "factsFailed", text: VALUE_STATUS_TEXT.factsFailed }), { fetchFailure: true });
-    if (!ref) return plain(baseBlock("pending", "계산 준비 중", { code: "pendingReference", text: VALUE_STATUS_TEXT.pendingReference }), { waiting: true });
+    if (age >= FACTS_STALE_MS) {
+      if (failedSince) return plain(baseBlock("unavailable", "점수 없음", { code: "factsFailed", text: VALUE_STATUS_TEXT.factsFailed }), { fetchFailure: true });
+      // 오랜만에 연 종목: 뒤에서 새로 받는 중 (앱은 1분마다 다시 묻는다)
+      return plain(baseBlock("pending", "계산 준비 중", { code: "pendingRefresh", text: VALUE_STATUS_TEXT.pendingRefresh }), { waiting: true });
+    }
+    if (!ref) {
+      // 첫 비교 기준을 만들지 못했으면 끝나는 상태로 (앱이 계속 다시 묻지 않게) — 하루 한 번(09:15) 다시 만든다
+      if (!this.building && this.lastBuild && !this.lastBuild.ok)
+        return plain(baseBlock("unavailable", "점수 없음", { code: "referenceFailed", text: VALUE_STATUS_TEXT.referenceFailed }), { fetchFailure: true });
+      return plain(baseBlock("pending", "계산 준비 중", { code: "pendingReference", text: VALUE_STATUS_TEXT.pendingReference }), { waiting: true });
+    }
     if (daysBetween(ref.refDate, a.scoreDate) > REFERENCE_STALE_DAYS) return plain(baseBlock("insufficient", "점수 없음", { code: "referenceOld", text: VALUE_STATUS_TEXT.referenceOld }));
     if (a.candles === null) return plain(baseBlock("unavailable", "점수 없음", { code: "priceFailed", text: VALUE_STATUS_TEXT.priceFailed }), { fetchFailure: true });
     if (a.splitHold) return plain(baseBlock("hold", "잠시 보류", { code: "split", text: `잠시 보류 — ${VALUE_STATUS_TEXT.hold}` }));
 
     const monthly = await a.monthly().catch(() => null);
     const now = this.core(facts, ref, cls, a.candles, monthly, a.scoreDate);
+    // 마지막 보고서 뒤 주식 분할·병합 등: SEC 주식 수로 만든 시가총액이 틀리므로 점수를 내지 않는다
+    if (sharesMismatch(ref.quote(code), now.inputs?.shares, now.avgPrice))
+      return plain(baseBlock("hold", "잠시 보류", { code: "sharesMismatch", text: `잠시 보류 — ${VALUE_STATUS_TEXT.sharesMismatch}` }));
     if (now.status !== "scored") return plain(baseBlock("insufficient", "점수 없음", now.reason!), { stored: { method: VALUE_VERSION, status: "insufficient", reason: now.reason!.code, reference: ref.refDate, fetchedAt: facts.fetchedAt } });
 
     // 지난주 (5거래일 전 봉까지 · 그날까지 제출된 재무 · 그날 쓰던 비교 기준)
@@ -504,9 +547,11 @@ export class ValueScoreService {
       const prev = this.core(facts, prevRef, prevRef.classify(code), cut, monthly, prevDate);
       if (prev.status === "scored" && prev.result!.shown !== null) change = weeklyValueChange(now, prev, ref.refDate, prevRef.refDate);
     }
-    const carried = age >= FACTS_CARRY_MS;
+    // '지난 값' 배지는 실제로 받기에 실패했을 때만. 받는 중이면 점수는 그대로 보이고 응답만 짧게 기억한다
+    const carried = age >= FACTS_CARRY_MS && failedSince;
+    const refreshing = age >= FACTS_REFRESH_MS && !failedSince;
     const block = scoredBlock(now, { ref, cls, change, carried, fetchedAt: facts.fetchedAt });
-    return { block, stored: storedOf(now, ref.refDate, facts), fetchFailure: false, waiting: false };
+    return { block, stored: storedOf(now, ref.refDate, facts), fetchFailure: false, waiting: refreshing };
   }
 
   /** 한 시점 계산 (순수 — 저장·네트워크 없음) */
@@ -624,8 +669,16 @@ function baseBlock(status: ValueStatus, label: string, reason: { code: string; t
     notes: [],
     change: null,
     asOf: { priceThrough: null, fiscalEnd: null, filed: null, form: null, basis: null, fiscalLabel: null, fiscalShort: null, reference: null, fetchedAt: null },
-    versionLine: valueVersionLine(null),
+    versionLine: null,
   };
+}
+
+/**
+ * 같은 값이 많은 지표인지: 업종 자리 비교 회사의 절반 이상이 한 값이고(무배당 0% 등) 이 회사 값은 그 값과 다름 —
+ * 위치가 그 덩어리에 크게 좌우되어 '많은 편·적은 편' 문장이 실제보다 크게 읽힌다 (규칙 값 — 적자·순현금 덩어리 — 은 뺀다: 그 순위는 규칙대로)
+ */
+function tieDriven(m: MetricScore): boolean {
+  return !m.rule && m.x !== null && !!m.peer && m.peer.tie >= TIE_SHARE && m.peer.tieX !== null && Number.isFinite(m.peer.tieX) && m.x !== m.peer.tieX;
 }
 
 /** 지표 한 줄의 화면 값 (규칙은 이름으로) */
@@ -635,12 +688,13 @@ function metricValueText(m: MetricScore): string | null {
     if (m.key === "A1") return "적자";
     if (m.key === "A2" || m.key === "D2" || m.key === "D3") return "영업적자";
     if (m.key === "D1") return "자본잠식";
+    if (m.key === "B5") return "영업손실이 매출보다 큰 해가 많음";
   }
   if (m.rule === "notComputed") return null;
   return formatMetric(m.key, m.show);
 }
 
-function metricRow(m: MetricScore): ValueMetricRow {
+export function metricRow(m: MetricScore): ValueMetricRow {
   const level = m.peer?.level ?? null;
   const levelName = level === "sector" ? "부문" : level === "market" ? "시장" : "업종";
   const text = !m.adopted ? NOT_ADOPTED : m.rule && m.why ? RULE_TEXT[m.why] : m.score === null || m.x === null ? NO_DATA : positionSentence(m.key, m.score);
@@ -656,16 +710,18 @@ function metricRow(m: MetricScore): ValueMetricRow {
     text,
     meaning: metricMeaning(m.key),
     used: m.adopted && m.score !== null,
-    note: m.blend && m.adopted ? BLEND_NOTE : null,
+    note: [m.blend && m.adopted ? BLEND_NOTE : null, m.adopted && m.score !== null && tieDriven(m) ? tieNote(Math.round(100 * m.peer!.tie), medianText(m.key, m.peer!.tieX) ?? "") : null].filter(Boolean).join(" ") || null,
   };
 }
 
-function familyRow(f: FamilyScore): ValueFamilyRow {
+export function familyRow(f: FamilyScore): ValueFamilyRow {
   const present = f.metrics.filter((m) => m.adopted && m.score !== null);
   let text: string;
   if (!f.valid) text = f.why === "noCore" ? "핵심 지표 값이 없어 이 묶음은 빠졌습니다." : "값이 있는 지표가 절반보다 적어 이 묶음은 빠졌습니다.";
   else {
-    const top = [...present].sort((a, b) => Math.abs(b.score! - 50) - Math.abs(a.score! - 50))[0]!;
+    // 머리 문장: 가운데(50)에서 가장 먼 지표 — 같은 값이 많아 위치가 부풀려진 지표(무배당 0% 사이의 0.1% 등)는 되도록 고르지 않는다
+    const pool = present.filter((m) => !tieDriven(m));
+    const top = [...(pool.length ? pool : present)].sort((a, b) => Math.abs(b.score! - 50) - Math.abs(a.score! - 50))[0]!;
     const s = top.rule && top.why ? RULE_TEXT[top.why] : positionSentence(top.key, top.score!);
     text = `${METRIC_NAME[top.key]} — ${s}`;
   }
@@ -703,7 +759,8 @@ function scoredBlock(c: Core, o: { ref: PeerBook; cls: { sector: string | null; 
   if (period.basis === "TTM") notes.push(PEER_TIMING_NOTE);
   if (r.status === "partial") notes.push(`계산에 쓴 묶음 비중 ${r.coverageWeight} (100 중)`);
   return {
-    ...baseBlock(r.status, band, null),
+    // 요약 줄 글: 예전 앱(1단계)은 점수 칸을 모르고 label 만 굵게 보이므로 숫자까지 넣는다 ('66점 · 가운데쯤'). 새 앱은 score·band 를 쓴다
+    ...baseBlock(r.status, `${shown}점 · ${band}`, null),
     score: shown,
     scoreExact: r.score,
     band,

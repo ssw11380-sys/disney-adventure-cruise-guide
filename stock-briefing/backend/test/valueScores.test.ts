@@ -3,6 +3,7 @@ import { compactCompanyFacts, FactBook, normalizeInputs, type CompactFacts, type
 import { allTagNames, cashAndInvestments, totalDebt } from "../src/analysis/valueConcepts.js";
 import { computeAux, computeMetrics, type MetricCtx, type MetricSet } from "../src/analysis/valueMetrics.js";
 import {
+  buildLevels,
   encodeX,
   isCyclical,
   isFinancial,
@@ -15,11 +16,29 @@ import {
   valueBand,
   valueFlags,
   VALUE_WEIGHTS,
+  type FamilyScore,
+  type MetricScore,
   type PeerRow,
   type ValueReferenceData,
 } from "../src/analysis/valueScore.js";
 import { scoreWordingProblems } from "../src/analysis/scoreWording.js";
-import { buildReferenceData, frameData, framePlan, parseFrame, parseScreener, peerInputs, referencePeriods, screenerExcluded, secTicker, type FrameMap, type FrameRow, type ReferenceSources, type ScreenerRow } from "../src/services/valueReference.js";
+import {
+  buildReferenceData,
+  frameData,
+  framePlan,
+  parseFrame,
+  parseScreener,
+  peerInputs,
+  referenceDrop,
+  referencePeriods,
+  screenerExcluded,
+  secTicker,
+  type FrameMap,
+  type FrameRow,
+  type ReferenceSources,
+  type ScreenerRow,
+} from "../src/services/valueReference.js";
+import { familyRow, metricRow, sharesMismatch } from "../src/services/valueScoreService.js";
 import {
   BLEND_NOTE,
   carriedBadge,
@@ -46,6 +65,7 @@ import {
   positionText,
   PRICE_NOTE,
   RULE_TEXT,
+  tieNote,
   VALUE_BAND_LINE,
   VALUE_FAMILY_ABOUT,
   VALUE_FAMILY_NAME,
@@ -457,7 +477,7 @@ describe("백분위·비교 섞기·묶음·상태 (scoreValue)", () => {
     expect(short.families[0]!.metrics[0]!.pos.own).toBeUndefined();
   });
 
-  it("묶음 비중 일반 30·25·20·15·10: V = round(Σ W·F / Σ W), 묶음 점수 = 지표 점수 평균", () => {
+  it("묶음 비중 일반 30·25·20·15·10: 화면 정수로 한 단계씩 — 묶음 = 지표 정수의 평균, V = round(Σ W·round(F) / Σ W) (손으로 다시 계산해도 맞게)", () => {
     const pb = new PeerBook(smallReference());
     const metrics: MetricSet = { ...allMetrics(10.5), A1: { x: 20.5, show: 1 }, D1: { x: 0.5, show: 1 } };
     const r = scoreValue({ path: "general", sector: "Technology", industry: "IndA", cik: null, metrics, own: {}, peers: pb });
@@ -465,12 +485,21 @@ describe("백분위·비교 섞기·묶음·상태 (scoreValue)", () => {
     expect(r.coverageWeight).toBe(100);
     for (const f of r.families) {
       const present = f.metrics.filter((m) => m.score !== null);
-      expect(f.score).toBeCloseTo(present.reduce((a, m) => a + m.score!, 0) / present.length, 12);
+      expect(f.score).toBeCloseTo(present.reduce((a, m) => a + roundScore(m.score!), 0) / present.length, 12);
     }
-    const V = r.families.reduce((a, f) => a + VALUE_WEIGHTS.general[f.key] * f.score!, 0) / 100;
+    const V = r.families.reduce((a, f) => a + VALUE_WEIGHTS.general[f.key] * roundScore(f.score!), 0) / 100;
     expect(r.score).toBeCloseTo(V, 12);
     expect(r.shown).toBe(roundScore(V));
     expect(r.families.map((f) => f.weight)).toEqual([30, 25, 20, 15, 10]);
+  });
+
+  it("리뷰 예: 묶음 정수 0·46·81·24·32 → (30·0 + 25·46 + 20·81 + 15·24 + 10·32) / 100 = 34.5 → 35 (예전처럼 소수 묶음 점수로 계산하면 34 가 될 수 있었다)", () => {
+    const fam = (key: FamilyScore["key"], weight: number, score: number): FamilyScore => ({ key, weight, score, valid: true, why: null, metrics: [] });
+    // 묶음 소수값이 반올림 경계 바로 아래(45.6·80.6·23.6·31.6)여도 화면 정수(46·81·24·32)로 계산
+    const fams = [fam("price", 30, 0), fam("quality", 25, 45.6), fam("health", 20, 80.6), fam("growth", 15, 23.6), fam("payout", 10, 31.6)];
+    const exactV = fams.reduce((a, f) => a + f.weight * f.score!, 0) / 100;
+    const shownV = fams.reduce((a, f) => a + f.weight * roundScore(f.score!), 0) / 100;
+    expect([roundScore(exactV), roundScore(shownV)]).toEqual([34, 35]);
   });
 
   it("금융사 묶음 비중 35·30·10·15·10, 금융사끼리만 비교", () => {
@@ -550,6 +579,11 @@ describe("백분위·비교 섞기·묶음·상태 (scoreValue)", () => {
     expect(isCyclical("IndA", 0.05, { opMarginStdP70: 0.1 })).toBe(false);
     expect(isFinancial("Major Banks", {})).toBe(true);
     expect(isFinancial("Investment Bankers/Brokers/Service", { liabilities: 100, deposits: 30 })).toBe(true);
+    // 예금이 없는 증권사(IBKR·HOOD 식): 자본 ÷ 총자산 < 25% 면 금융 경로 (설계 §4 7번 '증권'), 자산운용사처럼 자본이 두꺼우면 일반 경로
+    expect(isFinancial("Investment Bankers/Brokers/Service", { liabilities: 88, assets: 100, equity: 12 })).toBe(true);
+    expect(isFinancial("Investment Bankers/Brokers/Service", { liabilities: 60, assets: 100, equity: 40 })).toBe(false);
+    expect(isFinancial("Investment Bankers/Brokers/Service", { liabilities: 88, assets: 100, equity: 8, equityTotal: 30 })).toBe(false);
+    expect(isFinancial("Business Services", { liabilities: 88, assets: 100, equity: 12 })).toBe(false);
     expect(isFinancial("Finance: Consumer Services", { liabilities: 100 })).toBe(false);
     expect(isFinancial(null, {}, 6021)).toBe(true);
     expect(isFinancial(null, {}, 7372)).toBe(false);
@@ -562,7 +596,7 @@ describe("비교 기준 만들기 (Nasdaq 스크리너 · SEC frames)", () => {
   it("스크리너 원본 → 줄: 시가총액 숫자, 빈 칸 null, 우선주(^)·워런트·스팩·리츠는 비교 회사에서 뺀다, BRK/B → SEC 표기 BRK-B", () => {
     const rows = parseScreener(screenerSample());
     const by = (s: string) => rows.find((r) => r.symbol === s)!;
-    expect(by("NVDA")).toEqual({ symbol: "NVDA", name: "NVIDIA Corporation Common Stock", marketCap: 5_412_378_000_000, sector: "Technology", industry: "Semiconductors" });
+    expect(by("NVDA")).toEqual({ symbol: "NVDA", name: "NVIDIA Corporation Common Stock", marketCap: 5_412_378_000_000, sector: "Technology", industry: "Semiconductors", price: 224.58 });
     expect(screenerExcluded(by("NVDA"))).toBe(false);
     expect(screenerExcluded(by("O"))).toBe(true); // 리츠
     expect(screenerExcluded(rows.find((r) => r.symbol.includes("^"))!)).toBe(true);
@@ -580,17 +614,21 @@ describe("비교 기준 만들기 (Nasdaq 스크리너 · SEC frames)", () => {
     expect(parseFrame({})).toEqual([]);
   });
 
-  it("기간: 연간 CY(Y−5)~CY(Y), 최근 분기말은 기준일보다 50일 넘게 지난 분기, 1년 전, 연말 잔액", () => {
+  it("기간: 연간 CY(Y−6)~CY(Y), 최근 분기말은 기준일보다 50일 넘게 지난 분기, 1년 전, 연말 잔액", () => {
     expect(referencePeriods("2026-09-26")).toEqual({
-      annual: ["CY2021", "CY2022", "CY2023", "CY2024", "CY2025", "CY2026"],
+      refDate: "2026-09-26",
+      annual: ["CY2020", "CY2021", "CY2022", "CY2023", "CY2024", "CY2025", "CY2026"],
       latest: ["CY2026Q2I", "CY2026Q1I"],
       yearAgo: ["CY2025Q2I", "CY2025Q1I"],
-      yearEnd: ["CY2021Q4I", "CY2022Q4I", "CY2023Q4I", "CY2024Q4I", "CY2025Q4I"],
+      yearEnd: ["CY2020Q4I", "CY2021Q4I", "CY2022Q4I", "CY2023Q4I", "CY2024Q4I", "CY2025Q4I"],
     });
     expect(referencePeriods("2026-08-10").latest).toEqual(["CY2026Q1I", "CY2025Q4I"]);
+    expect(referencePeriods("2027-01-02").latest).toEqual(["CY2026Q3I", "CY2026Q2I"]);
     const plan = framePlan(referencePeriods("2026-09-26"));
     expect(new Set(plan.map((p) => `${p.tag.name}|${p.period}`)).size).toBe(plan.length);
-    expect(plan.length).toBeLessThan(200);
+    // 매출·영업이익·순이익 7년, 나머지 흐름 3년 (2026-09-26 실측 210번)
+    expect(plan.length).toBeLessThan(230);
+    expect(plan.filter((p) => p.tag.name === "NetCashProvidedByUsedInOperatingActivities").map((p) => p.period)).toEqual(["CY2024", "CY2025", "CY2026"]);
   });
 
   /** 가짜 frames: 회사마다 값 정의 → 태그·기간별 줄 */
@@ -617,8 +655,9 @@ describe("비교 기준 만들기 (Nasdaq 스크리너 · SEC frames)", () => {
         const y = Number(period.slice(2, 6));
         const annual = !period.includes("Q");
         const end = annual ? `${y}-12-31` : period.includes("Q2") ? `${y}-06-30` : period.includes("Q1") ? `${y}-03-31` : `${y}-12-31`;
-        if (annual && y === 2026) {
-          if (c.ttmRowCY2026 && tag === "NetIncomeLoss") out.push({ cik: c.cik, start: "2025-07-01", end: "2026-06-30", val: 999 });
+        // 2026년 연간 보고서는 아직 없음 (AMZN 식 10-Q 12개월 줄만) — 2027년 1~3월 기준일은 '12월 결산 회사가 아직 연간 보고서를 내기 전'
+        if (annual && y >= 2026) {
+          if (c.ttmRowCY2026 && tag === "NetIncomeLoss" && y === 2026) out.push({ cik: c.cik, start: "2025-07-01", end: "2026-06-30", val: 999 });
           continue;
         }
         const scale = c.cap / 1e9;
@@ -686,10 +725,62 @@ describe("비교 기준 만들기 (Nasdaq 스크리너 · SEC frames)", () => {
     expect(amzn.x[METRIC_ORDER.indexOf("A1")]).toBeCloseTo(0.1 * 50e9 / 50e9, 9);
     // 잠깐 실패는 한 번 더 받아 채우고, 계속 실패한 항목은 빠진 목록에
     expect(calls.filter((c) => c === "GrossProfit|CY2025")).toHaveLength(2);
-    expect(d.missingFrames).toEqual(["ShareBasedCompensation|CY2025", "ShareBasedCompensation|CY2026"]);
+    expect(d.missingFrames).toEqual(["ShareBasedCompensation|CY2024", "ShareBasedCompensation|CY2025", "ShareBasedCompensation|CY2026"]);
+    // 지표 계산 확인용 시가총액·가격(가격이 없는 합성 줄은 빠짐), 업종 자리 층 표
+    expect(d.quotes).toEqual({});
+    expect(d.levels!.general["Technology|Semiconductors"]).toMatch(/^[ism]{46}$/);
     expect(slept.filter((ms) => ms === 250).length).toBeGreaterThan(100);
     expect(d.symbols["REIT1"]).toBeDefined(); // 대상 종목 분류용으로는 남김
     expect(d.method).toBe("VALUE-1");
+  });
+
+  it("1~3월에도 비교 회사가 빠지지 않는다 (리뷰 must): 12월 결산 회사가 아직 연간 보고서를 내지 않았으면 CY(Y−2) 로 — 예전에는 1/2~3/6 에 거의 다 빠졌다", async () => {
+    const s = synthetic();
+    const src: ReferenceSources = { screener: async () => s.screener, tickers: async () => s.tickers, frame: async (tag, period) => s.frame(tag.name, period) };
+    const quiet = { sleep: async () => undefined };
+    const base = await buildReferenceData(src, "2026-09-26", quiet);
+    expect(base.counts.universe).toBe(29);
+    for (const d of ["2026-12-26", "2027-01-02", "2027-01-09", "2027-02-06", "2027-03-06"]) {
+      const r = await buildReferenceData(src, d, quiet);
+      expect([d, r.counts.withData, r.counts.universe, r.counts.general, r.counts.financial]).toEqual([d, base.counts.withData, base.counts.universe, base.counts.general, base.counts.financial]);
+      // AMZN 식 10-Q 12개월 줄(CY2026 틀 — 연간 보고서를 내기 전)은 여전히 쓰지 않고 CY2025 회계연도 값
+      expect(r.peers.find((p) => p.t === "AMZNX")!.x[METRIC_ORDER.indexOf("A1")]).toBeCloseTo((0.1 * 50e9) / 50e9, 9);
+      expect(r.peers.map((p) => p.x)).toEqual(base.peers.map((p) => p.x));
+    }
+    // 결산이 18개월보다 오래되면(연간 보고서를 1년 넘게 내지 않은 회사) 비교 회사에서 뺀다 — 남는 것은 앞 값이 18개월을 넘어
+    // 12개월 줄(2026-06-30 끝, 15개월 전)을 그대로 쓰는 AMZNX 하나
+    const late = await buildReferenceData(src, "2027-09-26", quiet);
+    expect(late.counts.withData).toBe(1);
+  });
+
+  it("비교 회사 입력: 1월에 CY(Y−1) 틀의 값이 10-Q 12개월 줄이면 CY(Y−2) 회계연도로, 앞 값이 18개월보다 오래되었으면(회계연도 끝을 바꾼 회사) 그 값 그대로", () => {
+    const p = referencePeriods("2027-01-15");
+    const frames: FrameMap = new Map();
+    const put = (tag: string, period: string, rows: FrameRow[]) => frames.set(`${tag}|${period}`, frameData(rows, tag === "NetIncomeLoss"));
+    put("NetIncomeLoss", "CY2026", [
+      { cik: 1, start: "2025-10-01", end: "2026-09-30", val: 50 }, // 12월 결산 회사의 10-Q 12개월 줄
+      { cik: 2, start: "2025-10-01", end: "2026-09-30", val: 70 }, // 6월 결산 → 9월 결산으로 바꾼 회사 (앞 값 2024-06-30 은 18개월 넘음)
+    ]);
+    put("NetIncomeLoss", "CY2025", [{ cik: 1, start: "2025-01-01", end: "2025-12-31", val: 40 }]);
+    put("NetIncomeLoss", "CY2024", [{ cik: 2, start: "2023-07-01", end: "2024-06-30", val: 60 }]);
+    put("Assets", "CY2026Q3I", [
+      { cik: 1, end: "2026-09-30", val: 100 },
+      { cik: 2, end: "2026-09-30", val: 100 },
+    ]);
+    expect(peerInputs(1, frames, p)!.flow.netIncome).toBe(40);
+    expect(peerInputs(2, frames, p)!.flow.netIncome).toBe(70);
+    // 7월이면 앞 값(2025-12-31)도 아직 18개월 안 → 12개월 줄은 계속 건너뜀
+    expect(peerInputs(1, frames, { ...p, refDate: "2027-07-01" })!.flow.netIncome).toBe(40);
+  });
+
+  it("비교 회사 수가 지난 기준보다 크게 줄면 저장하지 않는다 (모집단·일반 85%, 금융 80% 밑) — 35일보다 오래된 지난 기준과는 비교하지 않음", () => {
+    const counts = (universe: number, general: number, financial: number) => ({ screener: 7000, mapped: 5000, withData: 3800, universe, general, financial });
+    const prev = { refDate: "2026-09-26", counts: counts(3000, 2600, 400) };
+    expect(referenceDrop(prev, { refDate: "2026-10-03", counts: counts(2950, 2560, 390) })).toBeNull();
+    expect(referenceDrop(prev, { refDate: "2026-10-03", counts: counts(1200, 1000, 200) })).toBe("비교 회사 수가 지난 기준(2026-09-26)보다 크게 줄어 저장하지 않았습니다: 모집단 3000 → 1200, 일반 2600 → 1000, 금융 400 → 200");
+    expect(referenceDrop(prev, { refDate: "2026-10-03", counts: counts(2900, 2560, 310) })).toMatch(/금융 400 → 310/);
+    expect(referenceDrop(prev, { refDate: "2026-11-05", counts: counts(1200, 1000, 200) })).toBeNull();
+    expect(referenceDrop(null, { refDate: "2026-10-03", counts: counts(10, 5, 5) })).toBeNull();
   });
 
   it("핵심 frames(최근 회계연도 순이익·최근 분기말 자산)를 받지 못하면 오류 — 지난 기준을 그대로 쓰게", async () => {
@@ -703,6 +794,9 @@ describe("비교 기준 만들기 (Nasdaq 스크리너 · SEC frames)", () => {
       },
     };
     await expect(buildReferenceData(src, "2026-09-26", { sleep: async () => undefined })).rejects.toThrow(/핵심 frames/);
+    // CY(Y−2) 순이익도 핵심 (1~3월에는 이것으로 비교 회사를 만든다)
+    const src2: ReferenceSources = { ...src, frame: async (tag, period) => (tag.name === "NetIncomeLoss" && period === "CY2024" ? Promise.reject(new Error("실패")) : s.frame(tag.name, period)) };
+    await expect(buildReferenceData(src2, "2026-09-26", { sleep: async () => undefined })).rejects.toThrow(/NetIncomeLoss\|CY2024/);
     await expect(buildReferenceData({ ...src, screener: async () => [] }, "2026-09-26", { sleep: async () => undefined })).rejects.toThrow(/스크리너/);
   });
 
@@ -776,5 +870,133 @@ describe("문구 (금지어 · 미래형) — 가치 지표 모든 틀", () => {
     expect(valueDatesLine({ priceThrough: "2026-09-25", fiscalEnd: "2026-07-26", basis: "TTM", filed: "2026-08-26", reference: "2026-09-26" })).toBe("주가 9월 25일(금)까지 20거래일 평균 · 재무 2026년 7월까지 최근 4분기, 8월 26일(수) 제출 · 비교 기준 9월 26일(토)");
     expect(fiscalShort("2026-07-26", "TTM")).toBe("재무 2026년 7월까지 4분기");
     expect(carriedBadge("2026-09-24T21:00:00+09:00")).toBe("지난 값 9/24");
+  });
+});
+
+// ── 리뷰 뒤 고친 점 (2단계 2차): 층 바꾸기·같은 값 덩어리·주식 수 확인·지표 정의 ──
+
+describe("업종 자리 층은 두 주 연속 조건이 바뀌어야 바뀐다 (설계 §7.1·§11.1)", () => {
+  const M = METRIC_ORDER.length;
+  const key = "Technology|IndA";
+  const pairs = [["Technology", "IndA"]] as const;
+  const levelsOf = (nA: number, prev?: ValueReferenceData["levels"]) => {
+    const r = smallReference({ nA });
+    return buildLevels(r.peers, r.sectors, r.industries, pairs, prev);
+  };
+  it("업종 20곳 → 14곳: 첫 주는 조건만 '부문'이고 쓰는 층은 업종 그대로, 둘째 주에 부문으로. 한 주만 바뀌었다 돌아오면 그대로", () => {
+    const w1 = levelsOf(20);
+    expect(w1.general[key]).toBe("i".repeat(2 * M));
+    const w2 = levelsOf(14, w1);
+    expect(w2.general[key]).toBe("s".repeat(M) + "i".repeat(M));
+    expect(levelsOf(14, w2).general[key]).toBe("s".repeat(2 * M));
+    expect(levelsOf(20, w2).general[key]).toBe("i".repeat(2 * M));
+    // 지난주 층의 값이 10개보다 적으면 한 주 더 두지 않는다 (업종 9곳 + 업종 B 5곳 = 부문 14곳 → 시장)
+    expect(levelsOf(9, w1).general[key]).toBe("m".repeat(2 * M));
+  });
+  it("비교 기준에 층 표가 있으면 PeerBook 이 그 층을 쓴다 (14곳이어도 이번 주는 업종), 없으면 그 자리에서 정함", () => {
+    const w1 = levelsOf(20);
+    const ref14 = smallReference({ nA: 14 });
+    const held = new PeerBook({ ...ref14, levels: levelsOf(14, w1) });
+    expect(held.industrySlot("general", "Technology", "IndA", "A1", null)).toMatchObject({ level: "industry", name: "IndA" });
+    expect(new PeerBook(ref14).industrySlot("general", "Technology", "IndA", "A1", null).level).toBe("sector");
+    // 둘째 주: 부문
+    expect(new PeerBook({ ...ref14, levels: levelsOf(14, levelsOf(14, w1)) }).industrySlot("general", "Technology", "IndA", "A1", null).level).toBe("sector");
+  });
+});
+
+describe("같은 값이 많은 지표 (무배당 0% 등) — 리뷰: '배당이 많은 편' 문장이 부풀려지지 않게", () => {
+  const peerOf = (tie: number, tieX: number | null) => ({ level: "industry" as const, name: "Semiconductors", n: 60, median: 0, tie, tieX });
+  const m = (key: MetricScore["key"], x: number, score: number, peer = peerOf(0.1, 1)): MetricScore => ({ key, adopted: true, x, show: 100 * x, score, pos: { industry: score, market: score }, mix: { industry: 50, market: 50 }, peer, ownN: 0 });
+  it("가장 많이 겹친 값과 비율", () => {
+    expect(PeerBook.tie([0, 0, 0, 1, 2])).toEqual({ share: 0.6, x: 0 });
+    expect(PeerBook.tie([1, 2, 3, 3])).toEqual({ share: 0.5, x: 3 });
+    expect(PeerBook.tie([])).toBeNull();
+  });
+  it("비교 회사의 절반 이상이 0% 이고 이 회사는 0.1% → 지표 줄에 안내, 묶음 머리 문장은 다른 지표로", () => {
+    const e1 = m("E1", 0.001, 85, peerOf(0.7, 0));
+    const e2 = m("E2", 0.01, 70);
+    const row = metricRow(e1);
+    expect(row.note).toBe(tieNote(70, "0.0%"));
+    expect(row.note).toBe("비교한 회사의 70%가 같은 값(0.0%)이라, 그 값과 조금만 달라도 위치 점수가 크게 달라집니다.");
+    expect(metricRow(e2).note).toBeNull();
+    const fam: FamilyScore = { key: "payout", weight: 10, score: 77.5, valid: true, why: null, metrics: [e1, e2] };
+    expect(familyRow(fam).text).toBe("주식 수 변화 (3년 연평균) — 주식 수가 줄어든 편입니다.");
+    // 이 회사도 무배당(같은 값 안)이면 안내 없음 · 모든 지표가 덩어리에 좌우되면 그래도 가장 먼 지표
+    expect(metricRow(m("E1", 0, 35, peerOf(0.7, 0))).note).toBeNull();
+    expect(familyRow({ ...fam, metrics: [e1] }).text).toBe("배당수익률 — 주가에 비해 배당이 많은 편입니다.");
+  });
+});
+
+describe("주식 수 확인 (리뷰: 마지막 보고서 뒤 분할이면 시가총액이 분할 배수만큼 틀린다)", () => {
+  const q = { cap: 100e9, price: 100 }; // Nasdaq 주식 수 10억 주
+  it("SEC 주식 수 ÷ Nasdaq 주식 수 < 0.6 (정분할) · > 8 (큰 병합), 점수용 시가총액 ÷ Nasdaq 시가총액 < 0.4 → 보류", () => {
+    expect(sharesMismatch(q, 1e9, 100)).toBeNull();
+    expect(sharesMismatch(q, 0.97e9, 80)).toBeNull(); // 자사주 매입·20일 평균이 20% 낮음
+    // 10:1 분할 뒤 봉은 보정됐는데 SEC 주식 수는 분할 전 → 시가총액 1/10
+    expect(sharesMismatch(q, 0.1e9, 100)).toEqual({ shares: 0.1, cap: 0.1 });
+    // 1:10 병합
+    expect(sharesMismatch(q, 10e9, 100)).toMatchObject({ shares: 10 });
+    // 비교 기준을 만든 뒤 생긴 3:1 분할: Nasdaq 주식 수는 아직 분할 전이지만 시가총액이 1/3
+    expect(sharesMismatch(q, 1e9, 33)).toMatchObject({ cap: 0.33 });
+    // 여러 종류 주식(상장 종류만 시가총액)으로 SEC 주식 수가 2배 → 보류하지 않음
+    expect(sharesMismatch(q, 2e9, 100)).toBeNull();
+    expect(sharesMismatch(null, 0.1e9, 100)).toBeNull();
+  });
+});
+
+describe("지표 정의 (리뷰: 설계와 다른 곳)", () => {
+  it("ROIC 투하자본·부채비율은 자본총계(비지배지분 포함) — PBR·ROE 는 지배주주 자본", () => {
+    const m = computeMetrics(inputs({ bal: { equity: 140, nci: 20, equityTotal: 160 } }), 400, CTX);
+    // 투하자본 160 + 50 − 30 = 180
+    expect(m.B2?.x).toBeCloseTo((30 * 0.8) / 180, 12);
+    expect(m.D1?.x).toBeCloseTo(-(110 / 160), 12);
+    expect(m.A3?.x).toBeCloseTo(140 / 400, 12);
+    // 자본총계 태그가 없으면 지배주주 자본 + 비지배지분
+    expect(computeMetrics(inputs({ bal: { equity: 140, nci: 20 } }), 400, CTX).D1?.x).toBeCloseTo(-(110 / 160), 12);
+  });
+
+  it("이익 안정성: 최근 5년 가운데 절반 넘는 해에 영업손실이 매출보다 크면 0점 (−100% 로 잘린 값끼리 오르내림 0 → 맨 위가 되던 것, RGTI)", () => {
+    const years = (ops: number[]) => ops.map((op, i) => ({ end: `${2021 + i}-12-31`, revenue: 10, opIncome: op, netIncome: op, shares: 100, assets: 200, equity: 120 }));
+    const deep = computeMetrics(inputs({ annual: years([-80, -70, -3, -75, -73]) }), 400, CTX);
+    expect(deep.B5).toEqual({ x: -Infinity, show: null, rule: "zeroLoss", why: "deepLoss" });
+    expect(computeAux(inputs({ annual: years([-80, -70, -3, -75, -73]) }))).toMatchObject({ marginYears: 5, deepLossYears: 4, opMarginStd: expect.closeTo(0.28, 2) });
+    // 두 해만이면 그대로 순위
+    expect(computeMetrics(inputs({ annual: years([-80, -70, 1, 2, 3]) }), 400, CTX).B5?.rule).toBeUndefined();
+    const rgti = book("RGTI").inputs("2026-09-28")!;
+    expect(computeMetrics(rgti, 5e9, CTX).B5).toMatchObject({ rule: "zeroLoss", why: "deepLoss" });
+  });
+
+  it("배당: 올해 처음 배당한 회사는 올해 누적을 최근 4분기로 (META 2024 식), 배당 기록이 있는데 만들 수 없으면 '자료 없음'(0% 와 다름), 기록이 없으면 0%", () => {
+    const base = (dividends: CompactFacts["flows"]["dividends"]): CompactFacts => ({
+      v: 1,
+      cik: "0000000001",
+      name: null,
+      lastFiled: null,
+      shares: [["2026-04-01", "2026-06-30", 100, "2026-08-05", "10-Q", 0]],
+      inst: {},
+      flows: {
+        netIncome: [
+          ["2025-01-01", "2025-12-31", 100, "2026-02-10", "10-K", 0],
+          ["2025-01-01", "2025-06-30", 50, "2026-08-05", "10-Q", 0],
+          ["2026-01-01", "2026-06-30", 60, "2026-08-05", "10-Q", 0],
+        ],
+        ...(dividends ? { dividends } : {}),
+      },
+    });
+    // 올해 6개월 누적 8 만 있음 (작년 연간·같은 기간 없음) → 8
+    const started = new FactBook(base([["2026-01-01", "2026-06-30", 8, "2026-08-05", "10-Q", 0]])).inputs("2026-09-01")!;
+    expect([started.flow.dividends, started.divUnknown]).toEqual([8, undefined]);
+    // 작년 7월에 시작: 작년 연간 5, 작년 6개월 없음, 올해 6개월 8 → 5 + 8
+    const lastYear = new FactBook(base([["2025-01-01", "2025-12-31", 5, "2026-02-10", "10-K", 0], ["2026-01-01", "2026-06-30", 8, "2026-08-05", "10-Q", 0]])).inputs("2026-09-01")!;
+    expect(lastYear.flow.dividends).toBe(13);
+    // 작년 연간 20 은 있는데 이번 10-Q 에 배당 줄이 없음 → 만들 수 없음 → 자료 없음
+    const unknown = new FactBook(base([["2025-01-01", "2025-12-31", 20, "2026-02-10", "10-K", 0]])).inputs("2026-09-01")!;
+    expect([unknown.flow.dividends, unknown.divUnknown]).toEqual([undefined, true]);
+    expect(computeMetrics({ ...inputs(), flow: { ...inputs().flow, dividends: undefined }, divUnknown: true }, 400, CTX).E1).toEqual({ x: null, show: null, rule: "notComputed", why: "noDividendData" });
+    // 배당 기록이 없으면 무배당 0%
+    const none = new FactBook(base(undefined)).inputs("2026-09-01")!;
+    expect([none.flow.dividends, none.divUnknown]).toEqual([undefined, undefined]);
+    expect(computeMetrics({ ...inputs(), flow: { ...inputs().flow, dividends: undefined } }, 400, CTX).E1).toEqual({ x: 0, show: 0 });
+    expect(RULE_TEXT.noDividendData).toContain("배당이 없다는 뜻이 아닙니다");
   });
 });

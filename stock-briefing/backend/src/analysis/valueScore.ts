@@ -5,8 +5,8 @@ import type { MetricAux, MetricKey, MetricRule, MetricSet, MetricWhy } from "./v
  * 식 (설계 value-v1 §7, 문서 docs/설계/가치지표-계산.md):
  *   p = 100 × (#{작음} + 0.5 × #{같음}) / N            비교 회사 값들 안에서 (대상 종목 자신은 뺀다)
  *   지표 점수 S = Σ w_k p_k / Σ w_k                      k ∈ 있는 비교(업종·시장·자기 지난 5년), 없는 비교는 남은 비교에 비례 배분
- *   묶음 점수 F = 값이 있는 지표 S 의 평균
- *   V = round( Σ W_f F_f / Σ W_f )                      f ∈ 유효한 묶음
+ *   묶음 점수 F = 값이 있는 지표의 화면 정수 round(S) 의 평균
+ *   V = round( Σ W_f round(F_f) / Σ W_f )               f ∈ 유효한 묶음 — 화면에 보이는 정수로 한 단계씩 (손으로 다시 계산해도 맞게, 설계 §7.5)
  * 0점 규칙(적자 등)은 S = 0, 맨 위 규칙(순현금 등)은 같은 규칙 회사끼리 같은 순위. 가중치는 설계값이며 과거 수익률로 고르지 않았다
  */
 
@@ -52,6 +52,15 @@ export const COMPARE_MIX: Record<ValueFamilyKey, Partial<Record<CompareKey, numb
 };
 /** 업종 비교에 필요한 최소 회사 수 (못 미치면 부문 → 시장) */
 export const MIN_PEERS = 15;
+/**
+ * 층을 바꾸는 것은 두 주 연속 조건이 바뀌었을 때만 (설계 §7.1·§11.1) — 지난주 층을 이번 주에 한 주 더 두는 동안에도
+ * 그 층의 값이 이보다 적으면 두지 않는다 (업종이 갑자기 작아진 때)
+ */
+export const MIN_PEERS_HOLD = 10;
+/** 층 글자 (비교 기준에 저장): 업종 · 부문 · 시장 */
+export type LevelCode = "i" | "s" | "m";
+/** 재무: 결산일이 이보다 오래되면 점수 없음 (대상 종목) · 비교 회사에서 뺀다 (18개월) */
+export const FISCAL_STALE_DAYS = 548;
 /** 한 지표를 쓰려면 그 시장 기준 모집단의 이 비율 이상에서 값이 있어야 함 */
 export const MIN_ADOPTION = 0.7;
 /** 점수를 내려면 유효한 묶음 비중 합이 이 이상 */
@@ -188,6 +197,16 @@ export interface ValueReferenceData {
   counts: { screener: number; mapped: number; withData: number; universe: number; general: number; financial: number };
   /** 받지 못한 기간·태그 (있으면) */
   missingFrames: string[];
+  /**
+   * 스크리너 시가총액·마지막 가격 (티커 → [시가총액 달러, 가격 달러], 둘 다 있는 줄만). 대상 종목의 SEC 주식 수가 지금 주식 수와
+   * 크게 다른지(보고서 뒤 주식 분할·병합 등) 확인하는 데만 쓴다. 예전 기준에는 없다
+   */
+  quotes?: Record<string, [number, number]>;
+  /**
+   * 업종 자리 층 (주 1회, 설계 §7.1): 경로 → '부문|업종' → 이번 주 조건 23글자 + 쓰는 층 23글자 (METRIC_ORDER 순서, i·s·m).
+   * 쓰는 층은 두 주 연속 조건이 바뀌었을 때만 바뀐다. 예전 기준에는 없다 (그때는 그 자리에서 정함)
+   */
+  levels?: Record<ValuePath, Record<string, string>>;
 }
 
 export type PeerLevel = "industry" | "sector" | "market";
@@ -230,6 +249,22 @@ export class PeerBook {
     return (this.ref.coverage[path]?.[key] ?? 0) >= MIN_ADOPTION;
   }
 
+  /** 티커 → 스크리너 시가총액·가격 (기준을 만든 날). 없으면 null */
+  quote(ticker: string): { cap: number; price: number } | null {
+    const q = this.ref.quotes;
+    if (!q) return null;
+    const t = ticker.toUpperCase();
+    const hit = q[t] ?? q[t.replace(/[.-]/g, "/")] ?? q[t.replace(/[./]/g, "-")];
+    return hit && hit[0] > 0 && hit[1] > 0 ? { cap: hit[0], price: hit[1] } : null;
+  }
+
+  /** 이번 주에 쓰는 층 (저장한 값). 없으면 null — 그때는 그 자리에서 정한다 */
+  heldLevel(path: ValuePath, sector: string | null, industry: string | null, key: MetricKey): LevelCode | null {
+    const row = this.ref.levels?.[path]?.[levelKey(sector, industry)];
+    const c = row?.[METRIC_ORDER.length + METRIC_ORDER.indexOf(key)];
+    return c === "i" || c === "s" || c === "m" ? c : null;
+  }
+
   private values(path: ValuePath, level: PeerLevel, name: string | null, key: MetricKey): number[] {
     const k = `${path}|${level}|${name ?? ""}|${key}`;
     const hit = this.dist.get(k);
@@ -251,10 +286,22 @@ export class PeerBook {
     return out;
   }
 
-  /** 업종 자리: 값이 15개 이상인 첫 층 (업종 → 부문 → 시장) */
+  /**
+   * 업종 자리: 값이 15개 이상인 첫 층 (업종 → 부문 → 시장). 비교 기준에 이번 주 층이 적혀 있으면 그 층
+   * (두 주 연속 조건이 바뀌어야 바뀜 — 그 층 값이 10개보다 적으면 그 자리에서 다시 정함)
+   */
   industrySlot(path: ValuePath, sector: string | null, industry: string | null, key: MetricKey, selfCik: string | null): PeerDist {
     const self = this.selfValue(selfCik, key);
-    const enough = (xs: number[]) => xs.length - (self !== null && xs.includes(self) ? 1 : 0) >= MIN_PEERS;
+    const count = (xs: number[]) => xs.length - (self !== null && xs.includes(self) ? 1 : 0);
+    const enough = (xs: number[]) => count(xs) >= MIN_PEERS;
+    const held = this.heldLevel(path, sector, industry, key);
+    if (held === "i" && industry) {
+      const xs = this.values(path, "industry", industry, key);
+      if (count(xs) >= MIN_PEERS_HOLD) return { level: "industry", name: industry, sorted: xs };
+    } else if (held === "s" && sector) {
+      const xs = this.values(path, "sector", sector, key);
+      if (count(xs) >= MIN_PEERS_HOLD) return { level: "sector", name: sector, sorted: xs };
+    } else if (held === "m") return { level: "market", name: null, sorted: this.values(path, "market", null, key) };
     if (industry) {
       const xs = this.values(path, "industry", industry, key);
       if (enough(xs)) return { level: "industry", name: industry, sorted: xs };
@@ -270,6 +317,22 @@ export class PeerBook {
     return { level: "market", name: null, sorted: this.values(path, "market", null, key) };
   }
 
+  /** 가장 많이 겹친 값과 그 비율 (무배당 0%·순현금처럼 여러 회사가 같은 값이면 위치가 그 덩어리에 크게 좌우된다) */
+  static tie(sorted: readonly number[]): { share: number; x: number } | null {
+    if (!sorted.length) return null;
+    let best = 1;
+    let bestX = sorted[0]!;
+    let run = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      run = sorted[i] === sorted[i - 1] ? run + 1 : 1;
+      if (run > best) {
+        best = run;
+        bestX = sorted[i]!;
+      }
+    }
+    return { share: best / sorted.length, x: bestX };
+  }
+
   /** 업종 회사 수 (금융·일반 경로 안, 값과 상관없이) */
   groupSize(path: ValuePath, level: PeerLevel, name: string | null): number {
     const fin = path === "financial" ? 1 : 0;
@@ -277,6 +340,68 @@ export class PeerBook {
     const indIdx = level === "industry" && name !== null ? this.ref.industries.indexOf(name) : -1;
     return this.ref.peers.filter((p) => p.f === fin && (level === "market" || (level === "sector" ? p.s === secIdx : p.i === indIdx))).length;
   }
+}
+
+/** 층 표의 열쇠: '부문|업종' (이름 — 번호는 주마다 바뀐다) */
+export const levelKey = (sector: string | null, industry: string | null) => `${sector ?? ""}|${industry ?? ""}`;
+
+/**
+ * 업종 자리 층 표 만들기 (비교 기준을 만들 때, 설계 §7.1·§11.1). 경로마다 '부문|업종' 짝과 지표마다:
+ *  - 이번 주 조건: 업종 값 15개 이상 → i, 아니면 부문 15개 이상 → s, 아니면 m (층은 업종마다 하나 — 대상 종목 자신도 센다)
+ *  - 쓰는 층: 지난주 쓰던 층과 같거나 지난주 조건과 같으면(두 주 연속) 이번 주 조건, 아니면 지난주 쓰던 층을 한 주 더
+ *    (그 층 값이 10개 이상일 때만)
+ * prev 는 지난 기준의 levels (없으면 이번 주 조건 그대로)
+ */
+export function buildLevels(
+  peers: readonly PeerRow[],
+  sectors: readonly string[],
+  industries: readonly string[],
+  pairs: Iterable<readonly [string, string]>,
+  prev?: ValueReferenceData["levels"] | null,
+): Record<ValuePath, Record<string, string>> {
+  const M = METRIC_ORDER.length;
+  const count = (fin: 0 | 1, pick: (p: PeerRow) => number) => {
+    const m = new Map<number, number[]>();
+    for (const p of peers) {
+      if (p.f !== fin) continue;
+      const k = pick(p);
+      let row = m.get(k);
+      if (!row) m.set(k, (row = new Array<number>(M).fill(0)));
+      for (let j = 0; j < M; j++) if (p.x[j] !== null && p.x[j] !== undefined) row[j]!++;
+    }
+    return m;
+  };
+  const out = { general: {}, financial: {} } as Record<ValuePath, Record<string, string>>;
+  const list = [...pairs];
+  for (const path of ["general", "financial"] as const) {
+    const fin = path === "financial" ? 1 : 0;
+    const byInd = count(fin, (p) => p.i);
+    const bySec = count(fin, (p) => p.s);
+    for (const [sector, industry] of list) {
+      const key = levelKey(sector || null, industry || null);
+      if (out[path][key] !== undefined) continue;
+      const ind = industry ? byInd.get(industries.indexOf(industry)) : undefined;
+      const sec = sector ? bySec.get(sectors.indexOf(sector)) : undefined;
+      const n = (row: number[] | undefined, j: number) => row?.[j] ?? 0;
+      let raw = "";
+      for (let j = 0; j < M; j++) raw += n(ind, j) >= MIN_PEERS ? "i" : n(sec, j) >= MIN_PEERS ? "s" : "m";
+      const old = prev?.[path]?.[key];
+      let eff = "";
+      for (let j = 0; j < M; j++) {
+        const r = raw[j]!;
+        const oldRaw = old?.[j];
+        const oldEff = old?.[M + j];
+        if (!oldEff || r === oldEff || r === oldRaw) eff += r;
+        else {
+          // 지난주 층을 한 주 더 — 그 층 값이 너무 적으면 두지 않음
+          const have = oldEff === "i" ? n(ind, j) : oldEff === "s" ? n(sec, j) : Infinity;
+          eff += have >= MIN_PEERS_HOLD ? oldEff : r;
+        }
+      }
+      out[path][key] = raw + eff;
+    }
+  }
+  return out;
 }
 
 // ── 점수 ─────────────────────────────────────────────────
@@ -294,8 +419,8 @@ export interface MetricScore {
   pos: Partial<Record<CompareKey, number>>;
   /** 실제로 쓴 비교 비중 (없는 비교는 비례 배분) */
   mix: Partial<Record<CompareKey, number>>;
-  /** 업종 자리에 쓴 층과 회사 수, 가운데값(순위용 값) */
-  peer: { level: PeerLevel; name: string | null; n: number; median: number | null } | null;
+  /** 업종 자리에 쓴 층과 회사 수, 가운데값(순위용 값), 가장 많이 겹친 값(tieX)과 그 비율(tie, 0~1) */
+  peer: { level: PeerLevel; name: string | null; n: number; median: number | null; tie: number; tieX: number | null } | null;
   /** 자기 지난 5년 비교에 쓴 월말 수 */
   ownN: number;
 }
@@ -366,13 +491,22 @@ export function scoreValue(inp: ScoreInput): ValueScoreResult {
         for (const k of used) pos[k] = 0;
       }
       const n = ind.sorted.length - (self !== null && ind.sorted.includes(self) ? 1 : 0);
-      return { ...base, score, pos, mix: usedMix, peer: { level: ind.level, name: ind.name, n, median: medianOf(ind.sorted) }, ownN: fk === "price" ? own.length : 0 };
+      const tie = PeerBook.tie(ind.sorted);
+      return {
+        ...base,
+        score,
+        pos,
+        mix: usedMix,
+        peer: { level: ind.level, name: ind.name, n, median: medianOf(ind.sorted), tie: tie?.share ?? 0, tieX: tie?.x ?? null },
+        ownN: fk === "price" ? own.length : 0,
+      };
     });
     const defined = metrics.filter((m) => m.adopted);
     const present = defined.filter((m) => m.score !== null);
     const core = CORE_METRICS[path][fk].some((k) => present.some((m) => m.key === k));
     const valid = core && present.length * 2 >= defined.length && present.length > 0;
-    const score = valid ? present.reduce((a, m) => a + m.score!, 0) / present.length : null;
+    // 화면에 보이는 지표 정수의 평균 (손으로 다시 계산해도 맞게)
+    const score = valid ? present.reduce((a, m) => a + roundScore(m.score!), 0) / present.length : null;
     return { key: fk, weight: VALUE_WEIGHTS[path][fk], score, valid, why: valid ? null : !core ? "noCore" : "tooFew", metrics };
   });
   const valid = families.filter((f) => f.valid);
@@ -382,7 +516,8 @@ export function scoreValue(inp: ScoreInput): ValueScoreResult {
   if (coverageWeight < MIN_COVERAGE_WEIGHT) reasons.push({ code: "lowCoverage", pct: coverageWeight });
   if (valid.length < MIN_FAMILIES) reasons.push({ code: "fewFamilies" });
   if (reasons.length) return { path, status: "insufficient", score: null, shown: null, band: null, coverageWeight, families, reasons };
-  const score = valid.reduce((a, f) => a + f.weight * f.score!, 0) / coverageWeight;
+  // 화면에 보이는 묶음 정수로 (설계 §7.5 '사용자가 손으로 다시 계산해도 맞아야 한다')
+  const score = valid.reduce((a, f) => a + f.weight * roundScore(f.score!), 0) / coverageWeight;
   const shown = roundScore(score);
   return { path, status: coverageWeight >= 100 ? "ok" : "partial", score, shown, band: valueBand(shown), coverageWeight, families, reasons };
 }
@@ -465,9 +600,25 @@ export const FINANCIAL_INDUSTRIES: ReadonlySet<string> = new Set([
 export const REIT_INDUSTRY = "Real Estate Investment Trusts";
 export const SPAC_INDUSTRY = "Blank Checks";
 
-/** 금융사 판정: 업종 목록 또는 예금·보험 준비금이 부채의 10% 이상 */
-export function isFinancial(industry: string | null, bal: { liabilities?: number; deposits?: number; policyReserves?: number; claimReserves?: number }, sic?: number | null): boolean {
+/** 증권·투자은행 업종 (Nasdaq) — 자산운용·거래소·결제 회사도 섞여 있어, 고객 돈을 부채로 크게 들고 있는 회사만 금융 경로로 본다 */
+export const BROKER_INDUSTRY = "Investment Bankers/Brokers/Service";
+/** 증권 업종에서 금융 경로로 보는 자본 ÷ 총자산 상한 (설계 §4 7번 '증권') */
+export const BROKER_EQUITY_MAX = 0.25;
+
+/**
+ * 금융사 판정: 업종 목록(은행·보험·저축기관) · 예금이나 보험 준비금이 부채의 10% 이상 ·
+ * 증권 업종이면서 자본 ÷ 총자산 < 25% (고객 돈을 부채로 들고 있는 증권사 — 예금이 없는 증권사도 금융 경로)
+ */
+export function isFinancial(
+  industry: string | null,
+  bal: { liabilities?: number; deposits?: number; policyReserves?: number; claimReserves?: number; assets?: number; equity?: number; equityTotal?: number },
+  sic?: number | null,
+): boolean {
   if (industry && FINANCIAL_INDUSTRIES.has(industry)) return true;
+  if (industry === BROKER_INDUSTRY) {
+    const eq = bal.equityTotal ?? bal.equity;
+    if (typeof bal.assets === "number" && bal.assets > 0 && typeof eq === "number" && eq / bal.assets < BROKER_EQUITY_MAX) return true;
+  }
   const L = bal.liabilities;
   if (typeof L === "number" && L > 0) {
     if ((bal.deposits ?? 0) / L >= 0.1) return true;

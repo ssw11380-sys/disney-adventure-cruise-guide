@@ -140,6 +140,9 @@ export default function StockDetailScreen() {
   // 지표 점수 (3-44, 기능 플래그 indicatorScores — 앱 fallback 꺼짐): 기업개요 탭 맨 위 요약 카드 + 'AI 기업개요 [AI가 쓴 글]' 제목,
   // 기술분석 탭 맨 위 추세 상세 카드. 꺼져 있으면 서버에 묻지도 않고 탭 내용이 지금 그대로다
   const scoresOn = useFeature("indicatorScores", false);
+  // 가치 지표 (3-44 2단계, 서버 되돌리기 스위치 valueScore — 앱 fallback 꺼짐): 가치분석 탭 맨 위 상세 카드 + 'AI 가치분석' 제목,
+  // 요약 카드의 '가치분석 탭에서 지표별 값 보기'. 꺼져 있으면 가치분석 탭은 1단계 그대로(AI 글만)
+  const valueOn = useFeature("valueScore", false);
   // 차트의 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
@@ -376,14 +379,22 @@ export default function StockDetailScreen() {
     : "";
 
   const openChart = () => router.push(`/stocks/${c}/chart?period=${period}` as never);
-  // 지표 점수 (플래그 indicatorScores): 기초자산 화면 열기(레버리지 상품) · 기업개요·가치분석(2단계)·기술분석 탭 맨 위 카드와 그 아래 AI 글 제목.
-  // 꺼져 있으면 AI 분석을 그대로 돌려준다 (지금 화면과 한 글자도 같게)
+  // 지표 점수 (플래그 indicatorScores): 기초자산 화면 열기(레버리지 상품) · 기업개요·기술분석 탭(1단계)·가치분석 탭(2단계, valueScore 도 켜졌을 때) 맨 위 카드와
+  // 그 아래 AI 글 제목. 꺼져 있으면 AI 분석을 그대로 돌려준다 (지금 화면과 한 글자도 같게)
   const openStock = (to: string) => router.push({ pathname: "/stocks/[code]", params: { code: to } } as never);
   const withScores = (kind: AnalysisKind, ai: React.ReactNode, opts: { twoCol?: boolean; techLabel?: string; valueLabel?: string } = {}) =>
-    scoresOn && (kind === "company" || kind === "technical" || kind === "value") ? (
+    scoresOn && (kind === "company" || kind === "technical" || (kind === "value" && valueOn)) ? (
       <>
         {kind === "company" ? (
-          <IndicatorSummaryCard code={c} twoCol={opts.twoCol} onTechnical={() => setTab("technical")} techTabLabel={opts.techLabel} onValue={() => setTab("value")} valueTabLabel={opts.valueLabel} onOpenStock={openStock} />
+          <IndicatorSummaryCard
+            code={c}
+            twoCol={opts.twoCol}
+            onTechnical={() => setTab("technical")}
+            techTabLabel={opts.techLabel}
+            onValue={valueOn ? () => setTab("value") : undefined}
+            valueTabLabel={opts.valueLabel}
+            onOpenStock={openStock}
+          />
         ) : kind === "value" ? (
           <ValueScoreCard code={c} />
         ) : (
