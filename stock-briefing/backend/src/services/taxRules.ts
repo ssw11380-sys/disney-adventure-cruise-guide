@@ -85,7 +85,7 @@ export const TAX_EXCLUDE_REASON = {
   cost: "기록 시작 전에 산 몫이라 취득가를 몰라요",
   fx: "결제일 환율을 받지 못했어요",
   changed: "주문 내역에 없는 주식 수·매입금액 변화 뒤라 결제일 환율로 잰 취득가를 몰라요",
-  unexplained: "주식 수·매입금액이 기록과 다른 기간의 매도라 손익을 계산하지 않았어요",
+  unexplained: "그해 이 종목에 주문 내역으로 설명되지 않는 변화가 있어 확인이 필요한 매도라 계산하지 않았어요",
   uncertain: "같은 날 사고판 순서를 몰라 취득가가 확실하지 않아 합계에서 뺐어요",
 } as const;
 
@@ -115,18 +115,18 @@ export interface TaxSellInput {
   gainParts: { proceeds: number; cost: number; costs: number | null } | null;
   /**
    * 계산할 수 없는 까닭: cost = 기록 전 몫 · fx = 결제일 환율 없음 · changed = 주문 내역으로 설명되지 않은 변화 뒤라 결제일 원화 취득가를 모름 ·
-   * unexplained = 주식 수·매입금액이 기록과 다른 기간의 매도 (손익을 계산하지 않음 — unexplained 에 까닭·바뀐 것·이름표)
+   * unexplained = 확인이 필요한 매도 (그해 그 종목에 기록으로 설명되지 않는 일이 있음 — unexplained 에 까닭·그해 있었던 일·이름표)
    */
   excluded: null | "cost" | "fx" | "changed" | "unexplained";
   /** 결제일 환율을 받는 중 (배경 작업이 곧 받는다) */
   pending: boolean;
   /** 같은 날 사고판 순서를 몰라 추정한 매도 — 기본으로 합계에서 빼고 까닭과 매도별 계산을 따로 준다 (가짜 손익이 세액을 몰래 바꾸지 않게) */
   estimate?: { status: "order-uncertain"; reason: string } | null;
-  /** excluded 'unexplained' 일 때: 까닭 · 무엇이 달라졌는지 · 비율 짐작 이름표(숫자에 쓰지 않음) */
+  /** excluded 'unexplained' 일 때: 까닭 · 그해 무엇이 있었는지 · 비율 짐작 이름표(숫자에 쓰지 않음) */
   unexplained?: { reason: string; change: string | null; guess: string | null } | null;
 }
 
-/** 합계에서 뺀, 주식 수·매입금액이 기록과 다른 기간의 매도 (숫자 없음 — 토스증권 앱에서 확인) */
+/** 합계에서 뺀, 확인이 필요한 매도 (숫자 없음 — 토스증권 앱에서 확인) */
 export interface TaxUnexplainedSell {
   key: string;
   code: string;
@@ -177,7 +177,7 @@ export interface TaxSummaryOptions {
 
 /**
  * 그해(결제일 기준) 합계 · 매도별 계산 · 빠진 매도(종목·건수·까닭). 매도마다 원 단위로 먼저 반올림한 값의 합이 합계.
- *  - 주식 수·매입금액이 기록과 다른 기간의 매도(unexplained)는 늘 합계에서 빼고 숫자 없이 따로 준다 (unexplainedSells — 까닭·바뀐 것·이름표)
+ *  - 확인이 필요한 매도(unexplained — 그해 그 종목에 기록으로 설명되지 않는 일이 있음)는 늘 합계에서 빼고 숫자 없이 따로 준다 (unexplainedSells — 까닭·그해 있었던 일·이름표)
  *  - 같은 날 사고판 순서를 모르는 매도(order-uncertain)는 기본으로 합계에서 빼고 건수·추정 양도차익 합·매도별 계산(uncertainItems)을 따로 준다.
  *    includeUncertain 이면 합계에 넣고 '추정 포함'으로 센다 (estimatedIncluded · estimatedSells)
  */
@@ -216,7 +216,7 @@ export function taxSummary(
   let pending = 0;
   for (const x of mine) {
     if (x.excluded === "unexplained") {
-      // 설명되지 않은 기간의 매도: 받는 중인 환율과 상관없이 늘 빠진 매도 (숫자 없음)
+      // 확인이 필요한 매도: 받는 중인 환율과 상관없이 늘 빠진 매도 (숫자 없음)
       count(out, x.code, x.name, TAX_EXCLUDE_REASON.unexplained);
       const w = x.unexplained;
       unexplained.push({ key: x.key, code: x.code, name: x.name, tradeDate: x.tradeDate, settleDate: x.settleDate, quantity: x.quantity, proceedsUsd: x.proceedsUsd, reason: w?.reason ?? TAX_EXCLUDE_REASON.unexplained, change: w?.change ?? null, guess: w?.guess ?? null });

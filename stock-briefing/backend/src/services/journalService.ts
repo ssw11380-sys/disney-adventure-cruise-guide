@@ -3,7 +3,7 @@ import { AppError } from "../lib/errors.js";
 import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
 import type { DailyRate } from "../providers/market/fxStd.js";
 import type { FeatureKey } from "./featureService.js";
-import { replayPair, round6, roundMoney, tossCosts, type ChangeRow, type Cur, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
+import { replayPair, round6, roundMoney, tossCosts, type ArrivalSpan, type ChangeRow, type Cur, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
 import { periodReturns, presetRange, READY_DAYS, type Preset, type RetFlow, type RetSkip, type RetSnap, type ReturnsBody, type ReturnsMarket } from "./journalReturns.js";
 import { tradingDate } from "./marketContext.js";
 import { isKrBankDay, taxSummary, TAX_RULES, usSettleDate, type TaxFx, type TaxSellInput } from "./taxRules.js";
@@ -13,7 +13,7 @@ import { parseData, STATE_KEY, tradeView, type TradeRow, type TradeView } from "
 /**
  * 매매일지 (3-37, 플래그 tradeJournal — tradeRecords 가 꺼져 있으면 꺼진 것으로 봄). 3-36 이 쌓은 원자료(일별 계좌 스냅샷 + 토스 주문 내역의 체결)로
  *  1) 기록: 날짜별 체결 목록, 매도마다 이동평균법 실현손익(journalCalc), 거래마다 메모(trade_notes — 서버에 저장, 백업 포함, AI 에는 넣지 않음).
- *     주식 수·매입금액이 기록과 다른 기간의 매도는 손익 없이 '계산에서 뺀 매도'(summary.excludedSells)로 따로 (검토 반영 7차 보수 규칙)
+ *     그해 그 종목에 기록으로 설명되지 않는 일이 있으면 그해 그 종목의 매도는 손익 없이 '확인이 필요한 매도'(summary.excludedSells)로 따로 (검토 반영 10차 종목·해 규칙 — journalCalc)
  *  2) 수익률: 스냅샷 시간가중 수익률(journalReturns — 10거래일 쌓인 뒤 숫자)
  *  3) 양도세 추정: 해외주식 결제일 기준환율 원화 양도차익 · 22% · 250만 원 공제(taxRules — 참고용 추정)
  * 계산은 저장하지 않고 요청 때 돌린다. 요청은 네트워크를 기다리지 않는다 — 환율(토스 과거 환율·세법 기준환율)은 fx_rates 에 있는 값만 쓰고,
@@ -53,7 +53,7 @@ export interface JournalDeps {
 
 export interface JournalItem {
   key: string;
-  /** fill = 체결 몫, change = 주문 내역으로 설명되지 않은 변화·큰 주가 변화 (그 기간은 손익·수익률 계산에서 뺌) */
+  /** fill = 체결 몫, change = 주문 내역으로 설명되지 않은 변화·큰 주가 변화 (그해 그 종목의 매도 손익·수익률 계산에서 뺌) */
   kind: "fill" | "change";
   account: number;
   accountLabel: string | null;
@@ -78,7 +78,7 @@ export interface JournalItem {
   change?: { kind: ChangeRow["kind"]; text: string; guess: string | null; qty: number };
 }
 
-/** 계산에서 뺀 매도 (주식 수·매입금액이 기록과 다른 기간 — 손익 숫자 없음) */
+/** 확인이 필요한 매도 (그해 그 종목에 기록으로 설명되지 않는 일이 있음 — 손익 숫자 없음) */
 export interface ExcludedSell {
   key: string;
   code: string;
@@ -298,12 +298,13 @@ export class JournalService {
         });
       }
       const anchors = this.anchorsFor(account, code, market, snaps);
-      const arr = arrived.get(`${account}:${market}`);
+      // ④ 같은 계좌·시장에 주문 없이 들어온 다른 종목
+      const others = (arrived.get(`${account}:${market}`) ?? []).filter((x) => x.code !== code).map(({ from, to }) => ({ from, to }));
       const res = replayPair(fills, anchors, {
         currency,
         ...(currency === "USD" ? { fxAt: (at: string) => toss.get(minuteKey(at)) ?? null } : {}),
         ...(stdAt && currency === "USD" ? { stdAt } : {}),
-        ...(arr ? { arrivals: arr } : {}),
+        arrivals: others,
       });
       out.set(key, { account, code, market, currency, trades: list, fills, res });
     }
@@ -388,7 +389,7 @@ export class JournalService {
           none: sells.filter((x) => !x.realized?.costs.source).length,
         },
         unknownSells: sells.filter((x) => x.realized?.status === "unknown-cost").length,
-        // 주식 수·매입금액이 기록과 다른 기간의 매도: 합계에서 빼고 까닭·바뀐 것과 함께 따로 (새것부터)
+        // 확인이 필요한 매도 (그해 그 종목에 기록으로 설명되지 않는 일이 있음): 합계에서 빼고 까닭·그해 있었던 일과 함께 따로 (새것부터)
         excludedSells: sells
           .filter((x) => x.realized?.status === "unexplained")
           .sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.key < b.key ? 1 : -1))
@@ -558,8 +559,8 @@ export class JournalService {
     const [snaps, trades, toss, since] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.recordSince()]);
     const flows: RetFlow[] = [];
     for (const t of trades) for (const f of t.fills) if (f.quantity > 0) flows.push({ market: t.market, side: t.side, amount: f.amount, at: f.at });
-    // 건너뛸 구간 (검토 반영 7차 보수 규칙 — 값을 매겨 흐름으로 넣지 않는다):
-    //  ① 짝마다 원장이 설명하지 못한 구간(입고·출고·분할·병합·분사·빠진 체결 등)과 큰 주가 변화 뒤 새 주식을 기다리는 구간
+    // 건너뛸 구간 (값을 매겨 흐름으로 넣지 않는다):
+    //  ① 짝마다 확인 필요인 해(검토 반영 10차 종목·해 규칙)에 걸친, 그 종목이 든 기록 구간
     //  ② 계좌 목록이 바뀐 기록 사이 (새 계좌가 기록에 들어오거나 빠지면 평가금액이 흐름 없이 뛴다)
     const skips: RetSkip[] = [];
     for (const p of this.pairs(trades, snaps, toss).values()) for (const x of p.res.skips) skips.push({ market: p.market, ...x });
@@ -615,7 +616,7 @@ export class JournalService {
         const std = r?.std;
         const costsUsd = r?.realized?.costs.source === "toss" ? r.realized.costs.total : null;
         const realized = r?.realized;
-        // 주식 수·매입금액이 기록과 다른 기간의 매도: 숫자 없이 늘 합계에서 빼고 까닭·바뀐 것·이름표를 따로 (taxSummary)
+        // 확인이 필요한 매도: 숫자 없이 늘 합계에서 빼고 까닭·그해 있었던 일·이름표를 따로 (taxSummary)
         const unexplained = realized?.status === "unexplained";
         const ok = !unexplained && !!std && std.proceeds !== null && std.cost !== null && fxSell !== null;
         // 같은 날 사고판 순서를 몰라 추정한 매도는 기본으로 합계에서 뺀다 (taxSummary)
@@ -895,20 +896,13 @@ export class JournalService {
 const anchorSnap = (s: SnapLite, account: number, market: RecordMarket) => s.status === "ok" && s.market === market && s.accounts.includes(account) && !s.doubtAccounts.includes(account);
 
 /**
- * 주문 없이 새로 들어온 종목 (분사·합병의 흔적 — 원장 opts.arrivals). 같은 계좌·시장의 이웃한 두 기준점 사이에서
- *  ① 앞 기준점에 없던(0주) 종목이 뒤 기준점에 있고, 그 사이 기록된 체결로 설명되지 않는 수량이 있으면 그 몫의 토스 매입금액 (모르면 null)
- *  ② 앞·뒤 기준점에 모두 없는(0주) 종목을 그 사이 산 것보다 많이 팔았으면 — 주문 없이 들어와 그 구간에 팔린 주식
- *     (분사 신설회사가 들어온 날 모두 판 경우 — 기록에 한 번도 보이지 않음). 매입금액은 모름(null)
- * `${account}:${market}` → 뒤 기준점 asOf → 들어온 몫 매입금액 합 (그 시장 통화, 하나라도 모르면 null)
+ * 주문 없이 들어온 주식 (원장 opts.arrivals — ④ 분사 모양). 같은 계좌·시장의 이웃한 두 기준점 사이에서 어떤 종목의
+ * 뒤 기록 수량이 앞 기록 수량 + 그 사이 기록된 순매수보다 많거나(0→N · 수량 늘어남), 앞 기록 수량 + 순매수가 0 보다 작으면
+ * (주문 없이 들어와 그 구간에 팔려 기록에 보이지 않음 — 분사 신설회사를 들어온 날 모두 판 경우). 마지막 기준점 뒤는 뒤쪽만 (to null).
+ * 첫 기준점 전은 보지 않는다 (기록 전에 산 몫과 가를 수 없음). `${account}:${market}` → [{ 종목, 앞 기록 asOf, 뒤 기록 asOf }]
  */
-function arrivals(trades: Array<Pick<TradeView, "account" | "code" | "side" | "fills">>, snaps: SnapLite[]): Map<string, Map<string, number | null>> {
-  const out = new Map<string, Map<string, number | null>>();
-  const put = (key: string, asOf: string, part: number | null) => {
-    const m = out.get(key) ?? new Map<string, number | null>();
-    const was = m.get(asOf);
-    m.set(asOf, was === null || part === null ? null : (was ?? 0) + part);
-    out.set(key, m);
-  };
+function arrivals(trades: Array<Pick<TradeView, "account" | "code" | "side" | "fills">>, snaps: SnapLite[]): Map<string, Array<ArrivalSpan & { code: string }>> {
+  const out = new Map<string, Array<ArrivalSpan & { code: string }>>();
   // 계좌·시장마다 체결 몫 (시각 순) — 구간마다 앞에서부터 한 번씩 훑는다
   const moves = new Map<string, Array<{ code: string; q: number; ms: number }>>();
   for (const t of trades) {
@@ -924,25 +918,28 @@ function arrivals(trades: Array<Pick<TradeView, "account" | "code" | "side" | "f
       const key = `${account}:${market}`;
       const list = snaps.filter((s) => anchorSnap(s, account, market));
       const mv = moves.get(key) ?? [];
-      const held = (s: SnapLite, code: string) => s.holdings.some((x) => x.account === account && x.code === code && x.quantity > 0);
+      const qty = (s: SnapLite) => {
+        const m = new Map<string, number>();
+        for (const h of s.holdings) if (h.account === account && h.quantity > 0) m.set(h.code, (m.get(h.code) ?? 0) + h.quantity);
+        return m;
+      };
       let p = 0;
-      for (let i = 1; i < list.length; i++) {
-        const prev = list[i - 1]!;
-        const cur = list[i]!;
+      for (let i = 0; i < list.length; i++) {
+        const prev = list[i]!;
+        const cur = list[i + 1] ?? null;
         const from = Date.parse(prev.asOf);
-        const to = Date.parse(cur.asOf);
+        const to = cur ? Date.parse(cur.asOf) : Infinity;
         // 이 구간(앞 기록 시각 초과 ~ 뒤 기록 시각 이하)의 종목별 순매수 수량
         while (p < mv.length && mv[p]!.ms <= from) p++;
         const net = new Map<string, number>();
         for (let j = p; j < mv.length && mv[j]!.ms <= to; j++) net.set(mv[j]!.code, (net.get(mv[j]!.code) ?? 0) + mv[j]!.q);
-        for (const h of cur.holdings) {
-          if (h.account !== account || !(h.quantity > 0) || held(prev, h.code)) continue;
-          const extra = round6(h.quantity - (net.get(h.code) ?? 0));
-          if (!(extra > 1e-6)) continue;
-          const cost = h.purchaseAmount ?? (h.avgPrice !== null ? h.avgPrice * h.quantity : null);
-          put(key, cur.asOf, cost === null ? null : (cost * Math.min(extra, h.quantity)) / h.quantity);
+        const before = qty(prev);
+        const after = cur ? qty(cur) : null;
+        for (const code of new Set([...before.keys(), ...net.keys(), ...(after ? after.keys() : [])])) {
+          const expected = round6((before.get(code) ?? 0) + (net.get(code) ?? 0));
+          const came = expected < -1e-6 || (after !== null && (after.get(code) ?? 0) > expected + 1e-6);
+          if (came) out.set(key, [...(out.get(key) ?? []), { code, from: prev.asOf, to: cur?.asOf ?? null }]);
         }
-        for (const [code, n] of net) if (round6(n) < -1e-6 && !held(prev, code) && !held(cur, code)) put(key, cur.asOf, null);
       }
     }
   }
@@ -956,7 +953,7 @@ function verifiedTag(r: Realized | null, cur: Cur): Realized | null {
   return r;
 }
 
-/** 매도 줄 → 통화별 합계 (매도마다 반올림한 값의 합 — 목록 합 = 머리 합계). 모름·계산에서 뺀 매도(unexplained)는 넣지 않는다 */
+/** 매도 줄 → 통화별 합계 (매도마다 반올림한 값의 합 — 목록 합 = 머리 합계). 모름·확인이 필요한 매도(unexplained)는 넣지 않는다 */
 function realizedSum(sells: JournalItem[]): RealizedSum {
   const known = sells.filter((x) => x.realized && x.realized.status !== "unknown-cost" && x.realized.status !== "unexplained" && x.realized.gross !== null);
   const kr = known.filter((x) => x.currency === "KRW").map((x) => x.realized!.gross!);

@@ -994,7 +994,7 @@ export interface QuoteBasis {
 // ── 매매일지 (3-37, 플래그 tradeJournal — 서버 journalService·journalCalc·journalReturns·taxRules 와 같은 모양) ──
 
 export type JournalCurrency = "KRW" | "USD";
-/** unexplained = 주식 수·매입금액이 기록과 다른 기간의 매도 (손익을 계산하지 않음 — '계산에서 뺀 매도') */
+/** unexplained = 확인이 필요한 매도 (그해 주문 내역으로 설명되지 않는 변화가 있던 종목 — 손익을 계산하지 않음) */
 export type RealizedStatus = "ok" | "unknown-cost" | "order-uncertain" | "unexplained";
 export type RealizedBasis = "snapshot" | "history-checked" | "history-only";
 
@@ -1022,7 +1022,7 @@ export interface JournalRealized {
 
 export interface JournalItem {
   key: string;
-  /** fill = 체결 몫, change = 주문 내역으로 설명되지 않은 변화·큰 주가 변화 (그 기간은 손익·수익률 계산에서 뺌) */
+  /** fill = 체결 몫, change = 주문 내역으로 설명되지 않은 변화·큰 주가 변화 (그해 그 종목의 매도 손익·수익률 계산에서 뺌) */
   kind: "fill" | "change";
   account: number;
   /** 계좌가 둘 이상일 때만 '계좌 2' */
@@ -1048,7 +1048,7 @@ export interface JournalItem {
   change?: { kind: "unexplained" | "possible-action"; text: string; guess: string | null; qty: number };
 }
 
-/** 계산에서 뺀 매도 (주식 수·매입금액이 기록과 다른 기간 — 손익 숫자 없음) */
+/** 확인이 필요한 매도 (그해 주문 내역으로 설명되지 않는 변화가 있던 종목 — 손익 숫자 없음) */
 export interface JournalExcludedSell {
   key: string;
   code: string;
@@ -1097,7 +1097,7 @@ export interface JournalResponse {
     realized: JournalRealizedSum & { estimatedIncluded: boolean };
     costs: { toss: number; estimated: number; none: number };
     unknownSells: number;
-    /** 계산에서 뺀 매도 (예전 서버는 없음) */
+    /** 확인이 필요한 매도 (예전 서버는 없음) */
     excludedSells?: JournalExcludedSell[];
     truncated: string[];
   };
@@ -1171,7 +1171,7 @@ export interface JournalTaxItem {
   estimate?: { status: "order-uncertain"; reason: string };
 }
 
-/** 합계에서 뺀, 주식 수·매입금액이 기록과 다른 기간의 매도 (숫자 없음) */
+/** 합계에서 뺀, 확인이 필요한 매도 (숫자 없음) */
 export interface JournalTaxUnexplained {
   key: string;
   code: string;
@@ -1202,7 +1202,7 @@ export interface JournalTax {
   uncertainExcluded?: number;
   uncertainGainKrw?: number | null;
   uncertainItems?: JournalTaxItem[];
-  /** 주식 수·매입금액이 기록과 다른 기간의 매도 (늘 합계에서 뺌 — 예전 서버는 없음) */
+  /** 확인이 필요한 매도 (늘 합계에서 뺌 — 예전 서버는 없음) */
   unexplainedSells?: JournalTaxUnexplained[];
   items?: JournalTaxItem[];
   kr?: { securitiesTax: { amount: number | null; sells: number; source: "toss" | null } };

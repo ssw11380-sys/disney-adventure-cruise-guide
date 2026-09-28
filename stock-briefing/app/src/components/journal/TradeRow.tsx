@@ -11,7 +11,7 @@ import { changeColor, font, radius, space, useTheme } from "@/theme";
  *   5주 · 평균 $37.50 · 23:10 · 판매 금액 $187.50
  *   메모: 실적 발표 뒤 일부 정리            (한 줄 말줄임)
  * 기록과 다른 변화 줄('[기록과 다름] NAVER' · '[큰 주가 변화] …' — 무엇이 달라졌는지, 그 기간은 계산하지 않았다는 말)은 누를 수 없다.
- * 계산에서 뺀 매도는 오른쪽에 숫자 대신 '계산에서 뺌'(흐린 색). 화면 읽기는 한 줄 한 문장(lib/journal rowSpeech).
+ * 확인이 필요한 매도는 오른쪽에 숫자 대신 '확인 필요'(흐린 색). 화면 읽기는 한 줄 한 문장(lib/journal rowSpeech).
  * 종목 이름은 한 줄 말줄임, 큰 글씨(100% 초과)에서는 잔고 목록처럼 두 줄까지. 변화 줄 제목(오른쪽 숫자 없음)은 잘리지 않게 줄바꿈
  */
 export function TradeRow({ item, selected, onPress }: { item: JournalItem; selected?: boolean; onPress?: (item: JournalItem) => void }) {

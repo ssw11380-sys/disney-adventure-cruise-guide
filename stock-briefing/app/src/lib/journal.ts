@@ -6,8 +6,8 @@ import { clampScale } from "./textScale";
 /**
  * 매매일지 (3-37, 기능 플래그 tradeJournal · tradeRecords) — 화면 글·화면 읽기 문장·기간 고르기. React Native 를 불러오지 않는 순수 모듈.
  * 사실만 적는다: 매매를 권하거나 세금에 대한 행동을 권하는 말은 쓰지 않는다 (문구 검사 test/journal.test.ts)
- * 검토 반영 7차 보수 규칙: 주식 수·매입금액이 기록과 다른 기간의 매도는 숫자 없이 '계산에서 뺀 매도'로 따로 보이고(무엇이 달라졌는지 · 비율 짐작은
- * '(추정)' 이름표로만), 그 기간은 수익률에서 뺐다고 알린다
+ * 검토 반영 10차 종목·해 규칙: 그해 주문 내역으로 설명되지 않는 변화가 있던 종목의 그해 매도는 숫자 없이 '확인이 필요한 매도'로 따로 보이고
+ * (그해 있었던 일 · 비율 짐작은 '(추정)' 이름표로만 · 토스증권 앱에서 확인하라는 안내), 그 종목이 든 기간은 수익률에서 뺐다고 알린다
  */
 
 type Cur = "KRW" | "USD";
@@ -40,11 +40,11 @@ export const JOURNAL = {
   rangeMax: "기간은 400일까지 고를 수 있어요.",
   rangeOrder: "시작이 끝보다 늦어요.",
   /** 기록과 다른 변화 줄 셋째 줄 */
-  changeNote: "이 기간의 매도 손익과 수익률은 계산하지 않았어요.",
-  /** 계산에서 뺀 매도 줄 오른쪽 (숫자 대신) */
-  excludedRight: "계산에서 뺌",
-  excludedToss: "실제 손익은 토스증권 앱의 거래 내역에서 볼 수 있어요.",
-  excludedNote: "주식 수·매입금액이 기록과 다른 기간의 매도라 위 실현손익 합계에 넣지 않았어요. 실제 손익은 토스증권 앱의 거래 내역에서 볼 수 있어요.",
+  changeNote: "그해 이 종목의 매도 손익과 이 종목이 든 기간의 수익률은 계산하지 않았어요.",
+  /** 확인이 필요한 매도 줄 오른쪽 (숫자 대신) */
+  excludedRight: "확인 필요",
+  excludedToss: "실제 손익은 토스증권 앱의 거래 내역에서 확인해 주세요.",
+  excludedNote: "그해 주문 내역으로 설명되지 않는 변화(분할·병합·무상증자·입고·출고·분사·큰 주가 변화 등)가 있던 종목의 그해 매도라 위 실현손익 합계에 넣지 않았어요. 실제 손익은 토스증권 앱의 거래 내역에서 확인해 주세요.",
   pickHint: "왼쪽에서 체결을 고르면 계산이 보여요.",
   method: "평균 구매가는 이동평균법(산 금액 합을 수량으로 나눈 값, 토스와 같은 방식)으로 계산했어요.",
   noteTitle: "메모",
@@ -220,10 +220,10 @@ const sideText = (side: JournalItem["side"]) => (side === "BUY" ? "매수" : sid
 
 // ── 기록 줄 ──────────────────────────────────────────────────────────
 
-/** 계산에서 뺀 매도 (주식 수·매입금액이 기록과 다른 기간) */
+/** 확인이 필요한 매도 (그해 주문 내역으로 설명되지 않는 변화가 있던 종목) */
 const excludedSell = (item: JournalItem) => item.side === "SELL" && item.realized?.status === "unexplained";
 
-/** 실현손익 글 '+$17.43 (+10.25%)' (모르면 '실현손익 모름', 계산에서 뺐으면 '계산에서 뺌') */
+/** 실현손익 글 '+$17.43 (+10.25%)' (모르면 '실현손익 모름', 확인이 필요하면 '확인 필요') */
 export function realizedText(item: JournalItem): string {
   const r = item.realized;
   if (excludedSell(item)) return JOURNAL.excludedRight;
@@ -277,7 +277,7 @@ export function detailLine(item: JournalItem): string {
     .join(" · ");
 }
 
-/** 셋째 줄들: 추정·모름·계산에서 뺀 까닭(서버 문장 — 뺀 매도는 바뀐 것·이름표도), 메모. 기록과 다른 변화 줄은 이름표 + 계산하지 않았다는 말 */
+/** 셋째 줄들: 추정·모름·확인 필요 까닭(서버 문장 — 확인이 필요한 매도는 그해 있었던 일·이름표도), 메모. 기록과 다른 변화 줄은 이름표 + 계산하지 않았다는 말 */
 export function extraLines(item: JournalItem): string[] {
   if (item.kind === "change") return [item.change?.guess, JOURNAL.changeNote].filter((x): x is string => !!x);
   const out: string[] = [];
@@ -336,11 +336,11 @@ export interface SummaryView {
   lines: { label: string; value: string; sign: number; speech: string }[];
   counts: string;
   notes: string[];
-  /** 계산에서 뺀 매도 (주식 수·매입금액이 기록과 다른 기간 — 매도마다 한 줄, 숫자 없음) */
+  /** 확인이 필요한 매도 (매도마다 한 줄, 숫자 없음) */
   excluded: { title: string; lines: string[]; note: string } | null;
 }
 
-/** 계산에서 뺀 매도 한 줄 '10/7 삼성전자 5주 · 수량 10 → 35주 · … · 1→4 분할로 보여요(추정)' */
+/** 확인이 필요한 매도 한 줄 '10/7 삼성전자 5주 · 10월 7일 기록: 수량 10 → 35주 · … · 1→4 분할로 보여요(추정)' */
 function excludedLine(x: JournalExcludedSell): string {
   return [`${mdShort(x.date)} ${x.name} ${qtyText(x.quantity)}`, x.change ?? x.reason, x.guess].filter(Boolean).join(" · ");
 }
@@ -370,7 +370,7 @@ export function summaryView(resp: JournalResponse): SummaryView | null {
     });
   const notes: string[] = [];
   if (s.sells > 0 && s.costs.toss === 0) notes.push(JOURNAL.grossNote);
-  if (s.unknownSells > 0) notes.push(`실현손익을 모르는 매도 ${s.unknownSells}건은 합계에서 뺐어요 (기록 시작 전에 산 몫).`);
+  if (s.unknownSells > 0) notes.push(`실현손익을 모르는 매도 ${s.unknownSells}건은 합계에서 뺐어요 (평균 구매가를 몰라요).`);
   if (s.truncated.length) notes.push(`오래된 주문이 다 오지 않은 종목 ${s.truncated.length}개가 있어요.`);
   const ex = s.excludedSells ?? [];
   return {
@@ -378,7 +378,7 @@ export function summaryView(resp: JournalResponse): SummaryView | null {
     lines,
     counts: `매수 ${s.buys}건 · 매도 ${s.sells}건 · 체결 ${s.orders}건`,
     notes,
-    excluded: ex.length ? { title: `계산에서 뺀 매도 ${ex.length}건`, lines: ex.map(excludedLine), note: JOURNAL.excludedNote } : null,
+    excluded: ex.length ? { title: `확인이 필요한 매도 ${ex.length}건`, lines: ex.map(excludedLine), note: JOURNAL.excludedNote } : null,
   };
 }
 
@@ -417,8 +417,8 @@ export function calcRows(item: JournalItem): { rows: DetailRow[]; notes: string[
   if (!r) return { rows: [], notes: [] };
   if (r.status === "unexplained")
     return {
-      rows: [{ label: "실현손익", value: "계산하지 않음", speech: "실현손익 계산하지 않음" }],
-      notes: [r.reason, r.change ? `달라진 것: ${r.change}` : null, r.guess, JOURNAL.excludedToss].filter((x): x is string => !!x),
+      rows: [{ label: "실현손익", value: JOURNAL.excludedRight, speech: `실현손익 ${JOURNAL.excludedRight}` }],
+      notes: [r.reason, r.change ? `그해 있었던 일: ${r.change}` : null, r.guess, JOURNAL.excludedToss].filter((x): x is string => !!x),
     };
   if (r.status === "unknown-cost" || r.gross === null) return { rows: [{ label: "실현손익", value: "모름" }], notes: [r.reason ?? "평균 구매가를 몰라요."] };
   const cur = item.currency;
@@ -538,7 +538,7 @@ export function returnsNotReady(r: JournalReturns): string {
   const record = r.recordDays ?? r.tradingDays ?? 0;
   // 전체(원화): 미국 기록에 평가 환율이 없으면 기간을 늘려도 같다 — 그 까닭을 바로
   if (r.usFxMissing) return "미국 계좌 기록에 평가 환율이 없어 전체(원화) 수익률을 계산할 수 없어요. 한국·미국은 따로 볼 수 있어요.";
-  // 고른 기간의 구간을 모두 건너뜀 (검토 반영 7차 — 0% 로 보이지 않게)
+  // 고른 기간의 구간을 모두 건너뜀 (0% 로 보이지 않게)
   if (r.allSkipped) return `고른 기간의 계좌 기록은 모두 ${SKIP_WHAT} 기간이라 수익률을 계산하지 않았어요. 그 기간의 값을 짐작해 넣지 않아요.`;
   if (record >= need && (r.tradingDays ?? 0) === 0) {
     // 고른 기간에 기록이 0일: 마지막 기록 뒤(기록이 멈춤 — 동기화 실패 등) · 기록 시작 전 · 그 사이(주말·휴일·빠진 날)를 나눠 말한다
@@ -564,8 +564,8 @@ export function returnsHeader(r: JournalReturns): string | null {
   return `${mdKo(r.actual.from)}${r.clippedToRecordStart ? "(기록 시작)" : ""} ~ ${mdKo(r.actual.to)} · ${r.tradingDays}거래일`;
 }
 
-/** 수익률에서 건너뛴 기간 (검토 반영 7차) */
-const SKIP_WHAT = "주식 수·매입금액이 기록과 다르거나 주가가 한 번에 크게 바뀐";
+/** 수익률에서 건너뛴 기간 (검토 반영 10차 — 확인이 필요한 종목·해) */
+const SKIP_WHAT = "확인이 필요한 종목이 든";
 
 /** 건너뛴 날 한 줄 '… 2일(10/7 · 10/8)은 수익률·기간 손익에서 뺐어요.' (날짜는 셋까지 + '등') — 없으면 null */
 function skippedText(r: JournalReturns): string | null {
@@ -600,7 +600,7 @@ export function returnsMethod(r: JournalReturns): string[] {
   if (r.gaps?.length) out.push(`빠진 날 ${r.gaps.length}일은 앞뒤를 이어 계산했어요.`);
   if (r.doubtedSkipped?.length) out.push(`믿기 어려운 기록 ${r.doubtedSkipped.length}일은 빼고 계산했어요.`);
   if (r.uncertainSkipped?.length)
-    out.push("주문 내역으로 설명되지 않는 주식 수·매입금액 변화(분할·병합·무상증자·주식배당·입고·출고·분사 등)가 있던 기간, 한 거래일(휴장일은 세지 않아요) 사이 주가가 크게 바뀐 뒤 새 주식을 기다리는 기간, 모두 판 뒤 주문 없이 주식이 들어온(늦게 들어온 새 주식·분사 등 — 그 사이 다시 샀어도) 기간은 수익률·기간 손익에서 뺐어요. 그 기간의 값을 짐작해 넣지 않아요.");
+    out.push("그해 주문 내역으로 설명되지 않는 변화(분할·병합·무상증자·주식배당·입고·출고·분사·큰 주가 변화 등)가 있던 종목은 확인이 필요한 종목이라, 그해 그 종목이 든 기간을 수익률·기간 손익에서 뺐어요. 그 기간의 값을 짐작해 넣지 않아요.");
   if (r.market === "ALL") out.push("미국 종목은 그날 기록의 환율로 원화로 바꿨어요. 환율이 움직인 몫도 들어 있어요.");
   if (r.market === "US") out.push("달러 기준이에요. 환율은 넣지 않았어요.");
   out.push("토스 앱 수익분석의 수익률과 계산 방법이 달라 다를 수 있어요.");
@@ -644,8 +644,8 @@ export const TAX = {
   krTitle: "국내 주식",
   krAssumption: "대주주가 아닌 경우 국내 상장주식을 팔아 생긴 차익에는 양도세가 없다고 보고 계산하지 않았어요.",
   krNoTax: "토스 주문 내역에 증권거래세 금액이 없어 보여 드리지 못해요.",
-  unexplainedTitle: "기록과 달라 계산하지 않은 매도",
-  unexplainedNote: "이 매도는 위 합계에 넣지 않았어요. 실제 양도차익은 토스증권 앱에서 볼 수 있어요.",
+  unexplainedTitle: "확인이 필요한 매도",
+  unexplainedNote: "그해 주문 내역으로 설명되지 않는 변화가 있던 종목의 매도라 위 합계에 넣지 않았어요. 실제 양도차익은 토스증권 앱에서 확인해 주세요.",
   rules: [
     "취득가액: 이동평균법(토스증권이 쓰는 방식)으로 계산했어요. 증권사마다 선입선출법을 쓰기도 해 금액이 다를 수 있어요.",
     "환율: 매수·매도 결제일의 기준환율(서울외국환중개 매매기준율)이에요. 받지 못한 날은 하나은행 고시 환율로 대신하고 따로 표시해요.",
@@ -653,6 +653,7 @@ export const TAX = {
     "비용: 토스 주문 내역에 수수료·세금이 있으면 뺐고, 없으면 빼지 않았어요.",
     "대상: 이 앱이 저장한 토스증권 계좌의 해외주식 매매만이에요. 다른 증권사·다른 계좌의 매매, 배당, 환전 손익은 넣지 않았어요.",
     "세율 22%와 기본공제 250만 원은 2026년 세법 기준으로 넣은 값이에요. 세법이 바뀌면 달라질 수 있어요. 원 단위 끝수는 버렸어요.",
+    "확인 필요: 그해 주문 내역으로 설명되지 않는 변화(분할·병합·무상증자·입고·출고·분사·큰 주가 변화 등)가 있던 종목은 그해 매도를 모두 합계에서 빼고 '확인이 필요한 매도'로 따로 보여 드려요.",
   ],
 } as const;
 
@@ -682,11 +683,11 @@ export interface TaxView {
   excluded: { title: string; lines: string[] } | null;
   /** 합계에 들어 있는, 순서 모름으로 추정한 매도 (includeUncertain 일 때만) — 따로 알린다 */
   estimated: { title: string; lines: string[] } | null;
-  /** 주식 수·매입금액이 기록과 다른 기간의 매도 (숫자 없이 매도마다 한 줄 — 늘 합계에서 뺌) */
+  /** 확인이 필요한 매도 (숫자 없이 매도마다 한 줄 — 늘 합계에서 뺌) */
   unexplained: { title: string; lines: string[]; note: string } | null;
 }
 
-/** 기록과 달라 계산하지 않은 매도 한 줄 '9/28 SOXL 4,000주 · 판매 금액 $100,000.00 · 바뀐 것 · 이름표' */
+/** 확인이 필요한 매도 한 줄 '9/28 SOXL 4,000주 · 판매 금액 $100,000.00 · 그해 있었던 일 · 이름표' */
 function unexplainedLine(x: JournalTaxUnexplained): string {
   return [`${mdShort(x.tradeDate)} ${x.name} ${qtyText(x.quantity)}`, `판매 금액 ${money(x.proceedsUsd, "USD")}`, x.change ?? x.reason, x.guess].filter(Boolean).join(" · ");
 }

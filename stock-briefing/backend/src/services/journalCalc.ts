@@ -6,51 +6,45 @@
  *  - 매수: 수량 += q, 매입금액 += a (수수료는 넣지 않음 — 토스 '평균 구매가'처럼. 표본으로 확인할 것)
  *  - 매도: 팔린 몫의 원가 = 매입금액 × q ÷ 수량 (마지막 매도는 남은 매입금액 전부), 실현손익(비용 전) = a − 원가
  *  - 기준점(anchor) = 스냅샷(토스 보유 조회의 수량·매입금액). 그 뒤 매도는 'snapshot' — 토스 평단에서 출발
- *  - 첫 기준점 전 매도: 0주에서 돌린 결과가 첫 기준점과 맞으면 'history-checked', 맞지 않으면 모름(unknown-cost)
- *  - 기준점이 없는 짝: 0주에서 음수 없이 돌면 'history-only'(토스 잔고와 맞춰 보지 못함), 음수면 모름
- *  - 같은 두 기준점 사이 반대 방향 몫 가운데 체결 시각(filled)이 아닌 것이 있으면 순서를 모른다 → 매수 먼저·매도 먼저로 계산해
- *    값이 1원·1센트 넘게 다르면 매수 먼저 값 + 'order-uncertain' (매수 먼저가 뒤 기록과 맞지 않고 매도 먼저만 맞으면 매도 먼저 값)
+ *  - 첫 기준점 전 매도: 0주에서 돌린 결과가 첫 기준점과 맞으면 'history-checked' · 기준점이 없는 짝은 'history-only'(토스 잔고와 맞춰 보지 못함)
+ *  - 같은 두 기준점 사이 반대 방향 몫 가운데 체결 시각(filled)이 아니거나 반대 방향 몫과 체결 시각이 똑같은 것이 있으면 순서를 모른다 →
+ *    매수 먼저·매도 먼저로 계산해 값이 1원·1센트 넘게 다르면 매수 먼저 값 + 'order-uncertain' (매수 먼저가 뒤 기록과 맞지 않고 매도 먼저만 맞으면 매도 먼저 값)
  *
- * 보수 규칙 (검토 반영 7차 — 기록된 체결과 토스 기록으로 다 설명하지 못하는 숫자는 넣지 않는다):
- *  - 두 기록 사이 구간은, 앞 기록(토스 수량·매입금액)에서 기록된 체결을 돌려 뒤 기록의 수량(±0.000001주)과 토스 매입금액
- *    (±0.5% — 매도는 이동평균으로 줄인 값)이 나올 때만 '설명됨'. 가진 수량보다 많이 판 매도가 끼거나 뒤 기록에 매입금액이 없으면 설명되지 않음.
- *  - 설명되지 않은 구간(주문 내역에 없는 입고·출고, 분할, 병합, 무상증자, 주식배당, 분사, 늦게 들어온 새 주식, 빠진 체결 — 까닭과 상관없이):
- *    그 구간 매도는 'unexplained'(손익 숫자 없음 — 실현손익·양도세 합계에서 빠지고 '계산에서 뺀 매도'로 따로, 무엇이 달라졌는지 문장과 함께),
- *    그 구간 매수의 '이 매수 뒤 평균'도 없음, 수익률은 그 구간을 건너뛴다(skips). 원가는 뒤 기록(토스 매입금액)에서 다시 출발하므로 그 뒤 매도는 보통 계산.
- *    결제일 원화 취득가(양도세)는 토스가 주지 않아 그 뒤로 모른다('changed' — 전부 판 뒤 새로 산 몫부터는 처음부터 온전한 원장).
- *  - 큰 주가 변화: 한 거래일(그 시장 휴장일 목록으로 셈 — 추석·노동절 다음 날도 한 거래일) 사이 주가가 ±35%(한국 — 하루 가격 제한 30% 밖)·
- *    ±60%(미국) 넘게 바뀌었거나 그날 체결 가격이 앞 기록 주가에서 그만큼 벗어나면,
- *    수량이 설명돼도 분할·무상증자 같은 변화일 수 있다(권리락 날 가격이 먼저 내리고 새 주식은 몇 주 뒤). 그 구간부터 설명되지 않은 수량 변화가 있는
- *    구간까지(90일 안 — 기록이 그 안에서 끝나면 지금까지) 같은 규칙. 90일 안에 수량 변화가 없고 기록이 이어지면 그 구간만.
- *    그 사이 0주가 되면 거기까지 — 0주에서 새로 산 몫은 권리락 뒤에 산 것이라 보통 계산.
- *  - 끝 기록이 0주인 구간은 매입금액을 맞춰 볼 수 없다. 그래서 끝이 0주이고 매도가 있는 구간은 다음 둘 가운데 하나면 설명되지 않음:
- *    ① 같은 계좌·같은 구간에 다른 종목이 주문 없이 새로 들어옴(분사·합병의 흔적 — 들어온 몫의 토스 매입금액이 그 종목 매입금액의 0.5% 이상,
- *       또는 기록에 보이지 않고 그 구간에 팔린 몫처럼 매입금액을 모름 — opts.arrivals)
- *    ② 0주가 된 뒤 90일 안에 같은 종목이 주문 없이 들어옴(늦게 들어온 새 주식 — 그 사이 다시 사 둔 몫이 있어도. 첫 기록 전 원장이 90일 안에
- *       0주에 닿았으면(첫 기록이 0주 · 첫 기록 전에 모두 팔고 다시 삼) 그때까지의 첫 기록 전 매도도).
- *  - 같은 시각에 체결된 매수·매도는 순서를 모르는 몫으로 본다 (매수 먼저·매도 먼저로 계산 — 저장 순서로 정하지 않음).
- *  - 비율 짐작('1→4 분할로 보여요(추정)')은 이름표로만 — 어떤 숫자에도 쓰지 않는다.
+ * 보수 규칙 (검토 반영 10차 — 종목·해 단위, 안전이 먼저): (계좌, 종목) 짝의 한 해(그 시장 거래일 기준 1/1~12/31)는 그해에 — 또는 해가 바뀌는
+ * 앞뒤 30일 안에 — 아래 가운데 하나라도 있으면 통째로 '확인 필요'다:
+ *  ① 기록된 체결로 설명되지 않는 구간: 앞 기록(토스 수량·매입금액)에서 체결을 돌려 뒤 기록의 수량(±0.000001주)·토스 매입금액(±0.5% — 매도는
+ *     이동평균으로 줄인 값)이 나오지 않음. 가진 수량보다 많이 판 매도, 뒤 기록에 매입금액이 없음, 주문 없이 들어온 주식(0→N·수량 늘어남)도 여기
+ *  ② 한 구간(앞 기록 → 뒤 기록 주가, 앞 기록 주가 → 그 구간 체결 가격)의 주가가 ±25% 넘게 바뀜 — 3거래일 넘게 걸친 구간은 ±20% (한국·미국 같게,
+ *     거래일은 그 시장 휴장일 목록으로 셈)
+ *  ③ 한 구간 주가(앞 기록 ÷ 뒤 기록)가 흔한 분할·병합·주식배당 비율과 ±4% 안인데, 그 구간이나 뒤 30일 안에 주문 없는 주식 수 변화(①의 수량 차이)가 있음.
+ *     분할·병합 비율(2·3·4·5·8·10·15·20 과 그 역수, 1.5)은 ±4% 안이면 늘 ±30% 넘는 변화라 ②가 먼저 잡으므로, 여기서는 주식배당·무상증자 비율
+ *     1.02~1.10 만 본다 (±4% 를 늘어난 몫에 적용해 1.0192~1.104 — 주가가 그대로인 날은 아님)
+ *  ④ 이 종목을 0주까지 판 뒤 30일 안에 같은 계좌·같은 시장에 다른 종목이 주문 없이 들어옴 (분사 모양 — opts.arrivals, 크기와 상관없이)
+ *  ⑤ 첫 기록 전 매도가 있는데 첫 기록 전 주문 내역을 0주부터 돌린 결과가 첫 기록(수량·매입금액)과 그대로 맞지 않음 (기록이 없는 짝은 가진 것보다 많이 판 매도)
+ * 확인 필요인 해: 그해 그 종목의 모든 매도는 'unexplained'(화면의 '확인 필요' — 손익 숫자 없음, 실현손익·양도세 합계에서 빠지고 까닭 문장과 함께 따로),
+ * 매수의 '이 매수 뒤 평균'도 없음, 그해 그 종목이 든 기록 구간은 수익률에서 건너뜀(skips). 그 밖은 지금처럼 계산한다(이동평균·환율·양도세).
+ * 설명되지 않은 구간 뒤 원가는 뒤 기록(토스 매입금액)에서 다시 출발하고, 결제일 원화 취득가는 그 뒤로 모른다('changed' — 모두 판 뒤 새로 산 몫부터 다시 앎).
+ * 비율 짐작('1→4 분할로 보여요(추정)')은 이름표로만 — 어떤 숫자에도 쓰지 않는다.
  * 미국 종목은 토스 원화 보기처럼 매수 당시 환율(토스 매수 환율 usdKrwAt)로 원화 매입금액도 이동평균으로 함께 쌓는다(추정).
  * 해외 양도세(journalTax)는 같은 원장을 결제일 기준환율(stdAt)로 한 번 더 쌓는다 — 처음부터 온전한 주문 내역이 있을 때만.
  * 화면 문장(REASONS)은 여기 한 곳에서 만든다 (문구 검사 — 권유 표현 없음)
  */
 
 import { isKrTradingDate, isUsTradingDate, tradingDate } from "./marketContext.js";
+import { addDays } from "./tradeRecordCalc.js";
 
 export type Cur = "KRW" | "USD";
 export type Side = "BUY" | "SELL";
 export type TimeBasis = "filled" | "ordered" | "seen";
+/** unexplained = 확인 필요 (그해 그 종목에 기록으로 설명되지 않는 일이 있음 — 손익 숫자 없음) */
 export type RealizedStatus = "ok" | "unknown-cost" | "order-uncertain" | "unexplained";
 export type RealizedBasis = "snapshot" | "history-checked" | "history-only";
 
 /** 화면에 그대로 쓰는 쉬운 문장 (서버 한 곳 — 문구 검사) */
 export const REASONS = {
-  beforeRecord: "기록 시작 전에 산 몫이라 평균 구매가를 몰라요.",
-  oversold: "기록된 수량보다 많이 판 매도라 평균 구매가를 몰라요.",
+  needsCheck: "그해 이 종목에 주문 내역으로 설명되지 않는 변화가 있어 이 매도의 손익을 계산하지 않았어요.",
   noAvg: "토스 잔고에 매입금액이 없어 평균 구매가를 몰라요.",
   orderUncertain: "같은 날 사고판 순서를 몰라 추정했어요.",
-  unexplained: "이 기간은 주식 수·매입금액이 기록과 달라 손익을 계산하지 않았어요.",
-  possibleAction: "이 기간은 주가가 한 번에 크게 바뀌어(분할·무상증자 같은 변화일 수 있어요) 손익을 계산하지 않았어요.",
   krwNoFx: "판매 때 환율을 받지 못해 원화 손익은 빼요.",
   krwNoBuyFx: "매수 때 환율을 받지 못해 원화 손익은 빼요.",
   krwNoBothFx: "매수·판매 때 환율을 받지 못해 원화 손익은 빼요.",
@@ -92,7 +86,7 @@ export interface LedgerAnchor {
   costKrwEstimated: boolean;
   /** 그 스냅샷 그 종목의 1 − 비용 차감 후 평가금액 ÷ 평가금액 (토스 평가금액의 '비용 차감' 비율). 없으면 null */
   costRatio: number | null;
-  /** 그 스냅샷 그 종목 한 주 가격 (정규장 종가, 없으면 그때 현재가 — 종목 통화). 큰 주가 변화를 볼 때만 쓴다. 모르면 null·없음 */
+  /** 그 스냅샷 그 종목 한 주 가격 (정규장 종가, 없으면 그때 현재가 — 종목 통화). 주가 변화 규칙(②③)에만 쓴다. 모르면 null·없음 */
   price?: number | null;
 }
 
@@ -120,7 +114,7 @@ export interface Realized {
   costs: { fee: number | null; tax: number | null; total: number | null; source: "toss" | "estimated" | null };
   net: number | null;
   krw: RealizedKrw | null;
-  /** 'unexplained' 일 때만: 무엇이 달라졌는지 (화면에 그대로 — '수량 1,000 → 3,995주 · 기록된 매매대로라면 995주') */
+  /** 'unexplained'(확인 필요) 일 때만: 그해 무엇이 있었는지 (화면에 그대로 — '10월 7일 기록: 수량 10 → 36주 · 기록된 매매대로라면 9주 / …') */
   change?: string;
   /** 'unexplained' 일 때만: 비율 짐작 이름표 ('1→4 분할로 보여요(추정)') — 숫자에 쓰지 않음. 없으면 null */
   guess?: string | null;
@@ -129,7 +123,7 @@ export interface Realized {
 /**
  * 해외 양도세용: 결제일 기준환율로 쌓은 원화 (양도가액·취득가액). missing:
  *  cost = 원가를 모름(기록 전 몫) · fx = 결제일 환율 없음 · changed = 주문 내역으로 설명되지 않은 변화 뒤라 결제일 원화 취득가를 모름 ·
- *  unexplained = 이 매도가 설명되지 않은 구간에 있음 (손익을 계산하지 않음)
+ *  unexplained = 이 매도가 확인 필요인 해에 있음 (손익을 계산하지 않음)
  */
 export interface StdValue {
   proceeds: number | null;
@@ -143,7 +137,7 @@ export interface FillResult {
   std?: StdValue;
 }
 
-/** 주문 내역으로 설명되지 않은 구간 (목록의 '기록과 다름' 줄) · 큰 주가 변화 구간 */
+/** 목록의 '기록과 다름'(①) · '큰 주가 변화'(②) 줄 — 뒤 기록마다 하나 */
 export interface ChangeRow {
   /** 뒤 기록 (여기서 달라진 것을 봤음) */
   at: string;
@@ -173,10 +167,12 @@ export interface PairCheck {
   preAnchor: "none" | "checked" | "mismatch" | "history-only" | "incomplete";
   /** 설명된 구간 가운데 토스 매입금액과 1원·1센트(평균) 넘게 달라 토스 값으로 맞춘 수 (0.5% 안) */
   drift: number;
-  /** 설명되지 않은 구간 수 */
+  /** 설명되지 않은 구간 수 (①) */
   unexplained: number;
-  /** 큰 주가 변화 구간 수 */
+  /** 주가가 크게 바뀐 구간 수 (②) */
   priceJumps: number;
+  /** 확인 필요인 해 */
+  doubtYears: number[];
 }
 
 export interface PairResult {
@@ -188,26 +184,33 @@ export interface PairResult {
   holding: { quantity: number; avgCost: number | null };
 }
 
+/** 같은 계좌·같은 시장에 주문 없이 들어온 다른 종목: 들어왔을 수 있는 때 = 앞 기록 시각 초과 ~ 뒤 기록 시각 이하 (to null = 마지막 기록 뒤) */
+export interface ArrivalSpan {
+  from: string;
+  to: string | null;
+}
+
 export interface LedgerOptions {
   currency: Cur;
   /** 미국: 그 시각의 토스 매수 환율 (저장한 값 — 없으면 null) */
   fxAt?: (at: string) => number | null;
   /** 해외 양도세: 그 몫의 결제일 기준환율 (없으면 null). 주면 몫마다 std 를 붙인다 */
   stdAt?: (f: LedgerFill) => number | null;
-  /**
-   * 같은 계좌·같은 시장에서 주문 없이 새로 들어온 다른 종목 (분사·합병의 흔적): 들어온 것을 본 기록의 asOf → 들어온 몫의 토스 매입금액 합
-   * (종목 통화, 모르면 null). 그 구간에 이 종목을 모두 판 매도는 매입금액을 맞춰 볼 수 없어 계산하지 않는다
-   */
-  arrivals?: ReadonlyMap<string, number | null>;
+  /** 같은 계좌·같은 시장에 주문 없이 들어온 다른 종목 (④ 분사 모양) */
+  arrivals?: ReadonlyArray<ArrivalSpan>;
 }
 
 const EPS = 1e-6;
 /** 설명된 구간으로 볼 토스 매입금액 차이 (±0.5%) */
 export const COST_TOL = 0.005;
-/** 큰 주가 변화: 한 구간 주가·체결 가격이 앞 기록 주가에서 이만큼 넘게 벗어남 (한국 하루 가격 제한 30% 밖 · 미국) */
-export const PRICE_JUMP = { KRW: 0.35, USD: 0.6 } as const;
-/** 큰 주가 변화 뒤 새 주식을 기다리는 기간 */
-export const JUMP_WINDOW_DAYS = 90;
+/** ② 한 구간 주가 변화 한도: 3거래일까지 ±25%, 그보다 길게 걸친 구간 ±20% */
+export const PRICE_MOVE = { short: 0.25, long: 0.2, shortDays: 3 } as const;
+/** ③ 주식배당·무상증자 비율 범위 (앞 주가 ÷ 뒤 주가) · 허용폭 — 분할·병합 비율은 ②가 먼저 잡는다 */
+const BONUS_RANGE = [1.02, 1.1] as const;
+const RATIO_TOL = 0.04;
+/** 해가 바뀌는 앞뒤로 함께 보는 날 · ③ 주식 수 변화를 기다리는 날 · ④ 0주 뒤 다른 종목을 보는 날 */
+export const DOUBT_DAYS = 30;
+const DAY_MS = 86_400_000;
 
 export const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 /** 원 1원 · 달러 1센트 (−0 없이) */
@@ -288,6 +291,7 @@ type Out = Map<string, FillResult>;
 
 const t = (iso: string) => Date.parse(iso);
 
+
 /** 한 몫 적용 (결과는 out 에). 매도의 상태·기준은 부른 쪽이 나중에 고친다 */
 function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
   const cur = opts.currency;
@@ -316,16 +320,16 @@ function apply(s: State, f: LedgerFill, opts: LedgerOptions, out: Out): void {
   // 매도
   const costs = sellCosts(f, s, cur);
   if (f.quantity > s.qty + EPS) {
-    // 가진 수량보다 많이 판 매도: 값을 지어내지 않는다
+    // 가진 수량보다 많이 판 매도: 값을 지어내지 않는다 (그 해는 늘 확인 필요가 된다 — ①·⑤)
     out.set(f.key, {
-      realized: { ...blank(costs), status: "unknown-cost", reason: REASONS.oversold },
+      realized: { ...blank(costs), status: "unknown-cost", reason: REASONS.needsCheck },
       ...(opts.stdAt ? { std: { proceeds: std !== null ? f.amount * std : null, cost: null, missing: "cost" as const } } : {}),
     });
     if (s.anchored) {
-      // 기준점 뒤: 0 으로 되돌리지 않는다 — 그 구간은 설명되지 않은 구간이 된다 (부른 쪽이 'unexplained' 로 고친다)
+      // 기준점 뒤: 0 으로 되돌리지 않는다 — 그 구간은 설명되지 않은 구간이 된다 (①)
       s.over = true;
       s.qty = round6(s.qty - f.quantity);
-      Object.assign(s, { cost: null, costWhy: REASONS.oversold, krw: null, krwWhy: REASONS.krwNoBook, std: null, stdWhy: "cost" });
+      Object.assign(s, { cost: null, costWhy: REASONS.needsCheck, krw: null, krwWhy: REASONS.krwNoBook, std: null, stdWhy: "cost" });
       return;
     }
     s.neg = true;
@@ -459,6 +463,7 @@ function runSegment(
   return { state: sellFirst ? b : a, uncertain, ambiguous: true };
 }
 
+
 // ── 화면 문장 조각 (서버 한 곳 — '수량 1,000 → 3,995주') ──
 
 const okPrice = (p: number | null | undefined): number | null => (p !== null && p !== undefined && Number.isFinite(p) && p > 0 ? p : null);
@@ -477,20 +482,16 @@ function fmtPct(r: number): string {
 }
 /** '9월 28일' */
 const md = (date: string) => `${Number(date.slice(5, 7))}월 ${Number(date.slice(8, 10))}일`;
+const yearOf = (date: string) => Number(date.slice(0, 4));
 
 /**
- * 앞 날짜 초과 ~ 뒤 날짜 이하의 그 시장 거래일 수 (주말·휴장일 목록 KR_HOLIDAYS·US_HOLIDAYS 를 뺌 — 추석 연휴 다음 날도 1, 2 넘으면 더 세지 않음).
- * 목록에 없는 해는 평일로 센다
+ * 앞 날짜 초과 ~ 뒤 날짜 이하의 그 시장 거래일 수 (주말·휴장일 목록 KR_HOLIDAYS·US_HOLIDAYS 를 뺌 — 추석 연휴 다음 날도 1).
+ * PRICE_MOVE.shortDays 를 넘으면 더 세지 않는다. 목록에 없는 해는 평일로 센다
  */
 function tradingDaysAfter(from: string, to: string, cur: Cur): number {
   const open = cur === "KRW" ? isKrTradingDate : isUsTradingDate;
   let n = 0;
-  const end = Date.parse(`${to}T12:00:00Z`);
-  for (const d = new Date(`${from}T12:00:00Z`); n < 2; ) {
-    d.setUTCDate(d.getUTCDate() + 1);
-    if (d.getTime() > end) break;
-    if (open(d.toISOString().slice(0, 10))) n++;
-  }
+  for (let d = addDays(from, 1); d <= to && n <= PRICE_MOVE.shortDays; d = addDays(d, 1)) if (open(d)) n++;
   return n;
 }
 
@@ -537,18 +538,33 @@ function guessOf(a: LedgerAnchor, b: LedgerAnchor, seg: LedgerFill[]): string | 
   return off < Math.abs(Math.log(x)) && off <= Math.log(1.15) ? (ratioLabel(k, 0.03)?.label ?? null) : null;
 }
 
-/** 구간 하나 (기준점 i → i+1, 마지막은 i → 지금) */
-interface Span {
-  from: LedgerAnchor;
-  /** 뒤 기록 (마지막 구간은 null) */
-  to: LedgerAnchor | null;
-  seg: LedgerFill[];
-  state: "ok" | "unexplained" | "jump";
-  /** 무엇이 달라졌는지 · 비율 짐작 (ok 면 빈 값) */
+/** ③ 앞 주가 ÷ 뒤 주가가 주식배당·무상증자 비율(1.02~1.10, ±4%)이면 이름표, 아니면 null */
+function bonusRatio(r: number): string | null {
+  const lo = 1 + (BONUS_RANGE[0] - 1) * (1 - RATIO_TOL);
+  const hi = 1 + (BONUS_RANGE[1] - 1) * (1 + RATIO_TOL);
+  return r >= lo && r <= hi ? `무상증자·주식배당(주식 수 ×${Number(r.toFixed(2))})일 수 있어요(추정)` : null;
+}
+
+/** 그해를 확인 필요로 만든 일 하나 (①~⑤). from~to: 일어났을 수 있는 날 (그 시장 거래일) — 앞뒤 30일까지의 해가 확인 필요 */
+interface DoubtEvent {
+  from: string;
+  to: string;
+  /** 본 기록 날짜 (문장 앞 '10월 7일 기록: ') — 체결·첫 기록 전 일은 null (문장에 날짜가 있음) */
+  seen: string | null;
   text: string;
   guess: string | null;
-  uncertain: Set<string>;
-  expectedQty: number;
+}
+
+/** 기록 구간 하나 (기준점 i → i+1, 마지막은 i → 지금) */
+interface Span {
+  a: LedgerAnchor;
+  /** 뒤 기록 (마지막 구간은 null) */
+  b: LedgerAnchor | null;
+  seg: LedgerFill[];
+  /** ①의 수량 차이 (주문 없는 주식 수 변화 — 가진 것보다 많이 판 매도 포함) */
+  orderless: boolean;
+  /** ② 주가가 크게 바뀐 구간 (③은 같은 까닭을 두 번 적지 않는다) */
+  moved: boolean;
 }
 
 /**
@@ -556,7 +572,6 @@ interface Span {
  */
 export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opts: LedgerOptions): PairResult {
   const cur = opts.currency;
-  const jumpTol = PRICE_JUMP[cur];
   const fills = [...fillsIn].sort((x, y) => t(x.at) - t(y.at) || x.seq - y.seq);
   const anchors = [...anchorsIn].sort((x, y) => t(x.asOf) - t(y.asOf));
   const segs: LedgerFill[][] = anchors.map(() => []);
@@ -567,15 +582,26 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
     segs[i]!.push(f);
   }
   const out: Out = new Map();
-  const check: PairCheck = { anchors: anchors.length, preAnchor: "none", drift: 0, unexplained: 0, priceJumps: 0 };
-  const sellKeys = (seg: LedgerFill[]) => seg.filter((f) => f.side === "SELL").map((f) => f.key);
+  const check: PairCheck = { anchors: anchors.length, preAnchor: "none", drift: 0, unexplained: 0, priceJumps: 0, doubtYears: [] };
+  /** 체결의 거래일 (한국 종목은 서울 날짜, 미국 종목은 뉴욕 날짜 — marketContext.tradingDate) */
+  const fillDate = (f: LedgerFill) => tradingDate(f.at, cur === "KRW");
+  const events: DoubtEvent[] = [];
+  const changes: ChangeRow[] = [];
+  /** 0주까지 판 매도 (④) — 시각 순으로 수량만 돌려 본다 */
+  const zeroSells: LedgerFill[] = [];
+  const findZeroSells = (seg: LedgerFill[], start: number) => {
+    let q = start;
+    for (const f of seg) {
+      q = round6(q + (f.side === "BUY" ? f.quantity : -f.quantity));
+      if (f.side === "SELL" && q <= EPS) zeroSells.push(f);
+    }
+  };
 
   // ── 첫 기준점 전 (0주에서) ──
   let s: State = { qty: 0, cost: 0, krw: 0, krwEst: false, krwWhy: null, std: 0, stdWhy: null, neg: false, over: false, anchored: false, costWhy: null, ratio: null };
-  const firstEnd = anchors[0] ? t(anchors[0].asOf) : Infinity;
-  const pre = runSegment(s, segs[0]!, -Infinity, firstEnd, opts, out);
-  s = pre.state;
   const a1 = anchors[0];
+  const pre = runSegment(s, segs[0]!, -Infinity, a1 ? t(a1.asOf) : Infinity, opts, out);
+  s = pre.state;
   const preOk = (() => {
     if (s.neg) return false;
     if (!a1) return true;
@@ -584,20 +610,29 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
     return costClose(s.cost, a1.cost, a1.quantity, cur);
   })();
   if (segs[0]!.length) check.preAnchor = !a1 ? (preOk ? "history-only" : "incomplete") : preOk ? "checked" : "mismatch";
-  for (const k of sellKeys(segs[0]!)) {
-    const res = out.get(k);
-    const r = res?.realized;
-    if (!r) continue;
-    if (preOk && r.status !== "unknown-cost") {
+  const preSells = segs[0]!.filter((f) => f.side === "SELL");
+  if (preOk) {
+    for (const f of preSells) {
+      const r = out.get(f.key)?.realized;
+      if (!r || r.status === "unknown-cost") continue;
       r.basis = a1 ? "history-checked" : "history-only";
       r.anchorDate = a1?.date ?? null;
-    } else {
-      // 첫 스냅샷과 맞지 않음(앞부분 주문 내역이 없음): 그 전 매도는 값을 지어내지 않는다
-      Object.assign(r, { ...blank(r.costs), status: "unknown-cost", reason: REASONS.beforeRecord });
-      if (res.std) res.std = { ...res.std, cost: null, missing: "cost" };
     }
+    for (const k of pre.uncertain) tagUncertain(out, k);
+  } else {
+    // 앞부분 주문 내역이 없음: 0주에서 돌린 값은 지어낸 값이다 (매수 뒤 평균도)
+    for (const f of segs[0]!) if (f.side === "BUY") out.set(f.key, { afterBuy: null });
+    // ⑤ 그 전 매도가 있으면 그 해들은 확인 필요
+    if (preSells.length)
+      events.push({
+        from: fillDate(preSells[0]!),
+        to: fillDate(preSells.at(-1)!),
+        seen: null,
+        text: a1 ? `첫 기록(${md(a1.date)} ${fmtQty(a1.quantity)}주) 전 주문 내역이 그 기록과 맞지 않아요` : "주문 내역에 그때 가진 수량보다 많이 판 매도가 있어요",
+        guess: null,
+      });
   }
-  if (preOk) for (const k of pre.uncertain) tagUncertain(out, k);
+  findZeroSells(segs[0]!, 0);
 
   /** 기준점 a 에서 출발하는 원장 (carry = 앞 원장이 이 기준점과 맞음 — 원화 장부·결제일 원화를 이어 쓴다) */
   const fromAnchor = (a: LedgerAnchor, prev: State, carry: boolean, first: boolean): State => {
@@ -624,42 +659,33 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
     if (b.quantity <= EPS || e.cost === null) return true; // 앞 매입금액을 모르면 그 구간 매도는 이미 '모름'
     return b.cost !== null && costWithin(e.cost, b.cost, cur);
   };
-  const hasSell = (seg: LedgerFill[]) => seg.some((f) => f.side === "SELL");
   /**
-   * 같은 계좌·같은 구간(끝 기록 b)에 다른 종목이 주문 없이 들어왔음: 들어온 몫의 토스 매입금액이 이 종목이 그 구간에 가졌던 매입금액
-   * (앞 기록 + 구간 매수)의 0.5% 이상이면 (모르면 늘). 0.5% 보다 작으면 분사였어도 매입금액 차이가 설명된 구간의 허용폭 안이다 (토스 이벤트 주식 1주 등)
+   * ② 한 구간의 주가 변화: 뒤 기록 주가 · 그 구간 체결 가격이 앞 기록 주가에서 ±25%(3거래일 넘게 걸쳤으면 ±20%) 넘게 벗어남.
+   * 거래일은 그 시장 휴장일을 빼고 센다 (추석 연휴 다음 날도 하루)
    */
-  const siblingArrived = (a: LedgerAnchor, b: LedgerAnchor, seg: LedgerFill[]): boolean => {
-    const arr = opts.arrivals?.get(b.asOf);
-    if (arr === undefined) return false;
-    if (arr === null || a.cost === null) return true;
-    return arr >= (a.cost + seg.reduce((s, f) => s + (f.side === "BUY" ? f.amount : 0), 0)) * COST_TOL;
-  };
-  /** 체결의 거래일 (한국 종목은 서울 날짜, 미국 종목은 뉴욕 날짜 — marketContext.tradingDate) */
-  const fillDate = (f: LedgerFill) => tradingDate(f.at, cur === "KRW");
-  /**
-   * 큰 주가 변화: 한 거래일 사이 뒤 기록 주가 · 그날 체결 가격이 앞 기록 주가에서 벗어난 폭 (문장·짐작). 휴장일은 세지 않는다 (추석 뒤 첫 거래일도 하루).
-   * 기록이 빠져 여러 거래일에 걸친 구간·여러 거래일 뒤 체결은 보지 않는다 (한국 하한가 두 번처럼 실제로 날 수 있는 변화)
-   */
-  const jumpOf = (a: LedgerAnchor, b: LedgerAnchor | null, seg: LedgerFill[]): { text: string; guess: string | null } | null => {
+  const priceMove = (a: LedgerAnchor, b: LedgerAnchor | null, seg: LedgerFill[]): { to: string; seen: string | null; text: string; guess: string | null } | null => {
     const p0 = okPrice(a.price);
     if (p0 === null) return null;
-    const off = (r: number) => r > 1 + jumpTol || r < 1 - jumpTol;
-    const p1 = b && b.quantity > EPS && tradingDaysAfter(a.date, b.date, cur) <= 1 ? okPrice(b.price) : null;
-    if (b && p1 !== null && off(p1 / p0)) {
+    const off = (r: number, to: string) => {
+      const m = Math.abs(r - 1);
+      return m > PRICE_MOVE.short || (m > PRICE_MOVE.long && tradingDaysAfter(a.date, to, cur) > PRICE_MOVE.shortDays);
+    };
+    const p1 = b && b.quantity > EPS ? okPrice(b.price) : null;
+    if (b && p1 !== null && off(p1 / p0, b.date)) {
       const same = Math.abs(b.quantity - a.quantity) <= EPS ? ` · 주식 수 ${fmtQty(a.quantity)}주 그대로` : "";
-      return { text: `주가 ${fmtMoney(p0, cur, true)} → ${fmtMoney(p1, cur, true)} (${fmtPct(p1 / p0)})${same}`, guess: ratioLabel(p0 / p1, 0.1, true)?.label ?? null };
+      return { to: b.date, seen: b.date, text: `주가 ${fmtMoney(p0, cur, true)} → ${fmtMoney(p1, cur, true)} (${fmtPct(p1 / p0)})${same}`, guess: ratioLabel(p0 / p1, 0.1, true)?.label ?? null };
     }
     for (const f of seg) {
       if (!(f.quantity > EPS && f.amount > 0)) continue;
       const px = f.amount / f.quantity;
-      // 가격이 벗어난 체결만 거래일을 센다 (날짜 계산이 가장 비싼 몫)
-      if (off(px / p0) && tradingDaysAfter(a.date, fillDate(f), cur) <= 1) return { text: `${f.side === "SELL" ? "매도" : "매수"} 가격 ${fmtMoney(px, cur, true)} · 직전 기록 주가 ${fmtMoney(p0, cur, true)}보다 ${fmtPct(px / p0)}`, guess: ratioLabel(p0 / px, 0.1, true)?.label ?? null };
+      const d = fillDate(f);
+      if (off(px / p0, d))
+        return { to: d, seen: null, text: `${md(d)} ${f.side === "SELL" ? "매도" : "매수"} 가격 ${fmtMoney(px, cur, true)} · 직전 기록 주가 ${fmtMoney(p0, cur, true)}보다 ${fmtPct(px / p0)}`, guess: ratioLabel(p0 / px, 0.1, true)?.label ?? null };
     }
     return null;
   };
 
-  // ── 기준점마다: 구간을 기록대로 돌려 뒤 기록과 맞춰 본다 ──
+  // ── 기준점마다: 구간을 기록대로 돌려 뒤 기록과 맞춰 본다 (원가는 늘 앞 기록의 토스 값에서) ──
   const spans: Span[] = [];
   let prev = s;
   let carry = preOk;
@@ -682,129 +708,83 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
       }
     }
     for (const [k, v] of tmp) out.set(k, v);
-    for (const k of sellKeys(seg)) {
-      const x = out.get(k)?.realized;
+    for (const f of seg) {
+      const x = f.side === "SELL" ? out.get(f.key)?.realized : null;
       if (!x || x.status === "unknown-cost") continue;
       x.basis = "snapshot";
       x.anchorDate = a.date;
     }
     const e = run.state;
-    // 끝이 0주면 매입금액을 맞춰 볼 수 없다: 같은 구간에 다른 종목이 주문 없이 들어왔으면(분사 등) 설명되지 않음
-    const sibling = !!b && fits(e, b) && b.quantity <= EPS && hasSell(seg) && siblingArrived(a, b, seg);
-    const explained = b ? fits(e, b) && !sibling : !e.over;
-    const span: Span = { from: a, to: b, seg, state: "ok", text: "", guess: null, uncertain: run.uncertain, expectedQty: e.qty };
-    if (!explained) {
-      span.state = "unexplained";
-      span.guess = b ? guessOf(a, b, seg) : null;
-      if (e.over) span.text = `기록된 매도가 그때 가진 수량보다 많았어요 · ${b ? `수량 ${fmtQty(a.quantity)} → ${fmtQty(b.quantity)}주` : `${md(a.date)} 기록 ${fmtQty(a.quantity)}주`}`;
-      else if (b && Math.abs(e.qty - b.quantity) > EPS)
-        span.text = `수량 ${fmtQty(a.quantity)} → ${fmtQty(b.quantity)}주 · ${seg.length ? `기록된 매매대로라면 ${fmtQty(e.qty)}주` : "그 사이 기록된 매매 없음"}`;
-      else if (sibling) span.text = `수량 ${fmtQty(a.quantity)} → 0주 · 같은 기간 다른 종목이 주문 없이 들어와(분사 등일 수 있어요) 매입금액을 맞춰 보지 못했어요`;
-      else if (b && b.cost === null) span.text = `토스 잔고에 매입금액이 없어 기록과 맞춰 보지 못했어요 (수량 ${fmtQty(b.quantity)}주)`;
-      else if (b) span.text = `토스 매입금액 ${fmtMoney(b.cost!, cur)} · 기록된 매매대로라면 ${fmtMoney(e.cost!, cur)} (수량 ${fmtQty(b.quantity)}주는 같아요)`;
-    } else {
-      const j = jumpOf(a, b, seg);
-      if (j) Object.assign(span, { state: "jump", text: j.text, guess: j.guess });
+    const explained = b ? fits(e, b) : !e.over;
+    if (explained) {
+      for (const k of run.uncertain) tagUncertain(out, k);
       if (b && b.cost !== null && e.cost !== null && b.quantity > EPS && !costClose(e.cost, b.cost, b.quantity, cur)) check.drift++;
+    } else {
+      // ① 기록된 체결로 설명되지 않는 구간
+      check.unexplained++;
+      let text = "";
+      if (e.over) text = `기록된 매도가 그때 가진 수량보다 많았어요 · ${b ? `수량 ${fmtQty(a.quantity)} → ${fmtQty(b.quantity)}주` : `${md(a.date)} 기록 ${fmtQty(a.quantity)}주`}`;
+      else if (b && Math.abs(e.qty - b.quantity) > EPS) text = `수량 ${fmtQty(a.quantity)} → ${fmtQty(b.quantity)}주 · ${seg.length ? `기록된 매매대로라면 ${fmtQty(e.qty)}주` : "그 사이 기록된 매매 없음"}`;
+      else if (b && b.cost === null) text = `토스 잔고에 매입금액이 없어 기록과 맞춰 보지 못했어요 (수량 ${fmtQty(b.quantity)}주)`;
+      else if (b) text = `토스 매입금액 ${fmtMoney(b.cost!, cur)} · 기록된 매매대로라면 ${fmtMoney(e.cost!, cur)} (수량 ${fmtQty(b.quantity)}주는 같아요)`;
+      const guess = b ? guessOf(a, b, seg) : null;
+      events.push({ from: a.date, to: b ? b.date : seg.length ? fillDate(seg.at(-1)!) : a.date, seen: b?.date ?? null, text, guess });
+      if (b) changes.push({ at: b.asOf, date: b.date, fromDate: a.date, kind: "unexplained", fromQty: a.quantity, toQty: b.quantity, expectedQty: e.qty, text, guess });
     }
-    spans.push(span);
+    // ② 주가가 크게 바뀐 구간
+    const move = priceMove(a, b, seg);
+    if (move) {
+      check.priceJumps++;
+      events.push({ from: a.date, ...move });
+      if (b && explained) changes.push({ at: b.asOf, date: b.date, fromDate: a.date, kind: "possible-action", fromQty: a.quantity, toQty: b.quantity, expectedQty: e.qty, text: move.text, guess: move.guess });
+    }
+    spans.push({ a, b, seg, orderless: !explained && (e.over || (!!b && Math.abs(e.qty - b.quantity) > EPS)), moved: !!move });
+    findZeroSells(seg, a.quantity);
     prev = e;
     carry = explained;
   }
 
-  // ── 큰 주가 변화 뒤 새 주식을 기다리는 창: 설명되지 않은 수량 변화가 있는 구간까지 (90일 안), 기록이 그 안에서 끝나면 지금까지.
-  //    그 사이 0주가 되면 거기까지 (0주에서 시작한 구간의 몫은 권리락 뒤에 산 것 — 새 주식은 그 전 몫의 것) ──
-  const windowOf = new Map<number, Span>();
-  /** 창이 찾은 설명되지 않은 구간 (큰 주가 변화 뒤 늦게 들어온 새 주식 — 아래 '0주 뒤 입고'가 다시 보지 않음) */
-  const claimed = new Set<number>();
-  const windowMs = JUMP_WINDOW_DAYS * 86_400_000;
-  spans.forEach((sp, j) => {
-    if (sp.state !== "jump" || !sp.to) return;
-    const seen = t(sp.to.asOf);
-    let held = j + 1;
-    while (held < spans.length && spans[held]!.from.quantity > EPS) held++;
-    const put = (upTo: number) => {
-      for (let m = j + 1; m < Math.min(upTo, held); m++) if (!windowOf.has(m)) windowOf.set(m, sp);
-    };
-    for (let k = j + 1; k < spans.length; k++) {
-      const x = spans[k]!;
-      if (t(x.from.asOf) - seen > windowMs) return;
-      if (x.state === "unexplained") {
-        claimed.add(k);
-        put(k);
-        return;
-      }
-      if (!x.to) put(k + 1);
-    }
+  // ③ 주식배당·무상증자 비율만큼 주가가 내린 구간 — 그 구간이나 뒤 30일 안에 주문 없는 주식 수 변화가 있으면 (②로 이미 적은 구간은 빼고)
+  spans.forEach((sp, i) => {
+    const p0 = okPrice(sp.a.price);
+    const p1 = sp.b && sp.b.quantity > EPS ? okPrice(sp.b.price) : null;
+    if (sp.moved || p0 === null || p1 === null) return;
+    const guess = bonusRatio(p0 / p1);
+    const until = t(sp.b!.asOf) + DOUBT_DAYS * DAY_MS;
+    if (guess === null || !spans.slice(i).some((x) => x.orderless && t(x.a.asOf) <= until)) return;
+    events.push({ from: sp.a.date, to: sp.b!.date, seen: sp.b!.date, text: `주가 ${fmtMoney(p0, cur, true)} → ${fmtMoney(p1, cur, true)} (${fmtPct(p1 / p0)}) · 그 구간이나 30일 안에 주문 없이 주식 수가 바뀌었어요`, guess });
   });
 
-  // ── 같은 종목이 주문 없이 들어옴 (판 뒤 늦게 들어온 새 주식일 수 있음 — 그 사이 다시 사 둔 몫이 있어도): 그 앞 90일 안에 끝이 0주인 구간
-  //    (매입금액을 맞춰 보지 못한 구간)의 매도는 계산하지 않는다. 첫 기록 전 원장이 90일 안에 0주에 닿았으면(첫 기록이 0주 · 첫 기록 전에 모두 팔고
-  //    다시 삼) 그때까지의 첫 기록 전 몫도 (첫 기록 전에는 주가가 없어 큰 주가 변화도 볼 수 없다) ──
-  /** 첫 기록 전 원장이 마지막으로 0주가 된 때 · 그때까지의 몫 수 · 문장 (첫 기록이 0주면 첫 기록 — 모든 몫) */
-  let preZero: { at: number; count: number; text: string } | null = null;
-  if (a1 && preOk) {
-    if (a1.quantity <= EPS) preZero = { at: t(a1.asOf), count: segs[0]!.length, text: `첫 기록(${md(a1.date)}) 0주` };
-    else {
-      let q = 0;
-      for (const [i, f] of segs[0]!.entries()) {
-        q = round6(q + (f.side === "BUY" ? f.quantity : -f.quantity));
-        if (f.side === "SELL" && q <= EPS) preZero = { at: t(f.at), count: i + 1, text: `첫 기록 전 ${md(fillDate(f))} 모두 팔아 0주` };
-      }
-    }
-  }
-  let preArrival: string | null = null;
-  for (let k = 0; k < spans.length; k++) {
-    const x = spans[k]!;
-    if (x.state !== "unexplained" || claimed.has(k) || !x.to || !(x.to.quantity > x.expectedQty + EPS)) continue;
-    const what = `${md(x.to.date)} 기록에서 주문 없이 ${fmtQty(round6(x.to.quantity - x.expectedQty))}주가 들어왔어요(판 뒤 늦게 들어온 새 주식일 수 있어요)`;
-    const since = t(x.from.asOf);
-    for (let j = k - 1; j >= 0; j--) {
-      const sp = spans[j]!;
-      if (since - t(sp.to!.asOf) > windowMs) break;
-      if (sp.state === "ok" && !windowOf.has(j) && hasSell(sp.seg) && sp.to!.quantity <= EPS)
-        Object.assign(sp, { state: "unexplained", text: `${sp.from.quantity > EPS ? `수량 ${fmtQty(sp.from.quantity)} → 0주` : "0주에서 사고팔아 다시 0주"} · ${what}`, guess: null });
-    }
-    if (preZero && since - preZero.at <= windowMs) preArrival ??= `${preZero.text} · ${what}`;
-  }
-  if (preArrival && preZero) {
-    // 첫 기록 전 0주가 된 때까지의 몫(0주에서 돌려 첫 기록과 맞춘 것)도 계산하지 않는다 — 그 뒤 다시 산 몫은 보통
-    for (const f of segs[0]!.slice(0, preZero.count)) {
-      const r = out.get(f.key)?.realized;
-      if (f.side === "BUY" || (r && r.status !== "unknown-cost")) exclude(out, f, REASONS.unexplained, preArrival, null);
-    }
+  // ④ 0주까지 판 뒤 30일 안에 같은 계좌에 다른 종목이 주문 없이 들어옴 (들어온 때가 판 때보다 확실히 앞이면 아님)
+  for (const f of zeroSells) {
+    const at = t(f.at);
+    if (!(opts.arrivals ?? []).some((x) => (x.to === null || t(x.to) >= at) && t(x.from) <= at + DOUBT_DAYS * DAY_MS)) continue;
+    const d = fillDate(f);
+    events.push({ from: d, to: d, seen: null, text: `${md(d)} 모두 판 뒤 30일 안에 같은 계좌에 다른 종목이 주문 없이 들어왔어요(분사 등일 수 있어요)`, guess: null });
   }
 
-  // ── 마무리: 설명되지 않은 구간·큰 주가 변화 창의 매도는 계산하지 않는다 ──
-  const changes: ChangeRow[] = [];
+  // ── 확인 필요인 해: 일이 있었을 수 있는 날의 앞뒤 30일이 닿는 해 ──
+  const doubt = new Map<number, DoubtEvent[]>();
+  for (const e of [...events].sort((x, y) => (x.from < y.from ? -1 : x.from > y.from ? 1 : 0)))
+    for (let y = yearOf(addDays(e.from, -DOUBT_DAYS)); y <= yearOf(addDays(e.to, DOUBT_DAYS)); y++) doubt.set(y, [...(doubt.get(y) ?? []), e]);
+  check.doubtYears = [...doubt.keys()].sort((x, y) => x - y);
+  for (const f of fills) {
+    const ev = doubt.get(yearOf(fillDate(f)));
+    if (ev) exclude(out, f, ev);
+  }
+
+  // ── 수익률: 확인 필요인 해에 걸친, 이 종목이 든 기록 구간은 건너뛴다 ──
   const skips: SkipSpan[] = [];
-  spans.forEach((sp, idx) => {
-    const src = sp.state !== "ok" ? sp : windowOf.get(idx);
-    if (!src) {
-      for (const k of sp.uncertain) tagUncertain(out, k);
-      return;
-    }
-    if (sp.state === "unexplained") check.unexplained++;
-    if (sp.state === "jump") check.priceJumps++;
-    const reason = src.state === "unexplained" ? REASONS.unexplained : REASONS.possibleAction;
-    const change = src === sp || !src.to ? src.text : `${md(src.to.date)} 기록: ${src.text}`;
-    for (const f of sp.seg) exclude(out, f, reason, change, src.guess);
-    if (sp.to && sp.state !== "ok")
-      changes.push({
-        at: sp.to.asOf,
-        date: sp.to.date,
-        fromDate: sp.from.date,
-        kind: sp.state === "unexplained" ? "unexplained" : "possible-action",
-        fromQty: sp.from.quantity,
-        toQty: sp.to.quantity,
-        expectedQty: sp.expectedQty,
-        text: sp.text,
-        guess: sp.guess,
-      });
-    const last = skips.at(-1);
-    if (last && last.to === sp.from.asOf) last.to = sp.to?.asOf ?? null;
-    else skips.push({ from: sp.from.asOf, to: sp.to?.asOf ?? null });
-  });
+  for (const sp of spans) {
+    if (!(sp.a.quantity > EPS || (sp.b?.quantity ?? 0) > EPS || sp.seg.length)) continue;
+    const last = sp.b ? sp.b.date : sp.seg.length ? fillDate(sp.seg.at(-1)!) : sp.a.date;
+    let bad = false;
+    for (let y = yearOf(sp.a.date); y <= yearOf(last); y++) bad ||= doubt.has(y);
+    if (!bad) continue;
+    const tail = skips.at(-1);
+    if (tail && tail.to === sp.a.asOf) tail.to = sp.b?.asOf ?? null;
+    else skips.push({ from: sp.a.asOf, to: sp.b?.asOf ?? null });
+  }
 
   return {
     fills: out,
@@ -815,18 +795,19 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
   };
 }
 
-/** 계산하지 않는 몫: 매도는 손익 숫자 없이 'unexplained'(까닭·바뀐 것·이름표), 매수는 '이 매수 뒤 평균' 없음 */
-function exclude(out: Out, f: LedgerFill, reason: string, change: string, guess: string | null): void {
+/** 확인 필요인 해의 몫: 매도는 손익 숫자 없이 'unexplained'(까닭 · 그해 있었던 일 · 이름표), 매수는 '이 매수 뒤 평균' 없음 */
+function exclude(out: Out, f: LedgerFill, events: DoubtEvent[]): void {
   const res = out.get(f.key);
-  if (!res) return;
   if (f.side === "BUY") {
     out.set(f.key, { afterBuy: null });
     return;
   }
-  const costs = res.realized?.costs ?? { fee: null, tax: null, total: null, source: null };
+  const lines = [...new Set(events.map((e) => (e.seen ? `${md(e.seen)} 기록: ${e.text}` : e.text)))];
+  const change = lines.length > 3 ? `${lines.slice(0, 3).join(" / ")} / 그 밖 ${lines.length - 3}가지` : lines.join(" / ");
+  const costs = res?.realized?.costs ?? { fee: null, tax: null, total: null, source: null };
   out.set(f.key, {
-    realized: { ...blank(costs), status: "unexplained", reason, change, guess },
-    ...(res.std ? { std: { proceeds: res.std.proceeds, cost: null, missing: "unexplained" as const } } : {}),
+    realized: { ...blank(costs), status: "unexplained", reason: REASONS.needsCheck, change, guess: events.find((e) => e.guess)?.guess ?? null },
+    ...(res?.std ? { std: { proceeds: res.std.proceeds, cost: null, missing: "unexplained" as const } } : {}),
   });
 }
 

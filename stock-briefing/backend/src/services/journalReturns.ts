@@ -11,8 +11,8 @@
  *  - 시장: 한국(원) = 한국 스냅샷, 미국(달러) = 미국 스냅샷 달러 값(환율 효과 없음), 전체(원화) = 두 시장 스냅샷을 시각 순으로 이어, 시점마다
  *    '그 시각까지의 최신 한국 + 최신 미국(그 스냅샷 환율)'. 한 시장의 흐름은 그 시장의 다음 스냅샷에서 센다(미국은 그 스냅샷 환율로 원화)
  *  - 빈칸(gap)은 앞뒤를 한 구간으로 이어 계산, 의심을 안고 저장한 스냅샷은 평가 시점에서 뺀다
- *  - 주문 내역으로 설명되지 않은 구간(원장의 skips — 입고·출고·분할·병합·분사 등, 큰 주가 변화 뒤 새 주식을 기다리는 구간, 계좌 목록이 바뀐 기록 사이)과
- *    겹치는 그 시장 구간은 수익률·기간 손익에서 건너뛴다 (uncertainSkipped — 그 구간 끝 날짜). 흐름으로 값을 매겨 넣지 않는다 (검토 반영 7차 보수 규칙).
+ *  - 건너뛸 구간(원장의 skips — 확인 필요인 해(검토 반영 10차 종목·해 규칙)에 걸친, 그 종목이 든 기록 구간 · 계좌 목록이 바뀐 기록 사이)과
+ *    겹치는 그 시장 구간은 수익률·기간 손익에서 건너뛴다 (uncertainSkipped — 그 구간 끝 날짜). 흐름으로 값을 매겨 넣지 않는다.
  *    모든 구간을 건너뛰면 숫자 없이 allSkipped
  *  - 현금 입출금·배당은 넣지 않는다(토스 Open API 가 주지 않음 — 주식 평가금액만의 가격 수익률)
  *  - 공개 조건(로드맵 '3-36 뒤 최소 2주를 모은 다음 공개'): 기록 전체(기간과 상관없이)의 평가 시점이 READY_DAYS(10)거래일 미만이면 숫자를 주지 않는다
@@ -86,7 +86,7 @@ export interface ReturnsBody {
   sells: number;
   gaps: string[];
   doubtedSkipped: string[];
-  /** 주문 내역으로 설명되지 않은 변화가 있어 수익률·기간 손익에서 건너뛴 구간의 끝 날짜 */
+  /** 확인 필요인 종목·해에 걸쳐 수익률·기간 손익에서 건너뛴 구간의 끝 날짜 */
   uncertainSkipped: string[];
   /** 고른 기간의 모든 구간을 건너뛰어 숫자가 없음 (ready false) */
   allSkipped: boolean;
@@ -250,7 +250,7 @@ export function periodReturns(
     sells += b.flowOut;
     const denom = a.total + b.flowIn;
     if (b.skip) {
-      // 설명되지 않은 구간: 수익률은 그대로 이어 가고 그 구간 손익은 빼 둔다
+      // 건너뛸 구간: 수익률은 그대로 이어 가고 그 구간 손익은 빼 둔다
       skippedPnl += b.total + b.flowOut - b.flowIn - a.total;
       if (uncertainSkipped.at(-1) !== b.p.snap.date) uncertainSkipped.push(b.p.snap.date);
     } else if (denom > 0) growth *= 1 + (b.total + b.flowOut - b.flowIn - a.total) / denom;
