@@ -768,7 +768,6 @@ export const authLayout = {
   logoSubGap: 12,
   /** 부제 한 줄 높이 */
   logoSubH: 16,
-  logoGap: 18,
   /** SVG 로고 그림 폭 = 글자 크기 × 7 (글자가 잘리지 않게 넉넉히), 실제 글자 폭 ≈ 글자 크기 × 6.3 (겹침 검사용, 웹 실측 5.6) */
   wordmarkCanvas: 7,
   wordmarkInk: 6.3,
