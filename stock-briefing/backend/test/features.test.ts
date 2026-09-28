@@ -21,7 +21,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
       now: NOW,
     });
     try {
-      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true, tradeRecords: true, indicatorScores: true, valueScore: true, briefingTrim: true, briefingSafeWording: true, briefingCompactTop: true, moversMerge: true, priceAlerts: true, densityMode: true, maCustom: true, chartHighLow: true, tossOpen: true }, updatedAt: null });
+      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true, tradeRecords: true, indicatorScores: true, valueScore: true, briefingTrim: true, briefingSafeWording: true, briefingCompactTop: true, moversMerge: true, priceAlerts: true, densityMode: true, maCustom: true, chartHighLow: true, tossOpen: false }, updatedAt: null });
       const history = async () => ((await app.inject({ method: "GET", url: "/api/admin/toss/reconcile" })).json() as { history: unknown[] }).history.length;
       expect((await app.inject({ method: "POST", url: "/api/admin/toss/import-holdings" })).statusCode).toBe(200);
       await vi.waitFor(async () => expect(await history()).toBe(1)); // 대조는 동기화를 기다리지 않고 뒤에서 돈다
@@ -72,7 +72,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect((await new FeatureService(db, NOW).all()).features).toMatchObject({ tossReconcile: false, briefingSources: false });
     await db.updateTable("meta").set({ value: JSON.stringify({ overrides: { briefingSources: false, removedFlag: true }, updatedAt: "x" }) }).where("key", "=", "features").execute();
     const b = new FeatureService(db, NOW);
-    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true, tradeRecords: true, indicatorScores: true, valueScore: true, briefingTrim: true, briefingSafeWording: true, briefingCompactTop: true, moversMerge: true, priceAlerts: true, densityMode: true, maCustom: true, chartHighLow: true, tossOpen: true });
+    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true, tradeRecords: true, indicatorScores: true, valueScore: true, briefingTrim: true, briefingSafeWording: true, briefingCompactTop: true, moversMerge: true, priceAlerts: true, densityMode: true, maCustom: true, chartHighLow: true, tossOpen: false });
     await db.destroy();
   });
 
@@ -157,6 +157,24 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect(detail.find((x) => x.key === "emptyGuide")?.description).toMatch(/설정 열기/);
     for (const k of ["oneHand", "firstRun", "emptyGuide"]) expect(detail.find((x) => x.key === k)?.description).toMatch(/끄면/);
     expect((await f.set({ oneHand: null })).features.oneHand).toBe(true);
+    await db.destroy();
+  });
+
+  it("토스에서 열기(tossOpen)는 사용자 결정 전까지 기본 꺼짐: 휴대폰에서는 'PC로 접속해주세요' 막다른 화면이라 켜 둔 채 내보내지 않는다 (3-48 검토)", async () => {
+    const db = await createMigratedDb(":memory:");
+    const f = new FeatureService(db, NOW);
+    expect((await f.all()).features.tossOpen).toBe(false);
+    const detail = (await f.detail()).find((x) => x.key === "tossOpen");
+    expect(detail).toMatchObject({ enabled: false, default: false, overridden: false });
+    // 관리 API 설명에 한계가 그대로 보인다 (펼친 화면이라고 종목 화면이 나오지 않는다)
+    expect(detail?.description).toMatch(/기본 꺼짐/);
+    expect(detail?.description).toMatch(/PC로 접속해주세요/);
+    expect(detail?.description).toMatch(/접은·펼친 화면 모두/);
+    expect(detail?.description).not.toMatch(/펼친 화면.{0,10}종목 화면/);
+    expect(detail?.description).not.toMatch(/매수|매도/);
+    // 폰 확인용으로 관리 API 로 켤 수 있고, 되돌리면 다시 꺼짐
+    expect((await f.set({ tossOpen: true })).features.tossOpen).toBe(true);
+    expect((await f.set({ tossOpen: null })).features.tossOpen).toBe(false);
     await db.destroy();
   });
 });

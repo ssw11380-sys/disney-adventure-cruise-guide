@@ -263,7 +263,8 @@ describe("켜짐: '시세' 칸 제목 줄 오른쪽 [↗ 토스에서 열기]", 
     }
   });
 
-  it("누르는 곳은 44 이상 (보이는 높이 + hitSlop 위아래)", () => {
+  // 선언값 44. 아래 형제와 겹치는 몫(휴대폰 약 4.5 · 넓은 창 약 6.5)은 안드로이드에서 아래 칸이 받아 실제는 약 40 · 38 ('더 보기'와 같은 방식 — 문서에 그대로 적음)
+  it("보이는 높이 + hitSlop 위아래 = 44 이상 (선언값)", () => {
     const b = buttons(open(samsung(), "phone475", { tossOpen: true }))[0]!;
     const slop = b.props.hitSlop as { top: number; bottom: number; left: number; right: number };
     const st = flat(b);
