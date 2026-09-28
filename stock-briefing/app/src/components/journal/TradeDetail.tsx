@@ -99,6 +99,8 @@ function NoteEditor({ item }: { item: JournalItem }) {
         value={text}
         onChangeText={(v) => setText(clampNote(v))}
         placeholder={JOURNAL.notePlaceholder}
+        multiline
+        textAlignVertical="top"
         placeholderTextColor={t.muted}
         accessibilityLabel={JOURNAL.noteA11y}
         style={[styles.input, { color: t.ink, borderColor: t.lineStrong, backgroundColor: t.surfaceAlt }]}
@@ -147,7 +149,8 @@ const styles = StyleSheet.create({
   kv: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", columnGap: space.md, rowGap: space.xxs, paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
   kvLabel: { fontSize: font.small, flexShrink: 1 },
   kvValue: { fontSize: font.small, fontWeight: "700", fontVariant: ["tabular-nums"], marginLeft: "auto", textAlign: "right" },
-  input: { minHeight: 44, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, fontSize: font.body },
+  // 여러 줄 (200자가 한 줄로 밀리지 않게) — 최소 44, 네 줄쯤까지 늘어난다
+  input: { minHeight: 44, maxHeight: 120, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.s, fontSize: font.body },
   noteBar: { flexDirection: "row", alignItems: "center", gap: space.sm },
   backdrop: { flex: 1, alignItems: "center" },
   sheet: { width: "100%", maxWidth: 560, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },

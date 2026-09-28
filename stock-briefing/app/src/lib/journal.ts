@@ -1,6 +1,7 @@
 import type { JournalItem, JournalRealizedSum, JournalResponse, JournalReturns, JournalTax, JournalTaxItem, ReturnsMarket, ReturnsPreset } from "@/api/types";
 import { sentence, speakAmount, speakProfit, speakRate } from "./a11y";
 import { formatPct, formatPrice, shownSign } from "./format";
+import { clampScale } from "./textScale";
 
 /**
  * 매매일지 (3-37, 기능 플래그 tradeJournal · tradeRecords) — 화면 글·화면 읽기 문장·기간 고르기. React Native 를 불러오지 않는 순수 모듈.
@@ -50,6 +51,18 @@ export const JOURNAL = {
   costsNone: "토스가 주지 않아 빼지 않았어요",
   grossNote: "실현손익은 수수료·세금을 빼기 전 금액이에요 (토스 주문 내역에 비용이 없음).",
 } as const;
+
+/** '양도세 추정' 탭 이름 폭 어림 (굵은 14 글자 다섯 자 + 여유, 글자 100%) */
+const TAX_TAB_W = 84;
+
+/**
+ * 위 탭 이름: 한 칸(창 폭 ÷ 3)에 '양도세 추정'이 한 줄로 안 들어가면(좁은 폭 × 큰 글씨) '양도세' — 글자 중간에서 줄이 바뀌지 않게.
+ * '추정'은 그 탭 맨 위 상자·제목에 늘 있다
+ */
+export function journalTabs(width: number, fontScale: number): { value: "list" | "returns" | "tax"; label: string }[] {
+  const fits = width / 3 >= TAX_TAB_W * clampScale(fontScale);
+  return JOURNAL.tabs.map((t) => (t.value === "tax" && !fits ? { value: t.value, label: "양도세" } : { value: t.value, label: t.label }));
+}
 
 export const NOTE_MAX = 200;
 export const MAX_RANGE_DAYS = 400;
@@ -192,10 +205,15 @@ export function realizedText(item: JournalItem): string {
   return base;
 }
 
-/** 줄 오른쪽: 매도는 실현손익, 매수는 산 금액 */
+/**
+ * 줄 오른쪽: 매도는 실현손익 숫자만(추정·순서 추정 꼬리표는 셋째 줄 까닭 문장이 말한다 — 큰 글씨에서 숫자가 잘리지 않게), 매수는 산 금액
+ */
 export function rightText(item: JournalItem): string {
   if (item.kind === "estimated") return "";
-  return item.side === "SELL" ? realizedText(item) : money(item.amount, item.currency);
+  if (item.side !== "SELL") return money(item.amount, item.currency);
+  const r = item.realized;
+  if (!r || r.status === "unknown-cost" || r.gross === null) return "실현손익 모름";
+  return `${money(r.gross, item.currency, true)}${r.rate !== null ? ` (${formatPct(r.rate)})` : ""}`;
 }
 
 /** 줄 오른쪽 색의 부호 (손익) — 매수·모름은 0 */

@@ -15,6 +15,7 @@ import {
   extraLines,
   headLines,
   journalHref,
+  journalTabs,
   krTaxLine,
   periodRange,
   qtyText,
@@ -92,6 +93,18 @@ const krBuyPart: JournalItem = {
   afterBuy: { avgCost: 300, quantity: 2.5 },
   note: null,
 };
+
+describe("위 탭 이름", () => {
+  it("'양도세 추정'이 한 칸에 안 들어가는 좁은 폭 × 큰 글씨에서만 '양도세' (글자 중간 줄바꿈 막기)", () => {
+    const tax = (w: number, s: number) => journalTabs(w, s).find((t) => t.value === "tax")!.label;
+    expect(journalTabs(360, 1).map((t) => t.label)).toEqual(["기록", "수익률", "양도세 추정"]);
+    expect(tax(360, 1.3)).toBe("양도세 추정");
+    expect(tax(360, 2)).toBe("양도세");
+    expect(tax(475, 1.3)).toBe("양도세 추정");
+    expect(tax(475, 2)).toBe("양도세");
+    expect(tax(933, 2)).toBe("양도세 추정");
+  });
+});
 
 describe("기간 고르기", () => {
   it("1주·1달·3달·올해·1년 (서버와 같은 규칙) · 직접 고른 기간 검증", () => {

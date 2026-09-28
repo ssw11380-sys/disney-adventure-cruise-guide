@@ -1,5 +1,6 @@
 import { useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
+import { useWindowDimensions } from "react-native";
 import { JournalList } from "@/components/journal/JournalList";
 import { ReturnsView } from "@/components/journal/ReturnsView";
 import { TaxView } from "@/components/journal/TaxView";
@@ -7,7 +8,7 @@ import { Screen } from "@/components/Screen";
 import { Button, Empty, Segmented } from "@/components/ui";
 import { SERVER_SECTION, TOKEN_FIELD, URL_FIELD } from "@/lib/connectionError";
 import { parseStockCode } from "@/lib/freshness";
-import { JOURNAL, kstDate } from "@/lib/journal";
+import { journalTabs, JOURNAL, kstDate } from "@/lib/journal";
 import { useJournalOn } from "@/lib/journalFlag";
 import { useNow } from "@/lib/useNow";
 import { useSettingsGuide } from "@/lib/settingsLink";
@@ -53,7 +54,8 @@ function JournalBody() {
   // 오늘(한국 날짜)은 1분마다 다시 본다 (자정을 넘겨 켜 둔 화면)
   const now = useNow(60_000);
   const today = kstDate(now);
-  const tabs = <Segmented options={[...JOURNAL.tabs]} value={tab} onChange={setTab} />;
+  const win = useWindowDimensions();
+  const tabs = <Segmented options={journalTabs(win.width, win.fontScale)} value={tab} onChange={setTab} />;
   return (
     <Screen top={tabs} scroll={!twoPane} disclaimer>
       {tab === "list" ? (

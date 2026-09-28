@@ -29,14 +29,15 @@ export function TradeRow({ item, selected, onPress }: { item: JournalItem; selec
           {titleText(item)}
         </Text>
         {!est ? (
-          <Text style={[styles.right, { color: unknown ? t.muted : sell ? changeColor(t, sign) : t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+          <Text style={[styles.right, { color: unknown ? t.muted : sell ? changeColor(t, sign) : t.ink }]} numberOfLines={1}>
             {rightText(item)}
           </Text>
         ) : null}
       </View>
       <Text style={{ color: t.muted, fontSize: font.small }}>{detailLine(item)}</Text>
+      {/* 까닭 문장은 줄바꿈(잘리지 않게), 메모는 한 줄 말줄임 */}
       {extraLines(item).map((l) => (
-        <Text key={l} style={{ color: t.sub, fontSize: font.small }} numberOfLines={1}>
+        <Text key={l} style={{ color: t.sub, fontSize: font.small }} numberOfLines={l.startsWith("메모: ") ? 1 : undefined}>
           {l}
         </Text>
       ))}
@@ -67,8 +68,9 @@ const LINE_H = 56;
 
 const styles = StyleSheet.create({
   row: { minHeight: LINE_H, paddingHorizontal: space.lg, paddingVertical: space.sm, gap: space.xxs, borderBottomWidth: StyleSheet.hairlineWidth, justifyContent: "center" },
-  line1: { flexDirection: "row", alignItems: "center", gap: space.s },
+  // 이름과 오른쪽 숫자가 한 줄에 안 들어가면(큰 글씨) 숫자가 다음 줄 오른쪽으로 — 숫자를 줄이거나 자르지 않는다
+  line1: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.s, rowGap: space.xxs },
   tag: { borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: space.xs, paddingVertical: space.xxs },
   name: { flexShrink: 1, fontSize: font.body, fontWeight: "700" },
-  right: { marginLeft: "auto", flexShrink: 0, maxWidth: "60%", fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"], textAlign: "right" },
+  right: { marginLeft: "auto", flexShrink: 0, fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"], textAlign: "right" },
 });
