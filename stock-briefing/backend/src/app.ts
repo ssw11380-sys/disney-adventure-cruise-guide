@@ -110,7 +110,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const accountsOn = () => features.enabled("accounts");
   // 주인 계정: 없을 때만 만든다 (플래그와 상관없이 — 나중에 켜도 바로 쓰게. 이미 있으면 비밀번호를 되돌리지 않는다)
   if (!accountsKilled) await auth.ensureOwner().catch((e: unknown) => app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 주인 계정 확인 실패"));
-  // 비상 주인 비밀번호 되돌리기 (OWNER_RESET_PASSWORD — 지금 비밀번호와 다를 때만, 주인 세션·기기를 모두 끊는다)
+  // 비상 주인 비밀번호 되돌리기 (OWNER_RESET_PASSWORD — 같은 값은 한 번만, 지금 비밀번호와 다를 때만 바꾸고 주인 세션·기기를 모두 끊는다)
   const resetPw = opts.config.OWNER_RESET_PASSWORD ?? "";
   if (!accountsKilled && resetPw) await auth.resetOwnerPassword(resetPw).catch((e: unknown) => app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 주인 비밀번호 되돌리기 실패"));
 
