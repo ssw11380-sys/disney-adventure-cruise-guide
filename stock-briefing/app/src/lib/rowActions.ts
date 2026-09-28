@@ -48,3 +48,22 @@ export function rowA11yActions(s: RemovableStock): { name: string; label: string
     { name: "longpress", label: "메뉴 열기" },
   ];
 }
+
+/**
+ * 관심 줄의 화면 읽기 동작 더하기 (3-34, 기능 플래그 watchGroups): 그룹 옮기기, 그리고 내 순서(정렬 '등록순')일 때 위로·아래로 옮기기
+ * (맨 위에서는 위로, 맨 아래에서는 아래로를 뺀다). 늘 같은 배열을 돌려준다 — 잔고 줄의 memo 비교를 깨지 않게
+ */
+export type WatchRowAction = "watchGroup" | "watchUp" | "watchDown";
+const WATCH_GROUP = Object.freeze({ name: "watchGroup", label: "그룹 옮기기" });
+const WATCH_UP = Object.freeze({ name: "watchUp", label: "위로 옮기기" });
+const WATCH_DOWN = Object.freeze({ name: "watchDown", label: "아래로 옮기기" });
+const WATCH_ACTIONS = {
+  none: Object.freeze([WATCH_GROUP]),
+  up: Object.freeze([WATCH_GROUP, WATCH_UP]),
+  down: Object.freeze([WATCH_GROUP, WATCH_DOWN]),
+  both: Object.freeze([WATCH_GROUP, WATCH_UP, WATCH_DOWN]),
+} as const;
+
+export function watchRowA11yActions(o: { up: boolean; down: boolean }): readonly { name: string; label: string }[] {
+  return o.up && o.down ? WATCH_ACTIONS.both : o.up ? WATCH_ACTIONS.up : o.down ? WATCH_ACTIONS.down : WATCH_ACTIONS.none;
+}

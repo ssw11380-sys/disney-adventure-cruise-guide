@@ -38,6 +38,7 @@ import type { AppErrorSummary, Evaluation,
   ReconcileBadgeBody,
 } from "./types";
 import { authMessage, NOT_JSON } from "@/lib/connectionError";
+import type { WatchLayout } from "@/lib/watchGroups";
 
 import { condDrop, condGet, condHeaders, condKey, condNote, condPut, isDelta, rebuild } from "./condCache";
 
@@ -273,6 +274,13 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     priceAlertVolume: (codes: string[]) => get<{ items: VolumeStatus[] }>(`/api/price-alerts/volume?codes=${codes.map(encodeURIComponent).join(",")}`, 45_000),
     /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis). 예전 서버는 404 → 부르는 쪽(reconcileBadgeQuery)이 꺼짐으로 본다 */
     reconcileBadge: () => get<ReconcileBadgeBody>("/api/admin/toss/reconcile/badge", 8_000),
+    /** 관심 종목 그룹·순서 (3-34, 플래그 watchGroups). 모든 응답이 배치 전체. 예전 서버는 404 → 부르는 쪽(WatchGroupsProvider)이 꺼짐으로 본다 */
+    watchGroups: () => get<WatchLayout>("/api/watch-groups", 10_000),
+    createWatchGroup: (name: string) => send<WatchLayout>("POST", "/api/watch-groups", { name }, 15_000),
+    renameWatchGroup: (id: number, name: string) => send<WatchLayout>("PATCH", `/api/watch-groups/${id}`, { name }, 15_000),
+    deleteWatchGroup: (id: number) => send<WatchLayout>("DELETE", `/api/watch-groups/${id}`, undefined, 15_000),
+    orderWatchGroups: (ids: number[]) => send<WatchLayout>("PUT", "/api/watch-groups/order", { ids }, 15_000),
+    moveWatchStock: (body: { code: string; groupId: number | null; index: number }) => send<WatchLayout>("POST", "/api/watch-groups/move", body, 15_000),
   };
 }
 

@@ -18,6 +18,8 @@ import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
 import { closeOpenRow, SwipeRow, type SwipeAction } from "@/components/SwipeRow";
 import { TossImportButton } from "@/components/TossImportButton";
 import { Button, ErrorView, TableHead } from "@/components/ui";
+import { WatchChips, WatchEmptyGroup, WatchGroupHead } from "@/components/WatchChips";
+import { WatchMenuHost, moveWithin, type WatchMenuTarget } from "@/components/WatchRowSheet";
 import { panelBasisFit } from "@/lib/basisFit";
 import { gated } from "@/lib/features";
 import { formatPct, formatPrice, formatQuote } from "@/lib/format";
@@ -27,12 +29,14 @@ import { holdingsLayoutKey, useHoldingsAnchor } from "@/lib/holdingsAnchor";
 import { bandOneLine, bandRates, holdingWeights, pickCols, pickWatchCols } from "@/lib/holdingsColumns";
 import { quoteLive, sessionOpen } from "@/lib/liveDot";
 import { excludedLabel, isHolding, sortHoldings, splitHoldings, summarize } from "@/lib/portfolio";
-import { removeConfirm, removeKind, removeLabel } from "@/lib/rowActions";
+import { removeConfirm, removeKind, removeLabel, watchRowA11yActions } from "@/lib/rowActions";
 import { SORT_OPTIONS, useSettings, type SortKey } from "@/lib/settings";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { TAB_ICON } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useGuideMarks, useUx } from "@/lib/uxFlags";
+import { selectChip, toggleFold, watchChips, watchEntries, watchModel, type WatchEntry, type WatchSelected } from "@/lib/watchGroups";
+import { useWatchGroups } from "@/lib/watchGroupsQuery";
 import { isWide, railWidth } from "@/lib/windowClass";
 import { changeColor, font, fontCap, layout, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 
@@ -111,10 +115,18 @@ export default function StocksScreen() {
     ];
   }, [data, sort, afterCost]);
 
-  // 이어 보기: 목록에서 빠진 종목(삭제 등)의 줄 위치는 버린다 (맨 위 종목으로 사라진 종목을 기억하지 않게)
+  // 3-34 관심 그룹·순서 (플래그 watchGroups — 루트 WatchGroupsProvider 가 서버 배치·기기 보기 상태를 내려 준다): 관심 구역을 그룹별로(칩·그룹 머리·접기).
+  // 꺼져 있으면(제공자 없음 포함) watchM·watchList 가 null → 아래는 모두 지금과 같은 길
+  const wg = useWatchGroups();
+  const mine = sort === "created";
+  const watchData = sections.find((x) => x.key === "watch")?.data;
+  const watchM = useMemo(() => (wg.on && watchData ? watchModel(watchData, wg.layout, wg.view, mine) : null), [wg.on, watchData, wg.layout, wg.view, mine]);
+  const watchList = useMemo(() => (watchM ? watchEntries(watchM) : null), [watchM]);
+
+  // 이어 보기: 목록에서 빠진 종목(삭제 등)의 줄 위치는 버린다 (맨 위 종목으로 사라진 종목을 기억하지 않게). 관심 그룹이 켜져 있으면 보이는 줄만 (접은 그룹·다른 칩의 줄은 뺀다)
   useEffect(() => {
-    if (fold.on) anchor.keep(new Set(sections.flatMap((x) => x.data.map((i) => i.code))));
-  }, [fold.on, anchor, sections]);
+    if (fold.on) anchor.keep(new Set(sections.flatMap((x) => (x.key === "watch" && watchList ? watchList.flatMap((e) => (e.kind === "row" ? [e.stock.code] : [])) : x.data.map((i) => i.code)))));
+  }, [fold.on, anchor, sections, watchList]);
 
   const confirmRemove = (s: RegisteredWithQuote) =>
     // 토스 연동 종목은 삭제하면 동기화에서도 빠진다는 것을 먼저 알린다 (수정 화면과 같은 문구)
@@ -156,12 +168,30 @@ export default function StocksScreen() {
     ]);
   };
 
+  // 3-34 관심 줄 메뉴 시트 (플래그 watchGroups): 관심 줄 길게 누르기 · 밀기 '그룹' · 화면 읽기 '그룹 옮기기'. 보유 줄은 지금 그대로
+  const [watchMenu, setWatchMenu] = useState<WatchMenuTarget | null>(null);
+  const openWatchMenu = (s: RegisteredWithQuote, step: WatchMenuTarget["step"]) => {
+    haptic("press");
+    setWatchMenu({ stock: s, step });
+  };
+
   // 줄 누름 처리는 렌더마다 새로 만들지 않는다 (체결이 온 줄만 다시 그리게, 3-17)
   const confirmRef = useRef(confirmRemove);
   const actionRef = useRef((s: RegisteredWithQuote, a: "edit" | "remove") => (a === "edit" ? openEdit(s) : askRemove(s)));
+  // 3-34 관심 줄의 더한 동작 (그룹 옮기기 · 위로 · 아래로 — 화면 읽기 동작·밀기 '그룹')
+  const moreRef = useRef((_s: RegisteredWithQuote, _a: string) => {});
   useEffect(() => {
-    confirmRef.current = ux.oneHand ? rowMenu : confirmRemove;
+    const menu = ux.oneHand ? rowMenu : confirmRemove;
+    confirmRef.current = watchM ? (s) => (isHolding(s) ? menu(s) : openWatchMenu(s, "menu")) : menu;
     actionRef.current = (s, a) => (a === "edit" ? openEdit(s) : askRemove(s));
+    moreRef.current = (s, a) => {
+      if (!watchM) return;
+      if (a === "watchGroup") openWatchMenu(s, "groups");
+      else if (a === "watchUp" || a === "watchDown") {
+        const p = watchM.pos.get(s.code);
+        if (p) moveWithin(wg.ops, watchM, s, p.index + (a === "watchUp" ? -1 : 1));
+      }
+    };
   });
   // 스와이프로 열린 줄이 있으면 다른 줄을 누른 것은 그 줄을 닫기만 한다 (상세를 열지 않음 — 열린 줄을 누른 것과 같은 규칙, 3-24).
   // 열린 줄은 oneHand 가 켜진 휴대폰·접은 화면에만 생기므로 꺼져 있으면 지금 그대로
@@ -171,12 +201,15 @@ export default function StocksScreen() {
   }, []);
   const longPress = useCallback((s: RegisteredWithQuote) => confirmRef.current(s), []);
   const rowAction = useCallback((s: RegisteredWithQuote, a: "edit" | "remove") => actionRef.current(s, a), []);
+  const moreAction = useCallback((s: RegisteredWithQuote, a: string) => moreRef.current(s, a), []);
   // 휴대폰·접은 화면 줄 스와이프 틀: 줄(StockRow) 안에서 감싸 체결이 온 줄만 틀까지 다시 그린다 (늘 같은 함수 — 줄의 memo 비교를 깨지 않게).
-  // 버튼: 수정(청록) · 지우기(경고색 — 토스 종목은 동기화 제외, 관심은 관심 해제)
+  // 버튼: 수정(청록) · 지우기(경고색 — 토스 종목은 동기화 제외, 관심은 관심 해제). 3-34 관심 그룹이 켜져 있으면 관심 줄은 가운데 '그룹'(그룹 고르기)이 하나 더
+  const watchSwipe = wg.on;
   const swipeWrap = useCallback(
     (s: RegisteredWithQuote, row: React.ReactElement, onLayout?: (e: LayoutChangeEvent) => void) => {
       const actions: SwipeAction[] = [
         { key: "edit", label: "수정", icon: "create-outline", onPress: () => actionRef.current(s, "edit") },
+        ...(watchSwipe && !isHolding(s) ? [{ key: "group", label: "그룹", icon: "folder-outline" as const, onPress: () => moreRef.current(s, "watchGroup") }] : []),
         { key: "remove", label: removeLabel(s), icon: removeKind(s) === "sync" ? "remove-circle-outline" : removeKind(s) === "unwatch" ? "star-outline" : "trash-outline", danger: true, onPress: () => actionRef.current(s, "remove") },
       ];
       return (
@@ -185,13 +218,28 @@ export default function StocksScreen() {
         </SwipeRow>
       );
     },
-    [],
+    [watchSwipe],
   );
   // 정렬 바꾸기 (3-24: 바꿀 때 짧은 진동 — 플래그·설정이 켜져 있을 때만. 열린 줄은 닫는다 — 줄 순서가 바뀌므로)
   const pickSort = (k: SortKey) => {
     closeOpenRow();
     haptic("select");
     void setSort(k);
+  };
+  // 3-34 칩 고르기 · 그룹 접기(이 기기에 기억) · '관심 그룹·순서' 화면 — 칩·접기는 서버에 묻지 않고 폰에 있는 배치로 바로
+  const pickChip = (key: WatchSelected) => {
+    closeOpenRow();
+    haptic("select");
+    wg.setView(selectChip(wg.view, key));
+  };
+  const toggleGroup = (groupId: number | null) => {
+    closeOpenRow();
+    haptic("select");
+    wg.setView(toggleFold(wg.view, groupId ?? "none"));
+  };
+  const openWatchEditor = () => {
+    closeOpenRow();
+    router.push("/watch-groups");
   };
   // 목록을 끌기 시작하거나 당겨서 새로고침하면 열린 줄을 닫는다 (휴대폰·접은 화면 스와이프가 켜졌을 때만 — 꺼져 있으면 지금 그대로)
   const onPullRows = swipeRows
@@ -284,6 +332,10 @@ export default function StocksScreen() {
     );
 
   const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";
+  // 3-34: 정렬이 '등록순'이면 관심 칸은 '내 순서'(그룹·순서 화면에서 정한 순서). 보유 칸은 그대로 '등록순'
+  const myOrder = !!watchM && mine;
+  const headSort = (key: string) => (key === "watch" && myOrder ? { label: "내 순서", a11y: "정렬 바꾸기, 지금 등록순, 관심 종목은 내 순서" } : { label: sortLabel, a11y: `정렬 바꾸기, 지금 ${sortLabel}` });
+  const chipsRow = (pad: number) => (watchM ? <WatchChips chips={watchChips(watchM)} onPick={pickChip} onEdit={openWatchEditor} pad={pad} backdrop={t.bg} /> : null);
 
   // 넓은 한 줄 계좌 띠에 국내·해외 수익률까지 넣는 폭인지 (좁은 한 줄 띠는 숫자 기준 점만 — 글 없음)
   const rates = bandRates(tableW, fontScale);
@@ -333,8 +385,8 @@ export default function StocksScreen() {
                 <Text style={{ color: t.muted, fontSize: font.small }}>비중</Text>
               </Pressable>
             ) : null}
-            <Pressable onPress={() => setSortOpen(true)} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={styles.barBtn}>
-              <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel}</Text>
+            <Pressable onPress={() => setSortOpen(true)} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel={headSort(section.key).a11y} style={styles.barBtn}>
+              <Text style={{ color: t.muted, fontSize: font.small }}>{headSort(section.key).label}</Text>
               <Ionicons name="chevron-down" size={font.small} color={t.muted} />
             </Pressable>
           </View>
@@ -344,12 +396,14 @@ export default function StocksScreen() {
           <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }} accessibilityRole="header">
             {section.title}
           </Text>
-          <Pressable onPress={() => setSortOpen(true)} hitSlop={SORT_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={{ flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xs }}>
-            <Text style={{ color: t.muted, fontSize: font.small }}>{sortLabel}</Text>
+          <Pressable onPress={() => setSortOpen(true)} hitSlop={SORT_SLOP} accessibilityRole="button" accessibilityLabel={headSort(section.key).a11y} style={{ flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xs }}>
+            <Text style={{ color: t.muted, fontSize: font.small }}>{headSort(section.key).label}</Text>
             <Ionicons name="chevron-down" size={font.small} color={t.muted} />
           </Pressable>
         </View>
       )}
+      {/* 3-34 칩 줄: '관심 9' 머리와 표 머리 사이 (켜져 있을 때만) */}
+      {section.key === "watch" ? chipsRow(space.lg) : null}
       <TableHead>
         <HeadCell label="종목명" a11y="이름순 정렬" active={sort === "name"} onPress={() => pickSort("name")} flex />
         <HeadCell label={PRICE_HEAD} a11y="등락률순 정렬" active={sort === "changeRate"} onPress={() => pickSort("changeRate")} width={col.price} />
@@ -363,7 +417,7 @@ export default function StocksScreen() {
   );
   // 넓은 창 표 머리: 열 이름을 누르면 정렬 (설정의 정렬 값 그대로), 이름 칸의 "등록순 ▾" 는 정렬 창
   const tableHeader = (section: (typeof sections)[number]) => (
-    <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={sortLabel} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
+    <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={headSort(section.key).label} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
   );
   const empty = ux.emptyGuide ? (
     // 3-24 빈 화면 (플래그 emptyGuide): 무엇을 하면 되는지 한 문단 + 행동 버튼 하나 (토스 계좌는 설정의 칸 이름으로 알려 준다)
@@ -417,7 +471,8 @@ export default function StocksScreen() {
   let childIndex = 1;
   for (const sec of sections) {
     stickyIndices.push(childIndex);
-    childIndex += 1 + sec.data.length;
+    // 3-34: 관심 구역은 그룹 머리·빈 그룹 칸도 목록 자식이다 (그룹이 켜져 있으면 watchList 길이 — 틀리면 엉뚱한 줄이 위에 붙는다)
+    childIndex += 1 + (sec.key === "watch" && watchList ? watchList.length : sec.data.length);
   }
   // 이어 보기·돌아온 줄 강조(플래그가 켜져 있을 때만): 스크롤 위치·목록 칸 높이·구역 머리·줄 위치를 잰다. 넓은 창이면 표 폭도 잰다.
   // 꺼져 있으면 아무것도 붙이지 않는다 (지금과 똑같다 — 종목 상세 ‹ › 도 플래그가 켜진 넓은 창에만 있어 강조할 줄이 생기지 않는다)
@@ -434,6 +489,15 @@ export default function StocksScreen() {
       }
     : null;
   const plans = wide && weights ? { held: heldPlan, watch: watchPlan } : null;
+  // 구역의 줄들: 보유·(꺼짐) 관심은 종목 줄 그대로, 3-34 관심 그룹이 켜져 있으면 관심 구역은 그룹 머리·빈 그룹 칸이 줄 사이에 낀다 (i = 줄무늬 차례, 그룹마다 0 부터)
+  const entriesOf = (section: (typeof sections)[number]): WatchEntry[] =>
+    section.key === "watch" && watchList ? watchList : section.data.map((stock, index) => ({ kind: "row", stock, groupId: null, index, count: section.data.length }));
+  // 3-34 관심 줄의 화면 읽기 동작 더하기: 그룹 옮기기 · 위로 · 아래로 (내 순서에서 맨 위·맨 아래는 뺀다). 꺼져 있으면 null → 줄 속성 그대로
+  const watchExtra = (code: string) => {
+    if (!watchM) return null;
+    const p = watchM.pos.get(code);
+    return { moreActions: watchRowA11yActions({ up: myOrder && !!p && p.index > 0, down: myOrder && !!p && p.index < p.count - 1 }), onMoreAction: moreAction };
+  };
 
   return (
     <Screen
@@ -475,10 +539,18 @@ export default function StocksScreen() {
           : sections.flatMap((section) => [
               <View key={`h-${section.key}`} {...(fold.on ? { onLayout: (e: LayoutChangeEvent) => anchor.head(section.key, e) } : null)}>
                 {plans ? tableHeader(section) : sectionHeader(section)}
+                {/* 3-34 넓은 표의 칩 줄: 표 머리 아래 (화면 읽기가 '관심 9' 제목을 먼저 읽고 칩을 읽게) */}
+                {plans && section.key === "watch" ? chipsRow(plans.watch?.pad ?? space.lg) : null}
               </View>,
               // 줄은 목록에 바로 놓는다. 종목 상세에서 ‹ › 로 넘겨 본 뒤 돌아오면 마지막에 본 줄만 강조 틀(mark.wrap)로 감싼다 —
               // 감싼 줄은 틀 안에서 y=0 이므로 이어 보기 줄 위치는 줄 대신 틀이 알린다 (휴대폰 목록·넓은 표 모두)
-              ...section.data.map((item, i) => {
+              ...entriesOf(section).map((entry) => {
+                // 3-34 그룹 머리(누르면 접기) · 빈 그룹 칸
+                if (entry.kind === "groupHead")
+                  return <WatchGroupHead key={entry.key} name={entry.name} groupId={entry.groupId} count={entry.count} collapsed={entry.collapsed} onToggle={() => toggleGroup(entry.groupId)} pad={plans?.watch?.pad ?? space.lg} />;
+                if (entry.kind === "empty") return <WatchEmptyGroup key="watch-empty" onOpen={openWatchEditor} />;
+                const item = entry.stock;
+                const i = entry.index;
                 const marked = mark.code === item.code;
                 const row = (
                   <StockRow
@@ -501,6 +573,7 @@ export default function StocksScreen() {
                         : // 관심 줄은 비중을 쓰지 않는다: 최대 비중이 바뀔 때마다 관심 줄까지 다시 그리지 않게
                           { columns: plans.watch, zebra: i % 2 === 1 }
                       : null)}
+                    {...(section.key === "watch" ? watchExtra(item.code) : null)}
                   />
                 );
                 return mark.wrap(item.code, row, fold.on ? (e) => rowLayout(item, e.nativeEvent.layout.y, e.nativeEvent.layout.height) : undefined);
@@ -508,7 +581,20 @@ export default function StocksScreen() {
             ])}
         {watchEmpty}
       </ScrollView>
-      <SortSheet visible={sortOpen} value={sort} onClose={() => setSortOpen(false)} onPick={pickSort} />
+      <SortSheet visible={sortOpen} value={sort} onClose={() => setSortOpen(false)} onPick={pickSort} {...(watchM ? { createdNote: "관심 종목은 ‘그룹·순서’에서 정한 순서" } : null)} />
+      {/* 3-34 관심 줄 메뉴 시트 (켜져 있을 때만) */}
+      {watchM ? (
+        <WatchMenuHost
+          target={watchMenu}
+          model={watchM}
+          mine={myOrder}
+          variant="holdings"
+          removeText={watchMenu ? removeLabel(watchMenu.stock) : undefined}
+          onEdit={openEdit}
+          onRemove={askRemove}
+          onClose={() => setWatchMenu(null)}
+        />
+      ) : null}
     </Screen>
   );
 }
@@ -772,7 +858,20 @@ function Kpi({ label, value, color }: { label: string; value: string; color?: st
   );
 }
 
-function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; value: SortKey; onClose: () => void; onPick: (k: SortKey) => void }) {
+function SortSheet({
+  visible,
+  value,
+  onClose,
+  onPick,
+  createdNote,
+}: {
+  visible: boolean;
+  value: SortKey;
+  onClose: () => void;
+  onPick: (k: SortKey) => void;
+  /** '등록순' 아래 작은 흐린 줄 (3-34 관심 그룹이 켜져 있을 때만 — 관심 종목은 '그룹·순서'에서 정한 순서) */
+  createdNote?: string;
+}) {
   const t = useTheme();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -791,11 +890,18 @@ function SortSheet({ visible, value, onClose, onPick }: { visible: boolean; valu
                 onClose();
               }}
               accessibilityRole="radio"
-              accessibilityLabel={o.label}
+              accessibilityLabel={createdNote && o.value === "created" ? `${o.label}, ${createdNote}` : o.label}
               accessibilityState={{ checked: o.value === value }}
               style={({ pressed }) => [styles.sheetItem, { borderTopColor: t.line, backgroundColor: pressed ? t.surfaceAlt : "transparent" }]}
             >
-              <Text style={{ color: o.value === value ? t.accent : t.ink, fontSize: font.body, fontWeight: o.value === value ? "700" : "400" }}>{o.label}</Text>
+              {createdNote && o.value === "created" ? (
+                <View style={styles.sheetLabel}>
+                  <Text style={{ color: o.value === value ? t.accent : t.ink, fontSize: font.body, fontWeight: o.value === value ? "700" : "400" }}>{o.label}</Text>
+                  <Text style={{ color: t.muted, fontSize: font.small }}>{createdNote}</Text>
+                </View>
+              ) : (
+                <Text style={{ color: o.value === value ? t.accent : t.ink, fontSize: font.body, fontWeight: o.value === value ? "700" : "400" }}>{o.label}</Text>
+              )}
               {o.value === value ? <Ionicons name="checkmark" size={font.h2} color={t.accent} /> : null}
             </Pressable>
           ))}
@@ -839,6 +945,8 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: "flex-end" },
   sheet: { borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: space.xl },
   sheetItem: { minHeight: touch.min, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.lg, borderTopWidth: StyleSheet.hairlineWidth },
+  // 3-34 '등록순' + 아랫줄 안내
+  sheetLabel: { flex: 1, gap: space.xxs },
   // ── 넓은 창 맨 위 띠 오른쪽 끝 ──
   stripEnd: { flexDirection: "row", alignItems: "stretch", borderLeftWidth: StyleSheet.hairlineWidth },
   // 시장 상태: 세션 / 실시간·시각 두 줄, 칸 폭은 글자에 맞춘다 (최대 폭은 StripEnd 가 글자 배율로)

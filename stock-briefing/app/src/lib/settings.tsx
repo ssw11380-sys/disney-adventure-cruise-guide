@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
+import { parseWatchView, serializeWatchView, VIEW_DEFAULT, type WatchView } from "@/lib/watchView";
 
 /**
  * 앱 설정. AsyncStorage 에 저장한다.
@@ -12,6 +13,7 @@ import { Platform } from "react-native";
  *  - haptics: 누를 때 짧은 진동 (3-24, 기능 플래그 oneHand 가 켜져 있을 때만 설정 화면에 보인다. 기본 켬 — lib/haptics)
  *  - density: 잔고 표시 기본 · 촘촘 (3-39, 기능 플래그 densityMode 가 켜져 있을 때만 설정 화면에 보이고 잔고에 쓰인다. 위젯은 읽지 않는다)
  *  - chartHighLow: 차트 최고·최저가 표시 (3-46, 기능 플래그 chartHighLow 가 켜져 있을 때만 설정 화면에 보이고 차트에 쓰인다. 기본 켬)
+ *  - watchView: 잔고 관심 칸에서 고른 칩·접은 그룹 (3-34, 기능 플래그 watchGroups 가 켜져 있을 때만 쓰인다. 그룹·순서 자체는 서버 — lib/watchView)
  * 위젯(백그라운드)도 같은 키를 읽으므로 키 이름을 바꾸면 widgets/ 쪽도 같이 바꿔야 한다.
  */
 
@@ -26,6 +28,7 @@ export const STORAGE_KEYS = {
   haptics: "settings.haptics",
   density: "settings.density",
   chartHighLow: "settings.chartHighLow",
+  watchView: "settings.watchView",
 } as const;
 
 /** 잔고 위젯 종목 줄 손익 금액: 원화(기본) · 종목 통화 */
@@ -93,6 +96,8 @@ interface Settings {
   density: Density;
   /** 차트 최고·최저가 표시 (기본 켬, 3-46 — 플래그 chartHighLow 가 꺼져 있으면 차트는 이 값과 상관없이 지금 그대로) */
   chartHighLow: boolean;
+  /** 관심 칸에서 고른 칩·접은 그룹 (3-34 — 기본 '전체' · 모두 펼침) */
+  watchView: WatchView;
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
   setApiToken: (token: string) => Promise<void>;
@@ -106,6 +111,7 @@ interface Settings {
   setHaptics: (on: boolean) => Promise<void>;
   setDensity: (v: Density) => Promise<void>;
   setChartHighLow: (on: boolean) => Promise<void>;
+  setWatchView: (v: WatchView) => Promise<void>;
 }
 
 /**
@@ -144,6 +150,7 @@ const Ctx = createContext<Settings>({
   haptics: true,
   density: "basic",
   chartHighLow: true,
+  watchView: VIEW_DEFAULT,
   ready: false,
   setApiUrl: noop,
   setApiToken: noop,
@@ -156,6 +163,7 @@ const Ctx = createContext<Settings>({
   setHaptics: noop,
   setDensity: noop,
   setChartHighLow: noop,
+  setWatchView: noop,
 });
 
 async function persist(key: string, value: string | null): Promise<void> {
@@ -214,10 +222,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [haptics, setHapticsState] = useState(true);
   const [density, setDensityState] = useState<Density>("basic");
   const [chartHighLow, setChartHighLowState] = useState(true);
+  const [watchView, setWatchViewState] = useState<WatchView>(VIEW_DEFAULT);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency, STORAGE_KEYS.haptics, STORAGE_KEYS.density, STORAGE_KEYS.chartHighLow])
+    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency, STORAGE_KEYS.haptics, STORAGE_KEYS.density, STORAGE_KEYS.chartHighLow, STORAGE_KEYS.watchView])
       .then((pairs) => {
         const m = new Map(pairs);
         const u = m.get(STORAGE_KEYS.apiUrl);
@@ -243,6 +252,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         // 차트 최고·최저가 표시: 저장한 적 없으면 켬
         const hl = m.get(STORAGE_KEYS.chartHighLow);
         if (hl) setChartHighLowState(hl !== "0");
+        // 관심 칸 칩·접힘: ready 전에 읽어 켤 때 '전체'로 한 번 그렸다가 바뀌지 않게 (망가진 값은 기본)
+        setWatchViewState(parseWatchView(m.get(STORAGE_KEYS.watchView)));
       })
       .catch(() => {})
       .finally(() => {
@@ -313,9 +324,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     await persist(STORAGE_KEYS.chartHighLow, on ? "1" : "0");
   }, []);
 
+  const setWatchView = useCallback(async (v: WatchView) => {
+    setWatchViewState(v);
+    await persist(STORAGE_KEYS.watchView, serializeWatchView(v));
+  }, []);
+
   const value = useMemo(
-    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, chartHighLow, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity, setChartHighLow }),
-    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, chartHighLow, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity, setChartHighLow],
+    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, chartHighLow, watchView, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity, setChartHighLow, setWatchView }),
+    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, chartHighLow, watchView, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity, setChartHighLow, setWatchView],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

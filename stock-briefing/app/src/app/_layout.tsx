@@ -12,6 +12,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NotificationBridge } from "@/components/NotificationBridge";
 import { PriceAlertProvider } from "@/components/PriceAlertProvider";
 import { ConnectionWordingBridge, FirstRunGate, GuideMarksProvider, HapticsBridge, UxFlagsProvider } from "@/components/UxBridge";
+import { WatchGroupsProvider } from "@/components/WatchGroupsProvider";
 import { WidgetBridge } from "@/components/WidgetBridge";
 import { ensureBackgroundTaskRegistered } from "@/lib/backgroundBriefings";
 import { installErrorHandlers, setCurrentScreen } from "@/lib/errorReport";
@@ -129,6 +130,8 @@ function Navigator() {
       <Stack.Screen name="chart-lines" options={{ title: "이동평균선", presentation: "modal" }} />
       {/* 첫 실행 안내 (3-24, 플래그 firstRun): 머리 없이 한 화면, 뒤로 가기·'시작하기'로 닫힌다 */}
       <Stack.Screen name="welcome" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
+      {/* 관심 그룹·순서 (3-34, 기능 플래그 watchGroups — 꺼져 있으면 화면 안에 안내만) */}
+      <Stack.Screen name="watch-groups" options={{ title: "관심 그룹·순서" }} />
     </Stack>
   );
 }
@@ -167,7 +170,10 @@ export default function RootLayout() {
                     <ScreenTracker />
                     <HapticsBridge />
                     <ConnectionWordingBridge />
-                    <Navigator />
+                    {/* 관심 종목 그룹·순서 (3-34, 플래그 watchGroups): 서버 배치·기기 보기 상태. 꺼져 있으면 부르지 않고 꺼짐만 내려 준다 */}
+                    <WatchGroupsProvider>
+                      <Navigator />
+                    </WatchGroupsProvider>
                     <FirstRunGate />
                   </PriceAlertProvider>
                 </GuideMarksProvider>

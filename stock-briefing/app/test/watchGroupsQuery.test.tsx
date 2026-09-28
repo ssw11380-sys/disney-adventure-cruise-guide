@@ -1,0 +1,227 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import React from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RegisteredWithQuote } from "@/api/types";
+import { holding, quote } from "./helpers";
+import { cleanupRenders, render } from "./miniRender";
+
+/**
+ * 관심 그룹 제공자·저장 차례 (3-34, 플래그 watchGroups) — 실제 QueryClient 로.
+ *  - 꺼짐: 서버를 부르지 않고 꺼짐 값 (잔고·메뉴가 지금 그대로)
+ *  - 켬: 배치를 받아 내려 줌, 예전 서버 404 · on:false 는 꺼짐처럼
+ *  - 조작: 누르는 즉시 캐시(낙관적) → 차례로 보내고 마지막 응답으로 맞춤, 실패하면 '저장하지 못했습니다' 창 + 서버 값 다시 받기
+ *  - 기기 캐시 저장 대상(watchGroups), 종목 상세 ‹ › 가 보이는 관심 순서를 따름
+ */
+const h = vi.hoisted(() => ({
+  flags: {} as Record<string, boolean>,
+  api: {} as Record<string, ReturnType<typeof vi.fn>>,
+  alert: vi.fn(),
+  announce: vi.fn(),
+  view: { selected: "all", collapsed: [] } as { selected: unknown; collapsed: unknown[] },
+  setView: vi.fn(),
+}));
+vi.mock("react-native", () => ({ Alert: { alert: h.alert }, AccessibilityInfo: { announceForAccessibility: h.announce } }));
+vi.mock("@/api/hooks", () => ({ useApi: () => h.api, useFeature: (k: string, f = false) => h.flags[k] ?? f }));
+vi.mock("@/lib/settings", () => ({ useSettings: () => ({ apiUrl: "http://x", watchView: h.view, setWatchView: h.setView, sort: "created", afterCost: false }) }));
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
+
+const { WatchGroupsProvider } = await import("@/components/WatchGroupsProvider");
+const { useWatchGroups, WatchOpQueue, WATCH_GROUPS_OFF } = await import("@/lib/watchGroupsQuery");
+const { ApiRequestError } = await import("@/api/client");
+const { shouldPersist } = await import("@/lib/queryPersist");
+const { holdingsOrder } = await import("@/lib/holdingsNav");
+type State = import("@/lib/watchGroupsQuery").WatchGroupsState;
+type Layout = import("@/lib/watchGroups").WatchLayout;
+
+const at = (m: number) => `2026-09-01T09:${String(m).padStart(2, "0")}:00+09:00`;
+const w = (code: string, name: string, m: number): RegisteredWithQuote => ({ ...holding(code, quote(code, 100), null, null, undefined, name), createdAt: at(m) });
+const LIST = [w("A", "가", 1), w("B", "나", 2), w("C", "다", 3), w("D", "라", 4)];
+const LAYOUT: Layout = {
+  on: true,
+  groups: [{ id: 1, name: "반도체", position: 0 }],
+  items: [
+    { code: "A", groupId: 1, position: 0 },
+    { code: "B", groupId: 1, position: 1 },
+  ],
+};
+const settle = () => new Promise((r) => setTimeout(r, 30));
+/** 부르는 쪽이 끝낼 수 있는 응답 */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+let client: QueryClient;
+beforeEach(() => {
+  cleanupRenders();
+  h.flags = { watchGroups: true };
+  h.api = { watchGroups: vi.fn(async () => LAYOUT), moveWatchStock: vi.fn(), createWatchGroup: vi.fn(), renameWatchGroup: vi.fn(), deleteWatchGroup: vi.fn(), orderWatchGroups: vi.fn() };
+  h.alert.mockReset();
+  h.announce.mockReset();
+  h.view = { selected: "all", collapsed: [] };
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  client.setQueryData(["http://x", "stocks"], LIST);
+});
+afterEach(() => client.clear());
+
+function mount() {
+  const seen = { value: WATCH_GROUPS_OFF as State };
+  function Probe() {
+    seen.value = useWatchGroups();
+    return null;
+  }
+  render(
+    <QueryClientProvider client={client}>
+      <WatchGroupsProvider>
+        <Probe />
+      </WatchGroupsProvider>
+    </QueryClientProvider>,
+  );
+  return seen;
+}
+const cache = () => client.getQueryData<Layout>(["http://x", "watchGroups"]);
+
+describe("제공자: 꺼짐 · 켬 · 예전 서버", () => {
+  it("꺼짐: 서버를 부르지 않고 꺼짐 값", async () => {
+    h.flags = {};
+    const seen = mount();
+    await settle();
+    expect(seen.value).toBe(WATCH_GROUPS_OFF);
+    expect(h.api.watchGroups).not.toHaveBeenCalled();
+  });
+
+  it("켬: 배치를 받아 on · 준비됨, 기기에 저장한 보기 상태(서버에 없는 그룹은 뺌)", async () => {
+    h.view = { selected: 42, collapsed: [1, 42] };
+    const seen = mount();
+    expect(seen.value.status).toBe("loading");
+    await settle();
+    expect(seen.value.on).toBe(true);
+    expect(seen.value.status).toBe("ready");
+    expect(seen.value.layout).toEqual(LAYOUT);
+    expect(seen.value.view).toEqual({ selected: "all", collapsed: [1] });
+    expect(shouldPersist(["http://x", "watchGroups"], { data: LAYOUT, dataUpdatedAt: Date.now() - 1000, error: null }, Date.now())).toBe(true);
+  });
+
+  it("예전 서버(404)·on:false 는 꺼짐처럼, 다른 오류는 편집 화면의 '실패'", async () => {
+    h.api.watchGroups!.mockRejectedValueOnce(new ApiRequestError(404, "HTTP_404", "없음"));
+    const a = mount();
+    await settle();
+    expect([a.value.on, a.value.status]).toEqual([false, "off"]);
+    client.clear();
+    h.api.watchGroups!.mockResolvedValueOnce({ on: false, groups: [], items: [] });
+    const b = mount();
+    await settle();
+    expect([b.value.on, b.value.status]).toEqual([false, "off"]);
+    client.clear();
+    // 한 번 더 해 보고(retry 1) 그래도 안 되면 실패
+    h.api.watchGroups!.mockRejectedValue(new ApiRequestError(500, "INTERNAL", "서버 오류"));
+    const c = mount();
+    await vi.waitFor(() => expect([c.value.on, c.value.status]).toEqual([false, "error"]), { timeout: 4000, interval: 50 });
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("조작: 낙관적 반영 · 차례 · 실패", () => {
+  it("↑ 세 번 빠르게: 누를 때마다 바로 캐시가 바뀌고 요청은 하나씩, 마지막 응답만 캐시에 쓴다 · 화면 읽기 알림", async () => {
+    const seen = mount();
+    await settle();
+    const replies = [deferred<Layout>(), deferred<Layout>(), deferred<Layout>()];
+    let n = 0;
+    h.api.moveWatchStock!.mockImplementation(() => replies[n++]!.promise);
+    seen.value.ops.move({ code: "B", name: "나" }, 1, 0, "나를 반도체 1번째로 옮겼습니다");
+    expect(cache()!.items.filter((i) => i.groupId === 1)).toEqual([
+      { code: "A", groupId: 1, position: 1 },
+      { code: "B", groupId: 1, position: 0 },
+    ]);
+    expect(h.announce).toHaveBeenCalledWith("나를 반도체 1번째로 옮겼습니다");
+    seen.value.ops.move({ code: "C", name: "다" }, 1, 0);
+    seen.value.ops.move({ code: "D", name: "라" }, null, 0);
+    await settle();
+    // 앞 요청이 끝나기 전에는 다음 요청을 보내지 않는다
+    expect(h.api.moveWatchStock).toHaveBeenCalledTimes(1);
+    const mid: Layout = { ...LAYOUT, items: [{ code: "A", groupId: 1, position: 1 }, { code: "B", groupId: 1, position: 0 }] };
+    replies[0]!.resolve(mid);
+    await settle();
+    expect(h.api.moveWatchStock).toHaveBeenCalledTimes(2);
+    // 중간 응답은 캐시에 쓰지 않는다 (낙관적 값 그대로 — C 가 맨 앞)
+    expect(cache()!.items.find((i) => i.code === "C")).toEqual({ code: "C", groupId: 1, position: 0 });
+    replies[1]!.resolve(mid);
+    await settle();
+    const final: Layout = { ...LAYOUT, items: [{ code: "Z", groupId: null, position: 0 }] };
+    replies[2]!.resolve(final);
+    await settle();
+    expect(h.api.moveWatchStock!.mock.calls.map((c) => c[0])).toEqual([
+      { code: "B", groupId: 1, index: 0 },
+      { code: "C", groupId: 1, index: 0 },
+      { code: "D", groupId: null, index: 0 },
+    ]);
+    expect(cache()).toEqual(final);
+  });
+
+  it("실패하면 '저장하지 못했습니다' 창(서버 글 · 연결 안 됨 글)과 서버 값 다시 받기", async () => {
+    const seen = mount();
+    await settle();
+    h.api.moveWatchStock!.mockRejectedValueOnce(new ApiRequestError(404, "NOT_FOUND", "그룹을 찾을 수 없습니다. 목록을 새로 불러옵니다"));
+    seen.value.ops.move({ code: "C", name: "다" }, 1, 0);
+    await settle();
+    expect(h.alert).toHaveBeenCalledWith("저장하지 못했습니다", "그룹을 찾을 수 없습니다. 목록을 새로 불러옵니다", [{ text: "확인" }]);
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(2);
+    expect(cache()).toEqual(LAYOUT);
+    h.api.deleteWatchGroup!.mockRejectedValueOnce(new ApiRequestError(0, "NETWORK", "서버에 연결할 수 없습니다: http://x"));
+    seen.value.ops.remove(1);
+    expect(cache()!.groups).toEqual([]);
+    await settle();
+    expect(h.alert).toHaveBeenLastCalledWith("저장하지 못했습니다", "서버에 연결되지 않았습니다. 연결되면 다시 해 주세요.", [{ text: "확인" }]);
+    expect(cache()).toEqual(LAYOUT);
+  });
+
+  it("이름 창의 만들기·이름 바꾸기는 창을 띄우지 않고 결과를 돌려준다 (만든 그룹 · 서버 글)", async () => {
+    const seen = mount();
+    await settle();
+    h.api.createWatchGroup!.mockResolvedValueOnce({ ...LAYOUT, groups: [...LAYOUT.groups, { id: 5, name: "배당", position: 1 }], created: { id: 5, name: "배당" } });
+    expect(await seen.value.ops.create("배당")).toEqual({ ok: true, created: { id: 5, name: "배당" } });
+    await settle();
+    expect(cache()!.groups.map((g) => g.name)).toEqual(["반도체", "배당"]);
+    expect(cache()).not.toHaveProperty("created");
+    h.api.renameWatchGroup!.mockRejectedValueOnce(new ApiRequestError(409, "DUPLICATE", "같은 이름의 그룹이 이미 있습니다"));
+    expect(await seen.value.ops.rename(1, "배당")).toEqual({ ok: false, message: "같은 이름의 그룹이 이미 있습니다" });
+    expect(h.alert).not.toHaveBeenCalled();
+  });
+
+  it("저장 차례 (순수): 실패가 섞이면 줄이 빌 때 한 번 다시 받는다", async () => {
+    const applied: Layout[] = [];
+    const deps = { apply: (l: Layout) => void applied.push(l), refetch: vi.fn(), fail: vi.fn() };
+    const q = new WatchOpQueue(deps);
+    const a = q.run(async () => LAYOUT);
+    const b = q.run(async () => {
+      throw new Error("실패 글");
+    });
+    const c = q.run(async () => LAYOUT, { quiet: true });
+    expect(q.size).toBe(3);
+    await a;
+    await b.catch(() => undefined);
+    await c;
+    expect(deps.fail).toHaveBeenCalledWith("실패 글");
+    expect(deps.refetch).toHaveBeenCalledTimes(1);
+    expect(applied).toEqual([]);
+    await q.run(async () => LAYOUT);
+    expect(applied).toEqual([LAYOUT]);
+  });
+});
+
+describe("종목 상세 ‹ › 순서 (holdingsOrder)", () => {
+  it("켜져 있으면 관심은 잔고에 보이는 순서 — 고른 칩 · 접은 그룹 건너뜀, 꺼져 있으면 지금 그대로", () => {
+    const list = [{ ...holding("H", quote("H", 1), 3, 1, undefined, "보유"), createdAt: at(0) }, ...LIST];
+    expect(holdingsOrder(list, "created", false).watch.map((s) => s.code)).toEqual(["A", "B", "C", "D"]);
+    const moved: Layout = { ...LAYOUT, items: [{ code: "A", groupId: 1, position: 1 }, { code: "B", groupId: 1, position: 0 }] };
+    expect(holdingsOrder(list, "created", false, { layout: moved, view: { selected: "all", collapsed: [] } }).watch.map((s) => s.code)).toEqual(["B", "A", "C", "D"]);
+    expect(holdingsOrder(list, "created", false, { layout: moved, view: { selected: "all", collapsed: [1] } }).watch.map((s) => s.code)).toEqual(["C", "D"]);
+    expect(holdingsOrder(list, "created", false, { layout: moved, view: { selected: "none", collapsed: [] } }).watch.map((s) => s.code)).toEqual(["C", "D"]);
+    expect(holdingsOrder(list, "created", false, { layout: moved, view: { selected: "all", collapsed: [] } }).held.map((s) => s.code)).toEqual(["H"]);
+  });
+});

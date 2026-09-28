@@ -59,6 +59,13 @@ type StockRowProps = {
   wrapRow?: (stock: RegisteredWithQuote, row: React.ReactElement, onLayout?: (e: LayoutChangeEvent) => void) => React.ReactElement;
   /** 촘촘 휴대폰 줄 (3-39, 기능 플래그 densityMode + 설정 '잔고 표시 촘촘' — 잔고 화면만 넘긴다). 한 줄 표(columns)에서는 쓰지 않는다 */
   dense?: boolean;
+  /**
+   * 화면 읽기 동작 더하기 (3-34, 기능 플래그 watchGroups — 관심 줄만): 그룹 옮기기 · 위로 옮기기 · 아래로 옮기기 (lib/rowActions watchRowA11yActions — 늘 같은 배열).
+   * 있으면 길게 누르기 이름은 '메뉴 열기'(관심 줄 메뉴 시트). 주지 않으면 지금 그대로
+   */
+  moreActions?: readonly { name: string; label: string }[];
+  /** moreActions 를 골랐을 때 (늘 같은 함수) */
+  onMoreAction?: (stock: RegisteredWithQuote, action: string) => void;
 };
 
 /**
@@ -80,7 +87,9 @@ export function sameRow(a: StockRowProps, b: StockRowProps): boolean {
     a.onLayoutRow === b.onLayoutRow &&
     a.onRowAction === b.onRowAction &&
     a.wrapRow === b.wrapRow &&
-    a.dense === b.dense
+    a.dense === b.dense &&
+    a.moreActions === b.moreActions &&
+    a.onMoreAction === b.onMoreAction
   );
 }
 
@@ -90,7 +99,7 @@ export const StockRow = React.memo(StockRowView, sameRow);
 /** 한 줄 표의 금액: 원화는 단위 없이("1,576,274"), 달러는 "$" 를 붙인다 (국내·미국 줄이 한 열에 섞이므로) */
 const cellMoney = (text: string) => text.replace("원", "");
 
-function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp, columns, zebra = false, weight = null, weightMax = 0, onLayoutRow, onRowAction, wrapRow, dense }: StockRowProps) {
+function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, live: liveProp, columns, zebra = false, weight = null, weightMax = 0, onLayoutRow, onRowAction, wrapRow, dense, moreActions, onMoreAction }: StockRowProps) {
   const t = useTheme();
   const q = stock.quote;
   const live = liveProp ?? q?.live === true;
@@ -141,15 +150,23 @@ function StockRowView({ stock, onPress, onLongPress, showKrw, afterCost = true, 
   const badge = <LineMark label={us ? "US" : "KR"} color={us ? t.accent : t.gold} />;
   const layoutProp = onLayoutRow ? (e: LayoutChangeEvent) => onLayoutRow(stock, e.nativeEvent.layout.y, e.nativeEvent.layout.height) : undefined;
   // 3-24: 수정 · 지우기 · 메뉴 열기를 화면 읽기 동작으로 (스와이프를 못 쓰는 TalkBack 사용자도 같은 일을)
-  const a11yActions = onRowAction ? rowA11yActions(stock) : onLongPress ? LONG_PRESS_ACTION : undefined;
-  const a11yAction = onRowAction
+  const baseActions = onRowAction ? rowA11yActions(stock) : onLongPress ? (moreActions ? MENU_ACTION : LONG_PRESS_ACTION) : undefined;
+  // 3-34 관심 줄: 그룹 옮기기·위로·아래로를 뒤에 더한다 (없으면 지금 그대로)
+  const a11yActions = moreActions ? [...(baseActions ?? []), ...moreActions] : baseActions;
+  const a11yAction = moreActions
     ? (name: string) => {
-        if (name === "edit" || name === "remove") onRowAction(stock, name);
+        if ((name === "edit" || name === "remove") && onRowAction) onRowAction(stock, name);
         else if (name === "longpress") onLongPress?.(stock);
+        else onMoreAction?.(stock, name);
       }
-    : onLongPress
-      ? (name: string) => name === "longpress" && onLongPress(stock)
-      : undefined;
+    : onRowAction
+      ? (name: string) => {
+          if (name === "edit" || name === "remove") onRowAction(stock, name);
+          else if (name === "longpress") onLongPress?.(stock);
+        }
+      : onLongPress
+        ? (name: string) => name === "longpress" && onLongPress(stock)
+        : undefined;
 
   if (columns) {
     const rateColor = changeColor(t, shownSign(q?.changeRate, rateText));
@@ -242,6 +259,8 @@ const EXCLUDED = "합계 제외";
 
 /** 화면 읽기의 길게 누르기 안내를 "수정·삭제"로 (TalkBack 이 "두 번 탭하고 길게 눌러 수정·삭제"라고 읽는다) */
 const LONG_PRESS_ACTION = [{ name: "longpress", label: "수정·삭제" }];
+/** 관심 줄 메뉴 시트를 여는 길게 누르기 (3-34 — 수정·관심 해제·그룹 옮기기·위로·아래로가 시트에 있다) */
+const MENU_ACTION = [{ name: "longpress", label: "메뉴 열기" }];
 
 function formatQty(n: number | null): string {
   if (n === null) return "-";
