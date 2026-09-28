@@ -44,7 +44,7 @@ import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
  */
 export default function SettingsScreen() {
   const t = useTheme();
-  const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency, haptics, setHaptics, density, setDensity } = useSettings();
+  const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency, haptics, setHaptics, density, setDensity, chartHighLow, setChartHighLow } = useSettings();
   // 3-24 플래그: oneHand('누를 때 진동' 스위치), firstRun('처음 사용 안내 다시 보기'), emptyGuide(서버 연결 칸 열기·빈 칸 안내)
   const ux = useUx();
   // 가격 알림 (3-29, 플래그 priceAlerts): 루트 제공자가 내려 준 문맥만 읽는다 (없으면 꺼짐 — 지금 화면 그대로)
@@ -57,6 +57,8 @@ export default function SettingsScreen() {
   const densityOn = useFeature("densityMode", false);
   // 이동평균선 기간·색 (3-39): 켜져 있을 때만 '차트 이동평균선' 줄 + [설정] → 새 화면 '이동평균선'
   const maOn = useFeature("maCustom", false);
+  // 차트 최고·최저가 표시 (3-46): 켜져 있을 때만 '차트 최고·최저가 표시' 스위치 (꺼져 있으면 저장된 값과 상관없이 차트는 지금 그대로)
+  const hlOn = useFeature("chartHighLow", false);
   const health = useHealth();
   // 알림·토스 카드는 토큰이 맞는 서버에서만 보인다 (토큰이 없으면 서버가 401 을 주므로 묻지 않는다)
   const full = !!health.data && !health.data.limited;
@@ -226,6 +228,16 @@ export default function SettingsScreen() {
             <Muted style={{ fontSize: font.tiny }}>선 6개의 기간(2~240)과 색</Muted>
           </View>
           <Button title="설정" icon="options-outline" variant="secondary" compact accessibilityLabel="이동평균선 기간·색 설정" onPress={() => router.push("/chart-lines")} />
+        </View>
+      ) : null}
+      {hlOn ? (
+        // 3-46 차트 최고·최저가 표시 (플래그 chartHighLow). 끄면 차트가 지금 그대로(가격 축 여백 포함). 저장값을 모르면 켬
+        <View style={styles.line}>
+          <View style={{ flex: 1, paddingRight: space.md }}>
+            <Text style={styles.label(t.ink)}>차트 최고·최저가 표시</Text>
+            <Muted style={{ fontSize: font.tiny }}>차트에 보이는 구간의 가장 높은 값과 낮은 값에 화살표, 가격·날짜, 지금 가격과의 차이(%)</Muted>
+          </View>
+          <Toggle value={chartHighLow !== false} onValueChange={(v) => void setChartHighLow(v)} accessibilityLabel="차트 최고·최저가 표시" />
         </View>
       ) : null}
       <View style={{ gap: space.xxs, paddingTop: space.sm }}>

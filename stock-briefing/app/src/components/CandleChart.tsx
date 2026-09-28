@@ -101,7 +101,12 @@ export function CandleChart({
   // 차트에 그릴 선 (켠 선만 · 기간 작은 순 · 선마다 고른 색). 꺼짐이면 null → PriceChart 에 지금처럼 maPeriods 만
   const drawn = useMemo(() => (custom ? drawnMa(lines, t.chart.maPalette) : null), [custom, lines, t]);
   // 설정 "미국 주식 원화로 보기"가 켜져 있으면 차트도 원화로. 과거 봉도 현재 환율로 환산한다(당시 환율 아님)
-  const { showKrw } = useSettings();
+  const { showKrw, chartHighLow } = useSettings();
+  // 차트 최고·최저가 표시 (3-46, 기능 플래그 chartHighLow — 앱 fallback 꺼짐 + 설정 > 표시 '차트 최고·최저가 표시', 기본 켬):
+  // 둘 다 켜졌을 때만 PriceChart 에 highLow 를 넘긴다. 끄면 속성 자체를 넘기지 않아 그림이 지금 그대로.
+  // 설정 값을 모르면(저장한 적 없음) 켬 — 종목·지수 상세·전체 화면 차트가 모두 이 부품 하나를 거친다
+  const hlFlag = useFeature("chartHighLow", false);
+  const highLow = hlFlag && chartHighLow !== false;
   const fx = quote?.fxRate ?? (quote?.priceKrw && quote.price ? quote.priceKrw / quote.price : null);
   const toKrw = currency === "USD" && showKrw && !!fx;
   const k = toKrw ? fx! : 1;
@@ -311,6 +316,7 @@ export function CandleChart({
           labelBg={fadeBg}
           fitAxis={polish}
           paneLabelBox={polish}
+          {...(highLow ? { highLow: true } : null)}
         />
       )}
 

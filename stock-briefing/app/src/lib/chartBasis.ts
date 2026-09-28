@@ -245,7 +245,7 @@ export function insideLabelWidth(l: Pick<InsideLabel, "text" | "lead">): number 
  * 글자마다 선 위·선 아래(fixed 면 그 줄) × 그림 왼쪽 끝부터 오른쪽 끝까지 LABEL_STEP 간격의 자리를 모두 보고, 점수(COST)가 가장 낮은 곳을 고른다 —
  * 봉·다른 글자·다른 가로선을 가리지 않고, 최신 봉(오른쪽 끝 LABEL_GUARD_BARS 개)은 특히 덮지 않고, 되도록 예전 자리(평단 왼쪽 위, 52주 오른쪽 위) 가까이.
  * 차례로(평단 → 52주 → 이동평균) 놓은 뒤 두 번 더 돌며 서로를 보고 다시 고른다 (먼저 놓은 평단이 자리를 막아 52주가 최신 봉을 덮던 것 — RGTX).
- * 가장 나은 자리도 최신 봉을 덮거나, 다른 글자와 겹치거나, 현재가선(lines)이 가로지르거나, 지난 봉을 LABEL_DROP_BARS 개 이상 덮으면 글자를 뺀다 (keep 인 평단은 빼지 않는다).
+ * 가장 나은 자리도 최신 봉을 덮거나, 다른 글자·피할 상자(avoid — 최고·최저 표시)와 겹치거나, 현재가선(lines)이 가로지르거나, 지난 봉을 LABEL_DROP_BARS 개 이상 덮으면 글자를 뺀다 (keep 인 평단은 빼지 않는다).
  * 예전에는 네 자리(양쪽 × 선 위·아래)만 보고 차례로 정해, 오늘 52주 신저가인 RGTX 에서 '52주 최저'가 최신 봉 16개를 덮었다.
  *
  * bars 는 왼쪽부터 차례로 (보이는 봉의 몸통·꼬리 상자), lines 는 글자가 가로지르지 않았으면 하는 다른 가로선 y (현재가선)
@@ -261,8 +261,14 @@ export function placeInsideLabels(o: {
   plotTop?: number;
   /** 가격 칸 아래로 글자 상자가 넘어가도 되는 폭 (기본 0 — 거래량 칸 앞 틈). 오늘 52주 신저가처럼 선이 바닥에 붙어도 선 아래에 적을 수 있게 */
   bottomSlack?: number;
+  /**
+   * 다른 글자가 덮으면 안 되는 상자 (보이는 구간 최고·최저 표시의 글자·화살표 — 기능 플래그 chartHighLow). 겹치면 글자끼리 겹침과 같게 감점하고,
+   * 마지막에도 겹치면 평단이 아닌 글자는 뺀다. 주지 않으면(빈 목록) 예전과 결과가 같다
+   */
+  avoid?: readonly Box[];
 }): (LabelSpot | null)[] {
   const guardFrom = o.bars.length - (o.guard ?? LABEL_GUARD_BARS);
+  const avoid = o.avoid ?? [];
   const plotTop = o.plotTop ?? 0;
   const plotBottom = o.plotH + (o.bottomSlack ?? 0);
   // 다른 글자의 선 (fixed 가 아닌 것): 글자가 자기 선이 아닌 선을 가로지르면 조금 감점. 부르는 쪽이 준 선(현재가선)은 크게 감점하고, 그래도 가로지르면 뺀다
@@ -290,6 +296,7 @@ export function placeInsideLabels(o: {
         const hit = barHits(o.bars, box, guardFrom);
         let base = extra + (Math.abs(left - prefLeft) / Math.max(o.plotW, 1)) * COST.far + hit.old * COST.bar + hit.latest * COST.guard;
         for (const y of weak) if (y !== null && y > top && y < bottom) base += COST.line;
+        for (const a of avoid) if (overlaps(a, box, LABEL_GAP)) base += COST.label;
         const cross = strong.filter((y) => y > top && y < bottom).length;
         base += cross * COST.current;
         const side: "left" | "right" = l.lead || left + w / 2 < o.plotW / 2 ? "left" : "right";
@@ -316,7 +323,7 @@ export function placeInsideLabels(o: {
   for (let i = 0; i < o.labels.length; i++) {
     const p = placed[i];
     if (!p || o.labels[i]!.keep) continue;
-    if (p.latest > 0 || p.old >= LABEL_DROP_BARS || p.cross > 0 || clash(i, p.spot.box)) {
+    if (p.latest > 0 || p.old >= LABEL_DROP_BARS || p.cross > 0 || clash(i, p.spot.box) || avoid.some((a) => overlaps(a, p.spot.box, LABEL_GAP))) {
       out[i] = null;
       placed[i] = null;
     }

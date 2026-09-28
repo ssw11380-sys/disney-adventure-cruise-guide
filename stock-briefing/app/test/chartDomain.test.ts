@@ -251,6 +251,37 @@ describe("그림 안쪽 글자 자리 (placeInsideLabels)", () => {
     expect(place(base, [{ y: 45, text: "52주 최고", prefer: "right" }])[0]!.ty).toBe(41);
   });
 
+  describe("피할 상자 avoid (보이는 구간 최고·최저 표시 — 3-46 chartHighLow)", () => {
+    const h52 = { y: 30, text: "52주 최고", prefer: "right" as const };
+    it("52주 글자가 예전 자리(선 위 오른쪽)에 놓인 최고 표시 상자를 피해 다른 자리로", () => {
+      const [before] = place(base, [h52]);
+      const block = { ...before!.box };
+      const [after] = place(base, [h52], { avoid: [block] });
+      expect(after).not.toBeNull();
+      expect(overlap(after!.box, block)).toBe(false);
+      // 나란히 놓여도 조금 띄운다 (글자끼리와 같은 간격)
+      if (after!.box.top < block.bottom && block.top < after!.box.bottom) expect(Math.max(block.left - after!.box.right, after!.box.left - block.right)).toBeGreaterThanOrEqual(4);
+    });
+    it("피할 수 없으면(선 위·아래 줄을 모두 덮음) 52주 글자는 빼고, 평단(keep)은 남는다", () => {
+      const wall = [
+        { left: 0, right: 300, top: 10, bottom: 30 },
+        { left: 0, right: 300, top: 30, bottom: 50 },
+      ];
+      expect(place(base, [h52], { avoid: wall })[0]).toBeNull();
+      expect(place(base, [{ ...h52, text: "평단 18,599", keep: true }], { avoid: wall })[0]).not.toBeNull();
+    });
+    it("avoid 없음 = 빈 목록 = 예전 결과 (위 경우들 그대로)", () => {
+      const labels = [
+        { y: 60, text: "평단 18,599", prefer: "left" as const, keep: true },
+        { y: 60, text: "52주 최저", prefer: "left" as const },
+        { y: 12, text: "120일선(범위 위)", prefer: "right" as const, fixed: true, lead: 11 },
+      ];
+      const b = bars((i) => (i <= 8 ? [40, 100] : [150, 190]));
+      expect(place(b, labels, { avoid: [] })).toEqual(place(b, labels));
+      expect(place(b, labels, { lines: [94], avoid: [] })).toEqual(place(b, labels, { lines: [94] }));
+    });
+  });
+
   it("벗어난 이동평균 표시(글자 앞 색 네모 lead)는 상자가 그만큼 넓고 늘 왼쪽 맞춤, 평단 글자와 나란히 겹치지 않게", () => {
     const [avg, ma] = place(base, [
       { y: 12, text: "평단(범위 위) 19,064", prefer: "left", fixed: true, keep: true },
