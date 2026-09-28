@@ -40,6 +40,8 @@ import { IndicatorSummaryCard } from "@/components/scores/IndicatorSummaryCard";
 import { TrendScoreCard } from "@/components/scores/TrendScoreCard";
 import { ValueScoreCard } from "@/components/scores/ValueScoreCard";
 import { SCORE_LABELS, valueJumpY } from "@/lib/scoreView";
+import { TossOpenButton } from "@/components/TossOpenButton";
+import { tossStockUrl } from "@/lib/tossLink";
 
 type Tab = AnalysisKind | "news";
 const TABS: { value: Tab; label: string }[] = [
@@ -143,6 +145,9 @@ export default function StockDetailScreen() {
   // 가치 지표 (3-44 2단계, 서버 되돌리기 스위치 valueScore — 앱 fallback 꺼짐): 가치분석 탭 맨 위 상세 카드 + 'AI 가치분석' 제목,
   // 요약 카드의 '가치분석 탭에서 지표별 값 보기'. 꺼져 있으면 가치분석 탭은 1단계 그대로(AI 글만)
   const valueOn = useFeature("valueScore", false);
+  // 토스에서 열기 (3-48, 기능 플래그 tossOpen — 앱 fallback 꺼짐, 사용자 결정 A): '시세' 칸 제목 줄 오른쪽에 토스증권 공개 종목 페이지를 여는 링크 버튼.
+  // 주문·로그인 API 없음. 주소를 확실히 만들 수 없는 종목(lib/tossLink)이나 꺼져 있으면 버튼·줄을 넘기지 않는다 (지금 화면과 한 글자도 같게)
+  const tossOn = useFeature("tossOpen", false);
   // 차트의 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
@@ -258,6 +263,9 @@ export default function StockDetailScreen() {
   // 발견 탭 등에서 연 미등록 종목: 수정 대신 관심 추가
   const unregistered = s.registered === false;
   const subtitle = detailSubtitle({ code: s.code, market: s.market, industry, status: unregistered ? "미등록" : s.quantity ? null : "관심", alias });
+  // 토스에서 열기 (플래그 tossOpen): 모든 배치에서 '시세' 칸 제목 줄 오른쪽 같은 자리. 주소가 없으면 null (버튼 없음)
+  const tossUrl = tossOn ? tossStockUrl({ code: s.code, market: s.market }) : null;
+  const tossBtn = tossUrl ? <TossOpenButton url={tossUrl} /> : null;
   const addWatch = () => {
     if (adding) return;
     setAdding(true);
@@ -596,7 +604,15 @@ export default function StockDetailScreen() {
         {/* 시세 정보 */}
         {q && quoteStats ? (
           <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
-            <Text style={styles.panelTitle(t.ink)}>시세</Text>
+            {/* 토스에서 열기 (tossOpen): 제목과 한 줄로 — 없으면 지금 제목 그대로 */}
+            {tossBtn ? (
+              <View style={styles.panelHead} testID="toss-title-row">
+                <Text style={styles.panelTitle(t.ink)}>시세</Text>
+                {tossBtn}
+              </View>
+            ) : (
+              <Text style={styles.panelTitle(t.ink)}>시세</Text>
+            )}
             <StatGrid>
               {PHONE_ORDER.map((id) => (
                 <Stat key={id} {...quoteStats[id]} />
@@ -744,7 +760,7 @@ export default function StockDetailScreen() {
       ) : null}
       {q && quoteStats ? (
         <View>
-          <PaneTitle title="시세" />
+          <PaneTitle title="시세" {...(tossBtn ? { action: tossBtn } : null)} />
           <PairGrid items={PHONE_ORDER.map((id) => quoteStats[id])} cols={sideCols} />
           {range()}
         </View>
@@ -884,6 +900,7 @@ export default function StockDetailScreen() {
       ? quoteCols.map((items, i) => ({
           key: `q${i}`,
           title: i === 0 ? "시세" : undefined,
+          ...(i === 0 && tossBtn ? { action: tossBtn } : null),
           body: (
             <>
               <StatList items={items} />
@@ -933,6 +950,8 @@ const styles = {
     bigPrice: { fontSize: font.hero, fontWeight: "800", letterSpacing: -0.6, fontVariant: ["tabular-nums"] },
     change: { fontSize: font.body, fontWeight: "700", fontVariant: ["tabular-nums"] },
     panel: { paddingHorizontal: space.lg, paddingVertical: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, gap: space.sm },
+    // '시세' 제목 + [토스에서 열기] 한 줄 (tossOpen). 제목은 줄지 않고 버튼이 줄어든다
+    panelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
     // 넓은 창
     wideContent: { gap: 0, paddingBottom: space.md },
     side: { paddingHorizontal: space.lg, paddingTop: space.md, gap: space.md },

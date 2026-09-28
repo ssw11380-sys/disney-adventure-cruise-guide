@@ -272,13 +272,16 @@ export function PaneTitle({ title, note, action }: { title?: string; note?: stri
   );
 }
 
-/** 여러 칸 시세표 (폴드8 펼침 세로: 내 보유 | 시세 | 시세 | 시세 + 52주). 칸마다 위에서 아래로. flex 는 칸 폭 비율 (없으면 1) */
-export function StatColumns({ columns }: { columns: { key: string; title?: string; note?: string | null; flex?: number; body: React.ReactNode }[] }) {
+/**
+ * 여러 칸 시세표 (폴드8 펼침 세로: 내 보유 | 시세 | 시세 | 시세 + 52주). 칸마다 위에서 아래로. flex 는 칸 폭 비율 (없으면 1).
+ * action: 칸 제목 줄 오른쪽 버튼 (첫 '시세' 칸의 '토스에서 열기' — 3-48, 플래그 tossOpen). 없으면 지금 제목 줄 그대로
+ */
+export function StatColumns({ columns }: { columns: { key: string; title?: string; note?: string | null; flex?: number; action?: React.ReactNode; body: React.ReactNode }[] }) {
   return (
     <View style={styles.columns}>
       {columns.map((c) => (
         <View key={c.key} style={[styles.column, c.flex ? { flex: c.flex } : null]}>
-          <PaneTitle title={c.title} note={c.note} />
+          <PaneTitle title={c.title} note={c.note} action={c.action} />
           {c.body}
         </View>
       ))}
