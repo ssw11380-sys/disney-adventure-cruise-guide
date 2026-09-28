@@ -1,0 +1,187 @@
+{
+  "about": "관심 그룹 이름 규칙 (3-34): 정리한 이름(ok) 또는 오류(error). except 는 이름을 바꾸는 그룹의 자리(없으면 새로 만들기 — 12개 한도 검사)",
+  "limit": 12,
+  "maxLength": 10,
+  "cases": [
+    {
+      "name": "반도체",
+      "existing": [],
+      "ok": "반도체"
+    },
+    {
+      "name": "  반도체  ",
+      "existing": [],
+      "ok": "반도체"
+    },
+    {
+      "name": "고 배당   주",
+      "existing": [],
+      "ok": "고 배당 주"
+    },
+    {
+      "name": "반도\t체",
+      "existing": [],
+      "ok": "반도 체"
+    },
+    {
+      "name": "반도\u0000체",
+      "existing": [],
+      "ok": "반도체"
+    },
+    {
+      "name": "",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "   ",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "\u0000\n",
+      "existing": [],
+      "error": "empty"
+    },
+    {
+      "name": "가나다라마바사아자차",
+      "existing": [],
+      "ok": "가나다라마바사아자차"
+    },
+    {
+      "name": "가나다라마바사아자차카",
+      "existing": [],
+      "error": "tooLong"
+    },
+    {
+      "name": "미국배당성장ETF",
+      "existing": [],
+      "ok": "미국배당성장ETF"
+    },
+    {
+      "name": "🚀반도체",
+      "existing": [],
+      "ok": "🚀반도체"
+    },
+    {
+      "name": "👨‍👩‍👧‍👦",
+      "existing": [],
+      "ok": "👨‍👩‍👧‍👦"
+    },
+    {
+      "name": "👨‍👩‍👧‍👦👨‍👩‍👧‍👦",
+      "existing": [],
+      "error": "tooLong"
+    },
+    {
+      "name": "전체",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": " 그룹 없음 ",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": "그룹없음",
+      "existing": [],
+      "error": "reserved"
+    },
+    {
+      "name": "etf",
+      "existing": [
+        "ETF"
+      ],
+      "error": "duplicate"
+    },
+    {
+      "name": " ETF ",
+      "existing": [
+        "ETF",
+        "배당"
+      ],
+      "error": "duplicate"
+    },
+    {
+      "name": "반도체",
+      "existing": [
+        "반도체"
+      ],
+      "error": "duplicate"
+    },
+    {
+      "name": "etf",
+      "existing": [
+        "ETF",
+        "배당"
+      ],
+      "except": 0,
+      "ok": "etf"
+    },
+    {
+      "name": "배당",
+      "existing": [
+        "ETF",
+        "배당"
+      ],
+      "except": 0,
+      "error": "duplicate"
+    },
+    {
+      "name": "새 그룹",
+      "existing": [
+        "그룹1",
+        "그룹2",
+        "그룹3",
+        "그룹4",
+        "그룹5",
+        "그룹6",
+        "그룹7",
+        "그룹8",
+        "그룹9",
+        "그룹10",
+        "그룹11",
+        "그룹12"
+      ],
+      "error": "limit"
+    },
+    {
+      "name": "그룹1",
+      "existing": [
+        "그룹1",
+        "그룹2",
+        "그룹3",
+        "그룹4",
+        "그룹5",
+        "그룹6",
+        "그룹7",
+        "그룹8",
+        "그룹9",
+        "그룹10",
+        "그룹11",
+        "그룹12"
+      ],
+      "error": "duplicate"
+    },
+    {
+      "name": "바꾼 이름",
+      "existing": [
+        "그룹1",
+        "그룹2",
+        "그룹3",
+        "그룹4",
+        "그룹5",
+        "그룹6",
+        "그룹7",
+        "그룹8",
+        "그룹9",
+        "그룹10",
+        "그룹11",
+        "그룹12"
+      ],
+      "except": 3,
+      "ok": "바꾼 이름"
+    }
+  ]
+}

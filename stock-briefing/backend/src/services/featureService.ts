@@ -153,6 +153,11 @@ export const FEATURES = {
     description:
       "숫자 기준·토스 대조 배지 (3-32): 잔고 계좌 합계 옆 점과 짧은 글(토스와 0.1% 이내·차이 N%·수량 다름·대기), 누르면 '숫자 기준' 창(시세 기준·시각·비용 차감·환율·당일손익·토스 대조·최근 7일 장중 비율), 대조 기록 뒤 실시간 연결로 앱에 알림(reconcile). 잔고·자산 위젯 기준 시각 뒤 '· NXT·주간거래 포함'(자리가 남을 때만, /api/widget &ms=1 응답에 종목 기준 b), 브리핑 탭 계좌 카드·줄 'HH:MM 기준', 계좌 브리핑 상세 '시세 기준' 줄(새 브리핑에 quoteBasis 저장). 끄면 모두 예전 그대로",
   },
+  watchGroups: {
+    default: true,
+    description:
+      "관심 종목 그룹·순서 (3-34): 잔고 관심 칸 칩(전체·그룹·그룹 없음)·그룹 머리 접기·'관심 그룹·순서' 화면(만들기·이름·지우기·끌기·↑↓), 관심 줄 메뉴 '그룹 옮기기·위로·아래로'. 서버 /api/watch-groups (표 watch_groups + registered_stocks 칸 watch_group_id·watch_position). 끄면 앱이 부르지 않고 잔고가 지금 그대로(관심은 등록순), 서버 GET 빈 값·쓰기 409, 저장값은 지우지 않음",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

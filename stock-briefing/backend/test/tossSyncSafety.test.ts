@@ -486,7 +486,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5]);
     await migrate(db, "postgres");
     // 6 뒤에 시장 요약 표(7)·매매 기록 표(8, 3-36)·지표 점수 기록 표(9, 3-44)가 더해졌다 — 새 표만 만들고 기존 표는 건드리지 않는다
-    expect(inserted).toEqual([6, 7, 8, 9, 10, 11]);
+    expect(inserted).toEqual([6, 7, 8, 9, 10, 11, 12]);
     expect(sqls.some((s) => /create table.*"?account_briefings"?/i.test(s))).toBe(false); // 5 는 다시 돌지 않는다
     expect(sqls.some((s) => /create table.*"?market_summaries"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create table.*"?account_snapshots"?/i.test(s))).toBe(true);
@@ -500,14 +500,14 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     // 새 Postgres DB 는 1~9 를 한 번씩 기록한다
     const fresh = recordingPostgres();
     await migrate(fresh.db, "postgres");
-    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     await fresh.db.destroy();
   });
 
   it("새 SQLite DB 는 버전 1~9 를 한 번씩 기록하고, 5 까지 올라간 DB 도 6 만 더해 깨끗이 올라간다", async () => {
     const db = await createMigratedDb(":memory:");
     try {
-      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
       // 버전 5 까지만 올라간 운영 DB 흉내: 계좌 브리핑·보유 종목이 이미 있다
       await sql`delete from schema_version where version = 6`.execute(db);
       await db
@@ -520,7 +520,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
         .execute();
       await migrate(db, "sqlite");
       await migrate(db, "sqlite"); // 두 번 돌아도 안전
-      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
       expect(await db.selectFrom("account_briefings").select(["briefing_date", "session"]).execute()).toEqual([{ briefing_date: "2026-09-24", session: "morning" }]);
       expect(await db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", "VRT").executeTakeFirst()).toEqual({ quantity: 16.123456, avg_price: 201234.57 });
     } finally {
@@ -531,24 +531,37 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
   it("가격 알림 조건 표(10, 3-29)는 새 표만 만들고, 값은 Postgres 에서 double precision · (종목·종류·값) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([10, 11]);
+    expect(inserted).toEqual([10, 11, 12]);
     const create = sqls.find((s) => /create table.*"?price_alerts"?/i.test(s));
     expect(create).toMatch(/"?value"?\s+double precision/i);
     expect(create).toMatch(/"?fired_value"?\s+double precision/i);
     expect(sqls.some((s) => /create unique index if not exists uq_price_alerts_rule on price_alerts \(code, kind, value\)/i.test(s))).toBe(true);
-    expect(sqls.some((s) => /alter table/i.test(s))).toBe(false);
+    expect(sqls.some((s) => /alter table/i.test(s) && !/add column "?watch_(group_id|position)"?/i.test(s))).toBe(false); // 12(3-34)는 관심 그룹 칸 둘만 더한다
     await db.destroy();
   });
 
   it("가치 지표 표(11, 3-44 2단계)는 새 표 두 개만 만들고(재무 · 비교 기준), 종목·(시장·기준일) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([11]);
+    expect(inserted).toEqual([11, 12]);
     expect(sqls.some((s) => /create table.*"?value_fundamentals"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create table.*"?value_references"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create unique index if not exists uq_value_fundamentals_code on value_fundamentals \(code\)/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create unique index if not exists uq_value_references_market_date on value_references \(market, ref_date\)/i.test(s))).toBe(true);
-    expect(sqls.some((s) => /alter table/i.test(s))).toBe(false);
+    expect(sqls.some((s) => /alter table/i.test(s) && !/add column "?watch_(group_id|position)"?/i.test(s))).toBe(false); // 12(3-34)는 관심 그룹 칸 둘만 더한다
+    await db.destroy();
+  });
+
+  it("관심 그룹(12, 3-34)은 새 표 하나 + registered_stocks 에 integer 칸 둘 — 칸이 이미 있는지 먼저 본다(information_schema)", async () => {
+    const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    await migrate(db, "postgres");
+    expect(inserted).toEqual([12]);
+    expect(sqls.find((s) => /create table.*"?watch_groups"?/i.test(s))).toMatch(/"?id"?\s+integer.*generated always as identity/i);
+    expect(sqls.filter((s) => /information_schema\.columns/i.test(s))).toHaveLength(2);
+    const alter = sqls.filter((s) => /alter table/i.test(s));
+    expect(alter).toHaveLength(2);
+    expect(alter.join(" ; ")).toMatch(/"?registered_stocks"?\s+add column\s+"?watch_group_id"?\s+integer/i);
+    expect(alter.join(" ; ")).toMatch(/"?registered_stocks"?\s+add column\s+"?watch_position"?\s+integer/i);
     await db.destroy();
   });
 });
