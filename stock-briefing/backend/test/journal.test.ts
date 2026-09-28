@@ -6,7 +6,8 @@ import { createMigratedDb, type Db } from "../src/db/index.js";
 import { FeatureService } from "../src/services/featureService.js";
 import { JournalService, minuteKey, type JournalFxSources } from "../src/services/journalService.js";
 import { REASONS } from "../src/services/journalCalc.js";
-import { TAX_EXCLUDE_REASON } from "../src/services/taxRules.js";
+import { tradingDate } from "../src/services/marketContext.js";
+import { TAX_EXCLUDE_REASON, usSettleDate } from "../src/services/taxRules.js";
 import { fakeProviders } from "./helpers.js";
 
 /**
@@ -647,6 +648,26 @@ describe("검토 반영 10차 종목·해 규칙: 확인이 필요한 해는 그
   });
 
   it("그해 확인 필요인 종목이 기간 일부에만 있었으면 그 종목이 든 구간만 건너뛴다 — 나머지 종목·구간 수익률은 그대로", async () => {
+    // 삼성전자 10주(매일 +1,000원) · SK하이닉스 그대로 · 신설회사 10주를 10/7 주문으로 사고, 10/8 +40%(확인 필요), 10/13 모두 팖
+    const x = (i: number): H => ({ code: "000990", name: "신설회사", qty: 10, cost: 1000, price: i >= 7 ? 140 : 100 });
+    const t = await setup({ seed: false, now: LATER });
+    await t.db
+      .insertInto("account_snapshots")
+      .values(DAYS.map((d, i) => snapRow(d, "KR", at(i, "16:05"), [sam(10, 700_000, 70_000 + i * 1000), b, ...(i >= 6 && i < 9 ? [x(i)] : [])])))
+      .execute();
+    await t.db
+      .insertInto("trade_executions")
+      .values([tradeRow("x8", "000990", "BUY", [{ q: 10, a: 1000, at: at(6, "10:00") }]), tradeRow("x9", "000990", "SELL", [{ q: 10, a: 1400, at: at(9, "10:00") }])])
+      .execute();
+    const returns = (await t.get("/api/journal/returns?preset=1M&market=KR")).body;
+    const twr = Math.round(((751_000 / 701_000) * (811_000 / 791_000) - 1) * 10_000) / 100;
+    expect(returns).toMatchObject({ ready: true, twr, pnl: 70_000, buys: 1000, sells: 1400, uncertainSkipped: DAYS.slice(6, 10) });
+    const list = (await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body;
+    expect(items(list).find((r) => r.orderId === "x9")!.realized).toMatchObject(needs);
+    await t.app.close();
+  });
+
+  it("검토 반영 11차: 신설회사처럼 주문 없이 들어온 종목이면 들어온 때 앞 30일도 건너뛴다 (분사면 모회사 권리락 날) — 그 뒤 구간은 그대로", async () => {
     // 삼성전자 10주(매일 +1,000원) · SK하이닉스 그대로 · 신설회사 10주가 10/7 주문 없이 들어와 10/13 모두 팖
     const x: H = { code: "000990", name: "신설회사", qty: 10, cost: 1000, price: 100 };
     const t = await setup({ seed: false, now: LATER });
@@ -656,8 +677,8 @@ describe("검토 반영 10차 종목·해 규칙: 확인이 필요한 해는 그
       .execute();
     await t.db.insertInto("trade_executions").values([tradeRow("x9", "000990", "SELL", [{ q: 10, a: 1000, at: at(9, "10:00") }])]).execute();
     const returns = (await t.get("/api/journal/returns?preset=1M&market=KR")).body;
-    const twr = Math.round(((751_000 / 701_000) * (811_000 / 791_000) - 1) * 10_000) / 100;
-    expect(returns).toMatchObject({ ready: true, twr, pnl: 70_000, sells: 1000, uncertainSkipped: DAYS.slice(6, 10) });
+    // 10/7 앞 30일 ~ 10/13(신설회사가 든 마지막 구간)을 건너뛰고 10/14·10/15 만: 791,000 → 811,000
+    expect(returns).toMatchObject({ ready: true, twr: Math.round((811_000 / 791_000 - 1) * 10_000) / 100, pnl: 20_000, sells: 1000, uncertainSkipped: DAYS.slice(1, 10) });
     const list = (await t.get("/api/journal?from=2026-09-28&to=2026-10-15")).body;
     expect(items(list).find((r) => r.orderId === "x9")!.realized).toMatchObject(needs);
     await t.app.close();
@@ -938,6 +959,119 @@ describe("검토 반영 10차: 휴장일 다음 날 권리락 · 분사 모양(0
     // 모회사 종목 머리 카드도 합계에 넣지 않음
     const head = (await t.get("/api/journal?from=2026-09-01&to=2026-09-30&code=005930")).body.head;
     expect(head.realized).toMatchObject({ amount: null, sells: 0, unknown: 1 });
+    await t.app.close();
+  });
+});
+
+describe("검토 반영 11차: 첫 기록 전 분사 모양 · 신설회사가 늦게 들어온 분사의 수익률 — 합계·양도세·수익률에 틀린 숫자를 넣지 않는다", () => {
+  const items = (body: { days: Array<{ items: Array<Record<string, any>> }> }) => body.days.flatMap((d) => d.items);
+  const needs = { status: "unexplained", reason: REASONS.needsCheck, gross: null, rate: null, costAmount: null, avgCost: null };
+  const spin = (md: string) => `${md} 모두 판 뒤 30일 안에 같은 계좌에 다른 종목이 주문 없이 들어왔어요(분사 등일 수 있어요)`;
+  const codes = (xs: Array<{ code: string }>) => xs.map((x) => x.code).sort();
+  /** 미국 계좌 (첫 미국 기록 2026-09-25 — 주지 않으면 빈 계좌): 체결마다 결제일 기준환율 1,350원 */
+  async function usAccount(trades: ReturnType<typeof tradeRow>[], first: H[] = []) {
+    const t = await setup({ seed: false });
+    await t.db.insertInto("account_snapshots").values([snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), first)]).execute();
+    await t.db.insertInto("trade_executions").values(trades).execute();
+    const settle = new Set(trades.flatMap((r) => (JSON.parse(r.fills) as Array<{ at: string }>).map((f) => usSettleDate(tradingDate(f.at, false)).kr)));
+    await t.db.insertInto("fx_rates").values([...settle].map((at) => ({ kind: "krw-std", at, rate: 1350, source: "smbs", fetched_at: "x" }))).execute();
+    return t;
+  }
+  const buyAAA = (at: string) => tradeRow("b1", "AAA", "BUY", [{ q: 1000, a: 100_000, at: TS(at) }]);
+  const sellAAA = (at: string) => tradeRow("x1", "AAA", "SELL", [{ q: 1000, a: 80_000, at: TS(at) }]);
+  const sellBBB = (at: string) => tradeRow("c1", "BBB", "SELL", [{ q: 500, a: 15_000, at: TS(at) }]);
+
+  it("(PS1) 첫 미국 기록 전: 모회사 AAA 를 모두 판 뒤(2025-06-02) 신설회사 BBB 를 산 기록 없이 팖(6/10), 첫 기록은 빈 계좌 → 모회사 매도도 확인 필요, 2025 양도세 합계에 없음 (예전 −$20,000 'ok' history-checked · 양도차손 −27,000,000원 1건)", async () => {
+    const t = await usAccount([buyAAA("2025-03-03T23:40:00"), sellAAA("2025-06-02T23:40:00"), sellBBB("2025-06-10T23:40:00")]);
+    const list = (await t.get("/api/journal?from=2025-01-01&to=2025-12-31")).body;
+    expect(items(list).find((x) => x.orderId === "x1")!.realized).toMatchObject({ ...needs, change: spin("6월 2일") });
+    expect(list.summary.realized).toMatchObject({ KRW: null, USD: null, krwTotal: null });
+    expect(codes(list.summary.excludedSells)).toEqual(["AAA", "BBB"]);
+    const tax = (await t.get("/api/journal/tax?year=2025")).body;
+    expect(tax.items).toEqual([]);
+    expect(tax.totals).toMatchObject({ gains: 0, losses: 0, net: 0, sells: 0 });
+    expect(codes(tax.unexplainedSells)).toEqual(["AAA", "BBB"]);
+    await t.app.close();
+  });
+
+  it("(PS5) 해가 바뀌어도: 모회사를 2025-12-19 모두 팖, 신설회사를 2026-01-06 산 기록 없이 팖 → 2025 모회사 매도 확인 필요, 2025 양도세 합계에 없음", async () => {
+    const t = await usAccount([buyAAA("2025-03-03T23:40:00"), sellAAA("2025-12-19T23:40:00"), sellBBB("2026-01-06T23:40:00")]);
+    const tax = (await t.get("/api/journal/tax?year=2025")).body;
+    expect(tax.items).toEqual([]);
+    expect(tax.totals).toMatchObject({ gains: 0, losses: 0, net: 0, sells: 0 });
+    expect(tax.unexplainedSells).toMatchObject([{ key: "3:x1:0", code: "AAA", change: spin("12월 19일") }]);
+    expect(items((await t.get("/api/journal?from=2025-12-01&to=2025-12-31")).body).find((x) => x.orderId === "x1")!.realized).toMatchObject(needs);
+    await t.app.close();
+  });
+
+  it("(PS2) 신설회사 500주가 주문 없이 첫 기록(9/25)에 있고 모회사는 그 전(9/10)에 모두 팖 → 모회사 매도 확인 필요 (예전 −$20,000 'ok' · 양도차손 −27,000,000원)", async () => {
+    const t = await usAccount([buyAAA("2026-03-02T23:40:00"), sellAAA("2026-09-10T23:40:00")], [{ code: "BBB", name: "신설회사", qty: 500, cost: 15_000, price: 30, costKrw: 20_850_000 }]);
+    const list = (await t.get("/api/journal?from=2026-09-01&to=2026-09-30&code=AAA")).body;
+    expect(items(list).find((x) => x.orderId === "x1")!.realized).toMatchObject({ ...needs, change: spin("9월 10일") });
+    expect(list.summary.realized.USD).toBeNull();
+    const tax = (await t.get("/api/journal/tax?year=2026")).body;
+    expect(tax.items).toEqual([]);
+    expect(tax.totals).toMatchObject({ gains: 0, losses: 0, net: 0, sells: 0 });
+    expect(tax.unexplainedSells).toMatchObject([{ key: "3:x1:0", code: "AAA", change: spin("9월 10일") }]);
+    await t.app.close();
+  });
+
+  it("(PS3) 한국 기록이 한 번도 없는 계좌(미국 기록만 · 기록이 아예 없음): 모회사를 모두 판 뒤 신설회사를 산 기록 없이 팖 → 모회사 매도 확인 필요 (예전 −300,000 'ok' history-only 가 한국 합계에)", async () => {
+    for (const snaps of [[snapRow("2026-09-25", "US", TS("2026-09-26T05:05:00"), [])], []]) {
+      const t = await setup({ seed: false });
+      if (snaps.length) await t.db.insertInto("account_snapshots").values(snaps).execute();
+      await t.db
+        .insertInto("trade_executions")
+        .values([
+          tradeRow("k0", "005930", "BUY", [{ q: 100, a: 1_000_000, at: TS("2026-03-03T10:00:00") }]),
+          tradeRow("k1", "005930", "SELL", [{ q: 100, a: 700_000, at: TS("2026-06-01T10:00:00") }]),
+          tradeRow("k2", "000990", "SELL", [{ q: 30, a: 300_000, at: TS("2026-06-05T10:00:00") }]),
+        ])
+        .execute();
+      const list = (await t.get("/api/journal?from=2026-03-01&to=2026-06-30")).body;
+      expect(items(list).find((x) => x.orderId === "k1")!.realized, `기록 ${snaps.length}`).toMatchObject({ ...needs, change: spin("6월 1일") });
+      expect(list.summary.realized).toMatchObject({ KRW: null, USD: null, krwTotal: null });
+      expect(codes(list.summary.excludedSells)).toEqual(["000990", "005930"]);
+      await t.app.close();
+    }
+  });
+
+  it("첫 기록 전 모두 판 매도라도 주문 없이 들어온 증거가 없으면 그대로: 주문으로 산 신설회사 · 첫 기록의 종목이 모두 주문 내역으로 설명됨 (보통 계산 −$20,000)", async () => {
+    const t = await usAccount(
+      [buyAAA("2026-03-02T23:40:00"), sellAAA("2026-09-10T23:40:00"), tradeRow("c0", "BBB", "BUY", [{ q: 500, a: 15_000, at: TS("2026-09-11T23:40:00") }])],
+      [{ code: "BBB", name: "신설회사", qty: 500, cost: 15_000, price: 30, costKrw: 20_850_000 }],
+    );
+    const list = (await t.get("/api/journal?from=2026-09-01&to=2026-09-30&code=AAA")).body;
+    expect(items(list).find((x) => x.orderId === "x1")!.realized).toMatchObject({ status: "ok", basis: "history-checked", gross: -20_000 });
+    expect((await t.get("/api/journal/tax?year=2026")).body.totals).toMatchObject({ losses: -27_000_000, sells: 1 });
+    await t.app.close();
+  });
+
+  it("(RS1) 미국 분사에서 신설회사가 배당락 3거래일 뒤 주문 없이 들어옴(모회사 수량·매입금액 그대로, 배당락 −15%): 들어온 때 앞 30일은 수익률에서 건너뜀 — 배당락 −15% 가 수익률·기간 손익에 들지 않음 (예전 twr −15 · pnl −$15,000), 그보다 이른 구간은 그대로", async () => {
+    const next = (d: string) => {
+      const x = new Date(`${d}T12:00:00Z`);
+      x.setUTCDate(x.getUTCDate() + 1);
+      return x.toISOString().slice(0, 10);
+    };
+    const days: string[] = [];
+    for (let d = "2026-08-03"; d <= "2026-09-25"; d = next(d)) if (![0, 6].includes(new Date(`${d}T12:00:00Z`).getUTCDay()) && d !== "2026-09-07") days.push(d);
+    const ex = days.indexOf("2026-09-15");
+    const t = await setup({ seed: false, now: new Date("2026-09-26T20:00:00+09:00") });
+    await t.db
+      .insertInto("account_snapshots")
+      .values(
+        days.map((d, i) =>
+          snapRow(d, "US", TS(`${next(d)}T05:05:00`), [
+            { code: "AAA", name: "모회사", qty: 1000, cost: 100_000, price: i < ex ? 100 : 85, costKrw: 139_000_000 },
+            ...(i >= ex + 3 ? [{ code: "BBB", name: "신설회사", qty: 500, cost: 15_000, price: 30, costKrw: 20_850_000 }] : []),
+          ]),
+        ),
+      )
+      .execute();
+    const r = (await t.get("/api/journal/returns?preset=3M&market=US")).body;
+    expect(r).toMatchObject({ ready: true, twr: 0, pnl: 0 });
+    expect(r.uncertainSkipped).toEqual(expect.arrayContaining(["2026-09-15", "2026-09-18", "2026-09-25"]));
+    expect(r.uncertainSkipped[0]).toBe("2026-08-19");
     await t.app.close();
   });
 });

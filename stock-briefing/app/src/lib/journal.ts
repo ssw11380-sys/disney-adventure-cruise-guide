@@ -600,7 +600,7 @@ export function returnsMethod(r: JournalReturns): string[] {
   if (r.gaps?.length) out.push(`빠진 날 ${r.gaps.length}일은 앞뒤를 이어 계산했어요.`);
   if (r.doubtedSkipped?.length) out.push(`믿기 어려운 기록 ${r.doubtedSkipped.length}일은 빼고 계산했어요.`);
   if (r.uncertainSkipped?.length)
-    out.push("그해 주문 내역으로 설명되지 않는 변화(분할·병합·무상증자·주식배당·입고·출고·분사·큰 주가 변화 등)가 있던 종목은 확인이 필요한 종목이라, 그해 그 종목이 든 기간을 수익률·기간 손익에서 뺐어요. 그 기간의 값을 짐작해 넣지 않아요.");
+    out.push("그해 주문 내역으로 설명되지 않는 변화(분할·병합·무상증자·주식배당·입고·출고·분사·큰 주가 변화 등)가 있던 종목은 확인이 필요한 종목이라, 그해 그 종목이 든 기간을 수익률·기간 손익에서 뺐어요. 같은 계좌에 다른 종목이 주문 없이 들어오면(분사 등) 그 앞 30일도 뺐어요. 그 기간의 값을 짐작해 넣지 않아요.");
   if (r.market === "ALL") out.push("미국 종목은 그날 기록의 환율로 원화로 바꿨어요. 환율이 움직인 몫도 들어 있어요.");
   if (r.market === "US") out.push("달러 기준이에요. 환율은 넣지 않았어요.");
   out.push("토스 앱 수익분석의 수익률과 계산 방법이 달라 다를 수 있어요.");

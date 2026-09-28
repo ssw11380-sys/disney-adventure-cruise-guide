@@ -3,7 +3,7 @@ import { AppError } from "../lib/errors.js";
 import { seoulDate, seoulDateOf, seoulIso } from "../lib/time.js";
 import type { DailyRate } from "../providers/market/fxStd.js";
 import type { FeatureKey } from "./featureService.js";
-import { replayPair, round6, roundMoney, tossCosts, type ArrivalSpan, type ChangeRow, type Cur, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
+import { DOUBT_DAYS, replayPair, round6, roundMoney, tossCosts, type ArrivalSpan, type ChangeRow, type Cur, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
 import { periodReturns, presetRange, READY_DAYS, type Preset, type RetFlow, type RetSkip, type RetSnap, type ReturnsBody, type ReturnsMarket } from "./journalReturns.js";
 import { tradingDate } from "./marketContext.js";
 import { isKrBankDay, taxSummary, TAX_RULES, usSettleDate, type TaxFx, type TaxSellInput } from "./taxRules.js";
@@ -14,7 +14,7 @@ import { parseData, STATE_KEY, tradeView, type TradeRow, type TradeView } from "
  * 매매일지 (3-37, 플래그 tradeJournal — tradeRecords 가 꺼져 있으면 꺼진 것으로 봄). 3-36 이 쌓은 원자료(일별 계좌 스냅샷 + 토스 주문 내역의 체결)로
  *  1) 기록: 날짜별 체결 목록, 매도마다 이동평균법 실현손익(journalCalc), 거래마다 메모(trade_notes — 서버에 저장, 백업 포함, AI 에는 넣지 않음).
  *     그해 그 종목에 기록으로 설명되지 않는 일이 있으면 그해 그 종목의 매도는 손익 없이 '확인이 필요한 매도'(summary.excludedSells)로 따로 (검토 반영 10차 종목·해 규칙 — journalCalc)
- *  2) 수익률: 스냅샷 시간가중 수익률(journalReturns — 10거래일 쌓인 뒤 숫자)
+ *  2) 수익률: 스냅샷 시간가중 수익률(journalReturns — 10거래일 쌓인 뒤 숫자). 확인 필요인 종목·해의 구간과 주문 없이 들어온 종목의 앞 30일은 건너뜀
  *  3) 양도세 추정: 해외주식 결제일 기준환율 원화 양도차익 · 22% · 250만 원 공제(taxRules — 참고용 추정)
  * 계산은 저장하지 않고 요청 때 돌린다. 요청은 네트워크를 기다리지 않는다 — 환율(토스 과거 환율·세법 기준환율)은 fx_rates 에 있는 값만 쓰고,
  * 없는 값은 배경 작업(10분마다, 플래그가 켜져 있을 때만)이 받는다.
@@ -561,9 +561,15 @@ export class JournalService {
     for (const t of trades) for (const f of t.fills) if (f.quantity > 0) flows.push({ market: t.market, side: t.side, amount: f.amount, at: f.at });
     // 건너뛸 구간 (값을 매겨 흐름으로 넣지 않는다):
     //  ① 짝마다 확인 필요인 해(검토 반영 10차 종목·해 규칙)에 걸친, 그 종목이 든 기록 구간
-    //  ② 계좌 목록이 바뀐 기록 사이 (새 계좌가 기록에 들어오거나 빠지면 평가금액이 흐름 없이 뛴다)
+    //  ② 주문 없이 들어온 종목의 앞 30일 (검토 반영 11차 — ④를 수익률에: 분사 신설회사가 며칠 늦게 들어와도 모회사가 내린 권리락 날이 이 안에 있다.
+    //     모회사가 수량·매입금액 그대로 계속 있으면 모회사 쪽에는 확인 필요가 없어서. 기록 사이에 들어온 것만 — 첫 기록 전 증거는 그 앞에 수익률 구간이 없음)
+    //  ③ 계좌 목록이 바뀐 기록 사이 (새 계좌가 기록에 들어오거나 빠지면 평가금액이 흐름 없이 뛴다)
     const skips: RetSkip[] = [];
     for (const p of this.pairs(trades, snaps, toss).values()) for (const x of p.res.skips) skips.push({ market: p.market, ...x });
+    for (const [key, list] of arrivals(trades, snaps)) {
+      const market = key.slice(key.indexOf(":") + 1) as RecordMarket;
+      for (const x of list) if (x.from !== null) skips.push({ market, from: seoulIso(new Date(Date.parse(x.from) - DOUBT_DAYS * 86_400_000)), to: x.to });
+    }
     for (const market of ["KR", "US"] as const) {
       const list = snaps.filter((x) => x.status === "ok" && x.market === market && x.doubtAccounts.length === 0);
       for (let i = 1; i < list.length; i++) {
@@ -896,50 +902,67 @@ export class JournalService {
 const anchorSnap = (s: SnapLite, account: number, market: RecordMarket) => s.status === "ok" && s.market === market && s.accounts.includes(account) && !s.doubtAccounts.includes(account);
 
 /**
- * 주문 없이 들어온 주식 (원장 opts.arrivals — ④ 분사 모양). 같은 계좌·시장의 이웃한 두 기준점 사이에서 어떤 종목의
- * 뒤 기록 수량이 앞 기록 수량 + 그 사이 기록된 순매수보다 많거나(0→N · 수량 늘어남), 앞 기록 수량 + 순매수가 0 보다 작으면
- * (주문 없이 들어와 그 구간에 팔려 기록에 보이지 않음 — 분사 신설회사를 들어온 날 모두 판 경우). 마지막 기준점 뒤는 뒤쪽만 (to null).
- * 첫 기준점 전은 보지 않는다 (기록 전에 산 몫과 가를 수 없음). `${account}:${market}` → [{ 종목, 앞 기록 asOf, 뒤 기록 asOf }]
+ * 주문 없이 들어온 주식 (원장 opts.arrivals — ④ 분사 모양 · 수익률 건너뛰기). `${account}:${market}` → [{ 종목, from, to }] (들어왔을 수 있는 때):
+ *  - 같은 계좌·시장의 이웃한 두 기준점 사이: 뒤 기록 수량이 앞 기록 수량 + 그 사이 기록된 순매수보다 많거나(0→N · 수량 늘어남),
+ *    앞 기록 수량 + 순매수가 0 보다 작으면(주문 없이 들어와 그 구간에 팔려 기록에 보이지 않음 — 분사 신설회사를 들어온 날 모두 판 경우).
+ *    from = 앞 기록 asOf, to = 뒤 기록 asOf (마지막 기준점 뒤는 뒤쪽만 — to null)
+ *  - 첫 기준점 전 (검토 반영 11차 — 기준점이 한 번도 없는 계좌·시장은 모든 체결): 0주부터 돌려 산 기록보다 많이 판 매도(to = 그 매도 시각),
+ *    첫 기준점 수량이 그 전 순매수보다 많음(to = 첫 기준점 asOf). 들어온 때의 하한은 모른다 (from null — 기록 전 언젠가)
  */
 function arrivals(trades: Array<Pick<TradeView, "account" | "code" | "side" | "fills">>, snaps: SnapLite[]): Map<string, Array<ArrivalSpan & { code: string }>> {
   const out = new Map<string, Array<ArrivalSpan & { code: string }>>();
-  // 계좌·시장마다 체결 몫 (시각 순) — 구간마다 앞에서부터 한 번씩 훑는다
-  const moves = new Map<string, Array<{ code: string; q: number; ms: number }>>();
+  const add = (key: string, code: string, from: string | null, to: string | null) => out.set(key, [...(out.get(key) ?? []), { code, from, to }]);
+  // 계좌·시장마다 체결 몫 (시각 순) — 앞에서부터 한 번씩 훑는다
+  const moves = new Map<string, Array<{ code: string; q: number; ms: number; at: string }>>();
   for (const t of trades) {
     const key = `${t.account}:${marketOf(t.code)}`;
     const list = moves.get(key) ?? [];
-    for (const f of t.fills) if (f.quantity > 0) list.push({ code: t.code, q: t.side === "BUY" ? f.quantity : -f.quantity, ms: Date.parse(f.at) });
+    for (const f of t.fills) if (f.quantity > 0) list.push({ code: t.code, q: t.side === "BUY" ? f.quantity : -f.quantity, ms: Date.parse(f.at), at: f.at });
     moves.set(key, list);
   }
   for (const list of moves.values()) list.sort((a, b) => a.ms - b.ms);
-  const accounts = [...new Set(snaps.flatMap((s) => s.accounts))];
-  for (const market of ["KR", "US"] as const) {
-    for (const account of accounts) {
-      const key = `${account}:${market}`;
-      const list = snaps.filter((s) => anchorSnap(s, account, market));
-      const mv = moves.get(key) ?? [];
-      const qty = (s: SnapLite) => {
-        const m = new Map<string, number>();
-        for (const h of s.holdings) if (h.account === account && h.quantity > 0) m.set(h.code, (m.get(h.code) ?? 0) + h.quantity);
-        return m;
-      };
-      let p = 0;
-      for (let i = 0; i < list.length; i++) {
-        const prev = list[i]!;
-        const cur = list[i + 1] ?? null;
-        const from = Date.parse(prev.asOf);
-        const to = cur ? Date.parse(cur.asOf) : Infinity;
-        // 이 구간(앞 기록 시각 초과 ~ 뒤 기록 시각 이하)의 종목별 순매수 수량
-        while (p < mv.length && mv[p]!.ms <= from) p++;
-        const net = new Map<string, number>();
-        for (let j = p; j < mv.length && mv[j]!.ms <= to; j++) net.set(mv[j]!.code, (net.get(mv[j]!.code) ?? 0) + mv[j]!.q);
-        const before = qty(prev);
-        const after = cur ? qty(cur) : null;
-        for (const code of new Set([...before.keys(), ...net.keys(), ...(after ? after.keys() : [])])) {
-          const expected = round6((before.get(code) ?? 0) + (net.get(code) ?? 0));
-          const came = expected < -1e-6 || (after !== null && (after.get(code) ?? 0) > expected + 1e-6);
-          if (came) out.set(key, [...(out.get(key) ?? []), { code, from: prev.asOf, to: cur?.asOf ?? null }]);
-        }
+  const keys = new Set([...moves.keys(), ...snaps.flatMap((s) => s.accounts.map((a) => `${a}:${s.market}`))]);
+  for (const key of keys) {
+    const account = Number(key.slice(0, key.indexOf(":")));
+    const market = key.slice(key.indexOf(":") + 1) as RecordMarket;
+    const list = snaps.filter((s) => anchorSnap(s, account, market));
+    const mv = moves.get(key) ?? [];
+    const qty = (s: SnapLite) => {
+      const m = new Map<string, number>();
+      for (const h of s.holdings) if (h.account === account && h.quantity > 0) m.set(h.code, (m.get(h.code) ?? 0) + h.quantity);
+      return m;
+    };
+    // 첫 기준점 전: 종목마다 0주부터 돌려, 가장 낮던 수량보다 더 내려간 매도마다 (그 전 언젠가 들어왔다) · 첫 기준점의 남는 수량
+    const first = list[0] ?? null;
+    const firstMs = first ? Date.parse(first.asOf) : Infinity;
+    const run = new Map<string, number>();
+    const low = new Map<string, number>();
+    let p = 0;
+    for (; p < mv.length && mv[p]!.ms <= firstMs; p++) {
+      const m = mv[p]!;
+      const q = round6((run.get(m.code) ?? 0) + m.q);
+      run.set(m.code, q);
+      if (q < (low.get(m.code) ?? 0) - 1e-6) {
+        low.set(m.code, q);
+        add(key, m.code, null, m.at);
+      }
+    }
+    if (first) for (const [code, n] of qty(first)) if (n > Math.max(0, run.get(code) ?? 0) + 1e-6) add(key, code, null, first.asOf);
+    // 이웃한 기준점 사이
+    for (let i = 0; i < list.length; i++) {
+      const prev = list[i]!;
+      const cur = list[i + 1] ?? null;
+      const from = Date.parse(prev.asOf);
+      const to = cur ? Date.parse(cur.asOf) : Infinity;
+      // 이 구간(앞 기록 시각 초과 ~ 뒤 기록 시각 이하)의 종목별 순매수 수량
+      while (p < mv.length && mv[p]!.ms <= from) p++;
+      const net = new Map<string, number>();
+      for (let j = p; j < mv.length && mv[j]!.ms <= to; j++) net.set(mv[j]!.code, (net.get(mv[j]!.code) ?? 0) + mv[j]!.q);
+      const before = qty(prev);
+      const after = cur ? qty(cur) : null;
+      for (const code of new Set([...before.keys(), ...net.keys(), ...(after ? after.keys() : [])])) {
+        const expected = round6((before.get(code) ?? 0) + (net.get(code) ?? 0));
+        if (expected < -1e-6 || (after !== null && (after.get(code) ?? 0) > expected + 1e-6)) add(key, code, prev.asOf, cur?.asOf ?? null);
       }
     }
   }

@@ -296,6 +296,19 @@ describe("검토 반영 10차 — 종목·해 규칙: 그해 확인 필요가 �
     expect(h.fills.get(half[1]!.key)!.realized).toMatchObject({ status: "ok", gross: -10_000 });
   });
 
+  it("④ 첫 기록 전 증거(검토 반영 11차 — 들어온 때의 하한을 모름, from null): 증거(산 기록 없이 판 매도 · 첫 기록의 주문 없는 수량) 전에 0주까지 판 매도는 언제였든 확인 필요 · 증거보다 뒤에 판 것은 그대로", () => {
+    const f = [us("BUY", 1000, 100_000, "2025-03-03"), us("SELL", 1000, 80_000, "2025-06-02")];
+    const first = usA("2026-09-25", 0, 0);
+    const run = (arrivals: Array<{ from: string | null; to: string | null }>) => replayPair(f, [first], { ...USD, arrivals }).fills.get(f[1]!.key)!.realized;
+    // 신설회사를 산 기록 없이 6/10 에 팖 (PS1) · 첫 기록에 주문 없이 있음 (PS2) · 기록이 한 번도 없는 짝 (PS3)
+    expect(run([{ from: null, to: kst("2025-06-10", "23:40") }])).toMatchObject({ ...needs, change: "6월 2일 모두 판 뒤 30일 안에 같은 계좌에 다른 종목이 주문 없이 들어왔어요(분사 등일 수 있어요)" });
+    expect(run([{ from: null, to: first.asOf }])).toMatchObject(needs);
+    expect(replayPair(f, [], { ...USD, arrivals: [{ from: null, to: kst("2025-06-10", "23:40") }] }).fills.get(f[1]!.key)!.realized).toMatchObject(needs);
+    // 판 것보다 확실히 먼저 들어옴 · 아무것도 들어오지 않음 → 보통 계산
+    expect(run([{ from: null, to: kst("2025-05-01", "23:40") }])).toMatchObject({ status: "ok", basis: "history-checked", gross: -20_000 });
+    expect(run([])).toMatchObject({ status: "ok", basis: "history-checked", gross: -20_000 });
+  });
+
   it("⑤ 첫 기록 전 매도가 있는데 그 전 주문 내역이 첫 기록을 그대로 만들지 못하면: 그해 그 종목의 매도는 모두 확인 필요 (첫 기록 뒤 매도도) · 다른 해는 그대로", () => {
     const first = anchor({ asOf: "2026-09-26T05:05:00+09:00", date: "2026-09-25", quantity: 10, cost: 1000 });
     // 같은 해: 5주 사고 8주 판 기록 (앞부분 기록 없음) → 9/29 매도도 확인 필요 (예전: 토스 평균에서 +50 'ok')
@@ -373,7 +386,7 @@ describe("검토 반영 10차 — 예전에 틀린 숫자를 만들던 경우는
   const ua = usA("2026-10-12", 1000, 100_000, 100);
   const uz = usA("2026-10-13", 0, 0);
   const ub = us("BUY", 1000, 100_000, "2026-09-01");
-  type Case = { fills: LedgerFill[]; anchors: LedgerAnchor[]; usd?: boolean; arrivals?: Array<{ from: string; to: string | null }>; allow?: Record<number, number> };
+  type Case = { fills: LedgerFill[]; anchors: LedgerAnchor[]; usd?: boolean; arrivals?: Array<{ from: string | null; to: string | null }>; allow?: Record<number, number> };
   const cases: Record<string, () => Case> = {
     // 분할·병합 뒤 같은 구간에 모두 팖 (R1~R4 · N10 · E1)
     "R1 한국 1→4 분할 뒤 4,000주 250원에 모두 팖": () => ({ fills: [k("SELL", 4000, 1_000_000)], anchors: [a1, z2] }),
@@ -434,6 +447,30 @@ describe("검토 반영 10차 — 예전에 틀린 숫자를 만들던 경우는
     "N4b 분사가 기록된 다음 날 모두 팖": () => ({ fills: [ub, us("SELL", 1000, 80_000, "2026-10-14")], anchors: [ua, usA("2026-10-13", 1000, 80_000, 80), usA("2026-10-14", 0, 0)], usd: true }),
     "N4c 분사 당일 999주 팔고 1주 (토스 매입금액 $80)": () => ({ fills: [ub, us("SELL", 999, 79_920, "2026-10-13", "23:30")], anchors: [ua, usA("2026-10-13", 1, 80, 80)], usd: true }),
     "C1-US 분사 당일 모회사·신설회사를 모두 팖 (신설회사는 기록에 없음)": () => ({ fills: [ub, us("SELL", 1000, 80_000, "2026-10-13", "23:30")], anchors: [ua, uz], usd: true, arrivals: [{ from: ua.asOf, to: uz.asOf }] }),
+    // 첫 기록 전 분사 모양 (검토 반영 11차 — 서버 arrivals 가 첫 기록 전 증거를 from null 로 넘김)
+    "PS1 첫 기록 전 모회사 모두 팖, 8일 뒤 신설회사를 산 기록 없이 팖": () => ({
+      fills: [us("BUY", 1000, 100_000, "2025-03-03"), us("SELL", 1000, 80_000, "2025-06-02")],
+      anchors: [usA("2026-09-25", 0, 0)],
+      usd: true,
+      arrivals: [{ from: null, to: kst("2025-06-10", "23:40") }],
+    }),
+    "PS2 첫 기록 전 모회사 모두 팖, 신설회사가 첫 기록에 주문 없이 있음": () => ({
+      fills: [us("BUY", 1000, 100_000, "2026-03-02"), us("SELL", 1000, 80_000, "2026-09-10")],
+      anchors: [usA("2026-09-25", 0, 0)],
+      usd: true,
+      arrivals: [{ from: null, to: usA("2026-09-25", 0, 0).asOf }],
+    }),
+    "PS3 한국 기록이 없는 계좌: 모회사 모두 팖, 신설회사를 산 기록 없이 팖": () => ({
+      fills: [kr("BUY", 100, 1_000_000, "2026-03-03"), kr("SELL", 100, 700_000, "2026-06-01")],
+      anchors: [],
+      arrivals: [{ from: null, to: kst("2026-06-05", "10:00") }],
+    }),
+    "PS5 첫 기록 전 해가 바뀜: 2025-12-19 모회사 모두 팖, 2026-01-06 신설회사 매도": () => ({
+      fills: [us("BUY", 1000, 100_000, "2025-03-03"), us("SELL", 1000, 80_000, "2025-12-19")],
+      anchors: [usA("2026-09-25", 0, 0)],
+      usd: true,
+      arrivals: [{ from: null, to: kst("2026-01-06", "23:40") }],
+    }),
     "E4 분사 + 같은 날 순서 모르는 매수": () => ({ fills: [ub, us("SELL", 500, 50_000, "2026-10-13", "23:30"), fill({ side: "BUY", quantity: 800, amount: 64_000, at: uz.asOf, basis: "seen" })], anchors: [ua, usA("2026-10-13", 1300, 104_000, 80)], usd: true }),
     // 입고 · 다시 사기 (C15 · C16)
     "입고 + 모두 팖 + 다시 사고 팖": () => ({
@@ -477,7 +514,7 @@ describe("검토 반영 10차 — 예전에 틀린 숫자를 만들던 경우는
         expect(res.realized!.change, `${name} 매도 ${i} 까닭`).toBeTruthy();
         if (c.usd) expect(res.std, `${name} 매도 ${i}`).toMatchObject({ cost: null, missing: "unexplained" });
       });
-      expect(r.check.doubtYears).toContain(2026);
+      expect(r.check.doubtYears).toContain(Number(sells[0]!.at.slice(0, 4)));
     });
   }
 });
