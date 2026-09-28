@@ -109,6 +109,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   const accountsOn = () => features.enabled("accounts");
   // 주인 계정: 없을 때만 만든다 (플래그와 상관없이 — 나중에 켜도 바로 쓰게. 이미 있으면 비밀번호를 되돌리지 않는다)
   if (!accountsKilled) await auth.ensureOwner().catch((e: unknown) => app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 주인 계정 확인 실패"));
+  // 비상 주인 비밀번호 되돌리기 (OWNER_RESET_PASSWORD — 지금 비밀번호와 다를 때만, 주인 세션·기기를 모두 끊는다)
+  const resetPw = opts.config.OWNER_RESET_PASSWORD ?? "";
+  if (!accountsKilled && resetPw) await auth.resetOwnerPassword(resetPw).catch((e: unknown) => app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 주인 비밀번호 되돌리기 실패"));
 
   const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now });
   // 가격·등락률·거래량 알림 (3-29, 플래그 priceAlerts): 조건 저장·울림 기록, 거래량 급증은 차트와 같은 30분봉 캐시(450개)로 계산
@@ -377,11 +380,21 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }
 
   // 계정 관문 (계정 A단계, 플래그 accounts): API 토큰 확인 **뒤에**, 라우터가 고른 경로로 판단한다 (퍼센트 인코딩으로 못 피함).
-  //  - 꺼져 있으면 지금처럼 (API 토큰 = 주인), /api/auth/* 는 없는 주소(404)
+  //  - 꺼져 있으면 지금처럼 (API 토큰 = 주인), /api/auth/* 는 없는 주소(404). 다만 주인 아닌 계정의 세션을 보낸 요청은 그 계정으로 본다
+  //    (플래그를 끄거나 비상 끄기·되돌리기를 해도 그 계정 기기에 주인 데이터가 보이지 않게 — offMember)
   //  - 세션 헤더(X-Session-Token, 웹소켓은 ?session= 도)가 있으면 확인: 없는 토큰·끊김·기한 지남 → 401 session_invalid (앱이 로그아웃하는 유일한 응답)
   //    DB 를 못 읽으면 503 auth_unavailable (로그아웃 아님)
   //  - 그다음 경로 정책(auth/routePolicy): 세션 없음은 403 session_required, 주인 아닌 계정은 공유 경로만 (개인은 빈 값·403)
+  //  - 플래그를 읽지 못하면 켜짐으로 본다 (featureService FAIL_ON — 오류로 문이 열리지 않게)
   app.decorateRequest("auth", null);
+  /** 꺼져 있을 때: 세션 헤더가 주인 아닌 계정의 살아 있는 세션이면 그 계정 (확인하지 못하면 지금처럼 — 비상 끄기가 DB 오류로 막히지 않게) */
+  const offMember = async (req: FastifyRequest, route: string): Promise<AuthState | null> => {
+    if (accountsKilled) return null; // 비상 끄기: 계정 표를 읽지 않는다 (앱에도 플래그 꺼짐 — 세션을 보내는 앱은 곧 멈춘다)
+    const token = sessionTokenOf(req, route);
+    if (!token) return null;
+    const ctx = await auth.authenticate(token).catch(() => null);
+    return ctx && !ctx.user.isOwner ? { kind: "user", ...ctx } : null;
+  };
   app.addHook("onRequest", async (req, reply) => {
     const route = req.routeOptions.url;
     if (!route || !route.startsWith("/api/")) return; // 맞는 경로가 없으면(404) 그대로
@@ -389,6 +402,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     if (!(await accountsOn())) {
       req.auth = { kind: "off" };
       if (route.startsWith("/api/auth/")) return reply.code(404).send({ error: "NOT_FOUND", message: `없는 주소입니다: ${req.method} ${req.url.split("?")[0]}` });
+      const member = await offMember(req, route);
+      if (!member) return;
+      req.auth = member;
+      const d = decide(key, member);
+      if (d.action === "deny") return reply.code(d.status).send(d.body);
+      if (d.action === "empty") return reply.code(200).send(d.body(req));
       return;
     }
     if (NO_SESSION_ROUTES.has(key)) {
@@ -436,10 +455,28 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     return reply.code(500).send({ error: "INTERNAL", message: "서버 오류" });
   });
 
-  /** 브라우저로 주소만 열었을 때 보이는 안내 페이지. 모델·알림 기기 수·브리핑 시각은 /health 처럼 토큰을 설정하지 않았거나 맞는 토큰을 보낸 요청에만 */
+  /**
+   * /health · / 를 보는 사람 (계정 A단계 — 이 둘은 /api 밖이라 관문을 지나지 않는다). 상세(주인 토스 계좌 합계·보유 수·알림 기기·브리핑 상태·매매 기록 등)는
+   * 플래그가 꺼져 있으면 지금처럼 API 토큰만으로, 켜져 있으면 **주인 세션**에만. 주인 아닌 계정·세션 없음·끊긴 세션은 공유 모습.
+   * req.auth 를 채워 끊겼을 때 데이터 절약의 옛 본문 기억도 보는 사람마다 나눈다
+   */
+  const healthViewer = async (req: FastifyRequest): Promise<"owner" | "shared"> => {
+    if (!(await accountsOn())) {
+      const member = await offMember(req, "/health");
+      req.auth = member ?? { kind: "off" };
+      return member ? "shared" : "owner";
+    }
+    const token = sessionTokenOf(req, "/health");
+    const ctx = token ? await auth.authenticate(token).catch(() => null) : null;
+    req.auth = ctx ? { kind: "user", ...ctx } : { kind: "anonymous" };
+    return ctx?.user.isOwner ? "owner" : "shared";
+  };
+
+  /** 브라우저로 주소만 열었을 때 보이는 안내 페이지. 모델·알림 기기 수·브리핑 시각은 /health 처럼 토큰을 설정하지 않았거나 맞는 토큰을 보낸 요청에만 (계정이 켜져 있으면 주인 세션에만) */
   app.get("/", async (req, reply) => {
     const auth = req.headers.authorization;
-    const detail = !opts.config.API_TOKEN || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), opts.config.API_TOKEN));
+    const trusted = !opts.config.API_TOKEN || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), opts.config.API_TOKEN));
+    const detail = trusted && (await healthViewer(req)) === "owner";
     const h = detail ? await deviceService.enabledTokens() : [];
     const jobs = detail ? (scheduler?.status().jobs ?? []) : [];
     const protectedApi = Boolean(opts.config.API_TOKEN);
@@ -460,7 +497,21 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     const trusted = !token || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), token));
     // 옛 앱이 sources·schedule 을 바로 읽으므로 빈 값을 함께 준다 (limited = 토큰이 없거나 틀려 상세를 뺀 응답)
     if (!trusted) return { ok: true, time: seoulIso(now()), authRequired: true, limited: true, sources: {}, schedule: null, disclaimer: DISCLAIMER };
-    return healthDetail();
+    return (await healthViewer(req)) === "owner" ? healthDetail() : healthShared();
+  });
+  /**
+   * 주인 아닌 계정·로그인 전(세션 없음)의 /health: 토큰은 맞으므로 limited 가 아니다 (앱이 '토큰 필요'로 보이지 않게). 서버 시각·출처 구성·모델 설정만 —
+   * 주인 데이터(토스 계좌 합계·보유·대조, 매매 기록, 알림 기기 수, 브리핑·계좌 브리핑 상태, 구독 종목, 백업, 앱 오류)는 넣지 않는다
+   */
+  const healthShared = () => ({
+    ok: true,
+    time: seoulIso(now()),
+    sources: describeProviders(opts.config),
+    schedule: null,
+    authRequired: Boolean(opts.config.API_TOKEN),
+    llmConfigured: opts.providers.generator.model !== "disabled",
+    viewer: "shared" as const,
+    disclaimer: DISCLAIMER,
   });
   const healthDetail = async () => ({
     ok: true,
@@ -484,8 +535,9 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     backup: await backups.status().catch(() => null),
     // 매매 기록(3-36): 켜져 있을 때만 (끄면 응답이 예전과 같게). 최근 5·30거래일 스냅샷이 빠진 날이 있으면 warning — ok 는 그대로 true
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
-    // 계정(A단계): 켜져 있을 때만 (끄면 응답이 예전과 같게). 주인이 아직 처음 비밀번호(1111)인지
-    ...((await accountsOn()) ? { accounts: { enabled: true, ownerInitialPassword: await auth.ownerUsesInitialPassword().catch(() => null) } } : {}),
+    // 계정(A단계): 켜져 있을 때만 (끄면 응답이 예전과 같게). 처음 비밀번호를 쓰는지는 내보내지 않는다 (공개 저장소에 적힌 1111 이 아직 되는지 알리는 셈 —
+    // 주인은 앱 설정 맨 위 띠·/api/auth/me 로 본다)
+    ...((await accountsOn()) ? { accounts: { enabled: true } } : {}),
     disclaimer: DISCLAIMER,
   });
 

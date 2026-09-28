@@ -46,6 +46,19 @@ export const AUTH_ROUTES: ReadonlySet<string> = new Set([
   "PUT /api/auth/email",
 ]);
 
+/**
+ * /api 밖의 경로 — 관문(onRequest)을 지나지 않으므로 경로가 스스로 보는 사람을 가린다 (app.ts healthViewer: 상세는 주인 세션에만,
+ * 플래그가 꺼져 있으면 지금처럼 API 토큰만으로). 새 /api 밖 경로를 만들면 test/routePolicy.test.ts 가 실패해 여기에 넣고 주인 데이터가 새지 않는지 정하게 된다
+ */
+export const OUTSIDE_API_ROUTES: ReadonlySet<string> = new Set([
+  "GET /",
+  "GET /health",
+  "OPTIONS *", // CORS 사전 요청(@fastify/cors) — 본문 없음
+]);
+
+/** 주인 아닌 계정·로그인 전의 /health 칸 (이것 말고는 없다 — 주인 토스 계좌·보유·매매 기록·알림 기기·브리핑 상태 등은 주인 세션에만) */
+export const SHARED_HEALTH_KEYS: readonly string[] = ["ok", "time", "sources", "schedule", "authRequired", "llmConfigured", "viewer", "disclaimer"];
+
 /** 세션 없이 여는 경로 (세션 헤더를 읽지도 않는다) */
 export const NO_SESSION_ROUTES: ReadonlySet<string> = new Set(["GET /api/features", "POST /api/auth/login", "POST /api/auth/signup"]);
 

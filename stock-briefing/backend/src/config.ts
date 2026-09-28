@@ -52,6 +52,11 @@ const schema = z.object({
   /** 주인 계정 아이디·처음 비밀번호 (주인이 없을 때 한 번만 쓴다 — 이미 있으면 바꾸지 않는다) */
   OWNER_LOGIN_ID: z.string().default(""),
   OWNER_INITIAL_PASSWORD: z.string().default(""),
+  /**
+   * 비상 주인 비밀번호 되돌리기: 설정하면 서버를 켤 때 주인 비밀번호를 이 값으로 바꾸고 주인 세션·기기 등록을 모두 끊는다
+   * (지금 비밀번호와 같으면 아무것도 안 함). 누가 먼저 로그인해 비밀번호를 바꿨을 때처럼 되찾을 길이 없을 때만 — 쓴 뒤에는 지운다
+   */
+  OWNER_RESET_PASSWORD: z.string().default(""),
   /** 앞단 프록시 수 (요청 IP 를 X-Forwarded-For 에서 읽는다 — IP 별 로그인 제한). 비우면 Railway 에서는 1, 그 밖에는 0 */
   TRUST_PROXY_HOPS: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().min(0).max(5).optional()),
 });

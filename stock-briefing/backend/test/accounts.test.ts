@@ -263,10 +263,21 @@ describe("회원가입", () => {
     expect(dupEmail.json()).toMatchObject({ code: "email_taken", message: "이미 가입한 이메일이에요", fields: { email: "email_taken" } });
   });
 
-  it("IP 별 가입 제한: 1시간에 5번", async () => {
+  it("IP 별 가입 제한: 만드는 계정은 1시간에 5개", async () => {
     const { app } = await makeApp();
     for (let i = 0; i < 5; i++) expect((await signup(app, `user${i}x`, `u${i}@example.com`, "abcd1234", "10.4.0.1")).statusCode).toBe(201);
     expect((await signup(app, "user9x", "u9@example.com", "abcd1234", "10.4.0.1")).statusCode).toBe(429);
+  });
+
+  it("겹친 아이디·이메일·형식 오류는 만든 계정 수(5)에 세지 않는다 — 시도는 IP 별 1시간 20번 (통신사 NAT 로 IP 를 나눠 써도 겹친 아이디 몇 번에 막히지 않게)", async () => {
+    const { app } = await makeApp();
+    expect((await signup(app, "taken01", "t0@example.com", "abcd1234", "10.4.1.9")).statusCode).toBe(201);
+    for (let i = 0; i < 6; i++) expect((await signup(app, "taken01", `x${i}@example.com`, "abcd1234", "10.4.1.1")).json().code).toBe("login_id_taken");
+    expect((await signup(app, "bad id!", "y@example.com", "abcd1234", "10.4.1.1")).json().code).toBe("invalid");
+    for (let i = 0; i < 5; i++) expect((await signup(app, `fresh${i}x`, `f${i}@example.com`, "abcd1234", "10.4.1.1")).statusCode).toBe(201);
+    // 지금까지 12번 시도 — 8번 더 하면 20번, 그다음은 형식 오류·겹침도 429 (알아내기를 막는 몫)
+    for (let i = 0; i < 8; i++) expect((await signup(app, "taken01", `z${i}@example.com`, "abcd1234", "10.4.1.1")).statusCode).toBe(409);
+    expect((await signup(app, "taken01", "last@example.com", "abcd1234", "10.4.1.1")).statusCode).toBe(429);
   });
 
   it("비밀번호는 로그에도 DB 에도 평문으로 남지 않는다", async () => {
@@ -403,19 +414,36 @@ describe("로그아웃·비밀번호·이메일", () => {
     expect(same.json()).toMatchObject({ code: "invalid", fields: { next: "password_same_as_id" } });
   });
 
-  it("이메일 등록·변경: 형식·중복(다른 사람) 확인, 자기 이메일 그대로 저장은 됨", async () => {
-    const { app } = await makeApp();
+  it("이메일 등록·변경: 지금 비밀번호를 다시 받고, 형식·중복(다른 사람) 확인, 자기 이메일 그대로 저장은 됨", async () => {
+    const { app, clock } = await makeApp();
     const owner = await ownerToken(app);
     await signup(app, "mailuser", "taken@example.com");
-    const put = (email: string) => app.inject({ method: "PUT", url: "/api/auth/email", headers: sessionHeader(owner), payload: { email } });
+    const put = (email: string, current = "1111") => app.inject({ method: "PUT", url: "/api/auth/email", headers: sessionHeader(owner), payload: { email, current } });
     expect((await put("bad")).json()).toMatchObject({ code: "invalid", fields: { email: "email_format" } });
-    expect((await put("")).json()).toMatchObject({ fields: { email: "required" } });
+    expect((await put("", "")).json()).toMatchObject({ fields: { email: "required", current: "required" } });
+    // 세션만 있고 비밀번호를 모르면 바꾸지 못한다 (이메일이 겹치는지도 알려 주지 않는다)
+    expect((await put("TAKEN@example.com", "0000")).json()).toMatchObject({ code: "bad_current_password", fields: { current: "bad_current_password" } });
     expect((await put("TAKEN@example.com")).json()).toMatchObject({ code: "email_taken" });
     const ok = await put(" Owner@Example.com ");
     expect(ok.statusCode).toBe(200);
     expect(ok.json().user).toMatchObject({ email: "owner@example.com", isOwner: true });
-    expect((await put("owner@example.com")).statusCode).toBe(200);
+    // 다른 이름(currentPassword)도 받는다 (한 시간 5번 제한을 넘지 않게 시계를 옮긴다)
+    clock.t += HOUR + 1000;
+    expect((await app.inject({ method: "PUT", url: "/api/auth/email", headers: sessionHeader(owner), payload: { email: "owner@example.com", currentPassword: "1111" } })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: sessionHeader(owner) })).json().user.email).toBe("owner@example.com");
+  });
+
+  it("이메일 변경은 사람마다 1시간 5번 — 가입한 이메일인지 끝없이 알아내지 못하게", async () => {
+    const { app, clock } = await makeApp();
+    await signup(app, "victim01", "victim@example.com", "abcd1234", "10.6.0.1");
+    const prober = (await signup(app, "prober01", "prober@example.com", "abcd1234", "10.6.0.2")).json().token as string;
+    const put = (email: string) => app.inject({ method: "PUT", url: "/api/auth/email", headers: sessionHeader(prober), payload: { email, current: "abcd1234" } });
+    for (let i = 0; i < 5; i++) expect((await put(`guess${i}@example.com`)).statusCode).toBe(200);
+    const blocked = await put("victim@example.com");
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.json().code).toBe("too_many_attempts");
+    clock.t += HOUR + 1000;
+    expect((await put("victim@example.com")).json().code).toBe("email_taken");
   });
 });
 
@@ -434,8 +462,12 @@ describe("관문 (플래그 켜짐/꺼짐 · API 토큰)", () => {
     expect((await app.inject({ method: "GET", url: "/api/stocks", headers: { "x-session": token } })).statusCode).toBe(200);
     // 퍼센트 인코딩한 경로로도 피하지 못한다
     expect((await app.inject({ method: "GET", url: "/%61pi/stocks" })).statusCode).toBe(403);
-    // /health 상세에 주인이 아직 처음 비밀번호인지
-    expect((await app.inject({ method: "GET", url: "/health" })).json().accounts).toEqual({ enabled: true, ownerInitialPassword: true });
+    // /health: 세션 없이는 공유 모습(주인 상세 없음), 주인 세션이면 상세 — 처음 비밀번호를 쓰는지는 어디에도 내보내지 않는다
+    const shared = (await app.inject({ method: "GET", url: "/health" })).json();
+    expect(shared.viewer).toBe("shared");
+    expect(shared.accounts).toBeUndefined();
+    expect(shared.limited).toBeUndefined();
+    expect((await app.inject({ method: "GET", url: "/health", headers: sessionHeader(token) })).json().accounts).toEqual({ enabled: true });
   });
 
   it("API 토큰은 그대로 앞에서 확인한다 — 토큰이 틀리면 로그인·세션이 있어도 401 UNAUTHORIZED (session_invalid 아님)", async () => {
@@ -453,7 +485,7 @@ describe("관문 (플래그 켜짐/꺼짐 · API 토큰)", () => {
     expect((await app.inject({ method: "GET", url: "/api/stocks", headers: { ...bearer, ...s } })).statusCode).toBe(200);
   });
 
-  it("꺼짐(관리 API): 지금과 같음 — 세션 없이 열리고 세션 헤더는 읽지도 않음, /api/auth/* 는 404", async () => {
+  it("꺼짐(관리 API): 지금과 같음 — 세션 없이 열리고 주인·모르는 세션 헤더도 그대로, /api/auth/* 는 404", async () => {
     const { app } = await makeApp();
     const token = await ownerToken(app);
     const off = await app.inject({ method: "PUT", url: "/api/admin/features", headers: sessionHeader(token), payload: { accounts: false } });

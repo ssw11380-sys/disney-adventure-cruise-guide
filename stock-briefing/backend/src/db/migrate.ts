@@ -355,6 +355,16 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
       await sql`create index if not exists idx_sessions_user on sessions (user_id)`.execute(db);
     },
   },
+  {
+    version: 12, // 계정 A단계 보안 보강: 푸시 기기 등록을 로그인 세션에 묶는다
+    up: async (db) => {
+      // 세션을 끊으면(로그아웃·모든 기기에서 로그아웃·비밀번호 변경) 그 세션으로 등록한 기기도 지운다 — 잃어버린 폰으로 주인 계좌 알림이 가지 않게.
+      // 비어 있을 수 있는 칸 하나만 더한다 (FK 없음 — 세션을 지워도 기기 행은 남고, 알림은 살아 있는 세션의 기기에만 간다).
+      // 예전 서버로 되돌려도 이 칸을 모르고 지나갈 뿐이다
+      await db.schema.alterTable("devices").addColumn("session_id", "integer").execute();
+      await sql`create index if not exists idx_devices_session on devices (session_id)`.execute(db);
+    },
+  },
 ];
 
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {

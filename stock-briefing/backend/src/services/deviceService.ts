@@ -25,11 +25,16 @@ export class DeviceService {
     this.now = now ?? (() => new Date());
   }
 
-  async register(input: { token: string; platform: string; deviceName?: string | null }): Promise<Device> {
+  /**
+   * 등록(같은 토큰이면 새로 적음). sessionId: 이 기기를 등록한 로그인 세션 (계정 A단계 — 그 세션을 끊으면 이 등록도 지운다).
+   * 플래그가 꺼져 있거나 세션 없이(API 토큰만) 등록하면 null
+   */
+  async register(input: { token: string; platform: string; deviceName?: string | null; sessionId?: number | null }): Promise<Device> {
     if (!this.push.isValidToken(input.token)) {
       throw new AppError(400, "INVALID_TOKEN", "Expo 푸시 토큰 형식이 아닙니다 (ExponentPushToken[...])");
     }
     const ts = seoulIso(this.now());
+    const sessionId = input.sessionId ?? null;
     await this.db
       .insertInto("devices")
       .values({
@@ -40,9 +45,10 @@ export class DeviceService {
         disabled_reason: null,
         created_at: ts,
         last_seen_at: ts,
+        session_id: sessionId,
       })
       .onConflict((oc) =>
-        oc.column("token").doUpdateSet({ platform: input.platform, device_name: input.deviceName ?? null, enabled: 1, disabled_reason: null, last_seen_at: ts }),
+        oc.column("token").doUpdateSet({ platform: input.platform, device_name: input.deviceName ?? null, enabled: 1, disabled_reason: null, last_seen_at: ts, session_id: sessionId }),
       )
       .execute();
     return (await this.get(input.token))!;
@@ -66,13 +72,26 @@ export class DeviceService {
     return (await this.db.selectFrom("devices").selectAll().orderBy("created_at").execute()).map(toDevice);
   }
 
+  /**
+   * 알림을 보낼 기기. 로그인 세션으로 등록한 기기는 그 세션이 살아 있을 때만 (끊김·기한 지남·지워짐이면 빼고 — 계정 A단계:
+   * 로그아웃하거나 '모든 기기에서 로그아웃'으로 끊긴 폰, 자동 로그인을 끈 채 12시간 넘게 안 쓴 폰으로 주인 계좌 알림이 가지 않게).
+   * 세션 없이(계정 전·플래그 꺼짐) 등록한 기기는 예전처럼 보낸다
+   */
   async enabledTokens(): Promise<string[]> {
-    return (await this.db.selectFrom("devices").select("token").where("enabled", "=", 1).execute()).map((r) => r.token);
+    const nowIso = seoulIso(this.now());
+    const rows = await this.db
+      .selectFrom("devices as d")
+      .leftJoin("sessions as s", "s.id", "d.session_id")
+      .select("d.token")
+      .where("d.enabled", "=", 1)
+      .where((eb) => eb.or([eb("d.session_id", "is", null), eb.and([eb("s.id", "is not", null), eb("s.revoked_at", "is", null), eb("s.expires_at", ">", nowIso)])]))
+      .execute();
+    return rows.map((r) => r.token);
   }
 }
 
 function toDevice(r: {
-  token: string; platform: string; device_name: string | null; enabled: number; disabled_reason: string | null; created_at: string; last_seen_at: string;
+  token: string; platform: string; device_name: string | null; enabled: number; disabled_reason: string | null; created_at: string; last_seen_at: string; session_id?: number | null;
 }): Device {
   return {
     token: r.token,

@@ -1,5 +1,7 @@
 import type { FastifyBaseLogger } from "fastify";
+import type { Expression, Kysely, SqlBool } from "kysely";
 import type { Db } from "../db/index.js";
+import type { Database } from "../db/schema.js";
 import { seoulIso } from "../lib/time.js";
 import { hashPassword, looksLikeToken, newSessionToken, SCRYPT_N, tokenHash, verifyPassword } from "./password.js";
 import { LoginLock, WindowLimiter } from "./rateLimit.js";
@@ -10,8 +12,11 @@ import { confirmError, emailError, loginIdKey, normalizeEmail, normalizeLoginId,
  *  - 주인 계정: 서버를 켤 때 주인(is_owner=1)이 없을 때만 만든다 (아이디 '서성원', 처음 비밀번호 1111 — 설정에서 바꾼다). 이미 있으면 건드리지 않는다
  *  - 세션: 자동 로그인 켬 = 365일, 쓸 때마다 연장(하루 한 번까지만 DB 에 적음) / 끔 = 12시간, 쓸 때마다 연장(15분에 한 번까지만 적음).
  *    서버를 다시 켜도(배포) DB 에 있어 유지된다. 끝나는 경우: 직접 로그아웃 · 모든 기기에서 로그아웃 · 다른 기기에서 비밀번호 변경 · 기한 지남
- *  - 토큰은 sha256 만 DB 에, 서버 메모리 캐시 30초 (이 서버에서 끊은 세션은 바로 지운다)
+ *  - 토큰은 sha256 만 DB 에, 서버 메모리 캐시 30초 (이 서버에서 끊은 세션은 바로 지운다 — 끊는 동안 읽던 요청이 옛 상태를 다시 캐시에 넣지 않게 세대 번호로 막는다)
+ *  - 세션을 끊으면 그 세션으로 등록한 푸시 기기도 지운다 (devices.session_id). '모든 기기에서 로그아웃'·비밀번호 변경은 계정 전(세션 없이)
+ *    등록한 주인 기기도 지운다 — 잃어버린 폰으로 주인 계좌 알림이 가지 않게. 앱은 주인으로 다시 로그인하면 이 기기를 다시 등록한다
  *  - 잠금: 같은 아이디 5번 틀리면 10분 (없는 아이디도 똑같이 — 계정이 있는지 드러나지 않게). 속도 제한은 IP·사용자별 (메모리)
+ *  - 비상 주인 비밀번호 되돌리기: OWNER_RESET_PASSWORD (서버를 켤 때 한 번 — 지금 비밀번호와 다를 때만 바꾸고 주인 세션·기기를 모두 끊는다)
  *  - 로그: 아이디·이메일·비밀번호·토큰은 적지 않는다
  */
 export const REMEMBER_MS = 365 * 86_400_000;
@@ -113,11 +118,16 @@ export class AuthService {
   private readonly cache = new Map<string, { at: number; s: CachedSession }>();
   readonly lock: LoginLock;
   private readonly loginIp: WindowLimiter;
+  /** 가입 시도(형식 오류·겹침 포함)는 IP 별 넉넉히, 실제로 만든 계정은 IP 별 적게 — 통신사 NAT 로 IP 를 나눠 쓰는 사람이 겹친 아이디 몇 번에 막히지 않게 */
+  private readonly signupTryIp: WindowLimiter;
   private readonly signupIp: WindowLimiter;
   private readonly signupAll: WindowLimiter;
   private readonly passwordUser: WindowLimiter;
+  private readonly emailUser: WindowLimiter;
   private dummy: Promise<string> | null = null;
   private readonly n: number;
+  /** 세션을 끊을 때마다 늘린다 — 끊기 전에 DB 를 읽기 시작한 요청이 끊긴 세션을 캐시에 다시 넣지 않게 */
+  private gen = 0;
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -125,9 +135,11 @@ export class AuthService {
     this.n = deps.scryptN ?? SCRYPT_N;
     this.lock = new LoginLock(this.nowMs);
     this.loginIp = new WindowLimiter(20, 10 * 60_000, this.nowMs);
+    this.signupTryIp = new WindowLimiter(20, 3_600_000, this.nowMs);
     this.signupIp = new WindowLimiter(5, 3_600_000, this.nowMs);
     this.signupAll = new WindowLimiter(30, 86_400_000, this.nowMs);
     this.passwordUser = new WindowLimiter(10, 10 * 60_000, this.nowMs);
+    this.emailUser = new WindowLimiter(5, 3_600_000, this.nowMs);
   }
 
   // ── 주인 계정 ────────────────────────────────────────────────
@@ -157,10 +169,35 @@ export class AuthService {
     return created ? "created" : "exists";
   }
 
-  /** 주인이 아직 처음 비밀번호인지 (/health). 주인이 없으면 null */
+  /** 주인이 아직 처음 비밀번호인지 (테스트·운영 확인용 — /health 에는 내보내지 않는다). 주인이 없으면 null */
   async ownerUsesInitialPassword(): Promise<boolean | null> {
     const r = await this.deps.db.selectFrom("users").select("initial_password").where("is_owner", "=", 1).executeTakeFirst();
     return r ? Number(r.initial_password) === 1 : null;
+  }
+
+  /**
+   * 비상 주인 비밀번호 되돌리기 (Railway 변수 OWNER_RESET_PASSWORD, 서버를 켤 때). 공개 저장소에 처음 비밀번호가 적혀 있어 누가 먼저 로그인해
+   * 비밀번호를 바꾸면 되찾을 길이 없기 때문. 지금 비밀번호와 같으면 아무것도 하지 않는다 (변수를 남겨 둬도 켤 때마다 로그아웃되지 않게 —
+   * 다만 앱에서 다른 비밀번호로 바꾼 뒤 다시 켜면 또 되돌리므로 쓴 뒤에는 변수를 지운다).
+   * 바꾸면: 처음 비밀번호 표시를 지우고(직접 정한 값이므로), 주인의 모든 세션과 주인 기기 등록을 끊고, 잠금을 푼다
+   */
+  async resetOwnerPassword(password: string): Promise<"reset" | "same" | "no_owner"> {
+    const row = await this.deps.db.selectFrom("users").select(["id", "login_id", "password_hash"]).where("is_owner", "=", 1).executeTakeFirst();
+    if (!row) return "no_owner";
+    if (await verifyPassword(password, row.password_hash)) return "same";
+    const ts = seoulIso(this.now());
+    const hash = await hashPassword(password, this.n);
+    const userId = Number(row.id);
+    this.gen++;
+    await this.deps.db.transaction().execute(async (trx) => {
+      await trx.updateTable("users").set({ password_hash: hash, initial_password: 0, updated_at: ts }).where("id", "=", userId).execute();
+      await trx.updateTable("sessions").set({ revoked_at: ts }).where("user_id", "=", userId).where("revoked_at", "is", null).execute();
+      await dropDevices(trx, { userId, unbound: true });
+    });
+    this.forget((s) => s.userId === userId);
+    this.lock.succeed(loginIdKey(row.login_id));
+    this.deps.log?.warn({ userId }, "계정: 주인 비밀번호를 OWNER_RESET_PASSWORD 로 되돌렸습니다 (주인 세션·기기 등록을 모두 끊음 — 변수를 지우세요)");
+    return "reset";
   }
 
   // ── 로그인·가입 ──────────────────────────────────────────────
@@ -192,15 +229,18 @@ export class AuthService {
   }
 
   async signup(input: SignupInput & { remember: boolean; deviceName?: string | null; ip: string }): Promise<{ token: string; user: AuthUser; session: SessionView }> {
-    const ipHit = this.signupIp.hit(input.ip);
-    if (!ipHit.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: ipHit.retryAfterSec });
+    // 시도는 IP 별 한 시간 20번 (형식 오류·겹친 아이디·이메일 확인 포함 — 알아내기를 막는 몫)
+    const tryHit = this.signupTryIp.hit(input.ip);
+    if (!tryHit.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: tryHit.retryAfterSec });
     const fields = signupErrors(input);
     if (Object.keys(fields).length) throw new AuthFailure(400, "invalid", MSG.invalid, { fields });
     const loginId = normalizeLoginId(input.loginId);
     const key = loginIdKey(loginId);
     const email = normalizeEmail(input.email);
     await this.assertFree(key, email, null);
-    // 전체 하루 상한은 형식이 맞는 가입 시도만 센다
+    // 만드는 계정은 IP 별 한 시간 5개, 전체 하루 30개 (형식이 맞고 겹치지 않는 가입만 센다)
+    const ipHit = this.signupIp.hit(input.ip);
+    if (!ipHit.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: ipHit.retryAfterSec });
     const all = this.signupAll.hit("all");
     if (!all.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: all.retryAfterSec });
     const ts = seoulIso(this.now());
@@ -273,6 +313,7 @@ export class AuthService {
     if (!looksLikeToken(token)) return null;
     const h = tokenHash(token);
     const t = this.nowMs();
+    const gen = this.gen;
     let s: CachedSession | null = null;
     const hit = this.cache.get(h);
     if (hit && t - hit.at < CACHE_MS) s = hit.s;
@@ -295,7 +336,8 @@ export class AuthService {
         expiresAt: Date.parse(row.expires_at),
         user: toUser(row),
       };
-      this.cache.set(h, { at: t, s });
+      // 읽는 동안 이 서버에서 세션을 끊었으면(로그아웃·비밀번호 변경) 읽은 행이 끊기 전 것일 수 있다 → 캐시에 넣지 않는다
+      if (this.gen === gen) this.cache.set(h, { at: t, s });
     }
     if (!(s.expiresAt > t)) {
       this.cache.delete(h);
@@ -311,7 +353,7 @@ export class AuthService {
         .where("revoked_at", "is", null)
         .execute();
       s = { ...s, lastSeenAt: t, expiresAt };
-      this.cache.set(h, { at: hit && t - hit.at < CACHE_MS ? hit.at : t, s });
+      if (this.gen === gen) this.cache.set(h, { at: hit && t - hit.at < CACHE_MS ? hit.at : t, s });
     }
     return { user: s.user, session: { id: s.sessionId, remember: s.remember, expiresAt: seoulIso(new Date(s.expiresAt)) } };
   }
@@ -322,17 +364,33 @@ export class AuthService {
     return { user: r ? toUser(r) : ctx.user, session: ctx.session };
   }
 
+  /** 이 세션만 끊는다 (그 세션으로 등록한 푸시 기기도 지운다 — 앱이 알림 빼기에 실패했어도) */
   async logout(sessionId: number): Promise<void> {
-    await this.deps.db.updateTable("sessions").set({ revoked_at: seoulIso(this.now()) }).where("id", "=", sessionId).where("revoked_at", "is", null).execute();
+    this.gen++;
+    await this.deps.db.transaction().execute(async (trx) => {
+      await trx.updateTable("sessions").set({ revoked_at: seoulIso(this.now()) }).where("id", "=", sessionId).where("revoked_at", "is", null).execute();
+      await dropDevices(trx, { sessionIds: [sessionId] });
+    });
     this.forget((s) => s.sessionId === sessionId);
   }
 
-  /** 이 사람의 모든 세션 (이 기기 포함) */
+  /** 이 사람의 모든 세션 (이 기기 포함) + 그 세션들로 등록한 푸시 기기. 주인이면 계정 전(세션 없이) 등록한 기기도 */
   async logoutAll(userId: number): Promise<number> {
-    const r = await this.deps.db.updateTable("sessions").set({ revoked_at: seoulIso(this.now()) }).where("user_id", "=", userId).where("revoked_at", "is", null).executeTakeFirst();
+    this.gen++;
+    const owner = await this.isOwner(userId);
+    const n = await this.deps.db.transaction().execute(async (trx) => {
+      const r = await trx.updateTable("sessions").set({ revoked_at: seoulIso(this.now()) }).where("user_id", "=", userId).where("revoked_at", "is", null).executeTakeFirst();
+      await dropDevices(trx, { userId, unbound: owner });
+      return Number(r.numUpdatedRows ?? 0);
+    });
     this.forget((s) => s.userId === userId);
     this.deps.log?.info({ userId }, "계정: 모든 기기에서 로그아웃");
-    return Number(r.numUpdatedRows ?? 0);
+    return n;
+  }
+
+  private async isOwner(userId: number): Promise<boolean> {
+    const r = await this.deps.db.selectFrom("users").select("is_owner").where("id", "=", userId).executeTakeFirst();
+    return Number(r?.is_owner ?? 0) === 1;
   }
 
   /** 비밀번호 바꾸기: 지금 세션은 두고 다른 세션은 모두 끊는다. 처음 비밀번호 표시를 지운다 */
@@ -358,9 +416,12 @@ export class AuthService {
     this.lock.succeed(key);
     const ts = seoulIso(this.now());
     const hash = await hashPassword(input.next, this.n);
+    this.gen++;
     const revoked = await this.deps.db.transaction().execute(async (trx) => {
       await trx.updateTable("users").set({ password_hash: hash, initial_password: 0, updated_at: ts }).where("id", "=", ctx.user.id).execute();
       const r = await trx.updateTable("sessions").set({ revoked_at: ts }).where("user_id", "=", ctx.user.id).where("id", "!=", ctx.session.id).where("revoked_at", "is", null).executeTakeFirst();
+      // 다른 세션으로 등록한 기기 + (주인이면) 계정 전 등록 기기. 이 기기는 이 세션에 묶여 있으면 그대로 (앱이 바꾼 뒤 이 기기를 다시 등록한다)
+      await dropDevices(trx, { userId: ctx.user.id, exceptSessionId: ctx.session.id, unbound: Number(row.is_owner) === 1 });
       return Number(r.numUpdatedRows ?? 0);
     });
     this.forget((s) => s.userId === ctx.user.id);
@@ -368,27 +429,75 @@ export class AuthService {
     return { revokedOthers: revoked, user: { ...toUser(row), usingInitialPassword: false } };
   }
 
-  async changeEmail(ctx: SessionContext, raw: string): Promise<AuthUser> {
-    const err = emailError(raw);
-    if (err) throw new AuthFailure(400, "invalid", MSG.invalid, { fields: { email: err } });
-    const email = normalizeEmail(raw);
+  /**
+   * 이메일 등록·변경: 지금 비밀번호를 다시 받는다 (세션만 훔쳐서는 복구용 이메일을 바꾸지 못하게), 사람마다 한 시간 5번
+   * (이미 가입한 이메일인지 409 로 끝없이 알아내지 못하게 — 가입·로그인에서 막은 알아내기를 이 경로로 비켜 가지 않게)
+   */
+  async changeEmail(ctx: SessionContext, input: { email: string; current: string }): Promise<AuthUser> {
+    const hit = this.emailUser.hit(String(ctx.user.id));
+    if (!hit.ok) throw new AuthFailure(429, "too_many_attempts", MSG.tooMany, { retryAfterSec: hit.retryAfterSec });
+    const fields: Record<string, string> = {};
+    const err = emailError(input.email);
+    if (err) fields["email"] = err;
+    if (!input.current) fields["current"] = "required";
+    if (Object.keys(fields).length) throw new AuthFailure(400, "invalid", MSG.invalid, { fields });
+    const key = loginIdKey(ctx.user.loginId);
+    const locked = this.lock.lockedFor(key);
+    if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: locked });
+    const row = await this.deps.db.selectFrom("users").select("password_hash").where("id", "=", ctx.user.id).executeTakeFirst();
+    if (!row || input.current.length > LOGIN_PASSWORD_MAX || !(await verifyPassword(input.current, row.password_hash))) {
+      const lockedNow = this.lock.fail(key);
+      if (lockedNow > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: lockedNow });
+      throw new AuthFailure(400, "bad_current_password", MSG.badCurrent, { fields: { current: "bad_current_password" } });
+    }
+    this.lock.succeed(key);
+    const email = normalizeEmail(input.email);
     await this.assertFree("", email, ctx.user.id);
     await this.deps.db.updateTable("users").set({ email, updated_at: seoulIso(this.now()) }).where("id", "=", ctx.user.id).execute();
     this.forget((s) => s.userId === ctx.user.id);
     return (await this.me(ctx)).user;
   }
 
-  /** 기한이 지났거나 끊긴 지 30일 넘은 세션을 지운다 (하루 한 번) */
+  /** 기한이 지났거나 끊긴 지 30일 넘은 세션을 지운다 (하루 한 번). 지운 세션으로 등록한 기기 행도 지운다 (알림은 이미 가지 않는다 — enabledTokens) */
   async purge(): Promise<number> {
     const cutoff = seoulIso(new Date(this.nowMs() - PURGE_AFTER_MS));
     const r = await this.deps.db
       .deleteFrom("sessions")
       .where((eb) => eb.or([eb("expires_at", "<", cutoff), eb.and([eb("revoked_at", "is not", null), eb("revoked_at", "<", cutoff)])]))
       .executeTakeFirst();
+    await this.deps.db
+      .deleteFrom("devices")
+      .where("session_id", "is not", null)
+      .where((eb) => eb.not(eb.exists(eb.selectFrom("sessions").select("sessions.id").whereRef("sessions.id", "=", "devices.session_id"))))
+      .execute();
     return Number(r.numDeletedRows ?? 0);
   }
 
   private forget(match: (s: CachedSession) => boolean): void {
+    this.gen++;
     for (const [k, v] of this.cache) if (match(v.s)) this.cache.delete(k);
   }
+}
+
+/**
+ * 끊은 세션의 푸시 기기 등록을 지운다 (같은 트랜잭션 안에서).
+ *  - sessionIds: 이 세션들로 등록한 기기
+ *  - userId: 이 사람의 세션으로 등록한 기기 (exceptSessionId 는 빼고)
+ *  - unbound: 세션 없이(계정 전·플래그 꺼짐) 등록한 기기도 — 주인만 (A단계에서 세션 없는 등록은 모두 주인 것)
+ */
+async function dropDevices(trx: Kysely<Database>, o: { sessionIds?: number[]; userId?: number; exceptSessionId?: number; unbound?: boolean }): Promise<void> {
+  await trx
+    .deleteFrom("devices")
+    .where((eb) => {
+      const any: Expression<SqlBool>[] = [];
+      if (o.sessionIds?.length) any.push(eb("session_id", "in", o.sessionIds));
+      if (o.userId !== undefined) {
+        let sub = eb.selectFrom("sessions").select("sessions.id").where("sessions.user_id", "=", o.userId);
+        if (o.exceptSessionId !== undefined) sub = sub.where("sessions.id", "!=", o.exceptSessionId);
+        any.push(eb("session_id", "in", sub));
+      }
+      if (o.unbound) any.push(eb("session_id", "is", null));
+      return any.length ? eb.or(any) : eb.lit(false);
+    })
+    .execute();
 }

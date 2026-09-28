@@ -140,6 +140,9 @@ export const FEATURES = {
 
 export type FeatureKey = keyof typeof FEATURES;
 export const FEATURE_KEYS = Object.keys(FEATURES) as FeatureKey[];
+
+/** 값을 한 번도 읽지 못했을 때 켜짐으로 보는 플래그 — 켜짐이 '막는 쪽'인 보안 관문 (계정: 꺼지면 API 토큰만으로 주인 데이터가 열린다) */
+export const FAIL_ON: ReadonlySet<FeatureKey> = new Set<FeatureKey>(["accounts"]);
 export const FEATURES_META_KEY = "features";
 
 interface Stored {
@@ -189,10 +192,14 @@ export class FeatureService {
     return { features, updatedAt: s.updatedAt };
   }
 
-  /** DB 를 못 읽으면 마지막 값, 그것도 없으면 꺼짐 (끄기 스위치가 오류로 다시 켜지지 않게, 앱과 같은 쪽으로) */
+  /**
+   * DB 를 못 읽으면 마지막 값, 그것도 없으면 꺼짐 (끄기 스위치가 오류로 다시 켜지지 않게, 앱과 같은 쪽으로).
+   * 보안 관문(FAIL_ON — 계정)만은 켜짐: 서버를 막 켰는데 읽기가 실패해도 'API 토큰 = 주인'으로 열리지 않게 (끄려면 비상 끄기 ACCOUNTS_DISABLED)
+   */
   async enabled(key: FeatureKey): Promise<boolean> {
+    if (this.forcedOff.has(key)) return false;
     const s = await this.load().catch(() => this.cache?.stored ?? null);
-    if (!s || this.forcedOff.has(key)) return false;
+    if (!s) return FAIL_ON.has(key);
     return s.overrides[key] ?? FEATURES[key].default;
   }
 

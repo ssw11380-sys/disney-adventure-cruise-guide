@@ -3,7 +3,7 @@ import { sql } from "kysely";
 import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
-import { AUTH_ROUTES, decide, EMPTY_READS, NO_SESSION_ROUTES, routeKey, SANITIZED_ROUTES, SHARED_ROUTES, type AuthState } from "../src/auth/routePolicy.js";
+import { AUTH_ROUTES, decide, EMPTY_READS, NO_SESSION_ROUTES, OUTSIDE_API_ROUTES, routeKey, SANITIZED_ROUTES, SHARED_HEALTH_KEYS, SHARED_ROUTES, type AuthState } from "../src/auth/routePolicy.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
 import { NaverDiscover } from "../src/providers/market/naverDiscover.js";
@@ -15,6 +15,7 @@ import { fakeProviders } from "./helpers.js";
  * 계정 A단계 경로 정책: 새 계정(주인 아님)이 주인의 개인 데이터를 보지도 바꾸지도 못하는지.
  *  1. 모든 등록 경로를 센다 — 공유(SHARED) · 인증(AUTH) · 개인(아래 KNOWN_PERSONAL) 중 정확히 하나. 새 경로를 만들면 여기서 실패해 정하게 된다
  *     (정하지 않아도 서버는 기본으로 막는다 — 공유 목록에 없으면 주인만)
+ *     /api 밖 경로(/ · /health — 관문을 지나지 않음)도 센다: OUTSIDE_API_ROUTES 에 없으면 실패
  *  2. 카나리아: 주인 데이터에 눈에 띄는 표시를 심고, 주인 아닌 계정으로 모든 GET 을 불러 본문에 표시가 하나도 없어야 한다.
  *     쓰기 경로는 모두 403 이고 표 행 수가 그대로여야 한다. 세션 없는 요청은 403 session_required
  */
@@ -215,6 +216,37 @@ describe("경로 정책 — 모든 경로 · 카나리아", () => {
     expect([...SANITIZED_ROUTES].filter((k) => !SHARED_ROUTES.has(k))).toEqual([]);
     expect(Object.keys(EMPTY_READS).filter((k) => !KNOWN_PERSONAL.has(k) || !k.startsWith("GET "))).toEqual([]);
     expect(keys.length).toBe(SHARED_ROUTES.size + AUTH_ROUTES.size + KNOWN_PERSONAL.size);
+  });
+
+  it("/api 밖 경로도 센다 — 목록(OUTSIDE_API_ROUTES)에 없는 새 경로는 여기서 정한다", () => {
+    const outside = [...new Set(w.app.routeList.filter((r) => !r.url.startsWith("/api")).map((r) => routeKey(r.method, r.url)))].sort();
+    expect(outside, "새 /api 밖 경로: routePolicy.ts OUTSIDE_API_ROUTES 에 넣고 주인 데이터가 새지 않는지 아래 테스트에 더하세요").toEqual([...OUTSIDE_API_ROUTES].sort());
+  });
+
+  it("/health · / : 주인 아닌 계정·세션 없음·끊긴 세션에는 주인 상세가 없다 (주인 세션만 — 토큰은 맞으므로 limited 아님)", async () => {
+    const bogus = `gzs1_${"A".repeat(43)}`;
+    for (const headers of [{ "x-session-token": w.member }, {}, { "x-session-token": bogus }] as Record<string, string>[]) {
+      const h = await w.app.inject({ method: "GET", url: "/health", headers });
+      expect(h.statusCode).toBe(200);
+      expect(Object.keys(h.json()).sort(), JSON.stringify(headers)).toEqual([...SHARED_HEALTH_KEYS].sort());
+      expect(h.json().viewer).toBe("shared");
+      for (const mark of MARKS) expect(h.body).not.toContain(mark);
+      const root = await w.app.inject({ method: "GET", url: "/", headers });
+      expect(root.statusCode).toBe(200);
+      expect(root.body).not.toContain("등록된 알림 기기");
+      expect(root.body).not.toContain("브리핑 모델");
+    }
+    const o = { "x-session-token": w.owner };
+    const mine = (await w.app.inject({ method: "GET", url: "/health", headers: o })).json();
+    expect(mine.devices).toBe(1);
+    expect(mine).toHaveProperty("tossOpenApi");
+    expect(mine).toHaveProperty("lastBriefing");
+    expect(mine.accounts).toEqual({ enabled: true });
+    // CORS 사전 요청은 본문이 없다
+    const pre = await w.app.inject({ method: "OPTIONS", url: "/api/stocks", headers: { origin: "https://x.test", "access-control-request-method": "GET" } });
+    expect(pre.statusCode).toBe(204);
+    expect(pre.body).toBe("");
+    expect((await w.app.inject({ method: "GET", url: "/", headers: o })).body).toContain("등록된 알림 기기: 1대");
   });
 
   it("주인은 심은 데이터를 본다 (카나리아가 제대로 심겼는지)", async () => {

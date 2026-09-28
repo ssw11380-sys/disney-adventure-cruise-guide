@@ -77,6 +77,11 @@ export interface DeviceTable {
   disabled_reason: string | null;
   created_at: string;
   last_seen_at: string;
+  /**
+   * 이 기기를 등록한 로그인 세션 (계정 A단계, 마이그레이션 12). 세션을 끊으면(로그아웃·모든 기기에서 로그아웃·비밀번호 변경) 이 등록도 지우고,
+   * 끊겼거나 기한이 지난 세션의 기기에는 알림을 보내지 않는다. 비어 있으면(NULL) 계정 전(API 토큰만)의 등록 = 주인 기기
+   */
+  session_id: ColumnType<number | null, number | null | undefined, number | null>;
 }
 
 /** 앱이 보낸 JS 오류 (토큰·금액은 지운 뒤 저장) */

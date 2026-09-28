@@ -135,6 +135,12 @@ describe("오류 정리 규칙", () => {
     expect(scrub("at bundle:12345:67", { numbers: false })).toBe("at bundle:12345:67");
     expect(scrub("ExponentPushToken[xyz] 0123456789abcdef0123456789abcdef", { numbers: false })).toBe("[지움] [지움]");
   });
+  it("scrub: 로그인 세션 토큰(gzs1_…·?session=)도 지운다 — 웹 스트림 주소가 오류 메시지에 담겨도 (계정 A단계)", () => {
+    const tok = "gzs1_Ab-9_zZ0123456789abcdefghijklmnopqrstuvwxy";
+    expect(scrub(`WebSocket wss://h.test/api/stream?token=t0k&session=${tok} 실패`, { numbers: false })).toBe("WebSocket wss://h.test/api/stream?token=[지움]&session=[지움] 실패");
+    expect(scrub(`세션 ${tok} 끝`, { numbers: true })).toBe("세션 [지움] 끝");
+    expect(scrub(`{"x-session-token":"${tok}"}`, { numbers: false })).not.toContain("gzs1_");
+  });
   it("scrubStack: 메시지 반복 줄은 숫자까지, 호출 위치 줄은 줄·열 번호 유지", () => {
     expect(scrubStack("Error: 합계 1,234,567원\n    at f (b:12345:6)")).toBe("Error: 합계 #\n    at f (b:12345:6)");
     expect(scrubStack("TypeError: x 9999\nf@http://h/b.js:1:2")).toBe("TypeError: x #\nf@http://h/b.js:1:2");

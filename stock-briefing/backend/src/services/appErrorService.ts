@@ -31,7 +31,9 @@ const STACK_MAX = 4000;
 export function scrub(text: string, opts: { numbers: boolean }): string {
   let s = text
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [지움]")
-    .replace(/([?&;#]|%3F|%26)(token|access_token|api_token|key)(=|%3D)[^&\s#;"']*/gi, "$1$2=[지움]")
+    // 로그인 세션 토큰(계정 A단계): 웹 스트림 주소의 ?session= 과 gzs1_… 모양 (base64url 이라 16진 규칙에 걸리지 않는다)
+    .replace(/\bgzs1_[A-Za-z0-9_-]+/g, "[지움]")
+    .replace(/([?&;#]|%3F|%26)(token|access_token|api_token|key|session|session_token)(=|%3D)[^&\s#;"']*/gi, "$1$2=[지움]")
     // JSON·객체 모양: "token":"…", apiToken: '…', authorization: …
     .replace(/(["']?(?:token|apiToken|api_token|access_token|authorization|password|secret|key)["']?\s*[:=]\s*)(?!\[지움\])("[^"]*"|'[^']*'|[^\s,}&]+)/gi, "$1\"[지움]\"")
     .replace(/\b(sk-ant-[A-Za-z0-9_-]+|ExponentPushToken\[[^\]]*\])/g, "[지움]")

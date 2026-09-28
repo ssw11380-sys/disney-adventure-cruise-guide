@@ -10,7 +10,7 @@ import { SESSION_REQUIRED, sessionOf } from "../auth/routePolicy.js";
  *  - POST /api/auth/logout  → 204 (지금 세션만. 세션이 없어도 204)
  *  - POST /api/auth/logout-all → 204 (이 사람의 모든 세션, 이 기기 포함)
  *  - POST /api/auth/password { current, next, nextConfirm } → { ok, revokedOthers, user } (지금 세션은 두고 다른 세션은 끊는다)
- *  - PUT  /api/auth/email   { email } → { user }
+ *  - PUT  /api/auth/email   { email, current } → { user } (지금 비밀번호를 다시 받는다, 사람마다 한 시간 5번)
  * 오류는 { error, code, message } (+ fields: 칸별 코드, retryAfterSec). 로그인 실패를 401 이 아닌 400 으로 주는 까닭:
  * 앱은 401 을 'API 토큰 틀림'(UNAUTHORIZED) 또는 '세션 끊김'(session_invalid)으로만 쓴다
  */
@@ -95,7 +95,9 @@ export const authRoutes: FastifyPluginAsync<{ auth: AuthService }> = async (app,
     const ctx = sessionOf(req);
     if (!ctx) return reply.code(403).send(SESSION_REQUIRED);
     try {
-      return { user: await auth.changeEmail(ctx, str(body(req)["email"])) };
+      const b = body(req);
+      // 지금 비밀번호를 다시 받는다 (current · currentPassword)
+      return { user: await auth.changeEmail(ctx, { email: str(b["email"]), current: str(b["current"] ?? b["currentPassword"]) }) };
     } catch (e) {
       return fail(reply, e);
     }
