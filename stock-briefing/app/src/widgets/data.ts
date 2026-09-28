@@ -10,7 +10,9 @@ import {
   gateExtended,
   NO_FEATURES,
   payloadMarket,
+  pickBoard,
   REUSE_OPEN_MS,
+  widgetFeatures,
   withExtended,
   type WidgetBrief,
   type WidgetBriefing,
@@ -22,6 +24,61 @@ import {
 } from "./payload";
 import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
+// 계정 A단계: 위젯·백그라운드 작업(앱과 다른 JS 로 켜질 수 있다)도 기기에 저장한 로그인 세션으로 묻는다
+import "@/lib/sessionStorage";
+import { backgroundSessionFor, handleSessionInvalid, markAccountsSeen, type BackgroundSession } from "@/lib/session";
+
+/**
+ * 로그인 세션 머리글 (계정 A단계). **기기에 저장한 세션(자동 로그인 켬)만** 보낸다 (검증 4차 M1).
+ * 자동 로그인을 끈 세션(메모리에만)이면 개인 데이터를 묻지 않고 LoginNeededError — 위젯은 '로그인하면 보여요'
+ * (앱을 닫으면 사라져야 할 세션이라 홈 화면에 잔고를 남기지 않게). 세션이 없으면 머리글 없이 — 계정 모드 서버는 개인 데이터를 주지 않는다 (403)
+ */
+async function withSession(apiUrl: string): Promise<{ headers: Record<string, string>; sent: string | null }> {
+  const b = await backgroundSessionFor(apiUrl).catch((): BackgroundSession => ({ kind: "none" }));
+  if (b.kind === "memory") throw new LoginNeededError("login");
+  return b.kind === "stored" ? { headers: { "x-session-token": b.token }, sent: b.token } : { headers: {}, sent: null };
+}
+
+/** 위젯이 그릴 수 없는 까닭 — 로그인이 필요함 (세션 끊김·세션 없음). model.failureText 가 '로그인'으로 알아본다 */
+export const LOGIN_NEEDED = "로그인 필요";
+/** 위젯이 그릴 수 없는 까닭 — 로그인은 돼 있지만 주인 아닌 계정 (개인 종목 기능은 다음 단계). model.failureText 가 '준비 중'으로 알아본다 */
+export const PERSONAL_NOT_READY = "개인 종목 준비 중";
+
+/**
+ * 서버가 '이 사람에게는 개인 데이터를 줄 수 없다'고 답함 (401 session_invalid · 403 session_required · 403 personal_data_not_ready).
+ * 이때는 마지막으로 받은 잔고·브리핑으로 그리지 않고 위젯이 적어 둔 개인 데이터를 지운다 — 로그아웃·세션 끊김 뒤, 다른 계정이 로그인한 뒤에도
+ * 홈 화면 위젯이 주인의 보유 수량·손익을 계속 보여 주지 않게 (계정 A단계 검증 지적)
+ */
+export class LoginNeededError extends Error {
+  /** personal: 로그인한 주인 아닌 계정 (위젯에 '로그인 필요'가 아니라 '개인 종목 기능은 준비 중'이라고 — 검증 지적) */
+  constructor(readonly reason: "login" | "personal" = "login") {
+    super(reason === "personal" ? PERSONAL_NOT_READY : LOGIN_NEEDED);
+    this.name = "LoginNeededError";
+  }
+}
+
+/**
+ * 401 session_invalid 면 앱과 같은 규칙으로 로그아웃(보낸 토큰이 지금 토큰일 때만), 403 session_required 면 계정 모드 표시.
+ * 개인 데이터를 받을 수 없는 응답이면 그 까닭 (login: 로그인 필요 · personal: 주인 아닌 계정), 아니면 null
+ */
+async function noteAuth(res: Response, apiUrl: string, sent: string | null): Promise<"login" | "personal" | null> {
+  if (res.status !== 401 && res.status !== 403) return null;
+  try {
+    const b = (await res.clone().json()) as { code?: unknown };
+    if (res.status === 401 && b.code === "session_invalid") {
+      handleSessionInvalid(apiUrl, sent);
+      return "login";
+    }
+    if (res.status === 403 && b.code === "session_required") {
+      markAccountsSeen(apiUrl, true);
+      return "login";
+    }
+    return res.status === 403 && b.code === "personal_data_not_ready" ? "personal" : null;
+  } catch {
+    /* 본문이 JSON 이 아님 */
+    return null;
+  }
+}
 
 /**
  * 위젯은 앱과 별도의 JS 컨텍스트에서 돌아가므로(react-native-android-widget 태스크 핸들러) react-query 나
@@ -79,6 +136,10 @@ export interface WidgetData {
    * 위젯 4종을 모두 그린다). 여러 조회가 한꺼번에 성공해도 하나만 true. 저장하지 않는다
    */
   recovered?: boolean;
+  /**
+   * 주인 아닌 계정의 지수·환율 판을 이번에 공유 경로(/api/market/indices)로 새로 받았는지 (검증 6차 — 백그라운드 작업이 판 위젯을 다시 그리게). 저장하지 않는다
+   */
+  boardFresh?: boolean;
 }
 
 const LAST_KEY = "widget.lastStocks";
@@ -175,6 +236,20 @@ async function readSettings(): Promise<{ apiUrl: string; apiToken: string; showK
 const PAYLOAD_KEY = "widget.payload";
 const VIEW_KEY = "widget.view";
 const PNL_KEY = "widget.pnlMode";
+
+/**
+ * 위젯이 적어 둔 개인 데이터(마지막 잔고·마지막 /api/widget 응답·마지막으로 그린 데이터·실패 표시)를 지운다 (계정 A단계).
+ * 계정이 바뀔 때(로그아웃·세션 끊김·다른 사람 로그인 — 앱 루트가 lib/session onAccountChange 로 부른다)와 서버가 개인 데이터를 주지 않을 때.
+ * 손익 보기(누적·당일)는 표시 설정이라 남긴다
+ */
+export async function clearWidgetAccountData(): Promise<void> {
+  await Promise.all([LAST_KEY, PAYLOAD_KEY, VIEW_KEY, RETRY_KEY].map((k) => AsyncStorage.removeItem(k).catch(() => undefined)));
+}
+
+/** 로그인이 필요할 때 그리는 빈 위젯 데이터 ('로그인하면 보여요', 숫자 없음) */
+export function signedOutWidgetData(now = Date.now()): WidgetData {
+  return { stocks: [], briefings: [], showKrw: false, afterCost: true, brief: null, fetchedAt: now, error: LOGIN_NEEDED, filled: [], market: null, indices: null, board: null, features: NO_FEATURES };
+}
 /**
  * 위젯 갱신이 실패한 뒤 아직 성공하지 못했다는 표시 (위젯 2차): 마지막 실패 시각과 서버 주소. 어느 갱신이든(백그라운드 작업·위젯 주기·크기 변경·추가·↻)
  * 서버 조회에 실패하면 그 조회를 다 마친 뒤(위젯에 그릴 값을 적은 뒤) 적고, 서버에서 받는 데 성공하면 지운다.
@@ -248,7 +323,7 @@ function slimBriefings(list: LatestBriefing[]): LatestBriefing[] {
 }
 
 export async function saveWidgetView(data: WidgetData, apiUrl: string): Promise<void> {
-  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, ...rest } = data;
+  const { showKrw: _k, afterCost: _a, rowKrw: _r, asked: _q, recovered: _v, boardFresh: _f, ...rest } = data;
   const view: StoredView = { ...rest, briefings: slimBriefings(data.briefings) };
   try {
     await AsyncStorage.setItem(VIEW_KEY, JSON.stringify({ apiUrl, view }));
@@ -381,6 +456,13 @@ export async function pushWidgetData(o: {
 }): Promise<WidgetData> {
   const now = Date.now();
   const { apiUrl, rowKrw } = await readSettings();
+  // 자동 로그인을 끈 세션(메모리에만)이면 앱이 받은 잔고라도 위젯에 적지 않는다 — '로그인하면 보여요' (검증 4차 M1: 앱을 닫으면 사라져야 할 세션)
+  if ((await backgroundSessionFor(apiUrl).catch((): BackgroundSession => ({ kind: "none" }))).kind === "memory") {
+    await clearWidgetAccountData();
+    const out = signedOutWidgetData(now);
+    await saveWidgetView(out, apiUrl);
+    return out;
+  }
   const [prev, cached] = await Promise.all([readWidgetView(apiUrl), readCachedPayload(apiUrl)]);
   const p = cached ? fromPayload(cached.body) : null;
   const idx = newest([
@@ -567,13 +649,16 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
     return null;
   };
   const cached = await readCachedPayload(apiUrl);
+  const session = await withSession(apiUrl);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
   try {
     const res = await fetch(`${apiUrl}${WIDGET_PATH}${board ? BOARD_QUERY : ""}`, {
-      headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
+      headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers, ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
+    const denied = await noteAuth(res, apiUrl, session.sent);
+    if (denied) throw new LoginNeededError(denied);
     if (res.status === 404) {
       // 로그인 페이지·프록시의 HTML 404 는 서버에 닿지 못한 것 (예전 서버의 404 는 JSON 오류 본문 — Fastify)
       if (await isHtml(res)) throw new Error(NOT_JSON);
@@ -639,10 +724,15 @@ export async function loadAccountBriefings(): Promise<AccountBriefing[] | null> 
 }
 
 async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promise<T> {
+  // 서버 주소 = 주소의 '/api/' 앞 (세션은 그 서버 것만)
+  const apiUrl = url.slice(0, Math.max(0, url.indexOf("/api/")));
+  const session = await withSession(apiUrl);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, signal: ctrl.signal });
+    const res = await fetch(url, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers }, signal: ctrl.signal });
+    const denied = await noteAuth(res, apiUrl, session.sent);
+    if (denied) throw new LoginNeededError(denied);
     if (!res.ok) throw new Error((await isPortalPage(res)) ? NOT_JSON : `HTTP ${res.status}`);
     return await jsonBody<T>(res);
   } finally {
@@ -680,6 +770,8 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
   /** 조회가 끝까지 성공했는지 (예전 API 포함) */
   let ok = false;
   try {
+    // 자동 로그인을 끈 세션(메모리에만)이면 받아 둔 응답도 쓰지 않는다 — 개인 데이터 없이 '로그인하면 보여요' (검증 4차 M1)
+    if ((await backgroundSessionFor(apiUrl).catch((): BackgroundSession => ({ kind: "none" }))).kind === "memory") throw new LoginNeededError("login");
     // 위젯이 스스로 갱신할 때는 백그라운드 작업이 받아 둔 응답을 다시 쓴다 (위젯마다 서버를 부르지 않게)
     const reused = opts.reuse ? await readCachedPayload(apiUrl) : null;
     // 칩은 플래그로 거른 것 (연장 세션 ext 는 widgetExtended 가 켜져 있을 때만 장중처럼 15분)
@@ -730,6 +822,22 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     ok = true;
   } catch (e) {
     out.error = e instanceof Error ? e.message : String(e);
+    if (e instanceof LoginNeededError) {
+      // 로그인이 필요함: 앞 사람(주인)의 잔고·브리핑으로 그리지 않고 적어 둔 개인 데이터를 지운다. 지수·환율 판·플래그는 개인 데이터가 아니라 남긴다
+      await clearWidgetAccountData();
+      if (prevView) {
+        out.features = prevView.features;
+        if (prevView.featuresAt !== undefined) out.featuresAt = prevView.featuresAt;
+        out.indices = prevView.indices;
+        if (prevView.indicesAt !== undefined) out.indicesAt = prevView.indicesAt;
+      }
+      // 주인 아닌 계정: 지수·환율 판은 공유 데이터라 공유 경로로 받는다 (검증 6차 — 예전에는 개인 경로 /api/widget 의 403 에 판까지 비어
+      // 지수·환율 위젯이 '개인 종목 기능은 준비 중'만 보였다). 로그인 전(세션 없음)은 공유 경로도 403 이라 묻지 않는다
+      if (e.reason === "personal" && opts.board) await sharedBoard(out, apiUrl, apiToken);
+      keepBoard(out, prevView);
+      await saveWidgetView(out, apiUrl);
+      return out;
+    }
     const cached = await readCachedPayload(apiUrl);
     // 칩: 받아 둔 응답의 것(플래그로 거름), 없으면(업데이트 직후 등) 마지막으로 그린 것 — 실패했다고 칩이 사라지지 않게
     out.market = cached ? payloadMarket(cached.body) : (prevView?.market ?? null);
@@ -783,6 +891,41 @@ export async function loadWidgetData(opts: { stocks?: boolean; briefings?: boole
     }
   }
   return out;
+}
+
+/**
+ * 주인 아닌 계정의 지수·환율 판 (검증 6차): 공유 경로 /api/market/indices?stale=1(앱 지수 띠와 같은 목록)에서 판 9개, 위젯 플래그는 /api/features.
+ * 못 받으면 그대로 둔다 (마지막 판은 keepBoard 가 둔다)
+ */
+async function sharedBoard(out: WidgetData, apiUrl: string, token: string): Promise<void> {
+  const [idx, flags] = await Promise.all([
+    getJson<{ indices?: unknown }>(`${apiUrl}/api/market/indices?stale=1`, token).catch(() => null),
+    getJson<{ features?: Record<string, boolean> }>(`${apiUrl}/api/features`, token).catch(() => null),
+  ]);
+  if (flags?.features && typeof flags.features === "object") {
+    out.features = widgetFeatures(flags.features);
+    out.featuresAt = out.fetchedAt;
+  }
+  const rows = Array.isArray(idx?.indices) ? (idx.indices as Parameters<typeof pickBoard>[0]) : [];
+  const list = pickBoard(rows).filter((i) => Number.isFinite(i.value) && Number.isFinite(i.change) && Number.isFinite(i.changeRate));
+  if (list.length) {
+    out.board = list;
+    out.boardAt = out.fetchedAt;
+    out.boardFresh = true;
+  }
+}
+
+/**
+ * 마지막으로 그린 위젯 데이터의 상태 (백그라운드 작업이 '조용한 안내'로 바뀐 순간을 알아보게 — 검증 6차). 적어 둔 것이 없으면 null
+ */
+export async function lastWidgetState(): Promise<{ error: string | null; stocks: number; briefings: number } | null> {
+  try {
+    const { apiUrl } = await readSettings();
+    const v = await readWidgetView(apiUrl);
+    return v ? { error: v.error, stocks: v.stocks.length, briefings: v.briefings.length } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

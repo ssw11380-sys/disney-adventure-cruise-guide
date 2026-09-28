@@ -8,6 +8,8 @@ import type { RegisteredWithQuote } from "@/api/types";
 import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type AccountData } from "@/components/AccountBand";
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
+import { MemberNotice } from "@/components/MemberNotice";
+import { MEMBER_EMPTY_HOLDINGS, useAccountView } from "@/lib/account";
 import { MarketStrip } from "@/components/MarketStrip";
 import { BasisMark } from "@/components/NumberBasis";
 import { useReturnMark } from "@/components/ReturnMark";
@@ -56,6 +58,8 @@ export default function StocksScreen() {
   // 비중 보기 (새 기능): 서버가 켤 때만 계좌 평가 패널에 '비중' 버튼
   const allocationOn = useFeature("allocationView", false);
   const openAllocation = useCallback(() => router.push("/portfolio/allocation"), []);
+  // 계정 A단계 (플래그 accounts): 주인 아닌 계정 (꺼져 있으면 늘 false — 지금 화면 그대로)
+  const { member } = useAccountView();
   // 숫자 기준 점 (3-32, 플래그 numberBasis): 켜졌을 때만 계좌 패널·띠에 점 + 토스 대조 글 (훅이므로 아래 이른 return 보다 위)
   const basisOn = useFeature("numberBasis", false);
   // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
@@ -287,8 +291,10 @@ export default function StocksScreen() {
 
   // 넓은 한 줄 계좌 띠에 국내·해외 수익률까지 넣는 폭인지 (좁은 한 줄 띠는 숫자 기준 점만 — 글 없음)
   const rates = bandRates(tableW, fontScale);
+  // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음)
   const header = wide ? (
     <View>
+      <MemberNotice />
       {summary.held > 0 && heldPlan ? (
         <AccountBand
           data={account}
@@ -304,6 +310,7 @@ export default function StocksScreen() {
   ) : (
     <View>
       <MarketStrip {...(dense ? { dense: true } : null)} />
+      <MemberNotice />
       {summary.held > 0 ? (
         <AccountPanel
           data={account}
@@ -365,7 +372,18 @@ export default function StocksScreen() {
   const tableHeader = (section: (typeof sections)[number]) => (
     <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={sortLabel} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
   );
-  const empty = ux.emptyGuide ? (
+  // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목 검색' 대신 차분한 안내 + [시장·종목 둘러보기] (발견 탭 — 검증 4차)
+  const empty = member ? (
+    <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
+      <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">
+        {MEMBER_EMPTY_HOLDINGS.title}
+      </Text>
+      <Text style={{ color: t.muted, fontSize: font.small }}>{MEMBER_EMPTY_HOLDINGS.hint}</Text>
+      <View style={{ flexDirection: "row", marginTop: space.sm, width: "100%", maxWidth: layout.readableMax, alignSelf: "center" }}>
+        <Button title={MEMBER_EMPTY_HOLDINGS.action} icon="compass-outline" variant="secondary" onPress={() => router.navigate("/discover")} style={{ flex: 1 }} />
+      </View>
+    </View>
+  ) : ux.emptyGuide ? (
     // 3-24 빈 화면 (플래그 emptyGuide): 무엇을 하면 되는지 한 문단 + 행동 버튼 하나 (토스 계좌는 설정의 칸 이름으로 알려 준다)
     <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
       <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">

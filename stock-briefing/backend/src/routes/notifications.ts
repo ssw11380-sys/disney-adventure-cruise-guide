@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sessionOf } from "../auth/routePolicy.js";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import { notificationSettingsPatch, timeToCron, type NotificationSettingsStore } from "../notifications/settings.js";
 import type { BriefingScheduler } from "../scheduler.js";
@@ -31,7 +32,8 @@ export const deviceRoutes: FastifyPluginAsync<NotificationRouteDeps> = async (ap
   app.get("/", async () => devices.list());
   app.post("/", async (req, reply) => {
     const body = registerBody.parse(req.body);
-    const d = await devices.register({ token: body.token, platform: body.platform, deviceName: body.deviceName ?? null });
+    // 로그인 세션에 묶는다 (계정 A단계 — 그 세션을 끊으면 이 등록도 지운다). 플래그가 꺼져 있으면 null
+    const d = await devices.register({ token: body.token, platform: body.platform, deviceName: body.deviceName ?? null, sessionId: sessionOf(req)?.session.id ?? null });
     return reply.code(201).send(d);
   });
   app.delete("/:token", async (req, reply) => {

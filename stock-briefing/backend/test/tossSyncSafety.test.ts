@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, migrate } from "../src/db/index.js";
+import { MIGRATION_VERSIONS } from "../src/db/migrate.js";
 import type { Database } from "../src/db/schema.js";
 import { TossOpenApiProvider, type TossHolding } from "../src/providers/market/tossOpenApi.js";
 import { StockService } from "../src/services/stockService.js";
@@ -486,7 +487,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5]);
     await migrate(db, "postgres");
     // 6 뒤에 시장 요약 표(7)·매매 기록 표(8, 3-36)·지표 점수 기록 표(9, 3-44)가 더해졌다 — 새 표만 만들고 기존 표는 건드리지 않는다
-    expect(inserted).toEqual([6, 7, 8, 9, 10, 11]);
+    expect(inserted).toEqual([6, 7, 8, 9, 10, 11, 12, 13]);
     expect(sqls.some((s) => /create table.*"?account_briefings"?/i.test(s))).toBe(false); // 5 는 다시 돌지 않는다
     expect(sqls.some((s) => /create table.*"?market_summaries"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create table.*"?account_snapshots"?/i.test(s))).toBe(true);
@@ -500,14 +501,14 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     // 새 Postgres DB 는 1~9 를 한 번씩 기록한다
     const fresh = recordingPostgres();
     await migrate(fresh.db, "postgres");
-    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(fresh.inserted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
     await fresh.db.destroy();
   });
 
   it("새 SQLite DB 는 버전 1~9 를 한 번씩 기록하고, 5 까지 올라간 DB 도 6 만 더해 깨끗이 올라간다", async () => {
     const db = await createMigratedDb(":memory:");
     try {
-      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
       // 버전 5 까지만 올라간 운영 DB 흉내: 계좌 브리핑·보유 종목이 이미 있다
       await sql`delete from schema_version where version = 6`.execute(db);
       await db
@@ -520,7 +521,7 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
         .execute();
       await migrate(db, "sqlite");
       await migrate(db, "sqlite"); // 두 번 돌아도 안전
-      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(await versionsOf(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
       expect(await db.selectFrom("account_briefings").select(["briefing_date", "session"]).execute()).toEqual([{ briefing_date: "2026-09-24", session: "morning" }]);
       expect(await db.selectFrom("registered_stocks").select(["quantity", "avg_price"]).where("code", "=", "VRT").executeTakeFirst()).toEqual({ quantity: 16.123456, avg_price: 201234.57 });
     } finally {
@@ -531,24 +532,85 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
   it("가격 알림 조건 표(10, 3-29)는 새 표만 만들고, 값은 Postgres 에서 double precision · (종목·종류·값) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([10, 11]);
+    expect(inserted).toEqual([10, 11, 12, 13]);
     const create = sqls.find((s) => /create table.*"?price_alerts"?/i.test(s));
     expect(create).toMatch(/"?value"?\s+double precision/i);
     expect(create).toMatch(/"?fired_value"?\s+double precision/i);
     expect(sqls.some((s) => /create unique index if not exists uq_price_alerts_rule on price_alerts \(code, kind, value\)/i.test(s))).toBe(true);
-    expect(sqls.some((s) => /alter table/i.test(s))).toBe(false);
+    // 기존 표를 바꾸는 것은 13(푸시 기기 등록에 비어 있을 수 있는 세션 칸 하나)뿐
+    expect(sqls.filter((s) => /alter table/i.test(s))).toEqual([expect.stringMatching(/alter table "?devices"? add column "?session_id"? integer/i)]);
     await db.destroy();
   });
 
   it("가치 지표 표(11, 3-44 2단계)는 새 표 두 개만 만들고(재무 · 비교 기준), 종목·(시장·기준일) 유일 색인", async () => {
     const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     await migrate(db, "postgres");
-    expect(inserted).toEqual([11]);
+    expect(inserted).toEqual([11, 12, 13]); // 11 뒤에 계정 표(12)·기기 세션 칸(13)
     expect(sqls.some((s) => /create table.*"?value_fundamentals"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create table.*"?value_references"?/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create unique index if not exists uq_value_fundamentals_code on value_fundamentals \(code\)/i.test(s))).toBe(true);
     expect(sqls.some((s) => /create unique index if not exists uq_value_references_market_date on value_references \(market, ref_date\)/i.test(s))).toBe(true);
-    expect(sqls.some((s) => /alter table/i.test(s))).toBe(false);
+    // 기존 표를 바꾸는 것은 13(푸시 기기 등록에 비어 있을 수 있는 세션 칸 하나)뿐
+    expect(sqls.filter((s) => /alter table/i.test(s))).toEqual([expect.stringMatching(/alter table "?devices"? add column "?session_id"? integer/i)]);
     await db.destroy();
+  });
+
+  it("계정 표(12, 로그인·회원가입)는 새 표만 만들고: 아이디 비교 키·이메일·주인 한 명(부분 색인)·세션 토큰 해시 유일", async () => {
+    const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    await migrate(db, "postgres");
+    expect(inserted).toEqual([12, 13]);
+    expect(sqls.find((s) => /create table.*"?users"?/i.test(s))).toMatch(/"?id"?\s+integer[^,]*generated always as identity/i);
+    expect(sqls.find((s) => /create table.*"?sessions"?/i.test(s))).toMatch(/references "?users"? \("?id"?\) on delete cascade/i);
+    for (const re of [/uq_users_login_id_key on users \(login_id_key\)/, /uq_users_email on users \(email\)/, /uq_users_owner on users \(is_owner\) where is_owner = 1/, /uq_sessions_token_hash on sessions \(token_hash\)/]) {
+      expect(sqls.some((s) => re.test(s)), String(re)).toBe(true);
+    }
+    expect(sqls.filter((s) => /alter table|drop /i.test(s))).toEqual([expect.stringMatching(/alter table "?devices"? add column "?session_id"? integer/i)]);
+    await db.destroy();
+  });
+
+  it("푸시 기기 세션 칸(13, 계정 보안 보강)은 비어 있을 수 있는 칸 하나와 색인만 — 기존 행·다른 표는 그대로 (칸이 이미 있는지 먼저 본다 — 검증 5차)", async () => {
+    const { db, sqls, inserted } = recordingPostgres([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    await migrate(db, "postgres");
+    expect(inserted).toEqual([13]);
+    expect(sqls.filter((s) => !/schema_version/i.test(s))).toEqual([
+      expect.stringMatching(/from information_schema\.columns where table_schema = current_schema\(\) and table_name = \$1 and column_name = \$2/i),
+      expect.stringMatching(/alter table "?devices"? add column "?session_id"? integer/i),
+      expect.stringMatching(/create index if not exists idx_devices_session on devices \(session_id\)/i),
+    ]);
+    await db.destroy();
+  });
+
+  it("마이그레이션 번호는 1 부터 빈 곳·겹침 없이 하나씩 — 두 브랜치가 같은 번호를 쓰면 이미 그 번호까지 올라간 운영 DB 가 뒤의 표를 건너뛴다", () => {
+    expect(MIGRATION_VERSIONS).toEqual(MIGRATION_VERSIONS.map((_, i) => i + 1));
+    // main 의 11(가치 지표, #90) 다음이 계정 표(12)·기기 세션 칸(13)
+    expect(MIGRATION_VERSIONS.slice(-3)).toEqual([11, 12, 13]);
+  });
+  it("SQLite: 13 전에 등록한 기기 행은 세션 칸이 비어(NULL) 예전처럼 알림을 받는다", async () => {
+    const db = await createMigratedDb(":memory:");
+    try {
+      await sql`delete from schema_version where version = 13`.execute(db);
+      await sql`drop index if exists idx_devices_session`.execute(db);
+      await sql`alter table devices drop column session_id`.execute(db);
+      await db.insertInto("devices").values({ token: "ExponentPushToken[old]", platform: "android", device_name: null, enabled: 1, disabled_reason: null, created_at: "x", last_seen_at: "x" }).execute();
+      await migrate(db, "sqlite");
+      expect(await db.selectFrom("devices").select(["token", "session_id"]).execute()).toEqual([{ token: "ExponentPushToken[old]", session_id: null }]);
+    } finally {
+      await db.destroy();
+    }
+  });
+  it("SQLite: 13 이 칸만 더하고 멈췄어도(색인·번호 적기 전) 다음 기동에 다시 돌아 끝난다 — '칸이 이미 있음'으로 서버가 못 뜨지 않게 (검증 5차)", async () => {
+    const db = await createMigratedDb(":memory:");
+    try {
+      await sql`delete from schema_version where version = 13`.execute(db);
+      await sql`drop index if exists idx_devices_session`.execute(db);
+      await migrate(db, "sqlite");
+      await migrate(db, "sqlite");
+      const versions = await sql<{ version: number }>`select version from schema_version order by version`.execute(db);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual(MIGRATION_VERSIONS);
+      const idx = await sql<{ name: string }>`select name from sqlite_master where type = 'index' and name = 'idx_devices_session'`.execute(db);
+      expect(idx.rows).toHaveLength(1);
+    } finally {
+      await db.destroy();
+    }
   });
 });

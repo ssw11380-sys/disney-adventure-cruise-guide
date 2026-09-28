@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   twoPane: false,
   restoring: false,
   ready: true,
+  /** 계정 A단계: _layout 이 넘기는 로그인 상태 (null 이면 넘기지 않음 — 로그인 없는 앱) */
+  auth: null as { ready: boolean; needsLogin: boolean; member: boolean } | null,
 }));
 
 /** 설정의 서버 주소 (플래그 캐시 키) */
@@ -78,7 +80,9 @@ async function boot(opts: { flags?: Record<string, boolean> } = {}) {
     h.invalidated.push(filters?.queryKey);
     return invalidate(filters as never);
   }) as typeof client.invalidateQueries;
-  return render(R.createElement(QueryClientProvider, { client }, R.createElement(NotificationBridge)));
+  // 로그인 상태는 그릴 때마다 h.auth 에서 (rerender 로 로그인·로그아웃을 흉내 낸다)
+  const Bridge = () => R.createElement(NotificationBridge, { auth: h.auth ? { ...h.auth } : undefined });
+  return render(R.createElement(QueryClientProvider, { client }, R.createElement(Bridge)));
 }
 const moves = () => h.push.mock.calls.length + h.navigate.mock.calls.length + h.dismissTo.mock.calls.length;
 const settle = () => new Promise((r) => setTimeout(r, 120));
@@ -93,6 +97,7 @@ beforeEach(() => {
   h.twoPane = false;
   h.restoring = false;
   h.ready = true;
+  h.auth = null;
   for (const f of [h.push, h.navigate, h.dismissTo]) f.mockReset();
 });
 
@@ -438,5 +443,137 @@ describe("브리핑 3차 1 notifBack: 브리핑 알림을 누르면 대상, '뒤
     await boot({ flags: ON });
     await settle();
     expect(moves()).toBe(2);
+  });
+});
+
+/**
+ * 계정 A단계 + 브리핑 3차 1: 알림을 누른 때 로그인 상태에 따라.
+ *  - 로그인 화면(세션 없음): 움직이지 않고 스플래시를 놓는다(로그인 화면이 보이게) → 로그인하면 그 브리핑으로
+ *  - 주인 아닌 계정: 주인의 브리핑·계좌 브리핑 상세를 열지 않고 브리핑 탭으로만 (탭 맨 위 차분한 안내 — 서버도 상세를 403 으로 막는다)
+ */
+describe("계정 A단계: 로그인 전·주인 아닌 계정의 알림 이동", () => {
+  const ON = { notifBack: true };
+  const ACCOUNT = { type: "briefing", digest: true, session: "morning", date: "2026-09-28", count: 17, accountBriefingId: 5, briefingId: 42, code: "NVDA", marketSummaryId: 900 };
+  const STOCK = { type: "briefing", briefingId: 42, code: "NVDA", session: "morning", date: "2026-09-28" };
+  const PRICE = { type: "priceAlert", code: "005930" };
+  const LOGGED_OUT = { ready: true, needsLogin: true, member: false };
+  const OWNER = { ready: true, needsLogin: false, member: false };
+  const MEMBER = { ready: true, needsLogin: false, member: true };
+
+  it("로그인 화면에서 누르면 움직이지 않고 스플래시를 놓는다 → 주인으로 로그인하면 브리핑 탭 → 그 계좌 브리핑 상세", async () => {
+    h.auth = LOGGED_OUT;
+    h.restoring = true;
+    h.response = tap("login-1", ACCOUNT);
+    const r = await boot({ flags: ON });
+    const bridge = await import("@/components/NotificationBridge");
+    expect(bridge.splashHeld()).toBe(true);
+    h.restoring = false;
+    r.rerender();
+    await settle();
+    expect(moves()).toBe(0);
+    // 로그인 화면이 스플래시 뒤에 묶이지 않는다
+    expect(bridge.splashHeld()).toBe(false);
+    // 로그인 (로그인 화면이 앱 화면으로 바뀐 뒤 옮겨 간다)
+    h.auth = OWNER;
+    r.rerender();
+    await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/account/5"));
+    expect(h.navigate).toHaveBeenCalledWith("/briefings");
+    expect(moves()).toBe(2);
+    // 다시 그려도 두 번 가지 않는다
+    r.rerender();
+    await settle();
+    await settle();
+    expect(moves()).toBe(2);
+  });
+
+  it("플래그를 몰라도(지금 그대로 이동) 로그인 뒤 그 브리핑 상세로", async () => {
+    h.auth = LOGGED_OUT;
+    h.response = tap("login-2", STOCK);
+    const r = await boot();
+    await settle();
+    expect(moves()).toBe(0);
+    h.auth = OWNER;
+    r.rerender();
+    await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/42"));
+    expect(moves()).toBe(1);
+  });
+
+  it("로그인 화면에서 누르고 주인 아닌 계정으로 로그인하면 브리핑 탭만 (상세·2단 고르기 없음)", async () => {
+    h.twoPane = true;
+    h.auth = LOGGED_OUT;
+    h.response = tap("login-3", ACCOUNT);
+    const r = await boot({ flags: ON });
+    await settle();
+    expect(moves()).toBe(0);
+    h.auth = MEMBER;
+    r.rerender();
+    await vi.waitFor(() => expect(h.navigate).toHaveBeenCalledWith("/briefings"));
+    await settle();
+    expect(h.push).not.toHaveBeenCalled();
+    expect(moves()).toBe(1);
+    const pick = await import("@/lib/briefingPick");
+    expect(pick.currentPick().pick).toBeNull();
+  });
+
+  it("주인 아닌 계정으로 로그인한 채 누른 브리핑 알림(종목·계좌·묶음): 브리핑 탭만 — 종목 상세 위면 닫고 탭으로", async () => {
+    h.auth = MEMBER;
+    h.canDismiss = true;
+    h.path = "/stocks/005930";
+    h.response = tap("member-1", STOCK);
+    const r = await boot({ flags: ON });
+    await vi.waitFor(() => expect(h.dismissTo).toHaveBeenCalledWith("/briefings"));
+    await settle();
+    expect(h.push).not.toHaveBeenCalled();
+    h.canDismiss = false;
+    h.path = "/";
+    h.response = tap("member-2", ACCOUNT);
+    r.rerender();
+    await vi.waitFor(() => expect(h.navigate).toHaveBeenCalledWith("/briefings"));
+    await settle();
+    expect(h.push).not.toHaveBeenCalled();
+    // 플래그가 꺼져 있어도(예전 이동) 상세를 열지 않는다
+    h.response = tap("member-3", ACCOUNT);
+    await boot();
+    await vi.waitFor(() => expect(h.navigate).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(h.push).not.toHaveBeenCalled();
+  });
+
+  it("주인 아닌 계정의 가격 알림은 종목 상세 그대로 (공유 정보)", async () => {
+    h.auth = MEMBER;
+    h.response = tap("member-price", PRICE);
+    await boot({ flags: ON });
+    await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/stocks/005930"));
+    expect(moves()).toBe(1);
+  });
+
+  it("세션을 아직 읽지 못했으면 기다렸다가, 세션이 있으면 바로 그 브리핑", async () => {
+    h.auth = { ready: false, needsLogin: false, member: false };
+    h.response = tap("login-wait", STOCK);
+    const r = await boot({ flags: ON });
+    await settle();
+    expect(moves()).toBe(0);
+    h.auth = OWNER;
+    r.rerender();
+    await vi.waitFor(() => expect(h.push).toHaveBeenCalledWith("/briefings/42"));
+  });
+
+  it("로그인을 10분 넘게 미루면 로그인해도 옮겨 가지 않는다 (한참 뒤 화면이 갑자기 바뀌지 않게)", async () => {
+    h.auth = LOGGED_OUT;
+    h.response = tap("login-late", STOCK);
+    const r = await boot({ flags: ON });
+    await settle();
+    const { LOGIN_WAIT_MAX_MS } = await import("@/components/NotificationBridge");
+    const now = Date.now();
+    const spy = vi.spyOn(Date, "now").mockReturnValue(now + LOGIN_WAIT_MAX_MS + 1_000);
+    try {
+      h.auth = OWNER;
+      r.rerender();
+      await settle();
+      await settle();
+      expect(moves()).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

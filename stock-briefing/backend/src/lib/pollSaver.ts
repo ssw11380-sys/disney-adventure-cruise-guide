@@ -107,7 +107,7 @@ export function deltaBody(baseEtag: string, baseBody: string, etag: string, body
  */
 export function registerPollSaver(
   app: FastifyInstance,
-  o: { enabled: () => Promise<boolean>; now?: () => number; routes?: ReadonlySet<string> },
+  o: { enabled: () => Promise<boolean>; now?: () => number; routes?: ReadonlySet<string>; scope?: (req: FastifyRequest) => string },
 ): { ring: BodyRing; stats: PollSaverStats } {
   const ring = new BodyRing(o.now);
   const stats: PollSaverStats = { full: 0, notModified: 0, delta: 0, gzip: 0 };
@@ -122,8 +122,11 @@ export function registerPollSaver(
     addVary(reply, "accept-encoding");
     // 브라우저(웹 미리보기)가 다른 출처의 ETag 를 읽을 수 있게
     if (req.headers.origin) reply.header("access-control-expose-headers", "etag");
+    // 옛 본문 기억은 보는 사람마다 나눈다 (계정 A단계 — scope 가 없거나 빈 값이면 예전과 같은 키)
+    const who = o.scope?.(req) ?? "";
+    const ringKey = (tag: string) => (who ? `${who}|${tag}` : tag);
     // 304 로 답해도 기억해 둔다 — 서버를 다시 켠 뒤에도 다음 변화부터 차이만 보낼 수 있게
-    ring.put(etag, payload);
+    ring.put(ringKey(etag), payload);
     const inm = inmTags(req.headers["if-none-match"]);
     if (inm.includes(etag)) {
       stats.notModified++;
@@ -135,7 +138,7 @@ export function registerPollSaver(
       .some((x) => x.trim().toLowerCase() === DELTA_IM);
     if (wantsDelta) {
       for (const base of inm) {
-        const baseBody = ring.get(base);
+        const baseBody = ring.get(ringKey(base));
         const d = baseBody ? deltaBody(base, baseBody, etag, payload) : null;
         if (!d) continue;
         stats.delta++;

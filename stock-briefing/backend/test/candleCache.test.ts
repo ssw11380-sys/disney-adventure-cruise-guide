@@ -128,4 +128,32 @@ describe("차트 봉 캐시 (3-18)", () => {
     await expect(c.get("NVDA", "D", 310, { maxAgeMs: 60_000 })).rejects.toThrow("봉을 새로 받지 못함");
     expect((await c.get("NVDA", "D", 310)).candles[0]!.close).toBe(before + 1); // 차트는 예전처럼 받아 둔 값
   });
+
+  it("shared (계정 A단계 검증 7차 — 주인 아닌 계정): 새 값 시간 안의 봉만 캐시에서, 지나면 기다려 새로 받고 실패하면 처음 보는 종목과 같은 오류. 받아 둔 개수는 줄이지 않는다", async () => {
+    const asked: number[] = [];
+    let fail = false;
+    let t = 0;
+    const c = new CandleCache(async (code, p, n) => {
+      asked.push(n);
+      if (fail) throw new Error(`down ${code}`);
+      return series(code, p, n, asked.length);
+    }, () => t);
+    await c.get("A", "D", 800); // 주인 차트 (서버가 켤 때 미리 받기와 같은 개수)
+    t += 30_000;
+    expect((await c.get("A", "D", 120, { shared: true })).candles).toHaveLength(120); // 60초 안: 받아 둔 것
+    expect(asked).toEqual([800]);
+    t += 60_000; // 90초 — 주인에게는 옛 값을 바로 주는 나이(정규장 10분·장 밖 12시간 안)
+    const seen = await c.get("A", "D", 120, { shared: true });
+    expect(seen.candles.at(-1)!.close).toBe(799 + 2); // 기다려 새 값
+    expect(asked).toEqual([800, 800]); // 800개를 그대로 다시 받음 (주인 차트가 다시 받지 않게)
+    expect((await c.get("A", "D", 800)).candles).toHaveLength(800);
+    expect(asked).toHaveLength(2);
+    // 새로 받기 실패: 받아 둔 봉이 있어도 처음 보는 종목(B)과 같은 오류
+    fail = true;
+    t += 120_000;
+    await expect(c.get("A", "D", 120, { shared: true })).rejects.toThrow("down A");
+    await expect(c.get("B", "D", 120, { shared: true })).rejects.toThrow("down B");
+    // 주인 차트는 예전처럼 받아 둔 값
+    expect((await c.get("A", "D", 120)).candles.at(-1)!.close).toBe(799 + 2);
+  });
 });

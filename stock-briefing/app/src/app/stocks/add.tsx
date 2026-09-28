@@ -9,6 +9,7 @@ import { Screen } from "@/components/Screen";
 import { LineHead, LineMark, StockLine } from "@/components/StockLine";
 import { Button, Card, ConnectionLine, Muted } from "@/components/ui";
 import { formatPct, formatQuote, isUsMarket } from "@/lib/format";
+import { useAccountView } from "@/lib/account";
 import { holdingInput, NO_AVG_NOTE } from "@/lib/holdingForm";
 import { useRecentSearches, type RecentStock } from "@/lib/recentSearch";
 import { useSettingsGuide } from "@/lib/settingsLink";
@@ -31,6 +32,10 @@ export default function AddStockScreen() {
   const { register } = useStockMutations();
   // 3-24 (emptyGuide — 빈 잔고의 '종목 검색'이 여는 화면): 검색이 서버 연결 오류로 실패하면 칸 이름 문구 + '설정 열기'. 꺼져 있으면 null → 지금 글 그대로
   const guideProps = useSettingsGuide();
+  // 계정 A단계: 주인 아닌 계정은 종목을 등록할 수 없다(서버가 막는다) → '등록' 칸 없이 검색·상세 보기만
+  const { member } = useAccountView();
+  const canRegister = !member;
+  const registerHead = canRegister ? "등록" : "";
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(q), 150);
@@ -170,10 +175,10 @@ export default function AddStockScreen() {
                   </Pressable>
                 </View>
                 {/* 최근 검색은 시세를 들고 있지 않다 → 가격 칸을 비운다 */}
-                <LineHead price="" right="등록" />
+                <LineHead price="" right={registerHead} />
               </>
             }
-            renderItem={({ item }) => <ResultRow item={item} recent registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => select({ ...item, isinCode: null, groupCode: null })} />}
+            renderItem={({ item }) => <ResultRow item={item} recent registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={canRegister ? () => select({ ...item, isinCode: null, groupCode: null }) : null} />}
           />
         ) : (
           <Muted style={{ paddingHorizontal: space.lg }}>한국·미국 종목을 한글 이름(테슬라, 애플), 티커(TSLA, AAPL), 6자리 코드로 검색합니다. 토스증권 검색을 쓰므로 토스에서 보이는 이름 그대로 치면 됩니다.</Muted>
@@ -192,7 +197,7 @@ export default function AddStockScreen() {
           style={{ opacity: search.previous ? 0.55 : 1 }}
           keyExtractor={(s) => s.code}
           keyboardShouldPersistTaps="handled"
-          ListHeaderComponent={(search.data?.results.length ?? 0) > 0 ? <LineHead right="등록" /> : null}
+          ListHeaderComponent={(search.data?.results.length ?? 0) > 0 ? <LineHead right={registerHead} /> : null}
           // 결과가 아직 없을 때만 안내 (입력이 바뀌는 동안은 이전 결과를 그대로 둔다 — 스피너·깜빡임 없음)
           ListEmptyComponent={pending ? null : search.error ? <Text style={{ color: t.danger, paddingHorizontal: space.lg }}>토스 검색에 실패했고 앱의 종목 목록에도 없습니다. 잠시 뒤 다시 검색해 보세요.</Text> : <Muted style={{ paddingHorizontal: space.lg }}>검색 결과가 없습니다.</Muted>}
           ListFooterComponent={
@@ -202,7 +207,7 @@ export default function AddStockScreen() {
               <Muted style={{ fontSize: font.tiny, paddingTop: space.xs, paddingHorizontal: space.lg }}>토스 검색 실패 — 앱의 종목 목록에서 찾은 결과만 보여 줍니다</Muted>
             ) : null
           }
-          renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={() => select(item)} />}
+          renderItem={({ item }) => <ResultRow item={item} registered={registered.has(item.code)} onOpen={() => open(item)} onRegister={canRegister ? () => select(item) : null} />}
         />
       )}
     </Screen>
@@ -210,7 +215,7 @@ export default function AddStockScreen() {
 }
 
 /** 검색 결과 한 줄 (공용 StockLine): 누르면 상세, 오른쪽 열은 등록됨 표시 또는 "등록" 버튼 */
-function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { item: RecentStock & Partial<ListedStock>; registered: boolean; onOpen: () => void; onRegister: () => void; recent?: boolean }) {
+function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { item: RecentStock & Partial<ListedStock>; registered: boolean; onOpen: () => void; onRegister: (() => void) | null; recent?: boolean }) {
   const t = useTheme();
   const us = isUsMarket(item.market);
   const c = changeColor(t, item.changeRate ?? null);
@@ -225,7 +230,7 @@ function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { i
       right={
         registered ? (
           <LineMark label="등록됨" color={t.accent} />
-        ) : (
+        ) : !onRegister ? null : (
           <Pressable onPress={onRegister} hitSlop={slopFor(ADD_BTN_H, space.xs)} accessibilityRole="button" accessibilityLabel={`${item.name} 등록`} style={[styles.addBtn, { borderColor: t.line }]}>
             <Ionicons name="add" size={font.body} color={t.ink} />
             <Text style={{ color: t.ink, fontSize: font.tiny, fontWeight: "600" }}>등록</Text>
@@ -235,9 +240,9 @@ function ResultRow({ item, registered, onOpen, onRegister, recent = false }: { i
       onPress={onOpen}
       accessibilityLabel={`${item.name}, ${item.code}${registered ? ", 등록됨" : ""}. 누르면 상세 보기`}
       // 화면 읽기 프로그램에서도 줄 안의 "등록" 버튼을 쓸 수 있게
-      accessibilityActions={registered ? undefined : [{ name: "register", label: "등록" }]}
+      accessibilityActions={registered || !onRegister ? undefined : [{ name: "register", label: "등록" }]}
       onAccessibilityAction={(name) => {
-        if (name === "register") onRegister();
+        if (name === "register") onRegister?.();
       }}
     />
   );

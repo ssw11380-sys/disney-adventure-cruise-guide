@@ -9,8 +9,8 @@ import { loadMarketSummaries } from "@/lib/marketSummaryLoad";
 import { INIT_KEY, initialized, saveSeen, SEEN_KEY, seenIds, withSeen } from "@/lib/briefingSeen";
 import { ANDROID_CHANNEL, ensureAndroidChannel } from "@/lib/notifications";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
-import { loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
-import { failureText } from "@/widgets/model";
+import { lastWidgetState, loadAccountBriefings, loadLatestBriefings, loadNotifyPrefs, loadWidgetData, pendingRetry, readCachedPayload, type WidgetData } from "@/widgets/data";
+import { failureText, quietState } from "@/widgets/model";
 import { payloadMarket, shouldSkipFetch } from "@/widgets/payload";
 import { redrawAllWidgets } from "@/widgets/redraw";
 import { marketWidgetPlaced, refreshWidgets } from "@/widgets/refresh";
@@ -46,6 +46,14 @@ const ACCOUNTS_FAIL_KEY = "notify.accountsFail";
  */
 const BG_FAIL_KEY = "widget.bgFail";
 export const BG_FAIL_REDRAW = 2;
+
+/**
+ * 조용한 상태(로그인 필요·준비 중)로 바뀌었는지 (검증 6차): 마지막으로 그린 것이 없거나(지워짐 — 무엇이 그려져 있는지 모름), 개인 데이터(잔고·브리핑)가
+ * 있었거나, 다른 안내·오류였으면 true. 같은 조용한 안내가 이미 그려져 있으면 false (15분마다 다시 그리지 않게)
+ */
+export function quietChanged(before: { error: string | null; stocks: number; briefings: number } | null, now: Pick<WidgetData, "error">): boolean {
+  return !before || before.stocks > 0 || before.briefings > 0 || before.error !== now.error;
+}
 
 /** 실패 한 번 더: 연달아 BG_FAIL_REDRAW 번 이상이면 받은 값(마지막 숫자 + 오류)으로 위젯을 다시 그린다 */
 async function noteWidgetFailure(data: WidgetData): Promise<void> {
@@ -157,8 +165,21 @@ export async function runBriefingCheck(): Promise<BackgroundTask.BackgroundTaskR
       return BackgroundTask.BackgroundTaskResult.Success;
     }
     const local = (await AsyncStorage.getItem(LOCAL_MODE_KEY).catch(() => null)) === "1";
+    // 조회 전에 마지막으로 그린 상태를 읽어 둔다 (조회가 '로그인 필요'면 적어 둔 것을 지우고 새로 적으므로)
+    const before = await lastWidgetState();
     // 지수·환율 위젯이 홈 화면에 있을 때만 판 9개를 함께 묻는다 (같은 요청 한 번, 없으면 응답이 예전과 같다)
     const data = await loadWidgetData({ stocks: true, briefings: true, board: await marketWidgetPlaced() });
+    if (quietState(data.error)) {
+      // 로그인 필요(자동 로그인 끔·로그인 전·세션 끊김)·주인 아닌 계정: 실패가 아니다 — 실패로 세지 않는다 (검증 5차). 개인 데이터가 없으니 알림도 없다.
+      // 다만 **조용한 상태로 바뀐 순간**에는 위젯 4종을 한 번 다시 그린다 (검증 6차): 이 작업은 앱과 다른 JS 에서 돌아 앱 루트의 onAccountChange
+      // (지우고 다시 그리기)가 없다. 다른 기기에서 '모든 기기에서 로그아웃'·비밀번호 변경·OWNER_RESET_PASSWORD 로 세션이 끝난 것을 이 작업이 처음
+      // 알게 되면, 적어 둔 개인 데이터는 지웠어도 홈 화면에 이미 그려진 잔고·자산 위젯(수량·손익)이 각 위젯의 주기 갱신(30분)까지 남았다.
+      // 같은 안내가 이미 그려져 있으면 다시 그리지 않고, 주인 아닌 계정의 지수·환율 판을 새로 받았으면 그 판을 그린다
+      if (quietChanged(before, data) || data.boardFresh === true) await redrawAllWidgets(data);
+      await AsyncStorage.removeItem(BG_FAIL_KEY).catch(() => undefined);
+      await logWidgetRefresh("background", "skipped");
+      return BackgroundTask.BackgroundTaskResult.Success;
+    }
     if (data.error) {
       // 연달아 두 번째 실패부터는 위젯에도 보이게 (위젯이 스스로 갱신하다 실패했을 때와 같은 '갱신 실패 · …') — 위젯 리뷰 6
       await noteWidgetFailure(data);

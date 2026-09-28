@@ -669,6 +669,134 @@ export const priceAlert = {
   boundaryMaxWaitMs: 300_000,
 } as const;
 
+/**
+ * 로그인·회원가입 화면 (계정 A단계, 플래그 accounts) — 앱 테마와 상관없이 늘 이 어두운 색 (hero-spec.md 2장).
+ * 강조는 빨강(봉·빛)과 금색(글자·선·버튼) 두 가지만. 오류는 상승 빨강과 헷갈리지 않게 주황(앱 다크 danger)
+ */
+export const authColors = {
+  bgTop: "#0B1030",
+  bgMid: "#04061A",
+  bgBottom: "#030410",
+  grid: "rgba(255,255,255,0.055)",
+  baseline: "rgba(255,255,255,0.13)",
+  /** 횡보 봉 (검증 4차: 55% → 70% — 어두운 바탕에서 흐려 점처럼 보였다) */
+  sideUp: "rgba(255,75,85,0.7)",
+  sideDown: "rgba(61,142,255,0.7)",
+  limitLow: "#D8152E",
+  limitHigh: "#FF5A4E",
+  limitWick: "#E61F33",
+  limitCap: "#FFD7A1",
+  glow: "#FF2D3A",
+  /** 불기둥 (검증 4차 — 세로 빛 기둥): 양옆 붉은 빛 · 그 안쪽 따뜻한 주황 · 가운데 따뜻한 흰 심. 위로 갈수록 투명 */
+  pillarRed: "#FF4A3D",
+  pillarWarm: "#FF9E6B",
+  pillarCore: "#FFF3E4",
+  /** 가림(mask) 색 — 흰색의 불투명도만큼 보인다 (불기둥 위아래를 옅게) */
+  maskOn: "#FFFFFF",
+  goldHi: "#F7E7B4",
+  gold: "#E3B341",
+  goldLo: "#B8862B",
+  goldLine: "rgba(227,179,65,0.6)",
+  ink: "#E8EAED",
+  sub: "#B4BAC4",
+  muted: "#8A919D",
+  /**
+   * 입력 칸 바탕: 어두운 바탕 위 흰색 5% 와 같은 색을 거의 불투명하게 (두 칸 화면에서 붉은 빛이 오른쪽 입력 칸 뒤까지 번져
+   * 칸의 왼쪽 절반만 자줏빛으로 물들었다 — 검증 지적). 입력 중이면 조금 밝게
+   */
+  field: "rgba(17,19,38,0.92)",
+  fieldActive: "rgba(22,25,46,0.94)",
+  fieldLine: "rgba(255,255,255,0.10)",
+  fieldFocus: "rgba(227,179,65,0.75)",
+  /** 입력 중인 칸 바깥 3dp 테두리 (금색 옅게), 오류 칸은 주황 옅게 */
+  focusRing: "rgba(227,179,65,0.16)",
+  dangerRing: "rgba(249,115,22,0.16)",
+  danger: "#F97316",
+  primary: "#E3B341",
+  /** [로그인] 금색 버튼: 위 → 아래 세로 그러데이션, 눌림은 한 단계 어둡게 */
+  primaryTop: "#EDC75F",
+  primaryBottom: "#D9A838",
+  primaryPressedTop: "#D6AD45",
+  primaryPressedBottom: "#BF9030",
+  primaryPressed: "#CFA033",
+  primaryInk: "#111418",
+  secondaryLine: "rgba(227,179,65,0.45)",
+  secondaryPressed: "rgba(227,179,65,0.10)",
+  notice: "rgba(227,179,65,0.10)",
+  scrim: "rgba(3,4,16,0.72)",
+  sheet: "#0E1330",
+} as const;
+
+/** 로그인·회원가입 배치 (hero-spec.md 4장) — 4dp 격자 */
+export const authLayout = {
+  /** 옆 여백: 창 폭 600 미만 24, 이상 32 */
+  gutter: 24,
+  gutterWide: 32,
+  wideMin: 600,
+  /** 입력 묶음 최대 폭 */
+  formMaxW: 420,
+  /** 두 칸(왼쪽 그림 · 오른쪽 입력): 창 폭 840 이상이고 가로가 더 길 때. 오른쪽 칸 폭 */
+  twoColMin: 840,
+  rightW: 420,
+  /**
+   * 한 칸 그림 높이 = (창 높이 − 안전 영역) × 0.40, 240~380 (+ 위 안전 영역).
+   * 명세 0.42 에서 0.40 으로: 360×752 폰에서 입력 묶음·'서버 설정'·고지 문구까지 스크롤 없이 한 화면에 들어오게
+   */
+  heroRatio: 0.4,
+  heroMin: 240,
+  heroMax: 380,
+  /** 그림 칸(plot): 한 칸은 위 12dp·입력 칸과 같은 폭(왼쪽 끝이 한 줄), 두 칸은 옆 40dp */
+  plotTop: 12,
+  twoPlotInset: 40,
+  /** 그림 아래 입력 묶음까지 */
+  heroGap: 8,
+  fieldGap: 12,
+  groupGap: 16,
+  /** 칸 이름과 칸 사이 */
+  labelGap: 6,
+  fieldH: 48,
+  buttonH: 48,
+  /** 입력 칸·버튼 둥글기 */
+  radius: 12,
+  /** 입력 중인 칸 바깥 테두리 두께 */
+  focusRing: 3,
+  checkbox: 22,
+  logoLineW: 40,
+  logoLineH: 1,
+  /** 로고 글자 → 금색 선, 금색 선 → 부제 */
+  logoLineGap: 8,
+  logoSubGap: 12,
+  /** 부제 한 줄 높이 */
+  logoSubH: 16,
+  /** SVG 로고 그림 폭 = 글자 크기 × 7 (글자가 잘리지 않게 넉넉히), 실제 글자 폭 ≈ 글자 크기 × 6.3 (겹침 검사용, 웹 실측 5.6) */
+  wordmarkCanvas: 7,
+  wordmarkInk: 6.3,
+  /** 회원가입 글자 머리 위 여백 (안전 영역 아래) */
+  headerTop: 32,
+  /**
+   * 회원가입 머리 오른쪽 작은 정지 계단 (상한가 봉 6개): 높이 = 로고 글자 칸 높이 × 2.4 (30sp 94 · 34sp 106), 폭 = 높이 × 0.9,
+   * 맨 아래를 로고 글자 바탕선에 맞춘다. 빛이 번지는 거리 = 높이 × 0.4
+   */
+  miniStairsH: 2.4,
+  miniStairsW: 0.9,
+  miniStairsGlow: 0.4,
+} as const;
+
+/** 로그인·회원가입 글자 크기 (hero-spec.md 3장) */
+export const authFont = {
+  logo: 30,
+  logoWide: 34,
+  title: 20,
+  input: 16,
+  button: 16,
+  label: 12,
+  /** 자동 로그인 글자, 회원가입 머리 아래 한 줄 */
+  check: 14,
+  link: 13,
+  sub: 12,
+  tiny: 11,
+} as const;
+
 /** 토스 앱 안내 시트 (3-48, 기능 플래그 tossOpen). 단위 dp */
 export const tossSheet = {
   /** 시트 최대 폭 (펼친 화면은 가운데 — 가격 알림 시트와 같은 폭) */

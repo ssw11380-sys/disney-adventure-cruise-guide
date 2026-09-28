@@ -104,18 +104,31 @@ export function dailyRunDue(market: ScoreMarket, now: Date): boolean {
 export interface ScoreStock {
   code: string;
   name: string;
-  /** registered_stocks.market (KOSPI · KOSDAQ · NASDAQ · NYSE · AMEX · US …) */
+  /** 시장 (KOSPI · KOSDAQ · NASDAQ · NYSE · AMEX · US …) */
   market: string;
   /** 종목 마스터 분류 (EF = ETF, EN = ETN) */
   groupCode?: string | null;
   /** 등록 종목인지 (false = 발견 탭 등에서 연 미등록 종목 — 계산은 하되 하루 기록은 남기지 않음). 모르면 등록 종목으로 본다 */
   registered?: boolean;
+  /**
+   * 이름·시장이 공개 값(종목 마스터·검색)인지. false = 공개 값으로 찾지 못해 **주인 등록 표**의 이름·시장 (계정 A단계 검증 8차 —
+   * 그 값으로 계산한 결과는 주인 아닌 계정에게 주지 않고, 기초자산이면 모르는 종목처럼 코드로만). 모르면 공개 값으로 본다
+   */
+  public?: boolean;
 }
 
 /** 점수에 필요한 자료 (app.ts 가 실제 출처로 채운다, 테스트는 기록한 일봉으로) */
 export interface ScoreSources {
-  /** 등록 종목 또는 종목 마스터·검색의 이름·시장. 모르는 코드면 null */
+  /**
+   * 이름·시장·분류. **공개 값(종목 마스터·검색)이 먼저** — 계산 캐시는 모든 계정이 같이 쓰므로 등록 표의 이름·시장(토스 동기화 이름 등)으로
+   * 계산하면 이름·상품 분류·비교 지수로 주인 등록 종목이 드러난다 (검증 8차). 공개 값이 없을 때만 등록 표 (public false). 모르는 코드면 null
+   */
   stock(code: string): Promise<ScoreStock | null>;
+  /**
+   * 등록 표를 보지 않는 이름 (종목 마스터·검색 — 종목 상세 미리 보기와 같음). 주인 아닌 계정에게 보이는 이름 (계정 A단계, #95 합친 뒤).
+   * 모르는 코드면 null. 없으면(테스트 출처) stock 의 이름
+   */
+  publicStock?(code: string): Promise<{ name: string } | null>;
   /** 일봉 (오래된 → 최신). 출처 이름은 series.source. fresh = 장 마감 뒤 미리 계산 — 차트 캐시에 1분 넘게 묵은 봉을 쓰지 않고 새로 받는다 */
   candles(code: string, count: number, opts?: { fresh?: boolean }): Promise<CandleSeries>;
   /** 비교 지수 일봉 (네이버) */
@@ -217,8 +230,20 @@ const marketOf = (code: string): ScoreMarket => (isKrCode(code) ? "KR" : "US");
 const cutTo = <T extends { date: string }>(cs: readonly T[], date: string) => cs.filter((c) => c.date <= date);
 /** 받기 실패 (잠시 뒤 다시 계산, 기록하지 않음) */
 export const isFetchFailure = (resp: ScoresResponse): boolean => resp.trend.reason?.code === "fetchFailed";
+
+/** 주인 아닌 계정의 점수 요청이 재무 받기를 기다리는 최대 시간 (검증 6차 M2 — 앱의 점수 요청 시간 초과 20초 안에서 넉넉히) */
+export const MEMBER_VALUE_WAIT_MS = 8_000;
+/** 가치 칸이 이 종목 재무를 받는 중이라 '계산 준비 중'인지 (처음 받기 · 오랜만에 새로 받기 — 종목마다 캐시에 따라 갈리는 상태) */
+export const factsPending = (v: ValueBlock): boolean => v.status === "pending" && (v.reason?.code === "pendingFacts" || v.reason?.code === "pendingRefresh");
 /** 가치 쪽 받기 실패·백그라운드 받기 대기 (응답을 짧게만 기억, 가치 기록은 남기지 않음) */
 const valueWaits = new WeakMap<ScoresResponse, ValueEval>();
+/** 공개 이름·시장을 못 찾아 주인 등록 표의 이름·시장으로 계산한 응답 (주인 아닌 계정에게 주지 않는다 — getShared, 검증 8차) */
+const registeredOnly = new WeakSet<ScoresResponse>();
+/**
+ * 하루 기록(indicator_scores)으로 남길 수 있는데 아직 남기지 않은 응답 — 주인 아닌 계정의 계산(store:false, 검증 9차).
+ * 같은 결과(캐시·계산 중)를 주인 요청·장 마감 뒤 미리 계산이 받을 때 그 요청이 남긴다 (가입자 요청은 주인 기록을 쓰지 않는다)
+ */
+const unsaved = new WeakMap<ScoresResponse, { trend: Record<string, unknown> | null; value: Record<string, unknown> | null }>();
 
 interface Ctx {
   scoreDate: string;
@@ -248,17 +273,25 @@ export class IndicatorScoreService {
     return this.deps.features.enabled("indicatorScores");
   }
 
-  /** 종목 하나의 지표 점수. 모르는 종목이면 null. 플래그는 부르는 쪽(경로)이 먼저 본다 */
+  /**
+   * 종목 하나의 지표 점수. 모르는 종목이면 null. 플래그는 부르는 쪽(경로)이 먼저 본다.
+   * store(기본 true): 등록 종목의 하루 기록을 남긴다 — 주인 아닌 계정의 요청(getShared)은 false (검증 9차). 남기지 않은 결과를 true 인 요청이 받으면 그때 남긴다
+   */
   async get(code: string, opts: { store?: boolean; fresh?: boolean } = {}): Promise<ScoresResponse | null> {
     const c = normalizeCode(code);
     const scoreDate = latestScoreDate(marketOf(c), this.now());
     const key = `${c}|${scoreDate}`;
     const t = this.now().getTime();
+    const store = opts.store !== false;
+    const keep = async (r: ScoresResponse | null): Promise<ScoresResponse | null> => {
+      if (r && store) await this.persist(r);
+      return r;
+    };
     const hit = this.cache.get(key);
-    if (!opts.fresh && hit && t - hit.at < hit.ttl) return hit.resp;
+    if (!opts.fresh && hit && t - hit.at < hit.ttl) return keep(hit.resp);
     const running = this.inflight.get(key);
-    if (running) return running;
-    const p = this.compute(c, { scoreDate, fresh: opts.fresh === true }, opts.store !== false)
+    if (running) return running.then(keep);
+    const p = this.compute(c, { scoreDate, fresh: opts.fresh === true }, store)
       .then((resp) => {
         if (resp) {
           const lagging = resp.asOf.priceDate !== null && resp.asOf.priceDate < scoreDate;
@@ -273,6 +306,46 @@ export class IndicatorScoreService {
       .finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
+  }
+
+  /** 주인 아닌 계정에게 보일 종목 이름 — 등록 표를 보지 않는다 (ScoreSources.publicStock, 없으면 stock). 모르면 null */
+  async publicName(code: string): Promise<string | null> {
+    const src = this.deps.sources;
+    const c = normalizeCode(code);
+    if (src.publicStock) return (await src.publicStock(c))?.name ?? null;
+    const s = await src.stock(c);
+    return s && s.public !== false ? s.name : null;
+  }
+
+  /**
+   * 주인 아닌 계정용 (계정 A단계 검증 6차 M2): 가치 칸이 '재무 받는 중'(pendingFacts · pendingRefresh)이면 받기가 끝날 때까지 waitMs 까지 기다렸다가
+   * 다시 계산한다. 주인 등록 종목은 서버가 재무를 매일 미리 받아 두어 바로 점수가 나오고, 처음 보는 종목만 '계산 준비 중'으로 시작해
+   * **본문만으로** 주인 등록 종목이 드러났다 (응답 속도보다 확실한 신호). 받기가 waitMs 안에 끝나지 않으면(출처가 느림·줄이 김) 그대로 '계산 준비 중'.
+   * 주인은 예전처럼 기다리지 않는다 (get).
+   * 공개 이름·시장을 잠깐 못 찾아 주인 등록 표 값으로 계산해 둔 응답(주인이 먼저 연 캐시)은 주지 않고 한 번 다시 계산한다 — 그래도 등록 표 값이면 null
+   * (모르는 종목과 같게, 검증 8차. 등록 표에만 있는 종목은 경로가 공개 이름을 먼저 보고 계산 전에 404)
+   */
+  async getShared(code: string, waitMs: number = MEMBER_VALUE_WAIT_MS): Promise<ScoresResponse | null> {
+    // 주인 하루 기록(indicator_scores)은 쓰지 않는다 (검증 9차 — store:false, 주인 요청·미리 계산이 같은 결과를 받을 때 남김)
+    const shared = { store: false } as const;
+    let r = await this.get(code, shared);
+    if (r && registeredOnly.has(r)) {
+      this.forget(code);
+      r = await this.get(code, shared);
+      if (r && registeredOnly.has(r)) return null;
+    }
+    if (!r || !this.deps.value || !factsPending(r.value)) return r;
+    if (!(await this.deps.value.waitFacts(code, waitMs))) return r;
+    // 받아 둔 '계산 준비 중' 응답(짧게 기억)을 버리고 다시 — 방금 받은 재무로
+    this.forget(code);
+    const again = await this.get(code, shared);
+    return again && !registeredOnly.has(again) ? again : r;
+  }
+
+  /** 기억한 오늘 계산 결과를 버린다 */
+  private forget(code: string): void {
+    const c = normalizeCode(code);
+    this.cache.delete(`${c}|${latestScoreDate(marketOf(c), this.now())}`);
   }
 
   /**
@@ -405,10 +478,25 @@ export class IndicatorScoreService {
       computedAt: seoulIso(this.now()),
     };
     if (v.waiting || v.fetchFailure) valueWaits.set(resp, v);
-    // 받기 실패는 기록하지 않는다 (그날 기록이 빠진 채로 두고 40분 뒤·다음에 열 때 다시 계산해 채운다)
-    if (store && stock.registered !== false && !isFetchFailure(resp)) await this.save(resp, trend.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 기록 저장 실패"));
-    if (store && stock.registered !== false && v.stored && !v.fetchFailure && !v.waiting) await this.saveValue(resp, v.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 가치 기록 저장 실패"));
+    if (stock.public === false) registeredOnly.add(resp);
+    // 하루 기록: 등록 종목만. 받기 실패는 기록하지 않는다 (그날 기록이 빠진 채로 두고 40분 뒤·다음에 열 때 다시 계산해 채운다)
+    const rows = {
+      trend: stock.registered !== false && !isFetchFailure(resp) ? trend.stored : null,
+      value: stock.registered !== false && v.stored && !v.fetchFailure && !v.waiting ? v.stored : null,
+    };
+    if (rows.trend || rows.value) unsaved.set(resp, rows);
+    if (store) await this.persist(resp);
     return resp;
+  }
+
+  /** 아직 남기지 않은 하루 기록을 남긴다 (한 번만 — 먼저 지우고 쓴다) */
+  private async persist(resp: ScoresResponse): Promise<void> {
+    const rows = unsaved.get(resp);
+    if (!rows) return;
+    unsaved.delete(resp);
+    const code = resp.code;
+    if (rows.trend) await this.save(resp, rows.trend).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 기록 저장 실패"));
+    if (rows.value) await this.saveValue(resp, rows.value).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 가치 기록 저장 실패"));
   }
 
   private async fetchCut(code: string, ctx: Ctx): Promise<{ candles: Candle[]; source: string } | null> {
@@ -580,7 +668,9 @@ export class IndicatorScoreService {
     let reference: TrendBlock["reference"] = null;
     let refStored: Record<string, unknown> | null = null;
     if (underlying && und) {
-      const uStock = (await this.deps.sources.stock(underlying).catch(() => null)) ?? { code: underlying, name: underlying, market: isKrCode(underlying) ? "KOSPI" : "US" };
+      // 기초자산 이름·시장도 공개 값만 — 등록 표에만 있는 기초자산은 모르는 종목처럼 코드로 (참고 줄·'기초자산 기준' 이름·비교 지수로 주인 등록 종목이 드러나지 않게, 검증 8차)
+      const known = await this.deps.sources.stock(underlying).catch(() => null);
+      const uStock = known && known.public !== false ? known : { code: underlying, name: underlying, market: isKrCode(underlying) ? "KOSPI" : "US" };
       const uFacts = await this.deps.sources.product(underlying).catch(() => null);
       const t = await this.selfTrend(uStock, marketOf(underlying), ctx, uFacts, und.candles);
       const note = kind.tracks && /지수/.test(kind.tracks) ? proxyNote(underlying, kind.tracks) : null;
@@ -690,7 +780,7 @@ export async function groupCodeOf(db: Db, code: string): Promise<string | null> 
 
 /**
  * 실제 출처로 만든 자료 묶음: 일봉은 차트와 같은 캐시(stockService.getCandles — 토스 웹 → 네이버 → 야후, 한 종목은 한 출처),
- * 비교 지수는 지수 띠와 같은 네이버 일봉(10분 캐시), 상품 정보는 토스 웹 v2/stock-infos(24시간 캐시), 이름·시장은 등록 종목 → 종목 마스터·검색
+ * 비교 지수는 지수 띠와 같은 네이버 일봉(10분 캐시), 상품 정보는 토스 웹 v2/stock-infos(24시간 캐시), 이름·시장은 종목 마스터·검색 → (못 찾으면) 등록 종목
  */
 export function defaultScoreSources(deps: {
   db: Db;
@@ -700,10 +790,16 @@ export function defaultScoreSources(deps: {
 }): ScoreSources {
   const group = (code: string) => groupCodeOf(deps.db, code);
   return {
+      // 이름·시장은 공개 값(미리 보기 — 종목 마스터·검색)이 먼저, 등록 표는 등록 여부(하루 기록)와 공개 값을 못 찾을 때만 (검증 8차)
     stock: async (code) => {
-      const reg = await deps.stocks.get(code);
-      const s = reg ?? (await deps.stocks.preview(code));
-      return s ? { code: s.code, name: s.name, market: s.market, groupCode: await group(s.code).catch(() => null), registered: !!reg } : null;
+      const [reg, pub] = await Promise.all([deps.stocks.get(code), deps.stocks.preview(code)]);
+      const s = pub ?? reg;
+      return s ? { code: s.code, name: s.name, market: s.market, groupCode: await group(s.code).catch(() => null), registered: !!reg, public: !!pub } : null;
+    },
+    // 주인 아닌 계정에게 보이는 이름: 등록 표를 보지 않는 미리 보기 (GET /api/stocks/:code 의 주인 아닌 계정과 같은 이름)
+    publicStock: async (code) => {
+      const p = await deps.stocks.preview(code);
+      return p ? { name: p.name } : null;
     },
     // 장 마감 뒤 미리 계산(fresh)은 차트 캐시에 1분 넘게 묵은 봉을 쓰지 않는다 — 미국은 16:00~20:00 ET 가 한 장 구간이라 마감 직후 받아 둔 봉이 17:30 까지 남을 수 있음
     candles: (code, count, opts) => deps.stocks.getCandles(code, "D", count, opts?.fresh ? { maxAgeMs: 60_000 } : undefined),

@@ -1,4 +1,5 @@
 /** 백엔드 응답 타입 (backend/src/domain, services 와 맞춘다) */
+import type { AccountUser } from "@/lib/session";
 
 export type Market = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "US" | "UNKNOWN";
 export type Currency = "KRW" | "USD";
@@ -703,6 +704,11 @@ export interface Health {
   sources?: Record<string, string>;
   /** 토큰이 없거나 틀려 상세를 뺀 응답 */
   limited?: boolean;
+  /**
+   * 계정 A단계 서버: 토큰은 맞지만 주인 세션이 아니라(주인 아닌 계정·로그인 전) 공유 칸만 준 응답 — 서버 시각·출처 구성·모델 설정만.
+   * limited 가 아니다 (연결은 정상). 주인 데이터(토스 계좌·알림 기기·브리핑 상태·매매 기록)는 없다
+   */
+  viewer?: "shared";
   schedule: { timezone: string; running: boolean; jobs: { session: BriefingSession; cron: string; nextRun: string | null }[] } | null;
   devices?: number;
   authRequired?: boolean;
@@ -902,6 +908,19 @@ export interface ThemeDetail {
 export interface FeatureFlags {
   features: Record<string, boolean>;
   updatedAt: string | null;
+}
+
+/** 계정 A단계 (플래그 accounts): 로그인·가입 응답. token 은 이 응답에 한 번만 온다 */
+export interface AuthResult {
+  token: string;
+  user: AccountUser;
+  session: { id: number; remember: boolean; expiresAt: string };
+}
+
+/** GET /api/auth/me */
+export interface AuthMe {
+  user: AccountUser;
+  session: { id: number; remember: boolean; expiresAt: string };
 }
 
 /**

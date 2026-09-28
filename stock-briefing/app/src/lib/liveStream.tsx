@@ -1,12 +1,13 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { createApi } from "@/api/client";
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
-import { AppState } from "react-native";
+import React, { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { AppState, Platform } from "react-native";
 import type { CandleSeries, Evaluation, FeatureFlags, Quote, RegisteredStock, RegisteredWithQuote } from "@/api/types";
 import { applyTickToCandles, isIntraday } from "./chartPrefs";
 import { featureOn } from "./features";
 import { SAVER } from "./pollSaver";
 import { applyTick, applyTicksToList, evaluate, latestPerCode, newTradingDay, streamUrl, type StreamMessage, type StreamTick } from "./liveTick";
+import { personalBlocked, sessionFor, sessionVersion, subscribeSession } from "./session";
 import { useSettings } from "./settings";
 
 /**
@@ -161,9 +162,15 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
   const qc = useQueryClient();
   const [state, setState] = useState<LiveStreamState>({ connected: false, connectedAt: null, lastTickAt: null, ticks: 0 });
   const ticksRef = useRef(0);
+  // 계정 A단계 (플래그 accounts): 로그인 세션을 머리글로 보낸다(웹은 ?session=). 주인 아닌 계정은 스트림을 열지 않고(서버도 403 — 등록 종목·잔고 변경은 주인 것),
+  // 계정 모드인데 로그인 전이면 로그인할 때까지 붙지 않는다. 계정을 쓰지 않는 서버는 지금과 같다
+  useSyncExternalStore(subscribeSession, sessionVersion, sessionVersion);
+  const session = sessionFor(apiUrl);
+  const streamToken = session?.token ?? null;
+  const blocked = personalBlocked(apiUrl);
 
   useEffect(() => {
-    if (!apiUrl || !ready) return; // 저장된 토큰을 읽은 뒤에 붙는다
+    if (!apiUrl || !ready || blocked) return; // 저장된 토큰을 읽은 뒤에 붙는다
     let socket: WebSocket | null = null;
     let closed = false;
     let backoff = 1000;
@@ -257,7 +264,8 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       try {
         // React Native 의 WebSocket 은 세 번째 인자로 헤더를 받는다 (표준 DOM 타입에는 없어서 캐스팅)
         const Ctor = WebSocket as unknown as new (url: string, protocols?: string[], options?: { headers?: Record<string, string> }) => WebSocket;
-        ws = new Ctor(streamUrl(apiUrl, apiToken), undefined, apiToken ? { headers: { authorization: `Bearer ${apiToken}` } } : undefined);
+        const headers: Record<string, string> = { ...(apiToken ? { authorization: `Bearer ${apiToken}` } : {}), ...(streamToken ? { "x-session-token": streamToken } : {}) };
+        ws = new Ctor(streamUrl(apiUrl, apiToken, Platform.OS === "web" ? streamToken : null), undefined, Object.keys(headers).length ? { headers } : undefined);
       } catch {
         scheduleReconnect();
         return;
@@ -347,7 +355,7 @@ export function LiveStreamProvider({ children }: { children: React.ReactNode }) 
       if (stateTimer) clearTimeout(stateTimer);
       disconnect();
     };
-  }, [apiUrl, apiToken, ready, qc]);
+  }, [apiUrl, apiToken, ready, qc, blocked, streamToken]);
 
   return <LiveStreamContext.Provider value={state}>{children}</LiveStreamContext.Provider>;
 }

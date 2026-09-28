@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { ownerView, viewerKey } from "../auth/routePolicy.js";
 import { AppError } from "../lib/errors.js";
 import { appErrorInput, type AppErrorInput, type AppErrorService } from "../services/appErrorService.js";
 
@@ -19,7 +20,8 @@ export const appErrorRoutes: FastifyPluginAsync<{ service: AppErrorService }> = 
     }
     const invalid = raw.length - valid.length;
     if (valid.length === 0) throw new AppError(400, "VALIDATION", `형식이 맞는 보고가 없습니다 (${invalid}건)`);
-    const r = await service.record(valid);
+    // 계정 A단계 (검증 8차): 주인 아닌 계정은 주인과 다른 분당 몫 (사람마다·모두 합쳐) — 가입자가 주인 앱 오류 보고를 밀어내지 않게
+    const r = await service.record(valid, ownerView(req) ? null : viewerKey(req));
     if (r.saved === 0) return reply.code(429).header("retry-after", "60").send({ ...r, invalid });
     return reply.code(201).send({ ...r, invalid });
   });

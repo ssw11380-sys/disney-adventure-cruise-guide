@@ -17,6 +17,7 @@ import {
   DAY_LABEL,
   excludedCount,
   failureText,
+  quietState,
   holdingsTitles,
   HOME_URI,
   indexItems,
@@ -178,9 +179,17 @@ function Header({ title, plan, market, refreshing, label, uri = HOME_URI, c }: {
   );
 }
 
-/** 합계 아래 회색 한 줄 조각: 갱신 실패·이전 값·합계에서 빠진 종목 (앞의 것이 더 중요) */
+/**
+ * 합계 아래 회색 한 줄 조각: 갱신 실패·이전 값·합계에서 빠진 종목 (앞의 것이 더 중요).
+ * 로그인 필요·주인 아닌 계정은 실패가 아니고 본문이 이미 안내하므로 넣지 않는다 (검증 5차 — 같은 말 두 번·'갱신 실패' 자리 없음)
+ */
 function noteParts(error: string | null, filled: number, excluded: number): string[] {
-  return [failureText(error), filled ? `${filled}종목 이전 값` : null, excluded ? `일부 제외 ${excluded}` : null].filter((x): x is string => !!x);
+  return [quietState(error) ? null : failureText(error), filled ? `${filled}종목 이전 값` : null, excluded ? `일부 제외 ${excluded}` : null].filter((x): x is string => !!x);
+}
+
+/** 잔고 위젯의 빈 목록 글 (조회가 끝났는데 종목이 없을 때): 로그인 필요·주인 아닌 계정은 안내 + 앱 열기, 진짜 실패는 ↻ 로 다시 시도 */
+function holdingsEmptyError(error: string): string {
+  return quietState(error) ? `${failureText(error)} · 눌러서 앱 열기` : "잔고를 불러오지 못했습니다. ↻ 로 다시 시도";
 }
 
 type StockWidgetProps = {
@@ -631,7 +640,8 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
   const head = holdingsTitles(stocks);
   const chips = chipTexts(market, stocks, usFirst);
   const sub = refreshing ? ["갱신 중"] : asOfVariants(asOf, now);
-  const alert = !refreshing && failureText(error) ? "갱신 실패" : null;
+  // 로그인 필요·주인 아닌 계정은 실패가 아니다 — 머리에 '갱신 실패'를 붙이지 않고 본문 안내만 (검증 5차)
+  const alert = !refreshing && failureText(error) && !quietState(error) ? "갱신 실패" : null;
   const basis = widgetBasis(props);
   const plan = planHoldingsPolished({
     width,
@@ -670,7 +680,7 @@ function PolishedHoldingsWidget(props: StockWidgetProps & WidgetFrame & Holdings
         {plan.index ? <PolishedIndexLine plan={plan.index} scale={scale} c={c} /> : null}
         {plan.note ? <TextWidget text={plan.note} maxLines={1} style={{ color: c.muted, fontSize: F.sm }} /> : null}
         {rows.length === 0 && !error && !refreshing ? <TextWidget text="등록된 종목이 없습니다" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
-        {rows.length === 0 && error && !refreshing ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
+        {rows.length === 0 && error && !refreshing ? <TextWidget text={holdingsEmptyError(error)} maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
       </FlexWidget>
       {/* 목록은 첫 줄이 보일 높이가 있을 때만 (높이 0 인 목록은 라이브러리가 그리지 못해 위젯이 갱신되지 않는다) */}
       {plan.list && rows.length > 0 ? (
@@ -722,7 +732,8 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
   const title = `잔고 ${rows.length}`;
   const sub = refreshing ? ["갱신 중"] : asOfVariants(asOf, now);
   // 메모 줄이 들어갈 높이가 없으면 머리 줄에 "갱신 실패" (갱신 중일 때는 "갱신 중"이 먼저)
-  const alert = !refreshing && failureText(error) ? "갱신 실패" : null;
+  // 로그인 필요·주인 아닌 계정은 실패가 아니다 — 머리에 '갱신 실패'를 붙이지 않고 본문 안내만 (검증 5차)
+  const alert = !refreshing && failureText(error) && !quietState(error) ? "갱신 실패" : null;
   const basis = widgetBasis(props);
   const plan = planHoldings({
     width,
@@ -747,7 +758,7 @@ export function HoldingsWidget(props: StockWidgetProps & WidgetFrame & HoldingsE
         {plan.index ? <IndexLine plan={plan.index} items={items} c={c} /> : null}
         {plan.note ? <TextWidget text={plan.note} maxLines={1} style={{ color: c.muted, fontSize: F.sm }} /> : null}
         {rows.length === 0 && !error && !refreshing ? <TextWidget text="등록된 종목이 없습니다" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
-        {rows.length === 0 && error && !refreshing ? <TextWidget text="잔고를 불러오지 못했습니다. ↻ 로 다시 시도" maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
+        {rows.length === 0 && error && !refreshing ? <TextWidget text={holdingsEmptyError(error)} maxLines={EMPTY_LINES} style={{ color: c.muted, fontSize: F.md }} /> : null}
       </FlexWidget>
       {/* 목록은 첫 줄이 보일 높이가 있을 때만 (높이 0 인 목록은 라이브러리가 그리지 못해 위젯이 갱신되지 않는다) */}
       {plan.list && rows.length > 0 ? (

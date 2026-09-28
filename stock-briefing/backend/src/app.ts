@@ -1,12 +1,16 @@
 import { timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
-import type { AppConfig } from "./config.js";
+import { envOn, type AppConfig } from "./config.js";
+import { AuthService } from "./auth/authService.js";
+import { AUTH_UNAVAILABLE, decide, MEMBER_AI_DAILY, MEMBER_SCORE_DAILY, MEMBER_SHARED_PER_MINUTE, MEMBER_TOO_MANY, NO_SESSION_ROUTES, ownerView, routeKey, SESSION_INVALID, SHARED_ROUTES, viewerKey, type AuthState } from "./auth/routePolicy.js";
+import { DistinctDailyQuota, WindowLimiter } from "./auth/rateLimit.js";
+import { authRoutes } from "./routes/auth.js";
 import { detectDialect, type Db } from "./db/index.js";
 import { AppError, ProviderError } from "./lib/errors.js";
-import { seoulIso } from "./lib/time.js";
+import { seoulDate, seoulIso } from "./lib/time.js";
 import { GenerationError } from "./llm/generator.js";
 import { PromptStore } from "./llm/prompts.js";
 import { defaultsFromCron, NotificationSettingsStore, timeToCron } from "./notifications/settings.js";
@@ -71,19 +75,47 @@ export interface BuildAppOptions {
   now?: () => Date;
   /** 푸시 영수증 확인 대기 시간 (테스트용) */
   receiptDelayMs?: number;
+  /** 계정 (테스트용): 비밀번호 해시 비용을 낮춘다 */
+  auth?: { scryptN?: number };
 }
 
 export const DISCLAIMER = "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.";
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const logger = opts.logger === false ? false : { level: opts.config.LOG_LEVEL, ...(typeof opts.logger === "object" ? opts.logger : {}), serializers: { req: logReq, path: logPath } };
-  const app = Fastify({ logger });
+  // Railway 앞단 프록시 뒤에서 실제 요청 IP 를 읽는다 (IP 별 로그인 제한 — 설정 TRUST_PROXY_HOPS, Railway 에서는 기본 1)
+  const hops = opts.config.trustProxyHops ?? 0;
+  // (Fastify 가 숫자를 받을 때와 같은 규칙: 가까운 쪽부터 hops 개의 주소를 믿는다)
+  const app = Fastify({ logger, ...(hops > 0 ? { trustProxy: (_addr: string, i: number) => i < hops } : {}) });
+  // 등록된 경로 목록 (계정 경로 정책 테스트가 모든 /api 경로를 센다 — 새 경로가 공유·개인 중 어디인지 정하지 않고 새지 않게)
+  const routeList: Array<{ method: string; url: string }> = [];
+  app.addHook("onRoute", (r) => {
+    for (const m of Array.isArray(r.method) ? r.method : [r.method]) routeList.push({ method: String(m), url: r.url });
+  });
+  app.decorate("routeList", routeList);
   await app.register(cors, { origin: true });
   await app.register(websocket, { options: { maxPayload: 4096 } });
   const log = app.log;
   const now = opts.now ?? (() => new Date());
   // 기능 켜고 끄기 (3-15): 플래그 목록은 featureService.ts 한 곳
-  const features = new FeatureService(opts.db, now);
+  // 로그인·회원가입 (계정 A단계, 플래그 accounts). 비상 끄기: ACCOUNTS_DISABLED=1 (설정 객체를 따로 만든 경우 — 테스트·스크립트 — 에도 프로세스 환경 변수를 본다).
+  // 비상 끄기면 앱에도 플래그를 꺼짐으로 준다 (로그인 화면이 나오지 않게)
+  const accountsKilled = Boolean(opts.config.accountsDisabled) || envOn(process.env["ACCOUNTS_DISABLED"]);
+  const features = new FeatureService(opts.db, now, new Set(accountsKilled ? (["accounts"] as const) : []));
+  const auth = new AuthService({
+    db: opts.db,
+    now,
+    log: app.log,
+    ownerLoginId: opts.config.OWNER_LOGIN_ID,
+    ownerInitialPassword: opts.config.OWNER_INITIAL_PASSWORD,
+    ...(opts.auth?.scryptN ? { scryptN: opts.auth.scryptN } : {}),
+  });
+  const accountsOn = () => features.enabled("accounts");
+  // 주인 계정: 없을 때만 만든다 (플래그와 상관없이 — 나중에 켜도 바로 쓰게. 이미 있으면 비밀번호를 되돌리지 않는다)
+  if (!accountsKilled) await auth.ensureOwner().catch((e: unknown) => app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 주인 계정 확인 실패"));
+  // 비상 주인 비밀번호 되돌리기 (OWNER_RESET_PASSWORD — 같은 값은 한 번만, 지금 비밀번호와 다를 때만 바꾸고 주인 세션·기기를 모두 끊는다)
+  const resetPw = opts.config.OWNER_RESET_PASSWORD ?? "";
+  if (!accountsKilled && resetPw) await auth.resetOwnerPassword(resetPw).catch((e: unknown) => app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 주인 비밀번호 되돌리기 실패"));
 
   const stockService = new StockService({ db: opts.db, ...opts.providers, tossSyncMinutes: opts.config.TOSS_SYNC_MINUTES, now });
   // 가격·등락률·거래량 알림 (3-29, 플래그 priceAlerts): 조건 저장·울림 기록, 거래량 급증은 차트와 같은 30분봉 캐시(450개)로 계산
@@ -212,6 +244,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     log,
   });
   app.addHook("onClose", async () => priceStream.stop());
+  // 계정 A단계 검증 6차 M1: 세션을 끊으면 그 세션으로 연 스트림 연결을 바로 닫는다 (로그아웃 · 모든 기기에서 로그아웃 · 비밀번호 변경의 다른 세션 · 비상 되돌리기).
+  // 기한 지남·다른 서버에서 끊음·비상 모드 → 보통 모드는 ping(25초)마다 다시 확인해 닫는다 (연결의 recheck — 아래 /api/stream)
+  auth.onRevoke((r) =>
+    priceStream.revoke((a) => a.sessionId !== null && ((r.sessionIds?.includes(a.sessionId) ?? false) || (r.userId !== undefined && a.userId === r.userId && a.sessionId !== r.exceptSessionId))),
+  );
+  // 플래그를 바꾸면(예: 비상 모드 → 보통 모드) 바로 다시 확인 — 세션 없이(API 토큰만) 연 연결이 계정이 켜진 뒤에도 남지 않게
+  features.onChange(() => void priceStream.recheck());
 
   const collector = new DataCollector({
     quotes: opts.providers.quotes,
@@ -256,7 +295,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     app.addHook("onClose", async () => scheduler?.stop());
   }
 
-  const deviceService = new DeviceService(opts.db, opts.providers.push, now);
+  // 푸시 받을 기기: 계정이 켜져 있으면 살아 있는 주인 세션에 묶인 기기만 (검증 4차 M1 — 세션 없이 등록한 계정 전 기기·로그아웃한 폰으로 주인 알림이 가지 않게)
+  const deviceService = new DeviceService(opts.db, opts.providers.push, now, { strict: () => features.enabled("accounts") });
   const notificationService = new NotificationService({
     push: opts.providers.push,
     devices: deviceService,
@@ -341,20 +381,30 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("priceStream", priceStream);
   app.decorate("tradeRecords", tradeRecords);
   app.decorate("indicatorScores", indicatorScores);
+  app.decorate("authService", auth);
   app.decorate("valueScores", valueScores);
   app.decorate("krValue", krValue);
 
-  // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
+  // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게.
+  // 주인 보기에만 (계정 A단계 검증 4차 M2 — 주인 아닌 계정·세션 없음에게는 캐시 적중이 빠른 것으로 주인이 연 종목이 드러나지 않게)
   app.addHook("onRequest", async (req) => {
     (req as { startedAt?: bigint }).startedAt = process.hrtime.bigint();
   });
+  // 보는 사람의 처음 값 (검증 9차 — 닫힌 쪽으로): 계정이 켜져 있으면 null(= 주인 아님, routePolicy.ownerView)으로 두고 관문이 채운다 —
+  // 관문 전에 끝난 응답(API 토큰 401 · 세션 끊김 401 · 인증 확인 503 · 없는 주소 404 · /api 밖 경로)은 주인 모습·서버 처리 시간을 받지 않는다.
+  // 꺼져 있으면(관리 API · 비상 끄기) 계정 전처럼 API 토큰 = 주인이라 맨 앞에서 off (관문·/health 가 주인 아닌 계정의 세션이면 그 계정으로 바꾼다)
+  app.decorateRequest("auth", null);
+  app.addHook("onRequest", async (req) => {
+    if (!(await accountsOn())) req.auth = { kind: "off" };
+  });
   app.addHook("onSend", async (req, reply, payload) => {
     const started = (req as { startedAt?: bigint }).startedAt;
-    if (started !== undefined) reply.header("server-timing", `app;dur=${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)}`);
+    if (started !== undefined && ownerView(req)) reply.header("server-timing", `app;dur=${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)}`);
     return payload;
   });
   // 끊겼을 때 데이터 절약 (플래그 pollSaver, 3-25): 잔고·상세·지수 등 자주 묻는 GET 에 ETag·304·바뀐 부분만·gzip (라우트 등록 전에)
-  const pollSaver = registerPollSaver(app, { enabled: () => features.enabled("pollSaver") });
+  // 옛 본문 기억은 보는 사람마다 나눈다 (계정 A단계 — 주인 아닌 계정의 차이 계산에 주인의 옛 본문이 섞이지 않게)
+  const pollSaver = registerPollSaver(app, { enabled: () => features.enabled("pollSaver"), scope: viewerKey });
 
   // 인터넷에 노출할 때의 최소 보호: API_TOKEN 이 설정되면 /api/* 는 Bearer 토큰이 있어야 한다. /health 는 열어 둔다.
   if (opts.config.API_TOKEN) {
@@ -373,6 +423,86 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       }
     });
   }
+
+  // 계정 관문 (계정 A단계, 플래그 accounts): API 토큰 확인 **뒤에**, 라우터가 고른 경로로 판단한다 (퍼센트 인코딩으로 못 피함).
+  //  - 꺼져 있으면 지금처럼 (API 토큰 = 주인), /api/auth/* 는 없는 주소(404). 다만 주인 아닌 계정의 세션을 보낸 요청은 그 계정으로 본다
+  //    (플래그를 끄거나 비상 끄기(ACCOUNTS_DISABLED=1)·되돌리기를 해도 그 계정 기기에 주인 데이터가 보이지 않게 — offMember)
+  //  - 세션 헤더(X-Session-Token, 웹소켓은 ?session= 도)가 있으면 확인: 없는 토큰·끊김·기한 지남 → 401 session_invalid (앱이 로그아웃하는 유일한 응답)
+  //    DB 를 못 읽으면 503 auth_unavailable (로그아웃 아님)
+  //  - 그다음 경로 정책(auth/routePolicy): 세션 없음은 403 session_required, 주인 아닌 계정은 공유 경로만 (개인은 빈 값·403)
+  //  - 플래그를 읽지 못하면 켜짐으로 본다 (featureService FAIL_ON — 오류로 문이 열리지 않게)
+  /**
+   * 비상 모드(관리 API 로 끔 · 비상 끄기 ACCOUNTS_DISABLED=1 둘 다) = 계정 전처럼 **API 토큰만 = 주인**. 이때 막는 것은 하나뿐:
+   * 세션 헤더가 주인 아닌 계정의 세션(살아 있음·기한 지남·끊김 모두 — 검증 4차)이면 그 계정으로 본다 (그 폰에 주인 잔고·메모가 보이거나 알림 기기가 등록되지 않게).
+   * 막지 못하는 것: 세션 머리글이 없는 요청(로그아웃·앱 다시 설치한 가입자 폰, 자동 로그인을 끄고 쓰다 앱을 닫은 가입자 폰 — 검증 6차, API 토큰을 꺼낸 사람), 세션 확인이 DB 오류일 때 — 그래서 가입자가 있으면
+   * 비상 모드 전에 API 토큰(Railway API_TOKEN)을 바꾸고 새 값은 주인 폰에만 넣는다 (docs 설계 5장). 끝난 세션의 사용자를 모르면(지운 행) 지금처럼
+   */
+  const offMember = async (req: FastifyRequest, route: string): Promise<AuthState | null> => {
+    const token = sessionTokenOf(req, route);
+    if (!token) return null;
+    const ctx = await auth.authenticate(token).catch(() => null);
+    if (ctx) return ctx.user.isOwner ? null : { kind: "user", ...ctx };
+    const who = await auth.identify(token).catch(() => null);
+    if (!who || who.isOwner) return null;
+    return { kind: "user", user: { id: who.userId, loginId: "", email: null, isOwner: false, usingInitialPassword: false }, session: { id: 0, remember: false, expiresAt: "" } };
+  };
+  // 주인 아닌 계정의 공유 경로는 사람마다 1분 MEMBER_SHARED_PER_MINUTE 번까지 (시세·차트·뉴스가 서버 env 의 주인 키로 외부를 부르므로 — 주인 몫의 호출 한도를 다 쓰지 않게)
+  const memberRate = new WindowLimiter(MEMBER_SHARED_PER_MINUTE, 60_000, () => now().getTime());
+  /** 경로 정책을 적용한다 (응답을 보냈으면 true) */
+  const enforce = (req: FastifyRequest, reply: FastifyReply, key: string, state: AuthState): boolean => {
+    const d = decide(key, state);
+    if (d.action === "deny") {
+      void reply.code(d.status).send(d.body);
+      return true;
+    }
+    if (d.action === "empty") {
+      void reply.code(200).send(d.body(req));
+      return true;
+    }
+    if (state.kind === "user" && !state.user.isOwner && SHARED_ROUTES.has(key)) {
+      const hit = memberRate.hit(String(state.user.id));
+      if (!hit.ok) {
+        void reply.code(429).header("retry-after", String(hit.retryAfterSec)).send({ ...MEMBER_TOO_MANY, retryAfterSec: hit.retryAfterSec });
+        return true;
+      }
+    }
+    return false;
+  };
+  app.addHook("onRequest", async (req, reply) => {
+    const route = req.routeOptions.url;
+    if (!route || !route.startsWith("/api/")) return; // 맞는 경로가 없으면(404) 그대로
+    const key = routeKey(req.method, route);
+    if (!(await accountsOn())) {
+      req.auth = { kind: "off" };
+      if (route.startsWith("/api/auth/")) return reply.code(404).send({ error: "NOT_FOUND", message: `없는 주소입니다: ${req.method} ${req.url.split("?")[0]}` });
+      const member = await offMember(req, route);
+      if (!member) return;
+      req.auth = member;
+      if (enforce(req, reply, key, member)) return reply;
+      return;
+    }
+    // 맨 앞에서 꺼짐으로 읽은 뒤 그새 켜졌으면 모르는 사람으로 되돌린다 (아래에서 401·503 으로 끝나도 주인 모습이 아니게)
+    req.auth = null;
+    if (NO_SESSION_ROUTES.has(key)) {
+      req.auth = { kind: "anonymous" };
+      return;
+    }
+    const token = sessionTokenOf(req, route);
+    let state: AuthState = { kind: "anonymous" };
+    if (token) {
+      let ctx;
+      try {
+        ctx = await auth.authenticate(token);
+      } catch (e) {
+        app.log.warn({ err: e instanceof Error ? e.message : String(e) }, "계정: 세션 확인 실패 (DB)");
+        return reply.code(503).header("retry-after", "10").send(AUTH_UNAVAILABLE);
+      }
+      if (!ctx) return reply.code(401).send(SESSION_INVALID);
+      state = { kind: "user", ...ctx };
+    }
+    req.auth = state;
+    if (enforce(req, reply, key, state)) return reply;
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) {
@@ -396,10 +526,28 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     return reply.code(500).send({ error: "INTERNAL", message: "서버 오류" });
   });
 
-  /** 브라우저로 주소만 열었을 때 보이는 안내 페이지. 모델·알림 기기 수·브리핑 시각은 /health 처럼 토큰을 설정하지 않았거나 맞는 토큰을 보낸 요청에만 */
+  /**
+   * /health · / 를 보는 사람 (계정 A단계 — 이 둘은 /api 밖이라 관문을 지나지 않는다). 상세(주인 토스 계좌 합계·보유 수·알림 기기·브리핑 상태·매매 기록 등)는
+   * 플래그가 꺼져 있으면 지금처럼 API 토큰만으로, 켜져 있으면 **주인 세션**에만. 주인 아닌 계정·세션 없음·끊긴 세션은 공유 모습.
+   * req.auth 를 채워 끊겼을 때 데이터 절약의 옛 본문 기억도 보는 사람마다 나눈다
+   */
+  const healthViewer = async (req: FastifyRequest): Promise<"owner" | "shared"> => {
+    if (!(await accountsOn())) {
+      const member = await offMember(req, "/health");
+      req.auth = member ?? { kind: "off" };
+      return member ? "shared" : "owner";
+    }
+    const token = sessionTokenOf(req, "/health");
+    const ctx = token ? await auth.authenticate(token).catch(() => null) : null;
+    req.auth = ctx ? { kind: "user", ...ctx } : { kind: "anonymous" };
+    return ctx?.user.isOwner ? "owner" : "shared";
+  };
+
+  /** 브라우저로 주소만 열었을 때 보이는 안내 페이지. 모델·알림 기기 수·브리핑 시각은 /health 처럼 토큰을 설정하지 않았거나 맞는 토큰을 보낸 요청에만 (계정이 켜져 있으면 주인 세션에만) */
   app.get("/", async (req, reply) => {
     const auth = req.headers.authorization;
-    const detail = !opts.config.API_TOKEN || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), opts.config.API_TOKEN));
+    const trusted = !opts.config.API_TOKEN || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), opts.config.API_TOKEN));
+    const detail = trusted && (await healthViewer(req)) === "owner";
     const h = detail ? await deviceService.enabledTokens() : [];
     const jobs = detail ? (scheduler?.status().jobs ?? []) : [];
     const protectedApi = Boolean(opts.config.API_TOKEN);
@@ -420,7 +568,21 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     const trusted = !token || (typeof auth === "string" && auth.startsWith("Bearer ") && sameSecret(auth.slice(7), token));
     // 옛 앱이 sources·schedule 을 바로 읽으므로 빈 값을 함께 준다 (limited = 토큰이 없거나 틀려 상세를 뺀 응답)
     if (!trusted) return { ok: true, time: seoulIso(now()), authRequired: true, limited: true, sources: {}, schedule: null, disclaimer: DISCLAIMER };
-    return healthDetail();
+    return (await healthViewer(req)) === "owner" ? healthDetail() : healthShared();
+  });
+  /**
+   * 주인 아닌 계정·로그인 전(세션 없음)의 /health: 토큰은 맞으므로 limited 가 아니다 (앱이 '토큰 필요'로 보이지 않게). 서버 시각·출처 구성·모델 설정만 —
+   * 주인 데이터(토스 계좌 합계·보유·대조, 매매 기록, 알림 기기 수, 브리핑·계좌 브리핑 상태, 구독 종목, 백업, 앱 오류)는 넣지 않는다
+   */
+  const healthShared = () => ({
+    ok: true,
+    time: seoulIso(now()),
+    sources: describeProviders(opts.config),
+    schedule: null,
+    authRequired: Boolean(opts.config.API_TOKEN),
+    llmConfigured: opts.providers.generator.model !== "disabled",
+    viewer: "shared" as const,
+    disclaimer: DISCLAIMER,
   });
   const healthDetail = async () => ({
     ok: true,
@@ -444,6 +606,9 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     backup: await backups.status().catch(() => null),
     // 매매 기록(3-36): 켜져 있을 때만 (끄면 응답이 예전과 같게). 최근 5·30거래일 스냅샷이 빠진 날이 있으면 warning — ok 는 그대로 true
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
+    // 계정(A단계): 켜져 있을 때만 (끄면 응답이 예전과 같게). 처음 비밀번호를 쓰는지는 내보내지 않는다 (공개 저장소에 적힌 1111 이 아직 되는지 알리는 셈 —
+    // 주인은 앱 설정 맨 위 띠·/api/auth/me 로 본다)
+    ...((await accountsOn()) ? { accounts: { enabled: true } } : {}),
     // 다가오는 일정(브리핑 3차 5): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 받지 못한 것·두 출처가 다른 것 경고
     ...(holdingEvents && (await features.enabled("holdingEvents")) ? { holdingEvents: holdingEvents.health() } : {}),
     disclaimer: DISCLAIMER,
@@ -517,9 +682,25 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   app.decorate("marketSummaries", summaries);
   if (summaries) await app.register(marketSummaryRoutes, { prefix: "/api/market-summaries", service: summaries });
 
-  /** GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token= */
-  app.get("/api/stream", { websocket: true }, (socket) => {
-    priceStream.attach(socket);
+  /**
+   * GET /api/stream (웹소켓) — 등록 종목 체결가를 실시간으로 밀어 준다. 인증은 Authorization 헤더 또는 ?token=, 세션은 X-Session-Token 또는 ?session=.
+   * 연결할 때(관문)만이 아니라 연결하는 동안에도 확인한다 (검증 6차 M1): 연결마다 연 세션을 적어 두고, 세션을 끊으면 바로 닫고(auth.onRevoke),
+   * ping(25초)마다·플래그를 바꿀 때 다시 확인한다 — 계정이 켜져 있으면 살아 있는 주인 세션만, 세션 없이 연 연결(비상 모드에 API 토큰만)은 계정이 켜지면 닫는다.
+   * 비상 모드(계정 꺼짐)에는 계정 전처럼 API 토큰 = 주인이라 두고, 확인이 DB 오류면 두고 다음 ping 에 다시
+   */
+  app.get("/api/stream", { websocket: true }, (socket, req) => {
+    const token = sessionTokenOf(req, "/api/stream");
+    const a = req.auth;
+    const who = a?.kind === "user" ? { sessionId: a.session.id, userId: a.user.id } : { sessionId: null, userId: null };
+    priceStream.attach(socket, {
+      ...who,
+      recheck: async () => {
+        if (!(await accountsOn())) return true;
+        if (!token) return false;
+        const ctx = await auth.authenticate(token);
+        return !!ctx && ctx.user.isOwner;
+      },
+    });
   });
 
   await app.register(stockRoutes, { prefix: "/api/stocks", service: stockService });
@@ -531,6 +712,9 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     news: opts.providers.news,
     financials: opts.providers.financials,
     financialsUs: opts.providers.financialsUs,
+    // 계정 A단계: 주인 아닌 계정은 서로 다른 분석(종목·종류)을 사람마다 하루 MEMBER_AI_DAILY 건까지 — 캐시에 있든 없든 센다 (검증 4차 M2)
+    memberQuota: new DistinctDailyQuota(MEMBER_AI_DAILY, () => seoulDate(now())),
+    now,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler, status: briefingStatus });
   await app.register(accountBriefingRoutes, {
@@ -545,6 +729,19 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     },
   });
   await app.register(featureRoutes, { prefix: "/api/features", features });
+  await app.register(authRoutes, { prefix: "/api/auth", auth });
+  // 끝난 세션 청소: 켠 뒤 1분, 그 뒤 하루 한 번 (기한이 지났거나 끊긴 지 30일 넘은 행)
+  if (opts.enableScheduler !== false && !accountsKilled) {
+    const sweep = () => void auth.purge().then((n) => (n ? app.log.info({ removed: n }, "계정: 끝난 세션 청소") : undefined)).catch(() => undefined);
+    const first = setTimeout(sweep, 60_000);
+    const daily = setInterval(sweep, 86_400_000);
+    first.unref?.();
+    daily.unref?.();
+    app.addHook("onClose", async () => {
+      clearTimeout(first);
+      clearInterval(daily);
+    });
+  }
   // accounts: 계좌 한 장 브리핑(3-31)이 켜져 있으면 최근 id 를 위젯 응답에 넣어 앱 백그라운드 알림이 새 계좌 브리핑도 알아보게
   // schedule: 브리핑 위젯 안내에 설정한 브리핑 시간을 쓴다 (BH-68 — 예전에는 늘 '평일 08:30·16:00')
   // 브리핑 위젯 첫 줄(시장 전체 요약): 새 앱이 &ms=1 로 물을 때만, 플래그가 켜져 있을 때만 가장 최근 요약을 읽는다
@@ -553,7 +750,15 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
-  await app.register(scoreRoutes, { prefix: "/api/scores", service: indicatorScores });
+  // 계정 A단계: 주인 아닌 계정은 서로 다른 종목 점수를 사람마다 하루 MEMBER_SCORE_DAILY 개까지 — 캐시에 있든 없든 센다 (검증 4차)
+  await app.register(scoreRoutes, {
+    prefix: "/api/scores",
+    service: indicatorScores,
+    memberQuota: new DistinctDailyQuota(MEMBER_SCORE_DAILY, () => seoulDate(now())),
+    // 주인 아닌 계정에게는 종목 상세 미리 보기와 같은 이름 (주인 등록 표의 이름이 아니라)
+    publicName: (code) => indicatorScores.publicName(code),
+    now,
+  });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)
@@ -581,10 +786,26 @@ declare module "fastify" {
     tradeRecords: TradeRecordService;
     /** 지표 점수 (3-44): 종목 상세의 추세 지표 점수·장 마감 뒤 기록 */
     indicatorScores: IndicatorScoreService;
+    /** 등록된 모든 경로 (메서드·주소) — 계정 경로 정책 테스트용 */
+    routeList: ReadonlyArray<{ method: string; url: string }>;
+    /** 로그인·회원가입 (계정 A단계) */
+    authService: AuthService;
     valueScores: ValueScoreService;
     /** 한국 간이 가치 (3-44 3단계) */
     krValue: KrValueService;
   }
+}
+
+/** 세션 토큰: X-Session-Token(또는 X-Session) 헤더, 웹소켓(/api/stream)은 헤더를 못 붙이는 클라이언트(웹)를 위해 ?session= 도 */
+function sessionTokenOf(req: FastifyRequest, route: string): string | null {
+  const h = req.headers["x-session-token"] ?? req.headers["x-session"];
+  const v = Array.isArray(h) ? h[0] : h;
+  if (typeof v === "string" && v.trim()) return v.trim();
+  if (route === "/api/stream") {
+    const q = (req.query as { session?: unknown } | undefined)?.session;
+    if (typeof q === "string" && q) return q;
+  }
+  return null;
 }
 
 /** 요청 경로(쿼리 제외)를 퍼센트 디코딩한다. 깨진 인코딩이면 원문 그대로 (그러면 /api/ 로 시작하지 않아 라우터도 못 찾는다) */
@@ -629,7 +850,7 @@ function redactPushToken(url: string, route: string | undefined): string {
 }
 
 /**
- * 주소에서 이름이 token 인 쿼리 값(퍼센트 인코딩한 이름 포함)을 [redacted] 로 바꾼다.
+ * 주소에서 이름이 token·session 인 쿼리 값(퍼센트 인코딩한 이름 포함)을 [redacted] 로 바꾼다 (API 토큰·세션 토큰이 로그에 남지 않게).
  * 라우터는 '?' 와 '#' 중 앞선 곳부터 쿼리로 읽으므로 '?', '#', ';', '&' 뒤의 이름=값을 모두 본다
  */
 export function redactToken(url: string): string {
@@ -646,7 +867,8 @@ function isTokenName(key: string): boolean {
   } catch {
     // 깨진 인코딩: 원문 이름으로 비교
   }
-  return name.trim().toLowerCase() === "token";
+  const n = name.trim().toLowerCase();
+  return n === "token" || n === "session";
 }
 
 /** 비밀값 비교 (길이가 같을 때 시간 일정 비교) */

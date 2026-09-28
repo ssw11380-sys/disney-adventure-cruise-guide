@@ -4,7 +4,7 @@ import { sentence } from "@/lib/a11y";
 import { space } from "@/tokens";
 import { BOARD_TITLE, boardColumns, boardTiles, type BoardTile } from "./board";
 import { BOARD_GAP, MARKER_GAP, PAD, planMarket, STALE_TEXT, WIDE, type MarketPlan } from "./layout";
-import { asOfVariants, failureText, HOME_URI, tone } from "./model";
+import { asOfVariants, failureText, HOME_URI, quietState, tone } from "./model";
 import type { WidgetIndex } from "./payload";
 import { WIDGET_BOARD as BOARD, WIDGET_COLORS, WIDGET_FONT as F, WIDGET_TOUCH as TOUCH, type WidgetPalette } from "./palette";
 import { WIDGET_CLICK, type WidgetFrame } from "./widgets";
@@ -163,7 +163,8 @@ export function MarketWidget(props: MarketWidgetProps) {
   const hasData = props.enabled && tiles.some((t) => t.has);
   const fail = failureText(props.error);
   // 제목 옆: 갱신 중 → 갱신 실패(마지막 값을 두고) → 기준 시각 (판을 받은 시각)
-  const sub = refreshing ? ["갱신 중"] : fail ? [fail, "갱신 실패"] : hasData && props.boardAt ? asOfVariants(props.boardAt, props.now) : [];
+  // 로그인 필요는 실패가 아니다 — 좁아도 '갱신 실패'로 줄이지 않는다 (검증 5차)
+  const sub = refreshing ? ["갱신 중"] : fail ? (quietState(props.error) ? [fail] : [fail, "갱신 실패"]) : hasData && props.boardAt ? asOfVariants(props.boardAt, props.now) : [];
   const byCode = new Map(tiles.map((t) => [t.code, t]));
   // 넓은 위젯 모양(구역 안 옆 칸)은 다듬은 모습일 때만, 폴드 위젯 2차 폭 규칙(wideExtras — widgetFoldFit 이 켜져 있으면 폭 560dp 이상)이 막지 않을 때만
   const plan = planMarket({ width, height, scale, title: BOARD_TITLE, sub, columns: hasData ? boardColumns(tiles) : [], wide: props.polish === true && props.wideExtras !== false });

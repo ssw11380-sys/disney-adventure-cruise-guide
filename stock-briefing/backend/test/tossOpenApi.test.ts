@@ -202,6 +202,11 @@ describe("토스 연동 종목 잠금 (3-10)", () => {
   it("종목 상세 응답(GET /api/stocks/:code)에도 tossSynced·inTossSnapshot (3-24 앱의 아래 막대 '동기화 제외' 문구). 미등록 종목은 둘 다 거짓", async () => {
     const { db, service } = await setup();
     const app = Fastify();
+    // 경로만 띄운 서버: 계정 관문이 없으므로 '계정 꺼짐(= 주인)'을 직접 채운다 (보는 사람을 모르면 주인 아님 — 검증 9차)
+    app.decorateRequest("auth", null);
+    app.addHook("onRequest", async (req) => {
+      req.auth = { kind: "off" };
+    });
     await app.register(stockRoutes, { prefix: "/api/stocks", service });
     try {
       const get = async (code: string) => (await app.inject({ method: "GET", url: `/api/stocks/${code}` })).json() as { tossSynced: boolean; inTossSnapshot: boolean; registered: boolean };
