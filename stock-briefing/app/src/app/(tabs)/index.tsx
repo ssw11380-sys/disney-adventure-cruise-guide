@@ -9,6 +9,7 @@ import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type Ac
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
 import { MemberNotice } from "@/components/MemberNotice";
+import { useAccountView } from "@/lib/account";
 import { MarketStrip } from "@/components/MarketStrip";
 import { useReturnMark } from "@/components/ReturnMark";
 import { HoldingsSkeleton } from "@/components/Skeleton";
@@ -55,6 +56,8 @@ export default function StocksScreen() {
   // 비중 보기 (새 기능): 서버가 켤 때만 계좌 평가 패널에 '비중' 버튼
   const allocationOn = useFeature("allocationView", false);
   const openAllocation = useCallback(() => router.push("/portfolio/allocation"), []);
+  // 계정 A단계 (플래그 accounts): 주인 아닌 계정 (꺼져 있으면 늘 false — 지금 화면 그대로)
+  const { member } = useAccountView();
   // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
   const densityOn = useFeature("densityMode", false);
   const dense = densityOn && density === "dense";
@@ -344,7 +347,8 @@ export default function StocksScreen() {
   const tableHeader = (section: (typeof sections)[number]) => (
     <TableHeadRow plan={(section.key === "held" ? heldPlan : watchPlan)!} title={section.title} sort={sort} sortLabel={sortLabel} onSort={pickSort} onOpenSort={() => setSortOpen(true)} />
   );
-  const empty = ux.emptyGuide ? (
+  // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목 검색' 빈 칸 안내 대신 맨 위 안내 띠만
+  const empty = member ? null : ux.emptyGuide ? (
     // 3-24 빈 화면 (플래그 emptyGuide): 무엇을 하면 되는지 한 문단 + 행동 버튼 하나 (토스 계좌는 설정의 칸 이름으로 알려 준다)
     <View style={[styles.empty, { borderColor: t.line, backgroundColor: t.surface }]}>
       <Text style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }} accessibilityRole="header">

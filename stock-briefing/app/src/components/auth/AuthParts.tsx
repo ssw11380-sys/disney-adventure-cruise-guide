@@ -12,7 +12,7 @@ import { authColors as C, authFont, authLayout, fontCap, radius, space, touch } 
 
 /** 화면 전체 바탕: 남색 → 검정 세로 그러데이션 */
 export function AuthBackground() {
-  return <LinearGradient colors={[C.bgTop, C.bgMid, C.bgBottom]} locations={[0, 0.55, 1]} style={StyleSheet.absoluteFill} pointerEvents="none" />;
+  return <LinearGradient colors={[C.bgTop, C.bgMid, C.bgBottom]} locations={[0, 0.55, 1]} style={[StyleSheet.absoluteFill, { pointerEvents: "none" }]} />;
 }
 
 export interface AuthFieldProps extends Omit<TextInputProps, "style" | "secureTextEntry"> {

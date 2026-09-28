@@ -29,6 +29,8 @@ export interface LoginLayout {
   formW: number;
   /** 입력 칸 왼쪽 끝 (화면 기준) */
   formX: number;
+  /** 창 폭 (두 칸 화면의 빛은 경계에서 잘리지 않게 창 전체에 그린다) */
+  screenW: number;
   /** 그림 영역 폭·높이 (한 칸: 화면 폭 × 그림 높이(위 안전 영역 포함), 두 칸: 왼쪽 영역 × 화면 높이) */
   heroW: number;
   heroH: number;
@@ -54,7 +56,7 @@ export function heroLayout(W: number, H: number, insets: Insets, keyboard = fals
     const inner = H - insets.top - insets.bottom;
     const h = Math.min(inner - 80, w);
     const plot = { x0: authLayout.twoPlotInset, y0: insets.top + (inner - h) / 2, w, h };
-    return { mode: "two", gutter: authLayout.gutterWide, formW, formX: heroW + authLayout.gutterWide, heroW, heroH: H, plot, logoSize, logoX: plot.x0, logoY: plot.y0 + 4, collapsed: false };
+    return { mode: "two", gutter: authLayout.gutterWide, formW, formX: heroW + authLayout.gutterWide, screenW: W, heroW, heroH: H, plot, logoSize, logoX: plot.x0, logoY: plot.y0 + 4, collapsed: false };
   }
   const gutter = W < authLayout.wideMin ? authLayout.gutter : authLayout.gutterWide;
   const formW = Math.min(W - 2 * gutter, authLayout.formMaxW);
@@ -63,7 +65,7 @@ export function heroLayout(W: number, H: number, insets: Insets, keyboard = fals
   const body = keyboard ? authLayout.heroKeyboardH : clamp(Math.round(inner * authLayout.heroRatio), authLayout.heroMin, authLayout.heroMax);
   const pw = Math.min(W - 2 * gutter, authLayout.plotMaxW);
   const plot = { x0: (W - pw) / 2, y0: insets.top + authLayout.plotTop, w: pw, h: body - 2 * authLayout.plotTop };
-  return { mode: "one", gutter, formW, formX, heroW: W, heroH: body + insets.top, plot, logoSize, logoX: formX, logoY: plot.y0 + 4, collapsed: keyboard };
+  return { mode: "one", gutter, formW, formX, screenW: W, heroW: W, heroH: body + insets.top, plot, logoSize, logoX: formX, logoY: plot.y0 + 4, collapsed: keyboard };
 }
 
 export interface HeroCandle {

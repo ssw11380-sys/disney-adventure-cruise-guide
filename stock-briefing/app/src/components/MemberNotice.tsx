@@ -23,5 +23,5 @@ export function MemberNotice() {
 }
 
 const styles = StyleSheet.create({
-  box: { flexDirection: "row", alignItems: "center", gap: space.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.md, paddingVertical: space.sm, marginBottom: space.sm },
+  box: { flexDirection: "row", alignItems: "center", gap: space.sm, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: space.md, paddingVertical: space.sm, marginHorizontal: space.md, marginVertical: space.sm },
 });
