@@ -300,6 +300,8 @@ export class JournalService {
       const h = s.holdings.find((x) => x.account === account && x.code === code && x.quantity > 0);
       const cost = h ? (h.purchaseAmount ?? (h.avgPrice !== null ? h.avgPrice * h.quantity : null)) : 0;
       const ratio = h && h.marketValue && h.marketValueAfterCost !== null && h.marketValue > 0 ? Math.max(0, 1 - h.marketValueAfterCost / h.marketValue) : null;
+      // 한 주 가격: 정규장 종가, 없으면 그때 현재가 (회사 행동 뒤 전부 판 경우 판 가격과 맞춰 본다)
+      const px = h ? (h.regularClose ?? h.price) : null;
       out.push({
         asOf: s.asOf,
         date: s.date,
@@ -308,6 +310,7 @@ export class JournalService {
         costKrw: market === "US" ? (h ? h.costKrw : 0) : null,
         costKrwEstimated: h?.costKrwSource === "book-estimated",
         costRatio: ratio,
+        price: px !== null && px !== undefined && Number.isFinite(px) && px > 0 ? px : null,
       });
     }
     return out;
@@ -553,7 +556,8 @@ export class JournalService {
 
   // ── 양도세 추정 ──────────────────────────────────────────────────────
 
-  async tax(year: number) {
+  /** includeUncertain: 순서 모름 매도를 합계에 넣는다 (기본은 빼고 따로 보여 줌 — taxSummary) */
+  async tax(year: number, opts: { includeUncertain?: boolean } = {}) {
     const now = this.now();
     const today = seoulDate(now);
     const [snaps, trades, toss, lookup] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.stdLookup(today)]);
@@ -582,7 +586,7 @@ export class JournalService {
         const std = r?.std;
         const costsUsd = r?.realized?.costs.source === "toss" ? r.realized.costs.total : null;
         const ok = !!std && std.proceeds !== null && std.cost !== null && fxSell !== null;
-        // 평균 구매가를 추정한 매도(분할·이관 전후 · 순서 모름): 합계에는 넣고 '추정 포함'으로 따로 센다
+        // 평균 구매가를 추정한 매도: 분할·이관 전후는 합계에 넣고 '추정 포함'으로 따로 센다 · 순서 모름은 기본으로 합계에서 뺀다 (taxSummary)
         const st = r?.realized?.status;
         const estimate = st === "estimated" || st === "order-uncertain" ? { status: st, reason: r!.realized!.reason ?? "" } : null;
         // 결제일 환율 대기: 이 매도의 결제일(또는 이 짝 매수의 결제일)이 아직 받는 중
@@ -605,7 +609,7 @@ export class JournalService {
         });
       }
     }
-    const s = taxSummary(year, inputs);
+    const s = taxSummary(year, inputs, { includeUncertain: opts.includeUncertain === true });
     const kr = krSells.filter((x) => x.year === year);
     const krTaxes = kr.map((x) => x.tax).filter((x): x is number => x !== null);
     return {

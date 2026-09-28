@@ -334,7 +334,8 @@ describe("검토 반영: 회사 행동(분할·무상증자·주식배당)은 �
 });
 
 describe("검토 반영: 기준점 뒤 기록된 수량보다 많이 판 매도", () => {
-  const a1 = anchor({ asOf: "2026-09-25T16:05:00+09:00", date: "2026-09-25", quantity: 10, cost: 1000 });
+  // 직전 종가 100 — 120 에 판 15주는 1.5배 무상증자(뒤 가격 약 67)로 설명되지 않는다 (서비스는 스냅샷 종가를 늘 넘긴다)
+  const a1 = anchor({ asOf: "2026-09-25T16:05:00+09:00", date: "2026-09-25", quantity: 10, cost: 1000, price: 100 });
   const a2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 0, cost: 0 });
 
   it("0 으로 조용히 되돌리지 않는다: '순서 추정'(기준점 평균으로 추정) + 다음 기준점의 이관 추정은 +5주", () => {
@@ -469,5 +470,112 @@ describe("검토 반영 3차: 작은 입고·출고는 회사 행동으로 보�
     expect(replayPair([], [a1, inbound], { currency: "KRW" }).estimated[0]).toMatchObject({ reason: "transfer", qty: 30 });
     const div = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 1050, cost: 1_000_000 });
     expect(replayPair([], [a1, div], { currency: "KRW" }).estimated[0]).toMatchObject({ reason: "split", ratio: 1.05, qty: 50 });
+  });
+});
+
+describe("검토 반영 4차: 분할·병합·주식배당 뒤 같은 구간에 전부 판 경우 (다음 스냅샷 0주·0원) — 가짜 손익·가짜 이관 없음", () => {
+  const a1 = anchor({ asOf: "2026-09-25T16:05:00+09:00", date: "2026-09-25", quantity: 1000, cost: 1_000_000, price: 1000 });
+  const a2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 0, cost: 0 });
+  const kr = (side: "BUY" | "SELL", quantity: number, amount: number, hm = "09:30") => fill({ side, quantity, amount, at: `2026-09-28T${hm}:00+09:00`, code: "005930" });
+  const splitRow = (qty: number, toQty: number, ratio: number) => ({ at: a2.asOf, date: "2026-09-28", qty, fromQty: 1000, toQty, reason: "split", ratio });
+
+  it("한국 1→4 분할 뒤 4,000주를 250원에 모두 팔면: 손익 0 · 분할 줄(배수 4) · 이관 없음 (예전 −3,000,000 · 이관 +3,000주)", () => {
+    const f = [kr("SELL", 4000, 1_000_000)];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ status: "estimated", reason: REASONS.split, gross: 0, costAmount: 1_000_000, avgCost: 250, basis: "snapshot", anchorDate: "2026-09-25" });
+    expect(r.estimated).toEqual([splitRow(3000, 4000, 4)]);
+    expect(r.check).toMatchObject({ splits: 1, transfers: 0 });
+    expect(r.holding).toEqual({ quantity: 0, avgCost: null });
+    // 직전 종가가 없어도 흔한 배수(4)라 분할로 본다 (수량이 늘어나는 쪽)
+    const noPx = replayPair(f, [{ ...a1, price: null }, a2], { currency: "KRW" });
+    expect(noPx.fills.get(f[0]!.key)!.realized).toMatchObject({ status: "estimated", gross: 0 });
+    expect(noPx.estimated).toEqual([splitRow(3000, 4000, 4)]);
+  });
+
+  it("미국 같은 경우 (결제일 환율 1,350): 달러 손익 0 · 원화 손익 0 · 양도세 취득가 = 양도가 (예전 가짜 손실 약 −405,000,000원)", () => {
+    const f = [
+      fill({ side: "BUY", quantity: 1000, amount: 100_000, at: "2026-09-01T23:00:00+09:00" }),
+      fill({ side: "SELL", quantity: 4000, amount: 100_000, at: "2026-09-28T23:30:00+09:00" }),
+    ];
+    const b1 = anchor({ asOf: "2026-09-26T05:05:00+09:00", date: "2026-09-25", quantity: 1000, cost: 100_000, price: 100 });
+    const b2 = anchor({ asOf: "2026-09-29T05:05:00+09:00", date: "2026-09-28", quantity: 0, cost: 0 });
+    const r = replayPair(f, [b1, b2], { currency: "USD", fxAt: () => 1390, stdAt: () => 1350 });
+    const s = r.fills.get(f[1]!.key)!;
+    expect(s.realized).toMatchObject({ status: "estimated", reason: REASONS.split, gross: 0, costAmount: 100_000, avgCost: 25 });
+    expect(s.realized!.krw).toMatchObject({ gross: 0, costKrw: 139_000_000 });
+    expect(s.std).toEqual({ proceeds: 135_000_000, cost: 135_000_000, missing: null });
+    expect(r.estimated).toEqual([{ at: b2.asOf, date: "2026-09-28", qty: 3000, fromQty: 1000, toQty: 4000, reason: "split", ratio: 4 }]);
+  });
+
+  it("한국 4→1 병합 뒤 250주를 4,000원에 모두 팔면: 손익 0 · 병합 줄(배수 0.25) (예전 +750,000 · 출고 −750주)", () => {
+    const f = [kr("SELL", 250, 1_000_000)];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ status: "estimated", reason: REASONS.split, gross: 0, costAmount: 1_000_000, avgCost: 4000 });
+    expect(r.estimated).toEqual([splitRow(-750, 250, 0.25)]);
+    expect(r.check).toMatchObject({ splits: 1, transfers: 0 });
+  });
+
+  it("미국 4→1 병합 뒤 모두 판 경우: 달러 손익 0 · 양도세 취득가 = 양도가", () => {
+    const f = [
+      fill({ side: "BUY", quantity: 1000, amount: 100_000, at: "2026-09-01T23:00:00+09:00" }),
+      fill({ side: "SELL", quantity: 250, amount: 100_000, at: "2026-09-28T23:30:00+09:00" }),
+    ];
+    const b1 = anchor({ asOf: "2026-09-26T05:05:00+09:00", date: "2026-09-25", quantity: 1000, cost: 100_000, price: 100 });
+    const b2 = anchor({ asOf: "2026-09-29T05:05:00+09:00", date: "2026-09-28", quantity: 0, cost: 0 });
+    const r = replayPair(f, [b1, b2], { currency: "USD", stdAt: () => 1350 });
+    const s = r.fills.get(f[1]!.key)!;
+    expect(s.realized).toMatchObject({ status: "estimated", gross: 0, avgCost: 400 });
+    expect(s.std).toEqual({ proceeds: 135_000_000, cost: 135_000_000, missing: null });
+    expect(r.estimated[0]).toMatchObject({ reason: "split", ratio: 0.25, fromQty: 1000, toQty: 250 });
+  });
+
+  it("1→4 분할 뒤 2,000주씩 두 번에 나눠 모두 팔면: 두 매도 모두 손익 0 (예전 −1,500,000 + 평균 모름)", () => {
+    const f = [kr("SELL", 2000, 500_000, "09:30"), kr("SELL", 2000, 500_000, "10:30")];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    for (const x of f) expect(r.fills.get(x.key)!.realized).toMatchObject({ status: "estimated", reason: REASONS.split, gross: 0, costAmount: 500_000, avgCost: 250 });
+    expect(r.estimated).toEqual([splitRow(3000, 4000, 4)]);
+  });
+
+  it("주식배당 5% (1000→1050주) 뒤 모두 팔면: 손익 0 · 배수 1.05 / 단주를 현금으로 받은 333→349주도 1.05", () => {
+    const f = [kr("SELL", 1050, 1_000_000)];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ status: "estimated", gross: 0, costAmount: 1_000_000 });
+    expect(r.estimated).toEqual([splitRow(50, 1050, 1.05)]);
+    // 333주 × 1.05 = 349.65 → 349주 (0.65주는 현금) → 349주를 952원에 모두 팖
+    const c1 = anchor({ ...a1, quantity: 333, cost: 333_000 });
+    const g = [kr("SELL", 349, 349 * 952)];
+    const r2 = replayPair(g, [c1, a2], { currency: "KRW" });
+    expect(r2.estimated).toEqual([{ at: a2.asOf, date: "2026-09-28", qty: 16, fromQty: 333, toQty: 349, reason: "split", ratio: 1.05 }]);
+    expect(r2.fills.get(g[0]!.key)!.realized).toMatchObject({ status: "estimated", costAmount: 333_000, gross: 349 * 952 - 333_000 });
+  });
+
+  it("1→4 분할 뒤 100주를 더 사고 4,100주를 모두 팔면: 이 매수 뒤 평균 250 · 매도 손익 +41,000 (예전 −2,754,455)", () => {
+    const f = [kr("BUY", 100, 25_000, "09:10"), kr("SELL", 4100, 1_066_000, "10:00")];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    expect(r.fills.get(f[0]!.key)!.afterBuy).toEqual({ avgCost: 250, quantity: 4100 });
+    expect(r.fills.get(f[1]!.key)!.realized).toMatchObject({ status: "estimated", gross: 41_000, costAmount: 1_025_000, avgCost: 250 });
+    expect(r.estimated).toEqual([splitRow(3000, 4000, 4)]);
+  });
+
+  it("회사 행동으로 보지 않는 경우: 판 가격이 배수와 맞지 않음 · 흔하지 않은 배수 · 부분 매도 뒤 출고 · 직전 종가 없는 병합 쪽", () => {
+    // 1) 4,000주를 분할 전 가격(1,000원)에 팖 — 주문 내역에 없는 입고 3,000주로 남긴다 (순서 추정 → 양도세 합계에서 뺌)
+    const same = [kr("SELL", 4000, 4_000_000)];
+    const r1 = replayPair(same, [a1, a2], { currency: "KRW" });
+    expect(r1.fills.get(same[0]!.key)!.realized).toMatchObject({ status: "order-uncertain", reason: REASONS.oversoldAfter });
+    expect(r1.estimated).toEqual([{ at: a2.asOf, date: "2026-09-28", qty: 3000, fromQty: -3000, toQty: 0, reason: "transfer" }]);
+    // 2) 4.075배 — 흔한 배수가 아니다
+    const odd = [kr("SELL", 4075, 1_018_750)];
+    const r2 = replayPair(odd, [a1, a2], { currency: "KRW" });
+    expect(r2.fills.get(odd[0]!.key)!.realized!.status).toBe("order-uncertain");
+    expect(r2.estimated[0]).toMatchObject({ reason: "transfer", qty: 3075 });
+    // 3) 250주를 보통 가격(1,000원)에 팔고 나머지 750주는 출고 — 0.25 배 병합이 아니다 (손익은 평균 그대로 0)
+    const part = [kr("SELL", 250, 250_000)];
+    const r3 = replayPair(part, [a1, a2], { currency: "KRW" });
+    expect(r3.fills.get(part[0]!.key)!.realized).toMatchObject({ status: "estimated", reason: REASONS.transfer, gross: 0, costAmount: 250_000 });
+    expect(r3.estimated).toEqual([{ at: a2.asOf, date: "2026-09-28", qty: -750, fromQty: 750, toQty: 0, reason: "transfer" }]);
+    // 4) 직전 종가가 없으면 수량이 줄어드는 쪽(병합)은 부분 매도 + 출고와 구별할 수 없어 이관으로 둔다 — 가짜 손실(−750,000)을 만들지 않는다
+    const r4 = replayPair(part, [{ ...a1, price: null }, a2], { currency: "KRW" });
+    expect(r4.fills.get(part[0]!.key)!.realized).toMatchObject({ reason: REASONS.transfer, gross: 0 });
+    expect(r4.estimated[0]).toMatchObject({ reason: "transfer" });
   });
 });

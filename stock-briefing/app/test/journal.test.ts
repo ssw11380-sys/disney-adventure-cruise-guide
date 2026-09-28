@@ -537,4 +537,32 @@ describe("검토 반영 (3-37 다듬기)", () => {
     expect(taxItemLines({ ...item, estimate: { status: "estimated", reason: "x" } })[0]).toBe("9/28 SOXL 5주 · 결제일 9/30(추정) · 환율 1,350.00원 · 추정 포함");
     expect(taxItemLines(item)[0]).toBe("9/28 SOXL 5주 · 결제일 9/30(추정) · 환율 1,350.00원");
   });
+
+  it("검토 반영 4차: 순서를 모르는 매도는 합계에서 빠짐 — 빠진 매도 상자에 까닭 + 추정 양도차익 한 줄, 매도별 계산 첫 줄 '합계에서 뺌'", () => {
+    const reason = "사고판 순서나 주문 내역에 없는 입고를 몰라 취득가가 확실하지 않아 합계에서 뺐어요";
+    const item = { key: "u", code: "SOXL", name: "SOXL", tradeDate: "2026-09-28", settleDate: "2026-09-30", settleSource: "estimated" as const, quantity: 4000, proceedsUsd: 100_000, costsUsd: null, fxSell: { rate: 1350, source: "smbs", date: "2026-09-30", provisional: false }, proceedsKrw: 135_000_000, costKrw: 540_000_000, costsKrw: null, gainKrw: -405_000_000, estimate: { status: "order-uncertain" as const, reason: "x" } };
+    const d: JournalTax = {
+      enabled: true,
+      year: 2026,
+      years: [2026],
+      rules: { rate: 0.22, nationalRate: 0.2, localRateOfNational: 0.1, deduction: 2_500_000, method: "moving-average", lawYear: 2026 },
+      totals: { gains: 4_000_000, losses: -550_000, net: 3_450_000, base: 950_000, nationalTax: 190_000, localTax: 19_000, tax: 209_000, sells: 12 },
+      complete: false,
+      fxPending: 0,
+      excluded: [{ code: "SOXL", name: "SOXL", count: 1, reason }],
+      items: [],
+      uncertainExcluded: 1,
+      uncertainGainKrw: -405_000_000,
+      uncertainItems: [item],
+      kr: { securitiesTax: { amount: null, sells: 0, source: null } },
+    };
+    const v = taxView(d, false)!;
+    expect(v.excluded).toEqual({ title: "계산에 넣지 못한 매도 1건이 있어 실제와 다를 수 있어요.", lines: [`SOXL 1건 · ${reason}`, "순서를 몰라 뺀 매도 1건의 추정 양도차익은 -405,000,000원이에요 (확실하지 않아요)."] });
+    // 합계 줄에는 '추정 포함'을 붙이지 않는다 (합계에 들어 있지 않음)
+    expect(v.rows[0]!.label).toBe("양도차익 합계 (이익 − 손실)");
+    expect(taxItemLines(item, true)[0]).toBe("9/28 SOXL 4,000주 · 결제일 9/30(추정) · 환율 1,350.00원 · 합계에서 뺌");
+    expect(taxItemLines(item, true)[1]).toBe("양도가액 135,000,000원 − 취득가액 540,000,000원 = -405,000,000원");
+    // 예전 서버(칸 없음)는 지금 그대로
+    expect(taxView({ ...d, uncertainExcluded: undefined, uncertainGainKrw: undefined }, false)!.excluded!.lines).toEqual([`SOXL 1건 · ${reason}`]);
+  });
 });

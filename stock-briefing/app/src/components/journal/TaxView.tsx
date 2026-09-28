@@ -12,6 +12,7 @@ import { changeColor, font, radius, space, touch, useTheme } from "@/theme";
  * 매매일지 '양도세 추정' 탭 (3-37, 참고용 — 세무 조언이 아님). 맨 위 '참고용 추정' 상자(늘 보임, 닫을 수 없음) →
  * 해외주식 합계(결제일 기준 연도) · 기본공제 · 과세 대상 · 세율 · 예상 세액(추정) → 빠진 매도·받는 중 → 평균 구매가를 추정한 매도(합계에 들어 있음 —
  * 합계 줄·아래 줄에 '추정 포함', 따로 상자에 종목·건수·까닭) → 매도별 계산 → 계산 기준 6줄(늘 펼침) → 국내 주식 → 고지.
+ * 순서를 몰라 합계에서 뺀 매도는 빠진 매도 상자(까닭 + 추정 양도차익 한 줄)와 매도별 계산 끝('합계에서 뺌')에 따로 보인다.
  * 환율을 받는 중이면 1분마다 5번까지 다시 묻고(useJournalTax), 그래도 받는 중이면 빠진 매도로 보여 준다. 폴드 가로는 왼쪽 합계·기준 | 오른쪽 매도별 계산
  */
 export function TaxView({ twoPane, thisYear }: { twoPane: boolean; thisYear: number }) {
@@ -37,7 +38,7 @@ export function TaxView({ twoPane, thisYear }: { twoPane: boolean; thisYear: num
           </ScrollView>
         }
         right={
-          d.items?.length ? (
+          d.items?.length || d.uncertainItems?.length ? (
             <ScrollView contentContainerStyle={styles.pane}>
               <PerSell d={d} alwaysOpen />
             </ScrollView>
@@ -155,7 +156,8 @@ function TaxBody({ d, retriesDone, year, onYear, split }: { d: JournalTax; retri
 function PerSell({ d, alwaysOpen = false }: { d: JournalTax; alwaysOpen?: boolean }) {
   const t = useTheme();
   const [open, setOpen] = useState(false);
-  const items = d.items ?? [];
+  // 합계에 넣은 매도 뒤에 합계에서 뺀(순서를 모름) 매도를 '합계에서 뺌'으로
+  const items = [...(d.items ?? []).map((x) => ({ x, outside: false })), ...(d.uncertainItems ?? []).map((x) => ({ x, outside: true }))];
   if (!items.length) return null;
   const shown = alwaysOpen || open;
   return (
@@ -171,8 +173,8 @@ function PerSell({ d, alwaysOpen = false }: { d: JournalTax; alwaysOpen?: boolea
         </Pressable>
       )}
       {shown
-        ? items.map((x) => {
-            const [a, b] = taxItemLines(x);
+        ? items.map(({ x, outside }) => {
+            const [a, b] = taxItemLines(x, outside);
             return (
               <View key={x.key} style={[styles.sell, { borderTopColor: t.line }]} accessible accessibilityLabel={`${a}, ${b}`}>
                 <Text style={{ color: t.sub, fontSize: font.small }}>{a}</Text>

@@ -84,6 +84,7 @@ export function taxFor(net: number): { base: number; nationalTax: number; localT
 export const TAX_EXCLUDE_REASON = {
   cost: "기록 시작 전에 산 몫이라 취득가를 몰라요",
   fx: "결제일 환율을 받지 못했어요",
+  uncertain: "사고판 순서나 주문 내역에 없는 입고를 몰라 취득가가 확실하지 않아 합계에서 뺐어요",
 } as const;
 
 export interface TaxFx {
@@ -113,7 +114,10 @@ export interface TaxSellInput {
   excluded: null | "cost" | "fx";
   /** 결제일 환율을 받는 중 (배경 작업이 곧 받는다) */
   pending: boolean;
-  /** 평균 구매가를 추정한 매도 (분할·이관 전후 'estimated' · 순서 모름 'order-uncertain') — 합계에 넣고 '추정 포함'으로 따로 센다 */
+  /**
+   * 평균 구매가를 추정한 매도: 분할·이관 전후 'estimated' 는 합계에 넣고 '추정 포함'으로 따로 센다.
+   * 순서 모름·많이 판 매도 'order-uncertain' 은 기본으로 합계에서 빼고(가짜 손실이 세액을 몰래 낮추지 않게) 까닭과 매도별 계산을 따로 준다
+   */
   estimate?: { status: "estimated" | "order-uncertain"; reason: string } | null;
 }
 
@@ -147,12 +151,21 @@ export interface TaxTotals {
   sells: number;
 }
 
+/** 순서 모름 매도를 합계에 넣을지 (기본: 넣지 않음) */
+export interface TaxSummaryOptions {
+  includeUncertain?: boolean;
+}
+
 /**
- * 그해(결제일 기준) 합계 · 매도별 계산 · 빠진 매도 · 추정이 들어간 매도(합계에 들어 있음 — 건수와 종목·까닭). 매도마다 원 단위로 먼저 반올림한 값의 합이 합계
+ * 그해(결제일 기준) 합계 · 매도별 계산 · 빠진 매도 · 추정이 들어간 매도(합계에 들어 있음 — 건수와 종목·까닭). 매도마다 원 단위로 먼저 반올림한 값의 합이 합계.
+ * 순서를 모르는 매도(order-uncertain — 같은 날 사고판 순서 · 기록된 수량보다 많이 판 매도)는 기본으로 합계에서 뺀다:
+ * 분할 뒤 전부 판 매도처럼 원가가 몇 배로 부풀어 가짜 손실이 세액을 조용히 낮출 수 있어서다. 빠진 매도(excluded)에 까닭을 넣고
+ * (예전 앱도 그 상자를 보여 준다) 건수·추정 양도차익 합·매도별 계산(uncertainItems)은 따로 준다. includeUncertain 이면 예전처럼 합계에 넣는다
  */
 export function taxSummary(
   year: number,
   items: TaxSellInput[],
+  opts: TaxSummaryOptions = {},
 ): {
   totals: TaxTotals;
   items: TaxItemView[];
@@ -161,11 +174,24 @@ export function taxSummary(
   fxPending: number;
   estimatedIncluded: number;
   estimatedSells: Array<{ code: string; name: string; count: number; reason: string }>;
+  includeUncertain: boolean;
+  /** 합계에서 뺀 순서 모름 매도 수 · 그 추정 양도차익 합(참고, 없으면 null) · 매도별 계산 */
+  uncertainExcluded: number;
+  uncertainGainKrw: number | null;
+  uncertainItems: TaxItemView[];
 } {
+  const includeUncertain = opts.includeUncertain === true;
   const mine = items.filter((x) => Number(x.settleDate.slice(0, 4)) === year);
   const views: TaxItemView[] = [];
+  const uncertain: TaxItemView[] = [];
   const out = new Map<string, { code: string; name: string; count: number; reason: string }>();
   const est = new Map<string, { code: string; name: string; count: number; reason: string }>();
+  const count = (m: typeof out, code: string, name: string, reason: string) => {
+    const k = `${code}|${reason}`;
+    const e = m.get(k) ?? { code, name, count: 0, reason };
+    e.count++;
+    m.set(k, e);
+  };
   let pending = 0;
   for (const x of mine) {
     if (!x.gainParts) {
@@ -173,36 +199,38 @@ export function taxSummary(
         pending++;
         continue;
       }
-      const reason = TAX_EXCLUDE_REASON[x.excluded ?? "cost"];
-      const k = `${x.code}|${reason}`;
-      const e = out.get(k) ?? { code: x.code, name: x.name, count: 0, reason };
-      e.count++;
-      out.set(k, e);
+      count(out, x.code, x.name, TAX_EXCLUDE_REASON[x.excluded ?? "cost"]);
       continue;
     }
     const proceedsKrw = Math.round(x.gainParts.proceeds);
     const costKrw = Math.round(x.gainParts.cost);
     const costsKrw = x.gainParts.costs === null ? null : Math.round(x.gainParts.costs);
     const { gainParts: _g, excluded: _e, pending: _p, estimate, ...rest } = x;
-    views.push({ ...rest, proceedsKrw, costKrw, costsKrw, gainKrw: proceedsKrw - costKrw - (costsKrw ?? 0), ...(estimate ? { estimate } : {}) });
-    if (estimate) {
-      const k = `${x.code}|${estimate.reason}`;
-      const e = est.get(k) ?? { code: x.code, name: x.name, count: 0, reason: estimate.reason };
-      e.count++;
-      est.set(k, e);
+    const view: TaxItemView = { ...rest, proceedsKrw, costKrw, costsKrw, gainKrw: proceedsKrw - costKrw - (costsKrw ?? 0), ...(estimate ? { estimate } : {}) };
+    if (estimate?.status === "order-uncertain" && !includeUncertain) {
+      uncertain.push(view);
+      count(out, x.code, x.name, TAX_EXCLUDE_REASON.uncertain);
+      continue;
     }
+    views.push(view);
+    if (estimate) count(est, x.code, x.name, estimate.reason);
   }
   const gains = views.reduce((s, v) => s + (v.gainKrw > 0 ? v.gainKrw : 0), 0);
   const losses = views.reduce((s, v) => s + (v.gainKrw < 0 ? v.gainKrw : 0), 0);
   const net = gains + losses;
+  // 건수 많은 순 (같으면 종목 코드 순)
+  const byCount = (a: { count: number; code: string }, b: { count: number; code: string }) => b.count - a.count || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0);
   return {
     totals: { gains, losses: losses === 0 ? 0 : losses, net, ...taxFor(net), sells: views.length },
     items: views,
-    // 건수 많은 순 (같으면 종목 코드 순)
-    excluded: [...out.values()].sort((a, b) => b.count - a.count || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
+    excluded: [...out.values()].sort(byCount),
     complete: out.size === 0 && pending === 0,
     fxPending: pending,
     estimatedIncluded: views.filter((v) => v.estimate).length,
-    estimatedSells: [...est.values()].sort((a, b) => b.count - a.count || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
+    estimatedSells: [...est.values()].sort(byCount),
+    includeUncertain,
+    uncertainExcluded: uncertain.length,
+    uncertainGainKrw: uncertain.length ? uncertain.reduce((s, v) => s + v.gainKrw, 0) : null,
+    uncertainItems: uncertain,
   };
 }

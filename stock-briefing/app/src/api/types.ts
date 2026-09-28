@@ -1143,7 +1143,7 @@ export interface JournalTaxItem {
   costKrw: number;
   costsKrw: number | null;
   gainKrw: number;
-  /** 평균 구매가를 추정한 매도 (분할·이관 전후 · 순서 모름) — 합계에 들어 있음 */
+  /** 평균 구매가를 추정한 매도 (분할·이관 전후 — 합계에 들어 있음 · 순서 모름 — 기본으로 합계에서 빠져 uncertainItems 에) */
   estimate?: { status: "estimated" | "order-uncertain"; reason: string };
 }
 
@@ -1159,6 +1159,11 @@ export interface JournalTax {
   /** 합계에 들어 있는, 평균 구매가를 추정한 매도 수와 종목·까닭 (예전 서버는 없음) */
   estimatedIncluded?: number;
   estimatedSells?: { code: string; name: string; count: number; reason: string }[];
+  /** 순서를 몰라(순서 추정) 합계에서 뺀 매도 수 · 그 추정 양도차익 합 · 매도별 계산 (까닭은 excluded 에도 — 예전 서버는 없음) */
+  includeUncertain?: boolean;
+  uncertainExcluded?: number;
+  uncertainGainKrw?: number | null;
+  uncertainItems?: JournalTaxItem[];
   items?: JournalTaxItem[];
   kr?: { securitiesTax: { amount: number | null; sells: number; source: "toss" | null } };
   asOf?: string;

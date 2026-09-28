@@ -667,6 +667,9 @@ export function taxView(d: JournalTax, retriesDone: boolean): TaxView | null {
   const exCount = ex.reduce((s, x) => s + x.count, 0) + (pendingN > 0 && retriesDone ? pendingN : 0);
   const lines = ex.map((x) => `${x.name} ${x.count}건 · ${x.reason}`);
   if (pendingN > 0 && retriesDone) lines.push(`${pendingN}건 · 결제일 환율을 아직 받지 못했어요`);
+  // 순서를 몰라 합계에서 뺀 매도 (까닭 줄은 excluded 에 서버가 넣었다): 그 추정 양도차익을 참고로 한 줄
+  const unN = d.uncertainExcluded ?? 0;
+  if (unN > 0 && d.uncertainGainKrw !== null && d.uncertainGainKrw !== undefined) lines.push(`순서를 몰라 뺀 매도 ${unN}건의 추정 양도차익은 ${won(d.uncertainGainKrw, true)}이에요 (확실하지 않아요).`);
   return {
     title: `해외주식 양도세 추정 · ${d.year}년`,
     rows,
@@ -678,12 +681,12 @@ export function taxView(d: JournalTax, retriesDone: boolean): TaxView | null {
   };
 }
 
-/** 매도별 계산 두 줄 */
-export function taxItemLines(x: JournalTaxItem): [string, string] {
+/** 매도별 계산 두 줄. outside: 합계에서 뺀 매도 (순서를 모름) — 첫 줄 끝에 '합계에서 뺌' */
+export function taxItemLines(x: JournalTaxItem, outside = false): [string, string] {
   const fx = x.fxSell;
   const src = !fx ? "" : fx.provisional ? "(결제일 전이라 최근 고시)" : fx.source === "naver-hana" ? "(하나은행 고시로 대신)" : fx.date !== x.settleDate ? `(${mdShort(fx.date)} 고시)` : "";
   const rate = fx ? `환율 ${fx.rate.toLocaleString("ko-KR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}원${src}` : "환율 없음";
-  const first = `${mdShort(x.tradeDate)} ${x.name} ${qtyText(x.quantity)} · 결제일 ${mdShort(x.settleDate)}${x.settleSource === "estimated" ? "(추정)" : ""} · ${rate}${x.estimate ? " · 추정 포함" : ""}`;
+  const first = `${mdShort(x.tradeDate)} ${x.name} ${qtyText(x.quantity)} · 결제일 ${mdShort(x.settleDate)}${x.settleSource === "estimated" ? "(추정)" : ""} · ${rate}${outside ? " · 합계에서 뺌" : x.estimate ? " · 추정 포함" : ""}`;
   const second = `양도가액 ${money(x.proceedsKrw, "KRW")} − 취득가액 ${money(x.costKrw, "KRW")}${x.costsKrw !== null ? ` − 비용 ${money(x.costsKrw, "KRW")}` : ""} = ${money(x.gainKrw, "KRW", true)}`;
   return [first, second];
 }
