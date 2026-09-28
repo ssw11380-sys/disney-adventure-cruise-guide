@@ -1,0 +1,21 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`플래그 꺼짐(없음·false): 버튼이 없고 트리가 지금과 같다 > 다섯 배치 × 세 종목의 지문이 바꾸기 전과 같다 1`] = `
+{
+  "phone360 apple": "355a24e94020eb4f4b63bb8263fa2e4dd329da87",
+  "phone360 kakao": "ad9eb7c5f3f615bd975498342a9fafe832d68013",
+  "phone360 samsung": "f70a2dd75096ad1f374f81d57e23bf8d2a646c38",
+  "phone475 apple": "355a24e94020eb4f4b63bb8263fa2e4dd329da87",
+  "phone475 kakao": "ad9eb7c5f3f615bd975498342a9fafe832d68013",
+  "phone475 samsung": "f70a2dd75096ad1f374f81d57e23bf8d2a646c38",
+  "rows apple": "2b6359a8f4c747a9ffd30071b07f59316752e19e",
+  "rows kakao": "81cab5c7322d7197a44eb28571ac6a121c9ef433",
+  "rows samsung": "9b5578ab5f46d5c76d54b3b6f5109aff29f1c59c",
+  "split apple": "983849d8a94e854c411004f59d1cb9d493af5eeb",
+  "split kakao": "30b24509a42928a4c82efddb687c08e114e08ce5",
+  "split samsung": "0b1f2c1f483c16939959cf4f2f64563bf414d837",
+  "wide apple": "d28991c4fca5d82780c77805624ec3c26e01ae0e",
+  "wide kakao": "be988d2fe99ab2d54fdfbf6375cf00e29d21b6a1",
+  "wide samsung": "cd4c5ef39c6241d37b5b5446801eda99b56179da",
+}
+`;
