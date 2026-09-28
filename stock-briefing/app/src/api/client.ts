@@ -35,6 +35,7 @@ import type { AppErrorSummary, Evaluation,
   PriceAlertKind,
   PriceAlertRule,
   VolumeStatus,
+  ReconcileBadgeBody,
 } from "./types";
 import { authMessage, NOT_JSON } from "@/lib/connectionError";
 
@@ -270,6 +271,8 @@ export function createApi(baseUrl: string, token = "", opts: ApiOptions = {}) {
     priceAlertFired: (id: number, body: { date: string; at: string; value: number }) => send<{ first: boolean }>("POST", `/api/price-alerts/${id}/fired`, body, 10_000),
     // 시간 제한 45초: 서버가 여러 종목 30분봉을 순서대로 받고 시간 예산 35초 안에 끝낸다. 15초면 느린 토스에서 매번 시간 초과
     priceAlertVolume: (codes: string[]) => get<{ items: VolumeStatus[] }>(`/api/price-alerts/volume?codes=${codes.map(encodeURIComponent).join(",")}`, 45_000),
+    /** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis). 예전 서버는 404 → 부르는 쪽(reconcileBadgeQuery)이 꺼짐으로 본다 */
+    reconcileBadge: () => get<ReconcileBadgeBody>("/api/admin/toss/reconcile/badge", 8_000),
   };
 }
 

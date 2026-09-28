@@ -99,8 +99,9 @@ export function fxNote(d: AccountData): string | null {
  * 화면 읽기는 휴대폰 패널과 같은 한 문장 (칸 조각은 숨긴다), '비중' 버튼은 문장 밖에 두어 따로 고를 수 있다
  * 촘촘(3-39, 기능 플래그 densityMode + 설정 — dense): 두 줄 띠는 첫 줄만(총 평가금액 · 평가손익·수익률 · 당일손익) + 비중 버튼, 한 줄 띠는 그대로.
  *  숨긴 국내·해외·매입금액도 화면 읽기 문장에는 그대로 남는다
+ * 숫자 기준 점(3-32, 기능 플래그 numberBasis — basis): '비중' 버튼 바로 앞, 요약 문장 묶음 밖. 없으면 지금 그대로
  */
-export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, dense = false }: { data: AccountData; oneLine: boolean; rates?: boolean; pad: number; onAllocation?: () => void; dense?: boolean }) {
+export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, dense = false, basis }: { data: AccountData; oneLine: boolean; rates?: boolean; pad: number; onAllocation?: () => void; dense?: boolean; basis?: React.ReactNode }) {
   const t = useTheme();
   const { main, profit, rate, lines, showSplit } = accountFigures(data);
   const pc = changeColor(t, profit);
@@ -148,6 +149,7 @@ export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, de
             {day}
             {split(false, rates)}
           </View>
+          {basis}
           {button}
         </View>
       ) : dense ? (
@@ -158,6 +160,7 @@ export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, de
             {profitCell}
             {day}
           </View>
+          {basis}
           {button}
         </View>
       ) : (
@@ -174,6 +177,7 @@ export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, de
               {split(true, true)}
               <Cell first={!showSplit} label="매입금액" value={formatPrice(main.cost, "KRW")} />
             </View>
+            {basis}
             {button}
           </View>
         </>

@@ -9,6 +9,7 @@ import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type Ac
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
 import { MarketStrip } from "@/components/MarketStrip";
+import { BasisMark } from "@/components/NumberBasis";
 import { useReturnMark } from "@/components/ReturnMark";
 import { HoldingsSkeleton } from "@/components/Skeleton";
 import { Screen } from "@/components/Screen";
@@ -54,6 +55,8 @@ export default function StocksScreen() {
   // 비중 보기 (새 기능): 서버가 켤 때만 계좌 평가 패널에 '비중' 버튼
   const allocationOn = useFeature("allocationView", false);
   const openAllocation = useCallback(() => router.push("/portfolio/allocation"), []);
+  // 숫자 기준 점 (3-32, 플래그 numberBasis): 켜졌을 때만 계좌 패널·띠에 점 + 토스 대조 글 (훅이므로 아래 이른 return 보다 위)
+  const basisOn = useFeature("numberBasis", false);
   // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
   const densityOn = useFeature("densityMode", false);
   const dense = densityOn && density === "dense";
@@ -222,6 +225,8 @@ export default function StocksScreen() {
     excluded: excludedLabel(summary.excluded),
     grossValue,
   };
+  // 숫자 기준 점 (3-32): 끄면 속성 자체를 넘기지 않는다 (지금 화면과 같게). dotOnly: 좁은 한 줄 계좌 띠는 점만
+  const basisFor = (dotOnly: boolean) => (basisOn ? { basis: <BasisMark stocks={data ?? []} account={account} {...(dotOnly ? { dotOnly: true } : {})} /> } : {});
   const stale = staleQuoteCount(stocks.data);
   const status = (
     <LiveStatus
@@ -279,16 +284,26 @@ export default function StocksScreen() {
 
   const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";
 
+  // 넓은 한 줄 계좌 띠에 국내·해외 수익률까지 넣는 폭인지 (좁은 한 줄 띠는 숫자 기준 점만 — 글 없음)
+  const rates = bandRates(tableW, fontScale);
   const header = wide ? (
     <View>
       {summary.held > 0 && heldPlan ? (
-        <AccountBand data={account} oneLine={oneLineBand} rates={bandRates(tableW, fontScale)} pad={heldPlan.pad} onAllocation={gated(allocationOn, openAllocation)} {...(dense ? { dense: true } : null)} />
+        <AccountBand
+          data={account}
+          oneLine={oneLineBand}
+          rates={rates}
+          pad={heldPlan.pad}
+          onAllocation={gated(allocationOn, openAllocation)}
+          {...(dense ? { dense: true } : null)}
+          {...basisFor(oneLineBand && !rates)}
+        />
       ) : null}
     </View>
   ) : (
     <View>
       <MarketStrip {...(dense ? { dense: true } : null)} />
-      {summary.held > 0 ? <AccountPanel data={account} onAllocation={gated(allocationOn, openAllocation)} status={status} {...(dense ? { dense: true } : null)} /> : null}
+      {summary.held > 0 ? <AccountPanel data={account} onAllocation={gated(allocationOn, openAllocation)} status={status} {...(dense ? { dense: true } : null)} {...basisFor(false)} /> : null}
     </View>
   );
 
@@ -558,6 +573,7 @@ function AccountPanel({
   status,
   onAllocation,
   dense = false,
+  basis,
 }: {
   data: AccountData;
   status: React.ReactNode;
@@ -565,6 +581,11 @@ function AccountPanel({
   onAllocation?: () => void;
   /** 촘촘 세 줄 (3-39) — 비중 버튼은 받아도 그리지 않는다 (구역 머리에 있음) */
   dense?: boolean;
+  /**
+   * 숫자 기준 점 (3-32, 플래그 numberBasis). 있으면 총액 줄 오른쪽 끝(촘촘이면 요약 묶음 오른쪽)에 두고 — 새 줄 없음,
+   * 요약 문장 묶음 밖이라 화면 읽기로 따로 고를 수 있다. 없으면 지금 나무 그대로
+   */
+  basis?: React.ReactNode;
 }) {
   const t = useTheme();
   const { total, afterCost, fx, excluded } = data;
@@ -585,41 +606,73 @@ function AccountPanel({
   );
   // 합계에서 뺀 보유 종목(시세·평단·환율 없음)을 알린다 — 말없이 빠져 총액이 작아 보이지 않게 (BH-04 · BH-26 · BH-30). 촘촘에서도 그대로
   const excludedLine = excluded ? <Text style={{ color: t.warn, fontSize: font.tiny }}>{excluded}</Text> : null;
-  if (dense)
+  if (dense) {
+    const denseSummary = (style: { flex?: number; gap: number }) => (
+      <View accessible accessibilityLabel={label} style={style}>
+        <Text style={[styles.totalDense, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+          {formatQuote(main.value, "KRW")}
+          <Text style={{ fontSize: font.small, color: t.muted, fontWeight: "500" }}> 원</Text>
+        </Text>
+        {/* 말줄임 없이: 글자가 크거나 금액이 길면 숫자를 자르지 않고 다음 줄로 */}
+        <Text style={[styles.denseLine, { color: t.muted }]}>
+          평가손익 <Text style={{ color: pc, fontWeight: "700" }}>{formatPrice(profit, "KRW", { sign: true })}</Text>
+          <Text style={{ color: pc }}> {formatPct(rate)}</Text> · 당일 <Text style={{ color: dc, fontWeight: "700" }}>{formatPrice(main.day, "KRW", { sign: true })}</Text>
+        </Text>
+      </View>
+    );
     return (
       <View style={[styles.panel, styles.panelDense, { backgroundColor: t.surface, borderColor: t.line }]}>
         {top}
-        <View accessible accessibilityLabel={label} style={{ gap: space.xxs }}>
-          <Text style={[styles.totalDense, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-            {formatQuote(main.value, "KRW")}
-            <Text style={{ fontSize: font.small, color: t.muted, fontWeight: "500" }}> 원</Text>
-          </Text>
-          {/* 말줄임 없이: 글자가 크거나 금액이 길면 숫자를 자르지 않고 다음 줄로 */}
-          <Text style={[styles.denseLine, { color: t.muted }]}>
-            평가손익 <Text style={{ color: pc, fontWeight: "700" }}>{formatPrice(profit, "KRW", { sign: true })}</Text>
-            <Text style={{ color: pc }}> {formatPct(rate)}</Text> · 당일 <Text style={{ color: dc, fontWeight: "700" }}>{formatPrice(main.day, "KRW", { sign: true })}</Text>
-          </Text>
-        </View>
+        {/* 숫자 기준 점(3-32)은 요약 묶음 오른쪽 — 새 줄·숨기는 칸 없음. 윗줄 상태 점 옆에는 두지 않는다 (점 두 개가 붙어 헷갈림) */}
+        {basis ? (
+          <View style={styles.totalRow}>
+            {denseSummary({ flex: 1, gap: space.xxs })}
+            {basis}
+          </View>
+        ) : (
+          denseSummary({ gap: space.xxs })
+        )}
         {excludedLine}
         {/* 환율 안내는 숨기되, 원화 손익이 추정이거나 현재 환율 환산일 때만 한 줄 남긴다 (넓은 창 계좌 띠와 같은 규칙) */}
         {fx && (data.estimated || data.currentBasis) ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{fxNote(data)}</Text> : null}
       </View>
     );
+  }
+  const totalText = (
+    <Text style={[styles.total, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+      {formatQuote(main.value, "KRW")}
+      <Text style={{ fontSize: font.body, color: t.muted, fontWeight: "500" }}> 원</Text>
+    </Text>
+  );
+  const kpiCells = [
+    <Kpi key="profit" label="평가손익" value={formatPrice(profit, "KRW", { sign: true })} color={pc} />,
+    <Kpi key="rate" label="수익률" value={formatPct(rate)} color={pc} />,
+    <Kpi key="cost" label="매입금액" value={formatPrice(main.cost, "KRW")} />,
+    <Kpi key="day" label="당일손익" value={formatPrice(main.day, "KRW", { sign: true })} color={dc} />,
+  ];
   return (
     <View style={[styles.panel, { backgroundColor: t.surface, borderColor: t.line }]}>
       {top}
-      <View accessible accessibilityLabel={label} style={{ gap: space.xs }}>
-      <Text style={[styles.total, { color: t.ink }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-        {formatQuote(main.value, "KRW")}
-        <Text style={{ fontSize: font.body, color: t.muted, fontWeight: "500" }}> 원</Text>
-      </Text>
-      <View style={styles.kpis}>
-        <Kpi label="평가손익" value={formatPrice(profit, "KRW", { sign: true })} color={pc} />
-        <Kpi label="수익률" value={formatPct(rate)} color={pc} />
-        <Kpi label="매입금액" value={formatPrice(main.cost, "KRW")} />
-        <Kpi label="당일손익" value={formatPrice(main.day, "KRW", { sign: true })} color={dc} />
-      </View>
-      </View>
+      {basis ? (
+        <>
+          {/* 숫자 기준 점(3-32): 총액 줄 오른쪽 끝, 요약 문장 밖 (화면 읽기로 따로 고른다 — '비중' 버튼과 같은 까닭). 새 줄 없음 */}
+          <View style={styles.totalRow}>
+            <View accessible accessibilityLabel={label} style={{ flex: 1 }}>
+              {totalText}
+            </View>
+            {basis}
+          </View>
+          {/* 숫자 네 칸은 위 요약 문장에 들어 있다 → 조각으로 한 번 더 읽히지 않게 숨긴다 (국내·해외 줄과 같은 방식) */}
+          <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={styles.kpis}>
+            {kpiCells}
+          </View>
+        </>
+      ) : (
+        <View accessible accessibilityLabel={label} style={{ gap: space.xs }}>
+          {totalText}
+          <View style={styles.kpis}>{kpiCells}</View>
+        </View>
+      )}
       {excludedLine}
       {showSplit ? (
         <View style={[styles.split, { borderTopColor: t.line }]}>
@@ -745,6 +798,8 @@ const styles = StyleSheet.create({
   // 시장 상태: 세션 / 실시간·시각 두 줄, 칸 폭은 글자에 맞춘다 (최대 폭은 StripEnd 가 글자 배율로)
   stripStatus: { flexShrink: 0, justifyContent: "center", alignItems: "flex-end", paddingHorizontal: space.sm },
   searchBtn: { width: touch.min, minHeight: touch.min, alignItems: "center", justifyContent: "center" },
+  // 숫자 기준 점(3-32)이 있을 때 총액 줄: 총액(남은 폭, 글자를 줄여 맞춤) | 점 + 짧은 글 (누르는 칸 44)
+  totalRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 });
 
 // 이 화면에서 난 렌더 오류는 앱을 끄지 않고 "다시 시도" 화면으로 (expo-router)

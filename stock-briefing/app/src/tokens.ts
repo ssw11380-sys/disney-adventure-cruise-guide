@@ -341,6 +341,10 @@ export const layout = {
   briefCardMinW: 300,
   /** 테마 히트맵 타일 기준 폭: 칸 수 = 폭 ÷ 이 값 (넓은 창만. 좁은 창은 지금처럼 3칸) */
   heatTileW: 150,
+  /** 숫자 기준 점 지름 (3-32 — 보이는 점. 누르는 칸은 touch.min 44×44) */
+  basisDot: 6,
+  /** 숫자 기준 창 이름 칸 폭 (글자 100%, 큰 글씨는 배율만큼 — 상한 fontCap.row) */
+  basisLabelW: 68,
 } as const;
 
 /**

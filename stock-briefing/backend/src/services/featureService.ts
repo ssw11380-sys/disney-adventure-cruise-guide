@@ -148,6 +148,11 @@ export const FEATURES = {
     description:
       "종목 상세 '토스 앱 열기' (3-48, 앱만, 사용자 결정 '토스 앱만 열기'): '시세' 칸 제목 줄 오른쪽 버튼 → 안내 시트('토스 앱 → 증권 → 검색에서 \"종목명\"(코드)을 찾아 주세요. 주문은 토스 앱에서 직접 합니다.') → [토스 앱 열기]가 토스 앱 자체를 연다(supertoss:// — 종목 화면으로 바로 가지 않음, 종목은 사용자가 토스 앱에서 검색). 못 열면 시트에 안내 + Play 스토어 토스 앱 페이지. 주문·로그인 API·서버 호출 없음, 웹 주소 없음. 이름이 있는 종목 모두(지수·환율 제외). 끄면 버튼이 없음",
   },
+  numberBasis: {
+    default: true,
+    description:
+      "숫자 기준·토스 대조 배지 (3-32): 잔고 계좌 합계 옆 점과 짧은 글(토스와 0.1% 이내·차이 N%·수량 다름·대기), 누르면 '숫자 기준' 창(시세 기준·시각·비용 차감·환율·당일손익·토스 대조·최근 7일 장중 비율). 대조 기록 뒤 실시간 연결로 앱에 알림(reconcile). 끄면 점·창·배지 조회·알림 없음",
+  },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 
 export type FeatureKey = keyof typeof FEATURES;

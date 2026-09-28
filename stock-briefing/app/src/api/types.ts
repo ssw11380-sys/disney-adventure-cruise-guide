@@ -109,7 +109,8 @@ export interface TossOpenApiStatus {
   } | null;
   /** 토스 계좌 자동 대조 (앱 총평가 vs 토스 비용 차감 평가). 구버전 서버에는 없음 */
   reconcile?: {
-    last: { at: string; diffKrw: number; diffPct: number; missing: number; qtyMismatch?: string[] } | null;
+    /** n: 비교한 종목 수 (예전 기록에는 없음) */
+    last: { at: string; diffKrw: number; diffPct: number; missing: number; qtyMismatch?: string[]; n?: number } | null;
     streakOver: number;
     qtyStreak?: number;
     week: { n: number; withinPct: number | null };
@@ -959,4 +960,15 @@ export interface VolumeStatus {
   minutes: number | null;
   asOf: string;
   reason: string | null;
+}
+
+/** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis — 서버 GET /api/admin/toss/reconcile/badge 와 같은 모양) */
+export interface ReconcileBadgeBody {
+  /** numberBasis·tossReconcile 이 켜져 있고 토스 연동이 있을 때만 true */
+  on: boolean;
+  status: NonNullable<TossOpenApiStatus["reconcile"]> | null;
+  /** 최근 7일 정규장 시간 기록: 비교한 수 · 그중 차이 0.1% 이하 비율 · 비교하지 못한 수 */
+  intraday: { n: number; withinPct: number | null; skipped: number } | null;
+  /** 자동 동기화 상태 — '숫자 기준' 창 설명과 '오래된 기록' 판단에 */
+  sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null } | null;
 }

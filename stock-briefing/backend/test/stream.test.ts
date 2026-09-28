@@ -384,4 +384,20 @@ describe("GET /api/stream (websocket)", () => {
     ws2.close();
     expect(app.priceStream.status().clients).toBeGreaterThanOrEqual(0);
   });
+
+  it("notify('reconcile') 는 붙은 앱마다 { type: 'reconcile', at } 를 한 번 보낸다 (3-32 — 앱이 '숫자 기준' 배지를 다시 받음)", async () => {
+    const stream = new PriceStream({ codes: async () => [] });
+    const a = new FakeSocket();
+    const b = new FakeSocket();
+    stream.attach(a);
+    stream.attach(b);
+    await tick();
+    stream.notify("reconcile");
+    for (const s of [a, b]) {
+      expect(s.messages("reconcile")).toHaveLength(1);
+      expect(s.messages("reconcile")[0]).toEqual({ type: "reconcile", at: expect.any(Number) });
+      expect(s.messages("holdings")).toHaveLength(0);
+    }
+    stream.stop();
+  });
 });

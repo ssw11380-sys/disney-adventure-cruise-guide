@@ -126,7 +126,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     const autoSync = new HoldingsAutoSync({
       sync,
       // 동기화마다 앱 총평가와 토스 계좌 요약을 대조해 남긴다 (3-13)
-      onResult: reconcileAfterSync({ features, reconcile, stocks: stockService }),
+      // 대조 기록 뒤 접속한 앱에 알린다 → '숫자 기준' 배지가 바로 바뀐다 (3-32, 플래그 numberBasis). priceStream 은 아래에서 만들고 동기화 때 부른다
+      onResult: reconcileAfterSync({ features, reconcile, stocks: stockService, after: () => priceStream.notify("reconcile") }),
       calendar: opts.providers.calendar,
       // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다
       afterSync: async () => {
