@@ -23,7 +23,7 @@ import { Badge, Button, Card, Chip, Muted, Row, RowWrapContext, SectionTitle, To
 import { connectionKind, connectionText, SERVER_SECTION, TOKEN_FIELD } from "@/lib/connectionError";
 import { FOLD_COL_GAP, settingsColumnMax, settingsTwoColumns } from "@/lib/foldScreens";
 import { formatDateKo } from "@/lib/format";
-import { SORT_OPTIONS, THEME_OPTIONS, useSettings, WIDGET_ROW_OPTIONS } from "@/lib/settings";
+import { DENSITY_OPTIONS, SORT_OPTIONS, THEME_OPTIONS, useSettings, WIDGET_ROW_OPTIONS } from "@/lib/settings";
 import { serverOpenRequest } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useSticky } from "@/lib/useSticky";
@@ -44,7 +44,7 @@ import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
  */
 export default function SettingsScreen() {
   const t = useTheme();
-  const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency, haptics, setHaptics } = useSettings();
+  const { apiUrl, apiToken, setCredentials, showKrw, setShowKrw, sort, setSort, themeMode, setThemeMode, afterCost, setAfterCost, widgetRowCurrency, setWidgetRowCurrency, haptics, setHaptics, density, setDensity } = useSettings();
   // 3-24 플래그: oneHand('누를 때 진동' 스위치), firstRun('처음 사용 안내 다시 보기'), emptyGuide(서버 연결 칸 열기·빈 칸 안내)
   const ux = useUx();
   // 가격 알림 (3-29, 플래그 priceAlerts): 루트 제공자가 내려 준 문맥만 읽는다 (없으면 꺼짐 — 지금 화면 그대로)
@@ -53,6 +53,10 @@ export default function SettingsScreen() {
   const widgetPolishOn = useFeature("widgetPolish", false);
   // 위젯 자동 갱신 기록 요약·배터리 설정 열기 (위젯 리뷰 2). 기록은 늘 적고 보여 주는 것만 플래그 뒤에
   const widgetLogOn = useFeature("widgetRefreshLog", false);
+  // 잔고 촘촘 모드 (3-39): 켜져 있을 때만 '잔고 표시' 기본/촘촘 칩 (꺼져 있으면 저장된 값과 상관없이 잔고는 기본)
+  const densityOn = useFeature("densityMode", false);
+  // 이동평균선 기간·색 (3-39): 켜져 있을 때만 '차트 이동평균선' 줄 + [설정] → 새 화면 '이동평균선'
+  const maOn = useFeature("maCustom", false);
   const health = useHealth();
   // 알림·토스 카드는 토큰이 맞는 서버에서만 보인다 (토큰이 없으면 서버가 401 을 주므로 묻지 않는다)
   const full = !!health.data && !health.data.limited;
@@ -200,6 +204,30 @@ export default function SettingsScreen() {
           ))}
         </View>
       </View>
+      {densityOn ? (
+        // 3-39 잔고 표시 기본 · 촘촘 (플래그 densityMode). 목록(DENSITY_OPTIONS)은 켜져 있을 때만 읽는다
+        <View style={{ gap: space.s, paddingTop: space.sm }}>
+          <View style={{ gap: space.xxs }}>
+            <Text style={styles.label(t.ink)}>잔고 표시</Text>
+            <Muted style={{ fontSize: font.tiny }}>촘촘: 종목 줄 높이를 줄이고 계좌 요약을 짧게 해 한 화면에 종목을 더 많이 봅니다 (매입금액·국내/해외는 기본에서)</Muted>
+          </View>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.s }}>
+            {DENSITY_OPTIONS.map((o) => (
+              <Chip key={o.value} label={o.label} accessibilityLabel={`잔고 표시 ${o.label}`} active={density === o.value} onPress={() => void setDensity(o.value)} />
+            ))}
+          </View>
+        </View>
+      ) : null}
+      {maOn ? (
+        // 3-39 이동평균선 선 6개의 기간·색 (플래그 maCustom). 차트 칩 '설정'과 같은 화면
+        <View style={styles.line}>
+          <View style={{ flex: 1, paddingRight: space.md }}>
+            <Text style={styles.label(t.ink)}>차트 이동평균선</Text>
+            <Muted style={{ fontSize: font.tiny }}>선 6개의 기간(2~240)과 색</Muted>
+          </View>
+          <Button title="설정" icon="options-outline" variant="secondary" compact accessibilityLabel="이동평균선 기간·색 설정" onPress={() => router.push("/chart-lines")} />
+        </View>
+      ) : null}
       <View style={{ gap: space.xxs, paddingTop: space.sm }}>
         <Text style={styles.label(t.ink)}>홈 화면 위젯 갱신</Text>
         <Muted style={{ fontSize: font.tiny }}>{WIDGET_REFRESH_HELP}</Muted>

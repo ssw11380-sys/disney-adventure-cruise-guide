@@ -1,7 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { Candle, CandlePeriod } from "@/api/types";
 import type { IndicatorKind } from "@/components/chart/PriceChart";
+import { defaultMaLines, maLinesOf, type MaLine } from "./maLines";
 import { inTradingHours, marketClock, periodKey, tradingDate } from "./marketTime";
 
 /** 차트 설정(이평선·볼린저·거래량·보조지표)은 종목과 화면(인라인/전체)에 상관없이 하나로 기억한다 */
@@ -42,6 +43,59 @@ export function useChartPrefs(): [ChartPrefs, (patch: Partial<ChartPrefs>) => vo
     AsyncStorage.setItem(KEY, JSON.stringify(next)).catch(() => undefined);
   }, []);
   return [prefs, update];
+}
+
+const MA_KEY = "chartPrefs.maLines.v1";
+/** 저장소에서 읽었거나 setLines 로 적은 선 (없으면 처음 선을 쓴다) */
+let maCached: MaLine[] | null = null;
+/** 캐시가 바뀌면 알릴 곳 (useMaLines 를 쓰는 차트·화면 — 상세와 전체 화면 차트가 한 번에 바뀐다) */
+const maListeners = new Set<() => void>();
+const notifyMa = () => {
+  for (const l of maListeners) l();
+};
+
+/**
+ * 이동평균선 선 6개 (3-39, 기능 플래그 maCustom). enabled 가 false 면 저장소를 읽지 않고 듣지도 않고 처음 선만 돌려준다(꺼짐 = 작업 0).
+ * 저장한 적이 없으면 maPeriods(지금 켠 기간)로 만든 처음 선. setLines 는 캐시·듣는 곳·저장소(MA_KEY)에 적는다. chartPrefs.v1 은 쓰지 않는다.
+ * 읽기가 끝나기 전에 setLines 가 캐시를 적었으면 늦게 온 저장값은 버린다 (칩을 누른 값이 옛 저장값에 덮이지 않게)
+ */
+export function useMaLines(maPeriods: readonly number[], enabled: boolean): [MaLine[], (next: MaLine[]) => void] {
+  // 캐시는 바깥 저장소처럼 듣는다 (useSyncExternalStore). enabled 가 거짓이었다가 참이 되면(플래그를 늦게 받음) 그때 듣는 곳에 든다
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      if (!enabled) return () => undefined;
+      maListeners.add(onChange);
+      return () => {
+        maListeners.delete(onChange);
+      };
+    },
+    [enabled],
+  );
+  const stored = useSyncExternalStore(subscribe, () => (enabled ? maCached : null));
+  // 저장값이 없을 때의 처음 선: 그릴 때마다 새 배열을 만들지 않는다 (차트의 이동평균 계산이 매번 다시 돌지 않게)
+  const defaults = useMemo(() => defaultMaLines(maPeriods), [maPeriods]);
+  // 캐시가 비어 있으면 저장소를 한 번 읽는다 (enabled 가 참일 때만)
+  useEffect(() => {
+    if (!enabled || maCached) return;
+    AsyncStorage.getItem(MA_KEY)
+      .then((raw) => {
+        // 그사이 setLines(또는 앞선 읽기)가 캐시를 채웠으면 읽은 값은 쓰지 않는다 — useChartPrefs 와 다른 점 (늦게 온 옛 값이 누른 값을 덮지 않게)
+        if (maCached) return;
+        if (!raw) return;
+        const parsed = maLinesOf(JSON.parse(raw));
+        // 틀린 저장값(같은 기간 두 칸 등)은 통째로 무시 → 처음 선
+        if (!parsed) return;
+        maCached = parsed;
+        notifyMa();
+      })
+      .catch(() => undefined);
+  }, [enabled]);
+  const setLines = useCallback((next: MaLine[]) => {
+    maCached = next;
+    notifyMa();
+    AsyncStorage.setItem(MA_KEY, JSON.stringify(next)).catch(() => undefined);
+  }, []);
+  return [stored ?? defaults, setLines];
 }
 
 export const PERIOD_OPTIONS: { value: CandlePeriod; label: string }[] = [

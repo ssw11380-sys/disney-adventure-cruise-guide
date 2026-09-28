@@ -97,8 +97,10 @@ export function fxNote(d: AccountData): string | null {
  * 글자는 목업 크기: 칸 이름 11 · 값 14 굵게 · 총액 16 더 굵게 · 등락률 12 (펼쳤다고 키우지 않는다 — 띠 높이 52 / 48×2 를 지킨다).
  * 숫자는 칸이 모자라면 말줄임 대신 글자를 줄여 한 줄에 다 보인다. 글자 확대는 표 줄과 같은 상한(fontCap.row).
  * 화면 읽기는 휴대폰 패널과 같은 한 문장 (칸 조각은 숨긴다), '비중' 버튼은 문장 밖에 두어 따로 고를 수 있다
+ * 촘촘(3-39, 기능 플래그 densityMode + 설정 — dense): 두 줄 띠는 첫 줄만(총 평가금액 · 평가손익·수익률 · 당일손익) + 비중 버튼, 한 줄 띠는 그대로.
+ *  숨긴 국내·해외·매입금액도 화면 읽기 문장에는 그대로 남는다
  */
-export function AccountBand({ data, oneLine, rates = true, pad, onAllocation }: { data: AccountData; oneLine: boolean; rates?: boolean; pad: number; onAllocation?: () => void }) {
+export function AccountBand({ data, oneLine, rates = true, pad, onAllocation, dense = false }: { data: AccountData; oneLine: boolean; rates?: boolean; pad: number; onAllocation?: () => void; dense?: boolean }) {
   const t = useTheme();
   const { main, profit, rate, lines, showSplit } = accountFigures(data);
   const pc = changeColor(t, profit);
@@ -145,6 +147,16 @@ export function AccountBand({ data, oneLine, rates = true, pad, onAllocation }: 
             {profitCell}
             {day}
             {split(false, rates)}
+          </View>
+          {button}
+        </View>
+      ) : dense ? (
+        // 촘촘 두 줄 띠 → 한 줄 (48): 칸 묶음과 비중 버튼이 같은 줄. 글자가 커져 칸이 한 줄에 안 들어가면 다음 줄로 넘긴다
+        <View style={[styles.line2, { paddingHorizontal: pad }]}>
+          <View accessible accessibilityLabel={label} style={[styles.cells, styles.wrap]}>
+            {total}
+            {profitCell}
+            {day}
           </View>
           {button}
         </View>

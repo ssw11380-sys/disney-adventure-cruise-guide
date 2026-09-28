@@ -125,6 +125,8 @@ function Navigator() {
       <Stack.Screen name="market/[code]" options={{ title: "지수" }} />
       <Stack.Screen name="discover/theme/[id]" options={{ title: "테마" }} />
       <Stack.Screen name="portfolio/allocation" options={{ title: "비중" }} />
+      {/* 이동평균선 기간·색 (3-39, 기능 플래그 maCustom — 꺼져 있으면 화면 안에 안내만) */}
+      <Stack.Screen name="chart-lines" options={{ title: "이동평균선", presentation: "modal" }} />
       {/* 첫 실행 안내 (3-24, 플래그 firstRun): 머리 없이 한 화면, 뒤로 가기·'시작하기'로 닫힌다 */}
       <Stack.Screen name="welcome" options={{ headerShown: false, presentation: "fullScreenModal", animation: "fade" }} />
     </Stack>

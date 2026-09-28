@@ -21,6 +21,8 @@ import { useFoldLayout } from "@/lib/useFoldLayout";
 import { changeColor, font, space, useTheme } from "@/theme";
 
 const US_INDEX = new Set(["NASDAQ", "SPX", "DJI", "SOX"]);
+/** 이동평균선 기간·색 설정 화면 열기 (3-39, 기능 플래그 maCustom — 켜졌을 때만 차트에 넘긴다) */
+const openMaLines = () => router.push("/chart-lines");
 
 /**
  * 지수·환율 차트 (홈 상단 지수 띠에서 들어온다): 값·등락 머리 → 캔들 차트(분·일·주·월, 이평·지표) → 기준 안내.
@@ -43,6 +45,8 @@ export default function MarketIndexScreen() {
   const fold = useFoldLayout();
   // 차트의 보이는 구간 (기능 플래그 detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const polish = useFeature("detailPolish", false);
+  // 이동평균선 기간·색 (3-39, 기능 플래그 maCustom): 켜졌을 때만 차트에 '설정' 칩으로 여는 화면 이동을 넘긴다 (꺼지면 속성 없음 = 지금 그대로)
+  const maCustom = useFeature("maCustom", false);
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
   const win = useWindowDimensions();
@@ -121,6 +125,7 @@ export default function MarketIndexScreen() {
             quote={quote}
             hasVolume={hasVolume}
             {...chartMemo}
+            {...(maCustom ? { onMaSettings: openMaLines } : null)}
           />
           {candles.isError ? (
             <ConnectionLine error={candles.error} {...guideProps} fallback={<Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text>} />
@@ -177,6 +182,7 @@ export default function MarketIndexScreen() {
         hasVolume={hasVolume}
         height={height}
         {...chartMemo}
+        {...(maCustom ? { onMaSettings: openMaLines } : null)}
       />
       {candles.isError ? (
         <ConnectionLine error={candles.error} {...guideProps} fallback={<Text style={{ color: t.danger, fontSize: font.small }}>{candles.error instanceof Error ? candles.error.message : "차트를 불러오지 못했습니다"}</Text>} />

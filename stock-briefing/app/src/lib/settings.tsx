@@ -10,6 +10,7 @@ import { Platform } from "react-native";
  *  - showKrw: 미국 종목을 원화로 환산해 표시
  *  - widgetRowCurrency: 잔고 위젯(다듬은 모습) 종목 줄의 손익 금액 통화 — 원화(기본, 합계와 같은 기준) · 종목 통화
  *  - haptics: 누를 때 짧은 진동 (3-24, 기능 플래그 oneHand 가 켜져 있을 때만 설정 화면에 보인다. 기본 켬 — lib/haptics)
+ *  - density: 잔고 표시 기본 · 촘촘 (3-39, 기능 플래그 densityMode 가 켜져 있을 때만 설정 화면에 보이고 잔고에 쓰인다. 위젯은 읽지 않는다)
  * 위젯(백그라운드)도 같은 키를 읽으므로 키 이름을 바꾸면 widgets/ 쪽도 같이 바꿔야 한다.
  */
 
@@ -22,6 +23,7 @@ export const STORAGE_KEYS = {
   afterCost: "settings.afterCost",
   widgetRowCurrency: "settings.widgetRowCurrency",
   haptics: "settings.haptics",
+  density: "settings.density",
 } as const;
 
 /** 잔고 위젯 종목 줄 손익 금액: 원화(기본) · 종목 통화 */
@@ -32,6 +34,15 @@ export const WIDGET_ROW_OPTIONS: { value: WidgetRowCurrency; label: string }[] =
 ];
 /** 저장값 → 설정 (모르는 값·없음은 원화) */
 export const widgetRowCurrencyOf = (v: string | null | undefined): WidgetRowCurrency => (v === "native" ? "native" : "krw");
+
+/** 잔고 표시 밀도 (3-39, 기능 플래그 densityMode): 기본 · 촘촘 */
+export type Density = "basic" | "dense";
+export const DENSITY_OPTIONS: { value: Density; label: string }[] = [
+  { value: "basic", label: "기본" },
+  { value: "dense", label: "촘촘" },
+];
+/** 저장값 → 밀도 (모르는 값·없음은 기본) */
+export const densityOf = (v: string | null | undefined): Density => (v === "dense" ? "dense" : "basic");
 
 export type ThemeMode = "dark" | "light" | "system";
 export const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -76,6 +87,8 @@ interface Settings {
   widgetRowCurrency: WidgetRowCurrency;
   /** 누를 때 짧은 진동 (기본 켬, 3-24) */
   haptics: boolean;
+  /** 잔고 표시 기본 · 촘촘 (기본 '기본', 3-39 — 플래그 densityMode 가 꺼져 있으면 잔고는 이 값과 상관없이 기본) */
+  density: Density;
   ready: boolean;
   setApiUrl: (url: string) => Promise<void>;
   setApiToken: (token: string) => Promise<void>;
@@ -87,6 +100,7 @@ interface Settings {
   setAfterCost: (on: boolean) => Promise<void>;
   setWidgetRowCurrency: (v: WidgetRowCurrency) => Promise<void>;
   setHaptics: (on: boolean) => Promise<void>;
+  setDensity: (v: Density) => Promise<void>;
 }
 
 /**
@@ -123,6 +137,7 @@ const Ctx = createContext<Settings>({
   afterCost: true,
   widgetRowCurrency: "krw",
   haptics: true,
+  density: "basic",
   ready: false,
   setApiUrl: noop,
   setApiToken: noop,
@@ -133,6 +148,7 @@ const Ctx = createContext<Settings>({
   setAfterCost: noop,
   setWidgetRowCurrency: noop,
   setHaptics: noop,
+  setDensity: noop,
 });
 
 async function persist(key: string, value: string | null): Promise<void> {
@@ -189,10 +205,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [afterCost, setAfterCostState] = useState(true);
   const [widgetRowCurrency, setWidgetRowCurrencyState] = useState<WidgetRowCurrency>("krw");
   const [haptics, setHapticsState] = useState(true);
+  const [density, setDensityState] = useState<Density>("basic");
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency, STORAGE_KEYS.haptics])
+    AsyncStorage.multiGet([STORAGE_KEYS.apiUrl, STORAGE_KEYS.apiToken, STORAGE_KEYS.sort, STORAGE_KEYS.showKrw, STORAGE_KEYS.themeMode, STORAGE_KEYS.afterCost, STORAGE_KEYS.widgetRowCurrency, STORAGE_KEYS.haptics, STORAGE_KEYS.density])
       .then((pairs) => {
         const m = new Map(pairs);
         const u = m.get(STORAGE_KEYS.apiUrl);
@@ -214,6 +231,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         // 저장한 적 없으면 켬
         const hp = m.get(STORAGE_KEYS.haptics);
         if (hp) setHapticsState(hp !== "0");
+        setDensityState(densityOf(m.get(STORAGE_KEYS.density)));
       })
       .catch(() => {})
       .finally(() => {
@@ -274,9 +292,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     await persist(STORAGE_KEYS.haptics, on ? "1" : "0");
   }, []);
 
+  const setDensity = useCallback(async (v: Density) => {
+    setDensityState(v);
+    await persist(STORAGE_KEYS.density, v);
+  }, []);
+
   const value = useMemo(
-    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics }),
-    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics],
+    () => ({ apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity }),
+    [apiUrl, apiToken, sort, showKrw, themeMode, afterCost, widgetRowCurrency, haptics, density, ready, setApiUrl, setApiToken, setCredentials, setSort, setShowKrw, setThemeMode, setAfterCost, setWidgetRowCurrency, setHaptics, setDensity],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -1,7 +1,7 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type StyleProp, type TextStyle } from "react-native";
 import { isBigText, LINE_COL, LINE_H, lineCols, lineH } from "@/lib/textScale";
-import { font, fontCap, space, useFontScale, useTheme } from "@/theme";
+import { font, fontCap, space, touch, useFontScale, useTheme } from "@/theme";
 import { FlashPrice } from "./FlashPrice";
 import { TableHead } from "./ui";
 
@@ -55,6 +55,7 @@ export function StockLine({
   onAccessibilityAction,
   onLayout,
   fixedHeight = false,
+  dense = false,
 }: {
   rank?: number;
   name: string;
@@ -79,6 +80,11 @@ export function StockLine({
   onLayout?: (e: LayoutChangeEvent) => void;
   /** 높이를 LINE_H 로 고정 (FlatList getItemLayout 을 쓰는 목록). 아니면 최소 높이만 — 큰 글씨에서 줄이 늘어난다 */
   fixedHeight?: boolean;
+  /**
+   * 촘촘 잔고 줄 (3-39, densityMode — 잔고 화면만 넘긴다). 고정 높이 목록(fixedHeight)에는 쓰지 않는다.
+   * 최소 높이만 44(touch.min)로 낮추고 위아래 여백 4, 이름·보조 줄과 숫자 두 줄 사이 0 — 큰 글씨에서는 줄이 늘어난다
+   */
+  dense?: boolean;
 }) {
   const t = useTheme();
   const col = useLineCols();
@@ -98,14 +104,15 @@ export function StockLine({
       accessibilityHint={accessibilityHint}
       accessibilityActions={accessibilityActions}
       onAccessibilityAction={onAccessibilityAction ? (e) => onAccessibilityAction(e.nativeEvent.actionName) : undefined}
-      style={({ pressed }) => [styles.row, fixedHeight ? { height: lineH } : { minHeight: LINE_H, paddingVertical: space.s }, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
+      style={({ pressed }) => [styles.row, fixedHeight ? { height: lineH } : dense ? styles.dense : { minHeight: LINE_H, paddingVertical: space.s }, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderBottomColor: t.line }]}
     >
       {rank !== undefined ? (
         <Text style={[styles.rank, { width: col.rank, color: rank <= 3 ? t.ink : t.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
           {rank}
         </Text>
       ) : null}
-      <View style={styles.name}>
+      {/* 촘촘(3-39)일 때만 스타일을 배열로 — 기본 줄은 그리는 나무까지 지금과 같게 */}
+      <View style={dense ? [styles.name, styles.tight] : styles.name}>
         <View style={styles.inline}>
           {nameBadge}
           {/* 높이가 고정이 아닌 줄(잔고·검색)은 큰 글씨에서 이름을 두 줄까지 */}
@@ -125,7 +132,7 @@ export function StockLine({
           </View>
         ) : null}
       </View>
-      <View style={[styles.num, { width: col.price }]}>
+      <View style={dense ? [styles.num, { width: col.price }, styles.tight] : [styles.num, { width: col.price }]}>
         {price ? (
           <>
             <View style={[styles.inline, { maxWidth: "100%" }]}>
@@ -142,7 +149,7 @@ export function StockLine({
           </Text>
         )}
       </View>
-      <View style={[styles.num, { width: col.right }]}>{right}</View>
+      <View style={dense ? [styles.num, { width: col.right }, styles.tight] : [styles.num, { width: col.right }]}>{right}</View>
     </Pressable>
   );
 }
@@ -207,4 +214,7 @@ const styles = StyleSheet.create({
   sub: { fontSize: font.small, fontVariant: ["tabular-nums"] },
   live: { width: 4, height: 4, borderRadius: 2 },
   th: { fontSize: font.tiny, fontWeight: "500" },
+  // ── 촘촘 잔고 줄 (3-39, densityMode): 최소 높이만 44(누르는 크기 최소), 위아래 4. 이름·보조 줄, 숫자 두 줄 사이 0 ──
+  dense: { minHeight: touch.min, paddingVertical: space.xs },
+  tight: { gap: 0 },
 });
