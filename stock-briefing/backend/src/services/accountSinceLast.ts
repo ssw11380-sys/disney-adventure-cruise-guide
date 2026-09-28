@@ -1,4 +1,4 @@
-import type { AccountData, AccountOneSide, AccountPosition, AccountQtyChange, AccountSinceLast, AccountWeightChange } from "./accountNumbers.js";
+import { weightPct, type AccountData, type AccountOneSide, type AccountPosition, type AccountQtyChange, type AccountSinceLast, type AccountWeightChange } from "./accountNumbers.js";
 
 /**
  * 브리핑 3차 3 — 지난 브리핑과 비교 (플래그 accountSinceLast). DB·네트워크를 모르는 순수 함수.
@@ -130,8 +130,9 @@ function weightChanges(prev: AccountPosition[], prevTotal: number, now: AccountP
     if (x.value === null || !b || b.value === null) return;
     const fromRaw = (b.value / prevTotal) * 100;
     const toRaw = (x.value / nowTotal) * 100;
-    const from = round1(fromRaw);
-    const to = round1(toRaw);
+    // 보이는 비중은 비중 한 줄(exposureOf)과 같은 정확한 반올림 (21.35 → 21.4)
+    const from = weightPct(b.value, prevTotal);
+    const to = weightPct(x.value, nowTotal);
     // 보이는 두 값의 차 (원 값의 차를 반올림하면 '18.2% → 18.8% (+0.5%p)'처럼 화면 안에서 어긋날 수 있다)
     const diff = round1(to - from);
     if (Math.abs(diff) + EPS < WEIGHT_MIN_PP) return;

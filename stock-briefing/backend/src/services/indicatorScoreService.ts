@@ -681,15 +681,15 @@ export class IndicatorScoreService {
   }
 }
 
-/**
- * 실제 출처로 만든 자료 묶음: 일봉은 차트와 같은 캐시(stockService.getCandles — 토스 웹 → 네이버 → 야후, 한 종목은 한 출처),
- * 비교 지수는 지수 띠와 같은 네이버 일봉(10분 캐시), 상품 정보는 토스 웹 v2/stock-infos(24시간 캐시), 이름·시장은 등록 종목 → 종목 마스터·검색
- */
 /** 종목 마스터 분류 (listed_stocks.group_code — ST 주권 · EF ETF · EN ETN). 모르면 null. 지표 점수·계좌 비중 한 줄(브리핑 3차 4)이 같이 쓴다 */
 export async function groupCodeOf(db: Db, code: string): Promise<string | null> {
   return (await db.selectFrom("listed_stocks").select("group_code").where("code", "=", code).executeTakeFirst())?.group_code ?? null;
 }
 
+/**
+ * 실제 출처로 만든 자료 묶음: 일봉은 차트와 같은 캐시(stockService.getCandles — 토스 웹 → 네이버 → 야후, 한 종목은 한 출처),
+ * 비교 지수는 지수 띠와 같은 네이버 일봉(10분 캐시), 상품 정보는 토스 웹 v2/stock-infos(24시간 캐시), 이름·시장은 등록 종목 → 종목 마스터·검색
+ */
 export function defaultScoreSources(deps: {
   db: Db;
   stocks: Pick<StockService, "get" | "preview" | "getCandles" | "list">;

@@ -89,6 +89,10 @@ const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/accountEx
 const LEV = fixture.cases.find((c) => c.name === "levInv")!;
 const NOLEV = fixture.cases.find((c) => c.name === "noLev")!;
 const EXCL = fixture.cases.find((c) => c.name === "excludedGuessed")!;
+const FX = fixture.cases.find((c) => c.name === "fxMissing")!;
+const { EXPOSURE_ABOUT } = await import("@/lib/accountExposure");
+/** 묶음 끝 ' ·' 의 공백 = 줄바꿈 없는 공백 (좁은 칸에서 '·' 하나만 다음 줄에 남지 않게) */
+const NBSP = "\u00a0";
 
 /** 월 9/28 08:38 오전 계좌 브리핑 (비중은 픽스처 levInv) */
 const DATA: AccountData = {
@@ -139,11 +143,11 @@ const settle = async (r: R) => {
 };
 /** 비중 묶음: 화면 읽기 문장이 '비중,' 으로 시작하는 묶음 */
 const block = (r: R) => r.all().filter((n) => n.props.accessible === true && String(n.props.accessibilityLabel ?? "").startsWith("비중,"));
-/** 묶음째 줄바꿈하는 줄: 글(Text·Muted)만 둘 이상 담은 View 를 ' '로 이은 글 */
+/** 묶음째 줄바꿈하는 줄: 글(Text·Muted)만 둘 이상 담은 View 를 ' '로 이은 글 (묶음 끝 ' ·' 의 줄바꿈 없는 공백은 보통 공백으로 읽어 픽스처와 견줌) */
 const chunkRows = (n: HostNode) =>
   allOf(n)
     .filter((v) => v.type === "View" && kids(v).length > 1 && kids(v).every((k) => k.type === "Text" || k.type === "Muted"))
-    .map((v) => kids(v).map(rawOf).join(" "));
+    .map((v) => kids(v).map(rawOf).join(" ").split(NBSP).join(" "));
 /** 총 평가 카드(띠): '보유 N종목 합계' 줄을 담은 카드 */
 const totalsCard = (r: R) => ofType(r, "Card").find((c) => allOf(c).some((n) => n.type === "Muted" && /^보유 \d+종목 합계/.test(rawOf(n))))!;
 
@@ -183,7 +187,59 @@ describe("계좌 상세: 총 평가 카드의 비중 두 줄", () => {
       expect([dark.up, dark.down]).not.toContain(c);
     }
     expect(flat(texts[0]!.props.style).fontWeight).toBe("600");
-    expect(rawOf(texts[0]!)).toBe("비중 ·");
+    expect(rawOf(texts[0]!)).toBe(`비중${NBSP}·`);
+  });
+
+  it("묶음 끝 '·' 앞 공백은 줄바꿈 없는 공백 (검토 지적 — 704×933 글자 200% 에서 '·' 하나만 다음 줄 맨 앞에 남던 것) · 마지막 묶음에는 '·' 없음", () => {
+    const b = block(render(<AccountBriefingBody numId={12} layout="stack" />))[0]!;
+    const rows = allOf(b).filter((v) => v.type === "View" && kids(v).length > 1 && kids(v).every((k) => k.type === "Text" || k.type === "Muted"));
+    for (const row of rows) {
+      const parts = kids(row).map(rawOf);
+      for (const p of parts.slice(0, -1)) {
+        expect(p.endsWith(`${NBSP}·`), p).toBe(true);
+        expect(p.endsWith(" ·"), p).toBe(false);
+      }
+      expect(parts.at(-1)!.endsWith("·")).toBe(false);
+    }
+  });
+
+  it("환율을 받지 못한 날 (검토 지적): '합계에서 뺀 종목: 엔비디아(환율…)·SOXL(…)' 아래에 '미국 상장 없음'이 아니라 '비중 알 수 없음' · 뺀 SOXL 은 '(3배, 계산에서 뺌)'", () => {
+    h.detail = detailOf(FX.expected, {
+      holdings: 4,
+      excluded: [
+        { code: "NVDA", name: "엔비디아", reason: "환율을 받지 못해 원화 합계에서 뺐습니다" },
+        { code: "SOXL", name: "SOXL", reason: "환율을 받지 못해 원화 합계에서 뺐습니다" },
+      ],
+    });
+    const r = render(<AccountBriefingBody numId={12} layout="stack" />);
+    const b = block(r);
+    expect(b).toHaveLength(1);
+    expect(chunkRows(b[0]!)).toEqual([FX.app.line1, FX.app.line2]);
+    expect(b[0]!.props.accessibilityLabel).toBe(FX.app.speech);
+    const all = rawOf(totalsCard(r));
+    expect(all).not.toContain("미국 상장 없음");
+    expect(all).not.toContain("레버리지·인버스 없음");
+  });
+
+  it("화면 맨 아래 기준 줄 밑에 '비중'·'미국 상장'의 뜻 한 줄 (총 평가 카드 밖 — 첫 화면을 늘리지 않게) · 폰·넓은 창", () => {
+    const about = (r: R) => ofType(r, "Muted").filter((n) => rawOf(n) === EXPOSURE_ABOUT);
+    const r = render(<AccountBriefingBody numId={12} layout="stack" />);
+    expect(about(r)).toHaveLength(1);
+    expect(allOf(totalsCard(r)).some((n) => rawOf(n) === EXPOSURE_ABOUT)).toBe(false);
+    // 기준 줄 바로 아래
+    const muted = ofType(r, "Muted").map(rawOf);
+    const at = muted.indexOf(EXPOSURE_ABOUT);
+    expect(muted[at - 1]).toMatch(/^기준: /);
+    for (const size of [{ width: 933, height: 704 }, { width: 704, height: 933 }]) {
+      cleanupRenders();
+      forgetWindowClass();
+      h.win = { ...size, scale: 2.625, fontScale: 1 };
+      expect(about(render(<AccountBriefingBody numId={12} layout="split" />)), JSON.stringify(size)).toHaveLength(1);
+    }
+    // 비중이 null(값이 있는 종목 없음)이면 설명도 없음
+    cleanupRenders();
+    h.detail = detailOf(null);
+    expect(about(render(<AccountBriefingBody numId={12} layout="stack" />))).toHaveLength(0);
   });
 
   it("합계에서 뺀 종목 줄이 있으면 그 줄 아래 (총 평가 설명 두 줄을 가르지 않게) · 시세 없는 종목·이름으로 구분한 종목 안내", () => {
@@ -242,7 +298,7 @@ describe("계좌 상세: 총 평가 카드의 비중 두 줄", () => {
       }
     }
     // 조각마다 따로 (한 조각이 너무 길어 한 줄을 넘으면 그 조각 안에서만 줄이 바뀐다)
-    expect(kids(rows[0]!).map(rawOf)).toEqual(["비중 ·", "가장 큰 종목 엔비디아 21.3% ·", "상위 3종목 48.2% ·", "레버리지·인버스 9.1% ·", "미국 상장 62.4%"]);
+    expect(kids(rows[0]!).map(rawOf)).toEqual([`비중${NBSP}·`, `가장 큰 종목 엔비디아 21.3%${NBSP}·`, `상위 3종목 48.2%${NBSP}·`, `레버리지·인버스 9.1%${NBSP}·`, "미국 상장 62.4%"]);
   });
 
   it("비중이 null(값이 있는 종목 없음)이면 묶음 없음", () => {

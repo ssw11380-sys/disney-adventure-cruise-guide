@@ -323,9 +323,10 @@ export interface AccountExposure {
   top1: { code: string; name: string; weight: number };
   /** 4종목 이상일 때만 */
   top3: { weight: number } | null;
-  levInv: { weight: number; items: AccountExposureItem[] };
-  /** 미국 상장(달러) 종목 합과 그 수 */
-  us: { weight: number; count: number };
+  /** uncounted = 합계에서 뺀 레버리지·인버스 종목 (비중 모름, 서버가 늘 채움 — 없는 기록은 빈 목록으로 봄) */
+  levInv: { weight: number; items: AccountExposureItem[]; uncounted?: Omit<AccountExposureItem, "weight">[] };
+  /** 미국 상장(달러) 종목 합과 그 수 (합계에 넣은 것). uncounted = 합계에서 뺀 미국 종목 수 (없는 기록은 0 으로 봄) */
+  us: { weight: number; count: number; uncounted?: number };
   /** 시세·환율이 없어 합계에서 뺀 보유 종목 수 */
   excluded: number;
   /** 토스 상품 정보를 받지 못해 이름 규칙으로 가린 종목 수 */

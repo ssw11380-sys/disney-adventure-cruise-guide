@@ -5,7 +5,8 @@ import { createMigratedDb, type Db } from "../src/db/index.js";
 import type { TextGenerator } from "../src/llm/generator.js";
 import type { PromptStore } from "../src/llm/prompts.js";
 import { AccountBriefingService } from "../src/services/accountBriefingService.js";
-import { computeAccount, exposureOf, positionsOf, type AccountData, type AccountExposure, type AccountHolding, type AccountPosition } from "../src/services/accountNumbers.js";
+import { computeAccount, exposureOf, positionsOf, weightPct, type AccountData, type AccountExposure, type AccountHolding, type AccountPosition } from "../src/services/accountNumbers.js";
+import { compareSinceLast } from "../src/services/accountSinceLast.js";
 import { FEATURES } from "../src/services/featureService.js";
 
 /**
@@ -51,10 +52,39 @@ describe("비중 계산 (exposureOf, 순수 — 공용 픽스처)", () => {
     ]);
   });
 
-  it("합계에서 뺀 종목(값 null)은 분모·순위·레버리지에서 빠지고 excluded 로 센다 · 상품 종류를 몰라도 된다", () => {
+  it("합계에서 뺀 종목(값 null)은 분모·순위·비중에서 빠지고 excluded 로 센다 · 뺀 레버리지·미국 종목은 uncounted 로 따로 (비중 없이)", () => {
     const kinds = new Map<string, LevInv>([["SOXL", { kind: "leveraged", L: 3, guessed: true }]]);
     const e = exposureOf([P("005930", 1_000_000), P("SOXL", null, "USD"), P("NVDA", 1_000_000, "USD")], kinds, "2026-09-28T08:38:00+09:00")!;
-    expect(e).toMatchObject({ count: 2, excluded: 1, guessedByName: 0, levInv: { weight: 0, items: [] }, us: { weight: 50, count: 1 }, top3: null });
+    expect(e).toMatchObject({
+      count: 2,
+      excluded: 1,
+      // 뺀 종목도 이름으로 구분했으면 센다 (안내 문구가 그 종목에도 해당)
+      guessedByName: 1,
+      levInv: { weight: 0, items: [], uncounted: [{ code: "SOXL", name: "SOXL", kind: "leveraged", L: 3 }] },
+      us: { weight: 50, count: 1, uncounted: 1 },
+      top3: null,
+    });
+    // 상품 종류를 몰라도(kinds 에 없음) 된다 — 보통 상품으로
+    expect(exposureOf([P("005930", 1_000_000), P("TSLA", null, "USD")], new Map(), "2026-09-28T08:38:00+09:00")).toMatchObject({ levInv: { items: [], uncounted: [] }, us: { count: 0, uncounted: 1 }, excluded: 1 });
+  });
+
+  it("환율을 받지 못한 날 (검토 지적): 미국 종목·레버리지가 모두 합계에서 빠져도 us.count 0 · items [] 로 '없음'처럼 되지 않고 uncounted 로 남는다", () => {
+    const kinds = new Map<string, LevInv>([
+      ["NVDA", { kind: null, L: null, guessed: false }],
+      ["SOXL", { kind: "leveraged", L: 3, guessed: false }],
+      ["RGTX", { kind: "leveraged", L: 2, guessed: false }],
+    ]);
+    const e = exposureOf([P("005930", 8_430_000), P("NVDA", null, "USD", "엔비디아"), P("SOXL", null, "USD"), P("RGTX", null, "USD"), P("000660", 3_510_000)], kinds, "2026-09-28T08:38:00+09:00")!;
+    expect(e.us).toEqual({ weight: 0, count: 0, uncounted: 3 });
+    expect(e.levInv).toEqual({
+      weight: 0,
+      items: [],
+      uncounted: [
+        { code: "SOXL", name: "SOXL", kind: "leveraged", L: 3 },
+        { code: "RGTX", name: "RGTX", kind: "leveraged", L: 2 },
+      ],
+    });
+    expect(e.excluded).toBe(3);
   });
 
   it("값이 있는 종목이 없거나 합이 0 이면 null (줄 없음)", () => {
@@ -63,9 +93,30 @@ describe("비중 계산 (exposureOf, 순수 — 공용 픽스처)", () => {
     expect(exposureOf([P("A", 0)], new Map(), "2026-09-28T08:38:00+09:00")).toBeNull();
   });
 
-  it("비중은 지난 브리핑과 비교(accountSinceLast)의 비중과 같은 반올림 — 값 ÷ 합 × 100 을 소수 한 자리로", () => {
-    const e = exposureOf([P("A", 2_125), P("B", 7_875)], new Map(), "2026-09-28T08:38:00+09:00")!;
-    expect(e.top1.weight).toBe(Math.round((7_875 / 10_000) * 100 * 10) / 10);
+  it("비중은 정확히 반올림 (검토 지적): 21.35 → 21.4 · 78.65 → 78.7 (전에는 부동소수 오차로 21.3·78.6 으로 내림)", () => {
+    // (v ÷ 합) × 100 × 10 = 213.4999… · 786.4999… 였던 경계값 — 기대값을 같은 식으로 만들지 않고 손으로 적는다
+    expect(weightPct(2_135, 10_000)).toBe(21.4);
+    expect(weightPct(7_865, 10_000)).toBe(78.7);
+    expect(weightPct(1, 3)).toBe(33.3);
+    expect(weightPct(2, 3)).toBe(66.7);
+    expect(weightPct(1_234_567, 1_234_567)).toBe(100);
+    const kinds = new Map<string, LevInv>([["A", { kind: "leveraged", L: 2, guessed: false }]]);
+    const e = exposureOf([P("A", 2_135, "USD"), P("B", 7_865)], kinds, "2026-09-28T08:38:00+09:00")!;
+    expect(e.top1).toEqual({ code: "B", name: "B", weight: 78.7 });
+    expect(e.levInv.weight).toBe(21.4);
+    expect(e.levInv.items[0]!.weight).toBe(21.4);
+    expect(e.us.weight).toBe(21.4);
+  });
+
+  it("지난 브리핑과 비교(accountSinceLast)의 비중도 같은 반올림 — 같은 브리핑의 두 카드가 같은 비중을 보인다", () => {
+    const base = { session: "morning" as const, excluded: [] };
+    const prev = { id: 1, data: { ...base, date: "2026-09-25", asOf: "2026-09-25T08:38:00+09:00", totalValue: 10_000, totalProfit: 0, positions: [P("A", 1_000), P("B", 9_000)] } };
+    const now = { ...base, date: "2026-09-28", asOf: "2026-09-28T08:38:00+09:00", totalValue: 10_000, totalProfit: 0, positions: [P("A", 2_135), P("B", 7_865)] };
+    const s = compareSinceLast(prev, now);
+    const a = s.weights!.find((w) => w.code === "A")!;
+    expect(a.to).toBe(21.4);
+    expect(a.to).toBe(exposureOf(now.positions, new Map([["A", { kind: "leveraged", L: 2, guessed: false }]]), now.asOf)!.levInv.weight);
+    expect(s.weights!.find((w) => w.code === "B")!.to).toBe(78.7);
   });
 });
 
@@ -86,6 +137,15 @@ describe("레버리지·인버스 가리기 (levInvOf — 지표 점수 1단계�
     ["배수를 모르는 레버리지(이름에 Bull 만)", "XBUL", "Example Bull ETF", null, null, { kind: "leveraged", L: null, guessed: true }],
     ["배수를 모르는 인버스(이름에 Short 만)", "XSHT", "Example Short ETF", null, null, { kind: "inverse", L: null, guessed: true }],
     ["채권 ETF 는 레버리지·인버스 아님 (짧은 만기 'Short-Term')", "SHY", "iShares 1-3 Year Treasury Bond ETF Short-Term", F({ group: "EF", leverageFactor: 0 }), null, { kind: null, L: null, guessed: false }],
+    // 검토 지적: 한글 이름의 인버스 — '베어'를 몰라 '3X' 만 보고 레버리지(3배)로, 또는 아예 못 잡던 것
+    ["SOXS 한글 이름 '… 베어 3X' (상품 정보 없음) → 인버스 3배 (레버리지 아님)", "SOXS", "디렉시온 데일리 반도체 베어 3X", null, null, { kind: "inverse", L: 3, guessed: true }],
+    ["TSLQ 한글 이름 'AXS 테슬라 베어 데일리 ETF' (상품 정보 없음) → 인버스 (배수 모름)", "TSLQ", "AXS 테슬라 베어 데일리 ETF", null, null, { kind: "inverse", L: null, guessed: true }],
+    ["상품 정보가 있으면 이름보다 배수: SOXS −3", "SOXS", "디렉시온 데일리 반도체 베어 3X", F({ group: "EF", leverageFactor: -3 }), null, { kind: "inverse", L: 3, guessed: false }],
+    // 검토 지적: 상품 정보도 종목 마스터도 없는 미국 보통 주식 이름의 'Bear' — 상장지수상품 표시(ETF·배수·Daily·운용사)가 없으면 세지 않는다
+    ["Build-A-Bear: 상품 정보·마스터 분류가 모두 없음 → ETF 표시가 없어 레버리지·인버스로 세지 않음 (이름으로 구분)", "BBW", "Build-A-Bear Workshop", null, null, { kind: null, L: null, guessed: true }],
+    ["Build-A-Bear 한글 이름 '빌드-어-베어 워크숍' → 세지 않음", "BBW", "빌드-어-베어 워크숍", null, null, { kind: null, L: null, guessed: true }],
+    ["상품 정보 없는 미국 'ProShares Short S&P500' → 운용사 표시가 있어 인버스", "SH", "ProShares Short S&P500", null, null, { kind: "inverse", L: null, guessed: true }],
+    ["국내 '베어링' 같은 낱말은 인버스 아님 (앞뒤가 한글)", "999991", "베어링자산운용", null, null, { kind: null, L: null, guessed: true }],
   ])("%s", (_n, code, name, facts, group, want) => {
     expect(levInvOf(code, name, facts, group)).toEqual(want);
   });
@@ -143,11 +203,13 @@ describe("계좌 브리핑 저장: exposure (서비스)", () => {
     NVDA: { group: "ST", leverageFactor: 0 },
     RGTX: { group: "EF", leverageFactor: 2, singleStockEtp: true },
     BBW: { group: "ST", leverageFactor: 0 },
+    // 테슬라: 시세가 없어 합계에서 빠지지만 상품 종류는 가린다 (합계에서 뺀 레버리지·인버스·미국 종목을 '없음'으로 보이지 않게)
+    TSLA: { group: "ST", leverageFactor: 0 },
     // 122630: 상품 정보를 받지 못함(null) → 종목 마스터 EF + 정적 표 2배
     "122630": null,
   };
 
-  const setup = async (o: { exposure?: boolean; since?: boolean; facts?: (code: string) => Promise<ProductFacts | null>; productWaitMs?: number; noProduct?: boolean } = {}) => {
+  const setup = async (o: { exposure?: boolean; since?: boolean; facts?: (code: string) => Promise<ProductFacts | null>; productWaitMs?: number; productBudgetMs?: number; noProduct?: boolean } = {}) => {
     db = await createMigratedDb(":memory:");
     await db.insertInto("listed_stocks").values([
       { code: "122630", name: "KODEX 레버리지", market: "KOSPI", isin_code: null, group_code: "EF", updated_at: "2026-09-28T00:00:00+09:00" },
@@ -166,6 +228,7 @@ describe("계좌 브리핑 저장: exposure (서비스)", () => {
       features: { enabled: async (k: string) => flags[k] ?? false },
       productInfo: o.noProduct ? null : { productFacts },
       ...(o.productWaitMs !== undefined ? { productWaitMs: o.productWaitMs } : {}),
+      ...(o.productBudgetMs !== undefined ? { productBudgetMs: o.productBudgetMs } : {}),
       now: () => new Date(st.at),
     });
     return { svc, st, flags, productFacts };
@@ -192,13 +255,15 @@ describe("계좌 브리핑 저장: exposure (서비스)", () => {
           { code: "RGTX", name: "RGTX", kind: "leveraged", L: 2, weight: 21.1 },
           { code: "122630", name: "KODEX 레버리지", kind: "leveraged", L: 2, weight: 10 },
         ],
+        uncounted: [],
       },
-      us: { weight: 49.8, count: 3 },
+      // 시세가 없어 뺀 테슬라는 미국 상장 비중에 없고 uncounted 로
+      us: { weight: 49.8, count: 3, uncounted: 1 },
       excluded: 1,
       guessedByName: 0,
     });
-    // 상품 정보는 합계에 넣은 종목만 (시세 없는 테슬라는 부르지 않음)
-    expect(productFacts.mock.calls.map((c) => c[0]).sort()).toEqual(["005930", "122630", "BBW", "NVDA", "RGTX"]);
+    // 상품 정보는 합계에서 뺀 종목(시세 없는 테슬라)까지 — 뺀 레버리지·인버스를 '없음'으로 보이지 않게
+    expect(productFacts.mock.calls.map((c) => c[0]).sort()).toEqual(["005930", "122630", "BBW", "NVDA", "RGTX", "TSLA"]);
     expect(b.headline).not.toHaveProperty("exposure");
     // 지난 브리핑과 비교가 꺼져 있으면 종목별 값(positions)은 저장하지 않는다 (비중에만 씀)
     expect(d).not.toHaveProperty("positions");
@@ -216,12 +281,12 @@ describe("계좌 브리핑 저장: exposure (서비스)", () => {
   it("상품 정보를 받지 못한 종목: 종목 마스터가 보통 주식이면 그대로, 모르면 정적 표·이름 규칙으로 가리고 guessedByName 으로 센다", async () => {
     const { svc } = await setup({ facts: async (code) => (code === "RGTX" ? FACTS["RGTX"]! : null) });
     const e = (await svc.get((await make(svc)).id)).data!.exposure!;
-    // 삼성전자(마스터 ST)·122630(표)는 짐작 아님, 엔비디아·BBW(마스터 없음)는 이름 규칙 — BBW 는 이름의 'Bear' 로 인버스가 되어 버림 → 그래서 안내가 붙는다
-    expect(e.guessedByName).toBe(2);
+    // 삼성전자(마스터 ST)·122630(표)는 짐작 아님, 엔비디아·BBW·테슬라(마스터 없음)는 이름 규칙 → 안내가 붙는다.
+    // BBW 는 이름에 'Bear' 가 있지만 상장지수상품 표시(ETF·배수·Daily·운용사)가 없어 인버스로 세지 않는다 (검토 지적 — 전에는 인버스로 셈)
+    expect(e.guessedByName).toBe(3);
     expect(e.levInv.items.map((x) => [x.code, x.kind])).toEqual([
       ["RGTX", "leveraged"],
       ["122630", "leveraged"],
-      ["BBW", "inverse"],
     ]);
   });
 
@@ -237,10 +302,10 @@ describe("계좌 브리핑 저장: exposure (서비스)", () => {
 
   it("상품 정보 출처가 없거나(설정 없음) 오류를 내도 저장한다", async () => {
     const a = await setup({ noProduct: true });
-    // 상품 정보 없이: RGTX·122630 은 정적 표, 엔비디아는 이름 규칙(보통), BBW 는 종목 마스터가 없어 이름의 'Bear' 로 인버스 → 이름으로 구분한 2종목
+    // 상품 정보 없이: RGTX·122630 은 정적 표, 엔비디아·테슬라는 이름 규칙(보통), BBW 는 종목 마스터가 없지만 ETF 표시가 없어 보통 → 이름으로 구분한 3종목
     const ea = (await a.svc.get((await make(a.svc)).id)).data!.exposure!;
-    expect(ea.levInv.items.map((x) => x.code)).toEqual(["RGTX", "122630", "BBW"]);
-    expect(ea.guessedByName).toBe(2);
+    expect(ea.levInv.items.map((x) => x.code)).toEqual(["RGTX", "122630"]);
+    expect(ea.guessedByName).toBe(3);
     await db.destroy();
     const b = await setup({ facts: async () => Promise.reject(new Error("토스 오류")) });
     const e = (await b.svc.get((await make(b.svc)).id)).data!.exposure!;
@@ -255,7 +320,36 @@ describe("계좌 브리핑 저장: exposure (서비스)", () => {
     });
     const bc = await make(c.svc);
     expect(bc.status).toBe("ok");
-    expect((await c.svc.get(bc.id)).data!.exposure!.guessedByName).toBe(2);
+    expect((await c.svc.get(bc.id)).data!.exposure!.guessedByName).toBe(3);
+  });
+
+  it("상품 정보는 모두 합쳐 최대 시간까지만 기다린다 (검토 지적 — 토스 웹이 멈춘 날 종목 수 × 8초로 알림이 늦어지지 않게): 남은 종목은 부르지 않고 이름 규칙으로", async () => {
+    const hang = () => new Promise<ProductFacts | null>(() => undefined);
+    // 종목마다 5초까지 기다려도 되지만 전체는 60ms — 동시에 4개를 부르고, 시간이 다 된 뒤의 2종목은 부르지 않는다
+    const { svc, productFacts } = await setup({ facts: hang, productWaitMs: 5_000, productBudgetMs: 60 });
+    const t0 = Date.now();
+    const b = await make(svc);
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(b.status).toBe("ok");
+    expect(productFacts).toHaveBeenCalledTimes(4);
+    const e = (await svc.get(b.id)).data!.exposure!;
+    // 상품 정보 없이도 표(RGTX·122630)·종목 마스터(삼성전자 ST)로 가린 것은 그대로
+    expect(e.levInv.items.map((x) => x.code)).toEqual(["RGTX", "122630"]);
+    expect(e.count).toBe(5);
+  });
+
+  it("환율을 받지 못한 날 (검토 지적): 미국 종목이 모두 합계에서 빠지면 us.count 0 · uncounted 로 남고, 뺀 레버리지(RGTX)는 levInv.uncounted", async () => {
+    const { svc, st } = await setup();
+    const noFx = (h: AccountHolding): AccountHolding => (h.quote?.currency === "USD" ? { ...h, quote: { ...h.quote, fxRate: null } } : h);
+    st.list = LIST().map(noFx);
+    const d = (await svc.get((await make(svc)).id)).data!;
+    expect(d.excluded.filter((x) => /환율/.test(x.reason)).map((x) => x.code)).toEqual(["NVDA", "RGTX", "BBW"]);
+    expect(d.exposure).toMatchObject({
+      count: 2,
+      us: { weight: 0, count: 0, uncounted: 4 },
+      levInv: { weight: 20, items: [{ code: "122630", weight: 20 }], uncounted: [{ code: "RGTX", name: "RGTX", kind: "leveraged", L: 2 }] },
+      excluded: 4,
+    });
   });
 
   it("꺼짐: exposure 칸이 없고(예전 모양 그대로) 상품 정보를 부르지 않는다", async () => {

@@ -58,11 +58,15 @@ export const LEVERAGED_TABLE: Readonly<Record<string, { underlying: string; L: n
   "233740": { underlying: "229200", L: 2, tracks: "코스닥150 지수" },
 };
 
-/** 인버스: 'UltraShort'·'울트라숏', 'Short'(채권 낱말이 같이 있으면 짧은 만기 채권이라 아님), 'Bear', 인버스·곱버스 (marketSummaryCalc 의 isLeverageName 인버스 부분과 같은 규칙) */
+/**
+ * 인버스: 'UltraShort'·'울트라숏', 'Short'(채권 낱말이 같이 있으면 짧은 만기 채권이라 아님), 'Bear'·한글 '베어', 인버스·곱버스 (marketSummaryCalc 의 isLeverageName 인버스 부분과 같은 규칙 +
+ * 한글 '베어'). 토스 한글 이름 '디렉시온 데일리 반도체 베어 3X'(SOXS)가 '3X' 만 보고 레버리지로, 'AXS 테슬라 베어 데일리 ETF'(TSLQ)가 보통 상품으로 잡히지 않게 (브리핑 3차 4 검토 지적).
+ * '베어'는 '숏'처럼 앞뒤가 한글이 아닐 때만 ('베어링' 같은 낱말은 아님)
+ */
 const ULTRASHORT_RE = /(ultrashort|울트라\s?숏)/i;
 const SHORT_RE = /(\bshort\b|(?<![가-힣])숏(?![가-힣]))/i;
 const SHORT_BOND_RE = /(income|bond|\bterm\b|duration|maturity|muni|t-bill|floating)/i;
-const INVERSE_WORD_RE = /(\bbear\b|인버스|곱버스)/i;
+const INVERSE_WORD_RE = /(\bbear\b|(?<![가-힣])베어(?![가-힣])|인버스|곱버스)/i;
 /** 이름의 배수 ('2X', '3x') */
 const MULT_RE = /(\d(?:\.\d+)?)\s*x\b/i;
 /** 미국 단일 종목 상품의 기초 티커 ('… 2X LONG RGTI ETF', 'NVDA Bull 2X') */
@@ -132,15 +136,25 @@ export interface LevInv {
 }
 
 /**
+ * 상장지수상품(ETF·ETN) 이름 표시: 'ETF'·'ETN'·배수 '2X'·'Daily'·운용사(ProShares·Direxion·GraniteShares·T-REX·Defiance·Tradr·AXS)·'Ultra'·레버리지·인버스.
+ * 상품 정보도 종목 마스터 분류도 없는 미국 종목(짐작)은 이 표시가 있을 때만 이름의 Bear·Short·Bull 로 레버리지·인버스라고 센다 —
+ * 'Build-A-Bear Workshop' 같은 회사 이름이 인버스로 잡히지 않게 (브리핑 3차 4 검토 지적, 계좌 비중 한 줄만 — 지표 점수는 classifyProduct 그대로)
+ */
+const ETP_MARK_RE =
+  /(\bet[fnp]s?\b|\d(?:\.\d+)?\s*x\b|\bdaily\b|데일리|\bultra|울트라|proshares|프로셰어즈|direxion|디렉시온|graniteshares|그래닛셰어즈|\bt-rex\b|티렉스|defiance|디파이언스|\btradr\b|\baxs\b|레버리지|인버스|곱버스)/i;
+
+/**
  * 레버리지·인버스인지와 배수 (브리핑 3차 4, 지표 점수와 같은 가리기 — productKindOf). 배수는 아는 것만: 상품 정보의 배수(인버스는 음수의 크기) →
  * 정적 표 → 이름의 '2X' → 국내 '레버리지'(2배). 그 밖은 null — classifyProduct 가 점수 계산용으로 채우는 기본 2배를 화면에 옮기지 않게.
- * guessed: 상품 정보를 받지 못했고 종목 마스터도 보통 주식(ST)이라고 하지 않았고 정적 표에도 없어, 이름 규칙으로 가린 것
+ * guessed: 상품 정보를 받지 못했고 종목 마스터도 보통 주식(ST)이라고 하지 않았고 정적 표에도 없어, 이름 규칙으로 가린 것.
+ * 짐작한 미국 종목은 이름에 상장지수상품 표시(ETP_MARK_RE)가 없으면 레버리지·인버스로 세지 않는다 (보통 주식 이름의 'Bear' 등)
  */
 export function levInvOf(code: string, name: string, facts: ProductFacts | null | undefined, groupCode?: string | null): LevInv {
   const kind = productKindOf(code, name, facts, groupCode);
   const guessed = !facts && groupCode !== "ST" && !LEVERAGED_TABLE[code];
   const lf = typeof facts?.leverageFactor === "number" && Number.isFinite(facts.leverageFactor) ? facts.leverageFactor : null;
   const names = [name, facts?.name, facts?.englishName, facts?.detailName].filter((x): x is string => typeof x === "string" && x.length > 0).join(" ");
+  if (guessed && !isKrCode(code) && groupCode !== "EF" && groupCode !== "EN" && !ETP_MARK_RE.test(names)) return { kind: null, L: null, guessed };
   const nameL = Number(MULT_RE.exec(names)?.[1] ?? NaN);
   const byName = Number.isFinite(nameL) && nameL > 0 ? nameL : null;
   if (kind.kind === "leveraged") {

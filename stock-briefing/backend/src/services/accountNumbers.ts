@@ -177,6 +177,9 @@ export interface AccountExposureItem {
   weight: number;
 }
 
+/** 합계에서 뺀(시세·환율을 받지 못한) 레버리지·인버스 종목 — 비중을 알 수 없어 weight 가 없다 (등록 순서) */
+export type AccountExposureUncounted = Omit<AccountExposureItem, "weight">;
+
 /**
  * 비중 한 줄 (브리핑 3차 4 — exposureOf). 비중 = 종목 원화 평가금액(비용 차감, 앱 잔고와 같은 기준) ÷ 합계에 넣은 종목 값의 합 × 100, 소수 한 자리.
  * 여럿을 더한 비중(상위 3종목·레버리지·인버스·미국 상장)은 원 값을 더한 뒤 반올림한다 (조각 반올림의 합이 아님). 현금·예수금은 모름(토스 보유 조회에 없음) — 분모에 없음
@@ -190,13 +193,20 @@ export interface AccountExposure {
   top1: { code: string; name: string; weight: number };
   /** 상위 3종목 합 (4종목 이상일 때만, 아니면 null) */
   top3: { weight: number } | null;
-  /** 레버리지·인버스 상품 합과 그 종목들 (없으면 weight 0 · 빈 목록) */
-  levInv: { weight: number; items: AccountExposureItem[] };
-  /** 미국 상장(달러) 종목 합과 그 수 (수가 0 이면 앱이 '미국 상장 없음' — 비중이 0.0 으로 반올림되는 작은 보유와 가르려고). 국내 상장 해외 ETF 는 원화 종목이라 들지 않음 */
-  us: { weight: number; count: number };
+  /**
+   * 레버리지·인버스 상품 합과 그 종목들 (합계에 넣은 것 — 없으면 weight 0 · 빈 목록).
+   * uncounted = 합계에서 뺀 레버리지·인버스 종목 (비중을 모름 — 합계에 넣은 것이 없고 이것만 있으면 앱이 '없음' 대신 '비중 알 수 없음')
+   */
+  levInv: { weight: number; items: AccountExposureItem[]; uncounted: AccountExposureUncounted[] };
+  /**
+   * 미국 상장(달러) 종목 합과 그 수 (합계에 넣은 것. 수가 0 이면 앱이 '미국 상장 없음' — 비중이 0.0 으로 반올림되는 작은 보유와 가르려고).
+   * uncounted = 합계에서 뺀 미국 종목 수 (환율·시세를 받지 못한 날 — count 가 0 이어도 이것이 있으면 앱이 '없음' 대신 '비중 알 수 없음').
+   * 국내 상장 해외 ETF 는 원화 종목이라 들지 않음
+   */
+  us: { weight: number; count: number; uncounted: number };
   /** 시세·환율이 없어 합계에서 뺀 보유 종목 수 (비중 계산에 없음) */
   excluded: number;
-  /** 토스 상품 정보를 받지 못해 이름 규칙으로 레버리지·인버스를 가린 종목 수 (analysis/leveraged levInvOf guessed) */
+  /** 토스 상품 정보를 받지 못해 이름 규칙으로 레버리지·인버스를 가린 종목 수 (analysis/leveraged levInvOf guessed — 합계에서 뺀 종목도 셈) */
   guessedByName: number;
 }
 
@@ -521,9 +531,18 @@ export function positionsOf(list: readonly AccountHolding[], opts: { afterCost?:
 }
 
 /**
+ * 비중(%, 소수 한 자리)을 정확히 반올림 (값·합계는 원 단위 정수 — positionsOf). 값 × 1000 ÷ 합계는 절반 경계에서 정확히 '.5' 가 되어 올림된다.
+ * (값 ÷ 합계) × 100 × 10 은 21.35 를 213.4999… 로 만들어 21.3 으로 내림하던 것 (브리핑 3차 4 검토 지적). 비중 한 줄·지난 브리핑과 비교가 같이 쓴다
+ */
+export function weightPct(value: number, total: number): number {
+  return Math.round((value * 1000) / total) / 10;
+}
+
+/**
  * 비중 한 줄 (브리핑 3차 4, 플래그 accountExposure — 순수). positions = positionsOf 결과(값 null = 합계에서 뺀 종목), kinds = 종목별 레버리지·인버스
- * (analysis/leveraged levInvOf — 없는 종목은 보통 상품). 합계에 넣은 종목이 없거나 합이 0 이면 null.
- * 판단하지 않고 숫자만: 가장 큰 종목·상위 3종목(4종목 이상)·레버리지·인버스(값 큰 순)·미국 상장
+ * (analysis/leveraged levInvOf — 없는 종목은 보통 상품, 합계에서 뺀 종목도 넣을 수 있음). 합계에 넣은 종목이 없거나 합이 0 이면 null.
+ * 판단하지 않고 숫자만: 가장 큰 종목·상위 3종목(4종목 이상)·레버리지·인버스(값 큰 순)·미국 상장.
+ * 합계에서 뺀 미국·레버리지·인버스 종목은 비중에는 없지만 따로 센다(us.uncounted·levInv.uncounted) — 환율을 받지 못한 날 '미국 상장 없음'처럼 사실과 다른 '없음'이 나오지 않게
  */
 export function exposureOf(
   positions: readonly AccountPosition[],
@@ -531,17 +550,19 @@ export function exposureOf(
   asOf: string,
 ): AccountExposure | null {
   const counted = positions.map((p, i) => ({ p, i })).filter((x): x is { p: AccountPosition & { value: number }; i: number } => x.p.value !== null);
+  const left = positions.filter((p) => p.value === null);
   const total = sum(counted.map((x) => x.p.value));
   if (!counted.length || !(total > 0)) return null;
-  const weight = (v: number) => Math.round((v / total) * 100 * 10) / 10;
+  const weight = (v: number) => weightPct(v, total);
+  const levKind = (code: string) => {
+    const k = kinds.get(code);
+    return k && (k.kind === "leveraged" || k.kind === "inverse") ? { kind: k.kind, L: k.L } : null;
+  };
   // 값이 큰 순, 같으면 먼저 등록한 종목
   const ranked = [...counted].sort((a, b) => b.p.value - a.p.value || a.i - b.i);
   const top = ranked[0]!.p;
   const usd = counted.filter((x) => x.p.currency === "USD");
-  const lev = ranked.filter((x) => {
-    const k = kinds.get(x.p.code)?.kind;
-    return k === "leveraged" || k === "inverse";
-  });
+  const lev = ranked.filter((x) => levKind(x.p.code) !== null);
   return {
     asOf,
     count: counted.length,
@@ -549,14 +570,15 @@ export function exposureOf(
     top3: counted.length > 3 ? { weight: weight(sum(ranked.slice(0, 3).map((x) => x.p.value))) } : null,
     levInv: {
       weight: weight(sum(lev.map((x) => x.p.value))),
-      items: lev.map((x) => {
-        const k = kinds.get(x.p.code)!;
-        return { code: x.p.code, name: x.p.name, kind: k.kind as "leveraged" | "inverse", L: k.L, weight: weight(x.p.value) };
+      items: lev.map((x) => ({ code: x.p.code, name: x.p.name, ...levKind(x.p.code)!, weight: weight(x.p.value) })),
+      uncounted: left.flatMap((p) => {
+        const k = levKind(p.code);
+        return k ? [{ code: p.code, name: p.name, ...k }] : [];
       }),
     },
-    us: { weight: weight(sum(usd.map((x) => x.p.value))), count: usd.length },
-    excluded: positions.length - counted.length,
-    guessedByName: counted.filter((x) => kinds.get(x.p.code)?.guessed === true).length,
+    us: { weight: weight(sum(usd.map((x) => x.p.value))), count: usd.length, uncounted: left.filter((p) => p.currency === "USD").length },
+    excluded: left.length,
+    guessedByName: positions.filter((p) => kinds.get(p.code)?.guessed === true).length,
   };
 }
 

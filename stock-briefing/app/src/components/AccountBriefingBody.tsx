@@ -13,7 +13,7 @@ import { CardsSkeleton } from "@/components/Skeleton";
 import { Badge, Button, Card, ChangeText, Empty, ErrorView, Muted, SectionTitle, TableHead } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
 import { briefingTime, contributionSpeech, contributionTable, fxEquationSpeech, localDay, summaryShownLines, summarySpeech, templateNote } from "@/lib/accountBriefing";
-import { exposureView } from "@/lib/accountExposure";
+import { EXPOSURE_ABOUT, exposureView } from "@/lib/accountExposure";
 import { QTY_HEAD, QTY_NONE, sinceLastView, sinceNone, WEIGHT_HEAD, WEIGHT_NONE } from "@/lib/accountSinceLast";
 import { usHolidayWhen } from "@/lib/briefingDigest";
 import { mdw } from "@/lib/marketSummary";
@@ -140,11 +140,21 @@ function AccountBriefingView({ b, top, layout, title, trim, since = false, expos
       </Muted>
     </Card>
   );
-  const basis = d ? (
+  const basisLine = d ? (
     <Muted style={styles.basis}>
       기준: {d.basis} · {formatDateKo(d.asOf, true)} 계산
     </Muted>
   ) : null;
+  // 브리핑 3차 4 (플래그 accountExposure): 비중 두 줄이 있으면 맨 아래 기준 줄 밑에 '비중'·'미국 상장'의 뜻 한 줄 (첫 화면 밖 — 총 평가 카드를 늘리지 않게). 꺼지면 지금 그대로
+  const basis =
+    exposure && d?.exposure ? (
+      <>
+        {basisLine}
+        <Muted style={styles.basis}>{EXPOSURE_ABOUT}</Muted>
+      </>
+    ) : (
+      basisLine
+    );
 
   if (layout === "split" && !failed && d) {
     return <AccountSplit d={d} top={top} head={title?.(b)} header={header} summary={summary} narrative={narrative} basis={basis} trim={trim} since={since} exposure={exposure} />;
@@ -308,7 +318,8 @@ function ExposureLines({ e }: { e: AccountExposure }) {
   const t = useTheme();
   const chunkRow = useChunkRow();
   const v = exposureView(e);
-  const joined = (parts: string[]) => parts.map((p, i) => (i < parts.length - 1 ? `${p} ·` : p));
+  // 묶음 끝 ' ·' 의 공백은 줄바꿈 없는 공백 — 묶음 글이 칸보다 길어 그 안에서 줄이 바뀔 때 '·' 하나만 다음 줄 맨 앞에 남지 않게
+  const joined = (parts: string[]) => parts.map((p, i) => (i < parts.length - 1 ? `${p}\u00a0·` : p));
   return (
     <View accessible accessibilityLabel={v.speech} style={[styles.exposure, { borderTopColor: t.line }]}>
       <View style={chunkRow}>

@@ -92,6 +92,8 @@ export interface AccountBriefingDeps {
   productInfo?: { productFacts(code: string): Promise<ProductFacts | null> } | null;
   /** 상품 정보를 종목마다 기다리는 최대 시간 (기본 PRODUCT_WAIT_MS — 테스트는 짧게) */
   productWaitMs?: number;
+  /** 상품 정보를 모든 종목 합쳐 기다리는 최대 시간 (기본 PRODUCT_BUDGET_MS — 테스트는 짧게) */
+  productBudgetMs?: number;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -104,6 +106,11 @@ const DISCLOSURE_MAX = 8;
 /** 비중 한 줄의 상품 정보: 종목마다 기다리는 최대 시간과 동시에 부르는 수 (세션 알림이 늦어지지 않게 — 늦으면 표·이름 규칙으로) */
 const PRODUCT_WAIT_MS = 8_000;
 const PRODUCT_CONCURRENCY = 4;
+/**
+ * 비중 한 줄의 상품 정보: 모든 종목을 합쳐 기다리는 최대 시간. 토스 웹이 멈춘 날 종목 수만큼(19종목 = 5차례 × 8초 ≈ 40초) 계좌 브리핑·세션 알림이
+ * 늦어지지 않게 (app.ts onRunDone 이 계좌 브리핑을 기다린다 — 브리핑 3차 4 검토 지적). 넘으면 남은 종목은 부르지 않고 표·이름 규칙으로
+ */
+const PRODUCT_BUDGET_MS = 8_000;
 
 /**
  * 계좌 한 장 브리핑 (3-31). 세션(오전·오후)마다 종목별 브리핑이 끝난 뒤 계좌 전체 요약 한 건을 만든다.
@@ -223,11 +230,12 @@ export class AccountBriefingService {
       data.sinceLast = prev ? compareSinceLast(prev, data) : null;
     }
     // 브리핑 3차 4 (플래그 accountExposure): 비중 한 줄. 종목별 값은 위와 같은 positionsOf (지난 브리핑과 비교가 꺼져 있으면 저장하지 않고 비중에만 쓴다).
-    // 꺼지면 칸도 상품 정보 호출도 없다. 계산이 뜻밖에 실패해도 계좌 브리핑·알림은 그대로 (칸 없이 저장)
+    // 꺼지면 칸도 상품 정보 호출도 없다. 계산이 뜻밖에 실패해도 계좌 브리핑·알림은 그대로 (칸 없이 저장).
+    // 상품 종류는 합계에서 뺀 종목도 가린다 — 환율·시세를 받지 못한 레버리지·인버스를 '없음'이 아니라 '비중 알 수 없음'으로 밝히려고
     if (await this.deps.features.enabled("accountExposure").catch(() => false)) {
       try {
         const positions = data.positions ?? positionsOf(holdings, { afterCost: true });
-        data.exposure = exposureOf(positions, await this.productKinds(positions.filter((p) => p.value !== null)), data.asOf);
+        data.exposure = exposureOf(positions, await this.productKinds(positions), data.asOf);
       } catch (e) {
         this.deps.log?.warn({ session, date, err: (e as Error).message }, "비중 한 줄을 계산하지 못해 칸 없이 저장");
       }
@@ -273,17 +281,20 @@ export class AccountBriefingService {
   }
 
   /**
-   * 비중 한 줄의 레버리지·인버스 (브리핑 3차 4): 합계에 넣은 종목마다 토스 웹 상품 정보(종목마다 최대 PRODUCT_WAIT_MS, 동시에 PRODUCT_CONCURRENCY 개) +
-   * 종목 마스터 분류로 levInvOf. 상품 정보가 없거나 늦거나 실패하면 정적 표·이름 규칙으로 (guessed) — 계좌 브리핑은 늘 만든다
+   * 비중 한 줄의 레버리지·인버스 (브리핑 3차 4): 보유 종목마다(합계에서 뺀 종목 포함) 토스 웹 상품 정보(종목마다 최대 PRODUCT_WAIT_MS, 모두 합쳐 최대
+   * PRODUCT_BUDGET_MS, 동시에 PRODUCT_CONCURRENCY 개) + 종목 마스터 분류로 levInvOf. 상품 정보가 없거나 늦거나 실패하면 정적 표·이름 규칙으로 (guessed) —
+   * 계좌 브리핑은 늘 만든다. 전체 시간이 다 되면 남은 종목은 부르지 않는다 (시계는 실제 시간 — 브리핑 시각(now)과 상관없이 기다린 시간만 잰다)
    */
   private async productKinds(list: readonly AccountPosition[]): Promise<Map<string, LevInv>> {
     const wait = this.deps.productWaitMs ?? PRODUCT_WAIT_MS;
+    const budgetEnd = Date.now() + (this.deps.productBudgetMs ?? PRODUCT_BUDGET_MS);
     const info = this.deps.productInfo ?? null;
     const out = new Map<string, LevInv>();
     const one = async (p: AccountPosition) => {
+      const ms = Math.min(wait, budgetEnd - Date.now());
       const [facts, group] = await Promise.all([
-        // 부르는 순간 던져도(동기 오류) 이 종목만 상품 정보 없이
-        info ? settleWithin(Promise.resolve().then(() => info.productFacts(p.code)), wait).then((r) => (r.kind === "ok" ? r.value : null)) : Promise.resolve(null),
+        // 부르는 순간 던져도(동기 오류) 이 종목만 상품 정보 없이. 전체 시간이 다 됐으면 부르지 않는다
+        info && ms > 0 ? settleWithin(Promise.resolve().then(() => info.productFacts(p.code)), ms).then((r) => (r.kind === "ok" ? r.value : null)) : Promise.resolve(null),
         groupCodeOf(this.deps.db, p.code).catch(() => null),
       ]);
       out.set(p.code, levInvOf(p.code, p.name, facts, group));
