@@ -241,7 +241,7 @@ export function NotificationSettingsCard() {
             setBusy(true);
             // 브리핑 알림과 같은 채널로 (BH-28) — 기기 설정의 '브리핑 알림' 채널 설정이 테스트에도 그대로 적용되게
             void Notifications.scheduleNotificationAsync({
-              content: { title: "주식 브리핑 테스트 알림", body: "알림이 정상적으로 도착했습니다.\n브리핑이 생성되면 이렇게 도착합니다.", sound: "default" },
+              content: { title: "가즈아 불기둥 테스트 알림", body: "알림이 정상적으로 도착했습니다.\n브리핑이 생성되면 이렇게 도착합니다.", sound: "default" },
               trigger: briefingTrigger(),
             })
               .then(() => runBriefingCheck())

@@ -313,7 +313,7 @@ describe("안내 한 화면", () => {
     await flush();
     r.rerender();
     expect(r.has("알림 허용")).toBe(false);
-    expect(r.text()).toContain("휴대폰 설정 > 애플리케이션 > 주식 브리핑 > 알림");
+    expect(r.text()).toContain("휴대폰 설정 > 애플리케이션 > 가즈아 불기둥 > 알림");
   });
 
   it("'시작하기' 한 번으로 닫힌다 (뒤로 갈 곳이 없으면 잔고로)", async () => {
