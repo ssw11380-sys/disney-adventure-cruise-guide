@@ -88,6 +88,8 @@ export interface KrQuote {
   /** 시세 시각 (현지, 날짜 부분이 거래일) */
   tradedAt: string | null;
   status: string;
+  /** 누적 거래대금 (원, KRX — accumulatedTradingValueRaw. 3-35 내 종목 테마의 거래대금 평소 대비). 없으면 null */
+  tradingValue?: number | null;
 }
 
 export function exchangeSession(j: Json | undefined): ExchangeSession | null {
@@ -435,6 +437,7 @@ export class NaverDiscover {
           changeRate: change !== null && change < 0 && rate > 0 ? -rate : rate,
           tradedAt: typeof it["localTradedAt"] === "string" ? it["localTradedAt"] : null,
           status: String(it["marketStatus"] ?? ""),
+          tradingValue: num(it["accumulatedTradingValueRaw"]),
         });
       }
     }

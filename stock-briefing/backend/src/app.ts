@@ -66,6 +66,16 @@ import { watchlistRoutes } from "./routes/watchlist.js";
 import { WatchlistService } from "./services/watchlistService.js";
 import { InvestorFlowService } from "./services/investorFlowService.js";
 import { investorFlowAdminRoutes, investorFlowRoutes } from "./routes/investorFlow.js";
+import { HoldingThemesService } from "./services/holdingThemesService.js";
+import { HoldingThemeMaps } from "./services/holdingThemeMaps.js";
+import { KrThemeIndex } from "./services/krThemeIndex.js";
+import { ThemeTvHistory } from "./services/themeTvHistory.js";
+import { underlyingOfKind } from "./services/holdingThemesCalc.js";
+import { holdingThemeAdminRoutes, holdingThemeRoutes } from "./routes/holdingThemes.js";
+import { productKindOf } from "./analysis/leveraged.js";
+import { positionsOf } from "./services/accountNumbers.js";
+import { groupCodeOf } from "./services/indicatorScoreService.js";
+import { within } from "./lib/errors.js";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -317,6 +327,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   }
   // 다가오는 일정 (브리핑 3차 5, 플래그 holdingEvents·holdingEarnings): 계좌 브리핑이 만들 때 부른다. 출처가 없으면(테스트 기본) 두지 않는다
   const holdingEvents = opts.providers.holdingEvents ? new HoldingEventsService({ sources: opts.providers.holdingEvents, now, log }) : null;
+  // 내 종목 테마 (3-35, 플래그 holdingThemes): 아래 발견 탭 서비스를 만든 뒤 채운다 (계좌 브리핑은 부를 때 찾는다). 출처가 없으면(테스트 기본) 두지 않는다
+  let holdingThemes: HoldingThemesService | null = null;
   // 계좌 한 장 브리핑 (3-31, 플래그 accountBriefing): 종목별 브리핑 실행이 끝나면 계좌 요약 1건을 만든다
   const accountBriefings = new AccountBriefingService({
     db: opts.db,
@@ -330,6 +342,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // 브리핑 3차 4 비중 한 줄 (플래그 accountExposure): 레버리지·인버스는 지표 점수와 같은 토스 웹 상품 정보(같은 인스턴스·24시간 캐시)로 가린다
     productInfo: opts.providers.productInfo ?? null,
     holdingEvents,
+    // 3-35 내 종목 테마 카드 (플래그 holdingThemes): 만들 때 그때 값을 저장 (최대 8초 — 넘으면 칸 없이)
+    holdingThemes: { snapshot: (held) => (holdingThemes ? holdingThemes.snapshot(held) : Promise.resolve(null)) },
     now,
     log,
   });
@@ -479,6 +493,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     ...((await features.enabled("tradeRecords")) ? { tradeRecords: await tradeRecords.status().catch(() => null) } : {}),
     // 다가오는 일정(브리핑 3차 5): 켜져 있고 출처가 있을 때만 (끄면 응답이 예전과 같게). 마지막으로 모두 받은 시각 · 받지 못한 것·두 출처가 다른 것 경고
     ...(holdingEvents && (await features.enabled("holdingEvents")) ? { holdingEvents: holdingEvents.health() } : {}),
+    // 내 종목 테마(3-35): 켜져 있고 서비스가 있을 때만 (끄면 응답이 예전과 같게). 한국 테마 표 시각·테마 수, 거래대금 마지막 기록일, 경고
+    ...(holdingThemes && (await features.enabled("holdingThemes")) ? { holdingThemes: holdingThemes.health() } : {}),
     disclaimer: DISCLAIMER,
   });
 
@@ -517,6 +533,46 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     });
   }
   await app.register(discoverRoutes, { prefix: "/api/discover", service: discoverService });
+
+  // 내 보유 종목 × 테마 강도 (3-35, 플래그 holdingThemes): 발견 탭과 같은 인스턴스(목록·미국 테마북·시세 캐시)를 부르기만 한다.
+  // 분류(토스 회사 테마·네이버 업종)·한국 테마 표·거래대금 기록은 meta 표에 (마이그레이션 없음). 예약 작업은 도는 순간 플래그를 확인한다 (꺼지면 요청 0건)
+  if (opts.providers.holdingThemes) {
+    const store = metaStore(opts.db);
+    const productInfo = opts.providers.productInfo ?? null;
+    const ht = new HoldingThemesService({
+      features,
+      discover: discoverService,
+      naver: discoverNaver,
+      krIndex: new KrThemeIndex({ naver: discoverNaver, store, now, log }),
+      maps: new HoldingThemeMaps({ sources: opts.providers.holdingThemes, store, now, log }),
+      tv: new ThemeTvHistory({ store }),
+      // 잔고 탭 '보유'와 같은 판정 (수량 > 0 · 평단 있음), 평가금액은 계좌 브리핑과 같은 원화 환산
+      holdings: async () => positionsOf(await stockService.listWithQuotes(), { afterCost: true }).map((p) => ({ code: p.code, name: p.name, value: p.value })),
+      // 레버리지 단일 종목의 기초 (지표 점수·비중 한 줄과 같은 가리기 — 토스 웹 상품 정보 24시간 캐시 + 종목 마스터 분류)
+      underlying: async (code, name) => {
+        const [facts, group] = await Promise.all([productInfo ? within(productInfo.productFacts(code), 3_000, null) : Promise.resolve(null), groupCodeOf(opts.db, code).catch(() => null)]);
+        return underlyingOfKind(productKindOf(code, name, facts, group));
+      },
+      disclaimer: DISCLAIMER,
+      now,
+      log,
+    });
+    holdingThemes = ht;
+    await app.register(holdingThemeRoutes, { prefix: "/api/holdings", service: ht });
+    await app.register(holdingThemeAdminRoutes, { prefix: "/api/admin/holding-themes", service: ht });
+    if (opts.enableScheduler !== false) {
+      const warm = setTimeout(() => void ht.warm().catch((e: unknown) => app.log.warn({ err: String(e) }, "한국 테마 표 준비 실패")), 60_000);
+      const idxTask = cron.schedule("40 5 * * 0", () => void ht.rebuildKrIndex().catch((e: unknown) => app.log.warn({ err: String(e) }, "한국 테마 표 주간 갱신 실패")), { timezone: "Asia/Seoul", name: "holding-themes-kr-index" });
+      const krTv = cron.schedule("10 20 * * 1-5", () => void ht.recordTv("KR").catch((e: unknown) => app.log.warn({ err: String(e) }, "한국 테마 거래대금 기록 실패")), { timezone: "Asia/Seoul", name: "holding-themes-kr-tv" });
+      const usTv = cron.schedule("15 16 * * 1-5", () => void ht.recordTv("US").catch((e: unknown) => app.log.warn({ err: String(e) }, "미국 테마 거래대금 기록 실패")), { timezone: "America/New_York", name: "holding-themes-us-tv" });
+      app.addHook("onClose", async () => {
+        clearTimeout(warm);
+        void idxTask.stop();
+        void krTv.stop();
+        void usTv.stop();
+      });
+    }
+  }
 
   // 시장 전체 요약: 지수·환율은 지수 띠와 같은 인스턴스, 한국 업종은 발견 탭과 같은 계산, 뉴스는 구글 뉴스 RSS(키 없음).
   // 테스트 기본 출처 묶음(fakeProviders)은 null → 서비스를 두지 않는다 (네트워크 없음)

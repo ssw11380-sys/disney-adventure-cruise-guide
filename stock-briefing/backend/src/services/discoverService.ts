@@ -969,6 +969,18 @@ export class DiscoverService {
     });
   }
 
+  /**
+   * 내 종목 테마(3-35)가 발견 탭과 같은 미국 테마북·시세 캐시(30초)를 쓰게 — 계산 코드는 그대로 두고 감싸기만 한다.
+   * 테마북이 없으면(미국 테마 분류 없음) null, 처음 만드는 중이면 UsThemesBuildingError(3초만 기다림), 출처 초기화 시간이면 PreopenError
+   */
+  async usThemeBookQuotes(): Promise<{ book: UsThemeBookData; quotes: Map<string, UsQuote>; at: number; day: string; session: DiscoverSession; open: boolean } | null> {
+    if (!this.deps.usThemes) return null;
+    const ss = await this.session("US");
+    const book = await this.deps.usThemes.get(this.deps.bookWaitMs ?? BOOK_WAIT_MS);
+    const { value, at } = await this.usThemeQuotes(book, ss.open);
+    return { book, quotes: value, at, day: latestTradeDay(value.values()), session: ss.session, open: ss.open };
+  }
+
   private async usThemeList(ss: Session, period: ThemePeriod): Promise<ThemeList> {
     const usThemes = this.deps.usThemes!;
     const open = ss.open;
