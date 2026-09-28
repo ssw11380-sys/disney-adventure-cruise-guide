@@ -101,6 +101,8 @@ export interface HtMarketInfo {
   preparing: boolean;
   note: string | null;
   weekNote: string | null;
+  /** 이 시장 보유 종목 원화 평가금액 합 (앱이 처음 고를 시장 칩 — 위젯 칩과 같은 규칙). 모르는 종목은 0 으로 셈 */
+  heldValue: number;
 }
 
 export interface HoldingThemesResponse {
@@ -344,6 +346,7 @@ export class HoldingThemesService {
         preparing,
         note: [preparing ? (m === "KR" ? MARKET_NOTE_KR_INDEX : MARKET_NOTE_US_BOOK) : null, head?.note ?? null].filter(Boolean).join(" · ") || null,
         weekNote: week?.note ?? null,
+        heldValue: heldValueOf(held, m),
       };
     }
 
@@ -610,6 +613,10 @@ export function nyDate(d: Date): string {
   return `${g("year")}-${g("month")}-${g("day")}`;
 }
 
+function heldValueOf(held: readonly HeldPosition[], m: HtMarket): number {
+  return held.filter((h) => (m === "KR") === isKrCode(h.code)).reduce((a, h) => a + (h.value ?? 0), 0);
+}
+
 /** 캐시한 응답에 이번 보유 목록의 평가금액 순서만 다시 (많이 속한 테마·종목별 보기) */
 function withValues(r: HoldingThemesResponse, held: readonly HeldPosition[]): HoldingThemesResponse {
   const valueOf = new Map(held.map((h) => [h.code, h.value]));
@@ -618,7 +625,9 @@ function withValues(r: HoldingThemesResponse, held: readonly HeldPosition[]): Ho
     (c) => valueOf.get(c) ?? null,
   );
   const byHolding = [...r.byHolding].sort((a, b) => (valueOf.get(b.code) ?? 0) - (valueOf.get(a.code) ?? 0) || a.name.localeCompare(b.name, "ko"));
-  return { ...r, mostHeld: most, byHolding };
+  const markets: HoldingThemesResponse["markets"] = {};
+  for (const [m, info] of Object.entries(r.markets) as Array<[HtMarket, HtMarketInfo]>) markets[m] = { ...info, heldValue: heldValueOf(held, m) };
+  return { ...r, markets, mostHeld: most, byHolding };
 }
 
 /** 응답 → 계좌 브리핑 저장본 (시장마다 등락률 높은·낮은 3개, 나누지 않으면 높은 순 5개 + 더 있는 수) */

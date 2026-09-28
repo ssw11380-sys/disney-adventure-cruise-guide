@@ -111,6 +111,7 @@ export function AccountBand({
   rates = true,
   pad,
   onAllocation,
+  onThemes,
   dense = false,
   basis,
   width,
@@ -120,6 +121,8 @@ export function AccountBand({
   rates?: boolean;
   pad: number;
   onAllocation?: () => void;
+  /** 내 종목 테마 화면 열기 (3-35, 플래그 holdingThemes). 없으면 지금 나무 그대로 */
+  onThemes?: () => void;
   dense?: boolean;
   /** 숫자 기준 점 그리기 (dotOnly: 글 없이 점만) */
   basis?: (dotOnly: boolean) => React.ReactNode;
@@ -179,7 +182,13 @@ export function AccountBand({
   // 끄고도 다음 줄로 넘어가는 칸(큰 글씨·좁은 폭·큰 금액)은 그대로 줄바꿈. 점이 없으면 지금 그대로
   const wrap = fit?.noWrap ? null : styles.wrap;
   const label = accountSpeech(data);
-  const button = onAllocation ? (
+  const button = onThemes ? (
+    // 3-35: 비중 오른쪽에 테마 (버튼 사이 12)
+    <View style={[styles.action, styles.actions]}>
+      {onAllocation ? <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} /> : null}
+      <Button title="테마" icon="pricetags-outline" variant="secondary" compact accessibilityLabel="내 종목 테마 보기" onPress={onThemes} />
+    </View>
+  ) : onAllocation ? (
     <View style={styles.action}>
       <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} />
     </View>
@@ -285,5 +294,7 @@ const styles = StyleSheet.create({
   cell: { flexGrow: 1, flexShrink: 1, flexBasis: "auto", justifyContent: "center", gap: space.xxs, paddingVertical: space.xs, paddingRight: space.sm },
   value: { fontVariant: ["tabular-nums"] },
   action: { paddingLeft: space.sm },
+  // 3-35 비중·테마 두 버튼 (누르는 칸 44 가 겹치지 않게 사이 12)
+  actions: { flexDirection: "row", columnGap: space.md },
   notes: { paddingBottom: space.s, gap: space.xxs },
 });

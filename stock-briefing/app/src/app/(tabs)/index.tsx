@@ -61,6 +61,9 @@ export default function StocksScreen() {
   const openAllocation = useCallback(() => router.push("/portfolio/allocation"), []);
   // 계정 A단계 (플래그 accounts): 주인 아닌 계정 (꺼져 있으면 늘 false — 지금 화면 그대로)
   const { member } = useAccountView();
+  // 3-35 내 종목 테마 (플래그 holdingThemes, fallback 꺼짐): 서버가 켤 때만 '비중' 옆 '테마' 버튼 (꺼지면 그림 트리가 지금과 같음)
+  const themesOn = useFeature("holdingThemes", false);
+  const openThemes = useCallback(() => router.push("/portfolio/themes"), []);
   // 숫자 기준 점 (3-32, 플래그 numberBasis): 켜졌을 때만 계좌 패널·띠에 점 + 토스 대조 글 (훅이므로 아래 이른 return 보다 위)
   const basisOn = useFeature("numberBasis", false);
   const tossSnapshotOn = useFeature("tossAccountSnapshot", false);
@@ -306,6 +309,7 @@ export default function StocksScreen() {
           rates={rates}
           pad={heldPlan.pad}
           onAllocation={gated(allocationOn, openAllocation)}
+          {...(themesOn ? { onThemes: openThemes } : null)}
           {...(dense ? { dense: true } : null)}
           {...(basisOn ? { basis: basisMark, width: tableW } : null)}
         />
@@ -319,6 +323,7 @@ export default function StocksScreen() {
         <AccountPanel
           data={account}
           onAllocation={gated(allocationOn, openAllocation)}
+          {...(themesOn ? { onThemes: openThemes } : null)}
           status={status}
           {...(dense ? { dense: true } : null)}
           // 휴대폰 목록은 창 폭을 다 쓴다 (좌우 여백은 패널 안에서)
@@ -342,6 +347,12 @@ export default function StocksScreen() {
               <Pressable onPress={openAllocation} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel="비중 보기" style={styles.barBtn}>
                 <Ionicons name="pie-chart-outline" size={font.small} color={t.muted} />
                 <Text style={{ color: t.muted, fontSize: font.small }}>비중</Text>
+              </Pressable>
+            ) : null}
+            {section.key === "held" && themesOn ? (
+              <Pressable onPress={openThemes} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel="내 종목 테마 보기" style={styles.barBtn}>
+                <Ionicons name="pricetags-outline" size={font.small} color={t.muted} />
+                <Text style={{ color: t.muted, fontSize: font.small }}>테마</Text>
               </Pressable>
             ) : null}
             <Pressable onPress={() => setSortOpen(true)} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel={`정렬 바꾸기, 지금 ${sortLabel}`} style={styles.barBtn}>
@@ -604,6 +615,7 @@ function AccountPanel({
   data,
   status,
   onAllocation,
+  onThemes,
   dense = false,
   basis,
   width,
@@ -613,6 +625,8 @@ function AccountPanel({
   status: React.ReactNode;
   /** 비중 보기 화면 열기 (플래그 allocationView 가 꺼져 있으면 없음 → 버튼도 없음) */
   onAllocation?: () => void;
+  /** 내 종목 테마 화면 열기 (3-35, 플래그 holdingThemes 가 꺼져 있으면 없음 → 버튼도 없고 지금 나무 그대로). 촘촘이면 구역 머리에 있어 그리지 않는다 */
+  onThemes?: () => void;
   /** 촘촘 세 줄 (3-39) — 비중 버튼은 받아도 그리지 않는다 (구역 머리에 있음) */
   dense?: boolean;
   /**
@@ -773,7 +787,13 @@ function AccountPanel({
         </View>
       ) : null}
       {/* 요약 문장(accessible) 밖에 둔다: 안에 두면 화면 읽기로 버튼을 고를 수 없다 (3-22) */}
-      {onAllocation ? (
+      {onThemes ? (
+        // 3-35: '비중' 오른쪽에 같은 모양 '테마'. 폭 360·글자 200% 로 한 줄에 안 들어가면 다음 줄로 (글자 줄이기·말줄임 없음)
+        <View style={[styles.panelActions, styles.panelActionsWrap]}>
+          {onAllocation ? <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} /> : null}
+          <Button title="테마" icon="pricetags-outline" variant="secondary" compact accessibilityLabel="내 종목 테마 보기" onPress={onThemes} />
+        </View>
+      ) : onAllocation ? (
         <View style={styles.panelActions}>
           <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} />
         </View>
@@ -846,6 +866,8 @@ const styles = StyleSheet.create({
   splitNum: { fontSize: font.small, fontVariant: ["tabular-nums"], textAlign: "right" },
   // 비중 버튼(보이는 높이 32, hitSlop 으로 44): 위는 숫자·환율 글자라 넓혀도 겹치는 버튼이 없다
   panelActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: space.xs },
+  // 3-35 '비중'·'테마' 두 버튼: 줄이 모자라면 다음 줄로 (버튼 사이 12 — 누르는 칸 44 가 겹치지 않게 위아래 줄 간격도)
+  panelActionsWrap: { flexWrap: "wrap", columnGap: space.md, rowGap: space.md },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
   // ── 촘촘(3-39) ── 계좌 세 줄 · 구역 머리 44 (위아래 여백 없음 — 버튼 둘이 머리 높이를 다 채워 누르는 곳이 머리 안)
   panelDense: { paddingTop: space.s, paddingBottom: space.s, gap: space.xxs },

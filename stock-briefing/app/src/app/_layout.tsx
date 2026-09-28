@@ -172,6 +172,7 @@ function Navigator() {
       <Stack.Screen name="market/[code]" options={{ title: "지수" }} />
       <Stack.Screen name="discover/theme/[id]" options={{ title: "테마" }} />
       <Stack.Screen name="portfolio/allocation" options={{ title: "비중" }} />
+      <Stack.Screen name="portfolio/themes" options={{ title: "내 종목 테마" }} />
       {/* 이동평균선 기간·색 (3-39, 기능 플래그 maCustom — 꺼져 있으면 화면 안에 안내만) */}
       <Stack.Screen name="chart-lines" options={{ title: "이동평균선", presentation: "modal" }} />
       <Stack.Screen name="widget-settings" options={{ title: "위젯 설정", presentation: "modal" }} />
