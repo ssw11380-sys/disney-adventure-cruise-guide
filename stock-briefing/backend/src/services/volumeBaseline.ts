@@ -11,6 +11,9 @@ import { isKrTradingDate, isUsTradingDate, krRegularHours, parts, usRegularClose
  *  - 정규장만: 한국 KRX 정규장(수능일·새해 첫 거래일은 그날 개장), 미국 09:30 ET ~ 그날 마감(조기 폐장 13:00). 프리·애프터·주간거래 봉은 오늘·지난 날 모두 뺀다
  *  - 봉 안은 고르게 나눠 센다: 지난 날은 같은 경과 시간이 걸친 봉을 비율만큼. 그래서 개장 뒤 첫 30분(첫 봉 — 시가 단일가가 몰림)은 확인하지 않는다 (early)
  *  - 시각은 그 시장 현지 시각 (한국 = 서울, 미국 = 뉴욕 — 서머타임이 바뀐 주도 현지 시각으로 맞춘다)
+ *  - 토스 30분봉의 시각(dt → Candle.time)은 **봉이 끝나는 시각**이다 (2026-09-28 실측: 한국 봉이 08:30~20:00 24개, 10:00 에 받은 마지막 봉이 10:30,
+ *    미국은 금요일 마지막 봉이 20:00). 그래서 봉 시작 = 시각 − 30분으로 나눈다 — 시작으로 보면 한 칸씩 밀려 한국은 NXT 프리마켓 봉(08:30~09:00)을
+ *    정규장 첫 봉으로 세고 마감 단일가가 든 봉(15:00~15:30)을 뺀다
  */
 
 export type VolumeState = "ok" | "closed" | "early" | "short" | "unavailable";
@@ -63,11 +66,11 @@ function marketOf(code: string): MarketRule {
   return { tz: "America/New_York", hours: (d) => ({ open: 9 * 60 + 30, close: usRegularCloseMinutes(d) }), trading: isUsTradingDate };
 }
 
-/** 시각 글자를 그 시장 현지 날짜·분으로 (못 읽으면 null) */
-function localOf(iso: string | undefined, tz: string): { date: string; minutes: number } | null {
+/** 봉 시각(끝나는 시각) 글자 → 그 봉이 시작한 그 시장 현지 날짜·분 (못 읽으면 null) */
+function barStartOf(iso: string | undefined, tz: string): { date: string; minutes: number } | null {
   if (!iso) return null;
   const t = Date.parse(iso);
-  return Number.isNaN(t) ? null : parts(new Date(t), tz);
+  return Number.isNaN(t) ? null : parts(new Date(t - BAR_MIN * 60_000), tz);
 }
 
 /** 봉을 받기 전에: 지금이 그 시장 정규장인지·개장 뒤 30분이 지났는지 (closed·early 면 봉을 받지 않는다) */
@@ -88,7 +91,7 @@ export function volumeNotOk(code: string, now: Date, status: Exclude<VolumeState
   return { code, status, date: closed ? null : w.date, volume: null, expected: null, ratio: null, days, minutes: closed ? null : w.minutes, asOf: seoulIso(now), reason };
 }
 
-/** 30분봉(오래된 → 최신, time = 봉 시작 ISO)으로 상태. limit = 요청한 봉 개수(450) */
+/** 30분봉(오래된 → 최신, time = 봉이 끝나는 시각 ISO — 토스 dt)으로 상태. limit = 요청한 봉 개수(450) */
 export function volumeStatus(code: string, candles: Candle[], now: Date, limit = 450): VolumeStatus {
   const w = volumeWindow(code, now);
   if (w.state === "closed") return volumeNotOk(code, now, "closed", VOLUME_REASON.closed);
@@ -98,17 +101,17 @@ export function volumeStatus(code: string, candles: Candle[], now: Date, limit =
   const elapsed = w.minutes!;
 
   // 받은 봉이 한도만큼이면 맨 앞 날은 앞부분이 잘렸을 수 있어 뺀다 (오늘이면 빼지 않음).
-  // 날짜는 봉 시각(time)의 그 시장 날짜로 본다 — date 칸은 출처 시각 글자의 앞 10자라 미국 봉이 서울 시각으로 적히면 다음 날이 된다
+  // 날짜는 봉 시작(time − 30분)의 그 시장 날짜로 본다 — date 칸은 출처 시각 글자의 앞 10자라 미국 봉이 서울 시각으로 적히면 다음 날이 된다
   let cut: string | null = null;
   if (candles.length >= limit) {
-    const first = candles.map((b) => localOf(b.time, m.tz)).find((p) => p !== null);
+    const first = candles.map((b) => barStartOf(b.time, m.tz)).find((p) => p !== null);
     if (first && first.date !== today) cut = first.date;
   }
 
-  // 정규장 봉만 날짜별로 (개장 뒤 분 · 거래량)
+  // 정규장 봉만 날짜별로 (봉 시작의 개장 뒤 분 · 거래량)
   const byDate = new Map<string, { offset: number; volume: number }[]>();
   for (const b of candles) {
-    const p = localOf(b.time, m.tz);
+    const p = barStartOf(b.time, m.tz);
     if (!p || !m.trading(p.date)) continue;
     const h = m.hours(p.date);
     if (p.minutes < h.open || p.minutes >= h.close) continue;

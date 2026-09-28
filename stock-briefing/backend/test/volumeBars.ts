@@ -1,9 +1,18 @@
 import type { Candle } from "../src/domain/types.js";
 import { isKrTradingDate, isUsTradingDate } from "../src/services/marketContext.js";
 
-/** 거래량 급증 테스트용 30분봉 도우미 (3-29). 시각은 봉 시작, date 는 시각 글자의 앞 10자 (토스 dt.slice(0, 10) 흉내) */
+/**
+ * 거래량 급증 테스트용 30분봉 도우미 (3-29). hhmm 은 봉이 **시작**하는 현지 시각(작업지시 7장의 봉 설명과 같음)이고,
+ * 봉 시각(time)에는 토스처럼 봉이 **끝나는** 시각(시작 + 30분)을 같은 오프셋으로 적는다 (2026-09-28 실측). date 는 그 시각 글자의 앞 10자 (토스 dt.slice(0, 10) 흉내)
+ */
 export function bar(date: string, hhmm: string, volume: number, offset = "+09:00"): Candle {
-  return { date, time: `${date}T${hhmm}:00${offset}`, open: 1, high: 1, low: 1, close: 1, volume };
+  const end = Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)) + 30;
+  const d = new Date(`${date}T12:00:00Z`);
+  if (end >= 24 * 60) d.setUTCDate(d.getUTCDate() + 1);
+  const m = end % (24 * 60);
+  const day = d.toISOString().slice(0, 10);
+  const time = `${day}T${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}:00${offset}`;
+  return { date: time.slice(0, 10), time, open: 1, high: 1, low: 1, close: 1, volume };
 }
 
 /** from ~ to (둘 다 포함) 30분 간격 "HH:MM" */

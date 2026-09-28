@@ -16,9 +16,9 @@ function seoulText(nyIso: string): string {
   const t = Date.parse(nyIso) + 9 * 3_600_000;
   return `${new Date(t).toISOString().slice(0, 19)}+09:00`;
 }
-/** 서울 오프셋으로 적은 미국 봉 (date = 시각 글자 앞 10자 — 뉴욕 10:00 뒤 봉은 다음 날이 된다) */
+/** 서울 오프셋으로 적은 미국 봉 (hhmm = 뉴욕 봉 시작, 시각은 끝나는 시각 · date = 시각 글자 앞 10자 — 뉴욕 10:00 뒤 봉은 다음 날이 된다) */
 function usBarSeoul(date: string, hhmm: string, volume: number): Candle {
-  const time = seoulText(`${date}T${hhmm}:00-05:00`);
+  const time = seoulText(new Date(Date.parse(`${date}T${hhmm}:00-05:00`) + 30 * 60_000).toISOString());
   return { date: time.slice(0, 10), time, open: 1, high: 1, low: 1, close: 1, volume };
 }
 
@@ -40,7 +40,7 @@ describe("거래량 급증 기준 (volumeBaseline)", () => {
     all.push(bar("2026-12-08", "08:00", 5000), bar("2026-12-08", "08:30", 5000), bar("2026-12-08", "09:00", 3000), bar("2026-12-08", "09:30", 3000), bar("2026-12-08", "10:00", 1500));
     expect(all).toHaveLength(605);
     const last = all.slice(-450);
-    expect(last[0]!.time).toBe("2026-11-11T13:30:00+09:00");
+    expect(last[0]!.time).toBe("2026-11-11T14:00:00+09:00"); // 13:30~14:00 봉 (시각은 끝나는 때)
     expect(volumeStatus(KR, last, at("2026-12-08T10:15:00+09:00"))).toMatchObject({ status: "ok", days: 18, volume: 7500, expected: 2500, ratio: 3 });
   });
 
@@ -123,7 +123,7 @@ describe("거래량 급증 기준 (volumeBaseline)", () => {
     all.push(usBarSeoul("2026-12-08", "09:30", 4000), usBarSeoul("2026-12-08", "10:00", 2000));
     expect(all).toHaveLength(823);
     const last = all.slice(-450);
-    expect(last[0]!.time).toBe("2026-11-18T04:30:00+09:00");
+    expect(last[0]!.time).toBe("2026-11-18T05:00:00+09:00"); // 뉴욕 11/17 14:30~15:00 봉
     expect(last[0]!.date).toBe("2026-11-18");
     expect(volumeStatus(US, last, at("2026-12-09T00:30:00+09:00"))).toMatchObject({ status: "ok", days: 13, volume: 6000, expected: 2000, ratio: 3 });
   });
