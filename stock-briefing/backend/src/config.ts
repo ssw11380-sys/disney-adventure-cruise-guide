@@ -53,7 +53,7 @@ const schema = z.object({
   OWNER_LOGIN_ID: z.string().default(""),
   OWNER_INITIAL_PASSWORD: z.string().default(""),
   /** 앞단 프록시 수 (요청 IP 를 X-Forwarded-For 에서 읽는다 — IP 별 로그인 제한). 비우면 Railway 에서는 1, 그 밖에는 0 */
-  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).optional(),
+  TRUST_PROXY_HOPS: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().min(0).max(5).optional()),
 });
 
 export type AppConfig = z.infer<typeof schema> & {

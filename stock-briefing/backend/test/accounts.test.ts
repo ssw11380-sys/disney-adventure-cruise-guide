@@ -226,6 +226,8 @@ describe("요청 IP (Railway 앞단 프록시)", () => {
     expect(loadConfig({ RAILWAY_ENVIRONMENT: "production" }).trustProxyHops).toBe(1);
     expect(loadConfig({}).trustProxyHops).toBe(0);
     expect(loadConfig({ RAILWAY_ENVIRONMENT: "production", TRUST_PROXY_HOPS: "0" }).trustProxyHops).toBe(0);
+    // .env 에 빈 값으로 두면 기본값 (0 이 아니라)
+    expect(loadConfig({ RAILWAY_ENVIRONMENT: "production", TRUST_PROXY_HOPS: "" }).trustProxyHops).toBe(1);
     const { app } = await makeApp({ env: { TRUST_PROXY_HOPS: "1" } });
     for (let i = 0; i < 20; i++) await login(app, `u${i}`, "bad", true, { headers: { "x-forwarded-for": "203.0.113.7" } });
     expect((await login(app, OWNER, "1111", true, { headers: { "x-forwarded-for": "203.0.113.7" } })).statusCode).toBe(429);
