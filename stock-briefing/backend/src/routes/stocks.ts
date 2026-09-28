@@ -92,6 +92,7 @@ export const stockRoutes: FastifyPluginAsync<{ service: StockService }> = async 
   app.get("/:code/candles", async (req) => {
     const { code } = codeParam.parse(req.params);
     const { period, count } = candlesQuery.parse(req.query);
-    return service.getCandles(code, period, count);
+    // 계정 A단계 (검증 7차 M2): 주인 아닌 계정은 새 값(분봉 20초·일봉 60초 안)만 캐시에서 — 주인 앱이 열어 둔 옛 봉으로 주인 등록 종목이 드러나지 않게
+    return service.getCandles(code, period, count, ownerView(req) ? undefined : { shared: true });
   });
 };

@@ -7,6 +7,7 @@ import { hashCost, hashPassword, looksLikeToken, newSessionToken, tokenHash, ver
 import { loginIdKey, normalizeEmail, normalizeLoginId, signupErrors, type SignupInput } from "../src/auth/rules.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, type Db } from "../src/db/index.js";
+import { seoulIso } from "../src/lib/time.js";
 import type { Providers } from "../src/providers/index.js";
 import { fakeProviders } from "./helpers.js";
 
@@ -589,10 +590,12 @@ describe("주인 아닌 계정 (A단계: 개인 데이터 기본 거절)", () =>
     expect(seen.body).not.toContain("OWNER-CANARY");
     expect(seen.body).not.toContain("777.77");
     expect(seen.json()).toMatchObject({ code: "005930", registered: false, quantity: null, avgPrice: null, memo: null, tossSynced: false, inTossSnapshot: false });
-    // 주인이 등록하지 않은 종목을 주인이 볼 때와 같은 모양
+    // 주인이 등록하지 않은 종목을 주인이 볼 때와 같은 모양 — 시세 기준 시각(asOf)만 요청 시각 (검증 7차 M2: 캐시의 받은 시각을 주지 않는다)
     const other = await app.inject({ method: "GET", url: "/api/stocks/000660", headers: sessionHeader(member) });
     const otherOwner = await app.inject({ method: "GET", url: "/api/stocks/000660", headers: sessionHeader(owner) });
-    expect(other.body).toBe(otherOwner.body);
+    const ownerSeen = otherOwner.json();
+    expect(ownerSeen.quote.asOf).not.toBe(seoulIso(new Date(T0)));
+    expect(other.body).toBe(JSON.stringify({ ...ownerSeen, quote: { ...ownerSeen.quote, asOf: seoulIso(new Date(T0)) } }));
     // 공유 경로는 그대로 열린다
     expect((await app.inject({ method: "GET", url: "/api/stocks/005930/quote", headers: sessionHeader(member) })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/market/status", headers: sessionHeader(member) })).statusCode).toBe(200);

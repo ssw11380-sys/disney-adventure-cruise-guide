@@ -624,16 +624,35 @@ export class StockService {
     const fetched = src
       .getMany(codes)
       .then((m) => {
-        for (const [c, tick] of m) {
-          const prev = this.quickLast.get(c);
-          if (prev && prev.price !== tick.price && prev.receivedAt < tick.receivedAt) this.quickMovedAt.set(c, prev.receivedAt);
-          this.quickLast.set(c, tick);
-        }
+        this.noteQuick(m);
         return true;
       })
       .catch(() => false);
     await within(fetched, QUICK_WAIT_MS, false);
     return this.quickCached(codes);
+  }
+
+  /** 받은 토스 웹 일괄 가격을 적어 둔다 (다음 요청의 직전 값 · 3초 갱신에서 본 가격 변화) */
+  private noteQuick(m: Map<string, LiveTick>): void {
+    for (const [c, tick] of m) {
+      const prev = this.quickLast.get(c);
+      if (prev && prev.price !== tick.price && prev.receivedAt < tick.receivedAt) this.quickMovedAt.set(c, prev.receivedAt);
+      this.quickLast.set(c, tick);
+    }
+  }
+
+  /**
+   * 주인 아닌 계정의 실시간(토스 웹 일괄) 가격 (검증 7차 M2): **이 요청에서 받은 값만** 쓴다. quickNow 는 150ms 만 기다리고 직전 값(30초 안)을 쓰는데,
+   * 그 값은 주인 앱의 3초 갱신이 남긴 것이라 주인 등록 종목만 가격 변화·초록 점이 붙고 처음 보는 종목(150ms 안에 못 받음)은 안 붙어 갈렸다.
+   * 기다림은 처음 보는 종목의 시세와 같게 COLD_WAIT_MS 까지. 토스 웹 일괄 가격 안의 2초 캐시는 그대로 (처음 보는 종목도 2초 안에 다시 부르면 같은 값)
+   */
+  private async quickShared(codes: string[]): Promise<Map<string, LiveTick>> {
+    const src = this.deps.quickPrices;
+    if (!src || codes.length === 0) return new Map();
+    const got = await within(src.getMany(codes).catch(() => null), COLD_WAIT_MS, null);
+    if (!got) return new Map();
+    this.noteQuick(got);
+    return new Map([...got].filter(([c]) => codes.includes(c)));
   }
 
   /** 마지막으로 받은 토스 웹 가격 중 QUICK_MAX_AGE_MS 안의 것 (새로 받지 않는다) */
@@ -655,28 +674,46 @@ export class StockService {
    */
   async getQuote(code: string, opts: { fresh?: boolean; quick?: Map<string, LiveTick>; shared?: boolean } = {}): Promise<Quote> {
     await this.hydrate();
+    const shared = opts.shared === true;
     // 웹소켓이 방금(1분 안) 체결을 준 종목은 토스 웹을 부르지 않는다 (받아 둔 값만 — 그 체결을 믿지 못할 때(초록 점과 같은 기준) 목록과 같은 가격이 되게).
     // 오래된 체결뿐이면(이 세션 체결을 아직 안 줌) 토스 웹 가격도 받는다.
-    // shared(주인 아닌 계정 — 검증 5차 M2): 웹소켓 체결을 보지 않고 늘 토스 웹 가격을 받아 본다 (웹소켓은 주인 등록 종목만 구독한다)
-    const wsTick = opts.shared ? undefined : this.deps.live?.get(code);
+    // shared(주인 아닌 계정 — 검증 5차 M2): 웹소켓 체결을 보지 않고 늘 토스 웹 가격을 받아 본다 (웹소켓은 주인 등록 종목만 구독한다).
+    // 7차: 그 가격도 이 요청에서 받은 것만 (주인 앱의 3초 갱신이 남긴 값을 쓰지 않는다 — quickShared)
+    const wsTick = shared ? undefined : this.deps.live?.get(code);
     const wsFresh = !!wsTick && Math.abs(this.now().getTime() - wsTick.receivedAt) <= TICK_FRESH_MS;
-    const quickP = opts.quick ? Promise.resolve(opts.quick) : wsFresh ? Promise.resolve(this.quickCached([code])) : this.quickNow([code]);
+    const quickP = opts.quick ? Promise.resolve(opts.quick) : wsFresh ? Promise.resolve(this.quickCached([code])) : shared ? this.quickShared([code]) : this.quickNow([code]);
     const calendarP = this.calendarNow();
     const h = this.book.get(code);
     const t = this.now().getTime();
     if (h && !opts.fresh) {
       if (this.due(code, t)) {
         const p = this.refreshQuotes([code]);
-        if (this.old(code, t) || this.catchingUp(code)) await within(p, COLD_WAIT_MS, undefined);
+        // shared(검증 7차 M2): ttl 이 지난 캐시로 먼저 답하지 않고 처음 보는 종목처럼 새로 받기를 끝까지 기다린다 —
+        // 주인 앱이 받아 둔 옛 스냅샷(받은 시각·거래량·전 거래일 값)이 나가면 주인 등록 종목이 본문으로 드러난다
+        if (shared) await p;
+        else if (this.old(code, t) || this.catchingUp(code)) await within(p, COLD_WAIT_MS, undefined);
       }
     } else {
       await this.refreshQuotes([code]);
     }
     const quick = await quickP;
     const calendar = await calendarP;
-    const q = this.current(code, quick, opts.shared ? this.sharedContext(calendar) : this.sessionContext([code], calendar));
+    const q = this.current(code, quick, shared ? this.sharedContext(calendar) : this.sessionContext([code], calendar));
     if (!q) throw new ProviderError(this.deps.quotes.name, this.quoteErrors.get(code) ?? `${code} 시세 없음`);
-    return q;
+    return shared ? this.sharedQuote(code, q) : q;
+  }
+
+  /**
+   * 주인 아닌 계정에게 주는 시세 (검증 7차 M2 — 주인 앱이 받아 둔 캐시인지 드러나지 않게, 처음 보는 종목을 방금 받은 것과 같은 모양으로):
+   *  - asOf(시세 기준 시각)는 요청 시각. 캐시의 받은 시각이 나가면 '몇십 초 전에 누가 받아 둔 종목' = 주인 등록 종목이 보였다
+   *    (토스 웹·네이버 시세는 원래 받은 시각이 asOf 라 처음 보는 종목도 요청 시각이 나간다 — 같은 모양)
+   *  - 새로 받기가 실패해 마지막 값(stale)만 있으면 처음 보는 종목의 실패와 같게 던진다 (캐시가 있는 종목만 '시세 지연' 값이 나오면 갈린다)
+   *  - live(예전 앱의 초록 점 — 새 앱은 realtime 을 본다)는 뺀다: 받아 둔 스냅샷에 이 요청의 토스 웹 가격을 덮어쓴 표시라, 처음 보는 종목(스냅샷과 가격을 같이 받음)에는 붙지 않는다
+   */
+  private sharedQuote(code: string, q: Quote): Quote {
+    if (q.stale) throw new ProviderError(this.deps.quotes.name, this.quoteErrors.get(code) ?? `${code} 시세 없음`);
+    const { live: _live, stale: _stale, ...rest } = q;
+    return { ...rest, asOf: seoulIso(this.now()) };
   }
 
   /** 현재가를 새로 받은 뒤(최대 8초) 잔고 목록 — 토스 대조처럼 지금 값이 필요할 때 */
@@ -1129,8 +1166,11 @@ export class StockService {
     };
   }
 
-  /** 차트 봉 (캐시: 같은 종목·주기를 다시 열면 바로, 3-18). maxAgeMs = 그보다 오래 받아 둔 봉은 새로 받기 (지표 점수 장 마감 뒤 계산) */
-  getCandles(code: string, period: CandlePeriod, count: number, opts?: { maxAgeMs?: number }): Promise<CandleSeries> {
+  /**
+   * 차트 봉 (캐시: 같은 종목·주기를 다시 열면 바로, 3-18). maxAgeMs = 그보다 오래 받아 둔 봉은 새로 받기 (지표 점수 장 마감 뒤 계산).
+   * shared = 주인 아닌 계정 (새 값으로 보는 시간 안의 봉만 캐시에서 — 검증 7차 M2, CandleCache.getShared)
+   */
+  getCandles(code: string, period: CandlePeriod, count: number, opts?: { maxAgeMs?: number; shared?: boolean }): Promise<CandleSeries> {
     return this.candleCache.get(normalizeCode(code), period, count, opts);
   }
 

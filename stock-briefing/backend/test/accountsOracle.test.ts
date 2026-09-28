@@ -9,12 +9,13 @@ import { createMigratedDb, type Db } from "../src/db/index.js";
 import { seoulIso } from "../src/lib/time.js";
 import { memberSummary } from "../src/routes/marketSummaries.js";
 import type { MarketSummary } from "../src/services/marketSummaryService.js";
-import type { CandlePeriod, CandleSeries } from "../src/domain/types.js";
-import type { LiveTick, StockSessionFacts, TossRealtime } from "../src/providers/market/tossRealtime.js";
+import type { CandlePeriod, CandleSeries, Quote } from "../src/domain/types.js";
+import { ProviderError } from "../src/lib/errors.js";
+import type { LiveTick, QuickPriceSource, StockSessionFacts, TossRealtime } from "../src/providers/market/tossRealtime.js";
 import type { ScoreSources, ScoreStock } from "../src/services/indicatorScoreService.js";
 import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
 import { dailyOf, fakeValueSources, monthlyOf, referenceData } from "./fixtures/valueScores/load.js";
-import { FakeQuoteProvider, fakeProviders } from "./helpers.js";
+import { FakeQuoteProvider, fakeProviders, makeQuote } from "./helpers.js";
 
 /**
  * 계정 A단계 검증 4차:
@@ -454,5 +455,149 @@ describe("M2 (검증 6차): 가치 기능을 켠 서버 둘 — 주인이 재무
     // 받기가 끝난 뒤에는 기다림 없이 점수
     const again = await cold.app.indicatorScores.getShared("NVDA", 80);
     expect(again?.value.status).toBe("ok");
+  });
+});
+
+/**
+ * 검증 7차 M2: 시세·봉의 **캐시 시각과 옛 값**도 주인 등록 종목을 드러내지 않는다. 6차까지는 주인 아닌 계정에게 서버 캐시를 그대로 줘서
+ *  - 시세 asOf(기준 시각)가 주인 앱이 받아 둔 시각(몇십 초 전)이고, 처음 보는 종목은 방금이었다 (토스 웹·네이버 시세는 받은 시각이 asOf)
+ *  - ttl(1분)이 지난 시세·새 값 시간(일봉 1분)이 지난 봉도 먼저 주고 뒤에서 새로 받아, 옛 거래량·옛 마지막 봉이 나갔다 (봉은 정규장 10분까지)
+ *  - 주인 앱의 3초 갱신이 남긴 토스 웹 가격(30초 안)을 붙여, 주인 등록 종목만 가격 변화·live 가 붙었다
+ *  - 새로 받기가 실패하면 주인 등록 종목만 '시세 지연' 값·옛 봉이 나오고, 처음 보는 종목은 오류였다
+ * 값이 시계를 따라 바뀌는 같은 가짜 출처·같은 시계로 서버 둘을 띄워(주인이 삼성전자를 받아 둔 서버 · 다른 종목만 받은 서버) 주인 아닌 계정의 본문을 견준다.
+ * (응답 속도 차이는 남는다 — 설계 3장 '남는 것')
+ */
+describe("M2 (검증 7차): 시세 기준 시각·ttl 지난 스냅샷·옛 봉·주인 앱의 3초 갱신 가격이 주인 아닌 계정에게 나가지 않는다", () => {
+  const T3 = Date.parse("2026-09-28T10:00:00+09:00"); // 월요일 한국 정규장
+  const CODE = "005930";
+  const URLS = [`/api/stocks/${CODE}/quote`, `/api/stocks/${CODE}`, `/api/stocks/${CODE}/candles`];
+
+  /** 토스 웹·네이버처럼 받은 시각이 asOf. 가격·거래량·오늘 봉은 분마다 바뀐다 */
+  class ClockSource extends FakeQuoteProvider {
+    down = false;
+    constructor(private readonly clock: { t: number }) {
+      super("toss");
+    }
+    private minute(): number {
+      return Math.floor((this.clock.t - T3) / MIN);
+    }
+    override async getQuote(code: string): Promise<Quote> {
+      this.calls++;
+      if (this.down) throw new ProviderError(this.name, "고의 실패");
+      const m = this.minute();
+      return { ...makeQuote(code, this.name, 100_000 + m * 100), volume: 1_000_000 + m * 5_000, asOf: seoulIso(new Date(this.clock.t)) };
+    }
+    override async getCandles(code: string, period: CandlePeriod, count: number): Promise<CandleSeries> {
+      this.calls++;
+      if (this.down) throw new ProviderError(this.name, "고의 실패");
+      const m = this.minute();
+      const end = Date.UTC(2026, 8, 28);
+      const candles = Array.from({ length: count }, (_, i) => {
+        const k = count - 1 - i;
+        const c = 100_000 - k * 20 + (k === 0 ? m * 100 : 0);
+        return { date: new Date(end - k * 86_400_000).toISOString().slice(0, 10), open: c - 200, high: c + 800, low: c - 900, close: c, volume: k === 0 ? 1_000_000 + m * 5_000 : 2_000_000 };
+      });
+      return { code, period, candles, source: this.name };
+    }
+  }
+
+  /** 토스 웹 일괄 가격 (3초 갱신): 받은 시각이 timestamp, 가격은 분마다 */
+  function quickWeb(clock: { t: number }, state: { down: boolean }): QuickPriceSource {
+    return {
+      name: "toss-web",
+      async getMany(codes: string[]): Promise<Map<string, LiveTick>> {
+        if (state.down) throw new Error("토스 웹 고의 실패");
+        const m = Math.floor((clock.t - T3) / MIN);
+        return new Map(codes.map((c) => [c, { code: c, price: 100_050 + m * 100, volume: 10, timestamp: seoulIso(new Date(clock.t)), receivedAt: clock.t }]));
+      },
+    };
+  }
+
+  async function server(ownerCode: string) {
+    const clock = { t: T3 };
+    const db = await createMigratedDb(":memory:");
+    const quotes = new ClockSource(clock);
+    const web = { down: false };
+    const app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ quotes, quickPrices: quickWeb(clock, web) }), logger: false, enableScheduler: false, now: () => new Date(clock.t), auth: { scryptN: 1024 } });
+    opened.push({ app, db, clock });
+    await app.stockService.refreshMaster();
+    const owner = (await login(app, OWNER, "1111")).json().token as string;
+    expect((await app.inject({ method: "POST", url: "/api/stocks", headers: S(owner), payload: { code: ownerCode, quantity: 3, avgPrice: 70000 } })).statusCode).toBe(201);
+    // 주인 앱처럼: 잔고(시세·3초 갱신 가격이 쌓임) · 상세 · 차트 (봉 캐시)
+    for (const url of ["/api/stocks?quotes=1", `/api/stocks/${ownerCode}`, `/api/stocks/${ownerCode}/candles`]) expect((await app.inject({ method: "GET", url, headers: S(owner) })).statusCode, url).toBe(200);
+    const member = (await app.inject({ method: "POST", url: "/api/auth/signup", payload: { loginId: "member1", password: "abcd1234", passwordConfirm: "abcd1234", email: "m@example.com" } })).json().token as string;
+    return { app, clock, quotes, web, owner, member };
+  }
+
+  async function both() {
+    return { warm: await server(CODE), cold: await server("000660") };
+  }
+  type Srv = Awaited<ReturnType<typeof server>>;
+  const advance = (s: { warm: Srv; cold: Srv }, ms: number) => {
+    s.warm.clock.t += ms;
+    s.cold.clock.t += ms;
+  };
+  async function sameForMember(s: { warm: Srv; cold: Srv }) {
+    const out: Record<string, { status: number; body: unknown }> = {};
+    for (const url of URLS) {
+      const a = await s.warm.app.inject({ method: "GET", url, headers: S(s.warm.member) });
+      const b = await s.cold.app.inject({ method: "GET", url, headers: S(s.cold.member) });
+      expect(a.statusCode, `${url} ${a.body}`).toBe(b.statusCode);
+      expect(a.json(), url).toEqual(b.json());
+      out[url] = { status: a.statusCode, body: a.json() };
+    }
+    return out;
+  }
+
+  it("40초 뒤(ttl 안): 시세 기준 시각은 요청 시각 — 주인 앱이 받아 둔 시각이 나가지 않는다. live·stale 칸도 없다", async () => {
+    const s = await both();
+    advance(s, 40_000);
+    const now = seoulIso(new Date(s.warm.clock.t));
+    // 주인에게는 캐시가 드러난다 (이 테스트가 두 서버를 실제로 다르게 만들었는지)
+    expect((await s.warm.app.inject({ method: "GET", url: `/api/stocks/${CODE}/quote`, headers: S(s.warm.owner) })).json().live).toBe(true);
+    const seen = await sameForMember(s);
+    const q = seen[`/api/stocks/${CODE}/quote`]!.body as Record<string, unknown>;
+    expect(q.asOf).toBe(now);
+    expect(q).not.toHaveProperty("live");
+    expect(q).not.toHaveProperty("stale");
+    expect((seen[`/api/stocks/${CODE}`]!.body as { quote: { asOf: string } }).quote.asOf).toBe(now);
+  });
+
+  it("2분 뒤(ttl 지남): 주인 앱이 받아 둔 스냅샷(옛 거래량)·옛 봉(마지막 봉 종가)을 먼저 주지 않고 새로 받아 준다", async () => {
+    const s = await both();
+    const probe = await server(CODE); // 주인 보기 확인용 (warm 과 같은 상태)
+    advance(s, 2 * MIN);
+    probe.clock.t += 2 * MIN;
+    // 주인은 예전처럼 옛 봉을 바로 받는다 (뒤에서 새로) — 두 서버가 실제로 옛 값을 들고 있는지
+    const ownerCandles = (await probe.app.inject({ method: "GET", url: `/api/stocks/${CODE}/candles`, headers: S(probe.owner) })).json() as CandleSeries;
+    expect(ownerCandles.candles.at(-1)!.close).toBe(100_000);
+    const seen = await sameForMember(s);
+    expect((seen[`/api/stocks/${CODE}/quote`]!.body as Quote).volume).toBe(1_000_000 + 2 * 5_000);
+    expect((seen[`/api/stocks/${CODE}/candles`]!.body as CandleSeries).candles.at(-1)!.close).toBe(100_200);
+  });
+
+  it("주인 앱의 3초 갱신이 남긴 토스 웹 가격(20초 전)을 붙이지 않는다 — 지금 토스 웹을 못 받으면 두 서버 모두 스냅샷 가격", async () => {
+    const s = await both();
+    advance(s, 20_000);
+    s.warm.web.down = true;
+    s.cold.web.down = true;
+    const seen = await sameForMember(s);
+    expect((seen[`/api/stocks/${CODE}/quote`]!.body as Quote).price).toBe(100_000);
+  });
+
+  it("새로 받기 실패: 주인 등록 종목만 '시세 지연' 값·옛 봉이 나오지 않고, 처음 보는 종목과 같은 오류", async () => {
+    const s = await both();
+    advance(s, 2 * MIN);
+    for (const x of [s.warm, s.cold]) {
+      x.quotes.down = true;
+      x.web.down = true;
+    }
+    const seen = await sameForMember(s);
+    expect(seen[`/api/stocks/${CODE}/quote`]!.status).toBe(502);
+    expect(seen[`/api/stocks/${CODE}/candles`]!.status).toBe(502);
+    expect(seen[`/api/stocks/${CODE}`]!.body).toMatchObject({ quote: null, quoteError: expect.stringContaining("고의 실패") });
+    // 주인은 예전처럼 마지막 값(시세 지연)
+    const mine = (await s.warm.app.inject({ method: "GET", url: `/api/stocks/${CODE}/quote`, headers: S(s.warm.owner) })).json();
+    expect(mine.stale).toBe(true);
   });
 });

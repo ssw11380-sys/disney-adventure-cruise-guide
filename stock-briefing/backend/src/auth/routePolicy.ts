@@ -21,19 +21,32 @@ export const SHARED_ROUTES: ReadonlySet<string> = new Set([
   "GET /api/discover/:market/themes/:id",
   "GET /api/stocks/search",
   "GET /api/stocks/:code", // 가림: 등록 여부와 상관없이 미리 보기 모양
-  "GET /api/stocks/:code/quote",
-  "GET /api/stocks/:code/candles",
+  "GET /api/stocks/:code/quote", // 가림: 캐시의 받은 시각·ttl 지난 스냅샷·주인 앱의 3초 갱신 가격을 쓰지 않음 (검증 7차)
+  "GET /api/stocks/:code/candles", // 가림: 새 값 시간(분봉 20초·일봉 60초) 안의 봉만 캐시에서 (검증 7차)
   "GET /api/stocks/:code/analysis/:kind", // refresh 무시 + 사용자별 하루 한도
   "GET /api/stocks/:code/news", // 가림: 등록 표를 보지 않음
-  "GET /api/scores/:code",
+  "GET /api/scores/:code", // 가림: 계산 시각·재무 받은 시각을 요청 시각 값으로 + 하루 한도
   "GET /api/market-summaries", // 가림: 내 종목 비교를 뺌
   "GET /api/market-summaries/latest",
   "GET /api/market-summaries/:id",
   "POST /api/app-errors", // 운영 진단
 ]);
 
-/** 주인 아닌 계정에게 보유 정보를 뺀 모습을 주는 공유 경로 (경로 안에서 ownerView 로 나눈다) */
-export const SANITIZED_ROUTES: ReadonlySet<string> = new Set(["GET /api/stocks/:code", "GET /api/stocks/:code/news", "GET /api/stocks/:code/analysis/:kind", "GET /api/market-summaries", "GET /api/market-summaries/latest", "GET /api/market-summaries/:id"]);
+/**
+ * 주인 아닌 계정에게 보유 정보를 빼거나, 공유 캐시의 시각·상태(주인이 먼저 열었는지·주인 등록 종목이라 미리 받아 뒀는지)를 요청 시각 값으로 바꾼 모습을 주는
+ * 공유 경로 (경로 안에서 ownerView 로 나눈다 — 검증 4~7차 M2)
+ */
+export const SANITIZED_ROUTES: ReadonlySet<string> = new Set([
+  "GET /api/stocks/:code",
+  "GET /api/stocks/:code/quote",
+  "GET /api/stocks/:code/candles",
+  "GET /api/stocks/:code/news",
+  "GET /api/stocks/:code/analysis/:kind",
+  "GET /api/scores/:code",
+  "GET /api/market-summaries",
+  "GET /api/market-summaries/latest",
+  "GET /api/market-summaries/:id",
+]);
 
 /** 인증 경로 (각 경로가 스스로 세션을 확인한다) */
 export const AUTH_ROUTES: ReadonlySet<string> = new Set([
