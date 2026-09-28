@@ -17,7 +17,7 @@ const KB_GUESS_SHEET = 0.45;
  *  - 앱이 먼저 검사하고(빔·10자·예약어·같은 이름·12개 — 서버와 같은 규칙) 서버도 다시 검사한다. 서버가 거절하면 그 글을 입력칸 아래 빨간 글로
  *  - 입력칸이 열리자마자 자판이 뜬다. 자판이 열리면 시트를 위쪽에 붙이고 높이를 자판 위까지로 줄인다 — edge-to-edge 라 창이 자판만큼
  *    줄어드는 동작(KeyboardAvoidingView·adjustResize)에 기대지 않는다 (가격 알림 시트와 같은 방식). 넘치면 위쪽 글만 스크롤, 버튼은 늘 보임.
- *    Modal 창에는 자판 이벤트가 오지 않을 수 있어(폰 확인 전) 입력칸 초점으로 한 번 더 대비한다 (아래 guess)
+ *    Modal 창에는 자판 이벤트가 오지 않을 수 있어(폰 확인 전) 입력칸 초점으로 한 번 더 대비한다 (아래 guess — 한 번 위로 가면 창을 닫을 때까지 그 자리)
  *  - 저장하는 동안 창을 닫으면(바깥·뒤로 가기·취소) 응답이 와도 onDone 을 부르지 않는다 (닫은 뒤 종목이 몰래 옮겨지지 않게)
  */
 export function WatchGroupNameSheet({
@@ -54,6 +54,8 @@ export function WatchGroupNameSheet({
   // 자판 이벤트를 한 번이라도 받았는지 · 입력칸에 초점이 있는지 (아래 대비책)
   const [kbEvents, setKbEvents] = useState(false);
   const [focused, setFocused] = useState(false);
+  // 대비책으로 한 번 위로 올렸는지 — 창이 열려 있고 자판 이벤트가 오지 않는 동안 그 자리를 지킨다 (아래 guess)
+  const [held, setHeld] = useState(false);
   useEffect(() => {
     // 개발 모드(StrictMode)는 붙였다 떼었다 다시 붙인다 — 다시 붙을 때 '닫힘'을 풀어 둔다
     closedRef.current = false;
@@ -72,8 +74,9 @@ export function WatchGroupNameSheet({
   const create = mode === "create";
   // 대비책 (3-34 검토): RN 0.86 은 자판 이벤트를 앱 본 창에서만 보내는데 이 입력칸은 Modal(다른 창) 안이라, 이벤트가 오지 않으면 시트가 자판에 가린다.
   // 입력칸에 초점이 있는데 자판 이벤트를 아직 한 번도 받지 못했으면 자판이 떠 있다고 보고, 위쪽에 붙이고 창 높이의 45%까지로 줄인다.
-  // 이벤트가 오면 그 높이를 쓰고(자판이 닫히면 아래로 — 지금 그대로), 초점이 빠지면 아래로
-  const guess = kb === 0 && focused && !kbEvents;
+  // 이벤트가 오면 그 높이를 쓰고(자판이 닫히면 아래로 — 지금 그대로). 초점이 빠져도 창을 닫을 때까지(만들어 닫힘 · 취소 · 바깥 · 뒤로) 그 자리 (3-34 3차 검토):
+  // [만들기]를 누르면 초점이 버튼으로 옮겨 가는데(웹 · 외부 자판), 그 순간 시트가 아래로 내려가면 누른 자리에서 버튼이 빠져 눌리지 않았고 '같은 이름' 글도 보이지 않았다
+  const guess = kb === 0 && !kbEvents && (focused || held);
   const up = kb > 0 || guess;
   const maxH = kb > 0 ? win.height - kb - insets.top - space.md * 2 : guess ? Math.round(win.height * KB_GUESS_SHEET) : undefined;
 
@@ -129,7 +132,10 @@ export function WatchGroupNameSheet({
               placeholderTextColor={t.muted}
               accessibilityLabel={`그룹 이름, ${WATCH_GROUP_NAME_MAX}자까지`}
               autoFocus
-              onFocus={() => setFocused(true)}
+              onFocus={() => {
+                setFocused(true);
+                setHeld(true);
+              }}
               onBlur={() => setFocused(false)}
               returnKeyType="done"
               onSubmitEditing={() => void submit()}

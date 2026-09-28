@@ -4,7 +4,7 @@ import { useApi } from "@/api/hooks";
 import type { RegisteredWithQuote } from "@/api/types";
 import { sortHoldings, splitHoldings } from "@/lib/portfolio";
 import { useSettings, type SortKey } from "@/lib/settings";
-import { visibleWatch, watchModel, type WatchLayout } from "@/lib/watchGroups";
+import { registeredSeq, visibleWatch, watchModel, type WatchLayout } from "@/lib/watchGroups";
 import { useWatchGroups } from "@/lib/watchGroupsQuery";
 import type { WatchView } from "@/lib/watchView";
 
@@ -56,7 +56,7 @@ const item = (s: RegisteredWithQuote): NavItem => ({ code: s.code, name: s.name 
  */
 export function holdingsOrder(list: readonly RegisteredWithQuote[], sort: SortKey, afterCost: boolean, watch?: { layout: WatchLayout; view: WatchView }): HoldingsOrder {
   const split = splitHoldings(sortHoldings([...list], sort, afterCost));
-  const shown = watch ? visibleWatch(watchModel(split.watch, watch.layout, watch.view, sort === "created")) : split.watch;
+  const shown = watch ? visibleWatch(watchModel(split.watch, watch.layout, watch.view, sort === "created", registeredSeq(list))) : split.watch;
   return { held: split.held.map(item), watch: shown.map(item) };
 }
 

@@ -29,7 +29,7 @@ class FakeToss {
     const hook = this.duringSync;
     this.duringSync = null;
     if (hook) await hook();
-    const purchaseKrw = this.purchaseKrw ?? items.reduce((a, h) => a + h.quantity * h.avgPrice, 0);
+    const purchaseKrw = this.purchaseKrw ?? items.reduce((a, h) => a + h.quantity * (h.avgPrice ?? 0), 0);
     return { items, overview: { purchaseKrw, purchaseUsd: 0, afterCostKrw: 0, afterCostUsd: 0, rateAfterCost: null } };
   }
   async ordersForBook() {

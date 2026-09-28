@@ -80,7 +80,10 @@ export function WatchChips({ chips, onPick, onEdit, pad, backdrop }: { chips: Wa
  * 관심 칸 '전체'의 그룹 머리 줄 (휴대폰·넓은 표 공통, 높이 44 · 줄 전체가 누르는 곳): '▾ 반도체 · 4' — 누르면 접고 편다 (이 기기에 기억).
  * 화면 읽기 '반도체 그룹, 4종목' + 값 '펼쳐짐'/'접힘' + 상태 expanded · 힌트 '두 번 탭하면 접습니다'.
  * 값을 따로 주는 까닭 (3-34 검토): RN 0.86 안드로이드는 expanded 를 펼치기·접기 동작으로만 붙이고 읽을 글을 만들지 않아, 사용법 힌트를 끈 TalkBack 은
- * 접혔는지 몰랐다. accessibilityValue.text 는 이름표 뒤에 붙어('반도체 그룹, 4종목, 접힘') 바뀔 때마다 새 글로 읽히고, 칩 이름표('반도체 그룹, 4종목')와도 갈린다
+ * 접혔는지 몰랐다. accessibilityValue.text 는 이름표 뒤에 붙어('반도체 그룹, 4종목, 접힘') 바뀔 때마다 새 글로 읽히고, 칩 이름표('반도체 그룹, 4종목')와도 갈린다.
+ * 동작 (3-34 3차 검토): 안드로이드는 expanded 상태가 있으면 TalkBack 동작 메뉴에 '펼치기'/'접기'를 넣지만, accessibilityActions 에 없으면 JS 로 알리지 않아
+ * 골라도 아무 일이 없었다 → 지금 할 수 있는 쪽 하나(펼쳐져 있으면 collapse, 접혀 있으면 expand)와 두 번 탭(activate)을 넣고 모두 접고 펴기로.
+ * activate 를 넣으면 두 번 탭이 onPress 대신 onAccessibilityAction 으로 온다 (RN ReactAccessibilityDelegate)
  */
 export function WatchGroupHead({ name, groupId, count, collapsed, onToggle, pad }: { name: string; groupId: number | null; count: number; collapsed: boolean; onToggle: () => void; pad: number }) {
   const t = useTheme();
@@ -92,6 +95,11 @@ export function WatchGroupHead({ name, groupId, count, collapsed, onToggle, pad 
       accessibilityState={{ expanded: !collapsed }}
       accessibilityValue={{ text: collapsed ? "접힘" : "펼쳐짐" }}
       accessibilityHint={collapsed ? "두 번 탭하면 펼칩니다" : "두 번 탭하면 접습니다"}
+      accessibilityActions={collapsed ? EXPAND_ACTIONS : COLLAPSE_ACTIONS}
+      onAccessibilityAction={(e) => {
+        const name = e.nativeEvent.actionName;
+        if (name === "activate" || (name === "expand" && collapsed) || (name === "collapse" && !collapsed)) onToggle();
+      }}
       style={({ pressed }) => [styles.head, { paddingHorizontal: pad, backgroundColor: pressed ? t.rowPressed : t.bg, borderBottomColor: t.line }]}
     >
       <Ionicons name={collapsed ? "chevron-forward" : "chevron-down"} size={font.small} color={t.muted} />
@@ -104,6 +112,9 @@ export function WatchGroupHead({ name, groupId, count, collapsed, onToggle, pad 
     </Pressable>
   );
 }
+
+const EXPAND_ACTIONS = [{ name: "activate" }, { name: "expand", label: "펼치기" }];
+const COLLAPSE_ACTIONS = [{ name: "activate" }, { name: "collapse", label: "접기" }];
 
 /** 고른 그룹이 비었을 때 칩 줄 아래 한 칸 — 제목에 고른 그룹 이름 ('‘반도체’ 그룹에 종목이 없습니다') */
 export function WatchEmptyGroup({ name, groupId, onOpen }: { name: string; groupId: number | null; onOpen: () => void }) {

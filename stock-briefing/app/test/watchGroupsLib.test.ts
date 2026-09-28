@@ -19,6 +19,7 @@ import {
   objectParticle,
   parseWatchView,
   posLine,
+  registeredSeq,
   rowStamps,
   saveFailText,
   selectChip,
@@ -44,7 +45,7 @@ import { holding, quote } from "./helpers";
  * 그룹 0개 = 지금 순서), 칩(그룹 없음 0 숨김), 정렬과의 관계(등록순 = 내 순서, 등락률 = 그룹 안에서), 기기 저장값, 끌기 목표 칸, 글
  */
 const orderFx = JSON.parse(readFileSync(new URL("../../shared/fixtures/watchOrder.json", import.meta.url), "utf8")) as {
-  cases: { name: string; groups: WatchGroup[]; stocks: OrderStock[]; op: WatchOp | null; order: { groupId: number | null; codes: string[] }[] }[];
+  cases: { name: string; groups: WatchGroup[]; stocks: Omit<OrderStock, "seq">[]; op: WatchOp | null; order: { groupId: number | null; codes: string[] }[] }[];
 };
 const nameFx = JSON.parse(readFileSync(new URL("../../shared/fixtures/watchGroupNames.json", import.meta.url), "utf8")) as {
   limit: number;
@@ -60,7 +61,9 @@ describe("공용 픽스처 (서버 services/watchGroupService 와 같은 답)", 
   });
 
   it.each(orderFx.cases.map((c) => [c.name, c] as const))("순서: %s", (_n, c) => {
-    const state = c.op ? applyOp(c.groups, c.stocks, c.op) : { groups: c.groups, stocks: c.stocks };
+    // 픽스처 stocks 의 차례 = 서버가 등록순으로 읽은 차례 (seq)
+    const stocks = c.stocks.map((s, seq) => ({ ...s, seq }));
+    const state = c.op ? applyOp(c.groups, stocks, c.op) : { groups: c.groups, stocks };
     expect(watchOrder(state.groups, state.stocks)).toEqual(c.order);
   });
 
@@ -294,6 +297,42 @@ describe("낙관적 반영 (applyToLayout)", () => {
     expect(m.buckets.at(-1)!.stocks.map((s) => s.code)).toEqual(["AAPL", "TSLA", "000660", "005930", "042700", "NVDA"]);
     expect(del.items.find((i) => i.code === "ZZZ")).toEqual({ code: "ZZZ", groupId: 3, position: 5 });
     expect(applyToLayout(LAYOUT, LIST, { kind: "order", ids: [9, 7, 3] }).groups.map((g) => g.name)).toEqual(["빈 그룹", "반도체", "배당"]);
+  });
+});
+
+describe("같은 등록 시각 — 토스 가져오기 한 번에 들어온 종목 (3-34 3차 검토)", () => {
+  // 서버 목록은 등록 시각 → 같은 시각이면 넣은 차례 (= 플래그를 끈 잔고 순서). 예전 규칙(코드 순)은 켜자마자 005930 · AAPL · MSFT · ZZZ 로 바꿔 놓았다
+  const T = "2026-09-10T21:00:00+09:00";
+  const b = (code: string, name: string, rate: number): RegisteredWithQuote => ({ ...holding(code, quote(code, 100, { changeRate: rate }), null, null, undefined, name), createdAt: T });
+  const BATCH = [b("ZZZ", "지지지", 0.3), b("005930", "삼성전자", 1.2), b("AAPL", "애플", -0.5), b("MSFT", "마이크로소프트", 2)];
+  const EMPTY: WatchLayout = { on: true, groups: [], items: [] };
+  const ONE: WatchLayout = { on: true, groups: [{ id: 1, name: "반도체", position: 0 }], items: [] };
+  const off = codes(splitHoldings(sortHoldings(BATCH, "created", false)).watch);
+
+  it("자리를 정하지 않았으면 켜도 끈 잔고 순서 그대로 (그룹 0개 · 그룹 있음 모두)", () => {
+    expect(off).toEqual(["ZZZ", "005930", "AAPL", "MSFT"]);
+    expect(codes(visibleWatch(watchModel(splitHoldings(BATCH).watch, EMPTY, VIEW_DEFAULT, true)))).toEqual(off);
+    expect(codes(visibleWatch(watchModel(splitHoldings(BATCH).watch, ONE, VIEW_DEFAULT, true)))).toEqual(off);
+    expect(registeredSeq(BATCH)).toEqual(new Map([["ZZZ", 0], ["005930", 1], ["AAPL", 2], ["MSFT", 3]]));
+  });
+
+  it("다른 정렬(등락률)이어도 자리(↑↓·메뉴 '지금' 줄)는 넣은 차례 기준 — 받은 목록 차례(seq)를 넘긴다, 화면 줄은 등락률 순 그대로", () => {
+    const sorted = splitHoldings(sortHoldings(BATCH, "changeRate", false)).watch;
+    expect(codes(sorted)).toEqual(["MSFT", "005930", "ZZZ", "AAPL"]);
+    const m = watchModel(sorted, ONE, VIEW_DEFAULT, false, registeredSeq(BATCH));
+    expect(off.map((code) => m.pos.get(code)!.index)).toEqual([0, 1, 2, 3]);
+    expect(codes(visibleWatch(m))).toEqual(["MSFT", "005930", "ZZZ", "AAPL"]);
+  });
+
+  it("같은 시각 종목 사이 옮기기: 낙관적 반영도 넣은 차례로 번호를 매긴다 (서버 · 공용 픽스처와 같은 답)", () => {
+    const next = applyToLayout(EMPTY, BATCH, { kind: "move", code: "MSFT", groupId: null, index: 0 });
+    expect(next.items).toEqual([
+      { code: "005930", groupId: null, position: 2 },
+      { code: "AAPL", groupId: null, position: 3 },
+      { code: "MSFT", groupId: null, position: 0 },
+      { code: "ZZZ", groupId: null, position: 1 },
+    ]);
+    expect(codes(visibleWatch(watchModel(splitHoldings(BATCH).watch, next, VIEW_DEFAULT, true)))).toEqual(["MSFT", "ZZZ", "005930", "AAPL"]);
   });
 });
 

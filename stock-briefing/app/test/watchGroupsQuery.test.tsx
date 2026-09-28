@@ -240,6 +240,112 @@ describe("조작: 낙관적 반영 · 차례 · 실패", () => {
   });
 });
 
+describe("조작 중에 받은 서버 배치 (3-34 3차 검토 — 낙관적 화면을 덮지 않기)", () => {
+  const moved: Layout = { ...LAYOUT, items: [{ code: "A", groupId: 1, position: 1 }, { code: "B", groupId: 1, position: 0 }] };
+
+  it("저장 차례에 조작이 남은 동안 끝난 GET(잔고 목록이 바뀌어 다시 받기)은 캐시를 덮지 않고, 줄이 비면 마지막 조작 응답을 쓴 뒤 한 번 다시 받아 맞춘다", async () => {
+    const seen = mount();
+    await settle();
+    const reply = deferred<Layout>();
+    h.api.moveWatchStock!.mockImplementationOnce(() => reply.promise);
+    seen.value.ops.move({ code: "B", name: "나" }, 1, 0);
+    const optimistic = cache()!;
+    expect(optimistic.items.find((i) => i.code === "B")).toEqual({ code: "B", groupId: 1, position: 0 });
+    // 조작 응답 전에 GET 이 나감 (새 종목 E 가 생겨 다시 받기) — 서버는 아직 옛 배치(B 가 2번째)를 준다
+    const stale = deferred<Layout>();
+    h.api.watchGroups!.mockImplementationOnce(() => stale.promise);
+    client.setQueryData(["http://x", "stocks"], [...LIST, w("E", "마", 9)]);
+    await settle();
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(2);
+    stale.resolve(LAYOUT);
+    await settle();
+    expect(cache()).toEqual(optimistic);
+    expect(seen.value.layout.items.find((i) => i.code === "B")).toEqual({ code: "B", groupId: 1, position: 0 });
+    // 조작 응답 → 줄이 빔 → 그 응답을 쓰고, 덮지 않은 GET 이 있었으니 한 번 다시 받는다
+    h.api.watchGroups!.mockResolvedValue(moved);
+    reply.resolve(moved);
+    await settle();
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(3);
+    expect(cache()).toEqual(moved);
+  });
+
+  it("조작 중에 나간 GET 이 조작 응답보다 늦게 와도(줄이 이미 빔) 옛 값으로 되돌리지 않는다 — 조작 응답이 그 GET 보다 새것", async () => {
+    const seen = mount();
+    await settle();
+    const reply = deferred<Layout>();
+    h.api.moveWatchStock!.mockImplementationOnce(() => reply.promise);
+    seen.value.ops.move({ code: "B", name: "나" }, 1, 0);
+    const stale = deferred<Layout>();
+    h.api.watchGroups!.mockImplementationOnce(() => stale.promise);
+    // 앱으로 돌아옴 · 당겨서 새로고침 등으로 다시 받기
+    void client.invalidateQueries({ queryKey: ["http://x", "watchGroups"] });
+    await settle();
+    reply.resolve(moved);
+    await settle();
+    expect(cache()).toEqual(moved);
+    stale.resolve(LAYOUT);
+    await settle();
+    expect(cache()).toEqual(moved);
+    expect(seen.value.layout).toEqual(moved);
+    // 조작이 없을 때 받은 값은 그대로 쓴다 (다른 기기에서 바꾼 것)
+    const other: Layout = { ...LAYOUT, groups: [...LAYOUT.groups, { id: 2, name: "배당", position: 1 }] };
+    h.api.watchGroups!.mockResolvedValueOnce(other);
+    seen.value.refetch();
+    await settle();
+    expect(cache()).toEqual(other);
+  });
+
+  it("실패 뒤 다시 시도(retry)한 GET 도 같다: 조작이 남아 있으면 덮지 않는다", async () => {
+    const seen = mount();
+    await settle();
+    const reply = deferred<Layout>();
+    h.api.moveWatchStock!.mockImplementationOnce(() => reply.promise);
+    seen.value.ops.move({ code: "B", name: "나" }, 1, 0);
+    const optimistic = cache()!;
+    h.api.watchGroups!.mockRejectedValueOnce(new ApiRequestError(500, "INTERNAL", "서버 오류")).mockResolvedValueOnce(LAYOUT);
+    void client.invalidateQueries({ queryKey: ["http://x", "watchGroups"] });
+    await vi.waitFor(() => expect(h.api.watchGroups).toHaveBeenCalledTimes(3), { timeout: 4000, interval: 50 });
+    await settle();
+    expect(cache()).toEqual(optimistic);
+    h.api.watchGroups!.mockResolvedValue(moved);
+    reply.resolve(moved);
+    await settle();
+    expect(cache()).toEqual(moved);
+    expect(h.api.watchGroups).toHaveBeenCalledTimes(4);
+  });
+
+  it("저장 차례 (순수): 보낸 뒤 조작이 없었던 조회만 새것, 줄에 조작이 있을 때 온 조회는 줄이 빌 때 한 번 다시 받기", async () => {
+    const applied: Layout[] = [];
+    const deps = { apply: (l: Layout) => void applied.push(l), refetch: vi.fn(), fail: vi.fn() };
+    const q = new WatchOpQueue(deps);
+    const quiet = q.stamp();
+    expect(q.fresh(quiet)).toBe(true);
+    const before = q.stamp();
+    const d = deferred<Layout>();
+    const run = q.run(() => d.promise);
+    expect(q.fresh(before)).toBe(false);
+    expect(q.fresh(q.stamp())).toBe(false);
+    d.resolve(LAYOUT);
+    await run;
+    expect(applied).toEqual([LAYOUT]);
+    expect(deps.refetch).toHaveBeenCalledTimes(1);
+    // 줄이 빈 뒤: 조작 전에 보낸 조회는 옛것(다시 받기는 적지 않음), 지금 보낸 조회는 새것
+    expect(q.fresh(before)).toBe(false);
+    expect(q.fresh(q.stamp())).toBe(true);
+    await q.run(async () => LAYOUT);
+    expect(deps.refetch).toHaveBeenCalledTimes(1);
+    // 조작이 줄에 있는 동안 보낸 조회는 줄이 빈 뒤에 돌아와도 옛것 (서버가 그 조작보다 먼저 읽었을 수 있다)
+    const d2 = deferred<Layout>();
+    const run2 = q.run(() => d2.promise);
+    const sentBusy = q.stamp();
+    expect(sentBusy).toBe(-1);
+    d2.resolve(LAYOUT);
+    await run2;
+    expect(q.fresh(sentBusy)).toBe(false);
+    expect(deps.refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("잔고 목록의 종목이 바뀌면 (관심 해제 → 다시 추가 — 3-34 검토 must)", () => {
   const model = (seen: { value: State }, list: RegisteredWithQuote[]) =>
     watchModel(list, seen.value.layout, seen.value.view, true).buckets.map((b) => [b.name, ...b.stocks.map((s) => s.code)]);
@@ -369,6 +475,25 @@ describe("기기 보기 상태 정리를 저장 (3-34 검토)", () => {
     expect(seen.value.view.selected).toBe("all");
     expect(h.setView).not.toHaveBeenCalled();
   });
+
+  it("받기가 실패하면(한 번 더 해 봐도) 기기 캐시의 옛 배치로 정리한 값을 저장하지 않는다 — 이번 실행에서 서버 배치를 받은 뒤에만 (3-34 3차 검토)", async () => {
+    // 기기 캐시: 옛 배치(그룹 1 없음) · 저장값: 그룹 1 칩과 그 접힘 (다른 기기에서 만든 그룹일 수 있다)
+    h.view = { selected: 1, collapsed: [1] };
+    client.setQueryData(["http://x", "watchGroups"], { on: true, groups: [], items: [] }, { updatedAt: Date.now() - 120_000 });
+    h.api.watchGroups!.mockRejectedValue(new ApiRequestError(0, "NETWORK", "서버에 연결할 수 없습니다: http://x"));
+    const seen = mount();
+    await vi.waitFor(() => expect(h.api.watchGroups).toHaveBeenCalledTimes(2), { timeout: 4000, interval: 50 });
+    await settle();
+    // 그리기에는 정리한 값('전체'), 저장값은 그대로
+    expect(seen.value.view).toEqual({ selected: "all", collapsed: [] });
+    expect(h.setView).not.toHaveBeenCalled();
+    // 연결되어 서버 배치를 받으면(그룹 1 이 정말 없음) 그때 한 번 저장
+    h.api.watchGroups!.mockResolvedValue({ on: true, groups: [], items: [] });
+    seen.value.refetch();
+    await settle();
+    expect(h.setView).toHaveBeenCalledTimes(1);
+    expect(h.setView).toHaveBeenCalledWith({ selected: "all", collapsed: [] });
+  });
 });
 
 describe("종목 상세 ‹ › 순서 (holdingsOrder)", () => {
@@ -380,5 +505,13 @@ describe("종목 상세 ‹ › 순서 (holdingsOrder)", () => {
     expect(holdingsOrder(list, "created", false, { layout: moved, view: { selected: "all", collapsed: [1] } }).watch.map((s) => s.code)).toEqual(["C", "D"]);
     expect(holdingsOrder(list, "created", false, { layout: moved, view: { selected: "none", collapsed: [] } }).watch.map((s) => s.code)).toEqual(["C", "D"]);
     expect(holdingsOrder(list, "created", false, { layout: moved, view: { selected: "all", collapsed: [] } }).held.map((s) => s.code)).toEqual(["H"]);
+  });
+
+  it("같은 등록 시각(토스 가져오기 한 번)은 켜도 끈 순서 그대로 — 자리를 정하지 않았으면 서버 목록 차례, 코드 순이 아님 (3-34 3차 검토)", () => {
+    const batch = ["ZZZ", "005930", "AAPL", "MSFT"].map((c) => w(c, c, 30));
+    const off = holdingsOrder(batch, "created", false).watch.map((s) => s.code);
+    expect(off).toEqual(["ZZZ", "005930", "AAPL", "MSFT"]);
+    for (const layout of [{ on: true, groups: [], items: [] }, LAYOUT] as Layout[])
+      expect(holdingsOrder(batch, "created", false, { layout, view: { selected: "all", collapsed: [] } }).watch.map((s) => s.code)).toEqual(off);
   });
 });

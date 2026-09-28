@@ -60,6 +60,11 @@ export interface OrderStock {
   createdAt: string;
   groupId: number | null;
   position: number | null;
+  /**
+   * 등록 차례: 서버 /api/stocks 목록(등록 시각 → 같은 시각이면 넣은 차례)에서의 자리. 토스 가져오기 한 번에 들어온 종목은 등록 시각이 같아,
+   * 자리를 정하지 않았으면 이 차례 = 플래그를 끈 잔고 순서 (3-34 3차 검토 — 예전에는 코드 순이라 켜자마자 순서가 바뀌었다)
+   */
+  seq: number;
 }
 
 export type WatchOp = { kind: "move"; code: string; groupId: number | null; index: number } | { kind: "delete"; groupId: number } | { kind: "order"; ids: number[] };
@@ -79,6 +84,7 @@ export function compareInGroup(a: OrderStock, b: OrderStock): number {
     return a.position - b.position;
   }
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+  if (a.seq !== b.seq) return a.seq - b.seq;
   return a.code < b.code ? -1 : a.code > b.code ? 1 : 0;
 }
 
@@ -125,18 +131,19 @@ export function applyOp(groups: readonly WatchGroup[], stocks: readonly OrderSto
   return { groups: applyOrder(groups, op.ids) ?? [...groups], stocks: [...stocks] };
 }
 
-/** 잔고 목록 + 배치 → 순서 계산용 줄. 배치에만 있는 코드(목록이 아직 옛것)는 보유처럼 두어 값만 지킨다 */
+/** 잔고 목록(서버 차례 그대로 — 그 자리가 seq) + 배치 → 순서 계산용 줄. 배치에만 있는 코드(목록이 아직 옛것)는 보유처럼 두어 값만 지킨다 */
 export function orderStocks(list: readonly RegisteredWithQuote[], layout: WatchLayout): OrderStock[] {
   const items = new Map(layout.items.map((i) => [i.code, i]));
-  const out: OrderStock[] = list.map((s) => ({
+  const out: OrderStock[] = list.map((s, seq) => ({
     code: s.code,
     quantity: isHolding(s) ? Math.max(s.quantity ?? 0, 1) : null,
     createdAt: s.createdAt,
     groupId: items.get(s.code)?.groupId ?? null,
     position: items.get(s.code)?.position ?? null,
+    seq,
   }));
   const seen = new Set(list.map((s) => s.code));
-  for (const i of layout.items) if (!seen.has(i.code)) out.push({ code: i.code, quantity: 1, createdAt: "", groupId: i.groupId, position: i.position });
+  for (const i of layout.items) if (!seen.has(i.code)) out.push({ code: i.code, quantity: 1, createdAt: "", groupId: i.groupId, position: i.position, seq: out.length });
   return out;
 }
 
@@ -267,19 +274,26 @@ export interface WatchModel {
   hasGroups: boolean;
 }
 
-const toOrder = (s: RegisteredWithQuote, item: WatchItem | undefined): OrderStock => ({
+const toOrder = (s: RegisteredWithQuote, item: WatchItem | undefined, seq: number): OrderStock => ({
   code: s.code,
   quantity: null,
   createdAt: s.createdAt,
   groupId: item?.groupId ?? null,
   position: item?.position ?? null,
+  seq,
 });
 
+/** 서버 /api/stocks 목록의 차례 (코드 → 자리) — 다른 정렬로 늘어놓은 관심 줄에 등록 차례를 알려 줄 때 (watchModel) */
+export function registeredSeq(list: readonly { code: string }[]): Map<string, number> {
+  return new Map(list.map((s, i) => [s.code, i]));
+}
+
 /**
- * 관심 종목(보유가 아닌 것 — 받은 정렬 순서 그대로)을 그룹별로 나눈다. mine(정렬 '등록순')이면 그룹 안은 내 순서(자리 → 등록 시각 → 코드),
- * 아니면 받은 정렬 순서. 자리(pos)는 늘 내 순서 기준 (위로·아래로 옮기기는 내 순서에서만 쓴다)
+ * 관심 종목(보유가 아닌 것 — 받은 정렬 순서 그대로)을 그룹별로 나눈다. mine(정렬 '등록순')이면 그룹 안은 내 순서(자리 → 등록 시각 → 등록 차례 → 코드),
+ * 아니면 받은 정렬 순서. 자리(pos)는 늘 내 순서 기준 (위로·아래로 옮기기는 내 순서에서만 쓴다).
+ * seq = 서버 목록의 차례 (registeredSeq). 없으면 watch 의 차례 — '등록순'으로 받은 목록(서버 차례 그대로)일 때만 맞다
  */
-export function watchModel(watch: readonly RegisteredWithQuote[], layout: WatchLayout, view: WatchView, mine: boolean): WatchModel {
+export function watchModel(watch: readonly RegisteredWithQuote[], layout: WatchLayout, view: WatchView, mine: boolean, seq?: ReadonlyMap<string, number>): WatchModel {
   const groups = sortGroups(layout.groups);
   const ids = new Set(groups.map((g) => g.id));
   const items = new Map(layout.items.map((i) => [i.code, i]));
@@ -289,10 +303,12 @@ export function watchModel(watch: readonly RegisteredWithQuote[], layout: WatchL
   };
   const buckets = [...groups.map((g) => ({ groupId: g.id as number | null, name: g.name, stocks: [] as RegisteredWithQuote[] })), { groupId: null, name: NONE_NAME, stocks: [] as RegisteredWithQuote[] }];
   const byId = new Map(buckets.map((b) => [b.groupId, b]));
+  const at = seq ?? registeredSeq(watch);
+  const rank = (s: RegisteredWithQuote) => at.get(s.code) ?? Number.MAX_SAFE_INTEGER;
   for (const s of watch) byId.get(gid(s))!.stocks.push(s);
   const pos = new Map<string, WatchPos>();
   for (const b of buckets) {
-    const ordered = [...b.stocks].sort((x, y) => compareInGroup(toOrder(x, items.get(x.code)), toOrder(y, items.get(y.code))));
+    const ordered = [...b.stocks].sort((x, y) => compareInGroup(toOrder(x, items.get(x.code), rank(x)), toOrder(y, items.get(y.code), rank(y))));
     ordered.forEach((s, i) => pos.set(s.code, { groupId: b.groupId, groupName: b.name, index: i, count: ordered.length }));
     if (mine) b.stocks = ordered;
   }

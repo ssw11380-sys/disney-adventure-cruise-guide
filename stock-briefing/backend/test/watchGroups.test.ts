@@ -7,7 +7,7 @@ import { sql, type KyselyPlugin } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
-import { createDb, createMigratedDb, migrate, type Db } from "../src/db/index.js";
+import { createDb, createMigratedDb, migrate, sameTimeOrder, type Db } from "../src/db/index.js";
 import { BACKUP_TABLES, BackupService, decodeBackup, encryptJsonBackup, restoreBackup } from "../src/services/backupService.js";
 import { applyOp, groupNameCheck, watchOrder, WATCH_GROUP_LIMIT, type OrderStock, type WatchGroup, type WatchLayout, type WatchOp } from "../src/services/watchGroupService.js";
 import { fakeProviders } from "./helpers.js";
@@ -74,15 +74,16 @@ const move = (app: FastifyInstance, code: string, groupId: number | null, index:
 /** 지금 서버 배치로 본 관심 순서 (앱과 같은 규칙) */
 async function order(app: FastifyInstance, db: Db) {
   const layout = await get(app);
-  const rows = await db.selectFrom("registered_stocks").select(["code", "quantity", "created_at"]).execute();
+  // 서버가 읽는 등록순 (등록 시각 → 같은 시각이면 넣은 차례) = 앱이 받는 /api/stocks 차례
+  const rows = await db.selectFrom("registered_stocks").select(["code", "quantity", "created_at"]).orderBy("created_at").orderBy(sameTimeOrder(db)).execute();
   const items = new Map(layout.items.map((i) => [i.code, i]));
-  const stocks: OrderStock[] = rows.map((r) => ({ code: r.code, quantity: r.quantity, createdAt: r.created_at, groupId: items.get(r.code)?.groupId ?? null, position: items.get(r.code)?.position ?? null }));
+  const stocks: OrderStock[] = rows.map((r, seq) => ({ code: r.code, quantity: r.quantity, createdAt: r.created_at, groupId: items.get(r.code)?.groupId ?? null, position: items.get(r.code)?.position ?? null, seq }));
   return watchOrder(layout.groups, stocks).map((g) => [g.groupId === null ? "그룹 없음" : layout.groups.find((x) => x.id === g.groupId)!.name, ...g.codes]);
 }
 
 describe("공용 픽스처 (앱 lib/watchGroups 와 같은 규칙)", () => {
   const orderFx = JSON.parse(readFileSync(new URL("../../shared/fixtures/watchOrder.json", import.meta.url), "utf8")) as {
-    cases: { name: string; groups: WatchGroup[]; stocks: OrderStock[]; op: WatchOp | null; order: { groupId: number | null; codes: string[] }[] }[];
+    cases: { name: string; groups: WatchGroup[]; stocks: Omit<OrderStock, "seq">[]; op: WatchOp | null; order: { groupId: number | null; codes: string[] }[] }[];
   };
   const nameFx = JSON.parse(readFileSync(new URL("../../shared/fixtures/watchGroupNames.json", import.meta.url), "utf8")) as {
     limit: number;
@@ -97,7 +98,9 @@ describe("공용 픽스처 (앱 lib/watchGroups 와 같은 규칙)", () => {
   });
 
   it.each(orderFx.cases.map((c) => [c.name, c] as const))("순서: %s", (_n, c) => {
-    const state = c.op ? applyOp(c.groups, c.stocks, c.op) : { groups: c.groups, stocks: c.stocks };
+    // 픽스처 stocks 의 차례 = 서버가 등록순으로 읽은 차례 (seq)
+    const stocks = c.stocks.map((s, seq) => ({ ...s, seq }));
+    const state = c.op ? applyOp(c.groups, stocks, c.op) : { groups: c.groups, stocks };
     expect(watchOrder(state.groups, state.stocks)).toEqual(c.order);
   });
 
@@ -334,6 +337,51 @@ describe("옮기기", () => {
     const layout = await get(app);
     expect(layout.items).toEqual([{ code: "B", groupId: null, position: 0 }]);
     expect(await order(app, db)).toEqual([["그룹 없음", "B", "A"]]);
+  });
+});
+
+describe("같은 등록 시각 — 토스 가져오기 한 번에 들어온 종목 (3-34 3차 검토)", () => {
+  /** 같은 등록 시각으로 넣은 차례대로 (토스 동기화가 한 번에 넣는 모양) */
+  async function batch(db: Db, codes: string[]) {
+    const at = "2026-09-10T21:00:00+09:00";
+    for (const code of codes) await db.insertInto("registered_stocks").values({ code, name: code, market: /^\d/.test(code) ? "KOSPI" : "NASDAQ", quantity: null, avg_price: null, memo: null, created_at: at, updated_at: at }).execute();
+  }
+  const listCodes = async (app: FastifyInstance) => ((await app.inject({ method: "GET", url: "/api/stocks" })).json() as { code: string }[]).map((s) => s.code);
+
+  it("/api/stocks(플래그를 끈 잔고 순서)는 넣은 차례 그대로 — 행을 고친 뒤에도, 관심 순서 규칙(자리를 정하지 않음)도 같은 차례 (코드 순이 아님)", async () => {
+    const { app, db } = await setup();
+    await register(db, "FIRST");
+    await batch(db, ["ZZZ", "005930", "AAPL", "MSFT"]);
+    expect(await listCodes(app)).toEqual(["FIRST", "ZZZ", "005930", "AAPL", "MSFT"]);
+    // 수량·메모를 고쳐도 차례는 그대로 (SQLite 는 행 번호가 바뀌지 않는다)
+    await db.updateTable("registered_stocks").set({ memo: "메모", updated_at: "2026-09-28T21:00:00+09:00" }).where("code", "=", "ZZZ").execute();
+    expect(await listCodes(app)).toEqual(["FIRST", "ZZZ", "005930", "AAPL", "MSFT"]);
+    await create(app, "반도체");
+    expect(await order(app, db)).toEqual([["반도체"], ["그룹 없음", "FIRST", "ZZZ", "005930", "AAPL", "MSFT"]]);
+  });
+
+  it("같은 시각 종목 사이 옮기기: 번호를 매길 때도 넣은 차례 (앱 낙관적 반영 · 공용 픽스처와 같은 답)", async () => {
+    const { app, db } = await setup();
+    await batch(db, ["ZZZ", "005930", "AAPL", "MSFT"]);
+    const r = await move(app, "MSFT", null, 0);
+    expect((r.json() as WatchLayout).items).toEqual([
+      { code: "005930", groupId: null, position: 2 },
+      { code: "AAPL", groupId: null, position: 3 },
+      { code: "MSFT", groupId: null, position: 0 },
+      { code: "ZZZ", groupId: null, position: 1 },
+    ]);
+    expect(await order(app, db)).toEqual([["그룹 없음", "MSFT", "ZZZ", "005930", "AAPL"]]);
+    // 그룹 지우기도: 자리 없이 그룹에 든 같은 시각 종목(복구한 칸 등)을 넣은 차례로 붙인다
+    const semi = ((await create(app, "반도체")).json() as WatchLayout).created!.id;
+    await batch(db, ["TSLA", "KO"]);
+    await db.updateTable("registered_stocks").set({ watch_group_id: semi, watch_position: null }).where("code", "in", ["TSLA", "KO"]).execute();
+    expect(await order(app, db)).toEqual([["반도체", "TSLA", "KO"], ["그룹 없음", "MSFT", "ZZZ", "005930", "AAPL"]]);
+    await app.inject({ method: "DELETE", url: `/api/watch-groups/${semi}` });
+    expect(await order(app, db)).toEqual([["그룹 없음", "MSFT", "ZZZ", "005930", "AAPL", "TSLA", "KO"]]);
+    expect(await db.selectFrom("registered_stocks").select(["code", "watch_position"]).where("code", "in", ["TSLA", "KO"]).orderBy("code").execute()).toEqual([
+      { code: "KO", watch_position: 5 },
+      { code: "TSLA", watch_position: 4 },
+    ]);
   });
 });
 

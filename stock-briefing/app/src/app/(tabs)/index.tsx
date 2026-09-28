@@ -35,7 +35,7 @@ import { useSettingsGuide } from "@/lib/settingsLink";
 import { TAB_ICON } from "@/lib/textScale";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useGuideMarks, useUx } from "@/lib/uxFlags";
-import { selectChip, toggleFold, watchChips, watchEntries, watchModel, type WatchEntry, type WatchSelected } from "@/lib/watchGroups";
+import { registeredSeq, selectChip, toggleFold, watchChips, watchEntries, watchModel, type WatchEntry, type WatchSelected } from "@/lib/watchGroups";
 import { useWatchGroups } from "@/lib/watchGroupsQuery";
 import { isWide, railWidth } from "@/lib/windowClass";
 import { changeColor, font, fontCap, layout, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
@@ -120,7 +120,9 @@ export default function StocksScreen() {
   const wg = useWatchGroups();
   const mine = sort === "created";
   const watchData = sections.find((x) => x.key === "watch")?.data;
-  const watchM = useMemo(() => (wg.on && watchData ? watchModel(watchData, wg.layout, wg.view, mine) : null), [wg.on, watchData, wg.layout, wg.view, mine]);
+  // 자리(↑↓·메뉴)는 서버 목록 차례로 (다른 정렬이면 watchData 가 그 정렬 순서라 따로 넘긴다 — 같은 등록 시각끼리의 차례)
+  const watchSeq = useMemo(() => (wg.on ? registeredSeq(data ?? []) : undefined), [wg.on, data]);
+  const watchM = useMemo(() => (wg.on && watchData ? watchModel(watchData, wg.layout, wg.view, mine, watchSeq) : null), [wg.on, watchData, wg.layout, wg.view, mine, watchSeq]);
   const watchList = useMemo(() => (watchM ? watchEntries(watchM) : null), [watchM]);
 
   // 이어 보기: 목록에서 빠진 종목(삭제 등)의 줄 위치는 버린다 (맨 위 종목으로 사라진 종목을 기억하지 않게). 관심 그룹이 켜져 있으면 보이는 줄만 (접은 그룹·다른 칩의 줄은 뺀다)

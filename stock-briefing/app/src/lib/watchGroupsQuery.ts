@@ -62,18 +62,24 @@ export function useWatchGroups(): WatchGroupsState {
 /**
  * 저장 차례 (Promise 줄): 누를 때마다 부르는 쪽이 화면을 먼저 바꾸고(낙관적), 요청은 앞 요청이 끝난 뒤 하나씩 보낸다 (↑↑↑ 를 빠르게 눌러도 서버가 차례대로 계산).
  * 서버 응답은 줄에 남은 요청이 없을 때만 캐시에 쓴다 — 중간 응답으로 화면이 한 칸 되돌아갔다 다시 오지 않게.
- * 하나라도 실패하면 창을 띄우고(quiet 가 아니면), 줄이 비었을 때 서버 값을 다시 받아 되돌린다
+ * 하나라도 실패하면 창을 띄우고(quiet 가 아니면), 줄이 비었을 때 서버 값을 다시 받아 되돌린다.
+ * 배치 조회(GET)와의 경주 (3-34 3차 검토): 조회를 보낸 뒤 조작이 하나라도 들어왔으면 그 조회 값은 낙관적 화면·조작 응답보다 옛것일 수 있어 캐시에 쓰지 않는다
+ * (stamp → fresh). 조작이 아직 줄에 있을 때 온 조회였으면 줄이 빌 때 마지막 응답을 쓴 뒤 한 번 다시 받아 맞춘다
  */
 export class WatchOpQueue {
   private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
   private failed = false;
+  /** 지금까지 줄에 들어온 조작 수 (조회 stamp) */
+  private runs = 0;
+  /** 조작이 줄에 있는 동안 조회 값을 버렸다 → 줄이 비면 한 번 다시 받기 */
+  private skipped = false;
 
   constructor(
     private readonly deps: {
       /** 서버가 준 배치를 캐시에 */
       apply: (layout: WatchLayout) => void;
-      /** 서버 값을 다시 받기 (실패 뒤 되돌리기) */
+      /** 서버 값을 다시 받기 (실패 뒤 되돌리기 · 조작 중에 온 조회를 버린 뒤 맞추기) */
       refetch: () => void;
       /** 저장 실패 창 */
       fail: (message: string) => void;
@@ -85,8 +91,25 @@ export class WatchOpQueue {
     return this.pending;
   }
 
+  /** 배치 조회를 보낼 때 받아 두는 표시 (돌아오면 fresh 에 넘긴다). 조작이 줄에 있는 동안 보낸 조회는 -1 (서버가 그 조작보다 먼저 읽었을 수 있다) */
+  stamp(): number {
+    return this.pending > 0 ? -1 : this.runs;
+  }
+
+  /**
+   * 돌아온 배치 조회 값을 캐시에 써도 되는지: 줄이 빈 채 보냈고, 보낸 뒤 조작이 하나도 없었고, 지금도 줄이 비어 있어야 한다.
+   * 줄에 조작이 남아 있으면 줄이 빌 때 한 번 다시 받게 적어 둔다. 줄이 이미 비었으면 마지막 조작 응답(서버가 그 조작 뒤 준 배치 전체)이
+   * 캐시에 있어 다시 받지 않는다
+   */
+  fresh(stamp: number): boolean {
+    if (stamp >= 0 && this.pending === 0 && this.runs === stamp) return true;
+    if (this.pending > 0) this.skipped = true;
+    return false;
+  }
+
   run(send: () => Promise<WatchLayout>, opts: { quiet?: boolean } = {}): Promise<WatchLayout> {
     this.pending++;
+    this.runs++;
     const p = this.tail.then(send);
     this.tail = p.catch(() => undefined);
     return p.then(
@@ -106,9 +129,11 @@ export class WatchOpQueue {
   private settle(layout: WatchLayout | null): void {
     this.pending--;
     if (this.pending > 0) return;
-    if (this.failed) {
-      this.failed = false;
-      this.deps.refetch();
-    } else if (layout) this.deps.apply(layout);
+    const failed = this.failed;
+    const again = failed || this.skipped;
+    this.failed = false;
+    this.skipped = false;
+    if (!failed && layout) this.deps.apply(layout);
+    if (again) this.deps.refetch();
   }
 }

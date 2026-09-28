@@ -1,4 +1,5 @@
 import type { Db } from "../db/index.js";
+import { sameTimeOrder } from "../db/order.js";
 import { CODE_RE, normalizeCode } from "../lib/codes.js";
 import { AppError } from "../lib/errors.js";
 import { Mutex } from "../lib/mutex.js";
@@ -56,6 +57,11 @@ export interface OrderStock {
   createdAt: string;
   groupId: number | null;
   position: number | null;
+  /**
+   * 등록 차례: 등록순(등록 시각 → 같은 시각이면 넣은 차례 — db/order.ts)으로 읽었을 때의 자리. 토스 가져오기 한 번에 들어온 종목은 등록 시각이 같아,
+   * 자리를 정하지 않았으면 이 차례 = 플래그를 끈 잔고 순서 (3-34 3차 검토 — 예전에는 코드 순이라 켜자마자 순서가 바뀌었다). 앱은 /api/stocks 목록의 차례를 쓴다
+   */
+  seq: number;
 }
 
 export type WatchOp = { kind: "move"; code: string; groupId: number | null; index: number } | { kind: "delete"; groupId: number } | { kind: "order"; ids: number[] };
@@ -71,7 +77,7 @@ export function sortGroups<G extends WatchGroup>(groups: readonly G[]): G[] {
 /** 없는 그룹을 가리키면 그룹 없음 */
 const groupOf = (s: OrderStock, ids: ReadonlySet<number>) => (s.groupId !== null && ids.has(s.groupId) ? s.groupId : null);
 
-/** 그룹 안 순서: 자리(null 은 맨 뒤) → 등록 시각 → 코드 */
+/** 그룹 안 순서: 자리(null 은 맨 뒤) → 등록 시각 → 등록 차례(같은 시각이면 넣은 차례) → 코드 */
 export function compareInGroup(a: OrderStock, b: OrderStock): number {
   if (a.position !== b.position) {
     if (a.position === null) return 1;
@@ -79,6 +85,7 @@ export function compareInGroup(a: OrderStock, b: OrderStock): number {
     return a.position - b.position;
   }
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+  if (a.seq !== b.seq) return a.seq - b.seq;
   return a.code < b.code ? -1 : a.code > b.code ? 1 : 0;
 }
 
@@ -226,14 +233,21 @@ export class WatchGroupService {
     return sortGroups(rows.map((r) => ({ id: Number(r.id), name: r.name, position: Number(r.position) })));
   }
 
+  /** 등록순으로 (잔고 목록 stockService.list 와 같은 차례 — 그 자리가 seq) */
   private async readStocks(db: Db = this.db): Promise<OrderStock[]> {
-    const rows = await db.selectFrom("registered_stocks").select(["code", "quantity", "created_at", "watch_group_id", "watch_position"]).execute();
-    return rows.map((r) => ({
+    const rows = await db
+      .selectFrom("registered_stocks")
+      .select(["code", "quantity", "created_at", "watch_group_id", "watch_position"])
+      .orderBy("created_at", "asc")
+      .orderBy(sameTimeOrder(db))
+      .execute();
+    return rows.map((r, seq) => ({
       code: r.code,
       quantity: r.quantity === null ? null : Number(r.quantity),
       createdAt: r.created_at,
       groupId: r.watch_group_id === null ? null : Number(r.watch_group_id),
       position: r.watch_position === null ? null : Number(r.watch_position),
+      seq,
     }));
   }
 

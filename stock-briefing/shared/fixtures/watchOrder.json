@@ -1,5 +1,5 @@
 {
-  "about": "관심 종목 그룹·순서 규칙 (3-34): 서버 services/watchGroupService 와 앱 lib/watchGroups 가 같은 답을 내야 한다. op 가 있으면 먼저 적용한 뒤의 순서 (관심 종목만, 그룹 순서대로 · 그룹 없음은 늘 맨 끝)",
+  "about": "관심 종목 그룹·순서 규칙 (3-34): 서버 services/watchGroupService 와 앱 lib/watchGroups 가 같은 답을 내야 한다. op 가 있으면 먼저 적용한 뒤의 순서 (관심 종목만, 그룹 순서대로 · 그룹 없음은 늘 맨 끝). stocks 의 차례 = 서버가 등록순으로 읽은 차례(등록 시각 → 같은 시각이면 넣은 차례 — 플래그를 끈 잔고 순서와 같다). 두 쪽 테스트는 이 차례를 seq 로 넣는다",
   "cases": [
     {
       "name": "아무것도 정하지 않음 = 등록순 (보유 종목은 빠짐)",
@@ -112,7 +112,7 @@
       ]
     },
     {
-      "name": "같은 번호는 등록 시각 → 코드 순",
+      "name": "같은 번호는 등록 시각 → 같은 시각이면 넣은 차례 (코드 순이 아님)",
       "groups": [
         {
           "id": 1,
@@ -149,13 +149,124 @@
           "groupId": 1,
           "codes": [
             "C",
-            "A",
-            "B"
+            "B",
+            "A"
           ]
         },
         {
           "groupId": null,
           "codes": []
+        }
+      ]
+    },
+    {
+      "name": "토스 가져오기 한 번(같은 등록 시각)은 넣은 차례 그대로 — 플래그를 끈 잔고 순서와 같다",
+      "groups": [],
+      "stocks": [
+        {
+          "code": "ZZZ",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "005930",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "AAPL",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "000660",
+          "quantity": 3,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "MSFT",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": null,
+      "order": [
+        {
+          "groupId": null,
+          "codes": [
+            "ZZZ",
+            "005930",
+            "AAPL",
+            "MSFT"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "같은 시각 종목 사이 옮기기: 번호를 매길 때도 넣은 차례 (맨 앞으로 옮긴 종목 뒤는 그대로)",
+      "groups": [],
+      "stocks": [
+        {
+          "code": "ZZZ",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "005930",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "AAPL",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "000660",
+          "quantity": 3,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        },
+        {
+          "code": "MSFT",
+          "quantity": null,
+          "createdAt": "2026-09-10T21:00:00+09:00",
+          "groupId": null,
+          "position": null
+        }
+      ],
+      "op": {
+        "kind": "move",
+        "code": "MSFT",
+        "groupId": null,
+        "index": 0
+      },
+      "order": [
+        {
+          "groupId": null,
+          "codes": [
+            "MSFT",
+            "ZZZ",
+            "005930",
+            "AAPL"
+          ]
         }
       ]
     },

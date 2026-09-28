@@ -16,7 +16,7 @@ import { SORT_OPTIONS, useSettings } from "@/lib/settings";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { isWide } from "@/lib/windowClass";
 import { dragShift, dragTarget } from "@/lib/watchDrag";
-import { deleteGroupMessage, NONE_NAME, stockSub, WATCH_GROUP_LIMIT, watchModel, type WatchGroup, type WatchModel } from "@/lib/watchGroups";
+import { deleteGroupMessage, NONE_NAME, registeredSeq, stockSub, WATCH_GROUP_LIMIT, watchModel, type WatchGroup, type WatchModel } from "@/lib/watchGroups";
 import { useWatchGroups } from "@/lib/watchGroupsQuery";
 import { VIEW_DEFAULT, type WatchSelected } from "@/lib/watchView";
 import { font, layout, space, touch, useTheme } from "@/theme";
@@ -70,7 +70,7 @@ function WatchGroupsBody() {
   const { sort, setSort } = useSettings();
   const groups = wg.layout.groups;
   const list = stocks.data;
-  const model = useMemo(() => (list ? watchModel(splitHoldings(list).watch, wg.layout, VIEW_DEFAULT, true) : null), [list, wg.layout]);
+  const model = useMemo(() => (list ? watchModel(splitHoldings(list).watch, wg.layout, VIEW_DEFAULT, true, registeredSeq(list)) : null), [list, wg.layout]);
   const [picked, setPicked] = useState<{ id: number | null } | null>(null);
   // 고른 그룹이 지워졌으면 처음 값으로
   const editing = picked && (picked.id === null || groups.some((g) => g.id === picked.id)) ? picked.id : initialGroup(wg.view.selected, groups);

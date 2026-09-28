@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccessibilityInfo, Alert } from "react-native";
 import { ApiRequestError } from "@/api/client";
 import { useApi, useFeature } from "@/api/hooks";
@@ -18,7 +18,8 @@ const bare = (l: WatchLayout): WatchLayout => ({ on: l.on, groups: l.groups, ite
  *  - 켜져 있으면 /api/watch-groups 배치를 받는다 (60초 동안 새것으로 보고, 앱으로 돌아올 때 다시 · 기기 캐시에 저장해 켤 때 바로 — lib/queryPersist).
  *    예전 서버의 404 는 꺼짐, 배치의 on:false(이 계정은 쓸 수 없음 등)도 꺼짐처럼
  *  - 조작은 lib/watchGroupsQuery 의 저장 차례로: 누르는 즉시 캐시를 바꾸고(lib/watchGroups applyToLayout — 서버와 같은 규칙) 차례로 보낸 뒤 마지막 응답으로 맞춘다.
- *    실패하면 '저장하지 못했습니다' 창과 서버 값으로 되돌림
+ *    실패하면 '저장하지 못했습니다' 창과 서버 값으로 되돌림. 조작을 보내는 동안 돌아온 배치 조회(앱으로 돌아옴 · 목록이 바뀌어 다시 받기 · 다시 시도)는 낙관적 화면을 덮지 않고,
+ *    줄이 빈 뒤 서버 값으로 맞춘다 (3-34 3차 검토)
  *  - 잔고 목록의 종목이 바뀌면(관심 해제·다시 추가·동기화 제외·토스 가져오기·다른 기기) 사라진·다시 등록된 종목을 캐시 배치에서 빼고 서버 배치를 다시 받는다 —
  *    다시 추가한 종목은 서버에서 '그룹 없음' 맨 끝이다 (설계 E8·E23)
  *  - 고른 칩·접은 그룹은 기기 설정(settings.watchView). 서버에서 받은 배치로 정리한 값(지운 그룹 → '전체')이 저장값과 다르면 한 번 다시 저장한다
@@ -29,16 +30,37 @@ export function WatchGroupsProvider({ children }: { children: React.ReactNode })
   const qc = useQueryClient();
   const { apiUrl, watchView, setWatchView } = useSettings();
   const key = useMemo(() => [apiUrl, "watchGroups"] as const, [apiUrl]);
+  const queue = useMemo(
+    () =>
+      new WatchOpQueue({
+        apply: (l) => qc.setQueryData(key, bare(l)),
+        refetch: () => void qc.invalidateQueries({ queryKey: key }),
+        fail: (message) => Alert.alert("저장하지 못했습니다", message, [{ text: "확인" }]),
+      }),
+    [qc, key],
+  );
+  // 이번 실행에서 이 서버 주소의 배치를 서버에서 받아 캐시에 썼는지 (기기 캐시에 남은 옛 배치 · 실패한 받기 · 버린 조회는 세지 않음 — 아래 보기 상태 저장)
+  const [served, setServed] = useState<string | null>(null);
   const query = useQuery({
     queryKey: key,
     queryFn: async () => {
+      const sent = queue.stamp();
+      let got: WatchLayout;
       try {
-        return bare(await api.watchGroups());
+        got = bare(await api.watchGroups());
       } catch (e) {
         // 예전 서버(경로 없음)는 꺼짐
-        if (e instanceof ApiRequestError && e.status === 404) return WATCH_OFF;
-        throw e;
+        if (e instanceof ApiRequestError && e.status === 404) got = WATCH_OFF;
+        else throw e;
       }
+      // 보낸 뒤 조작이 들어왔으면(앱으로 돌아옴 · 잔고 목록이 바뀌어 다시 받기 · 다시 시도가 조작과 겹침) 이 값은 낙관적 화면·조작 응답보다 옛것일 수 있다 →
+      // 지금 캐시를 그대로 둔다. 조작이 아직 줄에 있었으면 줄이 빌 때 마지막 응답을 쓴 뒤 한 번 다시 받는다 (lib/watchGroupsQuery WatchOpQueue.fresh)
+      if (!queue.fresh(sent)) {
+        const cur = qc.getQueryData<WatchLayout>(key);
+        if (cur) return cur;
+      }
+      setServed(apiUrl);
+      return got;
     },
     enabled: flag,
     staleTime: 60_000,
@@ -67,16 +89,7 @@ export function WatchGroupsProvider({ children }: { children: React.ReactNode })
     if (change.refetch) void qc.invalidateQueries({ queryKey: key });
   }, [flag, stamps, apiUrl, qc, key]);
 
-  const queue = useMemo(
-    () =>
-      new WatchOpQueue({
-        apply: (l) => qc.setQueryData(key, bare(l)),
-        refetch: () => void qc.invalidateQueries({ queryKey: key }),
-        fail: (message) => Alert.alert("저장하지 못했습니다", message, [{ text: "확인" }]),
-      }),
-    [qc, key],
-  );
-  /** 누르는 즉시 캐시를 바꾼다 (받는 중인 조회가 덮지 않게 먼저 멈춤) */
+  /** 누르는 즉시 캐시를 바꾼다 (받는 중인 조회는 먼저 멈춤 — 멈추지 못하고 돌아온 조회는 위 queryFn 이 버린다) */
   const optimistic = useCallback(
     (op: WatchOp) => {
       const cur = qc.getQueryData<WatchLayout>(key);
@@ -128,8 +141,9 @@ export function WatchGroupsProvider({ children }: { children: React.ReactNode })
   const refetch = useCallback(() => void again(), [again]);
   const view = useMemo(() => normalizeView(watchView, layout), [watchView, layout]);
   // 정리한 값을 그리기에만 쓰고 저장값을 두면, '그룹 없음'을 골라 둔 채 그룹을 다 지운 뒤 새 그룹을 만들었을 때 옛 '그룹 없음' 선택이 되살아났다 (3-34 검토).
-  // 이번 실행에서 서버 배치를 받은 뒤에만 (기기 캐시에 남은 옛 배치로 방금 고른 칩을 지우지 않게)
-  const fetched = query.isFetchedAfterMount;
+  // 이번 실행에서 서버 배치를 받은 뒤에만 (기기 캐시에 남은 옛 배치로 방금 고른 칩을 지우지 않게).
+  // isFetchedAfterMount 는 받기가 실패해도 참이라(오프라인 → 다시 시도까지 실패) 옛 배치로 정리한 값을 저장했다 (3-34 3차 검토) → 받아서 캐시에 쓴 때만
+  const fetched = served === apiUrl;
   useEffect(() => {
     if (layout && fetched && view !== watchView) setView(view);
   }, [layout, fetched, view, watchView, setView]);

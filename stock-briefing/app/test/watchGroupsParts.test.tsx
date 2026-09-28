@@ -151,6 +151,27 @@ describe("칩 줄 · 그룹 머리", () => {
     (shut.props.onPress as () => void)();
     expect(toggle).toHaveBeenCalledTimes(1);
   });
+
+  it("그룹 머리 TalkBack 동작 (3-34 3차 검토): 펼쳐져 있으면 '접기'(collapse), 접혀 있으면 '펼치기'(expand) + 두 번 탭(activate) — 모두 접고 펴기를 부른다. 이미 그 상태면 그대로", () => {
+    // RN 0.86 안드로이드는 expanded 상태만 있으면 동작 메뉴에 펼치기·접기를 넣지만, accessibilityActions 에 없으면 JS 로 알리지 않아 아무 일도 없었다
+    const toggle = vi.fn();
+    const act = (n: HostNode, actionName: string) => (n.props.onAccessibilityAction as (e: unknown) => void)({ nativeEvent: { actionName } });
+    const open = render(<WatchGroupHead name="반도체" groupId={7} count={4} collapsed={false} onToggle={toggle} pad={14} />).all()[0]!;
+    expect(open.props.accessibilityActions).toEqual([{ name: "activate" }, { name: "collapse", label: "접기" }]);
+    act(open, "collapse");
+    expect(toggle).toHaveBeenCalledTimes(1);
+    act(open, "expand");
+    expect(toggle).toHaveBeenCalledTimes(1);
+    act(open, "activate");
+    expect(toggle).toHaveBeenCalledTimes(2);
+    const shut = render(<WatchGroupHead name="반도체" groupId={7} count={4} collapsed onToggle={toggle} pad={14} />).all()[0]!;
+    expect(shut.props.accessibilityActions).toEqual([{ name: "activate" }, { name: "expand", label: "펼치기" }]);
+    act(shut, "expand");
+    expect(toggle).toHaveBeenCalledTimes(3);
+    act(shut, "collapse");
+    act(shut, "longpress");
+    expect(toggle).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("고른 칩까지 넘기기 · 빈 그룹 칸 · 넓은 표 머리", () => {
@@ -273,7 +294,7 @@ describe("이름 창 (WatchGroupNameSheet)", () => {
     expect(h.kb.every((k) => k.removed)).toBe(true);
   });
 
-  it("대비책: 자판 이벤트가 Modal 창까지 오지 않아도, 입력칸에 초점이 있으면 위쪽에 붙이고 창 높이의 45%까지 — 이벤트가 오면 그 높이, 초점이 빠지면 아래로 (3-34 검토)", () => {
+  it("대비책: 자판 이벤트가 Modal 창까지 오지 않아도, 입력칸에 초점이 있으면 위쪽에 붙이고 창 높이의 45%까지 — 이벤트가 오면 그 높이, 초점이 빠져도 창을 닫을 때까지 그 자리 (3-34 검토 · 3차 검토)", () => {
     const r = render(<WatchGroupNameSheet mode="create" groups={[]} onSubmit={async () => ({ ok: true })} onClose={() => undefined} />);
     const input = () => r.byLabel("그룹 이름, 10자까지");
     expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-end" });
@@ -282,9 +303,10 @@ describe("이름 창 (WatchGroupNameSheet)", () => {
     expect(flat(sheetBox(r)).maxHeight).toBe(Math.round(752 * 0.45));
     // 입력칸 · [만들기] 가 보통 자판(약 300) 위에 들어간다: 위 여백 12 + 338 = 350 ≤ 752 − 300
     expect(space.md + Math.round(752 * 0.45)).toBeLessThanOrEqual(752 - 300);
+    // 초점이 빠져도(버튼을 누름 · 3-34 3차 검토) 창을 닫을 때까지 그 자리 — 아래 '대비책 유지'
     r.act(() => (input().props.onBlur as () => void)());
-    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-end" });
-    expect(flat(sheetBox(r)).maxHeight).toBeUndefined();
+    expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-start", paddingTop: space.md });
+    expect(flat(sheetBox(r)).maxHeight).toBe(Math.round(752 * 0.45));
     // 이벤트가 오는 기기: 자판 높이를 쓰고, 자판이 닫히면(초점은 남아도) 지금처럼 아래로
     r.act(() => (input().props.onFocus as () => void)());
     kbShow(r, 300);
@@ -292,6 +314,30 @@ describe("이름 창 (WatchGroupNameSheet)", () => {
     r.act(() => h.kb.find((k) => k.ev === "keyboardDidHide" && !k.removed)!.fn({ endCoordinates: { height: 0 } }));
     expect(flat(backdrop(r))).toMatchObject({ justifyContent: "flex-end" });
     expect(flat(sheetBox(r)).maxHeight).toBeUndefined();
+  });
+
+  it("대비책 유지 (3-34 3차 검토): 입력칸 초점이 버튼 누르기로 빠져도(자판 이벤트가 오지 않은 채) 시트는 위쪽 그대로 — [만들기]가 눌려 '같은 이름' 글이 보이고, 고쳐 누르면 만든다", async () => {
+    // 예전: 초점이 빠지는 순간 시트가 아래로 내려가 누른 자리에서 [만들기]가 빠져나가 눌리지 않았고 빨간 글도 보이지 않았다 (웹 캡처)
+    const onSubmit = vi.fn(async (_name: string) => ({ ok: true as const }));
+    const onClose = vi.fn();
+    const r = render(<WatchGroupNameSheet mode="create" groups={[{ id: 3, name: "배당", position: 0 }]} onSubmit={onSubmit} onClose={onClose} />);
+    const input = () => r.byLabel("그룹 이름, 10자까지");
+    const up = { justifyContent: "flex-start", paddingTop: space.md };
+    r.act(() => (input().props.onFocus as () => void)());
+    r.act(() => (input().props.onChangeText as (v: string) => void)("배당"));
+    expect(flat(backdrop(r))).toMatchObject(up);
+    r.act(() => (input().props.onBlur as () => void)());
+    expect(flat(backdrop(r))).toMatchObject(up);
+    expect(flat(sheetBox(r)).maxHeight).toBe(Math.round(752 * 0.45));
+    r.act(() => (button(r, "만들기").props.onPress as () => void)());
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(r.text()).toContain("같은 이름의 그룹이 이미 있습니다");
+    expect(flat(backdrop(r))).toMatchObject(up);
+    r.act(() => (input().props.onChangeText as (v: string) => void)("ETF"));
+    r.act(() => (button(r, "만들기").props.onPress as () => void)());
+    await new Promise((res) => setTimeout(res, 0));
+    expect(onSubmit).toHaveBeenCalledWith("ETF");
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("넓은 창(933×704)도 자판이 열리면 위쪽 (가운데 두면 자판에 가린다)", () => {
