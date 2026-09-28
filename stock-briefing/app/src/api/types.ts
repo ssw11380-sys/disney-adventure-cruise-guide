@@ -990,3 +990,164 @@ export interface QuoteBasis {
   kr: MarketQuoteBasis | null;
   us: MarketQuoteBasis | null;
 }
+
+// ── 매매일지 (3-37, 플래그 tradeJournal — 서버 journalService·journalCalc·journalReturns·taxRules 와 같은 모양) ──
+
+export type JournalCurrency = "KRW" | "USD";
+export type RealizedStatus = "ok" | "unknown-cost" | "order-uncertain" | "estimated";
+export type RealizedBasis = "snapshot" | "history-checked" | "history-only";
+
+/** 매도 한 몫의 실현손익 (이동평균법, 종목 통화). 모르면 gross null + reason */
+export interface JournalRealized {
+  status: RealizedStatus;
+  /** 화면에 그대로 쓰는 쉬운 문장 (서버가 만듦) */
+  reason: string | null;
+  basis: RealizedBasis | null;
+  anchorDate: string | null;
+  avgCost: number | null;
+  costAmount: number | null;
+  gross: number | null;
+  /** 퍼센트 */
+  rate: number | null;
+  costs: { fee: number | null; tax: number | null; total: number | null; source: "toss" | "estimated" | null };
+  net: number | null;
+  /** 미국: 매수 당시 환율로 쌓은 원화 평균 구매가 기준 원화 실현손익 (추정) */
+  krw: { gross: number | null; costKrw: number | null; sellFx: number | null; fxSource: "toss" | null; estimated: boolean; reason: string | null } | null;
+}
+
+export interface JournalItem {
+  key: string;
+  /** fill = 체결 몫, estimated = 주문 내역에 없는 수량 변화 (추정) */
+  kind: "fill" | "estimated";
+  account: number;
+  /** 계좌가 둘 이상일 때만 '계좌 2' */
+  accountLabel: string | null;
+  orderId: string | null;
+  code: string;
+  name: string;
+  market: "KR" | "US";
+  currency: JournalCurrency;
+  side: "BUY" | "SELL" | null;
+  quantity: number;
+  orderQuantity: number;
+  amount: number;
+  price: number | null;
+  at: string;
+  timeBasis: "filled" | "ordered" | "seen";
+  status: "CLOSED" | "OPEN";
+  part: { index: number; count: number } | null;
+  realized: JournalRealized | null;
+  afterBuy?: { avgCost: number; quantity: number } | null;
+  note: string | null;
+  estimated?: { qty: number; reason: "split" | "transfer"; ratio?: number };
+}
+
+export interface JournalRealizedSum {
+  KRW: number | null;
+  USD: number | null;
+  krwTotal: number | null;
+  krwTotalEstimated: boolean;
+}
+
+export interface JournalStockHead {
+  code: string;
+  name: string;
+  market: "KR" | "US";
+  holding: { quantity: number; avgCost: number | null; currency: JournalCurrency; asOf: string } | null;
+  orders: number;
+  buys: number;
+  sells: number;
+  realized: { amount: number | null; currency: JournalCurrency; sells: number; unknown: number };
+  firstTrade: string | null;
+  lastTrade: string | null;
+  recordSince: string | null;
+  memo: string | null;
+}
+
+export interface JournalResponse {
+  enabled: boolean;
+  from?: string;
+  to?: string;
+  code?: string | null;
+  recordSince?: string | null;
+  verified?: { krRealized: boolean; usRealizedUsd: boolean; usRealizedKrw: boolean; headline: "gross" | "net" };
+  summary?: {
+    orders: number;
+    buys: number;
+    sells: number;
+    realized: JournalRealizedSum & { estimatedIncluded: boolean };
+    costs: { toss: number; estimated: number; none: number };
+    unknownSells: number;
+    truncated: string[];
+  };
+  days: { date: string; realized: JournalRealizedSum; items: JournalItem[] }[];
+  stocks: { code: string; name: string; count: number }[];
+  head?: JournalStockHead;
+}
+
+export type JournalStockResponse = { enabled: false } | ({ enabled: true } & JournalStockHead);
+
+export type ReturnsPreset = "1W" | "1M" | "3M" | "YTD" | "1Y" | "custom";
+export type ReturnsMarket = "ALL" | "KR" | "US";
+
+export interface JournalReturns {
+  enabled: boolean;
+  ready: boolean;
+  recordSince?: string | null;
+  tradingDays?: number;
+  needDays?: number;
+  requested?: { from: string; to: string };
+  actual?: { from: string; to: string } | null;
+  clippedToRecordStart?: boolean;
+  market?: ReturnsMarket;
+  currency?: JournalCurrency;
+  twr?: number | null;
+  pnl?: number | null;
+  startValue?: number | null;
+  endValue?: number | null;
+  buys?: number;
+  sells?: number;
+  transfersEstimated?: number;
+  gaps?: string[];
+  doubtedSkipped?: string[];
+  priceBasis?: { regularClose: number; priceFallback: number; fallbackCodes: string[] };
+  series?: { date: string; cum: number }[];
+}
+
+export interface JournalTaxFx {
+  rate: number;
+  source: string;
+  date: string;
+  provisional: boolean;
+}
+
+export interface JournalTaxItem {
+  key: string;
+  code: string;
+  name: string;
+  tradeDate: string;
+  settleDate: string;
+  settleSource: "toss" | "estimated";
+  quantity: number;
+  proceedsUsd: number;
+  costsUsd: number | null;
+  fxSell: JournalTaxFx | null;
+  proceedsKrw: number;
+  costKrw: number;
+  costsKrw: number | null;
+  gainKrw: number;
+}
+
+export interface JournalTax {
+  enabled: boolean;
+  year?: number;
+  years?: number[];
+  rules?: { rate: number; nationalRate: number; localRateOfNational: number; deduction: number; method: string; lawYear: number };
+  totals?: { gains: number; losses: number; net: number; base: number; nationalTax: number; localTax: number; tax: number; sells: number };
+  complete?: boolean;
+  fxPending?: number;
+  excluded?: { code: string; name: string; count: number; reason: string }[];
+  items?: JournalTaxItem[];
+  kr?: { securitiesTax: { amount: number | null; sells: number; source: "toss" | null } };
+  asOf?: string;
+}

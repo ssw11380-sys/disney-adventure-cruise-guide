@@ -12,6 +12,7 @@ import { MarketStrip } from "@/components/MarketStrip";
 import { BasisMark } from "@/components/NumberBasis";
 import { useReturnMark } from "@/components/ReturnMark";
 import { HoldingsSkeleton } from "@/components/Skeleton";
+import { JournalButton, JournalIconButton } from "@/components/journal/JournalEntry";
 import { Screen } from "@/components/Screen";
 import { StockRow } from "@/components/StockRow";
 import { PRICE_HEAD, useLineCols } from "@/components/StockLine";
@@ -24,6 +25,7 @@ import { formatPct, formatPrice, formatQuote } from "@/lib/format";
 import { holdingsSuffix, openMaxAge, staleQuoteCount, viewState } from "@/lib/freshness";
 import { haptic } from "@/lib/haptics";
 import { holdingsLayoutKey, useHoldingsAnchor } from "@/lib/holdingsAnchor";
+import { useJournalOn } from "@/lib/journalFlag";
 import { bandOneLine, bandRates, holdingWeights, pickCols, pickWatchCols } from "@/lib/holdingsColumns";
 import { quoteLive, sessionOpen } from "@/lib/liveDot";
 import { excludedLabel, isHolding, sortHoldings, splitHoldings, summarize } from "@/lib/portfolio";
@@ -58,6 +60,8 @@ export default function StocksScreen() {
   const openAllocation = useCallback(() => router.push("/portfolio/allocation"), []);
   // 숫자 기준 점 (3-32, 플래그 numberBasis): 켜졌을 때만 계좌 패널·띠에 점 + 토스 대조 글 (훅이므로 아래 이른 return 보다 위)
   const basisOn = useFeature("numberBasis", false);
+  // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 휴대폰 기본은 계좌 패널 '비중' 앞 [매매일지], 촘촘·넓은 창은 보유 구역 머리에 아이콘만
+  const journalOn = useJournalOn();
   // 촘촘 모드 (3-39): 서버 플래그 + 설정 '잔고 표시 촘촘'. 불러오는 중 화면도 쓰므로 일찍 돌아가는 줄보다 위에서 정한다
   const densityOn = useFeature("densityMode", false);
   const dense = densityOn && density === "dense";
@@ -298,6 +302,7 @@ export default function StocksScreen() {
           onAllocation={gated(allocationOn, openAllocation)}
           {...(dense ? { dense: true } : null)}
           {...(basisOn ? { basis: basisMark, width: tableW } : null)}
+          {...(journalOn ? { journal: <JournalIconButton />, width: tableW } : null)}
         />
       ) : null}
     </View>
@@ -308,6 +313,7 @@ export default function StocksScreen() {
         <AccountPanel
           data={account}
           onAllocation={gated(allocationOn, openAllocation)}
+          {...(journalOn ? { journal: true } : null)}
           status={status}
           {...(dense ? { dense: true } : null)}
           // 휴대폰 목록은 창 폭을 다 쓴다 (좌우 여백은 패널 안에서)
@@ -317,6 +323,8 @@ export default function StocksScreen() {
     </View>
   );
 
+  // 매매일지 아이콘 (3-37): 휴대폰 촘촘의 보유 구역 머리 (휴대폰 기본은 계좌 패널 버튼, 넓은 창은 계좌 띠). 끄면 없음 — 머리가 지금 그대로
+  const journalIcon = (key: string) => (key === "held" && journalOn && dense ? <JournalIconButton /> : null);
   const sectionHeader = (section: (typeof sections)[number]) => (
     <View style={{ backgroundColor: t.bg }}>
       {dense ? (
@@ -327,6 +335,7 @@ export default function StocksScreen() {
             {section.title}
           </Text>
           <View style={styles.barEnd}>
+            {journalIcon(section.key)}
             {section.key === "held" && allocationOn ? (
               <Pressable onPress={openAllocation} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel="비중 보기" style={styles.barBtn}>
                 <Ionicons name="pie-chart-outline" size={font.small} color={t.muted} />
@@ -582,6 +591,7 @@ function AccountPanel({
   data,
   status,
   onAllocation,
+  journal = false,
   dense = false,
   basis,
   width,
@@ -591,6 +601,8 @@ function AccountPanel({
   status: React.ReactNode;
   /** 비중 보기 화면 열기 (플래그 allocationView 가 꺼져 있으면 없음 → 버튼도 없음) */
   onAllocation?: () => void;
+  /** 매매일지 버튼 (3-37, 플래그 tradeJournal · tradeRecords) — '비중' 앞, 같은 줄. 비중이 꺼져 있으면 이 버튼만으로 그 줄. 촘촘은 받아도 그리지 않는다(구역 머리) */
+  journal?: boolean;
   /** 촘촘 세 줄 (3-39) — 비중 버튼은 받아도 그리지 않는다 (구역 머리에 있음) */
   dense?: boolean;
   /**
@@ -751,9 +763,10 @@ function AccountPanel({
         </View>
       ) : null}
       {/* 요약 문장(accessible) 밖에 둔다: 안에 두면 화면 읽기로 버튼을 고를 수 없다 (3-22) */}
-      {onAllocation ? (
-        <View style={styles.panelActions}>
-          <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} />
+      {onAllocation || journal ? (
+        <View style={journal ? [styles.panelActions, styles.panelActionsGap] : styles.panelActions}>
+          {journal ? <JournalButton /> : null}
+          {onAllocation ? <Button title="비중" icon="pie-chart-outline" variant="secondary" compact accessibilityLabel="비중 보기" onPress={onAllocation} /> : null}
         </View>
       ) : null}
     </View>
@@ -824,6 +837,8 @@ const styles = StyleSheet.create({
   splitNum: { fontSize: font.small, fontVariant: ["tabular-nums"], textAlign: "right" },
   // 비중 버튼(보이는 높이 32, hitSlop 으로 44): 위는 숫자·환율 글자라 넓혀도 겹치는 버튼이 없다
   panelActions: { flexDirection: "row", justifyContent: "flex-end", marginTop: space.xs },
+  // 매매일지·비중 두 버튼 사이 (3-37 — 매매일지가 켜졌을 때만 더한다)
+  panelActionsGap: { gap: space.sm },
   sectionBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.s },
   // ── 촘촘(3-39) ── 계좌 세 줄 · 구역 머리 44 (위아래 여백 없음 — 버튼 둘이 머리 높이를 다 채워 누르는 곳이 머리 안)
   panelDense: { paddingTop: space.s, paddingBottom: space.s, gap: space.xxs },

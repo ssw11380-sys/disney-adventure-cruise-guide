@@ -14,7 +14,8 @@ import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } fro
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
-import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
+import { taxRefetch } from "@/lib/journal";
+import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, JournalResponse, JournalReturns, JournalStockResponse, JournalTax, NotificationSettings, NotificationSettingsPatch, RankCategory, ReturnsMarket, ReturnsPreset, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
   const { apiUrl, apiToken, ready } = useSettings();
@@ -576,6 +577,84 @@ export function useMarketSummaries(enabled: boolean) {
 export function useMarketSummary(id: number, enabled: boolean) {
   const api = useApi();
   return useQuery({ queryKey: useKey("briefings", "market", id), queryFn: () => api.getMarketSummary(id), enabled: enabled && Number.isFinite(id) && id > 0 });
+}
+
+// ── 매매일지 (3-37, 플래그 tradeJournal · tradeRecords — 부르는 화면이 켜져 있을 때만 enabled) ──
+// 예전 서버(404)는 오류가 아니라 꺼짐({ enabled: false })으로 본다. 기록은 장 마감 뒤에 바뀌므로 1분 동안 새로 묻지 않는다
+
+async function offOn404<T>(p: Promise<T>, off: T): Promise<T> {
+  try {
+    return await p;
+  } catch (e) {
+    if (e instanceof ApiRequestError && e.status === 404) return off;
+    throw e;
+  }
+}
+
+export function useJournal(q: { from: string; to: string; code?: string | null }, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("journal", "list", q.from, q.to, q.code ?? null),
+    queryFn: () => offOn404<JournalResponse>(api.journal(q), { enabled: false, days: [], stocks: [] }),
+    enabled,
+    staleTime: 60_000,
+    retry: 0,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** 종목 상세 '매매 기록' 칸 (지금 보유가 없는 종목에서만 부른다) */
+export function useJournalStock(code: string, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("journal", "stock", code),
+    queryFn: () => offOn404<JournalStockResponse>(api.journalStock(code), { enabled: false }),
+    enabled: enabled && !!code,
+    staleTime: 5 * 60_000,
+    retry: 0,
+  });
+}
+
+export function useJournalReturns(q: { preset: ReturnsPreset; market: ReturnsMarket; from?: string; to?: string }, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: useKey("journal", "returns", q.preset, q.market, q.from ?? null, q.to ?? null),
+    queryFn: () => offOn404<JournalReturns>(api.journalReturns(q), { enabled: false, ready: false }),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: 0,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** 양도세 추정. 환율을 받는 중이면 1분마다 다시 묻되 5번까지 (lib/journal taxRefetch — 끝나지 않는 '받는 중' 막기) */
+export function useJournalTax(year: number | undefined, enabled: boolean) {
+  const api = useApi();
+  const qc = useQueryClient();
+  const key = useKey("journal", "tax", year ?? null);
+  const q = useQuery({
+    queryKey: key,
+    queryFn: () => offOn404<JournalTax>(api.journalTax(year), { enabled: false }),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: 0,
+    placeholderData: keepPreviousData,
+    refetchInterval: (q) => taxRefetch(q.state.data, Math.max(0, q.state.dataUpdateCount - 1)),
+    refetchIntervalInBackground: false,
+  });
+  // 받는 중일 때 다시 물은 횟수 (처음 받기는 빼고) — 다 쓰면 화면이 빠진 매도로 보여 준다
+  return { ...q, tries: Math.max(0, (qc.getQueryState(key)?.dataUpdateCount ?? 0) - 1) };
+}
+
+/** 거래 메모 저장 — 끝나면 매매일지 목록을 다시 받는다 */
+export function useSaveTradeNote() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const { apiUrl } = useSettings();
+  return useMutation({
+    mutationFn: api.saveTradeNote,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: [apiUrl, "journal", "list"] }),
+  });
 }
 
 /** 예전 서버에 없는 경로(404)는 빈 목록으로 */

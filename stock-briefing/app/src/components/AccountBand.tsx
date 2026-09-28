@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import type { Currency } from "@/api/types";
 import { Button } from "@/components/ui";
 import { sentence, speakAmount, speakProfit, speakRate } from "@/lib/a11y";
-import { bandBasisFit } from "@/lib/basisFit";
+import { bandBasisFit, bandJournalFits } from "@/lib/basisFit";
 import { formatPct, formatPrice, formatQuote, shownSign } from "@/lib/format";
 import type { Bucket as Totals } from "@/lib/portfolio";
 import { changeColor, font, fontCap, layout, space, useFontScale, useTheme } from "@/theme";
@@ -111,6 +111,7 @@ export function AccountBand({
   rates = true,
   pad,
   onAllocation,
+  journal,
   dense = false,
   basis,
   width,
@@ -120,6 +121,11 @@ export function AccountBand({
   rates?: boolean;
   pad: number;
   onAllocation?: () => void;
+  /**
+   * 매매일지 아이콘 (3-37, 기능 플래그 tradeJournal · tradeRecords): '비중' 뒤 44×44. 한 줄 띠는 늘, 두 줄 띠·촘촘 띠는 칸 묶음이 아이콘과 한 줄에 들 때만
+   * (lib/basisFit bandJournalFits — 띠 줄 수가 켜기 전과 같게). 없으면 지금 그대로
+   */
+  journal?: React.ReactNode;
   dense?: boolean;
   /** 숫자 기준 점 그리기 (dotOnly: 글 없이 점만) */
   basis?: (dotOnly: boolean) => React.ReactNode;
@@ -175,6 +181,23 @@ export function AccountBand({
         })
       : null;
   const mark = basis ? basis(oneLine ? !rates : fit!.dotOnly) : null;
+  // 매매일지 아이콘 (3-37): 점과 같은 줄의 칸 글로 어림 — 두 줄 띠는 둘째 줄, 촘촘은 첫 줄
+  const journalCells = dense
+    ? [
+        { label: totalLabel, value: totalValue, unit: "원", big: true, first: true },
+        { label: "평가손익 · 수익률", value: profitValue, sub: rateText },
+        { label: "당일손익", value: dayText, sub: dayRateText },
+      ]
+    : [
+        ...(showSplit ? lines.map((l, i) => ({ label: splitLabel(l), value: formatPrice(l.tot.value, l.cur), sub: formatPct(lineProfit(l).r), first: i === 0 })) : []),
+        { label: "매입금액", value: costValue, first: !showSplit },
+      ];
+  const journalIcon =
+    journal && (oneLine || bandJournalFits({ width: width ?? 0, pad, fontScale, cells: journalCells, action: !!onAllocation, mark: basis ? (fit!.dotOnly ? "dot" : "text") : null })) ? (
+      <View style={styles.journal}>
+        {journal}
+      </View>
+    ) : null;
   // 줄바꿈하는 칸 묶음: 끄고는 한 줄인 칸이 점 때문에 다음 줄로 가면 줄바꿈을 막는다 (칸 글자가 조금 줄어든다 — 한 줄 띠와 같은 규칙).
   // 끄고도 다음 줄로 넘어가는 칸(큰 글씨·좁은 폭·큰 금액)은 그대로 줄바꿈. 점이 없으면 지금 그대로
   const wrap = fit?.noWrap ? null : styles.wrap;
@@ -204,6 +227,7 @@ export function AccountBand({
           </View>
           {mark}
           {button}
+          {journalIcon}
         </View>
       ) : dense ? (
         // 촘촘 두 줄 띠 → 한 줄 (48): 칸 묶음과 비중 버튼이 같은 줄. 글자가 커져 칸이 한 줄에 안 들어가면 다음 줄로 넘긴다
@@ -215,6 +239,7 @@ export function AccountBand({
           </View>
           {mark}
           {button}
+          {journalIcon}
         </View>
       ) : (
         <>
@@ -232,6 +257,7 @@ export function AccountBand({
             </View>
             {mark}
             {button}
+            {journalIcon}
           </View>
         </>
       )}
@@ -285,5 +311,7 @@ const styles = StyleSheet.create({
   cell: { flexGrow: 1, flexShrink: 1, flexBasis: "auto", justifyContent: "center", gap: space.xxs, paddingVertical: space.xs, paddingRight: space.sm },
   value: { fontVariant: ["tabular-nums"] },
   action: { paddingLeft: space.sm },
+  // 매매일지 아이콘 (3-37): '비중' 버튼과 같은 앞 간격
+  journal: { paddingLeft: space.xs },
   notes: { paddingBottom: space.s, gap: space.xxs },
 });

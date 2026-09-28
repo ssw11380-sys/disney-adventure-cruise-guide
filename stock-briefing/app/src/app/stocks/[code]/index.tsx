@@ -43,6 +43,8 @@ import { ValueScoreCard } from "@/components/scores/ValueScoreCard";
 import { SCORE_LABELS, valueJumpY } from "@/lib/scoreView";
 import { TossAppButton } from "@/components/TossAppButton";
 import { tossAppTarget } from "@/lib/tossApp";
+import { JournalStockLink, JournalStockPanel, JournalStockRow } from "@/components/journal/JournalEntry";
+import { useJournalOn } from "@/lib/journalFlag";
 
 type Tab = AnalysisKind | "news";
 const TABS: { value: Tab; label: string }[] = [
@@ -152,6 +154,9 @@ export default function StockDetailScreen() {
   // 한국 간이 가치 (3-44 3단계, 서버 되돌리기 스위치 krValueScore — 앱 fallback 꺼짐): 한국 종목의 가치분석 탭 상세 카드·'가치분석 탭에서 지표별 값 보기'.
   // 꺼져 있으면(예전 서버 포함) 한국 종목 가치분석 탭은 2단계 그대로(AI 글만) — 요약 카드는 서버가 준 줄 그대로('지금 계산하지 않음')
   const krValueOn = useFeature("krValueScore", false);
+  // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 휴대폰 '잔고' 칸 맨 아래 '이 종목 매매 기록 ›', 넓은 창 '내 보유' 제목 오른쪽 '매매 기록 ›',
+  // 보유가 없는데 저장된 체결이 있으면 '매매 기록' 작은 칸 (그 판단만 서버에 한 번 묻는다). 꺼져 있으면 모두 없음 — 지금 화면 그대로
+  const journalOn = useJournalOn();
   // 차트의 보이는 구간 (detailPolish 켜짐만): 접고 펼 때 배치가 바뀌어 차트가 다른 자리에서 새로 그려져도 보던 봉 수·위치를 잇는다
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
@@ -627,6 +632,7 @@ export default function StockDetailScreen() {
             {range()}
           </View>
         ) : null}
+        {!ev && journalOn ? <JournalStockPanel code={c} /> : null}
 
         {/* 잔고 */}
         {ev ? (
@@ -649,6 +655,7 @@ export default function StockDetailScreen() {
             ) : null}
             {afterCost && baseEval?.afterCost ? <Text style={styles.sub(t.muted)}>평가금액·손익은 매도 시 예상 수수료·세금 차감 후 (토스 기준)</Text> : null}
             {s.memo ? <Text style={styles.sub(t.muted)}>메모 {s.memo}</Text> : null}
+            {journalOn ? <JournalStockRow code={c} /> : null}
           </View>
         ) : null}
 
@@ -758,7 +765,7 @@ export default function StockDetailScreen() {
     <View style={styles.side}>
       {ev ? (
         <View>
-          <PaneTitle title="내 보유" note={holdNote} />
+          <PaneTitle title="내 보유" note={holdNote} {...(journalOn ? { action: <JournalStockLink code={c} push={!holdNote} /> } : null)} />
           <PairGrid items={holdStats} cols={sideCols} />
           {krwLast ? null : krwSide}
           {memo}
@@ -772,6 +779,7 @@ export default function StockDetailScreen() {
         </View>
       ) : null}
       {ev && krwLast ? <View>{krwSide}</View> : null}
+      {!ev && journalOn ? <JournalStockPanel code={c} /> : null}
     </View>
   );
 
@@ -889,6 +897,7 @@ export default function StockDetailScreen() {
             key: "hold",
             title: "내 보유",
             note: shortNote,
+            ...(journalOn ? { action: <JournalStockLink code={c} push={!shortNote} /> } : null),
             flex: foldDetail.holdColFlex,
             body: (
               <>

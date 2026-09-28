@@ -17,6 +17,8 @@ import { NotificationSettingsCard } from "@/components/NotificationSettingsCard"
 import { PriceAlertSettingsCard } from "@/components/PriceAlertSettingsCard";
 import { ScreenInfoCard } from "@/components/ScreenInfoCard";
 import { TossOpenApiCard } from "@/components/TossOpenApiCard";
+import { TradeJournalCard } from "@/components/journal/TradeJournalCard";
+import { useJournalOn } from "@/lib/journalFlag";
 import { WidgetRefreshStatus } from "@/components/WidgetRefreshStatus";
 import { Screen } from "@/components/Screen";
 import { Badge, Button, Card, Chip, Muted, Row, RowWrapContext, SectionTitle, Toggle } from "@/components/ui";
@@ -69,6 +71,8 @@ export default function SettingsScreen() {
   // 매매 기록 (3-36): 서버가 쌓는 일별 계좌 스냅샷 상태 한 줄 (읽기만). 꺼져 있거나 예전 서버면 줄 없음
   const tradeRecordsOn = useFeature("tradeRecords", false);
   const recordsLabel = tradeRecordsLabel(gated(tradeRecordsOn, health.data?.tradeRecords));
+  // 매매일지 (3-37, 플래그 tradeJournal · tradeRecords): 토스증권 연동 카드 바로 아래 카드 (꺼져 있으면 없음 — 지금 화면 그대로)
+  const journalOn = useJournalOn();
   const [advanced, setAdvanced] = useState(false);
   // 3-24 (emptyGuide — 플래그를 못 받은 채 서버에 닿지 않을 때도, lib/uxFlags connectionGuide): 오류 화면·끊김 띠의 '설정 열기'로 오면(주소 검색어 open=server) '서버 연결' 칸을 펼치고 그 칸까지 스크롤한다.
   // 누를 때마다 새 요청이라(at) 사용자가 칸을 접은 뒤 다른 화면에서 또 눌러도 다시 펼친다. 플래그가 꺼져 있으면 검색어를 보지 않는다
@@ -366,6 +370,7 @@ export default function SettingsScreen() {
   // 가격 알림 칸 (3-29): 서버에 연결됐고 켜져 있을 때만, 알림 칸 바로 아래
   const priceAlertCard = full && alerts.on ? <PriceAlertSettingsCard /> : null;
   const toss = full ? <TossOpenApiCard /> : null;
+  const journalCard = full && journalOn ? <TradeJournalCard records={health.data?.tradeRecords} /> : null;
   // 3-24 빈 칸 안내 (플래그 emptyGuide): 서버에 연결되지 않았거나 토큰이 맞지 않아 알림·토스 칸이 비었을 때 까닭과 버튼 하나
   const serverGap =
     ux.connectionGuide && !full && (health.isError || health.data?.limited) ? (
@@ -400,6 +405,7 @@ export default function SettingsScreen() {
           </View>
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart} {...(measure ? { onLayout: onColumnLayout } : null)}>
             {toss}
+            {journalCard}
             <AppUpdateCard />
             {server}
             {connectBox}
@@ -417,6 +423,7 @@ export default function SettingsScreen() {
       {notify}
       {priceAlertCard}
       {toss}
+      {journalCard}
       {serverGap}
       <AppUpdateCard />
       {server}
