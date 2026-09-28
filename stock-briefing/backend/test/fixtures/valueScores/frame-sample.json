@@ -1,0 +1,66 @@
+{
+ "taxonomy": "us-gaap",
+ "tag": "NetIncomeLoss",
+ "ccp": "CY2025",
+ "uom": "USD",
+ "label": "Net Income (Loss) Attributable to Parent",
+ "description": "The portion of profit or loss for the period, net of income taxes, which is attributable to the parent.",
+ "pts": 5,
+ "data": [
+  {
+   "accn": "0000019617-26-000096",
+   "cik": 19617,
+   "entityName": "JPMORGAN CHASE & CO",
+   "loc": "-",
+   "start": "2025-01-01",
+   "end": "2025-12-31",
+   "val": 57000000000
+  },
+  {
+   "accn": "0000320193-25-000079",
+   "cik": 320193,
+   "entityName": "Apple Inc.",
+   "loc": "US-CA",
+   "start": "2024-09-29",
+   "end": "2025-09-27",
+   "val": 112010000000
+  },
+  {
+   "accn": "0001193125-26-323660",
+   "cik": 789019,
+   "entityName": "MICROSOFT CORPORATION",
+   "loc": "US-WA",
+   "start": "2024-07-01",
+   "end": "2025-06-30",
+   "val": 101832000000
+  },
+  {
+   "accn": "0001104659-26-041026",
+   "cik": 1018724,
+   "entityName": "AMAZON COM INC",
+   "loc": "US-WA",
+   "start": "2025-01-01",
+   "end": "2025-12-31",
+   "val": 77670000000
+  },
+  {
+   "accn": "0001045810-26-000036",
+   "cik": 1045810,
+   "entityName": "NVIDIA CORPORATION",
+   "loc": "-",
+   "start": "2025-01-27",
+   "end": "2026-01-25",
+   "val": 120067000000
+  },
+  {
+   "cik": "x",
+   "end": "2025-12-31",
+   "val": 1
+  },
+  {
+   "cik": 1,
+   "end": "2025-12-31",
+   "val": "NaN"
+  }
+ ]
+}

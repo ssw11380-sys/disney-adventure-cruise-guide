@@ -9,6 +9,8 @@ import type { FeatureService } from "./featureService.js";
 import type { StockService } from "./stockService.js";
 import { isKrTradingDate, isUsTradingDate } from "./marketContext.js";
 import { benchmarkOf } from "./marketSummaryCalc.js";
+import { ValueScoreService, type ValueBlock, type ValueEval } from "./valueScoreService.js";
+import { gapText, howLinesV2, VALUE_DETAIL_NOTE } from "./valueScoreText.js";
 import {
   BAND_LINE,
   basisSentence,
@@ -123,6 +125,8 @@ export interface ScoreSources {
   product(code: string): Promise<ProductFacts | null>;
   /** 등록 종목 (장 마감 뒤 미리 계산할 목록) */
   registered(): Promise<ScoreStock[]>;
+  /** 월봉 (가치 지표의 자기 지난 5년 비교, 오래된 → 최신). 없으면 자기 비교 없이 계산 */
+  monthly?(code: string, count: number): Promise<Candle[] | null>;
 }
 
 export interface FamilyRow {
@@ -176,10 +180,12 @@ export interface ScoresResponse {
   name: string;
   market: ScoreMarket;
   asOf: { priceDate: string | null; scoreDate: string; market: ScoreMarket; line: string | null };
-  value: { method: "value-v1"; status: "pending" | "excluded"; label: string; score: null; band: null; about: string; text: string };
+  /** 가치 지표 (2단계: 미국 보통주 점수, 한국 '계산 준비 중', ETF 등 '대상 아님') */
+  value: ValueBlock;
   trend: TrendBlock;
-  composite: { status: "ok" | "none"; score: number | null; reason: "valueMissing" | "trendMissing" | "bothMissing"; text: string; gap: number | null; gapNote: boolean };
-  text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string };
+  /** 종합 = 화면에 보이는 두 정수의 평균 (두 점수가 모두 있고 가격 기준일이 같을 때만). |V − T| ≥ 30 이면 차이 안내 */
+  composite: { status: "ok" | "none"; score: number | null; reason: "valueMissing" | "trendMissing" | "bothMissing" | "dateMismatch" | null; text: string; gap: number | null; gapNote: boolean; gapText: string | null };
+  text: { titleNote: string; notForecast: string; how: string[]; disclaimerShort: string; detailNote: string; trendAbout: string; valueAbout: string; valueDetailNote: string };
   computedAt: string;
 }
 
@@ -187,6 +193,8 @@ export interface IndicatorScoreDeps {
   db: Db;
   features: Pick<FeatureService, "enabled">;
   sources: ScoreSources;
+  /** 가치 지표 (2단계). 없으면 1단계 그대로 */
+  value?: ValueScoreService | null;
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -198,18 +206,29 @@ export interface IndicatorScoreDeps {
 const CACHE_OK_MS = 6 * 3_600_000;
 const CACHE_LAG_MS = 30 * 60_000;
 const CACHE_FAIL_MS = 5 * 60_000;
+/** 가치 지표가 백그라운드 받기(재무·첫 비교 기준)를 기다리는 동안 */
+const CACHE_WAIT_MS = 60_000;
 const CACHE_MAX = 300;
+/** 가치 지표 자기 지난 5년 비교용 월봉 수 */
+const MONTHLY_CANDLES = 72;
+/** 종합 차이 안내 기준 (|V − T| 이 이 이상) */
+export const COMPOSITE_GAP_NOTE = 30;
 
 const marketOf = (code: string): ScoreMarket => (isKrCode(code) ? "KR" : "US");
 const cutTo = <T extends { date: string }>(cs: readonly T[], date: string) => cs.filter((c) => c.date <= date);
 /** 받기 실패 (잠시 뒤 다시 계산, 기록하지 않음) */
 export const isFetchFailure = (resp: ScoresResponse): boolean => resp.trend.reason?.code === "fetchFailed";
+/** 가치 쪽 받기 실패·백그라운드 받기 대기 (응답을 짧게만 기억, 가치 기록은 남기지 않음) */
+const valueWaits = new WeakMap<ScoresResponse, ValueEval>();
 
 interface Ctx {
   scoreDate: string;
   /** 장 마감 뒤 미리 계산: 차트 캐시의 묵은 봉을 쓰지 않는다 */
   fresh: boolean;
 }
+/** 추세 쪽 결과 + 가치 지표가 함께 쓰는 일봉 (기준 거래일까지, 받기 실패면 null) */
+type TrendOut = { block: TrendBlock; priceDate: string | null; stored: Record<string, unknown>; candles: Candle[] | null };
+type ValueEvalProduct = Parameters<ValueScoreService["evaluate"]>[0]["product"];
 type SelfTrend = { r: TrendResult; prev: TrendResult | null; bench: TrendBlock["benchmark"]; benchName: string | null; benchMissing: "overseas" | "none" | null };
 
 export class IndicatorScoreService {
@@ -245,7 +264,9 @@ export class IndicatorScoreService {
         if (resp) {
           const lagging = resp.asOf.priceDate !== null && resp.asOf.priceDate < scoreDate;
           this.cache.delete(key);
-          this.cache.set(key, { at: t, ttl: isFetchFailure(resp) ? CACHE_FAIL_MS : lagging ? CACHE_LAG_MS : CACHE_OK_MS, resp });
+          const v = valueWaits.get(resp);
+          const ttl = isFetchFailure(resp) ? CACHE_FAIL_MS : v?.waiting ? CACHE_WAIT_MS : v?.fetchFailure ? CACHE_FAIL_MS : lagging ? CACHE_LAG_MS : CACHE_OK_MS;
+          this.cache.set(key, { at: t, ttl, resp });
           while (this.cache.size > CACHE_MAX) this.cache.delete(this.cache.keys().next().value!);
         }
         return resp;
@@ -271,6 +292,8 @@ export class IndicatorScoreService {
       let failed = 0;
       for (const s of list) {
         try {
+          // 가치 지표: 저장한 SEC 재무가 20시간 넘게 묵었으면 먼저 다시 받는다 (그날 제출한 보고서까지 — 화면 요청은 SEC 를 기다리지 않음)
+          if (market === "US") await this.deps.value?.refreshIfStale(s.code).catch(() => undefined);
           const r = await this.get(s.code, { fresh: true, store: true });
           if (r && !isFetchFailure(r)) computed++;
           else failed++;
@@ -307,9 +330,12 @@ export class IndicatorScoreService {
     // 준비 시각 뒤에 서버가 다시 켜졌으면(배포 등) 1분 뒤 그날 몫을 따라잡는다 — 예약은 다음 날까지 오지 않으므로
     this.catchUpTimer = setTimeout(() => void this.catchUp().catch(() => undefined), 60_000);
     this.catchUpTimer.unref?.();
+    // 가치 지표: 주 1회 비교 기준 · 켤 때 등록 종목 재무 받아 두기 (플래그가 꺼져 있으면 아무것도 하지 않음)
+    this.deps.value?.start(async () => (await this.deps.sources.registered()).map((s) => s.code));
   }
 
   stop(): void {
+    this.deps.value?.stop();
     for (const t of this.tasks) void t.destroy();
     this.tasks = [];
     if (this.catchUpTimer) clearTimeout(this.catchUpTimer);
@@ -352,30 +378,36 @@ export class IndicatorScoreService {
     const etf = kind.etf || stock.groupCode === "EF" || stock.groupCode === "EN";
     const trend = await this.trendBlock(stock, market, ctx, kind, facts, isHighDistribution(stock.name, facts, etf));
     const priceDate = trend.priceDate;
-    // 종합 (설계 5.4 조합표): 이번 단계는 가치 점수가 없어 늘 '없음'. 추세가 있거나 레버리지(기초자산 참고)면 '가치가 없어', 둘 다 없으면 '모두 없음'
-    const trendPresent = trend.block.status === "ok" || trend.block.reason?.code === "leveraged";
+    // 가치 (2단계): 플래그·출처가 있으면 저장한 SEC 재무·비교 기준으로 (SEC 요청 없음), 아니면 1단계 줄 그대로
+    const valueOn = this.deps.value ? await this.deps.value.enabled() : false;
+    const v: ValueEval = valueOn
+      ? await this.deps.value!.evaluate({
+          code,
+          etf,
+          product: facts as ValueEvalProduct,
+          candles: trend.candles,
+          monthly: () => (this.deps.sources.monthly ? this.deps.sources.monthly(code, MONTHLY_CANDLES) : Promise.resolve(null)),
+          scoreDate,
+          splitHold: trend.block.status === "hold",
+        })
+      : { block: ValueScoreService.stage1Block(etf), stored: null, fetchFailure: false, waiting: false };
+    const composite = compositeOf(v.block, trend.block, priceDate);
+    const line = priceDate ? `${priceDateLine(priceDate, market)}${v.block.asOf.fiscalShort ? ` · ${v.block.asOf.fiscalShort}` : ""}` : null;
     const resp: ScoresResponse = {
       code,
       name: stock.name,
       market,
-      asOf: { priceDate, scoreDate, market, line: priceDate ? priceDateLine(priceDate, market) : null },
-      value: etf
-        ? { method: "value-v1", status: "excluded", label: "대상 아님", score: null, band: null, about: VALUE_ABOUT, text: STATUS_TEXT.valueEtf }
-        : { method: "value-v1", status: "pending", label: "계산 준비 중", score: null, band: null, about: VALUE_ABOUT, text: STATUS_TEXT.valuePending },
+      asOf: { priceDate, scoreDate, market, line },
+      value: v.block,
       trend: trend.block,
-      composite: {
-        status: "none",
-        score: null,
-        reason: trendPresent ? "valueMissing" : "bothMissing",
-        text: `없음 · ${trendPresent ? STATUS_TEXT.compositeValueMissing : STATUS_TEXT.compositeBothMissing}`,
-        gap: null,
-        gapNote: false,
-      },
-      text: { titleNote: CARD_TITLE_NOTE, notForecast: NOT_FORECAST, how: howLines(), disclaimerShort: DISCLAIMER_SHORT, detailNote: DETAIL_NOTE, trendAbout: TREND_ABOUT },
+      composite,
+      text: { titleNote: CARD_TITLE_NOTE, notForecast: NOT_FORECAST, how: valueOn ? howLinesV2() : howLines(), disclaimerShort: DISCLAIMER_SHORT, detailNote: DETAIL_NOTE, trendAbout: TREND_ABOUT, valueAbout: VALUE_ABOUT, valueDetailNote: VALUE_DETAIL_NOTE },
       computedAt: seoulIso(this.now()),
     };
+    if (v.waiting || v.fetchFailure) valueWaits.set(resp, v);
     // 받기 실패는 기록하지 않는다 (그날 기록이 빠진 채로 두고 40분 뒤·다음에 열 때 다시 계산해 채운다)
     if (store && stock.registered !== false && !isFetchFailure(resp)) await this.save(resp, trend.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 기록 저장 실패"));
+    if (store && stock.registered !== false && v.stored && !v.fetchFailure && !v.waiting) await this.saveValue(resp, v.stored).catch((e: unknown) => this.deps.log?.warn({ code, err: e instanceof Error ? e.message : String(e) }, "지표 점수: 가치 기록 저장 실패"));
     return resp;
   }
 
@@ -431,7 +463,7 @@ export class IndicatorScoreService {
     kind: ProductKind,
     facts: ProductFacts | null,
     distribution: boolean,
-  ): Promise<{ block: TrendBlock; priceDate: string | null; stored: Record<string, unknown> }> {
+  ): Promise<TrendOut> {
     const base = {
       version: TREND_VERSION,
       cal: TREND_CAL.version,
@@ -460,12 +492,12 @@ export class IndicatorScoreService {
       const text = kind.kind === "inverse" ? STATUS_TEXT.inverse : STATUS_TEXT.bond;
       const got = await this.fetchCut(stock.code, ctx);
       const priceDate = got?.candles.at(-1)?.date ?? null;
-      return { block: { ...base, status: "excluded", label: "대상 아님", reason: { code: kind.kind, text } }, priceDate, stored: { status: "excluded", reason: kind.kind } };
+      return { block: { ...base, status: "excluded", label: "대상 아님", reason: { code: kind.kind, text } }, priceDate, stored: { status: "excluded", reason: kind.kind }, candles: got?.candles ?? null };
     }
     if (kind.kind === "leveraged") return this.leveragedBlock(stock, ctx, kind, base);
 
     const got = await this.fetchCut(stock.code, ctx);
-    if (!got) return { block: { ...base, status: "unavailable", label: "점수 없음", reason: { code: "fetchFailed", text: STATUS_TEXT.fetchFailed } }, priceDate: null, stored: {} };
+    if (!got) return { block: { ...base, status: "unavailable", label: "점수 없음", reason: { code: "fetchFailed", text: STATUS_TEXT.fetchFailed } }, priceDate: null, stored: {}, candles: null };
     const t = await this.selfTrend(stock, market, ctx, facts, got.candles);
     const priceDate = got.candles.at(-1)?.date ?? null;
     if ("benchFailed" in t)
@@ -473,10 +505,11 @@ export class IndicatorScoreService {
         block: { ...base, status: "unavailable", label: "점수 없음", reason: { code: "fetchFailed", text: benchFetchFailed(t.benchFailed.name) }, candleSource: got.source, versionLine: versionLine(got.source, null) },
         priceDate,
         stored: {},
+        candles: got.candles,
       };
     const block = this.fromResult(base, t, got.source, market);
     if (distribution && block.status === "ok") block.notes = [...block.notes, DISTRIBUTION_NOTE];
-    return { block, priceDate: block.status === "ok" ? (t.r as TrendShown).asOf : priceDate, stored: storedOf(t.r, t.prev, got.source, t.bench) };
+    return { block, priceDate: block.status === "ok" ? (t.r as TrendShown).asOf : priceDate, stored: storedOf(t.r, t.prev, got.source, t.bench), candles: got.candles };
   }
 
   private fromResult(base: Omit<TrendBlock, "status" | "label" | "reason">, t: SelfTrend, source: string, market: ScoreMarket): TrendBlock {
@@ -520,7 +553,7 @@ export class IndicatorScoreService {
     ctx: Ctx,
     kind: Extract<ProductKind, { kind: "leveraged" }>,
     base: Omit<TrendBlock, "status" | "label" | "reason">,
-  ): Promise<{ block: TrendBlock; priceDate: string | null; stored: Record<string, unknown> }> {
+  ): Promise<TrendOut> {
     const own = await this.fetchCut(stock.code, ctx);
     const L = kind.L;
     const cand = kind.underlying;
@@ -577,7 +610,7 @@ export class IndicatorScoreService {
       versionLine: versionLine(own?.source ?? null, null),
     };
     const priceDate = own?.candles.at(-1)?.date ?? null;
-    return { block, priceDate, stored: { status: "excluded", reason: reason.code, leveraged: { L, underlying, check, facts }, reference: refStored } };
+    return { block, priceDate, stored: { status: "excluded", reason: reason.code, leveraged: { L, underlying, check, facts }, reference: refStored }, candles: own?.candles ?? null };
   }
 
   /**
@@ -610,13 +643,38 @@ export class IndicatorScoreService {
       .execute();
   }
 
-  /** 저장한 기록 (관리·확인용, 최근 순) */
-  async history(code: string, limit = 30): Promise<Array<{ date: string; status: string; score: number | null; band: string | null }>> {
+  /** 가치 지표 하루 한 줄 (kind 'value', 같은 기준 거래일이면 덮어씀). 점수·묶음·지표 순위·재무 기준·비교 기준 날짜 */
+  private async saveValue(resp: ScoresResponse, stored: Record<string, unknown>): Promise<void> {
+    const at = seoulIso(this.now());
+    const v = resp.value;
+    const row = {
+      score_date: resp.asOf.scoreDate,
+      code: resp.code,
+      market: resp.market,
+      kind: "value",
+      version: v.method,
+      status: v.status,
+      score: v.scoreExact,
+      score_today: null,
+      band: v.band,
+      data: JSON.stringify({ ...stored, reason: v.reason?.code ?? null }),
+      created_at: at,
+      updated_at: at,
+    };
+    await this.deps.db
+      .insertInto("indicator_scores")
+      .values(row)
+      .onConflict((oc) => oc.columns(["code", "score_date", "kind"]).doUpdateSet({ market: row.market, version: row.version, status: row.status, score: row.score, score_today: row.score_today, band: row.band, data: row.data, updated_at: at }))
+      .execute();
+  }
+
+  /** 저장한 기록 (관리·확인용, 최근 순). kind 'trend'(기본) · 'value' */
+  async history(code: string, limit = 30, kind: "trend" | "value" = "trend"): Promise<Array<{ date: string; status: string; score: number | null; band: string | null }>> {
     const rows = await this.deps.db
       .selectFrom("indicator_scores")
       .select(["score_date", "status", "score", "band"])
       .where("code", "=", normalizeCode(code))
-      .where("kind", "=", "trend")
+      .where("kind", "=", kind)
       .orderBy("score_date", "desc")
       .limit(limit)
       .execute();
@@ -646,6 +704,8 @@ export function defaultScoreSources(deps: {
     benchmark: async (code, count) => (await deps.indices.candles(code, "D", count))?.candles ?? null,
     product: (code) => (deps.product ? deps.product.productFacts(code) : Promise.resolve(null)),
     registered: async () => (await deps.stocks.list()).map((s) => ({ code: s.code, name: s.name, market: s.market })),
+    // 가치 지표의 자기 지난 5년 비교: 차트와 같은 캐시의 월봉
+    monthly: async (code, count) => (await deps.stocks.getCandles(code, "M", count)).candles,
   };
 }
 
@@ -678,6 +738,27 @@ export function weeklyChange(r: TrendShown, prevR: TrendShown): TrendBlock["chan
   if (!best) return null;
   const familyDiff = shownScore(r.families[best].score!) - shownScore(prevR.families[best].score!);
   return { from: prevR.asOf, prev, now: score, diff, family: best, familyName: FAMILY_NAME[best], familyDiff, text: changeText({ from: prevR.asOf, diff, family: best, familyDiff }) };
+}
+
+/**
+ * 종합 지표 (설계 5.2·5.4): 화면에 보이는 두 정수의 평균 C = floor((V + T) / 2 + 0.5).
+ * 가치가 ok·partial 이고 추세가 본인 봉으로 ok 이며 두 가격 기준일이 같을 때만. 없는 점수를 0점·50점으로 채우지 않는다.
+ * 레버리지(기초자산 참고)는 추세 점수가 '있는' 쪽으로 보아 '가치 지표 점수가 없어'를 쓴다 (1단계와 같음)
+ */
+export function compositeOf(value: Pick<ValueBlock, "status" | "score" | "asOf">, trend: Pick<TrendBlock, "status" | "score" | "reason">, priceDate: string | null): ScoresResponse["composite"] {
+  const vOk = (value.status === "ok" || value.status === "partial") && value.score !== null;
+  const tOk = trend.status === "ok" && trend.score !== null;
+  const trendPresent = tOk || trend.reason?.code === "leveraged";
+  const none = (reason: "valueMissing" | "trendMissing" | "bothMissing" | "dateMismatch", text: string): ScoresResponse["composite"] => ({ status: "none", score: null, reason, text: `없음 · ${text}`, gap: null, gapNote: false, gapText: null });
+  if (!vOk && !trendPresent) return none("bothMissing", STATUS_TEXT.compositeBothMissing);
+  if (!vOk) return none("valueMissing", STATUS_TEXT.compositeValueMissing);
+  if (!tOk) return none("trendMissing", STATUS_TEXT.compositeTrendMissing);
+  if (!priceDate || value.asOf.priceThrough !== priceDate) return none("dateMismatch", STATUS_TEXT.compositeDateMismatch);
+  const V = value.score!;
+  const T = trend.score!;
+  const gap = Math.abs(V - T);
+  const gapNote = gap >= COMPOSITE_GAP_NOTE;
+  return { status: "ok", score: Math.floor((V + T) / 2 + 0.5), reason: null, text: "두 점수의 평균", gap, gapNote, gapText: gapNote ? gapText(gap) : null };
 }
 
 /** 하루 기록에 남길 입력·결과 (재현·확인용 — 봉 자체는 남기지 않고 원값·묶음·항목 점수만) */
