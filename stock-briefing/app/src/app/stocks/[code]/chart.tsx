@@ -15,6 +15,9 @@ import { parseStockCode } from "@/lib/freshness";
 import { useFoldLayout } from "@/lib/useFoldLayout";
 import { font, fontCap, slopFor, space, useTheme } from "@/theme";
 
+/** 이동평균선 기간·색 설정 화면 열기 (3-39, 기능 플래그 maCustom — 켜졌을 때만 차트에 넘긴다). 이 전체 화면 위에 모달로 열리고, 저장하고 돌아오면 새 선 */
+const openMaLines = () => router.push("/chart-lines");
+
 /**
  * 전체 화면 차트. 앱은 세로 고정이라 "가로" 버튼을 누르면 화면을 90도 돌려 그린다(가로 모드처럼 넓게).
  * 제스처 좌표는 회전된 뷰 기준으로 들어오므로 그대로 동작한다.
@@ -50,6 +53,8 @@ export default function FullscreenChartScreen() {
   const landscape = !winLandscape && rotation.on && rotation.win === winKey;
   // 차트의 보이는 구간 (기능 플래그 detailPolish 켜짐만): 가로로 돌리거나 접고 펼 때 차트가 새로 그려져도 보던 봉 수·위치를 잇는다
   const polish = useFeature("detailPolish", false);
+  // 이동평균선 기간·색 (3-39, 기능 플래그 maCustom): 켜졌을 때만 위 조작 줄 칩 띠에 '설정' 칩으로 여는 화면 이동을 넘긴다 (꺼지면 속성 없음 = 지금 그대로)
+  const maCustom = useFeature("maCustom", false);
   const [chartView] = useState(createChartViewMemo);
   const chartMemo = polish ? { viewMemo: chartView } : {};
   // 차트 아래·위 도구 모음(기간·봉 수·읽기 줄·오버레이 줄)의 실제 높이. 글자 크기·화면 폭에 따라 달라지므로 그려 본 뒤 잰다.
@@ -195,6 +200,7 @@ export default function FullscreenChartScreen() {
         compact
         backdrop={t.bg}
         {...chartMemo}
+        {...(maCustom ? { onMaSettings: openMaLines } : null)}
       />
       </View>
       <ChartNotice query={candles} />

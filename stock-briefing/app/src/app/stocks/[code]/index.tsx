@@ -61,6 +61,8 @@ type QuoteId = "open" | "prev" | "high" | "volume" | "low" | "cap" | "h52" | "l5
 const PHONE_ORDER: QuoteId[] = ["open", "prev", "high", "volume", "low", "cap", "h52", "l52", "per", "pbr", "eps", "bps", "dy", "dps"];
 /** 여러 칸에 위에서 아래로 나눌 때의 읽는 순서 (시가·고가·저가·전일·거래량 → 시가총액·52주 → 가치 지표) */
 const COLUMN_ORDER: QuoteId[] = ["open", "high", "low", "prev", "volume", "cap", "h52", "l52", "per", "pbr", "eps", "bps", "dy", "dps"];
+/** 이동평균선 기간·색 설정 화면 열기 (3-39, 기능 플래그 maCustom — 켜졌을 때만 차트에 넘긴다) */
+const openMaLines = () => router.push("/chart-lines");
 
 /**
  * 종목 상세: 시세 헤더, 52주 위치, 지표 격자, 캔들 차트, 4개 탭, 최근 브리핑.
@@ -132,6 +134,8 @@ export default function StockDetailScreen() {
   const fold = useFoldLayout();
   // 휴대폰·접은 화면 시세 머리 아래 보유 한 줄 (기능 플래그 detailPolish — 앱 fallback 꺼짐)
   const polish = useFeature("detailPolish", false);
+  // 이동평균선 기간·색 (3-39, 기능 플래그 maCustom): 켜졌을 때만 차트에 '설정' 칩으로 여는 화면 이동을 넘긴다 (꺼지면 속성 없음 = 지금 그대로)
+  const maCustom = useFeature("maCustom", false);
   // 지표 점수 (3-44, 기능 플래그 indicatorScores — 앱 fallback 꺼짐): 기업개요 탭 맨 위 요약 카드 + 'AI 기업개요 [AI가 쓴 글]' 제목,
   // 기술분석 탭 맨 위 추세 상세 카드. 꺼져 있으면 서버에 묻지도 않고 탭 내용이 지금 그대로다
   const scoresOn = useFeature("indicatorScores", false);
@@ -548,6 +552,7 @@ export default function StockDetailScreen() {
             quote={q}
             onFullscreen={openChart}
             {...chartMemo}
+            {...(maCustom ? { onMaSettings: openMaLines } : null)}
           />
           <ChartNotice query={candles} />
         </View>
@@ -663,6 +668,7 @@ export default function StockDetailScreen() {
       height={height}
       onFullscreen={() => router.push(`/stocks/${c}/chart?period=${period}` as never)}
       {...chartMemo}
+      {...(maCustom ? { onMaSettings: openMaLines } : null)}
     />
   );
   const holdNote = afterCost && baseEval?.afterCost ? "매도 비용 차감 · 토스 기준" : null;

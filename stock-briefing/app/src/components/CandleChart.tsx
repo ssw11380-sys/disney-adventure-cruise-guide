@@ -5,8 +5,9 @@ import { useFeature } from "@/api/hooks";
 import type { Candle, CandlePeriod, ChartUnit, Currency, Quote } from "@/api/types";
 import { krQuoteDate } from "@/lib/chartBasis";
 import { candleChartSize, estimateTextWidth, initialWindowIdx, isNarrowChart, needsFreshView, pastViewLabel, type ChartViewMemo, type ChartViewState } from "@/lib/chartLayout";
-import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs } from "@/lib/chartPrefs";
+import { PERIOD_OPTIONS, UNIT, WINDOWS, useChartPrefs, useMaLines } from "@/lib/chartPrefs";
 import { formatNumber } from "@/lib/format";
+import { drawnMa, withOn } from "@/lib/maLines";
 import { useSettings } from "@/lib/settings";
 import { useFoldLayout, useWindowClass } from "@/lib/useFoldLayout";
 import { isWide } from "@/lib/windowClass";
@@ -50,6 +51,7 @@ export function CandleChart({
   hasVolume = true,
   backdrop,
   viewMemo,
+  onMaSettings,
 }: {
   candles: Candle[] | undefined;
   period: CandlePeriod;
@@ -70,6 +72,8 @@ export function CandleChart({
   backdrop?: string;
   /** 화면이 들고 있는 보이는 구간 (ChartViewMemo). 없으면 이 차트 안에서만 기억한다 */
   viewMemo?: ChartViewMemo;
+  /** 이동평균선 설정 화면 열기 (3-39 maCustom — 화면이 플래그가 켜졌을 때만 넘긴다). 있고 이 부품의 maCustom 도 켜져 있으면 이동평균 칩 뒤에 '설정' 칩 */
+  onMaSettings?: () => void;
 }) {
   const t = useTheme();
   const { width: winW, height: winH } = useWindowDimensions();
@@ -85,11 +89,17 @@ export function CandleChart({
   // 종목 상세 다듬기 (기능 플래그 detailPolish — 앱 fallback 꺼짐): 휴대폰·접은 화면도 차트 폭은 잰 폭(오른쪽 28dp 빈 띠 없음, 높이는 그대로)·
   // 맞춘 가격 축(축 글자 오른쪽 빈 띠 없음), 과거로 옮기면 조작 줄에 '2일 전 · 최신으로' 버튼
   const polish = useFeature("detailPolish", false);
+  // 이동평균선 기간·색 (3-39, 기능 플래그 maCustom — 앱 fallback 꺼짐): 칩·선 색을 정하는 곳이 이 부품 하나라 여기서 읽는다.
+  // 켜지면 칩 6개 = 선 1~6 (기간·색은 새 화면 '이동평균선'에서 정해 기기에 저장, lib/chartPrefs useMaLines). 꺼지면 지금 그대로(MA_CHOICES·maPeriods)
+  const custom = useFeature("maCustom", false);
   const size = candleChartSize({ box, window: { width: winW, height: winH }, wide, width: widthProp, height, fill: polish });
   const width = size.width;
   const chartH = size.height;
   const fadeBg = backdrop ?? t.surface;
   const [prefs, setPrefs] = useChartPrefs();
+  const [lines, setLines] = useMaLines(prefs.maPeriods, custom);
+  // 차트에 그릴 선 (켠 선만 · 기간 작은 순 · 선마다 고른 색). 꺼짐이면 null → PriceChart 에 지금처럼 maPeriods 만
+  const drawn = useMemo(() => (custom ? drawnMa(lines, t.chart.maPalette) : null), [custom, lines, t]);
   // 설정 "미국 주식 원화로 보기"가 켜져 있으면 차트도 원화로. 과거 봉도 현재 환율로 환산한다(당시 환율 아님)
   const { showKrw } = useSettings();
   const fx = quote?.fxRate ?? (quote?.priceKrw && quote.price ? quote.priceKrw / quote.price : null);
@@ -181,15 +191,33 @@ export function CandleChart({
   const chipText = (active: boolean) => ({ color: active ? t.ink : t.muted, fontSize: font.tiny, fontWeight: active ? ("700" as const) : ("500" as const) });
   const overlayChips = (
     <>
-        {MA_CHOICES.map((per) => {
-          const on = prefs.maPeriods.includes(per);
-          return (
-            <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="switch" accessibilityLabel={`${per} 이동평균선`} accessibilityState={{ checked: on }} hitSlop={CHIP_SLOP} style={[styles.chip, roomy, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
-              <View style={[styles.swatch, { backgroundColor: maColor(t, per) }]} />
-              <Text style={chipText(on)}>{per}</Text>
-            </Pressable>
-          );
-        })}
+        {custom
+          ? // 3-39 maCustom: 선 1~6 차례로 (글 = 그 선의 기간, 네모 = 그 선의 색). 누르면 지금처럼 그 선을 켜고 끈다
+            lines.map((l, i) => {
+              const color = t.chart.maPalette[l.color] ?? t.muted;
+              return (
+                <Pressable key={`slot${i}`} onPress={() => setLines(withOn(lines, i, !l.on))} accessibilityRole="switch" accessibilityLabel={`${l.period} 이동평균선`} accessibilityState={{ checked: l.on }} hitSlop={CHIP_SLOP} style={[styles.chip, roomy, { borderColor: l.on ? color : t.line, opacity: l.on ? 1 : 0.6 }]}>
+                  <View style={[styles.swatch, { backgroundColor: color }]} />
+                  <Text style={chipText(l.on)}>{l.period}</Text>
+                </Pressable>
+              );
+            })
+          : MA_CHOICES.map((per) => {
+              const on = prefs.maPeriods.includes(per);
+              return (
+                <Pressable key={per} onPress={() => toggleMa(per)} accessibilityRole="switch" accessibilityLabel={`${per} 이동평균선`} accessibilityState={{ checked: on }} hitSlop={CHIP_SLOP} style={[styles.chip, roomy, { borderColor: on ? maColor(t, per) : t.line, opacity: on ? 1 : 0.6 }]}>
+                  <View style={[styles.swatch, { backgroundColor: maColor(t, per) }]} />
+                  <Text style={chipText(on)}>{per}</Text>
+                </Pressable>
+              );
+            })}
+        {custom && onMaSettings ? (
+          // 3-39 maCustom: 이동평균선 기간·색 설정 화면 열기 (화면 이동은 부르는 화면이 속성으로 준다 — 이 부품은 expo-router 를 부르지 않는다)
+          <Pressable onPress={onMaSettings} accessibilityRole="button" accessibilityLabel="이동평균선 기간·색 설정" hitSlop={CHIP_SLOP} style={chipStyle(false)}>
+            <Ionicons name="options-outline" size={font.tiny} color={t.muted} />
+            <Text style={chipText(false)}>설정</Text>
+          </Pressable>
+        ) : null}
         <Pressable onPress={() => setPrefs({ bollinger: !prefs.bollinger })} accessibilityRole="switch" accessibilityLabel="볼린저 밴드" accessibilityState={{ checked: prefs.bollinger }} hitSlop={CHIP_SLOP} style={chipStyle(prefs.bollinger)}>
           <Text style={chipText(prefs.bollinger)}>볼린저</Text>
         </Pressable>
@@ -266,7 +294,8 @@ export function CandleChart({
           height={chartH}
           view={clamped}
           onViewChange={setView}
-          maPeriods={prefs.maPeriods}
+          maPeriods={drawn ? drawn.periods : prefs.maPeriods}
+          {...(drawn ? { maColors: drawn.colors } : null)}
           showBollinger={prefs.bollinger}
           showVolume={prefs.volume && hasVolume}
           hasVolume={hasVolume}

@@ -55,6 +55,8 @@ export default function SettingsScreen() {
   const widgetLogOn = useFeature("widgetRefreshLog", false);
   // 잔고 촘촘 모드 (3-39): 켜져 있을 때만 '잔고 표시' 기본/촘촘 칩 (꺼져 있으면 저장된 값과 상관없이 잔고는 기본)
   const densityOn = useFeature("densityMode", false);
+  // 이동평균선 기간·색 (3-39): 켜져 있을 때만 '차트 이동평균선' 줄 + [설정] → 새 화면 '이동평균선'
+  const maOn = useFeature("maCustom", false);
   const health = useHealth();
   // 알림·토스 카드는 토큰이 맞는 서버에서만 보인다 (토큰이 없으면 서버가 401 을 주므로 묻지 않는다)
   const full = !!health.data && !health.data.limited;
@@ -214,6 +216,16 @@ export default function SettingsScreen() {
               <Chip key={o.value} label={o.label} accessibilityLabel={`잔고 표시 ${o.label}`} active={density === o.value} onPress={() => void setDensity(o.value)} />
             ))}
           </View>
+        </View>
+      ) : null}
+      {maOn ? (
+        // 3-39 이동평균선 선 6개의 기간·색 (플래그 maCustom). 차트 칩 '설정'과 같은 화면
+        <View style={styles.line}>
+          <View style={{ flex: 1, paddingRight: space.md }}>
+            <Text style={styles.label(t.ink)}>차트 이동평균선</Text>
+            <Muted style={{ fontSize: font.tiny }}>선 6개의 기간(2~240)과 색</Muted>
+          </View>
+          <Button title="설정" icon="options-outline" variant="secondary" compact accessibilityLabel="이동평균선 기간·색 설정" onPress={() => router.push("/chart-lines")} />
         </View>
       ) : null}
       <View style={{ gap: space.xxs, paddingTop: space.sm }}>

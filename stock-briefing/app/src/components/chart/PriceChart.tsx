@@ -41,6 +41,8 @@ export interface PriceChartProps {
   view: ChartView;
   onViewChange: (v: ChartView) => void;
   maPeriods: number[];
+  /** 이동평균선 색 (기간 → 색, 3-39 maCustom — CandleChart 가 정한다). 주지 않으면 maColor(t, 기간) — 지금 그대로 */
+  maColors?: Readonly<Record<number, string>>;
   showBollinger: boolean;
   /** 차트 아래 이동평균 값 줄 (전체 화면은 끔 — 칩 색으로 구분) */
   showMaValues?: boolean;
@@ -160,6 +162,8 @@ export function PriceChart(p: PriceChartProps) {
   const clipId = `priceClip${useId().replace(/[^A-Za-z0-9_-]/g, "")}`;
   // ── 지표 (전체 시계열로 계산해 구간 첫 봉부터 선이 보이게) ──
   const closes = useMemo(() => candles.map((c) => c.close), [candles]);
+  // 이동평균선 색: 선마다 고른 색(maColors — 3-39 maCustom) 이 있으면 그 색, 없으면 기간마다 고정 색 (지금 그대로)
+  const maColorOf = (per: number) => p.maColors?.[per] ?? maColor(t, per);
   const mas = useMemo(() => p.maPeriods.map((per) => ({ period: per, values: sma(closes, per) })), [closes, p.maPeriods]);
   const bb = useMemo(() => (p.showBollinger ? bollinger(closes, 20, 2) : null), [closes, p.showBollinger]);
   const rsiS = useMemo(() => (p.indicator === "rsi" ? rsi(closes, 14) : null), [closes, p.indicator]);
@@ -477,7 +481,7 @@ export function PriceChart(p: PriceChartProps) {
               <Path d={candlePaths.downBody} fill={downColor} />
               {/* 이동평균 */}
               {mas.map((m) => (
-                <Path key={m.period} d={linePath(m.values, yOf)} stroke={maColor(t, m.period)} strokeWidth={1.2} fill="none" />
+                <Path key={m.period} d={linePath(m.values, yOf)} stroke={maColorOf(m.period)} strokeWidth={1.2} fill="none" />
               ))}
             </G>
             {/* 52주 고/저 · 평단 · 현재가 선 (글자는 선을 모두 그린 뒤에 — 다른 선이 글자를 가로지르지 않게) */}
@@ -495,7 +499,7 @@ export function PriceChart(p: PriceChartProps) {
                 color={l.key === "avg" ? t.gold : t.muted}
                 bg={labelBg}
                 bold={l.key === "avg" && avgIn}
-                swatch={l.ma !== undefined ? maColor(t, l.ma) : undefined}
+                swatch={l.ma !== undefined ? maColorOf(l.ma) : undefined}
               />
             ))}
             {/* 거래량 */}
@@ -599,9 +603,9 @@ export function PriceChart(p: PriceChartProps) {
           part="bottom"
           />
           {p.maItems ? (
-            <MaItems mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} />
+            <MaItems mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} colorOf={maColorOf} />
           ) : (
-            <MaLine mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} />
+            <MaLine mas={mas} index={cross ? start + cross.i : end - 1} currency={currency} period={p.period} colorOf={maColorOf} />
           )}
         </>
       ) : null}
@@ -769,7 +773,7 @@ function Readout({
  * 차트 아래 이동평균 값 (십자선이 잡은 봉, 없으면 마지막 봉). 색은 네모에만 — 선 색은 글자 대비 4.5 를 보장하지 않는다.
  * 휴대폰·접힌 화면(넓은 창이 아님): 3-42 이전과 똑같은 한 줄 글자 (두 줄까지, 공백에서 줄이 바뀐다)
  */
-function MaLine({ mas, index, currency, period }: { mas: { period: number; values: Series }[]; index: number; currency: ChartUnit; period: CandlePeriod }) {
+function MaLine({ mas, index, currency, period, colorOf }: { mas: { period: number; values: Series }[]; index: number; currency: ChartUnit; period: CandlePeriod; colorOf: (per: number) => string }) {
   const t = useTheme();
   if (!mas.length) return null;
   const unit = period === "W" ? "주" : period === "M" ? "월" : period === "D" ? "일" : "봉";
@@ -779,7 +783,7 @@ function MaLine({ mas, index, currency, period }: { mas: { period: number; value
         const v = m.values[index];
         return (
           <Text key={m.period}>
-            <Ionicons name="square" size={font.tiny} color={maColor(t, m.period)} /> {m.period}
+            <Ionicons name="square" size={font.tiny} color={colorOf(m.period)} /> {m.period}
             {unit} {v === null || v === undefined ? "-" : formatChartValue(v, currency)}{"  "}
           </Text>
         );
@@ -792,14 +796,14 @@ function MaLine({ mas, index, currency, period }: { mas: { period: number; value
  * 넓은 창의 이동평균 값 (폴드 진단 24번). 항목('■ 120일 77,120원')마다 따로 묶어 줄바꿈 줄(flexWrap)에 놓는다 →
  * 글자를 키워도 항목 단위로만 다음 줄로 가고, '120일'과 값이 떨어지거나 색 네모만 윗줄에 남지 않는다 (lib/chartLayout maLegendItems)
  */
-function MaItems({ mas, index, currency, period }: { mas: { period: number; values: Series }[]; index: number; currency: ChartUnit; period: CandlePeriod }) {
+function MaItems({ mas, index, currency, period, colorOf }: { mas: { period: number; values: Series }[]; index: number; currency: ChartUnit; period: CandlePeriod; colorOf: (per: number) => string }) {
   const t = useTheme();
   if (!mas.length) return null;
   return (
     <View style={styles.maLine}>
       {maLegendItems(mas, index, currency, period).map((it) => (
         <View key={it.period} style={styles.maItem}>
-          <Ionicons name="square" size={font.tiny} color={maColor(t, it.period)} />
+          <Ionicons name="square" size={font.tiny} color={colorOf(it.period)} />
           <Text style={[styles.readoutText, { color: t.muted }]}>{it.text}</Text>
         </View>
       ))}
