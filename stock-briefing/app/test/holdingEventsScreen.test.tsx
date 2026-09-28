@@ -85,7 +85,7 @@ const pick = await import("@/lib/briefingPick");
 const readStore = await import("@/lib/briefingRead");
 const { dark, space, fontCap } = await import("@/tokens");
 
-type Case = { name: string; events: AccountEvents; app: { title: string; lines: string[]; empty: string | null; notes: string[]; basis: string; speech: { head: string; lines: string[]; basis: string } } };
+type Case = { name: string; events: AccountEvents; app: { title: string; sub: string; lines: string[]; empty: string | null; notes: string[]; basis: string; speech: { head: string; lines: string[]; basis: string } } };
 type WeekCase = { name: string; week: NonNullable<NonNullable<AccountBriefing["headline"]>["week"]>; app: { text: string; speech: string } };
 const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/holdingEvents.json", import.meta.url), "utf8")) as { cases: Case[]; week: WeekCase[] };
 const OCT = fixture.cases.find((c) => c.name === "oct26Earnings")!;
@@ -180,7 +180,7 @@ describe("계좌 상세: '다가오는 일정' 카드", () => {
     const card = upcoming(r)[0]!;
     expect(chunkRows(card)).toEqual(OCT.app.lines);
     const muted = allOf(card).filter((n) => n.type === "Muted").map(rawOf);
-    expect(muted).toEqual([...OCT.app.notes, OCT.app.basis]);
+    expect(muted).toEqual([OCT.app.sub, ...OCT.app.notes, OCT.app.basis]);
     const spoken = allOf(card).filter((n) => n.props.accessible === true).map((n) => n.props.accessibilityLabel);
     expect(spoken).toEqual([OCT.app.speech.head, ...OCT.app.speech.lines, OCT.app.speech.basis]);
   });
@@ -218,17 +218,17 @@ describe("계좌 상세: '다가오는 일정' 카드", () => {
   it("없음·받지 못함·일부만: 한 줄 또는 작은 글", () => {
     h.detail = detailOf(NONE.events);
     const none = upcoming(render(<AccountBriefingBody numId={12} layout="stack" />))[0]!;
-    expect(allOf(none).filter((n) => n.type === "Muted").map(rawOf)).toEqual([NONE.app.empty, NONE.app.basis]);
+    expect(allOf(none).filter((n) => n.type === "Muted").map(rawOf)).toEqual([NONE.app.sub, NONE.app.empty, NONE.app.basis]);
     expect(chunkRows(none)).toEqual([]);
     cleanupRenders();
     h.detail = detailOf(FAILED.events);
     const failed = upcoming(render(<AccountBriefingBody numId={12} layout="stack" />))[0]!;
-    expect(allOf(failed).filter((n) => n.type === "Muted").map(rawOf)).toEqual([FAILED.app.empty, ...FAILED.app.notes, FAILED.app.basis]);
+    expect(allOf(failed).filter((n) => n.type === "Muted").map(rawOf)).toEqual([FAILED.app.sub, FAILED.app.empty, ...FAILED.app.notes, FAILED.app.basis]);
     cleanupRenders();
     h.detail = detailOf(PARTIAL.events);
     const part = upcoming(render(<AccountBriefingBody numId={12} layout="stack" />))[0]!;
     expect(chunkRows(part)).toEqual(PARTIAL.app.lines);
-    expect(allOf(part).filter((n) => n.type === "Muted").map(rawOf)).toEqual([...PARTIAL.app.notes, PARTIAL.app.basis]);
+    expect(allOf(part).filter((n) => n.type === "Muted").map(rawOf)).toEqual([PARTIAL.app.sub, ...PARTIAL.app.notes, PARTIAL.app.basis]);
   });
 
   it("줄이 많으면 8줄 + '외 N건'", () => {
@@ -310,7 +310,8 @@ describe("꺼짐·예전 기록: 지금 그대로", () => {
 });
 
 describe("브리핑 탭 계좌 카드·줄 '이번 주 일정' 한 줄", () => {
-  const lineOf = (r: R) => r.all().filter((n) => n.type === "View" && kids(n).some((k) => k.type === "Text" && rawOf(k).startsWith("이번 주 일정"))).map((v) => kids(v).map(rawOf).join(" "));
+  /** 이번 주 줄 (묶음 끝 줄바꿈 없는 공백은 보통 공백으로 읽어 픽스처와 견줌) */
+  const lineOf = (r: R) => r.all().filter((n) => n.type === "View" && kids(n).some((k) => k.type === "Text" && rawOf(k).startsWith("이번 주 일정"))).map((v) => kids(v).map(rawOf).join(" ").split(NBSP).join(" "));
 
   it("접은 화면 맨 위 계좌 줄(475×751): '이번 주 일정 · 마이크로소프트 실적 10/29(목) · 메타 실적 10/29(목) 외 1건' · 화면 읽기 조각은 기여 뒤·'자세히 보기' 앞", async () => {
     h.flags.briefingCompactTop = true;
@@ -368,5 +369,8 @@ describe("브리핑 탭 계좌 카드·줄 '이번 주 일정' 한 줄", () => {
     expect(render(<AccountBriefingCard briefing={{ ...withWeek(WEEK.week), status: "failed" }} week />).text()).not.toContain("이번 주");
     const r = render(<AccountBriefingCard briefing={withWeek(WEEK.week)} week />);
     for (const t of r.all().filter((n) => n.type === "Text" && /이번 주|실적/.test(rawOf(n)))) expect([dark.up, dark.down]).not.toContain(flat(t.props.style).color);
+    // 묶음 끝 '·' 앞은 줄바꿈 없는 공백 · 마지막 묶음에는 '·' 없음
+    const parts = r.all().filter((n) => n.type === "Text" && /^(이번 주 일정|마이크로소프트 실적|메타 실적)/.test(rawOf(n))).map(rawOf);
+    expect(parts).toEqual([`이번 주 일정${NBSP}·`, `마이크로소프트 실적 10/29(목)${NBSP}·`, "메타 실적 10/29(목) 외 1건"]);
   });
 });

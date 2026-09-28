@@ -281,7 +281,7 @@ export function SinceLineText({ briefing, cap }: { briefing: AccountBriefing; ca
 
 /**
  * 브리핑 3차 5 (플래그 holdingEvents): '이번 주 일정 · 마이크로소프트 실적 10/29(목) · 메타 실적 10/29(목) 외 1건' 한 줄
- * (headline.week — 그 주 첫 오전 계좌 브리핑이고 이번 주 일정이 있을 때만, 없으면 그리지 않음). 묶음째 다음 줄로(구분점은 앞 묶음 끝에).
+ * (headline.week — 그 주 첫 오전 계좌 브리핑이고 이번 주 일정이 있을 때만, 없으면 그리지 않음). 묶음째 다음 줄로(구분점은 앞 묶음 끝에 — 그 앞은 줄바꿈 없는 공백).
  * 색 없음. 누르는 곳이 따로 없다 (줄·카드 전체가 링크 하나 — 누르면 상세의 '다가오는 일정')
  */
 export function WeekLineText({ briefing, cap }: { briefing: AccountBriefing; cap?: number }) {
@@ -292,7 +292,7 @@ export function WeekLineText({ briefing, cap }: { briefing: AccountBriefing; cap
     <View style={styles.rowNums}>
       {l.parts.map((p, i) => (
         <Text key={i} style={{ color: i === 0 ? t.muted : t.sub, fontSize: font.small }} maxFontSizeMultiplier={cap}>
-          {i < l.parts.length - 1 ? `${p} ·` : p}
+          {i < l.parts.length - 1 ? `${p}\u00a0·` : p}
         </Text>
       ))}
     </View>

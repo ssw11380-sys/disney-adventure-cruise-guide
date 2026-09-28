@@ -24,21 +24,32 @@ export const KR_DIVIDEND_NOTE = "국내 종목 배당은 보통 기준일 뒤에
 /** 모두 받지 못함 — 계좌 브리핑마다 다시 받으므로 사실 */
 export const EVENTS_FAILED = "일정을 받지 못했습니다. 다음 브리핑 때 다시 받습니다.";
 export const EARNINGS_FAILED = "실적 발표일을 받지 못했습니다. 다음 브리핑 때 다시 받습니다.";
+/** 배당 일정만 모두 받지 못함 (실적 발표일은 받음) */
+export const DIVIDENDS_FAILED = "배당 일정을 받지 못했습니다. 다음 브리핑 때 다시 받습니다.";
+/** 받지 못한 종목 이름을 보이는 수 (넘으면 '외 N종목') */
+export const FAILED_NAMES_MAX = 5;
 export const WEEK_HEAD = "이번 주 일정";
 
-/** 카드 제목 '다가오는 일정 (보유 종목 · 30일 안)' */
-export function eventsTitle(days: number): string {
-  return `${EVENTS_HEAD} (보유 종목 · ${days}일 안)`;
+/** 카드 제목 아래 작은 글 '보유 종목 · 30일 안' (설계의 '다가오는 일정 (보유 종목 · 30일 안)'을 두 줄로 — 글자 200% 에서 제목이 낱말 가운데서 꺾이지 않게) */
+export function eventsSub(days: number): string {
+  return `보유 종목 · ${days}일 안`;
 }
 
-/** 일정이 없을 때 한 줄 */
-export function eventsNone(e: Pick<AccountEvents, "days" | "earnings" | "earningsFailed">): string {
-  return e.earnings && !e.earningsFailed ? `${e.days}일 안에 알려진 배당락일·실적 발표일이 없습니다.` : `${e.days}일 안에 알려진 배당락일이 없습니다.`;
+/**
+ * 일정이 없을 때 한 줄: 받은 것만 말한다 — 배당·실적 모두 받음 '… 배당락일·실적 발표일이 없습니다.', 배당만 받음(실적 꺼짐·받지 못함)
+ * '… 배당락일이 없습니다.', 실적만 받음(배당을 모두 받지 못함) '… 실적 발표일이 없습니다.'
+ */
+export function eventsNone(e: Pick<AccountEvents, "days" | "earnings" | "earningsFailed">, dividendsOk = true): string {
+  const earnings = e.earnings && !e.earningsFailed;
+  const what = dividendsOk && earnings ? "배당락일·실적 발표일" : earnings ? "실적 발표일" : "배당락일";
+  return `${e.days}일 안에 알려진 ${what}이 없습니다.`;
 }
 
-/** 배당 일정을 받지 못한 종목 (일부만) */
+/** 배당 일정을 받지 못한 종목 (일부만 — 이름은 FAILED_NAMES_MAX 개까지, 넘으면 '외 N종목') */
 export function failedNote(names: string[]): string {
-  return `배당 일정을 받지 못한 종목: ${names.join(", ")} (다음 브리핑 때 다시 받습니다)`;
+  const shown = names.slice(0, FAILED_NAMES_MAX);
+  const more = names.length - shown.length;
+  return `배당 일정을 받지 못한 종목: ${shown.join(", ")}${more > 0 ? ` 외 ${more}종목` : ""} (다음 브리핑 때 다시 받습니다)`;
 }
 
 /** 토스증권·네이버 배당락일이 달라 뺀 종목 */
@@ -101,7 +112,10 @@ function stamp(iso: string): { text: string; speech: string } | null {
 }
 
 export interface EventsView {
+  /** '다가오는 일정' */
   title: string;
+  /** '보유 종목 · 30일 안' */
+  sub: string;
   /** 보이는 줄 (EVENTS_LINES_MAX 까지) */
   lines: EventLine[];
   /** 넘친 줄 수 ('외 N건') */
@@ -121,23 +135,24 @@ export interface EventsView {
 /**
  * 계좌 상세 '다가오는 일정' 카드에 그릴 글과 읽는 말 (설계 '브리핑 3차 5'):
  *  - 줄: 날짜 순 EVENTS_LINES_MAX 개까지, 넘으면 '외 N건'
- *  - 없음: '30일 안에 알려진 배당락일·실적 발표일이 없습니다.'(실적 켬) · '… 배당락일이 없습니다.'(끔).
- *    배당 일정을 모두 받지 못했으면(실적도 끔이거나 받지 못함) '일정을 받지 못했습니다. 다음 브리핑 때 다시 받습니다.'
+ *  - 없음: 받은 것만 말한다 — '30일 안에 알려진 배당락일·실적 발표일이 없습니다.'(실적 켬) · '… 배당락일이 없습니다.'(끔·실적을 받지 못함) ·
+ *    '… 실적 발표일이 없습니다.'(배당 일정을 모두 받지 못함). 배당 일정을 모두 받지 못했고 실적도 끔이거나 받지 못했으면 '일정을 받지 못했습니다. 다음 브리핑 때 다시 받습니다.'
  *  - 작은 글: 배당락일 뜻(배당락일 줄이 있을 때) · 실적 발표일 안내(실적을 넣었을 때) 또는 '실적 발표일을 받지 못했습니다 …' ·
- *    일부 종목을 받지 못함 · 두 출처가 달라 뺀 종목 · 국내 종목 배당(국내 종목이 있을 때)
+ *    배당 일정을 모두 받지 못함(실적은 받음) 또는 일부 종목을 받지 못함(이름 5개까지) · 두 출처가 달라 뺀 종목 · 국내 종목 배당(국내 종목이 있을 때)
  *  - 기준: '9/28 08:38 기준 · 출처 토스증권·네이버' (줄의 출처 — 줄이 없으면 토스증권)
  */
 export function eventsView(e: AccountEvents): EventsView {
   const all = e.items.map(eventLine);
   const lines = all.slice(0, EVENTS_LINES_MAX);
   const holdings = e.kr + e.us;
-  const allFailed = holdings > 0 && e.failed.length >= holdings && (!e.earnings || e.earningsFailed);
-  const empty = all.length ? null : allFailed ? EVENTS_FAILED : eventsNone(e);
-  const partFailed = !allFailed && e.failed.length > 0;
+  const dividendsFailed = holdings > 0 && e.failed.length >= holdings;
+  const earningsOk = e.earnings && !e.earningsFailed;
+  const allFailed = dividendsFailed && !earningsOk;
+  const empty = all.length ? null : allFailed ? EVENTS_FAILED : eventsNone(e, !dividendsFailed);
   const notes = [
     e.items.some((i) => i.kind === "exDividend") ? EX_DIVIDEND_NOTE : null,
     e.earnings ? (e.earningsFailed ? (allFailed ? null : EARNINGS_FAILED) : EARNINGS_NOTE) : null,
-    partFailed ? failedNote(e.failed.map((f) => f.name)) : null,
+    allFailed || !e.failed.length ? null : dividendsFailed ? DIVIDENDS_FAILED : failedNote(e.failed.map((f) => f.name)),
     e.conflicts.length ? conflictNote(e.conflicts.map((c) => c.name)) : null,
     e.kr > 0 ? KR_DIVIDEND_NOTE : null,
   ].filter((x): x is string => x !== null);
@@ -148,9 +163,9 @@ export function eventsView(e: AccountEvents): EventsView {
   }
   const src = sources.size ? ["토스증권", "네이버"].filter((s) => sources.has(s)) : ["토스증권"];
   const at = stamp(e.asOf);
-  const title = eventsTitle(e.days);
   return {
-    title,
+    title: EVENTS_HEAD,
+    sub: eventsSub(e.days),
     lines,
     more: all.length - lines.length,
     empty,

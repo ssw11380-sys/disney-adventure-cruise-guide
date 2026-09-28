@@ -4,6 +4,7 @@ import type { AccountBriefing, AccountEventItem, AccountEvents } from "@/api/typ
 import { accountCardSpeech } from "@/lib/accountBriefing";
 import {
   amountText,
+  DIVIDENDS_FAILED,
   EARNINGS_FAILED,
   EARNINGS_NOTE,
   eventLine,
@@ -23,7 +24,7 @@ import {
 type Case = {
   name: string;
   events: AccountEvents;
-  app: { title: string; lines: string[]; more: number; empty: string | null; notes: string[]; basis: string; speech: { head: string; lines: string[]; basis: string } };
+  app: { title: string; sub: string; lines: string[]; more: number; empty: string | null; notes: string[]; basis: string; speech: { head: string; lines: string[]; basis: string } };
 };
 type WeekCase = { name: string; week: NonNullable<NonNullable<AccountBriefing["headline"]>["week"]>; app: { parts: string[]; text: string; speech: string } };
 const fixture = JSON.parse(readFileSync(new URL("../../shared/fixtures/holdingEvents.json", import.meta.url), "utf8")) as { cases: Case[]; week: WeekCase[] };
@@ -38,6 +39,7 @@ describe("공용 픽스처: 서버가 저장한 일정 → 카드 글·화면 �
     it(c.name, () => {
       const v = eventsView(c.events);
       expect(v.title).toBe(c.app.title);
+      expect(v.sub).toBe(c.app.sub);
       expect(v.lines.map((l) => l.text)).toEqual(c.app.lines);
       expect(v.lines.map((l) => l.parts.join(" · "))).toEqual(c.app.lines);
       expect(v.more).toBe(c.app.more);
@@ -92,12 +94,24 @@ describe("줄 모양", () => {
     expect(v.notes).toEqual([EARNINGS_FAILED]);
   });
 
-  it("배당 일정을 모두 받지 못했지만 실적 발표일은 받음: '받지 못했습니다'가 아니라 없음 한 줄 + 받지 못한 종목", () => {
-    const v = eventsView({ asOf: "2026-09-28T08:38:00+09:00", days: 30, items: [], earnings: true, failed: [{ code: "TSLA", name: "테슬라" }], earningsFailed: false, conflicts: [], kr: 0, us: 1, week: null });
-    expect(v.empty).toBe("30일 안에 알려진 배당락일·실적 발표일이 없습니다.");
-    expect(v.notes).toEqual([EARNINGS_NOTE, "배당 일정을 받지 못한 종목: 테슬라 (다음 브리핑 때 다시 받습니다)"]);
+  it("배당 일정을 모두 받지 못했지만 실적 발표일은 받음: 없음 한 줄은 받은 실적만 말하고('배당락일이 없습니다'라고 하지 않음) '배당 일정을 받지 못했습니다' 작은 글", () => {
+    const failed = [{ code: "TSLA", name: "테슬라" }, { code: "AAPL", name: "애플" }];
+    const v = eventsView({ asOf: "2026-09-28T08:38:00+09:00", days: 30, items: [], earnings: true, failed, earningsFailed: false, conflicts: [], kr: 0, us: 2, week: null });
+    expect(v.empty).toBe("30일 안에 알려진 실적 발표일이 없습니다.");
+    expect(v.notes).toEqual([EARNINGS_NOTE, DIVIDENDS_FAILED]);
+    // 실적 발표 줄이 있어도 같은 작은 글 (이름을 모두 늘어놓지 않음)
+    const withEarnings = eventsView({ asOf: "2026-10-26T08:38:00+09:00", days: 30, items: [{ code: "AAPL", name: "애플", kind: "earnings", date: "2026-10-30", kstTime: "05:00", timeText: "오전 5시 이후", usDate: false, source: "toss" }], earnings: true, failed, earningsFailed: false, conflicts: [], kr: 0, us: 2, week: null });
+    expect(withEarnings.empty).toBeNull();
+    expect(withEarnings.notes).toEqual([EARNINGS_NOTE, DIVIDENDS_FAILED]);
     // 실적 꺼짐이면 모두 받지 못한 것
-    expect(eventsView({ asOf: "2026-09-28T08:38:00+09:00", days: 30, items: [], earnings: false, failed: [{ code: "TSLA", name: "테슬라" }], earningsFailed: false, conflicts: [], kr: 0, us: 1, week: null }).empty).toBe(EVENTS_FAILED);
+    expect(eventsView({ asOf: "2026-09-28T08:38:00+09:00", days: 30, items: [], earnings: false, failed, earningsFailed: false, conflicts: [], kr: 0, us: 2, week: null }).empty).toBe(EVENTS_FAILED);
+  });
+
+  it("일부 종목만 받지 못함: 이름은 5개까지, 넘으면 '외 N종목'", () => {
+    const failed = ["가", "나", "다", "라", "마", "바", "사"].map((n, i) => ({ code: `C${i}`, name: `종목${n}` }));
+    const v = eventsView({ asOf: "2026-09-28T08:38:00+09:00", days: 30, items: [], earnings: false, failed, earningsFailed: false, conflicts: [], kr: 0, us: 10, week: null });
+    expect(v.empty).toBe("30일 안에 알려진 배당락일이 없습니다.");
+    expect(v.notes).toEqual(["배당 일정을 받지 못한 종목: 종목가, 종목나, 종목다, 종목라, 종목마 외 2종목 (다음 브리핑 때 다시 받습니다)"]);
   });
 
   it("기준 시각을 읽지 못하면 시각 조각을 뺀다 (틀린 시각을 보이지 않게)", () => {
@@ -144,7 +158,10 @@ describe("문구 검사 (사실만 — 매매·전망·판단하는 말 없음)"
       KR_DIVIDEND_NOTE,
       EVENTS_FAILED,
       EARNINGS_FAILED,
-      ...fixture.cases.flatMap((c) => [c.app.title, ...c.app.lines, c.app.empty ?? "", ...c.app.notes, c.app.basis, c.app.speech.head, ...c.app.speech.lines, c.app.speech.basis]),
+      DIVIDENDS_FAILED,
+      "배당 일정을 받지 못한 종목: 종목가, 종목나, 종목다, 종목라, 종목마 외 2종목 (다음 브리핑 때 다시 받습니다)",
+      "토스증권과 네이버의 배당락일이 달라 뺀 종목: 마이크로소프트",
+      ...fixture.cases.flatMap((c) => [c.app.title, c.app.sub, ...c.app.lines, c.app.empty ?? "", ...c.app.notes, c.app.basis, c.app.speech.head, ...c.app.speech.lines, c.app.speech.basis]),
       ...fixture.week.flatMap((c) => [c.app.text, c.app.speech]),
     ];
     for (const t of texts) {

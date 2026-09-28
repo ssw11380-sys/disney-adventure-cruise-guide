@@ -682,7 +682,7 @@ function ScheduleCard({ s, asOf }: { s: AccountSchedule; asOf: string }) {
 }
 
 /**
- * 브리핑 3차 5 (플래그 holdingEvents): '다가오는 일정 (보유 종목 · 30일 안)' 카드 — '오늘 일정' 바로 아래(넓은 창은 오른쪽 칸).
+ * 브리핑 3차 5 (플래그 holdingEvents): '다가오는 일정' + '보유 종목 · 30일 안' 카드 — '오늘 일정' 바로 아래(넓은 창은 오른쪽 칸).
  * 서버가 계좌 브리핑을 만들 때 받아 둔 일정 그대로: 날짜 순 줄(8개까지, '외 N건') '9/30(수) · 리얼티인컴 배당락일 (미국 날짜) · 주당 $0.2715' ·
  * '10/29(목) 오전 5시 이후 · 마이크로소프트 실적 발표 (예정)'(실적 발표일을 넣었을 때만), 없으면 한 줄, 작은 글(뜻·받지 못한 것·국내 배당), 기준 시각·출처.
  * 누르는 곳 없음. 색 없음(등락이 아님). 좁은 칸·큰 글씨는 ' · ' 묶음째 줄바꿈. 화면 읽기는 제목 묶음·줄마다·기준 한 문장씩
@@ -697,7 +697,8 @@ function UpcomingCard({ e }: { e: AccountEvents }) {
     <Card>
       <View accessible accessibilityLabel={v.headSpeech} style={styles.upcomingHead}>
         <SectionTitle>{v.title}</SectionTitle>
-        {v.empty ? <Muted>{v.empty}</Muted> : null}
+        <Muted>{v.sub}</Muted>
+        {v.empty ? <Muted style={styles.upcomingEmpty}>{v.empty}</Muted> : null}
       </View>
       {v.lines.map((l) => (
         <View key={l.key} accessible accessibilityLabel={l.speech} style={[styles.upcomingRow, { borderBottomColor: t.line }]}>
@@ -797,5 +798,6 @@ const styles = StyleSheet.create({
   exposure: { gap: space.xxs, paddingTop: space.s, borderTopWidth: StyleSheet.hairlineWidth },
   // 브리핑 3차 5 다가오는 일정 카드
   upcomingHead: { gap: space.xxs },
+  upcomingEmpty: { marginTop: space.xs },
   upcomingRow: { paddingVertical: space.s, borderBottomWidth: StyleSheet.hairlineWidth },
 });
