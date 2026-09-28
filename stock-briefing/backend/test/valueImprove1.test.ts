@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildKrReference, krCandidates, krCommonStock, krExclusion, krIsReit, type KrMember } from "../src/analysis/krValue.js";
@@ -224,6 +225,27 @@ describe("[2] 방향 말 · 두 쪽 문장 (valueDirectionWords · valueFamilyTw
     expect(familyRow(fam("payout", [e1, ms("E2", 72)], 77), ON).text).toBe("막대를 길게 만든 지표: 배당수익률 82(비교 회사 77%가 0.0%) · 주식 수 변화 72");
     expect(twoSidedLine(true, [["PER", 71]])).toBe("막대를 길게 만든 지표: PER 71");
     expect(twoSidedMidLine([["ROE", 49], ["ROA", 55]])).toBe("가운데쯤(34~66)인 지표: ROE 49 · ROA 55");
+  });
+
+  it("검사: 공용 픽스처 모든 묶음에서 대표 문장이 묶음 띠와 같은 쪽 (높은 편에 '짧게' 없음 · 낮은 편에 '길게' 없음 — 소수 쪽 문장 0건)", () => {
+    const fx = JSON.parse(readFileSync(new URL("../../shared/fixtures/indicatorScores.json", import.meta.url), "utf8")) as { cases: Record<string, ScoresResponse> };
+    let checked = 0;
+    for (const [k, c] of Object.entries(fx.cases)) {
+      if (k.endsWith("_stage1Off")) continue;
+      for (const f of c.value.families ?? []) {
+        if (f.score === null || !/막대를|가운데쯤\(34~66\)/.test(f.text)) continue;
+        checked++;
+        if (f.score >= 67) expect(f.text, `${k} ${f.key}`).not.toContain("막대를 짧게");
+        if (f.score <= 33) expect(f.text, `${k} ${f.key}`).not.toContain("막대를 길게");
+        // 적힌 위치 점수는 그 묶음 지표의 점수와 같다
+        for (const m of f.text.matchAll(/([^:·\n]+?) (\d+)(?:\([^)]*\))?(?= ·|\n|$)/g)) {
+          const name = m[1]!.trim();
+          const row = f.metrics.find((x) => x.name.replace(/ \([^)]*\)$/, "") === name);
+          if (row) expect(row.score, `${k} ${name}`).toBe(Number(m[2]));
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(50);
   });
 
   it("가치 함정 표시도 막대 말로 (끄면 예전 글)", () => {
