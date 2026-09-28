@@ -9,7 +9,7 @@ import { authErrorView } from "@/lib/authErrors";
 import { confirmError, EMAIL_NOTE, emailError, fieldMessage, HELP, loginIdError, normalizeEmail, normalizeLoginId, passwordError, signupErrors, type SignupField } from "@/lib/authRules";
 import { markFailOpen, saveSession, setRememberPreference } from "@/lib/session";
 import { useSettings } from "@/lib/settings";
-import { authColors as C, authFont, fontCap } from "@/tokens";
+import { authColors as C, authFont, authLayout, fontCap } from "@/tokens";
 
 /**
  * 회원가입 (계정 A단계). 네 칸만: 아이디 · 비밀번호 · 비밀번호 확인 · 이메일. 가입하면 바로 로그인(자동 로그인 켬).
@@ -75,7 +75,7 @@ export default function SignupScreen() {
   };
 
   return (
-    <AuthFrame top="header" title="회원가입">
+    <AuthFrame top="header" title="회원가입" lead="아이디 · 비밀번호 · 이메일만 있으면 돼요">
       <AuthField
         label="아이디"
         value={v.loginId}
@@ -130,6 +130,7 @@ export default function SignupScreen() {
         textContentType="emailAddress"
         returnKeyType="go"
         onSubmitEditing={() => void submit()}
+        revealBelow={authLayout.fieldGap + authLayout.buttonH}
       />
       {message ? <AuthNotice text={message} action={showServer ? { title: "서버 설정 열기", onPress: () => router.push("/server") } : undefined} /> : null}
       <AuthButton title="가입하고 시작하기" onPress={() => void submit()} loading={busy} />

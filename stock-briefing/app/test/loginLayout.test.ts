@@ -1,55 +1,56 @@
 import { describe, expect, it } from "vitest";
 import { ApiRequestError } from "@/api/client";
 import { AUTH_TEXT, authErrorView } from "@/lib/authErrors";
-import { heroCandles, heroLayout, LIMIT_COUNT } from "@/lib/loginHero";
+import { heroCandles, heroLayout, LIMIT_COUNT, logoBox } from "@/lib/loginHero";
 
 /**
- * 로그인 화면 배치 (hero-spec.md 4.2 표의 네 크기 — 위 28·아래 24, 933×704 는 위 24·아래 16)와 그림 기하(5장), 오류 문구
+ * 로그인 화면 배치 (hero-spec.md 4.2 표의 네 크기 — 위 28·아래 24, 933×704 는 위 24·아래 16)와 그림 기하(5장), 오류 문구.
+ * 한 칸 그림 높이는 명세 0.42 가 아니라 0.40 (360×752 폰에서 '서버 설정'·고지 문구까지 한 화면에 들어오게 — tokens authLayout.heroRatio)
  */
 describe("로그인 배치 (hero-spec 4.2)", () => {
-  it("360×752 한 칸: 그림 322(안전 영역 포함), 입력 x 24 · 폭 312, 로고 30", () => {
+  it("360×752 한 칸: 그림 308(안전 영역 포함), 입력 x 24 · 폭 312, 로고 30", () => {
     const l = heroLayout(360, 752, { top: 28, bottom: 24 });
-    expect(l).toMatchObject({ mode: "one", gutter: 24, formW: 312, formX: 24, heroW: 360, heroH: 322, logoSize: 30, logoX: 24, logoY: 44 });
-    expect(l.plot).toEqual({ x0: 24, y0: 40, w: 312, h: 270 });
+    expect(l).toMatchObject({ mode: "one", gutter: 24, formW: 312, formX: 24, heroW: 360, heroH: 308, logoSize: 30, logoX: 24, logoY: 44 });
+    expect(l.plot).toEqual({ x0: 24, y0: 40, w: 312, h: 256 });
   });
   it("475×751 한 칸 (접은 폴드8): 입력 27.5 · 420", () => {
     const l = heroLayout(475, 751, { top: 28, bottom: 24 });
-    expect(l).toMatchObject({ mode: "one", formW: 420, formX: 27.5, heroH: 322, logoSize: 30 });
-    expect(l.plot).toEqual({ x0: 24, y0: 40, w: 427, h: 270 });
+    expect(l).toMatchObject({ mode: "one", formW: 420, formX: 27.5, heroH: 308, logoSize: 30 });
+    expect(l.plot).toEqual({ x0: 24, y0: 40, w: 427, h: 256 });
   });
   it("933×704 두 칸 (펼친 폴드8 가로): 왼쪽 그림 513 · 오른쪽 입력 545 · 356, 로고 34", () => {
     const l = heroLayout(933, 704, { top: 24, bottom: 16 });
     expect(l).toMatchObject({ mode: "two", formW: 356, formX: 545, heroW: 513, heroH: 704, logoSize: 34, logoX: 40, logoY: 143.5 });
     expect(l.plot).toEqual({ x0: 40, y0: 139.5, w: 433, h: 433 });
   });
-  it("704×933 한 칸 (펼친 폴드8 세로): 가운데 420, 그림 398", () => {
+  it("704×933 한 칸 (펼친 폴드8 세로): 가운데 420, 그림 380", () => {
     const l = heroLayout(704, 933, { top: 28, bottom: 24 });
-    expect(l).toMatchObject({ mode: "one", gutter: 32, formW: 420, formX: 142, heroH: 398, logoSize: 34, logoX: 142 });
-    expect(l.plot).toEqual({ x0: 72, y0: 40, w: 560, h: 346 });
+    expect(l).toMatchObject({ mode: "one", gutter: 32, formW: 420, formX: 142, heroH: 380, logoSize: 34, logoX: 142 });
+    expect(l.plot).toEqual({ x0: 72, y0: 40, w: 560, h: 328 });
   });
-  it("키보드가 뜨면 한 칸 그림을 72dp 로 접는다 (두 칸은 그대로)", () => {
-    expect(heroLayout(360, 752, { top: 28, bottom: 24 }, true)).toMatchObject({ heroH: 100, collapsed: true });
+  it("키보드가 뜨면 한 칸 그림을 72dp 머리(로고 22 한 줄, 가운데)로 접는다 (두 칸은 그대로)", () => {
+    expect(heroLayout(360, 752, { top: 28, bottom: 24 }, true)).toMatchObject({ heroH: 100, collapsed: true, logoSize: 22, logoX: 24, logoY: 49.5 });
     expect(heroLayout(933, 704, { top: 24, bottom: 16 }, true)).toMatchObject({ mode: "two", collapsed: false });
   });
 });
 
 describe("그림 기하 (hero-spec 5장)", () => {
-  it("360×752: 봉 26개, 몸통 7 · 꼬리 1.5, 한 계단 20.2, 첫 상한가 시가 273.1, 마지막 종가 72.4", () => {
+  it("360×752: 봉 26개, 몸통 7 · 꼬리 1.5, 한 계단 19.1, 첫 상한가 시가 261.1, 마지막 종가 70.7", () => {
     const g = heroCandles(heroLayout(360, 752, { top: 28, bottom: 24 }).plot);
     expect(g.candles).toHaveLength(26);
     expect(g.candles.filter((c) => c.kind === "limit")).toHaveLength(LIMIT_COUNT);
     expect(g.bw).toBeCloseTo(7, 0);
     expect(g.wickW).toBe(1.5);
     const limits = g.candles.filter((c) => c.kind === "limit");
-    expect(limits[0]!.bottom).toBeCloseTo(273.1, 1);
-    expect(limits[9]!.top).toBeCloseTo(72.4, 1);
-    expect(limits[0]!.bottom - limits[1]!.bottom).toBeCloseTo(20.2, 1);
+    expect(limits[0]!.bottom).toBeCloseTo(261.1, 1);
+    expect(limits[9]!.top).toBeCloseTo(70.7, 1);
+    expect(limits[0]!.bottom - limits[1]!.bottom).toBeCloseTo(19.1, 1);
     // 상한가 봉은 윗꼬리가 없다 (고가 = 종가)
     for (const c of limits) expect(c.high).toBe(c.top);
     // 늘 같은 그림
     expect(heroCandles(heroLayout(360, 752, { top: 28, bottom: 24 }).plot)).toEqual(g);
   });
-  it("모든 크기에서 상한가 봉이 로고 상자(+8dp)와 겹치지 않는다", () => {
+  it("네 크기에서 상한가 봉이 로고 묶음(글자·선·부제, +8dp)과 겹치지 않는다", () => {
     for (const [W, H, top, bottom] of [
       [360, 752, 28, 24],
       [475, 751, 28, 24],
@@ -58,8 +59,10 @@ describe("그림 기하 (hero-spec 5장)", () => {
     ] as const) {
       const l = heroLayout(W, H, { top, bottom });
       const g = heroCandles(l.plot);
-      // 로고 상자: '가즈아 불기둥' 6글자 ≈ 글자 크기 × 6.2 폭, 높이 = 글자 크기 × 1.3
-      const box = { x1: l.logoX + l.logoSize * 6.2 + 8, y1: l.logoY + l.logoSize * 1.3 + 8 };
+      // 로고 묶음: '가즈아 불기둥' 글자 폭 ≈ 글자 크기 × 6.3 (웹 실측 5.6), 높이 = 글자 칸 + 선 + 부제
+      const lb = logoBox(l);
+      expect(lb.w).toBe(Math.round(l.logoSize * 6.3));
+      const box = { x1: lb.x + lb.w + 8, y1: lb.y + lb.h + 8 };
       for (const c of g.candles.filter((x) => x.kind === "limit")) {
         const overlaps = c.cx - g.bw / 2 < box.x1 && c.top < box.y1;
         expect(overlaps, `${W}×${H} 봉 ${c.cx.toFixed(1)}`).toBe(false);

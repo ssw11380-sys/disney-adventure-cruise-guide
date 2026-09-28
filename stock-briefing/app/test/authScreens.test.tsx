@@ -15,6 +15,7 @@ import {
   sessionFor,
   type AccountUser,
 } from "@/lib/session";
+import { flatStyle } from "./fakeAnimated";
 import { cleanupRenders, render, type HostNode } from "./miniRender";
 
 /**
@@ -40,7 +41,10 @@ const h = vi.hoisted(() => ({
   store: new Map<string, string>(),
 }));
 
-vi.mock("react-native", () => ({
+vi.mock("react-native", async () => {
+  const { makeFakeAnimated } = await import("./fakeAnimated");
+  const fake = makeFakeAnimated();
+  return {
   View: "View",
   Text: "Text",
   TextInput: "TextInput",
@@ -50,15 +54,18 @@ vi.mock("react-native", () => ({
   Modal: "Modal",
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1, absoluteFill: { position: "absolute" } },
   Keyboard: { addListener: () => ({ remove: () => undefined }) },
-  AccessibilityInfo: { announceForAccessibility: h.announce },
+  Animated: fake.Animated,
+  Easing: fake.Easing,
+  AccessibilityInfo: { announceForAccessibility: h.announce, isReduceMotionEnabled: async () => false, addEventListener: () => ({ remove: () => undefined }) },
   Alert: { alert: h.alert },
   AppState: { addEventListener: () => ({ remove: () => undefined }), currentState: "active" },
   Platform: { OS: "android" },
   useWindowDimensions: () => h.win,
-}));
+  };
+});
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 28, bottom: 24, left: 0, right: 0 }) }));
 vi.mock("expo-linear-gradient", () => ({ LinearGradient: "LinearGradient" }));
-vi.mock("react-native-svg", () => ({ Svg: "Svg", Defs: "Defs", Ellipse: "Ellipse", LinearGradient: "SvgLinearGradient", Line: "Line", RadialGradient: "RadialGradient", Rect: "Rect", Stop: "Stop" }));
+vi.mock("react-native-svg", () => ({ Svg: "Svg", Defs: "Defs", Ellipse: "Ellipse", LinearGradient: "SvgLinearGradient", Line: "Line", RadialGradient: "RadialGradient", Rect: "Rect", Stop: "Stop", Text: "SvgText" }));
 vi.mock("expo-status-bar", () => ({ StatusBar: "StatusBar" }));
 vi.mock("expo-device", () => ({ modelName: "SM-F966N" }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
@@ -135,6 +142,42 @@ describe("로그인 화면", () => {
     expect(h.push).toHaveBeenCalledWith("/signup");
     press(r, "서버 설정");
     expect(h.push).toHaveBeenCalledWith("/server");
+  });
+
+  it("화면 읽기 순서: 아이디 → 비밀번호 → 보기 → 자동 로그인 → 로그인 → 회원가입 → 서버 설정 → 고지", () => {
+    const r = render(<LoginScreen />);
+    const order = r
+      .all()
+      .map((n) => n.props.accessibilityLabel as string | undefined)
+      .filter((l): l is string => ["아이디", "비밀번호", "비밀번호 보기", "자동 로그인", "로그인", "회원가입", "서버 설정"].includes(l ?? ""));
+    expect(order).toEqual(["아이디", "비밀번호", "비밀번호 보기", "자동 로그인", "로그인", "회원가입", "서버 설정"]);
+    const t = r.text();
+    expect(t.indexOf("회원가입")).toBeLessThan(t.indexOf("서버 설정"));
+    expect(t.indexOf("서버 설정")).toBeLessThan(t.indexOf(DISCLAIMER));
+  });
+
+  it("입력 칸 모양: 입력 중이면 금색 테두리 + 바깥 3dp 옅은 금색, 오류 칸은 주황 테두리 + 아이콘, 버튼은 눌리면 어두워진다", async () => {
+    const { authColors: C } = await import("@/tokens");
+    const r = render(<LoginScreen />);
+    const box = () => r.all().find((n) => n.type === "View" && n.children.some((c) => typeof c !== "string" && c.props.accessibilityLabel === "아이디"))!;
+    const ring = () => r.all().filter((n) => flatStyle(n.props.style).borderWidth === 3);
+    expect(ring()).toHaveLength(0);
+    r.act(() => (r.byLabel("아이디").props.onFocus as (e: unknown) => void)({}));
+    expect(ring()).toHaveLength(1);
+    expect(flatStyle(ring()[0]!.props.style).borderColor).toBe(C.focusRing);
+    expect(flatStyle(box().props.style)).toMatchObject({ borderColor: C.fieldFocus, backgroundColor: C.fieldActive });
+    r.act(() => (r.byLabel("아이디").props.onBlur as (e: unknown) => void)({}));
+    expect(ring()).toHaveLength(0);
+    press(r, "로그인");
+    expect(flatStyle(box().props.style).borderColor).toBe(C.danger);
+    expect(r.all().filter((n) => n.type === "Ionicons" && n.props.name === "alert-circle")).toHaveLength(2);
+    // [로그인] 금색 그러데이션: 누르는 동안 한 단계 어둡게
+    const fill = () => r.all().find((n) => n.type === "LinearGradient" && (n.props.colors as string[])[0]?.startsWith("#") && ((n.props.colors as string[])[0] === C.primaryTop || (n.props.colors as string[])[0] === C.primaryPressedTop))!;
+    expect(fill().props.colors).toEqual([C.primaryTop, C.primaryBottom]);
+    r.act(() => (r.byLabel("로그인").props.onPressIn as () => void)());
+    expect(fill().props.colors).toEqual([C.primaryPressedTop, C.primaryPressedBottom]);
+    r.act(() => (r.byLabel("로그인").props.onPressOut as () => void)());
+    expect(fill().props.colors).toEqual([C.primaryTop, C.primaryBottom]);
   });
 
   it("빈 칸으로 누르면 칸 아래 오류 (서버에 묻지 않음, 화면 읽기로 알림)", () => {
@@ -227,7 +270,7 @@ describe("로그인 화면", () => {
     expect(hero.props.style).toMatchObject({ width: 513, height: 704 });
     h.win = { width: 704, height: 933, scale: 2.6, fontScale: 1 };
     const tall = render(<LoginScreen />);
-    expect(tall.all().find((n) => n.props.testID === "login-hero")!.props.style).toMatchObject({ width: 704, height: 398 });
+    expect(tall.all().find((n) => n.props.testID === "login-hero")!.props.style).toMatchObject({ width: 704, height: 380 });
   });
 });
 
@@ -242,6 +285,12 @@ describe("회원가입 화면", () => {
     expect(r.text()).toContain("8자 이상, 영문과 숫자를 함께");
     expect(r.has("가입하고 시작하기")).toBe(true);
     expect(r.text()).toContain(DISCLAIMER);
+    // 머리: 금색 로고 + 작은 정지 계단(꾸밈 — 화면 읽기에서 뺌), 제목 아래 한 줄
+    expect(r.byLabel("가즈아 불기둥").props.accessibilityRole).toBe("header");
+    const hasSvg = (n: HostNode): boolean => n.children.some((c) => typeof c !== "string" && (c.type === "Svg" || hasSvg(c)));
+    expect(r.all().some((n) => n.props.importantForAccessibility === "no-hide-descendants" && hasSvg(n))).toBe(true);
+    expect(r.text()).toContain("아이디 · 비밀번호 · 이메일만 있으면 돼요");
+    expect(r.text()).not.toMatch(/수익|추천|보장|대박|!/);
   });
 
   it("칸을 떠날 때·보낼 때 서버와 같은 규칙으로 칸 아래 오류", () => {

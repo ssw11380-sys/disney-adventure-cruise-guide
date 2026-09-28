@@ -668,6 +668,9 @@ export const authColors = {
   bgMid: "#04061A",
   bgBottom: "#030410",
   grid: "rgba(255,255,255,0.055)",
+  /** 눈금 색의 불투명도 (글자 옆에서 옅어지는 눈금 그러데이션용) */
+  gridLine: "#FFFFFF",
+  gridOpacity: 0.055,
   baseline: "rgba(255,255,255,0.13)",
   sideUp: "rgba(255,75,85,0.55)",
   sideDown: "rgba(61,142,255,0.55)",
@@ -687,13 +690,24 @@ export const authColors = {
   sub: "#B4BAC4",
   muted: "#8A919D",
   field: "rgba(255,255,255,0.05)",
+  /** 입력 중인 칸 바탕 (조금 밝게) */
+  fieldActive: "rgba(255,255,255,0.07)",
   fieldLine: "rgba(255,255,255,0.10)",
   fieldFocus: "rgba(227,179,65,0.75)",
+  /** 입력 중인 칸 바깥 3dp 테두리 (금색 옅게), 오류 칸은 주황 옅게 */
+  focusRing: "rgba(227,179,65,0.16)",
+  dangerRing: "rgba(249,115,22,0.16)",
   danger: "#F97316",
   primary: "#E3B341",
+  /** [로그인] 금색 버튼: 위 → 아래 세로 그러데이션, 눌림은 한 단계 어둡게 */
+  primaryTop: "#EDC75F",
+  primaryBottom: "#D9A838",
+  primaryPressedTop: "#D6AD45",
+  primaryPressedBottom: "#BF9030",
   primaryPressed: "#CFA033",
   primaryInk: "#111418",
   secondaryLine: "rgba(227,179,65,0.45)",
+  secondaryPressed: "rgba(227,179,65,0.10)",
   notice: "rgba(227,179,65,0.10)",
   scrim: "rgba(3,4,16,0.72)",
   sheet: "#0E1330",
@@ -710,8 +724,11 @@ export const authLayout = {
   /** 두 칸(왼쪽 그림 · 오른쪽 입력): 창 폭 840 이상이고 가로가 더 길 때. 오른쪽 칸 폭 */
   twoColMin: 840,
   rightW: 420,
-  /** 한 칸 그림 높이 = (창 높이 − 안전 영역) × 0.42, 240~380 (+ 위 안전 영역) */
-  heroRatio: 0.42,
+  /**
+   * 한 칸 그림 높이 = (창 높이 − 안전 영역) × 0.40, 240~380 (+ 위 안전 영역).
+   * 명세 0.42 에서 0.40 으로: 360×752 폰에서 입력 묶음·'서버 설정'·고지 문구까지 스크롤 없이 한 화면에 들어오게
+   */
+  heroRatio: 0.4,
   heroMin: 240,
   heroMax: 380,
   /** 키보드가 뜨면 그림을 이 높이(글자 한 줄)로 접는다 */
@@ -724,24 +741,46 @@ export const authLayout = {
   heroGap: 8,
   fieldGap: 12,
   groupGap: 16,
+  /** 칸 이름과 칸 사이 */
+  labelGap: 6,
   fieldH: 48,
-  buttonH: 50,
-  checkbox: 20,
+  buttonH: 48,
+  /** 입력 칸·버튼 둥글기 */
+  radius: 12,
+  /** 입력 중인 칸 바깥 테두리 두께 */
+  focusRing: 3,
+  checkbox: 22,
   logoLineW: 40,
   logoLineH: 1,
+  /** 로고 글자 → 금색 선, 금색 선 → 부제 */
+  logoLineGap: 8,
+  logoSubGap: 12,
+  /** 부제 한 줄 높이 */
+  logoSubH: 16,
   logoGap: 18,
+  /** SVG 로고 그림 폭 = 글자 크기 × 7 (글자가 잘리지 않게 넉넉히), 실제 글자 폭 ≈ 글자 크기 × 6.3 (겹침 검사용, 웹 실측 5.6) */
+  wordmarkCanvas: 7,
+  wordmarkInk: 6.3,
   /** 회원가입 글자 머리 위 여백 (안전 영역 아래) */
   headerTop: 32,
+  /** 회원가입 머리 오른쪽 작은 정지 계단 (상한가 봉 6개), 빛이 번지는 거리 */
+  miniStairsW: 60,
+  miniStairsH: 72,
+  miniStairsGlow: 28,
 } as const;
 
 /** 로그인·회원가입 글자 크기 (hero-spec.md 3장) */
 export const authFont = {
   logo: 30,
   logoWide: 34,
+  /** 키보드가 떠 그림을 접었을 때 한 줄 로고 */
+  logoCollapsed: 22,
   title: 20,
   input: 16,
   button: 16,
   label: 12,
+  /** 자동 로그인 글자, 회원가입 머리 아래 한 줄 */
+  check: 14,
   link: 13,
   sub: 12,
   tiny: 11,
