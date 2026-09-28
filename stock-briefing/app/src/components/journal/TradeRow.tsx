@@ -1,7 +1,8 @@
 import React from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import type { JournalItem } from "@/api/types";
 import { detailLine, extraLines, rightSign, rightText, rowSpeech, titleText } from "@/lib/journal";
+import { isBigText } from "@/lib/textScale";
 import { changeColor, font, radius, space, useTheme } from "@/theme";
 
 /**
@@ -9,10 +10,12 @@ import { changeColor, font, radius, space, useTheme } from "@/theme";
  *   [매도] SOXL                          +$17.43 (+10.25%)
  *   5주 · 평균 $37.50 · 23:10 · 판매 금액 $187.50
  *   메모: 실적 발표 뒤 일부 정리            (한 줄 말줄임)
- * 추정 줄([추정] 수량 변화)은 누를 수 없다. 화면 읽기는 한 줄 한 문장(lib/journal rowSpeech)
+ * 추정 줄([추정] 수량 변화)은 누를 수 없다. 화면 읽기는 한 줄 한 문장(lib/journal rowSpeech).
+ * 종목 이름은 한 줄 말줄임, 큰 글씨(100% 초과)에서는 잔고 목록처럼 두 줄까지
  */
 export function TradeRow({ item, selected, onPress }: { item: JournalItem; selected?: boolean; onPress?: (item: JournalItem) => void }) {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
   const est = item.kind === "estimated";
   const sell = item.side === "SELL";
   const sign = rightSign(item);
@@ -25,7 +28,7 @@ export function TradeRow({ item, selected, onPress }: { item: JournalItem; selec
             <Text style={{ color: sell ? t.down : t.up, fontSize: font.tiny, fontWeight: "700" }}>{sell ? "매도" : "매수"}</Text>
           </View>
         ) : null}
-        <Text style={[styles.name, { color: est ? t.sub : t.ink }]} numberOfLines={1}>
+        <Text style={[styles.name, { color: est ? t.sub : t.ink }]} numberOfLines={isBigText(fontScale) ? 2 : 1}>
           {titleText(item)}
         </Text>
         {!est ? (

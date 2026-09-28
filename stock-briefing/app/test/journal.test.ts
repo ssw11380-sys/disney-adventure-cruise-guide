@@ -9,6 +9,7 @@ import {
   clampNote,
   customRangeError,
   dayHeader,
+  dayHeadSpeech,
   dayRealizedText,
   detailLine,
   detailTime,
@@ -17,9 +18,12 @@ import {
   journalHref,
   journalTabs,
   krTaxLine,
+  pendingStart,
   periodRange,
+  perSellNone,
   qtyText,
   realizedText,
+  returnLineLabels,
   returnsHeader,
   returnsLines,
   returnsMethod,
@@ -192,15 +196,17 @@ describe("요약·날짜 묶음", () => {
     expect(summaryView(resp)).toEqual({
       range: "9월 1일 ~ 9월 28일",
       lines: [
-        { label: "국내", value: "+45,000원", sign: 1 },
-        { label: "미국", value: "+$17.43 (원화 약 +24,703원, 추정)", sign: 1 },
-        { label: "합계", value: "약 +69,703원", sign: 1 },
+        { label: "국내", value: "+45,000원", sign: 1, speech: "국내 실현손익 45,000원 이익" },
+        { label: "미국", value: "+$17.43 (원화 약 +24,703원, 추정)", sign: 1, speech: "미국 실현손익 17.43달러 이익, 원화 약 24,703원 이익, 추정" },
+        { label: "합계", value: "약 +69,703원", sign: 1, speech: "합계 실현손익 약 69,703원 이익" },
       ],
       counts: "매수 5건 · 매도 3건 · 체결 8건",
       notes: [JOURNAL.grossNote, "실현손익을 모르는 매도 1건은 합계에서 뺐어요 (기록 시작 전에 산 몫)."],
     });
     expect(beforeRecordNote(resp)).toBe("9월 23일부터 저장한 기록이에요. 그 전 체결은 토스에서 받아 온 것만 있어요.");
     expect(beforeRecordNote({ ...resp, from: "2026-09-24" })).toBeNull();
+    // 회귀: 종목을 골랐으면 머리 카드의 '기록 시작' 줄과 같은 말이라 두 번 쓰지 않는다
+    expect(beforeRecordNote({ ...resp, code: "TQQQ" })).toBeNull();
   });
 
   it("날짜 머리 오른쪽: 통화가 섞이면 둘 다, 매도가 없으면 없음", () => {
@@ -208,17 +214,22 @@ describe("요약·날짜 묶음", () => {
     expect(dayRealizedText({ KRW: null, USD: -1.2, krwTotal: null, krwTotalEstimated: true })).toBe("실현 -$1.20");
     expect(dayRealizedText({ KRW: null, USD: null, krwTotal: null, krwTotalEstimated: false })).toBeNull();
   });
+
+  it("회귀: 날짜 머리 화면 읽기는 읽는 말로 (기호·부호를 그대로 읽지 않는다)", () => {
+    expect(dayHeadSpeech("2026-09-23", { KRW: -321_000, USD: 17.43, krwTotal: null, krwTotalEstimated: true })).toBe("9월 23일 수요일, 실현손익 321,000원 손실, 17.43달러 이익");
+    expect(dayHeadSpeech("2026-09-23", { KRW: null, USD: null, krwTotal: null, krwTotalEstimated: false })).toBe("9월 23일 수요일");
+  });
 });
 
 describe("거래 상세", () => {
   it("실현손익 계산: 판매 금액 − 평균 구매가 × 수량 = 실현손익, 수수료·세금, 원화로는 (§4.4)", () => {
     const c = calcRows(soxlSell);
     expect(c.rows).toEqual([
-      { label: "판매 금액", value: "$187.50" },
-      { label: "− 평균 구매가 $34.0133 × 5주", value: "$170.07" },
-      { label: "= 실현손익", value: "+$17.43 (+10.25%)", sign: 1 },
-      { label: "수수료·세금", value: "토스가 주지 않아 빼지 않았어요" },
-      { label: "원화로는", value: "약 +24,703원 (추정)", sign: 1 },
+      { label: "판매 금액", value: "$187.50", speech: "판매 금액 187.50달러" },
+      { label: "− 평균 구매가 $34.0133 × 5주", value: "$170.07", speech: "빼는 금액, 평균 구매가 34.0133달러 곱하기 5주, 170.07달러" },
+      { label: "= 실현손익", value: "+$17.43 (+10.25%)", sign: 1, speech: "실현손익 17.43달러 이익, 10.25퍼센트" },
+      { label: "수수료·세금", value: "토스가 주지 않아 빼지 않았어요", speech: "수수료·세금, 토스가 주지 않아 빼지 않았어요" },
+      { label: "원화로는", value: "약 +24,703원 (추정)", sign: 1, speech: "원화로는 약 24,703원 이익, 추정" },
     ]);
     expect(c.notes).toEqual([
       "판매 때 환율 1,389.4원(토스) · 매수 때 환율로 쌓은 원화 평균 구매가 기준",
@@ -284,6 +295,16 @@ describe("수익률 글", () => {
       "기간 수익률은 매일 장 마감 뒤 찍은 계좌 기록으로 계산해요. 기록이 10거래일 쌓이면 보여 드려요. 지금 3거래일 (9월 28일부터).",
     );
   });
+  it("회귀: '지금 N거래일'은 기록 전체 길이(recordDays) — 기록이 충분한데 고른 기간 안 기록이 모자라면 다른 안내 (기록이 짧다고 말하지 않는다)", () => {
+    // 기록 6거래일, 1주 안 4거래일 → 기록 전체 6거래일로 안내
+    expect(returnsNotReady({ enabled: true, ready: false, tradingDays: 4, recordDays: 6, needDays: 10, recordSince: "2026-09-28" })).toBe(
+      "기간 수익률은 매일 장 마감 뒤 찍은 계좌 기록으로 계산해요. 기록이 10거래일 쌓이면 보여 드려요. 지금 6거래일 (9월 28일부터).",
+    );
+    // 기록 40거래일인데 하루만 고름
+    const short = returnsNotReady({ enabled: true, ready: false, tradingDays: 1, recordDays: 40, needDays: 10, recordSince: "2026-09-28" });
+    expect(short).toBe("고른 기간 안에 계좌 기록이 1거래일뿐이라 수익률을 계산할 수 없어요. 기간을 더 길게 골라 주세요.");
+    expect(short).not.toContain("쌓이면");
+  });
   it("머리·손익·흐름·당김 문장, 계산 방법은 있을 때만의 줄 포함, 화면 읽기 (§4.6)", () => {
     expect(returnsHeader(ready)).toBe("9월 28일(기록 시작) ~ 10월 12일 · 10거래일");
     expect(returnsLines(ready)).toEqual({
@@ -299,7 +320,18 @@ describe("수익률 글", () => {
     expect(m).toContain("현금 입출금과 배당은 넣지 않았어요. 주식 평가금액만의 수익률이에요.");
     expect(m.some((x) => x.startsWith("빠진 날"))).toBe(false);
     expect(returnsMethod({ ...ready, market: "US", gaps: ["2026-10-01"] })).toEqual(expect.arrayContaining(["빠진 날 1일은 앞뒤를 이어 계산했어요.", "달러 기준이에요. 환율은 넣지 않았어요."]));
-    expect(returnsSpeech(ready)).toBe("9월 28일부터 10월 12일까지 10거래일, 수익률 시간가중 3.42% 상승, 기간 손익 456,000원 이익");
+    // 회귀: 화면에 보이는 시작→끝 평가금액·그 사이 사고판 금액·기록 시작일부터 계산한 까닭도 읽는다
+    expect(returnsSpeech(ready)).toBe(
+      "9월 28일부터 10월 12일까지 10거래일, 수익률 시간가중 3.42% 상승, 기간 손익 456,000원 이익, 시작 평가금액 12,340,000원에서 끝 12,800,000원, 그 사이 매수 1,000,000원, 매도 500,000원, 수익률 계산에서 뺐어요, 고른 기간보다 기록이 짧아 기록 시작일부터 계산했어요",
+    );
+    expect(returnsSpeech({ ...ready, buys: 0, sells: 0, clippedToRecordStart: false })).toBe(
+      "9월 28일부터 10월 12일까지 10거래일, 수익률 시간가중 3.42% 상승, 기간 손익 456,000원 이익, 시작 평가금액 12,340,000원에서 끝 12,800,000원",
+    );
+  });
+
+  it("누적 수익률 선 그림 제목·양 끝 날짜 (점이 2개 이상일 때)", () => {
+    expect(returnLineLabels([{ date: "2026-09-28", cum: 0 }, { date: "2026-10-12", cum: 3.42 }])).toEqual({ title: "날짜별 누적 수익률", from: "9월 28일", to: "10월 12일" });
+    expect(returnLineLabels([{ date: "2026-09-28", cum: 0 }])).toBeNull();
   });
 });
 
@@ -319,6 +351,14 @@ describe("양도세 추정 글", () => {
   it("보통: 합계·공제·과세 대상·세율·예상 세액 (§4.7)", () => {
     const v = taxView(base, false)!;
     expect(v.title).toBe("해외주식 양도세 추정 · 2026년");
+    expect(v.rows.map((r) => r.speech)).toEqual([
+      "양도차익 합계, 이익에서 손실을 뺀 금액, 3,450,000원 이익",
+      "기본공제 2,500,000원 빼기",
+      "과세 대상 금액 950,000원",
+      "세율 22퍼센트, 양도소득세 20퍼센트와 지방소득세 2퍼센트",
+      "예상 세액 추정 209,000원",
+    ]);
+    expect(perSellNone(2026)).toBe("2026년 계산에 넣은 해외주식 매도가 없어요.");
     expect(v.rows.map((r) => [r.label, r.value])).toEqual([
       ["양도차익 합계 (이익 − 손실)", "+3,450,000원"],
       ["기본공제", "-2,500,000원"],
@@ -346,6 +386,26 @@ describe("양도세 추정 글", () => {
     expect(taxRefetch(pend, 5)).toBe(false);
     expect(taxRefetch(base, 0)).toBe(false);
     expect(taxRefetch(undefined, 0)).toBe(false);
+  });
+  it("회귀: 다시 묻기 횟수는 '받는 중'이 된 때부터 센다 — 그 전에 쌓인 받은 횟수(앱을 다시 열어 새로 받음)는 세지 않는다", () => {
+    const pend = { ...base, fxPending: 1 };
+    // 받는 중이 아닌 채 6번 받음 → 기준 없음
+    let at: number | null = null;
+    for (let n = 1; n <= 6; n++) at = pendingStart(at, base, n);
+    expect(at).toBeNull();
+    // 7번째 받기에서 새 매도가 받는 중 → 기준 7, 다시 물은 횟수 0 → 다시 묻는다
+    at = pendingStart(at, pend, 7);
+    expect(at).toBe(7);
+    expect(taxRefetch(pend, 7 - at!)).toBe(60_000);
+    // 그 뒤 5번 다시 물으면 멈춘다
+    for (let n = 8; n <= 12; n++) at = pendingStart(at, pend, n);
+    expect(at).toBe(7);
+    expect(taxRefetch(pend, 12 - at!)).toBe(false);
+    // 받는 중이 끝나면 기준을 지우고, 다시 받는 중이 되면 새로 센다
+    expect(pendingStart(at, base, 13)).toBeNull();
+    expect(pendingStart(null, pend, 14)).toBe(14);
+    // 캐시가 새로 만들어져 받은 횟수가 줄면 새로 센다
+    expect(pendingStart(7, pend, 1)).toBe(1);
   });
   it("매도별 계산 두 줄 · 대신한 환율·잠정 표시 · 국내 증권거래세 줄", () => {
     const item = { key: "k", code: "SOXL", name: "SOXL", tradeDate: "2026-09-25", settleDate: "2026-09-29", settleSource: "estimated" as const, quantity: 5, proceedsUsd: 187.5, costsUsd: null, fxSell: { rate: 1389.4, source: "smbs", date: "2026-09-29", provisional: false }, proceedsKrw: 260_512, costKrw: 235_809, costsKrw: null, gainKrw: 24_703 };

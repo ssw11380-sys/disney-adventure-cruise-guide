@@ -47,6 +47,11 @@ export const JOURNAL = {
   noteFailed: "메모를 저장하지 못했어요. 다시 해 주세요.",
   noteSave: "저장",
   noteClear: "지우기",
+  /** [지우기]는 입력 칸만 비운다 — 서버의 메모는 [저장]을 눌러야 지워진다 (되돌릴 수 없는 바로 지우기 막기) */
+  noteClearA11y: "메모 입력 칸 비우기",
+  noteDeleted: "메모를 지웠어요.",
+  /** 저장한 메모가 있는데 입력 칸을 비웠을 때 */
+  noteEmptyHint: "비운 채 [저장]을 누르면 저장한 메모를 지워요.",
   close: "닫기",
   costsNone: "토스가 주지 않아 빼지 않았어요",
   grossNote: "실현손익은 수수료·세금을 빼기 전 금액이에요 (토스 주문 내역에 비용이 없음).",
@@ -132,6 +137,11 @@ const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
 /** '9월 25일 (금)' */
 export function dayHeader(date: string): string {
   return `${mdKo(date)} (${WEEK[new Date(`${date}T12:00:00Z`).getUTCDay()]})`;
+}
+
+/** 읽는 날짜 '9월 25일 금요일' */
+export function daySpeech(date: string): string {
+  return `${mdKo(date)} ${WEEK[new Date(`${date}T12:00:00Z`).getUTCDay()]}요일`;
 }
 
 /** 한국 시각 조각 (연·월·일·시·분·초) */
@@ -286,9 +296,22 @@ export function dayRealizedText(r: JournalRealizedSum): string | null {
   return parts.length ? `실현 ${parts.join(" · ")}` : null;
 }
 
+/** 손익 읽는 말 ('45,000원 이익' · '1.20달러 손실') */
+function profitSpeech(v: number, cur: Cur): string {
+  const shown = money(v, cur);
+  return speakProfit(shown, shownSign(v, shown)) ?? speakAmount(shown);
+}
+
+/** 날짜 묶음 머리 화면 읽기 '9월 23일 수요일, 실현손익 321,000원 손실, 17.43달러 이익' */
+export function dayHeadSpeech(date: string, r: JournalRealizedSum): string {
+  const parts = [r.KRW !== null ? profitSpeech(r.KRW, "KRW") : null, r.USD !== null ? profitSpeech(r.USD, "USD") : null].filter(Boolean);
+  return sentence([daySpeech(date), parts.length ? `실현손익 ${parts.join(", ")}` : null]);
+}
+
 export interface SummaryView {
   range: string;
-  lines: { label: string; value: string; sign: number }[];
+  /** speech: 화면 읽기 문장 ('미국 실현손익 3,652.75달러 이익, 원화 약 5,000,000원 이익, 추정') */
+  lines: { label: string; value: string; sign: number; speech: string }[];
   counts: string;
   notes: string[];
 }
@@ -299,12 +322,23 @@ export function summaryView(resp: JournalResponse): SummaryView | null {
   if (!s || !resp.from || !resp.to) return null;
   const r = s.realized;
   const lines: SummaryView["lines"] = [];
-  if (r.KRW !== null) lines.push({ label: "국내", value: money(r.KRW, "KRW", true), sign: shownSign(r.KRW, money(r.KRW, "KRW")) });
+  if (r.KRW !== null) lines.push({ label: "국내", value: money(r.KRW, "KRW", true), sign: shownSign(r.KRW, money(r.KRW, "KRW")), speech: `국내 실현손익 ${profitSpeech(r.KRW, "KRW")}` });
   if (r.USD !== null) {
     const usKrw = r.krwTotal !== null ? r.krwTotal - (r.KRW ?? 0) : null;
-    lines.push({ label: "미국", value: `${money(r.USD, "USD", true)}${usKrw !== null ? ` (원화 약 ${money(usKrw, "KRW", true)}, 추정)` : ""}`, sign: shownSign(r.USD, money(r.USD, "USD")) });
+    lines.push({
+      label: "미국",
+      value: `${money(r.USD, "USD", true)}${usKrw !== null ? ` (원화 약 ${money(usKrw, "KRW", true)}, 추정)` : ""}`,
+      sign: shownSign(r.USD, money(r.USD, "USD")),
+      speech: sentence([`미국 실현손익 ${profitSpeech(r.USD, "USD")}`, usKrw !== null ? `원화 약 ${profitSpeech(usKrw, "KRW")}` : null, usKrw !== null ? "추정" : null]),
+    });
   }
-  if (r.krwTotal !== null && r.KRW !== null && r.USD !== null) lines.push({ label: "합계", value: `${r.krwTotalEstimated ? "약 " : ""}${money(r.krwTotal, "KRW", true)}`, sign: shownSign(r.krwTotal, money(r.krwTotal, "KRW")) });
+  if (r.krwTotal !== null && r.KRW !== null && r.USD !== null)
+    lines.push({
+      label: "합계",
+      value: `${r.krwTotalEstimated ? "약 " : ""}${money(r.krwTotal, "KRW", true)}`,
+      sign: shownSign(r.krwTotal, money(r.krwTotal, "KRW")),
+      speech: `합계 실현손익 ${r.krwTotalEstimated ? "약 " : ""}${profitSpeech(r.krwTotal, "KRW")}`,
+    });
   const notes: string[] = [];
   if (s.sells > 0 && s.costs.toss === 0) notes.push(JOURNAL.grossNote);
   if (s.unknownSells > 0) notes.push(`실현손익을 모르는 매도 ${s.unknownSells}건은 합계에서 뺐어요 (기록 시작 전에 산 몫).`);
@@ -312,8 +346,9 @@ export function summaryView(resp: JournalResponse): SummaryView | null {
   return { range: `${mdKo(resp.from)} ~ ${mdKo(resp.to)}`, lines, counts: `매수 ${s.buys}건 · 매도 ${s.sells}건 · 체결 ${s.orders}건`, notes };
 }
 
-/** 고른 기간이 기록 시작보다 앞이면 목록 위 한 줄 */
+/** 고른 기간이 기록 시작보다 앞이면 목록 위 한 줄. 종목을 골랐으면 머리 카드의 '기록 시작' 줄이 같은 말을 해서 없음 */
 export function beforeRecordNote(resp: JournalResponse): string | null {
+  if (resp.code || resp.head) return null;
   if (!resp.recordSince || !resp.from || resp.from >= resp.recordSince) return null;
   return `${mdKo(resp.recordSince)}부터 저장한 기록이에요. 그 전 체결은 토스에서 받아 온 것만 있어요.`;
 }
@@ -324,6 +359,8 @@ export interface DetailRow {
   label: string;
   value: string;
   sign?: number;
+  /** 화면 읽기 문장 (없으면 '이름 값') — 금액·기호를 읽는 말로 */
+  speech?: string;
 }
 
 /** 거래 상세 위 표 (체결 · 수량 · 평균 체결가 · 금액 · 주문 상태) */
@@ -331,8 +368,8 @@ export function detailRows(item: JournalItem): DetailRow[] {
   return [
     { label: "체결", value: detailTime(item) },
     { label: "수량", value: item.part ? `${qtyText(item.quantity)} (주문 ${qtyText(item.orderQuantity)} 중 이 날 몫)` : qtyText(item.quantity) },
-    { label: "평균 체결가", value: avgText(item.price, item.currency) },
-    { label: item.side === "SELL" ? "판매 금액" : "산 금액", value: money(item.amount, item.currency) },
+    { label: "평균 체결가", value: avgText(item.price, item.currency), speech: `평균 체결가 ${speakAmount(avgText(item.price, item.currency))}` },
+    { label: item.side === "SELL" ? "판매 금액" : "산 금액", value: money(item.amount, item.currency), speech: `${item.side === "SELL" ? "판매 금액" : "산 금액"} ${speakAmount(money(item.amount, item.currency))}` },
     { label: "주문 상태", value: item.status === "OPEN" ? "일부 체결 · 진행 중" : "체결 완료" },
     ...(item.accountLabel ? [{ label: "계좌", value: item.accountLabel }] : []),
   ];
@@ -345,15 +382,29 @@ export function calcRows(item: JournalItem): { rows: DetailRow[]; notes: string[
   if (r.status === "unknown-cost" || r.gross === null) return { rows: [{ label: "실현손익", value: "모름" }], notes: [r.reason ?? "평균 구매가를 몰라요."] };
   const cur = item.currency;
   const rows: DetailRow[] = [
-    { label: "판매 금액", value: money(item.amount, cur) },
-    { label: `− 평균 구매가 ${avgText(r.avgCost, cur)} × ${qtyText(item.quantity)}`, value: money(r.costAmount, cur) },
-    { label: "= 실현손익", value: `${money(r.gross, cur, true)}${r.rate !== null ? ` (${formatPct(r.rate)})` : ""}`, sign: shownSign(r.gross, money(r.gross, cur)) },
-    { label: "수수료·세금", value: costText(r.costs, cur) },
+    { label: "판매 금액", value: money(item.amount, cur), speech: `판매 금액 ${speakAmount(money(item.amount, cur))}` },
+    {
+      label: `− 평균 구매가 ${avgText(r.avgCost, cur)} × ${qtyText(item.quantity)}`,
+      value: money(r.costAmount, cur),
+      speech: `빼는 금액, 평균 구매가 ${speakAmount(avgText(r.avgCost, cur))} 곱하기 ${qtyText(item.quantity)}, ${speakAmount(money(r.costAmount, cur))}`,
+    },
+    {
+      label: "= 실현손익",
+      value: `${money(r.gross, cur, true)}${r.rate !== null ? ` (${formatPct(r.rate)})` : ""}`,
+      sign: shownSign(r.gross, money(r.gross, cur)),
+      speech: sentence([`실현손익 ${profitSpeech(r.gross, cur)}`, r.rate !== null ? `${Math.abs(r.rate).toFixed(2)}퍼센트` : null]),
+    },
+    { label: "수수료·세금", value: costText(r.costs, cur), speech: costSpeech(r.costs, cur) },
   ];
   const notes: string[] = [];
   if (r.krw) {
     if (r.krw.gross !== null) {
-      rows.push({ label: "원화로는", value: `약 ${money(r.krw.gross, "KRW", true)}${r.krw.estimated ? " (추정)" : ""}`, sign: shownSign(r.krw.gross, money(r.krw.gross, "KRW")) });
+      rows.push({
+        label: "원화로는",
+        value: `약 ${money(r.krw.gross, "KRW", true)}${r.krw.estimated ? " (추정)" : ""}`,
+        sign: shownSign(r.krw.gross, money(r.krw.gross, "KRW")),
+        speech: sentence([`원화로는 약 ${profitSpeech(r.krw.gross, "KRW")}`, r.krw.estimated ? "추정" : null]),
+      });
       if (r.krw.sellFx !== null) notes.push(`판매 때 환율 ${r.krw.sellFx.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원(토스) · 매수 때 환율로 쌓은 원화 평균 구매가 기준`);
     } else if (r.krw.reason) notes.push(r.krw.reason);
   }
@@ -368,6 +419,12 @@ function costText(c: NonNullable<JournalItem["realized"]>["costs"], cur: Cur): s
   if (c.source === "toss" && c.total !== null) return `${money(-c.total, cur, true)} (토스 주문 내역)`;
   if (c.source === "estimated" && c.total !== null) return `약 ${money(-c.total, cur, true)} · 토스 평가 차감 비율로 추정 (위 실현손익에서는 빼지 않음)`;
   return JOURNAL.costsNone;
+}
+
+function costSpeech(c: NonNullable<JournalItem["realized"]>["costs"], cur: Cur): string {
+  if (c.source === "toss" && c.total !== null) return `수수료·세금 ${speakAmount(money(c.total, cur))} 뺌, 토스 주문 내역`;
+  if (c.source === "estimated" && c.total !== null) return `수수료·세금 약 ${speakAmount(money(c.total, cur))}, 토스 평가 차감 비율로 추정, 위 실현손익에서는 빼지 않음`;
+  return `수수료·세금, ${JOURNAL.costsNone}`;
 }
 
 /** 어디서 출발한 계산인지 */
@@ -414,10 +471,16 @@ export function stockPanelText(orders: number): string {
 
 // ── 수익률 ────────────────────────────────────────────────────────────
 
+/**
+ * 숫자를 못 보여 줄 때 안내: 기록 전체가 아직 짧음('지금 N거래일' — 기록 전체 길이) · 기록은 충분한데 고른 기간 안 기록이 2번보다 적음.
+ * recordDays 가 없는 예전 서버는 기간 안 거래일로 센다
+ */
 export function returnsNotReady(r: JournalReturns): string {
   const need = r.needDays ?? 10;
+  const record = r.recordDays ?? r.tradingDays ?? 0;
+  if (record >= need) return `고른 기간 안에 계좌 기록이 ${r.tradingDays ?? 0}거래일뿐이라 수익률을 계산할 수 없어요. 기간을 더 길게 골라 주세요.`;
   const since = r.recordSince ?? r.actual?.from ?? null;
-  return `기간 수익률은 매일 장 마감 뒤 찍은 계좌 기록으로 계산해요. 기록이 ${need}거래일 쌓이면 보여 드려요. 지금 ${r.tradingDays ?? 0}거래일${since ? ` (${mdKo(since)}부터)` : ""}.`;
+  return `기간 수익률은 매일 장 마감 뒤 찍은 계좌 기록으로 계산해요. 기록이 ${need}거래일 쌓이면 보여 드려요. 지금 ${record}거래일${since ? ` (${mdKo(since)}부터)` : ""}.`;
 }
 
 export function returnsHeader(r: JournalReturns): string | null {
@@ -456,15 +519,28 @@ export function returnsMethod(r: JournalReturns): string[] {
   return out;
 }
 
+/** 요약 묶음 화면 읽기: 기간·수익률·기간 손익 + 화면에 보이는 시작→끝 평가금액·그 사이 사고판 금액·기록 시작일부터 계산한 까닭 */
 export function returnsSpeech(r: JournalReturns): string {
   if (!r.ready || !r.actual) return returnsNotReady(r);
   const cur: Cur = r.currency ?? "KRW";
   const pnl = money(r.pnl ?? null, cur);
+  const flows = (r.buys ?? 0) > 0 || (r.sells ?? 0) > 0;
   return sentence([
     `${mdKo(r.actual.from)}부터 ${mdKo(r.actual.to)}까지 ${r.tradingDays}거래일`,
     `수익률 시간가중 ${speakRate(r.twr ?? null) ?? "없음"}`,
     `기간 손익 ${speakProfit(pnl, shownSign(r.pnl ?? null, pnl)) ?? "없음"}`,
+    r.startValue !== null && r.startValue !== undefined && r.endValue !== null && r.endValue !== undefined
+      ? `시작 평가금액 ${speakAmount(money(r.startValue, cur))}에서 끝 ${speakAmount(money(r.endValue, cur))}`
+      : null,
+    flows ? `그 사이 매수 ${speakAmount(money(r.buys ?? 0, cur))}, 매도 ${speakAmount(money(r.sells ?? 0, cur))}, 수익률 계산에서 뺐어요` : null,
+    r.clippedToRecordStart ? "고른 기간보다 기록이 짧아 기록 시작일부터 계산했어요" : null,
   ]);
+}
+
+/** 누적 수익률 선 그림 제목·양 끝 날짜 (점이 2개 이상일 때) */
+export function returnLineLabels(series: { date: string; cum: number }[]): { title: string; from: string; to: string } | null {
+  if (series.length < 2) return null;
+  return { title: "날짜별 누적 수익률", from: mdKo(series[0]!.date), to: mdKo(series[series.length - 1]!.date) };
 }
 
 // ── 양도세 추정 ───────────────────────────────────────────────────────
@@ -496,9 +572,19 @@ export function taxRefetch(data: JournalTax | undefined, tries: number): number 
   return data?.enabled && (data.fxPending ?? 0) > 0 && tries < TAX_RETRY_MAX ? TAX_RETRY_MS : false;
 }
 
+/**
+ * 다시 묻기 횟수를 셀 기준 (쿼리의 받은 횟수 dataUpdateCount): 받는 중이 아니면 null, 받는 중이 막 시작됐으면 그때의 받은 횟수.
+ * 다시 물은 횟수 = 지금 받은 횟수 − 기준. 그 전에 쌓인 받은 횟수(앱을 다시 열어 새로 받은 것 등)는 세지 않는다
+ */
+export function pendingStart(prev: number | null, data: JournalTax | undefined, count: number): number | null {
+  if (!data?.enabled || (data.fxPending ?? 0) <= 0) return null;
+  return prev === null || prev > count ? count : prev;
+}
+
 export interface TaxView {
   title: string;
-  rows: { label: string; value: string; sign?: number; strong?: boolean }[];
+  /** speech: 화면 읽기 문장 (금액·기호를 읽는 말로) */
+  rows: { label: string; value: string; sign?: number; strong?: boolean; speech: string }[];
   sub: string;
   zeroNote: string | null;
   pending: string | null;
@@ -510,12 +596,13 @@ export function taxView(d: JournalTax, retriesDone: boolean): TaxView | null {
   const t = d.totals;
   const won = (v: number, sign = false) => money(v, "KRW", sign);
   const netText = `${won(t.net, true)}${t.net < 0 ? " (손실)" : ""}`;
+  const deduction = d.rules?.deduction ?? 2_500_000;
   const rows: TaxView["rows"] = [
-    { label: "양도차익 합계 (이익 − 손실)", value: netText, sign: shownSign(t.net, won(t.net)) },
-    { label: "기본공제", value: won(-(d.rules?.deduction ?? 2_500_000), true) },
-    { label: "과세 대상 금액", value: won(t.base) },
-    { label: "세율", value: "22% (양도소득세 20% + 지방소득세 2%)" },
-    { label: "예상 세액 (추정)", value: won(t.tax), strong: true },
+    { label: "양도차익 합계 (이익 − 손실)", value: netText, sign: shownSign(t.net, won(t.net)), speech: `양도차익 합계, 이익에서 손실을 뺀 금액, ${profitSpeech(t.net, "KRW")}` },
+    { label: "기본공제", value: won(-deduction, true), speech: `기본공제 ${speakAmount(won(deduction))} 빼기` },
+    { label: "과세 대상 금액", value: won(t.base), speech: `과세 대상 금액 ${speakAmount(won(t.base))}` },
+    { label: "세율", value: "22% (양도소득세 20% + 지방소득세 2%)", speech: "세율 22퍼센트, 양도소득세 20퍼센트와 지방소득세 2퍼센트" },
+    { label: "예상 세액 (추정)", value: won(t.tax), strong: true, speech: `예상 세액 추정 ${speakAmount(won(t.tax))}` },
   ];
   const pendingN = d.fxPending ?? 0;
   // 다시 묻기를 다 썼는데도 받는 중이면 빠진 매도로 보여 준다 (끝나지 않는 '받는 중' 막기)
@@ -542,6 +629,11 @@ export function taxItemLines(x: JournalTaxItem): [string, string] {
   const first = `${mdShort(x.tradeDate)} ${x.name} ${qtyText(x.quantity)} · 결제일 ${mdShort(x.settleDate)}${x.settleSource === "estimated" ? "(추정)" : ""} · ${rate}`;
   const second = `양도가액 ${money(x.proceedsKrw, "KRW")} − 취득가액 ${money(x.costKrw, "KRW")}${x.costsKrw !== null ? ` − 비용 ${money(x.costsKrw, "KRW")}` : ""} = ${money(x.gainKrw, "KRW", true)}`;
   return [first, second];
+}
+
+/** 폴드 가로 오른쪽 칸: 매도별 계산에 넣은 매도가 없을 때 */
+export function perSellNone(year: number): string {
+  return `${year}년 계산에 넣은 해외주식 매도가 없어요.`;
 }
 
 export function krTaxLine(d: JournalTax): string {

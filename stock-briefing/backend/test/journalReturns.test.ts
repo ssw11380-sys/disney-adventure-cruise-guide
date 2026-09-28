@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { periodReturns, presetRange, READY_DAYS, type RetFlow, type RetSnap } from "../src/services/journalReturns.js";
+import { MIN_POINTS, periodReturns, presetRange, READY_DAYS, type RetFlow, type RetSnap } from "../src/services/journalReturns.js";
 
 /**
  * 기간 수익률 (3-37) — 스냅샷 시간가중 수익률(TWR). 순수 함수, 고정 값.
@@ -26,6 +26,11 @@ const US = (date: string, usd: number, fx: number, asOf: string, over: Partial<R
   holdings: [{ code: "SOXL", quantity: 1, price: usd, regularClose: usd }],
   ...over,
 });
+const nextDay = (d: string) => {
+  const x = new Date(`${d}T12:00:00Z`);
+  x.setUTCDate(x.getUTCDate() + 1);
+  return x.toISOString().slice(0, 10);
+};
 const flow = (market: "KR" | "US", side: "BUY" | "SELL", amount: number, at: string): RetFlow => ({ market, side, amount, at, kind: "trade" });
 const days = (n: number, start = "2026-09-28") => {
   const out: string[] = [];
@@ -119,15 +124,41 @@ describe("시간가중 수익률", () => {
 });
 
 describe("공개 조건 · 기간", () => {
-  it("기간 안 스냅샷이 10거래일 미만이면 ready false (숫자 대신 안내), 10거래일이면 true (§9-20)", () => {
+  it("기록 전체가 10거래일 미만이면 ready false (숫자 대신 안내), 10거래일이면 true (§9-20)", () => {
     expect(READY_DAYS).toBe(10);
     const nine = days(9);
     const r9 = periodReturns(q(nine[0]!, nine[8]!), nine.map((d, i) => KR(d, 1_000_000 + i)), []);
-    expect(r9).toMatchObject({ ready: false, tradingDays: 9, twr: null, pnl: null, series: [] });
+    expect(r9).toMatchObject({ ready: false, tradingDays: 9, recordDays: 9, twr: null, pnl: null, series: [] });
     const ten = days(10);
     const r10 = periodReturns(q(ten[0]!, ten[9]!), ten.map((d, i) => KR(d, 1_000_000 + i)), []);
     expect(r10.ready).toBe(true);
-    expect(r10.tradingDays).toBe(10);
+    expect(r10).toMatchObject({ tradingDays: 10, recordDays: 10 });
+  });
+
+  it("회귀: 공개 조건은 기록 전체 길이 — 기록이 60거래일이면 1주(기간 안 5~6거래일)도 전체·한국·미국 모두 숫자가 나온다", () => {
+    const d = days(60, "2026-07-01");
+    const today = d.at(-1)!;
+    const snaps: RetSnap[] = d.flatMap((x, i) => [KR(x, 1_000_000 + i * 1000), US(x, 100 + i, 1400, `${nextDay(x)}T05:05:00+09:00`)]);
+    const range = presetRange("1W", today);
+    for (const market of ["ALL", "KR", "US"] as const) {
+      const r = periodReturns({ requested: range, market, recordSince: d[0]! }, snaps, []);
+      expect(r.ready, market).toBe(true);
+      expect(r.recordDays, market).toBe(60);
+      expect(r.tradingDays, market).toBeLessThanOrEqual(6);
+      expect(r.twr, market).not.toBeNull();
+    }
+    // 1달도 그대로
+    expect(periodReturns({ requested: presetRange("1M", today), market: "KR", recordSince: d[0]! }, snaps, []).ready).toBe(true);
+  });
+
+  it("회귀: 기록은 충분한데 고른 기간 안 평가 시점이 1개뿐(하루만 고름)이면 계산하지 않고 ready false — recordDays 로 구분", () => {
+    expect(MIN_POINTS).toBe(2);
+    const d = days(12);
+    const r = periodReturns(q(d[5]!, d[5]!), d.map((x, i) => KR(x, 1_000_000 + i)), []);
+    expect(r).toMatchObject({ ready: false, tradingDays: 1, recordDays: 12, twr: null, actual: { from: d[5], to: d[5] } });
+    // 기간 안 점이 없음(주말만 고름)
+    const w = periodReturns(q("2026-10-03", "2026-10-04"), d.map((x, i) => KR(x, 1_000_000 + i)), []);
+    expect(w).toMatchObject({ ready: false, tradingDays: 0, recordDays: 12, actual: null });
   });
 
   it("고른 기간이 기록 시작보다 앞이면 기록 시작일부터 계산하고 그렇게 알린다", () => {

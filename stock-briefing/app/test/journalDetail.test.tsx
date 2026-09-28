@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   journalStock: undefined as unknown,
   journalCalls: [] as string[],
   push: vi.fn(),
+  afterCost: false,
 }));
 
 vi.mock("react-native", () => ({
@@ -71,7 +72,7 @@ vi.mock("@/api/hooks", () => ({
     return { ...idle, data: enabled ? h.journalStock : undefined };
   },
 }));
-vi.mock("@/lib/settings", () => ({ useSettings: () => ({ showKrw: false, afterCost: false, sort: "created", apiUrl: "http://x" }) }));
+vi.mock("@/lib/settings", () => ({ useSettings: () => ({ showKrw: false, afterCost: h.afterCost, sort: "created", apiUrl: "http://x" }) }));
 vi.mock("@/lib/holdingsNav", async (orig) => ({ ...(await orig<typeof import("@/lib/holdingsNav")>()), useHoldingsNav: () => null, useCachedRow: () => null }));
 vi.mock("@/lib/chartPrefs", () => ({ CANDLE_COUNT: { D: 800, W: 520, M: 240 }, parseCandlePeriod: () => "D" }));
 vi.mock("@/components/BriefingCard", () => ({ BriefingCard: "BriefingCard" }));
@@ -132,6 +133,7 @@ const print = (r: R) => createHash("sha1").update(JSON.stringify(tree(r.tree))).
 
 beforeEach(() => {
   h.flags = {};
+  h.afterCost = false;
   h.journalStock = undefined;
   h.journalCalls = [];
   h.push.mockReset();
@@ -213,6 +215,30 @@ describe("켜면: 종목 상세 입구 (§4.1 ③)", () => {
       expect(textOf(title).startsWith("내 보유")).toBe(true);
       r.act(() => (link[0]!.props.onPress as () => void)());
       expect(h.push).toHaveBeenLastCalledWith("/journal?code=005930");
+    });
+
+    it(`회귀: 넓은 창(${size})에서 '내 보유' 제목 줄에 숫자 기준 안내(매도 비용 차감)가 있으면 링크를 제목 줄에 넣지 않고 칸 맨 아래 한 줄로 — 안내가 잘리지 않게`, () => {
+      h.afterCost = true;
+      const cost = (): Detail => {
+        const s = samsung();
+        return { ...s, evaluation: { ...s.evaluation!, afterCost: { marketValue: 10_000_000, profit: 1_480_000, profitRate: 17.37 } } };
+      };
+      const r = open(cost(), size, ON);
+      expect(r.all().some((n) => n.props.testID === "journal-stock-link")).toBe(false);
+      // 안내 글이 있는 제목 줄에는 안내만 (다른 누를 것 없음)
+      const note = r.all().find((n) => n.type === "Text" && /비용 차감/.test(textOf(n)) && n.props.numberOfLines === 1)!;
+      expect(note).toBeTruthy();
+      const titleRow = parentOf(r, note);
+      expect(textOf(titleRow).startsWith("내 보유")).toBe(true);
+      expect(titleRow.children.filter((c) => typeof c !== "string" && c.type === "Pressable")).toHaveLength(0);
+      // 칸 맨 아래 '이 종목 매매 기록 ›' 한 줄 (높이 44)
+      const row = r.all().filter((n) => n.props.testID === "journal-stock-row");
+      expect(row).toHaveLength(1);
+      expect(pressStyle(row[0]!).minHeight).toBe(44);
+      r.act(() => (row[0]!.props.onPress as () => void)());
+      expect(h.push).toHaveBeenLastCalledWith("/journal?code=005930");
+      // 플래그를 끄면 줄도 없음
+      expect(open(cost(), size, {}).all().some((n) => n.props.testID === "journal-stock-row")).toBe(false);
     });
   }
 });

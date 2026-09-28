@@ -12,13 +12,17 @@
  *    '그 시각까지의 최신 한국 + 최신 미국(그 스냅샷 환율)'. 한 시장의 흐름은 그 시장의 다음 스냅샷에서 센다(미국은 그 스냅샷 환율로 원화)
  *  - 빈칸(gap)은 앞뒤를 한 구간으로 이어 계산, 의심을 안고 저장한 스냅샷은 평가 시점에서 뺀다
  *  - 현금 입출금·배당은 넣지 않는다(토스 Open API 가 주지 않음 — 주식 평가금액만의 가격 수익률)
- *  - 공개 조건: 기간 안 평가 시점이 READY_DAYS(10)거래일 미만이면 숫자를 주지 않는다(ready false)
+ *  - 공개 조건(로드맵 '3-36 뒤 최소 2주를 모은 다음 공개'): 기록 전체(기간과 상관없이)의 평가 시점이 READY_DAYS(10)거래일 미만이면 숫자를 주지 않는다
+ *    (ready false, recordDays 로 '지금 N거래일'). 기록이 충분해도 고른 기간 안 평가 시점이 MIN_POINTS(2) 미만이면 계산할 수 없어 ready false
+ *    (1주는 거래일이 많아야 5~6일이라, 기간 안 점 수로 막으면 영영 나오지 않는다)
  */
 
 export type ReturnsMarket = "ALL" | "KR" | "US";
 export type Preset = "1W" | "1M" | "3M" | "YTD" | "1Y" | "custom";
 
 export const READY_DAYS = 10;
+/** 고른 기간 안에 이만큼 평가 시점이 있어야 계산한다 (시작·끝) */
+export const MIN_POINTS = 2;
 
 export interface RetSnap {
   date: string;
@@ -44,7 +48,10 @@ export interface RetFlow {
 
 export interface ReturnsBody {
   ready: boolean;
+  /** 고른 기간 안 평가 시점의 거래일 수 */
   tradingDays: number;
+  /** 기록 전체의 평가 시점 거래일 수 (공개 조건은 이것 ≥ needDays) */
+  recordDays: number;
   needDays: number;
   requested: { from: string; to: string };
   actual: { from: string; to: string } | null;
@@ -115,7 +122,13 @@ function valueOf(s: RetSnap, basis: ReturnsBody["priceBasis"], codes: Set<string
   return v;
 }
 
-/** opts.minDays: 공개 조건(기본 READY_DAYS) — 계산만 확인하는 테스트는 1 */
+/** 평가 시점으로 쓰는 스냅샷: 성공(ok)·의심 없음, 전체(원화)의 미국 몫은 환율이 있어야 */
+function usableSnap(s: RetSnap, market: ReturnsMarket): boolean {
+  const markets = market === "ALL" ? ["KR", "US"] : [market];
+  return markets.includes(s.market) && s.status === "ok" && !s.doubted && (s.market === "KR" || market !== "ALL" || s.fx !== null);
+}
+
+/** opts.minDays: 공개 조건(기본 READY_DAYS — 기록 전체 거래일) — 계산만 확인하는 테스트는 1 */
 export function periodReturns(
   q: { requested: { from: string; to: string }; market: ReturnsMarket; recordSince: string | null },
   snaps: RetSnap[],
@@ -128,7 +141,9 @@ export function periodReturns(
   const inRange = snaps.filter((s) => (markets as readonly string[]).includes(s.market) && s.date >= requested.from && s.date <= requested.to);
   const gaps = [...new Set(inRange.filter((s) => s.status === "gap").map((s) => s.date))].sort();
   const doubtedSkipped = [...new Set(inRange.filter((s) => s.status === "ok" && s.doubted).map((s) => s.date))].sort();
-  const usable = inRange.filter((s) => s.status === "ok" && !s.doubted && (s.market === "KR" || market !== "ALL" || s.fx !== null)).sort((a, b) => t(a.asOf) - t(b.asOf));
+  const usable = inRange.filter((s) => usableSnap(s, market)).sort((a, b) => t(a.asOf) - t(b.asOf));
+  // 기록 전체 길이 (고른 기간과 상관없이) — 공개 조건
+  const recordDays = new Set(snaps.filter((s) => usableSnap(s, market)).map((s) => s.date)).size;
   const basis = { regularClose: 0, priceFallback: 0, fallbackCodes: [] as string[] };
   const fallbackCodes = new Set<string>();
   const points: Point[] = usable.map((snap) => ({ snap, value: valueOf(snap, basis, fallbackCodes) }));
@@ -137,6 +152,7 @@ export function periodReturns(
   const base: ReturnsBody = {
     ready: false,
     tradingDays: 0,
+    recordDays,
     needDays: READY_DAYS,
     requested,
     actual: null,
@@ -189,7 +205,8 @@ export function periodReturns(
   if (seq.length === 0) return base;
   const tradingDays = new Set(seq.map((x) => x.p.snap.date)).size;
   const actual = { from: seq[0]!.p.snap.date, to: seq.at(-1)!.p.snap.date };
-  if (tradingDays < (opts.minDays ?? READY_DAYS)) return { ...base, tradingDays, actual };
+  // 기록이 아직 짧음 · 기록은 충분하지만 고른 기간 안 평가 시점이 모자람 (시작과 끝이 있어야 계산)
+  if (recordDays < (opts.minDays ?? READY_DAYS) || seq.length < MIN_POINTS) return { ...base, tradingDays, actual };
   let growth = 1;
   let buys = 0,
     sells = 0,

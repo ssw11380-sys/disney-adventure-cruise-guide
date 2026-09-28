@@ -1094,7 +1094,10 @@ export interface JournalReturns {
   enabled: boolean;
   ready: boolean;
   recordSince?: string | null;
+  /** 고른 기간 안 평가 시점의 거래일 수 */
   tradingDays?: number;
+  /** 기록 전체의 거래일 수 (공개 조건 — 이것이 needDays 이상이어야 숫자). 예전 서버는 없음 */
+  recordDays?: number;
   needDays?: number;
   requested?: { from: string; to: string };
   actual?: { from: string; to: string } | null;

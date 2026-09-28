@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Button, Chip } from "@/components/ui";
 import { customRangeError, dayHeader, JOURNAL, PERIODS, type ListPreset } from "@/lib/journal";
-import { font, radius, space, useTheme } from "@/theme";
+import { font, radius, space, touch, useTheme } from "@/theme";
 
 /**
  * 기간 칩 줄 (3-37 매매일지 기록·수익률 탭): 1주 · 1달 · 3달 · 올해 · 1년 · 직접. 가로로 밀 수 있고(줄바꿈 없음) 칩은 누르는 곳 44.
@@ -33,6 +33,8 @@ export function PeriodChips({
             label={p.label}
             active={value === p.value}
             accessibilityLabel={`기간 ${p.label}`}
+            // '1주'·'1달'처럼 짧은 칩도 누르는 폭 44 이상
+            minWidth={touch.min}
             onPress={() => (p.value === "custom" ? setPicking(true) : onChange(p.value))}
           />
         ))}

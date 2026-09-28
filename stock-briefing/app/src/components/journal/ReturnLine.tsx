@@ -1,10 +1,12 @@
 import React, { useState } from "react";
-import { View, type LayoutChangeEvent } from "react-native";
+import { Text, View, type LayoutChangeEvent } from "react-native";
 import { Line, Path, Svg } from "react-native-svg";
-import { changeColor, useTheme } from "@/theme";
+import { returnLineLabels } from "@/lib/journal";
+import { changeColor, font, space, useTheme } from "@/theme";
 
 /**
  * 날짜별 누적 수익률 선 (3-37 수익률 탭). 0% 가로선과 누적 값 선 하나 — 끝 값이 이익이면 빨강, 손실이면 파랑.
+ * 위에 제목 '날짜별 누적 수익률', 아래 양 끝 날짜, 0% 선 오른쪽 끝에 '0%' (무엇을 그린 선인지 보이게).
  * 숫자는 위 요약 문장이 읽으므로 화면 읽기에서는 숨긴다
  */
 export const RETURN_LINE_H = 120;
@@ -27,14 +29,29 @@ export function ReturnLine({ series }: { series: { date: string; cum: number }[]
   const values = series.map((s) => s.cum);
   const { d, zeroY } = linePath(values, w, RETURN_LINE_H);
   const color = changeColor(t, values.at(-1) ?? 0);
+  const labels = returnLineLabels(series);
+  // '0%' 글자: 0% 선 바로 위 (그림 안에서 넘치지 않게)
+  const zeroTop = Math.max(0, Math.min(RETURN_LINE_H - ZERO_LABEL_H, zeroY - ZERO_LABEL_H));
   return (
-    <View onLayout={(e: LayoutChangeEvent) => setW(Math.round(e.nativeEvent.layout.width))} style={{ height: RETURN_LINE_H }} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden testID="return-line">
-      {w > 0 && d ? (
-        <Svg width={w} height={RETURN_LINE_H}>
-          <Line x1={0} y1={zeroY} x2={w} y2={zeroY} stroke={t.line} strokeWidth={1} />
-          <Path d={d} stroke={color} strokeWidth={2} fill="none" />
-        </Svg>
+    <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden testID="return-line" style={{ gap: space.xxs }}>
+      {labels ? <Text style={{ color: t.sub, fontSize: font.small, fontWeight: "700" }}>{labels.title}</Text> : null}
+      <View onLayout={(e: LayoutChangeEvent) => setW(Math.round(e.nativeEvent.layout.width))} style={{ height: RETURN_LINE_H }}>
+        {w > 0 && d ? (
+          <Svg width={w} height={RETURN_LINE_H}>
+            <Line x1={0} y1={zeroY} x2={w} y2={zeroY} stroke={t.line} strokeWidth={1} />
+            <Path d={d} stroke={color} strokeWidth={2} fill="none" />
+          </Svg>
+        ) : null}
+        {w > 0 && d ? <Text style={{ position: "absolute", right: 0, top: zeroTop, color: t.muted, fontSize: font.tiny }}>0%</Text> : null}
+      </View>
+      {labels ? (
+        <View style={{ flexDirection: "row", justifyContent: "space-between", columnGap: space.sm }}>
+          <Text style={{ color: t.muted, fontSize: font.tiny }}>{labels.from}</Text>
+          <Text style={{ color: t.muted, fontSize: font.tiny }}>{labels.to}</Text>
+        </View>
       ) : null}
     </View>
   );
 }
+
+const ZERO_LABEL_H = Math.ceil(font.tiny * 1.4);

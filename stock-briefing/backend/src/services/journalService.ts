@@ -6,7 +6,7 @@ import type { FeatureKey } from "./featureService.js";
 import { replayPair, round6, roundMoney, tossCosts, type Cur, type EstimatedRow, type LedgerAnchor, type LedgerFill, type PairResult, type Realized } from "./journalCalc.js";
 import { periodReturns, presetRange, READY_DAYS, type Preset, type RetFlow, type RetSnap, type ReturnsBody, type ReturnsMarket } from "./journalReturns.js";
 import { tradingDate } from "./marketContext.js";
-import { taxSummary, TAX_RULES, usSettleDate, type TaxFx, type TaxSellInput } from "./taxRules.js";
+import { isKrBankDay, taxSummary, TAX_RULES, usSettleDate, type TaxFx, type TaxSellInput } from "./taxRules.js";
 import { addDays, marketOf, type RecordMarket, type SnapshotHolding } from "./tradeRecordCalc.js";
 import { parseData, STATE_KEY, tradeView, type TradeRow, type TradeView } from "./tradeRecordService.js";
 
@@ -334,8 +334,13 @@ export class JournalService {
         realized: realizedSum(list.filter((x) => x.side === "SELL")),
         items: list.sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.key < b.key ? 1 : -1)),
       }));
+    // 종목 고르기 목록: 종목을 골랐어도 기간 안 체결이 있는 모든 종목 (고른 종목에서 다른 종목으로 바로 바꿀 수 있게)
     const stockCount = new Map<string, Set<string>>();
-    for (const x of fills) stockCount.set(x.code, (stockCount.get(x.code) ?? new Set()).add(orderKey(x)));
+    for (const t of q.code ? await this.trades() : trades) {
+      if (!t.fills.some((f) => f.quantity > 0 && seoulDateOf(f.at) >= q.from && seoulDateOf(f.at) <= q.to)) continue;
+      stockCount.set(t.code, (stockCount.get(t.code) ?? new Set()).add(`${t.account}:${t.orderId}`));
+    }
+    const stockNames = q.code ? await this.names([...stockCount.keys()], snaps) : names;
     const truncated = await this.truncatedCodes();
     const head = q.code ? await this.stockHead(q.code, pairs, names, snaps, since) : undefined;
     return {
@@ -360,7 +365,7 @@ export class JournalService {
         truncated: truncated.filter((c) => codes.includes(c)),
       },
       days,
-      stocks: [...stockCount].map(([code, set]) => ({ code, name: names.get(code) ?? code, count: set.size })).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : 1)),
+      stocks: [...stockCount].map(([code, set]) => ({ code, name: stockNames.get(code) ?? code, count: set.size })).sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : 1)),
       ...(head ? { head } : {}),
     };
   }
@@ -508,15 +513,24 @@ export class JournalService {
     const [snaps, trades, toss, since] = await Promise.all([this.snapshots(), this.trades(), this.tossRates(), this.recordSince()]);
     const flows: RetFlow[] = [];
     for (const t of trades) for (const f of t.fills) if (f.quantity > 0) flows.push({ market: t.market, side: t.side, amount: f.amount, at: f.at, kind: "trade" });
-    // 주문 내역에 없는 수량 변화(이관 추정)는 그 스냅샷 가격으로 들어오고 나간 것으로 (분할·병합은 흐름이 아님)
+    // 주문 내역에 없는 수량 변화(이관 추정)는 그 스냅샷 가격으로 들어오고 나간 것으로 (분할·병합은 흐름이 아님).
+    // 전량 출고·상장폐지처럼 그 스냅샷에 종목이 없으면 그 종목이 있던 직전 스냅샷의 가격으로 (빼지 않으면 가짜 손실이 된다)
     const pairs = this.pairs(trades, snaps, toss);
+    const pxOf = (h: SnapshotHolding | undefined) => {
+      const v = h ? (h.regularClose ?? h.price) : null;
+      return v !== null && v !== undefined && Number.isFinite(v) ? v : null;
+    };
     for (const p of pairs.values()) {
       for (const e of p.res.estimated) {
         if (e.reason !== "transfer") continue;
+        const held = (x: SnapLite) => x.holdings.find((h) => h.account === p.account && h.code === p.code && h.quantity > 0);
         const s = snaps.find((x) => x.status === "ok" && x.market === p.market && x.asOf === e.at);
-        const h = s?.holdings.find((x) => x.account === p.account && x.code === p.code);
-        const px = h ? (h.regularClose ?? h.price) : null;
-        if (px === null || px === undefined) continue;
+        let px = s ? pxOf(held(s)) : null;
+        if (px === null && e.qty < 0) {
+          const before = snaps.filter((x) => x.status === "ok" && x.market === p.market && Date.parse(x.asOf) < Date.parse(e.at) && held(x));
+          px = pxOf(before.length ? held(before.at(-1)!) : undefined);
+        }
+        if (px === null) continue;
         flows.push({ market: p.market, side: e.qty > 0 ? "BUY" : "SELL", amount: Math.abs(e.qty) * px, at: e.at, kind: "transfer" });
       }
     }
@@ -732,7 +746,11 @@ export class JournalService {
 
   /**
    * 결제일 매매기준율: 서울외국환중개 공개 값을 그 기간 한 번에 받고, 네이버(하나은행 고시) 값과 1% 넘게 다르면 쓰지 않는다.
-   * 매매기준율을 받지 못한 날은 네이버 값으로 대신한다('naver-hana'). 받아 본 기간은 '고시가 없는 날'을 가리려고 적는다
+   * 매매기준율을 받지 못한 날은 네이버 값으로 대신한다('naver-hana'). 받아 본 기간은 '고시가 없는 날'을 가리려고 적는다.
+   *  - '받음'으로 보는 조건: 응답이 그 기간 한국 은행 영업일의 절반 이상을 덮는다. 빈 배열(모양이 바뀜 · 오류를 HTTP 200 오류 페이지로 줌)이나
+   *    듬성듬성한 응답은 '받지 못함'과 같게 — 네이버로 대신하고, 그것도 없으면 받기 횟수를 올려 다시(1시간·6시간·하루 뒤) 묻는다
+   *  - 받아 본 기간(stdCovered)은 실제 줄이 있는 구간(첫 요청일 ~ 마지막 줄)에만 적는다 — 줄이 끊긴 뒤의 날을 며칠 전 고시로 조용히 메우지 않게
+   *  - 결제일(한국 은행 영업일)인데 줄이 없으면 네이버 값으로 대신한다. 네이버에도 없으면(목록에 없는 휴일) 받아 본 기간 안에서는 직전 고시
    */
   private async fetchStd(dates: string[]): Promise<number> {
     const fx = this.deps.fx;
@@ -755,37 +773,40 @@ export class JournalService {
       }
     }
     const iso = seoulIso(this.now());
+    const today = seoulDate(this.now());
+    // 오늘은 아직 고시 전일 수 있다: 오늘 줄이 없으면 오늘은 '아직'(받기 횟수를 올리지 않고 다음에 다시)
+    const dueTo = to < today || std?.some((r) => r.date === today) ? to : addDays(today, -1);
+    const rows = (std ?? []).filter((r) => r.date >= from && r.date <= dueTo);
+    const bankDays = countDays(from, dueTo, isKrBankDay);
+    const stdOk = rows.length > 0 && rows.length * 2 >= bankDays;
+    if (std && !stdOk && bankDays > 0) this.deps.log?.warn({ from, to, rows: rows.length, bankDays }, "매매일지: 매매기준율 응답이 비었거나 모자라 받지 못한 것으로 봄");
     let n = 0;
+    const done = new Set<string>();
     const put = async (date: string, rate: number, source: string) => {
       const r = await this.deps.db.insertInto("fx_rates").values({ kind: "krw-std", at: date, rate, source, fetched_at: iso }).onConflict((oc) => oc.columns(["kind", "at"]).doNothing()).executeTakeFirst();
       if (Number(r.numInsertedOrUpdatedRows ?? 0) > 0) n++;
+      done.add(date);
     };
-    if (std) {
-      const got = new Set<string>();
-      for (const r of std) {
-        const nv = naverBy.get(r.date);
-        if (nv !== undefined && Math.abs(r.rate - nv) / nv > 0.01) {
-          this.deps.log?.warn({ date: r.date, smbs: r.rate, naver: nv }, "매매일지: 매매기준율이 하나은행 고시와 1% 넘게 달라 쓰지 않음");
-          continue;
-        }
-        got.add(r.date);
-        await put(r.date, r.rate, "smbs");
+    // 받은 줄은 (모자란 응답이어도) 하나은행 고시와 맞으면 쓴다 — 실제 고시 값이다
+    for (const r of rows) {
+      const nv = naverBy.get(r.date);
+      if (nv !== undefined && Math.abs(r.rate - nv) / nv > 0.01) {
+        this.deps.log?.warn({ date: r.date, smbs: r.rate, naver: nv }, "매매일지: 매매기준율이 하나은행 고시와 1% 넘게 달라 쓰지 않음");
+        continue;
       }
-      // 받아 본 기간 안에서 줄이 없는 날은 고시가 없는 날 (직전 고시를 쓴다). 1% 넘게 달라 버린 날은 네이버 값으로.
-      // 오늘은 아직 고시 전일 수 있어 받은 줄이 있을 때만 받아 본 것으로 적는다
-      const today = seoulDate(this.now());
-      const coverTo = to < today || std.some((r) => r.date === today) ? to : addDays(today, -1);
-      if (coverTo >= from) st.stdCovered.push([from, coverTo]);
-      for (const d of want) if (!got.has(d) && naverBy.has(d) && std.some((r) => r.date === d)) await put(d, naverBy.get(d)!, "naver-hana");
-    } else {
-      // 매매기준율을 못 받음: 네이버 값으로 대신, 그것도 없으면 다음에 다시
-      for (const d of want) {
-        const nv = naverBy.get(d);
-        if (nv !== undefined) await put(d, nv, "naver-hana");
-        else st.tries[d] = { n: (st.tries[d]?.n ?? 0) + 1, last: iso };
-      }
+      await put(r.date, r.rate, "smbs");
     }
-    for (const d of want) if (have.has(d) || covered(d)) delete st.tries[d];
+    const lastRow = rows.at(-1)?.date ?? null;
+    if (stdOk && lastRow) st.stdCovered.push([from, lastRow]);
+    for (const d of want) {
+      if (d > dueTo || done.has(d)) continue;
+      const nv = naverBy.get(d);
+      if (nv !== undefined) await put(d, nv, "naver-hana");
+      // 받아 본 기간 안인데 줄도 네이버 값도 없음 → 고시가 없는 날(직전 고시). 그 밖은 받지 못함 → 다음에 다시
+      else if (stdOk && lastRow && d <= lastRow) done.add(d);
+      else st.tries[d] = { n: (st.tries[d]?.n ?? 0) + 1, last: iso };
+    }
+    for (const d of done) delete st.tries[d];
     await this.saveFxState(st);
     if (n) this.deps.log?.info({ n, from, to }, "매매일지: 결제일 기준환율 저장");
     return n;
@@ -848,6 +869,13 @@ export function cleanNote(text: string): string | null {
 const HIDDEN = new Set([0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff]);
 function isHidden(cp: number): boolean {
   return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) || HIDDEN.has(cp);
+}
+
+/** [from, to] 가운데 조건에 맞는 날 수 (to < from 이면 0) */
+function countDays(from: string, to: string, ok: (d: string) => boolean): number {
+  let n = 0;
+  for (let d = from; d <= to; d = addDays(d, 1)) if (ok(d)) n++;
+  return n;
 }
 
 /** 받기 실패 뒤 기다림: 1시간 · 6시간 · 그 뒤 하루 */

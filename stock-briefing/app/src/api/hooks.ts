@@ -14,7 +14,7 @@ import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } fro
 import { loadedCredentials, useSettings } from "@/lib/settings";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
-import { taxRefetch } from "@/lib/journal";
+import { pendingStart, taxRefetch } from "@/lib/journal";
 import type { AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, JournalResponse, JournalReturns, JournalStockResponse, JournalTax, NotificationSettings, NotificationSettingsPatch, RankCategory, ReturnsMarket, ReturnsPreset, ThemeKind, ThemePeriod } from "./types";
 
 export function useApi(): Api {
@@ -627,7 +627,10 @@ export function useJournalReturns(q: { preset: ReturnsPreset; market: ReturnsMar
   });
 }
 
-/** 양도세 추정. 환율을 받는 중이면 1분마다 다시 묻되 5번까지 (lib/journal taxRefetch — 끝나지 않는 '받는 중' 막기) */
+/**
+ * 양도세 추정. 환율을 받는 중이면 1분마다 다시 묻되 5번까지 (lib/journal taxRefetch — 끝나지 않는 '받는 중' 막기).
+ * 횟수는 '받는 중'이 된 때부터 센다 (lib/journal pendingStart) — 앱을 다시 열어 새로 받은 횟수가 쌓여 있어도 새 매도의 '받는 중'은 처음부터 다시 묻는다
+ */
 export function useJournalTax(year: number | undefined, enabled: boolean) {
   const api = useApi();
   const qc = useQueryClient();
@@ -639,11 +642,21 @@ export function useJournalTax(year: number | undefined, enabled: boolean) {
     staleTime: 5 * 60_000,
     retry: 0,
     placeholderData: keepPreviousData,
-    refetchInterval: (q) => taxRefetch(q.state.data, Math.max(0, q.state.dataUpdateCount - 1)),
+    refetchInterval: (query) => taxRefetch(query.state.data, taxTries(query, query.state.data, query.state.dataUpdateCount)),
     refetchIntervalInBackground: false,
   });
-  // 받는 중일 때 다시 물은 횟수 (처음 받기는 빼고) — 다 쓰면 화면이 빠진 매도로 보여 준다
-  return { ...q, tries: Math.max(0, (qc.getQueryState(key)?.dataUpdateCount ?? 0) - 1) };
+  // 받는 중이 된 뒤 다시 물은 횟수 — 다 쓰면 화면이 빠진 매도로 보여 준다
+  const query = qc.getQueryCache().find<JournalTax>({ queryKey: key, exact: true });
+  return { ...q, tries: taxTries(query, query?.state.data, query?.state.dataUpdateCount ?? 0) };
+}
+
+/** 양도세 쿼리마다 '받는 중'이 된 때의 받은 횟수 (쿼리가 캐시에서 빠지면 같이 사라진다) */
+const taxPendingAt = new WeakMap<object, number | null>();
+function taxTries(query: object | undefined, data: JournalTax | undefined, count: number): number {
+  if (!query) return 0;
+  const at = pendingStart(taxPendingAt.get(query) ?? null, data, count);
+  taxPendingAt.set(query, at);
+  return at === null ? 0 : count - at;
 }
 
 /** 거래 메모 저장 — 끝나면 매매일지 목록을 다시 받는다 */

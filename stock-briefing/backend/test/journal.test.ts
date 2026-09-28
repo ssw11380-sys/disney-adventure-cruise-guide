@@ -208,6 +208,11 @@ describe("매매일지 목록 (GET /api/journal)", () => {
       lastTrade: "2026-09-29",
       memo: "장기 보유",
     });
+    // 종목 고르기 목록은 종목을 골랐어도 기간 안 체결이 있는 모든 종목 (다른 종목으로 바로 바꿀 수 있게)
+    expect(body.stocks).toEqual([
+      { code: "SOXL", name: "SOXL", count: 3 },
+      { code: "005930", name: "삼성전자", count: 1 },
+    ]);
     const st = (await get("/api/journal/stock/SOXL")).body;
     expect(st).toMatchObject({ enabled: true, code: "SOXL", holding: { quantity: 25, avgCost: 34.0132 }, orders: 3, realized: { amount: 17.43, currency: "USD" } });
     await app.close();
@@ -303,6 +308,38 @@ describe("기간 수익률 (GET /api/journal/returns)", () => {
     expect(body.series).toHaveLength(12);
     expect((await get("/api/journal/returns?preset=custom&from=2026-10-01")).status).toBe(400);
     await app.close();
+  });
+
+  it("회귀: 기록이 12거래일이면 1주(기간 안 거래일 6일 이하)도 숫자가 나온다 — 공개 조건은 기록 전체 길이", async () => {
+    const { get, app } = await withSnaps(12, new Date("2026-10-15T20:00:00+09:00"));
+    const { body } = await get("/api/journal/returns?preset=1W&market=KR");
+    expect(body).toMatchObject({ ready: true, recordDays: 12, requested: { from: "2026-10-08", to: "2026-10-15" }, actual: { from: "2026-10-08", to: "2026-10-15" } });
+    expect(body.tradingDays).toBeLessThanOrEqual(6);
+    expect(body.twr).not.toBeNull();
+    await app.close();
+  });
+
+  it("회귀: 종목이 통째로 사라지면(전량 이관 출고·상장폐지) 직전 스냅샷 가격으로 나간 흐름 — 가짜 손실이 아니라 0%", async () => {
+    const t = await setup({ seed: false, now: new Date("2026-10-15T20:00:00+09:00") });
+    const both = [
+      { code: "005930", name: "삼성전자", qty: 1, cost: 1000, price: 1000 },
+      { code: "000660", name: "SK하이닉스", qty: 1, cost: 1000, price: 1000 },
+    ];
+    await t.db
+      .insertInto("account_snapshots")
+      .values(DAYS.map((d, i) => snapRow(d, "KR", TS(`${d}T16:05:00`), i < 6 ? both : both.slice(0, 1))))
+      .execute();
+    const { body } = await t.get("/api/journal/returns?preset=1M&market=KR");
+    expect(body).toMatchObject({ ready: true, twr: 0, pnl: 0, sells: 1000, transfersEstimated: 1 });
+    // 일부만 출고(1주 → 0.5주)는 그날 가격 그대로
+    const t2 = await setup({ seed: false, now: new Date("2026-10-15T20:00:00+09:00") });
+    await t2.db
+      .insertInto("account_snapshots")
+      .values(DAYS.map((d, i) => snapRow(d, "KR", TS(`${d}T16:05:00`), i < 6 ? both : [both[0]!, { ...both[1]!, qty: 0.5, cost: 500 }])))
+      .execute();
+    expect((await t2.get("/api/journal/returns?preset=1M&market=KR")).body).toMatchObject({ ready: true, twr: 0, pnl: 0, transfersEstimated: 1 });
+    await t.app.close();
+    await t2.app.close();
   });
 });
 
@@ -434,6 +471,56 @@ describe("배경 환율 받기", () => {
     const rows = await failing.db.selectFrom("fx_rates").select(["at", "source"]).where("kind", "=", "krw-std").execute();
     expect(rows.length).toBe(3);
     expect(new Set(rows.map((x) => x.source))).toEqual(new Set(["naver-hana"]));
+  });
+
+  const fxState = async (db: Db) => {
+    const row = await db.selectFrom("meta").select("value").where("key", "=", "journal_fx_state").executeTakeFirst();
+    return row ? (JSON.parse(row.value) as { stdCovered: Array<[string, string]>; tries: Record<string, { n: number }> }) : null;
+  };
+
+  it("회귀: 매매기준율 응답이 예외 없이 빈 배열(모양 바뀜·HTTP 200 오류 페이지)이면 받지 못한 것으로 보고 하나은행 값으로 대신 — 받아 본 기간으로 적지 않는다", async () => {
+    const { db, s, warns } = await svc({ tossAt: async () => 1390, std: async () => [], naver: async () => business("2026-09-01", "2026-09-30").map((d) => ({ date: d, rate: 1351 })) });
+    await s.tick();
+    const rows = await db.selectFrom("fx_rates").select(["at", "source"]).where("kind", "=", "krw-std").orderBy("at").execute();
+    expect(rows).toEqual([
+      { at: "2026-09-03", source: "naver-hana" },
+      { at: "2026-09-28", source: "naver-hana" },
+      { at: "2026-09-29", source: "naver-hana" },
+    ]);
+    expect((await fxState(db))!.stdCovered).toEqual([]);
+    expect(warns.some((w) => w.includes("비었거나 모자라"))).toBe(true);
+    const tax = await s.tax(2026);
+    expect(tax.excluded).toEqual([]);
+    expect(tax.items[0]!.fxSell).toEqual({ rate: 1351, source: "naver-hana", date: "2026-09-29", provisional: false });
+  });
+
+  it("회귀: 빈 응답이고 하나은행 값도 없으면 '받는 중'으로 남기고 받기 횟수를 올린다 (영구 '받지 못함'이 아님)", async () => {
+    const { db, s } = await svc({ tossAt: async () => 1390, std: async () => [], naver: async () => [] });
+    await s.tick();
+    const st = (await fxState(db))!;
+    expect(st.stdCovered).toEqual([]);
+    expect(Object.fromEntries(Object.entries(st.tries).filter(([k]) => !k.startsWith("t:")).map(([k, v]) => [k, v.n]))).toEqual({ "2026-09-03": 1, "2026-09-28": 1, "2026-09-29": 1 });
+    const tax = await s.tax(2026);
+    expect(tax.fxPending).toBe(1);
+    expect(tax.excluded).toEqual([]);
+  });
+
+  it("회귀: 매매기준율 줄이 중간에 끊기면(늦게 올라옴) 받아 본 기간은 마지막 줄까지만 — 그 뒤 결제일을 며칠 전 고시로 조용히 메우지 않는다", async () => {
+    const upTo = "2026-09-23";
+    const { db, s } = await svc({
+      tossAt: async () => 1390,
+      std: async (from, to) => business(from, to).filter((d) => d <= upTo).map((d) => ({ date: d, rate: 1350 })),
+      naver: async () => business("2026-09-01", upTo).map((d) => ({ date: d, rate: 1351 })),
+    });
+    await s.tick();
+    const st = (await fxState(db))!;
+    expect(st.stdCovered).toEqual([["2026-09-03", upTo]]);
+    expect(st.tries["2026-09-28"]?.n).toBe(1);
+    expect(st.tries["2026-09-29"]?.n).toBe(1);
+    const tax = await s.tax(2026);
+    // 9/29 결제 매도는 9/23 고시로 계산되지 않고 '받는 중'
+    expect(tax.fxPending).toBe(1);
+    expect(tax.items).toEqual([]);
   });
 
   it("플래그가 꺼져 있으면 환율 요청 0건 (§9-26)", async () => {

@@ -5,7 +5,7 @@ import { useJournalTax } from "@/api/hooks";
 import type { JournalTax } from "@/api/types";
 import { TwoPane } from "@/components/TwoPane";
 import { Chip, Empty, ErrorView, Loading } from "@/components/ui";
-import { krTaxLine, TAX, TAX_RETRY_MAX, taxItemLines, taxView } from "@/lib/journal";
+import { krTaxLine, perSellNone, TAX, TAX_RETRY_MAX, taxItemLines, taxView } from "@/lib/journal";
 import { changeColor, font, radius, space, touch, useTheme } from "@/theme";
 
 /**
@@ -14,6 +14,7 @@ import { changeColor, font, radius, space, touch, useTheme } from "@/theme";
  * 환율을 받는 중이면 1분마다 5번까지 다시 묻고(useJournalTax), 그래도 받는 중이면 빠진 매도로 보여 준다. 폴드 가로는 왼쪽 합계·기준 | 오른쪽 매도별 계산
  */
 export function TaxView({ twoPane, thisYear }: { twoPane: boolean; thisYear: number }) {
+  const t = useTheme();
   const [year, setYear] = useState<number>(thisYear);
   const q = useJournalTax(year, true);
   const d = q.data;
@@ -35,9 +36,17 @@ export function TaxView({ twoPane, thisYear }: { twoPane: boolean; thisYear: num
           </ScrollView>
         }
         right={
-          <ScrollView contentContainerStyle={styles.pane}>
-            <PerSell d={d} alwaysOpen />
-          </ScrollView>
+          d.items?.length ? (
+            <ScrollView contentContainerStyle={styles.pane}>
+              <PerSell d={d} alwaysOpen />
+            </ScrollView>
+          ) : null
+        }
+        // 계산에 넣은 매도가 없으면 오른쪽을 빈 채로 두지 않고 한 줄 (까닭은 왼쪽 '빠진 매도' 상자)
+        empty={
+          <View style={styles.emptyPane} testID="tax-per-sell-none">
+            <Text style={{ color: t.muted, fontSize: font.body, textAlign: "center" }}>{perSellNone(year)}</Text>
+          </View>
         }
       />
     );
@@ -82,7 +91,7 @@ function TaxBody({ d, retriesDone, year, onYear, split }: { d: JournalTax; retri
         </View>
         <Text style={{ color: t.muted, fontSize: font.small }}>{TAX.period}</Text>
         {v.rows.map((r) => (
-          <View key={r.label} style={[styles.kv, { borderBottomColor: t.line }]} accessible accessibilityLabel={`${r.label} ${r.value}`}>
+          <View key={r.label} style={[styles.kv, { borderBottomColor: t.line }]} accessible accessibilityLabel={r.speech}>
             <Text style={{ color: r.strong ? t.ink : t.muted, fontSize: font.small, fontWeight: r.strong ? "700" : "400", flexShrink: 1 }}>{r.label}</Text>
             <Text style={[styles.value, { color: r.sign !== undefined ? changeColor(t, r.sign) : t.ink, fontSize: r.strong ? font.h2 : font.small }]} adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2}>
               {r.value}
@@ -179,4 +188,5 @@ const styles = StyleSheet.create({
   toggle: { flexDirection: "row", alignItems: "center", gap: space.xxs, minHeight: touch.min },
   sell: { borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: space.s, gap: space.xxs },
   foot: { fontSize: font.small, textAlign: "center", paddingHorizontal: space.lg },
+  emptyPane: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
 });

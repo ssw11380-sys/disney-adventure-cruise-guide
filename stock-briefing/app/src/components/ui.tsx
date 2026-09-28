@@ -88,8 +88,22 @@ export function Button({
   );
 }
 
-/** 작은 선택 칩 (사각). 보이는 높이 32 + 위아래 hitSlop 6 = 44 (3-22) */
-export function Chip({ label, active, onPress, icon, accessibilityLabel }: { label: string; active?: boolean; onPress: () => void; icon?: keyof typeof Ionicons.glyphMap; accessibilityLabel?: string }) {
+/** 작은 선택 칩 (사각). 보이는 높이 32 + 위아래 hitSlop 6 = 44 (3-22). minWidth: 짧은 글의 칩도 누르는 폭을 맞출 때 (없으면 지금 그대로) */
+export function Chip({
+  label,
+  active,
+  onPress,
+  icon,
+  accessibilityLabel,
+  minWidth,
+}: {
+  label: string;
+  active?: boolean;
+  onPress: () => void;
+  icon?: keyof typeof Ionicons.glyphMap;
+  accessibilityLabel?: string;
+  minWidth?: number;
+}) {
   const t = useTheme();
   return (
     <Pressable
@@ -98,7 +112,11 @@ export function Chip({ label, active, onPress, icon, accessibilityLabel }: { lab
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ selected: !!active }}
       hitSlop={slopFor(CHIP_H, space.xxs)}
-      style={({ pressed }) => [styles.chip, { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 }]}
+      style={({ pressed }) => [
+        styles.chip,
+        { backgroundColor: active ? t.surfaceAlt : "transparent", borderColor: active ? t.accent : t.lineStrong, opacity: pressed ? 0.75 : 1 },
+        ...(minWidth ? [{ minWidth, justifyContent: "center" as const }] : []),
+      ]}
     >
       {icon ? <Ionicons name={icon} size={12} color={active ? t.accent : t.muted} /> : null}
       <Text style={{ color: active ? t.ink : t.muted, fontSize: font.small, fontWeight: active ? "700" : "500" }}>{label}</Text>

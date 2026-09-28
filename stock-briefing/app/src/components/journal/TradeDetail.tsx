@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSaveTradeNote } from "@/api/hooks";
 import type { JournalItem } from "@/api/types";
@@ -11,6 +11,7 @@ import { changeColor, font, radius, space, useTheme } from "@/theme";
  * 거래 상세 (3-37): 체결 · 수량 · 평균 체결가 · 금액 · 주문 상태, 매도는 '실현손익 계산'(판매 금액 − 평균 구매가 × 수량 = 실현손익 · 수수료·세금 · 원화로는)과
  * 계산 방법·출발한 기록, 매수는 '이 매수 뒤 평균 구매가'. 아래 메모(200자, 서버에 저장 — 저장 뒤 '메모를 저장했어요.' 3초, 실패하면 입력 그대로 두고 안내).
  * 휴대폰은 아래에서 올라오는 창(TradeDetailSheet), 폴드 가로 2단은 오른쪽 칸(TradeDetailBody 그대로), 폴드 세로는 가운데 창(최대 560dp)
+ * 메모 [지우기]는 입력 칸만 비운다 — 저장한 메모는 비운 채 [저장]을 눌러야 지워진다 (한 번 누름으로 되돌릴 수 없이 지우지 않게)
  */
 export function TradeDetailBody({ item, onClose }: { item: JournalItem; onClose?: () => void }) {
   const t = useTheme();
@@ -48,7 +49,7 @@ function Rows({ rows }: { rows: DetailRow[] }) {
   return (
     <View>
       {rows.map((r) => (
-        <View key={r.label} style={[styles.kv, { borderBottomColor: t.line }]} accessible accessibilityLabel={`${r.label} ${r.value}`}>
+        <View key={r.label} style={[styles.kv, { borderBottomColor: t.line }]} accessible accessibilityLabel={r.speech ?? `${r.label} ${r.value}`}>
           <Text style={[styles.kvLabel, { color: t.muted }]}>{r.label}</Text>
           <Text style={[styles.kvValue, { color: r.sign !== undefined ? changeColor(t, r.sign) : t.ink }]}>{r.value}</Text>
         </View>
@@ -81,7 +82,7 @@ function NoteEditor({ item }: { item: JournalItem }) {
       {
         onSuccess: (r) => {
           setText(r.note ?? "");
-          setMsg({ ok: true, text: JOURNAL.noteSaved });
+          setMsg({ ok: true, text: r.note ? JOURNAL.noteSaved : JOURNAL.noteDeleted });
           if (timer.current) clearTimeout(timer.current);
           timer.current = setTimeout(() => setMsg(null), 3_000);
         },
@@ -108,9 +109,20 @@ function NoteEditor({ item }: { item: JournalItem }) {
       />
       <View style={styles.noteBar}>
         <Text style={{ color: t.muted, fontSize: font.small, flex: 1 }}>{`${noteLength(text)}/${NOTE_MAX}`}</Text>
-        <Button title={JOURNAL.noteClear} compact variant="secondary" accessibilityLabel="메모 지우기" disabled={save.isPending || (!text && !item.note)} onPress={() => submit("")} />
+        <Button
+          title={JOURNAL.noteClear}
+          compact
+          variant="secondary"
+          accessibilityLabel={JOURNAL.noteClearA11y}
+          disabled={save.isPending || !text}
+          onPress={() => {
+            setText("");
+            setMsg(null);
+          }}
+        />
         <Button title={JOURNAL.noteSave} compact accessibilityLabel="메모 저장" loading={save.isPending} onPress={() => submit(text)} />
       </View>
+      {!text && item.note && !msg ? <Text style={{ color: t.muted, fontSize: font.small }}>{JOURNAL.noteEmptyHint}</Text> : null}
       {msg ? (
         <Text style={{ color: msg.ok ? t.accent : t.warn, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">
           {msg.text}
@@ -120,21 +132,49 @@ function NoteEditor({ item }: { item: JournalItem }) {
   );
 }
 
-/** 휴대폰: 아래에서 올라오는 창 · 넓은 세로 창: 가운데 창 (최대 560dp) */
+/**
+ * 휴대폰: 아래에서 올라오는 창 · 넓은 세로 창: 가운데 창 (최대 560dp).
+ * 메모 자판이 열리면 창을 위쪽에 붙이고 높이를 자판 위까지로 줄인 뒤 끝(메모 칸·[저장])까지 내린다 — edge-to-edge 라 창이
+ * 자판만큼 줄어드는 동작에 기대지 않는다 (가격 알림 시트 PriceAlertSheet 와 같은 방식)
+ */
 export function TradeDetailSheet({ item, onClose }: { item: JournalItem; onClose: () => void }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const win = useWindowDimensions();
   const wide = win.width >= 560 + space.xl * 2;
+  // 자판 높이 (0 = 닫힘). 창이 열려 있는 동안만 구독한다
+  const [kb, setKb] = useState(0);
+  const scroll = useRef<ScrollView | null>(null);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", (e) => setKb(e.endCoordinates.height));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKb(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  const up = kb > 0;
+  const maxH = up ? win.height - kb - insets.top - space.md * 2 : win.height * 0.85;
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={[styles.backdrop, { justifyContent: wide ? "center" : "flex-end" }]}>
+      <View style={[styles.backdrop, { justifyContent: up ? "flex-start" : wide ? "center" : "flex-end", paddingTop: up ? insets.top + space.md : 0 }]}>
         <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: t.scrim }]} onPress={onClose} accessibilityRole="button" accessibilityLabel={`거래 상세 ${JOURNAL.close}`} />
         <View
-          style={[styles.sheet, wide ? styles.sheetFloat : styles.sheetBottom, { backgroundColor: t.surface, borderColor: t.lineStrong, maxHeight: win.height * 0.85, paddingBottom: wide ? space.lg : insets.bottom + space.lg }]}
+          style={[
+            styles.sheet,
+            wide || up ? styles.sheetFloat : styles.sheetBottom,
+            { backgroundColor: t.surface, borderColor: t.lineStrong, maxHeight: maxH, paddingBottom: wide || up ? space.lg : insets.bottom + space.lg },
+          ]}
           testID="trade-detail-sheet"
         >
-          <ScrollView keyboardShouldPersistTaps="handled">
+          <ScrollView
+            ref={scroll}
+            keyboardShouldPersistTaps="handled"
+            // 자판 때문에 창이 줄면(메모 칸을 누른 뒤) 메모 칸·[저장]이 보이게 끝으로
+            onLayout={() => {
+              if (up) scroll.current?.scrollToEnd({ animated: false });
+            }}
+          >
             <TradeDetailBody item={item} onClose={onClose} />
           </ScrollView>
         </View>

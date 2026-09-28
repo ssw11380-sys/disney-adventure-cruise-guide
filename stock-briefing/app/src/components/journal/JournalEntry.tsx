@@ -11,8 +11,9 @@ import { font, space, touch, useTheme } from "@/theme";
  * 매매일지 입구 (3-37, 기능 플래그 tradeJournal · tradeRecords — 부르는 화면이 켜져 있을 때만 그린다).
  *  - JournalButton: 잔고 계좌 패널 '비중' 줄의 [매매일지] (작은 버튼, 보이는 높이 32 + hitSlop 44)
  *  - JournalIconButton: 촘촘 구역 머리·넓은 계좌 띠의 아이콘만 44×44
- *  - JournalStockRow: 종목 상세 휴대폰 '잔고' 칸 맨 아래 '이 종목 매매 기록 ›' 한 줄 (높이 44)
- *  - JournalStockLink: 넓은 창 '내 보유' 제목 오른쪽 '매매 기록 ›'
+ *  - JournalStockRow: 종목 상세 휴대폰 '잔고' 칸 맨 아래 '이 종목 매매 기록 ›' 한 줄 (높이 44). 넓은 창도 '내 보유' 제목 줄에
+ *    숫자 기준 안내('매도 비용 차감 · 토스 기준')가 있으면 그 안내를 자르지 않게 칸 맨 아래 이 줄로
+ *  - JournalStockLink: 넓은 창 '내 보유' 제목 오른쪽 '매매 기록 ›' (제목 줄에 안내 글이 없을 때만)
  *  - JournalStockPanel: 지금 안 갖고 있지만 기록이 있는 종목 — '매매 기록 · 보유 없음 · 저장된 체결 3건 ›' (서버에 한 번 묻는다)
  */
 

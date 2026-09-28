@@ -6,7 +6,7 @@ import { useHealth, useJournal } from "@/api/hooks";
 import type { JournalItem, JournalResponse } from "@/api/types";
 import { TwoPane } from "@/components/TwoPane";
 import { Button, Chip, Empty, ErrorView, Loading } from "@/components/ui";
-import { beforeRecordNote, dayHeader, dayRealizedText, headLines, JOURNAL, periodRange, summaryView, type ListPreset } from "@/lib/journal";
+import { beforeRecordNote, dayHeader, dayHeadSpeech, dayRealizedText, headLines, JOURNAL, periodRange, summaryView, type ListPreset } from "@/lib/journal";
 import { changeColor, font, space, touch, useTheme } from "@/theme";
 import { PeriodChips } from "./PeriodChips";
 import { StockPickerSheet } from "./StockPickerSheet";
@@ -137,7 +137,7 @@ function ListBody({ data, selected, onPick }: { data: JournalResponse; selected:
             <View style={styles.sumRows}>
               <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }}>실현손익</Text>
               {s.lines.map((l) => (
-                <View key={l.label} style={styles.sumRow} accessible accessibilityLabel={`${l.label} 실현손익 ${l.value}`}>
+                <View key={l.label} style={styles.sumRow} accessible accessibilityLabel={l.speech}>
                   <Text style={{ color: t.muted, fontSize: font.body }}>{l.label}</Text>
                   <Text style={[styles.sumValue, { color: changeColor(t, l.sign) }]} adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2}>
                     {l.value}
@@ -158,7 +158,7 @@ function ListBody({ data, selected, onPick }: { data: JournalResponse; selected:
         const right = dayRealizedText(d.realized);
         return (
           <View key={d.date}>
-            <View style={[styles.dayHead, { backgroundColor: t.bg }]} accessible accessibilityRole="header" accessibilityLabel={right ? `${dayHeader(d.date)}, ${right}` : dayHeader(d.date)}>
+            <View style={[styles.dayHead, { backgroundColor: t.bg }]} accessible accessibilityRole="header" accessibilityLabel={dayHeadSpeech(d.date, d.realized)}>
               <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }}>{dayHeader(d.date)}</Text>
               {right ? <Text style={{ color: t.sub, fontSize: font.small, fontVariant: ["tabular-nums"] }}>{right}</Text> : null}
             </View>

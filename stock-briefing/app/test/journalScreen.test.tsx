@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   save: vi.fn(),
   push: vi.fn(),
   pickerOpen: vi.fn(),
+  kb: [] as { ev: string; fn: (e: { endCoordinates: { height: number } }) => void; removed: boolean }[],
 }));
 
 vi.mock("react-native", () => ({
@@ -34,6 +35,13 @@ vi.mock("react-native", () => ({
   Platform: { OS: "android" },
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1, absoluteFill: { position: "absolute" } },
   useWindowDimensions: () => h.win,
+  Keyboard: {
+    addListener: (ev: string, fn: (e: { endCoordinates: { height: number } }) => void) => {
+      const sub = { ev, fn, removed: false, remove: () => void (sub.removed = true) };
+      h.kb.push(sub);
+      return sub;
+    },
+  },
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 24, left: 0, right: 0 }) }));
 vi.mock("react-native-svg", () => ({ Svg: "Svg", Path: "Path", Line: "Line" }));
@@ -142,6 +150,7 @@ beforeEach(() => {
   h.save.mockReset();
   h.push.mockReset();
   h.pickerOpen.mockReset();
+  h.kb = [];
   forgetWindowClass();
 });
 
@@ -181,7 +190,9 @@ describe("기록 탭", () => {
     expect(text).toContain("+$17.43 (원화 약 +24,703원, 추정)");
     expect(text).toContain("매수 1건 · 매도 1건 · 체결 2건");
     expect(text).toContain("9월 23일부터 저장한 기록이에요.");
-    expect(r.all().filter((n) => n.props.accessibilityRole === "header" && /^9월 2[35]일/.test(String(n.props.accessibilityLabel))).map((n) => n.props.accessibilityLabel)).toEqual(["9월 25일 (금), 실현 +$17.43", "9월 23일 (수)"]);
+    expect(r.all().filter((n) => n.props.accessibilityRole === "header" && /^9월 2[35]일/.test(String(n.props.accessibilityLabel))).map((n) => n.props.accessibilityLabel)).toEqual(["9월 25일 금요일, 실현손익 17.43달러 이익", "9월 23일 수요일"]);
+    // 요약 줄 화면 읽기도 읽는 말로
+    expect(r.all().some((n) => n.props.accessibilityLabel === "미국 실현손익 17.43달러 이익, 원화 약 24,703원 이익, 추정")).toBe(true);
     byLabel(r, lib.rowSpeech(SELL), "Pressable");
     byLabel(r, lib.rowSpeech(BUY), "Pressable");
   });
@@ -216,6 +227,71 @@ describe("기록 탭", () => {
     expect(input().props.value).toBe("실적 발표 뒤 일부 정리");
     r.act(() => cb.onSuccess({ account: 3, orderId: "o3", note: "실적 발표 뒤 일부 정리", updatedAt: "x" }));
     expect(r.text()).toContain("메모를 저장했어요.");
+  });
+
+  it("회귀: 메모 [지우기]는 입력 칸만 비운다 — 서버에 보내지 않고, 비운 채 [저장]을 눌러야 지우고 '메모를 지웠어요.'", () => {
+    h.journal = { ...LIST, days: [{ ...LIST.days[0]!, items: [{ ...SELL, note: "실적 발표 뒤 일부 정리" }] }, LIST.days[1]!] };
+    const r = draw();
+    press(r, byLabel(r, lib.rowSpeech({ ...SELL, note: "실적 발표 뒤 일부 정리" }), "Pressable"));
+    const input = () => r.all().find((n) => n.props.testID === "note-input")!;
+    expect(input().props.value).toBe("실적 발표 뒤 일부 정리");
+    press(r, byLabel(r, "메모 입력 칸 비우기"));
+    expect(h.save).not.toHaveBeenCalled();
+    expect(input().props.value).toBe("");
+    expect(r.text()).toContain(lib.JOURNAL.noteEmptyHint);
+    expect(byLabel(r, "메모 입력 칸 비우기").props.disabled).toBe(true);
+    press(r, byLabel(r, "메모 저장"));
+    expect(h.save).toHaveBeenCalledTimes(1);
+    const [body, cb] = h.save.mock.calls[0] as [unknown, { onSuccess: (x: unknown) => void }];
+    expect(body).toEqual({ account: 3, orderId: "o3", note: "" });
+    r.act(() => cb.onSuccess({ account: 3, orderId: "o3", note: null, updatedAt: "x" }));
+    expect(r.text()).toContain("메모를 지웠어요.");
+  });
+
+  it("회귀: 휴대폰에서 메모 자판이 열리면 아래 창을 위쪽에 붙이고 높이를 자판 위까지 줄인 뒤 끝(메모 칸·[저장])까지 내린다, 닫으면 아래로, 창을 닫으면 구독을 뗀다", () => {
+    h.win = { width: 360, height: 752, scale: 3, fontScale: 1 };
+    const r = draw();
+    press(r, byLabel(r, lib.rowSpeech(SELL), "Pressable"));
+    const flat = (n: HostNode) => Object.assign({}, ...[n.props.style].flat(Infinity).filter(Boolean)) as Record<string, unknown>;
+    const sheet = () => r.all().find((n) => n.props.testID === "trade-detail-sheet")!;
+    const backdrop = () => r.all().find((n) => n.children.includes(sheet()))!;
+    expect(flat(backdrop())).toMatchObject({ justifyContent: "flex-end" });
+    expect(flat(sheet()).maxHeight).toBeCloseTo(752 * 0.85);
+    // 자판 300dp
+    const scroll = sheet().children.find((c): c is HostNode => typeof c !== "string" && c.type === "ScrollView")!;
+    const scrollToEnd = vi.fn();
+    (scroll.props.ref as { current: unknown }).current = { scrollToEnd };
+    r.act(() => h.kb.find((k) => k.ev === "keyboardDidShow")!.fn({ endCoordinates: { height: 300 } }));
+    expect(flat(backdrop())).toMatchObject({ justifyContent: "flex-start", paddingTop: 0 + 12 });
+    expect(flat(sheet()).maxHeight).toBe(752 - 300 - 0 - 12 * 2);
+    // 창이 줄어든 뒤 끝까지 내린다 (메모 칸·[저장]이 자판 위에 보이게)
+    const scroll2 = sheet().children.find((c): c is HostNode => typeof c !== "string" && c.type === "ScrollView")!;
+    r.act(() => (scroll2.props.onLayout as () => void)());
+    expect(scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    r.act(() => h.kb.find((k) => k.ev === "keyboardDidHide")!.fn({ endCoordinates: { height: 0 } }));
+    expect(flat(backdrop())).toMatchObject({ justifyContent: "flex-end" });
+    // 자판이 닫힌 채로는 끝으로 내리지 않는다
+    scrollToEnd.mockReset();
+    r.act(() => (sheet().children.find((c): c is HostNode => typeof c !== "string" && c.type === "ScrollView")!.props.onLayout as () => void)());
+    expect(scrollToEnd).not.toHaveBeenCalled();
+    press(r, byLabel(r, "거래 상세 닫기"));
+    expect(r.all().some((n) => n.props.testID === "trade-detail-sheet")).toBe(false);
+    expect(h.kb.length).toBeGreaterThan(0);
+    expect(h.kb.every((k) => k.removed)).toBe(true);
+  });
+
+  it("회귀: 200% 글씨에서는 종목 이름을 두 줄까지 (100% 는 한 줄)", () => {
+    const long = { ...SELL, name: "프로셰어즈 울트라프로 QQQ 3배" };
+    h.journal = { ...LIST, days: [{ ...LIST.days[0]!, items: [long] }] };
+    const nameLines = (r: R) => r.all().find((n) => n.type === "Text" && n.children.join("") === long.name)!.props.numberOfLines;
+    expect(nameLines(draw())).toBe(1);
+    h.win = { width: 360, height: 752, scale: 3, fontScale: 2 };
+    expect(nameLines(draw())).toBe(2);
+  });
+
+  it("회귀: 기간 칩(1주·1달 …)은 누르는 폭 44 이상", () => {
+    const r = draw();
+    for (const p of lib.PERIODS) expect(byLabel(r, `기간 ${p.label}`).props.minWidth).toBeGreaterThanOrEqual(44);
   });
 
   it("매수 상세는 '이 매수 뒤 평균 구매가'", () => {
@@ -306,6 +382,10 @@ describe("수익률 탭", () => {
     press(r, byLabel(r, "계산 방법"));
     expect(r.text()).toContain("현금 입출금과 배당은 넣지 않았어요.");
     expect(r.all().some((n) => n.props.testID === "return-line")).toBe(true);
+    // 선 그림 제목·양 끝 날짜
+    expect(textOf(r.all().find((n) => n.props.testID === "return-line")!)).toBe("날짜별 누적 수익률9월 28일10월 12일");
+    // 요약 묶음 화면 읽기: 보이는 줄을 다 읽는다
+    expect(r.all().some((n) => n.props.accessibilityLabel === lib.returnsSpeech(h.returns as JournalReturns) && String(n.props.accessibilityLabel).includes("시작 평가금액 12,340,000원에서 끝 12,800,000원"))).toBe(true);
     press(r, byLabel(r, "시장 미국"));
     expect(last(h.returnsCalls)).toEqual({ preset: "1M", market: "US" });
   });
@@ -361,5 +441,16 @@ describe("양도세 추정 탭", () => {
     const r = draw();
     expect(r.text()).toContain("양도가액 260,512원 − 취득가액 235,809원 = +24,703원");
     expect(r.all().filter((n) => n.props.testID === "tax-per-sell")).toHaveLength(1);
+    expect(r.all().some((n) => n.props.testID === "tax-per-sell-none")).toBe(false);
+  });
+
+  it("회귀: 폴드 가로에서 계산에 넣은 해외 매도가 0건이면 오른쪽 칸에 안내 한 줄 (빈 화면이 아니게)", () => {
+    h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
+    h.flags = { ...ON, foldLayout: true };
+    h.params = { tab: "tax" };
+    h.tax = { ...TAX, items: [], excluded: [], totals: { gains: 0, losses: 0, net: 0, base: 0, nationalTax: 0, localTax: 0, tax: 0, sells: 0 } };
+    const r = draw();
+    expect(r.all().some((n) => n.props.testID === "tax-per-sell")).toBe(false);
+    expect(textOf(r.all().find((n) => n.props.testID === "tax-per-sell-none")!)).toBe("2026년 계산에 넣은 해외주식 매도가 없어요.");
   });
 });

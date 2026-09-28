@@ -765,10 +765,12 @@ export default function StockDetailScreen() {
     <View style={styles.side}>
       {ev ? (
         <View>
-          <PaneTitle title="내 보유" note={holdNote} {...(journalOn ? { action: <JournalStockLink code={c} push={!holdNote} /> } : null)} />
+          <PaneTitle title="내 보유" note={holdNote} {...(journalOn && !holdNote ? { action: <JournalStockLink code={c} /> } : null)} />
           <PairGrid items={holdStats} cols={sideCols} />
           {krwLast ? null : krwSide}
           {memo}
+          {/* 제목 줄에 숫자 기준 안내가 있으면 그 안내를 자르지 않게 링크는 칸 아래 한 줄로 */}
+          {journalOn && holdNote ? <JournalStockRow code={c} /> : null}
         </View>
       ) : null}
       {q && quoteStats ? (
@@ -897,7 +899,7 @@ export default function StockDetailScreen() {
             key: "hold",
             title: "내 보유",
             note: shortNote,
-            ...(journalOn ? { action: <JournalStockLink code={c} push={!shortNote} /> } : null),
+            ...(journalOn && !shortNote ? { action: <JournalStockLink code={c} /> } : null),
             flex: foldDetail.holdColFlex,
             body: (
               <>
@@ -905,6 +907,8 @@ export default function StockDetailScreen() {
                 {krwCol ? null : krwBlock}
                 {!krwCol && krwStats.length ? <StatList items={krwStats} /> : null}
                 {memo}
+                {/* 제목 줄에 숫자 기준 안내가 있으면 그 안내를 자르지 않게 링크는 칸 아래 한 줄로 */}
+                {journalOn && shortNote ? <JournalStockRow code={c} /> : null}
               </>
             ),
           },
