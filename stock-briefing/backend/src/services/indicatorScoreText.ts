@@ -28,6 +28,14 @@ export const DETAIL_NOTE = "과거 가격·거래량으로 계산한 지표이�
 export const DISCLAIMER_SHORT = "참고 정보이며 투자 권유가 아닙니다";
 export const TREND_ABOUT = "최근 1년 가격·거래량 흐름의 방향과 세기";
 export const VALUE_ABOUT = "재무 숫자가 같은 업종·시장 회사들 사이 어디쯤인지";
+/**
+ * 가치 지표 설명 줄 — 비교한 무리에 맞춘다: 금융사 경로는 '업종·금융사 전체'(금융사끼리만 비교, 검토 지적), 한국 종목은 '한국 시장'
+ * (한국 종목은 한국 상장 회사끼리만 비교 — 미국 종목과 견주지 않음, 설계 B8)
+ */
+export function valueAboutOf(path: "general" | "financial" | null, market: ScoreMarket = "US"): string {
+  const group = market === "KR" ? (path === "financial" ? "한국 금융사 전체" : "한국 시장") : path === "financial" ? "금융사 전체" : "시장";
+  return `재무 숫자가 같은 업종·${group} 회사들 사이 어디쯤인지`;
+}
 
 /** 띠 한 줄 (설계서 6.4) */
 export const BAND_LINE: Record<TrendBand, string> = {

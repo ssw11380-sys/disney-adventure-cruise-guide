@@ -41,6 +41,36 @@ export const CORE_METRICS: Record<ValuePath, Record<ValueFamilyKey, readonly Met
   // 금융사 성장은 매출(순영업수익)이나 주당이익 증가폭 가운데 하나 (은행 매출 태그가 고르지 않다)
   financial: { price: ["A3"], quality: ["B1"], health: ["F3"], growth: ["C1", "C2"], payout: ["E1"] },
 };
+/**
+ * 계산 등급: full = 미국(SEC 재무 전체), lite = 한국 간이 계산(3단계 — 네이버 재무 요약 최근 5분기·3년, 잉여현금흐름·기업가치·ROIC·
+ * 이익 안정성·주식 수 변화 없음). 묶음·비중·순위 식은 같고, 묶음마다 쓰는 지표와 핵심 지표만 다르다 (설계 5.2 '한국: 간이 등급')
+ */
+export type ValueGrade = "full" | "lite";
+export const LITE_FAMILY_METRICS: Record<ValuePath, Record<ValueFamilyKey, readonly MetricKey[]>> = {
+  general: {
+    price: ["A1", "A3", "A4"],
+    quality: ["B1", "B4"],
+    health: ["D1", "D5"],
+    growth: ["C1", "C2", "C3"],
+    payout: ["E1"],
+  },
+  financial: {
+    price: ["A1", "A3"],
+    quality: ["B1", "F1"],
+    health: ["F3"],
+    growth: ["C1", "C2"],
+    payout: ["E1"],
+  },
+};
+export const LITE_CORE_METRICS: Record<ValuePath, Record<ValueFamilyKey, readonly MetricKey[]>> = {
+  general: { price: ["A1"], quality: ["B1"], health: ["D1"], growth: ["C1"], payout: ["E1"] },
+  financial: { price: ["A3"], quality: ["B1"], health: ["F3"], growth: ["C1", "C2"], payout: ["E1"] },
+};
+/** 한국 간이 비교 기준의 지표 순서 (PeerRow.x) */
+export const LITE_METRIC_ORDER: readonly MetricKey[] = ["A1", "A3", "A4", "B1", "B4", "D1", "D5", "C1", "C2", "C3", "E1", "F1", "F3"];
+export const familiesOf = (grade: ValueGrade | undefined, path: ValuePath) => (grade === "lite" ? LITE_FAMILY_METRICS : FAMILY_METRICS)[path];
+export const coreOf = (grade: ValueGrade | undefined, path: ValuePath) => (grade === "lite" ? LITE_CORE_METRICS : CORE_METRICS)[path];
+
 export type CompareKey = "industry" | "market" | "own";
 /** 세 가지 비교를 섞는 비율 (설계 §7.3) */
 export const COMPARE_MIX: Record<ValueFamilyKey, Partial<Record<CompareKey, number>>> = {
@@ -180,7 +210,14 @@ export interface ValueThresholds {
 export interface ValueReferenceData {
   v: 1;
   method: string;
-  market: "US";
+  /** US = SEC frames + Nasdaq 스크리너, KR = 네이버 재무 요약 + 업종 목록 (3단계, 간이) */
+  market: "US" | "KR";
+  /** 계산 등급 (없으면 full) */
+  grade?: ValueGrade;
+  /** PeerRow.x 의 지표 순서 (없으면 METRIC_ORDER — 미국) */
+  order?: MetricKey[];
+  /** 한국: 네이버 업종 번호 → 업종 이름 (대상 종목이 목록에 없을 때 integration 의 업종 번호로 찾는다) */
+  industryCodes?: Record<string, string>;
   refDate: string;
   /** Nasdaq 스크리너 받은 날 */
   screenerDate: string;
@@ -221,8 +258,11 @@ export interface PeerDist {
 export class PeerBook {
   private readonly dist = new Map<string, number[]>();
   private readonly byCik = new Map<string, PeerRow>();
+  /** PeerRow.x 의 지표 순서 (미국 METRIC_ORDER · 한국 LITE_METRIC_ORDER) */
+  readonly order: readonly MetricKey[];
   constructor(readonly ref: ValueReferenceData) {
     for (const p of ref.peers) this.byCik.set(p.c, p);
+    this.order = ref.order ?? METRIC_ORDER;
   }
 
   get refDate(): string {
@@ -242,7 +282,8 @@ export class PeerBook {
     if (!cik) return null;
     const p = this.byCik.get(cik);
     if (!p) return null;
-    return decodeX(p.x[METRIC_ORDER.indexOf(key)]);
+    const i = this.order.indexOf(key);
+    return i < 0 ? null : decodeX(p.x[i]);
   }
 
   adopted(path: ValuePath, key: MetricKey): boolean {
@@ -261,7 +302,8 @@ export class PeerBook {
   /** 이번 주에 쓰는 층 (저장한 값). 없으면 null — 그때는 그 자리에서 정한다 */
   heldLevel(path: ValuePath, sector: string | null, industry: string | null, key: MetricKey): LevelCode | null {
     const row = this.ref.levels?.[path]?.[levelKey(sector, industry)];
-    const c = row?.[METRIC_ORDER.length + METRIC_ORDER.indexOf(key)];
+    const i = this.order.indexOf(key);
+    const c = i < 0 ? undefined : row?.[this.order.length + i];
     return c === "i" || c === "s" || c === "m" ? c : null;
   }
 
@@ -269,7 +311,7 @@ export class PeerBook {
     const k = `${path}|${level}|${name ?? ""}|${key}`;
     const hit = this.dist.get(k);
     if (hit) return hit;
-    const idx = METRIC_ORDER.indexOf(key);
+    const idx = this.order.indexOf(key);
     const secIdx = level === "sector" && name !== null ? this.ref.sectors.indexOf(name) : -1;
     const indIdx = level === "industry" && name !== null ? this.ref.industries.indexOf(name) : -1;
     const out: number[] = [];
@@ -278,7 +320,7 @@ export class PeerBook {
       if (p.f !== fin) continue;
       if (level === "sector" && p.s !== secIdx) continue;
       if (level === "industry" && p.i !== indIdx) continue;
-      const v = decodeX(p.x[idx]);
+      const v = idx < 0 ? null : decodeX(p.x[idx]);
       if (v !== null) out.push(v);
     }
     out.sort((a, b) => a - b);
@@ -358,8 +400,9 @@ export function buildLevels(
   industries: readonly string[],
   pairs: Iterable<readonly [string, string]>,
   prev?: ValueReferenceData["levels"] | null,
+  order: readonly MetricKey[] = METRIC_ORDER,
 ): Record<ValuePath, Record<string, string>> {
-  const M = METRIC_ORDER.length;
+  const M = order.length;
   const count = (fin: 0 | 1, pick: (p: PeerRow) => number) => {
     const m = new Map<number, number[]>();
     for (const p of peers) {
@@ -435,6 +478,8 @@ export interface FamilyScore {
 }
 export interface ValueScoreResult {
   path: ValuePath;
+  /** 계산 등급 (lite = 한국 간이) */
+  grade: ValueGrade;
   status: "ok" | "partial" | "insufficient";
   /** 반올림 전 */
   score: number | null;
@@ -448,6 +493,8 @@ export interface ValueScoreResult {
 
 export interface ScoreInput {
   path: ValuePath;
+  /** 계산 등급 (없으면 full) — 묶음마다 쓰는 지표·핵심 지표 */
+  grade?: ValueGrade;
   sector: string | null;
   industry: string | null;
   cik: string | null;
@@ -460,9 +507,12 @@ export interface ScoreInput {
 /** 대상 종목 지표 → 점수 */
 export function scoreValue(inp: ScoreInput): ValueScoreResult {
   const { path, peers } = inp;
+  const grade: ValueGrade = inp.grade ?? "full";
+  const famMetrics = familiesOf(grade, path);
+  const coreMetrics = coreOf(grade, path);
   const families: FamilyScore[] = VALUE_FAMILIES.map((fk) => {
     const mix = COMPARE_MIX[fk];
-    const metrics: MetricScore[] = FAMILY_METRICS[path][fk].map((key) => {
+    const metrics: MetricScore[] = famMetrics[fk].map((key) => {
       const mv = inp.metrics[key];
       const adopted = peers.adopted(path, key);
       const base: MetricScore = { key, adopted, x: mv?.x ?? null, show: mv?.show ?? null, ...(mv?.rule ? { rule: mv.rule } : {}), ...(mv?.why ? { why: mv.why } : {}), ...(mv?.blend ? { blend: true } : {}), score: null, pos: {}, mix: {}, peer: null, ownN: 0 };
@@ -503,7 +553,7 @@ export function scoreValue(inp: ScoreInput): ValueScoreResult {
     });
     const defined = metrics.filter((m) => m.adopted);
     const present = defined.filter((m) => m.score !== null);
-    const core = CORE_METRICS[path][fk].some((k) => present.some((m) => m.key === k));
+    const core = coreMetrics[fk].some((k) => present.some((m) => m.key === k));
     const valid = core && present.length * 2 >= defined.length && present.length > 0;
     // 화면에 보이는 지표 정수의 평균 (손으로 다시 계산해도 맞게)
     const score = valid ? present.reduce((a, m) => a + roundScore(m.score!), 0) / present.length : null;
@@ -515,11 +565,11 @@ export function scoreValue(inp: ScoreInput): ValueScoreResult {
   if (!families.find((f) => f.key === "price")!.valid) reasons.push({ code: "priceInvalid" });
   if (coverageWeight < MIN_COVERAGE_WEIGHT) reasons.push({ code: "lowCoverage", pct: coverageWeight });
   if (valid.length < MIN_FAMILIES) reasons.push({ code: "fewFamilies" });
-  if (reasons.length) return { path, status: "insufficient", score: null, shown: null, band: null, coverageWeight, families, reasons };
+  if (reasons.length) return { path, grade, status: "insufficient", score: null, shown: null, band: null, coverageWeight, families, reasons };
   // 화면에 보이는 묶음 정수로 (설계 §7.5 '사용자가 손으로 다시 계산해도 맞아야 한다')
   const score = valid.reduce((a, f) => a + f.weight * roundScore(f.score!), 0) / coverageWeight;
   const shown = roundScore(score);
-  return { path, status: coverageWeight >= 100 ? "ok" : "partial", score, shown, band: valueBand(shown), coverageWeight, families, reasons };
+  return { path, grade, status: coverageWeight >= 100 ? "ok" : "partial", score, shown, band: valueBand(shown), coverageWeight, families, reasons };
 }
 
 // ── 표시 (점수는 그대로, 해석을 돕는 줄) ─────────────────────────
@@ -551,7 +601,7 @@ export function valueFlags(r: ValueScoreResult, aux: MetricAux, ctx: { cyclical:
   if (aux.payoutOver100) out.push("payoutOver100");
   if (aux.dividendCut) out.push("dividendCut");
   // 업종 대신 부문·시장과 비교: 주가 수준 핵심 지표 기준
-  const priceCore = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && CORE_METRICS[r.path].price.includes(m.key));
+  const priceCore = r.families.find((f) => f.key === "price")?.metrics.find((m) => m.peer && coreOf(r.grade, r.path).price.includes(m.key));
   if (priceCore?.peer && priceCore.peer.level !== "industry") out.push("peerFallback");
   if (r.path === "financial") out.push("financial");
   return out;

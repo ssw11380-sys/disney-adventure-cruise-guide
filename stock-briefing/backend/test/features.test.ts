@@ -21,7 +21,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
       now: NOW,
     });
     try {
-      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true, tradeRecords: true, indicatorScores: true, valueScore: true, briefingTrim: true, briefingSafeWording: true, briefingCompactTop: true, moversMerge: true, priceAlerts: true, densityMode: true, maCustom: true, chartHighLow: true, notifBack: true, briefingStatus: true, accountSinceLast: true, accountExposure: true, holdingEvents: true, holdingEarnings: false }, updatedAt: null });
+      expect((await app.inject({ method: "GET", url: "/api/features" })).json()).toEqual({ features: { tossReconcile: true, briefingSources: true, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true, tradeRecords: true, indicatorScores: true, valueScore: true, krValueScore: true, briefingTrim: true, briefingSafeWording: true, briefingCompactTop: true, moversMerge: true, priceAlerts: true, densityMode: true, maCustom: true, chartHighLow: true, notifBack: true, briefingStatus: true, accountSinceLast: true, accountExposure: true, holdingEvents: true, holdingEarnings: false, tossOpen: true, numberBasis: true }, updatedAt: null });
       const history = async () => ((await app.inject({ method: "GET", url: "/api/admin/toss/reconcile" })).json() as { history: unknown[] }).history.length;
       expect((await app.inject({ method: "POST", url: "/api/admin/toss/import-holdings" })).statusCode).toBe(200);
       await vi.waitFor(async () => expect(await history()).toBe(1)); // 대조는 동기화를 기다리지 않고 뒤에서 돈다
@@ -72,7 +72,7 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect((await new FeatureService(db, NOW).all()).features).toMatchObject({ tossReconcile: false, briefingSources: false });
     await db.updateTable("meta").set({ value: JSON.stringify({ overrides: { briefingSources: false, removedFlag: true }, updatedAt: "x" }) }).where("key", "=", "features").execute();
     const b = new FeatureService(db, NOW);
-    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true, tradeRecords: true, indicatorScores: true, valueScore: true, briefingTrim: true, briefingSafeWording: true, briefingCompactTop: true, moversMerge: true, priceAlerts: true, densityMode: true, maCustom: true, chartHighLow: true, notifBack: true, briefingStatus: true, accountSinceLast: true, accountExposure: true, holdingEvents: true, holdingEarnings: false });
+    expect((await b.all()).features).toEqual({ tossReconcile: true, briefingSources: false, briefingDigest: true, briefingTabMovers: true, briefingManualRun: true, widgetPnlToggle: true, widgetIndexLine: true, widgetMarket: true, widgetPolish: true, widgetExtended: true, widgetFoldFit: true, widgetRefreshLog: true, allocationView: true, accountBriefing: true, accountBriefingLlm: false, marketSummary: true, foldLayout: true, detailPolish: true, pollSaver: true, oneHand: true, firstRun: true, emptyGuide: true, tradeRecords: true, indicatorScores: true, valueScore: true, krValueScore: true, briefingTrim: true, briefingSafeWording: true, briefingCompactTop: true, moversMerge: true, priceAlerts: true, densityMode: true, maCustom: true, chartHighLow: true, notifBack: true, briefingStatus: true, accountSinceLast: true, accountExposure: true, holdingEvents: true, holdingEarnings: false, tossOpen: true, numberBasis: true });
     await db.destroy();
   });
 
@@ -157,6 +157,26 @@ describe("기능 켜고 끄기 (3-15)", () => {
     expect(detail.find((x) => x.key === "emptyGuide")?.description).toMatch(/설정 열기/);
     for (const k of ["oneHand", "firstRun", "emptyGuide"]) expect(detail.find((x) => x.key === k)?.description).toMatch(/끄면/);
     expect((await f.set({ oneHand: null })).features.oneHand).toBe(true);
+    await db.destroy();
+  });
+
+  it("토스 앱 열기(tossOpen)는 기본 켬 (사용자 결정 '토스 앱만 열기' 2026-09-28): 관리 API 설명이 지금 동작을 말하고, 끄고 되돌릴 수 있다", async () => {
+    const db = await createMigratedDb(":memory:");
+    const f = new FeatureService(db, NOW);
+    expect((await f.all()).features.tossOpen).toBe(true);
+    const detail = (await f.detail()).find((x) => x.key === "tossOpen");
+    expect(detail).toMatchObject({ enabled: true, default: true, overridden: false });
+    // 설명: 토스 앱 자체만 연다 (supertoss://), 종목은 사용자가 검색, 못 열면 Play 스토어. 웹 주소·주문·로그인 없음
+    expect(detail?.description).toMatch(/토스 앱 열기/);
+    expect(detail?.description).toContain("supertoss://");
+    expect(detail?.description).toMatch(/Play 스토어/);
+    expect(detail?.description).toMatch(/주문은 토스 앱에서 직접 합니다/);
+    expect(detail?.description).not.toContain("tossinvest.com");
+    expect(detail?.description).not.toMatch(/기본 꺼짐/);
+    expect(detail?.description).not.toMatch(/매수|매도/);
+    // 문제가 생기면 관리 API 로 끄고(OTA 없이), 되돌리면 다시 켬
+    expect((await f.set({ tossOpen: false })).features.tossOpen).toBe(false);
+    expect((await f.set({ tossOpen: null })).features.tossOpen).toBe(true);
     await db.destroy();
   });
 });

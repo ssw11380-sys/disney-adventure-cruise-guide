@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useIndicatorScores } from "@/api/hooks";
 import type { IndicatorScores, TrendScoreBlock, ValueScoreBlock } from "@/api/types";
 import { Badge, Button, Card, Muted } from "@/components/ui";
-import { compositeLine, familyLabel, familySpeech, flagPreview, moreFlagsText, nameWidth, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech } from "@/lib/scoreView";
+import { compositeLine, familyLabel, familySpeech, flagPreview, moreFlagsText, nameWidth, reasonOnly, SCORE_LABELS, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueSpeech } from "@/lib/scoreView";
 import { font, slopFor, space, touch, useFontScale, useTheme } from "@/theme";
 import { scores } from "@/tokens";
 import { LeverageNotice } from "./LeverageNotice";
@@ -14,7 +14,9 @@ import { ScoreBar } from "./ScoreBar";
  * 종목 상세 기업개요 탭 맨 위 '지표 점수' 요약 카드 (3-44, 플래그 indicatorScores — 켜져 있을 때만 화면이 이 카드를 둔다).
  * 두 점수(가치 · 추세) → 종합(작게 — 두 점수가 모두 있으면 평균, 차이 30 이상이면 안내, 없으면 '없음 · 이유') → 레버리지 주의 상자 → 날짜 한 줄
  * → 예측 아님 줄 → '구성·계산 방법 보기' → 짧은 고지.
- * 2단계: 미국 보통주는 가치 줄도 회색 막대·0~100·띠(낮은 편 · 가운데쯤 · 높은 편)·배지(일부 지표 없이 계산 · 지난 값), 한국은 '계산 준비 중', ETF 는 '대상 아님'.
+ * 2단계: 미국 보통주는 가치 줄도 회색 막대·0~100·띠(낮은 편 · 가운데쯤 · 높은 편)·배지(일부 지표 없이 계산 · 지난 값), ETF 는 '대상 아님'.
+ * 3단계: 한국 보통주도 같은 가치 줄에 배지 '간이 계산'(네이버 재무 요약 — 서버 스위치 krValueScore 를 끄면 서버가 '지금 계산하지 않음' 줄을 준다).
+ * 줄 글은 서버가 준 그대로 그리므로 이 카드는 한국·미국을 나누지 않는다.
  * 레버리지 ETF 는 이 상품 자체 점수 없이 기초자산 참고 줄과 사실 상자. 변화 화살표·숫자는 요약 카드에 두지 않는다(지난주 대비는 상세 카드만).
  * 카드는 늘 접힌 채 시작하고 펼침은 화면 상태로만 기억한다. 막대는 회색 한 가지. 404(꺼짐·예전 서버)면 아무것도 그리지 않는다
  */
@@ -219,7 +221,7 @@ function TrendRow({ trend }: { trend: TrendScoreBlock }) {
   if (!trendHasScore(trend)) {
     const ref = trend.reference;
     return (
-      <StatusRow name={SCORE_LABELS.trend} label={trend.label} text={ref ? [trend.reason?.text, ref.note].filter(Boolean).join(" ") : (trend.reason?.text ?? null)}>
+      <StatusRow name={SCORE_LABELS.trend} label={trend.label} text={ref ? [reasonOnly(trend.label, trend.reason?.text), ref.note].filter(Boolean).join(" ") : reasonOnly(trend.label, trend.reason?.text)}>
         {ref ? (
           <View style={styles.refRow}>
             <Text style={{ color: t.sub, fontSize: font.small, flexShrink: 1 }}>{ref.text}</Text>
@@ -294,7 +296,7 @@ function FamilyMini({ f, nameW = scores.familyNameW }: { f: { key: string; name:
   return (
     <View style={[styles.row, styles.mini]} accessible accessibilityLabel={familySpeech(f)}>
       <Text style={{ color: t.sub, fontSize: font.small, width: nameWidth(nameW, fs) }} numberOfLines={2}>
-        {familyLabel(f.name, f.weight)}
+        {familyLabel(f.name, f.weight, fs)}
       </Text>
       <ScoreBar score={f.score} />
       <Text style={[styles.num, { color: t.ink, fontSize: font.body }]}>{f.score ?? "-"}</Text>

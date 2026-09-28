@@ -92,6 +92,8 @@ export default function BriefingsScreen() {
   const sinceOn = useFeature("accountSinceLast", false);
   // 브리핑 3차 5 (플래그 holdingEvents, 앱 fallback 꺼짐): 계좌 카드·줄(2단 계좌 줄 빼고)의 '이번 주 일정 · …' 한 줄. 여기서 한 번 읽어 넘긴다. 꺼지면 지금 그대로
   const weekOn = useFeature("holdingEvents", false);
+  // 3-32 (플래그 numberBasis, 앱 fallback 꺼짐): 계좌 카드·줄에 숫자의 시각 'HH:MM 기준'. 여기서 한 번 읽어 카드·줄에 넘긴다. 꺼지면 속성 자체를 넘기지 않음
+  const timeMark: { timeMark?: true } = useFeature("numberBasis", false) ? { timeMark: true } : {};
   const statusRefetch = useRef<(() => Promise<unknown>) | null>(null);
   // 당겨서 새로고침: 브리핑과 등락률(계좌 브리핑·시장 요약·늦음/실패 안내가 켜져 있으면 그것도)을 함께
   const { pulling, onPull } = usePull(() =>
@@ -278,6 +280,7 @@ export default function BriefingsScreen() {
         trim={trim}
         compactTop={compactTop}
         criterionTop={moversMerge}
+        timeMark={timeMark}
         // 브리핑 2차 2 (compactTop): 시장 줄이 한국 휴장을 이미 말하면 목록 위 안내에서 휴장 글을 뺀다 (같은 말 두 번 방지)
         holiday={compactTop && summarySaysKrHoliday ? null : wideHoliday}
         criterion={movers ? CRITERION : null}
@@ -332,6 +335,7 @@ export default function BriefingsScreen() {
             contributors={merge}
             since={sinceOn}
             week={weekOn}
+            {...timeMark}
           />
         ) : null}
         {summary ? (
@@ -353,7 +357,7 @@ export default function BriefingsScreen() {
       {head}
       {compactBlock}
       {!compactTop && summary ? <MarketSummaryCard summary={summary} selected={hl?.kind === "market" && hl.id === summary.id} trim={trim} /> : null}
-      {!compactTop && account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} trim={trim} contributors={merge} since={sinceOn} week={weekOn} /> : null}
+      {!compactTop && account ? <AccountBriefingCard briefing={account} selected={hl?.kind === "account" && hl.id === account.id} trim={trim} contributors={merge} since={sinceOn} week={weekOn} {...timeMark} /> : null}
       {banner}
       {/* 탭 휴장 줄. trim(브리핑 2차 4)이면 '국내 종목 브리핑 없음'(틀린 말 — 목록에 직전 거래일 국내 브리핑이 있음) 대신 등락 기준을 밝히고(넓은 창 문구와 같게),
           보이는 시장 요약이 한국 휴장을 이미 말하면 숨긴다. 한국 휴장일 아침('밤사이 미국' 요약)·요약 꺼짐·없음·실패면 남긴다.
@@ -480,6 +484,8 @@ interface WideProps {
   since?: boolean;
   /** 브리핑 3차 5 (holdingEvents): 카드 격자 계좌 줄의 '이번 주 일정 · …' 한 줄 (2단 계좌 줄에는 넣지 않음 — 상세에 있음) */
   week?: boolean;
+  /** 3-32 (플래그 numberBasis): 계좌 줄 'HH:MM 기준' — 켜져 있을 때만 { timeMark: true }, 꺼지면 빈 객체 (지금 그대로) */
+  timeMark: { timeMark?: true };
 }
 
 const SORT_OPTIONS: { value: Order; label: string }[] = [
@@ -634,6 +640,7 @@ function WideBriefings(p: WideProps) {
         onPress={() => chooseBriefing({ kind: "account", id: p.account!.id })}
         trim={p.trim}
         holidayLines={p.compactTop}
+        {...p.timeMark}
       />
     ) : null;
     const left = (
@@ -731,6 +738,7 @@ function WideBriefings(p: WideProps) {
       holidayLines={p.compactTop}
       {...(p.since ? { since: true } : {})}
       {...(p.week ? { week: true } : {})}
+      {...p.timeMark}
     />
   ) : null;
   return (

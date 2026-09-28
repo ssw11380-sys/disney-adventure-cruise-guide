@@ -56,10 +56,14 @@ export const FLOW_TAGS = {
 } as const satisfies Record<string, readonly FactTag[]>;
 export type FlowKey = keyof typeof FLOW_TAGS;
 
-/** 희석 가중평균 주식 수 (기간 값이지만 더하지 않는다 — 가장 최근 분기 값·연간 값) */
+/**
+ * 희석 가중평균 주식 수 (기간 값이지만 더하지 않는다 — 가장 최근 분기 값·연간 값). 희석 태그가 없으면 '기본·희석 같음', 그것도 없으면 기본 주식 수
+ * (희석 주식이 없어 기본 주식 수만 보고하는 회사 — XOM 은 2014년부터 기본만 보고해 3단계 전에는 주식 수가 없어 가치 지표 점수가 없었다)
+ */
 export const SHARE_TAGS: readonly FactTag[] = [
   { name: "WeightedAverageNumberOfDilutedSharesOutstanding", unit: "shares" },
   { name: "WeightedAverageNumberOfShareOutstandingBasicAndDiluted", unit: "shares" },
+  { name: "WeightedAverageNumberOfSharesOutstandingBasic", unit: "shares" },
 ];
 
 /** 잔액(재무상태표 시점 값) */

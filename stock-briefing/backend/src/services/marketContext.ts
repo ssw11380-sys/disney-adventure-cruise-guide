@@ -246,3 +246,17 @@ export function completedCandles(candles: Candle[], ctx: MarketContext, now: Dat
     return true;
   });
 }
+
+/** 이 순간이 한국 또는 미국 정규장 시간인지 (휴장·조기 폐장·수능일 반영, 토스 달력 없이 목록으로) — 토스 대조 '장중' 비율 (3-32) */
+export function regularOpenAt(iso: string): boolean {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return false;
+  const at = new Date(t);
+  // 한국: 서울 날짜의 정규장(수능일 등 특수일은 KR_SPECIAL_HOURS)
+  const kr = parts(at, "Asia/Seoul");
+  const h = krRegularHours(kr.date);
+  if (isKrTradingDate(kr.date) && h.open <= kr.minutes && kr.minutes < h.close) return true;
+  // 미국: 뉴욕 날짜의 09:30 ~ 정규장 마감(조기 폐장일 13:00, 달력 인자 없이 목록으로)
+  const ny = parts(at, "America/New_York");
+  return isUsTradingDate(ny.date) && 9 * 60 + 30 <= ny.minutes && ny.minutes < usRegularCloseMinutes(ny.date);
+}

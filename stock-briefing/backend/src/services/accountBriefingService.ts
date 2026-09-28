@@ -21,6 +21,7 @@ import {
   leaders,
   pickIndices,
   positionsOf,
+  quoteBasisOf,
   sessionKo,
   summaryText,
   templateNarrative,
@@ -90,7 +91,7 @@ export interface AccountBriefingDeps {
   calendar: { status(): Promise<MarketStatus> } | null;
   generator: TextGenerator;
   prompts: PromptStore;
-  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure" | "holdingEvents" | "holdingEarnings"): Promise<boolean> };
+  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "accountSinceLast" | "accountExposure" | "holdingEvents" | "holdingEarnings" | "numberBasis"): Promise<boolean> };
   /**
    * 토스 웹 상품 정보 (브리핑 3차 4 비중 한 줄의 레버리지·인버스 — 지표 점수와 같은 출처·같은 24시간 캐시, 시세를 받으며 대부분 이미 캐시에 있음).
    * 없으면 종목 마스터 분류·정적 표·이름 규칙으로만 가린다
@@ -234,6 +235,8 @@ export class AccountBriefingService {
       narrative: { source: "template", reason: null },
     };
     data.krPreviousDay = krPreviousDay(data.schedule, totals);
+    // 숫자 기준 (3-32): 합계에 넣은 종목 시세의 기준만 저장한다 — 요약·설명·알림·모델 입력에는 넣지 않는다 (켜도 꺼도 같은 글)
+    if (await this.deps.features.enabled("numberBasis").catch(() => false)) data.quoteBasis = quoteBasisOf(holdings, totals);
     data.usPreviousDay = usPreviousDay(now, totals);
     if (data.usPreviousDay) data.usHolidayDate = usSkippedSession(now)!;
     if (data.holdings === 0) {

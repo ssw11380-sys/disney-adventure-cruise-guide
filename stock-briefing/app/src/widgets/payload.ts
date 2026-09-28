@@ -37,6 +37,8 @@ export interface WidgetStock {
   avg: number | null;
   q: [number, number, number, "KRW" | "USD", string, number | null, 0 | 1] | null;
   e: [number, number, number | null, number | null, "exact" | "estimated" | null] | null;
+  /** 시세 기준 원문 (quote.priceBasis — 'KRX+NXT 통합' 등). 서버 numberBasis 가 켜져 있고 &ms=1 로 물었을 때만, 기준이 있는 종목만 (3-32) */
+  b?: string;
 }
 
 export interface WidgetBriefing {
@@ -135,6 +137,11 @@ export interface WidgetFeatures {
    * 예전에 적어 둔 값·예전 모양과 같고, 브리핑 위젯은 지금 그림 그대로). 서버는 &ms=1 로 물은 새 앱의 features 에만 이 키를 넣는다
    */
   marketSummary?: boolean;
+  /**
+   * 숫자 기준 (numberBasis, 3-32): 잔고·자산 위젯 기준 시각 뒤 ' · NXT·주간거래 포함' (자리가 남을 때만). 켜져 있을 때만 true 칸이 있다
+   * (foldFit 과 같은 규칙 — 꺼짐·모름·예전 서버는 칸이 없어 예전에 적어 둔 값·예전 그림과 같다)
+   */
+  basis?: boolean;
 }
 
 export const NO_FEATURES: WidgetFeatures = { pnlToggle: false, indexLine: false, market: false, polish: false };
@@ -150,6 +157,7 @@ export function widgetFeatures(features: Record<string, boolean> | null | undefi
     ...(featureOn(flags, "widgetExtended", false) ? { extended: true } : {}),
     ...(featureOn(flags, "widgetFoldFit", false) ? { foldFit: true } : {}),
     ...(featureOn(flags, "marketSummary", false) ? { marketSummary: true } : {}),
+    ...(featureOn(flags, "numberBasis", false) ? { basis: true } : {}),
   };
 }
 
@@ -269,6 +277,7 @@ export function fromPayload(p: WidgetPayload): {
           code: s.c, price: s.q[0], change: s.q[1], changeRate: s.q[2], currency: s.q[3], asOf: s.q[4], fxRate: s.q[5],
           open: null, high: null, low: null, prevClose: null, volume: null, marketCap: null, per: null, pbr: null, eps: null, bps: null, high52w: null, low52w: null, source: "widget",
           ...(s.q[6] ? { stale: true } : {}),
+          ...(s.b ? { priceBasis: s.b } : {}),
         } as Quote)
       : null;
     const e = s.e;

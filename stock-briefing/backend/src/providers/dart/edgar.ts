@@ -344,7 +344,12 @@ export class EdgarProvider implements FinancialsProvider {
   /** companyfacts 원본 한 번 (캐시 없음). SEC 목록에 없는 티커(ETF 등)는 NotListedError */
   async companyFactsRaw(stockCode: string): Promise<{ cik: string; raw: Json }> {
     const { cik } = await this.resolveCik(stockCode);
-    return { cik, raw: await this.getJson<Json>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { timeoutMs: BULK_TIMEOUT_MS, paced: true }) };
+    return { cik, raw: await this.companyFactsRawByCik(cik) };
+  }
+
+  /** CIK 로 companyfacts 원본 한 번 (지주회사 전환으로 CIK 가 바뀐 회사의 예전 재무 — secFacts PREDECESSOR_CIK) */
+  async companyFactsRawByCik(cik: string): Promise<Json> {
+    return this.getJson<Json>(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { timeoutMs: BULK_TIMEOUT_MS, paced: true });
   }
 
   /** 업종 번호(SIC)·이름 (submissions — 6시간 캐시). 리츠(6798)·스팩(6770) 판정에 쓴다 */

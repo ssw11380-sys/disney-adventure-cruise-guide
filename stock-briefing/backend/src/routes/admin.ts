@@ -4,7 +4,7 @@ import type { TossOpenApiProvider } from "../providers/market/tossOpenApi.js";
 import type { TossRealtime } from "../providers/market/tossRealtime.js";
 import type { BackupService } from "../services/backupService.js";
 import type { FeatureService } from "../services/featureService.js";
-import type { ReconcileService } from "../services/reconcileService.js";
+import type { ReconcileService, ReconcileStatus } from "../services/reconcileService.js";
 import type { StockService } from "../services/stockService.js";
 import type { HoldingsAutoSync, TossSyncService } from "../services/tossSyncService.js";
 
@@ -16,6 +16,17 @@ export interface AdminDeps {
   outboundIp?: () => Promise<string | null>;
   backups?: BackupService;
   features?: FeatureService;
+}
+
+/** 잔고 '숫자 기준' 배지 조회 응답 (3-32, GET /api/admin/toss/reconcile/badge) */
+export interface ReconcileBadgeBody {
+  /** numberBasis·tossReconcile 이 켜져 있고 토스 연동이 있을 때만 true */
+  on: boolean;
+  status: ReconcileStatus | null;
+  /** 최근 7일 정규장 시간 기록 (intradayWithin) */
+  intraday: { n: number; withinPct: number | null; skipped: number } | null;
+  /** 자동 동기화 상태 — '숫자 기준' 창 설명과 '오래된 기록' 판단에 */
+  sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null } | null;
 }
 
 /** 토스 Open API 연동 상태 (앱 설정 화면용). 키가 없어도 200 으로 configured:false 를 준다 */
@@ -47,6 +58,22 @@ export const adminRoutes: FastifyPluginAsync<AdminDeps> = async (app, { service,
   app.get("/toss/reconcile", async (_req, reply) => {
     if (!toss) return reply.code(503).send({ error: "TOSS_DISABLED", message: "TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 설정되지 않았습니다" });
     return { status: await toss.reconcile.status(), history: (await toss.reconcile.history()).slice(-50).reverse() };
+  });
+  /**
+   * 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis): 마지막 대조·최근 7일 장중 비율·자동 동기화 주기. 늘 200.
+   * 토스 연동이 없거나 numberBasis·tossReconcile 중 하나라도 꺼져 있으면 대조 기록을 읽지 않고 { on: false } 만 준다
+   */
+  app.get("/toss/reconcile/badge", async (): Promise<ReconcileBadgeBody> => {
+    const off: ReconcileBadgeBody = { on: false, status: null, intraday: null, sync: null };
+    if (!toss || !features) return off;
+    if (!(await features.enabled("numberBasis")) || !(await features.enabled("tossReconcile"))) return off;
+    const s = toss.autoSync.status();
+    return {
+      on: true,
+      status: await toss.reconcile.status().catch(() => null),
+      intraday: await toss.reconcile.intraday().catch(() => null),
+      sync: { enabled: s.enabled, intervalMin: s.intervalMin, idleIntervalMin: s.idleIntervalMin, lastRunAt: s.lastRunAt, nextRunAt: s.nextRunAt },
+    };
   });
 
   /** 토스증권 계좌의 보유 종목을 등록 종목으로 가져온다 (수량·평단 동기화) */

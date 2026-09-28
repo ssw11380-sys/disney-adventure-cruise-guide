@@ -341,6 +341,10 @@ export const layout = {
   briefCardMinW: 300,
   /** 테마 히트맵 타일 기준 폭: 칸 수 = 폭 ÷ 이 값 (넓은 창만. 좁은 창은 지금처럼 3칸) */
   heatTileW: 150,
+  /** 숫자 기준 점 지름 (3-32 — 보이는 점. 누르는 칸은 touch.min 44×44) */
+  basisDot: 6,
+  /** 숫자 기준 창 이름 칸 폭 (글자 100%, 큰 글씨는 배율만큼 — 상한 fontCap.row) */
+  basisLabelW: 68,
 } as const;
 
 /**
@@ -663,4 +667,10 @@ export const priceAlert = {
   boundaryTries: 3,
   /** 경계 타이머 한 번의 최대 대기 (먼 경계는 이 간격으로 다시 잰다 — 긴 타이머를 걸지 않게) */
   boundaryMaxWaitMs: 300_000,
+} as const;
+
+/** 토스 앱 안내 시트 (3-48, 기능 플래그 tossOpen). 단위 dp */
+export const tossSheet = {
+  /** 시트 최대 폭 (펼친 화면은 가운데 — 가격 알림 시트와 같은 폭) */
+  maxW: priceAlert.sheetMaxW,
 } as const;

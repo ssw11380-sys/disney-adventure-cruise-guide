@@ -20,6 +20,7 @@ import { Badge, Card, Muted } from "./ui";
  * 누르면 계좌 브리핑 화면. 숫자는 서버가 계산한 값 그대로 (앱 잔고 화면과 같은 기준).
  * trim(브리핑 2차 4, 플래그 briefingTrim — 탭에서 읽어 넘김): 한국 휴장 줄에 브리핑 날짜('9/25(금) 한국 휴장 · …'), 끝줄 '숫자로 만든 요약 · …'
  * contributors(브리핑 2차 3, 플래그 moversMerge — 탭이 '합치기 가능'일 때만 넘김): '기여 1위 …' 줄 대신 기여 상위 묶음(ContributorsBlock)
+ * timeMark(3-32, 플래그 numberBasis — 탭이 읽어 넘김): '당일 손익' 이름 뒤 ' · 08:38 기준' (실패·기여 상위 묶음이 있으면 더하지 않음 — 묶음 머리에 이미 시각)
  */
 export function AccountBriefingCard({
   briefing,
@@ -28,6 +29,7 @@ export function AccountBriefingCard({
   contributors = false,
   since = false,
   week = false,
+  timeMark = false,
 }: {
   briefing: AccountBriefing;
   /** 넓은 창에서 보던 계좌 브리핑 (3-42 접고 펴기 이어 보기). 기본 false = 지금 모양 그대로 */
@@ -40,19 +42,22 @@ export function AccountBriefingCard({
   since?: boolean;
   /** 브리핑 3차 5 (플래그 holdingEvents): '이번 주 일정 · …' 한 줄 (그 주 첫 오전 브리핑에 일정이 있을 때만). 기본 false = 지금 그대로 */
   week?: boolean;
+  /** 3-32 (플래그 numberBasis): 숫자의 시각 'HH:MM 기준'. 기본 false = 지금 그대로 */
+  timeMark?: boolean;
 }) {
   const t = useTheme();
   const h = briefing.headline;
   const block = contributors && !!h && h.top.length > 0;
   const top = block ? null : (h?.top[0] ?? null);
   const failed = briefing.status === "failed" || !h;
+  const hhmm = timeMark && !failed && !block ? briefingTime(briefing.createdAt) : "";
   return (
     <Card style={selected ? { borderLeftWidth: FB.selBar, borderLeftColor: t.accent, paddingLeft: space.lg - FB.selBar } : undefined}>
       <Pressable
         onPress={() => router.push(`/briefings/account/${briefing.id}`)}
         {...(selected ? { accessibilityState: { selected: true } } : {})}
         accessibilityRole="link"
-        accessibilityLabel={accountCardSpeech(briefing, { ...(block ? { trim, contributors: true } : { trim }), ...(since ? { since: true } : {}), ...(week ? { week: true } : {}) })}
+        accessibilityLabel={accountCardSpeech(briefing, { ...(block ? { trim, contributors: true } : hhmm ? { trim, time: true } : { trim }), ...(since ? { since: true } : {}), ...(week ? { week: true } : {}) })}
         style={styles.press}
       >
         <View style={styles.head}>
@@ -72,7 +77,7 @@ export function AccountBriefingCard({
           <>
             <View style={styles.nums}>
               <View style={styles.col}>
-                <Muted>당일 손익</Muted>
+                <Muted>{hhmm ? `당일 손익 · ${hhmm} 기준` : "당일 손익"}</Muted>
                 <Text style={[styles.big, { color: changeColor(t, h.dayPnl) }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
                   {formatWon(h.dayPnl, { sign: true })}
                 </Text>
@@ -121,6 +126,7 @@ export function AccountBriefingCard({
  * 브리핑 2차 2·3 (접은 화면 맨 위 묶음 — 플래그 briefingCompactTop·moversMerge, 탭이 읽어 넘김. 모두 기본값이면 지금 넓은 창 모양·문장 그대로):
  *  - holidayLines: 숫자 줄 아래(기여 상위 묶음이 있으면 그 아래) 휴장 줄 한국 → 미국 (accountHolidayLines — 브리핑 날짜가 오늘이 아니면 날짜 모양)
  *  - contributors: 둘째 줄의 '· 기여 1위 …' 묶음 대신 기여 상위 묶음(ContributorsBlock)
+ * timeMark(3-32, 플래그 numberBasis — 탭이 읽어 넘김): 둘째 줄 끝에 '08:38 기준' 묶음 (실패·기여 상위 묶음이 있으면 더하지 않음). 새 줄은 만들지 않는다
  */
 export function AccountBriefingRow({
   briefing,
@@ -132,6 +138,7 @@ export function AccountBriefingRow({
   contributors = false,
   since = false,
   week = false,
+  timeMark = false,
 }: {
   briefing: AccountBriefing;
   selected: boolean;
@@ -147,6 +154,8 @@ export function AccountBriefingRow({
   since?: boolean;
   /** 브리핑 3차 5 (플래그 holdingEvents — 접은 화면·카드 격자만, 2단 계좌 줄은 넘기지 않음): '이번 주 일정 · …' 한 줄. 기본 false = 지금 그대로 */
   week?: boolean;
+  /** 3-32 (플래그 numberBasis): 둘째 줄 끝 'HH:MM 기준'. 기본 false = 지금 그대로 */
+  timeMark?: boolean;
 }) {
   const t = useTheme();
   const today = viewDateOf(new Date(useNow(60_000)));
@@ -155,8 +164,9 @@ export function AccountBriefingRow({
   const top = block ? null : (h?.top[0] ?? null);
   const failed = briefing.status === "failed" || !h;
   const holidays = holidayLines && !failed ? accountHolidayLines(briefing, { trim, today }) : [];
+  const hhmm = timeMark && !failed && !block ? briefingTime(briefing.createdAt) : "";
   // 옵션을 쓰지 않으면 예전 문장 그대로 (옵션 칸 자체를 넘기지 않는다)
-  const speechOpts = { trim, ...(block ? { contributors: true } : {}), ...(holidayLines ? { today } : {}), ...(since ? { since: true } : {}), ...(week ? { week: true } : {}) };
+  const speechOpts = { trim, ...(block ? { contributors: true } : {}), ...(holidayLines ? { today } : {}), ...(since ? { since: true } : {}), ...(week ? { week: true } : {}), ...(hhmm ? { time: true } : {}) };
   return (
     <Pressable
       onPress={onPress}
@@ -190,13 +200,20 @@ export function AccountBriefingRow({
             <Text style={[styles.num, { color: changeColor(t, shownSign(h.dayPnl, formatWon(h.dayPnl, { sign: true }))), fontSize: font.body, fontWeight: "700" }]}>{formatWon(h.dayPnl, { sign: true })}</Text>
             {h.dayRate !== null ? <Text style={[styles.num, { color: changeColor(t, shownSign(h.dayRate, formatPct(h.dayRate))) }]}> {formatPct(h.dayRate)}</Text> : null}
             {/* 구분점은 앞 묶음 끝에 (줄이 넘어가도 새 줄이 '·'로 시작하지 않게 — 목록 위 안내와 같은 규칙) */}
-            {top ? " ·" : null}
+            {top || hhmm ? " ·" : null}
           </Text>
           {top ? (
             <Text style={{ color: t.sub, fontSize: font.small }} maxFontSizeMultiplier={fontCap.row}>
               {"기여 1위 "}
               <Text style={{ color: t.ink }}>{top.name}</Text>{" "}
               <Text style={[styles.num, { color: changeColor(t, shownSign(top.amount, formatWon(top.amount, { sign: true }))) }]}>{formatWon(top.amount, { sign: true })}</Text>
+              {hhmm ? " ·" : null}
+            </Text>
+          ) : null}
+          {/* 3-32 숫자의 시각 (numberBasis): 마지막 묶음 뒤 새 묶음 — 폭이 모자라면 묶음째 다음 줄로 */}
+          {hhmm ? (
+            <Text style={{ color: t.muted, fontSize: font.tiny }} maxFontSizeMultiplier={fontCap.row}>
+              {`${hhmm} 기준`}
             </Text>
           ) : null}
         </View>

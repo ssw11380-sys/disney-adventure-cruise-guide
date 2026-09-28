@@ -53,6 +53,7 @@ import { regularCloseLookup, TradeRecordService } from "./services/tradeRecordSe
 import { tradeRecordAdminRoutes, tradeRecordRoutes } from "./routes/tradeRecords.js";
 import { defaultScoreSources, IndicatorScoreService } from "./services/indicatorScoreService.js";
 import { ValueScoreService } from "./services/valueScoreService.js";
+import { KrValueService } from "./services/krValueService.js";
 import { scoreRoutes } from "./routes/scores.js";
 import { PriceAlertService } from "./services/priceAlertService.js";
 import { BriefingStatusService } from "./services/briefingStatus.js";
@@ -128,7 +129,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     const autoSync = new HoldingsAutoSync({
       sync,
       // 동기화마다 앱 총평가와 토스 계좌 요약을 대조해 남긴다 (3-13)
-      onResult: reconcileAfterSync({ features, reconcile, stocks: stockService }),
+      // 대조 기록 뒤 접속한 앱에 알린다 → '숫자 기준' 배지가 바로 바뀐다 (3-32, 플래그 numberBasis). priceStream 은 아래에서 만들고 동기화 때 부른다
+      onResult: reconcileAfterSync({ features, reconcile, stocks: stockService, after: () => priceStream.notify("reconcile") }),
       calendar: opts.providers.calendar,
       // 바뀐 게 있으면 실시간 구독 종목을 맞추고, 접속한 앱에 "잔고 변경"을 바로 알린다
       afterSync: async () => {
@@ -269,7 +271,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   // 지표 점수 (3-44, 플래그 indicatorScores): 종목 상세의 추세 지표 점수. 일봉은 차트와 같은 캐시, 비교 지수는 위 지수 목록과 같은 인스턴스.
   // 장 마감 뒤(한국 20:10 · 뉴욕 17:30, 평일·거래일만) 등록 종목을 미리 계산해 기록한다. 플래그가 꺼져 있으면 예약이 돌아도 아무것도 하지 않는다
   // 가치 지표 (3-44 2단계, 플래그 valueScore): SEC 재무·주간 비교 기준. 출처가 없으면(테스트 기본) 1단계 그대로
-  const valueScores = new ValueScoreService({ db: opts.db, features, sources: opts.providers.valueSources ?? null, now, log });
+  // 한국 간이 가치 (3-44 3단계, 플래그 krValueScore): 네이버 재무 요약·업종 구성 종목. 출처가 없으면(테스트 기본) 한국 가치 줄은 '지금 계산하지 않음'
+  const krValue = new KrValueService({ db: opts.db, features, sources: opts.providers.krValueSources ?? null, now, log });
+  const valueScores = new ValueScoreService({ db: opts.db, features, sources: opts.providers.valueSources ?? null, kr: krValue, now, log });
   const indicatorScores = new IndicatorScoreService({
     db: opts.db,
     features,
@@ -338,6 +342,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("tradeRecords", tradeRecords);
   app.decorate("indicatorScores", indicatorScores);
   app.decorate("valueScores", valueScores);
+  app.decorate("krValue", krValue);
 
   // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
   app.addHook("onRequest", async (req) => {
@@ -577,6 +582,8 @@ declare module "fastify" {
     /** 지표 점수 (3-44): 종목 상세의 추세 지표 점수·장 마감 뒤 기록 */
     indicatorScores: IndicatorScoreService;
     valueScores: ValueScoreService;
+    /** 한국 간이 가치 (3-44 3단계) */
+    krValue: KrValueService;
   }
 }
 

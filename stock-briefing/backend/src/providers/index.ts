@@ -3,7 +3,8 @@ import type { Db } from "../db/index.js";
 import { describeLlmBackend, resolveLlmBackend } from "../llm/backend.js";
 import { ClaudeGenerator, DisabledGenerator, type TextGenerator } from "../llm/generator.js";
 import { DartProvider } from "./dart/dart.js";
-import type { NaverDiscover } from "./market/naverDiscover.js";
+import { NaverDiscover } from "./market/naverDiscover.js";
+import { NaverFinanceClient } from "./market/naverFinance.js";
 import type { MarketIndices } from "./market/indices.js";
 import { EdgarProvider } from "./dart/edgar.js";
 import type { FinancialsProvider } from "./dart/types.js";
@@ -32,6 +33,7 @@ import type { ScoreSources } from "../services/indicatorScoreService.js";
 import { defaultValueSources, type ValueSources } from "../services/valueScoreService.js";
 import type { HoldingEventSources } from "../services/holdingEvents.js";
 import { NasdaqScreener } from "./market/nasdaqScreener.js";
+import { defaultKrValueSources, type KrValueSources } from "../services/krValueService.js";
 
 export interface Providers {
   quotes: QuoteProvider;
@@ -78,6 +80,8 @@ export interface Providers {
    * 다가오는 일정 출처 (브리핑 3차 5 — 토스 웹 배당 요약·공개 캘린더 + 네이버 배당락일, 모두 로그인 없음). 없으면(테스트 기본) 계좌 브리핑에 일정 칸이 없다
    */
   holdingEvents?: HoldingEventSources | null;
+  /** 한국 간이 가치 출처 (네이버 재무 요약 + 업종 구성 종목, 3-44 3단계). 없으면 한국 가치 줄은 '지금 계산하지 않음' */
+  krValueSources?: KrValueSources | null;
   investorFlow: InvestorFlowProvider | null; // KIS 키 없으면 null
   generator: TextGenerator;
   dart: DartProvider | null;
@@ -159,6 +163,8 @@ export function buildProviders(cfg: AppConfig, db: Db, log: ChainLogger): Provid
     financialsUs: edgar,
     // 가치 지표(3-44 2단계): 같은 SEC 인스턴스(요청 간격 공유) + Nasdaq 스크리너
     valueSources: defaultValueSources(edgar, new NasdaqScreener()),
+    // 한국 간이 가치(3-44 3단계): 네이버 재무 요약(요청 사이 0.7초) + 업종 구성 종목(발견 탭과 같은 네이버 공개 JSON)
+    krValueSources: defaultKrValueSources(new NaverFinanceClient(), new NaverDiscover()),
     // 토스 달력과 휴장일 목록이 다르면 로그로 경고 (시장·날짜마다 한 번)
     calendar: new MarketCalendar(fetch, () => new Date(), 5 * 60_000, log),
     regularCloseSources: { KR: [naver], US: [toss, yahoo] },

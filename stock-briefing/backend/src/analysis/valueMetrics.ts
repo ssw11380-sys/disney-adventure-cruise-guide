@@ -19,7 +19,7 @@ import type { AnnualPoint, ValueInputs } from "./secFacts.js";
 export type MetricKey =
   | "A1" | "A2" | "A3" | "A4" | "A5"
   | "B1" | "B2" | "B3" | "B4" | "B5" | "B6"
-  | "D1" | "D2" | "D3" | "D4"
+  | "D1" | "D2" | "D3" | "D4" | "D5"
   | "C1" | "C2" | "C3"
   | "E1" | "E2"
   | "F1" | "F2" | "F3";
@@ -42,7 +42,7 @@ export type MetricUnit = "배" | "%" | "%p";
 export const METRIC_UNIT: Record<MetricKey, MetricUnit> = {
   A1: "배", A2: "배", A3: "배", A4: "배", A5: "%",
   B1: "%", B2: "%", B3: "%", B4: "%", B5: "%p", B6: "%",
-  D1: "%", D2: "배", D3: "배", D4: "%",
+  D1: "%", D2: "배", D3: "배", D4: "%", D5: "%",
   C1: "%", C2: "%", C3: "%p",
   E1: "%", E2: "%",
   F1: "%", F2: "%p", F3: "%",

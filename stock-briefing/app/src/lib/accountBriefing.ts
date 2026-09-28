@@ -132,7 +132,7 @@ function contributorsSpeech(b: AccountBriefing): string[] {
  *    그 줄의 읽는 말 (비교가 없는 브리핑이면 그대로)
  *  - week = 브리핑 3차 5 '이번 주 일정 · …' 한 줄(플래그 holdingEvents)을 보일 때: 보이는 자리와 같은 순서로 비교 줄 뒤·휴장 앞에 그 줄의 읽는 말 (없는 브리핑이면 그대로)
  */
-export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string; since?: boolean; week?: boolean } = {}): string {
+export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string; since?: boolean; week?: boolean; time?: boolean } = {}): string {
   const h = b.headline;
   const list = opts.contributors ? contributorsSpeech(b) : [];
   const top = list.length ? undefined : h?.top[0];
@@ -152,6 +152,8 @@ export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; co
     opts.since ? (sinceLine(b)?.speech ?? null) : null,
     opts.week ? (weekLine(b)?.speech ?? null) : null,
     ...holidays,
+    // 3-32 (numberBasis): 숫자의 시각 — 카드·줄이 'HH:MM 기준'을 그릴 때만 (기여 상위 묶음이 있으면 부르는 쪽이 넘기지 않음)
+    opts.time && b.status !== "failed" && briefingTime(b.createdAt) ? `${speakClock(briefingTime(b.createdAt))} 기준` : null,
     "자세히 보기",
   ]);
 }
