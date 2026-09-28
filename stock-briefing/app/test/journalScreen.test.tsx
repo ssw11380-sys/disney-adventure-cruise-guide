@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   returnsCalls: [] as unknown[],
   tax: undefined as unknown,
   taxTries: 0,
+  taxCalls: 0,
   health: { data: { tradeRecords: { toss: true, since: "2026-09-28", days: 1 } } } as unknown,
   save: vi.fn(),
   push: vi.fn(),
@@ -64,7 +65,10 @@ vi.mock("@/api/hooks", () => ({
     h.returnsCalls.push(q);
     return { ...idle, data: h.returns };
   },
-  useJournalTax: () => ({ ...idle, data: h.tax, tries: h.taxTries }),
+  useJournalTax: () => {
+    h.taxCalls++;
+    return { ...idle, data: h.tax, tries: h.taxTries };
+  },
   useSaveTradeNote: () => ({ mutate: h.save, isPending: false }),
   useJournalStock: () => ({ ...idle, data: undefined }),
 }));
@@ -83,6 +87,8 @@ const { forgetWindowClass } = await import("@/lib/useFoldLayout");
 const lib = await import("@/lib/journal");
 
 const ON = { tradeJournal: true, tradeRecords: true };
+/** 양도세 추정 탭까지 (하위 플래그 journalTax — 서버 기본 끔) */
+const TAX_ON = { ...ON, journalTax: true };
 const realized = (gross: number, rate: number): JournalItem["realized"] => ({
   status: "ok",
   reason: null,
@@ -146,6 +152,7 @@ beforeEach(() => {
   h.returnsCalls = [];
   h.tax = undefined;
   h.taxTries = 0;
+  h.taxCalls = 0;
   h.health = { data: { tradeRecords: { toss: true, since: "2026-09-28", days: 1 } } };
   h.save.mockReset();
   h.push.mockReset();
@@ -177,6 +184,26 @@ describe("켜고 끄기", () => {
       expect(r.all().find((n) => n.type === "Empty")!.props.title).toBe("지금은 매매일지를 쓸 수 없습니다");
       expect(h.journalCalls).toEqual([]);
     }
+  });
+
+  it("양도세 추정(journalTax)이 꺼져 있으면(기본) '기록'·'수익률' 두 탭만 — tab=tax 로 열어도 기록 탭, 양도세 화면·요청 0건 · 켜면 세 탭", () => {
+    h.params = { tab: "tax" };
+    h.tax = { enabled: true, year: 2026, years: [2026] } as JournalTax;
+    const r = draw();
+    const seg = r.all().find((n) => n.type === "Segmented")!;
+    expect(seg.props.value).toBe("list");
+    expect((seg.props.options as Array<{ value: string }>).map((o) => o.value)).toEqual(["list", "returns"]);
+    expect(h.taxCalls).toBe(0);
+    expect(r.all().some((n) => String(n.props.testID ?? "").startsWith("tax-"))).toBe(false);
+    expect(r.text()).not.toContain("양도세");
+    expect(h.journalCalls.length).toBeGreaterThan(0);
+    // 켜면 세 탭 · tab=tax 는 양도세 탭
+    h.flags = TAX_ON;
+    const on = draw();
+    const seg2 = on.all().find((n) => n.type === "Segmented")!;
+    expect((seg2.props.options as Array<{ value: string }>).map((o) => o.value)).toEqual(["list", "returns", "tax"]);
+    expect(seg2.props.value).toBe("tax");
+    expect(h.taxCalls).toBeGreaterThan(0);
   });
 });
 
@@ -406,6 +433,7 @@ describe("양도세 추정 탭", () => {
   };
   it("맨 위 '참고용 추정' 상자(늘) · 합계·공제·세율·예상 세액 · 빠진 매도 · 계산 기준 7줄(확인 필요 규칙 포함) · 국내 · 고지", () => {
     h.params = { tab: "tax" };
+    h.flags = TAX_ON;
     h.tax = TAX;
     const r = draw();
     expect(textOf(r.all().find((n) => n.props.testID === "tax-notice")!)).toBe(lib.TAX.notice);
@@ -424,6 +452,7 @@ describe("양도세 추정 탭", () => {
 
   it("환율 받는 중: 안내 · 다시 묻기를 다 쓰면(5번) 빠진 매도로", () => {
     h.params = { tab: "tax" };
+    h.flags = TAX_ON;
     h.tax = { ...TAX, excluded: [], fxPending: 2 };
     let r = draw();
     expect(textOf(r.all().find((n) => n.props.testID === "tax-pending")!)).toBe("환율을 받는 중이에요 (2건). 잠시 뒤 다시 계산해요.");
@@ -435,7 +464,7 @@ describe("양도세 추정 탭", () => {
 
   it("폴드 가로: 왼쪽 합계·기준 | 오른쪽 매도별 계산(늘 펼침)", () => {
     h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
-    h.flags = { ...ON, foldLayout: true };
+    h.flags = { ...TAX_ON, foldLayout: true };
     h.params = { tab: "tax" };
     h.tax = TAX;
     const r = draw();
@@ -446,7 +475,7 @@ describe("양도세 추정 탭", () => {
 
   it("회귀: 폴드 가로에서 계산에 넣은 해외 매도가 0건이면 오른쪽 칸에 안내 한 줄 (빈 화면이 아니게)", () => {
     h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
-    h.flags = { ...ON, foldLayout: true };
+    h.flags = { ...TAX_ON, foldLayout: true };
     h.params = { tab: "tax" };
     h.tax = { ...TAX, items: [], excluded: [], totals: { gains: 0, losses: 0, net: 0, base: 0, nationalTax: 0, localTax: 0, tax: 0, sells: 0 } };
     const r = draw();
@@ -459,6 +488,7 @@ describe("양도세 추정 탭", () => {
     const reason = "같은 날 사고판 순서를 몰라 취득가가 확실하지 않아 합계에서 뺐어요";
     const tax: JournalTax = { ...TAX, items: [], excluded: [{ code: "SOXL", name: "SOXL", count: 1, reason }], totals: { gains: 0, losses: 0, net: 0, base: 0, nationalTax: 0, localTax: 0, tax: 0, sells: 0 }, uncertainExcluded: 1, uncertainGainKrw: 405_000, uncertainItems: [u] };
     h.params = { tab: "tax" };
+    h.flags = TAX_ON;
     h.tax = tax;
     let r = draw();
     expect(textOf(r.all().find((n) => n.props.testID === "tax-excluded")!)).toBe(`계산에서 뺀 매도 1건이 있어 실제와 다를 수 있어요.SOXL 1건 · ${reason}사고판 순서를 몰라 뺀 매도 1건의 추정 양도차익은 +405,000원이에요.`);
@@ -467,7 +497,7 @@ describe("양도세 추정 탭", () => {
     expect(r.text()).toContain("양도가액 2,430,000원 − 취득가액 2,025,000원 = +405,000원");
     // 폴드 가로: 오른쪽 칸에 그 매도 (빈 칸 안내가 아니라)
     h.win = { width: 933, height: 704, scale: 2.625, fontScale: 1 };
-    h.flags = { ...ON, foldLayout: true };
+    h.flags = { ...TAX_ON, foldLayout: true };
     r = draw();
     expect(r.all().filter((n) => n.props.testID === "tax-per-sell")).toHaveLength(1);
     expect(r.text()).toContain("합계에서 뺌");
@@ -550,6 +580,7 @@ describe("검토 반영 (3-37 다듬기) — 화면", () => {
 
   it("양도세: 순서 모름 매도를 합계에 넣었으면(includeUncertain) 합계 줄 '추정 포함' · 따로 상자 · 매도별 계산 첫 줄 '추정 포함'", () => {
     h.params = { tab: "tax" };
+    h.flags = TAX_ON;
     h.tax = {
       enabled: true,
       year: 2026,
@@ -654,6 +685,7 @@ describe("검토 반영 10차 — 확인이 필요한 매도 (그해 주문 내�
 
   it("양도세: '확인이 필요한 매도' 상자 — 매도마다 한 줄(판매 금액·그해 있었던 일·이름표) + 토스증권 앱 안내", () => {
     h.params = { tab: "tax" };
+    h.flags = TAX_ON;
     h.tax = {
       enabled: true,
       year: 2026,

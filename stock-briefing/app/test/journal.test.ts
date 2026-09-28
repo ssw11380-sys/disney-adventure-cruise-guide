@@ -106,13 +106,17 @@ const krBuyPart: JournalItem = {
 
 describe("위 탭 이름", () => {
   it("'양도세 추정'이 한 칸에 안 들어가는 좁은 폭 × 큰 글씨에서만 '양도세' (글자 중간 줄바꿈 막기)", () => {
-    const tax = (w: number, s: number) => journalTabs(w, s).find((t) => t.value === "tax")!.label;
-    expect(journalTabs(360, 1).map((t) => t.label)).toEqual(["기록", "수익률", "양도세 추정"]);
+    const tax = (w: number, s: number) => journalTabs(w, s, true).find((t) => t.value === "tax")!.label;
+    expect(journalTabs(360, 1, true).map((t) => t.label)).toEqual(["기록", "수익률", "양도세 추정"]);
     expect(tax(360, 1.3)).toBe("양도세 추정");
     expect(tax(360, 2)).toBe("양도세");
     expect(tax(475, 1.3)).toBe("양도세 추정");
     expect(tax(475, 2)).toBe("양도세");
     expect(tax(933, 2)).toBe("양도세 추정");
+  });
+
+  it("양도세 추정(하위 플래그 journalTax)이 꺼져 있으면 '기록'·'수익률' 두 탭만 — 어느 폭·글씨에서도", () => {
+    for (const [w, s] of [[360, 1], [360, 2], [475, 1.3], [933, 2]] as const) expect(journalTabs(w, s, false)).toEqual([{ value: "list", label: "기록" }, { value: "returns", label: "수익률" }]);
   });
 });
 

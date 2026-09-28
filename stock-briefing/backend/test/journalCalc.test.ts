@@ -296,6 +296,25 @@ describe("검토 반영 10차 — 종목·해 규칙: 그해 확인 필요가 �
     expect(h.fills.get(half[1]!.key)!.realized).toMatchObject({ status: "ok", gross: -10_000 });
   });
 
+  it("④ 검토 반영 12차: 모두 판 매도와 다시 산 매수의 순서를 모르면 어느 순서로든 0주가 될 수 있었던 매도를 0주까지 판 매도로 본다 · 순서를 알고 0주가 되지 않았거나 들어온 종목이 없으면 그대로", () => {
+    const a = usA("2026-10-12", 1000, 100_000, 100);
+    const b = usA("2026-10-13", 10, 800, 80);
+    const arrivals = [{ from: a.asOf, to: b.asOf }];
+    const text = "10월 13일 모두 판 뒤 30일 안에 같은 계좌에 다른 종목이 주문 없이 들어왔어요(분사 등일 수 있어요)";
+    const buy = us("BUY", 1000, 100_000, "2026-09-01");
+    const sell = us("SELL", 1000, 80_000, "2026-10-13", "23:30");
+    // 주문 시각만 있는 다시 사기(22:40): 저장 순서로는 1,010주 → 10주지만 매도 먼저면 0주 → 확인 필요 (까닭 문장은 그 매도 날)
+    const ordered = [buy, sell, us("BUY", 10, 800, "2026-10-13", "22:40", "ordered")];
+    expect(replayPair(ordered, [a, b], { ...USD, arrivals }).fills.get(sell.key)!.realized).toMatchObject({ ...needs, change: text });
+    // 들어온 종목이 없으면 예전 그대로 (매도 먼저만 뒤 기록과 맞음 → '순서 추정' −$20,000)
+    expect(replayPair(ordered, [a, b], USD).fills.get(sell.key)!.realized).toMatchObject({ status: "order-uncertain", gross: -20_000 });
+    // 다시 산 매수가 22:40 에 체결(순서를 앎 — 0주가 된 적 없음, 뒤 기록은 이동평균으로 남은 10주 $998.02): 들어온 종목이 있어도 ④ 아님
+    const known = [buy, sell, us("BUY", 10, 800, "2026-10-13", "22:40")];
+    const r = replayPair(known, [a, usA("2026-10-13", 10, 998.02, 80)], { ...USD, arrivals });
+    expect(r.fills.get(sell.key)!.realized).toMatchObject({ status: "ok", gross: -19_801.98 });
+    expect(r.check.doubtYears).toEqual([]);
+  });
+
   it("④ 첫 기록 전 증거(검토 반영 11차 — 들어온 때의 하한을 모름, from null): 증거(산 기록 없이 판 매도 · 첫 기록의 주문 없는 수량) 전에 0주까지 판 매도는 언제였든 확인 필요 · 증거보다 뒤에 판 것은 그대로", () => {
     const f = [us("BUY", 1000, 100_000, "2025-03-03"), us("SELL", 1000, 80_000, "2025-06-02")];
     const first = usA("2026-09-25", 0, 0);
@@ -472,6 +491,39 @@ describe("검토 반영 10차 — 예전에 틀린 숫자를 만들던 경우는
       arrivals: [{ from: null, to: kst("2026-01-06", "23:40") }],
     }),
     "E4 분사 + 같은 날 순서 모르는 매수": () => ({ fills: [ub, us("SELL", 500, 50_000, "2026-10-13", "23:30"), fill({ side: "BUY", quantity: 800, amount: 64_000, at: uz.asOf, basis: "seen" })], anchors: [ua, usA("2026-10-13", 1300, 104_000, 80)], usd: true }),
+    // 분사 당일 모두 판 매도 + 같은 구간에 다시 산 매수, 순서를 모름 (검토 반영 12차 — 저장 순서로는 0주가 되지 않아 ④를 놓쳤다)
+    "A1c 미국 모회사 모두 팖(23:30) + 주문 시각만 있는 10주 다시 삼(22:40), 토스 매입금액 $80,000": () => {
+      const a = usA("2026-10-12", 1000, 80_000, 100);
+      const b = usA("2026-10-13", 10, 800, 80);
+      return { fills: [us("BUY", 1000, 80_000, "2026-09-01"), us("SELL", 1000, 80_000, "2026-10-13", "23:30"), us("BUY", 10, 800, "2026-10-13", "22:40", "ordered")], anchors: [a, b], usd: true, arrivals: [{ from: a.asOf, to: b.asOf }] };
+    },
+    "A1 미국 같은 모양, 토스 매입금액 $100,000 (예전 '순서 추정' −$20,000)": () => {
+      const b = usA("2026-10-13", 10, 800, 80);
+      return { fills: [ub, us("SELL", 1000, 80_000, "2026-10-13", "23:30"), us("BUY", 10, 800, "2026-10-13", "22:40", "ordered")], anchors: [ua, b], usd: true, arrivals: [{ from: ua.asOf, to: b.asOf }] };
+    },
+    "A2 같은 초에 체결된 다시 사기(먼저 저장)와 모두 팖": () => {
+      const b = usA("2026-10-13", 10, 800, 80);
+      const buy = us("BUY", 10, 800, "2026-10-13", "23:30");
+      return { fills: [ub, buy, us("SELL", 1000, 80_000, "2026-10-13", "23:30")], anchors: [ua, b], usd: true, arrivals: [{ from: ua.asOf, to: b.asOf }] };
+    },
+    "A2c 모두 판 매도는 기록 시각('seen')만, 다시 산 매수는 23:45 체결": () => {
+      const a = usA("2026-10-12", 1000, 80_000, 100);
+      const b = usA("2026-10-13", 10, 800, 80);
+      return { fills: [us("BUY", 1000, 80_000, "2026-09-01"), fill({ side: "SELL", quantity: 1000, amount: 80_000, at: b.asOf, basis: "seen" }), us("BUY", 10, 800, "2026-10-13", "23:45")], anchors: [a, b], usd: true, arrivals: [{ from: a.asOf, to: b.asOf }] };
+    },
+    "A1-KR 한국 모회사 모두 팖(10:00) + 주문 시각만 있는 10주 다시 삼(09:00)": () => {
+      const b = krA("2026-10-13", 10, 8_000, 800);
+      return { fills: [k("SELL", 1000, 800_000, "10:00"), k("BUY", 10, 8_000, "09:00", "2026-10-13", "ordered")], anchors: [a1, b], arrivals: [{ from: a1.asOf, to: b.asOf }] };
+    },
+    "A17 첫 기록 전 모두 팖 + 주문 시각만 있는 평균가 다시 사기, 첫 기록 전 증거(from null)": () => {
+      const first = usA("2026-09-25", 10, 1000, 100);
+      return {
+        fills: [us("BUY", 1000, 100_000, "2026-09-01"), us("SELL", 1000, 100_000, "2026-09-10", "23:30"), us("BUY", 10, 1000, "2026-09-10", "22:40", "ordered")],
+        anchors: [first],
+        usd: true,
+        arrivals: [{ from: null, to: first.asOf }],
+      };
+    },
     // 입고 · 다시 사기 (C15 · C16)
     "입고 + 모두 팖 + 다시 사고 팖": () => ({
       fills: [k("SELL", 15, 1_650_000), k("BUY", 3, 315_000, "11:00"), k("SELL", 3, 321_000, "10:00", "2026-10-14")],

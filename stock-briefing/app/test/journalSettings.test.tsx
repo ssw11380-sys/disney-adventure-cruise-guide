@@ -141,7 +141,10 @@ describe("켜면: 설정 '매매일지' 카드 (§4.1 ①)", () => {
     expect(order(r)).toEqual(["NotificationSettingsCard", "TossOpenApiCard", "매매일지", "AppUpdateCard"]);
     const card = journalCard(r)!;
     const kids = r.all(card.children);
-    expect(kids.filter((n) => n.type === "Muted").map(textOf)).toEqual(["토스 체결 기록으로 실현손익·기간 수익률·해외주식 양도세(추정)를 봐요."]);
+    // 양도세 추정(journalTax)은 기본 꺼짐 — 설명에 양도세 말이 없다 · 켜면 양도세(추정)까지
+    expect(kids.filter((n) => n.type === "Muted").map(textOf)).toEqual(["토스 체결 기록으로 실현손익·기간 수익률을 봐요."]);
+    const withTax = draw(475, 751, { ...ON, journalTax: true });
+    expect(r.all(journalCard(withTax)!.children).filter((n) => n.type === "Muted").map(textOf)).toEqual(["토스 체결 기록으로 실현손익·기간 수익률·해외주식 양도세(추정)를 봐요."]);
     expect(kids.find((n) => n.type === "Row")!.props).toMatchObject({ label: "기록", value: "9/28부터 3거래일 저장" });
     const btn = kids.find((n) => n.type === "Button")!;
     expect(btn.props).toMatchObject({ title: "매매일지 열기", icon: "book-outline" });

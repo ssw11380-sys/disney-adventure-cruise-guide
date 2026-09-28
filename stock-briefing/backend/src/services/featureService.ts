@@ -163,7 +163,13 @@ export const FEATURES = {
   tradeJournal: {
     default: true,
     description:
-      "매매일지 (3-37): 설정·잔고 계좌 칸·종목 상세에서 여는 '매매일지'(기록 — 체결 목록·이동평균법 실현손익·거래 메모, 수익률 — 스냅샷 시간가중 수익률(10거래일 뒤), 양도세 추정 — 해외주식 결제일 기준환율·22%·250만 원 공제, 참고용). 새 표 trade_notes·fx_rates. tradeRecords 가 꺼져 있으면 꺼진 것으로 봄. 끄면 입구·화면 없음, /api/journal* 빈 값·쓰기 409, 환율 받기 0건",
+      "매매일지 (3-37): 설정·잔고 계좌 칸·종목 상세에서 여는 '매매일지'(기록 — 체결 목록·이동평균법 실현손익·거래 메모, 수익률 — 스냅샷 시간가중 수익률(10거래일 뒤), 양도세 추정 탭은 따로 journalTax). 새 표 trade_notes·fx_rates. tradeRecords 가 꺼져 있으면 꺼진 것으로 봄. 끄면 입구·화면 없음, /api/journal* 빈 값·쓰기 409, 환율 받기 0건",
+  },
+  // 양도세 추정은 틀린 숫자의 해가 가장 커서(세금 신고로 이어질 수 있음) 기본 끔 — 토스 표본 대조·분사 모양 확인 뒤 켠다. 켜기: PUT /api/admin/features {"journalTax": true}
+  journalTax: {
+    default: false,
+    description:
+      "매매일지 '양도세 추정' 탭 (3-37, tradeJournal 이 켜져 있을 때만 뜻이 있음, 기본 끔): 해외주식 결제일 기준환율(서울외국환중개 매매기준율, 못 받으면 하나은행 고시)·22%·250만 원 공제로 계산한 참고용 추정, 매매기준율 배경 받기. 끄면 탭·화면·합계가 없고 /api/journal/tax 는 { enabled: false }, 매매기준율·하나은행 요청 0건 — 기록(매도별 실현손익·'확인 필요' 표시)·수익률은 그대로",
   },
 } as const satisfies Record<string, { default: boolean; description: string }>;
 

@@ -31,7 +31,8 @@ const code = z
  *  - GET /api/journal/stock/:code               종목 상세 '매매 기록' 칸 (지금 보유·기록된 실현손익·체결 수·종목 메모)
  *  - PUT /api/journal/notes { account, orderId, note }   거래 메모 (빈 글 → 지움, 200자까지)
  *  - GET /api/journal/returns?preset=1W|1M|3M|YTD|1Y|custom&from&to&market=ALL|KR|US   기간 수익률 (시간가중, 10거래일 뒤)
- *  - GET /api/journal/tax?year=2026&includeUncertain=1   해외주식 양도세 추정 (참고용). 순서 모름 매도는 기본으로 합계에서 빼고 따로 (1 이면 넣음)
+ *  - GET /api/journal/tax?year=2026&includeUncertain=1   해외주식 양도세 추정 (참고용, 하위 플래그 journalTax — 기본 끔, 꺼져 있으면 { enabled: false }).
+ *                                                        순서 모름 매도는 기본으로 합계에서 빼고 따로 (1 이면 넣음)
  * 요청은 네트워크를 기다리지 않는다 (환율은 저장한 값만)
  */
 export const journalRoutes: FastifyPluginAsync<{ service: JournalService; now: () => Date }> = async (app, { service, now }) => {
@@ -79,7 +80,7 @@ export const journalRoutes: FastifyPluginAsync<{ service: JournalService; now: (
 
   app.get("/journal/tax", async (req) => {
     const q = z.object({ year: z.coerce.number().int().min(2000).max(2100).optional(), includeUncertain: z.enum(["0", "1", "true", "false"]).optional() }).parse(req.query);
-    if (!(await service.enabled())) return { enabled: false };
+    if (!(await service.taxEnabled())) return { enabled: false };
     return service.tax(q.year ?? Number(seoulDate(now()).slice(0, 4)), { includeUncertain: q.includeUncertain === "1" || q.includeUncertain === "true" });
   });
 };

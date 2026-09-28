@@ -15,7 +15,7 @@ import { parseData, STATE_KEY, tradeView, type TradeRow, type TradeView } from "
  *  1) 기록: 날짜별 체결 목록, 매도마다 이동평균법 실현손익(journalCalc), 거래마다 메모(trade_notes — 서버에 저장, 백업 포함, AI 에는 넣지 않음).
  *     그해 그 종목에 기록으로 설명되지 않는 일이 있으면 그해 그 종목의 매도는 손익 없이 '확인이 필요한 매도'(summary.excludedSells)로 따로 (검토 반영 10차 종목·해 규칙 — journalCalc)
  *  2) 수익률: 스냅샷 시간가중 수익률(journalReturns — 10거래일 쌓인 뒤 숫자). 확인 필요인 종목·해의 구간과 주문 없이 들어온 종목의 앞 30일은 건너뜀
- *  3) 양도세 추정: 해외주식 결제일 기준환율 원화 양도차익 · 22% · 250만 원 공제(taxRules — 참고용 추정)
+ *  3) 양도세 추정 (하위 플래그 journalTax — 기본 끔): 해외주식 결제일 기준환율 원화 양도차익 · 22% · 250만 원 공제(taxRules — 참고용 추정)
  * 계산은 저장하지 않고 요청 때 돌린다. 요청은 네트워크를 기다리지 않는다 — 환율(토스 과거 환율·세법 기준환율)은 fx_rates 에 있는 값만 쓰고,
  * 없는 값은 배경 작업(10분마다, 플래그가 켜져 있을 때만)이 받는다.
  * 토스와 1원까지 맞는지는 사용자 표본 5건으로 확인하기 전이라 '(추정)' 꼬리표를 둔다 (TOSS_VERIFIED)
@@ -180,6 +180,11 @@ export class JournalService {
 
   async enabled(): Promise<boolean> {
     return (await this.deps.features.enabled("tradeJournal")) && (await this.deps.features.enabled("tradeRecords"));
+  }
+
+  /** 양도세 추정 (하위 플래그 journalTax — 기본 끔): 매매일지가 켜져 있고 journalTax 도 켜져 있을 때만. 끄면 /api/journal/tax 빈 값·매매기준율 받기 0건 */
+  async taxEnabled(): Promise<boolean> {
+    return (await this.enabled()) && (await this.deps.features.enabled("journalTax"));
   }
 
   // ── 읽기 ─────────────────────────────────────────────────────────────
@@ -753,6 +758,8 @@ export class JournalService {
     if (!trades.length) return;
     const fills = trades.flatMap((t) => t.fills.filter((f) => f.quantity > 0));
     await this.fetchToss(fills.map((f) => f.at));
+    // 결제일 매매기준율은 양도세 추정에만 쓴다 (journalTax 가 꺼져 있으면 받지 않음)
+    if (!(await this.taxEnabled())) return;
     const today = seoulDate(this.now());
     const dates = [...new Set(fills.map((f) => usSettleDate(tradingDate(f.at, false)).kr))].filter((d) => d <= today).sort();
     await this.fetchStd(dates);
@@ -764,6 +771,7 @@ export class JournalService {
     const trades = (await this.trades()).filter((t) => t.market === "US");
     const fills = trades.flatMap((t) => t.fills.filter((f) => f.quantity > 0 && seoulDateOf(f.at) >= from && seoulDateOf(f.at) <= to));
     const toss = await this.fetchToss(fills.map((f) => f.at));
+    if (!(await this.taxEnabled())) return { toss, std: 0 };
     const today = seoulDate(this.now());
     const std = await this.fetchStd([...new Set(fills.map((f) => usSettleDate(tradingDate(f.at, false)).kr))].filter((d) => d <= today).sort());
     return { toss, std };
@@ -881,12 +889,15 @@ export class JournalService {
     const [snaps, trades, toss] = await Promise.all([this.snapshots(), this.trades(), this.tossRates()]);
     const pairs = this.pairs(trades, snaps, toss);
     const today = seoulDate(this.now());
+    const tax = await this.taxEnabled();
     const lookup = await this.stdLookup(today);
     const us = trades.filter((t) => t.market === "US").flatMap((t) => t.fills.filter((f) => f.quantity > 0));
     const missingToss = [...new Set(us.map((f) => minuteKey(f.at)))].filter((k) => !toss.has(k));
-    const settleDates = [...new Set(us.map((f) => usSettleDate(tradingDate(f.at, false)).kr))].sort();
+    // 양도세 추정이 꺼져 있으면 매매기준율을 받지 않으므로 빠진 날로 세지 않는다
+    const settleDates = tax ? [...new Set(us.map((f) => usSettleDate(tradingDate(f.at, false)).kr))].sort() : [];
     return {
       enabled: true as const,
+      tax,
       pairs: [...pairs.values()].map((p) => ({ account: p.account, code: p.code, ...p.res.check, holding: p.res.holding })),
       fx: {
         tossMissing: missingToss.length,

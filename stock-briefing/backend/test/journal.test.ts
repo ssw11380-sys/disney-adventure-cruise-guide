@@ -133,12 +133,13 @@ async function seed(db: Db) {
   await db.insertInto("registered_stocks").values({ code: "005930", name: "삼성전자", market: "KOSPI", quantity: 6, avg_price: 70_000, memo: "장기 보유", created_at: "x", updated_at: "x" }).execute();
 }
 
+/** 양도세 추정(journalTax)은 기본 꺼짐 — 여기 테스트는 양도세까지 보려고 켜고 시작한다 (끈 모양은 '양도세 추정 꺼짐' 묶음) */
 async function setup(opts: { now?: Date; flags?: Record<string, boolean>; seed?: boolean } = {}) {
   const db = await createMigratedDb(":memory:");
   if (opts.seed !== false) await seed(db);
   const now = () => opts.now ?? NOW;
   const app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders(), logger: false, enableScheduler: false, now });
-  if (opts.flags) await app.inject({ method: "PUT", url: "/api/admin/features", payload: opts.flags });
+  await app.inject({ method: "PUT", url: "/api/admin/features", payload: { journalTax: true, ...opts.flags } });
   const get = async (url: string) => {
     const r = await app.inject({ method: "GET", url });
     return { status: r.statusCode, body: r.json() };
@@ -282,6 +283,50 @@ describe("플래그 꺼짐 (§9-26)", () => {
   }
 });
 
+describe("양도세 추정 꺼짐 (하위 플래그 journalTax — 기본 끔)", () => {
+  it("기본값(끔): /api/journal/tax 는 { enabled: false } — 기록(매도별 실현손익)·종목 칸·수익률·메모는 그대로", async () => {
+    const db = await createMigratedDb(":memory:");
+    await seed(db);
+    const app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders(), logger: false, enableScheduler: false, now: () => NOW });
+    const get = async (url: string) => (await app.inject({ method: "GET", url })).json();
+    expect((await get("/api/features")).features).toMatchObject({ tradeJournal: true, journalTax: false });
+    for (const q of ["", "?year=2026", "?year=2026&includeUncertain=1"]) expect(await get(`/api/journal/tax${q}`)).toEqual({ enabled: false });
+    const list = await get("/api/journal?from=2026-09-01&to=2026-09-30");
+    expect(list.enabled).toBe(true);
+    expect(list.days.flatMap((d: { items: Array<Record<string, any>> }) => d.items).find((x: Record<string, any>) => x.orderId === "o3").realized).toMatchObject({ status: "ok", gross: 17.43 });
+    expect(list.summary.realized).toMatchObject({ USD: 17.43 });
+    expect((await get("/api/journal/stock/SOXL")).enabled).toBe(true);
+    expect((await get("/api/journal/returns")).enabled).toBe(true);
+    expect((await app.inject({ method: "PUT", url: "/api/journal/notes", payload: { account: 3, orderId: "o3", note: "메모" } })).statusCode).toBe(200);
+    expect(await get("/api/admin/journal/check")).toMatchObject({ enabled: true, tax: false, fx: { stdPending: [], stdNone: [] } });
+    await app.close();
+  });
+
+  it("배경 환율 받기: 토스 과거 환율(원화 실현손익용)만 받고 매매기준율·하나은행 요청은 0건 · 관리 미리 받기도 std 0 · 켜면 그때부터 받음", async () => {
+    const db = await createMigratedDb(":memory:");
+    await seed(db);
+    await db.deleteFrom("fx_rates").execute();
+    const features = new FeatureService(db, () => NOW);
+    const calls = { toss: 0, std: 0, naver: 0 };
+    const s = new JournalService({
+      db,
+      features,
+      fx: { tossAt: async () => (calls.toss++, 1390), std: async () => (calls.std++, []), naver: async () => (calls.naver++, []) },
+      now: () => NOW,
+      pauseMs: 0,
+      log: { info: () => {}, warn: () => {} },
+    });
+    await s.tick();
+    expect(calls).toEqual({ toss: 3, std: 0, naver: 0 });
+    expect(await s.prefetch("2026-09-01", "2026-09-30")).toEqual({ toss: 0, std: 0 });
+    expect(calls).toMatchObject({ std: 0, naver: 0 });
+    expect(await db.selectFrom("fx_rates").select("at").where("kind", "=", "krw-std").execute()).toEqual([]);
+    await features.set({ journalTax: true });
+    await s.tick();
+    expect(calls.std).toBe(1);
+  });
+});
+
 describe("기간 수익률 (GET /api/journal/returns)", () => {
   const DAYS = ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"];
   async function withSnaps(n: number, now: Date) {
@@ -407,7 +452,7 @@ describe("배경 환율 받기", () => {
     await seed(db);
     await db.deleteFrom("fx_rates").execute();
     const features = new FeatureService(db, () => NOW);
-    if (!flag) await features.set({ tradeJournal: false });
+    await features.set(flag ? { journalTax: true } : { tradeJournal: false });
     const warns: string[] = [];
     const s = new JournalService({ db, features, fx, now: () => NOW, pauseMs: 0, log: { info: () => {}, warn: (_o, m) => void warns.push(m) } });
     return { db, s, warns };
@@ -961,6 +1006,22 @@ describe("검토 반영 10차: 휴장일 다음 날 권리락 · 분사 모양(0
     expect(head.realized).toMatchObject({ amount: null, sells: 0, unknown: 1 });
     await t.app.close();
   });
+  it("(A1 · 검토 반영 12차) 분사 당일 모회사를 모두 팔고(23:30) 주문 시각만 있는 10주를 다시 삼(22:40) + 자회사 입고: 순서를 몰라도 매도는 확인 필요 — 실현손익·양도세 합계(순서 추정 넣기 포함)에 없음 (예전 '순서 추정' −$20,000 · 양도차손 −27,000,000원)", async () => {
+    const rebuy = tradeRow("r1", "AAA", "BUY", [{ q: 10, a: 800, at: TS("2026-09-28T22:40:00"), basis: "ordered" }]);
+    const aaa: H = { code: "AAA", name: "모회사", qty: 10, cost: 800, price: 80, costKrw: 1_112_000 };
+    const { tax, list, sell } = await spinOff([child, aaa], [rebuy]);
+    expect(sell).toMatchObject({ ...needs, change: spinText });
+    expect(list.summary.realized).toMatchObject({ USD: null, estimatedIncluded: false });
+    expect(list.summary.excludedSells).toMatchObject([{ key: "3:x1:0", code: "AAA" }]);
+    expect(tax.items).toEqual([]);
+    expect(tax.uncertainItems ?? []).toEqual([]);
+    expect(tax.totals).toMatchObject({ gains: 0, losses: 0, net: 0, sells: 0 });
+    expect(tax.unexplainedSells).toMatchObject([{ key: "3:x1:0", code: "AAA", change: spinText }]);
+    // 자회사가 들어오지 않았으면 예전 그대로 ('순서 추정' — 기본은 양도세 합계에서 빼고 따로)
+    const plain = await spinOff([aaa], [rebuy]);
+    expect(plain.sell).toMatchObject({ status: "order-uncertain", gross: -20_000 });
+    expect(plain.tax.unexplainedSells).toEqual([]);
+  });
 });
 
 describe("검토 반영 11차: 첫 기록 전 분사 모양 · 신설회사가 늦게 들어온 분사의 수익률 — 합계·양도세·수익률에 틀린 숫자를 넣지 않는다", () => {
@@ -1104,6 +1165,7 @@ describe("검토 반영: 매매기준율 '받아 본 기간'은 실제로 온 �
       .execute();
     const clock = { now: NOW };
     const features = new FeatureService(db, () => clock.now);
+    await features.set({ journalTax: true });
     const calls: string[] = [];
     const s = new JournalService({
       db,
@@ -1233,6 +1295,7 @@ describe("검토 반영 3차: 2025 추석 연휴 전후 미국 매수·매도가
       .values([tradeRow("h1", "AMD", "BUY", [{ q: 2, a: 300, at: TS("2025-10-02T23:00:00") }]), tradeRow("h2", "AMD", "SELL", [{ q: 1, a: 170, at: TS("2025-10-20T23:00:00") }])])
       .execute();
     const features = new FeatureService(db, () => NOW);
+    await features.set({ journalTax: true });
     const s = new JournalService({
       db,
       features,

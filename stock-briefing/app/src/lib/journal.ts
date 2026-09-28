@@ -16,6 +16,8 @@ export const JOURNAL = {
   title: "매매일지",
   open: "매매일지 열기",
   cardDesc: "토스 체결 기록으로 실현손익·기간 수익률·해외주식 양도세(추정)를 봐요.",
+  /** 양도세 추정(journalTax)이 꺼져 있을 때 */
+  cardDescNoTax: "토스 체결 기록으로 실현손익·기간 수익률을 봐요.",
   cardNoToss: "토스증권을 연동하면 장 마감 뒤부터 기록이 쌓여요.",
   cardRecords: "기록",
   stockRow: "이 종목 매매 기록",
@@ -69,11 +71,13 @@ const TAX_TAB_W = 84;
 
 /**
  * 위 탭 이름: 한 칸(창 폭 ÷ 3)에 '양도세 추정'이 한 줄로 안 들어가면(좁은 폭 × 큰 글씨) '양도세' — 글자 중간에서 줄이 바뀌지 않게.
- * '추정'은 그 탭 맨 위 상자·제목에 늘 있다
+ * '추정'은 그 탭 맨 위 상자·제목에 늘 있다. tax = 양도세 추정(하위 플래그 journalTax)이 켜져 있음 — 꺼져 있으면 '기록'·'수익률' 두 탭만
  */
-export function journalTabs(width: number, fontScale: number): { value: "list" | "returns" | "tax"; label: string }[] {
+export function journalTabs(width: number, fontScale: number, tax: boolean): { value: "list" | "returns" | "tax"; label: string }[] {
   const fits = width / 3 >= TAX_TAB_W * clampScale(fontScale);
-  return JOURNAL.tabs.map((t) => (t.value === "tax" && !fits ? { value: t.value, label: "양도세" } : { value: t.value, label: t.label }));
+  return JOURNAL.tabs
+    .filter((t) => tax || t.value !== "tax")
+    .map((t) => (t.value === "tax" && !fits ? { value: t.value, label: "양도세" } : { value: t.value, label: t.label }));
 }
 
 export const NOTE_MAX = 200;

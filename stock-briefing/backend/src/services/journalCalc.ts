@@ -21,7 +21,8 @@
  *     1.02~1.10 만 본다 (±4% 를 늘어난 몫에 적용해 1.0192~1.104 — 주가가 그대로인 날은 아님)
  *  ④ 이 종목을 0주까지 판 뒤 30일 안에 같은 계좌·같은 시장에 다른 종목이 주문 없이 들어옴 (분사 모양 — opts.arrivals, 크기와 상관없이).
  *     첫 기록 전 증거(산 기록보다 많이 판 매도 · 첫 기록에 그 전 순매수보다 많은 수량 · 기록이 없는 계좌)는 들어온 때의 하한을 몰라
- *     그 증거 전에 0주까지 판 매도는 언제였든 여기 (검토 반영 11차)
+ *     그 증거 전에 0주까지 판 매도는 언제였든 여기 (검토 반영 11차). 같은 구간에 다시 산 매수가 있고 순서를 모르면 어느 순서로든 0주가 될 수
+ *     있었던 매도도 여기 (검토 반영 12차 — 매도 먼저·매수 먼저·저장 순서로 모두 돌려 봄, 그 매도가 있었을 수 있는 때 전체를 들어온 때와 견줌)
  *  ⑤ 첫 기록 전 매도가 있는데 첫 기록 전 주문 내역을 0주부터 돌린 결과가 첫 기록(수량·매입금액)과 그대로 맞지 않음 (기록이 없는 짝은 가진 것보다 많이 판 매도)
  * 확인 필요인 해: 그해 그 종목의 모든 매도는 'unexplained'(화면의 '확인 필요' — 손익 숫자 없음, 실현손익·양도세 합계에서 빠지고 까닭 문장과 함께 따로),
  * 매수의 '이 매수 뒤 평균'도 없음, 그해 그 종목이 든 기록 구간은 수익률에서 건너뜀(skips — 서버는 여기에 더해 주문 없이 들어온 종목의
@@ -419,9 +420,31 @@ function blank(costs: Realized["costs"]): Realized {
 const clone = (s: State): State => ({ ...s });
 
 /**
- * 한 구간(두 기준점 사이)의 몫을 적용. 반대 방향 몫이 있고 체결 시각(filled)이 아닌 몫이나 반대 방향 몫과 체결 시각이 똑같은 몫이 섞이면
- * 순서를 모른다 (같은 시각은 저장 순서로 정하지 않음 — 토스 주문 목록은 새것부터 옴) →
- * 매수 먼저(불확실한 매수는 가장 이르게·매도는 가장 늦게)와 매도 먼저로 돌려, 매도 실현손익이 1원·1센트 넘게 다른 매도에 'order-uncertain'.
+ * 한 구간(두 기준점 사이) 몫의 순서: 반대 방향 몫이 있고 체결 시각(filled)이 아닌 몫이나 반대 방향 몫과 체결 시각이 똑같은 몫이 섞이면
+ * 순서를 모른다(ambiguous — 같은 시각은 저장 순서로 정하지 않음, 토스 주문 목록은 새것부터 옴). 몫이 있을 수 있는 가장 이른·늦은 때:
+ * 'ordered' 는 주문 시각 ~ 다음 기준점, 'seen' 은 앞 기준점 ~ 그 시각, 'filled' 는 그 시각. order(true) = 매수 먼저(불확실한 매수는 가장 이르게·매도는
+ * 가장 늦게), order(false) = 매도 먼저. runSegment 와 ④ 0주 찾기가 같이 쓴다
+ */
+function segmentOrder(fills: LedgerFill[], startMs: number, endMs: number) {
+  const sidesAt = new Map<number, Set<Side>>();
+  for (const f of fills) sidesAt.set(t(f.at), (sidesAt.get(t(f.at)) ?? new Set<Side>()).add(f.side));
+  const uncertainFill = (f: LedgerFill) => f.basis !== "filled" || sidesAt.get(t(f.at))!.size > 1;
+  const both = fills.some((f) => f.side === "BUY") && fills.some((f) => f.side === "SELL");
+  const early = (f: LedgerFill) => (f.basis === "ordered" ? t(f.at) : f.basis === "seen" ? startMs : t(f.at));
+  const late = (f: LedgerFill) => (f.basis === "ordered" ? endMs : t(f.at));
+  const order = (buyFirst: boolean) =>
+    [...fills]
+      .map((f) => ({
+        f,
+        k: !uncertainFill(f) ? t(f.at) : (f.side === "BUY") === buyFirst ? early(f) : late(f),
+      }))
+      .sort((x, y) => x.k - y.k || (x.f.side === y.f.side ? 0 : (x.f.side === "BUY") === buyFirst ? -1 : 1) || x.f.seq - y.f.seq)
+      .map((x) => x.f);
+  return { ambiguous: both && fills.some(uncertainFill), early, late, order };
+}
+
+/**
+ * 한 구간(두 기준점 사이)의 몫을 적용. 순서를 모르면(segmentOrder) 매수 먼저와 매도 먼저로 돌려, 매도 실현손익이 1원·1센트 넘게 다른 매도에 'order-uncertain'.
  * 값은 매수 먼저 쪽을 쓴다 (sellFirst 면 매도 먼저 쪽). ambiguous = 두 순서로 돌렸음 (순서를 모르는 몫이 있음)
  */
 function runSegment(
@@ -433,31 +456,17 @@ function runSegment(
   out: Out,
   sellFirst = false,
 ): { state: State; uncertain: Set<string>; ambiguous: boolean } {
-  const sidesAt = new Map<number, Set<Side>>();
-  for (const f of fills) sidesAt.set(t(f.at), (sidesAt.get(t(f.at)) ?? new Set<Side>()).add(f.side));
-  const uncertainFill = (f: LedgerFill) => f.basis !== "filled" || sidesAt.get(t(f.at))!.size > 1;
-  const both = fills.some((f) => f.side === "BUY") && fills.some((f) => f.side === "SELL");
-  if (!both || !fills.some(uncertainFill)) {
+  const so = segmentOrder(fills, startMs, endMs);
+  if (!so.ambiguous) {
     for (const f of fills) apply(s, f, opts, out);
     return { state: s, uncertain: new Set(), ambiguous: false };
   }
-  // 몫이 있을 수 있는 가장 이른·늦은 때: 'ordered' 는 주문 시각 ~ 다음 기준점, 'seen' 은 앞 기준점 ~ 그 시각
-  const early = (f: LedgerFill) => (f.basis === "ordered" ? t(f.at) : f.basis === "seen" ? startMs : t(f.at));
-  const late = (f: LedgerFill) => (f.basis === "ordered" ? endMs : t(f.at));
-  const order = (buyFirst: boolean) =>
-    [...fills]
-      .map((f) => ({
-        f,
-        k: !uncertainFill(f) ? t(f.at) : (f.side === "BUY") === buyFirst ? early(f) : late(f),
-      }))
-      .sort((x, y) => x.k - y.k || (x.f.side === y.f.side ? 0 : (x.f.side === "BUY") === buyFirst ? -1 : 1) || x.f.seq - y.f.seq)
-      .map((x) => x.f);
   const outA: Out = new Map();
   const outB: Out = new Map();
   const a = clone(s);
   const b = clone(s);
-  for (const f of order(true)) apply(a, f, opts, outA);
-  for (const f of order(false)) apply(b, f, opts, outB);
+  for (const f of so.order(true)) apply(a, f, opts, outA);
+  for (const f of so.order(false)) apply(b, f, opts, outB);
   const uncertain = new Set<string>();
   for (const f of fills) {
     if (f.side !== "SELL") continue;
@@ -593,20 +602,28 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
   const fillDate = (f: LedgerFill) => tradingDate(f.at, cur === "KRW");
   const events: DoubtEvent[] = [];
   const changes: ChangeRow[] = [];
-  /** 0주까지 판 매도 (④) — 시각 순으로 수량만 돌려 본다 */
-  const zeroSells: LedgerFill[] = [];
-  const findZeroSells = (seg: LedgerFill[], start: number) => {
-    let q = start;
-    for (const f of seg) {
-      q = round6(q + (f.side === "BUY" ? f.quantity : -f.quantity));
-      if (f.side === "SELL" && q <= EPS) zeroSells.push(f);
+  /**
+   * 0주까지 판 매도 (④) — 수량만 돌려 본다. 순서를 모르는 구간(segmentOrder ambiguous — 첫 기록 전 구간도)은 저장 순서에 더해 매도 먼저(불확실한 매도는
+   * 가장 이르게·매수는 가장 늦게)와 매수 먼저로도 돌려, 어느 순서로든 0주가 될 수 있었던 매도는 0주까지 판 매도로 본다 (검토 반영 12차 — 모두 판 매도와
+   * 다시 산 매수가 한 구간에 있고 순서를 모르면 저장 순서로는 0주가 되지 않아 놓쳤다). lo~hi: 그 매도가 있었을 수 있는 때 (들어온 종목과 견줄 때)
+   */
+  const zeroSells = new Map<string, { f: LedgerFill; lo: number; hi: number }>();
+  const findZeroSells = (seg: LedgerFill[], start: number, startMs: number, endMs: number) => {
+    const so = segmentOrder(seg, startMs, endMs);
+    for (const list of so.ambiguous ? [seg, so.order(false), so.order(true)] : [seg]) {
+      let q = start;
+      for (const f of list) {
+        q = round6(q + (f.side === "BUY" ? f.quantity : -f.quantity));
+        if (f.side === "SELL" && q <= EPS && !zeroSells.has(f.key)) zeroSells.set(f.key, { f, lo: so.early(f), hi: so.late(f) });
+      }
     }
   };
 
   // ── 첫 기준점 전 (0주에서) ──
   let s: State = { qty: 0, cost: 0, krw: 0, krwEst: false, krwWhy: null, std: 0, stdWhy: null, neg: false, over: false, anchored: false, costWhy: null, ratio: null };
   const a1 = anchors[0];
-  const pre = runSegment(s, segs[0]!, -Infinity, a1 ? t(a1.asOf) : Infinity, opts, out);
+  const preEnd = a1 ? t(a1.asOf) : Infinity;
+  const pre = runSegment(s, segs[0]!, -Infinity, preEnd, opts, out);
   s = pre.state;
   const preOk = (() => {
     if (s.neg) return false;
@@ -638,7 +655,7 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
         guess: null,
       });
   }
-  findZeroSells(segs[0]!, 0);
+  findZeroSells(segs[0]!, 0, -Infinity, preEnd);
 
   /** 기준점 a 에서 출발하는 원장 (carry = 앞 원장이 이 기준점과 맞음 — 원화 장부·결제일 원화를 이어 쓴다) */
   const fromAnchor = (a: LedgerAnchor, prev: State, carry: boolean, first: boolean): State => {
@@ -745,7 +762,7 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
       if (b && explained) changes.push({ at: b.asOf, date: b.date, fromDate: a.date, kind: "possible-action", fromQty: a.quantity, toQty: b.quantity, expectedQty: e.qty, text: move.text, guess: move.guess });
     }
     spans.push({ a, b, seg, orderless: !explained && (e.over || (!!b && Math.abs(e.qty - b.quantity) > EPS)), moved: !!move });
-    findZeroSells(seg, a.quantity);
+    findZeroSells(seg, a.quantity, begin, end);
     prev = e;
     carry = explained;
   }
@@ -761,10 +778,9 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
     events.push({ from: sp.a.date, to: sp.b!.date, seen: sp.b!.date, text: `주가 ${fmtMoney(p0, cur, true)} → ${fmtMoney(p1, cur, true)} (${fmtPct(p1 / p0)}) · 그 구간이나 30일 안에 주문 없이 주식 수가 바뀌었어요`, guess });
   });
 
-  // ④ 0주까지 판 뒤 30일 안에 같은 계좌에 다른 종목이 주문 없이 들어옴 (들어온 때가 판 때보다 확실히 앞이면 아님 · 하한을 모르면 뒤일 수 있다고 봄)
-  for (const f of zeroSells) {
-    const at = t(f.at);
-    if (!(opts.arrivals ?? []).some((x) => (x.to === null || t(x.to) >= at) && (x.from === null || t(x.from) <= at + DOUBT_DAYS * DAY_MS))) continue;
+  // ④ 0주까지 판 뒤 30일 안에 같은 계좌에 다른 종목이 주문 없이 들어옴 (들어온 때가 판 때(가장 이른 때)보다 확실히 앞이면 아님 · 하한을 모르면 뒤일 수 있다고 봄)
+  for (const { f, lo, hi } of zeroSells.values()) {
+    if (!(opts.arrivals ?? []).some((x) => (x.to === null || t(x.to) >= lo) && (x.from === null || t(x.from) <= hi + DOUBT_DAYS * DAY_MS))) continue;
     const d = fillDate(f);
     events.push({ from: d, to: d, seen: null, text: `${md(d)} 모두 판 뒤 30일 안에 같은 계좌에 다른 종목이 주문 없이 들어왔어요(분사 등일 수 있어요)`, guess: null });
   }

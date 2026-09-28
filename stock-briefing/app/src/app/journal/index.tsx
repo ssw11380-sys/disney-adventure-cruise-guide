@@ -9,7 +9,7 @@ import { Button, Empty, Segmented } from "@/components/ui";
 import { SERVER_SECTION, TOKEN_FIELD, URL_FIELD } from "@/lib/connectionError";
 import { parseStockCode } from "@/lib/freshness";
 import { journalTabs, JOURNAL, kstDate } from "@/lib/journal";
-import { useJournalOn } from "@/lib/journalFlag";
+import { useJournalOn, useJournalTaxOn } from "@/lib/journalFlag";
 import { useNow } from "@/lib/useNow";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { useFoldLayout } from "@/lib/useFoldLayout";
@@ -19,7 +19,8 @@ type Tab = (typeof JOURNAL.tabs)[number]["value"];
 
 /**
  * 매매일지 (3-37, 기능 플래그 tradeJournal · tradeRecords — 앱 fallback 은 둘 다 꺼짐). 설정 카드·잔고 계좌 칸·종목 상세에서 연다.
- * 위 탭: 기록(체결 목록·실현손익·메모) · 수익률(시간가중, 10거래일 뒤) · 양도세 추정(해외주식, 참고용). 주소 /journal?tab=list|returns|tax&code=
+ * 위 탭: 기록(체결 목록·실현손익·메모) · 수익률(시간가중, 10거래일 뒤) · 양도세 추정(해외주식, 참고용 — 하위 플래그 journalTax 가 켜져 있을 때만,
+ * 꺼져 있으면 탭이 없고 tab=tax 로 열어도 기록 탭·양도세 요청 0건). 주소 /journal?tab=list|returns|tax&code=
  * 폴드 가로(foldLayout 의 twoPane)는 탭마다 두 칸, 그 밖은 한 칸. 사실만 보여 주고 매매·세금 행동을 권하는 말은 쓰지 않는다. 맨 아래 고지
  * 플래그가 꺼져 있으면 서버를 부르지 않는다 (화면 작업 0건)
  */
@@ -46,8 +47,11 @@ export default function JournalScreen() {
 
 function JournalBody() {
   const params = useLocalSearchParams<{ tab?: string; code?: string }>();
-  const first: Tab = params.tab === "returns" || params.tab === "tax" ? params.tab : "list";
-  const [tab, setTab] = useState<Tab>(first);
+  const taxOn = useJournalTaxOn();
+  const first: Tab = params.tab === "returns" || (params.tab === "tax" && taxOn) ? params.tab : "list";
+  const [picked, setTab] = useState<Tab>(first);
+  // 양도세 탭을 보는 중에 journalTax 가 꺼지면(60초마다 플래그를 다시 받음) 기록 탭으로
+  const tab: Tab = picked === "tax" && !taxOn ? "list" : picked;
   const code = parseStockCode(params.code)?.toUpperCase() ?? null;
   const fold = useFoldLayout();
   const twoPane = fold.on && fold.twoPane;
@@ -55,7 +59,7 @@ function JournalBody() {
   const now = useNow(60_000);
   const today = kstDate(now);
   const win = useWindowDimensions();
-  const tabs = <Segmented options={journalTabs(win.width, win.fontScale)} value={tab} onChange={setTab} />;
+  const tabs = <Segmented options={journalTabs(win.width, win.fontScale, taxOn)} value={tab} onChange={setTab} />;
   return (
     <Screen top={tabs} scroll={!twoPane} disclaimer>
       {tab === "list" ? (
