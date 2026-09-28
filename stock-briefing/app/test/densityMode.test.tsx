@@ -361,6 +361,19 @@ describe("켬", () => {
     expect(byType(draw(), "MarketStrip")[0]!.props).toEqual({ dense: true });
   });
 
+  it("원화 손익이 추정이면 촘촘에서도 환율 안내 한 줄은 남는다 (추정이 없으면 숨김)", () => {
+    h.density = "dense";
+    h.flags = { allocationView: true, densityMode: true };
+    const est = US.map((s) => ({ ...s, evaluation: s.evaluation ? { ...s.evaluation, krwCostSource: "estimated" as const } : null }));
+    h.stocks = [...KR, ...est, ...WATCH];
+    const panel = panelOf(draw());
+    expect(textIn(panel)).toContain("토스 적용 환율");
+    expect(textIn(panel)).toContain("(일부 추정)");
+    expect(textIn(thirdLine(panel))).toBe(THIRD);
+    h.stocks = STOCKS;
+    expect(textIn(panelOf(draw()))).not.toContain("토스 적용 환율");
+  });
+
   it("합계 제외 경고 줄(주황)은 촘촘에서도 보인다", () => {
     h.density = "dense";
     h.flags = { allocationView: true, densityMode: true };

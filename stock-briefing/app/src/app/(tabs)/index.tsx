@@ -550,7 +550,7 @@ const BAR_SLOP = { top: 0, bottom: 0, left: space.sm, right: space.sm };
 
 /**
  * 계좌 평가 패널 (휴대폰 화면): 총 평가금액(원화 환산) + 평가손익·수익률·매입·당일 + 국내/해외 구분.
- * 촘촘(3-39, dense): 세 줄 — 윗줄('총 평가금액' + 상태) · 총액 · '평가손익 … · 당일 …'. 매입금액·국내/해외·환율 안내·비중 버튼(구역 머리로)은 그리지 않고,
+ * 촘촘(3-39, dense): 세 줄 — 윗줄('총 평가금액' + 상태) · 총액 · '평가손익 … · 당일 …'. 매입금액·국내/해외·환율 안내(추정·현재 환율 환산일 때만 남김)·비중 버튼(구역 머리로)은 그리지 않고,
  * 화면 읽기 문장은 기본과 같다 (숨긴 숫자도 문장에는 남음)
  */
 function AccountPanel({
@@ -601,6 +601,8 @@ function AccountPanel({
           </Text>
         </View>
         {excludedLine}
+        {/* 환율 안내는 숨기되, 원화 손익이 추정이거나 현재 환율 환산일 때만 한 줄 남긴다 (넓은 창 계좌 띠와 같은 규칙) */}
+        {fx && (data.estimated || data.currentBasis) ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{fxNote(data)}</Text> : null}
       </View>
     );
   return (
