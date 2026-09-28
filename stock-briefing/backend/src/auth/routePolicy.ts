@@ -97,6 +97,9 @@ export const SESSION_REQUIRED = { error: "SESSION_REQUIRED", code: "session_requ
 export const PERSONAL_NOT_READY = { error: "PERSONAL_DATA_NOT_READY", code: "personal_data_not_ready", message: "개인 종목 기능은 준비 중이에요" } as const;
 export const OWNER_ONLY = { error: "OWNER_ONLY", code: "owner_only", message: "주인 계정만 쓸 수 있어요" } as const;
 export const AUTH_UNAVAILABLE = { error: "AUTH_UNAVAILABLE", code: "auth_unavailable", message: "로그인 확인을 잠시 할 수 없어요. 잠시 뒤 다시 해 주세요" } as const;
+/** 주인 아닌 계정의 공유 경로 요청 수 (사람마다 1분) — 보통 쓰는 앱은 1분에 수십 번이라 여유가 크다 */
+export const MEMBER_SHARED_PER_MINUTE = 240;
+export const MEMBER_TOO_MANY = { error: "TOO_MANY_REQUESTS", code: "too_many_requests", message: "요청이 너무 잦아요. 잠시 뒤에 다시 해 주세요" } as const;
 
 /** 경로 하나에 대한 결정 (순수 함수) */
 export function decide(key: string, auth: AuthState): Decision {

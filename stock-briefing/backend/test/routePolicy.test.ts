@@ -287,6 +287,26 @@ describe("경로 정책 — 모든 경로 · 카나리아", () => {
     expect((await w.app.inject({ method: "GET", url: "/api/market-summaries/latest", headers: m })).json()).toEqual(seen);
   });
 
+  it("주인 아닌 계정: 예전 문구로 저장된 요약의 '내 종목' 줄·모르는 안내도 새지 않는다 (요약 글을 보유 없이 다시 만든다)", async () => {
+    const data = summaryWithCanary();
+    data.notes = [...data.notes, `새로 생긴 안내 ${CANARY}`, `미국 시세를 받지 못함 (${CANARY_NAME} 조회 실패)`];
+    const current = summaryLines(data, new Date("2026-09-23T16:00:00+09:00")).map((l) => l.text);
+    // 옛 코드가 만든 글: '내 종목' 줄 문구가 지금과 조금 다르다 (지금 코드로 다시 만든 줄과 글자가 같지 않음)
+    const old = current.map((l) => (l.includes(CANARY_NAME) ? `내 종목 비교(예전 문구) · ${CANARY_NAME} +3.2%` : l)).join("\n");
+    const row = await w.db.insertInto("market_summaries").values({ summary_date: "2026-09-24", session: "afternoon", market: "KR", status: "ok", summary: old, data: JSON.stringify(data), created_at: "2026-09-24T16:00:00+09:00" }).returning("id").executeTakeFirstOrThrow();
+    const m = { "x-session-token": w.member };
+    const seen = await w.app.inject({ method: "GET", url: `/api/market-summaries/${row.id}`, headers: m });
+    expect(seen.statusCode).toBe(200);
+    expect(seen.body).not.toContain(CANARY_NAME);
+    expect(seen.body).not.toContain(CANARY);
+    expect(seen.json().summary.split("\n")).toEqual(current.filter((l) => !l.includes(CANARY_NAME)));
+    expect(seen.json().data.notes).toEqual(["원/달러를 받지 못함"]);
+    for (const url of ["/api/market-summaries?limit=20", "/api/market-summaries/latest"]) expect((await w.app.inject({ method: "GET", url, headers: m })).body).not.toContain(CANARY_NAME);
+    // 주인은 저장된 그대로
+    expect((await w.app.inject({ method: "GET", url: `/api/market-summaries/${row.id}`, headers: { "x-session-token": w.owner } })).json().summary).toBe(old);
+    await w.db.deleteFrom("market_summaries").where("id", "=", Number(row.id)).execute();
+  });
+
   it("주인 아닌 계정: 모든 쓰기(공유·인증 빼고)는 403, 표 행 수 그대로", async () => {
     const m = { "x-session-token": w.member };
     const before = await counts(w.db);

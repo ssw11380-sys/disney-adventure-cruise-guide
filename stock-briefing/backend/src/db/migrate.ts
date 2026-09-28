@@ -399,6 +399,9 @@ const migrations: Array<{ version: number; up: (db: Kysely<Database>, dialect: D
   },
 ];
 
+/** 마이그레이션 번호 (테스트: 1 부터 빈 곳·겹침 없이 하나씩 — 두 브랜치가 같은 번호를 쓰면 이미 그 번호까지 올라간 DB 는 뒤의 것을 건너뛴다) */
+export const MIGRATION_VERSIONS: readonly number[] = migrations.map((m) => m.version);
+
 export async function migrate(db: Kysely<Database>, dialect: Dialect = "sqlite"): Promise<void> {
   await sql`create table if not exists schema_version (version integer primary key)`.execute(db);
   const rows = await sql<{ version: number }>`select version from schema_version`.execute(db);

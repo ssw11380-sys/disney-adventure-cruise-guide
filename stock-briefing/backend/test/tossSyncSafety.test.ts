@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createMigratedDb, migrate } from "../src/db/index.js";
+import { MIGRATION_VERSIONS } from "../src/db/migrate.js";
 import type { Database } from "../src/db/schema.js";
 import { TossOpenApiProvider, type TossHolding } from "../src/providers/market/tossOpenApi.js";
 import { StockService } from "../src/services/stockService.js";
@@ -578,6 +579,11 @@ describe("BH-48 Postgres 에서 수량·평단 정밀도", () => {
     await db.destroy();
   });
 
+  it("마이그레이션 번호는 1 부터 빈 곳·겹침 없이 하나씩 — 두 브랜치가 같은 번호를 쓰면 이미 그 번호까지 올라간 운영 DB 가 뒤의 표를 건너뛴다", () => {
+    expect(MIGRATION_VERSIONS).toEqual(MIGRATION_VERSIONS.map((_, i) => i + 1));
+    // main 의 11(가치 지표, #90) 다음이 계정 표(12)·기기 세션 칸(13)
+    expect(MIGRATION_VERSIONS.slice(-3)).toEqual([11, 12, 13]);
+  });
   it("SQLite: 13 전에 등록한 기기 행은 세션 칸이 비어(NULL) 예전처럼 알림을 받는다", async () => {
     const db = await createMigratedDb(":memory:");
     try {

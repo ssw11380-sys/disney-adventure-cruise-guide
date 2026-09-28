@@ -1,12 +1,12 @@
 import { timingSafeEqual } from "node:crypto";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import { envOn, type AppConfig } from "./config.js";
 import { AuthService } from "./auth/authService.js";
-import { AUTH_UNAVAILABLE, decide, NO_SESSION_ROUTES, routeKey, SESSION_INVALID, viewerKey, type AuthState } from "./auth/routePolicy.js";
-import { DailyQuota } from "./auth/rateLimit.js";
+import { AUTH_UNAVAILABLE, decide, MEMBER_SHARED_PER_MINUTE, MEMBER_TOO_MANY, NO_SESSION_ROUTES, routeKey, SESSION_INVALID, SHARED_ROUTES, viewerKey, type AuthState } from "./auth/routePolicy.js";
+import { DailyQuota, WindowLimiter } from "./auth/rateLimit.js";
 import { authRoutes } from "./routes/auth.js";
 import { detectDialect, type Db } from "./db/index.js";
 import { AppError, ProviderError } from "./lib/errors.js";
@@ -386,19 +386,44 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   // 계정 관문 (계정 A단계, 플래그 accounts): API 토큰 확인 **뒤에**, 라우터가 고른 경로로 판단한다 (퍼센트 인코딩으로 못 피함).
   //  - 꺼져 있으면 지금처럼 (API 토큰 = 주인), /api/auth/* 는 없는 주소(404). 다만 주인 아닌 계정의 세션을 보낸 요청은 그 계정으로 본다
-  //    (플래그를 끄거나 비상 끄기·되돌리기를 해도 그 계정 기기에 주인 데이터가 보이지 않게 — offMember)
+  //    (플래그를 끄거나 비상 끄기(ACCOUNTS_DISABLED=1)·되돌리기를 해도 그 계정 기기에 주인 데이터가 보이지 않게 — offMember)
   //  - 세션 헤더(X-Session-Token, 웹소켓은 ?session= 도)가 있으면 확인: 없는 토큰·끊김·기한 지남 → 401 session_invalid (앱이 로그아웃하는 유일한 응답)
   //    DB 를 못 읽으면 503 auth_unavailable (로그아웃 아님)
   //  - 그다음 경로 정책(auth/routePolicy): 세션 없음은 403 session_required, 주인 아닌 계정은 공유 경로만 (개인은 빈 값·403)
   //  - 플래그를 읽지 못하면 켜짐으로 본다 (featureService FAIL_ON — 오류로 문이 열리지 않게)
   app.decorateRequest("auth", null);
-  /** 꺼져 있을 때: 세션 헤더가 주인 아닌 계정의 살아 있는 세션이면 그 계정 (확인하지 못하면 지금처럼 — 비상 끄기가 DB 오류로 막히지 않게) */
+  /**
+   * 꺼져 있을 때(관리 API 로 끔 · 비상 끄기 ACCOUNTS_DISABLED=1 둘 다): 세션 헤더가 주인 아닌 계정의 살아 있는 세션이면 그 계정.
+   * 비상 끄기도 세션을 확인한다 — API 토큰은 앱 묶음 안에 있어 모든 가입자 폰이 이미 가지고 있으므로, 여기서 건너뛰면 그 폰이 'API 토큰 = 주인'이 되어
+   * 주인 잔고·메모를 보고 알림 기기까지 등록했다 (검증 지적). 확인하지 못하면(DB 오류) 지금처럼 — 비상 끄기가 DB 오류로 막히지 않게
+   */
   const offMember = async (req: FastifyRequest, route: string): Promise<AuthState | null> => {
-    if (accountsKilled) return null; // 비상 끄기: 계정 표를 읽지 않는다 (앱에도 플래그 꺼짐 — 세션을 보내는 앱은 곧 멈춘다)
     const token = sessionTokenOf(req, route);
     if (!token) return null;
     const ctx = await auth.authenticate(token).catch(() => null);
     return ctx && !ctx.user.isOwner ? { kind: "user", ...ctx } : null;
+  };
+  // 주인 아닌 계정의 공유 경로는 사람마다 1분 MEMBER_SHARED_PER_MINUTE 번까지 (시세·차트·뉴스가 서버 env 의 주인 키로 외부를 부르므로 — 주인 몫의 호출 한도를 다 쓰지 않게)
+  const memberRate = new WindowLimiter(MEMBER_SHARED_PER_MINUTE, 60_000, () => now().getTime());
+  /** 경로 정책을 적용한다 (응답을 보냈으면 true) */
+  const enforce = (req: FastifyRequest, reply: FastifyReply, key: string, state: AuthState): boolean => {
+    const d = decide(key, state);
+    if (d.action === "deny") {
+      void reply.code(d.status).send(d.body);
+      return true;
+    }
+    if (d.action === "empty") {
+      void reply.code(200).send(d.body(req));
+      return true;
+    }
+    if (state.kind === "user" && !state.user.isOwner && SHARED_ROUTES.has(key)) {
+      const hit = memberRate.hit(String(state.user.id));
+      if (!hit.ok) {
+        void reply.code(429).header("retry-after", String(hit.retryAfterSec)).send({ ...MEMBER_TOO_MANY, retryAfterSec: hit.retryAfterSec });
+        return true;
+      }
+    }
+    return false;
   };
   app.addHook("onRequest", async (req, reply) => {
     const route = req.routeOptions.url;
@@ -410,9 +435,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       const member = await offMember(req, route);
       if (!member) return;
       req.auth = member;
-      const d = decide(key, member);
-      if (d.action === "deny") return reply.code(d.status).send(d.body);
-      if (d.action === "empty") return reply.code(200).send(d.body(req));
+      if (enforce(req, reply, key, member)) return reply;
       return;
     }
     if (NO_SESSION_ROUTES.has(key)) {
@@ -433,9 +456,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       state = { kind: "user", ...ctx };
     }
     req.auth = state;
-    const d = decide(key, state);
-    if (d.action === "deny") return reply.code(d.status).send(d.body);
-    if (d.action === "empty") return reply.code(200).send(d.body(req));
+    if (enforce(req, reply, key, state)) return reply;
   });
 
   app.setErrorHandler((err, _req, reply) => {

@@ -16,7 +16,10 @@ import { confirmError, emailError, loginIdKey, normalizeEmail, normalizeLoginId,
  *  - 세션을 끊으면 그 세션으로 등록한 푸시 기기도 지운다 (devices.session_id). '모든 기기에서 로그아웃'·비밀번호 변경은 계정 전(세션 없이)
  *    등록한 주인 기기도 지운다 — 잃어버린 폰으로 주인 계좌 알림이 가지 않게. 앱은 주인으로 다시 로그인하면 이 기기를 다시 등록한다
  *  - 잠금: 같은 아이디 5번 틀리면 10분 (없는 아이디도 똑같이 — 계정이 있는지 드러나지 않게). 속도 제한은 IP·사용자별 (메모리)
- *  - 비상 주인 비밀번호 되돌리기: OWNER_RESET_PASSWORD (서버를 켤 때 한 번 — 지금 비밀번호와 다를 때만 바꾸고 주인 세션·기기를 모두 끊는다)
+ *    로그인한 뒤의 비밀번호·이메일 변경(지금 비밀번호 다시 확인)은 로그인 잠금과 따로 **세션마다** 5번·10분 — 공개된 아이디로 로그인을 일부러 틀려
+ *    주인을 잠가 두어도, 이미 로그인한 주인이 설정에서 처음 비밀번호(1111)를 바꾸는 것은 막히지 않게 (검증 지적)
+ *  - 비상 주인 비밀번호 되돌리기: OWNER_RESET_PASSWORD (서버를 켤 때 — **같은 값은 한 번만** 적용. 적용한 값의 해시를 meta 에 적어 두어,
+ *    변수를 지우는 것을 잊고 앱에서 비밀번호를 바꾼 뒤 다시 배포해도 되돌리지 않고 주인이 로그아웃되지 않는다)
  *  - 로그: 아이디·이메일·비밀번호·토큰은 적지 않는다
  */
 export const REMEMBER_MS = 365 * 86_400_000;
@@ -29,6 +32,8 @@ const CACHE_MS = 30_000;
 const PURGE_AFTER_MS = 30 * 86_400_000;
 /** 로그인 비밀번호 길이 상한 (해시 부담 — 가입 규칙은 64자) */
 const LOGIN_PASSWORD_MAX = 256;
+/** 적용한 OWNER_RESET_PASSWORD 값의 해시 (scrypt — 같은 값이면 다시 적용하지 않는다) */
+export const OWNER_RESET_META_KEY = "accounts.ownerResetApplied";
 
 export interface AuthUser {
   id: number;
@@ -74,7 +79,18 @@ export const MSG = {
   loginIdTaken: "이미 쓰고 있는 아이디예요",
   emailTaken: "이미 가입한 이메일이에요",
   badCurrent: "지금 비밀번호가 맞지 않아요",
+  conflict: "같은 때에 다른 요청과 겹쳤어요. 다시 해 주세요",
 } as const;
+
+/**
+ * 유일 색인 위반인지 (SQLite SQLITE_CONSTRAINT_UNIQUE · Postgres 23505). 같은 순간의 가입·이메일 변경이 겹치면 여기로 온다 —
+ * 500 으로 두면 오류 로그에 Postgres detail('Key (email)=(…)')이 남을 수 있어 409 로 바꾼다
+ */
+export function isUniqueViolation(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const x = e as { code?: unknown; message?: unknown };
+  return x.code === "23505" || x.code === "SQLITE_CONSTRAINT_UNIQUE" || (typeof x.message === "string" && /UNIQUE constraint failed|duplicate key value/i.test(x.message));
+}
 
 interface CachedSession {
   sessionId: number;
@@ -117,6 +133,8 @@ export class AuthService {
   private readonly nowMs: () => number;
   private readonly cache = new Map<string, { at: number; s: CachedSession }>();
   readonly lock: LoginLock;
+  /** 로그인한 뒤 지금 비밀번호를 다시 확인할 때(비밀번호·이메일 변경)의 잠금 — 세션마다, 로그인 잠금과 따로 */
+  readonly reauthLock: LoginLock;
   private readonly loginIp: WindowLimiter;
   /** 가입 시도(형식 오류·겹침 포함)는 IP 별 넉넉히, 실제로 만든 계정은 IP 별 적게 — 통신사 NAT 로 IP 를 나눠 쓰는 사람이 겹친 아이디 몇 번에 막히지 않게 */
   private readonly signupTryIp: WindowLimiter;
@@ -134,6 +152,7 @@ export class AuthService {
     this.nowMs = () => this.now().getTime();
     this.n = deps.scryptN ?? SCRYPT_N;
     this.lock = new LoginLock(this.nowMs);
+    this.reauthLock = new LoginLock(this.nowMs);
     this.loginIp = new WindowLimiter(20, 10 * 60_000, this.nowMs);
     this.signupTryIp = new WindowLimiter(20, 3_600_000, this.nowMs);
     this.signupIp = new WindowLimiter(5, 3_600_000, this.nowMs);
@@ -177,26 +196,36 @@ export class AuthService {
 
   /**
    * 비상 주인 비밀번호 되돌리기 (Railway 변수 OWNER_RESET_PASSWORD, 서버를 켤 때). 공개 저장소에 처음 비밀번호가 적혀 있어 누가 먼저 로그인해
-   * 비밀번호를 바꾸면 되찾을 길이 없기 때문. 지금 비밀번호와 같으면 아무것도 하지 않는다 (변수를 남겨 둬도 켤 때마다 로그아웃되지 않게 —
-   * 다만 앱에서 다른 비밀번호로 바꾼 뒤 다시 켜면 또 되돌리므로 쓴 뒤에는 변수를 지운다).
+   * 비밀번호를 바꾸면 되찾을 길이 없기 때문.
+   *  - 같은 값은 **한 번만** 적용한다 (적용한 값의 scrypt 해시를 meta 에): 되찾은 뒤 앱에서 비밀번호를 바꾸고 변수를 지우는 것을 잊어도,
+   *    다음 배포 때 되돌리거나 주인의 모든 기기를 로그아웃시키지 않는다 ("웬만해선 로그인이 풀리지 않게"). 다른 값을 넣으면 다시 적용된다
+   *  - 지금 비밀번호와 같으면 바꾸지 않는다 (적용한 것으로 적어 둔다)
    * 바꾸면: 처음 비밀번호 표시를 지우고(직접 정한 값이므로), 주인의 모든 세션과 주인 기기 등록을 끊고, 잠금을 푼다
    */
-  async resetOwnerPassword(password: string): Promise<"reset" | "same" | "no_owner"> {
+  async resetOwnerPassword(password: string): Promise<"reset" | "same" | "applied" | "no_owner"> {
     const row = await this.deps.db.selectFrom("users").select(["id", "login_id", "password_hash"]).where("is_owner", "=", 1).executeTakeFirst();
     if (!row) return "no_owner";
-    if (await verifyPassword(password, row.password_hash)) return "same";
-    const ts = seoulIso(this.now());
+    const applied = await this.deps.db.selectFrom("meta").select("value").where("key", "=", OWNER_RESET_META_KEY).executeTakeFirst();
+    if (applied && (await verifyPassword(password, applied.value))) return "applied";
     const hash = await hashPassword(password, this.n);
+    const remember = (db: Kysely<Database>) =>
+      db.insertInto("meta").values({ key: OWNER_RESET_META_KEY, value: hash }).onConflict((oc) => oc.column("key").doUpdateSet({ value: hash })).execute();
+    if (await verifyPassword(password, row.password_hash)) {
+      await remember(this.deps.db);
+      return "same";
+    }
+    const ts = seoulIso(this.now());
     const userId = Number(row.id);
     this.gen++;
     await this.deps.db.transaction().execute(async (trx) => {
       await trx.updateTable("users").set({ password_hash: hash, initial_password: 0, updated_at: ts }).where("id", "=", userId).execute();
       await trx.updateTable("sessions").set({ revoked_at: ts }).where("user_id", "=", userId).where("revoked_at", "is", null).execute();
       await dropDevices(trx, { userId, unbound: true });
+      await remember(trx);
     });
     this.forget((s) => s.userId === userId);
     this.lock.succeed(loginIdKey(row.login_id));
-    this.deps.log?.warn({ userId }, "계정: 주인 비밀번호를 OWNER_RESET_PASSWORD 로 되돌렸습니다 (주인 세션·기기 등록을 모두 끊음 — 변수를 지우세요)");
+    this.deps.log?.warn({ userId }, "계정: 주인 비밀번호를 OWNER_RESET_PASSWORD 로 되돌렸습니다 (주인 세션·기기 등록을 모두 끊음 — 같은 값은 다시 적용하지 않음, 변수는 지워도 됩니다)");
     return "reset";
   }
 
@@ -254,9 +283,10 @@ export class AuthService {
         .executeTakeFirstOrThrow();
       id = Number(r.id);
     } catch (e) {
-      // 같은 순간의 가입(유일 색인) — 어느 칸이 겹쳤는지 다시 본다
+      if (!isUniqueViolation(e)) throw e;
+      // 같은 순간의 가입(유일 색인) — 어느 칸이 겹쳤는지 다시 본다 (그새 사라졌으면 다시 해 달라고)
       await this.assertFree(key, email, null);
-      throw e;
+      throw new AuthFailure(409, "conflict", MSG.conflict);
     }
     const created = await this.createSession(id, input.remember, input.deviceName ?? null);
     this.deps.log?.info({ userId: id, ip: input.ip }, "계정: 회원가입");
@@ -404,16 +434,9 @@ export class AuthService {
     const cf = confirmError(input.next, input.nextConfirm);
     if (cf) fields["nextConfirm"] = cf;
     if (Object.keys(fields).length) throw new AuthFailure(400, "invalid", MSG.invalid, { fields });
-    const key = loginIdKey(ctx.user.loginId);
-    const locked = this.lock.lockedFor(key);
-    if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: locked });
     const row = await this.deps.db.selectFrom("users").select(["id", "login_id", "email", "is_owner", "initial_password", "password_hash"]).where("id", "=", ctx.user.id).executeTakeFirst();
-    if (!row || input.current.length > LOGIN_PASSWORD_MAX || !(await verifyPassword(input.current, row.password_hash))) {
-      const lockedNow = this.lock.fail(key);
-      if (lockedNow > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: lockedNow });
-      throw new AuthFailure(400, "bad_current_password", MSG.badCurrent, { fields: { current: "bad_current_password" } });
-    }
-    this.lock.succeed(key);
+    await this.recheckPassword(ctx, input.current, row?.password_hash ?? null);
+    if (!row) throw new AuthFailure(400, "bad_current_password", MSG.badCurrent, { fields: { current: "bad_current_password" } });
     const ts = seoulIso(this.now());
     const hash = await hashPassword(input.next, this.n);
     this.gen++;
@@ -441,21 +464,37 @@ export class AuthService {
     if (err) fields["email"] = err;
     if (!input.current) fields["current"] = "required";
     if (Object.keys(fields).length) throw new AuthFailure(400, "invalid", MSG.invalid, { fields });
-    const key = loginIdKey(ctx.user.loginId);
-    const locked = this.lock.lockedFor(key);
-    if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: locked });
     const row = await this.deps.db.selectFrom("users").select("password_hash").where("id", "=", ctx.user.id).executeTakeFirst();
-    if (!row || input.current.length > LOGIN_PASSWORD_MAX || !(await verifyPassword(input.current, row.password_hash))) {
-      const lockedNow = this.lock.fail(key);
+    await this.recheckPassword(ctx, input.current, row?.password_hash ?? null);
+    const email = normalizeEmail(input.email);
+    await this.assertFree("", email, ctx.user.id);
+    try {
+      await this.deps.db.updateTable("users").set({ email, updated_at: seoulIso(this.now()) }).where("id", "=", ctx.user.id).execute();
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+      // 같은 순간에 다른 사람이 같은 이메일로 가입·변경 — 500 대신 409
+      await this.assertFree("", email, ctx.user.id);
+      throw new AuthFailure(409, "conflict", MSG.conflict);
+    }
+    this.forget((s) => s.userId === ctx.user.id);
+    return (await this.me(ctx)).user;
+  }
+
+  /**
+   * 로그인한 뒤 지금 비밀번호 다시 확인 (비밀번호·이메일 변경). 잠금은 세션마다 5번·10분 — 로그인 잠금(아이디별)과 따로 센다:
+   * 아이디가 공개돼 있어 남이 로그인을 일부러 틀려 주인을 잠가도, 이미 로그인한 주인이 비밀번호를 바꾸는 것은 막히지 않게.
+   * 훔친 세션으로 지금 비밀번호를 맞혀 보는 것은 세션마다 5번·10분 + 사람마다 변경 횟수 제한으로 묶인다
+   */
+  private async recheckPassword(ctx: SessionContext, current: string, hash: string | null): Promise<void> {
+    const key = `s${ctx.session.id}`;
+    const locked = this.reauthLock.lockedFor(key);
+    if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: locked });
+    if (!hash || current.length > LOGIN_PASSWORD_MAX || !(await verifyPassword(current, hash))) {
+      const lockedNow = this.reauthLock.fail(key);
       if (lockedNow > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: lockedNow });
       throw new AuthFailure(400, "bad_current_password", MSG.badCurrent, { fields: { current: "bad_current_password" } });
     }
-    this.lock.succeed(key);
-    const email = normalizeEmail(input.email);
-    await this.assertFree("", email, ctx.user.id);
-    await this.deps.db.updateTable("users").set({ email, updated_at: seoulIso(this.now()) }).where("id", "=", ctx.user.id).execute();
-    this.forget((s) => s.userId === ctx.user.id);
-    return (await this.me(ctx)).user;
+    this.reauthLock.succeed(key);
   }
 
   /** 기한이 지났거나 끊긴 지 30일 넘은 세션을 지운다 (하루 한 번). 지운 세션으로 등록한 기기 행도 지운다 (알림은 이미 가지 않는다 — enabledTokens) */
