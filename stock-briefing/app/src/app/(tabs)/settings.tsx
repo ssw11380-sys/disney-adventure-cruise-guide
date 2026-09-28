@@ -2,7 +2,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import Constants from "expo-constants";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, TextInput, View, type LayoutChangeEvent, type ScrollView } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFeature, useHealth, useNotificationSettings } from "@/api/hooks";
 import { useLiveStream } from "@/lib/liveStream";
@@ -10,6 +10,8 @@ import { saverLabel } from "@/lib/pollSaver";
 import { gated } from "@/lib/features";
 import { tradeRecordsLabel } from "@/lib/tradeRecords";
 import { condStats } from "@/api/condCache";
+import { AccountCard } from "@/components/AccountCard";
+import { ApiUrlForm } from "@/components/ApiUrlForm";
 import { AppUpdateCard } from "@/components/AppUpdateCard";
 import { usePull } from "@/components/Freshness";
 import { flushErrors, reportError } from "@/lib/errorReport";
@@ -29,9 +31,10 @@ import { useFoldLayout } from "@/lib/useFoldLayout";
 import { useSticky } from "@/lib/useSticky";
 import { useBoxWidth } from "@/lib/useBoxWidth";
 import { useUx } from "@/lib/uxFlags";
+import { useAccountView } from "@/lib/account";
 import { usePriceAlerts } from "@/lib/priceAlertContext";
 import { isWide } from "@/lib/windowClass";
-import { font, radius, space, touch, useTheme } from "@/theme";
+import { font, space, touch, useTheme } from "@/theme";
 import { settingsReveal } from "@/tokens";
 import { WIDGET_REFRESH_HELP } from "@/widgets/pushPolicy";
 
@@ -57,6 +60,8 @@ export default function SettingsScreen() {
   const densityOn = useFeature("densityMode", false);
   // 이동평균선 기간·색 (3-39): 켜져 있을 때만 '차트 이동평균선' 줄 + [설정] → 새 화면 '이동평균선'
   const maOn = useFeature("maCustom", false);
+  // 계정 A단계 (플래그 accounts): 맨 위 '계정' 칸. 주인 아닌 계정은 알림·가격 알림·토스 칸을 숨긴다 (개인 종목 기능은 다음 단계 — 서버도 막는다)
+  const { member } = useAccountView();
   const health = useHealth();
   // 알림·토스 카드는 토큰이 맞는 서버에서만 보인다 (토큰이 없으면 서버가 401 을 주므로 묻지 않는다)
   const full = !!health.data && !health.data.limited;
@@ -350,10 +355,10 @@ export default function SettingsScreen() {
       <Muted style={{ fontSize: font.tiny, marginTop: space.xs }}>투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.</Muted>
     </Card>
   );
-  const notify = full ? <NotificationSettingsCard /> : null;
+  const notify = full && !member ? <NotificationSettingsCard /> : null;
   // 가격 알림 칸 (3-29): 서버에 연결됐고 켜져 있을 때만, 알림 칸 바로 아래
-  const priceAlertCard = full && alerts.on ? <PriceAlertSettingsCard /> : null;
-  const toss = full ? <TossOpenApiCard /> : null;
+  const priceAlertCard = full && alerts.on && !member ? <PriceAlertSettingsCard /> : null;
+  const toss = full && !member ? <TossOpenApiCard /> : null;
   // 3-24 빈 칸 안내 (플래그 emptyGuide): 서버에 연결되지 않았거나 토큰이 맞지 않아 알림·토스 칸이 비었을 때 까닭과 버튼 하나
   const serverGap =
     ux.connectionGuide && !full && (health.isError || health.data?.limited) ? (
@@ -380,6 +385,7 @@ export default function SettingsScreen() {
         {/* 오른쪽 기둥 자리 재기('설정 열기'로 왔을 때 스크롤): 나중에 붙인 onLayout 은 자리가 바뀌기 전까지 알려 오지 않아 플래그를 받는 순간 한 번 새로 그린다 */}
         <View key={measure ? "cols-cg" : undefined} style={two ? styles.columns : styles.stacked} onLayout={onLayout}>
           <View style={two ? [styles.column, { maxWidth: colMax }] : styles.stackedPart}>
+            <AccountCard />
             {display}
             {notify}
             {priceAlertCard}
@@ -401,6 +407,7 @@ export default function SettingsScreen() {
     );
   return (
     <Screen refreshing={pulling} onRefresh={onPull} {...(measure ? { scrollRef, onScrollBeginDrag: stopSettling } : null)}>
+      <AccountCard />
       {display}
       {notify}
       {priceAlertCard}
@@ -428,66 +435,8 @@ function serverErrorText(error: unknown, guide: boolean): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 서버 주소·토큰 입력 (입력 중인 값은 설정 화면이 들고 있다 — 카드가 새로 그려져도 남게) */
-function ApiUrlForm({
-  apiUrl,
-  apiToken,
-  draft,
-  tokenDraft,
-  onDraft,
-  authRequired,
-  onSave,
-  onCheck,
-  checking,
-}: {
-  apiUrl: string;
-  apiToken: string;
-  draft: string;
-  tokenDraft: string;
-  onDraft: (url: string, token: string) => void;
-  authRequired: boolean;
-  onSave: (url: string, token: string) => Promise<void>;
-  onCheck: () => void;
-  checking: boolean;
-}) {
-  const t = useTheme();
-  const setDraft = (url: string) => onDraft(url, tokenDraft);
-  const setTokenDraft = (token: string) => onDraft(draft, token);
-  const dirty = draft.trim().replace(/\/+$/, "") !== apiUrl || tokenDraft.trim() !== apiToken;
-  return (
-    <View style={{ gap: space.sm }}>
-      <Muted>서버 주소</Muted>
-      <TextInput
-        value={draft}
-        onChangeText={setDraft}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        accessibilityLabel="서버 주소"
-        placeholder="https://서버 주소"
-        placeholderTextColor={t.muted}
-        style={[styles.input, { color: t.ink, borderColor: t.line, backgroundColor: t.surfaceAlt }]}
-      />
-      <Muted>API 토큰</Muted>
-      <TextInput
-        value={tokenDraft}
-        onChangeText={setTokenDraft}
-        autoCapitalize="none"
-        autoCorrect={false}
-        secureTextEntry
-        accessibilityLabel="API 토큰"
-        placeholder={authRequired ? "서버에 설정한 API 토큰" : "서버에 토큰을 설정한 경우만"}
-        placeholderTextColor={t.muted}
-        style={[styles.input, { color: t.ink, borderColor: authRequired && !tokenDraft ? t.danger : t.line, backgroundColor: t.surfaceAlt }]}
-      />
-      <Button title={dirty ? "저장하고 연결 확인" : "연결 확인"} variant="secondary" onPress={() => (dirty ? void onSave(draft, tokenDraft) : onCheck())} loading={checking} />
-    </View>
-  );
-}
-
 const styles = {
   ...StyleSheet.create({
-    input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.sm, padding: space.md, fontSize: font.body },
     // 큰 글씨에서 오른쪽 칩·스위치가 넘치면 다음 줄로
     line: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", rowGap: space.s, paddingVertical: space.s },
     // 넓은 창 두 칸 (3-42): 칸 폭이 곧 버튼 최대 폭. 칸이 최대 폭에 걸리면 남는 폭은 두 칸 사이로만 (양 끝에 붙는다).

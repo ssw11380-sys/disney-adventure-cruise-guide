@@ -22,6 +22,30 @@ import {
 } from "./payload";
 import { DEFAULT_PREFS, type NotifyPrefs } from "@/lib/briefingDigest";
 import { logWidgetRefresh } from "@/lib/widgetRefreshLog";
+// 계정 A단계: 위젯·백그라운드 작업(앱과 다른 JS 로 켜질 수 있다)도 기기에 저장한 로그인 세션으로 묻는다
+import "@/lib/sessionStorage";
+import { handleSessionInvalid, markAccountsSeen, sessionTokenFor } from "@/lib/session";
+
+/**
+ * 로그인 세션 머리글 (계정 A단계). 자동 로그인을 켰으면 기기에 저장된 세션, 껐으면 앱이 떠 있는 동안의 메모리 세션만 —
+ * 없으면 계정 모드 서버는 개인 데이터(잔고·브리핑)를 주지 않는다
+ */
+async function withSession(apiUrl: string): Promise<{ headers: Record<string, string>; sent: string | null }> {
+  const sent = await sessionTokenFor(apiUrl).catch(() => null);
+  return { headers: sent ? { "x-session-token": sent } : {}, sent };
+}
+
+/** 401 session_invalid 면 앱과 같은 규칙으로 로그아웃(보낸 토큰이 지금 토큰일 때만), 403 session_required 면 계정 모드 표시만 */
+async function noteAuth(res: Response, apiUrl: string, sent: string | null): Promise<void> {
+  if (res.status !== 401 && res.status !== 403) return;
+  try {
+    const b = (await res.clone().json()) as { code?: unknown };
+    if (res.status === 401 && b.code === "session_invalid") handleSessionInvalid(apiUrl, sent);
+    if (res.status === 403 && b.code === "session_required") markAccountsSeen(apiUrl, true);
+  } catch {
+    /* 본문이 JSON 이 아님 */
+  }
+}
 
 /**
  * 위젯은 앱과 별도의 JS 컨텍스트에서 돌아가므로(react-native-android-widget 태스크 핸들러) react-query 나
@@ -567,13 +591,15 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
     return null;
   };
   const cached = await readCachedPayload(apiUrl);
+  const session = await withSession(apiUrl);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12_000);
   try {
     const res = await fetch(`${apiUrl}${WIDGET_PATH}${board ? BOARD_QUERY : ""}`, {
-      headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
+      headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers, ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
+    await noteAuth(res, apiUrl, session.sent);
     if (res.status === 404) {
       // 로그인 페이지·프록시의 HTML 404 는 서버에 닿지 못한 것 (예전 서버의 404 는 JSON 오류 본문 — Fastify)
       if (await isHtml(res)) throw new Error(NOT_JSON);
@@ -639,10 +665,14 @@ export async function loadAccountBriefings(): Promise<AccountBriefing[] | null> 
 }
 
 async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promise<T> {
+  // 서버 주소 = 주소의 '/api/' 앞 (세션은 그 서버 것만)
+  const apiUrl = url.slice(0, Math.max(0, url.indexOf("/api/")));
+  const session = await withSession(apiUrl);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, signal: ctrl.signal });
+    const res = await fetch(url, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers }, signal: ctrl.signal });
+    await noteAuth(res, apiUrl, session.sent);
     if (!res.ok) throw new Error((await isPortalPage(res)) ? NOT_JSON : `HTTP ${res.status}`);
     return await jsonBody<T>(res);
   } finally {

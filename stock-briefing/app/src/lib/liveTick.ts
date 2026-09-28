@@ -159,9 +159,12 @@ export function evalView(
   return { marketValue: native, costBasis: ev.costBasis, profit, profitRate: ev.costBasis > 0 ? (profit / ev.costBasis) * 100 : 0, currency: cur, estimated: false, krwBasis: null };
 }
 
-/** 웹소켓 주소: http(s) → ws(s), 토큰은 헤더와 ?token= 둘 다 (React Native 는 헤더를 붙일 수 있지만 프록시가 떼는 경우 대비) */
-export function streamUrl(apiUrl: string, apiToken: string): string {
+/**
+ * 웹소켓 주소: http(s) → ws(s), 토큰은 헤더와 ?token= 둘 다 (React Native 는 헤더를 붙일 수 있지만 프록시가 떼는 경우 대비).
+ * session: 로그인 세션 (계정 A단계) — 머리글을 못 붙이는 웹에서만 ?session= 으로 (서버 로그에서는 가린다)
+ */
+export function streamUrl(apiUrl: string, apiToken: string, session: string | null = null): string {
   const base = apiUrl.replace(/\/+$/, "").replace(/^http/i, "ws");
-  const q = apiToken ? `?token=${encodeURIComponent(apiToken)}` : "";
-  return `${base}/api/stream${q}`;
+  const q = [apiToken ? `token=${encodeURIComponent(apiToken)}` : "", session ? `session=${encodeURIComponent(session)}` : ""].filter(Boolean).join("&");
+  return `${base}/api/stream${q ? `?${q}` : ""}`;
 }

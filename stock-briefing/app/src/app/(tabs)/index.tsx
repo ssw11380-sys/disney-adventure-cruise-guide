@@ -8,6 +8,7 @@ import type { RegisteredWithQuote } from "@/api/types";
 import { AccountBand, accountFigures, accountSpeech, fxNote, lineProfit, type AccountData } from "@/components/AccountBand";
 import { LiveStatus, StaleBanner, useFeedState, usePull } from "@/components/Freshness";
 import { TableHeadRow } from "@/components/HoldingsTableHead";
+import { MemberNotice } from "@/components/MemberNotice";
 import { MarketStrip } from "@/components/MarketStrip";
 import { useReturnMark } from "@/components/ReturnMark";
 import { HoldingsSkeleton } from "@/components/Skeleton";
@@ -279,8 +280,10 @@ export default function StocksScreen() {
 
   const sortLabel = SORT_OPTIONS.find((o) => o.value === sort)?.label ?? "정렬";
 
+  // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음)
   const header = wide ? (
     <View>
+      <MemberNotice />
       {summary.held > 0 && heldPlan ? (
         <AccountBand data={account} oneLine={oneLineBand} rates={bandRates(tableW, fontScale)} pad={heldPlan.pad} onAllocation={gated(allocationOn, openAllocation)} {...(dense ? { dense: true } : null)} />
       ) : null}
@@ -288,6 +291,7 @@ export default function StocksScreen() {
   ) : (
     <View>
       <MarketStrip {...(dense ? { dense: true } : null)} />
+      <MemberNotice />
       {summary.held > 0 ? <AccountPanel data={account} onAllocation={gated(allocationOn, openAllocation)} status={status} {...(dense ? { dense: true } : null)} /> : null}
     </View>
   );

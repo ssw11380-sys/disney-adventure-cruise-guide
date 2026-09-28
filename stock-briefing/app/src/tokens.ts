@@ -658,3 +658,91 @@ export const priceAlert = {
   /** 경계 타이머 한 번의 최대 대기 (먼 경계는 이 간격으로 다시 잰다 — 긴 타이머를 걸지 않게) */
   boundaryMaxWaitMs: 300_000,
 } as const;
+
+/**
+ * 로그인·회원가입 화면 (계정 A단계, 플래그 accounts) — 앱 테마와 상관없이 늘 이 어두운 색 (hero-spec.md 2장).
+ * 강조는 빨강(봉·빛)과 금색(글자·선·버튼) 두 가지만. 오류는 상승 빨강과 헷갈리지 않게 주황(앱 다크 danger)
+ */
+export const authColors = {
+  bgTop: "#0B1030",
+  bgMid: "#04061A",
+  bgBottom: "#030410",
+  grid: "rgba(255,255,255,0.055)",
+  baseline: "rgba(255,255,255,0.13)",
+  sideUp: "rgba(255,75,85,0.55)",
+  sideDown: "rgba(61,142,255,0.55)",
+  limitLow: "#D8152E",
+  limitHigh: "#FF5A4E",
+  limitWick: "#E61F33",
+  limitCap: "#FFD7A1",
+  glow: "#FF2D3A",
+  flame: "#FF8A2E",
+  flameHot: "#FF3A1E",
+  flameCore: "#FFD7A1",
+  goldHi: "#F7E7B4",
+  gold: "#E3B341",
+  goldLo: "#B8862B",
+  goldLine: "rgba(227,179,65,0.6)",
+  ink: "#E8EAED",
+  sub: "#B4BAC4",
+  muted: "#8A919D",
+  field: "rgba(255,255,255,0.05)",
+  fieldLine: "rgba(255,255,255,0.10)",
+  fieldFocus: "rgba(227,179,65,0.75)",
+  danger: "#F97316",
+  primary: "#E3B341",
+  primaryPressed: "#CFA033",
+  primaryInk: "#111418",
+  secondaryLine: "rgba(227,179,65,0.45)",
+  notice: "rgba(227,179,65,0.10)",
+  scrim: "rgba(3,4,16,0.72)",
+  sheet: "#0E1330",
+} as const;
+
+/** 로그인·회원가입 배치 (hero-spec.md 4장) — 4dp 격자 */
+export const authLayout = {
+  /** 옆 여백: 창 폭 600 미만 24, 이상 32 */
+  gutter: 24,
+  gutterWide: 32,
+  wideMin: 600,
+  /** 입력 묶음 최대 폭 */
+  formMaxW: 420,
+  /** 두 칸(왼쪽 그림 · 오른쪽 입력): 창 폭 840 이상이고 가로가 더 길 때. 오른쪽 칸 폭 */
+  twoColMin: 840,
+  rightW: 420,
+  /** 한 칸 그림 높이 = (창 높이 − 안전 영역) × 0.42, 240~380 (+ 위 안전 영역) */
+  heroRatio: 0.42,
+  heroMin: 240,
+  heroMax: 380,
+  /** 키보드가 뜨면 그림을 이 높이(글자 한 줄)로 접는다 */
+  heroKeyboardH: 72,
+  /** 그림 칸(plot): 한 칸은 위 12dp·최대 폭 560, 두 칸은 옆 40dp */
+  plotTop: 12,
+  plotMaxW: 560,
+  twoPlotInset: 40,
+  /** 그림 아래 입력 묶음까지 */
+  heroGap: 8,
+  fieldGap: 12,
+  groupGap: 16,
+  fieldH: 48,
+  buttonH: 50,
+  checkbox: 20,
+  logoLineW: 40,
+  logoLineH: 1,
+  logoGap: 18,
+  /** 회원가입 글자 머리 위 여백 (안전 영역 아래) */
+  headerTop: 32,
+} as const;
+
+/** 로그인·회원가입 글자 크기 (hero-spec.md 3장) */
+export const authFont = {
+  logo: 30,
+  logoWide: 34,
+  title: 20,
+  input: 16,
+  button: 16,
+  label: 12,
+  link: 13,
+  sub: 12,
+  tiny: 11,
+} as const;

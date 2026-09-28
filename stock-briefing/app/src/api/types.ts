@@ -1,4 +1,5 @@
 /** 백엔드 응답 타입 (backend/src/domain, services 와 맞춘다) */
+import type { AccountUser } from "@/lib/session";
 
 export type Market = "KOSPI" | "KOSDAQ" | "NASDAQ" | "NYSE" | "AMEX" | "US" | "UNKNOWN";
 export type Currency = "KRW" | "USD";
@@ -766,6 +767,19 @@ export interface ThemeDetail {
 export interface FeatureFlags {
   features: Record<string, boolean>;
   updatedAt: string | null;
+}
+
+/** 계정 A단계 (플래그 accounts): 로그인·가입 응답. token 은 이 응답에 한 번만 온다 */
+export interface AuthResult {
+  token: string;
+  user: AccountUser;
+  session: { id: number; remember: boolean; expiresAt: string };
+}
+
+/** GET /api/auth/me */
+export interface AuthMe {
+  user: AccountUser;
+  session: { id: number; remember: boolean; expiresAt: string };
 }
 
 /**

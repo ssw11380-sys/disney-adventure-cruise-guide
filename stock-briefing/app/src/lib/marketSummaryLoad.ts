@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { MarketSummary } from "@/api/types";
 import { PERSIST_STORAGE_KEY } from "@/lib/queryPersist";
+import { sessionHeaders } from "@/lib/session";
 import { defaultApiUrl, STORAGE_KEYS } from "@/lib/settings";
 
 /**
@@ -35,7 +36,9 @@ export async function loadMarketSummaries(timeoutMs = 12_000): Promise<MarketSum
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(`${apiUrl}/api/market-summaries?limit=4`, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, signal: ctrl.signal });
+    // 계정 A단계: 로그인 세션도 (백그라운드 작업은 기기에 저장한 세션 — widgets/data 가 저장소를 끼운다)
+    const session = await sessionHeaders(apiUrl).catch(() => ({}));
+    const res = await fetch(`${apiUrl}/api/market-summaries?limit=4`, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session }, signal: ctrl.signal });
     if (res.status === 404) return [];
     if (!res.ok) return null;
     const list = (await res.json()) as unknown;

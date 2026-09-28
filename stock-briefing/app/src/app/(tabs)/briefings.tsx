@@ -7,6 +7,7 @@ import type { AccountBriefing, BriefingSession, LatestBriefing, MarketSummary } 
 import { AccountBriefingBody } from "@/components/AccountBriefingBody";
 import { AccountBriefingCard, AccountBriefingRow } from "@/components/AccountBriefingCard";
 import { MarketSummaryBody } from "@/components/MarketSummaryBody";
+import { MemberNotice } from "@/components/MemberNotice";
 import { MarketSummaryCard, MarketSummaryRow } from "@/components/MarketSummaryCard";
 import { BriefingBody } from "@/components/BriefingBody";
 import { BriefingCard } from "@/components/BriefingCard";
@@ -98,7 +99,13 @@ export default function BriefingsScreen() {
     if (wide) noteTabHeadHidden();
   }, [wide]);
   const headOptions = tabHeadOptions(fold.on, wide);
-  const head = headOptions ? <Tabs.Screen options={headOptions} /> : null;
+  // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음 — 지금과 같음)
+  const head = (
+    <>
+      {headOptions ? <Tabs.Screen options={headOptions} /> : null}
+      <MemberNotice />
+    </>
+  );
   // 접은 화면 '이어 보기' 스크롤 (넓은 창에서 보던 브리핑 줄로 한 번). 다시 펴면 다음에 접을 때 또 맞춘다
   const scrollRef = useRef<ScrollView | null>(null);
   const scrolledTo = useRef<number | null>(null);
