@@ -90,6 +90,8 @@ export interface KrQuote {
   status: string;
   /** 누적 거래대금 (원, KRX — accumulatedTradingValueRaw. 3-35 내 종목 테마의 거래대금 평소 대비). 없으면 null */
   tradingValue?: number | null;
+  /** 거래정지 (출처 tradeStopType 이 TRADING 이 아님 — 3-35 내 종목 테마의 '거래정지' 표시). 거래 중이거나 모르면 없음 */
+  halted?: boolean;
 }
 
 export function exchangeSession(j: Json | undefined): ExchangeSession | null {
@@ -206,6 +208,12 @@ export function krStock(it: Json): DiscoverStock | null {
     // 거래량 0 이어도 거래 가능한 종목(코넥스 무거래 등)이 있어, 출처의 거래 가능 상태로만 거래정지를 판정한다
     ...(String(it["tradableStatus"] ?? "") === "halt" ? { suspended: true } : {}),
   };
+}
+
+/** 출처가 거래정지라고 알린 종목 (tradeStopType.name 이 있고 TRADING 이 아님 — 미국 순위 줄과 같은 판정) */
+function isTradeStopped(it: Json): boolean {
+  const stop = it["tradeStopType"] as Json | undefined;
+  return !!stop && typeof stop["name"] === "string" && stop["name"] !== "" && stop["name"] !== "TRADING";
 }
 
 /**
@@ -438,6 +446,7 @@ export class NaverDiscover {
           tradedAt: typeof it["localTradedAt"] === "string" ? it["localTradedAt"] : null,
           status: String(it["marketStatus"] ?? ""),
           tradingValue: num(it["accumulatedTradingValueRaw"]),
+          ...(isTradeStopped(it) ? { halted: true } : {}),
         });
       }
     }

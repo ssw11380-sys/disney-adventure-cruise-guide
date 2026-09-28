@@ -242,7 +242,9 @@ describe("'내 종목 테마' 화면", () => {
     expect(h.themesCalls.every((x) => x)).toBe(true);
     const screen = byType(r, "Screen")[0]!;
     expect(screen.props.disclaimer).toBe(true);
-    expect(r.has("내 종목이 많이 속한 테마, 스마트폰제조 1종목. 보유 3종목 중 2종목 연결")).toBe(true);
+    // 많이 속한 테마: 제목은 머리(header)만, 조각은 버튼으로 따로 — 묶음 문장으로 한 번 더 읽지 않는다 (중복 읽기 없음)
+    expect(r.has("내 종목이 많이 속한 테마, 스마트폰제조 1종목. 보유 3종목 중 2종목 연결")).toBe(false);
+    expect(r.byLabel("스마트폰제조 1종목, 그 테마 줄로 이동").type).toBe("Pressable");
     // 칩: 시장(미국 6 · 한국 1) · 기간(오늘 · 1주). 처음 시장은 원화 보유액이 큰 미국
     const chips = byType(r, "Chip").map((c) => [c.props.label, c.props.active]);
     expect(chips).toEqual([
@@ -256,7 +258,8 @@ describe("'내 종목 테마' 화면", () => {
     const headers = r.all().filter((n) => n.props.accessibilityRole === "header").map(textIn);
     expect(headers).toEqual(["내 종목이 많이 속한 테마", "등락률 높은 3개", "등락률 낮은 3개", "내 테마 6개 · 등락률 높은 순", "연결하지 못한 종목 1"]);
     const text = textIn(screen);
-    expect(text).toContain("장 마감 · 직전 정규장 기준");
+    // 미국 장 마감: 기준 거래일(뉴욕 날짜)을 밝히고 한국 시각은 따로 (거래대금 줄 날짜와 두 날짜로 보이지 않게)
+    expect(text).toContain("장 마감 · 미국 9/28(월) 정규장 기준 · 한국 시각 9월 29일 (화) 05:00");
     expect(text).toContain("QQQ · 나스닥100 지수 전체를 따르는 상품이라 테마로 묶지 않았습니다");
     expect(text).toContain("한국 테마 구성은 주 1회 받은 목록입니다");
     // 줄: 누르면 발견 탭 상세, 한 줄 한 문장, 누르는 높이 44 이상
@@ -338,5 +341,142 @@ describe("'내 종목 테마' 화면", () => {
     const pair = r.all().find((n) => n.type === "View" && flat(n.props.style).flexDirection === "row" && flat(n.props.style).flexWrap === "wrap" && n.children.length === 2 && textIn(n).includes("등락률 낮은 3개"))!;
     expect(pair).toBeTruthy();
     for (const cell of pair.children as HostNode[]) expect(flat(cell.props.style)).toMatchObject({ flexBasis: 300 });
+  });
+});
+
+describe("리뷰 반영 (3-35 검증)", () => {
+  const manyUs = (n: number): HtGroup[] => Array.from({ length: n }, (_, i) => G(`US:theme:${100 + i}`, `테마${String(100 + i)}`, 10 - i));
+
+  it("촘촘 모드: 보유 구역 머리에 버튼 셋이면 줄이 모자랄 때 버튼 묶음이 다음 줄 오른쪽으로 (제목은 끊지 않음) · 관심 구역 머리·끈 상태는 그대로", () => {
+    h.flags = { allocationView: true, densityMode: true };
+    h.density = "dense";
+    const none = drawTab();
+    h.flags = { allocationView: true, densityMode: true, holdingThemes: false };
+    expect(treeText(drawTab().tree)).toBe(treeText(none.tree));
+    h.flags = { allocationView: true, densityMode: true, holdingThemes: true };
+    const r = drawTab();
+    const titles = r.all().filter((n) => n.type === "Text" && n.props.accessibilityRole === "header");
+    const held = titles.find((n) => textIn(n).startsWith("보유"))!;
+    const bar = r.all().find((n) => n.children.includes(held))!;
+    expect(flat(bar.props.style)).toMatchObject({ flexWrap: "wrap", minHeight: 44 });
+    expect(flat(held.props.style)).toMatchObject({ flexShrink: 0 });
+    const end = bar.children.find((c) => typeof c !== "string" && c !== held) as HostNode;
+    expect(flat(end.props.style)).toMatchObject({ flexWrap: "wrap", justifyContent: "flex-end", marginLeft: "auto" });
+    // 관심 구역 머리는 버튼이 정렬 하나라 그대로
+    const watch = titles.find((n) => textIn(n).startsWith("관심"));
+    if (watch) expect(flat(r.all().find((n) => n.children.includes(watch))!.props.style)).not.toHaveProperty("flexWrap");
+  });
+
+  it("1주 칩: 내 종목 줄 머리가 '내 종목 (오늘)' (테마는 1주, 내 종목은 오늘 등락률)", async () => {
+    h.flags = { holdingThemes: true };
+    const r = render(<ThemesScreen />);
+    await settle(r);
+    expect(r.all().some((n) => n.type === "Text" && textIn(n) === "내 종목")).toBe(true);
+    (byType(r, "Chip").find((c) => c.props.label === "1주")!.props.onPress as () => void)();
+    await settle(r);
+    expect(r.all().some((n) => n.type === "Text" && textIn(n) === "내 종목")).toBe(false);
+    expect(r.all().filter((n) => n.type === "Text" && textIn(n) === "내 종목 (오늘)").length).toBeGreaterThan(0);
+    const row = r.all().find((n) => n.type === "Pressable" && String(n.props.accessibilityLabel ?? "").startsWith("테마1,"))!;
+    expect(String(row.props.accessibilityLabel)).toContain("1주 1.50% 상승");
+    expect(String(row.props.accessibilityLabel)).toContain("내 종목 오늘 등락률 애플, 0.20% 하락");
+  });
+
+  it("거래정지 내 종목(설계 E10)은 '거래정지'", async () => {
+    h.flags = { holdingThemes: true };
+    h.themes = { ...THEMES, groups: THEMES.groups.map((g) => (g.key === "KR:theme:543" ? { ...g, holdings: [{ code: "010140", name: "삼성중공업", via: null, changeRate: null, inCalc: null, halted: true }] } : g)) };
+    const r = render(<ThemesScreen />);
+    await settle(r);
+    (byType(r, "Chip").find((c) => c.props.label === "한국 1")!.props.onPress as () => void)();
+    await settle(r);
+    expect(r.all().some((n) => n.type === "Text" && textIn(n).startsWith("삼성중공업 거래정지"))).toBe(true);
+    expect(textIn(byType(r, "Screen")[0]!)).not.toContain("시세 없음");
+  });
+
+  it("연결한 종목이 0 이면: 카드 제목·칩 없이 한 줄 안내 + 연결하지 못한 종목", () => {
+    h.flags = { holdingThemes: true };
+    h.themes = { ...THEMES, coverage: { held: 2, mapped: 0, unmapped: [THEMES.coverage.unmapped[0]!, { code: "069500", name: "KODEX 200", market: "KR", reason: "index", text: "KODEX 200 · 코스피200 지수 전체를 따르는 상품이라 테마로 묶지 않았습니다" }] }, groups: [], mostHeld: [], byHolding: [] };
+    const r = render(<ThemesScreen />);
+    expect(byType(r, "Chip")).toHaveLength(0);
+    const text = textIn(byType(r, "Screen")[0]!);
+    expect(text).toContain("보유 2종목 중 테마·업종에 연결한 종목이 없습니다");
+    expect(text).not.toContain("내 종목이 많이 속한 테마");
+    expect(text).toContain("KODEX 200 · 코스피200 지수 전체를 따르는 상품이라 테마로 묶지 않았습니다");
+    expect(r.all().filter((n) => n.props.accessibilityRole === "header").map(textIn)).toEqual(["연결하지 못한 종목 2"]);
+  });
+
+  it("내 테마가 12개를 넘으면 앞 10개 + '나머지 N개 더 보기' — 누르면 모두, 많이 속한 테마 조각으로 가면 펼친다", async () => {
+    h.flags = { holdingThemes: true };
+    h.themes = { ...THEMES, groups: manyUs(15), mostHeld: [{ key: "US:theme:114", name: "테마114", count: 2, codes: ["AAPL"] }], byHolding: [] };
+    const r = render(<ThemesScreen />);
+    await settle(r);
+    const allRows = () => r.all().filter((n) => n.type === "Pressable" && String(n.props.accessibilityLabel ?? "").endsWith("누르면 발견 탭 테마 상세")).length;
+    expect(allRows()).toBe(6 + 10); // 높은 3 + 낮은 3 + 전체 앞 10
+    const more = r.byLabel("나머지 5개 더 보기");
+    expect(flat(more.props.style).minHeight).toBeGreaterThanOrEqual(44);
+    (more.props.onPress as () => void)();
+    await settle(r);
+    expect(allRows()).toBe(6 + 15);
+    expect(r.has("나머지 5개 더 보기")).toBe(false);
+    // 다시 그려 접힌 채에서 조각을 누르면 펼친다
+    cleanupRenders();
+    const r2 = render(<ThemesScreen />);
+    await settle(r2);
+    (r2.byLabel("테마114 2종목, 그 테마 줄로 이동").props.onPress as () => void)();
+    await settle(r2);
+    expect(r2.has("나머지 5개 더 보기")).toBe(false);
+  });
+
+  it("많이 속한 테마 조각: 긴 이름도 칸 폭 안에서 줄바꿈 (flexShrink · maxWidth 100%)", async () => {
+    h.flags = { holdingThemes: true };
+    h.themes = { ...THEMES, mostHeld: [{ key: "KR:theme:543", name: "밸류업(24년 기업가치 제고계획 발표)", count: 6, codes: ["005930"] }] };
+    const r = render(<ThemesScreen />);
+    await settle(r);
+    const part = r.byLabel("밸류업(24년 기업가치 제고계획 발표) 6종목, 그 테마 줄로 이동");
+    expect(flat(part.props.style)).toMatchObject({ flexShrink: 1, maxWidth: "100%" });
+    expect(flat((part.children[0] as HostNode).props.style)).toMatchObject({ flexShrink: 1 });
+  });
+
+  it("종목별로 보기: 펼침 상태는 accessibilityState 로만 · 한 종목 한 문장", async () => {
+    h.flags = { holdingThemes: true };
+    const r = render(<ThemesScreen />);
+    await settle(r);
+    const toggle = r.byLabel("종목별로 보기");
+    expect(toggle.props.accessibilityState).toEqual({ expanded: false });
+    (toggle.props.onPress as () => void)();
+    await settle(r);
+    expect(r.byLabel("종목별로 보기").props.accessibilityState).toEqual({ expanded: true });
+    const rows = r.all().filter((n) => n.type === "View" && n.props.accessible === true && String(n.props.accessibilityLabel ?? "").includes("등락률 높은 순"));
+    expect(rows.map((n) => n.props.accessibilityLabel)).toEqual([
+      "애플, 미국 테마 2개, 오늘 등락률 높은 순, 컴퓨터와 주변기기 1.50퍼센트 상승, 스마트폰제조 0.30퍼센트 하락",
+      "삼성전자, 한국 테마 1개, 오늘 등락률 높은 순, HBM(고대역폭메모리) 4.12퍼센트 하락",
+    ]);
+  });
+
+  it("넓은 창 두 칸: 두 칸 모두 당겨서 새로고침 · 왼쪽 칸은 글자 배율만큼 넓힌다 (100% 340 → 200% 408)", async () => {
+    h.flags = { holdingThemes: true, foldLayout: true };
+    for (const [fs, w] of [
+      [1, 340],
+      [2, 408],
+    ] as const) {
+      h.win = { width: 933, height: 704, scale: 2.625, fontScale: fs };
+      forgetWindowClass();
+      cleanupRenders();
+      const r = render(<ThemesScreen />);
+      await settle(r);
+      const scrolls = byType(r, "ScrollView");
+      expect(scrolls).toHaveLength(2);
+      for (const s of scrolls) expect((s.props.refreshControl as { type: unknown } | undefined)?.type).toBe("RefreshControl");
+      expect(flat(scrolls[0]!.props.style).width).toBe(w);
+    }
+  });
+
+  it("펼친 세로 704×933 · 글자 200%: 높은/낮은 3개 칸 최소 폭도 배율만큼 (600 — 두 칸이 안 들어가 위아래)", async () => {
+    h.flags = { holdingThemes: true, foldLayout: true };
+    h.win = { width: 704, height: 933, scale: 2.625, fontScale: 2 };
+    forgetWindowClass();
+    const r = render(<ThemesScreen />);
+    await settle(r);
+    const pair = r.all().find((n) => n.type === "View" && flat(n.props.style).flexWrap === "wrap" && n.children.length === 2 && textIn(n).includes("등락률 낮은 3개"))!;
+    for (const cell of pair.children as HostNode[]) expect(flat(cell.props.style)).toMatchObject({ flexBasis: 600 });
   });
 });

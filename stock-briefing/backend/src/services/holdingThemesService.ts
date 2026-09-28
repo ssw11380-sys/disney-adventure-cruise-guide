@@ -1,17 +1,20 @@
 import { isKrCode } from "../lib/codes.js";
 import { within } from "../lib/errors.js";
 import { seoulDate, seoulIso } from "../lib/time.js";
-import type { KrQuote, ThemeKind, ThemePeriod, ThemeSummary, UsQuote } from "../providers/market/naverDiscover.js";
+import type { KrQuote, SectorDetail, ThemeKind, ThemePeriod, ThemeSummary, UsQuote } from "../providers/market/naverDiscover.js";
 import type { DiscoverSession, ThemeDetail, ThemeList } from "./discoverService.js";
 import type { HoldingThemeMaps, MapLookup } from "./holdingThemeMaps.js";
 import {
   basisLines,
   classifyHolding,
   groupKey,
+  INDEX_PRODUCTS,
   koDateTime,
   MARKET_NOTE_KR_INDEX,
   MARKET_NOTE_US_BOOK,
+  MARKET_NOTE_US_BOOK_FAILED,
   mostHeld,
+  ticsMissingNote,
   topBottom,
   TV_MIN_DAYS,
   tvBaseline,
@@ -67,6 +70,11 @@ export interface HtTradingValue {
   /** today 값의 거래일 (그 시장 날짜) */
   day: string | null;
   currency: "KRW" | "USD";
+  /**
+   * 구성 종목이 SECTOR_TV_MAX(300)개 이상이라 발견 탭 상세가 등락률 상위만 준 업종 — 날마다 더하는 종목 묶음이 달라 합을 내지 않는다(state none).
+   * 그렇지 않으면 없음 (예전 앱은 '거래대금 값 없음'으로 보인다)
+   */
+  truncated?: boolean;
 }
 
 export interface HtHolding {
@@ -77,6 +85,8 @@ export interface HtHolding {
   changeRate: number | null;
   /** 미국 테마: 등락률 계산(시가총액 상위 30종목)에 드는지. 그 밖은 null */
   inCalc: boolean | null;
+  /** 거래정지 (출처가 알린 한국 종목 — changeRate 는 null). 아니면 없음 (예전 앱은 '시세 없음'으로 보인다) */
+  halted?: boolean;
 }
 
 export interface HtGroup {
@@ -152,9 +162,15 @@ export interface HoldingThemesDeps {
   discover: {
     themes(market: HtMarket, kind: ThemeKind, period: ThemePeriod): Promise<ThemeList>;
     theme(market: HtMarket, kind: ThemeKind, id: string): Promise<ThemeDetail | null>;
-    usThemeBookQuotes(): Promise<BookQuotes | null>;
+    /** fresh: 캐시를 거치지 않고 지금 값 (마감 뒤 기록) */
+    usThemeBookQuotes(opts?: { fresh?: boolean }): Promise<BookQuotes | null>;
   };
-  naver: { krQuotes(codes: string[]): Promise<Map<string, KrQuote>>; usQuotes(reuters: string[]): Promise<Map<string, UsQuote>> };
+  naver: {
+    krQuotes(codes: string[]): Promise<Map<string, KrQuote>>;
+    usQuotes(reuters: string[]): Promise<Map<string, UsQuote>>;
+    /** 업종 구성 종목 (마감 뒤 기록은 발견 탭 캐시를 거치지 않고 지금 값으로) */
+    sectorDetail(market: HtMarket, kind: ThemeKind, id: string): Promise<SectorDetail | null>;
+  };
   krIndex: KrThemeIndex;
   maps: HoldingThemeMaps;
   tv: ThemeTvHistory;
@@ -175,6 +191,10 @@ export interface HoldingThemesDeps {
 
 /** 계좌 브리핑이 기다리는 최대 시간 — 넘으면 칸 없이 (브리핑·알림을 늦추지 않게) */
 export const SNAPSHOT_BUDGET_MS = 8_000;
+/** 발견 탭 업종 상세가 주는 최대 종목 수 (등락률 상위부터) — 이만큼 받았으면 잘렸을 수 있어 거래대금 합을 내지 않는다 */
+export const SECTOR_TV_MAX = 300;
+/** 분류를 받는 중·받지 못한 종목이 있는 응답은 이만큼만 캐시한다 (5분 뒤 다시 받은 분류가 곧 보이게) */
+const RETRY_SOON_MS = 60_000;
 
 type Classified = { held: HeldPosition; market: HtMarket; r: ClassifyResult };
 
@@ -185,6 +205,8 @@ export class HoldingThemesService {
   private krQuoteCache: { at: number; codes: Set<string>; value: Map<string, KrQuote> } | null = null;
   private membersOf: { builtAt: number; map: Map<string, string[]> } | null = null;
   private readonly warnings: string[] = [];
+  /** 곧 다시 만들어야 하는 응답 (분류 받는 중·받지 못함·한쪽 출처만 받음·미국 테마 시세 실패) — 짧게 캐시 */
+  private readonly retrySoon = new WeakSet<HoldingThemesResponse>();
 
   constructor(private readonly deps: HoldingThemesDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -206,12 +228,12 @@ export class HoldingThemesService {
     const key = [...held].map((h) => h.code).sort().join(",");
     const t = this.now().getTime();
     const hit = this.cache.get(key);
-    if (hit && t - hit.at < (hit.open ? 60_000 : 10 * 60_000)) return withValues(hit.value, held);
+    if (hit && t - hit.at < (hit.open ? RETRY_SOON_MS : 10 * 60_000)) return withValues(hit.value, held);
     let p = this.inflight.get(key);
     if (!p) {
       p = this.build(held)
         .then((value) => {
-          const open = Object.values(value.markets).some((m) => m && (m.marketOpen || m.preparing));
+          const open = Object.values(value.markets).some((m) => m && (m.marketOpen || m.preparing)) || this.retrySoon.has(value);
           this.cache.set(key, { at: this.now().getTime(), open, value });
           if (this.cache.size > 20) this.cache.delete(this.cache.keys().next().value!);
           return value;
@@ -248,7 +270,7 @@ export class HoldingThemesService {
 
   private async classifyAll(
     held: readonly HeldPosition[],
-    ctx: { idx: KrThemeIndexData | null; book: BookQuotes | null; bookBuilding: boolean },
+    ctx: { idx: KrThemeIndexData | null; book: BookQuotes | null; bookBuilding: boolean; bookFailed?: boolean },
   ): Promise<{ list: Classified[]; under: Map<string, Underlying | null>; maps: Map<string, MapLookup> }> {
     const under = await this.underlyingOf(held);
     const codes = new Set<string>();
@@ -258,7 +280,8 @@ export class HoldingThemesService {
       if (u) codes.add(u.code);
     }
     const maps = await this.deps.maps.lookup([...codes], this.deps.mapWaitMs ?? 3_000);
-    const bookIds = ctx.book ? new Set(ctx.book.book.themes.map((x) => x.id)) : ctx.bookBuilding ? null : new Set<string>();
+    // 테마북을 만드는 중이거나 시세를 받지 못했으면 테마가 있는지 모른다 (null) — 테마북 자체가 없는 서버(미국 테마 분류 없음)만 빈 묶음
+    const bookIds = ctx.book ? new Set(ctx.book.book.themes.map((x) => x.id)) : ctx.bookBuilding || ctx.bookFailed ? null : new Set<string>();
     const list = held.map((h): Classified => {
       const market: HtMarket = isKrCode(h.code) ? "KR" : "US";
       const u = under.get(h.code) ?? null;
@@ -271,6 +294,7 @@ export class HoldingThemesService {
         market,
         underlying: u,
         bookIds,
+        ...(ctx.bookFailed ? { bookFailed: true } : {}),
         ...(market === "US" ? { usTics: it ? it.tics : src?.failed ? null : undefined, usIndustry: it ? it.industry : undefined } : { krThemes, krIndustry: it ? it.industry : undefined }),
         pending: !!src?.pending,
         failed: !!src?.failed,
@@ -289,16 +313,32 @@ export class HoldingThemesService {
     // 한국 표가 없거나 8일 넘었으면 뒤에서 만든다 (이번 응답은 '준비 중')
     void this.deps.krIndex.ensure().catch(() => undefined);
     let bookBuilding = false;
+    // 만드는 중이 아닌 실패 (출처 오류·초기화 시간에 저장본 없음): 데이터 실패를 '테마 없음'으로 보지 않는다 (업종으로 옮기지 않고 받지 못함)
+    let bookFailed = false;
     const hasUs = held.some((h) => !isKrCode(h.code));
     const hasKr = held.some((h) => isKrCode(h.code));
     const book: BookQuotes | null = hasUs
       ? await this.deps.discover.usThemeBookQuotes().catch((e: unknown) => {
           if (e instanceof UsThemesBuildingError) bookBuilding = true;
-          else this.warn(`미국 테마 시세: ${String(e)}`);
+          else {
+            bookFailed = true;
+            this.warn(`미국 테마 시세: ${String(e)}`);
+          }
           return null;
         })
       : null;
-    const { list, under, maps } = await this.classifyAll(held, { idx, book, bookBuilding });
+    const { list, under, maps } = await this.classifyAll(held, { idx, book, bookBuilding, bookFailed });
+    // 토스 회사 테마를 받지 못해(옛 값도 없음) 업종으로 묶은 미국 종목 (설계 3.1 — 5분 뒤 다시 받는다)
+    const ticsMissing = list.filter((c) => {
+      if (c.market !== "US" || !c.r.groups.length || c.r.groups.some((g) => g.kind === "theme")) return false;
+      const it = maps.get(under.get(c.held.code)?.code ?? c.held.code)?.item;
+      const u = under.get(c.held.code);
+      return !!it && it.tics === null && !!it.missing?.includes("tics") && !INDEX_PRODUCTS[c.held.code] && !(u && INDEX_PRODUCTS[u.code]);
+    }).length;
+    const soon =
+      bookFailed ||
+      list.some((c) => c.r.reason === "failed" || (c.r.reason === "preparing" && c.r.why === "classify")) ||
+      [...maps.values()].some((x) => x.item?.partialAt !== undefined);
 
     // 묶음 모으기
     const groups = new Map<string, { ref: GroupRef; codes: string[] }>();
@@ -338,13 +378,16 @@ export class HoldingThemesService {
       const week = listOf(m, "theme", "week") ?? listOf(m, "sector", "week");
       const preparing = m === "KR" ? !idx : bookBuilding;
       const session: DiscoverSession = m === "US" && book ? book.session : (head?.session ?? "closed");
+      // 미국 테마 목록의 안내는 '거래대금 100만 달러 미만 테마 N개 제외'뿐인데, 이 화면은 그 테마도 보인다(inDiscoverList false) → 옮기지 않는다
+      const headNote = m === "US" && head?.kind === "theme" ? null : (head?.note ?? null);
+      const own = m === "KR" ? (preparing ? MARKET_NOTE_KR_INDEX : null) : preparing ? MARKET_NOTE_US_BOOK : bookFailed ? MARKET_NOTE_US_BOOK_FAILED : null;
       markets[m] = {
         session,
         marketOpen: m === "US" && book ? book.open : (head?.marketOpen ?? false),
         asOf: head?.asOf ?? null,
         tvDay: null,
         preparing,
-        note: [preparing ? (m === "KR" ? MARKET_NOTE_KR_INDEX : MARKET_NOTE_US_BOOK) : null, head?.note ?? null].filter(Boolean).join(" · ") || null,
+        note: [own, m === "US" && ticsMissing ? ticsMissingNote(ticsMissing) : null, headNote].filter(Boolean).join(" · ") || null,
         weekNote: week?.note ?? null,
         heldValue: heldValueOf(held, m),
       };
@@ -366,13 +409,15 @@ export class HoldingThemesService {
       const q = await within(this.deps.naver.usQuotes(missingUs), listWait, null);
       if (q) for (const v of q.values()) if (!symQuote.has(v.code)) symQuote.set(v.code, v);
     }
-    const holdingRate = (code: string): number | null => {
+    const holdingRate = (code: string): { rate: number | null; halted: boolean } => {
       if (isKrCode(code)) {
         const q = krQuotes.get(code);
-        return q && q.status !== "HALT" ? q.changeRate : null;
+        // 거래정지 (설계 E10): 등락률 대신 '거래정지' (출처 tradeStopType · 장 상태 HALT)
+        if (q && (q.halted || q.status === "HALT")) return { rate: null, halted: true };
+        return { rate: q ? q.changeRate : null, halted: false };
       }
       const q = symQuote.get(code);
-      return q ? q.changeRate : null;
+      return { rate: q ? q.changeRate : null, halted: false };
     };
 
     const tvDays: Partial<Record<HtMarket, TvDay[]>> = {};
@@ -391,6 +436,8 @@ export class HoldingThemesService {
         let day: HtStrength = dayRow ? strength(dayRow) : { changeRate: null, up: null, flat: null, down: null };
         const inDiscoverList = !!dayRow;
         let tvToday: number | null = null;
+        /** 업종 구성 종목이 잘려(300개 이상) 합을 내지 않음 */
+        let truncated = false;
         let name = dayRow?.name ?? weekRow?.name ?? ref.name ?? (m === "KR" && ref.kind === "theme" ? idx?.themes[ref.id] : undefined) ?? ref.id;
         const bt = m === "US" && ref.kind === "theme" ? bookTheme.get(ref.id) : undefined;
         if (bt && book) {
@@ -407,7 +454,9 @@ export class HoldingThemesService {
         } else if (ref.kind === "sector") {
           const d = await within(this.deps.discover.theme(m, "sector", ref.id), listWait, null);
           if (d) {
-            tvToday = sumTv(d.items.filter((i) => !i.suspended).map((i) => i.tradingValue));
+            // 등락률 상위 300종목만 온 업종은 날마다 더하는 종목 묶음이 달라 평소와 견줄 수 없다
+            if (d.items.length >= SECTOR_TV_MAX) truncated = true;
+            else tvToday = sumTv(d.items.filter((i) => !i.suspended).map((i) => i.tradingValue));
             if (!dayRow && d.theme) name = d.theme.name || name;
           }
         }
@@ -416,12 +465,15 @@ export class HoldingThemesService {
           : null;
         const tvKeyName = `${ref.kind}:${ref.id}`;
         const info = markets[m]!;
-        const tv = this.tradingValue(tvDays[m] ?? [], tvKeyName, tvToday, info, marketToday(m), m === "KR" ? "KRW" : "USD");
+        const tv = truncated
+          ? { today: null, avg: null, days: 0, ratioPct: null, state: "none" as const, day: info.tvDay, currency: m === "KR" ? ("KRW" as const) : ("USD" as const), truncated: true }
+          : this.tradingValue(tvDays[m] ?? [], tvKeyName, tvToday, info, marketToday(m), m === "KR" ? "KRW" : "USD");
         const holdings: HtHolding[] = codes.map((code) => {
           const c = list.find((x) => x.held.code === code)!;
           const u = under.get(code) ?? null;
           const sym = u?.code ?? code;
-          return { code, name: c.held.name, via: c.r.via, changeRate: holdingRate(code), inCalc: bt ? bt.members.some((mm) => mm.symbol === sym) : null };
+          const hr = holdingRate(code);
+          return { code, name: c.held.name, via: c.r.via, changeRate: hr.rate, inCalc: bt ? bt.members.some((mm) => mm.symbol === sym) : null, ...(hr.halted ? { halted: true } : {}) };
         });
         out.push({ key: groupKey(ref), market: m, kind: ref.kind, id: ref.id, name, day, week, tradingValue: tv, inDiscoverList, holdings });
       }),
@@ -436,13 +488,13 @@ export class HoldingThemesService {
     );
     const unmapped = list
       .filter((c) => !c.r.groups.length)
-      .map((c) => ({ code: c.held.code, name: c.held.name, market: c.market, reason: c.r.reason ?? "none", text: unmappedText(c.r.reason ?? "none", { code: c.held.code, name: c.held.name, market: c.market, index: c.r.index }) }));
+      .map((c) => ({ code: c.held.code, name: c.held.name, market: c.market, reason: c.r.reason ?? "none", text: unmappedText(c.r.reason ?? "none", { code: c.held.code, name: c.held.name, market: c.market, index: c.r.index, why: c.r.why ?? null }) }));
     const byHolding = [...list]
       .sort((a, b) => (b.held.value ?? 0) - (a.held.value ?? 0) || a.held.name.localeCompare(b.held.name, "ko"))
       .filter((c) => c.r.groups.length)
       .map((c) => ({ code: c.held.code, name: c.held.name, market: c.market, keys: c.r.groups.map(groupKey) }));
     const krIndexAt = idx ? koDateTime(seoulIso(new Date(idx.builtAt))) : null;
-    return {
+    const value: HoldingThemesResponse = {
       enabled: true,
       asOf: seoulIso(now),
       markets,
@@ -454,6 +506,8 @@ export class HoldingThemesService {
       krIndexAt,
       disclaimer: this.deps.disclaimer,
     };
+    if (soon) this.retrySoon.add(value);
+    return value;
   }
 
   /** 거래대금 평소 대비 한 묶음 (설계 2-A 상태) */
@@ -519,11 +573,17 @@ export class HoldingThemesService {
   /**
    * 장 마감 뒤 거래대금 기록 (한국 20:10 KST · 미국 16:15 뉴욕, 평일). 그날이 거래일이 아니면(시세 날짜가 오늘이 아님) 적지 않는다.
    * 한국: 테마 표의 모든 종목 KRX 거래대금(폴링 500개씩) → 테마마다 합, 미국: 테마북 시세 → 테마마다 합(계산 30종목). 보유 종목이 든 업종은 업종 상세 합.
-   * 꺼져 있으면 요청 0건
+   * 모두 발견 탭 캐시를 거치지 않고 지금 받은 값으로 적는다 (느린 출처 때문에 장중에 받아 둔 캐시 값을 그날 확정 값으로 적지 않게).
+   * 미국은 모든 종목이 장이 끝난 값(시세 상태가 OPEN·PREOPEN 이 아님)일 때만, 업종은 구성 종목이 잘리지 않았을 때(300개 미만)만 적는다.
+   * 꺼져 있으면 요청 0건. onlyIfMissing: 그 시장 오늘(한국 날짜·뉴욕 날짜) 기록이 이미 있으면 받지 않는다 (마감 값이 아니어서 건너뛴 날의 다시 시도)
    */
-  async recordTv(market: HtMarket): Promise<{ recorded: number; day: string | null; skipped: string | null }> {
+  async recordTv(market: HtMarket, opts: { onlyIfMissing?: boolean } = {}): Promise<{ recorded: number; day: string | null; skipped: string | null }> {
     if (!(await this.enabled())) return { recorded: 0, day: null, skipped: "꺼짐" };
     const now = this.now();
+    if (opts.onlyIfMissing) {
+      const today = market === "KR" ? seoulDate(now) : nyDate(now);
+      if ((await this.deps.tv.days(market).catch(() => [] as TvDay[])).some((d) => d.day === today)) return { recorded: 0, day: today, skipped: "이미 적음" };
+    }
     const tv: Record<string, number> = {};
     let day: string | null = null;
     let book: BookQuotes | null = null;
@@ -539,11 +599,13 @@ export class HoldingThemesService {
         if (s !== null) tv[`theme:${id}`] = s;
       }
     } else {
-      const b = await this.deps.discover.usThemeBookQuotes().catch(() => null);
+      const b = await this.deps.discover.usThemeBookQuotes({ fresh: true }).catch(() => null);
       if (!b) return { recorded: 0, day: null, skipped: "미국 테마북 없음" };
       book = b;
       day = b.day;
       if (day !== nyDate(now) || b.open) return { recorded: 0, day, skipped: "오늘 정규장 값 아님" };
+      // 발견 탭 usTvFilter 와 같은 확인: 한 종목이라도 장중(OPEN)·장 전(PREOPEN) 값이면 확정 값이 아니다
+      if (!b.quotes.size || [...b.quotes.values()].some((q) => q.status === "OPEN" || q.status === "PREOPEN")) return { recorded: 0, day, skipped: "장이 끝난 값 아님" };
       for (const th of b.book.themes) {
         const s = usThemeSummary(th, b.quotes, b.day);
         if (s) tv[`theme:${th.id}`] = s.tradingValue;
@@ -557,8 +619,9 @@ export class HoldingThemesService {
       const { list } = await this.classifyAll(mine, { idx, book, bookBuilding: false });
       const sectors = new Set(list.flatMap((c) => c.r.groups.filter((g) => g.kind === "sector" && g.market === market).map((g) => g.id)));
       for (const id of sectors) {
-        const d = await within(this.deps.discover.theme(market, "sector", id), this.deps.listWaitMs ?? 8_000, null);
-        const s = d ? sumTv(d.items.filter((i) => !i.suspended).map((i) => i.tradingValue)) : null;
+        // 발견 탭 캐시(장중 값일 수 있음)를 거치지 않고 지금 값. 잘린 업종(300개 이상)은 적지 않는다
+        const d = await within(this.deps.naver.sectorDetail(market, "sector", id).catch(() => null), this.deps.listWaitMs ?? 8_000, null);
+        const s = d && d.items.length < SECTOR_TV_MAX ? sumTv(d.items.filter((i) => !i.suspended).map((i) => i.tradingValue)) : null;
         if (s !== null) tv[`sector:${id}`] = s;
       }
     }

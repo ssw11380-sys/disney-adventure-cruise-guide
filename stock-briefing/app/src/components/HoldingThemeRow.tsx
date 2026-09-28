@@ -25,7 +25,8 @@ export const HoldingThemeRow = memo(function HoldingThemeRow({ row, first = fals
       <Text style={[styles.sub, { color: t.muted }]}>{row.kindLine}</Text>
       {row.tvLine ? <Text style={[styles.sub, { color: t.muted }]}>{row.tvLine}</Text> : null}
       <View style={styles.mine}>
-        <Text style={[styles.sub, { color: t.sub, fontWeight: "600" }]}>내 종목</Text>
+        {/* 1주 칩이면 '내 종목 (오늘)' — 내 종목 등락률은 늘 오늘 정규장 값 */}
+        <Text style={[styles.sub, { color: t.sub, fontWeight: "600" }]}>{row.mineLabel}</Text>
         {row.holdings.map((h, i) => (
           <Text key={`${h.label}:${i}`} style={[styles.sub, { color: t.ink }]}>
             {h.label} <Text style={{ color: changeColor(t, h.rate), fontVariant: ["tabular-nums"] }}>{h.rateText}</Text>

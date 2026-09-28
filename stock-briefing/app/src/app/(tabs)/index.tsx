@@ -333,16 +333,19 @@ export default function StocksScreen() {
     </View>
   );
 
+  // 3-35: 촘촘 보유 구역 머리에 '테마'까지 버튼 셋 — 한 줄에 안 들어가면(폭 360·글자 200%) 제목을 끊지 않고 버튼 묶음을 다음 줄 오른쪽으로.
+  // 플래그가 꺼져 있으면 지금 나무 그대로
+  const wrapBar = (key: string) => dense && themesOn && key === "held";
   const sectionHeader = (section: (typeof sections)[number]) => (
     <View style={{ backgroundColor: t.bg }}>
       {dense ? (
         // 촘촘 머리 줄 (3-39): 높이 44 를 정렬·비중 버튼이 채우고 위아래 hitSlop 은 0 — 누르는 곳이 머리 밖으로 나가지 않는다 (BAR_SLOP).
         // 비중 버튼은 보유 구역에만 (계좌 요약에서 옮김 — 머리가 위에 붙어 보유 줄을 보는 동안 늘 보인다)
-        <View style={[styles.sectionBarDense, { backgroundColor: t.bg }]}>
-          <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "700" }} accessibilityRole="header">
+        <View style={[styles.sectionBarDense, ...(wrapBar(section.key) ? [styles.sectionBarWrap] : []), { backgroundColor: t.bg }]}>
+          <Text style={wrapBar(section.key) ? [{ color: t.ink, fontSize: font.small, fontWeight: "700" }, styles.barTitleKeep] : { color: t.ink, fontSize: font.small, fontWeight: "700" }} accessibilityRole="header">
             {section.title}
           </Text>
-          <View style={styles.barEnd}>
+          <View style={wrapBar(section.key) ? [styles.barEnd, styles.barEndWrap] : styles.barEnd}>
             {section.key === "held" && allocationOn ? (
               <Pressable onPress={openAllocation} hitSlop={BAR_SLOP} accessibilityRole="button" accessibilityLabel="비중 보기" style={styles.barBtn}>
                 <Ionicons name="pie-chart-outline" size={font.small} color={t.muted} />
@@ -875,6 +878,10 @@ const styles = StyleSheet.create({
   denseLine: { fontSize: font.small, fontVariant: ["tabular-nums"] },
   sectionBarDense: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", minHeight: touch.min, paddingHorizontal: space.lg },
   barEnd: { flexDirection: "row", alignItems: "stretch", gap: space.xl },
+  // 3-35 보유 구역 머리 버튼 셋: 줄이 모자라면 버튼 묶음을 다음 줄 오른쪽으로 (제목은 끊지 않음 — '보유/21' 두 줄 방지)
+  sectionBarWrap: { flexWrap: "wrap" },
+  barTitleKeep: { flexShrink: 0 },
+  barEndWrap: { flexWrap: "wrap", justifyContent: "flex-end", marginLeft: "auto" },
   barBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, minHeight: touch.min },
   empty: { margin: space.lg, padding: space.lg, gap: space.xs, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
   // 3-24 관심 안내 칸 제목 줄 + 닫기(오른쪽, 누르는 영역 44×44 — CLOSE_SLOP)

@@ -111,8 +111,10 @@ export interface ClassifyInput {
   underlying: Underlying | null;
   /** 토스 '주요 사업' 테마 (미국, 기초 종목이 있으면 기초 종목의 것). undefined = 아직 모름, null = 받지 못함 */
   usTics?: Array<{ id: string; title: string }> | null | undefined;
-  /** 발견 탭 미국 테마북의 테마 id (깊이 1 이상 · 미국 3종목 이상). null = 테마북을 처음 만드는 중 */
+  /** 발견 탭 미국 테마북의 테마 id (깊이 1 이상 · 미국 3종목 이상). null = 테마북을 처음 만드는 중(또는 bookFailed) */
   bookIds: ReadonlySet<string> | null;
+  /** 미국 테마북 시세를 받지 못함 (만드는 중이 아닌 실패 — 출처 오류·초기화 시간). 테마가 있는지 알 수 없어 업종으로 묶지 않는다 */
+  bookFailed?: boolean;
   /** 네이버 미국 업종 번호. undefined = 아직 모름/받지 못함, null = 받았는데 없음 */
   usIndustry?: string | null | undefined;
   /** 한국 테마(거꾸로 찾는 표). null = 표를 처음 만드는 중 */
@@ -131,6 +133,11 @@ export interface ClassifyResult {
   /** 지수 전체 상품이면 따르는 지수 (reason index) */
   index: string | null;
   via: Via | null;
+  /**
+   * 까닭의 자세한 사정 (문구만 바꾼다): classify = 종목 분류를 아직 받는 중(preparing — 목록 준비가 아님),
+   * book = 미국 테마 시세를 받지 못함(failed — 분류 받기 실패가 아님). 없으면 기본 문구
+   */
+  why?: "classify" | "book";
 }
 
 /** '리게티 컴퓨팅 주가' → '리게티 컴퓨팅' */
@@ -168,16 +175,17 @@ export function classifyHolding(x: ClassifyInput): ClassifyResult {
       if (themes.length) return done(dedupe(themes.map((t) => ({ market: "US", kind: "theme", id: t.id, name: t.title }))));
     }
     // 테마북을 처음 만드는 중인데 토스 분류는 받았으면 테마가 있을지 아직 모른다 → 준비 중 (업종으로 먼저 묶지 않는다 — 같은 종목이 나중에 다른 묶음으로 옮겨 가지 않게)
-    if (tics && tics.length && x.bookIds === null) return miss("preparing");
+    // 테마북 시세를 받지 못했을 때도 같다: 데이터 실패를 '테마 없음'으로 보고 업종으로 옮기지 않는다 → 받지 못함 (잠시 뒤 다시)
+    if (tics && tics.length && x.bookIds === null) return x.bookFailed ? { ...miss("failed"), why: "book" } : miss("preparing");
     if (x.usIndustry) return done([{ market: "US", kind: "sector", id: x.usIndustry }]);
-    if (x.pending) return miss("preparing");
+    if (x.pending) return { ...miss("preparing"), why: "classify" };
     if (x.failed || tics === null) return miss("failed");
     return miss("none");
   }
   if (x.krThemes === null) return miss("preparing");
   if (x.krThemes && x.krThemes.length) return done(dedupe(x.krThemes.map((id) => ({ market: "KR", kind: "theme", id }))));
   if (x.krIndustry) return done([{ market: "KR", kind: "sector", id: x.krIndustry }]);
-  if (x.pending) return miss("preparing");
+  if (x.pending) return { ...miss("preparing"), why: "classify" };
   if (x.failed) return miss("failed");
   return miss("none");
 }
@@ -193,7 +201,7 @@ function dedupe(gs: GroupRef[]): GroupRef[] {
 }
 
 /** 연결하지 못한 종목 한 줄 (설계 2.2 ⑥). 미국은 티커, 한국은 이름으로 시작한다 */
-export function unmappedText(reason: UnmappedReason, v: { code: string; name: string; market: HtMarket; index?: string | null }): string {
+export function unmappedText(reason: UnmappedReason, v: { code: string; name: string; market: HtMarket; index?: string | null; why?: "classify" | "book" | null }): string {
   const who = v.market === "US" ? v.code : v.name;
   switch (reason) {
     case "index":
@@ -201,8 +209,12 @@ export function unmappedText(reason: UnmappedReason, v: { code: string; name: st
     case "none":
       return `${who} · 미분류 · 테마·업종 정보가 없습니다`;
     case "failed":
+      // 분류는 받았지만 미국 테마 시세를 받지 못함 (테마가 있는지 알 수 없어 업종으로 옮기지 않음)
+      if (v.why === "book") return `${who} · 미국 테마 시세를 받지 못했습니다 (잠시 뒤 다시 시도)`;
       return `${who} · 분류를 받지 못했습니다 (잠시 뒤 다시 시도)`;
     case "preparing":
+      // 종목 분류를 아직 받는 중 (첫 요청은 3초까지만 기다린다) — 테마 목록 준비와는 다른 사정
+      if (v.why === "classify") return `${who} · 테마 분류를 받는 중입니다 (잠시 뒤 다시 보여 드립니다)`;
       return `${who} · ${v.market === "KR" ? "한국" : "미국"} 테마 목록을 처음 준비하는 중입니다 (약 2분)`;
   }
 }
@@ -319,16 +331,24 @@ export function allServerTexts(): string[] {
   const out: string[] = [];
   for (const reason of ["index", "none", "failed", "preparing"] as const)
     for (const market of ["KR", "US"] as const)
-      for (const index of [null, "나스닥100 지수", "코스피200 지수"]) out.push(unmappedText(reason, { code: "ABCD", name: "가나다", market, index }));
+      for (const index of [null, "나스닥100 지수", "코스피200 지수"])
+        for (const why of [null, "classify", "book"] as const) out.push(unmappedText(reason, { code: "ABCD", name: "가나다", market, index, why }));
   out.push(...basisLines("9월 27일 (일) 05:40"));
-  out.push(PREPARING_NOTE, MARKET_NOTE_US_BOOK, MARKET_NOTE_KR_INDEX);
+  out.push(PREPARING_NOTE, MARKET_NOTE_US_BOOK, MARKET_NOTE_KR_INDEX, MARKET_NOTE_US_BOOK_FAILED, ticsMissingNote(1), ticsMissingNote(3));
   return out;
 }
 
 /** 첫 준비 알림 줄 (설계 2.4) */
 export const PREPARING_NOTE = "테마 목록을 처음 준비하는 중입니다 (약 2분). 준비된 시장부터 보여 드립니다.";
 export const MARKET_NOTE_US_BOOK = "미국 테마를 처음 준비하는 중이라 업종으로 묶은 종목만 보여 드립니다";
-export const MARKET_NOTE_KR_INDEX = "한국 테마 목록을 처음 준비하는 중이라 업종으로 묶은 종목만 보여 드립니다";
+/** 한국 표가 없으면 한국 종목은 업종으로도 묶지 않고 모두 '준비 중'이다 (classifyHolding — 표가 생기면 테마로 옮겨 가지 않게) */
+export const MARKET_NOTE_KR_INDEX = "한국 테마 목록을 처음 준비하는 중이라 한국 종목은 준비가 끝나면 보여 드립니다";
+/** 미국 테마북 시세를 받지 못함 (만드는 중이 아닌 실패) */
+export const MARKET_NOTE_US_BOOK_FAILED = "미국 테마 시세를 받지 못해 테마로 묶지 못한 종목이 있습니다 (잠시 뒤 다시 시도)";
+/** 토스 회사 테마를 받지 못해(옛 값도 없음) 네이버 업종으로 묶은 미국 종목 수 (설계 3.1 — 5분 뒤 다시 받는다) */
+export function ticsMissingNote(n: number): string {
+  return `토스 테마 분류를 받지 못한 ${n}종목은 업종으로 묶었습니다 (잠시 뒤 다시 받습니다)`;
+}
 
 /** 서울 시각 ISO → '9월 27일 (일) 05:40' */
 export function koDateTime(iso: string): string {

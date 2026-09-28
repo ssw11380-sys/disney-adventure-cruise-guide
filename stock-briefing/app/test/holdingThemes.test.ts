@@ -13,6 +13,7 @@ import {
   marketView,
   mostView,
   rowView,
+  statusView,
   tvSpeech,
   tvText,
 } from "@/lib/holdingThemes";
@@ -113,6 +114,29 @@ describe("테마 한 줄 (설계 2.2 ⑤)", () => {
     expect(r.href).toContain("period=week&rate=2");
   });
 
+  it("1주 칩: 테마는 1주 등락률, 내 종목은 오늘 등락률 — 화면·화면 읽기 모두 '오늘'이라고 밝힌다 (기간이 섞여 보이지 않게)", () => {
+    const hbm = KR_GROUPS[0]!;
+    const w = rowView(hbm, "week");
+    expect(w.rateText).toBe("+5.10%");
+    expect(w.mineLabel).toBe("내 종목 (오늘)");
+    expect(w.holdings[0]).toMatchObject({ label: "삼성전자", rateText: "-5.00%" });
+    expect(w.speech).toBe("HBM(고대역폭메모리), 한국 테마, 1주 5.10% 상승, 오른 종목 3개, 내린 종목 0개, 보합 0개, 내 종목 오늘 등락률 삼성전자, 5.00% 하락. 누르면 발견 탭 테마 상세");
+    // 오늘 칩은 그대로 '내 종목'
+    const d = rowView(hbm, "day");
+    expect(d.mineLabel).toBe("내 종목");
+    expect(d.speech).toContain(", 내 종목 삼성전자, 5.00% 하락.");
+  });
+
+  it("거래정지 종목(설계 E10): 등락률 대신 '거래정지' (색 없음), 화면 읽기도", () => {
+    const g = { ...KR_GROUPS[0]!, holdings: [{ code: "010140", name: "삼성중공업", via: null, changeRate: null, inCalc: null, halted: true }, { code: "005930", name: "삼성전자", via: null, changeRate: null, inCalc: null }] };
+    const r = rowView(g, "day");
+    expect(r.holdings.map((h) => [h.label, h.rateText, h.rate])).toEqual([
+      ["삼성중공업", "거래정지", null],
+      ["삼성전자", "시세 없음", null],
+    ]);
+    expect(r.speech).toContain("내 종목 삼성중공업, 거래정지, 삼성전자, 시세 없음.");
+  });
+
   it("내 종목 3개 넘으면 '외 N종목', 계산 30종목 밖이면 작은 글, 인버스는 -3배", () => {
     const r = rowView(US_GROUPS[1]!, "day");
     expect(r.holdings.map((h) => h.label)).toEqual(["엔비디아", "브로드컴", "AMD"]);
@@ -143,9 +167,39 @@ describe("거래대금 문구 5상태 (설계 표 2-A)", () => {
     expect(tvSpeech(tv({ ratioPct: 134, days: 12 }))).toBe("거래대금 평소의 134퍼센트, 최근 12거래일 평균 기준");
   });
 
+  it("화면 읽기는 날짜·분수를 말로 ('9/25(금)' → '9월 25일 금요일', '(3/5거래일)' → '5거래일 중 3거래일')", () => {
+    expect(tvSpeech(tv({ state: "lastDay", ratioPct: 118, day: "2026-09-25", days: 20 }))).toBe("거래대금 9월 25일 금요일 평소의 118퍼센트");
+    expect(tvSpeech(tv({ state: "collecting", ratioPct: null, days: 3 }))).toBe("거래대금 평소 비교, 기록 모으는 중, 5거래일 중 3거래일");
+    for (const st of ["final", "partial", "lastDay", "collecting", "none"] as const) expect(tvSpeech(tv({ state: st, days: 3, ratioPct: st === "collecting" ? null : 50 }))).not.toMatch(/\d\/\d/);
+  });
+
+  it("구성 종목이 300개 넘는 업종: 합을 내지 않았다고 밝힌다 (예전 서버는 칸이 없어 지금 문구 그대로)", () => {
+    expect(tvText(tv({ state: "none", ratioPct: null, today: null, truncated: true }))).toBe("거래대금 평소 비교 없음 (구성 종목이 300개가 넘는 업종)");
+    expect(tvSpeech(tv({ state: "none", ratioPct: null, today: null, truncated: true }))).toBe("거래대금 평소 비교 없음 (구성 종목이 300개가 넘는 업종)");
+    expect(tvText(tv({ state: "none", ratioPct: null }))).toBe("거래대금 값 없음");
+  });
+
   it("날짜 짧게", () => {
     expect(dayShort("2026-09-25")).toBe("9/25(금)");
     expect(dayShort(null)).toBe("");
+  });
+});
+
+describe("상태 줄", () => {
+  it("미국 장 마감: 기준 거래일(뉴욕 날짜)과 한국 시각을 따로 밝힌다 — 거래대금 줄 날짜와 두 날짜로 보이지 않게", () => {
+    const v = statusView({ session: "closed", asOf: "2026-09-26T05:00:00+09:00", tvDay: "2026-09-25", note: null }, "US");
+    expect(v).toEqual({
+      text: "장 마감 · 미국 9/25(금) 정규장 기준 · 한국 시각 9월 26일 (토) 05:00",
+      speech: "장 마감, 미국 9월 25일 금요일 정규장 기준, 한국 시각 9월 26일 토요일 5시",
+      moving: false,
+    });
+  });
+
+  it("한국 장중·미국 장중은 지금까지처럼 (안내가 있으면 붙인다)", () => {
+    expect(statusView({ session: "regular", asOf: "2026-09-29T11:00:00+09:00", tvDay: "2026-09-29", note: null }, "KR")).toMatchObject({ text: "장중 · 1분마다 갱신 · 9월 29일 (화) 11:00 기준", moving: true });
+    expect(statusView({ session: "regular", asOf: "2026-09-29T23:00:00+09:00", tvDay: "2026-09-29", note: "안내" }, "US").text).toBe("장중 · 1분마다 갱신 · 9월 29일 (화) 23:00 기준 · 안내");
+    expect(statusView({ session: "closed", asOf: null, tvDay: null, note: null }, "US").text).toBe("장 마감 · 직전 정규장 기준");
+    expect(statusView({ session: "closed", asOf: "2026-09-29T11:00:00+09:00", tvDay: null, note: null }, "KR").speech).toBe("장 마감, 마지막 거래 기준, 9월 29일 화요일 11시 기준");
   });
 });
 
@@ -194,7 +248,16 @@ describe("계좌 한 줄 · 종목별로 보기", () => {
 
   it("종목별로 보기: '삼성전자 · 한국 테마 1개 · 한국 업종 1개' + 등락률 순", () => {
     expect(byHoldingView(D, "day")).toEqual([
-      { code: "005930", head: "삼성전자 · 한국 테마 1개 · 한국 업종 1개", items: [{ name: "HBM(고대역폭메모리)", rate: -4.12, rateText: "-4.12%" }, { name: "반도체와반도체장비", rate: -5.47, rateText: "-5.47%" }] },
+      {
+        code: "005930",
+        head: "삼성전자 · 한국 테마 1개 · 한국 업종 1개",
+        items: [
+          { name: "HBM(고대역폭메모리)", rate: -4.12, rateText: "-4.12%" },
+          { name: "반도체와반도체장비", rate: -5.47, rateText: "-5.47%" },
+        ],
+        // 한 종목 한 문장 (테마가 수십 개여도 화면 읽기가 한 번에 넘어간다)
+        speech: "삼성전자, 한국 테마 1개, 한국 업종 1개, 오늘 등락률 높은 순, HBM(고대역폭메모리) 4.12퍼센트 하락, 반도체와반도체장비 5.47퍼센트 하락",
+      },
     ]);
   });
 });
@@ -245,6 +308,11 @@ describe("계좌 브리핑 카드 (설계 2.3)", () => {
       clean(l.speech);
     }
     clean(v.basis);
+    clean(v.basisSpeech);
+  });
+
+  it("기준 줄 화면 읽기: 날짜·시각을 말로", () => {
+    expect(accountThemesView(SNAP, "08:38").basisSpeech).toBe("보유 17종목 중 15종목 연결, 미국 9월 25일 금요일 정규장, 한국 9월 23일 수요일 마감, 8시 38분 기준");
   });
 });
 

@@ -24,6 +24,11 @@ type Log = { info?: (o: unknown, m?: string) => void; warn?: (o: unknown, m?: st
 export const KR_INDEX_KEY = "holding-themes:kr-index:v1";
 /** 이보다 오래된 표는 서버를 켤 때 새로 만든다 */
 export const KR_INDEX_STALE_MS = 8 * 24 * 3_600_000;
+/**
+ * 만들기가 실패한 뒤 저절로(ensure — 화면·브리핑 요청마다 부른다) 다시 만들기 전에 쉬는 시간.
+ * 실패 뒤 곧바로 다시 하면 요청마다 전체 받기(약 265번)를 되풀이한다 (출처가 빈도 제한을 걸면 더 심해짐). 예약 작업·관리 경로(build)는 쉬지 않는다
+ */
+export const KR_INDEX_RETRY_MS = 30 * 60_000;
 
 export class KrThemeIndex {
   private data: KrThemeIndexData | null = null;
@@ -33,6 +38,8 @@ export class KrThemeIndex {
   private shrunk: number | null = null;
   /** 마지막 만들기 결과 (health 경고용) */
   lastError: string | null = null;
+  /** 마지막으로 만들기가 실패한 시각 (ensure 가 KR_INDEX_RETRY_MS 동안 다시 하지 않는다) */
+  private failedAt: number | null = null;
 
   constructor(
     private readonly deps: {
@@ -72,10 +79,11 @@ export class KrThemeIndex {
     return this.building !== null;
   }
 
-  /** 표가 없거나 maxAgeMs 보다 오래됐으면 뒤에서 만든다 (기다리지 않음) */
+  /** 표가 없거나 maxAgeMs 보다 오래됐으면 뒤에서 만든다 (기다리지 않음). 직전 만들기가 실패했으면 KR_INDEX_RETRY_MS 동안 쉰다 */
   async ensure(maxAgeMs = KR_INDEX_STALE_MS): Promise<void> {
     await this.load();
     if (this.data && this.t - this.data.builtAt < maxAgeMs) return;
+    if (this.failedAt !== null && this.t - this.failedAt < KR_INDEX_RETRY_MS) return;
     void this.build().catch(() => undefined);
   }
 
@@ -85,12 +93,14 @@ export class KrThemeIndex {
       .then(async (d) => {
         this.data = d;
         this.lastError = null;
+        this.failedAt = null;
         await this.deps.store?.set(KR_INDEX_KEY, JSON.stringify(d)).catch(() => undefined);
         this.deps.log?.info?.({ themes: Object.keys(d.themes).length, stocks: Object.keys(d.members).length }, "한국 테마 표 만듦");
         return d;
       })
       .catch((e: unknown) => {
         this.lastError = e instanceof Error ? e.message : String(e);
+        this.failedAt = this.t;
         this.deps.log?.warn?.({ err: this.lastError }, "한국 테마 표 만들기 실패 (옛 표 유지)");
         throw e;
       })

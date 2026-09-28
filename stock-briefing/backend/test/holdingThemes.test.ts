@@ -15,9 +15,11 @@ import type { AccountHolding } from "../src/services/accountNumbers.js";
 import { DiscoverService } from "../src/services/discoverService.js";
 import { FEATURES } from "../src/services/featureService.js";
 import { HoldingThemeMaps, MAPS_KEY, type MapSources } from "../src/services/holdingThemeMaps.js";
-import { themeWordingProblems, underlyingOfKind } from "../src/services/holdingThemesCalc.js";
+import { classifyHolding, MARKET_NOTE_US_BOOK_FAILED, themeWordingProblems, ticsMissingNote, underlyingOfKind } from "../src/services/holdingThemesCalc.js";
+import { metaStore } from "../src/providers/index.js";
+import { BACKUP_TABLES, restoreBackup } from "../src/services/backupService.js";
 import { HoldingThemesService, nyDate, toSnapshot, type HeldPosition, type HoldingThemesResponse } from "../src/services/holdingThemesService.js";
-import { KR_INDEX_KEY, KrThemeIndex } from "../src/services/krThemeIndex.js";
+import { KR_INDEX_KEY, KR_INDEX_RETRY_MS, KrThemeIndex } from "../src/services/krThemeIndex.js";
 import { ThemeTvHistory, tvKey } from "../src/services/themeTvHistory.js";
 import type { UsThemeBook, UsThemeBookData } from "../src/services/usThemes.js";
 import { fakeProviders } from "./helpers.js";
@@ -62,6 +64,8 @@ const BOOK: UsThemeBookData = {
 /** 미국 정규장 종가 등락률 (9/28) */
 const US_RATE: Record<string, number> = { NVDA: 1.2, AVGO: -0.3, AMD: 2, QCOM: 0.5, MSFT: 0.8, GOOGL: -1.1, META: 0.4, AAPL: -0.2, DELL: 1.5, IONQ: 6, RGTI: 6.2, QBTS: 7, QUBT: 5, ACN: 0.1, IBM: -0.4, PLTR: 2.2, ORCL: 1, SSNLF: 0, XIACF: -2, AMZN: 0.3, TSLA: -1.5, RIVN: -3, LCID: -2.5, GM: 0.2, F: 0, SOFI: 1.1, QQQ: 0.6, SOXL: 3.3, RGTX: 12.4 };
 const usQuote = (sym: string): UsQuote => ({ code: sym, name: sym, market: "NASDAQ", currency: "USD", price: 100, change: 1, changeRate: US_RATE[sym] ?? 0, volume: 1000, tradingValue: 2_000_000, marketCap: 1e9, tradedAt: "2026-09-28T16:00:00-04:00", status: "CLOSE" });
+/** 미국 시세를 바꾸는 손잡이 (테스트 중에 바꾼다): 상태·종목당 거래대금·시각·응답 지연 */
+type UsKnob = { status?: string; tv?: number; tradedAt?: string; delayMs?: number };
 
 /** 한국 테마 (id → 이름·구성) — 거꾸로 찾는 표의 원본 */
 const KR_THEMES: Array<{ id: string; name: string; members: string[]; s: [number, number, number, number] }> = [
@@ -76,7 +80,7 @@ const KR_RATE: Record<string, number> = { "005930": -5, "000660": -4.2, "042700"
 const krQuote = (code: string, day = "2026-09-29"): KrQuote => ({ code, name: code, exchange: "KS", price: 1000, changeRate: KR_RATE[code] ?? 0, tradedAt: `${day}T11:00:00+09:00`, status: "OPEN", tradingValue: 1e10 });
 const stock = (code: string, rate: number, tv: number): DiscoverStock => ({ code, name: code, market: "KOSPI", currency: "KRW", price: 1000, change: 10, changeRate: rate, volume: 100, tradingValue: tv, marketCap: 1e12 });
 
-function fakeNaver(o: { krDay?: string } = {}) {
+function fakeNaver(o: { krDay?: string; us?: UsKnob; lowTv?: string[]; bigSector?: string; halted?: string[] } = {}) {
   const calls: Record<string, number> = {};
   const count = (k: string) => (calls[k] = (calls[k] ?? 0) + 1);
   const naver = {
@@ -99,20 +103,27 @@ function fakeNaver(o: { krDay?: string } = {}) {
       }
       const list = market === "KR" ? KR_SECTORS : US_SECTORS;
       const t = list.find((x) => x.id === id);
+      // 구성 종목이 많아 등락률 상위 300종목만 오는 업종
+      if (t && id === o.bigSector) return { theme: t, description: null, items: Array.from({ length: 300 }, (_, i) => stock(`S${i}`, 1, 1e6)) };
       return t ? { theme: t, description: null, items: [stock("A", 1, 3e9), stock("B", -1, 2e9)] } : null;
     },
     usQuotes: async (codes: string[]) => {
       count("usQuotes");
+      // 받기 시작한 순간의 값 (지연 동안 손잡이가 바뀌어도 그때 값)
+      const k = { ...(o.us ?? {}) };
+      if (k.delayMs) await new Promise((r) => setTimeout(r, k.delayMs));
       const out = new Map<string, UsQuote>();
       for (const c of codes) {
         const sym = c.replace(/\.[A-Z]$/, "");
-        if (US_RATE[sym] !== undefined) out.set(c, usQuote(sym));
+        if (US_RATE[sym] === undefined) continue;
+        const q = usQuote(sym);
+        out.set(c, { ...q, ...(k.status ? { status: k.status } : {}), ...(k.tv !== undefined ? { tradingValue: k.tv } : {}), ...(k.tradedAt ? { tradedAt: k.tradedAt } : {}), ...(o.lowTv?.includes(sym) ? { tradingValue: 100_000 } : {}) });
       }
       return out;
     },
     krQuotes: async (codes: string[]) => {
       count("krQuotes");
-      return new Map(codes.filter((c) => /^\d{6}$/.test(c)).map((c) => [c, krQuote(c, o.krDay)]));
+      return new Map(codes.filter((c) => /^\d{6}$/.test(c)).map((c) => [c, { ...krQuote(c, o.krDay), ...(o.halted?.includes(c) ? { changeRate: 0, halted: true } : {}) }]));
     },
   };
   return { naver: naver as unknown as NaverDiscover, calls };
@@ -123,7 +134,11 @@ const fakeTics = {
     duration === "1w" ? US_THEMES.map((t, i) => ({ id: t.id, name: t.name, rate: i - 3, stockCount: t.members.length, leader: null })) : [],
   periodRate: async () => null,
 } as unknown as TossTics;
-const fakeBook = (building = false) => ({ get: async () => (building ? Promise.reject(new (await import("../src/services/usThemes.js")).UsThemesBuildingError()) : BOOK), summary: async () => null }) as unknown as UsThemeBook;
+const fakeBook = (building = false, fails = false) =>
+  ({
+    get: async () => (building ? Promise.reject(new (await import("../src/services/usThemes.js")).UsThemesBuildingError()) : fails ? Promise.reject(new Error("토스 테마 순위 HTTP 500")) : BOOK),
+    summary: async () => null,
+  }) as unknown as UsThemeBook;
 
 const TICS: Record<string, Array<{ id: string; title: string }>> = {
   NVDA: [{ id: "179", title: "반도체팹리스" }, { id: "823", title: "인공지능" }, { id: "209", title: "컴퓨터와 주변기기" }],
@@ -144,17 +159,19 @@ const TICS: Record<string, Array<{ id: string; title: string }>> = {
 const US_IND: Record<string, string | null> = { SOFI: "55101030", NVDA: "57101010", AVGO: "57101010", RGTI: "57101010" };
 const KR_IND: Record<string, string> = { "005930": "278", "000660": "278", "123456": "299" };
 
-function fakeSources(o: { fail?: boolean } = {}) {
+function fakeSources(o: { fail?: boolean; failTics?: Set<string>; failInd?: Set<string>; slowMs?: number } = {}) {
   const calls = { usTics: 0, usIndustry: 0, krIndustry: 0 };
   const sources: MapSources = {
     usTics: async (code) => {
       calls.usTics++;
-      if (o.fail) throw new Error("토스 실패");
+      if (o.slowMs) await new Promise((r) => setTimeout(r, o.slowMs));
+      if (o.fail || o.failTics?.has(code)) throw new Error("토스 실패");
       return TICS[code] ?? [];
     },
     usIndustry: async (code) => {
       calls.usIndustry++;
-      if (o.fail) throw new Error("네이버 실패");
+      if (o.slowMs) await new Promise((r) => setTimeout(r, o.slowMs));
+      if (o.fail || o.failInd?.has(code)) throw new Error("네이버 실패");
       return { reuters: rc(code), industry: US_IND[code] ?? null };
     },
     krIndustry: async (code) => {
@@ -174,17 +191,35 @@ const HELD: HeldPosition[] = [
   { code: "123456", name: "작은회사", value: 100_000 },
 ];
 
-async function world(o: { flag?: boolean; bookBuilding?: boolean; noIndex?: boolean; krDay?: string; now?: string; tvDays?: number; fail?: boolean; held?: HeldPosition[] } = {}) {
+async function world(
+  o: {
+    flag?: boolean;
+    bookBuilding?: boolean;
+    bookFails?: boolean;
+    noIndex?: boolean;
+    krDay?: string;
+    now?: string;
+    /** 움직이는 시계 (있으면 now 대신) */
+    clock?: { t: number };
+    usClose?: string;
+    tvDays?: number;
+    fail?: boolean;
+    held?: HeldPosition[];
+    src?: Parameters<typeof fakeSources>[0];
+    nav?: Parameters<typeof fakeNaver>[0];
+    mapWaitMs?: number;
+  } = {},
+) {
   const flags = { holdingThemes: o.flag ?? true };
   const features = { enabled: vi.fn(async (k: string) => (flags as Record<string, boolean>)[k] ?? false) };
-  const { naver, calls } = fakeNaver({ ...(o.krDay ? { krDay: o.krDay } : {}) });
+  const { naver, calls } = fakeNaver({ ...(o.krDay ? { krDay: o.krDay } : {}), ...(o.nav ?? {}) });
   const { store, m } = memStore();
-  const now = () => new Date(o.now ?? NOW);
+  const now = () => new Date(o.clock ? o.clock.t : (o.now ?? NOW));
   const discover = new DiscoverService({
     naver,
-    calendar: calendarOf(state("KR", true), state("US", false, US_CLOSE)),
+    calendar: calendarOf(state("KR", true), state("US", false, o.usClose ?? US_CLOSE)),
     now,
-    usThemes: fakeBook(o.bookBuilding),
+    usThemes: fakeBook(o.bookBuilding, o.bookFails),
     tics: fakeTics,
     store,
     bookWaitMs: 50,
@@ -203,7 +238,7 @@ async function world(o: { flag?: boolean; bookBuilding?: boolean; noIndex?: bool
     m.set(tvKey("KR"), JSON.stringify({ v: 1, days }));
     m.set(tvKey("US"), JSON.stringify({ v: 1, days: days.map((d) => ({ day: d.day, tv: { "theme:956": 4e6 } })) }));
   }
-  const src = fakeSources({ ...(o.fail ? { fail: true } : {}) });
+  const src = fakeSources({ ...(o.fail ? { fail: true } : {}), ...(o.src ?? {}) });
   const underlying = vi.fn(async (code: string, name: string) => underlyingOfKind(productKindOf(code, name, null, null)));
   const holdings = vi.fn(async () => o.held ?? HELD);
   const krIndex = new KrThemeIndex({ naver, store, now, pauseMs: 0, sleep: async () => undefined });
@@ -218,7 +253,7 @@ async function world(o: { flag?: boolean; bookBuilding?: boolean; noIndex?: bool
     underlying,
     disclaimer: "투자 판단의 책임은 본인에게 있으며, 본 서비스는 투자 권유가 아닙니다.",
     now,
-    mapWaitMs: 1_000,
+    mapWaitMs: o.mapWaitMs ?? 1_000,
     listWaitMs: 2_000,
     staleWaitMs: 50,
   });
@@ -602,6 +637,248 @@ describe("플래그 끔: 요청·계산·저장 0건", () => {
     } finally {
       await app.close();
       await db.destroy();
+    }
+  });
+});
+
+// ── 리뷰 반영 (3-35 검증) ─────────────────────────────────────
+
+describe("분류 캐시: 토스·네이버 중 한쪽만 받은 때", () => {
+  const DAY = 24 * 3_600_000;
+
+  it("토스만 실패: 업종으로 묶되 받은 시각(at)을 새로 하지 않고 5분 뒤 다시 받는다 — 7일 동안 굳지 않는다", async () => {
+    const clock = { t: Date.parse(NOW) };
+    const failTics = new Set(["NVDA"]);
+    const { store, m } = memStore();
+    const src = fakeSources({ failTics });
+    const maps = new HoldingThemeMaps({ sources: src.sources, store, now: () => new Date(clock.t) });
+    let got = (await maps.lookup(["NVDA"])).get("NVDA")!;
+    expect(got.item).toMatchObject({ tics: null, industry: "57101010", at: 0, missing: ["tics"], partialAt: clock.t });
+    // 저장본(meta)에도 '한쪽만'이 남는다 — 서버를 다시 켜도 5분 뒤 다시 받는다
+    expect((JSON.parse(m.get(MAPS_KEY)!) as { items: Record<string, unknown> }).items["NVDA"]).toMatchObject({ at: 0, partialAt: clock.t, missing: ["tics"] });
+    // 옛 값이 없으니 설계 3.1 대로 업종으로 (그 사이만)
+    const cls = (it: typeof got.item) => classifyHolding({ code: "NVDA", name: "NVDA", market: "US", underlying: null, bookIds: new Set(["179", "823", "209"]), usTics: it!.tics, usIndustry: it!.industry });
+    expect(cls(got.item).groups.map((g) => g.kind + ":" + g.id)).toEqual(["sector:57101010"]);
+    // 5분 안: 다시 부르지 않는다
+    clock.t += 4 * 60_000;
+    await maps.lookup(["NVDA"]);
+    expect(src.calls.usTics).toBe(1);
+    // 5분 뒤 토스가 돌아오면: 테마로, 받은 시각은 지금
+    failTics.clear();
+    clock.t += 2 * 60_000;
+    got = (await maps.lookup(["NVDA"])).get("NVDA")!;
+    expect(src.calls.usTics).toBe(2);
+    expect(got.item!.tics!.map((t) => t.id)).toEqual(["179", "823", "209"]);
+    expect(got.item!.at).toBe(clock.t);
+    expect(got.item).not.toHaveProperty("partialAt");
+    expect(cls(got.item).groups.map((g) => g.kind + ":" + g.id)).toEqual(["theme:179", "theme:823", "theme:209"]);
+    // 그 뒤로는 7일 캐시
+    clock.t += 3 * DAY;
+    await maps.lookup(["NVDA"]);
+    expect(src.calls.usTics).toBe(2);
+  });
+
+  it("네이버만 실패: 옛 로이터 코드·업종은 그대로 두고 받은 시각도 옛 값 그대로, 옛 값이 없으면 null 로 두고 5분 뒤 다시 (테마북 밖 ETF 가 7일 동안 '시세 없음'으로 굳지 않음)", async () => {
+    const clock = { t: Date.parse(NOW) };
+    const failInd = new Set(["SOFI", "QQQ"]);
+    const { store, m } = memStore();
+    const oldAt = clock.t - 8 * DAY;
+    m.set(MAPS_KEY, JSON.stringify({ v: 1, items: { SOFI: { at: oldAt, tics: [], industry: "55101030", reuters: "SOFI.O", askedAt: oldAt } } }));
+    const src = fakeSources({ failInd });
+    const maps = new HoldingThemeMaps({ sources: src.sources, store, now: () => new Date(clock.t) });
+    const got = await maps.lookup(["SOFI", "QQQ"]);
+    expect(got.get("SOFI")!.item).toMatchObject({ at: oldAt, tics: [{ id: "97", title: "금융" }], industry: "55101030", reuters: "SOFI.O", missing: ["industry"] });
+    expect(got.get("QQQ")!.item).toMatchObject({ at: 0, reuters: null, industry: null, missing: ["industry"] });
+    failInd.clear();
+    clock.t += 6 * 60_000;
+    const again = await maps.lookup(["SOFI", "QQQ"]);
+    expect(again.get("QQQ")!.item).toMatchObject({ at: clock.t, reuters: "QQQ.O" });
+    expect(again.get("QQQ")!.item).not.toHaveProperty("missing");
+    expect(src.calls.usIndustry).toBe(4);
+  });
+
+  it("서비스: 토스만 실패한 종목은 업종으로 묶고 시장 안내에 밝히며, 응답을 짧게(60초) 캐시해 5분 뒤 다시 받은 테마로 바뀐다", async () => {
+    const clock = { t: Date.parse(NOW) };
+    const failTics = new Set(["NVDA"]);
+    const { svc, src } = await world({ clock, src: { failTics } });
+    // 미국만 (장 마감 — 예전에는 10분 캐시)
+    const held: HeldPosition[] = [
+      { code: "NVDA", name: "엔비디아", value: 2 },
+      { code: "AAPL", name: "애플", value: 1 },
+    ];
+    const keysOf = (r: HoldingThemesResponse) => r.groups.filter((g) => g.holdings.some((h) => h.code === "NVDA")).map((g) => g.key);
+    const r1 = await svc.forHoldings(held);
+    expect(keysOf(r1)).toEqual(["US:sector:57101010"]);
+    expect(r1.markets.US!.note).toContain(ticsMissingNote(1));
+    failTics.clear();
+    clock.t += 6 * 60_000;
+    await svc.forHoldings(held);
+    await vi.waitFor(async () => expect(keysOf(await svc.forHoldings(held)).sort()).toEqual(["US:theme:179", "US:theme:209", "US:theme:823"]));
+    expect((await svc.forHoldings(held)).markets.US!.note ?? "").not.toContain("토스 테마 분류");
+    expect(src.calls.usTics).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("미국 테마북 시세 실패 · 안내 문구 · 거래정지", () => {
+  it("테마북 시세를 받지 못하면(만드는 중이 아님) 토스 분류가 있는 종목을 업종으로 옮기지 않고 '받지 못함' + 시장 안내, 짧게 캐시", async () => {
+    const { svc } = await world({ bookFails: true });
+    const r = await svc.forHoldings(HELD);
+    expect(r.markets.US).toMatchObject({ preparing: false });
+    expect(r.markets.US!.note).toContain(MARKET_NOTE_US_BOOK_FAILED);
+    expect(r.groups.some((g) => g.holdings.some((h) => h.code === "NVDA"))).toBe(false);
+    expect(r.coverage.unmapped.find((u) => u.code === "NVDA")).toMatchObject({ reason: "failed", text: "NVDA · 미국 테마 시세를 받지 못했습니다 (잠시 뒤 다시 시도)" });
+    // 지수 상품 표 묶음은 그대로
+    expect(r.groups.find((g) => g.key === "US:sector:57101010")!.holdings.map((h) => h.code)).toContain("SOXL");
+    expect(themeWordingProblems(r.markets.US!.note!)).toEqual([]);
+  });
+
+  it("미국 테마 목록의 '거래대금 100만 달러 미만 테마 N개 제외'는 옮기지 않는다 (이 화면은 그 테마도 '발견 탭 목록에는 없는 테마'로 보인다)", async () => {
+    const { svc, discover } = await world({ nav: { lowTv: ["AAPL", "SSNLF", "XIACF"] } });
+    expect((await discover.themes("US", "theme", "day")).note).toContain("1개 제외");
+    const r = await svc.forHoldings(HELD);
+    expect(r.markets.US!.note ?? "").not.toContain("제외");
+    expect(r.groups.find((g) => g.key === "US:theme:203")!.inDiscoverList).toBe(false);
+  });
+
+  it("분류를 기다리는 시간 안에 못 받은 종목은 '테마 분류를 받는 중' (목록 준비 문구가 아님)", async () => {
+    const held: HeldPosition[] = [{ code: "NVDA", name: "엔비디아", value: 1 }];
+    const { svc } = await world({ src: { slowMs: 300 }, mapWaitMs: 20, held });
+    const r = await svc.forHoldings(held);
+    expect(r.markets.US!.preparing).toBe(false);
+    expect(r.coverage.unmapped).toEqual([{ code: "NVDA", name: "엔비디아", market: "US", reason: "preparing", text: "NVDA · 테마 분류를 받는 중입니다 (잠시 뒤 다시 보여 드립니다)" }]);
+  });
+
+  it("한국 표를 준비하는 동안의 시장 안내는 사실대로 (한국 종목은 업종으로도 묶지 않음)", async () => {
+    const { svc } = await world({ noIndex: true });
+    const r = await svc.forHoldings(HELD);
+    expect(r.markets.KR!.note).toContain("한국 종목은 준비가 끝나면 보여 드립니다");
+    expect(r.groups.filter((g) => g.market === "KR")).toEqual([]);
+  });
+
+  it("거래정지 한국 종목(설계 E10): 등락률 대신 halted — 출처 tradeStopType 으로 가린다", async () => {
+    const { svc } = await world({ nav: { halted: ["000660"] } });
+    const r = await svc.forHoldings(HELD);
+    const hbm = r.groups.find((g) => g.key === "KR:theme:543")!;
+    expect(hbm.holdings.find((h) => h.code === "000660")).toMatchObject({ changeRate: null, halted: true });
+    expect(hbm.holdings.find((h) => h.code === "005930")).not.toHaveProperty("halted");
+    const { NaverDiscover: ND } = await import("../src/providers/market/naverDiscover.js");
+    const row = (code: string, stop: string) => ({ itemCode: code, stockName: code, closePriceRaw: "1000", fluctuationsRatioRaw: "0", compareToPreviousClosePriceRaw: "0", localTradedAt: "2026-09-29T11:00:00+09:00", marketStatus: "OPEN", tradeStopType: { name: stop }, stockExchangeType: { code: "KS" } });
+    const f = (async () => new Response(JSON.stringify({ datas: [row("010140", "HALT"), row("005930", "TRADING")] }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const q = await new ND(f).krQuotes(["010140", "005930"]);
+    expect(q.get("010140")).toMatchObject({ halted: true });
+    expect(q.get("005930")).not.toHaveProperty("halted");
+  });
+});
+
+describe("거래대금 기록: 캐시를 거치지 않은 장 마감 값만", () => {
+  it("16:15 기록 때 장중(15:50) 캐시가 있고 출처가 느려도 캐시 값을 그날 확정 값으로 적지 않는다", async () => {
+    const clock = { t: Date.parse("2026-09-28T15:50:00-04:00") };
+    const us: UsKnob = { status: "OPEN", tv: 1_000_000, tradedAt: "2026-09-28T15:50:00-04:00" };
+    const { svc, discover, m } = await world({ clock, nav: { us }, tvDays: 0, held: [] });
+    // 15:50: 발견 탭·기간 등락률 저장 작업이 장중 값으로 캐시를 채운다
+    expect([...(await discover.usThemeBookQuotes())!.quotes.values()][0]!.status).toBe("OPEN");
+    // 16:15: 확정 값은 더 크고, 출처가 캐시 기다림(50ms)보다 느리게 답한다
+    clock.t = Date.parse("2026-09-28T16:15:00-04:00");
+    Object.assign(us, { status: "CLOSE", tv: 1_600_000, tradedAt: "2026-09-28T16:00:00-04:00", delayMs: 200 });
+    expect(await svc.recordTv("US")).toMatchObject({ day: "2026-09-28", skipped: null });
+    const saved = JSON.parse(m.get(tvKey("US"))!) as { days: Array<{ day: string; tv: Record<string, number> }> };
+    expect(saved.days.find((d) => d.day === "2026-09-28")!.tv["theme:956"]).toBe(4 * 1_600_000);
+  });
+
+  it("지금 받은 값에 장중(OPEN) 종목이 있으면 적지 않고, 16:45 다시 시도(onlyIfMissing)에서 적는다 · 이미 적었으면 요청 0건", async () => {
+    const clock = { t: Date.parse("2026-09-28T16:15:00-04:00") };
+    const us: UsKnob = { status: "OPEN", tv: 1_500_000 };
+    const { svc, m, calls } = await world({ clock, nav: { us }, tvDays: 0, held: [] });
+    expect(await svc.recordTv("US")).toMatchObject({ recorded: 0, skipped: "장이 끝난 값 아님" });
+    expect(m.get(tvKey("US"))).toBeUndefined();
+    clock.t = Date.parse("2026-09-28T16:45:00-04:00");
+    us.status = "CLOSE";
+    expect(await svc.recordTv("US", { onlyIfMissing: true })).toMatchObject({ day: "2026-09-28", skipped: null });
+    const n = calls["usQuotes"];
+    expect(await svc.recordTv("US", { onlyIfMissing: true })).toMatchObject({ recorded: 0, skipped: "이미 적음" });
+    expect(calls["usQuotes"]).toBe(n);
+  });
+
+  it("조기 폐장(2026-11-27 금, 13:00 EST): 16:15 기록은 그날(뉴욕 날짜) 확정 값", async () => {
+    const clock = { t: Date.parse("2026-11-27T16:15:00-05:00") };
+    const { svc, m } = await world({ clock, usClose: "2026-11-27T18:00:00.000Z", nav: { us: { tradedAt: "2026-11-27T13:00:00-05:00" } }, tvDays: 0, held: [] });
+    expect(nyDate(new Date(clock.t))).toBe("2026-11-27");
+    expect(await svc.recordTv("US")).toMatchObject({ day: "2026-11-27", skipped: null });
+    const saved = JSON.parse(m.get(tvKey("US"))!) as { days: Array<{ day: string; tv: Record<string, number> }> };
+    expect(saved.days.find((d) => d.day === "2026-11-27")!.tv["theme:956"]).toBe(8e6);
+  });
+
+  it("업종 기록은 발견 탭 캐시를 거치지 않고 지금 값, 구성 종목이 300개 이상(잘림)인 업종은 적지도 비율을 내지도 않는다", async () => {
+    const { svc, discover, m, calls } = await world({ now: "2026-09-29T20:10:00+09:00" });
+    await discover.theme("KR", "sector", "299"); // 발견 탭 캐시를 채워 둠
+    const before = calls["sectorDetail:KR:sector"] ?? 0;
+    await svc.recordTv("KR");
+    expect(calls["sectorDetail:KR:sector"]).toBe(before + 1);
+    const big = await world({ now: "2026-09-29T20:10:00+09:00", nav: { bigSector: "299" } });
+    await big.svc.recordTv("KR");
+    const today = (JSON.parse(big.m.get(tvKey("KR"))!) as { days: Array<{ day: string; tv: Record<string, number> }> }).days.find((d) => d.day === "2026-09-29")!;
+    expect(today.tv).not.toHaveProperty("sector:299");
+    expect(today.tv).toHaveProperty("theme:543");
+    const r = await (await world({ nav: { bigSector: "299" } })).svc.forHoldings(HELD);
+    expect(r.groups.find((g) => g.key === "KR:sector:299")!.tradingValue).toMatchObject({ state: "none", ratioPct: null, today: null, truncated: true });
+    expect(m).toBeTruthy();
+  });
+});
+
+describe("한국 테마 표: 실패 뒤 쉬는 시간", () => {
+  it("만들기가 실패하면 30분 동안 ensure(화면·브리핑 요청마다)가 다시 만들지 않는다 — 예약 작업(build)은 그대로", async () => {
+    const clock = { t: Date.parse(NOW) };
+    const { store, m } = memStore();
+    const themes = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [String(i), "t" + i]));
+    m.set(KR_INDEX_KEY, JSON.stringify({ v: 1, builtAt: clock.t - 9 * 24 * 3_600_000, themes, members: { "005930": ["1"] } }));
+    let detail = 0;
+    const naver = {
+      sectors: async () => Array.from({ length: 20 }, (_, i) => theme(String(i), "t" + i, 0, 0, 0, 0)),
+      sectorDetail: async (_m: string, _k: string, id: string) => {
+        detail++;
+        if (Number(id) % 10 < 3) throw new Error("HTTP 429"); // 30% 실패 → 10% 넘어 옛 표 유지
+        return { theme: theme(id, id, 0, 0, 0, 0), description: null, items: [stock("005930", 0, 1)] };
+      },
+    } as unknown as NaverDiscover;
+    const idx = new KrThemeIndex({ naver, store, now: () => new Date(clock.t), pauseMs: 0, sleep: async () => undefined });
+    for (let i = 0; i < 5; i++) {
+      await idx.ensure();
+      await vi.waitFor(() => expect(idx.isBuilding).toBe(false));
+    }
+    expect(detail).toBe(20); // 한 번만
+    expect(idx.status().error).toContain("실패가 많습니다");
+    clock.t += KR_INDEX_RETRY_MS + 60_000;
+    await idx.ensure();
+    await vi.waitFor(() => expect(idx.isBuilding).toBe(false));
+    expect(detail).toBe(40);
+    await expect(idx.build()).rejects.toThrow(); // 예약 작업·관리 경로는 쉬지 않는다
+    expect(detail).toBe(60);
+  });
+});
+
+describe("백업 → 복구 (meta 키 그대로)", () => {
+  it("한국 테마 표·분류·거래대금 기록 키가 복구 뒤 그대로이고, 새 서비스가 복구본을 읽는다", async () => {
+    const a = await world();
+    await a.svc.forHoldings(HELD);
+    expect(await a.svc.recordTv("KR")).toMatchObject({ skipped: null });
+    const keys = [KR_INDEX_KEY, MAPS_KEY, tvKey("KR"), tvKey("US")];
+    for (const k of keys) expect(a.m.has(k), k).toBe(true);
+    const db = await createMigratedDb(":memory:");
+    const fresh = await createMigratedDb(":memory:");
+    try {
+      for (const k of keys) await metaStore(db).set(k, a.m.get(k)!);
+      expect(BACKUP_TABLES).toContain("meta");
+      const rows = await db.selectFrom("meta").selectAll().execute();
+      expect((await restoreBackup(fresh, "sqlite", { version: 1, createdAt: "x", tables: { meta: rows as unknown as Record<string, unknown>[] } }))["meta"]).toBe(rows.length);
+      const back = metaStore(fresh);
+      for (const k of keys) expect(await back.get(k), k).toBe(a.m.get(k));
+      expect((await new KrThemeIndex({ naver: a.naver, store: back, now: () => new Date(NOW) }).get())!.themes).toHaveProperty("543");
+      expect((await new ThemeTvHistory({ store: back }).days("KR")).some((d) => d.day === "2026-09-29")).toBe(true);
+      const maps = new HoldingThemeMaps({ sources: fakeSources({ fail: true }).sources, store: back, now: () => new Date(NOW) });
+      expect((await maps.lookup(["NVDA"])).get("NVDA")!.item!.tics!.map((t) => t.id)).toEqual(["179", "823", "209"]);
+    } finally {
+      await db.destroy();
+      await fresh.destroy();
     }
   });
 });

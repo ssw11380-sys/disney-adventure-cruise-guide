@@ -9,7 +9,10 @@ import {
   INDEX_PRODUCTS,
   krIndexEtf,
   koDateTime,
+  MARKET_NOTE_KR_INDEX,
+  MARKET_NOTE_US_BOOK_FAILED,
   mostHeld,
+  ticsMissingNote,
   pushTvDay,
   themeWordingProblems,
   topBottom,
@@ -120,6 +123,25 @@ describe("종목 → 묶음 고르기 (설계 3.1)", () => {
     expect(classifyHolding(us("NVDA", { bookIds: null })).reason).toBe("preparing");
     // 토스 분류가 없으면 업종으로
     expect(classifyHolding(us("SOFI", { bookIds: null, usTics: [] })).groups[0]!.kind).toBe("sector");
+  });
+
+  it("미국 테마북 시세를 받지 못함(만드는 중이 아닌 실패): 토스 분류가 있는 종목은 업종으로 옮기지 않고 '받지 못함' (시세 문구)", () => {
+    const r = classifyHolding(us("NVDA", { bookIds: null, bookFailed: true }));
+    expect(r).toMatchObject({ groups: [], reason: "failed", why: "book" });
+    expect(unmappedText(r.reason!, { code: "NVDA", name: "NVDA", market: "US", why: r.why ?? null })).toBe("NVDA · 미국 테마 시세를 받지 못했습니다 (잠시 뒤 다시 시도)");
+    // 토스 분류가 없는 종목(업종만)·지수 상품 표는 그대로 업종
+    expect(classifyHolding(us("SOFI", { bookIds: null, bookFailed: true, usTics: [] })).groups[0]!.id).toBe("55101030");
+    expect(classifyHolding(us("SOXL", { bookIds: null, bookFailed: true })).groups[0]!.id).toBe("57101010");
+  });
+
+  it("분류를 아직 받는 중(3초 안에 못 받음)은 목록 준비와 다른 문구", () => {
+    const r = classifyHolding(us("ABCD", { usTics: undefined, usIndustry: undefined, pending: true }));
+    expect(r).toMatchObject({ reason: "preparing", why: "classify" });
+    expect(unmappedText("preparing", { code: "ABCD", name: "ABCD", market: "US", why: r.why ?? null })).toBe("ABCD · 테마 분류를 받는 중입니다 (잠시 뒤 다시 보여 드립니다)");
+    const k = classifyHolding(kr("123456", "작은회사", { krThemes: [], krIndustry: undefined, pending: true }));
+    expect(unmappedText("preparing", { code: "123456", name: "작은회사", market: "KR", why: k.why ?? null })).toBe("작은회사 · 테마 분류를 받는 중입니다 (잠시 뒤 다시 보여 드립니다)");
+    // 한국 표를 처음 만드는 중은 목록 준비 문구 그대로
+    expect(classifyHolding(kr("005930", "삼성전자", { krThemes: null })).why).toBeUndefined();
   });
 
   it("분류를 받는 중·받지 못함·없음", () => {
@@ -300,6 +322,13 @@ describe("문구 (설계 2.6)", () => {
     expect(unmappedText("none", { code: "ABCD", name: "ABCD", market: "US" })).toBe("ABCD · 미분류 · 테마·업종 정보가 없습니다");
     expect(unmappedText("failed", { code: "ABCD", name: "ABCD", market: "US" })).toBe("ABCD · 분류를 받지 못했습니다 (잠시 뒤 다시 시도)");
     expect(unmappedText("preparing", { code: "005930", name: "삼성전자", market: "KR" })).toBe("삼성전자 · 한국 테마 목록을 처음 준비하는 중입니다 (약 2분)");
+  });
+
+  it("시장 안내 줄이 사실과 같다: 한국 표를 준비하는 동안 한국 종목은 업종으로도 묶지 않는다", () => {
+    expect(MARKET_NOTE_KR_INDEX).toBe("한국 테마 목록을 처음 준비하는 중이라 한국 종목은 준비가 끝나면 보여 드립니다");
+    expect(classifyHolding(kr("005930", "삼성전자", { krThemes: null, krIndustry: "278" })).groups).toEqual([]);
+    expect(ticsMissingNote(2)).toBe("토스 테마 분류를 받지 못한 2종목은 업종으로 묶었습니다 (잠시 뒤 다시 받습니다)");
+    for (const t of [MARKET_NOTE_KR_INDEX, MARKET_NOTE_US_BOOK_FAILED, ticsMissingNote(2)]) expect(themeWordingProblems(t), t).toEqual([]);
   });
 
   it("기준 줄: 한국 테마 구성을 받은 시각이 있을 때만 마지막 줄", () => {

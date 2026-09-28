@@ -565,11 +565,14 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
       const idxTask = cron.schedule("40 5 * * 0", () => void ht.rebuildKrIndex().catch((e: unknown) => app.log.warn({ err: String(e) }, "한국 테마 표 주간 갱신 실패")), { timezone: "Asia/Seoul", name: "holding-themes-kr-index" });
       const krTv = cron.schedule("10 20 * * 1-5", () => void ht.recordTv("KR").catch((e: unknown) => app.log.warn({ err: String(e) }, "한국 테마 거래대금 기록 실패")), { timezone: "Asia/Seoul", name: "holding-themes-kr-tv" });
       const usTv = cron.schedule("15 16 * * 1-5", () => void ht.recordTv("US").catch((e: unknown) => app.log.warn({ err: String(e) }, "미국 테마 거래대금 기록 실패")), { timezone: "America/New_York", name: "holding-themes-us-tv" });
+      // 16:15 에 아직 장이 끝난 값이 아니어서(출처 상태 OPEN) 건너뛰었으면 한 번 더 (적었으면 요청 0건)
+      const usTvRetry = cron.schedule("45 16 * * 1-5", () => void ht.recordTv("US", { onlyIfMissing: true }).catch((e: unknown) => app.log.warn({ err: String(e) }, "미국 테마 거래대금 기록 실패")), { timezone: "America/New_York", name: "holding-themes-us-tv-retry" });
       app.addHook("onClose", async () => {
         clearTimeout(warm);
         void idxTask.stop();
         void krTv.stop();
         void usTv.stop();
+        void usTvRetry.stop();
       });
     }
   }

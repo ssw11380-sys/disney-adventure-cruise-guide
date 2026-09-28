@@ -31,7 +31,10 @@ export function AccountThemesCard({ s, asOfClock }: { s: HoldingThemesSnapshot; 
           {l.tail ? <Text style={[styles.text, { color: t.muted }]}>{l.tail}</Text> : null}
         </View>
       ))}
-      <Muted style={{ fontSize: font.tiny }}>{v.basis}</Muted>
+      {/* 화면 읽기는 날짜·시각을 말로 ('9/26(금)' → '9월 26일 금요일', '08:38' → '8시 38분') */}
+      <View accessible accessibilityLabel={v.basisSpeech}>
+        <Muted style={{ fontSize: font.tiny }}>{v.basis}</Muted>
+      </View>
       <View style={styles.actions}>
         <Button title={v.button} icon="pricetags-outline" variant="secondary" compact accessibilityLabel={`${v.button}, 내 종목 테마 화면`} onPress={() => router.push("/portfolio/themes")} />
       </View>

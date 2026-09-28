@@ -2,15 +2,16 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { useFeature, useHoldingThemes } from "@/api/hooks";
 import type { HoldingThemes, HtMarket, HtMarketInfo } from "@/api/types";
 import { StaleBanner, usePull } from "@/components/Freshness";
 import { HoldingThemeRow } from "@/components/HoldingThemeRow";
 import { Disclaimer, Screen } from "@/components/Screen";
 import { Button, Chip, Empty, Loading } from "@/components/ui";
-import { formatDateKo } from "@/lib/format";
 import {
+  ALL_FOLD_OVER,
+  ALL_SHOWN,
   BOTTOM_TITLE,
   BY_HOLDING_TITLE,
   byHoldingView,
@@ -21,27 +22,34 @@ import {
   ERROR_TITLE,
   marketChips,
   marketView,
+  moreRowsText,
   mostView,
+  noneLinkedText,
   OFF_TITLE,
   PERIOD_LABEL,
   PREPARING_LINE,
+  statusView,
   TOP_TITLE,
   UNMAPPED_TITLE,
   type HtPeriod,
   type ThemeRowView,
 } from "@/lib/holdingThemes";
 import { useFoldLayout } from "@/lib/useFoldLayout";
-import { isWide } from "@/lib/windowClass";
-import { changeColor, font, layout, space, touch, useTheme } from "@/theme";
+import { isWide, listPaneWidth } from "@/lib/windowClass";
+import { changeColor, font, layout, space, touch, useFontScale, useTheme } from "@/theme";
 
 /**
  * 내 종목 테마 (3-35, 플래그 holdingThemes — 잔고 탭 '테마' 버튼·계좌 브리핑 카드의 '지금 기준으로 전체 보기').
  * 위에서부터: 많이 속한 테마 한 줄 → 시장·기간 칩 → 상태 줄 → 등락률 높은/낮은 3개(묶음 6개 이상) → 내 테마 전체 → 연결하지 못한 종목 → 종목별로 보기 → 기준.
  * 숫자는 서버가 발견 탭 값을 그대로 옮긴 것. 사실만 (판단·권유 없음), 색은 등락률 글자에만.
- * 플래그가 꺼져 있으면 요청하지 않는다(화면 작업 0건). 넓은 창(폭 840 이상)은 왼쪽 칸(요약·칩·높은/낮은 3개)과 오른쪽 칸(전체 이하)이 따로 스크롤,
- * 폭 600~839 는 한 단에 높은/낮은 3개만 두 칸 나란히
+ * 플래그가 꺼져 있으면 요청하지 않는다(화면 작업 0건). 넓은 창(폭 840 이상)은 왼쪽 칸(요약·칩·높은/낮은 3개)과 오른쪽 칸(전체 이하)이 따로 스크롤
+ * (두 칸 모두 당겨서 새로고침 — 장이 닫혀 있으면 저절로 다시 받지 않는다, 왼쪽 칸은 글자 배율만큼 넓힌다),
+ * 폭 600~839 는 한 단에 높은/낮은 3개만 두 칸 나란히 (칸 최소 300 × 글자 배율 — 큰 글씨는 위아래).
+ * 테마·업종에 연결한 종목이 하나도 없으면 카드 제목·칩 없이 한 줄 안내 + 연결하지 못한 종목. 내 테마가 12개를 넘으면 앞 10개 + '나머지 N개 더 보기'
  */
 const PREFS_KEY = "holdingThemes.chips.v1";
+/** 높은·낮은 3개를 두 칸으로 둘 때 칸 최소 폭 (글자 배율을 곱한다) */
+const PAIR_MIN = 300;
 
 export default function HoldingThemesScreen() {
   const on = useFeature("holdingThemes", false);
@@ -126,6 +134,7 @@ function ThemesBody() {
 
 function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.ReactNode; pulling: boolean; onPull: () => void }) {
   const t = useTheme();
+  const fontScale = useFontScale();
   const [prefs, savePrefs] = useChipPrefs();
   const fold = useFoldLayout();
   const wide = fold.on && isWide(fold);
@@ -137,6 +146,8 @@ function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.
   const most = mostView(d);
   const byHolding = useMemo(() => byHoldingView(d, period), [d, period]);
   const [openByHolding, setOpenByHolding] = useState(false);
+  /** 내 테마 전체를 모두 펼쳤는지 (ALL_FOLD_OVER 개를 넘을 때만 접는다) */
+  const [showAll, setShowAll] = useState(false);
   const info: HtMarketInfo | undefined = market ? d.markets[market] : undefined;
   const preparing = Object.values(d.markets).some((m) => m?.preparing);
 
@@ -153,21 +164,22 @@ function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.
   const goGroup = (key: string) => {
     const g = d.groups.find((x) => x.key === key);
     if (g && g.market !== market) savePrefs({ market: g.market });
+    // 접힌 줄로 가려면 먼저 펼친다
+    setShowAll(true);
     // 칩을 바꾼 뒤 줄이 자리를 잡을 때까지 한 틀 기다린다
     setTimeout(() => scrollTo(`row:${key}`), 80);
   };
 
   const mostCard = (
     <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.line }]}>
-      <View accessible accessibilityLabel={most.speech}>
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} accessibilityRole="header">
-          {most.title}
-        </Text>
-      </View>
+      {/* 제목은 머리(header)만 — 조각 버튼·연결 줄이 따로 읽히므로 묶어 한 번 더 읽지 않는다 */}
+      <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} accessibilityRole="header">
+        {most.title}
+      </Text>
       <View style={styles.wrapRow}>
         {most.parts.map((p, i) => (
           <Pressable key={p.key} onPress={() => goGroup(p.key)} accessibilityRole="button" accessibilityLabel={`${p.text}, 그 테마 줄로 이동`} hitSlop={{ top: space.sm, bottom: space.sm, left: 0, right: 0 }} style={styles.partBtn}>
-            <Text style={{ color: t.ink, fontSize: font.body }}>
+            <Text style={{ color: t.ink, fontSize: font.body, flexShrink: 1 }}>
               {p.text}
               {i < most.parts.length - 1 ? " ·" : ""}
             </Text>
@@ -220,14 +232,30 @@ function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.
     </View>
   );
 
+  // 높은·낮은 3개 두 칸: 칸 최소 폭도 글자 배율만큼 (큰 글씨에서 '보/합 0'처럼 낱말 가운데가 끊기지 않게 — 안 되면 위아래)
+  const pairCell = wide && !twoCol ? [styles.pairCell, { flexBasis: Math.round(PAIR_MIN * fontScale) }] : undefined;
   const topBottom =
     view && view.split ? (
       <View style={wide && !twoCol ? styles.pair : undefined}>
-        <View style={wide && !twoCol ? styles.pairCell : undefined}>{section(TOP_TITLE, view.top, "top")}</View>
-        <View style={wide && !twoCol ? styles.pairCell : undefined}>{section(BOTTOM_TITLE, view.bottom, "bottom")}</View>
+        <View style={pairCell}>{section(TOP_TITLE, view.top, "top")}</View>
+        <View style={pairCell}>{section(BOTTOM_TITLE, view.bottom, "bottom")}</View>
       </View>
     ) : null;
-  const all = view && view.rows.length ? section(view.allTitle, view.rows, "all") : null;
+  const folded = !!view && view.rows.length > ALL_FOLD_OVER && !showAll;
+  const allRows = view ? (folded ? view.rows.slice(0, ALL_SHOWN) : view.rows) : [];
+  const allBlock = view && view.rows.length ? section(view.allTitle, allRows, "all") : null;
+  const all =
+    allBlock && folded ? (
+      <>
+        {allBlock}
+        <Pressable onPress={() => setShowAll(true)} accessibilityRole="button" accessibilityLabel={moreRowsText(view!.rows.length - ALL_SHOWN)} style={[styles.moreBtn, { borderBottomColor: t.line, backgroundColor: t.surface }]}>
+          <Text style={{ color: t.accent, fontSize: font.small, fontWeight: "600" }}>{moreRowsText(view!.rows.length - ALL_SHOWN)}</Text>
+          <Ionicons name="chevron-down" size={font.small} color={t.accent} />
+        </Pressable>
+      </>
+    ) : (
+      allBlock
+    );
 
   const unmapped = d.coverage.unmapped.length ? (
     <View style={[styles.section, { borderColor: t.line, backgroundColor: t.surface }]} onLayout={place("unmapped")}>
@@ -244,13 +272,15 @@ function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.
 
   const byHoldingBlock = byHolding.length ? (
     <View style={[styles.section, { borderColor: t.line, backgroundColor: t.surface }]}>
-      <Pressable onPress={() => setOpenByHolding((v) => !v)} accessibilityRole="button" accessibilityLabel={`${BY_HOLDING_TITLE}, ${openByHolding ? "펼쳐짐" : "접힘"}`} accessibilityState={{ expanded: openByHolding }} style={styles.toggle}>
+      {/* 펼침 상태는 accessibilityState 로만 (이름에 또 넣으면 두 번 읽는다) */}
+      <Pressable onPress={() => setOpenByHolding((v) => !v)} accessibilityRole="button" accessibilityLabel={BY_HOLDING_TITLE} accessibilityState={{ expanded: openByHolding }} style={styles.toggle}>
         <Text style={[styles.sectionTitle, { color: t.ink, paddingHorizontal: 0 }]}>{BY_HOLDING_TITLE}</Text>
         <Ionicons name={openByHolding ? "chevron-up" : "chevron-down"} size={font.body} color={t.muted} />
       </Pressable>
       {openByHolding
         ? byHolding.map((h) => (
-            <View key={h.code} style={[styles.byRow, { borderTopColor: t.line }]}>
+            // 한 종목 한 문장 (삼성전자처럼 테마가 수십 개여도 화면 읽기가 한 번에 넘어간다)
+            <View key={h.code} accessible accessibilityLabel={h.speech} style={[styles.byRow, { borderTopColor: t.line }]}>
               <Text style={{ color: t.ink, fontSize: font.small, fontWeight: "600" }}>{h.head}</Text>
               <View style={styles.wrapRow}>
                 {h.items.map((it, i) => (
@@ -276,23 +306,37 @@ function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.
     </View>
   );
   const prepLine = preparing ? <Text style={[styles.prep, { color: t.warn, borderColor: t.line }]}>{PREPARING_LINE}</Text> : null;
-  const empty = !view ? <Text style={[styles.prep, { color: t.muted }]}>테마·업종에 연결한 보유 종목이 없습니다.</Text> : null;
+
+  if (!d.groups.length) {
+    // 연결한 종목이 하나도 없으면(지수 상품만 보유 등): 카드 제목·칩 없이 한 줄 + 연결하지 못한 종목 (넓은 창도 한 단)
+    return (
+      <Screen top={top} refreshing={pulling} onRefresh={onPull} disclaimer scrollRef={mainRef}>
+        {prepLine}
+        <View style={[styles.card, { backgroundColor: t.surface, borderColor: t.line }]}>
+          <Text style={{ color: t.ink, fontSize: font.body }}>{noneLinkedText(d.coverage.held)}</Text>
+        </View>
+        {unmapped}
+        {basis}
+      </Screen>
+    );
+  }
 
   if (twoCol) {
-    // 넓은 창 (폴드 펼침 가로 등): 두 칸이 따로 스크롤. 고지는 맨 아래 한 번
+    // 넓은 창 (폴드 펼침 가로 등): 두 칸이 따로 스크롤. 고지는 맨 아래 한 번. 왼쪽 칸은 글자 배율만큼 넓힌다 (다른 2단 화면의 listPaneWidth 와 같은 비율)
+    const leftW = Math.round((layout.detailSideW * listPaneWidth(fontScale)) / layout.listPaneW);
+    const pull = () => <RefreshControl refreshing={pulling} onRefresh={onPull} />;
     return (
       <View style={[styles.root, { backgroundColor: t.bg }]}>
         {top}
         <View style={styles.cols}>
-          <ScrollView style={[styles.left, { borderRightColor: t.line }]} contentContainerStyle={styles.colContent}>
+          <ScrollView style={[styles.left, { width: leftW, borderRightColor: t.line }]} contentContainerStyle={styles.colContent} refreshControl={pull()}>
             {prepLine}
             {mostCard}
             {chipRow}
             {status}
             {topBottom}
-            {empty}
           </ScrollView>
-          <ScrollView ref={mainRef} style={styles.root} contentContainerStyle={styles.colContent}>
+          <ScrollView ref={mainRef} style={styles.root} contentContainerStyle={styles.colContent} refreshControl={pull()}>
             {all}
             {unmapped}
             {byHoldingBlock}
@@ -311,7 +355,6 @@ function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.
       {status}
       {topBottom}
       {all}
-      {empty}
       {unmapped}
       {byHoldingBlock}
       {basis}
@@ -319,30 +362,18 @@ function ThemesView({ d, top, pulling, onPull }: { d: HoldingThemes; top: React.
   );
 }
 
-/** 상태 줄: 값이 바뀌는 중인지·어느 시점 값인지 (발견 탭 상태 줄과 같은 말, 갱신 주기만 이 화면 것) */
+/**
+ * 상태 줄: 값이 바뀌는 중인지·어느 시점 값인지 (발견 탭 상태 줄과 같은 말, 갱신 주기만 이 화면 것).
+ * 미국 장 마감이면 기준 거래일(뉴욕 날짜)을 밝히고 한국 시각은 따로 — 거래대금 줄 날짜와 두 날짜로 보이지 않게 (lib statusView)
+ */
 function StatusRow({ info, market, period }: { info: HtMarketInfo; market: HtMarket; period: HtPeriod }) {
   const t = useTheme();
-  const s = info.session;
-  const moving = s === "regular" || s === "extended";
-  const label =
-    s === "regular"
-      ? "장중 · 1분마다 갱신"
-      : s === "extended"
-        ? "시간외 거래 반영 중 · 1분마다 갱신"
-        : s === "pre"
-          ? "장 시작 전 · 직전 거래일 기준"
-          : market === "US"
-            ? "장 마감 · 직전 정규장 기준"
-            : "장 마감 · 마지막 거래 기준";
+  const v = statusView(info, market);
   return (
     <View style={[styles.status, { borderBottomColor: t.line }]}>
-      <View style={styles.statusLine}>
-        <View style={[styles.dot, { backgroundColor: moving ? t.live : t.muted }]} />
-        <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1 }}>
-          {label}
-          {info.asOf ? ` · ${formatDateKo(info.asOf, true)} 기준` : ""}
-          {info.note ? ` · ${info.note}` : ""}
-        </Text>
+      <View style={styles.statusLine} accessible accessibilityLabel={v.speech}>
+        <View style={[styles.dot, { backgroundColor: v.moving ? t.live : t.muted }]} />
+        <Text style={{ color: t.muted, fontSize: font.tiny, flexShrink: 1 }}>{v.text}</Text>
       </View>
       {period === "week" && info.weekNote ? <Text style={{ color: t.muted, fontSize: font.tiny }}>{info.weekNote}</Text> : null}
     </View>
@@ -353,7 +384,9 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   card: { borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.xs },
   wrapRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.xs, rowGap: space.xxs },
-  partBtn: { justifyContent: "center", minHeight: font.body * 2 },
+  // 긴 테마 이름('밸류업(24년 기업가치 제고계획 발표)')도 칸 폭 안에서 줄바꿈 (웹·휴대폰 같게)
+  partBtn: { justifyContent: "center", minHeight: font.body * 2, flexShrink: 1, maxWidth: "100%" },
+  moreBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xxs, minHeight: touch.min, borderBottomWidth: StyleSheet.hairlineWidth },
   linkBtn: { flexDirection: "row", alignItems: "center", gap: space.xxs, minHeight: touch.min },
   chips: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", rowGap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.sm },
   chipGroup: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
@@ -369,7 +402,7 @@ const styles = StyleSheet.create({
   prep: { fontSize: font.small, paddingHorizontal: space.lg, paddingVertical: space.sm },
   // 폭 600~839 (펼친 폴드 세로): 높은 3개·낮은 3개를 두 칸 나란히 (칸 최소 300 — 안 되면 위아래)
   pair: { flexDirection: "row", flexWrap: "wrap", columnGap: space.md },
-  pairCell: { flexGrow: 1, flexBasis: 300, minWidth: 0 },
+  pairCell: { flexGrow: 1, flexBasis: PAIR_MIN, minWidth: 0 },
   cols: { flex: 1, flexDirection: "row" },
   left: { width: layout.detailSideW, flexGrow: 0, borderRightWidth: StyleSheet.hairlineWidth },
   colContent: { paddingBottom: space.xl },

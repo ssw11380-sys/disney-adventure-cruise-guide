@@ -1325,6 +1325,8 @@ export interface HtHolding {
   changeRate: number | null;
   /** 미국 테마: 등락률 계산(시가총액 상위 30종목)에 드는지. 그 밖은 null */
   inCalc: boolean | null;
+  /** 거래정지 (서버가 출처에서 확인한 한국 종목 — changeRate 는 null). 예전 서버는 없음 */
+  halted?: boolean;
 }
 export interface HtGroup {
   key: string;
@@ -1334,7 +1336,8 @@ export interface HtGroup {
   name: string;
   day: HtStrength;
   week: HtStrength | null;
-  tradingValue: { today: number | null; avg: number | null; days: number; ratioPct: number | null; state: HtTvState; day: string | null; currency: "KRW" | "USD" };
+  /** truncated: 구성 종목이 300개 넘는 업종이라 합을 내지 않음 (state none, 예전 서버는 없음) */
+  tradingValue: { today: number | null; avg: number | null; days: number; ratioPct: number | null; state: HtTvState; day: string | null; currency: "KRW" | "USD"; truncated?: boolean };
   inDiscoverList: boolean;
   holdings: HtHolding[];
 }
