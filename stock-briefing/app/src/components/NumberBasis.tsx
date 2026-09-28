@@ -54,7 +54,7 @@ export function BasisSheet({ visible, rows, onClose }: { visible: boolean; rows:
             <Text accessibilityRole="header" style={{ color: t.ink, fontSize: font.h2, fontWeight: "700" }}>
               숫자 기준
             </Text>
-            <Pressable onPress={onClose} hitSlop={CLOSE_SLOP} accessibilityRole="button" accessibilityLabel="숫자 기준 닫기">
+            <Pressable onPress={onClose} hitSlop={CLOSE_SLOP} accessibilityRole="button" accessibilityLabel="숫자 기준 닫기" style={styles.close}>
               <Text style={{ color: t.accent, fontSize: font.body, fontWeight: "700" }}>닫기</Text>
             </Pressable>
           </View>
@@ -80,8 +80,8 @@ export function BasisSheet({ visible, rows, onClose }: { visible: boolean; rows:
   );
 }
 
-/** 창 머리 '닫기' 글자(보이는 높이 약 font.body × 1.35)의 누르는 곳: 위아래로 44, 좌우는 머리 여백 안 */
-const CLOSE_SLOP = slopFor(font.body * 1.35, space.sm);
+/** 창 머리 '닫기' 글자(보이는 높이 약 font.body × 1.35)의 누르는 곳: 위아래는 hitSlop 으로 44, 폭은 칸 자체가 44 (styles.close — 글자는 오른쪽 끝 그대로) */
+const CLOSE_SLOP = slopFor(font.body * 1.35);
 
 const styles = StyleSheet.create({
   // 누르는 칸 44×44 (점만 있을 때도). 한 줄이어야 a11y 검사가 minHeight: touch.min 을 찾는다
@@ -91,6 +91,7 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: "flex-end" },
   sheet: { width: "100%", maxWidth: layout.readableMax, alignSelf: "center", maxHeight: "85%", borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: space.xl },
   head: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: space.lg, paddingVertical: space.md },
+  close: { minWidth: touch.min, alignItems: "flex-end" },
   body: { paddingHorizontal: space.lg },
   row: { flexDirection: "row", gap: space.sm, paddingVertical: space.sm, borderTopWidth: StyleSheet.hairlineWidth },
   lines: { flex: 1, gap: space.xxs },
