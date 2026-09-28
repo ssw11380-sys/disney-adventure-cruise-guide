@@ -563,14 +563,16 @@ describe("주인 아닌 계정 (A단계: 개인 데이터 기본 거절)", () =>
     expect((await app.inject({ method: "GET", url: "/api/market/status", headers: sessionHeader(member) })).statusCode).toBe(200);
   });
 
-  it("AI 분석: 주인 아닌 계정은 새로 만들기(refresh)를 무시하고, 새로 만드는 것은 하루 10건까지 (캐시는 제한 없음)", async () => {
-    const { app, member, owner } = await seeded();
+  it("AI 분석: 주인 아닌 계정은 새로 만들기(refresh)를 무시하고, 서로 다른 분석은 하루 10건까지 (검증 4차 — 캐시에 있든 없든 센다, 오늘 본 것은 계속)", async () => {
+    const { app, db, member, owner } = await seeded();
     const m = sessionHeader(member);
     const first = await app.inject({ method: "GET", url: "/api/stocks/005930/analysis/company", headers: m });
     expect(first.statusCode, first.body).toBe(200);
-    expect(first.json().cached).toBe(false);
+    expect(first.json()).toMatchObject({ cached: false, id: 0 });
     const again = await app.inject({ method: "GET", url: "/api/stocks/005930/analysis/company?refresh=1", headers: m });
-    expect(again.json()).toMatchObject({ cached: true, id: first.json().id });
+    // 새로 만들지 않았다 (분석 행 하나 — 같은 글)
+    expect(again.json()).toMatchObject({ cached: false, id: 0, content: first.json().content });
+    expect(await db.selectFrom("analyses").select("id").execute()).toHaveLength(1);
     const codes = ["000660", "005935", "247540", "465580"];
     let made = 1;
     for (const kind of ["company", "value", "technical"]) {
@@ -584,7 +586,7 @@ describe("주인 아닌 계정 (A단계: 개인 데이터 기본 거절)", () =>
     const over = await app.inject({ method: "GET", url: "/api/stocks/005935/analysis/technical", headers: m });
     expect(over.statusCode).toBe(429);
     expect(over.json().code).toBe("ai_daily_limit");
-    // 캐시에 있는 것은 계속 보인다, 주인은 제한 없음
+    // 오늘 이미 본 것은 계속 보인다, 주인은 제한 없음
     expect((await app.inject({ method: "GET", url: "/api/stocks/005930/analysis/company", headers: m })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/stocks/005935/analysis/technical", headers: sessionHeader(owner) })).statusCode).toBe(200);
   });

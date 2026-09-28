@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { ownerView, sessionOf } from "../auth/routePolicy.js";
+import { AI_DAILY_LIMIT, memberAnalysisView, ownerView, sessionOf } from "../auth/routePolicy.js";
 import { CODE_RE, isKrCode, normalizeCode } from "../lib/codes.js";
 import { NotListedError } from "../lib/errors.js";
+import { seoulIso } from "../lib/time.js";
 import type { FinancialsProvider } from "../providers/dart/types.js";
 import type { NewsProvider } from "../providers/news/types.js";
 import type { AnalysisService } from "../services/analysisService.js";
@@ -22,24 +23,25 @@ export interface AnalysisRouteDeps {
   financials: FinancialsProvider | null;
   /** 미국 종목 공시 (SEC EDGAR) */
   financialsUs?: FinancialsProvider | null;
-  /** 계정 A단계: 주인 아닌 계정이 새로 만들게 하는 분석 수 (사용자별 하루). 없으면 한도 없음 */
-  memberQuota?: { take(userId: number): boolean };
+  /**
+   * 계정 A단계: 주인 아닌 계정이 하루에 볼 수 있는 서로 다른 분석(종목·종류) 수. 캐시에 있든 없든 센다 (검증 4차 — 한도를 다 쓴 뒤
+   * 캐시 여부로 주인이 연 종목이 드러나지 않게). 없으면 한도 없음
+   */
+  memberQuota?: { take(userId: number, item: string): boolean };
+  now?: () => Date;
 }
 
-export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app, { service, stocks, news, financials, financialsUs, memberQuota }) => {
+export const analysisRoutes: FastifyPluginAsync<AnalysisRouteDeps> = async (app, { service, stocks, news, financials, financialsUs, memberQuota, now = () => new Date() }) => {
   /** GET /api/stocks/:code/analysis/:kind?refresh=1 — 종목 상세 탭 (회사 소개 / 가치투자 / 기술적 분석) */
   app.get("/:code/analysis/:kind", async (req, reply) => {
     const { code, kind } = params.parse(req.params);
     const { refresh } = query.parse(req.query);
     if (ownerView(req)) return service.get(code, kind, { refresh });
-    // 계정 A단계: 주인 아닌 계정은 새로 만들기(refresh)를 무시하고(모델 비용), 캐시에 없어 새로 만드는 것은 사용자별 하루 한도까지
-    const fresh = await service.fresh(code, kind);
-    if (fresh) return fresh;
+    // 계정 A단계: 주인 아닌 계정은 새로 만들기(refresh)를 무시하고(모델 비용), 하루에 서로 다른 분석(종목·종류) 한도까지 — 캐시에 있든 없든 센다.
+    // 응답의 캐시 표시·만든 시각·번호는 요청 시각 값으로 (검증 4차 M2 — 주인이 먼저 연 종목인지 드러나지 않게)
     const who = sessionOf(req);
-    if (who && memberQuota && !memberQuota.take(who.user.id)) {
-      return reply.code(429).send({ error: "AI_DAILY_LIMIT", code: "ai_daily_limit", message: "오늘 새로 만들 수 있는 분석 수를 다 썼어요. 내일 다시 볼 수 있어요" });
-    }
-    return service.get(code, kind, { refresh: false });
+    if (who && memberQuota && !memberQuota.take(who.user.id, `${code}:${kind}`)) return reply.code(429).send(AI_DAILY_LIMIT);
+    return memberAnalysisView(await service.get(code, kind, { refresh: false }), seoulIso(now()));
   });
 
   /** GET /api/stocks/:code/news — 종목 상세 4번째 탭 (최근 뉴스 + 공시). 각 항목 독립, 실패는 error 로 */

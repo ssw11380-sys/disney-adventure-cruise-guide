@@ -21,6 +21,12 @@ export class DeviceService {
     private readonly db: Db,
     private readonly push: PushSender,
     now?: () => Date,
+    /**
+     * strict(): 계정이 켜져 있는지 (계정 A단계 검증 4차 M1). 켜져 있으면 **살아 있는 주인 세션에 묶인 기기에만** 보낸다 — 세션 없이(계정 전·비상 모드)
+     * 등록한 기기는 빼서, 로그아웃·세션이 끝난·다시 설치한 폰으로 주인 알림이 가지 않게 (앱은 주인으로 로그인하면 이 기기를 새 세션에 다시 등록한다).
+     * 꺼져 있으면(비상 모드) 계정 전처럼 세션 없이 등록한 기기에도 보낸다
+     */
+    private readonly opts: { strict?: () => Promise<boolean> } = {},
   ) {
     this.now = now ?? (() => new Date());
   }
@@ -73,18 +79,23 @@ export class DeviceService {
   }
 
   /**
-   * 알림을 보낼 기기. 로그인 세션으로 등록한 기기는 그 세션이 살아 있을 때만 (끊김·기한 지남·지워짐이면 빼고 — 계정 A단계:
+   * 알림을 보낼 기기. 로그인 세션으로 등록한 기기는 그 세션이 살아 있고 주인 세션일 때만 (끊김·기한 지남·지워짐이면 빼고 — 계정 A단계:
    * 로그아웃하거나 '모든 기기에서 로그아웃'으로 끊긴 폰, 자동 로그인을 끈 채 12시간 넘게 안 쓴 폰으로 주인 계좌 알림이 가지 않게).
-   * 세션 없이(계정 전·플래그 꺼짐) 등록한 기기는 예전처럼 보낸다
+   * 세션 없이(계정 전·비상 모드) 등록한 기기는 계정이 꺼져 있을 때만 보낸다 (검증 4차 — 켜져 있으면 주인 세션이 있어야 주인 데이터)
    */
   async enabledTokens(): Promise<string[]> {
     const nowIso = seoulIso(this.now());
+    const strict = this.opts.strict ? await this.opts.strict().catch(() => true) : false;
     const rows = await this.db
       .selectFrom("devices as d")
       .leftJoin("sessions as s", "s.id", "d.session_id")
+      .leftJoin("users as u", "u.id", "s.user_id")
       .select("d.token")
       .where("d.enabled", "=", 1)
-      .where((eb) => eb.or([eb("d.session_id", "is", null), eb.and([eb("s.id", "is not", null), eb("s.revoked_at", "is", null), eb("s.expires_at", ">", nowIso)])]))
+      .where((eb) => {
+        const bound = eb.and([eb("s.id", "is not", null), eb("s.revoked_at", "is", null), eb("s.expires_at", ">", nowIso), eb("u.is_owner", "=", 1)]);
+        return strict ? bound : eb.or([eb("d.session_id", "is", null), bound]);
+      })
       .execute();
     return rows.map((r) => r.token);
   }

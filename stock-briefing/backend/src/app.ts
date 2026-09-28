@@ -5,8 +5,8 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ZodError } from "zod";
 import { envOn, type AppConfig } from "./config.js";
 import { AuthService } from "./auth/authService.js";
-import { AUTH_UNAVAILABLE, decide, MEMBER_SHARED_PER_MINUTE, MEMBER_TOO_MANY, NO_SESSION_ROUTES, routeKey, SESSION_INVALID, SHARED_ROUTES, viewerKey, type AuthState } from "./auth/routePolicy.js";
-import { DailyQuota, WindowLimiter } from "./auth/rateLimit.js";
+import { AUTH_UNAVAILABLE, decide, MEMBER_AI_DAILY, MEMBER_SCORE_DAILY, MEMBER_SHARED_PER_MINUTE, MEMBER_TOO_MANY, NO_SESSION_ROUTES, ownerView, routeKey, SESSION_INVALID, SHARED_ROUTES, viewerKey, type AuthState } from "./auth/routePolicy.js";
+import { DistinctDailyQuota, WindowLimiter } from "./auth/rateLimit.js";
 import { authRoutes } from "./routes/auth.js";
 import { detectDialect, type Db } from "./db/index.js";
 import { AppError, ProviderError } from "./lib/errors.js";
@@ -284,7 +284,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     app.addHook("onClose", async () => scheduler?.stop());
   }
 
-  const deviceService = new DeviceService(opts.db, opts.providers.push, now);
+  // 푸시 받을 기기: 계정이 켜져 있으면 살아 있는 주인 세션에 묶인 기기만 (검증 4차 M1 — 세션 없이 등록한 계정 전 기기·로그아웃한 폰으로 주인 알림이 가지 않게)
+  const deviceService = new DeviceService(opts.db, opts.providers.push, now, { strict: () => features.enabled("accounts") });
   const notificationService = new NotificationService({
     push: opts.providers.push,
     devices: deviceService,
@@ -353,13 +354,14 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate("authService", auth);
   app.decorate("valueScores", valueScores);
 
-  // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게
+  // 서버 처리 시간 (응답 헤더 Server-Timing: app;dur=ms) — 네트워크를 뺀 서버 몫을 앱·측정 스크립트가 볼 수 있게.
+  // 주인 보기에만 (계정 A단계 검증 4차 M2 — 주인 아닌 계정·세션 없음에게는 캐시 적중이 빠른 것으로 주인이 연 종목이 드러나지 않게)
   app.addHook("onRequest", async (req) => {
     (req as { startedAt?: bigint }).startedAt = process.hrtime.bigint();
   });
   app.addHook("onSend", async (req, reply, payload) => {
     const started = (req as { startedAt?: bigint }).startedAt;
-    if (started !== undefined) reply.header("server-timing", `app;dur=${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)}`);
+    if (started !== undefined && ownerView(req)) reply.header("server-timing", `app;dur=${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)}`);
     return payload;
   });
   // 끊겼을 때 데이터 절약 (플래그 pollSaver, 3-25): 잔고·상세·지수 등 자주 묻는 GET 에 ETag·304·바뀐 부분만·gzip (라우트 등록 전에)
@@ -393,15 +395,19 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   //  - 플래그를 읽지 못하면 켜짐으로 본다 (featureService FAIL_ON — 오류로 문이 열리지 않게)
   app.decorateRequest("auth", null);
   /**
-   * 꺼져 있을 때(관리 API 로 끔 · 비상 끄기 ACCOUNTS_DISABLED=1 둘 다): 세션 헤더가 주인 아닌 계정의 살아 있는 세션이면 그 계정.
-   * 비상 끄기도 세션을 확인한다 — API 토큰은 앱 묶음 안에 있어 모든 가입자 폰이 이미 가지고 있으므로, 여기서 건너뛰면 그 폰이 'API 토큰 = 주인'이 되어
-   * 주인 잔고·메모를 보고 알림 기기까지 등록했다 (검증 지적). 확인하지 못하면(DB 오류) 지금처럼 — 비상 끄기가 DB 오류로 막히지 않게
+   * 비상 모드(관리 API 로 끔 · 비상 끄기 ACCOUNTS_DISABLED=1 둘 다) = 계정 전처럼 **API 토큰만 = 주인**. 이때 막는 것은 하나뿐:
+   * 세션 헤더가 주인 아닌 계정의 세션(살아 있음·기한 지남·끊김 모두 — 검증 4차)이면 그 계정으로 본다 (그 폰에 주인 잔고·메모가 보이거나 알림 기기가 등록되지 않게).
+   * 막지 못하는 것: 세션 머리글이 없는 요청(로그아웃·앱 다시 설치한 가입자 폰, API 토큰을 꺼낸 사람), 세션 확인이 DB 오류일 때 — 그래서 가입자가 있으면
+   * 비상 모드 전에 API 토큰(Railway API_TOKEN)을 바꾸고 새 값은 주인 폰에만 넣는다 (docs 설계 5장). 끝난 세션의 사용자를 모르면(지운 행) 지금처럼
    */
   const offMember = async (req: FastifyRequest, route: string): Promise<AuthState | null> => {
     const token = sessionTokenOf(req, route);
     if (!token) return null;
     const ctx = await auth.authenticate(token).catch(() => null);
-    return ctx && !ctx.user.isOwner ? { kind: "user", ...ctx } : null;
+    if (ctx) return ctx.user.isOwner ? null : { kind: "user", ...ctx };
+    const who = await auth.identify(token).catch(() => null);
+    if (!who || who.isOwner) return null;
+    return { kind: "user", user: { id: who.userId, loginId: "", email: null, isOwner: false, usingInitialPassword: false }, session: { id: 0, remember: false, expiresAt: "" } };
   };
   // 주인 아닌 계정의 공유 경로는 사람마다 1분 MEMBER_SHARED_PER_MINUTE 번까지 (시세·차트·뉴스가 서버 env 의 주인 키로 외부를 부르므로 — 주인 몫의 호출 한도를 다 쓰지 않게)
   const memberRate = new WindowLimiter(MEMBER_SHARED_PER_MINUTE, 60_000, () => now().getTime());
@@ -649,8 +655,9 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
     news: opts.providers.news,
     financials: opts.providers.financials,
     financialsUs: opts.providers.financialsUs,
-    // 계정 A단계: 주인 아닌 계정이 새로 만드는 분석은 사람마다 하루 10건까지 (캐시에 있는 것은 제한 없음)
-    memberQuota: new DailyQuota(10, () => seoulDate(now())),
+    // 계정 A단계: 주인 아닌 계정은 서로 다른 분석(종목·종류)을 사람마다 하루 MEMBER_AI_DAILY 건까지 — 캐시에 있든 없든 센다 (검증 4차 M2)
+    memberQuota: new DistinctDailyQuota(MEMBER_AI_DAILY, () => seoulDate(now())),
+    now,
   });
   await app.register(briefingRoutes, { prefix: "/api/briefings", service: briefingService, scheduler });
   await app.register(accountBriefingRoutes, {
@@ -686,7 +693,8 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(adminRoutes, { prefix: "/api/admin", service: stockService, dart: opts.providers.dart, toss: tossDeps, outboundIp, backups, features });
   await app.register(tradeRecordRoutes, { prefix: "/api", service: tradeRecords, now });
   await app.register(tradeRecordAdminRoutes, { prefix: "/api/admin/trade-records", service: tradeRecords });
-  await app.register(scoreRoutes, { prefix: "/api/scores", service: indicatorScores });
+  // 계정 A단계: 주인 아닌 계정은 서로 다른 종목 점수를 사람마다 하루 MEMBER_SCORE_DAILY 개까지 — 캐시에 있든 없든 센다 (검증 4차)
+  await app.register(scoreRoutes, { prefix: "/api/scores", service: indicatorScores, memberQuota: new DistinctDailyQuota(MEMBER_SCORE_DAILY, () => seoulDate(now())), now });
   await app.register(appErrorRoutes, { prefix: "/api/app-errors", service: appErrors });
   await app.register(appErrorAdminRoutes, { prefix: "/api/admin/app-errors", service: appErrors });
   // running: 종목 브리핑과 이어지는 계좌 브리핑·시장 요약을 만드는 동안 (앱 백그라운드 알림이 기다렸다가 한 번에 알리게)

@@ -100,6 +100,14 @@ export const AUTH_UNAVAILABLE = { error: "AUTH_UNAVAILABLE", code: "auth_unavail
 /** 주인 아닌 계정의 공유 경로 요청 수 (사람마다 1분) — 보통 쓰는 앱은 1분에 수십 번이라 여유가 크다 */
 export const MEMBER_SHARED_PER_MINUTE = 240;
 export const MEMBER_TOO_MANY = { error: "TOO_MANY_REQUESTS", code: "too_many_requests", message: "요청이 너무 잦아요. 잠시 뒤에 다시 해 주세요" } as const;
+/**
+ * 주인 아닌 계정의 하루 한도 (검증 4차 — 캐시에 있든 없든 서로 다른 것 수로 센다: 새로 만드는 것만 세면 한도를 다 쓴 뒤 캐시 여부로 주인 종목이 드러난다).
+ * AI 분석은 종목·종류마다(모델 비용), 지표 점수는 종목마다(주인 키로 받는 일봉·재무). 오늘 이미 본 것은 다시 봐도 세지 않는다
+ */
+export const MEMBER_AI_DAILY = 10;
+export const MEMBER_SCORE_DAILY = 30;
+export const AI_DAILY_LIMIT = { error: "AI_DAILY_LIMIT", code: "ai_daily_limit", message: "오늘 볼 수 있는 AI 분석 수를 다 썼어요. 내일 다시 볼 수 있어요" } as const;
+export const SCORE_DAILY_LIMIT = { error: "SCORE_DAILY_LIMIT", code: "score_daily_limit", message: "오늘 볼 수 있는 지표 점수 수를 다 썼어요. 내일 다시 볼 수 있어요" } as const;
 
 /** 경로 하나에 대한 결정 (순수 함수) */
 export function decide(key: string, auth: AuthState): Decision {
@@ -118,6 +126,19 @@ export function decide(key: string, auth: AuthState): Decision {
 export function ownerView(req: FastifyRequest): boolean {
   const a = req.auth;
   return !a || a.kind === "off" || (a.kind === "user" && a.user.isOwner);
+}
+
+/**
+ * 주인 아닌 계정에게 주는 응답에서 공유 캐시의 시각·상태를 요청 시각 값으로 (검증 4차 M2 — 캐시에 이미 있었는지·언제 만들었는지로
+ * 주인이 연 종목·주인 등록 종목(장 마감 뒤 미리 계산)이 드러나지 않게). 주인 보기면 그대로
+ */
+export function memberAnalysisView<T extends { id: number; createdAt: string; cached: boolean }>(a: T, nowIso: string): T {
+  return { ...a, id: 0, createdAt: nowIso, cached: false };
+}
+
+export function memberScoreView<T extends { computedAt: string; value?: { asOf?: { fetchedAt: string | null } | null } | null }>(r: T, nowIso: string): T {
+  const v = r.value;
+  return { ...r, computedAt: nowIso, ...(v && v.asOf ? { value: { ...v, asOf: { ...v.asOf, fetchedAt: null } } } : {}) };
 }
 
 /** 로그인한 사용자 (없으면 null) */

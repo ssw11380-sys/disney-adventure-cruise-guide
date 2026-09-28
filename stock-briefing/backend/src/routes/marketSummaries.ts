@@ -18,10 +18,14 @@ function marketNotes(d: MarketSummaryData): string[] {
  * (예전에는 저장된 글에서 지금 문구와 글자가 같은 '내 종목' 줄만 뺐다 — 문구가 조금만 바뀌어도 이미 저장된 요약의 그 줄(주인 종목 이름·등락률)이
  * 그대로 갔다. 검증 지적). 안내(notes)는 시장 전체 이야기만 남긴다(모르는 안내는 뺌). 나머지(지수·환율·금리·업종·일정·뉴스)는 그대로
  */
+/** 만들지 못한 요약의 고정 문구 (services/marketSummaryService — 주인 데이터가 아니다) */
+const FAILED_TEXT = "지수를 받지 못해 시장 요약을 만들지 못했습니다";
+
 export function memberSummary(s: MarketSummary): MarketSummary {
-  if (!s.data) return s;
+  // data 를 읽지 못한 옛 행: 저장된 글(내 종목 줄이 있을 수 있음)을 주지 않는다 — 실패 행의 고정 문구만 (검증 4차)
+  if (!s.data) return { ...s, summary: s.status === "failed" && s.summary === FAILED_TEXT ? s.summary : "", data: null };
   const data: MarketSummaryData = { ...s.data, holdings: null, notes: marketNotes(s.data) };
-  let summary = s.summary;
+  let summary = s.summary === FAILED_TEXT ? s.summary : "";
   if (s.status === "ok") {
     try {
       // 만든 때 기준으로 ('오늘'·'밤사이' 같은 말이 저장된 글과 같게)

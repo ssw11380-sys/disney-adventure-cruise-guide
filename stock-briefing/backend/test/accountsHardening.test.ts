@@ -107,7 +107,9 @@ describe("푸시 기기 등록은 로그인 세션에 묶인다", () => {
     const other = await loginToken(app);
     await register(app, LOST, S(other));
     await register(app, HERE, S(here));
-    expect((await app.deviceService.enabledTokens()).sort()).toEqual([HERE, LOST, OLD].sort());
+    // 계정이 켜져 있으면 세션 없이 등록한 옛 기기에는 이미 보내지 않는다 (검증 4차 — 행은 비밀번호를 바꿀 때 지운다)
+    expect((await app.deviceService.enabledTokens()).sort()).toEqual([HERE, LOST].sort());
+    expect(await deviceRows(db)).toEqual([HERE, LOST, OLD].sort());
     const r = await app.inject({ method: "POST", url: "/api/auth/password", headers: S(here), payload: { current: "1111", next: "abcd1234", nextConfirm: "abcd1234" } });
     expect(r.statusCode, r.body).toBe(200);
     expect(await deviceRows(db)).toEqual([HERE]);
@@ -125,16 +127,19 @@ describe("푸시 기기 등록은 로그인 세션에 묶인다", () => {
     expect(await app.deviceService.enabledTokens()).toEqual([HERE]);
   });
 
-  it("기한이 지난 세션(자동 로그인 끔 12시간)의 기기에는 보내지 않고, 청소하면 행도 지운다. 세션 없이 등록한 기기는 예전처럼 보낸다", async () => {
+  it("기한이 지난 세션(자동 로그인 끔 12시간)의 기기에는 보내지 않고, 청소하면 행도 지운다. 세션 없이 등록한 기기는 비상 모드(플래그 끔)에서만 보낸다", async () => {
     const { app, db, clock } = await makeApp();
     const short = await loginToken(app, "1111", false);
     await register(app, LOST, S(short));
     await app.inject({ method: "PUT", url: "/api/admin/features", headers: S(short), payload: { accounts: false } });
     await register(app, OLD);
-    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accounts: true } });
+    // 끈 동안(비상 모드): 계정 전처럼 세션 없이 등록한 기기에도
     expect((await app.deviceService.enabledTokens()).sort()).toEqual([LOST, OLD].sort());
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { accounts: true } });
+    // 켜면: 살아 있는 주인 세션에 묶인 기기만 (검증 4차 M1)
+    expect(await app.deviceService.enabledTokens()).toEqual([LOST]);
     clock.t += 13 * HOUR;
-    expect(await app.deviceService.enabledTokens()).toEqual([OLD]);
+    expect(await app.deviceService.enabledTokens()).toEqual([]);
     clock.t += 31 * DAY;
     await app.authService.purge();
     expect(await deviceRows(db)).toEqual([OLD]);

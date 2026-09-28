@@ -4,7 +4,7 @@ import type { Db } from "../db/index.js";
 import type { Database } from "../db/schema.js";
 import { seoulIso } from "../lib/time.js";
 import { hashPassword, looksLikeToken, newSessionToken, SCRYPT_N, tokenHash, verifyPassword } from "./password.js";
-import { LoginLock, WindowLimiter } from "./rateLimit.js";
+import { LoginGuard, LoginLock, WindowLimiter } from "./rateLimit.js";
 import { confirmError, emailError, loginIdKey, normalizeEmail, normalizeLoginId, passwordError, signupErrors, type SignupInput } from "./rules.js";
 
 /**
@@ -15,7 +15,8 @@ import { confirmError, emailError, loginIdKey, normalizeEmail, normalizeLoginId,
  *  - 토큰은 sha256 만 DB 에, 서버 메모리 캐시 30초 (이 서버에서 끊은 세션은 바로 지운다 — 끊는 동안 읽던 요청이 옛 상태를 다시 캐시에 넣지 않게 세대 번호로 막는다)
  *  - 세션을 끊으면 그 세션으로 등록한 푸시 기기도 지운다 (devices.session_id). '모든 기기에서 로그아웃'·비밀번호 변경은 계정 전(세션 없이)
  *    등록한 주인 기기도 지운다 — 잃어버린 폰으로 주인 계좌 알림이 가지 않게. 앱은 주인으로 다시 로그인하면 이 기기를 다시 등록한다
- *  - 잠금: 같은 아이디 5번 틀리면 10분 (없는 아이디도 똑같이 — 계정이 있는지 드러나지 않게). 속도 제한은 IP·사용자별 (메모리)
+ *  - 잠금: 같은 아이디를 **같은 IP** 에서 5번 틀리면 그 IP 만 10분 (검증 4차 — 남이 다른 곳에서 주인 아이디를 틀려도 주인 폰은 잠기지 않게),
+ *    모든 IP 를 합쳐 50번이면 그 아이디 전체 10분. 없는 아이디도 똑같이 (계정이 있는지 드러나지 않게). 속도 제한은 IP·사용자별 (메모리)
  *    로그인한 뒤의 비밀번호·이메일 변경(지금 비밀번호 다시 확인)은 로그인 잠금과 따로 **세션마다** 5번·10분 — 공개된 아이디로 로그인을 일부러 틀려
  *    주인을 잠가 두어도, 이미 로그인한 주인이 설정에서 처음 비밀번호(1111)를 바꾸는 것은 막히지 않게 (검증 지적)
  *  - 비상 주인 비밀번호 되돌리기: OWNER_RESET_PASSWORD (서버를 켤 때 — **같은 값은 한 번만** 적용. 적용한 값의 해시를 meta 에 적어 두어,
@@ -73,7 +74,8 @@ export class AuthFailure extends Error {
 
 export const MSG = {
   badCredentials: "아이디 또는 비밀번호가 맞지 않아요",
-  locked: "여러 번 틀려서 잠시 막아 두었어요. 10분 뒤에 다시 해 주세요",
+  /** 잠김: 남은 시간을 분으로 (올림 — 앱도 retryAfterSec 으로 같은 문장을 만든다) */
+  lockedFor: (sec: number) => `여러 번 틀려서 잠시 막아 두었어요. ${Math.max(1, Math.ceil(sec / 60))}분 뒤에 다시 해 주세요`,
   tooMany: "요청이 너무 잦아요. 잠시 뒤에 다시 해 주세요",
   invalid: "입력한 내용을 확인해 주세요",
   loginIdTaken: "이미 쓰고 있는 아이디예요",
@@ -132,7 +134,8 @@ export class AuthService {
   private readonly now: () => Date;
   private readonly nowMs: () => number;
   private readonly cache = new Map<string, { at: number; s: CachedSession }>();
-  readonly lock: LoginLock;
+  /** 로그인 잠금 (아이디 + IP, 아이디 전체는 훨씬 높은 횟수) */
+  readonly lock: LoginGuard;
   /** 로그인한 뒤 지금 비밀번호를 다시 확인할 때(비밀번호·이메일 변경)의 잠금 — 세션마다, 로그인 잠금과 따로 */
   readonly reauthLock: LoginLock;
   private readonly loginIp: WindowLimiter;
@@ -151,7 +154,7 @@ export class AuthService {
     this.now = deps.now ?? (() => new Date());
     this.nowMs = () => this.now().getTime();
     this.n = deps.scryptN ?? SCRYPT_N;
-    this.lock = new LoginLock(this.nowMs);
+    this.lock = new LoginGuard(this.nowMs);
     this.reauthLock = new LoginLock(this.nowMs);
     this.loginIp = new WindowLimiter(20, 10 * 60_000, this.nowMs);
     this.signupTryIp = new WindowLimiter(20, 3_600_000, this.nowMs);
@@ -224,7 +227,7 @@ export class AuthService {
       await remember(trx);
     });
     this.forget((s) => s.userId === userId);
-    this.lock.succeed(loginIdKey(row.login_id));
+    this.lock.clear(loginIdKey(row.login_id));
     this.deps.log?.warn({ userId }, "계정: 주인 비밀번호를 OWNER_RESET_PASSWORD 로 되돌렸습니다 (주인 세션·기기 등록을 모두 끊음 — 같은 값은 다시 적용하지 않음, 변수는 지워도 됩니다)");
     return "reset";
   }
@@ -239,19 +242,19 @@ export class AuthService {
     if (!input.password) fields["password"] = "required";
     if (Object.keys(fields).length) throw new AuthFailure(400, "invalid", MSG.invalid, { fields });
     const key = loginIdKey(input.loginId);
-    const locked = this.lock.lockedFor(key);
-    if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: locked });
+    const locked = this.lock.lockedFor(key, input.ip);
+    if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.lockedFor(locked), { retryAfterSec: locked });
     const row = await this.userByKey(key);
     const tooLong = input.password.length > LOGIN_PASSWORD_MAX;
     // 없는 아이디도 해시를 한 번 계산해 응답 시간을 비슷하게
     const ok = row && !tooLong ? await verifyPassword(input.password, row.password_hash) : (await verifyPassword("x", await this.dummyHash()), false);
     if (!row || !ok) {
-      const lockedNow = this.lock.fail(key);
+      const lockedNow = this.lock.fail(key, input.ip);
       this.deps.log?.warn({ ip: input.ip, ...(row ? { userId: row.id } : {}), locked: lockedNow > 0 }, "계정: 로그인 실패");
-      if (lockedNow > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: lockedNow });
+      if (lockedNow > 0) throw new AuthFailure(429, "too_many_attempts", MSG.lockedFor(lockedNow), { retryAfterSec: lockedNow });
       throw new AuthFailure(400, "bad_credentials", MSG.badCredentials);
     }
-    this.lock.succeed(key);
+    this.lock.succeed(key, input.ip);
     const created = await this.createSession(Number(row.id), input.remember, input.deviceName ?? null);
     this.deps.log?.info({ userId: row.id, remember: input.remember }, "계정: 로그인");
     return { token: created.token, user: toUser(row), session: created.session };
@@ -388,6 +391,22 @@ export class AuthService {
     return { user: s.user, session: { id: s.sessionId, remember: s.remember, expiresAt: seoulIso(new Date(s.expiresAt)) } };
   }
 
+  /**
+   * 비상 모드(플래그 끔·ACCOUNTS_DISABLED=1) 전용: 이 세션 토큰이 누구 것이었는지 — **기한이 지났거나 끊긴 세션도** (검증 4차).
+   * 비상 모드에는 API 토큰만 = 주인이라, 주인 아닌 계정의 폰이 끝난 세션을 계속 보내도 그 계정으로 막으려면 기한과 상관없이 알아봐야 한다.
+   * 모르는 토큰이면 null. DB 를 못 읽으면 오류를 던진다 (부르는 쪽이 지금처럼 — 비상 모드가 DB 오류로 막히지 않게)
+   */
+  async identify(token: string): Promise<{ userId: number; isOwner: boolean } | null> {
+    if (!looksLikeToken(token)) return null;
+    const row = await this.deps.db
+      .selectFrom("sessions as s")
+      .innerJoin("users as u", "u.id", "s.user_id")
+      .select(["u.id", "u.is_owner"])
+      .where("s.token_hash", "=", tokenHash(token))
+      .executeTakeFirst();
+    return row ? { userId: Number(row.id), isOwner: Number(row.is_owner) === 1 } : null;
+  }
+
   /** 사용자 정보를 DB 에서 다시 (이메일·처음 비밀번호 표시가 다른 기기에서 바뀌었을 수 있다) */
   async me(ctx: SessionContext): Promise<SessionContext> {
     const r = await this.deps.db.selectFrom("users").select(["id", "login_id", "email", "is_owner", "initial_password"]).where("id", "=", ctx.user.id).executeTakeFirst();
@@ -488,10 +507,10 @@ export class AuthService {
   private async recheckPassword(ctx: SessionContext, current: string, hash: string | null): Promise<void> {
     const key = `s${ctx.session.id}`;
     const locked = this.reauthLock.lockedFor(key);
-    if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: locked });
+    if (locked > 0) throw new AuthFailure(429, "too_many_attempts", MSG.lockedFor(locked), { retryAfterSec: locked });
     if (!hash || current.length > LOGIN_PASSWORD_MAX || !(await verifyPassword(current, hash))) {
       const lockedNow = this.reauthLock.fail(key);
-      if (lockedNow > 0) throw new AuthFailure(429, "too_many_attempts", MSG.locked, { retryAfterSec: lockedNow });
+      if (lockedNow > 0) throw new AuthFailure(429, "too_many_attempts", MSG.lockedFor(lockedNow), { retryAfterSec: lockedNow });
       throw new AuthFailure(400, "bad_current_password", MSG.badCurrent, { fields: { current: "bad_current_password" } });
     }
     this.reauthLock.succeed(key);
