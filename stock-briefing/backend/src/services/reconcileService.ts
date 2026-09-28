@@ -1,5 +1,6 @@
 import type { Db } from "../db/index.js";
 import { seoulIso } from "../lib/time.js";
+import { regularOpenAt } from "./marketContext.js";
 import type { RegisteredWithQuote } from "./stockService.js";
 
 /**
@@ -175,6 +176,28 @@ export class ReconcileService {
     const qty = fresh ? qtyStreak(h) : 0;
     return { last: h.at(-1) ?? null, streakOver: streak, qtyStreak: qty, week: { n: week.length, withinPct: week.length ? Math.round((within / week.length) * 1000) / 10 : null }, alert: streak >= STREAK_ALERT || qty >= STREAK_ALERT };
   }
+
+  /** 최근 days 일 정규장 시간 기록의 0.1% 이하 비율 (3-32 '숫자 기준' 창·로드맵 '장중 95%' 판정). status() 는 그대로 둔다 */
+  async intraday(days = 7): Promise<{ n: number; withinPct: number | null; skipped: number }> {
+    return intradayWithin(await this.history(), this.now, days);
+  }
+}
+
+/** 최근 days 일 동안 정규장 시간(regularOpenAt)에 남긴 기록 — 비교한 수·그중 차이 0.1% 이하 비율·비교하지 못한 수 (3-32 '장중' 기준) */
+export function intradayWithin(history: readonly ReconcileEntry[], now: Date, days = 7): { n: number; withinPct: number | null; skipped: number } {
+  const since = now.getTime() - days * 86_400_000;
+  let n = 0, within = 0, skipped = 0;
+  for (const e of history) {
+    if (!(Date.parse(e.at) >= since) || !regularOpenAt(e.at)) continue;
+    // 시세 지연·수량 다름·환율 없음 등으로 비교하지 못한 기록은 분모에서 빼되 수는 따로 센다 (비율이 부풀어 보이지 않게 함께 보인다)
+    if (e.missing > 0) {
+      skipped++;
+      continue;
+    }
+    n++;
+    if (Math.abs(e.diffPct) <= RECONCILE_WARN_PCT) within++;
+  }
+  return { n, withinPct: n > 0 ? Math.round((within / n) * 1000) / 10 : null, skipped };
 }
 
 /** 기록 사이가 이보다 벌어지면 연속이 끊긴 것으로 본다 (대조를 껐다 켜거나 서버가 오래 멈췄을 때 옛 기록과 이어 붙지 않게) */

@@ -64,6 +64,7 @@ const KNOWN_PERSONAL = new Set([
   "POST /api/admin/master/refresh",
   "GET /api/admin/toss/status",
   "GET /api/admin/toss/reconcile",
+  "GET /api/admin/toss/reconcile/badge", // 3-32 숫자 기준 점 (주인 토스 대조 — 관리)
   "POST /api/admin/toss/import-holdings",
   "GET /api/admin/toss/krw-cost",
   "PUT /api/admin/toss/krw-cost",

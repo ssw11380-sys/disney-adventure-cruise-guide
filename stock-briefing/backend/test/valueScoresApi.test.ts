@@ -320,10 +320,11 @@ describe("대상 아님 · 한국 · 받기 실패 · 지난 값", () => {
     expect((await get("ZZREIT")).body.value).toMatchObject({ status: "excluded", reason: { code: "reit" } });
   });
 
-  it("한국 종목은 3단계까지 '계산 준비 중 — 한국 종목 가치 지표 점수는 다음 단계에서', SEC 요청 0건", async () => {
+  it("한국 간이 가치 출처가 없는 서버(3단계 전·krValueScore 끔과 같은 모습): 한국 종목은 '지금 계산하지 않음', SEC 요청 0건", async () => {
     const { value } = await start();
     const b = (await get("005930")).body;
-    expect(b.value).toMatchObject({ status: "pending", label: "계산 준비 중", text: VALUE_STATUS_TEXT.kr, versionLine: null });
+    expect(b.value).toMatchObject({ status: "pending", label: "지금 계산하지 않음", text: VALUE_STATUS_TEXT.krOff, versionLine: null, reason: { code: "krOff" } });
+    expect(b.text.valueAbout).toBe("재무 숫자가 같은 업종·한국 시장 회사들 사이 어디쯤인지");
     await app!.valueScores.idle();
     expect(value.calls.facts).toEqual([]);
   });
@@ -660,7 +661,9 @@ describe("검토 지적 3차 — 끝나지 않는 '받는 중·만드는 중', �
     expect(value.calls.facts).toEqual(["MSFT"]);
     clock = new Date(clock.getTime() + 61_000);
     const b = (await get("MSFT")).body.value;
-    expect(b).toMatchObject({ status: "insufficient", label: "점수 없음", reason: { code: "notListed", text: VALUE_STATUS_TEXT.notListed } });
+    expect(b).toMatchObject({ status: "insufficient", label: "점수 없음", reason: { code: "notListed", text: VALUE_STATUS_TEXT.notListedAfter } });
+    // 받은 뒤 빠진 것은 '상장 폐지·합병·티커 변경 등' (처음부터 없던 '외국 회사·새로 상장한 회사 등'과 까닭이 다르다, 3단계 검토 지적)
+    expect(VALUE_STATUS_TEXT.notListedAfter).toBe("SEC 재무제표를 찾지 못했습니다 (상장 폐지·합병·티커 변경 등)");
     // 하루 동안 다시 받지 않고, 계속 끝나는 상태
     clock = new Date(clock.getTime() + 2 * 3_600_000);
     expect((await get("MSFT")).body.value.reason?.code).toBe("notListed");

@@ -40,6 +40,7 @@ describe("GET /api/widget: 브리핑 위젯 첫 줄 (시장 요약, &ms=1 만)",
       logger: false,
       enableScheduler: false,
     });
+    await app.inject({ method: "PUT", url: "/api/admin/features", payload: { numberBasis: false } });
   };
   const insert = async (d: MarketSummaryData, status: "ok" | "failed" = "ok") => {
     await db!

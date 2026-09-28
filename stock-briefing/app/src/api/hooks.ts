@@ -8,6 +8,7 @@ import { candleRefresh, pollInterval, refetchDue, streamFresh } from "@/lib/fres
 import { capToBoundary, marketBoundary, marketChip, nextBoundary, quotesOf, sessionOpen } from "@/lib/liveDot";
 import { useLiveStream, withLastTick } from "@/lib/liveStream";
 import { tradingNow } from "@/lib/marketTime";
+import { RECONCILE_OFF, RECONCILE_POLL_MS } from "@/lib/numberBasis";
 import { saverInterval, unchangedStreak } from "@/lib/pollSaver";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
 import { loadedCredentials, useSettings } from "@/lib/settings";
@@ -211,6 +212,35 @@ export function useFeature(key: string, fallback = false): boolean {
 export function useTossStatus() {
   const api = useApi();
   return useQuery({ queryKey: useKey("tossStatus"), queryFn: api.tossStatus, staleTime: 30_000, retry: 0 });
+}
+
+/**
+ * 토스 대조 배지 쿼리 옵션 (useReconcileBadge 와 테스트가 같이 쓴다, 3-32). 잔고 탭이 보이는 동안 RECONCILE_POLL_MS 마다, 실시간 알림 'reconcile' 이 오면 그 전에 바로.
+ * 예전 서버의 404 는 오류가 아니라 꺼짐(RECONCILE_OFF — 점 옆 '숫자 기준')으로 본다. 다른 오류(500·연결 실패)는 그대로 던진다
+ */
+export function reconcileBadgeQuery(api: Pick<Api, "reconcileBadge">, apiUrl: string, focused = true) {
+  return queryOptions({
+    subscribed: focused,
+    queryKey: [apiUrl, "reconcileBadge"],
+    queryFn: async () => {
+      try {
+        return await api.reconcileBadge();
+      } catch (e) {
+        if (e instanceof ApiRequestError && e.status === 404) return RECONCILE_OFF;
+        throw e;
+      }
+    },
+    staleTime: 20_000,
+    refetchInterval: RECONCILE_POLL_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 0,
+  });
+}
+
+/** 토스 대조 배지 (3-32, 플래그 numberBasis). 켜졌을 때만 그리는 부품(BasisMark) 안에서만 부른다 */
+export function useReconcileBadge() {
+  return useQuery(reconcileBadgeQuery(useApi(), useSettings().apiUrl, useScreenFocused()));
 }
 
 /** 토스 계좌 보유 종목 가져오기 (설정 > 토스증권 연동의 '지금 계좌 동기화'와 같은 요청). 끝나면 잔고·브리핑·토스 상태를 다시 받는다 */

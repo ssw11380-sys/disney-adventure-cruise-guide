@@ -127,7 +127,7 @@ function contributorsSpeech(b: AccountBriefing): string[] {
  *  - contributors = 플래그 moversMerge 로 기여 상위 묶음을 보일 때: '기여 1위 …' 조각 대신 묶음 전체와 'HH시 MM분 기준'
  *  - today = 접은 화면 계좌 줄의 휴장 줄(플래그 briefingCompactTop)을 보일 때 보는 날 — 휴장 조각을 보이는 줄과 같은 판단으로 (accountHolidayLines)
  */
-export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string } = {}): string {
+export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; contributors?: boolean; today?: string; time?: boolean } = {}): string {
   const h = b.headline;
   const list = opts.contributors ? contributorsSpeech(b) : [];
   const top = list.length ? undefined : h?.top[0];
@@ -145,6 +145,8 @@ export function accountCardSpeech(b: AccountBriefing, opts: { trim?: boolean; co
     top ? `기여 1위 ${top.name} ${speakProfit(formatWon(top.amount, { sign: true }), Math.sign(top.amount)) ?? ""}` : null,
     ...list,
     ...holidays,
+    // 3-32 (numberBasis): 숫자의 시각 — 카드·줄이 'HH:MM 기준'을 그릴 때만 (기여 상위 묶음이 있으면 부르는 쪽이 넘기지 않음)
+    opts.time && b.status !== "failed" && briefingTime(b.createdAt) ? `${speakClock(briefingTime(b.createdAt))} 기준` : null,
     "자세히 보기",
   ]);
 }

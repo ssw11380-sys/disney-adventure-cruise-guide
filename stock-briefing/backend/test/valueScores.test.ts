@@ -636,11 +636,13 @@ describe("비교 기준 만들기 (Nasdaq 스크리너 · SEC frames)", () => {
     expect(referencePeriods("2027-01-02").latest).toEqual(["CY2026Q3I", "CY2026Q2I"]);
     const plan = framePlan(referencePeriods("2026-09-26"));
     expect(new Set(plan.map((p) => `${p.tag.name}|${p.period}`)).size).toBe(plan.length);
-    // 매출·영업이익·순이익 7년, 주식 수 6년 × 두 태그, 나머지 흐름 3년 (문서 10장 '216번')
-    expect(plan.length).toBe(216);
-    // 비교 회사 주식 수도 대상 종목처럼 두 태그 (검토 지적: 앞 태그만 받던 것)
+    // 매출·영업이익·순이익 7년, 주식 수 6년 × 세 태그(3단계: 기본 주식 수 더함 — XOM 처럼 기본만 보고하는 회사), 나머지 흐름 3년 (문서 5장 '222번')
+    expect(plan.length).toBe(222);
+    // 비교 회사 주식 수도 대상 종목처럼 세 태그 (검토 지적: 앞 태그만 받던 것 · 3단계: 기본 주식 수)
     expect(plan.filter((p) => p.key === "shares").map((p) => `${p.tag.name}|${p.period}`)).toEqual(
-      ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"].flatMap((t) => ["CY2021", "CY2022", "CY2023", "CY2024", "CY2025", "CY2026"].map((y) => `${t}|${y}`)),
+      ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfShareOutstandingBasicAndDiluted", "WeightedAverageNumberOfSharesOutstandingBasic"].flatMap((t) =>
+        ["CY2021", "CY2022", "CY2023", "CY2024", "CY2025", "CY2026"].map((y) => `${t}|${y}`),
+      ),
     );
     expect(plan.filter((p) => p.tag.name === "NetCashProvidedByUsedInOperatingActivities").map((p) => p.period)).toEqual(["CY2024", "CY2025", "CY2026"]);
   });
@@ -979,7 +981,9 @@ describe("같은 값이 많은 지표 (무배당 0% 등) — 리뷰: '배당이 
     expect(row.positions).toBe("업종 안 위치 68/100 · 시장 안 79/100");
     // p = 100 × (1 − 0.5 × 같은 회사 비율) → 비율 = 2 × (100 − 68) = 64%
     expect(row.note).toBe(topTieNote("업종", 64, 68));
-    expect(row.note).toBe("업종 비교 회사의 64%가 같은 맨 위 순위라, 위치 점수는 그 무리의 가운데 값(68)입니다.");
+    // 지표 줄의 '위치 점수'(업종·시장을 섞은 73)와 헷갈리지 않게 '업종 안 위치' (3단계 검토 지적)
+    expect(row.note).toBe("업종 비교 회사의 64%가 같은 맨 위 순위라, 업종 안 위치는 그 무리의 가운데 값(68)입니다.");
+    expect(row.score).toBe(73);
     // 맨 위가 이 회사 하나뿐(위치 100)이면 안내 없음
     expect(metricRow({ ...d2, pos: { industry: 100, market: 100 } }).note).toBeNull();
     for (const k of ["netCash", "evNonPositive", "noInterest"] as const) expect(RULE_TEXT[k]).toMatch(/같은 순위\)\.$/);
@@ -1112,7 +1116,10 @@ describe("검토 지적 3차 (배당 삭감 표시 · 비교 회사 주식 수 �
     const fin = metricRow(f1, { path: "financial", annualEnd: null });
     expect([fin.positions, fin.mix, fin.peerMedian]).toEqual(["업종 안 위치 81/100 · 금융사 전체 안 66/100", "업종 50 · 금융사 전체 50", "업종 가운데값 1.0%"]);
     const atMarket = metricRow({ ...f1, pos: { industry: 66, market: 66 }, peer: { ...f1.peer!, level: "market", name: null } }, { path: "financial", annualEnd: null });
-    expect([atMarket.positions, atMarket.mix, atMarket.peerMedian]).toEqual(["금융사 전체 안 위치 66/100", "금융사 전체 50 · 금융사 전체 50", "금융사 전체 가운데값 1.0%"]);
+    // 업종 자리가 시장(금융사 전체)으로 내려가면 두 비교가 같은 무리라 한 항목으로 ('금융사 전체 50 · 금융사 전체 50' 이던 것, 3단계 검토 지적)
+    expect([atMarket.positions, atMarket.mix, atMarket.peerMedian]).toEqual(["금융사 전체 안 위치 66/100", "금융사 전체 100", "금융사 전체 가운데값 1.0%"]);
+    expect(mixText({ industry: 50, market: 50 }, "market")).toBe("시장 100");
+    expect(mixText({ industry: 35.7, market: 14.3, own: 50 }, "market")).toBe("시장 50 · 지난 5년 50");
     expect(JSON.stringify(fin) + JSON.stringify(atMarket)).not.toMatch(/시장/);
     expect(metricRow(f1, { path: "general", annualEnd: null }).positions).toBe("업종 안 위치 81/100 · 시장 안 66/100");
     expect(peerFallbackText("market", null, "financial")).toBe("같은 업종 회사가 적어 금융사 전체와 비교했습니다.");

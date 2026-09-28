@@ -16,6 +16,8 @@ import { benchFetchFailed, changeText, DISTRIBUTION_NOTE, howLines, leverageBox,
 import { benchOf, candlesOf, expected, tossInfo } from "./fixtures/indicatorScores/load.js";
 import { dailyOf, fakeValueSources, monthlyOf, referenceData } from "./fixtures/valueScores/load.js";
 import type { ValueSources } from "../src/services/valueScoreService.js";
+import type { KrValueSources } from "../src/services/krValueService.js";
+import { fakeKrSources, krReference } from "./fixtures/krValue/load.js";
 import { fakeProviders } from "./helpers.js";
 
 /**
@@ -48,6 +50,9 @@ const STOCKS: Record<string, ScoreStock> = {
   JPM: { code: "JPM", name: "JP모건 체이스", market: "NYSE" },
   ZZGAP: { code: "ZZGAP", name: "예시 종목 (두 점수 차이 큼)", market: "NASDAQ" },
   ZZNOF: { code: "ZZNOF", name: "예시 종목 (SEC 재무 없음)", market: "NASDAQ" },
+  // 3단계 공용 픽스처: 한국 간이 가치 · 12·12·12·16주 분기(COST) · 분할 미반영 보류(합성)
+  "105560": { code: "105560", name: "KB금융", market: "KOSPI" },
+  COST: { code: "COST", name: "코스트코", market: "NASDAQ" },
 };
 const FIX_SYM = (code: string) => (/^\d{6}$/.test(code) ? `${code}.KS` : code);
 
@@ -111,10 +116,10 @@ afterEach(async () => {
 });
 
 /** 서버 기본은 켜짐 — on: false 면 PUT 없이 기본값 그대로 */
-async function start(sources: ScoreSources, at = kst("2026-09-28T10:00:00"), on = true, valueSources?: ValueSources) {
+async function start(sources: ScoreSources, at = kst("2026-09-28T10:00:00"), on = true, valueSources?: ValueSources, krValueSources?: KrValueSources) {
   clock = at;
   db = await createMigratedDb(":memory:");
-  app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ scoreSources: sources, ...(valueSources ? { valueSources } : {}) }), logger: false, enableScheduler: false, now: () => clock });
+  app = await buildApp({ config: loadConfig({ DATABASE_URL: ":memory:" }), db, providers: fakeProviders({ scoreSources: sources, ...(valueSources ? { valueSources } : {}), ...(krValueSources ? { krValueSources } : {}) }), logger: false, enableScheduler: false, now: () => clock });
   if (on) await app.inject({ method: "PUT", url: "/api/admin/features", payload: { indicatorScores: true } });
   return app;
 }
@@ -701,22 +706,29 @@ describe("문구 (금지어 · 미래형)", () => {
 
 describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서버 응답)", () => {
   /** shared/fixtures/indicatorScores.json — 지금 서버 코드가 기록한 일봉으로 낸 응답과 같아야 한다. 바꿀 때: UPDATE_SCORE_FIXTURE=1 npx vitest run test/indicatorScores.test.ts */
-  it("2단계(가치·종합 켜짐): NVDA · MSFT · AAPL · META · JPM(은행) · RGTI(적자) · 차이 큰 예시 · SEC 재무 없는 예시 · 삼성전자 · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 지난주 대비 바뀐 종목(추세·가치) · 재무 받는 중 · 가치 끔 · 받기 실패", async () => {
+  it("2·3단계(가치·종합 켜짐): NVDA · MSFT · AAPL · META · JPM(은행) · RGTI(적자) · 차이 큰 예시 · SEC 재무 없는 예시 · 삼성전자·SK하이닉스·KB금융(한국 간이) · COST · QQQ · SOXL · RGTX · SQQQ · 짧은 기록 · 분할 보류 · 지난주 대비 바뀐 종목(추세·가치) · 재무 받는 중 · 가치 끔 · 한국 가치 끔 · 받기 실패", async () => {
     const { stock } = jumpCandles();
+    // 분할 미반영 일봉 (합성): 60봉 앞까지 가격을 10배로 — 그날 1/10 로 뚝 떨어져 추세 쪽이 '잠시 보류'
+    const nv = candlesOf("NVDA");
+    const k = nv.length - 60;
+    const split = nv.map((c, i) => (i < k ? { ...c, open: c.open * 10, high: c.high * 10, low: c.low * 10, close: c.close * 10 } : i === k ? { ...c, open: nv[k - 1]!.close, close: nv[k - 1]!.close } : c));
     const { src } = fixtureSources({
-      candles: { ZJMP: stock, SHRT: candlesOf("NVDA").slice(-120), SQQQ: new Error("기록 없음") },
-      stocks: { ZJMP: { code: "ZJMP", name: "합성 종목", market: "NASDAQ" }, SHRT: { code: "SHRT", name: "짧은 기록", market: "NASDAQ" } },
+      candles: { ZJMP: stock, SHRT: candlesOf("NVDA").slice(-120), SQQQ: new Error("기록 없음"), ZSPL: split },
+      stocks: { ZJMP: { code: "ZJMP", name: "합성 종목", market: "NASDAQ" }, SHRT: { code: "SHRT", name: "짧은 기록", market: "NASDAQ" }, ZSPL: { code: "ZSPL", name: "합성 종목 (분할 미반영)", market: "NASDAQ" } },
     });
     const value = fakeValueSources({ alias: { ZZGAP: "RGTI" } });
-    await start(src, undefined, true, value.src);
+    await start(src, undefined, true, value.src, fakeKrSources().src);
     await app!.valueScores.saveReference(referenceData());
-    for (const c of ["NVDA", "MSFT", "AAPL", "META", "JPM", "RGTI", "ZZGAP"]) await app!.valueScores.refreshFacts(c);
+    // 한국 비교 기준: 2026-09-28 실제로 만든 것을 줄인 픽스처 (네이버 업종 구성 종목 + 재무 요약)
+    await app!.krValue.saveReference(krReference());
+    for (const c of ["NVDA", "MSFT", "AAPL", "META", "JPM", "RGTI", "ZZGAP", "COST"]) await app!.valueScores.refreshFacts(c);
+    for (const c of ["005930", "000660", "105560"]) await app!.krValue.refreshFacts(c);
     const cases: Record<string, unknown> = {};
     const take = async (c: string, key = c) => {
       const { computedAt: _t, ...body } = (await get(c)).body;
       cases[key] = body;
     };
-    for (const c of ["NVDA", "MSFT", "AAPL", "META", "JPM", "RGTI", "ZZGAP", "005930", "QQQ", "SOXL", "RGTX", "SQQQ", "SHRT", "ZJMP"]) await take(c);
+    for (const c of ["NVDA", "MSFT", "AAPL", "META", "JPM", "RGTI", "ZZGAP", "005930", "000660", "105560", "COST", "QQQ", "SOXL", "RGTX", "SQQQ", "SHRT", "ZJMP", "ZSPL"]) await take(c);
     // SEC 목록에 없는 종목: 처음엔 '재무제표를 처음 받는 중' → 백그라운드 확인 뒤 '점수 없음'
     await take("ZZNOF", "ZZNOF_pending");
     await app!.valueScores.idle();
@@ -727,6 +739,11 @@ describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서
     await start(fixtureSources().src, undefined, true, fakeValueSources().src);
     await app!.inject({ method: "PUT", url: "/api/admin/features", payload: { valueScore: false } });
     await take("NVDA", "NVDA_valueOff");
+    // 한국 가치만 끈 서버 (3단계 되돌리기 스위치 krValueScore)
+    await app!.close();
+    await start(fixtureSources().src, undefined, true, fakeValueSources().src, fakeKrSources().src);
+    await app!.inject({ method: "PUT", url: "/api/admin/features", payload: { krValueScore: false } });
+    await take("005930", "005930_krOff");
     // 지난주 대비 바뀐 이유 (가치): 지난주에 쓰던 비교 기준(9/17)은 비교 회사 주가 수준 값(이익·자산·매출 ÷ 시가총액)을 1/5 로 둔 것 →
     // 이번 주(9/26 기준)와 가치 점수가 5점 넘게 달라 상세 카드에 한 줄 (서버 코드가 낸 응답 그대로)
     await app!.close();
@@ -748,7 +765,7 @@ describe("공용 픽스처 (앱 화면 테스트·웹 미리보기가 쓰는 서
       cases[`${c}_fetchFailed`] = body;
     }
     const file = new URL("../../shared/fixtures/indicatorScores.json", import.meta.url);
-    const fixture = { note: "지표 점수 2단계 서버 응답 (GET /api/scores/:code, computedAt 제외) — 기록한 야후 공개 일봉(backend/test/fixtures/indicatorScores·valueScores)과 SEC 재무·2026-09-26 비교 기준(backend/test/fixtures/valueScores)으로 서버 코드가 낸 값. 2026-09-28 10:00 KST 기준. ZZ 로 시작하는 코드는 예시 종목(다른 종목 기록을 빌림)", cases };
+    const fixture = { note: "지표 점수 2·3단계 서버 응답 (GET /api/scores/:code, computedAt 제외) — 기록한 야후 공개 일봉(backend/test/fixtures/indicatorScores·valueScores)과 SEC 재무·2026-09-26 비교 기준(backend/test/fixtures/valueScores), 네이버 재무 요약·2026-09-28 한국 비교 기준(backend/test/fixtures/krValue)으로 서버 코드가 낸 값. 2026-09-28 10:00 KST 기준. ZZ 로 시작하는 코드는 예시 종목(다른 종목 기록을 빌림), ZJMP·ZSPL 은 합성 일봉", cases };
     if (process.env["UPDATE_SCORE_FIXTURE"] === "1") writeFileSync(file, `${JSON.stringify(fixture, null, 1)}\n`);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(fixture);
   });

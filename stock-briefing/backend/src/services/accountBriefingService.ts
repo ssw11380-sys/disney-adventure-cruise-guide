@@ -18,6 +18,7 @@ import {
   krPreviousDay,
   leaders,
   pickIndices,
+  quoteBasisOf,
   sessionKo,
   summaryText,
   templateNarrative,
@@ -72,7 +73,7 @@ export interface AccountBriefingDeps {
   calendar: { status(): Promise<MarketStatus> } | null;
   generator: TextGenerator;
   prompts: PromptStore;
-  features: { enabled(key: "accountBriefing" | "accountBriefingLlm"): Promise<boolean> };
+  features: { enabled(key: "accountBriefing" | "accountBriefingLlm" | "numberBasis"): Promise<boolean> };
   now?: () => Date;
   log?: { info(obj: Record<string, unknown>, msg: string): void; warn(obj: Record<string, unknown>, msg: string): void };
 }
@@ -185,6 +186,8 @@ export class AccountBriefingService {
       narrative: { source: "template", reason: null },
     };
     data.krPreviousDay = krPreviousDay(data.schedule, totals);
+    // 숫자 기준 (3-32): 합계에 넣은 종목 시세의 기준만 저장한다 — 요약·설명·알림·모델 입력에는 넣지 않는다 (켜도 꺼도 같은 글)
+    if (await this.deps.features.enabled("numberBasis").catch(() => false)) data.quoteBasis = quoteBasisOf(holdings, totals);
     data.usPreviousDay = usPreviousDay(now, totals);
     if (data.usPreviousDay) data.usHolidayDate = usSkippedSession(now)!;
     if (data.holdings === 0) {

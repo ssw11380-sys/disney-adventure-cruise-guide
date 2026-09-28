@@ -110,7 +110,8 @@ export interface TossOpenApiStatus {
   } | null;
   /** 토스 계좌 자동 대조 (앱 총평가 vs 토스 비용 차감 평가). 구버전 서버에는 없음 */
   reconcile?: {
-    last: { at: string; diffKrw: number; diffPct: number; missing: number; qtyMismatch?: string[] } | null;
+    /** n: 비교한 종목 수 (예전 기록에는 없음) */
+    last: { at: string; diffKrw: number; diffPct: number; missing: number; qtyMismatch?: string[]; n?: number } | null;
     streakOver: number;
     qtyStreak?: number;
     week: { n: number; withinPct: number | null };
@@ -295,6 +296,8 @@ export interface AccountData {
   usPreviousDay?: boolean;
   /** 쉰 미국 정규장의 뉴욕 날짜 (usPreviousDay 일 때만). 브리핑 날짜의 전날이 아니면(금요일 휴장 다음 월요일) '12/25(금) 미국 휴장'. 예전 서버에는 없음 → '지난밤' */
   usHolidayDate?: string;
+  /** 합계에 넣은 종목 시세의 기준 (3-32, 서버 numberBasis 를 켠 뒤 만든 브리핑만). 예전 기록·플래그 끔은 없음 */
+  quoteBasis?: QuoteBasis;
 }
 
 export interface AccountHeadline {
@@ -790,7 +793,8 @@ export interface AuthMe {
 /**
  * GET /api/scores/:code — 지표 점수 (3-44, 플래그 indicatorScores). 서버 services/indicatorScoreService 의 ScoresResponse 와 같은 모양.
  * 모든 문장은 서버가 만든다(금지어 검사를 서버 한 곳에서) — 앱은 배치만 하고, 앱에 고정된 글은 줄 이름·버튼뿐이다.
- * 1단계: 추세 지표 점수. 2단계(서버 플래그 valueScore): 미국 보통주 가치 지표 점수와 종합(두 점수가 모두 있을 때 평균) — 한국은 '계산 준비 중', ETF 는 '대상 아님'.
+ * 1단계: 추세 지표 점수. 2단계(서버 플래그 valueScore): 미국 보통주 가치 지표 점수와 종합(두 점수가 모두 있을 때 평균) — ETF 는 '대상 아님'.
+ * 3단계(서버 플래그 krValueScore): 한국 보통주도 가치 지표 점수(간이 계산 — grade 'lite', 배지 '간이 계산')와 종합. 끈 서버는 한국 가치 줄이 '지금 계산하지 않음'.
  * 예전 서버(1단계)는 가치 칸에 label·text 만 준다 → 새 칸은 모두 없을 수 있다고 보고 그린다.
  * trend.reason.code 'fetchFailed' = 받기 실패(일봉·비교 지수·기초자산 일봉) — 서버가 5분 뒤 다시 계산한다
  */
@@ -895,6 +899,8 @@ export interface ValueFamilyRow {
 /** 가치 지표 칸. 예전 서버(1단계)는 method·status·label·score·band·about·text 만 준다 */
 export interface ValueScoreBlock {
   method: string;
+  /** 계산 등급 (3단계): full = 미국(SEC 재무 전체), lite = 한국 간이(네이버 재무 요약, 배지 '간이 계산'). 점수가 없거나 예전 서버면 없음·null */
+  grade?: "full" | "lite" | null;
   /** ok · partial(일부 지표 없이) · insufficient·unavailable(점수 없음) · excluded(대상 아님) · pending(계산 준비 중) · hold(잠시 보류) */
   status: "ok" | "partial" | "insufficient" | "unavailable" | "excluded" | "pending" | "hold";
   /**
@@ -978,4 +984,28 @@ export interface VolumeStatus {
   minutes: number | null;
   asOf: string;
   reason: string | null;
+}
+
+/** 잔고 '숫자 기준' 배지 (3-32, 플래그 numberBasis — 서버 GET /api/admin/toss/reconcile/badge 와 같은 모양) */
+export interface ReconcileBadgeBody {
+  /** numberBasis·tossReconcile 이 켜져 있고 토스 연동이 있을 때만 true */
+  on: boolean;
+  status: NonNullable<TossOpenApiStatus["reconcile"]> | null;
+  /** 최근 7일 정규장 시간 기록: 비교한 수 · 그중 차이 0.1% 이하 비율 · 비교하지 못한 수 */
+  intraday: { n: number; withinPct: number | null; skipped: number } | null;
+  /** 자동 동기화 상태 — '숫자 기준' 창 설명과 '오래된 기록' 판단에 */
+  sync: { enabled: boolean; intervalMin: number; idleIntervalMin: number; lastRunAt: string | null; nextRunAt: string | null } | null;
+}
+
+/** 계좌 브리핑 시세 기준 (3-32 — 서버 accountNumbers.ts 의 QuoteBasisTag·MarketQuoteBasis·QuoteBasis 와 같은 모양) */
+export type QuoteBasisTag = "NXT" | "주간거래" | "시간외" | "정규장" | "모름";
+export interface MarketQuoteBasis {
+  count: number;
+  /** 기준별 종목 수 (많은 순, 같으면 NXT·주간거래·시간외·정규장·모름) */
+  tags: { tag: QuoteBasisTag; count: number }[];
+}
+/** 계좌 브리핑을 만들 때 합계에 넣은 종목 시세의 기준. 종목이 없는 시장은 null */
+export interface QuoteBasis {
+  kr: MarketQuoteBasis | null;
+  us: MarketQuoteBasis | null;
 }

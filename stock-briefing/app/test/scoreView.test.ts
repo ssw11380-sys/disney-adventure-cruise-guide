@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { IndicatorScores } from "@/api/types";
-import { barFraction, compositeLine, familyLabel, familySpeech, flagPreview, itemLine, leverageSpeech, metricMain, metricSpeech, moreFlagsText, nameWidth, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueJumpY, valueSpeech, valueWaiting } from "@/lib/scoreView";
+import { barFraction, compositeLine, familyLabel, familySpeech, flagPreview, itemLine, leverageSpeech, metricMain, metricSpeech, moreFlagsText, nameWidth, reasonOnly, SCORE_LABELS, showComposite, stackRows, summarySpeech, trendHasScore, trendSpeech, valueHasScore, valueJumpY, valueSpeech, valueWaiting, weightJoin, WEIGHT_JOIN } from "@/lib/scoreView";
 
 /**
  * 지표 점수 화면 모양 (3-44 — 2단계부터 가치·종합). 서버 응답은 공용 픽스처(shared/fixtures/indicatorScores.json — 서버 테스트가 지금 서버 코드의 응답과 같은지 본다).
@@ -39,7 +39,8 @@ describe("화면 읽기 문장", () => {
   it("가치 점수 없음·대상 아님·한국: 상태 글과 이유 (보이는 이유 줄을 화면 읽기도 읽는다)", () => {
     expect(valueSpeech(S["ZZNOF"]!.value)).toBe("가치 지표, 점수 없음, SEC 재무제표를 찾지 못했습니다 (외국 회사·새로 상장한 회사 등)");
     expect(valueSpeech(S["SOXL"]!.value)).toBe("가치 지표, 대상 아님, ETF는 여러 종목을 묶은 상품이라, 한 회사의 재무로 계산하는 이 점수를 내지 않습니다");
-    expect(valueSpeech(S["005930"]!.value)).toBe("가치 지표, 계산 준비 중, 한국 종목 가치 지표 점수는 다음 단계에서 계산합니다");
+    // 한국 가치를 끈 서버 (3단계 되돌리기 스위치 krValueScore)
+    expect(valueSpeech(S["005930_krOff"]!.value)).toBe("가치 지표, 지금 계산하지 않음, 한국 종목 가치 지표 점수는 지금 계산하지 않습니다");
     expect(valueSpeech(S["ZZNOF_pending"]!.value)).toBe("가치 지표, 계산 준비 중, 재무제표를 처음 받는 중입니다 (보통 몇 분 안)");
     // 예전 서버(이유 없이 label·text 만)도 그대로 읽는다
     expect(valueSpeech({ method: "VALUE-1", status: "pending", label: "계산 준비 중", score: null, band: null, about: "", text: "" })).toBe("가치 지표, 계산 준비 중");
@@ -69,7 +70,10 @@ describe("화면 읽기 문장", () => {
   });
   it("삼성전자: 68 다소 강함", () => expect(trendSpeech(S["005930"]!.trend)).toBe("추세 지표 68점, 다소 강함"));
   it("SOXL: 이 상품 자체 점수 없음 + 기초자산 참고", () => {
-    expect(summarySpeech(S["SOXL"]!)).toBe("지표 점수. 가치 지표, 대상 아님, ETF는 여러 종목을 묶은 상품이라, 한 회사의 재무로 계산하는 이 점수를 내지 않습니다. 추세 지표, 이 상품 자체 점수 없음. 참고: 기초자산 SOXX 추세 지표 73 · 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.");
+    // 추세 줄은 보이는 이유 글까지 읽는다 (3단계 검토 지적)
+    expect(summarySpeech(S["SOXL"]!)).toBe(
+      "지표 점수. 가치 지표, 대상 아님, ETF는 여러 종목을 묶은 상품이라, 한 회사의 재무로 계산하는 이 점수를 내지 않습니다. 추세 지표, 이 상품 자체 점수 없음, 매일 3배를 다시 맞추는 상품이라 이 상품 가격으로는 계산하지 않습니다. 참고: 기초자산 SOXX 추세 지표 73 · 강함. 종합 지표 없음, 가치 지표 점수가 없어 합치지 않습니다.",
+    );
   });
   it("레버리지 주의 상자: 줄 앞 '·'·줄 끝 마침표를 떼고 이어 읽는다 (마침표 겹침 없음)", () => {
     const sp = leverageSpeech(S["SOXL"]!.trend.leveraged!.box);
@@ -79,10 +83,10 @@ describe("화면 읽기 문장", () => {
     expect(sp.endsWith("차이가 커질 수 있습니다.")).toBe(true);
   });
   it("점수 없음·대상 아님·받기 실패", () => {
-    expect(trendSpeech(S["NVDA_fetchFailed"]!.trend)).toBe("추세 지표, 점수 없음");
+    expect(trendSpeech(S["NVDA_fetchFailed"]!.trend)).toBe("추세 지표, 점수 없음, 비교 지수(나스닥) 일봉을 받지 못했습니다. 잠시 뒤 다시 계산합니다");
     expect(valueSpeech(S["NVDA_fetchFailed"]!.value)).toBe("가치 지표 67점, 0에서 100 중, 높은 편");
-    expect(trendSpeech(S["SHRT"]!.trend)).toBe("추세 지표, 점수 없음");
-    expect(trendSpeech(S["SQQQ"]!.trend)).toBe("추세 지표, 대상 아님");
+    expect(trendSpeech(S["SHRT"]!.trend)).toBe("추세 지표, 점수 없음, 기록이 120거래일이라 계산할 수 없습니다 (200거래일 필요)");
+    expect(trendSpeech(S["SQQQ"]!.trend)).toBe("추세 지표, 대상 아님, 인버스 상품은 점수를 내지 않습니다 (기초자산과 반대로 움직이도록 만든 상품)");
   });
   it("묶음: '추세 69점, 비중 35' · 항목 점수 한 줄", () => {
     const f = S["NVDA"]!.trend.families[0]!;
@@ -105,21 +109,26 @@ describe("보이는 모양", () => {
       RGTI: true,
       ZZGAP: true,
       "005930": true,
+      "000660": true,
+      "105560": true,
+      COST: true,
       QQQ: true,
       SOXL: false,
       RGTX: false,
       SQQQ: false,
       SHRT: false,
       ZJMP: true,
+      ZSPL: false,
       ZZNOF_pending: true,
       ZZNOF: true,
       NVDA_valueOff: true,
+      "005930_krOff": true,
       NVDA_change: true,
       NVDA_fetchFailed: false,
       SOXL_fetchFailed: false,
     });
-    // 가치 줄은 미국 보통주 점수만 (한국 · ETF · 받는 중 · SEC 재무 없음 · 가치 끔은 상태 글)
-    expect(Object.entries(S).filter(([, v]) => valueHasScore(v.value)).map(([k]) => k)).toEqual(["NVDA", "MSFT", "AAPL", "META", "JPM", "RGTI", "ZZGAP", "NVDA_change", "NVDA_fetchFailed"]);
+    // 가치 줄은 미국 보통주 · 한국 보통주(간이) 점수만 (ETF · 받는 중 · SEC 재무 없음 · 가치 끔 · 한국 가치 끔은 상태 글)
+    expect(Object.entries(S).filter(([, v]) => valueHasScore(v.value)).map(([k]) => k).sort()).toEqual(["000660", "005930", "105560", "AAPL", "COST", "JPM", "META", "MSFT", "NVDA", "NVDA_change", "NVDA_fetchFailed", "RGTI", "ZZGAP"].sort());
   });
   it("종합 숫자는 두 점수가 모두 있을 때만 = 두 정수의 평균, 없으면 '없음'과 이유 (설계 5.4 '없으면 없다고')", () => {
     for (const s of Object.values(S)) {
@@ -180,5 +189,44 @@ describe("문구", () => {
     const all = [...Object.values(SCORE_LABELS), ...texts(fx)];
     expect(all.length).toBeGreaterThan(200);
     expect(all.map((s) => [s, problems(s)] as const).filter(([, p]) => p.length)).toEqual([]);
+  });
+});
+
+describe("3단계 — 한국 간이 가치 · 2단계 남은 지적 (화면 읽기·묶음 이름 줄바꿈)", () => {
+  it("한국 종목: 가치 점수 + '간이 계산' 배지를 화면 읽기도 읽는다, 종합은 두 정수의 평균", () => {
+    const k = S["005930"]!;
+    expect(k.value.grade).toBe("lite");
+    expect(k.value.badges).toEqual(["간이 계산"]);
+    expect(valueHasScore(k.value)).toBe(true);
+    expect(valueSpeech(k.value)).toBe(`가치 지표 ${k.value.score}점, 0에서 100 중, ${k.value.band}, 간이 계산`);
+    expect(showComposite(k)).toBe(true);
+    expect(k.asOf.line).toMatch(/^가격 9월 23일\(수\) 한국 종가 · 재무 2026년 6월까지 4분기$/);
+    // 한국 가치를 끈 서버: '지금 계산하지 않음' — 앱은 다시 묻지 않는다
+    expect(valueSpeech(S["005930_krOff"]!.value)).toBe("가치 지표, 지금 계산하지 않음, 한국 종목 가치 지표 점수는 지금 계산하지 않습니다");
+    expect(valueWaiting(S["005930_krOff"])).toBe(false);
+  });
+  it("한국 비교 회사 첫 채우기(며칠)는 1분마다 다시 묻지 않는다, 대상 종목 재무를 처음 받는 중은 다시 묻는다", () => {
+    const withReason = (code: string) => ({ ...S["NVDA"]!, value: { ...S["NVDA_valueOff"]!.value, label: "계산 준비 중", reason: { code, text: "" } } });
+    expect(valueWaiting(withReason("krFirstFill"))).toBe(false);
+    expect(valueWaiting(withReason("krOff"))).toBe(false);
+    expect(valueWaiting(withReason("pendingFacts"))).toBe(true);
+  });
+  it("추세 줄 화면 읽기는 보이는 이유 글까지 (레버리지 · 분할 보류) — 상태 글을 두 번 읽지 않는다", () => {
+    expect(trendSpeech(S["SOXL"]!.trend)).toBe("추세 지표, 이 상품 자체 점수 없음, 매일 3배를 다시 맞추는 상품이라 이 상품 가격으로는 계산하지 않습니다");
+    const hold = S["ZSPL"]!.trend;
+    expect(hold).toMatchObject({ status: "hold", label: "잠시 보류", reason: { code: "split", text: "주식 분할·병합 반영을 확인하는 중입니다" } });
+    expect(trendSpeech(hold)).toBe("추세 지표, 잠시 보류, 주식 분할·병합 반영을 확인하는 중입니다");
+    // 예전 서버 이유 글 '잠시 보류 — …' 도 상태 글을 떼고 읽는다
+    const old = { ...hold, reason: { code: "split", text: "잠시 보류 — 주식 분할·병합 반영을 확인하는 중입니다" } };
+    expect(trendSpeech(old)).toBe("추세 지표, 잠시 보류, 주식 분할·병합 반영을 확인하는 중입니다");
+    expect([reasonOnly("잠시 보류", "잠시 보류 — 가"), reasonOnly("점수 없음", "기록이 모자랍니다"), reasonOnly("x", null)]).toEqual(["가", "기록이 모자랍니다", null]);
+  });
+  it("묶음 이름 비중 이음: 보통은 줄바꿈 없는 빈칸, 큰 글씨(130% 이상)는 '·' 앞에서 줄을 바꿀 수 있게 ('가격 안정 / 성 · 10' 으로 낱말 가운데서 끊기던 것)", () => {
+    expect(weightJoin(1)).toBe(WEIGHT_JOIN);
+    expect(weightJoin(1.15)).toBe(WEIGHT_JOIN);
+    expect(weightJoin(2)).toBe(" · ");
+    expect(familyLabel("가격 안정성", 10, 2)).toBe("가격 안정성 · 10");
+    // 빈칸은 '가격'과 '안정성' 사이, '안정성'과 '·' 사이 — '·'와 숫자 사이는 줄바꿈 없는 빈칸
+    expect(familyLabel("가격 안정성", 10, 2).split(" ")).toEqual(["가격", "안정성", "· 10"]);
   });
 });

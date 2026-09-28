@@ -15,7 +15,9 @@ export type StreamMessage =
   | { type: "ticks"; ticks: StreamTick[] }
   | ({ type: "tick" } & StreamTick)
   | { type: "ping"; at: number }
-  | { type: "holdings"; at: number };
+  | { type: "holdings"; at: number }
+  /** 토스 대조 기록이 새로 생겼다 → '숫자 기준' 배지를 다시 받는다 (3-32, 서버 플래그 numberBasis 일 때만 옴) */
+  | { type: "reconcile"; at: number };
 
 /** 같은 종목 체결이 여러 개면 가장 늦은 것 하나만 (묶음 적용 전에) */
 export function latestPerCode(ticks: StreamTick[]): Map<string, StreamTick> {

@@ -37,6 +37,8 @@ export interface Rendered {
 }
 
 export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette: WidgetPalette): React.JSX.Element {
+  // 숫자 기준 (numberBasis, 3-32): 켜져 있을 때만 칸을 더한다 (꺼져 있으면 넘기는 값이 예전과 같아 그림도 같다). 잔고·자산 위젯만
+  const basis = data.features.basis === true ? { basis: true } : {};
   // 폭 규칙이 막을 때만 칸을 더한다 (막지 않으면 넘기는 값이 예전과 같아 그림도 같다)
   const frame = { width: o.width, height: o.height, fontScale: o.fontScale, palette, ...(wideExtrasOk(o.width, data.features.foldFit === true) ? {} : { wideExtras: false }) };
   switch (name) {
@@ -58,7 +60,7 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
         />
       );
     case WIDGET_NAMES.asset:
-      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={o.now} market={data.market} {...frame} />;
+      return <AssetWidget stocks={data.stocks} showKrw={data.showKrw} afterCost={data.afterCost} fetchedAt={data.fetchedAt} error={data.error} filled={data.filled} now={o.now} market={data.market} {...basis} {...frame} />;
     case WIDGET_NAMES.market:
       // 판을 받은 지 3시간(서버 지연 한도)이 넘으면 모든 칸을 "지연"으로
       return (
@@ -92,6 +94,7 @@ export function renderOne(name: string, data: WidgetData, o: RenderOpts, palette
           refreshing={o.refreshing}
           polish={data.features.polish}
           rowKrw={data.rowKrw !== false}
+          {...basis}
           {...frame}
         />
       );
