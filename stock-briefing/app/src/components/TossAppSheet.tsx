@@ -13,7 +13,7 @@ type Step = "find" | "fail" | "storeFail";
  * 토스 앱 안내 시트 (3-48, 기능 플래그 tossOpen). 가격 알림 시트와 같은 모양: 휴대폰은 아래에 붙이고, 넓은 창은 가운데 최대 560dp.
  *  1. '토스 앱에서 찾기' · '토스 앱 → 증권 → 검색에서 "삼성전자"(005930)을 찾아 주세요.' · '주문은 토스 앱에서 직접 합니다.' · [토스 앱 열기] [닫기]
  *  2. [토스 앱 열기] → Linking.openURL('supertoss://') (토스 앱 자체만 — 종목 경로를 추측해 붙이지 않는다). 열리면 시트를 닫는다
- *  3. 못 열면(토스 앱 없음) 같은 시트에 '토스 앱을 열지 못했습니다. …' + [Play 스토어에서 보기] (market:// → 안 되면 https Play 주소)
+ *  3. 못 열면(토스 앱 없음) 같은 시트에 '토스 앱을 열지 못했습니다. …' + [Play 스토어에서 보기] (market:// → 안 되면 https Play 주소) + [토스 앱 다시 열기] (한 번 잘못 거절됐을 때 시트를 닫지 않고 다시)
  * 이 앱은 주문을 넣지 않고 서버도 부르지 않는다. 바깥(어두운 곳)·뒤로 가기·[닫기]로 닫힌다
  */
 export function TossAppSheet({ target, onClose }: { target: TossAppTarget; onClose: () => void }) {
@@ -75,7 +75,10 @@ export function TossAppSheet({ target, onClose }: { target: TossAppTarget; onClo
           ) : null}
           <View style={styles.actions}>
             {failed ? (
-              <Button title={TOSS_APP.store} icon="storefront-outline" loading={busy} onPress={() => void run(openTossStore, "storeFail")} />
+              <>
+                <Button title={TOSS_APP.store} icon="storefront-outline" loading={busy} onPress={() => void run(openTossStore, "storeFail")} />
+                <Button title={TOSS_APP.retry} icon="refresh-outline" variant="secondary" disabled={busy} onPress={() => void run(openTossApp, "fail")} />
+              </>
             ) : (
               <Button title={TOSS_APP.open} icon="open-outline" loading={busy} onPress={() => void run(openTossApp, "fail")} />
             )}

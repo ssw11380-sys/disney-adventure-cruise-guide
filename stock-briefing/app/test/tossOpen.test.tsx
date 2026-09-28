@@ -90,7 +90,9 @@ const { font, fontCap, foldDetail, space, touch } = await import("@/tokens");
 const { estimateTextWidth } = await import("@/lib/chartLayout");
 const { sideWidth, splitColumns, statColumns } = await import("@/lib/detailLayout");
 const lib = await import("@/lib/tossApp");
-const { tossAppTarget, tossSheetBody, TOSS_APP } = lib;
+const { tossAppTarget, tossFindText, TOSS_APP } = lib;
+/** 시트 본문 전체 (첫 문장 + 주문 안내) — 화면에는 두 조각으로 나뉘어 있어 테스트에서만 한 줄로 합친다 */
+const tossSheetBody = (t: { name: string; code: string }) => `${tossFindText(t)} ${TOSS_APP.note}`;
 
 const A11Y = "토스 앱 열기, 토스에서 이 종목을 직접 찾아야 합니다";
 const TOSS_SCHEME = "supertoss://";
@@ -231,7 +233,7 @@ describe("문구: 투자 권유로 읽히지 않는다", () => {
   const SRC = fileURLToPath(new URL("../src", import.meta.url));
   const texts = () => {
     const t = { name: "삼성전자", code: "005930" };
-    return [TOSS_APP.label, TOSS_APP.a11y, TOSS_APP.sheetTitle, TOSS_APP.open, TOSS_APP.close, TOSS_APP.scrim, TOSS_APP.fail, TOSS_APP.store, TOSS_APP.storeFail, tossSheetBody(t)];
+    return [TOSS_APP.label, TOSS_APP.a11y, TOSS_APP.sheetTitle, TOSS_APP.open, TOSS_APP.close, TOSS_APP.scrim, TOSS_APP.fail, TOSS_APP.store, TOSS_APP.storeFail, TOSS_APP.retry, tossSheetBody(t)];
   };
 
   it("버튼·시트·안내 글에 매수·매도·구매·권유 말이 없다", () => {
@@ -259,7 +261,7 @@ describe("문구: 투자 권유로 읽히지 않는다", () => {
 // ───────────────────────────── 끄면 지금 그대로 ─────────────────────────────
 
 describe("플래그 꺼짐(없음·false): 버튼이 없고 트리가 지금과 같다", () => {
-  // 바꾸기 전 코드(main 9206f1e — 이 기능이 없는 코드)에서 뜬 트리 지문 — 휴대폰 두 크기·좌우·윗줄+아랫줄·펼침 세로 × 보유(KR)·미국·미등록
+  // 바꾸기 전 코드(main e389e59 — 이 기능이 없는 코드)에서 뜬 트리 지문 — 휴대폰 두 크기·좌우·윗줄+아랫줄·펼침 세로 × 보유(KR)·미국·미등록
   it("다섯 배치 × 세 종목의 지문이 바꾸기 전과 같다", () => {
     const got: Record<string, string> = {};
     for (const size of Object.keys(SIZES) as SizeKey[]) {
@@ -477,7 +479,7 @@ describe("[토스 앱 열기] → supertoss://, 못 열면 Play 스토어", () =
     expect(text).not.toMatch(/Error|Intent|Activity|undefined|supertoss/);
     // 이름·코드 안내는 그대로 남는다
     expect(text).toContain('"삼성전자"(005930)');
-    expect(sheetButtons(r).map((b) => b.props.title)).toEqual(["Play 스토어에서 보기", "닫기"]);
+    expect(sheetButtons(r).map((b) => b.props.title)).toEqual(["Play 스토어에서 보기", "토스 앱 다시 열기", "닫기"]);
     // 화면 읽기가 바로 읽는 알림 영역
     const region = r.all(sheet(r)!.children).find((n) => n.props.accessibilityRole === "alert")!;
     expect(region.props.accessibilityLiveRegion).toBe("polite");
@@ -487,6 +489,26 @@ describe("[토스 앱 열기] → supertoss://, 못 열면 Play 스토어", () =
     expect(h.openURL.mock.calls).toEqual([[TOSS_SCHEME], [STORE_APP]]);
     expect(sheet(r)).toBeNull();
     expect(h.alert).not.toHaveBeenCalled();
+  });
+
+  it("못 연 뒤 [토스 앱 다시 열기]: 같은 시트에서 supertoss:// 를 한 번 더, 열리면 닫힌다", async () => {
+    let first = true;
+    h.openURL.mockImplementation(async (url: string) => {
+      if (url === TOSS_SCHEME && first) {
+        first = false;
+        throw new Error("no");
+      }
+      return true;
+    });
+    const r = open(samsung(), "phone475", { tossOpen: true });
+    openSheet(r);
+    tap(r, sheetButton(r, "토스 앱 열기"));
+    await settle(r);
+    expect(sheetText(sheet(r)!)).toContain(FAIL);
+    tap(r, sheetButton(r, "토스 앱 다시 열기"));
+    await settle(r);
+    expect(h.openURL.mock.calls).toEqual([[TOSS_SCHEME], [TOSS_SCHEME]]);
+    expect(sheet(r)).toBeNull();
   });
 
   it("Play 스토어 앱이 없으면 https Play 주소로 한 번 더", async () => {

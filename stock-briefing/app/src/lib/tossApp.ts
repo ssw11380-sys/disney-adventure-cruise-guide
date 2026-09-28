@@ -34,6 +34,8 @@ export const TOSS_APP = {
   /** 화면에는 두 문장을 두 줄로 (좁은 폰에서 '확인해'가 두 줄로 갈라지지 않게). 화면 읽기는 fail 한 줄 */
   failLines: ["토스 앱을 열지 못했습니다.", "토스 앱이 설치되어 있는지 확인해 주세요."],
   store: "Play 스토어에서 보기",
+  /** 못 연 뒤에도 같은 시트에서 한 번 더 (폰이 한 번 잘못 거절하는 경우) */
+  retry: "토스 앱 다시 열기",
   storeFail: "Play 스토어를 열지 못했습니다. 잠시 뒤 다시 눌러 주세요.",
 } as const;
 
@@ -77,11 +79,6 @@ export function tossFindText(t: TossAppTarget): string {
   return `${p.before} ${p.strong}${p.after}`;
 }
 
-/** 시트 본문 전체 (첫 문장 + 주문 안내) — 화면 읽기·테스트용 */
-export function tossSheetBody(t: TossAppTarget): string {
-  return `${tossFindText(t)} ${TOSS_APP.note}`;
-}
-
 type Open = (url: string) => unknown;
 
 /** 토스 앱을 연다. 열었으면 true, 못 열었으면(토스 앱 없음 등 — openURL 이 거절·예외) false */
@@ -111,7 +108,7 @@ export async function openTossStore(open: Open): Promise<boolean> {
 export const TOSS_ICON = font.small + space.xxs;
 const ICON_GAP = space.xs;
 
-/** 버튼 폭 어림 (아이콘 + 간격 + 글). 버튼 글·아이콘은 fontCap.chrome(150%) 까지만 커진다 */
+/** 버튼 폭 어림 (아이콘 + 간격 + 글). 버튼 글·아이콘은 fontCap.chrome(150%) 까지만 커진다 — 버튼이 '시세' 제목 줄에 들어가는지 지키는 자리 테스트가 쓴다 (버튼 모양을 바꾸면 여기도) */
 export function tossButtonWidth(fontScale: number): number {
   const s = Math.min(Math.max(fontScale || 1, 1), fontCap.chrome);
   return TOSS_ICON * s + ICON_GAP + estimateTextWidth(TOSS_APP.label, font.small * s);
