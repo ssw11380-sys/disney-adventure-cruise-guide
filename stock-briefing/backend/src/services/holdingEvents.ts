@@ -321,7 +321,8 @@ export class HoldingEventsService {
       Array.from({ length: Math.min(DIVIDEND_CONCURRENCY, queue.length) }, async () => {
         for (let c = queue.shift(); c; c = queue.shift()) {
           if (Date.now() >= deadline) return;
-          await within(one(c), deadline);
+          // 시간이 다 돼 돌아왔으면(타이머가 시계보다 1ms 일찍 울릴 수 있음) 다음 종목을 새로 부르지 않는다
+          if ((await within(one(c), deadline)).kind === "timeout") return;
         }
       }),
     );
@@ -391,6 +392,8 @@ export class HoldingEventsService {
               deadline,
             );
             out.set(h.code, r.kind === "ok" ? r.value : undefined);
+            // 시간이 다 됐으면 다음 종목을 새로 부르지 않는다 (타이머가 시계보다 1ms 일찍 울릴 수 있음)
+            if (r.kind === "timeout") return;
           }
         }),
       ),
