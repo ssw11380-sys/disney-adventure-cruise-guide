@@ -3,7 +3,7 @@ import { estimateTextWidth } from "@/lib/chartLayout";
 import type { DetailTab } from "@/lib/detailLayout";
 import { barsSpeechHead, barsSpeechRow, FLOW_NAMES, FLOW_TAB, sumSpeech } from "@/lib/flowText";
 import { clampScale } from "@/lib/textScale";
-import { font } from "@/tokens";
+import { font, fontCap, space } from "@/tokens";
 
 /**
  * 종목 상세 '수급' 탭 (3-33, 플래그 flowTab) 화면 계산 — React Native 를 불러오지 않는 순수 모듈 (테스트용).
@@ -180,6 +180,26 @@ export function showSumTable(inner: number, fontScale: number): boolean {
   return inner >= 520 * clampScale(fontScale);
 }
 
+// ── 날짜별 숫자 표 ──
+
+/** 날짜별 숫자 표 칸 사이 (FlowTab tableRow 의 columnGap 과 같은 값) */
+export const DAY_TABLE_GAP = space.xs;
+/** 가장 넓은 날짜 글 · 가장 넓은 칸 글 (칸에는 '주'를 쓰지 않고 표 위에 '단위: 주'를 한 번 — 1억 이상 '-12.3억'·1만 미만 '-9,999'는 이보다 좁다) */
+const WIDEST_DATE = "12월 31일";
+const WIDEST_CELL = "-9,999만";
+
+/**
+ * 날짜별 숫자 표 배치. 글자는 고정 폭 열 표 규칙대로 fontCap.row(1.4배)까지만 커진다.
+ * dateW: 날짜 열 폭(가장 넓은 날짜가 한 줄에 들어가는 폭). fits: 날짜 + 세 칸이 한 줄에 들어가는지 —
+ * 아니면 날짜를 한 줄 위에 따로 두고 세 칸이 폭을 나눈다 (숫자가 '만'·'주' 앞에서 두 줄로 갈라지지 않게)
+ */
+export function dayTableLayout(inner: number, fontScale: number): { dateW: number; fits: boolean } {
+  const size = font.small * clampScale(fontScale, fontCap.row);
+  const dateW = Math.ceil(estimateTextWidth(WIDEST_DATE, size));
+  const cellW = estimateTextWidth(WIDEST_CELL, size);
+  return { dateW, fits: inner >= dateW + 3 * (cellW + DAY_TABLE_GAP) };
+}
+
 // ── 막대 (설계서 3.6) ──
 
 /** 막대 한 줄 높이 (가운데 0선, 위 +, 아래 −) */
@@ -262,14 +282,29 @@ export interface Seg {
   deg: number;
 }
 
+/** 세 점이 한 직선 위에 있는지 (같은 방향으로 이어지는지) — 좌표 오차 여유 */
+function collinear(a: Pt, b: Pt, c: Pt): boolean {
+  const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+  const dot = (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y);
+  return Math.abs(cross) < 1e-6 && dot > 0;
+}
+
+/**
+ * 선분 목록. 같은 직선 위로 이어지는 점들(값이 그대로인 평평한 구간 등)은 선분 하나로 합친다 —
+ * 짧은 선분을 여러 개 이으면 이음매가 점선처럼 보이기 때문 (외국인 한도가 다 찬 KT 처럼 값이 모두 같으면 가로선 하나)
+ */
 export function lineSegments(pts: readonly Pt[]): Seg[] {
   const out: Seg[] = [];
+  let start = 0;
   for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1]!;
+    const next = pts[i + 1];
+    if (next && collinear(pts[start]!, pts[i]!, next)) continue;
+    const a = pts[start]!;
     const b = pts[i]!;
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     out.push({ cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, len: Math.hypot(dx, dy), deg: (Math.atan2(dy, dx) * 180) / Math.PI });
+    start = i;
   }
   return out;
 }

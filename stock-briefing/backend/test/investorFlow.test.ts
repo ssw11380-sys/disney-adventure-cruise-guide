@@ -109,6 +109,18 @@ describe("네이버 trend 파서", () => {
     expect(x).toMatchObject({ date: "2026-09-29", individual: 0, foreign: null, institution: -1234, foreignRatio: null, close: null });
   });
 
+  it("'-' 한 글자(값 없음 — 일부 ETN 보유율, 530036 실측)는 null, 출처 실패가 아니다", () => {
+    const rows = parseNaverTrend([
+      { bizdate: "20260928", individualPureBuyQuant: "+1,200", foreignerPureBuyQuant: "-", organPureBuyQuant: " - ", foreignerHoldRatio: "-", closePrice: "10,050" },
+      { bizdate: "20260926", individualPureBuyQuant: "-300", foreignerPureBuyQuant: "+300", organPureBuyQuant: "0", foreignerHoldRatio: "-", closePrice: "10,000" },
+    ]);
+    expect(rows[0]).toMatchObject({ individual: 1200, foreign: null, institution: null, foreignRatio: null, close: 10_050 });
+    expect(rows[1]).toMatchObject({ individual: -300, foreign: 300, institution: 0, foreignRatio: null });
+    // '-' 뒤에 숫자가 없는 다른 모양('--'·'-%')은 그대로 모양 바뀜
+    expect(() => parseNaverTrend([{ bizdate: "20260928", individualPureBuyQuant: "--" }])).toThrow(ProviderError);
+    expect(() => parseNaverTrend([{ bizdate: "20260928", foreignerHoldRatio: "-%" }])).toThrow(ProviderError);
+  });
+
   it("모양이 바뀌면 출처 실패, 빈 배열(없는 코드)은 자료 없음", () => {
     for (const bad of [{}, null, [{ bizdate: "2026-09-28" }], [{ bizdate: "20260928", individualPureBuyQuant: "abc" }], [{ bizdate: "20260928", foreignerHoldRatio: "많음" }]]) {
       expect(() => parseNaverTrend(bad), JSON.stringify(bad)).toThrow(ProviderError);
@@ -148,6 +160,24 @@ describe("확정 판정 (한국 시간)", () => {
     const n = row("2026-09-29", { inMarketTime: null, hasAll: null, updatedAt: null });
     expect(isFinalRow(n, "naver", T("2026-09-29T20:00:00+09:00"))).toBe(false);
     expect(isFinalRow(n, "naver", T("2026-09-29T20:31:00+09:00"))).toBe(true);
+  });
+
+  it("받은 때 기준: 장중(15:00)에 받은 줄을 다음 날 다시 쓰면 그 날 줄은 확정이 아니고, '오늘' 줄도 아니다", () => {
+    const provisional = row("2026-09-29", { inMarketTime: true, individual: null, hasAll: false, foreign: 50_000, institution: 7, updatedAt: "2026-09-29T15:00:00+09:00" });
+    const rows = [provisional, row("2026-09-28"), row("2026-09-26")];
+    const fetched = T("2026-09-29T15:00:00+09:00");
+    // 받은 그날: 잠정 → today
+    expect(splitFlowRows(rows, "toss-web", fetched, T("2026-09-29T15:05:00+09:00")).today?.date).toBe("2026-09-29");
+    // 다음 날 10:00 에 같은 줄을 다시 쓰면: 9/29 는 확정 줄에도 today 에도 없다
+    const next = splitFlowRows(rows, "toss-web", fetched, T("2026-09-30T10:00:00+09:00"));
+    expect(next.final.map((r) => r.date)).toEqual(["2026-09-28", "2026-09-26"]);
+    expect(next.today).toBeNull();
+    // 네이버도 같다: 20:30 전에 받은 그날 줄은 다음 날에도 잠정 · 20:30 뒤에 받은 줄은 확정
+    const n = row("2026-09-29", { inMarketTime: null, hasAll: null, updatedAt: null });
+    expect(splitFlowRows([n], "naver", T("2026-09-29T20:00:00+09:00"), T("2026-09-30T09:00:00+09:00")).final).toEqual([]);
+    expect(splitFlowRows([n], "naver", T("2026-09-29T20:31:00+09:00"), T("2026-09-30T09:00:00+09:00")).final).toHaveLength(1);
+    // 받은 때가 20:30 전이면 지금이 20:40 이어도 잠정 (그 자료를 다시 받아야 확정)
+    expect(splitFlowRows([row("2026-09-29")], "toss-web", T("2026-09-29T20:25:00+09:00"), T("2026-09-29T20:40:00+09:00")).final).toEqual([]);
   });
 
   it("나누기: 잠정 줄은 today 하나로, 확정 줄은 최신순 (같은 날짜가 두 번 오면 앞의 것)", () => {
@@ -222,6 +252,24 @@ describe("외국인 한도 (토스 웹만, 한도가 상장 주식 수의 99.5% 
     expect(flowLimit(TOSS.kodex[0]!)).toBeNull();
     expect(flowLimit(NAVER.kt[0]!)).toBeNull();
     expect(flowLimit(row("2026-09-28", { foreignRatio: 0, foreignHolding: 0, foreignLimit: 10 }))).toBeNull();
+  });
+
+  it("보유율이 1% 아래인 한도 없는 종목: 보유율 끝자리 반올림 때문에 없는 한도를 보이지 않는다 (0.56% · 0.07% 실측 모양)", () => {
+    // 한도 = 상장 주식 수(한도 없음)인데 보유율이 소수 둘째 자리로 줄어 있어 예전 계산은 한도율 99.2% 를 냈다
+    expect(flowLimit(row("2026-09-28", { foreignRatio: 0.56, foreignHolding: 122_468, foreignLimit: 21_704_774 }))).toBeNull();
+    // 379800 모양: 보유율 0.07%, 보유 ÷ 한도 = 0.0705% (예전 계산 99.3%)
+    expect(flowLimit(row("2026-09-28", { foreignRatio: 0.07, foreignHolding: 70_500, foreignLimit: 100_000_000 }))).toBeNull();
+    expect(flowLimit(row("2026-09-28", { foreignRatio: 0.06, foreignHolding: 649, foreignLimit: 1_000_000 }))).toBeNull();
+  });
+
+  it("실제 한도(30~50%)는 보유율이 낮아도 그대로 잡힌다", () => {
+    const listed = 100_000_000;
+    const limitRow = (limitPct: number, ratio: number) => row("2026-09-28", { foreignRatio: ratio, foreignHolding: Math.round((listed * ratio) / 100), foreignLimit: Math.round((listed * limitPct) / 100) });
+    expect(flowLimit(limitRow(50, 20.34))).toEqual({ limitPct: 50, usedPct: 40.7 });
+    expect(flowLimit(limitRow(49, 49))).toEqual({ limitPct: 49, usedPct: 100 });
+    expect(flowLimit(limitRow(40, 20.56))).toEqual({ limitPct: 40, usedPct: 51.4 });
+    expect(flowLimit(limitRow(30, 0.5))).toEqual({ limitPct: 30, usedPct: 1.7 });
+    expect(flowLimit(limitRow(49, 0.05))).toEqual({ limitPct: 49, usedPct: 0.1 });
   });
 });
 
@@ -347,6 +395,23 @@ describe("수급 서비스: 폴백 순서", () => {
     expect(naver.calls).toHaveLength(0);
   });
 
+  it("토스 웹 실패 → 어제 장중(15:00)에 받은 토스 캐시: 그 날 잠정 값은 합계·막대·오늘 줄에 넣지 않는다", async () => {
+    let t = Date.parse("2026-09-29T15:00:00+09:00");
+    const provisional = { ...row("2026-09-29"), individual: null, otherCorp: null, foreign: 9_000_000, institution: -40_000, inMarketTime: false, hasAll: false, updatedAt: "2026-09-29T15:00:00.000+09:00" };
+    const toss = new FakeSource("toss-web", [provisional, ...TOSS.samsung]);
+    const { service, naver } = await makeService({ now: () => new Date(t), toss });
+    const first = await service.get("005930");
+    expect(first).toMatchObject({ stale: false, today: { date: "2026-09-29", foreign: 9_000_000 } });
+    toss.fail = true;
+    t = Date.parse("2026-09-30T10:00:00+09:00"); // 19시간 뒤 (24시간 안 토스 캐시)
+    const r = await service.get("005930");
+    if (!r.supported) throw new Error("한국 종목");
+    expect(r).toMatchObject({ source: "toss-web", stale: true, fetchedAt: "2026-09-29T15:00:00+09:00", today: null });
+    expect(r.days[0]!.date).toBe("2026-09-28");
+    expect(r.sums["5"].foreign).toBe(4_179_201); // 9/28 까지 다섯 날 — 9/29 잠정 +900만 은 빠짐
+    expect(naver.calls).toHaveLength(0);
+  });
+
   it("토스 웹 실패·토스 캐시 없음 → 네이버 (KRX 기준, 기타법인·한도·대조 없음) + 경고 로그", async () => {
     const toss = new FakeSource("toss-web", TOSS.kt);
     toss.fail = true;
@@ -385,6 +450,20 @@ describe("수급 서비스: 폴백 순서", () => {
     if (!r.supported) throw new Error("한국 종목");
     expect(r.days.map((d) => d.individual)).toEqual(NAVER.samsung.map((d) => d.individual));
     expect(r.ratio?.now).toBe(46.56);
+  });
+
+  it("ETN(토스 400 · 네이버 보유율 '-'): 네이버 자료로 200 — 보유율 카드 없음, 모양 바뀜 경고 없음", async () => {
+    const toss = new FakeSource("toss-web", []);
+    toss.fail = true;
+    const etn = parseNaverTrend([
+      { bizdate: "20260928", individualPureBuyQuant: "+1,200", foreignerPureBuyQuant: "-300", organPureBuyQuant: "-900", foreignerHoldRatio: "-", closePrice: "10,050" },
+      { bizdate: "20260926", individualPureBuyQuant: "-500", foreignerPureBuyQuant: "0", organPureBuyQuant: "+500", foreignerHoldRatio: "-", closePrice: "10,000" },
+    ]);
+    const { service, warns } = await makeService({ now: NIGHT, toss, naver: new FakeSource("naver", etn) });
+    const r = await service.get("530036");
+    expect(r).toMatchObject({ supported: true, source: "naver", stale: false, ratio: null, limit: null });
+    expect(r.supported && r.sums["5"]).toMatchObject({ individual: 700, foreign: -300, institution: -400, days: 2 });
+    expect(warns.map((w) => w.msg)).not.toContain("수급 출처 모양 바뀜");
   });
 
   it("없는 코드: 토스 400 → 네이버 [] → days: [] (자료 없음)", async () => {

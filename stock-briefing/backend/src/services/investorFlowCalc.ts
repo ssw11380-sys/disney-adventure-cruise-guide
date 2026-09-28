@@ -3,10 +3,11 @@ import type { FlowTrendRow, InvestorFlowDay } from "../providers/market/investor
 
 /**
  * 수급 탭 계산 (3-33, 플래그 flowTab) — 순수 함수. 설계서 4.2:
- *  - 확정 판정: 지난 날은 확정, 앞날은 잠정, 오늘은 장이 끝나고 저녁 값이 나온 뒤(20:30 KST)에만 확정
+ *  - 확정 판정: 받은 때(fetchedAt) 기준 — 그때 지난 날은 확정, 앞날은 잠정, 그날 줄은 장이 끝나고 저녁 값이 나온 뒤(20:30 KST)에 받았을 때만 확정.
+ *    지금 시각이 아니라 받은 때로 본다: 전에 받은 값을 다음 날 다시 줄 때 장중에 받은 잠정 값이 확정으로 바뀌어 합계에 들어가지 않게
  *  - 합계: 확정 줄 앞에서 5·20·60개 (빈 값은 빼고 더하고 그 날 수를 missing 에)
  *  - 외국인 보유율: 지금 값과 합계 창 바로 앞날 값의 차이, 61점 선(오래된 순)
- *  - 외국인 한도(토스 웹만): 한도가 상장 주식 수의 99.5% 미만인 종목만 한도·소진율
+ *  - 외국인 한도(토스 웹만): 한도가 상장 주식 수의 99.5% 미만인 종목만 한도·소진율 (보유율 칸의 끝자리 오차를 넉넉히 보고 판정)
  *  - 대조: 토스 웹 확정 줄 최근 20일과 토스 Open API 같은 날짜의 개인·외국인·기관 세 값
  */
 
@@ -120,9 +121,9 @@ export function kst(d: Date): { date: string; minutes: number; weekday: number }
   return { date, minutes, weekday };
 }
 
-/** 줄이 확정 값인지 (설계서 4.2) */
-export function isFinalRow(row: FlowTrendRow, source: FlowSourceName, now: Date): boolean {
-  const k = kst(now);
+/** 줄이 확정 값인지 (설계서 4.2). at = 그 줄을 받은 때 (받은 뒤에는 값이 바뀌지 않으므로 받은 때 기준으로 본다) */
+export function isFinalRow(row: FlowTrendRow, source: FlowSourceName, at: Date): boolean {
+  const k = kst(at);
   if (row.date < k.date) return true;
   if (row.date > k.date) return false; // 시계 어긋남 — 잠정으로
   if (k.minutes < FLOW_FINAL_MIN) return false;
@@ -134,8 +135,12 @@ export function isFinalRow(row: FlowTrendRow, source: FlowSourceName, now: Date)
   return uk.date > row.date || (uk.date === row.date && uk.minutes >= FLOW_UPDATED_MIN);
 }
 
-/** 확정 줄(최신순, 날짜 겹치면 앞의 것)과 잠정 줄 하나(가장 최근) */
-export function splitFlowRows(rows: readonly FlowTrendRow[], source: FlowSourceName, now: Date): { final: FlowTrendRow[]; today: FlowTrendRow | null } {
+/**
+ * 확정 줄(최신순, 날짜 겹치면 앞의 것)과 오늘 잠정 줄 하나.
+ * 확정은 받은 때(fetchedAt) 기준. 잠정 줄은 그 날짜가 지금(now) 한국 날짜와 같을 때만 today 로 준다 —
+ * 전에 받은 값을 다음 날 다시 줄 때 어제의 잠정 줄은 합계에도 '오늘' 줄에도 넣지 않는다
+ */
+export function splitFlowRows(rows: readonly FlowTrendRow[], source: FlowSourceName, fetchedAt: Date, now: Date = fetchedAt): { final: FlowTrendRow[]; today: FlowTrendRow | null } {
   const seen = new Set<string>();
   const uniq: FlowTrendRow[] = [];
   for (const r of rows) {
@@ -146,9 +151,10 @@ export function splitFlowRows(rows: readonly FlowTrendRow[], source: FlowSourceN
   uniq.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const final: FlowTrendRow[] = [];
   let today: FlowTrendRow | null = null;
+  const nowDate = kst(now).date;
   for (const r of uniq) {
-    if (isFinalRow(r, source, now)) final.push(r);
-    else if (!today) today = r;
+    if (isFinalRow(r, source, fetchedAt)) final.push(r);
+    else if (!today && r.date === nowDate) today = r;
   }
   return { final, today };
 }
@@ -198,13 +204,25 @@ export function flowRatio(final: readonly FlowTrendRow[]): FlowRatio | null {
   return { now, date: first.date, ago, series, high: Math.max(...values), low: Math.min(...values) };
 }
 
-/** 외국인 한도 (토스 웹 줄만 — 한도 칸이 있을 때). 한도가 상장 주식 수의 99.5% 이상이면(= 한도 없음) null */
+/** 한도가 없는 종목으로 보는 한도율 (한도 ÷ 상장 주식 수, %) — 이 이상이면 한도 = 상장 주식 수 */
+export const FLOW_NO_LIMIT_PCT = 99.5;
+/**
+ * 보유율 칸은 소수 둘째 자리까지라(반올림이든 버림이든) 실제 값이 이만큼(%p) 더 클 수 있다.
+ * 보유율이 1% 아래인 종목은 이 끝자리 차이만으로 한도율이 99.5% 아래로 내려가, 없는 한도를 보이게 된다 (379800 보유율 0.07% → 99.3%)
+ */
+const RATIO_STEP = 0.01;
+
+/**
+ * 외국인 한도 (토스 웹 줄만 — 한도 칸이 있을 때). 한도가 상장 주식 수의 99.5% 이상일 수 있으면(= 한도 없음) null.
+ * 상장 주식 수 = 보유 ÷ 보유율. 판정은 보유율을 가장 크게(+0.01%p) 본 값, 곧 상장 주식 수를 가장 작게 본 값으로 한다
+ * (실제 한도는 30~50% 라 이 여유로 놓치는 종목은 보유율이 0.01% 안팎인 경우뿐). 보이는 한도율은 받은 보유율 그대로 계산
+ */
 export function flowLimit(row: FlowTrendRow): FlowLimit | null {
   const { foreignHolding: hold, foreignLimit: limit, foreignRatio: ratio } = row;
   if (hold === null || limit === null || ratio === null || !(hold > 0) || !(limit > 0) || !(ratio > 0)) return null;
-  const listed = hold / (ratio / 100);
-  const limitPct = (limit / listed) * 100;
-  if (!(limitPct < 99.5)) return null;
+  const limitPctMax = (limit * (ratio + RATIO_STEP)) / hold;
+  if (!(limitPctMax < FLOW_NO_LIMIT_PCT)) return null;
+  const limitPct = (limit * ratio) / hold;
   return { limitPct: round(limitPct, 1), usedPct: round((hold / limit) * 100, 1) };
 }
 
@@ -255,7 +273,7 @@ function isoOrNull(s: string | null): string | null {
 
 /** 받은 줄 → 응답 본문 */
 export function buildFlowBody(o: { code: string; source: FlowSourceName; rows: readonly FlowTrendRow[]; fetchedAt: Date; stale: boolean; check: FlowCheck | null; now: Date }): InvestorFlowBody {
-  const { final, today } = splitFlowRows(o.rows, o.source, o.now);
+  const { final, today } = splitFlowRows(o.rows, o.source, o.fetchedAt, o.now);
   const fetchedAt = seoulIso(o.fetchedAt);
   const first = final[0];
   return {

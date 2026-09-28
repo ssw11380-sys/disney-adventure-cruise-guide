@@ -8,6 +8,7 @@ import { estimateTextWidth } from "@/lib/chartLayout";
 import {
   agoLine,
   agoMissing,
+  agoSpeech,
   checkLine,
   FLOW_NAMES,
   FLOW_TEXT,
@@ -16,10 +17,12 @@ import {
   missingNote,
   periodLabel,
   pickedLine,
+  pickedParts,
   pctPointNote,
   ratioDateLine,
   ratioSpeech,
   shortData,
+  shortDataNaverCap,
   sourceNaver,
   sourceToss,
   staleLine,
@@ -29,13 +32,15 @@ import {
   todayNote,
   todayValues,
 } from "@/lib/flowText";
-import { barsSpeech, clampPick, dateKo, dateLong, flowSumRows, formatPp, formatRatio, formatShares, hhmm, sharesSign, shortDate, showSumTable, stampKo } from "@/lib/flowView";
+import { barsSpeech, clampPick, dateKo, dateLong, DAY_TABLE_GAP, dayTableLayout, flowSumRows, formatPp, formatRatio, formatShares, hhmm, sharesSign, shortDate, showSumTable, stampKo } from "@/lib/flowView";
 import { clampScale } from "@/lib/textScale";
 import { changeColor, font, fontCap, space, touch, useFontScale, useTheme } from "@/theme";
 import { FlowBars } from "./FlowBars";
 import { ForeignRatioLine } from "./ForeignRatioLine";
 
 const PERIODS: FlowPeriod[] = [5, 20, 60];
+/** 네이버 증권이 한 번에 주는 최대 줄 수 (서버 NAVER_TREND_MAX) */
+const NAVER_ROWS = 60;
 type Supported = Extract<InvestorFlow, { supported: true }>;
 
 /**
@@ -111,8 +116,8 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
   const bars = d.days.slice(0, period).reverse();
   const pickedIdx = clampPick(pick, bars.length);
   const pickedDay = bars[pickedIdx]!;
-  const noUnit = (v: number | null) => formatShares(v, { unit: false });
-  const picked = pickedLine(dateKo(pickedDay.date), noUnit(pickedDay.individual), noUnit(pickedDay.foreign), noUnit(pickedDay.institution), pickedDay.close !== null ? pickedDay.close.toLocaleString("ko-KR") : null);
+  const pickedArgs = [dateKo(pickedDay.date), formatShares(pickedDay.individual), formatShares(pickedDay.foreign), formatShares(pickedDay.institution), pickedDay.close !== null ? pickedDay.close.toLocaleString("ko-KR") : null] as const;
+  const picked = pickedLine(...pickedArgs);
   const labelW = Math.ceil(estimateTextWidth(FLOW_NAMES.foreign, font.small * clampScale(fs, fontCap.row))) + space.sm;
   const chips = (
     <View style={styles.chips}>
@@ -124,9 +129,13 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
 
   // ── ① 합계 ──
   const sum = d.sums[String(period) as "5" | "20" | "60"];
-  const sumRows = flowSumRows(sum, Math.min(period, sum.days) || period, toss);
+  // 실제로 더한 날 수 (자료가 모자라면 그만큼 — 부제·화면 읽기·안내가 같은 수를 쓴다)
+  const sumDays = Math.min(period, sum.days) || period;
+  const sumRows = flowSumRows(sum, sumDays, toss);
   const noteSum = wideSums ? d.sums["60"] : sum;
   const notePeriod = wideSums ? 60 : period;
+  // 네이버는 한 번에 60줄까지라 집계 중인 오늘 줄이 끼면 확정 줄이 59개 (종목 자료가 짧은 것이 아님)
+  const naverCap = !toss && d.today !== null && d.days.length + 1 >= NAVER_ROWS;
   const sumCard = (
     <Card>
       <View style={styles.headRow}>
@@ -135,7 +144,7 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
         </Text>
         {wideSums ? null : chips}
       </View>
-      {wideSums ? null : <Muted>{sumSub1(period)}</Muted>}
+      <Muted>{wideSums ? FLOW_TEXT.sumSubWide : sumSub1(sumDays)}</Muted>
       <Muted>{FLOW_TEXT.sumSub2}</Muted>
       {wideSums ? (
         <SumTable d={d} />
@@ -149,13 +158,13 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
           ))}
         </View>
       )}
-      {noteSum.days < notePeriod ? <Muted>{shortData(noteSum.days)}</Muted> : null}
+      {noteSum.days < notePeriod ? <Muted>{naverCap ? shortDataNaverCap(noteSum.days) : shortData(noteSum.days)}</Muted> : null}
       {noteSum.missing > 0 ? <Muted>{missingNote(noteSum.missing)}</Muted> : null}
       <Muted>{FLOW_TEXT.signNote}</Muted>
       <Muted>{toss ? FLOW_TEXT.zeroNoteToss : FLOW_TEXT.zeroNoteNaver}</Muted>
       {d.today ? (
         <View style={[styles.today, { borderLeftColor: t.lineStrong }]}>
-          <Text style={{ color: t.sub, fontSize: font.small }}>{todayNote(dateKo(d.today.date))}</Text>
+          <Text style={{ color: t.sub, fontSize: font.small }}>{todayNote(shortDate(d.today.date))}</Text>
           {d.today.foreign !== null || d.today.institution !== null ? (
             <Text style={[styles.num, { color: t.sub, fontSize: font.small }]}>
               {todayValues(hhmm(d.today.updatedAt), formatShares(d.today.foreign), formatShares(d.today.institution))}
@@ -176,9 +185,13 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
         </Text>
         {wideSums ? chips : null}
       </View>
-      <Text style={[styles.num, { color: t.ink, fontSize: font.small }]} accessibilityLiveRegion="polite" testID="flow-picked">
-        {picked}
-      </Text>
+      <View style={styles.picked} accessible accessibilityLabel={picked} accessibilityLiveRegion="polite" testID="flow-picked">
+        {pickedParts(...pickedArgs).map((part, i) => (
+          <Text key={i} style={[styles.num, { color: t.ink, fontSize: font.small }]}>
+            {i ? `· ${part}` : part}
+          </Text>
+        ))}
+      </View>
       <FlowBars days={bars} width={inner} labelW={labelW} picked={pickedIdx} onPick={setPick} speech={barsSpeech(d.days.slice(0, period))} pickedText={picked} />
       <View style={[styles.axis, { paddingLeft: labelW }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
         <Text style={{ color: t.muted, fontSize: font.tiny }}>{shortDate(bars[0]!.date)}</Text>
@@ -189,7 +202,7 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
         <Text style={{ color: t.accent, fontSize: font.body, fontWeight: "700" }}>{table ? FLOW_TEXT.tableClose : FLOW_TEXT.tableOpen}</Text>
         <Ionicons name={table ? "chevron-up" : "chevron-down"} size={font.body} color={t.accent} />
       </Pressable>
-      {table ? <DayTable days={d.days.slice(0, period)} /> : null}
+      {table ? <DayTable days={d.days.slice(0, period)} inner={inner} /> : null}
     </Card>
   );
 
@@ -208,7 +221,11 @@ export function FlowTab({ code, us, width }: { code: string; us: boolean; width:
       {PERIODS.map((n) => {
         const a = r.ago[String(n) as "5" | "20" | "60"];
         return (
-          <Text key={n} style={[styles.num, { color: a ? t.ink : t.muted, fontSize: font.small }]}>
+          <Text
+            key={n}
+            style={[styles.num, { color: a ? t.ink : t.muted, fontSize: font.small }]}
+            accessibilityLabel={a ? agoSpeech(n, formatRatio(a.value), Math.abs(a.change).toFixed(2), /[1-9]/.test(a.change.toFixed(2)) ? Math.sign(a.change) : 0) : agoMissing(n)}
+          >
             {a ? agoLine(n, formatRatio(a.value), formatPp(a.change)) : agoMissing(n)}
           </Text>
         );
@@ -311,23 +328,48 @@ function SumTable({ d }: { d: Supported }) {
   );
 }
 
-/** 날짜별 숫자 표 (최근 날부터). 한 줄 = 한 요소 */
-function DayTable({ days }: { days: Supported["days"] }) {
+/**
+ * 날짜별 숫자 표 (최근 날부터). 한 줄 = 한 요소 (화면 읽기는 '주'까지 읽는다).
+ * 고정 폭 열 표라 글자는 fontCap.row(1.4배)까지만 커지고, 칸에는 '주' 없이 숫자만(표 위 '단위: 주') — 큰 글씨에서 '-1,243' / '만 주'처럼
+ * 숫자와 단위가 두 줄로 갈라져 1만 배 작은 값으로 읽히지 않게. 날짜 열은 가장 넓은 날짜가 한 줄에 들어가는 폭이고,
+ * 그래도 한 줄에 다 들어가지 않는 좁은 칸이면 날짜를 위에 따로 둔다 (lib/flowView dayTableLayout)
+ */
+function DayTable({ days, inner }: { days: Supported["days"]; inner: number }) {
   const t = useTheme();
-  const cell = (v: number | null) => <Text style={[styles.cell, styles.num, { color: changeColor(t, sharesSign(v)), fontSize: font.small }]}>{formatShares(v)}</Text>;
+  const fs = useFontScale();
+  const { dateW, fits } = dayTableLayout(inner, fs);
+  const dateCol = fits ? { width: dateW } : styles.dateAbove;
+  const cell = (v: number | null) => (
+    <Text
+      style={[styles.dayCell, styles.num, { color: changeColor(t, sharesSign(v)), fontSize: font.small }]}
+      maxFontSizeMultiplier={fontCap.row}
+      numberOfLines={1}
+      adjustsFontSizeToFit
+      minimumFontScale={0.7}
+    >
+      {formatShares(v, { unit: false })}
+    </Text>
+  );
   return (
     <View testID="flow-day-table">
-      <View style={[styles.tableRow, { borderBottomColor: t.line }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-        <Text style={[styles.cellName, { color: t.muted, fontSize: font.small }]}>{FLOW_TEXT.tableDate}</Text>
+      <Text style={[styles.unit, { color: t.muted, fontSize: font.tiny }]} maxFontSizeMultiplier={fontCap.row} importantForAccessibility="no" accessibilityElementsHidden>
+        {FLOW_TEXT.tableUnit}
+      </Text>
+      <View style={[styles.tableRow, styles.dayRow, { borderBottomColor: t.line }]} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+        <Text style={[dateCol, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row} numberOfLines={1}>
+          {FLOW_TEXT.tableDate}
+        </Text>
         {(["individual", "foreign", "institution"] as const).map((k) => (
-          <Text key={k} style={[styles.cell, { color: t.muted, fontSize: font.small }]}>
+          <Text key={k} style={[styles.dayCell, { color: t.muted, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row} numberOfLines={1}>
             {FLOW_NAMES[k]}
           </Text>
         ))}
       </View>
       {days.map((x) => (
-        <View key={x.date} style={[styles.tableRow, { borderBottomColor: t.line }]} accessible accessibilityLabel={tableRowSpeech(dateLong(x.date), formatShares(x.individual), formatShares(x.foreign), formatShares(x.institution))}>
-          <Text style={[styles.cellName, styles.num, { color: t.sub, fontSize: font.small }]}>{shortDate(x.date)}</Text>
+        <View key={x.date} style={[styles.tableRow, styles.dayRow, { borderBottomColor: t.line }]} accessible accessibilityLabel={tableRowSpeech(dateLong(x.date), formatShares(x.individual), formatShares(x.foreign), formatShares(x.institution))}>
+          <Text style={[dateCol, styles.num, { color: t.sub, fontSize: font.small }]} maxFontSizeMultiplier={fontCap.row} numberOfLines={1}>
+            {shortDate(x.date)}
+          </Text>
           {cell(x.individual)}
           {cell(x.foreign)}
           {cell(x.institution)}
@@ -352,4 +394,9 @@ const styles = StyleSheet.create({
   tableRow: { flexDirection: "row", alignItems: "center", paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, columnGap: space.xs },
   cellName: { flex: 1, minWidth: 0 },
   cell: { flex: 1.3, minWidth: 0, textAlign: "right" },
+  picked: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs },
+  unit: { alignSelf: "flex-end" },
+  dayRow: { flexWrap: "wrap", columnGap: DAY_TABLE_GAP },
+  dayCell: { flex: 1, minWidth: 0, textAlign: "right" },
+  dateAbove: { width: "100%" },
 });

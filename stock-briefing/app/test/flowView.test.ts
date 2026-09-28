@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import * as text from "@/lib/flowText";
-import { barLayout, barsSpeech, dateKo, dateLong, detailTabLabels, flowSumRows, formatPp, formatRatio, formatShares, hhmm, linePoints, lineSegments, PHONE_TABS, pickIndex, shortDate, showSumTable, stampKo, WIDE_TABS_BASE } from "@/lib/flowView";
-import { parseDetailTab, phoneTab, wideTab } from "@/lib/detailLayout";
+import { barLayout, barsSpeech, dateKo, dateLong, DAY_TABLE_GAP, dayTableLayout, detailTabLabels, flowSumRows, formatPp, formatRatio, formatShares, hhmm, linePoints, lineSegments, PHONE_TABS, pickIndex, shortDate, showSumTable, stampKo, WIDE_TABS_BASE } from "@/lib/flowView";
+import { estimateTextWidth } from "@/lib/chartLayout";
+import { parseDetailTab, phoneTab, sideWidth, wideTab } from "@/lib/detailLayout";
 import type { FlowDay, FlowSum } from "@/api/types";
 
 /**
@@ -203,6 +204,43 @@ describe("보유율 선 좌표", () => {
     expect(s).toMatchObject({ len: 5, cx: 1.5, cy: 2 });
     expect(s!.deg).toBeCloseTo((Math.atan2(4, 3) * 180) / Math.PI);
   });
+
+  it("같은 직선 위 점은 선분 하나로 (값이 모두 같으면 가로선 하나 — 이음매가 점선처럼 보이지 않게)", () => {
+    const flat = linePoints(Array.from({ length: 61 }, (_, i) => [`d${i}`, 49] as const), 300, 72, 5);
+    const segs = lineSegments(flat);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]).toMatchObject({ cx: 150, cy: 36, len: 290, deg: 0 });
+    // 평평한 구간 + 오르막 + 평평한 구간 → 세 선분
+    const mixed = lineSegments([{ x: 0, y: 10 }, { x: 5, y: 10 }, { x: 10, y: 10 }, { x: 15, y: 5 }, { x: 20, y: 0 }, { x: 25, y: 0 }]);
+    expect(mixed.map((m) => [m.cx, m.cy, m.len])).toEqual([[5, 10, 10], [15, 5, Math.hypot(10, 10)], [22.5, 0, 5]]);
+    // 꺾이는 점은 합치지 않는다
+    expect(lineSegments([{ x: 0, y: 0 }, { x: 5, y: 5 }, { x: 10, y: 0 }])).toHaveLength(2);
+    expect(lineSegments([{ x: 0, y: 0 }])).toEqual([]);
+  });
+});
+
+describe("날짜별 숫자 표 배치 (dayTableLayout — 글자 1.4배까지, 칸은 '주' 없이)", () => {
+  // 카드 안쪽 폭 = 칸 폭 − 좌우 14: 휴대폰 360 → 332 · 폴드 접힘 475 → 447 · 펼침 세로 704 → 676 ·
+  // 펼침 가로 933×704 오른쪽 칸은 글자에 따라 넓어진다 (sideWidth: 100% 340 · 130% 391 · 200% 408)
+  it("명세 폭 × 글자 100·130·200% 에서 날짜 + 세 칸이 한 줄에 든다 (가장 넓은 '-9,999만'도)", () => {
+    for (const fs of [1, 1.3, 2]) {
+      for (const inner of [332, 447, 676, sideWidth(fs) - 28]) expect(dayTableLayout(inner, fs).fits, `${inner} ${fs}`).toBe(true);
+    }
+    expect([1, 1.3, 2].map((fs) => sideWidth(fs) - 28)).toEqual([312, 363, 380]);
+  });
+  it("글자 200% 도 1.4배로 잰다 (날짜 열 폭 = '12월 31일' 한 줄 폭) · 세 칸 폭이 가장 넓은 칸 글보다 넓다", () => {
+    const big = dayTableLayout(332, 2);
+    expect(big).toEqual(dayTableLayout(332, 1.4));
+    expect(big.dateW).toBe(Math.ceil(estimateTextWidth("12월 31일", 12 * 1.4)));
+    const cellW = (332 - big.dateW - 3 * DAY_TABLE_GAP) / 3;
+    expect(cellW).toBeGreaterThanOrEqual(estimateTextWidth("-9,999만", 12 * 1.4));
+    // 예전처럼 칸에 '주'까지 넣으면 들어가지 않았다 ('-1,243' / '만 주'로 갈라짐)
+    expect(cellW).toBeLessThan(estimateTextWidth("-9,999만 주", 12 * 1.4));
+  });
+  it("아주 좁은 칸(212)은 fits 거짓 → 날짜를 위 줄에 따로", () => {
+    expect(dayTableLayout(212, 2).fits).toBe(false);
+    expect(dayTableLayout(240, 1).fits).toBe(true);
+  });
 });
 
 describe("넓은 창: 합계를 세 기간 표로", () => {
@@ -236,8 +274,10 @@ function allTexts(): string[] {
   walk(text.FLOW_NAMES);
   walk(text.FLOW_TEXT);
   out.push(
-    text.periodLabel(20), text.sumSub1(20), text.shortData(43), text.missingNote(2), text.todayNote("9월 29일 (화)"), text.todayValues("10:05", "+12만 주", "-4만 주"),
-    text.pickedLine("9월 28일 (월)", "+742만", "-598만", "-363만", "270,000"), text.ratioDateLine("9월 28일 (월)"), text.agoLine(20, "46.75%", "-0.23%p"), text.agoMissing(60),
+    text.periodLabel(20), text.sumSub1(20), text.shortData(43), text.shortDataNaverCap(59), text.missingNote(2), text.todayNote("9월 29일"), text.todayValues("10:05", "+12만 주", "-4만 주"),
+    text.pickedLine("9월 28일 (월)", "+742만 주", "-598만 주", "-363만 주", "270,000"), ...text.pickedParts("9월 28일 (월)", "+742만 주", "-598만 주", "-363만 주", null),
+    text.ratioDateLine("9월 28일 (월)"), text.agoLine(20, "46.75%", "-0.23%p"), text.agoMissing(60),
+    text.agoSpeech(5, "46.48%", "0.04", 1), text.agoSpeech(20, "46.75%", "0.23", -1), text.agoSpeech(60, "49.00%", "0.00", 0),
     text.highLow("46.96%", "46.46%"), text.pctPointNote("46.75%", "46.52%", "-0.23%p"), text.limitNote("49.0%", "100.0%"), text.sourceToss("9월 28일 (월) 20:15"),
     text.sourceNaver("9월 29일 (화) 02:40"), text.checkLine(20, 20, "9월 29일 (화) 21:05"), text.checkLine(20, 19, "9월 29일 (화) 21:05"), text.staleLine("9월 29일 (화) 10:00"),
     text.sumSpeech("개인", 20, "3,348만 주", -1), text.sumSpeech("기관", 20, "839만 주", 1), text.sumSpeech("외국인", 5, "0주", 0), text.sumSpeech("기관", 5, null, 0),

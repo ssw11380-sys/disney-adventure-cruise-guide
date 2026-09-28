@@ -111,8 +111,12 @@ describe("한국 종목 (삼성전자, 토스 웹 자료)", () => {
 
   it("막대: 처음엔 가장 최근 날 줄, 누른 x 로 그날 줄 · 세 줄 같은 눈금(가장 큰 |값|이 반 줄 28)", () => {
     const r = open(FX.cases.samsung);
-    const picked = () => textOf(r.all().find((n) => n.props.testID === "flow-picked")!);
-    expect(picked()).toBe("9월 28일 (월) · 개인 +742만 · 외국인 -598만 · 기관 -363만 · 종가 270,000원");
+    const pickedNode = () => r.all().find((n) => n.props.testID === "flow-picked")!;
+    const picked = () => pickedNode().props.accessibilityLabel as string;
+    // 주 수에 늘 '주' (옆의 종가 '원'과 헷갈리지 않게), 조각마다 한 덩어리 (숫자와 단위가 줄에서 갈라지지 않게)
+    expect(picked()).toBe("9월 28일 (월) · 개인 +742만 주 · 외국인 -598만 주 · 기관 -363만 주 · 종가 270,000원");
+    expect(r.all(pickedNode().children).filter((n) => n.type === "Text").map(textOf)).toEqual(["9월 28일 (월)", "· 개인 +742만 주", "· 외국인 -598만 주", "· 기관 -363만 주", "· 종가 270,000원"]);
+    expect(pickedNode().props.accessibilityLiveRegion).toBe("polite");
     const area = r.all().find((n) => n.props.testID === "flow-bars-press")!;
     // 칸 폭 = 막대 칸 폭 / 20 → 첫 칸(가장 오래된 날, 8/28) 누르기
     press(r, area, { nativeEvent: { locationX: 1 } });
@@ -157,6 +161,11 @@ describe("한국 종목 (삼성전자, 토스 웹 자료)", () => {
     const rows = r.all(table.children).filter((n) => n.props.accessible === true);
     expect(rows).toHaveLength(20);
     expect(rows[0]!.props.accessibilityLabel).toBe("9월 28일 월요일, 개인 +742만 주, 외국인 -598만 주, 기관 -363만 주");
+    // 칸은 숫자만 ('주'는 표 위에 한 번), 글자는 1.4배까지 (고정 폭 열 표 규칙)
+    const cells = r.all(rows[0]!.children).filter((n) => n.type === "Text");
+    expect(cells.map(textOf)).toEqual(["9월 28일", "+742만", "-598만", "-363만"]);
+    for (const c of cells) expect(c.props.maxFontSizeMultiplier).toBe(1.4);
+    expect(texts(r)).toContain("단위: 주");
     expect(toggle().props.accessibilityLabel).toBe("날짜별 숫자 접기");
     press(r, toggle());
     expect(r.all().some((n) => n.props.testID === "flow-day-table")).toBe(false);
@@ -166,14 +175,18 @@ describe("한국 종목 (삼성전자, 토스 웹 자료)", () => {
     const r = open(FX.cases.samsung);
     const all = texts(r);
     expect(all).toContain("46.52%");
-    expect(all).toContain("9월 28일 (월) · 이 회사 주식 가운데 외국인이 가진 몫입니다.");
+    expect(all).toContain("9월 28일 (월) · 이 종목의 전체 주식 가운데 외국인이 가진 몫입니다.");
     expect(all).toContain("5일 전 46.48% → +0.04%p");
     expect(all).toContain("20일 전 46.75% → -0.23%p");
     expect(all).toContain("60일 전 46.96% → -0.44%p");
+    // 화면 읽기는 기호('→'·'%p') 대신 말로
+    expect(byText(r, "5일 전 46.48% → +0.04%p").props.accessibilityLabel).toBe("5일 전 46.48%, 지금은 그때보다 0.04퍼센트포인트 높습니다");
+    expect(byText(r, "20일 전 46.75% → -0.23%p").props.accessibilityLabel).toBe("20일 전 46.75%, 지금은 그때보다 0.23퍼센트포인트 낮습니다");
     expect(all).toContain("가장 높음 46.96% · 가장 낮음 46.46%");
     expect(all).toContain("%p는 퍼센트끼리 뺀 값입니다 (46.75% → 46.52%는 -0.23%p).");
     expect(all).toContain("외국인 보유율은 다음 날 오전에 한 번 더 고쳐지기도 합니다.");
-    expect(all.some((s) => s.startsWith("이 회사는 외국인이 가질 수 있는 몫이"))).toBe(false);
+    expect(all.some((s) => s.startsWith("이 종목은 외국인이 가질 수 있는 몫이"))).toBe(false);
+    expect(all.some((s) => s.includes("이 회사"))).toBe(false); // ETF 도 같은 글을 쓴다
     expect(r.byLabel("외국인 보유율 60일, 6월 30일 46.96%에서 9월 28일 46.52%, 가장 높음 46.96%, 가장 낮음 46.46%").props.accessibilityRole).toBe("image");
   });
 
@@ -197,8 +210,13 @@ describe("한국 종목 (삼성전자, 토스 웹 자료)", () => {
 
 describe("다른 경우", () => {
   it("KT: 한도 줄 (49.0% · 100.0%) · 대조 20일 가운데 19일", () => {
-    const all = texts(open(FX.cases.kt));
-    expect(all).toContain("이 회사는 외국인이 가질 수 있는 몫이 발행 주식의 49.0%로 정해져 있습니다. 지금 그 한도의 100.0%를 채웠습니다.");
+    const r = open(FX.cases.kt);
+    const all = texts(r);
+    expect(all).toContain("이 종목은 외국인이 가질 수 있는 몫이 전체 주식의 49.0%로 정해져 있습니다. 지금 그 한도의 100.0%를 채웠습니다.");
+    // 보유율이 60일 내내 49.00% → 선은 가로선 하나 (짧은 선분 60개를 이으면 점선처럼 보였다)
+    const segs = r.all().filter((n) => n.props.testID === "flow-ratio-seg");
+    expect(segs).toHaveLength(1);
+    expect(flat(segs[0]!).borderRadius).toBeUndefined();
     expect(all).toContain("토스증권 Open API 원자료와 최근 20일 비교: 20일 가운데 19일 같음 (9월 29일 (화) 21:05 확인)");
   });
 
@@ -206,7 +224,7 @@ describe("다른 경우", () => {
     const r = open(FX.cases.samsungNaver);
     expect(sumRows(r).map((n) => textOf(n))).toEqual(["개인-3,225만 주", "외국인-1,564만 주", "기관+895만 주"]);
     const all = texts(r);
-    expect(all).toContain("기타법인 값이 없어 세 값을 더해도 0이 되지 않습니다.");
+    expect(all).toContain("기타법인 값이 없어 세 값을 더해도 대개 0이 되지 않습니다.");
     expect(all).toContain("자료: 네이버 증권 · 한국거래소 거래만 (넥스트레이드 거래가 빠져 토스 앱 숫자와 같지 않습니다) · 9월 29일 (화) 02:40에 받음");
     expect(all.some((s) => s.startsWith("토스증권 Open API"))).toBe(false);
   });
@@ -215,7 +233,8 @@ describe("다른 경우", () => {
     const d = clone(FX.cases.samsung);
     d.today = { date: "2026-09-29", updatedAt: "2026-09-29T10:05:00+09:00", individual: null, foreign: 120_000, institution: -40_000 };
     const all = texts(open(d));
-    expect(all).toContain("오늘(9월 29일 (화)) 값은 집계 중이라 합계와 막대에 넣지 않았습니다.");
+    expect(all).toContain("오늘(9월 29일) 값은 집계 중이라 합계와 막대에 넣지 않았습니다.");
+    expect(all.some((s) => s.includes("))"))).toBe(false);
     expect(all).toContain("10:05까지 외국인 +12만 주 · 기관 -4만 주 (개인은 장이 끝난 뒤에 나옵니다)");
   });
 
@@ -225,7 +244,10 @@ describe("다른 경우", () => {
     d.sums["20"] = { ...d.sums["20"], days: 12, missing: 2 };
     const all = texts(open(d));
     expect(all).toContain("새 자료를 받지 못해 9월 29일 (화) 02:40에 받은 값입니다.");
-    expect(all).toContain("자료가 12일치뿐이라 12일 합계입니다.");
+    expect(all).toContain("받은 자료가 12일치라 12일 합계입니다.");
+    // 부제도 실제로 더한 날 수 (20 이 아니라 12)
+    expect(all).toContain("최근 12일 합계 (장이 열린 날 기준)");
+    expect(all).not.toContain("최근 20일 합계 (장이 열린 날 기준)");
     expect(all).toContain("(2일은 값이 없어 빼고 더했습니다)");
   });
 
@@ -258,6 +280,8 @@ describe("넓은 칸 (펼침 세로 704)", () => {
   it("합계를 칩 대신 세 기간 표로 (칩은 막대 카드로) — 200% 는 칩 그대로", () => {
     const r = open(FX.cases.samsung, { width: 704 });
     expect(texts(r)).not.toContain("최근 20일 합계 (장이 열린 날 기준)");
+    // 표 머리가 '5일 | 20일 | 60일'뿐이라 '장이 열린 날 기준'을 한 줄 남긴다
+    expect(texts(r)).toContain("장이 열린 날 기준 최근 5·20·60일 합계");
     const rows = r.all().filter((n) => n.props.accessible === true && String(n.props.accessibilityLabel).startsWith("개인, 최근 5일 합계"));
     expect(rows).toHaveLength(1);
     expect(textOf(rows[0]!)).toBe("개인-2,012만 주-3,348만 주-1,341만 주");
@@ -269,3 +293,50 @@ describe("넓은 칸 (펼침 세로 704)", () => {
     expect(texts(big)).toContain("최근 20일 합계 (장이 열린 날 기준)");
   });
 });
+
+describe("날짜별 숫자 표: 큰 글씨 (글자 200%)", () => {
+  const openTable = (width: number) => {
+    const r = open(FX.cases.samsung, { width, fontScale: 2 });
+    press(r, pressables(r).find((n) => /날짜별 숫자/.test(String(n.props.accessibilityLabel)))!);
+    const table = r.all().find((n) => n.props.testID === "flow-day-table")!;
+    return r.all(table.children).filter((n) => n.props.accessible === true);
+  };
+
+  it("휴대폰 360: 날짜 열은 가장 넓은 날짜('12월 31일')가 1.4배 글자로 한 줄에 드는 폭, 세 칸은 나머지를 나눈다 · 모든 칸 한 줄", () => {
+    const rows = openTable(360);
+    const cells = r2cells(rows[0]!);
+    expect(flat(cells[0]!).width).toBe(83);
+    for (const c of cells) {
+      expect(c.props.maxFontSizeMultiplier).toBe(1.4);
+      expect(c.props.numberOfLines).toBe(1);
+    }
+    // 9/21 개인 -1,243만 주: 칸에는 '-1,243만' (단위는 표 위) — '-1,243' / '만 주'로 갈라지지 않는다
+    const d21 = rows.find((n) => String(n.props.accessibilityLabel).startsWith("9월 21일"))!;
+    expect(r2cells(d21).map(textOf)).toEqual(["9월 21일", "-1,243만", "+595만", "+460만"]);
+    expect(d21.props.accessibilityLabel).toBe("9월 21일 월요일, 개인 -1,243만 주, 외국인 +595만 주, 기관 +460만 주");
+  });
+
+  it("아주 좁은 칸(240)은 날짜를 위 줄에 따로 두고 세 칸이 폭을 나눈다", () => {
+    const rows = openTable(240);
+    expect(flat(r2cells(rows[0]!)[0]!).width).toBe("100%");
+  });
+});
+
+describe("네이버 폴백 60줄: 집계 중인 오늘 줄이 끼면 확정 59일", () => {
+  it("60일 칩: '네이버 증권 자료는 한 번에 60일치까지라' 안내 (종목 자료가 짧다는 글이 아니다)", () => {
+    const d = clone(FX.cases.samsungNaver);
+    d.days = d.days.slice(0, 59);
+    d.sums["60"] = { ...d.sums["60"], days: 59 };
+    d.today = { date: "2026-09-29", updatedAt: null, individual: 1, foreign: 2, institution: 3 };
+    const r = open(d);
+    press(r, chip(r, "60일"));
+    const all = texts(r);
+    expect(all).toContain("네이버 증권 자료는 한 번에 60일치까지라, 집계 중인 오늘 값을 빼면 59일 합계입니다.");
+    expect(all).toContain("최근 59일 합계 (장이 열린 날 기준)");
+    expect(all.some((s) => s.startsWith("받은 자료가"))).toBe(false);
+  });
+});
+
+function r2cells(row: HostNode): HostNode[] {
+  return row.children.filter((c): c is HostNode => typeof c !== "string" && c.type === "Text");
+}

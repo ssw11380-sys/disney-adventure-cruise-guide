@@ -7,7 +7,8 @@ import type { FetchFn } from "./types.js";
  * 네이버 증권 모바일의 투자자별 매매 (3-33 수급 탭 2순위 — 토스 웹이 막힐 때만, 로그인 없음 — 시세 지표와 같은 호스트).
  *   GET https://m.stock.naver.com/api/stock/{코드}/trend?pageSize={N}   (최신순, pageSize 60 까지 — 61 부터 HTTP 400)
  * 한국거래소 거래만(넥스트레이드 빠짐)이라 토스 앱 숫자와 같지 않다 — 화면이 기준을 밝힌다. 기타법인·외국인 한도는 없다.
- * 수는 "+5,330,121"·"-4,999,903"·"0"·"" 글자, 보유율은 "46.56%". 모양이 다르면 던진다. 없는 코드는 빈 배열
+ * 수는 "+5,330,121"·"-4,999,903"·"0"·"" 글자, 보유율은 "46.56%". 값이 없는 칸은 "" 또는 "-"(일부 ETN 의 보유율 — 530036 실측) → null.
+ * 그 밖의 모양이면 던진다. 없는 코드는 빈 배열
  */
 const URL_BASE = "https://m.stock.naver.com/api/stock";
 const TIMEOUT_MS = 8_000;
@@ -21,17 +22,20 @@ function fail(msg: string): never {
   throw new ProviderError("naver", `수급 출처 모양 바뀜: ${msg}`);
 }
 
-/** "+1,234" · "-1,234" · "0" · "270,000" → 수, "" · 없음 → null */
+/** 값이 없다는 표시 (빈 칸 · 없음 · "-") */
+const blank = (v: unknown) => v === null || v === undefined || (typeof v === "string" && (v.trim() === "" || v.trim() === "-"));
+
+/** "+1,234" · "-1,234" · "0" · "270,000" → 수, "" · "-" · 없음 → null */
 function qty(v: unknown, key: string): number | null {
-  if (v === null || v === undefined || v === "") return null;
+  if (blank(v)) return null;
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v !== "string" || !/^[+-]?[\d,]+$/.test(v.trim())) fail(`${key}=${JSON.stringify(v)}`);
   return Number(v.trim().replace(/,/g, "")) || 0;
 }
 
-/** "46.56%" → 46.56, "" → null */
+/** "46.56%" → 46.56, "" · "-" → null */
 function pct(v: unknown, key: string): number | null {
-  if (v === null || v === undefined || v === "") return null;
+  if (blank(v)) return null;
   const m = typeof v === "string" ? /^(\d+(?:\.\d+)?)%?$/.exec(v.trim()) : null;
   if (!m) fail(`${key}=${JSON.stringify(v)}`);
   return Number(m[1]);

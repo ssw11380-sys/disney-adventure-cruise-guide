@@ -149,32 +149,32 @@ export class InvestorFlowService {
   private async load(code: string): Promise<InvestorFlowResponse> {
     const { source, snap, stale } = await this.pick(code);
     const now = this.now();
-    if (source === "toss-web") this.maybeCheck(code, snap.rows);
+    if (source === "toss-web") this.maybeCheck(code, snap);
     return buildFlowBody({ code, source, rows: snap.rows, fetchedAt: new Date(snap.at), stale, check: this.checks.get(code) ?? null, now });
   }
 
   /** 뒤에서 대조 (응답은 기다리지 않는다). 키가 없거나 12시간(실패면 1시간) 안에 해 봤으면 하지 않는다 */
-  private maybeCheck(code: string, rows: FlowTrendRow[]): void {
+  private maybeCheck(code: string, snap: Snap): void {
     const api = this.deps.sources?.openApi;
     if (!api) return;
     const tried = this.checkTried.get(code);
     const t = this.now().getTime();
     if (tried && t - tried.at < (tried.ok ? CHECK_EVERY_MS : CHECK_RETRY_MS)) return;
     this.checkTried.set(code, { at: t, ok: false });
-    const job = this.compare(code, rows)
+    const job = this.compare(code, snap)
       .then(() => this.checkTried.set(code, { at: t, ok: true }))
       .catch((err: unknown) => this.deps.log?.warn({ code, err: err instanceof Error ? err.message : String(err) }, "수급 대조: 토스 Open API 를 받지 못함"));
     this.running.add(job);
     void job.finally(() => this.running.delete(job));
   }
 
-  /** 대조 한 번: 결과 개수를 기억하고, 다른 날이 있으면 경고 로그(날짜·칸 이름만) */
-  private async compare(code: string, rows: FlowTrendRow[]): Promise<FlowCompare> {
+  /** 대조 한 번: 결과 개수를 기억하고, 다른 날이 있으면 경고 로그(날짜·칸 이름만). 확정 줄은 그 자료를 받은 때 기준 */
+  private async compare(code: string, snap: Snap): Promise<FlowCompare> {
     const api = this.deps.sources?.openApi;
     if (!api) throw new Error("토스 Open API 없음");
     const at = this.now();
     const days = await api.getInvestorFlow(code, CHECK_FETCH_DAYS);
-    const { final } = splitFlowRows(rows, "toss-web", this.now());
+    const { final } = splitFlowRows(snap.rows, "toss-web", new Date(snap.at), this.now());
     const c = compareFlows(final, days);
     this.checks.set(code, { at: seoulIso(at), days: c.days, same: c.same });
     if (c.same < c.days) this.deps.log?.warn({ code, days: c.days, same: c.same, diffs: c.diffs }, "수급 대조: 토스 Open API 와 다른 날이 있음");
@@ -191,7 +191,7 @@ export class InvestorFlowService {
     const { source, snap } = await this.pick(code);
     if (source !== "toss-web") return { enabled: true, code, available: false, reason: FLOW_TEXT.noTossWeb };
     const at = seoulIso(this.now());
-    const c = await this.compare(code, snap.rows);
+    const c = await this.compare(code, snap);
     this.checkTried.set(code, { at: this.now().getTime(), ok: true });
     return { enabled: true, code, available: true, at, days: c.days, same: c.same, rows: c.rows };
   }
