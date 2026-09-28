@@ -89,8 +89,8 @@ describe("화면 읽기 문장", () => {
     expect(metricSpeech(a1n)).toContain("업종 안 위치 100 중 76 (흑자 회사끼리 59)");
     expect(metricSpeech(a1n)).toContain("순위에는 최근 4분기 이익과 5년 평균 이익을 반씩 섞은 44.8배를 썼습니다");
     expect(metricSpeech(a1n)).not.toMatch(/\.\.|\/100|→/);
-    // [2] 두 쪽 문장은 묶음 글 그대로 (두 줄)
-    expect(S["NVDA"]!.value.families![0]!.text).toBe("막대를 길게 만든 지표(위치 점수): 기업가치 ÷ 영업이익 80 · PER 71\n막대를 짧게 만든 지표(위치 점수): PBR 5 · PSR 25");
+    // [2] 두 쪽 문장은 묶음 글 그대로 (두 줄 · 숫자는 위치 점수 '점', 이름과 숫자 사이는 줄바꿈 없는 빈칸)
+    expect(S["NVDA"]!.value.families![0]!.text).toBe("막대를 길게 만든 지표: 기업가치 ÷ 영업이익\u00a080점 · PER\u00a071점\n막대를 짧게 만든 지표: PBR\u00a05점 · PSR\u00a025점");
     expect(S["NVDA"]!.value.families![0]!.about).toBe("막대가 길수록: 이익·순자산·매출에 비해 주가가 낮은 쪽 (비교 회사 기준)");
   });
   it("삼성전자: 68 다소 강함", () => expect(trendSpeech(S["005930"]!.trend)).toBe("추세 지표 68점, 다소 강함"));

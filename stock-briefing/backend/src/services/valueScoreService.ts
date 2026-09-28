@@ -1021,7 +1021,7 @@ function twoSidedText(f: FamilyScore, ctx: RowCtx): string {
     .map((m, i) => ({ m, i }))
     .filter(({ m }) => m.adopted && m.score !== null)
     .map(({ m, i }) => ({ m, i, s: roundScore(m.score!) }));
-  const label = (r: { m: MetricScore; s: number }): readonly [string, string] => {
+  const label = (r: { m: MetricScore; s: number }): readonly [string, number, string] => {
     const tag =
       r.m.rule === "zeroLoss" && r.m.why && ZERO_LABEL[r.m.why]
         ? `(${ZERO_LABEL[r.m.why]})`
@@ -1031,7 +1031,7 @@ function twoSidedText(f: FamilyScore, ctx: RowCtx): string {
             tieDriven(r.m)
             ? `(비교 회사 ${Math.round(100 * r.m.peer!.tie)}%가 ${medianText(r.m.key, r.m.peer!.tieX) ?? "같은 값"})`
             : "";
-    return [shortMetricName(r.m.key, ctx.grade), `${r.s}${tag}`];
+    return [shortMetricName(r.m.key, ctx.grade), r.s, tag];
   };
   const pick = rows.filter((r) => !lossAccrual(r.m, ctx));
   const long = pick.filter((r) => r.s >= 67).sort((a, b) => b.s - a.s || a.i - b.i);

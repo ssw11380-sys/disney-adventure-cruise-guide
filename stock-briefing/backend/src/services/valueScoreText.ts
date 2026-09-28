@@ -490,16 +490,19 @@ export const PEER_TIMING_NOTE_V2 =
 /** [2] 가치 함정 표시 (방향 말) */
 export const VALUE_TRAP_V2 = "주가 수준 막대는 길지만(이익·순자산·매출에 비해 주가가 낮은 쪽) 이익이 줄고 있거나 재무 부담이 커서, 이 숫자만으로 판단하기 어렵습니다.";
 
-/**
- * [2] 두 쪽 문장 (valueFamilyTwoSided): 위치 67 이상 · 33 이하 지표를 가장 튀는 순으로.
- * 뒤 숫자가 PER 배수가 아니라 위치 점수(0~100)라는 것을 앞머리에 적는다 — 'PER 70'을 'PER 70배'로 읽지 않게 (검토 지적, 화면 읽기도 같은 글)
- */
-export const TWO_SIDED_LONG = "막대를 길게 만든 지표(위치 점수)";
-export const TWO_SIDED_SHORT = "막대를 짧게 만든 지표(위치 점수)";
+/** [2] 두 쪽 문장 (valueFamilyTwoSided): 위치 67 이상 · 33 이하 지표를 가장 튀는 순으로 */
+export const TWO_SIDED_LONG = "막대를 길게 만든 지표";
+export const TWO_SIDED_SHORT = "막대를 짧게 만든 지표";
 /** 67 이상 · 33 이하 지표가 없을 때: 가운데쯤 지표를 그대로 적는다 */
-export const TWO_SIDED_MID = "가운데쯤인 지표(위치 점수 34~66)";
-export const twoSidedMidLine = (items: ReadonlyArray<readonly [string, number | string]>) => `${TWO_SIDED_MID}: ${items.map(([n, s]) => `${n} ${s}`).join(" · ")}`;
-export const twoSidedLine = (long: boolean, items: ReadonlyArray<readonly [string, number | string]>) => `${long ? TWO_SIDED_LONG : TWO_SIDED_SHORT}: ${items.map(([n, s]) => `${n} ${s}`).join(" · ")}`;
+export const TWO_SIDED_MID = "가운데쯤(34~66)인 지표";
+/**
+ * 두 쪽 문장의 지표 하나 'PER 70점': 숫자가 PER 배수가 아니라 위치 점수라는 것을 '점'으로 붙이고('PER 70'을 'PER 70배'로 읽지 않게 — 바로 아래 PER 줄은 27.9배,
+ * 검토 지적 · 화면 읽기도 같은 글), 이름과 숫자 사이는 줄바꿈 없는 빈칸(U+00A0)이라 좁은 화면에서 'PER' / '70점'으로 갈리지 않는다. tag 는 '(적자)' 같은 사실
+ */
+export const twoSidedItem = (name: string, score: number, tag = "") => `${name}\u00a0${score}점${tag}`;
+type TwoSidedItem = readonly [name: string, score: number, tag?: string];
+export const twoSidedMidLine = (items: ReadonlyArray<TwoSidedItem>) => `${TWO_SIDED_MID}: ${items.map(([n, s, t]) => twoSidedItem(n, s, t)).join(" · ")}`;
+export const twoSidedLine = (long: boolean, items: ReadonlyArray<TwoSidedItem>) => `${long ? TWO_SIDED_LONG : TWO_SIDED_SHORT}: ${items.map(([n, s, t]) => twoSidedItem(n, s, t)).join(" · ")}`;
 /** 지표 짧은 이름 ('PER (이익 대비 주가)' → 'PER', '매출 성장 (3년 연평균)' → '매출 성장') */
 export const shortMetricName = (k: MetricKey, grade?: "full" | "lite") => metricName(k, grade).replace(/ \([^)]*\)$/, "");
 
