@@ -59,13 +59,14 @@ vi.mock("react-native", async () => {
   AccessibilityInfo: { announceForAccessibility: h.announce, isReduceMotionEnabled: async () => false, addEventListener: () => ({ remove: () => undefined }) },
   Alert: { alert: h.alert },
   AppState: { addEventListener: () => ({ remove: () => undefined }), currentState: "active" },
+  PixelRatio: { roundToNearestPixel: (v: number) => v },
   Platform: { OS: "android" },
   useWindowDimensions: () => h.win,
   };
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 28, bottom: 24, left: 0, right: 0 }) }));
 vi.mock("expo-linear-gradient", () => ({ LinearGradient: "LinearGradient" }));
-vi.mock("react-native-svg", () => ({ Svg: "Svg", Defs: "Defs", Ellipse: "Ellipse", LinearGradient: "SvgLinearGradient", Line: "Line", RadialGradient: "RadialGradient", Rect: "Rect", Stop: "Stop", Text: "SvgText" }));
+vi.mock("react-native-svg", () => ({ Svg: "Svg", Defs: "Defs", Ellipse: "Ellipse", LinearGradient: "SvgLinearGradient", Line: "Line", Path: "Path", RadialGradient: "RadialGradient", Rect: "Rect", Stop: "Stop", Text: "SvgText" }));
 vi.mock("expo-status-bar", () => ({ StatusBar: "StatusBar" }));
 vi.mock("expo-device", () => ({ modelName: "SM-F966N" }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
@@ -424,6 +425,25 @@ describe("설정 '계정' 칸 · 주인 아닌 계정 안내 · 처음 비밀번
     expect(r.text()).toBe("개인 종목 기능은 준비 중이에요 — 시장·종목 정보는 지금 볼 수 있어요");
     expect(r.byLabel("개인 종목 기능은 준비 중이에요 — 시장·종목 정보는 지금 볼 수 있어요")).toBeTruthy();
     expect(render(<AccountCard />).text()).not.toContain("처음 비밀번호");
+  });
+
+  it("플래그가 꺼져도(관리 API · 비상 끄기) 지금 서버에 주인 아닌 계정 세션이 있으면 안내 띠 — 서버가 그 계정으로 막으므로 빈 잔고 대신", async () => {
+    const { accountViewOf } = await import("@/lib/account");
+    const { activeSession, noteActiveServer } = await import("@/lib/session");
+    await saveSession({ apiUrl: SERVER, token: "gzs1_m", remember: true, user: MEMBER });
+    h.flag = false;
+    noteActiveServer(SERVER);
+    expect(render(<MemberNotice />).text()).toBe("개인 종목 기능은 준비 중이에요 — 시장·종목 정보는 지금 볼 수 있어요");
+    // 계정 칸·로그인 화면은 꺼짐 그대로 (on·session 없음)
+    expect(accountViewOf(false, currentSession(), activeSession())).toEqual({ on: false, session: null, member: true });
+    // 다른 서버로 바꿨으면 그 서버는 세션을 받지 않으므로 안내 없음
+    noteActiveServer("https://other.test");
+    expect(render(<MemberNotice />).tree).toEqual([]);
+    // 주인 세션·세션 없음은 지금 그대로
+    noteActiveServer(SERVER);
+    await saveSession({ apiUrl: SERVER, token: "gzs1_o", remember: true, user: OWNER });
+    expect(render(<MemberNotice />).tree).toEqual([]);
+    expect(accountViewOf(false, null, null)).toEqual({ on: false, session: null, member: false });
   });
 
   it("처음 비밀번호 권유 시트: 로그인 직후 한 번, [나중에] 로 닫고 다시 뜨지 않음", async () => {

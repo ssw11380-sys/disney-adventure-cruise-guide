@@ -48,7 +48,10 @@ export class FakeValue extends FakeNode {
   setValue(v: number): void {
     this.v = v;
   }
-  stopAnimation(): void {}
+  /** 움직임을 멈추고 지금 값을 알려 준다 (RN 과 같다) */
+  stopAnimation(cb?: (v: number) => void): void {
+    cb?.(this.v);
+  }
 }
 
 class FakeMul extends FakeNode {

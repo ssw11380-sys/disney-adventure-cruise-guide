@@ -1,7 +1,7 @@
 import { LinearGradient } from "expo-linear-gradient";
 import React, { memo, useEffect, useId, useMemo, useState } from "react";
-import { AccessibilityInfo, Animated, AppState, Easing, Platform, StyleSheet, View } from "react-native";
-import { Defs, Ellipse, LinearGradient as SvgLinearGradient, Line, RadialGradient, Rect, Stop, Svg } from "react-native-svg";
+import { AccessibilityInfo, Animated, AppState, Easing, PixelRatio, Platform, StyleSheet, View } from "react-native";
+import { Defs, Ellipse, LinearGradient as SvgLinearGradient, Line, Path, RadialGradient, Rect, Stop, Svg } from "react-native-svg";
 import {
   BREATH_MS,
   breathTrack,
@@ -15,6 +15,7 @@ import {
   pivotShift,
   type HeroScene,
   type LoginLayout,
+  type ScenePillar,
   type Track,
 } from "@/lib/loginHero";
 import { authColors as C, authLayout } from "@/tokens";
@@ -23,8 +24,9 @@ import { GoldWordmark, LogoSubtitle } from "./AuthParts";
 /**
  * ─────────────────────────────────────────────────────────────────────────────
  *  <LoginHero/> — 로그인 첫 화면 그림 (계정 A단계, hero-spec.md)
- *  횡보 16봉(0~1.5초) → 빨간 상한가 10봉이 한 개씩 계단처럼(1.5~3.6초) → 불기둥 빛 + 금색 '가즈아 불기둥'(3.6~4.2초),
- *  그 뒤에는 빛만 3.6초에 한 번 아주 천천히 숨 쉰다 (밝기 1 → 0.82 → 1, 깜빡임 없음).
+ *  금색 '가즈아 불기둥'·선·부제가 먼저(0.2~0.8초 — 첫 화면부터 브랜드가 보이게) · 횡보 16봉(0.15~1.5초) → 빨간 상한가 10봉이 한 개씩
+ *  계단처럼(1.5~3.6초) → 절정: 붉은 빛 + 마지막 봉에서 솟는 불기둥(3.6~4.2초),
+ *  그 뒤에는 빛·불기둥만 3.6초에 한 번 아주 천천히 숨 쉰다 (밝기 1 → 0.82 → 1, 깜빡임 없음).
  *
  *  움직임은 모두 UI 스레드: RN Animated 네이티브 드라이버의 시계 하나(0 → 4200ms)와 숨쉬기 하나에, 봉·빛·글자마다
  *  interpolate(시간표 lib/loginHero heroTracks)로 opacity·transform(translate·scale)만 잇는다. 프레임마다 JS 일 없음, SVG 속성은 움직이지 않는다.
@@ -42,6 +44,10 @@ import { GoldWordmark, LogoSubtitle } from "./AuthParts";
  */
 
 const NATIVE = Platform.OS !== "web";
+/** 봉 몸통·꼬리 자리·폭을 화면 픽셀에 (봉마다 굵기가 달라 보이지 않게). 없으면(테스트의 가짜 RN) 그대로 */
+const snapPx = (v: number) => (typeof PixelRatio?.roundToNearestPixel === "function" ? PixelRatio.roundToNearestPixel(v) : v);
+/** 숨쉬기를 멈출 때 밝기를 1 로 되돌리는 시간 (한 번에 최대 18% 튀지 않게) */
+const BREATH_SETTLE_MS = 180;
 const TRACKS = heroTracks();
 const BREATH = breathTrack();
 
@@ -100,7 +106,7 @@ export const LoginHero = memo(function LoginHero({ layout, logo = true, animate 
   const key = layoutKey(layout);
   // 같은 배치면 장면·움직임 노드를 다시 만들지 않는다 (입력할 때마다 화면이 다시 그려져도 시계에 붙은 노드는 그대로)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const scene = useMemo(() => heroScene(layout), [key]);
+  const scene = useMemo(() => heroScene(layout, snapPx), [key]);
   const still = frozenAt !== undefined ? frozenAt : animate ? null : HERO_MS;
   const [clock] = useState(() => new Animated.Value(still ?? (introPlayed ? HERO_MS : 0)));
   const [breath] = useState(() => new Animated.Value(0));
@@ -143,7 +149,13 @@ export const LoginHero = memo(function LoginHero({ layout, logo = true, animate 
     b.start();
     return () => {
       b.stop();
-      breath.setValue(0);
+      // 밝기 1(위상 0 또는 1)까지 가까운 쪽으로 부드럽게 (예전 setValue(0) 은 키보드·가려짐·앱 전환 때 빛이 한 번에 최대 18% 튀었다 — 검증 지적)
+      breath.stopAnimation((v) => {
+        const to = typeof v === "number" && v >= 0.5 ? 1 : 0;
+        Animated.timing(breath, { toValue: to, duration: BREATH_SETTLE_MS, easing: Easing.linear, useNativeDriver: NATIVE, isInteraction: false }).start(({ finished }) => {
+          if (finished) breath.setValue(0);
+        });
+      });
     };
   }, [still, reduce, done, paused, active, breath]);
 
@@ -163,11 +175,13 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
   // 빛은 두 칸 화면에서도 창 전체에 (오른쪽 입력 칸 뒤까지 — 경계에 세로 줄이 생기지 않게, hero-spec 4.1)
   const W = L.screenW;
   const H = L.heroH;
+  const P = scene.pillar;
+  const pH = P.base - P.top;
   const nodes = useMemo(() => {
     const breathe = breath.interpolate({ inputRange: [...BREATH.input], outputRange: [...BREATH.output] });
+    const ps = growTrack(TRACKS.pillar.grow);
     return {
       grid: at(clock, TRACKS.grid),
-      gridLead: at(clock, TRACKS.gridLead),
       glow: Animated.multiply(at(clock, TRACKS.glow), breathe),
       side: scene.side.map((c, i) => {
         const tr = TRACKS.side[i]!;
@@ -179,18 +193,14 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
         const s = growTrack(tr.grow);
         return { show: at(clock, tr.show), shift: at(clock, mapTrack(s, (v) => pivotShift(0, c.body.h, c.body.h, v))), scale: at(clock, s), cap: at(clock, tr.cap) };
       }),
-      flames: scene.flames.map((f, i) => {
-        const tr = TRACKS.flames[i]!;
-        const s = growTrack(tr.grow);
-        return {
-          opacity: Animated.multiply(at(clock, mapTrack(tr.opacity, (v) => v * f.opacity)), breathe),
-          shift: at(clock, mapTrack(s, (v) => pivotShift(0, 2 * f.ry, 2 * f.ry, v))),
-          scale: at(clock, s),
-        };
-      }),
-      core: Animated.multiply(at(clock, TRACKS.flames[TRACKS.flames.length - 1]!.opacity), breathe),
+      pillar: {
+        opacity: Animated.multiply(at(clock, TRACKS.pillar.opacity), breathe),
+        // 아래 끝(봉 종가) 기준으로 위로 솟는다
+        shift: at(clock, mapTrack(ps, (v) => pivotShift(0, pH, pH, v))),
+        scale: at(clock, ps),
+      },
     };
-  }, [scene, clock, breath]);
+  }, [scene, clock, breath, pH]);
   return (
     <View style={[StyleSheet.absoluteFill, { overflow: "visible", pointerEvents: "none" }]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       {/* 빛: 마지막 봉 둘레(glow)와 계단 가운데(glow2) — 원형 그러데이션 (흐림 필터 없음) */}
@@ -211,94 +221,34 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
           <Rect x={0} y={0} width={W} height={H} fill={ref("glow")} />
         </Svg>
       </Animated.View>
-      {/* 눈금 5줄 + 바닥선. 로고 옆을 지나는 줄은 로고 오른쪽에서 옅게 시작 */}
+      {/* 눈금 + 바닥선 (로고 묶음 높이에 걸리는 줄은 장면에서 뺐다) */}
       <Animated.View testID="hero-grid" style={{ position: "absolute", left: 0, top: 0, width: L.heroW, height: H, opacity: nodes.grid }}>
         <Svg width={L.heroW} height={H}>
-          <Defs>
-            {scene.grid.map((g, i) =>
-              g.fade ? (
-                <SvgLinearGradient key={i} id={`${uid}fade${i}`} x1={g.x1} y1={0} x2={g.x1 + g.fade} y2={0} gradientUnits="userSpaceOnUse">
-                  <Stop offset="0" stopColor={C.gridLine} stopOpacity={0} />
-                  <Stop offset="1" stopColor={C.gridLine} stopOpacity={C.gridOpacity} />
-                </SvgLinearGradient>
-              ) : null,
-            )}
-          </Defs>
           {scene.grid.map((g, i) => (
-            <Line key={`g${i}`} x1={g.x1} x2={g.x2} y1={g.y} y2={g.y} stroke={g.fade ? ref(`fade${i}`) : C.grid} strokeWidth={1} />
+            <Line key={`g${i}`} x1={g.x1} x2={g.x2} y1={g.y} y2={g.y} stroke={C.grid} strokeWidth={1} />
           ))}
           <Line x1={scene.baseline.x1} x2={scene.baseline.x2} y1={scene.baseline.y} y2={scene.baseline.y} stroke={C.baseline} strokeWidth={1} />
         </Svg>
       </Animated.View>
-      {/* 로고 옆 눈금의 왼쪽 부분: 로고가 나타나기 전에는 줄이 그림 칸 왼쪽 끝부터 이어지고, 로고가 나타나는 동안 사라진다 (끝 40dp 는 오른쪽 부분과 겹쳐 옅어짐) */}
-      {scene.grid.some((g) => g.lead) ? (
-        <Animated.View testID="hero-grid-lead" style={{ position: "absolute", left: 0, top: 0, width: L.heroW, height: H, opacity: nodes.gridLead }}>
-          <Svg width={L.heroW} height={H}>
-            <Defs>
-              {scene.grid.map((g, i) =>
-                g.lead ? (
-                  <SvgLinearGradient key={i} id={`${uid}lead${i}`} x1={g.x1} y1={0} x2={g.lead.x2} y2={0} gradientUnits="userSpaceOnUse">
-                    <Stop offset="0" stopColor={C.gridLine} stopOpacity={C.gridOpacity} />
-                    <Stop offset="1" stopColor={C.gridLine} stopOpacity={0} />
-                  </SvgLinearGradient>
-                ) : null,
-              )}
-            </Defs>
-            {scene.grid.map((g, i) =>
-              g.lead ? (
-                <React.Fragment key={`l${i}`}>
-                  <Line x1={g.lead.x1} x2={g.x1} y1={g.y} y2={g.y} stroke={C.grid} strokeWidth={1} />
-                  <Line x1={g.x1} x2={g.lead.x2} y1={g.y} y2={g.y} stroke={ref(`lead${i}`)} strokeWidth={1} />
-                </React.Fragment>
-              ) : null,
-            )}
-          </Svg>
-        </Animated.View>
-      ) : null}
-      {/* 불기둥: 마지막 세 봉 위 세로 타원 (아래 기준으로 자란다). 크림색 뜨거운 가운데는 마지막 불기둥에만 — 옅은 두 불꽃에 두면
-          어두운 붉은 빛 위에서 회색·보라 얼룩처럼 보였다 (검증 지적) */}
-      {scene.flames.map((f, i) => (
-        <Animated.View
-          key={`f${i}`}
-          testID={`hero-flame-${i}`}
-          renderToHardwareTextureAndroid
-          style={{ position: "absolute", left: f.cx - f.rx, top: f.cy - f.ry, width: 2 * f.rx, height: 2 * f.ry, opacity: nodes.flames[i]!.opacity, transform: [{ translateY: nodes.flames[i]!.shift }, { scaleY: nodes.flames[i]!.scale }] }}
-        >
-          <Svg width={2 * f.rx} height={2 * f.ry}>
-            <Defs>
-              <RadialGradient id={`${uid}flame${i}`} cx="50%" cy="58%" r="50%">
-                <Stop offset="0" stopColor={i === scene.flames.length - 1 ? C.flameCore : C.flame} stopOpacity={0.5} />
-                <Stop offset="0.2" stopColor={C.flame} stopOpacity={0.55} />
-                <Stop offset="0.55" stopColor={C.flameHot} stopOpacity={0.22} />
-                <Stop offset="1" stopColor={C.flameHot} stopOpacity={0} />
-              </RadialGradient>
-            </Defs>
-            <Ellipse cx={f.rx} cy={f.ry} rx={f.rx} ry={f.ry} fill={ref(`flame${i}`)} />
-            {i === scene.flames.length - 1 ? (
-              <>
-                <Defs>
-                  <RadialGradient id={`${uid}pillar`} cx="50%" cy="62%" r="50%">
-                    <Stop offset="0" stopColor={C.flameCore} stopOpacity={0.6} />
-                    <Stop offset="0.5" stopColor={C.flame} stopOpacity={0.25} />
-                    <Stop offset="1" stopColor={C.flame} stopOpacity={0} />
-                  </RadialGradient>
-                </Defs>
-                <Ellipse cx={f.rx} cy={f.ry * 1.05} rx={f.rx * 0.42} ry={f.ry * 0.92} fill={ref("pillar")} />
-              </>
-            ) : null}
-          </Svg>
-        </Animated.View>
-      ))}
-      {/* 횡보 봉 16개: 몸통 가운데 기준으로 0.3 → 1 */}
+      {/* 불기둥: 마지막 상한가 봉에서 위로 솟는 기둥 하나 (봉 뒤에서 시작 — 아래 끝은 몸통에 가려 봉에서 솟아오르는 모양).
+          둘레 옅은 주황 빛 → 기둥(주황-노랑, 몸통 폭 이상에서 위로 가늘어짐) → 가운데 심(거의 흰 크림) → 아래 뜨거운 점.
+          예전 세 봉 위 타원 불꽃은 붉은 빛 위에서 봉과 떨어진 갈색 얼룩·촛불처럼 보였다 (검증 지적) */}
+      <Animated.View
+        testID="hero-pillar"
+        renderToHardwareTextureAndroid
+        style={{ position: "absolute", left: P.cx - P.haloW / 2, top: P.top, width: P.haloW, height: pH, opacity: nodes.pillar.opacity, transform: [{ translateY: nodes.pillar.shift }, { scaleY: nodes.pillar.scale }] }}
+      >
+        <PillarArt uid={uid} pillar={P} />
+      </Animated.View>
+      {/* 횡보 봉 16개: 몸통 가운데 기준으로 0.3 → 1 (자리·폭은 화면 픽셀에 맞춤) */}
       {scene.side.map((c, i) => {
         const color = c.up ? C.sideUp : C.sideDown;
         const n = nodes.side[i]!;
-        const wickX = (c.box.w - 1) / 2;
         return (
           <Animated.View key={`s${i}`} testID={`hero-side-${i}`} style={{ position: "absolute", left: c.box.x, top: c.box.y, width: c.box.w, height: c.box.h, opacity: n.opacity, transform: [{ translateY: n.shift }, { scaleY: n.scale }] }}>
-            <View style={{ position: "absolute", left: wickX, top: 0, width: 1, height: c.bodyTop - c.box.y, backgroundColor: color }} />
+            <View style={{ position: "absolute", left: c.wickX, top: 0, width: c.wickW, height: c.bodyTop - c.box.y, backgroundColor: color }} />
             <View style={{ position: "absolute", left: 0, top: c.bodyTop - c.box.y, width: c.box.w, height: c.bodyBottom - c.bodyTop, borderRadius: 1, backgroundColor: color }} />
-            <View style={{ position: "absolute", left: wickX, top: c.bodyBottom - c.box.y, width: 1, height: c.box.y + c.box.h - c.bodyBottom, backgroundColor: color }} />
+            <View style={{ position: "absolute", left: c.wickX, top: c.bodyBottom - c.box.y, width: c.wickW, height: c.box.y + c.box.h - c.bodyBottom, backgroundColor: color }} />
           </Animated.View>
         );
       })}
@@ -315,25 +265,63 @@ const HeroArt = memo(function HeroArt({ scene, clock, breath }: { scene: HeroSce
           </Animated.View>
         );
       })}
-      {/* 마지막 봉 꼭대기 뜨거운 점 */}
-      <Animated.View
-        testID="hero-core"
-        style={{ position: "absolute", left: scene.core.cx - scene.core.r, top: scene.core.cy - scene.core.r, width: 2 * scene.core.r, height: 2 * scene.core.r, opacity: nodes.core }}
-        renderToHardwareTextureAndroid
-      >
-        <Svg width={2 * scene.core.r} height={2 * scene.core.r}>
-          <Defs>
-            <RadialGradient id={`${uid}core`} cx="50%" cy="50%" r="50%">
-              <Stop offset="0" stopColor={C.flameCore} stopOpacity={0.55} />
-              <Stop offset="1" stopColor={C.flameCore} stopOpacity={0} />
-            </RadialGradient>
-          </Defs>
-          <Ellipse cx={scene.core.r} cy={scene.core.r} rx={scene.core.r} ry={scene.core.r} fill={ref("core")} />
-        </Svg>
-      </Animated.View>
     </View>
   );
 });
+
+/**
+ * 불기둥 모양 (그리는 칸 기준, 아래 끝 = 칸 아래 끝 h, 가로 가운데 = 칸 가운데). 아래는 폭 baseW(봉 몸통 폭 — 몸통 뒤에 꼭 숨음)에서 시작해
+ * 아래에서 20% 높이까지 maxW 로 조금 부풀었다가 위로 가늘어져 끝(top)이 뾰족하다
+ */
+export function pillarPath(P: Pick<ScenePillar, "haloW">, h: number, baseW: number, maxW: number, top: number): string {
+  const cx = P.haloW / 2;
+  const s = h - top;
+  const yb = h - 0.2 * s;
+  const [l0, r0, lm, rm] = [cx - baseW / 2, cx + baseW / 2, cx - maxW / 2, cx + maxW / 2];
+  return [
+    `M ${l0} ${h}`,
+    `C ${l0} ${h - 0.08 * s} ${lm} ${yb + 0.06 * s} ${lm} ${yb}`,
+    `C ${lm} ${yb - 0.3 * s} ${cx - maxW * 0.28} ${top + 0.25 * s} ${cx} ${top}`,
+    `C ${cx + maxW * 0.28} ${top + 0.25 * s} ${rm} ${yb - 0.3 * s} ${rm} ${yb}`,
+    `C ${rm} ${yb + 0.06 * s} ${r0} ${h - 0.08 * s} ${r0} ${h}`,
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * 불기둥 그림: 둘레 옅은 주황 빛(타원) → 기둥(아래 주황-노랑 → 위 붉게 옅어짐) → 가운데 심(거의 흰 크림, 불투명도 0.95 — 붉은 빛 위에서도 뚜렷이 밝다).
+ * 아래 끝은 몸통 폭이라 몸통 뒤에 숨는다 (칸 아래로 잘리는 모양이 몸통 양옆으로 보이지 않게)
+ */
+function PillarArt({ uid, pillar: P }: { uid: string; pillar: ScenePillar }) {
+  const h = P.base - P.top;
+  const cx = P.haloW / 2;
+  const ref = (name: string) => `url(#${uid}${name})`;
+  return (
+    <Svg width={P.haloW} height={h}>
+      <Defs>
+        <RadialGradient id={`${uid}halo`} cx="50%" cy="72%" r="50%">
+          <Stop offset="0" stopColor={C.flame} stopOpacity={0.5} />
+          <Stop offset="0.5" stopColor={C.flameHot} stopOpacity={0.2} />
+          <Stop offset="1" stopColor={C.flameHot} stopOpacity={0} />
+        </RadialGradient>
+        <SvgLinearGradient id={`${uid}pillar`} x1={0} y1={h} x2={0} y2={0} gradientUnits="userSpaceOnUse">
+          <Stop offset="0" stopColor={C.flameLight} stopOpacity={0.95} />
+          <Stop offset="0.35" stopColor={C.flame} stopOpacity={0.88} />
+          <Stop offset="0.7" stopColor={C.flameHot} stopOpacity={0.5} />
+          <Stop offset="1" stopColor={C.flameHot} stopOpacity={0} />
+        </SvgLinearGradient>
+        <SvgLinearGradient id={`${uid}pillarCore`} x1={0} y1={h} x2={0} y2={h * 0.38} gradientUnits="userSpaceOnUse">
+          <Stop offset="0" stopColor={C.flameWhite} stopOpacity={0.95} />
+          <Stop offset="0.55" stopColor={C.flameCore} stopOpacity={0.8} />
+          <Stop offset="1" stopColor={C.flameCore} stopOpacity={0} />
+        </SvgLinearGradient>
+      </Defs>
+      <Ellipse cx={cx} cy={h * 0.56} rx={P.haloW / 2} ry={h * 0.44} fill={ref("halo")} />
+      <Path testID="hero-pillar-body" d={pillarPath(P, h, P.w, P.maxW, 0)} fill={ref("pillar")} />
+      <Path testID="hero-pillar-core" d={pillarPath(P, h, P.w * 0.5, P.maxW * 0.46, h * 0.38)} fill={ref("pillarCore")} />
+    </Svg>
+  );
+}
 
 /** 로고: 글자(나타나며 8dp 올라옴) → 금색 선(왼쪽부터 그어짐) → 부제. 감싸는 View 하나가 '가즈아 불기둥' 머리글 */
 const HeroLogo = memo(function HeroLogo({ scene, clock }: { scene: HeroScene; clock: Animated.Value }) {

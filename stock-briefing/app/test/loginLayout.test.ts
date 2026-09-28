@@ -39,16 +39,16 @@ describe("로그인 배치 (hero-spec 4.2)", () => {
 });
 
 describe("그림 기하 (hero-spec 5장)", () => {
-  it("360×752: 봉 26개, 몸통 7 · 꼬리 1.5, 한 계단 19.1, 첫 상한가 시가 261.1, 마지막 종가 70.7", () => {
+  it("360×752: 봉 26개, 몸통 7 · 꼬리 1.5, 한 계단 17.6, 첫 상한가 시가 261.2, 마지막 종가 86.1 (그림 칸 위에서 0.18 — 불기둥이 상태 표시줄 밑으로 올라가지 않게)", () => {
     const g = heroCandles(heroLayout(360, 752, { top: 28, bottom: 24 }).plot);
     expect(g.candles).toHaveLength(26);
     expect(g.candles.filter((c) => c.kind === "limit")).toHaveLength(LIMIT_COUNT);
     expect(g.bw).toBeCloseTo(7, 0);
     expect(g.wickW).toBe(1.5);
     const limits = g.candles.filter((c) => c.kind === "limit");
-    expect(limits[0]!.bottom).toBeCloseTo(261.1, 1);
-    expect(limits[9]!.top).toBeCloseTo(70.7, 1);
-    expect(limits[0]!.bottom - limits[1]!.bottom).toBeCloseTo(19.1, 1);
+    expect(limits[0]!.bottom).toBeCloseTo(261.15, 1);
+    expect(limits[9]!.top).toBeCloseTo(86.08, 1);
+    expect(limits[0]!.bottom - limits[1]!.bottom).toBeCloseTo(17.61, 1);
     // 상한가 봉은 윗꼬리가 없다 (고가 = 종가)
     for (const c of limits) expect(c.high).toBe(c.top);
     // 늘 같은 그림

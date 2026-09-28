@@ -1,7 +1,7 @@
 import { useFeatures } from "@/api/hooks";
 import { useSessionVersion } from "./account";
 import { featureOn } from "./features";
-import { accountsSeenFor, isFailOpen, sessionFor, sessionLoaded, type StoredSession } from "./session";
+import { accountsSeenFor, isFailOpen, noteActiveServer, sessionFor, sessionLoaded, type StoredSession } from "./session";
 import { useSettings } from "./settings";
 
 /**
@@ -27,12 +27,13 @@ export function gateOf(o: { settingsReady: boolean; loaded: boolean; flag: boole
 
 /** 받은 플래그 (없으면 null = 모름) */
 export function useAccountsFlag(): boolean | null {
-  const features = useFeatures();
+  const features = useFeatures({ fresh: true });
   return features.data ? featureOn(features.data, "accounts", false) : null;
 }
 
 export function useAuthGate(): AuthGate {
   const { apiUrl, ready } = useSettings();
+  noteActiveServer(apiUrl); // 화면 안내(lib/account)가 지금 서버의 세션을 보게 — 값만 적는다
   const flag = useAccountsFlag();
   useSessionVersion();
   return gateOf({ settingsReady: ready, loaded: sessionLoaded(), flag, seen: accountsSeenFor(apiUrl), failOpen: isFailOpen(apiUrl), session: sessionFor(apiUrl) });

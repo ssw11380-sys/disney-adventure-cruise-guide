@@ -97,6 +97,8 @@ export function asOfLabel(ms: number, now: number): string {
 export function failureText(error: string | null): string | null {
   if (!error) return null;
   if (/로그인/.test(error)) return "로그인 필요 · 앱에서 로그인";
+  // 로그인한 주인 아닌 계정 (계정 A단계 — 서버 403 personal_data_not_ready): 로그인하라고 하지 않는다
+  if (/준비 중/.test(error)) return "개인 종목 기능은 준비 중";
   if (/HTTP 401|토큰/.test(error)) return "갱신 실패 · 토큰 확인";
   if (/abort|timeout|시간/i.test(error)) return "갱신 실패 · 응답 없음";
   if (/network|fetch|연결/i.test(error)) return "갱신 실패 · 연결 안 됨";

@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
   kb: {} as Record<string, (e?: { endCoordinates?: { height: number } }) => void>,
   fake: null as unknown as ReturnType<typeof makeFakeAnimated>,
   win: { width: 360, height: 752, scale: 3, fontScale: 1 },
+  /** PixelRatio.roundToNearestPixel (기본은 그대로 — 픽셀 맞춤 테스트에서만 바꾼다) */
+  snap: (v: number) => v,
 }));
 
 vi.mock("react-native", async () => {
@@ -57,13 +59,14 @@ vi.mock("react-native", async () => {
       },
     },
     Platform: { OS: "android" },
+    PixelRatio: { roundToNearestPixel: (v: number) => h.snap(v) },
     useWindowDimensions: () => h.win,
   };
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 28, bottom: 24, left: 0, right: 0 }) }));
 vi.mock("expo-linear-gradient", () => ({ LinearGradient: "LinearGradient" }));
 vi.mock("expo-status-bar", () => ({ StatusBar: "StatusBar" }));
-vi.mock("react-native-svg", () => ({ Svg: "Svg", Defs: "Defs", Ellipse: "Ellipse", LinearGradient: "SvgLinearGradient", Line: "Line", RadialGradient: "RadialGradient", Rect: "Rect", Stop: "Stop", Text: "SvgText" }));
+vi.mock("react-native-svg", () => ({ Svg: "Svg", Defs: "Defs", Ellipse: "Ellipse", LinearGradient: "SvgLinearGradient", Line: "Line", Path: "Path", RadialGradient: "RadialGradient", Rect: "Rect", Stop: "Stop", Text: "SvgText" }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
 
 const { LoginHero, resetLoginHeroForTests } = await import("@/components/auth/LoginHero");
@@ -96,16 +99,17 @@ beforeEach(() => {
   for (const k of Object.keys(h.kb)) delete h.kb[k];
   h.fake.started.length = 0;
   h.win = { width: 360, height: 752, scale: 3, fontScale: 1 };
+  h.snap = (v) => v;
 });
 afterEach(() => cleanupRenders());
 
 describe("그림 구성", () => {
-  it("횡보 16 · 상한가 10 · 불기둥 3 · 뜨거운 점, 로고는 '가즈아 불기둥' 머리글, 그림은 화면 읽기에서 뺀다", () => {
+  it("횡보 16 · 상한가 10 · 불기둥 하나(마지막 봉), 로고는 '가즈아 불기둥' 머리글, 그림은 화면 읽기에서 뺀다", () => {
     const r = render(<LoginHero layout={L360()} at={HERO_MS} />);
     expect(countTest(r, /^hero-side-\d+$/)).toBe(16);
     expect(countTest(r, /^hero-limit-\d+$/)).toBe(10);
-    expect(countTest(r, /^hero-flame-\d+$/)).toBe(3);
-    expect(countTest(r, /^hero-core$/)).toBe(1);
+    expect(countTest(r, /^hero-pillar$/)).toBe(1);
+    expect(countTest(r, /^hero-flame-\d+$|^hero-core$|^hero-grid-lead$/)).toBe(0);
     const logo = r.byLabel("가즈아 불기둥");
     expect(logo.props.accessibilityRole).toBe("header");
     const art = r.all().find((n) => n.props.importantForAccessibility === "no-hide-descendants" && n.children.some((c) => typeof c !== "string" && c.props.testID === "hero-glow"));
@@ -132,7 +136,7 @@ describe("시계가 t 일 때 보이는 모습 = heroFrame (0.5·1.5·2.5·3.6·
     it(`${W}×${H}`, () => {
       const L = heroLayout(W, H, { top, bottom });
       const scene = heroScene(L);
-      for (const t of [0, 500, 1500, 2500, 3600, HERO_MS]) {
+      for (const t of [0, 500, 800, 1500, 2500, 3600, 3900, HERO_MS]) {
         const r = render(<LoginHero layout={L} at={t} />);
         const want = Object.fromEntries(heroFrame(scene, t).map((x) => [x.id, x]));
         scene.side.forEach((_, i) => {
@@ -152,23 +156,19 @@ describe("시계가 t 일 때 보이는 모습 = heroFrame (0.5·1.5·2.5·3.6·
           expect(got.y + got.h).toBeCloseTo(c.body.y + c.body.h, 6);
           expect(style(byTest(r, `hero-cap-${k}`)).opacity).toBeCloseTo(want[`cap${k}`]!.opacity / Math.max(want[`limit${k}`]!.opacity, 1e-9) || 0, 6);
         });
-        scene.flames.forEach((_, i) => {
-          const got = visibleBox(style(byTest(r, `hero-flame-${i}`)));
-          const w = want[`flame${i}`]!;
-          expect(got.y, `t=${t} flame${i}`).toBeCloseTo(w.rect.y, 6);
-          expect(got.h).toBeCloseTo(w.rect.h, 6);
-          expect(got.opacity).toBeCloseTo(w.opacity, 6);
-        });
+        const pillar = visibleBox(style(byTest(r, "hero-pillar")));
+        expect(pillar.y, `t=${t} pillar`).toBeCloseTo(want.pillar!.rect.y, 6);
+        expect(pillar.h, `t=${t} pillar`).toBeCloseTo(want.pillar!.rect.h, 6);
+        expect(pillar.x).toBeCloseTo(want.pillar!.rect.x, 6);
+        expect(pillar.opacity).toBeCloseTo(want.pillar!.opacity, 6);
+        // 불기둥 아래 끝은 늘 제자리 (마지막 봉 종가에서 위로 솟는다)
+        if (want.pillar!.opacity > 0) expect(pillar.y + pillar.h).toBeCloseTo(scene.pillar.base, 6);
         expect(style(byTest(r, "hero-glow")).opacity).toBeCloseTo(want.glow!.opacity, 6);
-        expect(style(byTest(r, "hero-core")).opacity).toBeCloseTo(want.core!.opacity, 6);
         const word = style(byTest(r, "hero-logo-word"));
         expect(word.opacity).toBeCloseTo(want.logo!.opacity, 6);
         expect((word.transform as { translateY: number }[])[0]!.translateY).toBeCloseTo(want.logo!.rect.y - scene.logo.y, 6);
         const line = style(byTest(r, "hero-logo-line"));
         expect(line.opacity).toBeCloseTo(want.line!.opacity, 6);
-        // 로고 옆 눈금의 왼쪽 부분 (로고 전에는 보이고 로고가 나타나며 사라짐)
-        const leadIdx = scene.grid.findIndex((g) => g.lead);
-        if (leadIdx >= 0) expect(style(byTest(r, "hero-grid-lead")).opacity, `t=${t} lead`).toBeCloseTo(want[`gridLead${leadIdx}`]!.opacity, 6);
         cleanupRenders();
       }
     });
@@ -335,12 +335,65 @@ describe("AuthFrame 키보드 (접지 않고 스크롤로 밀어낸다)", () => 
   });
 });
 
-describe("불기둥 색 (크림색 가운데는 마지막 불기둥에만)", () => {
-  it("옅은 두 불꽃의 가운데는 주황(flame), 마지막 불기둥만 크림(flameCore) — 붉은 빛 위에서 회색 얼룩처럼 보이지 않게", async () => {
+describe("불기둥 모양·색 (검증 지적 — 떠 있는 갈색 얼룩·촛불처럼 보였다)", () => {
+  it("기둥은 칸 아래 끝(봉 종가 뒤)에서 몸통 폭 이상으로 시작해 위로 뾰족, 가운데 심은 거의 흰 크림(불투명도 0.9 이상)", async () => {
     const { authColors } = await import("@/tokens");
+    const { pillarPath } = await import("@/components/auth/LoginHero");
+    const scene = heroScene(L360());
+    const P = scene.pillar;
+    const pH = P.base - P.top;
     const r = render(<LoginHero layout={L360()} at={HERO_MS} />);
-    const centers = r.all().filter((n) => n.type === "RadialGradient" && /flame\d$/.test(String(n.props.id))).map((g) => (g.children[0] as HostNode).props.stopColor);
-    expect(centers).toEqual([authColors.flame, authColors.flame, authColors.flameCore]);
+    const body = byTest(r, "hero-pillar-body");
+    expect(body.props.d).toBe(pillarPath(P, pH, P.w, P.maxW, 0));
+    // 아래 두 점: 칸 아래 끝(pH), 폭 P.w (= 봉 몸통 폭 — 몸통 뒤에 숨음), 위 끝(0)은 가운데 한 점
+    const nums = String(body.props.d).match(/-?\d+(\.\d+)?/g)!.map(Number);
+    expect(nums[1]).toBeCloseTo(pH, 6);
+    expect(nums.at(-1)).toBeCloseTo(pH, 6);
+    expect(nums.at(-2)! - nums[0]!).toBeCloseTo(P.w, 6);
+    expect(P.w).toBeGreaterThanOrEqual(scene.bw);
+    expect(Math.min(...nums.filter((_, i) => i % 2 === 1))).toBe(0);
+    // 가운데 심: 거의 흰 크림, 불투명도 0.9 이상 (예전 가운데 주황은 약 19% 불투명이라 붉은 빛 위에서 갈색이 됐다)
+    const coreGrad = r.all().find((n) => n.type === "SvgLinearGradient" && /pillarCore$/.test(String(n.props.id)))!;
+    const first = coreGrad.children[0] as HostNode;
+    expect(first.props.stopColor).toBe(authColors.flameWhite);
+    expect(first.props.stopOpacity as number).toBeGreaterThanOrEqual(0.9);
+    const bodyGrad = r.all().find((n) => n.type === "SvgLinearGradient" && /pillar$/.test(String(n.props.id)))!;
+    expect((bodyGrad.children[0] as HostNode).props.stopOpacity as number).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it("봉 자리·폭은 화면 픽셀에 맞춰 그린다 (PixelRatio — dpr 2.625 에서 모든 봉이 같은 굵기)", () => {
+    const dpr = 2.625;
+    h.snap = (v) => Math.round(v * dpr) / dpr;
+    const L = heroLayout(704, 933, { top: 28, bottom: 24 });
+    const r = render(<LoginHero layout={L} at={HERO_MS} />);
+    const widths = new Set<number>();
+    for (let k = 0; k < 10; k++) {
+      const g = style(byTest(r, `hero-limit-${k}`));
+      widths.add(g.width as number);
+      expect(Math.abs((g.left as number) * dpr - Math.round((g.left as number) * dpr))).toBeLessThan(1e-6);
+    }
+    for (let i = 0; i < 16; i++) widths.add(style(byTest(r, `hero-side-${i}`)).width as number);
+    expect(widths.size).toBe(1);
+  });
+});
+
+describe("숨쉬기를 멈출 때 (검증 지적 — 한 번에 최대 18% 튀었다)", () => {
+  it("밝기 1(가까운 끝)까지 약 0.18초 네이티브 timing 으로 되돌린 뒤 멈춘다 — setValue 로 튀지 않게", async () => {
+    const r = render(<LoginHero layout={L360()} />);
+    await settle(r);
+    r.act(() => intros()[0]!.finish());
+    const breathing = loops()[0]!;
+    // 숨쉬기 위상 0.7 (밝기 약 0.87) 에서 가려짐
+    breathing.inner.value.setValue(0.7);
+    r.rerender(<LoginHero layout={L360()} paused />);
+    expect(breathing.stopped).toBe(true);
+    const settleAnim = h.fake.started.filter((a): a is FakeTiming => a.kind === "timing" && a.value === breathing.inner.value && a !== breathing.inner);
+    expect(settleAnim).toHaveLength(1);
+    expect(settleAnim[0]!.config).toMatchObject({ toValue: 1, duration: 180, useNativeDriver: true });
+    // 아직 끝나지 않았으면 값은 그대로 (한 번에 바뀌지 않는다)
+    expect(breathing.inner.value.get()).toBe(0.7);
+    r.act(() => settleAnim[0]!.finish());
+    expect(style(byTest(r, "hero-glow")).opacity).toBeCloseTo(1, 6);
   });
 });
 

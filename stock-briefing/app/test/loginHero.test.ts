@@ -5,6 +5,7 @@ import {
   breathTrack,
   EASE_OUT,
   GLOW_START,
+  GRID_LOGO_GAP,
   HERO_MS,
   heroFrame,
   heroLayout,
@@ -13,6 +14,8 @@ import {
   LIMIT_COUNT,
   LIMIT_GAP,
   LIMIT_START,
+  LOGO_END,
+  LOGO_START,
   layoutKey,
   MINI_COUNT,
   miniStairs,
@@ -23,6 +26,8 @@ import {
   sampleTrack,
   SIDE_COUNT,
   SIDE_GAP,
+  FLAME_START,
+  PILLAR_W,
   type FrameItem,
   type HeroScene,
   type LoginLayout,
@@ -70,7 +75,7 @@ const allTracks = (): [string, Track][] => {
   ];
   t.side.forEach((s, i) => out.push([`side${i}.opacity`, s.opacity], [`side${i}.scale`, s.scale]));
   t.limit.forEach((s, k) => out.push([`limit${k}.show`, s.show], [`limit${k}.grow`, s.grow], [`limit${k}.cap`, s.cap]));
-  t.flames.forEach((s, i) => out.push([`flame${i}.grow`, s.grow], [`flame${i}.opacity`, s.opacity]));
+  out.push(["pillar.grow", t.pillar.grow], ["pillar.opacity", t.pillar.opacity]);
   return out;
 };
 
@@ -152,14 +157,15 @@ describe("마지막 장면 (t = 4.2초)", () => {
       expect(f.logo!.rect.y).toBe(scene.logo.y);
       expect(f.line!.rect.w).toBe(authLayout.logoLineW);
       expect(f.glow!.opacity).toBe(1);
-      scene.flames.forEach((fl, i) => expect(f[`flame${i}`]!.opacity).toBeCloseTo(fl.opacity, 6));
+      expect(f.pillar!.opacity).toBe(1);
+      expect(f.pillar!.rect.h).toBeCloseTo(scene.pillar.base - scene.pillar.top, 6);
     });
   }
 });
 
 describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
   // 검사가 많아(크기 약 290개 × 순간 85개 × 요소 70개) 틀린 것을 모았다가 한 번에 확인한다
-  const check = (scene: HeroScene, L: LoginLayout, label: string, bad: string[]) => {
+  const check = (scene: HeroScene, L: LoginLayout, label: string, bad: string[], top = 0) => {
     const logo = { x: scene.logo.x, y: scene.logo.y, w: scene.logo.w + 8, h: scene.logo.h + 8 };
     for (const t of TIMES) {
       const f = heroFrame(scene, t);
@@ -170,8 +176,8 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
           // 상한가 봉은 로고 묶음과 겹치지 않는다 (보일 때)
           if (!it.id.startsWith("side") && it.opacity > 0 && overlaps(it.rect, logo)) bad.push(`${label} t=${t} ${it.id} 로고와 겹침`);
         }
-        // 불기둥 빛은 그림 영역 가로 안, 위로는 상태 표시줄 밑까지 (화면 위 끝을 넘지 않음)
-        if (/^flame|^core/.test(it.id) && (it.rect.x < 0 || it.rect.x + it.rect.w > L.heroW + EPS || it.rect.y < -EPS)) bad.push(`${label} t=${t} ${it.id} 화면 밖`);
+        // 불기둥은 그림 영역 가로 안, 위 끝은 상태 표시줄 아래 (가장 밝은 절정이 배터리·신호 아이콘 밑에 오지 않게 — 검증 지적)
+        if (it.id === "pillar" && (it.rect.x < 0 || it.rect.x + it.rect.w > L.heroW + EPS || it.rect.y < top - EPS)) bad.push(`${label} t=${t} ${it.id} 화면·상태 표시줄 밖`);
         // 상한가 봉은 시가(몸통 아래)를 기준으로 자란다: 자라는 동안 아래 끝이 제자리
         const m = /^limit(\d+)$/.exec(it.id);
         if (m) {
@@ -185,7 +191,7 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
     const bad: string[] = [];
     for (const [W, H, top, bottom] of MANY) {
       const L = heroLayout(W, H, { top, bottom });
-      check(heroScene(L), L, `${W}×${H}(${top}/${bottom})`, bad);
+      check(heroScene(L), L, `${W}×${H}(${top}/${bottom})`, bad, top);
     }
     expect(MANY.length).toBeGreaterThan(280);
     expect(bad.slice(0, 10)).toEqual([]);
@@ -203,38 +209,46 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
     }
   });
 
-  it("눈금은 로고 묶음을 지나지 않는다 (지나는 줄은 로고 오른쪽에서 옅게 시작)", () => {
+  it("눈금은 로고 묶음 높이(± 8dp)에 걸리면 그리지 않는다 — 금색 선과 1~2dp 어긋난 줄이 틀어진 것처럼 보이지 않게. 나머지는 그림 칸 폭 전체", () => {
+    let dropped = 0;
     for (const [W, H, top, bottom] of MANY) {
       const s = heroScene(heroLayout(W, H, { top, bottom }));
       const L = s.logo;
+      dropped += 5 - s.grid.length;
       for (const g of s.grid) {
-        const crossesY = g.y >= L.y - 6 && g.y <= L.y + L.h + 6;
-        if (crossesY && L.x < g.x2 && L.x + L.w > s.plot.x0) {
-          expect(g.x1, `${W}×${H} y=${g.y}`).toBeGreaterThanOrEqual(L.x + L.w);
-          expect(g.fade).toBeGreaterThan(0);
-          // 왼쪽 부분: 그림 칸 왼쪽 끝부터 오른쪽 부분이 진해지는 곳까지 (로고가 나타나기 전에는 줄이 끊기지 않게)
-          expect(g.lead).toEqual({ x1: s.plot.x0, x2: Math.min(g.x2, g.x1 + g.fade) });
-        } else {
-          expect(g.fade).toBe(0);
-          expect(g.lead).toBeNull();
-        }
+        const label = `${W}×${H} y=${g.y}`;
+        expect(g.y < L.y - GRID_LOGO_GAP || g.y > L.y + L.h + GRID_LOGO_GAP, label).toBe(true);
+        expect(Math.min(Math.abs(g.y - L.lineY), Math.abs(g.y - L.y)), label).toBeGreaterThanOrEqual(GRID_LOGO_GAP);
+        expect([g.x1, g.x2]).toEqual([s.plot.x0, s.plot.x0 + s.plot.w]);
       }
     }
+    expect(dropped).toBeGreaterThan(0);
+    // 360×752: 로고 옆 줄(예전 첫 눈금 82.7 이 글자 칸 아래 끝 83 에 붙어 있었다)이 빠진다
+    const phone = heroScene(heroLayout(360, 752, { top: 28, bottom: 24 }));
+    expect(phone.grid.every((g) => g.y > phone.logo.y + phone.logo.h + GRID_LOGO_GAP)).toBe(true);
   });
 
-  it("로고 옆 눈금의 왼쪽 부분은 로고가 나타나기 전에는 눈금과 함께 보이고, 로고가 나타나는 만큼 사라진다 (둘이 함께 진하게 보이는 순간은 없다)", () => {
+  it("로고는 처음에 먼저 (0.2~0.8초): 첫 화면부터 브랜드가 보이고, 3.6~4.2초 절정에는 빛·불기둥만 바뀐다 (검증 지적 — 예전에는 3.7초까지 빈 차트)", () => {
     const t = heroTracks();
-    const s = heroScene(heroLayout(360, 752, { top: 28, bottom: 24 }));
-    const leads = s.grid.filter((g) => g.lead);
-    expect(leads.length).toBeGreaterThan(0);
-    for (const ms of TIMES) {
+    const s = heroScene(heroLayout(933, 704, { top: 24, bottom: 16 }));
+    expect(LOGO_START).toBe(200);
+    expect(LOGO_END).toBe(800);
+    expect(sampleTrack(t.logo.opacity, LOGO_START)).toBe(0);
+    for (const tr of [t.logo.opacity, t.logo.shift, t.line, t.lineShow, t.sub]) expect(tr.input.at(-1)!).toBeLessThanOrEqual(LOGO_END);
+    for (const ms of [800, 1500, 2500, 3600, HERO_MS]) {
       const f = byId(heroFrame(s, ms));
-      const lead = f[`gridLead${s.grid.indexOf(leads[0]!)}`]!;
-      if (ms <= 3700) expect(lead.opacity, `t=${ms}`).toBeCloseTo(sampleTrack(t.grid, ms), 6);
-      expect(lead.opacity + f.logo!.opacity, `t=${ms}`).toBeLessThanOrEqual(1 + 1e-9);
+      expect(f.logo!.opacity, `t=${ms}`).toBe(1);
+      expect(f.logo!.rect.y).toBe(s.logo.y);
+      expect(f.line!.rect.w).toBe(authLayout.logoLineW);
+      expect(f.sub!.opacity).toBe(1);
     }
-    expect(byId(heroFrame(s, 500))[`gridLead${s.grid.indexOf(leads[0]!)}`]!.opacity).toBe(1);
-    expect(byId(heroFrame(s, HERO_MS))[`gridLead${s.grid.indexOf(leads[0]!)}`]!.opacity).toBe(0);
+    // 1.5초 화면: 로고·선·부제 + 횡보 16봉 (예전에는 빈 눈금만)
+    const early = byId(heroFrame(s, 1500));
+    expect(early.logo!.opacity).toBe(1);
+    // 절정은 빛·불기둥
+    expect(t.pillar.grow.input[0]).toBe(FLAME_START);
+    expect(t.pillar.grow.input.at(-1)).toBe(HERO_MS);
+    expect(byId(heroFrame(s, FLAME_START)).pillar!.opacity).toBe(0);
   });
 
   it("빛은 상한가 봉이 절반쯤 오른 뒤(2.6초)부터 켜진다 — 봉이 바닥에 있는 동안 빈 오른쪽 위가 먼저 붉어지지 않게", () => {
@@ -246,7 +260,7 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
     expect(sampleTrack(t.glow, HERO_MS)).toBe(1);
   });
 
-  it("처음(0초)에는 봉·로고가 보이지 않고, 1.5초에는 횡보 16봉만, 3.6초에는 상한가 10봉까지 (로고는 아직)", () => {
+  it("처음(0초)에는 봉·로고가 보이지 않고, 1.5초에는 횡보 16봉(+ 로고), 3.6초에는 상한가 10봉까지 (불기둥은 아직)", () => {
     const s = heroScene(heroLayout(360, 752, { top: 28, bottom: 24 }));
     const vis = (t: number, re: RegExp) => heroFrame(s, t).filter((x) => re.test(x.id) && x.opacity > 0).length;
     expect(vis(0, /^(side|limit)\d/)).toBe(0);
@@ -255,10 +269,55 @@ describe("모든 크기 · 모든 순간 (0~4.2초, 50ms 마다)", () => {
     expect(vis(1500, /^side\d/)).toBe(16);
     expect(vis(1500, /^limit\d/)).toBe(0);
     expect(vis(3600, /^limit\d/)).toBe(10);
-    expect(byId(heroFrame(s, 3600)).logo!.opacity).toBe(0);
+    expect(byId(heroFrame(s, 3600)).pillar!.opacity).toBe(0);
     // 2.5초: 상한가 봉 5개가 보이기 시작
     expect(vis(2500, /^limit\d/)).toBe(5);
   });
+});
+
+describe("불기둥 (마지막 봉 하나에서 솟는 기둥 — 검증 지적)", () => {
+  for (const [W, H, top, bottom] of SIZES) {
+    it(`${W}×${H}: 마지막 봉 가운데에서 몸통 폭으로 시작해(몸통 뒤에 숨음) 조금 부풀었다가 위로 가늘어지고(아래 끝은 몸통 뒤), 그림 칸 안·상태 표시줄 아래`, () => {
+      const L = heroLayout(W, H, { top, bottom });
+      const s = heroScene(L);
+      const last = s.limit[9]!;
+      const P = s.pillar;
+      expect(P.cx).toBeCloseTo(last.body.x + last.body.w / 2, 6);
+      expect(P.w).toBeCloseTo(s.bw, 6);
+      expect(P.maxW).toBeCloseTo(s.bw * PILLAR_W, 6);
+      expect(P.w).toBeGreaterThanOrEqual(s.bw);
+      // 아래 끝은 몸통 위 끝보다 아래(몸통에 가려 봉에서 솟는 모양), 몸통 아래 끝보다는 위
+      expect(P.base).toBeGreaterThan(last.body.y);
+      expect(P.base).toBeLessThan(last.body.y + last.body.h);
+      // 위 끝: 그림 칸 안, 상태 표시줄(안전 영역 위) 아래
+      expect(P.top).toBeGreaterThanOrEqual(s.plot.y0 - EPS);
+      expect(P.top).toBeGreaterThanOrEqual(top);
+      // 빛의 가운데도 마지막 봉 종가
+      expect(s.glow.cy).toBeCloseTo(last.body.y, 6);
+    });
+  }
+});
+
+describe("화면 픽셀에 맞춤 (폴드 dpr 2.625 — 봉마다 굵기가 달라 보이지 않게)", () => {
+  const dpr = 2.625;
+  const snap = (v: number) => Math.round(v * dpr) / dpr;
+  const onPx = (v: number) => Math.abs(v * dpr - Math.round(v * dpr)) < 1e-6;
+  for (const [W, H, top, bottom] of SIZES) {
+    it(`${W}×${H}: 모든 봉 몸통 폭·꼬리 폭이 같고, 자리·눈금 y 가 픽셀 위`, () => {
+      const s = heroScene(heroLayout(W, H, { top, bottom }), snap);
+      const widths = new Set([...s.side.map((c) => c.box.w), ...s.limit.map((c) => c.body.w)]);
+      expect(widths.size).toBe(1);
+      expect(new Set(s.limit.map((c) => c.wick.w)).size).toBe(1);
+      expect(new Set(s.side.map((c) => c.wickW)).size).toBe(1);
+      for (const c of s.limit) for (const v of [c.body.x, c.body.w, c.body.y, c.body.h, c.wick.x, c.wick.w]) expect(onPx(v), `${v}`).toBe(true);
+      for (const c of s.side) for (const v of [c.box.x, c.box.w, c.box.x + c.wickX, c.wickW, c.bodyTop, c.bodyBottom]) expect(onPx(v), `${v}`).toBe(true);
+      for (const g of s.grid) expect(onPx(g.y)).toBe(true);
+      // 맞춘 뒤에도 계단은 한 칸씩 오른다 (픽셀 반올림 오차 1px 안)
+      s.limit.forEach((c, k) => {
+        if (k) expect(Math.abs(s.limit[k - 1]!.body.y - c.body.y - s.step)).toBeLessThanOrEqual(1 / dpr + 1e-9);
+      });
+    });
+  }
 });
 
 describe("그 밖", () => {

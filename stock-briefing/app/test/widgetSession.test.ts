@@ -86,21 +86,22 @@ describe("로그인이 필요하면 위젯이 적어 둔 개인 데이터로 그
     h.store.set("widget.view", JSON.stringify({ apiUrl: SERVER, view: { stocks: [ownerRow], briefings: [], fetchedAt: 1, error: null, filled: [], market: null, indices: null, board: null, features: {} } }));
     h.store.set("widget.payload", JSON.stringify({ at: 1, apiUrl: SERVER, path: "/api/widget?indices=1&sessions=1&ui=2&ms=1", etag: null, body: { v: 1, stocks: [ownerRow], briefings: [] } }));
   };
-  const cases: [string, () => Response][] = [
-    ["401 session_invalid (세션 끊김)", () => new Response(JSON.stringify({ error: "SESSION_INVALID", code: "session_invalid" }), { status: 401 })],
-    ["403 session_required (로그아웃 뒤)", () => new Response(JSON.stringify({ error: "SESSION_REQUIRED", code: "session_required" }), { status: 403 })],
-    ["403 personal_data_not_ready (주인 아닌 계정)", () => new Response(JSON.stringify({ error: "PERSONAL_DATA_NOT_READY", code: "personal_data_not_ready" }), { status: 403 })],
+  // 로그인한 주인 아닌 계정에는 '로그인 필요'가 아니라 '개인 종목 기능은 준비 중' (검증 지적 — 이미 로그인해 있는데 로그인하라고 했다)
+  const cases: [string, () => Response, "login" | "personal", string][] = [
+    ["401 session_invalid (세션 끊김)", () => new Response(JSON.stringify({ error: "SESSION_INVALID", code: "session_invalid" }), { status: 401 }), "login", "로그인 필요 · 앱에서 로그인"],
+    ["403 session_required (로그아웃 뒤)", () => new Response(JSON.stringify({ error: "SESSION_REQUIRED", code: "session_required" }), { status: 403 }), "login", "로그인 필요 · 앱에서 로그인"],
+    ["403 personal_data_not_ready (주인 아닌 계정)", () => new Response(JSON.stringify({ error: "PERSONAL_DATA_NOT_READY", code: "personal_data_not_ready" }), { status: 403 }), "personal", "개인 종목 기능은 준비 중"],
   ];
-  for (const [label, res] of cases) {
-    it(`${label}: 잔고 없이 '로그인 필요', 마지막 잔고·응답·그린 데이터를 지운다`, async () => {
+  for (const [label, res, reason, shown] of cases) {
+    it(`${label}: 잔고 없이 '${shown}', 마지막 잔고·응답·그린 데이터를 지운다`, async () => {
       seed();
       reply = res;
       const { data } = await freshModules();
       const { failureText } = await import("@/widgets/model");
       const d = await data.loadWidgetData();
       expect(d.stocks).toEqual([]);
-      expect(d.error).toBe(data.LOGIN_NEEDED);
-      expect(failureText(d.error)).toBe("로그인 필요 · 앱에서 로그인");
+      expect(d.error).toBe(reason === "login" ? data.LOGIN_NEEDED : data.PERSONAL_NOT_READY);
+      expect(failureText(d.error)).toBe(shown);
       expect(h.store.has("widget.lastStocks")).toBe(false);
       expect(h.store.has("widget.payload")).toBe(false);
       expect(JSON.stringify(await data.loadCachedWidgetData())).not.toContain("삼성전자");

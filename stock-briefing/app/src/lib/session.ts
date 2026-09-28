@@ -60,6 +60,8 @@ let failOpen: string | null = null;
 /** 처음 비밀번호로 로그인한 직후 권유 시트를 한 번 */
 let initialPrompt = false;
 let pendingLogouts: { apiUrl: string; token: string }[] = [];
+/** 앱이 지금 쓰는 서버 주소 (관문 lib/authGate 가 설정에서 읽어 알려 준다 — 화면 안내용). 모르면 null */
+let activeServer: string | null = null;
 let version = 0;
 const listeners = new Set<() => void>();
 /** 계정이 바뀔 때 부르는 함수 (앱 캐시·위젯 데이터 비우기) — 테스트가 모듈 상태를 지워도 남긴다 (모듈을 읽을 때 한 번 끼우는 쪽이 있다) */
@@ -179,9 +181,28 @@ export function sessionFor(apiUrl: string): StoredSession | null {
   return current && sameServer(current.apiUrl, apiUrl) ? current : null;
 }
 
+/** 앱이 지금 쓰는 서버 주소를 알려 준다 (관문이 그릴 때마다 — 값만 적고 알림은 하지 않는다) */
+export function noteActiveServer(apiUrl: string): void {
+  activeServer = clean(apiUrl);
+}
+
+/** 지금 서버 주소의 세션 (서버 주소를 아직 모르면 지금 세션) */
+export function activeSession(): StoredSession | null {
+  return activeServer === null ? current : sessionFor(activeServer);
+}
+
 /** 지금 로그인한 세션 (서버 주소와 상관없이 — 화면 안내용. 요청에는 sessionFor 로 그 서버 것만) */
 export function currentSession(): StoredSession | null {
   return current;
+}
+
+/**
+ * 이 서버의 개인 데이터(잔고 캐시)를 기기에 적어도 되는지 — 자동 로그인을 끈 세션이면 false (앱을 완전히 닫으면 세션과 함께 사라지게).
+ * 세션이 없으면(계정 전·플래그 꺼짐) 지금처럼 true
+ */
+export function persistsPersonal(apiUrl: string): boolean {
+  const s = sessionFor(apiUrl);
+  return !s || s.remember;
 }
 
 /** 요청에 붙일 세션 토큰 (읽기가 끝나길 기다린다) */
@@ -351,6 +372,7 @@ export function resetSessionForTests(): void {
   failOpen = null;
   initialPrompt = false;
   pendingLogouts = [];
+  activeServer = null;
   version = 0;
   listeners.clear();
 }

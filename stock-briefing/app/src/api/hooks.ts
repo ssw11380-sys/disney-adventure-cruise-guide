@@ -172,9 +172,29 @@ export function useStock(code: string) {
 /**
  * 기능 플래그: 30초마다, 앱으로 돌아올 때마다 다시 받는다 (관리 API 로 바꾸면 1분 안에 반영). 마지막 값은 기기에 저장해 켤 때 바로 쓴다
  */
-export function useFeatures() {
+/**
+ * 서버 기능 플래그. opts.fresh: 이 화면이 처음 그려질 때 기기 저장 캐시(최대 30초 안 된 값)를 믿지 않고 한 번 새로 받는다 —
+ * 로그인 관문(lib/authGate)이 앱을 켤 때마다 서버의 지금 계정 모드를 보게 (예전 서버로 바꾼 뒤 옛 'accounts 켬'으로 로그인 화면이 남지 않게).
+ * 다른 화면은 그대로 (화면을 열 때마다 요청하지 않게)
+ */
+export function useFeatures(opts: { fresh?: boolean } = {}) {
   const api = useApi();
-  return useQuery({ queryKey: useKey("features"), queryFn: api.features, staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: false, refetchOnWindowFocus: true, retry: 0 });
+  const { apiUrl } = useSettings();
+  return useQuery(featuresQuery(api, apiUrl, opts));
+}
+
+/** useFeatures 의 쿼리 옵션 (테스트가 같은 옵션으로 구독한다) */
+export function featuresQuery(api: Pick<Api, "features">, apiUrl: string, opts: { fresh?: boolean } = {}) {
+  return queryOptions({
+    queryKey: [apiUrl, "features"],
+    queryFn: api.features,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 0,
+    ...(opts.fresh ? { refetchOnMount: "always" as const } : {}),
+  });
 }
 
 /**

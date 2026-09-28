@@ -25,7 +25,7 @@ import { useAccountView } from "@/lib/account";
 import { useAuthGate } from "@/lib/authGate";
 import { setBeforeLogout, setPushRebind } from "@/lib/logout";
 import { detachPush, postPriceAlert, rebindPush } from "@/lib/notifications";
-import { onAccountChange } from "@/lib/session";
+import { onAccountChange, persistsPersonal } from "@/lib/session";
 import { clearWidgetAccountData, signedOutWidgetData } from "@/widgets/data";
 import { redrawAllWidgets } from "@/widgets/redraw";
 import { installPriceAlertNotifier } from "@/lib/priceAlerts";
@@ -111,9 +111,10 @@ function CredentialWatcher() {
   useEffect(() => {
     if (!ready) return;
     if (prev.current !== null && prev.current !== apiToken) {
-      // 이전 토큰으로 받은 캐시를 비우고(기기에 저장된 것도) 보고 있는 화면은 새 토큰으로 다시 받는다
+      // 이전 토큰으로 받은 캐시를 비우고(기기에 저장된 것도) 보고 있는 화면은 새 토큰으로 다시 받는다.
+      // 다시 받기는 이번 그리기의 효과가 모두 끝난 뒤에 — 화면의 쿼리가 새 토큰의 요청 함수를 받기 전에 다시 받으면 옛 토큰으로 묻는다 (검증 지적)
       void queryPersister.removeClient();
-      void qc.resetQueries();
+      setTimeout(() => void qc.resetQueries(), 0);
     }
     prev.current = apiToken;
   }, [apiToken, ready, qc]);
@@ -192,7 +193,7 @@ export default function RootLayout() {
               persister: queryPersister,
               maxAge: PERSIST_MAX_AGE_MS,
               buster: PERSIST_BUSTER,
-              dehydrateOptions: { shouldDehydrateQuery: (q) => shouldPersist(q.queryKey, q.state, Date.now()), shouldDehydrateMutation: () => false },
+              dehydrateOptions: { shouldDehydrateQuery: (q) => shouldPersist(q.queryKey, q.state, Date.now(), persistsPersonal), shouldDehydrateMutation: () => false },
             }}
           >
             <SplashGate />

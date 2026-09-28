@@ -132,11 +132,19 @@ export interface HeroGeometry {
   /** 빛 두 개 (가운데·반지름) */
   glow: { cx: number; cy: number; r: number };
   glow2: { cx: number; cy: number; r: number };
-  /** 불기둥 높이 */
-  flameH: number;
+  /** 불기둥 높이 (마지막 봉 종가에서 위로) */
+  pillarH: number;
   /** 상한가 한 계단 높이 */
   step: number;
 }
+
+/**
+ * 마지막 상한가 종가 자리 (그림 칸 위에서 h 의 몇 배). 0.12 → 0.18 (검증 지적): 한 칸 화면에서 불기둥 위 끝·가장 밝은 곳이
+ * 상태 표시줄(배터리·신호 아이콘) 밑까지 올라왔다 — 불기둥이 그림 칸 안(PILLAR_H 만큼)에 들어오게 내린다
+ */
+export const LAST_CLOSE = 0.18;
+/** 불기둥 높이 (그림 칸 h 의 몇 배) — 위 끝이 그림 칸 위 끝(y0) 아래에 오게 LAST_CLOSE 보다 조금 작게 */
+export const PILLAR_H = 0.17;
 
 /** 횡보 봉 16개 (띠 단위 u: 시가·종가·고가·저가, 위가 +) — hero-spec 5.3 */
 const SIDE: readonly (readonly [number, number, number, number])[] = [
@@ -183,7 +191,7 @@ export function heroCandles(p: Plot): HeroGeometry {
     return { cx: cx(i), top, bottom, high: y(hi), low: y(lo), kind: "side", up: c >= o };
   });
   const base = y(0.6);
-  const lastClose = p.y0 + p.h * 0.12;
+  const lastClose = p.y0 + p.h * LAST_CLOSE;
   const step = (base - lastClose) / LIMIT_COUNT;
   for (let k = 0; k < LIMIT_COUNT; k++) {
     const prev = base - k * step;
@@ -201,7 +209,7 @@ export function heroCandles(p: Plot): HeroGeometry {
     baseline: bandBottom + 6,
     glow: { cx: last.cx, cy: last.top, r: 0.55 * p.h },
     glow2: { cx: sixth.cx, cy: sixth.top, r: 0.33 * p.h },
-    flameH: 0.22 * p.h,
+    pillarH: PILLAR_H * p.h,
     step,
   };
 }
@@ -219,13 +227,6 @@ export interface GridLine {
   y: number;
   x1: number;
   x2: number;
-  /** 로고 옆을 지나는 줄: 로고 오른쪽 끝에서 시작해 fade dp 동안 옅게 → 진하게 (글자와 겹치지 않게) */
-  fade: number;
-  /**
-   * 로고 옆을 지나는 줄의 왼쪽 부분 (그림 칸 왼쪽 끝 ~ x1 + fade, 끝 fade dp 는 진하게 → 옅게). 로고가 나타나기 전(0~3.7초)에는 이 부분도 보여
-   * 줄이 화면 가운데에서 끊겨 시작하지 않고, 로고가 나타나는 동안(3.7~4.2초) 사라진다 (gridLead 시간표). 로고와 겹치지 않는 줄은 없음
-   */
-  lead: { x1: number; x2: number } | null;
 }
 
 export interface SceneSide {
@@ -237,6 +238,9 @@ export interface SceneSide {
   bodyBottom: number;
   /** 크기가 자라는 기준 y (몸통 가운데) */
   pivotY: number;
+  /** 꼬리 (1dp) 왼쪽 끝 — 묶음(box) 왼쪽 기준, 폭 */
+  wickX: number;
+  wickW: number;
 }
 
 export interface SceneLimit {
@@ -250,13 +254,23 @@ export interface SceneLimit {
   radius: number;
 }
 
-export interface SceneFlame {
+/**
+ * 불기둥 (마지막 상한가 봉 하나에서 위로 솟는 기둥 — 검증 지적 반영: 예전 세 봉 위 떠 있던 타원 불꽃은 봉에서 떨어진 갈색 얼룩·'촛불'처럼 보였다).
+ * 아래 끝은 마지막 봉 종가(몸통 위 끝)보다 조금 아래(몸통 뒤에 숨어 봉에서 솟아오르게), 아래 폭은 봉 몸통 폭 이상이고 위로 가늘어진다.
+ * 가운데는 밝은 크림·주황(불투명도 0.9 이상), 둘레는 옅은 주황 빛
+ */
+export interface ScenePillar {
   cx: number;
-  cy: number;
-  rx: number;
-  ry: number;
-  /** 다 보일 때 불투명도 */
-  opacity: number;
+  /** 아래 끝 y (몸통 위 끝보다 overlap 만큼 아래), 위 끝 y */
+  base: number;
+  top: number;
+  /**
+   * 기둥 아래 폭 = 봉 몸통 폭 (아래 끝이 몸통 뒤에 꼭 숨게 — 몸통보다 넓으면 납작한 아래 끝이 봉 양옆으로 보였다),
+   * 가장 넓은 곳(아래에서 20% 높이) = 몸통 폭 × PILLAR_W, 둘레 빛 폭(그리는 칸의 폭)
+   */
+  w: number;
+  maxW: number;
+  haloW: number;
 }
 
 export interface HeroScene {
@@ -271,70 +285,79 @@ export interface HeroScene {
   limit: SceneLimit[];
   glow: { cx: number; cy: number; r: number };
   glow2: { cx: number; cy: number; r: number };
-  flames: SceneFlame[];
-  /** 마지막 봉 꼭대기 뜨거운 점 */
-  core: { cx: number; cy: number; r: number };
+  pillar: ScenePillar;
   logo: LogoBox;
 }
 
-/** 로고 옆 눈금이 옅어지는 거리 */
-export const GRID_FADE = 40;
-/** 불기둥 타원 3개 (마지막 세 봉 위): 크기 비율·다 보일 때 불투명도 (hero-spec 5.5) */
-const FLAMES: readonly (readonly [number, number])[] = [
-  [0.55, 0.35],
-  [0.78, 0.6],
-  [1, 1],
-];
+/** 로고 묶음(글자·금색 선·부제) 위아래로 이만큼 안에 걸리는 눈금은 그리지 않는다 (금색 선과 눈금이 1~2dp 어긋나 한 줄이 틀어진 것처럼 보였다) */
+export const GRID_LOGO_GAP = 8;
+/** 불기둥 가장 넓은 곳 = 봉 몸통 폭 × PILLAR_W (아래 끝은 몸통 폭), 둘레 빛 폭 = × PILLAR_HALO_W */
+export const PILLAR_W = 1.3;
+export const PILLAR_HALO_W = 3.2;
 
-/** 배치 → 한 장면 (움직임의 마지막 모습). 눈금은 로고 묶음을 지나지 않게 로고 오른쪽에서 옅게 시작한다 */
-export function heroScene(layout: LoginLayout): HeroScene {
+/** 화면 픽셀에 맞추는 함수 (그리는 쪽은 PixelRatio.roundToNearestPixel, 테스트는 그대로) */
+export type Snap = (v: number) => number;
+const asIs: Snap = (v) => v;
+
+/**
+ * 배치 → 한 장면 (움직임의 마지막 모습).
+ *  - 눈금은 로고 묶음 높이(± GRID_LOGO_GAP)에 걸리면 그리지 않는다
+ *  - snap: 봉 몸통·꼬리의 x·폭과 y, 눈금 y 를 화면 픽셀에 맞춘다 (폴드 dpr 2.625 에서 봉마다 굵기가 24/25px·꼬리 2/3px 로 달라 보였다).
+ *    폭은 한 번만 맞춰 모든 봉이 같은 굵기
+ */
+export function heroScene(layout: LoginLayout, snap: Snap = asIs): HeroScene {
   const p = layout.plot;
   const g = heroCandles(p);
   const logo = logoBox(layout);
-  const line = (y: number): GridLine => {
-    const x2 = p.x0 + p.w;
-    const hitsLogo = y >= logo.y - 6 && y <= logo.y + logo.h + 6 && logo.x < x2 && logo.x + logo.w > p.x0;
-    if (!hitsLogo) return { y, x1: p.x0, x2, fade: 0, lead: null };
-    const x1 = Math.min(x2, logo.x + logo.w + 8);
-    return { y, x1, x2, fade: GRID_FADE, lead: { x1: p.x0, x2: Math.min(x2, x1 + GRID_FADE) } };
-  };
+  const px = snap(1) > 0 ? snap(1) : 1;
+  const bw = Math.max(px, snap(g.bw));
+  const wickW = Math.max(px, snap(g.wickW));
+  const x2 = p.x0 + p.w;
+  const hitsLogo = (y: number) => y >= logo.y - GRID_LOGO_GAP && y <= logo.y + logo.h + GRID_LOGO_GAP && logo.x < x2 && logo.x + logo.w > p.x0;
   const side: SceneSide[] = [];
   const limit: SceneLimit[] = [];
   g.candles.forEach((c, i) => {
+    const x = snap(c.cx - bw / 2);
     if (c.kind === "side") {
-      side.push({ i, up: c.up, box: { x: c.cx - g.bw / 2, y: c.high, w: g.bw, h: c.low - c.high }, bodyTop: c.top, bodyBottom: c.bottom, pivotY: (c.top + c.bottom) / 2 });
+      const y = snap(c.high);
+      const bodyTop = snap(c.top);
+      const bodyBottom = Math.max(snap(c.bottom), bodyTop + px);
+      side.push({ i, up: c.up, box: { x, y, w: bw, h: snap(c.low) - y }, bodyTop, bodyBottom, pivotY: (bodyTop + bodyBottom) / 2, wickX: snap(c.cx - px / 2) - x, wickW: px });
     } else {
+      const top = snap(c.top);
+      const bottom = snap(c.bottom);
       limit.push({
         k: i - SIDE_COUNT,
-        body: { x: c.cx - g.bw / 2, y: c.top, w: g.bw, h: c.bottom - c.top },
-        wick: { x: c.cx - g.wickW / 2, y: c.bottom, w: g.wickW, h: c.low - c.bottom },
+        body: { x, y: top, w: bw, h: bottom - top },
+        wick: { x: snap(c.cx - wickW / 2), y: bottom, w: wickW, h: snap(c.low) - bottom },
         capH: 1.5,
-        radius: Math.min(2, g.bw * 0.12),
+        radius: Math.min(2, bw * 0.12),
       });
     }
   });
-  const lastThree = g.candles.slice(-3);
-  const F = g.flameH;
-  const flames = lastThree.map((c, i) => {
-    const [k, opacity] = FLAMES[i]!;
-    const ry = 0.62 * 0.55 * F * k * 1.6;
-    return { cx: c.cx, cy: c.top - 0.3 * 0.55 * F * k - ry * 0.25, rx: 1.4 * g.bw, ry, opacity };
-  });
-  const last = g.candles[g.candles.length - 1]!;
+  const last = limit[limit.length - 1]!;
+  const pillar: ScenePillar = {
+    // 가운데는 픽셀에 맞춘 몸통의 가운데 (아래 끝이 몸통 옆으로 반 픽셀이라도 삐져나오지 않게)
+    cx: last.body.x + bw / 2,
+    base: last.body.y + Math.min(3, last.body.h * 0.3),
+    top: last.body.y - g.pillarH,
+    w: bw,
+    maxW: bw * PILLAR_W,
+    haloW: bw * PILLAR_HALO_W,
+  };
   return {
     layout,
     plot: p,
-    bw: g.bw,
-    wickW: g.wickW,
+    bw,
+    wickW,
     step: g.step,
-    grid: g.grid.map(line),
-    baseline: { y: g.baseline, x1: p.x0, x2: p.x0 + p.w, fade: 0, lead: null },
+    grid: g.grid.filter((y) => !hitsLogo(y)).map((y) => ({ y: snap(y), x1: p.x0, x2 })),
+    baseline: { y: snap(g.baseline), x1: p.x0, x2 },
     side,
     limit,
-    glow: g.glow,
+    glow: { ...g.glow, cy: last.body.y },
     glow2: g.glow2,
-    flames,
-    core: { cx: last.cx, cy: last.top, r: 0.9 * g.bw },
+    pillar,
     logo,
   };
 }
@@ -414,16 +437,14 @@ export function sampleTrack(tr: Track, t: number): number {
 export interface HeroTracks {
   /** 눈금·바닥선 불투명도 */
   grid: Track;
-  /** 로고 옆 눈금의 왼쪽 부분(GridLine.lead): 눈금과 함께 나타나고, 로고가 나타나는 동안(3.7~4.2초) 로고 불투명도만큼 사라진다 */
-  gridLead: Track;
   /** 빛(glow·glow2) 불투명도 — 숨쉬기를 곱한다 */
   glow: Track;
   /** 횡보 봉 i: 불투명도, 세로 크기(몸통 가운데 기준 0.3 → 1) */
   side: { opacity: Track; scale: Track }[];
   /** 상한가 봉 k: 보이기(꼬리와 함께 0 → 1), 몸통 세로 크기(시가 기준 0 → 1), 천장 띠 불투명도(0 → 0.55) */
   limit: { show: Track; grow: Track; cap: Track }[];
-  /** 불기둥 타원: 세로 크기(아래 기준 0 → 1), 불투명도(0 → 1, 다 보일 때 값을 곱한다) */
-  flames: { grow: Track; opacity: Track }[];
+  /** 불기둥 (마지막 봉 하나): 세로 크기(아래 = 봉 종가 기준 0 → 1), 불투명도(0 → 1) — 숨쉬기를 곱한다 */
+  pillar: { grow: Track; opacity: Track };
   logo: { opacity: Track; shift: Track };
   /** 금색 선 가로 크기(왼쪽 기준)와 보이기(그어지기 시작할 때 켜짐 — 그 전에는 점 하나도 보이지 않게), 부제 불투명도 */
   line: Track;
@@ -440,11 +461,21 @@ export const LIMIT_DUR = 260;
 export const CAP_DELAY = 0;
 export const CAP_DUR = 80;
 export const FLAME_START = 3600;
+/**
+ * 로고(금색 '가즈아 불기둥')는 처음에 먼저 (검증 지적 — 예전 명세는 3.7초에야 나와 첫 3.7초가 '빈 차트를 불러오는 중'처럼 보였다):
+ * 글자 0.2~0.8초(감속, 8dp 아래에서 제자리로), 금색 선 0.45~0.8초(왼쪽부터), 부제 0.5~0.8초. 3.6~4.2초 절정에는 빛·불기둥만 켜진다
+ */
+export const LOGO_START = 200;
+export const LOGO_DUR = 600;
+export const LINE_START = 450;
+export const SUB_START = 500;
+/** 로고 묶음이 다 보이는 때 */
+export const LOGO_END = LOGO_START + LOGO_DUR;
 
 /** 빛(glow·glow2)이 켜지기 시작하는 때 — 상한가 봉이 절반쯤 오른 뒤 (그 전에는 봉이 아직 바닥에 있는데 빈 오른쪽 위가 먼저 붉어졌다) */
 export const GLOW_START = 2600;
 
-/** 전체 시간표 (4.2초, 모든 요소는 나타나기만 하고 사라지지 않는다 — 깜빡임 없음. 로고 옆 눈금의 왼쪽 부분만 로고와 자리를 바꾼다) */
+/** 전체 시간표 (4.2초, 모든 요소는 나타나기만 하고 사라지지 않는다 — 깜빡임 없음) */
 export function heroTracks(): HeroTracks {
   const side = Array.from({ length: SIDE_COUNT }, (_, i) => {
     const s = SIDE_START + SIDE_GAP * i;
@@ -454,23 +485,17 @@ export function heroTracks(): HeroTracks {
     const s = LIMIT_START + LIMIT_GAP * k;
     return { show: linearTrack(s, 100), grow: easeTrack(s, LIMIT_DUR), cap: linearTrack(s + LIMIT_DUR + CAP_DELAY, CAP_DUR, 0, 0.55) };
   });
-  const flames = FLAMES.map((_, i) => {
-    // 셋이 거의 같이 오르되 마지막 봉 것이 가장 늦게 끝난다 (3.60 ~ 4.20초 안)
-    const s = FLAME_START + i * 40;
-    return { grow: easeTrack(s, HERO_MS - s), opacity: easeTrack(s, HERO_MS - s) };
-  });
-  const logoOpacity = easeTrack(3700, 500);
   return {
     grid: linearTrack(0, 300),
-    gridLead: joinTracks(linearTrack(0, 300), mapTrack(logoOpacity, (v) => 1 - v)),
     glow: joinTracks(linearTrack(GLOW_START, FLAME_START - GLOW_START, 0, 0.7), easeTrack(FLAME_START, HERO_MS - FLAME_START, 0.7, 1)),
     side,
     limit,
-    flames,
-    logo: { opacity: logoOpacity, shift: easeTrack(3700, 500, 8, 0) },
-    line: easeTrack(3850, 350),
-    lineShow: linearTrack(3850, 40),
-    sub: linearTrack(3850, 350),
+    // 불기둥은 마지막 봉 종가에서 위로 솟는다 (3.6 ~ 4.2초 — 절정)
+    pillar: { grow: easeTrack(FLAME_START, HERO_MS - FLAME_START), opacity: easeTrack(FLAME_START, HERO_MS - FLAME_START) },
+    logo: { opacity: easeTrack(LOGO_START, LOGO_DUR), shift: easeTrack(LOGO_START, LOGO_DUR, 8, 0) },
+    line: easeTrack(LINE_START, LOGO_END - LINE_START),
+    lineShow: linearTrack(LINE_START, 40),
+    sub: linearTrack(SUB_START, LOGO_END - SUB_START),
   };
 }
 
@@ -508,11 +533,7 @@ export function heroFrame(scene: HeroScene, t: number, phase = 0, tracks: HeroTr
   const out: FrameItem[] = [];
   const breath = sampleTrack(breathTrack(), phase);
   const gridO = sampleTrack(tracks.grid, t);
-  const leadO = sampleTrack(tracks.gridLead, t);
-  for (const [i, g] of scene.grid.entries()) {
-    out.push({ id: `grid${i}`, rect: { x: g.x1, y: g.y, w: g.x2 - g.x1, h: 0 }, opacity: gridO });
-    if (g.lead) out.push({ id: `gridLead${i}`, rect: { x: g.lead.x1, y: g.y, w: g.lead.x2 - g.lead.x1, h: 0 }, opacity: leadO });
-  }
+  for (const [i, g] of scene.grid.entries()) out.push({ id: `grid${i}`, rect: { x: g.x1, y: g.y, w: g.x2 - g.x1, h: 0 }, opacity: gridO });
   scene.side.forEach((c, i) => {
     const tr = tracks.side[i]!;
     const s = sampleTrack(growTrack(tr.scale), t);
@@ -531,15 +552,10 @@ export function heroFrame(scene: HeroScene, t: number, phase = 0, tracks: HeroTr
   });
   const glowO = sampleTrack(tracks.glow, t) * breath;
   out.push({ id: "glow", rect: { x: scene.glow.cx - scene.glow.r, y: scene.glow.cy - scene.glow.r, w: 2 * scene.glow.r, h: 2 * scene.glow.r }, opacity: glowO });
-  scene.flames.forEach((f, i) => {
-    const tr = tracks.flames[i]!;
-    const s = sampleTrack(growTrack(tr.grow), t);
-    const [y, h] = scaleAbout(f.cy - f.ry, 2 * f.ry, f.cy + f.ry, s);
-    out.push({ id: `flame${i}`, rect: { x: f.cx - f.rx, y, w: 2 * f.rx, h }, opacity: f.opacity * sampleTrack(tr.opacity, t) * breath });
-  });
-  const lastFlame = tracks.flames[tracks.flames.length - 1]!;
-  const core = scene.core;
-  out.push({ id: "core", rect: { x: core.cx - core.r, y: core.cy - core.r, w: 2 * core.r, h: 2 * core.r }, opacity: sampleTrack(lastFlame.opacity, t) * breath });
+  const P = scene.pillar;
+  const ps = sampleTrack(growTrack(tracks.pillar.grow), t);
+  const [py, ph] = scaleAbout(P.top, P.base - P.top, P.base, ps);
+  out.push({ id: "pillar", rect: { x: P.cx - P.haloW / 2, y: py, w: P.haloW, h: ph }, opacity: sampleTrack(tracks.pillar.opacity, t) * breath });
   const L = scene.logo;
   const shift = sampleTrack(tracks.logo.shift, t);
   out.push({ id: "logo", rect: { x: L.x, y: L.y + shift, w: L.w, h: L.wordH }, opacity: sampleTrack(tracks.logo.opacity, t) });

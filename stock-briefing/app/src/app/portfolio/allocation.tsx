@@ -7,6 +7,7 @@ import { AllocationCard } from "@/components/AllocationCard";
 import { usePull } from "@/components/Freshness";
 import { Screen } from "@/components/Screen";
 import { Button, Empty, ErrorView, Loading } from "@/components/ui";
+import { MEMBER_EMPTY_ALLOCATION, useAccountView } from "@/lib/account";
 import { sentence, speakAmount } from "@/lib/a11y";
 import { allocation, excludedNote } from "@/lib/allocation";
 import { allocationGrid, allocationStep, FOLD_COL_GAP, type AllocationStep } from "@/lib/foldScreens";
@@ -27,6 +28,7 @@ import { foldScreens } from "@/tokens";
  * 비중 보기 (플래그 allocationView, 잔고 탭 계좌 평가의 '비중' 버튼): 국내·해외 / 통화 / 업종 / 종목별 원 차트와 범례 표.
  * 금액은 잔고 탭 총 평가금액과 같은 기준(비용 차감 설정·환율)이고, 사실만 보여 준다 — 판단·권유 문구는 넣지 않는다.
  * 플래그가 꺼져 있으면 잔고를 받지도 계산하지도 않는다 (화면 작업 0건).
+ * 주인 아닌 계정(계정 A단계)은 딥링크로 열어도 준비 중 안내만 — 잔고를 받지 않고, 쓸 수 없는 '수량·평균 단가 넣기'로 안내하지 않는다
  */
 /** 요약의 제외 안내 한 줄 높이 (글자 12 × 줄 간격 약 1.45, 글자 100%) */
 const NOTE_LINE_H = Math.ceil(font.small * 1.45);
@@ -36,6 +38,13 @@ export default function AllocationScreen() {
   // 3-24 (연결 오류 안내): 플래그를 한 번도 받지 못한 채 서버에 닿지 않으면(주소·토큰이 틀림) '쓸 수 없음'이 아니라 무엇을 고칠지 + '설정 열기' 하나
   const ux = useUx();
   const guide = useSettingsGuide();
+  const { member } = useAccountView();
+  if (member)
+    return (
+      <Screen>
+        <Empty title={MEMBER_EMPTY_ALLOCATION.title} hint={MEMBER_EMPTY_ALLOCATION.hint} />
+      </Screen>
+    );
   if (!on)
     return (
       <Screen>

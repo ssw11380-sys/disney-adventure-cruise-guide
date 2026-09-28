@@ -688,6 +688,9 @@ export const authColors = {
   flame: "#FF8A2E",
   flameHot: "#FF3A1E",
   flameCore: "#FFD7A1",
+  /** 불기둥 밝은 부분 (아래쪽 주황-노랑), 가장 뜨거운 가운데 (거의 흰 크림) */
+  flameLight: "#FFB347",
+  flameWhite: "#FFF1D6",
   goldHi: "#F7E7B4",
   gold: "#E3B341",
   goldLo: "#B8862B",
@@ -695,9 +698,12 @@ export const authColors = {
   ink: "#E8EAED",
   sub: "#B4BAC4",
   muted: "#8A919D",
-  field: "rgba(255,255,255,0.05)",
-  /** 입력 중인 칸 바탕 (조금 밝게) */
-  fieldActive: "rgba(255,255,255,0.07)",
+  /**
+   * 입력 칸 바탕: 어두운 바탕 위 흰색 5% 와 같은 색을 거의 불투명하게 (두 칸 화면에서 붉은 빛이 오른쪽 입력 칸 뒤까지 번져
+   * 칸의 왼쪽 절반만 자줏빛으로 물들었다 — 검증 지적). 입력 중이면 조금 밝게
+   */
+  field: "rgba(17,19,38,0.92)",
+  fieldActive: "rgba(22,25,46,0.94)",
   fieldLine: "rgba(255,255,255,0.10)",
   fieldFocus: "rgba(227,179,65,0.75)",
   /** 입력 중인 칸 바깥 3dp 테두리 (금색 옅게), 오류 칸은 주황 옅게 */

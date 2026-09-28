@@ -6,7 +6,7 @@ import { font, fontCap, radius, space, useTheme } from "@/theme";
 
 /**
  * 주인 아닌 계정의 잔고·브리핑 탭 맨 위 차분한 안내 칸 (계정 A단계). 개인 종목(보유·관심·브리핑·알림)은 다음 단계에서 열린다 —
- * 지금은 서버가 빈 값을 준다. 주인·로그인 전·플래그 꺼짐이면 아무것도 그리지 않는다
+ * 지금은 서버가 빈 값을 준다. 주인·로그인 전이면 아무것도 그리지 않는다 (플래그가 꺼져도 지금 서버에 주인 아닌 계정 세션이 있으면 보인다 — lib/account)
  */
 export function MemberNotice() {
   const t = useTheme();

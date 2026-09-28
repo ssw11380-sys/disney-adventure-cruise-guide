@@ -13,6 +13,7 @@ import {
   markAccountsSeen,
   markFailOpen,
   onAccountChange,
+  persistsPersonal,
   rememberPreference,
   REMEMBER_KEY,
   resetSessionForTests,
@@ -75,6 +76,17 @@ describe("세션 저장 (자동 로그인 켬·끔)", () => {
     installSessionStorage(st);
     await loadSession();
     expect(sessionFor(SERVER)).toBeNull();
+  });
+
+  it("자동 로그인 끔이면 그 서버의 잔고 캐시를 기기에 적지 않는다 (persistsPersonal) — 켬·세션 없음·다른 서버는 지금처럼", async () => {
+    installSessionStorage(memoryStorage());
+    await loadSession();
+    expect(persistsPersonal(SERVER)).toBe(true);
+    await saveSession({ apiUrl: SERVER, token: "gzs1_off", remember: false, user: OWNER });
+    expect(persistsPersonal(SERVER)).toBe(false);
+    expect(persistsPersonal("https://other.test")).toBe(true);
+    await saveSession({ apiUrl: SERVER, token: "gzs1_on", remember: true, user: OWNER });
+    expect(persistsPersonal(SERVER)).toBe(true);
   });
 
   it("세션은 준 서버 주소로만 (끝 슬래시는 같은 주소)", async () => {

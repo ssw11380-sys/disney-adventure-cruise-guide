@@ -35,8 +35,10 @@ async function withSession(apiUrl: string): Promise<{ headers: Record<string, st
   return { headers: sent ? { "x-session-token": sent } : {}, sent };
 }
 
-/** 위젯이 그릴 수 없는 까닭 — 로그인이 필요함 (세션 끊김·세션 없음·주인 아닌 계정). model.failureText 가 '로그인'으로 알아본다 */
+/** 위젯이 그릴 수 없는 까닭 — 로그인이 필요함 (세션 끊김·세션 없음). model.failureText 가 '로그인'으로 알아본다 */
 export const LOGIN_NEEDED = "로그인 필요";
+/** 위젯이 그릴 수 없는 까닭 — 로그인은 돼 있지만 주인 아닌 계정 (개인 종목 기능은 다음 단계). model.failureText 가 '준비 중'으로 알아본다 */
+export const PERSONAL_NOT_READY = "개인 종목 준비 중";
 
 /**
  * 서버가 '이 사람에게는 개인 데이터를 줄 수 없다'고 답함 (401 session_invalid · 403 session_required · 403 personal_data_not_ready).
@@ -44,32 +46,33 @@ export const LOGIN_NEEDED = "로그인 필요";
  * 홈 화면 위젯이 주인의 보유 수량·손익을 계속 보여 주지 않게 (계정 A단계 검증 지적)
  */
 export class LoginNeededError extends Error {
-  constructor() {
-    super(LOGIN_NEEDED);
+  /** personal: 로그인한 주인 아닌 계정 (위젯에 '로그인 필요'가 아니라 '개인 종목 기능은 준비 중'이라고 — 검증 지적) */
+  constructor(readonly reason: "login" | "personal" = "login") {
+    super(reason === "personal" ? PERSONAL_NOT_READY : LOGIN_NEEDED);
     this.name = "LoginNeededError";
   }
 }
 
 /**
  * 401 session_invalid 면 앱과 같은 규칙으로 로그아웃(보낸 토큰이 지금 토큰일 때만), 403 session_required 면 계정 모드 표시.
- * 개인 데이터를 받을 수 없는 응답이면 true
+ * 개인 데이터를 받을 수 없는 응답이면 그 까닭 (login: 로그인 필요 · personal: 주인 아닌 계정), 아니면 null
  */
-async function noteAuth(res: Response, apiUrl: string, sent: string | null): Promise<boolean> {
-  if (res.status !== 401 && res.status !== 403) return false;
+async function noteAuth(res: Response, apiUrl: string, sent: string | null): Promise<"login" | "personal" | null> {
+  if (res.status !== 401 && res.status !== 403) return null;
   try {
     const b = (await res.clone().json()) as { code?: unknown };
     if (res.status === 401 && b.code === "session_invalid") {
       handleSessionInvalid(apiUrl, sent);
-      return true;
+      return "login";
     }
     if (res.status === 403 && b.code === "session_required") {
       markAccountsSeen(apiUrl, true);
-      return true;
+      return "login";
     }
-    return res.status === 403 && b.code === "personal_data_not_ready";
+    return res.status === 403 && b.code === "personal_data_not_ready" ? "personal" : null;
   } catch {
     /* 본문이 JSON 이 아님 */
-    return false;
+    return null;
   }
 }
 
@@ -639,7 +642,8 @@ async function fetchPayload(apiUrl: string, token: string, now: number, board = 
       headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers, ...(cached?.etag ? { "if-none-match": cached.etag } : {}) },
       signal: ctrl.signal,
     });
-    if (await noteAuth(res, apiUrl, session.sent)) throw new LoginNeededError();
+    const denied = await noteAuth(res, apiUrl, session.sent);
+    if (denied) throw new LoginNeededError(denied);
     if (res.status === 404) {
       // 로그인 페이지·프록시의 HTML 404 는 서버에 닿지 못한 것 (예전 서버의 404 는 JSON 오류 본문 — Fastify)
       if (await isHtml(res)) throw new Error(NOT_JSON);
@@ -712,7 +716,8 @@ async function getJson<T>(url: string, token: string, timeoutMs = 12_000): Promi
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { headers: { accept: "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...session.headers }, signal: ctrl.signal });
-    if (await noteAuth(res, apiUrl, session.sent)) throw new LoginNeededError();
+    const denied = await noteAuth(res, apiUrl, session.sent);
+    if (denied) throw new LoginNeededError(denied);
     if (!res.ok) throw new Error((await isPortalPage(res)) ? NOT_JSON : `HTTP ${res.status}`);
     return await jsonBody<T>(res);
   } finally {
