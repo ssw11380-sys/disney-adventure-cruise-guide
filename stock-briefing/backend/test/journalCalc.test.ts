@@ -386,3 +386,88 @@ describe("검토 반영: 원화 손익을 뺀 까닭은 빠진 환율을 바로 
     expect(REASONS.krwNoFx).toContain("판매 때");
   });
 });
+
+describe("검토 반영 3차: 회사 행동은 끝 가정·처음 가정을 둘 다 계산해 토스 매입금액에 더 가까운 쪽", () => {
+  const a1 = anchor({ asOf: "2026-09-25T16:05:00+09:00", date: "2026-09-25", quantity: 1000, cost: 1_000_000 });
+
+  it("1000주 1→4 분할 뒤 5주 매도 (토스 3,995주 · 998,750원): 분할 뒤 평균 250 — 가짜 손실 없음, 배수 4", () => {
+    // 끝 가정이면 원장 995주·995,000 → 매입금액 차이 0.38% (허용폭 안) 라 예전에는 배수 4.0151 · 매도 손실 −3,750 이었다
+    const a2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 3995, cost: 998_750 });
+    const f = [fill({ side: "SELL", quantity: 5, amount: 1250, at: "2026-09-28T09:30:00+09:00", code: "005930" })];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    expect(r.estimated).toEqual([{ at: a2.asOf, date: "2026-09-28", qty: 3000, fromQty: 1000, toQty: 4000, reason: "split", ratio: 4 }]);
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ status: "estimated", reason: REASONS.split, gross: 0, costAmount: 1250, avgCost: 250 });
+    expect(r.holding).toEqual({ quantity: 3995, avgCost: 250 });
+  });
+
+  it("미국 같은 경우: 달러 손익 0, 양도세 취득가 = 양도가 (예전에는 −$375 · 가짜 손실 −506,250원)", () => {
+    const f = [
+      fill({ side: "BUY", quantity: 1000, amount: 100_000, at: "2026-09-01T23:00:00+09:00" }),
+      fill({ side: "SELL", quantity: 5, amount: 125, at: "2026-09-28T23:30:00+09:00" }),
+    ];
+    const b1 = anchor({ asOf: "2026-09-26T05:05:00+09:00", date: "2026-09-25", quantity: 1000, cost: 100_000 });
+    const b2 = anchor({ asOf: "2026-09-29T05:05:00+09:00", date: "2026-09-28", quantity: 3995, cost: 99_875 });
+    const r = replayPair(f, [b1, b2], { currency: "USD", stdAt: () => 1350 });
+    const s = r.fills.get(f[1]!.key)!;
+    expect(s.realized).toMatchObject({ status: "estimated", gross: 0, avgCost: 25 });
+    expect(s.std).toEqual({ proceeds: 168_750, cost: 168_750, missing: null });
+    expect(r.estimated[0]).toMatchObject({ reason: "split", ratio: 4, fromQty: 1000, toQty: 4000 });
+  });
+
+  it("무상증자 1000→1500 뒤 3주 매도: 증자 뒤 평균으로 손익 0, 배수 1.5", () => {
+    const c1 = anchor({ asOf: "2026-09-25T16:05:00+09:00", date: "2026-09-25", quantity: 1000, cost: 1_500_000 });
+    const c2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 1497, cost: 1_497_000 });
+    const f = [fill({ side: "SELL", quantity: 3, amount: 3000, at: "2026-09-28T09:30:00+09:00", code: "005930" })];
+    const r = replayPair(f, [c1, c2], { currency: "KRW" });
+    expect(r.estimated).toEqual([{ at: c2.asOf, date: "2026-09-28", qty: 500, fromQty: 1000, toQty: 1500, reason: "split", ratio: 1.5 }]);
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ gross: 0, costAmount: 3000, avgCost: 1000 });
+  });
+
+  it("분할 뒤 매수 (매입금액은 두 가정이 같음): 흔한 배수(4)인 처음 가정 — 이 매수 뒤 평균 250원 · 4,100주", () => {
+    const a2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 4100, cost: 1_025_000 });
+    const f = [fill({ side: "BUY", quantity: 100, amount: 25_000, at: "2026-09-28T09:30:00+09:00", code: "005930" })];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    expect(r.fills.get(f[0]!.key)!.afterBuy).toEqual({ avgCost: 250, quantity: 4100 });
+    expect(r.estimated).toEqual([{ at: a2.asOf, date: "2026-09-28", qty: 3000, fromQty: 1000, toQty: 4000, reason: "split", ratio: 4 }]);
+  });
+
+  it("여러 날 구간에서 분할 전에 산 매수: 흔한 배수(4)인 끝 가정 — 처음 가정(4.075)으로 바꾸지 않는다", () => {
+    const a2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 4100, cost: 1_025_000 });
+    const f = [fill({ side: "BUY", quantity: 25, amount: 25_000, at: "2026-09-26T09:30:00+09:00", code: "005930" })];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    expect(r.fills.get(f[0]!.key)!.afterBuy).toEqual({ avgCost: 1000, quantity: 1025 });
+    expect(r.estimated).toEqual([{ at: a2.asOf, date: "2026-09-28", qty: 3075, fromQty: 1025, toQty: 4100, reason: "split", ratio: 4 }]);
+  });
+
+  it("분할 전에 판 매도는 그대로 끝 가정 (처음 가정은 매입금액이 맞지 않음)", () => {
+    const a2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 3960, cost: 990_000 });
+    const f = [fill({ side: "SELL", quantity: 10, amount: 11_000, at: "2026-09-26T09:30:00+09:00", code: "005930" })];
+    const r = replayPair(f, [a1, a2], { currency: "KRW" });
+    expect(r.estimated).toEqual([{ at: a2.asOf, date: "2026-09-28", qty: 2970, fromQty: 990, toQty: 3960, reason: "split", ratio: 4 }]);
+    expect(r.fills.get(f[0]!.key)!.realized).toMatchObject({ gross: 1000, costAmount: 10_000, avgCost: 1000 });
+  });
+});
+
+describe("검토 반영 3차: 작은 입고·출고는 회사 행동으로 보지 않는다 (수량 변화 2% 이상 · 매입금액 변화는 그 1/10 이하)", () => {
+  it("300주 가운데 1주 출고 (매입금액 −0.33%): 병합이 아니라 이관", () => {
+    const a1 = anchor({ asOf: "2026-09-25T16:05:00+09:00", date: "2026-09-25", quantity: 300, cost: 300_000 });
+    const a2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 299, cost: 299_000 });
+    const r = replayPair([], [a1, a2], { currency: "KRW" });
+    expect(r.estimated).toEqual([{ at: a2.asOf, date: "2026-09-28", qty: -1, fromQty: 300, toQty: 299, reason: "transfer" }]);
+    expect(r.check).toMatchObject({ splits: 0, transfers: 1 });
+  });
+
+  it("1000주에 3주 입고 (매입금액 그대로, +0.3%): 무상증자가 아니라 이관", () => {
+    const a1 = anchor({ asOf: "2026-09-25T16:05:00+09:00", date: "2026-09-25", quantity: 1000, cost: 1_000_000 });
+    const a2 = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 1003, cost: 1_000_000 });
+    expect(replayPair([], [a1, a2], { currency: "KRW" }).estimated[0]).toMatchObject({ reason: "transfer", qty: 3 });
+  });
+
+  it("매입금액이 수량 변화의 1/10 넘게 움직인 입고(+3% 수량 · +0.4% 매입금액)는 이관 · 주식배당 5%(매입금액 그대로)는 회사 행동", () => {
+    const a1 = anchor({ asOf: "2026-09-25T16:05:00+09:00", date: "2026-09-25", quantity: 1000, cost: 1_000_000 });
+    const inbound = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 1030, cost: 1_004_000 });
+    expect(replayPair([], [a1, inbound], { currency: "KRW" }).estimated[0]).toMatchObject({ reason: "transfer", qty: 30 });
+    const div = anchor({ asOf: "2026-09-28T16:05:00+09:00", date: "2026-09-28", quantity: 1050, cost: 1_000_000 });
+    expect(replayPair([], [a1, div], { currency: "KRW" }).estimated[0]).toMatchObject({ reason: "split", ratio: 1.05, qty: 50 });
+  });
+});

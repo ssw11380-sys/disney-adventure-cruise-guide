@@ -52,6 +52,11 @@ export interface ReturnsBody {
   tradingDays: number;
   /** 기록 전체의 평가 시점 거래일 수 (공개 조건은 이것 ≥ needDays) */
   recordDays: number;
+  /**
+   * 그 시장 기록(평가 시점으로 쓰는 스냅샷)의 마지막 날짜 — 고른 기간이 이 뒤면 '그 뒤로 기록이 저장되지 않음'(동기화가 멈춘 경우 등)을
+   * '주말·휴일·기록 시작 전'과 나눠 안내한다. 기록이 없으면 null
+   */
+  recordUntil: string | null;
   needDays: number;
   requested: { from: string; to: string };
   actual: { from: string; to: string } | null;
@@ -148,7 +153,9 @@ export function periodReturns(
   const doubtedSkipped = [...new Set(inRange.filter((s) => s.status === "ok" && s.doubted).map((s) => s.date))].sort();
   const usable = inRange.filter((s) => usableSnap(s, market)).sort((a, b) => t(a.asOf) - t(b.asOf));
   // 기록 전체 길이 (고른 기간과 상관없이) — 공개 조건
-  const recordDays = new Set(snaps.filter((s) => usableSnap(s, market)).map((s) => s.date)).size;
+  const recordDates = [...new Set(snaps.filter((s) => usableSnap(s, market)).map((s) => s.date))].sort();
+  const recordDays = recordDates.length;
+  const recordUntil = recordDates.at(-1) ?? null;
   const basis = { regularClose: 0, priceFallback: 0, fallbackCodes: [] as string[] };
   const fallbackCodes = new Set<string>();
   const points: Point[] = usable.map((snap) => ({ snap, value: valueOf(snap, basis, fallbackCodes) }));
@@ -159,6 +166,7 @@ export function periodReturns(
     ready: false,
     tradingDays: 0,
     recordDays,
+    recordUntil,
     needDays: READY_DAYS,
     requested,
     actual: null,

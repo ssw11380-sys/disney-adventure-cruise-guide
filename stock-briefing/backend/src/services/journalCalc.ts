@@ -8,9 +8,10 @@
  *  - 기준점(anchor) = 스냅샷(토스 보유 조회의 수량·매입금액). 그 뒤 매도는 'snapshot' — 토스 평단에서 출발
  *  - 첫 기준점 전 매도: 0주에서 돌린 결과가 첫 기준점과 맞으면 'history-checked', 맞지 않으면 모름(unknown-cost)
  *  - 기준점이 없는 짝: 0주에서 음수 없이 돌면 'history-only'(토스 잔고와 맞춰 보지 못함), 음수면 모름
- *  - 기준점마다 대조: 수량이 다르면 회사 행동(분할·병합·무상증자·주식배당 — 비율과 상관없이 토스 매입금액이 그대로, 사이 매도만큼 줄어든 값) 또는
- *    이관(그 밖) 추정 줄 + 사이 매도는 'estimated'. 회사 행동은 사이 몫의 뒤(끝 가정)·앞(처음 가정) 둘 다 맞춰 보고, 처음 가정이면
- *    사이 매도를 행동 뒤 수량으로 다시 계산한다 (1→4 분할 날 판 5주가 분할 전 평균으로 계산되어 가짜 손실이 나지 않게)
+ *  - 기준점마다 대조: 수량이 다르면 회사 행동(분할·병합·무상증자·주식배당 — 비율과 상관없이 토스 매입금액이 그대로, 사이 매도만큼 줄어든 값.
+ *    수량 변화 2% 이상 · 매입금액 차이 0.5% 이하이면서 수량 변화의 1/10 이하) 또는 이관(그 밖) 추정 줄 + 사이 매도는 'estimated'.
+ *    회사 행동은 사이 몫의 뒤(끝 가정)·앞(처음 가정) 둘 다 계산해 토스 매입금액에 더 가까운 쪽을 고르고(같으면 흔한 배수 모양 → 처음 가정),
+ *    처음 가정이면 사이 몫을 행동 뒤 수량으로 다시 계산한다 (1→4 분할 날 판 5주가 분할 전 평균으로 계산되어 가짜 손실이 나지 않게)
  *  - 기준점 뒤 기록된 수량보다 많이 판 매도: 0 으로 되돌리지 않고 수량을 음수로 둔다 → 다음 기준점의 이관 추정이 빠진 입고만큼 나온다.
  *    그 매도는 기준점 평균으로 추정한 'order-uncertain', 그 구간의 다음 매도는 평균을 모름
  *  - 같은 두 기준점 사이 반대 방향 몫 가운데 체결 시각(filled)이 아닌 것이 있으면 순서를 모른다 → 매수 먼저·매도 먼저로 계산해
@@ -446,22 +447,39 @@ function runSegment(s: State, fills: LedgerFill[], startMs: number, endMs: numbe
   return { state: a, uncertain };
 }
 
-/** 회사 행동으로 볼 매입금액 차이: 토스 매입금액이 행동 전 원장 값의 ±0.5% 안 */
+/** 회사 행동으로 볼 매입금액 차이: 토스 매입금액이 원장 값의 ±0.5% 안 */
 const CORP_COST_TOL = 0.005;
-const costNear = (a: number, b: number) => b > 0 && Math.abs(a - b) <= b * CORP_COST_TOL;
+/**
+ * 회사 행동으로 볼 가장 작은 수량 변화 |배수 − 1| (2%). 매입금액 허용폭(0.5%)보다 충분히 커야 한다 —
+ * 300주 가운데 1주 출고(−0.33%)·1000주에 3주 입고(+0.3%) 같은 작은 이관이 '병합·무상증자'로 보이지 않게
+ */
+export const CORP_MIN_CHANGE = 0.02;
+
+/**
+ * 배수 k 로 수량이 바뀌었을 때 토스 매입금액 a 가 원장 매입금액 b 와 맞는지. 맞으면 차이(원·달러), 아니면 null.
+ *  - 수량 변화 |k − 1| ≥ CORP_MIN_CHANGE
+ *  - 매입금액 차이 ≤ 0.5%, 그리고 수량 변화의 1/10 이하 — 평균 구매가로 나간 출고는 매입금액이 수량만큼 줄어 회사 행동으로 보지 않는다
+ */
+function corpFit(k: number, a: number, b: number): number | null {
+  if (!(k > 0) || !(b > 0)) return null;
+  const change = Math.abs(k - 1);
+  const diff = Math.abs(a - b);
+  return change >= CORP_MIN_CHANGE && diff <= b * Math.min(CORP_COST_TOL, change / 10) ? diff : null;
+}
+
+/** 정수 N·1/N 근처(±0.1%) */
+const nearWhole = (x: number) => Math.round(x) >= 2 && Math.abs(x - Math.round(x)) <= Math.round(x) * 0.001;
 
 /** 배수 정리: 정수 N·1/N 근처(±0.1%)는 딱 맞춘 값, 그 밖(무상증자 1.5 등)은 넷째 자리 */
 function tidyRatio(r: number): number {
-  const near = (x: number) => Math.abs(x - Math.round(x)) <= Math.round(x) * 0.001 && Math.round(x) >= 2;
-  if (near(r)) return Math.round(r);
-  if (near(1 / r)) return round4(1 / Math.round(1 / r));
+  if (nearWhole(r)) return Math.round(r);
+  if (nearWhole(1 / r)) return round4(1 / Math.round(1 / r));
   return round4(r);
 }
 
-/** 끝 가정: 구간 몫을 다 적용한 뒤 수량만 바뀌었다(매입금액이 거의 같음) → 배수. 사이 매도는 행동 전 수량으로 계산한 그대로 */
-function corpAtEnd(end: State, a: LedgerAnchor): number | null {
-  if (!(end.qty > EPS) || !(a.quantity > EPS) || end.cost === null || a.cost === null) return null;
-  return costNear(a.cost, end.cost) ? tidyRatio(a.quantity / end.qty) : null;
+/** 흔한 배수 모양: N·1/N 이거나 소수 둘째 자리까지 (1.5 · 1.05 · 0.25) — 두 가정의 매입금액이 같을 때 고르는 데 쓴다 */
+function simpleRatio(r: number): boolean {
+  return nearWhole(r) || nearWhole(1 / r) || Math.abs(r * 100 - Math.round(r * 100)) <= r * 100 * 1e-4;
 }
 
 /**
@@ -544,24 +562,36 @@ export function replayPair(fillsIn: LedgerFill[], anchorsIn: LedgerAnchor[], opt
       // 앞 구간 끝 원장과 이 스냅샷 대조
       const prevSells = sellKeys(segs[i]!);
       if (Math.abs(s.qty - a.quantity) > EPS) {
-        const ratioEnd = corpAtEnd(s, a);
-        let row: EstimatedRow | null = ratioEnd !== null ? { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "split", ratio: ratioEnd } : null;
-        // 처음 가정: 행동이 구간 처음에 있었다 — 행동 뒤 수량으로 구간을 다시 돌려 스냅샷(수량·매입금액)과 맞으면 그 값으로 바꾼다
-        if (!row && segStart && segs[i]!.length && segStart.qty > EPS && segStart.cost !== null && a.cost !== null && a.quantity > EPS) {
+        // 끝 가정: 행동이 구간 끝에 있었다 — 구간 몫은 행동 전 수량으로 계산한 그대로, 수량만 바뀜
+        const endK = s.qty > EPS && a.quantity > EPS ? a.quantity / s.qty : 0;
+        const endDiff = s.cost !== null && a.cost !== null ? corpFit(endK, a.cost, s.cost) : null;
+        // 처음 가정: 행동이 구간 처음에 있었다 — 행동 뒤 수량으로 구간을 다시 돌려 스냅샷(수량·매입금액)과 맞춰 본다
+        let start: { k: number; toQty: number; diff: number; state: State; out: Out; fromQty: number } | null = null;
+        if (segStart && segs[i]!.length && segStart.qty > EPS && segStart.cost !== null && a.cost !== null && a.quantity > EPS) {
           const k = (a.quantity - (s.qty - segStart.qty)) / segStart.qty;
           if (k > 0 && Math.abs(k - 1) > 1e-4) {
             const toQty = round6(segStart.qty * k);
             const scaled: State = { ...segStart, qty: toQty };
             const tmp: Out = new Map();
             const e = runAfter(i - 1, scaled, tmp);
-            if (e.cost !== null && Math.abs(e.qty - a.quantity) <= EPS && costNear(a.cost, e.cost)) {
-              for (const [key, v] of tmp) out.set(key, v);
-              row = { at: a.asOf, date: a.date, qty: round6(toQty - segStart.qty), fromQty: segStart.qty, toQty, reason: "split", ratio: tidyRatio(k) };
-              s = e;
-            }
+            const diff = e.cost !== null && Math.abs(e.qty - a.quantity) <= EPS ? corpFit(k, a.cost, e.cost) : null;
+            if (diff !== null) start = { k, toQty, diff, state: e, out: tmp, fromQty: segStart.qty };
           }
         }
-        if (!row) row = { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "transfer" };
+        // 둘 다 맞으면 토스 매입금액에 더 가까운 쪽. 매입금액이 같으면(매수만 있는 구간) 배수가 흔한 모양인 쪽, 그래도 같으면 처음 가정
+        // (회사 행동은 장 시작 전에 반영되므로 구간 몫은 행동 뒤인 경우가 많다) — 1→4 분할 날 판 5주가 분할 전 평균으로 계산되어 가짜 손실이 나지 않게
+        const useStart =
+          start !== null &&
+          (endDiff === null ||
+            start.diff < endDiff - unit(cur) ||
+            (Math.abs(start.diff - endDiff) <= unit(cur) && (simpleRatio(start.k) || !simpleRatio(endK))));
+        let row: EstimatedRow;
+        if (useStart) {
+          for (const [key, v] of start!.out) out.set(key, v);
+          row = { at: a.asOf, date: a.date, qty: round6(start!.toQty - start!.fromQty), fromQty: start!.fromQty, toQty: start!.toQty, reason: "split", ratio: tidyRatio(start!.k) };
+          s = start!.state;
+        } else if (endDiff !== null) row = { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "split", ratio: tidyRatio(endK) };
+        else row = { at: a.asOf, date: a.date, qty: round6(a.quantity - s.qty), fromQty: s.qty, toQty: a.quantity, reason: "transfer" };
         estimated.push(row);
         corp = row.reason === "split";
         if (corp) check.splits++;

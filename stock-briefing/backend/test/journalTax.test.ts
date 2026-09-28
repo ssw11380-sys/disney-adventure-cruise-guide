@@ -28,6 +28,30 @@ describe("결제일 (추정): 미국 T+1 → 그다음 한국 은행 영업일",
     expect(isKrBankDay("2027-01-01")).toBe(false);
     expect(isKrBankDay("2026-09-30")).toBe(true);
   });
+
+  it("검토 반영 3차: 2026 전 한국 공휴일(2022~2025)도 은행 휴일 — 2025 추석(10/3·10/6~10/9)·설(1/27~1/30) 위에 결제일을 잡지 않는다", () => {
+    for (const d of ["2025-10-03", "2025-10-06", "2025-10-07", "2025-10-08", "2025-10-09", "2025-01-27", "2025-01-28", "2025-01-29", "2025-01-30", "2024-09-17", "2023-10-02"]) {
+      expect(isKrBankDay(d), d).toBe(false);
+    }
+    // 거래소만 쉬는 연말 휴장은 은행 영업일
+    expect(isKrBankDay("2023-12-29")).toBe(true);
+    expect(isKrBankDay("2024-12-31")).toBe(true);
+    expect(isKrBankDay("2025-10-10")).toBe(true);
+    // 미국 10/2(목) 매수 → 현지 결제 10/3(금) → 국내 결제일은 연휴 뒤 10/10(금) (예전에는 휴일인 10/6)
+    expect(usSettleDate("2025-10-02")).toEqual({ us: "2025-10-03", kr: "2025-10-10" });
+    expect(usSettleDate("2025-01-23")).toEqual({ us: "2025-01-24", kr: "2025-01-31" });
+  });
+
+  it("2026 전 공휴일 목록은 모두 평일이고, 2026 뒤 거래소 목록(KR_HOLIDAYS)과 겹치지 않는다", async () => {
+    const { KR_BANK_HOLIDAYS_PAST } = await import("../src/services/taxRules.js");
+    const { KR_HOLIDAYS } = await import("../src/services/marketContext.js");
+    for (const d of KR_BANK_HOLIDAYS_PAST) {
+      const wd = new Date(`${d}T12:00:00Z`).getUTCDay();
+      expect(wd >= 1 && wd <= 5, d).toBe(true);
+      expect(d < "2026-01-01", d).toBe(true);
+      expect(d in KR_HOLIDAYS, d).toBe(false);
+    }
+  });
 });
 
 describe("세액 (2026년 세법 기준으로 넣은 값)", () => {

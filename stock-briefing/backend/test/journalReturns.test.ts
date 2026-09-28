@@ -194,3 +194,17 @@ describe("검토 반영: 전체(원화)에서 미국 기록에 평가 환율이 
     expect(periodReturns(q(d[0]!, d[11]!, "ALL"), kr, []).usFxMissing).toBe(false);
   });
 });
+
+describe("검토 반영 3차: 마지막 기록일(recordUntil)", () => {
+  it("기록이 중간에 멈추면(9/9~9/28 뒤로 없음) 고른 기간이 그 뒤여도 recordUntil 로 알 수 있다 — 주말·휴일과 나눠 안내하려고", () => {
+    const d = days(14, "2026-09-09").filter((x) => x <= "2026-09-28");
+    const snaps = d.map((x, i) => KR(x, 1_000_000 + i));
+    const r = periodReturns({ requested: { from: "2026-10-05", to: "2026-10-12" }, market: "KR", recordSince: "2026-09-09" }, snaps, []);
+    expect(r).toMatchObject({ ready: false, tradingDays: 0, recordUntil: "2026-09-28", actual: null });
+    expect(r.recordDays).toBeGreaterThanOrEqual(READY_DAYS);
+    // 그 시장 기록 기준 · 의심을 안고 저장한 기록·빈칸은 세지 않는다
+    const more = [...snaps, KR("2026-09-29", 1, { doubted: true }), KR("2026-09-30", 1, { status: "gap" })];
+    expect(periodReturns(q("2026-10-05", "2026-10-12"), more, []).recordUntil).toBe("2026-09-28");
+    expect(periodReturns(q("2026-10-05", "2026-10-12", "US"), snaps, []).recordUntil).toBeNull();
+  });
+});

@@ -759,4 +759,46 @@ describe("검토 반영: 매매기준율 조각·받아 본 기간 계산 (순�
     ]);
     expect(coveredSpans([])).toEqual([]);
   });
+
+  it("검토 반영 3차: 2025 추석(평일 5일)·설(평일 4일) 연휴를 건너뛴 두 줄은 한 구간 — 빠진 영업일로 세지 않는다", async () => {
+    const { coveredSpans } = await import("../src/services/journalService.js");
+    expect(coveredSpans(["2025-10-01", "2025-10-02", "2025-10-10", "2025-10-13"])).toEqual([["2025-10-01", "2025-10-13"]]);
+    expect(coveredSpans(["2025-01-23", "2025-01-24", "2025-01-31"])).toEqual([["2025-01-23", "2025-01-31"]]);
+  });
+});
+
+describe("검토 반영 3차: 2025 추석 연휴 전후 미국 매수·매도가 양도세 추정에서 빠지지 않는다", () => {
+  it("미국 2025-10-02 매수(국내 결제일 10/10) · 10/20 매도: 결제일 고시로 계산, '받는 중'·'받지 못함' 없음", async () => {
+    const { KR_BANK_HOLIDAYS_PAST } = await import("../src/services/taxRules.js");
+    // 실제 모양의 응답: 주말·공휴일에는 줄이 없다 (예시 환율 — 실제 값과 무관)
+    const bankDays = (from: string, to: string) => {
+      const out: Array<{ date: string; rate: number }> = [];
+      for (let d = new Date(`${from}T12:00:00Z`); d.toISOString().slice(0, 10) <= to; d.setUTCDate(d.getUTCDate() + 1)) {
+        const s = d.toISOString().slice(0, 10);
+        if (![0, 6].includes(d.getUTCDay()) && !KR_BANK_HOLIDAYS_PAST.has(s)) out.push({ date: s, rate: s === "2025-10-10" ? 1420 : 1400 });
+      }
+      return out;
+    };
+    const db = await createMigratedDb(":memory:");
+    await db
+      .insertInto("trade_executions")
+      .values([tradeRow("h1", "AMD", "BUY", [{ q: 2, a: 300, at: TS("2025-10-02T23:00:00") }]), tradeRow("h2", "AMD", "SELL", [{ q: 1, a: 170, at: TS("2025-10-20T23:00:00") }])])
+      .execute();
+    const features = new FeatureService(db, () => NOW);
+    const s = new JournalService({
+      db,
+      features,
+      fx: { tossAt: async () => 1400, std: async (from, to) => bankDays(from, to), naver: async () => [] },
+      now: () => NOW,
+      pauseMs: 0,
+      log: { info: () => {}, warn: () => {} },
+    });
+    await s.tick();
+    const tax = await s.tax(2025);
+    expect(tax.fxPending).toBe(0);
+    expect(tax.excluded).toEqual([]);
+    expect(tax.items).toHaveLength(1);
+    // 취득가 = $150 × 10/10 고시 1,420 · 양도가 = $170 × 10/22 고시 1,400 (참고용 추정)
+    expect(tax.items[0]).toMatchObject({ settleDate: "2025-10-22", costKrw: 213_000, proceedsKrw: 238_000, gainKrw: 25_000 });
+  });
 });
