@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("react-native", () => ({
   View: "View",
+  ScrollView: "ScrollView",
   Text: "Text",
   Pressable: "Pressable",
   StyleSheet: { create: <T,>(s: T) => s, hairlineWidth: 1 },
