@@ -102,8 +102,9 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
   const krwCost = krw.value;
   const [savingKrw, setSavingKrw] = useState(false);
   const saveKrwCost = async () => {
-    const v = Number(krwCost.replace(/[^0-9.]/g, ""));
-    if (!(v > 0)) {
+    // 다른 금액 칸과 같은 방식으로 쉼표만 제거한다. 음수 부호나 잘못된 글자를 지워 금액을 바꾸지 않는다.
+    const v = parseNum(krwCost);
+    if (v === null || !(v > 0) || !Number.isFinite(v)) {
       Alert.alert("입력 확인", "원화 매입금액을 숫자로 입력하세요.");
       return;
     }
@@ -167,6 +168,10 @@ function EditForm({ stock }: { stock: RegisteredStock & { evaluation?: Evaluatio
     if (side === "sell" && q > (num(quantity) ?? 0)) return { error: "보유 수량보다 많이 매도할 수 없습니다" as const };
     // 평단 칸을 고치지 않았으면 화면에 줄여 보인 값이 아니라 저장된 원래 값으로 계산한다
     const avg0 = avgPrice.trim() === initial.avgPrice.trim() ? stock.avgPrice : num(avgPrice);
+    // 기존 보유분의 원가를 모르면 새 체결가만으로 전체 평단을 계산할 수 없다.
+    if (side === "buy" && (num(quantity) ?? 0) > 0 && (avg0 === null || !(avg0 > 0) || !Number.isFinite(avg0))) {
+      return { error: "추가 매수 후 평균 단가를 계산하려면 기존 보유 종목의 평균 단가를 먼저 입력하세요." };
+    }
     return applyTrade({ quantity: num(quantity), avgPrice: avg0 }, side, q, p, cur);
   })();
 
