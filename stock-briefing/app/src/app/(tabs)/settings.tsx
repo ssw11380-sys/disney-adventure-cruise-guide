@@ -277,7 +277,7 @@ export default function SettingsScreen() {
   const server = (
     <Card>
       <SectionTitle
-        right={health.data?.limited ? <Badge tone="bad">토큰 필요</Badge> : health.data ? <Badge tone="good">정상</Badge> : health.isError ? <Badge tone="bad">연결 끊김</Badge> : null}
+        right={health.isError ? <Badge tone="bad">연결 끊김</Badge> : health.data?.limited ? <Badge tone="bad">토큰 필요</Badge> : health.data ? <Badge tone="good">정상</Badge> : null}
       >
         서버
       </SectionTitle>

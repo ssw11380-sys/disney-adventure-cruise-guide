@@ -161,6 +161,12 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
   const head = (
     <>
       {first ? <StatusLine market={market} open={first.marketOpen} session={first.session} asOf={first.asOf} note={first.note} paused={(pages?.length ?? 0) > AUTO_REFRESH_MAX_PAGES} /> : null}
+      {q.isError && !q.isFetchNextPageError && items.length > 0 ? (
+        <View style={styles.retryNotice}>
+          <Text accessibilityRole="alert" style={{ color: t.warn, fontSize: font.small }}>순위를 갱신하지 못했습니다. 이전 목록을 표시합니다.</Text>
+          <Button title="다시 확인" accessibilityLabel="순위 다시 확인" variant="secondary" compact loading={q.isFetching} onPress={onPull} />
+        </View>
+      ) : null}
       {table ? <DiscoverTableHead table={table} emphasis={EMPHASIS[category]} /> : <LineHead rank right={metric === "volume" ? "거래량" : "거래대금"} />}
     </>
   );
@@ -189,11 +195,12 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
       }
       ListFooterComponent={
         <View>
+          {q.isFetchNextPageError ? <Text accessibilityRole="alert" style={[styles.footer, { color: t.warn }]}>다음 순위를 불러오지 못했습니다.</Text> : null}
           {q.isFetchingNextPage ? (
             <ActivityIndicator style={{ marginVertical: space.lg }} color={t.muted} />
           ) : q.hasNextPage ? (
-            <Pressable onPress={() => void q.fetchNextPage()} style={[styles.more, { borderColor: t.line }]} accessibilityRole="button" accessibilityLabel="순위 더 보기">
-              <Text style={{ color: t.muted, fontSize: font.small }}>더 보기</Text>
+            <Pressable disabled={q.isFetching} accessibilityState={{ disabled: q.isFetching }} onPress={() => { if (!q.isFetching) void q.fetchNextPage({ cancelRefetch: false }); }} style={[styles.more, { borderColor: t.line }]} accessibilityRole="button" accessibilityLabel={q.isFetchNextPageError ? "다음 순위 다시 불러오기" : "순위 더 보기"}>
+              <Text style={{ color: t.muted, fontSize: font.small }}>{q.isFetchNextPageError ? "다시 불러오기" : "더 보기"}</Text>
             </Pressable>
           ) : null}
           {items.length ? (
@@ -207,7 +214,7 @@ function RankList({ market, category, tableW }: { market: DiscoverMarket; catego
       }
       onEndReachedThreshold={0.4}
       onEndReached={() => {
-        if (q.hasNextPage && !q.isFetchingNextPage) void q.fetchNextPage();
+        if (q.hasNextPage && !q.isFetching && !q.isFetchingNextPage && !q.isError) void q.fetchNextPage({ cancelRefetch: false });
       }}
       refreshControl={<RefreshControl refreshing={pulling} onRefresh={onPull} tintColor={t.muted} />}
     />
@@ -226,6 +233,7 @@ const styles = StyleSheet.create({
   // 검색: 줄 오른쪽 끝 (줄의 오른쪽 안쪽 여백만큼 밖으로 — 잔고 맨 위 띠의 검색과 같은 자리)
   search: { width: touch.min, minHeight: touch.min, alignItems: "center", justifyContent: "center", marginLeft: "auto", marginRight: -space.lg + space.xs },
   more: { margin: space.lg, paddingVertical: space.sm, minHeight: touch.min, alignItems: "center", justifyContent: "center", borderWidth: StyleSheet.hairlineWidth, borderRadius: 4 },
+  retryNotice: { paddingHorizontal: space.lg, paddingVertical: space.sm, gap: space.sm },
   footer: { fontSize: font.tiny, textAlign: "center", paddingVertical: space.lg, paddingHorizontal: space.lg },
 });
 
