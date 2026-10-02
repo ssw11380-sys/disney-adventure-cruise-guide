@@ -13,6 +13,7 @@ const stamp = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.tes
 const number = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits: 6 });
 // 가정·과거·범위·다른 가격과의 비교는 현재 시세의 단정으로 해석하지 않는다.
 const QUALIFIED = /가정|예상|전망|경우|시나리오|예를|과거|전년|전월|어제|당시|이상|이하|초과|미만|사이|대비한|수\s*있/;
+const OTHER_SUBJECT = /다른\s*(?:기업|종목)|경쟁사|예시|예제|지난/;
 const PRICE = /^\s*(?:[-•]\s*)?\|?\s*(?:현재가|현재\s*(?:주가|가격)|기준\s*(?:주가|가격))\s*(?:[:：|]|은|는)?\s*(?:약\s*)?(\$?)([+-]?\d[\d,]*(?:\.\d+)?)\s*(억|만|천)?\s*(원|달러|USD|KRW)?(?=\s|[.,;|()]|입니다|이다|$)/i;
 const RATE = /^\s*(?:[-•]\s*)?\|?\s*(?:전일\s*대비\s*(?:등락률)?|등락률)\s*(?:[:：|]|은|는)?\s*(?:약\s*)?([+-]?\d[\d,]*(?:\.\d+)?)\s*%\s*(상승|하락)?/;
 const scales: Record<string, number> = { "억": 100_000_000, "만": 10_000, "천": 1_000 };
@@ -36,7 +37,16 @@ export function verifyReport(content: string, snapshot: unknown): ReportVerifica
     result.checkedClaims++;
     if (contradictory || Math.abs(actual - expected) > tolerance) result.issues.push({ field, reported, expected: `${number(expected)}${unit}` });
   };
+  const sections: Array<{ level: number; excluded: boolean }> = [];
   for (const raw of content.split(/\n|(?<=[.!?;])\s+/)) {
+    const heading = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(raw);
+    if (heading) {
+      const level = heading[1]!.length;
+      while (sections.length && sections.at(-1)!.level >= level) sections.pop();
+      sections.push({ level, excluded: QUALIFIED.test(heading[2]!) || OTHER_SUBJECT.test(heading[2]!) });
+    }
+    // 과거·가정·다른 대상 절의 하위 문장도 같은 문맥이다. 같은 깊이 또는 상위의 현재 절에서 다시 검사한다.
+    if (sections.some((section) => section.excluded)) continue;
     const line = raw.replace(/[*_`#]/g, "");
     if (QUALIFIED.test(line)) continue;
     const price = PRICE.exec(line);

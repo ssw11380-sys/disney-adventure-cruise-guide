@@ -10,7 +10,7 @@ const base: ReportVerification = { scope: "quote_claims", quoteAsOf: "2026-10-02
 describe("보고서의 실제 시세 시각과 숫자 불일치 안내", () => {
   it("명시적 수치가 일치해도 전체 본문 검증 완료 표시를 하지 않는다", () => {
     const r = render(<ReportVerificationNotice verification={base} />);
-    expect(r.text()).toContain("시세 자료 기준");
+    expect(r.text()).toContain("보고서에 사용한 시세 시각");
     expect(r.text()).toContain("고정 출처");
     expect(r.text()).not.toContain("검증 완료");
     expect(r.all().some(n => n.props.accessibilityRole === "alert")).toBe(false);
@@ -22,6 +22,6 @@ describe("보고서의 실제 시세 시각과 숫자 불일치 안내", () => {
     expect(r.all().some(n => n.props.accessibilityRole === "alert")).toBe(true);
   });
   it.each([undefined, { ...base, quoteAsOf: null }, { ...base, quoteAsOf: "잘못됨" }])("없는 자료 시각은 현재 또는 생성 시각으로 꾸미지 않는다", (verification) => {
-    expect(render(<ReportVerificationNotice verification={verification} />).text()).toContain("시세 자료 기준 시각: 제공되지 않음");
+    expect(render(<ReportVerificationNotice verification={verification} />).text()).toContain("보고서에 사용한 시세 시각: 제공되지 않음");
   });
 });
