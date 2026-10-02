@@ -44,7 +44,7 @@ export const DEVICE_KEY = "auth.device.v1";
 export const PENDING_LOGOUT_KEY = "auth.pendingLogout.v1";
 const PENDING_MAX = 5;
 /** API가 없는 부팅·위젯 읽기도 끝나야 한다. 앱의 건강 확인 요청과 같은 8초 상한이다. */
-const SESSION_READ_TIMEOUT_MS = 8_000;
+export const SESSION_READ_TIMEOUT_MS = 8_000;
 
 export type EndReason = "invalid" | "logout";
 
