@@ -89,7 +89,7 @@ export function MarketSummaryBody({ numId, layout, title }: { numId: number | nu
   const view = viewState(q);
   if (view === "error") return <Screen disclaimer={paneNote}><ErrorView error={q.error} onRetry={() => void q.refetch()} {...guide} /></Screen>;
   if (view === "loading" || !data) return <Screen disclaimer={paneNote}><CardsSkeleton count={3} /></Screen>;
-  return <SummaryView s={data} top={layout === "pane" ? null : <StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} />;
+  return <SummaryView s={data} top={<StaleBanner query={q} {...guide} />} layout={layout} title={title} trim={trim} />;
 }
 
 /**

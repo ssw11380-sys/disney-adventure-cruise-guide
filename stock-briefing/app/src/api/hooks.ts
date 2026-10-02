@@ -760,6 +760,9 @@ export function useStockMutations() {
       mutationFn: ({ session, codes, force }: { session: BriefingSession; codes?: string[]; force?: boolean }) => api.runBriefings(session, codes, force),
       onSuccess: (r, v) => {
         invalidate();
+        // 같은 날짜·세션의 재생성은 ID를 유지하므로, 열린 상세도 새 본문을 받는다. 성공한 ID만 다시 확인한다.
+        const ids = new Set(r.results.filter((result) => result.status === "ok" && result.briefingId !== null).map((result) => result.briefingId));
+        for (const id of ids) void qc.invalidateQueries({ queryKey: [apiUrl, "briefing", id], exact: true });
         // 일부 종목 수동 실행(상세의 다시 만들기)으로 만든 브리핑은 백그라운드 확인이 다시 알리지 않게 — 서버도 알리지 않는다 (BH-67)
         void markRunSeen(v.codes, r);
       },

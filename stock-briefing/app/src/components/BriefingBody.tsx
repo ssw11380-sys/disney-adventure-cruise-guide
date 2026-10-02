@@ -273,10 +273,10 @@ export function BriefingBody({
     );
   }
 
-  // 브리핑 탭 2단의 오른쪽 칸 (끊김·지연 띠는 탭 위쪽에 한 번만 — 브리핑 본문은 만든 뒤 바뀌지 않는다).
+  // 브리핑 탭 2단의 오른쪽 칸. 목록 조회와 별개로 이 본문을 다시 받지 못한 경우도 알린다.
   // 머리·도구 줄·본문은 한 묶음 (화면 간격 없이 목업처럼 붙인다)
   return (
-    <Screen disclaimer scrollRef={scrollRef}>
+    <Screen disclaimer scrollRef={scrollRef} top={<StaleBanner query={b} {...guide} />}>
       <View>
         <Head d={d} ai={ai} />
         {toolbar}
