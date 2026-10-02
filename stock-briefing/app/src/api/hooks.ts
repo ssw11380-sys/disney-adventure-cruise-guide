@@ -13,6 +13,7 @@ import { RECONCILE_OFF, RECONCILE_POLL_MS } from "@/lib/numberBasis";
 import { saverInterval, unchangedStreak } from "@/lib/pollSaver";
 import { checkRankPage, nextRankPage, restartRankPages, type RankPageParam } from "@/lib/rankPages";
 import { loadedCredentials, useSettings } from "@/lib/settings";
+import { loginRequiredFor, sessionFor, subscribeSession } from "@/lib/session";
 import { ApiRequestError, createApi, type Api } from "./client";
 import { SCORE_WAIT_REFETCH_MS, valueWaiting } from "@/lib/scoreView";
 import type { Analysis, AnalysisKind, BriefingSession, CandlePeriod, DiscoverMarket, DiscoverRank, FeatureFlags, NotificationSettings, NotificationSettingsPatch, RankCategory, ThemeKind, ThemePeriod } from "./types";
@@ -175,9 +176,31 @@ export function useStock(code: string) {
 /**
  * 기능 플래그: 30초마다, 앱으로 돌아올 때마다 다시 받는다 (관리 API 로 바꾸면 1분 안에 반영). 마지막 값은 기기에 저장해 켤 때 바로 쓴다
  */
+/**
+ * 서버 기능 플래그. opts.fresh: 이 화면이 처음 그려질 때 기기 저장 캐시(최대 30초 안 된 값)를 믿지 않고 한 번 새로 받는다 —
+ * 로그인 관문(lib/authGate)이 앱을 켤 때마다 서버의 지금 계정 모드를 보게 (예전 서버로 바꾼 뒤 옛 'accounts 켬'으로 로그인 화면이 남지 않게).
+ * 다른 화면은 그대로 (화면을 열 때마다 요청하지 않게)
+ */
 export function useFeatures() {
   const api = useApi();
-  return useQuery({ queryKey: useKey("features"), queryFn: api.features, staleTime: 30_000, refetchInterval: 30_000, refetchIntervalInBackground: false, refetchOnWindowFocus: true, retry: 0 });
+  const { apiUrl } = useSettings();
+  return useQuery(featuresQuery(api, apiUrl));
+}
+
+/**
+ * useFeatures 의 쿼리 옵션 (테스트·로그인 관문이 같은 옵션을 쓴다). 30초마다 묻되, 로그인 화면이 떠 있는 동안(계정 모드 · 이 서버 세션 없음)은 묻지 않는다
+ * (검증 4차 — 앱으로 돌아올 때 한 번은 묻는다. 로그인하면 캐시를 비우고 다시 받으며 30초 묻기가 다시 걸린다)
+ */
+export function featuresQuery(api: Pick<Api, "features">, apiUrl: string) {
+  return queryOptions({
+    queryKey: [apiUrl, "features"],
+    queryFn: api.features,
+    staleTime: 30_000,
+    refetchInterval: () => (loginRequiredFor(apiUrl) ? false : 30_000),
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: 0,
+  });
 }
 
 /**
@@ -464,7 +487,8 @@ export function useAnalysisRecovery(code: string, kind: AnalysisKind, requested:
   const api = useApi();
   const qc = useQueryClient();
   const { apiUrl, apiToken } = useSettings();
-  const recovery = useMemo(() => analysisRecoveryFor(qc, api, apiUrl, apiToken), [qc, api, apiUrl, apiToken]);
+  const sessionIdentity = useSyncExternalStore(subscribeSession, () => sessionFor(apiUrl)?.token ?? "", () => sessionFor(apiUrl)?.token ?? "");
+  const recovery = useMemo(() => analysisRecoveryFor(qc, api, apiUrl, apiToken, sessionIdentity), [qc, api, apiUrl, apiToken, sessionIdentity]);
   const wait = useSyncExternalStore(recovery.subscribe, () => recovery.snapshot(code, kind), () => recovery.snapshot(code, kind));
   const query = useQuery<Analysis>({ queryKey: useKey("analysis", code, kind), enabled: false });
   useEffect(() => { if (requested || recovery.snapshot(code, kind).phase !== "idle") recovery.ensure(code, kind); }, [recovery, code, kind, requested]);
@@ -736,6 +760,9 @@ export function useStockMutations() {
       mutationFn: ({ session, codes, force }: { session: BriefingSession; codes?: string[]; force?: boolean }) => api.runBriefings(session, codes, force),
       onSuccess: (r, v) => {
         invalidate();
+        // 같은 날짜·세션의 재생성은 ID를 유지하므로, 열린 상세도 새 본문을 받는다. 성공한 ID만 다시 확인한다.
+        const ids = new Set(r.results.filter((result) => result.status === "ok" && result.briefingId !== null).map((result) => result.briefingId));
+        for (const id of ids) void qc.invalidateQueries({ queryKey: [apiUrl, "briefing", id], exact: true });
         // 일부 종목 수동 실행(상세의 다시 만들기)으로 만든 브리핑은 백그라운드 확인이 다시 알리지 않게 — 서버도 알리지 않는다 (BH-67)
         void markRunSeen(v.codes, r);
       },

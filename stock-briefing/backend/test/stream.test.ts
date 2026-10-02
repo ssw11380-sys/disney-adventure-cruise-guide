@@ -233,20 +233,30 @@ describe("체결 묶어 보내기 (3-17)", () => {
     const at = new Date("2026-09-25T09:59:00+09:00");
     const cal = { now: at.toISOString(), KR: stateFromSession("KR", at, "2026-09-23T11:00:00Z", "2026-09-27T23:00:00Z"), US: stateFromSession("US", at, "2026-09-24T20:00:00Z", "2026-09-25T13:30:00Z") };
     expect(cal.KR.isOpen || cal.US.isOpen).toBe(false); // 예전 규칙이면 30초로 늦췄다
-    const run = async (codes: string[]) => {
-      const asked: string[][] = [];
-      const seen: string[][] = [];
-      const quick: QuickPriceSource = { name: "toss", getMany: async (c) => (asked.push(c), new Map()) };
-      const stream = new PriceStream({ quickPrices: quick, codes: async () => codes, pollMs: 10, closedPollMs: 60_000, marketOpen: async (c) => (seen.push(c), anySessionOpen(c, cal, at)) });
-      stream.attach(new FakeSocket());
-      await new Promise((r) => setTimeout(r, 45));
-      stream.stop();
-      return { asked: asked.length, seen: seen[0] };
-    };
-    const both = await run(["035420", "VRT"]);
-    expect(both.seen).toEqual(["035420", "VRT"]);
-    expect(both.asked).toBeGreaterThan(2); // 늦추지 않고 계속
-    expect((await run(["035420"])).asked).toBe(1); // 한국 종목만이면 휴장 → 접속 직후 한 번 뒤로는 늦춘다
+    // OS 스케줄링과 무관하게 10ms 폴링 간격을 진행한다. 다른 테스트의 실제 웹소켓 타이머에는 영향을 주지 않는다.
+    vi.useFakeTimers({ now: at.getTime() });
+    try {
+      const run = async (codes: string[]) => {
+        const asked: string[][] = [];
+        const seen: string[][] = [];
+        const quick: QuickPriceSource = { name: "toss", getMany: async (c) => (asked.push(c), new Map()) };
+        const stream = new PriceStream({ quickPrices: quick, codes: async () => codes, pollMs: 10, closedPollMs: 60_000, marketOpen: async (c) => (seen.push(c), anySessionOpen(c, cal, at)) });
+        try {
+          stream.attach(new FakeSocket());
+          await vi.advanceTimersByTimeAsync(45);
+          return { asked: asked.length, seen: seen[0] };
+        } finally {
+          stream.stop();
+        }
+      };
+      const both = await run(["035420", "VRT"]);
+      expect(both.seen).toEqual(["035420", "VRT"]);
+      expect(both.asked).toBeGreaterThan(2); // 늦추지 않고 계속
+      expect((await run(["035420"])).asked).toBe(1); // 한국 종목만이면 휴장 → 접속 직후 한 번 뒤로는 늦춘다
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

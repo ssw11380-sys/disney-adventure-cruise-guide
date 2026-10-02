@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { Api } from "@/api/client";
 import type { Analysis, AnalysisKind, FeatureFlags } from "@/api/types";
 import { featureOn } from "@/lib/features";
+import { sessionFor } from "@/lib/session";
 
 export interface AnalysisWait {
   phase: "idle" | "checking" | "generating" | "recovering" | "unknown";
@@ -43,6 +44,12 @@ export class AnalysisRecovery {
     for (const listener of this.listeners) listener();
   }
   private save(data: Analysis) { if (this.active()) this.qc.setQueryData(this.key(data.code, data.kind), data); }
+  /** 이전 본문을 보존할 뿐 완료로 처리하지 않는다. 다른 종목·종류나 더 오래된 본문은 쓰지 않는다. */
+  private preserve(code: string, kind: AnalysisKind, data: Analysis | null) {
+    if (!data || data.code !== code || data.kind !== kind) return;
+    const shown = this.qc.getQueryData<Analysis>(this.key(code, kind));
+    if (!shown || data.id > shown.id) this.save(data);
+  }
   private pause() {
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => { this.waits.delete(timer); resolve(); }, POLL_MS);
@@ -102,16 +109,14 @@ export class AnalysisRecovery {
         let requestSettled = false;
         const completedPeek = new Promise<Analysis>((resolve) => {
           void this.api.analysisState(code, kind, state.requestId).then((peek) => {
-            if (requestSettled || !this.active() || this.snapshot(code, kind).requestId !== state.requestId) return;
+            if (!this.active() || this.snapshot(code, kind).requestId !== state.requestId) return;
             const tracked = peek.request;
-            if (tracked && tracked.id === state.requestId && tracked.status === "completed" && tracked.result?.code === code && tracked.result.kind === kind) {
+            if (!requestSettled && tracked && tracked.id === state.requestId && tracked.status === "completed" && tracked.result?.code === code && tracked.result.kind === kind) {
               resolve(tracked.result);
               return;
             }
-            if (!peek.latest) return;
-            const shown = this.qc.getQueryData<Analysis>(this.key(code, kind));
-            // 늦게 도착한 보조 응답으로 더 최근의 본문을 되돌리지 않는다. ID 비교는 본문 보전에만 쓴다.
-            if (!shown || peek.latest.id > shown.id) this.save(peek.latest);
+            // 생성 실패 뒤 도착한 이전 본문도 남긴다. 성공·새 요청 뒤에는 위 요청 ID 검사에서 막힌다.
+            this.preserve(code, kind, peek.latest);
           }).catch(() => undefined);
         });
         try {
@@ -132,11 +137,14 @@ export class AnalysisRecovery {
       this.update(code, kind, state);
       const deadline = Date.now() + RECOVERY_MS;
       let errors = 0;
-      while (this.active() && Date.now() < deadline) {
+      while (this.active()) {
+        // 앱이 오래 가려져 타이머가 기한을 넘겼어도 마지막으로 한 번만 읽는다. 새 생성은 하지 않는다.
+        const finalCheck = Date.now() >= deadline;
         try {
           const next = await this.api.analysisState(code, kind, state.requestId);
           if (!this.active()) return;
           errors = 0;
+          this.preserve(code, kind, next.latest);
           const tracked = next.request;
           if (!tracked || tracked.id !== state.requestId) break;
           if (tracked.status === "completed" && tracked.result?.code === code && tracked.result.kind === kind) {
@@ -150,6 +158,8 @@ export class AnalysisRecovery {
           state = { ...state, requestError: state.requestError ?? (error instanceof Error ? error.message : "서버 상태를 확인하지 못했습니다") };
           if (++errors >= 3) break;
         }
+        // 읽는 동안 기한을 넘겼다면 방금 받은 응답이 마지막 확인이다. 기한 뒤 반복은 하지 않는다.
+        if (finalCheck || Date.now() >= deadline) break;
         await this.pause();
       }
       this.unknown(code, kind, state);
@@ -163,18 +173,20 @@ export class AnalysisRecovery {
   }
 }
 
-const scopes = new WeakMap<QueryClient, { apiUrl: string; credential: string; recovery: AnalysisRecovery }>();
+const scopes = new WeakMap<QueryClient, { apiUrl: string; credential: string; sessionIdentity: string; recovery: AnalysisRecovery }>();
 export function invalidateAnalysisRecoveryScope(qc: QueryClient, apiUrl: string, credential: string) {
   const old = scopes.get(qc);
-  if (old && (old.apiUrl !== apiUrl || old.credential !== credential)) old.recovery.dispose();
+  if (old && (old.apiUrl !== apiUrl || old.credential !== credential || old.sessionIdentity !== (sessionFor(apiUrl)?.token ?? ""))) old.recovery.dispose();
 }
 /** 서버·로그인 정보가 바뀌면 이전 요청은 현재 캐시에 쓰거나 추가 조회하지 못한다. */
-export function analysisRecoveryFor(qc: QueryClient, api: Api, apiUrl: string, credential: string) {
+export function analysisRecoveryFor(qc: QueryClient, api: Api, apiUrl: string, credential: string, sessionIdentity = sessionFor(apiUrl)?.token ?? "") {
   const old = scopes.get(qc);
-  if (old && old.apiUrl === apiUrl && old.credential === credential && !old.recovery.disposed) return old.recovery;
+  const sameScope = old?.apiUrl === apiUrl && old.credential === credential && old.sessionIdentity === sessionIdentity;
+  if (old && sameScope && !old.recovery.disposed) return old.recovery;
   old?.recovery.dispose();
-  const recovery = new AnalysisRecovery(qc, api, apiUrl, () => featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "analysisWaitRecovery", false));
-  if (old?.apiUrl === apiUrl && old.credential === credential) recovery.restore(old.recovery);
-  scopes.set(qc, { apiUrl, credential, recovery });
+  // 계정 정보(/me)만 갱신될 때는 계속 기다리고, 실제 세션이 바뀔 때만 멈춘다. 식별값은 캐시 키에 넣지 않는다.
+  const recovery = new AnalysisRecovery(qc, api, apiUrl, () => (sessionFor(apiUrl)?.token ?? "") === sessionIdentity && featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "analysisWaitRecovery", false));
+  if (old && sameScope) recovery.restore(old.recovery);
+  scopes.set(qc, { apiUrl, credential, sessionIdentity, recovery });
   return recovery;
 }

@@ -399,7 +399,7 @@ describe("윗줄+아랫줄 배치 (울트라 펼침 세로)", () => {
       const previews = r.all().filter((n) => n.type === "Text" && typeof n.props.numberOfLines === "number" && n.children.some((c) => typeof c === "string" && /첫째/.test(c)));
       expect(previews.map((n) => n.props.numberOfLines)).toEqual([foldDetail.previewCompanyLines, foldDetail.previewTechLines]);
       expect(r.text()).toContain("company 첫째 둘째");
-      expect(r.text()).toContain("9/25 09:00 기준");
+      expect(r.text()).toContain("생성 9/25 09:00");
       expect(r.all().some((n) => n.type === "MarkdownView")).toBe(false);
       r.act(() => (r.byLabel("AI 기업개요 더 보기").props.onPress as () => void)());
       expect(r.all().filter((n) => n.type === "MarkdownView")).toHaveLength(1);

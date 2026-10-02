@@ -6,6 +6,7 @@ import { useApi, useFeature, useNotificationMutations, useNotificationSettings, 
 import { digestSettingNote, quietWarnings } from "@/lib/briefingDigest";
 import { sessionSeconds } from "@/lib/briefingRun";
 import { briefingTrigger, disableLocalBriefingAlerts, enableLocalBriefingAlerts, isLocalModeEnabled, runBriefingCheck } from "@/lib/backgroundBriefings";
+import { useAccountView } from "@/lib/account";
 import { getStoredToken, PushSetupError, registerForPush, unregisterPush } from "@/lib/notifications";
 import { font, radius, slopFor, space, touch, useTheme } from "@/theme";
 import { Button, Card, Loading, Muted, Row, SectionTitle, Toggle } from "./ui";
@@ -19,8 +20,13 @@ import { Button, Card, Loading, Muted, Row, SectionTitle, Toggle } from "./ui";
  * - 3-19 서버부터: 조용한 시간(기본 22~07시), 종목별 알림 끄기. 브리핑 알림은 세션마다 1건으로 묶인다
  * - 테스트 알림
  */
+/** 자동 로그인을 끈 주인 세션: 서버가 이 기기로 푸시를 보내지 않는다 (검증 5차 — 앱을 닫으면 로그아웃되는 폰) */
+export const SHORT_SESSION_PUSH_NOTE = "자동 로그인을 끈 동안에는 이 기기로 알림이 오지 않아요. 로그인할 때 '자동 로그인'을 켜 두면 와요.";
+
 export function NotificationSettingsCard() {
   const t = useTheme();
+  const { session } = useAccountView();
+  const shortSession = !!session && !session.remember;
   const api = useApi();
   const settings = useNotificationSettings();
   const { updateSettings, sendTest } = useNotificationMutations();
@@ -155,6 +161,7 @@ export function NotificationSettingsCard() {
         <Toggle value={alertsOn} onValueChange={(v) => void toggleAlerts(v)} disabled={busy || !tokenLoaded} accessibilityLabel="브리핑 알림" />
       </View>
       {setupError ? <Text style={{ color: t.danger, fontSize: font.small }}>{setupError}</Text> : null}
+      {shortSession ? <Muted style={{ fontSize: font.small }}>{SHORT_SESSION_PUSH_NOTE}</Muted> : null}
       {localMode ? (
         <View style={{ gap: space.xs }}>
           <Pressable onPress={() => setShowGuide((v) => !v)} accessibilityRole="button" accessibilityLabel={showGuide ? "설정 방법 접기" : "즉시 푸시 설정 방법 (관리자용)"} accessibilityState={{ expanded: showGuide }} hitSlop={slopFor(font.small + space.xs)}>

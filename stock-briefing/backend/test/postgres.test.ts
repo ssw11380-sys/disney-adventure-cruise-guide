@@ -6,11 +6,14 @@ import { loadConfig } from "../src/config.js";
 import { createDb, migrate, type Db } from "../src/db/index.js";
 import { BACKUP_TABLES, BackupService, decodeBackup, restoreBackup } from "../src/services/backupService.js";
 import { FeatureService } from "../src/services/featureService.js";
+import { AccountBriefingService } from "../src/services/accountBriefingService.js";
+import { evaluate } from "../src/services/stockService.js";
+import { PromptStore } from "../src/llm/prompts.js";
 import { TradeRecordService } from "../src/services/tradeRecordService.js";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FakeGenerator, fakeProviders, SAMPLE_MASTER } from "./helpers.js";
+import { FakeGenerator, fakeProviders, makeQuote, SAMPLE_MASTER } from "./helpers.js";
 import { IndicatorScoreService } from "../src/services/indicatorScoreService.js";
 import { benchOf, candlesOf } from "./fixtures/indicatorScores/load.js";
 
@@ -322,5 +325,31 @@ describe.skipIf(!url)("postgres dialect", () => {
     expect((await db.selectFrom("account_snapshots").select("id").execute()).length).toBe(2);
     await db.deleteFrom("account_snapshots").execute();
     await db.deleteFrom("trade_executions").execute();
+  });
+
+  it("계좌 보고서의 실패 upsert는 기존 성공 행을 보존한다 (Postgres 조건부 충돌 처리)", async () => {
+    const at = new Date("2026-12-28T08:45:00+09:00");
+    const date = "2026-12-28";
+    let available = true;
+    const stock = { code: "005930", name: "삼성전자", market: "KOSPI" as const, quantity: 10, avgPrice: 90_000, memo: null, createdAt: at.toISOString(), updatedAt: at.toISOString() };
+    const svc = new AccountBriefingService({
+      db, indices: null, calendar: null, generator: new FakeGenerator(), prompts: new PromptStore(),
+      features: { enabled: async (key) => key === "accountBriefing" }, now: () => at,
+      stocks: { listWithFreshQuotes: async () => {
+        const quote = available ? makeQuote(stock.code, "가짜시세") : null;
+        return [{ ...stock, quote, evaluation: evaluate(stock, quote) }];
+      } },
+    });
+    try {
+      const old = await svc.generate("morning", { date, force: true });
+      expect(old?.status).toBe("ok");
+      available = false;
+      await expect(svc.generate("morning", { date, force: true })).rejects.toMatchObject({ code: "ACCOUNT_DATA_UNAVAILABLE" });
+      expect(await svc.find(date, "morning")).toEqual(old);
+      available = true;
+      expect((await svc.generate("morning", { date, force: true }))?.status).toBe("ok");
+    } finally {
+      await db.deleteFrom("account_briefings").where("briefing_date", "=", date).where("session", "=", "morning").execute();
+    }
   });
 });

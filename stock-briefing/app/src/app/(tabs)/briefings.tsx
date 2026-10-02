@@ -7,6 +7,8 @@ import type { AccountBriefing, BriefingSession, BriefingStatusProblem, LatestBri
 import { AccountBriefingBody } from "@/components/AccountBriefingBody";
 import { AccountBriefingCard, AccountBriefingRow } from "@/components/AccountBriefingCard";
 import { MarketSummaryBody } from "@/components/MarketSummaryBody";
+import { MemberNotice } from "@/components/MemberNotice";
+import { MEMBER_EMPTY_BRIEFINGS, useAccountView } from "@/lib/account";
 import { MarketSummaryCard, MarketSummaryRow } from "@/components/MarketSummaryCard";
 import { BriefingBody } from "@/components/BriefingBody";
 import { BriefingCard } from "@/components/BriefingCard";
@@ -104,6 +106,8 @@ export default function BriefingsScreen() {
   const ux = useUx();
   // 플래그가 꺼져 있으면 속성 자체를 넘기지 않는다 (지금 화면과 한 글자도 같게 — 스냅숏)
   const guideProps = useSettingsGuide();
+  // 계정 A단계 (플래그 accounts): 주인 아닌 계정 (꺼져 있으면 늘 false — 지금 화면 그대로)
+  const { member } = useAccountView();
   const rates = useMemo(() => new Map((stocks.data ?? []).map((s) => [s.code, s.quote?.changeRate ?? null] as const)), [stocks.data]);
   // 3-42 넓은 창: 플래그가 꺼져 있으면 on=false → 아래는 모두 지금 그대로
   const fold = useFoldLayout();
@@ -115,7 +119,13 @@ export default function BriefingsScreen() {
     if (wide) noteTabHeadHidden();
   }, [wide]);
   const headOptions = tabHeadOptions(fold.on, wide);
-  const head = headOptions ? <Tabs.Screen options={headOptions} /> : null;
+  // 계정 A단계: 주인 아닌 계정은 맨 위에 '개인 종목 기능은 준비 중' 안내 (주인·플래그 꺼짐이면 없음 — 지금과 같음)
+  const head = (
+    <>
+      {headOptions ? <Tabs.Screen options={headOptions} /> : null}
+      <MemberNotice />
+    </>
+  );
   // 접은 화면 '이어 보기' 스크롤 (넓은 창에서 보던 브리핑 줄로 한 번). 다시 펴면 다음에 접을 때 또 맞춘다
   const scrollRef = useRef<ScrollView | null>(null);
   const scrolledTo = useRef<number | null>(null);
@@ -219,8 +229,9 @@ export default function BriefingsScreen() {
     if (twoPaneNow) chooseBriefing({ kind: "stock", id: p.briefingId, code: p.code });
     else router.push(`/briefings/${p.briefingId}`);
   };
-  // 브리핑이 하나도 없으면(emptyGuide) 안내는 '수동 생성' 대신 빈 화면의 '지금 만들기'를 가리킨다
-  const banner = statusOn ? <BriefingStatusSlot fallback={oldBanner} onOpen={openProblem} role={twoPaneNow ? "button" : "link"} refetchRef={statusRefetch} nowButton={guideNoBriefing} /> : oldBanner;
+  // 브리핑이 하나도 없으면(emptyGuide) 안내는 '수동 생성' 대신 빈 화면의 '지금 만들기'를 가리킨다.
+  // 계정 A단계: 주인 아닌 계정은 늦음·실패 안내를 그리지 않고 상태도 묻지 않는다 (주인 브리핑 실행 상태 — 서버도 403. 맨 위 차분한 안내만)
+  const banner = member ? null : statusOn ? <BriefingStatusSlot fallback={oldBanner} onOpen={openProblem} role={twoPaneNow ? "button" : "link"} refetchRef={statusRefetch} nowButton={guideNoBriefing} /> : oldBanner;
   // 실패 브리핑 카드·줄 글을 쉬운 말로 (꺼지면 속성을 넘기지 않아 지금과 같다)
   const plainFail = statusOn ? { plainFail: true } : {};
   const ratesFailText = moversOn && order === "movers" && stocks.isError ? "등락률을 불러오지 못해 등록순으로 보여 줍니다 · 당겨서 다시 시도" : null;
@@ -239,8 +250,12 @@ export default function BriefingsScreen() {
       <Muted style={{ paddingHorizontal: space.lg }}>브리핑 없음: {items.filter((i) => !i.latest).map((i) => i.name).join(", ")}</Muted>
     ) : null;
 
-  // 3-24 빈 목록 (플래그 emptyGuide): 무엇을 하면 되는지 한 문장 + 버튼 하나. 꺼져 있으면 아래 예전 안내 그대로
-  const guideEmpty = ux.emptyGuide
+  // 3-24 빈 목록 (플래그 emptyGuide): 무엇을 하면 되는지 한 문장 + 버튼 하나. 꺼져 있으면 아래 예전 안내 그대로.
+  // 계정 A단계: 주인 아닌 계정은 종목을 아직 추가할 수 없으므로(서버가 막는다) '종목을 추가하면…'·[종목 검색] 대신 차분한 안내만 (버튼 없음)
+  const memberEmpty = member ? <Empty title={MEMBER_EMPTY_BRIEFINGS.title} hint={MEMBER_EMPTY_BRIEFINGS.hint} /> : null;
+  const guideEmpty = memberEmpty
+    ? { none: memberEmpty, noBriefing: memberEmpty }
+    : ux.emptyGuide
     ? {
         none: <Empty title="등록된 종목이 없습니다" hint="종목을 추가하면 평일 장 시작 전·마감 뒤에 종목마다 브리핑이 만들어집니다." action={<Button title="종목 검색" icon="search" onPress={() => router.push("/stocks/add")} />} />,
         noBriefing: (

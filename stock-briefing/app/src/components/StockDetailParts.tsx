@@ -7,6 +7,7 @@ import type { AnalysisKind, Briefing, Disclosure, NewsItem } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { FlashPrice } from "@/components/FlashPrice";
 import { MarkdownView } from "@/components/MarkdownView";
+import { ReportVerificationNotice } from "@/components/ReportVerification";
 import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } from "@/components/ui";
 import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
@@ -80,11 +81,12 @@ function LegacyAnalysisTab({ code, kind, requested, onRequest }: { code: string;
           {refreshError}
         </Text>
       ) : null}
+      <ReportVerificationNotice verification={d.verification} />
       <MarkdownView>{d.content}</MarkdownView>
       {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
         <Muted>
-          {formatDateKo(d.createdAt, true)} 기준
+          보고서 생성 {formatDateKo(d.createdAt, true)}
         </Muted>
         <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
       </View>
@@ -94,7 +96,7 @@ function LegacyAnalysisTab({ code, kind, requested, onRequest }: { code: string;
 
 /**
  * 윗줄+아랫줄 배치(울트라 펼침 세로) 오른쪽 칸의 AI 분석 미리보기 — 설계 목업처럼 탭 없이 여러 분석을 함께 둔다.
- *  - 제목 줄: 제목 · 기준 시각 · '더 보기'. lines 줄만 보이고, '더 보기'를 누르면 그 자리에서 전체 분석(갱신 버튼 포함)을 펼친다
+ *  - 제목 줄: 제목 · 생성 시각 · '더 보기'. lines 줄만 보이고, '더 보기'를 누르면 그 자리에서 전체 분석(갱신 버튼 포함)을 펼친다
  *  - lines = 0 이면 제목 줄만 둔다 (가치분석). 펼칠 때 처음 받는다 — 접힌 동안에는 서버에 묻지 않는다
  *  - 미등록 종목(아직 만들지 않음)은 '만들기' 버튼, 불러오는 중·오류는 휴대폰 AI 분석 탭과 같은 안내
  */
@@ -125,7 +127,7 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
   const d = state === "ready" ? a.data : undefined;
   return (
     <View style={{ gap: space.xs }}>
-      <PaneTitle title={title} note={d ? `${shortStamp(d.createdAt)} 기준` : null} action={d || lines === null ? toggle : null} />
+      <PaneTitle title={title} note={d ? `생성 ${shortStamp(d.createdAt)}` : null} action={d || lines === null ? toggle : null} />
       {state === "ask" ? (
         <View style={styles.askRow}>
           <Muted>관심 종목이 아니라 미리 만들지 않았습니다.</Muted>
@@ -142,6 +144,7 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
               {refreshError}
             </Text>
           ) : null}
+          <ReportVerificationNotice verification={d.verification} />
           {lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>
               {markdownPreview(d.content)}
@@ -150,8 +153,8 @@ function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, to
             <>
               <MarkdownView>{d.content}</MarkdownView>
               {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                <Muted>{formatDateKo(d.createdAt, true)} 기준</Muted>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
+                <Muted>보고서 생성 {formatDateKo(d.createdAt, true)}</Muted>
                 <Button title={refreshError ? "다시 시도" : "갱신"} variant="secondary" icon="refresh" compact onPress={() => refreshAnalysis.mutate({ code, kind })} />
               </View>
             </>
@@ -174,7 +177,7 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
   const unknown = a.wait.phase === "unknown";
   return (
     <View style={{ gap: space.xs }}>
-      {title ? <PaneTitle title={title} note={d ? `${shortStamp(d.createdAt)} 기준` : null} action={d || lines === null ? toggle : null} /> : null}
+      {title ? <PaneTitle title={title} note={d ? `생성 ${shortStamp(d.createdAt)}` : null} action={d || lines === null ? toggle : null} /> : null}
       {ask ? (
         <View style={{ gap: space.xs }}>
           <Muted>관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.</Muted>
@@ -194,6 +197,7 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
               </View>
             </View>
           ) : !d ? <Loading label="저장된 분석 확인 중" /> : null}
+          {d ? <ReportVerificationNotice verification={d.verification} /> : null}
           {d ? lines !== null ? (
             <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>{markdownPreview(d.content)}</Text>
           ) : (
@@ -201,7 +205,7 @@ function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = nul
               <MarkdownView>{d.content}</MarkdownView>
               {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
               <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
-                <Muted>{formatDateKo(d.createdAt, true)} 기준</Muted>
+                <Muted>보고서 생성 {formatDateKo(d.createdAt, true)}</Muted>
                 {!unknown ? <Button title={a.busy ? "처리 중" : "갱신"} variant="secondary" icon="refresh" compact disabled={a.busy} onPress={a.refresh} /> : null}
               </View>
             </>
@@ -666,8 +670,10 @@ export function barStarText(star: BarStar): string {
  * 버튼 높이 44 (oneHand.barButtonH), 고지 바로 위.
  * 가격 알림(3-29, 플래그 priceAlerts · 등록 종목만): alert 가 있으면 가운데에 [종 알림 n] (내용 폭, 좁으면 종 아이콘만 — lib/detailLayout alertBarLabel). 없으면 지금 두 버튼 그대로
  */
-export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarStar; onStar: () => void; onChart: () => void; alert?: { count: number; label: boolean; onPress: () => void } }) {
+export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarStar | null; onStar: () => void; onChart: () => void; alert?: { count: number; label: boolean; onPress: () => void } }) {
   const t = useTheme();
+  // star 가 없으면(주인 아닌 계정의 미등록 종목 — 계정 A단계) 왼쪽 버튼 없이 [차트 크게]만
+  if (!star) return <View style={[styles.bar, { backgroundColor: t.surface, borderTopColor: t.line }]}>{chartButton(t, onChart)}</View>;
   const starText = barStarText(star);
   const starA11y = star.kind === "watch" ? "관심 종목에 추가" : star.kind === "unwatch" ? `관심 종목에서 빼기, ${star.label}` : "보유 정보 수정";
   const starIcon: keyof typeof Ionicons.glyphMap = star.kind === "watch" ? "star-outline" : star.kind === "unwatch" ? "star" : "create-outline";
@@ -705,18 +711,25 @@ export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarSta
           ) : null}
         </Pressable>
       ) : null}
-      <Pressable
-        onPress={onChart}
-        accessibilityRole="button"
-        accessibilityLabel="차트 전체 화면"
-        style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
-      >
-        <Ionicons name="expand-outline" size={font.title} color={t.ink} />
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
-          차트 크게
-        </Text>
-      </Pressable>
+      {chartButton(t, onChart)}
     </View>
+  );
+}
+
+/** 아래 막대 오른쪽 [차트 크게] */
+function chartButton(t: ReturnType<typeof useTheme>, onChart: () => void) {
+  return (
+    <Pressable
+      onPress={onChart}
+      accessibilityRole="button"
+      accessibilityLabel="차트 전체 화면"
+      style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
+    >
+      <Ionicons name="expand-outline" size={font.title} color={t.ink} />
+      <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
+        차트 크게
+      </Text>
+    </Pressable>
   );
 }
 

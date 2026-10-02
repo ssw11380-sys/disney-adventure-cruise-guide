@@ -1,7 +1,39 @@
 import { Platform } from "react-native";
 import type { WidgetInfo } from "react-native-android-widget";
-import { readPnlMode, type WidgetData } from "./data";
+import { clearWidgetAccountData, readPnlMode, signedOutWidgetData, type WidgetData } from "./data";
 import { fontScaleNow } from "./fontScale";
+import { assertSessionIdentity, sessionIdentityVersion } from "@/lib/session";
+
+/** 계정 변경의 빈 그림은 기기 저장 정리를 기다리지 않는다. 늦은 빈 그림도 다음 로그인 뒤에는 버린다. */
+export function resetWidgetsForAccountChange(): void {
+  const identity = sessionIdentityVersion();
+  void clearWidgetAccountData();
+  if (Platform.OS !== "android") return;
+  void (async () => {
+    try {
+      const [{ getWidgetInfo, requestWidgetUpdateById }, { renderFor }, { WIDGET_NAMES }] = await Promise.all([import("react-native-android-widget"), import("./render"), import("./widgets")]);
+      const now = Date.now();
+      const data = signedOutWidgetData(now);
+      const fontScale = fontScaleNow();
+      for (const name of [WIDGET_NAMES.holdings, WIDGET_NAMES.asset, WIDGET_NAMES.briefing, WIDGET_NAMES.market]) {
+        assertSessionIdentity(identity);
+        const infos = await getWidgetInfo(name);
+        assertSessionIdentity(identity);
+        for (const info of infos) {
+          // ById는 비동기 renderWidget을 기다리므로 세대 변경 오류도 아래 catch로 회수된다.
+          await requestWidgetUpdateById({ widgetName: name, widgetId: info.widgetId, renderWidget: async (box) => {
+            assertSessionIdentity(identity);
+            const rendered = await renderFor(name, data, box, { fontScale, now, pnlMode: "cumulative" });
+            assertSessionIdentity(identity);
+            return rendered;
+          } });
+        }
+      }
+    } catch {
+      /* 계정이 바뀌었거나 위젯 모듈을 쓸 수 없으면 다음 계정의 그림에 맡긴다. */
+    }
+  })();
+}
 
 /**
  * 서버를 부르지 않고 주어진 데이터로 위젯 4종(잔고·자산·브리핑·지수·환율)을 다시 그린다 (위젯 리뷰 6).

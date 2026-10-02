@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   stocks: undefined as unknown,
   setSort: vi.fn(),
   push: vi.fn(),
+  navigate: vi.fn(),
 }));
 
 vi.mock("react-native", () => ({
@@ -36,7 +37,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 48, left: 0, right: 0 }) }));
 vi.mock("@expo/vector-icons/Ionicons", () => ({ default: "Ionicons" }));
-vi.mock("expo-router", () => ({ router: { push: h.push, navigate: vi.fn(), dismissTo: vi.fn(), canDismiss: () => false }, usePathname: () => "/" }));
+vi.mock("expo-router", () => ({ router: { push: h.push, navigate: h.navigate, dismissTo: vi.fn(), canDismiss: () => false }, usePathname: () => "/" }));
 vi.mock("@/theme", async () => {
   const tokens = await import("@/tokens");
   return { ...tokens, useTheme: () => tokens.dark, useFontScale: (cap = Infinity) => Math.min(Math.max(h.win.fontScale || 1, 1), cap) };
@@ -382,5 +383,32 @@ describe("켬", () => {
     const panel = panelOf(draw());
     expect(textIn(panel)).toContain("제외");
     expect(textIn(thirdLine(panel))).toBe(THIRD);
+  });
+});
+
+describe("계정 A단계: 주인 아닌 계정의 빈 잔고 (검증 4차)", () => {
+  it("차분한 안내 한 칸 + [시장·종목 둘러보기] 하나 → 발견 탭 (종목 검색·계좌 불러오기 버튼 없음), 주인은 그대로", async () => {
+    const { resetSessionForTests, saveSession } = await import("@/lib/session");
+    const { MEMBER_EMPTY_HOLDINGS } = await import("@/lib/account");
+    h.flags = { accounts: true, emptyGuide: true };
+    h.stocks = [];
+    h.navigate.mockReset();
+    await saveSession({ apiUrl: "https://prod.test", token: "gzs1_m", remember: true, user: { id: 7, loginId: "newbie", email: null, isOwner: false, usingInitialPassword: false } });
+    try {
+      const r = draw();
+      const text = r.text();
+      expect(text).toContain(MEMBER_EMPTY_HOLDINGS.title);
+      expect(text).toContain(MEMBER_EMPTY_HOLDINGS.hint);
+      expect(text).not.toContain("등록된 종목이 없습니다");
+      const buttons = r.all().filter((n) => n.type === "Button" || n.type === "TossImportButton");
+      expect(buttons.map((b) => b.props.title)).toEqual(["시장·종목 둘러보기"]);
+      (buttons[0]!.props.onPress as () => void)();
+      expect(h.navigate).toHaveBeenCalledWith("/discover");
+      // 주인(세션 없음 — 계정 전과 같음)은 예전 빈 칸 그대로
+      resetSessionForTests();
+      expect(draw().text()).toContain("등록된 종목이 없습니다");
+    } finally {
+      resetSessionForTests();
+    }
   });
 });

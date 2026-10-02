@@ -1,7 +1,8 @@
 import { isIntraday, type Candle, type CandlePeriod, type CandleSeries, type Quote } from "../../domain/types.js";
-import { ProviderError } from "../../lib/errors.js";
+import { isTimeoutError, ProviderError } from "../../lib/errors.js";
 import { isKrCode } from "../../lib/codes.js";
 import { seoulDateCompact, seoulDateCompactDaysAgo, seoulIso } from "../../lib/time.js";
+import { fetchWithTimeout } from "../../lib/timedFetch.js";
 import type { InvestorFlowDay, InvestorFlowProvider } from "./investorFlow.js";
 import type { FetchFn, QuoteProvider } from "./types.js";
 
@@ -10,6 +11,7 @@ import type { FetchFn, QuoteProvider } from "./types.js";
  * - 접근토큰(POST /oauth2/tokenP)은 24시간 유효, 발급 제한이 있어 메모리에 캐시한다.
  * - 현재가:   GET /uapi/domestic-stock/v1/quotations/inquire-price           (tr_id FHKST01010100)
  * - 기간별봉: GET /uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice (tr_id FHKST03010100, 최대 100건/호출)
+ * - 각 HTTP 요청은 다른 시세 출처와 같은 10초 제한(연결·본문 포함). 토큰 발급·각 봉 페이지는 별도 요청이다.
  * 실계좌 서버는 초당 20건 제한. 스케줄러에서 여러 종목을 돌릴 때는 순차 호출한다.
  */
 
@@ -64,7 +66,7 @@ export class KisProvider implements QuoteProvider, InvestorFlowProvider {
     this.tokenPromise = (async () => {
       let res: Response;
       try {
-        res = await this.fetchFn(`${this.baseUrl}/oauth2/tokenP`, {
+        res = await fetchWithTimeout(this.fetchFn, `${this.baseUrl}/oauth2/tokenP`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -74,7 +76,7 @@ export class KisProvider implements QuoteProvider, InvestorFlowProvider {
           }),
         });
       } catch (e) {
-        throw new ProviderError(this.name, "토큰 발급 네트워크 오류", e);
+        throw new ProviderError(this.name, `토큰 발급 ${isTimeoutError(e) ? "응답 시간 초과" : "네트워크 오류"}`, e);
       }
       if (!res.ok) throw new ProviderError(this.name, `토큰 발급 실패 HTTP ${res.status}: ${await res.text()}`);
       const json = (await res.json()) as { access_token?: string; expires_in?: number };
@@ -93,7 +95,14 @@ export class KisProvider implements QuoteProvider, InvestorFlowProvider {
     const url = `${this.baseUrl}${path}?${new URLSearchParams(query).toString()}`;
     let res: Response;
     try {
-      res = await this.fetchFn(url, {
+      res = await fetchWithTimeout(async (input, init) => {
+        const response = await this.fetchFn(input, init);
+        // 본문이 멈춰도 인증 실패는 헤더에서 반영한다. 이미 끝난 요청의 늦은 응답은 새 토큰을 건드리지 않는다.
+        if (!init?.signal?.aborted && (response.status === 401 || response.status === 403) && this.token?.value === token) {
+          this.token = null;
+        }
+        return response;
+      }, url, {
         headers: {
           "content-type": "application/json; charset=utf-8",
           authorization: `Bearer ${token}`,
@@ -104,9 +113,8 @@ export class KisProvider implements QuoteProvider, InvestorFlowProvider {
         },
       });
     } catch (e) {
-      throw new ProviderError(this.name, `네트워크 오류: ${path}`, e);
+      throw new ProviderError(this.name, `${isTimeoutError(e) ? "응답 시간 초과" : "네트워크 오류"}: ${path}`, e);
     }
-    if (res.status === 401 || res.status === 403) this.token = null; // 다음 호출에서 재발급
     if (!res.ok) throw new ProviderError(this.name, `HTTP ${res.status}: ${path} ${await res.text()}`);
     const json = (await res.json()) as { rt_cd?: string; msg_cd?: string; msg1?: string } & T;
     if (json.rt_cd !== undefined && json.rt_cd !== "0") {

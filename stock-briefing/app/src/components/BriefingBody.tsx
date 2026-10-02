@@ -7,6 +7,7 @@ import type { BriefingWithData } from "@/api/types";
 import { Pills } from "@/components/BriefingList";
 import { BriefingSources } from "@/components/BriefingSources";
 import { StaleBanner } from "@/components/Freshness";
+import { ReportVerificationNotice } from "@/components/ReportVerification";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
@@ -200,6 +201,7 @@ export function BriefingBody({
               onChange={setMode}
             />
             <Card>
+              <ReportVerificationNotice verification={d.verification} />
               {text}
               {missing}
             </Card>
@@ -238,6 +240,7 @@ export function BriefingBody({
   const headingFirst = mode === "detail" && HEADING_FIRST.test(d.detail);
   const bodyText = failed ? failedCard : (
     <View style={[styles.text, headingFirst && styles.textFlush]}>
+      <ReportVerificationNotice verification={d.verification} />
       {text}
       {missing}
     </View>
@@ -270,10 +273,10 @@ export function BriefingBody({
     );
   }
 
-  // 브리핑 탭 2단의 오른쪽 칸 (끊김·지연 띠는 탭 위쪽에 한 번만 — 브리핑 본문은 만든 뒤 바뀌지 않는다).
+  // 브리핑 탭 2단의 오른쪽 칸. 목록 조회와 별개로 이 본문을 다시 받지 못한 경우도 알린다.
   // 머리·도구 줄·본문은 한 묶음 (화면 간격 없이 목업처럼 붙인다)
   return (
-    <Screen disclaimer scrollRef={scrollRef}>
+    <Screen disclaimer scrollRef={scrollRef} top={<StaleBanner query={b} {...guide} />}>
       <View>
         <Head d={d} ai={ai} />
         {toolbar}

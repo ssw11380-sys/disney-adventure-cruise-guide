@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   setKrwCost: vi.fn(),
   back: vi.fn(),
   alert: vi.fn(),
+  /** 서버 플래그 accounts (계정 A단계) */
+  accounts: false,
 }));
 
 vi.mock("react-native", async () => {
@@ -74,6 +76,8 @@ vi.mock("@/components/StockLine", async () => {
 });
 vi.mock("@/api/hooks", () => ({
   useApi: () => ({ setKrwCost: h.setKrwCost }),
+  // 계정 A단계: 검색 화면이 주인 아닌 계정인지 본다 (플래그 accounts — 여기서는 꺼짐 = 지금 화면 그대로)
+  useFeature: (key: string, fallback = false) => (key === "accounts" ? h.accounts : fallback),
   useStock: (code: string) => {
     h.stockCodes.push(code);
     return { data: code ? h.stock : undefined, isError: false, error: null, refetch: vi.fn() };
@@ -94,6 +98,7 @@ vi.mock("@/api/hooks", () => ({
 const { default: AddStockScreen } = await import("@/app/stocks/add");
 const { default: EditStockScreen } = await import("@/app/stocks/[code]/edit");
 const { ApiRequestError } = await import("@/api/client");
+const { resetSessionForTests, saveSession } = await import("@/lib/session");
 
 type Screen = ReturnType<typeof render>;
 const typeIn = (r: Screen, label: string, v: string) => r.act(() => (r.byLabel(label).props.onChangeText as (v: string) => void)(v));
@@ -116,7 +121,27 @@ beforeEach(() => {
   h.recent = [TESLA];
   for (const f of [h.register, h.update, h.remove, h.setKrwCost, h.back, h.alert]) f.mockReset();
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  h.accounts = false;
+  resetSessionForTests();
+});
+
+describe("종목 검색 — 주인 아닌 계정 (계정 A단계)", () => {
+  it("'등록' 칸 없이 검색·상세 보기만 (서버가 막는 등록 양식을 열지 않는다). 주인은 그대로", async () => {
+    h.accounts = true;
+    await saveSession({ apiUrl: "https://server.test", token: "gzs1_m", remember: true, user: { id: 7, loginId: "newbie", email: "n@example.com", isOwner: false, usingInitialPassword: false } });
+    const r = render(<AddStockScreen />);
+    typeIn(r, "종목 검색", "삼성");
+    r.act(() => vi.advanceTimersByTime(150));
+    expect(r.has("삼성전자 등록")).toBe(false);
+    // 줄은 그대로 있다 (누르면 상세)
+    expect(r.all().filter((n) => n.type === "StockLine" && n.props.name === "삼성전자")).toHaveLength(1);
+    await saveSession({ apiUrl: "https://server.test", token: "gzs1_o", remember: true, user: { id: 1, loginId: "서성원", email: null, isOwner: true, usingInitialPassword: false } });
+    r.rerender();
+    expect(r.has("삼성전자 등록")).toBe(true);
+  });
+});
 
 describe("PF-06: 종목 등록 양식 — 다른 종목을 고르면 수량·평단을 비운다", () => {
   const open = () => render(<AddStockScreen />);
