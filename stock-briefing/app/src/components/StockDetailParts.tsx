@@ -2,7 +2,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { useEffect, useState } from "react";
 import { Animated, Linking, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useAnalysis, useFeature, useStockMutations, useStockNews } from "@/api/hooks";
+import { useAnalysis, useAnalysisRecovery, useFeature, useStockMutations, useStockNews } from "@/api/hooks";
 import type { AnalysisKind, Briefing, Disclosure, NewsItem } from "@/api/types";
 import { BriefingCard } from "@/components/BriefingCard";
 import { FlashPrice } from "@/components/FlashPrice";
@@ -11,6 +11,9 @@ import { Button, Card, ErrorView, LiveDot, Loading, Muted, SectionTitle, Stat } 
 import { chunkRows, detailHeaderLayout, fillChartHeight, HEAD_PAD, headPriceParts, headTitleMaxWidth, markdownPreview, shortStamp } from "@/lib/detailLayout";
 import { formatDateKo, relativeTime } from "@/lib/format";
 import { analysisView } from "@/lib/freshness";
+import { gated } from "@/lib/features";
+import type { AnalysisWait } from "@/lib/analysisRecovery";
+import { useNow } from "@/lib/useNow";
 import { navLabel, navSpeech, type HoldingsNav } from "@/lib/holdingsNav";
 import { alertButtonA11y, alertButtonText } from "@/lib/priceAlerts";
 import { font, fontCap, radius, slopFor, space, touch, useTheme } from "@/theme";
@@ -49,6 +52,12 @@ export function Range52({ range, low, high, color, compact = false }: { range: n
  * 이미 받아 둔 분석(캐시)이 있으면 누르지 않아도 보여 준다.
  */
 export function AnalysisTab({ code, kind, requested, onRequest }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void }) {
+  const recovery = gated(useFeature("analysisWaitRecovery", false), true);
+  if (recovery) return <Card><AnalysisWaitBody code={code} kind={kind} requested={requested} onRequest={onRequest} /></Card>;
+  return <LegacyAnalysisTab code={code} kind={kind} requested={requested} onRequest={onRequest} />;
+}
+
+function LegacyAnalysisTab({ code, kind, requested, onRequest }: { code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void }) {
   const t = useTheme();
   const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
@@ -103,6 +112,12 @@ export function AnalysisPreview({ code, kind, title, lines, requested, onRequest
 
 /** AnalysisPreview 의 내용 (받은 분석이 있을 때만 '더 보기'를 둔다). lines = null 이면 전체 */
 function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }: { code: string; kind: AnalysisKind; title: string; lines: number | null; requested: boolean; onRequest: (kind: AnalysisKind) => void; toggle: React.ReactNode }) {
+  const recovery = gated(useFeature("analysisWaitRecovery", false), true);
+  if (recovery) return <AnalysisWaitBody code={code} kind={kind} title={title} lines={lines} requested={requested} onRequest={onRequest} toggle={toggle} />;
+  return <LegacyAnalysisPeek code={code} kind={kind} title={title} lines={lines} requested={requested} onRequest={onRequest} toggle={toggle} />;
+}
+
+function LegacyAnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }: { code: string; kind: AnalysisKind; title: string; lines: number | null; requested: boolean; onRequest: (kind: AnalysisKind) => void; toggle: React.ReactNode }) {
   const t = useTheme();
   const a = useAnalysis(code, kind, requested);
   const { refreshAnalysis } = useStockMutations();
@@ -143,6 +158,68 @@ function AnalysisPeek({ code, kind, title, lines, requested, onRequest, toggle }
           )}
         </>
       )}
+    </View>
+  );
+}
+
+/** 진행 상태는 본문 위에 따로 둔다. 시간 초과 뒤의 확인 버튼은 읽기 요청만 한다. */
+function AnalysisWaitBody({ code, kind, requested, onRequest, title, lines = null, toggle }: {
+  code: string; kind: AnalysisKind; requested: boolean; onRequest: (kind: AnalysisKind) => void;
+  title?: string; lines?: number | null; toggle?: React.ReactNode;
+}) {
+  const t = useTheme();
+  const a = useAnalysisRecovery(code, kind, requested);
+  const d = a.data;
+  const ask = !requested && !d && a.wait.phase === "idle";
+  const unknown = a.wait.phase === "unknown";
+  return (
+    <View style={{ gap: space.xs }}>
+      {title ? <PaneTitle title={title} note={d ? `${shortStamp(d.createdAt)} 기준` : null} action={d || lines === null ? toggle : null} /> : null}
+      {ask ? (
+        <View style={{ gap: space.xs }}>
+          <Muted>관심 종목이 아니라 AI 분석을 미리 만들지 않았습니다.</Muted>
+          <Button title="AI 분석 만들기" icon="sparkles" onPress={() => onRequest(kind)} />
+        </View>
+      ) : (
+        <>
+          {a.busy ? (
+            <AnalysisWaitProgress wait={a.wait} previous={!!d} />
+          ) : unknown ? (
+            <View style={{ gap: space.xs }}>
+              <Text style={{ color: t.danger, fontSize: font.small }} accessibilityRole="alert" accessibilityLiveRegion="polite">{a.wait.message}</Text>
+              {d ? <Muted>이전 분석을 보여 주는 중입니다.</Muted> : null}
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
+                <Button title="결과 확인" variant="secondary" compact icon="refresh" onPress={a.check} />
+                <Button title="다시 만들기" variant="secondary" compact onPress={a.refresh} />
+              </View>
+            </View>
+          ) : !d ? <Loading label="저장된 분석 확인 중" /> : null}
+          {d ? lines !== null ? (
+            <Text style={{ color: t.ink, fontSize: font.body, lineHeight: foldDetail.previewLineH }} numberOfLines={lines}>{markdownPreview(d.content)}</Text>
+          ) : (
+            <>
+              <MarkdownView>{d.content}</MarkdownView>
+              {d.missing.length ? <Muted>데이터 미확인: {d.missing.join(", ")}</Muted> : null}
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.xs }}>
+                <Muted>{formatDateKo(d.createdAt, true)} 기준</Muted>
+                {!unknown ? <Button title={a.busy ? "처리 중" : "갱신"} variant="secondary" icon="refresh" compact disabled={a.busy} onPress={a.refresh} /> : null}
+              </View>
+            </>
+          ) : null}
+        </>
+      )}
+    </View>
+  );
+}
+
+function AnalysisWaitProgress({ wait, previous }: { wait: AnalysisWait; previous: boolean }) {
+  const now = useNow(1_000);
+  const elapsed = Math.max(0, Math.floor((now - wait.startedAt) / 1_000));
+  const waiting = wait.phase === "checking" ? "저장된 분석 확인 중" : wait.phase === "recovering" ? "서버의 완료 결과 확인 중" : "분석 처리 중";
+  return (
+    <View style={{ gap: space.xxs }} accessibilityLiveRegion="none">
+      <Loading label={`${waiting} · ${elapsed}초 경과`} />
+      <Muted>{previous ? "이전 분석을 보여 주는 중입니다. " : ""}처리가 길어질 수 있습니다. 화면을 이동해도 서버 처리는 계속됩니다.</Muted>
     </View>
   );
 }

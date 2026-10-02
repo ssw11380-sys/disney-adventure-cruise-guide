@@ -230,6 +230,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     db: opts.db, collector, generator: opts.providers.generator, prompts, calendar: opts.providers.calendar, log, now,
     // 브리핑 2차 6: 종목 브리핑 AI 글 안전하게 (새 프롬프트·가격 줄 요약·금지어 검사)
     safeWording: () => features.enabled("briefingSafeWording"),
+    parallel: () => features.enabled("briefingParallel"),
   });
   const analysisService = new AnalysisService({ db: opts.db, collector, generator: opts.providers.generator, prompts, lookup: (code) => stockService.preview(code), now });
 
@@ -527,6 +528,7 @@ ${protectedApi ? "" : `<p class="warn">주의: API 토큰(API_TOKEN)이 설정�
   await app.register(analysisRoutes, {
     prefix: "/api/stocks",
     service: analysisService,
+    features,
     stocks: stockService,
     news: opts.providers.news,
     financials: opts.providers.financials,

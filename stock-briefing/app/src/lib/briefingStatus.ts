@@ -1,4 +1,4 @@
-import type { BriefingFailureKind, BriefingReasonKind, BriefingStatus, BriefingStatusProblem } from "@/api/types";
+import type { BriefingActiveRun, BriefingFailureKind, BriefingReasonKind, BriefingStatus, BriefingStatusProblem } from "@/api/types";
 import { sentence, speakClock } from "./a11y";
 
 /**
@@ -83,8 +83,8 @@ function speakWhen(iso: string | null, now: number): string | null {
 
 /** 안내 한 덩어리 (문제가 없으면 statusView 가 null) */
 export interface StatusView {
-  /** 왼쪽 막대 색: 모두 못 만듦·모델 없음만 danger */
-  tone: "warn" | "danger";
+  /** 왼쪽 막대 색: 모두 못 만듦·모델 없음은 danger, 현재 실행은 progress */
+  tone: "warn" | "danger" | "progress";
   /** 첫 줄 (본문 굵게) */
   title: string;
   /** 누르는 이름 (5개까지, 등록순) */
@@ -103,6 +103,40 @@ export interface StatusView {
 
 /** 이름을 보이는 최대 개수 */
 export const NAMES_MAX = 5;
+
+/** 현재 실행 안내. 처리 수에는 실패·건너뜀도 들어가므로 만든 수나 성공률로 표현하지 않는다 */
+export function progressView(run: BriefingActiveRun | null | undefined, now: number, opts: { slow?: boolean; unconfirmed?: boolean; lastCheckedAt?: number } = {}): StatusView | null {
+  if (!run) return null;
+  const session = run.session === "afternoon" ? "오후" : "오전";
+  const preparing = run.total === 0;
+  const finishing = !preparing && run.done >= run.total;
+  const slow = opts.slow || now - Date.parse(run.startedAt) > 20 * 60_000;
+  const phase = preparing ? "준비하는" : finishing ? "마무리하는" : "만드는";
+  const title = opts.unconfirmed ? "브리핑 진행 상태를 확인하지 못했습니다" : `${session} 브리핑을 ${slow ? "아직 " : ""}${phase} 중입니다`;
+  const count = `${run.total}종목 중 ${run.done}종목 처리`;
+  const line = opts.unconfirmed
+    ? `마지막 확인 상태: ${preparing ? "준비 중" : finishing ? `마무리 중 · ${count}` : count}`
+    : preparing ? "대상 종목을 확인하고 있습니다" : count;
+  const trigger = run.trigger === "manual" ? "수동 실행" : "예약 실행";
+  const scope = run.partial ? "일부 종목" : "전체 종목";
+  const started = kstClock(run.startedAt);
+  const lastChecked = opts.lastCheckedAt && Number.isFinite(opts.lastCheckedAt) ? kstClock(new Date(opts.lastCheckedAt).toISOString()) : null;
+  const notes = [
+    opts.unconfirmed ? "표시된 진행 정보가 현재 상태와 다를 수 있습니다." : slow ? "평소보다 오래 걸리고 있습니다." : null,
+    preparing ? null : "처리 수에는 실패하거나 건너뛴 종목도 포함됩니다.",
+  ].filter((part): part is string => !!part);
+  const note = notes.length ? notes.join(" ") : null;
+  return {
+    tone: opts.unconfirmed || slow ? "warn" : "progress",
+    title,
+    names: [],
+    more: 0,
+    line,
+    small: { parts: [run.date, trigger, scope, ...(started ? [`시작 ${started}`] : []), ...(opts.unconfirmed && lastChecked ? [`마지막 확인 ${lastChecked}`] : [])], note },
+    speech: sentence(["브리핑 진행", title, line, run.date, trigger, scope, started ? `${speakClock(started)} 시작` : null, opts.unconfirmed && lastChecked ? `마지막 확인 ${speakClock(lastChecked)}` : null, note]),
+    session,
+  };
+}
 
 /** 문장 끝 마침표를 떼고 따옴표를 뺀 화면 읽기 조각 */
 const said = (s: string | null) => (s ? s.replace(/['"‘’“”]/g, "").replace(/\.$/, "") : null);

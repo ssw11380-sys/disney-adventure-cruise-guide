@@ -8,6 +8,9 @@ import { seoulIso } from "../lib/time.js";
  *  - 새 기능(3-19·3-24 의 새 동작, P2 전부)은 플래그 뒤에 둔다
  */
 export const FEATURES = {
+  briefingParallel: { default: true, description: "보고서 속도 개선: 종목 두 개의 자료 수집·분석을 동시에 진행하며 각 종목의 분석 뒤 요약, 저장 순서와 세션 알림을 유지. 끄면 기존 순차 처리" },
+  analysisWaitRecovery: { default: true, description: "분석 대기 개선: 갱신 중 이전 보고서를 유지하고 조회 전용 상태 경로로 서버에서 완성된 결과를 회수. 끄면 기존 대기·오류 화면, 상태 경로 404" },
+  briefingLiveProgress: { default: true, description: "브리핑 진행 표시: 시작부터 준비·처리 개수·마무리 상태를 표시. 끄면 기존 늦음·실패 안내만 표시" },
   tossReconcile: { default: true, description: "토스 계좌 자동 대조: 동기화마다 기록·경고, 설정 화면 '토스 대조' 줄 (3-13)" },
   briefingSources: { default: true, description: "브리핑 상세의 근거(뉴스·공시 출처) 카드 (3-12)" },
   briefingDigest: { default: true, description: "브리핑 알림을 세션당 1건으로 묶고 조용한 시간·끈 종목을 지킴 (3-19). 끄면 종목마다 1건(예전)" },
