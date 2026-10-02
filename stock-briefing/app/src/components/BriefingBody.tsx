@@ -7,6 +7,7 @@ import type { BriefingWithData } from "@/api/types";
 import { Pills } from "@/components/BriefingList";
 import { BriefingSources } from "@/components/BriefingSources";
 import { StaleBanner } from "@/components/Freshness";
+import { ReportVerificationNotice } from "@/components/ReportVerification";
 import { useSettingsGuide } from "@/lib/settingsLink";
 import { MarkdownView } from "@/components/MarkdownView";
 import { Screen } from "@/components/Screen";
@@ -200,6 +201,7 @@ export function BriefingBody({
               onChange={setMode}
             />
             <Card>
+              <ReportVerificationNotice verification={d.verification} />
               {text}
               {missing}
             </Card>
@@ -238,6 +240,7 @@ export function BriefingBody({
   const headingFirst = mode === "detail" && HEADING_FIRST.test(d.detail);
   const bodyText = failed ? failedCard : (
     <View style={[styles.text, headingFirst && styles.textFlush]}>
+      <ReportVerificationNotice verification={d.verification} />
       {text}
       {missing}
     </View>

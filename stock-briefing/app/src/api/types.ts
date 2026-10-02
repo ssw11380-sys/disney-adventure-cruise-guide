@@ -208,6 +208,7 @@ export interface Briefing {
 }
 
 export interface BriefingWithData extends Briefing {
+  verification?: ReportVerification;
   data: {
     quote: Quote | null;
     technical: Record<string, unknown> | null;
@@ -661,7 +662,17 @@ export interface LastBriefingRun {
 
 export type AnalysisKind = "company" | "value" | "technical";
 
+/** 원자료 시세와 직접 대조한 명시적 주장. 본문 전체 사실성 검증을 뜻하지 않는다. */
+export interface ReportVerification {
+  scope: "quote_claims";
+  quoteAsOf: string | null;
+  quoteSource: string | null;
+  checkedClaims: number;
+  issues: { field: "price" | "changeRate"; reported: string; expected: string }[];
+}
+
 export interface Analysis {
+  verification?: ReportVerification;
   id: number;
   code: string;
   kind: AnalysisKind;
