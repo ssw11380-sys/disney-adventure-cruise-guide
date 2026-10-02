@@ -75,6 +75,8 @@ export interface RunLogEntry {
   skippedCodes: string[];
   /** 한 종목 다시 만들기(partial)가 다룬 종목 — 그 줄을 정기 실행이 만든 줄로 세지 않게 (전체 실행은 없음) */
   codes?: string[];
+  /** 수집·저장 예외로 회차가 끝난 경우. 개별 failed 수와 분리한 안전한 안내 문구 */
+  runError?: string;
 }
 
 export interface StatusProblem {
@@ -284,12 +286,13 @@ export function runLogEntry(done: Parameters<RunDoneListener>[0], finishedAt: st
     firedAt: done.firedAt ?? null,
     startedAt: done.startedAt ?? finishedAt,
     finishedAt,
-    total: r.length,
+    total: done.total ?? r.length,
     ok: r.filter((x) => x.status === "ok").length,
     failed: r.filter((x) => x.status === "failed").length,
     skipped: r.filter((x) => x.status === "skipped").length,
     skippedCodes: r.filter((x) => x.status === "skipped").map((x) => x.code),
     ...(done.partial ? { codes: r.map((x) => x.code) } : {}),
+    ...(done.runError ? { runError: done.runError } : {}),
   };
 }
 

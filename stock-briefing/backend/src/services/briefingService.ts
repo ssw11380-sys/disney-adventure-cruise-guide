@@ -56,6 +56,8 @@ export interface LastRun {
   skipped: number;
   lastError: string | null;
   trigger: "schedule" | "manual";
+  /** 도중 예외로 끝났을 때의 대상 수. 개별 성공·실패 수에 미완료 종목을 섞지 않는다. */
+  total?: number;
 }
 
 export interface BriefingServiceDeps {
@@ -98,7 +100,7 @@ export interface SessionDone {
 }
 export type SessionListener = (done: SessionDone) => Promise<void> | void;
 /** 실행 한 번이 끝날 때마다 (새로 만든 브리핑이 없어도, 도중에 예외로 끝나도). 계좌 브리핑(3-31)과 세션 알림이 여기에 붙는다 */
-export type RunDoneListener = (done: SessionDone & { force: boolean; results: RunResult["results"] }) => Promise<void> | void;
+export type RunDoneListener = (done: SessionDone & { force: boolean; results: RunResult["results"]; total?: number; runError?: string }) => Promise<void> | void;
 /** 실행 한 번이 시작될 때 (알림이 이 실행 동안 쓸 플래그 값을 여기서 정한다) */
 export type SessionStartListener = (start: { session: BriefingSession; trigger: "schedule" | "manual"; partial: boolean }) => Promise<void> | void;
 
@@ -188,6 +190,8 @@ export class BriefingService {
     const startedAt = seoulIso(this.now());
     const date = seoulDate(this.now());
     const results: RunResult["results"] = [];
+    let runError: string | undefined;
+    let finishedAt = startedAt;
     const created: SessionDone["created"] = [];
     const trigger = opts.trigger ?? "manual";
     const partial = !!opts.codes?.length;
@@ -253,6 +257,10 @@ export class BriefingService {
           await runStock(row);
         }
       }
+    } catch (error) {
+      // 개별 결과를 지어내지 않고 회차 중단을 따로 남긴다. 내부 DB 오류 원문은 공개하지 않는다.
+      runError = "자료 수집 또는 저장 중 오류가 발생해 브리핑 실행을 마치지 못했습니다.";
+      throw error;
     } finally {
       // 도중에 예외로 끝나도 이미 만든 브리핑은 알린다
       progress.done = results.length;
@@ -260,6 +268,7 @@ export class BriefingService {
         session, date, trigger, partial, created, force: opts.force === true, results,
         // 브리핑 3차 2 실행 기록 (더하기만 — 다른 리스너는 모르는 칸)
         startedAt, firedAt: opts.firedAt ? seoulIso(opts.firedAt) : null, scheduledAt: opts.scheduledAt ?? null,
+        ...(runError ? { total: progress.total, runError } : {}),
       };
       if (created.length > 0) {
         for (const l of this.sessionListeners) {
@@ -277,22 +286,20 @@ export class BriefingService {
           this.log?.warn({ err: (e as Error).message }, "실행 완료 리스너 오류");
         }
       }
+      finishedAt = seoulIso(this.now());
+      this._lastRun = {
+        session, date, startedAt, finishedAt,
+        ok: results.filter((r) => r.status === "ok").length,
+        failed: results.filter((r) => r.status === "failed").length,
+        skipped: results.filter((r) => r.status === "skipped").length,
+        lastError: runError ?? results.find((r) => r.status === "failed")?.error ?? null,
+        trigger,
+        ...(runError ? { total: progress.total } : {}),
+      };
       this._progress = null;
       this.running = false;
       for (const w of this.idleWaiters.splice(0)) w();
     }
-    const finishedAt = seoulIso(this.now());
-    this._lastRun = {
-      session,
-      date,
-      startedAt,
-      finishedAt,
-      ok: results.filter((r) => r.status === "ok").length,
-      failed: results.filter((r) => r.status === "failed").length,
-      skipped: results.filter((r) => r.status === "skipped").length,
-      lastError: results.find((r) => r.status === "failed")?.error ?? null,
-      trigger,
-    };
     return { session, date, results, startedAt, finishedAt };
   }
 
