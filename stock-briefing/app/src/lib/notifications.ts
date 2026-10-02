@@ -127,6 +127,31 @@ export async function unregisterPush(api: Api): Promise<void> {
   }
 }
 
+/**
+ * 로그아웃할 때 (계정 A단계, lib/logout 이 5초까지 기다린다): 서버에서 이 기기 등록을 빼되, 기기에 적어 둔 토큰(= 이 기기에서 알림을 켜 둠)은 남긴다.
+ * 주인으로 다시 로그인하면 rebindPush 가 그대로 다시 등록한다 — 예전에는 로그아웃하면 알림 설정이 조용히 꺼진 채 남았다.
+ * 빼지 못해도(인터넷 끊김) 서버가 로그아웃할 때 이 세션으로 등록한 기기를 지운다
+ */
+export async function detachPush(api: Api): Promise<void> {
+  const token = await getStoredToken();
+  if (!token) return;
+  try {
+    await api.unregisterDevice(token);
+  } catch {
+    /* 서버가 세션을 끊으며 지운다 */
+  }
+}
+
+/**
+ * 로그인한 뒤·비밀번호를 바꾼 뒤 (계정 A단계): 이 기기에서 알림을 켜 둔 경우만(적어 둔 토큰이 있을 때) 지금 로그인 세션으로 다시 등록한다.
+ * 권한 창을 띄우거나 토큰을 새로 받지 않는다. 서버는 세션을 끊을 때 그 세션으로 등록한 기기를 지우므로 새 세션에 다시 묶어야 알림이 온다
+ */
+export async function rebindPush(api: Api): Promise<void> {
+  const token = await getStoredToken();
+  if (!token) return;
+  await api.registerDevice({ token, platform: Platform.OS === "android" ? "android" : Platform.OS === "ios" ? "ios" : "unknown", deviceName: Device.modelName });
+}
+
 export async function getStoredToken(): Promise<string | null> {
   try {
     return await AsyncStorage.getItem(TOKEN_KEY);
@@ -226,6 +251,17 @@ export function notificationNav(data: Record<string, unknown> | undefined, ctx: 
     if (pick) return { kind: "pane", pick };
   }
   return path === "/briefings" ? { kind: "tab" } : { kind: "tabThenPush", path };
+}
+
+/**
+ * 계정 A단계: 주인 아닌 계정으로 로그인한 기기에서 누른 브리핑 알림 (주인이 로그아웃하기 전에 받아 둔 알림 등 — 서버는 주인 세션 기기에만 보낸다).
+ * 주인의 종목·계좌 브리핑·시장 요약 상세를 열지 않고(2단 오른쪽 칸에서 고르지도 않고) 브리핑 탭으로만 — 탭 맨 위에 차분한 안내(MemberNotice)가 보인다.
+ * 서버도 그 상세를 403 으로 막는다. 브리핑이 아닌 알림(가격 알림 → 종목 상세, 공유 정보)은 그대로
+ */
+export function memberNotificationNav(nav: NotificationNav | null, data: Record<string, unknown> | undefined): NotificationNav | null {
+  if (!nav) return null;
+  const path = routeForNotification(data);
+  return path !== null && (path === "/briefings" || path.startsWith("/briefings/")) ? { kind: "tab" } : nav;
 }
 
 /**

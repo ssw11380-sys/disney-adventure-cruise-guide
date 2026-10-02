@@ -20,6 +20,17 @@ export const ALWAYS_PATHS: ReadonlySet<string> = new Set(["/health", "/api/featu
 export const NOT_JSON = "NOT_JSON";
 
 /**
+ * 계정 A단계 (플래그 accounts) 오류 코드 — 연결 오류가 아니다 (서버에 잘 닿았고 API 토큰도 맞다):
+ *  - SESSION_INVALID: 401 + code session_invalid — 로그인이 끝났다(다른 기기에서 비밀번호 변경 등). 앱은 로그인 화면으로
+ *  - SESSION_REQUIRED: 403 session_required — 이 서버는 로그인해야 쓴다
+ *  - PERSONAL_DATA_NOT_READY: 403 — 주인 아닌 계정의 개인 종목 기능(준비 중)
+ */
+export const SESSION_INVALID = "SESSION_INVALID";
+export const SESSION_REQUIRED = "SESSION_REQUIRED";
+export const PERSONAL_DATA_NOT_READY = "PERSONAL_DATA_NOT_READY";
+const ACCOUNT_CODES: ReadonlySet<unknown> = new Set([SESSION_INVALID, SESSION_REQUIRED, PERSONAL_DATA_NOT_READY]);
+
+/**
  * 앱 API 오류(api/client ApiRequestError: status·code·path)에서 서버 연결 문제만 고른다. 우리 서버가 준 다른 오류(종목 없음 404·500 등)는 null.
  *  - network·timeout: 서버에 닿지 않음 (status 0)
  *  - auth: 토큰이 틀림 (401)
@@ -29,6 +40,7 @@ export const NOT_JSON = "NOT_JSON";
 export function connectionKind(error: unknown): ConnectionKind | null {
   if (!error || typeof error !== "object") return null;
   const e = error as { status?: unknown; code?: unknown; path?: unknown };
+  if (ACCOUNT_CODES.has(e.code)) return null;
   if (e.status === 401) return "auth";
   if (e.status === 0 && e.code === "NETWORK") return "network";
   if (e.status === 0 && e.code === "TIMEOUT") return "timeout";

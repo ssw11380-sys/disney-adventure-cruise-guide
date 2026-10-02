@@ -318,3 +318,38 @@ describe("WidgetBridge: 브리핑 위젯에도 앱이 받은 최신 브리핑을
     expect(h.briefOnly).toHaveLength(0);
   });
 });
+
+describe("WidgetBridge: 계정 A단계 (검증 4차 M1)", () => {
+  it("자동 로그인을 끈 세션·주인 아닌 계정·로그인 전이면 앱이 받은 잔고·브리핑을 위젯에 넘기지 않는다 — 자동 로그인 켬 주인은 넘긴다", async () => {
+    const session = await import("@/lib/session");
+    const OWNER = { id: 1, loginId: "서성원", email: null, isOwner: true, usingInitialPassword: false };
+    const MEMBER = { id: 7, loginId: "newbie", email: null, isOwner: false, usingInitialPassword: false };
+    try {
+      for (const setup of [
+        () => session.saveSession({ apiUrl: API, token: "gzs1_mem", remember: false, user: OWNER }),
+        () => session.saveSession({ apiUrl: API, token: "gzs1_m", remember: true, user: MEMBER }),
+        async () => session.markAccountsSeen(API, true),
+      ]) {
+        session.resetSessionForTests();
+        cleanupRenders();
+        h.calls.length = 0;
+        h.briefOnly.length = 0;
+        await setup();
+        await open({ polish: true, briefings: LIST });
+        for (const f of [...h.appState]) f("background");
+        await settle();
+        expect(h.calls).toEqual([]);
+        await coldOpen({ polish: true, stored: false });
+        expect(h.briefOnly).toEqual([]);
+      }
+      session.resetSessionForTests();
+      cleanupRenders();
+      h.calls.length = 0;
+      await session.saveSession({ apiUrl: API, token: "gzs1_o", remember: true, user: OWNER });
+      await open({ polish: true, briefings: LIST });
+      expect(h.calls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      session.resetSessionForTests();
+    }
+  });
+});

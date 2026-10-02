@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { Api } from "@/api/client";
 import type { Analysis, AnalysisKind, FeatureFlags } from "@/api/types";
 import { featureOn } from "@/lib/features";
+import { sessionFor } from "@/lib/session";
 
 export interface AnalysisWait {
   phase: "idle" | "checking" | "generating" | "recovering" | "unknown";
@@ -163,18 +164,20 @@ export class AnalysisRecovery {
   }
 }
 
-const scopes = new WeakMap<QueryClient, { apiUrl: string; credential: string; recovery: AnalysisRecovery }>();
+const scopes = new WeakMap<QueryClient, { apiUrl: string; credential: string; sessionIdentity: string; recovery: AnalysisRecovery }>();
 export function invalidateAnalysisRecoveryScope(qc: QueryClient, apiUrl: string, credential: string) {
   const old = scopes.get(qc);
-  if (old && (old.apiUrl !== apiUrl || old.credential !== credential)) old.recovery.dispose();
+  if (old && (old.apiUrl !== apiUrl || old.credential !== credential || old.sessionIdentity !== (sessionFor(apiUrl)?.token ?? ""))) old.recovery.dispose();
 }
 /** 서버·로그인 정보가 바뀌면 이전 요청은 현재 캐시에 쓰거나 추가 조회하지 못한다. */
-export function analysisRecoveryFor(qc: QueryClient, api: Api, apiUrl: string, credential: string) {
+export function analysisRecoveryFor(qc: QueryClient, api: Api, apiUrl: string, credential: string, sessionIdentity = sessionFor(apiUrl)?.token ?? "") {
   const old = scopes.get(qc);
-  if (old && old.apiUrl === apiUrl && old.credential === credential && !old.recovery.disposed) return old.recovery;
+  const sameScope = old?.apiUrl === apiUrl && old.credential === credential && old.sessionIdentity === sessionIdentity;
+  if (old && sameScope && !old.recovery.disposed) return old.recovery;
   old?.recovery.dispose();
-  const recovery = new AnalysisRecovery(qc, api, apiUrl, () => featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "analysisWaitRecovery", false));
-  if (old?.apiUrl === apiUrl && old.credential === credential) recovery.restore(old.recovery);
-  scopes.set(qc, { apiUrl, credential, recovery });
+  // 계정 정보(/me)만 갱신될 때는 계속 기다리고, 실제 세션이 바뀔 때만 멈춘다. 식별값은 캐시 키에 넣지 않는다.
+  const recovery = new AnalysisRecovery(qc, api, apiUrl, () => (sessionFor(apiUrl)?.token ?? "") === sessionIdentity && featureOn(qc.getQueryData<FeatureFlags>([apiUrl, "features"]), "analysisWaitRecovery", false));
+  if (old && sameScope) recovery.restore(old.recovery);
+  scopes.set(qc, { apiUrl, credential, sessionIdentity, recovery });
   return recovery;
 }

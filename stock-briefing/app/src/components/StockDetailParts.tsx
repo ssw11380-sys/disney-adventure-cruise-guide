@@ -666,8 +666,10 @@ export function barStarText(star: BarStar): string {
  * 버튼 높이 44 (oneHand.barButtonH), 고지 바로 위.
  * 가격 알림(3-29, 플래그 priceAlerts · 등록 종목만): alert 가 있으면 가운데에 [종 알림 n] (내용 폭, 좁으면 종 아이콘만 — lib/detailLayout alertBarLabel). 없으면 지금 두 버튼 그대로
  */
-export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarStar; onStar: () => void; onChart: () => void; alert?: { count: number; label: boolean; onPress: () => void } }) {
+export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarStar | null; onStar: () => void; onChart: () => void; alert?: { count: number; label: boolean; onPress: () => void } }) {
   const t = useTheme();
+  // star 가 없으면(주인 아닌 계정의 미등록 종목 — 계정 A단계) 왼쪽 버튼 없이 [차트 크게]만
+  if (!star) return <View style={[styles.bar, { backgroundColor: t.surface, borderTopColor: t.line }]}>{chartButton(t, onChart)}</View>;
   const starText = barStarText(star);
   const starA11y = star.kind === "watch" ? "관심 종목에 추가" : star.kind === "unwatch" ? `관심 종목에서 빼기, ${star.label}` : "보유 정보 수정";
   const starIcon: keyof typeof Ionicons.glyphMap = star.kind === "watch" ? "star-outline" : star.kind === "unwatch" ? "star" : "create-outline";
@@ -705,18 +707,25 @@ export function DetailBottomBar({ star, onStar, onChart, alert }: { star: BarSta
           ) : null}
         </Pressable>
       ) : null}
-      <Pressable
-        onPress={onChart}
-        accessibilityRole="button"
-        accessibilityLabel="차트 전체 화면"
-        style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
-      >
-        <Ionicons name="expand-outline" size={font.title} color={t.ink} />
-        <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
-          차트 크게
-        </Text>
-      </Pressable>
+      {chartButton(t, onChart)}
     </View>
+  );
+}
+
+/** 아래 막대 오른쪽 [차트 크게] */
+function chartButton(t: ReturnType<typeof useTheme>, onChart: () => void) {
+  return (
+    <Pressable
+      onPress={onChart}
+      accessibilityRole="button"
+      accessibilityLabel="차트 전체 화면"
+      style={({ pressed }) => [styles.barBtn, { backgroundColor: pressed ? t.surfaceAlt : t.surface, borderColor: t.lineStrong }]}
+    >
+      <Ionicons name="expand-outline" size={font.title} color={t.ink} />
+      <Text style={{ color: t.ink, fontSize: font.body, fontWeight: "700" }} maxFontSizeMultiplier={fontCap.chrome}>
+        차트 크게
+      </Text>
+    </Pressable>
   );
 }
 

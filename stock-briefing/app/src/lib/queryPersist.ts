@@ -10,9 +10,13 @@ import type { PersistedClient } from "@tanstack/react-query-persist-client";
  *  - 받은 지 7일 지난 값은 저장·복원하지 않는다. 3일 지난 값도 "M/D HH:MM 기준"으로 보인다(긴 휴장 대비)
  *  - 토큰이 틀려(401) 실패 중인 값은 저장하지 않는다
  *  - 쿼리 키 첫 칸이 서버 주소라 서버를 바꾸면 다른 캐시를 쓴다
+ *  - 계정 A단계: 자동 로그인을 끈 세션(공용 폰 등)이면 개인 데이터(잔고)는 기기에 적지 않는다 — 앱을 완전히 닫으면 세션과 함께 사라지게.
+ *    지수·플래그는 개인 데이터가 아니라 그대로
  */
 
 export const PERSIST_KEYS: ReadonlySet<string> = new Set(["stocks", "indices", "features"]);
+/** 그중 개인 데이터 (자동 로그인을 끈 세션이면 적지 않는다) */
+export const PERSONAL_PERSIST_KEYS: ReadonlySet<string> = new Set(["stocks"]);
 export const PERSIST_MAX_AGE_MS = 7 * 86_400_000;
 /** 기기 저장 키 (백그라운드 알림이 마지막으로 받은 기능 플래그를 여기서 읽는다 — lib/marketSummaryLoad) */
 export const PERSIST_STORAGE_KEY = "rq.cache";
@@ -27,9 +31,13 @@ interface QueryStateLike {
 
 const isAuthError = (e: unknown) => typeof e === "object" && e !== null && (e as { status?: unknown }).status === 401;
 
-/** 저장할 쿼리인지: [apiUrl, 종류] 중 종류가 목록에 있고, 받은 값이 있고, 7일 이내이고, 토큰 오류가 아닌 것 */
-export function shouldPersist(queryKey: readonly unknown[], state: QueryStateLike, now: number): boolean {
+/**
+ * 저장할 쿼리인지: [apiUrl, 종류] 중 종류가 목록에 있고, 받은 값이 있고, 7일 이내이고, 토큰 오류가 아닌 것.
+ * personal(apiUrl): 그 서버의 개인 데이터를 기기에 적어도 되는지 (자동 로그인 끔이면 false — lib/session persistsPersonal)
+ */
+export function shouldPersist(queryKey: readonly unknown[], state: QueryStateLike, now: number, personal: (apiUrl: string) => boolean = () => true): boolean {
   if (queryKey.length !== 2 || typeof queryKey[1] !== "string" || !PERSIST_KEYS.has(queryKey[1])) return false;
+  if (PERSONAL_PERSIST_KEYS.has(queryKey[1]) && !personal(String(queryKey[0]))) return false;
   if (state.data === undefined || !(state.dataUpdatedAt > 0) || now - state.dataUpdatedAt > PERSIST_MAX_AGE_MS) return false;
   return !isAuthError(state.error);
 }
